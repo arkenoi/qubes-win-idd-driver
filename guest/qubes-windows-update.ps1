@@ -1429,8 +1429,13 @@ function Get-EffectProbe([string]$kb, [string[]]$names){
   return $null
 }
 
-# A COM object the agent path needs - one place, so the offline tests can stand in fakes for it.
-function New-WuComObject([string]$progId){ return (New-Object -ComObject $progId) }
+# ---- WU-COMOBJECT-BEGIN   (tools/tests/wu-agentcache-test.ps1 runs this region)
+# A COM object the agent path needs - one place, so the offline tests can stand in fakes for it. A fresh Microsoft.Update.StringColl /
+# UpdateColl is an EMPTY enumerable collection, and a function's return value is unrolled into the pipeline: 'return (New-Object ...)'
+# handed every caller $null, and every agent-path install died at its first $coll.Add (rz38b, 2026-10-03, German 25H2 TemplateVM). The
+# unary comma returns the collection itself.
+function New-WuComObject([string]$progId){ return ,(New-Object -ComObject $progId) }   # GUARD:noenumerate
+# ---- WU-COMOBJECT-END
 
 # THE LIVE IUpdate FOR AN OFFER ROW: from this pass's search (Get-Available keeps them), else from a FRESH search - never guessed. The agent
 # installs only what it offered; an update a fresh search no longer offers is reported as such.

@@ -7,8 +7,11 @@
 # KB5007651 silently failed every pass from 2026-09-20). Installer-type updates are now installed by the agent's own installer from content
 # we supply through IUpdate2.CopyToCache (measured on four offered updates, all succeeding by effect). A one-level bundle walk left
 # KB2267602 'not downloaded' (its MpSigStub leaf sits at depth 2); routeless, the agent's downloader goes to BITS and hung for 30 min;
-# CopyToCache with an empty file list throws E_INVALIDARG.
+# CopyToCache with an empty file list throws E_INVALIDARG. The COM factory (WU-COMOBJECT) is the SHIPPED one: its stand-in fake let
+# 'return (New-Object ...)' pass here while it handed the guest $null for every fresh collection (rz38b, 2026-10-03) - only New-Object
+# -ComObject itself is stood in, written as the cmdlet writes it (ONE object, never unrolled).
 #   pwsh wu-agentcache-test.ps1 [-Script <path>] [-Defect <knob>]
+#   -Defect unroll          GUARD:noenumerate returns the fresh collection through the pipeline, which unrolls it to $null.
 #   -Defect onelevel        GUARD:leafrecurse walks one level only - the depth-2 leaf is missed (and so is its fetch failure).
 #   -Defect fetchinstalled  GUARD:leafneeded fetches installed / already-cached leaves too.
 #   -Defect acceptexpress   GUARD:leafstatic accepts any URL as static content.
@@ -33,6 +36,7 @@ function Func([string]$name) {   # a whole top-level function, by its own name
     if (-not $m.Success) { Write-Output "INSTRUMENT: function $name not found"; exit 2 }
     return $m.Value
 }
+$comRegion = Region 'WU-COMOBJECT'
 $leafRegion = Region 'WU-LEAF-SELECT'
 $installRegion = Region 'WU-AGENT-INSTALL'
 $sigRegion = Region 'WU-DEFENDER-SIGNATURE'
@@ -41,6 +45,7 @@ $classFn = Func 'Get-WuContentClass'
 $probeFn = Func 'Get-EffectProbe'
 # Every knob rewrites the ONE line that carries its guard tag.
 $knobs = @{
+    unroll         = @{ in = 'com';     tag = 'noenumerate';        with = 'function New-WuComObject([string]$progId){ return (New-Object -ComObject $progId) }   # DEFECT: unrolled to $null' }
     onelevel       = @{ in = 'leaf';    tag = 'leafrecurse';        with = '  if($nb -gt 0 -and $depth -eq 0){ foreach($c in $n.BundledUpdates){ Add-WuLeaves $c ($depth+1) $acc } }   # DEFECT: one level only' }
     fetchinstalled = @{ in = 'leaf';    tag = 'leafneeded';         with = '    if($true){   # DEFECT: installed and cached leaves are fetched too' }
     acceptexpress  = @{ in = 'leaf';    tag = 'leafstatic';         with = '          if($url){ $static += $url }   # DEFECT: any url counts as static' }
@@ -55,12 +60,21 @@ $knobs = @{
 if ($Defect -and -not $knobs.ContainsKey($Defect)) { Write-Output "INSTRUMENT: unknown -Defect '$Defect' ($(($knobs.Keys | Sort-Object) -join ' | '))"; exit 2 }
 if ($Defect) {
     $k = $knobs[$Defect]
-    $target = switch ($k.in) { 'leaf' { $leafRegion } 'install' { $installRegion } 'sig' { $sigRegion } 'verdict' { $verdictRegion } }
+    $target = switch ($k.in) { 'com' { $comRegion } 'leaf' { $leafRegion } 'install' { $installRegion } 'sig' { $sigRegion } 'verdict' { $verdictRegion } }
     $d = [regex]::Replace($target, "(?m)^.*# GUARD:$($k.tag)\b.*$", $k.with.Replace('$', '$$'))
     if ($d -eq $target) { Write-Output "INSTRUMENT: GUARD:$($k.tag) not found"; exit 2 }
-    switch ($k.in) { 'leaf' { $leafRegion = $d } 'install' { $installRegion = $d } 'sig' { $sigRegion = $d } 'verdict' { $verdictRegion = $d } }
+    switch ($k.in) { 'com' { $comRegion = $d } 'leaf' { $leafRegion = $d } 'install' { $installRegion = $d } 'sig' { $sigRegion = $d } 'verdict' { $verdictRegion = $d } }
 }
 function Log($m) { }
+# New-Object -ComObject as the cmdlet behaves on Windows: a fresh Microsoft.Update.StringColl / UpdateColl is ONE empty enumerable
+# collection, written WITHOUT enumeration (Cmdlet.WriteObject). The shipped factory's own return shape then decides whether its caller
+# holds the collection or $null. Nothing else in this test may call New-Object.
+function New-Object {
+    [CmdletBinding()] param([switch]$ComObject, [Parameter(Position = 0)][string]$TypeName)
+    if (-not $ComObject) { throw "INSTRUMENT: the New-Object stand-in models only -ComObject (asked for '$TypeName')" }
+    $PSCmdlet.WriteObject([System.Collections.ArrayList]::new(), $false)
+}
+Invoke-Expression $comRegion      # New-WuComObject, as shipped
 Invoke-Expression $leafRegion     # Get-WuNeededLeaves / Add-WuLeaves
 Invoke-Expression $classFn
 Invoke-Expression $probeFn
@@ -132,13 +146,17 @@ Check 'leaf-downloaded: leaves the agent already holds are not needed; an update
 Check 'probe-map: KB5007651 -> security-platform, an MpSigStub leaf -> defender-signature, an unknown package -> no probe (probe=none, never implied)' `
       ((Get-EffectProbe 'KB5007651' @()) -eq 'security-platform' -and (Get-EffectProbe '(no KB)' @('mpsigstub_aaaa.exe')) -eq 'defender-signature' -and (Get-EffectProbe 'KB4052623' @()) -eq 'defender-platform' -and $null -eq (Get-EffectProbe 'KB5999999' @('whatever_x.exe')))
 
+# ---------- WU-COMOBJECT: the factory hands its caller the collection itself
+$c1 = New-WuComObject 'Microsoft.Update.StringColl'; $c2 = New-WuComObject 'Microsoft.Update.UpdateColl'
+Check 'comobject: a fresh StringColl and UpdateColl reach the caller as empty collections it can Add to, never $null' `
+      ($null -ne $c1 -and $null -ne $c2 -and $c1.Count -eq 0 -and $c2.Count -eq 0 -and $c1 -is [System.Collections.IList])
+
 # ---------- WU-AGENT-INSTALL: fetch, CopyToCache, the agent's installer
 function Run-Install([string]$variant) {
     $sb = [scriptblock]::Create(@'
 param($variant, $region)
 function Log($m) { }
 function Save { }
-function New-WuComObject([string]$progId) { New-Object System.Collections.ArrayList }
 function Fetch-Msu($url, $dst, $kb) { if ($url -match 'FAIL') { return $false }; Set-Content -LiteralPath $dst -Value 'payload'; return $true }
 $script:DownloaderCalled = $false
 $session = New-FakeSession
@@ -147,9 +165,10 @@ $label = 'KB2267602'
 $dir = Join-Path ([IO.Path]::GetTempPath()) ('agentcache-' + [guid]::NewGuid().ToString()); New-Item -ItemType Directory -Force $dir | Out-Null
 $script:St = [ordered]@{ installing = $null }
 $lv = Get-WuNeededLeaves $update
-Invoke-Expression $region
+$err = $null
+try { Invoke-Expression $region } catch { $err = $_.Exception.Message }   # a crash is a result of the case, not the end of the test
 Remove-Item -Recurse -Force $dir -EA SilentlyContinue
-[pscustomobject]@{ agentRc = $agentRc; files = @($files).Count; missing = @($missing); downloaderCalled = [bool]$script:DownloaderCalled
+[pscustomobject]@{ error = $err; agentRc = $agentRc; files = @($files).Count; missing = @($missing); downloaderCalled = [bool]$script:DownloaderCalled
                    copyCalls = [int](@($script:FakeLeaves | ForEach-Object { $_.CopyCalls }) | Measure-Object -Sum).Sum
                    emptyCalls = [int](@($script:FakeLeaves | ForEach-Object { $_.EmptyCalls }) | Measure-Object -Sum).Sum }
 '@)
@@ -157,13 +176,13 @@ Remove-Item -Recurse -Force $dir -EA SilentlyContinue
 }
 $r = Run-Install 'ok'
 Check 'install-ok: three needed leaves fetched and handed to the agent, the update reads downloaded, the agent installs (ResultCode 2), its downloader is never called' `
-      ($r.agentRc -eq 2 -and $r.files -eq 3 -and $r.copyCalls -eq 3 -and $r.missing.Count -eq 0 -and -not $r.downloaderCalled -and $r.emptyCalls -eq 0)
+      (-not $r.error -and $r.agentRc -eq 2 -and $r.files -eq 3 -and $r.copyCalls -eq 3 -and $r.missing.Count -eq 0 -and -not $r.downloaderCalled -and $r.emptyCalls -eq 0)
 $r = Run-Install 'fetchfail'
 Check 'install-fetchfail: a leaf whose fetch failed is NOT handed over empty, the update stays not downloaded, the agent is not asked, the downloader is never called, the missing leaf is named' `
-      ($null -eq $r.agentRc -and ($r.missing -join ';') -match 'AM Engine 1\.1\.26080\.3: fetch failed \(am_engine_FAIL\.exe\)' -and -not $r.downloaderCalled -and $r.emptyCalls -eq 0)
+      (-not $r.error -and $null -eq $r.agentRc -and ($r.missing -join ';') -match 'AM Engine 1\.1\.26080\.3: fetch failed \(am_engine_FAIL\.exe\)' -and -not $r.downloaderCalled -and $r.emptyCalls -eq 0)
 $r = Run-Install 'nostatic'
 Check 'install-nostatic: a needed leaf with no static content is named as missing; nothing is fetched for it, the downloader is never called' `
-      ($null -eq $r.agentRc -and ($r.missing -join ';') -match 'AM Engine 1\.1\.26080\.3: no static content' -and -not $r.downloaderCalled)
+      (-not $r.error -and $null -eq $r.agentRc -and ($r.missing -join ';') -match 'AM Engine 1\.1\.26080\.3: no static content' -and -not $r.downloaderCalled)
 
 # ---------- WU-DEFENDER-SIGNATURE: the signature compared with the offer when nothing moved
 function Run-Sig([string]$before, [string]$after, $offered) {

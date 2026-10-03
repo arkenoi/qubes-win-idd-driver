@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# wu-agentcache-selftest.sh - the agent-cache install path (qubes-windows-update.ps1 WU-LEAF-SELECT, WU-AGENT-INSTALL, WU-DEFENDER-SIGNATURE,
-# WU-AGENT-VERDICT): the clean leg must pass, and each -Defect knob must fail EXACTLY the cases its guard protects - a guard never seen to
+# wu-agentcache-selftest.sh - the agent-cache install path (qubes-windows-update.ps1 WU-COMOBJECT, WU-LEAF-SELECT, WU-AGENT-INSTALL,
+# WU-DEFENDER-SIGNATURE, WU-AGENT-VERDICT): the clean leg must pass, and each -Defect knob must fail EXACTLY the cases its guard protects - a guard never seen to
 # fail is decoration. Exit 0 only if every leg comes out as required.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -19,6 +19,8 @@ expect() {   # knob, expected failing cases
 [ "$rc" = 0 ] || { echo "FAIL  clean rc=$rc"; printf '%s\n' "$out" | grep FAIL; bad=1; }
 # onelevel also takes the two install-failure cases down: with the depth-2 engine leaf never seen, its missing fetch / missing static
 # content cannot be named - the measured run-2 symptom ("not downloaded", nothing named).
+# unroll: the factory hands every caller $null, so every install case dies at its first Add (the rz38b guest, 2026-10-03).
+expect unroll         "comobject,install-fetchfail,install-nostatic,install-ok,"
 expect onelevel       "install-fetchfail,install-nostatic,install-ok,leaf-depth,"
 expect fetchinstalled "install-ok,leaf-downloaded,leaf-installed,"
 expect acceptexpress  "install-nostatic,leaf-express,"
