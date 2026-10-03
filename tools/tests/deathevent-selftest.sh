@@ -76,5 +76,31 @@ shape "QGABROKERDIED is logged at ERROR" "$(grep -q 'LogError("QGABROKERDIED' "$
 shape "the etwproxy exit lines ('proxy exited rc=') are logged at ERROR" "$([ "$(grep -c 'LogWarning("ETWPROXYSUP proxy exited rc=' "$ETW")" -eq 0 ] && [ "$(grep -c 'LogError("ETWPROXYSUP proxy exited rc=' "$ETW")" -ge 3 ] && echo 1 || echo 0)"
 shape "the etwproxy park line is logged at ERROR" "$(grep -q 'LogError("ETWPROXYSUP parked for this boot' "$ETW" && echo 1 || echo 0)"
 
+
+# ---- NO GUI DOMAIN IS A START-TIME CONDITION, NOT A DEATH (include/qga-exitcodes.h; Jev 0.94, 2026-10-03) ---------------------
+# A qube with guivm '' made the agent exit 0 at Init and the watchdog relaunch it for ever (47 times in one boot, then once a minute);
+# with the death events that would be a death per relaunch. Each check below is ALSO run against a copy of its file with the guarded
+# line removed, and must then FAIL - a shape check never seen to fail is decoration.
+nogui_agent_absent()  { grep -q 'status = QGA_EXIT_NO_GUI_DOMAIN;' "$1" && grep -q 'LogInfo("QGANOGUIDOMAIN' "$1"; }
+nogui_agent_initrc()  { grep -q 'return (int)QGA_EXIT_NO_GUI_DOMAIN;' "$1" && grep -q 'return (int)win_perror2(initStatus, "Init");' "$1" && ! grep -q 'return win_perror("Init");' "$1"; }
+nogui_wd_latch()      { awk '/if \(exitCode == QGA_EXIT_NO_GUI_DOMAIN\)/{f=1} f{print} f&&/continue;/{exit}' "$1" > "$OUT/nogui-latch.c"
+                        grep -q 'noGuiDomain = TRUE;' "$OUT/nogui-latch.c" && grep -q 'LogInfo("QGAWDNOGUIDOMAIN' "$OUT/nogui-latch.c" && ! grep -q 'DeathEventReport' "$OUT/nogui-latch.c"; }
+nogui_wd_wait()       { grep -q 'timeoutMs = (noGuiDomain ||' "$1"; }
+nogui_wd_norelaunch() { awk '/if \(!running && noGuiDomain\)/{a=NR} /StartTargetProcess\(cmdline/{b=NR} END{exit !(a && b && a<b)}' "$1"; }
+nogui() { # $1 label, $2 check fn, $3 file, $4 marker of the guarded line (the mutated copy drops the line carrying it)
+    local mut="$OUT/nogui-mut-$2.c"
+    if "$2" "$3"; then
+        grep -v -- "$4" "$3" > "$mut"
+        if "$2" "$mut"; then say "FAIL  nogui: $1 - the check still passes with the guarded line removed (it cannot fail)"; bad=1
+        else say "PASS  nogui: $1 (and FAILS with the guarded line removed)"; fi
+    else say "FAIL  nogui: $1"; bad=1; fi
+}
+nogui "the agent: the key absent is QGA_EXIT_NO_GUI_DOMAIN, logged once at INFO" nogui_agent_absent "$MAIN" 'status = QGA_EXIT_NO_GUI_DOMAIN;'
+nogui "the agent: the exit code is Init's own status, never GetLastError's 0" nogui_agent_initrc "$MAIN" 'return (int)win_perror2(initStatus'
+nogui "the watchdog: that exit latches, logs QGAWDNOGUIDOMAIN, writes no death record" nogui_wd_latch "$WD" 'QGA_NOGUI_LATCH'
+nogui "the watchdog: while latched it waits with no timeout (no poll)" nogui_wd_wait "$WD" 'QGA_NOGUI_WAIT'
+nogui "the watchdog: while latched it never relaunches" nogui_wd_norelaunch "$WD" 'QGA_NOGUI_NORELAUNCH'
+shape "main.c and watchdog.c include qga-exitcodes.h" "$(grep -q '#include "qga-exitcodes.h"' "$MAIN" && grep -q '#include "qga-exitcodes.h"' "$WD" && echo 1 || echo 0)"
+
 say "--- outputs in $OUT"
 exit $bad
