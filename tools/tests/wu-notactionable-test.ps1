@@ -3,9 +3,8 @@
 #
 # It extracts two marked regions from the shipped script and runs them against synthetic inputs, so
 # what is under test is the code that ships, not a copy of it here:
-#   WU-EXE-EFFECT-*     : GUARD:notactionable - rc=0 with a probe that RAN and saw nothing is
-#                         'info' / not-actionable; a NONZERO rc with the same probe result is a
-#                         FAILURE; a probe that did NOT run falls back to rc.
+#   (the verdict on an installer-type update moved to WU-AGENT-VERDICT on 2026-10-03, when the updater stopped running vendor .exe
+#   files itself; tools/tests/wu-agentcache-test.ps1 replays it. The WU-NOTPACKAGE region went with the DISM-on-static-content path.)
 #   WU-INFO-EXCLUDE-*   : GUARD:infoalways + GUARD:nokbinfo - informational rows are excluded from
 #                         dom0's actionable count ALWAYS (not only under the ESU notice), and the
 #                         exclusion keys on kb AND title so a no-KB offer is actually excluded.
@@ -32,8 +31,6 @@ function Region([string]$name) {
     return $m.Groups[1].Value
 }
 
-$exeRegion  = Region 'WU-EXE-EFFECT'
-$npRegion   = Region 'WU-NOTPACKAGE'
 $cvRegion   = Region 'WU-CATALOG-VALID'
 $nkRegion   = Region 'WU-NOKB'
 $scRegion   = Region 'WU-SCAN-COUNT'
@@ -44,10 +41,8 @@ switch ($Defect) {
     # Literal .Replace, not -replace: '$' is regex end-of-anchor and PowerShell also interpolates it
     # inside double quotes, and between them the old pattern silently matched NOTHING once the code
     # it targeted moved. A knob that matches nothing reports the guard as decoration.
-    'rcalone'   { $exeRegion  = $exeRegion.Replace('$ok = $eff', '$ok = ($p.ExitCode -eq 0) -or $eff').Replace('$ok=$false', '$ok=($p.ExitCode -eq 0)') }
     'noticeonly'{ $infoRegion = $infoRegion -replace '(?s)else \{ @\(\$after \| Where-Object \{ \(& \$notInfo \$_\) \}\)\.Count \}', 'else { $after.Count }' }
     'kbonly'    { $infoRegion = $infoRegion -replace '-and \(\$infoKbs -notcontains \$r\.title\)', '' }
-    'rcinfers'  { $npRegion = $npRegion -replace '(?s)\$mum = \$null.*?\n      \}', '$mum = $null' }
     'trustzero' { $cvRegion = $cvRegion -replace '(?s)if \(\[string\]::IsNullOrWhiteSpace.*?\n  \}', '' }
     # drops the catalog-by-title route - the state before 2026-09-21, where a KB-less offer with
     # no direct URL was always excluded even when the catalog held a package for this architecture.
@@ -58,13 +53,6 @@ switch ($Defect) {
     'infoonly'  { $infoRegion = $infoRegion.Replace('($_.ok -eq $true -and ((-not (Test-RowKey $_ ''state'')) -or ($doneStates -contains [string]$_.state)))', '$false') }
     # treats a STAGED row as done - dom0 then hears 0 while a cumulative waits for a reboot
     'stageddone'{ $infoRegion = $infoRegion.Replace('($_.ok -eq $true -and ((-not (Test-RowKey $_ ''state'')) -or ($doneStates -contains [string]$_.state)))', '$_.ok -eq $true').Replace('if ($stagedN -gt $reportCount) { $reportCount = $stagedN }', '') }
-    # Re-introduces the classification corrected on 2026-09-20: a negative probe with rc=0 read as
-    # "nothing to do on this image" instead of as a failed install. The two exe checks above must
-    # then fail - that is what makes them evidence rather than decoration.
-    'infobenign'{ $exeRegion  = $exeRegion.Replace("`$ok=`$false`n            `$why='installer exited 0 but the probe measured no change", "`$sev='info'; `$ok=`$true`n            `$why='nothing to do on this image") }
-    # Treats every negative probe as a failure again - which is what made an already-current
-    # Defender signature a permanent 'updates available'.
-    'failall'   { $exeRegion  = $exeRegion.Replace("} else {`n            `$sev='info'; `$ok=`$true", "} else {`n            `$sev=`$null; `$ok=`$false") }
     # Ignores the offer identity entirely - the state before GUARD:offeridentity, where a scan
     # re-counted an offer the previous pass had resolved and proved.
     'satignore' { $scRegion = $scRegion.Replace('-and (& $notPriorSat $r)', '') }
@@ -73,7 +61,7 @@ switch ($Defect) {
     'satdrop'   { $scRegion = $scRegion.Replace('$script:St.satisfied = @($priorSat)', '') }
     'scanall'   { $scRegion = $scRegion -replace '\$reportCount = @\(\$avail \| Where-Object \{ \(& \$notPriorInfo \$_\) \}\)\.Count', '$reportCount = $avail.Count' }
     ''          { }
-    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (rcalone | noticeonly | kbonly | rcinfers | trustzero | shapeskip | infoonly | scanall | infobenign | satignore | satdrop | failall | stageddone | notitle)"; exit 2 }
+    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (noticeonly | kbonly | trustzero | shapeskip | infoonly | scanall | satignore | satdrop | stageddone | notitle)"; exit 2 }
 }
 
 function Log($m) { }   # the regions log; the suite does not care what they print
@@ -88,58 +76,6 @@ function Check($label, $got, $want) {
     if ("$got" -eq "$want") { Write-Output "PASS  $label"; $script:pass++ }
     else { Write-Output "FAIL  $label (got '$got', want '$want')"; $script:fail++ }
 }
-
-# ---------- WU-EXE-EFFECT ----------
-function RunExe($probe, $probeRan, $eff, $rc, $alreadyCurrent = $false) {
-    $p = [pscustomobject]@{ ExitCode = $rc }
-    $name = 'securityhealthsetup_x.exe'; $shBefore = 'a|b'; $detail = ''
-    $ok = $false; $sev = $null; $why = $null
-    Invoke-Expression $exeRegion
-    return @{ ok = $ok; sev = $sev; why = $why }
-}
-
-# The measured case: securityhealthsetup.exe, rc=0, probe ran, nothing changed.
-$r = RunExe 'security-platform' $true $false 0
-# CORRECTED 2026-09-20 - these two checks encoded the WRONG behaviour and passed on it. The
-# shipped code used to read its own negative probe as "the image is already current" and mark the
-# row info/ok. For the item this was written for that inference is false: the offered installer
-# carries Microsoft.SecHealthUI 1000.29628.1000.0, the guest has 1000.26100.8036.0 in both the
-# installed AND the provisioned package, and the payload is applicable to this build. rc=0 with
-# nothing moved is a FAILED INSTALL and stays actionable. (Jev: concealed-failure 0.87.)
-Check "exe: rc=0 + probe ran + no effect -> NOT informational (a silent failure)" $r.sev ''
-Check "exe: rc=0 + probe ran + no effect -> ok FALSE (nothing landed, so nothing succeeded)" $r.ok 'False'
-# NARROWED 2026-09-21, in both directions, and each case is checked separately.
-#  * ALREADY CURRENT: the payload declares the version the image already has, so nothing to do is
-#    a result, not a failure - this is what a second pass sees after the fallback provisioned it.
-$r = RunExe 'security-platform' $true $false 0 $true
-Check "exe: rc=0, nothing moved, but already AT the offered version -> ok TRUE" $r.ok 'True'
-Check "exe: ...and not laundered into 'info' either" $r.sev ''
-#  * NO WAY TO KNOW: a probe that cannot establish what the offer carries must assert NEITHER.
-#    Asserting a failure here turned an already-current Defender signature into a permanent
-#    "updates available" - the defect this file exists to prevent, from the other side.
-$r = RunExe 'defender-signature' $true $false 0
-Check "exe: probe cannot establish the offered version -> informational, not a failure" $r.sev 'info'
-Check "exe: ...and ok TRUE, so it stays out of dom0's count" $r.ok 'True'
-
-# A real failure must NOT be laundered into 'info'.
-$r = RunExe 'security-platform' $true $false 1603
-Check "exe: rc<>0 + probe ran + no effect -> NOT info (a real failure)" ([string]$r.sev) ''
-Check "exe: rc<>0 + probe ran + no effect -> ok false" $r.ok 'False'
-# A real install.
-$r = RunExe 'defender-signature' $true $true 0
-Check "exe: probe ran AND effect seen -> ok true, not info" "$($r.ok)/$([string]$r.sev)" 'True/'
-# A probe that could not run must fall back to rc, never report a false failure.
-$r = RunExe 'security-platform' $false $false 0
-Check "exe: probe DID NOT run -> falls back to rc=0, ok true" $r.ok 'True'
-# BOUNDING THE BLAST RADIUS. The whole risk of this classification is that it is the SAME SHAPE as
-# a silent failure, so it must be reachable only where we have a probe that actually measures the
-# thing. An executable we cannot measure must NEVER be marked not-actionable, whatever it returns -
-# otherwise a genuinely installable update could be quietly excluded and dom0 would go silent about
-# it, which is the original field defect wearing this fix as a disguise.
-$r = RunExe $null $false $false 0
-Check "exe: NO probe at all -> never 'info', however it exits" ([string]$r.sev) ''
-$r = RunExe $null $false $false 1603
-Check "exe: NO probe, nonzero rc -> ok false, still never 'info'" "$($r.ok)/$([string]$r.sev)" 'False/'
 
 # ---------- WU-INFO-EXCLUDE ----------
 function RunCount($after, $result, $notice, $available, $rebootNeeded = $false) {
@@ -191,28 +127,6 @@ $infoIncludingCumulative = $infoOnlyTheUnactionable + @([pscustomobject]@{ kb = 
 Check "CONTROL: if the cumulative were wrongly excluded dom0 would hear 0 - proving the count is what carries it" `
       (RunCount $tuesday $infoIncludingCumulative $null) 0
 
-# ---------- WU-NOTPACKAGE: a corrupt download must never become 'informational' ----------
-# Jev's defect hunt, 2026-09-20: ERROR_FILE_NOT_FOUND / ERROR_INVALID_DATA / CBS_E_INVALID_PACKAGE
-# are NOT exclusive to WU-client blobs - a TRUNCATED download produces them too, and relay
-# truncation on large files is a known failure mode on this path. Inferring "informational" from
-# the code alone let a corrupt cumulative be filed as nothing-to-worry-about.
-$script:expandOut = ''
-function expand.exe { param([Parameter(ValueFromRemainingArguments=$true)]$a) $script:expandOut }
-function NotPackage($rc, $expandOutput) {
-    $script:expandOut = $expandOutput
-    $dst = 'C:\x.msu'; $name = 'x.msu'; $OK_RC = @(0, 3010, 2359302); $notPackage = $false; $mum = $null
-    Invoke-Expression $npRegion
-    return $notPackage
-}
-$realPkg = "Microsoft (R) File Expansion Utility`nupdate.mum`nupdate.cat`npackage.cab"
-$blob    = "Microsoft (R) File Expansion Utility`nwuclient.dll`nsetup.xml"
-Check "notpkg: DISM invalid-data but the file CONTAINS update.mum -> NOT informational (corrupt download)" (NotPackage 13 $realPkg) 'False'
-Check "notpkg: DISM invalid-data and NO update.mum -> informational (a genuine WU-client blob)"            (NotPackage 13 $blob)    'True'
-Check "notpkg: DISM file-not-found but the file CONTAINS update.mum -> NOT informational"                  (NotPackage 2  $realPkg) 'False'
-Check "notpkg: CBS_E_INVALID_PACKAGE on a real package -> NOT informational"                               (NotPackage -2146498555 $realPkg) 'False'
-Check "notpkg: expand produced nothing readable -> NOT informational (unreadable is corruption)"           (NotPackage 13 '')       'False'
-Check "notpkg: a success code is never reclassified"                                                       (NotPackage 0  $blob)    'False'
-
 # ---------- WU-CATALOG-VALID: a broken response is not "no package" ----------
 # Jev: is_defect 0.94, severity high-silently-hides-real-updates 1.00, self_corrects 0.21.
 function CatalogUnresolved($content) {
@@ -234,8 +148,9 @@ Check "catalog: a proxy error page -> UNRESOLVED"                               
 # Jev put 0.80 on a genuinely installable update legitimately lacking a KB. Get-Available computes
 # direct_urls for EVERY offer, so a no-KB offer can be self-contained with a working URL - the old
 # code skipped on the SHAPE of the KB field before looking, and threw that away.
+# Since 2026-10-03 that route is the agent's own installer (Install-ViaAgentCache, stubbed here); the region's decision is the same.
 $script:installCalled = $false
-function Install-SelfContained($kb, $urls) { $script:installCalled = $true; return @(@{ ok = $true }) }
+function Install-ViaAgentCache($u) { $script:installCalled = $true; return [ordered]@{ kb = $u.title; ok = $true; state = 'installed'; files = @() } }
 # The no-KB region now also tries the CATALOG BY TITLE when there is no direct URL, so the suite
 # has to supply those two. $script:DrvFound decides whether the catalog has a package for this
 # guest's architecture; $script:drvInstalled records that the driver path was taken.

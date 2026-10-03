@@ -567,162 +567,110 @@ function Report-Availability($count){
   catch { Log "qubes.NotifyUpdates report failed: $($_.Exception.Message)" }
 }
 
-# Classify an offered IUpdate by the SHAPE of its published download content, WITHOUT a network
-# round-trip, so the router can decide whether it is installable NLA-free. Proven separable on live
-# scan data (scratchpad/dc-probe.ps1, 2026-08-20): self-contained updates carry a static
-# download.windowsupdate.com URL with no query string (Defender mpam-fe.exe, MSRT, SSU, .NET .cab);
-# express/UUP cumulatives (KB5071959) carry thousands of time-signed
-# tlu.dl.delivery.mp.microsoft.com/filestreamingservice delta streams that ONLY Delivery Optimization
-# can assemble - and DO refuses routeless (measured 0x80D03805), so those are terminally classified,
-# not chased. Static WINS if any static URL exists; the walk is bounded (a self-contained payload
-# appears in the first handful) so an express update's 8496 streams are never enumerated.
-function Get-WuContentClass($u){
-  $static=@(); $expressSeen=$false; $total=0
-  $items=@($u); try{ $items += @($u.BundledUpdates) }catch{}
-  foreach($b in $items){
-    $dcc=$null; try{ $dcc=$b.DownloadContents }catch{}
-    if(-not $dcc){ continue }
-    $n=0
-    foreach($dc in $dcc){
-      $n++; $total++
-      $url=$null; try{ $url=$dc.DownloadUrl }catch{}
-      if($url){
-        if($url -match 'filestreamingservice|tlu\.dl\.delivery\.mp\.microsoft\.com'){ $expressSeen=$true }
-        else{
-          # A DELTA patch (Defender am_delta_patch_*.exe) is NOT self-contained: it needs the current
-          # engine as its base and cannot self-apply offline (measured 0x80070002 for bare run AND /q;
-          # the FULL mpam-fe is DO-only, MpCmdRun -SignatureUpdate uses DO). Exclude it so Defender is
-          # classified terminally (honest) rather than fail-attempting an unapplicable patch. WU's
-          # IsDeltaCompressedContent is FALSE for these, so filter on the name too.
-          $isDelta=$false; try{ $isDelta=[bool]$dc.IsDeltaCompressedContent }catch{}
-          if((-not $isDelta) -and $url -notmatch 'delta' -and $url -match '^https?://[^/]*download\.windowsupdate\.com/' -and $url -notmatch '\?'){ $static += $url }
+# ---- WU-LEAF-SELECT-BEGIN   (tools/tests/wu-agentcache-test.ps1 runs this region)
+# WHAT THE AGENT STILL NEEDS, read from the offer's OWN metadata. An IUpdate is a BUNDLE TREE: the offered update carries
+# BundledUpdates, and those can carry more - measured 2026-10-03 on the German 25H2 template, KB2267602's MpSigStub helper sits at depth 2
+# under a "HIDDEN" depth-1 node with no content of its own, so a one-level walk left the bundle 'not downloaded' and the install failed
+# (0x80240022 / 0x80246007). Content lives on LEAVES (DownloadContents.Count > 0). A leaf is NEEDED when it is neither installed nor
+# downloaded: an up-to-date guest's installed 204 MB "Bases" leaves are not fetched (fetching them cost time and preceded the relay
+# refusing every later connection). A content URL is STATIC when it is a plain download.windowsupdate.com file - not an express stream
+# (filestreamingservice / tlu.dl.delivery.mp.microsoft.com, which only Delivery Optimization can assemble, and DO refuses routeless,
+# 0x80D03805), and no query string. The Defender delta leaf IS static and IS needed: its old exclusion rested on running it ourselves
+# (0x80070002 bare and with /q), and the agent runs it through MpSigStub with the update's own command line. Bounded: 256 nodes, and 64
+# content items per leaf (a self-contained leaf carries one; an express node carries thousands, which are never enumerated).
+function Get-WuNeededLeaves($u){
+  $acc = [ordered]@{ needed=@(); urls=@(); missing=@(); content=0; express=$false; visited=0 }
+  Add-WuLeaves $u 0 $acc
+  return $acc
+}
+function Add-WuLeaves($n, [int]$depth, $acc){
+  if($acc.visited -ge 256){ return }
+  $acc.visited++
+  $nc=0; try{ $nc=[int]$n.DownloadContents.Count }catch{}
+  if($nc -gt 0){
+    $acc.content += $nc
+    $installed=$false; $downloaded=$false
+    try{ $installed=[bool]$n.IsInstalled }catch{}
+    try{ $downloaded=[bool]$n.IsDownloaded }catch{}
+    $title=''; try{ $title=[string]$n.Title }catch{}
+    $uid=''; try{ $uid=[string]$n.Identity.UpdateID }catch{}
+    if(-not $installed -and -not $downloaded){   # GUARD:leafneeded - installed or already-cached leaves are not fetched again
+      $static=@(); $bad=@()
+      if($nc -gt 64){ $bad += "$nc content items (express-shaped)"; $acc.express=$true }
+      else {
+        foreach($dc in $n.DownloadContents){
+          $url=$null; try{ $url=[string]$dc.DownloadUrl }catch{}
+          if($url -match 'filestreamingservice|tlu\.dl\.delivery\.mp\.microsoft\.com'){ $acc.express=$true }
+          if($url -and $url -match '^https?://[^/]*download\.windowsupdate\.com/' -and $url -notmatch '\?' -and $url -notmatch 'filestreamingservice|tlu\.dl\.delivery\.mp\.microsoft\.com'){ $static += $url }   # GUARD:leafstatic
+          else { $bad += $(if($url){ $url } else { '(no url)' }) }
         }
       }
-      if($n -ge 64){ break }
+      $acc.needed += [pscustomobject]@{ Update=$n; Uid=$uid; Title=$title; Depth=$depth; Urls=@($static); Bad=@($bad) }
+      $acc.urls += $static
+      if($bad.Count -gt 0){ $acc.missing += [pscustomobject]@{ Uid=$uid; Title=$title; Depth=$depth; Bad=@($bad) } }
     }
-    if($static.Count -gt 0 -and $expressSeen){ break }
   }
-  if($static.Count -gt 0){ return @{ class='self-contained'; urls=@($static | Sort-Object -Unique) } }
-  if($expressSeen -or $total -gt 50){ return @{ class='express'; urls=@() } }
+  $nb=0; try{ $nb=[int]$n.BundledUpdates.Count }catch{}
+  if($nb -gt 0){ foreach($c in $n.BundledUpdates){ Add-WuLeaves $c ($depth+1) $acc } }   # GUARD:leafrecurse - the whole tree, not one level
+}
+# ---- WU-LEAF-SELECT-END
+
+# Classify an offered IUpdate from the shape of its needed leaves, without a network round-trip: 'self-contained' when every needed leaf
+# has static content (or nothing is needed because the agent's cache already holds it all) - the agent's own installer installs it from
+# content we supply (Install-ViaAgentCache); 'express' when a needed leaf is an express stream (not installable routeless, classified
+# terminally); 'none' otherwise. urls = the static URLs the install will fetch. No per-package code (Jev, scope 0.74, 2026-10-03).
+function Get-WuContentClass($u){
+  $lv = Get-WuNeededLeaves $u
+  $downloaded=$false; try{ $downloaded=[bool]$u.IsDownloaded }catch{}
+  if($lv.needed.Count -gt 0 -and $lv.missing.Count -eq 0){ return @{ class='self-contained'; urls=@($lv.urls | Sort-Object -Unique) } }
+  if($lv.needed.Count -eq 0 -and $lv.content -gt 0 -and $downloaded){ return @{ class='self-contained'; urls=@() } }
+  if($lv.express){ return @{ class='express'; urls=@() } }
   return @{ class='none'; urls=@() }
 }
 
-# ---- WU-APPX-CARVE-BEGIN
-# A "self-contained" vendor installer may be a CONTAINER, not an installer: securityhealthsetup.exe
-# holds its .appx packages as ZIP64 members of the PE and, on a netvm-less guest invoked directly
-# rather than by the Windows Update engine, it exits 0 in under a second and does nothing at all -
-# with no extract switch that works either (/x, /extract, /q /x all rc=0, nothing written).
-# Measured 2026-09-21: the packages carve out intact, signatures included, and install in eleven
-# seconds via Add-AppxProvisionedPackage. So carve and provision, the same way this updater already
-# resolves .msu content itself instead of relying on BITS/DO, which cannot work here.
-function Get-EmbeddedAppx {
-    param([string]$ExePath, [string]$OutDir)
-    $bytes = [IO.File]::ReadAllBytes($ExePath)
-    New-Item -ItemType Directory -Force $OutDir | Out-Null
-    $out = @()
-    # ZIP64 end-of-central-directory: 'P','K',6,6. The classic EOCD that follows carries the
-    # archive's true end; the ZIP64 record carries the central directory's size and offset, and
-    # the archive therefore STARTS at (record position - size - offset).
-    # Walk the CLASSIC end-of-central-directory records ('P','K',5,6). Each one ends an archive
-    # and carries the central directory's size and offset, so the archive STARTS at
-    # (eocd - size - offset). When those fields are 0xFFFFFFFF the archive is ZIP64 and the real
-    # values live in the ZIP64 EOCD ('P','K',6,6) immediately before it. Handling BOTH matters:
-    # keying only on the ZIP64 record would silently skip any ordinary-sized embedded package,
-    # and "found nothing" is indistinguishable from "there was nothing".
-    for ($i = 0; $i -lt $bytes.Length - 22; $i++) {
-        if ($bytes[$i] -ne 0x50 -or $bytes[$i+1] -ne 0x4B -or $bytes[$i+2] -ne 0x05 -or $bytes[$i+3] -ne 0x06) { continue }
-        $cdsize = [BitConverter]::ToUInt32($bytes, $i + 12)
-        $cdoff  = [BitConverter]::ToUInt32($bytes, $i + 16)
-        $end    = $i + 22 + [BitConverter]::ToUInt16($bytes, $i + 20)
-        # [uint32]::MaxValue, NOT 0xFFFFFFFF: PowerShell parses that literal as Int32 -1, so
-        # `4294967295 -eq 0xFFFFFFFF` is FALSE and the ZIP64 branch never runs. Measured
-        # 2026-09-21 - it silently found zero packages in a file holding three.
-        if ($cdsize -eq [uint32]::MaxValue -or $cdoff -eq [uint32]::MaxValue) {
-            $z64 = -1
-            for ($j = $i - 4; $j -ge 0 -and $j -gt $i - 8192; $j--) {
-                if ($bytes[$j] -eq 0x50 -and $bytes[$j+1] -eq 0x4B -and $bytes[$j+2] -eq 0x06 -and $bytes[$j+3] -eq 0x06) { $z64 = $j; break }
-            }
-            if ($z64 -lt 0 -or $z64 + 56 -gt $bytes.Length) { continue }
-            $start = [int64]$z64 - [int64][BitConverter]::ToUInt64($bytes, $z64 + 40) - [int64][BitConverter]::ToUInt64($bytes, $z64 + 48)
-        } else {
-            $start = [int64]$i - [int64]$cdsize - [int64]$cdoff
-        }
-        if ($start -lt 0 -or $end -le $start -or $end -gt $bytes.Length) { continue }
-        $blob = New-Object byte[] ($end - $start)
-        [Array]::Copy($bytes, $start, $blob, 0, $blob.Length)
-        $tmp = Join-Path $OutDir ("member-" + $start + ".appx")
-        [IO.File]::WriteAllBytes($tmp, $blob)
-        # Identify it by its OWN manifest - never by filename or by size order.
-        $name = $null; $ver = $null
-        try {
-            Add-Type -AssemblyName System.IO.Compression.FileSystem -EA SilentlyContinue
-            $zip = [IO.Compression.ZipFile]::OpenRead($tmp)
-            $ent = $zip.Entries | Where-Object { $_.FullName -eq 'AppxManifest.xml' } | Select-Object -First 1
-            if ($ent) {
-                $sr = New-Object IO.StreamReader($ent.Open())
-                $xml = [xml]$sr.ReadToEnd(); $sr.Close()
-                $name = $xml.Package.Identity.Name; $ver = $xml.Package.Identity.Version
-            }
-            $zip.Dispose()
-        } catch {}
-        if ($name) {
-            $final = Join-Path $OutDir ($name + ".appx")
-            Move-Item -Force $tmp $final
-            $out += [pscustomobject]@{ Path = $final; Name = $name; Version = $ver; Bytes = $blob.Length }
-        } else {
-            Remove-Item -Force $tmp -EA SilentlyContinue
-        }
-    }
-    return ,$out
-}
-# ---- WU-APPX-CARVE-END
-
-# Provision what the wrapper would not. Main package vs frameworks is decided STRUCTURALLY, from
-# each manifest: a framework declares <Framework>true</Framework> and the main package declares
-# <PackageDependency> entries naming them. No filename matching, no size ordering.
-function Install-EmbeddedAppx {
-    param([string]$ExePath, [string]$WorkRoot)
-    $res = [ordered]@{ attempted = $false; count = 0; ok = $false; detail = ''; mainVersion = $null }
+# ---- WU-SECPLATFORM-READ-BEGIN   (tools/tests/wu-secplatform-test.ps1 runs this region)
+# THE WINDOWS SECURITY PLATFORM, as its own installer (securityhealthsetup.exe, KB5007651) records it. Measured 2026-10-03 on the German
+# 25H2 template before and after a no-argument run, as SYSTEM: HKLM\SOFTWARE\Microsoft\Windows Security Health\Platform\CoreLocation
+# names the platform folder the Security Health service runs - '\\?\C:\Windows\System32' is the INBOX platform, '\\?\C:\Windows\System32\
+# SecurityHealth\10.0.29628.1000-0' an installed update; HKLM\...\Windows Security Health\Updates\wu is the version the installer recorded
+# (the Updates key is ABSENT until the first install); SecurityHealthHost.exe in CoreLocation carries the platform's FileVersion, which is
+# the only version the inbox platform has (10.0.26100.9278 there). `ver` is the folder's version, `cmp` the version an offer is compared
+# with (the folder's, else the inbox host's), `text` the one-line state for the log. `readable` is false when CoreLocation cannot be
+# read: the probe then did NOT run (ADR-updater section 3) and no verdict is drawn from it.
+function Get-SecurityPlatformState {
+  $s = [ordered]@{ readable=$false; loc=''; ver=$null; wu=$null; host=$null; cmp=$null; text='' }
+  try {
+    $pl = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows Security Health\Platform' -EA SilentlyContinue
+    if($pl -and $pl.CoreLocation){ $s.loc = [string]$pl.CoreLocation; $s.readable = $true }
+  } catch {}
+  if($s.loc){
+    if(($s.loc -replace '^.*[\\/]','') -match '^(\d+\.\d+\.\d+\.\d+)'){ $s.ver = $Matches[1] }
     try {
-        $dir = Join-Path $WorkRoot ('appx-' + [IO.Path]::GetFileNameWithoutExtension($ExePath))
-        Remove-Item $dir -Recurse -Force -EA SilentlyContinue
-        # NOT @(Get-EmbeddedAppx ...): the function returns `,$out` so the array survives the
-        # pipeline intact, and wrapping it again yields a one-element array CONTAINING the
-        # array - so the count is always 1 and the main/framework split sees one object with
-        # every Name at once. Caught by tools/tests/wu-appx-carve-selftest.sh on its first run.
-        $pkgs = Get-EmbeddedAppx -ExePath $ExePath -OutDir $dir
-        $pkgs = @($pkgs)
-        $res.count = $pkgs.Count
-        if ($pkgs.Count -eq 0) { $res.detail = 'no embedded packages'; return $res }
-        $res.attempted = $true
-        $main = @(); $deps = @()
-        foreach ($pk in $pkgs) {
-            $isFw = $false
-            try {
-                $zip = [IO.Compression.ZipFile]::OpenRead($pk.Path)
-                $ent = $zip.Entries | Where-Object { $_.FullName -eq 'AppxManifest.xml' } | Select-Object -First 1
-                if ($ent) { $sr = New-Object IO.StreamReader($ent.Open()); $x = [xml]$sr.ReadToEnd(); $sr.Close()
-                            $isFw = ("$($x.Package.Properties.Framework)" -eq 'true') }
-                $zip.Dispose()
-            } catch {}
-            if ($isFw) { $deps += $pk.Path } else { $main += $pk.Path }
-        }
-        if ($main.Count -ne 1) { $res.detail = "expected exactly one non-framework package, found $($main.Count)"; return $res }
-        $res.mainVersion = @($pkgs | Where-Object { $_.Path -eq $main[0] } | Select-Object -First 1).Version
-        if ($deps.Count -gt 0) { Add-AppxProvisionedPackage -Online -PackagePath $main[0] -DependencyPackagePath $deps -SkipLicense -EA Stop | Out-Null }
-        else                   { Add-AppxProvisionedPackage -Online -PackagePath $main[0] -SkipLicense -EA Stop | Out-Null }
-        $res.ok = $true; $res.detail = "provisioned $([IO.Path]::GetFileName($main[0])) with $($deps.Count) dependency package(s)"
-    } catch {
-        $res.detail = $_.Exception.Message -replace '\s+',' '
-    }
-    return $res
+      $h = Get-Item -LiteralPath (($s.loc -replace '^\\\\\?\\','').TrimEnd('\') + '\SecurityHealthHost.exe') -EA SilentlyContinue
+      if($h -and ([string]$h.VersionInfo.FileVersion) -match '(\d+\.\d+\.\d+\.\d+)'){ $s.host = $Matches[1] }
+    } catch {}
+  }
+  try {
+    $up = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows Security Health\Updates' -EA SilentlyContinue
+    if($up -and $up.wu){ $s.wu = [string]$up.wu }
+  } catch {}
+  $s.cmp = if($s.ver){ $s.ver } else { $s.host }
+  if($s.readable){
+    $s.text = "$(if($s.ver){ $s.ver } else { 'inbox' }) (CoreLocation $($s.loc); host $(if($s.host){ $s.host } else { 'unreadable' }); Updates\wu $(if($s.wu){ $s.wu } else { 'absent' }))"
+  } else { $s.text = 'CoreLocation unreadable' }
+  return $s
 }
+# ---- WU-SECPLATFORM-READ-END
 
 function Get-Available {
   $s=New-Object -ComObject Microsoft.Update.Session
   $se=$s.CreateUpdateSearcher(); $se.ServerSelection=2; $se.Online=$true
   $r=$se.Search("IsInstalled=0 and IsHidden=0")
-  $out=@()
+  $r=$se.Search("IsInstalled=0 and IsHidden=0")
+  # THE LIVE IUpdate OBJECTS, kept for the install phase of this pass: Install-ViaAgentCache hands the agent's installer the very object
+  # the search returned (CopyToCache is a method of it). Keyed by KB and by UpdateID (no-KB offers); the session and the result stay
+  # referenced with them so the COM objects remain valid. Rebuilt by every search, so a fresh search is a fresh map.
+  $script:WuSession = $s; $script:WuSearchResult = $r; $script:LiveUpdates = @{}
   foreach($u in $r.Updates){
     $kb=@($u.KBArticleIDs)|Select-Object -First 1; $kb= if($kb){"KB$kb"}else{'(no KB)'}
     $cls = Get-WuContentClass $u    # content class + any static URLs, computed while the IUpdate is live
@@ -733,6 +681,8 @@ function Get-Available {
     # the COM object: no title parsing, no locale dependence (ADR section 6).
     $uid=$null; $rev=$null
     try { $uid=[string]$u.Identity.UpdateID; $rev=[int]$u.Identity.RevisionNumber } catch {}
+    if($kb -ne '(no KB)' -and -not $script:LiveUpdates.ContainsKey($kb)){ $script:LiveUpdates[$kb] = $u }
+    if($uid){ $script:LiveUpdates[$uid] = $u }
     $out += [ordered]@{ kb=$kb; title="$($u.Title)"; size_mb=[math]::Round($u.MaxDownloadSize/1MB,1); downloaded=[bool]$u.IsDownloaded; content_class=$cls.class; direct_urls=@($cls.urls); uid=$uid; rev=$rev }
   }
   return ,$out
@@ -1129,7 +1079,7 @@ function Test-Msu($path, $expect) {
   $isWim = ($magic[0] -eq 0x4D -and $magic[1] -eq 0x53 -and $magic[2] -eq 0x57 -and $magic[3] -eq 0x49)
   # A self-contained WU update can also be an executable (Defender mpam-fe.exe, MSRT
   # windows-kb890830-*.exe) - a valid PE starts 'MZ' (4D 5A). Accept it: an HTML error page still
-  # begins '<' (0x3C), so this keeps catching garbage while letting Install-SelfContained fetch exes.
+  # begins '<' (0x3C), so this keeps catching garbage while letting the agent-cache path fetch exes.
   $isExe = ($magic[0] -eq 0x4D -and $magic[1] -eq 0x5A)
   if (-not ($isCab -or $isWim -or $isExe)) {
     Log "  VERIFY: $([IO.Path]::GetFileName($path)) is not MSCF/MSWIM/MZ - discarding"
@@ -1396,165 +1346,150 @@ function Get-ServicingNotice($avail, $esu) {
     'in ESU with a volume Multiple Activation Key (MAK, offline-activatable). INFORMATIONAL, not an error.')
 }
 
-# Defender SIGNATURE updates: resolve the current full package URL.
-#
-# Measured 2026-08-21, correcting a claim recorded here earlier: the FULL signature package is NOT
-# Delivery-Optimization-only. It is an ordinary HTTPS GET of ~203 MB:
-#     https://go.microsoft.com/fwlink/?linkid=121721&arch=x64
-#       -> 302 -> https://definitionupdates.microsoft.com/packages/content/mpam-fe.exe
-#                   ?packageType=Signatures&packageVersion=...&arch=amd64&engineVersion=...
-# The version parameters are MANDATORY - the bare URL 404s - so the redirect has to be followed
-# rather than a URL constructed. HTTPS only (plain http answers 503), so it rides the relay's
-# CONNECT tunnel. Both hosts are in the relay allowlist for exactly this.
-#
-# Returns the resolved URL, or $null if it could not be resolved - in which case the caller keeps
-# the old INFORMATIONAL behaviour rather than inventing a URL.
-function Get-DefenderFullPackageUrl {
-  # The fwlink is a CHAIN, not one hop. Measured 2026-08-21:
-  #   go.microsoft.com/fwlink/?linkid=121721  -302->  definitionupdates.microsoft.com/packages?arch=x64
-  #                                           -302->  .../packages/content/mpam-fe.exe?packageType=...
-  # Only the LAST url names the file. Stopping at the first hop would hand Install-SelfContained a
-  # URL with no .exe in it, which it correctly refuses as an unrecognised artifact - so follow the
-  # chain until the target names a file, and cap the hops so a redirect loop cannot spin.
-  $url = 'https://go.microsoft.com/fwlink/?linkid=121721&arch=x64'
-  for ($hop = 0; $hop -lt 5; $hop++) {
-    $next = Get-RedirectTarget $url
-    if (-not $next) { break }
-    # A Location header may be RELATIVE, and the second hop of this chain is: it answers
-    # "/packages/content/mpam-fe.exe?packageType=..." with no scheme or host. Handing that to
-    # Fetch-Msu produced 14 identical failures reading
-    #   "Invalid URI: The format of the URI could not be determined."
-    # Resolve every hop against the URL it came from, which is a no-op for absolute targets.
-    try { $url = ([Uri]::new([Uri]$url, $next)).AbsoluteUri }
-    catch { Log "Defender: unusable redirect target '$next' from $url" 'WARN'; return $null }
-    if ($url -match '/[^/?]+\.(exe|msu|cab)(\?|$)') { return $url }
-  }
-  if ($url -match '/[^/?]+\.(exe|msu|cab)(\?|$)') { return $url }
-  Log "Defender: the fwlink chain did not end at a downloadable file (last: $url)" 'WARN'
+# WHICH EFFECT PROBE answers for an update: by its fixed KB, else by the filename family of its content (ADR-updater section 6: keys and
+# filename families, never titles). A probe measures the artefact the package actually changes; the agent's result is judged with it.
+function Get-EffectProbe([string]$kb, [string[]]$names){
+  $n = ($names -join ' ')
+  if($kb -eq 'KB5007651' -or $n -match 'securityhealthsetup'){ return 'security-platform' }
+  if($kb -eq 'KB890830'  -or $n -match 'kb890830'){ return 'mrt-version' }
+  if($kb -eq 'KB4052623' -or $n -match 'updateplatform'){ return 'defender-platform' }
+  if($kb -eq 'KB2267602' -or $n -match 'mpam|mpas|nis_full|am_delta|am_base|am_engine|mpsigstub'){ return 'defender-signature' }
   return $null
 }
 
-# One redirect hop: return the Location of $Url, or $null when it is not a redirect.
-function Get-RedirectTarget($Url) {
-  foreach ($try in 1..2) {
-    $resp = $null
-    try {
-      # HttpWebRequest with AllowAutoRedirect=$false, NOT Invoke-WebRequest -MaximumRedirection 0.
-      # Measured: the Invoke-WebRequest form throws
-      #   InvalidOperationException: Operation is not valid due to the current state of the object
-      # in Windows PowerShell 5.1 when the reply IS a redirect, and exposes no response object to
-      # read Location from - the request never even reaches the relay (its log stayed empty). This
-      # is also the class Fetch-Msu already uses, so the whole updater speaks HTTP one way.
-      $req = [System.Net.HttpWebRequest]::Create($Url)
-      $req.Proxy = New-Object System.Net.WebProxy($Proxy)
-      $req.AllowAutoRedirect = $false
-      $req.Timeout = 60000
-      $req.ReadWriteTimeout = 60000
-      $resp = $req.GetResponse()
-      $code = [int]$resp.StatusCode
-      $loc  = $resp.GetResponseHeader('Location')
-      $resp.Close(); $resp = $null
-      if ($loc) { return $loc }
-      if ($code -ge 300 -and $code -lt 400) { Log "Defender: $code with no Location header for $Url" 'WARN' }
-      return $null
-    } catch [System.Net.WebException] {
-      # A 3xx with AllowAutoRedirect=$false is NOT an exception, but a 4xx/5xx is - and its response
-      # still carries the headers, so try to read Location even here before giving up.
-      $wr = $null; try { $wr = $_.Exception.Response } catch {}
-      if ($wr) {
-        $loc = $null; try { $loc = $wr.GetResponseHeader('Location') } catch {}
-        try { $wr.Close() } catch {}
-        if ($loc) { return $loc }
-      }
-      if ($try -eq 2) { Log "Defender: redirect hop failed for $Url ($($_.Exception.Message))" 'WARN' }
-      else { Start-Sleep -Seconds 3 }
-    } catch {
-      if ($try -eq 2) { Log "Defender: redirect hop error for $Url ($($_.Exception.Message))" 'WARN' }
-      else { Start-Sleep -Seconds 3 }
-    } finally {
-      if ($resp) { try { $resp.Close() } catch {} }
+# A COM object the agent path needs - one place, so the offline tests can stand in fakes for it.
+function New-WuComObject([string]$progId){ return (New-Object -ComObject $progId) }
+
+# THE LIVE IUpdate FOR AN OFFER ROW: from this pass's search (Get-Available keeps them), else from a FRESH search - never guessed. The agent
+# installs only what it offered; an update a fresh search no longer offers is reported as such.
+function Get-LiveUpdate($u){
+  foreach($try in 1,2){
+    if($script:LiveUpdates){
+      if($u.uid -and $script:LiveUpdates.ContainsKey([string]$u.uid)){ return $script:LiveUpdates[[string]$u.uid] }
+      if(([string]$u.kb) -match '^KB\d+' -and $script:LiveUpdates.ContainsKey([string]$u.kb)){ return $script:LiveUpdates[[string]$u.kb] }
+    }
+    if($try -eq 1){
+      Log "  $($u.kb): no live update object from this pass's search - searching again"
+      try { Get-Available | Out-Null } catch { Log "  fresh search failed: $($_.Exception.Message)"; return $null }
     }
   }
   return $null
 }
 
-# Install a KB that Windows Update offers as a self-contained STATIC file (Defender defs and MSRT ship
-# as .exe; some updates as .msu), fetched through the proxy and installed with NO Delivery Optimization
-# / BITS / NLA. This is the routeless-clean replacement for handing these KBs to the DO-gated
-# Install-ViaWU, the class that actually failed every pass on a netvm-free guest. Proven mechanism:
-# scan carries the static URL (dc-probe.ps1), Fetch-Msu pulls it through 127.0.0.1:8082 (harvest-proof.ps1).
-function Install-SelfContained($kb,$urls){
-  $dir = Join-Path $WorkDir ("wu-direct\" + $kb)
+# INSTALLER-TYPE UPDATES ARE INSTALLED BY THE WINDOWS UPDATE AGENT'S OWN INSTALLER, FROM CONTENT WE SUPPLY. The owner's rule (2026-10-03):
+# a vendor installer is never run with a switch we chose, and its payload is never carved, repacked or provisioned by us. Until 2026-10-03
+# this updater ran the fetched .exe itself with '/q' (a no-op for securityhealthsetup.exe - KB5007651 silently failed every pass from
+# 2026-09-20), resolved and ran the Defender full package itself, and carved KB5007651's app packages out of its installer; all of that is
+# gone. Mechanism (Jev 1.00), measured 2026-10-03 on the German 25H2 template on four offered updates, all succeeding by effect: the
+# needed leaves' content is fetched through the relay (Fetch-Msu), handed to the agent with IUpdate2.CopyToCache (the update then reads
+# IsDownloaded), and IUpdateInstaller.Install runs it - the agent runs each package with the update's OWN command line (KB5007651: no
+# switch, ResultCode 2 in 2 s, the platform moved; KB2267602: MpSigStub's /payload chain, four leaves incl. a 204 MB base, ResultCode 2
+# in 26 s, signatures and engine moved; KB890830: '/Q /W', ResultCode 2 in 126 s, MRT version set; KB4052623: ResultCode 2 in 45 s).
+# The agent's DOWNLOADER is never called: routeless it goes to BITS and hung for 30 minutes. CopyToCache with an EMPTY list throws
+# E_INVALIDARG. The COM object's IsInstalled stays stale after Install: the verdict is the agent's result codes AND our effect probes
+# (Jev 0.72), never a re-read of it. One row per update, in the shape dom0's handler and the exclusion audit read.
+function Install-ViaAgentCache($u){
+  $kb = [string]$u.kb
+  $label = if($kb -match '^KB\d+'){ $kb } elseif($u.title){ [string]$u.title } else { 'untitled offer' }
+  $dir = Join-Path $WorkDir ("wu-agent\" + ($label -replace '[^A-Za-z0-9._-]','_'))
   New-Item -ItemType Directory -Force $dir | Out-Null
-  $rows=@()
-  foreach($url in @($urls)){
-    $name = if($url -match '/([^/?]+\.(?:msu|exe|cab))(\?|$)'){ $Matches[1] } else { "$kb.bin" }
-    $dst = Join-Path $dir $name
-    if(-not (Fetch-Msu $url $dst $kb)){ $rows += [ordered]@{ kb=$kb; file=$name; rc='fetch-failed'; ok=$false }; continue }
-    $ext = [IO.Path]::GetExtension($name).ToLower()
-    if($ext -eq '.exe'){
-      # Verify BY EFFECT, not by exit code: Defender mpam-fe advances AntivirusSignatureVersion; MSRT
-      # advances HKLM\...\RemovalTools\MRT\Version. rc=0 alone has read as success on a no-op before.
-      #
-      # GUARD:effectprobe - and it read as success on a no-op AGAIN, measured 2026-09-20 on the
-      # German 25H2 template. securityhealthsetup.exe (the "Windows Security platform" offer,
-      # KB5007651, offered as 10.0.29628.1000) ran with rc=0 on EVERY pass while
-      # SecurityHealthService.exe stayed at the inbox 10.0.26100.9278 - nothing moved. There was no
-      # probe for that executable, so $eff was structurally false for it and `rc -eq 0` alone
-      # decided ok=$true. dom0 was therefore told "offered, still pending" forever instead of
-      # "this update is FAILING", which is the same untruth as the field report in a new place.
-      # Now: if we KNOW how to measure an executable's effect, rc=0 without that effect is NOT
-      # success. Where we have no probe, say so in the row rather than implying verification.
-      $probe = $null
-      if    ($name -match 'securityhealthsetup') { $probe = 'security-platform' }
-      elseif($name -match 'kb890830|mrt')        { $probe = 'mrt-version' }
-      elseif($name -match 'mpam|mpas|nis_full')  { $probe = 'defender-signature' }
-      elseif($name -match 'updateplatform')      { $probe = 'defender-platform' }   # KB4052623, the antimalware platform
-      $sigBefore=''; $mrtBefore=''; $shBefore=''; $platBefore=''
-      try{ $sigBefore=(Get-MpComputerStatus).AntivirusSignatureVersion }catch{}
-      try{ $platBefore=[string](Get-MpComputerStatus).AMProductVersion }catch{}
-      $platDirsBefore = @()
-      if($probe -eq 'defender-platform'){ try{ $platDirsBefore = @(Get-ChildItem -LiteralPath 'C:\ProgramData\Microsoft\Windows Defender\Platform' -Directory -EA Stop | ForEach-Object { $_.Name }) }catch{} }
-      try{ $mrtBefore=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\RemovalTools\MRT' -Name Version -EA SilentlyContinue).Version }catch{}
-      # The file calls itself "Windows Security app UNDOCKED setup": what it updates is the
-      # SecHealthUI APPX PACKAGE, not SecurityHealthService.exe in System32. Probing only the
-      # System32 binary would report a false FAILURE for a correct install, so take both and
-      # treat either moving as the effect. (Caught before shipping, 2026-09-20.)
-      try{ $pkB=Get-AppxPackage -AllUsers -Name Microsoft.SecHealthUI -EA SilentlyContinue | Select-Object -First 1; if($pkB){ $shBefore=[string]$pkB.Version } }catch{}
-      # ...and the PROVISIONED package, which is a THIRD artefact and the one that moves when the
-      # payload is provisioned rather than installed into a user profile. Measured 2026-09-21:
-      # provisioning takes the version from 1000.26100.8036.0 to 1000.29628.1000.0 while
-      # Get-AppxPackage -AllUsers stays put, so a probe blind to this reports a correct install as
-      # a failure - the same "probe the wrong artefact" trap, one artefact further on.
-      try{ $prB=Get-AppxProvisionedPackage -Online -EA SilentlyContinue | Where-Object { $_.DisplayName -like '*SecHealthUI*' } | Select-Object -First 1; if($prB){ $shBefore="$shBefore|" + [string]$prB.Version } }catch{}
-      try{ $itB=Get-Item 'C:\Windows\System32\SecurityHealthService.exe' -EA SilentlyContinue; if($itB){ $shBefore="$shBefore|" + $itB.VersionInfo.ProductVersion } }catch{}
-      $p = Start-Process $dst -ArgumentList '/q' -Wait -PassThru -WindowStyle Hidden
-      $eff=$false
-      try{ if($sigBefore){ $eff = $eff -or ((Get-MpComputerStatus).AntivirusSignatureVersion -ne $sigBefore) } }catch{}
-      try{ if($name -match 'kb890830'){ $eff = $eff -or ((Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\RemovalTools\MRT' -Name Version -EA SilentlyContinue).Version -ne $mrtBefore) } }catch{}
-      $shAfter=''
-      try{ $pkA=Get-AppxPackage -AllUsers -Name Microsoft.SecHealthUI -EA SilentlyContinue | Select-Object -First 1; if($pkA){ $shAfter=[string]$pkA.Version } }catch{}
-      try{ $prA=Get-AppxProvisionedPackage -Online -EA SilentlyContinue | Where-Object { $_.DisplayName -like '*SecHealthUI*' } | Select-Object -First 1; if($prA){ $shAfter="$shAfter|" + [string]$prA.Version } }catch{}
-      try{ $itA=Get-Item 'C:\Windows\System32\SecurityHealthService.exe' -EA SilentlyContinue; if($itA){ $shAfter="$shAfter|" + $itA.VersionInfo.ProductVersion } }catch{}
-      # If neither artefact could be read at all, the probe did not RUN - that is unknown, not a
-      # negative, and must not be reported as a failed install.
-      $probeRan = $true
-      if($probe -eq 'security-platform'){
-        if(-not $shBefore -and -not $shAfter){ $probeRan = $false }
-        else { $eff = $eff -or ($shAfter -ne $shBefore) }
+  $update = Get-LiveUpdate $u
+  if(-not $update){
+    Log "  $label : not offered by a fresh search - nothing for the agent to install"
+    return [ordered]@{ kb=$label; ok=$false; state='failed'; files=@(); reason='Windows Update no longer offers this update (a fresh search in this pass found no live object for it) - nothing was installed' }
+  }
+  $session = $script:WuSession
+  try { if(-not $update.EulaAccepted){ $update.AcceptEula() } } catch {}
+  $lv = Get-WuNeededLeaves $update
+  $leafNames = @($lv.urls | ForEach-Object { if($_ -match '/([^/?]+)(\?|$)'){ $Matches[1] } })
+  $probe = Get-EffectProbe $kb $leafNames
+  Log ("  $label : $($lv.needed.Count) needed leaf/leaves, $($lv.urls.Count) static file(s)" + $(if($probe){ ", effect probe $probe" } else { ', no effect probe' }))
+  # ---- the artefact BEFORE the install, per probe
+  $sigBefore=''; $mrtBefore=''; $platBefore=''; $platDirsBefore=@(); $secBefore=$null; $appBefore=''
+  if($probe -eq 'defender-signature'){ try{ $sigBefore=[string](Get-MpComputerStatus).AntivirusSignatureVersion }catch{} }
+  if($probe -eq 'defender-platform'){
+    try{ $platBefore=[string](Get-MpComputerStatus).AMProductVersion }catch{}
+    try{ $platDirsBefore = @(Get-ChildItem -LiteralPath 'C:\ProgramData\Microsoft\Windows Defender\Platform' -Directory -EA Stop | ForEach-Object { $_.Name }) }catch{}
+  }
+  if($probe -eq 'mrt-version'){ try{ $mrtBefore=[string](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\RemovalTools\MRT' -Name Version -EA SilentlyContinue).Version }catch{} }
+  if($probe -eq 'security-platform'){
+    # THE WINDOWS SECURITY PLATFORM (KB5007651): the artefact its installer changes is the PLATFORM (Get-SecurityPlatformState). Two
+    # earlier probes read the wrong artefact (ADR-updater section 3): SecurityHealthService.exe (2026-09-20; it never changes) and the
+    # SecHealthUI app (2026-09-21; it follows the platform about 41 s AFTER the installer returns, and a fallback of this updater's own
+    # used to provision it, which made the item read ALREADY CURRENT over an uninstalled platform - rz35, 2026-10-03). The app is read
+    # for the LOG only and decides nothing.
+    $secBefore = Get-SecurityPlatformState
+    try{ $pkB=Get-AppxPackage -AllUsers -Name Microsoft.SecHealthUI -EA SilentlyContinue | Select-Object -First 1; if($pkB){ $appBefore=[string]$pkB.Version } }catch{}
+  }
+  # ---- WU-AGENT-INSTALL-BEGIN   (tools/tests/wu-agentcache-test.ps1 runs this region with fake agent objects)
+  $files=@(); $missing=@()
+  foreach($leaf in $lv.needed){
+    if($leaf.Bad.Count -gt 0){ $missing += "$($leaf.Title): no static content ($($leaf.Bad -join ', '))"; continue }
+    $coll = New-WuComObject 'Microsoft.Update.StringColl'
+    foreach($url in $leaf.Urls){
+      $name = if($url -match '/([^/?]+)(\?|$)'){ $Matches[1] } else { 'content.bin' }
+      $dst = Join-Path $dir $name
+      if(Fetch-Msu $url $dst $label){
+        [void]$coll.Add($dst)
+        $files += [ordered]@{ file=$name; bytes=(Get-Item -LiteralPath $dst).Length; leaf=$leaf.Title }
+      } else {
+        $missing += "$($leaf.Title): fetch failed ($name)"
+        $files += [ordered]@{ file=$name; bytes=0; leaf=$leaf.Title; rc='fetch-failed' }
       }
-      # THE WRAPPER RAN AND CHANGED NOTHING. Before reporting an outstanding update, check whether
-      # it is a CONTAINER we can service ourselves. Measured 2026-09-21 on the German 25H2
-      # template: securityhealthsetup.exe exits 0 in under a second and does nothing, with no
-      # extract switch that works (/x, /extract, /q /x all rc=0, nothing written), while the .appx
-      # packages inside it provision cleanly in eleven seconds. That is this path's problem, not a
-      # vendor bug: Windows Update normally installs this through its own engine, and we invoke the
-      # wrapper standalone because the guest is routeless - the same reason .msu content is
-      # resolved from the catalog here instead of through BITS/DO.
-      #
-      # Gated to the ONE probe whose effect we can measure. A fallback whose result cannot be
-      # verified must not fire silently (fallbacks are anomalies: they are logged loudly).
-      $alreadyCurrent = $false
+    }
+    if($coll.Count -eq 0){ continue }   # GUARD:emptycache - CopyToCache with no files throws E_INVALIDARG (measured 2026-10-03)
+    try { $leaf.Update.CopyToCache($coll); Log ("    $($leaf.Title): $($coll.Count) file(s) handed to the agent's cache") }
+    catch { $missing += "$($leaf.Title): CopyToCache failed ($($_.Exception.Message -replace '\s+',' '))" }
+  }
+  $downloaded=$false; try{ $downloaded=[bool]$update.IsDownloaded }catch{}
+  $agentRc=$null; $agentHr=$null; $agentErr=$null; $reboot=$false
+  if(-not $downloaded){   # GUARD:nodownloader - the agent's downloader is NEVER called here (routeless it goes to BITS and hangs)
+    Log ("  $label : NOT downloaded after CopyToCache - not installing; missing: " + $(if($missing.Count){ $missing -join '; ' } else { 'nothing named - the agent did not accept the cached content' }))
+  } else {
+    $installer = $session.CreateUpdateInstaller()
+    $one = New-WuComObject 'Microsoft.Update.UpdateColl'; [void]$one.Add($update); $installer.Updates = $one
+    $script:St.installing = [ordered]@{ kb=$label; via='agent' }; Save
+    $t0 = Get-Date
+    try {
+      $res = $installer.Install(); $ur = $res.GetUpdateResult(0)
+      $agentRc=[int]$ur.ResultCode; $agentHr=[int]$ur.HResult; $reboot=[bool]$res.RebootRequired
+      Log ("  $label : agent installer ResultCode=$agentRc HResult=0x{0:X8} RebootRequired=$reboot in {1} s" -f $agentHr, [int]((Get-Date) - $t0).TotalSeconds)
+    } catch { $agentErr = ($_.Exception.Message -replace '\s+',' '); $agentRc = 4; Log ("  $label : agent installer THREW: $agentErr") }
+    $script:St.installing = $null
+  }
+  # ---- WU-AGENT-INSTALL-END
+  $agentOk = ($null -ne $agentRc) -and ($agentRc -in @(2,3))
+  # ---- the artefact AFTER the install, per probe: $eff = it moved, $probeRan = it could be read, $alreadyCurrent / *Behind = its
+  # comparison with the dotted quad in the offer's own title (digits are language-free, ADR-updater section 6)
+  $eff=$false; $probeRan=$true; $alreadyCurrent=$false; $platBehind=$false; $sigBehind=$false; $secWhy=$null
+  $offered = $null
+  try { if(([string]$u.title) -match '(\d+\.\d+\.\d+\.\d+)'){ $offered = $Matches[1] } } catch {}
+  if($probe -eq 'mrt-version'){
+    $mrtAfter=''; try{ $mrtAfter=[string](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\RemovalTools\MRT' -Name Version -EA SilentlyContinue).Version }catch{}
+    if(-not $mrtBefore -and -not $mrtAfter){ $probeRan=$false } else { $eff = ($mrtAfter -ne $mrtBefore); Log ("    MRT version $mrtBefore -> $mrtAfter") }
+  }
+  if($probe -eq 'defender-signature'){
+    $sigAfter=''; try{ $sigAfter=[string](Get-MpComputerStatus).AntivirusSignatureVersion }catch{}
+    if(-not $sigBefore -and -not $sigAfter){ $probeRan=$false }
+    else {
+      $eff = ($sigAfter -ne $sigBefore)
+      # ---- WU-DEFENDER-SIGNATURE-BEGIN   (tools/tests/wu-agentcache-test.ps1 runs this region)
+      # The offer states the version it carries in its own title ("(Version 1.459.317.0)"); Get-MpComputerStatus states the installed
+      # one. Nothing moved and at or past the offer = ALREADY CURRENT (what a second pass sees). Nothing moved and BELOW the offer after
+      # an agent success = a disagreement the verdict fails loudly. No version in the offer = nothing to compare.
+      if($eff){ Log ("    signature $sigBefore -> $sigAfter") }
+      elseif($offered -and $sigAfter){
+        try {
+          if([version]$sigAfter -ge [version]$offered){ $alreadyCurrent = $true; Log ("    signature $sigAfter is already at or past the offered $offered - nothing to do") }
+          else {
+            $sigBehind = $true   # GUARD:sigbehind
+            Log ("    signature $sigAfter is BEHIND the offered $offered and nothing moved")
+          }
+        } catch { Log ("    could not compare signature versions ('$sigAfter' vs '$offered')") }
+      } else { Log ("    signature stayed at $sigAfter; the offer names no version to compare") }
+      # ---- WU-DEFENDER-SIGNATURE-END
+    }
+  }
 # ---- WU-DEFENDER-PLATFORM-BEGIN   (tools/tests/wu-defplatform-test.ps1 runs this region)
       # THE DEFENDER ANTIMALWARE PLATFORM (KB4052623, updateplatform.amd64fre_*.exe) was counted from its exit code alone - "probe=none
       # (ok from rc only)" - and the exclusion audit, rightly, would not accept dom0's silence about an item nothing had verified: it
@@ -1562,9 +1497,9 @@ function Install-SelfContained($kb,$urls){
       # effect IS measurable: the installer stages the new platform under ...\Windows Defender\Platform\<version>*, and Defender reports
       # the platform it runs as AMProductVersion (which may only move once its service restarts - so the staged folder counts too).
       # The offered version is the dotted quad in the offer's own title, as for the signatures below (language-independent).
-      # BEHIND = the installer exited 0, nothing moved, nothing new was staged and the platform is still below the offered version: a
-      # FAILED install, decided in WU-EXE-EFFECT. Never 'informational' - that reason says the offered version cannot be established,
-      # which here it can (ADR-updater section 3: the negative of a probe that ran is a result, not a missing one).
+      # BEHIND = the agent reported success, nothing moved, nothing new was staged and the platform is still below the offered version: a
+      # FAILED install (a disagreement), decided in WU-AGENT-VERDICT. Never 'informational' - that reason says the offered version cannot
+      # be established, which here it can (ADR-updater section 3: the negative of a probe that ran is a result, not a missing one).
       $platBehind = $false
       if($probe -eq 'defender-platform'){
         $platOffered = $null
@@ -1584,7 +1519,7 @@ function Install-SelfContained($kb,$urls){
         else {
           if(($platAfter -and $platBefore -and $platAfter -ne $platBefore) -or $platStaged){ $eff = $true }   # GUARD:defplatform
           if($eff){ Log ("    defender platform $platBefore -> $platAfter" + $(if($platStaged){ " (the offered $platOffered is staged on disk)" } else { '' })) }
-          elseif($p.ExitCode -eq 0 -and $platOffered -and $platAfter){
+          elseif($agentOk -and $platOffered -and $platAfter){
             try {
               if([version]$platAfter -ge [version]$platOffered){
                 $alreadyCurrent = $true
@@ -1613,196 +1548,89 @@ function Install-SelfContained($kb,$urls){
         }
       }
 # ---- WU-DEFENDER-PLATFORM-END
-      # DEFENDER SIGNATURES: the offer DOES state the version it carries, in its own title as
-      # "(Version 1.459.317.0)", and Get-MpComputerStatus states the installed one. Comparing the
-      # two turns "the probe cannot establish the offered version" - which was true, and which made
-      # this item unjudgeable - into a plain answer. Digits only: the title's LANGUAGE is
-      # nondeterministic here (the same KB comes back German, English or French) but a dotted quad
-      # is a dotted quad, and this is an EFFECT comparison, never accept/reject, which still runs
-      # on the filename. Jev rated this measurement decisive at 1.00 for this item.
-      if($probe -eq 'defender-signature' -and -not $eff -and $p.ExitCode -eq 0){
-        $offeredVer = $null
+# ---- WU-SECURITY-PLATFORM-BEGIN   (tools/tests/wu-secplatform-test.ps1 runs this region)
+      # THE WINDOWS SECURITY PLATFORM (KB5007651) is decided by the PLATFORM - Get-SecurityPlatformState before and after the run (the
+      # CoreLocation folder's version, Updates\wu, the host's FileVersion) against the dotted quad in the offer's own title (digits are
+      # language-free, ADR section 6), like the Defender platform above. Measured 2026-10-03 on the German 25H2 template (two fresh
+      # clones and the rz35 subject): the no-argument run moves CoreLocation from System32 to ...\SecurityHealth\10.0.29628.1000-0 and
+      # writes Updates\wu=10.0.29628.1000 before the launcher returns, and Windows Update then STOPS offering KB5007651; the SecHealthUI
+      # app follows about 41 s later and is information only - it decided this item until 2026-10-03 and read ALREADY CURRENT over an
+      # uninstalled platform. MOVED to or past the offer = installed (eff). NOT moved and at or past the offer = ALREADY CURRENT.
+      # Anything else = a FAILED install, decided in WU-AGENT-VERDICT (the owner's rule, 2026-10-03). The install itself is the
+      # agent's (Install-ViaAgentCache); nothing here installs, carves or provisions any part of the payload.
+      $secWhy = $null
+      if($probe -eq 'security-platform'){
+        $secOffered = $null
         try {
-          $off = @($script:St.available | Where-Object { $_.kb -eq $kb } | Select-Object -First 1)
-          if($off -and $off[0].title -match '(\d+\.\d+\.\d+\.\d+)'){ $offeredVer = $Matches[1] }
+          $secOff = @($script:St.available | Where-Object { $_.kb -eq $kb } | Select-Object -First 1)
+          if($secOff -and $secOff[0].title -match '(\d+\.\d+\.\d+\.\d+)'){ $secOffered = $Matches[1] }
         } catch {}
-        $sigNow = ''
-        try { $sigNow = [string](Get-MpComputerStatus).AntivirusSignatureVersion } catch {}
-        if($offeredVer -and $sigNow){
-          try {
-            if([version]$sigNow -ge [version]$offeredVer){
-              $alreadyCurrent = $true
-              Log ("    signature $sigNow is already at or past the offered $offeredVer - nothing to do")
-            } else {
-              Log ("    signature $sigNow is BEHIND the offered $offeredVer and nothing moved - this update did not install")
-            }
-          } catch { Log ("    could not compare signature versions ('$sigNow' vs '$offeredVer')") }
-        }
-      }
-      if($probe -eq 'security-platform' -and $probeRan -and -not $eff -and $p.ExitCode -eq 0){
-        $ax = Install-EmbeddedAppx -ExePath $dst -WorkRoot $WorkDir
-        if($ax.attempted){
-          Log ("  $name : wrapper exited 0 and changed nothing; carved $($ax.count) embedded package(s) -> $($ax.detail)")
-          if($ax.ok){
-            $shAfter=''
-            try{ $pkA3=Get-AppxPackage -AllUsers -Name Microsoft.SecHealthUI -EA SilentlyContinue | Select-Object -First 1; if($pkA3){ $shAfter=[string]$pkA3.Version } }catch{}
-            try{ $prA3=Get-AppxProvisionedPackage -Online -EA SilentlyContinue | Where-Object { $_.DisplayName -like '*SecHealthUI*' } | Select-Object -First 1; if($prA3){ $shAfter="$shAfter|" + [string]$prA3.Version } }catch{}
-            # The re-probe must read the SAME artefacts IN THE SAME ORDER as $shBefore, or the
-            # comparison below is apples-to-oranges and reports a change that did not happen.
-            # Measured 2026-09-21: $shBefore was installed|provisioned|service (three fields) while
-            # this re-probe built only two, so `$shAfter -ne $shBefore` was ALWAYS true and the
-            # fallback would have certified itself even when nothing moved. It happened to be right
-            # on the run that exposed it, which is exactly how an unsound check survives.
-            try{ $itA3=Get-Item 'C:\Windows\System32\SecurityHealthService.exe' -EA SilentlyContinue; if($itA3){ $shAfter="$shAfter|" + $itA3.VersionInfo.ProductVersion } }catch{}
-            # The EFFECT is still the only thing that counts - a successful call is not a result.
-            if($shAfter -ne $shBefore){ $eff=$true; Log ("    security platform moved $shBefore -> $shAfter (SecHealthUI|provisioned)") }
-            else {
-              # NOTHING MOVED - which is success or failure depending on a fact we can check: the
-              # version the PAYLOAD carries, read from its own manifest. If the image is already at
-              # it there was genuinely nothing to do, which is exactly what a SECOND pass sees once
-              # this fallback has provisioned it while Windows Update keeps offering the same
-              # revision. Measured 2026-09-21: without this, a pass that had succeeded an hour
-              # earlier reported the very same item as a failed install.
-              if($ax.mainVersion -and $prA3 -and ([string]$prA3.Version) -eq [string]$ax.mainVersion){
-                $alreadyCurrent = $true
-                Log ("    nothing moved, and the image is ALREADY at the version this offer carries ($($ax.mainVersion))")
-              } else {
-                Log ("    provisioning reported success but NOTHING MOVED, and the image is not at the offered version")
-              }
-            }
-          }
-        }
-      }
-      # A probe we ran and that showed nothing is a NEGATIVE result, not a missing one.
-      # ---- WU-EXE-EFFECT-BEGIN
-      if($probe -and $probeRan){ $ok = $eff } else { $ok = ($p.ExitCode -eq 0) }
-      $detail = if($probe -and $probeRan){ "probe=$probe verified_by_effect=$eff" }
-                elseif($probe){ "probe=$probe DID NOT RUN (artefact unreadable) - ok from rc only" }
-                else { 'probe=none (ok from rc only)' }
-      # GUARD:notactionable - what the probe tells us apart.
-      #   rc=0 AND the probe ran AND nothing changed -> the installer SELF-DETERMINED it has
-      #     nothing to do on this image. Measured 2026-09-20: securityhealthsetup.exe, 22 MB,
-      #     exits 0 in ONE SECOND, writes no log anywhere, and moves neither the SecHealthUI appx
-      #     nor SecurityHealthService.exe - on four consecutive passes. Windows Update re-offers it
-      #     regardless. That is an offer this guest can NEVER action, exactly the shape the
-      #     express/ESU phantoms already carry, so it is INFORMATIONAL: still reported and still
-      #     visible with its reason, but it must not hold dom0 at "updates available" forever.
-      #   rc<>0 AND the probe ran AND nothing changed -> a real failure. Stays actionable.
-      # Without the probe these two are indistinguishable, which is how one of them sat unnoticed.
-      $sev=$null; $why=$null
-      if($probe -and $probeRan -and -not $eff){
-        if($p.ExitCode -eq 0){
-          # CORRECTED 2026-09-20, SAME DAY, ON EVIDENCE. This branch used to set severity=info,
-          # ok=$true, reason "nothing to do on this image" - i.e. it read its own NEGATIVE probe as
-          # proof the image was already current. That inference is not supported, and for the item
-          # it was written for it is FALSE. Measured: the offered securityhealthsetup.exe was
-          # fetched and unpacked off-guest; it is an APPX payload declaring Microsoft.SecHealthUI
-          # 1000.29628.1000.0, while this guest carries 1000.26100.8036.0 in BOTH the installed and
-          # the PROVISIONED package (read directly, so "the probe watches the wrong artefact" is
-          # refuted), and the payload's TargetDeviceFamily MinVersion 10.0.22000.1 is far below this
-          # build, so inapplicability is refuted too. The installer carries something NEWER,
-          # applicable, and lands nothing. Jev: concealed-failure 0.87.
-          #
-          # "rc=0 and nothing moved" is therefore a FAILED INSTALL, and it stays ACTIONABLE. The
-          # temptation to keep it informational is that an item which can never install holds dom0
-          # at "updates available" forever - but dom0's job is to report the TRUTH (ADR section 2),
-          # and the truth is that this update is outstanding. Making dom0 look settled by calling a
-          # failure benign is the field report's untruth wearing a different hat.
-          # NARROWED 2026-09-21, and this matters in BOTH directions. The rule above is right only
-          # where we can establish what the offer CARRIES. Where we can (the appx payload declares
-          # its version), "not at it and nothing moved" is a failure and "already at it" is simply
-          # done. Where we cannot - a Defender signature, say - asserting a failure turned an
-          # already-current item into a permanent "updates available", which is the very defect
-          # this file exists to prevent, re-introduced by me from the other side. So: assert
-          # neither, report it, and keep it out of dom0's count.
-          if($alreadyCurrent){
-            $ok=$true
-            $why='the image is already at the version this offer carries - nothing to do'
-            Log ("  $name : exe rc=0 $detail -> ALREADY CURRENT ($why)")
-          } elseif($probe -eq 'security-platform'){
-            $ok=$false
-            $why='installer exited 0 but the probe measured no change - this update did NOT install'
-            Log ("  $name : exe rc=0 $detail -> FAILED ($why)")
-          } elseif($probe -eq 'defender-platform' -and $platBehind){
-            $ok=$false
-            $why='installer exited 0 but the Defender platform did not move, nothing new was staged, and it is still below the version the offer carries - this update did NOT install'
-            Log ("  $name : exe rc=0 $detail -> FAILED ($why)")
-          } else {
-            $sev='info'; $ok=$true
-            $why='installer exited 0 and changed nothing, and this probe cannot establish the version the offer carries - reported as informational rather than asserting an install or a failure'
-            Log ("  $name : exe rc=0 $detail -> NOT ACTIONABLE ($why)")
-          }
-          if($probe -eq 'security-platform'){ Log ("    security platform stayed at $shBefore (SecHealthUI|SecurityHealthService)") }
+        $secAfter = Get-SecurityPlatformState
+        if(-not ($secBefore.readable -and $secAfter.readable)){
+          $probeRan = $false   # GUARD:secunreadable
+          Log ("    security platform: CoreLocation could not be read (before: $($secBefore.text); after: $($secAfter.text)) - the probe did not run")
         } else {
-          Log ("  $name : exe rc=$($p.ExitCode) $detail -> FAILED (nonzero rc and the probe saw no effect)")
-        }
-      } else {
-        Log ("  $name : exe rc=$($p.ExitCode) $detail")
-      }
-      # ---- WU-EXE-EFFECT-END
-      # already_current is STRUCTURED, not a phrase to be matched later: the caller that builds the
-      # Defender row needs to know this outcome, and ADR section 6 forbids keying logic on text.
-      # Measured 2026-09-21: a first attempt matched the words "ALREADY CURRENT", which appear only
-      # in the log line and never in info_reason, so it could not have fired at all.
-      $rows += [ordered]@{ kb=$kb; file=$name; rc=$p.ExitCode; ok=$ok; verified_by_effect=$eff; probe=$probe; severity=$sev; info_reason=$why; already_current=[bool]$alreadyCurrent }
-    } elseif($ext -eq '.msu' -or $ext -eq '.cab'){
-      # DISM decides. Three DETERMINISTIC outcomes, each classified honestly:
-      #  - OK_RC (0/3010/2359302): installed/staged.
-      #  - NOT-A-PACKAGE (rc 2 ERROR_FILE_NOT_FOUND, 13 ERROR_INVALID_DATA, 0x800f0805 CBS_E_INVALID_PACKAGE):
-      #    the artifact is not a DISM-installable CBS package - a WU-CLIENT blob with no update.mum
-      #    (measured: KB5001716's cab, and the .NET ndp481 PAYLOAD cab). Windows installs these itself;
-      #    they are NOT applicable to offline servicing, so this is INFORMATIONAL, not a failure.
-      #  - anything else: a genuine install failure.
-      $rc = Add-PackageCompat $dst
-      Log ("  $name : DISM rc=$rc")
-      # ---- WU-NOTPACKAGE-BEGIN
-      # GUARD:mumcheck - PROVE it is not a package; do not infer it from the return code.
-      # Those three codes are NOT exclusive to WU-client blobs: a TRUNCATED OR CORRUPT DOWNLOAD
-      # produces ERROR_INVALID_DATA / CBS_E_INVALID_PACKAGE too, and relay truncation on large
-      # files is a known failure mode on this very path. Inferring "informational" from the code
-      # alone therefore let a corrupt cumulative be filed as "nothing to worry about" and dom0 was
-      # told all was well - the field defect exactly, reached from a different direction.
-      # The real discriminator is the one the comment above always named: a servicing package
-      # CONTAINS update.mum. Look, do not assume. If the artifact HAS update.mum it IS a package,
-      # so one of these codes means something went wrong with THIS copy of it - a failure, and a
-      # retryable one - never informational. If expand cannot read the file at all, that is itself
-      # evidence of corruption, so it fails too.
-      $notPackage = ($rc -eq 2 -or $rc -eq 13 -or $rc -eq -2146498555)   # -2146498555 = 0x800f0805
-      $mum = $null
-      if ($notPackage) {
-        try {
-          $lst = & expand.exe -D "$dst" 2>&1 | Out-String
-          # EMPTY output is not "no update.mum" - it is "we could not read the artifact", which is
-          # evidence of corruption and must fail. Caught by the suite: '' -match ... is $false, not
-          # $null, so an unreadable file was falling through to INFORMATIONAL - the very case this
-          # guard exists to stop.
-          if ([string]::IsNullOrWhiteSpace($lst)) { $mum = $null }
-          else { $mum = [bool]($lst -match '(?i)update\.mum') }
-        } catch { $mum = $null }
-        if ($mum -eq $true) {
-          Log ("  $name : DISM rc=$rc BUT the artifact CONTAINS update.mum - it IS a servicing package, so this is a FAILURE (corrupt or truncated download), not informational")
-          $notPackage = $false
-        } elseif ($mum -eq $null) {
-          Log ("  $name : DISM rc=$rc and expand could not read the artifact - treating as a FAILURE (unreadable is evidence of corruption, not of being a non-package)")
-          $notPackage = $false
+          $appAfter = ''; try{ $pkA=Get-AppxPackage -AllUsers -Name Microsoft.SecHealthUI -EA SilentlyContinue | Select-Object -First 1; if($pkA){ $appAfter=[string]$pkA.Version } }catch{}
+          $secMoved = ($secAfter.loc -ne $secBefore.loc) -or ([string]$secAfter.wu -ne [string]$secBefore.wu) -or ([string]$secAfter.host -ne [string]$secBefore.host)
+          $secAtOffer = $null   # $true / $false, or $null when the offer or the platform has no version to compare
+          if($secOffered -and $secAfter.cmp){ try { $secAtOffer = ([version]$secAfter.cmp -ge [version]$secOffered) } catch {} }
+          if($secMoved -and $secAtOffer -ne $false){ $eff = $true }   # GUARD:secplatform
+          if(-not $secMoved -and $secAtOffer -eq $true -and $agentOk){ $alreadyCurrent = $true }   # GUARD:seccurrent
+          $secState = "$($secBefore.text) -> $($secAfter.text)" + $(if($secOffered){ " (offered $secOffered)" } else { ' (the offer names no version)' })
+          if($eff){ Log ("    security platform moved: $secState") }
+          elseif($alreadyCurrent){ Log ("    security platform $($secAfter.cmp) is already at or past the offered $secOffered - nothing to do ($secState)") }
+          else {
+            $secAt = if($secAfter.ver){ $secAfter.ver } elseif($secAfter.cmp){ "the inbox platform $($secAfter.cmp)" } else { 'the inbox platform (version unreadable)' }
+            $secWhy = "$(if($secMoved){ 'moved only to' } else { 'stayed at' }) $secAt" +
+                      $(if($secAtOffer -eq $false){ ", below the offered $secOffered" }
+                        elseif($secAtOffer -eq $true){ ", at the offered $secOffered, but the agent reported ResultCode $agentRc" }
+                        elseif(-not $secOffered){ "; the offer names no version, so 'already current' cannot be established" }
+                        else { "; no version to compare with the offered $secOffered" })
+            Log ("    security platform $secWhy ($secState)")
+          }
+          Log ("    SecHealthUI app $appBefore -> $appAfter - information only: the app follows the platform asynchronously and is not this item's effect")   # GUARD:appnoteffect
         }
       }
-      # ---- WU-NOTPACKAGE-END
-      if ($rc -in $OK_RC) {
-        $rows += [ordered]@{ kb=$kb; file=$name; rc=$rc; ok=$true }
-        if($rc -eq 3010){ $script:St.reboot_needed=$true; $script:StagedThisSession=$true }
-      } elseif ($notPackage) {
-        $rows += [ordered]@{ kb=$kb; file=$name; rc=$rc; ok=$false; severity='info'; mum_present=$false
-          reason='not a DISM-installable CBS package - VERIFIED to contain no update.mum, i.e. a Windows Update client/orchestrator blob that Windows installs itself; not applicable to offline servicing. INFORMATIONAL - not a failure' }
-      } else {
-        $rows += [ordered]@{ kb=$kb; file=$name; rc=$rc; ok=$false }
-      }
+# ---- WU-SECURITY-PLATFORM-END
+  # ---- WU-AGENT-VERDICT-BEGIN   (tools/tests/wu-agentcache-test.ps1, wu-defplatform-test.ps1 and wu-secplatform-test.ps1 run this region)
+  # THE ROW IS DECIDED BY THE AGENT'S RESULT AND OUR EFFECT PROBE TOGETHER (Jev 0.72, 2026-10-03). ResultCode 2 = succeeded, 3 = succeeded
+  # with errors, 4 = failed, 5 = aborted; $null = the agent was never asked, because the update was not downloaded after CopyToCache.
+  # ALREADY CURRENT is only ever the probe's own comparison with the offer (KB5007651: the PLATFORM at or past the offer, Jev 0.98). A
+  # probe that ran, saw nothing move and finds the artefact BELOW the offer overrules an agent success - loudly, as a DISAGREEMENT - and
+  # for KB5007651 anything but moved-or-current is a failed install (the owner's rule). No probe, or a probe whose artefact could not be
+  # read: the agent's result stands and the row says probe=none / DID NOT RUN, never implying verification.
+  $sev=$null; $ok=$false; $state='failed'; $reason=$null
+  $hr = if($null -ne $agentHr){ ('0x{0:X8}' -f $agentHr) } else { '' }
+  if($null -eq $agentRc){   # GUARD:notdownloadedfails - the row names what is missing; the downloader is not the answer
+    $reason = "not downloaded after CopyToCache, so the agent was not asked to install (its downloader is never called on this path); missing: " + $(if($missing.Count){ $missing -join '; ' } else { 'nothing named - the agent did not accept the cached content' })
+  } elseif(-not $agentOk){   # GUARD:agentfailed
+    $reason = "the Windows Update agent's installer FAILED this update: ResultCode=$agentRc HResult=$hr" + $(if($agentErr){ " ($agentErr)" } else { '' })
+  } elseif($probe -and $probeRan -and -not $eff){
+    if($alreadyCurrent){   # GUARD:agentcurrent
+      $ok=$true; $state='installed'
+      $reason = "the agent reports ResultCode=$agentRc and the $probe artefact is already at or past the version this offer carries - nothing to do"
+    } elseif(($probe -eq 'security-platform') -or ($probe -eq 'defender-platform' -and $platBehind) -or ($probe -eq 'defender-signature' -and $sigBehind)){   # GUARD:agentdisagree
+      $reason = "DISAGREEMENT: the agent reports ResultCode=$agentRc but the $probe artefact " + $(if($secWhy){ $secWhy } else { 'did not move and is below the version this offer carries' }) + " - this update did NOT install"
     } else {
-      Log ("  $name : unrecognised self-contained artifact type - failing loudly")
-      $rows += [ordered]@{ kb=$kb; file=$name; rc='unknown-artifact'; ok=$false }
+      $ok=$true; $state='installed'
+      $reason = "the agent reports ResultCode=$agentRc; the $probe artefact did not move and there is no offered version to compare it with - the agent's result stands, the effect is NOT verified"
     }
+  } else {
+    $ok=$true; $state=$(if($reboot){ 'staged' } else { 'installed' })
+    $reason = "installed by the Windows Update agent's own installer from content supplied with CopyToCache: ResultCode=$agentRc" +
+              $(if($probe -and $probeRan){ " (verified by effect: $probe)" } elseif($probe){ " (probe=$probe DID NOT RUN - artefact unreadable; ok from the agent's result)" } else { ' (probe=none; ok from the agent''s result)' })
   }
-  return ,$rows
+  if($reboot){ $script:St.reboot_needed = $true }
+  Log ("  $label : " + $(if($ok){ $state.ToUpper() } else { 'FAILED' }) + " - $reason")
+  # ---- WU-AGENT-VERDICT-END
+  # Reclaim the fetched content only once the agent has installed it (its cache holds its own copy); a failed install keeps the files so
+  # the next pass resumes instead of re-fetching 200 MB.
+  if($ok){ foreach($f in $files){ Remove-Item -LiteralPath (Join-Path $dir $f.file) -Force -EA SilentlyContinue } }
+  # The per-file rows carry the verdict fields the exclusion audit and the evidence builder read (severity / verified_by_effect / probe /
+  # already_current / info_reason), as the per-file rows of the old .exe path did; the row carries them too for a leafless install.
+  $rows = @()
+  foreach($f in $files){ $rows += [ordered]@{ kb=$label; file=$f.file; bytes=$f.bytes; leaf=$f.leaf; rc=$(if($f.rc){ $f.rc } else { $agentRc }); ok=$ok; verified_by_effect=[bool]$eff; probe=$probe; severity=$sev; info_reason=$reason; already_current=[bool]$alreadyCurrent } }
+  return [ordered]@{ kb=$label; ok=$ok; state=$state; files=@($rows); rc=$agentRc; hresult=$(if($hr){ $hr } else { $null }); verified_by_effect=[bool]$eff; probe=$probe; already_current=[bool]$alreadyCurrent; severity=$sev; reason=$reason }
 }
 
 function Install-Msus($files){
@@ -2335,11 +2163,8 @@ try {
         $nokb = if($u.title){ [string]$u.title } else { 'untitled offer' }
         $nokbUrls = @(@($u.direct_urls) | Where-Object { $_ })
         if($nokbUrls.Count -gt 0 -and $Action -in 'install','full'){
-          Log "no KB but $($nokbUrls.Count) direct URL(s) - INSTALLING self-contained: $nokb"
-          $nokbRows = Install-SelfContained $nokb $nokbUrls
-          $nokbOk = @($nokbRows | Where-Object { $_.ok }).Count -gt 0
-          $script:St.result += [ordered]@{ kb=$nokb; ok=$nokbOk
-                                           state=$(if($nokbOk){'installed'}else{'failed'}); files=$nokbRows }
+          Log "no KB but $($nokbUrls.Count) static content URL(s) - installing through the agent's own installer: $nokb"
+          $script:St.result += (Install-ViaAgentCache $u)
           Save
           continue
         }
@@ -2449,28 +2274,19 @@ try {
         # reported failed on every pass, leaving dom0 showing updates that never clear.
         # Hand exactly those to WU's own installer after this loop.
         if ($urls.Count -eq 0) {
-          # The catalog has no .msu for this KB. Route by the content class computed at scan time
-          # (Get-WuContentClass) instead of blindly handing it to the DO-gated Install-ViaWU, which
-          # fails routeless. Three outcomes:
+          # The catalog has no .msu for this KB. Route by the content class computed at scan time (Get-WuContentClass):
           $cls = $u.content_class
-          $directUrls = @($u.direct_urls)
-          if ($cls -eq 'self-contained' -and $directUrls.Count -gt 0) {
-            # Defender defs / MSRT / SSU published as a static file: fetch through the proxy and
-            # install natively, NLA-free. This is the class that failed EVERY pass before.
-            Log "$($u.kb): not in the catalog, but Windows Update offers it as a self-contained static file - installing directly through the proxy (no DO/BITS/NLA)"
+          if ($cls -eq 'self-contained') {
+            # Every leaf Windows Update offers for it is a static file (Defender signatures and platform, MSRT, the Windows Security
+            # platform, SSU / .NET cabs): the agent's OWN installer installs it from content fetched through the proxy - no DO/BITS/NLA,
+            # and no switch of ours. This is the class that failed every pass before 2026-08-20, and whose .exe files this updater then
+            # ran itself, with '/q', until 2026-10-03.
+            Log "$($u.kb): not in the catalog; Windows Update offers it as static content - the agent's installer installs it from content supplied through the proxy (no DO/BITS/NLA)"
             $script:St.phase='install'; Save
-            $rows = Install-SelfContained $u.kb $directUrls
-            $ok = @($rows | Where-Object { $_.ok }).Count -gt 0
-            $staged = @($rows | Where-Object { $_.rc -eq 3010 }).Count -gt 0
-            # If nothing installed AND every file was a not-a-package informational (WU-client blob,
-            # e.g. KB5001716), the KB is INFORMATIONAL, not a failure - so it is excluded from the
-            # failed/remaining count and does not read as broken forever.
-            $allInfo = (-not $ok) -and (@($rows).Count -gt 0) -and (@($rows | Where-Object { $_.severity -ne 'info' }).Count -eq 0)
-            $row = [ordered]@{ kb=$u.kb; ok=$ok; state=$(if($staged){'staged'}elseif($ok){'installed'}elseif($allInfo){'informational'}else{'failed'}); files=$rows }
-            if ($allInfo) { $row.severity = 'info' }
-            $script:St.result += $row
+            $arow = Install-ViaAgentCache $u
+            $script:St.result += $arow
             Save
-            Log "$($u.kb): self-contained $(if($allInfo){'informational (not a DISM-installable package)'}else{"install ok=$ok"})"
+            Log "$($u.kb): agent-cache install ok=$($arow.ok) state=$($arow.state)"
             continue
           }
           if ($cls -eq 'express') {
@@ -2551,43 +2367,6 @@ try {
   if ($Action -in 'install','full' -and $script:WuFallbackKbs.Count -gt 0 -and -not $canWuNative) {
     $script:WuFallbackKbs = @($script:WuFallbackKbs | Sort-Object -Unique)
     foreach ($kb in $script:WuFallbackKbs) {
-      # DEFENDER SIGNATURES ARE NO LONGER A DEAD END. The full package turned out to be a plain
-      # HTTPS download (see Get-DefenderFullPackageUrl), so a netvm-free guest CAN take it. Try that
-      # before declaring the KB informational; Install-SelfContained already verifies Defender by
-      # EFFECT (AntivirusSignatureVersion moving), not by exit code.
-      $isDefender = ($kb -eq 'KB2267602') -or
-                    (@($avail | Where-Object { $_.kb -eq $kb -and $_.title -match 'Defender|Antivirus|Security Intelligence' }).Count -gt 0)
-      if ($isDefender) {
-        $defUrl = Get-DefenderFullPackageUrl
-        if ($defUrl) {
-          Log "Defender $kb : resolved the full signature package, installing it directly (netvm-free)"
-          $defRows = Install-SelfContained $kb @($defUrl)
-          $defOk = (@($defRows | Where-Object { $_.ok }).Count -gt 0)
-          # ---- WU-DEFENDER-ROW-BEGIN
-          # THE ROW MUST SAY WHAT HAPPENED, because dom0 reads the ROW and never the log. Measured
-          # 2026-09-21 on win11de-fb9: a repeat pass whose own log read
-          #   "signature 1.459.324.0 is already at or past the offered 1.459.324.0 - nothing to do"
-          #   "rc=0 probe=defender-signature verified_by_effect=False -> ALREADY CURRENT"
-          # still wrote the row "full signature package installed directly (VERIFIED BY EFFECT)".
-          # Nothing was installed and nothing was verified by effect on that pass: the row claimed a
-          # proof the pass had explicitly declined to make. Three outcomes, three sentences.
-          $defEff     = (@($defRows | Where-Object { $_.verified_by_effect }).Count -gt 0)
-          $defCurrent = (@($defRows | Where-Object { $_.already_current }).Count -gt 0)
-          $defReason  = if ($defCurrent) { 'the image is already at the version this offer carries - nothing to do (compared the offer''s version with the installed one)' }
-                        elseif ($defOk -and $defEff) { 'full signature package installed directly (verified by effect)' }
-                        elseif ($defOk) { 'full signature package installed directly; the effect could NOT be verified on this pass' }
-                        else { 'full signature package resolved but did not apply - INFORMATIONAL, not a failure' }
-          $script:St.result += [ordered]@{ kb=$kb; ok=$defOk
-            severity=$(if($defCurrent){'ok'} elseif($defOk){'ok'} else {'info'})
-            files=@($defRows)
-            verified_by_effect=$defEff
-            reason=$defReason }
-          # ---- WU-DEFENDER-ROW-END
-          Save
-          continue
-        }
-        # fall through to the informational record below when the fwlink could not be resolved
-      }
       # severity='info': on a netvm-free guest there is NO route by which these could install (no catalog
       # .msu, no static file, and DO/BITS refuse routeless), so this is a deterministic INFORMATIONAL
       # ceiling. Not a failure, and excluded from the actionable/remaining count reported to dom0.
