@@ -38,6 +38,17 @@ $ax = Get-AppxPackage -AllUsers -Name Microsoft.SecHealthUI | Select-Object -Fir
 'EV|sechealth=' + $ax.Version
 $pv = Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -like '*SecHealthUI*' } | Select-Object -First 1
 'EV|sechealth_prov=' + $pv.Version
+# THE WINDOWS SECURITY PLATFORM (KB5007651) - the artefact its installer changes, measured 2026-10-03: Platform\CoreLocation names the
+# platform folder the service runs ('\\?\C:\Windows\System32' = the INBOX platform, '...\SecurityHealth\10.0.29628.1000-0' = an installed
+# update), Updates\wu is the version the installer recorded (the key is ABSENT until the first install). The two app versions above are
+# NOT this item's artefact: the app follows the platform asynchronously, and an app at the offered build over an inbox platform was the
+# concealed failure the rz35 subject carried. Empty when the Platform key itself cannot be read, so the builder refuses (missing data fails).
+$pl = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows Security Health\Platform'
+$loc = [string]$pl.CoreLocation
+$leaf = $loc -replace '^.*[\\/]', ''
+'EV|secplatform=' + $(if ($leaf -match '^(\d+\.\d+\.\d+\.\d+)') { $Matches[1] } elseif ($loc) { 'inbox' } else { '' })
+$up = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows Security Health\Updates'
+'EV|secplatform_wu=' + $(if ($up.wu) { [string]$up.wu } elseif ($loc) { 'absent' } else { '' })
 $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
 'EV|build=' + $cv.CurrentBuild + '.' + $cv.UBR
 'EV|hotfixes=' + ((Get-HotFix | ForEach-Object { $_.HotFixID }) -join ',')

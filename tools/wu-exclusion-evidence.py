@@ -7,8 +7,9 @@ updater's rows - could not judge the three Defender items dom0 was not told abou
 measurement it named was the artefact version.
 
 mgmt/harness/wu-e2e.sh writes round<N>/facts-before.txt and round<N>/facts-after.txt with mgmt/harness/wu-evidence-facts.sh around every
-pass ('EV|key=value': Defender platform / engine / signature versions once Defender has loaded, the Windows Security app's installed and
-provisioned versions, the OS build, the installed hotfixes, the boot time; EV|end=1 last). For every item in excluded-items.tsv the
+pass ('EV|key=value': Defender platform / engine / signature versions once Defender has loaded, the Windows Security PLATFORM (the version
+folder CoreLocation names, or 'inbox') and the wu value of its Updates key, the Windows Security app's installed and provisioned versions (information:
+the app is not KB5007651's artefact), the OS build, the installed hotfixes, the boot time; EV|end=1 last). For every item in excluded-items.tsv the
 evidence gives, for each round that EXCLUDED it, that round's before/after artefacts and a comparison computed here (the artefact after
 the pass vs the version the round's offer carried in its title, and whether the pass moved it), plus the item's history in the updater's
 rows, each round labelled excluded or counted by the audit's own predicate. Per round, because the audit judges a round's claim: one
@@ -34,7 +35,9 @@ def artefact_for(kb: str, title: str):
     if kb in ('KB2267602', 'KB2461484') or 'security intelligence' in t:
         return 'signature', 'Defender signatures AntivirusSignatureVersion'
     if kb == 'KB5007651' or 'windows security platform' in t:
-        return 'sechealth', 'Windows Security app SecHealthUI'
+        # the PLATFORM, never the SecHealthUI app: the app can be at the offered build over an uninstalled (inbox) platform - measured
+        # 2026-10-03 on the rz35 subject, where this very comparison had certified a concealed failure from the app (Jev 0.83)
+        return 'secplatform', 'Windows Security platform (the version folder CoreLocation names)'
     return None, None
 
 
@@ -50,11 +53,9 @@ def compare(kind: str, offered: str, measured: str) -> str:
     if not offered or not measured:
         return 'NOT COMPARABLE (offered or measured version missing)'
     o, m = offered, measured
-    if kind == 'sechealth':
-        # the AppX version carries a 1000. prefix (1000.29628.1000.0) where the offer says 10.0.29628.1000: compare the build parts
-        ot, mt = vtuple(o), vtuple(m)
-        if ot and mt and len(ot) >= 4 and len(mt) >= 3:
-            o, m = '.'.join(map(str, ot[2:4])), '.'.join(map(str, mt[1:3]))
+    if kind == 'secplatform' and m == 'inbox':
+        # no versioned platform folder at all: CoreLocation is System32 - the offered platform update is not installed, whatever the app says
+        return f'NOT AT THE OFFER (the inbox platform - no platform update is installed, CoreLocation is System32): offered {offered}, installed inbox'
     ot, mt = vtuple(o), vtuple(m)
     if not ot or not mt:
         return f'NOT COMPARABLE ({offered!r} vs {measured!r})'
@@ -76,16 +77,17 @@ def load_excluded():
 def row_line(r: dict) -> str:
     files = r.get('files')
     f0 = files[0] if isinstance(files, list) and files else {}
-    return (f"ok={r.get('ok')} state={r.get('state')} rc={f0.get('rc')} verified_by_effect="
+    return (f"ok={r.get('ok')} state={r.get('state')} rc={f0.get('rc', r.get('rc'))} verified_by_effect="
             f"{f0.get('verified_by_effect', r.get('verified_by_effect'))} probe={f0.get('probe', r.get('probe'))} "
             f"already_current={f0.get('already_current', r.get('already_current'))} reason={r.get('reason') or f0.get('info_reason')}")
 
 
-REQUIRED = ('platform', 'signature', 'build', 'boot')
+REQUIRED = ('platform', 'signature', 'secplatform', 'secplatform_wu', 'build', 'boot')
 # THE GUEST WRITES THESE VALUES, and the guest is untrusted (CLAUDE.md: its output is parsed as data). They reach a JUDGE's prompt, so
 # only the shape each fact must have gets through - a dotted version, a build, an exact KB list, a timestamp. Anything else is dropped
 # and reads as MISSING (a required fact missing refuses; an optional one shows '?'), never as text the judge would read.
 SHAPES = {'platform': r'\d+(\.\d+){1,3}', 'engine': r'\d+(\.\d+){1,3}', 'signature': r'\d+(\.\d+){1,3}',
+          'secplatform': r'\d+(\.\d+){1,3}|inbox', 'secplatform_wu': r'\d+(\.\d+){1,3}|absent',
           'sechealth': r'\d+(\.\d+){1,3}', 'sechealth_prov': r'\d+(\.\d+){1,3}', 'build': r'\d+\.\d+',
           'hotfixes': r'(KB\d+)(,KB\d+)*', 'boot': r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d', 'end': r'1'}
 
@@ -160,9 +162,10 @@ def main() -> int:
                 continue
             meas.append(f"  {name} (EXCLUDED), measured by the harness before the pass (boot {fb['boot']}) and after it (boot {fa['boot']}):")
             meas.append(f"    Defender platform {moved(fb['platform'], fa['platform'])}; signatures {moved(fb['signature'], fa['signature'])}; "
-                        f"engine {moved(fb.get('engine', ''), fa.get('engine', ''))}; Windows Security app installed "
-                        f"{moved(fb.get('sechealth', ''), fa.get('sechealth', ''))}, provisioned {moved(fb.get('sechealth_prov', ''), fa.get('sechealth_prov', ''))}; "
-                        f"OS build {moved(fb['build'], fa['build'])}")
+                        f"engine {moved(fb.get('engine', ''), fa.get('engine', ''))}; Windows Security PLATFORM {moved(fb['secplatform'], fa['secplatform'])}, "
+                        f"its Updates\\wu record {moved(fb['secplatform_wu'], fa['secplatform_wu'])}; Windows Security app (information only, not the "
+                        f"platform) installed {moved(fb.get('sechealth', ''), fa.get('sechealth', ''))}, provisioned "
+                        f"{moved(fb.get('sechealth_prov', ''), fa.get('sechealth_prov', ''))}; OS build {moved(fb['build'], fa['build'])}")
             if kind:
                 meas.append(f"    COMPARISON, computed in code ({label} after the pass vs the version this round's offer carried): "
                             f"{compare(kind, offered, fa.get(kind, ''))}; during the pass: {moved(fb.get(kind, ''), fa.get(kind, ''))}")
