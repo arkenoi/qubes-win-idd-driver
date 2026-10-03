@@ -19,7 +19,8 @@ done when they were not. Each cause is fixed:
   actually changes; the Security platform is read after it finishes switching, which can be a few seconds after the installer returns.
 - **dom0 received a bare error code** instead of the reason; a pass that collided with the boot-time scan was declared dead and
   stopped the scan's proxy; a pass cut off part-way blocked every later one; dom0 could be told the proxy was still running when it
-  was not; any scan offering two or more updates crashed. All fixed.
+  was not. All fixed. *(Corrected 2026-10-03: this list also named "any scan offering two or more updates crashed" - that defect
+  was introduced and fixed during this release's development and never shipped in 4.3.32.)*
 - The update proxy process is owned by the pass that started it: nothing is stopped by name.
 
 Verified on a template built to the reporter's environment (German Windows 11 25H2, no network, no `user` account): the first-contact
@@ -97,8 +98,9 @@ lines a field report needs are not, deliberately.
   release's acceptance; that cell and the reinstall cell that depends on it were re-run on the same package and passed.
 - A template that has both a .NET update and a cumulative update to install asks dom0 for a restart **twice**: update packages are
   staged one per restart. Removing the second request is the next step.
-- On the event-driven capture, the first keystroke after a pause of about a second reaches dom0 about 20 ms later than before the
-  redesign; other keys are within 10 ms. Tracked.
+- On the event-driven capture, typing reaches dom0 a little later than before the redesign: about 9 ms at the median over all keys,
+  about 20 ms on the second key of a sequence typed one per second. The cause is not established; tracked. *(Corrected 2026-10-03:
+  this line first said every other key was within 10 ms - one key position measured 12 ms slower.)*
 - The desktop-quieting step still stops OneDrive by its process name; the next release stops no process by name.
 
 ## How this release was verified
