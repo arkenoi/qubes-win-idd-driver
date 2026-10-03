@@ -36,7 +36,7 @@ def vmexec(argv, timeout=120):
     """
     if "--no-vmexec" in sys.argv and "entrypoint.py" not in " ".join(argv):
         import shlex
-        return vmshell(" ".join(shlex.quote(a) for a in argv), b"", timeout) + (b"",)
+        return vmshell(" ".join(shlex.quote(a) for a in argv), b"", timeout)
     svc = "qubes.VMExec+" + encode_for_vmexec(argv)
     p = subprocess.run(["qrexec-client-vm", VM, svc], stdin=subprocess.DEVNULL,
                        capture_output=True, timeout=timeout)
@@ -49,7 +49,9 @@ def vmshell(command, payload=b"", timeout=120):
     data = command.encode() + b"& exit\n" + payload
     p = subprocess.run(["qrexec-client-vm", VM, "qubes.VMShell"], input=data,
                        capture_output=True, timeout=timeout)
-    return p.returncode, p.stdout
+    # stderr is RETURNED (rz38d, 2026-10-03: this step failed rc=1 and its stderr was thrown away, so the round said only
+    # "UNEXPECTED" - a failure of dom0's own agent copy, which aborts a real qubes-vm-update, left no reason behind).
+    return p.returncode, p.stdout, p.stderr
 
 
 def show(step, rc, out, err=b"", expect=None):
