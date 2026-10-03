@@ -633,6 +633,21 @@ public class QwtngNetSetup : ServiceBase {
             $q = (& sc.exe qc QwtngNetSetup 2>&1 | Out-String)
             $registered = $created -and ($q -notmatch 'does not exist')
             if ($registered) {
+                # ---- NETSETUP-RECOVERY-BEGIN  (tools/tests/supervision-install-test.ps1 extracts this region by marker)
+                # SCM RECOVERY, ARMED WHERE THE SERVICE IS CREATED (docs/ADR-supervision.md 4: every service
+                # of ours has failure actions, with the non-crash flag so an error exit counts too). The same
+                # shape the installer gives QdbDaemon/QrexecAgent/QubesGuiWatchdog (Set-QubesServiceRecovery):
+                # restart after 5 s, 15 s, then every 60 s, counter reset daily. The installer cannot arm this
+                # one - the service does not exist until this script creates it - and health-check.ps1 2b
+                # asserts the result. A failed arming is a failed priming: a service without the recovery it
+                # was promised is not the configured state, and this script is all-or-nothing.
+                & sc.exe failure QwtngNetSetup reset= 86400 actions= restart/5000/restart/15000/restart/60000 2>&1 | Out-Null
+                $rcFail = $LASTEXITCODE
+                & sc.exe failureflag QwtngNetSetup 1 2>&1 | Out-Null   # GUARD:netsetuprecov
+                $rcFlag = $LASTEXITCODE
+                if ($rcFail -ne 0 -or $rcFlag -ne 0) { $fail['netsetup_recovery'] = "sc failure=$rcFail failureflag=$rcFlag" }
+                Write-Output ("QwtngNetSetup recovery armed=" + ($rcFail -eq 0 -and $rcFlag -eq 0) + " (restart 5s/15s/60s, non-crash flag)")
+                # ---- NETSETUP-RECOVERY-END
                 # Only after the replacement demonstrably exists may the stock applier go. The
                 # 4.3.6 order deleted first and swallowed the create, so a failed registration
                 # shipped a template with NO network applier at all and reported ok=true.

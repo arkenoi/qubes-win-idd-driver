@@ -156,6 +156,9 @@ ERROR_FLAGS = [
     ('updater_agent',           starts('incomplete', 'error:'),           'L3509 WARN returned without its completion line / L3519 WARN threw'),
     ('etwproxy_account',        starts('error:'),                         "L3323 WARN threw ('skipped:<reason>' at L3317 is the documented fail-open - informational)"),
     ('service_recovery',        any_value(lambda x: _s(x) != 'armed'),    'L538/L542 WARN: stored in detail precisely because a WARN alone let it ship'),
+    # -- supervision (docs/ADR-supervision.md 2-3): our Event Log source and the ONE death reporter task
+    ('event_source',            lambda v: _s(v) != 'registered',          'Register-QwtEventSource WARN: the source our supervisors write their death events under is not registered (message file absent / reg add failed / threw)'),
+    ('death_reporter',          lambda v: _s(v) != 'registered',          'Register-QwtDeathReporter WARN: the event-triggered QwtDeathReporter task is not registered - a death of ours stays in the guest logs only'),
     ('autologon',               lambda v: _s(v) not in ('armed', 'skipped', 'not in payload'),
                                                                           'L1278 not-armed / L1285 error / L3384,L3416 unverified / L3409 no trailer / L3412 verify-error'),
 ]

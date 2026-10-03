@@ -71,6 +71,8 @@ with the PV bus. Nothing here pretends otherwise.
 | `tools/notifhost/notifhost.cpp` | includes the core; `--notify-errors N` (gate handed down by the agent); `ReportErrorSelf` for the bridge's own two recurring FATAL exits. |
 | `agent/gui-agent/notifyerr_test.c`, `agent/vs2022/notifyerr-test/` | C offline suite (gcc here, msbuild in CI). |
 | `tools/tests/notifyerr-test.ps1`, `tools/tests/notifyerr-selftest.sh` | PowerShell offline suite and the runner for the whole defect matrix. |
+| `guest/qwt-report-death.ps1` | **the ONE death reporter** (§10a): the `QwtDeathReporter` task's action; reads the triggering record back, counts the death, calls `Send-QwtError`. Suite: `tools/tests/death-reporter-selftest.sh`; subscription matrix: `tools/tests/death-reporter-xpath-selftest.py`. |
+| `agent/include/deathevent.h` | the supervisors' Event Log record (source `Qubes Windows Tools`, ids 4001-4004) for a child that exited unasked; header-only, no notification of its own. Suite: `tools/tests/deathevent-selftest.sh`. |
 
 Flow (both languages): caller logs as before → `QerrReport`/`Send-QwtError` → gate → severity →
 names → compose text → redaction → marker (this boot?) → cap → write marker + count → write
@@ -78,7 +80,7 @@ notify file (UTF-16LE + BOM, line 1 summary, rest body) → start `notifhost --n
 wait → return. notifhost logs the delivery outcome itself (`NOTIFY one-shot: sent ok=…` in
 `bridge.log`).
 
-## 5. Gate — `service.notify-errors`, a sibling, default OFF
+## 5. Gate — `service.notify-errors`, a sibling, default ON
 
 Registry `HKLM\…\Qubes Tools\gui-agent : NotifyErrors` (DWORD) is the base; qubesdb
 `/qubes-service/notify-errors` (i.e. `qvm-features <vm> service.notify-errors 1`) wins. Read once
@@ -86,15 +88,17 @@ at agent Init like every other gate (capabilities are decided at start); the age
 resolved value to the bridge helper as `--notify-errors N` so there is one reader. The PowerShell
 twin reads the same registry value and the same qubesdb key.
 
+**Default ON** (owner, 2026-09-13): `main.c` reads the pair with ON as the fallback, and
+`qwt-notify-error.ps1` the same - set `service.notify-errors 0` (or the DWORD to 0) to keep faults
+in the guest log only. This section said "default OFF" until 2026-10-03, which was true when written
+(2026-09-09) and stale after the 09-13 flip; `docs/QVM-FEATURES.md` carries the live value.
+
 **Why a sibling and not `service.notify-bridge`:** that gate means "forward the guest's *app*
 toasts to dom0 and suppress their Windows banners" — an allowlist-shaped, lossy feature about app
 content, and `service.legacy-toasts` forces it off. Neither of those may decide whether the
 agent's *own faults* reach dom0: an operator who wants error reports must not have to accept
 banner suppression, and a legacy-toasts qube must not be silenced. Same shape, separate switch.
 No further knobs: severity, cap and dedupe are policy constants, not configuration.
-
-**Default OFF** satisfies "a guest must not start notifying dom0 because it was upgraded": after
-an upgrade nothing changes in dom0 until someone sets the feature.
 
 ## 6. Severity threshold — ACTION only
 
@@ -116,10 +120,16 @@ for log-visibility reasons — so severity is stated explicitly at each call sit
 ## 7. De-duplication and rate limit
 
 - **One notification per distinct `(component, id)` per boot.** Marker file
-  `%ProgramData%\Qubes\notify-errors\<component>.<id>` containing `boot=<boot epoch seconds>`;
-  the stamp is derived from uptime (`now − GetTickCount64()` in C, `now − Stopwatch` in PS), so a
+  `%ProgramData%\Qubes\notify-errors\<component>.<id>` containing `boot=<per-boot token>`, so a
   respawned agent, a relaunched helper, or a second script in the same boot all see the first
-  attempt. Stamps within 120 s are the same boot; a marker from an earlier boot does not suppress.
+  attempt. The token is minted once per boot in a **volatile registry key** shared by the C and
+  PowerShell twins (`QERR_BOOT_KEY`, `HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools\NotifyErrBoot`,
+  `REG_OPTION_VOLATILE`: the kernel discards it at shutdown, so its existence *is* the boot) and
+  compared **exactly**; a marker from an earlier boot does not suppress. With no token the route
+  refuses and says so - it never guesses one. Until 2026-09-09 the stamp was uptime-derived
+  (`now − GetTickCount64()`) and compared with a ±120 s tolerance, which made two boots less than
+  120 s apart one boot and swallowed the second boot's error (measured on win11-ne, a real reboot
+  73 s apart); this section described that retired form until 2026-10-03.
 - **Cap: at most 8 per boot across all ids** (`.count`, `boot=…\ncount=…`): the storm guard for a
   bug that mints distinct ids. Suppressions are logged, never retried.
 - The files are the **cross-language contract**: C and PowerShell read and write the same
@@ -174,10 +184,46 @@ Wired (all `ACTION` unless stated):
 | `activate-idd.ps1` activation failed | `activate-idd.activation-failed` | templated text; the exception stays in the log |
 | `deactivate-idd.ps1` reboot refused | `deactivate-idd.reboot-refused` | topology not rebuilt until a hand reboot |
 
+### 10a. Deaths: ONE reporter, wired through the system's own records (2026-10-03)
+
+Every unexpected death of a component of ours is an ACTION notification, for **every** death
+(`docs/ADR-supervision.md` 1-3) - but **no component sends its own death notification**. One
+event-triggered SYSTEM task, `QwtDeathReporter` (registered by the installer's
+`Register-QwtDeathReporter`), subscribes with an XPath query to the records Windows already keeps
+and hands the record's channel and `EventRecordID` to `guest/qwt-report-death.ps1`, which reads the
+event back, decides whether it is a new death or another record of one already counted this boot,
+and calls `Send-QwtError`:
+
+| record | who writes it | what it is |
+|---|---|---|
+| Application 1000 / 1001 (`Application Error`, `Windows Error Reporting`) for one of our executables | Windows | a crash: faulting application, exception code, pid, start time, the WER report folder |
+| Application 1026 (`.NET Runtime`) for one of ours | Windows | an unhandled managed exception (qwtng-netsetup.exe, qubes-updates-relay.exe) |
+| Application 4001-4004, source **`Qubes Windows Tools`** (registered by `Register-QwtEventSource`) | our supervisors (agent `include/deathevent.h`): the QubesGuiWatchdog service for gui-agent.exe; the agent for wgcbroker.exe, notifhost.exe, etwproxy.exe | the one death Windows cannot see - a child that exited (or hung and was reaped) without being asked to; exe, pid, exit code, run time |
+| System 7031 / 7034 / 7023 / 7024 (`Service Control Manager`) for QdbDaemon, QrexecAgent, QubesGuiWatchdog, QwtngNetSetup | Windows | a service of ours ended; 7023/7024 only since the QWT build's `patches/windows-utils-service-exit-code.patch` makes a worker failure a non-zero service exit |
+| TaskScheduler/Operational 201 (non-zero result) / 203 for our tasks | Windows | a task's action failed or could not start (the channel is enabled by the installer; client Windows ships it disabled) |
+
+The notification: component = the executable's stem (`gui-agent`, `wgcbroker`, `qrexec-agent`,
+...), id = `death-<n>` with n the death count this boot, so the once-per-`(component, id)` rule of
+§7 cannot hide a second death, while the cap of 8 per boot still bounds a crash storm; past the cap
+every death is still logged at ERROR in `<LogDir>\qwt-deaths.log`. Text: what died, the exit or
+exception code with its meaning (`0xC0000005` access violation, `0xC0000409` fast-fail,
+`0xC0000374` heap corruption, `0xC00000FD` stack overflow, `0xE06D7363` C++ exception, ...), how
+long it ran, the death count, where the evidence is (the WER folder by prefix - its hash would
+trip §8's redaction - and the log). No window titles, no user data: every name comes from the
+reporter's tables, every number is parsed and re-rendered. The reporter runs as SYSTEM in session
+0: `notifhost --notify-file` hands the one-shot to the console user's session itself
+(`NotifyHandoffToSession`), so this is the agent's own proven path; while no user is logged on
+(the sign-in screen) the handoff has nobody to run as and that death reaches the log only.
+
+The agent-side DEGRADED site below (QGABROKERDIED) stays below the threshold on purpose: the
+death it records is notified by the reporter from the 4002 event the same site writes.
+
 Considered and **not** wired, with the reason:
 
-- QGABROKERLAUNCHFAIL, QGANOTIFBRIDGEEXIT/HUNG, QGABROKERREAP: DEGRADED by nature (a supervisor
-  relaunches); their persistent form is already covered by QGADESLICEDOWN / listener-denied.
+- QGABROKERLAUNCHFAIL, QGABROKERREAP: DEGRADED by nature (a supervisor relaunches); their
+  persistent form is already covered by QGADESLICEDOWN / listener-denied. QGANOTIFBRIDGEEXIT and
+  the etwproxy exits are deaths and reach dom0 through §10a (events 4003 / 4004), not through a
+  call here.
 - QGAQDBGATE: fires when qubesdb is unreadable at Init, which is also when the gate cannot be read
   and qrexec is most likely down; Init aborts for a watchdog respawn. Nothing to send from there.
 - QGAFAULT: fault injection, never in a shipped build.

@@ -1,0 +1,47 @@
+diff --git a/src/service.c b/src/service.c
+--- a/src/service.c
++++ b/src/service.c
+@@ -49,11 +49,18 @@
+     IN DWORD win32ExitCode
+     )
+ {
+-    UNREFERENCED_PARAMETER(win32ExitCode);
+     LogVerbose("start");
+ 
+-    LogDebug("state: %lu", state);
++    LogDebug("state: %lu, exit code: %lu", state, win32ExitCode);
+     g_Service->Status.dwCurrentState = state;
++    // Report the exit code the caller passed. It used to be ignored (UNREFERENCED_PARAMETER), so a
++    // service whose worker thread ended with an error reported SERVICE_STOPPED with dwWin32ExitCode 0:
++    // a clean stop in the SCM's eyes - no event 7023/7024, and no failure actions, even with
++    // FailureActionsOnNonCrashFailures set (Qubes Windows Tools, docs/ADR-supervision.md 2). The
++    // worker's codes are Win32 errors (win_perror2 status), so they are reported as such; anything else
++    // is forwarded verbatim all the same - a wrong error text in event 7023 beats a silent exit 0.
++    g_Service->Status.dwWin32ExitCode = win32ExitCode;
++    g_Service->Status.dwServiceSpecificExitCode = 0;
+ 
+     if (SERVICE_RUNNING != state)
+         g_Service->Status.dwControlsAccepted = 0;
+@@ -195,7 +202,21 @@
+     LogDebug("Waiting for the worker thread to exit");
+     WaitForSingleObject(g_Service->WorkerThread, INFINITE);
+ 
+-    SvcSetState(SERVICE_STOPPED, NO_ERROR);
++    // Forward the worker's outcome. A worker that returns an error (qrexec-agent: WaitForQdb timed out,
++    // the pipe server or the daemon vchan could not be set up; qubesdb-daemon: mainloop failed) ends the
++    // service with that error, so the SCM logs event 7023 and runs the recovery actions the installer
++    // armed. A requested stop returns NO_ERROR from the worker and stays a clean stop (exit code 0).
++    status = NO_ERROR;
++    if (!GetExitCodeThread(g_Service->WorkerThread, &status))
++    {
++        status = win_perror("GetExitCodeThread(worker)");
++        if (status == NO_ERROR)
++            status = ERROR_GEN_FAILURE;   // never report an unknown outcome as success
++    }
++    if (status != NO_ERROR)
++        LogError("worker thread ended with error %lu (0x%lx) - reported to the SCM as the service exit code so its recovery actions fire", status, status);
++
++    SvcSetState(SERVICE_STOPPED, status);
+ 
+     LogDebug("cleanup");
+     CloseHandle(g_Service->WorkerThread);

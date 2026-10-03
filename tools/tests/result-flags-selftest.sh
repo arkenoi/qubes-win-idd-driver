@@ -175,6 +175,12 @@ updater_agent|"incomplete: returned without the completion line"
 updater_agent|"error: x"
 etwproxy_account|"error: x"
 service_recovery|{"QdbDaemon":"armed","QrexecAgent":"failed: sc failure=1 failureflag=0"}
+service_recovery|{"QdbDaemon":"armed","QrexecAgent":"armed","QubesGuiWatchdog":"failed: sc failure=1060 failureflag=1060"}
+event_source|"failed: reg add rc=1/0"
+event_source|"failed: message file absent (C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\EventLogMessages.dll)"
+event_source|"error: x"
+death_reporter|"failed: schtasks /create rc '1': ERROR: The task XML is malformed."
+death_reporter|"failed: qwt-report-death.ps1 is not in the payload"
 autologon|"not-armed:bad-credentials"
 autologon|"error: x"
 autologon|"unverified"
