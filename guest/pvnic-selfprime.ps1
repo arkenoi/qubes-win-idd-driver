@@ -591,19 +591,32 @@ public class QwtngNetSetup : ServiceBase {
     }
     else {
         try {
-            & sc.exe stop QwtngNetSetup 2>&1 | Out-Null
-            # WAIT for the old service to be STOPPED and its PROCESS gone before touching the exe.
+            # ---- NETSETUP-STOP-BEGIN  (tools/tests/procown-sites-test.ps1 extracts this block by marker)
+            # STOP THE OLD SERVICE THROUGH THE SCM AND WAIT FOR ITS PROCESS before touching the exe.
             # On an upgrade the service is resident (auto-start, reconciles forever), and 'sc stop'
             # returns while qwtng-netsetup.exe is still tearing down (worker inside a 2 s sleep);
             # the Copy-Item below then throws 'being used by another process' -> netsetup_install
             # -> full rollback -> template shipped un-latched. Intermittent on CLR shutdown latency.
+            # The process waited on is the one the SCM names for the service (Win32_Service.ProcessId,
+            # read BEFORE the stop - it is 0 once the service is Stopped), held by handle. A process
+            # that outlives its service's Stopped state by 15 s is not going to finish on its own, and
+            # THAT pid - the SCM's own, nothing else - is terminated, loudly. Never a process found by
+            # name (owner's rule 2026-10-03, docs/ADR-updater.md 12.4): until then every process named
+            # qwtng-netsetup was Kill()ed here, i.e. anything with that name.
+            $oldPid = 0
+            $oldCim = Get-CimInstance Win32_Service -Filter "Name='QwtngNetSetup'" -EA SilentlyContinue
+            if ($oldCim) { $oldPid = [int]$oldCim.ProcessId }
+            $oldProc = $null
+            if ($oldPid -gt 0) { $oldProc = Get-Process -Id $oldPid -EA SilentlyContinue }
+            & sc.exe stop QwtngNetSetup 2>&1 | Out-Null
             $old = Get-Service QwtngNetSetup -EA SilentlyContinue
             if ($old) { try { $old.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30)) } catch { } }
-            foreach ($p in @(Get-Process -Name 'qwtng-netsetup' -EA SilentlyContinue)) {
-                # It is our own binary being replaced; a process that outlives its service's
-                # Stopped state by 15 s is not going to finish on its own.
-                if (-not $p.WaitForExit(15000)) { try { $p.Kill(); [void]$p.WaitForExit(5000) } catch { } }
+            if ($oldProc -and -not $oldProc.WaitForExit(15000)) {
+                Write-Output "WARNING: qwtng-netsetup.exe (pid $oldPid, the pid the SCM reported for QwtngNetSetup) still running 15 s after its service stopped - terminating that pid"
+                try { $oldProc.Kill(); [void]$oldProc.WaitForExit(5000) } catch { }
             }
+            # GUARD:netsetupbyname
+            # ---- NETSETUP-STOP-END
             & sc.exe delete QwtngNetSetup 2>&1 | Out-Null
             Copy-Item $svcOut $svcExe -Force -EA Stop
             # 'sc delete' on a service that is still stopping only MARKS it for delete, and
@@ -737,32 +750,41 @@ function Ok([string]$what) {
 #     would want the prompt; the installer re-enables nothing and needs nothing enabled.
 # ---- XBM-ENFORCE-BEGIN  (tools/tests/pvnic-xbm-verify-selftest.sh extracts this function by marker)
 function Enforce-XenbusMonitorOff {
-    # Stop + disable + kill, then VERIFY-AFTER (audit 2026-09-16 #20). The verdict is read back
-    # from the SCM, the process list and the registry AFTER the kill; the previous version slept
-    # 500 ms, read the status once, killed without waiting, and logged 'enforced off' from the
-    # PRE-state ($xbm) - a survivor was invisible. The kill is unconditional and waits on the
-    # handle, as the installer's Disable-XenbusMonitor does, because a Stopped SERVICE and a dead
-    # PROCESS are different facts (measured 2026-08-28: Disabled/Stopped with a live monitor
-    # process from an earlier boot) - a verdict that counts processes needs a kill that covers
-    # them. Returns @{ ok; pre; post; why }; nothing here logs or exits, the caller does.
+    # Stop + disable, wait for the SERVICE'S OWN PROCESS, then VERIFY-AFTER (audit 2026-09-16 #20).
+    # The verdict is read back from the SCM, the process list and the registry AFTER the stop; the
+    # version before that slept 500 ms, read the status once, killed without waiting, and logged
+    # 'enforced off' from the PRE-state ($xbm) - a survivor was invisible. A Stopped SERVICE and a
+    # dead PROCESS are different facts (measured 2026-08-28: Disabled/Stopped with a live monitor
+    # process), so the wait is on the process the SCM names for the service (Win32_Service.ProcessId,
+    # read BEFORE the stop - 0 once Stopped), by handle, as the installer's Disable-XenbusMonitor does;
+    # if that process outlives the stop it is terminated - THAT pid, nothing else. A monitor process
+    # the SCM does not own is COUNTED and read as SURVIVED (the caller Faults, loudly), never killed:
+    # until 2026-10-03 this function Stop-Process'ed every process named xenbus_monitor*, i.e. anything
+    # with that name (owner's rule, docs/ADR-updater.md 12.4). Returns @{ ok; pre; post; why }; nothing
+    # here logs or exits, the caller does.
     $r = @{ ok = $false; pre = 'not present'; post = ''; why = '' }
     reg add "HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Parameters" /v AutoReboot /t REG_DWORD /d 0 /f | Out-Null
     $xbm = Get-Service xenbus_monitor -EA SilentlyContinue
     if ($xbm) {
         $r.pre = "$($xbm.StartType)/$($xbm.Status)"
         & sc.exe config xenbus_monitor start= disabled 2>&1 | Out-Null
+        $svcPid = 0
+        $svcCim = Get-CimInstance Win32_Service -Filter "Name='xenbus_monitor'" -EA SilentlyContinue
+        if ($svcCim) { $svcPid = [int]$svcCim.ProcessId }
+        $svcProc = $null
+        if ($svcPid -gt 0) { $svcProc = Get-Process -Id $svcPid -EA SilentlyContinue }
         if ($xbm.Status -ne 'Stopped') {
             & sc.exe stop xenbus_monitor 2>&1 | Out-Null
             # SCM state wait, not a fixed 500 ms. Mid-prompt the service cannot stop (STOP_PENDING
-            # behind the modal csrss dialog); the timeout is then expected and the kill below is
-            # the remedy. An orphaned dialog dies with this boot's session, never across boots.
+            # behind the modal csrss dialog); the timeout is then expected and terminating the
+            # service's own pid below is the remedy. An orphaned dialog dies with this boot's session.
             try { $xbm.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(10)) } catch { }
         }
+        if ($svcProc -and -not $svcProc.WaitForExit(5000)) {
+            try { $svcProc.Kill(); [void]$svcProc.WaitForExit(5000) } catch { }
+        }
     }
-    foreach ($p in @(Get-Process -Name 'xenbus_monitor*' -EA SilentlyContinue)) {
-        try { $p | Stop-Process -Force -EA Stop } catch { }
-        try { [void]$p.WaitForExit(5000) } catch { }
-    }
+    # GUARD:xbmpayloadbyname
     # VERIFY-AFTER: re-enumerate everything the claim 'enforced off' rests on. $xbm is history.
     $svc   = Get-Service xenbus_monitor -EA SilentlyContinue
     $procs = @(Get-Process -Name 'xenbus_monitor*' -EA SilentlyContinue)

@@ -58,15 +58,21 @@ try {
 
 # --- OneDrive --------------------------------------------------------------------------------
 # The "set up OneDrive" reminder pops over the seamless desktop and on an offline qube can never
-# succeed at anything. DisableFileSyncNGSC stops the client starting at all.
+# succeed at anything. DisableFileSyncNGSC stops the client starting at all - from its NEXT start.
+# An instance already running in the user's session is the USER'S application and is left alone
+# (owner's rule 2026-10-03, docs/ADR-updater.md 12.4: nothing is ever killed by process name - until
+# then this script Stop-Process'ed every process named OneDrive, a decision about something it did
+# not start). So its reminder can still show once in the current session; the policy silences every
+# later one. The running instances are counted and said, not stopped.
+# ---- ONEDRIVE-BEGIN  (tools/tests/procown-sites-test.ps1 extracts this block by marker)
 Set-Reg "$POL\Windows\OneDrive" 'DisableFileSyncNGSC' 1 'DWord' 'OneDrive: client does not start'
 Set-Reg "$POL\Windows\OneDrive" 'DisableFileSync'     1 'DWord' 'OneDrive: file sync off'
 $run = @(Get-Process OneDrive -ErrorAction SilentlyContinue)
 if ($run.Count) {
-    $run | Stop-Process -Force -ErrorAction SilentlyContinue
-    $script:changed++
-    Write-Output "SET    OneDrive: stopped $($run.Count) running instance(s)"
+    # GUARD:onedrivebyname
+    Write-Output "ok     OneDrive: $($run.Count) running instance(s) left running - a user's application is never stopped; the policy applies at its next start"
 }
+# ---- ONEDRIVE-END
 
 # --- news, weather, widgets ------------------------------------------------------------------
 # Win11 calls it Widgets (Dsh), Win10 called it News and Interests (Windows Feeds). Both are a
