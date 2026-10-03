@@ -137,6 +137,9 @@ jobs:
           submodules: true
 
       - name: Install WDK + VS driver targets
+        # Bounded like the same step in pv-xenvif.yml / pv-xencons.yml. It takes 60-94 s; on 2026-10-03 it hung in
+        # release-package run 37147382401 for 90 min, and unbounded it would have held the run to the 6 h job limit.
+        timeout-minutes: 15
         shell: pwsh
         run: |
           choco install windowsdriverkit11 --no-progress -y
