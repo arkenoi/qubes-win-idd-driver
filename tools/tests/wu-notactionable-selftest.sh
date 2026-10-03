@@ -8,13 +8,14 @@
 #
 # Runs on this dev qube with the linux pwsh; no rig, no guest. The suite is
 # tools/tests/wu-notactionable-test.ps1, which EXTRACTS the marked regions of the shipped script
-# (WU-EXE-EFFECT-*, WU-INFO-EXCLUDE-*) and replays them, so what is tested is the code that ships.
+# (WU-INFO-EXCLUDE-*, WU-SCAN-COUNT-*, WU-NOKB-*, WU-CATALOG-VALID-*) and replays them, so what is tested is the code that ships. The
+# verdict on an installer-type update is replayed by wu-agentcache-selftest.sh since 2026-10-03 (the agent's own installer runs them).
 #
 #   no env                   full matrix: the clean leg must PASS and each defect knob must make the
 #                            suite FAIL on the check it targets. Exit 0 only if every leg came out
 #                            as required.
 #   WUNA_DEFECT=x            run ONLY that knob and exit with the suite's own code - i.e. the knob
-#                            makes this test FAIL, by design. (rcalone | noticeonly | kbonly | rcinfers | trustzero | shapeskip | infoonly | scanall | infobenign | satignore | satdrop | failall | stageddone | notitle)
+#                            makes this test FAIL, by design. (noticeonly | kbonly | trustzero | shapeskip | infoonly | scanall | satignore | satdrop | stageddone | notitle)
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PWSH="${PWSH:-/home/user/bin/pwsh7/pwsh}"
@@ -27,16 +28,12 @@ say() { printf '%s\n' "$*"; }
 # The check each knob must break - the failure has to land on the replayed case, not just anywhere.
 target_of() {
     case "$1" in
-        rcalone)    printf '%s' "ok FALSE (nothing landed, so nothing succeeded)" ;;
-        infobenign) printf '%s' "NOT informational (a silent failure)" ;;
         satignore)  printf '%s' "the SAME offer identity a pass resolved is excluded" ;;
         satdrop)    printf '%s' "the identities are CARRIED FORWARD" ;;
-        failall)    printf '%s' "probe cannot establish the offered version -> informational" ;;
         stageddone) printf '%s' "an ok=true STAGED cumulative is NOT done" ;;
         notitle)    printf '%s' "the CATALOG has a package for this arch" ;;
         noticeonly) printf '%s' "no ESU notice -> dom0 hears 0" ;;
         kbonly)     printf '%s' "no ESU notice -> dom0 hears 0" ;;
-        rcinfers)   printf '%s' "CONTAINS update.mum -> NOT informational (corrupt download)" ;;
         trustzero)  printf '%s' "EMPTY body -> UNRESOLVED" ;;
         shapeskip)  printf '%s' "HAS a direct URL on an install action -> INSTALLED" ;;
         infoonly)   printf '%s' "dom0 reaches 0 (up to date)" ;;
@@ -46,7 +43,7 @@ target_of() {
 }
 
 if [ -n "${WUNA_DEFECT:-}" ]; then
-    target_of "$WUNA_DEFECT" >/dev/null || { say "FAIL  unknown WUNA_DEFECT='$WUNA_DEFECT' (rcalone | noticeonly | kbonly | rcinfers | trustzero | shapeskip | infoonly | scanall | infobenign | satignore | satdrop | failall | stageddone | notitle)"; exit 2; }
+    target_of "$WUNA_DEFECT" >/dev/null || { say "FAIL  unknown WUNA_DEFECT='$WUNA_DEFECT' (noticeonly | kbonly | trustzero | shapeskip | infoonly | scanall | satignore | satdrop | stageddone | notitle)"; exit 2; }
     "$PWSH" -NoProfile -File "$SUITE" -Defect "$WUNA_DEFECT"; rc=$?
     say "--- defect knob $WUNA_DEFECT: suite rc=$rc (non-zero is the required outcome)"
     exit $rc
@@ -57,7 +54,7 @@ out=$("$PWSH" -NoProfile -File "$SUITE" 2>&1); rc=$?
 printf '%s\n' "$out" | sed 's/^/  /'
 if [ "$rc" != 0 ]; then say "FAIL  clean leg did not pass (rc=$rc)"; bad=1; else say "OK    clean leg passed"; fi
 
-for knob in rcalone noticeonly kbonly rcinfers trustzero shapeskip infoonly scanall infobenign satignore satdrop failall stageddone notitle; do
+for knob in noticeonly kbonly trustzero shapeskip infoonly scanall satignore satdrop stageddone notitle; do
     want=$(target_of "$knob")
     out=$("$PWSH" -NoProfile -File "$SUITE" -Defect "$knob" 2>&1); rc=$?
     if [ "$rc" = 0 ]; then

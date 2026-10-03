@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # wu-defplatform-selftest.sh - the Defender platform effect probe (qubes-windows-update.ps1 WU-DEFENDER-PLATFORM, judged through the
-# shipped WU-EXE-EFFECT): the clean leg must pass; -Defect noeffect (the measured effect ignored, as before 2026-10-03) must fail exactly
+# shipped WU-AGENT-VERDICT): the clean leg must pass; -Defect noeffect (the measured effect ignored, as before 2026-10-03) must fail exactly
 # the two effect cases; -Defect behindinfo (a platform left below the offer laundered into 'informational') must fail exactly the behind
 # and switch-never-happened cases; -Defect nopending (a platform staged earlier in THIS boot not recognised) must fail exactly the pending
 # case. Exit 0 only if all four hold.
