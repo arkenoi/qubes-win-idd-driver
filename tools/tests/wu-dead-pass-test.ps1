@@ -24,7 +24,12 @@
       killed      the measured case: Running+scan, then Ready+0x41306 with the status unchanged
                                                                  -> DIED with 0x41306, the stale ts and
                                                                     phase scan, teardown ran, exit 1 on
-                                                                    the FIRST poll that shows it
+                                                                    the FIRST poll that shows it; the
+                                                                    relay is NOT killed - the handler waits
+                                                                    for 8082's owner to leave by its own
+                                                                    parent watchdog and reports that
+      killed-survivor  the relay never leaves 8082          -> reported as an anomaly with pid and parent,
+                                                                    NOT killed, baseline NOT restored
       nostatus    Ready on both polls, nothing ever written      -> DIED on poll 2, "no status was written"
       foreign     only a foreign scan's `done` is on disk        -> DIED names it as an earlier operation
       grace       Ready on poll 1 (start latency), Running after -> no DIED, still polling
@@ -50,8 +55,9 @@
       3   the `# GUARD:refusal` read is disabled - a refusal reads as a death again (the 2026-10-02 "update pass DIED").
       4   the `# GUARD:holderwait` wait is disabled - dom0's pass starts on top of the holder again (the 2026-10-02 collision).
       5   the `# GUARD:keepcutoff` keep is disabled - the kick deletes a cut-off pass's record again and the start gate goes blind.
-      6   the `# GUARD:relayexit` wait is disabled - the teardown re-lists the relay before it has exited and tells dom0 the baseline is NOT restored.
-      7   the `# GUARD:relayexitpid` fallback is disabled - with WaitForExit denied, a killed relay is reported as not exiting.
+      6   the `# GUARD:relaynokill` branch kills by name again (pre-2026-10-03) - the survivor is killed instead of reported.
+      7   the `# GUARD:relaywatchdogwait` wait is disabled - the relay is judged before its watchdog had a chance, and a relay that
+          leaves on its own is reported as a survivor.
     tools/tests/wu-dead-pass-selftest.sh runs the clean leg and the knob and requires each outcome.
 #>
 [CmdletBinding()]
@@ -136,14 +142,14 @@ switch ($Defect) {
         $holder = @($holder | ForEach-Object { if ($_ -match '# GUARD:keepcutoff$') { '    if ($true) {   # DEFECT: before 2026-10-02 - the kick deleted every status' } else { $_ } })
     }
     '6' {
-        $hit = @($region | Where-Object { $_ -match '# GUARD:relayexit$' })
-        if ($hit.Count -ne 1) { Write-Host "FAIL defect 6: expected exactly 1 '# GUARD:relayexit' line, found $($hit.Count)"; exit 1 }
-        $region = @($region | ForEach-Object { if ($_ -match '# GUARD:relayexit$') { '            $exited = $true   # DEFECT: no wait for the exit' } else { $_ } })
+        $hit = @($region | Where-Object { $_ -match '# GUARD:relaynokill$' })
+        if ($hit.Count -ne 1) { Write-Host "FAIL defect 6: expected exactly 1 '# GUARD:relaynokill' line, found $($hit.Count)"; exit 1 }
+        $region = @($region | ForEach-Object { if ($_ -match '# GUARD:relaynokill$') { '    else { foreach ($p in @(Get-Process qubes-updates-relay -EA SilentlyContinue)) { $p.Kill() }; $done += "relay pid $relayOwner stopped" }   # DEFECT: kill by name (pre-2026-10-03)' } else { $_ } })
     }
     '7' {
-        $hit = @($region | Where-Object { $_ -match '# GUARD:relayexitpid$' })
-        if ($hit.Count -ne 1) { Write-Host "FAIL defect 7: expected exactly 1 '# GUARD:relayexitpid' line, found $($hit.Count)"; exit 1 }
-        $region = @($region | ForEach-Object { if ($_ -match '# GUARD:relayexitpid$') { '                # DEFECT: no pid fallback' } else { $_ } })
+        $hit = @($region | Where-Object { $_ -match '# GUARD:relaywatchdogwait$' })
+        if ($hit.Count -ne 1) { Write-Host "FAIL defect 7: expected exactly 1 '# GUARD:relaywatchdogwait' line, found $($hit.Count)"; exit 1 }
+        $region = @($region | ForEach-Object { if ($_ -match '# GUARD:relaywatchdogwait$') { '    # DEFECT: no wait for the watchdog' } else { $_ } })
     }
     default { Write-Host "FAIL unknown -Defect '$Defect' (1|2|3|4|5|6|7)"; exit 1 }
 }
@@ -179,10 +185,26 @@ $script:Tick = 0
 $script:TaskState = 'Ready'; $script:TaskResult = 0
 $script:LivePid = __LIVEPID__; $script:LiveStart = '__LIVESTART__'; $script:LiveName = '__LIVENAME__'
 $script:Busy = $false   # the updater lock (Test-UpdaterBusy), per plan step
-$script:WfeDenied = __WFEDENIED__   # WaitForExit throws (no SYNCHRONIZE right) - the pid fallback must still see the exit
+# The TCP table: who listens on 8082 (0 = nobody) and after how many lookups it is free (-1 = never - the survivor case).
+$script:PortOwnerPid = __PORTOWNER__; $script:PortGoneAfter = __PORTGONE__; $script:PortLookups = 0
 function schtasks { Call ('schtasks ' + ($args -join ' ')); $global:LASTEXITCODE = 0 }
 $script:BootTime = [datetime]::ParseExact('2026-10-02T18:30:00', 'yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture)
-function Get-CimInstance { [CmdletBinding()] param([Parameter(Position = 0)]$ClassName) return [pscustomobject]@{ LastBootUpTime = $script:BootTime } }
+function Get-CimInstance { [CmdletBinding()] param([Parameter(Position = 0)]$ClassName, $Filter)
+    if ("$ClassName" -eq 'Win32_Process') {
+        Call "Get-CimInstance Win32_Process $Filter"
+        if ("$Filter" -match 'ProcessId = (\d+)' -and [int]$Matches[1] -eq 4711) { return [pscustomobject]@{ ProcessId = 4711; ParentProcessId = 4242; Name = 'qubes-updates-relay.exe' } }
+        return $null
+    }
+    return [pscustomobject]@{ LastBootUpTime = $script:BootTime }
+}
+function Get-NetTCPConnection { [CmdletBinding()] param($LocalPort, $State)
+    $script:PortLookups++
+    Call 'Get-NetTCPConnection 8082'
+    if ($script:PortOwnerPid -le 0 -or ($script:PortGoneAfter -ge 0 -and $script:PortLookups -gt $script:PortGoneAfter)) {
+        Write-Error -Message "No MSFT_NetTCPConnection objects found with property 'LocalPort' equal to '8082'" -Category ObjectNotFound; return
+    }
+    return ,([pscustomobject]@{ LocalAddress = '127.0.0.1'; LocalPort = 8082; State = 'Listen'; OwningProcess = [uint32]$script:PortOwnerPid })
+}
 function Write-RefusalFile($obj) {
     $rf = Join-Path (Split-Path -Parent $Status) 'update-refusal.json'
     if ($null -eq $obj) { Remove-Item -LiteralPath $rf -Force -EA SilentlyContinue; return }
@@ -228,14 +250,11 @@ function Get-Process { [CmdletBinding()] param([Parameter(Position = 0)]$Name, $
         if ([int]$Id -eq 4711) { if ($script:RelayAlive) { return [pscustomobject]@{ Id = 4711; ProcessName = 'qubes-updates-relay' } }; return $null }
         return $null
     }
-    Call "Get-Process $Name"
+    Call "Get-Process $Name"   # BY NAME - recorded, so a knob that restores the kill by name is seen
     if (-not $script:RelayAlive) { return @() }
     $p = [pscustomobject]@{ Id = 4711; ProcessName = 'qubes-updates-relay' }
-    # Kill() is ASYNCHRONOUS on Windows: the process is still listed until it has exited, which WaitForExit observes.
-    $p | Add-Member -MemberType ScriptMethod -Name Kill -Value { $script:KillPending = $true; Call 'Kill 4711' }
-    $p | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { param($ms)
-        if ($script:WfeDenied) { if ($script:KillPending) { $script:RelayAlive = $false }; Call 'WaitForExit 4711 DENIED'; throw 'Zugriff verweigert' }
-        if ($script:KillPending) { $script:RelayAlive = $false }; Call 'WaitForExit 4711'; return (-not $script:RelayAlive) }
+    $p | Add-Member -MemberType ScriptMethod -Name Kill -Value { $script:RelayAlive = $false; Call 'Kill 4711' }
+    $p | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { param($ms) Call 'WaitForExit 4711'; return (-not $script:RelayAlive) }
     return ,$p
 }
 '@
@@ -261,12 +280,12 @@ function Render($v) {
     return [string]::Format([Globalization.CultureInfo]::InvariantCulture, '{0}', $v)
 }
 
-function Run-Scenario([string]$name, [array]$plan, [int]$maxTicks, [int]$livePid = 0, [string]$liveStart = '2026-10-02T18:31:36', [string[]]$body = $null, [string]$liveName = 'powershell', [switch]$realLock, [switch]$wfeDenied) {
+function Run-Scenario([string]$name, [array]$plan, [int]$maxTicks, [int]$livePid = 0, [string]$liveStart = '2026-10-02T18:31:36', [string[]]$body = $null, [string]$liveName = 'powershell', [switch]$realLock, [int]$portOwner = 4711, [int]$portGoneAfter = 3) {
     $dir = Join-Path $tmpRoot $name
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
     $statusFile = Join-Path $dir 'update-status.json'
     $planSrc = '@(' + (@($plan | ForEach-Object { Render $_ }) -join ', ') + ')'
-    $src = $preamble.Replace('__STATUS__', $statusFile.Replace("'", "''")).Replace('__PLAN__', $planSrc).Replace('__MAXTICKS__', "$maxTicks").Replace('__LIVEPID__', "$livePid").Replace('__LIVESTART__', $liveStart).Replace('__LIVENAME__', $liveName).Replace('__WFEDENIED__', $(if ($wfeDenied) { '$true' } else { '$false' }))
+    $src = $preamble.Replace('__STATUS__', $statusFile.Replace("'", "''")).Replace('__PLAN__', $planSrc).Replace('__MAXTICKS__', "$maxTicks").Replace('__LIVEPID__', "$livePid").Replace('__LIVESTART__', $liveStart).Replace('__LIVENAME__', $liveName).Replace('__PORTOWNER__', "$portOwner").Replace('__PORTGONE__', "$portGoneAfter")
     if ($null -eq $body) { $body = @($region) + @($postamble) }
     $file = Join-Path $dir 'scenario.ps1'
     $lockStub = @('function Test-UpdaterBusy { Call ''Test-UpdaterBusy''; return [bool]$script:Busy }')   # overrides the region's: no real mutex
@@ -314,18 +333,28 @@ Check $KILLED ($r.rc -eq 1 -and $r.died.Count -eq 1 -and $r.died[0] -like '*last
 Check 'killed: the DIED line names the task, its state, the stale ts and the phase' `
       ($r.died.Count -eq 1 -and $r.died[0] -like "update pass DIED: task QubesWindowsUpdateRun is Ready, *status stale since $freshTs at phase scan")
 Check 'killed: the verdict came on the FIRST poll that showed it (2 task reads: poll 1 Running, poll 2 Ready)' ($r.taskReads -eq 2 -and $r.post.Count -eq 0)
-Check 'killed: teardown mirrors Remove-Proxy - winhttp reset, wininet ProxyEnable=0 + ProxyServer removed, relay killed' `
+Check 'killed: teardown mirrors Remove-Proxy - winhttp reset, wininet ProxyEnable=0 + ProxyServer removed' `
       ($r.calls -contains 'netsh winhttp reset proxy' -and $r.calls -contains 'New-ItemProperty ProxyEnable=0' -and
-       $r.calls -contains 'Remove-ItemProperty ProxyServer' -and $r.calls -contains 'Kill 4711')
-Check 'killed: the leftovers line reports the relay stopped and the baseline restored' `
-      ($r.left.Count -eq 1 -and $r.left[0] -like '*relay pid 4711 stopped*' -and $r.left[0] -like '* - offline baseline restored')
+       $r.calls -contains 'Remove-ItemProperty ProxyServer')
+Check 'killed: the relay is NOT killed and never looked up by name - the handler waits for 8082''s owner to leave on its own (4 lookups: held x3, free)' `
+      ($r.calls -notcontains 'Kill 4711' -and $r.calls -notcontains 'Get-Process qubes-updates-relay' -and @($r.calls | Where-Object { $_ -eq 'Get-NetTCPConnection 8082' }).Count -eq 4)
+Check 'killed: the leftovers line reports the relay exited on its own (pid 4711, its parent watchdog, not killed) and the baseline restored' `
+      ($r.left.Count -eq 1 -and $r.left[0] -like '*relay pid 4711 exited on its own (its parent watchdog) after 1500 ms - not killed*' -and $r.left[0] -like '* - offline baseline restored')
 Check 'contract: the DIED and leftovers lines do not end in a bare number (dom0 float-parses the last token)' `
       (@(($r.died + $r.left) | Where-Object { $_ -match '\s[0-9]+([.,][0-9]+)?$' }).Count -eq 0 -and ($r.died.Count + $r.left.Count) -eq 2)
 
-# --- 3b. killed-denied: WaitForExit throws for lack of rights - the pid fallback must still report the relay stopped ------------
-$r = Run-Scenario 'killed-denied' @((Step 'Running' 0x41301 (Status 'scan' 'full' $freshTs)), (Step 'Ready' 0x41306 (Status 'scan' 'full' $freshTs))) 6 -wfeDenied
-Check 'killed-denied: WaitForExit denied -> the pid fallback still sees the exit; the leftovers line reports the relay stopped and the baseline restored' `
-      ($r.left.Count -eq 1 -and $r.left[0] -like '*relay pid 4711 stopped*' -and $r.left[0] -like '* - offline baseline restored' -and $r.calls -contains 'WaitForExit 4711 DENIED')
+# --- 3b. killed-survivor: the relay never leaves 8082 - reported with pid and parent, NOT killed ---------------------------------
+$r = Run-Scenario 'killed-survivor' @((Step 'Running' 0x41301 (Status 'scan' 'full' $freshTs)), (Step 'Ready' 0x41306 (Status 'scan' 'full' $freshTs))) 6 -portGoneAfter -1
+$SURV = 'killed-survivor: a relay still on 8082 after the bound is NOT killed - reported as an anomaly with its pid and parent, baseline NOT restored'
+Check $SURV ($r.calls -notcontains 'Kill 4711' -and $r.calls -notcontains 'Get-Process qubes-updates-relay' -and $r.left.Count -eq 1 -and
+             $r.left[0] -like '*relay pid 4711 (qubes-updates-relay.exe, parent pid 4242) is STILL listening on 127.0.0.1:8082 after 20 s - NOT killed*' -and
+             $r.left[0] -like '* - CHECK the qube, its offline baseline is NOT restored')
+Check 'killed-survivor: the wait ran its full bound (41 lookups = 1 + 40 x 500 ms) and the parent was read BY PID' `
+      (@($r.calls | Where-Object { $_ -eq 'Get-NetTCPConnection 8082' }).Count -eq 41 -and $r.calls -contains 'Get-CimInstance Win32_Process ProcessId = 4711')
+Check 'contract: the survivor line does not end in a bare number' (@($r.left | Where-Object { $_ -match '\s[0-9]+([.,][0-9]+)?$' }).Count -eq 0)
+$r = Run-Scenario 'killed-noport' @((Step 'Running' 0x41301 (Status 'scan' 'full' $freshTs)), (Step 'Ready' 0x41306 (Status 'scan' 'full' $freshTs))) 6 -portOwner 0
+Check 'killed-noport: nobody on 8082 -> one lookup, "no relay listening", baseline restored' `
+      ($r.left.Count -eq 1 -and $r.left[0] -like '*no relay listening on 127.0.0.1:8082*' -and $r.left[0] -like '* - offline baseline restored' -and @($r.calls | Where-Object { $_ -eq 'Get-NetTCPConnection 8082' }).Count -eq 1)
 
 # --- 4. nostatus: killed before the first Save --------------------------------------------------------------
 $r = Run-Scenario 'nostatus' @((Step 'Ready' 0x41303 $null), (Step 'Ready' 0x41306 $null)) 6
@@ -371,8 +400,8 @@ $LIVEHOLD = 'live-holder: our pass died while another pass holds the updater loc
 Check $LIVEHOLD ($r.rc -eq 1 -and $r.died.Count -eq 1 -and $r.untouched.Count -eq 1 -and $r.untouched[0] -like "*a 'scan' pass (pid 4242*" -and
                  $r.calls -notcontains 'netsh winhttp reset proxy' -and $r.calls -notcontains 'Kill 4711')
 $r = Run-Scenario 'dead-holder' @((StepB 'Running' 0x41301 (Status 'scan' 'full' $freshTs) $false), (StepB 'Ready' 0x41306 $holderStatus $false)) 6
-Check 'live-holder control: the same status with the lock GONE (its holder exited or died) -> the teardown runs as before' `
-      ($r.rc -eq 1 -and $r.untouched.Count -eq 0 -and $r.calls -contains 'netsh winhttp reset proxy' -and $r.calls -contains 'Kill 4711')
+Check 'live-holder control: the same status with the lock GONE (its holder exited or died) -> the teardown runs as before (proxy reset, relay waited for, nothing killed)' `
+      ($r.rc -eq 1 -and $r.untouched.Count -eq 0 -and $r.calls -contains 'netsh winhttp reset proxy' -and $r.calls -contains 'Get-NetTCPConnection 8082' -and $r.calls -notcontains 'Kill 4711')
 
 # --- 11. died-error: killed while diagnosing a failure - the DIED line carries the error it had recorded ---------------------
 $diag = Status 'diagnosing' 'full' $freshTs; $diag.error = 'Ausnahme von HRESULT: 0x8024402C'

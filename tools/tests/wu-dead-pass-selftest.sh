@@ -15,6 +15,7 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PWSH="${PWSH:-/home/user/bin/pwsh7/pwsh}"
+[ -x "$PWSH" ] || PWSH=/home/user/pwsh/pwsh
 OUT="${WUDEADPASS_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/wudeadpass-selftest-XXXXXX")}"
 SUITE="$ROOT/tools/tests/wu-dead-pass-test.ps1"
 mkdir -p "$OUT"
@@ -72,8 +73,10 @@ leg 4 'holder-wait: waits while the updater lock is held and returns when it is 
 
 leg 5 "keep-cutoff: Start-RunTask keeps a non-terminal status (a cut-off pass's record the start gate reads) and still starts the task" '^FAIL keep-cutoff'
 
-leg 6 'killed: the leftovers line reports the relay stopped and the baseline restored' '^FAIL (killed: the leftovers line|killed-denied|contract: the DIED and leftovers)'   # no wait at all breaks both exit paths
-leg 7 'killed-denied: WaitForExit denied' '^FAIL killed-denied'
+# Knobs 6 and 7 (2026-10-03, ADR-updater 12.4: the handler kills nothing): 6 restores the kill by name in the survivor branch, 7 drops
+# the wait for the relay's own parent watchdog (then a relay that leaves on its own is judged a survivor, and the survivor's bound is gone).
+leg 6 'killed-survivor: a relay still on 8082 after the bound is NOT killed' '^FAIL killed-survivor'
+leg 7 'killed: the leftovers line reports the relay exited on its own' '^FAIL (killed: |killed-survivor: the wait ran|contract: the DIED and leftovers)'
 
 say "--- outputs in $OUT"
 exit $bad

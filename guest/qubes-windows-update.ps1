@@ -416,6 +416,7 @@ function SetV($p,$n,$v,$t){ if(-not(Test-Path $p)){New-Item -Path $p -Force|Out-
 # qrexec qubes.UpdatesProxy call - measured 147 dom0 policy hits in one afternoon on an "offline"
 # guest, still dripping hours after the last scan. Remove-Proxy in the finally below restores the
 # routeless baseline; update traffic is the only traffic that ever gets a path out.
+# ---- WU-RELAY-BEGIN   (tools/tests/wu-relay-own-test.ps1 extracts this region by these markers)
 function Test-RelayListening {
   # Does something ACCEPT a TCP connection on 127.0.0.1:8082 within 3 s? A relay PROCESS existing
   # does not prove the port is being serviced (a hung/dead relay, or a squatter, yields
@@ -429,29 +430,90 @@ function Test-RelayListening {
     $c.Close(); return $res
   } catch { return $false }
 }
+# Who LISTENS on 127.0.0.1:8082 right now: the owning pid, 0 when nobody does, -1 when the table cannot be read (UNKNOWN IS NOT
+# ZERO). The owner is found by the PORT and identified by its PID - never by a process name (docs/ADR-updater.md 12.4). When the
+# port is free Get-NetTCPConnection reports "no matching objects" as an ObjectNotFound error, so that error IS the free answer and
+# any other error is unknown. Mirrored in guest/wu-update.ps1 and guest/install-updater-agent.ps1 (neither can load this file: it
+# IS the pass); keep the three in step.
+function Get-RelayPortOwner {
+  $ev = @()
+  try { $l = @(Get-NetTCPConnection -LocalPort 8082 -State Listen -ErrorAction SilentlyContinue -ErrorVariable ev) } catch { return -1 }
+  if ($l.Count -gt 0) { return [int]$l[0].OwningProcess }
+  foreach ($e in $ev) { if ("$($e.CategoryInfo.Category)" -ne 'ObjectNotFound') { return -1 } }
+  return 0
+}
+# The refusal, with the owner NAMED. Passes are serialized by the updater mutex, so nothing else of ours can be serving 8082 while
+# this pass runs: another owner is an anomaly to investigate, never a relay to use. This pass hands its traffic to nothing it did
+# not start, and it does not kill what it did not start either.
+function Format-RelayRefusal([int]$owner) {
+  if ($owner -lt 0) { return 'REFUSED: cannot read who listens on 127.0.0.1:8082 (Get-NetTCPConnection failed), so the port cannot be shown free - this pass never adopts a relay it did not start and never serves through an unknown one (ADR-updater 12.4); nothing was started' }
+  if ($owner -eq 0) { return ("REFUSED: nothing listens on 127.0.0.1:8082 right after relay pid {0} accepted a connection - that relay is gone; nothing was adopted and nothing else is started" -f $script:OwnRelayPid) }
+  $who = ''
+  try { $op = Get-Process -Id $owner -ErrorAction SilentlyContinue; if ($op) { $who = " ($($op.ProcessName), started $($op.StartTime.ToString('s')))" } } catch { }
+  return "REFUSED: 127.0.0.1:8082 is already served by pid $owner$who, which this pass did not start - the pass never adopts a relay (ADR-updater 12.4), and under the updater mutex another listener on its port is an ANOMALY: find out what pid $owner is before the next pass; it was NOT killed"
+}
 function Start-Relay {
   if (-not (Test-Path -LiteralPath $RelayExe)) { throw "relay not found at $RelayExe" }
   $env:QUBES_UPDATES_MAXCONN='256'
-  # --parent-pid: the relay exits on its own when THIS process is gone (measured 2026-09-17: a pass
-  # ended hard by the scheduler never reached the Remove-Proxy below, and the relay served for hours)
-  Start-Process -FilePath $RelayExe -ArgumentList '--listen','8082','--target','@default','--log',$WorkDir,'--parent-pid',"$PID" -WindowStyle Hidden
+  # OWNED BY HANDLE (ADR-updater 12.4): -PassThru hands back the Process object of the one relay THIS pass started; that object,
+  # its pid and its start time are the only identity this pass ever stops (Stop-OwnRelay). --parent-pid: the relay exits on its
+  # own when THIS process is gone (measured 2026-09-17: a pass ended hard by the scheduler never reached the Remove-Proxy below,
+  # and the relay served for hours).
+  $p = Start-Process -FilePath $RelayExe -ArgumentList '--listen','8082','--target','@default','--log',$WorkDir,'--parent-pid',"$PID" -WindowStyle Hidden -PassThru   # GUARD:relayhandle
+  $script:OwnRelay = $p
+  $script:OwnRelayPid = 0
+  $script:OwnRelayStart = ''
+  if ($p) {
+    $script:OwnRelayPid = [int]$p.Id
+    try { $script:OwnRelayStart = $p.StartTime.ToString('s') } catch { }
+  }
+  Log ("relay started: pid {0}, start {1}, parent {2} - owned by handle; this pass stops this one and no other" -f $script:OwnRelayPid, $(if ($script:OwnRelayStart) { $script:OwnRelayStart } else { 'unreadable' }), $PID)
   Start-Sleep -Seconds 2
 }
+# Stops exactly the relay THIS pass started, by the handle Start-Relay kept - never by name, never by port. A handle cannot be
+# fooled by pid reuse. Every outcome is logged; a stop that does not complete is an anomaly, not a retry.
+function Stop-OwnRelay {
+  $p = $script:OwnRelay
+  if (-not $p) { Log 'relay: this pass holds no relay handle - nothing of ours to stop (a relay this pass did not start is never touched)'; return }
+  $script:OwnRelay = $null
+  $id = $script:OwnRelayPid
+  try {
+    if ($p.HasExited) { Log ("relay pid {0} had already exited (exit code {1}) - nothing to stop" -f $id, $p.ExitCode); return }
+    $p.Kill()
+    if ($p.WaitForExit(10000)) { Log ("relay pid {0} stopped by this pass (exit code {1})" -f $id, $p.ExitCode) }
+    else { Log ("ANOMALY: relay pid {0} did not exit within 10 s of being killed by this pass" -f $id) }
+  } catch { Log ("ANOMALY: relay pid {0} NOT stopped: {1}" -f $id, $_.Exception.Message) }
+}
 function Ensure-Proxy {
+  # NEVER ADOPT (ADR-updater 12.4). Until 2026-10-03 this started a relay only if no process NAMED qubes-updates-relay existed and
+  # otherwise served through whatever answered on 8082 - measured that day: the boot scan adopted a relay another process had
+  # started, and its Remove-Proxy then killed it mid-transfer. Now the port's owner is read first, and a port that is not free is
+  # a refusal naming the owner, before any proxy setting is touched.
+  $owner = Get-RelayPortOwner
+  if ($owner -ne 0) { throw (Format-RelayRefusal $owner) }   # GUARD:relayrefuse
   & netsh winhttp set proxy '127.0.0.1:8082' '<local>' | Out-Null
   SetV $POL 'ProxySettingsPerUser' 0 'DWord'; SetV $IS 'ProxyEnable' 1 'DWord'
   SetV $IS 'ProxyServer' '127.0.0.1:8082' 'String'; SetV $IS 'ProxyOverride' '<local>' 'String'
-  if (-not (Get-Process qubes-updates-relay -EA SilentlyContinue)) { Start-Relay }
-  # Serviceability probe: if nothing is accepting connections on 8082, kill any relay-named process
-  # and respawn - a relay that exists but is not listening would otherwise fail the pass 0x80072EFD.
+  Start-Relay
+  # Serviceability probe: a relay that exists but is not accepting would fail the pass 0x80072EFD. Stop and respawn ONLY the relay
+  # this pass started, by its handle; the port is re-read before the respawn, because a listener that appeared meanwhile is not
+  # ours either.
   if (-not (Test-RelayListening)) {
-    Log 'relay not accepting connections on 127.0.0.1:8082 - killing any relay process and respawning' 'WARN'
-    Get-Process qubes-updates-relay -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+    Log ("relay pid {0} is not accepting connections on 127.0.0.1:8082 within 3 s - stopping THAT relay (by its handle) and starting another" -f $script:OwnRelayPid)
+    Stop-OwnRelay   # GUARD:relayrespawnown
     Start-Sleep -Seconds 1
+    $owner = Get-RelayPortOwner
+    if ($owner -ne 0) { throw (Format-RelayRefusal $owner) }
     Start-Relay
-    if (-not (Test-RelayListening)) { throw 'relay still not accepting connections on 127.0.0.1:8082 after respawn' }
+    if (-not (Test-RelayListening)) { throw ("relay pid {0} still not accepting connections on 127.0.0.1:8082 after respawn" -f $script:OwnRelayPid) }
   }
+  # THE LISTENER MUST BE OURS. Accepting a connection proves that something serves the port, not that it is the relay this pass
+  # started: a listener that won the port between the check above and our start would be adopted by the connect test alone.
+  $owner = Get-RelayPortOwner
+  if ($owner -ne $script:OwnRelayPid) { Stop-OwnRelay; throw (Format-RelayRefusal $owner) }   # GUARD:relayidentity
+  Log ("proxy up: 127.0.0.1:8082 is served by relay pid {0}, started by this pass" -f $script:OwnRelayPid)
 }
+# ---- WU-RELAY-END
 
 # GUARD:wusession WAS HERE AND IS REMOVED, 2026-09-21. It stopped wuauserv after Ensure-Proxy set
 # the proxy, on the theory that WU held a WinHTTP session created before the proxy existed. It was
@@ -539,13 +601,19 @@ function Sync-Revocation {
 # logic being right; this teardown does not. Keeping both means a mistake in either one is
 # bounded by the other: a wrong allowlist is still limited to the minutes a pass runs, and a
 # pass left open still serves nobody but the update. Do not remove this because the other exists.
+# ---- WU-RELAY-TEARDOWN-BEGIN   (tools/tests/wu-relay-own-test.ps1 extracts this region by these markers)
 function Remove-Proxy {
   & netsh winhttp reset proxy | Out-Null
   SetV $IS 'ProxyEnable' 0 'DWord'
   Remove-ItemProperty -Path $IS -Name 'ProxyServer' -EA SilentlyContinue
-  Get-Process qubes-updates-relay -EA SilentlyContinue | ForEach-Object { $_.Kill() }
-  Log 'proxy removed, relay stopped (offline baseline restored)'
+  # ONLY THE RELAY THIS PASS STARTED, by its handle (ADR-updater 12.4). Until 2026-10-03 this line killed every process NAMED
+  # qubes-updates-relay - measured that day: a relay another process had started, TerminateProcess'ed mid-transfer with no log
+  # line and no crash record. A relay this pass did not start is not its to stop; that relay's own --parent-pid watchdog ends it
+  # when ITS pass is gone.
+  Stop-OwnRelay   # GUARD:relayownstop
+  Log 'proxy removed (offline baseline restored)'
 }
+# ---- WU-RELAY-TEARDOWN-END
 
 # Report the available-update count to dom0's qubes.NotifyUpdates (target: bare dom0).
 # THIS build of qrexec-client-vm.exe takes ONE pipe-delimited command line "domain|service|user|
