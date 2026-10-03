@@ -252,6 +252,26 @@ A row's result is the agent's per-update result AND our effect probe where one e
 **Why:** the agent's result says the package ran to completion; the probe says the thing dom0 is told about changed. Either
 alone has read as success on a failed install (§3), and the case where they disagree is exactly the case that needs saying.
 
+**The effect is waited for, never assumed to be there** (decided 2026-10-03). The agent's `Install()` can return before the
+package's work is done: for KB5007651 it returned ResultCode 2 after 2 s, the platform read 1 s later was still the inbox one,
+and the platform had switched within 10 s. The rz38b validation pass therefore failed an update that had installed.
+- **Mechanism:** a registry change notification on the probe's own artefact key (`RegNotifyChangeKeyValue`, as the CBS settle
+  uses). It is armed before every read, and the artefact is re-read on every wake. Jev 0.72.
+- **Scope:** only the rows the verdict would otherwise fail as a disagreement. Every other row is decided on its first read,
+  and there is no per-package list. Jev 0.92.
+- **Bound:** 60 s after the agent returned. Jev 0.55. Measured with the wait on a fresh clone of the German golden: the platform
+  switched 2.8 s after the agent returned. Every wait logs the latency it saw.
+- **The expiry passes nothing.** The read taken after the expiry decides, so "never a timeout as a fix" holds. Jev 0.83.
+- **A wait that cannot be armed is an ERROR.** The read decides, and no poll takes its place.
+
+The Defender probes read the service's view (`Get-MpComputerStatus`), not the key that is watched, so their wake can come
+early. The cost is lateness up to the bound, never a wrong row (Jev 0.93).
+
+**Not yet decided: a reboot left pending.** The owner, 2026-10-03: "normal dom0-initiated update may keep reboot pending". What
+the agent-path installers do while a reboot is pending is not measured. That case is the next mandate, measured first (Jev 0.99):
+the verdict under a pending reboot, the report's assumption that the reboot follows the pass at once, and a gate round that runs
+with the reboot kept pending.
+
 ### 12.4 Process ownership
 
 - **A component touches only processes it started, and holds them by handle** (`Start-Process -PassThru`; identity = pid +

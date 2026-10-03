@@ -1437,6 +1437,59 @@ function Get-EffectProbe([string]$kb, [string[]]$names){
 function New-WuComObject([string]$progId){ return ,(New-Object -ComObject $progId) }   # GUARD:noenumerate
 # ---- WU-COMOBJECT-END
 
+# ---- WU-REGWATCH-BEGIN   (tools/tests/wu-effectsettle-test.ps1 runs this region)
+# AN EFFECT CAN LAND AFTER THE AGENT'S INSTALLER RETURNS (measured 2026-10-03, w11de-tu38b): KB5007651's Install() returned ResultCode 2
+# after 2 s, the platform read 1 s later was still the inbox one, and the platform had switched by the pass's rescan 10 s later. Run by
+# us directly, the same installer only returned after the switch (8.4 s) - the agent returns before its worker is done. So where a row
+# would otherwise FAIL, the pass waits for the artefact itself: a registry change notification on the probe's own key, armed BEFORE
+# each read and re-read on every wake (the CBS settle's RegNotifyChangeKeyValue below), for at most $EffectSettleSec after the agent
+# returned. An expiry never passes a row - only an observed effect does (Jev: mechanism 0.72, scope 0.92, 'never a timeout as a fix'
+# complied 0.83, 60 s 0.55). MEASURED with this wait (w11de-val38c, 2026-10-03): the platform switched 2.8 s after the agent returned;
+# every wait logs the latency it saw.
+$EffectSettleSec = 60   # GUARD:settlebound
+# The key each probe's artefact is recorded under (ADR-updater section 6: keys, never titles). $null = nothing to watch.
+function Get-EffectWatchKey([string]$probe){
+  switch($probe){
+    'security-platform'  { return @{ rel='SOFTWARE\Microsoft\Windows Security Health'; subtree=$true } }   # Platform\CoreLocation, Updates\wu
+    'defender-signature' { return @{ rel='SOFTWARE\Microsoft\Windows Defender\Signature Updates'; subtree=$false } }
+    'defender-platform'  { return @{ rel='SOFTWARE\Microsoft\Windows Defender'; subtree=$false } }
+    'mrt-version'        { return @{ rel='SOFTWARE\Microsoft\RemovalTools\MRT'; subtree=$false } }
+  }
+  return $null
+}
+# THE ROWS THE WAIT IS FOR: exactly the verdict's DISAGREEMENT rows (WU-AGENT-VERDICT, GUARD:agentdisagree) - the agent reports success,
+# the probe ran, nothing moved, the artefact is not already current. Any other row is decided on its first read, without waiting.
+function Test-EffectWouldFail([bool]$agentOk, [string]$probe, [bool]$probeRan, [bool]$eff, [bool]$alreadyCurrent, [bool]$platBehind, [bool]$sigBehind){
+  return [bool]($agentOk -and $probe -and $probeRan -and -not $eff -and -not $alreadyCurrent -and
+    (($probe -eq 'security-platform') -or ($probe -eq 'defender-platform' -and $platBehind) -or ($probe -eq 'defender-signature' -and $sigBehind)))   # GUARD:settlewhen
+}
+function Start-RegistryWatch([string]$rel, [bool]$subtree){
+  $w = [pscustomobject]@{ armed=$false; why=''; key=$null; ev=$null }
+  try {
+    if(-not ('CbsRegNotify' -as [type])){
+      Add-Type @'
+using System; using System.Runtime.InteropServices;
+public static class CbsRegNotify {
+    [DllImport("advapi32.dll")]
+    public static extern int RegNotifyChangeKeyValue(IntPtr hKey, bool bWatchSubtree, uint dwNotifyFilter, IntPtr hEvent, bool fAsynchronous);
+}
+'@
+    }
+    $w.key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($rel, [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadSubTree,
+               ([System.Security.AccessControl.RegistryRights]::Notify -bor [System.Security.AccessControl.RegistryRights]::ReadKey))
+    if(-not $w.key){ $w.why = "HKLM\$rel cannot be opened"; return $w }
+    $w.ev = New-Object System.Threading.ManualResetEvent($false)
+    # 0x1 REG_NOTIFY_CHANGE_NAME (a subkey added or removed) | 0x4 REG_NOTIFY_CHANGE_LAST_SET (a value written) | 0x10000000 THREAD_AGNOSTIC
+    $rc = [CbsRegNotify]::RegNotifyChangeKeyValue($w.key.Handle.DangerousGetHandle(), $subtree, 0x10000005, $w.ev.SafeWaitHandle.DangerousGetHandle(), $true)
+    if($rc -ne 0){ $w.why = "RegNotifyChangeKeyValue rc=$rc"; return $w }
+    $w.armed = $true
+  } catch { $w.why = ($_.Exception.Message -replace '\s+',' ') }
+  return $w
+}
+function Wait-RegistryWatch($w, [int]$ms){ if($w -and $w.armed){ return [bool]$w.ev.WaitOne([Math]::Max(0,$ms)) }; return $false }
+function Stop-RegistryWatch($w){ if($w){ try { if($w.ev){ $w.ev.Dispose() } } catch {}; try { if($w.key){ $w.key.Dispose() } } catch {} } }
+# ---- WU-REGWATCH-END
+
 # THE LIVE IUpdate FOR AN OFFER ROW: from this pass's search (Get-Available keeps them), else from a FRESH search - never guessed. The agent
 # installs only what it offered; an update a fresh search no longer offers is reported as such.
 function Get-LiveUpdate($u){
@@ -1536,6 +1589,16 @@ function Install-ViaAgentCache($u){
   }
   # ---- WU-AGENT-INSTALL-END
   $agentOk = ($null -ne $agentRc) -and ($agentRc -in @(2,3))
+  # ---- WU-EFFECT-SETTLE-BEGIN   (tools/tests/wu-effectsettle-test.ps1 runs this region; WU-REGWATCH says why)
+  # The artefact is read; a row that would otherwise FAIL waits for it to move - armed before every read, re-read on every wake, never
+  # past $EffectSettleSec after the agent returned. The reads below are the probes' own regions, unchanged, on every turn of this loop.
+  $settleKey = Get-EffectWatchKey $probe
+  $settleAt = Get-Date; $settleUntil = $settleAt.AddSeconds($EffectSettleSec); $settleWaited = $false
+  while($true){
+    $watch = $null
+    if($agentOk -and $settleKey){ $watch = Start-RegistryWatch $settleKey.rel $settleKey.subtree }   # GUARD:settlearm - BEFORE the read
+    try {
+  # ---- WU-EFFECT-SETTLE-READ-BEGIN
   # ---- the artefact AFTER the install, per probe: $eff = it moved, $probeRan = it could be read, $alreadyCurrent / *Behind = its
   # comparison with the dotted quad in the offer's own title (digits are language-free, ADR-updater section 6)
   $eff=$false; $probeRan=$true; $alreadyCurrent=$false; $platBehind=$false; $sigBehind=$false; $secWhy=$null
@@ -1630,7 +1693,10 @@ function Install-ViaAgentCache($u){
       # CoreLocation folder's version, Updates\wu, the host's FileVersion) against the dotted quad in the offer's own title (digits are
       # language-free, ADR section 6), like the Defender platform above. Measured 2026-10-03 on the German 25H2 template (two fresh
       # clones and the rz35 subject): the no-argument run moves CoreLocation from System32 to ...\SecurityHealth\10.0.29628.1000-0 and
-      # writes Updates\wu=10.0.29628.1000 before the launcher returns, and Windows Update then STOPS offering KB5007651; the SecHealthUI
+      # writes Updates\wu=10.0.29628.1000. CORRECTED 2026-10-03: this said "before the launcher returns" - true when WE ran the launcher
+      # (it returned after the switch, 8.4 s), FALSE through the agent's installer, whose Install() returns after 2 s with the switch still
+      # to come (rz38b validation: inbox 1 s after, switched by 10 s) - WU-EFFECT-SETTLE waits for it. Windows Update then STOPS offering
+      # KB5007651; the SecHealthUI
       # app follows about 41 s later and is information only - it decided this item until 2026-10-03 and read ALREADY CURRENT over an
       # uninstalled platform. MOVED to or past the offer = installed (eff). NOT moved and at or past the offer = ALREADY CURRENT.
       # Anything else = a FAILED install, decided in WU-AGENT-VERDICT (the owner's rule, 2026-10-03). The install itself is the
@@ -1669,6 +1735,26 @@ function Install-ViaAgentCache($u){
         }
       }
 # ---- WU-SECURITY-PLATFORM-END
+  # ---- WU-EFFECT-SETTLE-READ-END
+      if(-not (Test-EffectWouldFail $agentOk $probe $probeRan $eff $alreadyCurrent $platBehind $sigBehind)){
+        if($settleWaited){ Log ("    $probe artefact " + $(if($eff){ 'moved' } else { 'settled' }) + (" {0:N1} s after the agent returned" -f ((Get-Date) - $settleAt).TotalSeconds)) }
+        break
+      }
+      if(-not $settleKey){ break }   # no artefact key to watch: the read above decides
+      if(-not $watch.armed){   # GUARD:settleunarmed - the instrument is missing: loud, and the read above decides (never a poll in its place)
+        Log ("  ERROR: $label : the $probe effect wait could not be armed on HKLM\$($settleKey.rel) ($($watch.why)) - the row is decided on the read above")
+        break
+      }
+      $ms = [int][Math]::Floor(($settleUntil - (Get-Date)).TotalMilliseconds)
+      if($ms -le 0){   # GUARD:settledeadline - the expiry decides nothing: the read above (taken after it) stands
+        Log ("    $probe artefact did not move within $EffectSettleSec s of the agent returning - the read above decides")
+        break
+      }
+      if(-not $settleWaited){ Log ("    the agent reports success but the $probe artefact has not moved - waiting for it (registry notification on HKLM\$($settleKey.rel), at most $EffectSettleSec s)"); $settleWaited = $true }
+      [void](Wait-RegistryWatch $watch $ms)   # GUARD:settlewait - a wake or the deadline: either way the artefact is read again
+    } finally { Stop-RegistryWatch $watch }
+  }
+  # ---- WU-EFFECT-SETTLE-END
   # ---- WU-AGENT-VERDICT-BEGIN   (tools/tests/wu-agentcache-test.ps1, wu-defplatform-test.ps1 and wu-secplatform-test.ps1 run this region)
   # THE ROW IS DECIDED BY THE AGENT'S RESULT AND OUR EFFECT PROBE TOGETHER (Jev 0.72, 2026-10-03). ResultCode 2 = succeeded, 3 = succeeded
   # with errors, 4 = failed, 5 = aborted; $null = the agent was never asked, because the update was not downloaded after CopyToCache.
