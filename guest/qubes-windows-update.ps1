@@ -733,8 +733,12 @@ function Get-SecurityPlatformState {
 function Get-Available {
   $s=New-Object -ComObject Microsoft.Update.Session
   $se=$s.CreateUpdateSearcher(); $se.ServerSelection=2; $se.Online=$true
-  $r=$se.Search("IsInstalled=0 and IsHidden=0")
-  $r=$se.Search("IsInstalled=0 and IsHidden=0")
+  # ---- WU-AVAILABLE-INIT-BEGIN   (tools/tests/wu-available-test.ps1 runs this function)
+  $r=$se.Search("IsInstalled=0 and IsHidden=0")   # GUARD:onesearch - ONE online search per scan
+  # $out MUST start as an empty ARRAY: `$null += [ordered]@{...}` yields a DICTIONARY, and the next += then merges two dictionaries
+  # and throws on the duplicate key "kb" - which killed every scan offering two or more updates (rz38, 2026-10-03).
+  $out=@()   # GUARD:outarray
+  # ---- WU-AVAILABLE-INIT-END
   # THE LIVE IUpdate OBJECTS, kept for the install phase of this pass: Install-ViaAgentCache hands the agent's installer the very object
   # the search returned (CopyToCache is a method of it). Keyed by KB and by UpdateID (no-KB offers); the session and the result stay
   # referenced with them so the COM objects remain valid. Rebuilt by every search, so a fresh search is a fresh map.
