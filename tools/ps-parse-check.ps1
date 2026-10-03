@@ -31,14 +31,19 @@ $ErrorActionPreference = 'Stop'
 if (-not $Path) { $Path = Split-Path -Parent (Split-Path -Parent $PSCommandPath) }
 $root = (Resolve-Path -LiteralPath $Path).Path
 
+# The exclusions apply to the path RELATIVE TO THE SCANNED ROOT: the repo scan skips scratchpad/, but a scratchpad script named
+# explicitly (pwsh -File tools/ps-parse-check.ps1 scratchpad/x.ps1 - the by-hand check before it goes to a guest) is checked. Matching
+# the absolute path refused exactly that call as "no files found" (2026-10-03).
+function Excluded([string]$full) {
+    $rel = '/' + $full.Substring([Math]::Min($full.Length, $root.Length)).TrimStart('/', '\')
+    return ($rel -match '[\\/](upstream|scratchpad|evidence|\.git)[\\/]' -or $rel -match '[\\/]mgmt[\\/]prime-jobs[\\/]')
+}
 $files = @(Get-ChildItem -LiteralPath $root -Recurse -Filter *.ps1 -File -ErrorAction SilentlyContinue |
-           Where-Object { $_.FullName -notmatch '[\\/](upstream|scratchpad|evidence|\.git)[\\/]' -and
-                          $_.FullName -notmatch '[\\/]mgmt[\\/]prime-jobs[\\/]' })
+           Where-Object { -not (Excluded $_.FullName) })
 
 # Shell scripts, for the PowerShell they embed in quoted heredocs (checked below).
 $shFiles = @(Get-ChildItem -LiteralPath $root -Recurse -Filter *.sh -File -ErrorAction SilentlyContinue |
-             Where-Object { $_.FullName -notmatch '[\\/](upstream|scratchpad|evidence|\.git)[\\/]' -and
-                            $_.FullName -notmatch '[\\/]mgmt[\\/]prime-jobs[\\/]' })
+             Where-Object { -not (Excluded $_.FullName) })
 
 # MISSING DATA FAILS. Finding no files means the scan is broken (wrong root, bad filter), not that
 # the repo is clean - and a checker that reports success when it examined nothing is the exact
