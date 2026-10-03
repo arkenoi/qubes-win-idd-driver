@@ -267,10 +267,11 @@ and the platform had switched within 10 s. The rz38b validation pass therefore f
 The Defender probes read the service's view (`Get-MpComputerStatus`), not the key that is watched, so their wake can come
 early. The cost is lateness up to the bound, never a wrong row (Jev 0.93).
 
-**Not yet decided: a reboot left pending.** The owner, 2026-10-03: "normal dom0-initiated update may keep reboot pending". What
-the agent-path installers do while a reboot is pending is not measured. That case is the next mandate, measured first (Jev 0.99):
-the verdict under a pending reboot, the report's assumption that the reboot follows the pass at once, and a gate round that runs
-with the reboot kept pending.
+**A reboot left pending: at most ONCE** (the owner, 2026-10-03). The normal dom0-initiated update may leave the reboot pending.
+"It is ok if we show that updates are still pending and reboot is required to dom0 once, we just want to avoid doing that more than
+once." So dom0 may be told once that work is staged or deferred and a reboot is required. A second such report for the same update
+cycle is a defect: a repeated reboot request, or a pending count that comes back after the reboot because the work did not land.
+The test judges the count of those reports; no special machinery is built for the pending state itself.
 
 ### 12.4 Process ownership
 
