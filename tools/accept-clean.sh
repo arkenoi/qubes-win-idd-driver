@@ -167,7 +167,13 @@ log "running health-check.ps1"
 # It is not the default and must not become one: the IDD topology apply landed in the agent
 # on 2026-08-07 (EnsureQubesIddSolo), so a release run asserts the IDD for real.
 log "health-check args: ${HEALTH_ARGS:-<none, full IDD assertion>}"
-QT=180 qq pushrun "$HERE/guest/health-check.ps1" ${HEALTH_ARGS:+$HEALTH_ARGS} 2>&1 | tr -d '\r' | grep -a '=== HEALTH ===' | tail -1 > "$OUT/health.json"
+# THE CHECK MUST MATCH THE ARTEFACT UNDER TEST: HEALTH_CHECK = the health-check.ps1 shipped IN the package being graded (the matrix
+# passes it). The repo's working copy can be newer than the package - on 2026-10-03 it asserted rz39's recovery on four services against
+# rz38d, which arms two, and failed every cell by construction. Named but missing = missing data: FAIL, never a silent fallback.
+HC="${HEALTH_CHECK:-$HERE/guest/health-check.ps1}"
+[ -f "$HC" ] || { log "ACCEPT=FAIL reason=health-check.ps1 not found at $HC (HEALTH_CHECK)"; exit 1; }
+log "health-check.ps1 under test: $HC"
+QT=180 qq pushrun "$HC" ${HEALTH_ARGS:+$HEALTH_ARGS} 2>&1 | tr -d '\r' | grep -a '=== HEALTH ===' | tail -1 > "$OUT/health.json"
 [ -s "$OUT/health.json" ] || fail "health-check produced no output"
 
 # GATE ON asserted_all, NOT ok. `ok` is true when no HARD check failed, but it deliberately

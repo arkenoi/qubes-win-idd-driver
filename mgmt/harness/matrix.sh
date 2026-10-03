@@ -586,7 +586,7 @@ accept_grade(){ # $1=vm $2=label - the post-install acceptance battery, REUSED n
   # loudly about every tolerated NA. On a netvm-carrying subject every check must be asserted.
   [ -z "$nv" ] && allowna=1
   say "  $lbl: accept-clean SKIP_PROVISION=1 ALLOW_NA=$allowna (evidence: $M/$lbl-accept)"
-  SKIP_PROVISION=1 ALLOW_NA=$allowna ./tools/accept-clean.sh "$vm" no-loop-in-skip-mode "$M/$lbl-accept" \
+  SKIP_PROVISION=1 ALLOW_NA=$allowna HEALTH_CHECK="$RELEASE_SETUP/health-check.ps1" ./tools/accept-clean.sh "$vm" no-loop-in-skip-mode "$M/$lbl-accept" \
       >"$M/$lbl-accept.out" 2>&1
   local rc=$?
   say "  $lbl: accept-clean says: $(tail -1 "$M/$lbl-accept.out" | cut -c1-200)"
