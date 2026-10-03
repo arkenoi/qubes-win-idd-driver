@@ -799,7 +799,10 @@ function Format-QwtDeathNotice {
     }
     $header = "The $human $what"   # GUARD:hdrplain
     $tech = Format-QwtNotifyTechLine -Subject $subject -ProcessId $procId -Code $codeText -Ran $ran -Count "death $Number this boot" -Evidence $evidence   # GUARD:techline
-    return @{ Component = $Death.component; Header = $header; Next = $next; Cause = $cause; Tech = $tech }
+    # the same line with the evidence cut to the deaths log (which holds the full record) - what is sent when the full text would
+    # be over the route's byte limit; see GUARD:lengthfallback
+    $techShort = Format-QwtNotifyTechLine -Subject $subject -ProcessId $procId -Code $codeText -Ran $ran -Count "death $Number this boot" -Evidence $ourLog
+    return @{ Component = $Death.component; Header = $header; Next = $next; Cause = $cause; Tech = $tech; TechShort = $techShort }
 }
 
 # --- the whole thing for one record: log at ERROR, count, notify ----------------------------------
@@ -838,7 +841,15 @@ function Invoke-QwtDeathReport {
         return 'failed:transport'
     }
     $id = 'death-' + $reg.number   # GUARD:deathid
-    $st = Send-QwtError -Component $notice.Component -Id $id -Severity ACTION -Header $notice.Header -Next $notice.Next -Cause $notice.Cause -Tech $notice.Tech
+    # THE ROUTE REFUSES A TEXT OVER ITS BYTE LIMIT, AND A REFUSED DEATH IS A SILENT ONE. The text carries the log directory twice,
+    # so a long LogDir (a legacy install, a custom path) could push a death past the limit. Then the evidence is cut to the
+    # deaths log - which holds the full record - and the death is sent; the shortening is logged.
+    $techSent = $notice.Tech; $shortened = $false
+    $full = Format-QwtNotifyText -Header $notice.Header -Next $notice.Next -Cause $notice.Cause -Tech $notice.Tech
+    $why = "$(Get-QwtNotifyRedactReason $full)"
+    if ($why -like 'too long*' -and $notice.TechShort) { $techSent = $notice.TechShort; $shortened = $true }   # GUARD:lengthfallback
+    if ($shortened) { Write-QwtDeathLog 'WARN' "DEATH #$($reg.number): the full text is $([Text.Encoding]::UTF8.GetByteCount($full)) bytes, over the route's limit - sent with the evidence cut to the deaths log" }
+    $st = Send-QwtError -Component $notice.Component -Id $id -Severity ACTION -Header $notice.Header -Next $notice.Next -Cause $notice.Cause -Tech $techSent
     if ($st -eq 'send') { Write-QwtDeathLog 'INFO' "DEATH #$($reg.number) notified to dom0 as $($notice.Component).$id" }
     elseif ($st -eq 'suppressed:cap') { Write-QwtDeathLog 'ERROR' "DEATH #$($reg.number) NOT notified: the route's cap of 8 per boot is reached (a crash storm); every further death is still logged here" }
     else { Write-QwtDeathLog 'ERROR' "DEATH #$($reg.number) NOT notified: route status $st" }

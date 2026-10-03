@@ -79,6 +79,7 @@ else
             hang)           printf '%s' '            if ($false) { }   # DEFECT: a hang is an exit' ;;
             taskid)         printf '%s' '                $r.component = ($task.TrimStart('"'"'\'"'"').ToLowerInvariant() -replace '"'"'[^a-z0-9-]'"'"', '"'"''"'"')   # DEFECT: the old task ids' ;;
             scmwords)       printf '%s' '                    $cause = "Cause: terminated unexpectedly, time $($Death.svcCount) per the SCM."   # DEFECT: jargon' ;;
+            lengthfallback) printf '%s' '    if ($false) { }   # DEFECT: an over-long death text is refused - a silent death' ;;
             bodylines)      printf '%s' '    return ($lines[0] + "`r`n" + (($lines | Select-Object -Skip 1) -join '"'"' '"'"'))   # DEFECT: the body collapses into one line' ;;
         esac
     }
@@ -91,10 +92,11 @@ else
             hang)           printf '%s' 'the hang is rendered as a hang' ;;
             taskid)         printf '%s' 'the component is the task'"'"'s or executable'"'"'s machine id' ;;
             scmwords)       printf '%s' 'cause is not phrased by another table or in jargon (no '"'"'per the SCM'"'"')' ;;
+            lengthfallback) printf '%s' 'the death is sent even when the full text is over the limit' ;;
             bodylines)      printf '%s' 'body is 2 to 4 lines' ;;
         esac
     }
-    for k in hdrplain techline codetable redactfallback hang taskid scmwords bodylines; do
+    for k in hdrplain techline codetable redactfallback hang taskid scmwords lengthfallback bodylines; do
         src=$(knob_file "$k"); copy="$OUT/defect-$k.ps1"
         hits=$(grep -c "# GUARD:$k\$" "$src")
         if [ "$hits" -ne 1 ]; then say "FAIL  PS knob $k: expected exactly 1 '# GUARD:$k' line in $(basename "$src"), found $hits"; bad=1; continue; fi

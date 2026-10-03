@@ -208,6 +208,24 @@ foreach ($k in $cases.Keys) {
 
 # the service wording follows the SCM's recovery settings as the registry has them
 Say "`n==== a service death under each recovery state ===="
+# ---- a long log directory: the full text would be over the route's limit; the death must still be sent (GUARD:lengthfallback) ----
+$k = '4002 HUNG with a long log directory (~130 characters)'
+Reset-World
+# a realistic long path - words and separators; a 40-character run without one is the route's key-shaped rule, a different refusal
+$longDir = Join-Path $tmpRoot 'Program Files/Invisible Things Lab/Qubes Tools/log/a custom directory for this qube/kept on the private volume/deaths'
+New-Item -ItemType Directory -Force -Path $longDir | Out-Null
+$savedLogDir = $script:QwtDeathLogDir; $script:QwtDeathLogDir = $longDir
+$st = Invoke-QwtDeathReport (New-Super 4002 'wgcbroker.exe' '4100' 'hung' '125000' $T0)
+Say "`n---- $k (route status: $st) ----"
+if ($script:launched.Count) { Say ([string]$script:launched[-1]) } else { Say '(nothing sent)' }
+Check $k 'the death is sent even when the full text is over the limit' ($st -eq 'send' -and $script:launched.Count -eq 1) $st
+if ($script:launched.Count) {
+    $text = [string]$script:launched[-1]
+    Check $k 'the sent technical line names the deaths log' ($text -like '*qwt-deaths.log*') ''
+    Check $k 'the shortening is logged' ((Get-Content -LiteralPath (Join-Path $longDir 'qwt-deaths.log') -Raw) -like '*evidence cut to the deaths log*') ''
+}
+$script:QwtDeathLogDir = $savedLogDir
+
 foreach ($state in 'not-armed', 'crash-only', 'unreadable') {
     Reset-World
     switch ($state) {
