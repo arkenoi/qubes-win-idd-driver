@@ -181,6 +181,14 @@ for r in $(seq 1 "$ROUNDS"); do
     wait_qrexec 900 || { log "round $r: guest never came up"; fails=1; break; }
   fi
 
+  # INDEPENDENT FACTS FOR THE EXCLUSION AUDIT, at both ends of every pass (Jev 0.88, 2026-10-03). The audit judges an item in the
+  # round that EXCLUDED it, so the artefacts that item changes are measured by the harness - not the updater - before and after that
+  # very pass. One read after the whole run cannot speak for an earlier round: in rz35 KB2267602 was excluded as already current in
+  # round 2 and its signatures moved again in round 3. Evidence only, never a round verdict: an incomplete read is logged here and
+  # refused by tools/wu-exclusion-evidence.py when an excluded round needs it (missing data fails).
+  mgmt/harness/wu-evidence-facts.sh "$VM" "$RD/facts-before.txt" > "$RD/facts-before.out" 2>&1 \
+    || log "round $r: facts before the pass INCOMPLETE - $(tail -1 "$RD/facts-before.out" | cut -c1-160)"
+
   # agent.log is CUMULATIVE - it carries every pass this image has ever run, including the
   # golden's history. Judging the whole file each round re-judges the past and lets an old pass
   # decide this round's verdict. Snapshot it BEFORE, and judge only what this round appended.
@@ -283,6 +291,8 @@ for r in $(seq 1 "$ROUNDS"); do
   log "round $r: agent.log grew by $(wc -l < "$RD/agent.log") line(s)"
   guest_file 'C:\ProgramData\Qubes\update-status.json'  > "$RD/update-status.json"
   guest_file 'C:\ProgramData\Qubes\vmupdate-shim.log'   > "$RD/vmupdate-shim.log" 2>/dev/null
+  mgmt/harness/wu-evidence-facts.sh "$VM" "$RD/facts-after.txt" > "$RD/facts-after.out" 2>&1 \
+    || log "round $r: facts after the pass INCOMPLETE - $(tail -1 "$RD/facts-after.out" | cut -c1-160)"
 
   after=$(dom0_avail); log "round $r: dom0 updates-available AFTER='${after:-<empty>}'"
   echo "${after:-}" > "$RD/dom0-updates-available.txt"
