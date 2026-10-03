@@ -14,6 +14,10 @@
     unbalanced braces, a malformed hashtable literal, an if/else used as an expression where the
     parser will not take one - which is the class that costs a whole acceptance cell to find.
 
+    Two more checks ride the same parse (2026-10-03): a function named like a Windows PowerShell
+    5.1 alias (never called - the alias wins), and the PowerShell the shell harness embeds in
+    quoted heredocs (<<'PS', <<'PS1', <<'PSEOF'), which gets both checks.
+
     Excludes upstream/ (not ours), scratchpad/ and evidence/ (gitignored working files) and
     mgmt/prime-jobs/ (staging leftovers copied out of a built package, not source).
 
@@ -31,11 +35,16 @@ $files = @(Get-ChildItem -LiteralPath $root -Recurse -Filter *.ps1 -File -ErrorA
            Where-Object { $_.FullName -notmatch '[\\/](upstream|scratchpad|evidence|\.git)[\\/]' -and
                           $_.FullName -notmatch '[\\/]mgmt[\\/]prime-jobs[\\/]' })
 
+# Shell scripts, for the PowerShell they embed in quoted heredocs (checked below).
+$shFiles = @(Get-ChildItem -LiteralPath $root -Recurse -Filter *.sh -File -ErrorAction SilentlyContinue |
+             Where-Object { $_.FullName -notmatch '[\\/](upstream|scratchpad|evidence|\.git)[\\/]' -and
+                            $_.FullName -notmatch '[\\/]mgmt[\\/]prime-jobs[\\/]' })
+
 # MISSING DATA FAILS. Finding no files means the scan is broken (wrong root, bad filter), not that
 # the repo is clean - and a checker that reports success when it examined nothing is the exact
 # failure this repo keeps paying for.
-if ($files.Count -eq 0) {
-    Write-Host "FATAL: no .ps1 files found under $root - the scan is broken, not the repo clean"
+if ($files.Count -eq 0 -and $shFiles.Count -eq 0) {
+    Write-Host "FATAL: no .ps1 or .sh files found under $root - the scan is broken, not the repo clean"
     exit 2
 }
 
@@ -76,6 +85,42 @@ foreach ($f in $files) {
     }
 }
 
-Write-Host ("--- parsed {0} file(s), {1} with syntax errors, {2} function(s) named like a 5.1 alias" -f $files.Count, $bad, $shadowed)
+# POWERSHELL EMBEDDED IN SHELL SCRIPTS: the harness sends whole PowerShell programs to guests from quoted heredocs (<<'PS', <<'PS1',
+# <<'PSEOF' - quoted, so bash passes the body through literally and the text here IS the program). Both alias incidents were that
+# shape, so those bodies get the same two checks. Unquoted heredocs are expanded by bash first and are not parsed.
+$heredocs = 0
+foreach ($f in $shFiles) {
+    $lines = @(Get-Content -LiteralPath $f.FullName)
+    $rel = $f.FullName.Substring($root.Length).TrimStart('/', '\')
+    if (-not $rel) { $rel = $f.Name }
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $m = [regex]::Match($lines[$i], "<<-?'(PS|PS1|PSEOF)'")
+        if (-not $m.Success) { continue }
+        $delim = $m.Groups[1].Value
+        $j = $i + 1
+        while ($j -lt $lines.Count -and $lines[$j].Trim() -ne $delim) { $j++ }
+        $heredocs++
+        $tokens = $null
+        $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput(($lines[($i + 1)..($j - 1)] -join "`n"), [ref]$tokens, [ref]$errors)
+        if ($j -le $i + 1) { $ast = [System.Management.Automation.Language.Parser]::ParseInput('', [ref]$tokens, [ref]$errors) }
+        if ($errors -and $errors.Count -gt 0) {
+            $bad++
+            Write-Host ("FAIL  {0}: the PowerShell heredoc at line {1}" -f $rel, ($i + 1))
+            foreach ($e in ($errors | Select-Object -First 5)) {
+                Write-Host ("        file line {0}: {1}" -f ($i + 1 + $e.Extent.StartLineNumber), $e.Message)
+            }
+        }
+        foreach ($fd in $ast.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+            if ($aliases51 -contains $fd.Name) {
+                $shadowed++
+                Write-Host ("FAIL  {0}: line {1}: function '{2}' (in a PowerShell heredoc) is a Windows PowerShell 5.1 alias - every call runs the aliased cmdlet, never this function; rename it" -f $rel, ($i + 1 + $fd.Extent.StartLineNumber), $fd.Name)
+            }
+        }
+        $i = $j
+    }
+}
+
+Write-Host ("--- parsed {0} file(s) and {1} PowerShell heredoc(s), {2} with syntax errors, {3} function(s) named like a 5.1 alias" -f $files.Count, $heredocs, $bad, $shadowed)
 if ($bad -gt 0 -or $shadowed -gt 0) { exit 1 }
 exit 0
