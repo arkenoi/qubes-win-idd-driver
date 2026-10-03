@@ -9,7 +9,7 @@
 #
 #   tools/tests/lint-selftest.sh
 set -uo pipefail
-cd /home/user/qubes-win-idd-driver
+cd "$(dirname "$0")/../.."   # the checkout this selftest lives in (a worktree included), not a fixed path
 LINT=tools/lint-harness.py
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 pass=0; fail=0
@@ -176,6 +176,72 @@ expect_fires L12-provisioning-recipe "$D" "a LIVE cdrom attach (qubesd refuses i
 D="$TMP/l12ok"; mk "$D"
 printf '#!/bin/bash\nqvm-device block assign --required -o frontend-dev=xvdi -o devtype=disk "$VM" holder:loop0\n' > "$D/mgmt/harness/good.sh"
 expect_silent L12-provisioning-recipe "$D" "the recipe shape: assign --required"
+
+# ---------------------------------------------------------------- L17 process killed or adopted by NAME (owner 2026-10-03, ADR-updater 12.4)
+# One fixture per shape, each planted alone. No packaging/make-setup.ps1 in these fixtures, so every guest/*.ps1 counts as shipped.
+D="$TMP/l17a"; mk "$D"; printf 'Stop-Process -Name foo -Force -EA SilentlyContinue\n' > "$D/guest/upd.ps1"
+expect_fires L17-process-by-name "$D" "Stop-Process -Name"
+D="$TMP/l17b"; mk "$D"; printf 'Get-Process qubes-updates-relay -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue\n' > "$D/guest/upd.ps1"
+expect_fires L17-process-by-name "$D" "Get-Process <name> | Stop-Process (the old Ensure-Proxy respawn)"
+D="$TMP/l17c"; mk "$D"; printf 'Get-Process qubes-updates-relay -EA SilentlyContinue | ForEach-Object { $_.Kill() }\n' > "$D/guest/upd.ps1"
+expect_fires L17-process-by-name "$D" "Get-Process <name> | ForEach-Object { .Kill() } (the old Remove-Proxy)"
+D="$TMP/l17d"; mk "$D"; printf '& taskkill.exe /F /IM foo.exe *>$null\n' > "$D/guest/upd.ps1"
+expect_fires L17-process-by-name "$D" "taskkill /im"
+D="$TMP/l17e"; mk "$D"; printf 'if (-not (Get-Process qubes-updates-relay -EA SilentlyContinue)) { Start-Relay }\n' > "$D/guest/upd.ps1"
+expect_fires L17-process-by-name "$D" "existence by name decides whether to start our own (the old Ensure-Proxy adoption)"
+D="$TMP/l17f"; mk "$D"
+cat > "$D/guest/upd.ps1" <<'EOS'
+foreach ($p in @(Get-Process qubes-updates-relay -EA SilentlyContinue)) {
+    $rp = $p
+    try { $rp.Kill() } catch { }
+}
+EOS
+expect_fires L17-process-by-name "$D" "a variable bound by a by-name lookup, aliased, then .Kill()ed (the old dead-pass cleanup)"
+D="$TMP/l17g"; mk "$D"; printf '$script:Relay = Get-Process qubes-updates-relay -EA SilentlyContinue\n' > "$D/guest/upd.ps1"
+expect_fires L17-process-by-name "$D" "a by-name lookup retained as script state (adoption)"
+D="$TMP/l17h"; mk "$D"
+cat > "$D/guest/upd.ps1" <<'EOS'
+$running = @(Get-Process qubes-updates-relay -EA SilentlyContinue)
+if ($running.Count -eq 0) {
+    Log 'starting'
+    Start-Process foo.exe
+}
+EOS
+expect_fires L17-process-by-name "$D" "a by-name count gating a start across lines (adoption)"
+D="$TMP/l17i"; mk "$D"; printf 'Get-WmiObject Win32_Process -Filter "Name = ''foo.exe''" | ForEach-Object { $_.Terminate() }\n' > "$D/guest/upd.ps1"
+expect_fires L17-process-by-name "$D" "a Win32_Process selected by Name and Terminate'd"
+# ...and the shapes that are neither kill nor adopt: counting, waiting, by handle, by id, a start gated on something else
+D="$TMP/l17ok"; mk "$D"
+cat > "$D/guest/upd.ps1" <<'EOS'
+$ti = @(Get-Process TiWorker, TrustedInstaller -EA SilentlyContinue).Count
+while ((Get-Date) -lt $q) {
+  $tiw = @(Get-Process TiWorker -EA SilentlyContinue)
+  if ($tiw.Count -eq 0) { break }
+  try { [void]$tiw[0].WaitForExit($ms) } catch { Start-Sleep -Seconds 10 }
+}
+$me = Get-Process -Id $PID -EA SilentlyContinue
+$p = Start-Process -FilePath $exe -ArgumentList '--listen' -PassThru
+$script:OwnRelay = $p
+$p.Kill(); [void]$p.WaitForExit(10000)
+Stop-Process -Id $ownerPid -Force
+if (-not (Test-RelayListening)) { Start-Relay }
+# a comment naming Get-Process foo | Stop-Process must not fire
+EOS
+expect_silent L17-process-by-name "$D" "counting and waiting on a by-name process, kill by handle, kill by id, a start gated on a probe, a comment"
+# SCOPE: with a packaging/make-setup.ps1 present only the updater payload it names is linted (the other shipped scripts are out of
+# scope this time - see the lint's docstring for the sites that still kill by name)
+D="$TMP/l17scope"; mk "$D"; mkdir -p "$D/packaging"
+cat > "$D/packaging/make-setup.ps1" <<'EOS'
+foreach ($u in 'shipped.ps1', 'qubes-windows-update.ps1',
+               'other.ps1') {
+    Copy-Item (Need (Join-Path $RepoRoot "guest\$u") "updater agent payload ($u)") $OutDir -Force
+}
+EOS
+printf 'Stop-Process -Name foo -Force\n' > "$D/guest/unshipped.ps1"
+printf 'Write-Host ok\n' > "$D/guest/shipped.ps1"
+expect_silent L17-process-by-name "$D" "a by-name kill in a guest script outside the make-setup updater payload"
+printf 'Stop-Process -Name foo -Force\n' > "$D/guest/shipped.ps1"
+expect_fires L17-process-by-name "$D" "the same kill inside the make-setup updater payload"
 
 echo "  ---- $pass passed, $fail failed"
 exit $(( fail > 0 ? 1 : 0 ))

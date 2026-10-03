@@ -581,6 +581,150 @@ def l16_ps_script_scope_case_collision() -> None:
                                 f"rename the local or write $script:{sorted(spellings)[0]} on purpose")
 
 
+# --------------------------------------------------------------------------- L17
+# "By name" = Get-Process (or its aliases gps/ps) called without -Id/-InputObject: what comes back is ANY process with that name.
+_PS_GETPROC = re.compile(r"(?<![\w$\-.])(Get-Process|gps|ps)(?![\w-])([^|;)}\n]*)", re.I)
+_PS_START = re.compile(r"\bStart-(?!Sleep\b|Transcript\b)[A-Za-z]+\b|Process\]::Start\(", re.I)
+
+
+def _ps_code_lines(txt: str) -> list[str]:
+    """The code of each line: block comments blanked, a line comment cut at its first ' #'. Approximate (a '#' inside a
+    string also cuts), but it only ever REMOVES text, so it can hide a shape, never invent one."""
+    out: list[str] = []
+    inblock = False
+    for line in txt.splitlines():
+        code = line
+        if inblock:
+            if "#>" in code:
+                code = code.split("#>", 1)[1]
+                inblock = False
+            else:
+                out.append("")
+                continue
+        while "<#" in code:
+            pre, rest = code.split("<#", 1)
+            if "#>" in rest:
+                code = pre + rest.split("#>", 1)[1]
+            else:
+                code = pre
+                inblock = True
+                break
+        if code.lstrip().startswith("#"):
+            code = ""
+        else:
+            code = re.split(r"\s#", code, maxsplit=1)[0]
+        out.append(code)
+    return out
+
+
+def _ps_byname_getproc(code: str) -> bool:
+    for m in _PS_GETPROC.finditer(code):
+        if not re.search(r"-(Id|InputObject)\b", m.group(2), re.I):
+            return True
+    return False
+
+
+def _ps_shipped_updater_payload() -> list[Path]:
+    """The updater payload as packaging/make-setup.ps1 ships it: the foreach list that names qubes-windows-update.ps1, resolved
+    against guest/. Without a make-setup.ps1 (a selftest fixture) every guest/*.ps1 counts - a superset, never a skip."""
+    ms = ROOT / "packaging" / "make-setup.ps1"
+    if ms.exists():
+        txt = ms.read_text(errors="replace")
+        for m in re.finditer(r"foreach\s*\(\s*\$\w+\s+in\s+([^()]*?)\)\s*\{", txt, re.S):
+            names = re.findall(r"'([^']+\.ps1)'", m.group(1))
+            if "qubes-windows-update.ps1" in names:
+                return [ROOT / "guest" / n for n in names if (ROOT / "guest" / n).exists()]
+    return list(GUEST_PS)
+
+
+def l17_process_by_name() -> None:
+    """L17: no SHIPPED UPDATER script may KILL or ADOPT a process it found by NAME.
+
+    Owner, 2026-10-03 ("NAMED!!!????"), docs/ADR-updater.md 12.4. Measured that day: the boot-time scan adopted a relay another
+    process had started (Ensure-Proxy started one only if no process NAMED qubes-updates-relay existed, else served through whatever
+    listened) and its Remove-Proxy TerminateProcess'ed every process with that name, mid-transfer, no log line, no crash record. A
+    process found by name is ANY process with that name: killing it is a decision about something we did not start, adopting it
+    hands our traffic to it. The 2026-10-02 process audit listed these sites and left them in place - hence a lint, not a note.
+
+    SHAPES (each has a fixture in tools/tests/lint-selftest.sh):
+      kill   Stop-Process -Name / with a positional name; `Get-Process <name> | ... Stop-Process` or `| % { $_.Kill() }` on one
+             line; taskkill /im; a Win32_Process selected by Name and Terminate'd; a variable bound to a by-name Get-Process (or an
+             alias of one) and later .Kill()ed / Stop-Process'ed / taskkill'ed - rebinding it from anything else clears it
+      adopt  an if/elseif/while whose condition holds a by-name Get-Process (or such a variable) and whose block starts something
+             (Start-*, except Start-Sleep; Process::Start) - "start our own only if none is named so" IS adoption; a by-name
+             Get-Process retained as $script:/$global: state
+    Counting (@(...).Count) and waiting on (WaitForExit) a process found by name are neither kill nor adopt and stay silent - the
+    updater's TiWorker settle does exactly that.
+
+    SCOPE: the updater payload - the make-setup.ps1 foreach list that names qubes-windows-update.ps1 (Jev 2026-10-03, updater-payload
+    1.00 over all-shipped). The OTHER shipped guest scripts still kill by name today and are NOT linted yet: guest/activate-idd.ps1:182
+    (gui-watchdog, gui-agent, wgcbroker, notifhost), guest/pvnic-selfprime.ps1:602 (qwtng-netsetup) and :762 (xenbus_monitor*),
+    guest/quiet-desktop.ps1:66 (OneDrive), packaging/setup/Install-QwtImproved.ps1 (447-465, 745-752, 2713-2741, 2919-2921). Each stops
+    a process it did not start before replacing its binary and needs its own redesign; when they are fixed, widen the scope here to
+    every .ps1 make-setup.ps1 copies. The baseline file is not the place for them (it must never grow).
+    """
+    kill_direct = re.compile(r"\bStop-Process\b([^|;)}\n]*)", re.I)
+    taskkill_im = re.compile(r"\btaskkill(\.exe)?\b[^\n]*?/im\b", re.I)
+    wmi_kill = re.compile(r"Win32_Process[^\n]*\bName\b[^\n]*\b(Terminate|Invoke-CimMethod)\b|\b(Terminate|Invoke-CimMethod)\b[^\n]*Win32_Process[^\n]*\bName\b", re.I)
+    cond_block = re.compile(r"\s*(?:\}\s*)?(?:if|elseif|while)\s*\((.*)\)\s*\{(.*)$", re.I)
+    for p in _ps_shipped_updater_payload():
+        lines = _ps_code_lines(p.read_text(errors="replace"))
+        rel = p.relative_to(ROOT)
+        tainted: set[str] = set()
+        for i, code in enumerate(lines, 1):
+            if not code.strip():
+                continue
+            byname = _ps_byname_getproc(code)
+            for m in kill_direct.finditer(code):
+                args = m.group(1)
+                if re.search(r"-Name\b", args, re.I) or re.match(r"\s+(?![-$])[\w*'\"]", args):
+                    finding("L17-process-by-name", f"{rel}:{i}", f"Stop-Process by name: {code.strip()[:100]}")
+            if byname and re.search(r"\|[^\n]*(Stop-Process|\.Kill\(|taskkill)", code, re.I):
+                finding("L17-process-by-name", f"{rel}:{i}", f"a process found by name is killed in the same pipeline: {code.strip()[:100]}")
+            if taskkill_im.search(code):
+                finding("L17-process-by-name", f"{rel}:{i}", f"taskkill /im kills by image name: {code.strip()[:100]}")
+            if wmi_kill.search(code):
+                finding("L17-process-by-name", f"{rel}:{i}", f"a Win32_Process selected by Name is terminated: {code.strip()[:100]}")
+            for v in sorted(tainted):
+                ve = re.escape(v)
+                if re.search(rf"\${ve}\b[^\n]*(\.Kill\(|\|[^|\n]*Stop-Process|taskkill)|\bStop-Process\b[^\n]*\${ve}\b|\btaskkill\b[^\n]*\${ve}\b", code, re.I):
+                    finding("L17-process-by-name", f"{rel}:{i}",
+                            f"'${v}' holds a process found by name (Get-Process without -Id) and is killed here: {code.strip()[:100]}")
+            m = cond_block.match(code)
+            if m:
+                cond, rest = m.group(1), m.group(2)
+                cond_byname = _ps_byname_getproc(cond) or any(re.search(rf"\${re.escape(t)}\b", cond) for t in tainted)
+                if cond_byname:
+                    body = [rest]
+                    depth = 1 + rest.count("{") - rest.count("}")
+                    j = i   # 1-based index of the current line; lines[j] is the next one
+                    while depth > 0 and j < len(lines) and j < i + 300:
+                        body.append(lines[j])
+                        depth += lines[j].count("{") - lines[j].count("}")
+                        j += 1
+                    if _PS_START.search("\n".join(body)):
+                        finding("L17-process-by-name", f"{rel}:{i}",
+                                f"existence of a process found by name decides whether to START our own (adoption): {code.strip()[:100]}")
+            if byname and re.match(r"\s*\$(script|global):\w+\s*=(?!=)", code, re.I):
+                finding("L17-process-by-name", f"{rel}:{i}", f"a process found by name is retained as script state (adoption): {code.strip()[:100]}")
+            # taint bookkeeping, after the uses on this line: a binding from a by-name lookup (or an alias of one) taints; any other
+            # binding of the same name clears it
+            m = re.match(r"\s*\$(?:script:|global:)?(\w+)\s*=(?!=)\s*(.*)$", code)
+            if m:
+                v, rhs = m.group(1), m.group(2)
+                if _ps_byname_getproc(rhs) or any(re.match(rf"[@(\s]*\${re.escape(t)}\b", rhs) for t in tainted):
+                    tainted.add(v)
+                else:
+                    tainted.discard(v)
+            m = re.search(r"\bforeach\s*\(\s*\$(\w+)\s+in\s+(.*)\)\s*\{", code, re.I)
+            if m:
+                v, src = m.group(1), m.group(2)
+                if _ps_byname_getproc(src) or any(re.search(rf"\${re.escape(t)}\b", src) for t in tainted):
+                    tainted.add(v)
+                else:
+                    tainted.discard(v)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ledger", type=Path, default=None, help="verdicts.tsv, enables L7")
@@ -613,6 +757,7 @@ def main() -> int:
     l12_provisioning_recipe()
     l15_ps_function_named_like_alias()
     l16_ps_script_scope_case_collision()
+    l17_process_by_name()
     if a.ledger:
         l7_orphan_ledger_checks(a.ledger)
 
