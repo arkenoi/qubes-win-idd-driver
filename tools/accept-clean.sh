@@ -190,14 +190,18 @@ import json
 d=json.loads(open('$OUT/health.json').read().split('=== HEALTH ===',1)[1])
 print(','.join(d.get('not_applicable') or []) or 'none')" 2>/dev/null || echo '?')
     log "WARNING: ALLOW_NA=1 - not_applicable checks tolerated: ${nas:-none}"
+    hcpass="health-check PASS (not applicable, tolerated by ALLOW_NA: ${nas:-none})"
 else
+    hcpass="health-check PASS (every check asserted)"
     grep -q '"asserted_all":true' "$OUT/health.json" ||         fail "not every check was asserted (na present). $(python3 -c "
 import json,sys
 d=json.loads(open('$OUT/health.json').read().split('=== HEALTH ===',1)[1])
 print('not_applicable=' + ','.join(d.get('not_applicable') or []) + ' failed=' + ','.join(d.get('failed') or []))
 " 2>/dev/null || head -c 300 "$OUT/health.json")"
 fi
-log "health-check PASS (every check asserted)"
+# The PASS line says what was asserted: under ALLOW_NA it used to claim "every check asserted" while
+# the network checks had been tolerated as not applicable (the 4.3.33 gate's health.json: asserted_all false).
+log "$hcpass"
 
 # --- 5. pixels change in dom0 (the judge is output, not logs) -----------------------
 log "visual: two shots around a visible change"
