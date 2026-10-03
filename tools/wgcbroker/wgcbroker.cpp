@@ -34,6 +34,7 @@
 #include <set>
 #include <string>
 #include "../../agent/gui-agent/wgcbroker_ipc.h"
+#include "dirty_union.h"   // the union of two frames' dirty regions (S1); tested on Linux by tools/tests/dirty-union-test.cpp
 
 // ABI 12 frame signature - defined further down (it needs g_slots), used by the WGC publish path
 // above that definition. Declared here so the call site compiles.
@@ -613,14 +614,15 @@ static bool PublishCard(int i, ID3D11Texture2D* full, int texW, int texH, const 
             memcpy(dst + (size_t)y * w * 4, src + (size_t)y * map.RowPitch, (size_t)w * 4);
         bytes = (LONGLONG)w * h * 4;
     } else {
-        auto copyRect = [&](const RECT& k) {
-            const size_t rb = (size_t)(k.right - k.left) * 4;
-            for (int y = k.top; y < k.bottom; y++)
-                memcpy(dst + (size_t)y * w * 4 + (size_t)k.left * 4, src + (size_t)y * map.RowPitch + (size_t)k.left * 4, rb);
-            bytes += (LONGLONG)rb * (k.bottom - k.top);
-        };
-        for (const RECT& k : ch.prevRegs) copyRect(k);   // the spare holds the frame before the active one
-        for (const RECT& k : cur) copyRect(k);
+        // THE UNION of the previous arrival's regions (the spare holds the frame before the active one) and this arrival's - every
+        // pixel once (dirty_union.h). Writing the two lists one after the other copied each overlap twice: measured 2026-10-03 (M9(b),
+        // rz36) a blinking caret's same 3x20 rect at ~500 bytes per publish instead of 240, a marquee bar at ~2x its rect.
+        ForEachUnionRun(ch.prevRegs, cur, [&](long y0, long y1, long l, long r) {
+            const size_t rb = (size_t)(r - l) * 4;
+            for (long y = y0; y < y1; y++)
+                memcpy(dst + (size_t)y * w * 4 + (size_t)l * 4, src + (size_t)y * map.RowPitch + (size_t)l * 4, rb);
+            bytes += (LONGLONG)rb * (y1 - y0);
+        });
     }
     g_ctx->Unmap(full, 0);
     MemoryBarrier();
