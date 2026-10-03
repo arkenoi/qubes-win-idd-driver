@@ -1,8 +1,37 @@
-# QWT-NG 4.3.33 — the whole desktop in one window, live
+# QWT-NG 4.3.33 — Windows updates on a template that install and tell dom0 the truth; the whole desktop in one window, live
 
-Everything in 4.3.32 is carried forward unchanged. This release is about the mode you could ask
-for but not use: **showing the guest's whole desktop inside a single dom0 window, switching to it
-and back while the qube runs.**
+Everything in 4.3.32 is carried forward. This release brings two things: **Windows updates on a Qubes template that actually
+install and report truthfully to dom0**, and the mode you could ask for but not use — **the guest's whole desktop inside a single
+dom0 window, switching to it and back while the qube runs.**
+
+## Windows updates on a template install, and dom0 is told the truth
+
+A Windows template updated from dom0 (Qube Manager / `qubes-vm-update`) has no network of its own; the update runs through the
+Qubes update proxy. On such a template, in a field report on German Windows 11 25H2, updates could fail silently or be reported as
+done when they were not. Each cause is fixed:
+
+- **The first contact with Windows Update failed silently** (`0x8024402C`), and the remedy for it — one restart — never ran in any
+  release. dom0 is now given the reason and the restart request, and the next update completes.
+- **The Windows Security platform update (KB5007651) was never actually installed.** The updater ran its installer with a switch
+  that installs nothing, then reported the item current. Installer-type updates — the Security platform, Defender signatures
+  (KB2267602), the Malicious Software Removal Tool (KB890830), the Defender platform (KB4052623) — are now installed by Windows
+  Update's **own installer**, from content fetched through the proxy, with the update's own command line. Each is judged by what it
+  actually changes; the Security platform is read after it finishes switching, which can be a few seconds after the installer returns.
+- **dom0 received a bare error code** instead of the reason; a pass that collided with the boot-time scan was declared dead and
+  stopped the scan's proxy; a pass cut off part-way blocked every later one; dom0 could be told the proxy was still running when it
+  was not. All fixed. *(Corrected 2026-10-03: this list also named "any scan offering two or more updates crashed" - that defect
+  was introduced and fixed during this release's development and never shipped in 4.3.32.)*
+- The update proxy process is owned by the pass that started it: nothing is stopped by name.
+
+Verified on a template built to the reporter's environment (German Windows 11 25H2, no network, no `user` account): the first-contact
+restart; then the Security platform, Defender signatures and the Removal Tool installed and verified by what they change; .NET and
+the September cumulative staged for the restarts dom0 was asked for, each restart performed; dom0's update state correct after every
+round.
+
+## Capture on Windows 11 24H2 and later is event-driven
+
+Window content is copied when it changes — only the changed regions — instead of being re-read on timers, and the capture helpers no
+longer wake while nothing changes. This is the bulk of the work since 4.3.32; its formal acceptance is still in progress (see Known).
 
 ## Switching to the desktop view now works
 
@@ -65,4 +94,17 @@ lines a field report needs are not, deliberately.
   agent restarts while the desktop view is showing, until that window is recreated.
 - The Windows Settings app can render its right-hand panel into a different window. Reported from
   the field, reproduced only there so far, and tracked.
-- The intermittent guest stall during upgrades is unchanged and still unexplained.
+- The intermittent guest stall during upgrades is unchanged and still unexplained. It struck one Windows 10 clean-install cell of this
+  release's acceptance; that cell and the reinstall cell that depends on it were re-run on the same package and passed.
+- A template that has both a .NET update and a cumulative update to install asks dom0 for a restart **twice**: update packages are
+  staged one per restart. Removing the second request is the next step.
+- On the event-driven capture, typing reaches dom0 a little later than before the redesign: about 9 ms at the median over all keys,
+  about 20 ms on the second key of a sequence typed one per second. The cause is not established; tracked. *(Corrected 2026-10-03:
+  this line first said every other key was within 10 ms - one key position measured 12 ms slower.)*
+- The desktop-quieting step still stops OneDrive by its process name; the next release stops no process by name.
+
+## How this release was verified
+
+The full acceptance gate on this exact package: clean install, same-version reinstall, upgrade from the previous release and an
+AppVM cold-boot series, on Windows 10 and Windows 11; the error-notification and crop-before-map feature tests; and the template
+update test above on the reporter's environment, run separately on the same package the same day.
