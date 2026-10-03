@@ -624,21 +624,49 @@ def _ps_byname_getproc(code: str) -> bool:
     return False
 
 
-def _ps_shipped_updater_payload() -> list[Path]:
-    """The updater payload as packaging/make-setup.ps1 ships it: the foreach list that names qubes-windows-update.ps1, resolved
-    against guest/. Without a make-setup.ps1 (a selftest fixture) every guest/*.ps1 counts - a superset, never a skip."""
+def _ps_shipped_scripts() -> list[Path]:
+    """Every PowerShell script that SHIPS, as packaging/make-setup.ps1 stages it: each single
+    `Copy-Item (Need (Join-Path $RepoRoot 'guest\\X.ps1') ...)`; every foreach list of quoted names (resolved against guest/
+    and packaging/setup/); the whole of packaging/setup/*.ps1 (copied by name from $setupSrc); the core-agent rpc-services
+    dir, copied wholesale; plus the overlay installer packaging/payload/install-qwt-improved.ps1 (built by make-package.ps1).
+    Without a make-setup.ps1 (a selftest fixture) every guest/*.ps1 counts, and whatever exists under packaging/setup,
+    packaging/payload and the rpc-services dir - a superset, never a skip. A rpc-services dir that is not checked out (the
+    core-agent submodule, in a worktree) is SAID on stderr rather than skipped silently; the main checkout lints it."""
+    found: dict[str, Path] = {}
+
+    def add(p: Path) -> None:
+        if p.is_file() and p.suffix.lower() == ".ps1":
+            found[str(p.resolve())] = p
+
+    setup_dir = ROOT / "packaging" / "setup"
+    rpc = ROOT / "core-agent" / "src" / "qubes-rpc-services"
     ms = ROOT / "packaging" / "make-setup.ps1"
     if ms.exists():
         txt = ms.read_text(errors="replace")
+        for m in re.finditer(r"Join-Path\s+\$RepoRoot\s+'([^']+\.ps1)'", txt, re.I):
+            add(ROOT / m.group(1).replace("\\", "/"))
         for m in re.finditer(r"foreach\s*\(\s*\$\w+\s+in\s+([^()]*?)\)\s*\{", txt, re.S):
-            names = re.findall(r"'([^']+\.ps1)'", m.group(1))
-            if "qubes-windows-update.ps1" in names:
-                return [ROOT / "guest" / n for n in names if (ROOT / "guest" / n).exists()]
-    return list(GUEST_PS)
+            for n in re.findall(r"'([^']+\.ps1)'", m.group(1)):
+                add(ROOT / "guest" / n)
+                add(setup_dir / n)
+    else:
+        for p in GUEST_PS:
+            add(p)
+    for p in sorted(setup_dir.glob("*.ps1")):
+        add(p)
+    for p in sorted((ROOT / "packaging" / "payload").glob("*.ps1")):
+        add(p)
+    if rpc.is_dir():
+        for p in sorted(rpc.glob("*.ps1")):
+            add(p)
+    elif ms.exists():
+        print(f"L17: {rpc.relative_to(ROOT)} is not checked out (the core-agent submodule) - its scripts were NOT linted "
+              "in this checkout", file=sys.stderr)
+    return sorted(found.values())
 
 
 def l17_process_by_name() -> None:
-    """L17: no SHIPPED UPDATER script may KILL or ADOPT a process it found by NAME.
+    """L17: no SHIPPED script may KILL or ADOPT a process it found by NAME.
 
     Owner, 2026-10-03 ("NAMED!!!????"), docs/ADR-updater.md 12.4. Measured that day: the boot-time scan adopted a relay another
     process had started (Ensure-Proxy started one only if no process NAMED qubes-updates-relay existed, else served through whatever
@@ -656,18 +684,23 @@ def l17_process_by_name() -> None:
     Counting (@(...).Count) and waiting on (WaitForExit) a process found by name are neither kill nor adopt and stay silent - the
     updater's TiWorker settle does exactly that.
 
-    SCOPE: the updater payload - the make-setup.ps1 foreach list that names qubes-windows-update.ps1 (Jev 2026-10-03, updater-payload
-    1.00 over all-shipped). The OTHER shipped guest scripts still kill by name today and are NOT linted yet: guest/activate-idd.ps1:182
-    (gui-watchdog, gui-agent, wgcbroker, notifhost), guest/pvnic-selfprime.ps1:602 (qwtng-netsetup) and :762 (xenbus_monitor*),
-    guest/quiet-desktop.ps1:66 (OneDrive), packaging/setup/Install-QwtImproved.ps1 (447-465, 745-752, 2713-2741, 2919-2921). Each stops
-    a process it did not start before replacing its binary and needs its own redesign; when they are fixed, widen the scope here to
-    every .ps1 make-setup.ps1 copies. The baseline file is not the place for them (it must never grow).
+    SCOPE: EVERY shipped PowerShell script (_ps_shipped_scripts: what packaging/make-setup.ps1 copies, packaging/setup/*,
+    the core-agent rpc-services dir, the overlay installer). First landed 2026-10-03 on the updater payload alone (Jev,
+    updater-payload 1.00 over all-shipped, because the other sites needed their own redesign); widened the same day once
+    those were fixed - setup installer (xenbus_monitor by the SCM's pid; the GUI quiesce stops the watchdog SERVICE, whose
+    stop now takes its own agent down, and reports survivors), activate-idd.ps1 (same), pvnic-selfprime.ps1 (QwtngNetSetup
+    and xenbus_monitor by the SCM's pid), quiet-desktop.ps1 (the user's OneDrive is left alone), the overlay installer
+    (service stop + the agent's own QGA_SHUTDOWN request, survivors reported). The native watchdog is outside this lint:
+    its one enumeration site (watchdog.c IsProcessRunning) is detection-only by design since 2026-10-03 (a same-named
+    agent it did not start is reported and waited out, never adopted or stopped), and scratchpad/proc-audit2/audit.py
+    lists every native TerminateProcess/enumeration site for review. The baseline file is not the place for L17 findings
+    (it must never grow).
     """
     kill_direct = re.compile(r"\bStop-Process\b([^|;)}\n]*)", re.I)
     taskkill_im = re.compile(r"\btaskkill(\.exe)?\b[^\n]*?/im\b", re.I)
     wmi_kill = re.compile(r"Win32_Process[^\n]*\bName\b[^\n]*\b(Terminate|Invoke-CimMethod)\b|\b(Terminate|Invoke-CimMethod)\b[^\n]*Win32_Process[^\n]*\bName\b", re.I)
     cond_block = re.compile(r"\s*(?:\}\s*)?(?:if|elseif|while)\s*\((.*)\)\s*\{(.*)$", re.I)
-    for p in _ps_shipped_updater_payload():
+    for p in _ps_shipped_scripts():
         lines = _ps_code_lines(p.read_text(errors="replace"))
         rel = p.relative_to(ROOT)
         tainted: set[str] = set()

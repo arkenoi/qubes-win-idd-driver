@@ -113,7 +113,8 @@ ERROR_FLAGS = [
     ('idd_vga_disable_pending', is_true,                                  'L2982 ERROR: VGA adapter still enabled in-session after Disable-PnpDevice (code != 22)'),
     ('idd_gui_reappeared',      nonempty,                                 'L2689 WARN: the gui-agent came back during stage 2 - the quiesce is not holding'),
     ('idd_bound',               starts('unreadable'),                     'L2902/L2922 WARN: bound driver version unreadable, the version assertion was skipped'),
-    ('gui_quiesce_failed',      nonempty,                                 'L2557 ERROR: quiesce did not hold, the live processes by name'),
+    ('gui_quiesce_failed',      nonempty,                                 'L2557 ERROR: quiesce did not hold, the live processes by name (reported, never killed)'),
+    ('gui_runtime_survivors',   nonempty,                                 'Stop-QwtRuntime WARN: gui-agent/gui-watchdog still running after the service stop and the exit request (name/pid; reported, never killed)'),
     ('gui_restored',            starts('FAILED'),                         'L3862/L3867 ERROR: watchdog started but gui-agent.exe not running / could not be restarted'),
     # -- PV network / console / NIC priming
     ('pv_xenvif',               starts('failed'),                         'L2609 WARN pnputil rc; L3656 ERROR the unplug latch is refused over it'),
@@ -127,7 +128,7 @@ ERROR_FLAGS = [
     ('private_disk_gate',       starts('WARN', 'FAIL'),                   'L1585/L1598 WARN proceeding under -NoMoveUsers / L1588/L1601 Fail'),
     ('inbox_disk_rearm',        starts('incomplete', 'failed'),           'L2150/L2162 WARN (a Fail when C: is on the PV path): boot-start IDE driver not re-armed'),
     ('leftover_sweep',          lambda v: isinstance(v, dict) and bool(v.get('stuck')), 'L747 WARN could not move a leftover aside; refuses msiexec at L2021'),
-    ('xenbus_monitor_survivors', nonempty,                                'L425: xenbus_monitor still running after two kill attempts (WARN, or Fail with -FatalIfSurvives)'),
+    ('xenbus_monitor_survivors', nonempty,                                'L425: a xenbus_monitor process the SCM does not own still running after the service stop - reported, never killed (WARN, or Fail with -FatalIfSurvives)'),
     ('hiberboot',               lambda v: v is not None and _s(v) != '0', 'L1130: Fast Startup still enabled (Fails at L1131)'),
     # -- the MSI and its verification
     ('uninstall_rc',            any_value(rc_not_in(0, 3010, 1605)),      'L917: msiexec /x rc outside 0/3010/1605 (Fails at L911)'),

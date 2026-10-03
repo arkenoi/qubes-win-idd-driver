@@ -228,20 +228,60 @@ if (-not (Test-RelayListening)) { Start-Relay }
 # a comment naming Get-Process foo | Stop-Process must not fire
 EOS
 expect_silent L17-process-by-name "$D" "counting and waiting on a by-name process, kill by handle, kill by id, a start gated on a probe, a comment"
-# SCOPE: with a packaging/make-setup.ps1 present only the updater payload it names is linted (the other shipped scripts are out of
-# scope this time - see the lint's docstring for the sites that still kill by name)
-D="$TMP/l17scope"; mk "$D"; mkdir -p "$D/packaging"
+# SCOPE: with a packaging/make-setup.ps1 present, EVERY script it ships is linted (widened 2026-10-03 from the updater payload
+# alone): each single Copy-Item of a guest script, every foreach list (resolved against guest/ and packaging/setup/), all of
+# packaging/setup/*.ps1, the core-agent rpc-services dir, the overlay installer. A guest script make-setup does not copy is
+# not shipped and stays silent. One planted kill per covered file, each asserted BY FILE in the lint's output.
+expect_fires_in(){ # <lint-id> <fixture-dir> <path-substring> <what was planted>
+  local id="$1" dir="$2" path="$3" what="$4"
+  local out; out=$(python3 "$LINT" --root "$dir" --quiet 2>&1)
+  if echo "$out" | grep -q "^$id" && echo "$out" | grep -qF "$path"; then
+    ok "$id fires in $path: $what"
+  else
+    no "$id did NOT fire in $path: $what  <-- a shipped file the lint does not cover"
+  fi
+}
+D="$TMP/l17scope"; mk "$D"; mkdir -p "$D/packaging/setup" "$D/packaging/payload" "$D/core-agent/src/qubes-rpc-services"
 cat > "$D/packaging/make-setup.ps1" <<'EOS'
+foreach ($f in 'install.cmd', 'Install-QwtImproved.ps1', 'README.txt') {
+    Copy-Item (Join-Path $setupSrc $f) $OutDir -Force
+}
+Copy-Item (Need (Join-Path $RepoRoot 'guest\single.ps1') 'a single-copy guest script') $OutDir -Force
 foreach ($u in 'shipped.ps1', 'qubes-windows-update.ps1',
                'other.ps1') {
     Copy-Item (Need (Join-Path $RepoRoot "guest\$u") "updater agent payload ($u)") $OutDir -Force
 }
+foreach ($f in @(Get-ChildItem -LiteralPath $rpcSrcDir -File)) {
+    Copy-Item $f.FullName $rpcSvcOut -Force
+}
 EOS
 printf 'Stop-Process -Name foo -Force\n' > "$D/guest/unshipped.ps1"
 printf 'Write-Host ok\n' > "$D/guest/shipped.ps1"
-expect_silent L17-process-by-name "$D" "a by-name kill in a guest script outside the make-setup updater payload"
+printf 'Write-Host ok\n' > "$D/guest/single.ps1"
+printf 'Write-Host ok\n' > "$D/packaging/setup/Install-QwtImproved.ps1"
+printf 'Write-Host ok\n' > "$D/packaging/payload/install-qwt-improved.ps1"
+printf 'Write-Host ok\n' > "$D/core-agent/src/qubes-rpc-services/handler.ps1"
+expect_silent L17-process-by-name "$D" "a by-name kill in a guest script make-setup does not ship"
 printf 'Stop-Process -Name foo -Force\n' > "$D/guest/shipped.ps1"
-expect_fires L17-process-by-name "$D" "the same kill inside the make-setup updater payload"
+expect_fires_in L17-process-by-name "$D" "guest/shipped.ps1" "a kill in a foreach-listed guest script (the updater payload)"
+printf 'Write-Host ok\n' > "$D/guest/shipped.ps1"
+printf 'Get-Process OneDrive -EA SilentlyContinue | Stop-Process -Force\n' > "$D/guest/single.ps1"
+expect_fires_in L17-process-by-name "$D" "guest/single.ps1" "a kill in a single-Copy-Item guest script (quiet-desktop's shape)"
+printf 'Write-Host ok\n' > "$D/guest/single.ps1"
+cat > "$D/packaging/setup/Install-QwtImproved.ps1" <<'EOS'
+foreach ($pr in @(Get-Process -Name 'gui-agent' -ErrorAction SilentlyContinue)) {
+    try { $pr.Kill(); [void]$pr.WaitForExit(5000) } catch { }
+}
+EOS
+expect_fires_in L17-process-by-name "$D" "packaging/setup/Install-QwtImproved.ps1" "the setup installer's old quiesce kill loop"
+printf 'Write-Host ok\n' > "$D/packaging/setup/Install-QwtImproved.ps1"
+printf 'Get-Process -Name $AGENTPROC -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue\n' > "$D/packaging/payload/install-qwt-improved.ps1"
+expect_fires_in L17-process-by-name "$D" "packaging/payload/install-qwt-improved.ps1" "the overlay installer's old by-name kill"
+printf 'Write-Host ok\n' > "$D/packaging/payload/install-qwt-improved.ps1"
+printf '& taskkill.exe /F /IM foo.exe\n' > "$D/core-agent/src/qubes-rpc-services/handler.ps1"
+expect_fires_in L17-process-by-name "$D" "core-agent/src/qubes-rpc-services/handler.ps1" "a taskkill /im in a core-agent rpc handler"
+printf 'Write-Host ok\n' > "$D/core-agent/src/qubes-rpc-services/handler.ps1"
+expect_silent L17-process-by-name "$D" "the widened scope with every shipped file clean (the fixed shapes: counting, waiting, -Id)"
 
 echo "  ---- $pass passed, $fail failed"
 exit $(( fail > 0 ? 1 : 0 ))
