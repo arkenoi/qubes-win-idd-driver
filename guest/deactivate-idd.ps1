@@ -149,7 +149,11 @@ try {
         if ($LASTEXITCODE -ne 0) {
             $result['shutdown_rc'] = $LASTEXITCODE
             Log "shutdown.exe /r was REFUSED (rc '$LASTEXITCODE') - the guest is NOT rebooting on its own; the device changes are made but take effect only at the next boot - reboot this qube from dom0 (qvm-shutdown --wait, then qvm-start)" 'FATAL'
-            [void](Send-QwtError -Component 'deactivate-idd' -Id 'reboot-refused' -Severity ACTION -Summary 'the reboot after IDD deactivation was refused by Windows; the display change takes effect only after this qube is rebooted by hand' -LogPath $log)
+            [void](Send-QwtError -Component 'deactivate-idd' -Id 'reboot-refused' -Severity ACTION `
+                -Header 'The display change needs a reboot that was refused' `
+                -Next 'The device changes are made but take effect only at the next boot: restart this qube by hand (shut it down from dom0 and start it again).' `
+                -Cause 'Cause: Windows refused the reboot that the deactivation requested (shutdown.exe returned an error; the log has its code).' `
+                -Tech (Format-QwtNotifyTechLine -Subject 'deactivate-idd.ps1' -Count 'reported once per boot' -Evidence $log))
             $result.ok = $false
             $result.error = "reboot request refused by shutdown.exe (rc $LASTEXITCODE) - reboot this qube by hand for the VGA topology to be rebuilt"
             Emit 1

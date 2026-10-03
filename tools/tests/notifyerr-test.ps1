@@ -18,7 +18,8 @@
       fail-open launcher missing/throwing: the caller gets a status string, never an exception,
                 and the failure is logged ONCE for repeated errors; unwritable store -> no send
       gate      off -> 'gated', nothing touched
-      text      the notify file is UTF-16LE with BOM, summary names the component, body has id + log
+      text      the notify file is UTF-16LE with BOM; line 1 is the header alone, the body is line 1, the
+                cause and the technical line (rz39 shape: Format-QwtNotifyText, Format-QwtNotifyTechLine)
 #>
 [CmdletBinding()]
 param([string]$HelperPath)
@@ -75,7 +76,7 @@ function Reset-Store {
 function LogCount([string]$needle) { return @($script:logLines | Where-Object { $_ -like "*$needle*" }).Count }
 
 # --- 1. pure redaction --------------------------------------------------------------------------
-$clean = "Qubes Windows Tools, activate-idd: shutdown refused`r`nError id: reboot-refused. Reported once per boot; the detail is in the guest log: C:\qwt-idd-activate.log"
+$clean = "The display driver needs a reboot that was refused`r`nThe new display driver is not primary until this qube is rebooted by hand.`r`nCause: Windows refused the reboot request (shutdown.exe returned an error).`r`nactivate-idd.ps1; reported once per boot. Evidence: C:\qwt-idd-activate.log."
 Check 'redact: templated text with a log path is clean' ($null -eq (Get-QwtNotifyRedactReason $clean))
 Check "redact: 'password=' refused" ($null -ne (Get-QwtNotifyRedactReason 'agent failed: password=hunter2'))
 Check "redact: 'DefaultPassword' refused" ($null -ne (Get-QwtNotifyRedactReason 'LSA DefaultPassword missing'))
@@ -109,46 +110,52 @@ Check 'boot: a token 1 s away is ANOTHER boot' (-not (Test-QwtNotifyBootMatch 10
 # --- 3. gate off ----------------------------------------------------------------------------------
 Reset-Store
 $script:QwtNotifyGate = $false
-CheckStatus 'gate off: ACTION error is not sent' (Send-QwtError -Component 'activate-idd' -Id 'reboot-refused' -Severity ACTION -Summary 'x') 'gated'
+CheckStatus 'gate off: ACTION error is not sent' (Send-QwtError -Component 'activate-idd' -Id 'reboot-refused' -Severity ACTION -Header 'x' -Next 'y' -Tech 'z') 'gated'
 Check 'gate off: nothing launched, no marker' (($script:launched.Count -eq 0) -and -not (Test-Path (Join-Path $stateDir 'activate-idd.reboot-refused')))
 
 # --- 4. send, dedupe, severity, cap ----------------------------------------------------------
 Reset-Store
 New-Item -ItemType File -Path $script:QwtNotifyHostExe -Force | Out-Null   # "present" for the launcher hook
-CheckStatus 'send: first ACTION report sends' (Send-QwtError -Component 'activate-idd' -Id 'reboot-refused' -Summary 'shutdown refused' -LogPath 'C:\qwt-idd-activate.log') 'send'
+CheckStatus 'send: first ACTION report sends' (Send-QwtError -Component 'activate-idd' -Id 'reboot-refused' -Header 'The display driver needs a reboot that was refused' -Next 'The new display driver is not primary until this qube is rebooted by hand.' -Cause 'Cause: Windows refused the reboot request.' -Tech (Format-QwtNotifyTechLine -Subject 'activate-idd.ps1' -Count 'reported once per boot' -Evidence 'C:\qwt-idd-activate.log')) 'send'
 Check 'send: notifhost launched once with a file' ($script:launched.Count -eq 1)
 $bytes = [IO.File]::ReadAllBytes($script:launched[0])
 Check 'send: notify file is UTF-16LE with BOM (what notifhost reads)' (($bytes.Length -gt 2) -and ($bytes[0] -eq 0xFF) -and ($bytes[1] -eq 0xFE))
 $content = [Text.Encoding]::Unicode.GetString($bytes, 2, $bytes.Length - 2)
-Check 'send: summary line names the component' ($content.StartsWith("Qubes Windows Tools, activate-idd: shutdown refused`r`n"))
-Check 'send: body carries the id and the log pointer' (($content -like '*Error id: reboot-refused.*') -and ($content -like '*C:\qwt-idd-activate.log*'))
+Check 'send: line 1 is the header, alone' ($content.StartsWith("The display driver needs a reboot that was refused`r`n"))
+Check 'send: the body is line 1, the cause and the technical line, CRLF-separated' ($content -eq "The display driver needs a reboot that was refused`r`nThe new display driver is not primary until this qube is rebooted by hand.`r`nCause: Windows refused the reboot request.`r`nactivate-idd.ps1; reported once per boot. Evidence: C:\qwt-idd-activate.log.")
+Check 'text: Format-QwtNotifyText with no cause is three lines' ((Format-QwtNotifyText -Header 'H' -Next 'N' -Tech 'T') -eq "H`r`nN`r`nT")
+Check 'text: a CR/LF inside a part is folded to a space (it cannot move text into another line)' ((Format-QwtNotifyText -Header "H`r`nx" -Next "N`ny" -Cause "C`rz" -Tech 'T') -eq "H x`r`nN y`r`nC z`r`nT")
+Check 'tech: every part, in order' ((Format-QwtNotifyTechLine -Subject 'gui-agent.exe' -ProcessId 6100 -Code 'exception 0xC0000409' -Ran '0:12:34' -Count 'death 1 this boot' -Evidence 'C:\ProgramData\Qubes\qwt-deaths.log; WER folder AppCrash_gui-agent.exe_*') -eq 'gui-agent.exe pid 6100; exception 0xC0000409; ran 0:12:34; death 1 this boot. Evidence: C:\ProgramData\Qubes\qwt-deaths.log; WER folder AppCrash_gui-agent.exe_*.')
+Check 'tech: no pid, no code, no run time -> subject, count and evidence only' ((Format-QwtNotifyTechLine -Subject 'activate-idd.ps1' -Count 'reported once per boot' -Evidence 'C:\x.log') -eq 'activate-idd.ps1; reported once per boot. Evidence: C:\x.log.')
+CheckStatus 'compose: a report with no header is refused (never a silent drop)' (Send-QwtError -Component 'activate-idd' -Id 'no-header' -Header '' -Next 'y' -Tech 'z') 'rejected:redact'
+Check 'compose: the refusal is logged' ((LogCount 'did not compose') -eq 1)
 Check 'send: marker and count files written' ((Test-Path (Join-Path $stateDir 'activate-idd.reboot-refused')) -and (Test-Path (Join-Path $stateDir '.count')))
-CheckStatus 'dedupe: the same error again this boot is suppressed' (Send-QwtError -Component 'activate-idd' -Id 'reboot-refused' -Summary 'shutdown refused') 'suppressed:duplicate'
+CheckStatus 'dedupe: the same error again this boot is suppressed' (Send-QwtError -Component 'activate-idd' -Id 'reboot-refused' -Header 'shutdown refused' -Next 'y' -Tech 'z') 'suppressed:duplicate'
 Check 'dedupe: no second launch' ($script:launched.Count -eq 1)
-CheckStatus 'dedupe: a different id still sends' (Send-QwtError -Component 'activate-idd' -Id 'activation-failed' -Summary 'x') 'send'
-CheckStatus 'severity: DEGRADED report is rejected' (Send-QwtError -Component 'activate-idd' -Id 'degraded' -Severity DEGRADED -Summary 'x') 'rejected:severity'
-CheckStatus 'severity: INFO report is rejected' (Send-QwtError -Component 'activate-idd' -Id 'info' -Severity INFO -Summary 'x') 'rejected:severity'
+CheckStatus 'dedupe: a different id still sends' (Send-QwtError -Component 'activate-idd' -Id 'activation-failed' -Header 'x' -Next 'y' -Tech 'z') 'send'
+CheckStatus 'severity: DEGRADED report is rejected' (Send-QwtError -Component 'activate-idd' -Id 'degraded' -Severity DEGRADED -Header 'x' -Next 'y' -Tech 'z') 'rejected:severity'
+CheckStatus 'severity: INFO report is rejected' (Send-QwtError -Component 'activate-idd' -Id 'info' -Severity INFO -Header 'x' -Next 'y' -Tech 'z') 'rejected:severity'
 Check 'severity: rejected event left no marker and no launch' ((-not (Test-Path (Join-Path $stateDir 'activate-idd.degraded'))) -and ($script:launched.Count -eq 2))
 # a marker written by the C side for THIS boot must suppress (cross-language dedupe)
 [IO.File]::WriteAllText((Join-Path $stateDir 'gui-agent.deslicedown'), "boot=$BOOT`n", [Text.Encoding]::ASCII)
-CheckStatus 'dedupe: C-side marker from this boot suppresses' (Send-QwtError -Component 'gui-agent' -Id 'deslicedown' -Summary 'x') 'suppressed:duplicate'
+CheckStatus 'dedupe: C-side marker from this boot suppresses' (Send-QwtError -Component 'gui-agent' -Id 'deslicedown' -Header 'x' -Next 'y' -Tech 'z') 'suppressed:duplicate'
 [IO.File]::WriteAllText((Join-Path $stateDir 'gui-agent.oldboot'), "boot=$($BOOT - 5000)`n", [Text.Encoding]::ASCII)
-CheckStatus 'dedupe: marker from an earlier boot does not suppress' (Send-QwtError -Component 'gui-agent' -Id 'oldboot' -Summary 'x') 'send'
+CheckStatus 'dedupe: marker from an earlier boot does not suppress' (Send-QwtError -Component 'gui-agent' -Id 'oldboot' -Header 'x' -Next 'y' -Tech 'z') 'send'
 # The same defect end-to-end, not just in the comparator: a marker left by a boot that ended 73 s
 # ago is a DIFFERENT boot and must not suppress this one.
 [IO.File]::WriteAllText((Join-Path $stateDir 'gui-agent.closeboot'), "boot=$($BOOT - 73)`n", [Text.Encoding]::ASCII)
-CheckStatus 'dedupe: marker from a boot 73 s earlier does not suppress (close reboot)' (Send-QwtError -Component 'gui-agent' -Id 'closeboot' -Summary 'x') 'send'
+CheckStatus 'dedupe: marker from a boot 73 s earlier does not suppress (close reboot)' (Send-QwtError -Component 'gui-agent' -Id 'closeboot' -Header 'x' -Next 'y' -Tech 'z') 'send'
 # cap: 4 sends so far (the close-reboot case above is the 4th); distinct ids up to 8
 $last = 'send'
-for ($i = 4; $i -lt 8; $i++) { $last = Send-QwtError -Component 'gui-agent' -Id "cap-$i" -Summary 'x' }
+for ($i = 4; $i -lt 8; $i++) { $last = Send-QwtError -Component 'gui-agent' -Id "cap-$i" -Header 'x' -Next 'y' -Tech 'z' }
 CheckStatus 'cap: the 8th distinct error still sends' $last 'send'
-CheckStatus 'cap: the 9th distinct error is suppressed' (Send-QwtError -Component 'gui-agent' -Id 'cap-9' -Summary 'x') 'suppressed:cap'
+CheckStatus 'cap: the 9th distinct error is suppressed' (Send-QwtError -Component 'gui-agent' -Id 'cap-9' -Header 'x' -Next 'y' -Tech 'z') 'suppressed:cap'
 Check 'cap: exactly 8 launches this boot' ($script:launched.Count -eq 8)
 Check 'cap: suppression was logged' ((LogCount 'suppressed:cap') -eq 1)
 
 # --- 5. redaction end-to-end -------------------------------------------------------------------
 Reset-Store
-CheckStatus 'redact e2e: summary with a password is refused' (Send-QwtError -Component 'activate-idd' -Id 'reboot-refused' -Summary 'shutdown refused, password=abc') 'rejected:redact'
+CheckStatus 'redact e2e: summary with a password is refused' (Send-QwtError -Component 'activate-idd' -Id 'reboot-refused' -Header 'shutdown refused, password=abc' -Next 'y' -Tech 'z') 'rejected:redact'
 Check 'redact e2e: refused text launched nothing and left no marker' (($script:launched.Count -eq 0) -and -not (Test-Path (Join-Path $stateDir 'activate-idd.reboot-refused')))
 Check 'redact e2e: refusal logged' ((LogCount 'rejected:redact') -eq 1)
 
@@ -156,16 +163,16 @@ Check 'redact e2e: refusal logged' ((LogCount 'rejected:redact') -eq 1)
 Reset-Store
 Remove-Item -LiteralPath $script:QwtNotifyHostExe -Force   # exe missing
 $threw = $false
-try { $s = Send-QwtError -Component 'gui-agent' -Id 'a' -Summary 'x' } catch { $threw = $true; $s = 'THREW' }
+try { $s = Send-QwtError -Component 'gui-agent' -Id 'a' -Header 'x' -Next 'y' -Tech 'z' } catch { $threw = $true; $s = 'THREW' }
 CheckStatus 'fail-open: exe missing -> status, not an exception' $s 'failed:transport'
 Check 'fail-open: no exception reached the caller' (-not $threw)
-[void](Send-QwtError -Component 'gui-agent' -Id 'b' -Summary 'x')
-[void](Send-QwtError -Component 'gui-agent' -Id 'c' -Summary 'x')
+[void](Send-QwtError -Component 'gui-agent' -Id 'b' -Header 'x' -Next 'y' -Tech 'z')
+[void](Send-QwtError -Component 'gui-agent' -Id 'c' -Header 'x' -Next 'y' -Tech 'z')
 Check 'fail-open: three failures, the missing exe logged ONCE' ((LogCount 'NOT PRESENT') -eq 1)
 New-Item -ItemType File -Path $script:QwtNotifyHostExe -Force | Out-Null   # exe present, launch fails
 $script:QwtNotifyLauncher = { param($exe, $file) throw 'Start-Process failed' }
-[void](Send-QwtError -Component 'gui-agent' -Id 'd' -Summary 'x')
-[void](Send-QwtError -Component 'gui-agent' -Id 'e' -Summary 'x')
+[void](Send-QwtError -Component 'gui-agent' -Id 'd' -Header 'x' -Next 'y' -Tech 'z')
+[void](Send-QwtError -Component 'gui-agent' -Id 'e' -Header 'x' -Next 'y' -Tech 'z')
 Check 'fail-open: launcher throwing logged ONCE' ((LogCount 'Start-Process failed') -eq 1)
 Check 'fail-open: caller reached this line' $true
 # unwritable store: a FILE where the directory must be
@@ -174,8 +181,8 @@ $badDir = Join-Path $tmpRoot 'not-a-dir'
 [IO.File]::WriteAllText($badDir, 'x', [Text.Encoding]::ASCII)
 $script:QwtNotifyStateDir = $badDir
 $script:QwtNotifyLauncher = { param($exe, $file) [void]$script:launched.Add($file) }
-CheckStatus 'fail-open: unwritable store -> no send' (Send-QwtError -Component 'gui-agent' -Id 'f' -Summary 'x') 'failed:transport'
-[void](Send-QwtError -Component 'gui-agent' -Id 'g' -Summary 'x')
+CheckStatus 'fail-open: unwritable store -> no send' (Send-QwtError -Component 'gui-agent' -Id 'f' -Header 'x' -Next 'y' -Tech 'z') 'failed:transport'
+[void](Send-QwtError -Component 'gui-agent' -Id 'g' -Header 'x' -Next 'y' -Tech 'z')
 Check 'fail-open: unwritable store launched nothing' ($script:launched.Count -eq 0)
 Check 'fail-open: unwritable store logged ONCE' ((LogCount 'not writable') -eq 1)
 
@@ -190,7 +197,7 @@ $pinned = $script:QwtNotifyBootStamp
 $script:QwtNotifyBootStamp = $null
 $script:QwtNotifyBootCached = $null
 $threw = $false
-try { $s = Send-QwtError -Component 'gui-agent' -Id 'noboot' -Summary 'x' } catch { $threw = $true; $s = 'THREW' }
+try { $s = Send-QwtError -Component 'gui-agent' -Id 'noboot' -Header 'x' -Next 'y' -Tech 'z' } catch { $threw = $true; $s = 'THREW' }
 CheckStatus 'boot token: unavailable -> no send' $s 'failed:transport'
 Check 'boot token: no exception reached the caller' (-not $threw)
 Check 'boot token: nothing launched, no marker written' (($script:launched.Count -eq 0) -and -not (Test-Path (Join-Path $stateDir 'gui-agent.noboot')))

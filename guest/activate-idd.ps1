@@ -424,7 +424,11 @@ public static class QiddProbe {
         if ($LASTEXITCODE -ne 0) {
             $result['shutdown_rc'] = $LASTEXITCODE
             Log "shutdown.exe /r was REFUSED (rc '$LASTEXITCODE') - the guest is NOT rebooting on its own; the IDD is activated but will not be primary until this qube is rebooted BY HAND" 'FATAL'
-            [void](Send-QwtError -Component 'activate-idd' -Id 'reboot-refused' -Severity ACTION -Summary 'the reboot after IDD activation was refused by Windows; the display driver will not be primary until this qube is rebooted by hand' -LogPath $log)
+            [void](Send-QwtError -Component 'activate-idd' -Id 'reboot-refused' -Severity ACTION `
+                -Header 'The display driver needs a reboot that was refused' `
+                -Next 'The new display driver is activated but not primary until this qube is restarted by hand (shut it down from dom0 and start it again).' `
+                -Cause 'Cause: Windows refused the reboot that the activation requested (shutdown.exe returned an error; the log has its code).' `
+                -Tech (Format-QwtNotifyTechLine -Subject 'activate-idd.ps1' -Count 'reported once per boot' -Evidence $log))
             # Same situation as -NoReboot: this run is not rebooting, so the agent it quiesced must
             # come back or the qube maps no windows until that manual reboot.
             Restore-Gui
@@ -439,7 +443,11 @@ public static class QiddProbe {
     $result.error = "$($_.Exception.Message)"
     Log "IDD ACTIVATION FAILED: $($result.error)" 'ERROR'
     # Templated text only: the exception message is in the log, not in the notification.
-    [void](Send-QwtError -Component 'activate-idd' -Id 'activation-failed' -Severity ACTION -Summary 'IDD display driver activation failed; the guest keeps its previous display configuration' -LogPath $log)
+    [void](Send-QwtError -Component 'activate-idd' -Id 'activation-failed' -Severity ACTION `
+        -Header 'The display driver could not be activated' `
+        -Next 'The guest keeps its previous display configuration; nothing changed for the user. Rerun the activation after reading its log.' `
+        -Cause 'Cause: a step of the activation failed (the log has the error; it is not repeated here).' `
+        -Tech (Format-QwtNotifyTechLine -Subject 'activate-idd.ps1' -Count 'reported once per boot' -Evidence $log))
     Restore-Gui
     Emit 1
 }

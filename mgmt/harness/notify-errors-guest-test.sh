@@ -52,10 +52,12 @@ ps_probe(){ local k="$1"; gq "powershell -NoProfile -ExecutionPolicy Bypass -Enc
 state(){ qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$VM" '$1==v{print $2}'; }
 boot_id(){ ps_probe BOOT 'Write-Host ("BOOT=" + (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString("o"))'; }
 
-# send KEY COMPONENT ID SEVERITY SUMMARY -> the contract string
+# send KEY COMPONENT ID SEVERITY HEADER -> the contract string. The header is the probe's text (rz39 shape:
+# header / line 1 / technical line); the other parts are fixed, so a probe whose header the route must
+# refuse (the redact probe) is refused on the header alone.
 send(){
   local k="$1" comp="$2" id="$3" sev="$4" sum="$5"
-  ps_probe "$k" ". '$HELPER'; Write-Host (\"$k=\" + (Send-QwtError -Component '$comp' -Id '$id' -Severity '$sev' -Summary '$sum'))"
+  ps_probe "$k" ". '$HELPER'; Write-Host (\"$k=\" + (Send-QwtError -Component '$comp' -Id '$id' -Severity '$sev' -Header '$sum' -Next 'An acceptance probe: nothing in the guest is wrong.' -Tech (Format-QwtNotifyTechLine -Subject 'notify-errors-guest-test.sh' -Count 'reported once per boot' -Evidence 'the acceptance log in dom0')))"
 }
 # MARKERS FROM *THIS* BOOT ONLY, and only real ones. Counting every file in the state directory
 # reported "3 marker(s) on an idle healthy guest" on 2026-09-13 when the truth was ONE: the other
@@ -219,7 +221,7 @@ cat >"$TRIG" <<'TRIGEOF'
 # deliberately sends a given (component,id) only once per boot.
 cd "$NV_ROOT" || exit 2
 b64(){ python3 -c "import sys,base64;print(base64.b64encode(sys.argv[1].encode('utf-16-le')).decode())" "$1"; }
-PS=". '$NV_HELPER'; Write-Host ('W=' + (Send-QwtError -Component 'acceptance' -Id '$NV_ID' -Severity ACTION -Summary 'render witness: a human should see this'))"
+PS=". '$NV_HELPER'; Write-Host ('W=' + (Send-QwtError -Component 'acceptance' -Id '$NV_ID' -Severity ACTION -Header 'Render witness: a human should see this' -Next 'An acceptance probe: nothing in the guest is wrong.' -Tech (Format-QwtNotifyTechLine -Subject 'notify-errors-guest-test.sh' -Count 'reported once per boot' -Evidence 'the acceptance log in dom0')))"
 QTEST_VM="$NV_VM" timeout -k 5 120 ./tools/qtest run \
   "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $(b64 "$PS")" 2>/dev/null \
   | tr -d '\r' | grep -aoE '^W=.*'

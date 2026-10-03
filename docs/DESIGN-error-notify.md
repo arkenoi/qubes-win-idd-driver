@@ -145,12 +145,29 @@ for log-visibility reasons — so severity is stated explicitly at each call sit
 
 ## 8. Message content and redaction
 
-The notification is: summary `Qubes Windows Tools, <component>: <one sentence>`; body
-`Error id: <id>. Reported once per boot; the detail is in the guest log: <log pointer>`. dom0
-prefixes the qube name and colour itself (origin marking is the proxy's and unforgeable), so the
-guest does not name itself; the **component** is named because dom0 cannot know it. Callers pass
-templated text — never an exception message, never a file's contents, never a value read from
-the system.
+The notification has ONE shape for every sender (the agent's `notifyerr.h`, notifhost,
+`guest/qwt-notify-error.ps1` and the death reporter through it; rz39, 2026-10-03):
+
+- **header** (line 1 of the notify file): WHAT happened to WHICH component, in human names —
+  "The GUI agent crashed", "The notification and menu capture helper stopped answering", "The PV NIC setup task
+  failed". No codes, no file names, no counts, no product prefix: dom0 prefixes the qube name and
+  colour itself (origin marking is the proxy's and unforgeable). At most ~60 characters.
+- **line 1**: what it means for the user and what the system does next (relaunch, Windows'
+  recovery, nothing), and what the user can do — only when there is something.
+- **line 2**: the cause in words WITH the code: `Cause: an access violation - exception
+  0xC0000005.` The meaning comes from the table of the code's SOURCE — a process exit or exception
+  code, a Windows error the SCM reports (7023), a service-specific code (7024; the service defines
+  it, no table of ours), a task result (201/203) — never the process table for the others.
+- **line 3**, the technical line: `<executable>[ pid <n>][; <code>][; ran <h:mm:ss>]; death <n>
+  this boot | reported once per boot. Evidence: <log path>; <WER folder prefix>; <event log + id>.`
+  The death reporter says `death n this boot` (each death has its own id, up to the cap); the
+  agent, notifhost and the scripts say `reported once per boot` (one per (component, id) per boot).
+
+The agent's and notifhost's texts are rows of `agent/gui-agent/notifytexts.h`, rendered offline by
+`notifyrender_test.c`; the deaths and the scripts' texts are rendered by
+`tools/tests/notify-render-test.ps1`; `tools/tests/notify-render-selftest.sh` runs both with the
+defect knobs that make each rule fail. Callers pass templated text — never an exception message,
+never a file's contents, never a value read from the system.
 
 Redaction **refuses** (does not mask) a payload that is longer than 600 bytes, has more than 6
 lines or a control character, contains a credential keyword (`password`, `passwd`, `pwd=`,

@@ -118,6 +118,8 @@
                              // NOTHING GUI-adjacent may move into that header)
 #include "../../agent/gui-agent/notifyerr.h"   // secondary error route: policy core shared with
                                                 // the agent (wgcbroker_ipc.h include convention)
+#include "../../agent/gui-agent/notifytexts.h" // this helper's own notification texts, as rows the
+                                                // agent's offline render test holds to the rules
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
@@ -2637,12 +2639,18 @@ static bool WriteSmallA(std::wstring const& path, const void* data, DWORD len)
     return ok && wr == len;
 }
 
-static void ReportErrorSelf(const char* id, const char* summary)
+// key = a row of notifytexts.h ("listener-denied", "listener-init"): the text is rendered the way
+// the agent's offline render test renders it - header, line 1, the cause with this helper's exit
+// code, and the technical line with this process's pid.
+static void ReportErrorSelf(const char* key)
 {
     if (!g_notifyErrorsGate) return;
+    const QerrText* t = QerrTextFind(key);
+    if (!t) { BLog(L"NOTIFYERR no text row '%S' (a bug of ours) - not sent", key); return; }
+    const char* id = t->id;
     char text[QERR_MAX_TEXT + 256];
-    if (!QerrComposeNotifyText(text, sizeof(text), "notifhost", id, summary,
-                               "bridge.log in ProgramData\\qubes-toast-bridge")) return;
+    if (!QerrRenderText(text, sizeof(text), t, nullptr, (unsigned long)GetCurrentProcessId()))
+    { BLog(L"NOTIFYERR notifhost.%S not sent: the text did not render", id); return; }
 
     wchar_t pd[MAX_PATH];
     if (!GetEnvironmentVariableW(L"ProgramData", pd, RTL_NUMBER_OF(pd))) wcscpy_s(pd, L"C:\\ProgramData");
@@ -2656,6 +2664,11 @@ static void ReportErrorSelf(const char* id, const char* summary)
     std::wstring marker = dir + L"\\notifhost." + wid;
     std::wstring countPath = dir + L"\\.count";
 
+    // The boot stamp is DERIVED here (wall clock - uptime), not the shared volatile token the agent and the
+    // guest scripts use (QERR_BOOT_KEY): this bridge runs as the interactive USER (a /ru <user> /it task), and
+    // minting or even opening that HKLM key for write needs SYSTEM or an elevated token - a user-context read
+    // finds no token until the agent has reported something. Sharing it needs the agent to mint it at start and
+    // this side to open it read-only; recorded in findings/issues.md, not done here (rz39 notification texts).
     FILETIME ft; GetSystemTimeAsFileTime(&ft);
     ULARGE_INTEGER u; u.LowPart = ft.dwLowDateTime; u.HighPart = ft.dwHighDateTime;
     long long now = (long long)(u.QuadPart / 10000000ULL) - 11644473600LL - (long long)(GetTickCount64() / 1000ULL);
@@ -2663,7 +2676,7 @@ static void ReportErrorSelf(const char* id, const char* summary)
     std::string s; long long mb = 0, cb = 0; unsigned cnt = 0, newCnt = 0;
     int mp = ReadSmallA(marker, s) && QerrParseMarker(s.c_str(), &mb);
     int cp = ReadSmallA(countPath, s) && QerrParseCount(s.c_str(), &cb, &cnt);
-    QerrDecision d = QerrDecide(QERR_SEV_ACTION, "notifhost", id, text, mp, mb, cp, cb, cnt, now, &newCnt);
+    QerrDecision d = QerrDecide(t->sev, t->component, id, text, mp, mb, cp, cb, cnt, now, &newCnt);
     if (d != QERR_SEND) { BLog(L"NOTIFYERR notifhost.%S not sent: %S", id, QerrDecisionName(d)); return; }
 
     char kv[64];
@@ -2729,17 +2742,12 @@ static int BridgeMain()
         if (st != UserNotificationListenerAccessStatus::Allowed)
         {
             BLog(L"FATAL access=%d - window path preserved, exiting", (int)st);
-            ReportErrorSelf("listener-denied",
-                "the notification bridge cannot read toasts (notification access is denied for this "
-                "user), so bridged apps keep the plain window path; allow notification access in "
-                "Settings, or turn service.notify-bridge off");
+            ReportErrorSelf("listener-denied");   // notifytexts.h: "exit code 2" is this return
             return 2;
         }
     } catch (...) {
         BLog(L"FATAL listener init threw");
-        ReportErrorSelf("listener-init",
-            "the notification bridge cannot start its toast listener, so bridged apps keep the "
-            "plain window path");
+        ReportErrorSelf("listener-init");         // notifytexts.h: "exit code 3" is this return
         return 3;
     }
 

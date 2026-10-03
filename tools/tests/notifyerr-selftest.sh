@@ -7,8 +7,11 @@
 #   PS  guest/qwt-notify-error.ps1 via tools/tests/notifyerr-test.ps1: clean must PASS, and a
 #       copy with each `# GUARD:<name>` line deleted must FAIL.
 # Exit 0 only if every leg came out as required. Output is the evidence; keep it in scratchpad.
+#   AGENT_DIR=<path>   the agent checkout (default: the agent submodule); the texts themselves are held to
+#                      the rules by tools/tests/notify-render-selftest.sh
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+AGENT="${AGENT_DIR:-$ROOT/agent}"
 PWSH="${PWSH:-/home/user/pwsh/pwsh}"
 OUT="${NOTIFYERR_OUT:-$(mktemp -d /tmp/notifyerr-selftest-XXXXXX)}"
 mkdir -p "$OUT"
@@ -16,7 +19,7 @@ bad=0
 say() { printf '%s\n' "$*"; }
 
 # ---- C ----------------------------------------------------------------------------------------
-cd "$ROOT/agent/gui-agent" || exit 2
+cd "$AGENT/gui-agent" || { say "FAIL  $AGENT/gui-agent missing (set AGENT_DIR) - nothing ran"; exit 2; }
 cbuild() { gcc -std=c99 -Wall -Wextra -Werror -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L $2 -I. notifyerr.c notifyerr_test.c -o "$OUT/$1" 2>"$OUT/$1.build.err"; }
 if cbuild c-clean ""; then
     NOTIFYERR_TEST_DIR="$OUT" "$OUT/c-clean" >"$OUT/c-clean.out" 2>&1; rc=$?
