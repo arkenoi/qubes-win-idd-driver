@@ -184,3 +184,92 @@ availability number either way.
 rather than looping), if the once-per-boot guard is seen to fire twice in the field, or if a Windows
 change makes the state persist. Reporting it outside this project is the other live option, since
 this is Windows Update declining a proxy the system is handing it.
+
+## 12. Architecture: who does what, and who may touch which process
+
+Decided 2026-10-03 after the KB5007651 failure. Every fork below was put to Jev with the owner's rules as its premise. The
+measurements behind it are in `findings/updates.md` and `findings/issues.md`, not here.
+
+**These are decisions, not a description of shipped code.** Until the implementation lands (tracked in `findings/issues.md`, the
+two P1 updater entries), the shipped updater still runs installer-type packages itself with `/q`, and still adopts and kills
+relays by name.
+
+### 12.1 Components
+
+| component | file | role |
+|---|---|---|
+| the pass | `guest/qubes-windows-update.ps1` | one scan or install pass; passes are serialized by the updater mutex (a second one refuses, `QWTUPDMUTEXHELD`) |
+| the relay | `guest/qubes-updates-relay.cs` | the pass's only way out: `127.0.0.1:8082` → `qubes.UpdatesProxy`; serves sanctioned hosts, refuses others with a final 403 (§4) |
+| the dom0 handler | `guest/wu-update.ps1` | dom0's `qubes-vm-update` entry point: kicks the pass's task, tails `update-status.json`, cleans up after a pass that was killed |
+| the scheduled tasks | `QubesWindowsUpdateScan` / `…Run` | the boot-time and periodic scan; the install pass dom0 asks for |
+| the installer | `guest/install-updater-agent.ps1` | installs or upgrades the above (compiles the relay in place) |
+
+### 12.2 Install routes
+
+1. **Search** is always the Windows Update agent's own online search, through the relay.
+2. **What the Update Catalog serves as an `.msu`** (cumulatives and other express-content updates, which the agent could only fetch
+   through Delivery Optimization) is fetched by us and installed from the `.msu`, as before.
+3. **Every other offered update whose NEEDED content is static** (`download.windowsupdate.com`, not express) is installed by the
+   **Windows Update agent's own installer**.
+   - We walk the update's bundle tree recursively. A needed leaf has content, is not installed and is not downloaded.
+   - We fetch each needed leaf's files through the relay and hand them to the agent with `IUpdate2.CopyToCache`.
+   - We call `IUpdateInstaller.Install`.
+   - The agent then runs each package with **the update's own command line** and interprets its exit code by the update's own
+     rules.
+4. **Anything else** gets a row that says why: FAILED, or informational under §2. It never gets a guess.
+
+Rules that follow:
+
+- **No code of ours runs a vendor installer, and no code of ours chooses an installer's switches.** No switch table, no per-package
+  special case.
+- **The agent's downloader is never called on this path.** It needs Delivery Optimization / BITS (§5).
+- If the update is not complete in the agent's cache after `CopyToCache`, the row FAILS and names the leaves that are missing.
+- **A vendor payload is never carved, repacked, extracted or provisioned by us.**
+
+**Why:** the switches are not ours to know.
+- Where we guessed them we were wrong twice:
+  - `/q` made the Security platform installer exit 0 and do nothing.
+  - Running the Defender delta ourselves, bare and with `/q`, failed, and we concluded it "cannot self-apply". The agent applies
+    it through Microsoft's installer stub (`MpSigStub … /program <delta> WD /q`).
+- Where a guessed switch happened to work (MRT, the signature package), it still was not the package's own command line. The
+  agent runs MRT with `/Q /W`.
+- The workaround built on the first wrong guess, carving the app out of the Security platform installer, made the app current
+  while the platform stayed uninstalled. The updater then reported the update ALREADY CURRENT (§2 broken: too little).
+
+The update's metadata is the authoritative source, and the agent is the only component that reads it. So the agent runs the
+package, and we only supply the bytes it cannot fetch for itself.
+
+### 12.3 Verdicts
+
+A row's result is the agent's per-update result AND our effect probe where one exists (§3).
+- **Agent succeeded and the artefact moved:** installed.
+- **Agent failed:** FAILED, with its HRESULT.
+- **Agent succeeded but the artefact stayed below the offered version:** FAILED, logged loudly as a disagreement.
+- **The probe measures what the update changes.** For the Windows Security platform that is the platform's own registration
+  (`Windows Security Health\Platform\CoreLocation` and `\Updates\wu`), never the Security app.
+- **ALREADY CURRENT** means the measured artefact is at or above the version the offer carries. Nothing else qualifies.
+
+**Why:** the agent's result says the package ran to completion; the probe says the thing dom0 is told about changed. Either
+alone has read as success on a failed install (§3), and the case where they disagree is exactly the case that needs saying.
+
+### 12.4 Process ownership
+
+- **A component touches only processes it started, and holds them by handle** (`Start-Process -PassThru`; identity = pid +
+  start time).
+- **Nothing is ever killed or adopted by process name.**
+- **The pass owns exactly one relay,** the one it started, and stops exactly that one. It never uses a relay it did not start.
+  If `127.0.0.1:8082` is held by any other process, the pass refuses with a named reason. Under the mutex that is an anomaly,
+  not a race to win.
+- **A relay lives only as long as its pass.** It is started with `--parent-pid` and its own watchdog ends it within seconds of
+  the pass's process going away.
+- **The handler's dead-pass cleanup kills nothing.** It waits for that watchdog (bounded, every exit reported) and reports a
+  relay that outlives it as an anomaly, naming its pid and parent.
+- **The installer kills nothing.** Holding the mutex, it waits for any relay to exit. If one remains, it keeps the previous relay
+  exe and says why.
+- A commit-time lint refuses kill-by-name and adopt-by-name in shipped guest scripts.
+
+**Why:** measured 2026-10-03. The boot-time scan adopted a relay another process had started, and at the end of its pass
+`Remove-Proxy` TerminateProcess'ed every process with that name, mid-transfer, leaving no log line and no crash record. A
+process found by name is any process with that name. Killing it is a decision about something we did not start and cannot
+identify, and adopting it hands our traffic to it. This hazard was listed by the 2026-10-02 process audit and left in place,
+which is why it is a rule here now.
