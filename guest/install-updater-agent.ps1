@@ -56,8 +56,8 @@ if (-not (Test-Path $csc)) { throw "in-box csc not found at $csc" }
 if (-not (Test-Path $src)) { throw "relay source not found at $src" }
 # Serialise with the updater itself. On an UPGRADE the previous install's QubesWindowsUpdateScan
 # (boot+2 min) overlaps the resumed stage 2 (boot+1 min): the scan sets the machine-wide proxy and
-# starts the relay, then the Stop-Process below kills that relay mid-fetch and its task is rewritten
-# under it - the pass dies 0x80072EFD through a dead proxy and dom0 gets no availability answer until
+# starts the relay, then this deploy's relay replacement (until 2026-10-03 a kill by name) and task
+# rewrite land under it - the pass dies 0x80072EFD through a dead proxy and dom0 gets no availability answer until
 # the next 6-hourly scan. qubes-windows-update.ps1 serialises its passes on this mutex; take it here
 # too, so a running pass finishes first and one starting later yields (its scan uses WaitOne(0)).
 #
@@ -144,34 +144,75 @@ if (-not $haveUpdMutex) {
 # Every failure below throws. Without this the installer process (which runs us with `&`) would keep
 # the mutex until it exits - skipping every scan and stalling dom0-driven passes for that long.
 trap { if ($haveUpdMutex -and $updMutex) { try { $updMutex.ReleaseMutex() } catch { } }; break }
-# On an UPGRADE the previous relay can be RUNNING (an updater task mid-pass) and holds the
-# exe open, so csc fails with rc=1 (measured on the 4.3.6->4.3.7 upgrade e2e, 2026-08-25).
-# Stop it, clear the target, and retry through the handle-release window - and keep csc's
-# own words instead of discarding them.
-Get-Process -Name 'qubes-updates-relay' -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+# ---- WU-INSTALLER-RELAY-WAIT-BEGIN   (tools/tests/wu-installer-relay-test.ps1 extracts this region by these markers)
+# THE RELAY IS NOT KILLED (docs/ADR-updater.md 12.4, 2026-10-03). Until that day this read
+#     Get-Process -Name 'qubes-updates-relay' | Stop-Process -Force
+# - every process with that name, whoever started it. The reason it existed: on an UPGRADE the previous relay can be RUNNING and
+# holds the exe open, so the compiled exe cannot be moved into place (measured on the 4.3.6->4.3.7 upgrade e2e, 2026-08-25). Now:
+# this script holds the updater mutex (above), so no PASS is running, and a pass's relay exits by its own --parent-pid watchdog
+# within seconds of its pass's exit (ParentCheckMs, 5 s). So wait, bounded to four watchdog periods (40 x 500 ms), for
+# 127.0.0.1:8082's LISTEN owner to go away - found by the PORT, identified by its PID, never by a name. A listener still there
+# afterwards is not ours to stop: the compile is skipped, the previous exe is kept, and the pid is named. Without a previous exe
+# there is nothing to keep, and a deploy must not report a relay it cannot vouch for: it refuses (Jev 2026-10-03, throw 0.80).
+# Get-RelayPortOwner mirrors qubes-windows-update.ps1 and wu-update.ps1 (0 = free, -1 = unreadable, UNKNOWN IS NOT ZERO); keep the
+# three in step.
+function Get-RelayPortOwner {
+    $ev = @()
+    try { $l = @(Get-NetTCPConnection -LocalPort 8082 -State Listen -ErrorAction SilentlyContinue -ErrorVariable ev) } catch { return -1 }
+    if ($l.Count -gt 0) { return [int]$l[0].OwningProcess }
+    foreach ($e in $ev) { if ("$($e.CategoryInfo.Category)" -ne 'ObjectNotFound') { return -1 } }
+    return 0
+}
+$relayFirst = Get-RelayPortOwner
+$relayOwner = $relayFirst
+$relayWaits = 0
+while ($relayOwner -gt 0 -and $relayWaits -lt 40) { Start-Sleep -Milliseconds 500; $relayWaits++; $relayOwner = Get-RelayPortOwner }   # GUARD:relaywait
+$skipRelayCompile = $false
+if ($relayFirst -gt 0 -and $relayOwner -eq 0) { Log "a relay (pid $relayFirst) was still listening on 127.0.0.1:8082 and exited on its own after $($relayWaits * 500) ms - not killed" }
+if ($relayOwner -ne 0) {   # GUARD:relaynokill
+    $reason = 'cannot read who listens on 127.0.0.1:8082 (Get-NetTCPConnection failed), so a running relay cannot be ruled out'
+    if ($relayOwner -gt 0) {
+        $who = 'unknown'
+        try { $op = Get-Process -Id $relayOwner -ErrorAction SilentlyContinue; if ($op) { $who = $op.ProcessName; try { $who += ' at ' + $op.Path } catch { } } } catch { }
+        $reason = "QWTRELAYBUSY: pid $relayOwner ($who) is still listening on 127.0.0.1:8082 after 20 s while this deploy holds the updater mutex - it is not a running pass's relay (that exits with its pass) and it is NOT killed (nothing is killed by name, ADR-updater 12.4)"
+    }
+    if (Test-Path -LiteralPath $exe) {
+        $skipRelayCompile = $true
+        Log ($reason + ". The relay is NOT recompiled: the previous exe at $exe is kept, since a running copy would hold it open. Find out what that listener is, then rerun this deploy (install.cmd /updatesonly) to install the new relay.")
+    } else {
+        $msg = $reason + ". No previous relay exe exists at $exe to keep, so this deploy cannot leave the guest with a relay it can vouch for: refusing - nothing compiled, nothing killed. Find out what that listener is and rerun."
+        Log $msg
+        throw $msg
+    }
+}
+# ---- WU-INSTALLER-RELAY-WAIT-END
 # Compile to a TEMP name and move into place only on success: a failed compile (or a lock
 # that survives the retries) must leave the PREVIOUS working relay untouched. The first
 # version of this fix deleted $exe before compiling, which could strand an upgraded guest
 # with no relay at all - worse than the failure it fixed.
 $exeNew = "$exe.new"
 $cscOut = $null
-for ($cscTry = 1; $cscTry -le 3; $cscTry++) {
-    Remove-Item $exeNew -Force -EA SilentlyContinue
-    $cscOut = & $csc /nologo /optimize /target:exe /out:"$exeNew" "$src" 2>&1
-    if ($LASTEXITCODE -eq 0 -and (Test-Path $exeNew)) { break }
-    Log "relay compile attempt $cscTry failed (rc=$LASTEXITCODE); retrying"
-    Start-Sleep -Seconds 2
+if ($skipRelayCompile) {
+    Log "kept the previous relay exe $exe (compile skipped - see above)"
+} else {
+    for ($cscTry = 1; $cscTry -le 3; $cscTry++) {
+        Remove-Item $exeNew -Force -EA SilentlyContinue
+        $cscOut = & $csc /nologo /optimize /target:exe /out:"$exeNew" "$src" 2>&1
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $exeNew)) { break }
+        Log "relay compile attempt $cscTry failed (rc=$LASTEXITCODE); retrying"
+        Start-Sleep -Seconds 2
+    }
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $exeNew)) {
+        throw "relay compile failed (csc rc=$LASTEXITCODE): $((@($cscOut) | Select-Object -First 2) -join ' | ')"
+    }
+    $moved = $false
+    for ($mvTry = 1; $mvTry -le 3; $mvTry++) {
+        try { Move-Item $exeNew $exe -Force -EA Stop; $moved = $true; break }
+        catch { Start-Sleep -Seconds 2 }   # the old exe can still be releasing its handle
+    }
+    if (-not $moved) { throw "relay compiled but could not replace $exe (still locked)" }
+    Log "compiled relay -> $exe"
 }
-if ($LASTEXITCODE -ne 0 -or -not (Test-Path $exeNew)) {
-    throw "relay compile failed (csc rc=$LASTEXITCODE): $((@($cscOut) | Select-Object -First 2) -join ' | ')"
-}
-$moved = $false
-for ($mvTry = 1; $mvTry -le 3; $mvTry++) {
-    try { Move-Item $exeNew $exe -Force -EA Stop; $moved = $true; break }
-    catch { Start-Sleep -Seconds 2 }   # the old exe can still be releasing its handle
-}
-if (-not $moved) { throw "relay compiled but could not replace $exe (still locked)" }
-Log "compiled relay -> $exe"
 
 # 2. place the agent script
 $agent = Join-Path $BinDir 'qubes-windows-update.ps1'

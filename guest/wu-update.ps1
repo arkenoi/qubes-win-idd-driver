@@ -288,11 +288,31 @@ function Get-TaskResultMeaning([uint32]$r) {
     }
 }
 # What a killed pass leaves behind, torn down the way qubes-windows-update.ps1's Remove-Proxy does
-# it: WinHTTP proxy reset, WinINET proxy disabled, relay process stopped. That script is not
-# dot-sourceable (it IS the pass - loading it runs one) and has no cleanup action, so the steps
-# are mirrored here; keep them in step with Remove-Proxy. Every step reports its own outcome: this
-# handler runs in the rpc caller's context and may lack the right to stop a SYSTEM relay, and a
-# relay left serving is the one leftover that matters (see the temporal-gate comment there).
+# it: WinHTTP proxy reset, WinINET proxy disabled. That script is not dot-sourceable (it IS the
+# pass - loading it runs one) and has no cleanup action, so the steps are mirrored here; keep them
+# in step with Remove-Proxy. Every step reports its own outcome: this handler runs in the rpc
+# caller's context, and a relay left serving is the one leftover that matters (see the
+# temporal-gate comment there) - it is REPORTED, never killed (docs/ADR-updater.md 12.4).
+# Who LISTENS on 127.0.0.1:8082: the owning pid, 0 when nobody does, -1 when the table cannot be read (UNKNOWN IS NOT ZERO). Found by
+# the PORT, identified by its PID, never by a process name. A free port is an ObjectNotFound error from Get-NetTCPConnection; any other
+# error is unknown. Mirror of Get-RelayPortOwner in qubes-windows-update.ps1 and install-updater-agent.ps1; keep the three in step.
+function Get-RelayPortOwner {
+    $ev = @()
+    try { $l = @(Get-NetTCPConnection -LocalPort 8082 -State Listen -ErrorAction SilentlyContinue -ErrorVariable ev) } catch { return -1 }
+    if ($l.Count -gt 0) { return [int]$l[0].OwningProcess }
+    foreach ($e in $ev) { if ("$($e.CategoryInfo.Category)" -ne 'ObjectNotFound') { return -1 } }
+    return 0
+}
+# The anomaly line for a relay that outlived the bound: its pid, name and parent, all read BY PID. The parent tells whether it was the
+# dead pass's relay (then its own watchdog should have ended it) or something else's; either way it is not this handler's to stop.
+function Format-RelaySurvivor([int]$owner) {
+    $parent = 'unknown'; $name = 'unknown'
+    try {
+        $wp = Get-CimInstance Win32_Process -Filter "ProcessId = $owner" -EA SilentlyContinue
+        if ($wp) { $parent = "$($wp.ParentProcessId)"; $name = "$($wp.Name)" }
+    } catch { }
+    return ('relay pid ' + $owner + ' (' + $name + ', parent pid ' + $parent + ') is STILL listening on 127.0.0.1:8082 after 20 s - NOT killed (nothing is killed by name, ADR-updater 12.4), the proxy is still up - ANOMALY: find out what started it')
+}
 function Remove-DeadPassLeftovers {
     # NEVER UNDER A LIVE PASS (WU-HOLDER): the proxy settings and the relay then belong to it. Measured 2026-10-02: this teardown
     # killed the boot scan's relay mid-search, and that search failed 0x8024402F.
@@ -309,28 +329,19 @@ function Remove-DeadPassLeftovers {
         Remove-ItemProperty -Path $isKey -Name 'ProxyServer' -EA SilentlyContinue
         $done += 'wininet proxy disabled'
     } catch { $failed += "wininet proxy disable ($($_.Exception.Message))" }
-    foreach ($p in @(Get-Process qubes-updates-relay -EA SilentlyContinue)) {
-        $rp = $p
-        # Kill() only REQUESTS termination; the process exits a moment later. Re-listing at once still showed the dying relays and told
-        # dom0 "relay still running ... the proxy is still up ... baseline is NOT restored" while it was restored - measured 2026-10-02
-        # on GWeck's environment (rz33/rz34 kill cells). Wait for the exit (the observable event, bounded so a relay that truly
-        # survives is still reported as such) before saying it stopped.
-        try {
-            $rp.Kill()
-            $exited = $null
-            try { $exited = $rp.WaitForExit(10000) } catch { $exited = $null }   # GUARD:relayexit
-            if ($null -eq $exited) {
-                # WaitForExit needs SYNCHRONIZE on the process, which this caller may lack for a SYSTEM relay it could still
-                # terminate (Jev review 2026-10-02) - then watch the pid disappear instead, which needs no rights. Rare path only.
-                $exited = $false
-                for ($i = 0; $i -lt 40 -and -not $exited; $i++) { $exited = -not (Get-Process -Id $rp.Id -EA SilentlyContinue); if (-not $exited) { Start-Sleep -Milliseconds 250 } }   # GUARD:relayexitpid
-            }
-            if ($exited) { $done += "relay pid $($rp.Id) stopped" }
-            else { $failed += "relay pid $($rp.Id) did not exit within 10 s of being killed" }
-        } catch { $failed += "relay pid $($rp.Id) NOT stopped ($($_.Exception.Message))" }
-    }
-    $left = @(Get-Process qubes-updates-relay -EA SilentlyContinue)
-    if ($left.Count) { $failed += ('relay still running: pid ' + (@($left | ForEach-Object { $_.Id }) -join ', ') + ' - the proxy is still up') }
+    # THE RELAY IS NOT KILLED - not by name, not at all (ADR-updater 12.4). Until 2026-10-03 this killed every process named
+    # qubes-updates-relay, a LIVE scan's among them (measured 2026-10-02). The dead pass started its relay with --parent-pid, and the
+    # relay's own watchdog ends it within seconds of that pass's exit (ParentCheckMs, 5 s). The observable is 127.0.0.1:8082's LISTEN
+    # owner going away, found by the port and identified by its pid; the wait is bounded to four watchdog periods (40 x 500 ms), and a
+    # relay still there afterwards is reported with its pid and parent as an anomaly - it is not this handler's to stop.
+    $relayFirst = Get-RelayPortOwner
+    $relayOwner = $relayFirst
+    $waits = 0
+    while ($relayOwner -gt 0 -and $waits -lt 40) { Start-Sleep -Milliseconds 500; $waits++; $relayOwner = Get-RelayPortOwner }   # GUARD:relaywatchdogwait
+    if ($relayFirst -eq 0) { $done += 'no relay listening on 127.0.0.1:8082' }
+    elseif ($relayFirst -lt 0 -or $relayOwner -lt 0) { $failed += 'cannot read who listens on 127.0.0.1:8082 (Get-NetTCPConnection failed) - whether a relay is still serving is UNKNOWN' }
+    elseif ($relayOwner -eq 0) { $done += ('relay pid ' + $relayFirst + ' exited on its own (its parent watchdog) after ' + ($waits * 500) + ' ms - not killed') }
+    else { $failed += (Format-RelaySurvivor $relayOwner) }   # GUARD:relaynokill
     # never end in a bare number (see Msg): the summary closes with a word
     if ($failed.Count) { $Err.WriteLine('leftovers: ' + (($done + $failed) -join '; ') + ' - CHECK the qube, its offline baseline is NOT restored') }
     else { $Err.WriteLine('leftovers: ' + ($done -join '; ') + ' - offline baseline restored') }
