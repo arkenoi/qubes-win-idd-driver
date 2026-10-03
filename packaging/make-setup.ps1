@@ -327,8 +327,11 @@ foreach ($u in 'install-updater-agent.ps1', 'qubes-windows-update.ps1', 'qubes-u
 #     ships so the state can be read without a working push path, e.g. after a failed install.
 foreach ($g in 'pvnic-selfprime.ps1', 'qubesdb-read.ps1', 'health-check.ps1',
                'reboot-dialog-watch.ps1', 'qwt-state.ps1',
-               'qwt-notify-error.ps1') {   # secondary error route helper (docs/DESIGN-error-notify.md);
+               'qwt-notify-error.ps1',     # secondary error route helper (docs/DESIGN-error-notify.md);
                                            # dot-sourced by activate-idd.ps1 / deactivate-idd.ps1 from $PSScriptRoot
+               'qwt-report-death.ps1') {   # the ONE death reporter (docs/ADR-supervision.md 3): the installer
+                                           # copies it and qwt-notify-error.ps1 into bin and registers the
+                                           # event-triggered QwtDeathReporter task on it (Register-QwtDeathReporter)
     Copy-Item (Need (Join-Path $RepoRoot "guest\$g") "guest payload ($g)") $OutDir -Force
 }
 

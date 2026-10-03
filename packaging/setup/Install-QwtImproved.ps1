@@ -568,6 +568,7 @@ function Clear-BootResume {
 }
 
 # --------------------------------------------------------------- gui-agent registry seed
+# ---- SVC-RECOVERY-BEGIN  (tools/tests/supervision-install-test.ps1 extracts this function by marker)
 function Set-QubesServiceRecovery {
     # SELF-HEALING FOR THE CONTROL CHANNEL (2026-09-06, measured).
     #
@@ -588,15 +589,21 @@ function Set-QubesServiceRecovery {
     # simply accepted and never retried. The guest is then permanently unreachable until a human
     # reboots it, which for a Windows qube means its control channel is gone with no diagnosis.
     #
-    # Give both services ordinary Windows recovery: restart after 5 s, 15 s, then every 60 s,
+    # Give the services ordinary Windows recovery: restart after 5 s, 15 s, then every 60 s,
     # with the counter reset daily. FAILURE_ACTIONS_FLAG=1 is what makes the actions apply when
     # the service exits with an error rather than only when it crashes - without it a failed
     # START is still not retried, which is exactly the case that bit us.
     # Outcome per service goes into Result.detail as well as the log: a WARN in the text log alone
     # let a guest ship with the stock no-recovery configuration under ok:true, graded by the harness
     # identically to a correctly armed one.
+    #
+    # EVERY SERVICE OF OURS (docs/ADR-supervision.md 4, 2026-10-03): the three the MSI registers -
+    # QdbDaemon, QrexecAgent and QubesGuiWatchdog, the service that keeps the GUI agent alive, which
+    # until then was the one service of ours with no recovery at all. The fourth, QwtngNetSetup, is
+    # not the MSI's: pvnic-selfprime.ps1 creates it later in this stage and arms it where it is
+    # created (its NETSETUP-RECOVERY region); health-check.ps1 2b asserts all four.
     $recov = [ordered]@{}
-    foreach ($svc in 'QdbDaemon', 'QrexecAgent') {
+    foreach ($svc in 'QdbDaemon', 'QrexecAgent', 'QubesGuiWatchdog') {   # GUARD:recovthree
         try {
             & sc.exe failure $svc reset= 86400 actions= restart/5000/restart/15000/restart/60000 | Out-Null
             $rc1 = $LASTEXITCODE
@@ -618,6 +625,174 @@ function Set-QubesServiceRecovery {
     }
     $script:Result.detail.service_recovery = $recov
 }
+# ---- SVC-RECOVERY-END
+
+# ---- DEATH-REPORTER-BEGIN  (tools/tests/supervision-install-test.ps1 extracts this region by marker)
+# OUR EVENT LOG SOURCE (docs/ADR-supervision.md 2). The supervisors - the QubesGuiWatchdog service for
+# gui-agent.exe, the agent for its de-slice broker, notification bridge and ETW proxy - write ONE
+# Application-log event under it when a child exits without being asked to (agent include/deathevent.h,
+# ids 4001-4004: the one death Windows cannot record by itself). The message file is the .NET
+# Framework's EventLogMessages.dll: every message id in it renders as "%1", so the first insertion
+# string IS the text and no message DLL of ours is needed. Chosen over eventcreate.exe's message table
+# (ids 1-1000 only) because it covers every id and is an OS component on every Windows 10/11 - the same
+# Framework64\v4.0.30319 directory whose csc.exe the updater and the PV NIC applier already compile with -
+# and it is what New-EventLog / EventLog.CreateEventSource register, i.e. what the QubesPvNic and
+# QubesNetSetup sources in pvnic-selfprime.ps1 use today. Written with reg.exe like the gui-agent
+# defaults (idempotent under /f; New-EventLog throws on an existing source). TypesSupported=7 =
+# error|warning|information.
+function Register-QwtEventSource {
+    $key = 'HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Application\Qubes Windows Tools'
+    $dll = $script:QwtEventMessageDll
+    try {
+        $dllPath = [Environment]::ExpandEnvironmentVariables($dll)
+        if (-not (Test-Path -LiteralPath $dllPath)) {
+            Write-Log "event source NOT registered: message file $dllPath is absent (the .NET Framework 4 is an OS component on Windows 10/11; this image is not one we support)" 'WARN'
+            $script:Result.detail.event_source = "failed: message file absent ($dllPath)"
+            return
+        }
+        & reg.exe add $key /v EventMessageFile /t REG_EXPAND_SZ /d $dll /f | Out-Null   # GUARD:evsrc
+        $rc1 = $LASTEXITCODE
+        & reg.exe add $key /v TypesSupported /t REG_DWORD /d 7 /f | Out-Null
+        $rc2 = $LASTEXITCODE
+        if ($rc1 -eq 0 -and $rc2 -eq 0) {
+            Write-Log "event source 'Qubes Windows Tools' registered in the Application log (message file $dll)"
+            $script:Result.detail.event_source = 'registered'
+        } else {
+            Write-Log "could not register the event source 'Qubes Windows Tools': reg add EventMessageFile=$rc1 TypesSupported=$rc2 - the supervisors' death events will show as 'description not found' (non-fatal)" 'WARN'
+            $script:Result.detail.event_source = "failed: reg add rc=$rc1/$rc2"
+        }
+    } catch {
+        Write-Log "could not register the event source 'Qubes Windows Tools': $($_.Exception.Message) (non-fatal)" 'WARN'
+        $script:Result.detail.event_source = "error: $($_.Exception.Message)"
+    }
+}
+
+# ONE EVENT-TRIGGERED REPORTER (docs/ADR-supervision.md 3): a SYSTEM task whose trigger is an XPath
+# subscription over the system's own records of a death of ours, and whose action is the shipped
+# qwt-report-death.ps1 - it reads the event back by (channel, record id), decides whether it is a NEW
+# death or another record of one already counted this boot, and sends the ACTION notification through
+# the error-notify route (qwt-notify-error.ps1: gate, redaction, the per-boot cap of 8). Only the
+# record's CHANNEL and EventRecordID travel on the command line (Task Scheduler ValueQueries), never
+# event text: a faulting application's name is attacker-shaped data and must not land in an argument
+# string. Queue, not IgnoreNew: a second death while the first is being reported must not be dropped.
+#
+# The subscription, as data - tools/tests/death-reporter-xpath-selftest.py evaluates every Select below
+# against sample events (ours and not ours, each id), so keep each Select on ONE line:
+#   Application  1000 (Application Error) and 1001 (Windows Error Reporting) whose faulting application
+#                is one of OUR executables - "Data='x'" matches any insertion string, which is the only
+#                positional form the Event Log XPath subset guarantees for classic events; .NET Runtime
+#                1026 unfiltered (its one Data field is free text and that subset has no contains(); the
+#                script filters it); every event of our own source
+#   System       7031/7034/7023/7024 (Service Control Manager) for OUR four services, by DISPLAY name,
+#                which is what param1 carries (English only: Package.en-us.wxl is the MSI's one locale)
+#   TaskScheduler/Operational  201 with a non-zero ResultCode, and 203, for OUR tasks - never for the
+#                reporter itself, so a failing reporter cannot trigger itself
+# Microsoft-Windows-TaskScheduler/Operational is DISABLED by default on client Windows (Task Scheduler's
+# "Enable All Tasks History"); it is enabled here, or 201/203 would never be written at all.
+function Register-QwtDeathReporter {
+    param([Parameter(Mandatory)][string]$Root)
+    $reporterTask = 'QwtDeathReporter'
+    try {
+        # 1. the reporter and the route helper it dot-sources, in bin: the setup payload does not survive
+        New-Item -ItemType Directory -Force -Path $script:DefaultBinDir | Out-Null
+        foreach ($f in 'qwt-report-death.ps1', 'qwt-notify-error.ps1') {
+            $src = Join-Path $Root $f
+            if (-not (Test-Path -LiteralPath $src)) { throw "$f is not in the payload" }
+            Copy-Item -LiteralPath $src -Destination (Join-Path $script:DefaultBinDir $f) -Force
+        }
+        $reporter = Join-Path $script:DefaultBinDir 'qwt-report-death.ps1'
+
+        # 2. the channel 201/203 are written to
+        $global:LASTEXITCODE = $null
+        & wevtutil.exe set-log Microsoft-Windows-TaskScheduler/Operational /enabled:true 2>&1 | Out-Null   # GUARD:tasklog
+        if ($LASTEXITCODE -ne 0) { throw "wevtutil could not enable Microsoft-Windows-TaskScheduler/Operational (rc '$LASTEXITCODE')" }
+
+        # 3. the subscription. The executables are what packaging/make-setup.ps1 ships into bin (the
+        #    MSI's own, the user-session helpers, the fork qrexec binaries) plus the two compiled on the
+        #    guest (qubes-updates-relay.exe, qwtng-netsetup.exe). cat.exe (the posix shim) is left out:
+        #    a generic name would attribute a foreign crash to us. qwt-report-death.ps1 carries the same
+        #    list as its component table; the xpath selftest holds the two together.
+        $ourExes = @('gui-agent.exe', 'gui-watchdog.exe', 'qubesdb-daemon.exe', 'qubesdb-cmd.exe', 'qrexec-agent.exe',
+                     'qrexec-client-vm.exe', 'qrexec-wrapper.exe', 'network-setup.exe', 'advertise-tools.exe',
+                     'clipboard-copy.exe', 'clipboard-paste.exe', 'file-receiver.exe', 'file-sender.exe',
+                     'get-image-rgba.exe', 'open-in-vm.exe', 'open-url.exe', 'set-gui-mode.exe', 'vm-file-editor.exe',
+                     'wait-for-logon.exe', 'relocate-dir.exe', 'autologon.exe',
+                     'wgcbroker.exe', 'notifhost.exe', 'etwproxy.exe', 'bind-dirs.exe', 'qubesdb-read.exe',
+                     'qubes-updates-relay.exe', 'qwtng-netsetup.exe')
+        $ourServices = @('QubesDB daemon', 'Qubes RPC agent', 'Qubes GUI agent watchdog', 'Qubes PV NIC address applier')
+        $ourTasks = @('\Qubes-WgcBroker', '\Qubes-NotifBridge', '\QubesPvNic', '\QubesPvNicRearm', '\QubesNetworkReapply',
+                      '\QubesQuietDesktopGuard', '\QubesAutologonGuard', '\QubesWindowsUpdateScan', '\QubesWindowsUpdateRun',
+                      '\QubesWindowsUpdateDownload', '\QwtImprovedSetup')   # GUARD:selftrigger
+        $exeOr  = ($ourExes | ForEach-Object { "Data='$_'" }) -join ' or '
+        $svcOr  = ($ourServices | ForEach-Object { "Data[@Name='param1']='$_'" }) -join ' or '
+        $taskOr = ($ourTasks | ForEach-Object { "Data[@Name='TaskName']='$_'" }) -join ' or '
+        $tsPath = 'Microsoft-Windows-TaskScheduler/Operational'
+        $sub = @(
+            '<QueryList>',
+            '<Query Id="0" Path="Application">',
+            "<Select Path=`"Application`">*[System[Provider[@Name='Application Error'] and EventID=1000] and EventData[$exeOr]]</Select>",
+            "<Select Path=`"Application`">*[System[Provider[@Name='Windows Error Reporting'] and EventID=1001] and EventData[$exeOr]]</Select>",
+            "<Select Path=`"Application`">*[System[Provider[@Name='.NET Runtime'] and EventID=1026]]</Select>",
+            "<Select Path=`"Application`">*[System[Provider[@Name='Qubes Windows Tools']]]</Select>",
+            '</Query>',
+            '<Query Id="1" Path="System">',
+            "<Select Path=`"System`">*[System[Provider[@Name='Service Control Manager'] and (EventID=7031 or EventID=7034 or EventID=7023 or EventID=7024)] and EventData[$svcOr]]</Select>",
+            '</Query>',
+            "<Query Id=`"2`" Path=`"$tsPath`">",
+            "<Select Path=`"$tsPath`">*[System[Provider[@Name='Microsoft-Windows-TaskScheduler'] and EventID=201] and EventData[Data[@Name='ResultCode']!=0 and ($taskOr)]]</Select>",
+            "<Select Path=`"$tsPath`">*[System[Provider[@Name='Microsoft-Windows-TaskScheduler'] and EventID=203] and EventData[$taskOr]]</Select>",
+            '</Query>',
+            '</QueryList>'
+        ) -join ''
+        $arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $reporter + '" -Channel "$(Channel)" -RecordId $(RecordId)'   # GUARD:argsinject
+        $xml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>QWT: report every unexpected death of a Qubes Windows Tools component to dom0 (docs/ADR-supervision.md)</Description></RegistrationInfo>
+  <Triggers>
+    <EventTrigger>
+      <Enabled>true</Enabled>
+      <Subscription>$([Security.SecurityElement]::Escape($sub))</Subscription>
+      <ValueQueries>
+        <Value name="Channel">Event/System/Channel</Value>
+        <Value name="RecordId">Event/System/EventRecordID</Value>
+      </ValueQueries>
+    </EventTrigger>
+  </Triggers>
+  <Principals><Principal id="Author"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>Queue</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>false</StartWhenAvailable>
+    <ExecutionTimeLimit>PT5M</ExecutionTimeLimit>
+    <Hidden>true</Hidden>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>powershell.exe</Command><Arguments>$([Security.SecurityElement]::Escape($arguments))</Arguments></Exec></Actions>
+</Task>
+"@
+        $f = Join-Path $env:TEMP 'qwt-death-reporter.xml'
+        [IO.File]::WriteAllText($f, $xml, [Text.Encoding]::Unicode)
+        # Cleared first: a swallowed stderr throw leaves the PREVIOUS native command's exit code in
+        # $LASTEXITCODE (the schtasks lesson in Clear-BootResume); $null reads as failure below.
+        $global:LASTEXITCODE = $null
+        try { $out = & schtasks.exe /create /tn $reporterTask /xml "$f" /f 2>&1 } catch { $out = "$_" }
+        $rc = $LASTEXITCODE
+        Remove-Item $f -ErrorAction SilentlyContinue
+        if ($rc -ne 0) { throw "schtasks /create rc '$rc': $(($out -join ' ').Trim())" }
+        $global:LASTEXITCODE = $null
+        try { & schtasks.exe /query /tn $reporterTask *>&1 | Out-Null } catch { }
+        if ($LASTEXITCODE -ne 0) { throw "schtasks /create reported success but '$reporterTask' does not exist (query rc '$LASTEXITCODE')" }
+        Write-Log "death reporter registered: task $reporterTask (event-triggered, SYSTEM, queued) -> $reporter; $($ourExes.Count) executables, $($ourServices.Count) services, $($ourTasks.Count) tasks subscribed"
+        $script:Result.detail.death_reporter = 'registered'
+    } catch {
+        Write-Log "death reporter NOT registered: $($_.Exception.Message) - a death of our components stays in the guest logs only, nothing reaches dom0 (non-fatal)" 'WARN'
+        $script:Result.detail.death_reporter = "failed: $($_.Exception.Message)"
+    }
+}
+# ---- DEATH-REPORTER-END
 
 function Set-GuiAgentRegistryDefaults {
     # The MSI only seeds these when its AppSearch does NOT already find them (conditions
@@ -663,6 +838,10 @@ function Set-GuiAgentRegistryDefaults {
 # with MANIFEST.json -> reference_binaries at run time; this is the fallback list.
 $script:OurBinaries    = @('gui-agent.exe', 'gui-watchdog.exe')
 $script:DefaultBinDir  = 'C:\Program Files\Qubes Tools\bin'
+# The message file our Event Log source renders with (Register-QwtEventSource): REG_EXPAND_SZ as
+# written, expanded only for the existence check. A script-scope value so the offline test can point
+# it at a file that exists on Linux.
+$script:QwtEventMessageDll = '%SystemRoot%\Microsoft.NET\Framework64\v4.0.30319\EventLogMessages.dll'
 $script:GuiWatchdogSvc = 'QubesGuiWatchdog'
 # Set true only on the same-ProductVersion in-place reinstall path (see the upgrade block); a
 # fresh install never enters that block, so default it here rather than rely on StrictMode 1.0.
@@ -2473,9 +2652,17 @@ function Invoke-Stage2 {
     # the process that reboots the guest mid-stage-2, and the WARN-and-continue this was let it.
     Disable-XenbusMonitor -Why 'after msiexec: MSI re-registered the service' -FatalIfSurvives
 
-    # The MSI has just (re)registered QdbDaemon/QrexecAgent with no failure actions, so this has
-    # to run AFTER it, every time - see Set-QubesServiceRecovery for the measurement.
+    # The MSI has just (re)registered QdbDaemon/QrexecAgent/QubesGuiWatchdog with no failure actions,
+    # so this has to run AFTER it, every time - see Set-QubesServiceRecovery for the measurement.
     Set-QubesServiceRecovery
+
+    # ONE REPORTER FOR EVERY DEATH (docs/ADR-supervision.md 2-3): our Event Log source, and the
+    # event-triggered task that turns the system's own records of a crash, a service death or a task
+    # failure of ours into the dom0 notification. Same non-fatal shape as the recovery arming: the
+    # install is good without it, the RESULT names the gap (event_source / death_reporter) and
+    # result-flags.py grades it red.
+    Register-QwtEventSource
+    Register-QwtDeathReporter -Root $Root
 
     # --- prove the install put OUR agent on disk ------------------------------------
     # Without this the script would report success for an install that silently kept a

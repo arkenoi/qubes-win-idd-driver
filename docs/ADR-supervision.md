@@ -71,3 +71,58 @@ The owner: "notification that hits user screen should be ours ... for the rest, 
 Jev, 0.99.
 
 **Why:** the platform's recovery is documented and observable (7031 says which action it took), and survives our own bugs. Each hand-written relaunch loop is one more thing that can fail quietly.
+
+---
+
+## Implementation notes (2026-10-03; not decisions - what was built, and what the rig still has to show)
+
+- **Section 2, our event source.** `Qubes Windows Tools` in the Application log, registered by the installer
+  (`Register-QwtEventSource`, `reg.exe`, message file `%SystemRoot%\Microsoft.NET\Framework64\v4.0.30319\EventLogMessages.dll`:
+  every message id renders `%1`, present on every Windows 10/11 as an OS component, the same file `New-EventLog` and the
+  QubesPvNic/QubesNetSetup sources already use). The supervisors write ONE event per death with the agent's header-only
+  `include/deathevent.h` (ids 4001 gui-agent by the watchdog, 4002 wgcbroker, 4003 notifhost, 4004 etwproxy; strings %2..%6 =
+  exe, pid, exit code, run time, the supervisor's detail). Sites: `watchdog.c` at its death line; `main.c` QGABROKERDIED and
+  QGANOTIFBRIDGEEXIT; `etwproxy.c` EtwProxyExitCb (every exit that reaches it; its three relaunch lines and the park line are
+  ERROR now). UNCOMPILED here (gcc -fsyntax-only against stubs + the real windows-utils headers; CI builds it); the record's
+  contract is pinned by `gui-agent/deathevent_test.c` via `tools/tests/deathevent-selftest.sh`.
+- **Section 2, services visible.** The exit-0 swallow was not in the services but in windows-utils' `SvcMainLoop`
+  (`SvcSetState` ignored its exit code; the wrapper of QrexecAgent and of the qubesdb daemon alike). Fixed by
+  `patches/windows-utils-service-exit-code.patch`, applied by `build.yml` and `qwt-full.yml` like the interactive-logon patch;
+  `tools/tests/svc-exitcode-selftest.sh` proves it against the exact ref CI clones (v4.2.2) and sees the unpatched file fail.
+  qrexec-agent.c already returned the worker's Win32 code; the qubesdb daemon returns `ERROR_UNIDENTIFIED_ERROR` on a failed
+  mainloop. A stop request stays exit 0.
+- **Section 3, the reporter.** Task `QwtDeathReporter` (SYSTEM, EventTrigger, `Queue`, ValueQueries = channel + EventRecordID
+  only), action `guest/qwt-report-death.ps1` in bin, route `qwt-notify-error.ps1` (gate, redaction, cap 8). The subscription is
+  data in `Register-QwtDeathReporter` and is evaluated offline by `tools/tests/death-reporter-xpath-selftest.py`; the
+  reporter's identity/count/text by `tools/tests/death-reporter-selftest.sh`; the registration by
+  `tools/tests/supervision-install-selftest.sh`. Microsoft-Windows-TaskScheduler/Operational is enabled by the installer:
+  client Windows ships it disabled, and 201/203 are never written otherwise.
+- **Section 4, restarts.** `Set-QubesServiceRecovery` arms QdbDaemon, QrexecAgent, QubesGuiWatchdog; `pvnic-selfprime.ps1`
+  arms QwtngNetSetup where it creates it; `health-check.ps1` 2b asserts all four (`tools/tests/health-recovery-selftest.sh`).
+  Task-launched helpers: Task Scheduler's restart-on-failure interval is **1 minute at minimum** (`RestartOnFailure/Interval`,
+  PT1M..P31D; count 1..999) and applies to an instance that ended with a non-zero result. The broker must be back in ~8 s
+  (the agent's relaunch throttle; QGADESLICEDOWN escalates at 30 s): 60 s does not fit, the agent's bounded relaunch stays.
+  The bridge's agent relaunch is already one per 60 s, numerically equal, but it re-validates the gate, restores the banners
+  and ENDS any stale instance through `schtasks /create /f` - a second supervisor would race it - so the agent's relaunch
+  stays for both, and their deaths are reported through 4002/4003 (and the task's 201).
+- **Still owed on a guest (the release gate, win11 cell):** (1) `Register-QwtEventSource` + `Register-QwtDeathReporter` report
+  `registered` in the RESULT; `schtasks /query /tn QwtDeathReporter /xml` shows the subscription; (2) a forced gui-agent.exe
+  crash yields Application 1000 (+1001) and our 4001, exactly ONE notification `gui-agent.death-1` in dom0, one `DEATH #1 NEW`
+  line in `qwt-deaths.log`, and `AGAIN` lines for the 1001/4001 records; a second forced crash yields `death-2`; (3) a forced
+  `WaitForQdb` timeout (QrexecAgent) yields System 7023 with error 1460 and 7031 with the restart, and the SCM restart happens;
+  (4) a clean boot and a clean shutdown produce ZERO notifications and no `DEATH` line (the negative control); (5) `wevtutil gl
+  Microsoft-Windows-TaskScheduler/Operational` reads `enabled: true` after the install.
+- **Review, 2026-10-03 (Jev per claim).** Found and fixed before commit:
+  - A pid-less record (1001, 7031/7034, a helper task's 201) attached to any death of its executable within 600 s. A service that kept
+    exiting without a crash record (7031 only, restarted at 5/15/60 s) was ONE notification for three deaths. Now one death holds at most
+    one record of each type, and a pid match obeys the same rule, so a reused pid cannot hide a second crash.
+  - A WER 1001 and a helper task's 201 only JOIN a death. A 1001 carries no path: a foreign same-named executable's 1001 opened a death
+    of ours. A helper's 201 also follows an end the agent asked for, while its own 4002/4003 is the death record.
+  - A .NET 1026 counts only for our two managed executables. Our install directory comes from the registry (`InstallDir`) or from the
+    reporter's own folder, never from a hard-coded default that would refuse every crash of an install elsewhere.
+  - The windows-utils patch keeps a REQUESTED stop clean. Both workers return success on the stop event: qrexec-agent sets
+    ERROR_SUCCESS, and qubesdb's mainloop takes its stop branch because its pipe thread has no stop path (Jev 0.87).
+- **Accepted residuals.**
+  - Any guest process can write an Application-log record under our source name. The SYSTEM task then reports a death of a
+    table executable: text only from the tables, parsed numbers, at most 8 notifications per boot (Jev: acceptable 0.69).
+  - etwproxy's 4004 is written under its lock: a hung Event Log service could stall the agent's shutdown (Jev 0.60 "cannot wedge").
