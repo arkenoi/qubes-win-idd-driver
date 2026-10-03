@@ -190,9 +190,8 @@ this is Windows Update declining a proxy the system is handing it.
 Decided 2026-10-03 after the KB5007651 failure. Every fork below was put to Jev with the owner's rules as its premise. The
 measurements behind it are in `findings/updates.md` and `findings/issues.md`, not here.
 
-**These are decisions, not a description of shipped code.** Until the implementation lands (tracked in `findings/issues.md`, the
-two P1 updater entries), the shipped updater still runs installer-type packages itself with `/q`, and still adopts and kills
-relays by name.
+**Implemented in QWT-NG 4.3.33** (released 2026-10-03). Before it, the updater ran installer-type packages itself with `/q`, and
+adopted and killed relays by name.
 
 ### 12.1 Components
 
