@@ -1,0 +1,5 @@
+# The release feature tests: tools/release-acceptance.sh runs each one and records it as cell-group feature-<name>;
+# tools/acceptance-record-check.py requires every one of them in the acceptance record before cut-release may publish.
+notify-errors-guest-test
+crop-before-map
+template-update

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # FAIL if the acceptance runner's default campaign does not cover every cell cut-release.sh requires.
 #
-# THE CLASS OF BUG THIS EXISTS FOR. The required cell set lives in tools/cut-release.sh (the publish
-# gate) and the campaign that produces it lives in tools/release-acceptance.sh. They are two lists in
+# THE CLASS OF BUG THIS EXISTS FOR. The required cell set lives in tools/acceptance-record-check.py (the
+# publish gate's check, called by tools/cut-release.sh - it was inline in cut-release.sh until 2026-10-02)
+# and the campaign that produces it lives in tools/release-acceptance.sh. They are two lists in
 # two files with no relationship, so they drifted: the runner's default omitted win11-reinstall and
 # win11-upgrade while running two cells the gate does not require. A full run then reported
 # "51 passed, 0 failed", record-acceptance wrote verdict CLEAN, and only cut-release caught it -
@@ -17,12 +18,13 @@
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
-CUT=tools/cut-release.sh
+CUT=tools/acceptance-record-check.py
 RUN=tools/release-acceptance.sh
-[ -f "$CUT" ] && [ -f "$RUN" ] || { echo "FAIL  missing $CUT or $RUN"; exit 1; }
+FEAT=tools/release-feature-tests.txt
+[ -f "$CUT" ] && [ -f "$RUN" ] && [ -f "$FEAT" ] || { echo "FAIL  missing $CUT, $RUN or $FEAT"; exit 1; }
 
-# cut-release.sh:  required={"win11-clean","win10-clean",...}
-required=$(grep -aoE 'required=\{[^}]*\}' "$CUT" | head -1 | grep -oE '"[a-z0-9-]+"' | tr -d '"' | sort -u)
+# acceptance-record-check.py:  REQUIRED = {"win11-clean", "win10-clean", ...} | {"feature-" + f ...}  (the matrix cells)
+required=$(grep -aoE 'REQUIRED = \{[^}]*\}' "$CUT" | head -1 | grep -oE '"[a-z0-9-]+"' | tr -d '"' | sort -u)
 # release-acceptance.sh:  CELLS_DEFAULT="win10-clean win10-reinstall ..."
 defaults=$(grep -aoE '^CELLS_DEFAULT="[^"]*"' "$RUN" | head -1 | sed -E 's/^CELLS_DEFAULT="//; s/"$//' | tr ' ' '\n' | sed '/^$/d' | sort -u)
 
@@ -37,5 +39,13 @@ if [ -n "$missing" ]; then
   echo "      be believed. Add them to CELLS_DEFAULT (or justify removing them from the gate)."
   exit 1
 fi
-echo "--- cell coverage: $(printf '%s' "$required" | wc -w) required, all present in CELLS_DEFAULT ($(printf '%s' "$defaults" | wc -w) cells)"
+# THE FEATURE TESTS: the gate requires feature-<name> for every line of $FEAT, so the runner must read that same file, and every
+# name in it must have its own arm in the runner's case - a name with no arm would leave rc from the PREVIOUS test (a stale PASS).
+grep -q 'release-feature-tests.txt' "$RUN" || { echo "FAIL  $RUN no longer reads $FEAT - the gate and the runner can drift apart"; exit 1; }
+feats=$(grep -v -e '^#' -e '^[[:space:]]*$' "$FEAT")
+[ -n "$feats" ] || { echo "FAIL  $FEAT lists no feature test"; exit 1; }
+for f in $feats; do
+  grep -qE "^[[:space:]]+$f\)" "$RUN" || { echo "FAIL  feature test '$f' is required by the gate but has no arm in $RUN"; exit 1; }
+done
+echo "--- cell coverage: $(printf '%s' "$required" | wc -w) required, all present in CELLS_DEFAULT ($(printf '%s' "$defaults" | wc -w) cells); $(printf '%s\n' $feats | wc -l) feature tests, each with a runner arm"
 exit 0

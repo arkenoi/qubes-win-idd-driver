@@ -54,8 +54,10 @@ for f in "${outs[@]}"; do
   fi
   nf="$(printf '%s' "$line" | sed -nE 's/.*, ([0-9]+) failed ===$/\1/p')"
   if [ "$nf" = "0" ]; then clean=$((clean+1)); else failed=$((failed+1)); fi
-  # The cells a group ran are echoed by matrix.sh as '  cells: a b c'
-  c="$(grep -aE '^\[[0-9:]+\]?[[:space:]]*cells:' "$f" | tail -1 | sed -nE 's/.*cells:[[:space:]]*//p')"
+  # The cells a group ran are echoed by matrix.sh as '[HH:MM:SS]   cells: a b c'; the timestamp is OPTIONAL. The pattern used to be
+  # '^\[[0-9:]+\]?...', where only the ']' was optional, so a line without the timestamp was silently never read (found 2026-10-02 by
+  # tools/tests/acceptance-record-selftest.sh when the feature tests' cell-groups recorded no cells).
+  c="$(grep -aE '^(\[[0-9:]+\])?[[:space:]]*cells:' "$f" | tail -1 | sed -nE 's/.*cells:[[:space:]]*//p')"
   [ -n "$c" ] && cells="$cells $c"
 done
 shopt -u nullglob
@@ -66,7 +68,7 @@ import sys,json; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))'
 VERDICT="CLEAN"
 [ "$failed" -eq 0 ] || VERDICT="FAILED"
 
-OUTDIR="scratchpad/acceptance-records"
+OUTDIR="${ACCEPT_RECORD_DIR:-scratchpad/acceptance-records}"   # override: tools/tests/acceptance-record-selftest.sh only
 mkdir -p "$OUTDIR" || die "cannot create $OUTDIR"
 OUT="$OUTDIR/${ISOSHA}.json"
 

@@ -186,21 +186,10 @@ REC="scratchpad/acceptance-records/${ISOSHA}.json"
   Run the campaign against $ISO, then:
       tools/record-acceptance.sh --iso $ISO --campaign <campaign-out-dir>
   There is deliberately no flag to skip this."
-python3 - "$REC" "$ISOSHA" "$VER" <<'PY' || exit 1
-import json,sys
-rec=json.load(open(sys.argv[1]))
-iso,ver=sys.argv[2],sys.argv[3]
-def bad(m): print(f"ERROR: acceptance record: {m}",file=sys.stderr); sys.exit(1)
-if rec.get("iso_sha256")!=iso: bad("records a different ISO than the one being published")
-if rec.get("release_version")!=ver: bad(f"records release {rec.get('release_version')}, publishing {ver}")
-if rec.get("verdict")!="CLEAN": bad(f"verdict is {rec.get('verdict')!r}, not CLEAN")
-if int(rec.get("cell_groups_failed",1))!=0: bad(f"{rec.get('cell_groups_failed')} cell-group(s) had failures")
-cells=rec.get("cells") or []
-required={"win11-clean","win10-clean","win11-upgrade","win11-reinstall","win11-appvm","win10-appvm"}
-missing=required-set(cells)
-if missing: bad("PARTIAL MATRIX - these cells did not run: "+", ".join(sorted(missing)))
-print(f"[cut] acceptance: {rec.get('cell_groups_clean')} cell-groups clean, cells={len(cells)}, recorded {rec.get('recorded_utc')}")
-PY
+# The check itself lives in tools/acceptance-record-check.py (testable offline: tools/tests/acceptance-record-selftest.sh); it requires
+# every campaign cell AND the feature tests - a record that lacks any of them is PARTIAL (2026-10-02: rz30 recorded CLEAN with both
+# feature tests never run).
+python3 tools/acceptance-record-check.py "$REC" "$ISOSHA" "$VER" || exit 1
 
 # ---------------------------------------------------------------- notes
 NOTES_FILE="docs/RELEASE-NOTES-${VER}.md"

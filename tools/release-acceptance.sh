@@ -38,6 +38,10 @@ G11="${G11:?set G11 to the Win11 entry image - there is no default target}"
 # "matrix.sh: line 1628: B10: set B10 to the Win10 base golden".
 B10="${B10:?set B10 to the Win10 base golden - there is no default target}"
 B11="${B11:?set B11 to the Win11 base golden - there is no default target}"
+# The feature tests quick-upgrade a sealed golden <F11>-qwt. This was hard-coded OS_FAMILY=win11 and so kept naming win11-qwt after the
+# Win11 goldens moved to the retail image (win11r-*): on 2026-10-02 both feature tests died in seconds on "no golden win11-qwt" while
+# the campaign had passed 96/96. Named like every other target here - no default.
+F11="${F11:-}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -145,6 +149,10 @@ for _c in $CELLS; do
   fi
   [ -f "mgmt/fixtures/$_g.json" ] || say "WARNING: $_g exists but has no fixture record mgmt/fixtures/$_g.json - matrix.sh's custody gate may refuse it"
 done
+if [ "$SKIP_FEATURES" -eq 0 ]; then
+  [ -n "$F11" ] || die "set F11 to the Win11 golden family for the feature tests (they quick-upgrade the sealed golden <F11>-qwt) - there is no default target"
+  qvm-check "$F11-qwt" >/dev/null 2>&1 || die "the feature tests need the sealed golden '$F11-qwt' and it does NOT EXIST on the rig. Seal it from the PREVIOUS release's setup tree: mgmt/harness/seal-qwt-golden.sh $F11 <N-1 setup tree>; refusing to start a run whose feature tests cannot run."
+fi
 say "--- matrix campaign: $CELLS"
 CAMP="$WORK/campaign"
 mkdir -p "$CAMP"
@@ -161,38 +169,67 @@ say "matrix rc=$MRC (detail: $CAMP/full.out, artefacts: $CAMP/matrix)"
 # ---- 5. the feature tests this release is about ------------------------------------------------
 # These are NOT a substitute for the campaign; they are the per-feature evidence a campaign cell
 # does not cover. Each drives its own throwaway subject over quick-upgrade.
+# NO STALE FEATURE RESULTS: $CAMP is per release-package run, so a re-run of the same run would otherwise find an earlier attempt's
+# feature-*.out and record THEM - a skipped or failed feature test inheriting an old pass (Jev review 2026-10-02). Cleared first, always.
+rm -f "$CAMP"/feature-*.out
 if [ "$SKIP_FEATURES" -eq 0 ]; then
   # SETTLE THE RIG FIRST. The campaign's appvm cells leave their AppVM RUNNING, and quick-upgrade
   # refuses to start while any other Windows guest is up ("REFUSED: these are not Halted") - the
   # serial-rig rule, working correctly. Without this the feature tests died 7 s after a 45-minute
   # campaign, reporting a harness collision as a feature failure. Shut them down and WAIT.
-  say "settling the rig before the feature tests"
-  for vm in $(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' '$1 ~ /^win1/ && $2!="Halted"{print $1}'); do
-    say "  shutting down $vm (left running by the campaign)"
-    qwt_shutdown "$vm" 600 || { say "  $vm did not halt in 600s - killing it; the next clone from its volume may be dirty"; timeout 60 qvm-kill "$vm" >/dev/null 2>&1; }
-  done
-  for i in $(seq 1 40); do
+  # ...and BEFORE EACH feature test too: the feature tests leave their own subjects running (notify-errors-guest-test leaves
+  # win11-nfy up for crop-before-map, by design), and on rz35 (2026-10-02) template-update's quick-upgrade was refused in 4 s by
+  # "these are not Halted: win11-nfy" - a harness collision recorded as a feature failure.
+  settle_rig(){ # $1 what the guests are being settled for
+    say "settling the rig before $1"
+    for vm in $(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' '$1 ~ /^win1/ && $2!="Halted"{print $1}'); do
+      say "  shutting down $vm (left running)"
+      qwt_shutdown "$vm" 600 || { say "  $vm did not halt in 600s - killing it; the next clone from its volume may be dirty"; timeout 60 qvm-kill "$vm" >/dev/null 2>&1; }
+    done
+    for i in $(seq 1 40); do
+      busy=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' '$1 ~ /^win1/ && $2!="Halted"{print $1}' | tr '\n' ' ')
+      [ -z "$busy" ] && break
+      [ "$i" = 1 ] && say "  waiting for: $busy"
+      sleep 15
+    done
     busy=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' '$1 ~ /^win1/ && $2!="Halted"{print $1}' | tr '\n' ' ')
-    [ -z "$busy" ] && break
-    [ "$i" = 1 ] && say "  waiting for: $busy"
-    sleep 15
-  done
-  busy=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' '$1 ~ /^win1/ && $2!="Halted"{print $1}' | tr '\n' ' ')
-  [ -z "$busy" ] || say "WARNING: still not Halted after 10 min: $busy - the feature tests will likely be refused"
+    [ -z "$busy" ] || say "WARNING: still not Halted after 10 min: $busy - $1 will likely be refused"
+  }
+  settle_rig "the feature tests"
 
-  for t in notify-errors-guest-test crop-before-map; do
+  # the list is shared with tools/acceptance-record-check.py, which requires every one of these in the record
+  for t in $(grep -v -e '^#' -e '^[[:space:]]*$' tools/release-feature-tests.txt); do
     say "--- feature test: $t"
+    [ "$t" = crop-before-map ] || settle_rig "feature test $t"   # crop-before-map rides the notify test's running subject
     case "$t" in
       notify-errors-guest-test)
-        VM=win11-nfy PKG="$SETUP" OS_FAMILY=win11 LOG="$WORK/$t.log" \
+        VM=win11-nfy PKG="$SETUP" OS_FAMILY="$F11" LOG="$WORK/$t.log" \
           ./mgmt/harness/notify-errors-guest-test.sh >>"$WORK/$t.out" 2>&1
         rc=$? ;;
       crop-before-map)
         # Rides the guest the notify test just left installed with the release.
         VM=win11-nfy LOG="$WORK/$t.log" ./mgmt/harness/crop-before-map.sh >>"$WORK/$t.out" 2>&1
         rc=$? ;;
+      template-update)
+        # THE UPDATER ON THE ONE CLASS IT SERVES. The proxied updater runs on TemplateVMs only, and until 2026-10-02 no release had
+        # ever run an update pass on one - every update run was on StandaloneVM subjects (phase=skipped-standalone), which is how
+        # GWeck's first-contact failure shipped in every release from 4.3.30 on. Owner: "the point of updater test is that it is
+        # templateVM!" The subject is upgraded over the reporter's sealed German 25H2 TemplateVM golden and env-asserted as his.
+        VM=win11de-tup PKG="$SETUP" FAMILY=win11de REPORTER=gweck LOG="$WORK/$t.log" OUT="$WORK/$t.d" \
+          ./mgmt/harness/template-update-test.sh >>"$WORK/$t.out" 2>&1
+        rc=$? ;;
+      *)
+        # A listed test with no arm would otherwise inherit rc from the PREVIOUS test - a stale PASS (tools/check-cell-coverage.sh
+        # also refuses such a list at commit time).
+        say "no runner arm for feature test '$t' - tools/release-feature-tests.txt names it"; rc=2 ;;
     esac
     if [ $rc -eq 0 ]; then say "PASS  $t"; else say "FAIL  $t (rc=$rc, see $WORK/$t.log)"; MRC=1; fi
+    # A FEATURE TEST IS PART OF THE RECORDED VERDICT. record-acceptance.sh derives the record from $CAMP/*.out only, so the
+    # feature tests used to be invisible to it (rz30 recorded CLEAN with both never run). Each now leaves a cell-group in the
+    # campaign dir with matrix.sh's footer; tools/acceptance-record-check.py requires feature-<test> among the recorded cells.
+    { echo "[$(date +%T)]   cells: feature-$t"
+      if [ $rc -eq 0 ]; then echo "=== MATRIX: 1 passed, 0 failed ==="; else echo "=== MATRIX: 0 passed, 1 failed ==="; fi
+    } > "$CAMP/feature-$t.out"
   done
 else
   say "feature tests SKIPPED by --skip-features (say so in any report: this is not a full run)"
