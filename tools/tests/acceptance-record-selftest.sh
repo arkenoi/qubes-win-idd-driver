@@ -52,12 +52,37 @@ case_run(){ # $1 name $2 first feature $3 the other features $4 expected (publis
     if [ "$rc" != 0 ] && printf '%s' "$out" | grep -q -E "$5"; then ok "$1: refused ($out)"; else bad "$1: rc=$rc out='$out' (expected a refusal matching /$5/)"; fi
   fi
 }
+rcase_run(){ # $1 name $2 cells the re-run covers $3 failures in the re-run's footer $4 an extra FAIL line in the main group ("" none) $5 publish|refuse $6 reason-regex [$7 noreason]
+  local d="$T/$1" r="$T/$1-rerun" iso="$T/$1.iso" sha rc out reason=(--rerun-reason "test: the cells re-run")
+  [ "${7:-}" = noreason ] && reason=()
+  camp "$d" pass pass
+  { echo "[12:00:00]   cells: $MATRIX_CELLS"; echo "[12:30:00] FAIL  WIN10-clean: prime-run hit its deadline"
+    echo "[12:31:00] FAIL  WIN10-reinstall: FAIL - qrexec was DEAD on a running guest at unpark time (QREXECDEAD)"
+    [ -n "$4" ] && echo "[12:32:00] $4"
+    echo "=== MATRIX: 66 passed, 2 failed ==="; } > "$d/full.out"
+  mkdir -p "$r"; { echo "[13:00:00]   cells: $2"; echo "=== MATRIX: 30 passed, $3 failed ==="; } > "$r/full.out"
+  printf 'iso-%s' "$1" > "$iso"; sha=$(sha256sum "$iso" | cut -d' ' -f1)
+  bash tools/record-acceptance.sh --iso "$iso" --campaign "$d" --release "$VER" --rerun "$r" "${reason[@]}" > "$T/$1.rec" 2>&1
+  out=$(python3 tools/acceptance-record-check.py "$ACCEPT_RECORD_DIR/$sha.json" "$sha" "$VER" 2>&1); rc=$?
+  if [ "$5" = publish ]; then
+    if [ "$rc" = 0 ] && python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if len(d.get('superseded_failures',[]))==2 and d.get('rerun_reason') else 1)" "$ACCEPT_RECORD_DIR/$sha.json"
+    then ok "$1: publishable, the record lists both superseded failures and the reason"; else bad "$1: rc=$rc out='$out' (expected publishable with 2 superseded failures)"; fi
+  else
+    if [ "$rc" != 0 ] && printf '%s' "$out" | grep -q -E "$6"; then ok "$1: refused ($out)"; else bad "$1: rc=$rc out='$out' (expected a refusal matching /$6/)"; fi
+  fi
+}
 run_cases(){
   case_run all-pass        pass pass publish ''
   case_run first-failed    fail pass refuse  'verdict is .FAILED.|cell-group\(s\) had failures'
   case_run others-failed   pass fail refuse  'verdict is .FAILED.|cell-group\(s\) had failures'
   case_run features-skipped none none refuse "PARTIAL - these did not run: $ALL_SORTED"
   case_run others-skipped  pass none refuse  "PARTIAL - these did not run: $REST_SORTED"
+  # RE-RUNS OF FAILED CELLS (2026-10-03): a failed group is accepted only when every FAIL line names a cell that a clean re-run covers
+  rcase_run rerun-supersedes   "win10-clean win10-reinstall" 0 ""                         publish ''
+  rcase_run rerun-misses-cell  "win10-clean"                 0 ""                         refuse  'verdict is .FAILED.|cell-group\(s\) had failures'
+  rcase_run rerun-itself-fails "win10-clean win10-reinstall" 1 ""                         refuse  'verdict is .FAILED.|cell-group\(s\) had failures'
+  rcase_run unnamed-fail       "win10-clean win10-reinstall" 0 "FAIL  something went wrong" refuse  'verdict is .FAILED.|cell-group\(s\) had failures'
+  rcase_run rerun-no-reason    "win10-clean win10-reinstall" 0 ""                         refuse  'No such file|not found|no record|cannot|Errno' noreason
   # the record itself is keyed by the ISO and refuses a different one
   out=$(python3 tools/acceptance-record-check.py "$(ls "$ACCEPT_RECORD_DIR"/*.json | head -1)" deadbeef "$VER" 2>&1); rc=$?
   [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'different ISO' && ok "a record for another ISO is refused" || bad "other-ISO: rc=$rc $out"
@@ -70,7 +95,11 @@ run_cases; clean=$?
 echo "== ACCEPT_CHECK_DEFECT=1 (the old six-cell set - skipped feature tests must slip through, so this leg must FAIL)"
 dout=$(fails=0; export ACCEPT_CHECK_DEFECT=1; run_cases); drc=$?
 printf '%s\n' "$dout" | grep -E '^FAIL|cases failed'
-if [ "$clean" = 0 ] && [ "$drc" != 0 ] && printf '%s\n' "$dout" | grep -q '^FAIL  features-skipped:'; then
-  echo "PASS  clean leg passes, the defect knob lets skipped feature tests through and the test catches it"; exit 0
+echo "== RERUN_COVER_DEFECT=1 (a failed cell no re-run covers is accepted - this leg must FAIL on rerun-misses-cell)"
+rout=$(fails=0; export RERUN_COVER_DEFECT=1; run_cases); rrc=$?
+printf '%s\n' "$rout" | grep -E '^FAIL|cases failed'
+if [ "$clean" = 0 ] && [ "$drc" != 0 ] && printf '%s\n' "$dout" | grep -q '^FAIL  features-skipped:' \
+   && [ "$rrc" != 0 ] && printf '%s\n' "$rout" | grep -q '^FAIL  rerun-misses-cell:'; then
+  echo "PASS  clean leg passes; each defect knob lets its case through and the test catches it"; exit 0
 fi
 echo "FAIL  clean=$clean defect_rc=$drc"; exit 1
