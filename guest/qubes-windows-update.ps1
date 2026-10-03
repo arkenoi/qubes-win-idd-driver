@@ -1509,8 +1509,12 @@ function Install-SelfContained($kb,$urls){
       if    ($name -match 'securityhealthsetup') { $probe = 'security-platform' }
       elseif($name -match 'kb890830|mrt')        { $probe = 'mrt-version' }
       elseif($name -match 'mpam|mpas|nis_full')  { $probe = 'defender-signature' }
-      $sigBefore=''; $mrtBefore=''; $shBefore=''
+      elseif($name -match 'updateplatform')      { $probe = 'defender-platform' }   # KB4052623, the antimalware platform
+      $sigBefore=''; $mrtBefore=''; $shBefore=''; $platBefore=''
       try{ $sigBefore=(Get-MpComputerStatus).AntivirusSignatureVersion }catch{}
+      try{ $platBefore=[string](Get-MpComputerStatus).AMProductVersion }catch{}
+      $platDirsBefore = @()
+      if($probe -eq 'defender-platform'){ try{ $platDirsBefore = @(Get-ChildItem -LiteralPath 'C:\ProgramData\Microsoft\Windows Defender\Platform' -Directory -EA Stop | ForEach-Object { $_.Name }) }catch{} }
       try{ $mrtBefore=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\RemovalTools\MRT' -Name Version -EA SilentlyContinue).Version }catch{}
       # The file calls itself "Windows Security app UNDOCKED setup": what it updates is the
       # SecHealthUI APPX PACKAGE, not SecurityHealthService.exe in System32. Probing only the
@@ -1551,6 +1555,64 @@ function Install-SelfContained($kb,$urls){
       # Gated to the ONE probe whose effect we can measure. A fallback whose result cannot be
       # verified must not fire silently (fallbacks are anomalies: they are logged loudly).
       $alreadyCurrent = $false
+# ---- WU-DEFENDER-PLATFORM-BEGIN   (tools/tests/wu-defplatform-test.ps1 runs this region)
+      # THE DEFENDER ANTIMALWARE PLATFORM (KB4052623, updateplatform.amd64fre_*.exe) was counted from its exit code alone - "probe=none
+      # (ok from rc only)" - and the exclusion audit, rightly, would not accept dom0's silence about an item nothing had verified: it
+      # failed the rz35 release gate's template-update test on exactly this row (2026-10-03; Jev: product effect probe 0.92). The
+      # effect IS measurable: the installer stages the new platform under ...\Windows Defender\Platform\<version>*, and Defender reports
+      # the platform it runs as AMProductVersion (which may only move once its service restarts - so the staged folder counts too).
+      # The offered version is the dotted quad in the offer's own title, as for the signatures below (language-independent).
+      # BEHIND = the installer exited 0, nothing moved, nothing new was staged and the platform is still below the offered version: a
+      # FAILED install, decided in WU-EXE-EFFECT. Never 'informational' - that reason says the offered version cannot be established,
+      # which here it can (ADR-updater section 3: the negative of a probe that ran is a result, not a missing one).
+      $platBehind = $false
+      if($probe -eq 'defender-platform'){
+        $platOffered = $null
+        try {
+          $platOff = @($script:St.available | Where-Object { $_.kb -eq $kb } | Select-Object -First 1)
+          if($platOff -and $platOff[0].title -match '(\d+\.\d+\.\d+\.\d+)'){ $platOffered = $Matches[1] }
+        } catch {}
+        $platAfter=''; try{ $platAfter=[string](Get-MpComputerStatus).AMProductVersion }catch{}
+        # STAGED = a folder for the offered version that was NOT there before this installer ran. A folder that already existed is the
+        # platform already in place (handled as already-current below), never an effect of this run.
+        $platStaged = $false
+        if($platOffered){
+          try { $platStaged = @(Get-ChildItem -LiteralPath 'C:\ProgramData\Microsoft\Windows Defender\Platform' -Directory -EA Stop |
+                                Where-Object { $_.Name -like "$platOffered*" -and $platDirsBefore -notcontains $_.Name }).Count -gt 0 } catch {}
+        }
+        if(-not $platBefore -and -not $platAfter -and -not $platStaged -and -not $platDirsBefore.Count){ $probeRan = $false }   # nothing readable: unknown
+        else {
+          if(($platAfter -and $platBefore -and $platAfter -ne $platBefore) -or $platStaged){ $eff = $true }   # GUARD:defplatform
+          if($eff){ Log ("    defender platform $platBefore -> $platAfter" + $(if($platStaged){ " (the offered $platOffered is staged on disk)" } else { '' })) }
+          elseif($p.ExitCode -eq 0 -and $platOffered -and $platAfter){
+            try {
+              if([version]$platAfter -ge [version]$platOffered){
+                $alreadyCurrent = $true
+                Log ("    defender platform $platAfter is already at or past the offered $platOffered - nothing to do")
+              } else {
+                # PENDING, not behind: the offered version's folder was already on disk before this installer ran AND was created in
+                # THIS boot - an earlier pass of this boot staged it (and verified that) and the service has not switched yet. A folder
+                # older than this boot that the service still does not run is a switch that never happened: a failed install.
+                $platPending = $null
+                try {
+                  $bootAt = (Get-CimInstance Win32_OperatingSystem -EA Stop).LastBootUpTime
+                  $platPending = @(Get-ChildItem -LiteralPath 'C:\ProgramData\Microsoft\Windows Defender\Platform' -Directory -EA Stop |
+                                   Where-Object { $_.Name -like "$platOffered*" -and $_.CreationTime -ge $bootAt } | ForEach-Object { $_.Name }) |
+                                   Select-Object -First 1
+                } catch {}
+                if($platPending){
+                  $eff = $true   # GUARD:platpending
+                  Log ("    defender platform ${platAfter}: the offered $platOffered is staged on disk since this boot ($platPending) and the service has not switched yet")
+                } else {
+                  $platBehind = $true   # GUARD:platbehind
+                  Log ("    defender platform $platAfter is BEHIND the offered $platOffered, nothing moved and nothing was staged")
+                }
+              }
+            } catch { Log ("    could not compare platform versions ('$platAfter' vs '$platOffered')") }
+          }
+        }
+      }
+# ---- WU-DEFENDER-PLATFORM-END
       # DEFENDER SIGNATURES: the offer DOES state the version it carries, in its own title as
       # "(Version 1.459.317.0)", and Get-MpComputerStatus states the installed one. Comparing the
       # two turns "the probe cannot establish the offered version" - which was true, and which made
@@ -1660,6 +1722,10 @@ function Install-SelfContained($kb,$urls){
           } elseif($probe -eq 'security-platform'){
             $ok=$false
             $why='installer exited 0 but the probe measured no change - this update did NOT install'
+            Log ("  $name : exe rc=0 $detail -> FAILED ($why)")
+          } elseif($probe -eq 'defender-platform' -and $platBehind){
+            $ok=$false
+            $why='installer exited 0 but the Defender platform did not move, nothing new was staged, and it is still below the version the offer carries - this update did NOT install'
             Log ("  $name : exe rc=0 $detail -> FAILED ($why)")
           } else {
             $sev='info'; $ok=$true
