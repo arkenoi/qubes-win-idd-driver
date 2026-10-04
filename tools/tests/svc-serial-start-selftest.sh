@@ -81,6 +81,7 @@ leg regionearly   'shipped: QrexecAgent is released only after the last device-w
 # the skip marks the hold released: the static one-set/one-clear check, the skip's own "not marked released" assertion and the refused power-off all change
 leg releasetwice  'shipped: the hold is set in one place (GUARD:holdqrexec) and cleared in one (Start-HeldQrexecAgent)' '^FAIL (shipped:|poweroff:|release: on the -Auto)'
 leg noqrexecflag  'shipped: the stage-2 ok= block names svc_serial_start_failed, svc_qrexec_start_failed and svc_msi_started' '^FAIL shipped:'
+leg deployinhold  'shipped: the Windows Update agent deploy runs after the QREXEC-RELEASE site'                     '^FAIL shipped:'
 # every exit path that does not power off releases the hold before its RESULT; the RESULT writer refuses a silent held state
 leg failrelease   'failpath: that Fail also starts the QrexecAgent the serialized start held'                           '^FAIL failpath:'
 leg catchrelease  'maincatch: an unexpected exception during the device work starts the held QrexecAgent'              '^FAIL maincatch:'

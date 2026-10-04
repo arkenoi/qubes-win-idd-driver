@@ -91,6 +91,8 @@ inbox_disk_rearm|"not shipped"
 app_hwaccel|"skipped"
 app_hwaccel|"not in payload"
 updater_agent|"skipped"
+updater_agent|"not in payload"
+updater_agent_failed|false
 bind_dirs|"not-in-payload"
 qrexec_bins|"not-in-payload"
 pvnic_prime|"not in payload"
@@ -194,6 +196,9 @@ quiet_desktop_guard|"rc=1"
 quiet_desktop_guard|"error: x"
 updater_agent|"incomplete: returned without the completion line"
 updater_agent|"error: x"
+updater_agent|"error: QWTUPDMUTEXHELD: Global\\QubesWindowsUpdate is held by a running updater pass (last status record: 'full', phase 'install')"
+updater_agent|"error: QWTUPDSCANWAITEXPIRED: the running scan still held Global\\QubesWindowsUpdate after 1380s"
+updater_agent_failed|true
 etwproxy_account|"error: x"
 service_recovery|{"QdbDaemon":"armed","QrexecAgent":"failed: sc failure=1 failureflag=0"}
 service_recovery|{"QdbDaemon":"armed","QrexecAgent":"armed","QubesGuiWatchdog":"failed: sc failure=1060 failureflag=1060"}

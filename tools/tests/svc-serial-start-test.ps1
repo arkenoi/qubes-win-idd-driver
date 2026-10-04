@@ -64,6 +64,7 @@
       regionearly       the whole QREXEC-RELEASE region moves to right after the serialized start (in-memory copy)
       releasetwice      the power-off skip also marks the hold released, so a refused power-off starts nothing (in-memory copy)
       noqrexecflag      the ok= block no longer grades svc_qrexec_start_failed (in-memory copy)
+      deployinhold      the Windows Update agent deploy moves back inside the qrexec hold, before the release (in-memory copy)
       failrelease       a Fail after msiexec writes the RESULT with QrexecAgent still held
       catchrelease      the main catch writes the RESULT with QrexecAgent still held
       poweroffrefused   a refused power-off writes its second RESULT with QrexecAgent still held
@@ -133,6 +134,20 @@ switch ($Defect) {
         for ($i = 0; $i -lt $instLines.Count; $i++) {
             $patched.Add($instLines[$i])
             if ($i -eq $skipIdx[0]) { $patched.Add('    $script:QrexecAgentReleased = $true   # DEFECT (releasetwice): the skip marks the hold released') }
+        }
+        $instLines = @($patched)
+    }
+    'deployinhold' {
+        # the UPDATER-DEPLOY region (with its header comment) moves back to just before the QREXEC-RELEASE region - inside the hold
+        $ub = IdxRx '^\s*# --- Windows Update agent \(default ON'; $ue = @(0..($instLines.Count - 1) | Where-Object { $instLines[$_].Trim() -eq '# ---- UPDATER-DEPLOY-END' })
+        $rb = @(0..($instLines.Count - 1) | Where-Object { $instLines[$_].Trim() -like '# ---- QREXEC-RELEASE-BEGIN*' })
+        Must-One $ub 'Windows Update agent header'; Must-One $ue 'UPDATER-DEPLOY-END'; Must-One $rb 'QREXEC-RELEASE-BEGIN'
+        $region = @($instLines[$ub[0]..$ue[0]])
+        $patched = [System.Collections.Generic.List[string]]::new()
+        for ($i = 0; $i -lt $instLines.Count; $i++) {
+            if ($i -ge $ub[0] -and $i -le $ue[0]) { continue }
+            if ($i -eq $rb[0]) { foreach ($l in $region) { $patched.Add($l) } }
+            $patched.Add($instLines[$i])
         }
         $instLines = @($patched)
     }
@@ -231,7 +246,7 @@ $postEnd  = @(0..($instLines.Count - 1) | Where-Object { $instLines[$_].Trim() -
 $stage2At = (IdxRx '^function Invoke-Stage2')[0]
 $emit0    = @((IdxRx '^\s*Emit-Result 0\s*$') | Where-Object { $_ -gt $stage2At })[0]
 $deviceAnchors = @('pnputil.exe /add-driver $pvInf /install', 'pnputil.exe /add-driver $consInf /install', '& $devcon install $inf[0].FullName $iddHwId',
-                   'Disable-PnpDevice -InstanceId $vgaDev.InstanceId', '$ud = & $deployUpd -SetupRoot $Root', '$pp = & $deployPrime',
+                   'Disable-PnpDevice -InstanceId $vgaDev.InstanceId', '$pp = & $deployPrime',
                    'reg add "HKLM\SYSTEM\CurrentControlSet\Services\XEN\Unplug" /v NICS', 'schtasks /create /tn QubesNetworkReapply',
                    "Disable-XenbusMonitor -Why 'final act: shipping state'", '/v PromptOnSecureDesktop /t REG_DWORD /d 0')
 $afterAnchors  = @('$errFlags = @()', "Start-Service -Name 'QubesGuiWatchdog' -ErrorAction Stop", 'Emit-ResultThenPowerOff 0')
@@ -239,8 +254,15 @@ $misplaced = @()
 foreach ($a in $deviceAnchors) { $ix = Idx $a; if ($ix.Count -ne 1 -or $ix[0] -le $postEnd -or $ix[0] -ge $relBegin) { $misplaced += "device[$a]=$($ix -join ',')" } }
 foreach ($a in $afterAnchors)  { $ix = Idx $a; if ($ix.Count -ne 1 -or $ix[0] -le $relEnd -or $ix[0] -ge $emit0) { $misplaced += "after[$a]=$($ix -join ',')" } }
 $fnBetween = @((IdxRx '^function ') | Where-Object { $_ -gt $stage2At -and $_ -lt $emit0 })
-Check 'shipped: QrexecAgent is released only after the last device-work step of stage 2 (xenvif, xencons, the IDD device and the VGA disable, the updater agent, the PV NIC latch, the netvm task, the shipping state, the UAC policy) and before the ok= grading, the watchdog restore and the RESULT' `
+Check 'shipped: QrexecAgent is released only after the last device-work step of stage 2 (xenvif, xencons, the IDD device and the VGA disable, the PV NIC latch, the netvm task, the shipping state, the UAC policy) and before the ok= grading, the watchdog restore and the RESULT' `
       ($null -ne $relBegin -and $null -ne $relEnd -and $null -ne $emit0 -and $postEnd -lt $relBegin -and $relBegin -lt $relEnd -and $relEnd -lt $emit0 -and $stage2At -lt $relBegin -and $fnBetween.Count -eq 0 -and $misplaced.Count -eq 0) "rel=$relBegin..$relEnd postEnd=$postEnd emit0=$emit0 fnBetween=$($fnBetween -join ',') misplaced=[$($misplaced -join '; ')]"
+# THE UPDATER DEPLOY IS NOT DEVICE WORK (2026-10-04): it runs AFTER the release - a deploy that waits for the previous updater's
+# running boot scan must wait with qrexec up (the scan reaches dom0's update proxy over qrexec) - and BEFORE the ok= grading,
+# which folds its updater_agent_failed flag.
+$udIx = Idx '$ud = & $deployUpd -SetupRoot $Root'
+$okIx = Idx '$errFlags = @()'
+Check 'shipped: the Windows Update agent deploy runs after the QREXEC-RELEASE site and before the ok= grading that folds updater_agent_failed' `
+      ($udIx.Count -eq 1 -and $okIx.Count -eq 1 -and $null -ne $relEnd -and $udIx[0] -gt $relEnd -and $udIx[0] -lt $okIx[0]) "deploy=$($udIx -join ',') relEnd=$relEnd ok=$($okIx -join ',')"
 $sfLine = (IdxRx '# GUARD:serialfirst$')[0]
 $midCode = @()
 if ($null -ne $sfLine -and $null -ne $relBegin -and $sfLine -lt $relBegin) { $midCode = @($instLines[($sfLine + 1)..($relBegin - 1)] | Where-Object { $_ -notmatch '^\s*#' } | ForEach-Object { ($_ -split '\s#')[0] }) }
@@ -259,7 +281,7 @@ function Set-GuardLine([string[]]$region, [string]$guard, [string]$replacement) 
 }
 switch ($Defect) {
     '' { }
-    { $_ -in 'releaseearly', 'regionearly', 'releasetwice', 'noqrexecflag' } { }   # file-level knobs, applied to the in-memory copy above
+    { $_ -in 'releaseearly', 'regionearly', 'releasetwice', 'noqrexecflag', 'deployinhold' } { }   # file-level knobs, applied to the in-memory copy above
     'msicontract'   { $R['serial']  = Set-GuardLine $R['serial']  'msicontract'   "    Write-Log `$msg 'WARN'   # DEFECT: the un-paced MSI is run anyway" }
     'noviolation'   { $R['serial']  = Set-GuardLine $R['serial']  'noviolation'   '    if ($false) {   # DEFECT: an MSI-started service is never reported' }
     'startwatchdog' { $R['serial']  = Set-GuardLine $R['serial']  'startwatchdog' '            Start-Service -Name $svc -ErrorAction SilentlyContinue   # DEFECT: the watchdog is started as the MSI did (stopped seconds later by the quiesce)' }

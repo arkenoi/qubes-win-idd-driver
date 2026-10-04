@@ -293,3 +293,46 @@ The test judges the count of those reports; no special machinery is built for th
 process found by name is any process with that name. Killing it is a decision about something we did not start and cannot
 identify, and adopting it hands our traffic to it. This hazard was listed by the 2026-10-02 process audit and left in place,
 which is why it is a rule here now.
+
+## 13. The installer waits for a running scan, and a refused updater deploy is never quiet
+
+Decided 2026-10-04 (Jev: F-a + F-b over a boot-time retry, F-d), after the field report of a template upgraded to 4.3.33 whose
+dom0 showed no updates while Windows Update listed one, and its reproduction on the reporter's environment (the measurement is in
+`findings/updates.md`). The installer reaches the updater deploy a few minutes after boot; the previous updater's boot scan
+(`QubesWindowsUpdateScan`, boot+2 min, limit PT20M) holds the mutex then, and the deploy refused.
+
+- **A running SCAN is waited for, on the mutex itself.** `guest/install-updater-agent.ps1` identifies the holder before it waits:
+  the status record says `scan` AND either its recorded owner is a live process (owner_pid + start time, recorded since 4.3.33) or
+  the registered `QubesWindowsUpdateScan` task reports State Running while no install/download task does (the only witness for a
+  4.3.29 or 4.3.32 record, which carries no owner). The wait is `WaitOne` with a deadline - a wait on the observed release, never
+  a poll, never a fixed sleep - bounded by that task's own `ExecutionTimeLimit` as registered (our default when unreadable or
+  unlimited), less the time the scan has already run, plus a grace for the scheduler's stop-then-terminate. It is taken in 30 s
+  slices only so that a line is logged while it lasts; the 2026-09-23 reason for removing every wait here was silence.
+- **Nothing else is waited for.** An install or download pass (PT2H, ends in a restart), a holder the record and the scheduler
+  cannot both vouch for, and a scan still holding past its bound each REFUSE with a named reason and the remedy
+  (`QWTUPDMUTEXHELD`, `QWTUPDSCANWAITEXPIRED`). There is no proceed-anyway branch. A mutex abandoned after a scan is taken and
+  the deploy proceeds (the D3 rule for a cut-off scan: a scan installs nothing); abandoned after anything else, it is given back
+  and the deploy refuses.
+- **A refused or failed deploy is an ERROR of the install, not a warning inside it.** The installer logs it as ERROR with the
+  remedy, sets `updater_agent_failed` (error-class in `mgmt/harness/result-flags.py`; folded into `ok:false`), prints the
+  verdict in plain words as the last lines before the RESULT - "Windows Update agent was NOT installed: ... What to do: ..." -
+  streams every line of the deploy into its log as it arrives (a throw used to lose them), and notifies dom0 through the error
+  route (`installer.updater-not-installed`) once QrexecAgent is running, at the end of the stage; on `-Auto -RebootAtEnd` the
+  service is not started in that boot and no notification can leave before the power-off - the log says so, and the RESULT
+  carries it.
+- **The deploy runs AFTER the qrexec release, not inside the hold** (docs/ADR-boot.md 2). It touches no device or driver, so it
+  is not the device work the hold exists for; it only sat in that stretch. Inside the hold a waiting deploy would keep dom0 out
+  of the guest for as long as the scan holds on, and the scan it waits for reaches dom0's update proxy over qrexec
+  (qubes.UpdatesProxy): with the service held it had no network path to finish on. Jev: move 0.99 over deferring only the wait
+  or keeping it (the review of the first version named the wait inside the hold its top defect, 0.91). The offline order
+  assertion is `tools/tests/svc-serial-start-test.ps1` (knob `deployinhold`).
+- **The remedy is the existing `install.cmd /updatesonly`**, after the running pass has finished or been ended. No boot-time
+  retry of the deploy is built: it would stage the setup payload on disk and report its outcome outside the RESULT the caller
+  already graded.
+
+**Why:** a scan is the one holder that installs nothing and ends on its own; refusing it made the ordinary sequence - boot the
+template, run the installer - keep the previous updater. A deploy that fails must change the install's outcome, because the
+updater is a deliverable: the harness graded `updater_agent=error:` red already, but the writer said `ok:true` and the user
+saw INSTALL COMPLETE. The owner's rules bind every choice here: no timeout or fixed sleep as a fix (a bounded wait on an
+observed event with a loud failure exit), fallbacks are anomalies and are logged loudly, no process is killed or adopted by
+name, and the updater is not fixed while it conceals.
