@@ -83,20 +83,77 @@ $PassTaskLimit = 'PT2H'    # QubesWindowsUpdateRun and QubesWindowsUpdateDownloa
 # At its limit a task is first asked to stop and only then terminated (AllowHardTerminate=true) -
 # minutes, not instantaneous. The grace covers that; it is not a second deadline.
 
+# ---- DEPLOY-HELPERS-BEGIN   (tools/tests/wu-deploy-loud-test.ps1 dot-sources this region, then replaces Get-UpdTaskState with a fake)
+# The registered tasks AS THEY ARE on this guest - on an upgrade, the previous install's. State 'Running' is the scheduler's own
+# word for an instance in flight (an enum, never the localized text schtasks prints); the limit is the one THAT task runs under;
+# LastRunTime is when the current instance started. 'unreadable' is not 'Ready': a holder whose task state cannot be read is
+# not identified, and the caller refuses rather than guesses.
+function Get-UpdTaskState([string]$Name) {
+    $r = @{ state = 'unreadable'; limit = ''; lastRun = $null }
+    try {
+        $t = Get-ScheduledTask -TaskName $Name -ErrorAction Stop
+        $r.state = "$($t.State)"
+        try { $r.limit = "$($t.Settings.ExecutionTimeLimit)" } catch { }
+        try {
+            $i = Get-ScheduledTaskInfo -TaskName $Name -ErrorAction Stop
+            if ($i -and ($i.LastRunTime -is [datetime]) -and $i.LastRunTime.Year -gt 2000) { $r.lastRun = $i.LastRunTime }
+        } catch { }
+    } catch {
+        if ("$($_.CategoryInfo.Category)" -eq 'ObjectNotFound' -or "$($_.Exception.Message)" -match 'No MSFT_ScheduledTask') { $r.state = 'absent' }
+    }
+    return $r
+}
+# ISO-8601 duration -> whole seconds. Empty, unparseable or PT0S (Task Scheduler's "no limit") -> the default, so a wait is always
+# bounded by SOMETHING we can name; the default may itself be an ISO duration.
+function Get-UpdSeconds([string]$Iso, $Default) {
+    $d = $Default
+    if ($d -is [string]) { try { $d = [int][Xml.XmlConvert]::ToTimeSpan($d).TotalSeconds } catch { $d = 0 } }
+    if (-not $Iso) { return [int]$d }
+    $s = 0
+    try { $s = [int][Xml.XmlConvert]::ToTimeSpan($Iso).TotalSeconds } catch { return [int]$d }
+    if ($s -le 0) { return [int]$d }
+    return $s
+}
+# TRUE when the status record was written by the scan instance that is RUNNING now: its ts (local time, second resolution, written
+# by every updater's Save within a second or two of taking the mutex) is not older than that instance's start, the task's
+# LastRunTime (same clock). A 'scan' record left by an EARLIER scan says nothing about who holds the mutex now - e.g. a pass
+# started by dom0 or by hand that has not written its own record yet, while a scan instance waits for the mutex.
+function Test-UpdRecordFresh($Record, $Since) {
+    if (-not $Record -or -not $Since -or -not ($Record.PSObject.Properties.Name -contains 'ts')) { return $false }
+    $t = [datetime]::MinValue
+    if ($Record.ts -is [datetime]) { $t = $Record.ts }   # pwsh 7 (the offline suites) reads the ISO string back as a DateTime
+    elseif (-not [datetime]::TryParseExact("$($Record.ts)", 'yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture,
+                                            [Globalization.DateTimeStyles]::None, [ref]$t)) { return $false }
+    return ($t -ge $Since.AddSeconds(-1))   # both sides at second resolution
+}
+# The wait for a running scan (DEPLOY-MUTEX below) is ONE kernel wait on the mutex, taken in slices of this length only so that a
+# line is logged while it lasts: the 2026-09-23 reason for removing every wait here was a silent one, graded STALLED at 300 s by
+# the harness and indistinguishable from a wedged guest by a human. A slice ends the moment the holder releases.
+$UpdWaitSliceMs   = 30000
+# Added to the scan task's own limit: at that limit the scheduler asks the task to stop and only then terminates it
+# (AllowHardTerminate) - minutes, not instantaneous (the note above). Our margin for that, not a second deadline.
+$UpdScanWaitGrace = 'PT3M'
+# ---- DEPLOY-HELPERS-END
 
-# NO UNDEFINED PATH AROUND THIS MUTEX (2026-09-23). Three changes, each closing one:
-#  1. NO WAIT. This used to block for the holder's own ExecutionTimeLimit plus grace - PT2H for the
-#     run/download tasks - writing nothing meanwhile, so an install doing exactly the right thing
-#     was indistinguishable from a wedged guest (measured: an upgrade went silent after "deploying
-#     the Windows Update agent" and was graded STALLED at 300 s). Take the lock or refuse.
-#  2. ABANDONED REFUSES. It used to mean "it is ours now" and deploy on top of whatever the dead
-#     holder had been doing. It is also not the detector it appears to be: MEASURED 3/3 on
-#     win10-acc, killing a process that owns a named mutex does NOT raise AbandonedMutexException
-#     in the next waiter. It is a safety net, and it refuses.
-#  3. THE KILLED PASS is detected from the status file the PASS maintains - a non-terminal phase
-#     whose owner process is gone - checked before the mutex is touched. A pass that ends intending
-#     a reboot sets phase='done' first, so a planned servicing reboot is already terminal and needs
-#     nothing extra.
+# NO UNDEFINED PATH AROUND THIS MUTEX (2026-09-23; the wait for a running SCAN added 2026-10-04). Every path is one of these:
+#  1. A RUNNING SCAN IS WAITED FOR, on the mutex itself, bounded by the scan task's own ExecutionTimeLimit (DEPLOY-MUTEX below).
+#     The field report of 2026-10-04 (a German 25H2 template upgraded to 4.3.33 right after it booted): the previous updater's
+#     boot scan (QubesWindowsUpdateScan, boot+2 min, limit PT20M) held the mutex while this deploy ran; the deploy refused, the
+#     installer recorded that as one WARN line nobody reads, the install said INSTALL COMPLETE, and the guest kept its OLD
+#     updater - dom0 showed no updates while Windows Update listed one. A scan installs nothing and ends on its own; what it
+#     needs is the time its task already has. So: a WaitOne with a deadline - a wait on the observed release, never a poll, never
+#     a fixed sleep - that returns the moment the scan lets go, logged when it starts, while it lasts and when it ends.
+#  2. A RUNNING INSTALL OR DOWNLOAD PASS IS NOT WAITED FOR: it may run PT2H and ends in a restart. Refused loudly (QWTUPDMUTEXHELD),
+#     with the remedy; the installer records an ERROR, the RESULT is red (updater_agent_failed), dom0 is notified.
+#  3. THE BOUND EXPIRING IS A FAILURE (QWTUPDSCANWAITEXPIRED): the scheduler ends a scan at its limit, so a holder still there past
+#     it is not a scan doing its work. Refused loudly, same reporting. There is no "proceed anyway" branch.
+#  4. ABANDONED: the holder died with the mutex. Not the detector it looks like (MEASURED 3/3 on win10-acc: a killed owner raises
+#     nothing in a waiter that opens the mutex afterwards; it does wake one that already holds a handle, which the wait in 1 is).
+#     After a SCAN the deploy proceeds and says so - the updater's own rule for a cut-off scan (D3): a scan installs nothing, so
+#     nothing is unknown. After anything else it refuses: what that pass was doing is unknown.
+#  5. THE KILLED PASS is detected from the status file the PASS maintains - a non-terminal phase whose owner process is gone -
+#     checked before the mutex is touched (DEPLOY-PREVPASS). A pass that ends intending a reboot sets phase='done' first, so a
+#     planned servicing reboot is already terminal and needs nothing extra.
 # ---- DEPLOY-PREVPASS-BEGIN   (tools/tests/wu-deploy-prevpass-test.ps1 runs this region)
 $UpdaterStatusFile = 'C:\ProgramData\Qubes\update-status.json'
 $UpdTerminalPhases = @('done','error','skipped-unknown','skipped-standalone','skipped-appvm')
@@ -105,7 +162,8 @@ try { if (Test-Path -LiteralPath $UpdaterStatusFile) { $updPrev = Get-Content -L
 if ($updPrev -and $updPrev.phase -and ($UpdTerminalPhases -notcontains $updPrev.phase)) {
     $pPid = 0; $pStart = ''
     if ($updPrev.PSObject.Properties.Name -contains 'owner_pid')       { $pPid   = [int]$updPrev.owner_pid }
-    if ($updPrev.PSObject.Properties.Name -contains 'owner_pid_start') { $pStart = "$($updPrev.owner_pid_start)" }
+    # The guest's Windows PowerShell 5.1 reads the ISO owner_pid_start back as a string; pwsh 7 (the offline suites) as a DateTime.
+    if ($updPrev.PSObject.Properties.Name -contains 'owner_pid_start') { if ($updPrev.owner_pid_start -is [datetime]) { $pStart = $updPrev.owner_pid_start.ToString('s') } else { $pStart = "$($updPrev.owner_pid_start)" } }
     $alive = $false
     if ($pPid -gt 0) {
         $po = Get-Process -Id $pPid -ErrorAction SilentlyContinue
@@ -129,6 +187,9 @@ if ($updPrev -and $updPrev.phase -and ($UpdTerminalPhases -notcontains $updPrev.
         $lastKnown = [datetime]::TryParseExact($prevTs, 'yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture,
                                                [Globalization.DateTimeStyles]::None, [ref]$lastT)
         $what = "the last update pass ('$prevAction', last written $prevTs) stopped at phase '$($updPrev.phase)' and its process ($pPid) is gone"
+        # A 4.3.32 updater never recorded its owner (its status object was defined after the ownership write; owner_pid is 0 in every
+        # record it wrote), so "gone" is not known for one of its records - said so, and DEPLOY-MUTEX below asks the scheduler instead.
+        if ($pPid -le 0) { $what = "the last update pass ('$prevAction', last written $prevTs) stopped at phase '$($updPrev.phase)' and recorded no owner process (an updater before 4.3.33 never did), so whether it still runs is not known from this record" }
         if ($prevAction -eq 'scan') {   # GUARD:deployscan
             Log "$what - a scan only searches and installs nothing, so nothing is unknown; deploying (the updater's own rule)"
         } elseif ($bootT -and $lastKnown -and $lastT -lt $bootT) {   # GUARD:deployboot
@@ -146,27 +207,107 @@ if ($updPrev -and $updPrev.phase -and ($UpdTerminalPhases -notcontains $updPrev.
     }
 }
 # ---- DEPLOY-PREVPASS-END
+# ---- DEPLOY-MUTEX-BEGIN   (tools/tests/wu-deploy-loud-test.ps1 runs this region after DEPLOY-PREVPASS, against a second process that really holds the mutex)
 $updMutex = New-Object System.Threading.Mutex($false, 'Global\QubesWindowsUpdate')
 $haveUpdMutex = $false
+$updAbandoned = $false
 try {
-    $haveUpdMutex = $updMutex.WaitOne(0)   # NEVER a timed wait
+    $haveUpdMutex = $updMutex.WaitOne(0)   # take it, or find out who holds it
 } catch [System.Threading.AbandonedMutexException] {
-    # .NET hands us the mutex with the exception; give it back before refusing, or this process
-    # exits owning it and every later run inherits the abandonment.
-    try { $updMutex.ReleaseMutex() } catch { }
-    $msg = ("QWTUPDMUTEXABANDONED: a previous updater pass was terminated without releasing " +
-            "Global\QubesWindowsUpdate, so what it was doing is unknown; refusing to stop the relay or " +
-            "rewrite the updater tasks on top of it, nothing was changed.")
-    Log $msg
-    throw $msg
+    $haveUpdMutex = $true; $updAbandoned = $true   # .NET hands us the mutex WITH the exception: we own it now
+}
+$updPrevAction = ''; $updPrevPhase = ''
+if ($updPrev) { $updPrevAction = "$($updPrev.action)"; $updPrevPhase = "$($updPrev.phase)" }
+$updRemedy = 'Then run install.cmd /updatesonly from this install medium to install the Windows Update agent.'
+if ($updAbandoned) {
+    if ($updPrevAction -eq 'scan') {   # GUARD:abandonedscan
+        Log ("QWTUPDMUTEXABANDONED: a previous updater pass ended without releasing Global\QubesWindowsUpdate, and the last status record is a " +
+             "scan (phase '$updPrevPhase') - a scan only searches and installs nothing, so nothing is unknown; the mutex is ours now and the " +
+             "deploy proceeds (the updater's own rule for a cut-off scan)")
+    } else {
+        # Give it back before refusing, or this process exits owning it and every later run inherits the abandonment.
+        try { $updMutex.ReleaseMutex() } catch { }
+        $haveUpdMutex = $false
+        $msg = ("QWTUPDMUTEXABANDONED: a previous updater pass ('$updPrevAction', phase '$updPrevPhase') was terminated without releasing " +
+                "Global\QubesWindowsUpdate, so what it was doing is unknown; refusing to stop the relay or rewrite the updater tasks on top " +
+                "of it, nothing was changed. Read $UpdaterStatusFile and the agent log; restart this qube (Windows settles pending servicing " +
+                "during boot). $updRemedy")
+        Log $msg; throw $msg   # GUARD:abandonedfull
+    }
 }
 if (-not $haveUpdMutex) {
-    $msg = ("QWTUPDMUTEXHELD: Global\QubesWindowsUpdate is held by a running updater pass - refusing to " +
-            "stop the relay or rewrite the updater tasks under it, nothing was changed. Let the pass finish " +
-            "(schtasks /query /tn QubesWindowsUpdateRun /v) or end it (schtasks /end /tn <task>) and rerun.")
-    Log $msg
-    throw $msg
+    # WHO HOLDS IT. Two witnesses for "a running scan"; either suffices, and the status record must say 'scan' for both:
+    #   A. the record names a LIVE owner - owner_pid with a matching owner_pid_start is a running process (recorded since 4.3.33);
+    #   B. the registered QubesWindowsUpdateScan task is Running while neither QubesWindowsUpdateRun nor QubesWindowsUpdateDownload
+    #      is, AND the 'scan' record was written by that running instance (Test-UpdRecordFresh) - the only way to see a 4.3.29 or
+    #      4.3.32 scan, whose records carry no owner (see DEPLOY-PREVPASS).
+    # Anything else - an install/download pass, a record with another action or none, a dead recorded owner with no running scan
+    # task, an unreadable task state - is not a scan that will end on its own: refused, named, with the remedy.
+    $hPid = 0; $hStart = ''
+    if ($updPrev) {
+        if ($updPrev.PSObject.Properties.Name -contains 'owner_pid')       { $hPid = [int]$updPrev.owner_pid }
+        if ($updPrev.PSObject.Properties.Name -contains 'owner_pid_start') { if ($updPrev.owner_pid_start -is [datetime]) { $hStart = $updPrev.owner_pid_start.ToString('s') } else { $hStart = "$($updPrev.owner_pid_start)" } }
+    }
+    $hAlive = $false; $hSince = $null
+    if ($hPid -gt 0) {
+        $hp = Get-Process -Id $hPid -ErrorAction SilentlyContinue
+        if ($hp) { try { if (-not $hStart -or $hp.StartTime.ToString('s') -eq $hStart) { $hAlive = $true; $hSince = $hp.StartTime } } catch { $hAlive = $false } }
+    }
+    $scanTask = Get-UpdTaskState 'QubesWindowsUpdateScan'
+    $runTask  = Get-UpdTaskState 'QubesWindowsUpdateRun'
+    $dlTask   = Get-UpdTaskState 'QubesWindowsUpdateDownload'
+    $updFresh = Test-UpdRecordFresh $updPrev $scanTask.lastRun   # GUARD:freshrecord
+    $witness = ''
+    if ($updPrevAction -eq 'scan' -and $hAlive) {
+        $witness = "its owner process $hPid (started $($hSince.ToString('s'))) is running"
+    } elseif ($updPrevAction -eq 'scan' -and $updFresh -and $scanTask.state -eq 'Running' -and $runTask.state -ne 'Running' -and $dlTask.state -ne 'Running') {
+        $witness = "the QubesWindowsUpdateScan task is Running, no install/download task is, and the scan record was written by that running instance (it names no live owner, pid $hPid - an updater before 4.3.33 never recorded one)"
+        if ($scanTask.lastRun) { $hSince = $scanTask.lastRun }
+    }
+    if ($witness) {   # GUARD:scanwait
+        # Bounded by the scan task's limit AS REGISTERED (our own default when it is unreadable or unlimited), less the time the
+        # scan has already run, plus the grace for the scheduler's stop-then-terminate.
+        $limitS   = Get-UpdSeconds $scanTask.limit $ScanTaskLimit
+        $graceS   = Get-UpdSeconds $UpdScanWaitGrace 180
+        # Floor, never [int]: PowerShell's [int] cast ROUNDS (0.6 s -> 1), which would end the wait before its bound.
+        $elapsedS = 0; if ($hSince) { $elapsedS = [int][math]::Floor([math]::Max(0, ((Get-Date) - $hSince).TotalSeconds)) }
+        $boundS   = [int]([math]::Max(0, $limitS - $elapsedS) + $graceS)
+        Log ("QWTUPDSCANWAIT: Global\QubesWindowsUpdate is held by a running SCAN ($witness) - waiting for it to release the mutex, bounded " +
+             "by the scan task's own limit ('$($scanTask.limit)' -> ${limitS}s, ${elapsedS}s of it already run) plus ${graceS}s for the scheduler's " +
+             "stop-then-terminate: at most ${boundS}s")
+        $t0 = Get-Date
+        while (-not $haveUpdMutex) {
+            $leftMs = [int]($boundS * 1000 - ((Get-Date) - $t0).TotalMilliseconds)
+            if ($leftMs -le 0) { break }   # GUARD:waitbound
+            $sliceMs = [int][math]::Min($leftMs, $UpdWaitSliceMs)
+            try { $haveUpdMutex = $updMutex.WaitOne($sliceMs) }   # the kernel wait: returns the moment the scan releases
+            catch [System.Threading.AbandonedMutexException] {
+                $haveUpdMutex = $true
+                Log ("the scan was terminated without releasing the mutex while this deploy waited (abandoned after " +
+                     "$([math]::Floor(((Get-Date) - $t0).TotalSeconds))s) - a scan installs nothing, so nothing is unknown; the mutex is ours now")
+            }
+            if (-not $haveUpdMutex) { Log "still waiting for the scan to release the updater mutex: $([math]::Floor(((Get-Date) - $t0).TotalSeconds))s of at most ${boundS}s" }
+        }
+        if ($haveUpdMutex) {
+            Log "the scan released Global\QubesWindowsUpdate after $([math]::Floor(((Get-Date) - $t0).TotalSeconds))s - deploying"
+        } else {
+            $msg = ("QWTUPDSCANWAITEXPIRED: the running scan still held Global\QubesWindowsUpdate after ${boundS}s - past its own execution " +
+                    "time limit, so it is not a scan doing its work; refusing to stop the relay or rewrite the updater tasks under it, nothing " +
+                    "was changed. End it (schtasks /end /tn QubesWindowsUpdateScan) or let Task Scheduler end it. $updRemedy")
+            Log $msg; throw $msg
+        }
+    } else {
+        $who = "a running updater pass"
+        if ($updPrevAction) { $who = "a running updater pass (last status record: '$updPrevAction', phase '$updPrevPhase'" + $(if ($hAlive) { ", its owner process $hPid is running)" } else { ")" }) }
+        $tasks = "tasks: Scan=$($scanTask.state) Run=$($runTask.state) Download=$($dlTask.state)"
+        if ($updPrevAction -eq 'scan' -and -not $updFresh) { $tasks += "; the scan record (ts '$($updPrev.ts)') predates the Scan task's current run ('$(if ($scanTask.lastRun) { $scanTask.lastRun.ToString('s') } else { 'unknown' })')" }
+        $msg = ("QWTUPDMUTEXHELD: Global\QubesWindowsUpdate is held by $who - not a scan that ends on its own ($tasks), so it is not waited for " +
+                "(an install pass may run for $PassTaskLimit and ends in a restart); refusing to stop the relay or rewrite the updater tasks " +
+                "under it, nothing was changed. Let it finish (schtasks /query /tn QubesWindowsUpdateRun /v) or end it (schtasks /end /tn <task>). $updRemedy")
+        Log $msg; throw $msg   # GUARD:fullrefuse
+    }
 }
+# ---- DEPLOY-MUTEX-END
 # Every failure below throws. Without this the installer process (which runs us with `&`) would keep
 # the mutex until it exits - skipping every scan and stalling dom0-driven passes for that long.
 trap { if ($haveUpdMutex -and $updMutex) { try { $updMutex.ReleaseMutex() } catch { } }; break }

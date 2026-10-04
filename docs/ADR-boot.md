@@ -36,7 +36,7 @@ PACED arm, so it cannot grade the product change; Jev: stop it 0.81, run STOCK v
 **Decided:** in stage 2 of `packaging/setup/Install-QwtImproved.ps1`, right after msiexec, only QdbDaemon is started - observed
 RUNNING and READY (the local qubesdb answers /name), because the device work reads the qube class from the live qubesdb (the PV
 NIC priming latch). QrexecAgent is HELD (`svc_serial_start`: held-for-device-work) through every step that reconfigures a device
-or a driver - xenvif, xencons, the IddCx device and the emulated-VGA disable, the overlays, the updater agent, the PV NIC priming
+or a driver - xenvif, xencons, the IddCx device and the emulated-VGA disable, the overlays, the PV NIC priming
 latch, the netvm task, the shipping state, the UAC policy - and started, observed RUNNING, at the QREXEC-RELEASE site after the
 last of them (`Start-HeldQrexecAgent`; the RESULT records the site and the hold's length: `svc_qrexec_start`,
 `svc_qrexec_held_secs`). Every exit path after msiexec that does not power off starts it before its RESULT: Fail, the main catch, a
@@ -47,6 +47,12 @@ not reach RUNNING is `svc_qrexec_start_failed`; both red in `mgmt/harness/result
 an observed condition with a bounded failure detector, one observation routine for every start (`Start-QwtServiceObserved`). The
 offline suite `tools/tests/svc-serial-start-test.ps1` asserts the order on the shipped file and drives every path; each assertion
 has a knob that makes it fail (`tools/tests/svc-serial-start-selftest.sh`).
+
+**Amended 2026-10-04 (4.3.35):** the Windows Update agent deploy, which sat in this stretch in 4.3.34, runs right after the
+QREXEC-RELEASE site. It touches no device or driver (a csc compile, the relay process, three scheduled tasks), and since 4.3.35 it
+may wait for the previous updater's running boot scan - which reaches dom0's update proxy over qrexec, so inside the hold it had
+no network path to finish on while dom0 could not reach the guest at all (docs/ADR-updater.md 13; Jev: move 0.99). The order is
+asserted by the same offline suite (knob `deployinhold`).
 
 **Why:** the mechanism, verified in source: Xen 4.19's `p2m_remove_entry` requests a device-model mapcache invalidate for every
 page the guest removes from its physmap (XENMEM_decrease_reservation, unmapping a mapped grant), so the vCPU waits synchronously

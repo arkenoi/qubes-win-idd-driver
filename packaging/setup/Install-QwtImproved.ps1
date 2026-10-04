@@ -22,10 +22,11 @@
                READY (the device work reads the live qubesdb) while QrexecAgent stays HELD
                (Start-QwtServicesSerially, docs/ADR-boot.md 1), do the device work with no
                qrexec service open - xenvif/xencons, the IddCx display driver installed AND
-               ACTIVATED, the overlays, the updater agent, the PV NIC priming latch, the
-               shipping state - THEN start QrexecAgent, observed RUNNING (Start-HeldQrexecAgent,
-               docs/ADR-boot.md 2; on the -Auto -RebootAtEnd path not at all: the stage powers
-               off and the auto-start service comes up on the next boot), reboot
+               ACTIVATED, the overlays, the PV NIC priming latch, the shipping state - THEN
+               start QrexecAgent, observed RUNNING (Start-HeldQrexecAgent, docs/ADR-boot.md 2;
+               on the -Auto -RebootAtEnd path not at all: the stage powers off and the
+               auto-start service comes up on the next boot), deploy the Windows Update agent
+               (no device work; after the release), reboot
 
     The stage is DETECTED, not remembered: if testsigning is not active in the current
     boot we are in stage 1, otherwise stage 2. Re-running the script is safe.
@@ -202,6 +203,9 @@ if ($AutologonPasswordFromEnv) {
     $envPw = $null
 }
 $script:AutologonArmFailed = $null
+# A refused or failed Windows Update agent deploy (UPDATER-DEPLOY): the record Get-UpdaterDeployFailureRecord builds, read at
+# the end of stage 2 (UPDATER-DEPLOY-VERDICT) to say it in plain words and notify dom0. $null = deployed, skipped or not shipped.
+$script:UpdaterDeployFailure = $null
 # Binaries the leftover sweep moved aside for the MSI, and whether that MSI then completed.
 # A Fail between the two restores them - see Restore-SweptBinaries.
 $script:SweptAside = @()
@@ -227,6 +231,35 @@ function Write-Log {
     Write-Host $line
     try { Add-Content -LiteralPath $script:LogFile -Value $line -Encoding UTF8 } catch { }
 }
+
+# ---- UPDATER-DEPLOY-RECORD-BEGIN  (tools/tests/wu-deploy-loud-test.ps1 extracts this function by marker)
+# A refused or failed updater deploy, as the user and dom0 are told about it (UPDATER-DEPLOY and UPDATER-DEPLOY-VERDICT in
+# Invoke-Stage2). The deploy script's message starts with its code (QWTUPD...); the cause and the remedy are TEMPLATED per code -
+# the notification route refuses text read from the system (docs/DESIGN-error-notify.md 8), and the full message is in this log.
+function Get-UpdaterDeployFailureRecord {
+    param([Parameter(Mandatory)][string]$Message)
+    $code = 'DEPLOY-FAILED'
+    if ($Message -match '^(QWT[A-Z]+)') { $code = $Matches[1] }
+    # Short on purpose: header + line 1 + cause + the technical line must stay under the route's 600 bytes (measured 2026-10-04 by
+    # tools/tests/wu-deploy-loud-test.ps1 on the shipped route: the QWTUPDMUTEXHELD form is sent as 498 bytes in 4 lines).
+    $rerun = 'then run install.cmd /updatesonly from the install medium.'
+    switch ($code) {
+        'QWTUPDMUTEXHELD'       { $cause = 'an update pass of the previous updater was running when the installer reached the updater (QWTUPDMUTEXHELD)'
+                                  $remedy = "Let that pass finish or end it (schtasks /end /tn QubesWindowsUpdateRun), $rerun" }
+        'QWTUPDSCANWAITEXPIRED' { $cause = 'the previous updater''s update scan did not finish within its own time limit (QWTUPDSCANWAITEXPIRED)'
+                                  $remedy = "End that scan (schtasks /end /tn QubesWindowsUpdateScan), $rerun" }
+        'QWTUPDMUTEXABANDONED'  { $cause = 'a previous update pass was interrupted and what it was doing is unknown (QWTUPDMUTEXABANDONED)'
+                                  $remedy = "Restart this qube (Windows settles pending servicing during boot), $rerun" }
+        'QWTUPDSTATEUNKNOWN'    { $cause = 'a previous update pass was interrupted in this boot and what it was doing is unknown (QWTUPDSTATEUNKNOWN)'
+                                  $remedy = "Restart this qube (Windows settles pending servicing during boot), $rerun" }
+        'QWTRELAYBUSY'          { $cause = 'another process holds the updater''s relay port 127.0.0.1:8082 (QWTRELAYBUSY)'
+                                  $remedy = "Find out what listens on 127.0.0.1:8082 and stop it, $rerun" }
+        default                 { $cause = 'the updater deploy script failed; the reason is in C:\qwt-improved-install.log'
+                                  $remedy = "Read C:\qwt-improved-install.log for the reason and fix it, $rerun" }
+    }
+    return [ordered]@{ code = $code; reason = $Message; cause = $cause; remedy = $remedy }
+}
+# ---- UPDATER-DEPLOY-RECORD-END
 
 function Warn-DisplayBlackout {
     # THE INSTALLER IS ABOUT TO DELETE ITS OWN WINDOW.
@@ -4446,53 +4479,6 @@ function Invoke-Stage2 {
         }
     } else { $script:Result.detail.quiet_desktop = 'skipped' }
 
-    # --- Windows Update agent (default ON, /noupdates skips) ----------------------------
-    # Updates are dom0-owned: the guest reports availability via qubes.NotifyUpdates and
-    # installs ONLY when dom0 asks, exactly like a Linux qube. install-updater-agent.ps1 also
-    # makes dom0's stock `qubes-vm-update` (and the Qubes Update GUI) able to drive this qube,
-    # and turns Windows' own auto-update OFF. Deployed by DEFAULT: behind a switch it would
-    # never be there when the user clicks Update. Non-fatal, like the tweak above.
-    if ($NoUpdaterAgent) {
-        Write-Log 'Windows Update agent SKIPPED (/noupdates)'
-        $script:Result.detail.updater_agent = 'skipped'
-    } else {
-        $deployUpd = Join-Path $Root 'install-updater-agent.ps1'
-        if (Test-Path -LiteralPath $deployUpd) {
-            Write-Log 'deploying the Windows Update agent (dom0-driven; /noupdates to skip)'
-            try {
-                $ud = & $deployUpd -SetupRoot $Root 2>&1
-                foreach ($l in @($ud | Select-Object -Last 6)) { Write-Log "  $l" }
-                # JUDGE THE SCRIPT'S OWN LAST LINE, not the fact that it returned. 'deployed' used to be
-                # recorded whenever the call did not throw - so a deploy that stopped short without
-                # throwing (a trap or a non-terminating error swallowing a step) shipped as 'deployed' in
-                # the RESULT. install-updater-agent.ps1 has no '=== RESULT ===' trailer; its final
-                # `Log 'updater agent deployed'` is the completion witness and is only reached when every
-                # registration before it passed (each throws on failure). Widen this match if that
-                # script grows a real trailer.
-                $udDone = @($ud | Where-Object { "$_" -match 'updater agent deployed\s*$' }).Count -gt 0
-                if ($udDone) {
-                    $script:Result.detail.updater_agent = 'deployed'
-                } else {
-                    Write-Log ('install-updater-agent.ps1 returned WITHOUT its completion line ("updater agent deployed") - ' +
-                               'the deploy did not run to its end; recorded as incomplete, not deployed') 'WARN'
-                    $script:Result.detail.updater_agent = 'incomplete: returned without the completion line'
-                }
-                # Two settings live in dom0 and cannot be applied from in here. The RPM's
-                # qwt-ng-prepare-qube does them; say so, because a qube missing them fails to
-                # update in a way that looks like a bug in the guest.
-                Write-Log 'NOTE: dom0-side, this qube also needs:  qwt-ng-prepare-qube <qube>'
-                Write-Log '      (sets feature vmexec=1 and raises qrexec_timeout; without them'
-                Write-Log '       the Qubes Update tool cannot drive this qube)'
-            } catch {
-                Write-Log "Windows Update agent deploy failed: $($_.Exception.Message) (non-fatal)" 'WARN'
-                $script:Result.detail.updater_agent = "error: $($_.Exception.Message)"
-            }
-        } else {
-            Write-Log 'install-updater-agent.ps1 not in payload - updater agent unavailable' 'WARN'
-            $script:Result.detail.updater_agent = 'not in payload'
-        }
-    }
-
     # --- PV NIC priming latch: UNCONDITIONAL, every qube class (owner, 2026-08-29) -------
     # Was TEMPLATES-only. The stated reason was that "a StandaloneVM has a persistent root that
     # completes the vif install on its own first netvm boot". MEASURED 2026-08-29 and that is
@@ -4749,10 +4735,11 @@ public static class QdbPrime {
 
     # ---- QREXEC-RELEASE-BEGIN  (tools/tests/svc-serial-start-test.ps1 extracts this block by marker)
     # THE DEVICE WORK IS DONE - NOW THE QREXEC SERVICE (docs/ADR-boot.md 2). Everything since msiexec that touched a
-    # device or a driver - xenvif, xencons, the IDD device and the VGA disable, the overlays, the updater agent, the PV
-    # NIC priming latch, the shipping state, the UAC policy - ran with QrexecAgent HELD, so no call from dom0 could land
+    # device or a driver - xenvif, xencons, the IDD device and the VGA disable, the overlays, the PV NIC priming latch,
+    # the shipping state, the UAC policy - ran with QrexecAgent HELD, so no call from dom0 could land
     # in it (each would map and unmap the caller's vchan ring in the guest: two synchronous round trips to QEMU, the
-    # recorded freeze shape). From here the stage only grades itself, writes its RESULT and, on the interactive path,
+    # recorded freeze shape). From here the stage deploys the Windows Update agent (no device work - UPDATER-DEPLOY just
+    # below), grades itself, writes its RESULT and, on the interactive path,
     # restores the GUI watchdog - which declares QrexecAgent as its dependency, so this start MUST precede that restore
     # or the SCM would start QrexecAgent itself, unobserved. On -Auto -RebootAtEnd the guest powers off within seconds:
     # the service stays unstarted (it is auto-start and comes up on the next boot, as stock QWT's does) and the RESULT
@@ -4765,15 +4752,88 @@ public static class QdbPrime {
     }
     # ---- QREXEC-RELEASE-END
 
+    # --- Windows Update agent (default ON, /noupdates skips) ----------------------------
+    # Updates are dom0-owned: the guest reports availability via qubes.NotifyUpdates and
+    # installs ONLY when dom0 asks, exactly like a Linux qube. install-updater-agent.ps1 also
+    # makes dom0's stock `qubes-vm-update` (and the Qubes Update GUI) able to drive this qube,
+    # and turns Windows' own auto-update OFF. Deployed by DEFAULT: behind a switch it would
+    # never be there when the user clicks Update.
+    # NOT FATAL TO THE INSTALL, BUT NEVER QUIET (2026-10-04). A refused or failed deploy used to be one WARN line here and
+    # updater_agent='error: ...' in a RESULT only the test harness reads; the install then said INSTALL COMPLETE, dom0 was never
+    # told, and the guest kept its PREVIOUS updater. Measured on the reporter's environment (quick-upgrade of 4.3.34 over the
+    # German 25H2 template at 4.3.29, 2026-10-04 18:28): the deploy ran 3 min after boot, inside the previous updater's boot
+    # scan, refused with QWTUPDMUTEXHELD, and the RESULT was ok:true - the field report (dom0 shows no updates while Windows
+    # Update lists one) reproduced. Now the failure is an ERROR here, an error-class flag that makes the RESULT ok:false
+    # (updater_agent_failed), the last lines before the RESULT in plain words, and a dom0 notification once QrexecAgent is up
+    # (UPDATER-DEPLOY-VERDICT at the end of this stage).
+    # AFTER THE QREXEC RELEASE, NOT IN THE HOLD (2026-10-04). The deploy touches no device and no driver (a csc compile, the relay
+    # process, three scheduled tasks, NoAutoUpdate), so it is not part of the device work docs/ADR-boot.md 2 holds QrexecAgent for;
+    # it only sat in that stretch. There, a deploy that waits for the previous updater's running boot scan (install-updater-agent.ps1,
+    # DEPLOY-MUTEX) would keep dom0 out of the guest for as long as the scan holds on - and that scan reaches dom0's update proxy
+    # over qrexec (qubes.UpdatesProxy), so with the service held it had no network path to finish on. Here dom0 can reach the guest
+    # and the scan can complete while the deploy waits. On -Auto -RebootAtEnd QrexecAgent is not started in this stage either way.
+    # ---- UPDATER-DEPLOY-BEGIN  (tools/tests/wu-deploy-loud-test.ps1 runs this region)
+    if ($NoUpdaterAgent) {
+        Write-Log 'Windows Update agent SKIPPED (/noupdates)'
+        $script:Result.detail.updater_agent = 'skipped'
+    } else {
+        $deployUpd = Join-Path $Root 'install-updater-agent.ps1'
+        if (Test-Path -LiteralPath $deployUpd) {
+            Write-Log 'deploying the Windows Update agent (dom0-driven; /noupdates to skip)'
+            try {
+                # STREAMED into this log as each line arrives, not the last six after the call returns: the deploy may now wait
+                # for a running update scan (minutes, a line every 30 s), and a deploy that THROWS used to leave none of its own
+                # lines here at all - the reporter's log carries the refusal and nothing of what led to it.
+                $ud = & $deployUpd -SetupRoot $Root 2>&1 | ForEach-Object { Write-Log "  $_"; "$_" }
+                # JUDGE THE SCRIPT'S OWN LAST LINE, not the fact that it returned. 'deployed' used to be
+                # recorded whenever the call did not throw - so a deploy that stopped short without
+                # throwing (a trap or a non-terminating error swallowing a step) shipped as 'deployed' in
+                # the RESULT. install-updater-agent.ps1 has no '=== RESULT ===' trailer; its final
+                # `Log 'updater agent deployed'` is the completion witness and is only reached when every
+                # registration before it passed (each throws on failure). Widen this match if that
+                # script grows a real trailer.
+                $udDone = @($ud | Where-Object { "$_" -match 'updater agent deployed\s*$' }).Count -gt 0
+                if ($udDone) {
+                    $script:Result.detail.updater_agent = 'deployed'
+                } else {
+                    Write-Log ('install-updater-agent.ps1 returned WITHOUT its completion line ("updater agent deployed") - ' +
+                               'the deploy did not run to its end; recorded as incomplete, not deployed') 'ERROR'
+                    $script:Result.detail.updater_agent = 'incomplete: returned without the completion line'
+                    $script:Result.detail.updater_agent_failed = $true
+                    $script:UpdaterDeployFailure = Get-UpdaterDeployFailureRecord -Message 'install-updater-agent.ps1 returned without its completion line'
+                }
+                # Two settings live in dom0 and cannot be applied from in here. The RPM's
+                # qwt-ng-prepare-qube does them; say so, because a qube missing them fails to
+                # update in a way that looks like a bug in the guest.
+                Write-Log 'NOTE: dom0-side, this qube also needs:  qwt-ng-prepare-qube <qube>'
+                Write-Log '      (sets feature vmexec=1 and raises qrexec_timeout; without them'
+                Write-Log '       the Qubes Update tool cannot drive this qube)'
+            } catch {
+                $udMsg = "$($_.Exception.Message)"
+                $script:UpdaterDeployFailure = Get-UpdaterDeployFailureRecord -Message $udMsg
+                Write-Log "Windows Update agent deploy FAILED: $udMsg" 'ERROR'   # GUARD:deployerror
+                Write-Log "  the install continues without it; this qube keeps its previous updater (if any). $($script:UpdaterDeployFailure.remedy)" 'ERROR'
+                $script:Result.detail.updater_agent = "error: $udMsg"
+                $script:Result.detail.updater_agent_failed = $true   # GUARD:deployflag
+            }
+        } else {
+            Write-Log 'install-updater-agent.ps1 not in payload - updater agent unavailable' 'WARN'
+            $script:Result.detail.updater_agent = 'not in payload'
+        }
+    }
+    # ---- UPDATER-DEPLOY-END
+
     # ok MEANS ok. This line used to write ok=true UNCONDITIONALLY, while the warn-and-continue
     # paths above recorded their failures only in detail.* flags that no harness reads - so an
     # install with a failed IDD activation, a failed xenvif upgrade, a dead gui-agent or an
     # un-primed PV NIC graded GREEN (audit 2026-09-16, the systemic finding). The install DID run
     # to completion, so this is NOT the Fail path (no teardown, no resume-task clearing, the
     # reboot logic below is unchanged): ok simply reflects the truth, and the RESULT names why.
+    # ---- STAGE2-OK-FOLD-BEGIN  (tools/tests/wu-deploy-loud-test.ps1 runs this block)
     $errFlags = @()
     $dd = $script:Result.detail
     if ($dd.idd_failed -eq $true)                                   { $errFlags += 'idd_failed' }
+    if ($dd.updater_agent_failed -eq $true)                         { $errFlags += 'updater_agent_failed' }   # GUARD:deployfold
     if ($dd.idd_vga_disable_pending -eq $true)                      { $errFlags += 'idd_vga_disable_pending' }
     if ($dd.pvnic_prime_failed -eq $true)                           { $errFlags += 'pvnic_prime_failed' }
     if ($dd.vchan_prestop_failed -eq $true)                         { $errFlags += 'vchan_prestop_failed' }
@@ -4798,6 +4858,7 @@ public static class QdbPrime {
     } else {
         $script:Result.ok = $true
     }
+    # ---- STAGE2-OK-FOLD-END
     $script:Result.reboot_needed = $true
     # TERMINAL STATE: the -Auto resume task is retired here (and in Fail), not at stage-2 entry -
     # see the note at the top of this function.
@@ -4866,6 +4927,43 @@ public static class QdbPrime {
     # for one that stops at a sign-in screen. Placed after the agent restore above so the guest is
     # at least visible while the failure is reported.
     if ($script:AutologonArmFailed) { Fail $script:AutologonArmFailed }
+    # ---- UPDATER-DEPLOY-VERDICT-BEGIN  (tools/tests/wu-deploy-loud-test.ps1 runs this region)
+    # THE UPDATER DEPLOY'S FAILURE IS SAID WHERE IT IS SEEN (2026-10-04; the measurement is at UPDATER-DEPLOY). The last lines a
+    # user reads before the RESULT and install.cmd's "Done." say it in plain words, and dom0 is told through the error route -
+    # from HERE, the end of the stage, once (the deploy runs right after the QREXEC-RELEASE site, so on the interactive path
+    # QrexecAgent is already running when it fails). The route is the existing one (qwt-notify-error.ps1: gate, redaction,
+    # once per boot; notifhost --notify-file over qubes.Notifications, started and not waited for) and it rides qrexec: it
+    # delivers only while QrexecAgent is running. On -Auto -RebootAtEnd the service is not started in this boot at all (the
+    # guest powers off in seconds), so no notification can leave before the power-off and none is attempted; the RESULT
+    # (ok:false, updater_agent_failed) and this log carry it, and that is said here. Whether the agent is CONNECTED to dom0 by
+    # the time the one-shot runs (it reaches RUNNING at the QREXEC-RELEASE site, before the deploy) is not measured offline;
+    # the route logs its own outcome ('send', 'failed:transport', ...) on the line below.
+    if ($script:UpdaterDeployFailure) {
+        $udf = $script:UpdaterDeployFailure
+        Write-Log "Windows Update agent was NOT installed: $($udf.cause)." 'ERROR'   # GUARD:deployverdict
+        Write-Log "  What to do: $($udf.remedy)" 'ERROR'
+        Write-Log '  Until then this qube keeps its previous updater (if it had one), and dom0 may show no updates while Windows Update lists some.' 'ERROR'
+        $qa = Get-Service -Name 'QrexecAgent' -ErrorAction SilentlyContinue
+        if ($qa -and "$($qa.Status)" -eq 'Running') {   # GUARD:deploynotify
+            $notifyHelper = Join-Path $Root 'qwt-notify-error.ps1'
+            $sent = 'unavailable:helper-absent'
+            if (Test-Path -LiteralPath $notifyHelper) {
+                try {
+                    . $notifyHelper
+                    $sent = Send-QwtError -Component 'installer' -Id 'updater-not-installed' -Severity ACTION `
+                        -Header 'The Windows Update agent was not installed' `
+                        -Next "This qube keeps its previous updater; dom0 may show no updates while Windows Update lists some. $($udf.remedy)" `
+                        -Cause "Cause: $($udf.cause)." `
+                        -Tech (Format-QwtNotifyTechLine -Subject 'Install-QwtImproved.ps1' -Code $udf.code -Count 'reported once per install' -Evidence 'C:\qwt-improved-install.log')
+                } catch { $sent = "failed: $($_.Exception.Message)" }
+            }
+            Write-Log "  dom0 notification installer.updater-not-installed: $sent"
+            if ("$sent" -ne 'send') { Write-Log "  dom0 was NOT notified ($sent) - the RESULT (ok:false, updater_agent_failed) and this log carry it" 'ERROR' }
+        } else {
+            Write-Log '  dom0 was NOT notified from this boot: QrexecAgent is not running (on -Auto -RebootAtEnd it starts at the next boot) - the RESULT (ok:false, updater_agent_failed) and this log carry it' 'ERROR'
+        }
+    }
+    # ---- UPDATER-DEPLOY-VERDICT-END
     if ($Auto -and $RebootAtEnd) {
         Write-Log 'powering off in 2 s (-RebootAtEnd); start the qube again for the finished, PV-bound state'
         Emit-ResultThenPowerOff 0

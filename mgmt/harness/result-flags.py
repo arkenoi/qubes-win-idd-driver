@@ -159,7 +159,10 @@ ERROR_FLAGS = [
     ('reboot_audit',            helper_failed,                            'L3342 failed>0 / L3343 no trailer / L3346 threw'),
     ('quiet_desktop',           helper_failed,                            'L3428 failed>0 / L3429 no trailer / L3432 threw'),
     ('quiet_desktop_guard',     lambda v: _s(v) != 'rc=0',                'L3472 schtasks rc != 0 / L3475 threw'),
-    ('updater_agent',           starts('incomplete', 'error:'),           'L3509 WARN returned without its completion line / L3519 WARN threw'),
+    # -- the Windows Update agent deploy (2026-10-04): ERROR, never a WARN - a refused deploy leaves the PREVIOUS updater in place
+    #    (measured on the reporter's environment: ok:true with updater_agent='error: QWTUPDMUTEXHELD...' = dom0 shows no updates)
+    ('updater_agent',           starts('incomplete', 'error:'),           'UPDATER-DEPLOY ERROR: returned without its completion line / threw (QWTUPDMUTEXHELD, QWTUPDSCANWAITEXPIRED, QWTUPDMUTEXABANDONED, QWTUPDSTATEUNKNOWN, QWTRELAYBUSY, ...)'),
+    ('updater_agent_failed',    is_true,                                  'UPDATER-DEPLOY ERROR: the boolean beside the narrative; the installer folds it into ok:false and prints the verdict + notifies dom0 (UPDATER-DEPLOY-VERDICT)'),
     ('etwproxy_account',        starts('error:'),                         "L3323 WARN threw ('skipped:<reason>' at L3317 is the documented fail-open - informational)"),
     ('service_recovery',        any_value(lambda x: _s(x) != 'armed'),    'L538/L542 WARN: stored in detail precisely because a WARN alone let it ship'),
     # -- the serialized service start after msiexec (docs/ADR-boot.md 1; the installer's SVC-SERIAL-START region)

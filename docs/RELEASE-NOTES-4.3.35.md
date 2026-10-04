@@ -1,0 +1,52 @@
+# QWT-NG 4.3.35 — the Windows Update agent is installed even when an update scan is running
+
+Everything in 4.3.34 is carried forward. This release is about one installer defect reported from the field: an upgrade that
+quietly kept the previous Windows Update agent.
+
+## The Windows Update agent is installed even when an update scan is running
+
+A qube that has Windows Tools installed checks Windows Update for available updates two minutes after it boots, and then every
+six hours. If the installer was run while such a check was running - the ordinary sequence: start the template, run the
+installer - the installer did not install the new Windows Update agent: the qube kept its previous updater, the install said
+INSTALL COMPLETE, and the only trace was one warning line in `C:\qwt-improved-install.log`
+("Windows Update agent deploy failed: QWTUPDMUTEXHELD"). In dom0 the qube then showed no updates while Windows Update inside it
+listed some. This was reproduced on the reporter's environment (a German Windows 11 25H2 template) before it was fixed.
+
+Now the installer waits for a running update check to finish - it watches the check's own lock and continues the moment the
+check lets go, for at most the time Windows' Task Scheduler gives the check anyway (20 minutes, plus a few minutes' margin) -
+and installs the agent. While it waits it writes a line to its log every 30 seconds. The agent is now installed after the
+Qubes RPC agent has started (in 4.3.34 it was installed while that agent was still held back), so dom0 can reach the qube while
+the installer waits, and the update check can reach dom0's update proxy and finish. A running update *installation* is not
+waited for: it may take up to two hours and ends in a restart, so the installer stops the updater step and says so.
+
+## A failed updater install is reported, not hidden
+
+When the Windows Update agent cannot be installed, for whatever reason:
+
+- The installer logs it as an error, with the cause and what to do, and the last lines it prints before its result say it in
+  plain words: "Windows Update agent was NOT installed: ... What to do: ...". The remedy is always the same: let the running
+  update pass finish (or end it), then run `install.cmd /updatesonly` from the install medium.
+- The install's result is no longer "ok": the result trailer carries `updater_agent_failed` and `ok:false`, so an unattended
+  caller reading it sees the failure.
+- dom0 receives an error notification ("The Windows Update agent was not installed") at the end of the install, once the Qubes
+  RPC agent is running. With `install.cmd /auto /reboot` the qube powers off before that agent starts, so no notification is
+  sent in that run; the installer's log and result say so, and carry the failure.
+- Every line the updater deploy writes now appears in `C:\qwt-improved-install.log` as it happens. Until now a failed deploy
+  left none of its own lines there, only the final error.
+
+## Known and not fixed
+
+- The items under "Known and not fixed" in the 4.3.34 notes stand.
+- The updater deploy is not retried at the next boot when it was refused; the remedy is `install.cmd /updatesonly`.
+- Whether the dom0 notification arrives on an interactive install depends on the Qubes RPC agent being connected to dom0 when
+  the installer sends it, after the updater step; this has not been measured on a guest yet.
+
+## How this release was verified
+
+(placeholder - to be filled from the release acceptance)
+
+- Offline, on this change: the installer and updater-deploy suites (`tools/tests/wu-deploy-loud-selftest.sh`,
+  `tools/tests/wu-deploy-prevpass-selftest.sh`, `tools/tests/result-flags-selftest.sh`, `tools/tests/svc-serial-start-selftest.sh`)
+  pass, and every new assertion has been seen to fail with its defect re-introduced.
+- On a guest: not yet run. The acceptance must include an upgrade started within two minutes of the template's boot (inside the
+  previous updater's scan), on the reporter's environment, and must show the agent installed and dom0 reporting the update.
