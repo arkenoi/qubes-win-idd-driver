@@ -48,6 +48,15 @@ The installers and the guest scripts used to stop processes by their names. Serv
 manager, and the GUI agent is asked to stop through its own stop signal. OneDrive is no longer stopped at all; its policies still
 apply when it next starts.
 
+## The updater is installed even when the last update check was interrupted
+
+If a qube had been shut down while its update check was running, or the check had hit its time limit, installing 4.3.32 or
+4.3.33 did not install the Windows Update agent at all: the qube kept its previous updater, and the only trace was a warning in
+`C:\qwt-improved-install.log` ("Windows Update agent deploy failed: QWTUPDSTATEUNKNOWN"). A qube on 4.3.32 in that state could not
+get out of it, because its own updater also refused every later pass. The installer now follows the same rule as the updater: an
+interrupted check, or an update pass from before the qube's last restart, no longer blocks it. Only an install or download
+interrupted in the current boot still does, and the message says to restart the qube and run the installer again.
+
 ## Known and not fixed
 
 - A template that has both a .NET update and a cumulative update to install asks dom0 for a restart **twice**, as in 4.3.33:
