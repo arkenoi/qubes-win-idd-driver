@@ -723,15 +723,24 @@ function Register-QwtDeathReporter {
         $ourTasks = @('\Qubes-WgcBroker', '\Qubes-NotifBridge', '\QubesPvNic', '\QubesPvNicRearm', '\QubesNetworkReapply',
                       '\QubesQuietDesktopGuard', '\QubesAutologonGuard', '\QubesWindowsUpdateScan', '\QubesWindowsUpdateRun',
                       '\QubesWindowsUpdateDownload', '\QwtImprovedSetup')   # GUARD:selftrigger
-        $exeOr  = ($ourExes | ForEach-Object { "Data='$_'" }) -join ' or '
+        # TASK SCHEDULER REJECTS A SELECT WHOSE OR-LIST IS TOO LONG: "ERROR: The specified query is invalid." Measured 2026-10-04 on
+        # win11-acc (schtasks /create, this XML shape): one EventData list of 22 executables registers, 24 does not - and the single
+        # list of all 28 failed this registration on every install of the rz39 gate (death_reporter=failed). So the executables are
+        # split into two lists, each well inside the limit, and every crash id gets one Select per list. The xpath selftest holds each
+        # Select to at most 16 terms (knob onelist puts the single list back and must fail).
+        $exeHalf = [int][math]::Ceiling($ourExes.Count / 2)
+        $exeOrA = ($ourExes[0..($exeHalf - 1)] | ForEach-Object { "Data='$_'" }) -join ' or '   # GUARD:termlimit
+        $exeOrB = ($ourExes[$exeHalf..($ourExes.Count - 1)] | ForEach-Object { "Data='$_'" }) -join ' or '
         $svcOr  = ($ourServices | ForEach-Object { "Data[@Name='param1']='$_'" }) -join ' or '
         $taskOr = ($ourTasks | ForEach-Object { "Data[@Name='TaskName']='$_'" }) -join ' or '
         $tsPath = 'Microsoft-Windows-TaskScheduler/Operational'
         $sub = @(
             '<QueryList>',
             '<Query Id="0" Path="Application">',
-            "<Select Path=`"Application`">*[System[Provider[@Name='Application Error'] and EventID=1000] and EventData[$exeOr]]</Select>",
-            "<Select Path=`"Application`">*[System[Provider[@Name='Windows Error Reporting'] and EventID=1001] and EventData[$exeOr]]</Select>",
+            "<Select Path=`"Application`">*[System[Provider[@Name='Application Error'] and EventID=1000] and EventData[$exeOrA]]</Select>",
+            "<Select Path=`"Application`">*[System[Provider[@Name='Application Error'] and EventID=1000] and EventData[$exeOrB]]</Select>",
+            "<Select Path=`"Application`">*[System[Provider[@Name='Windows Error Reporting'] and EventID=1001] and EventData[$exeOrA]]</Select>",
+            "<Select Path=`"Application`">*[System[Provider[@Name='Windows Error Reporting'] and EventID=1001] and EventData[$exeOrB]]</Select>",
             "<Select Path=`"Application`">*[System[Provider[@Name='.NET Runtime'] and EventID=1026]]</Select>",
             "<Select Path=`"Application`">*[System[Provider[@Name='Qubes Windows Tools']]]</Select>",
             '</Query>',
