@@ -77,5 +77,21 @@ if [ "$magic" != "7f454c46" ]; then
 fi
 mv "$OUT.partial" "$OUT"
 say "OK: $OUT"
+# THE SMALL STATE, BEFORE ANYTHING ELSE CAN HAPPEN TO THE IMAGE: every vCPU's full register context (the decoded text and the raw
+# .xen_prstatus), the shared-info page and the section table - tens of KB that outlive the 8 GB image. 2026-10-02: a SPIN core was read
+# for RIP and CR3 only and deleted for space, and the stuck vCPU's RAX - which hypercall it sat in - was never recorded. A failure here
+# does not turn the fetch into a failure (callers read rc as "image taken"), but it is said loudly and marked next to the core, and
+# mgmt/harness/drop-core.sh refuses to delete an image whose small state is not on disk.
+SMALL="$OUT.small"
+if python3 tools/xen-core-rip.py "$OUT" --small "$SMALL" > "$SMALL.log" 2>&1; then
+  rm -f "$OUT.SMALL-FAILED"
+  say "small state: $SMALL/ (vcpu-regs.txt, xen_prstatus.bin, xen_shared_info.bin, sections.txt)"
+  grep -a -E '^vcpu|^vcpus=' "$SMALL/vcpu-regs.txt" | cut -c1-230 | sed 's/^/  /'
+else
+  echo "the small state could not be extracted - see $SMALL.log" > "$OUT.SMALL-FAILED"
+  say "SMALL STATE NOT EXTRACTED ($SMALL.log): THIS CORE IS THE ONLY COPY OF THE vCPU REGISTERS - do not delete it"
+  sed 's/^/  /' "$SMALL.log" | tail -5
+fi
 say "  name the spinning code:  tools/xen-core-rip.py $OUT"
 say "  resolve to a driver:     tools/resolve-guest-rip.py <module-bases.txt> 0x<rip>"
+say "  delete it ONLY with:     mgmt/harness/drop-core.sh $OUT   (refuses while the small state is missing)"

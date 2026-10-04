@@ -38,6 +38,33 @@ OFF = dict(rip=UR + 128, cs=UR + 136, rflags=UR + 144, rsp=UR + 152,
            r11=UR + 48, r10=UR + 56, r9=UR + 64, r8=UR + 72,
            rax=UR + 80, rcx=UR + 88, rdx=UR + 96, rsi=UR + 104, rdi=UR + 112,
            cr0=4984, cr2=5000, cr3=5008, cr4=5016)
+# The rest of the context, for --small: every field a reader might want later, because the core it came from is usually
+# deleted for space within the hour (2026-10-02: the stuck vCPU's RAX - which hypercall - was lost exactly that way).
+OFF_SMALL = dict(OFF, flags=512, ss=UR + 160, error_code=UR + 120, entry_vector=UR + 124,
+                 fs_base=5144, gs_base_kernel=5152, gs_base_user=5160)
+if os.environ.get("XENCORE_SMALL_DEFECT") == "1":   # GUARD:small-offsets - tools/tests/xen-core-small-selftest.sh must FAIL
+    OFF_SMALL["rax"] = OFF_SMALL["rax"] + 8
+SMALL_ORDER = ("rip rsp rflags cs ss rax rbx rcx rdx rsi rdi rbp r8 r9 r10 r11 r12 r13 r14 r15 "
+               "cr0 cr2 cr3 cr4 fs_base gs_base_kernel gs_base_user flags error_code entry_vector").split()
+# xen/include/public/xen.h __HYPERVISOR_* - RAX holds the op ONLY while the vCPU sits in a hypercall (its last exit a VMCALL,
+# dom0 bundle vmcs-summary reason=0x12); in a 64-bit HVM guest the arguments are RDI, RSI, RDX, R10, R8.
+HYPERCALL = {0: "set_trap_table", 1: "mmu_update", 2: "set_gdt", 3: "stack_switch", 4: "set_callbacks",
+             5: "fpu_taskswitch", 6: "sched_op_compat", 7: "platform_op", 8: "set_debugreg", 9: "get_debugreg",
+             10: "update_descriptor", 12: "memory_op", 13: "multicall", 14: "update_va_mapping", 15: "set_timer_op",
+             16: "event_channel_op_compat", 17: "xen_version", 18: "console_io", 19: "physdev_op_compat",
+             20: "grant_table_op", 21: "vm_assist", 22: "update_va_mapping_otherdomain", 23: "iret", 24: "vcpu_op",
+             25: "set_segment_base", 26: "mmuext_op", 27: "xsm_op", 28: "nmi_op", 29: "sched_op", 30: "callback_op",
+             31: "xenoprof_op", 32: "event_channel_op", 33: "physdev_op", 34: "hvm_op", 35: "sysctl", 36: "domctl",
+             37: "kexec_op", 38: "tmem_op", 39: "argo_op", 40: "xenpmu_op", 41: "dm_op", 42: "hypfs_op"}
+# the first argument's sub-op for the calls a vchan / grant / event-channel path makes (public/memory.h, grant_table.h,
+# event_channel.h, sched.h)
+SUBOP = {"memory_op": {0: "increase_reservation", 1: "decrease_reservation", 6: "populate_physmap", 7: "add_to_physmap",
+                       15: "remove_from_physmap", 23: "add_to_physmap_batch", 28: "acquire_resource"},
+         "grant_table_op": {0: "map_grant_ref", 1: "unmap_grant_ref", 2: "setup_table", 5: "copy", 6: "query_size",
+                            8: "set_version", 9: "get_status_frames", 10: "get_version"},
+         "event_channel_op": {0: "bind_interdomain", 1: "bind_virq", 3: "close", 4: "send", 5: "status",
+                              6: "alloc_unbound", 7: "bind_ipi", 8: "bind_vcpu", 9: "unmask"},
+         "sched_op": {0: "yield", 1: "block", 2: "shutdown", 3: "poll"}}
 PAGE = 4096
 HOLE = 0xFFFFFFFFFFFFFFFF
 
@@ -89,11 +116,24 @@ class Core:
             out[nm] = h
         return out
 
-    def vcpu(self, i):
+    def vcpu(self, i, fields=OFF):
         pr = self.sections[".xen_prstatus"]
         self.f.seek(pr["offset"] + i * VGC_SIZE)
         b = self.f.read(VGC_SIZE)
-        return {k: struct.unpack_from("<Q", b, o)[0] for k, o in OFF.items()}
+        if len(b) != VGC_SIZE:
+            die("vcpu%d context is short (%d of %d bytes) - a truncated core" % (i, len(b), VGC_SIZE))
+        return {k: struct.unpack_from("<I" if k in ("error_code", "entry_vector") else "<Q", b, o)[0]
+                for k, o in fields.items()}
+
+    def section_bytes(self, name):
+        s = self.sections.get(name)
+        if not s:
+            return None
+        self.f.seek(s["offset"])
+        b = self.f.read(s["size"])
+        if len(b) != s["size"]:
+            die("section %s is short (%d of %d bytes) - a truncated core" % (name, len(b), s["size"]))
+        return b
 
     def page_index(self, pfn):
         """pfn -> index into .xen_pages, or None. The array is ascending with holes at the tail."""
@@ -163,6 +203,79 @@ def disasm(data, vma):
     return lines or ["<objdump produced nothing>"]
 
 
+VMCALLS = (b"\x0f\x01\xc1", b"\x0f\x01\xd9")   # Intel VMCALL, AMD VMMCALL
+
+
+def code_around(c, v, before=16, after=8):
+    """The guest's own bytes [RIP-before, RIP+after) through its page tables, or None when RIP does not translate."""
+    try:
+        pa, _ = c.v2p(v["cr3"], v["rip"] - before)
+        return None if pa is None else c.read_phys(pa, before + after)
+    except Exception:
+        return None
+
+
+def hypercall_position(code, before=16):
+    """WHERE RIP sits relative to a hypercall instruction, which decides what RAX means. Xen leaves RIP ON the VMCALL while a call is
+    pending (a continuation re-executes it, RAX still the op) and moves it PAST the instruction once the call has returned (RAX then
+    holds the result). A `mov eax, imm32` right before the VMCALL (a hypercall-page style stub) names the op whatever RAX says."""
+    if code is None:
+        return "code at RIP unreadable", None
+    at, prev = code[before:before + 3], code[before - 3:before]
+    pos = ("RIP AT a hypercall instruction - pending: RAX is the op" if at in VMCALLS else
+           "RIP just AFTER a hypercall instruction - returned: RAX is its RESULT, not the op" if prev in VMCALLS else
+           "no hypercall instruction at or just before RIP")
+    stub = None
+    k = before if at in VMCALLS else (before - 3 if prev in VMCALLS else None)
+    if k is not None and k >= 5 and code[k - 5] == 0xB8:
+        stub = struct.unpack_from("<I", code, k - 4)[0]
+    return pos, stub
+
+
+def small(c, outdir):
+    """The SMALL STATE of a core, written next to it the moment it lands: every vCPU's full register context (decoded
+    text + the raw .xen_prstatus bytes), the shared-info page (event-channel pending/mask bits and every vcpu_info - the
+    IDLE shape's lost wakeup lives there), and the section table. Tens of KB that outlive the 8 GB image. 2026-10-02:
+    a SPIN core was read for RIP and CR3 only and then deleted for space, and the stuck vCPU's RAX - which hypercall
+    it was in - was never recorded; the reader had every offset and printed four of them."""
+    os.makedirs(outdir, exist_ok=True)
+    pr = c.section_bytes(".xen_prstatus")
+    if len(pr) != c.nvcpu * VGC_SIZE:
+        die(".xen_prstatus holds %d bytes, not %d vCPUs x %d" % (len(pr), c.nvcpu, VGC_SIZE))
+    open(os.path.join(outdir, "xen_prstatus.bin"), "wb").write(pr)
+    si = c.section_bytes(".xen_shared_info")
+    if si is not None:
+        open(os.path.join(outdir, "xen_shared_info.bin"), "wb").write(si)
+    with open(os.path.join(outdir, "sections.txt"), "w") as f:
+        for name, s in sorted(c.sections.items(), key=lambda kv: kv[1]["offset"]):
+            f.write("%-20s offset=0x%x size=%d entsize=%d\n" % (name or "<null>", s["offset"], s["size"], s["entsize"]))
+    lines = ["# per-vCPU register context from the core's .xen_prstatus (struct vcpu_guest_context, x86_64)",
+             "# rax names the hypercall ONLY for a vCPU whose last exit was a VMCALL (dom0 bundle vmcs-summary reason=0x12);"
+             " args rdi rsi rdx r10 r8",
+             "vcpus=%d" % c.nvcpu]
+    for i in range(c.nvcpu):
+        v = c.vcpu(i, OFF_SMALL)
+        lines.append("vcpu%d %s" % (i, " ".join("%s=0x%x" % (k, v[k]) for k in SMALL_ORDER)))
+        code = code_around(c, v)
+        pos, stub = hypercall_position(code)
+        lines.append("vcpu%d   code[rip-16:rip+8]=%s | %s%s" % (
+            i, code.hex() if code else "-", pos,
+            "" if stub is None else " | stub op %d = %s" % (stub, HYPERCALL.get(stub, "unknown"))))
+        hc = HYPERCALL.get(v["rax"])
+        if hc:
+            sub = SUBOP.get(hc, {}).get(v["rdi"])
+            lines.append("vcpu%d   if in a hypercall: %s(%s rdi=0x%x rsi=0x%x rdx=0x%x r10=0x%x r8=0x%x)" %
+                         (i, hc, sub or "cmd", v["rdi"], v["rsi"], v["rdx"], v["r10"], v["r8"]))
+    if si is None:
+        lines.append("NOTE: the core has no .xen_shared_info section")
+    txt = "\n".join(lines) + "\n"
+    open(os.path.join(outdir, "vcpu-regs.txt"), "w").write(txt)
+    print(txt, end="")
+    print("small state written to %s (xen_prstatus.bin %d bytes%s)" %
+          (outdir, len(pr), "" if si is None else ", xen_shared_info.bin %d bytes" % len(si)))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("core")
@@ -170,9 +283,13 @@ def main():
     ap.add_argument("--around", type=int, default=32, help="bytes to show BEFORE RIP (loop tops live there)")
     ap.add_argument("--read", help="also translate+hexdump an arbitrary VA, as VA:LEN (hex VA)")
     ap.add_argument("--json")
+    ap.add_argument("--small", metavar="DIR",
+                    help="ONLY write the small state (all vCPU registers, raw contexts, shared info, sections) to DIR")
     a = ap.parse_args()
 
     c = Core(a.core)
+    if a.small:
+        return small(c, a.small)
     print("vcpus=%d  pages=%d  (pfn entries %d)" % (c.nvcpu, c.sections[".xen_pages"]["size"] // PAGE, len(c.pfns)))
     print()
     rows = []
