@@ -21,28 +21,26 @@ Anywhere this README says "stock", it means unmodified upstream QWT 4.2.2 as shi
 
 ## Download
 
-Release **[v4.3.33-agentcda961d](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.33-agentcda961d)** — agent `cda961d`, package `4.3.33`, built from commit `90dfb98`. See
-[`docs/RELEASE-NOTES-4.3.33.md`](docs/RELEASE-NOTES-4.3.33.md) for what changed and what was
-verified: Windows updates on a template now install, and dom0 is told what actually happened;
-and the guest's whole desktop can be shown in one dom0 window, and switched back, while the qube
-runs. The full matrix — clean install, same-version reinstall, in-place upgrade from 4.3.32, and
-template→AppVM derivation with cold boots, on **both Windows 10 and Windows 11** — passed 96/96
-with 0 cells ungraded against this exact package, and both feature tests passed. One Windows 10
-clean-install cell first hit the known intermittent install stall (see Known limitations); it and
-the reinstall cell built on it were re-run on the same package and passed. Separately, the same
-package passed the template update test on the field reporter's environment.
+Release **[v4.3.34-agent1a19e05](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.34-agent1a19e05)** — agent `1a19e05`, package `4.3.34`, built from commit `24e28f4`. See
+[`docs/RELEASE-NOTES-4.3.34.md`](docs/RELEASE-NOTES-4.3.34.md) for what changed and what was
+verified: every failure notification says what happened and what to do; a part of Windows Tools that dies is reported, every
+time; nothing is stopped by name; the updater is installed even when the last update check was interrupted; and the installer
+no longer answers qrexec calls while it is still setting up devices. The full matrix — clean install, same-version reinstall,
+in-place upgrade from 4.3.33, and template→AppVM derivation with cold boots, on **both Windows 10 and Windows 11** — passed
+against this exact package with no guest stalling, both feature tests passed, and the same package passed the template update
+test on the field reporter's environment.
 
 | file | use it for |
 |---|---|
-| [`qubes-windows-tools-ng-4.3.33-1.agentcda961df595e.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.33-agentcda961d/qubes-windows-tools-ng-4.3.33-1.agentcda961df595e.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and installs `qvm-windows-update` and `qwt-ng-prepare-qube` |
-| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.33-agentcda961d/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
-| [`qubes-tools-4.3.33.exe`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.33-agentcda961d/qubes-tools-4.3.33.exe) | the installer on its own, if you already have a way to get a file into the guest |
-| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.33-agentcda961d/SHA256SUMS.txt) | checksums for all of them |
+| [`qubes-windows-tools-ng-4.3.34-1.agent1a19e05d3872.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.34-agent1a19e05/qubes-windows-tools-ng-4.3.34-1.agent1a19e05d3872.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and installs `qvm-windows-update` and `qwt-ng-prepare-qube` |
+| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.34-agent1a19e05/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
+| [`qubes-tools-4.3.34.exe`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.34-agent1a19e05/qubes-tools-4.3.34.exe) | the installer on its own, if you already have a way to get a file into the guest |
+| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.34-agent1a19e05/SHA256SUMS.txt) | checksums for all of them |
 
 The dom0 RPM is unsigned, so `qubes-dom0-update` will refuse it; install it directly:
 
 ```
-sudo rpm -i qubes-windows-tools-ng-4.3.33-1.agentcda961df595e.noarch.rpm
+sudo rpm -i qubes-windows-tools-ng-4.3.34-1.agent1a19e05d3872.noarch.rpm
 ```
 
 With the RPM in place, dom0 can attach the media itself — `qvm-start <vm> --install-windows-tools`
@@ -51,7 +49,7 @@ hands the guest exactly this ISO as a CD.
 Upgrading a guest that already runs stock QWT or an older build of this package is a
 plain in-place upgrade — run the installer, it detects the older version and lets the
 MSI replace it in one transaction. Validated end to end for an upgrade **from an older
-build of this package** — 4.3.33's acceptance upgraded a 4.3.32 guest in place on both
+build of this package** — 4.3.34's acceptance upgraded a 4.3.33 guest in place on both
 Windows 10 and Windows 11. An upgrade from **stock QWT 4.2.2** uses the same unchanged
 MSI machinery but has not been exercised on our testbed since August 2026, because the
 test images themselves carry a newer build.
@@ -59,25 +57,16 @@ test images themselves carry a newer build.
 **Hand-created qube?** Run `qvm-features <qube> vmexec 1` and `qvm-prefs <qube> qrexec_timeout 1800`
 in dom0 (on the template; AppVMs inherit), or the Qubes Update tool fails against it.
 
-**What changed in 4.3.33 — Windows updates on a template install, and dom0 is told what happened;
-the whole desktop in one window works.** A field report on a German Windows 11 25H2 template found
-updates that failed silently or were reported done when they were not. The first contact with
-Windows Update through the update proxy failed (`0x8024402C`) and dom0 was never told; dom0 now
-gets the reason and a request for the one restart that clears it. The Windows Security platform
-update (KB5007651) was reported current while its platform was not installed: the updater had run
-its installer with a switch under which it exits successfully and installs nothing. Installer-type
-updates — the Security platform, Defender signatures and platform, the Malicious Software Removal
-Tool — are now installed by **Windows Update's own installer**, with the update's own command line,
-from content fetched through the proxy, and each is checked against what it changes. dom0 also gets
-reasons instead of bare error codes; a pass cut off part-way blocks later ones at most until the
-next restart, not for good; a pass that collides with the boot-time scan is no longer declared
-dead, which had stopped that scan's proxy; and dom0 is no longer told the proxy is still running
-when it is not. Separately, Qube Manager's seamless toggle now works on any guest — the whole
-desktop in one dom0 window and back, while the qube runs (below). On Windows 11 24H2 and later the
-capture is now event-driven; its own acceptance is still in progress. Full story in
-[`docs/RELEASE-NOTES-4.3.33.md`](docs/RELEASE-NOTES-4.3.33.md); earlier releases:
-[4.3.32](docs/RELEASE-NOTES-4.3.32.md), [4.3.31](docs/RELEASE-NOTES-4.3.31.md),
-[4.3.30](docs/RELEASE-NOTES-4.3.30.md).
+**What changed in 4.3.34 — every failure says what happened and what to do; nothing is stopped by name.** Every error
+notification Windows Tools sends to dom0 now has one shape: a plain title, what happens next and what you can do, the cause read
+from the right source, and one technical line. A part of Windows Tools that dies — a crash, an unhandled .NET exception, a
+service that stops unexpectedly, a failed task of ours — is reported to dom0 from Windows' own records, once per death. The
+installers and guest scripts no longer stop or adopt processes by name. If a qube's last update check had been interrupted,
+4.3.32 and 4.3.33 silently kept the previous updater; the installer now follows the updater's own rule. And the installer's
+second stage starts the Windows Tools services one at a time and opens the Qubes RPC agent only after its device work is done:
+each qrexec call into a qube makes the guest wait for QEMU, and four of the install stalls on record happened in that window. Full story
+in [`docs/RELEASE-NOTES-4.3.34.md`](docs/RELEASE-NOTES-4.3.34.md); earlier releases:
+[4.3.33](docs/RELEASE-NOTES-4.3.33.md), [4.3.32](docs/RELEASE-NOTES-4.3.32.md), [4.3.31](docs/RELEASE-NOTES-4.3.31.md).
 
 **Provenance.** Every asset above is built by GitHub Actions from this repository at the tagged
 commit; the agent is `cda961d` on
@@ -535,9 +524,10 @@ deliberately differs from the Linux script are in [docs/BIND-DIRS.md](docs/BIND-
   qube's `audiovm`. Windows Tools contains no audio component because it does not need one —
   the path is entirely QEMU-side. Nothing here changes that, and there is no PV audio driver
   in Xen's Windows family to move to.
-- **An intermittent guest stall during installs and upgrades** is unchanged and still
-  unexplained. It struck one Windows 10 clean-install cell of 4.3.33's acceptance, which passed
-  when re-run on the same package.
+- **An intermittent guest stall** can still happen in a qube's first minutes: QEMU in the qube's stub domain stops answering
+  the guest's requests, which Windows Tools cannot fix. 4.3.34 removes the install window where the recorded install stalls
+  happened (none in its acceptance), but one is on record in the first start after an install and one on a qube with no
+  Windows Tools at all.
 - **A template with both a .NET and a cumulative update to install asks dom0 for a restart
   twice**: the updater stages one update package per restart. Removing the second request is the
   next step.
@@ -551,7 +541,7 @@ deliberately differs from the Linux script are in [docs/BIND-DIRS.md](docs/BIND-
 ## Test status
 
 A release is cut only after an acceptance gate has passed against the exact package it ships, on
-Windows 10 22H2 and Windows 11 (build 26300 for 4.3.33). Four cells per platform:
+Windows 10 22H2 and Windows 11 (build 26300 for 4.3.34). Four cells per platform:
 
 - **clean install** onto a guest that never had Windows Tools (the installer's own marker must
   say it took the clean-install path);
@@ -569,6 +559,6 @@ shutdown, and a clipboard round trip — plus a visible change in dom0's pixels 
 present. The gate's guests have no netvm, so its two network checks (PV NIC bound, traffic
 carried) are recorded as not applicable, not as passed.
 
-On top of the matrix: the error-notification and crop-before-map feature tests. 4.3.33, whose main
-change is the update path, also passed the template update test on the field reporter's
-environment (German Windows 11 25H2, no network, no `user` account).
+On top of the matrix: the error-notification and crop-before-map feature tests. 4.3.34 also passed
+the template update test on the field reporter's environment (German Windows 11 25H2, no network,
+no `user` account).
