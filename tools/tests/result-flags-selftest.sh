@@ -106,9 +106,17 @@ guest_utc_at_refusal|"2026-10-04T12:00:00.0000000Z"
 pv_boot_disk|"UNKNOWN"
 swept_binaries_restored|["gui-agent.exe"]
 svc_serial_start|"QdbDaemon=started running=0.4s ready=1.1s; QrexecAgent=started running=0.3s; QubesGuiWatchdog=held-for-quiesce"
+svc_serial_start|"QdbDaemon=started running=0.4s ready=1.1s; QrexecAgent=held-for-device-work; QubesGuiWatchdog=held-for-quiesce"
 svc_serial_start_after_retry|"QdbDaemon=already-running; QrexecAgent=already-running; QubesGuiWatchdog=held-for-quiesce"
+svc_serial_start_after_retry|"QdbDaemon=already-running ready=0.0s; QrexecAgent=held-for-device-work; QubesGuiWatchdog=held-for-quiesce"
 svc_serial_start_secs|1.9
 msi_startservices_condition|"VersionNT AND NOT QWTNG_SERIALSTART"
+svc_qrexec_start|"after-device-work: started running=0.3s"
+svc_qrexec_start|"fail-path: started running=0.4s"
+svc_qrexec_start|"main-catch: started running=0.3s"
+svc_qrexec_start|"power-off-refused: started running=0.3s"
+svc_qrexec_start|"not-started-powering-off: auto-start on the next boot (held 41.7s)"
+svc_qrexec_held_secs|41.7
 EOF
 
 echo "==== every error form must FAIL and be NAMED ===="
@@ -196,6 +204,12 @@ svc_serial_start|"QdbDaemon=ABSENT; QrexecAgent=not-attempted (QdbDaemon failed)
 svc_serial_start_after_retry|"QdbDaemon=already-running; QrexecAgent=TIMEOUT: not RUNNING after 60s (status StartPending); QubesGuiWatchdog=held-for-quiesce"
 svc_msi_started|"QdbDaemon=Running,QrexecAgent=Running"
 msi_startservices_condition|"REFUSED: its StartServices condition is 'VersionNT', which does not mention QWTNG_SERIALSTART"
+svc_qrexec_start_failed|true
+svc_qrexec_start|"after-device-work: TIMEOUT: not RUNNING after 60s (status StartPending)"
+svc_qrexec_start|"fail-path: FAILED: Service 'QrexecAgent' cannot be started due to the following error: Cannot start service QrexecAgent on computer '.'."
+svc_qrexec_start|"main-catch: ABSENT"
+svc_qrexec_start|"NEVER-STARTED: QrexecAgent was held through the device work and no exit path started it before this RESULT"
+svc_qrexec_never_started|true
 event_source|"failed: reg add rc=1/0"
 event_source|"failed: message file absent (C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\EventLogMessages.dll)"
 event_source|"error: x"

@@ -170,6 +170,11 @@ ERROR_FLAGS = [
                                                                           'the same narrative for the second start after the ADDLOCAL-only retry'),
     ('svc_msi_started',         nonempty,                                 'Assert-NoServiceStartedByMsi ERROR: these services were running right after msiexec although QWTNG_SERIALSTART=1 was passed - the MSI started them, the serialized start did not hold'),
     ('msi_startservices_condition', starts('REFUSED'),                    'Assert-MsiSerialStartContract: the MSI would start the services itself (Fails before msiexec)'),
+    # -- the qrexec hold (docs/ADR-boot.md 2): QrexecAgent is held through the stage-2 device work and started after it
+    ('svc_qrexec_start_failed', is_true,                                  'Start-HeldQrexecAgent ERROR: QrexecAgent, held through the device work, did not start / reach RUNNING when the stage released it - the guest has no qrexec until a reboot'),
+    ('svc_qrexec_start',        lambda v: any(t in _s(v) for t in ('FAILED', 'TIMEOUT', 'ABSENT', 'NEVER-STARTED')),
+                                                                          'narrative of the hold: "<site>: started running=Ns" (after-device-work / fail-path / main-catch / power-off-refused), "not-started-powering-off: ..." (the -Auto -RebootAtEnd skip, auto-start on the next boot), or the failure'),
+    ('svc_qrexec_never_started', is_true,                                 'Emit-Result ERROR: a RESULT was written on a path that does not power off while QrexecAgent was still held - no exit path started it (the invariant of docs/ADR-boot.md 2 broke)'),
     # -- supervision (docs/ADR-supervision.md 2-3): our Event Log source and the ONE death reporter task
     ('event_source',            lambda v: _s(v) != 'registered',          'Register-QwtEventSource WARN: the source our supervisors write their death events under is not registered (message file absent / reg add failed / threw)'),
     ('death_reporter',          lambda v: _s(v) != 'registered',          'Register-QwtDeathReporter WARN: the event-triggered QwtDeathReporter task is not registered - a death of ours stays in the guest logs only'),
@@ -199,6 +204,7 @@ INFORMATIONAL = (
     'certs_installed', 'precondition', 'payload_files_verified', 'package_version',   # L3921/L4115/L4193/L4205
     'clock_skew_certs', 'guest_utc_at_refusal',                            # records beside clock_skew_refusal (which carries the verdict)
     'svc_serial_start_secs', 'svc_serial_start_after_retry_secs',          # Start-QwtServicesSerially: wall time of each serialized start (the A/B's pacing measure)
+    'svc_qrexec_held_secs',                                                # Start-HeldQrexecAgent / the power-off skip: how long QrexecAgent was held through the device work (docs/ADR-boot.md 2)
 )
 
 
