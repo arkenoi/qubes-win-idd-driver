@@ -451,6 +451,31 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
     fi
     if QTEST_VM=$CHURN timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null \
          | grep -qa QREADY; then
+        # QUIET AFTER THE FIRST ANSWER (QUIET_AFTER_FIRST=1; owner-approved 2026-10-04, findings/wedge.md "REVERSE CODE QUALITY").
+        # The stall is QEMU in the stub domain no longer completing the guest's requests, and it strikes in a fresh domain's first
+        # minutes under concentrated activity. This script's first answer in stage 2 lands seconds after msiexec started QWT's
+        # services, and it used to follow it AT ONCE with the module-base arming (several calls and a file copy) - in #3 and #5 that
+        # arming call is the one that hung. So: after the first answer of a boot, make NO guest call until the domain leaves Running
+        # (a stage ended - the loop's own Halted handling restarts it) or QUIET_WINDOW seconds pass; then ONE liveness probe. A guest
+        # that went deaf while left alone gets no pass: the loop carries on to the deadline and its stall classification.
+        # Only dom0-side state (qvm-ls) is read during the window.
+        if [ "${QUIET_AFTER_FIRST:-0}" = 1 ]; then   # GUARD:quietfirst
+            log "  t+${el}s FIRST ANSWER of this boot - QUIET: no guest call for up to ${QUIET_WINDOW:-300}s or until the domain leaves Running"
+            _tq=$(date +%s); _left=0
+            while [ $(( $(date +%s) - _tq )) -lt "${QUIET_WINDOW:-300}" ]; do
+                rl_fg sleep 5
+                [ "$(state "$CHURN")" = Running ] || { _left=1; break; }
+            done
+            if [ "$_left" = 1 ]; then
+                log "  the domain left Running during the quiet window (state=$(state "$CHURN")) - a stage ended; the loop takes it from here"
+                continue
+            fi
+            if ! QTEST_VM=$CHURN timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null | grep -qa QREADY; then
+                log "  NO ANSWER after the quiet window - the guest went deaf while nothing called it; NOT a pass, the loop runs on to its deadline"
+                continue
+            fi
+            log "  still answering after the quiet window"
+        fi
         ready=1
         log "  t+${el}s QREXEC ANSWERS after $restarts restart(s) - the guest carries a working QWT"
         # ARM THE MODULE-BASE RECORDER, HERE, WHILE THE GUEST STILL ANSWERS.
@@ -626,9 +651,10 @@ if [ "$ready" != 1 ]; then
     # stopped the campaign by hand within minutes. Unattended runs have no such human, so the
     # evidence is taken here, while the guest is still up, and survives whatever happens next.
     #
-    # Only on the SPIN fingerprint (cpu_time advancing while qrexec is dead): a frozen or
-    # unreadable domain has nothing to image, and a memory image is ~8.6 GB.
-    if [ "${_pr_cs%% *}" = MOVING ]; then
+    # EVERY STALL IS CAPTURED (2026-10-04): this used to fire only on MOVING ("a frozen domain has nothing to image") - but the
+    # BLOCKED shape, every vCPU idle around one held in Xen waiting for QEMU, is FLAT, and it is exactly what #4 and #5 were; its
+    # memory and Xen's pause_flags are what named the mechanism. Only UNREADABLE (no cpu_time at all) is left uncaptured.
+    if [ "${_pr_cs%% *}" = MOVING ] || [ "${_pr_cs%% *}" = FLAT ]; then   # GUARD:captureflat
         log "  capturing the specimen automatically (dom0 forensics, then a memory image)"
         if timeout 300 qrexec-client-vm dom0 "local.WinWedgeForensics+$CHURN" </dev/null \
              > "$OUT/forensics.tar" 2>"$OUT/forensics.err"; then
