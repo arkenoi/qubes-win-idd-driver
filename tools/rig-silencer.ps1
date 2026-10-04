@@ -16,9 +16,15 @@
 #                (Tamper Protection may refuse - reported as RTP=STILL-ON, never hidden) and add scan exclusions for
 #                the measurement's own paths, end known background workers. Prints one line per action.
 #   -Mode Check  sample every process for -Seconds; QUIET=1 when no process outside the measurement's own set used
-#                more than -MaxPct % of one core; prints the busiest processes either way.
+#                more than -MaxPct % of one core; prints the busiest processes either way. -Exempt a,b,c: process
+#                names whose load IS the measurement (the scene's apps, DWM, the agent under test) - excluded from the
+#                noise test and subtracted, with the kernel's System time, from the total that is judged. Without it the
+#                arm that captures would fail its own gate on the very load being measured (measured 2026-09-30:
+#                every OURS arm "never quiet" on dwm 60%, gui-agent 36%, notepad 20%). -ExemptPids a,b,c: the same,
+#                BY PID - for the scene's own app processes, whose NAMES (explorer, notepad) other background work shares
+#                (Jev: exempting by name hides noise, 0.87). Keep -Exempt to names that are unique to the measurement.
 #   -Mode Off    undo On from the state file.
-param([ValidateSet('On', 'Off', 'Check')][string]$Mode = 'Check', [int]$Seconds = 15, [double]$MaxPct = 2.0, [double]$MaxTotalPct = 50.0,
+param([ValidateSet('On', 'Off', 'Check')][string]$Mode = 'Check', [int]$Seconds = 15, [double]$MaxPct = 2.0, [double]$MaxTotalPct = 50.0, [string]$Exempt = '', [string]$ExemptPids = '',
       [string]$StateFile = 'C:\ProgramData\Qubes\rig-silencer.json')
 $ErrorActionPreference = 'Continue'
 $inv = [Globalization.CultureInfo]::InvariantCulture
@@ -143,7 +149,9 @@ $rows = foreach ($id in $b.Keys) {
 }
 foreach ($id in $a.Keys) { if (-not (& $same $a[$id] $b[$id])) { $churn.Add("exited:" + $a[$id][0] + ":" + $id) } }
 # The measurement's own set: this sampler, the qrexec plumbing that carries it, and the kernel's System/Idle.
-$own = { param($r) $r.Id -in $anc -or $r.Name -in @('Idle', 'System', 'Registry', 'qrexec-agent') }
+$exemptNames = @($Exempt -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+$exemptIds = @($ExemptPids -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ })
+$own = { param($r) $r.Id -in $anc -or $r.Name -in @('Idle', 'System', 'Registry', 'qrexec-agent') -or $r.Name -in $exemptNames -or $r.Id -in $exemptIds }
 $noisy = @($rows | Where-Object { -not (& $own $_) -and $_.Pct -gt $MaxPct } | Sort-Object Pct -Descending)
 $churnOther = @($churn | Where-Object { [int](($_ -split ':')[2]) -notin $anc })
 # THE WHOLE-GUEST TOTAL catches what two snapshots cannot: a burst from a process that started AND exited inside the
@@ -151,12 +159,16 @@ $churnOther = @($churn | Where-Object { [int](($_ -split ':')[2]) -notin $anc })
 # and go at ~0 CPU all the time (measured: the gate failed 2 of 4 times on those alone with nothing above 0.5%). The
 # idle floor of this guest's total is ~30% of one core (kernel/interrupt time no process carries), hence -MaxTotalPct 50.
 $totalPct = 100.0 * ($bb - $ba) / $wall
+# THE JUDGED TOTAL is everything but the measured set and the kernel's own System time (which our capture itself raises).
+$exemptPct = ($rows | Where-Object { $_.Name -in $exemptNames -or $_.Id -in $exemptIds -or $_.Name -in @('System', 'Registry') } | Measure-Object -Property Pct -Sum).Sum
+if ($null -eq $exemptPct) { $exemptPct = 0.0 }
+$otherPct = $totalPct - $exemptPct
 # MISSING DATA FAILS: a process whose counter cannot be read could be the noise. Only the kernel's permanent
 # pseudo-processes are allowed to be unreadable (Jev review round 3: unreadable-not-failing 0.66).
 $kernelNames = @('Idle', 'System', 'Registry', 'Secure System', 'Memory Compression')
-$unreadOther = @($unread | Where-Object { ($_ -split ':')[0] -notin $kernelNames -and [int](($_ -split ':')[1]) -notin $anc })
+$unreadOther = @($unread | Where-Object { ($_ -split ':')[0] -notin $kernelNames -and ($_ -split ':')[0] -notin $exemptNames -and [int](($_ -split ':')[1]) -notin $anc })
 $top = ($rows | Sort-Object Pct -Descending | Select-Object -First 6 | ForEach-Object { [string]::Format($inv, '{0}:{1}={2:F1}', $_.Name, $_.Id, $_.Pct) }) -join ','
-Write-Output ("QUIET=" + $(if ($noisy.Count -eq 0 -and $unreadOther.Count -eq 0 -and $totalPct -le $MaxTotalPct) { 1 } else { 0 }) + "|secs=" + [Math]::Round($wall, 1).ToString($inv) +
-              "|total=" + [Math]::Round($totalPct, 1).ToString($inv) +
+Write-Output ("QUIET=" + $(if ($noisy.Count -eq 0 -and $unreadOther.Count -eq 0 -and $otherPct -le $MaxTotalPct) { 1 } else { 0 }) + "|secs=" + [Math]::Round($wall, 1).ToString($inv) +
+              "|total=" + [Math]::Round($totalPct, 1).ToString($inv) + "|other=" + [Math]::Round($otherPct, 1).ToString($inv) +
               "|churn=" + ($churnOther -join ',') + "|unreadable=" + ($unread -join ',') + "|noisy=" +
               (($noisy | ForEach-Object { [string]::Format($inv, '{0}={1:F1}', $_.Name, $_.Pct) }) -join ',') + "|top=" + $top)

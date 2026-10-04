@@ -1,0 +1,32 @@
+{
+  "note": "QWT 4.3.32 golden for quick-upgrade",
+  "props": {
+    "klass": "StandaloneVM",
+    "maxmem": "0",
+    "memory": "8192",
+    "vcpus": "4",
+    "virt_mode": "hvm"
+  },
+  "sealed_utc": "2026-10-02T15:09:06Z",
+  "vm": "win11r-qwt",
+  "volumes": {
+    "private": {
+      "revisions": [
+        "1790953503-back",
+        "1790953741-back"
+      ],
+      "revisions_to_keep": "2",
+      "size": "21474836480",
+      "usage": "648540061"
+    },
+    "root": {
+      "revisions": [
+        "1790953503-back",
+        "1790953741-back"
+      ],
+      "revisions_to_keep": "2",
+      "size": "85899345920",
+      "usage": "13331578486"
+    }
+  }
+}
