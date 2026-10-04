@@ -7,8 +7,11 @@ Decisions about the install and boot paths as seen from the device model. One se
 **Decided:** in the first minutes of a fresh domain - every install stage, every post-install boot, every boot with an emulated
 medium - our product and our test tools never release work all at once. Anything that reaches the device model (QEMU in the stub
 domain) or Xen happens ONE THING AT A TIME, each step started when the previous one's completion is OBSERVED: QWT's services after
-msiexec come up one by one, each after the previous one is running; the test harness makes no guest call between a boot's first
-qrexec answer and the stage's end or a quiet window, and its instruments (module-base arming, probes, log captures) run after that.
+msiexec come up one by one, each after the previous one is running; the test harness makes no guest call at all in a boot's first
+minutes (prime-run `QUIET_BOOT_SECS`, 420 s in the A/B) - not even its qrexec detection probe; the halt of an install stage is still
+seen from dom0 - and its instruments (module-base arming, probes, log captures) run after that. REVISED 2026-10-04 before the A/B's
+first run: the first rule (quiet only AFTER the first qrexec answer) froze its validation install on that single detection call
+inside stage 2 (findings/wedge.md, the sixth specimen; Jev 0.93 for the revision).
 Pacing means waiting for an observed completion, never a fixed sleep (owner: no pauses or timeouts as a fix).
 
 **Why:** measured 2026-10-04 (findings/wedge.md): the stall is QEMU in the stub domain no longer completing the guest's I/O
@@ -22,9 +25,9 @@ code had spread them out by accident. The one change ever measured to help fits 
 work on one CPU, 0/26 stalls under load vs 17/26 (Jev 0.74). The rule (Jev 0.93 over judging changes by exposure alone 0.07).
 
 **Cost:** installs and test runs take longer by the serialization and the quiet window - tens of seconds to ~2 minutes per clean
-install; ~5 minutes per harness boot with the quiet window (QUIET_WINDOW=300). A stall during a quiet window is detected at the
+install; ~7 minutes per harness boot with the quiet window (QUIET_BOOT_SECS=420). A stall during a quiet window is detected at the
 window's end or the harness deadline, not earlier.
 
 **Not done:** the device-model defect itself - outside this repo; reported upstream only with the owner's approval of the exact
 text. **Seen to fail / pass:** owed - the pre-registered clean-install A/B `mgmt/harness/paced-ab.sh` (CONTROL today vs PACED),
-30 runs per arm, one-sided Fisher on stall counts, bar p <= 0.05.
+30 runs per arm, one-sided Fisher on stall counts, bar p <= 0.05; started 2026-10-04 11:51Z.
