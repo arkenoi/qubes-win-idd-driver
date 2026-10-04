@@ -382,6 +382,17 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
     sleep 20
     el=$(( $(date +%s) - t0 ))
     st=$(state "$CHURN")
+    # QUIET BOOT (QUIET_BOOT_SECS > 0; owner-approved serialize-and-pace, ADR-boot 1; Jev 0.93 after the 2026-10-04 PACED validation):
+    # in each boot's first QUIET_BOOT_SECS seconds this script makes NO guest call at all - not even the qrexec detection probe, the
+    # rescue evaluation or the cpu stats read. The validation install froze with a qrexec-wrapper held after a grant unmap although
+    # the harness had made exactly ONE call in that boot (the detection probe at the first answer, inside stage 2's device work), so a
+    # quiet window that starts AFTER the first answer is too late. A halt (a stage ended) is still seen: the state is read from dom0
+    # every iteration and the Halted branch below restarts the guest and starts a new boot's window. A guest that is frozen when the
+    # window ends gets no pass - the loop runs on to its deadline and the stall classification.
+    if [ "${QUIET_BOOT_SECS:-0}" -gt 0 ] && [ "$st" = Running ] && [ $(( $(date +%s) - t_start )) -lt "${QUIET_BOOT_SECS}" ]; then   # GUARD:quietboot
+        [ "${_qb_boot:-}" = "$t_start" ] || { log "  t+${el}s QUIET BOOT: no guest call for ${QUIET_BOOT_SECS}s after this boot's start, or until the domain leaves Running"; _qb_boot=$t_start; }
+        continue
+    fi
     # CPU quiescence, read the same way verify_installed reads it. The stats stream is
     # NULL-separated records; stripping the separators runs values together (3 becomes "31") and
     # the quiet test can then never pass - that bug was already found and fixed twice here.

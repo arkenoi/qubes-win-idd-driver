@@ -5,8 +5,8 @@
 # longer completing the guest's requests, in a fresh domain's first minutes under concentrated activity. Rule (Jev 0.93): serialize
 # and pace everything that reaches QEMU/Xen there. Two changes, tested together against today's behaviour:
 #   CONTROL  the current release package + prime-run as the gate runs it (QUIET_AFTER_FIRST=0)
-#   PACED    the same release built with QWT's services started ONE AT A TIME after msiexec + prime-run QUIET_AFTER_FIRST=1
-#            (no guest call between a boot's first qrexec answer and the stage end / quiet window)
+#   PACED    the same release built with QWT's services started ONE AT A TIME after msiexec + prime-run QUIET_BOOT_SECS=420
+#            (no guest call at all in a boot's first 420 s - revised before run 1 after the 2026-10-04 validation, Jev 0.93)
 # Everything else identical: base win10-base (sealed), subject win10-acc recreated by prime-run every run, the gate's own prime-run
 # invocation (`prime-run.sh <base> <subject> ours --payload <tree>`), arms INTERLEAVED so background drift hits both.
 #
@@ -25,16 +25,16 @@ OUT="scratchpad/paced-ab-$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$OUT"
 say(){ echo "$(date -u +%H:%M:%SZ) paced-ab: $*" | tee -a "$OUT/run.log"; }
 pkgid(){ grep -aoE '"package_version"[^,]*' "$1/MANIFEST.json" 2>/dev/null | head -1; }
 printf 'run\tarm\tstart_utc\tsecs\texit\tverdict\tclass\tevidence\n' > "$OUT/runs.tsv"
-say "arms: CONTROL=$CTRL ($(pkgid "$CTRL")) QUIET_AFTER_FIRST=0 | PACED=$PACED ($(pkgid "$PACED")) QUIET_AFTER_FIRST=1; $N per arm, interleaved"
+say "arms: CONTROL=$CTRL ($(pkgid "$CTRL")) QUIET_BOOT_SECS=0 | PACED=$PACED ($(pkgid "$PACED")) QUIET_BOOT_SECS=420; $N per arm, interleaved"
 say "base $BASE, subject $SUBJ; the pre-registration is $OUT/../$(basename "$0" .sh)-PREREG.txt (written before the first run)"
 
 c_stall=0; p_stall=0; c_ok=0; p_ok=0; c_other=0; p_other=0
 for i in $(seq 1 "$N"); do
   for arm in CONTROL PACED; do
-    tree="$CTRL"; q=0; [ "$arm" = PACED ] && { tree="$PACED"; q=1; }
+    tree="$CTRL"; q=0; [ "$arm" = PACED ] && { tree="$PACED"; q=420; }
     log="$OUT/run-$i-$arm.log"; t0=$(date +%s); st=$(date -u +%H:%M:%SZ)
-    say "run $i/$N $arm: prime-run $BASE -> $SUBJ (QUIET_AFTER_FIRST=$q)"
-    QUIET_AFTER_FIRST=$q QUIET_WINDOW=300 \
+    say "run $i/$N $arm: prime-run $BASE -> $SUBJ (QUIET_BOOT_SECS=$q)"
+    QUIET_BOOT_SECS=$q QUIET_AFTER_FIRST=0 \
       ./mgmt/harness/prime-run.sh "$BASE" "$SUBJ" ours --payload "$tree" --deadline "${AB_DEADLINE:-1800}" > "$log" 2>&1
     rc=$?; secs=$(( $(date +%s) - t0 ))
     ev=$(grep -aoE 'evidence/prime-[a-z]+-[a-z0-9-]+-[0-9]{8}-[0-9]{6}' "$log" | head -1)
