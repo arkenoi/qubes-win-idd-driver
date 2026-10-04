@@ -18,6 +18,7 @@ subprocess and required to FAIL (a guard never seen to fail is decoration). XPAT
     anyresult     the 201 select loses ResultCode!=0                   -> a helper's clean exit (0) is subscribed to
     noerrorexit   the SCM select loses 7023/7024                        -> QrexecAgent's error exit is NOT subscribed to
     selftrigger   the task list gains \\QwtDeathReporter                -> the reporter would trigger itself
+    onelist       the executables are one list again (both halves = all) -> a Select over 16 terms, which schtasks rejects
 """
 import os, re, subprocess, sys
 from pathlib import Path
@@ -26,7 +27,10 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 INSTALLER = ROOT / 'packaging' / 'setup' / 'Install-QwtImproved.ps1'
 REPORTER = ROOT / 'guest' / 'qwt-report-death.ps1'
 MAKESETUP = ROOT / 'packaging' / 'make-setup.ps1'
-KNOBS = ('noexefilter', 'anyresult', 'noerrorexit', 'selftrigger')
+KNOBS = ('noexefilter', 'anyresult', 'noerrorexit', 'selftrigger', 'onelist')
+# Task Scheduler rejects a Select whose OR-list is too long (measured 2026-10-04 on win11-acc: 22 executables register, 24 do not;
+# the single list of 28 failed the reporter's registration on every install). Each Select is held to MAX_TERMS, with margin.
+MAX_TERMS = 16
 
 try:
     from lxml import etree
@@ -60,13 +64,20 @@ def build_selects(reg: str, defect: str) -> dict[str, list[str]]:
     exes = ps_list(reg, 'ourExes'); svcs = ps_list(reg, 'ourServices'); tasks = ps_list(reg, 'ourTasks')
     if defect == 'selftrigger':
         tasks = tasks + ['\\QwtDeathReporter']
-    exe_or = ' or '.join(f"Data='{e}'" for e in exes)
+    half = -(-len(exes) // 2)   # ceil, as the installer's [math]::Ceiling($ourExes.Count / 2)
+    exe_a, exe_b = exes[:half], exes[half:]
+    if defect == 'onelist':
+        exe_a = exe_b = exes
+    exe_or_a = ' or '.join(f"Data='{e}'" for e in exe_a)
+    exe_or_b = ' or '.join(f"Data='{e}'" for e in exe_b)
     svc_or = ' or '.join(f"Data[@Name='param1']='{s}'" for s in svcs)
     task_or = ' or '.join(f"Data[@Name='TaskName']='{t}'" for t in tasks)
     selects: dict[str, list[str]] = {'Application': [], 'System': [], 'Microsoft-Windows-TaskScheduler/Operational': []}
     for m in re.finditer(r'"<Select Path=`"(\$tsPath|[A-Za-z]+)`">(.*?)</Select>"', reg):
         path = m.group(1).replace('$tsPath', 'Microsoft-Windows-TaskScheduler/Operational')
-        xp = m.group(2).replace('$exeOr', exe_or).replace('$svcOr', svc_or).replace('$taskOr', task_or)
+        xp = m.group(2).replace('$exeOrA', exe_or_a).replace('$exeOrB', exe_or_b).replace('$svcOr', svc_or).replace('$taskOr', task_or)
+        if '$exeOr' in xp:
+            raise SystemExit('FAIL  a Select still names $exeOr - the installer and this test disagree on the executable lists')
         if defect == 'noexefilter' and ('1000' in xp or '1001' in xp):
             xp = re.sub(r' and EventData\[.*\]\]$', ']', xp)
         if defect == 'anyresult' and 'EventID=201' in xp:
@@ -138,6 +149,13 @@ def run(defect: str) -> int:
     reg = region(text, 'DEATH-REPORTER')
     selects = build_selects(reg, defect)
     fail = 0
+    # every Select inside the limit Task Scheduler accepts (schtasks: 'The specified query is invalid' above ~22 terms)
+    for channel, xps in selects.items():
+        for i, xp in enumerate(xps):
+            terms = len(re.findall(r"Data(?:\[@Name='[^']+'\])?\s*(?:=|!=)", xp))
+            ok = terms <= MAX_TERMS
+            fail += 0 if ok else 1
+            print(f"{'ok  ' if ok else 'FAIL'} xpath: {channel} select {i + 1} has {terms} Data terms (Task Scheduler limit: at most {MAX_TERMS} here)")
     for name, want, got in matrix(selects):
         ok = want == got
         fail += 0 if ok else 1

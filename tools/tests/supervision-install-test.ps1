@@ -163,6 +163,9 @@ Check 'reporter: TaskScheduler/Operational is enabled first' (@($script:W.wevtut
 Check 'reporter: schtasks /create /tn QwtDeathReporter /xml ... /f, then /query' (@($script:W.schtasks | Where-Object { $_ -like '/create /tn QwtDeathReporter /xml * /f' }).Count -eq 1 -and @($script:W.schtasks | Where-Object { $_ -eq '/query /tn QwtDeathReporter' }).Count -eq 1)
 Check 'reporter: the task XML file is removed afterwards' (-not (Test-Path -LiteralPath (Join-Path $tmp 'qwt-death-reporter.xml')))
 $xmlText = $script:W.taskXml['QwtDeathReporter']
+# SUPERVISION_DUMP_TASKXML=<path>: write the captured task XML out, so it can be put through the REAL schtasks on a guest (the fake
+# here cannot know Task Scheduler's own limits - 2026-10-04 its XPath term limit failed every install of the rz39 gate).
+if ($env:SUPERVISION_DUMP_TASKXML -and $xmlText) { [IO.File]::WriteAllText($env:SUPERVISION_DUMP_TASKXML, $xmlText, [Text.Encoding]::Unicode) }
 Check 'reporter: the task XML was written (UTF-16) and captured' ([bool]$xmlText)
 $x = $null
 try { $x = [xml]$xmlText } catch { }
@@ -190,7 +193,8 @@ if ($x) {
         $queries = @($sub.QueryList.Query)
         Check 'subscription: three queries - Application, System, TaskScheduler/Operational' ($queries.Count -eq 3 -and (@($queries | ForEach-Object { $_.Path }) -join ',') -eq 'Application,System,Microsoft-Windows-TaskScheduler/Operational')
         $selects = @($queries | ForEach-Object { @($_.Select) } | ForEach-Object { $_.'#text' })
-        Check 'subscription: seven selects' ($selects.Count -eq 7) "$($selects.Count)"
+        # nine: the executables are two lists (Task Scheduler rejects one list of 28 - measured 2026-10-04), so 1000 and 1001 have two each
+        Check 'subscription: nine selects (1000 and 1001 one per executable list)' ($selects.Count -eq 9) "$($selects.Count)"
         Check 'subscription: 1000 and 1001 are filtered to our executables, each by Data=' (@($selects | Where-Object { $_ -match "EventID=1000\] and EventData\[Data='gui-agent\.exe' or " }).Count -eq 1 -and @($selects | Where-Object { $_ -match "EventID=1001\] and EventData\[Data='gui-agent\.exe' or " }).Count -eq 1)
         Check 'subscription: 1026 is taken unfiltered (the script filters it)' (@($selects | Where-Object { $_ -eq "*[System[Provider[@Name='.NET Runtime'] and EventID=1026]]" }).Count -eq 1)
         Check 'subscription: every event of our source' (@($selects | Where-Object { $_ -eq "*[System[Provider[@Name='Qubes Windows Tools']]]" }).Count -eq 1)
