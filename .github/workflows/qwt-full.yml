@@ -908,7 +908,7 @@ jobs:
               $rec = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
               if (-not $rec) { break }
               $n = [int]$rec.GetType().InvokeMember('FieldCount', 'GetProperty', $null, $rec, $null)
-              $rows += ,@(1..$n | ForEach-Object { [string]$rec.GetType().InvokeMember('StringData', 'GetProperty', $null, $rec, @($_)) })
+              $rows += ,@(1..$n | ForEach-Object { [string]$rec.GetType().InvokeMember('StringData', 'GetProperty', $null, $rec, @([int]$_)) })
             }
             return $rows
           }
