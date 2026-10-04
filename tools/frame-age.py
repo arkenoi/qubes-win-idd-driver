@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Frame age per slot, from a saved census: brokerHB - captick, both guest GetTickCount64.
+"""Frame age per slot, from a saved census: now - captick, both guest GetTickCount64.
 
 WHY: the original cold-boot staleness cell re-read the section 6 s after the source advanced and found
 the delivered frame unchanged. That reading cannot distinguish "this channel never delivers again" from
 "its next frame took longer than 6 s" - and the two call for completely different work. captick is when
-the broker last captured a frame for that slot and brokerHB is the broker's heartbeat at the moment of
-the reading, both on the guest's own clock, so their difference is the frame's age with none of my
-polling latency in it. Run it on any saved routes.txt.
+the broker last captured a frame for that slot and `now` is the peek's own GetTickCount64 at the moment of
+the reading (ABI 19; the broker has no heartbeat any more - older readings fall back to brokerHB, which was
+the broker's heartbeat then), both on the guest's own clock, so their difference is the frame's age with
+none of my polling latency in it. Run it on any saved routes.txt.
 """
 import re, sys
 if len(sys.argv) < 2:
@@ -28,7 +29,7 @@ for path in sys.argv[1:]:
             cls[int(m.group(1), 16)] = m.group(2)
     print(f"== {path}")
     for sample in re.split(r'(?=^S\d+ HDR )', txt, flags=re.M):
-        hb = re.search(r'brokerHB=(\d+)', sample)
+        hb = re.search(r' now=(\d+)', sample) or re.search(r'brokerHB=(\d+)', sample)
         if not hb: continue
         hb = int(hb.group(1))
         rows = []

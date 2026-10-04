@@ -8,6 +8,7 @@
 #   clean build of gui-agent/deathevent_test.c   MUST pass (the record's source, type, id, six strings, bounds, failure paths)
 #   DEATHEVENT_DEFECT_* builds                   MUST fail - a guard never seen to fail is decoration:
 #       WARNING   written as a warning            SHAREDID  one id for every child            NOCODE  the exit code dropped
+#       HANGASEXIT a hang written as "exited, exit code unknown" (rz39 defect 2)
 #   UNCOMPILED SHAPE CHECK of the shipped callers: watchdog/watchdog.c parses with gcc -fsyntax-only against the stubs and the
 #   real log.h/config.h/qubes-io.h (the main.c and etwproxy.c sites pull ETW/LSA/DirectX headers no stub covers, so they are
 #   held to a static shape: the include, exactly one DeathEventReport per child id, no LogWarning left on the death lines).
@@ -41,7 +42,7 @@ if build clean ""; then
 else say "FAIL  clean build: $(head -3 "$OUT/clean.build.err")"; bad=1; fi
 
 # ---- every defect knob must make the suite FAIL -----------------------------------------------------------
-for d in WARNING SHAREDID NOCODE; do
+for d in WARNING SHAREDID NOCODE HANGASEXIT; do
     if build "defect-$d" "-DDEATHEVENT_DEFECT_$d"; then
         "$OUT/defect-$d" >"$OUT/defect-$d.out" 2>&1; rc=$?
         f=$(grep -c '^FAIL' "$OUT/defect-$d.out")
@@ -75,6 +76,10 @@ shape "QGANOTIFBRIDGEEXIT is logged at ERROR" "$(grep -q 'LogError("QGANOTIFBRID
 shape "QGABROKERDIED is logged at ERROR" "$(grep -q 'LogError("QGABROKERDIED' "$MAIN" && ! grep -q 'LogWarning("QGABROKERDIED' "$MAIN" && echo 1 || echo 0)"
 shape "the etwproxy exit lines ('proxy exited rc=') are logged at ERROR" "$([ "$(grep -c 'LogWarning("ETWPROXYSUP proxy exited rc=' "$ETW")" -eq 0 ] && [ "$(grep -c 'LogError("ETWPROXYSUP proxy exited rc=' "$ETW")" -ge 3 ] && echo 1 || echo 0)"
 shape "the etwproxy park line is logged at ERROR" "$(grep -q 'LogError("ETWPROXYSUP parked for this boot' "$ETW" && echo 1 || echo 0)"
+# rz39: a hang is written as a hang (DEATHEVENT_EXIT_HUNG), and the watchdog's quick-death line names the code it saw, not one cause
+shape "main.c writes the broker's hang as DEATHEVENT_EXIT_HUNG, never as an exit with no code" "$(grep -q 'hung ? DEATHEVENT_EXIT_HUNG : DEATHEVENT_EXIT_UNKNOWN' "$MAIN" && echo 1 || echo 0)"
+shape "watchdog.c's quick-death line carries the exit code it saw (QGA_QUICKDEATH_CODE) and no hard-coded cause" \
+      "$(grep -q 'QGA_QUICKDEATH_CODE' "$WD" && ! grep -q 'grant-table exhaustion, 0x5aa, needs a reboot' "$WD" && echo 1 || echo 0)"
 
 
 # ---- NO GUI DOMAIN IS A START-TIME CONDITION, NOT A DEATH (include/qga-exitcodes.h; Jev 0.94, 2026-10-03) ---------------------

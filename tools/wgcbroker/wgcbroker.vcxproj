@@ -24,6 +24,11 @@
     </ProjectConfiguration>
   </ItemGroup>
 
+  <!-- TEST BUILDS ONLY (qwt-full fault_injection=true passes /p:WgcbrkFaultInjection=1): the broker's fault knobs are
+       compiled in. Release builds leave it 0 and the code does not exist (same contract as the agent's QgaFaultInjection). -->
+  <PropertyGroup>
+    <WgcbrkFaultInjection Condition="'$(WgcbrkFaultInjection)'==''">0</WgcbrkFaultInjection>
+  </PropertyGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <ProjectGuid>{7C2A9E14-0B3D-4F62-9A11-2D6E8F4C7B90}</ProjectGuid>
@@ -96,7 +101,7 @@
       <SDLCheck>false</SDLCheck>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <PreprocessorDefinitions>NDEBUG;_CONSOLE;WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;WGCBRK_FAULT_INJECTION=$(WgcbrkFaultInjection);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>

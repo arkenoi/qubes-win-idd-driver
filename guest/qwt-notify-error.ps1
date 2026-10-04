@@ -2,13 +2,27 @@
 # (agent/gui-agent/notifyerr.h is the C policy core; docs/DESIGN-error-notify.md is the design).
 #
 # Dot-source it, then:   Send-QwtError -Component 'activate-idd' -Id 'reboot-refused' `
-#                            -Summary 'shutdown.exe refused the reboot; reboot this qube by hand' `
-#                            -LogPath 'C:\qwt-idd-activate.log'
+#                            -Header 'The display driver needs a reboot that was refused' `
+#                            -Next 'The new display driver is not primary until this qube is rebooted by hand.' `
+#                            -Cause 'Cause: Windows refused the reboot request (shutdown.exe exit code 1190).' `
+#                            -Tech (Format-QwtNotifyTechLine -Subject 'activate-idd.ps1' -Count 'reported once per boot' -Evidence 'C:\qwt-idd-activate.log')
 #
 # It reports a guest error to dom0 as a notification IN ADDITION TO the caller's own log line -
 # never instead of it. The caller logs first, exactly as before, then calls this. The transport
 # is the toast bridge's proven one-shot: `notifhost.exe --notify-file <file>` over
 # qubes.Notifications, started and NOT waited for.
+#
+# THE TEXT - ONE shape for every sender (this file, the agent's notifyerr.h, notifhost; rz39):
+#   header   line 1 of the notify file: WHAT happened to WHICH component, in human names - no codes,
+#            no file names, no counts, no product prefix (dom0 shows the source qube); <= ~60 chars
+#   -Next    what it means for the user and what the system does next; what the user can do, only
+#            when there is something
+#   -Cause   the cause in words WITH the code (optional)
+#   -Tech    ONE technical line, Format-QwtNotifyTechLine: the executable, pid, code, how long it
+#            ran, "death n this boot" or "reported once per boot", and where the evidence is
+# A code's meaning comes from the table of the code's SOURCE (a process exit or exception code, a
+# Windows error the SCM reports, a service-specific code, a task result) - the death reporter holds
+# those tables; never the process table for the others.
 #
 # HONEST LIMIT (owner, 2026-09-09): that transport is qrexec - notifhost hands the relay to the
 # LOCAL qrexec-agent service, which owns the vchan. So this delivers only while qrexec-agent is
@@ -36,7 +50,8 @@
 #              With no token the route REFUSES and says so; it never guesses one.
 #   redaction  the payload is REFUSED (not masked) if it is longer than 600 bytes, more than 6
 #              lines, has a control character, a credential keyword, a base64-class run >= 40 or
-#              a hex run >= 32. Pass templated text: component, id, one sentence, the log path.
+#              a hex run >= 32. Pass templated text: the four parts above, never a value read
+#              from the system, never a file's contents.
 #   fail-open  never throws, never waits, never changes the caller's state. Returns a status
 #              string ('send', 'rejected:severity', 'rejected:name', 'rejected:redact',
 #              'suppressed:duplicate', 'suppressed:cap', 'failed:transport', 'gated'). Transport
@@ -221,14 +236,52 @@ function Write-QwtNotifyOnce {
     try { & $script:QwtNotifyLog $Message } catch { }
 }
 
+# --- the text: ONE shape for every sender (mirrors notifyerr.h QerrComposeNotifyText) ---------
+# header / line 1 / [cause] / technical line, CRLF-separated. A CR or LF inside a part would move
+# text into the wrong line unnoticed, so each part has them folded to a space.
+function Format-QwtNotifyPart {
+    param([string]$Text)
+    return (("$Text" -replace "`r`n", ' ') -replace '[\r\n]', ' ')
+}
+function Format-QwtNotifyText {
+    param([string]$Header, [string]$Next, [string]$Cause = '', [string]$Tech)
+    $lines = New-Object System.Collections.ArrayList
+    [void]$lines.Add((Format-QwtNotifyPart $Header))
+    [void]$lines.Add((Format-QwtNotifyPart $Next))
+    if ($Cause) { [void]$lines.Add((Format-QwtNotifyPart $Cause)) }
+    [void]$lines.Add((Format-QwtNotifyPart $Tech))
+    return ($lines -join "`r`n")   # GUARD:bodylines
+}
+# The technical line (mirrors QerrFormatTechLine):
+#   "<subject>[ pid <n>][; <code>][; ran <h:mm:ss>]; <count>. Evidence: <where>."
+# Subject = the executable, script or task; Code = "exit code 2" / "exception 0xC0000409" / ... already
+# phrased by the source's table; Count = "death 3 this boot" or "reported once per boot".
+function Format-QwtNotifyTechLine {
+    param(
+        [Parameter(Mandatory)][string]$Subject,
+        [long]$ProcessId = 0,
+        [string]$Code = '',
+        [string]$Ran = '',
+        [Parameter(Mandatory)][string]$Count,
+        [Parameter(Mandatory)][string]$Evidence
+    )
+    $t = $Subject
+    if ($ProcessId -gt 0) { $t += " pid $ProcessId" }
+    if ($Code) { $t += "; $Code" }
+    if ($Ran) { $t += "; ran $Ran" }
+    return "$t; $Count. Evidence: $Evidence."
+}
+
 # --- the entry point ------------------------------------------------------------------------
 function Send-QwtError {
     param(
         [Parameter(Mandatory)][string]$Component,
         [Parameter(Mandatory)][string]$Id,
         [ValidateSet('INFO', 'DEGRADED', 'ACTION')][string]$Severity = 'ACTION',
-        [Parameter(Mandatory)][string]$Summary,
-        [string]$LogPath = ''
+        [string]$Header = '',    # line 1 of the notify file (see the head of this file)
+        [string]$Next = '',      # line 2: what it means, what happens next
+        [string]$Cause = '',     # line 3: the cause with the code (optional)
+        [string]$Tech = ''       # the technical line, Format-QwtNotifyTechLine
     )
     try {
         if (-not (Get-QwtNotifyErrorsGate)) { return 'gated' }
@@ -240,9 +293,10 @@ function Send-QwtError {
             & $script:QwtNotifyLog "$Component.$Id not sent: rejected:name"
             return 'rejected:name'
         }
-        $hint = $LogPath
-        if (-not $hint) { $hint = 'see the gui-agent log directory' }
-        $text = "Qubes Windows Tools, ${Component}: $Summary`r`nError id: $Id. Reported once per boot; the detail is in the guest log: $hint"
+        # A text that does not compose (no header, no line 1 or no technical line) is not sent at
+        # all, and that is said: a notification never composed is otherwise a silent one.
+        if (-not $Header -or -not $Next -or -not $Tech) { & $script:QwtNotifyLog "$Component.$Id not sent: rejected:redact (the text did not compose - empty header, line 1 or technical line)"; return 'rejected:redact' }
+        $text = Format-QwtNotifyText -Header $Header -Next $Next -Cause $Cause -Tech $Tech
         $reason = Get-QwtNotifyRedactReason $text
         if ($reason) { & $script:QwtNotifyLog "$Component.$Id not sent: rejected:redact ($reason)"; return 'rejected:redact' }   # GUARD:redact
 

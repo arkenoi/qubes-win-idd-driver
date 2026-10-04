@@ -23,8 +23,11 @@
                  exe inside the window is a second death
       count      id death-<n> per boot, n counts every death; the 9th is suppressed by the route's cap and is STILL
                  logged at ERROR; a new boot token restarts the count
-      text       what died, the code with its meaning, the run time, "death n this boot", the evidence by prefix
-                 (no WER hash), the route accepts it (no redaction refusal, under its size)
+      text       the rz39 shape: header / what next / cause / technical line (every rendering and its rules are
+                 tools/tests/notify-render-test.ps1's); here: the parts are present, the code and its meaning come from
+                 the right source's table, the run time, "death n this boot", the evidence by prefix (no WER hash), the
+                 route accepts it (no redaction refusal, under its size); a service's line 1 follows the SCM's recovery
+                 settings as the registry has them (probe hooked)
 #>
 [CmdletBinding()]
 param([string]$ReporterPath)
@@ -70,6 +73,7 @@ $script:QwtDeathHelper = $helperPath
 $script:QwtDeathStateDir = $stateDir
 $script:QwtDeathLogDir = $logDir
 $script:QwtDeathInstallDir = 'C:\Program Files\Qubes Tools\'   # the samples' paths; the resolver itself is checked in 6d
+$script:QwtDeathRecoveryProbe = { param($Key) return @{ restart = $true; delayMs = 5000; onError = $true } }   # as the installer arms it
 function Write-Host { }   # the reporter and the route echo; the suite's own output goes through the qualified name above
 
 . $ReporterPath
@@ -139,6 +143,12 @@ $badSvc = @($script:QwtDeathServices.Values | Where-Object { -not $script:QwtDea
 Check 'tables: every service maps to an executable in the table' ($badSvc.Count -eq 0) ($badSvc -join ',')
 Check 'tables: helper tasks map to helper executables' ($script:QwtDeathExes.ContainsKey($script:QwtDeathHelperTasks['\Qubes-WgcBroker']) -and $script:QwtDeathExes.ContainsKey($script:QwtDeathHelperTasks['\Qubes-NotifBridge']))
 Check 'tables: the reporter''s own task is not in any task list' (-not $script:QwtDeathHelperTasks.ContainsKey('\QwtDeathReporter') -and ('\QwtDeathReporter' -notin $script:QwtDeathScriptTasks))
+$noHuman = @($script:QwtDeathExes.Keys | Where-Object { -not $script:QwtDeathHuman.ContainsKey($_) })
+Check 'tables: every executable has a human name (the header never says an exe name)' ($noHuman.Count -eq 0) ($noHuman -join ',')
+$badTask = @($script:QwtDeathScriptTasks | Where-Object { -not $script:QwtDeathTaskNames.ContainsKey($_) -or -not (Test-QwtNotifyName $script:QwtDeathTaskNames[$_].id 24) -or -not $script:QwtDeathTaskNames[$_].human -or -not $script:QwtDeathTaskNames[$_].impact })
+Check 'tables: every script task has a machine id (the route''s name rule), a human name and an impact' ($badTask.Count -eq 0) ($badTask -join ',')
+$noKey = @($script:QwtDeathServices.Keys | Where-Object { -not $script:QwtDeathServiceKeys.ContainsKey($_) -or -not $script:QwtDeathServiceImpact.ContainsKey($script:QwtDeathServices[$_]) })
+Check 'tables: every service has its service key and an impact line' ($noKey.Count -eq 0) ($noKey -join ',')
 
 # 2. number parsing: the radix is the caller's
 Check 'parse: "0x1a2c" -> 6700' ((ConvertTo-QwtDeathUInt32 '0x1a2c') -eq 6700)
@@ -149,14 +159,24 @@ Check 'parse: "%%1460" -> 1460' ((ConvertTo-QwtDeathUInt32 '%%1460') -eq 1460)
 Check 'parse: "1460 (0x5B4)" -> 1460 (the b is not a radix hint)' ((ConvertTo-QwtDeathUInt32 '1460 (0x5B4)') -eq 1460)
 Check 'parse: "-1073741819" -> 0xC0000005' ((ConvertTo-QwtDeathUInt32 '-1073741819') -eq [uint32]0xC0000005L)
 Check 'parse: garbage -> $null' ($null -eq (ConvertTo-QwtDeathUInt32 'ERROR'))
-Check 'meaning: 0xC0000409 names the fast-fail' ((Get-QwtDeathCodeMeaning ([uint32]0xC0000409L)) -like 'fast-fail*')
-Check 'meaning: 1460 is a timeout' ((Get-QwtDeathCodeMeaning ([uint32]1460)) -eq 'timeout')
-Check 'format: a large code renders as 0x%08X with its meaning' ((Format-QwtDeathCode ([uint32]0xC0000005L) 'exception') -eq 'exception 0xC0000005 (access violation)')
-Check 'format: a small code renders in decimal' ((Format-QwtDeathCode ([uint32]1460) 'error') -eq 'error 1460 (timeout)')
+Check 'meaning: 0xC0000409 names the fast-fail (process table)' ((Get-QwtDeathCodeMeaning ([uint32]0xC0000409L) 'process') -like '*fast-fail abort*')
+Check 'meaning: 1460 is a timeout in the Windows-error table (the SCM''s 7023)' ((Get-QwtDeathCodeMeaning ([uint32]1460) 'win32') -eq 'the operation timed out')
+Check 'meaning: 1460 means nothing in the process table (the tables are per source)' ((Get-QwtDeathCodeMeaning ([uint32]1460) 'process') -eq '')
+Check 'meaning: a service-specific code has no table of ours (the service defines it)' ((Get-QwtDeathCodeMeaning ([uint32]1) 'service') -eq '')
+Check 'meaning: a task result 1 is the script''s own exit, never TerminateProcess' (((Get-QwtDeathCodeMeaning ([uint32]1) 'task') -like 'the script reported a failure*') -and ((Get-QwtDeathCodeMeaning ([uint32]1) 'task') -notlike '*TerminateProcess*'))
+Check 'meaning: a crash code in a task result is said to be its program''s crash' ((Get-QwtDeathCodeMeaning ([uint32]0xC0000005L) 'task') -eq 'its program crashed with an access violation')
+Check 'meaning: an executable''s documented exit code comes first (notifhost 2)' ((Get-QwtDeathCodeMeaning ([uint32]2) 'process' 'notifhost.exe') -like 'notification access is denied*')
+Check 'meaning: exit code 1 of a process is the TerminateProcess/own-failure ambiguity, said as such' ((Get-QwtDeathCodeMeaning ([uint32]1) 'process') -like 'exit code 1 - the code TerminateProcess imposes*')
+Check 'exception: 0xC... and 0xE... codes are exceptions, HRESULTs and small codes are not' ((Test-QwtDeathExceptionCode ([uint32]0xC0000005L)) -and (Test-QwtDeathExceptionCode ([uint32]0xE06D7363L)) -and -not (Test-QwtDeathExceptionCode ([uint32]0x80070002L)) -and -not (Test-QwtDeathExceptionCode ([uint32]1)))
+Check 'format: a large code renders as 0x%08X' ((Format-QwtDeathCode ([uint32]0xC0000005L) 'exception') -eq 'exception 0xC0000005')
+Check 'format: a small code renders in decimal' ((Format-QwtDeathCode ([uint32]1460) 'Windows error') -eq 'Windows error 1460')
 Check 'format: an unknown code is said so' ((Format-QwtDeathCode $null 'exit code') -eq 'exit code unknown')
 Check 'format: 754000 ms -> 0:12:34' ((Format-QwtDeathRun 754000) -eq '0:12:34')
-Check 'format: an unknown run time is said so' ((Format-QwtDeathRun $null) -eq 'an unknown time')
-Check 'component: a task name is lowered, stripped and bounded to 24' (((ConvertTo-QwtDeathComponent 'QubesWindowsUpdateDownload').Length -le 24) -and ((ConvertTo-QwtDeathComponent 'QubesPvNic') -eq 'qubespvnic'))
+Check 'format: an unknown run time renders empty (the technical line omits it)' ((Format-QwtDeathRun $null) -eq '')
+Check 'cause: meaning then the code' ((Format-QwtDeathCause ([uint32]0xC0000005L) 'process' '' 'exception 0xC0000005' 'the WER report') -eq 'Cause: an access violation - exception 0xC0000005.')
+Check 'cause: an unknown code is said to be unknown, never guessed' ((Format-QwtDeathCause ([uint32]0xC0000AAAL) 'process' '' 'exception 0xC0000AAA' 'the WER report') -eq 'Cause: exception 0xC0000AAA - not a code this reporter knows; the WER report has the detail.')
+Check 'component: a script task''s machine id comes from its table, in the executables'' style' ($script:QwtDeathTaskNames['\QubesPvNic'].id -eq 'pvnic' -and $script:QwtDeathTaskNames['\QubesAutologonGuard'].id -eq 'autologon-guard' -and $script:QwtDeathTaskNames['\QubesWindowsUpdateDownload'].id -eq 'update-download')
+Check 'recovery: armed -> Windows restarts it; armed for crashes only -> not after an error exit; unreadable -> no guess' (((Format-QwtDeathRecovery @{ restart = $true; delayMs = 5000; onError = $true } $true) -like 'Windows restarts it automatically*5 s)') -and ((Format-QwtDeathRecovery @{ restart = $true; delayMs = 5000; onError = $false } $true) -like 'Windows does NOT restart it after an error exit*') -and ((Format-QwtDeathRecovery @{ restart = $true; delayMs = 5000; onError = $false } $false) -like 'Windows restarts it automatically*') -and ((Format-QwtDeathRecovery @{ restart = $false; delayMs = 0; onError = $true } $true) -like 'Windows does NOT restart it (no restart is armed)*') -and ((Format-QwtDeathRecovery $null $true) -like 'Windows restarts it only if its recovery is armed*'))
 
 # 3. ownership and parsing, record by record
 $ev = ConvertFrom-QwtDeathEvent (New-Crash 'notepad.exe' 100 0xC0000005L $T0)
@@ -166,7 +186,7 @@ Check 'ours: a gui-agent.exe outside our install directory is not ours' (-not $e
 $ev = ConvertFrom-QwtDeathEvent (New-Crash 'gui-agent.exe' 6700 0xC0000409L $T0)
 Check 'crash 1000: ours, kind crash, component gui-agent' ($ev.ours -and $ev.kind -eq 'crash' -and $ev.component -eq 'gui-agent')
 Check 'crash 1000: pid from the hex field' ($ev.pid -eq 6700)
-Check 'crash 1000: exception code from the hex field' ($ev.code -eq [uint32]0xC0000409L -and $ev.codeKind -eq 'exception')
+Check 'crash 1000: exception code from the hex field, an exception-class code' ($ev.code -eq [uint32]0xC0000409L -and (Test-QwtDeathExceptionCode $ev.code))
 Check 'crash 1000: run time from the start FILETIME (754 s)' ($null -ne $ev.ranMs -and [Math]::Abs($ev.ranMs - 754000) -lt 1000) "$($ev.ranMs)"
 Check 'crash 1000: keyed by pid' ($ev.anchor -eq 'pid')
 Check 'crash 1000: the EventID with Qualifiers still parses' ($ev.origin -like 'Application/1000#*')
@@ -185,25 +205,27 @@ $ev = ConvertFrom-QwtDeathEvent (New-Clr 'contoso.exe' 'System.Exception' $T0)
 Check 'clr 1026: a foreign managed crash is not ours' (-not $ev.ours)
 $ev = ConvertFrom-QwtDeathEvent (New-Super 4001 'gui-agent.exe' '4321' '0xC0000005' '60000' $T0)
 Check 'our 4001: ours, keyed by pid, exit code and run time from the structured strings' ($ev.ours -and $ev.kind -eq 'supervisor' -and $ev.anchor -eq 'pid' -and $ev.pid -eq 4321 -and $ev.code -eq [uint32]0xC0000005L -and $ev.ranMs -eq 60000)
-Check 'our 4001: the label says who relaunches it' ($ev.label -like '*QubesGuiWatchdog service relaunches it*')
+Check 'our 4001: the label says it exited unasked, the event id is kept' ($ev.label -like '*exited without being asked to*' -and $ev.eventId -eq 4001)
 $ev = ConvertFrom-QwtDeathEvent (New-Super 4002 'wgcbroker.exe' '500' 'unknown' 'unknown' $T0)
-Check 'our 4002: unknown code and run time stay unknown' ($ev.ours -and $null -eq $ev.code -and $null -eq $ev.ranMs)
+Check 'our 4002: unknown code and run time stay unknown, and unknown is not a hang' ($ev.ours -and $null -eq $ev.code -and $null -eq $ev.ranMs -and -not $ev.hung)
+$ev = ConvertFrom-QwtDeathEvent (New-Super 4002 'wgcbroker.exe' '500' 'hung' '125000' $T0)
+Check 'our 4002: "hung" is a hang - no exit code, the label says it stopped answering and was ended' ($ev.ours -and $ev.hung -and $null -eq $ev.code -and $ev.ranMs -eq 125000 -and $ev.label -like '*stopped answering (a hang) and was ended by the GUI agent*')
 $ev = ConvertFrom-QwtDeathEvent (New-Super 4999 'gui-agent.exe' '1' '0x0' '1' $T0)
 Check 'our source, id 4999: not a death record' (-not $ev.ours)
 $ev = ConvertFrom-QwtDeathEvent (New-Svc 7023 'Qubes RPC agent' $T0 @{ param2 = '%%1460' })
 Check 'scm 7023: ours, always a new death, code 1460 from "%%1460"' ($ev.ours -and $ev.exe -eq 'qrexec-agent.exe' -and $ev.anchor -eq 'nopid' -and $ev.code -eq 1460)
 $ev = ConvertFrom-QwtDeathEvent (New-Svc 7024 'QubesDB daemon' $T0 @{ param2 = '1287 (0x507)' })
-Check 'scm 7024: service-specific error 1287' ($ev.ours -and $ev.code -eq 1287 -and $ev.codeKind -eq 'service-specific error')
+Check 'scm 7024: service-specific error 1287, its service key for the recovery probe' ($ev.ours -and $ev.code -eq 1287 -and $ev.eventId -eq 7024 -and $ev.svcKey -eq 'QdbDaemon')
 $ev = ConvertFrom-QwtDeathEvent (New-Svc 7031 'Qubes GUI agent watchdog' $T0 @{ param2 = '1'; param3 = '5000'; param4 = 'Restart the service' })
-Check 'scm 7031: ours, enrich, count and action rendered' ($ev.ours -and $ev.exe -eq 'gui-watchdog.exe' -and $ev.anchor -eq 'enrich' -and $ev.label -like '*time 1 per the SCM; recovery: Restart the service in 5000 ms')
+Check 'scm 7031: ours, enrich, count and action kept' ($ev.ours -and $ev.exe -eq 'gui-watchdog.exe' -and $ev.anchor -eq 'enrich' -and $ev.svcCount -eq '1' -and $ev.svcDelay -eq '5000' -and $ev.svcAction -eq 'Restart the service' -and $ev.label -like '*(failure 1); recovery: Restart the service in 5000 ms')
 $ev = ConvertFrom-QwtDeathEvent (New-Svc 7031 'Qubes PV NIC address applier' $T0 @{ param2 = 'x'; param3 = '<b>'; param4 = '<script>alert(1)</script>' })
-Check 'scm 7031: fields that are not shaped as numbers/phrases are not rendered verbatim' ($ev.ours -and $ev.label -like '*time ? per the SCM; recovery: the configured action in ? ms')
+Check 'scm 7031: fields that are not shaped as numbers/phrases are not rendered verbatim' ($ev.ours -and $ev.svcCount -eq '?' -and $ev.svcDelay -eq '?' -and $ev.svcAction -eq 'the configured action' -and $ev.label -like '*(failure ?); recovery: the configured action in ? ms')
 $ev = ConvertFrom-QwtDeathEvent (New-Svc 7034 'Print Spooler' $T0 @{ param2 = '1' })
 Check 'scm 7034: a foreign service is not ours' (-not $ev.ours)
 $ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\Qubes-WgcBroker' '3221226505' $T0)
 Check 'task 201 helper: ours, the helper''s exe, join-only, result 0xC0000409' ($ev.ours -and $ev.exe -eq 'wgcbroker.exe' -and $ev.anchor -eq 'join-only' -and $ev.code -eq [uint32]0xC0000409L)
 $ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesPvNic' '1' $T0)
-Check 'task 201 script: ours, its own death, component from the task name' ($ev.ours -and $ev.anchor -eq 'nopid' -and $ev.component -eq 'qubespvnic')
+Check 'task 201 script: ours, its own death, the component is the task''s machine id from the table' ($ev.ours -and $ev.anchor -eq 'nopid' -and $ev.component -eq 'pvnic' -and $ev.task -eq '\QubesPvNic' -and $ev.taskName -eq 'QubesPvNic')
 $ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesPvNic' '0' $T0)
 Check 'task 201 result 0: not a death' (-not $ev.ours)
 $ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\Qubes-NotifBridge' '267014' $T0)
@@ -213,7 +235,7 @@ Check 'task 201 of the reporter itself: not ours (no self-trigger)' (-not $ev.ou
 $ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\Microsoft\Windows\Defrag\ScheduledDefrag' '1' $T0)
 Check 'task 201 of a Windows task: not ours' (-not $ev.ours)
 $ev = ConvertFrom-QwtDeathEvent (New-Task 203 '\QubesAutologonGuard' '2147942402' $T0)
-Check 'task 203: ours, launch failure, HRESULT rendered with its meaning' ($ev.ours -and $ev.kind -eq 'launchfail' -and (Format-QwtDeathCode $ev.code $ev.codeKind) -eq 'result 0x80070002 (file not found)')
+Check 'task 203: ours, launch failure, HRESULT rendered from the task table' ($ev.ours -and $ev.kind -eq 'launchfail' -and (Format-QwtDeathCode $ev.code 'result') -eq 'result 0x80070002' -and (Get-QwtDeathCodeMeaning $ev.code 'task') -eq 'the file was not found')
 $ev = ConvertFrom-QwtDeathEvent (New-EvXml 'Application Error' 1002 'Application' $T0 @('gui-agent.exe') $null $true)
 Check 'application error 1002 (a hang) is not in the subscription: not ours' (-not $ev.ours)
 
@@ -226,22 +248,24 @@ $st = Invoke-QwtDeathReport (New-Crash 'gui-agent.exe' 6700 0xC0000409L $T0)
 CheckStatus 'e2e: death 1 - gui-agent crash' $st 'send'
 Check 'e2e: death 1 notified once' ($script:launched.Count -eq 1)
 $text = [string]$script:launched[0]
-Check 'text: names the component and says it died' ($text -like 'Qubes Windows Tools, gui-agent: DIED: gui-agent.exe crashed*')
-Check 'text: the exception code with its meaning' ($text -like '*exception 0xC0000409 (fast-fail: stack buffer overrun, __fastfail or an abort)*')
-Check 'text: how long it ran' ($text -like '*after running 0:12:34*')
-Check 'text: the death count this boot' ($text -like '*death 1 this boot*')
-Check 'text: id death-1' ($text -like '*Error id: death-1.*')
+Check 'text: the header names the GUI agent in human words and says it crashed' ($text.StartsWith("The GUI agent crashed`r`n"))
+Check 'text: four lines - header, what next, the cause, the technical line' (@($text -split "`r`n").Count -eq 4)
+Check 'text: what next - the watchdog relaunches it' ($text -like "*`r`nThe GUI agent watchdog relaunches it*")
+Check 'text: the cause with the exception code and its meaning from the process table' ($text -like '*Cause: a fast-fail abort (stack buffer overrun, __fastfail or an abort) - exception 0xC0000409.*')
+Check 'text: how long it ran' ($text -like '*; ran 0:12:34;*')
+Check 'text: the death count this boot, never "once per boot"' ($text -like '*death 1 this boot*' -and $text -notlike '*once per boot*')
+Check 'text: id death-1 (the route''s marker)' (Test-Path -LiteralPath (Join-Path $stateDir 'gui-agent.death-1'))
 Check 'text: the evidence - our deaths log and the WER folder by prefix' ($text -like "*$logDir\qwt-deaths.log*" -and $text -like '*AppCrash_gui-agent.exe_**')
 Check 'text: no 32-hex run, no window title, no user path' ($text -notmatch '[0-9A-Fa-f]{32,}' -and $text -notmatch 'Users\\')
 Check 'text: under the route''s 600 bytes' ([Text.Encoding]::UTF8.GetByteCount($text) -le 600) "$([Text.Encoding]::UTF8.GetByteCount($text))"
-Check 'log: death 1 is logged at ERROR as NEW with the pid' ((Get-DeathLog) -match '\[ERROR\] DEATH #1 NEW Application/1000#\d+: DIED: gui-agent\.exe crashed.*pid 6700')
+Check 'log: death 1 is logged at ERROR as NEW with the pid' ((Get-DeathLog) -match '\[ERROR\] DEATH #1 NEW Application/1000#\d+: The GUI agent crashed \| gui-agent\.exe crashed.*pid 6700')
 $st = Invoke-QwtDeathReport (New-Wer 'gui-agent.exe' 0xC0000409L $T0.AddSeconds(3))
 CheckStatus 'e2e: the WER record of death 1' $st 'enriched'
 Check 'e2e: the WER record adds no notification' ($script:launched.Count -eq 1)
 Check 'log: the WER record is logged as AGAIN with the full folder path' ((Get-DeathLog) -match '\[ERROR\] DEATH #1 AGAIN Application/1001#\d+:.*evidence .*\\WER\\ReportArchive\\AppCrash_gui-agent\.exe_')
 $st = Invoke-QwtDeathReport (New-Crash 'gui-agent.exe' 7100 0xC0000005L $T0.AddSeconds(30) 25)
 CheckStatus 'e2e: death 2 - a SECOND gui-agent crash 30 s later (another pid) is a second death' $st 'send'
-Check 'e2e: death 2 notified (not hidden by the once-per-id rule)' ($script:launched.Count -eq 2 -and ([string]$script:launched[1]) -like '*death 2 this boot*' -and ([string]$script:launched[1]) -like '*Error id: death-2.*')
+Check 'e2e: death 2 notified (not hidden by the once-per-id rule)' ($script:launched.Count -eq 2 -and ([string]$script:launched[1]) -like '*death 2 this boot*' -and (Test-Path -LiteralPath (Join-Path $stateDir 'gui-agent.death-2')))
 Check 'ledger: two deaths, keyed by pid' ((@(Get-Ledger | Where-Object { $_ -like 'D|*' })).Count -eq 2 -and (Get-Ledger)[1] -like 'D|1|*|gui-agent.exe|6700|crash|*' -and (Get-Ledger)[2] -like 'D|2|*|gui-agent.exe|7100|crash|*')
 $st = Invoke-QwtDeathReport (New-Super 4002 'wgcbroker.exe' '500' '0xC0000005' '12000' $T0.AddSeconds(60))
 CheckStatus 'e2e: death 3 - the agent''s broker record' $st 'send'
@@ -252,7 +276,7 @@ CheckStatus 'e2e: death 4 - the relaunched broker dies again 20 s later (another
 Check 'e2e: four notifications so far' ($script:launched.Count -eq 4)
 $st = Invoke-QwtDeathReport (New-Clr 'qwtng-netsetup.exe' 'System.NullReferenceException' $T0.AddSeconds(120))
 CheckStatus 'e2e: death 5 - a managed crash, the 1026 comes first' $st 'send'
-Check 'text: the managed death names the exception type' (([string]$script:launched[4]) -like '*unhandled .NET exception (System.NullReferenceException)*')
+Check 'text: the managed death names the exception type' (([string]$script:launched[4]) -like '*Cause: an unhandled .NET exception, System.NullReferenceException.*')
 $st = Invoke-QwtDeathReport (New-Crash 'qwtng-netsetup.exe' 900 0xE0434352L $T0.AddSeconds(121) 3600)
 CheckStatus 'e2e: its 1000 adopts death 5' $st 'enriched'
 Check 'ledger: death 5 now carries the adopted pid' (@(Get-Ledger | Where-Object { $_ -like 'D|5|*|qwtng-netsetup.exe|900|clr|*' }).Count -eq 1)
@@ -263,7 +287,7 @@ CheckStatus 'e2e: the SCM''s 7031 for the same service attaches to death 5' $st 
 Check 'e2e: still five notifications' ($script:launched.Count -eq 5)
 $st = Invoke-QwtDeathReport (New-Svc 7023 'Qubes RPC agent' $T0.AddSeconds(200) @{ param2 = '%%1460' })
 CheckStatus 'e2e: death 6 - QrexecAgent ended with error 1460' $st 'send'
-Check 'text: the service death names the service, the exe, the error and the SCM restart' (([string]$script:launched[5]) -like "*service 'Qubes RPC agent' (qrexec-agent.exe) ended with an error; SCM recovery restarts it; error 1460 (timeout); death 6 this boot*")
+Check 'text: the service death - the header, Windows'' armed restart, the Windows error from its own table, the count' (([string]$script:launched[5]).StartsWith("The Qubes RPC agent service stopped with an error`r`nWindows restarts it automatically (its recovery is armed; the first restart after 5 s); while it is down this qube cannot be reached from dom0.`r`nCause: the operation timed out - Windows error 1460.`r`nqrexec-agent.exe (service QrexecAgent); Windows error 1460; death 6 this boot.") -and ([string]$script:launched[5]) -notlike '*TerminateProcess*')
 $st = Invoke-QwtDeathReport (New-Svc 7031 'Qubes RPC agent' $T0.AddSeconds(200) @{ param2 = '1'; param3 = '5000'; param4 = 'Restart the service' })
 CheckStatus 'e2e: its 7031 attaches to death 6' $st 'enriched'
 $st = Invoke-QwtDeathReport (New-Svc 7023 'Qubes RPC agent' $T0.AddSeconds(210) @{ param2 = '%%1460' })
@@ -274,7 +298,7 @@ Check 'e2e: eight notifications, the route''s cap' ($script:launched.Count -eq 8
 $st = Invoke-QwtDeathReport (New-Super 4003 'notifhost.exe' '777' '0x00000002' '30000' $T0.AddSeconds(400))
 CheckStatus 'e2e: death 9 - past the cap, the route suppresses' $st 'suppressed:cap'
 Check 'e2e: death 9 sent nothing' ($script:launched.Count -eq 8)
-Check 'log: death 9 is STILL logged at ERROR as NEW (past the cap)' ((Get-DeathLog) -match '\[ERROR\] DEATH #9 NEW Application/4003#\d+: DIED: notifhost\.exe exited without being asked to')
+Check 'log: death 9 is STILL logged at ERROR as NEW (past the cap)' ((Get-DeathLog) -match '\[ERROR\] DEATH #9 NEW Application/4003#\d+: The notification bridge exited unexpectedly \| notifhost\.exe exited without being asked to')
 Check 'log: and the suppression is logged at ERROR, naming the cap' ((Get-DeathLog) -match '\[ERROR\] DEATH #9 NOT notified: the route''s cap of 8 per boot')
 $st = Invoke-QwtDeathReport (New-Task 201 '\Qubes-NotifBridge' '267014' $T0.AddSeconds(401))
 CheckStatus 'e2e: a Task-Scheduler-ended helper is ignored' $st 'ignored'
@@ -285,7 +309,7 @@ $script:QwtNotifyBootStamp = $BOOT + 1
 $script:QwtNotifyBootCached = $null
 $st = Invoke-QwtDeathReport (New-Crash 'gui-agent.exe' 6700 0xC0000409L $T0.AddHours(1))
 CheckStatus 'boot: the first death of the next boot is sent' $st 'send'
-Check 'boot: it is death 1 again, with id death-1' (([string]$script:launched[8]) -like '*death 1 this boot*' -and ([string]$script:launched[8]) -like '*Error id: death-1.*')
+Check 'boot: it is death 1 again, with id death-1 under the new boot' (([string]$script:launched[8]) -like '*death 1 this boot*' -and ([IO.File]::ReadAllText((Join-Path $stateDir 'gui-agent.death-1')) -like "boot=$($BOOT + 1)*"))
 Check 'boot: the ledger belongs to the new boot and holds one death' ((Get-Ledger)[0] -eq "boot=$($BOOT + 1)" -and (@(Get-Ledger | Where-Object { $_ -like 'D|*' })).Count -eq 1)
 
 # 6. the gate off: counted and logged, not sent

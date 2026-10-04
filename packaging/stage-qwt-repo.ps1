@@ -84,9 +84,11 @@ $subst = @(
         # "qrexec permanently missing after a clean install" stayed unidentified for days.
         # Withholding the fix would leave that P1 diagnosed and unfixed on every guest.
         #
-        # qrexec-client-vm.exe remains withheld: its source is unmodified, so shipping it would
-        # add forked surface for no benefit. ours-wins.psd1 CompiledSources still fails the build
-        # the moment IT diverges - that tripwire is unchanged and is what caught this one.
+        # qrexec-client-vm.exe SHIPS FROM THE FORK with the qrexec v4 change (it was withheld while its
+        # source was unmodified): it now speaks the v4 pipe format (magic, target, full service name)
+        # that the fork's qrexec-agent requires and refuses otherwise, so a stock client next to our
+        # agent fails every guest-initiated call. The tripwire that caught it: ours-wins.psd1
+        # (CompiledSources, then its Binaries entry: "byte-identical to the stock image's").
         # relocate-dir.exe joins them 2026-09-08: it is the BootExecute step that moves
         # C:\Users onto the private volume (MoveUsers), it runs before anything can report, and
         # its failure reporting is the fix. It was previously unbuildable here only because the
@@ -95,10 +97,11 @@ $subst = @(
         # qrexec=1 for the guest, and its fix replaces a poll with the session-logon event.
         Match  = { param($comp, $leaf) $comp -eq 'core-agent-windows' -and
                                        ($leaf -eq 'qrexec-wrapper.exe' -or $leaf -eq 'qrexec-agent.exe' -or
+                                        $leaf -eq 'qrexec-client-vm.exe' -or
                                         $leaf -eq 'relocate-dir.exe'   -or $leaf -eq 'advertise-tools.exe') }
         Source = { param($leaf) Join-Path $CoreAgentBins $leaf }
         Binary = $true
-        Min    = 4
+        Min    = 5
     }
     @{  Name   = 'VMExec.ps1 (maintained, guest/)'
         # MUST precede the rpc rule below. guest/VMExec.ps1 is the maintained handler

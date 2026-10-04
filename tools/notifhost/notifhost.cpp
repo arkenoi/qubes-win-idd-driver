@@ -118,6 +118,8 @@
                              // NOTHING GUI-adjacent may move into that header)
 #include "../../agent/gui-agent/notifyerr.h"   // secondary error route: policy core shared with
                                                 // the agent (wgcbroker_ipc.h include convention)
+#include "../../agent/gui-agent/notifytexts.h" // this helper's own notification texts, as rows the
+                                                // agent's offline render test holds to the rules
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
@@ -132,6 +134,34 @@ using namespace winrt::Windows::UI::Notifications::Management;
 static HANDLE g_agent = nullptr;
 static DWORD  g_agentPid = 0;
 static DWORD  g_mySession = 0;
+// REST-ZERO S4c (docs/DESIGN-rest-zero-capture.md C): the bridge sleeps without a timeout unless something it armed is
+// due. The agent's liveness and our readiness travel by kernel objects the agent creates (main.c NotifIpcEnsure):
+static HANDLE g_agentAlive = nullptr;   // --alive: a mutex the agent's main thread owns for its life - ABANDONED = died
+static HANDLE g_readyEvt = nullptr;     // --ready: set once our pid is published, so the agent takes it on that wake
+static HANDLE g_mainWake = nullptr;     // auto-reset: the reader / shadow threads queued work for the main loop
+// THE LISTING'S PUSH SOURCES besides NotificationChanged (rest-zero S4c). Measured 2026-10-01 on 26100.1742:
+// NotificationChanged throws for this unpackaged process, and the notification platform does NOT write its database
+// when a toast arrives (wpndatabase.db-wal untouched across 10 toasts), so the WAL watcher never fires for them - while
+// the ETW tier's proxy delivered every toast's records within the second (Jev: ETW push 0.73). Each hit sets its flag and
+// the main loop's wake; the loop lists, and retries a listing that found nothing new (bounded).
+// The WAL watcher does NOT trigger a listing: a listing makes the platform touch its own database (wpndatabase.db-wal/-shm),
+// so a watcher-triggered listing can re-trigger itself. Measured 2026-10-01 (rz2, w11-ds) with both triggers: in the 60 s
+// from 30 s after a 10-toast burst this process switched 9358 times (one thread 8600); before the burst, 0-5 a minute.
+static volatile LONG g_etwHit = 0;      // an ETW record naming an AUMID but NO id arrived (only while g_etwIdsSeen is 0)
+// THE LISTING IS TRIGGERED BY A NOTIFICATION ID THE BRIDGE HAS NOT SEEN, not by every record (2026-10-01, w11-ds). A
+// listing costs 60-400 ms and works a system thread in this process hundreds of times (a process that merely holds a
+// listener woke 0 times while ours woke 9889 times in 20 s); after a 10-toast burst every record of the ~90 s tail named a
+// toast already listed, or none, and each cost a listing plus two retries (~45 in 85 s, all new=0). Every toast's arrival
+// carries its own id in 5+ events (ETW dump of a burst: NotificationLifetimeActivity, ProcessNewNotificationActivity,
+// ToastInfo, ...; the same numbers as the listener's ids). So an id-bearing record queues its id and wakes the main loop,
+// which lists only if one of them is not in `seen`; an id-less record triggers only until the first id ever arrives (a
+// platform that sends no ids keeps listing on every record). Jev: this rule 0.97 over the alternatives.
+static volatile LONG g_etwIdsSeen = 0;  // an ETW record carrying a notification id has arrived in this bridge's life
+static SRWLOCK g_etwIdLock = SRWLOCK_INIT;
+static std::vector<uint32_t> g_etwIds;  // ids from ETW records since the main loop last looked (bounded)
+// A wake that asks for a listing (a verdict landed, a dismissal to apply, the push source or the connection changed).
+// The ETW thread's wake does NOT: the main loop decides from the queued ids.
+static volatile LONG g_listWanted = 0;
 
 // Agent-liveness check - a BACKUP only. The agent's shutdown writes the ProgramData stop file
 // (NotifBridgeRequestStop), which the main loop polls every pass; THAT is the primary channel.
@@ -274,13 +304,30 @@ static std::wstring FirstTexts(UserNotification const& un)
 //   *.Outlook / Calendar / reminder senders          (Snooze + interval selection)
 //   Microsoft.Windows.Explorer                       (the catch-all shell sender; also the
 //                                                     acceptance control for a real-choice toast)
+//   Windows.SystemToast.SecurityAndMaintenance       (UAC "Click to restart this computer": the click IS
+//                                                     the action - WINDOW_ONLY below, owner 2026-10-02)
 static const wchar_t* const DEFAULT_ALLOW[] = {
     L"Microsoft.ScreenSketch_8wekyb3d8bbwe!App",       // Snipping Tool: "screenshot saved" (open)
     L"Microsoft.WindowsCamera_8wekyb3d8bbwe!App",      // Camera: photo/video saved
     L"Microsoft.Windows.Photos_8wekyb3d8bbwe!App",     // Photos: import / edit complete
-    L"Windows.SystemToast.SecurityAndMaintenance",     // Security & Maintenance status (click-to-open)
     L"Windows.SystemToast.BackupReminder",             // "back up your files" status
 };
+
+// WINDOW-ONLY apps: never bridged, whatever the allowlist (compiled or NotifyBridgeAllow) or the per-toast classifier says.
+// Owner 2026-10-02: "UAC warning 'click to restart this computer' is actionable" - "we need to pump it through actionable
+// toast (o-r) way bypassing the bridge". The bridge's dom0 notifications carry no action (it sends none, and nothing here
+// would turn a dom0 click into the toast's activation), so a toast whose click IS its action has to stay the guest's own
+// banner, captured as an override-redirect window in dom0, where the click reaches the guest. The classifier cannot tell:
+// the UAC warning has no buttons, only a launch= target, which its table calls informational (row 6). Security and
+// Maintenance raises it, and its other toasts are action prompts too (turn something on, restart, fix something).
+static const wchar_t* const WINDOW_ONLY[] = {
+    L"Windows.SystemToast.SecurityAndMaintenance",
+};
+static bool WindowOnly(std::wstring const& aumid)
+{
+    for (const wchar_t* a : WINDOW_ONLY) if (_wcsicmp(a, aumid.c_str()) == 0) return true;
+    return false;
+}
 
 // Allowlist of AUMIDs whose toasts are bridged: REG_MULTI_SZ "NotifyBridgeAllow" under the
 // gui-agent's config key. If the value is set (non-empty) it is authoritative; if it is ABSENT
@@ -469,8 +516,17 @@ static void BannerRestoreAll(std::vector<std::wstring>* restoredAumids = nullptr
 // PutU32/PutU64/GetU32/GetU64: MOVED to qtb_shared.h (console split) - the same codec
 // frames both the dom0 notify wire below and the proxy pipe's QTS1 frames.
 
+// HOW LONG A FORWARDED NOTIFICATION STAYS (owner 2026-10-02: "current default timeout is too brief, consider increasing
+// (and errors should stay until dismissed)"). The stock proxy hands both fields to dom0's notification daemon unchanged
+// (qubes-notification-proxy lib.rs: only expire_timeout < -1 is refused; urgency becomes the freedesktop hint, no clamp).
+// A bridged toast stays 20 s instead of the daemon's default (Jev 0.56 over 15 s and 30 s). An ERROR - everything sent
+// through the one-shot --notify path: the agent's ACTION errors, the installer's and this bridge's own - is sent with
+// expire_timeout 0, which the freedesktop spec defines as "never expire", AND critical urgency, which daemons that ignore
+// expire_timeout (GNOME) also keep until dismissed.
+static const uint32_t kToastExpireMs = 20000;
+
 // Message { id: u64, Notification::V1 { ... } }, framed with a u32 LE length prefix.
-static std::vector<BYTE> EncodeNotifyFrame(uint64_t seq, std::string const& summary, std::string const& body)
+static std::vector<BYTE> EncodeNotifyFrame(uint64_t seq, std::string const& summary, std::string const& body, bool persistent)
 {
     std::vector<BYTE> m;
     PutU64(m, seq);             // Message.id (echoed as `sequence` in replies)
@@ -478,13 +534,14 @@ static std::vector<BYTE> EncodeNotifyFrame(uint64_t seq, std::string const& summ
     m.push_back(0);             // suppress_sound = false
     m.push_back(0);             // transient = false
     m.push_back(0);             // resident = false
-    m.push_back(0);             // urgency: Option None
+    if (persistent) { m.push_back(1); PutU32(m, 2); }   // urgency: Some(Critical) - variant index 2 (Low, Normal, Critical)
+    else m.push_back(0);                                 // urgency: Option None
     PutU32(m, 0);               // replaces_id: 0 = new notification
     PutU64(m, summary.size()); m.insert(m.end(), summary.begin(), summary.end());
     PutU64(m, body.size());    m.insert(m.end(), body.begin(), body.end());
     PutU64(m, 0);               // actions: count 0 (phase 2 adds ["default","Open"])
     m.push_back(0);             // category: Option None
-    PutU32(m, 0xFFFFFFFFu);     // expire_timeout: i32 -1 = server default
+    PutU32(m, persistent ? 0u : kToastExpireMs);   // expire_timeout ms: 0 = never expire (errors); else 20 s
     m.push_back(0);             // image: Option None
     std::vector<BYTE> f;
     PutU32(f, (uint32_t)m.size());
@@ -1212,6 +1269,22 @@ static bool EtwIpcReadRecord(HANDLE pipe)
         while (g_etw.ring.size() > 64) g_etw.ring.pop_front();
     }
     if (g_etw.sigEvt) SetEvent(g_etw.sigEvt);   // wake a worker waiting out the flush pacing
+    if (!la.empty())
+    {
+        if (idn != 0)
+        {
+            InterlockedExchange(&g_etwIdsSeen, 1);
+            AcquireSRWLockExclusive(&g_etwIdLock);
+            if (g_etwIds.size() < 512) g_etwIds.push_back((uint32_t)idn);
+            ReleaseSRWLockExclusive(&g_etwIdLock);
+            if (g_mainWake) SetEvent(g_mainWake);   // the main loop lists if this id is new to it (see g_etwIdsSeen)
+        }
+        else if (!g_etwIdsSeen)
+        {
+            InterlockedExchange(&g_etwHit, 1);      // no ids from this platform (yet): every record lists, as before
+            if (g_mainWake) SetEvent(g_mainWake);
+        }
+    }
     if (EtwSigLogAllow(n))                   // every frame at human rates; 1-in-20 in a burst
         BLog(L"ETW SIG #%ld aumid=%s idnum=%llu notif=%s tag=%s group=%s", n,
              la.empty() ? L"-" : la.c_str(), (ULONGLONG)idn,
@@ -1220,8 +1293,19 @@ static bool EtwIpcReadRecord(HANDLE pipe)
     return true;
 }
 
+// rest-zero M1 attribution: each long-lived thread names itself, so a per-thread wake count (restwatch / thread-who's
+// GetThreadDescription) says WHICH of ours woke - the 2026-10-01 toast tail had one thread at ~128 wakes/s and no symbols
+// to name it. Looked up at run time: SetThreadDescription needs Windows 10 1607.
+static void NameThisThread(const wchar_t* name)
+{
+    typedef HRESULT (WINAPI *PFN_STD)(HANDLE, PCWSTR);
+    static PFN_STD p = (PFN_STD)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetThreadDescription");
+    if (p) p(GetCurrentThread(), name);
+}
+
 static DWORD WINAPI EtwIpcThread(LPVOID)
 {
+    NameThisThread(L"notifhost: etw-ipc");
     try
     {
         static const DWORD bo[] = { 2000, 5000, 15000, 60000 };   // bounded reconnect backoff
@@ -1251,6 +1335,8 @@ static DWORD WINAPI EtwIpcThread(LPVOID)
             GetNamedPipeServerProcessId(pipe, &spid);
             InterlockedExchange(&g_etw.state, ETW_STATE_LIVE);
             BLog(L"ETW IPC connected server_pid=%lu - push tier armed", spid);
+            InterlockedExchange(&g_listWanted, 1);
+            if (g_mainWake) SetEvent(g_mainWake);   // the listing now has a push source: the main loop drops its floor
             while (EtwIpcReadRecord(pipe))
                 if (WaitForSingleObject(g_etw.stopEvt, 0) == WAIT_OBJECT_0) break;
             CloseHandle(pipe);
@@ -1258,6 +1344,8 @@ static DWORD WINAPI EtwIpcThread(LPVOID)
             InterlockedExchange(&g_etw.state, ETW_STATE_DOWN);
             BLog(L"ETW IPC disconnected (recs=%ld bad=%ld) - tier down, DB fallback, reconnecting",
                  g_etw.recTotal, g_etw.recBad);
+            InterlockedExchange(&g_listWanted, 1);
+            if (g_mainWake) SetEvent(g_mainWake);   // the listing may have lost its only push source: floor back on
         }
     }
     catch (...)
@@ -1734,6 +1822,8 @@ static void VerdictStorePut(uint32_t id, int route)
     CsGuard g(&g_verdict.lock);
     if (g_verdict.route.size() > 4096) { g_verdict.route.clear(); g_verdict.passes.clear(); }
     g_verdict.route[id] = route;
+    InterlockedExchange(&g_listWanted, 1);
+    if (g_mainWake) SetEvent(g_mainWake);   // a toast may be waiting for this verdict: re-list now, not on a tick
 }
 // Returns true and sets *route when a verdict exists. Otherwise counts this pass: a toast whose
 // verdict never arrives must NOT be deferred for ever - after kVerdictMaxPasses it takes the
@@ -1776,6 +1866,9 @@ static struct
     HANDLE walEvt = nullptr;                // auto-reset: "wpndatabase.db* just changed"
     bool armed = false;
 } g_shadow;
+// The WAL watcher armed (set by WalWatchThread once its directory handle is open). It paces WpnCorrelate's retries only;
+// it never triggers a listing (see g_etwHit).
+static volatile LONG g_walArmed = 0;
 
 // Push replacement for WpnCorrelate's blind retry sleep (owner directive: prefer push over
 // poll): watch the notification store's directory and signal walEvt whenever
@@ -1785,6 +1878,7 @@ static struct
 // the old blind retry had. This thread signals; it never reads file content.
 static DWORD WINAPI WalWatchThread(LPVOID)
 {
+    NameThisThread(L"notifhost: wal-watch");
     wchar_t la[MAX_PATH] = { 0 };
     if (!GetEnvironmentVariableW(L"LOCALAPPDATA", la, RTL_NUMBER_OF(la))) return 0;
     std::wstring dir = std::wstring(la) + L"\\Microsoft\\Windows\\Notifications";
@@ -1794,6 +1888,7 @@ static DWORD WINAPI WalWatchThread(LPVOID)
     if (h == INVALID_HANDLE_VALUE)
     { BLog(L"WALWATCH unavailable (%lu) - timed-retry fallback", GetLastError()); return 0; }
     BLog(L"WALWATCH armed dir=%s", dir.c_str());
+    InterlockedExchange(&g_walArmed, 1);
     std::vector<BYTE> buf(8192);
     for (;;)
     {
@@ -1816,7 +1911,8 @@ static DWORD WINAPI WalWatchThread(LPVOID)
             if (!fi->NextEntryOffset) break;
             p += fi->NextEntryOffset;
         }
-        if (hit) SetEvent(g_shadow.walEvt);
+        if (hit)
+            SetEvent(g_shadow.walEvt);   // NOT the listing's trigger: a listing writes this database too (see g_etwHit)
     }
     CloseHandle(h);
     return 0;
@@ -1901,6 +1997,7 @@ static void ShadowClassifyWork(ShadowJob const& j)
 
 static DWORD WINAPI ShadowWorkerThread(LPVOID)
 {
+    NameThisThread(L"notifhost: shadow-worker");
     for (;;)
     {
         HANDLE hs[2] = { g_shadow.stopEvt, g_shadow.evt };
@@ -2093,7 +2190,7 @@ static CRITICAL_SECTION g_corrLock;
 static std::vector<CorrEntry> g_corr;                 // small: capped, human-rate
 static std::vector<uint32_t> g_pendingDismiss;        // guest ids queued by the reader thread
 
-static void MarkConnDead() { InterlockedExchange(&g_connDead, 1); }
+static void MarkConnDead() { InterlockedExchange(&g_connDead, 1); InterlockedExchange(&g_listWanted, 1); if (g_mainWake) SetEvent(g_mainWake); }
 
 static BOOL PipeXfer(BOOL rd, void* buf, DWORD n, DWORD timeoutMs)
 {
@@ -2122,6 +2219,7 @@ static BOOL PipeXfer(BOOL rd, void* buf, DWORD n, DWORD timeoutMs)
 
 static DWORD WINAPI ReaderThread(LPVOID)
 {
+    NameThisThread(L"notifhost: reader");
     // DIAGNOSTIC guard (2026-09-05): this thread had NO exception handler, so any C++ throw
     // here (bad_alloc in the frame vector / pendingDismiss push_back / BLog's Utf8, ...) was
     // an instant std::terminate with no log line - a prime suspect for the silent vanish.
@@ -2174,6 +2272,7 @@ static DWORD WINAPI ReaderThread(LPVOID)
                     }
             }
             if (reason != 2) BLog(L"Dismissed id=%u reason=%u (not user-dismissed - guest record kept)", id, reason);
+            else { InterlockedExchange(&g_listWanted, 1); if (g_mainWake) SetEvent(g_mainWake); }   // the main loop applies queued dismissals on its next pass
         }
         else if (tag == 4)                            // ActionInvoked - phase 2 consumes this
             BLog(L"reader: ActionInvoked (ignored in A0)");
@@ -2300,7 +2399,7 @@ static uint64_t g_seq = 0;
 // so the Phase-3 deferred-map hold budget (design 3.3, the ~250 ms hypothesis) is sized from
 // measured dom0 latency, not guessed. QPC-based: GetTickCount64's ~16 ms grain would round a
 // fast ack down to 0.
-static bool ForwardText(std::wstring const& title, std::wstring const& body, uint32_t guestId)
+static bool ForwardText(std::wstring const& title, std::wstring const& body, uint32_t guestId, bool persistent = false)
 {
     if (g_connDead) return false;
     uint64_t seq = ++g_seq;
@@ -2318,7 +2417,7 @@ static bool ForwardText(std::wstring const& title, std::wstring const& body, uin
         while (g_corr.size() > 256) g_corr.erase(g_corr.begin());
     }
 
-    auto frame = EncodeNotifyFrame(seq, Utf8(title.empty() ? L"Notification" : title), Utf8(body));
+    auto frame = EncodeNotifyFrame(seq, Utf8(title.empty() ? L"Notification" : title), Utf8(body), persistent);
     g_awaitSeq = seq; g_awaitOk = 0; ResetEvent(g_ackEvt);
     if (!PipeXfer(FALSE, frame.data(), (DWORD)frame.size(), 15000)) { rtt(-1); MarkConnDead(); return false; }
     if (WaitForSingleObject(g_ackEvt, 15000) != WAIT_OBJECT_0)
@@ -2493,7 +2592,7 @@ static int NotifyOnceMain(std::wstring const& summary, std::wstring const& body)
     g_ackEvt   = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!g_rdEvt || !g_wrEvt || !g_connStop || !g_ackEvt) return 3;
     if (!ConnUp()) { BLog(L"NOTIFY one-shot: no connection (policy refusal? no dom0 session?)"); return 3; }
-    bool ok = ForwardText(summary, body, 0);
+    bool ok = ForwardText(summary, body, 0, true);   // an error: stays until dismissed
     BLog(L"NOTIFY one-shot: sent ok=%d summary=%s", ok ? 1 : 0, summary.c_str());
     ConnDown();
     return ok ? 0 : 4;
@@ -2540,12 +2639,18 @@ static bool WriteSmallA(std::wstring const& path, const void* data, DWORD len)
     return ok && wr == len;
 }
 
-static void ReportErrorSelf(const char* id, const char* summary)
+// key = a row of notifytexts.h ("listener-denied", "listener-init"): the text is rendered the way
+// the agent's offline render test renders it - header, line 1, the cause with this helper's exit
+// code, and the technical line with this process's pid.
+static void ReportErrorSelf(const char* key)
 {
     if (!g_notifyErrorsGate) return;
+    const QerrText* t = QerrTextFind(key);
+    if (!t) { BLog(L"NOTIFYERR no text row '%S' (a bug of ours) - not sent", key); return; }
+    const char* id = t->id;
     char text[QERR_MAX_TEXT + 256];
-    if (!QerrComposeNotifyText(text, sizeof(text), "notifhost", id, summary,
-                               "bridge.log in ProgramData\\qubes-toast-bridge")) return;
+    if (!QerrRenderText(text, sizeof(text), t, nullptr, (unsigned long)GetCurrentProcessId()))
+    { BLog(L"NOTIFYERR notifhost.%S not sent: the text did not render", id); return; }
 
     wchar_t pd[MAX_PATH];
     if (!GetEnvironmentVariableW(L"ProgramData", pd, RTL_NUMBER_OF(pd))) wcscpy_s(pd, L"C:\\ProgramData");
@@ -2559,6 +2664,11 @@ static void ReportErrorSelf(const char* id, const char* summary)
     std::wstring marker = dir + L"\\notifhost." + wid;
     std::wstring countPath = dir + L"\\.count";
 
+    // The boot stamp is DERIVED here (wall clock - uptime), not the shared volatile token the agent and the
+    // guest scripts use (QERR_BOOT_KEY): this bridge runs as the interactive USER (a /ru <user> /it task), and
+    // minting or even opening that HKLM key for write needs SYSTEM or an elevated token - a user-context read
+    // finds no token until the agent has reported something. Sharing it needs the agent to mint it at start and
+    // this side to open it read-only; recorded in findings/issues.md, not done here (rz39 notification texts).
     FILETIME ft; GetSystemTimeAsFileTime(&ft);
     ULARGE_INTEGER u; u.LowPart = ft.dwLowDateTime; u.HighPart = ft.dwHighDateTime;
     long long now = (long long)(u.QuadPart / 10000000ULL) - 11644473600LL - (long long)(GetTickCount64() / 1000ULL);
@@ -2566,7 +2676,7 @@ static void ReportErrorSelf(const char* id, const char* summary)
     std::string s; long long mb = 0, cb = 0; unsigned cnt = 0, newCnt = 0;
     int mp = ReadSmallA(marker, s) && QerrParseMarker(s.c_str(), &mb);
     int cp = ReadSmallA(countPath, s) && QerrParseCount(s.c_str(), &cb, &cnt);
-    QerrDecision d = QerrDecide(QERR_SEV_ACTION, "notifhost", id, text, mp, mb, cp, cb, cnt, now, &newCnt);
+    QerrDecision d = QerrDecide(t->sev, t->component, id, text, mp, mb, cp, cb, cnt, now, &newCnt);
     if (d != QERR_SEND) { BLog(L"NOTIFYERR notifhost.%S not sent: %S", id, QerrDecisionName(d)); return; }
 
     char kv[64];
@@ -2599,6 +2709,7 @@ static void ReportErrorSelf(const char* id, const char* summary)
 
 static int BridgeMain()
 {
+    NameThisThread(L"notifhost: bridge-main");
     SetUnhandledExceptionFilter(BridgeCrashFilter);   // crash breadcrumb (see BridgeCrashFilter)
     HANDLE mtx = CreateMutexW(nullptr, FALSE, L"Local\\QubesToastBridgeSingleton");
     if (mtx) { DWORD w = WaitForSingleObject(mtx, 0); if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED) return 0; }
@@ -2631,17 +2742,12 @@ static int BridgeMain()
         if (st != UserNotificationListenerAccessStatus::Allowed)
         {
             BLog(L"FATAL access=%d - window path preserved, exiting", (int)st);
-            ReportErrorSelf("listener-denied",
-                "the notification bridge cannot read toasts (notification access is denied for this "
-                "user), so bridged apps keep the plain window path; allow notification access in "
-                "Settings, or turn service.notify-bridge off");
+            ReportErrorSelf("listener-denied");   // notifytexts.h: "exit code 2" is this return
             return 2;
         }
     } catch (...) {
         BLog(L"FATAL listener init threw");
-        ReportErrorSelf("listener-init",
-            "the notification bridge cannot start its toast listener, so bridged apps keep the "
-            "plain window path");
+        ReportErrorSelf("listener-init");         // notifytexts.h: "exit code 3" is this return
         return 3;
     }
 
@@ -2683,16 +2789,25 @@ static int BridgeMain()
                 [toastEvt](UserNotificationListener const&, auto const&)
                 { SetEvent(toastEvt); });
             pushArmed = true;
-            BLog(L"PUSH NotificationChanged armed - listing runs on signal + 30 s floor");
+            BLog(L"PUSH NotificationChanged armed - listing runs on its signal and the WAL watcher's");
         }
         catch (...)
         {
-            BLog(L"PUSH NotificationChanged unavailable - keeping the 2 s listing floor");
+            BLog(L"PUSH NotificationChanged unavailable - the ETW proxy's records drive the listing (2 s floor only while "
+                 L"the proxy is not live)");
         }
     }
-    const DWORD kFloorMs = pushArmed ? 30000 : 2000;
+    // THE LISTING FLOOR (rest-zero S4c): only while the bridge has NO push source at all. With NotificationChanged armed,
+    // or the ETW proxy live (the push source on 26100.1742, where the subscription throws), a listing runs on their
+    // signals and never on a clock - the 30 s / 2 s floors were idle polls (owner rule: zero wakes at rest).
+    const DWORD kFloorMs = 2000;
     ULONGLONG nextFloorList = 0;                       // 0: first pass always lists
     bool toastSignaled = true;
+    // An ETW record can arrive before its toast is listable: a push-triggered listing that finds nothing new is retried at
+    // most twice (+250 ms, +1 s), armed by the record and ended by a find - bounded, never at rest.
+    int walRetries = 0;
+    ULONGLONG walRetryAt = 0;
+    bool lastAnyPush = false;   // the floor state last logged (LISTING lines)
 
     // baseline: everything already in the center predates us - never forwarded. If the FIRST read
     // throws we must NOT proceed with an empty set (that would forward the whole backlog to dom0);
@@ -2729,8 +2844,64 @@ static int BridgeMain()
     std::unordered_map<uint32_t, int> fwdFails;
     const int kFwdFailCap = 5;
     int failStreak = 0, backoff = 0;
-    ULONGLONG nextReconnect = 0, nextConsent = 0;
+    ULONGLONG nextReconnect = 0;
     int rc = 0;
+
+    // ---- REST-ZERO S4c wake sources (docs/DESIGN-rest-zero-capture.md C) -----------------------------------------
+    // This loop used to wake every 2 s for a heartbeat contract with the agent and re-read its stop file, the agent's
+    // pid and the listener's consent on that tick. Each is an event now, and the loop sleeps without a timeout unless a
+    // retry or a reconnect it armed is due:
+    //   * the agent's death: the liveness mutex it owns is ABANDONED (--alive);
+    //   * a stop request: a file-name change in the state dir (the stop file is created there);
+    //   * consent revoked: a change under the listener's consent keys (HKCU and HKLM);
+    //   * the console session: WM_WTSSESSION_CHANGE on a message-only window;
+    //   * work from the reader / shadow threads (a dismissal, a dead connection, a verdict): g_mainWake;
+    //   * a toast: NotificationChanged (toastEvt).
+    // PUBLISHED ONCE: our pid for the agent ("<tick> <pid>", the format it parses - the tick lets it accept only a file
+    // written after the launch it is answering), then the ready event so it takes it on that wake.
+    {
+        HANDLE f = CreateFileW(hbf.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (f != INVALID_HANDLE_VALUE)
+        {
+            char t[48]; int n = sprintf_s(t, "%llu %lu\n", GetTickCount64(), GetCurrentProcessId());
+            DWORD wr; WriteFile(f, t, (DWORD)n, &wr, nullptr);
+            CloseHandle(f);
+        }
+        if (g_readyEvt) SetEvent(g_readyEvt);
+        else BLog(L"BRIDGE no --ready from the agent (mixed install?) - it will find our pid only on its own wakes");
+    }
+    if (!g_agentAlive)
+        BLog(L"BRIDGE no --alive from the agent (mixed install?) - the agent's death falls back to the 30 s pid probe");
+    g_mainWake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    HANDLE stopChg = FindFirstChangeNotificationW(StateDir().c_str(), FALSE, FILE_NOTIFY_CHANGE_FILE_NAME);
+    if (stopChg == INVALID_HANDLE_VALUE) { stopChg = nullptr; BLog(L"BRIDGE stop-dir watch failed %lu - the stop file is seen on the next wake only", GetLastError()); }
+    HANDLE consentEvt = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    HKEY consentKeys[2] = { nullptr, nullptr };
+    static const wchar_t* kConsentPath =
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\userNotificationListener";
+    RegOpenKeyExW(HKEY_CURRENT_USER, kConsentPath, 0, KEY_NOTIFY, &consentKeys[0]);
+    RegOpenKeyExW(HKEY_LOCAL_MACHINE, kConsentPath, 0, KEY_NOTIFY, &consentKeys[1]);
+    auto armConsent = [&]() {
+        for (HKEY k : consentKeys)
+            if (k && consentEvt)
+                RegNotifyChangeKeyValue(k, TRUE, REG_NOTIFY_CHANGE_LAST_SET | REG_NOTIFY_THREAD_AGNOSTIC, consentEvt, TRUE);
+    };
+    armConsent();
+    if (!consentKeys[0] && !consentKeys[1]) BLog(L"BRIDGE consent keys not watchable - revocation is noticed when a listing fails");
+    HWND msgWnd = nullptr;
+    {
+        WNDCLASSEXW wc{}; wc.cbSize = sizeof(wc); wc.lpfnWndProc = DefWindowProcW;
+        wc.hInstance = GetModuleHandleW(nullptr); wc.lpszClassName = L"QubesToastBridgeMsg";
+        RegisterClassExW(&wc);
+        msgWnd = CreateWindowExW(0, L"QubesToastBridgeMsg", L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr,
+                                 GetModuleHandleW(nullptr), nullptr);
+        if (!msgWnd || !WTSRegisterSessionNotification(msgWnd, NOTIFY_FOR_THIS_SESSION))
+            BLog(L"BRIDGE session notification unavailable (%lu) - a console change is seen on the next wake only", GetLastError());
+    }
+    bool consentChanged = true;   // checked once at entry, then on every change of its keys
+    bool retryPending = false;    // the last listing left a toast UNSEEN for a retry (verdict pending / forward failed)
+    ULONGLONG lastListTick = 0;
 
     for (;;)
     {
@@ -2742,27 +2913,14 @@ static int BridgeMain()
         try
         {
         ULONGLONG now = GetTickCount64();
-        if (AgentGone()) { BLog(L"agent gone"); break; }
+        if (g_agentAlive)
+        {
+            const DWORD aw = WaitForSingleObject(g_agentAlive, 0);
+            if (aw == WAIT_ABANDONED || aw == WAIT_OBJECT_0) { BLog(L"agent gone (its liveness mutex was released)"); break; }
+        }
+        else if (AgentGone()) { BLog(L"agent gone"); break; }
         if (WTSGetActiveConsoleSessionId() != g_mySession) { BLog(L"session changed"); break; }
         if (GetFileAttributesW(stopf.c_str()) != INVALID_FILE_ATTRIBUTES) { BLog(L"stop requested"); break; }
-
-        // heartbeat for the agent supervisor: "<GetTickCount64> <pid>\n". The tick is the
-        // hang backstop (compared against the agent's own tick - same boot, same clock); the
-        // PID lets the SYSTEM agent open this process (validated as notifhost.exe in the
-        // console session) and WAIT on it, so an exit is seen the instant it happens instead
-        // of 15 s + a 5 s poll later, and a stale tick with the process still alive is
-        // reported as a HANG rather than guessed at. Same line on purpose: a pid read next to
-        // a fresh tick is the process that wrote it, never a leftover from an earlier instance.
-        {
-            HANDLE f = CreateFileW(hbf.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
-                                   CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-            if (f != INVALID_HANDLE_VALUE)
-            {
-                char t[48]; int n = sprintf_s(t, "%llu %lu\n", now, GetCurrentProcessId());
-                DWORD wr; WriteFile(f, t, (DWORD)n, &wr, nullptr);
-                CloseHandle(f);
-            }
-        }
 
         // connection maintenance. Down => every suppression RESTORED (fail-open: allowlisted apps
         // take the window path while dom0 is unreachable) and re-suppression is re-applied once a
@@ -2812,26 +2970,60 @@ static int BridgeMain()
         }
 
         // consent can be revoked from Settings at any time; the APIs then return empty
-        // SILENTLY - poll the status and fail open loudly instead of forwarding vacuum.
-        if (now >= nextConsent)
+        // SILENTLY - check the status whenever its consent keys change (it used to be polled every
+        // 60 s) and fail open loudly instead of forwarding vacuum.
+        if (consentChanged)
         {
-            nextConsent = now + 60000;
+            consentChanged = false;
+            armConsent();   // one-shot notifications: re-arm before reading, so no change between is lost
             try {
                 if (listener.GetAccessStatus() != UserNotificationListenerAccessStatus::Allowed)
                 { BLog(L"FATAL consent revoked - restoring banners, exiting"); rc = 2; break; }
             } catch (...) {}
         }
 
-        // toast listing: push-gated (NotificationChanged) with the bounded floor pass.
+        // toast listing: push-gated (NotificationChanged and/or the WAL watcher); the floor only without either.
         // Body deliberately NOT re-indented (diff minimalism, the file's guard precedent).
-        bool doList = !pushArmed || toastSignaled || now >= nextFloorList;
+        // A live push source: NotificationChanged, or the ETW proxy's pipe (the one that works on 26100.1742). The WAL
+        // watcher is neither a push source nor a trigger (measured: it does not fire for toast arrivals on that build, and
+        // a listing it triggered re-triggered itself).
+        const bool anyPush = pushArmed || (g_etw.state == ETW_STATE_LIVE);
+        if (anyPush != lastAnyPush)
+        {
+            BLog(anyPush ? L"LISTING push-driven (%s) - no floor" : L"LISTING NO PUSH SOURCE (%s) - listing every 2 s until one is back",
+                 pushArmed ? L"NotificationChanged" : L"ETW proxy pipe");
+            lastAnyPush = anyPush;
+        }
+        bool pushHit = (InterlockedExchange(&g_etwHit, 0) != 0);   // an id-less record on a platform that sends no ids
+        {
+            std::vector<uint32_t> ids;
+            AcquireSRWLockExclusive(&g_etwIdLock);
+            ids.swap(g_etwIds);
+            ReleaseSRWLockExclusive(&g_etwIdLock);
+            for (uint32_t id : ids)
+                if (!seen.count(id)) { pushHit = true; break; }   // a notification this bridge has not listed yet
+        }
+        if (pushHit) { walRetries = 0; walRetryAt = 0; toastSignaled = true; }
+        const bool walRetryDue = (walRetryAt != 0 && now >= walRetryAt);
+        const bool walTriggered = pushHit || walRetryDue;
+        bool sawNew = false;
+        bool doList = !anyPush || toastSignaled || walRetryDue;
+        // What asked for this listing (rest-zero M1: in the ~90 s after a toast burst a system thread in this process woke
+        // ~80/s; the LIST lines say how many listings ran then and why). One line per listing - none at rest.
+        const wchar_t* listTrig = pushHit ? L"etw" : walRetryDue ? L"retry" : toastSignaled ? L"wake" : L"floor";
+        UINT listN = 0;
+        const ULONGLONG listT0 = GetTickCount64();
         if (doList)
         {
         nextFloorList = now + kFloorMs;
         toastSignaled = false;
+        retryPending = false;
+        lastListTick = now;
+        walRetryAt = 0;
         try
         {
             auto list = listener.GetNotificationsAsync(NotificationKinds::Toast).get();
+            listN = list.Size();
             failStreak = 0;
             // First good poll after a failed baseline: seed `seen` with the whole current center
             // and forward NOTHING this pass (the backlog predates us). This is the legacy `primed`
@@ -2855,6 +3047,7 @@ static int BridgeMain()
                 {
                     uint32_t id = un.Id();
                     if (seen.count(id)) continue;
+                    sawNew = true;
                     std::wstring aumid, app;
                     try { aumid = un.AppInfo().AppUserModelId().c_str(); } catch (...) {}
                     try { app = un.AppInfo().DisplayInfo().DisplayName().c_str(); } catch (...) {}
@@ -2865,6 +3058,12 @@ static int BridgeMain()
                     // the CLASSIFY line lands asynchronously. Dedupes internally so a
                     // retried allowlisted toast logs exactly once.
                     ShadowClassify(un, id, aumid);
+                    if (WindowOnly(aumid))
+                    {
+                        seen.insert(id); VerdictForget(id);
+                        BLog(L"skip id=%u aumid=%s (window path; window-only app - its click is its action)", id, aumid.c_str());
+                        continue;
+                    }
                     bool listed = false;
                     for (auto const& a : allow) if (_wcsicmp(a.c_str(), aumid.c_str()) == 0) { listed = true; break; }
 #if defined(P3AQ_DEFECT_ROUTE)
@@ -2898,6 +3097,7 @@ static int BridgeMain()
                             // is the same retry that already stops a failed forward from dropping a
                             // toast. Nothing blocks and nothing is lost.
                             BLog(L"await id=%u aumid=%s (verdict pending, pass %d/%d)", id, aumid.c_str(), passes, kVerdictMaxPasses);
+                            retryPending = true;   // re-listed when the verdict lands (g_mainWake) or on the retry deadline
                             continue;
                         }
                         else
@@ -2957,7 +3157,7 @@ static int BridgeMain()
                     swprintf(sum, RTL_NUMBER_OF(sum), L"%u notifications (%s)", (UINT)fresh.size(), fresh[0].app.c_str());
                     bool ok = ForwardText(sum, lines, 0);
                     if (ok) for (auto const& e : fresh) { seen.insert(e.id); suppressNow(e.aumid); fwdFails.erase(e.id); }
-                    else for (auto const& e : fresh) capFailed(e.id);
+                    else { for (auto const& e : fresh) capFailed(e.id); retryPending = true; }
                     BLog(L"SENT coalesced x%u: %s%s", (UINT)fresh.size(), ok ? L"OK" : L"FAIL",
                          ok ? L"" : L" (unseen, retried)");
                 }
@@ -2965,7 +3165,7 @@ static int BridgeMain()
                 {
                     bool ok = ForwardText(e.title, e.body.empty() ? e.app : e.body, e.id);
                     if (ok) { seen.insert(e.id); suppressNow(e.aumid); fwdFails.erase(e.id); }
-                    else capFailed(e.id);
+                    else { capFailed(e.id); retryPending = true; }
                     BLog(L"SENT id=%u app='%s' title='%s': %s%s", e.id, e.app.c_str(), e.title.c_str(),
                          ok ? L"OK" : L"FAIL", ok ? L"" : L" (unseen, retried)");
                 }
@@ -2989,6 +3189,14 @@ static int BridgeMain()
             BLog(L"poll error (%d)", failStreak);
             if (failStreak >= 30) { BLog(L"FATAL 30 consecutive poll errors"); rc = 3; break; }
         }
+        BLog(L"LIST trig=%s n=%u new=%d ms=%llu", listTrig, listN, sawNew ? 1 : 0, GetTickCount64() - listT0);
+        // A WAL-triggered listing that found nothing new may have run before its toast became listable: retry it, twice
+        // at most, then rest (see walRetries).
+        if (walTriggered)
+        {
+            if (sawNew || walRetries >= 2) { walRetries = 0; walRetryAt = 0; }
+            else { walRetryAt = now + (walRetries ? 1000 : 250); walRetries++; }
+        }
         }   // doList
 
         // dom0 dismissals queued by the reader: keep the guest Notification Center in sync
@@ -3005,12 +3213,38 @@ static int BridgeMain()
             }
         }
 
-        // 2 s wake (heartbeat/stop/dismissal cadence), returning EARLY on a toast push -
-        // detection latency is now event-bound, not poll-bound, while the wake cadence
-        // the supervisor heartbeat depends on is unchanged.
-        toastSignaled = toastEvt
-            ? (WaitForSingleObject(toastEvt, 2000) == WAIT_OBJECT_0)
-            : (Sleep(2000), false);
+        // THE WAIT (rest-zero S4c): INFINITE unless something this loop armed is due - a toast left unseen for a
+        // retry (2 s after its listing), the reconnect backoff while dom0 is unreachable with apps to forward (a
+        // failure state's bounded timer), and the listing floor (kFloorMs) - and woken by every event above.
+        {
+            DWORD timeout = INFINITE;
+            const ULONGLONG t = GetTickCount64();
+            auto dueAt = [&](ULONGLONG at) {
+                const DWORD d = (at > t) ? (DWORD)((at - t) < 0x7FFFFFFFull ? (at - t) : 0x7FFFFFFFull) : 0;
+                if (timeout == INFINITE || d < timeout) timeout = d;
+            };
+            if (g_connDead && !allow.empty()) dueAt(nextReconnect);
+            if (retryPending) dueAt(lastListTick + 2000);
+            if (!(pushArmed || g_etw.state == ETW_STATE_LIVE)) dueAt(nextFloorList);
+            if (walRetryAt) dueAt(walRetryAt);
+            HANDLE hs[5]; DWORD n = 0;
+            const DWORD iToast = n; if (toastEvt) hs[n++] = toastEvt;
+            const DWORD iWake = n;  if (g_mainWake) hs[n++] = g_mainWake;
+            const DWORD iStop = n;  if (stopChg) hs[n++] = stopChg;
+            const DWORD iCons = n;  if (consentEvt) hs[n++] = consentEvt;
+            if (g_agentAlive) hs[n++] = g_agentAlive;   // abandoned = the agent died; checked at the loop top
+            const DWORD w = n ? MsgWaitForMultipleObjects(n, hs, FALSE, timeout, QS_ALLINPUT)
+                              : (Sleep(timeout == INFINITE ? 2000 : timeout), WAIT_TIMEOUT);
+            const DWORD k = (w >= WAIT_ABANDONED_0 && w < WAIT_ABANDONED_0 + n) ? (w - WAIT_ABANDONED_0)
+                          : (w >= WAIT_OBJECT_0 && w < WAIT_OBJECT_0 + n) ? (w - WAIT_OBJECT_0) : n;
+            // A push, or queued work that asked for a listing (g_listWanted). The ETW thread's wake alone does not: the
+            // queued ids decide at the top of the next pass.
+            toastSignaled = (k == iToast && toastEvt) || (InterlockedExchange(&g_listWanted, 0) != 0);
+            if (k == iStop && stopChg) FindNextChangeNotification(stopChg);           // the stop file is read at the top
+            if (k == iCons && consentEvt) consentChanged = true;
+            MSG msg;
+            while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
+        }
         }
         catch (...)
         {
@@ -3022,6 +3256,10 @@ static int BridgeMain()
 
     if (pushArmed) { try { listener.NotificationChanged(changedTok); } catch (...) {} }
     if (toastEvt) CloseHandle(toastEvt);
+    if (msgWnd) { WTSUnRegisterSessionNotification(msgWnd); DestroyWindow(msgWnd); }
+    for (HKEY k : consentKeys) if (k) RegCloseKey(k);
+    if (consentEvt) CloseHandle(consentEvt);
+    if (stopChg) FindCloseChangeNotification(stopChg);
     ShadowWorkerStop();   // bounded joins (worker + WAL watcher)
     EtwTierStop();        // bounded join of the IPC client; no kernel session to reap -
                           // the ETW session belongs to the SYSTEM agent (etwproxy.c) now
@@ -3063,6 +3301,7 @@ static BOOL RelayOne(BOOL doRead, HANDLE h, BOOL overlapped, HANDLE evt,
 
 static DWORD WINAPI RelayPump(LPVOID p)
 {
+    NameThisThread(L"notifhost: relay-pump");
     RelayDir* d = (RelayDir*)p;
     BYTE buf[16384]; DWORD n, wr;
     for (;;)
@@ -3129,6 +3368,39 @@ static int DumpMain()
     return 0;
 }
 
+// --probe-push <seconds> [--sub] (rest-zero S4c diagnostic). Holds a UserNotificationListener for <seconds> - subscribed
+// to NotificationChanged with --sub - and does NOTHING else, so a thread that wakes in this process is the listener's
+// own. Measured 2026-10-01 on w11-ds: the resident bridge has a thread started in shcore.dll waking ~20.7 times a second
+// at rest (66 ms after process start), while a PowerShell process holding the listener, its access and a listing has
+// none; this separates the subscription from everything else the bridge runs.
+static int ProbePushMain(int secs, bool sub)
+{
+    init_apartment(apartment_type::multi_threaded);
+    try {
+        auto listener = UserNotificationListener::Current();
+        if (listener.RequestAccessAsync().get() != UserNotificationListenerAccessStatus::Allowed)
+        { wprintf(L"PROBEPUSH access denied\n"); return 2; }
+        HANDLE e = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        if (!e) { wprintf(L"PROBEPUSH event failed\n"); return 4; }
+        winrt::event_token tok{};
+        if (sub) tok = listener.NotificationChanged([e](UserNotificationListener const&, auto const&) { SetEvent(e); });
+        wprintf(L"PROBEPUSH armed sub=%d pid=%lu\n", sub ? 1 : 0, GetCurrentProcessId());
+        fflush(stdout);
+        const ULONGLONG end = GetTickCount64() + (ULONGLONG)secs * 1000;
+        unsigned changes = 0;
+        for (;;)
+        {
+            const ULONGLONG now = GetTickCount64();
+            if (now >= end) break;
+            if (WaitForSingleObject(e, (DWORD)(end - now)) == WAIT_OBJECT_0) changes++;
+        }
+        if (sub) listener.NotificationChanged(tok);
+        wprintf(L"PROBEPUSH done sub=%d changes=%u\n", sub ? 1 : 0, changes);
+        CloseHandle(e);
+    } catch (...) { wprintf(L"PROBEPUSH listener error\n"); return 3; }
+    return 0;
+}
+
 // ==========================================================================================
 
 int wmain(int argc, wchar_t** argv)
@@ -3136,8 +3408,8 @@ int wmain(int argc, wchar_t** argv)
     SetUnhandledExceptionFilter(BridgeCrashFilter);   // every mode: crash leaves a breadcrumb
     const wchar_t* relayPipe = nullptr;
     bool bridge = false, dump = false, stop = false, restore = false, dumpdb = false, dumpetw = false;
-    bool etwproxy = false;
-    int dumpdbN = 20, dumpEtwSecs = 30;
+    bool etwproxy = false, probePush = false, probeSub = false;
+    int dumpdbN = 20, dumpEtwSecs = 30, probeSecs = 30;
     std::wstring notifySummary, notifyBody;
     const wchar_t* notifyFile = nullptr;
     for (int i = 1; i < argc; i++)
@@ -3173,6 +3445,17 @@ int wmain(int argc, wchar_t** argv)
             if (i + 1 < argc && argv[i + 1][0] != L'-') notifyBody = argv[++i];
         }
         else if (_wcsicmp(argv[i], L"--etw-proxy") == 0) etwproxy = true;
+        else if (_wcsicmp(argv[i], L"--probe-push") == 0)
+        {
+            probePush = true;
+            if (i + 1 < argc && argv[i + 1][0] >= L'0' && argv[i + 1][0] <= L'9')
+                probeSecs = _wtoi(argv[++i]);
+        }
+        else if (_wcsicmp(argv[i], L"--sub") == 0) probeSub = true;
+        else if (_wcsicmp(argv[i], L"--alive") == 0 && i + 1 < argc)
+            g_agentAlive = OpenMutexW(SYNCHRONIZE, FALSE, argv[++i]);
+        else if (_wcsicmp(argv[i], L"--ready") == 0 && i + 1 < argc)
+            g_readyEvt = OpenEventW(EVENT_MODIFY_STATE, FALSE, argv[++i]);
         else if (_wcsicmp(argv[i], L"--notify-errors") == 0 && i + 1 < argc) g_notifyErrorsGate = (_wtoi(argv[++i]) != 0);
         else if (_wcsicmp(argv[i], L"--client-sid") == 0 && i + 1 < argc) i++;   // consumed by etwproxy.exe
     }
@@ -3222,6 +3505,7 @@ int wmain(int argc, wchar_t** argv)
         return 0;
     }
     if (dump) return DumpMain();
+    if (probePush) return ProbePushMain(probeSecs, probeSub);
     if (bridge) return BridgeMain();
 
     // ---- legacy in-guest toast interceptor (default mode) ----
