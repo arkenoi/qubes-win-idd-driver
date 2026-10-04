@@ -100,6 +100,10 @@ emulated_storage_rearmed|true
 upgrade_mode|"in-place-msi-major-upgrade"
 pv_boot_disk|"UNKNOWN"
 swept_binaries_restored|["gui-agent.exe"]
+svc_serial_start|"QdbDaemon=started running=0.4s ready=1.1s; QrexecAgent=started running=0.3s; QubesGuiWatchdog=held-for-quiesce"
+svc_serial_start_after_retry|"QdbDaemon=already-running; QrexecAgent=already-running; QubesGuiWatchdog=held-for-quiesce"
+svc_serial_start_secs|1.9
+msi_startservices_condition|"VersionNT AND NOT QWTNG_SERIALSTART"
 EOF
 
 echo "==== every error form must FAIL and be NAMED ===="
@@ -176,6 +180,13 @@ updater_agent|"error: x"
 etwproxy_account|"error: x"
 service_recovery|{"QdbDaemon":"armed","QrexecAgent":"failed: sc failure=1 failureflag=0"}
 service_recovery|{"QdbDaemon":"armed","QrexecAgent":"armed","QubesGuiWatchdog":"failed: sc failure=1060 failureflag=1060"}
+svc_serial_start_failed|true
+svc_serial_start|"QdbDaemon=FAILED: Service 'QdbDaemon' cannot be started; QrexecAgent=not-attempted (QdbDaemon failed); QubesGuiWatchdog=held-for-quiesce"
+svc_serial_start|"QdbDaemon=started running=0.3s ready=TIMEOUT 120s; QrexecAgent=not-attempted (QdbDaemon failed); QubesGuiWatchdog=held-for-quiesce"
+svc_serial_start|"QdbDaemon=ABSENT; QrexecAgent=not-attempted (QdbDaemon failed); QubesGuiWatchdog=held-for-quiesce"
+svc_serial_start_after_retry|"QdbDaemon=already-running; QrexecAgent=TIMEOUT: not RUNNING after 60s (status StartPending); QubesGuiWatchdog=held-for-quiesce"
+svc_msi_started|"QdbDaemon=Running,QrexecAgent=Running"
+msi_startservices_condition|"REFUSED: its StartServices condition is 'VersionNT', which does not mention QWTNG_SERIALSTART"
 event_source|"failed: reg add rc=1/0"
 event_source|"failed: message file absent (C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\EventLogMessages.dll)"
 event_source|"error: x"

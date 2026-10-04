@@ -47,6 +47,7 @@ on:
       - 'packaging/stage-qwt-repo.ps1'
       - 'packaging/patch-xenbus-inf.ps1'
       - 'packaging/patch-installer-drop-prepareprivateimg.ps1'
+      - 'packaging/patch-installer-serialize-services.ps1'
       - '.github/workflows/qwt-full.yml'
       # The user-session helpers are BUILT here and staged into the setup tree's bin\ - a
       # source change to either must rebuild them or the shipped helper goes stale (the
@@ -237,6 +238,28 @@ jobs:
           if ($n -ne 0) { throw "PreparePrivateImg still referenced $n time(s) in Package.wxs" }
           Select-String -Path "$ws\installer-src\vs2022\installer\Package.wxs" -Pattern '<Custom Action=' | ForEach-Object { "  $($_.Line.Trim())" }
           Write-Host "::notice title=installer::stock PreparePrivateImg action dropped; Install-QwtImproved.ps1 creates Q:"
+
+      # THE SERVICES ARE STARTED ONE AT A TIME, NOT BY THE MSI (docs/ADR-boot.md 1, owner-approved 2026-10-04).
+      # Stock's StartServices action starts QdbDaemon, QrexecAgent and QubesGuiWatchdog together inside msiexec -
+      # three vchan/xenstore set-ups at once in a fresh domain's first minutes, the moment a clean install's log
+      # last spoke before the 2026-10-04 stall. The patch conditions that action on the public property
+      # QWTNG_SERIALSTART; Install-QwtImproved.ps1 passes it, verifies the MSI carries the condition before running
+      # it, and starts the services itself in dependency order, each after the previous one is observed running.
+      # Same mechanism as the patch above: the installer source is cloned fresh at the pinned tag, so this is the
+      # only place the change can reach a build. The script FAILS the build if either insertion does not apply.
+      - name: "Condition StartServices on QWTNG_SERIALSTART - the wrapper starts the services one at a time"
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = $env:GITHUB_WORKSPACE
+          & "$ws\packaging\patch-installer-serialize-services.ps1" -WxsPath "$ws\installer-src\vs2022\installer\Package.wxs"
+          # Show what shipped, so the log carries the proof rather than a claim.
+          $n = (Select-String -Path "$ws\installer-src\vs2022\installer\Package.wxs" -Pattern '<StartServices Condition="VersionNT AND NOT QWTNG_SERIALSTART" />' | Measure-Object).Count
+          if ($n -ne 1) { throw "StartServices condition present $n time(s) in Package.wxs (expected exactly 1)" }
+          $p = (Select-String -Path "$ws\installer-src\vs2022\installer\Package.wxs" -Pattern '<Property Id="QWTNG_SERIALSTART" Secure="yes" />' | Measure-Object).Count
+          if ($p -ne 1) { throw "QWTNG_SERIALSTART property present $p time(s) in Package.wxs (expected exactly 1)" }
+          Select-String -Path "$ws\installer-src\vs2022\installer\Package.wxs" -Pattern 'QWTNG_SERIALSTART' | ForEach-Object { "  $($_.Line.Trim())" }
+          Write-Host "::notice title=installer::StartServices conditioned on QWTNG_SERIALSTART; Install-QwtImproved.ps1 starts the services serially"
       - name: Shadow every set-version script with the QWT-NG stamper; wire one version into every shipped binary
         shell: pwsh
         run: |
@@ -864,6 +887,52 @@ jobs:
               -p:Platform=x64 "-p:Configuration=$env:CONFIG"
           if ($LASTEXITCODE -ne 0) { throw 'installer.sln build failed' }
           Pop-Location
+
+      # THE SERIALIZED START, PROVEN IN THE BUILT DATABASE (docs/ADR-boot.md 1). The WiX patch above edits a
+      # source file; this reads the InstallExecuteSequence, Property and ServiceControl tables of the
+      # installer.msi msbuild just produced, through the same Windows Installer API the guest-side check in
+      # Install-QwtImproved.ps1 (Assert-MsiSerialStartContract) uses, so the log carries the proof that the
+      # condition reached the shipped MSI - and the build fails if the ServiceControl table grew a service the
+      # installer's $script:QwtMsiServices list does not know (it would come up unpaced, or never).
+      - name: Prove installer.msi carries the serialized-start condition
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = "${{ github.workspace }}"
+          $msi = Get-ChildItem "$ws\installer-src\vs2022\x64\$env:CONFIG" -Recurse -Filter installer.msi | Select-Object -First 1
+          if (-not $msi) { throw 'installer.msi not produced' }
+          $wi = New-Object -ComObject WindowsInstaller.Installer
+          $db = $wi.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $wi, @($msi.FullName, 0))
+          function Query([string]$sql) {
+            $view = $db.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $db, @($sql))
+            [void]$view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null)
+            $rows = @()
+            while ($true) {
+              $rec = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
+              if (-not $rec) { break }
+              $n = [int]$rec.GetType().InvokeMember('FieldCount', 'GetProperty', $null, $rec, $null)
+              $rows += ,@(1..$n | ForEach-Object { [string]$rec.GetType().InvokeMember('StringData', 'GetProperty', $null, $rec, @($_)) })
+            }
+            return $rows
+          }
+          $cond = @(Query "SELECT ``Condition`` FROM ``InstallExecuteSequence`` WHERE ``Action``='StartServices'")
+          if ($cond.Count -ne 1) { throw "InstallExecuteSequence has $($cond.Count) StartServices row(s), expected 1" }
+          Write-Host "StartServices condition in installer.msi: '$($cond[0][0])'"
+          if ($cond[0][0] -notmatch 'QWTNG_SERIALSTART') { throw "the built MSI's StartServices action is NOT conditioned on QWTNG_SERIALSTART - the WiX patch did not reach the database" }
+          $sec = @(Query "SELECT ``Value`` FROM ``Property`` WHERE ``Property``='SecureCustomProperties'")
+          Write-Host "SecureCustomProperties: '$(if ($sec.Count) { $sec[0][0] } else { '<absent>' })'"
+          if ($sec.Count -ne 1 -or $sec[0][0] -notmatch 'QWTNG_SERIALSTART') { throw 'QWTNG_SERIALSTART is not in SecureCustomProperties - a command-line value would not reach the execute sequence of a per-machine install' }
+          # The services the condition now holds back - the set Install-QwtImproved.ps1 starts serially. Event bit 1 =
+          # start on install (msidbServiceControlEventStart).
+          $ctl = @(Query "SELECT ``ServiceName``, ``Event`` FROM ``ServiceControl``")
+          $startOnInstall = @($ctl | Where-Object { ([int]$_[1] -band 1) -ne 0 } | ForEach-Object { $_[0] } | Sort-Object)
+          Write-Host "ServiceControl rows with a start-on-install event: $($startOnInstall -join ', ')"
+          $known = @('QdbDaemon', 'QrexecAgent', 'QubesGuiWatchdog')
+          $unknown = @($startOnInstall | Where-Object { $known -notcontains $_ })
+          if ($unknown.Count) { throw "the MSI would start services the installer's serialized start does not know: $($unknown -join ', ') - add them to `$script:QwtMsiServices in Install-QwtImproved.ps1 (in dependency order) first" }
+          $missing = @($known | Where-Object { $startOnInstall -notcontains $_ })
+          if ($missing.Count) { throw "expected start-on-install ServiceControl rows are missing: $($missing -join ', ') - the pinned WiX changed shape, re-read it" }
+          Write-Host "::notice title=installer::installer.msi StartServices condition '$($cond[0][0])'; serialized start covers $($startOnInstall -join ', ')"
 
       - name: Collect package + MANIFEST
         shell: pwsh

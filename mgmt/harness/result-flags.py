@@ -156,6 +156,14 @@ ERROR_FLAGS = [
     ('updater_agent',           starts('incomplete', 'error:'),           'L3509 WARN returned without its completion line / L3519 WARN threw'),
     ('etwproxy_account',        starts('error:'),                         "L3323 WARN threw ('skipped:<reason>' at L3317 is the documented fail-open - informational)"),
     ('service_recovery',        any_value(lambda x: _s(x) != 'armed'),    'L538/L542 WARN: stored in detail precisely because a WARN alone let it ship'),
+    # -- the serialized service start after msiexec (docs/ADR-boot.md 1; the installer's SVC-SERIAL-START region)
+    ('svc_serial_start_failed', is_true,                                  'Start-QwtServicesSerially ERROR: a QWT service is absent, never reached RUNNING or never became ready; the ones after it were not attempted'),
+    ('svc_serial_start',        lambda v: any(t in _s(v) for t in ('FAILED', 'TIMEOUT', 'ABSENT', 'not-attempted')),
+                                                                          'narrative of svc_serial_start_failed: per service started/running/ready seconds, held-for-quiesce, or the failure'),
+    ('svc_serial_start_after_retry', lambda v: any(t in _s(v) for t in ('FAILED', 'TIMEOUT', 'ABSENT', 'not-attempted')),
+                                                                          'the same narrative for the second start after the ADDLOCAL-only retry'),
+    ('svc_msi_started',         nonempty,                                 'Assert-NoServiceStartedByMsi ERROR: these services were running right after msiexec although QWTNG_SERIALSTART=1 was passed - the MSI started them, the serialized start did not hold'),
+    ('msi_startservices_condition', starts('REFUSED'),                    'Assert-MsiSerialStartContract: the MSI would start the services itself (Fails before msiexec)'),
     # -- supervision (docs/ADR-supervision.md 2-3): our Event Log source and the ONE death reporter task
     ('event_source',            lambda v: _s(v) != 'registered',          'Register-QwtEventSource WARN: the source our supervisors write their death events under is not registered (message file absent / reg add failed / threw)'),
     ('death_reporter',          lambda v: _s(v) != 'registered',          'Register-QwtDeathReporter WARN: the event-triggered QwtDeathReporter task is not registered - a death of ours stays in the guest logs only'),
@@ -183,6 +191,7 @@ INFORMATIONAL = (
     'xenbus_autoreboot_final', 'xenbus_monitor_final',                     # L3758/L3759 readback (matrix.sh asserts the service state itself)
     'uac_prompt_on_secure_desktop',                                        # L3778 readback
     'certs_installed', 'precondition', 'payload_files_verified', 'package_version',   # L3921/L4115/L4193/L4205
+    'svc_serial_start_secs', 'svc_serial_start_after_retry_secs',          # Start-QwtServicesSerially: wall time of each serialized start (the A/B's pacing measure)
 )
 
 

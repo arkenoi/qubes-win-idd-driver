@@ -17,7 +17,10 @@
       stage 2  verify testsigning is active, decide the upgrade mode for any previously
                installed QWT (in place for older/equal, remove-first ONLY for a genuine
                downgrade - see the branch at 'IN-PLACE MSI MAJOR UPGRADE'), install
-               vc_redist, run msiexec, optionally install AND ACTIVATE the IddCx display
+               vc_redist, run msiexec with QWTNG_SERIALSTART=1 (the MSI registers QWT's
+               services but does NOT start them), start those services ONE AT A TIME, each
+               after the previous one is observed running (Start-QwtServicesSerially,
+               docs/ADR-boot.md 1), optionally install AND ACTIVATE the IddCx display
                driver, reboot
 
     The stage is DETECTED, not remembered: if testsigning is not active in the current
@@ -202,6 +205,10 @@ $script:MsiInstallCompleted = $false
 $script:AutoRuns = 0
 $script:GuiQuiesced = $false
 $script:GuiQuiesceHeld = $false
+# Set by Start-QwtServicesSerially when it leaves QubesGuiWatchdog unstarted after msiexec (the stage quiesces
+# the GUI agent right after; a service about to be stopped is not started). The GUI-QUIESCE block reads it and
+# records the held watchdog as quiesced, so the end of the stage restores it on the no-reboot path.
+$script:GuiWatchdogHeld = $false
 
 function Write-Log {
     param([string]$Message, [string]$Level = 'INFO')
@@ -262,6 +269,7 @@ function Emit-Result {
     exit $ExitCode
 }
 
+# ---- FAIL-PATH-BEGIN  (tools/tests/svc-serial-start-test.ps1 runs this region)
 function Fail {
     param([string]$Message)
     Write-Log $Message 'FATAL'
@@ -277,8 +285,17 @@ function Fail {
     try { Clear-BootResume } catch { }
     try { Reset-AutoRunCounter } catch { }
     try { Restore-SweptBinaries } catch { }
+    # A FAIL AFTER msiexec STARTS QWT'S SERVICES FIRST, BEFORE THE RESULT IS WRITTEN (Jev review 2026-10-04, 0.67): the MSI no
+    # longer starts them (QWTNG_SERIALSTART), and the RESULT is what the harness grades - so the start, or its failure, must be IN
+    # it. The POST-MSI-ORDER finally covers a throw; this covers Fail, whose exit would otherwise write the RESULT first.
+    if ($script:MsiInstallCompleted -and -not $script:SerialStartDone -and (Get-Command Start-QwtServicesSerially -ErrorAction SilentlyContinue)) {   # GUARD:failstart
+        Write-Log 'the stage ends early after msiexec - starting QWT''s services first (the MSI no longer does)' 'ERROR'
+        try { Start-QwtServicesSerially } catch { Write-Log "the serialized start on the failure path failed too: $($_.Exception.Message)" 'ERROR' }
+        $script:SerialStartDone = $true
+    }
     Emit-Result 1
 }
+# ---- FAIL-PATH-END
 
 # ---------------------------------------------------------------------------- elevation
 function Assert-Elevated {
@@ -626,6 +643,272 @@ function Set-QubesServiceRecovery {
     $script:Result.detail.service_recovery = $recov
 }
 # ---- SVC-RECOVERY-END
+
+# ---- SVC-SERIAL-START-BEGIN  (tools/tests/svc-serial-start-test.ps1 extracts this region by marker)
+# ONE SERVICE AT A TIME AFTER MSIEXEC (docs/ADR-boot.md 1; owner-approved 2026-10-04).
+#
+# THE DEFECT THIS REMOVES. The guest stall - qrexec dead, the guest frozen, the domain Running - is QEMU
+# in the stub domain no longer completing the guest's I/O requests: Xen holds a vCPU with pause_flags=4
+# (VPF_blocked_in_xen) waiting for the device model, and it strikes in a FRESH domain's first minutes
+# under CONCENTRATED guest activity (findings/wedge.md, measured 2026-10-04). In stage 2 of a clean
+# install the install log stopped 4 s after msiexec returned ("QWT_INSTALL_OK rc=3010", "cleared a
+# pending PV reboot request" were its last lines) - the instant the MSI's StartServices action had
+# started QdbDaemon, QrexecAgent and QubesGuiWatchdog TOGETHER: three services each opening its own
+# vchan and xenstore connections to dom0 at once (and the GUI agent granting its framebuffer), while
+# the harness's first qrexec call landed and this installer went on into its device work. The SCM's own
+# sequencing serializes nothing that reaches Xen: each service reports RUNNING before its worker thread
+# does the vchan work (windows-utils SvcMainLoop), so Wait="yes" in the MSI waits for nothing real.
+#
+# THE RULE (Jev 0.93 on the practice, 0.99 on this shape for the product): in a fresh domain's first
+# minutes, SERIALIZE AND PACE everything that reaches QEMU/Xen - one thing at a time, each step started
+# when the previous one's completion is OBSERVED, never everything at once. Holding qrexec back for the
+# whole stage was considered and NOT chosen.
+#
+# HOW. The MSI is built from the pinned WiX with packaging/patch-installer-serialize-services.ps1
+# applied (qwt-full.yml): its StartServices action is conditioned on the public property
+# QWTNG_SERIALSTART. Stage 2 passes QWTNG_SERIALSTART=1, so Windows Installer registers the services
+# (InstallServices, auto-start, same dependencies) and leaves them STOPPED; then this installer starts
+# them itself, in dependency order, through the SCM:
+#   QdbDaemon        Start-Service, observe RUNNING, then observe READY: the local database answers the
+#                    qube's own /name (the VM-side store is empty until dom0's daemon has connected over
+#                    the vchan and pushed it - a readable /name is the whole path, pipe + vchan + dom0,
+#                    observed from inside with the client DLL the MSI just installed into System32);
+#   QrexecAgent      Start-Service, observe RUNNING (no cheap in-guest observable of the daemon handshake
+#                    exists: the agent writes nothing the guest can read until advertise-tools runs
+#                    AFTER a user logon, and the vchan server's xenstore node would need xencontrol.dll);
+#   QubesGuiWatchdog HELD - not started at all. The very next thing this stage does is stop it for the
+#                    rest of the stage (GUI-QUIESCE: no capture agent during the display surgery), so
+#                    the MSI-era start was a start, a framebuffer grant, a broker launch and a stop
+#                    within seconds - pure churn at the most fragile moment. The end of the stage starts
+#                    it when nothing reboots the guest (gui_restored), and the reboot brings it up with
+#                    its auto-start type otherwise, exactly as before.
+# Each wait is OBSERVED and bounded only as a FAILURE DETECTOR: a service that never reaches RUNNING or
+# never becomes ready is an ERROR with a flag the harness grades (svc_serial_start_failed), the services
+# after it are NOT attempted (their dependency failed; asking the SCM would only start more things), and
+# the stage continues into a defined, reported state - never a silent continue, never a fixed sleep.
+# Recovery (Set-QubesServiceRecovery) is armed AFTER this on purpose: an armed SCM restarting a failed
+# service behind these waits would be unobserved activity and would turn a loud failure into a flap.
+# The contract is checked at both ends: Assert-MsiSerialStartContract refuses to run an MSI whose
+# StartServices row does not carry the condition (a package where the patch did not ship is refused,
+# not silently un-paced), and Assert-NoServiceStartedByMsi records, after msiexec, any service it
+# started anyway (svc_msi_started, error-class).
+$script:MsiSerialStartProperty = 'QWTNG_SERIALSTART'
+# The services the MSI registers with ServiceControl Start="install" (CoreComponents.wxs, GuiComponents.wxs
+# of the pinned WiX), in dependency order: QrexecAgent declares ServiceDependency QdbDaemon, QubesGuiWatchdog
+# declares QrexecAgent. QdbDaemon itself depends on xenagent (xeniface's agent), which the SCM starts for it.
+$script:QwtMsiServices = @('QdbDaemon', 'QrexecAgent', 'QubesGuiWatchdog')
+
+function Read-QwtQubesDbValue {
+    # One qubesdb read through the client DLL (System32\qubesdb-client.dll, installed by the MSI's Core
+    # feature). $null = unreadable (no daemon, no pipe, dom0 not connected yet, key absent) - that is
+    # the NOT-READY answer, never an error. Inline mirror of guest/qubesdb-read.ps1's Get-QubesDbValue
+    # (that file lists the mirrors; this one carries its own type name so it can coexist with the
+    # per-boot priming block's QdbPrime in the same process).
+    param([Parameter(Mandatory)][string]$Path)
+    try {
+        if (-not ('QwtQdbProbe' -as [type])) {
+            Add-Type @'
+using System; using System.Runtime.InteropServices;
+public static class QwtQdbProbe {
+    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl)]
+    public static extern IntPtr qdb_open(IntPtr vmname);
+    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl, CharSet=CharSet.Ansi)]
+    public static extern IntPtr qdb_read(IntPtr h, string path, out uint value_len);
+    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl)]
+    public static extern void qdb_close(IntPtr h);
+}
+'@
+        }
+        $h = [QwtQdbProbe]::qdb_open([IntPtr]::Zero)
+        if ($h -eq [IntPtr]::Zero) { return $null }
+        try {
+            $len = [uint32]0
+            $ptr = [QwtQdbProbe]::qdb_read($h, $Path, [ref]$len)
+            if ($ptr -eq [IntPtr]::Zero) { return $null }
+            return [Runtime.InteropServices.Marshal]::PtrToStringAnsi($ptr, [int]$len)
+        } finally { [QwtQdbProbe]::qdb_close($h) }
+    } catch { return $null }
+}
+
+# Readiness, where it is cheaply observable. A service without an entry is ready when the SCM says RUNNING.
+$script:QwtServiceReadiness = @{
+    'QdbDaemon' = @{ what = '/name readable from the local qubesdb (dom0 connected and synced)'; probe = { $null -ne (Read-QwtQubesDbValue '/name') } }
+}
+
+function New-QwtMsiInstallerObject { return (New-Object -ComObject WindowsInstaller.Installer) }
+function Invoke-QwtComMember {
+    # WindowsInstaller.Installer exposes no type information PowerShell can bind to, so its members are
+    # reached by reflection - the same idiom as Get-PackagePvDiskDriverVersion. One function so the
+    # offline test can drive the contract check against a scripted database.
+    param([Parameter(Mandatory)]$Object, [Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Kind, [object[]]$Arguments = $null)
+    return $Object.GetType().InvokeMember($Name, $Kind, $null, $Object, $Arguments)
+}
+
+function Get-QwtMsiStartServicesCondition {
+    # The Condition column of the MSI's own InstallExecuteSequence row for StartServices, read from the
+    # database the installer is about to run - not from a manifest claim about it. Throws when the
+    # database cannot be read (missing data is not "no condition"); $null when the row is absent.
+    param([Parameter(Mandatory)][string]$MsiPath)
+    $wi = New-QwtMsiInstallerObject
+    $db = Invoke-QwtComMember $wi 'OpenDatabase' 'InvokeMethod' @($MsiPath, 0)
+    $view = Invoke-QwtComMember $db 'OpenView' 'InvokeMethod' @("SELECT ``Condition`` FROM ``InstallExecuteSequence`` WHERE ``Action``='StartServices'")
+    [void](Invoke-QwtComMember $view 'Execute' 'InvokeMethod' $null)
+    $rec = Invoke-QwtComMember $view 'Fetch' 'InvokeMethod' $null
+    if (-not $rec) { return $null }
+    return [string](Invoke-QwtComMember $rec 'StringData' 'GetProperty' @(1))
+}
+
+function Assert-MsiSerialStartContract {
+    # REFUSE AN MSI THAT WOULD START THE SERVICES ITSELF. The whole pacing of stage 2 rests on the MSI
+    # honouring QWTNG_SERIALSTART; a package built without the WiX patch (a packaging regression, a
+    # hand-built MSI, a stale pin) would silently bring the simultaneous start back under a new version
+    # number, and the RESULT would read like a paced install. So the MSI is asked, before it runs.
+    param([Parameter(Mandatory)][string]$MsiPath)
+    $cond = $null
+    $why = ''
+    try {
+        $cond = Get-QwtMsiStartServicesCondition -MsiPath $MsiPath
+        if ($null -eq $cond) { $why = 'the InstallExecuteSequence table has no StartServices row' }
+        elseif ($cond -notmatch [regex]::Escape($script:MsiSerialStartProperty)) { $why = "its StartServices condition is '$cond', which does not mention $script:MsiSerialStartProperty" }
+    } catch {
+        # Missing data FAILS: an unreadable database is not evidence that the condition is there.
+        $why = "the MSI database could not be read ($($_.Exception.Message))"
+    }
+    if ($why -eq '') {
+        Write-Log "MSI contract: StartServices is conditioned ('$cond') - Windows Installer will leave the services stopped for the serialized start"
+        $script:Result.detail.msi_startservices_condition = $cond
+        return $true
+    }
+    $script:Result.detail.msi_startservices_condition = "REFUSED: $why"
+    $msg = ("REFUSING to run msiexec: this MSI would start QWT's services inside Windows Installer, all at once - $why. " +
+            'The serialized start (docs/ADR-boot.md 1) needs the pinned WiX patched by packaging/patch-installer-serialize-services.ps1 ' +
+            '(qwt-full.yml); this package was built without it, or the MSI is not the one this installer ships with.')
+    Fail $msg   # GUARD:msicontract
+}
+
+function Assert-NoServiceStartedByMsi {
+    # THE CONTRACT, OBSERVED AT THE OTHER END. Right after msiexec returns, none of the three may be
+    # running: this installer stopped any pre-existing instance before msiexec (vchan_prestop /
+    # Stop-QwtRuntime) and asked the MSI not to start them. One found running is one the MSI (or
+    # something else) started behind the serialized start - recorded as error-class (svc_msi_started),
+    # because the pacing this stage promises did not hold on this guest. It is NOT stopped: stopping a
+    # live vchan holder is more churn, and the serialized start below treats it as observed-running.
+    $started = @()
+    foreach ($svc in $script:QwtMsiServices) {
+        $s = Get-Service -Name $svc -ErrorAction SilentlyContinue
+        if ($s -and $s.Status -ne 'Stopped') { $started += "$svc=$($s.Status)" }
+    }
+    if ($started.Count -gt 0) {   # GUARD:noviolation
+        Write-Log ("after msiexec: " + ($started -join ', ') + " - running although $script:MsiSerialStartProperty=1 was passed; " +
+                   'the MSI started them itself and the serialized start did NOT hold on this guest (svc_msi_started)') 'ERROR'
+        $script:Result.detail.svc_msi_started = ($started -join ',')
+    } else {
+        Write-Log 'after msiexec: none of the QWT services is running - Windows Installer left the start to this installer, as asked'
+    }
+}
+
+function Wait-QwtServiceReady {
+    # A condition wait, not a pause: it returns the instant the probe answers, and the deadline is a
+    # failure detector (ready=$false), never a timer anything builds on. The sampling interval is the
+    # only sleep in this region.
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][scriptblock]$Probe, [int]$TimeoutSec = 120)
+    $t0 = Get-Date
+    $n = 0
+    while ($true) {
+        $n++
+        $ok = $false
+        try { $ok = [bool](& $Probe) } catch { $ok = $false }
+        $el = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
+        if ($ok) { return [ordered]@{ ready = $true; secs = $el; probes = $n } }
+        if ($el -ge $TimeoutSec) { return [ordered]@{ ready = $false; secs = $el; probes = $n } }
+        Start-Sleep -Milliseconds 250
+    }
+}
+
+function Start-QwtServicesSerially {
+    # See the region header. -AfterRetry: the ADDLOCAL-only retry path calls this a second time; its
+    # record goes to svc_serial_start_after_retry so the first call's survives.
+    param([switch]$AfterRetry, [int]$RunningTimeoutSec = 60, [int]$ReadyTimeoutSec = 120)
+    $narr = [ordered]@{}
+    $failedSvc = ''
+    $tAll = Get-Date
+    foreach ($svc in $script:QwtMsiServices) {
+        if ($svc -eq $script:GuiWatchdogSvc) {
+            # HELD, not started - see the header. Recorded as held; the quiesce block reads the flag.
+            $script:GuiWatchdogHeld = $true   # GUARD:startwatchdog
+            $narr[$svc] = 'held-for-quiesce'
+            Write-Log "serial start: $svc HELD - not started; the stage quiesces the GUI agent next, and the end of the stage (or the reboot) brings it up"
+            continue
+        }
+        if ($failedSvc -ne '') {
+            $narr[$svc] = "not-attempted ($failedSvc failed)"
+            Write-Log "serial start: $svc NOT attempted - $failedSvc, which it depends on, failed" 'ERROR'
+            continue
+        }
+        $s = Get-Service -Name $svc -ErrorAction SilentlyContinue
+        if (-not $s) {
+            $narr[$svc] = 'ABSENT'
+            $failedSvc = $svc
+            Write-Log "serial start: $svc is not registered - the MSI did not install it (feature missing?)" 'ERROR'
+            continue
+        }
+        $t0 = Get-Date
+        $note = ''
+        if ($s.Status -eq 'Running') {
+            $note = 'already-running'
+            Write-Log "serial start: $svc already running (started earlier in this stage) - observed, not restarted"
+        } else {
+            Write-Log "serial start: starting $svc (status was $($s.Status))"
+            try {
+                Start-Service -Name $svc -ErrorAction Stop
+            } catch {
+                $narr[$svc] = "FAILED: $($_.Exception.Message)"
+                $failedSvc = $svc
+                Write-Log "serial start: $svc did not start - $($_.Exception.Message)" 'ERROR'
+                continue
+            }
+            # OBSERVE RUNNING through the SCM - the service's own report, not the cmdlet's return.
+            $running = $false
+            try { (Get-Service -Name $svc -ErrorAction Stop).WaitForStatus('Running', [TimeSpan]::FromSeconds($RunningTimeoutSec)); $running = $true } catch { $running = $false }   # GUARD:nowaitrunning
+            $elRun = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
+            if (-not $running) {
+                $st = (Get-Service -Name $svc -ErrorAction SilentlyContinue).Status
+                $narr[$svc] = "TIMEOUT: not RUNNING after ${elRun}s (status $st)"
+                $failedSvc = $svc
+                Write-Log "serial start: $svc did not reach RUNNING within $RunningTimeoutSec s (status $st)" 'ERROR'
+                continue
+            }
+            $note = "started running=${elRun}s"
+            Write-Log "serial start: $svc RUNNING after ${elRun}s"
+        }
+        if ($script:QwtServiceReadiness.ContainsKey($svc)) {
+            $rd = $script:QwtServiceReadiness[$svc]
+            $w = Wait-QwtServiceReady -Name $svc -Probe $rd.probe -TimeoutSec $ReadyTimeoutSec   # GUARD:nowaitready
+            if ($w.ready) {
+                $note += " ready=$($w.secs)s"
+                Write-Log "serial start: $svc ready after $($w.secs)s ($($rd.what); $($w.probes) probe(s))"
+            } else {
+                $narr[$svc] = "$note ready=TIMEOUT $($w.secs)s"
+                $failedSvc = $svc
+                Write-Log "serial start: $svc is RUNNING but not ready after $($w.secs)s - $($rd.what) never held; the next service is not started on top of it" 'ERROR'
+                continue
+            }
+        }
+        $narr[$svc] = $note
+    }
+    $total = [math]::Round(((Get-Date) - $tAll).TotalSeconds, 1)
+    $record = (($narr.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join '; ')
+    if ($AfterRetry) {
+        $script:Result.detail.svc_serial_start_after_retry = $record
+        $script:Result.detail.svc_serial_start_after_retry_secs = $total
+    } else {
+        $script:Result.detail.svc_serial_start = $record
+        $script:Result.detail.svc_serial_start_secs = $total
+    }
+    if ($failedSvc -ne '') { $script:Result.detail.svc_serial_start_failed = $true }   # GUARD:silentfail
+    Write-Log "serial start done in ${total}s: $record"
+}
+# ---- SVC-SERIAL-START-END
 
 # ---- DEATH-REPORTER-BEGIN  (tools/tests/supervision-install-test.ps1 extracts this region by marker)
 # OUR EVENT LOG SOURCE (docs/ADR-supervision.md 2). The supervisors - the QubesGuiWatchdog service for
@@ -2474,7 +2757,11 @@ function Invoke-Stage2 {
     # makes it an honest MajorUpgrade. This branch only stops an identical-build re-run from
     # hard-failing at the PV gate; shipping two releases at one version is prevented upstream, at
     # build time, not patched over here.
-    $msiArgs = @('/i', "`"$msi`"", '/qn', '/norestart', "ADDLOCAL=$addlocal")
+    # QWTNG_SERIALSTART=1: Windows Installer registers QWT's services and does NOT start them - this installer
+    # starts them one at a time right after msiexec (Start-QwtServicesSerially, docs/ADR-boot.md 1). Passed on
+    # EVERY msiexec /i of this stage (the ADDLOCAL-only retry below builds its own argument list from it).
+    $serialProp = "$script:MsiSerialStartProperty=1"   # GUARD:msinostart
+    $msiArgs = @('/i', "`"$msi`"", '/qn', '/norestart', "ADDLOCAL=$addlocal", $serialProp)
     if ($script:SameVersionReinstall) { $msiArgs += 'REINSTALL=ALL' }
     # '/l*v!' - the '!' flushes every line to disk rather than buffering it. This is the install
     # that reboots the guest mid-flight when it goes wrong, so the buffered tail is precisely the
@@ -2491,6 +2778,9 @@ function Invoke-Stage2 {
     # -FatalIfSurvives: a process that outlives the kill is what restarts the guest mid-MSI; the
     # WARN-and-continue this used to be started msiexec into the state the comments above call a brick.
     Disable-XenbusMonitor -Why 'before msiexec' -FatalIfSurvives
+
+    # THE MSI MUST HONOUR THE SERIALIZED START, or it does not run (see the SVC-SERIAL-START region).
+    [void](Assert-MsiSerialStartContract -MsiPath $msi)
 
     # RE-ARM THE INBOX STORAGE DRIVERS before the MSI touches the PV disk driver.
     # MEASURED 2026-08-15, upgrading a genuine stock QWT 4.2.2 guest to this package: the boot
@@ -2650,19 +2940,47 @@ function Invoke-Stage2 {
     Write-Log "QWT_INSTALL_OK rc=$($p.ExitCode)"
     $script:Result.detail.msiexec_rc = $p.ExitCode
     $script:Result.detail.addlocal = $addlocal
+    # ---- POST-MSI-ORDER-BEGIN  (tools/tests/svc-serial-start-test.ps1 extracts this block by marker)
+    # THE ORDER HERE IS THE PRODUCT (docs/ADR-boot.md 1): after msiexec, FIRST the xenbus_monitor safety stop
+    # (the one thing that may not wait - a monitor the MSI re-registered answers a parked reboot request and
+    # restarts the guest mid-stage), THEN QWT's services one at a time, each after the previous one is
+    # observed running, and ONLY THEN any further step - recovery arming, the Event Log source, the death
+    # reporter, the feature check, the disk probe, the GUI quiesce, the PV driver installs, the IDD surgery.
+    # Nothing is inserted between msiexec and the serialized start; the offline suite asserts this order.
     # The new product owns the bin directory from here: the old binaries the sweep moved aside are
     # no longer a rollback target (Fail after this point leaves the NEW product in place).
     $script:MsiInstallCompleted = $true
-    Remove-SweptAside
+    $script:SerialStartDone = $false
+    try {
+        Remove-SweptAside
 
-    # Re-assert AFTER the install too: the MSI lays the service down fresh (auto-start, new
-    # service key), losing both the disable and the AutoReboot value written before it.
-    # -FatalIfSurvives here as at the two sites before msiexec: a monitor that outlives this stop is
-    # the process that reboots the guest mid-stage-2, and the WARN-and-continue this was let it.
-    Disable-XenbusMonitor -Why 'after msiexec: MSI re-registered the service' -FatalIfSurvives
+        # Re-assert AFTER the install too: the MSI lays the service down fresh (auto-start, new
+        # service key), losing both the disable and the AutoReboot value written before it.
+        # -FatalIfSurvives here as at the two sites before msiexec: a monitor that outlives this stop is
+        # the process that reboots the guest mid-stage-2, and the WARN-and-continue this was let it.
+        Disable-XenbusMonitor -Why 'after msiexec: MSI re-registered the service' -FatalIfSurvives
+
+        # QWT'S SERVICES, ONE AT A TIME (SVC-SERIAL-START region). The MSI was asked to leave them stopped
+        # (QWTNG_SERIALSTART=1); first that is checked, then QdbDaemon is started and observed running and
+        # ready, then QrexecAgent is started and observed running; QubesGuiWatchdog is held for the quiesce.
+        Assert-NoServiceStartedByMsi
+        Start-QwtServicesSerially   # GUARD:serialfirst
+        $script:SerialStartDone = $true
+    } finally {
+        # NO EXIT PATH AFTER msiexec MAY LEAVE THE SERVICES STOPPED (Jev review 2026-10-04: the top concern, 0.63). The MSI used
+        # to start them inside msiexec; now only the serialized start does. A step above that throws, or Fails (Fail -> exit
+        # unwinds through this finally), still gets them started - one at a time, exactly as above - and the log says why.
+        if (-not $script:SerialStartDone) {   # GUARD:startonexit
+            Write-Log 'a step between msiexec and the serialized start ended early - starting QWT''s services anyway (the MSI no longer does)' 'ERROR'
+            try { Start-QwtServicesSerially } catch { Write-Log "the serialized start after an early exit failed too: $($_.Exception.Message)" 'ERROR' }
+            $script:SerialStartDone = $true
+        }
+    }
 
     # The MSI has just (re)registered QdbDaemon/QrexecAgent/QubesGuiWatchdog with no failure actions,
-    # so this has to run AFTER it, every time - see Set-QubesServiceRecovery for the measurement.
+    # so this has to run AFTER it, every time - see Set-QubesServiceRecovery for the measurement. AFTER
+    # the serialized start too, on purpose: a failed start is reported by the start itself, not retried
+    # unobserved by the SCM under it (see the SVC-SERIAL-START header).
     Set-QubesServiceRecovery
 
     # ONE REPORTER FOR EVERY DEATH (docs/ADR-supervision.md 2-3): our Event Log source, and the
@@ -2672,6 +2990,7 @@ function Invoke-Stage2 {
     # result-flags.py grades it red.
     Register-QwtEventSource
     Register-QwtDeathReporter -Root $Root
+    # ---- POST-MSI-ORDER-END
 
     # --- prove the install put OUR agent on disk ------------------------------------
     # Without this the script would report success for an install that silently kept a
@@ -2722,7 +3041,9 @@ function Invoke-Stage2 {
         if ($script:SameVersionReinstall) {
             Write-Log ("gui-agent.exe absent or requested features not LOCAL after REINSTALL=ALL - the MSI " +
                        "records a feature as Absent, which REINSTALL skips. Retrying ONCE with ADDLOCAL only.") 'WARN'
-            $retryArgs = @('/i', "`"$msi`"", '/qn', '/norestart', "ADDLOCAL=$addlocal",
+            # Same QWTNG_SERIALSTART=1 as the main run: this msiexec may install a feature whose service was
+            # Absent, and that service is then started below, serially, like the others - never by the MSI.
+            $retryArgs = @('/i', "`"$msi`"", '/qn', '/norestart', "ADDLOCAL=$addlocal", $serialProp,
                            'REBOOT=ReallySuppress', 'REINSTALLMODE=amus', 'MSIFASTINSTALL=7',
                            '/l*v+!', "`"$msiLog`"")
             $rp = Start-Process msiexec.exe -Wait -PassThru -ArgumentList $retryArgs
@@ -2732,6 +3053,11 @@ function Invoke-Stage2 {
             # test and be reported as 'msiexec reported success but gui-agent.exe does not exist' -
             # the wrong cause, in the one line the reader gets.
             if ($rp.ExitCode -notin 0, 3010) { Fail "the ADDLOCAL-only retry failed with $($rp.ExitCode) - see $msiLog" }
+            # The serialized start, again: a service this retry newly registered is Stopped and is started
+            # here in order; one the first pass already started is observed running and left alone. The
+            # post-msiexec "none running" assertion is NOT repeated here - the first pass legitimately left
+            # QdbDaemon/QrexecAgent running, so it could not tell our start from the MSI's.
+            Start-QwtServicesSerially -AfterRetry
             $fc = & $featureCheck $features
             $script:Result.detail.features_installed = $fc.states
         }
@@ -2883,8 +3209,9 @@ function Invoke-Stage2 {
     # ELIMINATE THE WINDOW, do not police it (owner 2026-09-08: "our task is to eliminate all race
     # conditions to make sure everything goes the defined path or gracefully fails and never ends
     # in undefined state").
-    # The MSI registers and STARTS QubesGuiWatchdog, so from here the agent - and the WGC broker it
-    # launches into the session - is live while stage 2 still has to: install xenvif and xencons
+    # The MSI registers QubesGuiWatchdog. Until the serialized start (SVC-SERIAL-START, 2026-10-04) it also
+    # STARTED it, so from here the agent - and the WGC broker it launches into the session - was live while
+    # stage 2 still had to: install xenvif and xencons
     # (PV drivers, pending reboot), stage and create the IDD display device, and DISABLE the
     # adapter the desktop is running on. A capture agent seconds old, a broker mid-launch, a shell
     # announcing freshly arrived removable volumes, and three driver packages pending reboot is not
@@ -2897,6 +3224,7 @@ function Invoke-Stage2 {
     # the device topology already final.
     # ---- GUI-QUIESCE-BEGIN  (tools/tests/procown-sites-test.ps1 extracts this block by marker)
     $script:GuiQuiesced = $false
+    $quiesceStoppedNow = $false   # a watchdog this block actually stopped (the settle below is for that case only)
     try {
         $wd = Get-Service -Name 'QubesGuiWatchdog' -ErrorAction SilentlyContinue
         if ($wd -and $wd.Status -ne 'Stopped') {
@@ -2915,6 +3243,13 @@ function Invoke-Stage2 {
             # Quiesced = the SERVICE reached Stopped (a stop that threw inside the helper did not; the
             # survivor count below says so). This is also what the end of the stage restarts.
             $script:GuiQuiesced = [bool]$wdStop.stopped
+            $quiesceStoppedNow = [bool]$wdStop.stopped
+        } elseif ($script:GuiWatchdogHeld) {
+            # The serialized start after msiexec HELD the watchdog instead of starting it (SVC-SERIAL-START):
+            # held IS quiesced - nothing ran, nothing to stop - and the end of the stage restores it on the
+            # no-reboot path exactly as it would a watchdog this block had stopped.
+            Write-Log 'QubesGuiWatchdog held by the serialized start - never started in this stage; counted as quiesced (restored at the end of the stage, or by the reboot)'
+            $script:GuiQuiesced = $true
         } else {
             Write-Log 'QubesGuiWatchdog not running - nothing to quiesce before the stage-2 device work'
         }
@@ -2957,8 +3292,9 @@ function Invoke-Stage2 {
     # GUARD:quiescebyname
     # Let an in-flight AcquireNextFrame and the framebuffer grant go away before any device moves
     # under them: the agent re-grants on resolution change, and that path reaches into the kernel
-    # (xeniface gnttab IOCTLs).
-    if ($script:GuiQuiesced) { Start-Sleep -Seconds 3 }
+    # (xeniface gnttab IOCTLs). Only when this block actually stopped a running watchdog - a watchdog
+    # the serialized start HELD never ran, so there is nothing in flight to let go.
+    if ($quiesceStoppedNow) { Start-Sleep -Seconds 3 }
     # ASSERT IT HELD. A quiesce that quietly failed leaves the display surgery running under a live
     # capture agent - the condition it exists to remove - while the log says it was quiesced. The
     # IDD activation below REFUSES to run when this did not hold (it throws into its loud failure
@@ -4309,6 +4645,8 @@ public static class QdbPrime {
     if ($dd.idd_vga_disable_pending -eq $true)                      { $errFlags += 'idd_vga_disable_pending' }
     if ($dd.pvnic_prime_failed -eq $true)                           { $errFlags += 'pvnic_prime_failed' }
     if ($dd.vchan_prestop_failed -eq $true)                         { $errFlags += 'vchan_prestop_failed' }
+    if ($dd.svc_serial_start_failed -eq $true)                      { $errFlags += 'svc_serial_start_failed' }
+    if ("$($dd.svc_msi_started)" -ne '')                            { $errFlags += 'svc_msi_started' }
     if ("$($dd.gui_quiesce_failed)" -ne '')                         { $errFlags += 'gui_quiesce_failed' }
     if ("$($dd.gui_runtime_survivors)" -ne '')                      { $errFlags += 'gui_runtime_survivors' }
     if ("$($dd.gui_restored)" -like 'FAILED*')                      { $errFlags += 'gui_restored' }
