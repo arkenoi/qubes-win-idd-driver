@@ -594,7 +594,17 @@ jobs:
             if (-not $vsix) { throw "WDK.vsix not found after choco install" }
             $inst = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022" -Recurse -Filter VSIXInstaller.exe |
                     Select-Object -First 1
-            Start-Process $inst.FullName -ArgumentList '/quiet', $vsix.FullName -Wait
+            # VSIXInstaller can HANG on the hosted runner (2026-10-03/04: release-package runs 37147382401 and 37179019542 sat in it, the
+            # choco WDK install itself finishing in ~1 min). Bounded: 4 min per attempt, the installer WE started stopped by its handle,
+            # at most three attempts; the exit code is logged and not judged, as before (the driver build that follows is the judge).
+            $vsixDone = $false
+            foreach ($attempt in 1..3) {
+              $p = Start-Process $inst.FullName -ArgumentList '/quiet', $vsix.FullName -PassThru
+              if ($p.WaitForExit(240000)) { Write-Host "VSIXInstaller exited $($p.ExitCode) (attempt $attempt)"; $vsixDone = $true; break }
+              Write-Host "VSIXInstaller still running after 4 min (attempt $attempt) - stopping it and retrying"
+              try { $p.Kill() } catch { }
+            }
+            if (-not $vsixDone) { throw 'VSIXInstaller hung on three attempts' }
           }
           # PIN relocate-dir TO THE SDK VERSION THAT ACTUALLY HAS THE KM HEADERS.
           # Measured 2026-09-08: with the WDK installed and the toolset resolving
