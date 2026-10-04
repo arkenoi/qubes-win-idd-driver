@@ -97,6 +97,7 @@ $PassTaskLimit = 'PT2H'    # QubesWindowsUpdateRun and QubesWindowsUpdateDownloa
 #     whose owner process is gone - checked before the mutex is touched. A pass that ends intending
 #     a reboot sets phase='done' first, so a planned servicing reboot is already terminal and needs
 #     nothing extra.
+# ---- DEPLOY-PREVPASS-BEGIN   (tools/tests/wu-deploy-prevpass-test.ps1 runs this region)
 $UpdaterStatusFile = 'C:\ProgramData\Qubes\update-status.json'
 $UpdTerminalPhases = @('done','error','skipped-unknown','skipped-standalone','skipped-appvm')
 $updPrev = $null
@@ -111,15 +112,40 @@ if ($updPrev -and $updPrev.phase -and ($UpdTerminalPhases -notcontains $updPrev.
         if ($po) { $alive = $true; if ($pStart) { try { if ($po.StartTime.ToString('s') -ne $pStart) { $alive = $false } } catch { $alive = $false } } }
     }
     if (-not $alive) {
-        $msg = ("QWTUPDSTATEUNKNOWN: the last update pass ('" + $updPrev.action + "') stopped at phase '" +
-                $updPrev.phase + "' and its process (" + $pPid + ") is gone - it was terminated partway, so " +
-                "what it was doing is unknown; refusing to stop the relay or rewrite the updater tasks on top " +
-                "of it, nothing was changed and the mutex was not touched. Read " + $UpdaterStatusFile +
-                " and the agent log, then let a full pass run to completion (it rewrites this state) and rerun.")
-        Log $msg
-        throw $msg
+        # THE UPDATER'S OWN RULE FOR A CUT-OFF PASS (its WU-PREVPASS-GATE, the owner's D3 decision 2026-10-02), applied here too. Until
+        # 2026-10-04 this refused EVERY cut-off pass, and the rz39 gate's upgrade from 4.3.33 failed on it: the boot scan had been cut off
+        # at phase 'init' (in an earlier boot), and the deploy refused with QWTUPDSTATEUNKNOWN - updater_agent=error on a correct upgrade.
+        $prevAction = "$($updPrev.action)"
+        $prevTs = "$($updPrev.ts)"; if ($updPrev.ts -is [datetime]) { $prevTs = $updPrev.ts.ToString('s') }
+        $bootT = $null
+        try { $bootT = (Get-CimInstance Win32_OperatingSystem -EA Stop).LastBootUpTime } catch { $bootT = $null }
+        if (-not $bootT) { try { $bootT = (Get-Date).AddMilliseconds(-[double]([Environment]::TickCount -band [int]::MaxValue)) } catch { } }
+        $bootS = ''; if ($bootT) { $bootS = $bootT.ToString('s') }
+        $refusedBoot = ''
+        if ($updPrev.PSObject.Properties.Name -contains 'refused_boot') {
+            if ($updPrev.refused_boot -is [datetime]) { $refusedBoot = $updPrev.refused_boot.ToString('s') } else { $refusedBoot = "$($updPrev.refused_boot)" }
+        }
+        $lastT = [datetime]::MinValue
+        $lastKnown = [datetime]::TryParseExact($prevTs, 'yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture,
+                                               [Globalization.DateTimeStyles]::None, [ref]$lastT)
+        $what = "the last update pass ('$prevAction', last written $prevTs) stopped at phase '$($updPrev.phase)' and its process ($pPid) is gone"
+        if ($prevAction -eq 'scan') {   # GUARD:deployscan
+            Log "$what - a scan only searches and installs nothing, so nothing is unknown; deploying (the updater's own rule)"
+        } elseif ($bootT -and $lastKnown -and $lastT -lt $bootT) {   # GUARD:deployboot
+            Log "$what before this qube's last restart ($bootS) - Windows completes or rolls back pending servicing during boot, so that work is settled; deploying"
+        } elseif ($refusedBoot -and $bootS -and $refusedBoot -ne $bootS) {   # GUARD:deployrefused
+            Log "$what; a pass refused it in an earlier boot ($refusedBoot) and requested a restart, which has happened ($bootS) - deploying"
+        } else {
+            $msg = ("QWTUPDSTATEUNKNOWN: $what - it was terminated partway in THIS boot, so what it was doing is unknown; refusing " +
+                    "to stop the relay or rewrite the updater tasks on top of it, nothing was changed and the mutex was not touched. " +
+                    "Read " + $UpdaterStatusFile + " and the agent log; restart this qube (Windows settles pending servicing during " +
+                    "boot) and rerun.")
+            Log $msg
+            throw $msg
+        }
     }
 }
+# ---- DEPLOY-PREVPASS-END
 $updMutex = New-Object System.Threading.Mutex($false, 'Global\QubesWindowsUpdate')
 $haveUpdMutex = $false
 try {
