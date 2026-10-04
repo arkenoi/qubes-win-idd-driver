@@ -24,22 +24,19 @@ cd "$(git rev-parse --show-toplevel)" || exit 2
 VM="${VM:?set VM to the guest to stress}"
 ROUNDS="${1:-6}"; SECS="${2:-180}"
 export QTEST_VM="$VM"
+. .claude/skills/win-guest-e2e/e2e-lib.sh
+. mgmt/harness/e2e-wait.sh
 . mgmt/harness/vmlock.sh
 vm_lock "$VM"
 OUT="scratchpad/ipistorm-$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$OUT"
 say(){ echo "$(date -u +%H:%M:%SZ) storm: $*" | tee -a "$OUT/run.log"; }
 
 state(){ qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$VM" '$1==v{print $2}'; }
-cputime(){ qvm-ls --raw-data --fields NAME,STATE 2>/dev/null >/dev/null; python3 - "$VM" <<'PY'
-import sys
-try:
-    import qubesadmin
-    vm = qubesadmin.Qubes().domains[sys.argv[1]]
-    print(int(getattr(vm, "get_cputime", lambda: 0)() or 0))
-except Exception:
-    print(0)
-PY
-}
+# w_cpu_time from the shared wait library, NOT a hand-rolled qubesadmin reader. `get_cputime`
+# does not exist on this toolstack: the getattr fallback returned 0 every time, so "c2 > c1" was
+# always false and this harness COULD NOT have detected a wedge - its negatives are weaker than
+# they read. Measured 2026-09-23, after the same bug discarded a real stall in the upgrade loop.
+cputime(){ w_cpu_time "$VM"; }
 alive(){ timeout -k 5 45 ./tools/qtest run 'cmd /c echo PONG' 2>/dev/null | grep -qa PONG; }
 
 if [ -n "${VCPUS:-}" ]; then
@@ -77,8 +74,12 @@ for r in $(seq 1 "$ROUNDS"); do
   sleep "$SECS"
   check_wedge "quiet-$r" || break
   say "round $r/$ROUNDS: STORM ${SECS}s"
-  timeout -k 10 $((SECS + 120)) ./tools/qtest run \
-    "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\Users\\user\\Documents\\QubesIncoming\\win-idd-mgmt\\ipi-storm.ps1 -Seconds $SECS" \
+  # PNPDEV= adds device disable/enable cycling to the round. The TLB arm alone drove 1.05 M
+  # shootdown cycles on 2026-09-23 with NO wedge, which refutes "shootdown pressure is the
+  # trigger" - the specimens sat around DEVICE activity (the installer's devcon install + VGA
+  # disable), and driver load/unload is what actually runs KeIpiGenericCall.
+  timeout -k 10 $((SECS + 180)) ./tools/qtest run \
+    "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\Users\\user\\Documents\\QubesIncoming\\win-idd-mgmt\\ipi-storm.ps1 -Seconds $SECS${PNPDEV:+ -PnpDevice '$PNPDEV'}" \
     2>&1 | tr -d '\r' | tee -a "$OUT/storm-$r.log" | grep -a IPISTORM | tail -3
   grep -qa "IPISTORM t=" "$OUT/storm-$r.log" || say "  WARNING: no cycle heartbeat - the storm may not have run; treat this round as UNMEASURED"
   check_wedge "storm-$r" || break

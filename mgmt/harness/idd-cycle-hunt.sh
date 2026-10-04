@@ -25,6 +25,8 @@ ARM="${ARM:-new}"
 N="${1:-20}"
 TREE="${2:-/home/user/qwt-accept/rel-35789898345/dl/qwt-improved-setup}"
 export QTEST_VM="$VM"
+. .claude/skills/win-guest-e2e/e2e-lib.sh
+. mgmt/harness/e2e-wait.sh
 . mgmt/harness/vmlock.sh
 vm_lock "$VM"
 OUT="scratchpad/iddcycle-$(date -u +%Y%m%dT%H%M%SZ)-$ARM"; mkdir -p "$OUT"
@@ -32,15 +34,11 @@ say(){ echo "$(date -u +%H:%M:%SZ) iddcycle[$ARM]: $*" | tee -a "$OUT/run.log"; 
 I='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
 
 state(){ qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$VM" '$1==v{print $2}'; }
-cpu(){ python3 - "$VM" <<'PY'
-import sys
-try:
-    import qubesadmin
-    print(int(qubesadmin.Qubes().domains[sys.argv[1]].get_cputime() or 0))
-except Exception:
-    print(0)
-PY
-}
+# w_cpu_state from the shared wait library. A hand-rolled qubesadmin get_cputime reader was used
+# here first; that property DOES NOT EXIST on this toolstack, the exception was swallowed, and a
+# live wedge would have read as healthy (measured 2026-09-23 - it discarded a real stall in the
+# upgrade loop). Missing data must FAIL, never read as a negative.
+cpu(){ w_cpu_time "$1"; }
 alive(){ timeout -k 5 45 ./tools/qtest run 'cmd /c echo PONG' 2>/dev/null | grep -qa PONG; }
 wedge_check(){ # $1=tag -> 0 healthy, 1 wedged+captured
   local c1 c2; c1=$(cpu); sleep 20; c2=$(cpu)
