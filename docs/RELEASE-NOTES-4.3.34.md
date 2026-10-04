@@ -57,6 +57,21 @@ get out of it, because its own updater also refused every later pass. The instal
 interrupted check, or an update pass from before the qube's last restart, no longer blocks it. Only an install or download
 interrupted in the current boot still does, and the message says to restart the qube and run the installer again.
 
+## The installer no longer answers qrexec calls while it is still setting up devices
+
+After Windows Installer finishes, the installer still changes devices for up to about a minute: it installs and activates the display
+driver, switches off the emulated graphics adapter, sets up the updater and prepares the PV network adapter. Until now Windows
+Installer started the Windows Tools services itself, as part of the install, so a qrexec call from dom0 could arrive in the
+middle of that work.
+Each call into the qube makes Windows map, and afterwards unmap, a page shared with the caller, and on Xen every unmap makes the
+guest wait for QEMU in the qube's stub domain. Four of the install stalls on record happened in that window; one more froze in
+the first start after an install, and one on a qube with no Windows Tools installed at all - this change does not reach those.
+
+Now the services start one at a time, each after the previous one is running, and the Qubes RPC agent starts only when the device
+work is done. In a manual install, qrexec answers when the install has finished - later than before by the length of that work
+(24 s measured on Windows 10; up to about a minute on earlier runs). With
+`install.cmd /auto /reboot` the qube powers off at the end of the install as before, and qrexec answers at its next start.
+
 ## Known and not fixed
 
 - A template that has both a .NET update and a cumulative update to install asks dom0 for a restart **twice**, as in 4.3.33:
@@ -68,7 +83,11 @@ interrupted in the current boot still does, and the message says to restart the 
 - After a cumulative update, Windows can restart itself while it finishes installing, and on Qubes a restart the guest starts
   itself ends with the qube shut down. On the reporter's environment that happened once with the cumulative alone and twice with
   the cumulative and .NET together, so the qube had to be started again until the update was done.
-- The intermittent guest stall during installs and upgrades is unchanged and still unexplained.
+- The guest stall can still happen outside the install's device work: one is on record in the first minutes of a qube's first
+  start after an install, and one on a qube with no Windows Tools installed at all. The part of it that happens in QEMU is not
+  something Windows Tools can change.
+- If a part of Windows Tools crashes during that last minute of an install, while the Qubes RPC agent is not yet started, the crash
+  is recorded in the guest's own log but not reported to dom0.
 - On the event-driven capture, the repaint after a keystroke still reaches dom0 a little later than before it (measured on a
   pre-release build: about 9 ms at the median, about 20 ms on the second key of a sequence typed one per second).
 - The notification bridge's reports about its own failures may not reach dom0 (found by reading the code; not yet checked on a
@@ -76,4 +95,16 @@ interrupted in the current boot still does, and the message says to restart the 
 
 ## How this release was verified
 
-To be completed from the acceptance gate on this exact package.
+The full release acceptance ran on this exact package (release-package 37206244684, built from 24e28f46) on 2026-10-04 and
+passed:
+
+- The package checks: driver versions, the 84 manifest files and the analyser, 13 of 13.
+- Eight install cells on Windows 10 22H2 and Windows 11 (retail 26300): a clean install from a pristine image, a same-version
+  reinstall, an upgrade from 4.3.33, and an AppVM derived from the installed template with cold boots - all passed, and no guest
+  stalled. In the clean installs the installer's own log shows the Qubes RPC agent held through the device work (24 s on
+  Windows 10) and started only afterwards.
+- The error notifications sent to dom0, the window crop before mapping, and the updater on the reporter's environment (a German
+  Windows 11 25H2 template, three update rounds) - all passed.
+
+One clean gate is not a measurement of the stall rate: eight installs without a stall would also happen about one time in five
+if nothing had changed. Every install from here on is part of that check.

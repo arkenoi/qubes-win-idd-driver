@@ -70,9 +70,12 @@ the release. The harnesses already live with a no-qrexec phase: `quick-upgrade.s
 reaches dom0 only through the guest log - the death reporter's notification rides the local qrexec-agent (`guest/qwt-notify-error.ps1`,
 HONEST LIMIT).
 
-**Not fixed:** a freeze in a post-install boot (#4) and a freeze with no QWT at all (J-C sp.1) remain - nothing of ours is open in
-either; QEMU's own hang is not ours to patch (dom0 is not patched - owner). The hold does not cover the pre-msiexec part of an
+**Not fixed:** a freeze in a post-install boot (#4 - our agent was running and answered the harness's first-answer burst, which
+the stage-2 hold does not reach; the every-boot form, F2, waits on a premise probe) and a freeze with no QWT at all (J-C sp.1)
+remain; QEMU's own hang is not ours to patch (dom0 is not patched - owner). The hold does not cover the pre-msiexec part of an
 upgrade (the previous QWT's agent answers until the vchan_prestop stops it) or the seconds between the release and the end of the
 stage. **A coin flip on the framing, stated plainly:** Jev rated "a product property rather than avoidance" at 0.44. The check is a
 posteriori - the stall rate on the rig with this order against the record before it, through the gate as it runs, with no harness
-quiet window. **Seen to fail / pass:** offline, every assertion of the suite fails under its knob (21 knobs); on the rig, owed.
+quiet window. **Seen to fail / pass:** offline, every assertion of the suite fails under its knob (24 knobs, re-run by the reviewer: 77/0 clean); on the rig, gate #6 on
+4.3.34 (24e28f46, 2026-10-04): QrexecAgent held 24.2 s through stage 2's device work and not started before the power-off, all
+8 install cells PASS with no stall, record CLEAN - 0 of 8 at the recent ~18% rate has P = 0.21, so consistent, not proof.
