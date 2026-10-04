@@ -182,11 +182,15 @@ window at every boot and shutdown. It is now denied outright — and permanently
 cosmetic one. A guest that reaches a *visible* Windows login screen is a misconfiguration to fix
 (autologon), not something this build will render for you.
 
-### The Start menu works again
+### The Windows key and the Start menu in seamless mode
 
-Earlier builds blocked the Windows key in seamless mode. In seamless the taskbar window is never
-mapped, so that key is the only way into any Start menu — including third-party shells. The block
-is now **opt-in**; nothing to do unless you want it back.
+In seamless mode the Windows key is blocked by default, and the Windows Start menu itself is not
+shown: on Windows 11 25H2 it cannot be reproduced acceptably as a seamless window. Set
+`qvm-features <vm> service.enableWinKey 1` to let the key through for a third-party start menu such
+as Open-Shell, which is shown like any other window. If the Windows Start menu is opened anyway
+(Shift+Win, or the Windows key with no third-party menu installed), **4.3.35 closes it at once** and
+says so once per session — before, it stayed open and invisible and took your clicks. The Qubes app
+menu in dom0 is the other way to start programs.
 
 ### A qube built from a Windows template boots the first time
 
@@ -429,7 +433,7 @@ overrides, is [docs/QVM-FEATURES.md](docs/QVM-FEATURES.md). The short version:
 
 | set in dom0 | what it does |
 |---|---|
-| `qvm-features <vm> service.enableWinKey 1` | let the Windows key through, so Start (or a third-party shell) opens. Default: blocked in seamless mode |
+| `qvm-features <vm> service.enableWinKey 1` | let the Windows key through, so a third-party start menu (Open-Shell, for example) opens. The Windows Start menu itself is not shown in seamless mode and is closed if opened. Default: blocked in seamless mode |
 | `qvm-features <vm> service.gui-fullscreen 1` | allow a **borderless true-fullscreen app window** (a game, a video, a presentation taking over the screen). A maximized app with a title bar is always allowed; the boot/shutdown screen is never allowed, feature or not. It no longer gates the **non-seamless desktop**: dom0 asking for the whole desktop in one window is honoured on any guest — the desktop surface is plugged in like a monitor when you switch and unplugged when you switch back, so a seamless guest still never holds a whole-desktop grant |
 | `qvm-features <vm> service.hideGuestTitleBar ""` | keep the guest's own title bars. Stripping them so only dom0's decoration shows is the **default since 4.3.21** — set the feature to an empty value to opt out |
 | `qvm-features <vm> service.notify-bridge 0` | turn **off** the forwarding of guest notifications to dom0. Default: **on** since 4.3.30 |

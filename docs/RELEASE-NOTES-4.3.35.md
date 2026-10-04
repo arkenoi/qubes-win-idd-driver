@@ -1,7 +1,7 @@
-# QWT-NG 4.3.35 — the Windows Update agent is installed even when an update scan is running
+# QWT-NG 4.3.35 — the Windows Update agent is installed even during an update check, and the hidden Start menu no longer takes clicks
 
-Everything in 4.3.34 is carried forward. This release is about one installer defect reported from the field: an upgrade that
-quietly kept the previous Windows Update agent.
+Everything in 4.3.34 is carried forward. This release fixes two defects reported from the field on a German Windows 11 25H2
+template: an upgrade that quietly kept the previous Windows Update agent, and a Windows Start menu that was open but invisible.
 
 ## The Windows Update agent is installed even when an update scan is running
 
@@ -33,6 +33,18 @@ When the Windows Update agent cannot be installed, for whatever reason:
   sent in that run; the installer's log and result say so, and carry the failure.
 - Every line the updater deploy writes now appears in `C:\qwt-improved-install.log` as it happens. Until now a failed deploy
   left none of its own lines there, only the final error.
+
+## The Windows Start menu no longer stays open invisibly
+
+In seamless mode the Windows Start menu is not shown (on Windows 11 25H2 it cannot be reproduced acceptably as a seamless
+window), and the Windows key is blocked by default. With `service.enableWinKey 1` - meant for a third-party start menu such as
+Open-Shell - or with Shift+Win, Windows still opened its own Start menu: invisible in dom0, but holding the keyboard and taking
+the clicks meant for the windows underneath it ("clicking where it should be starts Paint"). Reproduced on the reporter's
+environment with 4.3.34.
+
+Now the agent closes the Windows Start menu the moment it opens in seamless mode, and tells you once per session, with a dom0
+notification, why it closed. Open-Shell's menu and Windows Search (Win+S) are not affected. The README's section on the Windows
+key said the key was let through by default and that "the Start menu works again"; both were wrong and are corrected.
 
 ## Known and not fixed
 
