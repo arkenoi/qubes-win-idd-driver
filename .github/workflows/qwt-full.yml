@@ -921,7 +921,7 @@ jobs:
           if ($sec.Count -ne 1 -or $sec[0][0] -notmatch 'QWTNG_SERIALSTART') { throw 'QWTNG_SERIALSTART is not in SecureCustomProperties - a command-line value would not reach the execute sequence of a per-machine install' }
           # The services the condition now holds back - the set Install-QwtImproved.ps1 starts serially. Event bit 1 =
           # start on install (msidbServiceControlEventStart).
-          $ctl = @(Query "SELECT ``ServiceName``, ``Event`` FROM ``ServiceControl``")
+          $ctl = @(Query "SELECT ``Name``, ``Event`` FROM ``ServiceControl``")
           $startOnInstall = @($ctl | Where-Object { ([int]$_[1] -band 1) -ne 0 } | ForEach-Object { $_[0] } | Sort-Object)
           Write-Host "ServiceControl rows with a start-on-install event: $($startOnInstall -join ', ')"
           $known = @('QdbDaemon', 'QrexecAgent', 'QubesGuiWatchdog')
