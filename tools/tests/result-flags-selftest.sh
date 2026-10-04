@@ -98,6 +98,11 @@ pvnic_prime|"seeded-indeterminate-class"
 idd_driver|"skipped (/noidd)"
 emulated_storage_rearmed|true
 upgrade_mode|"in-place-msi-major-upgrade"
+vchan_prestop|"QrexecAgent=stopped:0.5s QdbDaemon=stopped:0.3s"
+vchan_prestop|"QrexecAgent=absent QdbDaemon=already-stopped"
+vchan_prestop_failed|false
+clock_skew_certs|"certs\\qubes-ca.cer"
+guest_utc_at_refusal|"2026-10-04T12:00:00.0000000Z"
 pv_boot_disk|"UNKNOWN"
 swept_binaries_restored|["gui-agent.exe"]
 EOF
@@ -122,6 +127,9 @@ idd_bound|"unreadable"
 idd_bound|"unreadable-after-rebind"
 gui_quiesce_failed|"gui-agent,wgcbroker"
 gui_runtime_survivors|"gui-agent/1234"
+vchan_prestop_failed|true
+vchan_prestop|"QrexecAgent=TIMEOUT:60.1s QdbDaemon=stopped:0.4s"
+clock_skew_refusal|true
 gui_restored|"FAILED: watchdog started, gui-agent.exe not running after 30 s"
 gui_restored|"FAILED: Cannot start service QubesGuiWatchdog"
 pv_xenvif|"failed rc=1"

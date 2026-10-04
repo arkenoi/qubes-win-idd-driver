@@ -114,6 +114,11 @@ ERROR_FLAGS = [
     ('idd_gui_reappeared',      nonempty,                                 'L2689 WARN: the gui-agent came back during stage 2 - the quiesce is not holding'),
     ('idd_bound',               starts('unreadable'),                     'L2902/L2922 WARN: bound driver version unreadable, the version assertion was skipped'),
     ('gui_quiesce_failed',      nonempty,                                 'L2557 ERROR: quiesce did not hold, the live processes by name (reported, never killed)'),
+    # -- the vchan pre-stop before msiexec (2026-09-27) and the clock-sanity refusal: written by the installer, never classified
+    #    until 2026-10-04 (the drift test had been red on them; the gate grades with THIS table)
+    ('vchan_prestop_failed',    is_true,                                  'pre-msiexec ERROR: QrexecAgent/QdbDaemon did not stop within 60 s - the Restart Manager tears them down in bulk (the measured stall trigger)'),
+    ('vchan_prestop',           lambda v: 'TIMEOUT' in _s(v),             'pre-msiexec narrative <svc>=stopped:<s>|already-stopped|absent|TIMEOUT:<s>; TIMEOUT = that service did not stop'),
+    ('clock_skew_refusal',      is_true,                                  'clock sanity ERROR: a payload certificate is not yet valid by the guest clock - the install refused before touching a driver'),
     ('gui_runtime_survivors',   nonempty,                                 'Stop-QwtRuntime WARN: gui-agent/gui-watchdog still running after the service stop and the exit request (name/pid; reported, never killed)'),
     ('gui_restored',            starts('FAILED'),                         'L3862/L3867 ERROR: watchdog started but gui-agent.exe not running / could not be restarted'),
     # -- PV network / console / NIC priming
@@ -184,6 +189,7 @@ INFORMATIONAL = (
     'xenbus_autoreboot_final', 'xenbus_monitor_final',                     # L3758/L3759 readback (matrix.sh asserts the service state itself)
     'uac_prompt_on_secure_desktop',                                        # L3778 readback
     'certs_installed', 'precondition', 'payload_files_verified', 'package_version',   # L3921/L4115/L4193/L4205
+    'clock_skew_certs', 'guest_utc_at_refusal',                            # records beside clock_skew_refusal (which carries the verdict)
 )
 
 
