@@ -18,10 +18,14 @@
                installed QWT (in place for older/equal, remove-first ONLY for a genuine
                downgrade - see the branch at 'IN-PLACE MSI MAJOR UPGRADE'), install
                vc_redist, run msiexec with QWTNG_SERIALSTART=1 (the MSI registers QWT's
-               services but does NOT start them), start those services ONE AT A TIME, each
-               after the previous one is observed running (Start-QwtServicesSerially,
-               docs/ADR-boot.md 1), optionally install AND ACTIVATE the IddCx display
-               driver, reboot
+               services but does NOT start them), start QdbDaemon and observe it RUNNING and
+               READY (the device work reads the live qubesdb) while QrexecAgent stays HELD
+               (Start-QwtServicesSerially, docs/ADR-boot.md 1), do the device work with no
+               qrexec service open - xenvif/xencons, the IddCx display driver installed AND
+               ACTIVATED, the overlays, the updater agent, the PV NIC priming latch, the
+               shipping state - THEN start QrexecAgent, observed RUNNING (Start-HeldQrexecAgent,
+               docs/ADR-boot.md 2; on the -Auto -RebootAtEnd path not at all: the stage powers
+               off and the auto-start service comes up on the next boot), reboot
 
     The stage is DETECTED, not remembered: if testsigning is not active in the current
     boot we are in stage 1, otherwise stage 2. Re-running the script is safe.
@@ -209,6 +213,13 @@ $script:GuiQuiesceHeld = $false
 # the GUI agent right after; a service about to be stopped is not started). The GUI-QUIESCE block reads it and
 # records the held watchdog as quiesced, so the end of the stage restores it on the no-reboot path.
 $script:GuiWatchdogHeld = $false
+# THE QREXEC HOLD (docs/ADR-boot.md 2). Set by Start-QwtServicesSerially when it leaves QrexecAgent unstarted after msiexec, so the
+# stage's device work runs with no qrexec service open (no call from dom0 can land in it); released by Start-HeldQrexecAgent at the
+# QREXEC-RELEASE site after the last device-work step and by every exit path after msiexec that does not power off (Fail, the main
+# catch, a refused power-off). Emit-Result refuses to write a RESULT silently while it is still held (svc_qrexec_never_started).
+$script:QrexecAgentHeld = $false
+$script:QrexecAgentHeldAt = $null
+$script:QrexecAgentReleased = $false
 
 function Write-Log {
     param([string]$Message, [string]$Level = 'INFO')
@@ -260,14 +271,24 @@ function Warn-DisplayBlackout {
     }
 }
 
+# ---- EMIT-RESULT-BEGIN  (tools/tests/svc-serial-start-test.ps1 extracts this function by marker)
 function Emit-Result {
     param([int]$ExitCode)
+    # THE LAST BELT OF THE QREXEC HOLD (docs/ADR-boot.md 2). This writer ends a path that does NOT power off (the power-off path has
+    # its own writer, Emit-ResultThenPowerOff), so QrexecAgent still held here means no exit path started it: said in the RESULT
+    # itself, error-class for result-flags.py, never silently - a guest with no qrexec must never be graded green.
+    if ($script:QrexecAgentHeld -and -not $script:QrexecAgentReleased) {   # GUARD:emitcheck
+        $script:Result.detail.svc_qrexec_start = 'NEVER-STARTED: QrexecAgent was held through the device work and no exit path started it before this RESULT'
+        $script:Result.detail.svc_qrexec_never_started = $true
+        Write-Log $script:Result.detail.svc_qrexec_start 'ERROR'
+    }
     $json = $script:Result | ConvertTo-Json -Depth 6 -Compress
     Write-Host '=== RESULT ==='
     Write-Host $json
     try { Add-Content -LiteralPath $script:LogFile -Value "=== RESULT === $json" -Encoding UTF8 } catch { }
     exit $ExitCode
 }
+# ---- EMIT-RESULT-END
 
 # ---- FAIL-PATH-BEGIN  (tools/tests/svc-serial-start-test.ps1 runs this region)
 function Fail {
@@ -292,6 +313,12 @@ function Fail {
         Write-Log 'the stage ends early after msiexec - starting QWT''s services first (the MSI no longer does)' 'ERROR'
         try { Start-QwtServicesSerially } catch { Write-Log "the serialized start on the failure path failed too: $($_.Exception.Message)" 'ERROR' }
         $script:SerialStartDone = $true
+    }
+    # THE HELD QrexecAgent TOO (docs/ADR-boot.md 2): a Fail during the device work ends a stage that does not power off, so the held
+    # service is started here, observed, BEFORE the RESULT - the start or its failure is in it. Nothing held = nothing done (a Fail
+    # before msiexec, an agent the MSI had started, a QdbDaemon failure the serialized start already reported).
+    if (Get-Command Start-HeldQrexecAgent -ErrorAction SilentlyContinue) {   # GUARD:failrelease
+        try { [void](Start-HeldQrexecAgent -Site 'fail-path') } catch { Write-Log "the qrexec release on the failure path failed too: $($_.Exception.Message)" 'ERROR' }
     }
     Emit-Result 1
 }
@@ -645,7 +672,7 @@ function Set-QubesServiceRecovery {
 # ---- SVC-RECOVERY-END
 
 # ---- SVC-SERIAL-START-BEGIN  (tools/tests/svc-serial-start-test.ps1 extracts this region by marker)
-# ONE SERVICE AT A TIME AFTER MSIEXEC (docs/ADR-boot.md 1; owner-approved 2026-10-04).
+# ONE SERVICE AT A TIME AFTER MSIEXEC, AND THE QREXEC SERVICE LAST (docs/ADR-boot.md 1 and 2; owner-approved 2026-10-04).
 #
 # THE DEFECT THIS REMOVES. The guest stall - qrexec dead, the guest frozen, the domain Running - is QEMU
 # in the stub domain no longer completing the guest's I/O requests: Xen holds a vCPU with pause_flags=4
@@ -661,8 +688,23 @@ function Set-QubesServiceRecovery {
 #
 # THE RULE (Jev 0.93 on the practice, 0.99 on this shape for the product): in a fresh domain's first
 # minutes, SERIALIZE AND PACE everything that reaches QEMU/Xen - one thing at a time, each step started
-# when the previous one's completion is OBSERVED, never everything at once. Holding qrexec back for the
-# whole stage was considered and NOT chosen.
+# when the previous one's completion is OBSERVED, never everything at once.
+#
+# THE WINDOW (docs/ADR-boot.md 2, owner 2026-10-04; Jev 0.95 for this shape, 0.91 "removes the window
+# for every caller"). Every qrexec call INTO the guest makes the guest map the caller's vchan ring and
+# unmap it at close (the service side is the vchan client), and each of those is a synchronous round
+# trip to QEMU in the stub domain: Xen 4.19's p2m_remove_entry requests a device-model mapcache
+# invalidate for every page the guest removes from its physmap, and QEMU 9.0.2's invalidate handler runs
+# bdrv_drain_all first. The guest's own outgoing calls and the agent's control channel only GRANT pages.
+# Four recorded stage-2 freezes (#3, #5, #6, E18) are each a call into the guest that landed between the
+# moment QWT's services came up after msiexec and the stage's power-off - the window in which this stage
+# installs drivers, creates the IDD device, disables the emulated VGA and arms the PV NIC latch. Before
+# 168f72c (2026-09-08) the stage-2 agent usually gave up after 60 s waiting for QubesDB, so that window
+# ran with no qrexec service at all; the stall rate rose after it. ADR-boot 1 declined to hold qrexec
+# back for the stage; on this mechanism the owner chose it: the qrexec SERVICE opens only after the
+# device work. QdbDaemon still comes up first and ready - the device work reads the qube class from the
+# live qubesdb (the PV NIC priming latch) - and QrexecAgent is HELD here and started by
+# Start-HeldQrexecAgent once the last device-work step is done.
 #
 # HOW. The MSI is built from the pinned WiX with packaging/patch-installer-serialize-services.ps1
 # applied (qwt-full.yml): its StartServices action is conditioned on the public property
@@ -673,9 +715,18 @@ function Set-QubesServiceRecovery {
 #                    qube's own /name (the VM-side store is empty until dom0's daemon has connected over
 #                    the vchan and pushed it - a readable /name is the whole path, pipe + vchan + dom0,
 #                    observed from inside with the client DLL the MSI just installed into System32);
-#   QrexecAgent      Start-Service, observe RUNNING (no cheap in-guest observable of the daemon handshake
-#                    exists: the agent writes nothing the guest can read until advertise-tools runs
-#                    AFTER a user logon, and the vchan server's xenstore node would need xencontrol.dll);
+#   QrexecAgent      HELD - not started here (svc_serial_start: held-for-device-work). Start-HeldQrexecAgent
+#                    starts it - Start-Service, observe RUNNING, the same code (no cheap in-guest observable
+#                    of the daemon handshake exists: the agent writes nothing the guest can read until
+#                    advertise-tools runs AFTER a user logon, and the vchan server's xenstore node would need
+#                    xencontrol.dll) - at the QREXEC-RELEASE site after the last device-work step of the stage,
+#                    and on every exit path after msiexec that does not power off (Fail, the main catch, a
+#                    refused power-off). On the -Auto -RebootAtEnd path it is not started in this stage at all:
+#                    the guest powers off within seconds, the service is auto-start and comes up on the next
+#                    boot (as stock QWT's does), and the RESULT says so (svc_qrexec_start). One the MSI had
+#                    started anyway (svc_msi_started) is observed running like any other, never stopped to be
+#                    held. A RESULT written on a non-power-off path with it still held is an error of its own
+#                    (Emit-Result: svc_qrexec_never_started).
 #   QubesGuiWatchdog HELD - not started at all. The very next thing this stage does is stop it for the
 #                    rest of the stage (GUI-QUIESCE: no capture agent during the display surgery), so
 #                    the MSI-era start was a start, a framebuffer grant, a broker launch and a stop
@@ -825,6 +876,57 @@ function Wait-QwtServiceReady {
     }
 }
 
+function Start-QwtServiceObserved {
+    # ONE service through the SCM: Start-Service, observe RUNNING (the service's own report, not the cmdlet's
+    # return), then observe READY where the readiness table has a probe. Shared by the serialized start after
+    # msiexec and by the QrexecAgent release after the device work, so the two observe identically. Never a
+    # fixed pause: the only sleep is the probe's sampling interval in Wait-QwtServiceReady. Returns ok (started
+    # and observed, or already running) and the note the RESULT narrative records.
+    param([Parameter(Mandatory)][string]$Name, [int]$RunningTimeoutSec = 60, [int]$ReadyTimeoutSec = 120, [string]$Tag = 'serial start')
+    $s = Get-Service -Name $Name -ErrorAction SilentlyContinue
+    if (-not $s) {
+        Write-Log "${Tag}: $Name is not registered - the MSI did not install it (feature missing?)" 'ERROR'
+        return [ordered]@{ ok = $false; note = 'ABSENT' }
+    }
+    $t0 = Get-Date
+    $note = ''
+    if ($s.Status -eq 'Running') {
+        $note = 'already-running'
+        Write-Log "${Tag}: $Name already running (started earlier in this stage) - observed, not restarted"
+    } else {
+        Write-Log "${Tag}: starting $Name (status was $($s.Status))"
+        try {
+            Start-Service -Name $Name -ErrorAction Stop
+        } catch {
+            Write-Log "${Tag}: $Name did not start - $($_.Exception.Message)" 'ERROR'
+            return [ordered]@{ ok = $false; note = "FAILED: $($_.Exception.Message)" }
+        }
+        # OBSERVE RUNNING through the SCM - the service's own report, not the cmdlet's return.
+        $running = $false
+        try { (Get-Service -Name $Name -ErrorAction Stop).WaitForStatus('Running', [TimeSpan]::FromSeconds($RunningTimeoutSec)); $running = $true } catch { $running = $false }   # GUARD:nowaitrunning
+        $elRun = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
+        if (-not $running) {
+            $st = (Get-Service -Name $Name -ErrorAction SilentlyContinue).Status
+            Write-Log "${Tag}: $Name did not reach RUNNING within $RunningTimeoutSec s (status $st)" 'ERROR'
+            return [ordered]@{ ok = $false; note = "TIMEOUT: not RUNNING after ${elRun}s (status $st)" }
+        }
+        $note = "started running=${elRun}s"
+        Write-Log "${Tag}: $Name RUNNING after ${elRun}s"
+    }
+    if ($script:QwtServiceReadiness.ContainsKey($Name)) {
+        $rd = $script:QwtServiceReadiness[$Name]
+        $w = Wait-QwtServiceReady -Name $Name -Probe $rd.probe -TimeoutSec $ReadyTimeoutSec   # GUARD:nowaitready
+        if ($w.ready) {
+            $note += " ready=$($w.secs)s"
+            Write-Log "${Tag}: $Name ready after $($w.secs)s ($($rd.what); $($w.probes) probe(s))"
+        } else {
+            Write-Log "${Tag}: $Name is RUNNING but not ready after $($w.secs)s - $($rd.what) never held; the next service is not started on top of it" 'ERROR'
+            return [ordered]@{ ok = $false; note = "$note ready=TIMEOUT $($w.secs)s" }
+        }
+    }
+    return [ordered]@{ ok = $true; note = $note }
+}
+
 function Start-QwtServicesSerially {
     # See the region header. -AfterRetry: the ADDLOCAL-only retry path calls this a second time; its
     # record goes to svc_serial_start_after_retry so the first call's survives.
@@ -846,55 +948,17 @@ function Start-QwtServicesSerially {
             continue
         }
         $s = Get-Service -Name $svc -ErrorAction SilentlyContinue
-        if (-not $s) {
-            $narr[$svc] = 'ABSENT'
-            $failedSvc = $svc
-            Write-Log "serial start: $svc is not registered - the MSI did not install it (feature missing?)" 'ERROR'
+        if ($svc -eq 'QrexecAgent' -and $s -and $s.Status -ne 'Running') {
+            # HELD until the stage's device work is done (docs/ADR-boot.md 2) - see the header. Start-HeldQrexecAgent starts it
+            # at the QREXEC-RELEASE site and on every exit path that does not power off. The hold's clock starts at the FIRST hold
+            # (the ADDLOCAL-only retry holds it a second time). One already running is observed below like any other.
+            if (-not $script:QrexecAgentHeld) { $script:QrexecAgentHeldAt = Get-Date }; $script:QrexecAgentHeld = $true; $narr[$svc] = 'held-for-device-work'   # GUARD:holdqrexec
+            Write-Log "serial start: $svc HELD - not started; the device work of this stage runs with no qrexec service open, then Start-HeldQrexecAgent starts it (a power-off leaves it to the next boot's auto-start)"
             continue
         }
-        $t0 = Get-Date
-        $note = ''
-        if ($s.Status -eq 'Running') {
-            $note = 'already-running'
-            Write-Log "serial start: $svc already running (started earlier in this stage) - observed, not restarted"
-        } else {
-            Write-Log "serial start: starting $svc (status was $($s.Status))"
-            try {
-                Start-Service -Name $svc -ErrorAction Stop
-            } catch {
-                $narr[$svc] = "FAILED: $($_.Exception.Message)"
-                $failedSvc = $svc
-                Write-Log "serial start: $svc did not start - $($_.Exception.Message)" 'ERROR'
-                continue
-            }
-            # OBSERVE RUNNING through the SCM - the service's own report, not the cmdlet's return.
-            $running = $false
-            try { (Get-Service -Name $svc -ErrorAction Stop).WaitForStatus('Running', [TimeSpan]::FromSeconds($RunningTimeoutSec)); $running = $true } catch { $running = $false }   # GUARD:nowaitrunning
-            $elRun = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
-            if (-not $running) {
-                $st = (Get-Service -Name $svc -ErrorAction SilentlyContinue).Status
-                $narr[$svc] = "TIMEOUT: not RUNNING after ${elRun}s (status $st)"
-                $failedSvc = $svc
-                Write-Log "serial start: $svc did not reach RUNNING within $RunningTimeoutSec s (status $st)" 'ERROR'
-                continue
-            }
-            $note = "started running=${elRun}s"
-            Write-Log "serial start: $svc RUNNING after ${elRun}s"
-        }
-        if ($script:QwtServiceReadiness.ContainsKey($svc)) {
-            $rd = $script:QwtServiceReadiness[$svc]
-            $w = Wait-QwtServiceReady -Name $svc -Probe $rd.probe -TimeoutSec $ReadyTimeoutSec   # GUARD:nowaitready
-            if ($w.ready) {
-                $note += " ready=$($w.secs)s"
-                Write-Log "serial start: $svc ready after $($w.secs)s ($($rd.what); $($w.probes) probe(s))"
-            } else {
-                $narr[$svc] = "$note ready=TIMEOUT $($w.secs)s"
-                $failedSvc = $svc
-                Write-Log "serial start: $svc is RUNNING but not ready after $($w.secs)s - $($rd.what) never held; the next service is not started on top of it" 'ERROR'
-                continue
-            }
-        }
-        $narr[$svc] = $note
+        $r = Start-QwtServiceObserved -Name $svc -RunningTimeoutSec $RunningTimeoutSec -ReadyTimeoutSec $ReadyTimeoutSec
+        $narr[$svc] = $r.note
+        if (-not $r.ok) { $failedSvc = $svc }
     }
     $total = [math]::Round(((Get-Date) - $tAll).TotalSeconds, 1)
     $record = (($narr.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join '; ')
@@ -907,6 +971,43 @@ function Start-QwtServicesSerially {
     }
     if ($failedSvc -ne '') { $script:Result.detail.svc_serial_start_failed = $true }   # GUARD:silentfail
     Write-Log "serial start done in ${total}s: $record"
+}
+
+function Start-HeldQrexecAgent {
+    # THE RELEASE OF THE HOLD (docs/ADR-boot.md 2). Called at the QREXEC-RELEASE site once the stage's device work is done,
+    # and by every exit path after msiexec that does not power off - Fail, the main catch, a refused power-off - so no such
+    # path leaves the guest running with no qrexec service. Idempotent and site-stamped: the first caller starts the service,
+    # observed RUNNING exactly as the serialized start observes (Start-QwtServiceObserved), and the RESULT records which site
+    # did it and how long the hold lasted (svc_qrexec_start, svc_qrexec_held_secs); later callers find it released. Nothing
+    # held = nothing to do: an agent the MSI had started, one not attempted after a QdbDaemon failure, a path before msiexec -
+    # those states are already in svc_serial_start / svc_msi_started.
+    param([Parameter(Mandatory)][string]$Site, [int]$RunningTimeoutSec = 60)
+    if (-not $script:QrexecAgentHeld -or $script:QrexecAgentReleased) { return $false }
+    $script:QrexecAgentReleased = $true
+    $held = [math]::Round(((Get-Date) - $script:QrexecAgentHeldAt).TotalSeconds, 1)
+    Write-Log "qrexec release ($Site): starting QrexecAgent now - held ${held}s since the serialized start, through the stage's device work"
+    $r = Start-QwtServiceObserved -Name 'QrexecAgent' -RunningTimeoutSec $RunningTimeoutSec -Tag "qrexec release ($Site)"   # GUARD:qrexecrelease
+    $script:Result.detail.svc_qrexec_start = "${Site}: $($r.note)"
+    $script:Result.detail.svc_qrexec_held_secs = $held
+    if (-not $r.ok) {   # GUARD:qrexecsilentfail
+        $script:Result.detail.svc_qrexec_start_failed = $true
+        Write-Log "qrexec release ($Site): QrexecAgent did NOT start ($($r.note)) - this guest has NO qrexec until it is rebooted (svc_qrexec_start_failed)" 'ERROR'
+    }
+    return [bool]$r.ok
+}
+
+function Skip-HeldQrexecAgentForPowerOff {
+    # THE ONE PATH THAT LEAVES THE HOLD IN PLACE (docs/ADR-boot.md 2): -Auto -RebootAtEnd powers the guest off within seconds
+    # of the device work. QrexecAgent is auto-start (the MSI registers it so; nothing in this stage changes a start type) and
+    # comes up on the next boot exactly as stock QWT's does. The four recorded freezes were calls landing before the power-off,
+    # and a start here would reopen that window for the seconds the shutdown takes - with every dom0 call queued meanwhile
+    # landing at once. Recorded in the RESULT so the grader sees a deliberate skip, not a service that never started. NOT marked
+    # released: a power-off that is refused (Emit-ResultThenPowerOff) starts it after all, because that guest stays up.
+    if (-not $script:QrexecAgentHeld -or $script:QrexecAgentReleased) { return }
+    $held = [math]::Round(((Get-Date) - $script:QrexecAgentHeldAt).TotalSeconds, 1)
+    Write-Log "QrexecAgent NOT started in this stage: the guest powers off now (-Auto -RebootAtEnd) and the auto-start service comes up on the next boot - a start seconds before the power-off would only reopen the window this stage kept closed (held ${held}s)"
+    $script:Result.detail.svc_qrexec_start = "not-started-powering-off: auto-start on the next boot (held ${held}s)"
+    $script:Result.detail.svc_qrexec_held_secs = $held
 }
 # ---- SVC-SERIAL-START-END
 
@@ -1845,6 +1946,7 @@ function Invoke-AutologonArming {
     return $armed
 }
 
+# ---- POWEROFF-BEGIN  (tools/tests/svc-serial-start-test.ps1 extracts this function by marker)
 function Emit-ResultThenPowerOff {
     param([int]$ExitCode)
     $json = $script:Result | ConvertTo-Json -Depth 6 -Compress
@@ -1912,11 +2014,15 @@ function Emit-ResultThenPowerOff {
         $script:Result.ok = $false
         $script:Result.error = $msg
         $script:Result.detail.shutdown_rc = $LASTEXITCODE
+        # THIS GUEST STAYS UP, so the hold on QrexecAgent ends here (docs/ADR-boot.md 2): the skip before this power-off left it
+        # stopped on the promise of a next boot that is not coming. Started and observed before the second trailer, so it is in it.
+        [void](Start-HeldQrexecAgent -Site 'power-off-refused')   # GUARD:poweroffrefused
         # Second RESULT trailer on purpose: a consumer reading the LAST trailer sees the failure.
         Emit-Result 1
     }
     exit $ExitCode
 }
+# ---- POWEROFF-END
 
 # --------------------------------------------------------------------- IDD device lookup
 function Get-IddPnpDevices {
@@ -2941,11 +3047,13 @@ function Invoke-Stage2 {
     $script:Result.detail.msiexec_rc = $p.ExitCode
     $script:Result.detail.addlocal = $addlocal
     # ---- POST-MSI-ORDER-BEGIN  (tools/tests/svc-serial-start-test.ps1 extracts this block by marker)
-    # THE ORDER HERE IS THE PRODUCT (docs/ADR-boot.md 1): after msiexec, FIRST the xenbus_monitor safety stop
+    # THE ORDER HERE IS THE PRODUCT (docs/ADR-boot.md 1 and 2): after msiexec, FIRST the xenbus_monitor safety stop
     # (the one thing that may not wait - a monitor the MSI re-registered answers a parked reboot request and
-    # restarts the guest mid-stage), THEN QWT's services one at a time, each after the previous one is
-    # observed running, and ONLY THEN any further step - recovery arming, the Event Log source, the death
+    # restarts the guest mid-stage), THEN QdbDaemon started and observed running and READY (the device work
+    # reads the live qubesdb) with QrexecAgent HELD - no qrexec service is open while this stage does its
+    # device work - and ONLY THEN any further step - recovery arming, the Event Log source, the death
     # reporter, the feature check, the disk probe, the GUI quiesce, the PV driver installs, the IDD surgery.
+    # QrexecAgent starts at the QREXEC-RELEASE site after the last device-work step (Start-HeldQrexecAgent).
     # Nothing is inserted between msiexec and the serialized start; the offline suite asserts this order.
     # The new product owns the bin directory from here: the old binaries the sweep moved aside are
     # no longer a rollback target (Fail after this point leaves the NEW product in place).
@@ -2962,7 +3070,8 @@ function Invoke-Stage2 {
 
         # QWT'S SERVICES, ONE AT A TIME (SVC-SERIAL-START region). The MSI was asked to leave them stopped
         # (QWTNG_SERIALSTART=1); first that is checked, then QdbDaemon is started and observed running and
-        # ready, then QrexecAgent is started and observed running; QubesGuiWatchdog is held for the quiesce.
+        # ready; QrexecAgent is HELD for the device work (docs/ADR-boot.md 2); QubesGuiWatchdog is held for
+        # the quiesce.
         Assert-NoServiceStartedByMsi
         Start-QwtServicesSerially   # GUARD:serialfirst
         $script:SerialStartDone = $true
@@ -2970,6 +3079,8 @@ function Invoke-Stage2 {
         # NO EXIT PATH AFTER msiexec MAY LEAVE THE SERVICES STOPPED (Jev review 2026-10-04: the top concern, 0.63). The MSI used
         # to start them inside msiexec; now only the serialized start does. A step above that throws, or Fails (Fail -> exit
         # unwinds through this finally), still gets them started - one at a time, exactly as above - and the log says why.
+        # QrexecAgent stays HELD by that start too: the exit path itself (Fail, or the main catch the throw lands in) starts it
+        # before the RESULT (Start-HeldQrexecAgent), so no exit that does not power off leaves it stopped.
         if (-not $script:SerialStartDone) {   # GUARD:startonexit
             Write-Log 'a step between msiexec and the serialized start ended early - starting QWT''s services anyway (the MSI no longer does)' 'ERROR'
             try { Start-QwtServicesSerially } catch { Write-Log "the serialized start after an early exit failed too: $($_.Exception.Message)" 'ERROR' }
@@ -4028,8 +4139,11 @@ function Invoke-Stage2 {
     # on NO guest. When the package carries bin\ (make-setup.ps1 -CoreAgentBins), place its
     # files over `Qubes Tools\bin`. A running exe cannot be overwritten but CAN be renamed,
     # so on a locked file the live binary is moved aside and the copy retried; the swap takes
-    # effect at the next process spawn (qrexec-wrapper is started per connection) or, for the
-    # agent service itself, at the reboot this stage ends in.
+    # effect at the next process spawn (qrexec-wrapper is started per connection). The agent
+    # service itself is HELD stopped through this stage's device work (docs/ADR-boot.md 2), so
+    # its image is free here and the fork build is what Start-HeldQrexecAgent starts at the end
+    # of the stage; on the -Auto -RebootAtEnd path, what the next boot's auto-start runs. This
+    # block starts and stops no service: the hold is the serialized start's and the release's.
     $binSrc = Join-Path $Root 'bin'
     $binDst = Join-Path $qtRoot 'bin'
     if ((Test-Path -LiteralPath $binSrc) -and (Test-Path -LiteralPath $binDst)) {
@@ -4633,6 +4747,24 @@ public static class QdbPrime {
         $script:Result.detail.uac_prompt_on_secure_desktop = $psd
     } catch { Write-Log "could not seed PromptOnSecureDesktop: $($_.Exception.Message)" 'WARN' }
 
+    # ---- QREXEC-RELEASE-BEGIN  (tools/tests/svc-serial-start-test.ps1 extracts this block by marker)
+    # THE DEVICE WORK IS DONE - NOW THE QREXEC SERVICE (docs/ADR-boot.md 2). Everything since msiexec that touched a
+    # device or a driver - xenvif, xencons, the IDD device and the VGA disable, the overlays, the updater agent, the PV
+    # NIC priming latch, the shipping state, the UAC policy - ran with QrexecAgent HELD, so no call from dom0 could land
+    # in it (each would map and unmap the caller's vchan ring in the guest: two synchronous round trips to QEMU, the
+    # recorded freeze shape). From here the stage only grades itself, writes its RESULT and, on the interactive path,
+    # restores the GUI watchdog - which declares QrexecAgent as its dependency, so this start MUST precede that restore
+    # or the SCM would start QrexecAgent itself, unobserved. On -Auto -RebootAtEnd the guest powers off within seconds:
+    # the service stays unstarted (it is auto-start and comes up on the next boot, as stock QWT's does) and the RESULT
+    # says so; a refused power-off starts it after all (Emit-ResultThenPowerOff), and Fail and the main catch start it
+    # on their paths. Nothing here is a pause: the start is observed, like every start of this stage.
+    if ($Auto -and $RebootAtEnd) {
+        Skip-HeldQrexecAgentForPowerOff   # GUARD:skiponpoweroff
+    } else {
+        [void](Start-HeldQrexecAgent -Site 'after-device-work')   # GUARD:releaseafterdevicework
+    }
+    # ---- QREXEC-RELEASE-END
+
     # ok MEANS ok. This line used to write ok=true UNCONDITIONALLY, while the warn-and-continue
     # paths above recorded their failures only in detail.* flags that no harness reads - so an
     # install with a failed IDD activation, a failed xenvif upgrade, a dead gui-agent or an
@@ -4646,6 +4778,7 @@ public static class QdbPrime {
     if ($dd.pvnic_prime_failed -eq $true)                           { $errFlags += 'pvnic_prime_failed' }
     if ($dd.vchan_prestop_failed -eq $true)                         { $errFlags += 'vchan_prestop_failed' }
     if ($dd.svc_serial_start_failed -eq $true)                      { $errFlags += 'svc_serial_start_failed' }
+    if ($dd.svc_qrexec_start_failed -eq $true)                      { $errFlags += 'svc_qrexec_start_failed' }
     if ("$($dd.svc_msi_started)" -ne '')                            { $errFlags += 'svc_msi_started' }
     if ("$($dd.gui_quiesce_failed)" -ne '')                         { $errFlags += 'gui_quiesce_failed' }
     if ("$($dd.gui_runtime_survivors)" -ne '')                      { $errFlags += 'gui_runtime_survivors' }
@@ -4737,7 +4870,7 @@ public static class QdbPrime {
         Write-Log 'powering off in 2 s (-RebootAtEnd); start the qube again for the finished, PV-bound state'
         Emit-ResultThenPowerOff 0
     }
-    Write-Log 'No reboot from here. qrexec answers in this boot; PV drivers and their'
+    Write-Log 'No reboot from here. qrexec answers in this boot (QrexecAgent started after the device work); PV drivers and their'
     Write-Log 'emulated-device handover complete the next time the qube starts.'
     Emit-Result 0
 }
@@ -5207,6 +5340,7 @@ try {
         Invoke-Stage1 -Root $WorkDir
     }
 } catch {
+    # ---- MAIN-CATCH-BEGIN  (tools/tests/svc-serial-start-test.ps1 extracts this block by marker)
     $msg = "$($_.Exception.Message)"
     Write-Log $msg 'FATAL'
     Write-Log ($_.ScriptStackTrace) 'FATAL'
@@ -5217,5 +5351,9 @@ try {
     try { Clear-BootResume } catch { }
     try { Reset-AutoRunCounter } catch { }
     try { Restore-SweptBinaries } catch { }
+    # ...nor the held QrexecAgent stopped (docs/ADR-boot.md 2): an exception during the device work ends a
+    # stage that does not power off, so it is started here, observed, before the RESULT it is recorded in.
+    try { [void](Start-HeldQrexecAgent -Site 'main-catch') } catch { Write-Log "the qrexec release in the main catch failed too: $($_.Exception.Message)" 'ERROR' }   # GUARD:catchrelease
     Emit-Result 1
+    # ---- MAIN-CATCH-END
 }

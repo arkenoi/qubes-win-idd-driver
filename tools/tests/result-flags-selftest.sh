@@ -98,12 +98,25 @@ pvnic_prime|"seeded-indeterminate-class"
 idd_driver|"skipped (/noidd)"
 emulated_storage_rearmed|true
 upgrade_mode|"in-place-msi-major-upgrade"
+vchan_prestop|"QrexecAgent=stopped:0.5s QdbDaemon=stopped:0.3s"
+vchan_prestop|"QrexecAgent=absent QdbDaemon=already-stopped"
+vchan_prestop_failed|false
+clock_skew_certs|"certs\\qubes-ca.cer"
+guest_utc_at_refusal|"2026-10-04T12:00:00.0000000Z"
 pv_boot_disk|"UNKNOWN"
 swept_binaries_restored|["gui-agent.exe"]
 svc_serial_start|"QdbDaemon=started running=0.4s ready=1.1s; QrexecAgent=started running=0.3s; QubesGuiWatchdog=held-for-quiesce"
+svc_serial_start|"QdbDaemon=started running=0.4s ready=1.1s; QrexecAgent=held-for-device-work; QubesGuiWatchdog=held-for-quiesce"
 svc_serial_start_after_retry|"QdbDaemon=already-running; QrexecAgent=already-running; QubesGuiWatchdog=held-for-quiesce"
+svc_serial_start_after_retry|"QdbDaemon=already-running ready=0.0s; QrexecAgent=held-for-device-work; QubesGuiWatchdog=held-for-quiesce"
 svc_serial_start_secs|1.9
 msi_startservices_condition|"VersionNT AND NOT QWTNG_SERIALSTART"
+svc_qrexec_start|"after-device-work: started running=0.3s"
+svc_qrexec_start|"fail-path: started running=0.4s"
+svc_qrexec_start|"main-catch: started running=0.3s"
+svc_qrexec_start|"power-off-refused: started running=0.3s"
+svc_qrexec_start|"not-started-powering-off: auto-start on the next boot (held 41.7s)"
+svc_qrexec_held_secs|41.7
 EOF
 
 echo "==== every error form must FAIL and be NAMED ===="
@@ -125,6 +138,10 @@ idd_gui_reappeared|"gui-watchdog,gui-agent"
 idd_bound|"unreadable"
 idd_bound|"unreadable-after-rebind"
 gui_quiesce_failed|"gui-agent,wgcbroker"
+gui_runtime_survivors|"gui-agent/1234"
+vchan_prestop_failed|true
+vchan_prestop|"QrexecAgent=TIMEOUT:60.1s QdbDaemon=stopped:0.4s"
+clock_skew_refusal|true
 gui_restored|"FAILED: watchdog started, gui-agent.exe not running after 30 s"
 gui_restored|"FAILED: Cannot start service QubesGuiWatchdog"
 pv_xenvif|"failed rc=1"
@@ -187,6 +204,12 @@ svc_serial_start|"QdbDaemon=ABSENT; QrexecAgent=not-attempted (QdbDaemon failed)
 svc_serial_start_after_retry|"QdbDaemon=already-running; QrexecAgent=TIMEOUT: not RUNNING after 60s (status StartPending); QubesGuiWatchdog=held-for-quiesce"
 svc_msi_started|"QdbDaemon=Running,QrexecAgent=Running"
 msi_startservices_condition|"REFUSED: its StartServices condition is 'VersionNT', which does not mention QWTNG_SERIALSTART"
+svc_qrexec_start_failed|true
+svc_qrexec_start|"after-device-work: TIMEOUT: not RUNNING after 60s (status StartPending)"
+svc_qrexec_start|"fail-path: FAILED: Service 'QrexecAgent' cannot be started due to the following error: Cannot start service QrexecAgent on computer '.'."
+svc_qrexec_start|"main-catch: ABSENT"
+svc_qrexec_start|"NEVER-STARTED: QrexecAgent was held through the device work and no exit path started it before this RESULT"
+svc_qrexec_never_started|true
 event_source|"failed: reg add rc=1/0"
 event_source|"failed: message file absent (C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\EventLogMessages.dll)"
 event_source|"error: x"

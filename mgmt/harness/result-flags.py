@@ -114,6 +114,12 @@ ERROR_FLAGS = [
     ('idd_gui_reappeared',      nonempty,                                 'L2689 WARN: the gui-agent came back during stage 2 - the quiesce is not holding'),
     ('idd_bound',               starts('unreadable'),                     'L2902/L2922 WARN: bound driver version unreadable, the version assertion was skipped'),
     ('gui_quiesce_failed',      nonempty,                                 'L2557 ERROR: quiesce did not hold, the live processes by name'),
+    # -- the vchan pre-stop before msiexec (2026-09-27) and the clock-sanity refusal: written by the installer, never classified
+    #    until 2026-10-04 (the drift test had been red on them; the gate grades with THIS table)
+    ('vchan_prestop_failed',    is_true,                                  'pre-msiexec ERROR: QrexecAgent/QdbDaemon did not stop within 60 s - the Restart Manager tears them down in bulk (the measured stall trigger)'),
+    ('vchan_prestop',           lambda v: 'TIMEOUT' in _s(v),             'pre-msiexec narrative <svc>=stopped:<s>|already-stopped|absent|TIMEOUT:<s>; TIMEOUT = that service did not stop'),
+    ('clock_skew_refusal',      is_true,                                  'clock sanity ERROR: a payload certificate is not yet valid by the guest clock - the install refused before touching a driver'),
+    ('gui_runtime_survivors',   nonempty,                                 'Stop-QwtRuntime WARN: gui-agent/gui-watchdog still running after the service stop and the exit request (name/pid; reported, never killed)'),
     ('gui_restored',            starts('FAILED'),                         'L3862/L3867 ERROR: watchdog started but gui-agent.exe not running / could not be restarted'),
     # -- PV network / console / NIC priming
     ('pv_xenvif',               starts('failed'),                         'L2609 WARN pnputil rc; L3656 ERROR the unplug latch is refused over it'),
@@ -164,6 +170,11 @@ ERROR_FLAGS = [
                                                                           'the same narrative for the second start after the ADDLOCAL-only retry'),
     ('svc_msi_started',         nonempty,                                 'Assert-NoServiceStartedByMsi ERROR: these services were running right after msiexec although QWTNG_SERIALSTART=1 was passed - the MSI started them, the serialized start did not hold'),
     ('msi_startservices_condition', starts('REFUSED'),                    'Assert-MsiSerialStartContract: the MSI would start the services itself (Fails before msiexec)'),
+    # -- the qrexec hold (docs/ADR-boot.md 2): QrexecAgent is held through the stage-2 device work and started after it
+    ('svc_qrexec_start_failed', is_true,                                  'Start-HeldQrexecAgent ERROR: QrexecAgent, held through the device work, did not start / reach RUNNING when the stage released it - the guest has no qrexec until a reboot'),
+    ('svc_qrexec_start',        lambda v: any(t in _s(v) for t in ('FAILED', 'TIMEOUT', 'ABSENT', 'NEVER-STARTED')),
+                                                                          'narrative of the hold: "<site>: started running=Ns" (after-device-work / fail-path / main-catch / power-off-refused), "not-started-powering-off: ..." (the -Auto -RebootAtEnd skip, auto-start on the next boot), or the failure'),
+    ('svc_qrexec_never_started', is_true,                                 'Emit-Result ERROR: a RESULT was written on a path that does not power off while QrexecAgent was still held - no exit path started it (the invariant of docs/ADR-boot.md 2 broke)'),
     # -- supervision (docs/ADR-supervision.md 2-3): our Event Log source and the ONE death reporter task
     ('event_source',            lambda v: _s(v) != 'registered',          'Register-QwtEventSource WARN: the source our supervisors write their death events under is not registered (message file absent / reg add failed / threw)'),
     ('death_reporter',          lambda v: _s(v) != 'registered',          'Register-QwtDeathReporter WARN: the event-triggered QwtDeathReporter task is not registered - a death of ours stays in the guest logs only'),
@@ -191,7 +202,9 @@ INFORMATIONAL = (
     'xenbus_autoreboot_final', 'xenbus_monitor_final',                     # L3758/L3759 readback (matrix.sh asserts the service state itself)
     'uac_prompt_on_secure_desktop',                                        # L3778 readback
     'certs_installed', 'precondition', 'payload_files_verified', 'package_version',   # L3921/L4115/L4193/L4205
+    'clock_skew_certs', 'guest_utc_at_refusal',                            # records beside clock_skew_refusal (which carries the verdict)
     'svc_serial_start_secs', 'svc_serial_start_after_retry_secs',          # Start-QwtServicesSerially: wall time of each serialized start (the A/B's pacing measure)
+    'svc_qrexec_held_secs',                                                # Start-HeldQrexecAgent / the power-off skip: how long QrexecAgent was held through the device work (docs/ADR-boot.md 2)
 )
 
 
