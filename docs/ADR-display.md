@@ -1,31 +1,28 @@
 # ADR - display: the IddCx driver and the guest's screen (Track B)
 
-Decisions about the QubesIDD indirect display driver: that it ships on, how the desktop lands on it, why no
-other monitor may be active, where the mode list comes from, and the one thing the driver must never do
-without the owner. Every decision here was already in force - in `CLAUDE.md` ("Displays (IDD)"), the README
-("A real display driver") and the `findings/idd.md` head - and is collected here. Format and status
-vocabulary: `docs/ADR-README.md`.
+## In plain English
 
-| record | content |
-|---|---|
-| `findings/idd.md` | the measurements, retractions and instrument traps behind every section |
-| `driver/` | the IddCx driver (vendored from Microsoft's IddSample, MIT) |
-| `agent/gui-agent/resolution.c` (`EnsureQubesIddSolo`, `IsQubesIddAdapter`, the mode-set builder) | where §2-§5 are enforced |
-| `packaging/setup/install.cmd`, `guest/activate-idd.ps1`, `guest/deactivate-idd.ps1` | activation, the switches, the recovery path |
-| `guest/health-check.ps1` | `idd_device_bound`, `desktop_on_idd`, `idd_modes_published`, `idd_single_node` |
-| `docs/RESEARCH-hypervisor-resize.md` | how every other hypervisor injects modes, and why IddCx cannot |
-| `docs/RELEASE-NOTES-idd-default.md` | the default-on decision as released (its "no /noidd" line is stale) |
+Stock Windows Tools has no display driver, so the guest runs on an emulated adapter with a fixed list of 29
+resolutions, and a dom0 window of arbitrary size can never be matched. This package ships and activates an
+indirect display driver by default. It becomes the guest's only active display, the emulated adapter is
+disabled, and the guest resolution follows the dom0 window exactly. It can be switched off, and switching it
+off is also the recovery path for a black window, usable from dom0 without a working display.
 
-| § | decision | status | date |
-|---|---|---|---|
-| 1 | The IddCx driver ships on and is the guest's sole active output | ACCEPTED (owner) | 4.3.1; switches 2026-08-14 |
-| 2 | The desktop is put on the IDD by the agent, in the user session, behind a readiness gate | ACCEPTED | 2026-08-14 |
-| 3 | A monitor dom0 does not see is INACTIVE, never merely uncaptured | ACCEPTED (owner) | 2026-08-27 |
-| 4 | The mode list is ours: the agent is the sole writer, and nothing ever snaps | ACCEPTED | 2026-08-15 |
-| 5 | The device is `Qubes Idd`, rebound in place; exactly one node | ACCEPTED (Jev 0.96) | 4.3.31 |
-| 6 | The IDD never feeds frames through its own grant path without the owner's approval | ACCEPTED (owner), a standing gate | - |
+Windows connects the virtual monitor but does not attach it to the desktop by itself (Windows 11 happens to,
+Windows 10 does not), and the installer cannot do it from its system context. The GUI agent does it at
+startup, once the driver has published a mode, and persists the choice. No other display may ever be active: a
+second active monitor would enlarge the desktop beyond what dom0 sees and break seamless coordinates, so
+everything else is detached, and Windows itself refuses to extend the desktop on these guests.
 
-How the desktop lands on the IDD at boot (§1-§3), and what a resolution request costs (§4):
+The list of resolutions the monitor offers is written by the agent, the only writer, and read by the driver. A
+size not yet in the list is published and the monitor is re-plugged, which costs about half a second and plays
+the device chime, which we silence. Nothing ever snaps to a nearby resolution; the old snapping path pinned
+one user at the wrong size with a visible pointer offset. The device is named "Qubes Idd" and is rebound in
+place on upgrade, so the guest's only display is never removed. One standing rule: if the driver ever had to
+send frames to dom0 through its own channel instead of the existing capture, work stops and the owner decides
+first, because that would be a new path across the security boundary.
+
+How the desktop lands on the virtual monitor at boot (§1-§3), and what a resolution request costs (§4):
 
 ```mermaid
 flowchart TD
@@ -39,7 +36,34 @@ flowchart TD
     S -->|no| U["Agent publishes the new set to HKLM\\SOFTWARE\\QubesIDD\\Modes,<br/>IOCTL_QIDD_RELOAD_MODES = monitor departure + arrival (a real replug),<br/>then obtain: ~550 ms to repaint"]
 ```
 
+## The decisions at a glance
+
+| § | decision | status | date |
+|---|---|---|---|
+| 1 | The IddCx driver ships on and is the guest's sole active output | ACCEPTED (owner) | 4.3.1; switches 2026-08-14 |
+| 2 | The desktop is put on the IDD by the agent, in the user session, behind a readiness gate | ACCEPTED | 2026-08-14 |
+| 3 | A monitor dom0 does not see is INACTIVE, never merely uncaptured | ACCEPTED (owner) | 2026-08-27 |
+| 4 | The mode list is ours: the agent is the sole writer, and nothing ever snaps | ACCEPTED | 2026-08-15 |
+| 5 | The device is `Qubes Idd`, rebound in place; exactly one node | ACCEPTED (Jev 0.96) | 4.3.31 |
+| 6 | The IDD never feeds frames through its own grant path without the owner's approval | ACCEPTED (owner), a standing gate | - |
+
+Status words and the section format are defined in `docs/ADR-README.md`.
+
 ---
+
+## The decisions in detail
+
+Where the details live:
+
+| record | content |
+|---|---|
+| `findings/idd.md` | the measurements, retractions and instrument traps behind every section |
+| `driver/` | the IddCx driver (vendored from Microsoft's IddSample, MIT) |
+| `agent/gui-agent/resolution.c` (`EnsureQubesIddSolo`, `IsQubesIddAdapter`, the mode-set builder) | where §2-§5 are enforced |
+| `packaging/setup/install.cmd`, `guest/activate-idd.ps1`, `guest/deactivate-idd.ps1` | activation, the switches, the recovery path |
+| `guest/health-check.ps1` | `idd_device_bound`, `desktop_on_idd`, `idd_modes_published`, `idd_single_node` |
+| `docs/RESEARCH-hypervisor-resize.md` | how every other hypervisor injects modes, and why IddCx cannot |
+| `docs/RELEASE-NOTES-idd-default.md` | the default-on decision as released (its "no /noidd" line is stale) |
 
 ## 1. The IddCx driver ships on and is the guest's sole active output
 

@@ -1,24 +1,65 @@
 # ADR - window content capture: the PrintWindow engine, the WGC broker, and rest
 
-Decisions about where a guest window's pixels come from, when the agent asks an application to paint, and how
-a capture that has stopped is noticed. This file is not a status report: what a guest measured on a given day
-belongs in `findings/`, and the mechanisms live in the design notes and the code headers. Format and status
-vocabulary: `docs/ADR-README.md`.
+## In plain English
 
-| record | content |
-|---|---|
-| `DESIGN-per-window-capture.md` | per-window buffers; Gate 0 (PrintWindow returns an occluded window's content) |
-| `DESIGN-pure-per-window.md` | the per-window model; the classes PrintWindow cannot render |
-| `DESIGN-wgc-broker.md` | the user-session WGC broker: slots, routes, IPC |
-| `DESIGN-rest-zero-capture.md` | the rest-zero design (§18): stages S0-S5 and the measurement plan |
-| `agent/gui-agent/wincapture.cpp` (header comment) | the PrintWindow engine as built: service loop, sweep, echo guard |
-| `findings/issues.md`, `findings/capture.md` | open defects, and the measurements quoted here |
+Every guest window shown in dom0 needs a source of pixels. Windows does not let a system service capture a
+window's content directly, so there are two ways to get it: ask the application to paint into a buffer, or
+read the composited screen. Asking an application to paint costs its own UI thread tens to hundreds of
+milliseconds, and some applications repaint because they were asked to, which creates the very change we then
+react to. Reading the screen is cheap, but it is "slicing": whatever covers the window ends up in its picture.
 
-Two build populations run different designs. **Below build 26100** the agent's own PrintWindow engine and the
-composited desktop are the sources (§1-§11, §13). **On 26100 and later** every window is a WGC session in the
-user-session broker and nothing runs at rest (§12, §14, §18-§32). Rules for editing this file: a section
-changes only when a decision changes; every tradeoff is written with its cost and a bound; every section is
-classified by Jev and the verdict recorded; a PROPOSED section is not built before its verdict.
+On Windows 11 builds 26100 and later, every window is now captured by a helper running in the user's session
+with Windows' own graphics capture. Windows pushes a frame whenever the window actually changes, no
+application is asked to paint, and nothing of ours runs while the desktop is at rest. The owner set that as
+the bar: "idle load should GO, not just be reduced". Measured on a quiet desktop, our processes wake zero
+times per minute and use no CPU. Menus are the exception, since Windows refuses to capture them that way; they
+are rendered on demand, only when their pixels change or on input. Older builds keep the earlier engine: an
+unobstructed window is copied from the screen, a partly covered one is painted whole on each change of its
+visible pixels, with a guard against applications that echo our own render.
+
+A capture session can stop delivering. For two days we built an elaborate detector that compared screen damage
+with window frames. It produced dozens of false alarms and found no real failure on the target build, so the
+owner had it removed. Liveness is now checked only when the user types or clicks into a window, since input is
+a promise of change: the session is reopened once, and if the fresh session delivers nothing the window is
+declared deaf and the user is told in dom0 to close and reopen it. The accepted cost is that a window changing
+on its own, without input, could stay frozen unnoticed.
+
+The record also keeps the paths not taken: copying resting windows from the desktop (rejected as slicing in
+disguise), bypassing Windows' compositor (not feasible without changing the security model), and timed re-
+renders (never).
+
+Where a window's pixels come from today:
+
+```mermaid
+flowchart TD
+    A["A tracked guest window"] --> B{"Build 26100+ and the broker enabled?<br/>(latched once at agent Init, never re-read - §1)"}
+    B -->|yes| C{"Window class"}
+    C -->|"ordinary window, UWP frame, toast,<br/>Terminal, layered window"| D["WGC session in the user-session broker, on the window itself (§12, §18).<br/>Frames copied by WGC's dirty regions when the broker signals."]
+    C -->|"override-redirect menu or popup<br/>(WGC refuses CreateForWindow)"| E["Broker PrintWindow slot, rendered only on its own pokes:<br/>damage whose pixels changed, or input (§20, §23);<br/>first frame retried at 0/50/100/200/400 ms (§19)"]
+    B -->|no| F{"Window class (PwWindowClassify)"}
+    F -->|"ordinary, unoccluded, eligible"| G["Copied from the composited desktop,<br/>established by one PrintWindow (§2)"]
+    F -->|"ordinary, partly covered"| H["Whole-window PrintWindow on each change of its own<br/>visible pixels (§3, §5), guarded against echoes (§9)"]
+    F -->|"popup, NOREDIRECTIONBITMAP, layered"| I["Slices of the composited desktop"]
+    D --> J["At rest nothing runs: no timer, no PrintWindow, no heartbeat (§14, §20)"]
+    E --> J
+```
+
+How a capture that has stopped is noticed on build 26100 and later (§32):
+
+```mermaid
+flowchart TD
+    A["A WGC slot"] --> B{"What happened?"}
+    B -->|"Windows closed the capture item<br/>(QGAWGCITEMCLOSED)"| C["Reopen the session - event-driven"]
+    B -->|"desktop damage, or pointer motion"| N["No poke. WGC delivers real changes by itself."]
+    B -->|"a key or a click delivered to the window<br/>(input is a promise of change)"| D{"Did the session deliver before the quiet deadline?"}
+    D -->|yes| OK["Alive"]
+    D -->|no| R["Recreate the session once (QGAWGCRECREATE)"]
+    R --> F{"Does the fresh session deliver?"}
+    F -->|yes| OK
+    F -->|no| G["DEAF (QGAWGCDEAF). The user is told in dom0 through the error route:<br/>'a window of app stopped updating ... close and reopen that window',<br/>once per application per boot, at most 8 error notices per boot"]
+```
+
+## The decisions at a glance
 
 | § | decision | status | date |
 |---|---|---|---|
@@ -55,38 +96,22 @@ classified by Jev and the verdict recorded; a PROPOSED section is not built befo
 | 31 | Alt-nav key-tip badges are dropped fully | ACCEPTED (owner) | 2026-10-02 |
 | 32 | Liveness from input and Windows' own events only; the damage-comparison detector goes | ACCEPTED (owner) | 2026-10-02 |
 
-### Where a window's pixels come from today
-
-```mermaid
-flowchart TD
-    A["A tracked guest window"] --> B{"Build 26100+ and the broker enabled?<br/>(latched once at agent Init, never re-read - §1)"}
-    B -->|yes| C{"Window class"}
-    C -->|"ordinary window, UWP frame, toast,<br/>Terminal, layered window"| D["WGC session in the user-session broker, on the window itself (§12, §18).<br/>Frames copied by WGC's dirty regions when the broker signals."]
-    C -->|"override-redirect menu or popup<br/>(WGC refuses CreateForWindow)"| E["Broker PrintWindow slot, rendered only on its own pokes:<br/>damage whose pixels changed, or input (§20, §23);<br/>first frame retried at 0/50/100/200/400 ms (§19)"]
-    B -->|no| F{"Window class (PwWindowClassify)"}
-    F -->|"ordinary, unoccluded, eligible"| G["Copied from the composited desktop,<br/>established by one PrintWindow (§2)"]
-    F -->|"ordinary, partly covered"| H["Whole-window PrintWindow on each change of its own<br/>visible pixels (§3, §5), guarded against echoes (§9)"]
-    F -->|"popup, NOREDIRECTIONBITMAP, layered"| I["Slices of the composited desktop"]
-    D --> J["At rest nothing runs: no timer, no PrintWindow, no heartbeat (§14, §20)"]
-    E --> J
-```
-
-### How a capture that has stopped is noticed on 26100+ (§32)
-
-```mermaid
-flowchart TD
-    A["A WGC slot"] --> B{"What happened?"}
-    B -->|"Windows closed the capture item<br/>(QGAWGCITEMCLOSED)"| C["Reopen the session - event-driven"]
-    B -->|"desktop damage, or pointer motion"| N["No poke. WGC delivers real changes by itself."]
-    B -->|"a key or a click delivered to the window<br/>(input is a promise of change)"| D{"Did the session deliver before the quiet deadline?"}
-    D -->|yes| OK["Alive"]
-    D -->|no| R["Recreate the session once (QGAWGCRECREATE)"]
-    R --> F{"Does the fresh session deliver?"}
-    F -->|yes| OK
-    F -->|no| G["DEAF (QGAWGCDEAF). The user is told in dom0 through the error route:<br/>'a window of app stopped updating ... close and reopen that window',<br/>once per application per boot, at most 8 error notices per boot"]
-```
+Status words and the section format are defined in `docs/ADR-README.md`.
 
 ---
+
+## The decisions in detail
+
+Where the details live:
+
+| record | content |
+|---|---|
+| `DESIGN-per-window-capture.md` | per-window buffers; Gate 0 (PrintWindow returns an occluded window's content) |
+| `DESIGN-pure-per-window.md` | the per-window model; the classes PrintWindow cannot render |
+| `DESIGN-wgc-broker.md` | the user-session WGC broker: slots, routes, IPC |
+| `DESIGN-rest-zero-capture.md` | the rest-zero design (§18): stages S0-S5 and the measurement plan |
+| `agent/gui-agent/wincapture.cpp` (header comment) | the PrintWindow engine as built: service loop, sweep, echo guard |
+| `findings/issues.md`, `findings/capture.md` | open defects, and the measurements quoted here |
 
 ## 1. The pixel source is chosen per window class; capabilities are decided at start
 
@@ -107,7 +132,8 @@ capabilities latched once at agent Init:
    layered windows: on build 26100 and later the user-session WGC broker (§12), below that slices of the
    composited desktop.
 3. The broker is eligible on build 26100+ unless qubesdb switches it off, and eligibility is never re-read at
-   runtime. A broker that was working and stops is a FAILURE, reported loudly, never a capability change.
+   runtime. A broker that was working and stops is a FAILURE, reported loudly, never a capability change;
+   the mapping side of that failure is `docs/ADR-windows.md` §8.
 
 ## 2. An unoccluded window is copied from the composited desktop, established once, then left alone
 

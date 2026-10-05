@@ -1,7 +1,57 @@
 # ADR - boot: what may touch the device model in a fresh domain's first minutes
 
-Decisions about the install and the first boots of a Windows guest, as seen from the device model (QEMU in the
-stub domain) and from Xen. Format and status vocabulary: `docs/ADR-README.md`.
+## In plain English
+
+A freshly created Windows qube sometimes freezes in its first minutes. The emulated hardware (QEMU, running in
+a helper domain beside the guest) stops answering the guest's disk and device requests, and the guest hangs
+waiting for it. We measured the same freeze on a guest with none of our software installed, so the defect
+lives below us in the virtualization stack. What we control is how much work we throw at that layer at once.
+
+Two decisions follow. First, during install stages and first boots, our installer and services never release
+work all at once: one step at a time, each started only after the previous one is observed to have finished,
+never after a fixed number of seconds. Second, the service that lets dom0 run commands inside the guest is
+kept stopped during the part of the install that reconfigures devices and drivers. Every incoming command from
+dom0 forces two synchronous round trips through the emulated hardware, exactly where the freezes were
+recorded. The service is started when that work is done. On the fully unattended install path it is not
+started in that stage at all, because the guest powers off seconds later and the service comes up on the next
+boot anyway.
+
+The cost is a slower install, tens of seconds to about two minutes, and a window during which dom0 cannot talk
+to the guest. The owner explicitly rejected making the test harness go quiet for seven minutes instead: that
+would have avoided the problem in testing while shipping nothing. The proof that pacing helps is still owed.
+The service hold has passed one release gate without a stall, which is consistent with the fix but not proof
+of it.
+
+How stage 2 of the install sequences the services (§2):
+
+```mermaid
+flowchart TD
+    A["msiexec returns"] --> B["Start QdbDaemon<br/>observe RUNNING, then READY (qubesdb answers /name)"]
+    B --> C["Device work, one step at a time, each completion observed:<br/>xenvif, xencons, IddCx + emulated-VGA disable, overlays,<br/>updater agent, PV NIC latch, netvm task, shipping state, UAC policy<br/>(QrexecAgent HELD throughout)"]
+    C --> D{"How does the stage end?"}
+    D -->|"normal interactive path"| E["QREXEC-RELEASE: start QrexecAgent, observe RUNNING<br/>RESULT records the site and the held seconds"]
+    D -->|"Fail / main catch / refused power-off"| E
+    D -->|"-Auto -RebootAtEnd"| F["Not started: the guest powers off in seconds,<br/>the auto-start service comes up on the next boot<br/>RESULT = not-started-powering-off"]
+    E --> G["RESULT written"]
+    F --> G
+    E -. "release never reaches RUNNING" .-> H["svc_qrexec_start_failed (red)"]
+    G -. "non-power-off path, service still held" .-> I["svc_qrexec_never_started (red)"]
+```
+
+## The decisions at a glance
+
+| § | decision | status | date |
+|---|---|---|---|
+| 1 | Work that reaches QEMU or Xen in a fresh domain's first minutes is serialized and paced | ACCEPTED (owner, Jev); the harness half WITHDRAWN (owner) | 2026-10-04 |
+| 2 | The qrexec service opens only after stage 2's device work | ACCEPTED (owner, Jev) | 2026-10-04 |
+
+Status words and the section format are defined in `docs/ADR-README.md`.
+
+---
+
+## The decisions in detail
+
+Where the details live:
 
 | record | content |
 |---|---|
@@ -9,13 +59,6 @@ stub domain) and from Xen. Format and status vocabulary: `docs/ADR-README.md`.
 | `packaging/setup/Install-QwtImproved.ps1` | stage 2 of the install, where §2 is enforced |
 | `tools/tests/svc-serial-start-test.ps1`, `svc-serial-start-selftest.sh` | the offline suite that asserts §2's order |
 | `mgmt/harness/paced-ab.sh`, `mgmt/harness/stock-ab.sh` | the A/B runs that grade §1 |
-
-| § | decision | status | date |
-|---|---|---|---|
-| 1 | Work that reaches QEMU or Xen in a fresh domain's first minutes is serialized and paced | ACCEPTED (owner, Jev); the harness half WITHDRAWN (owner) | 2026-10-04 |
-| 2 | The qrexec service opens only after stage 2's device work | ACCEPTED (owner, Jev) | 2026-10-04 |
-
----
 
 ## 1. Work that reaches QEMU or Xen in a fresh domain's first minutes is serialized and paced
 
@@ -83,8 +126,8 @@ no qrexec service at all, and the stall rate jumped after that commit.
 
 Section 1 had declined to hold qrexec back for the stage. On this mechanism the owner chose it ("need the fix
 first ... checks a posteriori"). Jev: this shape 0.95 combined; "removes the window for every caller" 0.91; the
-top implementation risk is the QubesDB dependency, 0.45, met by rule 1 below. The owner rejected any
-test-harness hands-off window: this is a property of the product, enforced in the product.
+top implementation risk is the QubesDB dependency, 0.45, met by rule 1 below. As in §1, there is no
+test-harness quiet window: the property is enforced in the product.
 
 **Decision.** In stage 2 of `packaging/setup/Install-QwtImproved.ps1`:
 
@@ -108,19 +151,7 @@ test-harness hands-off window: this is a property of the product, enforced in th
 7. No fixed sleep anywhere. Every wait is an observed condition with a bounded failure detector, through one
    observation routine for every service start (`Start-QwtServiceObserved`).
 
-```mermaid
-flowchart TD
-    A["msiexec returns"] --> B["Start QdbDaemon<br/>observe RUNNING, then READY (qubesdb answers /name)"]
-    B --> C["Device work, one step at a time, each completion observed:<br/>xenvif, xencons, IddCx + emulated-VGA disable, overlays,<br/>updater agent, PV NIC latch, netvm task, shipping state, UAC policy<br/>(QrexecAgent HELD throughout)"]
-    C --> D{"How does the stage end?"}
-    D -->|"normal interactive path"| E["QREXEC-RELEASE: start QrexecAgent, observe RUNNING<br/>RESULT records the site and the held seconds"]
-    D -->|"Fail / main catch / refused power-off"| E
-    D -->|"-Auto -RebootAtEnd"| F["Not started: the guest powers off in seconds,<br/>the auto-start service comes up on the next boot<br/>RESULT = not-started-powering-off"]
-    E --> G["RESULT written"]
-    F --> G
-    E -. "release never reaches RUNNING" .-> H["svc_qrexec_start_failed (red)"]
-    G -. "non-power-off path, service still held" .-> I["svc_qrexec_never_started (red)"]
-```
+(The flowchart for this decision is in "In plain English" at the top of this file.)
 
 **Cost.** qrexec answers only when the install is done.
 

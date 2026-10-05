@@ -1,28 +1,26 @@
 # ADR - supervision: how our components are kept alive, and how their deaths are made loud
 
-Decisions about what happens when one of our processes or services ends without being asked to: how the death
-is noticed, how it is reported, and how the component comes back. Decided 2026-10-03 (owner, Jev), built the
-same day; what the rig still has to show is in the implementation notes at the end and in `findings/issues.md`.
-Format and status vocabulary: `docs/ADR-README.md`.
+## In plain English
 
-| record | content |
-|---|---|
-| `docs/DESIGN-error-notify.md` | the error-notify route (`service.notify-errors`) that carries the death notification |
-| `guest/qwt-report-death.ps1`, `guest/qwt-notify-error.ps1` | the reporter's action and the route it sends through |
-| `include/deathevent.h` (agent) | the one Event Log record a supervisor writes per death |
-| `patches/windows-utils-service-exit-code.patch` | services exit non-zero when their worker fails |
-| `guest/health-check.ps1` (step 2b) | asserts every service's recovery settings |
-| `tools/tests/death-reporter-*`, `svc-exitcode-selftest.sh`, `supervision-install-selftest.sh`, `health-recovery-selftest.sh` | the offline proofs |
-| `findings/issues.md` | what is still owed on a guest |
+When one of our programs or services crashes or quits without being asked, that is a serious error, and the
+person using the qube must see it. It is not a warning line buried in a log while a watchdog quietly restarts
+the program. Every such death is logged as an error and reported to dom0 as a notification, every time,
+counted, up to a storm cap of eight per boot.
 
-| § | decision | status | date |
-|---|---|---|---|
-| 1 | Anything of ours that dies unexpectedly is a major ERROR, and it is LOUD | ACCEPTED (owner; Jev 0.74) | 2026-10-03 |
-| 2 | Detection uses the system's own records | ACCEPTED (owner; Jev 0.86) | 2026-10-03 |
-| 3 | ONE reporter, and the notification is ours | ACCEPTED (owner) | 2026-10-03 |
-| 4 | Restarts use system recovery; a supervisor service only where nothing else can do the job | ACCEPTED (owner; Jev 0.99) | 2026-10-03 |
+Deaths are detected from the records Windows already keeps: crash reports, service-failure events, scheduled-
+task failures. We do not write our own watchdog scripts. The one case Windows cannot see, a helper exiting
+cleanly but unexpectedly, is written by its supervisor as a single event in the same log. One scheduled task
+subscribes to all of those records and sends the one notification, which says what died, the error code and
+its meaning, how long the program had run, how many deaths this boot, and where the evidence is.
 
-The four decisions together form one chain:
+Restarts use the operating system's own recovery. Every service we install has recovery actions. Helpers use
+the scheduler's restart settings where its one-minute minimum interval fits, and our own bounded relaunch only
+where a helper must be back within seconds. The GUI agent keeps its small watchdog service, because starting a
+system-privileged process inside the user's session is the one job nothing in Windows does for us. There are
+no polling loops and no kill loops: a state that must hold is configured at its source. All of this was built
+on 2026-10-03. What remains is to demonstrate the chain on a real guest with a forced crash.
+
+The whole chain, from a death to the notification in dom0 (§1-§4):
 
 ```mermaid
 flowchart TD
@@ -42,7 +40,32 @@ flowchart TD
     J --> K["dom0 qubes.Notifications: one ACTION notification per death"]
 ```
 
+## The decisions at a glance
+
+| § | decision | status | date |
+|---|---|---|---|
+| 1 | Anything of ours that dies unexpectedly is a major ERROR, and it is LOUD | ACCEPTED (owner; Jev 0.74) | 2026-10-03 |
+| 2 | Detection uses the system's own records | ACCEPTED (owner; Jev 0.86) | 2026-10-03 |
+| 3 | ONE reporter, and the notification is ours | ACCEPTED (owner) | 2026-10-03 |
+| 4 | Restarts use system recovery; a supervisor service only where nothing else can do the job | ACCEPTED (owner; Jev 0.99) | 2026-10-03 |
+
+Status words and the section format are defined in `docs/ADR-README.md`.
+
 ---
+
+## The decisions in detail
+
+Where the details live:
+
+| record | content |
+|---|---|
+| `docs/DESIGN-error-notify.md` | the error-notify route (`service.notify-errors`) that carries the death notification |
+| `guest/qwt-report-death.ps1`, `guest/qwt-notify-error.ps1` | the reporter's action and the route it sends through |
+| `include/deathevent.h` (agent) | the one Event Log record a supervisor writes per death |
+| `patches/windows-utils-service-exit-code.patch` | services exit non-zero when their worker fails |
+| `guest/health-check.ps1` (step 2b) | asserts every service's recovery settings |
+| `tools/tests/death-reporter-*`, `svc-exitcode-selftest.sh`, `supervision-install-selftest.sh`, `health-recovery-selftest.sh` | the offline proofs |
+| `findings/issues.md` | what is still owed on a guest |
 
 ## 1. Anything of ours that dies unexpectedly is a major ERROR, and it is LOUD
 

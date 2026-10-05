@@ -1,36 +1,34 @@
 # ADR - windows: which guest surfaces become dom0 windows, and how the guest keeps a session
 
-Decisions about what the agent presents to dom0 as a window: the screens that are never shown, the fullscreen
-window that needs dom0's consent, the secure desktop, the non-seamless desktop window, the chrome fragments
-that are dropped, the popups that are sent override-redirect, and the autologon that keeps a session alive for
-all of it. Every decision here was already binding - in `CLAUDE.md` ("Product decisions"), the README's feature
-table (the specification of the one control), `docs/QVM-FEATURES.md`, the `findings/` heads and the script
-headers cited - and is only collected and written down here. Format and status vocabulary: `docs/ADR-README.md`.
+## In plain English
 
-| record | content |
-|---|---|
-| `CLAUDE.md`, "Product decisions (binding)" | the owner-approved spec for fullscreen, the secure desktop, autologon, window filtering |
-| README, "Configuration" table | the specification of `service.gui-fullscreen` and the other features |
-| `docs/QVM-FEATURES.md` | every feature, its default and precedence, generated from the source |
-| `findings/windowing.md`, `findings/autologon.md` | the measurements behind each section |
-| `docs/DESIGN-nonseamless-buildout.md` | the non-seamless desktop: what works, what is still owed (2026-09-25) |
-| `guest/set-autologon.ps1`, `guest/ensure-autologon.ps1` | autologon as built; the header states the reasons |
-| `agent/gui-agent/main.c` (`ShouldAcceptWindow`, `ProcessNewFrame`, `ApplySeamlessTweaks`) | where §1-§4, §6-§9 are enforced |
+Not every window a Windows guest has should become a window on your desktop. The agent decides, and these are
+the rules.
 
-| § | decision | status | date |
-|---|---|---|---|
-| 1 | The boot, logon and shutdown screen is never shown to dom0 (Mode 1) | ACCEPTED (owner), unconditional | 2026-08-28 |
-| 2 | A borderless true-fullscreen app window is shown only when dom0 opts in (Mode 2) | ACCEPTED (owner) | 2026-08-28 |
-| 3 | ONE control: `service.gui-fullscreen`, and the README table is its specification | ACCEPTED (owner) | 2026-09-01 |
-| 4 | The secure desktop is handled by mode; the safety criterion is geometry, not desktop identity | ACCEPTED (owner) | 2026-08-28 |
-| 5 | The non-seamless desktop is one bounded window the guest can never grow to the host | ACCEPTED (owner) | 2026-08-27 |
-| 6 | Chrome fragments are not windows; dom0's bordering is never weakened | ACCEPTED (owner) | 2026-08-26 |
-| 7 | Popups, tooltips and toasts are override-redirect windows; a contained menu is synthesized onto its owner | ACCEPTED (owner) | 2026-08-16 |
-| 8 | No composite fallback on a direct-capable guest: fail hard and visibly | ACCEPTED (owner) | 2026-09-06 |
-| 9 | Seamless tweaks are applied in one place and reversed by construction | ACCEPTED (Jev 1.00) | 2026-09-25 |
-| 10 | Autologon is enforced: a guest without a session is unreachable | ACCEPTED (owner) | 2026-08-28 |
+Windows' own boot, sign-in, lock and shutdown screens are never shown, recognised by class and by phase, and
+no setting changes that. A borderless window filling the whole guest screen (a game, a video) is shown only if
+you opted in for that qube with a single dom0 feature; a maximized application with a title bar is always
+fine. That feature is the only control, and the README's table is its specification. Windows' secure desktop
+(UAC prompts, the lock screen) is never presented as free-standing windows in seamless mode, because each
+would be indistinguishable from dom0's own interface. A UAC prompt is therefore configured to appear on the
+normal desktop as an ordinary window, and while the secure desktop is up a seamless qube shows nothing new. In
+the whole-desktop mode the secure desktop is shown inside the one bounded window, which the guest can never
+grow to your screen size on its own.
 
-How `ShouldAcceptWindow` decides (§1, §2, §4, §6, §7):
+Fragments of application chrome that are not windows (Office's shadow strips, shell overlays, the shell window
+itself) are dropped rather than bordered. The fix for a mis-bordered fragment is always to stop presenting it,
+never to weaken dom0's borders. Menus and tooltips are sent borderless, as the Linux agent does; toasts
+likewise, and they stay shown. The Start menu is not presented in seamless mode. If the capture helper the
+design relies on is missing or dead, the agent fails visibly, with a black window that stays mapped and an
+error in dom0, rather than silently falling back to copying the whole desktop. Everything the agent changes in
+the guest for seamless mode (title bars stripped, Windows key blocked, shadows off) is applied in one place
+and undone when the mode switches.
+
+Finally, autologon is enforced, because a guest parked at the sign-in screen is unreachable: dom0 cannot run
+anything in it, and in seamless mode it is invisible. The password is validated before anything is written and
+stored only as a protected system secret, and a boot-time task re-asserts the arming.
+
+How the agent decides whether a guest window becomes a dom0 window (§1, §2, §4, §6, §7):
 
 ```mermaid
 flowchart TD
@@ -52,7 +50,38 @@ flowchart TD
     G -->|no| M
 ```
 
+## The decisions at a glance
+
+| § | decision | status | date |
+|---|---|---|---|
+| 1 | The boot, logon and shutdown screen is never shown to dom0 (Mode 1) | ACCEPTED (owner), unconditional | 2026-08-28 |
+| 2 | A borderless true-fullscreen app window is shown only when dom0 opts in (Mode 2) | ACCEPTED (owner) | 2026-08-28 |
+| 3 | ONE control: `service.gui-fullscreen`, and the README table is its specification | ACCEPTED (owner) | 2026-09-01 |
+| 4 | The secure desktop is handled by mode; the safety criterion is geometry, not desktop identity | ACCEPTED (owner) | 2026-08-28 |
+| 5 | The non-seamless desktop is one bounded window the guest can never grow to the host | ACCEPTED (owner) | 2026-08-27 |
+| 6 | Chrome fragments are not windows; dom0's bordering is never weakened | ACCEPTED (owner) | 2026-08-26 |
+| 7 | Popups, tooltips and toasts are override-redirect windows; a contained menu is synthesized onto its owner | ACCEPTED (owner) | 2026-08-16 |
+| 8 | No composite fallback on a direct-capable guest: fail hard and visibly | ACCEPTED (owner) | 2026-09-06 |
+| 9 | Seamless tweaks are applied in one place and reversed by construction | ACCEPTED (Jev 1.00) | 2026-09-25 |
+| 10 | Autologon is enforced: a guest without a session is unreachable | ACCEPTED (owner) | 2026-08-28 |
+
+Status words and the section format are defined in `docs/ADR-README.md`.
+
 ---
+
+## The decisions in detail
+
+Where the details live:
+
+| record | content |
+|---|---|
+| `CLAUDE.md`, "Product decisions (binding)" | the owner-approved spec for fullscreen, the secure desktop, autologon, window filtering |
+| README, "Configuration" table | the specification of `service.gui-fullscreen` and the other features |
+| `docs/QVM-FEATURES.md` | every feature, its default and precedence, generated from the source |
+| `findings/windowing.md`, `findings/autologon.md` | the measurements behind each section |
+| `docs/DESIGN-nonseamless-buildout.md` | the non-seamless desktop: what works, what is still owed (2026-09-25) |
+| `guest/set-autologon.ps1`, `guest/ensure-autologon.ps1` | autologon as built; the header states the reasons |
+| `agent/gui-agent/main.c` (`ShouldAcceptWindow`, `ProcessNewFrame`, `ApplySeamlessTweaks`) | where §1-§4, §6-§9 are enforced |
 
 ## 1. The boot, logon and shutdown screen is never shown to dom0 (Mode 1)
 

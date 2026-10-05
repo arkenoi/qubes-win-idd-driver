@@ -1,32 +1,29 @@
 # ADR - network: PV networking with no netvm at install, and no second boot
 
-Decisions about how a Windows guest gets a working Xen PV network interface: primed in the template without a
-netvm, completing in one boot in every AppVM, with the L3 configuration owned by one service that reads only
-qubesdb. Every decision here was already in force - in `CLAUDE.md` ("Networking (binding)"), the README and the
-`findings/network.md` head, and the header of `guest/pvnic-selfprime.ps1` - and is collected here. Format and
-status vocabulary: `docs/ADR-README.md`.
+## In plain English
 
-| record | content |
-|---|---|
-| `findings/network.md` | the measurements, retractions and instrument traps behind every section |
-| `guest/pvnic-selfprime.ps1` | the latch installer, the applier and the embedded `QwtngNetSetup` service; its header states the mechanism |
-| `mgmt/clone-to-template.sh` (`PRIME_NETVM=latch`, `scrub_net_identity`) | how a template is primed and scrubbed |
-| `patches/xenvif-ctrl-ring-fix.patch`, the pv-xenvif CI pipeline | our xenvif |
-| `docs/ACCEPTANCE-PROTOCOL.md` (NET-2, NET-6, NET-7, C11) | the acceptance cells |
-| `guest/health-check.ps1` | PV NIC bound, traffic by counters |
+A Windows qube's network interface is a Xen paravirtual device, like a Linux qube's. Stock Windows Tools never
+got it to bind (its own two drivers disagreed on a revision number) and silently fell back to an emulated
+Realtek card. We ship a corrected driver.
 
-| § | decision | status | date |
-|---|---|---|---|
-| 1 | Templates never have a netvm; the guests that test PV networking must | ACCEPTED (owner) | 2026-08-29 |
-| 2 | PV networking is primed in the template with the unplug latch, no netvm ever attached | ACCEPTED (owner D1: unconditional) | 2026-08-19 |
-| 3 | The latch is re-armed at every layer, because reading it consumes it | ACCEPTED | 2026-08-23 |
-| 4 | Stock `network-setup.exe` is deleted; `QwtngNetSetup` owns L3 from qubesdb alone | ACCEPTED | 2026-08-23 |
-| 5 | DHCP is not part of the design and is off in the image; the DHCP Client service stays enabled | ACCEPTED | 2026-08-23 |
-| 6 | A second boot is a failure; traffic is proven by a file transfer | ACCEPTED (owner) | 2026-08-29 |
-| 7 | Our xenvif ships, not stock's | ACCEPTED | 2026-08-23 |
-| 8 | A netvm's defects are fixed in the netvm, upstream, with the owner's approval of the text | ACCEPTED (owner) | 2026-08-24 |
+Binding has a second problem specific to app qubes. Their system disk is reset at every boot, so the network
+driver is re-installed on every boot, and the first installation in a boot demands a restart, which an app
+qube can never complete: it would reset forever. Windows' Xen driver skips that restart only if a one-shot
+"unplug the emulated card" flag is set, and it erases the flag every time it reads it. We set that flag, the
+latch, in the template, with no network attached at any point, and re-arm it at every opportunity: at boot, at
+shutdown, when the network service starts, when the installer finishes. The build fails if the re-arm cannot
+be read back. Attaching a network to a running qube then works in the same boot with no restart, and needing a
+second boot is a failure.
 
-What happens on an AppVM boot (§2-§5):
+The IP configuration comes from the Qubes database and nowhere else. The stock applier ran at the wrong moment
+and tore down a correct address, so it is deleted and replaced by our own service, which waits for the adapter
+to come up, applies address, route and DNS, and keeps them correct. DHCP is not part of the design and is
+scrubbed from the image; the DHCP client service stays enabled because Windows' network awareness depends on
+it. Connectivity is proven by transferring a file and checking the adapter's byte counters, never by pinging
+the gateway, which a Qubes firewall does not answer. Defects found in the firewall itself (the Mirage
+unikernel) were fixed there and submitted upstream with the owner's approval.
+
+What happens on an app qube's boot (§2-§5):
 
 ```mermaid
 flowchart TD
@@ -39,7 +36,35 @@ flowchart TD
     B -. "consumed" .-> H["Re-arm: QwtngNetSetup's first act (~8-12 s);<br/>QubesPvNic at boot and on NetworkProfile 10000;<br/>QubesPvNicRearm on shutdown event 1074"]
 ```
 
+## The decisions at a glance
+
+| § | decision | status | date |
+|---|---|---|---|
+| 1 | Templates never have a netvm; the guests that test PV networking must | ACCEPTED (owner) | 2026-08-29 |
+| 2 | PV networking is primed in the template with the unplug latch, no netvm ever attached | ACCEPTED (owner D1: unconditional) | 2026-08-19 |
+| 3 | The latch is re-armed at every layer, because reading it consumes it | ACCEPTED | 2026-08-23 |
+| 4 | Stock `network-setup.exe` is deleted; `QwtngNetSetup` owns L3 from qubesdb alone | ACCEPTED | 2026-08-23 |
+| 5 | DHCP is not part of the design and is off in the image; the DHCP Client service stays enabled | ACCEPTED | 2026-08-23 |
+| 6 | A second boot is a failure; traffic is proven by a file transfer | ACCEPTED (owner) | 2026-08-29 |
+| 7 | Our xenvif ships, not stock's | ACCEPTED | 2026-08-23 |
+| 8 | A netvm's defects are fixed in the netvm, upstream, with the owner's approval of the text | ACCEPTED (owner) | 2026-08-24 |
+
+Status words and the section format are defined in `docs/ADR-README.md`.
+
 ---
+
+## The decisions in detail
+
+Where the details live:
+
+| record | content |
+|---|---|
+| `findings/network.md` | the measurements, retractions and instrument traps behind every section |
+| `guest/pvnic-selfprime.ps1` | the latch installer, the applier and the embedded `QwtngNetSetup` service; its header states the mechanism |
+| `mgmt/clone-to-template.sh` (`PRIME_NETVM=latch`, `scrub_net_identity`) | how a template is primed and scrubbed |
+| `patches/xenvif-ctrl-ring-fix.patch`, the pv-xenvif CI pipeline | our xenvif |
+| `docs/ACCEPTANCE-PROTOCOL.md` (NET-2, NET-6, NET-7, C11) | the acceptance cells |
+| `guest/health-check.ps1` | PV NIC bound, traffic by counters |
 
 ## 1. Templates never have a netvm; the guests that test PV networking must
 

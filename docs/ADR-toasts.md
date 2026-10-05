@@ -1,32 +1,31 @@
 # ADR - guest notifications: the toast bridge
 
-Decisions about how a guest's Windows notifications reach dom0, and why each toast is routed the way it is.
-The bridge ships default-on since 4.3.30; per-toast routing since 4.3.31. What a guest did on a given day
-belongs in `findings/`; the mechanism lives in the design notes. Format and status vocabulary:
-`docs/ADR-README.md`.
+## In plain English
 
-| record | content |
-|---|---|
-| `docs/DESIGN-toast-bridge.md` | the bridge's mechanism, the options considered (A0/A1/B), phase plan |
-| `docs/DESIGN-p3-classifier-impl.md` | the per-toast classifier: signals, call sites, tests |
-| `docs/DESIGN-error-notify.md` | the separate error route (`service.notify-errors`) |
-| `docs/QVM-FEATURES.md` | the features, their defaults and precedence - authoritative |
-| `findings/issues.md` | open defects, among them the first-toast double (P1) that §10 addresses |
+A Windows notification (a "toast") in a seamless qube used to appear as a small window drawn by the guest on
+your desktop. Now, by default, it is forwarded to dom0's own notification service and shown the way a
+notification from any other qube is shown, and the banner inside the guest is suppressed while the forwarding
+connection is up. The guest is not trusted to paint on your desktop; dom0 renders the text under its usual
+treatment.
 
-| § | decision | status | since |
-|---|---|---|---|
-| 1 | A guest notification is dom0's to render, not the guest's to draw | ACCEPTED | 4.3.30 |
-| 2 | The route is decided per toast; the allowlist is a shortcut, not the gate | ACCEPTED | 4.3.31 |
-| 3 | Misrouting fails open, never closed | ACCEPTED | 4.3.30 |
-| 4 | The allowlist ships with a conservative seed, not empty and not everything | ACCEPTED | 4.3.30 |
-| 5 | The dom0 notification is the copy; the guest Notification Center stays in sync | ACCEPTED | 4.3.30 |
-| 6 | Error reporting is a sibling route, not this one | ACCEPTED | 4.3.30 |
-| 7 | Every gate is read once, at agent start | ACCEPTED | 4.3.30 |
-| 8 | When the classifier cannot trust its inputs, it stops classifying | ACCEPTED | 4.3.31 |
-| 9 | The allowlist is a guest-side convenience; the switches that matter are dom0's | ACCEPTED | 4.3.30 |
-| 10 | The guest banner is suppressed by not mapping it, never by ShowBanner | PROPOSED (Jev), 2026-10-01 | - |
+Not every toast can be forwarded. One that carries buttons needs them to work, so it stays a guest window.
+Since 4.3.31 that choice is made per notification, by a classifier that looks at the toast's own content, not
+per application. A short list of applications whose notifications are always informational (Snipping Tool,
+Camera, Photos, Security and Maintenance, the backup reminder) is forwarded without waiting for the verdict,
+and operators can extend the list per guest.
 
-How one toast is routed (§2, §3, §7, §8; §10 changes how the banner is suppressed, not the route):
+Whenever the bridge is unsure, the toast keeps the old guest-window path: an unknown application, no verdict
+within about six seconds, the connection down, a Windows build whose notification database looks different. A
+notification may lose its dom0 rendering, never its delivery. Dismissing the dom0 copy clears it in the guest
+too. Agent faults travel to dom0 on a separate, bounded route that these switches do not affect. All switches
+are read once when the agent starts, and dom0's settings win over the guest's.
+
+One defect is open. The first toast of an application routed by the classifier appears twice, because the
+guest banner is already on screen when the verdict arrives. The proposed fix is for the agent not to show the
+banner window at all until the verdict is in, instead of flipping Windows' per-application banner setting
+after the fact.
+
+How one toast is routed (§2, §3, §7, §8). §10 changes how the banner is suppressed, not the route:
 
 ```mermaid
 flowchart TD
@@ -45,7 +44,36 @@ flowchart TD
     F --> D["dom0 renders it; a dom0 dismissal is echoed back to the guest (§5)"]
 ```
 
+## The decisions at a glance
+
+| § | decision | status | since |
+|---|---|---|---|
+| 1 | A guest notification is dom0's to render, not the guest's to draw | ACCEPTED | 4.3.30 |
+| 2 | The route is decided per toast; the allowlist is a shortcut, not the gate | ACCEPTED | 4.3.31 |
+| 3 | Misrouting fails open, never closed | ACCEPTED | 4.3.30 |
+| 4 | The allowlist ships with a conservative seed, not empty and not everything | ACCEPTED | 4.3.30 |
+| 5 | The dom0 notification is the copy; the guest Notification Center stays in sync | ACCEPTED | 4.3.30 |
+| 6 | Error reporting is a sibling route, not this one | ACCEPTED | 4.3.30 |
+| 7 | Every gate is read once, at agent start | ACCEPTED | 4.3.30 |
+| 8 | When the classifier cannot trust its inputs, it stops classifying | ACCEPTED | 4.3.31 |
+| 9 | The allowlist is a guest-side convenience; the switches that matter are dom0's | ACCEPTED | 4.3.30 |
+| 10 | The guest banner is suppressed by not mapping it, never by ShowBanner | PROPOSED (Jev), 2026-10-01 | - |
+
+Status words and the section format are defined in `docs/ADR-README.md`.
+
 ---
+
+## The decisions in detail
+
+Where the details live:
+
+| record | content |
+|---|---|
+| `docs/DESIGN-toast-bridge.md` | the bridge's mechanism, the options considered (A0/A1/B), phase plan |
+| `docs/DESIGN-p3-classifier-impl.md` | the per-toast classifier: signals, call sites, tests |
+| `docs/DESIGN-error-notify.md` | the separate error route (`service.notify-errors`) |
+| `docs/QVM-FEATURES.md` | the features, their defaults and precedence - authoritative |
+| `findings/issues.md` | open defects, among them the first-toast double (P1) that §10 addresses |
 
 ## 1. A guest notification is dom0's to render, not the guest's to draw
 

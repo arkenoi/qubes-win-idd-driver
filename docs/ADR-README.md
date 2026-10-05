@@ -56,9 +56,12 @@ gone with the fix present. Or "owed", naming the measurement that would settle i
 **Open.** What the decision does not cover or does not fix.
 ```
 
-Each file opens with a table of the records it rests on, then a table of its sections with their status, then
-a flowchart where one helps. A flowchart (Mermaid, rendered by GitHub) is added where the decision describes an
-order of steps or a routing choice. It shows the decision, not the code.
+Each file has two parts. **In plain English** comes first: a few paragraphs anyone can read, with no code
+identifiers and no verdict numbers, followed by the flowcharts and a table of the sections with their status.
+**The decisions in detail** follows: the records each decision rests on, then the sections in the format
+above, where the code references, measurements and Jev verdicts live. A flowchart (Mermaid, rendered by
+GitHub) is drawn where a decision describes an order of steps or a routing choice; it shows the decision, not
+the code.
 
 ### Status vocabulary
 

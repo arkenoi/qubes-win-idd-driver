@@ -1,20 +1,77 @@
 # ADR - gui: window geometry between the guest and dom0
 
-Decisions about how the agent and dom0's gui-daemon agree on where a window is and how big it is. Format and
-status vocabulary: `docs/ADR-README.md`.
+## In plain English
 
-| record | content |
-|---|---|
-| `agent/gui-agent/` | the agent code (`RestartPlacementTick`, the geometry post gate) |
-| gui-daemon source (`mkwindow`, `have_queued_configure`, `moveresize_vm_window`) | the dom0 side these decisions answer to; not ours to change |
-| `findings/issues.md` | open defects |
+Two defects in how windows are placed and resized between the guest and dom0, and the rules that fixed them.
+
+Placement after a restart. Each time the agent restarted, every guest window crept 5 pixels right and 25
+pixels down. dom0's window manager places a new window's frame where the guest said the window is, then
+reports the client area one frame-size further down and right, and the agent applied that reported position to
+the guest window. Now a window the agent re-creates in bulk keeps its guest position: dom0's first move-only
+placement is acknowledged, as the protocol requires, and then answered with the guest's own position instead
+of being applied. The cost is one extra message per re-created window.
+
+Resizing from dom0. Dragging a window's edge in dom0 produced hundreds of resize requests. The guest applied
+every one (about 90 ms each for a complex application), lagged seconds behind, kept resizing after the mouse
+was released, and announced slightly wrong sizes back, which dom0 then applied in turn. Now at most one resize
+is in flight per window until the window has taken it, the guest says nothing about geometry while dom0 is
+still dragging, and it announces its resting size once, only if that differs from what dom0 asked for. The
+invisible border Windows adds around a window is accounted for, so sizes match exactly. Verified on the
+owner's own drag: 310 requests became 54 applied resizes, and the owner's verdict was "all perfect".
+
+How a dom0 placement is handled after the agent re-creates a window (§1):
+
+```mermaid
+flowchart TD
+    A["dom0 configure arrives for window W"] --> B["ACK by byte-echo (every configure)"]
+    B --> C{"W marked as bulk re-created?"}
+    C -->|no| X["Existing path: apply to the guest window"]
+    C -->|yes| D{"First configure for W within 2 s<br/>of its re-creation, or of its map if held for a first frame?"}
+    D -->|no| X
+    D -->|yes| E{"A move only, same size?"}
+    E -->|"no (a resize)"| X
+    E -->|yes| F["Do not apply.<br/>Answer dom0 with the guest's own position (QGAPLACEKEEP)"]
+```
+
+How a dom0 resize lands (§2):
+
+```mermaid
+flowchart TD
+    A["dom0 configure with a new size"] --> B["Convert: add the window's invisible-border delta (0..64 px)"]
+    B --> C{"A post for this window still in flight?<br/>(not taken, less than 200 ms old)"}
+    C -->|yes| D["Keep the latest target only; no new post"]
+    C -->|no| E["One async SetWindowPos"]
+    E --> F{"Taken? rect moved off its posted position,<br/>or already on target"}
+    F -->|"not yet"| W["wait, up to 200 ms"] --> F
+    F -->|"yes, or the bound expired"| G["Post complete; next target may post"]
+    D --> G
+    G --> H{"dom0 still streaming configures,<br/>or a geometry pending or landing?"}
+    H -->|yes| I["Hold every announce<br/>(override-redirect changes excepted)"] --> H
+    H -->|no| J{"Resting geometry differs from dom0's?"}
+    J -->|"yes: a size the window refused"| K["Announce once"]
+    J -->|no| L["Announce nothing"]
+```
+
+## The decisions at a glance
 
 | § | decision | status | date |
 |---|---|---|---|
 | 1 | A re-created window keeps its guest position; dom0's frame placement is answered, not obeyed | ACCEPTED (Jev) | 2026-10-01 |
 | 2 | A dom0 resize lands once and settles | ACCEPTED (Jev) | 2026-10-02 |
 
+Status words and the section format are defined in `docs/ADR-README.md`.
+
 ---
+
+## The decisions in detail
+
+Where the details live:
+
+| record | content |
+|---|---|
+| `agent/gui-agent/` | the agent code (`RestartPlacementTick`, the geometry post gate) |
+| gui-daemon source (`mkwindow`, `have_queued_configure`, `moveresize_vm_window`) | the dom0 side these decisions answer to; not ours to change |
+| `findings/issues.md` | open defects |
 
 ## 1. A re-created window keeps its guest position; dom0's frame placement is answered, not obeyed
 
@@ -46,17 +103,7 @@ it 0.16; review: correct 0.70, ping-pong 0.22, still cheap 0.71.
 
 Code: `RestartPlacementTick`; log tag `QGAPLACEKEEP`.
 
-```mermaid
-flowchart TD
-    A["dom0 configure arrives for window W"] --> B["ACK by byte-echo (every configure)"]
-    B --> C{"W marked as bulk re-created?"}
-    C -->|no| X["Existing path: apply to the guest window"]
-    C -->|yes| D{"First configure for W within 2 s<br/>of its re-creation, or of its map if held for a first frame?"}
-    D -->|no| X
-    D -->|yes| E{"A move only, same size?"}
-    E -->|"no (a resize)"| X
-    E -->|yes| F["Do not apply.<br/>Answer dom0 with the guest's own position (QGAPLACEKEEP)"]
-```
+(The flowchart for this decision is in "In plain English" at the top of this file.)
 
 **Cost.** One extra configure per re-created window. A new window (not a bulk re-creation) is placed by dom0 as
 before.
@@ -93,22 +140,7 @@ changes". Their traced drag of Settings (2026-10-02 00:00) showed three defects 
 3. **Convert.** The dictated size gets the window's invisible-border delta added back: GetWindowRect minus the
    DWM bounds, measured together with the origin delta, 0..64 px.
 
-```mermaid
-flowchart TD
-    A["dom0 configure with a new size"] --> B["Convert: add the window's invisible-border delta (0..64 px)"]
-    B --> C{"A post for this window still in flight?<br/>(not taken, less than 200 ms old)"}
-    C -->|yes| D["Keep the latest target only; no new post"]
-    C -->|no| E["One async SetWindowPos"]
-    E --> F{"Taken? rect moved off its posted position,<br/>or already on target"}
-    F -->|"not yet"| W["wait, up to 200 ms"] --> F
-    F -->|"yes, or the bound expired"| G["Post complete; next target may post"]
-    D --> G
-    G --> H{"dom0 still streaming configures,<br/>or a geometry pending or landing?"}
-    H -->|yes| I["Hold every announce<br/>(override-redirect changes excepted)"] --> H
-    H -->|no| J{"Resting geometry differs from dom0's?"}
-    J -->|"yes: a size the window refused"| K["Announce once"]
-    J -->|no| L["Announce nothing"]
-```
+(The flowchart for this decision is in "In plain English" at the top of this file.)
 
 **Superseded before commit.** An earlier candidate held a UWP frame's resize until the configures stopped and
 applied it once (Jev 0.72 at the time). It rested on the claim that "the app's content stayed at 502x1141",

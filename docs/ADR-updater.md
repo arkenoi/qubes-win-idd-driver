@@ -1,17 +1,74 @@
 # ADR - the Windows updater (Track C)
 
-Decisions about how the dom0-owned Windows update path is built, and how it is tested. This file does not say
-what works today or what any guest measured; that belongs in the records below. Format and status vocabulary:
-`docs/ADR-README.md`.
+## In plain English
 
-| record | content |
-|---|---|
-| `findings/updates.md` | standing facts about the update path, and retracted approaches |
-| `findings/issues.md` | the open issue register (P1/P2/P3), maintained in place |
-| `findings/rig.md` | rig and harness behaviour, including instrument traps |
-| `findings/install.md` | getting a build onto a guest |
-| `guest/qubes-windows-update.ps1`, `guest/qubes-updates-relay.cs`, `guest/wu-update.ps1`, `guest/install-updater-agent.ps1` | the components (§12.1) |
-| `tools/wu-pass-judge.py`, `tools/wu-log-judge.py`, `mgmt/harness/wu-e2e.sh` | the judges and the end-to-end harness (§9) |
+Windows updates for a Windows qube are driven by dom0, exactly as for Linux templates. Automatic updates
+inside the guest are off, the qube reports whether updates are available, and the Qubes Update tool installs
+them through a proxy that exists only while a pass runs. The guest has no network route of its own, so the
+updater fetches the update files itself through that proxy; Windows' peer-to-peer and background download
+mechanisms are never used.
+
+Everything serves one invariant: what dom0 is told must be true. Never "up to date" when it is not, never
+stuck at "updates available" because of an item that can never install here. So an install counts only when
+its effect is measured, since an exit code of zero alone is not success. Any item that cannot be installed on
+this path is reported as informational with a reason. The relay answers a disallowed request with a final
+refusal, never a hang that Windows Update would wait out. Nothing is matched by its display title, because the
+catalog answers in whichever language it likes.
+
+After a failure in which we had run a vendor installer with the wrong switch, the rule became: our code never
+runs a vendor installer and never chooses its switches. Cumulative updates come from the catalog as .msu
+packages. Everything else with static content is handed to Windows Update's own installer, which runs each
+package with the update's own command line. A row counts as installed only when the installer succeeded and
+the thing the update changes actually changed; when the two disagree, the row fails loudly. Reboots are
+counted: the guest requests them, dom0 performs them, and none is taken speculatively. No component ever kills
+or adopts a process by name; it touches only what it started.
+
+The update path as a whole (§1, §4, §5, §12.1):
+
+```mermaid
+flowchart LR
+    D["dom0: qubes-vm-update"] -->|qrexec| H["wu-update.ps1, the dom0 handler:<br/>kicks the pass's task, tails update-status.json"]
+    H --> P["qubes-windows-update.ps1: one scan or install pass<br/>(passes serialized by the updater mutex)"]
+    P -->|"starts it, holds it by handle"| R["qubes-updates-relay.cs on 127.0.0.1:8082<br/>(lives only as long as its pass)"]
+    R -->|"a sanctioned host"| X["qubes.UpdatesProxy -> Windows Update, the Update Catalog"]
+    R -->|"any other host"| F["final 403 - never a reset, a 5xx or a hang"]
+    P -->|"the ACTIONABLE count"| N["qubes.NotifyUpdates -> dom0's updates-available marker"]
+    P -->|"reboot_needed=true"| H
+```
+
+How an offered update is installed (§12.2):
+
+```mermaid
+flowchart TD
+    S["Online search by the Windows Update agent, through the relay"] --> O["An offered update"]
+    O --> Q1{"Does the Update Catalog serve it as an .msu?<br/>(cumulatives and other express content)"}
+    Q1 -->|yes| M["We fetch the .msu through the relay and install from it"]
+    Q1 -->|no| Q2{"Is every NEEDED leaf's content static?<br/>(download.windowsupdate.com, not express)"}
+    Q2 -->|yes| W["Walk the bundle tree; fetch each needed leaf through the relay;<br/>IUpdate2.CopyToCache; IUpdateInstaller.Install.<br/>The agent runs each package with the update's own command line"]
+    W --> C{"Update complete in the agent's cache after CopyToCache?"}
+    C -->|no| FL["Row FAILS, naming the missing leaves"]
+    C -->|yes| V["Verdict (§12.3)"]
+    M --> V
+    Q2 -->|no| E["Row says why: FAILED, or informational under §2.<br/>Never a guess"]
+```
+
+How a row's verdict is decided (§12.3):
+
+```mermaid
+flowchart TD
+    A["The agent's Install() returns for a row"] --> B{"Agent succeeded?"}
+    B -->|no| F["FAILED, with its HRESULT"]
+    B -->|yes| C{"An effect probe exists for this update?"}
+    C -->|no| I0["The agent's result stands; probe=none"]
+    C -->|yes| D{"First read: artefact at or above the offered version?"}
+    D -->|yes| I["installed"]
+    D -->|no| W["Arm RegNotifyChangeKeyValue on the artefact key;<br/>re-read on every wake; bound 60 s after the agent returned<br/>(a wait that cannot be armed is an ERROR)"]
+    W --> E{"The read after the wake, or after the expiry"}
+    E -->|"moved"| I
+    E -->|"still below"| G["FAILED, logged loudly as a disagreement"]
+```
+
+## The decisions at a glance
 
 | § | decision | status | date |
 |---|---|---|---|
@@ -28,20 +85,22 @@ what works today or what any guest measured; that belongs in the records below. 
 | 11 | A cause outside our code, with a measured remedy, is CLOSED BY DECISION | ACCEPTED; applied once (`0x8024402C`) | - |
 | 12 | Architecture: who does what, and who may touch which process | ACCEPTED (owner, Jev); shipped in 4.3.33 | 2026-10-03 |
 
-The path as a whole (§1, §4, §5, §12.1):
-
-```mermaid
-flowchart LR
-    D["dom0: qubes-vm-update"] -->|qrexec| H["wu-update.ps1, the dom0 handler:<br/>kicks the pass's task, tails update-status.json"]
-    H --> P["qubes-windows-update.ps1: one scan or install pass<br/>(passes serialized by the updater mutex)"]
-    P -->|"starts it, holds it by handle"| R["qubes-updates-relay.cs on 127.0.0.1:8082<br/>(lives only as long as its pass)"]
-    R -->|"a sanctioned host"| X["qubes.UpdatesProxy -> Windows Update, the Update Catalog"]
-    R -->|"any other host"| F["final 403 - never a reset, a 5xx or a hang"]
-    P -->|"the ACTIONABLE count"| N["qubes.NotifyUpdates -> dom0's updates-available marker"]
-    P -->|"reboot_needed=true"| H
-```
+Status words and the section format are defined in `docs/ADR-README.md`.
 
 ---
+
+## The decisions in detail
+
+Where the details live:
+
+| record | content |
+|---|---|
+| `findings/updates.md` | standing facts about the update path, and retracted approaches |
+| `findings/issues.md` | the open issue register (P1/P2/P3), maintained in place |
+| `findings/rig.md` | rig and harness behaviour, including instrument traps |
+| `findings/install.md` | getting a build onto a guest |
+| `guest/qubes-windows-update.ps1`, `guest/qubes-updates-relay.cs`, `guest/wu-update.ps1`, `guest/install-updater-agent.ps1` | the components (§12.1) |
+| `tools/wu-pass-judge.py`, `tools/wu-log-judge.py`, `mgmt/harness/wu-e2e.sh` | the judges and the end-to-end harness (§9) |
 
 ## 1. dom0 owns updates; the guest never installs on its own
 
@@ -273,19 +332,7 @@ Rules that follow:
   that are missing.
 - **A vendor payload is never carved, repacked, extracted or provisioned by us.**
 
-```mermaid
-flowchart TD
-    S["Online search by the Windows Update agent, through the relay"] --> O["An offered update"]
-    O --> Q1{"Does the Update Catalog serve it as an .msu?<br/>(cumulatives and other express content)"}
-    Q1 -->|yes| M["We fetch the .msu through the relay and install from it"]
-    Q1 -->|no| Q2{"Is every NEEDED leaf's content static?<br/>(download.windowsupdate.com, not express)"}
-    Q2 -->|yes| W["Walk the bundle tree; fetch each needed leaf through the relay;<br/>IUpdate2.CopyToCache; IUpdateInstaller.Install.<br/>The agent runs each package with the update's own command line"]
-    W --> C{"Update complete in the agent's cache after CopyToCache?"}
-    C -->|no| FL["Row FAILS, naming the missing leaves"]
-    C -->|yes| V["Verdict (§12.3)"]
-    M --> V
-    Q2 -->|no| E["Row says why: FAILED, or informational under §2.<br/>Never a guess"]
-```
+(The flowchart for this decision is in "In plain English" at the top of this file.)
 
 **Why.** The switches are not ours to know. Where we guessed them we were wrong twice: `/q` made the Security
 platform installer exit 0 and do nothing; running the Defender delta ourselves, bare and with `/q`, failed,
@@ -334,19 +381,7 @@ therefore failed an update that had installed.
 - The Defender probes read the service's view (`Get-MpComputerStatus`), not the key that is watched, so their
   wake can come early. The cost is lateness up to the bound, never a wrong row (Jev 0.93).
 
-```mermaid
-flowchart TD
-    A["The agent's Install() returns for a row"] --> B{"Agent succeeded?"}
-    B -->|no| F["FAILED, with its HRESULT"]
-    B -->|yes| C{"An effect probe exists for this update?"}
-    C -->|no| I0["The agent's result stands; probe=none"]
-    C -->|yes| D{"First read: artefact at or above the offered version?"}
-    D -->|yes| I["installed"]
-    D -->|no| W["Arm RegNotifyChangeKeyValue on the artefact key;<br/>re-read on every wake; bound 60 s after the agent returned<br/>(a wait that cannot be armed is an ERROR)"]
-    W --> E{"The read after the wake, or after the expiry"}
-    E -->|"moved"| I
-    E -->|"still below"| G["FAILED, logged loudly as a disagreement"]
-```
+(The flowchart for this decision is in "In plain English" at the top of this file.)
 
 **A reboot left pending: at most ONCE** (the owner, 2026-10-03). The normal dom0-initiated update may leave
 the reboot pending: "It is ok if we show that updates are still pending and reboot is required to dom0 once, we
