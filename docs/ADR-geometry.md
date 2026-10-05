@@ -1,4 +1,4 @@
-# ADR - gui: window geometry between the guest and dom0
+# ADR - geometry: window geometry between the guest and dom0
 
 ## In plain English
 
