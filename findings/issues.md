@@ -1,6 +1,7 @@
 # issues — prioritized register by tag
 
 ## CURRENT STATE
+- P2 [user-facing, notifications; cause UNVERIFIED] **A FORWARDED NOTIFICATION LEFT DOM0'S SCREEN SOONER THAN ITS 20 S (owner 2026-10-06: "it did not stay", "it did NOT stay for 20s").** The notice was Windows' logon reminder "Consider changing your password", forwarded by the bridge (informational, expire_timeout 20000). For the one traced in the bridge log (sent 21:47:05) dom0 answered NotificationClosed reason=1 (expired) at 21:47:25 - exactly 20 s; the ones the owner watched came later (gate and probe boots ~22:00-22:08 guest time) and have no dom0 close on record (the guests were shut down soon after; the stock proxy does NOT close a guest's notifications on disconnect - notification-proxy-server.rs only leaves its loop). Not measured: what dom0's notification daemon does with expire_timeout and urgency for a popup. Next: a controlled forwarded notice with the guest kept running, timed by the owner.
 AUTHORITATIVE — and the ONLY content of this file. The owner-required standing view
 (2026-09-01): every open issue, tagged and prioritized, maintained IN PLACE — close by
 DELETING the bullet, never by appending. P1 = owner action needed or top product risk;

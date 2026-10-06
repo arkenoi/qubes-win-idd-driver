@@ -1,9 +1,10 @@
-# QWT-NG 4.3.35 — the Windows Update agent is installed even during an update check, the hidden Start menu no longer takes clicks, and an app's first notification is shown once
+# QWT-NG 4.3.35 — the Windows Update agent is installed even during an update check, the hidden Start menu no longer takes clicks, an app's first notification is shown once, and the autologon password no longer expires
 
 Everything in 4.3.34 is carried forward. This release fixes two defects reported from the field on a German Windows 11 25H2
 template: an upgrade that quietly kept the previous Windows Update agent, and a Windows Start menu that was open but invisible. It
-also hardens the GUI agent's connection to dom0 against a dialog that could end a qube's GUI after an upgrade, and stops an
-app's first notification from reaching dom0 twice.
+also hardens the GUI agent's connection to dom0 against a dialog that could end a qube's GUI after an upgrade, stops an app's
+first notification from reaching dom0 twice, keeps the account autologon uses from expiring, and gives dom0 notifications a
+display time by kind: errors stay until you dismiss them, warnings 60 s, informational messages 20 s.
 
 ## The Windows Update agent is installed even when an update scan is running
 
@@ -72,10 +73,32 @@ not confirmed within 3 seconds: a notification is never lost waiting for the bri
 banners off, and the switches older versions left behind are undone. In non-seamless mode nothing is forwarded: every
 notification shows once, inside the Windows desktop window.
 
+## The account autologon uses no longer expires
+
+Windows ages a local account's password out after 42 days by default, and reminds you at every sign-in ("Consider changing your
+password"). Measured on our Windows 10 test image: the password was set on 30 August and would have expired on 11 October.
+Windows Tools keeps autologon working because a qube that stops at the sign-in screen is unreachable - in seamless mode that
+screen is not even shown. An expired password stops autologon exactly like a wrong one, and so does changing the password at
+Windows' prompt, until autologon is set up again with the new one.
+
+Now the installer sets the account that autologon signs in with to "password never expires", and the boot check that keeps
+autologon working sets it again if anything turns expiry back on. A password that has already expired works again once the
+setting is made. This applies to local accounts only, and qubes you upgrade get it at the upgrade and at every boot. The qube is
+Qubes' security boundary; the password is already stored in the guest so that autologon can use it.
+
+## dom0 notifications: errors stay, warnings 60 s, informational messages 20 s
+
+A notification a Windows qube sends to dom0 now stays on screen by its kind: an error until you dismiss it, a warning for 60 s, an
+informational message for 20 s. A forwarded Windows notification is informational. Until now every notice Windows Tools sent
+itself was treated as an error, so the new one-time notice that the hidden Start menu was closed would have stayed until
+dismissed; it is informational and goes after 20 s.
+
 ## Known and not fixed
 
 - The items under "Known and not fixed" in the 4.3.34 notes stand.
 - The updater deploy is not retried at the next boot when it was refused; the remedy is `install.cmd /updatesonly`.
+- A forwarded notification was seen to leave dom0's screen sooner than its 20 s. For the one we could trace, dom0 reported it
+  expired after exactly 20 s; the cause of the earlier disappearance is not known yet.
 - A notification that stays in the guest (one with buttons, for instance) and is followed, while Windows still shows it, by a
   notification that is forwarded to dom0 is not shown in dom0: in the tests it was either never shown or withdrawn after a split
   second. It stays in Windows' notification center. The fix - keep it on screen until Windows swaps in the second one - is
