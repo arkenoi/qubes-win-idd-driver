@@ -51,6 +51,38 @@ $pass = Get-WL 'DefaultPassword'
 if (-not $user) { Write-Output 'WARN   DefaultUserName is not set - autologon cannot work'; $warn++ }
 else { Write-Output "ok     DefaultUserName=$user" }
 
+# The autologon account's password must not expire (owner decision 2026-10-06; set-autologon.ps1 sets it at arming).
+# Re-asserted here because a policy or the user can turn expiry back on, and an expired password stops autologon exactly
+# like a wrong one. A password that is ALREADY past its date and cannot be fixed means autologon will not happen (warn,
+# exit 2); one that merely cannot be changed yet is reported without touching the exit contract.
+$pwNoExpire = 'n/a'
+if ($user) {
+    $dom = Get-WL 'DefaultDomainName'
+    if (-not $dom -or $dom -eq $env:COMPUTERNAME) {
+        $due = $null
+        try {
+            $lu = Get-LocalUser -Name $user -ErrorAction Stop
+            $due = $lu.PasswordExpires
+            if ($null -ne $due) {
+                Set-LocalUser -Name $user -PasswordNeverExpires $true -ErrorAction Stop
+                $changed++
+                Write-Output "ok     set the password of $user never to expire (it was due $due)"
+            } else {
+                Write-Output "ok     the password of $user never expires"
+            }
+            $pwNoExpire = 'yes'
+        } catch {
+            $pwNoExpire = 'error'
+            if ($null -ne $due -and $due -le (Get-Date)) {
+                Write-Output "WARN   the password of $user EXPIRED $due and could not be set never to expire - autologon will fail"
+                $warn++
+            } else {
+                Write-Output "WARN   could not check or set the password expiry of ${user}: $($_.Exception.Message.Split([char]10)[0])"
+            }
+        }
+    }
+}
+
 # The password may live in the LSA secret instead of the registry - that is where
 # set-autologon.ps1 puts it, because an LSA secret is not consumed by AutoLogonCount and is not
 # world-readable plaintext. Winlogon reads it when the registry value is absent, so a guest with
@@ -154,7 +186,7 @@ Write-Output ''
 # warnings= counts the unverified case too, so a caller that only reads the trailer (the
 # installer's stage-2 verify) does not log "armed" for a state it could not check; lsa= says which
 # case it was, reason= which repair applies.
-Write-Output ("=== RESULT === changed=$changed warnings=$($warn + $unknown) lsa=$lsaState reason=$reason")
+Write-Output ("=== RESULT === changed=$changed warnings=$($warn + $unknown) lsa=$lsaState reason=$reason pwnoexpire=$pwNoExpire")
 # EXIT CODE IS A CONTRACT: 0 = autologon will happen on the next boot, 2 = it will NOT and the
 # qube would come back unreachable, 3 = it could not be VERIFIED (the LSA probe itself failed; no
 # positive finding either way). The updater refuses to reboot on 2 rather than knowingly stranding
