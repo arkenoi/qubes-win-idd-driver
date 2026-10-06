@@ -118,9 +118,12 @@
                                        // is NotifyHandoffToSession, so the dependency stays with it
 #include <objbase.h>    // CoCreateInstance / CoInitializeEx (WIN32_LEAN_AND_MEAN leaves it out)
 #include <shellapi.h>   // ShellExecuteExW - a protocol action's URI launch (WIN32_LEAN_AND_MEAN leaves it out)
-#include <shobjidl.h>   // IShellLinkW / IPersistFile - the Start-menu shortcut that names a toast activator
+// The _core headers, NOT <shobjidl.h>/<shlobj.h>: those declare the shell's IUserNotification coclass as a global
+// `UserNotification`, ambiguous with winrt::Windows::UI::Notifications::UserNotification used unqualified in this file (C2872 in
+// CI 37538814618). The Start-menu shortcut lookup needs only IShellLinkW and SHGetFolderPathW.
+#include <shobjidl_core.h>   // IShellLinkW / IPersistFile - the Start-menu shortcut that names a toast activator
 #include <propsys.h>    // IPropertyStore - System.AppUserModel.ID / ToastActivatorCLSID on that shortcut
-#include <shlobj.h>     // SHGetFolderPathW(CSIDL_PROGRAMS / CSIDL_COMMON_PROGRAMS)
+#include <shlobj_core.h>     // SHGetFolderPathW(CSIDL_PROGRAMS / CSIDL_COMMON_PROGRAMS)
 #include <NotificationActivationCallback.h>   // INotificationActivationCallback - the shell's own activation call
 #pragma comment(lib, "shell32.lib")    // ShellExecuteExW, SHGetFolderPathW
 #pragma comment(lib, "ole32.lib")      // CoCreateInstance / PropVariantClear / CLSIDFromString
