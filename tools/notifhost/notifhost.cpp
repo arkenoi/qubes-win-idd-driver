@@ -9,8 +9,8 @@
 // AUMIDs) are read via UserNotificationListener and forwarded over ONE long-lived
 // qubes.Notifications connection to the dom0-native notification service; their Windows
 // banner is never mapped into dom0 - the AGENT holds each toast's banner window until this
-// bridge's per-notification record says bridge/window (docs/ADR-toasts.md 10, the --hold /
-// --verdict IPC in agent/gui-agent/toastident.h; the per-AUMID ShowBanner=0 write is retired,
+// bridge's per-notification record says bridge/window (docs/ADR-toasts.md 10, the --hold
+// IPC in agent/gui-agent/toastident.h; the per-AUMID ShowBanner=0 write is retired,
 // only the sweep that undoes an older version's markers remains). dom0 dismissal is echoed
 // back as RemoveNotification (guest Notification Center stays in sync). Everything else -
 // every non-allowlisted app, and every toast while the bridge is unhealthy or disconnected -
@@ -143,10 +143,12 @@ static DWORD  g_mySession = 0;
 static HANDLE g_agentAlive = nullptr;   // --alive: a mutex the agent's main thread owns for its life - ABANDONED = died
 static HANDLE g_readyEvt = nullptr;     // --ready: set once our pid is published, so the agent takes it on that wake
 static HANDLE g_mainWake = nullptr;     // auto-reset: the reader / shadow threads queued work for the main loop
-// THE TOAST-HOLD RECORDS (docs/ADR-toasts.md 10). --hold names a section the SYSTEM agent created and this bridge
-// writes (one record per listed notification: content identity hashes + verdict + arrival tick, toastident.h);
-// --verdict an auto-reset event in the agent's main-loop wait array, set after every write. The agent holds each
-// toast's banner window unmapped until its record's verdict - this replaced the per-AUMID ShowBanner=0 write.
+// THE TOAST-HOLD RECORDS (docs/ADR-toasts.md 10). --hold: a section the SYSTEM agent created and this bridge
+// writes (one record per listed notification: content identity hashes + verdict + arrival tick, toastident.h),
+// and an auto-reset event in the agent's main-loop wait array, set after every write - named <prefix>_hold and
+// <prefix>_verdict from the --alive name <prefix>_alive (or given explicitly: --hold <section> --verdict <event>).
+// The agent holds each toast's banner window unmapped until its record's verdict - this replaced the per-AUMID
+// ShowBanner=0 write.
 static TH_IPC_HEADER* g_hold = nullptr;          // nullptr: no section this run (older agent) - nothing is published
 static HANDLE g_holdVerdictEvt = nullptr;
 // The dom0 connection state. Defined up here (not with the pipe plumbing below) because the shadow worker's verdict
@@ -3535,6 +3537,8 @@ int wmain(int argc, wchar_t** argv)
     int dumpdbN = 20, dumpEtwSecs = 30, probeSecs = 30;
     std::wstring notifySummary, notifyBody;
     const wchar_t* notifyFile = nullptr;
+    const wchar_t* aliveName = nullptr;   // remembered for a bare --hold (names derived from it)
+    bool holdDerive = false;
     for (int i = 1; i < argc; i++)
     {
         if (_wcsicmp(argv[i], L"--agent-pid") == 0 && i + 1 < argc)
@@ -3576,14 +3580,39 @@ int wmain(int argc, wchar_t** argv)
         }
         else if (_wcsicmp(argv[i], L"--sub") == 0) probeSub = true;
         else if (_wcsicmp(argv[i], L"--alive") == 0 && i + 1 < argc)
+        {
+            aliveName = argv[i + 1];
             g_agentAlive = OpenMutexW(SYNCHRONIZE, FALSE, argv[++i]);
+        }
         else if (_wcsicmp(argv[i], L"--ready") == 0 && i + 1 < argc)
             g_readyEvt = OpenEventW(EVENT_MODIFY_STATE, FALSE, argv[++i]);
-        else if (_wcsicmp(argv[i], L"--hold") == 0 && i + 1 < argc) HoldOpen(argv[++i]);
+        // --hold <section> [--verdict <event>], or a BARE --hold: then both names are derived from the --alive name
+        // (the agent names all four objects Global\\QubesToastBridge_<nonce>_{alive,ready,hold,verdict}). The bare form
+        // exists because Task Scheduler refuses a /tr longer than 261 characters, and four nonce'd names do not fit
+        // (measured 2026-10-06: the toast-hold build's bridge never started - "schtasks /create failed").
+        else if (_wcsicmp(argv[i], L"--hold") == 0)
+        {
+            if (i + 1 < argc && wcsncmp(argv[i + 1], L"--", 2) != 0) HoldOpen(argv[++i]);
+            else holdDerive = true;
+        }
         else if (_wcsicmp(argv[i], L"--verdict") == 0 && i + 1 < argc)
             g_holdVerdictEvt = OpenEventW(EVENT_MODIFY_STATE, FALSE, argv[++i]);
         else if (_wcsicmp(argv[i], L"--notify-errors") == 0 && i + 1 < argc) g_notifyErrorsGate = (_wtoi(argv[++i]) != 0);
         else if (_wcsicmp(argv[i], L"--client-sid") == 0 && i + 1 < argc) i++;   // consumed by etwproxy.exe
+    }
+    if (holdDerive)
+    {
+        const size_t suffix = wcslen(L"_alive");
+        const size_t n = aliveName ? wcslen(aliveName) : 0;
+        if (n > suffix && n < 200 && _wcsicmp(aliveName + n - suffix, L"_alive") == 0)
+        {
+            std::wstring prefix(aliveName, n - suffix);
+            HoldOpen((prefix + L"_hold").c_str());
+            g_holdVerdictEvt = OpenEventW(EVENT_MODIFY_STATE, FALSE, (prefix + L"_verdict").c_str());
+            if (!g_holdVerdictEvt) BLog(L"HOLD verdict event %s_verdict not opened (%lu)", prefix.c_str(), GetLastError());
+        }
+        else
+            BLog(L"HOLD a bare --hold needs an --alive name ending in _alive to derive the section and event from - no records published");
     }
     if (etwproxy)
     {
