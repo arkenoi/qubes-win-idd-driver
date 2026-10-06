@@ -26,7 +26,7 @@ if cbuild c-clean ""; then
     n=$(grep -c '^ok' "$OUT/c-clean.out"); f=$(grep -c '^FAIL' "$OUT/c-clean.out")
     if [ $rc -eq 0 ] && [ "$f" -eq 0 ] && [ "$n" -gt 40 ]; then say "PASS  C clean: rc=0 ok=$n fail=0"; else say "FAIL  C clean: rc=$rc ok=$n fail=$f"; bad=1; fi
 else say "FAIL  C clean build: $(head -3 "$OUT/c-clean.build.err")"; bad=1; fi
-for d in SEVERITY RATELIMIT CAP REDACT FAILOPEN CLOSEREBOOT; do
+for d in SEVERITY RATELIMIT CAP REDACT FAILOPEN CLOSEREBOOT LAZYMINT ACL_EVERYONE; do
     if cbuild "c-defect-$d" "-DNOTIFYERR_DEFECT_$d"; then
         NOTIFYERR_TEST_DIR="$OUT" "$OUT/c-defect-$d" >"$OUT/c-defect-$d.out" 2>&1; rc=$?
         f=$(grep -c '^FAIL' "$OUT/c-defect-$d.out")

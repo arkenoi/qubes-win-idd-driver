@@ -599,7 +599,8 @@ jobs:
                            'TOASTHOLD_DEFECT_PREEMPT_IDENTGATE', 'TOASTHOLD_DEFECT_SUPPRESS_FINAL',
                            'TOASTHOLD_DEFECT_NORECLAIM', 'TOASTHOLD_DEFECT_NOIDENT_IGNORES_BRIDGE',
                            'TOASTHOLD_DEFECT_NOFORWARDBOUND', 'TOASTHOLD_DEFECT_NOCARD_UNPACED', 'TOASTHOLD_DEFECT_SIZE60',
-                           'TOASTHOLD_DEFECT_DEADRECORDS', 'TOASTHOLD_DEFECT_NOBACKOFF')) {
+                           'TOASTHOLD_DEFECT_DEADRECORDS', 'TOASTHOLD_DEFECT_NOBACKOFF',
+                           'TOASTIDENT_DEFECT_TIE_SLOTORDER', 'TOASTHOLD_DEFECT_RECLAIM_ANY')) {
             & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 `
                 /t:Rebuild "/p:ToastHoldDefect=$d"
             if ($LASTEXITCODE -ne 0) { throw "toasthold_test defect $d build failed to compile" }
@@ -680,7 +681,10 @@ jobs:
           $env:NOTIFYERR_TEST_DIR = $env:RUNNER_TEMP
           & $exe
           if ($LASTEXITCODE -ne 0) { throw "notifyerr_test suite FAILED on the clean build" }
-          foreach ($d in 'SEVERITY', 'RATELIMIT', 'CAP', 'REDACT', 'FAILOPEN') {
+          # LAZYMINT / ACL_EVERYONE (2026-10-06, findings/issues.md P3): the agent must mint the per-boot token
+          # and prepare the state directory at START, and the directory's DACL must grant the interactive
+          # user - nobody else, never full control - or the bridge's own error reports never leave the guest.
+          foreach ($d in 'SEVERITY', 'RATELIMIT', 'CAP', 'REDACT', 'FAILOPEN', 'LAZYMINT', 'ACL_EVERYONE') {
             & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 `
                 /t:Rebuild "/p:NotifyErrDefect=NOTIFYERR_DEFECT_$d"
             if ($LASTEXITCODE -ne 0) { throw "notifyerr_test defect $d build failed to compile" }

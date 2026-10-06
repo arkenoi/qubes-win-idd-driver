@@ -2743,14 +2743,31 @@ static void ReportErrorSelf(const char* key)
     std::wstring marker = dir + L"\\notifhost." + wid;
     std::wstring countPath = dir + L"\\.count";
 
-    // The boot stamp is DERIVED here (wall clock - uptime), not the shared volatile token the agent and the
-    // guest scripts use (QERR_BOOT_KEY): this bridge runs as the interactive USER (a /ru <user> /it task), and
-    // minting or even opening that HKLM key for write needs SYSTEM or an elevated token - a user-context read
-    // finds no token until the agent has reported something. Sharing it needs the agent to mint it at start and
-    // this side to open it read-only; recorded in findings/issues.md, not done here (rz39 notification texts).
-    FILETIME ft; GetSystemTimeAsFileTime(&ft);
-    ULARGE_INTEGER u; u.LowPart = ft.dwLowDateTime; u.HighPart = ft.dwHighDateTime;
-    long long now = (long long)(u.QuadPart / 10000000ULL) - 11644473600LL - (long long)(GetTickCount64() / 1000ULL);
+    // THE SHARED per-boot token (QERR_BOOT_KEY), read-only. The AGENT mints it at its start (SYSTEM; notifyerr.c
+    // QerrInit) - this bridge runs as the interactive USER (a /ru <user> /it task) and can only open the volatile
+    // HKLM key for READ. The derived stamp (wall clock - uptime) that used to stand in here made this helper's
+    // markers compare against a different "boot" than the agent's and the scripts', so the once-per-boot rule did
+    // not hold across the binaries (findings/issues.md P3). No token = no boot identity = nothing is sent, loudly:
+    // the same rule the agent applies to itself (guessing would storm dom0 or swallow errors).
+    long long now = 0;
+    {
+        HKEY k = nullptr;
+        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, QERR_BOOT_KEY, 0, KEY_READ | KEY_WOW64_64KEY, &k) == ERROR_SUCCESS)
+        {
+            LONG64 tok = 0; DWORD cb = sizeof(tok), type = 0;
+            if (RegQueryValueExA(k, "Token", nullptr, &type, (LPBYTE)&tok, &cb) == ERROR_SUCCESS &&
+                type == REG_QWORD && cb == sizeof(tok))
+                now = (long long)tok;
+            RegCloseKey(k);
+        }
+    }
+    if (!now)
+    {
+        BLog(L"NOTIFYERR notifhost.%S not sent: no per-boot token under HKLM\\%S - the agent mints it at its start "
+             L"(an agent older than this helper, or not started yet); without a boot identity neither once-per-boot "
+             L"nor the cap can be honoured, so nothing is sent", id, QERR_BOOT_KEY);
+        return;
+    }
 
     std::string s; long long mb = 0, cb = 0; unsigned cnt = 0, newCnt = 0;
     int mp = ReadSmallA(marker, s) && QerrParseMarker(s.c_str(), &mb);
@@ -2761,7 +2778,9 @@ static void ReportErrorSelf(const char* key)
     char kv[64];
     if (!QerrFormatMarker(kv, sizeof(kv), now) || !WriteSmallA(marker, kv, (DWORD)strlen(kv)) ||
         !QerrFormatCount(kv, sizeof(kv), now, newCnt) || !WriteSmallA(countPath, kv, (DWORD)strlen(kv)))
-    { BLog(L"NOTIFYERR state dir not writable - not sent (no once-per-boot record, so no send)"); return; }
+    { BLog(L"NOTIFYERR state dir not writable - not sent (no once-per-boot record, so no send). The agent grants the "
+           L"interactive user write access on the state directory at its start (notifyerr.c QerrInit); a directory an "
+           L"older agent created stays SYSTEM-only until that agent is replaced"); return; }
 
     // UTF-16LE + BOM, what ReadNotifyFile reads; a unique name per send (it is deleted after reading).
     std::wstring file = dir + L"\\out-notifhost-" + std::to_wstring(GetTickCount64()) + L".txt";

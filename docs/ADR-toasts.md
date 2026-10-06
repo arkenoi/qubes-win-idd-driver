@@ -159,18 +159,47 @@ in the guest's own Notification Center.
 it in dom0 and the guest still believes it is pending. Sync is what makes forwarding a move rather than a
 duplication.
 
-## 6. Error reporting is a sibling route, not this one
+## 6. Error reporting is a sibling route, not this one - and its shared state is the agent's to prepare
 
-**Status:** ACCEPTED.
+**Status:** ACCEPTED. Rule 3 added 2026-10-06 for 4.3.35 (the P3 register entry on notifhost's own reports; found by
+code reading, fixed in code; Jev verdict on the amendment owed, the guest verification owed).
 
-**Decision.** `service.notify-errors` raises ACTION-severity agent faults to dom0 as notifications, through the
-same helper but a different path (`--notify-file`, one-shot). It is bounded - once per distinct error per boot,
-at most 8 per boot, secret-shaped text refused - and it is **in addition to** the guest log line, never instead
-of it. `service.legacy-toasts` does not affect it.
+**Context.** Three writers share the route's per-boot token (a volatile HKLM key) and its state directory under
+ProgramData: the agent and the guest scripts run as SYSTEM, the toast bridge as the interactive user. The user can
+neither mint the token nor write a `.count` or a marker a SYSTEM process created, so the bridge's own reports (listener
+consent denied, listener init failed) were never sent, and its derived stand-in stamp compared against a different
+"boot" than everyone else's.
 
-**Why.** A fault the operator never sees is a fault that does not get fixed, and a log line inside a guest
-nobody opens is that. Bounding it keeps a failing guest from becoming a notification storm. Keeping the log
-line means the evidence survives even when qrexec, which this route rides, is down.
+**Decision.**
+
+1. `service.notify-errors` raises ACTION-severity agent faults to dom0 as notifications, through the same helper but a
+   different path (`--notify-file`, one-shot). It is bounded - once per distinct error per boot, at most 8 per boot,
+   secret-shaped text refused - and it is **in addition to** the guest log line, never instead of it.
+   `service.legacy-toasts` does not affect it.
+2. The gate, the redaction and the two bounds are the same for every writer and are decided by the shared policy core
+   (`notifyerr.h`), which each binary compiles.
+3. The agent (SYSTEM) prepares the shared state at its START: it mints the per-boot token before anything can report,
+   and it creates the state directory with a DACL that grants the interactive user read/write/traverse on the directory
+   and read/write/delete on the files under it - that grant only, never Everyone, never full control to the user -
+   propagated to files that already exist. The bridge opens the token read-only and sends nothing without it, loudly.
+
+**Why.** A fault the operator never sees is a fault that does not get fixed, and a log line inside a guest nobody
+opens is that. Bounding it keeps a failing guest from becoming a notification storm. Keeping the log line means the
+evidence survives even when qrexec, which this route rides, is down. Preparing the shared state once, as SYSTEM, is
+the only way the user-mode writer can honour the same once-per-boot rule as the others without being handed SYSTEM's
+rights: the token stays SYSTEM-minted, the directory grant is the narrowest that lets the bridge write its own files.
+
+**Cost.** One registry write and one DACL application at agent start. A guest whose state directory an OLDER agent
+created stays SYSTEM-only until the new agent runs once (the propagation is done at every start).
+
+**Evidence.** Offline: `agent/gui-agent/notifyerr_test.c` - the token is established by init before any report (knob
+`NOTIFYERR_DEFECT_LAZYMINT` seen to fail), the directory is created by init, and the DACL text grants the interactive
+user and nobody else with no full control (knob `NOTIFYERR_DEFECT_ACL_EVERYONE` seen to fail). On a guest: owed -
+`icacls C:\ProgramData\Qubes\notify-errors` after an agent start must show the interactive-user grant and no Everyone
+entry; then the bridge's listener-denied path must produce a dom0 notification once per boot.
+
+**Open.** The DACL's application (`SetNamedSecurityInfo`) and the read-only token read under the user token cannot be
+exercised offline.
 
 ## 7. Every gate is read once, at agent start
 
@@ -248,9 +277,12 @@ banner is identified by its content, never by its window or by arrival order alo
    record per listed notification - content identity hashes (sender, title, message; normalized the same way on both
    sides), verdict pending/bridge/window/forwarded, arrival tick - into a section the agent created, and signals an event
    the agent's main loop waits on. Nothing polls.
-3. Matching is by content; arrival order only breaks ties between identical texts. A record with the same sender and
-   title but another message is taken only when it is the unique such candidate. The identity is read in the UI
-   Automation raw view, on the toastcrop worker, bounded.
+3. Matching is by content; arrival order only breaks ties between identical texts - by arrival tick, then by the
+   record's publish sequence, never by its position in the ring (which reorders across a wrap). A record with the same
+   sender and title but another message is taken only when it is the unique such candidate. A banner re-claims the
+   record it already consumed only when a later reading COMPLETES the earlier one (same sender and title, the message
+   empty before or a prefix of the new one); other content in the same window is a new toast and must match its own
+   record or fail open. The identity is read in the UI Automation raw view, on the toastcrop worker, bounded.
 4. A suppression is not final: a record that turns `window`, a bridge that dies before dom0's acknowledgement (unless
    the record says `forwarded`), and a suppression not acknowledged within 3 s each show the banner after all, loudly.
    A dead bridge's unacknowledged records read as `window`.
