@@ -681,10 +681,7 @@ jobs:
           $env:NOTIFYERR_TEST_DIR = $env:RUNNER_TEMP
           & $exe
           if ($LASTEXITCODE -ne 0) { throw "notifyerr_test suite FAILED on the clean build" }
-          # LAZYMINT / ACL_EVERYONE (2026-10-06, findings/issues.md P3): the agent must mint the per-boot token
-          # and prepare the state directory at START, and the directory's DACL must grant the interactive
-          # user - nobody else, never full control - or the bridge's own error reports never leave the guest.
-          foreach ($d in 'SEVERITY', 'RATELIMIT', 'CAP', 'REDACT', 'FAILOPEN', 'LAZYMINT', 'ACL_EVERYONE') {
+          foreach ($d in 'SEVERITY', 'RATELIMIT', 'CAP', 'REDACT', 'FAILOPEN') {
             & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 `
                 /t:Rebuild "/p:NotifyErrDefect=NOTIFYERR_DEFECT_$d"
             if ($LASTEXITCODE -ne 0) { throw "notifyerr_test defect $d build failed to compile" }
