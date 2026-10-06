@@ -20,10 +20,12 @@ notification may lose its dom0 rendering, never its delivery. Dismissing the dom
 too. Agent faults travel to dom0 on a separate, bounded route that these switches do not affect. All switches
 are read once when the agent starts, and dom0's settings win over the guest's.
 
-One defect is open. The first toast of an application routed by the classifier appears twice, because the
-guest banner is already on screen when the verdict arrives. The proposed fix is for the agent not to show the
-banner window at all until the verdict is in, instead of flipping Windows' per-application banner setting
-after the fact.
+The first toast of an application routed by the classifier used to appear twice, because the guest banner was
+already on screen when the verdict arrived. Now the agent does not show the banner window at all until that
+toast's own verdict is in (§10): forwarded, it is never shown; kept on the window path, it is shown at once; no
+verdict within about three seconds, it is shown and the fall-back is logged. Windows' per-application banner
+setting is no longer touched. In non-seamless mode, where the guest's banner is visible inside the desktop window,
+the bridge forwards nothing, so no toast is shown twice there either.
 
 How one toast is routed (§2, §3, §7, §8). §10 changes how the banner is suppressed, not the route:
 
@@ -34,7 +36,7 @@ flowchart TD
     G -->|"bridge on"| H{"Bridge healthy, dom0 connection up?"}
     H -->|no| W
     H -->|yes| L{"Sender's AUMID in NotifyBridgeAllow,<br/>or in the built-in seed (§4)?"}
-    L -->|yes| F["Forward to dom0's qubes.Notifications;<br/>suppress the guest banner"]
+    L -->|yes| F["Forward to dom0's qubes.Notifications;<br/>the guest banner stays unmapped (§10)"]
     L -->|no| S{"Classifier usable? (§8: the wpndatabase<br/>schema matched for this process)"}
     S -->|no| W
     S -->|yes| V{"Verdict within 3 poll passes (about 6 s)?"}
@@ -57,7 +59,7 @@ flowchart TD
 | 7 | Every gate is read once, at agent start | ACCEPTED | 4.3.30 |
 | 8 | When the classifier cannot trust its inputs, it stops classifying | ACCEPTED | 4.3.31 |
 | 9 | The allowlist is a guest-side convenience; the switches that matter are dom0's | ACCEPTED | 4.3.30 |
-| 10 | The guest banner is suppressed by not mapping it, never by ShowBanner | PROPOSED (Jev), 2026-10-01 | - |
+| 10 | The guest banner is suppressed by not mapping it, never by ShowBanner | ACCEPTED (owner, Jev); built for 4.3.35, guest acceptance owed | 2026-10-04 |
 
 Status words and the section format are defined in `docs/ADR-README.md`.
 
@@ -217,43 +219,74 @@ would make a per-guest, per-application list a policy edit.
 
 ## 10. The guest banner is suppressed by not mapping it, never by ShowBanner
 
-**Status:** PROPOSED (Jev), 2026-10-01. The defect it addresses is the first-toast double, P1 in
-`findings/issues.md` (reprioritized by the owner 2026-10-04: "first toast shown twice is fucking ugly P1").
+**Status:** ACCEPTED (owner: "i thought we agreed on design, delay and everything"; Jev), 2026-10-04; proposed by Jev
+2026-10-01. Built 2026-10-06 for 4.3.35; the guest acceptance (`mgmt/harness/toast-hold-test.sh`, control first) is owed.
+The defect it fixes is the first-toast double, P1 in `findings/issues.md` (owner 2026-10-04: "first toast shown twice is
+fucking ugly P1").
 
-**Context.** Two defects measured on 2026-10-01 come from the per-application `ShowBanner=0` switch the bridge
-writes:
+**Context.** Two defects measured on 2026-10-01 come from the per-application `ShowBanner=0` switch the bridge wrote:
 
-- It is set only when a toast is forwarded, so the first classified toast of an app is already on screen and
-  reaches dom0 twice: the guest banner (captured as a window) and the dom0 notification. Seen by the owner
-  2026-10-01 ~11:59 on w11-ds: Windows Security raised "Microsoft Defender summary" at 11:59:52, the shell showed
-  its banner at once, the bridge held it for the classifier, routed it to dom0 at 11:59:55 and only then set
-  `ShowBanner=0` for that app, which suppresses LATER banners, not the one already up. After every bridge
-  restart the first classified toast of each app duplicates again.
-- It stays set until the bridge exits, so a later toast of the same app whose own verdict sends it to the
-  window path - an interactive one - is shown nowhere: a misroute that fails CLOSED, against §3.
+- It was set only when a toast was forwarded, so the first classified toast of an app was already on screen and reached
+  dom0 twice: the guest banner (captured as a window) and the dom0 notification. Seen by the owner 2026-10-01 ~11:59 on
+  w11-ds (Windows Security, "Microsoft Defender summary"). After every bridge restart it happened again.
+- It stayed set until the bridge exited, so a later toast of the same app whose own verdict sent it to the window path
+  was shown nowhere: a misroute that fails CLOSED, against §3.
 
-In seamless mode the user sees a guest banner only because the agent maps its window into dom0, so not mapping
-it is the whole suppression. Nothing in Windows' settings has to change, and every uncertain case (no verdict,
-unhealthy bridge, a window the agent cannot tie to a toast) falls to mapping the window: the behaviour that
-shipped. The owner: an occasional ~3 s delay on a first toast is fine, a flash of the guest banner before it
-disappears is not; Win10 may take the delay (its classifier reads the payload from the notification database,
-11 has it in the ETW record). Jev: agent-side hold 1.00 against per-toast ShowBanner toggling (racy with
-concurrent toasts) and RemoveNotification after forwarding (deletes the guest's Notification Center copy, §5)
-0.00; fails open by construction 0.89.
+Measured 2026-10-04 on retail Windows 11 26300 and Windows 10 19045: ONE ShellExperienceHost banner window
+(`Windows.UI.Core.CoreWindow`, "New notification") serves every toast of the session; the shell shows banners one at a
+time, first in first out, a queued one seconds after its arrival; a new banner arrives either by a collapse-and-grow
+cycle or in place (same rectangle, a burst of location changes). The card's UI Automation tree names it by
+non-localized ids: `NormalToastView` (the card), `SenderName`, `Title` (11) or `TitleText` (10), `MessageText`. So a
+banner is identified by its content, never by its window or by arrival order alone.
 
-**Proposal.** For a toast the bridge forwards, the agent keeps that toast's banner window unmapped until the
-toast's verdict arrives:
+**Decision.**
 
-| verdict | the banner window |
-|---|---|
-| `bridge` | never mapped; the guest banner times out unseen |
-| `window` | mapped at once |
-| none within §2's bound | mapped (fail open) |
+1. The agent keeps each toast's banner window unmapped in dom0 until THAT toast's verdict is known: `bridge` (or
+   `forwarded`) - never mapped; `window` - mapped at once; none within 3 s - mapped, and the fall-back is logged loudly
+   (`QGATOASTHOLDLATE`). A double is better than a loss; neither is the target.
+2. The bridge no longer writes `ShowBanner` (a sweep still restores markers older versions left). It publishes one
+   record per listed notification - content identity hashes (sender, title, message; normalized the same way on both
+   sides), verdict pending/bridge/window/forwarded, arrival tick - into a section the agent created, and signals an event
+   the agent's main loop waits on. Nothing polls.
+3. Matching is by content; arrival order only breaks ties between identical texts - by arrival tick, then by the
+   record's publish sequence, never by its position in the ring (which reorders across a wrap). A record with the same
+   sender and title but another message is taken only when it is the unique such candidate. A banner re-claims the
+   record it already consumed only when a later reading COMPLETES the earlier one (same sender and title, the message
+   empty before or a prefix of the new one); other content in the same window is a new toast and must match its own
+   record or fail open. The identity is read in the UI Automation raw view, on the toastcrop worker, bounded.
+4. A suppression is not final: a record that turns `window`, a bridge that dies before dom0's acknowledgement (unless
+   the record says `forwarded`), and a suppression not acknowledged within 3 s each show the banner after all, loudly.
+   A dead bridge's unacknowledged records read as `window`.
+5. While a newer record is still `bridge` or `pending`, a displayed window-path banner is unmapped before an in-place
+   swap can paint (pre-emption), bounded (3 s for `pending`, 15 s for `bridge`, never while the bridge is down).
+6. Only the banner is held: the ShellExperienceHost banner surface (a surface >= 90 % of the screen is not one); a window
+   with no toast card in two reads at least 250 ms apart is a flyout and is shown at once.
+7. Nothing runs at rest: deadlines are armed only while something is held, suppressed or pre-empted.
+8. In non-seamless mode the agent publishes the mode in the section header and the bridge forwards nothing: every toast
+   takes the window path there, its banner visible inside the desktop window (Jev 0.95).
 
-The per-application `ShowBanner=0` switch is retired: the bridge no longer writes it at all.
+Implementation: `agent/gui-agent/toastident.h` (the contract both binaries compile), `toasthold-core.h` (the state
+machine), `toasthold.c`, every UI Automation call in `toastcrop.c`, `tools/notifhost/notifhost.cpp`.
 
-**Open before design detail.** How a banner window corresponds to a notification on the target build was not
-measured when this was written (Jev: measure first, 0.58), and that measurement precedes the agent change,
-after the acceptance then running. It has since been taken on Win11 26300 and Win10 19045 (one shared banner
-window, FIFO, identity by non-localized UI Automation ids; recorded under the P1 in `findings/issues.md`), and
-the fix is in progress.
+**Why.** In seamless mode the user sees a guest banner only because the agent maps its window into dom0, so not mapping
+it is the whole suppression; nothing in Windows' settings has to change, and every uncertain case falls to mapping the
+window - the behaviour that shipped before. Owner: an occasional ~3 s delay on a first toast is fine, a flash is not.
+Jev 2026-10-01: agent-side hold 1.00 against per-toast ShowBanner toggling and RemoveNotification after forwarding
+(0.00); fails open by construction 0.89. Two independent reviews of the implementation (2026-10-06) found a flash path
+(pre-emption released during an identity read), a loss path (a suppression that ignored a later `window`), a permanent
+pre-emption for an unreadable card, an unpaced not-a-banner verdict and a pixel-based size cut; all fixed, each with a
+defect knob in the offline suite. Jev on the result: no doubles 0.79, the bounds are failure states 0.94, nothing at
+rest 0.71, nothing lost 0.54, top residual an identity mismatch on real banners (measured by the guest test).
+
+**Cost.** A first toast waits for its verdict: the identity read plus the verdict latency, at most 3 s, then shown. A
+window-path banner followed within its display time by a bridged toast loses the tail of its dom0 display (it stays in
+the guest's Notification Center). A flyout (Quick Settings, volume, clock) appears up to ~250 ms plus one read later.
+
+**Evidence.** Offline: `agent/gui-agent/toasthold_test.c` (176 checks, as C99 and as C++17) and
+`tools/notifhost/toasthold_bridge_test.cpp` (25 checks), every defect knob (15 + 2) seen to fail; CI builds and runs
+both suites. On a guest: owed - `mgmt/harness/toast-hold-test.sh` first on a build without the hold, where the first
+classified toast must come out as a DOUBLE (the detectors seen to fail), then on the candidate.
+
+**Open.** Not fixed by this section: a toast whose banner timed out before a correction is only in the guest's
+Notification Center; the identity of system toasts whose display name differs between the notification database and
+the card is unmeasured (a mismatch fails open: the double returns, logged).

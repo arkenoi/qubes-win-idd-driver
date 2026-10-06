@@ -8,8 +8,10 @@
 // Toasts from ALLOWLISTED apps (HKLM gui-agent config, NotifyBridgeAllow REG_MULTI_SZ of
 // AUMIDs) are read via UserNotificationListener and forwarded over ONE long-lived
 // qubes.Notifications connection to the dom0-native notification service; their Windows
-// banner is suppressed (per-AUMID ShowBanner=0, prior state recorded and restored) so the
-// toast does not also map as an override-redirect window in dom0. dom0 dismissal is echoed
+// banner is never mapped into dom0 - the AGENT holds each toast's banner window until this
+// bridge's per-notification record says bridge/window (docs/ADR-toasts.md 10, the --hold
+// IPC in agent/gui-agent/toastident.h; the per-AUMID ShowBanner=0 write is retired,
+// only the sweep that undoes an older version's markers remains). dom0 dismissal is echoed
 // back as RemoveNotification (guest Notification Center stays in sync). Everything else -
 // every non-allowlisted app, and every toast while the bridge is unhealthy or disconnected -
 // takes today's window path untouched: fail-open is the design invariant. Launched and
@@ -120,6 +122,8 @@
                                                 // the agent (wgcbroker_ipc.h include convention)
 #include "../../agent/gui-agent/notifytexts.h" // this helper's own notification texts, as rows the
                                                 // agent's offline render test holds to the rules
+#include "../../agent/gui-agent/toastident.h"  // the toast-hold contract: identity normalization/hashes
+                                                // + the per-notification record ring the agent reads
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
@@ -139,6 +143,17 @@ static DWORD  g_mySession = 0;
 static HANDLE g_agentAlive = nullptr;   // --alive: a mutex the agent's main thread owns for its life - ABANDONED = died
 static HANDLE g_readyEvt = nullptr;     // --ready: set once our pid is published, so the agent takes it on that wake
 static HANDLE g_mainWake = nullptr;     // auto-reset: the reader / shadow threads queued work for the main loop
+// THE TOAST-HOLD RECORDS (docs/ADR-toasts.md 10). --hold: a section the SYSTEM agent created and this bridge
+// writes (one record per listed notification: content identity hashes + verdict + arrival tick, toastident.h),
+// and an auto-reset event in the agent's main-loop wait array, set after every write - named <prefix>_hold and
+// <prefix>_verdict from the --alive name <prefix>_alive (or given explicitly: --hold <section> --verdict <event>).
+// The agent holds each toast's banner window unmapped until its record's verdict - this replaced the per-AUMID
+// ShowBanner=0 write.
+static TH_IPC_HEADER* g_hold = nullptr;          // nullptr: no section this run (older agent) - nothing is published
+static HANDLE g_holdVerdictEvt = nullptr;
+// The dom0 connection state. Defined up here (not with the pipe plumbing below) because the shadow worker's verdict
+// consults it: a `bridge` verdict while dom0 is unreachable must not hold a banner that nobody will forward.
+static volatile LONG g_connDead = 1;
 // THE LISTING'S PUSH SOURCES besides NotificationChanged (rest-zero S4c). Measured 2026-10-01 on 26100.1742:
 // NotificationChanged throws for this unpackaged process, and the notification platform does NOT write its database
 // when a toast arrives (wpndatabase.db-wal untouched across 10 toasts), so the WAL watcher never fires for them - while
@@ -267,9 +282,13 @@ static void ShowToast(std::wstring const& title, std::wstring const& body)
     ShowWindow(h, SW_SHOWNA); UpdateWindow(h);
 }
 
-static std::wstring FirstTexts(UserNotification const& un)
+// The toast's text elements as the listener exposes them: text[0] -> title, text[1..] -> body joined by '\n'.
+// RAW, no placeholder: the toast-hold identity (HoldPublish) must hash exactly what the banner shows, and the
+// banner shows nothing for a missing title. (toastident.h folds the '\n' joins to one space, the same as the
+// agent's ' '-joined UIA text blocks, so the two sides hash alike.)
+static void RawTexts(UserNotification const& un, std::wstring& title, std::wstring& body)
 {
-    std::wstring title, body;
+    title.clear(); body.clear();
     try {
         auto vis = un.Notification().Visual();
         auto bind = vis.GetBinding(KnownNotificationBindings::ToastGeneric());
@@ -279,6 +298,12 @@ static std::wstring FirstTexts(UserNotification const& un)
             for (auto const& e : els) { if (i == 0) title = e.Text().c_str(); else { if (!body.empty()) body += L"\n"; body += e.Text().c_str(); } i++; }
         }
     } catch (...) {}
+}
+
+static std::wstring FirstTexts(UserNotification const& un)
+{
+    std::wstring title, body;
+    RawTexts(un, title, body);
     if (title.empty()) title = L"Notification";
     return title + L"\x1f" + body;   // 0x1f separates title from body
 }
@@ -386,12 +411,18 @@ static void EnsureConsent()
     RegCloseKey(k);
 }
 
-// --- ShowBanner lifecycle -----------------------------------------------------------------
-// Suppression is LAZY - applied to an AUMID only after its first SUCCESSFUL forward while the
-// connection is up - and the pre-existing value is recorded in a marker file first, so every
-// exit path (and the next start, after a crash) can restore the user's setting. This is the
-// P.6 top-risk mitigation, strengthened: a bridge that never forwards never suppresses, so a
-// dead/failing bridge can never leave an allowlisted app bannerless-and-unforwarded.
+// --- ShowBanner lifecycle: RETIRED (docs/ADR-toasts.md 10, 2026-10-04) ------------------------
+// Until 4.3.34 the bridge wrote ShowBanner=0 per AUMID (prior value recorded in a SID-scoped marker
+// file, restored on every exit path and at the next start) so a forwarded toast's guest banner
+// would not also map in dom0. It could not do the job: the write happened only once a toast of
+// that app had forwarded, so the FIRST toast of every classifier-routed app was already on screen
+// and reached dom0 twice, and it stood until the bridge exited, so a LATER interactive toast of
+// the same app was shown nowhere (findings/issues.md P1). The agent now holds each toast's banner
+// window unmapped until THAT toast's verdict, which it learns from the records this bridge
+// publishes (the toast-hold block below). NOTHING HERE WRITES ShowBanner ANY MORE. What stays is
+// BannerRestoreAll: a guest upgraded from an older version may still carry its markers, and the
+// user's ShowBanner values they record are restored exactly as before (startup sweep, exit path,
+// the agent's gate-off --restore-banners one-shot).
 //
 // Markers are SID-scoped. HKCU is per-user but %ProgramData% is machine-wide, so a marker from
 // user A must never be restored into user B's hive; the SID in the filename keeps each user's
@@ -406,17 +437,10 @@ static ULONGLONG Fnv1a64(std::string const& s)
 
 // CurrentUserSid: MOVED to qtb_shared.h (console split) - shared with etwproxy.exe.
 
-// Marker basename glob for the current user (shared by MarkerPath and BannerRestoreAll).
+// Marker basename glob for the current user (BannerRestoreAll).
 static std::wstring MarkerPrefix()
 {
     return L"\\banner-" + std::to_wstring(Fnv1a64(Utf8(CurrentUserSid()))) + L"-";
-}
-
-static std::wstring MarkerPath(std::wstring const& aumid)
-{
-    wchar_t tail[48];
-    swprintf(tail, RTL_NUMBER_OF(tail), L"%016llx.prev", Fnv1a64(Utf8(aumid)));
-    return StateDir() + MarkerPrefix() + tail;
 }
 
 static std::wstring BannerKey(std::wstring const& aumid)
@@ -424,39 +448,91 @@ static std::wstring BannerKey(std::wstring const& aumid)
     return L"Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings\\" + aumid;
 }
 
-// Suppress ONE AUMID's banner (applied once the qubes.Notifications connection is proven UP),
-// recording the prior state in a SID-scoped marker so it can be restored on any exit path or a
-// later start.
-static void BannerApplyOne(std::wstring const& a)
+// --- the toast-hold records (docs/ADR-toasts.md 10; agent/gui-agent/toastident.h) -------------
+// One record per listed notification: the content identity the agent also computes from the banner's
+// UI Automation text (TiIdentFromTexts over DisplayName / text[0] / text[1..]: hashes only, no text),
+// the verdict as far as this bridge knows it (pending -> bridge/window), the arrival tick. Written into
+// the section the agent created (--hold) and announced with a SetEvent on the agent's verdict event
+// (--verdict) - the agent's main loop waits on it; nothing polls on either side. Without --hold (an
+// older agent) nothing is published and the agent maps banners as before.
+
+static void HoldOpen(const wchar_t* name)
 {
-    std::wstring marker = MarkerPath(a);
-    if (GetFileAttributesW(marker.c_str()) == INVALID_FILE_ATTRIBUTES)
+    HANDLE m = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, name);
+    if (!m) { BLog(L"HOLD section %s not opened (%lu) - no records this run; the agent shows every banner it cannot decide", name, GetLastError()); return; }
+    void* base = MapViewOfFile(m, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, 0);
+    CloseHandle(m);   // the view keeps the section alive
+    if (!base) { BLog(L"HOLD section %s not mapped (%lu)", name, GetLastError()); return; }
+    if (!ThIpcValid((TH_IPC_HEADER*)base)) { BLog(L"HOLD section %s carries no valid header (mixed install?) - ignored", name); UnmapViewOfFile(base); return; }
+    g_hold = (TH_IPC_HEADER*)base;
+}
+
+static void HoldSignal() { if (g_holdVerdictEvt) SetEvent(g_holdVerdictEvt); }
+
+static void HoldStart()
+{
+    if (!g_hold) { BLog(L"HOLD no --hold section from the agent (mixed install?) - banners are not held for this bridge's verdicts"); return; }
+    g_hold->BridgeStartTick = GetTickCount64();
+    TI_STORE32(&g_hold->BridgeAlive, 1);
+    HoldSignal();
+    BLog(L"HOLD records live (%d slots) - the agent holds each toast's banner until its record's verdict", (int)TH_IPC_RECORDS);
+}
+
+static void HoldStop()
+{
+    if (!g_hold) return;
+    TI_STORE32(&g_hold->BridgeAlive, 0);
+    HoldSignal();
+}
+
+static const wchar_t* HoldVerdictName(LONG v)
+{
+    return v == TH_VERDICT_BRIDGE ? L"bridge" : v == TH_VERDICT_WINDOW ? L"window"
+         : v == TH_VERDICT_FORWARDED ? L"forwarded" : L"pending";
+}
+
+// The agent's display mode (docs/ADR-toasts.md 10): TRUE in seamless mode, where the hold exists. In non-seamless/
+// fullscreen mode the guest draws its banner inside the one desktop window and nothing can withhold it - forwarding a
+// toast would show it twice - so every toast takes the window path while this is FALSE. Without a section (older
+// agent) the mode is unknown and routing is as before.
+static bool HoldSeamless()
+{
+    return !g_hold || TI_LOAD32(&g_hold->Seamless) != 0;
+}
+
+// Any thread - the shadow worker calls it with onlyIfPending (the ring's interlocked ops make it safe).
+// onlyIfPending: the classifier's answer may never override a route the listing settled (WindowOnly app,
+// allowlist, forward outcome); a `false` is the listing's own final word.
+static void HoldVerdict(uint32_t id, LONG verdict, bool onlyIfPending)
+{
+    if (!g_hold) return;
+    if (ThIpcSetVerdict(g_hold, id, verdict, onlyIfPending ? TRUE : FALSE))
     {
-        // record prior state: "absent", "0" or "1" (second line; first line = AUMID)
-        std::wstring prior = L"absent";
-        HKEY k;
-        if (!RegOpenKeyExW(HKEY_CURRENT_USER, BannerKey(a).c_str(), 0, KEY_READ, &k))
-        {
-            DWORD v = 0, cb = sizeof(v), type = 0;
-            if (!RegQueryValueExW(k, L"ShowBanner", nullptr, &type, (BYTE*)&v, &cb) && type == REG_DWORD)
-                prior = v ? L"1" : L"0";
-            RegCloseKey(k);
-        }
-        std::string body = Utf8(a + L"\n" + prior + L"\n");
-        HANDLE f = CreateFileW(marker.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                               FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (f != INVALID_HANDLE_VALUE)
-        { DWORD wr; WriteFile(f, body.data(), (DWORD)body.size(), &wr, nullptr); CloseHandle(f); }
+        HoldSignal();
+        BLog(L"HOLD id=%u verdict=%s%s", id, HoldVerdictName(verdict), onlyIfPending ? L" (classifier, was pending)" : L"");
     }
-    HKEY k;
-    if (!RegCreateKeyExW(HKEY_CURRENT_USER, BannerKey(a).c_str(), 0, nullptr, 0,
-                         KEY_SET_VALUE, nullptr, &k, nullptr))
-    {
-        DWORD zero = 0;
-        RegSetValueExW(k, L"ShowBanner", 0, REG_DWORD, (const BYTE*)&zero, sizeof(zero));
-        RegCloseKey(k);
-    }
-    BLog(L"ShowBanner=0 for %s (connection proven up)", a.c_str());
+}
+
+// Listing thread only: once per notification id (a toast left unseen for a retry is listed again).
+static void HoldPublish(UserNotification const& un, uint32_t id, std::wstring const& aumid, std::wstring const& app,
+                        LONG verdict, UINT32 flags)
+{
+    static std::unordered_set<uint32_t> published;   // listing thread only
+    if (!g_hold) return;
+    if (published.size() > 2048) published.clear();   // bound; a re-publish after a clear is harmless (newest seq wins)
+    if (!published.insert(id).second) return;
+    std::wstring title, body;
+    RawTexts(un, title, body);
+    TOAST_IDENT ident;
+    TiIdentFromTexts(app.c_str(), title.c_str(), body.c_str(), &ident);
+    const LONG seq = ThIpcPublish(g_hold, id, flags, Fnv1a64(Utf8(aumid)), &ident, verdict, GetTickCount64());
+    HoldSignal();
+    // Hashes only, per field: the record is what the agent matches the banner's text against, and a
+    // mismatch is diagnosed on the rig by comparing s/t/m here with the agent's QGATOASTHOLD/QGATOASTIDENT
+    // lines (which field disagrees says whether it is the sender, the title or the body spelling).
+    BLog(L"HOLD id=%u seq=%ld verdict=%s ident=%016llx s=%016llx t=%016llx m=%016llx flags=0x%x",
+         id, seq, HoldVerdictName(verdict), (unsigned long long)ident.Combined,
+         (unsigned long long)ident.Sender, (unsigned long long)ident.Title, (unsigned long long)ident.Message, flags);
 }
 
 // Restores every suppression this user's markers record. A marker found at STARTUP is positive
@@ -1824,6 +1900,11 @@ static void VerdictStorePut(uint32_t id, int route)
     g_verdict.route[id] = route;
     InterlockedExchange(&g_listWanted, 1);
     if (g_mainWake) SetEvent(g_mainWake);   // a toast may be waiting for this verdict: re-list now, not on a tick
+    // The agent is holding this toast's banner on the record published at listing: give it the verdict NOW,
+    // from this thread, rather than after the re-listing above (the ETW tier answers within the second; the
+    // listing adds its own latency). Only while the record is still pending - a settled route stands - and
+    // never `bridge` while dom0 is unreachable: nobody would forward it, so the banner must show.
+    HoldVerdict(id, (route == ToastRouteBridge && !g_connDead) ? TH_VERDICT_BRIDGE : TH_VERDICT_WINDOW, true);
 }
 // Returns true and sets *route when a verdict exists. Otherwise counts this pass: a toast whose
 // verdict never arrives must NOT be deferred for ever - after kVerdictMaxPasses it takes the
@@ -2179,7 +2260,7 @@ static HANDLE g_pipe = INVALID_HANDLE_VALUE;
 static HANDLE g_rdEvt = nullptr, g_wrEvt = nullptr;   // per-direction OVERLAPPED events
 static HANDLE g_connStop = nullptr;                   // manual-reset: aborts in-flight pipe i/o
 static HANDLE g_reader = nullptr;
-static volatile LONG g_connDead = 1;
+// g_connDead: defined with the bridge globals near the top (VerdictStorePut reads it).
 
 static HANDLE g_ackEvt = nullptr;                     // auto-reset; sends are sequential
 static volatile ULONGLONG g_awaitSeq = 0;
@@ -2724,6 +2805,7 @@ static int BridgeMain()
     std::wstring stopf = StateDir() + L"\\stop";
     DeleteFileW(stopf.c_str());       // a stale stop request must not kill a fresh start
     std::wstring hbf = StateDir() + L"\\heartbeat";
+    // (Markers exist only from versions before the agent-side hold - ADR-toasts 10; this version writes none.)
     // Crash leftovers from a previous instance are POSITIVE evidence of a suppression gap:
     // ShowBanner=0 stood through the supervision gap, so a toast from one of these AUMIDs that
     // fired in the gap showed no banner and was forwarded by nobody. Capture the AUMIDs before
@@ -2833,8 +2915,7 @@ static int BridgeMain()
         primed = true;
     } catch (...) { BLog(L"baseline read failed - will prime on the first good poll, forwarding nothing until then"); }
 
-    bool connected = false;                        // a connection is up (banners may be suppressed)
-    std::unordered_set<std::wstring> suppressed;   // AUMIDs whose banner is currently ShowBanner=0
+    bool connected = false;                        // a connection is up
     // Per-toast-id count of forward attempts REJECTED BY A LIVE SERVER (reply tag 1/2: ForwardText
     // returns false without marking the connection dead). Such a rejection is deterministic - the
     // center record persists, so unbounded retry would resend at 0.5 Hz forever. Transient failures
@@ -2871,6 +2952,7 @@ static int BridgeMain()
         if (g_readyEvt) SetEvent(g_readyEvt);
         else BLog(L"BRIDGE no --ready from the agent (mixed install?) - it will find our pid only on its own wakes");
     }
+    HoldStart();   // the toast-hold records are live from here (ADR-toasts 10)
     if (!g_agentAlive)
         BLog(L"BRIDGE no --alive from the agent (mixed install?) - the agent's death falls back to the 30 s pid probe");
     g_mainWake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
@@ -2922,28 +3004,25 @@ static int BridgeMain()
         if (WTSGetActiveConsoleSessionId() != g_mySession) { BLog(L"session changed"); break; }
         if (GetFileAttributesW(stopf.c_str()) != INVALID_FILE_ATTRIBUTES) { BLog(L"stop requested"); break; }
 
-        // connection maintenance. Down => every suppression RESTORED (fail-open: allowlisted apps
-        // take the window path while dom0 is unreachable) and re-suppression is re-applied once a
-        // fresh connection is proven UP.
+        // connection maintenance. Down => toasts stay on the window path (fail-open: the listing below
+        // publishes `window` for every toast it cannot forward) and the connection is re-established with
+        // a bounded backoff.
         //
-        // NO DOUBLE NOTIFICATIONS (owner, 2026-09-13). Suppression used to be lazy - applied to an
-        // AUMID only after one of its toasts had forwarded - so the FIRST toast of every app
-        // showed twice: the guest banner AND the dom0 notification. It is now applied to the whole
-        // allowlist the moment the connection is established, so no toast is ever both banner and
-        // notification.
-        //
-        // NOTHING IS LOST, and the reason is unchanged: suppression is tied to a PROVEN-UP
-        // connection, never to hope. ConnUp() has succeeded before a single banner is suppressed;
-        // the instant the connection dies, the block below restores every banner and clears the
-        // set, so an app is bannerless only while its toasts are demonstrably being delivered.
-        // Markers are written before each suppression, so a crash restores on next start too.
+        // NO DOUBLE NOTIFICATIONS (owner, 2026-09-13; P1 2026-10-04) and NOTHING IS LOST are both the
+        // AGENT's to deliver now (docs/ADR-toasts.md 10): it maps a toast's banner only after this bridge's
+        // record for that toast says `window`, never when it says `bridge`, and after 3 s regardless. This
+        // loop's part is to publish each toast's record at its first listing and to keep the verdict honest:
+        // `bridge` only for a toast that is being forwarded over a proven-up connection, `window` the moment
+        // it cannot be (dom0 unreachable, server rejection cap, no verdict in time). The per-AUMID
+        // ShowBanner=0 write that used to live here is retired - it doubled the first toast of every
+        // classifier-routed app and hid later interactive ones.
         if (g_connDead)
         {
             ConnDown();   // reap the reader/pipe of a connection that died mid-flight
-            if (connected || !suppressed.empty())
+            if (connected)
             {
-                BannerRestoreAll(); suppressed.clear(); connected = false;
-                BLog(L"connection down - banners restored, suppression cleared");
+                connected = false;
+                BLog(L"connection down - toasts take the window path until it is back");
             }
             if (!allow.empty() && now >= nextReconnect)
             {
@@ -2953,11 +3032,7 @@ static int BridgeMain()
                 if (ConnUp())
                 {
                     backoff = 0; connected = true; toastSignaled = true;
-                    // The connection is proven up: suppress the whole allowlist NOW, before any
-                    // of these apps can produce its first toast. This is what removes the double.
-                    for (auto const& a : allow)
-                        if (suppressed.insert(a).second) BannerApplyOne(a);
-                    BLog(L"connection up - %u allowlisted app(s) banner-suppressed up front (no double-show)",
+                    BLog(L"connection up - %u allowlisted app(s); banners are held per toast by the agent (no ShowBanner writes)",
                          (UINT)allow.size());
                 }
                 else
@@ -3043,6 +3118,20 @@ static int BridgeMain()
             {
                 struct NewToast { uint32_t id; std::wstring aumid, app, title, body; };
                 std::vector<NewToast> fresh;
+                // NON-SEAMLESS MODE (ADR-toasts 10): the agent says whether the hold exists right now. While it does
+                // not, every toast listed here takes the window path - the guest banner inside the desktop window is
+                // the one copy the user gets. Logged once per change, not per toast.
+                const bool seamless = HoldSeamless();
+                {
+                    static bool lastSeamless = true;
+                    if (seamless != lastSeamless)
+                    {
+                        lastSeamless = seamless;
+                        BLog(seamless ? L"MODE seamless - toasts are routed (the agent holds each banner for its verdict)"
+                                      : L"MODE non-seamless - every toast takes the window path: the guest draws its banner inside "
+                                        L"the desktop window, forwarding would double it");
+                    }
+                }
                 for (auto const& un : list)
                 {
                     uint32_t id = un.Id();
@@ -3057,15 +3146,39 @@ static int BridgeMain()
                     // then WpnCorrelate's WAL-paced retry) runs on the shadow worker, and
                     // the CLASSIFY line lands asynchronously. Dedupes internally so a
                     // retried allowlisted toast logs exactly once.
+                    const bool windowOnly = WindowOnly(aumid);
+                    bool listed = false;
+                    for (auto const& a : allow) if (_wcsicmp(a.c_str(), aumid.c_str()) == 0) { listed = true; break; }
+                    // THE TOAST-HOLD RECORD (docs/ADR-toasts.md 10): published ONCE per notification id, at its first
+                    // listing, with whatever this pass already settles - window-only app: window; allowlisted:
+                    // bridge; otherwise pending, decided by the classifier (VerdictStorePut) or by the passes below.
+                    // BEFORE the classifier is asked, so its verdict always finds the record. The agent is holding
+                    // this toast's banner on it.
+                    // `bridge` only for a toast that WILL be forwarded now: an allowlisted toast listed while dom0 is
+                    // unreachable is left unseen for the retry, and its banner must show meanwhile (window); when the
+                    // connection returns and it forwards, the record turns `forwarded` (a late second copy is the
+                    // accepted price of never losing one).
+                    HoldPublish(un, id, aumid, app,
+                                (windowOnly || !seamless) ? TH_VERDICT_WINDOW
+                                    : listed ? (g_connDead ? TH_VERDICT_WINDOW : TH_VERDICT_BRIDGE) : TH_VERDICT_PENDING,
+                                (listed ? TH_REC_FLAG_ALLOWLISTED : 0u) | (windowOnly ? TH_REC_FLAG_WINDOWONLY : 0u) |
+                                (app.empty() ? TH_REC_FLAG_NO_SENDER : 0u));
                     ShadowClassify(un, id, aumid);
-                    if (WindowOnly(aumid))
+                    if (windowOnly)
                     {
                         seen.insert(id); VerdictForget(id);
                         BLog(L"skip id=%u aumid=%s (window path; window-only app - its click is its action)", id, aumid.c_str());
                         continue;
                     }
-                    bool listed = false;
-                    for (auto const& a : allow) if (_wcsicmp(a.c_str(), aumid.c_str()) == 0) { listed = true; break; }
+                    if (!seamless)
+                    {
+                        seen.insert(id); VerdictForget(id);
+                        // A toast listed earlier in seamless mode (record pending/bridge, left unseen for a retry)
+                        // is settled here too, or its stale record would pre-empt banners once seamless returns.
+                        HoldVerdict(id, TH_VERDICT_WINDOW, false);
+                        BLog(L"skip id=%u aumid=%s (window path; non-seamless mode)", id, aumid.c_str());
+                        continue;
+                    }
 #if defined(P3AQ_DEFECT_ROUTE)
                     // DEFECT (seen-to-fail, autonomy rule 5): acquisition state gates the
                     // A0 routing. The routing-invariance detector (identical SENT/skip
@@ -3084,11 +3197,18 @@ static int BridgeMain()
                             if (route != ToastRouteBridge)
                             {
                                 seen.insert(id); VerdictForget(id);
+                                HoldVerdict(id, TH_VERDICT_WINDOW, false);   // the listing's final word
                                 BLog(L"skip id=%u aumid=%s (window path; classifier verdict)", id, aumid.c_str());
                                 continue;
                             }
                             BLog(L"route id=%u aumid=%s (bridge; classifier verdict)", id, aumid.c_str());
-                            VerdictForget(id);
+                            // The verdict is kept in the store until the forward SUCCEEDS (or is given up): forgetting it
+                            // here made a failed forward's retry find no verdict, wait out its passes and end as
+                            // "window" without ever forwarding - every forward failure was a loss (review #2).
+                            // `bridge` only over a live connection: disconnected, the forward path below leaves the
+                            // toast on the window path, and flipping its record bridge->window every pass would
+                            // churn the agent's hold (review N4).
+                            HoldVerdict(id, g_connDead ? TH_VERDICT_WINDOW : TH_VERDICT_BRIDGE, false);
                             listed = true;        // fall through to the forward path below
                         }
                         else if (passes < kVerdictMaxPasses)
@@ -3103,6 +3223,7 @@ static int BridgeMain()
                         else
                         {
                             seen.insert(id); VerdictForget(id);
+                            HoldVerdict(id, TH_VERDICT_WINDOW, false);
                             BLog(L"skip id=%u aumid=%s (window path; no verdict after %d passes)", id, aumid.c_str(), kVerdictMaxPasses);
                             continue;
                         }
@@ -3129,22 +3250,22 @@ static int BridgeMain()
                     if (g_connDead) return;   // transient path: unlimited fail-open retry
                     if (++fwdFails[id] >= kFwdFailCap)
                     {
-                        seen.insert(id); fwdFails.erase(id);
+                        seen.insert(id); fwdFails.erase(id); VerdictForget(id);
+                        // Nobody will ever forward it: the banner is the toast's only way to the user.
+                        HoldVerdict(id, TH_VERDICT_WINDOW, false);
                         BLog(L"GIVE UP id=%u after %d server rejections - not resent (guest center record kept)",
                              id, kFwdFailCap);
                     }
                 };
-                // Backstop only. The allowlist is suppressed up front on connect (see the
-                // connection-maintenance block), so this normally finds every AUMID already in
-                // `suppressed`. It still covers an AUMID that forwards without being in the set -
-                // e.g. an allowlist edited while the bridge runs.
-                auto suppressNow = [&](std::wstring const& aumid) {
-                    if (!aumid.empty() && suppressed.insert(aumid).second) BannerApplyOne(aumid);
-                };
                 if (fresh.empty() || g_connDead)
                 {
                     if (!fresh.empty())
+                    {
                         BLog(L"%u allowlisted toast(s) while disconnected - left on the window path (unseen, retried)", (UINT)fresh.size());
+                        // The banner is shown for each (window): a toast forwarded later, when the connection
+                        // returns, may then reach dom0 a second time - the accepted price of never losing one.
+                        for (auto const& e : fresh) HoldVerdict(e.id, TH_VERDICT_WINDOW, false);
+                    }
                     // leave `fresh` UNSEEN so they forward once the connection returns
                 }
                 else if (fresh.size() > 3)
@@ -3156,7 +3277,10 @@ static int BridgeMain()
                     wchar_t sum[256];
                     swprintf(sum, RTL_NUMBER_OF(sum), L"%u notifications (%s)", (UINT)fresh.size(), fresh[0].app.c_str());
                     bool ok = ForwardText(sum, lines, 0);
-                    if (ok) for (auto const& e : fresh) { seen.insert(e.id); suppressNow(e.aumid); fwdFails.erase(e.id); }
+                    // Acknowledged by dom0: the record turns `forwarded` - the agent's suppression now stands even if
+                    // this bridge dies (a `bridge` without the ack is reopened on bridge death: nobody knows whether
+                    // dom0 has it). The classifier's verdict is forgotten only now that the toast is done.
+                    if (ok) for (auto const& e : fresh) { seen.insert(e.id); fwdFails.erase(e.id); VerdictForget(e.id); HoldVerdict(e.id, TH_VERDICT_FORWARDED, false); }
                     else { for (auto const& e : fresh) capFailed(e.id); retryPending = true; }
                     BLog(L"SENT coalesced x%u: %s%s", (UINT)fresh.size(), ok ? L"OK" : L"FAIL",
                          ok ? L"" : L" (unseen, retried)");
@@ -3164,7 +3288,7 @@ static int BridgeMain()
                 else for (auto const& e : fresh)
                 {
                     bool ok = ForwardText(e.title, e.body.empty() ? e.app : e.body, e.id);
-                    if (ok) { seen.insert(e.id); suppressNow(e.aumid); fwdFails.erase(e.id); }
+                    if (ok) { seen.insert(e.id); fwdFails.erase(e.id); VerdictForget(e.id); HoldVerdict(e.id, TH_VERDICT_FORWARDED, false); }
                     else { capFailed(e.id); retryPending = true; }
                     BLog(L"SENT id=%u app='%s' title='%s': %s%s", e.id, e.app.c_str(), e.title.c_str(),
                          ok ? L"OK" : L"FAIL", ok ? L"" : L" (unseen, retried)");
@@ -3264,8 +3388,9 @@ static int BridgeMain()
     EtwTierStop();        // bounded join of the IPC client; no kernel session to reap -
                           // the ETW session belongs to the SYSTEM agent (etwproxy.c) now
 
-    // Restore unconditionally: any marker this (or a crashed prior) instance wrote must be undone
-    // on every exit path, whether or not we think a suppression is currently standing.
+    HoldStop();   // records go dark; the agent fails every held banner open on our exit anyway (its wait array)
+    // Markers: this version writes none (the agent's hold replaced ShowBanner, ADR-toasts 10); an older
+    // version's leftovers are still undone on every exit path.
     BannerRestoreAll();
     ConnDown();
     DeleteFileW(stopf.c_str());
@@ -3412,6 +3537,8 @@ int wmain(int argc, wchar_t** argv)
     int dumpdbN = 20, dumpEtwSecs = 30, probeSecs = 30;
     std::wstring notifySummary, notifyBody;
     const wchar_t* notifyFile = nullptr;
+    const wchar_t* aliveName = nullptr;   // remembered for a bare --hold (names derived from it)
+    bool holdDerive = false;
     for (int i = 1; i < argc; i++)
     {
         if (_wcsicmp(argv[i], L"--agent-pid") == 0 && i + 1 < argc)
@@ -3453,11 +3580,39 @@ int wmain(int argc, wchar_t** argv)
         }
         else if (_wcsicmp(argv[i], L"--sub") == 0) probeSub = true;
         else if (_wcsicmp(argv[i], L"--alive") == 0 && i + 1 < argc)
+        {
+            aliveName = argv[i + 1];
             g_agentAlive = OpenMutexW(SYNCHRONIZE, FALSE, argv[++i]);
+        }
         else if (_wcsicmp(argv[i], L"--ready") == 0 && i + 1 < argc)
             g_readyEvt = OpenEventW(EVENT_MODIFY_STATE, FALSE, argv[++i]);
+        // --hold <section> [--verdict <event>], or a BARE --hold: then both names are derived from the --alive name
+        // (the agent names all four objects Global\\QubesToastBridge_<nonce>_{alive,ready,hold,verdict}). The bare form
+        // exists because Task Scheduler refuses a /tr longer than 261 characters, and four nonce'd names do not fit
+        // (measured 2026-10-06: the toast-hold build's bridge never started - "schtasks /create failed").
+        else if (_wcsicmp(argv[i], L"--hold") == 0)
+        {
+            if (i + 1 < argc && wcsncmp(argv[i + 1], L"--", 2) != 0) HoldOpen(argv[++i]);
+            else holdDerive = true;
+        }
+        else if (_wcsicmp(argv[i], L"--verdict") == 0 && i + 1 < argc)
+            g_holdVerdictEvt = OpenEventW(EVENT_MODIFY_STATE, FALSE, argv[++i]);
         else if (_wcsicmp(argv[i], L"--notify-errors") == 0 && i + 1 < argc) g_notifyErrorsGate = (_wtoi(argv[++i]) != 0);
         else if (_wcsicmp(argv[i], L"--client-sid") == 0 && i + 1 < argc) i++;   // consumed by etwproxy.exe
+    }
+    if (holdDerive)
+    {
+        const size_t suffix = wcslen(L"_alive");
+        const size_t n = aliveName ? wcslen(aliveName) : 0;
+        if (n > suffix && n < 200 && _wcsicmp(aliveName + n - suffix, L"_alive") == 0)
+        {
+            std::wstring prefix(aliveName, n - suffix);
+            HoldOpen((prefix + L"_hold").c_str());
+            g_holdVerdictEvt = OpenEventW(EVENT_MODIFY_STATE, FALSE, (prefix + L"_verdict").c_str());
+            if (!g_holdVerdictEvt) BLog(L"HOLD verdict event %s_verdict not opened (%lu)", prefix.c_str(), GetLastError());
+        }
+        else
+            BLog(L"HOLD a bare --hold needs an --alive name ending in _alive to derive the section and event from - no records published");
     }
     if (etwproxy)
     {
@@ -3494,8 +3649,9 @@ int wmain(int argc, wchar_t** argv)
     }
     if (restore)
     {
-        // One-shot restorer of last resort: undo every ShowBanner suppression this user's
-        // markers record and exit. Launched by the agent (in the user session - markers are
+        // One-shot restorer of last resort: undo every ShowBanner suppression an OLDER version's
+        // markers record for this user (this version writes none - docs/ADR-toasts.md 10) and exit.
+        // Launched by the agent (in the user session - markers are
         // SID-scoped HKCU state) when the bridge gate is OFF and a crashed bridge may have
         // left markers behind: with the gate off no bridge will ever start to run its own
         // startup BannerRestoreAll, so without this pass those apps stay bannerless forever.
