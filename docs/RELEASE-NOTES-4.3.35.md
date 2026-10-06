@@ -1,8 +1,9 @@
-# QWT-NG 4.3.35 — the Windows Update agent is installed even during an update check, and the hidden Start menu no longer takes clicks
+# QWT-NG 4.3.35 — the Windows Update agent is installed even during an update check, the hidden Start menu no longer takes clicks, and an app's first notification is shown once
 
 Everything in 4.3.34 is carried forward. This release fixes two defects reported from the field on a German Windows 11 25H2
 template: an upgrade that quietly kept the previous Windows Update agent, and a Windows Start menu that was open but invisible. It
-also hardens the GUI agent's connection to dom0 against a dialog that could end a qube's GUI after an upgrade.
+also hardens the GUI agent's connection to dom0 against a dialog that could end a qube's GUI after an upgrade, and stops an
+app's first notification from reaching dom0 twice.
 
 ## The Windows Update agent is installed even when an update scan is running
 
@@ -56,14 +57,29 @@ nothing onto its connection before that version exchange is complete; a part of 
 and logged (`QGAHANDSHAKE` in the gui-agent log). This makes "the version comes first" true by construction. We have not
 identified the exact writer of those zeros, so if you still see the dialog, restart the qube and send us the gui-agent log.
 
+## An app's first notification is shown once
+
+With the notification bridge on (the default), the first notification of an app could reach dom0 twice: as the guest's own
+banner, captured like any window, and as the bridge's dom0 notification. The bridge learned where a notification belonged only
+after Windows had already shown its banner, and then switched that app's banners off - which also hid its later notifications
+that belong in the guest, so one with buttons could end up shown nowhere.
+
+Now the agent keeps every notification banner off your screen until the bridge has decided that notification - at most 0.4 s
+in the test on a Windows 11 guest. One the bridge sends to dom0 is shown once, as the dom0 notification, and its banner never
+appears; one that stays in the guest (one with buttons, for instance) is shown as its banner window, its buttons working. If the
+bridge has not decided within 3 seconds, the banner is shown anyway, and so is the banner of a forwarded notification dom0 has
+not confirmed within 3 seconds: a notification is never lost waiting for the bridge. The bridge no longer switches any app's
+banners off, and the switches older versions left behind are undone. In non-seamless mode nothing is forwarded: every
+notification shows once, inside the Windows desktop window.
+
 ## Known and not fixed
 
 - The items under "Known and not fixed" in the 4.3.34 notes stand.
 - The updater deploy is not retried at the next boot when it was refused; the remedy is `install.cmd /updatesonly`.
-- With the notification bridge on (the default), an app's first notification can still reach dom0 twice: as the guest's banner
-  and as the bridge's dom0 notification. The fix - the agent holds each banner until the bridge has decided that notification -
-  passed every single-notification case on a Windows 11 guest, but not two notifications in quick succession, so it is not in
-  this release.
+- A notification that stays in the guest (one with buttons, for instance) and is followed, while Windows still shows it, by a
+  notification that is forwarded to dom0 is not shown in dom0: in the tests it was either never shown or withdrawn after a split
+  second. It stays in Windows' notification center. The fix - keep it on screen until Windows swaps in the second one - is
+  planned for the next release.
 - Whether the dom0 notification arrives on an interactive install depends on the Qubes RPC agent being connected to dom0 when
   the installer sends it, after the updater step; this has not been measured on a guest yet.
 
