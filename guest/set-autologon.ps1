@@ -171,6 +171,36 @@ if (-not $User) {
 if (-not $Domain) { $Domain = $env:COMPUTERNAME }
 Write-Output "info   arming autologon for $Domain\$User (user from: $userSource)"
 
+# ---- 1b. the password must not expire ----------------------------------------
+# Owner decision 2026-10-06. Windows' default policy ages a local password out after 42 days: measured that day on the
+# win10 test image (net accounts "Maximum password age (days): 42"; net user: set 30/08/2026, expires 11/10/2026), with a
+# "Consider changing your password" reminder at every logon. An expired password stops autologon exactly like a wrong one,
+# and a password changed at Windows' prompt strands it the same way until autologon is re-armed - so the account this guest
+# logs on with is set never to expire. Done BEFORE the validation below: a password that has already aged out validates
+# again once the flag is set (expiry is computed from the flag, not stored). Local accounts only.
+$neverExpires = 'n/a'
+if ($Domain -eq $env:COMPUTERNAME) {
+    try {
+        $lu = Get-LocalUser -Name $User -ErrorAction Stop
+        if ($null -ne $lu.PasswordExpires) {
+            Set-LocalUser -Name $User -PasswordNeverExpires $true -ErrorAction Stop
+            $lu = Get-LocalUser -Name $User -ErrorAction Stop
+        }
+        if ($null -eq $lu.PasswordExpires) {
+            $neverExpires = 'yes'
+            Write-Output "ok     the password of $User never expires (an expired password would stop autologon)"
+        } else {
+            $neverExpires = 'no'; $warn++
+            Write-Output "WARN   the password of $User still expires $($lu.PasswordExpires) - autologon stops working then"
+        }
+    } catch {
+        $neverExpires = 'error'; $warn++
+        Write-Output "WARN   could not set the password of $User never to expire: $($_.Exception.Message.Split([char]10)[0])"
+    }
+} else {
+    Write-Output "info   $Domain\$User is not a local account - its password policy is not ours to change"
+}
+
 # ---- 2. validate BEFORE writing anything -----------------------------------
 # A blank password is legitimate (a local account with none): Windows autologs in with an empty
 # DefaultPassword, and LogonUser accepts "" for such an account, so the same check covers it.
@@ -226,5 +256,5 @@ if ($null -ne (Get-WL 'AutoLogonCount')) {
 # Policies\System value, not a Winlogon one, and writing it here would do nothing.)
 
 Write-Output "ok     AutoAdminLogon=1 DefaultUserName=$User DefaultDomainName=$Domain"
-Write-Output "=== RESULT === armed=1 user=$User stored=$stored warnings=$warn"
+Write-Output "=== RESULT === armed=1 user=$User stored=$stored warnings=$warn pwnoexpire=$neverExpires"
 exit 0
