@@ -60,6 +60,10 @@ identified the exact writer of those zeros, so if you still see the dialog, rest
 
 - The items under "Known and not fixed" in the 4.3.34 notes stand.
 - The updater deploy is not retried at the next boot when it was refused; the remedy is `install.cmd /updatesonly`.
+- With the notification bridge on (the default), an app's first notification can still reach dom0 twice: as the guest's banner
+  and as the bridge's dom0 notification. The fix - the agent holds each banner until the bridge has decided that notification -
+  passed every single-notification case on a Windows 11 guest, but not two notifications in quick succession, so it is not in
+  this release.
 - Whether the dom0 notification arrives on an interactive install depends on the Qubes RPC agent being connected to dom0 when
   the installer sends it, after the updater step; this has not been measured on a guest yet.
 
