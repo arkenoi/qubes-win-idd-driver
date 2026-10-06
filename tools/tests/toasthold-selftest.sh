@@ -28,6 +28,9 @@
 #   TOASTHOLD_DEFECT_NOBACKOFF         a refused identity request is retried without back-off (N7)
 #   TOASTIDENT_DEFECT_TIE_SLOTORDER    equal arrival ticks broken by ring slot, not sequence - reorders across a wrap (#12)
 #   TOASTHOLD_DEFECT_RECLAIM_ANY       the own consumed record re-claimable for any new content, not only a completion (N5)
+#   TOASTIDENT_DEFECT_MARK_BY_SLOT     the agent's shown mark is a flag in the slot, not the sequence it marks: a store
+#                                      racing the bridge's republish of the slot reads as the NEW toast's banner shown
+#                                      (ADR-toasts 11: its failed dom0 action goes unreported)
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="${TOASTHOLD_OUT:-$(mktemp -d /tmp/toasthold-selftest-XXXXXX)}"
@@ -69,11 +72,11 @@ run_suite agent  "gcc -std=c99 -Wall -Wextra -Werror" "$ROOT/agent/gui-agent/toa
     TOASTHOLD_DEFECT_PREEMPT_IDENTGATE TOASTHOLD_DEFECT_SUPPRESS_FINAL TOASTHOLD_DEFECT_NORECLAIM \
     TOASTHOLD_DEFECT_NOIDENT_IGNORES_BRIDGE TOASTHOLD_DEFECT_NOFORWARDBOUND TOASTHOLD_DEFECT_NOCARD_UNPACED \
     TOASTHOLD_DEFECT_SIZE60 TOASTHOLD_DEFECT_DEADRECORDS TOASTHOLD_DEFECT_NOBACKOFF \
-    TOASTIDENT_DEFECT_TIE_SLOTORDER TOASTHOLD_DEFECT_RECLAIM_ANY
+    TOASTIDENT_DEFECT_TIE_SLOTORDER TOASTHOLD_DEFECT_RECLAIM_ANY TOASTIDENT_DEFECT_MARK_BY_SLOT
 # The agent suite's headers must also compile as C++ (notifhost includes toastident.h that way).
 run_suite agent-as-cpp "g++ -std=c++17 -Wall -Wextra -Werror -x c++" "$ROOT/agent/gui-agent/toasthold_test.c" 90
 run_suite bridge "g++ -std=c++17 -Wall -Wextra -Werror" "$ROOT/tools/notifhost/toasthold_bridge_test.cpp" 15 \
-    TOASTIDENT_DEFECT_NOFOLD TOASTIDENT_DEFECT_VERDICTOVERRIDE
+    TOASTIDENT_DEFECT_NOFOLD TOASTIDENT_DEFECT_VERDICTOVERRIDE TOASTIDENT_DEFECT_MARK_BY_SLOT
 
 say "--- outputs in $OUT"
 exit $bad

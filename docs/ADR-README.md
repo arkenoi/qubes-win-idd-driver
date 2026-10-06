@@ -11,7 +11,7 @@ in `docs/DESIGN-*.md` and in the code headers. An ADR section goes stale only wh
 | `ADR-windows.md` | which guest surfaces become dom0 windows: the screens never shown, the fullscreen window that needs dom0's consent, the secure desktop, the non-seamless desktop window, chrome fragments, popups, autologon | 10 |
 | `ADR-capture.md` | where a guest window's pixels come from: the PrintWindow engine, the WGC broker, liveness at rest | 32 |
 | `ADR-gui.md` | window geometry between the guest and dom0's gui-daemon: placement after a restart, resizes | 2 |
-| `ADR-toasts.md` | how a guest's Windows notifications reach dom0 (the toast bridge) and how each toast is routed | 10 |
+| `ADR-toasts.md` | how a guest's Windows notifications reach dom0 (the toast bridge), how each toast is routed, and how a toast's buttons round-trip as dom0 actions | 11 |
 | `ADR-display.md` | the IddCx driver (Track B): ships on, sole active output, the mode list, the identity, the grant-path gate | 6 |
 | `ADR-network.md` | PV networking: the unplug latch, re-arming, the L3 service, DHCP off, the acceptance, our xenvif | 8 |
 | `ADR-boot.md` | what may touch the device model (QEMU, Xen) in a fresh domain's first minutes: install stages and first boots | 2 |

@@ -149,7 +149,10 @@ shipped switched off).
 
 Since 4.3.31 the decision is made **per notification**, not per application: a notification that
 needs no answer from you is forwarded, and one carrying buttons stays a guest window so the buttons
-still work. An allowlist (`NotifyBridgeAllow`) remains as a shortcut for applications whose
+still work - unless every one of its buttons is one the bridge can press for you (a link, or a classic
+Windows application's own notification hook), in which case it is forwarded with its buttons and your
+click in dom0 is carried out in the guest (built, not yet proven on a guest: `docs/ADR-toasts.md` §11).
+An allowlist (`NotifyBridgeAllow`) remains as a shortcut for applications whose
 notifications are known to be informational, and with none configured a conservative built-in seed
 is used — Snipping Tool, Camera, Photos, Security & Maintenance, the backup reminder. See what a
 guest actually emits with `notifhost --dump-aumids`.

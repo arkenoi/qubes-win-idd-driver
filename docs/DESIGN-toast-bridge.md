@@ -167,7 +167,7 @@ top-down, first match wins:
 | any `<input type="text">` | **window path** | reply text cannot cross the bridge (no input field in the freedesktop model) |
 | any `<input type="selection">`, or any `activationType="system"` action with `arguments="snooze"` | **window path** | snooze rescheduling is shell-internal; not reproducible externally |
 | `scenario="incomingCall"`/`"alarm"`/`"reminder"`, or `afterActivationBehavior="pendingUpdate"`, or a `<progress>` element | **window path** | time-critical / self-updating surfaces; a static dom0 copy misleads |
-| any `<action>` with `activationType="foreground"` or `"background"` (non-system) | **window path** under the owner's split (it is a real choice); *bridgeable-with-risk* under Proposal B/C via activator re-invocation | the return path is the hard half, §3 |
+| any `<action>` with `activationType="foreground"` or `"background"` (non-system) | **window path** under the owner's split (it is a real choice); *bridgeable-with-risk* under Proposal B/C via activator re-invocation. **Since ADR-toasts §11 (2026-10-07): a `foreground` button of an UNPACKAGED sender with a registered toast activator IS carried (the shell's own COM activation, replayed); `background` and packaged buttons are not; one uncarriable button keeps the whole toast here** | the return path is the hard half, §3 |
 | only `activationType="protocol"` actions | **bridgeable** even with buttons | return path is just launching a URI in the guest — documented and robust |
 | only a system `dismiss` action, or no `<actions>` at all | **bridge** — informational | the implicit default click can be approximated (§3); dom0 dismissal maps to `RemoveNotification` |
 

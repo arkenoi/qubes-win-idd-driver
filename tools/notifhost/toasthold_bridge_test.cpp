@@ -25,6 +25,9 @@
 // /p:ToastHoldBridgeDefect=<define> (CI inverts the exit code) MUST make this suite fail:
 //   TOASTIDENT_DEFECT_NOFOLD          - the '\n'-joined and ' '-joined bodies stop agreeing
 //   TOASTIDENT_DEFECT_VERDICTOVERRIDE - the classifier's late verdict overrides a settled route
+//   TOASTIDENT_DEFECT_MARK_BY_SLOT    - the agent's shown mark is a flag in the slot, not the sequence it marks: a
+//                                       store racing the bridge's republish of the slot reads as the NEW toast's
+//                                       banner shown (ADR-toasts 11: a failed dom0 action then goes unreported)
 #include "../../agent/gui-agent/toastident.h"
 #include <cstdio>
 #include <cstring>
@@ -72,7 +75,8 @@ static std::basic_string<WCHAR> JoinBlocks(const WCHAR* const* blocks, size_t n)
 
 int main()
 {
-#if defined(TOASTIDENT_DEFECT_NOFOLD) || defined(TOASTIDENT_DEFECT_VERDICTOVERRIDE) || defined(TOASTIDENT_DEFECT_ORDERONLY)
+#if defined(TOASTIDENT_DEFECT_NOFOLD) || defined(TOASTIDENT_DEFECT_VERDICTOVERRIDE) || defined(TOASTIDENT_DEFECT_ORDERONLY) || \
+    defined(TOASTIDENT_DEFECT_MARK_BY_SLOT)
     printf("DEFECT BUILD: a TOASTIDENT_DEFECT_* switch is compiled in - this run MUST fail\n");
 #endif
 
@@ -176,6 +180,37 @@ int main()
         for (int i = 0; i < 29; i++) s = ThIpcPublish(h, 200 + i, 0, 0, &id, TH_VERDICT_PENDING, 2000 + i);
         Check("the ring wraps: seq 33 lands in slot 0", s == 33 && ThIpcRead(h, 0, &r) && r.Seq == 33 && r.NotifId == 228);
         Check("sizes: record 80 bytes, header 64, block 2624", sizeof(TH_IPC_RECORD) == 80 && sizeof(TH_IPC_HEADER) == 64 && TH_IPC_BYTES == 2624);
+    }
+
+    // ---- 3b. the actionable route's use of the ring (ADR-toasts 11): a failed dom0 click turns the forwarded
+    //          record `window` and reads the agent's mark on exactly that record ---------------------------
+    {
+        unsigned char block[TH_IPC_BYTES];
+        TH_IPC_HEADER* h = (TH_IPC_HEADER*)block;
+        TH_IPC_RECORD r;
+        TOAST_IDENT id;
+        LONG seq = 0;
+        ThIpcInit(h);
+        TiIdentFromTexts(TW("Calendar"), TW("Meeting"), TW("in 5 min"), &id);
+        LONG s = ThIpcPublish(h, 300, 0, 0x9u, &id, TH_VERDICT_BRIDGE, 5000);
+        Check("actions: a fresh record carries no agent mark", ThIpcRead(h, 0, &r) && r.AgentShownSeq == 0 && ThIpcAgentState(h, s) == TH_AGENT_NONE);
+        Check("actions: the forward's ack -> forwarded, the sequence handed back", ThIpcSetVerdictSeq(h, 300, TH_VERDICT_FORWARDED, FALSE, &seq) && seq == s);
+        Check("actions: a failed click turns the FORWARDED record window (unconditional), same sequence", ThIpcSetVerdictSeq(h, 300, TH_VERDICT_WINDOW, FALSE, &seq) && seq == s && ThIpcRead(h, 0, &r) && r.Verdict == TH_VERDICT_WINDOW);
+        Check("actions: the agent's mark on that record reads back", (ThIpcAgentMarkShown(h, s), ThIpcAgentState(h, s) == TH_AGENT_SHOWN));
+        Check("actions: a mark asked for a sequence not in the ring reads none", ThIpcAgentState(h, s + 1) == TH_AGENT_NONE && ThIpcFindSeq(h, s + 1) < 0);
+        Check("actions: a mark naming another sequence reads none (a flag would not be enough)", (TI_STORE32(&ThIpcRecords(h)[0].AgentShownSeq, s + 7), ThIpcAgentState(h, s) == TH_AGENT_NONE));
+        // THE RACE (review 2026-10-07): the agent found the slot for `s`, the bridge then republished that slot for a
+        // new toast, and the agent's store lands AFTER the publish. The new toast's record must not read as shown.
+        const int slot = ThIpcFindSeq(h, s);
+        LONG last = s;
+        for (int i = 0; i < TH_IPC_RECORDS; i++) last = ThIpcPublish(h, 400 + i, 0, 0, &id, TH_VERDICT_PENDING, 6000 + i);
+        Check("actions: the ring turned - the slot now holds the new toast", slot == 0 && ThIpcFindSeq(h, s) < 0 && ThIpcFindSeq(h, last) == slot);
+        ThIpcAgentStoreShown(h, slot, s);   // the late store of the OLD toast's mark into the reused slot
+        Check("actions: RACE - the late store of the old toast's mark does not read as the new toast's banner shown", ThIpcAgentState(h, last) == TH_AGENT_NONE);
+        Check("actions: ...and the old toast's record reads none too (it is gone, nothing to reopen)", ThIpcAgentState(h, s) == TH_AGENT_NONE);
+        ThIpcAgentMarkShown(h, last);
+        Check("actions: a mark for the new toast itself reads back", ThIpcAgentState(h, last) == TH_AGENT_SHOWN);
+        Check("actions: a verdict change for an id no longer in the ring says so (the bridge goes straight to the notice)", !ThIpcSetVerdictSeq(h, 300, TH_VERDICT_WINDOW, FALSE, &seq) && seq == 0);
     }
 
     // ---- 4. the matcher from the bridge's point of view: a bannerless older record ---------------

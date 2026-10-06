@@ -41,6 +41,10 @@
 // --dump-aumids: print AUMID + title of every toast currently in the Notification Center
 // (allowlist authoring aid; the listener exposes AppInfo.AppUserModelId).
 //
+// --resolve-activator <AUMID> / --invoke-activator <AUMID> [<arguments>]: the actionable-buttons
+// route's in-guest instruments (ADR-toasts 11) - what toast activator the bridge resolves for a
+// sender, and the COM activation a dom0 click performs, run by hand (see their definitions).
+//
 // --dump-wpndb [N] (P3a probe, DESIGN-toast-bridge.md 3.4.1): read-only dump of the WNS
 // platform database %LocalAppData%\Microsoft\Windows\Notifications\wpndatabase.db via the
 // IN-BOX System32 winsqlite3.dll - prints the schema the Phase-3 classifier relies on, then
@@ -81,6 +85,23 @@
 // markers exist (no bridge will ever start to run its own startup restore) - the restorer of
 // last resort for the fail-open invariant.
 //
+// ACTIONABLE BUTTONS (docs/ADR-toasts.md 11, built 2026-10-07): a forwarded toast's buttons and its
+// default click travel to dom0 as freedesktop actions (bridge-generated keys "default"/"bN", the
+// buttons' labels), and the proxy's ActionInvoked{id, action} reply is carried out in the guest the
+// way the shell would have: a protocol action launches its URI (ShellExecute as the user), a Win32
+// COM-activator action CoCreates the sender's registered ToastActivatorCLSID and calls
+// INotificationActivationCallback::Activate(aumid, arguments, no inputs). The classifier's row 4
+// (real-choice buttons) therefore no longer means "window" by itself: toastactions.h decides from
+// the XML AND the sender whether every banner button can be carried - all or nothing, never
+// half-way - and only then is the toast forwarded, with its actions. Packaged (UWP) activation,
+// background activation, inputs, snooze and time-critical scenarios stay on the window path. When
+// a click's activation fails in the guest, the toast's hold record turns `window` (the agent
+// reopens the banner if it is still displayed) and, if no banner was there to reopen, the user is
+// told through a dom0 error notice. Each click runs in a short-lived child process of this exe
+// (--act-exec, internal) that the bridge terminates at its bound. --resolve-activator /
+// --invoke-activator are the in-guest instruments for the activation path (the dom0 click itself
+// needs a human).
+//
 // Wire protocol: see tools/notify-proxy/NotifyClient.cs (verified against
 // qubes-notification-proxy v1.1.2) - u32 LE version handshake (server speaks first), then
 // u32-LE-length-prefixed bincode-1.x fixint LE frames. The encoder here is that file's
@@ -95,6 +116,14 @@
 #include <wtsapi32.h>   // WTSQuerySessionInformation - who owns the interactive session
 #pragma comment(lib, "wtsapi32.lib")   // linked here rather than in the vcxproj: the one call site
                                        // is NotifyHandoffToSession, so the dependency stays with it
+#include <objbase.h>    // CoCreateInstance / CoInitializeEx (WIN32_LEAN_AND_MEAN leaves it out)
+#include <shellapi.h>   // ShellExecuteExW - a protocol action's URI launch (WIN32_LEAN_AND_MEAN leaves it out)
+#include <shobjidl.h>   // IShellLinkW / IPersistFile - the Start-menu shortcut that names a toast activator
+#include <propsys.h>    // IPropertyStore - System.AppUserModel.ID / ToastActivatorCLSID on that shortcut
+#include <shlobj.h>     // SHGetFolderPathW(CSIDL_PROGRAMS / CSIDL_COMMON_PROGRAMS)
+#include <NotificationActivationCallback.h>   // INotificationActivationCallback - the shell's own activation call
+#pragma comment(lib, "shell32.lib")    // ShellExecuteExW, SHGetFolderPathW
+#pragma comment(lib, "ole32.lib")      // CoCreateInstance / PropVariantClear / CLSIDFromString
 #include <wincrypt.h>   // CryptoAPI SHA-1 (TraceLogging provider name -> GUID hash)
 #include <wmistr.h>     // WNODE_HEADER (evntrace.h prerequisite)
 #include <evntrace.h>   // StartTrace/EnableTraceEx2/OpenTrace/ProcessTrace (real-time ETW)
@@ -111,10 +140,12 @@
 #include <unordered_map>
 #include <vector>
 #include <deque>
+#include <memory>       // shared_ptr: the activator lookup's hand-off outlives whichever thread finishes last
 #include <algorithm>    // stable_sort: id-bearing signal candidates first (EtwTierLookup)
 #include <cstdio>
 #include <cstdarg>
 #include "toastclassify.h"   // P3b pure decision-table classifier (P3a logs its verdicts)
+#include "toastactions.h"    // the actionable-buttons route's pure rules: action list, table, dispatch, failure choice
 #include "qtb_shared.h"      // shared with etwproxy.exe: log/BLog, wire contract, CsGuard,
                              // EtwOpen/EtwBufferCb/EtwProcessTraceThread (pure Win32 only -
                              // NOTHING GUI-adjacent may move into that header)
@@ -502,15 +533,30 @@ static bool HoldSeamless()
 
 // Any thread - the shadow worker calls it with onlyIfPending (the ring's interlocked ops make it safe).
 // onlyIfPending: the classifier's answer may never override a route the listing settled (WindowOnly app,
-// allowlist, forward outcome); a `false` is the listing's own final word.
-static void HoldVerdict(uint32_t id, LONG verdict, bool onlyIfPending)
+// allowlist, forward outcome); a `false` is the listing's own final word. Returns whether the record was
+// still in the ring; *seqOut (optional) is its sequence, for the agent-mark read-back (ADR-toasts 11).
+static bool HoldVerdictSeq(uint32_t id, LONG verdict, bool onlyIfPending, LONG* seqOut)
 {
-    if (!g_hold) return;
-    if (ThIpcSetVerdict(g_hold, id, verdict, onlyIfPending ? TRUE : FALSE))
+    if (seqOut) *seqOut = 0;
+    if (!g_hold) return false;
+    if (ThIpcSetVerdictSeq(g_hold, id, verdict, onlyIfPending ? TRUE : FALSE, seqOut))
     {
         HoldSignal();
         BLog(L"HOLD id=%u verdict=%s%s", id, HoldVerdictName(verdict), onlyIfPending ? L" (classifier, was pending)" : L"");
+        return true;
     }
+    return false;
+}
+
+static void HoldVerdict(uint32_t id, LONG verdict, bool onlyIfPending)
+{
+    HoldVerdictSeq(id, verdict, onlyIfPending, nullptr);
+}
+
+// The agent's word on a record (TH_AGENT_SHOWN: it maps a banner showing this toast); none without a section.
+static LONG HoldAgentState(LONG seq)
+{
+    return g_hold ? ThIpcAgentState(g_hold, seq) : TH_AGENT_NONE;
 }
 
 // Listing thread only: once per notification id (a toast left unseen for a retry is listed again).
@@ -604,8 +650,11 @@ enum class NotifyKind { Error, Warning, Info };
 static const uint32_t kInfoExpireMs = 20000;
 static const uint32_t kWarningExpireMs = 60000;
 
-// Message { id: u64, Notification::V1 { ... } }, framed with a u32 LE length prefix.
-static std::vector<BYTE> EncodeNotifyFrame(uint64_t seq, std::string const& summary, std::string const& body, NotifyKind kind)
+// Message { id: u64, Notification::V1 { ... } }, framed with a u32 LE length prefix. `actions` is the
+// freedesktop list as alternating key, label (toastactions.h ToastActFlatten); empty = no actions, the
+// frame of every version before this one byte for byte.
+static std::vector<BYTE> EncodeNotifyFrame(uint64_t seq, std::string const& summary, std::string const& body, NotifyKind kind,
+                                           std::vector<std::string> const& actions)
 {
     std::vector<BYTE> m;
     PutU64(m, seq);             // Message.id (echoed as `sequence` in replies)
@@ -618,7 +667,7 @@ static std::vector<BYTE> EncodeNotifyFrame(uint64_t seq, std::string const& summ
     PutU32(m, 0);               // replaces_id: 0 = new notification
     PutU64(m, summary.size()); m.insert(m.end(), summary.begin(), summary.end());
     PutU64(m, body.size());    m.insert(m.end(), body.begin(), body.end());
-    PutU64(m, 0);               // actions: count 0 (phase 2 adds ["default","Open"])
+    ToastActPutVec(m, actions); // actions: Vec<String> - u64 count, then (u64 len + UTF-8) each; keys validated by the proxy
     m.push_back(0);             // category: Option None
     PutU32(m, kind == NotifyKind::Error ? 0u : kind == NotifyKind::Warning ? kWarningExpireMs : kInfoExpireMs);   // expire_timeout ms; 0 = never
     m.push_back(0);             // image: Option None
@@ -1883,24 +1932,41 @@ static int DumpEtwMain(int seconds)
 // nothing, because an unforwarded toast is already left unseen and re-examined every 2 s.
 // Jev graded the alternatives 2026-09-23: verdict-map-retry 0.73, stay-in-shadow 0.24,
 // bounded-wait 0.01, per-app-learning 0.00.
+// The actionable-buttons route's impure helpers, defined with the click handling further down (the
+// classification above them needs the two lookups).
+static std::wstring ResolveToastActivator(std::wstring const& aumid, const wchar_t** source);
+static bool AumidPackaged(UserNotification const& un, std::wstring const& aumid);
+
+// The verdict and, since the actionable-buttons route (ADR-toasts 11), the ACTION PLAN that came with it: the
+// dom0 actions the forward carries (toastactions.h) and the sender's resolved toast activator CLSID the click
+// handler calls. Both are decided on the shadow worker with the verdict - the main thread only forwards.
+struct VerdictEntry
+{
+    int route = ToastRouteWindow;
+    ToastActPlan plan;        // ok with actions (possibly none) when route is bridge
+    std::wstring clsid;       // "{...}" when any action is a COM activation
+};
 struct VerdictStore
 {
     CRITICAL_SECTION lock{};
     bool init = false;
-    std::unordered_map<uint32_t, int> route;      // id -> ToastRoute
-    std::unordered_map<uint32_t, int> passes;     // id -> poll passes spent waiting
+    std::unordered_map<uint32_t, VerdictEntry> route;   // id -> the verdict and its plan
+    std::unordered_map<uint32_t, int> passes;           // id -> poll passes spent waiting
 } g_verdict;
 
 static void VerdictInit()
 {
     if (!g_verdict.init) { InitializeCriticalSection(&g_verdict.lock); g_verdict.init = true; }
 }
-static void VerdictStorePut(uint32_t id, int route)
+static void VerdictStorePut(uint32_t id, int route, ToastActPlan const& plan, std::wstring const& clsid)
 {
     if (!g_verdict.init) return;
-    CsGuard g(&g_verdict.lock);
-    if (g_verdict.route.size() > 4096) { g_verdict.route.clear(); g_verdict.passes.clear(); }
-    g_verdict.route[id] = route;
+    {
+        CsGuard g(&g_verdict.lock);
+        if (g_verdict.route.size() > 4096) { g_verdict.route.clear(); g_verdict.passes.clear(); }
+        VerdictEntry& e = g_verdict.route[id];
+        e.route = route; e.plan = plan; e.clsid = clsid;
+    }
     InterlockedExchange(&g_listWanted, 1);
     if (g_mainWake) SetEvent(g_mainWake);   // a toast may be waiting for this verdict: re-list now, not on a tick
     // The agent is holding this toast's banner on the record published at listing: give it the verdict NOW,
@@ -1909,7 +1975,7 @@ static void VerdictStorePut(uint32_t id, int route)
     // never `bridge` while dom0 is unreachable: nobody would forward it, so the banner must show.
     HoldVerdict(id, (route == ToastRouteBridge && !g_connDead) ? TH_VERDICT_BRIDGE : TH_VERDICT_WINDOW, true);
 }
-// Returns true and sets *route when a verdict exists. Otherwise counts this pass: a toast whose
+// Returns true and fills *out when a verdict exists. Otherwise counts this pass: a toast whose
 // verdict never arrives must NOT be deferred for ever - after kVerdictMaxPasses it takes the
 // window path, which is the fail-open direction (the user sees it as a guest window, as today).
 static const int kVerdictMaxPasses = 3;           // ~6 s at the 2 s poll cadence
@@ -1918,12 +1984,12 @@ static const int kVerdictMaxPasses = 3;           // ~6 s at the 2 s poll cadenc
 // of deferring for ever. The first version returned false without touching *passes there, which
 // left such a toast undecided on every pass - deferred permanently and re-logged every 2 s. Jev
 // caught it on review (preserves_fail_open 0.58, worst_defect=pass-counter-leak 0.52).
-static bool VerdictLookup(uint32_t id, int* route, int* passes)
+static bool VerdictLookup(uint32_t id, VerdictEntry* out, int* passes)
 {
     if (!g_verdict.init) { *passes = kVerdictMaxPasses; return false; }
     CsGuard g(&g_verdict.lock);
     auto it = g_verdict.route.find(id);
-    if (it != g_verdict.route.end()) { *route = it->second; return true; }
+    if (it != g_verdict.route.end()) { *out = it->second; return true; }
     if (g_verdict.passes.size() > 4096) g_verdict.passes.clear();   // bounded independently of route
     *passes = ++g_verdict.passes[id];
     return false;
@@ -1939,7 +2005,14 @@ static void VerdictForget(uint32_t id)
     g_verdict.passes.erase(id);
 }
 
-struct ShadowJob { uint32_t id = 0; std::wstring aumid, title; long long creationFt = 0; };
+struct ShadowJob
+{
+    uint32_t id = 0;
+    std::wstring aumid, title;
+    long long creationFt = 0;
+    bool packaged = false;   // a packaged (PFN!App) sender: its foreground activation is UWP's, never a COM call we can make
+    std::wstring payloadW;   // filled on the worker once a payload is in hand (the action plan reads it as text)
+};
 
 static struct
 {
@@ -2004,7 +2077,7 @@ static DWORD WINAPI WalWatchThread(LPVOID)
 
 // The acquisition ladder for ONE toast + the CLASSIFY line. Runs on the shadow worker
 // (or, under P3AQ_DEFECT_HOTWAIT only, back on the poll thread as the seen-to-fail proof).
-static void ShadowClassifyWork(ShadowJob const& j)
+static void ShadowClassifyWork(ShadowJob& j)
 {
     try
     {
@@ -2019,6 +2092,32 @@ static void ShadowClassifyWork(ShadowJob const& j)
         const wchar_t* verdict = L"window";           // fail-open default (tier 3)
         std::wstring signals = L"none";
         std::vector<EtwToastRec> sigs;
+        // THE ACTION PLAN (ADR-toasts 11), decided here with the verdict from the same payload. Row 4 (real-choice
+        // buttons) is bridge ONLY if every banner button can be carried as a dom0 action; rows 5/6 are bridge as
+        // before and carry what they can (protocol buttons, the default click). The sender's toast activator is
+        // looked up at most once, lazily, through the callback (ResolveToastActivator: a bounded thread of its own).
+        struct ActivatorQuery { const std::wstring* aumid; std::wstring clsid; const wchar_t* source; bool asked; };
+        ActivatorQuery aq{ &j.aumid, L"", L"none", false };
+        auto hasActivator = [](void* cookie) -> bool {
+            ActivatorQuery* q = (ActivatorQuery*)cookie;
+            if (!q->asked) { q->asked = true; q->clsid = ResolveToastActivator(*q->aumid, &q->source); }
+            return !q->clsid.empty();
+        };
+        ToastActPlan plan;                            // !ok, no actions, until a payload says otherwise
+        plan.refusal = L"no payload (fail-open)";
+        auto decide = [&](ToastClass const& k, bool clean) {
+            signals = WpnSignalSlug(k);
+            if (!clean) return;                       // only a clean acquisition may say "bridge" (unchanged)
+            if (k.row >= 4 && k.row <= 6)
+            {
+                ToastActCtx ctx{ j.packaged, hasActivator, &aq };
+                plan = ToastActionsBuild(j.payloadW.c_str(), j.payloadW.size(), k, ctx);
+            }
+            if (k.row == 4) verdict = plan.ok ? L"bridge" : L"window";
+            else verdict = ToastRouteName(k.route);
+            if (k.route == ToastRouteBridge && !plan.ok)  // rows 5/6 refused (a protocol button without a URI): rule 4
+                verdict = L"window";
+        };
         const char* etw = EtwTierLookup(j.id, j.aumid, j.creationFt, &sigs);
         // FlushTimer catch-up (2026-09-06): the agent's session delivers to the proxy on a
         // 1 s FlushTimer (EtwCtlSessionStart), so a listener/WAL-triggered classify can
@@ -2048,10 +2147,9 @@ static void ShadowClassifyWork(ShadowJob const& j)
             if (!t.payload.empty())                   // only on id-ok / sig-unique
             {
                 src = "etw-sig";
+                j.payloadW = WpnPayloadToW(t.payload);
                 ToastClass k = ClassifyToastXmlBytes(t.payload.data(), t.payload.size());
-                signals = WpnSignalSlug(k);
-                if (strcmp(t.corr, "id-ok") == 0 || strcmp(t.corr, "sig-unique") == 0)
-                    verdict = ToastRouteName(k.route);
+                decide(k, strcmp(t.corr, "id-ok") == 0 || strcmp(t.corr, "sig-unique") == 0);
             }
         }
         else                                          // no signal (sig-none/down/off): DB rung
@@ -2061,27 +2159,32 @@ static void ShadowClassifyWork(ShadowJob const& j)
             if (!c.payload.empty())
             {
                 src = "db";
+                j.payloadW = WpnPayloadToW(c.payload);
                 ToastClass k = ClassifyToastXmlBytes(c.payload.data(), c.payload.size());
-                signals = WpnSignalSlug(k);
-                if (strcmp(c.corr, "ok") == 0)        // only a clean correlation may say "bridge"
-                    verdict = ToastRouteName(k.route);
+                decide(k, strcmp(c.corr, "ok") == 0);  // only a clean correlation may say "bridge"
             }
         }
-        BLog(L"CLASSIFY id=%u src=%hs etw=%hs verdict=%s row_latency=%lums signals=%s corr=%hs",
-             j.id, src, etw, verdict, (DWORD)(GetTickCount64() - t0), signals.c_str(), corr);
+        // actions=: what the forward will carry ("default:com,b0:protocol"), "none", or "refused:<why>" (then a
+        // row-4 toast is window). activator=: where the sender's toast activator came from, when it was asked.
+        BLog(L"CLASSIFY id=%u src=%hs etw=%hs verdict=%s row_latency=%lums signals=%s corr=%hs actions=%s activator=%s%s%s",
+             j.id, src, etw, verdict, (DWORD)(GetTickCount64() - t0), signals.c_str(), corr, ToastActSlug(plan).c_str(),
+             aq.asked ? aq.source : L"not-asked", plan.defaultNote ? L" default-not-carried=" : L"", plan.defaultNote ? plan.defaultNote : L"");
         // Record exactly what was logged, so the route a later poll pass takes is the verdict an
         // operator can read in the log - not a second, separately-derived opinion.
-        VerdictStorePut(j.id, (wcscmp(verdict, L"bridge") == 0) ? ToastRouteBridge : ToastRouteWindow);
+        VerdictStorePut(j.id, (wcscmp(verdict, L"bridge") == 0) ? ToastRouteBridge : ToastRouteWindow, plan, aq.clsid);
     }
     catch (...)
     {
-        BLog(L"CLASSIFY id=%u src=none etw=probe-threw verdict=window row_latency=0ms signals=none corr=probe-threw", j.id);
+        BLog(L"CLASSIFY id=%u src=none etw=probe-threw verdict=window row_latency=0ms signals=none corr=probe-threw actions=none activator=not-asked", j.id);
     }
 }
 
 static DWORD WINAPI ShadowWorkerThread(LPVOID)
 {
     NameThisThread(L"notifhost: shadow-worker");
+    // No COM apartment here, as before: this thread's work is sqlite, the ETW ring and the classifier. The toast-
+    // activator lookup it asks for (ADR-toasts 11) runs on a short-lived STA thread of its own, bounded
+    // (ResolveToastActivator), so nothing this thread already does changes and nothing it waits on is unbounded.
     for (;;)
     {
         HANDLE hs[2] = { g_shadow.stopEvt, g_shadow.evt };
@@ -2163,7 +2266,9 @@ static void ShadowClassify(UserNotification const& un, uint32_t id, std::wstring
         long long creationFt = 0;
         try { creationFt = un.CreationTime().time_since_epoch().count(); } catch (...) {}
         auto tb = FirstTexts(un);
-        ShadowJob j{ id, aumid, tb.substr(0, tb.find(L'\x1f')), creationFt };
+        ShadowJob j;
+        j.id = id; j.aumid = aumid; j.title = tb.substr(0, tb.find(L'\x1f')); j.creationFt = creationFt;
+        j.packaged = AumidPackaged(un, aumid);   // a cheap WinRT read, like the aumid: the action plan needs it
 #if defined(P3AQ_DEFECT_HOTWAIT)
         // DEFECT (seen-to-fail, autonomy rule 5): acquisition back on the poll thread plus
         // a deliberate stall, so a 3-toast burst pushes a pass past the harness's
@@ -2253,6 +2358,501 @@ static int DumpWpnDbMain(int limit)
     return 0;
 }
 
+// ==================== actionable buttons (docs/ADR-toasts.md 11) ===========================
+// The impure half of toastactions.h: who the sender's toast activator is, how a click is carried
+// out, and what happens when it cannot be. The pure half (which actions a toast gets, the bounded
+// table, the dispatch, the choice after a failure) is in the header and in toastactions_test.cpp.
+//
+// PROCESSES AND THREADS (review 2026-10-07, two rounds: every wait bounded, no leak, no existing thread
+// changes apartment). The activator LOOKUP (registry, then a bounded Start-menu shortcut scan through
+// IShellLink, an apartment-threaded object) runs on a short-lived STA thread of its own; the shadow
+// worker that asks waits kToastActLookupBoundMs at most and otherwise treats the sender as having no
+// activator THIS time (ToastActLookupHandoff). A CLICK is carried out by a short-lived CHILD PROCESS
+// (`notifhost --act-exec <file>`, same user and session, CreateProcess - no Task Scheduler, no /tr
+// limit): ShellExecute and a CLSCTX_LOCAL_SERVER CoCreateInstance/Activate may never return, and a
+// process can be terminated where a thread cannot be cancelled. The main loop spawns the child, keeps
+// its handle in the wait array (its exit wakes the loop), reaps it (the exit code is the outcome) or
+// TERMINATES it at kToastActClickBoundMs (the decision-3 failure, exactly once: ToastActClickLedger),
+// with at most kToastActInflightMax children at once (a refused click is a failure the user is told
+// about). Only the main loop sends on the dom0 connection (sends are sequential), so the error notice
+// goes from there too.
+
+// --- who answers a toast activation for this AUMID ----------------------------------------
+// The shell finds a Win32 app's toast activator in two places, both read as the shell reads them:
+//   1. HKCR\AppUserModelId\<AUMID>  CustomActivator = "{CLSID}"  (REG_SZ) - the ToastNotificationManagerCompat
+//      scheme modern unpackaged apps use (tools/toastfire's com-activator method writes exactly this);
+//   2. a Start-menu shortcut (per-user or all-users Programs folder) whose property store carries
+//      System.AppUserModel.ID = the AUMID and System.AppUserModel.ToastActivatorCLSID - the classic
+//      installer-written registration.
+// HKCR merges HKCU\Software\Classes over HKLM\Software\Classes, as the shell sees it. An AUMID with '\'
+// cannot have been registered under 1. (it would nest keys) and is only looked for under 2.
+// Cached per process (bounded, TTL) so a sender's every toast does not re-walk the Start menu; a stale
+// "none" only sends a toast to the window path, a stale CLSID fails the click into the loud path below.
+static const PROPERTYKEY kPkeyAppUserModelId         = { { 0x9F4C2855, 0x9F79, 0x4B39, { 0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3 } }, 5 };
+static const PROPERTYKEY kPkeyToastActivatorClsid    = { { 0x9F4C2855, 0x9F79, 0x4B39, { 0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3 } }, 26 };
+static const DWORD       kActivatorCacheTtlMs = 10 * 60 * 1000;
+static const size_t      kActivatorCacheMax = 256;
+static const int         kLnkScanMaxDepth = 4;
+static const int         kLnkScanMaxFiles = 1024;
+
+struct ActivatorHit { std::wstring clsid; const wchar_t* source; ULONGLONG tick; };   // clsid empty = none registered
+static CRITICAL_SECTION g_activatorLock;
+static bool g_activatorLockInit = false;
+static std::unordered_map<std::wstring, ActivatorHit> g_activatorCache;   // key: lower-cased AUMID
+
+static std::wstring LowerW(std::wstring s) { for (auto& c : s) if (c >= L'A' && c <= L'Z') c = (wchar_t)(c + 32); return s; }
+
+static bool ClsidStringValid(std::wstring const& s)
+{
+    CLSID c;
+    return !s.empty() && s.size() <= 40 && SUCCEEDED(CLSIDFromString(s.c_str(), &c));
+}
+
+static std::wstring ActivatorFromRegistry(std::wstring const& aumid)
+{
+    if (aumid.find(L'\\') != std::wstring::npos) return L"";
+    HKEY k;
+    std::wstring key = L"AppUserModelId\\" + aumid;
+    if (RegOpenKeyExW(HKEY_CLASSES_ROOT, key.c_str(), 0, KEY_QUERY_VALUE, &k) != ERROR_SUCCESS) return L"";
+    wchar_t buf[64] = { 0 }; DWORD cb = sizeof(buf) - sizeof(wchar_t), type = 0;
+    LSTATUS st = RegQueryValueExW(k, L"CustomActivator", nullptr, &type, (BYTE*)buf, &cb);
+    RegCloseKey(k);
+    if (st != ERROR_SUCCESS || type != REG_SZ) return L"";
+    std::wstring s(buf);
+    return ClsidStringValid(s) ? s : L"";
+}
+
+// One Programs folder, recursively, bounded. `files` counts every .lnk opened across the whole lookup.
+static std::wstring ActivatorFromShortcutsIn(std::wstring const& dir, std::wstring const& aumidLower, int depth, int& files)
+{
+    if (depth > kLnkScanMaxDepth || files >= kLnkScanMaxFiles) return L"";
+    WIN32_FIND_DATAW fd;
+    HANDLE fh = FindFirstFileW((dir + L"\\*").c_str(), &fd);
+    if (fh == INVALID_HANDLE_VALUE) return L"";
+    std::wstring found;
+    do {
+        if (fd.cFileName[0] == L'.' && (fd.cFileName[1] == 0 || (fd.cFileName[1] == L'.' && fd.cFileName[2] == 0))) continue;
+        std::wstring path = dir + L"\\" + fd.cFileName;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+        {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue;   // no junction walks
+            found = ActivatorFromShortcutsIn(path, aumidLower, depth + 1, files);
+            if (!found.empty()) break;
+            continue;
+        }
+        size_t n = wcslen(fd.cFileName);
+        if (n < 5 || _wcsicmp(fd.cFileName + n - 4, L".lnk") != 0) continue;
+        if (++files > kLnkScanMaxFiles) break;
+        winrt::com_ptr<IShellLinkW> link;
+        if (FAILED(CoCreateInstance(__uuidof(ShellLink), nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(link.put())))) continue;
+        auto pf = link.try_as<IPersistFile>();
+        if (!pf || FAILED(pf->Load(path.c_str(), STGM_READ))) continue;
+        auto store = link.try_as<IPropertyStore>();
+        if (!store) continue;
+        PROPVARIANT pvId; PropVariantInit(&pvId);
+        bool same = false;
+        if (SUCCEEDED(store->GetValue(kPkeyAppUserModelId, &pvId)) && pvId.vt == VT_LPWSTR && pvId.pwszVal)
+            same = (LowerW(pvId.pwszVal) == aumidLower);
+        PropVariantClear(&pvId);
+        if (!same) continue;
+        PROPVARIANT pvClsid; PropVariantInit(&pvClsid);
+        if (SUCCEEDED(store->GetValue(kPkeyToastActivatorClsid, &pvClsid)) && pvClsid.vt == VT_CLSID && pvClsid.puuid)
+            found = GuidStr(*pvClsid.puuid);
+        PropVariantClear(&pvClsid);
+        // the shortcut that carries the AUMID is THE registration, with or without an activator: stop here
+        break;
+    } while (FindNextFileW(fh, &fd));
+    FindClose(fh);
+    return found;
+}
+
+static std::wstring ActivatorFromShortcuts(std::wstring const& aumid)
+{
+    std::wstring lower = LowerW(aumid);
+    int files = 0;
+    static const int folders[2] = { CSIDL_PROGRAMS, CSIDL_COMMON_PROGRAMS };
+    for (int csidl : folders)
+    {
+        wchar_t p[MAX_PATH] = { 0 };
+        if (FAILED(SHGetFolderPathW(nullptr, csidl, nullptr, SHGFP_TYPE_CURRENT, p)) || !p[0]) continue;
+        std::wstring hit = ActivatorFromShortcutsIn(p, lower, 0, files);
+        if (!hit.empty()) return hit;
+    }
+    return L"";
+}
+
+// The lookup proper, on a thread of its own with its own STA (IShellLink is an apartment-threaded in-proc
+// object; the asking thread - the shadow worker, or a diagnostic - keeps whatever apartment it has). The
+// result goes through the hand-off; if the asker has given up (kToastActLookupBoundMs), it is dropped.
+struct ActivatorLookupJob { std::wstring aumid; std::shared_ptr<ToastActLookupHandoff> handoff; };
+
+static DWORD WINAPI ActivatorLookupThread(LPVOID p)
+{
+    NameThisThread(L"notifhost: activator-lookup");
+    ActivatorLookupJob* job = (ActivatorLookupJob*)p;
+    std::wstring clsid;
+    const wchar_t* src = L"none";
+    const bool co = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE));
+    try
+    {
+        clsid = ActivatorFromRegistry(job->aumid);
+        src = L"registry";
+        if (clsid.empty())
+        {
+            if (co) { clsid = ActivatorFromShortcuts(job->aumid); src = clsid.empty() ? L"none" : L"shortcut"; }
+            else { BLog(L"ACTIVATOR lookup thread: COM apartment init failed - shortcuts not scanned for %s", job->aumid.c_str()); src = L"none"; }
+        }
+    }
+    catch (...) { clsid.clear(); src = L"none"; BLog(L"ACTIVATOR lookup threw for %s - treated as none", job->aumid.c_str()); }
+    if (co) CoUninitialize();
+    job->handoff->Publish(clsid, src);
+    delete job;
+    return 0;
+}
+
+// The sender's toast activator CLSID ("{...}") or empty; *source says where it came from (registry |
+// shortcut | none | cache | timeout | no-thread). Any thread, any apartment: the lookup runs elsewhere and
+// this waits at most kToastActLookupBoundMs - a bound passed is loud, reads as none THIS time and is not
+// cached, so the next toast of that sender asks again.
+static std::wstring ResolveToastActivator(std::wstring const& aumid, const wchar_t** source)
+{
+    *source = L"none";
+    if (aumid.empty()) return L"";
+    const std::wstring key = LowerW(aumid);
+    const ULONGLONG now = GetTickCount64();
+    if (!g_activatorLockInit) { InitializeCriticalSection(&g_activatorLock); g_activatorLockInit = true; }
+    {
+        CsGuard g(&g_activatorLock);
+        auto it = g_activatorCache.find(key);
+        if (it != g_activatorCache.end() && now - it->second.tick < kActivatorCacheTtlMs)
+        { *source = L"cache"; return it->second.clsid; }
+    }
+    auto handoff = std::make_shared<ToastActLookupHandoff>();
+    ActivatorLookupJob* job = new ActivatorLookupJob{ aumid, handoff };
+    HANDLE t = CreateThread(nullptr, 0, ActivatorLookupThread, job, 0, nullptr);
+    if (!t)
+    {
+        delete job;
+        BLog(L"ACTIVATOR lookup thread create failed %lu for %s - treated as none this time", GetLastError(), aumid.c_str());
+        *source = L"no-thread";
+        return L"";
+    }
+    CloseHandle(t);   // detached: it publishes through the hand-off and exits
+    std::wstring clsid;
+    const wchar_t* src = L"none";
+    if (!handoff->WaitFor(kToastActLookupBoundMs, clsid, src))
+    {
+        BLog(L"ACTIVATOR lookup for %s did not answer within %llu ms (a Start-menu scan that does not finish?) - treated as none "
+             L"THIS time: its COM-activation toasts take the window path, nothing cached, the next toast asks again",
+             aumid.c_str(), (ULONGLONG)kToastActLookupBoundMs);
+        *source = L"timeout";
+        return L"";
+    }
+    {
+        CsGuard g(&g_activatorLock);
+        if (g_activatorCache.size() >= kActivatorCacheMax) g_activatorCache.clear();   // bound; a refill is one lookup each
+        g_activatorCache[key] = { clsid, src, now };
+    }
+    *source = src;
+    return clsid;
+}
+
+// A packaged (PFN!App) sender, from the listener's AppInfo when it says so, else from the AUMID's shape.
+static bool AumidPackaged(UserNotification const& un, std::wstring const& aumid)
+{
+    try { if (!un.AppInfo().PackageFamilyName().empty()) return true; } catch (...) {}
+    return aumid.find(L'!') != std::wstring::npos;
+}
+
+// --- the per-notification table and the clicks in flight ---------------------------------------
+static CRITICAL_SECTION g_actLock;          // guards g_actTable, g_actLedger, g_actClicks, g_actFails (initialised in BridgeMain)
+static ToastActTable g_actTable;
+static ToastActClickLedger g_actLedger;     // admission, the click bound, one outcome per click (toastactions.h)
+static uint64_t g_actClickSeq = 0;          // click tokens
+
+// A click in flight: the toast and key (for the outcome's log line and notice), and - once the main loop has
+// spawned it - the child process carrying it out, its start tick (the bound counts from here) and the
+// instruction file it reads. Admitted on the reader thread, spawned/reaped/killed on the main loop.
+struct ActClickInfo
+{
+    ToastActEntry entry;
+    std::string   key;
+    HANDLE        process = nullptr;   // nullptr until spawned
+    DWORD         pid = 0;
+    ULONGLONG     startedAt = 0;
+    std::wstring  file;
+};
+static std::unordered_map<uint64_t, ActClickInfo> g_actClicks;   // token -> info, while the click is unresolved
+
+// A failed click awaiting its outcome on the main loop (toastactions.h ToastActFailChoice).
+struct ActFail
+{
+    uint32_t  guestId;
+    LONG      seq;            // the hold record turned window (0: it was gone)
+    bool      recordFound;
+    ULONGLONG flippedAt;
+    std::wstring app, title, label, detail;
+    std::string key;
+    ToastActEntry entry;      // for the notice text (the action is re-found in it by key)
+};
+static std::vector<ActFail> g_actFails;   // g_actLock; bounded by the ledger's caps + the notice give-up
+
+// THE FAILURE PATH (Jev 2026-10-06, 0.71), from any thread: the toast's record turns `window` - the agent reopens
+// the banner if it is still displayed (rule 4 of the hold) and marks the record shown; the main loop reads that
+// mark within kToastActShowBoundMs and sends the dom0 error notice when there is none.
+static void ActFailQueue(ToastActEntry const& entry, std::string const& key, std::wstring const& detail, const wchar_t* how)
+{
+    const uint32_t id = entry.guestId;
+    LONG seq = 0;
+    const bool found = HoldVerdictSeq(id, TH_VERDICT_WINDOW, false, &seq);
+    BLog(L"ACTION id=%u dom0=%u key=%hs %s: %s - record %s (seq %ld); the guest banner is reopened if it is still "
+         L"displayed, else dom0 gets an error notice", id, entry.dom0Id, key.c_str(), how, detail.c_str(),
+         found ? L"turned window" : L"gone from the ring", seq);
+    ActFail f;
+    f.guestId = id; f.seq = seq; f.recordFound = found; f.flippedAt = GetTickCount64();
+    f.app = entry.app; f.title = entry.title; f.label = L"?"; f.detail = detail;
+    f.key = key; f.entry = entry;
+    for (auto const& a : f.entry.plan.actions) if (a.key == key) f.label = a.label;
+    {
+        CsGuard g(&g_actLock);
+        if (g_actFails.size() < 32) g_actFails.push_back(std::move(f));
+        else BLog(L"ACTION id=%u failure queue full - its dom0 notice is dropped (logged here instead)", id);
+    }
+    if (g_mainWake) SetEvent(g_mainWake);   // the main loop pumps g_actFails on every wake (no listing is asked for)
+}
+
+// --- carrying out a click (the click thread) ------------------------------------------------
+struct WinToastActivator : ToastActivator
+{
+    static std::wstring Hr(HRESULT hr) { wchar_t b[16]; swprintf(b, RTL_NUMBER_OF(b), L"0x%08X", (unsigned)hr); return b; }
+    bool Protocol(std::wstring const& uri, std::wstring& detail) override
+    {
+        // What the shell does for a protocol activation: open the URI as the user; no UI on failure (the
+        // failure is reported through our own paths). The thread is an STA (ShellExecuteEx's requirement).
+        SHELLEXECUTEINFOW sei = { sizeof(sei) };
+        sei.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+        sei.lpVerb = L"open";
+        sei.lpFile = uri.c_str();
+        sei.nShow = SW_SHOWNORMAL;
+        if (ShellExecuteExW(&sei)) return true;
+        detail = L"ShellExecute failed, Windows error " + std::to_wstring(GetLastError());
+        return false;
+    }
+    bool Com(std::wstring const& clsid, std::wstring const& aumid, std::wstring const& args, std::wstring& detail) override
+    {
+        // The shell's own call for a Win32 toast activation: CoCreate the registered activator as a local
+        // server (launches the app if it is not running) and Activate(aumid, arguments, inputs, count) with no
+        // user input (toasts with inputs never reach this route).
+        CLSID c;
+        if (FAILED(CLSIDFromString(clsid.c_str(), &c))) { detail = L"activator CLSID unparseable"; return false; }
+        winrt::com_ptr<INotificationActivationCallback> cb;
+        HRESULT hr = CoCreateInstance(c, nullptr, CLSCTX_LOCAL_SERVER, IID_PPV_ARGS(cb.put()));
+        if (FAILED(hr)) { detail = L"the sender's toast activator could not be created (CoCreateInstance " + Hr(hr) + L")"; return false; }
+        hr = cb->Activate(aumid.c_str(), args.c_str(), nullptr, 0);
+        if (FAILED(hr)) { detail = L"the sender's activator refused the activation (Activate " + Hr(hr) + L")"; return false; }
+        return true;
+    }
+};
+
+// --- the instruction file: parent -> child --------------------------------------------------------
+// UTF-16LE with BOM, in the bridge's state dir: line 1 kind (protocol|com), line 2 AUMID, line 3 CLSID (empty for
+// protocol), then the rest of the file verbatim = the argument (the URI, or the Activate arguments - which may
+// hold anything, newlines included; nothing of ours parses it). A file rather than the command line: no quoting
+// rules, no length limit, the same shape --notify-file already uses. The child deletes it after reading; the
+// parent deletes it if the child never read it.
+static std::wstring ActFilePath(uint64_t token)
+{
+    return StateDir() + L"\\act-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring((unsigned long long)token) + L".txt";
+}
+
+static bool ActFileWrite(std::wstring const& path, ToastActEntry const& e, ToastAct const& a)
+{
+    std::wstring text = (a.kind == ToastActKind::Protocol ? L"protocol" : L"com");
+    text += L"\n"; text += e.aumid;
+    text += L"\n"; text += e.clsid;
+    text += L"\n"; text += a.arg;
+    std::vector<BYTE> raw; raw.push_back(0xFF); raw.push_back(0xFE);
+    raw.insert(raw.end(), (const BYTE*)text.data(), (const BYTE*)text.data() + text.size() * sizeof(wchar_t));
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    DWORD wr = 0;
+    const BOOL ok = WriteFile(h, raw.data(), (DWORD)raw.size(), &wr, nullptr);
+    CloseHandle(h);
+    return ok && wr == raw.size();
+}
+
+static bool ActFileRead(std::wstring const& path, std::wstring& kind, std::wstring& aumid, std::wstring& clsid, std::wstring& arg)
+{
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    std::vector<BYTE> buf(64 * 1024);
+    DWORD rd = 0;
+    const BOOL ok = ReadFile(h, buf.data(), (DWORD)buf.size() - 2, &rd, nullptr);
+    CloseHandle(h);
+    DeleteFileW(path.c_str());   // one-shot instructions, never state
+    if (!ok || rd < 2 || buf[0] != 0xFF || buf[1] != 0xFE || (rd & 1)) return false;
+    std::wstring all((const wchar_t*)(buf.data() + 2), (rd - 2) / sizeof(wchar_t));
+    size_t n1 = all.find(L'\n');
+    if (n1 == std::wstring::npos) return false;
+    size_t n2 = all.find(L'\n', n1 + 1);
+    if (n2 == std::wstring::npos) return false;
+    size_t n3 = all.find(L'\n', n2 + 1);
+    if (n3 == std::wstring::npos) return false;
+    kind = all.substr(0, n1);
+    aumid = all.substr(n1 + 1, n2 - n1 - 1);
+    clsid = all.substr(n2 + 1, n3 - n2 - 1);
+    arg = all.substr(n3 + 1);
+    return kind == L"protocol" || kind == L"com";
+}
+
+// --- the child: `notifhost --act-exec <file>` -----------------------------------------------------
+// One activation, in a process of its own (same user, same session, started by the bridge with CreateProcess),
+// so that an activation that never answers leaves a PROCESS the bridge terminates at the bound - not a thread it
+// would carry for ever. Exit: 0 carried out, 2 the activation failed (the ACTEXEC line in bridge.log has the
+// HRESULT / Windows error), 3 the instructions could not be read. The same WinToastActivator the by-hand
+// --invoke-activator diagnostic uses.
+static int ActExecMain(const wchar_t* file)
+{
+    std::wstring kind, aumid, clsid, arg;
+    if (!ActFileRead(file, kind, aumid, clsid, arg))
+    {
+        BLog(L"ACTEXEC pid=%lu: instruction file %s unreadable or malformed - nothing activated", GetCurrentProcessId(), file);
+        return (int)kToastActExitBadInput;
+    }
+    const bool co = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE));
+    bool ok = false;
+    std::wstring detail;
+    try
+    {
+        WinToastActivator wa;
+        if (!co) detail = L"COM apartment init failed in the child";
+        else ok = (kind == L"protocol") ? wa.Protocol(arg, detail) : wa.Com(clsid, aumid, arg, detail);
+    }
+    catch (...) { ok = false; detail = L"the activation threw"; }
+    if (co) CoUninitialize();
+    BLog(L"ACTEXEC pid=%lu kind=%s aumid=%s result=%s%s%s", GetCurrentProcessId(), kind.c_str(), aumid.c_str(),
+         ok ? L"OK" : L"FAIL", ok ? L"" : L" detail=", ok ? L"" : detail.c_str());
+    return ok ? (int)kToastActExitOk : (int)kToastActExitFailed;
+}
+
+// --- the parent: admission (reader thread), spawn / reap / kill (main loop) ------------------------
+
+// Reader thread: dom0 invoked `key` on its notification `dom0Id`. Finds the toast in the table, admits the click
+// under the ledger's cap and hands it to the main loop, which spawns the child. Everything unexpected is logged;
+// a refused click is a failure (the user is told), never silence.
+static void ActionInvoke(uint32_t dom0Id, std::string const& key)
+{
+    const wchar_t* why = nullptr;
+    ToastActEntry refused;
+    bool haveRefused = false;
+    size_t inflight = 0;
+    {
+        CsGuard g(&g_actLock);
+        const ULONGLONG now = GetTickCount64();
+        g_actTable.Expire(now);
+        const ToastActEntry* e = g_actTable.FindDom0(dom0Id);
+        if (!e)
+        {
+            BLog(L"ACTION dom0=%u key=%hs: no forwarded toast with actions under that id (expired, dismissed, or another "
+                 L"connection's id) - ignored", dom0Id, key.c_str());
+            return;
+        }
+        const uint64_t token = ++g_actClickSeq;
+        if (g_actLedger.Admit(token, now, &why))
+        {
+            ActClickInfo info; info.entry = *e; info.key = key;
+            g_actClicks[token] = std::move(info);
+        }
+        else { refused = *e; haveRefused = true; }
+        inflight = g_actLedger.Inflight();
+    }
+    if (haveRefused)
+    {
+        BLog(L"ACTION id=%u dom0=%u key=%hs REFUSED: %s (%u in flight) - treated as a failure",
+             refused.guestId, dom0Id, key.c_str(), why ? why : L"-", (UINT)inflight);
+        ActFailQueue(refused, key, why ? why : L"refused", L"REFUSED");
+        return;
+    }
+    if (g_mainWake) SetEvent(g_mainWake);   // the main loop spawns the child on this wake
+}
+
+// Main loop: spawn the child for one admitted click. Returns false (and the caller fails the click) when it cannot.
+static bool ActChildSpawn(uint64_t token, ActClickInfo& info, std::wstring& why)
+{
+    const ToastAct* act = nullptr;
+    for (auto const& a : info.entry.plan.actions) if (a.key == info.key) act = &a;
+    if (!act) { why = L"dom0 invoked an action this toast never carried"; return false; }
+    info.file = ActFilePath(token);
+    if (!ActFileWrite(info.file, info.entry, *act)) { why = L"the instruction file could not be written"; return false; }
+    wchar_t self[MAX_PATH] = { 0 };
+    GetModuleFileNameW(nullptr, self, RTL_NUMBER_OF(self));
+    std::wstring cmd = L"\"" + std::wstring(self) + L"\" --act-exec \"" + info.file + L"\"";
+    std::vector<wchar_t> cmdBuf(cmd.begin(), cmd.end()); cmdBuf.push_back(0);
+    STARTUPINFOW si = { sizeof(si) }; PROCESS_INFORMATION pi = {};
+    if (!CreateProcessW(nullptr, cmdBuf.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+    {
+        why = L"the activation process could not be started, Windows error " + std::to_wstring(GetLastError());
+        DeleteFileW(info.file.c_str());
+        return false;
+    }
+    CloseHandle(pi.hThread);
+    info.process = pi.hProcess;
+    info.pid = pi.dwProcessId;
+    info.startedAt = GetTickCount64();
+    BLog(L"ACTION id=%u dom0=%u key=%hs kind=%s -> child pid %lu (bound %llu ms)", info.entry.guestId, info.entry.dom0Id, info.key.c_str(),
+         act->kind == ToastActKind::Protocol ? L"protocol" : L"com", pi.dwProcessId, (ULONGLONG)kToastActClickBoundMs);
+    return true;
+}
+
+// Main loop: the process handles of the children in flight, for the wait array (a child's exit wakes the loop).
+static DWORD ActChildHandles(HANDLE* out, DWORD cap)
+{
+    DWORD n = 0;
+    CsGuard g(&g_actLock);
+    for (auto const& kv : g_actClicks)
+        if (kv.second.process && n < cap) out[n++] = kv.second.process;
+    return n;
+}
+
+// --- in-guest instruments for the activation path (the dom0 click itself needs a human) ------
+// --resolve-activator <AUMID>: what the bridge would resolve for that sender, the way the click handler does.
+//   ACTIVATOR aumid=<a> clsid=<{...}|-> source=registry|shortcut|none      exit 0 found, 2 none
+// --invoke-activator <AUMID> [<arguments>]: the COM activation the click handler performs, by hand - against
+//   tools/toastfire's com-activator registration this proves CoCreateInstance + Activate() end to end in the
+//   guest without dom0 (toastfire records the Activate call it received).
+//   INVOKE aumid=<a> clsid=<{...}> args='<args>' result=OK|FAIL detail=<why>            exit 0 ok, 2 failed
+// Both run in the invoking user's session and apartment (STA, like the click thread).
+static int ResolveActivatorMain(const wchar_t* aumid)
+{
+    const bool co = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE));
+    const wchar_t* source = L"none";
+    std::wstring clsid = ResolveToastActivator(aumid, &source);
+    wprintf(L"ACTIVATOR aumid=%s clsid=%s source=%s\n", aumid, clsid.empty() ? L"-" : clsid.c_str(), source);
+    if (co) CoUninitialize();
+    return clsid.empty() ? 2 : 0;
+}
+
+static int InvokeActivatorMain(const wchar_t* aumid, const wchar_t* args)
+{
+    const bool co = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE));
+    const wchar_t* source = L"none";
+    std::wstring clsid = ResolveToastActivator(aumid, &source);
+    if (clsid.empty())
+    {
+        wprintf(L"INVOKE aumid=%s clsid=- args='%s' result=FAIL detail=no toast activator registered for this AUMID (source=%s)\n", aumid, args ? args : L"", source);
+        if (co) CoUninitialize();
+        return 2;
+    }
+    WinToastActivator wa;
+    std::wstring detail;
+    const bool ok = wa.Com(clsid, aumid, args ? args : L"", detail);
+    wprintf(L"INVOKE aumid=%s clsid=%s args='%s' result=%s detail=%s\n", aumid, clsid.c_str(), args ? args : L"",
+            ok ? L"OK" : L"FAIL", ok ? L"Activate returned S_OK" : detail.c_str());
+    BLog(L"INVOKE (by hand) aumid=%s clsid=%s result=%s %s", aumid, clsid.c_str(), ok ? L"OK" : L"FAIL", detail.c_str());
+    if (co) CoUninitialize();
+    return ok ? 0 : 2;
+}
+
 // --- the long-lived connection ------------------------------------------------------------
 // Resident end of a named pipe; the vchan end is a --relay child spawned in this same
 // session by qrexec-agent (via qrexec-client-vm). All protocol state lives here.
@@ -2328,6 +2928,9 @@ static DWORD WINAPI ReaderThread(LPVOID)
                 CsGuard g(&g_corrLock);   // RAII: no lock leak if anything here throws (must-fix)
                 for (auto& e : g_corr) if (e.seq == seq) { e.dom0Id = id; break; }
             }
+            // The actions table entry for this frame (put before the send, ADR-toasts 11) learns the proxy's id
+            // HERE - the id Dismissed and ActionInvoked will carry - before anything can be invoked on it.
+            { CsGuard g(&g_actLock); g_actTable.SetDom0Id(seq, id); }
             if (seq == g_awaitSeq) { g_awaitOk = 1; SetEvent(g_ackEvt); }
         }
         else if (tag == 1 || tag == 2)                // DBusError / UnknownError
@@ -2355,11 +2958,20 @@ static DWORD WINAPI ReaderThread(LPVOID)
                         break;
                     }
             }
+            // The actions of a notification the user dismissed (2) or the daemon was told to close (3) can no
+            // longer be invoked: its table entry goes after a short grace (the daemon's ActionInvoked for the same
+            // click can arrive after its NotificationClosed). An expiry (1) keeps it: a daemon that keeps the
+            // notification in a list still lets the user invoke its actions - the TTL bounds that.
+            if (reason == 2 || reason == 3) { CsGuard g(&g_actLock); g_actTable.Dismiss(id, GetTickCount64()); }
             if (reason != 2) BLog(L"Dismissed id=%u reason=%u (not user-dismissed - guest record kept)", id, reason);
             else { InterlockedExchange(&g_listWanted, 1); if (g_mainWake) SetEvent(g_mainWake); }   // the main loop applies queued dismissals on its next pass
         }
-        else if (tag == 4)                            // ActionInvoked - phase 2 consumes this
-            BLog(L"reader: ActionInvoked (ignored in A0)");
+        else if (tag == 4)                            // ActionInvoked{id u32, action String}: a dom0 click (ADR-toasts 11)
+        {
+            uint32_t id = 0; std::string key;
+            if (ToastActParseInvoked(p.data(), len, id, key)) ActionInvoke(id, key);
+            else BLog(L"reader: malformed ActionInvoked frame (len %u) - ignored", len);
+        }
         else if (tag == 5)                            // ServerRestart
         {
             BLog(L"reader: ServerRestart - reconnecting");
@@ -2389,6 +3001,11 @@ static void ConnDown()
         CsGuard g(&g_corrLock);   // RAII (must-fix)
         g_corr.clear();
         g_pendingDismiss.clear();
+    }
+    {
+        CsGuard g(&g_actLock);    // the actions table is keyed by the same per-connection dom0 ids
+        if (g_actTable.Size()) BLog(L"ACTION table cleared on connection loss (%u toast(s) lose their dom0 actions)", (UINT)g_actTable.Size());
+        g_actTable.Clear();
     }
     MarkConnDead();
 }
@@ -2483,10 +3100,14 @@ static uint64_t g_seq = 0;
 // so the Phase-3 deferred-map hold budget (design 3.3, the ~250 ms hypothesis) is sized from
 // measured dom0 latency, not guessed. QPC-based: GetTickCount64's ~16 ms grain would round a
 // fast ack down to 0.
-static bool ForwardText(std::wstring const& title, std::wstring const& body, uint32_t guestId, NotifyKind kind = NotifyKind::Info)
+// `actions`: the freedesktop list (alternating key, label) for a toast forwarded with its buttons (ADR-toasts 11);
+// *seqOut (optional) receives the frame's sequence, which the actions table keys the dom0 id by.
+static bool ForwardText(std::wstring const& title, std::wstring const& body, uint32_t guestId, NotifyKind kind = NotifyKind::Info,
+                        std::vector<std::string> const& actions = {}, uint64_t* seqOut = nullptr)
 {
     if (g_connDead) return false;
     uint64_t seq = ++g_seq;
+    if (seqOut) *seqOut = seq;
     LARGE_INTEGER qf, q0, q1;
     QueryPerformanceFrequency(&qf); QueryPerformanceCounter(&q0);
     auto rtt = [&](int ok) {
@@ -2501,13 +3122,141 @@ static bool ForwardText(std::wstring const& title, std::wstring const& body, uin
         while (g_corr.size() > 256) g_corr.erase(g_corr.begin());
     }
 
-    auto frame = EncodeNotifyFrame(seq, Utf8(title.empty() ? L"Notification" : title), Utf8(body), kind);
+    auto frame = EncodeNotifyFrame(seq, Utf8(title.empty() ? L"Notification" : title), Utf8(body), kind, actions);
     g_awaitSeq = seq; g_awaitOk = 0; ResetEvent(g_ackEvt);
     if (!PipeXfer(FALSE, frame.data(), (DWORD)frame.size(), 15000)) { rtt(-1); MarkConnDead(); return false; }
     if (WaitForSingleObject(g_ackEvt, 15000) != WAIT_OBJECT_0)
     { rtt(-2); BLog(L"send seq=%llu: ack timeout", (ULONGLONG)seq); MarkConnDead(); return false; }
     rtt(g_awaitOk == 1 ? 1 : 0);
     return g_awaitOk == 1;
+}
+
+// The dom0 id the proxy gave our frame `seq` (the reader stores it from the Id reply before it signals the
+// ack, so after a successful ForwardText it is in hand); 0 = not known.
+static uint32_t CorrDom0Id(uint64_t seq)
+{
+    CsGuard g(&g_corrLock);
+    for (auto const& e : g_corr) if (e.seq == seq) return e.dom0Id;
+    return 0;
+}
+
+// --- the clicks (main loop): spawn, reap, kill; then the failures ------------------------------------
+// 1. An admitted click not yet spawned gets its child (ActChildSpawn); a child that exited is reaped - its exit
+//    code is the outcome (ToastActExitOutcome); a child still running at kToastActClickBoundMs is TERMINATED and
+//    the click fails (ToastActChildDecide: Reap / Kill / Keep). The ledger makes each outcome the only one.
+// 2. Pumps g_actFails: a failure whose record the agent marked shown is closed (the user has the guest's
+//    buttons); one without a mark at the bound - or whose record was already gone - becomes a dom0 ERROR notice
+//    (stays until dismissed) over the live connection, retried on every pass while dom0 is unreachable and given
+//    up loudly after kToastActNoticeGiveUpMs.
+// *nextDue is the earliest tick a child's bound or a pending failure wants a pass.
+static void ActPump(ULONGLONG now, ULONGLONG* nextDue)
+{
+    struct Outcome { uint64_t token; ActClickInfo info; ToastActChildStep step; DWORD exitCode; bool noChild; std::wstring why; };
+    std::vector<Outcome> outcomes;
+    {
+        CsGuard g(&g_actLock);   // held across CreateProcess/TerminateProcess: both return at once; the reader waits milliseconds at most
+        for (auto it = g_actClicks.begin(); it != g_actClicks.end(); )
+        {
+            ActClickInfo& info = it->second;
+            if (!info.process)
+            {
+                std::wstring why;
+                if (ActChildSpawn(it->first, info, why)) { ++it; continue; }
+                if (g_actLedger.Done(it->first)) outcomes.push_back({ it->first, info, ToastActChildStep::Keep, 0, true, why });   // no child: failed at once
+                it = g_actClicks.erase(it);
+                continue;
+            }
+            const bool exited = WaitForSingleObject(info.process, 0) == WAIT_OBJECT_0;
+            const ToastActChildStep step = ToastActChildDecide(exited, now, info.startedAt);
+            if (step == ToastActChildStep::Keep)
+            {
+                const ULONGLONG due = info.startedAt + kToastActClickBoundMs;
+                if (*nextDue == 0 || due < *nextDue) *nextDue = due;
+                ++it;
+                continue;
+            }
+            DWORD code = 259;
+            if (step == ToastActChildStep::Reap) GetExitCodeProcess(info.process, &code);
+            if (step == ToastActChildStep::Kill) { TerminateProcess(info.process, 1); DeleteFileW(info.file.c_str()); }   // asynchronous: the handle is closed below, the kernel finishes it
+            const bool owns = g_actLedger.Done(it->first);
+            CloseHandle(info.process); info.process = nullptr;
+            if (owns) outcomes.push_back({ it->first, info, step, code, false, L"" });
+            else BLog(L"ACTION id=%u key=%hs: outcome already reported (a bug of ours) - not reported twice", info.entry.guestId, info.key.c_str());
+            it = g_actClicks.erase(it);
+        }
+    }
+    for (auto& o : outcomes)
+    {
+        const uint32_t id = o.info.entry.guestId;
+        if (o.noChild)
+            ActFailQueue(o.info.entry, o.info.key, o.why, L"FAILED");
+        else if (o.step == ToastActChildStep::Reap)
+        {
+            const wchar_t* detail = L"";
+            const ToastActResult r = ToastActExitOutcome(o.exitCode, &detail);
+            if (r == ToastActResult::Done)
+                BLog(L"ACTION id=%u dom0=%u key=%hs OK - carried out in the guest by child pid %lu", id, o.info.entry.dom0Id, o.info.key.c_str(), o.info.pid);
+            else
+            {
+                wchar_t code[16]; swprintf(code, RTL_NUMBER_OF(code), L"0x%08X", (unsigned)o.exitCode);
+                ActFailQueue(o.info.entry, o.info.key, std::wstring(detail) + L" (child pid " + std::to_wstring(o.info.pid) + L" exit " + code + L")", L"FAILED");
+            }
+        }
+        else if (o.step == ToastActChildStep::Kill)
+        {
+            BLog(L"ACTION id=%u dom0=%u key=%hs TIMED OUT: child pid %lu gave no answer within %llu ms (stuck in CoCreateInstance/"
+                 L"Activate/ShellExecute) - TERMINATED, reported as failed", id, o.info.entry.dom0Id, o.info.key.c_str(), o.info.pid,
+                 (ULONGLONG)kToastActClickBoundMs);
+            ActFailQueue(o.info.entry, o.info.key, L"the activation did not answer within " + std::to_wstring(kToastActClickBoundMs / 1000) +
+                         L" s and its process was terminated", L"TIMED OUT");
+        }
+    }
+
+    std::vector<ActFail> pending;
+    {
+        CsGuard g(&g_actLock);
+        pending.swap(g_actFails);
+    }
+    if (pending.empty()) return;
+    std::vector<ActFail> keep;
+    for (auto& f : pending)
+    {
+        const LONG mark = f.recordFound ? HoldAgentState(f.seq) : TH_AGENT_NONE;
+        const ToastActAfterFail c = ToastActFailChoice(f.recordFound, mark, !g_connDead, now, f.flippedAt);
+        if (c == ToastActAfterFail::BannerShown)
+        {
+            BLog(L"ACTION id=%u key=%hs failure resolved: the agent reopened the guest banner (its buttons are the user's way now) "
+                 L"after %llu ms", f.guestId, f.key.c_str(), now - f.flippedAt);
+            continue;
+        }
+        if (c == ToastActAfterFail::Wait)
+        {
+            const ULONGLONG due = f.flippedAt + (f.recordFound ? kToastActShowBoundMs : 0);
+            if (due > now && (*nextDue == 0 || due < *nextDue)) *nextDue = due;
+            keep.push_back(std::move(f));
+            continue;
+        }
+        if (c == ToastActAfterFail::GiveUp)
+        {
+            BLog(L"ACTION id=%u key=%hs failure UNREPORTED: dom0 unreachable for %llu ms - the notice is given up (the toast is "
+                 L"in the guest's Notification Center)", f.guestId, f.key.c_str(), now - f.flippedAt);
+            continue;
+        }
+        // Notice
+        const ToastAct* act = nullptr;
+        for (auto const& a : f.entry.plan.actions) if (a.key == f.key) act = &a;
+        std::wstring summary, body;
+        ToastActNoticeText(f.entry, act, f.detail, summary, body);
+        const bool ok = ForwardText(summary, body, 0, NotifyKind::Error);
+        BLog(L"ACTION id=%u key=%hs failure reported to dom0 as an error notice: %s (banner %s)", f.guestId, f.key.c_str(),
+             ok ? L"OK" : L"FAIL (connection; retried)", f.recordFound ? L"gone before the correction could show it" : L"record already gone");
+        if (!ok) keep.push_back(std::move(f));
+    }
+    if (!keep.empty())
+    {
+        CsGuard g(&g_actLock);
+        for (auto& f : keep) g_actFails.push_back(std::move(f));
+    }
 }
 
 // --- one-shot notification (--notify) ------------------------------------------------------
@@ -2670,6 +3419,7 @@ static int NotifyOnceMain(std::wstring const& summary, std::wstring const& body,
 
     ProcessIdToSessionId(GetCurrentProcessId(), &g_mySession);
     InitializeCriticalSection(&g_corrLock);
+    InitializeCriticalSection(&g_actLock);   // the reader thread touches the actions table on Dismissed
     g_rdEvt    = CreateEventW(nullptr, TRUE,  FALSE, nullptr);
     g_wrEvt    = CreateEventW(nullptr, TRUE,  FALSE, nullptr);
     g_connStop = CreateEventW(nullptr, TRUE,  FALSE, nullptr);
@@ -2800,6 +3550,7 @@ static int BridgeMain()
     ProcessIdToSessionId(GetCurrentProcessId(), &g_mySession);
 
     InitializeCriticalSection(&g_corrLock);
+    InitializeCriticalSection(&g_actLock);
     g_rdEvt = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_wrEvt = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_connStop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -3119,7 +3870,12 @@ static int BridgeMain()
             }
             else
             {
-                struct NewToast { uint32_t id; std::wstring aumid, app, title, body; };
+                struct NewToast
+                {
+                    uint32_t id; std::wstring aumid, app, title, body;
+                    ToastActPlan plan;        // the classifier's action plan (ADR-toasts 11); !ok or empty = no actions
+                    std::wstring clsid;       // the sender's toast activator, when any action is a COM activation
+                };
                 std::vector<NewToast> fresh;
                 // NON-SEAMLESS MODE (ADR-toasts 10): the agent says whether the hold exists right now. While it does
                 // not, every toast listed here takes the window path - the guest banner inside the desktop window is
@@ -3143,6 +3899,11 @@ static int BridgeMain()
                     std::wstring aumid, app;
                     try { aumid = un.AppInfo().AppUserModelId().c_str(); } catch (...) {}
                     try { app = un.AppInfo().DisplayInfo().DisplayName().c_str(); } catch (...) {}
+                    // The title goes into every skip line too (owner, 2026-10-02: ties the UAC A/B cell's skip line to its
+                    // test toast by content, not by count), and into the forward below.
+                    const std::wstring tb = FirstTexts(un);
+                    const size_t sep = tb.find(L'\x1f');
+                    const std::wstring title = tb.substr(0, sep);
                     // P3a shadow probe: capture + ENQUEUE every new toast (skip and forward
                     // branches alike) BEFORE the unchanged A0 routing below. MEASURE-ONLY
                     // and now FIXED-COST on this thread: the acquisition ladder (ETW ring,
@@ -3170,7 +3931,7 @@ static int BridgeMain()
                     if (windowOnly)
                     {
                         seen.insert(id); VerdictForget(id);
-                        BLog(L"skip id=%u aumid=%s (window path; window-only app - its click is its action)", id, aumid.c_str());
+                        BLog(L"skip id=%u aumid=%s title='%s' (window path; window-only app - its click is its action)", id, aumid.c_str(), title.c_str());
                         continue;
                     }
                     if (!seamless)
@@ -3179,7 +3940,7 @@ static int BridgeMain()
                         // A toast listed earlier in seamless mode (record pending/bridge, left unseen for a retry)
                         // is settled here too, or its stale record would pre-empt banners once seamless returns.
                         HoldVerdict(id, TH_VERDICT_WINDOW, false);
-                        BLog(L"skip id=%u aumid=%s (window path; non-seamless mode)", id, aumid.c_str());
+                        BLog(L"skip id=%u aumid=%s title='%s' (window path; non-seamless mode)", id, aumid.c_str(), title.c_str());
                         continue;
                     }
 #if defined(P3AQ_DEFECT_ROUTE)
@@ -3189,22 +3950,24 @@ static int BridgeMain()
                     // FAIL on this build or it is decoration.
                     if (g_etw.state != ETW_STATE_LIVE) listed = false;
 #endif
+                    VerdictEntry ve;          // the classifier's verdict + action plan, when it has one (else window, no actions)
                     if (!listed)
                     {
                         // CLASSIFIER-DRIVEN ROUTING. An app nobody allowlisted is no longer skipped
                         // outright: its toast takes the route the classifier gave it. Every rung
                         // below fails OPEN to the window path, which is what shipped before this.
-                        int route = ToastRouteWindow, passes = 0;
-                        if (VerdictLookup(id, &route, &passes))
+                        int passes = 0;
+                        if (VerdictLookup(id, &ve, &passes))
                         {
-                            if (route != ToastRouteBridge)
+                            if (ve.route != ToastRouteBridge)
                             {
                                 seen.insert(id); VerdictForget(id);
                                 HoldVerdict(id, TH_VERDICT_WINDOW, false);   // the listing's final word
-                                BLog(L"skip id=%u aumid=%s (window path; classifier verdict)", id, aumid.c_str());
+                                BLog(L"skip id=%u aumid=%s title='%s' (window path; classifier verdict%s%s)", id, aumid.c_str(), title.c_str(),
+                                     ve.plan.ok ? L"" : L"; actions ", ve.plan.ok ? L"" : ToastActSlug(ve.plan).c_str());
                                 continue;
                             }
-                            BLog(L"route id=%u aumid=%s (bridge; classifier verdict)", id, aumid.c_str());
+                            BLog(L"route id=%u aumid=%s (bridge; classifier verdict; actions=%s)", id, aumid.c_str(), ToastActSlug(ve.plan).c_str());
                             // The verdict is kept in the store until the forward SUCCEEDS (or is given up): forgetting it
                             // here made a failed forward's retry find no verdict, wait out its passes and end as
                             // "window" without ever forwarding - every forward failure was a loss (review #2).
@@ -3227,16 +3990,19 @@ static int BridgeMain()
                         {
                             seen.insert(id); VerdictForget(id);
                             HoldVerdict(id, TH_VERDICT_WINDOW, false);
-                            BLog(L"skip id=%u aumid=%s (window path; no verdict after %d passes)", id, aumid.c_str(), kVerdictMaxPasses);
+                            BLog(L"skip id=%u aumid=%s title='%s' (window path; no verdict after %d passes)", id, aumid.c_str(), title.c_str(), kVerdictMaxPasses);
                             continue;
                         }
                     }
                     // allowlisted: DEFER marking seen until a forward succeeds, so a failed/absent
                     // forward is retried and never silently drops a toast (P.2 fail-open invariant).
-                    auto tb = FirstTexts(un);
-                    size_t sep = tb.find(L'\x1f');
-                    fresh.push_back({ id, aumid, app, tb.substr(0, sep),
-                                      sep == std::wstring::npos ? L"" : tb.substr(sep + 1) });
+                    // An allowlisted toast carries no actions (the shortcut forwards before any verdict; the seed
+                    // is informational senders only, ADR-toasts 4); a classifier-routed one carries its plan.
+                    NewToast nt;
+                    nt.id = id; nt.aumid = aumid; nt.app = app; nt.title = title;
+                    nt.body = (sep == std::wstring::npos) ? L"" : tb.substr(sep + 1);
+                    if (ve.route == ToastRouteBridge && ve.plan.ok) { nt.plan = ve.plan; nt.clsid = ve.clsid; }
+                    fresh.push_back(std::move(nt));
                 }
                 // prune failure counters for ids no longer pending (forwarded, given up, or gone
                 // from the center) - keeps `fwdFails` no larger than `fresh` across polls
@@ -3275,26 +4041,84 @@ static int BridgeMain()
                 {
                     // coalesce a burst into one dom0 notification (politeness rule). guestId 0 =>
                     // no dismiss-sync for coalesced items (documented A0 limit).
-                    std::wstring lines;
-                    for (auto const& e : fresh) { if (!lines.empty()) lines += L"\n"; lines += e.title + L": " + e.body; }
-                    wchar_t sum[256];
-                    swprintf(sum, RTL_NUMBER_OF(sum), L"%u notifications (%s)", (UINT)fresh.size(), fresh[0].app.c_str());
-                    bool ok = ForwardText(sum, lines, 0);
-                    // Acknowledged by dom0: the record turns `forwarded` - the agent's suppression now stands even if
-                    // this bridge dies (a `bridge` without the ack is reopened on bridge death: nobody knows whether
-                    // dom0 has it). The classifier's verdict is forgotten only now that the toast is done.
-                    if (ok) for (auto const& e : fresh) { seen.insert(e.id); fwdFails.erase(e.id); VerdictForget(e.id); HoldVerdict(e.id, TH_VERDICT_FORWARDED, false); }
-                    else { for (auto const& e : fresh) capFailed(e.id); retryPending = true; }
-                    BLog(L"SENT coalesced x%u: %s%s", (UINT)fresh.size(), ok ? L"OK" : L"FAIL",
-                         ok ? L"" : L" (unseen, retried)");
+                    // A toast WITH actions cannot be coalesced (one dom0 notification cannot carry four toasts'
+                    // buttons) and must not be forwarded half-way (rule 4): in a burst it takes the window path,
+                    // where its buttons work - the politeness bound stays exactly what it was.
+                    std::vector<NewToast> plain;
+                    for (auto& e : fresh)
+                    {
+                        if (e.plan.ok && !e.plan.actions.empty())
+                        {
+                            seen.insert(e.id); fwdFails.erase(e.id); VerdictForget(e.id);
+                            HoldVerdict(e.id, TH_VERDICT_WINDOW, false);
+                            BLog(L"skip id=%u aumid=%s title='%s' (window path; a toast with actions inside a burst of %u is not coalesced)",
+                                 e.id, e.aumid.c_str(), e.title.c_str(), (UINT)fresh.size());
+                        }
+                        else plain.push_back(std::move(e));
+                    }
+                    if (!plain.empty())
+                    {
+                        std::wstring lines;
+                        for (auto const& e : plain) { if (!lines.empty()) lines += L"\n"; lines += e.title + L": " + e.body; }
+                        wchar_t sum[256];
+                        swprintf(sum, RTL_NUMBER_OF(sum), L"%u notifications (%s)", (UINT)plain.size(), plain[0].app.c_str());
+                        bool ok = ForwardText(sum, lines, 0);
+                        // Acknowledged by dom0: the record turns `forwarded` - the agent's suppression now stands even if
+                        // this bridge dies (a `bridge` without the ack is reopened on bridge death: nobody knows whether
+                        // dom0 has it). The classifier's verdict is forgotten only now that the toast is done.
+                        if (ok) for (auto const& e : plain) { seen.insert(e.id); fwdFails.erase(e.id); VerdictForget(e.id); HoldVerdict(e.id, TH_VERDICT_FORWARDED, false); }
+                        else { for (auto const& e : plain) capFailed(e.id); retryPending = true; }
+                        BLog(L"SENT coalesced x%u: %s%s", (UINT)plain.size(), ok ? L"OK" : L"FAIL",
+                             ok ? L"" : L" (unseen, retried)");
+                    }
                 }
                 else for (auto const& e : fresh)
                 {
-                    bool ok = ForwardText(e.title, e.body.empty() ? e.app : e.body, e.id);
+                    // WITH ITS ACTIONS (ADR-toasts 11) when the plan carries any: dom0 renders them if its daemon does
+                    // (the guest cannot know - Jev 0.76; the stock Linux client advertises them unconditionally too).
+                    const bool withActions = e.plan.ok && !e.plan.actions.empty();
+                    const std::vector<std::string> actions = withActions ? ToastActFlatten(e.plan) : std::vector<std::string>();
+                    // The click comes back as ActionInvoked{proxy id, key}: the table entry is put BEFORE the send, keyed by
+                    // our sequence, and the reader fills the proxy's id in from the Id reply - which it processes before any
+                    // Dismissed/ActionInvoked for this notification can exist - so no click can find the table empty.
+                    // Bounded (ToastActTable); evictions are anomalies, logged.
+                    const uint64_t seqNext = g_seq + 1;   // ForwardText's sequence for this frame (sends are sequential, this thread)
+                    if (withActions)
+                    {
+                        ToastActEntry te;
+                        te.seq = seqNext; te.guestId = e.id; te.dom0Id = 0; te.aumid = e.aumid; te.app = e.app; te.title = e.title;
+                        te.clsid = e.clsid; te.plan = e.plan;
+                        size_t evicted;
+                        { CsGuard g(&g_actLock); evicted = g_actTable.Put(std::move(te), GetTickCount64()); }
+                        if (evicted) BLog(L"ACTION table: %u entr%s evicted to make room (TTL, dismissal grace, or the %u bound)",
+                                          (UINT)evicted, evicted == 1 ? L"y" : L"ies", (UINT)ToastActTable::kMax);
+                    }
+                    uint64_t seq = 0;
+                    bool ok = ForwardText(e.title, e.body.empty() ? e.app : e.body, e.id, NotifyKind::Info, actions, &seq);
+                    uint32_t dom0Id = 0;
                     if (ok) { seen.insert(e.id); fwdFails.erase(e.id); VerdictForget(e.id); HoldVerdict(e.id, TH_VERDICT_FORWARDED, false); }
                     else { capFailed(e.id); retryPending = true; }
-                    BLog(L"SENT id=%u app='%s' title='%s': %s%s", e.id, e.app.c_str(), e.title.c_str(),
-                         ok ? L"OK" : L"FAIL", ok ? L"" : L" (unseen, retried)");
+                    if (withActions)
+                    {
+                        if (!ok) { CsGuard g(&g_actLock); g_actTable.RemoveSeq(seqNext); }   // not acknowledged (or dom0 went away): nothing to click on
+                        else
+                        {
+                            dom0Id = CorrDom0Id(seq);
+                            if (seq != seqNext)   // cannot happen on this thread (sends are sequential): keyed wrong = unreachable, say so
+                            {
+                                CsGuard g(&g_actLock); g_actTable.RemoveSeq(seqNext);
+                                BLog(L"ACTION id=%u: frame sequence %llu differs from the expected %llu (a bug of ours) - its actions are "
+                                     L"unreachable (entry removed)", e.id, (ULONGLONG)seq, (ULONGLONG)seqNext);
+                            }
+                            else if (dom0Id == 0)
+                                BLog(L"ACTION id=%u seq=%llu: no proxy id in the correlation table after the ack - its actions cannot be "
+                                     L"matched when clicked (a dom0 click will log 'no forwarded toast')", e.id, (ULONGLONG)seq);
+                        }
+                    }
+                    BLog(L"SENT id=%u app='%s' title='%s': %s%s actions=%s%s%s", e.id, e.app.c_str(), e.title.c_str(),
+                         ok ? L"OK" : L"FAIL", ok ? L"" : L" (unseen, retried)",
+                         withActions ? ToastActSlug(e.plan).c_str() : L"none",
+                         (ok && withActions) ? L" dom0=" : L"", (ok && withActions) ? std::to_wstring(dom0Id).c_str() : L"");
                 }
             }
             // bound the seen-set: INTERSECT with what is still in the center. A plain rebuild
@@ -3340,9 +4164,15 @@ static int BridgeMain()
             }
         }
 
+        // dom0 clicks (ADR-toasts 11): the bound of those in flight, and the failures awaiting their outcome - the
+        // agent's mark, or the error notice from here
+        ULONGLONG actDue = 0;
+        ActPump(GetTickCount64(), &actDue);
+
         // THE WAIT (rest-zero S4c): INFINITE unless something this loop armed is due - a toast left unseen for a
         // retry (2 s after its listing), the reconnect backoff while dom0 is unreachable with apps to forward (a
-        // failure state's bounded timer), and the listing floor (kFloorMs) - and woken by every event above.
+        // failure state's bounded timer), the listing floor (kFloorMs), and a failed click's show bound - and
+        // woken by every event above.
         {
             DWORD timeout = INFINITE;
             const ULONGLONG t = GetTickCount64();
@@ -3354,12 +4184,14 @@ static int BridgeMain()
             if (retryPending) dueAt(lastListTick + 2000);
             if (!(pushArmed || g_etw.state == ETW_STATE_LIVE)) dueAt(nextFloorList);
             if (walRetryAt) dueAt(walRetryAt);
-            HANDLE hs[5]; DWORD n = 0;
+            if (actDue) dueAt(actDue);
+            HANDLE hs[5 + kToastActInflightMax]; DWORD n = 0;
             const DWORD iToast = n; if (toastEvt) hs[n++] = toastEvt;
             const DWORD iWake = n;  if (g_mainWake) hs[n++] = g_mainWake;
             const DWORD iStop = n;  if (stopChg) hs[n++] = stopChg;
             const DWORD iCons = n;  if (consentEvt) hs[n++] = consentEvt;
             if (g_agentAlive) hs[n++] = g_agentAlive;   // abandoned = the agent died; checked at the loop top
+            n += ActChildHandles(hs + n, kToastActInflightMax);   // a click's child exiting wakes the loop (ActPump reaps it)
             const DWORD w = n ? MsgWaitForMultipleObjects(n, hs, FALSE, timeout, QS_ALLINPUT)
                               : (Sleep(timeout == INFINITE ? 2000 : timeout), WAIT_TIMEOUT);
             const DWORD k = (w >= WAIT_ABANDONED_0 && w < WAIT_ABANDONED_0 + n) ? (w - WAIT_ABANDONED_0)
@@ -3543,6 +4375,10 @@ int wmain(int argc, wchar_t** argv)
     NotifyKind notifyKind = NotifyKind::Error;   // --severity: the one-shot notice's kind (absent = an error, as before)
     const wchar_t* aliveName = nullptr;   // remembered for a bare --hold (names derived from it)
     bool holdDerive = false;
+    const wchar_t* actExecFile = nullptr;    // --act-exec <file>: one activation in a child process (the bridge's own click handler)
+    const wchar_t* resolveAumid = nullptr;   // --resolve-activator <AUMID>
+    const wchar_t* invokeAumid = nullptr;    // --invoke-activator <AUMID> [<arguments>]
+    const wchar_t* invokeArgs = nullptr;
     for (int i = 1; i < argc; i++)
     {
         if (_wcsicmp(argv[i], L"--agent-pid") == 0 && i + 1 < argc)
@@ -3611,7 +4447,17 @@ int wmain(int argc, wchar_t** argv)
             g_holdVerdictEvt = OpenEventW(EVENT_MODIFY_STATE, FALSE, argv[++i]);
         else if (_wcsicmp(argv[i], L"--notify-errors") == 0 && i + 1 < argc) g_notifyErrorsGate = (_wtoi(argv[++i]) != 0);
         else if (_wcsicmp(argv[i], L"--client-sid") == 0 && i + 1 < argc) i++;   // consumed by etwproxy.exe
+        else if (_wcsicmp(argv[i], L"--act-exec") == 0 && i + 1 < argc) actExecFile = argv[++i];
+        else if (_wcsicmp(argv[i], L"--resolve-activator") == 0 && i + 1 < argc) resolveAumid = argv[++i];
+        else if (_wcsicmp(argv[i], L"--invoke-activator") == 0 && i + 1 < argc)
+        {
+            invokeAumid = argv[++i];
+            if (i + 1 < argc && wcsncmp(argv[i + 1], L"--", 2) != 0) invokeArgs = argv[++i];
+        }
     }
+    if (actExecFile) return ActExecMain(actExecFile);
+    if (resolveAumid) return ResolveActivatorMain(resolveAumid);
+    if (invokeAumid) return InvokeActivatorMain(invokeAumid, invokeArgs);
     if (holdDerive)
     {
         const size_t suffix = wcslen(L"_alive");
