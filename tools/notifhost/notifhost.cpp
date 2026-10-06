@@ -595,14 +595,17 @@ static void BannerRestoreAll(std::vector<std::wstring>* restoredAumids = nullptr
 // HOW LONG A FORWARDED NOTIFICATION STAYS (owner 2026-10-02: "current default timeout is too brief, consider increasing
 // (and errors should stay until dismissed)"). The stock proxy hands both fields to dom0's notification daemon unchanged
 // (qubes-notification-proxy lib.rs: only expire_timeout < -1 is refused; urgency becomes the freedesktop hint, no clamp).
-// A bridged toast stays 20 s instead of the daemon's default (Jev 0.56 over 15 s and 30 s). An ERROR - everything sent
-// through the one-shot --notify path: the agent's ACTION errors, the installer's and this bridge's own - is sent with
-// expire_timeout 0, which the freedesktop spec defines as "never expire", AND critical urgency, which daemons that ignore
-// expire_timeout (GNOME) also keep until dismissed.
-static const uint32_t kToastExpireMs = 20000;
+// THE OWNER'S RULE (2026-10-06, after a forwarded reminder vanished): "errors stay. warnings are 60s. informational
+// messages are 20s." An ERROR is sent with expire_timeout 0, which the freedesktop spec defines as "never expire", AND critical
+// urgency, which daemons that ignore expire_timeout (GNOME) also keep until dismissed. A WARNING stays 60 s, an INFORMATIONAL
+// message 20 s - a forwarded guest toast is informational. The one-shot --notify path is an error unless its caller says
+// --severity warning|info: every notice it carried before the flag existed was an error, so an old caller keeps its meaning.
+enum class NotifyKind { Error, Warning, Info };
+static const uint32_t kInfoExpireMs = 20000;
+static const uint32_t kWarningExpireMs = 60000;
 
 // Message { id: u64, Notification::V1 { ... } }, framed with a u32 LE length prefix.
-static std::vector<BYTE> EncodeNotifyFrame(uint64_t seq, std::string const& summary, std::string const& body, bool persistent)
+static std::vector<BYTE> EncodeNotifyFrame(uint64_t seq, std::string const& summary, std::string const& body, NotifyKind kind)
 {
     std::vector<BYTE> m;
     PutU64(m, seq);             // Message.id (echoed as `sequence` in replies)
@@ -610,14 +613,14 @@ static std::vector<BYTE> EncodeNotifyFrame(uint64_t seq, std::string const& summ
     m.push_back(0);             // suppress_sound = false
     m.push_back(0);             // transient = false
     m.push_back(0);             // resident = false
-    if (persistent) { m.push_back(1); PutU32(m, 2); }   // urgency: Some(Critical) - variant index 2 (Low, Normal, Critical)
-    else m.push_back(0);                                 // urgency: Option None
+    if (kind == NotifyKind::Error) { m.push_back(1); PutU32(m, 2); }   // urgency: Some(Critical) - variant index 2 (Low, Normal, Critical)
+    else m.push_back(0);                                                // urgency: Option None
     PutU32(m, 0);               // replaces_id: 0 = new notification
     PutU64(m, summary.size()); m.insert(m.end(), summary.begin(), summary.end());
     PutU64(m, body.size());    m.insert(m.end(), body.begin(), body.end());
     PutU64(m, 0);               // actions: count 0 (phase 2 adds ["default","Open"])
     m.push_back(0);             // category: Option None
-    PutU32(m, persistent ? 0u : kToastExpireMs);   // expire_timeout ms: 0 = never expire (errors); else 20 s
+    PutU32(m, kind == NotifyKind::Error ? 0u : kind == NotifyKind::Warning ? kWarningExpireMs : kInfoExpireMs);   // expire_timeout ms; 0 = never
     m.push_back(0);             // image: Option None
     std::vector<BYTE> f;
     PutU32(f, (uint32_t)m.size());
@@ -2480,7 +2483,7 @@ static uint64_t g_seq = 0;
 // so the Phase-3 deferred-map hold budget (design 3.3, the ~250 ms hypothesis) is sized from
 // measured dom0 latency, not guessed. QPC-based: GetTickCount64's ~16 ms grain would round a
 // fast ack down to 0.
-static bool ForwardText(std::wstring const& title, std::wstring const& body, uint32_t guestId, bool persistent = false)
+static bool ForwardText(std::wstring const& title, std::wstring const& body, uint32_t guestId, NotifyKind kind = NotifyKind::Info)
 {
     if (g_connDead) return false;
     uint64_t seq = ++g_seq;
@@ -2498,7 +2501,7 @@ static bool ForwardText(std::wstring const& title, std::wstring const& body, uin
         while (g_corr.size() > 256) g_corr.erase(g_corr.begin());
     }
 
-    auto frame = EncodeNotifyFrame(seq, Utf8(title.empty() ? L"Notification" : title), Utf8(body), persistent);
+    auto frame = EncodeNotifyFrame(seq, Utf8(title.empty() ? L"Notification" : title), Utf8(body), kind);
     g_awaitSeq = seq; g_awaitOk = 0; ResetEvent(g_ackEvt);
     if (!PipeXfer(FALSE, frame.data(), (DWORD)frame.size(), 15000)) { rtt(-1); MarkConnDead(); return false; }
     if (WaitForSingleObject(g_ackEvt, 15000) != WAIT_OBJECT_0)
@@ -2660,7 +2663,7 @@ static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring con
     return true;
 }
 
-static int NotifyOnceMain(std::wstring const& summary, std::wstring const& body)
+static int NotifyOnceMain(std::wstring const& summary, std::wstring const& body, NotifyKind kind)
 {
     // SESSION 0 CANNOT DELIVER. Hand off to the interactive session rather than failing there.
     if (NotifyHandoffToSession(summary, body)) return 0;
@@ -2673,7 +2676,7 @@ static int NotifyOnceMain(std::wstring const& summary, std::wstring const& body)
     g_ackEvt   = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!g_rdEvt || !g_wrEvt || !g_connStop || !g_ackEvt) return 3;
     if (!ConnUp()) { BLog(L"NOTIFY one-shot: no connection (policy refusal? no dom0 session?)"); return 3; }
-    bool ok = ForwardText(summary, body, 0, true);   // an error: stays until dismissed
+    bool ok = ForwardText(summary, body, 0, kind);   // an error stays until dismissed; --severity warning/info expire
     BLog(L"NOTIFY one-shot: sent ok=%d summary=%s", ok ? 1 : 0, summary.c_str());
     ConnDown();
     return ok ? 0 : 4;
@@ -3537,6 +3540,7 @@ int wmain(int argc, wchar_t** argv)
     int dumpdbN = 20, dumpEtwSecs = 30, probeSecs = 30;
     std::wstring notifySummary, notifyBody;
     const wchar_t* notifyFile = nullptr;
+    NotifyKind notifyKind = NotifyKind::Error;   // --severity: the one-shot notice's kind (absent = an error, as before)
     const wchar_t* aliveName = nullptr;   // remembered for a bare --hold (names derived from it)
     bool holdDerive = false;
     for (int i = 1; i < argc; i++)
@@ -3566,6 +3570,14 @@ int wmain(int argc, wchar_t** argv)
                 dumpEtwSecs = _wtoi(argv[++i]);
         }
         else if (_wcsicmp(argv[i], L"--notify-file") == 0 && i + 1 < argc) notifyFile = argv[++i];
+        else if (_wcsicmp(argv[i], L"--severity") == 0 && i + 1 < argc)
+        {
+            const wchar_t* sv = argv[++i];
+            if (_wcsicmp(sv, L"warning") == 0) notifyKind = NotifyKind::Warning;
+            else if (_wcsicmp(sv, L"info") == 0) notifyKind = NotifyKind::Info;
+            else if (_wcsicmp(sv, L"error") == 0) notifyKind = NotifyKind::Error;
+            else BLog(L"NOTIFY --severity %s is not error|warning|info - sent as an error (stays until dismissed)", sv);
+        }
         else if (_wcsicmp(argv[i], L"--notify") == 0 && i + 1 < argc)
         {
             notifySummary = argv[++i];
@@ -3634,9 +3646,9 @@ int wmain(int argc, wchar_t** argv)
         std::wstring fs, fb;
         if (!ReadNotifyFile(notifyFile, fs, fb))
         { BLog(L"NOTIFY one-shot: unreadable/empty %s", notifyFile); return 3; }
-        return NotifyOnceMain(fs, fb);
+        return NotifyOnceMain(fs, fb, notifyKind);
     }
-    if (!notifySummary.empty()) return NotifyOnceMain(notifySummary, notifyBody);
+    if (!notifySummary.empty()) return NotifyOnceMain(notifySummary, notifyBody, notifyKind);
     if (dumpdb) return DumpWpnDbMain(dumpdbN);
     if (dumpetw) return DumpEtwMain(dumpEtwSecs);
     if (stop)
