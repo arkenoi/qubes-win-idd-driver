@@ -118,9 +118,9 @@
                                        // is NotifyHandoffToSession, so the dependency stays with it
 #include <objbase.h>    // CoCreateInstance / CoInitializeEx (WIN32_LEAN_AND_MEAN leaves it out)
 #include <shellapi.h>   // ShellExecuteExW - a protocol action's URI launch (WIN32_LEAN_AND_MEAN leaves it out)
-// The _core headers, NOT <shobjidl.h>/<shlobj.h>: those declare the shell's IUserNotification coclass as a global
-// `UserNotification`, ambiguous with winrt::Windows::UI::Notifications::UserNotification used unqualified in this file (C2872 in
-// CI 37538814618). The Start-menu shortcut lookup needs only IShellLinkW and SHGetFolderPathW.
+// The shell headers declare the shell's IUserNotification coclass as a GLOBAL `UserNotification` - <shobjidl.h> and, measured
+// in CI 37539314129, <shobjidl_core.h> too - which is ambiguous with winrt::Windows::UI::Notifications::UserNotification (C2872).
+// So this file names the WinRT type through WinUserNotification (below), never unqualified.
 #include <shobjidl_core.h>   // IShellLinkW / IPersistFile - the Start-menu shortcut that names a toast activator
 #include <propsys.h>    // IPropertyStore - System.AppUserModel.ID / ToastActivatorCLSID on that shortcut
 #include <shlobj_core.h>     // SHGetFolderPathW(CSIDL_PROGRAMS / CSIDL_COMMON_PROGRAMS)
@@ -168,6 +168,7 @@
 using namespace winrt;
 using namespace winrt::Windows::UI::Notifications;
 using namespace winrt::Windows::UI::Notifications::Management;
+using WinUserNotification = winrt::Windows::UI::Notifications::UserNotification;   // see the shell-header note above
 
 static HANDLE g_agent = nullptr;
 static DWORD  g_agentPid = 0;
@@ -320,7 +321,7 @@ static void ShowToast(std::wstring const& title, std::wstring const& body)
 // RAW, no placeholder: the toast-hold identity (HoldPublish) must hash exactly what the banner shows, and the
 // banner shows nothing for a missing title. (toastident.h folds the '\n' joins to one space, the same as the
 // agent's ' '-joined UIA text blocks, so the two sides hash alike.)
-static void RawTexts(UserNotification const& un, std::wstring& title, std::wstring& body)
+static void RawTexts(WinUserNotification const& un, std::wstring& title, std::wstring& body)
 {
     title.clear(); body.clear();
     try {
@@ -334,7 +335,7 @@ static void RawTexts(UserNotification const& un, std::wstring& title, std::wstri
     } catch (...) {}
 }
 
-static std::wstring FirstTexts(UserNotification const& un)
+static std::wstring FirstTexts(WinUserNotification const& un)
 {
     std::wstring title, body;
     RawTexts(un, title, body);
@@ -563,7 +564,7 @@ static LONG HoldAgentState(LONG seq)
 }
 
 // Listing thread only: once per notification id (a toast left unseen for a retry is listed again).
-static void HoldPublish(UserNotification const& un, uint32_t id, std::wstring const& aumid, std::wstring const& app,
+static void HoldPublish(WinUserNotification const& un, uint32_t id, std::wstring const& aumid, std::wstring const& app,
                         LONG verdict, UINT32 flags)
 {
     static std::unordered_set<uint32_t> published;   // listing thread only
@@ -1938,7 +1939,7 @@ static int DumpEtwMain(int seconds)
 // The actionable-buttons route's impure helpers, defined with the click handling further down (the
 // classification above them needs the two lookups).
 static std::wstring ResolveToastActivator(std::wstring const& aumid, const wchar_t** source);
-static bool AumidPackaged(UserNotification const& un, std::wstring const& aumid);
+static bool AumidPackaged(WinUserNotification const& un, std::wstring const& aumid);
 
 // The verdict and, since the actionable-buttons route (ADR-toasts 11), the ACTION PLAN that came with it: the
 // dom0 actions the forward carries (toastactions.h) and the sender's resolved toast activator CLSID the click
@@ -2244,7 +2245,7 @@ static void ShadowWorkerStop()
 
 // Poll-thread side: dedupe + SUPPAPI + capture + FIXED-COST enqueue. Never blocks on
 // acquisition (the heartbeat contract); every throw swallowed.
-static void ShadowClassify(UserNotification const& un, uint32_t id, std::wstring const& aumid)
+static void ShadowClassify(WinUserNotification const& un, uint32_t id, std::wstring const& aumid)
 {
     try
     {
@@ -2561,7 +2562,7 @@ static std::wstring ResolveToastActivator(std::wstring const& aumid, const wchar
 }
 
 // A packaged (PFN!App) sender, from the listener's AppInfo when it says so, else from the AUMID's shape.
-static bool AumidPackaged(UserNotification const& un, std::wstring const& aumid)
+static bool AumidPackaged(WinUserNotification const& un, std::wstring const& aumid)
 {
     try { if (!un.AppInfo().PackageFamilyName().empty()) return true; } catch (...) {}
     return aumid.find(L'!') != std::wstring::npos;
@@ -3653,7 +3654,7 @@ static int BridgeMain()
     // `primed` gates forwarding until a poll has successfully seeded `seen`.
     // EXCEPTION: a toast from a suppression-gap AUMID (leftover marker above) may itself BE a gap
     // toast - already bannerless - so it is left out of the baseline and forwarded like a fresh one.
-    auto inGap = [&](UserNotification const& un) -> bool {
+    auto inGap = [&](WinUserNotification const& un) -> bool {
         if (gapAumids.empty()) return false;
         std::wstring aumid;
         try { aumid = un.AppInfo().AppUserModelId().c_str(); } catch (...) {}
