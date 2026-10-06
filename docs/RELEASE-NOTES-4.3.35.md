@@ -1,7 +1,8 @@
 # QWT-NG 4.3.35 — the Windows Update agent is installed even during an update check, and the hidden Start menu no longer takes clicks
 
 Everything in 4.3.34 is carried forward. This release fixes two defects reported from the field on a German Windows 11 25H2
-template: an upgrade that quietly kept the previous Windows Update agent, and a Windows Start menu that was open but invisible.
+template: an upgrade that quietly kept the previous Windows Update agent, and a Windows Start menu that was open but invisible. It
+also hardens the GUI agent's connection to dom0 against a dialog that could end a qube's GUI after an upgrade.
 
 ## The Windows Update agent is installed even when an update scan is running
 
@@ -45,6 +46,15 @@ environment with 4.3.34.
 Now the agent closes the Windows Start menu the moment it opens in seamless mode, and tells you once per session, with a dom0
 notification, why it closed. Open-Shell's menu and Windows Search (Win+S) are not affected. The README's section on the Windows
 key said the key was let through by default and that "the Start menu works again"; both were wrong and are corrected.
+
+## The GUI agent sends its protocol version before anything else
+
+After an upgrade or reinstall with the qube's GUI open, dom0 could show "The GUI agent that runs in the VM ... implements outdated
+protocol (0:0), and must be updated", and the qube then had no GUI until it was restarted. The "(0:0)" means dom0's GUI daemon read
+zeros where the agent's protocol version should have been - the very first thing it reads when it connects. The agent now lets
+nothing onto its connection before that version exchange is complete; a part of the agent that tries to send earlier is refused
+and logged (`QGAHANDSHAKE` in the gui-agent log). This makes "the version comes first" true by construction. We have not
+identified the exact writer of those zeros, so if you still see the dialog, restart the qube and send us the gui-agent log.
 
 ## Known and not fixed
 
