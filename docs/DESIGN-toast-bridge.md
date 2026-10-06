@@ -387,7 +387,7 @@ is therefore literal — the default branch is the current code path, byte for b
 | **Notification router** (listener + allowlist + route decision + correlation table + reply demux) | extend `tools/notifhost/notifhost.cpp` | interactive **user** session | listener + loop + session/agent-liveness EXIST; add routing + forward + return |
 | **Listener feed** (`UserNotificationListener`) | notifhost, as today | user session (per-user consent store) | EXISTS, access proven `Allowed` |
 | **Allowlist + master gate** | qubesdb `/qubes-service/notify-bridge` = master on/off (dom0 wins, default OFF, mirrors `wgc-broker`); AUMID list in a guest-side config (registry multi-string under the gui-agent config key, or a file pushed via qrexec — the Phase-2B "config pushed via qrexec" precedent) | read by notifhost at startup + on change | NEW (small) |
-| **Banner suppression** (`ShowBanner=0`) | `HKCU\Software\Microsoft\Windows\CurrentVersion\Notifications\Settings\<AUMID>\ShowBanner=DWORD 0`, written by notifhost (user session = correct hive) for each allowlisted AUMID **while it is alive**, removed on clean exit | user session | NEW (small); lifecycle is a named risk, see P.6 |
+| **Banner suppression** | **SUPERSEDED 2026-10-04 (ADR-toasts §10):** the agent keeps each toast's banner window unmapped until that toast's verdict (`agent/gui-agent/toasthold.c`); the bridge publishes per-notification records (content identity + verdict) into an agent-created section and signals an event (`toastident.h`). The per-AUMID `ShowBanner=0` write described in earlier revisions of this row is retired; only the sweep restoring markers left by older versions remains. | agent (SYSTEM) + bridge (user session) | SHIPPED |
 | **Long-lived qrexec connection** to `qubes.Notifications` | a thin `--relay` endpoint spawned by notifhost via `qrexec-client-vm` whose stdio (the vchan) is spliced to a local named pipe back to the resident notifhost (the `guest/qubes-updates-relay.cs` splice shape, proven ~13 MB/s duplex); the **wire protocol lives in notifhost** (ported from `NotifyClient.cs`) so all protocol + correlation state sits in one process | user session | NEW; splice + wire-encode both have working precedents |
 | **Correlation table** `proxy-id (u64 seq) ↔ { guest notification Id (u32), AUMID, synthetic-key → activation }` | in-memory in notifhost, with expiry | user session | NEW (small) |
 | **Agent side** | nothing new in `agent/gui-agent` beyond the existing notifhost spawn/supervise; the agent already launches notifhost and never sees bridged toasts (they map no window) | SYSTEM | EXISTS |
@@ -416,6 +416,11 @@ on new toast un (AUMID = un.AppInfo().AppUserModelId, Id = un.Id()):
     else if listener/consent unhealthy:   -> ShowToast(...)          // fail-open on any doubt
     else:                                 -> Forward(un)             // bridge; banner already off
 ```
+
+*(2026-10-04: the "banner already off" comment above described `ShowBanner=0`, which is retired - ADR-toasts §10.
+The route decision is unchanged; what differs is that the bridge now publishes each toast's record (identity + verdict)
+for the agent, and the AGENT decides whether the banner window is mapped at all. The "no suppression race" property
+below is now delivered by the agent's hold, which starts before anything of the banner reaches dom0.)*
 
 Properties that make this sound:
 - **The default arm is literally today's code.** No allowlisted+healthy match ⇒ nothing changes.
@@ -533,12 +538,21 @@ Top risks (ranked):
    **SETTLED 2026-09-13 (owner: "i do not want double notifications, make sure nothing is lost,
    but no doubles").** The shipped form was *lazy* suppression - `ShowBanner=0` written only after
    an AUMID's first successful forward - which made the FIRST toast of every app double-show (guest
-   banner AND dom0 notification). Suppression now happens the moment `ConnUp()` succeeds, for the
-   whole allowlist at once, before any of those apps can produce a toast. Fail-open is unchanged
-   and is what keeps "nothing is lost": a send failure or a missing ACK marks the connection dead,
-   which restores every banner and clears the set; markers are written before each suppression, so
-   a crash restores on the next start. Suppression is therefore still tied to a proven-up
-   connection - never to hope - it is just no longer bought at the price of one visible double.
+   banner AND dom0 notification). Suppression then moved to the moment `ConnUp()` succeeded, for the
+   whole allowlist at once.
+
+   **RE-SETTLED 2026-10-04 (ADR-toasts §10; the owner's P1).** Up-front allowlist suppression never
+   covered the classifier-routed apps (§2.2's per-toast route): their first toast was on screen before
+   its verdict, so it doubled, and the switch then stood until the bridge exited, so a LATER interactive
+   toast of that app was shown nowhere (fail-closed). `ShowBanner` is no longer written at all. The
+   agent holds each toast's banner window unmapped until that toast's verdict, from the bridge's
+   per-notification records (content identity + verdict over a shared section + event); bridge-bound
+   toasts queued behind a displayed window-path banner pre-empt it so an in-place swap cannot flash.
+   Risk 1 as stated above (`ShowBanner=0` + dead bridge = fail-closed) is therefore gone by construction:
+   a dead bridge means no verdicts, and a banner with no verdict is shown. The remaining fail-open is a
+   late or missing verdict (3 s bound), which shows the banner - possibly as a second copy - and is
+   reported (`QGATOASTHOLDLATE`). The marker sweep stays only to restore `ShowBanner` for users whose
+   hive an older version touched.
 2. **Listener consent / package identity in an unpackaged guest.** The whole bridge is vacuous if
    `GetNotificationsAsync` silently returns empty (revoked consent, lost identity). notifhost claims
    `Allowed` today — but *why* it is allowed must be pinned (sparse package? pre-seeded consent?),

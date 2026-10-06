@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  toasthold_bridge_test - offline unit suite for the BRIDGE side of the toast-banner hold:
+  agent/gui-agent/toastident.h (the identity contract + record ring shared with the agent)
+  compiled as C++17 the way notifhost.cpp compiles it. Mirrors notifhost.vcxproj's rules:
+  v143 (no WDK), /MT (no redist), Windows SDK only - and needs even less (pure C++17,
+  no WinRT, no d3d). Runs on the CI Windows runner straight after msbuild.
+
+  Build:
+    msbuild tools\notifhost\toasthold_bridge_test.vcxproj /p:Configuration=Release /p:Platform=x64
+  Defect-reintroduction proof (the suite must then FAIL - CI inverts the exit code):
+    msbuild ... /t:Rebuild /p:ToastHoldBridgeDefect=TOASTIDENT_DEFECT_VERDICTOVERRIDE
+  Output pinned to tools\notifhost\x64\Release\toasthold_bridge_test.exe.
+-->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{5F2A9C3E-1B7D-4A60-8E4C-9D0B6F1A2C73}</ProjectGuid>
+    <RootNamespace>toasthold_bridge_test</RootNamespace>
+    <ProjectName>toasthold_bridge_test</ProjectName>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <!-- empty by default; CI passes /p:ToastHoldBridgeDefect=TOASTIDENT_DEFECT_VERDICTOVERRIDE
+         for the defect-reintroduction build -->
+    <ToastHoldBridgeDefect Condition="'$(ToastHoldBridgeDefect)'==''"></ToastHoldBridgeDefect>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>false</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="Shared" />
+  <PropertyGroup Label="UserMacros" />
+
+  <PropertyGroup>
+    <OutDir>$(ProjectDir)$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(ProjectDir)$(Platform)\$(Configuration)\obj-toasthold-bridge\</IntDir>
+    <TargetName>toasthold_bridge_test</TargetName>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;$(ToastHoldBridgeDefect);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;$(ToastHoldBridgeDefect);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClCompile Include="toasthold_bridge_test.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\..\agent\gui-agent\toastident.h" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+</Project>
