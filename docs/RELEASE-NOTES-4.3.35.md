@@ -86,6 +86,15 @@ autologon working sets it again if anything turns expiry back on. A password tha
 setting is made. This applies to local accounts only, and qubes you upgrade get it at the upgrade and at every boot. The qube is
 Qubes' security boundary; the password is already stored in the guest so that autologon can use it.
 
+## The windowed desktop no longer covers the screen
+
+Switching a qube to the windowed desktop (non-seamless mode) first shrinks the guest's desktop to a window size, 1280x800 by
+default, so that it cannot cover your screen; only you maximizing that window in dom0 makes it larger. In 4.3.33 and 4.3.34 the
+first switch after the qube started could still end up covering the screen: the window was shown in dom0 at its old full-screen
+size before dom0 was told the new one, dom0's window manager fit it to the screen, and Windows Tools took that as you sizing it
+(measured 2026-10-06: shrunk to 1280x800, then resized to 5120x1384 two seconds later). The new size now reaches dom0 before the
+window is shown.
+
 ## dom0 notifications: errors stay, warnings 60 s, informational messages 20 s
 
 A notification a Windows qube sends to dom0 now stays on screen by its kind: an error until you dismiss it, a warning for 60 s, an
