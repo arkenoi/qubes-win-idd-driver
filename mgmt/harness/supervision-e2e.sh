@@ -18,6 +18,8 @@
 #                 on purpose, which takes the toast bridge down with it, so no cell may run after it
 #   L5 catchup    a death DURING a shutdown produces exactly one dom0 notification at the next boot (the reporter
 #                 cannot run while the system goes down - ERROR_SHUTDOWN_IN_PROGRESS)
+#   L8 catchup-e2e a death injected DURING a shutdown is reported at the next boot EXACTLY once - never zero
+#                 (concealment), never twice (a double). The measurement L5 does not make
 #   L6 toast      an actionable toast reaches dom0 WITH its actions, an informational one without and without
 #                 waiting for the action work; --click waits for the owner to press a button (no dom0 shell here)
 #   L7 pvnic      the PV NIC shutdown re-arm LANDS its two registry writes (the measurement Jev named at 0.85) and
@@ -35,7 +37,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; ROOT="$(cd "$ROOT/.." && pwd)"
 cd "$ROOT" || exit 2
 
-ISO=""; SUBJ="win11r-sup"; GOLDEN="win11r-qwt"; CELLS="L1 L2 L3 L4 L5 L6 L7 L7C"; CYCLES=2; CLICK=0
+ISO=""; SUBJ="win11r-sup"; GOLDEN="win11r-qwt"; CELLS="L1 L2 L3 L5 L6 L7 L7C L8 L4"; CYCLES=2; CLICK=0
 HOLD="${HOLD_REPO:-$PWD}"                         # kept for an override; the helpers are in THIS repo now
 SWEEP="${SWEEP_REPO:-$PWD}"                       # the log sweep, likewise - no cross-worktree dependency
 TFEXE="${TFEXE:-}"                                # toastfire.exe for L6 (from the branch's build artifact)
@@ -80,6 +82,48 @@ wait_session(){ local d=$((SECONDS+${1:-300}));
     sleep 10
   done; echo "deadline"; return 1; }
 guest_ps(){ q pushrun "$1" 2>&1 | tr -d '\r'; }   # a guest-side probe script, output verbatim
+
+# THE L7 PROBE IS WRITTEN ONCE, HERE. L7C pushes the same script to the control, and when the cells were
+# selected without L7 the file simply did not exist - the push sent 0 of 3 KB and the control's PowerShell
+# said so, which the cell reported as "the probe produced nothing" (measured 2026-10-07). A cell that depends
+# on another cell having run in the same invocation is not independent, whatever the header claims.
+  cat > "$OUT/L7-probe.ps1" <<'PS'
+$ErrorActionPreference = 'Continue'
+function L($k,$v){ "L7|$k|$v" }
+$bin = 'C:\Program Files\Qubes Tools\bin'
+$x = (& schtasks /query /tn QubesPvNicRearm /xml 2>&1 | Out-String)
+L 'action_cmd' (([regex]::Match($x, '<Command>([^<]+)')).Groups[1].Value)
+L 'action_args' ((([regex]::Match($x, '<Arguments>([^<]{0,400})')).Groups[1].Value) -replace '\s+',' ')
+L 'limit' (([regex]::Match($x, '<ExecutionTimeLimit>([^<]+)')).Groups[1].Value)
+L 'lastresult' ((([regex]::Match((& schtasks /query /tn QubesPvNicRearm /v /fo LIST 2>&1 | Out-String), '(?m)^\s*Last Result\s*:\s*(.+)$')).Groups[1].Value).Trim())
+L 'netvm' ((& "$bin\qubesdb-read.exe" '/netvm' 2>&1 | Out-String).Trim())
+# the boot run's own judgement of the PREVIOUS session - the end-to-end signal, written where a task can finish
+L 'bootjudgement' (((Get-Content 'C:\ProgramData\QubesPvNic.log' -EA SilentlyContinue |
+                     Where-Object { $_ -match 'shutdown re-arm:' } | Select-Object -Last 1) -replace '\s+',' '))
+# DID THE WRITES LAND? Clear both, run the task, and watch. The latch is left ARMED either way.
+$stamp = 'C:\ProgramData\QubesPvNic-rearm.stamp'
+Remove-Item -LiteralPath $stamp -Force -EA SilentlyContinue
+& reg delete "HKLM\SYSTEM\CurrentControlSet\Services\XEN\Unplug" /v NICS /f 2>&1 | Out-Null
+L 'nics_cleared' (((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\XEN\Unplug' -EA SilentlyContinue).NICS -as [string]))
+$t0 = Get-Date
+& schtasks /run /tn QubesPvNicRearm | Out-Null
+$landed = $false
+foreach ($i in 1..20) {
+    Start-Sleep -Milliseconds 500
+    $n = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\XEN\Unplug' -EA SilentlyContinue).NICS
+    if ((Test-Path -LiteralPath $stamp) -and $n -eq 1) { $landed = $true; break }
+}
+L 'writes_landed' ([string]$landed)
+L 'landed_after_ms' ([int]((Get-Date)-$t0).TotalMilliseconds)
+L 'nics_after' (((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\XEN\Unplug' -EA SilentlyContinue).NICS -as [string]))
+L 'stamp_after' (((Get-Item -LiteralPath $stamp -EA SilentlyContinue).LastWriteTime -as [string]))
+if (-not $landed) {
+    # leave the guest armed whatever the verdict was - the reading above is already recorded
+    & reg add "HKLM\SYSTEM\CurrentControlSet\Services\XEN\Unplug" /v NICS /t REG_DWORD /d 1 /f | Out-Null
+    L 'restored' 'the probe re-armed the latch itself'
+}
+L 'END' 'ok'
+PS
 
 # ---- L1 deploy ----------------------------------------------------------------------------------------------------
 if has L1; then
@@ -227,7 +271,9 @@ if has L6; then
     # without what it demands, so the selftest now checks it.
     VM="$SUBJ"; export QTEST_VM="$SUBJ"
     INCOMING="${INCOMING:-C:\\Users\\user\\Documents\\QubesIncoming\\win-idd-mgmt}"
-    R="$OUT/L6-a0.log"; : > "$R"
+    # $R IS THIS ROUTINE'S OWN RESULTS LOG and log() tees into it, so a0-lib.sh's requirement is already
+    # satisfied - reassigning it sent every line from here on into a side file, and the run's own record
+    # stopped at two lines (measured 2026-10-07; the control's wait exit was in the side file all along).
     source .claude/skills/win-guest-e2e/e2e-lib.sh
     source mgmt/harness/a0-lib.sh
     log "  push toastfire.exe ($(sha256sum "$TFEXE" | cut -c1-12)) - without it every fire is a silent no-op"
@@ -305,43 +351,6 @@ fi
 # defect still present.
 if has L7; then
   log "L7: the re-arm's writes land, and the boot run judges the previous session"
-  cat > "$OUT/L7-probe.ps1" <<'PS'
-$ErrorActionPreference = 'Continue'
-function L($k,$v){ "L7|$k|$v" }
-$bin = 'C:\Program Files\Qubes Tools\bin'
-$x = (& schtasks /query /tn QubesPvNicRearm /xml 2>&1 | Out-String)
-L 'action_cmd' (([regex]::Match($x, '<Command>([^<]+)')).Groups[1].Value)
-L 'action_args' ((([regex]::Match($x, '<Arguments>([^<]{0,400})')).Groups[1].Value) -replace '\s+',' ')
-L 'limit' (([regex]::Match($x, '<ExecutionTimeLimit>([^<]+)')).Groups[1].Value)
-L 'lastresult' ((([regex]::Match((& schtasks /query /tn QubesPvNicRearm /v /fo LIST 2>&1 | Out-String), '(?m)^\s*Last Result\s*:\s*(.+)$')).Groups[1].Value).Trim())
-L 'netvm' ((& "$bin\qubesdb-read.exe" '/netvm' 2>&1 | Out-String).Trim())
-# the boot run's own judgement of the PREVIOUS session - the end-to-end signal, written where a task can finish
-L 'bootjudgement' (((Get-Content 'C:\ProgramData\QubesPvNic.log' -EA SilentlyContinue |
-                     Where-Object { $_ -match 'shutdown re-arm:' } | Select-Object -Last 1) -replace '\s+',' '))
-# DID THE WRITES LAND? Clear both, run the task, and watch. The latch is left ARMED either way.
-$stamp = 'C:\ProgramData\QubesPvNic-rearm.stamp'
-Remove-Item -LiteralPath $stamp -Force -EA SilentlyContinue
-& reg delete "HKLM\SYSTEM\CurrentControlSet\Services\XEN\Unplug" /v NICS /f 2>&1 | Out-Null
-L 'nics_cleared' (((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\XEN\Unplug' -EA SilentlyContinue).NICS -as [string]))
-$t0 = Get-Date
-& schtasks /run /tn QubesPvNicRearm | Out-Null
-$landed = $false
-foreach ($i in 1..20) {
-    Start-Sleep -Milliseconds 500
-    $n = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\XEN\Unplug' -EA SilentlyContinue).NICS
-    if ((Test-Path -LiteralPath $stamp) -and $n -eq 1) { $landed = $true; break }
-}
-L 'writes_landed' ([string]$landed)
-L 'landed_after_ms' ([int]((Get-Date)-$t0).TotalMilliseconds)
-L 'nics_after' (((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\XEN\Unplug' -EA SilentlyContinue).NICS -as [string]))
-L 'stamp_after' (((Get-Item -LiteralPath $stamp -EA SilentlyContinue).LastWriteTime -as [string]))
-if (-not $landed) {
-    # leave the guest armed whatever the verdict was - the reading above is already recorded
-    & reg add "HKLM\SYSTEM\CurrentControlSet\Services\XEN\Unplug" /v NICS /t REG_DWORD /d 1 /f | Out-Null
-    L 'restored' 'the probe re-armed the latch itself'
-}
-L 'END' 'ok'
-PS
   guest_ps "$OUT/L7-probe.ps1" > "$OUT/L7.out" 2>&1
   g7(){ grep -a "^L7|$1|" "$OUT/L7.out" | tail -1 | cut -d'|' -f3-; }
   ac=$(g7 action_cmd); wl=$(g7 writes_landed); ms=$(g7 landed_after_ms); bj=$(g7 bootjudgement); lr=$(g7 lastresult)
@@ -428,6 +437,115 @@ if has L7C; then
   if [ "$(state)" != Running ]; then
     qvm-start "$SUBJ" >/dev/null 2>&1
     w=$(wait_session 420); [ "$w" = up ] || log "WARNING: the subject did not return after the control (wait_session=$w) - the sweep will say so"
+  fi
+fi
+
+# ---- L8 a death DURING a shutdown reaches dom0 at the NEXT boot, exactly once -----------------------------------------
+# The measurement L5 does not make. The death reporter is a scheduled task, and Task Scheduler REFUSES to start
+# actions once shutdown is in progress (ERROR_SHUTDOWN_IN_PROGRESS, 2147943515), so a death at that moment was
+# silently lost - which is why QwtDeathCatchUp exists as a separate boot-triggered pass with a watermark. Jev named
+# this as the one unmeasured thing that would most change the verdict on the release (0.89).
+# The stimulus is a REAL death of a REAL supervised process - the de-slice broker, ended through its handle by the
+# pid the AGENT's own log reports, never by image name - with the shutdown requested FIRST so the reporter's own
+# trigger lands inside the refusal window. The broker is the right subject: its death is the P1 class, the agent
+# reports it as a death, and nothing relaunches it, so no armed relauncher is being fought. The invariant asserted afterwards is the owner's: EXACTLY ONE
+# notification for one death. Never zero (concealment), never two (a double).
+if has L8; then
+  log "L8: end the agent DURING a shutdown; the catch-up must report it at the next boot, exactly once"
+  cat > "$OUT/L8-arm.ps1" <<'PS'
+$ErrorActionPreference = 'Continue'
+function L($k,$v){ "L8|$k|$v" }
+$state = Join-Path $env:ProgramData 'Qubes\notify-errors'
+$wm = Join-Path $state 'qwt-death-watermark.json'
+$logdir = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -EA SilentlyContinue).LogDir
+L 'logdir' $logdir
+$before = 0
+if ($logdir) {
+    foreach ($f in Get-ChildItem -LiteralPath $logdir -Filter 'qwt-report-death*.log' -EA SilentlyContinue) {
+        $before += @(Get-Content -LiteralPath $f.FullName -EA SilentlyContinue | Where-Object { $_ -match 'DEATH #' }).Count
+    }
+}
+L 'deaths_before' $before
+L 'watermark_before' $(if (Test-Path $wm) { ((Get-Content $wm -Raw -EA SilentlyContinue) -replace "`r|`n",'') } else { 'absent' })
+# THE SUBJECT OF THE INJECTION IS THE DE-SLICE BROKER, NOT THE AGENT, and the pid comes from the AGENT'S OWN
+# LOG - never from a name. Three reasons the agent is the wrong target here: ending it while the watchdog
+# service is armed is the defect class the owner made a rule about; the watchdog would simply relaunch it,
+# since the shutdown has not begun yet; and the agent's own exit at session end is QGA_EXIT_SESSION_END, not a
+# death at all. A broker death IS the P1 class, the agent reports it as one, and the agent does NOT relaunch it
+# (owner: "broker death is a major failure anyway, so there is no point of making it extra smooth"), so the
+# death record is written and nothing races to undo it.
+$agentLog = $null
+if ($logdir) { $agentLog = Get-ChildItem -LiteralPath $logdir -Filter 'gui-agent-*.log' -EA SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1 }
+if (-not $agentLog) { L 'error' 'no agent log to read the broker pid from'; L 'END' 'ok'; return }
+$line = (Get-Content -LiteralPath $agentLog.FullName -EA SilentlyContinue |
+         Where-Object { $_ -match 'WGCBROKER ready \(pid (\d+) validated\)' } | Select-Object -Last 1)
+if (-not $line) { L 'error' 'no WGCBROKER ready line - the broker never came up, so there is nothing to end'; L 'END' 'ok'; return }
+$bpid = [int]([regex]::Match($line, 'pid (\d+)').Groups[1].Value)
+$p = Get-Process -Id $bpid -EA SilentlyContinue
+if (-not $p) { L 'error' "broker pid $bpid is not running"; L 'END' 'ok'; return }
+L 'broker_pid' $bpid
+L 'broker_name' $p.ProcessName
+# the shutdown goes first, so the reporter's own trigger lands inside Task Scheduler's refusal window
+& shutdown /s /t 8 /c "supervision-e2e L8: a helper death during a shutdown" | Out-Null
+L 'shutdown_requested' (Get-Date -Format 'HH:mm:ss.fff')
+Start-Sleep -Seconds 9                      # the teardown has begun by now; the task service refuses new actions
+try { $p.Kill(); L 'killed' (Get-Date -Format 'HH:mm:ss.fff') } catch { L 'error' ("could not end the broker: " + $_.Exception.Message) }
+L 'END' 'ok'
+PS
+  guest_ps "$OUT/L8-arm.ps1" > "$OUT/L8-arm.out" 2>&1
+  g8(){ grep -a "^L8|$1|" "$OUT/L8-arm.out" | tail -1 | cut -d'|' -f3-; }
+  db=$(g8 deaths_before); apid=$(g8 broker_pid); kil=$(g8 killed)
+  # THREE EXITS on the halt: it halted / it is still up at the deadline / it never had the stimulus
+  d=$((SECONDS+420)); while [ $SECONDS -lt $d ] && [ "$(state)" != Halted ]; do sleep 10; done
+  if [ "$(state)" != Halted ]; then
+    verdict L8 INVALID "a death during a shutdown is reported at the next boot, exactly once" \
+            "the guest did not halt within 420 s of the injected shutdown (state $(state)); nothing can be judged"
+  elif [ -z "$apid" ] || [ -z "$kil" ]; then
+    verdict L8 INVALID "a death during a shutdown is reported at the next boot, exactly once" \
+            "the stimulus did not reach the broker: pid='$apid' killed='$kil' $(g8 error | cut -c1-110)"
+  else
+    qvm-start "$SUBJ" >/dev/null 2>&1
+    w=$(wait_session 420)
+    if [ "$w" != up ]; then
+      verdict L8 INVALID "a death during a shutdown is reported at the next boot, exactly once" "no session after the boot (wait_session=$w)"
+    else
+      cat > "$OUT/L8-read.ps1" <<'PS'
+$ErrorActionPreference = 'Continue'
+function L($k,$v){ "L8R|$k|$v" }
+$state = Join-Path $env:ProgramData 'Qubes\notify-errors'
+$wm = Join-Path $state 'qwt-death-watermark.json'
+$logdir = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -EA SilentlyContinue).LogDir
+$lines = @()
+if ($logdir) {
+    foreach ($f in Get-ChildItem -LiteralPath $logdir -Filter 'qwt-report-death*.log' -EA SilentlyContinue) {
+        $lines += @(Get-Content -LiteralPath $f.FullName -EA SilentlyContinue)
+    }
+}
+$deaths = @($lines | Where-Object { $_ -match 'DEATH #' })
+L 'deaths_after' $deaths.Count
+foreach ($d in ($deaths | Select-Object -Last 4)) { L 'line' ($d -replace "`r",'') }
+L 'catchup_lines' (@($lines | Where-Object { $_ -match 'CatchUp|catch-up|catchup' }) -join ' || ')
+L 'watermark_after' $(if (Test-Path $wm) { ((Get-Content $wm -Raw -EA SilentlyContinue) -replace "`r|`n",'') } else { 'absent' })
+L 'catchup_task_last' ((& schtasks /query /tn QwtDeathCatchUp /v /fo LIST 2>&1 | Out-String) -replace "`r|`n",' ' -replace '\s+',' ')
+L 'END' 'ok'
+PS
+      guest_ps "$OUT/L8-read.ps1" > "$OUT/L8-read.out" 2>&1
+      g8r(){ grep -a "^L8R|$1|" "$OUT/L8-read.out" | tail -1 | cut -d'|' -f3-; }
+      da=$(g8r deaths_after); wma=$(g8r watermark_after)
+      if [ -z "$da" ] || [ -z "$db" ]; then
+        verdict L8 INVALID "a death during a shutdown is reported at the next boot, exactly once" \
+                "the reporter's own log could not be counted: before='$db' after='$da' (missing data fails)"
+      elif [ "$da" = "$db" ]; then
+        verdict L8 FAIL "a death during a shutdown is reported at the next boot" \
+                "DEATH lines did not change ($db -> $da): the death was CONCEALED - exactly what the catch-up exists to prevent"
+      elif [ "$((da - db))" = 1 ]; then
+        verdict L8 PASS "a death during a shutdown is reported at the next boot, exactly once" \
+                "DEATH lines $db -> $da (+1); watermark now $wma; $(g8r line | cut -c1-120)"
+      else
+        verdict L8 FAIL "a death during a shutdown is reported EXACTLY ONCE" \
+                "DEATH lines $db -> $da (+$((da - db))) - a double is P1 by the owner's rule; $(g8r line | cut -c1-110)"
+      fi
+    fi
   fi
 fi
 

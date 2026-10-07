@@ -107,7 +107,7 @@ inject "self-contained: no cell reaches into a scratch dir or a sibling worktree
 # the third time in this project that a library was sourced without its prerequisite. The check is ORDER.
 lib_prereqs(){ awk '
   /^ *export QTEST_VM=|^ *QTEST_VM=.*export|^ *VM="\$SUBJ"; export QTEST_VM=/ {qv=NR}
-  /^ *R="\$OUT\/L6-a0.log"/ {r=NR}
+  /^R="\$OUT\/results.log"/ {r=NR}
   /source .claude\/skills\/win-guest-e2e\/e2e-lib.sh/ {e=NR}
   /source mgmt\/harness\/a0-lib.sh/ {a=NR}
   END{exit !(qv && r && e && a && qv < e && r < a)}' "$1"; }
@@ -124,6 +124,23 @@ pushrun_after_session(){ awk '
 shape "session: the control waits for a LOGGED-ON session before pushrun, not just for qrexec" \
       pushrun_after_session 'imagename eq explorer.exe'
 
+# ONE RESULTS LOG. log() tees into $R, so a cell that reassigns it silently redirects the run's own record -
+# which happened on 2026-10-07 when a0-lib.sh's requirement was "satisfied" by pointing $R at a side file,
+# and results.log ended at two lines while the evidence went elsewhere.
+one_log(){ [ "$(grep -c 'R="\$OUT' "$1")" -eq 1 ]; }
+inject "log: only the one assignment of \$R - no cell redirects the run's own record" \
+       one_log 'R="$OUT/L6-a0.log"; : > "$R"'
+
+# CELL INDEPENDENCE. The header says each cell is independent and --cells selects; L7C pushed a probe that
+# only the L7 block wrote, so selecting L7C without L7 pushed a file that did not exist (0 of 3 KB sent) and
+# the cell blamed the guest. The probe is written once, OUTSIDE any `if has` block.
+probe_hoisted(){ awk '
+  /cat > "\$OUT\/L7-probe.ps1"/ {w=NR}
+  /^if has L1;/ {first=NR}
+  END{exit !(w && first && w < first)}' "$1"; }
+shape "independence: the L7 probe is written before any cell, so L7C never needs L7 to have run" \
+      probe_hoisted 'cat > "$OUT/L7-probe.ps1" <<'"'"'PS'"'"''
+
 exits_nonzero(){ grep -qE '\[ "\$nf" = 0 \] && \[ "\$ni" = 0 \] && exit 0 \|\| exit 1' "$1"; }
 shape "exit: the routine exits non-zero when any cell failed or was invalid" \
       exits_nonzero '[ "$nf" = 0 ] && [ "$ni" = 0 ] && exit 0 || exit 1'
@@ -133,14 +150,17 @@ PWSH="${PWSH:-/home/user/pwsh/pwsh}"
 if [ -x "$PWSH" ]; then
   # extract each heredoc'd probe and parse-check it the way the repo checks every shipped script
   n=0; bad_ps=0
-  for tag in L3-probe L4-probe L5-arm L7-probe; do
+  # EVERY heredoc'd probe, not a list someone has to remember to extend: a syntax error in one of these only
+  # shows up on the rig otherwise. The count is asserted below so a new probe cannot be silently uncovered.
+  for tag in $(grep -oE 'cat > "\$OUT/[A-Za-z0-9-]+\.ps1"' "$S" | sed 's|.*/\([A-Za-z0-9-]*\)\.ps1"|\1|' | sort -u); do
     awk -v t="$tag" '$0 ~ ("cat > \"\\$OUT/" t "\\.ps1\" <<.PS.") {f=1; next} f && /^PS$/ {exit} f {print}' "$S" > "$OUT/$tag.ps1"
     [ -s "$OUT/$tag.ps1" ] || { bad "probes: $tag could not be extracted"; bad_ps=1; continue; }
     n=$((n+1))
     "$PWSH" -NoProfile -File "$ROOT/tools/ps-parse-check.ps1" "$OUT/$tag.ps1" > "$OUT/$tag.parse" 2>&1
     grep -q '0 with syntax errors' "$OUT/$tag.parse" || { bad "probes: $tag does not parse: $(tail -2 "$OUT/$tag.parse" | tr '\n' ' ' | cut -c1-160)"; bad_ps=1; }
   done
-  [ "$bad_ps" = 0 ] && [ "$n" = 4 ] && ok "probes: all $n guest-side probes parse as PowerShell"
+  [ "$bad_ps" = 0 ] && [ "$n" -ge 7 ] && ok "probes: all $n guest-side probes parse as PowerShell"
+  [ "$n" -ge 7 ] || bad "probes: only $n probes were found to check (the routine has $(grep -c 'cat > "$OUT/[A-Za-z0-9-]*\.ps1"' "$S")) - extraction missed some"
 else
   echo "skip  probes: no pwsh at $PWSH"
 fi
