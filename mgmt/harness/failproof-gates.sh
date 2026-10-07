@@ -89,7 +89,7 @@ agent_restart_push || { log "FATAL: guest/restart-gui-agent.ps1 could not be pus
 log "=== confirm the RUNNING agent understands FI_GATE_OFF ==="
 BAN=$(psrun '$d=(Get-ItemProperty "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\").LogDir
 $f=Get-ChildItem $d -Filter gui-agent-*.log | Sort LastWriteTime -Desc | Select -First 1
-$l=Get-Content $f.FullName | Select-String -SimpleMatch "QGAFAULT-INIT build" | Select -First 1
+$l=Get-Content $f.FullName | Select-String -SimpleMatch "QGAFAULT-INIT build" | Select -Last 1
 $p=Get-Process gui-agent -EA SilentlyContinue
 Write-Output ("BANNER " + $l.Line)
 Write-Output ("RUNSHA " + (Get-FileHash $p.Path -Algorithm SHA256).Hash.ToLower())')
@@ -109,8 +109,9 @@ log "  gate-capable build CONFIRMED running"
 # relaunch of the agent it owns; the survivor was adopted and p5 graded cells under the PREVIOUS
 # gate bits - which this file then excused with an "old one survived Stop-Process" INVALID branch
 # instead of fixing. Now the helper stops the QubesGuiWatchdog service (since 2026-10-03 its stop
-# ends the agent IT started, by handle), starts it, and proves a NEW gui-agent-<ts>-<pid>.log with
-# a live pid; a missing proof is RESTART INVALID-INSTRUMENT and set_gate_checked grades it. The
+# ends the agent IT started, by handle), starts it, and proves a NEW INIT RECORD in the agent log
+# (one file per module per day, so a restart produces no new FILE) with a live pid; a missing proof
+# is RESTART INVALID-INSTRUMENT and set_gate_checked grades it. The
 # registry write rides the same round trip, before the restart; the GATEOFF readback after it.
 # Nothing is killed, nothing is found by name. The window-map witness is p5-run.sh's own control poll.
 set_gate(){  # <hex-or-0>
@@ -147,9 +148,9 @@ set_gate_checked(){  # <hex-or-0> <context> <check-column>
   echo "$out" | sed 's/^/  /'
   echo "$out" | grep -qa 'WDSTART Running' || \
     watchdog_failed "$2: $(echo "$out" | grep -a WDSTART | head -1)" "$3"
-  # THE SERVICE RESTART MUST HAVE PRODUCED A NEW AGENT - a newer gui-agent-<ts>-<pid>.log with a
-  # live pid and the old agent gone (guest/restart-gui-agent.ps1 RESTART ok). Anything less - no
-  # new log inside the bound, the old agent surviving the service stop, the service not reaching
+  # THE SERVICE RESTART MUST HAVE PRODUCED A NEW AGENT - an init record written after the service
+  # start, by a live pid, with the old agent gone (guest/restart-gui-agent.ps1 RESTART ok). Anything
+  # less - no new init inside the bound, the old agent surviving the service stop, the service not reaching
   # Stopped - means FaultGateOff=$1 was never applied to a fresh process: p5 would grade cells the
   # toggle never reached and this script would report "armed went red / did not go red" for a
   # measurement of the old state. INVALID-INSTRUMENT, never an anomaly line and a guess.

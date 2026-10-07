@@ -111,7 +111,11 @@ $v=(Get-ItemProperty -Path $p -Name PromptOnSecureDesktop -EA SilentlyContinue).
 Write-Output ("PROMPTSD " + $(if ($null -eq $v) { "absent" } else { [string]$v }))
 $d=(Get-ItemProperty "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\").LogDir
 $f=Get-ChildItem $d -Filter gui-agent-*.log -EA SilentlyContinue | Sort LastWriteTime -Desc | Select -First 1
-if ($f) { Write-Output ("QGAUAC " + @(Get-Content $f.FullName | Select-String -SimpleMatch "QGAUAC").Count) } else { Write-Output "QGAUAC none" }')
+# THIS INSTANCE ONLY: one file per module per day; the last "process ID:" is where it began.
+if ($f) { $all=@(Get-Content $f.FullName); $i=0
+  for ($k=0; $k -lt $all.Count; $k++) { if ($all[$k] -match "process ID: \d+") { $i=$k } }
+  $mine=@(); if ($all.Count -gt $i) { $mine=$all[$i..($all.Count-1)] }
+  Write-Output ("QGAUAC " + @($mine | Select-String -SimpleMatch "QGAUAC").Count) } else { Write-Output "QGAUAC none" }')
 psd=$(echo "$UA" | grep -ao 'PROMPTSD [a-z0-9]*' | awk '{print $2}')
 uac=$(echo "$UA" | grep -ao 'QGAUAC [a-z0-9]*' | awk '{print $2}')
 log "  PromptOnSecureDesktop=$psd  agent QGAUAC lines=$uac"
@@ -133,7 +137,11 @@ fi
 log "=== secure-desktop-left-cleanly ==="
 SD=$(psrun '$d=(Get-ItemProperty "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\").LogDir
 $f=Get-ChildItem $d -Filter gui-agent-*.log -EA SilentlyContinue | Sort LastWriteTime -Desc | Select -First 1
-$a=Get-Content $f.FullName
+# THIS INSTANCE ONLY: one file per module per day, and an ENTERED/LEFT imbalance from an earlier
+# instance would read as this run's stuck secure desktop. The last "process ID:" is where it began.
+$all=Get-Content $f.FullName; $i=0
+for ($k=0; $k -lt $all.Count; $k++) { if ($all[$k] -match "process ID: \d+") { $i=$k } }
+$a=@(); if ($all.Count -gt $i) { $a=$all[$i..($all.Count-1)] }
 Write-Output ("ENTERED " + @($a | Select-String -SimpleMatch "secure-desktop ENTERED").Count)
 Write-Output ("LEFT " + @($a | Select-String -SimpleMatch "secure-desktop LEFT").Count)
 Write-Output ("STUCK " + @($a | Select-String -SimpleMatch "QGADESKSTUCK").Count)')

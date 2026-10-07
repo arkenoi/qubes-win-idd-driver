@@ -66,7 +66,11 @@ agent_mapped(){  # <hwnd like 0x3601e6> -> count of MAP messages for it
   local h; h=$(echo "${1#0x}" | tr 'A-Z' 'a-z')
   psrun '$d=(Get-ItemProperty "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\").LogDir
 $f=Get-ChildItem $d -Filter gui-agent-*.log | Sort LastWriteTime -Desc | Select -First 1
-Write-Output ("AGENTMAP " + @(Get-Content $f.FullName | Select-String -SimpleMatch "msg=MAP,hwnd=0x'"$h"'").Count)' \
+# THIS INSTANCE ONLY: one file per module per day, so a whole-file count carries earlier maps.
+$all=@(Get-Content $f.FullName); $i=0
+for ($k=0; $k -lt $all.Count; $k++) { if ($all[$k] -match "process ID: \d+") { $i=$k } }
+$mine=@(); if ($all.Count -gt $i) { $mine=$all[$i..($all.Count-1)] }
+Write-Output ("AGENTMAP " + @($mine | Select-String -SimpleMatch "msg=MAP,hwnd=0x'"$h"'").Count)' \
     | grep -aoE 'AGENTMAP [0-9]+' | awk '{print $2}' | head -1
 }
 rc=0
@@ -190,8 +194,9 @@ $d=(Get-ItemProperty 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -EA Silen
 $f=(Get-ChildItem $d -Filter 'gui-agent-*.log' -EA SilentlyContinue | Sort-Object LastWriteTime -Desc | Select-Object -First 1)
 if(-not $f){Write-Output 'SINCE_HITS 0';exit}
 $all = Get-Content $f.FullName
-# THE OFFSET IS ONLY VALID IN THE FILE IT WAS TAKEN FROM. The agent rotates to a new log on every
-# restart, and several cells restart it. Applying a stale offset to a different file counts lines
+# THE OFFSET IS ONLY VALID IN THE FILE IT WAS TAKEN FROM. The log is one file per module per day, so
+# a restart appends to the same file and the offset survives it; the name still changes at midnight
+# and if LogDir moves. Applying a stale offset to a different file counts lines
 # from an arbitrary point in the middle of it - measured 2026-08-31: an SG9 cell reported 3 deny
 # hits for a clause that a clean direct measurement showed fired 0 times. If the file changed,
 # EVERY line in the current one postdates the mark, so the whole file is the correct window.

@@ -185,6 +185,48 @@ def l19_guest_run_must_sweep_the_log() -> None:
                 "the gate condition, so a run that does not read the log cannot report on it")
 
 
+# --------------------------------------------------------------------------- L20
+def l20_module_log_read_must_be_bounded() -> None:
+    """RULE: A PATTERN MATCH IN A MODULE LOG MUST BE BOUNDED TO THE RUN IT IS JUDGING.
+
+    The guest logger is one file per module per day, so every instance that ran today is in the file
+    a harness greps and an unbounded match can be satisfied by an earlier one. Found by hand in four
+    places: failproof-gates.sh took `Select -First 1` of the QGAFAULT-INIT banner - the OLDEST of
+    the day - so the fault-injection gate would have been confirmed against a stale banner; p5-run.sh
+    and promoted-checks.sh counted matches over the whole file.
+
+    Bounded by any of: a mark plus `$all[$mark..]`, `-Last 1`, a slice from the last `process ID:`
+    record, or a timestamp filter. Pending, not gating, until the named list is empty."""
+    # the read has to be of a windows-utils MODULE log - the ones several processes now share
+    reads_module_log = re.compile(r"(gui-agent|qrexec-(?:agent|wrapper)|qubesdb-daemon)-\*?\.?log|Filter\s+'?(gui-agent|qrexec-\w+|qubesdb-daemon)-\*\.log")
+    bounded = ("-Last 1", "process ID:", "$all[", "-Tail", "total_lines", "KeepRx", "AfterLine")
+    # PER READ SITE, not per file. A file-level version of this rule read p5-run.sh as clean because
+    # ONE of its reads used -Tail while the AGENTMAP count right above it was unbounded - exactly the
+    # false negative that let the defect through in the first place. Selecting the newest FILE with
+    # -First 1 is legitimate, so the window starts at the read and covers the lines that consume it.
+    # The next 14 lines THAT ARE CODE: counting comments against the budget flagged a read that is
+    # bounded a few lines further down, past the comment explaining it.
+    WINDOW = 14
+    # A bare line count is a mark, not a verdict - it is how the bounded harnesses take their offset.
+    judges = ("Select-String", "-SimpleMatch", "-Pattern", "-match", "findstr", "| grep")
+    for f in HARNESS:
+        lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+        code_at = [i for i, ln in enumerate(lines) if ln.strip() and not ln.lstrip().startswith("#")]
+        for n, line in enumerate(lines, 1):
+            if line.lstrip().startswith("#") or not reads_module_log.search(line):
+                continue
+            after = [i for i in code_at if i >= n - 1][:WINDOW]
+            window = [lines[i] for i in after]
+            if not any(any(j in ln for j in judges) for ln in window):
+                continue                                   # a mark or a bare count, not a verdict
+            if any(any(b in ln for b in bounded) for ln in window):
+                continue
+            pending_finding("L20-unbounded-module-log-read", f"{f.name}:{n}",
+                    "matches a pattern in a module log with nothing bounding it to this run - "
+                    "instances share one file per day now, so an earlier one can satisfy the check "
+                    "(%s)" % line.strip()[:70])
+
+
 # --------------------------------------------------------------------------- L3
 def l3_no_nested_quote_powershell() -> None:
     """RULE 16. `powershell -Command "... \\"...\\" ..."` is re-split at every hop and FAILS
@@ -1067,6 +1109,7 @@ def main() -> int:
     l17_process_by_name()
     l18_relauncher_armed()
     l19_guest_run_must_sweep_the_log()
+    l20_module_log_read_must_be_bounded()
     if a.ledger:
         l7_orphan_ledger_checks(a.ledger)
 
