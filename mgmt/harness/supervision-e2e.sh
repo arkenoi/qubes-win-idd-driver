@@ -153,7 +153,8 @@ if has L2; then
   done
   if [ "$ok" = 1 ]; then
     # graded from the guest's own logs by the sweep, over this window only
-    (cd "$SWEEP" && timeout 1200 bash mgmt/harness/log-sweep.sh "$SUBJ" "$SINCE" "$OUT/L2-sweep") > "$OUT/L2-sweep.out" 2>&1
+    (cd "$SWEEP" && timeout 1200 bash mgmt/harness/log-sweep.sh "$SUBJ" "$SINCE" "$OUT/L2-sweep" \
+  --declare-error 'qrexec-wrapper.*(XcStoreRead: IOCTL_XENIFACE_STORE_READ failed: 0x5|libx?envchan_client_init)' 'this routine polls for a session with `qtest run` under a timeout while the guest boots; when that timeout fires the CLIENT goes away and its vchan ring-ref leaves xenstore, so the wrapper already running finds nothing. The lines are this run''s own stimulus. The PRODUCT half - a departed peer reading as four ERRORs of ours - is filed as a P2 and is NOT excused by this') > "$OUT/L2-sweep.out" 2>&1
     rep="$OUT/L2-sweep/report.json"
     if [ -f "$rep" ]; then
       read -r inst deaths relaunch stop stale < <(python3 -c "
@@ -447,7 +448,8 @@ log "the log sweep over everything this run touched"
 # (measured 2026-10-07: instances_per_boot=2, nine ETW tier-downs, an ERROR during a requested stop - all of
 # it this harness's own doing). L8 ENDS THE BROKER on purpose, and broker_deaths is a P1 threshold in the
 # sweep - so a window containing L8 would report this harness's own injection as the product's worst class.
-(cd "$SWEEP" && timeout 1200 bash mgmt/harness/log-sweep.sh "$SUBJ" "$SINCE" "$OUT/sweep") > "$OUT/sweep.out" 2>&1
+(cd "$SWEEP" && timeout 1200 bash mgmt/harness/log-sweep.sh "$SUBJ" "$SINCE" "$OUT/sweep" \
+  --declare-error 'qrexec-wrapper.*(XcStoreRead: IOCTL_XENIFACE_STORE_READ failed: 0x5|libx?envchan_client_init)' 'this routine polls for a session with `qtest run` under a timeout while the guest boots; when that timeout fires the CLIENT goes away and its vchan ring-ref leaves xenstore, so the wrapper already running finds nothing. The lines are this run''s own stimulus. The PRODUCT half - a departed peer reading as four ERRORs of ours - is filed as a P2 and is NOT excused by this') > "$OUT/sweep.out" 2>&1
 sweepline=$(grep -a 'LOGSWEEP-RESULT' "$OUT/sweep.out" | tail -1)
 log "$sweepline"
 case "$sweepline" in

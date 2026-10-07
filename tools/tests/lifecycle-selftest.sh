@@ -118,6 +118,15 @@ shape "main.c: each helper is launched ONCE per agent life, never relaunched (Ta
 # keyed to the XML LINE, not the word: the comment above the change in main.c names IgnoreNew to explain
 # what it replaced, and the first version of this predicate failed on that comment (the same self-matching
 # trap this suite has hit before).
+# THE COMPLETION SIGNAL IS SET WHERE THE WORK FINISHES. If it were set by whoever wakes on g_ExitDone, the
+# handoff between the two threads would be exactly the window in which the system's kill makes a COMPLETED
+# orderly exit read as a forced one - the false ERROR this whole mechanism exists to remove (Jev flagged that
+# first version at race-remains 0.70). So: SetEvent(g_Done) inside LifecycleExitDone, and nowhere else.
+lc_done_at_work() { awk '/^void LifecycleExitDone\(void\)/{f=1} f&&/SetEvent\(g_Done\)/{hit=1} f&&/^}/{exit} END{exit !hit}' "$1" &&
+                    [ "$(grep -c 'SetEvent(g_Done)' "$1")" -eq 1 ]; }
+shape "lifecycle.c: the orderly-exit signal is set in LifecycleExitDone - on the thread that finished the work, not on the one that wakes" \
+      lc_done_at_work "$LC" 'SetEvent(g_Done);'
+
 main_helper_queue() { grep -q '<MultipleInstancesPolicy>Queue</MultipleInstancesPolicy>' "$1" &&
                       ! grep -qE '^ *L" *<MultipleInstancesPolicy>IgnoreNew' "$1"; }
 shape "main.c: a helper task QUEUES a new instance behind the outgoing one, never drops it (IgnoreNew)" \
