@@ -1,8 +1,10 @@
-# QWT-NG 4.3.35 — the Windows Update agent is installed even during an update check, and the hidden Start menu no longer takes clicks
+# QWT-NG 4.3.35 — the Windows Update agent is installed even during an update check, the hidden Start menu no longer takes clicks, an app's first notification is shown once, and the autologon password no longer expires
 
 Everything in 4.3.34 is carried forward. This release fixes two defects reported from the field on a German Windows 11 25H2
 template: an upgrade that quietly kept the previous Windows Update agent, and a Windows Start menu that was open but invisible. It
-also hardens the GUI agent's connection to dom0 against a dialog that could end a qube's GUI after an upgrade.
+also hardens the GUI agent's connection to dom0 against a dialog that could end a qube's GUI after an upgrade, stops an app's
+first notification from reaching dom0 twice, keeps the account autologon uses from expiring, and gives dom0 notifications a
+display time by kind: errors stay until you dismiss them, warnings 60 s, informational messages 20 s.
 
 ## The Windows Update agent is installed even when an update scan is running
 
@@ -56,19 +58,86 @@ nothing onto its connection before that version exchange is complete; a part of 
 and logged (`QGAHANDSHAKE` in the gui-agent log). This makes "the version comes first" true by construction. We have not
 identified the exact writer of those zeros, so if you still see the dialog, restart the qube and send us the gui-agent log.
 
+## An app's first notification is shown once
+
+With the notification bridge on (the default), the first notification of an app could reach dom0 twice: as the guest's own
+banner, captured like any window, and as the bridge's dom0 notification. The bridge learned where a notification belonged only
+after Windows had already shown its banner, and then switched that app's banners off - which also hid its later notifications
+that belong in the guest, so one with buttons could end up shown nowhere.
+
+Now the agent keeps every notification banner off your screen until the bridge has decided that notification - at most 0.4 s
+in the test on a Windows 11 guest. One the bridge sends to dom0 is shown once, as the dom0 notification, and its banner never
+appears; one that stays in the guest (one with buttons, for instance) is shown as its banner window, its buttons working. If the
+bridge has not decided within 3 seconds, the banner is shown anyway, and so is the banner of a forwarded notification dom0 has
+not confirmed within 3 seconds: a notification is never lost waiting for the bridge. The bridge no longer switches any app's
+banners off, and the switches older versions left behind are undone. In non-seamless mode nothing is forwarded: every
+notification shows once, inside the Windows desktop window.
+
+## The account autologon uses no longer expires
+
+Windows ages a local account's password out after 42 days by default, and reminds you at every sign-in ("Consider changing your
+password"). Measured on our Windows 10 test image: the password was set on 30 August and would have expired on 11 October.
+Windows Tools keeps autologon working because a qube that stops at the sign-in screen is unreachable - in seamless mode that
+screen is not even shown. An expired password stops autologon exactly like a wrong one, and so does changing the password at
+Windows' prompt, until autologon is set up again with the new one.
+
+Now the installer sets the account that autologon signs in with to "password never expires", and the boot check that keeps
+autologon working sets it again if anything turns expiry back on. A password that has already expired works again once the
+setting is made. This applies to local accounts only, and qubes you upgrade get it at the upgrade and at every boot. The qube is
+Qubes' security boundary; the password is already stored in the guest so that autologon can use it.
+
+## The windowed desktop no longer covers the screen
+
+Switching a qube to the windowed desktop (non-seamless mode) first shrinks the guest's desktop to a window size, 1280x800 by
+default, so that it cannot cover your screen; only you maximizing that window in dom0 makes it larger. In 4.3.33 and 4.3.34 the
+first switch after the qube started could still end up covering the screen: the window was shown in dom0 at its old full-screen
+size before dom0 was told the new one, dom0's window manager fit it to the screen, and Windows Tools took that as you sizing it
+(measured 2026-10-06: shrunk to 1280x800, then resized to 5120x1384 two seconds later). The new size now reaches dom0 before the
+window is shown.
+
+## dom0 notifications: errors stay, warnings 60 s, informational messages 20 s
+
+A notification a Windows qube sends to dom0 now stays on screen by its kind: an error until you dismiss it, a warning for 60 s, an
+informational message for 20 s. A forwarded Windows notification is informational. Until now every notice Windows Tools sent
+itself was treated as an error, so the new one-time notice that the hidden Start menu was closed would have stayed until
+dismissed; it is informational and goes after 20 s.
+
 ## Known and not fixed
 
 - The items under "Known and not fixed" in the 4.3.34 notes stand.
 - The updater deploy is not retried at the next boot when it was refused; the remedy is `install.cmd /updatesonly`.
+- A forwarded notification was seen to leave dom0's screen sooner than its 20 s. For the one we could trace, dom0 reported it
+  expired after exactly 20 s; the cause of the earlier disappearance is not known yet.
+- A notification that stays in the guest (one with buttons, for instance) and is followed, while Windows still shows it, by a
+  notification that is forwarded to dom0 is not shown in dom0: in the tests it was either never shown or withdrawn after a split
+  second. It stays in Windows' notification center. The fix - keep it on screen until Windows swaps in the second one - is
+  planned for the next release.
 - Whether the dom0 notification arrives on an interactive install depends on the Qubes RPC agent being connected to dom0 when
   the installer sends it, after the updater step; this has not been measured on a guest yet.
 
 ## How this release was verified
 
-(placeholder - to be filled from the release acceptance)
+The full release acceptance ran on this exact package (release-package 37525894363, built from 9478cae3) on 6-7 October 2026 and
+passed:
 
-- Offline, on this change: the installer and updater-deploy suites (`tools/tests/wu-deploy-loud-selftest.sh`,
-  `tools/tests/wu-deploy-prevpass-selftest.sh`, `tools/tests/result-flags-selftest.sh`, `tools/tests/svc-serial-start-selftest.sh`)
-  pass, and every new assertion has been seen to fail with its defect re-introduced.
-- On a guest: not yet run. The acceptance must include an upgrade started within two minutes of the template's boot (inside the
-  previous updater's scan), on the reporter's environment, and must show the agent installed and dom0 reporting the update.
+- The package checks: driver versions, the manifest and the analyser - 14 of 14.
+- Eight install cells on Windows 10 22H2 and Windows 11 (retail 26300): a clean install from a pristine image, a same-version
+  reinstall, an upgrade from 4.3.33, and an AppVM derived from the installed template with cold boots - 96 checks, none failed.
+- The error notifications sent to dom0 and the window crop before mapping - both passed.
+- The template update on the reporter's environment (a German Windows 11 25H2 template, three update rounds): the first round was
+  the planned first-contact remedy, which tells dom0 why a restart is needed; the last completed the update - passed.
+
+On the same package, the notification test on a Windows 11 guest (`mgmt/harness/toast-hold-test.sh`, 13 notifications - single,
+in pairs, and across a switch to the windowed desktop and back): 12 were shown once, where they belong, and none twice; the one
+failing case is the one under "Known and not fixed". On the windowed desktop the guest kept its windowed size (1280x800); the same
+check fails on 4.3.34's behaviour, where the desktop grew to 5120x1384.
+
+Earlier the same day, on the reporter's environment, with an earlier 4.3.35 candidate carrying the same updater and Start menu
+changes: the updater deploy waited for a running update scan and then installed the agent (after 28 s and 18 s), and the hidden
+Start menu was closed in every try (5 of 5, in three runs) while Windows Search (Win+S) was left alone. Open-Shell's own menu stayed
+open in 54 of 57 openings in those runs (36 of 36 with 4.3.34); the three early closes are recorded as a watch item, not
+attributed to this release. On a Windows 10 guest, the boot check set the autologon account's password never to expire
+(`net user`: "Password expires 11/10/2026" before, "Never" after).
+
+Offline: the installer, updater-deploy and autologon suites pass, the toast-hold suites (agent core and bridge) pass in CI, and
+every new check in the notification test's grader has been seen to fail with its defect present.

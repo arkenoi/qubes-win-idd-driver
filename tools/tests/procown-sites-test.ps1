@@ -119,6 +119,7 @@ switch ($Defect) {
     '' { }
     'svcpid'         { $R['inst-svcstop']  = Set-GuardLine $R['inst-svcstop']  'svcpid'         '    $svcPid = 0   # DEFECT: the SCM pid is never taken - nothing to wait on, nothing to end' }
     'xbmbyname'      { $R['inst-xbm']      = Set-GuardLine $R['inst-xbm']      'xbmbyname'      '    foreach ($p in @(Get-Process -Name ''xenbus_monitor*'' -ErrorAction SilentlyContinue)) { try { $p | Stop-Process -Force -ErrorAction Stop } catch { }; try { [void]$p.WaitForExit(5000) } catch { } }   # DEFECT: kill by name (pre-2026-10-03)' }
+    'wdstopdisarm'   { $R['inst-runtime']  = Set-GuardLine $R['inst-runtime']  'wdstopdisarm'   '    # DEFECT: the watchdog service is stopped with its SCM recovery still armed (pre-2026-10-07)' }
     'runtimebyname'  { $R['inst-runtime']  = Set-GuardLine $R['inst-runtime']  'runtimebyname'  '    foreach ($proc in ''gui-agent'', ''gui-watchdog'') { foreach ($pr in @(Get-Process -Name $proc -ErrorAction SilentlyContinue)) { try { $pr | Stop-Process -Force -ErrorAction Stop } catch { } } }   # DEFECT: kill by name (pre-2026-10-03)' }
     'quiescebyname'  { $R['inst-quiesce']  = Set-GuardLine $R['inst-quiesce']  'quiescebyname'  $byName4 }
     'reassertbyname' { $R['inst-reassert'] = Set-GuardLine $R['inst-reassert'] 'reassertbyname' '          try { $pr.Kill(); [void]$pr.WaitForExit(5000) } catch { }   # DEFECT: kill by name (pre-2026-10-03)' }
@@ -144,6 +145,7 @@ function New-World {
             log = [System.Collections.Generic.List[string]]::new(); out = [System.Collections.Generic.List[string]]::new()
             kills = [System.Collections.Generic.List[string]]::new(); schtasks = [System.Collections.Generic.List[string]]::new()
             sc = [System.Collections.Generic.List[string]]::new(); warns = [System.Collections.Generic.List[string]]::new()
+            ops = [System.Collections.Generic.List[string]]::new()   # the ORDER of the lifecycle operations (R1: disarm before stop)
             fails = [System.Collections.Generic.List[string]]::new(); requests = 0; byNameLookups = 0 }
     foreach ($s in $Services) {
         $d = @{ name = ''; status = 'Running'; start = 'Automatic'; pid = 0; stopWorks = $true; stopThrows = $false; procExitsOnStop = $true; stopTakesAgent = $false }
@@ -178,6 +180,12 @@ function New-ProcObj([hashtable]$d) {
     $o
 }
 # ---- mocks: the Windows the regions talk to, over $script:W ----
+# THE RELAUNCHER'S DISARM (2026-10-07). The installer's stop regions call Suspend-QubesServiceRecovery before they
+# stop one of our services, because the SCM's recovery actions are a relauncher and on a reinstall they are armed by
+# the PREVIOUS install. It lives outside these regions, so it is mocked here - and its ORDER relative to the stop is
+# what the checks below assert.
+function Suspend-QubesServiceRecovery { param([Parameter(Mandatory)][string]$Name) $script:W.ops.Add("disarm:$Name"); return $true }
+function Resume-QubesServiceRecovery { param([string]$Name) $script:W.ops.Add("rearm:$Name") }
 function Get-Service { [CmdletBinding()] param([Parameter(Position = 0)][string]$Name)
     $s = $script:W.svc[$Name]
     if (-not $s) { return $null }
@@ -187,6 +195,7 @@ function Get-Service { [CmdletBinding()] param([Parameter(Position = 0)][string]
         param($st, $t) if ($script:W.svc[$this.Name].status -ne $st) { throw "timeout waiting for $st" } } -PassThru
 }
 function Stop-Service { [CmdletBinding()] param([Parameter(Position = 0)][string]$Name, [switch]$Force)
+    $script:W.ops.Add("stop:$Name")
     $s = $script:W.svc[$Name]
     if (-not $s) { return }
     if ($s.stopThrows) { throw "Cannot stop service '$Name' on computer '.' (the SCM is busy)" }
@@ -357,6 +366,8 @@ Check 'xbm: the same orphan without -FatalIfSurvives is WARNed about with its pi
 New-World -Services @(@{ name = 'QubesGuiWatchdog'; pid = 100; stopTakesAgent = $true }) -Procs @(@{ pid = 100; name = 'gui-watchdog' }, @{ pid = 200; name = 'gui-agent'; ownedByService = $true })
 $script:Result = @{ detail = @{} }
 Invoke-InstRuntime
+Check 'runtime: the watchdog service recovery is DISARMED BEFORE its service is stopped (R1 - the SCM is a relauncher)' `
+      (($script:W.ops -join ' ') -match 'disarm:QubesGuiWatchdog.*stop:QubesGuiWatchdog') "ops=$($script:W.ops -join ' ')"
 Check 'runtime: a new watchdog takes its agent down with the service stop - nothing left, nothing killed, no survivors recorded' `
       ((Alive).Count -eq 0 -and $script:W.kills.Count -eq 0 -and -not $script:Result.detail.ContainsKey('gui_runtime_survivors') -and (Logged 'service QubesGuiWatchdog: service=Stopped pid=100 process=gone')) "alive=$((Alive) -join ',') log=$($script:W.log -join ' | ')"
 

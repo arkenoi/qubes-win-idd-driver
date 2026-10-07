@@ -236,7 +236,8 @@ would make a per-guest, per-application list a policy edit.
 ## 10. The guest banner is suppressed by not mapping it, never by ShowBanner
 
 **Status:** ACCEPTED (owner: "i thought we agreed on design, delay and everything"; Jev), 2026-10-04; proposed by Jev
-2026-10-01. Built 2026-10-06 for 4.3.35; the guest acceptance (`mgmt/harness/toast-hold-test.sh`, control first) is owed.
+2026-10-01. In 4.3.35 (owner 2026-10-06: "switch to toast-fix"), with rule 5's case as a known failure (see Cost); the guest
+acceptance (`mgmt/harness/toast-hold-test.sh`, control first) passed every other case.
 The defect it fixes is the first-toast double, P1 in `findings/issues.md` (owner 2026-10-04: "first toast shown twice is
 fucking ugly P1").
 
@@ -295,17 +296,25 @@ defect knob in the offline suite. Jev on the result: no doubles 0.79, the bounds
 rest 0.71, nothing lost 0.54, top residual an identity mismatch on real banners (measured by the guest test).
 
 **Cost.** A first toast waits for its verdict: the identity read plus the verdict latency, at most 3 s, then shown. A
-window-path banner followed within its display time by a bridged toast loses the tail of its dom0 display (it stays in
-the guest's Notification Center). A flyout (Quick Settings, volume, clock) appears up to ~250 ms plus one read later.
+window-path banner followed within its display time by a bridged toast loses its dom0 display (it stays in the guest's
+Notification Center) - measured 2026-10-06: withdrawn 20 ms after it was mapped, or, when the newer record was already there,
+never mapped at all. That is against the owner's rule (no flash, nothing lost); 4.3.35 ships it as a known issue by the owner's
+decision, and rule 5 is to be replaced (Open). A flyout (Quick Settings, volume, clock) appears up to ~250 ms plus one read later.
 
 **Evidence.** Offline: `agent/gui-agent/toasthold_test.c` (176 checks, as C99 and as C++17) and
 `tools/notifhost/toasthold_bridge_test.cpp` (25 checks), every defect knob (15 + 2) seen to fail; CI builds and runs
-both suites. On a guest: owed - `mgmt/harness/toast-hold-test.sh` first on a build without the hold, where the first
-classified toast must come out as a DOUBLE (the detectors seen to fail), then on the candidate.
+both suites. On a guest (`mgmt/harness/toast-hold-test.sh`, win11r, 2026-10-06): the build without the hold doubled the
+first classified toasts and lost a window-path one (the detectors seen to fail); the hold build (37499041570) passed 17 of 18
+rows - forwarded toasts never mapped (held 78-375 ms), window-path toasts shown, a shared-window pair bridged-then-window clean,
+non-seamless forwarding nothing - and failed only rule 5's case.
 
 **Open.** Not fixed by this section: a toast whose banner timed out before a correction is only in the guest's
 Notification Center; the identity of system toasts whose display name differs between the notification database and
 the card is unmeasured (a mismatch fails open: the double returns, logged).
+Rule 5 is to be replaced: keep the displayed window-path banner mapped, and while a newer `bridge` or `pending` record is
+queued behind it forward none of that window's new frames until a fresh identity read shows which toast it carries (swap-edge
+gating; Jev 2026-10-06 0.44, against 0.36 for a bridge re-route with it as the fallback and 0.08 for keeping rule 5). First
+measurement: whether the capture path can hold back one mapped window's frames (Jev 0.75).
 
 ## 11. A toast's buttons travel to dom0 as actions, and a dom0 click is carried out in the guest - all of them or none
 

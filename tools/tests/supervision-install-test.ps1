@@ -49,6 +49,7 @@ function Get-Region([string]$file, [string]$name) {
 }
 $R = [ordered]@{
     'recovery' = Get-Region 'packaging/setup/Install-QwtImproved.ps1' 'SVC-RECOVERY'
+    'suspend'  = Get-Region 'packaging/setup/Install-QwtImproved.ps1' 'RECOVERY-SUSPEND'
     'reporter' = Get-Region 'packaging/setup/Install-QwtImproved.ps1' 'DEATH-REPORTER'
     'netsetup' = Get-Region 'guest/pvnic-selfprime.ps1' 'NETSETUP-RECOVERY'
 }
@@ -59,6 +60,7 @@ function Set-GuardLine([string[]]$region, [string]$guard, [string]$replacement) 
 }
 switch ($Defect) {
     '' { }
+    'recovsuspend'   { $R['suspend']  = Set-GuardLine $R['suspend']  'recovsuspend'   '    $script:RecoverySuspended = $script:RecoverySuspended + @{ $Name = $before }   # DEFECT: throws on a second suspend of the same service (pre-2026-10-07)' }
     'recovthree'    { $R['recovery'] = Set-GuardLine $R['recovery'] 'recovthree'    "    foreach (`$svc in 'QdbDaemon', 'QrexecAgent') {   # DEFECT: the watchdog service is not armed" }
     'evsrc'         { $R['reporter'] = Set-GuardLine $R['reporter'] 'evsrc'         '        $global:LASTEXITCODE = 0   # DEFECT: EventMessageFile never written - every event renders as "description not found"' }
     'tasklog'       { $R['reporter'] = Set-GuardLine $R['reporter'] 'tasklog'       '        $global:LASTEXITCODE = 0   # DEFECT: the TaskScheduler/Operational channel stays disabled - 201/203 are never written' }
@@ -76,7 +78,7 @@ $bin = Join-Path $tmp 'bin'
 $env:TEMP = $tmp
 $script:W = @{ sc = New-Object System.Collections.ArrayList; reg = New-Object System.Collections.ArrayList
                wevtutil = New-Object System.Collections.ArrayList; schtasks = New-Object System.Collections.ArrayList
-               taskXml = @{}; scFailFor = @{}; regRc = 0; wevtRc = 0; schtasksCreateRc = 0; schtasksQueryRc = 0 }
+               taskXml = @{}; scFailFor = @{}; scDisarmed = @{}; regRc = 0; wevtRc = 0; schtasksCreateRc = 0; schtasksQueryRc = 0 }
 $script:logged = New-Object System.Collections.ArrayList
 function Write-Log { param([string]$Message, [string]$Level = 'INFO') [void]$script:logged.Add("[$Level] $Message") }
 function Write-Host { }
@@ -84,6 +86,19 @@ function sc.exe { param([Parameter(ValueFromRemainingArguments = $true)][string[
     $call = ($a -join ' '); [void]$script:W.sc.Add($call)
     $svc = $a[1]
     if ($script:W.scFailFor.ContainsKey($svc)) { $global:LASTEXITCODE = [int]$script:W.scFailFor[$svc] } else { $global:LASTEXITCODE = 0 }
+    if ($a[0] -eq 'qfailure') {
+        # The SCM's own text, and the state it reports CHANGES once the service has been disarmed - so a
+        # second suspend reads "no actions", and a record that overwrote the first reading would re-arm nothing.
+        if ($script:W.scDisarmed.ContainsKey($svc)) {
+            return @("[SC] QueryServiceConfig2 SUCCESS", "SERVICE_NAME: $svc", "        RESET_PERIOD (in seconds)    : 0", "        FAILURE_ACTIONS              :") -join "`n"
+        }
+        return @("[SC] QueryServiceConfig2 SUCCESS", "SERVICE_NAME: $svc", "        RESET_PERIOD (in seconds)    : 86400",
+                 "        FAILURE_ACTIONS              : RESTART -- Delay = 5000 milliseconds.",
+                 "                                       RESTART -- Delay = 15000 milliseconds.",
+                 "                                       RESTART -- Delay = 60000 milliseconds.") -join "`n"
+    }
+    if ($a[0] -eq 'failure' -and ($call -match 'actions= *$' -or $call -match 'actions= ""')) { $script:W.scDisarmed[$svc] = $true }
+    if ($a[0] -eq 'failure' -and $call -match 'actions= restart') { [void]$script:W.scDisarmed.Remove($svc) }
     return ''
 }
 function reg.exe { param([Parameter(ValueFromRemainingArguments = $true)][string[]]$a)
@@ -234,6 +249,44 @@ $fail = @{}
 $script:W.scFailFor['QwtngNetSetup'] = 5
 . ([scriptblock]::Create(($R['netsetup'] -join "`n"))) *> $null
 Check 'netsetup: a failed arming is a failed priming (fail.netsetup_recovery)' ($fail['netsetup_recovery'] -eq 'sc failure=5 failureflag=5')
+
+# ================================================================= the recovery suspend/resume pair ==============
+# R1: the installer disarms the SCM before it stops one of our services (docs/ADR-supervision.md 5). Both halves of
+# the defect measured 2026-10-07 on win11r-gz live here: the SECOND suspend of the same service threw "Item has
+# already been added" and ended stage 2 (the install delivered nothing), and a record that kept the SECOND reading
+# would re-arm "no actions" - the configuration the arming exists to prevent.
+Reset-World
+. ([scriptblock]::Create(($R['suspend'] -join "`n")))
+$script:Result = @{ detail = @{} }
+$script:RecoverySuspended = @{}
+$thrown = ''
+try { [void](Suspend-QubesServiceRecovery -Name 'QubesGuiWatchdog') } catch { $thrown = "$_" }
+Check 'suspend: the first call disarms the service and records what it was' `
+      ($thrown -eq '' -and @($script:W.sc | Where-Object { $_ -eq 'failure QubesGuiWatchdog reset= 0 actions= ' -or $_ -eq 'failure QubesGuiWatchdog reset= 0 actions= ""' }).Count -ge 1 `
+       -and @($script:W.sc | Where-Object { $_ -eq 'failureflag QubesGuiWatchdog 0' }).Count -eq 1 `
+       -and "$($script:RecoverySuspended['QubesGuiWatchdog'])" -match 'reset=86400' ) "thrown=$thrown rec=$($script:RecoverySuspended['QubesGuiWatchdog']) sc=$($script:W.sc -join ' | ')"
+$thrown = ''
+try { [void](Suspend-QubesServiceRecovery -Name 'QubesGuiWatchdog') } catch { $thrown = "$_" }
+Check 'suspend: a SECOND call for the same service does not throw (Stop-QwtRuntime runs from three sites)' ($thrown -eq '') "thrown=$thrown"
+Check 'suspend: the record is still the FIRST reading, not the disarmed one it would read now' `
+      ("$($script:RecoverySuspended['QubesGuiWatchdog'])" -match 'reset=86400') "rec=$($script:RecoverySuspended['QubesGuiWatchdog'])"
+$thrown = ''
+try { Resume-QubesServiceRecovery } catch { $thrown = "$_" }
+Check 'resume: the recorded configuration is restored, with the non-crash flag back on' `
+      ($thrown -eq '' -and @($script:W.sc | Where-Object { $_ -like 'failure QubesGuiWatchdog reset= 86400 actions= restart/5000*' }).Count -eq 1 `
+       -and @($script:W.sc | Where-Object { $_ -eq 'failureflag QubesGuiWatchdog 1' }).Count -eq 1 `
+       -and $script:RecoverySuspended.Count -eq 0) "thrown=$thrown sc=$($script:W.sc -join ' | ')"
+# A service whose prior configuration could not be read is armed with the standard one - never left bare.
+Reset-World
+$script:RecoverySuspended = @{}
+$script:W.scFailFor['QdbDaemon'] = 1
+[void](Suspend-QubesServiceRecovery -Name 'QdbDaemon')
+Check 'suspend: an unreadable prior configuration is an ERROR-class flag, and the disarm is still attempted' `
+      ($null -ne $script:Result.detail['svc_recovery_disarm_failed']) "detail=$($script:Result.detail.Keys -join ',')"
+$script:W.scFailFor.Remove('QdbDaemon')
+Resume-QubesServiceRecovery -Name 'QdbDaemon'
+Check 'resume: a service with no readable prior configuration gets the standard recovery, never none' `
+      (@($script:W.sc | Where-Object { $_ -like 'failure QdbDaemon reset= 86400 actions= restart/5000*' }).Count -eq 1) "sc=$($script:W.sc -join ' | ')"
 
 Microsoft.PowerShell.Utility\Write-Host "$($script:run) checks, $($script:nfail) failed"
 Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
