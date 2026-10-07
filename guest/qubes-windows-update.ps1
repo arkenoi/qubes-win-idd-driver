@@ -2461,16 +2461,39 @@ try {
       if (-not ($r -and (Test-RowKey $r 'uid') -and $r.uid)) { return $true }   # no identity -> count it
       return ($priorSat -notcontains "$($r.uid):$($r.rev)") }
   $notPriorInfo = { param($r) ($priorInfo -notcontains $r.kb) -and ($priorInfo -notcontains $r.title) -and (& $notPriorSat $r) }
-  $reportCount = @($avail | Where-Object { (& $notPriorInfo $_) }).Count
-  if ($priorInfo.Count -gt 0 -and $reportCount -ne $avail.Count) {
-    Log ("scan: excluding " + ($avail.Count - $reportCount) + " offer(s) a previous pass proved not actionable: " + ($priorInfo -join ', '))
+  # DOM0 HEARS THE TRUE NUMBER OF OFFERS. The rule is stated fifteen lines below this, at the -OnlyKb
+  # narrowing - "dom0 must always hear the true number of available updates" - and this line broke it: an
+  # offer a previous pass classified 'info' was subtracted from the count, DURABLY (not_actionable is carried
+  # forward on purpose), so the guest decided on its own that dom0 should be told nothing while Windows went
+  # on offering the update. GWeck, forum #175 on 4.3.35, unchanged since 4.3.33: "Trying to update from the
+  # Qube manager still shows (wrongly) that no updates are available", with KB5101684 - the July 2026
+  # optional PREVIEW cumulative, which cannot install routeless - listed in his own Windows Update window.
+  # Jev: is_concealment 0.89, true-count-always 0.87, and the owner's ESU ruling is untouched (0.28) because
+  # that is the notice branch below, which keeps its own rule.
+  # The actionable/informational split is not lost - it is recorded in the status, where the pass's own
+  # report carries it, instead of being hidden inside a single number.
+  # TWO DIFFERENT EXCLUSIONS, and only one of them may touch what dom0 hears:
+  #   an offer whose own IDENTITY a pass installed and proved installed is GONE, not hidden - Windows
+  #     re-presents satisfied signatures under the same KB, and counting them is what drove dom0 0 -> 3 -> 0
+  #     on 2026-09-20 (GUARD:offeridentity above);
+  #   an offer we CANNOT INSTALL is still available, and subtracting it is the concealment this fix removes.
+  $actionableCount = @($avail | Where-Object { (& $notPriorInfo $_) }).Count
+  $reportCount = @($avail | Where-Object { (& $notPriorSat $_) }).Count   # GUARD:truecount DEFECT: $reportCount = $actionableCount
+  if ($priorInfo.Count -gt 0 -and $actionableCount -ne $avail.Count) {
+    Log ("scan: " + ($avail.Count - $actionableCount) + " offer(s) a previous pass proved not actionable: " + ($priorInfo -join ', ') +
+         " - still COUNTED to dom0, because what we cannot install is not the same as nothing being available")
   }
   # Under the ESU notice (netvm-free, post-EOS): only SELF-CONTAINED updates are actionable - express
   # (ESU-gated phantom) and 'none' (Defender delta / DO-only) cannot install routeless and are informational.
-  if ($script:St.notice) { $reportCount = @($avail | Where-Object { $_.content_class -eq 'self-contained' -and (& $notPriorInfo $_) }).Count }
+  # The ESU notice is the owner's standing exception and keeps its own rule: "a Win10 22H2 guest reporting
+  # 0 actionable updates with ESU items as info is CORRECT" (findings/updates.md).
+  if ($script:St.notice) { $reportCount = @($avail | Where-Object { $_.content_class -eq 'self-contained' -and (& $notPriorInfo $_) }).Count
+                           $actionableCount = $reportCount }
+  $script:St.offered = $avail.Count
+  $script:St.actionable = $actionableCount
   # ---- WU-SCAN-COUNT-END
-  $script:St.remaining = $reportCount; Save
-  Log ("scan: $($avail.Count) update(s) offered" + $(if($script:St.notice){ "; $reportCount actionable (" + ($avail.Count - $reportCount) + " ESU-gated/express informational - see notice)" }else{ '' }))
+  $script:St.remaining = $actionableCount; Save
+  Log ("scan: $($avail.Count) update(s) offered, $actionableCount actionable, $reportCount reported to dom0" + $(if($script:St.notice){ "; $reportCount actionable (" + ($avail.Count - $reportCount) + " ESU-gated/express informational - see notice)" }else{ '' }))
   if ($script:St.notice) { Log ("SERVICING NOTICE: " + $script:St.notice) }
   Report-Availability $reportCount    # -> dom0 Qube Manager (default-allowed for TemplateVMs)
 

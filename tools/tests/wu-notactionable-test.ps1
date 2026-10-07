@@ -55,11 +55,13 @@ switch ($Defect) {
     'stageddone'{ $infoRegion = $infoRegion.Replace('($_.ok -eq $true -and ((-not (Test-RowKey $_ ''state'')) -or ($doneStates -contains [string]$_.state)))', '$_.ok -eq $true').Replace('if ($stagedN -gt $reportCount) { $reportCount = $stagedN }', '') }
     # Ignores the offer identity entirely - the state before GUARD:offeridentity, where a scan
     # re-counted an offer the previous pass had resolved and proved.
-    'satignore' { $scRegion = $scRegion.Replace('-and (& $notPriorSat $r)', '') }
+    'satignore' { $scRegion = $scRegion.Replace('@($avail | Where-Object { (& $notPriorSat $_) }).Count', '@($avail).Count') }
     # Drops the carry-forward: the scan consumes the identities and writes an empty list back, so
     # the knowledge lasts exactly one scan.
     'satdrop'   { $scRegion = $scRegion.Replace('$script:St.satisfied = @($priorSat)', '') }
-    'scanall'   { $scRegion = $scRegion -replace '\$reportCount = @\(\$avail \| Where-Object \{ \(& \$notPriorInfo \$_\) \}\)\.Count', '$reportCount = $avail.Count' }
+    # the 2026-10-07 concealment, restored: report only what we can INSTALL, so an offer we cannot place
+    # makes dom0 say "no updates available" while Windows goes on offering it (GWeck, forum #175)
+    'scanhide'  { $scRegion = $scRegion.Replace('$reportCount = @($avail | Where-Object { (& $notPriorSat $_) }).Count', '$reportCount = $actionableCount') }
     ''          { }
     default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (noticeonly | kbonly | trustzero | shapeskip | infoonly | scanall | satignore | satdrop | stageddone | notitle)"; exit 2 }
 }
@@ -250,10 +252,10 @@ function ScanCount($avail, $prevResult) {
     $StatusFile = Join-Path ([IO.Path]::GetTempPath()) ("wuscan-" + [guid]::NewGuid().ToString() + ".json")
     if ($null -ne $prevResult) { (@{ result = $prevResult } | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $StatusFile }
     $script:PrevStatus = if (Test-Path $StatusFile) { Get-Content -LiteralPath $StatusFile -Raw | ConvertFrom-Json } else { $null }
-    $reportCount = -1
+    $reportCount = -1; $actionableCount = -1
     Invoke-Expression $scRegion
     Remove-Item $StatusFile -EA SilentlyContinue
-    return $reportCount
+    return @{ reported = $reportCount; actionable = $actionableCount; offered = $script:St.offered }
 }
 $scanAvail = @(
     [pscustomobject]@{ kb = 'KB5007651'; title = 'Security platform'; content_class = 'self-contained' },
@@ -263,11 +265,18 @@ $scanAvail = @(
 $priorNoRoute = @(
     [pscustomobject]@{ kb = 'AudioProcessingObject Driver Update'; title = 'AudioProcessingObject Driver Update'; severity = 'info' }
 )
-Check "scan: no prior status -> every offer counts (a fresh guest must not be silenced)" (ScanCount $scanAvail $null) 3
-Check "scan: a KB a previous pass proved NOT ACTIONABLE is excluded"                      (ScanCount $scanAvail $priorNoRoute) 2
+Check "scan: no prior status -> every offer counts (a fresh guest must not be silenced)" (ScanCount $scanAvail $null).reported 3
+# THE CONTRACT CHANGED ON 2026-10-07, and this suite had encoded the defect: it asserted that an offer a
+# previous pass called not-actionable is SUBTRACTED from what dom0 is told, which is what made GWeck's Qube
+# Manager say "no updates available" while his own Windows Update window listed KB5101684. dom0 hears the
+# TRUE number of offers; the split is recorded for the pass's report (Jev: is_concealment 0.89,
+# true-count-always 0.87). What we cannot install is not the same as nothing being available.
+Check "scan: an offer a previous pass proved NOT ACTIONABLE is still COUNTED to dom0"     (ScanCount $scanAvail $priorNoRoute).reported 3
+Check "scan: ...and the actionable split is recorded rather than hidden inside the count" (ScanCount $scanAvail $priorNoRoute).actionable 2
+Check "scan: the offered count is recorded too"                                           (ScanCount $scanAvail $priorNoRoute).offered 3
 # The conservative half: 'installed last time' must NOT silence a fresh offer on a scan.
 $priorInstalled = @([pscustomobject]@{ kb = 'KB5007651'; ok = $true; state = 'installed' })
-Check "scan: a KB merely INSTALLED last pass still counts on a scan (only a pass may judge that)" (ScanCount $scanAvail $priorInstalled) 3
+Check "scan: a KB merely INSTALLED last pass still counts on a scan (only a pass may judge that)" (ScanCount $scanAvail $priorInstalled).reported 3
 # DURABLE: a scan writes result=[], so knowledge kept only in result rows survives one scan. The
 # carry-forward field must keep it. Simulate the SECOND scan: no result rows, but not_actionable set.
 function ScanCount2($avail, $notActionable) {
@@ -275,13 +284,35 @@ function ScanCount2($avail, $notActionable) {
     $StatusFile = Join-Path ([IO.Path]::GetTempPath()) ("wuscan2-" + [guid]::NewGuid().ToString() + ".json")
     (@{ result = @(); not_actionable = $notActionable } | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $StatusFile
     $script:PrevStatus = Get-Content -LiteralPath $StatusFile -Raw | ConvertFrom-Json
-    $reportCount = -1
+    $reportCount = -1; $actionableCount = -1
     Invoke-Expression $scRegion
     Remove-Item $StatusFile -EA SilentlyContinue
-    return $reportCount
+    return @{ reported = $reportCount; actionable = $actionableCount; offered = $script:St.offered }
 }
-Check "scan: the SECOND scan still excludes - the classification is durable, not one-shot" `
-      (ScanCount2 $scanAvail @('AudioProcessingObject Driver Update')) 2
+Check "scan: the SECOND scan still knows it is not actionable - the classification is durable, not one-shot" `
+      (ScanCount2 $scanAvail @('AudioProcessingObject Driver Update')).actionable 2
+Check "scan: ...and dom0 still hears all three, because durability must not become concealment" `
+      (ScanCount2 $scanAvail @('AudioProcessingObject Driver Update')).reported 3
+
+# THE OWNER'S STANDING EXCEPTION, kept: under the ESU servicing notice (netvm-free Win10 22H2, post-EOS) only
+# self-contained updates are actionable AND that is what dom0 hears - "a Win10 22H2 guest reporting 0
+# actionable updates with ESU items as info is CORRECT" (findings/updates.md). Jev confirmed the change above
+# does not disturb it (0.28).
+function ScanCountNotice($avail, $prevResult) {
+    $script:St = [ordered]@{ notice = 'Windows 10 22H2 is past end of servicing (ESU)'; not_actionable = @() }
+    $StatusFile = Join-Path ([IO.Path]::GetTempPath()) ("wuscanN-" + [guid]::NewGuid().ToString() + ".json")
+    if ($null -ne $prevResult) { (@{ result = $prevResult } | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $StatusFile }
+    $script:PrevStatus = if (Test-Path $StatusFile) { Get-Content -LiteralPath $StatusFile -Raw | ConvertFrom-Json } else { $null }
+    $reportCount = -1; $actionableCount = -1
+    Invoke-Expression $scRegion
+    Remove-Item $StatusFile -EA SilentlyContinue
+    return @{ reported = $reportCount; actionable = $actionableCount }
+}
+$esuAvail = @(
+    [pscustomobject]@{ kb = 'KB5068781'; title = 'ESU cumulative';  content_class = 'express' },
+    [pscustomobject]@{ kb = 'KB2267602'; title = 'Defender defs';   content_class = 'self-contained' }
+)
+Check "scan: under the ESU notice dom0 hears the ACTIONABLE count, as the owner ruled" (ScanCountNotice $esuAvail $null).reported 1
 
 # GUARD:offeridentity. The oscillation that failed the bar on 2026-09-20: a pass installed a
 # Defender signature and PROVED it by effect, dom0 went empty, and a scan 30 seconds later counted
