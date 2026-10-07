@@ -63,6 +63,15 @@
             "command": "bash \"$CLAUDE_PROJECT_DIR/tools/hooks/release-cut-gate.sh\""
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/tools/hooks/admin-target-gate.sh\""
+          }
+        ]
       }
     ],
     "Stop": [

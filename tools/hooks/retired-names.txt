@@ -13,3 +13,8 @@ KM-TEST
 express[- ]URL[^\n]{0,20}harvest
 NLA/NCSI[^\n]{0,20}flip
 checkpoint-cumulative
+# RETRACTED CAPABILITY CLAIMS. Not components - claims about what this qube cannot do, which were
+# measured false and then kept being re-asserted because the correction was applied to one copy of
+# the text and not to the others. Carry RETRACTED in the edit when you are recording the withdrawal.
+--cdrom[^\n]{0,40}(is |was )?BROKEN
+cdrom[^\n]{0,40}poisons the guest

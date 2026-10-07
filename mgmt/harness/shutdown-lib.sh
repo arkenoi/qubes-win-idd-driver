@@ -61,6 +61,16 @@ _qwt_boottime() {
 }
 qwt_shutdown() {
     local vm="$1" deadline="${2:-1800}" end st b0 b1
+    # A QUBE THAT DOES NOT EXIST IS NOT "NOT HALTED". The poll below reads STATE out of qvm-ls and
+    # compares it to Halted; for an absent qube that read is EMPTY, which is never Halted, so every
+    # caller that pre-cleaned a subject it had not created yet sat here for its whole deadline and
+    # then returned 1 - "the request had no effect" - about a qube there was nothing to request of.
+    # Measured 2026-10-07: appmenu-guest-ab.sh spent 240 s in its pre-clean and another 300 s in
+    # its teardown doing exactly this, before it had cloned anything.
+    if ! qvm-ls --raw-data --fields NAME 2>/dev/null | grep -qxF "$vm"; then
+        echo "qwt_shutdown: $vm does not exist - nothing to shut down" >&2
+        return 0
+    fi
     b0=$(_qwt_boottime "$vm")            # before the request; empty = no qrexec, a fact in itself
     # A bare qvm-shutdown is the REQUEST (ACPI). It returns immediately and kills nothing.
     timeout 120 qvm-shutdown "$vm" >/dev/null 2>&1
@@ -68,6 +78,12 @@ qwt_shutdown() {
     while [ "$(date +%s)" -lt "$end" ]; do
         st=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$vm" '$1==v{print $2}')
         [ "$st" = Halted ] && return 0
+        # and if it has gone from the list entirely while we waited, it is down, not unresponsive -
+        # the same mistake as above, just arriving mid-poll.
+        if [ -z "$st" ]; then
+            echo "qwt_shutdown: $vm is no longer listed - it is gone, not unresponsive" >&2
+            return 0
+        fi
         sleep 10
     done
     b1=$(_qwt_boottime "$vm")   # same guard: returns empty unless it is still Running

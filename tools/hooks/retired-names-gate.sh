@@ -26,7 +26,12 @@ ti = hook.get('tool_input') or {}
 path = str(ti.get('file_path') or ti.get('path') or '')
 if not path:
     sys.exit(0)
-guarded = re.compile(r'(^|/)(CLAUDE\.md|CLAUDE\.local\.md|FINDINGS\.md)$|(^|/)(findings|docs)/|/memory/')
+# .claude/skills/ IS part of the record: on 2026-10-07 a claim CLAUDE.md had retracted twelve days
+# earlier was still sitting, verbatim, in .claude/skills/rig-capabilities/SKILL.md - the very file
+# CLAUDE.md names as the antidote to that class of mistake - and in mgmt/CLAUDE.md and
+# docs/ACCEPTANCE-PROTOCOL.md. A correction applied to one copy is not a correction.
+guarded = re.compile(r'(^|/)(CLAUDE\.md|CLAUDE\.local\.md|FINDINGS\.md)$|(^|/)(findings|docs)/|/memory/'
+                     r'|/\.claude/skills/')
 if not guarded.search(path):
     sys.exit(0)
 parts = []
@@ -37,7 +42,7 @@ for e in ti.get('edits') or []:
 text = '\n'.join(parts)
 if not text:
     sys.exit(0)
-if re.search(r'\bRETIRED\b|\bREOPENED-BY-OWNER\b', text):
+if re.search(r'\bRETIRED\b|\bREOPENED-BY-OWNER\b|\bRETRACTED\b', text):
     sys.exit(0)
 names = []
 try:
@@ -54,8 +59,8 @@ for pat in names:
             f"BLOCKED by tools/hooks/retired-names-gate.sh: this edit to {path} names a RETIRED/PARKED line "
             f"(pattern {pat!r}, matched {m.group(0)!r}) and carries neither RETIRED nor REOPENED-BY-OWNER. "
             f"Read CLAUDE.md 'RETIRED AND PARKED LINES' and `git log --oneline -S<name> -- .` first. If you are "
-            f"recording that it is retired, say RETIRED in the edit; if the owner reopened it, quote them and say "
-            f"REOPENED-BY-OWNER. Otherwise this is the dead end being re-derived - stop.\n")
+            f"recording that it is retired, say RETIRED in the edit (or RETRACTED for a withdrawn claim); if the owner reopened it, quote "
+            f"them and say REOPENED-BY-OWNER. Otherwise this is the dead end being re-derived - stop.\n")
         sys.exit(2)
 sys.exit(0)
 PY

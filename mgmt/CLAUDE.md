@@ -11,14 +11,18 @@ copy at `~/qubes-win-idd/`. Keep a dated log in `~/qubes-win-idd/mgmt/PROVISION-
 
 ## Rights and rules
 
-You hold (via dom0 policy, nothing else): `admin.vm.Create.standalone`; full manage/lifecycle
-of VMs YOU created (auto-tag `created-by-win-idd-mgmt`) and of `win-idd-test`; block-device
-export of your own files (`--cdrom=win-idd-mgmt:...`); `qubes.VMShell`/`qubes.Filecopy` to
-`win-idd-test`; `local.WinScreenshot` (dom0 service; screenshots only `[win-idd-test]`
-windows, returns a tar of PNGs).
+**WHAT YOU HOLD IS IN THE ROOT `CLAUDE.md`, AND THIS PARAGRAPH IS NO LONGER IT.** Policy here is
+TAG-BASED (`dom0/12-install-policy-tagged.sh`): every qube tagged `win-idd-testbed` is drivable, you
+may CREATE more, and qube create/remove, `qvm-prefs` read+write, `qvm-tags`, `qvm-firewall`,
+`qvm-volume` info/clone, power state and `qtest` run/push/shot are PRE-AUTHORISED without asking.
+The old text here granted rights over a single `win-idd-test` qube that has not existed for months.
 
-- Touch NOTHING but `win-idd-test` and your own home dir. Never request policy changes;
-  if a right is missing, STOP and tell the user the exact line you need.
+- Touch nothing that is NOT tagged `win-idd-testbed`, and nothing outside your own home dir.
+- **Do not report a capability as missing, and do not ask for a policy line, before running the
+  command.** Every row of the table below is root-free and in daily use; `sudo losetup`, `mount` and
+  a dom0 shell are what you do not have, and each has a root-free equivalent here. Needing root for
+  ONE SPELLING has been mistaken for the capability being absent six times, at hours each. Read
+  `.claude/skills/rig-capabilities/SKILL.md` before calling anything impossible.
 - `qvm-*` CLI comes from `qubes-core-admin-client` (template package). If a tool hangs on
   events, use the raw call fallback: `qrexec-client-vm <dest> <admin.service>` (empty stdin;
   response starts `0\x00` on success) and note it in the log.
@@ -112,5 +116,10 @@ REAL traps here, none of them permission problems:
 - `assign --required` PERSISTS while loop numbers are TRANSIENT (recycled on reboot and by every
   `loop-delete`). A stale claim makes the guest unstartable with only `internal error: libxenlight
   failed to create new domain` — check assignments FIRST when a guest will not create (`findings/rig.md`).
-- `qvm-start --cdrom=` is BROKEN from this qube and poisons the guest (`findings/rig.md`); use the
-  attach/assign rows instead.
+- **`qvm-start <vm> --cdrom=<holder>:<loopN>` WORKS.** This line said it was "BROKEN from this qube
+  and poisons the guest" until 2026-09-25, when the claim it cited (`findings/rig.md` line 59) turned
+  out to be flagged STALE in that same file, with a LATER entry recording the opposite as MEASURED:
+  the start-time disc was verified inside the guest, at D:, with the expected commit. `matrix.sh` uses
+  it in every reinstall cell. What IS broken is the **live** `devtype=cdrom` attach/detach against a
+  RUNNING guest - an uncaught `libvirtError` in qubesd that returns an empty response - and
+  `lint-harness.py` rule L12 already refuses that. The disc goes in AT START.
