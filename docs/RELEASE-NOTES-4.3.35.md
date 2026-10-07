@@ -117,10 +117,27 @@ dismissed; it is informational and goes after 20 s.
 
 ## How this release was verified
 
-(placeholder - to be filled from the release acceptance)
+The full release acceptance ran on this exact package (release-package 37525894363, built from 9478cae3) on 6-7 October 2026 and
+passed:
 
-- Offline, on this change: the installer and updater-deploy suites (`tools/tests/wu-deploy-loud-selftest.sh`,
-  `tools/tests/wu-deploy-prevpass-selftest.sh`, `tools/tests/result-flags-selftest.sh`, `tools/tests/svc-serial-start-selftest.sh`)
-  pass, and every new assertion has been seen to fail with its defect re-introduced.
-- On a guest: not yet run. The acceptance must include an upgrade started within two minutes of the template's boot (inside the
-  previous updater's scan), on the reporter's environment, and must show the agent installed and dom0 reporting the update.
+- The package checks: driver versions, the manifest and the analyser - 14 of 14.
+- Eight install cells on Windows 10 22H2 and Windows 11 (retail 26300): a clean install from a pristine image, a same-version
+  reinstall, an upgrade from 4.3.33, and an AppVM derived from the installed template with cold boots - 96 checks, none failed.
+- The error notifications sent to dom0 and the window crop before mapping - both passed.
+- The template update on the reporter's environment (a German Windows 11 25H2 template, three update rounds): the first round was
+  the planned first-contact remedy, which tells dom0 why a restart is needed; the last completed the update - passed.
+
+On the same package, the notification test on a Windows 11 guest (`mgmt/harness/toast-hold-test.sh`, 13 notifications - single,
+in pairs, and across a switch to the windowed desktop and back): 12 were shown once, where they belong, and none twice; the one
+failing case is the one under "Known and not fixed". On the windowed desktop the guest kept its windowed size (1280x800); the same
+check fails on 4.3.34's behaviour, where the desktop grew to 5120x1384.
+
+Earlier the same day, on the reporter's environment, with an earlier 4.3.35 candidate carrying the same updater and Start menu
+changes: the updater deploy waited for a running update scan and then installed the agent (after 28 s and 18 s), and the hidden
+Start menu was closed in every try (5 of 5, in three runs) while Windows Search (Win+S) was left alone. Open-Shell's own menu stayed
+open in 54 of 57 openings in those runs (36 of 36 with 4.3.34); the three early closes are recorded as a watch item, not
+attributed to this release. On a Windows 10 guest, the boot check set the autologon account's password never to expire
+(`net user`: "Password expires 11/10/2026" before, "Never" after).
+
+Offline: the installer, updater-deploy and autologon suites pass, the toast-hold suites (agent core and bridge) pass in CI, and
+every new check in the notification test's grader has been seen to fail with its defect present.
