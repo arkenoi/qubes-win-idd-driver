@@ -1,17 +1,55 @@
 --- a/src/log.c
 +++ b/src/log.c
-@@ -47,6 +47,10 @@
+@@ -47,6 +47,19 @@
  static WCHAR g_Buffer[BUFFER_SIZE];
  static char g_BufferUtf8[CONVERT_MAX_BUFFER_LENGTH];
  static char g_PrefixBufferUtf8[CONVERT_MAX_BUFFER_LENGTH];
 +// The log's own path, kept so LogFlush can reopen it: an append-only handle cannot be flushed.
 +static WCHAR *g_LogFilePath = NULL;
++// A raw ROW is many LogDebugRaw calls and must still reach the file in ONE write, or another
++// process sharing the file lands a line inside the row. Accumulated here and flushed on the
++// fragment that ends the line (and by LogUnlock, so an unterminated row cannot sit here).
++static char g_RawBufUtf8[CONVERT_MAX_BUFFER_LENGTH + 1024];
++static size_t g_RawLen = 0;
++// Set when the shared open failed and this process took a per-process name. Reported as a LOG line
++// once the logger is up: stderr is not somewhere a service's children can be read from.
++static BOOL g_LogDegraded = FALSE;
++static DWORD g_LogDegradedError = 0;
 +// One line, one WriteFile: prefix, message and newline are composed here before the single write.
 +static char g_LineBufUtf8[CONVERT_MAX_BUFFER_LENGTH + 1024];
  
  static WCHAR g_LogLevelChar[] = {
      L'?',
-@@ -219,7 +223,9 @@
+@@ -62,8 +75,28 @@
+     EnterCriticalSection(&g_Lock);
+ }
+ 
++// Flush a raw row that has not been ended by a newline fragment. Called with the lock held.
++static void _RawFlushUnlocked(void)
++{
++    DWORD written = 0;
++
++    if (g_RawLen == 0 || g_LogfileHandle == INVALID_HANDLE_VALUE)
++    {
++        g_RawLen = 0;
++        return;
++    }
++
++    if (!WriteFile(g_LogfileHandle, g_RawBufUtf8, (DWORD) g_RawLen, &written, NULL) || written != (DWORD) g_RawLen)
++        fwprintf(stderr, L"_RawFlush: WriteFile(raw row) failed: error %d\n", GetLastError());
++
++    g_RawLen = 0;
++}
++
+ void LogUnlock()
+ {
++    // A raw row ends at the unlock even if its last fragment carried no newline: holding bytes here
++    // past the row would attribute them to whatever is logged next.
++    _RawFlushUnlocked();
+     LeaveCriticalSection(&g_Lock);
+ }
+ 
+@@ -219,7 +252,9 @@
  {
      SYSTEMTIME st;
      DWORD len = 0;
@@ -22,7 +60,7 @@
      WCHAR systemPath[MAX_PATH]; // this should be fine unless for some reason Windows dir is in a weird location
      DWORD versionMajor = 0, versionMinor = 0;
      HANDLE token;
-@@ -275,8 +281,7 @@
+@@ -275,8 +310,7 @@
      }
  
      if (FAILED(StringCchPrintf(logPath, MAX_PATH_LONG, format,
@@ -32,7 +70,23 @@
          )))
      {
          LogStart(NULL);
-@@ -376,6 +381,11 @@
+@@ -286,6 +320,15 @@
+ 
+     LogStart(logPath);
+ 
++    // NOW the logger is up, so the degradation can be said where it will be counted.
++    if (g_LogDegraded)
++    {
++        LogError("QWTLOGFALLBACK the shared log could not be opened (error %lu) - this process is "
++            L"logging to %s instead, so this module has a file per process until that is fixed",
++            g_LogDegradedError, g_LogFilePath ? g_LogFilePath : L"(unknown)");
++        g_LogDegraded = FALSE;
++    }
++
+ fallback:
+     free(logPath);
+     LogInfo("Log started, module name: %s", g_LogName);
+@@ -376,6 +419,11 @@
  {
      BYTE utf8Bom[3] = { 0xEF, 0xBB, 0xBF };
      DWORD len, status = ERROR_SUCCESS;
@@ -44,7 +98,7 @@
  
      if (!g_LoggerInitialized)
      {
-@@ -383,32 +393,93 @@
+@@ -383,32 +431,106 @@
  
          if (logfilePath)
          {
@@ -71,17 +125,23 @@
                  NULL);
  
 -            if (g_LogfileHandle == INVALID_HANDLE_VALUE)
-+            // THE BOM BELONGS TO WHOEVER CREATES THE FILE. OPEN_ALWAYS plus a length check lets
-+            // two simultaneous starters both read zero and both write one; one CREATE_NEW wins.
++            // THE BOM BELONGS TO WHOEVER CREATES THE FILE: OPEN_ALWAYS plus a length check lets two
++            // simultaneous starters both read zero and both write one, and only one CREATE_NEW can
++            // win. WHAT THIS DOES NOT GUARANTEE is the BOM's POSITION - this handle is append-only,
++            // so the 3-byte write below is an append like any other and a loser that got in through
++            // OPEN_EXISTING first could precede it. Harmless and deliberately not chased: every
++            // consumer tolerates a BOM anywhere (log-sweep.py's five line regexes all anchor
++            // "^\ufeff?", restart-gui-agent.ps1 the same, and the collector only special-cases a BOM
++            // at offset 0 and otherwise decodes it as a U+FEFF character).
 +            if (g_LogfileHandle != INVALID_HANDLE_VALUE)
-+            {
-+                weCreatedTheLog = TRUE;
-+            }
-+            else if (GetLastError() == ERROR_FILE_EXISTS || GetLastError() == ERROR_ALREADY_EXISTS)
              {
 -                status = GetLastError();
 -                fwprintf(stderr, L"LogStart: CreateFile(%s) failed: error %d\n", logfilePath, GetLastError());
 -                goto fallback;
++                weCreatedTheLog = TRUE;
++            }
++            else if (GetLastError() == ERROR_FILE_EXISTS || GetLastError() == ERROR_ALREADY_EXISTS)
++            {
 +                // Somebody else owns the BOM; we only append after it. DECLARED, not handled: a
 +                // delete between the failed CREATE_NEW and this open drops THIS process to stderr
 +                // for its lifetime - only the age-based purge deletes here, so it needs a
@@ -99,10 +159,6 @@
 -            // seek to end
 -            len = SetFilePointer(g_LogfileHandle, 0, 0, SEEK_END);
 -            if (INVALID_SET_FILE_POINTER == len)
--            {
--                status = GetLastError();
--                fwprintf(stderr, L"LogStart: SetFilePointer(%s) failed: error %d\n", logfilePath, GetLastError());
--                goto fallback;
 +            // A FAILED SHARED OPEN MUST NOT COST THIS PROCESS ITS WHOLE LOG. Sharing failures are
 +            // newly reachable exactly because the file is shared now - another process can hold it
 +            // in a way we did not expect, a reader can hold it without FILE_SHARE_WRITE, the ACL
@@ -110,7 +166,10 @@
 +            // stderr, where this process then logged nothing at all for its lifetime. Fall back to
 +            // a PER-PROCESS name instead: a few extra files in a rare case beat a blind process.
 +            if (g_LogfileHandle == INVALID_HANDLE_VALUE)
-+            {
+             {
+-                status = GetLastError();
+-                fwprintf(stderr, L"LogStart: SetFilePointer(%s) failed: error %d\n", logfilePath, GetLastError());
+-                goto fallback;
 +                DWORD sharedError = GetLastError();
 +                WCHAR *ownPath = malloc(MAX_PATH_LONG_WSIZE);
 +
@@ -136,7 +195,14 @@
 +                    goto fallback;
 +                }
 +
-+                // The reason belongs in the file, not only on a stderr nobody reads.
++                // The reason belongs in the file, and it cannot be written yet: the logger is
++                // not initialised until the end of this function. Remembered and emitted by
++                // LogInit, so the sweep can COUNT it - a shared open that fails systematically
++                // reinstates per-process files for that module, and stderr is not readable for a
++                // service's children (CREATE_NO_WINDOW) or for an agent started with
++                // CreateProcessAsUser.
++                g_LogDegraded = TRUE;
++                g_LogDegradedError = sharedError;
 +                fwprintf(stderr, L"LogStart: the shared log %s could not be opened (error %d) - "
 +                                 L"logging to %s instead\n", logfilePath, sharedError, ownPath);
 +                free(g_LogFilePath);
@@ -154,7 +220,7 @@
              {
                  if (!WriteFile(g_LogfileHandle, utf8Bom, 3, &len, NULL))
                  {
-@@ -444,8 +515,47 @@
+@@ -444,8 +566,47 @@
  
  void LogFlush(void)
  {
@@ -204,7 +270,7 @@
  }
  
  static void _LogFormatUnlocked(IN int level, IN BOOL raw, IN const char *functionName, IN const WCHAR *format, va_list args)
-@@ -459,7 +569,9 @@
+@@ -459,7 +620,9 @@
      size_t prefixBufferSize = 0;
      BOOL echoToStderr = level <= LOG_LEVEL_WARNING;
  
@@ -215,7 +281,7 @@
  #define PREFIX_FORMAT_FUNCNAME TEXT("%S: ")
      if (!raw)
      {
-@@ -468,7 +580,7 @@
+@@ -468,7 +631,7 @@
          prefixLen = swprintf_s(prefixBuffer, RTL_NUMBER_OF(prefixBuffer),
              functionName ? PREFIX_FORMAT PREFIX_FORMAT_FUNCNAME : PREFIX_FORMAT,
              st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
@@ -224,7 +290,7 @@
      }
  
      // format buffer
-@@ -489,42 +601,75 @@
+@@ -489,42 +652,103 @@
          goto cleanup;
      }
  
@@ -237,13 +303,47 @@
      if (g_LogfileHandle != INVALID_HANDLE_VALUE)
      {
 -        if (!raw)
-+        // THE ONE WRITE. A single WriteFile to an append-only handle is atomic against the other
-+        // processes sharing this file; three calls would let one shred a line mid-way. Same bytes.
 +        size_t lineSize = 0;
 +
-+        if (prefixBufferSize + bufferSize + 1 <= sizeof(g_LineBufUtf8))
++        // A RAW ROW IS ONE WRITE TOO. Raw output is emitted a FRAGMENT at a time - the window table
++        // is 4 to ~40 LogDebugRaw calls for one visual row - so writing each fragment would let
++        // another process sharing this file land a line inside the row. Fragments accumulate and go
++        // out when one ends the line, or at LogUnlock, or if the buffer would overflow.
++        if (raw)
          {
 -            if (!WriteFile(g_LogfileHandle, g_PrefixBufferUtf8, (DWORD) prefixBufferSize, &written, NULL) || written != (DWORD) prefixBufferSize)
++            if (g_RawLen + bufferSize > sizeof(g_RawBufUtf8))
+             {
+-                fwprintf(stderr, L"_LogFormat: WriteFile(prefix) failed: error %d\n", GetLastError());
+-                goto cleanup;
++                fwprintf(stderr, L"_LogFormat: raw row exceeds %zu bytes - flushing it early, so it "
++                                 L"can be interleaved\n", sizeof(g_RawBufUtf8));
++                _RawFlushUnlocked();
++            }
++
++            if (bufferSize <= sizeof(g_RawBufUtf8))
++            {
++                memcpy(g_RawBufUtf8 + g_RawLen, g_BufferUtf8, bufferSize);
++                g_RawLen += bufferSize;
++                if (g_RawLen > 0 && g_RawBufUtf8[g_RawLen - 1] == '\n')
++                    _RawFlushUnlocked();
+             }
++            else if (!WriteFile(g_LogfileHandle, g_BufferUtf8, (DWORD) bufferSize, &written, NULL))
++            {
++                fwprintf(stderr, L"_LogFormat: WriteFile(raw) failed: error %d\n", GetLastError());
++            }
++            goto echo_raw;
+         }
+ 
+-        // bufferSize is at most INT_MAX*2
+-        if (!WriteFile(g_LogfileHandle, g_BufferUtf8, (DWORD) bufferSize, &written, NULL) || written != (DWORD) bufferSize)
++        // THE ONE WRITE. A single WriteFile to an append-only handle is atomic against the other
++        // processes sharing this file; three calls would let one shred a line mid-way. Same bytes.
++        if (prefixBufferSize + bufferSize + 1 <= sizeof(g_LineBufUtf8))
+         {
+-            fwprintf(stderr, L"_LogFormat: WriteFile failed: error %d\n", GetLastError());
+-            goto cleanup;
+-        }
 +            if (!raw && prefixBufferSize > 0)
 +            {
 +                memcpy(g_LineBufUtf8, g_PrefixBufferUtf8, prefixBufferSize);
@@ -255,29 +355,21 @@
 +
 +            if (addNewline && !raw)
 +                g_LineBufUtf8[lineSize++] = '\n';
-+
+ 
+-        if (addNewline && !raw)
 +            if (!WriteFile(g_LogfileHandle, g_LineBufUtf8, (DWORD) lineSize, &written, NULL) || written != (DWORD) lineSize)
-             {
--                fwprintf(stderr, L"_LogFormat: WriteFile(prefix) failed: error %d\n", GetLastError());
++            {
 +                fwprintf(stderr, L"_LogFormat: WriteFile(line) failed: error %d\n", GetLastError());
-                 goto cleanup;
-             }
-         }
--
--        // bufferSize is at most INT_MAX*2
--        if (!WriteFile(g_LogfileHandle, g_BufferUtf8, (DWORD) bufferSize, &written, NULL) || written != (DWORD) bufferSize)
++                goto cleanup;
++            }
++        }
 +        else
          {
--            fwprintf(stderr, L"_LogFormat: WriteFile failed: error %d\n", GetLastError());
--            goto cleanup;
--        }
+-            if (!WriteFile(g_LogfileHandle, "\n", 1, &written, NULL) || written != 1)
 +            // Too long to compose: written piecewise and SAID, since truncating would be worse.
 +            fwprintf(stderr, L"_LogFormat: line of %zu bytes exceeds the one-write buffer; writing piecewise\n",
 +                prefixBufferSize + bufferSize + 1);
- 
--        if (addNewline && !raw)
--        {
--            if (!WriteFile(g_LogfileHandle, "\n", 1, &written, NULL) || written != 1)
++
 +            if (!raw)
 +            {
 +                if (!WriteFile(g_LogfileHandle, g_PrefixBufferUtf8, (DWORD) prefixBufferSize, &written, NULL) || written != (DWORD) prefixBufferSize)
@@ -304,6 +396,7 @@
 +            }
          }
  
++echo_raw:
          if (echoToStderr)
          {
              if (!raw)

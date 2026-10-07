@@ -136,6 +136,28 @@ else
   bad "open_failure_degrades: a shared-open failure still leaves this process with no log at all"
 fi
 
+# ---- 6d. A RAW ROW IS ONE WRITE, AND A DEGRADED OPEN IS COUNTABLE ------------------------------
+# Two findings the adversarial read returned as REAL (is_real 0.79 and 0.92):
+#  * raw output is emitted a FRAGMENT at a time - the window table is 4 to ~40 LogDebugRaw calls for
+#    one visual row - so writing each fragment lets another process land a line inside the row. Off
+#    by default (the MSI ships LogLevel 3; raw is 4), but it corrupts exactly when the instrument is
+#    switched on, which is the same operation that leaves two agent instances writing one file.
+#  * the fall back to a per-process file was announced only on stderr, which a service's children
+#    (CREATE_NO_WINDOW) and an agent started with CreateProcessAsUser do not have - so a
+#    systematically failing shared open would silently reinstate per-process files, uncounted.
+if command grep -qF '_RawFlushUnlocked' "$SRC" \
+   && command grep -qF 'g_RawBufUtf8' "$SRC" \
+   && sed -n '/^void LogUnlock/,/^}/p' "$SRC" | command grep -qF '_RawFlushUnlocked'; then
+  ok "raw_row_is_one_write: raw fragments accumulate and are flushed on the line end and at LogUnlock"
+else
+  bad "raw_row_is_one_write: each raw fragment is still its own write, so a row can be interleaved"
+fi
+if command grep -qF 'QWTLOGFALLBACK' "$SRC"; then
+  ok "degradation_is_countable: the per-process fallback is a LOG line the sweep can count, not only stderr"
+else
+  bad "degradation_is_countable: the fallback is announced only where nothing can read it"
+fi
+
 # ---- 7. the shipped retention sweep still works ------------------------------------------------
 # PurgeOldLogs deletes by ftCreationTime against "<module>*.*". The date must stay in the name, or
 # the live log ages out and gets deleted under the running process.
