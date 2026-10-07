@@ -119,7 +119,10 @@ def event_wanted(log, eid, provider, msg):
         return eid in (201, 203) and bool(OUR_TASKS_RE.search(msg))
     return False
 
-WINUTILS_RE = re.compile(r"^\ufeff?\[(\d{8})\.(\d{6})\.(\d{3})-(\d+)-([IWEDV])\] (?:([A-Za-z0-9_]+): )?(.*)$")
+# Two prefix shapes, both accepted: since 2026-10-07 the numbers are PID:TID (one log file per
+# module, so a line has to say which process wrote it), and before that there was one number and
+# it was the TID. Guests still hold logs in the old shape, so dropping it would blind the gate.
+WINUTILS_RE = re.compile(r"^\ufeff?\[(\d{8})\.(\d{6})\.(\d{3})-(\d+)(?::(\d+))?-([IWEDV])\] (?:([A-Za-z0-9_]+): )?(.*)$")
 BLOG_RE = re.compile(r"^\ufeff?(\d\d):(\d\d):(\d\d) (.*)$")
 INSTALLER_RE = re.compile(r"^\ufeff?(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d) \[(INFO|WARN|ERROR|FATAL|DEBUG)\] (.*)$")
 RESULT_RE = re.compile(r"^\ufeff?=== RESULT === (\{.*\})\s*$")
@@ -400,13 +403,14 @@ def parse_winutils(lf, raw_lines):
             else:
                 lf.unparsed += 1
             continue
-        d, t, ms, tid, lvl, func, msg = m.groups()
+        d, t, ms, n1, n2, lvl, func, msg = m.groups()
+        pid, tid = (n1, n2) if n2 else ("", n1)   # one number means the old shape: it is the tid
         try:
             ts = dt.datetime(int(d[0:4]), int(d[4:6]), int(d[6:8]), int(t[0:2]), int(t[2:4]), int(t[4:6]), int(ms) * 1000)
         except ValueError:
             lf.unparsed += 1
             continue
-        ln = Line(lf.family, lf.name, i, ts, lvl, func or "", msg, raw, {"tid": tid})
+        ln = Line(lf.family, lf.name, i, ts, lvl, func or "", msg, raw, {"tid": tid, "pid": pid})
         lf.lines.append(ln)
         prev = ln
         if func == "LogInit":
@@ -1564,6 +1568,28 @@ def write_summary(rep, path):
     h = rep["header"]
     L.append("LOG SWEEP %s  status=%s rc=%d  since=%s  files=%d lines=%d boots=%d shutdowns=%d agent_instances=%d  (report %s)" % (
         h["label"], rep["status"], rep["rc"], h["since"] or "all", h["files"], h["lines"], h["boots"], h["shutdowns"], h["agent_instances"], h["generated"]))
+    # THE LOG DIRECTORY AS IT ACTUALLY IS, independent of what the collector pulled. This is the
+    # volume measurement that nothing reported, so "386 files, 368 of them one module's" had to be
+    # counted by hand once and was then unavailable to every later run.
+    inv = rep["header"].get("inventory")
+    if inv:
+        try:
+            nf, nl, nb = int(inv.get("files", 0)), int(inv.get("lines", 0)), int(inv.get("bytes", 0))
+            L.append("LOGDIR INVENTORY: %d files, %d lines, %.1f MiB across %s module(s)%s" % (
+                nf, nl, nb / 1048576.0, inv.get("modules", "?"),
+                "" if inv.get("direxists") == "1" else "   -- THE LOG DIRECTORY DOES NOT EXIST"))
+            worst = sorted(rep["header"].get("invmodules") or [], key=lambda m: -int(m.get("files", 0)))[:5]
+            for m in worst:
+                nm = b64dec_path(m.get("nameb64", "")) or "?"
+                unread = int(m.get("unreadable", 0))
+                L.append("  %-24s %4s file(s) %9s line(s)%s" % (
+                    nm[:24], m.get("files", "?"), m.get("lines", "?"),
+                    "   %d UNREADABLE - counted as missing, never as empty" % unread if unread else ""))
+        except (TypeError, ValueError):
+            L.append("LOGDIR INVENTORY: present but unparseable - %r" % (inv,))
+    else:
+        L.append("LOGDIR INVENTORY: absent - this stream predates the inventory, so the file and line "
+                 "volume for this run is NOT KNOWN (missing data, not zero)")
     c = rep["context"]
     L.append("CONTEXT: fault_injection=%s declared=%s%s records=%d%s" % (
         str(c["fault_injection"]).lower(), str(c["declared"]).lower(), (" (%s)" % c["declared_source"]) if c["declared"] else "", len(c["records"]),
@@ -1688,6 +1714,7 @@ def cmd_analyze(a):
         "out_of_context": [sig_json(s) for s in cmp["out_of_context"]],
         "header": {"label": a.label, "since": fmt_ts(since) if since else None, "generated": utcnow_iso(), "logsdir": os.path.abspath(a.logsdir),
                    "baseline": a.baseline, "files": len(files), "lines": sum(lf.scanned for lf in files), "boots": len(boots), "shutdowns": len(st["windows"]),
+                   "inventory": meta.get("inventory"), "invmodules": meta.get("invmodules") or [],
                    "agent_instances": len(st["instances"]), "collector": meta.get("begin") if meta else None},
         "data_problems": problems,
         "files": [{"name": lf.name, "family": lf.family, "scanned": lf.scanned, "parsed": len(lf.lines), "ignored": lf.ignored, "unparsed": lf.unparsed, "skipped": lf.skipped,
@@ -1744,6 +1771,11 @@ def cmd_decode(a):
             meta["fileerrs"].append(kv_parse(body[8:]))
         elif body.startswith("FILESKIPPED "):
             meta["skipped"] = kv_parse(body[12:])
+        elif body.startswith("INVENTORY "):
+            # What the guest's log directory actually holds, independent of the collection cap.
+            meta["inventory"] = kv_parse(body[10:])
+        elif body.startswith("INVMODULE "):
+            meta.setdefault("invmodules", []).append(kv_parse(body[10:]))
         elif body.startswith("EVENTS "):
             meta["events"] = kv_parse(body[7:])
         elif body.startswith("PULL "):

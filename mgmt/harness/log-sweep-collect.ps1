@@ -279,6 +279,36 @@ foreach ($f in $sorted) {
         Write-Output ("${Mark}FILEERR pathb64=$(Get-LswB64 $f.FullName) error=$(Get-LswB64 $_.Exception.Message)")
     }
 }
+# ---- THE INVENTORY: what is actually THERE, not what we pulled ---------------------------------
+# This is the measurement Jev named as the one that would most change the logging decision
+# (missing_measurement = total-line-volume-per-boot, confidence 1.00) and that nothing reported, so
+# "386 files, 368 of them one module's" had to be counted by hand once and was never seen again.
+# It is deliberately INDEPENDENT of -MaxFiles: the cap decides what content comes back, never what
+# the guest is told to have. Counted by streaming, so a large file costs time and not memory.
+$invFiles = 0; $invBytes = [long]0; $invLines = [long]0
+$invByModule = @{}
+$invSrc = @()
+if ($dirExists) { $invSrc = @(Get-ChildItem -LiteralPath $logDir -Filter *.log -File -ErrorAction SilentlyContinue) }
+foreach ($f in $invSrc) {
+    $invFiles++
+    $invBytes += $f.Length
+    $n = 0
+    try { foreach ($void in [System.IO.File]::ReadLines($f.FullName)) { $n++ } }
+    catch { $n = -1 }   # unreadable: reported as -1, never as zero - missing data must not read as empty
+    if ($n -ge 0) { $invLines += $n }
+    # the module is the name without the date (and without the old time-and-pid shape)
+    $mod = $f.Name -replace '-\d{8}(-\d{6}-\d+)?\.log$','' -replace '\.log$',''
+    if (-not $invByModule.ContainsKey($mod)) { $invByModule[$mod] = @{ files = 0; bytes = [long]0; lines = [long]0; unreadable = 0 } }
+    $invByModule[$mod].files++
+    $invByModule[$mod].bytes += $f.Length
+    if ($n -ge 0) { $invByModule[$mod].lines += $n } else { $invByModule[$mod].unreadable++ }
+}
+Write-Output ("${Mark}INVENTORY direxists=$(if ($dirExists) { 1 } else { 0 }) files=$invFiles bytes=$invBytes lines=$invLines modules=$($invByModule.Count)")
+foreach ($mod in ($invByModule.Keys | Sort-Object { -$invByModule[$_].files })) {
+    $m = $invByModule[$mod]
+    Write-Output ("${Mark}INVMODULE nameb64=$(Get-LswB64 $mod) files=$($m.files) bytes=$($m.bytes) lines=$($m.lines) unreadable=$($m.unreadable)")
+}
+
 if ($skipped -gt 0) {
     # base64 per name: a log name is data from the guest and must not break the stream's line format.
     $enc = @($skippedNames | ForEach-Object { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($_)) }) -join ','

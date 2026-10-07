@@ -211,6 +211,21 @@ def with_skip(src, names, out):
 with_skip("base.pull", ("gui-agent-20261007-090000-999.log", "qrexec-wrapper-20261007-085959-1.log"), "skipnames.pull")
 with_skip("base.pull", ("qrexec-wrapper-20261007-085959-1.log", "qubesdb-daemon-20261007-085959-2.log"), "skipchatty.pull")
 
+# inv: the LOG DIRECTORY INVENTORY, which is what the collector reports about the directory itself
+# rather than about the files it pulled. The numbers here are the shape the file explosion had on a
+# real guest (368 of 386 files belonging to one module), so the summary is exercised on the case the
+# measurement exists for.
+def with_inventory(src, out, files=386, lines=41000, nbytes=5 * 1048576, mods=(("qrexec-wrapper", 368, 22000, 0), ("gui-agent", 3, 15000, 0), ("qubesdb-daemon", 2, 3500, 1))):
+    L = open(os.path.join(T, src), encoding="utf-8").read().splitlines()
+    at = [i for i, l in enumerate(L) if l.startswith("LSW END")][0]
+    rows = ["LSW INVENTORY direxists=1 files=%d bytes=%d lines=%d modules=%d" % (files, nbytes, lines, len(mods))]
+    for nm, nf, nl, un in mods:
+        rows.append("LSW INVMODULE nameb64=%s files=%d bytes=%d lines=%d unreadable=%d" % (
+            _b64.b64encode(nm.encode()).decode(), nf, nbytes // max(len(mods), 1), nl, un))
+    L[at:at] = rows
+    write(out, L)
+with_inventory("base.pull", "inv.pull")
+
 # ---- fault-injection context fixtures (coordinator correction 2026-10-07) ----
 BANNER = [wu("100031.300", 200, "W", "FiInit", "QGAFAULT-INIT build=QGA-FAULT-INJECTION:on armdelay=30s negcreate=0(hwnd=0x0) ringstall=0s pumpstall=0s pumplose=0 captureexit=0 dupcreate=0 legacysend=0 rawcreate=0 pwfail=0 gateoff=0x0 damagedelay=0ms")]
 def broker_seq(reg="100500.000", hung="100502.008", died="100502.008", reap="100502.015", back="100502.540", pid=4000, with_hung=True, with_reap=True):
@@ -303,7 +318,7 @@ analyze(){ # $1=analyzer $2=logsdir $3=baseline $4=judge $5=tag -> rc; report at
 field(){ python3 -c "import json,sys; r=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$1" "$2"; }
 
 # ---- decode every fixture with the real decoder --------------------------------------------------------------------
-for f in base newsig rise three stoperr empty twoboot skipnames skipchatty bootshut; do
+for f in base newsig rise three stoperr empty twoboot skipnames skipchatty bootshut inv; do
   rc=$(decode "$SRC" "$T/$f.pull" "$T/$f")
   [ "$rc" = 0 ] || { echo "FATAL: the $f fixture did not decode (rc=$rc): $(tail -2 "$T/$f.decode.txt")"; exit 2; }
   # EVERY LINE IN THESE CORPORA IS WRITTEN BY THIS TEST, so the run declares the errors it caused - which is
@@ -501,6 +516,30 @@ pc=$(field "$T/t22b.json" "[p[0] for p in r['data_problems']]")
 if printf '%s' "$pv" | grep -q "skipped-verdict" && ! printf '%s' "$pc" | grep -q "skipped-verdict"; then
   ok "T22 a dropped agent log is called out (skipped-verdict); dropped chatty logs are not ($pv vs $pc)"
 else bad "T22 verdict=$pv chatty=$pc (want skipped-verdict only in the first)"; fi
+
+# T29 THE LOG DIRECTORY'S OWN VOLUME IS REPORTED, and its absence is reported as absence.
+# Jev named this the one unmeasured fact that would most change the logging decision
+# (missing_measurement = total-line-volume-per-boot, confidence 1.00), and nothing reported it - so
+# "386 files, 368 of them one module's" was counted by hand once and was gone by the next run.
+rc=$(analyze "$SRC" "$T/inv" "$T/baseline.json" "$T/jev-expected.py" t29)
+ifiles=$(field "$T/t29.json" "r['header']['inventory']['files']")
+ilines=$(field "$T/t29.json" "r['header']['inventory']['lines']")
+imods=$(field "$T/t29.json" "len(r['header']['invmodules'])")
+if [ "$ifiles" = 386 ] && [ "$ilines" = 41000 ] && [ "$imods" = 3 ]; then
+  ok "T29 the inventory reaches the report intact (386 files, 41000 lines, 3 modules)"
+else bad "T29 inventory files=$ifiles lines=$ilines modules=$imods (want 386/41000/3)"; fi
+if grep -q 'LOGDIR INVENTORY: 386 files, 41000 lines' "$T/t29.txt" && grep -qE 'qrexec-wrapper +368 file' "$T/t29.txt"; then
+  ok "T29 the summary NAMES the volume and the module responsible for it"
+else bad "T29 the summary does not report the volume: $(grep -a 'INVENTORY' "$T/t29.txt" | head -1)"; fi
+# an UNREADABLE file must be reported as missing, never counted as empty
+if grep -q 'UNREADABLE - counted as missing, never as empty' "$T/t29.txt"; then
+  ok "T29 an unreadable log is reported as missing data, not as zero lines"
+else bad "T29 the unreadable file in the fixture is not called out"; fi
+# SEEN TO FAIL: a stream with no inventory must say the volume is NOT KNOWN, not imply zero
+rc=$(analyze "$SRC" "$T/base" "$T/baseline.json" "$T/jev-expected.py" t29k)
+if grep -q 'LOGDIR INVENTORY: absent' "$T/t29k.txt" && grep -q 'NOT KNOWN' "$T/t29k.txt"; then
+  ok "T29 knob 'no inventory': the check is SEEN TO FAIL - the volume is reported as NOT KNOWN"
+else bad "T29 knob: a stream without an inventory does not say the volume is unknown"; fi
 
 # T23 a filter on a key that does not exist must not silently zero a metric (knob: winkey - the defect I shipped
 # for ten minutes while fixing T21, caught only because shutdowns_in_window=0 contradicted shutdowns=5)
