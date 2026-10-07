@@ -250,7 +250,7 @@ Check 'e2e: death 1 notified once' ($script:launched.Count -eq 1)
 $text = [string]$script:launched[0]
 Check 'text: the header names the GUI agent in human words and says it crashed' ($text.StartsWith("The GUI agent crashed`r`n"))
 Check 'text: four lines - header, what next, the cause, the technical line' (@($text -split "`r`n").Count -eq 4)
-Check 'text: what next - the watchdog relaunches it' ($text -like "*`r`nThe GUI agent watchdog relaunches it*")
+Check 'text: what next - Windows restarts the watchdog service, which starts a new agent (nothing of ours relaunches)' ($text -like "*`r`nIts watchdog service ends itself so Windows restarts it*" -and $text -notlike '*relaunches it*')
 Check 'text: the cause with the exception code and its meaning from the process table' ($text -like '*Cause: a fast-fail abort (stack buffer overrun, __fastfail or an abort) - exception 0xC0000409.*')
 Check 'text: how long it ran' ($text -like '*; ran 0:12:34;*')
 Check 'text: the death count this boot, never "once per boot"' ($text -like '*death 1 this boot*' -and $text -notlike '*once per boot*')
@@ -354,6 +354,34 @@ Check 'install dir: the registry InstallDir decides, else the folder above the s
       ((Resolve-QwtDeathInstallDir 'D:\QWT' 'C:\Program Files\Qubes Tools\bin') -eq 'D:\QWT\' -and
        (Resolve-QwtDeathInstallDir '' 'E:\Tools\QWT\bin') -eq 'E:\Tools\QWT\' -and
        (Resolve-QwtDeathInstallDir '' '') -eq 'C:\Program Files\Qubes Tools\')
+
+# 6e. THE WATCHDOG'S OWN EXIT AFTER THE AGENT'S DEATH (2026-10-07, docs/ADR-supervision.md 5): the service ends itself with
+#     QGA_SVC_EXIT_AGENT_DIED (0x20514710 = 541853456) for the SCM's recovery; its 7024 with that code and the 7031 of the restart
+#     are records of the agent's 4001 death - ONE notification. A launch failure (0x20514711) and a 7024 with any other code
+#     are the watchdog's own deaths; a watchdog 7031 with no agent death nearby is its own death too.
+Reset-World
+$st = Invoke-QwtDeathReport (New-Super 4001 'gui-agent.exe' '6100' '0xC0000005' '90000' $T0)
+CheckStatus 'wd exit: death 1 - the agent''s 4001' $st 'send'
+$st = Invoke-QwtDeathReport (New-Svc 7024 'Qubes GUI agent watchdog' $T0.AddSeconds(1) @{ param2 = '542197520' })
+CheckStatus 'wd exit: the watchdog''s 7024 with QGA_SVC_EXIT_AGENT_DIED attaches to the agent''s death' $st 'enriched'
+$st = Invoke-QwtDeathReport (New-Svc 7031 'Qubes GUI agent watchdog' $T0.AddSeconds(2) @{ param2 = '1'; param3 = '5000'; param4 = 'Restart the service' })
+CheckStatus 'wd exit: the SCM''s 7031 for that end attaches to the agent''s death too' $st 'enriched'
+Check 'wd exit: ONE notification for the agent death, its service exit and the restart record' ($script:launched.Count -eq 1)
+Check 'wd exit: the ledger holds one death with the three record types' ((@(Get-Ledger | Where-Object { $_ -like 'D|*' })).Count -eq 1 -and (Get-Ledger)[1] -like 'D|1|*|gui-agent.exe|6100|supervisor|*|supervisor,scm-agentdied,scm-unexpected')
+Check 'wd exit: the AGAIN lines say it is a record of the agent''s death' ((Get-DeathLog) -match 'DEATH #1 AGAIN System/7024#\d+:.*ended itself after the GUI agent died \(service error 542197520\) - a record of the agent''s death')
+$st = Invoke-QwtDeathReport (New-Svc 7024 'Qubes GUI agent watchdog' $T0.AddSeconds(700) @{ param2 = '542197520' })
+CheckStatus 'wd exit: the same 7024 with NO agent death to join (outside the window) opens a death of the watchdog''s own' $st 'send'
+Check 'wd exit: that death''s text names the cause from the watchdog''s code table and what Windows does next' (([string]$script:launched[1]) -like "The GUI agent watchdog service stopped with an error`r`nWindows restarts it automatically*`r`nCause: the GUI agent it supervises died, so the service ended itself for Windows to restart it and a new GUI agent - service error 0x20514710.`r`n*")
+$st = Invoke-QwtDeathReport (New-Svc 7024 'Qubes GUI agent watchdog' $T0.AddSeconds(1400) @{ param2 = '542197521' })
+CheckStatus 'wd exit: a launch failure (QGA_SVC_EXIT_LAUNCH_FAILED) is the watchdog''s own death' $st 'send'
+Check 'wd exit: the launch failure says so' (([string]$script:launched[2]) -like "*`r`nCause: the GUI agent could not be started, so the service ended itself for Windows to restart it and retry - service error 0x20514711.`r`n*")
+$st = Invoke-QwtDeathReport (New-Svc 7024 'Qubes GUI agent watchdog' $T0.AddSeconds(2100) @{ param2 = '7' })
+CheckStatus 'wd exit: a watchdog 7024 with any other code is its own death, as before' $st 'send'
+$st = Invoke-QwtDeathReport (New-Svc 7034 'Qubes GUI agent watchdog' $T0.AddSeconds(2800) @{ param2 = '1' })
+CheckStatus 'wd exit: a watchdog 7034 with no agent death nearby is its own death (a genuine watchdog crash)' $st 'send'
+$st = Invoke-QwtDeathReport (New-Crash 'gui-watchdog.exe' 3300 0xC0000005L $T0.AddSeconds(3500) 20)
+$st2 = Invoke-QwtDeathReport (New-Svc 7031 'Qubes GUI agent watchdog' $T0.AddSeconds(3501) @{ param2 = '2'; param3 = '15000'; param4 = 'Restart the service' })
+Check 'wd exit: a watchdog CRASH (1000) and its 7031 are one death of the watchdog, not of the agent' ($st -eq 'send' -and $st2 -eq 'enriched' -and $script:launched.Count -eq 6)
 
 # 7. no boot token: an ERROR, nothing counted, nothing sent, no exception to the caller
 Reset-World

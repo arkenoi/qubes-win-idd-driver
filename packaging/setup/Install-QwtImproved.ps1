@@ -646,6 +646,74 @@ function Clear-BootResume {
 
 # --------------------------------------------------------------- gui-agent registry seed
 # ---- SVC-RECOVERY-BEGIN  (tools/tests/supervision-install-test.ps1 extracts this function by marker)
+# ---- RECOVERY-SUSPEND-BEGIN  (tools/tests/procown-sites-test.ps1 extracts this region by marker)
+function Suspend-QubesServiceRecovery {
+    # DISARM THE RELAUNCHER BEFORE ENDING ITS TARGET (the owner's rule, 2026-10-07: "if you terminate something
+    # that relaunches you need to make sure it STOPS relaunching beforehand"; docs/ADR-supervision.md 5).
+    #
+    # The SCM is a relauncher. Every service of ours carries recovery actions (Set-QubesServiceRecovery below:
+    # restart after 5 s, 15 s, 60 s, with FailureActionsOnNonCrashFailures so they fire when a service ENDS WITH
+    # AN ERROR and not only on a crash) - and on a reinstall or an upgrade they were armed by the PREVIOUS
+    # install and are armed while this stage runs. Measured 2026-10-06 on WIN10-reinstall: this stage stopped
+    # QdbDaemon cleanly, and ~5 s later it was running again, behind the serialized start this stage promises;
+    # the MSI was innocent (its own verbose log: "Skipping action: StartServices (condition is false)", and not
+    # one ServiceStart/ServiceDelete op in the whole log), and of the three services stopped the same way only
+    # QdbDaemon came back - the one whose worker returns an error on a requested stop
+    # (patches/windows-utils-service-exit-code.patch now exempts a requested stop, which is the other half of
+    # this fix). Jev: root cause 0.99, this fix shape 0.89.
+    #
+    # So: before a DELIBERATE stop of one of our services, its recovery is read, RECORDED and disarmed; the
+    # re-arm is Set-QubesServiceRecovery at the end of the stage (it writes the standard config for all three,
+    # whatever was there before), and Resume-QubesServiceRecovery restores the recorded config on the paths that
+    # do not reach it. A disarm that fails is an ERROR-class detail the harness grades - never a silent continue,
+    # because the stop that follows would then race a restart exactly as before.
+    param([Parameter(Mandatory)][string]$Name)
+    $before = 'unreadable'
+    try {
+        $q = (& sc.exe qfailure $Name 2>&1 | Out-String)
+        if ($LASTEXITCODE -eq 0) {
+            $reset = ([regex]::Match($q, 'RESET_PERIOD[^:]*:\s*(\d+)')).Groups[1].Value
+            $acts  = ([regex]::Matches($q, '(RESTART|RUN PROCESS|REBOOT)\s*--\s*Delay\s*=\s*(\d+)') | ForEach-Object { "$($_.Groups[1].Value.ToLower())/$($_.Groups[2].Value)" }) -join '/'
+            $before = "reset=$reset actions=$(if ($acts) { $acts } else { 'none' })"
+        } else { $before = "sc qfailure rc=$LASTEXITCODE" }
+    } catch { $before = "error: $($_.Exception.Message)" }
+    & sc.exe failure $Name reset= 0 actions= "" 2>&1 | Out-Null
+    $rc1 = $LASTEXITCODE
+    & sc.exe failureflag $Name 0 2>&1 | Out-Null
+    $rc2 = $LASTEXITCODE
+    $script:RecoverySuspended = $script:RecoverySuspended + @{ $Name = $before }   # GUARD:recovsuspend
+    if ($rc1 -eq 0 -and $rc2 -eq 0) {
+        Write-Log "recovery disarmed for $Name before this stage stops it (was: $before); the SCM cannot restart it behind us"
+        $script:Result.detail.svc_recovery_suspended = (($script:RecoverySuspended.GetEnumerator() | ForEach-Object { "$($_.Key)[$($_.Value)]" }) -join ' ')
+        return $true
+    }
+    Write-Log "could not disarm recovery for ${Name} (sc failure=$rc1 failureflag=$rc2) - the SCM may restart it while this stage has it stopped" 'ERROR'
+    $script:Result.detail.svc_recovery_disarm_failed = "${Name}: sc failure=$rc1 failureflag=$rc2"
+    return $false
+}
+
+function Resume-QubesServiceRecovery {
+    # Restore what Suspend-QubesServiceRecovery recorded, for the paths that do not reach
+    # Set-QubesServiceRecovery. A service whose prior config could not be read is armed with the standard
+    # configuration rather than left bare - a guest must never leave this installer with no recovery at all.
+    param([string]$Name)
+    $names = if ($Name) { @($Name) } else { @($script:RecoverySuspended.Keys) }
+    foreach ($n in $names) {
+        if (-not $script:RecoverySuspended.ContainsKey($n)) { continue }
+        $prior = $script:RecoverySuspended[$n]
+        $m = [regex]::Match([string]$prior, 'reset=(\d+) actions=(.+)$')
+        if ($m.Success -and $m.Groups[2].Value -ne 'none') {
+            & sc.exe failure $n reset= $m.Groups[1].Value actions= $m.Groups[2].Value 2>&1 | Out-Null
+        } else {
+            & sc.exe failure $n reset= 86400 actions= restart/5000/restart/15000/restart/60000 2>&1 | Out-Null
+        }
+        & sc.exe failureflag $n 1 2>&1 | Out-Null
+        Write-Log "recovery re-armed for $n (prior: $prior)"
+        [void]$script:RecoverySuspended.Remove($n)
+    }
+}
+# ---- RECOVERY-SUSPEND-END
+
 function Set-QubesServiceRecovery {
     # SELF-HEALING FOR THE CONTROL CHANNEL (2026-09-06, measured).
     #
@@ -781,6 +849,8 @@ $script:MsiSerialStartProperty = 'QWTNG_SERIALSTART'
 # of the pinned WiX), in dependency order: QrexecAgent declares ServiceDependency QdbDaemon, QubesGuiWatchdog
 # declares QrexecAgent. QdbDaemon itself depends on xenagent (xeniface's agent), which the SCM starts for it.
 $script:QwtMsiServices = @('QdbDaemon', 'QrexecAgent', 'QubesGuiWatchdog')
+# What Suspend-QubesServiceRecovery disarmed, and what it was: the re-arm's source and the RESULT's record.
+$script:RecoverySuspended = @{}
 
 function Read-QwtQubesDbValue {
     # One qubesdb read through the client DLL (System32\qubesdb-client.dll, installed by the MSI's Core
@@ -871,21 +941,69 @@ function Assert-MsiSerialStartContract {
 }
 
 function Assert-NoServiceStartedByMsi {
-    # THE CONTRACT, OBSERVED AT THE OTHER END. Right after msiexec returns, none of the three may be
-    # running: this installer stopped any pre-existing instance before msiexec (vchan_prestop /
-    # Stop-QwtRuntime) and asked the MSI not to start them. One found running is one the MSI (or
-    # something else) started behind the serialized start - recorded as error-class (svc_msi_started),
-    # because the pacing this stage promises did not hold on this guest. It is NOT stopped: stopping a
-    # live vchan holder is more churn, and the serialized start below treats it as observed-running.
+    # THE CONTRACT, OBSERVED AT THE OTHER END, AND THE ACTOR NAMED FROM EVIDENCE (2026-10-07).
+    #
+    # Right after msiexec none of the three may be running: this installer stopped any pre-existing instance
+    # before msiexec (vchan_prestop / Stop-QwtRuntime, each with the service's recovery DISARMED first) and
+    # asked the MSI not to start them. One found running means the pacing this stage promises did not hold.
+    #
+    # WHAT THIS USED TO SAY, AND WHY IT WAS A DEFECT: the message asserted "the MSI started them itself".
+    # Measured on WIN10-reinstall 2026-10-06, that was false - the MSI's own verbose log said "Skipping
+    # action: StartServices (condition is false)" and carried no ServiceStart, ServiceControl or ServiceDelete
+    # op at all. The actual starter was the SCM, whose recovery actions (armed by the PREVIOUS install) fired
+    # on a requested stop that reported an error. A wrong accusation in an error-class flag cost a day of
+    # looking at packaging, so the actor is now READ rather than asserted: the MSI's own StartServices outcome
+    # from the verbose log it already writes, the service's recovery state, and the SCM's own records
+    # (7023/7024 for the error exit, then 7036 for the start) with their times. Where the evidence does not
+    # name an actor the flag says so instead of naming one.
     $started = @()
     foreach ($svc in $script:QwtMsiServices) {
         $s = Get-Service -Name $svc -ErrorAction SilentlyContinue
         if ($s -and $s.Status -ne 'Stopped') { $started += "$svc=$($s.Status)" }
     }
     if ($started.Count -gt 0) {   # GUARD:noviolation
-        Write-Log ("after msiexec: " + ($started -join ', ') + " - running although $script:MsiSerialStartProperty=1 was passed; " +
-                   'the MSI started them itself and the serialized start did NOT hold on this guest (svc_msi_started)') 'ERROR'
-        $script:Result.detail.svc_msi_started = ($started -join ',')
+    # WHO. The MSI first: its log is definitive about its own action, and it is already on disk.
+    $msiVerdict = 'the MSI log could not be read'
+    try {
+        if ($script:MsiVerboseLog -and (Test-Path -LiteralPath $script:MsiVerboseLog)) {
+            $msiText = Get-Content -LiteralPath $script:MsiVerboseLog -ErrorAction Stop | Out-String
+            $skipped = $msiText -match 'Skipping action:\s*StartServices'
+            $startOps = [regex]::Matches($msiText, 'Executing op: Service(Control|Start)').Count
+            $msiVerdict = if ($skipped -and $startOps -eq 0) { 'the MSI did NOT start them (StartServices skipped on its condition, no service-start op)' }
+                          elseif ($startOps -gt 0) { "the MSI ran $startOps service-start op(s) - the condition did not hold" }
+                          else { 'the MSI log names no StartServices outcome' }
+        }
+    } catch { $msiVerdict = "the MSI log could not be read: $($_.Exception.Message)" }
+    # Then the SCM's own records for each service found running: the error exit that armed a restart, and the start.
+    $scm = @()
+    foreach ($entry in $started) {
+        $svc = ($entry -split '=')[0]
+        $rec = @()
+        try {
+            $ev = Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = 7023, 7024, 7031, 7034, 7036; StartTime = (Get-Date).AddMinutes(-15) } -ErrorAction Stop |
+                  Where-Object { $_.Message -like "*$svc*" } | Sort-Object TimeCreated
+            foreach ($e in $ev) { $rec += "$($e.Id)@$($e.TimeCreated.ToString('HH:mm:ss'))" }
+        } catch { $rec += 'System log unreadable' }
+        $recov = 'recovery unknown'
+        try {
+            $q = (& sc.exe qfailure $svc 2>&1 | Out-String)
+            if ($LASTEXITCODE -eq 0) {
+                $acts = ([regex]::Matches($q, '(RESTART|RUN PROCESS|REBOOT)\s*--\s*Delay')).Count
+                $recov = if ($acts -gt 0) { "recovery ARMED ($acts action(s))" } else { 'recovery not armed' }
+            }
+        } catch { }
+        $scm += "${svc}: $recov; records: $(if ($rec) { $rec -join ',' } else { 'none in the last 15 min' })"
+    }
+    $actor = if ($msiVerdict -like 'the MSI did NOT*' -and ($scm -join ' ') -match '7023|7024|7031|7034') {
+                 'the SCM restarted it on its recovery actions after an error exit'
+             } elseif ($msiVerdict -like 'the MSI ran*') { 'the MSI' }
+             else { 'NOT NAMED by the evidence here' }
+    Write-Log ("after msiexec: " + ($started -join ', ') + " - running although $script:MsiSerialStartProperty=1 was passed, so the " +
+               "serialized start did NOT hold on this guest (svc_msi_started). Started by: $actor. Evidence: $msiVerdict; " +
+               ($scm -join ' | ')) 'ERROR'
+    $script:Result.detail.svc_msi_started = ($started -join ',')
+    $script:Result.detail.svc_msi_started_actor = $actor
+    $script:Result.detail.svc_msi_started_evidence = ($msiVerdict + '; ' + ($scm -join ' | '))
     } else {
         Write-Log 'after msiexec: none of the QWT services is running - Windows Installer left the start to this installer, as asked'
     }
@@ -1374,6 +1492,13 @@ function Stop-QwtRuntime {
     # binaries, which Windows allows on an open image. The graceful request stays: on an upgrade the
     # INSTALLED watchdog predates the stop-own-child change and leaves its agent running when its service
     # stops, and QGA_SHUTDOWN is the agent's own documented stop interface - a request, not a kill.
+    # DISARM THE SCM BEFORE STOPPING THE WATCHDOG (R1, 2026-10-07). Since the supervision change the watchdog
+    # service deliberately ENDS ITSELF with a failure code when the agent it started dies, so that the SCM's
+    # recovery restarts it and a new agent is launched. That is exactly what must NOT happen while this
+    # installer has the GUI quiesced: an agent coming back mid-stage holds the files the MSI is about to
+    # replace and re-grants framebuffers under the device work. Set-QubesServiceRecovery re-arms it at the end
+    # of the stage.
+    [void](Suspend-QubesServiceRecovery -Name $script:GuiWatchdogSvc)   # GUARD:wdstopdisarm
     $wdStop = Stop-ServiceProcess -Name $script:GuiWatchdogSvc -TimeoutSec 20
     if ($wdStop.present) { Write-Log "service $script:GuiWatchdogSvc`: $($wdStop.detail)" }
     else { Write-Log "service $script:GuiWatchdogSvc not installed" }
@@ -2879,6 +3004,9 @@ function Invoke-Stage2 {
 
     $msi = Join-Path $Root 'msi\installer.msi'
     $msiLog = 'C:\qwt-install.log'
+    # The MSI's own verbose log is the only definitive record of what the MSI's StartServices action did;
+    # Assert-NoServiceStartedByMsi reads it rather than asserting an actor (2026-10-07).
+    $script:MsiVerboseLog = $msiLog
     # REINSTALLMODE=amus is a SECOND, independent guard against the same defect the
     # uninstall-first phase above addresses: 'a' means "copy all files regardless of
     # version", i.e. it disables exactly the file-versioning rule that kept the old
@@ -3027,8 +3155,14 @@ function Invoke-Stage2 {
     # live wrappers and the qubesdb daemon - each closing its vchan and event channel at the same moment.
     # This installer never stopped those two services itself (its own stop step covers the GUI parts
     # only), so the bulk teardown was the MSI's. Stopped here, cleanly and in dependency order, the
-    # Restart Manager finds none of them. A clean stop exits 0, so the recovery actions armed after the
-    # MSI do not fire. Jev: trigger established 0.73; this fix 0.80 over disabling the Restart Manager.
+    # Restart Manager finds none of them. Jev: trigger established 0.73; this fix 0.80 over disabling the
+    # Restart Manager.
+    # CORRECTED 2026-10-07: this comment used to say "a clean stop exits 0, so the recovery actions armed
+    # after the MSI do not fire" - wrong twice. On a reinstall or an upgrade the recovery actions are armed
+    # by the PREVIOUS install, i.e. right now; and a requested stop did NOT exit 0 for QdbDaemon, whose
+    # worker returns an error on its stop path, so the SCM restarted it ~5 s later, behind this very step
+    # (measured on WIN10-reinstall, 2026-10-06; the MSI was innocent). Recovery is therefore DISARMED
+    # before each stop below and re-armed by Set-QubesServiceRecovery at the end of the stage.
     # A wait that runs out is an ERROR-CLASS detail (vchan_prestop), graded by the harness - never a
     # quiet fall-back to the bulk teardown.
     $prestop = [ordered]@{}
@@ -3036,6 +3170,7 @@ function Invoke-Stage2 {
         $s = Get-Service -Name $svc -ErrorAction SilentlyContinue
         if (-not $s) { $prestop[$svc] = 'absent'; continue }
         if ($s.Status -eq 'Stopped') { $prestop[$svc] = 'already-stopped'; continue }
+        [void](Suspend-QubesServiceRecovery -Name $svc)   # GUARD:prestopdisarm - the relauncher first (R1)
         $svcPid = (Get-CimInstance Win32_Service -Filter "Name='$svc'" -ErrorAction SilentlyContinue).ProcessId
         try { Stop-Service -Name $svc -Force -ErrorAction Stop } catch { Write-Log "Stop-Service $svc threw: $($_.Exception.Message)" 'WARN' }
         $t0 = Get-Date; $done = $false

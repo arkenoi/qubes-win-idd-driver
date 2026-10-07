@@ -48,6 +48,7 @@ flowchart TD
 | 2 | Detection uses the system's own records | ACCEPTED (owner; Jev 0.86) | 2026-10-03 |
 | 3 | ONE reporter, and the notification is ours | ACCEPTED (owner) | 2026-10-03 |
 | 4 | Restarts use system recovery; a supervisor service only where nothing else can do the job | ACCEPTED (owner; Jev 0.99) | 2026-10-03 |
+| 5 | Nothing of ours relaunches anything: an exit code is a contract, the relauncher is disarmed before its target is ended, and a loud error the user must see reaches them even when dom0 cannot be told | ACCEPTED (owner) | 2026-10-07 |
 
 Status words and the section format are defined in `docs/ADR-README.md`.
 
@@ -146,7 +147,7 @@ The trigger is the system's own event delivery, not a poll.
 | component | how it comes back |
 |---|---|
 | every service of ours: QdbDaemon, QrexecAgent, QubesGuiWatchdog, QwtngNetSetup | **SCM recovery actions**, with `failureflag` so that non-crash failures count too. At decision time only the first two were armed. |
-| task-launched helpers | Task Scheduler's restart settings where its restart interval fits the need. Where it does not (a helper that must be back in seconds, not after a minute) the agent's relaunch stays: bounded, ERROR-logged, and its deaths reported through §3. |
+| task-launched helpers | **SUPERSEDED by §5 (2026-10-07).** At decision time: Task Scheduler's restart settings where its interval fits, and the agent's own bounded relaunch where it did not. The owner withdrew that exception - the agent keeps no relaunch loop at all. |
 | the GUI agent | stays under the **QubesGuiWatchdog service**. That is the one job no system mechanism does: starting a SYSTEM-token process inside the user's interactive session. The watchdog service itself is SCM-recovered. |
 
 Rules that follow:
@@ -158,6 +159,81 @@ Rules that follow:
 
 **Why.** The platform's recovery is documented and observable (7031 says which action it took), and it survives
 our own bugs. Each hand-written relaunch loop is one more thing that can fail quietly.
+
+---
+
+## 5. Nothing of ours relaunches anything; an exit code is a contract; the relauncher is disarmed first
+
+**Status:** ACCEPTED (owner), 2026-10-07. Jev on the parts: the keep-alive owner 0.55, the session-end
+mechanism 0.67, the one reconnect relaunch 1.0, the helper loops 1.0 (then overridden by the owner, below),
+the guest error window's mechanism 1.0, the installer fix shape 0.89.
+
+**What was measured, 2026-10-07.** On every shutdown of a 4.3.35 guest, Windows' session teardown terminated
+the GUI agent with `0x40010004` 33-826 ms after the shutdown began, and the watchdog service relaunched it
+13 ms-1 s later **into the session that was being torn down**; that instance was killed too, and a third
+lived until the service's own preshutdown notice. Three agent instances per shutdown, two of them killed,
+each one a vchan setup with dom0 and an `Application` 4001 death record. The guard written in August to
+prevent exactly this read `SM_SHUTTINGDOWN` from a session-0 service, which reports session 0: it logged
+`sm_shuttingdown=0` at every death and was never once seen to fire, while `SERVICE_CONTROL_PRESHUTDOWN`
+arrived 4-32 s too late. A terminated agent runs no cleanup, so its vchan announcement stayed in xenstore -
+which is what dom0's "(0:0) outdated protocol" dialog reads. None of it was hidden: it was logged at ERROR on
+every boot for weeks, and nobody read the logs between runs.
+
+The owner, on seeing it: *"OF FUCKING COURSE if you terminate something that relaunches you need to make sure
+it STOPS relaunching beforehand"*, *"i asked you to rely on windows system services if we need to keep smth
+running"*, *"we agreed that broker death is major failure anyway, so there is no point of making it extra
+smooth"*, and - of the other components - *"same of other components."*
+
+**Decision.**
+
+1. **An exit code is a contract.** `WinMain` returns `QGA_EXIT_REQUESTED`, `QGA_EXIT_SESSION_END`,
+   `QGA_EXIT_RECONNECT` or `QGA_EXIT_NO_GUI_DOMAIN` on the paths it decides, never a stale `GetLastError`, and
+   the service decides what to do from that code alone. An expected exit is logged at INFO with its reason; a
+   failure at ERROR with the code that caused it. No ERROR line is written on a path the service asked for.
+2. **The session end is a handshake, not a surprise.** The agent's first act - before `Init` - is to create a
+   hidden top-level window. On `WM_QUERYENDSESSION` it disarms its helper launches, tells the service the
+   session is ending and waits, bounded, for the service's acknowledgement; on `WM_ENDSESSION(TRUE)` it leaves
+   through its orderly exit (vchan closed and its announcement withdrawn, helpers told to leave) with
+   `QGA_EXIT_SESSION_END`; `WM_ENDSESSION(FALSE)` re-arms. The service never launches into a session that has
+   announced its end, and a `0x40010004` with no such notice is read as the system's own record of that
+   session ending - loud, and still no relaunch into it.
+3. **Nothing of ours relaunches anything.** The agent keeps **no** relaunch loop: each helper is launched once
+   per agent life, through its scheduled task, and the task's own `RestartOnFailure` is its only relauncher.
+   An unexpected agent death makes the watchdog **end itself** with a service-specific failure code, so the
+   SCM's recovery actions restart the service, which launches a new agent. The one relaunch the service still
+   performs is `QGA_EXIT_RECONNECT` - dom0's daemon went away, a protocol event, not a death.
+4. **The relauncher is disarmed before its target is ended.** Every deliberate termination disarms what would
+   bring the target back, first: a helper's task before the helper is ended, and a service's SCM recovery
+   before the installer stops it. Measured 2026-10-06: a reinstall stopped `QdbDaemon` cleanly and the SCM
+   restarted it ~5 s later, behind the serialized start, because the recovery armed by the *previous* install
+   was still live and the service's worker reported an error on a stop the SCM had asked for. Both halves are
+   fixed: the installer disarms and re-arms, and windows-utils reports a **requested** stop as clean while
+   still logging the worker's outcome.
+5. **A loud error reaches the user even when dom0 cannot be told.** When the dom0 notification route fails or
+   is switched off, the same text is shown inside the guest with `WTSSendMessage` on the console session,
+   under the same per-boot cap and dedupe, so one error is never both a notification and a window. The box
+   exists whether or not the agent is alive, and a restarting agent maps it **before** any other window.
+
+**Why no relaunch loop of ours.** Every one of them hid a failure: the watchdog's hid the shutdown kills for
+weeks, and the agent's hid the broker deaths. A death that only Windows brings back is a death someone sees.
+
+**Scope.** This does not change the watchdog service's existence: starting a SYSTEM-token process inside the
+user's interactive session is still the one job no Windows mechanism does.
+
+**Accepted residuals** (from the Jev review of the change itself, which found one real hole and is the reason the
+latch is also a failure detector - `lost_or_dropped` fell from 0.53 to 0.38 once it was):
+
+- **Up to 90 s with no GUI in one rare sequence** (`detector-window`, 0.78 of what is left): a shutdown is
+  announced, another application vetoes it, and the agent dies before it can say so. The dead agent cannot send
+  the cancellation and no logoff follows, so only the detector's expiry re-allows a launch. Launching sooner is
+  the original defect, so this is the trade: the outage is bounded, named in the log (`QGAWDSESSIONSTUCK`) and
+  rare, where relaunching into an ending session was neither.
+- **An agent killed before its window exists** (early in `Init`) can send no notice, so that case rests entirely
+  on reading `0x40010004`. It is the system's own record of the session ending, and the decision table treats a
+  missing notice as such, loudly.
+- **After a crash the GUI waits for the SCM's recovery delay** (5 s, then 15 s, then 60 s) instead of the old
+  ~2 s relaunch. That is the point of decision 3, not a side effect: a death someone has to wait for is a death
+  someone notices.
 
 ---
 

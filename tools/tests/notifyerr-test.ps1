@@ -17,7 +17,8 @@
       redaction secret-shaped text is refused, pure and end-to-end (no marker, no launch)
       fail-open launcher missing/throwing: the caller gets a status string, never an exception,
                 and the failure is logged ONCE for repeated errors; unwritable store -> no send
-      gate      off -> 'gated', nothing touched
+      gate      off -> 'gated': nothing to dom0, THE ERROR WINDOW instead (owner 2026-10-07), under the dedupe and the cap
+      window    dom0 not told (failed:transport, gated) -> the window; never on send / duplicate / cap / rejection; no storm
       text      the notify file is UTF-16LE with BOM; line 1 is the header alone, the body is line 1, the
                 cause and the technical line (rz39 shape: Format-QwtNotifyText, Format-QwtNotifyTechLine)
 #>
@@ -63,15 +64,20 @@ $script:QwtNotifyBootStamp = $BOOT
 $script:QwtNotifyLog = { param($m) [void]$script:logLines.Add($m) }
 $script:QwtNotifyLauncher = { param($exe, $file) [void]$script:launched.Add($file) }
 $script:QwtNotifyLogged = @{}
+# the error window: every box the route shows is recorded (header + text), as WTSSendMessage would get them
+$script:boxes = New-Object System.Collections.ArrayList
+$script:QwtNotifyBoxShower = { param($h, $t) [void]$script:boxes.Add(@{ header = $h; text = $t }); return $true }
 
 . $HelperPath
 
 function Reset-Store {
     if (Test-Path -LiteralPath $stateDir) { Remove-Item -LiteralPath $stateDir -Recurse -Force }
     New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
-    $script:logLines.Clear(); $script:launched.Clear(); $script:QwtNotifyLogged.Clear()
+    $script:logLines.Clear(); $script:launched.Clear(); $script:QwtNotifyLogged.Clear(); $script:boxes.Clear()
     $script:QwtNotifyStateDir = $stateDir
     $script:QwtNotifyGate = $true
+    $script:QwtNotifyBoxWithoutRecord = $false
+    $script:QwtNotifyBoxShower = { param($h, $t) [void]$script:boxes.Add(@{ header = $h; text = $t }); return $true }
 }
 function LogCount([string]$needle) { return @($script:logLines | Where-Object { $_ -like "*$needle*" }).Count }
 
@@ -107,17 +113,32 @@ Check 'boot: the same token is one boot' (Test-QwtNotifyBootMatch 1000 1000)
 Check 'boot: a token 73 s away is ANOTHER boot (close reboot, the 4.3.22 defect)' (-not (Test-QwtNotifyBootMatch 1000 1073))
 Check 'boot: a token 1 s away is ANOTHER boot' (-not (Test-QwtNotifyBootMatch 1000 1001))
 
-# --- 3. gate off ----------------------------------------------------------------------------------
+# --- 3. gate off: nothing to dom0, THE ERROR WINDOW instead (owner 2026-10-07; Jev gated=window 0.76) --------
 Reset-Store
 $script:QwtNotifyGate = $false
-CheckStatus 'gate off: ACTION error is not sent' (Send-QwtError -Component 'activate-idd' -Id 'reboot-refused' -Severity ACTION -Header 'x' -Next 'y' -Tech 'z') 'gated'
-Check 'gate off: nothing launched, no marker' (($script:launched.Count -eq 0) -and -not (Test-Path (Join-Path $stateDir 'activate-idd.reboot-refused')))
+CheckStatus 'gate off: ACTION error is not sent to dom0 (gated)' (Send-QwtError -Component 'activate-idd' -Id 'reboot-refused' -Severity ACTION -Header 'The display driver needs a reboot that was refused' -Next 'y' -Tech 'z') 'gated'
+Check 'gate off: nothing launched' ($script:launched.Count -eq 0)
+Check 'gate off: the error window is shown once, with the header and the whole text' ($script:boxes.Count -eq 1 -and $script:boxes[0].header -eq 'The display driver needs a reboot that was refused' -and $script:boxes[0].text -eq "The display driver needs a reboot that was refused`r`ny`r`nz")
+Check 'gate off: the per-boot record is written (the window shares the dedupe)' ((Test-Path (Join-Path $stateDir 'activate-idd.reboot-refused')) -and (Test-Path (Join-Path $stateDir '.count')))
+Check 'gate off: the window is logged (QGAERRBOX)' ((LogCount 'QGAERRBOX activate-idd.reboot-refused shown') -eq 1)
+CheckStatus 'gate off: the same error again this boot is a duplicate' (Send-QwtError -Component 'activate-idd' -Id 'reboot-refused' -Header 'x' -Next 'y' -Tech 'z') 'suppressed:duplicate'
+Check 'gate off: a duplicate shows NO second window (no storm)' ($script:boxes.Count -eq 1)
+CheckStatus 'gate off: a DEGRADED report is rejected by severity, not shown' (Send-QwtError -Component 'activate-idd' -Id 'degraded' -Severity DEGRADED -Header 'x' -Next 'y' -Tech 'z') 'rejected:severity'
+CheckStatus 'gate off: secret-shaped text is refused, not shown' (Send-QwtError -Component 'activate-idd' -Id 'secret' -Header 'password=abc' -Next 'y' -Tech 'z') 'rejected:redact'
+Check 'gate off: rejections show no window' ($script:boxes.Count -eq 1)
+$last = 'gated'
+for ($i = 2; $i -le 8; $i++) { $last = Send-QwtError -Component 'gui-agent' -Id "gated-$i" -Header 'x' -Next 'y' -Tech 'z' }
+CheckStatus 'gate off: the 8th distinct gated error is still shown' $last 'gated'
+Check 'gate off: eight windows this boot' ($script:boxes.Count -eq 8)
+CheckStatus 'gate off: the 9th distinct gated error is capped' (Send-QwtError -Component 'gui-agent' -Id 'gated-9' -Header 'x' -Next 'y' -Tech 'z') 'suppressed:cap'
+Check 'gate off: the cap holds for windows too (still eight)' ($script:boxes.Count -eq 8)
 
 # --- 4. send, dedupe, severity, cap ----------------------------------------------------------
 Reset-Store
 New-Item -ItemType File -Path $script:QwtNotifyHostExe -Force | Out-Null   # "present" for the launcher hook
 CheckStatus 'send: first ACTION report sends' (Send-QwtError -Component 'activate-idd' -Id 'reboot-refused' -Header 'The display driver needs a reboot that was refused' -Next 'The new display driver is not primary until this qube is rebooted by hand.' -Cause 'Cause: Windows refused the reboot request.' -Tech (Format-QwtNotifyTechLine -Subject 'activate-idd.ps1' -Count 'reported once per boot' -Evidence 'C:\qwt-idd-activate.log')) 'send'
 Check 'send: notifhost launched once with a file' ($script:launched.Count -eq 1)
+Check 'send: dom0 was told, so NO window' ($script:boxes.Count -eq 0)
 $bytes = [IO.File]::ReadAllBytes($script:launched[0])
 Check 'send: notify file is UTF-16LE with BOM (what notifhost reads)' (($bytes.Length -gt 2) -and ($bytes[0] -eq 0xFF) -and ($bytes[1] -eq 0xFE))
 $content = [Text.Encoding]::Unicode.GetString($bytes, 2, $bytes.Length - 2)
@@ -152,6 +173,7 @@ CheckStatus 'cap: the 8th distinct error still sends' $last 'send'
 CheckStatus 'cap: the 9th distinct error is suppressed' (Send-QwtError -Component 'gui-agent' -Id 'cap-9' -Header 'x' -Next 'y' -Tech 'z') 'suppressed:cap'
 Check 'cap: exactly 8 launches this boot' ($script:launched.Count -eq 8)
 Check 'cap: suppression was logged' ((LogCount 'suppressed:cap') -eq 1)
+Check 'cap and dedupe: nothing suppressed by the policy was shown as a window' ($script:boxes.Count -eq 0)
 
 # --- 5. redaction end-to-end -------------------------------------------------------------------
 Reset-Store
@@ -163,17 +185,29 @@ Check 'redact e2e: refusal logged' ((LogCount 'rejected:redact') -eq 1)
 Reset-Store
 Remove-Item -LiteralPath $script:QwtNotifyHostExe -Force   # exe missing
 $threw = $false
-try { $s = Send-QwtError -Component 'gui-agent' -Id 'a' -Header 'x' -Next 'y' -Tech 'z' } catch { $threw = $true; $s = 'THREW' }
+try { $s = Send-QwtError -Component 'gui-agent' -Id 'a' -Header 'The GUI agent crashed' -Next 'y' -Tech 'z' } catch { $threw = $true; $s = 'THREW' }
 CheckStatus 'fail-open: exe missing -> status, not an exception' $s 'failed:transport'
 Check 'fail-open: no exception reached the caller' (-not $threw)
+Check 'fail-open: dom0 not told -> the error window IS shown, with the text dom0 would have got' ($script:boxes.Count -eq 1 -and $script:boxes[0].header -eq 'The GUI agent crashed' -and $script:boxes[0].text -eq "The GUI agent crashed`r`ny`r`nz")
 [void](Send-QwtError -Component 'gui-agent' -Id 'b' -Header 'x' -Next 'y' -Tech 'z')
 [void](Send-QwtError -Component 'gui-agent' -Id 'c' -Header 'x' -Next 'y' -Tech 'z')
 Check 'fail-open: three failures, the missing exe logged ONCE' ((LogCount 'NOT PRESENT') -eq 1)
+Check 'fail-open: three distinct errors, three windows (each under its own per-boot record)' ($script:boxes.Count -eq 3)
+CheckStatus 'fail-open: the same error again is a duplicate - no second window' (Send-QwtError -Component 'gui-agent' -Id 'a' -Header 'x' -Next 'y' -Tech 'z') 'suppressed:duplicate'
+Check 'fail-open: still three windows' ($script:boxes.Count -eq 3)
 New-Item -ItemType File -Path $script:QwtNotifyHostExe -Force | Out-Null   # exe present, launch fails
 $script:QwtNotifyLauncher = { param($exe, $file) throw 'Start-Process failed' }
 [void](Send-QwtError -Component 'gui-agent' -Id 'd' -Header 'x' -Next 'y' -Tech 'z')
 [void](Send-QwtError -Component 'gui-agent' -Id 'e' -Header 'x' -Next 'y' -Tech 'z')
 Check 'fail-open: launcher throwing logged ONCE' ((LogCount 'Start-Process failed') -eq 1)
+Check 'fail-open: a launch failure shows the window too' ($script:boxes.Count -eq 5)
+$script:QwtNotifyBoxShower = { param($h, $t) return $false }
+[void](Send-QwtError -Component 'gui-agent' -Id 'f-nobox' -Header 'x' -Next 'y' -Tech 'z')
+Check 'fail-open: a window that cannot be shown is a loud line, and the caller still gets a status' ((LogCount 'could NOT be shown') -eq 1)
+$script:QwtNotifyBoxShower = { param($h, $t) throw 'WTSSendMessage threw' }
+$threw = $false
+try { $s = Send-QwtError -Component 'gui-agent' -Id 'g-boxthrows' -Header 'x' -Next 'y' -Tech 'z' } catch { $threw = $true; $s = 'THREW' }
+Check 'fail-open: a shower that throws is caught, logged, and the caller still gets failed:transport' ((-not $threw) -and $s -eq 'failed:transport' -and (LogCount 'WTSSendMessage threw') -eq 1)
 Check 'fail-open: caller reached this line' $true
 # unwritable store: a FILE where the directory must be
 Reset-Store
@@ -185,6 +219,7 @@ CheckStatus 'fail-open: unwritable store -> no send' (Send-QwtError -Component '
 [void](Send-QwtError -Component 'gui-agent' -Id 'g' -Header 'x' -Next 'y' -Tech 'z')
 Check 'fail-open: unwritable store launched nothing' ($script:launched.Count -eq 0)
 Check 'fail-open: unwritable store logged ONCE' ((LogCount 'not writable') -eq 1)
+Check 'fail-open: with no per-boot record the window is shown at most ONCE per process (no dedupe, so no storm)' ($script:boxes.Count -eq 1)
 
 # --- 7. no per-boot token -> LOUD failure, never a guess ---------------------------------------
 # Boot identity is a volatile HKLM key (QERR_BOOT_KEY). Unpinning the stamp makes the helper go
@@ -202,6 +237,7 @@ CheckStatus 'boot token: unavailable -> no send' $s 'failed:transport'
 Check 'boot token: no exception reached the caller' (-not $threw)
 Check 'boot token: nothing launched, no marker written' (($script:launched.Count -eq 0) -and -not (Test-Path (Join-Path $stateDir 'gui-agent.noboot')))
 Check 'boot token: the failure is logged' ((LogCount 'no per-boot token') -eq 1)
+Check 'boot token: the window is still shown, once per process' ($script:boxes.Count -eq 1)
 $script:QwtNotifyBootStamp = $pinned
 $script:QwtNotifyBootCached = $null
 

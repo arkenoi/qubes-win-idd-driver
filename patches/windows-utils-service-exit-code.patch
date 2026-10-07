@@ -1,7 +1,25 @@
 diff --git a/src/service.c b/src/service.c
+index 3975771..016bcfc 100644
 --- a/src/service.c
 +++ b/src/service.c
-@@ -49,11 +49,18 @@
+@@ -41,6 +41,16 @@ typedef struct _SERVICE_CONTEXT
+ // since ServiceMain doesn't take any context parameter.
+ PSERVICE_CONTEXT g_Service = NULL;
+ 
++// A STOP THE SCM ASKED FOR IS NOT A FAILURE, WHATEVER THE WORKER RETURNS (Qubes Windows Tools,
++// docs/ADR-supervision.md 5; measured 2026-10-06). Forwarding the worker's status below made every
++// failure visible, as intended - and also made a REQUESTED stop look like one: a worker whose
++// shutdown path returns an error (qubesdb-daemon's mainloop, whose pipe thread has no stop path)
++// ended the service with that error, so with FailureActionsOnNonCrashFailures armed the SCM ran its
++// recovery actions and restarted the service ~5 s after an installer had deliberately stopped it -
++// behind device work that stop exists to protect. Latched here, read at the end of SvcMainLoop; the
++// worker's status is still LOGGED in that case, never swallowed.
++static volatile LONG g_StopRequested = 0;
++
+ static void SvcStop(void);
+ static void WINAPI SvcMain(DWORD argc, WCHAR *argv[]);
+ 
+@@ -49,11 +59,18 @@ static void SvcSetState(
      IN DWORD win32ExitCode
      )
  {
@@ -22,7 +40,23 @@ diff --git a/src/service.c b/src/service.c
  
      if (SERVICE_RUNNING != state)
          g_Service->Status.dwControlsAccepted = 0;
-@@ -195,7 +202,21 @@
+@@ -109,6 +126,7 @@ static void SvcStop(
+     )
+ {
+     LogDebug("stopping");
++    InterlockedExchange(&g_StopRequested, 1);   // the SCM asked; see g_StopRequested
+     SvcSetState(SERVICE_STOP_PENDING, NO_ERROR);
+ 
+     SetEvent(g_Service->StopEvent);
+@@ -169,6 +187,7 @@ static void WINAPI SvcMain(DWORD argc, WCHAR *argv[])
+     }
+ 
+     // initialization
++    InterlockedExchange(&g_StopRequested, 0);   // a new run of this service has not been asked to stop
+     SvcSetState(SERVICE_START_PENDING, NO_ERROR);
+ 
+     g_Service->StopEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+@@ -195,7 +214,37 @@ static void WINAPI SvcMain(DWORD argc, WCHAR *argv[])
      LogDebug("Waiting for the worker thread to exit");
      WaitForSingleObject(g_Service->WorkerThread, INFINITE);
  
@@ -39,7 +73,23 @@ diff --git a/src/service.c b/src/service.c
 +            status = ERROR_GEN_FAILURE;   // never report an unknown outcome as success
 +    }
 +    if (status != NO_ERROR)
-+        LogError("worker thread ended with error %lu (0x%lx) - reported to the SCM as the service exit code so its recovery actions fire", status, status);
++    {
++        if (InterlockedCompareExchange(&g_StopRequested, 0, 0) != 0)
++        {
++            // Requested: the service reports a CLEAN stop, so the SCM runs no recovery action - but the
++            // worker's outcome is on the record, because a stop path that returns an error is a defect of
++            // ours even when nobody is restarted for it.
++            LogWarning("worker thread ended with error %lu (0x%lx) on a stop the service manager ASKED for - "
++                "reported to the SCM as a clean stop (its recovery actions must not fire on a requested stop); "
++                "a stop path that returns an error is still a defect worth fixing", status, status);
++            status = NO_ERROR;
++        }
++        else
++        {
++            LogError("worker thread ended with error %lu (0x%lx) WITHOUT a stop request - reported to the SCM as the "
++                "service exit code so its recovery actions fire", status, status);
++        }
++    }
 +
 +    SvcSetState(SERVICE_STOPPED, status);
  

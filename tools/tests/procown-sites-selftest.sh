@@ -28,7 +28,7 @@ say() { printf '%s\n' "$*"; }
 
 if [ ! -x "$PWSH" ]; then say "FAIL  pwsh not found at $PWSH - nothing ran"; exit 2; fi
 
-KNOBS="svcpid xbmbyname runtimebyname quiescebyname reassertbyname activatebyname netsetupbyname onedrivebyname overlaybyname"
+KNOBS="svcpid xbmbyname wdstopdisarm runtimebyname quiescebyname reassertbyname activatebyname netsetupbyname onedrivebyname overlaybyname"
 if [ -n "${PROCOWN_DEFECT:-}" ]; then
     case " $KNOBS " in *" $PROCOWN_DEFECT "*) ;; *) say "FAIL  unknown PROCOWN_DEFECT='$PROCOWN_DEFECT' ($KNOBS)"; exit 2 ;; esac
     "$PWSH" -NoProfile -File "$SUITE" -Defect "$PROCOWN_DEFECT"; rc=$?
@@ -57,6 +57,7 @@ leg(){ # $1 knob, $2 target check (literal prefix), $3 allowed-failures regex
 # the SCM pid none of them can wait on or end the service's own process, so their cases may fail too - all within the helper's users.
 leg svcpid         'svcstop: with -TerminateSurvivor the lingering service process is ended by ITS handle (pid 100) and is dead afterwards' '^FAIL (svcstop|xbm|runtime|quiesce|activate):'
 leg xbmbyname      'xbm: an orphan monitor the SCM does not own (pid 777) is reported, left ALIVE, and refused under -FatalIfSurvives' '^FAIL xbm:'
+leg wdstopdisarm 'runtime: the watchdog service recovery is DISARMED BEFORE' 'runtime:'
 leg runtimebyname  'runtime: an agent that ignores QGA_SHUTDOWN under an old watchdog is reported in gui_runtime_survivors with its pid and left ALIVE' '^FAIL runtime:'
 leg quiescebyname  'quiesce: a foreign agent that ignores QGA_SHUTDOWN is reported (QUIESCE DID NOT HOLD, gui-agent/200) and left ALIVE' '^FAIL quiesce:'
 leg reassertbyname 'reassert: a reappeared agent is recorded in idd_gui_reappeared with its pid and left ALIVE' '^FAIL reassert:'

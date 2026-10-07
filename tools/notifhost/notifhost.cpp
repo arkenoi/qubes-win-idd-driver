@@ -119,6 +119,7 @@
                              // EtwOpen/EtwBufferCb/EtwProcessTraceThread (pure Win32 only -
                              // NOTHING GUI-adjacent may move into that header)
 #include "../../agent/gui-agent/notifyerr.h"   // secondary error route: policy core shared with
+#include "../../agent/gui-agent/errbox.h"       // the error window when dom0 cannot be told (docs/ADR-supervision.md 6)
                                                 // the agent (wgcbroker_ipc.h include convention)
 #include "../../agent/gui-agent/notifytexts.h" // this helper's own notification texts, as rows the
                                                 // agent's offline render test holds to the rules
@@ -389,8 +390,8 @@ static std::vector<std::wstring> ReadAllowlist()
 // toggle writes; proven sufficient for an unpackaged reader on this guest). An
 // explicit value - crucially "Deny" - is the user's decision and is left untouched: re-seeding
 // Allow over a Deny would (a) override a user who deliberately turned notification access off
-// and (b) defeat the fail-open selftest, since the agent relaunches this process ~1/min and each
-// launch would re-grant. The authoritative health check is GetAccessStatus afterwards - on Deny
+// and (b) defeat the fail-open selftest, since Task Scheduler restarts this process on failure and
+// each launch would re-grant. The authoritative health check is GetAccessStatus afterwards - on Deny
 // the bridge exits WITHOUT having suppressed anything (fail-open).
 static void EnsureConsent()
 {
@@ -2684,21 +2685,36 @@ static int NotifyOnceMain(std::wstring const& summary, std::wstring const& body,
 
 // --- secondary error route: this helper's OWN faults (notifyerr.h) ------------------------
 //
-// The bridge has two FATAL exits that recur for the life of the guest (the agent relaunches it
-// about once a minute and it dies the same way each time): listener access DENIED for this user,
-// and listener init throwing. Each is logged here in bridge.log and as QGANOTIFBRIDGEEXIT in the
-// agent log, and nothing else ever tells a human that the bridge they turned on is doing nothing.
+// The bridge has two FATAL exits that recur for the life of the guest (Task Scheduler restarts it
+// on failure, up to its count, and it dies the same way each time): listener access DENIED for this
+// user, and listener init throwing. Each is logged here in bridge.log and as QGANOTIFBRIDGEEXIT in
+// the agent log, and nothing else ever tells a human that the bridge they turned on is doing nothing.
 // So each is also reported through the same one-shot `--notify-file` path the agent uses, with
 // the SAME per-boot marker files (state dir shared with notifyerr.c), so the once-per-boot rule
-// holds across the relaunches and across the two binaries.
+// holds across the restarts and across the two binaries.
 //
 // Gate: --notify-errors N on the command line, resolved by the agent (the single reader of the
 // service.notify-errors gate); absent = off. Fail-open: nothing here can affect the exit path
 // that calls it; every failure is one BLog line. A FRESH instance of this exe is spawned for the
 // send rather than calling NotifyOnceMain in-process: the FATAL paths run before the bridge's
 // connection state exists, and a diagnostic must not borrow the state of the thing that failed.
-// SAME HONEST LIMIT as everywhere else: this rides qrexec-agent and delivers nothing without it.
+// SAME HONEST LIMIT as everywhere else: this rides qrexec-agent and delivers nothing without it -
+// and then, or when the gate is off, THE ERROR WINDOW (errbox.h, the same pure rule QerrWindowWanted
+// as the agent's notifyerr.c): the user sees it on the console session, under the same per-boot
+// record, so never a storm and never a box beside a dom0 notification for one error.
 static int g_notifyErrorsGate = 0;
+
+// The box, from this user-session process (WTSSendMessage to its own session). d is the route's decision; the box is
+// shown only when the pure rule says dom0 was not told. Logged either way.
+static void ShowErrorBoxSelf(QerrDecision d, const char* id, const char* header, const char* text, const wchar_t* why)
+{
+    if (!QerrWindowWanted(d)) return;
+    DWORD err = 0;
+    if (QerrShowErrorBox(header, text, &err))
+        BLog(L"QGAERRBOX notifhost.%S shown as an error window on the console session (%s)", id, why);
+    else
+        BLog(L"QGAERRBOX notifhost.%S could NOT be shown as an error window (error %lu) after %s - bridge.log is the only record", id, err, why);
+}
 
 static bool ReadSmallA(std::wstring const& path, std::string& out)
 {
@@ -2728,12 +2744,12 @@ static bool WriteSmallA(std::wstring const& path, const void* data, DWORD len)
 // code, and the technical line with this process's pid.
 static void ReportErrorSelf(const char* key)
 {
-    if (!g_notifyErrorsGate) return;
     const QerrText* t = QerrTextFind(key);
     if (!t) { BLog(L"NOTIFYERR no text row '%S' (a bug of ours) - not sent", key); return; }
     const char* id = t->id;
-    char text[QERR_MAX_TEXT + 256];
-    if (!QerrRenderText(text, sizeof(text), t, nullptr, (unsigned long)GetCurrentProcessId()))
+    char text[QERR_MAX_TEXT + 256], header[200];
+    if (!QerrRenderText(text, sizeof(text), t, nullptr, (unsigned long)GetCurrentProcessId()) ||
+        !QerrFormatHeader(header, sizeof(header), t->header, nullptr))
     { BLog(L"NOTIFYERR notifhost.%S not sent: the text did not render", id); return; }
 
     wchar_t pd[MAX_PATH];
@@ -2766,7 +2782,19 @@ static void ReportErrorSelf(const char* key)
     char kv[64];
     if (!QerrFormatMarker(kv, sizeof(kv), now) || !WriteSmallA(marker, kv, (DWORD)strlen(kv)) ||
         !QerrFormatCount(kv, sizeof(kv), now, newCnt) || !WriteSmallA(countPath, kv, (DWORD)strlen(kv)))
-    { BLog(L"NOTIFYERR state dir not writable - not sent (no once-per-boot record, so no send)"); return; }
+    {
+        // No per-boot record, so no send and no dedupe: the box once (this process reports at most twice and exits).
+        BLog(L"NOTIFYERR state dir not writable - not sent (no once-per-boot record, so no send)");
+        ShowErrorBoxSelf(QERR_FAIL_TRANSPORT, id, header, text, L"the state dir could not be written");
+        return;
+    }
+    // GATED: dom0 is not told (the operator's choice), the user is - under the record just written.
+    if (!g_notifyErrorsGate)
+    {
+        BLog(L"NOTIFYERR notifhost.%S not sent to dom0: gated - shown as a window instead", id);
+        ShowErrorBoxSelf(QERR_GATED, id, header, text, L"gated");
+        return;
+    }
 
     // UTF-16LE + BOM, what ReadNotifyFile reads; a unique name per send (it is deleted after reading).
     std::wstring file = dir + L"\\out-notifhost-" + std::to_wstring(GetTickCount64()) + L".txt";
@@ -2776,7 +2804,8 @@ static void ReportErrorSelf(const char* key)
     MultiByteToWideChar(CP_UTF8, 0, text, -1, &wtext[0], n);
     std::vector<BYTE> body; body.push_back(0xFF); body.push_back(0xFE);
     body.insert(body.end(), (const BYTE*)wtext.data(), (const BYTE*)wtext.data() + wtext.size() * sizeof(wchar_t));
-    if (!WriteSmallA(file, body.data(), (DWORD)body.size())) { BLog(L"NOTIFYERR cannot write notify file - not sent"); return; }
+    if (!WriteSmallA(file, body.data(), (DWORD)body.size()))
+    { BLog(L"NOTIFYERR cannot write notify file - not sent"); ShowErrorBoxSelf(QERR_FAIL_TRANSPORT, id, header, text, L"the notify file could not be written"); return; }
 
     wchar_t self[MAX_PATH] = { 0 };
     GetModuleFileNameW(nullptr, self, RTL_NUMBER_OF(self));
@@ -2784,7 +2813,11 @@ static void ReportErrorSelf(const char* key)
     swprintf(cmd, RTL_NUMBER_OF(cmd), L"\"%s\" --notify-file \"%s\"", self, file.c_str());
     STARTUPINFOW si = { sizeof(si) }; PROCESS_INFORMATION pi = {};
     if (!CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
-    { BLog(L"NOTIFYERR CreateProcess(self --notify-file) failed %lu - not sent", GetLastError()); return; }
+    {
+        BLog(L"NOTIFYERR CreateProcess(self --notify-file) failed %lu - not sent", GetLastError());
+        ShowErrorBoxSelf(QERR_FAIL_TRANSPORT, id, header, text, L"the notify helper could not be started");
+        return;
+    }
     CloseHandle(pi.hThread); CloseHandle(pi.hProcess);   // fire and forget
     BLog(L"NOTIFYERR notifhost.%S sent to dom0 (#%u this boot)", id, newCnt);
 }

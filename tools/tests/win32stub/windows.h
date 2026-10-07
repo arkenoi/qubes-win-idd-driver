@@ -147,4 +147,50 @@ DWORD GetLastError(void);
 HANDLE RegisterEventSourceW(LPCWSTR, LPCWSTR);
 BOOL ReportEventW(HANDLE, WORD, WORD, DWORD, PSID, WORD, DWORD, LPCWSTR *, LPVOID);
 BOOL DeregisterEventSource(HANDLE);
+/* ---- grown 2026-10-07 for the lifecycle change (watchdog.c's per-pid channel, gui-agent/lifecycle.c's end-session
+   window, include/qga-lifecycle.h): security attributes, a few more kernel32 calls, and the user32 surface a hidden
+   window needs. Types + arities only, as above. */
+typedef void *PSECURITY_DESCRIPTOR;
+typedef struct _SECURITY_ATTRIBUTES { DWORD nLength; LPVOID lpSecurityDescriptor; BOOL bInheritHandle; } SECURITY_ATTRIBUTES, *LPSECURITY_ATTRIBUTES;
+typedef void *HLOCAL;
+typedef void *HWND;
+typedef void *HINSTANCE;
+typedef void *HICON;
+typedef void *HCURSOR;
+typedef void *HBRUSH;
+typedef void *HMENU;
+typedef void *HMODULE;
+typedef unsigned int UINT;
+typedef unsigned long long ULONG_PTR;
+typedef ULONG_PTR WPARAM;
+typedef long long LPARAM;
+typedef long long LRESULT;
+typedef struct tagPOINT { LONG x, y; } POINT;
+typedef struct tagMSG { HWND hwnd; UINT message; WPARAM wParam; LPARAM lParam; DWORD time; POINT pt; } MSG;
+typedef LRESULT (CALLBACK *WNDPROC)(HWND, UINT, WPARAM, LPARAM);
+typedef struct tagWNDCLASSEXW { UINT cbSize, style; WNDPROC lpfnWndProc; int cbClsExtra, cbWndExtra; HINSTANCE hInstance; HICON hIcon; HCURSOR hCursor; HBRUSH hbrBackground; LPCWSTR lpszMenuName, lpszClassName; HICON hIconSm; } WNDCLASSEX;
+typedef unsigned short ATOM;
+#define CREATE_SUSPENDED 0x00000004UL
+#define WTS_SESSION_LOGOFF 0x6
+#define ERROR_CLASS_ALREADY_EXISTS 1410L
+#define WM_QUERYENDSESSION 0x0011
+#define WM_ENDSESSION 0x0016
+#define ENDSESSION_LOGOFF 0x80000000UL
+#define WS_POPUP 0x80000000UL
+#define WS_EX_TOOLWINDOW 0x00000080UL
+#define WS_EX_NOACTIVATE 0x08000000UL
+#define SUCCEEDED(hr) ((HRESULT)(hr) >= 0)
+#define FAILED(hr) ((HRESULT)(hr) < 0)
+HLOCAL LocalFree(HLOCAL);
+BOOL ResetEvent(HANDLE);
+DWORD ResumeThread(HANDLE);
+void ExitProcess(unsigned);
+HMODULE GetModuleHandle(LPCWSTR);
+ATOM RegisterClassEx(const WNDCLASSEX *);
+HWND CreateWindowEx(DWORD, LPCWSTR, LPCWSTR, DWORD, int, int, int, int, HWND, HMENU, HINSTANCE, LPVOID);
+BOOL GetMessage(MSG *, HWND, UINT, UINT);
+BOOL TranslateMessage(const MSG *);
+LRESULT DispatchMessage(const MSG *);
+LRESULT DefWindowProc(HWND, UINT, WPARAM, LPARAM);
+BOOL QueryFullProcessImageNameW(HANDLE, DWORD, LPWSTR, DWORD *);
 #endif

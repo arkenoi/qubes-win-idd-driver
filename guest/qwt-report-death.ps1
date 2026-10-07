@@ -17,7 +17,12 @@
 # A death is identified by (executable, pid) when the record carries a pid (1000, 4001-4004); a record that
 # carries none attaches to the newest death of the same executable within QwtDeathWindowSec. Records that
 # can only be a NEW death (7023/7024: an error exit; 203: a launch failure; 201 of a script task; 1026, the
-# first record of a managed crash, whose 1000 then adopts its pid) always open one. The per-boot ledger
+# first record of a managed crash, whose 1000 then adopts its pid) always open one - with ONE exception
+# (2026-10-07, docs/ADR-supervision.md 5): the GUI agent watchdog service ENDS ITSELF when the agent it started
+# died, with its own service-specific code (QGA_SVC_EXIT_AGENT_DIED), so that the SCM's recovery restarts it;
+# its 7024 with that code, and the 7031/7034 the SCM writes for that end, are records OF THE AGENT'S DEATH (the
+# 4001) and join it - one notification per death - and open a death of their own only when no agent death is
+# there to join. The per-boot ledger
 # that holds this is keyed by the route's per-boot token (the volatile registry key qwt-notify-error.ps1
 # and the agent share), so a reboot starts the count at 1.
 #
@@ -137,15 +142,25 @@ $script:QwtDeathHuman = @{
 }
 # WHAT HAPPENS NEXT when one of ours dies, by executable - the supervisors' measured behaviour (watchdog.c, main.c,
 # etwproxy.c); a service's answer comes from the SCM's recovery settings (below), a one-shot tool's is "nothing"
+# (2026-10-07, docs/ADR-supervision.md 4-5: nothing of ours relaunches anything; Windows does, or nothing does)
 $script:QwtDeathNextByExe = @{
-    'gui-agent.exe' = 'The GUI agent watchdog relaunches it (backing off while it keeps dying quickly); this qube''s windows close in dom0 until it is back - if they do not reopen, restart the qube.'
-    'wgcbroker.exe' = 'The GUI agent relaunches it within about 8 s; until then, menus, modern app windows and notification windows do not appear in dom0.'
-    'notifhost.exe' = 'The GUI agent relaunches it, at most once per 60 s; guest toasts show as plain windows meanwhile.'
-    'etwproxy.exe' = 'The GUI agent relaunches it, waiting 5 s to 5 min between tries; notifications still reach dom0 meanwhile, through the bridge''s other two sources.'
+    'gui-agent.exe' = 'Its watchdog service ends itself so Windows restarts it (after 5 s, then 15 s, then 60 s) and the restarted service starts a new GUI agent; this qube''s windows close in dom0 until then - if they do not reopen, restart the qube.'
+    'wgcbroker.exe' = 'Task Scheduler restarts it on failure (three tries, a minute apart); until then menus, modern app windows and notifications do not appear in dom0.'
+    'notifhost.exe' = 'Task Scheduler restarts it on failure (three tries, a minute apart); guest toasts show as plain windows meanwhile.'
+    'etwproxy.exe' = 'Nothing relaunches it before the next GUI agent start; notifications still reach dom0 meanwhile, through the bridge''s other two sources.'
     'qubes-updates-relay.exe' = 'Nothing relaunches it; the update pass it was serving has lost its network path and cannot finish.'
 }
-# the ETW signal proxy's rights failures (its exit codes 5 and 9): the agent parks it instead of relaunching
-$script:QwtDeathEtwParked = 'The GUI agent stops relaunching it for this boot (a rights problem a relaunch cannot fix); notifications still reach dom0 through the bridge''s other two sources.'
+# the ETW signal proxy's rights failures (its exit codes 5 and 9): the agent parks it; nothing relaunches it either way
+$script:QwtDeathEtwParked = 'The GUI agent parks it for this boot (a rights problem a relaunch cannot fix); notifications still reach dom0 through the bridge''s other two sources.'
+# THE WATCHDOG SERVICE'S OWN EXIT CODES (agent/include/qga-exitcodes.h QGA_SVC_EXIT_*): the service ends itself for the SCM's
+# recovery. 0x20514710 = the agent it started died (its 7024 is a record of the agent's 4001 death); 0x20514711 = the agent could
+# not be launched at all (nothing ran: a death of the watchdog's own, the launch failure).
+$script:QwtDeathWatchdogAgentDied = [uint32]0x20514710L
+$script:QwtDeathWatchdogLaunchFailed = [uint32]0x20514711L
+$script:QwtDeathWatchdogCodes = @{
+    [uint32]0x20514710L = 'the GUI agent it supervises died, so the service ended itself for Windows to restart it and a new GUI agent'
+    [uint32]0x20514711L = 'the GUI agent could not be started, so the service ended itself for Windows to restart it and retry'
+}
 # one-shot programs: the RPC handlers dom0 invokes, and the setup/boot-time tools
 $script:QwtDeathRpcExes = @('clipboard-copy.exe', 'clipboard-paste.exe', 'file-receiver.exe', 'file-sender.exe', 'get-image-rgba.exe',
                             'open-in-vm.exe', 'open-url.exe', 'vm-file-editor.exe', 'set-gui-mode.exe', 'qrexec-client-vm.exe',
@@ -411,7 +426,8 @@ function ConvertFrom-QwtDeathEvent {
     $r = [ordered]@{ ours = $false; ignore = $false; reason = ''; kind = ''; origin = "$channel/$eventId#$recordId"; time = $time
                      exe = ''; component = ''; pid = $null; code = $null; ranMs = $null
                      anchor = 'enrich'; label = ''; evidence = ''; detail = ''; rec = ''; eventId = $eventId
-                     hung = $false; clrType = ''; task = ''; taskName = ''; svcKey = ''; svcCount = ''; svcDelay = ''; svcAction = '' }
+                     hung = $false; clrType = ''; task = ''; taskName = ''; svcKey = ''; svcCount = ''; svcDelay = ''; svcAction = ''
+                     joinExe = ''; joinWindowSec = 0 }   # a record of ANOTHER executable's death (the watchdog's exit after the agent's)
 
     # OWNERSHIP: the executable must be one of ours; for 1000 the faulting-application PATH, when the
     # record carries one, must be under our install directory (a foreign gui-agent.exe is not ours).
@@ -517,6 +533,21 @@ function ConvertFrom-QwtDeathEvent {
                 7034 { $r.anchor = 'enrich'
                        $r.label = "service '$display' ($($r.exe)) stopped unexpectedly (failure $count); no recovery action is configured" }
             }
+            # THE WATCHDOG'S OWN FAILURE EXIT IS A RECORD OF THE AGENT'S DEATH (docs/ADR-supervision.md 5): it ends itself with
+            # QGA_SVC_EXIT_AGENT_DIED after writing the agent's 4001, so that the SCM's recovery restarts it. Its 7024 with that
+            # code JOINS the newest GUI agent death (and opens a death of the watchdog's own only when there is none to join -
+            # the 4001 was never written); the 7031/7034 the SCM writes for that end join the same agent death, inside the
+            # short adopt window, without opening one. A launch failure (QGA_SVC_EXIT_LAUNCH_FAILED) is the watchdog's own death.
+            if ($r.exe -eq 'gui-watchdog.exe') {
+                if ($eventId -eq 7024 -and $null -ne $r.code -and [uint32]$r.code -eq $script:QwtDeathWatchdogAgentDied) {
+                    $r.anchor = 'enrich'; $r.rec = 'scm-agentdied'; $r.joinExe = 'gui-agent.exe'   # GUARD:wdjoin
+                    $r.label = "service '$display' ($($r.exe)) ended itself after the GUI agent died (service error $($r.code)) - a record of the agent's death"
+                } elseif ($eventId -eq 7024 -and $null -ne $r.code -and [uint32]$r.code -eq $script:QwtDeathWatchdogLaunchFailed) {
+                    $r.label = "service '$display' ($($r.exe)) could not start the GUI agent (service error $($r.code))"
+                } elseif ($eventId -in 7031, 7034) {
+                    $r.joinExe = 'gui-agent.exe'; $r.joinWindowSec = [int]$script:QwtDeathAdoptSec
+                }
+            }
             return $r
         }
         'Microsoft-Windows-TaskScheduler' {
@@ -596,6 +627,15 @@ function Register-QwtDeath {
     $w = [long]$script:QwtDeathWindowSec
     $match = $null
     $sameExe = @($deaths | Where-Object { $_.exe -eq $Death.exe -and [Math]::Abs($_.t - $t) -le $w } | Sort-Object t -Descending)
+    # A CROSS-EXECUTABLE JOIN (the watchdog service's records after the agent's death): the candidates are the OTHER
+    # executable's deaths - inside its own window when one is given - and, when none of them lacks this record's type, the
+    # record falls back to its own executable's deaths, like any other (a genuine watchdog death opens its own).
+    if ($Death.joinExe) {
+        $jw = $w
+        if ($Death.joinWindowSec -gt 0) { $jw = [long]$Death.joinWindowSec }
+        $joined = @($deaths | Where-Object { $_.exe -eq $Death.joinExe -and [Math]::Abs($_.t - $t) -le $jw } | Sort-Object t -Descending)
+        if (@($joined | Where-Object { @($_.recs -split ',') -notcontains $Death.rec }).Count -gt 0) { $sameExe = $joined }
+    }
     switch ($Death.anchor) {
         'pid' {
             $match = @($sameExe | Where-Object { $null -ne $_.pid -and $_.pid -eq $Death.pid }) | Select-Object -First 1   # GUARD:anchorpid
@@ -757,6 +797,9 @@ function Format-QwtDeathNotice {
                     $what = 'stopped with an error'
                     $codeText = Format-QwtDeathCode $Death.code 'service error'
                     $cause = "Cause: a code the service itself defines, not a Windows error - $codeText; its log has the meaning."
+                    if ($Death.exe -eq 'gui-watchdog.exe' -and $null -ne $Death.code -and $script:QwtDeathWatchdogCodes.ContainsKey([uint32]$Death.code)) {
+                        $cause = "Cause: $($script:QwtDeathWatchdogCodes[[uint32]$Death.code]) - $codeText."
+                    }
                     $next = (Format-QwtDeathRecovery (Get-QwtDeathServiceRecovery $Death.svcKey) $true) + "; $impact."
                 }
                 7031 {
