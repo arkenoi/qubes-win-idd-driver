@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# supervision-e2e-selftest.sh - offline checks on mgmt/harness/supervision-e2e.sh. No guest, no rig.
+#
+# A ROUTINE THAT GRADES THE PRODUCT IS ITSELF AN INSTRUMENT. This one was written after three ad-hoc runs measured a
+# broken harness instead of the product, so the shapes that made those runs worthless are the shapes checked here -
+# and every check is driven to FAIL with its line removed, because a check never seen to fail is decoration.
+#
+#   usage      it refuses to run without --iso, and refuses an --iso that does not exist (missing data fails)
+#   cells      every documented cell has an `if has <cell>` block, and every block is documented
+#   shutdown   it uses qwt_shutdown, never `qvm-shutdown --wait` (which KILLS at its timeout - lint L9)
+#   waits      its session wait has THREE exits and says which one it took
+#   byname     nothing is killed or adopted by process name
+#   verdicts   every cell records a verdict, and a missing measurement is INVALID or FAIL - never PASS
+#   control    L7C compares against a clone of the GOLDEN and never boots the golden itself
+#   exit       the script exits non-zero when any cell failed or was invalid
+set -u
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+S="$ROOT/mgmt/harness/supervision-e2e.sh"
+OUT="${SUP_SELFTEST_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/sup-selftest-XXXXXX")}"
+mkdir -p "$OUT"
+pass=0; fail=0
+ok(){ pass=$((pass+1)); echo "PASS  $*"; }
+bad(){ fail=$((fail+1)); echo "FAIL  $*"; }
+[ -f "$S" ] || { echo "FAIL  $S is missing - nothing ran (missing data fails)"; exit 2; }
+
+# a check and its knob: $1 label, $2 predicate over a file, $3 a literal line whose removal must break it
+shape(){ local label="$1" fn="$2" guard="$3" tmp="$OUT/knob.sh"
+  if ! "$fn" "$S"; then bad "$label"; return; fi
+  grep -vF "$guard" "$S" > "$tmp"
+  if [ "$(wc -l < "$tmp")" -eq "$(wc -l < "$S")" ]; then bad "$label (the guard line is not in the file: '$guard')"; return; fi
+  if "$fn" "$tmp"; then bad "$label - still passes with the guard removed (decoration)"; else ok "$label (and FAILS with its line removed)"; fi
+}
+
+# ---- usage: no --iso, or an --iso that does not exist, must refuse ------------------------------------------------
+rc=0; bash "$S" >"$OUT/noiso.out" 2>&1 || rc=$?
+if [ "$rc" = 2 ] && grep -q -- "--iso" "$OUT/noiso.out"; then ok "usage: it refuses to run without --iso (rc=2)"
+else bad "usage: no --iso gave rc=$rc: $(head -1 "$OUT/noiso.out")"; fi
+rc=0; bash "$S" --iso /nonexistent/nope.iso >"$OUT/badiso.out" 2>&1 || rc=$?
+if [ "$rc" = 2 ]; then ok "usage: it refuses an --iso that does not exist (rc=2) - missing data fails"
+else bad "usage: a nonexistent --iso gave rc=$rc"; fi
+
+# ---- every documented cell exists, and every cell is documented ---------------------------------------------------
+doc=$(grep -oE '^#   (L[0-9]+C?|SW) ' "$S" | awk '{print $2}' | sort -u)
+impl=$(grep -oE 'if has (L[0-9]+C?)' "$S" | awk '{print $3}' | sort -u)
+missing=""; for c in $doc; do case "$c" in SW) continue ;; esac; printf '%s\n' "$impl" | grep -qx "$c" || missing="$missing $c"; done
+extra=""; for c in $impl; do printf '%s\n' "$doc" | grep -qx "$c" || extra="$extra $c"; done
+if [ -z "$missing" ] && [ -z "$extra" ]; then ok "cells: every documented cell is implemented and every implemented cell documented ($(printf '%s' "$impl" | tr '\n' ' '))"
+else bad "cells: documented-but-absent:'$missing' implemented-but-undocumented:'$extra'"; fi
+
+# ---- the shapes that made the ad-hoc runs worthless ---------------------------------------------------------------
+uses_qwt_shutdown(){ grep -q 'source mgmt/harness/shutdown-lib.sh' "$1" && grep -q 'qwt_shutdown "' "$1" &&
+                     # a comment that NAMES the forbidden form is not a use of it (lint L9 skips comment lines too;
+                     # the first version of this check failed on the very comment explaining why the form is banned)
+                     ! grep -vE '^\s*#' "$1" | grep -qE 'qvm-shutdown[^|;&#]*--wait'; }
+shape "shutdown: it asks through qwt_shutdown and never 'qvm-shutdown --wait' (which kills at its timeout)" \
+      uses_qwt_shutdown 'source mgmt/harness/shutdown-lib.sh'
+
+three_exits(){ awk '/^wait_session\(\)/{f=1} f&&/echo "halted"/{a=1} f&&/echo "deadline"/{b=1} f&&/echo "up"/{c=1} f&&/^guest_ps/{exit} END{exit !(a&&b&&c)}' "$1"; }
+shape "waits: the session wait has three exits and says which it took (up / halted / deadline)" \
+      three_exits 'done; echo "deadline"; return 1; }'
+
+# The predicate must depend on the GUARD LINE, or the knob proves nothing. What matters here is that the broker is
+# resolved by the pid the AGENT logged - never by image name - so that is what is checked: the pid parsed out of the
+# agent's line, and the process opened by -Id with it.
+no_by_name(){ ! grep -qE '(Stop-Process|taskkill|pkill|killall)' "$1" &&
+              grep -qF 'pid (\d+)' "$1" &&
+              # the UNIQUE by-handle action: the suspend takes $p.Handle, never a name. (Get-Process -Id appears
+              # twice in the routine, so keying on it made the knob removable without breaking the check.)
+              grep -qF 'NtSuspendProcess($p.Handle)' "$1"; }
+shape "byname: the broker is resolved by the pid the agent logged, never by image name" \
+      no_by_name '[void][W.T]::NtSuspendProcess($p.Handle)'
+
+missing_is_not_pass(){ # every INVALID branch must exist for the cells that read guest output
+  for c in L3 L4 L6 L7 L7C; do grep -q "verdict $c INVALID" "$1" || return 1; done; return 0; }
+shape "verdicts: every cell that reads guest output has an INVALID branch - missing data is never a PASS" \
+      missing_is_not_pass 'verdict L3 INVALID "a 4 s suspension does not get the broker reaped"'
+
+control_clones(){ grep -q 'clone-guest.sh "$GOLDEN" "$CTL"' "$1" && ! grep -qE 'qvm-start "\$GOLDEN"' "$1"; }
+shape "control: L7C clones the golden and never boots the golden itself (it is a pristine base)" \
+      control_clones 'if bash mgmt/clone-guest.sh "$GOLDEN" "$CTL" > "$OUT/L7C-clone.out" 2>&1; then'
+
+exits_nonzero(){ grep -qE '\[ "\$nf" = 0 \] && \[ "\$ni" = 0 \] && exit 0 \|\| exit 1' "$1"; }
+shape "exit: the routine exits non-zero when any cell failed or was invalid" \
+      exits_nonzero '[ "$nf" = 0 ] && [ "$ni" = 0 ] && exit 0 || exit 1'
+
+# ---- the guest-side probes must parse as PowerShell ---------------------------------------------------------------
+PWSH="${PWSH:-/home/user/pwsh/pwsh}"
+if [ -x "$PWSH" ]; then
+  # extract each heredoc'd probe and parse-check it the way the repo checks every shipped script
+  n=0; bad_ps=0
+  for tag in L3-probe L4-probe L5-arm L7-probe; do
+    awk -v t="$tag" '$0 ~ ("cat > \"\\$OUT/" t "\\.ps1\" <<.PS.") {f=1; next} f && /^PS$/ {exit} f {print}' "$S" > "$OUT/$tag.ps1"
+    [ -s "$OUT/$tag.ps1" ] || { bad "probes: $tag could not be extracted"; bad_ps=1; continue; }
+    n=$((n+1))
+    "$PWSH" -NoProfile -File "$ROOT/tools/ps-parse-check.ps1" "$OUT/$tag.ps1" > "$OUT/$tag.parse" 2>&1
+    grep -q '0 with syntax errors' "$OUT/$tag.parse" || { bad "probes: $tag does not parse: $(tail -2 "$OUT/$tag.parse" | tr '\n' ' ' | cut -c1-160)"; bad_ps=1; }
+  done
+  [ "$bad_ps" = 0 ] && [ "$n" = 4 ] && ok "probes: all $n guest-side probes parse as PowerShell"
+else
+  echo "skip  probes: no pwsh at $PWSH"
+fi
+
+echo "--- $pass passed, $fail failed; outputs in $OUT"
+[ "$fail" = 0 ] && exit 0 || exit 1

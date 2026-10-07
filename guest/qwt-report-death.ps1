@@ -205,8 +205,8 @@ $script:QwtDeathScriptTasks = @('\QubesPvNic', '\QubesPvNicRearm', '\QubesNetwor
 # each script task's MACHINE ID (the route component, in the same style as the executables'), its HUMAN NAME, and what its
 # failure means (line 1) - from the tasks' own registrations (their <Description>)
 $script:QwtDeathTaskNames = @{
-    '\QubesPvNic'                 = @{ id = 'pvnic';           human = 'PV NIC setup task';             impact = 'The PV NIC setup did not complete: the guest''s network may stay unconfigured until it runs again.' }
-    '\QubesPvNicRearm'            = @{ id = 'pvnic-rearm';     human = 'PV NIC re-arm task';            impact = 'The PV NIC latch was not re-armed at shutdown: the next boot''s PV NIC binding is at risk.' }
+    '\QubesPvNic'                 = @{ id = 'pvnic';           human = 'PV NIC setup task';             impact = 'The PV NIC setup task reported a failure, and its log (C:\ProgramData\QubesPvNic.log) names the step: the guest''s network may stay unconfigured until it runs again, or a previous session''s shutdown re-arm of the unplug latch did not complete.' }
+    '\QubesPvNicRearm'            = @{ id = 'pvnic-rearm';     human = 'PV NIC re-arm task';            impact = 'A shutdown re-arm of the PV NIC latch failed outright - a registry write returned an error - so the next boot''s PV NIC binding is at risk. A run the shutdown itself ENDED is not reported here (result 267014 is ignored for every task); the next boot judges that from the re-arm stamp.' }
     '\QubesNetworkReapply'        = @{ id = 'network-reapply'; human = 'network re-apply task';         impact = 'The network configuration was not re-applied for the interface that appeared.' }
     '\QubesQuietDesktopGuard'     = @{ id = 'quiet-desktop';   human = 'quiet-desktop guard task';      impact = 'The consumer-nag policies were not re-asserted this boot; Windows may show its nags again.' }
     '\QubesAutologonGuard'        = @{ id = 'autologon-guard'; human = 'autologon guard task';          impact = 'Autologon was not re-asserted: after an update or a sign-out this qube may stop at the sign-in screen, unreachable in seamless mode.' }

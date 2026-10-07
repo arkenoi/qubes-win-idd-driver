@@ -748,6 +748,57 @@ function Ok([string]$what) {
     exit 0
 }
 
+# 1a. DID THE PREVIOUS SESSION'S SHUTDOWN RE-ARM ACTUALLY LAND?
+#     The re-arm task fires on User32 1074 (shutdown initiated) and the Task Scheduler service
+#     terminates running actions as the system goes down: its Last Result was 267014 on every
+#     shutdown measured (= 0x41306 SCHED_S_TASK_TERMINATED), and qwt-report-death.ps1 IGNORES that
+#     code for every task by design - "a stop that was asked for, not a death". Correct, and that is
+#     exactly the hole: a re-arm that never ran looked identical to one that completed, with no
+#     readback anywhere on the path (Jev 2026-10-07: silent_hole 0.89, severity narrow-but-real
+#     0.93, the one missing measurement "did the writes land" 0.85).
+#     So the task now writes a STAMP as the last link of a `&&` chain - its presence inside the
+#     previous session's window proves both registry writes landed - and this boot run is where the
+#     absence is judged and reported, because a task at boot can finish what it starts.
+function Test-QwtRearmArm {
+    # PURE DECISION - no registry, no WMI, no clock of its own, so it is unit-testable offline
+    # (tools/tests/pvnic-rearm-selftest.sh drives every branch). Times are [datetime] or $null.
+    param($StampTime, $PrevBoot, [bool]$Unclean, $ReportedBoot, $ThisBoot)
+    if (-not $PrevBoot)                                  { return 'nojudge' }          # no previous session on record
+    if ($StampTime -and $StampTime -gt $PrevBoot)        { return 'armed' }            # written during that session
+    if ($Unclean)                                        { return 'unclean' }          # no 1074 was raised: none was due
+    if ($ReportedBoot -and $ReportedBoot -eq $ThisBoot)  { return 'already-reported' } # one notification per boot, never two
+    return 'report'
+}
+$stampPath    = 'C:\ProgramData\QubesPvNic-rearm.stamp'
+$reportedPath = 'C:\ProgramData\QubesPvNic-rearm-reported.txt'
+$thisBoot = (Get-CimInstance Win32_OperatingSystem -EA SilentlyContinue).LastBootUpTime
+# the PREVIOUS boot from the event log service's own start events - a fact, not a timer
+$bootEvents = @(Get-WinEvent -FilterHashtable @{LogName='System'; Id=6005} -MaxEvents 8 -EA SilentlyContinue |
+                Select-Object -ExpandProperty TimeCreated)
+$prevBoot = $null
+if ($thisBoot) { $prevBoot = ($bootEvents | Where-Object { $_ -lt $thisBoot.AddMinutes(-1) } | Select-Object -First 1) }
+$stampTime = (Get-Item -LiteralPath $stampPath -EA SilentlyContinue).LastWriteTime
+# 6008 is "the previous system shutdown was unexpected", logged at THIS boot: no 1074 was raised,
+# so no re-arm was due and its absence is explained rather than a defect.
+$unclean = $false
+if ($thisBoot) {
+    $unclean = @(Get-WinEvent -FilterHashtable @{LogName='System'; Id=6008} -MaxEvents 4 -EA SilentlyContinue |
+                 Where-Object { $_.TimeCreated -ge $thisBoot.AddMinutes(-20) }).Count -gt 0
+}
+$reportedBoot = $null
+$rb = (Get-Content -LiteralPath $reportedPath -EA SilentlyContinue | Select-Object -First 1)
+if ($rb) { $reportedBoot = ($rb -as [datetime]) }
+switch (Test-QwtRearmArm $stampTime $prevBoot $unclean $reportedBoot $thisBoot) {
+    'armed'            { L ("shutdown re-arm: the previous session armed the latch at {0:o}" -f $stampTime) }
+    'unclean'          { L 'shutdown re-arm: no stamp, but the previous shutdown was UNEXPECTED (6008) - none was due' }
+    'nojudge'          { L 'shutdown re-arm: no previous boot on record (first boot) - nothing to judge' }
+    'already-reported' { L 'shutdown re-arm: no stamp - already reported for this boot' }
+    'report'           {
+        if ($thisBoot) { Set-Content -LiteralPath $reportedPath -Value $thisBoot.ToString('o') -EA SilentlyContinue }
+        Fault ("the previous session's shutdown re-arm did not complete: no stamp since {0:o} (the latch is re-armed by this boot's run)" -f $prevBoot)
+    }
+}
+
 # 1b. KEEP xenbus_monitor OFF - every qube class, every boot, as early as this payload runs.
 #     Reviewed 2026-08-25: xenvbd re-files its reboot request at EVERY AppVM boot (the Request
 #     key's LastWriteTime equals boot time - the template ships one boot short of settled, and a
@@ -1052,7 +1103,23 @@ function Register-Xml($name, $xml) {
 }
 
 $actMain  = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$payload`""
-$actRearm = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$payload`" -RearmOnly"
+# THE RE-ARM ACTION CARRIES NO INTERPRETER. It used to be
+#   powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$payload" -RearmOnly
+# - powershell.exe starting,
+# loading a profile-less host and parsing this ~500-line payload for two registry writes, of which
+# PowerShell's own start is the bulk of the ~2 s the installer measured. The trigger is "shutdown
+# initiated", and the Task Scheduler service terminates running actions as the system goes down, so
+# those 2 s were spent inside the window where the action is killed: Last Result 267014
+# (SCHED_S_TASK_TERMINATED) on every shutdown measured, and nothing anywhere said whether the two
+# writes had landed - a hole, since that result is deliberately ignored as "a stop we asked for".
+# cmd.exe + reg.exe is ~30 ms, and `&&` buys the two things a bare list of <Exec> actions cannot:
+# strict ordering, and a STAMP that exists only once both writes have succeeded - which is what the
+# boot run reads to judge the previous session (see "1a." in the payload).
+# `^&` escapes the ampersand for cmd (the Enum key name has one); `&amp;` escapes it for the XML.
+$stampFile = 'C:\ProgramData\QubesPvNic-rearm.stamp'
+$argRearm = '/c reg add HKLM\SYSTEM\CurrentControlSet\Services\XEN\Unplug /v NICS /t REG_DWORD /d 1 /f &gt;nul' +
+            ' &amp;&amp; reg add HKLM\SYSTEM\CurrentControlSet\Enum\XENBUS\VEN_XP0001^&amp;DEV_VIF /f &gt;nul' +
+            " &amp;&amp; echo rearmed&gt;$stampFile"
 
 $xmlMain = @"
 <?xml version="1.0" encoding="UTF-16"?>
@@ -1098,7 +1165,7 @@ $xmlRearm = @"
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
   </Settings>
-  <Actions Context="Author"><Exec><Command>powershell.exe</Command><Arguments>$actRearm</Arguments></Exec></Actions>
+  <Actions Context="Author"><Exec><Command>cmd.exe</Command><Arguments>$argRearm</Arguments></Exec></Actions>
 </Task>
 "@
 
@@ -1159,8 +1226,8 @@ reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v ExcludeWUDri
 # boot up ('No reboot from here'). On a StandaloneVM with a netvm whose xenvif child does not
 # bind until the next start, that loop ends in a 'network configuration FAILED' popup, an Error
 # event and a QubesPvNic-FAILED.txt marker (which health-check then reports) in the middle of a
-# successful install. -RearmOnly arms and exits in ~2 s, so the readback below polls at 1 s
-# instead of waiting a fixed 5 s before its first look; the 60 s deadline is unchanged.
+# successful install. The re-arm action is now cmd.exe + reg.exe (~30 ms, no interpreter), so the
+# readback below sees the latch on its first look; the 1 s poll and the 60 s deadline are unchanged.
 & schtasks /run /tn QubesPvNicRearm | Out-Null
 $armed = $false
 foreach ($i in 1..60) {
