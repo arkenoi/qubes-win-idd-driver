@@ -2,77 +2,51 @@
 
 ## In plain English
 
-Windows updates for a Windows qube are driven by dom0, exactly as for Linux templates. Automatic updates
-inside the guest are off, the qube reports whether updates are available, and the Qubes Update tool installs
-them through a proxy that exists only while a pass runs. The guest has no network route of its own, so the
-updater fetches the update files itself through that proxy; Windows' peer-to-peer and background download
-mechanisms are never used.
+dom0 drives Windows updates for a Windows qube, exactly as for Linux templates: automatic updates in the
+guest are off, the qube reports what Windows offers, and the Qubes Update tool installs through a proxy that
+exists only while a pass runs. The guest has no route of its own, so the updater fetches the files itself
+through that proxy; Windows' peer-to-peer and background download mechanisms are never used.
 
-Everything serves one invariant: what dom0 is told must be true. Never "up to date" when it is not, never
-stuck at "updates available" because of an item that can never install here. So an install counts only when
-its effect is measured, since an exit code of zero alone is not success. Any item that cannot be installed on
-this path is reported as informational with a reason. The relay answers a disallowed request with a final
-refusal, never a hang that Windows Update would wait out. Nothing is matched by its display title, because the
-catalog answers in whichever language it likes.
+One invariant governs the rest: what dom0 is told must be true. dom0 hears the number of updates Windows is
+OFFERING, with whether we can place each one recorded beside it and never subtracted from that number. An
+install counts only when its effect is measured, because an exit code of zero is not success. The relay
+refuses a disallowed request finally, never with a hang Windows Update would wait out. Nothing is matched by
+display title. Our code never runs a vendor installer and never chooses its switches: cumulatives come from
+the catalog as `.msu`, everything else with static content goes to Windows Update's own installer with the
+update's own command line, and a row is installed only when the installer succeeded AND the artefact moved -
+a disagreement fails loudly. Reboots are counted: the guest requests, dom0 performs, none is speculative.
+Nothing is killed or adopted by name.
 
-After a failure in which we had run a vendor installer with the wrong switch, the rule became: our code never
-runs a vendor installer and never chooses its switches. Cumulative updates come from the catalog as .msu
-packages. Everything else with static content is handed to Windows Update's own installer, which runs each
-package with the update's own command line. A row counts as installed only when the installer succeeded and
-the thing the update changes actually changed; when the two disagree, the row fails loudly. Reboots are
-counted: the guest requests them, dom0 performs them, and none is taken speculatively. No component ever kills
-or adopts a process by name; it touches only what it started.
-
-The installer installs the update agent even when the previous agent's own update check is running at that
-moment, which is the ordinary case right after a template boots: it waits for that check to let go of its
-lock, for at most the time the check is allowed anyway, and installs then. It refuses only when the holder is
-an installation in progress or cannot be identified, and then it says so loudly: the whole install is marked
-failed, the last lines it prints say what was not installed and what to do, and dom0 is told. A failed agent
-install used to be one warning line nobody read, and the qube quietly kept its old updater.
-
-The update path as a whole (§1, §4, §5, §12.1):
+The whole path, in one picture (§1, §2, §4, §5, §12):
 
 ```mermaid
-flowchart LR
+flowchart TD
     D["dom0: qubes-vm-update"] -->|qrexec| H["wu-update.ps1, the dom0 handler:<br/>kicks the pass's task, tails update-status.json"]
-    H --> P["qubes-windows-update.ps1: one scan or install pass<br/>(passes serialized by the updater mutex)"]
+    H --> P["qubes-windows-update.ps1: ONE scan or install pass<br/>(passes serialized by the updater mutex)"]
     P -->|"starts it, holds it by handle"| R["qubes-updates-relay.cs on 127.0.0.1:8082<br/>(lives only as long as its pass)"]
     R -->|"a sanctioned host"| X["qubes.UpdatesProxy -> Windows Update, the Update Catalog"]
-    R -->|"any other host"| F["final 403 - never a reset, a 5xx or a hang"]
-    P -->|"the ACTIONABLE count"| N["qubes.NotifyUpdates -> dom0's updates-available marker"]
+    R -->|"any other host"| F403["final 403<br/>never a reset, a 5xx or a hang"]
+    P -->|"the OFFERED count; the actionable split<br/>rides in update-status.json"| N["qubes.NotifyUpdates<br/>-> dom0's updates-available marker"]
     P -->|"reboot_needed=true"| H
-```
-
-How an offered update is installed (§12.2):
-
-```mermaid
-flowchart TD
-    S["Online search by the Windows Update agent, through the relay"] --> O["An offered update"]
-    O --> Q1{"Does the Update Catalog serve it as an .msu?<br/>(cumulatives and other express content)"}
-    Q1 -->|yes| M["We fetch the .msu through the relay and install from it"]
-    Q1 -->|no| Q2{"Is every NEEDED leaf's content static?<br/>(download.windowsupdate.com, not express)"}
-    Q2 -->|yes| W["Walk the bundle tree; fetch each needed leaf through the relay;<br/>IUpdate2.CopyToCache; IUpdateInstaller.Install.<br/>The agent runs each package with the update's own command line"]
-    W --> C{"Update complete in the agent's cache after CopyToCache?"}
-    C -->|no| FL["Row FAILS, naming the missing leaves"]
-    C -->|yes| V["Verdict (§12.3)"]
-    M --> V
-    Q2 -->|no| E["Row says why: FAILED, or informational under §2.<br/>Never a guess"]
-```
-
-How a row's verdict is decided (§12.3):
-
-```mermaid
-flowchart TD
-    A["The agent's Install() returns for a row"] --> B{"Agent succeeded?"}
-    B -->|no| F["FAILED, with its HRESULT"]
-    B -->|yes| C{"An effect probe exists for this update?"}
-    C -->|no| I0["The agent's result stands; probe=none"]
-    C -->|yes| D{"First read: artefact at or above the offered version?"}
-    D -->|yes| I["installed"]
-    D -->|no| W["Arm RegNotifyChangeKeyValue on the artefact key;<br/>re-read on every wake; bound 60 s after the agent returned<br/>(a wait that cannot be armed is an ERROR)"]
-    W --> E{"The read after the wake, or after the expiry"}
-    E -->|"moved"| I
-    E -->|"still below"| G["FAILED, logged loudly as a disagreement"]
+    P --> O["each offered update"]
+    O --> Q1{"served by the Catalog as an .msu?<br/>(cumulatives and other express content)"}
+    Q1 -->|yes| M["fetch the .msu through the relay,<br/>install from it"]
+    Q1 -->|no| Q2{"is every NEEDED leaf's content static?<br/>(download.windowsupdate.com, not express)"}
+    Q2 -->|no| INFO["severity=info WITH a reason -<br/>and still COUNTED to dom0 (§2.2).<br/>Never a guess"]
+    Q2 -->|yes| W["walk the bundle tree, fetch each needed leaf,<br/>IUpdate2.CopyToCache, IUpdateInstaller.Install<br/>(the agent runs each package with its own command line)"]
+    W --> C{"complete in the agent's cache<br/>after CopyToCache?"}
+    C -->|no| FL["row FAILS, naming the missing leaves"]
+    M --> V{"the agent's Install() succeeded?"}
+    C -->|yes| V
+    V -->|no| F2["FAILED, with its HRESULT"]
+    V -->|yes| EP{"is there an effect probe<br/>for this update?"}
+    EP -->|no| I0["the agent's result stands; probe=none"]
+    EP -->|yes| RD{"artefact at or above<br/>the offered version?"}
+    RD -->|yes| I["installed"]
+    RD -->|no| WT["arm RegNotifyChangeKeyValue on the artefact key,<br/>re-read on every wake, bounded 60 s<br/>(a wait that cannot be armed is a failure, never a sleep)"]
+    WT --> E2{"the read after the wake,<br/>or after the expiry"}
+    E2 -->|moved| I
+    E2 -->|"still below"| G["FAILED - logged loudly as a disagreement"]
 ```
 
 ## The decisions at a glance
@@ -80,7 +54,7 @@ flowchart TD
 | § | decision | status | date |
 |---|---|---|---|
 | 1 | dom0 owns updates; the guest never installs on its own | ACCEPTED | - |
-| 2 | The invariant: dom0's reported state must be true | ACCEPTED | - |
+| 2 | The invariant: dom0's reported state must be true | ACCEPTED; point 1 amended | 2026-10-07 |
 | 3 | Verify by effect, never by exit code | ACCEPTED | - |
 | 4 | Sanctioned paths hard-fail; never a timeout instead of an answer | ACCEPTED | - |
 | 5 | Routeless by construction | ACCEPTED | - |
@@ -92,6 +66,7 @@ flowchart TD
 | 11 | A cause outside our code, with a measured remedy, is CLOSED BY DECISION | ACCEPTED; applied once (`0x8024402C`) | - |
 | 12 | Architecture: who does what, and who may touch which process | ACCEPTED (owner, Jev); shipped in 4.3.33 | 2026-10-03 |
 | 13 | The installer waits for a running scan; a refused updater deploy is never quiet | ACCEPTED (Jev); shipped in 4.3.35 | 2026-10-04 |
+| 14 | The cumulative goes first, and Windows is asked whether it registered it | ACCEPTED (Jev) | 2026-10-04 |
 
 Status words and the section format are defined in `docs/ADR-README.md`.
 
@@ -123,19 +98,30 @@ cannot be left to update itself.
 
 ## 2. The invariant: dom0's reported state must be true
 
-**Status:** ACCEPTED.
+**Status:** ACCEPTED; amended 2026-10-07 (point 1, which had said the opposite).
 
-**Decision.** dom0 must never be told that a template is up to date when it is not, and must never be held at
-"updates available" by an item this path can never install.
+**Decision.** dom0 must never be told that a template is up to date when it is not.
 
-1. "Offered" and "actionable" are different numbers. dom0 is told the actionable one.
-2. An item that cannot be installed on this path is reported as `severity=info` with a reason and left out of
-   the count, but only when that classification is correct for that item.
-3. The invariant breaks in two directions: too little (silence about a pending update) and too much (a count
+1. "Offered" and "actionable" are different numbers, and BOTH are reported. dom0 is told the OFFERED
+   count - what Windows is offering - and the actionable split rides in `update-status.json` (`offered`,
+   `actionable`) with a reason per item.
+2. An item that cannot be installed on this path is `severity=info` with a reason, and is still COUNTED:
+   what we cannot install is not the same as nothing being available. A classification may narrow what a
+   PASS acts on; it may not narrow what the guest admits to.
+3. An offer whose own identity a pass installed and proved installed is GONE, and does not count. That is
+   not the same as point 2, and only this one may reduce the number: Windows re-presents satisfied
+   signatures under one KB, and counting them makes dom0's marker oscillate.
+4. The invariant breaks in two directions: too little (silence about a pending update) and too much (a count
    that can never clear). They are one defect class. Fixing one direction does not close the other, and the
    open direction may not be re-filed at a lower priority in order to call the work done.
+5. ONE exception, owner-ruled: under the ESU servicing notice (netvm-free Win10 22H2, past end of
+   servicing) dom0 is told the actionable count - "a Win10 22H2 guest reporting 0 actionable updates with
+   ESU items as info is CORRECT".
 
-**Why.** dom0's reported state is the product. Every other rule in this file exists to keep it true.
+**Why.** dom0's reported state is the product. Every other rule in this file exists to keep it true - and a
+count reduced by our own inability to install something is the "too little" direction of this very
+invariant, which is how a field reporter came to see "no updates available" while his own Windows Update
+window listed one.
 
 ## 3. Verify by effect, never by exit code
 
