@@ -44,7 +44,7 @@
  
      if (!g_LoggerInitialized)
      {
-@@ -383,32 +393,57 @@
+@@ -383,32 +393,93 @@
  
          if (logfilePath)
          {
@@ -74,14 +74,14 @@
 +            // THE BOM BELONGS TO WHOEVER CREATES THE FILE. OPEN_ALWAYS plus a length check lets
 +            // two simultaneous starters both read zero and both write one; one CREATE_NEW wins.
 +            if (g_LogfileHandle != INVALID_HANDLE_VALUE)
++            {
++                weCreatedTheLog = TRUE;
++            }
++            else if (GetLastError() == ERROR_FILE_EXISTS || GetLastError() == ERROR_ALREADY_EXISTS)
              {
 -                status = GetLastError();
 -                fwprintf(stderr, L"LogStart: CreateFile(%s) failed: error %d\n", logfilePath, GetLastError());
 -                goto fallback;
-+                weCreatedTheLog = TRUE;
-+            }
-+            else if (GetLastError() == ERROR_FILE_EXISTS)
-+            {
 +                // Somebody else owns the BOM; we only append after it. DECLARED, not handled: a
 +                // delete between the failed CREATE_NEW and this open drops THIS process to stderr
 +                // for its lifetime - only the age-based purge deletes here, so it needs a
@@ -99,23 +99,62 @@
 -            // seek to end
 -            len = SetFilePointer(g_LogfileHandle, 0, 0, SEEK_END);
 -            if (INVALID_SET_FILE_POINTER == len)
-+            if (g_LogfileHandle == INVALID_HANDLE_VALUE)
-             {
-                 status = GetLastError();
+-            {
+-                status = GetLastError();
 -                fwprintf(stderr, L"LogStart: SetFilePointer(%s) failed: error %d\n", logfilePath, GetLastError());
-+                fwprintf(stderr, L"LogStart: CreateFile(%s) failed: error %d\n", logfilePath, status);
-                 goto fallback;
+-                goto fallback;
++            // A FAILED SHARED OPEN MUST NOT COST THIS PROCESS ITS WHOLE LOG. Sharing failures are
++            // newly reachable exactly because the file is shared now - another process can hold it
++            // in a way we did not expect, a reader can hold it without FILE_SHARE_WRITE, the ACL
++            // can differ - and the old code sent every failure that was not ERROR_FILE_EXISTS to
++            // stderr, where this process then logged nothing at all for its lifetime. Fall back to
++            // a PER-PROCESS name instead: a few extra files in a rare case beat a blind process.
++            if (g_LogfileHandle == INVALID_HANDLE_VALUE)
++            {
++                DWORD sharedError = GetLastError();
++                WCHAR *ownPath = malloc(MAX_PATH_LONG_WSIZE);
++
++                if (ownPath && SUCCEEDED(StringCchPrintf(ownPath, MAX_PATH_LONG, L"%s.%d.log",
++                                                         logfilePath, GetCurrentProcessId())))
++                {
++                    g_LogfileHandle = CreateFile(
++                        ownPath,
++                        FILE_APPEND_DATA | FILE_READ_ATTRIBUTES,
++                        FILE_SHARE_READ | FILE_SHARE_WRITE,
++                        NULL, // fixme: security attrs
++                        OPEN_ALWAYS,
++                        logFlags,
++                        NULL);
++                }
++
++                if (g_LogfileHandle == INVALID_HANDLE_VALUE)
++                {
++                    status = GetLastError();
++                    fwprintf(stderr, L"LogStart: CreateFile(%s) failed: error %d, and the per-process "
++                                     L"fallback failed too: error %d\n", logfilePath, sharedError, status);
++                    free(ownPath);
++                    goto fallback;
++                }
++
++                // The reason belongs in the file, not only on a stderr nobody reads.
++                fwprintf(stderr, L"LogStart: the shared log %s could not be opened (error %d) - "
++                                 L"logging to %s instead\n", logfilePath, sharedError, ownPath);
++                free(g_LogFilePath);
++                g_LogFilePath = ownPath;
++                weCreatedTheLog = TRUE;   // our own file: the BOM is ours to write
++            }
++            else
++            {
++                free(g_LogFilePath);
++                g_LogFilePath = _wcsdup(logfilePath);
              }
  
 -            if (len == 0) // fresh file - write BOM
-+            free(g_LogFilePath);
-+            g_LogFilePath = _wcsdup(logfilePath);
-+
 +            if (weCreatedTheLog) // fresh file - write BOM
              {
                  if (!WriteFile(g_LogfileHandle, utf8Bom, 3, &len, NULL))
                  {
-@@ -444,8 +479,47 @@
+@@ -444,8 +515,47 @@
  
  void LogFlush(void)
  {
@@ -165,7 +204,7 @@
  }
  
  static void _LogFormatUnlocked(IN int level, IN BOOL raw, IN const char *functionName, IN const WCHAR *format, va_list args)
-@@ -459,7 +533,9 @@
+@@ -459,7 +569,9 @@
      size_t prefixBufferSize = 0;
      BOOL echoToStderr = level <= LOG_LEVEL_WARNING;
  
@@ -176,7 +215,7 @@
  #define PREFIX_FORMAT_FUNCNAME TEXT("%S: ")
      if (!raw)
      {
-@@ -468,7 +544,7 @@
+@@ -468,7 +580,7 @@
          prefixLen = swprintf_s(prefixBuffer, RTL_NUMBER_OF(prefixBuffer),
              functionName ? PREFIX_FORMAT PREFIX_FORMAT_FUNCNAME : PREFIX_FORMAT,
              st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
@@ -185,7 +224,7 @@
      }
  
      // format buffer
-@@ -489,42 +565,75 @@
+@@ -489,42 +601,75 @@
          goto cleanup;
      }
  
@@ -206,8 +245,7 @@
          {
 -            if (!WriteFile(g_LogfileHandle, g_PrefixBufferUtf8, (DWORD) prefixBufferSize, &written, NULL) || written != (DWORD) prefixBufferSize)
 +            if (!raw && prefixBufferSize > 0)
-             {
--                fwprintf(stderr, L"_LogFormat: WriteFile(prefix) failed: error %d\n", GetLastError());
++            {
 +                memcpy(g_LineBufUtf8, g_PrefixBufferUtf8, prefixBufferSize);
 +                lineSize = prefixBufferSize;
 +            }
@@ -219,7 +257,8 @@
 +                g_LineBufUtf8[lineSize++] = '\n';
 +
 +            if (!WriteFile(g_LogfileHandle, g_LineBufUtf8, (DWORD) lineSize, &written, NULL) || written != (DWORD) lineSize)
-+            {
+             {
+-                fwprintf(stderr, L"_LogFormat: WriteFile(prefix) failed: error %d\n", GetLastError());
 +                fwprintf(stderr, L"_LogFormat: WriteFile(line) failed: error %d\n", GetLastError());
                  goto cleanup;
              }

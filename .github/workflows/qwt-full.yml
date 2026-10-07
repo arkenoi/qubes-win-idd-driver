@@ -258,7 +258,7 @@ jobs:
           if ($src -notmatch 'FILE_APPEND_DATA \| FILE_READ_ATTRIBUTES') { throw 'append-only open marker missing after patch' }
           if ($src -notmatch 'WriteFile\(g_LogfileHandle, g_LineBufUtf8') { throw 'the single-write line marker is missing after patch' }
           if ($src -notmatch '%s-%04d%02d%02d\.log') { throw 'per-module log name marker missing after patch' }
-          if ($src -match 'GetCurrentProcessId\(\)\s*\)\)\)') { throw 'the log name still carries the pid after patching' }
+          if ($src -match '(?m)st\.wSecond,\s*$') { throw 'the log name still carries the time and the pid after patching' }
           if ($src -match '%02d%02d%02d-%d\.log') { throw 'the per-process log name is still present after patching' }
           if ($src -notmatch '%03d-%d:%d-%c') { throw 'the pid is missing from the line prefix after patch' }
           if ($src -notmatch 'FILE_FLAG_WRITE_THROUGH') { throw 'safe flush would be a no-op on an append-only handle after patch' }

@@ -83,7 +83,11 @@ done
                || bad "markers: missing$miss"
 
 # ---- 4. the defect is GONE, not merely shadowed ------------------------------------------------
-if command grep -qF '%02d%02d%02d-%d.log' "$SRC" || command grep -qE 'GetCurrentProcessId\(\)\s*\)\)\)' "$SRC"; then
+# Matched on the old name's FORMAT and its time arguments, not on GetCurrentProcessId: the
+# per-process FALLBACK name (used only when the shared open fails) legitimately calls that, and a
+# check that cannot tell the two apart fails the build for the fix.
+if command grep -qF '%02d%02d%02d-%d.log' "$SRC" \
+   || command grep -qE 'st\.wSecond,\s*$' "$SRC"; then
   bad "defect_removed: the log name still carries the time and the pid"
 else
   ok "defect_removed: the per-process log name (time + pid) is gone"
@@ -117,6 +121,19 @@ if command grep -qF 'CREATE_NEW' "$SRC" && command grep -qF 'weCreatedTheLog' "$
   ok "bom_by_creator: CREATE_NEW decides who writes the BOM; the racy length check is gone"
 else
   bad "bom_by_creator: the BOM is still written on a length check, which two starters can both pass"
+fi
+
+# ---- 6c. A FAILED SHARED OPEN MUST NOT COST A PROCESS ITS WHOLE LOG ----------------------------
+# Sharing failures are newly reachable because the file is shared now. Routing only
+# ERROR_FILE_EXISTS to the second open sent every other failure to the stderr fallback, where that
+# process logged nothing for its lifetime. Jev scored this the most real of fifteen candidates
+# (is_real 0.83, worth_fixing 0.72). The fallback is a PER-PROCESS file, announced.
+if command grep -qF 'ERROR_ALREADY_EXISTS' "$SRC" \
+   && command grep -qF 'logging to %s instead' "$SRC" \
+   && command grep -qF 'the per-process ' "$SRC"; then
+  ok "open_failure_degrades: a failed shared open falls back to a per-process file and says why"
+else
+  bad "open_failure_degrades: a shared-open failure still leaves this process with no log at all"
 fi
 
 # ---- 7. the shipped retention sweep still works ------------------------------------------------
