@@ -307,17 +307,37 @@ if ($wuPrev -and $wuPrev.phase -and ($WU_TERMINAL_PHASES -notcontains $wuPrev.ph
                                     "happened ($bootS) - Windows has settled that servicing during boot; continuing")
         } else {
             # In THIS boot - or its timing cannot be read, which is treated the same way: one restart settles it either way.
-            $m = ("QWTUPDSTATEUNKNOWN: $what in THIS boot - its Windows servicing may still be running; refusing to start a $Action " +
-                  'on top of it, nothing was changed. Restart this qube once, then update again (a restart has been requested).')
+            # THE RESTART REQUEST IS RECORDED EITHER WAY, before deciding whether to refuse: an INSTALL pass must still
+            # refuse until the qube has been restarted once, and that has to hold whether or not THIS caller refuses.
+            $recordErr = ''
             try {
                 if ($wuPrev.PSObject.Properties.Name -contains 'reboot_needed') { $wuPrev.reboot_needed = $true }
                 else { $wuPrev | Add-Member -NotePropertyName reboot_needed -NotePropertyValue $true }
                 if ($bootS -and -not $refusedBoot) { $wuPrev | Add-Member -NotePropertyName refused_boot -NotePropertyValue $bootS -Force }
                 ($wuPrev | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath "$StatusFile.tmp" -Encoding UTF8
                 Move-Item -LiteralPath "$StatusFile.tmp" -Destination $StatusFile -Force
-            } catch { $m += " (The restart request could not be recorded: $($_.Exception.Message) - restart it yourself.)" }
-            Write-Refusal 'state-unknown' $m
-            exit 1   # GUARD:thisboot
+            } catch { $recordErr = " (The restart request could not be recorded: $($_.Exception.Message) - restart it yourself.)" }
+
+            if ($Action -eq 'scan') {   # GUARD:scanreadonly
+                # A SCAN ONLY READS, so there is nothing for unfinished servicing to make unknown - which is exactly
+                # what GUARD:prevscan above already says ("a scan installs nothing, so nothing is unknown"). That guard
+                # tested the wrong side: whether the PREVIOUS action was a scan, rather than whether the action about to
+                # run is one. The consequence was measured on a faithful reproduction of the reporter's case
+                # (2026-10-07): the installer's own pass is cut off by the install's reboot, the boot+2min scheduled
+                # scan lands in THIS boot, falls through to the refusal below, and exits 1. Task Scheduler records
+                # 0x80070001, the death reporter correctly turns a non-zero task result into a dom0 notification, and
+                # the user's first sight of a freshly installed qube is "The Windows Update scan task failed" - for a
+                # read-only operation that had nothing to refuse. The restart request above still stands for an install.
+                $script:St.recovered = ("$what in THIS boot, but a scan only reads - it installs nothing and cannot land on " +
+                                        'top of unfinished servicing, so nothing is unknown to it; continuing. A restart has ' +
+                                        "been requested and an install pass will still refuse until it has happened.$recordErr")
+            } else {
+                $m = ("QWTUPDSTATEUNKNOWN: $what in THIS boot - its Windows servicing may still be running; refusing to start a $Action " +
+                      'on top of it, nothing was changed. Restart this qube once, then update again (a restart has been requested).' +
+                      $recordErr)
+                Write-Refusal 'state-unknown' $m
+                exit 1   # GUARD:thisboot
+            }
         }
     }
     # owner alive = a pass really is running; that is ordinary contention and the mutex below says so.

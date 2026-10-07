@@ -60,8 +60,9 @@ switch ($Defect) {
         if ($hit.Count -ne 1) { Write-Host "FAIL defect noreboot: the record write was not found"; exit 1 }
         $region = @($region | ForEach-Object { if ($_ -match 'Move-Item -LiteralPath "\$StatusFile\.tmp"') { '                # DEFECT: the request is not recorded' } else { $_ } })
     }
+    'noscanreadonly' { Knob 'scanreadonly' { param($l) $l -replace "if \(\`$Action -eq 'scan'\)", 'if ($false)' } }
     'norefusedboot' { Knob 'refusedboot' { param($l) $l -replace 'elseif \(\$refusedBoot -and \$bootS -and \$refusedBoot -ne \$bootS\)', 'elseif ($false)' } }
-    default { Write-Host "FAIL unknown -Defect '$Defect' (oldgate|nothisboot|noreboot|norefusedboot)"; exit 1 }
+    default { Write-Host "FAIL unknown -Defect '$Defect' (oldgate|nothisboot|noreboot|norefusedboot|noscanreadonly)"; exit 1 }
 }
 
 $tmpRoot = Join-Path ([IO.Path]::GetTempPath()) ('wu-prevpass-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -71,7 +72,7 @@ $boot = '2026-10-02T19:00:00'
 $preamble = @'
 $ErrorActionPreference = 'Continue'
 $StatusFile = '__STATUS__'
-$Action = 'full'; $Scheduled = $false
+$Action = '__ACTION__'; $Scheduled = $false
 $WU_TERMINAL_PHASES = @('done','error','diagnosing','skipped-unknown','skipped-standalone','skipped-appvm')
 $script:St = [ordered]@{ action = 'full'; phase = 'init'; recovered = '' }
 $script:OwnerAlive = __ALIVE__
@@ -81,12 +82,12 @@ function Get-CimInstance { [CmdletBinding()] param([Parameter(Position = 0)]$Cla
 function Write-Refusal([string]$reason, [string]$message) { [Console]::Out.WriteLine("REFUSED|$reason|$message") }
 '@
 $post = @('[Console]::Out.WriteLine("PROCEED|" + $script:St.recovered)', 'exit 0')
-function Scenario([string]$name, $status, [bool]$alive, [switch]$keep) {
+function Scenario([string]$name, $status, [bool]$alive, [switch]$keep, [string]$act = 'full') {
     $dir = Join-Path $tmpRoot $name
     if (-not $keep) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     $sf = Join-Path $dir 'update-status.json'
     if (-not $keep) { if ($null -ne $status) { ($status | ConvertTo-Json -Depth 4) | Set-Content -LiteralPath $sf -Encoding UTF8 } }
-    $src = $preamble.Replace('__STATUS__', $sf.Replace("'", "''")).Replace('__ALIVE__', $(if ($alive) { '$true' } else { '$false' })).Replace('__BOOT__', $boot)
+    $src = $preamble.Replace('__STATUS__', $sf.Replace("'", "''")).Replace('__ALIVE__', $(if ($alive) { '$true' } else { '$false' })).Replace('__BOOT__', $boot).Replace('__ACTION__', $act)
     $file = Join-Path $dir 'scenario.ps1'
     [IO.File]::WriteAllLines($file, [string[]](@($src) + $region + $post), [Text.UTF8Encoding]::new($false))
     $out = Join-Path $dir 'stdout.txt'
@@ -111,6 +112,17 @@ Check $SCANCUT ($r.rc -eq 0 -and $r.proceed.Count -eq 1 -and $r.proceed[0] -like
 $r = Scenario 'prev-boot' (St 'full' 'install' $prevBoot) $false
 $PREVBOOT = 'prev-boot: a full pass cut off before the last restart -> proceeds with the note "before this qube''s last restart"'
 Check $PREVBOOT ($r.rc -eq 0 -and $r.proceed.Count -eq 1 -and $r.proceed[0] -like "PROCEED|*'full'*cut off at phase 'install'*before this qube's last restart*settled; continuing")
+# A SCHEDULED SCAN UNDER A CUT-OFF INSTALL PASS MUST PROCEED. A scan only reads, so unfinished servicing leaves
+# nothing unknown to it - which is what the prevscan guard already says, except it tested whether the PREVIOUS action
+# was a scan rather than whether the action about to run is one. Measured 2026-10-07 on a faithful reproduction of the
+# reporter's case: the installer's pass is cut off by the install's own reboot, the boot+2min scan lands in THIS boot,
+# refuses, exits 1, Task Scheduler records 0x80070001, and the user's first sight of the new qube is a dom0
+# notification "The Windows Update scan task failed" for an operation that changes nothing.
+$r = Scenario 'scan-under-cutoff' (St 'full' 'install' $thisBoot) $false -act 'scan'
+Check 'scan-under-cutoff: a SCAN under an install pass cut off in THIS boot -> proceeds, does not refuse' `
+      ($r.rc -eq 0 -and $r.refused.Count -eq 0 -and $r.proceed.Count -eq 1 -and $r.proceed[0] -like '*a scan only reads*continuing*')
+Check 'scan-under-cutoff: the restart is STILL requested, so an install pass keeps refusing' `
+      ($null -ne $r.after -and $r.after.reboot_needed -eq $true)
 $r = Scenario 'this-boot' (St 'full' 'install' $thisBoot) $false
 $THISBOOT = 'this-boot: a full pass cut off in THIS boot -> REFUSED state-unknown, "Restart this qube once", exit 1'
 Check $THISBOOT ($r.rc -eq 1 -and $r.proceed.Count -eq 0 -and $r.refused.Count -eq 1 -and $r.refused[0] -like 'REFUSED|state-unknown|QWTUPDSTATEUNKNOWN:*in THIS boot*Restart this qube once, then update again*')

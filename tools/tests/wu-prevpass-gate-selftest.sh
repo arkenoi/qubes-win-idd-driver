@@ -4,6 +4,9 @@
 #   oldgate     the pre-decision gate (every cut-off pass refuses forever)  -> scan-cut and prev-boot fail
 #   nothisboot  a pass cut off in this boot does not refuse                 -> this-boot / again / unreadable-ts fail
 #   noreboot    the restart request is not recorded                         -> this-boot's record check fails
+#   noscanreadonly  a scheduled SCAN refuses under a cut-off install pass   -> scan-under-cutoff fails
+#               (that refusal is what made a fresh qube greet its user with "The Windows Update scan
+#                task failed" - exit 1 from a read-only operation, measured 2026-10-07)
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PWSH="${PWSH:-/home/user/bin/pwsh7/pwsh}"
@@ -22,7 +25,8 @@ leg(){ # $1 knob $2 target check (prefix) $3 allowed-failures regex
 }
 leg oldgate    'scan-cut: a scan cut off'                 '^FAIL (scan-cut|prev-boot)'
 leg nothisboot 'this-boot: a full pass cut off in THIS'   '^FAIL (this-boot|again|unreadable-ts|contract)'
-leg noreboot   "this-boot: the cut-off pass's record"     "^FAIL (this-boot: the cut-off pass's record|unreadable-ts: the refusal records)"   # one write carries both
+leg noreboot   "this-boot: the cut-off pass's record"     "^FAIL (this-boot: the cut-off pass's record|unreadable-ts: the refusal records|scan-under-cutoff: the restart)"   # ONE write carries all three: the refusal's record, the unreadable-ts record, and the restart a proceeding SCAN still has to request
+leg noscanreadonly 'scan-under-cutoff: a SCAN under an install pass' '^FAIL scan-under-cutoff'
 leg norefusedboot 'unreadable-after-restart: refused in an earlier boot' '^FAIL unreadable-after-restart'
 echo "--- outputs in $OUT"
 exit $bad
