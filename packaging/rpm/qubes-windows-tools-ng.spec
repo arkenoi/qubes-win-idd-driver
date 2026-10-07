@@ -31,8 +31,54 @@ Source0:        qwt-improved-setup.iso
 Source1:        install-qwt.bat
 Source2:        README-qvm-create-windows-qube.md
 Source3:        MANIFEST.json
-# THIS PACKAGE SHIPS NO dom0 SCRIPTS AND RUNS NOTHING IN dom0. It places the ISO and the
-# auto-qwt stub, and its %post
+
+# THIS PACKAGE SHIPS NO dom0 SCRIPTS AND RUNS NOTHING IN dom0 beyond printing the notice below.
+# It places the ISO, the auto-qwt stub and the manifest, and nothing else; the per-qube settings it
+# used to apply are printed for the administrator to apply, which is why %%post is only a banner.
+
+%description
+Qubes Windows Tools, next generation, for Qubes OS 4.3.
+
+Built from upstream QWT 4.2.2 sources with a reworked GUI agent, a Xen PV network driver
+that actually binds (stock 4.2.2 ships xenvif at VIF revision 0x09000004 while its own
+xennet requires 0x09000005, so the PV NIC never binds and Windows silently falls back to the
+emulated Realtek), and an IddCx display driver that becomes the guest's real display.
+
+IMPORTANT - the Windows binaries in this ISO are TEST-SIGNED. The in-guest installer runs
+"bcdedit /set testsigning on" and adds an unofficial certificate to the guest's Root and
+TrustedPublisher stores. That weakens driver-signature enforcement inside the Windows guest
+for as long as it stays enabled. It affects the guest only, not dom0. Install this only if
+that trade-off is acceptable to you.
+
+Installing this package does NOT change any Windows qube by itself; it only places the ISO
+where the provisioning tools look for it.
+
+%prep
+# Nothing to unpack: the sources are installed verbatim.
+
+%build
+# Nothing to build: the ISO is produced by CI and passed in as Source0.
+
+%install
+install -d -m 0755 %{buildroot}%{qwt_iso_dir}
+install -m 0644 %{SOURCE0} %{buildroot}%{qwt_iso_dir}/qubes-windows-tools.iso
+
+install -d -m 0755 %{buildroot}%{qwtng_share}/auto-qwt
+install -m 0644 %{SOURCE1} %{buildroot}%{qwtng_share}/auto-qwt/install-qwt.bat
+install -m 0644 %{SOURCE3} %{buildroot}%{qwtng_share}/MANIFEST.json
+
+install -d -m 0755 %{buildroot}%{_docdir}/%{name}
+install -m 0644 %{SOURCE2} %{buildroot}%{_docdir}/%{name}/README-qvm-create-windows-qube.md
+
+%files
+%{qwt_iso_dir}/qubes-windows-tools.iso
+%dir %{qwtng_share}
+%dir %{qwtng_share}/auto-qwt
+%{qwtng_share}/auto-qwt/install-qwt.bat
+%{qwtng_share}/MANIFEST.json
+%doc %{_docdir}/%{name}/README-qvm-create-windows-qube.md
+
+%post
 cat <<'EOF'
 
 qubes-windows-tools-ng installed.
