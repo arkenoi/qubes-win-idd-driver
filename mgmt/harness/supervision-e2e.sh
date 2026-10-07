@@ -13,8 +13,9 @@
 #                 line during a requested stop, every vchan announcement withdrawn  (findings/issues.md, 2026-10-07)
 #   L3 broker     a broker SUSPENDED inside its work is NOT reaped while it still makes declared progress, and one
 #                 that never comes back IS reported - the stage-budget fix, demonstrated rather than assumed
-#   L4 restarter  guest/restart-gui-agent.ps1 must answer INVALID-INSTRUMENT when the agent survives the service
-#                 stop: the fail-proof its own commit says is owed before any harness PASS rests on it
+#   L4 restarter  a live turnover, and INVALID-INSTRUMENT when it cannot be proven (the registry value the helper
+#                 reads, renamed and restored). RUNS LAST and restores the guest's health: it restarts the agent
+#                 on purpose, which takes the toast bridge down with it, so no cell may run after it
 #   L5 catchup    a death DURING a shutdown produces exactly one dom0 notification at the next boot (the reporter
 #                 cannot run while the system goes down - ERROR_SHUTDOWN_IN_PROGRESS)
 #   L6 toast      an actionable toast reaches dom0 WITH its actions, an informational one without and without
@@ -176,68 +177,6 @@ PS
   else
     verdict L3 FAIL "a 4 s suspension does not get the broker reaped" "hung lines $hb -> $ha alive=$alive; $(grep -a '^L3|line|' "$OUT/L3.out" | tail -2 | tr '\n' ' ' | cut -c1-200)"
   fi
-fi
-
-# ---- L4 the restart helper: a live turnover, and a fail-proof driven by a REAL stimulus ------------------------------
-# The first version passed `-LogDir <nonexistent>` to a script that HAS NO SUCH PARAMETER - the helper reads the log
-# directory from HKLM Qubes Tools\LogDir - so the stimulus never reached the code under test, the normal path ran, and
-# its correct `RESTART ok` was recorded as a FAIL. (Experimenter rule 5: the injection must reach the code, and the
-# order must be checked before the outcome is read.) So this cell now drives the two things it can drive honestly:
-# a real turnover, and a real logdir-unreadable - by renaming the very registry value the helper reads, and putting it
-# back before anything is graded. A cell that leaves the guest altered is itself a defect, so the restore is asserted.
-if has L4; then
-  log "L4: a live turnover, then the fail-proof with the registry value the helper actually reads renamed"
-  cat > "$OUT/L4-probe.ps1" <<'PS'
-$ErrorActionPreference = 'Continue'
-function L($k,$v){ "L4|$k|$v" }
-$inc = 'C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
-$h = Join-Path $inc 'restart-gui-agent.ps1'
-if (-not (Test-Path -LiteralPath $h)) { L 'error' "the helper is not at $h"; L 'END' 'ok'; return }
-$key = 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools'
-L 'logdir_before' ((Get-ItemProperty -Path $key -EA SilentlyContinue).LogDir)
-# ARM 1 - the normal path: a real turnover on a live guest
-$a = & powershell -NoProfile -ExecutionPolicy Bypass -File $h 2>&1 | Out-String
-L 'normal' (($a -split "`n" | Where-Object { $_ -match '^RESTART' } | Select-Object -Last 1) -replace "`r",'')
-L 'normal_newpid' (($a -split "`n" | Where-Object { $_ -match '^AGENTPID' } | Select-Object -Last 1) -replace "`r",'')
-# ARM 2 - the fail-proof: the log directory the helper reads is GONE. Renamed, not deleted, and put back first.
-$orig = (Get-ItemProperty -Path $key -EA SilentlyContinue).LogDir
-$renamed = $false
-try { Rename-ItemProperty -Path $key -Name 'LogDir' -NewName 'LogDir_sup_backup' -EA Stop; $renamed = $true }
-catch { L 'rename_failed' ($_.Exception.Message -replace "`r|`n",' ') }
-if ($renamed) {
-    $b = & powershell -NoProfile -ExecutionPolicy Bypass -File $h 2>&1 | Out-String
-    # RESTORE BEFORE GRADING - whatever the arm said
-    try { Rename-ItemProperty -Path $key -Name 'LogDir_sup_backup' -NewName 'LogDir' -EA Stop } catch { }
-    L 'nologdir' (($b -split "`n" | Where-Object { $_ -match '^RESTART' } | Select-Object -Last 1) -replace "`r",'')
-}
-$after = (Get-ItemProperty -Path $key -EA SilentlyContinue).LogDir
-L 'logdir_after' $after
-L 'logdir_restored' ([string]($after -eq $orig -and $after))
-L 'END' 'ok'
-PS
-  q push guest/restart-gui-agent.ps1 >/dev/null 2>&1 || true   # in-repo since the branches merged
-  guest_ps "$OUT/L4-probe.ps1" > "$OUT/L4.out" 2>&1
-  g4(){ grep -a "^L4|$1|" "$OUT/L4.out" | tail -1 | cut -d'|' -f3-; }
-  n=$(g4 normal); f=$(g4 nologdir); rst=$(g4 logdir_restored); np=$(g4 normal_newpid)
-  if grep -aq '^L4|error|' "$OUT/L4.out"; then
-    verdict L4 INVALID "a live turnover, and INVALID-INSTRUMENT when the turnover cannot be proven" "$(g4 error | cut -c1-160)"
-  elif [ "$rst" != True ]; then
-    # the guest's registry must be as we found it; a cell that leaves it changed is a defect of the cell
-    verdict L4 FAIL "the cell leaves HKLM LogDir exactly as it found it" \
-            "logdir_before='$(g4 logdir_before)' logdir_after='$(g4 logdir_after)' restored=$rst $(g4 rename_failed | cut -c1-90)"
-  elif [ -z "$n" ] || [ -z "$f" ]; then
-    verdict L4 INVALID "a live turnover, and INVALID-INSTRUMENT when the turnover cannot be proven" \
-            "normal='${n:-<none>}' nologdir='${f:-<none>}' (one arm produced no RESTART line)"
-  elif printf '%s' "$n" | grep -q '^RESTART ok' && printf '%s' "$f" | grep -q 'INVALID-INSTRUMENT.*logdir-unreadable'; then
-    verdict L4 PASS "a live turnover is proven, and an unprovable one is INVALID-INSTRUMENT" \
-            "normal -> '$n' ($np); logdir renamed -> '$f'; registry restored"
-  else
-    verdict L4 FAIL "a live turnover is proven, and an unprovable one is INVALID-INSTRUMENT" \
-            "normal -> '$n'; logdir renamed -> '$f' (want RESTART ok, then INVALID-INSTRUMENT logdir-unreadable)"
-  fi
-  # L4 RESTARTED THE AGENT TWICE ON PURPOSE. The final sweep counts agent instances per boot, so its window starts
-  # here - L2 has already graded the shutdown cycles over its own window, with its own sweep.
-  SWEEP_SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 fi
 
 # ---- L5 a death during a shutdown is reported at the next boot -----------------------------------------------------
@@ -446,12 +385,21 @@ if has L7C; then
       CELLS="$(printf '%s' "$CELLS" | sed 's/L7C//')"
     fi
     qvm-start "$CTL" >/dev/null 2>&1
-    cd_ok=0; d=$((SECONDS+300))
+    # WAIT FOR A LOGGED-ON SESSION, not just for qrexec. `qtest pushrun` runs the script IN a user session and
+    # returns nothing but cmd's banner when there is none - which is exactly what happened on 2026-10-07: the
+    # control answered `echo UP` as soon as qrexec came up, the probe ran into a session-less guest, and the cell
+    # reported "the probe produced nothing" about a guest that was simply not logged on yet. Three exits, and it
+    # says which: a session appeared / the guest is Halted (terminal) / the deadline.
+    cd_ok=0; cd_why=deadline; d=$((SECONDS+420))
     while [ $SECONDS -lt $d ]; do
-      QTEST_VM="$CTL" timeout 45 ./tools/qtest run 'cmd /c echo UP' 2>/dev/null | grep -q UP && { cd_ok=1; break; }
-      [ "$(qvm-ls --raw-data --fields STATE "$CTL" | tr -d '\n')" = Halted ] && break
-      sleep 10
+      if [ "$(qvm-ls --raw-data --fields STATE "$CTL" | tr -d '\n')" = Halted ]; then cd_why=halted; break; fi
+      # explorer.exe means the autologon session is up; query user confirms an interactive session exists
+      if QTEST_VM="$CTL" timeout 60 ./tools/qtest run 'cmd /c tasklist /fi "imagename eq explorer.exe" /nh' 2>/dev/null | tr -d '\r' | grep -q 'explorer.exe'; then
+        cd_ok=1; cd_why=session; break
+      fi
+      sleep 15
     done
+    log "  control $CTL: $cd_why"
     if [ "$cd_ok" = 1 ]; then
       QTEST_VM="$CTL" timeout 300 ./tools/qtest pushrun "$OUT/L7-probe.ps1" > "$OUT/L7C.out" 2>&1
       c7(){ grep -a "^L7|$1|" "$OUT/L7C.out" | tail -1 | cut -d'|' -f3-; }
@@ -468,7 +416,7 @@ if has L7C; then
         verdict L7C INVALID "the control shows the defect present" "control writes_landed='$cwl' subject writes_landed='$swl' (one of them did not read)"
       fi
     else
-      verdict L7C INVALID "the control shows the defect present" "$CTL never answered (state $(qvm-ls --raw-data --fields STATE "$CTL" | tr -d '\n'))"
+      verdict L7C INVALID "the control shows the defect present" "$CTL reached no logged-on session: $cd_why (state $(qvm-ls --raw-data --fields STATE "$CTL" | tr -d '\n'))"
     fi
     # the control is a throwaway clone: asked down, then GONE - no stale claim, no second guest left up
     qwt_shutdown "$CTL" 420 > "$OUT/L7C-ctl-down.out" 2>&1
@@ -485,7 +433,10 @@ fi
 
 # ---- the sweep over the whole window, then the table ---------------------------------------------------------------
 log "the log sweep over everything this run touched"
-(cd "$SWEEP" && timeout 1200 bash mgmt/harness/log-sweep.sh "$SUBJ" "${SWEEP_SINCE:-$SINCE}" "$OUT/sweep") > "$OUT/sweep.out" 2>&1
+# THE SWEEP RUNS BEFORE L4, which is why L4 is the last cell in this file: it restarts the agent twice on
+# purpose, and a window containing that reads as agent churn (measured 2026-10-07: instances_per_boot=2,
+# nine ETW tier-downs, an ERROR during a requested stop - all of it this harness's own doing).
+(cd "$SWEEP" && timeout 1200 bash mgmt/harness/log-sweep.sh "$SUBJ" "$SINCE" "$OUT/sweep") > "$OUT/sweep.out" 2>&1
 sweepline=$(grep -a 'LOGSWEEP-RESULT' "$OUT/sweep.out" | tail -1)
 log "$sweepline"
 case "$sweepline" in
@@ -493,6 +444,90 @@ case "$sweepline" in
   *status=*) verdict SW FAIL "the sweep finds nothing new or breached" "$sweepline" ;;
   *) verdict SW INVALID "the sweep ran" "no LOGSWEEP-RESULT line" ;;
 esac
+
+# ---- L4 the restart helper: a live turnover, and a fail-proof driven by a REAL stimulus ------------------------------
+# The first version passed `-LogDir <nonexistent>` to a script that HAS NO SUCH PARAMETER - the helper reads the log
+# directory from HKLM Qubes Tools\LogDir - so the stimulus never reached the code under test, the normal path ran, and
+# its correct `RESTART ok` was recorded as a FAIL. (Experimenter rule 5: the injection must reach the code, and the
+# order must be checked before the outcome is read.) So this cell now drives the two things it can drive honestly:
+# a real turnover, and a real logdir-unreadable - by renaming the very registry value the helper reads, and putting it
+# back before anything is graded. A cell that leaves the guest altered is itself a defect, so the restore is asserted.
+if has L4; then
+  log "L4: a live turnover, then the fail-proof with the registry value the helper actually reads renamed"
+  cat > "$OUT/L4-probe.ps1" <<'PS'
+$ErrorActionPreference = 'Continue'
+function L($k,$v){ "L4|$k|$v" }
+$inc = 'C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
+$h = Join-Path $inc 'restart-gui-agent.ps1'
+if (-not (Test-Path -LiteralPath $h)) { L 'error' "the helper is not at $h"; L 'END' 'ok'; return }
+$key = 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools'
+L 'logdir_before' ((Get-ItemProperty -Path $key -EA SilentlyContinue).LogDir)
+# ARM 1 - the normal path: a real turnover on a live guest
+$a = & powershell -NoProfile -ExecutionPolicy Bypass -File $h 2>&1 | Out-String
+L 'normal' (($a -split "`n" | Where-Object { $_ -match '^RESTART' } | Select-Object -Last 1) -replace "`r",'')
+L 'normal_newpid' (($a -split "`n" | Where-Object { $_ -match '^AGENTPID' } | Select-Object -Last 1) -replace "`r",'')
+# ARM 2 - the fail-proof: the log directory the helper reads is GONE. Renamed, not deleted, and put back first.
+$orig = (Get-ItemProperty -Path $key -EA SilentlyContinue).LogDir
+$renamed = $false
+try { Rename-ItemProperty -Path $key -Name 'LogDir' -NewName 'LogDir_sup_backup' -EA Stop; $renamed = $true }
+catch { L 'rename_failed' ($_.Exception.Message -replace "`r|`n",' ') }
+if ($renamed) {
+    $b = & powershell -NoProfile -ExecutionPolicy Bypass -File $h 2>&1 | Out-String
+    # RESTORE BEFORE GRADING - whatever the arm said
+    try { Rename-ItemProperty -Path $key -Name 'LogDir_sup_backup' -NewName 'LogDir' -EA Stop } catch { }
+    L 'nologdir' (($b -split "`n" | Where-Object { $_ -match '^RESTART' } | Select-Object -Last 1) -replace "`r",'')
+}
+$after = (Get-ItemProperty -Path $key -EA SilentlyContinue).LogDir
+L 'logdir_after' $after
+L 'logdir_restored' ([string]($after -eq $orig -and $after))
+L 'END' 'ok'
+PS
+  q push guest/restart-gui-agent.ps1 >/dev/null 2>&1 || true   # in-repo since the branches merged
+  guest_ps "$OUT/L4-probe.ps1" > "$OUT/L4.out" 2>&1
+  g4(){ grep -a "^L4|$1|" "$OUT/L4.out" | tail -1 | cut -d'|' -f3-; }
+  n=$(g4 normal); f=$(g4 nologdir); rst=$(g4 logdir_restored); np=$(g4 normal_newpid)
+  if grep -aq '^L4|error|' "$OUT/L4.out"; then
+    verdict L4 INVALID "a live turnover, and INVALID-INSTRUMENT when the turnover cannot be proven" "$(g4 error | cut -c1-160)"
+  elif [ "$rst" != True ]; then
+    # the guest's registry must be as we found it; a cell that leaves it changed is a defect of the cell
+    verdict L4 FAIL "the cell leaves HKLM LogDir exactly as it found it" \
+            "logdir_before='$(g4 logdir_before)' logdir_after='$(g4 logdir_after)' restored=$rst $(g4 rename_failed | cut -c1-90)"
+  elif [ -z "$n" ] || [ -z "$f" ]; then
+    verdict L4 INVALID "a live turnover, and INVALID-INSTRUMENT when the turnover cannot be proven" \
+            "normal='${n:-<none>}' nologdir='${f:-<none>}' (one arm produced no RESTART line)"
+  elif printf '%s' "$n" | grep -q '^RESTART ok' && printf '%s' "$f" | grep -q 'INVALID-INSTRUMENT.*logdir-unreadable'; then
+    verdict L4 PASS "a live turnover is proven, and an unprovable one is INVALID-INSTRUMENT" \
+            "normal -> '$n' ($np); logdir renamed -> '$f'; registry restored"
+  else
+    verdict L4 FAIL "a live turnover is proven, and an unprovable one is INVALID-INSTRUMENT" \
+            "normal -> '$n'; logdir renamed -> '$f' (want RESTART ok, then INVALID-INSTRUMENT logdir-unreadable)"
+  fi
+  # AND IT LEAVES THE GUEST HEALTHY. This cell restarts the agent twice and renames a registry value for one of
+  # them, so the agent that ends up running was started while LogDir was missing - and its toast bridge went down
+  # with the restart and did not come back (measured 2026-10-07: L6 then fired two toasts into a guest with no
+  # bridge and could measure nothing). One more restart, with the registry intact, and the health is ASSERTED.
+  cat > "$OUT/L4-restore.ps1" <<'PS'
+$ErrorActionPreference = 'Continue'
+function L($k,$v){ "L4R|$k|$v" }
+$h = 'C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\restart-gui-agent.ps1'
+$r = & powershell -NoProfile -ExecutionPolicy Bypass -File $h 2>&1 | Out-String
+L 'restart' (($r -split "`n" | Where-Object { $_ -match '^RESTART' } | Select-Object -Last 1) -replace "`r",'')
+Start-Sleep -Seconds 12
+foreach ($n in 'gui-agent','notifhost','wgcbroker') {
+    L $n (@(Get-Process -Name $n -EA SilentlyContinue).Count)
+}
+L 'END' 'ok'
+PS
+  guest_ps "$OUT/L4-restore.ps1" > "$OUT/L4-restore.out" 2>&1
+  g4r(){ grep -a "^L4R|$1|" "$OUT/L4-restore.out" | tail -1 | cut -d'|' -f3-; }
+  ag=$(g4r gui-agent); nh=$(g4r notifhost)
+  if [ "$ag" = 1 ] && [ "$nh" -ge 1 ] 2>/dev/null; then
+    log "  L4 restored the guest: gui-agent=$ag notifhost=$nh wgcbroker=$(g4r wgcbroker)"
+  else
+    verdict L4R FAIL "L4 leaves the guest with a running agent AND its toast bridge" \
+            "gui-agent='$ag' notifhost='$nh' after the restore restart ('$(g4r restart | cut -c1-80)') - a cell that leaves the guest degraded is a defect of the cell"
+  fi
+fi
 
 echo
 echo "=== supervision-e2e: $SUBJ ==="

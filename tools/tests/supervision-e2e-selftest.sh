@@ -114,6 +114,16 @@ lib_prereqs(){ awk '
 shape "prereqs: QTEST_VM is exported before e2e-lib.sh and \$R is set before a0-lib.sh (both refuse without them)" \
       lib_prereqs 'VM="$SUBJ"; export QTEST_VM="$SUBJ"'
 
+# PUSHRUN NEEDS A LOGGED-ON SESSION and returns nothing but cmd's banner without one, so waiting for qrexec
+# to answer is not waiting for the guest to be usable: the control arm did exactly that on 2026-10-07 and then
+# reported "the probe produced nothing" about a guest that was simply not logged on yet. Again an ORDER check.
+pushrun_after_session(){ awk '
+  /imagename eq explorer.exe/ {sess=NR}
+  /qtest pushrun "\$OUT\/L7-probe.ps1"/ {pr=NR}
+  END{exit !(sess && pr && sess < pr)}' "$1"; }
+shape "session: the control waits for a LOGGED-ON session before pushrun, not just for qrexec" \
+      pushrun_after_session 'imagename eq explorer.exe'
+
 exits_nonzero(){ grep -qE '\[ "\$nf" = 0 \] && \[ "\$ni" = 0 \] && exit 0 \|\| exit 1' "$1"; }
 shape "exit: the routine exits non-zero when any cell failed or was invalid" \
       exits_nonzero '[ "$nf" = 0 ] && [ "$ni" = 0 ] && exit 0 || exit 1'
