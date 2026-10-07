@@ -25,17 +25,18 @@ $refUrl  = 'http://speedtest.tele2.net/100MB.zip'
 Write-Output "=== CEILING PROBE $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff') ==="
 
 # ---- 1. relay must be listening -------------------------------------------------------------
-$proc = Get-Process qubes-updates-relay -ErrorAction SilentlyContinue
-if (-not $proc) {
-  if (-not (Test-Path -LiteralPath $relay)) { Write-Output "FAIL: relay exe missing at $relay"; exit 1 }
-  Start-Process -FilePath $relay -ArgumentList '--listen','8082','--target','@default','--log',$wu -WindowStyle Hidden
-  Start-Sleep -Seconds 3
-  $proc = Get-Process qubes-updates-relay -ErrorAction SilentlyContinue
-  Write-Output "relay_started=$([bool]$proc)"
-} else {
-  Write-Output "relay_already_running=1 pid=$($proc.Id)"
-}
-if (-not $proc) { Write-Output 'FAIL: relay not running and could not be started'; exit 1 }
+# RELAY OWNED BY HANDLE (owner 2026-10-07; the shape of guest/relay-own.ps1, inlined): the old shape ADOPTED
+# whatever was named qubes-updates-relay and measured through it. A port that is not free is a REFUSAL naming
+# its owner - never adopted, never killed; ours leaves with this script (--parent-pid).
+if (-not (Test-Path -LiteralPath $relay)) { Write-Output "FAIL: relay exe missing at $relay"; exit 1 }
+$owner = 0
+try { $l = @(Get-NetTCPConnection -LocalPort 8082 -State Listen -ErrorAction SilentlyContinue); if ($l.Count) { $owner = [int]$l[0].OwningProcess } } catch { $owner = -1 }
+if ($owner -ne 0) { Write-Output "REFUSED: port 8082 is owned by pid $owner (not this script's) - nothing started, nothing adopted"; exit 2 }
+$proc = Start-Process -FilePath $relay -ArgumentList '--listen','8082','--target','@default','--log',$wu,'--parent-pid',"$PID" -WindowStyle Hidden -PassThru
+Start-Sleep -Seconds 3
+if ($proc) { try { if ($proc.HasExited) { $proc = $null } } catch { } }
+Write-Output "relay_started=$([bool]$proc) pid=$(if ($proc) { $proc.Id } else { 'none' })"
+if (-not $proc) { Write-Output 'FAIL: the relay this probe started did not stay up'; exit 1 }
 
 # mark the log so the after-window can be sliced exactly at this point
 $logMark = 0

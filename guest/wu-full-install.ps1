@@ -15,7 +15,15 @@ $POL='HKLM:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\Internet Settings
 function SetV($p,$n,$v,$t){ if(-not(Test-Path $p)){New-Item -Path $p -Force|Out-Null}; New-ItemProperty -Path $p -Name $n -Value $v -PropertyType $t -Force|Out-Null }
 & netsh winhttp set proxy '127.0.0.1:8082' '<local>' | Out-Null
 SetV $POL 'ProxySettingsPerUser' 0 'DWord'; SetV $IS 'ProxyEnable' 1 'DWord'; SetV $IS 'ProxyServer' '127.0.0.1:8082' 'String'; SetV $IS 'ProxyOverride' '<local>' 'String'
-if(-not(Get-Process qubes-updates-relay -EA SilentlyContinue)){ $env:QUBES_UPDATES_MAXCONN='256'; Start-Process -FilePath 'C:\Users\Public\relaytest\qubes-updates-relay.exe' -ArgumentList '--listen','8082','--target','@default','--log','C:\Users\Public\relaytest' -WindowStyle Hidden; Start-Sleep 2 }
+# RELAY OWNED BY HANDLE (owner 2026-10-07; the shape of guest/relay-own.ps1, inlined): the old shape ADOPTED
+# whatever was named qubes-updates-relay. A port that is not free is a REFUSAL naming its owner - never
+# adopted, never killed; ours leaves with this script (--parent-pid).
+$owner = 0
+try { $l = @(Get-NetTCPConnection -LocalPort 8082 -State Listen -ErrorAction SilentlyContinue); if ($l.Count) { $owner = [int]$l[0].OwningProcess } } catch { $owner = -1 }
+if ($owner -ne 0) { Log "REFUSED: port 8082 is owned by pid $owner (not this script's) - nothing started, nothing adopted"; exit 2 }
+$env:QUBES_UPDATES_MAXCONN='256'
+$ownRelay = Start-Process -FilePath 'C:\Users\Public\relaytest\qubes-updates-relay.exe' -ArgumentList '--listen','8082','--target','@default','--log','C:\Users\Public\relaytest','--parent-pid',"$PID" -WindowStyle Hidden -PassThru
+Start-Sleep 2
 
 # --- resolve .msu urls from the catalog ------------------------------------------------
 try {

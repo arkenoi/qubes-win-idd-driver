@@ -665,8 +665,48 @@ def _ps_shipped_scripts() -> list[Path]:
     return sorted(found.values())
 
 
+OUR_SCRIPT_ROOTS = ("agent", "packaging", "guest", "mgmt", "tools")
+OUR_SCRIPT_SUFFIXES = {".ps1", ".sh", ".py", ".cmd", ".bat"}
+# Files that CARRY the refused shapes as data: this linter, and the review instrument that found and ranked the sites
+# (scratchpad/lifecycle-review; its script names the shapes it searches for).
+PATTERN_CARRIERS = {"lint-harness.py", "lifecycle-review.py"}
+
+
+_OUR_SCRIPTS_CACHE: dict[str, list[Path]] = {}
+
+
+def _all_our_scripts() -> list[Path]:
+    """EVERY script of ours. Widened 2026-10-07 from the shipped set (owner: "why did you miss kill-by-name during the
+    previous sweep?" - the 2026-10-03 sweep covered SHIPPED scripts only, so every harness and dev script kept its
+    by-name kills). PowerShell, shell, python and cmd under agent/, packaging/, guest/, mgmt/ and tools/ - the bash
+    harnesses EMBED the PowerShell they send and the `taskkill /im` they run, so they are read as text like any
+    .ps1 - plus the shipped set as make-setup.ps1 stages it (the core-agent rpc dir, the overlay payload).
+    Out: tools/tests/ (deliberate fixtures), mgmt/prime-jobs/ (generated copies of guest/), scratchpad/, and the
+    pattern carriers. Scanned once per tree (three lints walk it; the rpc-dir notice is said once)."""
+    key = str(ROOT)
+    if key in _OUR_SCRIPTS_CACHE:
+        return _OUR_SCRIPTS_CACHE[key]
+    found: dict[str, Path] = {}
+    for root in OUR_SCRIPT_ROOTS:
+        d = ROOT / root
+        if not d.is_dir():
+            continue
+        for p in sorted(d.rglob("*")):
+            if not p.is_file() or p.suffix.lower() not in OUR_SCRIPT_SUFFIXES:
+                continue
+            if "tests" in p.parts or "prime-jobs" in p.parts or "scratchpad" in p.parts or ".git" in p.parts:
+                continue
+            if p.name in PATTERN_CARRIERS:
+                continue
+            found[str(p.resolve())] = p
+    for p in _ps_shipped_scripts():
+        found[str(p.resolve())] = p
+    _OUR_SCRIPTS_CACHE[key] = sorted(found.values())
+    return _OUR_SCRIPTS_CACHE[key]
+
+
 def l17_process_by_name() -> None:
-    """L17: no SHIPPED script may KILL or ADOPT a process it found by NAME.
+    """L17: no script of ours may KILL or ADOPT a process it found by NAME.
 
     Owner, 2026-10-03 ("NAMED!!!????"), docs/ADR-updater.md 12.4. Measured that day: the boot-time scan adopted a relay another
     process had started (Ensure-Proxy started one only if no process NAMED qubes-updates-relay existed, else served through whatever
@@ -684,23 +724,27 @@ def l17_process_by_name() -> None:
     Counting (@(...).Count) and waiting on (WaitForExit) a process found by name are neither kill nor adopt and stay silent - the
     updater's TiWorker settle does exactly that.
 
-    SCOPE: EVERY shipped PowerShell script (_ps_shipped_scripts: what packaging/make-setup.ps1 copies, packaging/setup/*,
-    the core-agent rpc-services dir, the overlay installer). First landed 2026-10-03 on the updater payload alone (Jev,
-    updater-payload 1.00 over all-shipped, because the other sites needed their own redesign); widened the same day once
-    those were fixed - setup installer (xenbus_monitor by the SCM's pid; the GUI quiesce stops the watchdog SERVICE, whose
-    stop now takes its own agent down, and reports survivors), activate-idd.ps1 (same), pvnic-selfprime.ps1 (QwtngNetSetup
-    and xenbus_monitor by the SCM's pid), quiet-desktop.ps1 (the user's OneDrive is left alone), the overlay installer
-    (service stop + the agent's own QGA_SHUTDOWN request, survivors reported). The native watchdog is outside this lint:
-    its one enumeration site (watchdog.c IsProcessRunning) is detection-only by design since 2026-10-03 (a same-named
-    agent it did not start is reported and waited out, never adopted or stopped), and scratchpad/proc-audit2/audit.py
-    lists every native TerminateProcess/enumeration site for review. The baseline file is not the place for L17 findings
-    (it must never grow).
+    SCOPE: EVERY script of ours (_all_our_scripts: agent/, packaging/, guest/, mgmt/, tools/ - PowerShell, shell, python,
+    cmd - plus the shipped set as make-setup.ps1 stages it). First landed 2026-10-03 on the updater payload alone (Jev,
+    updater-payload 1.00 over all-shipped, because the other sites needed their own redesign); widened the same day to
+    every SHIPPED script once those were fixed - setup installer (xenbus_monitor by the SCM's pid; the GUI quiesce stops
+    the watchdog SERVICE, whose stop now takes its own agent down, and reports survivors), activate-idd.ps1 (same),
+    pvnic-selfprime.ps1 (QwtngNetSetup and xenbus_monitor by the SCM's pid), quiet-desktop.ps1 (the user's OneDrive is
+    left alone), the overlay installer (service stop + the agent's own QGA_SHUTDOWN request, survivors reported).
+    Widened again 2026-10-07 to ALL our code (owner: "why did you miss kill-by-name during the previous sweep?") - the
+    harnesses and dev scripts had kept every by-name kill: the agent killed under its armed watchdog (now
+    guest/restart-gui-agent.ps1 through mgmt/harness/lifecycle-lib.sh), control windows by `taskkill /im` (now
+    ctl_start/ctl_stop by recorded identity), relays by name (now guest/relay-own.ps1 by handle). The native watchdog
+    is outside this lint: its one enumeration site (watchdog.c IsProcessRunning) is detection-only by design since
+    2026-10-03 (a same-named agent it did not start is reported and waited out, never adopted or stopped), and
+    scratchpad/proc-audit2/audit.py lists every native TerminateProcess/enumeration site for review. The baseline file
+    is not the place for L17 findings (it must never grow).
     """
     kill_direct = re.compile(r"\bStop-Process\b([^|;)}\n]*)", re.I)
     taskkill_im = re.compile(r"\btaskkill(\.exe)?\b[^\n]*?/im\b", re.I)
     wmi_kill = re.compile(r"Win32_Process[^\n]*\bName\b[^\n]*\b(Terminate|Invoke-CimMethod)\b|\b(Terminate|Invoke-CimMethod)\b[^\n]*Win32_Process[^\n]*\bName\b", re.I)
     cond_block = re.compile(r"\s*(?:\}\s*)?(?:if|elseif|while)\s*\((.*)\)\s*\{(.*)$", re.I)
-    for p in _ps_shipped_scripts():
+    for p in _all_our_scripts():
         lines = _ps_code_lines(p.read_text(errors="replace"))
         rel = p.relative_to(ROOT)
         tainted: set[str] = set()
@@ -758,6 +802,182 @@ def l17_process_by_name() -> None:
                     tainted.discard(v)
 
 
+# --------------------------------------------------------------------------- L18
+# Processes the rig KNOWS are relaunched by something that is still armed when a script ends them, and what that
+# relauncher is. Owner, 2026-10-07: "if you terminate something that relaunches you need to make sure it STOPS
+# relaunching beforehand ... thats why we do not kill processes by name". Ending one of these by name races its
+# relauncher, and the test then measures whichever instance won: the harnesses restarted the agent with
+# `Stop-Service QubesGuiWatchdog; Get-Process gui-agent | Stop-Process -Force; Start-Service` and grew an
+# INVALID-INSTRUMENT branch for "the old one survived Stop-Process" instead of fixing the cause. Each entry says who
+# relaunches it and what the sanctioned way is.
+RELAUNCHED = {
+    "gui-agent": ("the QubesGuiWatchdog service (watchdog.c relaunches the agent it owns the instant it exits; since "
+                  "2026-10-03 its STOP ends that agent by handle) - restart through the service: guest/restart-gui-agent.ps1 "
+                  "via mgmt/harness/lifecycle-lib.sh, and never end the agent by hand"),
+    "gui-watchdog": "the SCM's recovery actions for QubesGuiWatchdog (sc failure ... restart) - stop the SERVICE through the SCM",
+    "wgcbroker": "gui-agent, which supervises and relaunches its broker",
+    "notifhost": "gui-agent, which relaunches the notification bridge",
+    "etwproxy": ("gui-agent, which relaunches the ETW proxy on a backoff (etwproxy.c) - a supervision DRILL ends it by the pid "
+                 "the agent LOGGED when it launched it ('ETWPROXYSUP launched etwproxy.exe pid='), never by a name scan"),
+    "qwtng-netsetup": "the QwtngNetSetup service (SCM recovery) - stop the service, by its SCM-reported pid",
+    "xenbus_monitor": "the xenbus_monitor service (SCM recovery) - disable and stop the service, by its SCM-reported pid",
+    "qubes-updates-relay": ("the updater pass that started it, and the QubesWindowsUpdateScan/Run task that runs passes - own a "
+                            "relay by handle (guest/relay-own.ps1), end the TASK, or wait for the pass; never the relay by name"),
+    "explorer": ("Winlogon's AutoRestartShell, which relaunches the shell the instant it exits - end the Shell_TrayWnd owner by "
+                 "pid and WAIT for Winlogon's instance (guest/set-visual-performance.ps1), or leave it"),
+    "shellexperiencehost": "the shell, which relaunches it on demand - never ended (guest/dismiss-toast.ps1 clears the history instead)",
+    "startmenuexperiencehost": "the shell, which relaunches it on demand - never ended",
+}
+_RELAUNCHED_ALT = "|".join(re.escape(n) for n in RELAUNCHED)
+_RELAUNCHED_RE = re.compile(r"(?<![\w-])(" + _RELAUNCHED_ALT + r")(?:\.exe)?(?![\w-])", re.I)
+_KILL_RE = re.compile(r"\bStop-Process\b|\.Kill\(|\btaskkill(?:\.exe)?\b|\bTerminateProcess\b|\.Terminate\(\)"
+                      r"|\bInvoke-CimMethod\b[^\n]*\bTerminate\b", re.I)
+# The name in the kill's TARGET position - not anywhere on the line: a one-line script that starts etwproxy.exe by
+# path through Process::Start and ends THAT handle (p3a T4) names the exe without ending anything by name.
+_KILL_TARGET_RES = [
+    re.compile(r"\bStop-Process\s+(?:-Name\s+)?['\"]?(" + _RELAUNCHED_ALT + r")(?:\.exe)?['\"]?(?![\w-])", re.I),
+    re.compile(r"(?<![\w$\-.])(?:Get-Process|gps|ps)\b(?![\w-])[^|\n]*?(?<![\w-])(" + _RELAUNCHED_ALT + r")(?:\.exe)?(?![\w-])[^|\n]*\|[^\n]*(?:Stop-Process|\.Kill\(|taskkill)", re.I),
+    re.compile(r"\btaskkill(?:\.exe)?\b[^\n]*/im\s+['\"]?(" + _RELAUNCHED_ALT + r")(?:\.exe)?", re.I),
+    re.compile(r"Win32_Process[^\n]*\bName\b[^\n]*?(?<![\w-])(" + _RELAUNCHED_ALT + r")(?:\.exe)?[^\n]*\b(?:Terminate|Invoke-CimMethod)\b", re.I),
+]
+
+
+def _kill_target_name(code: str) -> str:
+    for rx in _KILL_TARGET_RES:
+        m = rx.search(code)
+        if m:
+            return m.group(1).lower()
+    return ""
+_TASKLIST_IMAGE_RE = re.compile(r"\btasklist\b[^\n]*imagename\s+eq\s+([\w.-]+)", re.I)
+_TASKKILL_PID_RE = re.compile(r"\btaskkill(?:\.exe)?\b[^\n]*/pid\b", re.I)
+_TASK_END_RE = re.compile(r"\bschtasks(?:\.exe)?\b[^\n]*/end\b[^\n]*/tn\s+(\S+)|\bStop-ScheduledTask\b[^\n]*-TaskName\s+(\S+)", re.I)
+_TASK_CREATE_RE = re.compile(r"\bschtasks(?:\.exe)?\b[^\n]*/create\b[^\n]*/tn\s+(\S+)|\bRegister-ScheduledTask\b[^\n]*-TaskName\s+(\S+)", re.I)
+_FUNC_START_RE = re.compile(r"^\s*function\s+[\w-]+|^\s*[\w-]+\s*\(\)\s*\{", re.I)
+
+
+def _tasks_with_restart_on_failure() -> set[str]:
+    """Task names whose DEFINITION in our scripts restarts them on failure: a <RestartOnFailure> block (task XML) or
+    New-ScheduledTaskSettingsSet -RestartCount, attributed to the nearest FOLLOWING registration in the same file
+    (schtasks /create /tn NAME, Register-ScheduledTask -TaskName NAME). Today no task of ours carries one; the set
+    exists so the day one does, /end on it is refused."""
+    tasks: set[str] = set()
+    for p in _all_our_scripts():
+        pending = False
+        for ln in p.read_text(errors="replace").splitlines():
+            if re.search(r"<RestartOnFailure>|-RestartCount\b", ln, re.I):
+                pending = True
+            m = _TASK_CREATE_RE.search(ln)
+            if m and pending:
+                tasks.add((m.group(1) or m.group(2)).strip("'\""))
+                pending = False
+    return tasks
+
+
+def _disarmed_above(lines: list[str], i: int, task: str) -> bool:
+    """Is task TASK disabled or deleted somewhere between the start of the enclosing function (or the file) and line i?"""
+    t = re.escape(task)
+    disarm = re.compile(rf"/change\b[^\n]*/tn\s+['\"]?{t}['\"]?\b[^\n]*/disable|/delete\b[^\n]*/tn\s+['\"]?{t}['\"]?\b"
+                        rf"|\bDisable-ScheduledTask\b[^\n]*{t}|\bUnregister-ScheduledTask\b[^\n]*{t}", re.I)
+    for j in range(i - 2, -1, -1):           # lines[j] is line j+1; start just above line i
+        if _FUNC_START_RE.search(lines[j]):
+            return False
+        if disarm.search(lines[j]):
+            return True
+    return False
+
+
+def l18_relauncher_armed() -> None:
+    """L18: a process, service child or task whose RELAUNCHER IS ARMED is never ended by name, and never without the
+    relauncher disarmed first (owner 2026-10-07, see RELAUNCHED). Scope: every script of ours (_all_our_scripts).
+
+    SHAPES (each has a fixture in tools/tests/lint-selftest.sh):
+      a. gui-agent ended by ANY means on a line that names it (Stop-Process, .Kill(), taskkill, Terminate) - the
+         old harness restart `Stop-Service QubesGuiWatchdog; Get-Process gui-agent | Stop-Process` included: the
+         service IS the stopper, nothing ends the agent by hand;
+      b. any name in RELAUNCHED ended by name: Stop-Process -Name / Get-Process <name> | Stop-Process or .Kill() /
+         taskkill /im <name>.exe / a Win32_Process Terminate; a variable bound by a by-name lookup of such a name and
+         ended later; a pid SELECTED by a `tasklist /fi "imagename eq <name>"` scan and ended with taskkill /pid
+         within the next 12 lines (by name in two steps - the p3a drills' old shape);
+      c. a scheduled task ended with schtasks /end or Stop-ScheduledTask while its definition carries RestartOnFailure
+         (_tasks_with_restart_on_failure), unless it is disabled or deleted first in the same function (or the file
+         above it).
+    Not shapes: Stop-Service/Start-Service (the owner's interface); Stop-Process -Id of a pid the script recorded when
+    IT started the process (lifecycle-lib.sh ctl_stop, relay-own.ps1 Stop-OwnRelay); a drill's taskkill /pid of the pid
+    the SUPERVISOR logged; counting or waiting on a by-name lookup; a comment.
+    """
+    restart_tasks = _tasks_with_restart_on_failure()
+    for p in _all_our_scripts():
+        lines = _ps_code_lines(p.read_text(errors="replace"))
+        rel = p.relative_to(ROOT)
+        named: dict[str, set[str]] = {}               # variable -> RELAUNCHED names its binding looked up by name
+        scans: list[tuple[int, str]] = []             # (line, name) of a tasklist-by-imagename of a RELAUNCHED name
+        for i, code in enumerate(lines, 1):
+            if not code.strip():
+                continue
+            if _KILL_RE.search(code):
+                n = _kill_target_name(code)
+                if n:
+                    finding("L18-relauncher-armed", f"{rel}:{i}",
+                            f"'{n}' is ended by name while its relauncher is armed - it is relaunched by {RELAUNCHED[n]}: "
+                            f"{code.strip()[:100]}")
+                else:
+                    for v, names in named.items():
+                        if re.search(rf"\${re.escape(v)}\b", code):
+                            n = sorted(names)[0]
+                            finding("L18-relauncher-armed", f"{rel}:{i}",
+                                    f"'${v}' holds '{n}' found by name and ends it here while its relauncher is armed - it is "
+                                    f"relaunched by {RELAUNCHED[n]}: {code.strip()[:100]}")
+                            break
+                if _TASKKILL_PID_RE.search(code):
+                    for ln, n in scans:
+                        if 0 < i - ln <= 12:
+                            finding("L18-relauncher-armed", f"{rel}:{i}",
+                                    f"taskkill /pid of a pid SELECTED by a tasklist imagename scan for '{n}' (line {ln}) - by name in "
+                                    f"two steps, while its relauncher is armed - it is relaunched by {RELAUNCHED[n]}: {code.strip()[:100]}")
+                            break
+            m = _TASKLIST_IMAGE_RE.search(code)
+            if m:
+                n = re.sub(r"\.exe$", "", m.group(1).lower())
+                if n in RELAUNCHED:
+                    scans.append((i, n))
+            # bindings: a variable bound by a by-name lookup (or an alias of one) carries the names; any other binding clears it
+            mb = re.match(r"\s*\$(?:script:|global:)?(\w+)\s*=(?!=)\s*(.*)$", code)
+            if mb:
+                v, rhs = mb.group(1), mb.group(2)
+                names: set[str] = set()
+                if _ps_byname_getproc(rhs):
+                    names = {h.group(1).lower() for h in _RELAUNCHED_RE.finditer(rhs)}
+                else:
+                    for t, tn in named.items():
+                        if re.match(rf"[@(\s]*\${re.escape(t)}\b", rhs):
+                            names |= tn
+                if names:
+                    named[v] = names
+                else:
+                    named.pop(v, None)
+            mf = re.search(r"\bforeach\s*\(\s*\$(\w+)\s+in\s+(.*)\)\s*\{", code, re.I)
+            if mf:
+                v, src = mf.group(1), mf.group(2)
+                names = set()
+                if _ps_byname_getproc(src):
+                    names = {h.group(1).lower() for h in _RELAUNCHED_RE.finditer(src)}
+                else:
+                    for t, tn in named.items():
+                        if re.search(rf"\${re.escape(t)}\b", src):
+                            names |= tn
+                if names:
+                    named[v] = names
+                else:
+                    named.pop(v, None)
+            me = _TASK_END_RE.search(code)
+            if me:
+                tn = (me.group(1) or me.group(2)).strip("'\"")
+                if tn in restart_tasks and not _disarmed_above(lines, i, tn):
+                    finding("L18-relauncher-armed", f"{rel}:{i}",
+                            f"scheduled task '{tn}' is ended while its definition carries RestartOnFailure (Task Scheduler relaunches "
+                            f"it) and it was not disabled or deleted first in this function: {code.strip()[:100]}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ledger", type=Path, default=None, help="verdicts.tsv, enables L7")
@@ -791,6 +1011,7 @@ def main() -> int:
     l15_ps_function_named_like_alias()
     l16_ps_script_scope_case_collision()
     l17_process_by_name()
+    l18_relauncher_armed()
     if a.ledger:
         l7_orphan_ledger_checks(a.ledger)
 

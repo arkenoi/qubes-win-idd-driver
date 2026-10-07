@@ -32,11 +32,16 @@ $urls  = [ordered]@{
 Write-Output '=== RESULT ==='
 foreach ($e in @($PreExe, $CurExe)) { if (-not (Test-Path $e)) { Write-Output "missing: $e"; exit 1 } }
 
-function Stop-Relays { Get-Process qubes-updates-relay, relay-pre -EA SilentlyContinue | ForEach-Object { $_.Kill() }; Start-Sleep -Seconds 2 }
+# RELAY OWNED BY HANDLE (guest/relay-own.ps1 next to this script; owner 2026-10-07): the build under
+# test is started by handle once the port is free (a serving relay is someone else's - refused, named,
+# never killed, whatever its image name), and only that one is stopped between arms.
+$ro = Join-Path $PSScriptRoot 'relay-own.ps1'
+if (-not (Test-Path -LiteralPath $ro)) { Write-Output 'relay-own.ps1 not pushed next to this script (tools/qtest push guest/relay-own.ps1)'; exit 3 }
+. $ro
+function Stop-Relays { Stop-OwnRelay; Start-Sleep -Seconds 2 }
 function Start-Relay($exe) {
     Stop-Relays
-    Start-Process -FilePath $exe -ArgumentList '--listen','8082','--target','@default','--log',$wu -WindowStyle Hidden
-    Start-Sleep -Seconds 3
+    [void](Start-OwnRelay -Exe $exe -Arguments @('--listen','8082','--target','@default','--log',$wu) -SettleSec 3)
 }
 
 $stats = @{}

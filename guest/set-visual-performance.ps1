@@ -82,8 +82,28 @@ if (Test-Path $vfx) {
 "VISUALPERF mode=$Mode transparency=$on animations=$on visualstyles=preserved"
 
 if ($RestartExplorer) {
-    Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 3
-    if (-not (Get-Process explorer -ErrorAction SilentlyContinue)) { Start-Process explorer.exe }
-    "VISUALPERF explorer restarted - theme and transparency re-read together"
+    # THE SHELL IS WINDOWS' TO RELAUNCH (Winlogon AutoRestartShell), NOT THIS SCRIPT'S. The shell
+    # instance is identified by the taskbar window it owns (Shell_TrayWnd -> owning pid), never by
+    # name: `Stop-Process -Name explorer` ended every explorer, whoever started it, and then raced
+    # Winlogon's relaunch with its own Start-Process (owner 2026-10-07). That one instance is ended
+    # by its pid and the script then only WAITS for Winlogon's new instance; with AutoRestartShell=0
+    # there is no relauncher, so nothing is ended and the settings take effect at the next logon.
+    Add-Type -Namespace VP -Name U -MemberDefinition '[DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindowW(string c, string w); [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);'
+    $ars = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name AutoRestartShell -ErrorAction SilentlyContinue).AutoRestartShell
+    $shellPid = [uint32]0
+    $tray = [VP.U]::FindWindowW('Shell_TrayWnd', [NullString]::Value)   # [NullString]: a PowerShell $null marshals as "" (memory: powershell-null-string-pinvoke)
+    if ($tray -ne [IntPtr]::Zero) { [void][VP.U]::GetWindowThreadProcessId($tray, [ref]$shellPid) }
+    if ($ars -ne 1) { "VISUALPERF explorer NOT restarted: AutoRestartShell=$ars means no relauncher - the shell re-reads the theme at the next logon" }
+    elseif ($shellPid -eq 0) { 'VISUALPERF explorer NOT restarted: no Shell_TrayWnd owner found (no shell in this session?)' }
+    else {
+        Stop-Process -Id $shellPid -Force -ErrorAction SilentlyContinue
+        $deadline = (Get-Date).AddSeconds(30); $newPid = [uint32]0
+        do {
+            Start-Sleep -Milliseconds 500
+            $t2 = [VP.U]::FindWindowW('Shell_TrayWnd', [NullString]::Value)
+            if ($t2 -ne [IntPtr]::Zero) { [void][VP.U]::GetWindowThreadProcessId($t2, [ref]$newPid) }
+        } while (($newPid -eq 0 -or $newPid -eq $shellPid) -and (Get-Date) -lt $deadline)
+        if ($newPid -ne 0 -and $newPid -ne $shellPid) { "VISUALPERF explorer restarted by Winlogon (pid $shellPid -> $newPid) - theme and transparency re-read together" }
+        else { "VISUALPERF explorer ended (pid $shellPid) but Winlogon's new instance was not seen within 30 s - NOT started by this script" }
+    }
 }

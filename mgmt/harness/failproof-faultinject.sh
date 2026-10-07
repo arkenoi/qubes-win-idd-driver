@@ -97,35 +97,23 @@ if [ "$G1" != PASS-UNPROVEN ] && [ "$G1" != PASS ]; then
 fi
 
 # ---------------------------------------------------------------- agent restart, graded
-# AGENT RESTART WAITS ON A FACT, NOT A TIMER (audit 2026-09-08; same shape as gate-preflight.sh's
-# set_bits and failproof-gates.sh's set_gate - do not let them drift). D-6/D-9 used to be
-# `Start-Service; Start-Sleep 25`. Start-Service returning says nothing about the agent: the
-# watchdog reports RUNNING at once and spawns gui-agent from its own 1 s loop, so on a slow
-# session RND-8 started against no agent, while -EA SilentlyContinue hid a watchdog that never
-# started and any gui-agent that survived Stop-Process was ADOPTED by the restarted watchdog
-# (watchdog.c) - the guest then kept running under the PREVIOUS fault values and the "armed" red
-# or "disarmed" green described the old state. Now: pre-kill PIDs recorded, only a gui-agent NOT
-# among them counts (bounded 45 s poll), service status echoed and graded. The pixel witness is
-# RND-8's own shot_hash (NOCAP/NOWIN are graded there).
+# THE AGENT IS RESTARTED THROUGH THE SERVICE THAT OWNS IT, AND THE TURNOVER IS PROVEN (owner
+# 2026-10-07; same shape as gate-preflight.sh's set_bits and failproof-gates.sh's set_gate - all
+# three call guest/restart-gui-agent.ps1 through mgmt/harness/lifecycle-lib.sh, do not let them
+# drift). History: D-6/D-9 used to be `Start-Service; Start-Sleep 25` (audit 2026-09-08: a timer,
+# not a fact), then `Stop-Service; Get-Process gui-agent | Stop-Process -Force; Start-Service` with
+# a poll for a pid not seen before. That kill BY NAME raced the watchdog's own relaunch of the
+# agent it owns, the survivor was adopted, and RND-8 graded the PREVIOUS fault values - which this
+# file then excused with an "old one survived Stop-Process" INVALID branch instead of fixing. Now
+# the helper stops the QubesGuiWatchdog service (since 2026-10-03 its stop ends the agent IT
+# started, by handle), starts it, and proves a NEW gui-agent-<ts>-<pid>.log with a live pid; a
+# missing proof is RESTART INVALID-INSTRUMENT and restart_agent_checked grades it. Nothing is
+# killed, nothing is found by name. The pixel witness is RND-8's own shot_hash (NOCAP/NOWIN are
+# graded there).
+source mgmt/harness/lifecycle-lib.sh
+agent_restart_push || { log "FATAL: guest/restart-gui-agent.ps1 could not be pushed and proven on $VM - no agent restart is possible without it"; exit 2; }
 restart_agent(){  # <ps-preamble> <marker-echo-line>
-  psrun "$1
-\$old = @(Get-Process gui-agent -EA SilentlyContinue | ForEach-Object Id)
-Stop-Service QubesGuiWatchdog -Force -EA SilentlyContinue; Start-Sleep 3
-Get-Process gui-agent -EA SilentlyContinue | Stop-Process -Force; Start-Sleep 2
-\$wdErr = ''
-try { Start-Service QubesGuiWatchdog -EA Stop } catch { \$wdErr = \$_.Exception.Message }
-\$wd = (Get-Service QubesGuiWatchdog -EA SilentlyContinue).Status
-Write-Output ('WDSTART ' + \$wd + ' ' + \$wdErr)
-\$new = 0; \$sw = [Diagnostics.Stopwatch]::StartNew()
-while (\$sw.Elapsed.TotalSeconds -lt 45) {
-  \$p = @(Get-Process gui-agent -EA SilentlyContinue | Where-Object { \$old -notcontains \$_.Id })
-  if (\$p.Count -gt 0) { \$new = \$p[0].Id; break }
-  Start-Sleep -Milliseconds 500
-}
-Write-Output ('AGENTPID ' + \$new + ' after ' + [int]\$sw.Elapsed.TotalSeconds + 's')
-\$stillOld = @(Get-Process gui-agent -EA SilentlyContinue | Where-Object { \$old -contains \$_.Id })
-Write-Output ('OLDALIVE ' + \$stillOld.Count)
-$2" | grep -aE 'WDSTART|AGENTPID|OLDALIVE|ARMED|DISARMED'
+  psrun "$(agent_restart_ps "$1" "$2")" | grep -aE 'SVCSTOP|OLDLOG|WDSTART|AGENTPID|OLDALIVE|NEWLOG|RESTART|ARMED|DISARMED'
 }
 
 DISARM_PS="Remove-ItemProperty -Path '$KEY' -Name FaultCaptureExit -EA SilentlyContinue
@@ -155,12 +143,13 @@ restart_agent_checked(){  # <ps-preamble> <marker-echo-line> <marker> <context>
   echo "$out" | sed 's/^/  /' | tee -a "$OUT/failproof.log"
   echo "$out" | grep -qa 'WDSTART Running' || \
     toggle_invalid "$4" "QubesGuiWatchdog not Running after Start-Service ($(echo "$out" | grep -a WDSTART | head -1))"
-  # NO NEW AGENT + THE OLD ONE STILL ALIVE = the watchdog adopted the survivor; the fault values
-  # were never read by a fresh process. Only "no new AND no old" is the benign still-starting case.
-  if echo "$out" | grep -qa 'AGENTPID 0 '; then
-    echo "$out" | grep -qaE 'OLDALIVE [1-9]' && \
-      toggle_invalid "$4" "no new gui-agent within 45 s and the old one survived Stop-Process; the toggle never took"
-    log "  ANOMALY: watchdog Running, no NEW gui-agent within 45 s, and the old one IS gone ($4) - grading RND-8's own capture witness, not a guess"
+  # THE SERVICE RESTART MUST HAVE PRODUCED A NEW AGENT - a newer gui-agent-<ts>-<pid>.log with a
+  # live pid, the old agent gone (guest/restart-gui-agent.ps1). Anything less (no new log, the old
+  # agent surviving the service stop, the service not stopping) means the fault values were never
+  # read by a fresh process, and RND-8 would grade the old state: INVALID-INSTRUMENT, never a guess.
+  local why
+  if ! why=$(agent_restart_grade "$out"); then
+    toggle_invalid "$4" "the service restart did not produce a new agent: $why; the toggle never took"
   fi
 }
 

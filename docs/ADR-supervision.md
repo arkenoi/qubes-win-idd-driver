@@ -237,3 +237,51 @@ relaunch therefore stays for both, and their deaths are reported through 4002/40
    and the SCM restart happens.
 4. A clean boot and a clean shutdown produce ZERO notifications and no `DEATH` line (the negative control).
 5. `wevtutil gl Microsoft-Windows-TaskScheduler/Operational` reads `enabled: true` after the install.
+
+---
+
+## Rig and developer scripts (2026-10-07) - the agent is restarted through its owner, nothing is ended by name
+
+**Owner:** "if you terminate something that relaunches you need to make sure it STOPS relaunching
+beforehand ... thats why we do not kill processes by name" / "find all similar defects, fix, ship and
+retest" / "why did you miss kill-by-name during the previous sweep?" (the 2026-10-03 sweep covered SHIPPED
+scripts only; every harness and dev script kept its by-name kills).
+
+**The defect class.** A harness that needed a fresh agent did `Stop-Service QubesGuiWatchdog; Get-Process
+gui-agent | Stop-Process -Force; Start-Service` (or `.Kill()`, or `taskkill /im`) and polled for a pid it had
+not seen; the kill raced the watchdog's own relaunch of the agent it owns, the survivor was adopted, and the
+cell measured the previous state - which `failproof-gates.sh` and `gate-preflight.sh` then excused with an
+INVALID-INSTRUMENT branch for "the old one survived Stop-Process" instead of fixing. The same shape ended
+relays by name (a running pass's, relaunched by its task), control windows by `taskkill /im notepad.exe` (any
+notepad, whoever started it), the shell and the shell surface host (Winlogon's and the shell's to relaunch).
+
+**Decisions.**
+1. The GUI agent is restarted ONLY through the service that owns it, and the turnover is PROVEN:
+   `guest/restart-gui-agent.ps1` (dot-sourced or run; `Stop-GuiAgentOwner` / `Start-GuiAgentOwner` for the swap
+   scripts, `Restart-GuiAgent` otherwise) stops `QubesGuiWatchdog`, waits on the HANDLE of the pid the newest
+   `gui-agent-<ts>-<pid>.log` names, starts the service, and requires a NEWER log file with a live pid.
+   Anything less is `RESTART INVALID-INSTRUMENT <reason>` - never a kill, never a guess. The bash side is
+   `mgmt/harness/lifecycle-lib.sh` (`agent_restart_push` proves the pushed copy by hash, `agent_restart_ps`
+   composes the one round trip, `agent_restart_grade` grades it); the harness INVALID branches now read "the
+   service restart did not produce a new agent" and still fail.
+2. A control process the harness starts (notepad, chromerepro, the p5 probe) is stopped by the identity it
+   recorded when it started it - pid AND start time (`ctl_start` / `ctl_stop`) - and a leftover it did not
+   start is counted and reported, never ended.
+3. A relay a test starts is owned by handle (`guest/relay-own.ps1`, the shipped updater's shape): a port that is
+   not free is a refusal naming the owner; a running pass is ended through its TASK, never its relay.
+4. A relauncher's child is never ended bare: the shell is ended by the `Shell_TrayWnd` owner's pid and Winlogon's
+   instance is WAITED for (refused when `AutoRestartShell=0`); `ShellExperienceHost` is never ended
+   (`dismiss-toast.ps1` clears the history, which is the mechanism); the rig silencer waits its workers out and
+   reports survivors. A supervision DRILL (p3a T5/T8c) ends `etwproxy` by the pid the AGENT logged when it
+   launched it - the relaunch is what the drill measures.
+5. Enforced in code, every file of ours: `tools/lint-harness.py` L17 (kill/adopt by name) now scans agent/,
+   packaging/, guest/, mgmt/ and tools/ - PowerShell, shell, python, cmd; L18 refuses gui-agent ended by any
+   named means, any relaunched name (`RELAUNCHED`) ended by name - including a `tasklist` imagename scan followed
+   by `taskkill /pid` - and `schtasks /end` on a task whose definition carries `RestartOnFailure` without a disable
+   or delete first. Each refusal is driven by a planted violation and a negative control in
+   `tools/tests/lint-selftest.sh`.
+
+**Owed on a guest (the retest).** The helper's fail direction has been seen offline only (a wrong guest hash is
+refused; an INVALID verdict is graded rc 1; a Linux run reports `service-absent`): the on-guest fail-proof - the
+service stop leaving its agent running (a pre-4.3.34 watchdog), or no new log inside the bound - is driven on the
+rig before any harness result built on it is written as PASS.

@@ -26,8 +26,6 @@ L4-check-cannot-fail|sg1-u2-coldboot.sh:coldboot-reboot-confirmed
 L4-check-cannot-fail|sg1-u2-coldboot.sh:no-shell-phase-observed
 L4-check-cannot-fail|u2-coldboot.sh:qdbdaemon-race-fix-exercised
 L6-probe-null-deref|defect-evidence.ps1:14
-L6-probe-null-deref|deploy-gui-agent.ps1:31
-L6-probe-null-deref|deploy-relay-fix.ps1:36
 L6-probe-null-deref|pvnic-latch-readback.ps1:17
 L6-probe-null-deref|pvnic-selfprime.ps1:659
 L6-probe-null-deref|verify-running-agent.ps1:16

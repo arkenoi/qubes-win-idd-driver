@@ -23,8 +23,13 @@ $exe = Join-Path $bin  'qubes-updates-relay.exe'
 if (-not (Test-Path $src)) { $res['error'] = "source not pushed: $src"; $res['ok']=$false
                              Write-Output ("=== RESULT === " + ($res | ConvertTo-Json -Compress)); exit 1 }
 $res['exe_before'] = if (Test-Path $exe) { (Get-FileHash $exe -Algorithm SHA256).Hash.Substring(0,16) } else { 'none' }
-Get-Process qubes-updates-relay -EA SilentlyContinue | ForEach-Object { $_.Kill() }
-Start-Sleep 3
+# A relay that is serving belongs to a running updater pass (started by it, relaunched by its task) -
+# NOT this script's to end (owner 2026-10-07: never by name). It is reported by its PORT owner; a
+# locked target exe then fails the compile loudly below instead of being "freed" by a kill.
+$owner = 0
+try { $l = @(Get-NetTCPConnection -LocalPort 8082 -State Listen -ErrorAction SilentlyContinue); if ($l.Count) { $owner = [int]$l[0].OwningProcess } } catch { $owner = -1 }
+$res['relay_port_owner'] = $owner
+if ($owner -ne 0) { $res['relay_warning'] = "port 8082 is served by pid $owner (a running pass's relay; not stopped) - end that pass (schtasks /end /tn QubesWindowsUpdateScan or QubesWindowsUpdateRun) if the exe turns out locked" }
 $csc = Get-ChildItem 'C:\Windows\Microsoft.NET\Framework64\v4.0.*\csc.exe' -EA SilentlyContinue | Select-Object -First 1
 if (-not $csc) { $csc = Get-ChildItem 'C:\Windows\Microsoft.NET\Framework\v4.0.*\csc.exe' -EA SilentlyContinue | Select-Object -First 1 }
 if (-not $csc) { $res['error']='no in-box csc.exe'; $res['ok']=$false
@@ -33,7 +38,8 @@ $cscOut = & $csc.FullName /nologo /o /target:exe "/out:$exe" "$src" 2>&1
 $res['compile_output'] = (($cscOut | Out-String).Trim() -replace '\s+',' ')
 $res['exe_exists'] = Test-Path $exe
 if (Test-Path $exe) {
-  $res['exe_after'] = (Get-FileHash $exe -Algorithm SHA256).Hash.Substring(0,16)
+  $h = Get-FileHash $exe -Algorithm SHA256 -EA SilentlyContinue
+  $res['exe_after'] = if ($h -and $h.Hash) { $h.Hash.Substring(0,16) } else { 'UNREADABLE' }
   $res['exe_size']  = (Get-Item $exe).Length
   $res['exe_changed'] = ($res['exe_before'] -ne $res['exe_after'])
 }

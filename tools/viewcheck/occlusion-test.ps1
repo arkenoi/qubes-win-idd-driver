@@ -17,10 +17,17 @@
 #   phase 'hidden'  : COVER hidden -> BASE damage MUST reach past x=300
 $ErrorActionPreference = 'SilentlyContinue'
 
-Get-Process gui-agent -EA SilentlyContinue | Stop-Process -Force
-Start-Sleep 14
-$log = (Get-ChildItem 'C:\Program Files\Qubes Tools\log' -Filter 'gui-agent*.log' |
-        Sort-Object LastWriteTime -Desc | Select-Object -First 1)
+# A fresh agent, restarted THROUGH THE SERVICE THAT OWNS IT with the turnover proven - a new
+# gui-agent-<ts>-<pid>.log with a live pid (guest/restart-gui-agent.ps1, pushed next to this script
+# with tools/qtest push). Owner 2026-10-07: never `Get-Process gui-agent | Stop-Process`, which
+# raced the watchdog's own relaunch; a restart that is not proven is not a run.
+$helper = Join-Path $PSScriptRoot 'restart-gui-agent.ps1'
+if (-not (Test-Path -LiteralPath $helper)) { Write-Output 'RESTART INVALID-INSTRUMENT helper-missing: push guest/restart-gui-agent.ps1 next to this script'; exit 3 }
+. $helper
+$ra = Restart-GuiAgent
+foreach ($ln in @($ra.lines)) { Write-Output $ln }
+if (-not $ra.ok) { exit 3 }
+$log = Get-Item -LiteralPath (Join-Path $ra.log_dir $ra.new_log)
 Write-Output "LOGFILE $($log.Name)"
 
 Add-Type -AssemblyName System.Windows.Forms

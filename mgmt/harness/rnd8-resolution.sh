@@ -28,6 +28,7 @@ require_scripts guest/set-resolution.ps1 guest/run-as-user.ps1
 
 VM="${1:?usage: $0 <vm> [outdir]}"
 source mgmt/harness/vmlock.sh; vm_lock "$VM"   # one harness per guest; see vmlock.sh
+source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the notepad this run starts is stopped by its recorded identity, never by name
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/RND8-$VM}"
 mkdir -p "$OUT"
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
@@ -102,8 +103,11 @@ $m = (Get-Content $f.FullName -Tail 4000 | Select-String -Pattern 'A6CONFIGURE w
 if($m){ Write-Output ('AGENTSCREEN ' + $m.Matches[0].Groups[1].Value + 'x' + $m.Matches[0].Groups[2].Value) } else { Write-Output 'AGENTSCREEN none' }
 PS
 
-r 'cmd /c taskkill /f /im notepad.exe & exit 0' >/dev/null 2>&1
-r 'cmd /c start "" notepad.exe' >/dev/null 2>&1; sleep 14
+# A notepad left by an earlier run is NOT ours to stop (owner 2026-10-07: nothing is killed by
+# name): reported, not touched. Ours is started by handle and stopped by that identity at the end.
+left=$(r 'cmd /c tasklist /nh /fo csv /fi "imagename eq notepad.exe"' | grep -aci '^"notepad\.exe"'); left=${left:-0}
+[ "$left" -gt 0 ] && log "  WARNING: $left notepad.exe process(es) from an earlier run are on the guest - not started by this run, not stopped"
+read -r _ NP_PID NP_START <<< "$(ctl_start notepad)"; sleep 14
 
 # ---------------------------------------------------------------- per-mode
 for M in $MODES; do
@@ -278,6 +282,6 @@ else
 fi
 
 printf 'RND-8\tdom0-driven-resize\tBLOCKED\tlocal.WinResize returns no_window even with windows present; dom0 must reinstall 10-install-resize-service.sh v5 before this half can run\t%s\n' "$EV" >> "$V"
-r 'cmd /c taskkill /f /im notepad.exe & exit 0' >/dev/null 2>&1
+log "  notepad: $(ctl_stop "${NP_PID:-0}" "${NP_START:-0}")"
 log "=== finished rc=$rc ==="
 exit $rc

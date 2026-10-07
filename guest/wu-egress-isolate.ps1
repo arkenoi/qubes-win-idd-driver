@@ -18,11 +18,14 @@ Write-Output '=== RESULT ==='
 $IS = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
 Set-ItemProperty -Path $IS -Name ProxyEnable -Value 1 -Type DWord
 Set-ItemProperty -Path $IS -Name ProxyServer -Value '127.0.0.1:8082'
-if (-not (Get-Process qubes-updates-relay -EA SilentlyContinue)) {
-    Start-Process -FilePath $relay -ArgumentList '--listen','8082','--target','@default','--log',$wu -WindowStyle Hidden
-    Start-Sleep -Seconds 3
-}
-Write-Output ("relay running = {0}" -f @(Get-Process qubes-updates-relay -EA SilentlyContinue).Count)
+# RELAY OWNED BY HANDLE (guest/relay-own.ps1 next to this script): the old shape ADOPTED whatever
+# was named qubes-updates-relay and started its own only when none was; now a port that is not free
+# is a refusal naming its owner - never adopted, never killed (owner 2026-10-07).
+$ro = Join-Path $PSScriptRoot 'relay-own.ps1'
+if (-not (Test-Path -LiteralPath $ro)) { Write-Output 'relay-own.ps1 not pushed next to this script (tools/qtest push guest/relay-own.ps1)'; exit 3 }
+. $ro
+try { [void](Start-OwnRelay -Exe $relay -Arguments @('--listen','8082','--target','@default','--log',$wu) -SettleSec 3); Write-Output ("relay running = pid {0} (started here)" -f $script:OwnRelayPid) }
+catch { Write-Output $_.Exception.Message; exit 2 }
 
 # 1. .NET stack through the explicit proxy - this is our downloader's path.
 foreach ($u in 'https://www.catalog.update.microsoft.com/Search.aspx?q=KB5121003',
@@ -58,5 +61,5 @@ if (Test-Path $rl) {
 
 & netsh winhttp reset proxy | Out-Null
 Set-ItemProperty -Path $IS -Name ProxyEnable -Value 0 -Type DWord
-Get-Process qubes-updates-relay -EA SilentlyContinue | ForEach-Object { $_.Kill() }
+Stop-OwnRelay
 Write-Output 'proxy torn down'

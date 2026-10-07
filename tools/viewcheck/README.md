@@ -18,6 +18,9 @@ tools/viewcheck/bothshot.sh <tag>          # capture both sides
 tools/qtest pushrun tools/viewcheck/enumwin.ps1   # window rects -> windows.json
 python3 tools/compare-views.py <tag>-guest.png <tag>-dom0/ windows.json
 ```
+`occlusion-test.ps1` and `protorun.ps1` restart the agent through `guest/restart-gui-agent.ps1` (the
+service that owns it, turnover proven - never a kill by name): push that file next to them
+(`tools/qtest push guest/restart-gui-agent.ps1`) or they refuse with `RESTART INVALID-INSTRUMENT helper-missing`.
 
 ## Why this exists
 Four rendering bugs in this project were found by the user driving the VM by hand, not by

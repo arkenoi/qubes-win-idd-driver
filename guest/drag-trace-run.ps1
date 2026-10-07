@@ -41,8 +41,9 @@ Set-ItemProperty $k -Name DragSim   -Value $(if ($Sim) { 1 } else { 0 }) -Type D
 Set-ItemProperty $k -Name DragSimMs -Value $DurationMs -Type DWord
 Set-ItemProperty $k -Name DragSimGo -Value 0 -Type DWord
 
-# A window to drag. Reused if one is already open, so a hand-drag run does not have its
-# target replaced underneath the person about to drag it.
+# A window to drag, started by THIS run and held by handle (owner 2026-10-07: a notepad found by
+# name is someone else's - never adopted as the target). A hand-drag run drags the window this
+# script brings up; nothing already open is touched or replaced.
 Add-Type @"
 using System;using System.Runtime.InteropServices;
 public class DTR {
@@ -50,27 +51,33 @@ public class DTR {
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
 }
 "@
-$np = Get-Process notepad -EA SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-if (-not $np) {
-    Start-Process notepad
-    Start-Sleep -Seconds 4
-    $np = Get-Process notepad -EA SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-}
+$np = Start-Process notepad -PassThru -EA SilentlyContinue
+$deadline = (Get-Date).AddSeconds(10)
+while ($np -and (Get-Date) -lt $deadline) { try { $np.Refresh() } catch { }; if ($np.MainWindowHandle -ne 0) { break }; Start-Sleep -Milliseconds 250 }
+if ($np -and $np.MainWindowHandle -eq 0) { $np = $null }
 if ($np) {
     [DTR]::MoveWindow($np.MainWindowHandle, 600, 400, 900, 650, $true) | Out-Null
     [DTR]::SetForegroundWindow($np.MainWindowHandle) | Out-Null
 }
 
-# Restart the agent so the switches above are actually in force. The watchdog respawns it;
-# stopping the SERVICE would not recycle the agent (recorded trap).
-Get-Process gui-agent -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
-Start-Sleep -Seconds 10
-$proc = Get-Process gui-agent -EA SilentlyContinue | Select-Object -First 1
+# Restart the agent so the switches above are actually in force - THROUGH THE SERVICE THAT OWNS
+# IT, turnover proven (guest/restart-gui-agent.ps1, pushed next to this script). The "trap" this
+# comment used to record - "stopping the SERVICE would not recycle the agent" - is RETIRED: since
+# 2026-10-03 (watchdog.c StopOwnAgent) the service stop ends the agent it started and the start
+# launches a fresh one; the old `Get-Process gui-agent | Stop-Process` raced that relaunch (owner
+# 2026-10-07: never by name).
+$helper = Join-Path $PSScriptRoot 'restart-gui-agent.ps1'
+if (-not (Test-Path -LiteralPath $helper)) { Write-Output '=== RESULT ==='; Write-Output 'RESTART INVALID-INSTRUMENT helper-missing: push guest/restart-gui-agent.ps1 next to this script'; Write-Output '=== END ==='; exit 3 }
+. $helper
+$ra = Restart-GuiAgent
+foreach ($ln in @($ra.lines)) { Write-Output $ln }
+if (-not $ra.ok) { Write-Output '=== RESULT ==='; Write-Output ("RESTART INVALID-INSTRUMENT " + $ra.reason); Write-Output '=== END ==='; exit 3 }
+$proc = Get-Process -Id $ra.new_pid -EA SilentlyContinue
 $hash = if ($proc -and $proc.Path) { (Get-FileHash $proc.Path -Algorithm SHA256).Hash.Substring(0,16) } else { '' }
 
-# Read only what THIS episode writes: remember the log length now.
-$log = Get-ChildItem 'Q:\Qubes Logs\gui-agent-*.log' -EA SilentlyContinue |
-       Sort-Object LastWriteTime -Descending | Select-Object -First 1
+# Read only what THIS episode writes: remember the log length now (the NEW agent's log, which
+# the restart proved).
+$log = Get-Item -LiteralPath (Join-Path $ra.log_dir $ra.new_log) -EA SilentlyContinue
 $before = 0
 if ($log) { $before = @(Get-Content -LiteralPath $log.FullName -EA SilentlyContinue).Count }
 

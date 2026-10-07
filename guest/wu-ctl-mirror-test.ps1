@@ -20,6 +20,15 @@ $L += ("updater hash16=" + (Get-FileHash $agent -Algorithm SHA256).Hash.Substrin
 $rootBefore = (Get-ItemProperty -Path $key -Name RootDirURL -EA SilentlyContinue).RootDirURL
 $L += ("RootDirURL before: [" + $rootBefore + "]")
 
+# 0. the port must be FREE for the pass's own relay to bind. A relay already serving belongs to a
+# running pass and is NOT this test's to end (owner 2026-10-07: it used to be killed by name here,
+# before and after the pass): refuse and name the owner instead - BEFORE the mirror is touched.
+$ro = Join-Path $PSScriptRoot 'relay-own.ps1'
+if (-not (Test-Path -LiteralPath $ro)) { $L += 'relay-own.ps1 not pushed next to this script (tools/qtest push guest/relay-own.ps1)'; $L | Out-File -LiteralPath $out -Encoding ASCII; exit 3 }
+. $ro
+$owner = Get-RelayPortOwner
+if ($owner -ne 0) { $L += (Format-RelayRefusal $owner); $L | Out-File -LiteralPath $out -Encoding ASCII; exit 2 }
+
 # 1. make the mirror PRISTINE (no cabs at all)
 if (Test-Path $stash) { Remove-Item -LiteralPath $stash -Recurse -Force -EA SilentlyContinue }
 if (Test-Path $dir) { Move-Item -LiteralPath $dir -Destination $stash -Force -EA SilentlyContinue }
@@ -34,15 +43,14 @@ $L += ("mirror emptied: " + (@(Get-ChildItem $dir -EA SilentlyContinue).Count) +
 # another pass completed recently - which silently made an earlier version of this test measure
 # nothing at all. An explicit pass always runs.
 $env:QUBES_UPDATES_ALLOW = 'ctl-mirror-test.invalid'
-Get-Process qubes-updates-relay -EA SilentlyContinue | ForEach-Object { $_.Kill() }
-Start-Sleep 2
 try {
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $agent -Action scan `
       -StatusFile 'C:\ProgramData\Qubes\ctl-test-status.json' `
       -WorkDir 'C:\ProgramData\Qubes\ctl-test-wu' 2>&1 | Out-Null
 } catch { $L += ("pass threw: " + $_.Exception.Message) }
 Remove-Item Env:\QUBES_UPDATES_ALLOW -EA SilentlyContinue
-Get-Process qubes-updates-relay -EA SilentlyContinue | ForEach-Object { $_.Kill() }
+# The pass's relay leaves with the pass (--parent-pid): wait for the port to free, never end it.
+if (-not (Wait-RelayPortFree -TimeoutSec 20)) { $L += ("WARN: port 8082 still served by pid " + (Get-RelayPortOwner) + " after the pass - not this test's to stop") }
 
 $rootAfter = (Get-ItemProperty -Path $key -Name RootDirURL -EA SilentlyContinue).RootDirURL
 $L += ("RootDirURL after:  [" + $rootAfter + "]")

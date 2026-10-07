@@ -38,6 +38,7 @@ import base64,sys; print(base64.b64encode(sys.stdin.read().encode('utf-16-le')).
   r "cmd /c powershell -NoProfile -EncodedCommand $b"; }
 log(){ echo "$(date -u +%H:%M:%S) prom[$VM]: $*" | tee -a "$OUT/promoted.log"; }
 V="$OUT/verdicts.tsv"; EV=$(basename "$OUT"); rc=0
+source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the chromerepro this run starts is stopped by its recorded identity, never by name
 emit(){ printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$EV" >> "$V"; [ "$3" = PASS-UNPROVEN ] || [ "$3" = PASS ] || rc=1; }
 
 KLASS=$(qvm-prefs "$VM" klass 2>/dev/null); NETVM=$(qvm-prefs "$VM" netvm 2>/dev/null)
@@ -168,18 +169,22 @@ if [ ! -f artifacts/chromerepro.exe ]; then
   log "  -> INVALID-INSTRUMENT: artifacts/chromerepro.exe absent"
   emit PROM shadow-strips-dropped INVALID-INSTRUMENT "chromerepro.exe not built"
 else
-  r 'cmd /c taskkill /f /im chromerepro.exe 2>nul & exit 0' >/dev/null 2>&1; sleep 3
+  # A chromerepro from an earlier run is NOT ours to stop (owner 2026-10-07: nothing is killed by
+  # name). It is reported, and the base capture below includes its windows, so the delta still
+  # measures only the instance THIS run starts - by handle, stopped by that identity (lifecycle-lib.sh).
+  left=$(r 'cmd /c tasklist /nh /fo csv /fi "imagename eq chromerepro.exe"' | grep -aci '^"chromerepro\.exe"'); left=${left:-0}
+  [ "$left" -gt 0 ] && log "  WARNING: $left chromerepro.exe process(es) from an earlier run are running - not started by this run, not stopped; their windows are in the base count"
   base_t="$OUT/chrome-base.tar"; rm -f "$base_t"; q shot "$base_t" >/dev/null 2>&1
   base_n=$(tar tf "$base_t" 2>/dev/null | grep -c '\.png$'); base_n=${base_n:-0}
   q push artifacts/chromerepro.exe >/dev/null 2>&1
-  q run 'cmd /c start "" C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\chromerepro.exe' >/dev/null 2>&1
+  read -r _ CR_PID CR_START <<< "$(ctl_start 'C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\chromerepro.exe')"
   sleep 20
   hw=$(T=300 q pushrun guest/enumwin.ps1 | tr -d '\r' | grep -aoE 'CHROMEREPRO_HWNDS [0-9]+' | awk '{print $2}')
   af_t="$OUT/chrome-after.tar"; rm -f "$af_t"; q shot "$af_t" >/dev/null 2>&1
   af_n=$(tar tf "$af_t" 2>/dev/null | grep -c '\.png$'); af_n=${af_n:-0}
   delta=$(( af_n - base_n ))
   log "  guest HWNDs=${hw:-?}   dom0 windows ${base_n} -> ${af_n}  (delta ${delta})"
-  r 'cmd /c taskkill /f /im chromerepro.exe 2>nul & exit 0' >/dev/null 2>&1
+  log "  chromerepro: $(ctl_stop "${CR_PID:-0}" "${CR_START:-0}")"
   if [ -z "$hw" ] || [ "${hw:-0}" -lt 2 ]; then
     log "  -> INVALID-VACUOUS: chromerepro did not create its compound window (HWNDs=${hw:-0}),"
     log "     so nothing was offered to the filter and 'only 1 mapped' proves nothing."

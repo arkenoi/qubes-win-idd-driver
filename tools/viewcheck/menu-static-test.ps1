@@ -13,9 +13,11 @@
 param([int]$HoldSeconds = 45)
 $ErrorActionPreference = 'SilentlyContinue'
 
-Get-Process notepad -EA SilentlyContinue | Stop-Process -Force
-Start-Sleep -Seconds 2
-Start-Process notepad
+# A notepad from an earlier run is NOT ours to stop (owner 2026-10-07: nothing is killed by name):
+# reported, not touched. Ours is started by handle and ITS main window is the owner below.
+$left = @(Get-Process notepad -EA SilentlyContinue)
+if ($left.Count) { Write-Output ("WARN notepad from an earlier run is open (pid " + (($left | ForEach-Object Id) -join ',') + ") - not started here, not stopped") }
+$np = Start-Process notepad -PassThru
 Start-Sleep -Seconds 3
 
 Add-Type -TypeDefinition @"
@@ -27,8 +29,10 @@ public class K {
   [StructLayout(LayoutKind.Sequential)] public struct R { public int l,t,rr,b; }
 }
 "@
-$h = [K]::FindWindowW("Notepad", $null)
-if ($h -eq [IntPtr]::Zero) { "RESULT=ERROR no notepad"; exit 1 }
+# the window of the notepad THIS run started - never FindWindow by class, which picks any notepad
+$h = [IntPtr]::Zero
+if ($np) { try { $np.Refresh(); $h = $np.MainWindowHandle } catch { } }
+if ($h -eq [IntPtr]::Zero) { "RESULT=ERROR no notepad (the one started here has no main window - handed over to another instance?)"; exit 1 }
 [void][K]::SetForegroundWindow($h)
 Start-Sleep -Seconds 1
 $r = New-Object K+R; [void][K]::GetWindowRect($h, [ref]$r)

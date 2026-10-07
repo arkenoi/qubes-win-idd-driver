@@ -32,6 +32,7 @@ require_scripts guest/set-resolution.ps1 guest/wu-boot-acceptance-check.ps1 gues
 
 VM="${1:?usage: $0 <vm> [outdir]}"
 source mgmt/harness/vmlock.sh; vm_lock "$VM"   # one harness per guest; see vmlock.sh
+source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the notepad this run starts is stopped by its recorded identity, never by name
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/SG1U2-$VM}"
 mkdir -p "$OUT"
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
@@ -127,10 +128,10 @@ log "  COLD BOOT PROVEN (boot time advanced)"
 
 # ------------------------------------------------------------------ negative control
 log "=== negative control: a normal window must still map (the filter must not be a brick) ==="
-r 'cmd /c start "" notepad.exe' >/dev/null 2>&1; sleep 16
+read -r _ NP_PID NP_START <<< "$(ctl_start notepad)"; sleep 16   # by handle (lifecycle-lib.sh)
 nd=$(rm -f "$TMP/n.tar"; q shot "$TMP/n.tar" >/dev/null 2>&1; tar tf "$TMP/n.tar" 2>/dev/null | grep -c '\.png$')
 log "  notepad mapped: ${nd:-0} window(s)"
-r 'cmd /c taskkill /f /im notepad.exe' >/dev/null 2>&1
+log "  notepad: $(ctl_stop "${NP_PID:-0}" "${NP_START:-0}")"
 
 # ------------------------------------------------------------------ the agent's own wire log
 log "=== the agent's wire log for THIS boot ==="

@@ -21,6 +21,7 @@
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver
 source .claude/skills/win-guest-e2e/e2e-lib.sh
+source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the notepad each check starts is stopped by its recorded identity, never by name
 # Evidence goes somewhere DURABLE. This used to be a per-job scratch directory, so every artefact
 # a run produced - shots, logs, the run ledger - was deleted with the job that made it.
 T="${STAB_OUT:-$HOME/qwt-accept/stability}"; S=$T/stability; mkdir -p $S
@@ -68,7 +69,8 @@ w,h=struct.unpack('>II',d[16:24]); print(w,h)" "$1" 2>/dev/null; }
 # left the one check that matters (no host-sized window) with nothing to look at.
 check_windows(){ # $1=label  -> sets WCOUNT
   local lbl=$1 f w h big=0
-  timeout -k 5 45 ./tools/qtest run 'cmd /c start "" notepad.exe' >/dev/null 2>&1
+  # T is this file's OUTPUT DIR, so the lib's per-call timeout is given explicitly
+  local nppid npstart; read -r _ nppid npstart <<< "$(T=45 ctl_start notepad)"
   # POLL, do not sleep a fixed amount. On an AppVM's first cold boot notepad can take longer than
   # any constant, and a single early shot then reports "capture failed" for a guest that is simply
   # still starting - one such false failure in the 2026-08-28 run.
@@ -89,7 +91,7 @@ check_windows(){ # $1=label  -> sets WCOUNT
     say "  $lbl: $(basename $f) ${w}x${h}"
     if [ "$w" -ge $(( HOSTW * 99 / 100 )) ] && [ "$h" -ge $(( HOSTH * 99 / 100 )) ]; then big=1; fi
   done
-  timeout -k 5 45 ./tools/qtest run 'cmd /c taskkill /f /im notepad.exe' >/dev/null 2>&1
+  say "  notepad: $(T=45 ctl_stop "${nppid:-0}" "${npstart:-0}")"
   [ "$big" = 0 ] || return 2
   [ "$WCOUNT" -gt 0 ] || return 3   # notepad was opened: zero windows now means a real failure
   return 0

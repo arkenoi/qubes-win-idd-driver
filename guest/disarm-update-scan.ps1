@@ -8,17 +8,21 @@
 #
 # The disarm itself is a P3 precondition: a boot+2min scan raises the proxy and churns qrexec, which
 # is a named wedge trigger under rendering load. Disabling the task does NOT stop a pass that is
-# already running, so a live relay is killed too.
+# already running, so a RUNNING pass is ended through its TASK - the owner of its relay, which exits
+# with it (--parent-pid). The relay itself is never stopped by name (owner 2026-10-07: that was any
+# process so named, a Run-task pass's included); what listens on 8082 afterwards is read by PORT
+# and reported, never touched.
 $ErrorActionPreference = 'Continue'
 $t = Get-ScheduledTask -TaskName QubesWindowsUpdateScan -EA SilentlyContinue
 if (-not $t) { Write-Output 'SCAN_TASK ABSENT'; Write-Output 'DISARMED True'; exit 0 }
 $i = Get-ScheduledTaskInfo -TaskName QubesWindowsUpdateScan -EA SilentlyContinue
 Write-Output ('SCAN_BEFORE state=' + $t.State + ' nextrun=' + $i.NextRunTime)
 & schtasks /change /tn QubesWindowsUpdateScan /disable *>$null
-$p = Get-Process qubes-updates-relay -EA SilentlyContinue
-if ($p) { Write-Output ('RELAY_RUNNING ' + @($p).Count + ' - stopping'); $p | Stop-Process -Force -EA SilentlyContinue }
+if ("$($t.State)" -eq 'Running') { Write-Output 'SCAN_RUNNING - ending the task (its relay leaves with it)'; & schtasks /end /tn QubesWindowsUpdateScan *>$null }
 Start-Sleep -Seconds 2
 $t2 = Get-ScheduledTask -TaskName QubesWindowsUpdateScan -EA SilentlyContinue
 Write-Output ('SCAN_AFTER state=' + $t2.State)
-Write-Output ('RELAY_AFTER ' + @(Get-Process qubes-updates-relay -EA SilentlyContinue).Count)
+$owner = 0
+try { $l = @(Get-NetTCPConnection -LocalPort 8082 -State Listen -ErrorAction SilentlyContinue); if ($l.Count) { $owner = [int]$l[0].OwningProcess } } catch { $owner = -1 }
+Write-Output ('RELAY_AFTER ' + $(if ($owner -gt 0) { "port 8082 served by pid $owner - not this script's to stop" } elseif ($owner -eq 0) { '0' } else { 'unreadable' }))
 Write-Output ('DISARMED ' + ($t2.State -eq 'Disabled'))

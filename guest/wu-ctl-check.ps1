@@ -15,10 +15,14 @@ $relay = 'C:\Program Files\Qubes Tools\bin\qubes-updates-relay.exe'
 $wu    = 'C:\ProgramData\Qubes\wu'
 $proxy = 'http://127.0.0.1:8082'
 Write-Output '=== RESULT ==='
-if (-not (Get-Process qubes-updates-relay -EA SilentlyContinue)) {
-    Start-Process -FilePath $relay -ArgumentList '--listen','8082','--target','@default','--log',$wu -WindowStyle Hidden
-    Start-Sleep -Seconds 3
-}
+# RELAY OWNED BY HANDLE (owner 2026-10-07; the shape of guest/relay-own.ps1, inlined): the old shape ADOPTED
+# whatever was named qubes-updates-relay. A port that is not free is a REFUSAL naming its owner - never
+# adopted, never killed; ours leaves with this script (--parent-pid).
+$owner = 0
+try { $l = @(Get-NetTCPConnection -LocalPort 8082 -State Listen -ErrorAction SilentlyContinue); if ($l.Count) { $owner = [int]$l[0].OwningProcess } } catch { $owner = -1 }
+if ($owner -ne 0) { Write-Output "REFUSED: port 8082 is owned by pid $owner (not this script's) - nothing started, nothing adopted"; exit 2 }
+$ownRelay = Start-Process -FilePath $relay -ArgumentList '--listen','8082','--target','@default','--log',$wu,'--parent-pid',"$PID" -WindowStyle Hidden -PassThru
+Start-Sleep -Seconds 3
 
 $urls = @(
     'http://ctldl.windowsupdate.com/msdownload/update/v3/static/trustedr/en/disallowedcertstl.cab',

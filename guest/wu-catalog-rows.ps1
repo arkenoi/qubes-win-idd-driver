@@ -45,10 +45,15 @@ function W(`$m){ Add-Content -LiteralPath '$out' -Value `$m }
 `$IS = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
 Set-ItemProperty -Path `$IS -Name ProxyEnable -Value 1 -Type DWord
 Set-ItemProperty -Path `$IS -Name ProxyServer -Value '127.0.0.1:8082'
-if (-not (Get-Process qubes-updates-relay -EA SilentlyContinue)) {
-    Start-Process -FilePath '$RelayExe' -ArgumentList '--listen','8082','--target','@default','--log','$WorkDir' -WindowStyle Hidden
-    Start-Sleep -Seconds 3
-}
+# RELAY OWNED BY HANDLE (the shape of guest/relay-own.ps1, inlined because this worker runs from the
+# work dir as a scheduled task; owner 2026-10-07): the port's owner is read first - a port that is not
+# free is a refusal naming the owner, never adopted (the old shape served through whatever was NAMED
+# qubes-updates-relay), never killed; the relay this worker starts is the only one it stops.
+`$owner = 0
+try { `$l = @(Get-NetTCPConnection -LocalPort 8082 -State Listen -ErrorAction SilentlyContinue); if (`$l.Count) { `$owner = [int]`$l[0].OwningProcess } } catch { `$owner = -1 }
+if (`$owner -ne 0) { W ("REFUSED: port 8082 is owned by pid " + `$owner + " (not this worker's) - nothing started, nothing adopted"); W 'DONE'; exit 2 }
+`$ownRelay = Start-Process -FilePath '$RelayExe' -ArgumentList '--listen','8082','--target','@default','--log','$WorkDir','--parent-pid',"`$PID" -WindowStyle Hidden -PassThru
+Start-Sleep -Seconds 3
 
 `$rx = [regex]"(?is)id='([0-9a-fA-F\-]{36})_link'[^>]*>(.*?)</a>"
 `$runs = @()
@@ -119,7 +124,8 @@ if (`$runs.Count -ge 2) {
 
 & netsh winhttp reset proxy | Out-Null
 Set-ItemProperty -Path `$IS -Name ProxyEnable -Value 0 -Type DWord
-Get-Process qubes-updates-relay -EA SilentlyContinue | ForEach-Object { `$_.Kill() }
+# only the relay THIS worker started, by its handle
+if (`$ownRelay) { try { if (-not `$ownRelay.HasExited) { `$ownRelay.Kill(); [void]`$ownRelay.WaitForExit(10000) } } catch { } }
 W 'DONE'
 "@
 $wp = Join-Path $WorkDir 'catalog-rows-worker.ps1'

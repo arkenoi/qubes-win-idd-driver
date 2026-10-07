@@ -37,7 +37,15 @@ CONFIGS=(
 )
 
 echo "== ablation on $VM, $ROUNDS rounds, out=$OUTDIR"
-qt push "$HERE/guest/phase-cpu-bench.ps1" "$HERE/instrumentation/drag-harness.ps1" >/dev/null 2>&1
+qt push "$HERE/guest/phase-cpu-bench.ps1" "$HERE/instrumentation/drag-harness.ps1" "$HERE/guest/restart-gui-agent.ps1" >/dev/null 2>&1
+# The agent is restarted THROUGH THE SERVICE THAT OWNS IT, with the turnover proven - a new
+# gui-agent-<ts>-<pid>.log with a live pid (guest/restart-gui-agent.ps1). Owner 2026-10-07: the
+# old `Get-Process gui-agent | Stop-Process -Force; Start-Sleep 12` raced the watchdog's own
+# relaunch, so a configuration could be measured on the survivor. Not proven = not measured.
+restart_agent(){  # <tag> -> rc 1 when the restart was not proven
+    qt run "powershell -NoProfile -ExecutionPolicy Bypass -File $IN\\restart-gui-agent.ps1" > "$OUTDIR/$1.restart" 2>&1
+    grep -qa '^RESTART ok' "$OUTDIR/$1.restart" || { echo "   INVALID: agent restart not proven ($(grep -a '^RESTART' "$OUTDIR/$1.restart" | head -1))"; return 1; }
+}
 
 # Every knob any configuration touches, reset before each run, so a configuration can never
 # inherit a switch the previous one set. Forgetting this is how a "ladder" measures itself.
@@ -60,7 +68,7 @@ run_cfg() {  # run_cfg <name> <knobspec> <round>
     grep -q KNOBS_SET "$OUTDIR/$tag.knobs" || { echo "   INVALID: knob write failed"; return 1; }
 
     # Config is read at agent Init, so the agent must be restarted for it to be in force.
-    qt run "powershell -NoProfile -Command \"Get-Process gui-agent -EA SilentlyContinue | Stop-Process -Force; Start-Sleep -Seconds 12\"" >/dev/null 2>&1
+    restart_agent "$tag" || return 1
     sleep 6
 
     qt run "powershell -NoProfile -ExecutionPolicy Bypass -File $IN\\phase-cpu-bench.ps1" \
@@ -84,7 +92,7 @@ done
 # Leave the guest on shipped defaults: an ablation that leaves a knob set poisons whatever
 # runs next on this guest, and the next thing is usually someone judging by feel.
 qt run "$(for k in "${ALL_KNOBS[@]}"; do printf 'reg delete "%s" /v %s /f >nul 2>&1 & ' "$KEY" "$k"; done)echo RESTORED" >/dev/null 2>&1
-qt run "powershell -NoProfile -Command \"Get-Process gui-agent -EA SilentlyContinue | Stop-Process -Force\"" >/dev/null 2>&1
+restart_agent "restore-defaults" || echo "   WARNING: the final restart onto shipped defaults was not proven - the guest may still run the last configuration"
 
 echo "== summary (drag, % of one core)"
 python3 "$HERE/tools/bench-ablate-summary.py" "$OUTDIR" | tee "$OUTDIR/SUMMARY.txt"

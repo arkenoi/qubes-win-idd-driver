@@ -14,7 +14,8 @@
 #   -Mode On     stop background services (recording each one's state and start type), disable scheduled
 #                maintenance, cancel a running Defender scan, try to switch Defender real-time protection off
 #                (Tamper Protection may refuse - reported as RTP=STILL-ON, never hidden) and add scan exclusions for
-#                the measurement's own paths, end known background workers. Prints one line per action.
+#                the measurement's own paths, then WAIT OUT the known background workers (never ended - each is a
+#                service's or a task's child; a survivor is reported and shows in -Mode Check). One line per action.
 #   -Mode Check  sample every process for -Seconds; QUIET=1 when no process outside the measurement's own set used
 #                more than -MaxPct % of one core; prints the busiest processes either way. -Exempt a,b,c: process
 #                names whose load IS the measurement (the scene's apps, DWM, the agent under test) - excluded from the
@@ -74,11 +75,18 @@ if ($Mode -eq 'On') {
         Write-Output ("DEFENDER RTP=" + $(if ($st.RealTimeProtectionEnabled) { 'STILL-ON' } else { 'OFF' }) + " tamper=" + $st.IsTamperProtected +
                       " exclusions-added=" + $state.addedExclusions.Count)
     } catch { Write-Output "DEFENDER not changed ($($_.Exception.Message.Split([char]10)[0]))" }
-    foreach ($w in $workers) {
-        foreach ($p in @(Get-Process -Name $w -ErrorAction SilentlyContinue)) {
-            try { $p.Kill(); Write-Output "ENDED $w/$($p.Id)" } catch { Write-Output "REFUSED end $w/$($p.Id)" }
-        }
-    }
+    # THE WORKERS ARE WAITED OUT, NOT ENDED (owner 2026-10-07: nothing is killed by name, and each of these is the
+    # child of a service or a scheduled task that relaunches it). Their owners were stopped or disabled above
+    # (WSearch for the Search* hosts, maintenance for the rest), so they exit on their own; one bounded wait, then
+    # whatever still runs is REPORTED, never ended - it shows in -Mode Check as noise, which is the honest answer.
+    $deadline = (Get-Date).AddSeconds(20)
+    do {
+        $still = @(foreach ($w in $workers) { foreach ($p in @(Get-Process -Name $w -ErrorAction SilentlyContinue)) { "$w/$($p.Id)" } })
+        if ($still.Count -eq 0) { break }
+        Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+    if ($still.Count) { Write-Output ("SURVIVOR workers still running, not started here and not ended: " + ($still -join ',')) }
+    else { Write-Output 'WORKERS gone' }
     & $save
     Write-Output "STATE saved to $StateFile"
     exit 0

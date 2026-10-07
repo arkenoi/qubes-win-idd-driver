@@ -38,12 +38,13 @@ public class Drag {
 }
 '@
 
-$p = Get-Process $ProcName -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-if (-not $p) {
-    Start-Process notepad; Start-Sleep -Seconds 2
-    $p = Get-Process $ProcName -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-}
-if (-not $p) { Write-Output '=== RESULT ==='; @{ ok=$false; error='no target window' } | ConvertTo-Json; exit 1 }
+# The drag target is a window THIS run started, by handle (owner 2026-10-07: a process found by name is someone
+# else's - never adopted as ours). A bounded wait for its main window replaces the old reuse-or-start.
+$p = Start-Process $ProcName -PassThru -ErrorAction SilentlyContinue
+$deadline = (Get-Date).AddSeconds(10)
+while ($p -and (Get-Date) -lt $deadline) { try { $p.Refresh() } catch { }; if ($p.MainWindowHandle -ne 0) { break }; Start-Sleep -Milliseconds 250 }
+if ($p -and $p.MainWindowHandle -eq 0) { $p = $null }
+if (-not $p) { Write-Output '=== RESULT ==='; @{ ok=$false; error='no target window (the process started here showed no main window within 10 s)' } | ConvertTo-Json; exit 1 }
 $h = $p.MainWindowHandle
 [Drag]::SetForegroundWindow($h) | Out-Null
 Start-Sleep -Milliseconds 300

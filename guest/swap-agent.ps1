@@ -68,22 +68,27 @@ if ($NewNotifhost) {
     Write-Output ("NOTIF_HASH_PUSHED=" + (Hash16 $NewNotifhost))
 }
 
-$svc = Get-Service QubesGuiWatchdog -ErrorAction SilentlyContinue
-if ($svc) {
-    Stop-Service QubesGuiWatchdog -Force -ErrorAction SilentlyContinue
-    Write-Output ("WATCHDOG_STOPPED=" + (Get-Service QubesGuiWatchdog).Status)
-}
-Get-Process gui-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 3
+# The agent is stopped THROUGH THE SERVICE THAT OWNS IT and proven gone by handle (Stop-GuiAgentOwner in
+# guest/restart-gui-agent.ps1, pushed next to this script); the swap happens between that and
+# Start-GuiAgentOwner, which proves the NEW agent by its log turnover. Owner 2026-10-07: never
+# `Get-Process gui-agent | Stop-Process`, which was any process so named and raced the watchdog's relaunch.
+$helper = Join-Path $PSScriptRoot 'restart-gui-agent.ps1'
+if (-not (Test-Path -LiteralPath $helper)) { Write-Output 'FAIL: restart-gui-agent.ps1 not pushed next to this script (tools/qtest push guest/restart-gui-agent.ps1)'; exit 1 }
+. $helper
+$svcStop = Stop-GuiAgentOwner
+foreach ($ln in @($svcStop.lines)) { Write-Output $ln }
+$svc = ($svcStop.service -ne 'absent')
+if ($svc) { Write-Output ("WATCHDOG_STOPPED=" + $(if ($svcStop.svc_stopped) { 'Stopped' } else { 'NOT-STOPPED' })) }
 if ($StopHelpers) {
-    $h = Get-OurHelpers
-    $h | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 1
-    $left = Get-OurHelpers
-    Write-Output ("HELPERS_STOPPED=" + (($h | ForEach-Object { '{0}:{1}' -f $_.ProcessName, $_.Id }) -join ','))
+    # The helpers are the AGENT's children: its exit path tells them to leave, so after the service stop they
+    # are WAITED OUT, bounded, and a survivor is REPORTED - never stopped by this script, which did not start
+    # them (owner 2026-10-07). A survivor that still holds its exe makes the copy below fail loudly.
+    $deadline = (Get-Date).AddSeconds(15)
+    do { $left = @(Get-OurHelpers); if (-not $left.Count) { break }; Start-Sleep -Milliseconds 500 } while ((Get-Date) -lt $deadline)
+    Write-Output ("HELPERS_GONE=" + $(if ($left.Count) { 'no' } else { 'yes' }))
     # Loud, not fatal: exiting here would leave the guest with no agent at all. A helper that survived is
     # in the next repetition's FAMILY list, and the summariser voids a stock repetition that counted one.
-    if ($left.Count) { Write-Output ("WARN: helpers still running: " + (($left | ForEach-Object { '{0}:{1}' -f $_.ProcessName, $_.Id }) -join ',')) }
+    if ($left.Count) { Write-Output ("WARN: helpers still running (not ended by this script): " + (($left | ForEach-Object { '{0}:{1}' -f $_.ProcessName, $_.Id }) -join ',')) }
 }
 
 # Keep exactly one .orig backup - the FIRST one, which is the shipped binary. Overwriting it on a
@@ -101,7 +106,7 @@ if ($NewBroker) {
         Write-Output 'BROKER_BACKUP=created'
     }
     Copy-Item $NewBroker $brokerTarget -Force
-    if (-not $?) { Write-Output 'FAIL: broker copy failed (still running?)'; if ($svc) { Start-Service QubesGuiWatchdog -ErrorAction SilentlyContinue }; exit 1 }
+    if (-not $?) { Write-Output 'FAIL: broker copy failed (still running?)'; if ($svc) { [void](Start-GuiAgentOwner -Stopped $svcStop) }; exit 1 }
     Write-Output ("BROKER_HASH_AFTER=" + (Hash16 $brokerTarget))
 }
 if ($NewNotifhost) {
@@ -110,14 +115,15 @@ if ($NewNotifhost) {
         Write-Output 'NOTIF_BACKUP=created'
     }
     Copy-Item $NewNotifhost $notifTarget -Force
-    if (-not $?) { Write-Output 'FAIL: notifhost copy failed (still running?)'; if ($svc) { Start-Service QubesGuiWatchdog -ErrorAction SilentlyContinue }; exit 1 }
+    if (-not $?) { Write-Output 'FAIL: notifhost copy failed (still running?)'; if ($svc) { [void](Start-GuiAgentOwner -Stopped $svcStop) }; exit 1 }
     Write-Output ("NOTIF_HASH_AFTER=" + (Hash16 $notifTarget))
 }
 
-if ($svc) { Start-Service QubesGuiWatchdog -ErrorAction SilentlyContinue }
-Start-Sleep -Seconds 12
-
-$now = Get-Process gui-agent -ErrorAction SilentlyContinue | Select-Object -First 1
+# Start the service; the NEW agent is proven by its log turnover (bounded), not by a fixed sleep.
+$ra = Start-GuiAgentOwner -Stopped $svcStop
+foreach ($ln in @($ra.lines)) { Write-Output $ln }
+if (-not $ra.ok) { Write-Output ("FAIL: no new gui-agent after the swap - " + $ra.reason); exit 1 }
+$now = Get-Process -Id $ra.new_pid -ErrorAction SilentlyContinue
 if (-not $now) { Write-Output 'FAIL: gui-agent is NOT running after the swap'; exit 1 }
 Write-Output ("RUNNING_PID=" + $now.Id)
 Write-Output ("HASH_RUNNING=" + (Hash16 $now.Path))

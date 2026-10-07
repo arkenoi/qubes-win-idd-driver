@@ -155,6 +155,17 @@ _ps_enc(){ printf '%s' "$1" | iconv -f UTF-8 -t UTF-16LE | base64 -w0; }
 # -EncodedCommand runner: the command line the console echoes is an opaque blob, so output
 # markers can never self-match (the a0-lib path_state/blog_len lesson).
 enc_run(){ qrun "powershell -NoProfile -EncodedCommand $(_ps_enc "$1")"; }
+# The proxy's pid from ITS OWNER'S record: the agent's "ETWPROXYSUP launched etwproxy.exe pid=N"
+# line (etwproxy.c), the last one in the current agent log, verified alive BY PID (tasklist /fi
+# "pid eq N" - Get-Process is unreliable on this guest, memory [[guest-desktop-on-display2]]).
+# Never a name scan (owner 2026-10-07): `tasklist /fi "imagename eq etwproxy.exe"` selected ANY
+# process with that name. The T5 and T8c drills END that child on purpose: the agent's relauncher
+# IS the thing under test and its relaunch is the measured outcome - the kill is the stimulus, not
+# a lifetime the drill pretends to own. -> "PROXYPID <pid> alive=<0|1>"
+proxy_owned_pid(){
+  enc_run '$d=(Get-ItemProperty "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools" -EA SilentlyContinue).LogDir; $f=(Get-ChildItem $d -Filter "gui-agent-*.log" -EA SilentlyContinue | Sort-Object LastWriteTime -Desc | Select-Object -First 1); $procId = 0; if ($f) { $m = @(Select-String -Path $f.FullName -Pattern "ETWPROXYSUP launched etwproxy.exe pid=(\d+)" | Select-Object -Last 1); if ($m.Count) { $procId = [int]$m[0].Matches[0].Groups[1].Value } }; $alive = 0; if ($procId -gt 0) { $alive = @(& tasklist /nh /fo csv /fi "pid eq $procId" 2>$null | Select-String -SimpleMatch "etwproxy.exe").Count }; Write-Output ("PROXYPID " + $procId + " alive=" + $alive)' \
+    | tr -d '\r' | grep -aoE 'PROXYPID [0-9]+ alive=[0-9]+' | tail -1
+}
 
 # Path-generic guest-file line count / tail-past-offset (blog_len/blog_since with the path as a
 # parameter — same retry, same whole-line-integer anchor, same NONZERO-on-hard-failure contract:
@@ -1013,19 +1024,18 @@ if ! grep -qai "$ACCT" "$OUT/t5-plu-after-add.txt"; then
 else
   log "T5: drift injected AND seen by the T1d probe (its fail direction is now proven)"
   AM5=$(amark); [ -n "$AM5" ] || AM5=0   # amark's pipeline exits 0 even when empty - test output
-  # kill the running proxy (etwproxy.exe BY PID - never the user-session notifhost bridge;
-  # the image NAME discriminates since the console split); the agent's exit-wait relaunches
-  # it, and THAT launch's census meets the drifted token. (Filter RIG-RECONCILED
-  # 2026-09-05: the console split renamed the proxy binary. 2026-09-06: the session-0
-  # awk filter dropped - pid 6008 ran the whole 233011 gate in the CONSOLE session and
-  # this probe missed it, false-INSTRUMENTing T5; the agent now stamps session 0, but the
-  # probe must not depend on placement to FIND the proxy.)
-  enc_run 'tasklist /nh /fo csv /fi "imagename eq etwproxy.exe"' | tr -d '\r' > "$OUT/t5-tasklist.csv"
-  ppid=$(awk -F'","' '/[Ee]twproxy\.exe/ {gsub(/"/,"",$2); print $2}' "$OUT/t5-tasklist.csv" | head -1)
-  if [ -z "$ppid" ]; then
-    verdict T5 "INSTRUMENT no running etwproxy.exe to kill (tier already down?) - drift relaunch cannot be forced, ungraded"
+  # end the running proxy BY THE PID ITS OWNER RECORDED (proxy_owned_pid: the agent's own
+  # "launched etwproxy.exe pid=" line - never the user-session notifhost bridge, never a name
+  # scan); the agent's exit-wait relaunches it, and THAT launch's census meets the drifted
+  # token. (History: a tasklist imagename filter, RIG-RECONCILED 2026-09-05/06 for the console
+  # split and the session-0 placement; replaced 2026-10-07 by the owner's record, which does not
+  # depend on placement or name at all.)
+  pp=$(proxy_owned_pid); printf '%s\n' "${pp:-no answer}" > "$OUT/t5-proxypid.txt"
+  ppid=$(printf '%s' "$pp" | awk '{print $2}'); palive=$(printf '%s' "$pp" | sed -n 's/.*alive=//p')
+  if [ -z "$ppid" ] || [ "$ppid" = 0 ] || [ "${palive:-0}" = 0 ]; then
+    verdict T5 "INSTRUMENT no live etwproxy.exe in the agent's own launch record (${pp:-no answer}; tier already down?) - drift relaunch cannot be forced, ungraded"
   else
-    qrun "taskkill /f /pid $ppid" >/dev/null 2>&1
+    qrun "taskkill /f /pid $ppid" >/dev/null 2>&1   # the supervised child, by its owner's pid: the relaunch is what T5 measures
     t5seen=""; _wt5=$SECONDS
     for i in $(seq 1 24); do   # nominal 120s: 5s backoff floor + census; TODO(RIG)#7
       # wall cap 150s (the documented 120s window + margin; asince is a ~55s-capped enc_run
@@ -1447,9 +1457,10 @@ fi
 # relaunch (a fast exit-cb + CreateProcess) re-grabbed the single-instance name inside the
 # ~sub-second gap before the squatter's next 200ms poll, so the squatter NEVER won the race.
 # Now the squatter OWNS the whole race atomically, in ONE guest process: it force-kills the
-# live proxy itself (tasklist/taskkill - Get-Process is broken on this guest, memory
-# [[guest-desktop-on-display2]] class), then TIGHT busy-loops (no sleep) to CreateNamedPipe the
-# instant the name frees. The agent's relaunch must traverse exit-cb -> backoff -> CreateProcess
+# live proxy itself - by the pid the AGENT recorded when it launched it (the last "ETWPROXYSUP
+# launched etwproxy.exe pid=" line of the current agent log; taskkill /pid, since Get-Process is
+# broken on this guest, memory [[guest-desktop-on-display2]] class; never a name scan, owner
+# 2026-10-07) - then TIGHT busy-loops (no sleep) to CreateNamedPipe the instant the name frees. The agent's relaunch must traverse exit-cb -> backoff -> CreateProcess
 # -> guard/census -> EtwOpen -> CreateNamedPipe (many ms); an in-process spin beats it every
 # time. The relaunched proxy then meets the squatted name => 'ETWPROXY FAIL CreateNamedPipe ...
 # (squatter holding the name?)' => exit 8. The killed proxy's own rc=1 (TerminateProcess code)
@@ -1457,11 +1468,11 @@ fi
 # squatter self-bounds (20s grab window, 120s hold) so nothing lingers. NOTE $procId (not $pid,
 # a PowerShell automatic) and quote-free matching so the script survives -EncodedCommand.
 sq='$out="C:\ProgramData\Qubes\p3a-squat.txt"; Remove-Item $out -Force -EA SilentlyContinue
-$csv = @(& tasklist /nh /fo csv /fi "imagename eq etwproxy.exe" 2>$null)
-foreach ($ln in $csv) {
-  $f = $ln -split ","
-  if ($f.Count -ge 2) { $procId = ($f[1] -replace [char]34,"") ; if ($procId -match "^[0-9]+$") { & taskkill /f /pid $procId *>$null } }
-}
+$d=(Get-ItemProperty "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools" -EA SilentlyContinue).LogDir
+$lf=(Get-ChildItem $d -Filter "gui-agent-*.log" -EA SilentlyContinue | Sort-Object LastWriteTime -Desc | Select-Object -First 1)
+$procId = 0
+if ($lf) { $m = @(Select-String -Path $lf.FullName -Pattern "ETWPROXYSUP launched etwproxy.exe pid=(\d+)" | Select-Object -Last 1); if ($m.Count) { $procId = [int]$m[0].Matches[0].Groups[1].Value } }
+if ($procId -gt 0) { & taskkill /f /pid $procId *>$null }
 $p=$null; $deadline=(Get-Date).AddSeconds(20)
 while ((Get-Date) -lt $deadline) {
   try { $p = New-Object System.IO.Pipes.NamedPipeServerStream("qubes-toast-etw",[System.IO.Pipes.PipeDirection]::Out,1); break } catch {}

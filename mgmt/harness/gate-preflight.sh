@@ -28,6 +28,7 @@ BITS="${2:?usage: $0 <vm> <hex-bits>}"
 source mgmt/harness/vmlock.sh; vm_lock "$VM"
 KEY='HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent'
 QTEST_BIN="${QTEST_BIN:-./tools/qtest}"   # overridable ONLY so the degraded-guest paths are provable off-rig
+source mgmt/harness/lifecycle-lib.sh   # agent_restart_ps / agent_restart_grade / ctl_start / ctl_stop: no process is killed by name
 q(){ QTEST_VM=$VM timeout -k 8 "${T:-200}" "$QTEST_BIN" "$@" 2>/dev/null; }
 psrun(){ local b; b=$(python3 -c "
 import base64,sys; print(base64.b64encode(sys.stdin.read().encode('utf-16-le')).decode(), end='')" <<< "$1")
@@ -81,34 +82,23 @@ import struct,sys; b=open(sys.argv[1],'rb').read(); w,h=struct.unpack('>II',b[16
   rm -f "$t"; echo "$n|$d"
 }
 
-# AGENT RESTART WAITS ON A FACT, NOT A TIMER (audit 2026-09-08). This used to be `Start-Service;
-# Start-Sleep 22`. Start-Service returning says nothing about the agent: the watchdog reports
-# RUNNING at once and spawns gui-agent from its own loop, so a slow session (cold AppVM, IDD
-# re-bind) had no agent yet at 22 s and the toggle was graded against a stale state, while a
-# fast guest idled ~20 s per toggle. Worse, -EA SilentlyContinue hid a watchdog that never
-# started, and any gui-agent left over from before the kill then stood in for the "restarted"
-# one. Now: the pre-kill PIDs are recorded and only a gui-agent NOT among them counts (bounded
-# 45 s poll), the service status is echoed for the caller to grade, and the window-map witness
-# is control_up's own outcome poll below.
-set_bits(){ psrun "New-Item -Path '$KEY' -Force | Out-Null
-Set-ItemProperty -Path '$KEY' -Name FaultGateOff -Value $1 -Type DWord
-\$old = @(Get-Process gui-agent -EA SilentlyContinue | ForEach-Object Id)
-Stop-Service QubesGuiWatchdog -Force -EA SilentlyContinue; Start-Sleep 3
-Get-Process gui-agent -EA SilentlyContinue | Stop-Process -Force; Start-Sleep 2
-\$wdErr = ''
-try { Start-Service QubesGuiWatchdog -EA Stop } catch { \$wdErr = \$_.Exception.Message }
-\$wd = (Get-Service QubesGuiWatchdog -EA SilentlyContinue).Status
-Write-Output ('WDSTART ' + \$wd + ' ' + \$wdErr)
-\$new = 0; \$sw = [Diagnostics.Stopwatch]::StartNew()
-while (\$sw.Elapsed.TotalSeconds -lt 45) {
-  \$p = @(Get-Process gui-agent -EA SilentlyContinue | Where-Object { \$old -notcontains \$_.Id })
-  if (\$p.Count -gt 0) { \$new = \$p[0].Id; break }
-  Start-Sleep -Milliseconds 500
-}
-Write-Output ('AGENTPID ' + \$new + ' after ' + [int]\$sw.Elapsed.TotalSeconds + 's')
-\$stillOld = @(Get-Process gui-agent -EA SilentlyContinue | Where-Object { \$old -contains \$_.Id })
-Write-Output ('OLDALIVE ' + \$stillOld.Count)
-Write-Output ('GATEOFF ' + (Get-ItemProperty '$KEY').FaultGateOff)" | grep -aE 'GATEOFF|WDSTART|AGENTPID|OLDALIVE'; }
+# THE AGENT IS RESTARTED THROUGH THE SERVICE THAT OWNS IT, AND THE TURNOVER IS PROVEN (owner
+# 2026-10-07; same shape as failproof-gates.sh's set_gate and failproof-faultinject.sh's
+# restart_agent - all three call guest/restart-gui-agent.ps1 through mgmt/harness/lifecycle-lib.sh,
+# do not let them drift). History: this used to be `Start-Service; Start-Sleep 22` (audit
+# 2026-09-08: a timer, not a fact), then `Stop-Service; Get-Process gui-agent | Stop-Process -Force;
+# Start-Service` with a poll for a pid not seen before. That kill BY NAME raced the watchdog's own
+# relaunch of the agent it owns; the survivor was adopted and the control was graded under the
+# PREVIOUS bits - which this file then excused with an "old one survived Stop-Process" INVALID
+# branch instead of fixing. Now the helper stops the QubesGuiWatchdog service (since 2026-10-03 its
+# stop ends the agent IT started, by handle), starts it, and proves a NEW gui-agent-<ts>-<pid>.log
+# with a live pid; a missing proof is RESTART INVALID-INSTRUMENT and set_bits_checked grades it.
+# The registry write rides the same round trip, before the restart; the GATEOFF readback after it.
+# Nothing is killed, nothing is found by name. The window-map witness is control_up's outcome poll.
+set_bits(){ psrun "$(agent_restart_ps "New-Item -Path '$KEY' -Force | Out-Null
+Set-ItemProperty -Path '$KEY' -Name FaultGateOff -Value $1 -Type DWord" \
+    "Write-Output ('GATEOFF ' + (Get-ItemProperty '$KEY').FaultGateOff)")" \
+    | grep -aE 'GATEOFF|SVCSTOP|OLDLOG|WDSTART|AGENTPID|OLDALIVE|NEWLOG|RESTART'; }
 
 watchdog_failed(){  # <context> - the watchdog service is not Running after Start-Service: the
                     # toggle never restarted the agent, so nothing downstream measures the bit.
@@ -140,22 +130,20 @@ set_bits_checked(){  # <value> <context>
   # not a verdict: control_up grades the OUTCOME (windows or none) against a live guest.
   echo "$out" | grep -qa 'WDSTART Running' || \
     watchdog_failed "$2: $(echo "$out" | grep -a WDSTART | head -1)"
-  # NO NEW AGENT + THE OLD ONE STILL ALIVE IS AN INVALID INSTRUMENT, NOT AN ANOMALY.
-  # Stop-Process is best-effort here (-Force, no wait); if the old gui-agent survived it, the
-  # restarted watchdog ADOPTS it (watchdog.c) and the guest keeps running the PREVIOUS binary
-  # under the PREVIOUS gate bits. Everything downstream then grades a control that the toggle
-  # never reached, and the run reports CLEAR TO RUN for a measurement of the old state. Only
-  # "no new agent AND no old agent" is the benign still-starting case worth a mere log line.
-  if echo "$out" | grep -qa 'AGENTPID 0 '; then
-    if echo "$out" | grep -qaE 'OLDALIVE [1-9]'; then
-      log "-> INVALID-INSTRUMENT: no NEW gui-agent within 45 s and the OLD one is STILL RUNNING ($2)."
-      log "   The watchdog adopted the surviving agent, so bit $BITS was never applied to a fresh"
-      log "   process. Anything graded from here would describe the previous state."
-      printf 'PREFLIGHT\t%s\t%s\tINVALID-INSTRUMENT\tno new gui-agent and the old one survived Stop-Process (%s); the toggle never took\n' \
-        "$VM" "$BITS" "$2"
-      exit 3
-    fi
-    log "  ANOMALY: watchdog Running, no NEW gui-agent within 45 s, and the old one IS gone ($2) - grading the control poll, not a guess"
+  # THE SERVICE RESTART MUST HAVE PRODUCED A NEW AGENT - a newer gui-agent-<ts>-<pid>.log with a
+  # live pid and the old agent gone (guest/restart-gui-agent.ps1 RESTART ok). Anything less - no
+  # new log inside the bound, the old agent surviving the service stop, the service not reaching
+  # Stopped - means bit $BITS was never applied to a fresh process: everything downstream would
+  # grade a control the toggle never reached, and the run would report CLEAR TO RUN for a
+  # measurement of the old state. INVALID-INSTRUMENT, never an anomaly line and a guess.
+  local why
+  if ! why=$(agent_restart_grade "$out"); then
+    log "-> INVALID-INSTRUMENT: the service restart did not produce a new agent ($2): $why"
+    log "   Bit $BITS was never applied to a fresh process. Anything graded from here would"
+    log "   describe the previous state."
+    printf 'PREFLIGHT\t%s\t%s\tINVALID-INSTRUMENT\tthe service restart did not produce a new agent (%s: %s); the toggle never took\n' \
+      "$VM" "$BITS" "$2" "$why"
+    exit 3
   fi
 }
 
@@ -164,9 +152,20 @@ set_bits_checked(){  # <value> <context>
 # draw. Measured again 2026-08-31 on a cold AppVM - 14 s was not enough for a first-run Notepad,
 # and the preflight reported "0 windows" for a guest whose agent was perfectly healthy (vchan
 # connected, seamless mode 1, no errors). Wait for the OUTCOME, with a deadline.
+# THE CONTROL IS OURS BY IDENTITY, NOT BY NAME (owner 2026-10-07). This used to `taskkill /f /im
+# notepad.exe` - any notepad on the guest, whoever started it - before each start and at the end.
+# Now the previous control THIS run started is stopped by the pid + start time recorded when it was
+# started (lifecycle-lib.sh ctl_start/ctl_stop), and a fresh one is started by handle. A notepad
+# this run did not start is never touched: it would show in the window count exactly as before.
+# The identity lives in a FILE: control_up runs inside $(...), where a shell variable would die
+# with the subshell and the restore step would find nothing to stop.
+CTL_FILE=$(mktemp -u /tmp/pf-ctl-XXXX); : > "$CTL_FILE"
+control_stop(){ local _ pid start; read -r _ pid start < "$CTL_FILE" 2>/dev/null
+  [ "${pid:-0}" != 0 ] && { echo "  control: $(T=60 ctl_stop "$pid" "${start:-0}")"; : > "$CTL_FILE"; }; return 0; }
 control_up(){  # -> echoes the window list once the control appears, or after the deadline;
                #    rc 3 = the guest stopped answering (caller grades it, never out-waits it)
-  T=60 q run 'cmd /c taskkill /f /im notepad.exe 2>nul & start "" notepad.exe' >/dev/null 2>&1
+  control_stop >&2
+  T=60 ctl_start notepad > "$CTL_FILE" || log "  control: notepad did not start as ours ($(cat "$CTL_FILE")) - the outcome poll below grades what is visible" >&2
   local i w n dead=0
   # 16 polls (96 s), was 12: set_bits no longer sleeps a fixed 22 s after Start-Service, so the
   # time a cold guest needs to init the agent AND draw the control is all spent here, on the
@@ -185,6 +184,7 @@ control_up(){  # -> echoes the window list once the control appears, or after th
 }
 
 require_alive "before the unarmed reference control"
+agent_restart_push || { log "FATAL: guest/restart-gui-agent.ps1 could not be pushed and proven on $VM - no agent restart is possible without it"; exit 2; }
 log "=== control WITHOUT the bit (this is the reference) ==="
 set_bits_checked 0 "clearing the gate for the reference run"
 BEFORE=$(control_up) || guest_gone "guest stopped answering while polling for the unarmed reference control"
@@ -193,7 +193,7 @@ nb=${BEFORE%%|*}
 if [ "${nb:-0}" -eq 0 ]; then
   log "REFUSING: the harness control is not visible even with NO bit set. The rig is not in a"
   log "  state where any proof could be read; fix that before arming anything."
-  q run 'cmd /c taskkill /f /im notepad.exe 2>nul & exit 0' >/dev/null 2>&1
+  control_stop
   exit 2
 fi
 
@@ -203,9 +203,9 @@ AFTER=$(control_up) || guest_gone "guest stopped answering while polling for the
 log "  dom0: $AFTER"
 na=${AFTER%%|*}
 
-log "=== restoring (bit cleared, notepad killed) ==="
+log "=== restoring (bit cleared, our control notepad stopped) ==="
 set_bits_checked 0 "clearing $BITS during restore"
-q run 'cmd /c taskkill /f /im notepad.exe 2>nul & exit 0' >/dev/null 2>&1
+control_stop
 
 if [ "${na:-0}" -eq 0 ]; then
   log "-> DO NOT SPEND THE 28 MINUTES. With $BITS armed the harness sees NO windows at all,"
