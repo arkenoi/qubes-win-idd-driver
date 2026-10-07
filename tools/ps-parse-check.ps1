@@ -41,6 +41,14 @@ function Excluded([string]$full) {
 $files = @(Get-ChildItem -LiteralPath $root -Recurse -Filter *.ps1 -File -ErrorAction SilentlyContinue |
            Where-Object { -not (Excluded $_.FullName) })
 
+# A SHELL SCRIPT NAMED EXPLICITLY IS STILL ONLY CHECKED FOR ITS HEREDOCS. Passing one as an
+# argument used to put it in the PowerShell-file list as well, so the tool parsed the BASH as
+# PowerShell and reported its own confusion as the script's syntax errors - "line 42: An expression
+# was expected after '('" against a file whose embedded PowerShell was perfectly valid, which cost
+# a search for a defect that was not there (2026-10-07). The repo-wide sweep never hit it, because
+# that path filters by extension.
+$files = @($files | Where-Object { $_.Extension -notin @('.sh', '.bash') })
+
 # Shell scripts, for the PowerShell they embed in quoted heredocs (checked below).
 $shFiles = @(Get-ChildItem -LiteralPath $root -Recurse -Filter *.sh -File -ErrorAction SilentlyContinue |
              Where-Object { -not (Excluded $_.FullName) })
