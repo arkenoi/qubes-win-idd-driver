@@ -542,7 +542,16 @@ def parse_msi(lf, raw_lines, anchor_date):
         hh, mi, ss, ms, msg = m.groups()
         ts = dt.datetime.combine(anchor_date, dt.time(int(hh), int(mi), int(ss), int(ms) * 1000)) if anchor_date else None
         if MSI_SUSPECT_RE.search(msg):
-            level = "E" if re.search(r"Return value 3|Installation failed|error status: [1-9]|rolled back|Rollback", msg) else "W"
+            # "Rollback" ALONE matched the rollback actions EVERY MSI install schedules up front in
+            # case something fails - ActionStart(Name=MsiRollbackInstall),
+            # CustomActionSchedule(Action=...Rollback...), RollbackInfo(...), the property adds, the
+            # MSI_LUA privilege notices. Measured 2026-10-08 on a VERIFIED-SUCCESSFUL 4.3.36 upgrade
+            # (installed hash == the package reference, one product, right version): 168 of the run's
+            # 171 error lines were those, drowning the three that were real. A rollback that actually
+            # RAN says "rolled back"; an action that failed says "Return value 3"; the engine says
+            # "MainEngineThread is returning <nonzero>".
+            level = "E" if re.search(r"Return value 3|Installation failed|error status: [1-9]|rolled back"
+                                     r"|MainEngineThread is returning [1-9]", msg) else "W"
             lf.lines.append(Line(lf.family, lf.name, i, ts, level, "", msg, raw))
         else:
             lf.skipped += 1

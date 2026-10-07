@@ -248,6 +248,31 @@ def agent_two_procs():
           wu2("100200.200", A, A + 1, "I", "WatchForEvents", "exiting"),
           wu2("100200.300", B, B + 1, "I", "WatchForEvents", "exiting")]
     return L
+# msi: the verbose installer log, in both directions. A ROUTINE install schedules its rollback
+# actions up front in case something fails, and those lines all contain the word "Rollback"; a
+# classifier that keys on the bare word called 168 of one successful upgrade's 171 error lines
+# errors and drowned the three that were real.
+def msi(t, msg):
+    return "MSI (s) (A4:B8) [%s]: %s" % (t, msg)
+MSI_ROUTINE = [
+    msi("10:00:31:200", "Machine policy value 'DisableRollback' is 0"),
+    msi("10:00:31:201", "PROPERTY CHANGE: Adding MsiRollbackInstall property. Its value is '{GUID}Qubes Windows Tools'."),
+    msi("10:00:31:202", "Executing op: ActionStart(Name=MsiRollbackInstall,,)"),
+    msi("10:00:31:203", "Executing op: CustomActionSchedule(Action=MsiRollbackInstall,ActionType=3073,Source=BinaryData,Target=RollbackInstall)"),
+    msi("10:00:31:204", "MSI_LUA : Custom Action 'MsiRollbackInstall' is running with sufficient privileges."),
+    msi("10:00:31:205", "Executing op: RollbackInfo(,RollbackAction=Rollback,RollbackDescription=Rolling back action:,,CleanupAction=RollbackCleanup)"),
+    msi("10:00:31:206", "Doing action: MsiRollbackInstall"),
+    msi("10:00:40:000", "Product: Qubes Windows Tools -- Installation completed successfully."),
+]
+MSI_FAILED = MSI_ROUTINE + [
+    msi("10:00:41:000", "Action ended 10:00:41: InstallFinalize. Return value 3."),
+    msi("10:00:41:100", "Product: Qubes Windows Tools -- Installation failed."),
+    msi("10:00:41:200", "Action ended 10:00:41: INSTALL. Return value 3."),
+    msi("10:00:41:300", "MainEngineThread is returning 1603"),
+]
+write("msiok.pull", stream([("msi-verbose.log", "msi", MSI_ROUTINE)], ["EV NONE [Application]"]))
+write("msibad.pull", stream([("msi-verbose.log", "msi", MSI_FAILED)], ["EV NONE [Application]"]))
+
 TP = [("gui-agent-%s.log" % D, "agent", agent_two_procs()),
       ("gui-watchdog-%s.log" % D, "watchdog", watchdog())]
 write("twoproc.pull", stream(TP, ["EV NONE [Application]"]))
@@ -344,7 +369,7 @@ analyze(){ # $1=analyzer $2=logsdir $3=baseline $4=judge $5=tag -> rc; report at
 field(){ python3 -c "import json,sys; r=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$1" "$2"; }
 
 # ---- decode every fixture with the real decoder --------------------------------------------------------------------
-for f in base newsig rise three stoperr empty twoboot skipnames skipchatty bootshut inv twoproc; do
+for f in base newsig rise three stoperr empty twoboot skipnames skipchatty bootshut inv twoproc msiok msibad; do
   rc=$(decode "$SRC" "$T/$f.pull" "$T/$f")
   [ "$rc" = 0 ] || { echo "FATAL: the $f fixture did not decode (rc=$rc): $(tail -2 "$T/$f.decode.txt")"; exit 2; }
   # EVERY LINE IN THESE CORPORA IS WRITTEN BY THIS TEST, so the run declares the errors it caused - which is
@@ -590,6 +615,22 @@ nik=$(field "$T/t30k.json" "r['metrics']['agent_instances']")
 if [ "$nik" = 1 ]; then
   ok "T30 knob 'perfileinst': the check is SEEN TO FAIL - keying on the file reads $nik instance for two processes"
 else bad "T30 knob 'perfileinst' did not collapse the instances (agent_instances=$nik, want 1)"; fi
+
+# T31 THE MSI CLASSIFIER, BOTH WAYS. A routine install's rollback SCHEDULING is not an error, and a
+# real failure still is. Measured on a verified-successful 4.3.36 upgrade: 171 error lines, of which
+# 168 were the routine scheduling - so the gate was reporting a clean install as 171 errors.
+rc=$(analyze "$SRC" "$T/msiok" "$T/baseline.json" "$T/jev-expected.py" t31)
+eok=$(field "$T/t31.json" "r['metrics']['error_lines']")
+wok=$(field "$T/t31.json" "r['metrics']['warning_lines']")
+if [ "$eok" = 0 ] && [ "$wok" -ge 7 ]; then
+  ok "T31 a successful install's rollback scheduling is NOT an error (errors=$eok, warnings=$wok)"
+else bad "T31 a successful install produced $eok error line(s) (want 0) and $wok warning(s)"; fi
+# SEEN TO FAIL: a real failure must still be errors
+rc=$(analyze "$SRC" "$T/msibad" "$T/baseline.json" "$T/jev-expected.py" t31b)
+ebad=$(field "$T/t31b.json" "r['metrics']['error_lines']")
+if [ "$ebad" -ge 3 ]; then
+  ok "T31 a FAILED install is still errors (errors=$ebad: Return value 3, Installation failed, MainEngineThread returning 1603)"
+else bad "T31 a failed install produced only $ebad error line(s) - the classifier has gone blind"; fi
 
 # T23 a filter on a key that does not exist must not silently zero a metric (knob: winkey - the defect I shipped
 # for ten minutes while fixing T21, caught only because shutdowns_in_window=0 contradicted shutdowns=5)
