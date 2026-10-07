@@ -1263,6 +1263,8 @@ function Register-QwtDeathReporter {
         $ourTasks = @('\Qubes-WgcBroker', '\Qubes-NotifBridge', '\QubesPvNic', '\QubesPvNicRearm', '\QubesNetworkReapply',
                       '\QubesQuietDesktopGuard', '\QubesAutologonGuard', '\QubesWindowsUpdateScan', '\QubesWindowsUpdateRun',
                       '\QubesWindowsUpdateDownload', '\QwtImprovedSetup')   # GUARD:selftrigger
+        # Neither the reporter NOR its catch-up is in that list: a reporter that fails must not trigger itself, and the
+        # catch-up's own 201/203 would do exactly that through the other task (2026-10-07).
         # TASK SCHEDULER REJECTS A SELECT WHOSE OR-LIST IS TOO LONG: "ERROR: The specified query is invalid." Measured 2026-10-04 on
         # win11-acc (schtasks /create, this XML shape): one EventData list of 22 executables registers, 24 does not - and the single
         # list of all 28 failed this registration on every install of the rz39 gate (death_reporter=failed). So the executables are
@@ -1335,6 +1337,49 @@ function Register-QwtDeathReporter {
         try { & schtasks.exe /query /tn $reporterTask *>&1 | Out-Null } catch { }
         if ($LASTEXITCODE -ne 0) { throw "schtasks /create reported success but '$reporterTask' does not exist (query rc '$LASTEXITCODE')" }
         Write-Log "death reporter registered: task $reporterTask (event-triggered, SYSTEM, queued) -> $reporter; $($ourExes.Count) executables, $($ourServices.Count) services, $($ourTasks.Count) tasks subscribed"
+
+        # THE CATCH-UP PASS, AS A SECOND TRIGGER FOR THE SAME REPORTER (2026-10-07). Task Scheduler refuses to launch an
+        # action while the system is going down (measured on the lifecycle retest: Error Value 2147943515 =
+        # ERROR_SHUTDOWN_IN_PROGRESS, once per shutdown on \QwtDeathReporter), so a death DURING a shutdown is recorded
+        # by Windows, logged by its supervisor, and its dom0 notification silently dropped. It cannot be fixed by making
+        # the trigger survive - it is fixed by coming back for it at the next boot.
+        #
+        # A SEPARATE TASK, not a second trigger on the reporter's own: Task Scheduler substitutes ValueQueries only for
+        # an event trigger, so a BootTrigger on that task would run its action with the literal text "$(Channel)". Still
+        # ONE reporter and one route (ADR-supervision 3) - one script, one notification path, a second way in.
+        $catchUpTask = 'QwtDeathCatchUp'
+        $cuArgs = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $reporter + '" -CatchUp'
+        $cuXml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>QWT: at boot, report the component deaths whose notification could not be sent while the guest was going down (docs/ADR-supervision.md 5)</Description></RegistrationInfo>
+  <Triggers><BootTrigger><Enabled>true</Enabled><Delay>PT90S</Delay></BootTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT5M</ExecutionTimeLimit>
+    <Hidden>true</Hidden>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>powershell.exe</Command><Arguments>$([Security.SecurityElement]::Escape($cuArgs))</Arguments></Exec></Actions>
+</Task>
+"@
+        $cuF = Join-Path $env:TEMP 'qwt-death-catchup.xml'
+        [IO.File]::WriteAllText($cuF, $cuXml, [Text.Encoding]::Unicode)
+        $global:LASTEXITCODE = $null
+        try { $cuOut = & schtasks.exe /create /tn $catchUpTask /xml "$cuF" /f 2>&1 } catch { $cuOut = "$_" }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Log "could not register $catchUpTask (rc '$LASTEXITCODE'): $cuOut - a death during a shutdown would go unreported" 'ERROR'
+            $script:Result.detail.death_catchup = "failed: rc=$LASTEXITCODE"
+        } else {
+            Write-Log "death catch-up registered: task $catchUpTask (boot, SYSTEM, PT90S) -> $reporter -CatchUp"
+            $script:Result.detail.death_catchup = 'registered'
+        }
+        Remove-Item -LiteralPath $cuF -Force -ErrorAction SilentlyContinue
         $script:Result.detail.death_reporter = 'registered'
     } catch {
         Write-Log "death reporter NOT registered: $($_.Exception.Message) - a death of our components stays in the guest logs only, nothing reaches dom0 (non-fatal)" 'WARN'
