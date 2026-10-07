@@ -115,6 +115,33 @@ fi
 # without it, check 5 would compare the fix against itself and pass for free.
 prev=$(cd "$ROOT/core-agent" && git log --format=%H -S'the peer hung up first, a data error or a stop' -- src/qrexec-wrapper/qrexec-wrapper.c | head -1)
 
+# ---- 4b. THE CONSOLE-CONTROL CLOSE REPORTS ONLY WHAT CAN LEAVE SOMETHING BEHIND ---------------
+# "data vchan NOT confirmed closed within 3000 ms of console control event 6 - exiting anyway" was
+# one of the ten error lines the new binary wrote on win11r-logvol (2026-10-08). The ERROR is right
+# when a ring mapping is left for the kernel to reclaim at process exit - the path the 2026-08-20
+# NMI dump caught spinning on a TLB shootdown - and MEANINGLESS when there was never a data vchan,
+# which is the commonest case here: a client that went away before libvchan_client_init could
+# connect. Nothing is mapped then, and no cleanup will ever signal the close, so the error was
+# guaranteed and said nothing.
+if command grep -qF 'g_VchanOpen' "$SRC" \
+   && command grep -qF 'no data vchan to close at console control event' "$SRC" \
+   && command grep -qF 'so its mapping is reclaimed at process exit' "$SRC"; then
+  ok "close_report_is_specific: the ERROR is kept for the case that leaks a mapping, and the empty case is INFO"
+else
+  bad "close_report_is_specific: the handler still reports an ERROR when there was no vchan to close"
+fi
+# the flag must be set where the vchan is created and cleared where it is closed, or it lies
+if command grep -qF 'InterlockedExchange(&g_VchanOpen, 1)' "$SRC" \
+   && command grep -qF 'InterlockedExchange(&g_VchanOpen, 0)' "$SRC"; then
+  ok "open_flag_tracks_the_vchan: set after InitVchan succeeds, cleared where the cleanup closes it"
+else
+  bad "open_flag_tracks_the_vchan: the flag is not maintained, so the branch above cannot be trusted"
+fi
+# and the ERROR branch must still say WHICH of the two cleanup states it was in
+command grep -qF 'had begun closing it' "$SRC" && command grep -qF 'never reached the close' "$SRC" \
+  && ok "close_error_is_diagnosable: the remaining ERROR names whether the cleanup had reached the close" \
+  || bad "close_error_is_diagnosable: the ERROR still does not say what the cleanup was doing"
+
 # ---- 5. NOTHING WAS MADE QUIETER BY A TIMEOUT, A RETRY OR A WATCHDOG -------------------------
 # The house rule: never a timeout as a fix. The 120 s backstop predates this change and must be
 # untouched, and no new wait may have appeared.
