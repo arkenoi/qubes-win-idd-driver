@@ -27,7 +27,7 @@ CREATED YOUR WINDOWS QUBE BY HAND? TWO dom0 SETTINGS ARE REQUIRED
 Nothing inside the guest can apply these -- they are per-qube dom0 settings,
 and no Windows install path sets them for you unless you used
 qvm-create-windows-qube or installed our dom0 RPM (whose post-install runs
-`qwt-ng-prepare-qube --all`). For a manually created qube, run in dom0:
+they are not applied for you). For every Windows qube, run in dom0:
 
     qvm-features <qube> vmexec 1
     qvm-prefs    <qube> qrexec_timeout 1800
@@ -362,7 +362,8 @@ TWO SETTINGS LIVE IN DOM0 and cannot be applied from inside the guest. The dom0 
 (qubes-windows-tools-ng) applies them to existing Windows qubes when it is installed; for a
 qube created later, run in dom0:
 
-    qwt-ng-prepare-qube <qube>          # or --all
+    qvm-features <qube> vmexec 1
+    qvm-prefs <qube> qrexec_timeout 600
 
 It sets:
   * feature vmexec=1 - dom0 sends its update commands over qubes.VMExec. Without it they

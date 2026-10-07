@@ -41,13 +41,13 @@ scenario: 24 focus flips, `QGARAISE sent=0 debounced=0`, no re-maps, all windows
 
 ## 2. Features a Windows qube needs to work
 
-These are not optional. The dom0 RPM applies them at install, and `qwt-ng-prepare-qube <vm>`
+These are not optional, and NOTHING applies them for you: the dom0 RPM runs nothing in dom0 and ships no script. Apply them yourself
 applies them to a qube created later — you should not normally need to set them by hand.
 
 | feature | value | why | who reads it |
 |---|---|---|---|
-| `os` | `Windows` | Qubes core treats the qube as Windows; our dom0 CLIs (`qvm-windows-update`, `qwt-ng-prepare-qube`) use it as the `--all` selection filter (`packaging/rpm/qvm-windows-update:11`) | Qubes core **and** us |
-| `vmexec` | `1` | Makes dom0 use `qubes.VMExec` instead of `qubes.VMShell`. Without it dom0's update commands arrive at `cmd.exe` as POSIX shell text and the run aborts before our agent is reached (`packaging/rpm/qwt-ng-prepare-qube:10-16`) | Qubes core; we set it (`:59`) |
+| `os` | `Windows` | Qubes core treats the qube as Windows, and it is how any `--all`-style selection identifies Windows qubes | Qubes core **and** us |
+| `vmexec` | `1` | Makes dom0 use `qubes.VMExec` instead of `qubes.VMShell`. Without it dom0's update commands arrive at `cmd.exe` as POSIX shell text and the run aborts before our agent is reached | Qubes core; the admin sets it - nothing in this package does |
 | `gui`, `qrexec` | `1` | Qubes core treats the qube as GUI- and qrexec-capable | Qubes core |
 | `audio-model`, `timezone`, `no-monitor-layout`, `rpc-clipboard`, `stubdom-qrexec` | per qube | Qubes core only — **no code in this package reads any of them.** They appear here only because our clone tooling copies them (`mgmt/clone-to-template.sh:47-48`) | Qubes core |
 
@@ -56,7 +56,7 @@ Also required, and applied by the same tools — a **preference**, not a feature
     qvm-prefs <vm> qrexec_timeout 1800
 
 A Windows boot that is *applying* an update has been measured taking 259 s to answer qrexec,
-against a 60 s default (`packaging/rpm/qwt-ng-prepare-qube:28,66-70`).
+against a 60 s default.
 
 ---
 
@@ -64,7 +64,7 @@ against a 60 s default (`packaging/rpm/qwt-ng-prepare-qube:28,66-70`).
 
 | feature | direction | meaning |
 |---|---|---|
-| `updates-available` | **dom0-owned, guest-reported** | Drives the "updates available" marker in the Qubes Update tool. The guest never writes it: it reports a *count* over `qubes.NotifyUpdates` (`guest/qubes-windows-update.ps1:295`) and dom0 owns the flag. `qvm-windows-update --all` targets running Windows qubes where it is set and non-zero. Reads back as `1` when true and as an **empty string** when false — empty means "cleared", not "missing"; genuinely unset raises `QubesFeatureNotFoundError` |
+| `updates-available` | **dom0-owned, guest-reported** | Drives the "updates available" marker in the Qubes Update tool. The guest never writes it: it reports a *count* over `qubes.NotifyUpdates` (`guest/qubes-windows-update.ps1:295`) and dom0 owns the flag. an `--all`-style selection targets running Windows qubes where it is set and non-zero. Reads back as `1` when true and as an **empty string** when false — empty means "cleared", not "missing"; genuinely unset raises `QubesFeatureNotFoundError` |
 | `gui-emulated` | dom0 | Qubes core; required by our unattended-install watcher so there is a stubdom console to screenshot (`mgmt/win-install-watch.sh:5`) |
 | `qemu-extra-args` | dom0 | Only used by the development rig to attach an unattended-answer USB stick (`mgmt/reprovision-usb.sh:58`). Not part of a normal install |
 

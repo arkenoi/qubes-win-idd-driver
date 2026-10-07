@@ -5021,9 +5021,9 @@ public static class QdbPrime {
                     $script:UpdaterDeployFailure = Get-UpdaterDeployFailureRecord -Message 'install-updater-agent.ps1 returned without its completion line'
                 }
                 # Two settings live in dom0 and cannot be applied from in here. The RPM's
-                # qwt-ng-prepare-qube does them; say so, because a qube missing them fails to
-                # update in a way that looks like a bug in the guest.
-                Write-Log 'NOTE: dom0-side, this qube also needs:  qwt-ng-prepare-qube <qube>'
+                # These are dom0-side and cannot be set from in here, so NAME them: a qube missing them fails to
+                # update, and this package ships no dom0 script to apply them (owner, 2026-10-07).
+                Write-Log 'NOTE: dom0-side, this qube also needs:  qvm-features <qube> vmexec 1  and  qvm-prefs <qube> qrexec_timeout 600'
                 Write-Log '      (sets feature vmexec=1 and raises qrexec_timeout; without them'
                 Write-Log '       the Qubes Update tool cannot drive this qube)'
             } catch {

@@ -32,7 +32,7 @@ same package passed the template update test on the field reporter's environment
 
 | file | use it for |
 |---|---|
-| [`qubes-windows-tools-ng-4.3.35-1.agentf613dc344d9e.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.35-agentf613dc3/qubes-windows-tools-ng-4.3.35-1.agentf613dc344d9e.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and installs `qvm-windows-update` and `qwt-ng-prepare-qube` |
+| [`qubes-windows-tools-ng-4.3.35-1.agentf613dc344d9e.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.35-agentf613dc3/qubes-windows-tools-ng-4.3.35-1.agentf613dc344d9e.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and runs nothing in dom0 |
 | [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.35-agentf613dc3/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
 | [`qubes-tools-4.3.35.exe`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.35-agentf613dc3/qubes-tools-4.3.35.exe) | the installer on its own, if you already have a way to get a file into the guest |
 | [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.35-agentf613dc3/SHA256SUMS.txt) | checksums for all of them |
@@ -236,7 +236,7 @@ update changes agree, not on an exit code alone; until 4.3.33 the Security platf
 reported current while its installer had been run with a switch that installs nothing.
 
 Two things to know. **Two settings live in dom0** and cannot come from the guest — the dom0
-package applies them on install, and `qwt-ng-prepare-qube <qube>` applies them to a qube created
+package applies NOTHING and runs nothing in dom0 - apply them yourself to each Windows qube, including one created
 later: the `vmexec` feature (or dom0's update commands arrive as shell text at `cmd.exe` and the
 run aborts) and a raised `qrexec_timeout` (a Windows boot *applying* an update took 259 s to
 answer qrexec, against a 60 s default). And **the qube shuts down after installing an update** —
@@ -464,7 +464,7 @@ See [docs/BIND-DIRS.md](docs/BIND-DIRS.md) for the syntax, the exact differences
 feature and what it refuses.
 
 Two settings are required rather than optional, and the dom0 RPM applies them for you
-(`qwt-ng-prepare-qube <vm>` applies them to a qube created later): the `vmexec` feature, without
+(apply them yourself in dom0; this package ships no script that does it): the `vmexec` feature, without
 which dom0's update commands arrive at `cmd.exe` as shell text and the run aborts, and a raised
 `qrexec_timeout`, because a Windows boot that is *applying* an update can take minutes to answer
 qrexec against a 60 s default.

@@ -17,33 +17,68 @@ update's own command line, and a row is installed only when the installer succee
 a disagreement fails loudly. Reboots are counted: the guest requests, dom0 performs, none is speculative.
 Nothing is killed or adopted by name.
 
-**The qrexec protocol, and what the guest does with it.** dom0 calls one service -
-`qubes.WindowsUpdate` - and that service speaks the SAME contract as the Linux agent
-(`core-admin-linux vmupdate/qube_connection.py`), so dom0's own updater needs no Windows-specific
-knowledge:
+**The qrexec protocol, and what the guest does with it.** dom0's STOCK `qubes-vm-update` - and so the
+Qubes Update GUI - drives a Windows qube with no dom0-side command and no dom0 changes. The chain, every
+link of it in the tree:
 
-* progress is **bare float lines, 0..100, on STDERR**; dom0 parses each with `float(line)`, `100.0` ends
-  the progress phase, and any stderr line that is NOT a number is shown to the user as a message;
+```
+dom0 qubes-vm-update
+  -> qubes.VMExec                      (the service definition the package ships; the `vmexec` feature
+                                        is REQUIRED and must be set FROM DOM0 - the guest cannot
+                                        advertise it, and both fallback shapes fail before the shim)
+  -> VMExec.ps1                        (the definition runs: cmd /c powershell -file
+                                        "%QUBES_TOOLS%\qubes-rpc-services\VMExec.ps1" "%1")
+  -> vmupdate-shim.ps1                 (ONLY for commands naming the updater workdir or entrypoint.py;
+                                        every other VMExec command goes to cmd.exe as before)
+  -> wu-update.ps1                     (qubes-rpc-services\wu-update.ps1 - the protocol end)
+  -> QubesWindowsUpdateRun             (a SYSTEM scheduled task: a qrexec handler runs unelevated and
+                                        DISM needs admin)
+  -> qubes-windows-update.ps1          (the pass; rewrites update-status.json at every phase)
+```
+
+dom0's updater does not call an agent living in the guest - it INJECTS one on every run
+(`qubes-core-admin-linux`, `vmupdate/qube_connection.py`): untar a tarball into `/run/qubes-update/`, run
+`/usr/bin/python3 .../entrypoint.py <flags>`, collect the log. That is why any Linux qube is updatable with
+nothing preinstalled, and exactly why Windows never can be: no `python3`, no dnf/apt, no Windows branch in
+`get_os_data()`. So the shim answers those command shapes and runs our updater where dom0 expects the
+injected agent to run; the injected Python is accepted and discarded.
+
+The contract is the Linux agent's own (`vmupdate/agent/source/common/exit_codes.py`):
+
+* progress is **bare float lines, 0..100, on STDERR**; dom0 parses each with `float(line)`, `100.0` ends the
+  progress phase, and any stderr line that is NOT a number is shown to the user as a message;
 * **stdout is logs**;
 * **exit 0 = success, exit 100 = no updates, anything else = an error.**
 
 Those floats must be formatted in the INVARIANT culture. PowerShell's `-f` formats with the current one,
 where `.` in a numeric format string is the decimal-separator placeholder - so on a German guest it emitted
-`75,0`, `float()` raised on every progress line from the first, and each one was displayed as a message
-instead of moving the bar. Only formatting that crosses this protocol needs that care; log text does not.
+`75,0`, `float()` raised on every progress line from the first, and each was displayed as a message instead
+of moving the bar. Only formatting that crosses this protocol needs that care; log text does not.
 
-Guest-side the handler (`guest/wu-update.ps1`) is a **protocol shim and nothing else**, because a qrexec
-handler runs unelevated and DISM needs admin. It baselines `update-status.json`, kicks the
-`QubesWindowsUpdateRun` SYSTEM scheduled task, tails that status file - which `qubes-windows-update.ps1`
-rewrites at every phase - and translates phases into the float protocol. Its waits are bounded: it never
-blocks dom0 indefinitely. Which on-demand task it drives is dom0's decision, not the guest's: the rpc
-service passes nothing and gets a full pass, while `vmupdate-shim.ps1` passes
-`QubesWindowsUpdateDownload` when dom0 asked for `--download-only`, so a download-only request cannot
-install. The `vmexec` feature is REQUIRED and must be set FROM DOM0 - the guest cannot advertise it for
-itself, and both fallback shapes fail before the shim is reached.
+`wu-update.ps1` is a protocol end and nothing more: baseline `update-status.json`, kick the task, tail that
+file as the pass rewrites it, translate phases into floats. Its waits are bounded - it never blocks dom0
+indefinitely. WHICH on-demand task runs is dom0's decision: a full pass by default, and
+`QubesWindowsUpdateDownload` when dom0 asked for `--download-only`, so a download-only request cannot install.
 
 In the other direction the guest uses two stock services: `qubes.NotifyUpdates` for the count (§2) and
 `qubes.UpdatesProxy`, through the relay, for every byte it fetches (§5).
+
+**There is no `qubes.WindowsUpdate` service, and no dom0 script.** The service definitions the package
+ships are `qubes.ClipboardCopy`, `ClipboardPaste`, `Filecopy`, `GetAppMenus`, `GetAppmenus`,
+`GetImageRGBA`, `OpenInVM`, `OpenURL`, `SetDateTime`, `SetGuiMode`, `StartApp`, `SuspendPostAll`, `VMExec`,
+`VMShell` and `WaitForSession` - fifteen, none of them for updates. `wu-update.ps1` is deployed into
+`qubes-rpc-services\` and reached by the shim, not by a service definition; its own file header still
+calls itself an rpc handler, which is stale.
+
+**The dom0 side applies nothing and runs nothing.** Until 2026-10-07 the dom0 RPM installed three scripts
+into `%{_bindir}` and its `%post` EXECUTED two of them: one walked every qube whose `os` feature read
+Windows and changed its features and prefs, one rewrote `qvm-create-windows-qube`'s files, and one called
+the `qubes.WindowsUpdate` service that has never existed in this tree. All three are removed, along with
+the `%post` execution. What a Windows qube needs from dom0 is stated, not done: `qvm-features <qube>
+vmexec 1` and `qvm-prefs <qube> qrexec_timeout 600`, which the `%post` message and `docs/QVM-FEATURES.md`
+spell out for the admin to apply. Neither can be set from inside the guest - the Windows build of
+`qubesdb-cmd` cannot write to QubesDB at all - which is why they are a prerequisite rather than part of
+the install.
 
 The whole path, in one picture (§1, §2, §4, §5, §12):
 

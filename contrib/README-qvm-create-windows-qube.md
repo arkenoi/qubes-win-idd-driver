@@ -65,7 +65,7 @@ for os=Windows" sequence can survive - a second shutdown left it waiting on a ha
 The rest of this section describes the older patching route. It remains valid, and is still
 what you want if you are running a build that predates the bootstrap executable.
 
-**This is applied automatically.** The RPM's `%post` runs `qwt-ng-fix-qwcq`, which finds
+**You apply this yourself.** This package does not modify another package's files, so nothing finds
 `qvm-create-windows-qube` installations (the resolved entry point on `PATH`, plus
 `/opt`, `/usr/local/share`, `/root` and `/home/*` clones), backs the upstream stub up
 once as `install-qwt.bat.stock`, and swaps in the shipped replacement. It reports what it
@@ -74,7 +74,6 @@ patched, is idempotent, and never fails the package transaction. If you install
 look — run it once by hand:
 
 ```
-qwt-ng-fix-qwcq
 ```
 
 (The manual equivalent remains a plain copy of
