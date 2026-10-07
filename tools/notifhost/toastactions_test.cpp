@@ -30,16 +30,20 @@ static void Check(const char* name, bool ok)
     printf("%s %s\n", ok ? "ok  " : "FAIL", name);
 }
 
-static bool ActivatorYes(void*) { return true; }
-static bool ActivatorNo(void*)  { return false; }
-static int  g_asked = 0;
-static bool ActivatorCount(void*) { g_asked++; return true; }
+static const ToastActActivator ActivatorYes = ToastActActivator::Known;
+static const ToastActActivator ActivatorNo = ToastActActivator::None;
+static const ToastActActivator ActivatorPending = ToastActActivator::Unknown;
 
-static ToastActPlan Build(const wchar_t* xml, bool packaged, bool (*act)(void*))
+static ToastActPlan Build(const wchar_t* xml, bool packaged, ToastActActivator act)
 {
     ToastClass k = ClassifyToastXml(xml, wcslen(xml));
-    ToastActCtx ctx{ packaged, act, nullptr };
+    ToastActCtx ctx{ packaged, act };
     return ToastActionsBuild(xml, wcslen(xml), k, ctx);
+}
+static bool NeedsActivator(const wchar_t* xml, bool packaged)
+{
+    ToastClass k = ClassifyToastXml(xml, wcslen(xml));
+    return ToastActRouteNeedsActivator(xml, wcslen(xml), k, packaged);
 }
 
 static bool SlugIs(ToastActPlan const& p, const wchar_t* want) { return ToastActSlug(p) == want; }
@@ -63,7 +67,9 @@ int main()
     defined(TOASTACT_DEFECT_NONOTICE) || defined(TOASTACT_DEFECT_UNBOUNDED_TABLE) || \
     defined(TOASTACT_DEFECT_KEY_BY_SEQ) || defined(TOASTACT_DEFECT_NOCLICKBOUND) || \
     defined(TOASTACT_DEFECT_DOUBLE_OUTCOME) || defined(TOASTACT_DEFECT_NOLOOKUPBOUND) || \
-    defined(TOASTACT_DEFECT_NOKILL)
+    defined(TOASTACT_DEFECT_NOKILL) || defined(TOASTACT_DEFECT_AWAIT_FOR_INFO) || \
+    defined(TOASTACT_DEFECT_UNKNOWN_REFUSES) || defined(TOASTACT_DEFECT_UNKNOWN_AS_KNOWN) || \
+    defined(TOASTACT_DEFECT_LATE_RESULT_DROPPED) || defined(TOASTACT_DEFECT_ALLOWLIST_BLIND)
     const bool defectBuild = true;
     printf("DEFECT BUILD: a TOASTACT_DEFECT_* switch is compiled in - this run MUST fail\n");
 #else
@@ -97,10 +103,31 @@ int main()
         ToastActPlan u = Build(two, true, ActivatorYes);
         Check("row4 com buttons on a PACKAGED sender: refused (UWP activation is not carried)", !u.ok && u.actions.empty());
 
-        // the activator is asked ONCE for the whole plan (a registry/shortcut lookup on the Windows side)
-        g_asked = 0;
-        (void)Build(two, false, ActivatorCount);
-        Check("the activator lookup is asked at most once per toast", g_asked == 1);
+        // THE LOOKUP IS NEVER AWAITED BY THE BUILDER (guest-test regression 2026-10-07): with the sender's activator
+        // not known yet, a row-4 COM toast is refused (the caller may have waited within its budget first) ...
+        ToastActPlan w = Build(two, false, ActivatorPending);
+        Check("row4 com buttons with the activator lookup pending: refused (window path; the late result warms the cache)", !w.ok && w.actions.empty() && w.refusal && wcsstr(w.refusal, L"not known yet") != nullptr);
+        // ... and its ROUTE is the one kind that may wait for the lookup, within the listing's budget
+        Check("route: row-4 com buttons on a Win32 sender depend on the activator (may wait within the budget)", NeedsActivator(two, false));
+        Check("route: ...but not on a packaged sender (refused regardless, nothing to wait for)", !NeedsActivator(two, true));
+    }
+    {
+        // AN INFORMATIONAL TOAST NEVER WAITS FOR THE LOOKUP (the regression: S0 of a sender without an activator took
+        // the window path because its verdict waited 3.4 s for a cold Start-menu scan)
+        const wchar_t* info = L"<toast launch=\"ctx=7\"><visual><binding template=\"ToastGeneric\"><text>t</text></binding></visual></toast>";
+        ToastActPlan p = Build(info, false, ActivatorPending);
+        Check("row6 with the activator lookup pending: FORWARDED, without the default click, the reason noted", p.ok && !p.hasDefault && p.actions.empty() && p.defaultNote && wcsstr(p.defaultNote, L"not known yet") != nullptr);
+        Check("route: a row-6 toast's route never depends on the activator (never waits for the lookup)", !NeedsActivator(info, false));
+        const wchar_t* r5 = L"<toast><actions><action content=\"Open\" activationType=\"protocol\" arguments=\"https://e/\"/></actions></toast>";
+        ToastActPlan q = Build(r5, false, ActivatorPending);
+        Check("row5 protocol button with the lookup pending: forwarded with the button, default not carried", q.ok && q.buttons == 1 && !q.hasDefault && SlugIs(q, L"b0:protocol"));
+        Check("route: a row-5 toast never waits either", !NeedsActivator(r5, false));
+        const wchar_t* mix = L"<toast><actions><action content=\"Open\" activationType=\"protocol\" arguments=\"https://e/\"/>"
+                             L"<action content=\"Reply\" arguments=\"r\"/></actions></toast>";
+        Check("route: a row-4 mix with one schema-default (foreground) button depends on the activator", NeedsActivator(mix, false));
+        const wchar_t* bg = L"<toast><actions><action content=\"Archive\" activationType=\"background\" arguments=\"a\"/></actions></toast>";
+        Check("route: a row-4 background-only toast does not (refused regardless)", !NeedsActivator(bg, false));
+        Check("budget: the route wait is inside the listing's budget (under 1.25 s) and the hold's 3 s", kToastActRouteLookupBudgetMs < 1250 && kToastActRouteLookupBudgetMs < 3000);
     }
     {
         // mixed: a protocol button + a foreground button without an activator -> ALL OR NOTHING: refused
@@ -291,6 +318,34 @@ int main()
         std::thread fast([h2] { h2->Publish(L"", L"none"); });
         Check("lookup: a prompt answer is taken as is", h2->WaitFor(2000, clsid, source) && clsid.empty() && source && wcscmp(source, L"none") == 0);
         fast.join();
+
+        // the cache with lookups in flight (the 2026-10-07 regression fix: a cold lookup warms the cache in the background)
+        ToastActActivatorCache C;
+        const uint64_t tc0 = 900000;
+        std::wstring c; const wchar_t* src = nullptr;
+        Check("cache: an unknown sender reads Unknown", C.Get(L"vendor.app", tc0, c, src) == ToastActActivator::Unknown);
+        bool started = false;
+        auto p1 = C.Pending(L"vendor.app", &started);
+        Check("cache: the first asker starts the lookup", started && p1 && C.PendingCount() == 1);
+        auto p2 = C.Pending(L"vendor.app", &started);
+        Check("cache: a second asker of the same sender joins it (one lookup, not two)", !started && p2 == p1 && C.PendingCount() == 1);
+        Check("cache: while pending the sender still reads Unknown (nobody waits unless the route depends on it)", C.Get(L"vendor.app", tc0 + 10, c, src) == ToastActActivator::Unknown);
+        // NOBODY waited (an informational toast was forwarded without its default): the late result is cached anyway
+        C.Store(L"vendor.app", L"{11111111-2222-3333-4444-555555555555}", L"shortcut", tc0 + 3400);
+        Check("cache: a late result nobody waited for IS cached - the sender's next toast finds it", C.Get(L"vendor.app", tc0 + 3500, c, src) == ToastActActivator::Known && c == L"{11111111-2222-3333-4444-555555555555}" && C.PendingCount() == 0);
+        Check("cache: ...and its hand-off was published for anyone still holding it", p1->WaitFor(0, c, src) && src && wcscmp(src, L"shortcut") == 0);
+        // negative results are cached too
+        auto p3 = C.Pending(L"other.app", &started);
+        C.Store(L"other.app", L"", L"none", tc0 + 100);
+        Check("cache: a negative result (no activator) is cached as None, not Unknown", C.Get(L"other.app", tc0 + 200, c, src) == ToastActActivator::None && c.empty());
+        Check("cache: ...and expires with the TTL back to Unknown", C.Get(L"other.app", tc0 + 100 + ToastActActivatorCache::kTtlMs, c, src) == ToastActActivator::Unknown);
+        // a lookup that could not run answers none and caches nothing
+        auto p4 = C.Pending(L"third.app", &started);
+        C.Abandon(L"third.app");
+        Check("cache: an abandoned lookup answers its hand-off with none and caches nothing", p4->WaitFor(0, c, src) && c.empty() && C.Get(L"third.app", tc0, c, src) == ToastActActivator::Unknown && C.PendingCount() == 0);
+        for (unsigned i = 0; i < 300; i++) C.Store(L"s" + std::to_wstring(i), L"", L"none", tc0);
+        Check("cache: bounded", C.Size() <= ToastActActivatorCache::kMax);
+        (void)p3;
     }
 
     // ---- 5. ActionInvoked parsing -------------------------------------------------------------
@@ -342,6 +397,24 @@ int main()
               summary == L"A notification action did not run" &&
               body.find(L"'Later' on 'Meeting' (Calendar)") != std::wstring::npos && body.find(L"Activate failed (fake)") != std::wstring::npos &&
               body.find(L"Notification Center") != std::wstring::npos);
+    }
+
+    // ---- 6b. the listing's route, allowlisted or not (guest finding 2026-10-07: the blind shortcut) -------
+    {
+        ToastActPlan okPlan; okPlan.ok = true; okPlan.actions.push_back({ "b0", L"OK", ToastActKind::Com, L"ok" }); okPlan.buttons = 1;
+        ToastActPlan refused; refused.ok = false; refused.refusal = L"the sender registered no toast activator";
+        ToastActPlan none; none.ok = true;   // informational: no actions
+        const int maxP = 3;
+        Check("listing: allowlisted row-4 toast, plan carried -> forwarded WITH its plan (never blind)", ToastActListingDecide(true, true, true, okPlan, 1, maxP) == ToastActListingRoute::ForwardWithPlan);
+        Check("listing: allowlisted row-4 toast, plan refused -> WINDOW path (the user keeps the guest's buttons)", ToastActListingDecide(true, true, false, refused, 1, maxP) == ToastActListingRoute::Window);
+        Check("listing: allowlisted informational toast with its verdict -> forwarded at once (no actions)", ToastActListingDecide(true, true, true, none, 1, maxP) == ToastActListingRoute::ForwardWithPlan);
+        Check("listing: allowlisted toast, verdict pending, passes left -> await (not forwarded blind)", ToastActListingDecide(true, false, false, none, 1, maxP) == ToastActListingRoute::AwaitVerdict);
+        Check("listing: allowlisted toast, no verdict after the passes -> the shortcut's blind forward (logged loudly)", ToastActListingDecide(true, false, false, none, 3, maxP) == ToastActListingRoute::ForwardBlind);
+        Check("listing: classifier-routed toast, no verdict after the passes -> window (ADR 2 rule 3)", ToastActListingDecide(false, false, false, none, 3, maxP) == ToastActListingRoute::Window);
+        Check("listing: classifier-routed toast, verdict bridge -> forwarded with its plan", ToastActListingDecide(false, true, true, okPlan, 1, maxP) == ToastActListingRoute::ForwardWithPlan);
+        Check("listing: classifier-routed toast, verdict window -> window", ToastActListingDecide(false, true, false, refused, 1, maxP) == ToastActListingRoute::Window);
+        Check("sent: a row-4 toast sent with no actions is the anomaly", ToastActSentAnomaly(4, 0));
+        Check("sent: a row-4 toast sent with actions, or a row-6 toast without, is not", !ToastActSentAnomaly(4, 2) && !ToastActSentAnomaly(6, 0));
     }
 
     // ---- 7. after a failed activation: banner reopened, or the dom0 notice --------------------------

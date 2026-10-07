@@ -17,6 +17,12 @@
 #   TOASTACT_DEFECT_NOCLICKBOUND        a click whose child never exits is never resolved (no outcome, cap taken)
 #   TOASTACT_DEFECT_NOKILL              the bound reports the failure but leaves the hung child process alive
 #   TOASTACT_DEFECT_DOUBLE_OUTCOME      a click already reported gets a second outcome
+#   TOASTACT_DEFECT_AWAIT_FOR_INFO      an informational toast's route waits for the activator lookup (the 2026-10-07
+#                                       guest-test regression)
+#   TOASTACT_DEFECT_UNKNOWN_REFUSES     an informational toast with the lookup pending is refused instead of forwarded
+#   TOASTACT_DEFECT_UNKNOWN_AS_KNOWN    a pending lookup is treated as a registered activator
+#   TOASTACT_DEFECT_LATE_RESULT_DROPPED a lookup result nobody waited for is not cached
+#   TOASTACT_DEFECT_ALLOWLIST_BLIND     the allowlist shortcut forwards a toast without its plan whatever the classifier said
 #   TOASTACT_DEFECT_NOLOOKUPBOUND       the activator lookup is waited for without a bound
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -30,16 +36,18 @@ SRC="$ROOT/tools/notifhost/toastactions_test.cpp"
 if $CC "$SRC" -o "$OUT/clean" 2>"$OUT/clean.build.err"; then
     "$OUT/clean" >"$OUT/clean.out" 2>&1; rc=$?
     n=$(grep -c '^ok' "$OUT/clean.out"); f=$(grep -c '^FAIL' "$OUT/clean.out")
-    if [ "$rc" -eq 0 ] && [ "$f" -eq 0 ] && [ "$n" -ge 100 ]; then
+    if [ "$rc" -eq 0 ] && [ "$f" -eq 0 ] && [ "$n" -ge 120 ]; then
         say "PASS  toastactions clean: rc=0 ok=$n fail=0"
     else
-        say "FAIL  toastactions clean: rc=$rc ok=$n fail=$f (min ok 100)"; grep '^FAIL' "$OUT/clean.out" | head -5; bad=1
+        say "FAIL  toastactions clean: rc=$rc ok=$n fail=$f (min ok 120)"; grep '^FAIL' "$OUT/clean.out" | head -5; bad=1
     fi
 else
     say "FAIL  toastactions clean build: $(head -3 "$OUT/clean.build.err")"; bad=1
 fi
 for d in TOASTACT_DEFECT_BACKGROUND_CARRIED TOASTACT_DEFECT_PARTIAL_FORWARD TOASTACT_DEFECT_PACKAGED_COM \
          TOASTACT_DEFECT_KEY_BY_SEQ TOASTACT_DEFECT_NOCLICKBOUND TOASTACT_DEFECT_NOKILL TOASTACT_DEFECT_DOUBLE_OUTCOME TOASTACT_DEFECT_NOLOOKUPBOUND \
+         TOASTACT_DEFECT_AWAIT_FOR_INFO TOASTACT_DEFECT_UNKNOWN_REFUSES TOASTACT_DEFECT_UNKNOWN_AS_KNOWN TOASTACT_DEFECT_LATE_RESULT_DROPPED \
+         TOASTACT_DEFECT_ALLOWLIST_BLIND \
          TOASTACT_DEFECT_BADKEY TOASTACT_DEFECT_NONOTICE TOASTACT_DEFECT_UNBOUNDED_TABLE; do
     if $CC -D"$d" "$SRC" -o "$OUT/$d" 2>"$OUT/$d.build.err"; then
         "$OUT/$d" >"$OUT/$d.out" 2>&1; rc=$?

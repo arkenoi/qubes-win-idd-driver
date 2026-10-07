@@ -1947,6 +1947,7 @@ static bool AumidPackaged(WinUserNotification const& un, std::wstring const& aum
 struct VerdictEntry
 {
     int route = ToastRouteWindow;
+    int row = 0;              // the classifier's row (4 = real-choice buttons: the SENT line asserts actions went with it)
     ToastActPlan plan;        // ok with actions (possibly none) when route is bridge
     std::wstring clsid;       // "{...}" when any action is a COM activation
 };
@@ -1962,14 +1963,14 @@ static void VerdictInit()
 {
     if (!g_verdict.init) { InitializeCriticalSection(&g_verdict.lock); g_verdict.init = true; }
 }
-static void VerdictStorePut(uint32_t id, int route, ToastActPlan const& plan, std::wstring const& clsid)
+static void VerdictStorePut(uint32_t id, int route, ToastActPlan const& plan, std::wstring const& clsid, int row)
 {
     if (!g_verdict.init) return;
     {
         CsGuard g(&g_verdict.lock);
         if (g_verdict.route.size() > 4096) { g_verdict.route.clear(); g_verdict.passes.clear(); }
         VerdictEntry& e = g_verdict.route[id];
-        e.route = route; e.plan = plan; e.clsid = clsid;
+        e.route = route; e.row = row; e.plan = plan; e.clsid = clsid;
     }
     InterlockedExchange(&g_listWanted, 1);
     if (g_mainWake) SetEvent(g_mainWake);   // a toast may be waiting for this verdict: re-list now, not on a tick
@@ -2098,23 +2099,54 @@ static void ShadowClassifyWork(ShadowJob& j)
         std::vector<EtwToastRec> sigs;
         // THE ACTION PLAN (ADR-toasts 11), decided here with the verdict from the same payload. Row 4 (real-choice
         // buttons) is bridge ONLY if every banner button can be carried as a dom0 action; rows 5/6 are bridge as
-        // before and carry what they can (protocol buttons, the default click). The sender's toast activator is
-        // looked up at most once, lazily, through the callback (ResolveToastActivator: a bounded thread of its own).
-        struct ActivatorQuery { const std::wstring* aumid; std::wstring clsid; const wchar_t* source; bool asked; };
-        ActivatorQuery aq{ &j.aumid, L"", L"none", false };
-        auto hasActivator = [](void* cookie) -> bool {
-            ActivatorQuery* q = (ActivatorQuery*)cookie;
-            if (!q->asked) { q->asked = true; q->clsid = ResolveToastActivator(*q->aumid, &q->source); }
-            return !q->clsid.empty();
-        };
+        // before and carry what they can (protocol buttons, the default click).
+        // THE ACTIVATOR LOOKUP NEVER DELAYS A ROUTE THAT DOES NOT DEPEND ON IT (guest-test regression 2026-10-07: a
+        // cold 3.4 s lookup for a sender WITHOUT an activator pushed an informational toast's verdict past the listing's
+        // budget and it lost forwarding). The cache is asked without blocking; a miss STARTS the lookup in the background
+        // (its result warms the cache for the sender's next toast) and is awaited - within kToastActRouteLookupBudgetMs -
+        // only for a toast whose route depends on it (row-4 COM buttons, ToastActRouteNeedsActivator); not done in time,
+        // that toast takes the window path (the user keeps the guest's buttons). An informational toast is published at
+        // once, its default click left out this time and the reason logged.
+        std::wstring actClsid;
+        const wchar_t* actSrc = L"not-asked";
+        ToastActActivator actState = ToastActActivator::Unknown;
         ToastActPlan plan;                            // !ok, no actions, until a payload says otherwise
         plan.refusal = L"no payload (fail-open)";
+        int lastRow = 0;                              // the classifier's row, carried to the SENT line's assertion
         auto decide = [&](ToastClass const& k, bool clean) {
             signals = WpnSignalSlug(k);
+            lastRow = k.row;
             if (!clean) return;                       // only a clean acquisition may say "bridge" (unchanged)
             if (k.row >= 4 && k.row <= 6)
             {
-                ToastActCtx ctx{ j.packaged, hasActivator, &aq };
+                if (!j.packaged)                      // a packaged sender's foreground activation is never carried: nothing to ask
+                {
+                    actState = ActivatorCacheGet(j.aumid, actClsid, actSrc);
+                    if (actState == ToastActActivator::Unknown)
+                    {
+                        bool started = false;
+                        auto h = ActivatorLookupStart(j.aumid, &started);
+                        const bool routeNeedsIt = ToastActRouteNeedsActivator(j.payloadW.c_str(), j.payloadW.size(), k, j.packaged);
+                        if (h && routeNeedsIt && h->WaitFor(kToastActRouteLookupBudgetMs, actClsid, actSrc))
+                            actState = actClsid.empty() ? ToastActActivator::None : ToastActActivator::Known;
+                        else if (h && routeNeedsIt)
+                        {
+                            actSrc = L"budget-exceeded";
+                            BLog(L"ACTIVATOR id=%u aumid=%s: lookup not done within the %llu ms route budget - this row-4 toast takes the "
+                                 L"window path (the guest's buttons stay with the user); the result warms the cache for the next toast",
+                                 j.id, j.aumid.c_str(), (ULONGLONG)kToastActRouteLookupBudgetMs);
+                        }
+                        else if (h)
+                        {
+                            actSrc = started ? L"pending-started" : L"pending";
+                            BLog(L"ACTIVATOR id=%u aumid=%s: not in the cache - lookup %s in the background, NOT awaited (an informational "
+                                 L"toast's route does not depend on it; its default click is not carried this time)",
+                                 j.id, j.aumid.c_str(), started ? L"started" : L"already running");
+                        }
+                        else actSrc = L"no-thread";
+                    }
+                }
+                ToastActCtx ctx{ j.packaged, actState };
                 plan = ToastActionsBuild(j.payloadW.c_str(), j.payloadW.size(), k, ctx);
             }
             if (k.row == 4) verdict = plan.ok ? L"bridge" : L"window";
@@ -2172,10 +2204,10 @@ static void ShadowClassifyWork(ShadowJob& j)
         // row-4 toast is window). activator=: where the sender's toast activator came from, when it was asked.
         BLog(L"CLASSIFY id=%u src=%hs etw=%hs verdict=%s row_latency=%lums signals=%s corr=%hs actions=%s activator=%s%s%s",
              j.id, src, etw, verdict, (DWORD)(GetTickCount64() - t0), signals.c_str(), corr, ToastActSlug(plan).c_str(),
-             aq.asked ? aq.source : L"not-asked", plan.defaultNote ? L" default-not-carried=" : L"", plan.defaultNote ? plan.defaultNote : L"");
+             actSrc, plan.defaultNote ? L" default-not-carried=" : L"", plan.defaultNote ? plan.defaultNote : L"");
         // Record exactly what was logged, so the route a later poll pass takes is the verdict an
         // operator can read in the log - not a second, separately-derived opinion.
-        VerdictStorePut(j.id, (wcscmp(verdict, L"bridge") == 0) ? ToastRouteBridge : ToastRouteWindow, plan, aq.clsid);
+        VerdictStorePut(j.id, (wcscmp(verdict, L"bridge") == 0) ? ToastRouteBridge : ToastRouteWindow, plan, actClsid, lastRow);
     }
     catch (...)
     {
@@ -2394,15 +2426,15 @@ static int DumpWpnDbMain(int limit)
 // "none" only sends a toast to the window path, a stale CLSID fails the click into the loud path below.
 static const PROPERTYKEY kPkeyAppUserModelId         = { { 0x9F4C2855, 0x9F79, 0x4B39, { 0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3 } }, 5 };
 static const PROPERTYKEY kPkeyToastActivatorClsid    = { { 0x9F4C2855, 0x9F79, 0x4B39, { 0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3 } }, 26 };
-static const DWORD       kActivatorCacheTtlMs = 10 * 60 * 1000;
-static const size_t      kActivatorCacheMax = 256;
 static const int         kLnkScanMaxDepth = 4;
 static const int         kLnkScanMaxFiles = 1024;
 
-struct ActivatorHit { std::wstring clsid; const wchar_t* source; ULONGLONG tick; };   // clsid empty = none registered
+// The cache (toastactions.h ToastActActivatorCache: answers for kTtlMs, negative ones too, bounded; and the lookups
+// in flight, one per sender, joined by every asker) under its own lock.
 static CRITICAL_SECTION g_activatorLock;
 static bool g_activatorLockInit = false;
-static std::unordered_map<std::wstring, ActivatorHit> g_activatorCache;   // key: lower-cased AUMID
+static ToastActActivatorCache g_activatorCache;
+static void ActivatorLockEnsure() { if (!g_activatorLockInit) { InitializeCriticalSection(&g_activatorLock); g_activatorLockInit = true; } }
 
 static std::wstring LowerW(std::wstring s) { for (auto& c : s) if (c >= L'A' && c <= L'Z') c = (wchar_t)(c + 32); return s; }
 
@@ -2488,77 +2520,148 @@ static std::wstring ActivatorFromShortcuts(std::wstring const& aumid)
 // The lookup proper, on a thread of its own with its own STA (IShellLink is an apartment-threaded in-proc
 // object; the asking thread - the shadow worker, or a diagnostic - keeps whatever apartment it has). The
 // result goes through the hand-off; if the asker has given up (kToastActLookupBoundMs), it is dropped.
-struct ActivatorLookupJob { std::wstring aumid; std::shared_ptr<ToastActLookupHandoff> handoff; };
+// The lookup proper: registry, then the Start-menu shortcuts. Needs a COM apartment on the calling thread (IShellLink
+// is apartment-threaded); runs on the lookup thread or the warm thread, never on the shadow worker or the main loop.
+static void ActivatorLookupRun(std::wstring const& aumid, bool coReady, std::wstring& clsid, const wchar_t*& src)
+{
+    clsid.clear(); src = L"none";
+    try
+    {
+        clsid = ActivatorFromRegistry(aumid);
+        if (!clsid.empty()) { src = L"registry"; return; }
+        if (!coReady) { BLog(L"ACTIVATOR lookup: no COM apartment - shortcuts not scanned for %s (none this time)", aumid.c_str()); return; }
+        clsid = ActivatorFromShortcuts(aumid);
+        src = clsid.empty() ? L"none" : L"shortcut";
+    }
+    catch (...) { clsid.clear(); src = L"none"; BLog(L"ACTIVATOR lookup threw for %s - treated as none", aumid.c_str()); }
+}
+
+// Store a finished lookup: cached whether or not anyone waited (the 2026-10-07 regression fix: a cold lookup warms
+// the cache for the sender's next toast), its hand-off published.
+static void ActivatorStore(std::wstring const& aumid, std::wstring const& clsid, const wchar_t* src)
+{
+    ActivatorLockEnsure();
+    CsGuard g(&g_activatorLock);
+    g_activatorCache.Store(LowerW(aumid), clsid, src, GetTickCount64());
+}
+
+struct ActivatorLookupJob { std::wstring aumid; };
 
 static DWORD WINAPI ActivatorLookupThread(LPVOID p)
 {
     NameThisThread(L"notifhost: activator-lookup");
     ActivatorLookupJob* job = (ActivatorLookupJob*)p;
-    std::wstring clsid;
-    const wchar_t* src = L"none";
     const bool co = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE));
-    try
-    {
-        clsid = ActivatorFromRegistry(job->aumid);
-        src = L"registry";
-        if (clsid.empty())
-        {
-            if (co) { clsid = ActivatorFromShortcuts(job->aumid); src = clsid.empty() ? L"none" : L"shortcut"; }
-            else { BLog(L"ACTIVATOR lookup thread: COM apartment init failed - shortcuts not scanned for %s", job->aumid.c_str()); src = L"none"; }
-        }
-    }
-    catch (...) { clsid.clear(); src = L"none"; BLog(L"ACTIVATOR lookup threw for %s - treated as none", job->aumid.c_str()); }
+    std::wstring clsid; const wchar_t* src = L"none";
+    const ULONGLONG t0 = GetTickCount64();
+    ActivatorLookupRun(job->aumid, co, clsid, src);
     if (co) CoUninitialize();
-    job->handoff->Publish(clsid, src);
+    ActivatorStore(job->aumid, clsid, src);
+    BLog(L"ACTIVATOR lookup done aumid=%s clsid=%s source=%s ms=%llu (cached %u min)", job->aumid.c_str(),
+         clsid.empty() ? L"-" : clsid.c_str(), src, GetTickCount64() - t0, (UINT)(ToastActActivatorCache::kTtlMs / 60000));
     delete job;
     return 0;
 }
 
-// The sender's toast activator CLSID ("{...}") or empty; *source says where it came from (registry |
-// shortcut | none | cache | timeout | no-thread). Any thread, any apartment: the lookup runs elsewhere and
-// this waits at most kToastActLookupBoundMs - a bound passed is loud, reads as none THIS time and is not
-// cached, so the next toast of that sender asks again.
+// Non-blocking: the cache's answer for the sender as of now (Known/None/Unknown).
+static ToastActActivator ActivatorCacheGet(std::wstring const& aumid, std::wstring& clsid, const wchar_t*& src)
+{
+    ActivatorLockEnsure();
+    CsGuard g(&g_activatorLock);
+    return g_activatorCache.Get(LowerW(aumid), GetTickCount64(), clsid, src);
+}
+
+// Non-blocking: the lookup for the sender - joined if one is in flight, started on a thread of its own otherwise.
+// The result lands in the cache when it is done, waited for or not. nullptr: no thread could be started (logged;
+// the next toast asks again).
+static std::shared_ptr<ToastActLookupHandoff> ActivatorLookupStart(std::wstring const& aumid, bool* started)
+{
+    ActivatorLockEnsure();
+    const std::wstring key = LowerW(aumid);
+    std::shared_ptr<ToastActLookupHandoff> h;
+    {
+        CsGuard g(&g_activatorLock);
+        h = g_activatorCache.Pending(key, started);
+    }
+    if (!*started) return h;
+    ActivatorLookupJob* job = new ActivatorLookupJob{ aumid };
+    HANDLE t = CreateThread(nullptr, 0, ActivatorLookupThread, job, 0, nullptr);
+    if (!t)
+    {
+        const DWORD gle = GetLastError();
+        delete job;
+        { CsGuard g(&g_activatorLock); g_activatorCache.Abandon(key); }
+        BLog(L"ACTIVATOR lookup thread create failed %lu for %s - none this time, nothing cached", gle, aumid.c_str());
+        return nullptr;
+    }
+    CloseHandle(t);   // detached: it stores into the cache and exits
+    return h;
+}
+
+// The sender's toast activator CLSID ("{...}") or empty, waiting up to kToastActLookupBoundMs for a lookup when the
+// cache has no answer - for the by-hand diagnostics (--resolve-activator / --invoke-activator) only; the
+// classification never waits like this (ShadowClassifyWork). *source: registry | shortcut | none | cache | timeout.
 static std::wstring ResolveToastActivator(std::wstring const& aumid, const wchar_t** source)
 {
     *source = L"none";
     if (aumid.empty()) return L"";
-    const std::wstring key = LowerW(aumid);
-    const ULONGLONG now = GetTickCount64();
-    if (!g_activatorLockInit) { InitializeCriticalSection(&g_activatorLock); g_activatorLockInit = true; }
+    std::wstring clsid; const wchar_t* src = L"none";
+    if (ActivatorCacheGet(aumid, clsid, src) != ToastActActivator::Unknown) { *source = L"cache"; return clsid; }
+    bool started = false;
+    auto h = ActivatorLookupStart(aumid, &started);
+    if (!h) return L"";
+    if (!h->WaitFor(kToastActLookupBoundMs, clsid, src))
     {
-        CsGuard g(&g_activatorLock);
-        auto it = g_activatorCache.find(key);
-        if (it != g_activatorCache.end() && now - it->second.tick < kActivatorCacheTtlMs)
-        { *source = L"cache"; return it->second.clsid; }
-    }
-    auto handoff = std::make_shared<ToastActLookupHandoff>();
-    ActivatorLookupJob* job = new ActivatorLookupJob{ aumid, handoff };
-    HANDLE t = CreateThread(nullptr, 0, ActivatorLookupThread, job, 0, nullptr);
-    if (!t)
-    {
-        delete job;
-        BLog(L"ACTIVATOR lookup thread create failed %lu for %s - treated as none this time", GetLastError(), aumid.c_str());
-        *source = L"no-thread";
-        return L"";
-    }
-    CloseHandle(t);   // detached: it publishes through the hand-off and exits
-    std::wstring clsid;
-    const wchar_t* src = L"none";
-    if (!handoff->WaitFor(kToastActLookupBoundMs, clsid, src))
-    {
-        BLog(L"ACTIVATOR lookup for %s did not answer within %llu ms (a Start-menu scan that does not finish?) - treated as none "
-             L"THIS time: its COM-activation toasts take the window path, nothing cached, the next toast asks again",
+        BLog(L"ACTIVATOR lookup for %s did not answer within %llu ms - none this time (its result will still land in the cache)",
              aumid.c_str(), (ULONGLONG)kToastActLookupBoundMs);
         *source = L"timeout";
         return L"";
     }
-    {
-        CsGuard g(&g_activatorLock);
-        if (g_activatorCache.size() >= kActivatorCacheMax) g_activatorCache.clear();   // bound; a refill is one lookup each
-        g_activatorCache[key] = { clsid, src, now };
-    }
     *source = src;
     return clsid;
+}
+
+// Warming at bridge start (background, bounded): the unpackaged senders whose toasts are already in the Notification
+// Center are the ones most likely to toast again - their activators are looked up now, one after another on one
+// thread, so their first toast after the start finds the cache warm. Fail-open: a lookup that fails or hangs costs
+// only that sender its enrichment until the next toast asks again.
+struct ActivatorWarmJob { std::vector<std::wstring> aumids; };
+
+static DWORD WINAPI ActivatorWarmThread(LPVOID p)
+{
+    NameThisThread(L"notifhost: activator-warm");
+    ActivatorWarmJob* job = (ActivatorWarmJob*)p;
+    const bool co = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE));
+    unsigned done = 0;
+    for (auto const& aumid : job->aumids)
+    {
+        std::wstring clsid; const wchar_t* src = L"none";
+        if (ActivatorCacheGet(aumid, clsid, src) != ToastActActivator::Unknown) continue;
+        bool started = false;
+        {
+            CsGuard g(&g_activatorLock);
+            g_activatorCache.Pending(LowerW(aumid), &started);   // askers meanwhile join this lookup
+        }
+        if (!started) continue;                                   // a classification already started one
+        ActivatorLookupRun(aumid, co, clsid, src);
+        ActivatorStore(aumid, clsid, src);
+        done++;
+    }
+    if (co) CoUninitialize();
+    BLog(L"ACTIVATOR warm done: %u of %u sender(s) looked up in the background", done, (UINT)job->aumids.size());
+    delete job;
+    return 0;
+}
+
+static void ActivatorWarmStart(std::vector<std::wstring> const& aumids)
+{
+    if (aumids.empty()) return;
+    ActivatorLockEnsure();
+    ActivatorWarmJob* job = new ActivatorWarmJob{ aumids };
+    HANDLE t = CreateThread(nullptr, 0, ActivatorWarmThread, job, 0, nullptr);
+    if (!t) { BLog(L"ACTIVATOR warm thread create failed %lu - the cache warms on first use instead", GetLastError()); delete job; return; }
+    CloseHandle(t);
+    BLog(L"ACTIVATOR warm: %u unpackaged sender(s) from the Notification Center queued for a background lookup", (UINT)aumids.size());
 }
 
 // A packaged (PFN!App) sender, from the listener's AppInfo when it says so, else from the AUMID's shape.
@@ -3664,14 +3767,24 @@ static int BridgeMain()
     };
     std::unordered_set<uint32_t> seen;
     bool primed = false;
+    std::vector<std::wstring> warm;   // unpackaged senders already in the center: their activators are looked up in the background
     try {
         for (auto const& un : listener.GetNotificationsAsync(NotificationKinds::Toast).get())
         {
             if (inGap(un)) { BLog(L"baseline: id=%u left unseen (suppression-gap AUMID)", un.Id()); continue; }
             seen.insert(un.Id());
+            std::wstring aumid;
+            try { aumid = un.AppInfo().AppUserModelId().c_str(); } catch (...) {}
+            if (!aumid.empty() && warm.size() < 8 && !AumidPackaged(un, aumid))
+            {
+                bool have = false;
+                for (auto const& w : warm) if (_wcsicmp(w.c_str(), aumid.c_str()) == 0) { have = true; break; }
+                if (!have) warm.push_back(aumid);
+            }
         }
         primed = true;
     } catch (...) { BLog(L"baseline read failed - will prime on the first good poll, forwarding nothing until then"); }
+    ActivatorWarmStart(warm);   // ADR-toasts 11: a sender's first toast after the start should find its activator cached
 
     bool connected = false;                        // a connection is up
     // Per-toast-id count of forward attempts REJECTED BY A LIVE SERVER (reply tag 1/2: ForwardText
@@ -3879,6 +3992,8 @@ static int BridgeMain()
                     uint32_t id; std::wstring aumid, app, title, body;
                     ToastActPlan plan;        // the classifier's action plan (ADR-toasts 11); !ok or empty = no actions
                     std::wstring clsid;       // the sender's toast activator, when any action is a COM activation
+                    int row = 0;              // the classifier's row (0 = no verdict: an allowlisted toast forwarded blind)
+                    bool allowlisted = false;
                 };
                 std::vector<NewToast> fresh;
                 // NON-SEAMLESS MODE (ADR-toasts 10): the agent says whether the hold exists right now. While it does
@@ -3955,23 +4070,51 @@ static int BridgeMain()
                     if (g_etw.state != ETW_STATE_LIVE) listed = false;
 #endif
                     VerdictEntry ve;          // the classifier's verdict + action plan, when it has one (else window, no actions)
-                    if (!listed)
+                    bool blind = false;       // an allowlisted toast forwarded without a verdict (the shortcut's contract, loud)
                     {
-                        // CLASSIFIER-DRIVEN ROUTING. An app nobody allowlisted is no longer skipped
-                        // outright: its toast takes the route the classifier gave it. Every rung
-                        // below fails OPEN to the window path, which is what shipped before this.
+                        // THE ROUTE (toastactions.h ToastActListingDecide), allowlisted or not. An allowlisted toast is NO LONGER
+                        // forwarded blind by the shortcut when the classifier has answered (guest finding 2026-10-07: a row-4
+                        // toast from an allowlisted sender reached dom0 WITHOUT its buttons while the hold suppressed its banner
+                        // - the choice lost, which decision 4 forbids): with its verdict it follows its plan like any toast -
+                        // bridge with the plan's actions, window when the plan refuses. While the verdict is pending it waits
+                        // within the listing's passes; after them, allowlisted -> forwarded without a plan (the shortcut's
+                        // contract, for a classifier that cannot answer; logged loudly), otherwise -> window (ADR 2 rule 3).
+                        // Every rung fails OPEN to the window path.
                         int passes = 0;
-                        if (VerdictLookup(id, &ve, &passes))
+                        const bool known = VerdictLookup(id, &ve, &passes);
+                        const ToastActListingRoute lr = ToastActListingDecide(listed, known, ve.route == ToastRouteBridge, ve.plan, passes, kVerdictMaxPasses);
+                        if (lr == ToastActListingRoute::Window)
                         {
-                            if (ve.route != ToastRouteBridge)
-                            {
-                                seen.insert(id); VerdictForget(id);
-                                HoldVerdict(id, TH_VERDICT_WINDOW, false);   // the listing's final word
-                                BLog(L"skip id=%u aumid=%s title='%s' (window path; classifier verdict%s%s)", id, aumid.c_str(), title.c_str(),
+                            seen.insert(id); VerdictForget(id);
+                            HoldVerdict(id, TH_VERDICT_WINDOW, false);   // the listing's final word (reopens an allowlisted toast's held banner)
+                            if (known)
+                                BLog(L"skip id=%u aumid=%s title='%s' (window path; %s verdict%s%s)", id, aumid.c_str(), title.c_str(),
+                                     listed ? L"allowlisted sender, but the classifier's" : L"classifier",
                                      ve.plan.ok ? L"" : L"; actions ", ve.plan.ok ? L"" : ToastActSlug(ve.plan).c_str());
-                                continue;
-                            }
-                            BLog(L"route id=%u aumid=%s (bridge; classifier verdict; actions=%s)", id, aumid.c_str(), ToastActSlug(ve.plan).c_str());
+                            else
+                                BLog(L"skip id=%u aumid=%s title='%s' (window path; no verdict after %d passes)", id, aumid.c_str(), title.c_str(), kVerdictMaxPasses);
+                            continue;
+                        }
+                        if (lr == ToastActListingRoute::AwaitVerdict)
+                        {
+                            // No verdict yet. Leave it UNSEEN so the next pass reconsiders it; this is the same retry that
+                            // already stops a failed forward from dropping a toast. Nothing blocks and nothing is lost.
+                            BLog(L"await id=%u aumid=%s (%sverdict pending, pass %d/%d)", id, aumid.c_str(), listed ? L"allowlisted; " : L"", passes, kVerdictMaxPasses);
+                            retryPending = true;   // re-listed when the verdict lands (g_mainWake) or on the retry deadline
+                            continue;
+                        }
+                        if (lr == ToastActListingRoute::ForwardBlind)
+                        {
+                            blind = true;
+                            BLog(L"ALLOWLIST id=%u aumid=%s title='%s' forwarded WITHOUT a verdict after %d passes (the classifier did not answer): "
+                                 L"if this toast carries buttons they are LOST in dom0 - the allowlist is for informational senders only",
+                                 id, aumid.c_str(), title.c_str(), kVerdictMaxPasses);
+                        }
+                        else
+                            BLog(L"route id=%u aumid=%s (bridge; %s verdict; actions=%s)", id, aumid.c_str(), listed ? L"allowlisted sender, classifier" : L"classifier",
+                                 ToastActSlug(ve.plan).c_str());
+                        if (!listed)
+                        {
                             // The verdict is kept in the store until the forward SUCCEEDS (or is given up): forgetting it
                             // here made a failed forward's retry find no verdict, wait out its passes and end as
                             // "window" without ever forwarding - every forward failure was a loss (review #2).
@@ -3979,33 +4122,16 @@ static int BridgeMain()
                             // toast on the window path, and flipping its record bridge->window every pass would
                             // churn the agent's hold (review N4).
                             HoldVerdict(id, g_connDead ? TH_VERDICT_WINDOW : TH_VERDICT_BRIDGE, false);
-                            listed = true;        // fall through to the forward path below
-                        }
-                        else if (passes < kVerdictMaxPasses)
-                        {
-                            // No verdict yet. Leave it UNSEEN so the next pass reconsiders it; this
-                            // is the same retry that already stops a failed forward from dropping a
-                            // toast. Nothing blocks and nothing is lost.
-                            BLog(L"await id=%u aumid=%s (verdict pending, pass %d/%d)", id, aumid.c_str(), passes, kVerdictMaxPasses);
-                            retryPending = true;   // re-listed when the verdict lands (g_mainWake) or on the retry deadline
-                            continue;
-                        }
-                        else
-                        {
-                            seen.insert(id); VerdictForget(id);
-                            HoldVerdict(id, TH_VERDICT_WINDOW, false);
-                            BLog(L"skip id=%u aumid=%s title='%s' (window path; no verdict after %d passes)", id, aumid.c_str(), title.c_str(), kVerdictMaxPasses);
-                            continue;
                         }
                     }
-                    // allowlisted: DEFER marking seen until a forward succeeds, so a failed/absent
-                    // forward is retried and never silently drops a toast (P.2 fail-open invariant).
-                    // An allowlisted toast carries no actions (the shortcut forwards before any verdict; the seed
-                    // is informational senders only, ADR-toasts 4); a classifier-routed one carries its plan.
+                    // DEFER marking seen until a forward succeeds, so a failed/absent forward is retried and never
+                    // silently drops a toast (P.2 fail-open invariant). The plan goes with the toast - an allowlisted one's
+                    // too (its default click only if the activator was already cached: the plan never waited for it).
                     NewToast nt;
                     nt.id = id; nt.aumid = aumid; nt.app = app; nt.title = title;
                     nt.body = (sep == std::wstring::npos) ? L"" : tb.substr(sep + 1);
-                    if (ve.route == ToastRouteBridge && ve.plan.ok) { nt.plan = ve.plan; nt.clsid = ve.clsid; }
+                    nt.allowlisted = listed;
+                    if (!blind) { nt.row = ve.row; if (ve.route == ToastRouteBridge && ve.plan.ok) { nt.plan = ve.plan; nt.clsid = ve.clsid; } }
                     fresh.push_back(std::move(nt));
                 }
                 // prune failure counters for ids no longer pending (forwarded, given up, or gone
@@ -4119,10 +4245,15 @@ static int BridgeMain()
                                      L"matched when clicked (a dom0 click will log 'no forwarded toast')", e.id, (ULONGLONG)seq);
                         }
                     }
-                    BLog(L"SENT id=%u app='%s' title='%s': %s%s actions=%s%s%s", e.id, e.app.c_str(), e.title.c_str(),
+                    BLog(L"SENT id=%u app='%s' title='%s': %s%s actions=%s%s%s%s", e.id, e.app.c_str(), e.title.c_str(),
                          ok ? L"OK" : L"FAIL", ok ? L"" : L" (unseen, retried)",
                          withActions ? ToastActSlug(e.plan).c_str() : L"none",
-                         (ok && withActions) ? L" dom0=" : L"", (ok && withActions) ? std::to_wstring(dom0Id).c_str() : L"");
+                         (ok && withActions) ? L" dom0=" : L"", (ok && withActions) ? std::to_wstring(dom0Id).c_str() : L"",
+                         e.allowlisted ? L" (allowlisted)" : L"");
+                    // The assertion (guest finding 2026-10-07): a row-4 toast - real-choice buttons - must never go to dom0 as text.
+                    if (ok && ToastActSentAnomaly(e.row, actions.size() / 2))
+                        BLog(L"ANOMALY id=%u: a row-4 toast (real-choice buttons) was SENT with actions=none - a bug of ours (decision 4 "
+                             L"forbids a half-way forward); its guest banner is held by the hold, so the choice is lost in dom0", e.id);
                 }
             }
             // bound the seen-set: INTERSECT with what is still in the center. A plain rebuild

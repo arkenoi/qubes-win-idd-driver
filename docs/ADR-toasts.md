@@ -11,8 +11,9 @@ treatment.
 Not every toast can be forwarded. One that carries buttons needs them to work. Since 4.3.31 that choice is
 made per notification, by a classifier that looks at the toast's own content, not per application. A short
 list of applications whose notifications are always informational (Snipping Tool, Camera, Photos, Security
-and Maintenance, the backup reminder) is forwarded without waiting for the verdict, and operators can extend
-the list per guest.
+and Maintenance, the backup reminder) is forwarded even when the classifier cannot answer, and operators can
+extend the list per guest - but since the buttons route (§11) a toast of theirs whose verdict has arrived
+follows that verdict like any other: a listed application cannot smuggle a toast with buttons to dom0 as text.
 
 Buttons can now travel too (§11, built, not yet proven on a guest). When every button of a toast is one the
 bridge can press on your behalf - a link the button opens, or a classic Windows application that registered
@@ -45,7 +46,8 @@ flowchart TD
     G -->|"bridge on"| H{"Bridge healthy, dom0 connection up?"}
     H -->|no| W
     H -->|yes| L{"Sender's AUMID in NotifyBridgeAllow,<br/>or in the built-in seed (§4)?"}
-    L -->|yes| F["Forward to dom0's qubes.Notifications, with the actions<br/>it can carry (§11); the guest banner stays unmapped (§10)"]
+    L -->|"yes, and the verdict (when it arrives within the passes)<br/>does not refuse its buttons (§11)"| F["Forward to dom0's qubes.Notifications, with the actions<br/>it can carry (§11); the guest banner stays unmapped (§10)"]
+    L -->|"yes, but the verdict refuses its buttons (§11)"| W
     L -->|no| S{"Classifier usable? (§8: the wpndatabase<br/>schema matched for this process)"}
     S -->|no| W
     S -->|yes| V{"Verdict within 3 poll passes (about 6 s)?"}
@@ -118,6 +120,10 @@ that sent it.
    with its buttons intact.
 2. An AUMID in `NotifyBridgeAllow` is forwarded without waiting for a verdict. The allowlist is a per-app
    shortcut for senders whose toasts are known to be informational, saving the classification round trip.
+   **CORRECTED 2026-10-07 (§11, guest finding):** the shortcut no longer forwards a toast whose verdict has
+   arrived against that verdict - an allowlisted toast with buttons the bridge cannot carry takes the window
+   path like any other, and one forwarded with buttons carries them. The shortcut stands only where the
+   classifier has not answered within the listing's passes: that toast is still forwarded, loudly logged.
 3. **Bound.** A toast with no verdict after 3 poll passes (about 6 s) takes the window path and is marked seen.
    It is never held indefinitely and never dropped.
 
@@ -336,6 +342,21 @@ without a window; `system` snooze is shell-internal; an `<input>` needs a surfac
    its buttons work. Rows 5 and 6 are forwarded as before and carry what they can; a button that cannot be carried (a
    protocol button without a launchable URI) sends them to the window path too. The default click is an enrichment:
    carried as the `default` action when it can be, otherwise omitted and the reason logged - what shipped since 4.3.30.
+   **The activator lookup never delays a route that does not depend on it** (guest-test regression 2026-10-07: a cold
+   3.4 s lookup for a sender without an activator pushed an informational toast's verdict past the listing's budget and
+   it lost forwarding). The cache is asked without blocking; a miss starts the lookup in the background - its result,
+   negative ones too, is cached for 10 minutes whether anyone waited or not - and only a row-4 toast with COM buttons
+   waits for it, within the listing's own budget (750 ms); not done by then, that toast takes the window path and its
+   late result warms the cache. An informational toast is published at once, its default click left out that time (logged).
+   At bridge start the unpackaged senders already in the Notification Center (at most 8) are looked up in the background.
+   **The allowlist never forwards a toast against its plan** (guest finding 2026-10-07: a row-4 toast from an allowlisted
+   sender reached dom0 as text while the hold suppressed its banner). With its verdict in hand an allowlisted toast
+   follows its plan like any other - forwarded with its actions, or the window path when the plan refuses; while the
+   verdict is pending it waits within the listing's passes; only a toast whose verdict never comes is forwarded without
+   a plan, as the shortcut's contract for a classifier that cannot answer, logged loudly (`ALLOWLIST ... WITHOUT a
+   verdict`). An allowlisted informational toast therefore goes out on the first pass that has its verdict - the pass
+   after its listing, tens of milliseconds later - and never waits for a lookup. The `SENT` line carries an assertion:
+   a row-4 toast sent with `actions=none` logs `ANOMALY`.
 3. **Keys are the bridge's** (`default`, `b0`..`b4`), never the toast's; labels are the buttons' `content`. The toast is
    forwarded WITH its actions regardless of dom0's daemon (the guest cannot learn whether it renders actions; the stock
    Linux client advertises them unconditionally too); the `SENT` line says what went.
@@ -390,16 +411,20 @@ depend on a guess.
 text and acts in the guest's Notification Center, as for every forwarded toast today. A click runs under the bridge's
 token, which has no foreground rights: an activated app may not come to the front (a taskbar flash) - to be measured on
 the guest. An actionable toast inside a burst of more than three loses its dom0 rendering. The activator lookup walks
-the Start menu once per sender per 10 minutes, bounded (depth 4, 1024 shortcuts, 5 s - past which that sender's COM
-toasts take the window path that time). A failed click shows the banner late (within 2 s plus the agent's pass) or
+the Start menu once per sender per 10 minutes, bounded (depth 4, 1024 shortcuts), in the background; a toast whose
+route depends on it waits at most 750 ms for it (past which it takes the window path that time), an informational toast
+never - whose default click is then missing until the sender's next toast. An allowlisted toast is forwarded one pass
+(tens of milliseconds) later than before: on the pass that has its verdict. A failed click shows the banner late (within 2 s plus the agent's pass) or
 costs one dom0 error notice. A click whose activation never answers is reported failed after 30 s and its process
 is terminated (an app that was mid-launch for it may be killed with it; nothing of the bridge is left behind). Every
 click costs one short-lived process. A toast with actions stays correlated for up to an hour (64 small entries).
 
-**Evidence.** Offline: `tools/notifhost/toastactions_test.cpp` (106 checks; eleven defect knobs each seen to fail:
+**Evidence.** Offline: `tools/notifhost/toastactions_test.cpp` (135 checks; sixteen defect knobs each seen to fail:
 background carried, half-way forward, packaged treated as COM, invalid keys, silent failure, unbounded table, the
 table keyed by our sequence instead of the proxy's id, no click bound, the bound reporting the failure but leaving the
-hung child alive, a second outcome for a click already reported, no lookup bound), `toasthold_bridge_test.cpp` (+11 checks) and `agent/gui-agent/toasthold_test.c` (+7)
+hung child alive, a second outcome for a click already reported, no lookup bound, an informational toast's route
+awaiting the lookup, a pending lookup refusing an informational toast, a pending lookup taken for a registered
+activator, a lookup result nobody waited for dropped, the allowlist forwarding blind against the plan), `toasthold_bridge_test.cpp` (+11 checks) and `agent/gui-agent/toasthold_test.c` (+7)
 for the agent mark - including the store that races the slot's republish - with the knob
 `TOASTIDENT_DEFECT_MARK_BY_SLOT` seen to fail in both; `tools/tests/toastactions-selftest.sh` and
 `toasthold-selftest.sh` run the matrices with g++, CI with msbuild. Independent review 2026-10-07 (Jev, five parts)
@@ -408,7 +433,12 @@ fixed in two rounds: first a click ledger bounding the outcome, then - because a
 not be cancelled and would have been leaked - the child process per click that the bound terminates), the id space of
 a click (not real: the table was keyed by the proxy's id from the Id reply all along; hardened so the entry exists
 before the send), the shadow worker's apartment (a regression risk, not a defect - that thread makes no COM call of
-its own; the lookup moved to a bounded thread so its apartment is as before). On a guest: OWED. (a) `toastfire --register --method com-activator` then
+its own; the lookup moved to a bounded thread so its apartment is as before). Guest test of the first package
+(toast-hold-test on win11r, 2026-10-07): two findings against the 4.3.35 release - (1) the first informational toast
+of a sender without an activator took the window path, its verdict delayed 3.4 s by the cold activator lookup
+(release: 16-94 ms), fixed by the non-blocking lookup above; (2) a row-4 toast from an allowlisted sender was SENT
+`actions=none` while its banner was held - the allowlist's blind forward, fixed by the plan-following allowlist above.
+Everything else matched the release. On a guest: OWED again, on the fixed package. (a) `toastfire --register --method com-activator` then
 `--fire --class actionable`: `CLASSIFY ... verdict=bridge ... actions=default:com,b0:com,b1:com activator=registry`,
 `SENT ... actions=... dom0=N`, no guest banner (the hold); the control, the same fire with the activator unregistered:
 `actions=refused:...` and the window path. (b) `notifhost --invoke-activator QubesToastfire.ComActivator ok` with

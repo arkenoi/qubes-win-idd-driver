@@ -71,13 +71,25 @@
 //   TOASTACT_DEFECT_DOUBLE_OUTCOME      a click already reported (the bound killed its child) gets a second
 //                                       outcome (two notices, or a success after a failure)
 //   TOASTACT_DEFECT_NOLOOKUPBOUND       the asking thread waits for the activator lookup without a bound
+//   TOASTACT_DEFECT_AWAIT_FOR_INFO      an informational toast's route waits for the activator lookup (the 2026-10-07
+//                                       guest-test regression: a cold lookup pushed the verdict past the listing's budget)
+//   TOASTACT_DEFECT_UNKNOWN_REFUSES     an informational toast with the lookup pending is refused (window) instead of
+//                                       forwarded without its default click
+//   TOASTACT_DEFECT_UNKNOWN_AS_KNOWN    a pending lookup is treated as a registered activator (COM buttons forwarded
+//                                       with no CLSID to call)
+//   TOASTACT_DEFECT_LATE_RESULT_DROPPED a lookup result nobody waited for is not cached (the next toast asks again)
+//   TOASTACT_DEFECT_ALLOWLIST_BLIND     the allowlist shortcut forwards a toast without its plan whatever the classifier
+//                                       said (guest finding 2026-10-07: a row-4 toast from an allowlisted sender went to
+//                                       dom0 WITHOUT its buttons while the hold suppressed its banner - the choice lost)
 #pragma once
 #include "toastclassify.h"
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #if (defined(TOASTACT_DEFECT_BACKGROUND_CARRIED) + defined(TOASTACT_DEFECT_PARTIAL_FORWARD) + \
@@ -85,7 +97,9 @@
      defined(TOASTACT_DEFECT_NONOTICE) + defined(TOASTACT_DEFECT_UNBOUNDED_TABLE) + \
      defined(TOASTACT_DEFECT_KEY_BY_SEQ) + defined(TOASTACT_DEFECT_NOCLICKBOUND) + \
      defined(TOASTACT_DEFECT_DOUBLE_OUTCOME) + defined(TOASTACT_DEFECT_NOLOOKUPBOUND) + \
-     defined(TOASTACT_DEFECT_NOKILL)) > 1
+     defined(TOASTACT_DEFECT_NOKILL) + defined(TOASTACT_DEFECT_AWAIT_FOR_INFO) + \
+     defined(TOASTACT_DEFECT_UNKNOWN_REFUSES) + defined(TOASTACT_DEFECT_UNKNOWN_AS_KNOWN) + \
+     defined(TOASTACT_DEFECT_LATE_RESULT_DROPPED) + defined(TOASTACT_DEFECT_ALLOWLIST_BLIND)) > 1
 #error define at most one TOASTACT_DEFECT_* switch
 #endif
 
@@ -109,14 +123,48 @@ struct ToastActPlan
     std::vector<ToastAct> actions;
 };
 
-// What the builder needs from the sender. `hasActivator` is asked at most once and only when the plan
-// needs it (a registry/shortcut lookup on the Windows side; a stub in the suite).
+// The sender's toast activator as the caller KNOWS it when the plan is built - never something the builder
+// waits for (guest-test regression 2026-10-07: a lookup awaited here pushed an informational toast's verdict
+// past the listing's budget and it lost forwarding). Unknown = a lookup is pending or has not been started;
+// the builder then carries nothing that depends on it and says so, and the caller decides whether THIS
+// toast's route may wait for the result (ToastActRouteNeedsActivator) or not.
+enum class ToastActActivator { Unknown = 0, None = 1, Known = 2 };
+
 struct ToastActCtx
 {
     bool packaged;                          // a packaged (PFN!App) sender: its foreground activation is UWP's, out of scope
-    bool (*hasActivator)(void* cookie);     // the sender registered a toast activator CLSID
-    void* cookie;
+    ToastActActivator activator;            // the cache's answer for the sender, as of now
 };
+
+// Does THIS toast's ROUTE depend on the sender's activator - i.e. may the caller wait (within the listing's
+// budget) for a pending lookup before deciding? Only a row-4 toast with a foreground (COM) banner button on an
+// unpackaged sender: without the activator it is the window path, with it the bridge. An informational toast
+// (rows 5-6) never waits: its default click is an enrichment that the lookup's result enriches next time.
+inline bool ToastActRouteNeedsActivator(const wchar_t* xml, size_t len, ToastClass const& k, bool packaged)
+{
+#ifdef TOASTACT_DEFECT_AWAIT_FOR_INFO
+    if (k.row >= 4 && k.row <= 6 && !packaged) return true;   // DEFECT: every candidate waits for the lookup (the regression)
+#endif
+    if (k.row != 4 || packaged) return false;
+    std::vector<tc::Elem> els;
+    std::wstring root;
+    if (!tc::Parse(xml, len, els, root) || !tc::IEq(root, L"toast")) return false;
+    for (auto const& e : els)
+    {
+        if (!tc::IEq(e.name, L"action")) continue;
+        const tc::Attr* pl = tc::FindAttr(e, L"placement");
+        if (pl && pl->value == L"contextMenu") continue;
+        const tc::Attr* at = tc::FindAttr(e, L"activationType");
+        if (!at || tc::IEq(at->value, L"foreground")) return true;
+    }
+    return false;
+}
+
+// How long a toast whose route depends on a pending lookup may wait for it: inside the listing's own budget (its
+// 3 verdict passes elapse within about 1.25 s on the push-retry pattern; the agent's hold fails open at 3 s).
+// A lookup not done by then sends the toast to the window path (the user keeps the guest's buttons) and its
+// late result still warms the cache for the sender's next toast.
+constexpr uint64_t kToastActRouteLookupBudgetMs = 750;
 
 namespace ta {
 
@@ -214,20 +262,22 @@ inline ToastActPlan ToastActionsBuild(const wchar_t* xml, size_t len, ToastClass
     if (!tc::Parse(xml, len, els, root) || !tc::IEq(root, L"toast"))
     { p.refusal = L"payload unparseable for the action list (fail-open)"; return p; }
 
-    int activator = -1;                         // unknown / asked: 0 none, 1 registered
-    auto hasActivator = [&]() -> bool {
-        if (activator < 0) activator = (ctx.hasActivator && ctx.hasActivator(ctx.cookie)) ? 1 : 0;
-        return activator == 1;
-    };
-    // The activation a foreground (COM) request resolves to, or the static reason it cannot be carried.
+    // The activation a foreground (COM) request resolves to, or the static reason it cannot be carried. Unknown
+    // (a lookup pending) carries nothing: for a button that refuses the toast (the caller waited within its
+    // budget first, if the route depended on it); for the default click it only leaves the enrichment out.
     auto comAllowed = [&](const wchar_t** why) -> bool {
 #ifdef TOASTACT_DEFECT_PACKAGED_COM
         (void)0;
 #else
         if (ctx.packaged) { *why = L"packaged sender: a UWP foreground activation is not carried"; return false; }
 #endif
-        if (!hasActivator()) { *why = L"the sender registered no toast activator (no CustomActivator, no ToastActivatorCLSID shortcut)"; return false; }
+        if (ctx.activator == ToastActActivator::None) { *why = L"the sender registered no toast activator (no CustomActivator, no ToastActivatorCLSID shortcut)"; return false; }
+#ifdef TOASTACT_DEFECT_UNKNOWN_AS_KNOWN
+        return true;   // DEFECT: a pending lookup treated as a registered activator (COM buttons forwarded without a CLSID)
+#else
+        if (ctx.activator == ToastActActivator::Unknown) { *why = L"the sender's toast activator is not known yet (lookup pending in the background; the next toast finds it cached)"; return false; }
         return true;
+#endif
     };
 
     // ---- the default click: the toast element's own launch/activationType ----------------------
@@ -245,7 +295,15 @@ inline ToastActPlan ToastActionsBuild(const wchar_t* xml, size_t len, ToastClass
             const wchar_t* why = nullptr;
             if (arg.size() > ta::kMaxArgChars) p.defaultNote = L"default click arguments too long";
             else if (comAllowed(&why)) p.actions.push_back({ "default", L"Open", ToastActKind::Com, arg });
-            else p.defaultNote = why;
+            else
+            {
+                p.defaultNote = why;
+#ifdef TOASTACT_DEFECT_UNKNOWN_REFUSES
+                // DEFECT (the 2026-10-07 regression's shape): an informational toast whose sender's activator is not
+                // known yet is REFUSED instead of forwarded without its default click
+                if (!ctx.packaged && ctx.activator == ToastActActivator::Unknown) { p.refusal = why; p.actions.clear(); return p; }
+#endif
+            }
         }
         else if (tc::IEq(at->value, L"background"))
             p.defaultNote = L"background default click is not carried";
@@ -596,6 +654,7 @@ public:
     bool WaitFor(uint64_t boundMs, std::wstring& clsid, const wchar_t*& source)
     {
         std::unique_lock<std::mutex> g(m_);
+        waited_ = true;
 #ifdef TOASTACT_DEFECT_NOLOOKUPBOUND
         (void)boundMs;
         cv_.wait(g, [&] { return done_; });   // DEFECT: no bound
@@ -605,13 +664,110 @@ public:
         clsid = clsid_; source = source_;
         return true;
     }
+    bool Waited() { std::lock_guard<std::mutex> g(m_); return waited_; }
+    bool Done() { std::lock_guard<std::mutex> g(m_); return done_; }
 private:
     std::mutex m_;
     std::condition_variable cv_;
     bool done_ = false;
+    bool waited_ = false;
     std::wstring clsid_;
     const wchar_t* source_ = L"none";
 };
+
+// ==== the activator cache, with the lookups in flight ======================================
+// Per sender (lower-cased AUMID): the answer - a CLSID, or NONE, negative results cached alike - for
+// kTtlMs, bounded; and the hand-off of a lookup in flight, so every asker of the same sender joins the one
+// lookup instead of starting another. A result is STORED whether or not anyone waited for it (the 2026-10-07
+// regression fix: a cold lookup is started in the background and warms the cache for the sender's next toast;
+// an informational toast never waits for it). Not thread-safe by itself: the caller locks.
+class ToastActActivatorCache
+{
+public:
+    static constexpr size_t   kMax = 256;
+    static constexpr uint64_t kTtlMs = 10ull * 60ull * 1000ull;
+    struct Hit { std::wstring clsid; const wchar_t* source; uint64_t tick; };
+
+    ToastActActivator Get(std::wstring const& key, uint64_t now, std::wstring& clsid, const wchar_t*& source) const
+    {
+        auto it = hits_.find(key);
+        if (it == hits_.end() || now - it->second.tick >= kTtlMs) return ToastActActivator::Unknown;
+        clsid = it->second.clsid; source = it->second.source;
+        return clsid.empty() ? ToastActActivator::None : ToastActActivator::Known;
+    }
+    // The hand-off of the lookup for `key`: the one in flight, or a new one (*started = true: the caller runs it).
+    std::shared_ptr<ToastActLookupHandoff> Pending(std::wstring const& key, bool* started)
+    {
+        auto it = pending_.find(key);
+        if (it != pending_.end()) { *started = false; return it->second; }
+        auto h = std::make_shared<ToastActLookupHandoff>();
+        pending_[key] = h;
+        *started = true;
+        return h;
+    }
+    // The lookup for `key` finished: cached (an empty clsid is the cached NONE), its hand-off published and dropped.
+    void Store(std::wstring const& key, std::wstring const& clsid, const wchar_t* source, uint64_t now)
+    {
+        auto it = pending_.find(key);
+        std::shared_ptr<ToastActLookupHandoff> h = (it != pending_.end()) ? it->second : nullptr;
+        if (it != pending_.end()) pending_.erase(it);
+#ifdef TOASTACT_DEFECT_LATE_RESULT_DROPPED
+        if (!h || !h->Waited()) { if (h) h->Publish(clsid, source); return; }   // DEFECT: nobody waited -> not cached
+#endif
+        if (hits_.size() >= kMax) hits_.clear();   // bound; a refill is one lookup each
+        hits_[key] = { clsid, source, now };
+        if (h) h->Publish(clsid, source);
+    }
+    // The lookup for `key` could not run (no thread): its hand-off answers none, nothing is cached (the next toast asks again).
+    void Abandon(std::wstring const& key)
+    {
+        auto it = pending_.find(key);
+        if (it == pending_.end()) return;
+        it->second->Publish(L"", L"no-thread");
+        pending_.erase(it);
+    }
+    size_t Size() const { return hits_.size(); }
+    size_t PendingCount() const { return pending_.size(); }
+private:
+    std::unordered_map<std::wstring, Hit> hits_;
+    std::unordered_map<std::wstring, std::shared_ptr<ToastActLookupHandoff>> pending_;
+};
+
+// ==== the listing's route for one toast, allowlisted or not ===================================
+// The allowlist is a SHORTCUT for senders whose toasts are informational (ADR-toasts 2, 4) - it was never a
+// licence to forward a toast with buttons without them (guest finding 2026-10-07: a row-4 toast from an
+// allowlisted sender reached dom0 as text while the hold suppressed its banner; decision 4 forbids exactly
+// that). So once the classifier has answered, an allowlisted toast follows its PLAN like any other: bridge
+// with the plan's actions, or the window path when the plan refuses (row 4 not fully carriable, rows 0-3). Only
+// while the verdict is pending do the two differ: a toast still inside the listing's passes waits for it, and
+// one that exhausted them is forwarded WITHOUT a plan if allowlisted (the shortcut's original contract, for a
+// classifier that cannot answer - logged loudly: if that toast had buttons they are lost) and takes the window
+// path otherwise (ADR-toasts 2, rule 3). An allowlisted informational toast is therefore forwarded on the first
+// pass that has its verdict - typically the pass after its listing, tens of milliseconds later - and never
+// waits for an activator lookup (its plan does not).
+enum class ToastActListingRoute { AwaitVerdict = 0, ForwardWithPlan = 1, Window = 2, ForwardBlind = 3 };
+
+inline ToastActListingRoute ToastActListingDecide(bool allowlisted, bool verdictKnown, bool routeBridge,
+                                                  ToastActPlan const& plan, int passes, int maxPasses)
+{
+#ifdef TOASTACT_DEFECT_ALLOWLIST_BLIND
+    if (allowlisted) return ToastActListingRoute::ForwardBlind;   // DEFECT: the shortcut ignores the plan
+#endif
+    if (verdictKnown) return (routeBridge && plan.ok) ? ToastActListingRoute::ForwardWithPlan : ToastActListingRoute::Window;
+    if (passes < maxPasses) return ToastActListingRoute::AwaitVerdict;
+    return allowlisted ? ToastActListingRoute::ForwardBlind : ToastActListingRoute::Window;
+}
+
+// The assertion the SENT line carries: a row-4 toast (real-choice buttons) sent with no actions is a bug of ours.
+inline bool ToastActSentAnomaly(int row, size_t actionsSent)
+{
+#ifdef TOASTACT_DEFECT_ALLOWLIST_BLIND
+    (void)row; (void)actionsSent;
+    return false;   // DEFECT: the blind shortcut had no assertion either
+#else
+    return row == 4 && actionsSent == 0;
+#endif
+}
 
 // ==== after a failed activation ===========================================================
 

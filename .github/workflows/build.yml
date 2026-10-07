@@ -817,7 +817,10 @@ jobs:
           foreach ($d in @('TOASTACT_DEFECT_BACKGROUND_CARRIED', 'TOASTACT_DEFECT_PARTIAL_FORWARD', 'TOASTACT_DEFECT_PACKAGED_COM',
                            'TOASTACT_DEFECT_BADKEY', 'TOASTACT_DEFECT_NONOTICE', 'TOASTACT_DEFECT_UNBOUNDED_TABLE',
                            'TOASTACT_DEFECT_KEY_BY_SEQ', 'TOASTACT_DEFECT_NOCLICKBOUND', 'TOASTACT_DEFECT_NOKILL',
-                           'TOASTACT_DEFECT_DOUBLE_OUTCOME', 'TOASTACT_DEFECT_NOLOOKUPBOUND')) {
+                           'TOASTACT_DEFECT_DOUBLE_OUTCOME', 'TOASTACT_DEFECT_NOLOOKUPBOUND',
+                           'TOASTACT_DEFECT_AWAIT_FOR_INFO', 'TOASTACT_DEFECT_UNKNOWN_REFUSES',
+                           'TOASTACT_DEFECT_UNKNOWN_AS_KNOWN', 'TOASTACT_DEFECT_LATE_RESULT_DROPPED',
+                           'TOASTACT_DEFECT_ALLOWLIST_BLIND')) {
             & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 `
                 /t:Rebuild "/p:ToastActDefect=$d"
             if ($LASTEXITCODE -ne 0) { throw "toastactions_test defect $d build failed to compile" }
