@@ -543,6 +543,13 @@ foreach ($d in ($deaths | Select-Object -Last 4)) { L 'line' ($d -replace "`r",'
 L 'catchup_lines' (@($lines | Where-Object { $_ -match 'CatchUp|catch-up|catchup' }) -join ' || ')
 L 'watermark_after' $(if (Test-Path $wm) { ((Get-Content $wm -Raw -EA SilentlyContinue) -replace "`r|`n",'') } else { 'absent' })
 L 'catchup_task_last' ((& schtasks /query /tn QwtDeathCatchUp /v /fo LIST 2>&1 | Out-String) -replace "`r|`n",' ' -replace '\s+',' ')
+# DID THE DEATH EVENT EXIST AT ALL? 4002 is the agent's event for a de-slice broker that stopped serving
+# (include/deathevent.h). Without it the injection never landed - the agent was torn down before it noticed -
+# and that is an INSTRUMENT miss, not concealment. "No death was recorded" and "a death was recorded and
+# nobody was told" are opposite verdicts, so the cell must not collapse them.
+$ev = @(Get-WinEvent -FilterHashtable @{LogName='Application'; Id=4002; StartTime=(Get-Date).AddMinutes(-30)} -EA SilentlyContinue)
+L 'death_events_4002' $ev.Count
+if ($ev.Count -gt 0) { L 'event_line' ((($ev[0].Message -replace "`r|`n",' ') -replace '\s+',' ')) }
 L 'END' 'ok'
 PS
       guest_ps "$OUT/L8-read.ps1" > "$OUT/L8-read.out" 2>&1
@@ -551,9 +558,12 @@ PS
       if [ -z "$da" ] || [ -z "$db" ]; then
         verdict L8 INVALID "a death during a shutdown is reported at the next boot, exactly once" \
                 "the reporter's own log could not be counted: before='$db' after='$da' (missing data fails)"
+      elif [ "$(g8r death_events_4002)" = 0 ] && [ "$da" = "$db" ]; then
+        verdict L8 INVALID "a death during a shutdown is reported at the next boot, exactly once" \
+                "no event 4002 was written at all - the agent was torn down before it noticed the broker go, so nothing was there to report: the INJECTION missed, which is not the same as concealment"
       elif [ "$da" = "$db" ]; then
         verdict L8 FAIL "a death during a shutdown is reported at the next boot" \
-                "DEATH lines did not change ($db -> $da): the death was CONCEALED - exactly what the catch-up exists to prevent"
+                "a death WAS recorded (event 4002 x$(g8r death_events_4002)) and the reporter's DEATH lines did not change ($db -> $da): CONCEALED - exactly what the catch-up exists to prevent"
       elif [ "$((da - db))" = 1 ]; then
         verdict L8 PASS "a death during a shutdown is reported at the next boot, exactly once" \
                 "DEATH lines $db -> $da (+1); watermark now $wma; $(g8r line | cut -c1-120)"
