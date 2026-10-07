@@ -754,7 +754,12 @@ public:
         }
         source = L"none";
 #ifdef TOASTACT_DEFECT_SCAN_PER_SENDER
-        *refresh = !building_;   // DEFECT: every miss re-scans the Start menu
+        // DEFECT: every miss re-scans the Start menu. `now` is then unused, and -Werror=unused-parameter turned that
+        // into a BUILD failure - so this knob did not compile and therefore never ran: a knob that cannot build is
+        // decoration, exactly like a check never seen to fail (measured 2026-10-07, after the latency fix added the
+        // parameter).
+        (void)now;
+        *refresh = !building_;
 #else
         *refresh = !building_ && now - builtAt_ >= kToastActScanTtlMs;
 #endif

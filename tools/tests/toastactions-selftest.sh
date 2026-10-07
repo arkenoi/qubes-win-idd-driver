@@ -33,11 +33,19 @@ bad=0
 say() { printf '%s\n' "$*"; }
 CC="g++ -std=c++17 -Wall -Wextra -Werror -pthread"
 # NOTHING HERE MAY WAIT FOREVER (2026-10-07). A run of this suite was found alive after 6.5 HOURS, holding the
-# subagent that started it: the compiled test inherits the caller's stdin, and with a pipe or a terminal there it can
-# block on a read that never completes - it finished at once with stdin closed. A test that can hang is worse than a
-# failing one: it stops the work that was waiting for its verdict and says nothing. So every child runs with stdin
-# closed AND under a bound, and the bound's expiry is a FAILURE with its own line, never a silent retry.
-RUNB="timeout --kill-after=5 300"
+# subagent that had started it. CAUSE, corrected after measuring it: not stdin, as the first version of this comment
+# said - it is the knob TOASTACT_DEFECT_NOLOOKUPBOUND. Its defect IS an unbounded wait, so the defect build waits for
+# a condition nobody will signal, and this loop had no bound to cut it short. The clean leg and every other knob
+# finish in seconds.
+#
+# So: every child runs under a bound, with stdin closed for good measure. And for the one knob whose defect is "waits
+# without a bound", TIMING OUT IS THE REQUIRED OUTCOME - a hang there is the defect being visible, and demanding FAIL
+# lines from a process that can never print them is a check that cannot pass. Every other knob must fail with lines.
+# 60 s: the clean leg and every non-hanging knob finish in seconds, so this is a failure detector, not a
+# pace - and it bounds what the one hanging knob costs the suite.
+RUNB="timeout --kill-after=5 60"
+# the knobs whose DEFECT is an unbounded wait: for these the bound's expiry is the required outcome
+HANGING_KNOBS=" TOASTACT_DEFECT_NOLOOKUPBOUND "
 SRC="$ROOT/tools/notifhost/toastactions_test.cpp"
 
 if $CC "$SRC" -o "$OUT/clean" 2>"$OUT/clean.build.err"; then
@@ -60,7 +68,12 @@ for d in TOASTACT_DEFECT_BACKGROUND_CARRIED TOASTACT_DEFECT_PARTIAL_FORWARD TOAS
          TOASTACT_DEFECT_BADKEY TOASTACT_DEFECT_NONOTICE TOASTACT_DEFECT_UNBOUNDED_TABLE; do
     if $CC -D"$d" "$SRC" -o "$OUT/$d" 2>"$OUT/$d.build.err"; then
         $RUNB "$OUT/$d" >"$OUT/$d.out" 2>&1 </dev/null; rc=$?
-        if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then say "FAIL  toastactions defect $d: the test HUNG (rc=$rc), it did not fail as required"; bad=1; continue; fi
+        if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then
+            case "$HANGING_KNOBS" in
+                *" $d "*) say "PASS  toastactions defect $d: the test HUNG at the bound (rc=$rc) - which is what an unbounded wait does, so the defect IS visible"; continue ;;
+                *) say "FAIL  toastactions defect $d: the test HUNG (rc=$rc) instead of failing - a defect that hangs says nothing"; bad=1; continue ;;
+            esac
+        fi
         f=$(grep -c '^FAIL' "$OUT/$d.out")
         if [ "$rc" -ne 0 ] && [ "$f" -gt 0 ]; then
             say "PASS  toastactions defect $d: suite FAILED as required (rc=$rc, $f failing: $(grep '^FAIL' "$OUT/$d.out" | head -1 | cut -c6-90))"
