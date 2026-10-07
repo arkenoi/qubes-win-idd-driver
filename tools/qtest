@@ -59,10 +59,35 @@ if ! qvm-check --quiet "$VM" 2>/dev/null; then
     [ -n "$tagged" ] && { echo "       testbed qubes available:" >&2; echo "$tagged" >&2; }
     exit 2
 fi
-# Discovered in Phase 0; override via env if different.
-INCOMING="${QTEST_INCOMING:-C:\\Users\\user\\Documents\\QubesIncoming\\$(hostname)}"
-
 vmshell() { printf '%s\n' "$1" | qrexec-client-vm "$VM" qubes.VMShell; }
+
+# THE INCOMING DIRECTORY IS DISCOVERED, NOT ASSUMED. It used to be hardcoded to
+# C:\Users\user\..., and a registered field reporter's environment HAS NO `user` ACCOUNT
+# (mgmt/reporters/gweck.json records it; his template's account is his own). The push still
+# succeeded - qvm-copy-to-vm lands the file in the real user's QubesIncoming - and then the run
+# executed a path that did not exist, so PowerShell said the file was missing, in German, and the
+# measurement reported "no data" about a guest that was working perfectly (2026-10-07, the
+# notification-flood reproduction). Ask the guest instead: whichever profile actually has this
+# qube's QubesIncoming directory is the answer, and the autologon user wins when several do.
+# QTEST_INCOMING still overrides, and a discovery that finds nothing falls back to the old path
+# with a word on stderr rather than silently guessing.
+qtest_incoming() {
+    [ -n "${QTEST_INCOMING:-}" ] && { printf '%s' "$QTEST_INCOMING"; return; }
+    [ -n "${_QTEST_INCOMING_CACHE:-}" ] && { printf '%s' "$_QTEST_INCOMING_CACHE"; return; }
+    local h d found pref
+    h="$(hostname)"
+    found=$(vmshell "cmd /c for /d %D in (C:\Users\*) do @if exist \"%D\\Documents\\QubesIncoming\\$h\" echo %D" 2>/dev/null | tr -d '\r' | grep -aE '^C:\\Users\\' || true)
+    pref=$(vmshell "cmd /c reg query \"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\" /v DefaultUserName 2>nul" 2>/dev/null | tr -d '\r' | awk '/DefaultUserName/{print $NF}' | tail -1)
+    d=""
+    if [ -n "$pref" ]; then d=$(printf '%s\n' "$found" | grep -aiE "\\\\$pref\$" | head -1); fi
+    [ -z "$d" ] && d=$(printf '%s\n' "$found" | head -1)
+    if [ -z "$d" ]; then
+        d="C:\\Users\\user"
+        echo "qtest: could not discover a QubesIncoming directory on $VM - falling back to $d (set QTEST_INCOMING to override)" >&2
+    fi
+    _QTEST_INCOMING_CACHE="$d\\Documents\\QubesIncoming\\$h"
+    printf '%s' "$_QTEST_INCOMING_CACHE"
+}
 adm()     { qrexec-client-vm "$VM" "$1" </dev/null; echo; }
 
 case "${1:-}" in
@@ -72,6 +97,7 @@ case "${1:-}" in
            # Qubes' file-agent REFUSES to overwrite an existing name in QubesIncoming
            # ("A file named ... already exists"). Delete the targets first so re-pushing
            # an edited file during iteration just works.
+           INCOMING="$(qtest_incoming)"
            for f in "$@"; do
                b="$(basename "$f")"
                vmshell "cmd /c del /q /f \"$INCOMING\\$b\" 2>nul" >/dev/null 2>&1 || true
@@ -81,6 +107,7 @@ case "${1:-}" in
            # Extra args after the script are FORWARDED to it. They used to be dropped
            # silently, so a caller passing e.g. -NoIddExpected got the default behaviour
            # and no warning (found 2026-08-07 while wiring the health gate's non-IDD mode).
+           INCOMING="$(qtest_incoming)"
            f="$1"; shift; base="$(basename "$f")"
            vmshell "cmd /c del /q /f \"$INCOMING\\$base\" 2>nul" >/dev/null 2>&1 || true
            qvm-copy-to-vm "$VM" "$f"

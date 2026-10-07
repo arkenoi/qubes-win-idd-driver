@@ -21,17 +21,24 @@
 # The reporter gate is not optional: env-assert.sh must pass before anything is measured, because a
 # reproduction on the wrong image has already cost this project a day (mgmt/harness/env-assert.sh header).
 #
-#   flood-repro.sh --iso <iso> [--subject <vm>] [--golden win11de-qwt] [--boots 3]
+#   flood-repro.sh --iso <iso> [--subject <vm>] [--golden win11de-qwt] [--boots 3] [--deliver]
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT" || exit 2
 
-ISO=""; SUBJ="win11de-flood"; GOLDEN="win11de-qwt"; BOOTS=3
+ISO=""; SUBJ="win11de-flood"; GOLDEN="win11de-qwt"; BOOTS=3; DELIVER=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --iso) ISO="${2:-}"; shift 2 ;;
     --subject) SUBJ="${2:-}"; shift 2 ;;
     --golden) GOLDEN="${2:-}"; shift 2 ;;
     --boots) BOOTS="${2:-}"; shift 2 ;;
+    # THE BOOTS THAT MEASURE THE FLOOD PUT IT ON THE OWNER'S SCREEN, and there is no way round that:
+    # the notifications are forwarded to dom0's notification service by the product itself, and the
+    # queue they come from lives in a SQLite store only the C++ bridge reads. So this is an explicit
+    # opt-in, not a default - on 2026-10-07 this run was started without warning him and he watched
+    # the flood arrive ("so, here is the flood, right on screen"). Standing rule: warn before taking
+    # over the owner's screen.
+    --deliver) DELIVER=1; shift ;;
     *) echo "unknown argument '$1'" >&2; exit 2 ;;
   esac
 done
@@ -42,6 +49,17 @@ R="$OUT/results.log"; : > "$R"
 log(){ echo "$(date -u +%T)Z flood[$SUBJ]: $*" | tee -a "$R"; }
 source mgmt/harness/shutdown-lib.sh
 source mgmt/harness/vmlock.sh; vm_lock "$SUBJ" || { echo "FAIL  the rig lock for $SUBJ is held by a live job" >&2; exit 2; }
+# THE SUBJECT COMES DOWN WHEN THIS STOPS, however it stops. A guest running this measurement keeps
+# forwarding notifications to the OWNER'S dom0 screen: on 2026-10-07 the harness was interrupted and
+# left the subject up, and he watched the flood continue with nothing driving it. SIGTERM/SIGINT and a
+# normal exit all land here.
+_teardown(){ local rc=$?; trap - EXIT INT TERM
+  if [ "$(qvm-ls --raw-data --fields STATE "$SUBJ" 2>/dev/null | tr -d '\n')" != Halted ]; then
+    echo "$(date -u +%T)Z flood[$SUBJ]: stopping the subject - it must not keep sending notifications to dom0" | tee -a "$R"
+    qwt_shutdown "$SUBJ" 420 >/dev/null 2>&1
+  fi
+  exit $rc; }
+trap _teardown EXIT INT TERM
 log "start iso=$(sha256sum "$ISO" | cut -c1-12) golden=$GOLDEN boots=$BOOTS out=$OUT"
 
 q(){ QTEST_VM="$SUBJ" timeout "${QT_T:-180}" ./tools/qtest "$@"; }
@@ -130,7 +148,14 @@ tally(){ # $1 label -> the per-boot reading
   echo "$s" > "$OUT/sent-$1.txt"
 }
 
+if [ "$DELIVER" != 1 ]; then
+  log "STOPPING BEFORE THE MEASUREMENT BOOTS - they would deliver the flood to dom0's screen."
+  log "  The clone, env-assert gweck and the install are done; the subject is $SUBJ."
+  log "  Re-run with --deliver when you are ready to see notifications arrive on the desktop."
+  exit 3
+fi
 log "boot 1 - the first start after the install, which is the one he reports"
+log "  --deliver was given: notifications WILL appear on dom0's screen from here on"
 if [ "$(state)" != Running ]; then qvm-start "$SUBJ" >/dev/null 2>&1; fi
 w=$(wait_session 420); [ "$w" = up ] || { log "FAIL no session on boot 1 ($w)"; exit 1; }
 sleep 120   # the first-run storm and the guard's PT1M trigger both land inside this; see the header
