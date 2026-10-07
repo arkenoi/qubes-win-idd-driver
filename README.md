@@ -21,26 +21,26 @@ Anywhere this README says "stock", it means unmodified upstream QWT 4.2.2 as shi
 
 ## Download
 
-Release **[v4.3.34-agent1a19e05](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.34-agent1a19e05)** — agent `1a19e05`, package `4.3.34`, built from commit `24e28f4`. See
-[`docs/RELEASE-NOTES-4.3.34.md`](docs/RELEASE-NOTES-4.3.34.md) for what changed and what was
-verified: every failure notification says what happened and what to do; a part of Windows Tools that dies is reported, every
-time; nothing is stopped by name; the updater is installed even when the last update check was interrupted; and the installer
-no longer answers qrexec calls while it is still setting up devices. The full matrix — clean install, same-version reinstall,
-in-place upgrade from 4.3.33, and template→AppVM derivation with cold boots, on **both Windows 10 and Windows 11** — passed
-against this exact package with no guest stalling, both feature tests passed, and the same package passed the template update
-test on the field reporter's environment.
+Release **[v4.3.35-agentf613dc3](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.35-agentf613dc3)** — agent `f613dc3`, package `4.3.35`, built from commit `9478cae`. See
+[`docs/RELEASE-NOTES-4.3.35.md`](docs/RELEASE-NOTES-4.3.35.md) for what changed and what was
+verified: the Windows Update agent is installed even while an update check is running; the hidden Windows Start menu no longer
+takes clicks; an app's first notification reaches dom0 once instead of twice; the account autologon uses no longer expires; dom0
+notifications stay by kind (errors until dismissed, warnings 60 s, information 20 s); and the windowed desktop no longer covers
+the screen. The full matrix — clean install, same-version reinstall, in-place upgrade from 4.3.33, and template→AppVM derivation
+with cold boots, on **both Windows 10 and Windows 11** — passed against this exact package, both feature tests passed, and the
+same package passed the template update test on the field reporter's environment.
 
 | file | use it for |
 |---|---|
-| [`qubes-windows-tools-ng-4.3.34-1.agent1a19e05d3872.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.34-agent1a19e05/qubes-windows-tools-ng-4.3.34-1.agent1a19e05d3872.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and installs `qvm-windows-update` and `qwt-ng-prepare-qube` |
-| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.34-agent1a19e05/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
-| [`qubes-tools-4.3.34.exe`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.34-agent1a19e05/qubes-tools-4.3.34.exe) | the installer on its own, if you already have a way to get a file into the guest |
-| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.34-agent1a19e05/SHA256SUMS.txt) | checksums for all of them |
+| [`qubes-windows-tools-ng-4.3.35-1.agentf613dc344d9e.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.35-agentf613dc3/qubes-windows-tools-ng-4.3.35-1.agentf613dc344d9e.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and installs `qvm-windows-update` and `qwt-ng-prepare-qube` |
+| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.35-agentf613dc3/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
+| [`qubes-tools-4.3.35.exe`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.35-agentf613dc3/qubes-tools-4.3.35.exe) | the installer on its own, if you already have a way to get a file into the guest |
+| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.35-agentf613dc3/SHA256SUMS.txt) | checksums for all of them |
 
 The dom0 RPM is unsigned, so `qubes-dom0-update` will refuse it; install it directly:
 
 ```
-sudo rpm -i qubes-windows-tools-ng-4.3.34-1.agent1a19e05d3872.noarch.rpm
+sudo rpm -i qubes-windows-tools-ng-4.3.35-1.agentf613dc344d9e.noarch.rpm
 ```
 
 With the RPM in place, dom0 can attach the media itself — `qvm-start <vm> --install-windows-tools`
@@ -49,7 +49,7 @@ hands the guest exactly this ISO as a CD.
 Upgrading a guest that already runs stock QWT or an older build of this package is a
 plain in-place upgrade — run the installer, it detects the older version and lets the
 MSI replace it in one transaction. Validated end to end for an upgrade **from an older
-build of this package** — 4.3.34's acceptance upgraded a 4.3.33 guest in place on both
+build of this package** — 4.3.35's acceptance upgraded a 4.3.33 guest in place on both
 Windows 10 and Windows 11. An upgrade from **stock QWT 4.2.2** uses the same unchanged
 MSI machinery but has not been exercised on our testbed since August 2026, because the
 test images themselves carry a newer build.
@@ -57,19 +57,19 @@ test images themselves carry a newer build.
 **Hand-created qube?** Run `qvm-features <qube> vmexec 1` and `qvm-prefs <qube> qrexec_timeout 1800`
 in dom0 (on the template; AppVMs inherit), or the Qubes Update tool fails against it.
 
-**What changed in 4.3.34 — every failure says what happened and what to do; nothing is stopped by name.** Every error
-notification Windows Tools sends to dom0 now has one shape: a plain title, what happens next and what you can do, the cause read
-from the right source, and one technical line. A part of Windows Tools that dies — a crash, an unhandled .NET exception, a
-service that stops unexpectedly, a failed task of ours — is reported to dom0 from Windows' own records, once per death. The
-installers and guest scripts no longer stop or adopt processes by name. If a qube's last update check had been interrupted,
-4.3.32 and 4.3.33 silently kept the previous updater; the installer now follows the updater's own rule. And the installer's
-second stage starts the Windows Tools services one at a time and opens the Qubes RPC agent only after its device work is done:
-each qrexec call into a qube makes the guest wait for QEMU, and four of the install stalls on record happened in that window. Full story
-in [`docs/RELEASE-NOTES-4.3.34.md`](docs/RELEASE-NOTES-4.3.34.md); earlier releases:
-[4.3.33](docs/RELEASE-NOTES-4.3.33.md), [4.3.32](docs/RELEASE-NOTES-4.3.32.md), [4.3.31](docs/RELEASE-NOTES-4.3.31.md).
+**What changed in 4.3.35 — the field reporter's two defects, and notifications shown once.** On a German Windows 11 25H2 template
+an upgrade could quietly keep the previous Windows Update agent when the template's own update check was running; the installer now
+waits for that check and then installs the agent, and a failed install is reported to dom0 in plain words. With a third-party
+start menu or Shift+Win, Windows opened its own Start menu invisibly in seamless mode, taking clicks; it is now closed at once. With
+the notification bridge on, an app's first notification no longer reaches dom0 twice: the agent keeps the guest's banner off the
+screen until the bridge has decided where it goes (one known case remains - see the notes). The account autologon signs in with is
+set never to expire, notifications stay on screen by kind, the windowed desktop keeps its windowed size (a 4.3.33/4.3.34
+regression), and the GUI agent sends its protocol version before anything else. Full story in
+[`docs/RELEASE-NOTES-4.3.35.md`](docs/RELEASE-NOTES-4.3.35.md); earlier releases:
+[4.3.34](docs/RELEASE-NOTES-4.3.34.md), [4.3.33](docs/RELEASE-NOTES-4.3.33.md), [4.3.32](docs/RELEASE-NOTES-4.3.32.md).
 
 **Provenance.** Every asset above is built by GitHub Actions from this repository at the tagged
-commit; the agent is `cda961d` on
+commit; the agent is `f613dc3` on
 [arkenoi/qubes-gui-agent-windows](https://github.com/arkenoi/qubes-gui-agent-windows). The
 Windows build is not timestamp-reproducible, so binary hashes differ across rebuilds of identical
 source; `MANIFEST.json` inside each asset records the exact source commits the build came from.
