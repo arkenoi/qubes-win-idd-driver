@@ -2083,8 +2083,8 @@ static DWORD WINAPI WalWatchThread(LPVOID)
 // The acquisition ladder for ONE toast + the CLASSIFY line. Runs on the shadow worker
 // (or, under P3AQ_DEFECT_HOTWAIT only, back on the poll thread as the seen-to-fail proof).
 // Defined with the activator cache further down; ShadowClassifyWork reads the cache and starts lookups (C3861 in CI 37553977560).
-static ToastActActivator ActivatorCacheGet(std::wstring const& aumid, std::wstring& clsid, const wchar_t*& src);
-static std::shared_ptr<ToastActLookupHandoff> ActivatorLookupStart(std::wstring const& aumid, bool* started);
+static ToastActActivator ActivatorResolveNow(std::wstring const& aumid, std::wstring& clsid, const wchar_t*& src);
+static std::shared_ptr<ToastActLookupHandoff> ShortcutScanHandoff();
 
 static void ShadowClassifyWork(ShadowJob& j)
 {
@@ -2125,29 +2125,27 @@ static void ShadowClassifyWork(ShadowJob& j)
             {
                 if (!j.packaged)                      // a packaged sender's foreground activation is never carried: nothing to ask
                 {
-                    actState = ActivatorCacheGet(j.aumid, actClsid, actSrc);
-                    if (actState == ToastActActivator::Unknown)
+                    // a registry read + a map read, never a scan on this thread (ActivatorResolveNow)
+                    actState = ActivatorResolveNow(j.aumid, actClsid, actSrc);
+                    if (actState == ToastActActivator::Unknown)   // the shortcut map is not built yet (the first seconds of a run)
                     {
-                        bool started = false;
-                        auto h = ActivatorLookupStart(j.aumid, &started);
                         const bool routeNeedsIt = ToastActRouteNeedsActivator(j.payloadW.c_str(), j.payloadW.size(), k, j.packaged);
-                        if (h && routeNeedsIt && h->WaitFor(kToastActRouteLookupBudgetMs, actClsid, actSrc))
-                            actState = actClsid.empty() ? ToastActActivator::None : ToastActActivator::Known;
-                        else if (h && routeNeedsIt)
+                        auto h = ShortcutScanHandoff();
+                        if (routeNeedsIt && h)
                         {
-                            actSrc = L"budget-exceeded";
-                            BLog(L"ACTIVATOR id=%u aumid=%s: lookup not done within the %llu ms route budget - this row-4 toast takes the "
-                                 L"window path (the guest's buttons stay with the user); the result warms the cache for the next toast",
-                                 j.id, j.aumid.c_str(), (ULONGLONG)kToastActRouteLookupBudgetMs);
+                            std::wstring ignored; const wchar_t* ignoredSrc = nullptr;
+                            if (h->WaitFor(kToastActRouteLookupBudgetMs, ignored, ignoredSrc)) actState = ActivatorResolveNow(j.aumid, actClsid, actSrc);
+                            if (actState == ToastActActivator::Unknown)
+                            {
+                                actSrc = L"budget-exceeded";
+                                BLog(L"ACTIVATOR id=%u aumid=%s: the shortcut scan is not done within the %llu ms route budget - this row-4 toast "
+                                     L"takes the window path (the guest's buttons stay with the user); the map serves the next toast",
+                                     j.id, j.aumid.c_str(), (ULONGLONG)kToastActRouteLookupBudgetMs);
+                            }
                         }
-                        else if (h)
-                        {
-                            actSrc = started ? L"pending-started" : L"pending";
-                            BLog(L"ACTIVATOR id=%u aumid=%s: not in the cache - lookup %s in the background, NOT awaited (an informational "
-                                 L"toast's route does not depend on it; its default click is not carried this time)",
-                                 j.id, j.aumid.c_str(), started ? L"started" : L"already running");
-                        }
-                        else actSrc = L"no-thread";
+                        else
+                            BLog(L"ACTIVATOR id=%u aumid=%s: the shortcut map is not built yet (%s) - NOT awaited for an informational toast "
+                                 L"(its route does not depend on it; its default click is not carried this time)", j.id, j.aumid.c_str(), actSrc);
                     }
                 }
                 ToastActCtx ctx{ j.packaged, actState };
@@ -2404,10 +2402,10 @@ static int DumpWpnDbMain(int limit)
 // table, the dispatch, the choice after a failure) is in the header and in toastactions_test.cpp.
 //
 // PROCESSES AND THREADS (review 2026-10-07, two rounds: every wait bounded, no leak, no existing thread
-// changes apartment). The activator LOOKUP (registry, then a bounded Start-menu shortcut scan through
-// IShellLink, an apartment-threaded object) runs on a short-lived STA thread of its own; the shadow
-// worker that asks waits kToastActLookupBoundMs at most and otherwise treats the sender as having no
-// activator THIS time (ToastActLookupHandoff). A CLICK is carried out by a short-lived CHILD PROCESS
+// changes apartment). The Start-menu shortcuts are read ONCE per run by a lowest-priority STA thread
+// started with the bridge (ShortcutScanThread); per sender the activator is a registry read plus a map
+// read, on the shadow worker, never a scan; only a row-4 COM toast waits for a scan still running,
+// within kToastActRouteLookupBudgetMs (ToastActLookupHandoff). A CLICK is carried out by a short-lived CHILD PROCESS
 // (`notifhost --act-exec <file>`, same user and session, CreateProcess - no Task Scheduler, no /tr
 // limit): ShellExecute and a CLSCTX_LOCAL_SERVER CoCreateInstance/Activate may never return, and a
 // process can be terminated where a thread cannot be cancelled. The main loop spawns the child, keeps
@@ -2424,20 +2422,19 @@ static int DumpWpnDbMain(int limit)
 //   2. a Start-menu shortcut (per-user or all-users Programs folder) whose property store carries
 //      System.AppUserModel.ID = the AUMID and System.AppUserModel.ToastActivatorCLSID - the classic
 //      installer-written registration.
-// HKCR merges HKCU\Software\Classes over HKLM\Software\Classes, as the shell sees it. An AUMID with '\'
-// cannot have been registered under 1. (it would nest keys) and is only looked for under 2.
-// Cached per process (bounded, TTL) so a sender's every toast does not re-walk the Start menu; a stale
-// "none" only sends a toast to the window path, a stale CLSID fails the click into the loud path below.
+// 1. is a registry read per toast (microseconds; HKCR merges HKCU\Software\Classes over HKLM's, as the shell sees
+// it; an AUMID with '\' cannot be registered there - it would nest keys). 2. is read ONCE per bridge run into a map
+// (toastactions.h ToastActShortcutMap) by a thread at the lowest priority in background mode, started with the
+// bridge, refreshed at most once per TTL on a miss - never per sender and never on the classifier's thread (guest
+// measurement 2026-10-07: a per-sender scan beside the classifier on 2 vCPUs tripled the first toast's latency).
 static const PROPERTYKEY kPkeyAppUserModelId         = { { 0x9F4C2855, 0x9F79, 0x4B39, { 0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3 } }, 5 };
 static const PROPERTYKEY kPkeyToastActivatorClsid    = { { 0x9F4C2855, 0x9F79, 0x4B39, { 0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3 } }, 26 };
 static const int         kLnkScanMaxDepth = 4;
-static const int         kLnkScanMaxFiles = 1024;
+static const int         kLnkScanMaxFiles = 4096;   // the whole Start menu, both Programs folders (typically 50-300 shortcuts)
 
-// The cache (toastactions.h ToastActActivatorCache: answers for kTtlMs, negative ones too, bounded; and the lookups
-// in flight, one per sender, joined by every asker) under its own lock.
 static CRITICAL_SECTION g_activatorLock;
 static bool g_activatorLockInit = false;
-static ToastActActivatorCache g_activatorCache;
+static ToastActShortcutMap g_shortcutMap;
 static void ActivatorLockEnsure() { if (!g_activatorLockInit) { InitializeCriticalSection(&g_activatorLock); g_activatorLockInit = true; } }
 
 static std::wstring LowerW(std::wstring s) { for (auto& c : s) if (c >= L'A' && c <= L'Z') c = (wchar_t)(c + 32); return s; }
@@ -2462,22 +2459,23 @@ static std::wstring ActivatorFromRegistry(std::wstring const& aumid)
     return ClsidStringValid(s) ? s : L"";
 }
 
-// One Programs folder, recursively, bounded. `files` counts every .lnk opened across the whole lookup.
-static std::wstring ActivatorFromShortcutsIn(std::wstring const& dir, std::wstring const& aumidLower, int depth, int& files)
+// One Programs folder, recursively, EVERY shortcut: AUMID -> ToastActivatorCLSID ("" for a shortcut carrying the
+// AUMID without an activator). Bounded; `files` counts the .lnk files opened across the whole scan. Needs the
+// caller's COM apartment (IShellLink is apartment-threaded).
+static void ShortcutScanDir(std::wstring const& dir, int depth, int& files, std::unordered_map<std::wstring, std::wstring>& out)
 {
-    if (depth > kLnkScanMaxDepth || files >= kLnkScanMaxFiles) return L"";
+    if (depth > kLnkScanMaxDepth || files >= kLnkScanMaxFiles) return;
     WIN32_FIND_DATAW fd;
     HANDLE fh = FindFirstFileW((dir + L"\\*").c_str(), &fd);
-    if (fh == INVALID_HANDLE_VALUE) return L"";
-    std::wstring found;
+    if (fh == INVALID_HANDLE_VALUE) return;
     do {
         if (fd.cFileName[0] == L'.' && (fd.cFileName[1] == 0 || (fd.cFileName[1] == L'.' && fd.cFileName[2] == 0))) continue;
         std::wstring path = dir + L"\\" + fd.cFileName;
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
         {
             if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue;   // no junction walks
-            found = ActivatorFromShortcutsIn(path, aumidLower, depth + 1, files);
-            if (!found.empty()) break;
+            ShortcutScanDir(path, depth + 1, files, out);
+            if (files >= kLnkScanMaxFiles) break;
             continue;
         }
         size_t n = wcslen(fd.cFileName);
@@ -2490,182 +2488,136 @@ static std::wstring ActivatorFromShortcutsIn(std::wstring const& dir, std::wstri
         auto store = link.try_as<IPropertyStore>();
         if (!store) continue;
         PROPVARIANT pvId; PropVariantInit(&pvId);
-        bool same = false;
-        if (SUCCEEDED(store->GetValue(kPkeyAppUserModelId, &pvId)) && pvId.vt == VT_LPWSTR && pvId.pwszVal)
-            same = (LowerW(pvId.pwszVal) == aumidLower);
+        std::wstring key;
+        if (SUCCEEDED(store->GetValue(kPkeyAppUserModelId, &pvId)) && pvId.vt == VT_LPWSTR && pvId.pwszVal && pvId.pwszVal[0])
+            key = LowerW(pvId.pwszVal);
         PropVariantClear(&pvId);
-        if (!same) continue;
+        if (key.empty()) continue;                      // an ordinary shortcut: no AUMID
+        std::wstring clsid;
         PROPVARIANT pvClsid; PropVariantInit(&pvClsid);
         if (SUCCEEDED(store->GetValue(kPkeyToastActivatorClsid, &pvClsid)) && pvClsid.vt == VT_CLSID && pvClsid.puuid)
-            found = GuidStr(*pvClsid.puuid);
+            clsid = GuidStr(*pvClsid.puuid);
         PropVariantClear(&pvClsid);
-        // the shortcut that carries the AUMID is THE registration, with or without an activator: stop here
-        break;
+        auto it = out.find(key);
+        if (it == out.end() || (it->second.empty() && !clsid.empty())) out[key] = clsid;   // several shortcuts, one AUMID: an activator wins
     } while (FindNextFileW(fh, &fd));
     FindClose(fh);
-    return found;
 }
 
-static std::wstring ActivatorFromShortcuts(std::wstring const& aumid)
+static int ShortcutScanAll(std::unordered_map<std::wstring, std::wstring>& out)
 {
-    std::wstring lower = LowerW(aumid);
     int files = 0;
     static const int folders[2] = { CSIDL_PROGRAMS, CSIDL_COMMON_PROGRAMS };
     for (int csidl : folders)
     {
         wchar_t p[MAX_PATH] = { 0 };
         if (FAILED(SHGetFolderPathW(nullptr, csidl, nullptr, SHGFP_TYPE_CURRENT, p)) || !p[0]) continue;
-        std::wstring hit = ActivatorFromShortcutsIn(p, lower, 0, files);
-        if (!hit.empty()) return hit;
+        ShortcutScanDir(p, 0, files, out);
     }
-    return L"";
+    return files;
 }
 
-// The lookup proper, on a thread of its own with its own STA (IShellLink is an apartment-threaded in-proc
-// object; the asking thread - the shadow worker, or a diagnostic - keeps whatever apartment it has). The
-// result goes through the hand-off; if the asker has given up (kToastActLookupBoundMs), it is dropped.
-// The lookup proper: registry, then the Start-menu shortcuts. Needs a COM apartment on the calling thread (IShellLink
-// is apartment-threaded); runs on the lookup thread or the warm thread, never on the shadow worker or the main loop.
-static void ActivatorLookupRun(std::wstring const& aumid, bool coReady, std::wstring& clsid, const wchar_t*& src)
+// THE ONE SCAN: a thread at the lowest priority in background mode (the policy is a rule in toastactions.h, with its
+// knob), its own STA; the whole map is swapped in at the end, whether or not anyone is waiting for it.
+static DWORD WINAPI ShortcutScanThread(LPVOID)
 {
-    clsid.clear(); src = L"none";
+    NameThisThread(L"notifhost: shortcut-scan");
+    const ToastActScanPolicy pol = ToastActScanPolicyGet();
+    if (pol.prio == ToastActScanPrio::Lowest) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
+    const bool bg = pol.backgroundIo && SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
+    const bool co = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE));
+    std::unordered_map<std::wstring, std::wstring> entries;
+    int files = 0;
+    const ULONGLONG t0 = GetTickCount64();
     try
     {
-        clsid = ActivatorFromRegistry(aumid);
-        if (!clsid.empty()) { src = L"registry"; return; }
-        if (!coReady) { BLog(L"ACTIVATOR lookup: no COM apartment - shortcuts not scanned for %s (none this time)", aumid.c_str()); return; }
-        clsid = ActivatorFromShortcuts(aumid);
-        src = clsid.empty() ? L"none" : L"shortcut";
+        if (co) files = ShortcutScanAll(entries);
+        else BLog(L"ACTIVATOR scan: no COM apartment - the shortcut map is empty this run (registry-only lookups)");
     }
-    catch (...) { clsid.clear(); src = L"none"; BLog(L"ACTIVATOR lookup threw for %s - treated as none", aumid.c_str()); }
-}
-
-// Store a finished lookup: cached whether or not anyone waited (the 2026-10-07 regression fix: a cold lookup warms
-// the cache for the sender's next toast), its hand-off published.
-static void ActivatorStore(std::wstring const& aumid, std::wstring const& clsid, const wchar_t* src)
-{
-    ActivatorLockEnsure();
-    CsGuard g(&g_activatorLock);
-    g_activatorCache.Store(LowerW(aumid), clsid, src, GetTickCount64());
-}
-
-struct ActivatorLookupJob { std::wstring aumid; };
-
-static DWORD WINAPI ActivatorLookupThread(LPVOID p)
-{
-    NameThisThread(L"notifhost: activator-lookup");
-    ActivatorLookupJob* job = (ActivatorLookupJob*)p;
-    const bool co = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE));
-    std::wstring clsid; const wchar_t* src = L"none";
-    const ULONGLONG t0 = GetTickCount64();
-    ActivatorLookupRun(job->aumid, co, clsid, src);
+    catch (...) { BLog(L"ACTIVATOR scan threw - the map holds what was read before it"); }
+    unsigned withActivator = 0;
+    for (auto const& kv : entries) if (!kv.second.empty()) withActivator++;
+    if (bg) SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_END);
     if (co) CoUninitialize();
-    ActivatorStore(job->aumid, clsid, src);
-    BLog(L"ACTIVATOR lookup done aumid=%s clsid=%s source=%s ms=%llu (cached %u min)", job->aumid.c_str(),
-         clsid.empty() ? L"-" : clsid.c_str(), src, GetTickCount64() - t0, (UINT)(ToastActActivatorCache::kTtlMs / 60000));
-    delete job;
+    const size_t senders = entries.size();
+    {
+        ActivatorLockEnsure();
+        CsGuard g(&g_activatorLock);
+        g_shortcutMap.EndScan(std::move(entries), GetTickCount64());
+    }
+    BLog(L"ACTIVATOR scan done: %d shortcut(s) read, %u sender(s) carry an AUMID, %u an activator, ms=%llu (%s%s); refreshed at most "
+         L"once per %u min, on a miss", files, (UINT)senders, withActivator, GetTickCount64() - t0,
+         pol.prio == ToastActScanPrio::Lowest ? L"lowest priority" : L"NORMAL priority", bg ? L", background mode" : L"",
+         (UINT)(kToastActScanTtlMs / 60000));
     return 0;
 }
 
-// Non-blocking: the cache's answer for the sender as of now (Known/None/Unknown).
-static ToastActActivator ActivatorCacheGet(std::wstring const& aumid, std::wstring& clsid, const wchar_t*& src)
+static void ShortcutScanStart(const wchar_t* reason)
 {
     ActivatorLockEnsure();
-    CsGuard g(&g_activatorLock);
-    return g_activatorCache.Get(LowerW(aumid), GetTickCount64(), clsid, src);
-}
-
-// Non-blocking: the lookup for the sender - joined if one is in flight, started on a thread of its own otherwise.
-// The result lands in the cache when it is done, waited for or not. nullptr: no thread could be started (logged;
-// the next toast asks again).
-static std::shared_ptr<ToastActLookupHandoff> ActivatorLookupStart(std::wstring const& aumid, bool* started)
-{
-    ActivatorLockEnsure();
-    const std::wstring key = LowerW(aumid);
-    std::shared_ptr<ToastActLookupHandoff> h;
+    const wchar_t* why = nullptr;
     {
         CsGuard g(&g_activatorLock);
-        h = g_activatorCache.Pending(key, started);
+        if (!g_shortcutMap.BeginScan(GetTickCount64(), &why)) { BLog(L"ACTIVATOR scan not started (%s): %s", reason, why); return; }
     }
-    if (!*started) return h;
-    ActivatorLookupJob* job = new ActivatorLookupJob{ aumid };
-    HANDLE t = CreateThread(nullptr, 0, ActivatorLookupThread, job, 0, nullptr);
+    HANDLE t = CreateThread(nullptr, 0, ShortcutScanThread, nullptr, 0, nullptr);
     if (!t)
     {
         const DWORD gle = GetLastError();
-        delete job;
-        { CsGuard g(&g_activatorLock); g_activatorCache.Abandon(key); }
-        BLog(L"ACTIVATOR lookup thread create failed %lu for %s - none this time, nothing cached", gle, aumid.c_str());
-        return nullptr;
+        { CsGuard g(&g_activatorLock); g_shortcutMap.AbortScan(); }
+        BLog(L"ACTIVATOR scan thread create failed %lu (%s) - registry-only lookups until the next attempt", gle, reason);
+        return;
     }
-    CloseHandle(t);   // detached: it stores into the cache and exits
-    return h;
+    CloseHandle(t);   // detached: it swaps the map in and exits
+    BLog(L"ACTIVATOR scan started (%s): the Start menu is read once, at the lowest priority, into the AUMID -> activator map", reason);
 }
 
-// The sender's toast activator CLSID ("{...}") or empty, waiting up to kToastActLookupBoundMs for a lookup when the
-// cache has no answer - for the by-hand diagnostics (--resolve-activator / --invoke-activator) only; the
-// classification never waits like this (ShadowClassifyWork). *source: registry | shortcut | none | cache | timeout.
+// Non-blocking, any thread: the sender's activator from the registry (read now) and the shortcut map; starts the one
+// scan or refresh when the map asks for it. Known / None / Unknown (the map is not built yet).
+static ToastActActivator ActivatorResolveNow(std::wstring const& aumid, std::wstring& clsid, const wchar_t*& src)
+{
+    const std::wstring reg = ActivatorFromRegistry(aumid);
+    bool refresh = false;
+    ToastActActivator st;
+    {
+        ActivatorLockEnsure();
+        CsGuard g(&g_activatorLock);
+        st = g_shortcutMap.Resolve(LowerW(aumid), reg, GetTickCount64(), clsid, src, &refresh);
+    }
+    if (refresh) ShortcutScanStart(st == ToastActActivator::Unknown ? L"no map yet" : L"a miss against a map older than its TTL");
+    return st;
+}
+
+static std::shared_ptr<ToastActLookupHandoff> ShortcutScanHandoff()
+{
+    ActivatorLockEnsure();
+    CsGuard g(&g_activatorLock);
+    return g_shortcutMap.ScanHandoff();
+}
+
+// The sender's toast activator CLSID ("{...}") or empty, waiting up to kToastActLookupBoundMs for the scan when the map
+// is not built yet - for the by-hand diagnostics (--resolve-activator / --invoke-activator) only; the classification
+// never waits like this (ShadowClassifyWork). *source: registry | shortcut | shortcut-no-activator | none | timeout.
 static std::wstring ResolveToastActivator(std::wstring const& aumid, const wchar_t** source)
 {
     *source = L"none";
     if (aumid.empty()) return L"";
     std::wstring clsid; const wchar_t* src = L"none";
-    if (ActivatorCacheGet(aumid, clsid, src) != ToastActActivator::Unknown) { *source = L"cache"; return clsid; }
-    bool started = false;
-    auto h = ActivatorLookupStart(aumid, &started);
-    if (!h) return L"";
-    if (!h->WaitFor(kToastActLookupBoundMs, clsid, src))
+    ToastActActivator st = ActivatorResolveNow(aumid, clsid, src);
+    if (st == ToastActActivator::Unknown)
     {
-        BLog(L"ACTIVATOR lookup for %s did not answer within %llu ms - none this time (its result will still land in the cache)",
-             aumid.c_str(), (ULONGLONG)kToastActLookupBoundMs);
-        *source = L"timeout";
-        return L"";
+        auto h = ShortcutScanHandoff();
+        std::wstring ignored; const wchar_t* ignoredSrc = nullptr;
+        if (h && h->WaitFor(kToastActLookupBoundMs, ignored, ignoredSrc)) st = ActivatorResolveNow(aumid, clsid, src);
+        if (st == ToastActActivator::Unknown)
+        {
+            BLog(L"ACTIVATOR the shortcut scan did not finish within %llu ms - %s unknown this time", (ULONGLONG)kToastActLookupBoundMs, aumid.c_str());
+            *source = L"timeout";
+            return L"";
+        }
     }
     *source = src;
     return clsid;
-}
-
-// Warming at bridge start (background, bounded): the unpackaged senders whose toasts are already in the Notification
-// Center are the ones most likely to toast again - their activators are looked up now, one after another on one
-// thread, so their first toast after the start finds the cache warm. Fail-open: a lookup that fails or hangs costs
-// only that sender its enrichment until the next toast asks again.
-struct ActivatorWarmJob { std::vector<std::wstring> aumids; };
-
-static DWORD WINAPI ActivatorWarmThread(LPVOID p)
-{
-    NameThisThread(L"notifhost: activator-warm");
-    ActivatorWarmJob* job = (ActivatorWarmJob*)p;
-    const bool co = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE));
-    unsigned done = 0;
-    for (auto const& aumid : job->aumids)
-    {
-        std::wstring clsid; const wchar_t* src = L"none";
-        if (ActivatorCacheGet(aumid, clsid, src) != ToastActActivator::Unknown) continue;
-        bool started = false;
-        {
-            CsGuard g(&g_activatorLock);
-            g_activatorCache.Pending(LowerW(aumid), &started);   // askers meanwhile join this lookup
-        }
-        if (!started) continue;                                   // a classification already started one
-        ActivatorLookupRun(aumid, co, clsid, src);
-        ActivatorStore(aumid, clsid, src);
-        done++;
-    }
-    if (co) CoUninitialize();
-    BLog(L"ACTIVATOR warm done: %u of %u sender(s) looked up in the background", done, (UINT)job->aumids.size());
-    delete job;
-    return 0;
-}
-
-static void ActivatorWarmStart(std::vector<std::wstring> const& aumids)
-{
-    if (aumids.empty()) return;
-    ActivatorLockEnsure();
-    ActivatorWarmJob* job = new ActivatorWarmJob{ aumids };
-    HANDLE t = CreateThread(nullptr, 0, ActivatorWarmThread, job, 0, nullptr);
-    if (!t) { BLog(L"ACTIVATOR warm thread create failed %lu - the cache warms on first use instead", GetLastError()); delete job; return; }
-    CloseHandle(t);
-    BLog(L"ACTIVATOR warm: %u unpackaged sender(s) from the Notification Center queued for a background lookup", (UINT)aumids.size());
 }
 
 // A packaged (PFN!App) sender, from the listener's AppInfo when it says so, else from the AUMID's shape.
@@ -3705,6 +3657,10 @@ static int BridgeMain()
         BLog(L"BRIDGE armed allow=[%s]", joined.c_str());
     }
 
+    // ADR-toasts 11: the one Start-menu scan of this run starts now, at the lowest priority, so a sender's first toast
+    // normally finds the AUMID -> activator map ready; a toast listed before it is done reads the registry only.
+    ShortcutScanStart(L"bridge start");
+
     // P3-ETW push tier (MEASURE-ONLY, shadow-only): the bridge runs NO ETW code - this
     // spawns the IPC client that mirrors the --etw-proxy's pushed records into the ring,
     // then the off-thread shadow worker + WAL watcher that run the acquisition ladder.
@@ -3771,24 +3727,14 @@ static int BridgeMain()
     };
     std::unordered_set<uint32_t> seen;
     bool primed = false;
-    std::vector<std::wstring> warm;   // unpackaged senders already in the center: their activators are looked up in the background
     try {
         for (auto const& un : listener.GetNotificationsAsync(NotificationKinds::Toast).get())
         {
             if (inGap(un)) { BLog(L"baseline: id=%u left unseen (suppression-gap AUMID)", un.Id()); continue; }
             seen.insert(un.Id());
-            std::wstring aumid;
-            try { aumid = un.AppInfo().AppUserModelId().c_str(); } catch (...) {}
-            if (!aumid.empty() && warm.size() < 8 && !AumidPackaged(un, aumid))
-            {
-                bool have = false;
-                for (auto const& w : warm) if (_wcsicmp(w.c_str(), aumid.c_str()) == 0) { have = true; break; }
-                if (!have) warm.push_back(aumid);
-            }
         }
         primed = true;
     } catch (...) { BLog(L"baseline read failed - will prime on the first good poll, forwarding nothing until then"); }
-    ActivatorWarmStart(warm);   // ADR-toasts 11: a sender's first toast after the start should find its activator cached
 
     bool connected = false;                        // a connection is up
     // Per-toast-id count of forward attempts REJECTED BY A LIVE SERVER (reply tag 1/2: ForwardText

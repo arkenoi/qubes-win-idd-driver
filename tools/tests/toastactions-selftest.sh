@@ -21,7 +21,8 @@
 #                                       guest-test regression)
 #   TOASTACT_DEFECT_UNKNOWN_REFUSES     an informational toast with the lookup pending is refused instead of forwarded
 #   TOASTACT_DEFECT_UNKNOWN_AS_KNOWN    a pending lookup is treated as a registered activator
-#   TOASTACT_DEFECT_LATE_RESULT_DROPPED a lookup result nobody waited for is not cached
+#   TOASTACT_DEFECT_SCAN_PER_SENDER     a sender missing from the shortcut map re-scans the Start menu (the latency regression)
+#   TOASTACT_DEFECT_SCAN_NORMAL_PRIORITY the one scan runs at normal priority, competing with the classifier
 #   TOASTACT_DEFECT_ALLOWLIST_BLIND     the allowlist shortcut forwards a toast without its plan whatever the classifier said
 #   TOASTACT_DEFECT_NOLOOKUPBOUND       the activator lookup is waited for without a bound
 set -u
@@ -31,10 +32,17 @@ mkdir -p "$OUT"
 bad=0
 say() { printf '%s\n' "$*"; }
 CC="g++ -std=c++17 -Wall -Wextra -Werror -pthread"
+# NOTHING HERE MAY WAIT FOREVER (2026-10-07). A run of this suite was found alive after 6.5 HOURS, holding the
+# subagent that started it: the compiled test inherits the caller's stdin, and with a pipe or a terminal there it can
+# block on a read that never completes - it finished at once with stdin closed. A test that can hang is worse than a
+# failing one: it stops the work that was waiting for its verdict and says nothing. So every child runs with stdin
+# closed AND under a bound, and the bound's expiry is a FAILURE with its own line, never a silent retry.
+RUNB="timeout --kill-after=5 300"
 SRC="$ROOT/tools/notifhost/toastactions_test.cpp"
 
 if $CC "$SRC" -o "$OUT/clean" 2>"$OUT/clean.build.err"; then
-    "$OUT/clean" >"$OUT/clean.out" 2>&1; rc=$?
+    $RUNB "$OUT/clean" >"$OUT/clean.out" 2>&1 </dev/null; rc=$?
+    [ "$rc" = 124 ] || [ "$rc" = 137 ] && { say "FAIL  toastactions clean: the test did not finish within the bound (rc=$rc) - it HUNG"; bad=1; }
     n=$(grep -c '^ok' "$OUT/clean.out"); f=$(grep -c '^FAIL' "$OUT/clean.out")
     if [ "$rc" -eq 0 ] && [ "$f" -eq 0 ] && [ "$n" -ge 120 ]; then
         say "PASS  toastactions clean: rc=0 ok=$n fail=0"
@@ -46,11 +54,13 @@ else
 fi
 for d in TOASTACT_DEFECT_BACKGROUND_CARRIED TOASTACT_DEFECT_PARTIAL_FORWARD TOASTACT_DEFECT_PACKAGED_COM \
          TOASTACT_DEFECT_KEY_BY_SEQ TOASTACT_DEFECT_NOCLICKBOUND TOASTACT_DEFECT_NOKILL TOASTACT_DEFECT_DOUBLE_OUTCOME TOASTACT_DEFECT_NOLOOKUPBOUND \
-         TOASTACT_DEFECT_AWAIT_FOR_INFO TOASTACT_DEFECT_UNKNOWN_REFUSES TOASTACT_DEFECT_UNKNOWN_AS_KNOWN TOASTACT_DEFECT_LATE_RESULT_DROPPED \
+         TOASTACT_DEFECT_AWAIT_FOR_INFO TOASTACT_DEFECT_UNKNOWN_REFUSES TOASTACT_DEFECT_UNKNOWN_AS_KNOWN \
+         TOASTACT_DEFECT_SCAN_PER_SENDER TOASTACT_DEFECT_SCAN_NORMAL_PRIORITY \
          TOASTACT_DEFECT_ALLOWLIST_BLIND \
          TOASTACT_DEFECT_BADKEY TOASTACT_DEFECT_NONOTICE TOASTACT_DEFECT_UNBOUNDED_TABLE; do
     if $CC -D"$d" "$SRC" -o "$OUT/$d" 2>"$OUT/$d.build.err"; then
-        "$OUT/$d" >"$OUT/$d.out" 2>&1; rc=$?
+        $RUNB "$OUT/$d" >"$OUT/$d.out" 2>&1 </dev/null; rc=$?
+        if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then say "FAIL  toastactions defect $d: the test HUNG (rc=$rc), it did not fail as required"; bad=1; continue; fi
         f=$(grep -c '^FAIL' "$OUT/$d.out")
         if [ "$rc" -ne 0 ] && [ "$f" -gt 0 ]; then
             say "PASS  toastactions defect $d: suite FAILED as required (rc=$rc, $f failing: $(grep '^FAIL' "$OUT/$d.out" | head -1 | cut -c6-90))"

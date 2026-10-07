@@ -819,8 +819,8 @@ jobs:
                            'TOASTACT_DEFECT_KEY_BY_SEQ', 'TOASTACT_DEFECT_NOCLICKBOUND', 'TOASTACT_DEFECT_NOKILL',
                            'TOASTACT_DEFECT_DOUBLE_OUTCOME', 'TOASTACT_DEFECT_NOLOOKUPBOUND',
                            'TOASTACT_DEFECT_AWAIT_FOR_INFO', 'TOASTACT_DEFECT_UNKNOWN_REFUSES',
-                           'TOASTACT_DEFECT_UNKNOWN_AS_KNOWN', 'TOASTACT_DEFECT_LATE_RESULT_DROPPED',
-                           'TOASTACT_DEFECT_ALLOWLIST_BLIND')) {
+                           'TOASTACT_DEFECT_UNKNOWN_AS_KNOWN', 'TOASTACT_DEFECT_SCAN_PER_SENDER',
+                           'TOASTACT_DEFECT_SCAN_NORMAL_PRIORITY', 'TOASTACT_DEFECT_ALLOWLIST_BLIND')) {
             & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 `
                 /t:Rebuild "/p:ToastActDefect=$d"
             if ($LASTEXITCODE -ne 0) { throw "toastactions_test defect $d build failed to compile" }

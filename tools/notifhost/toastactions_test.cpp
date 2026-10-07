@@ -69,7 +69,8 @@ int main()
     defined(TOASTACT_DEFECT_DOUBLE_OUTCOME) || defined(TOASTACT_DEFECT_NOLOOKUPBOUND) || \
     defined(TOASTACT_DEFECT_NOKILL) || defined(TOASTACT_DEFECT_AWAIT_FOR_INFO) || \
     defined(TOASTACT_DEFECT_UNKNOWN_REFUSES) || defined(TOASTACT_DEFECT_UNKNOWN_AS_KNOWN) || \
-    defined(TOASTACT_DEFECT_LATE_RESULT_DROPPED) || defined(TOASTACT_DEFECT_ALLOWLIST_BLIND)
+    defined(TOASTACT_DEFECT_SCAN_PER_SENDER) || defined(TOASTACT_DEFECT_SCAN_NORMAL_PRIORITY) || \
+    defined(TOASTACT_DEFECT_ALLOWLIST_BLIND)
     const bool defectBuild = true;
     printf("DEFECT BUILD: a TOASTACT_DEFECT_* switch is compiled in - this run MUST fail\n");
 #else
@@ -319,33 +320,40 @@ int main()
         Check("lookup: a prompt answer is taken as is", h2->WaitFor(2000, clsid, source) && clsid.empty() && source && wcscmp(source, L"none") == 0);
         fast.join();
 
-        // the cache with lookups in flight (the 2026-10-07 regression fix: a cold lookup warms the cache in the background)
-        ToastActActivatorCache C;
-        const uint64_t tc0 = 900000;
-        std::wstring c; const wchar_t* src = nullptr;
-        Check("cache: an unknown sender reads Unknown", C.Get(L"vendor.app", tc0, c, src) == ToastActActivator::Unknown);
-        bool started = false;
-        auto p1 = C.Pending(L"vendor.app", &started);
-        Check("cache: the first asker starts the lookup", started && p1 && C.PendingCount() == 1);
-        auto p2 = C.Pending(L"vendor.app", &started);
-        Check("cache: a second asker of the same sender joins it (one lookup, not two)", !started && p2 == p1 && C.PendingCount() == 1);
-        Check("cache: while pending the sender still reads Unknown (nobody waits unless the route depends on it)", C.Get(L"vendor.app", tc0 + 10, c, src) == ToastActActivator::Unknown);
-        // NOBODY waited (an informational toast was forwarded without its default): the late result is cached anyway
-        C.Store(L"vendor.app", L"{11111111-2222-3333-4444-555555555555}", L"shortcut", tc0 + 3400);
-        Check("cache: a late result nobody waited for IS cached - the sender's next toast finds it", C.Get(L"vendor.app", tc0 + 3500, c, src) == ToastActActivator::Known && c == L"{11111111-2222-3333-4444-555555555555}" && C.PendingCount() == 0);
-        Check("cache: ...and its hand-off was published for anyone still holding it", p1->WaitFor(0, c, src) && src && wcscmp(src, L"shortcut") == 0);
-        // negative results are cached too
-        auto p3 = C.Pending(L"other.app", &started);
-        C.Store(L"other.app", L"", L"none", tc0 + 100);
-        Check("cache: a negative result (no activator) is cached as None, not Unknown", C.Get(L"other.app", tc0 + 200, c, src) == ToastActActivator::None && c.empty());
-        Check("cache: ...and expires with the TTL back to Unknown", C.Get(L"other.app", tc0 + 100 + ToastActActivatorCache::kTtlMs, c, src) == ToastActActivator::Unknown);
-        // a lookup that could not run answers none and caches nothing
-        auto p4 = C.Pending(L"third.app", &started);
-        C.Abandon(L"third.app");
-        Check("cache: an abandoned lookup answers its hand-off with none and caches nothing", p4->WaitFor(0, c, src) && c.empty() && C.Get(L"third.app", tc0, c, src) == ToastActActivator::Unknown && C.PendingCount() == 0);
-        for (unsigned i = 0; i < 300; i++) C.Store(L"s" + std::to_wstring(i), L"", L"none", tc0);
-        Check("cache: bounded", C.Size() <= ToastActActivatorCache::kMax);
-        (void)p3;
+        // THE SHORTCUT MAP: one scan per run at the lowest priority, per-sender lookups a registry read + a map read
+        // (guest measurement 2026-10-07: a per-sender scan beside the classifier tripled the first toast's latency)
+        const ToastActScanPolicy pol = ToastActScanPolicyGet();
+        Check("scan: runs at the LOWEST priority in background mode (never competing with the classifier)", pol.prio == ToastActScanPrio::Lowest && pol.backgroundIo);
+        ToastActShortcutMap M;
+        const wchar_t* why = nullptr;
+        const uint64_t s0 = 700000;
+        std::wstring c; const wchar_t* src = nullptr; bool refresh = false;
+        Check("map: with no map and no scan, a lookup asks for the scan to start (Unknown)", M.Resolve(L"x", L"", s0, c, src, &refresh) == ToastActActivator::Unknown && refresh && wcscmp(src, L"scan-not-started") == 0);
+        Check("scan: begins at bridge start", M.BeginScan(s0, &why) && M.Building() && !M.Ready());
+        Check("scan: a second begin while it runs is refused, with a reason", !M.BeginScan(s0 + 1, &why) && why != nullptr);
+        Check("map: a registry-known sender is Known at once, scan or no scan", M.Resolve(L"a", L"{AAAAAAAA-0000-0000-0000-000000000000}", s0 + 2, c, src, &refresh) == ToastActActivator::Known && wcscmp(src, L"registry") == 0 && !refresh);
+        Check("map: a sender the registry does not know reads Unknown while the scan runs - no second scan asked", M.Resolve(L"b", L"", s0 + 2, c, src, &refresh) == ToastActActivator::Unknown && wcscmp(src, L"scan-pending") == 0 && !refresh);
+        Check("scan: its hand-off is not done yet (a row-4 toast waits within its budget, an informational one not at all)", M.ScanHandoff() && !M.ScanHandoff()->WaitFor(0, c, src));
+        std::unordered_map<std::wstring, std::wstring> entries;
+        entries[L"b"] = L"{BBBBBBBB-0000-0000-0000-000000000000}";
+        entries[L"d"] = L"";
+        M.EndScan(std::move(entries), s0 + 3000);
+        Check("scan: done - the map is ready, the hand-off answered", M.Ready() && !M.Building() && M.Size() == 2 && M.ScanHandoff()->WaitFor(0, c, src));
+        Check("map: after ONE scan a sender with a shortcut activator is Known from the map", M.Resolve(L"b", L"", s0 + 3100, c, src, &refresh) == ToastActActivator::Known && c == L"{BBBBBBBB-0000-0000-0000-000000000000}" && wcscmp(src, L"shortcut") == 0 && !refresh);
+        Check("map: a shortcut carrying the AUMID without an activator is None from the map (no registry, no scan)", M.Resolve(L"d", L"", s0 + 3100, c, src, &refresh) == ToastActActivator::None && wcscmp(src, L"shortcut-no-activator") == 0 && !refresh);
+        Check("map: a sender in neither place is None, and a FRESH map is NOT re-scanned for it (no per-sender scan)", M.Resolve(L"e", L"", s0 + 3100, c, src, &refresh) == ToastActActivator::None && wcscmp(src, L"none") == 0 && !refresh);
+        Check("map: a miss against a map older than the TTL asks for ONE refresh", M.Resolve(L"e", L"", s0 + 3000 + kToastActScanTtlMs, c, src, &refresh) == ToastActActivator::None && refresh);
+        Check("scan: the refresh may begin (a TTL has passed since the last one)", M.BeginScan(s0 + 3000 + kToastActScanTtlMs, &why));
+        Check("map: the OLD map serves while the refresh runs, and asks for nothing more", M.Resolve(L"b", L"", s0 + 3001 + kToastActScanTtlMs, c, src, &refresh) == ToastActActivator::Known && !refresh &&
+                                                                                      M.Resolve(L"e", L"", s0 + 3001 + kToastActScanTtlMs, c, src, &refresh) == ToastActActivator::None && !refresh);
+        std::unordered_map<std::wstring, std::wstring> entries2;
+        entries2[L"b"] = L"{CCCCCCCC-0000-0000-0000-000000000000}";
+        M.EndScan(std::move(entries2), s0 + 3500 + kToastActScanTtlMs);
+        Check("map: the refresh REPLACED the map (a shortcut gone from the Start menu is gone; a changed CLSID is the new one)", M.Resolve(L"d", L"", s0 + 3600 + kToastActScanTtlMs, c, src, &refresh) == ToastActActivator::None && wcscmp(src, L"none") == 0 &&
+                                                                                                                                       M.Resolve(L"b", L"", s0 + 3600 + kToastActScanTtlMs, c, src, &refresh) == ToastActActivator::Known && c == L"{CCCCCCCC-0000-0000-0000-000000000000}");
+        Check("scan: rate-limited - a miss right after a refresh asks for nothing and a begin is refused", !refresh && !M.BeginScan(s0 + 3700 + kToastActScanTtlMs, &why) && why != nullptr);
+        ToastActShortcutMap A;
+        Check("scan: an aborted scan (no thread) releases its waiters and leaves the map unbuilt for the next attempt", A.BeginScan(s0, &why) && (A.AbortScan(), A.ScanHandoff()->WaitFor(0, c, src) && !A.Ready() && !A.Building()));
     }
 
     // ---- 5. ActionInvoked parsing -------------------------------------------------------------

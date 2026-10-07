@@ -342,13 +342,17 @@ without a window; `system` snooze is shell-internal; an `<input>` needs a surfac
    its buttons work. Rows 5 and 6 are forwarded as before and carry what they can; a button that cannot be carried (a
    protocol button without a launchable URI) sends them to the window path too. The default click is an enrichment:
    carried as the `default` action when it can be, otherwise omitted and the reason logged - what shipped since 4.3.30.
-   **The activator lookup never delays a route that does not depend on it** (guest-test regression 2026-10-07: a cold
-   3.4 s lookup for a sender without an activator pushed an informational toast's verdict past the listing's budget and
-   it lost forwarding). The cache is asked without blocking; a miss starts the lookup in the background - its result,
-   negative ones too, is cached for 10 minutes whether anyone waited or not - and only a row-4 toast with COM buttons
-   waits for it, within the listing's own budget (750 ms); not done by then, that toast takes the window path and its
-   late result warms the cache. An informational toast is published at once, its default click left out that time (logged).
-   At bridge start the unpackaged senders already in the Notification Center (at most 8) are looked up in the background.
+   **The activator lookup never delays a route that does not depend on it, and never scans per sender** (guest-test
+   regression 2026-10-07: a cold 3.4 s lookup for a sender without an activator pushed an informational toast's verdict
+   past the listing's budget and it lost forwarding; the fix's background per-sender scan then still tripled the first
+   toast's classifier latency - 1375 ms against 157-437 ms - by competing with the classifier on a 2-vCPU guest). The
+   Start menu is read ONCE per bridge run, when the bridge starts, by a thread at the lowest priority in background mode,
+   into a complete map AUMID -> ToastActivatorCLSID; per sender the lookup is a registry read (CustomActivator) plus a
+   map read - microseconds, on the classifier's thread. A sender in neither reads none; a miss against a map older than
+   10 minutes refreshes it once (never more than once per 10 minutes, the old map serving meanwhile). While the map is
+   not built yet - the first seconds of a run - a sender the registry does not know is unknown: an informational toast
+   is published at once without its default click (logged), only a row-4 toast with COM buttons waits for the scan,
+   within the listing's own budget (750 ms), and takes the window path past it.
    **The allowlist never forwards a toast against its plan** (guest finding 2026-10-07: a row-4 toast from an allowlisted
    sender reached dom0 as text while the hold suppressed its banner). With its verdict in hand an allowlisted toast
    follows its plan like any other - forwarded with its actions, or the window path when the plan refuses; while the
@@ -411,20 +415,22 @@ depend on a guess.
 text and acts in the guest's Notification Center, as for every forwarded toast today. A click runs under the bridge's
 token, which has no foreground rights: an activated app may not come to the front (a taskbar flash) - to be measured on
 the guest. An actionable toast inside a burst of more than three loses its dom0 rendering. The activator lookup walks
-the Start menu once per sender per 10 minutes, bounded (depth 4, 1024 shortcuts), in the background; a toast whose
-route depends on it waits at most 750 ms for it (past which it takes the window path that time), an informational toast
-never - whose default click is then missing until the sender's next toast. An allowlisted toast is forwarded one pass
-(tens of milliseconds) later than before: on the pass that has its verdict. A failed click shows the banner late (within 2 s plus the agent's pass) or
+the Start menu once per bridge run (plus at most one refresh per 10 minutes), bounded (depth 4, 4096 shortcuts), at the
+lowest priority; a toast arriving before that scan is done and whose route depends on it waits at most 750 ms (past which
+it takes the window path that time), an informational toast never - whose default click is then missing until the
+sender's next toast; a shortcut installed after the scan is seen at the next refresh. An allowlisted toast is forwarded
+one pass (tens of milliseconds) later than before: on the pass that has its verdict. A failed click shows the banner late (within 2 s plus the agent's pass) or
 costs one dom0 error notice. A click whose activation never answers is reported failed after 30 s and its process
 is terminated (an app that was mid-launch for it may be killed with it; nothing of the bridge is left behind). Every
 click costs one short-lived process. A toast with actions stays correlated for up to an hour (64 small entries).
 
-**Evidence.** Offline: `tools/notifhost/toastactions_test.cpp` (135 checks; sixteen defect knobs each seen to fail:
+**Evidence.** Offline: `tools/notifhost/toastactions_test.cpp` (150 checks; seventeen defect knobs each seen to fail:
 background carried, half-way forward, packaged treated as COM, invalid keys, silent failure, unbounded table, the
 table keyed by our sequence instead of the proxy's id, no click bound, the bound reporting the failure but leaving the
-hung child alive, a second outcome for a click already reported, no lookup bound, an informational toast's route
+hung child alive, a second outcome for a click already reported, no scan-wait bound, an informational toast's route
 awaiting the lookup, a pending lookup refusing an informational toast, a pending lookup taken for a registered
-activator, a lookup result nobody waited for dropped, the allowlist forwarding blind against the plan), `toasthold_bridge_test.cpp` (+11 checks) and `agent/gui-agent/toasthold_test.c` (+7)
+activator, a per-sender Start-menu scan on a miss, the scan at normal priority, the allowlist forwarding blind against
+the plan), `toasthold_bridge_test.cpp` (+11 checks) and `agent/gui-agent/toasthold_test.c` (+7)
 for the agent mark - including the store that races the slot's republish - with the knob
 `TOASTIDENT_DEFECT_MARK_BY_SLOT` seen to fail in both; `tools/tests/toastactions-selftest.sh` and
 `toasthold-selftest.sh` run the matrices with g++, CI with msbuild. Independent review 2026-10-07 (Jev, five parts)
@@ -438,7 +444,11 @@ its own; the lookup moved to a bounded thread so its apartment is as before). Gu
 of a sender without an activator took the window path, its verdict delayed 3.4 s by the cold activator lookup
 (release: 16-94 ms), fixed by the non-blocking lookup above; (2) a row-4 toast from an allowlisted sender was SENT
 `actions=none` while its banner was held - the allowlist's blind forward, fixed by the plan-following allowlist above.
-Everything else matched the release. On a guest: OWED again, on the fixed package. (a) `toastfire --register --method com-activator` then
+Everything else matched the release. Second package (3cd22afb): both fixed (17 PASS), one measured regression left -
+the first toast's classifier latency 1375 ms against 157-437 ms on earlier builds, the background per-sender scan
+(3469 ms) competing with the classifier on 2 vCPUs; fixed by the one low-priority scan at start. On a guest: OWED
+again, on that package - the expectation is S0 row_latency back in the hundreds of milliseconds with
+`activator=scan-pending` or `none`, and one `ACTIVATOR scan done` line per run. (a) `toastfire --register --method com-activator` then
 `--fire --class actionable`: `CLASSIFY ... verdict=bridge ... actions=default:com,b0:com,b1:com activator=registry`,
 `SENT ... actions=... dom0=N`, no guest banner (the hold); the control, the same fire with the activator unregistered:
 `actions=refused:...` and the window path. (b) `notifhost --invoke-activator QubesToastfire.ComActivator ok` with

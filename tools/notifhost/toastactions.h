@@ -50,8 +50,9 @@
 // BOUNDS (review 2026-10-07, two rounds): a click is carried out by a short-lived child process and reaches a
 // defined outcome within kToastActClickBoundMs - the child's exit, or its termination at the bound
 // (ToastActClickLedger: the admission cap and exactly one outcome per click; ToastActChildDecide: reap, kill
-// or keep, per pass); the sender's activator lookup is answered within kToastActLookupBoundMs or treated as
-// "none, this time" (ToastActLookupHandoff).
+// or keep, per pass); the sender's activator is a registry read plus a read of the Start-menu shortcut map,
+// which ONE low-priority scan per bridge run builds at start (ToastActShortcutMap) - a toast whose route
+// depends on it waits for that scan within kToastActRouteLookupBudgetMs, an informational toast never.
 //
 // ==== defect-reintroduction switches (proof the suite can FAIL) ============================
 //   TOASTACT_DEFECT_BACKGROUND_CARRIED  background activations treated as carriable (out of scope by decision)
@@ -77,7 +78,9 @@
 //                                       forwarded without its default click
 //   TOASTACT_DEFECT_UNKNOWN_AS_KNOWN    a pending lookup is treated as a registered activator (COM buttons forwarded
 //                                       with no CLSID to call)
-//   TOASTACT_DEFECT_LATE_RESULT_DROPPED a lookup result nobody waited for is not cached (the next toast asks again)
+//   TOASTACT_DEFECT_SCAN_PER_SENDER     a sender missing from the shortcut map re-scans the Start menu (the 2026-10-07
+//                                       latency regression: a per-sender scan beside the classifier on 2 vCPUs)
+//   TOASTACT_DEFECT_SCAN_NORMAL_PRIORITY the one scan runs at normal priority, competing with the classifier
 //   TOASTACT_DEFECT_ALLOWLIST_BLIND     the allowlist shortcut forwards a toast without its plan whatever the classifier
 //                                       said (guest finding 2026-10-07: a row-4 toast from an allowlisted sender went to
 //                                       dom0 WITHOUT its buttons while the hold suppressed its banner - the choice lost)
@@ -99,7 +102,8 @@
      defined(TOASTACT_DEFECT_DOUBLE_OUTCOME) + defined(TOASTACT_DEFECT_NOLOOKUPBOUND) + \
      defined(TOASTACT_DEFECT_NOKILL) + defined(TOASTACT_DEFECT_AWAIT_FOR_INFO) + \
      defined(TOASTACT_DEFECT_UNKNOWN_REFUSES) + defined(TOASTACT_DEFECT_UNKNOWN_AS_KNOWN) + \
-     defined(TOASTACT_DEFECT_LATE_RESULT_DROPPED) + defined(TOASTACT_DEFECT_ALLOWLIST_BLIND)) > 1
+     defined(TOASTACT_DEFECT_SCAN_PER_SENDER) + defined(TOASTACT_DEFECT_SCAN_NORMAL_PRIORITY) + \
+     defined(TOASTACT_DEFECT_ALLOWLIST_BLIND)) > 1
 #error define at most one TOASTACT_DEFECT_* switch
 #endif
 
@@ -636,11 +640,11 @@ inline ToastActResult ToastActExitOutcome(unsigned long exitCode, const wchar_t*
     }
 }
 
-// ==== the activator lookup, bounded ========================================================
-// The lookup (registry, then a Start-menu shortcut scan through IShellLink) runs on a short-lived thread
-// of its own with its own apartment, so the thread that asks keeps its apartment and never waits without a
-// bound: WaitFor returns false when the bound passes first, and the asker treats the sender as having no
-// activator THIS time (window path, logged loudly, not cached); the lookup thread's late result is dropped.
+// ==== the scan's hand-off, bounded ============================================================
+// The Start-menu scan runs on a thread of its own (its own apartment, lowest priority); a thread that must wait
+// for it - a row-4 COM toast within its route budget, a by-hand diagnostic - waits on this hand-off with a bound
+// and never without one: WaitFor returns false when the bound passes first, and the asker treats the sender as
+// unknown THIS time (window path for a row-4 toast, logged); the scan's result lands in the map regardless.
 constexpr uint64_t kToastActLookupBoundMs = 5000;
 
 class ToastActLookupHandoff
@@ -675,62 +679,98 @@ private:
     const wchar_t* source_ = L"none";
 };
 
-// ==== the activator cache, with the lookups in flight ======================================
-// Per sender (lower-cased AUMID): the answer - a CLSID, or NONE, negative results cached alike - for
-// kTtlMs, bounded; and the hand-off of a lookup in flight, so every asker of the same sender joins the one
-// lookup instead of starting another. A result is STORED whether or not anyone waited for it (the 2026-10-07
-// regression fix: a cold lookup is started in the background and warms the cache for the sender's next toast;
-// an informational toast never waits for it). Not thread-safe by itself: the caller locks.
-class ToastActActivatorCache
+// ==== the Start-menu shortcut map: ONE scan per bridge run, at the lowest priority ===============
+// Guest measurement 2026-10-07 (win11r, 2 vCPUs): a per-sender Start-menu scan running in the background WHILE the
+// classifier worked on the same toast pushed the first toast's row_latency from 157-437 ms to 1375 ms - a hair under the
+// listing's budget - and the scan itself took 3.5 s. So the shell's shortcuts are read ONCE per bridge run, when the
+// bridge starts, by a thread at the lowest priority in background mode (I/O and memory priority lowered too), into a
+// complete map AUMID -> ToastActivatorCLSID (an empty CLSID = a shortcut carrying the AUMID without an activator). Per
+// sender a lookup is then a registry read (HKCR\AppUserModelId\<AUMID>\CustomActivator, microseconds) plus a map read -
+// never a scan. A sender in neither reads NONE; a miss against a map older than kToastActScanTtlMs asks for ONE refresh
+// (never more than one per TTL; the old map serves meanwhile). While the map is not built yet - the first seconds of a
+// run - a sender the registry does not know reads UNKNOWN: an informational toast forwards at once without its default
+// click, a row-4 COM toast waits for the scan within its route budget or takes the window path.
+constexpr uint64_t kToastActScanTtlMs = 10ull * 60ull * 1000ull;
+
+enum class ToastActScanPrio { Normal = 0, Lowest = 1 };
+struct ToastActScanPolicy { ToastActScanPrio prio; bool backgroundIo; };
+inline ToastActScanPolicy ToastActScanPolicyGet()
+{
+#ifdef TOASTACT_DEFECT_SCAN_NORMAL_PRIORITY
+    return { ToastActScanPrio::Normal, false };   // DEFECT: the scan competes with the classifier for the guest's CPUs and disk
+#else
+    return { ToastActScanPrio::Lowest, true };
+#endif
+}
+
+class ToastActShortcutMap
 {
 public:
-    static constexpr size_t   kMax = 256;
-    static constexpr uint64_t kTtlMs = 10ull * 60ull * 1000ull;
-    struct Hit { std::wstring clsid; const wchar_t* source; uint64_t tick; };
-
-    ToastActActivator Get(std::wstring const& key, uint64_t now, std::wstring& clsid, const wchar_t*& source) const
+    // A scan may begin: none running, and the last one began a TTL ago or more (or never). *why names the refusal.
+    bool BeginScan(uint64_t now, const wchar_t** why)
     {
-        auto it = hits_.find(key);
-        if (it == hits_.end() || now - it->second.tick >= kTtlMs) return ToastActActivator::Unknown;
-        clsid = it->second.clsid; source = it->second.source;
-        return clsid.empty() ? ToastActActivator::None : ToastActActivator::Known;
+        if (building_) { *why = L"a scan is running"; return false; }
+        if (lastBeginAt_ != 0 && now - lastBeginAt_ < kToastActScanTtlMs) { *why = L"the last scan began less than a TTL ago"; return false; }
+        building_ = true;
+        lastBeginAt_ = now;
+        handoff_ = std::make_shared<ToastActLookupHandoff>();
+        return true;
     }
-    // The hand-off of the lookup for `key`: the one in flight, or a new one (*started = true: the caller runs it).
-    std::shared_ptr<ToastActLookupHandoff> Pending(std::wstring const& key, bool* started)
+    // The scan finished: the map is REPLACED (a complete picture - a sender gone from the Start menu goes too) and the
+    // scan's hand-off published, whether or not anyone waited for it.
+    void EndScan(std::unordered_map<std::wstring, std::wstring>&& entries, uint64_t now)
     {
-        auto it = pending_.find(key);
-        if (it != pending_.end()) { *started = false; return it->second; }
-        auto h = std::make_shared<ToastActLookupHandoff>();
-        pending_[key] = h;
-        *started = true;
-        return h;
+        entries_ = std::move(entries);
+        builtAt_ = now;
+        building_ = false;
+        if (handoff_) handoff_->Publish(L"", L"scan-done");
     }
-    // The lookup for `key` finished: cached (an empty clsid is the cached NONE), its hand-off published and dropped.
-    void Store(std::wstring const& key, std::wstring const& clsid, const wchar_t* source, uint64_t now)
+    // The scan could not run (no thread): the old map stands, waiters are released, the next miss after a TTL may try again.
+    void AbortScan()
     {
-        auto it = pending_.find(key);
-        std::shared_ptr<ToastActLookupHandoff> h = (it != pending_.end()) ? it->second : nullptr;
-        if (it != pending_.end()) pending_.erase(it);
-#ifdef TOASTACT_DEFECT_LATE_RESULT_DROPPED
-        if (!h || !h->Waited()) { if (h) h->Publish(clsid, source); return; }   // DEFECT: nobody waited -> not cached
+        building_ = false;
+        if (handoff_) handoff_->Publish(L"", L"scan-aborted");
+    }
+    // The sender's activator: the registry's answer first (read by the caller, now), then the map. *refresh asks the
+    // caller to start a scan: no map yet and none running, or a miss against a map older than the TTL.
+    ToastActActivator Resolve(std::wstring const& key, std::wstring const& registryClsid, uint64_t now,
+                              std::wstring& clsid, const wchar_t*& source, bool* refresh) const
+    {
+        *refresh = false;
+        if (!registryClsid.empty()) { clsid = registryClsid; source = L"registry"; return ToastActActivator::Known; }
+        clsid.clear();
+        if (builtAt_ == 0)
+        {
+            source = building_ ? L"scan-pending" : L"scan-not-started";
+            *refresh = !building_;
+            return ToastActActivator::Unknown;
+        }
+        auto it = entries_.find(key);
+        if (it != entries_.end())
+        {
+            clsid = it->second;
+            source = clsid.empty() ? L"shortcut-no-activator" : L"shortcut";
+            return clsid.empty() ? ToastActActivator::None : ToastActActivator::Known;
+        }
+        source = L"none";
+#ifdef TOASTACT_DEFECT_SCAN_PER_SENDER
+        *refresh = !building_;   // DEFECT: every miss re-scans the Start menu
+#else
+        *refresh = !building_ && now - builtAt_ >= kToastActScanTtlMs;
 #endif
-        if (hits_.size() >= kMax) hits_.clear();   // bound; a refill is one lookup each
-        hits_[key] = { clsid, source, now };
-        if (h) h->Publish(clsid, source);
+        return ToastActActivator::None;
     }
-    // The lookup for `key` could not run (no thread): its hand-off answers none, nothing is cached (the next toast asks again).
-    void Abandon(std::wstring const& key)
-    {
-        auto it = pending_.find(key);
-        if (it == pending_.end()) return;
-        it->second->Publish(L"", L"no-thread");
-        pending_.erase(it);
-    }
-    size_t Size() const { return hits_.size(); }
-    size_t PendingCount() const { return pending_.size(); }
+    std::shared_ptr<ToastActLookupHandoff> ScanHandoff() const { return handoff_; }   // the running (or last) scan's
+    bool Ready() const { return builtAt_ != 0; }
+    bool Building() const { return building_; }
+    size_t Size() const { return entries_.size(); }
+    uint64_t BuiltAt() const { return builtAt_; }
 private:
-    std::unordered_map<std::wstring, Hit> hits_;
-    std::unordered_map<std::wstring, std::shared_ptr<ToastActLookupHandoff>> pending_;
+    std::unordered_map<std::wstring, std::wstring> entries_;   // lower-cased AUMID -> "{CLSID}" or ""
+    uint64_t builtAt_ = 0;
+    uint64_t lastBeginAt_ = 0;
+    bool building_ = false;
+    std::shared_ptr<ToastActLookupHandoff> handoff_;
 };
 
 // ==== the listing's route for one toast, allowlisted or not ===================================
