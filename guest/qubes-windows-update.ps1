@@ -1291,6 +1291,15 @@ $OK_RC = @(0, 3010, 2359302)
 # Set QUBES_UPDATES_ALLOW_MULTISTAGE=1 to stage several packages anyway - Windows DOES aggregate
 # packages per reboot normally, so the one-per-session rule rests on a single observation and must
 # stay falsifiable. That variable is how the aggregation question gets re-tested.
+# ONE RELAXATION, AND ONLY THIS ONE (2026-10-04, docs/ADR-updater.md section 13): packages may stage in the same pass AFTER a
+# cumulative that THIS pass staged and that Windows REGISTERED (WU-CUMULATIVE-REGISTERED sets $script:CumulativeRegisteredThisSession).
+# Measured 2026-10-03/04 on the reporter's German 25H2 template (released 4.3.33, four fresh clones). With this rule LIFTED
+# (QUBES_UPDATES_ALLOW_MULTISTAGE=1), .NET (KB5126052) staged first and the cumulative (KB5129195) second lost the cumulative silently -
+# DISM 3010 for both, no RollupFix 9457 ever registered, UBR unchanged after the restart. (Shipped 4.3.33 keeps the rule: it defers the
+# cumulative behind .NET and asks for a second restart; a cumulative it staged alone was verified to land, UBR 9457.) The cumulative
+# FIRST and .NET second both landed at ONE restart (RollupFix 9457 Installed, UBR 9457, .NET installed).
+# Mechanism, inferred: the cumulative's bundled servicing stack must install ONLINE first, and a restart already pending blocks that.
+# A second cumulative behind the first is still deferred, and with no cumulative in the pass the rule above stands unchanged.
 # TEST HOOKS, same convention as the agent's SoloFaultInject: the multistage-defer guard only
 # fires when a session has already staged a reboot-requiring package AND a non-catalog KB is
 # still pending, and that combination cannot be summoned on a guest that is already up to date.
@@ -1299,6 +1308,9 @@ $OK_RC = @(0, 3010, 2359302)
 # Both are dead code when unset.
 $script:StagedThisSession = ($env:QUBES_UPDATES_FAKE_STAGED -eq '1')
 if ($script:StagedThisSession) { Log 'QUBES_UPDATES_FAKE_STAGED=1 - pretending a reboot-requiring package is already staged' }
+# True only once a cumulative staged in THIS pass is seen REGISTERED by Windows (a RollupFix package newly InstallPending). Never
+# set from an exit code, never carried across passes: the restart that follows settles it.
+$script:CumulativeRegisteredThisSession = $false
 
 # ASK DISM WHETHER A PACKAGE APPLIES, BEFORE INSTALLING IT.
 # Measured 2026-08-13/14 on a 24H2 image: the catalog returns SEVERAL .msu per KB, and we ran all
@@ -1337,6 +1349,78 @@ function Order-Msus($files){
   }
   return ,@($ranked | Sort-Object rank, size | ForEach-Object { $_.path })
 }
+
+# ---- WU-MSU-KIND-BEGIN   (tools/tests/wu-cumulative-order-test.ps1 runs this region)
+# WHICH .msu IS THE CUMULATIVE - decided by the package identity DISM reports for the FILE (Get-MsuInfo), never by a title or a filename
+# (ADR-updater section 6; Jev Q1 0.63, 2026-10-04). Measured on the reporter's German 25H2 template with 4.3.33: the combined cumulative
+# (KB5129195 - servicing stack and rollup in one .msu, the new format expand.exe cannot open) reports 'OnePackage~~~~0.0.0.0'; an
+# older-format rollup names its RollupFix; the .NET packages (KB5126052) report no identity at all. The kind decides the ORDER of the
+# pass (WU-PASS-ORDER) and which package gets the registration check (WU-CUMULATIVE-REGISTERED). It never decides whether a package is
+# installed - DISM's own applicability answer does that, as before.
+function Get-MsuKindFromIdentity([string]$identity){
+  if($identity -match 'OnePackage|RollupFix'){ return 'cumulative' }   # GUARD:cumulativeid
+  return 'other'
+}
+# Memoized per path: /Get-PackageInfo opens the package, and a cumulative is gigabytes.
+$script:MsuKindCache = @{}
+function Get-MsuKind($path){
+  $key = [string]$path
+  if(-not $script:MsuKindCache.ContainsKey($key)){
+    $id = ''
+    try { $id = [string](Get-MsuInfo $path).identity } catch { $id = '' }
+    $script:MsuKindCache[$key] = Get-MsuKindFromIdentity $id
+  }
+  return $script:MsuKindCache[$key]
+}
+# ---- WU-MSU-KIND-END
+
+# ---- WU-CBS-READ-BEGIN
+# TWO READS OF THE SERVICING STATE, both STRUCTURED, both honest about not knowing.
+# CBS RebootPending (the key CBS creates when a staged operation waits for a boot): $true / $false, or $null when it cannot be read.
+# UNKNOWN IS NOT FALSE: the caller announces an unreadable answer (ADR-updater section 10) rather than treating it as 'nothing pending'.
+function Test-CbsRebootPending {
+  try { return [bool](Test-Path -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending' -EA Stop) }
+  catch { return $null }
+}
+# The package list as PackageName -> PackageState, from the Dism module (Get-WindowsPackage -Online). The state is the module's own
+# enum, whose names are English whatever the system language - `dism /get-packages /format:table` prints its state words LOCALIZED,
+# and the reporter's guest is German, so that output can never be matched here (ADR-updater section 6). $null when the list cannot be
+# read or comes back empty: a reading that failed is reported as such by the caller, never as 'nothing pending'.
+function Get-CbsPackageStates {
+  try {
+    $states = @{}
+    foreach($p in @(Get-WindowsPackage -Online -ErrorAction Stop)){ $states[[string]$p.PackageName] = [string]$p.PackageState }
+    if($states.Count -eq 0){ Log '  package list: Get-WindowsPackage -Online returned no packages at all - treated as UNREADABLE'; return $null }
+    return $states
+  } catch {
+    Log ('  package list: Get-WindowsPackage -Online failed (' + ($_.Exception.Message -replace '\s+',' ') + ') - UNREADABLE')
+    return $null
+  }
+}
+# ---- WU-CBS-READ-END
+
+# ---- WU-CUMULATIVE-REGISTERED-BEGIN   (tools/tests/wu-cumulative-order-test.ps1 runs this region)
+# DID WINDOWS REGISTER THE CUMULATIVE DISM ACCEPTED? DISM's rc=3010 is not the answer: measured 2026-10-03/04 on the reporter's German 25H2
+# template, a cumulative staged behind a pending restart returned 3010 and was NEVER registered - no RollupFix 9457 in the package list
+# in any state, UBR unchanged after the restart, the update re-offered. (That was an experiment with QUBES_UPDATES_ALLOW_MULTISTAGE=1: the
+# shipped one-package rule never staged the cumulative behind .NET - it deferred it, which is why 4.3.33 asks for a second restart. And a
+# cumulative 4.3.33 staged ALONE was verified to complete at its restart, UBR 9457.) The
+# answer is the package list BEFORE and AFTER the DISM call: a RollupFix package must be NEWLY InstallPending (absent before, or not
+# InstallPending before). Measured when it works: RollupFix 9457 'InstallPending' and 8037 'UninstallPending' after the call, 9457
+# Installed and 8037 Superseded after the restart. An already-pending rollup is NOT this call's doing and does not pass it.
+# Returns ok (registered), known (both lists were readable) and a why that names what was seen. Jev Q3 0.88: the check is needed.
+function Test-RollupRegistered($before, $after){
+  if($null -eq $before -or $null -eq $after){
+    $which = if($null -eq $before -and $null -eq $after){ 'before and after' } elseif($null -eq $before){ 'before' } else { 'after' }
+    return @{ ok=$false; known=$false; why="the package list could not be read $which the DISM call, so whether a RollupFix package became InstallPending is UNKNOWN" }
+  }
+  $newlyPending = @($after.Keys | Where-Object { $_ -match 'RollupFix' -and $after[$_] -eq 'InstallPending' -and ((-not $before.ContainsKey($_)) -or ($before[$_] -ne 'InstallPending')) })   # GUARD:rollupregistered
+  $seen = @($after.Keys | Where-Object { $_ -match 'RollupFix' } | Sort-Object | ForEach-Object {
+             "$_=$($after[$_])" + $(if($before.ContainsKey($_)){ " (before: $($before[$_]))" } else { ' (absent before)' }) })
+  if($newlyPending.Count -gt 0){ return @{ ok=$true; known=$true; why=('newly InstallPending: ' + ($newlyPending -join ', ')) } }
+  return @{ ok=$false; known=$true; why=('no RollupFix package is newly InstallPending - RollupFix packages after the call: ' + $(if($seen.Count){ $seen -join ', ' } else { 'none' })) }
+}
+# ---- WU-CUMULATIVE-REGISTERED-END
 
 # DISM cannot ingest .msu on Win10 (measured 2026-08-19: rc=50 'request is not supported' on
 # 19045 for both the LCU and the .NET package; the same call works on Win11 26100, where the
@@ -1796,12 +1880,14 @@ function Install-ViaAgentCache($u){
   return [ordered]@{ kb=$label; ok=$ok; state=$state; files=@($rows); rc=$agentRc; hresult=$(if($hr){ $hr } else { $null }); verified_by_effect=[bool]$eff; probe=$probe; already_current=[bool]$alreadyCurrent; severity=$sev; reason=$reason }
 }
 
+# ---- WU-INSTALL-MSUS-BEGIN   (tools/tests/wu-cumulative-order-test.ps1 runs this function with DISM, the settle and the package list stood in)
 function Install-Msus($files){
-  $reboot=$false; $rows=@()
+  $reboot=$false; $rows=@(); $cumRow=$null; $cumBefore=$null; $cumFile=''
   foreach($f in (Order-Msus $files)){
     $name = [IO.Path]::GetFileName($f)
     $pi = Get-MsuInfo $f
-    Log "  $name applicable=$($pi.applicable) state=$($pi.state) id=$($pi.identity)"
+    $kind = Get-MsuKindFromIdentity ([string]$pi.identity)
+    Log "  $name applicable=$($pi.applicable) state=$($pi.state) id=$($pi.identity) kind=$kind"
     if($pi.applicable -eq 'No'){
       # SKIPPED, not failed: this package was never meant for this image. Recording it as a
       # failure is what made a whole KB look broken when only a catalog sibling was irrelevant.
@@ -1812,7 +1898,7 @@ function Install-Msus($files){
       $rows += [ordered]@{ file=$name; rc='skipped'; why="already installed" }
       continue
     }
-    # ONE REBOOT-REQUIRING PACKAGE PER SERVICING SESSION.
+    # ONE REBOOT-REQUIRING PACKAGE PER SERVICING SESSION - WITH ONE RELAXATION.
     #
     # Measured 2026-08-14 on a pristine 26100.8875 clone: the pass staged KB5120710 (rc=3010) and
     # then KB5121003 (rc=3010) without a reboot in between. After the reboot KB5120710 was
@@ -1825,19 +1911,34 @@ function Install-Msus($files){
     # So once something is staged, stop. The remaining packages stay on disk and the next pass -
     # after the reboot this one forces - picks them up. Slower, and the only way the second package
     # actually lands.
+    #
+    # THE RELAXATION (2026-10-04, ADR-updater section 13), measured on the reporter's German 25H2 template with this rule lifted
+    # (QUBES_UPDATES_ALLOW_MULTISTAGE=1): the package that gets lost behind a stage is the CUMULATIVE (its bundled servicing stack must
+    # install online first), while the cumulative FIRST and .NET second both landed at one restart. So a package that is NOT itself a
+    # cumulative may stage behind a cumulative THIS pass staged and Windows REGISTERED (the check below). A second cumulative is still
+    # deferred; with no registered cumulative the rule stands.
     if ($script:StagedThisSession -and -not $env:QUBES_UPDATES_ALLOW_MULTISTAGE) {
-      $rows += [ordered]@{ file=$name; rc='deferred'
-                           why='another package is already staged; installing it needs a reboot first' }
-      Log "  DEFER $name - a reboot-requiring package is already staged this session"
-      continue
+      if ($kind -eq 'cumulative' -or -not $script:CumulativeRegisteredThisSession) {   # GUARD:stagebehindcumulative
+        $why = if ($kind -eq 'cumulative') { 'another package is already staged this pass and this one is a cumulative (it carries a servicing stack, which must install online before anything is pending); installing it needs a reboot first' }
+               else { 'another package is already staged; installing it needs a reboot first' }
+        $rows += [ordered]@{ file=$name; rc='deferred'; why=$why }
+        Log "  DEFER $name - $why"
+        continue
+      }
+      Log "  $name : staging behind the cumulative this pass staged and Windows registered (measured 2026-10-04: both land at the one restart)"
     }
+    # THE BASELINE FOR THE REGISTRATION CHECK, read BEFORE the DISM call - a RollupFix package already pending now is not this call's.
+    if ($kind -eq 'cumulative') { $cumBefore = Get-CbsPackageStates }   # GUARD:regbefore
     $script:St.installing=[ordered]@{ file=$name; state='running' }; Save
     $rc = Add-PackageCompat $f
     if($rc -eq 3010){ $reboot=$true; $script:StagedThisSession = $true }
     # Re-ask DISM what the package's state is NOW. rc=3010 only means "staged"; the state tells us
-    # whether CBS actually took it, which is the thing that was silently false before.
+    # whether CBS actually took it, which is the thing that was silently false before. For the combined cumulative it tells nothing
+    # (measured 2026-10-04: 'Not Present' whether the rollup later lands or is dropped) - the package list after the settle decides.
     $after = Get-MsuInfo $f
-    $rows += [ordered]@{ file=$name; rc=$rc; state_after=$after.state }
+    $row = [ordered]@{ file=$name; rc=$rc; state_after=$after.state; kind=$kind }
+    if($kind -eq 'cumulative' -and $rc -eq 3010){ $cumRow = $row; $cumFile = $name }
+    $rows += $row
     Log "  DISM $name rc=$rc state_after=$($after.state)"
   }
   # STICKY, never assigned: Install-Msus runs once per KB, so assigning would let a later KB
@@ -1845,7 +1946,33 @@ function Install-Msus($files){
   # KB5120710 returned 3010 (reboot required), KB5121003 then returned 0, and the pass ended
   # claiming reboot_needed=false while Windows had CBS RebootPending set.
   if ($reboot) { $script:St.reboot_needed = $true }
+  if ($reboot) { Wait-CbsSettle }
+  # THE REGISTRATION CHECK, after the settle (TiWorker idle): was the cumulative DISM accepted actually registered by Windows? A row
+  # that was not is NOT staged, whatever rc=3010 says - it will not complete at the restart, and dom0 is never told it will
+  # (Get-MsuKbVerdict fails the KB on it). The restart is requested either way: it is what clears the state that blocked the
+  # registration, and the pass after it retries the package, which stays on disk.
+  if ($cumRow) {
+    $cumAfter = Get-CbsPackageStates
+    $reg = Test-RollupRegistered $cumBefore $cumAfter
+    if ($reg.ok) {
+      $script:CumulativeRegisteredThisSession = $true   # GUARD:registeredrelaxes - the only thing that lets a later package stage this pass
+      $cumRow.registered = $true
+      Log "  REGISTERED $cumFile - $($reg.why)"
+    } elseif ($reg.known) {
+      $cumRow.registered = $false
+      $cumRow.why = "DISM accepted $cumFile (rc=3010; the cumulative) but Windows did NOT register it: $($reg.why). It is NOT staged and will not complete at a restart; this pass requests the restart that clears the state which blocked it, and the pass after the restart retries this package"
+      Log "  ERROR: $($cumRow.why)"
+    } else {
+      $cumRow.registered = 'unknown'   # GUARD:unreadablefails - missing data fails: not reported as staged
+      $cumRow.why = "DISM accepted $cumFile (rc=3010; the cumulative) but whether Windows registered it is UNKNOWN: $($reg.why). NOT reported as staged; this pass requests a restart, which settles it either way, and the pass after the restart retries this package if Windows did not take it"
+      Log "  ERROR: $($cumRow.why)"
+    }
+  }
+  return $rows
+}
+# ---- WU-INSTALL-MSUS-END
 
+function Wait-CbsSettle {
   # SETTLE BEFORE DECLARING ANYTHING. DISM returning 3010 does NOT mean CBS has finished
   # registering the package: TiWorker keeps working after the exit code. Measured 2026-08-14 - the
   # pass reported done, the qube shut down 22 s later, the shutdown took 77 s where a real apply
@@ -1857,7 +1984,7 @@ function Install-Msus($files){
   # If RebootPending appears here and the package is still discarded at boot, the aggregation story
   # is real; if RebootPending never appears, the loss was this race and serialising was treating a
   # symptom.
-  if ($reboot) {
+  # Its own function since 2026-10-04 so the offline test can stand it in; the body is unchanged. Called only after a stage (rc=3010).
     $cbsRel = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing'
     $rp = "HKLM:\$cbsRel\RebootPending"
     $deadline = (Get-Date).AddMinutes(10)
@@ -1931,9 +2058,95 @@ public static class CbsRegNotify {
       }
     }
     Log ("  settle: TiWorker idle={0}" -f (@(Get-Process TiWorker -EA SilentlyContinue).Count -eq 0))
-  }
-  return $rows
 }
+
+# ---- WU-MSU-VERDICT-BEGIN   (tools/tests/wu-cumulative-order-test.ps1 runs this region)
+# THE KB's ROW FROM ITS FILE ROWS. One catalog KB can yield SEVERAL .msu (build/architecture variants, prerequisites), and the ones that
+# do not apply to this image fail by design - a 24H2 cumulative returns rc=552 on a 25H2 guest. So a KB counts as installed when AT
+# LEAST ONE of its files succeeds. STAGED IS NOT INSTALLED: rc=3010 means CBS accepted the package and will apply it during the next
+# boot - it is not proof that it landed, and on 2026-08-14 a package that returned 3010 ended up with ZERO CBS entries after the reboot
+# while this code reported "installed=True". Say which it is, so a discarded package can never read as a success.
+# A CUMULATIVE DISM ACCEPTED BUT WINDOWS DID NOT REGISTER (or could not be shown to have registered - WU-INSTALL-MSUS's check, rows
+# carrying registered=$false / 'unknown') FAILS the KB: ok=false, state 'failed', the file row's why as the reason. dom0 then hears it
+# as outstanding with a restart required - never as 'staged (completes at restart)', which DISM's 3010 alone would have claimed.
+function Get-MsuKbVerdict([string]$kb, $rows){
+  $ok = @($rows | Where-Object { $_.rc -in $OK_RC }).Count -gt 0
+  $staged = @($rows | Where-Object { $_.rc -eq 3010 }).Count -gt 0
+  $applied = @($rows | Where-Object { $_.rc -eq 0 }).Count -gt 0
+  $deferred = @($rows | Where-Object { $_.rc -eq 'deferred' }).Count -gt 0
+  $state = if ($staged) { 'staged' } elseif ($applied) { 'installed' }
+           elseif ($deferred) { 'deferred' } else { 'failed' }
+  $row = [ordered]@{ kb=$kb; ok=$ok; state=$state; files=@($rows) }
+  $unregistered = @($rows | Where-Object { (Test-RowKey $_ 'registered') -and ($_.registered -ne $true) })
+  if ($unregistered.Count -gt 0) {   # GUARD:unregisteredfails
+    $row.ok = $false; $row.state = 'failed'; $row.reason = [string]$unregistered[0].why
+  }
+  return $row
+}
+# ---- WU-MSU-VERDICT-END
+
+# ---- WU-PASS-ORDER-BEGIN   (tools/tests/wu-cumulative-order-test.ps1 runs this region with DISM, the settle and the package list stood in)
+# THE ORDER OF THE .msu ROUTE (decided 2026-10-04, docs/ADR-updater.md section 13). Until then each catalog package was handed to DISM
+# the moment its files arrived, i.e. in OFFER ORDER - on the reporter's German 25H2 template .NET (KB5126052) before the cumulative
+# (KB5129195): .NET staged, the one-package rule deferred the cumulative, and the guest needed a second restart. Measured there with the
+# rule lifted (QUBES_UPDATES_ALLOW_MULTISTAGE=1), a cumulative staged behind .NET's pending restart was never registered at all; the
+# cumulative FIRST and .NET second both landed at one restart. So the resolve/download loop queues the .msu offers in a plan and this
+# installs them after the loop:
+#   1. the cumulative (Get-MsuKind, by DISM's identity of the file) - FIRST, and only if CBS RebootPending is false at that moment.
+#      A restart already pending (left by Windows or by an earlier pass) DEFERS it with exactly that reason and requests the restart
+#      through the existing channel (reboot_needed; ADR sections 8 and 10). An unreadable RebootPending is announced and the cumulative
+#      proceeds (ADR section 10: an unmeasured guard is never assumed in either direction) - the registration check is the backstop;
+#   2. every other .msu, in offer order (the one-package rule, relaxed only behind a registered cumulative, is Install-Msus's).
+# NOT part of this: the Windows Update agent route (Install-ViaAgentCache - Defender, the Security platform, MSRT, no-KB offers with
+# static content) and the title-resolved drivers (Install-DriverCab). They run inline in the offer loop, where 4.3.33 was measured
+# working (Jev review 2026-10-04: moving them behind a staged cumulative was the biggest risk, 0.78; this narrow design 0.73). They are
+# not CBS packages and are not expected to set CBS RebootPending (not measured); if one ever does, the gate above defers the cumulative
+# truthfully, at the cost of one extra restart. Any miss of the order rule ends in a truthful deferral or a failed row that requests the
+# restart (Jev Q2 unsettled at 0.49; Q3's check is the backstop at 0.88): at most one extra restart, and nothing reported staged on
+# DISM's 3010 alone. Plan entries: @{ u=<offer row>; label; got=@(files) }.
+function Install-MsuPlan($plan){
+  foreach($e in $plan){ $e.cumulative = (@($e.got | Where-Object { (Get-MsuKind $_) -eq 'cumulative' }).Count -gt 0) }
+  $ordered = @($plan | Where-Object { $_.cumulative }) + @($plan | Where-Object { -not $_.cumulative })   # GUARD:cumulativefirst
+  Log ('install order (.msu): ' + (@($ordered | ForEach-Object { $_.label + $(if($_.cumulative){ ' [cumulative]' } else { '' }) }) -join ' -> '))
+  foreach($e in $ordered){
+    $u = $e.u
+    if($e.cumulative){
+      $rp = Test-CbsRebootPending
+      if($rp -eq $true){   # GUARD:cumulativedefer
+        $why = ('deferred: a restart is already pending (CBS RebootPending is set - left by Windows or by an earlier pass) and the ' +
+                'cumulative''s bundled servicing stack must install online BEFORE anything is pending (measured 2026-10-03/04 on the ' +
+                'reporter''s environment: staged behind a pending restart, DISM returned 3010 and Windows never registered the rollup); ' +
+                'this pass requests that restart, and the pass after it installs the cumulative first')
+        $fileRows = @($e.got | ForEach-Object { [ordered]@{ file=[IO.Path]::GetFileName($_); rc='deferred'; why=$why } })
+        $script:St.result += [ordered]@{ kb=$u.kb; ok=$false; state='deferred'; files=@($fileRows); reason=$why }
+        $script:St.reboot_needed = $true   # GUARD:deferrequests - the restart is REQUESTED through the counted channel, never taken
+        Save
+        Log "$($u.kb): DEFERRED - $why"
+        continue
+      }
+      if($null -eq $rp){ Log "  WARNING: $($u.kb): CBS RebootPending could not be read - the cumulative proceeds (an unmeasured guard is never assumed); the registration check after the DISM call is the backstop" }   # GUARD:rpunreadable
+      else { Log "  $($u.kb): CBS RebootPending=false - the cumulative goes first" }
+    }
+    $script:St.phase='install'; Save
+    # One catalog KB can yield SEVERAL .msu (build/architecture variants, prerequisites), and the ones that do not apply to this image
+    # fail by design - a 24H2 cumulative returns rc=552 on a 25H2 guest. So a KB counts as installed when AT LEAST ONE of its files
+    # succeeds (Get-MsuKbVerdict), and results are grouped PER KB and APPENDED. This used to be a plain assignment of a flat row list,
+    # so each KB silently erased the previous KB's outcome.
+    $rows = Install-Msus $e.got
+    $verdict = Get-MsuKbVerdict $u.kb $rows
+    $script:St.result += $verdict
+    Save
+    # Reclaim the download ONLY once the package is truly applied. A STAGED package still has
+    # to survive a reboot, and if it does not, the next pass must be able to retry it without
+    # re-fetching gigabytes - deleting it here is what made a failed apply expensive.
+    $staged = @($rows | Where-Object { $_.rc -eq 3010 }).Count -gt 0
+    if (-not $staged) {
+      foreach($r in $rows){ if($r.rc -in $OK_RC){ Remove-Item -LiteralPath (Join-Path (Join-Path $WorkDir $u.kb) $r.file) -Force -EA SilentlyContinue } }
+    }
+    Log ("$($u.kb): $($verdict.state) (ok=$($verdict.ok))" + $(if($verdict.reason){ " - $($verdict.reason)" } else { '' }))
+  }
+}
+# ---- WU-PASS-ORDER-END
 
 # AUTOLOGON PROTECTION AT EVERY PASS END (measured 2026-08-19: three HARNESS-driven reboots
 # around staged servicing consumed DefaultPassword and left win10-clean at the sign-in screen
@@ -2308,6 +2521,12 @@ try {
     Log ("QUBES_UPDATES_FAKE_FALLBACK_KB=" + $env:QUBES_UPDATES_FAKE_FALLBACK_KB + " - pretending that KB needs the Windows Update fallback")
   }
   if ($Action -in 'resolve','download','full','install') {
+    # THE .msu ROUTE IS TWO-PHASE (2026-10-04, docs/ADR-updater.md section 13). This loop still resolves and fetches every offer in
+    # offer order, and the agent route and the drivers still install right here, where 4.3.33 was measured working. Only the catalog
+    # .msu are not installed here: they are queued in $plan, and Install-MsuPlan (WU-PASS-ORDER) runs them after the loop, the
+    # cumulative first. In offer order 4.3.33 staged .NET first and its one-package rule then deferred the cumulative to a second
+    # restart (reporter's environment, 2026-10-03/04).
+    $plan = @()
     foreach($u in $avail){
       if($u.kb -notmatch '^KB\d+'){
         # ---- WU-NOKB-BEGIN
@@ -2470,34 +2689,13 @@ try {
         Log "$($u.kb): NO installable package resolved - reporting as failed"
       }
       if ($Action -in 'install','full' -and $got.Count -gt 0) {
-        $script:St.phase='install'; Save
-        # One catalog KB can yield SEVERAL .msu (build/architecture variants, prerequisites), and
-        # the ones that do not apply to this image fail by design - a 24H2 cumulative returns
-        # rc=552 on a 25H2 guest. So a KB counts as installed when AT LEAST ONE of its files
-        # succeeds, and results are grouped PER KB and APPENDED. This used to be a plain
-        # assignment of a flat row list, so each KB silently erased the previous KB's outcome.
-        $rows = Install-Msus $got
-        $ok = @($rows | Where-Object { $_.rc -in $OK_RC }).Count -gt 0
-        # STAGED IS NOT INSTALLED. rc=3010 means CBS accepted the package and will apply it during
-        # the next boot - it is not proof that it landed, and on 2026-08-14 a package that returned
-        # 3010 ended up with ZERO CBS entries after the reboot while this code reported
-        # "installed=True". Say which it is, so a discarded package can never read as a success.
-        $staged = @($rows | Where-Object { $_.rc -eq 3010 }).Count -gt 0
-        $applied = @($rows | Where-Object { $_.rc -eq 0 }).Count -gt 0
-        $deferred = @($rows | Where-Object { $_.rc -eq 'deferred' }).Count -gt 0
-        $state = if ($staged) { 'staged' } elseif ($applied) { 'installed' }
-                 elseif ($deferred) { 'deferred' } else { 'failed' }
-        $script:St.result += [ordered]@{ kb=$u.kb; ok=$ok; state=$state; files=$rows }
-        Save
-        # Reclaim the download ONLY once the package is truly applied. A STAGED package still has
-        # to survive a reboot, and if it does not, the next pass must be able to retry it without
-        # re-fetching gigabytes - deleting it here is what made a failed apply expensive.
-        if (-not $staged) {
-          foreach($r in $rows){ if($r.rc -in $OK_RC){ Remove-Item -LiteralPath (Join-Path (Join-Path $WorkDir $u.kb) $r.file) -Force -EA SilentlyContinue } }
-        }
-        Log "$($u.kb): $state (ok=$ok)"
+        # Not installed here: queued for Install-MsuPlan (WU-PASS-ORDER), which runs the .msu after this loop, the cumulative first,
+        # and builds the per-KB row (Get-MsuKbVerdict).
+        Log "$($u.kb): $($got.Count) package file(s) on disk - queued for DISM (WU-PASS-ORDER decides the order)"
+        $plan += [ordered]@{ u=$u; label=$u.kb; got=@($got) }
       }
     }
+    if ($Action -in 'install','full' -and $plan.Count -gt 0) { Install-MsuPlan $plan }
   }
   # Updates that are not catalog packages: install them the only way they CAN be installed.
   #
