@@ -63,18 +63,16 @@ indefinitely. WHICH on-demand task runs is dom0's decision: a full pass by defau
 In the other direction the guest uses two stock services: `qubes.NotifyUpdates` for the count (§2) and
 `qubes.UpdatesProxy`, through the relay, for every byte it fetches (§5).
 
-**There is no `qubes.WindowsUpdate` service, and no dom0 script.** The service definitions the package
-ships are `qubes.ClipboardCopy`, `ClipboardPaste`, `Filecopy`, `GetAppMenus`, `GetAppmenus`,
-`GetImageRGBA`, `OpenInVM`, `OpenURL`, `SetDateTime`, `SetGuiMode`, `StartApp`, `SuspendPostAll`, `VMExec`,
-`VMShell` and `WaitForSession` - fifteen, none of them for updates. `wu-update.ps1` is deployed into
-`qubes-rpc-services\` and reached by the shim, not by a service definition; its own file header still
-calls itself an rpc handler, which is stale.
+No service definition of ours is involved. The fifteen the package ships are `qubes.ClipboardCopy`,
+`ClipboardPaste`, `Filecopy`, `GetAppMenus`, `GetAppmenus`, `GetImageRGBA`, `OpenInVM`, `OpenURL`,
+`SetDateTime`, `SetGuiMode`, `StartApp`, `SuspendPostAll`, `VMExec`, `VMShell` and `WaitForSession`.
+`wu-update.ps1` is deployed into `qubes-rpc-services\` and reached by the shim, not by a service
+definition; its own file header still calls itself an rpc handler, which is stale.
 
 **The dom0 side applies nothing and runs nothing.** Until 2026-10-07 the dom0 RPM installed three scripts
 into `%{_bindir}` and its `%post` EXECUTED two of them: one walked every qube whose `os` feature read
-Windows and changed its features and prefs, one rewrote `qvm-create-windows-qube`'s files, and one called
-the `qubes.WindowsUpdate` service that has never existed in this tree. All three are removed, along with
-the `%post` execution. What a Windows qube needs from dom0 is stated, not done: `qvm-features <qube>
+Windows and changed its features and prefs, one rewrote `qvm-create-windows-qube`'s files, and one was a
+`qvm-windows-update` wrapper. All three are removed, along with the `%post` execution. What a Windows qube needs from dom0 is stated, not done: `qvm-features <qube>
 vmexec 1` and `qvm-prefs <qube> qrexec_timeout 600`, which the `%post` message and `docs/QVM-FEATURES.md`
 spell out for the admin to apply. Neither can be set from inside the guest - the Windows build of
 `qubesdb-cmd` cannot write to QubesDB at all - which is why they are a prerequisite rather than part of
