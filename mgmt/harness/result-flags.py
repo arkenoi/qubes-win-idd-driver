@@ -183,6 +183,7 @@ ERROR_FLAGS = [
     ('death_reporter',          lambda v: _s(v) != 'registered',          'Register-QwtDeathReporter WARN: the event-triggered QwtDeathReporter task is not registered - a death of ours stays in the guest logs only'),
     ('death_catchup',           lambda v: _s(v) != 'registered',          'Register-QwtDeathCatchUp WARN: the boot-triggered QwtDeathCatchUp task is not registered, so a death DURING a shutdown is never reported (Task Scheduler refuses to start actions once shutdown is in progress)'),
     ('svc_recovery_disarm_failed', nonempty,                              'Suspend-QubesServiceRecovery ERROR: "<svc>: sc failure=<rc> failureflag=<rc>" - the SCM recovery could NOT be disarmed, so stopping that service may have it restarted underneath the install (a relauncher left armed is the defect class this suspend exists for)'),
+    ('svc_recovery_rearm_failed', nonempty,                               'Resume-QubesServiceRecovery ERROR: "<svc>: NO actions|unreadable (prior: ...)" - the recovery could not be put BACK, so the service would leave the installer with no SCM recovery at all while the log said "re-armed". The readback catches it; sc.exe returning 0 does not.'),
     ('autologon',               lambda v: _s(v) not in ('armed', 'skipped', 'not in payload'),
                                                                           'L1278 not-armed / L1285 error / L3384,L3416 unverified / L3409 no trailer / L3412 verify-error'),
 ]

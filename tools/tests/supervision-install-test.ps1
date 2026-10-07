@@ -61,6 +61,9 @@ function Set-GuardLine([string[]]$region, [string]$guard, [string]$replacement) 
 switch ($Defect) {
     '' { }
     'recovsuspend'   { $R['suspend']  = Set-GuardLine $R['suspend']  'recovsuspend'   '    $script:RecoverySuspended = $script:RecoverySuspended + @{ $Name = $before }   # DEFECT: throws on a second suspend of the same service (pre-2026-10-07)' }
+    'recovquote'     { $R['suspend']  = Set-GuardLine $R['suspend']  'recovquote'     '    & sc.exe failure $Name reset= 0 actions= "" 2>&1 | Out-Null   # DEFECT: the bare "" Windows PowerShell 5.1 drops, so sc.exe gets `actions=` and answers 1639' }
+    'recovreadback'  { $R['suspend']  = Set-GuardLine $R['suspend']  'recovreadback'  '    $after = @{ reset = ''0''; actions = @() }   # DEFECT: believe the exit code; never read the configuration back' }
+    'rearmreadback'  { $R['suspend']  = Set-GuardLine $R['suspend']  'rearmreadback'  '        $now = @{ reset = ''86400''; actions = @(''restart/5000'') }   # DEFECT: assume the re-arm took' }
     'recovthree'    { $R['recovery'] = Set-GuardLine $R['recovery'] 'recovthree'    "    foreach (`$svc in 'QdbDaemon', 'QrexecAgent') {   # DEFECT: the watchdog service is not armed" }
     'evsrc'         { $R['reporter'] = Set-GuardLine $R['reporter'] 'evsrc'         '        $global:LASTEXITCODE = 0   # DEFECT: EventMessageFile never written - every event renders as "description not found"' }
     'tasklog'       { $R['reporter'] = Set-GuardLine $R['reporter'] 'tasklog'       '        $global:LASTEXITCODE = 0   # DEFECT: the TaskScheduler/Operational channel stays disabled - 201/203 are never written' }
@@ -78,27 +81,51 @@ $bin = Join-Path $tmp 'bin'
 $env:TEMP = $tmp
 $script:W = @{ sc = New-Object System.Collections.ArrayList; reg = New-Object System.Collections.ArrayList
                wevtutil = New-Object System.Collections.ArrayList; schtasks = New-Object System.Collections.ArrayList
-               taskXml = @{}; scFailFor = @{}; scDisarmed = @{}; regRc = 0; wevtRc = 0; schtasksCreateRc = 0; schtasksQueryRc = 0 }
+               taskXml = @{}; scFailFor = @{}; scActions = @{}; scLieOnWrite = $false; regRc = 0; wevtRc = 0; schtasksCreateRc = 0; schtasksQueryRc = 0 }
 $script:logged = New-Object System.Collections.ArrayList
 function Write-Log { param([string]$Message, [string]$Level = 'INFO') [void]$script:logged.Add("[$Level] $Message") }
 function Write-Host { }
+# REAL sc.exe GRAMMAR. The old stub accepted a command line the real tool REJECTS, and that is precisely
+# the defect it hid: `sc failure <svc> reset= 0 actions=` with NOTHING after actions= is 1639,
+# ERROR_INVALID_COMMAND_LINE - and that is what the shipped installer actually sent, because Windows
+# PowerShell 5.1 drops a bare "" when calling a native executable. This stub is a FUNCTION, so it receives
+# the empty string intact; modelling the rejection is the only way the suite can see the defect at all.
+# A value containing whitespace (a space-joined action list, which PowerShell passes as one quoted argument)
+# is rejected the same way. The state kept here is the service's ACTION LIST, so qfailure reports what the
+# writes really did - which is what makes a readback-based verdict testable.
 function sc.exe { param([Parameter(ValueFromRemainingArguments = $true)][string[]]$a)
     $call = ($a -join ' '); [void]$script:W.sc.Add($call)
     $svc = $a[1]
-    if ($script:W.scFailFor.ContainsKey($svc)) { $global:LASTEXITCODE = [int]$script:W.scFailFor[$svc] } else { $global:LASTEXITCODE = 0 }
+    if ($script:W.scFailFor.ContainsKey($svc)) { $global:LASTEXITCODE = [int]$script:W.scFailFor[$svc]; return '' }
+    $global:LASTEXITCODE = 0
+    if (-not $script:W.scActions.ContainsKey($svc)) { $script:W.scActions[$svc] = @('restart/5000','restart/15000','restart/60000') }
     if ($a[0] -eq 'qfailure') {
-        # The SCM's own text, and the state it reports CHANGES once the service has been disarmed - so a
-        # second suspend reads "no actions", and a record that overwrote the first reading would re-arm nothing.
-        if ($script:W.scDisarmed.ContainsKey($svc)) {
-            return @("[SC] QueryServiceConfig2 SUCCESS", "SERVICE_NAME: $svc", "        RESET_PERIOD (in seconds)    : 0", "        FAILURE_ACTIONS              :") -join "`n"
+        $acts = @($script:W.scActions[$svc])
+        $out = @("[SC] QueryServiceConfig2 SUCCESS", "SERVICE_NAME: $svc",
+                 "        RESET_PERIOD (in seconds)    : $(if ($acts.Count) { '86400' } else { '0' })")
+        if (-not $acts.Count) { return (($out + "        FAILURE_ACTIONS              :") -join "`n") }
+        $first = $true
+        foreach ($x in $acts) {
+            $parts = @($x -split '/')
+            $label = switch ($parts[0].ToLower()) { 'restart' { 'RESTART' } 'reboot' { 'REBOOT' } default { 'RUN PROCESS' } }
+            if ($first) { $out += "        FAILURE_ACTIONS              : $label -- Delay = $($parts[1]) milliseconds."; $first = $false }
+            else        { $out += "                                       $label -- Delay = $($parts[1]) milliseconds." }
         }
-        return @("[SC] QueryServiceConfig2 SUCCESS", "SERVICE_NAME: $svc", "        RESET_PERIOD (in seconds)    : 86400",
-                 "        FAILURE_ACTIONS              : RESTART -- Delay = 5000 milliseconds.",
-                 "                                       RESTART -- Delay = 15000 milliseconds.",
-                 "                                       RESTART -- Delay = 60000 milliseconds.") -join "`n"
+        return ($out -join "`n")
     }
-    if ($a[0] -eq 'failure' -and ($call -match 'actions= *$' -or $call -match 'actions= ""')) { $script:W.scDisarmed[$svc] = $true }
-    if ($a[0] -eq 'failure' -and $call -match 'actions= restart') { [void]$script:W.scDisarmed.Remove($svc) }
+    if ($a[0] -eq 'failure') {
+        $i = [array]::IndexOf($a, 'actions=')
+        $val = $(if ($i -ge 0 -and ($i + 1) -lt $a.Count) { [string]$a[$i + 1] } else { '' })
+        if ($i -lt 0 -or $val -eq '' -or $val -match '\s') { $global:LASTEXITCODE = 1639; return '' }
+        # a write that is ACCEPTED and changes nothing: only reading the configuration back can catch it
+        if ($script:W.scLieOnWrite) { return '' }
+        if ($val -eq '""') { $script:W.scActions[$svc] = @() }
+        else {
+            $t = @($val -split '/'); $acts = @()
+            for ($k = 0; ($k + 1) -lt $t.Count; $k += 2) { $acts += "$($t[$k])/$($t[$k+1])" }
+            $script:W.scActions[$svc] = $acts
+        }
+    }
     return ''
 }
 function reg.exe { param([Parameter(ValueFromRemainingArguments = $true)][string[]]$a)
@@ -119,7 +146,7 @@ function schtasks.exe { param([Parameter(ValueFromRemainingArguments = $true)][s
 }
 function Reset-World {
     $script:W.sc.Clear(); $script:W.reg.Clear(); $script:W.wevtutil.Clear(); $script:W.schtasks.Clear(); $script:W.taskXml.Clear()
-    $script:W.scFailFor.Clear(); $script:W.regRc = 0; $script:W.wevtRc = 0; $script:W.schtasksCreateRc = 0; $script:W.schtasksQueryRc = 0
+    $script:W.scFailFor.Clear(); $script:W.scActions.Clear(); $script:W.scLieOnWrite = $false; $script:W.regRc = 0; $script:W.wevtRc = 0; $script:W.schtasksCreateRc = 0; $script:W.schtasksQueryRc = 0
     $script:logged.Clear()
     $script:Result = [pscustomobject]@{ detail = [ordered]@{} }
     if (Test-Path -LiteralPath $bin) { Remove-Item -LiteralPath $bin -Recurse -Force }
@@ -261,10 +288,16 @@ $script:Result = @{ detail = @{} }
 $script:RecoverySuspended = @{}
 $thrown = ''
 try { [void](Suspend-QubesServiceRecovery -Name 'QubesGuiWatchdog') } catch { $thrown = "$_" }
-Check 'suspend: the first call disarms the service and records what it was' `
-      ($thrown -eq '' -and @($script:W.sc | Where-Object { $_ -eq 'failure QubesGuiWatchdog reset= 0 actions= ' -or $_ -eq 'failure QubesGuiWatchdog reset= 0 actions= ""' }).Count -ge 1 `
+# THE COMMAND LINE IS NOW EXACT. It used to accept EITHER the literal-quote token OR the dropped empty one
+# ("actions= " with nothing after it), which is the form real sc.exe answers 1639 to - so the suite blessed
+# the broken call. Shipped twice before the flag that reported it was classified.
+Check 'suspend: the disarm sends a NON-EMPTY actions token (5.1 drops a bare "" and sc answers 1639)' `
+      ($thrown -eq '' -and @($script:W.sc | Where-Object { $_ -eq 'failure QubesGuiWatchdog reset= 0 actions= ""' }).Count -eq 1 `
        -and @($script:W.sc | Where-Object { $_ -eq 'failureflag QubesGuiWatchdog 0' }).Count -eq 1 `
        -and "$($script:RecoverySuspended['QubesGuiWatchdog'])" -match 'reset=86400' ) "thrown=$thrown rec=$($script:RecoverySuspended['QubesGuiWatchdog']) sc=$($script:W.sc -join ' | ')"
+Check 'suspend: and it VERIFIED the effect - no disarm-failed flag when the configuration really reads empty' `
+      ($null -eq $script:Result.detail['svc_recovery_disarm_failed'] -and @($script:W.scActions['QubesGuiWatchdog']).Count -eq 0) `
+      "flag=$($script:Result.detail['svc_recovery_disarm_failed']) actions=$(@($script:W.scActions['QubesGuiWatchdog']) -join '/')"
 $thrown = ''
 try { [void](Suspend-QubesServiceRecovery -Name 'QubesGuiWatchdog') } catch { $thrown = "$_" }
 Check 'suspend: a SECOND call for the same service does not throw (Stop-QwtRuntime runs from three sites)' ($thrown -eq '') "thrown=$thrown"
@@ -276,8 +309,38 @@ Check 'resume: the recorded configuration is restored, with the non-crash flag b
       ($thrown -eq '' -and @($script:W.sc | Where-Object { $_ -like 'failure QubesGuiWatchdog reset= 86400 actions= restart/5000*' }).Count -eq 1 `
        -and @($script:W.sc | Where-Object { $_ -eq 'failureflag QubesGuiWatchdog 1' }).Count -eq 1 `
        -and $script:RecoverySuspended.Count -eq 0) "thrown=$thrown sc=$($script:W.sc -join ' | ')"
+Check 'resume: the re-arm is verified by effect too - actions are back and no re-arm-failed flag' `
+      (@($script:W.scActions['QubesGuiWatchdog']).Count -eq 3 -and $null -eq $script:Result.detail['svc_recovery_rearm_failed']) `
+      "actions=$(@($script:W.scActions['QubesGuiWatchdog']) -join '/') flag=$($script:Result.detail['svc_recovery_rearm_failed'])"
+
+# A WRITE THAT IS ACCEPTED AND CHANGES NOTHING. sc.exe returns 0, the configuration is untouched: an
+# exit-code verdict calls that success, and only reading it back catches it. This is the case the shipped
+# code could not have detected even with the quoting fixed.
+Reset-World
+. ([scriptblock]::Create(($R['suspend'] -join "`n")))
+$script:Result = @{ detail = @{} }
+$script:RecoverySuspended = @{}
+$script:W.scLieOnWrite = $true
+[void](Suspend-QubesServiceRecovery -Name 'QdbDaemon')
+Check 'suspend: a write that sc ACCEPTS but does not apply is caught by the readback, not believed' `
+      ($null -ne $script:Result.detail['svc_recovery_disarm_failed'] -and "$($script:Result.detail['svc_recovery_disarm_failed'])" -match 'still=restart/5000') `
+      "flag=$($script:Result.detail['svc_recovery_disarm_failed'])"
+# the same for the re-arm: a service left with NO recovery while the log says "re-armed" is the worse half
+Reset-World
+. ([scriptblock]::Create(($R['suspend'] -join "`n")))
+$script:Result = @{ detail = @{} }
+$script:RecoverySuspended = @{}
+[void](Suspend-QubesServiceRecovery -Name 'QdbDaemon')
+$script:W.scLieOnWrite = $true
+Resume-QubesServiceRecovery -Name 'QdbDaemon'
+Check 'resume: a re-arm that does not take is an ERROR-class flag, never a "re-armed" log line' `
+      ($null -ne $script:Result.detail['svc_recovery_rearm_failed']) `
+      "flag=$($script:Result.detail['svc_recovery_rearm_failed']) logged=$(@($script:logged | Where-Object { $_ -match 're-armed' }) -join ' | ')"
+
 # A service whose prior configuration could not be read is armed with the standard one - never left bare.
 Reset-World
+. ([scriptblock]::Create(($R['suspend'] -join "`n")))
+$script:Result = @{ detail = @{} }
 $script:RecoverySuspended = @{}
 $script:W.scFailFor['QdbDaemon'] = 1
 [void](Suspend-QubesServiceRecovery -Name 'QdbDaemon')

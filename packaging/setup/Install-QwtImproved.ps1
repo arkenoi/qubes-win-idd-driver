@@ -646,6 +646,20 @@ function Clear-BootResume {
 
 # --------------------------------------------------------------- gui-agent registry seed
 # ---- RECOVERY-SUSPEND-BEGIN  (tools/tests/procown-sites-test.ps1 extracts this region by marker)
+# THE VERDICT ON A RECOVERY CHANGE IS THE READBACK, NEVER sc.exe's EXIT CODE (docs/ADR-updater.md 3,
+# "verify by effect, never by exit code"). An exit code cannot tell you the SCM will not restart a service;
+# only the configuration can. $null means the configuration could not be READ - missing data, never
+# mistaken for "no actions configured".
+function Read-QubesServiceRecovery {
+    param([Parameter(Mandatory)][string]$Name)
+    $q = (& sc.exe qfailure $Name 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) { return $null }
+    $reset = ([regex]::Match($q, 'RESET_PERIOD[^:]*:\s*(\d+)')).Groups[1].Value
+    $acts  = @([regex]::Matches($q, '(RESTART|RUN PROCESS|REBOOT)\s*--\s*Delay\s*=\s*(\d+)') |
+               ForEach-Object { "$($_.Groups[1].Value.ToLower())/$($_.Groups[2].Value)" })
+    return @{ reset = $(if ($reset) { $reset } else { '0' }); actions = $acts }
+}
+
 function Suspend-QubesServiceRecovery {
     # DISARM THE RELAUNCHER BEFORE ENDING ITS TARGET (the owner's rule, 2026-10-07: "if you terminate something
     # that relaunches you need to make sure it STOPS relaunching beforehand"; docs/ADR-supervision.md 5).
@@ -676,7 +690,12 @@ function Suspend-QubesServiceRecovery {
             $before = "reset=$reset actions=$(if ($acts) { $acts } else { 'none' })"
         } else { $before = "sc qfailure rc=$LASTEXITCODE" }
     } catch { $before = "error: $($_.Exception.Message)" }
-    & sc.exe failure $Name reset= 0 actions= "" 2>&1 | Out-Null
+    # '""' IS A LITERAL TWO-QUOTE TOKEN, and the reason this function never worked. Windows PowerShell 5.1 -
+    # what runs on the guest - DROPS a bare "" when calling a native executable, so sc.exe received
+    # `failure <svc> reset= 0 actions=` with nothing after it and answered 1639, ERROR_INVALID_COMMAND_LINE.
+    # Measured on the rig 2026-10-07: the disarm had therefore NEVER run, in any build, and the detail key
+    # that said so was unclassified in the checker until the same day, so the install read green.
+    & sc.exe failure $Name reset= 0 actions= '""' 2>&1 | Out-Null   # GUARD:recovquote
     $rc1 = $LASTEXITCODE
     & sc.exe failureflag $Name 0 2>&1 | Out-Null
     $rc2 = $LASTEXITCODE
@@ -686,13 +705,17 @@ function Suspend-QubesServiceRecovery {
     # the FIRST reading matters just as much: a second `sc qfailure` reads the DISARMED state, so overwriting would
     # make the re-arm restore "no actions" - the very configuration the arming exists to prevent.
     if (-not $script:RecoverySuspended.ContainsKey($Name)) { $script:RecoverySuspended[$Name] = $before }   # GUARD:recovsuspend
-    if ($rc1 -eq 0 -and $rc2 -eq 0) {
-        Write-Log "recovery disarmed for $Name before this stage stops it (was: $before); the SCM cannot restart it behind us"
+    # AND THE VERDICT IS THE READBACK, not $rc1/$rc2 - an exit code of 0 from a command that wrote nothing
+    # would read exactly like success. The codes stay in the message as evidence.
+    $after = Read-QubesServiceRecovery $Name   # GUARD:recovreadback
+    if ($null -ne $after -and $after.actions.Count -eq 0) {
+        Write-Log "recovery disarmed for $Name before this stage stops it (was: $before; now reads no actions); the SCM cannot restart it behind us"
         $script:Result.detail.svc_recovery_suspended = (($script:RecoverySuspended.GetEnumerator() | ForEach-Object { "$($_.Key)[$($_.Value)]" }) -join ' ')
         return $true
     }
-    Write-Log "could not disarm recovery for ${Name} (sc failure=$rc1 failureflag=$rc2) - the SCM may restart it while this stage has it stopped" 'ERROR'
-    $script:Result.detail.svc_recovery_disarm_failed = "${Name}: sc failure=$rc1 failureflag=$rc2"
+    $still = $(if ($null -eq $after) { 'unreadable' } else { ($after.actions -join '/') })
+    Write-Log "could not disarm recovery for ${Name}: it STILL reads '$still' (sc failure=$rc1 failureflag=$rc2) - the SCM may restart it while this stage has it stopped" 'ERROR'
+    $script:Result.detail.svc_recovery_disarm_failed = "${Name}: still=$still (sc failure=$rc1 failureflag=$rc2)"
     return $false
 }
 
@@ -712,7 +735,17 @@ function Resume-QubesServiceRecovery {
             & sc.exe failure $n reset= 86400 actions= restart/5000/restart/15000/restart/60000 2>&1 | Out-Null
         }
         & sc.exe failureflag $n 1 2>&1 | Out-Null
-        Write-Log "recovery re-armed for $n (prior: $prior)"
+        # READ BACK HERE TOO. This call was never checked at all, and a silent failure here is worse than a
+        # silent failure in the disarm: the guest leaves the installer with NO recovery for a service of ours
+        # while the log says "re-armed".
+        $now = Read-QubesServiceRecovery $n   # GUARD:rearmreadback
+        if ($null -ne $now -and $now.actions.Count -gt 0) {
+            Write-Log "recovery re-armed for $n (now: $($now.actions -join '/'); prior: $prior)"
+        } else {
+            $st = $(if ($null -eq $now) { 'unreadable' } else { 'NO actions' })
+            Write-Log "could not re-arm recovery for ${n}: it reads '$st' (prior: $prior) - this service would be left with no SCM recovery" 'ERROR'
+            $script:Result.detail.svc_recovery_rearm_failed = "${n}: $st (prior: $prior)"
+        }
         [void]$script:RecoverySuspended.Remove($n)
     }
 }

@@ -21,7 +21,7 @@ mkdir -p "$OUT"
 say() { printf '%s\n' "$*"; }
 if [ ! -x "$PWSH" ]; then say "FAIL  pwsh not found at $PWSH - nothing ran"; exit 2; fi
 
-KNOBS="recovsuspend recovthree evsrc tasklog selftrigger argsinject netsetuprecov"
+KNOBS="recovsuspend recovquote recovreadback rearmreadback recovthree evsrc tasklog selftrigger argsinject netsetuprecov"
 if [ -n "${SUPERV_DEFECT:-}" ]; then
     case " $KNOBS " in *" $SUPERV_DEFECT "*) ;; *) say "FAIL  unknown SUPERV_DEFECT='$SUPERV_DEFECT' ($KNOBS)"; exit 2 ;; esac
     "$PWSH" -NoProfile -File "$SUITE" -Defect "$SUPERV_DEFECT"; rc=$?
@@ -45,6 +45,9 @@ leg(){ # $1 knob, $2 target check (literal prefix)
     fi
 }
 leg recovsuspend  'suspend: a SECOND call for the same service does not throw'
+leg recovquote    'suspend: the disarm sends a NON-EMPTY actions token'
+leg recovreadback 'suspend: a write that sc ACCEPTS but does not apply is caught by the readback'
+leg rearmreadback 'resume: a re-arm that does not take is an ERROR-class flag'
 leg recovthree    'recovery: QubesGuiWatchdog = armed'
 leg evsrc         'event source: EventMessageFile is REG_EXPAND_SZ to the message file, under the Application log, forced'
 leg tasklog       'reporter: TaskScheduler/Operational is enabled first'
