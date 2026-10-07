@@ -178,35 +178,66 @@ PS
   fi
 fi
 
-# ---- L4 the restart helper's fail-proof ---------------------------------------------------------------------------
+# ---- L4 the restart helper: a live turnover, and a fail-proof driven by a REAL stimulus ------------------------------
+# The first version passed `-LogDir <nonexistent>` to a script that HAS NO SUCH PARAMETER - the helper reads the log
+# directory from HKLM Qubes Tools\LogDir - so the stimulus never reached the code under test, the normal path ran, and
+# its correct `RESTART ok` was recorded as a FAIL. (Experimenter rule 5: the injection must reach the code, and the
+# order must be checked before the outcome is read.) So this cell now drives the two things it can drive honestly:
+# a real turnover, and a real logdir-unreadable - by renaming the very registry value the helper reads, and putting it
+# back before anything is graded. A cell that leaves the guest altered is itself a defect, so the restore is asserted.
 if has L4; then
-  log "L4: the restart helper must say INVALID-INSTRUMENT when it cannot prove a turnover"
+  log "L4: a live turnover, then the fail-proof with the registry value the helper actually reads renamed"
   cat > "$OUT/L4-probe.ps1" <<'PS'
-# Drive guest/restart-gui-agent.ps1 twice: once normally (RESTART ok), and once with the log directory made
-# unreadable, where it must answer INVALID-INSTRUMENT rather than claim a restart it cannot prove.
 $ErrorActionPreference = 'Continue'
 function L($k,$v){ "L4|$k|$v" }
 $inc = 'C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
 $h = Join-Path $inc 'restart-gui-agent.ps1'
 if (-not (Test-Path -LiteralPath $h)) { L 'error' "the helper is not at $h"; L 'END' 'ok'; return }
+$key = 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools'
+L 'logdir_before' ((Get-ItemProperty -Path $key -EA SilentlyContinue).LogDir)
+# ARM 1 - the normal path: a real turnover on a live guest
 $a = & powershell -NoProfile -ExecutionPolicy Bypass -File $h 2>&1 | Out-String
 L 'normal' (($a -split "`n" | Where-Object { $_ -match '^RESTART' } | Select-Object -Last 1) -replace "`r",'')
-# now the same call with a LogDir that cannot be read: the proof is impossible, so the answer must be INVALID
-$b = & powershell -NoProfile -ExecutionPolicy Bypass -File $h -LogDir 'Q:\NoSuchDirectory-ForTheFailProof' 2>&1 | Out-String
-L 'nolog' (($b -split "`n" | Where-Object { $_ -match '^RESTART' } | Select-Object -Last 1) -replace "`r",'')
+L 'normal_newpid' (($a -split "`n" | Where-Object { $_ -match '^AGENTPID' } | Select-Object -Last 1) -replace "`r",'')
+# ARM 2 - the fail-proof: the log directory the helper reads is GONE. Renamed, not deleted, and put back first.
+$orig = (Get-ItemProperty -Path $key -EA SilentlyContinue).LogDir
+$renamed = $false
+try { Rename-ItemProperty -Path $key -Name 'LogDir' -NewName 'LogDir_sup_backup' -EA Stop; $renamed = $true }
+catch { L 'rename_failed' ($_.Exception.Message -replace "`r|`n",' ') }
+if ($renamed) {
+    $b = & powershell -NoProfile -ExecutionPolicy Bypass -File $h 2>&1 | Out-String
+    # RESTORE BEFORE GRADING - whatever the arm said
+    try { Rename-ItemProperty -Path $key -Name 'LogDir_sup_backup' -NewName 'LogDir' -EA Stop } catch { }
+    L 'nologdir' (($b -split "`n" | Where-Object { $_ -match '^RESTART' } | Select-Object -Last 1) -replace "`r",'')
+}
+$after = (Get-ItemProperty -Path $key -EA SilentlyContinue).LogDir
+L 'logdir_after' $after
+L 'logdir_restored' ([string]($after -eq $orig -and $after))
 L 'END' 'ok'
 PS
   q push guest/restart-gui-agent.ps1 >/dev/null 2>&1 || true   # in-repo since the branches merged
   guest_ps "$OUT/L4-probe.ps1" > "$OUT/L4.out" 2>&1
-  n=$(grep -a '^L4|normal|' "$OUT/L4.out" | tail -1 | cut -d'|' -f3-)
-  f=$(grep -a '^L4|nolog|' "$OUT/L4.out" | tail -1 | cut -d'|' -f3-)
+  g4(){ grep -a "^L4|$1|" "$OUT/L4.out" | tail -1 | cut -d'|' -f3-; }
+  n=$(g4 normal); f=$(g4 nologdir); rst=$(g4 logdir_restored); np=$(g4 normal_newpid)
   if grep -aq '^L4|error|' "$OUT/L4.out"; then
-    verdict L4 INVALID "the helper proves a turnover or says INVALID-INSTRUMENT" "$(grep -a '^L4|error|' "$OUT/L4.out" | cut -c1-160)"
-  elif printf '%s' "$f" | grep -q 'INVALID-INSTRUMENT'; then
-    verdict L4 PASS "the helper says INVALID-INSTRUMENT when it cannot prove the turnover" "unreadable logdir -> '$f'; normal -> '$n'"
+    verdict L4 INVALID "a live turnover, and INVALID-INSTRUMENT when the turnover cannot be proven" "$(g4 error | cut -c1-160)"
+  elif [ "$rst" != True ]; then
+    # the guest's registry must be as we found it; a cell that leaves it changed is a defect of the cell
+    verdict L4 FAIL "the cell leaves HKLM LogDir exactly as it found it" \
+            "logdir_before='$(g4 logdir_before)' logdir_after='$(g4 logdir_after)' restored=$rst $(g4 rename_failed | cut -c1-90)"
+  elif [ -z "$n" ] || [ -z "$f" ]; then
+    verdict L4 INVALID "a live turnover, and INVALID-INSTRUMENT when the turnover cannot be proven" \
+            "normal='${n:-<none>}' nologdir='${f:-<none>}' (one arm produced no RESTART line)"
+  elif printf '%s' "$n" | grep -q '^RESTART ok' && printf '%s' "$f" | grep -q 'INVALID-INSTRUMENT.*logdir-unreadable'; then
+    verdict L4 PASS "a live turnover is proven, and an unprovable one is INVALID-INSTRUMENT" \
+            "normal -> '$n' ($np); logdir renamed -> '$f'; registry restored"
   else
-    verdict L4 FAIL "the helper says INVALID-INSTRUMENT when it cannot prove the turnover" "unreadable logdir -> '${f:-<no RESTART line>}'"
+    verdict L4 FAIL "a live turnover is proven, and an unprovable one is INVALID-INSTRUMENT" \
+            "normal -> '$n'; logdir renamed -> '$f' (want RESTART ok, then INVALID-INSTRUMENT logdir-unreadable)"
   fi
+  # L4 RESTARTED THE AGENT TWICE ON PURPOSE. The final sweep counts agent instances per boot, so its window starts
+  # here - L2 has already graded the shutdown cycles over its own window, with its own sweep.
+  SWEEP_SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 fi
 
 # ---- L5 a death during a shutdown is reported at the next boot -----------------------------------------------------
@@ -251,7 +282,13 @@ if has L6; then
   else
     # a0-lib.sh demands $R and a log() BEFORE it is sourced, and says so; that is how the first attempt died in one
     # line instead of half-working. VM is its subject variable.
-    VM="$SUBJ"; INCOMING="${INCOMING:-C:\\Users\\user\\Documents\\QubesIncoming\\win-idd-mgmt}"
+    # BOTH libraries refuse without the variable they demand, and they are right to: e2e-lib.sh wants QTEST_VM
+    # ("there is deliberately no default target") and a0-lib.sh wants $R and a log() before it is sourced. Setting
+    # VM alone killed this run at L6 under `set -u` - the third time in this project that a library was sourced
+    # without what it demands, so the selftest now checks it.
+    VM="$SUBJ"; export QTEST_VM="$SUBJ"
+    INCOMING="${INCOMING:-C:\\Users\\user\\Documents\\QubesIncoming\\win-idd-mgmt}"
+    R="$OUT/L6-a0.log"; : > "$R"
     source .claude/skills/win-guest-e2e/e2e-lib.sh
     source mgmt/harness/a0-lib.sh
     log "  push toastfire.exe ($(sha256sum "$TFEXE" | cut -c1-12)) - without it every fire is a silent no-op"
@@ -448,7 +485,7 @@ fi
 
 # ---- the sweep over the whole window, then the table ---------------------------------------------------------------
 log "the log sweep over everything this run touched"
-(cd "$SWEEP" && timeout 1200 bash mgmt/harness/log-sweep.sh "$SUBJ" "$SINCE" "$OUT/sweep") > "$OUT/sweep.out" 2>&1
+(cd "$SWEEP" && timeout 1200 bash mgmt/harness/log-sweep.sh "$SUBJ" "${SWEEP_SINCE:-$SINCE}" "$OUT/sweep") > "$OUT/sweep.out" 2>&1
 sweepline=$(grep -a 'LOGSWEEP-RESULT' "$OUT/sweep.out" | tail -1)
 log "$sweepline"
 case "$sweepline" in

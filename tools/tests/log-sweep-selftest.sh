@@ -259,6 +259,29 @@ stub("jev-expected.py", "expected")
 stub("jev-defect.py", "defect")
 stub("jev-exit2.py", rc=2)
 print("fixtures written to", T)
+# bootshut: a BOOT whose agent launch lands ONE SECOND before the shutdown marker - the install's own reboot
+# chain, and the shape that was reported on 2026-10-07 as a relaunch into an ending session (a P2 breach, Jev
+# 0.73, against the build that had just fixed that defect). The 2 s pre-roll for marker jitter pulled the
+# boot's own launch into the window; nothing of ours had ENDED before it, so it is not a relaunch.
+WDB = "gui-watchdog-20261007-100955-710.log"
+AGB = "gui-agent-20261007-100957-1010.log"
+wd_bs = [wu("100955.000", 100, "I", "LogInit", "Log started, module name: gui-watchdog"),
+         wu("100955.000", 100, "I", "LogInit", "System uptime: 5.000 seconds"),
+         wu("100955.001", 100, "I", "LogInit", "Running as user: SYSTEM, process ID: 710"),
+         wu("100955.001", 100, "I", "LogInit", "Module version: 9.9.9.1"),
+         wu("100955.001", 100, "I", "LogInit", "Session: 0"),
+         wu("100955.001", 100, "I", "LogInit", 'Command line: "C:\\Program Files\\Qubes Tools\\bin\\gui-watchdog.exe"'),
+         wu("100957.000", 101, "W", "WatchdogThread", "Process 'gui-agent.exe' not running, restarting it (servicestop=0 sm_shuttingdown=0 console=0x1 wtsstate=0)"),
+         wu("100957.000", 101, "I", "StartTargetProcess", "Running process 'C:\\Program Files\\Qubes Tools\\bin\\gui-agent.exe' in session 1"),
+         wu("100957.020", 101, "I", "WatchdogThread", "QGAWDLAUNCH 'gui-agent.exe' started as PID 1010 in session 1"),
+         wu("101000.000", 102, "I", "ControlHandlerEx", "preshutdown - the agent will not be restarted from here on, stopping"),
+         wu("101000.001", 101, "I", "WatchdogThread", "service stop requested, watchdog thread exiting"),
+         wu("101000.002", 101, "I", "StopOwnAgent", "service stopping: asked 'gui-agent.exe' (PID 1010) to exit via Global\\QGA_SHUTDOWN, waiting up to 10000 ms on its handle"),
+         wu("101000.400", 101, "I", "StopOwnAgent", "service stopping: 'gui-agent.exe' (PID 1010) is gone, exit code 0x0"),
+         wu("101000.401", 103, "I", "ServiceMain", "exiting")]
+ag_bs = agent(1010, t0="100957.200", uptime="7.200")
+write("bootshut.pull", stream([(WDB, "watchdog", wd_bs), (AGB, "agent", ag_bs)], events()))
+
 PY
 [ $? -eq 0 ] || { echo "FATAL: fixture generation failed"; exit 2; }
 
@@ -280,7 +303,7 @@ analyze(){ # $1=analyzer $2=logsdir $3=baseline $4=judge $5=tag -> rc; report at
 field(){ python3 -c "import json,sys; r=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$1" "$2"; }
 
 # ---- decode every fixture with the real decoder --------------------------------------------------------------------
-for f in base newsig rise three stoperr empty twoboot skipnames skipchatty; do
+for f in base newsig rise three stoperr empty twoboot skipnames skipchatty bootshut; do
   rc=$(decode "$SRC" "$T/$f.pull" "$T/$f")
   [ "$rc" = 0 ] || { echo "FATAL: the $f fixture did not decode (rc=$rc): $(tail -2 "$T/$f.decode.txt")"; exit 2; }
 done
@@ -498,6 +521,28 @@ if grep -q "GUARD:reportparses" "$WRAP"; then
     bad "T25 the fixture report parsed - the case cannot be driven"
   else ok "T25 the wrapper's guard exists and an unreadable report is detectably unreadable (INCOMPLETE, not FINDINGS)"; fi
 else bad "T25 mgmt/harness/log-sweep.sh has no GUARD:reportparses - a crash would still read as FINDINGS"; fi
+
+# T26/T27 A LAUNCH IS NOT YET A RELAUNCH. bootshut is a boot whose agent launch lands 1 s before the
+# shutdown marker: nothing of ours has ENDED before it, so it must not count. three is the real defect shape
+# (the agent dies at a shutdown and the watchdog starts another), where it must count - otherwise the fix
+# would have silenced the metric rather than corrected it.
+rc=$(analyze "$SRC" "$T/bootshut" "$T/baseline.json" "$T/jev-expected.py" t26)
+rl=$(field "$T/t26.json" "r['metrics']['agent_relaunches_at_shutdown']")
+b=$(field "$T/t26.json" "[x['metric'] for x in r['breaches']]")
+if [ "$rl" = 0 ] && ! printf '%s' "$b" | grep -q 'agent_relaunches_at_shutdown'; then
+  ok "T26 the boot's own launch 1 s before a shutdown is not a relaunch (relaunches=$rl, no breach)"
+else bad "T26 bootshut: relaunches=$rl breaches=$b - the boot's own launch was counted as a relaunch into the ending session"; fi
+K=$(knob relaunchneedsend); rc=$(analyze "$K" "$T/bootshut" "$T/baseline.json" "$T/jev-expected.py" t26k)
+rlk=$(field "$T/t26k.json" "r['metrics']['agent_relaunches_at_shutdown']")
+# MISSING DATA FAILS: an empty reading here used to pass this check, because knob() exits inside a subshell
+# when its marker is unusable and "" != 0 is true in test(1). The reading must be a NUMBER, and >= 1.
+if printf '%s' "$rlk" | grep -qE '^[0-9]+$' && [ "$rlk" -ge 1 ]; then
+  ok "T26 knob relaunchneedsend: without the preceding-end rule the boot launch IS miscounted (relaunches=$rlk)"
+else bad "T26 knob relaunchneedsend: the defect copy reported '$rlk' (want a number >= 1) - the check proves nothing"; fi
+rc=$(analyze "$SRC" "$T/three" "$T/baseline.json" "$T/jev-expected.py" t27)
+rl3=$(field "$T/t27.json" "r['metrics']['agent_relaunches_at_shutdown']")
+if [ "$rl3" -ge 1 ]; then ok "T27 the real shape still counts: a death at a shutdown followed by a launch = $rl3 relaunch(es)"
+else bad "T27 the 2026-10-07 defect shape now reports $rl3 relaunches - the fix silenced the metric instead of correcting it"; fi
 
 # the collector must parse (the Linux pwsh is the same parser Windows PowerShell uses) when pwsh is present
 PWSH="${PWSH:-/home/user/pwsh/pwsh}"

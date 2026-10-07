@@ -1089,6 +1089,14 @@ def build_structure(files, boots, declared=None):
         w["launches"] = [l for l in launches if l.ts and lo <= l.ts <= w["end"]]
         w["deaths"] = [d for d in deaths if d["ts"] and lo <= d["ts"] <= w["end"]]
         w["goingdown"] = [d for d in goingdown if d["ts"] and lo <= d["ts"] <= w["end"]]
+        # A LAUNCH IS NOT YET A RELAUNCH. The 2 s pre-roll above exists for marker jitter, and with it a launch
+        # that happened BEFORE the shutdown marker counted as one INTO it - which is how a BOOT followed five
+        # seconds later by a shutdown (the install's own reboot chain) was reported on 2026-10-07 as the very
+        # defect that build had just fixed: a P2 breach, Jev 0.73, against a correct binary. The defect is the
+        # watchdog starting a NEW agent after one of ours ENDED in that window; a launch with nothing of ours
+        # ended before it is the boot's own launch, and a boot that is followed by a shutdown is not it.
+        _ends = [i["end"] for i in w["instances"] if i.get("end")] + [d["ts"] for d in w["deaths"] if d.get("ts")]
+        w["relaunches"] = [l for l in w["launches"] if any(e <= l.ts for e in _ends)]   # GUARD:relaunchneedsend DEFECT: w["relaunches"] = w["launches"]
         w["announces"] = [l for i in w["instances"] for l in i["_lines"] if l.func == "WatchForEvents" and l.msg.startswith("Awaiting for a vchan client") and lo <= l.ts <= w["end"]]
         w["stops"] = [i for i in w["instances"] if i["stop"] and i["stop"]["asked"] and lo <= i["stop"]["asked"] <= w["end"] + dt.timedelta(seconds=60)]
         w["label"] = "S%d %s..%s%s" % (w["id"], fmt_ts(w["start"]), fmt_ts(w["end"]), " (approximate window)" if w["approx"] or w["approx_end"] else "")
@@ -1130,7 +1138,7 @@ def compute_metrics(files, boots, st, since, now=None):
     insts = [i for i in inst if i.get("start") is None or sel(i["start"])] if since is not None else inst   # GUARD:winkey DEFECT: insts = [i for i in inst if sel(i.get("ts"))] if since is not None else inst
     m["shutdowns_in_window"] = len(win)
     m["agent_deaths_at_shutdown"] = sum(len(w["deaths"]) for w in win)
-    m["agent_relaunches_at_shutdown"] = sum(len(w["launches"]) for w in win)
+    m["agent_relaunches_at_shutdown"] = sum(len(w["relaunches"]) for w in win)
     m["agent_instances_per_shutdown"] = max([len(w["instances"]) for w in win], default=0)   # GUARD:instances DEFECT: m["agent_instances_per_shutdown"] = 0
     per_boot = Counter(i["boot"] for i in insts)
     m["agent_instances_per_boot"] = max(per_boot.values(), default=0)
@@ -1307,7 +1315,8 @@ def breach_evidence(b, st, metrics):
             out.append("shutdown %s: markers=%s" % (w["label"], " | ".join(w["markers"])[:300]))
             out.append("  instances alive: %s" % ", ".join("pid %s [%s..%s end=%s code=%s]" % (i["pid"], fmt_ts(i["start"]), fmt_ts(i["end"]), i["end_kind"], i["exit_code"]) for i in w["instances"]))
             for l in w["launches"]:
-                out.append("  launch: " + l.raw[:200])
+                out.append("  launch%s: %s" % (" (RELAUNCH - something of ours had already ended in this window)"
+                                               if l in w["relaunches"] else " (the boot's own - nothing of ours had ended yet)", l.raw[:200]))
             for d in w["deaths"]:
                 out.append("  death: " + d["line"].raw[:220])
             for l in w["announces"]:
@@ -1390,8 +1399,8 @@ def jev_state_text(items, meta, boots, st, metrics, label, since):
     out = [OWNER_PREMISES, "CAPTURE: label=%s since=%s files=%d boots=%d shutdown_windows=%d agent_instances=%d" % (
         label, fmt_ts(since) if since else "all", len(st["agents"]) + len(st["watchdogs"]), len(boots), len(st["windows"]), len(st["instances"]))]
     for w in st["windows"]:
-        out.append("  shutdown %s: instances=%s launches=%d deaths=%d vchan_announces=%d requested_stops=%s" % (
-            w["label"], [i["pid"] for i in w["instances"]], len(w["launches"]), len(w["deaths"]), len(w["announces"]),
+        out.append("  shutdown %s: instances=%s relaunches=%d deaths=%d vchan_announces=%d requested_stops=%s" % (
+            w["label"], [i["pid"] for i in w["instances"]], len(w["relaunches"]), len(w["deaths"]), len(w["announces"]),
             ["pid %s exit %s" % (i["pid"], i["stop"]["code"]) for i in w["stops"]]))
     out.append("METRICS: " + json.dumps({k: v for k, v in metrics.items() if k != "deaths_by_exit_code"}, sort_keys=True) + " deaths_by_exit_code=" + json.dumps(metrics.get("deaths_by_exit_code")))
     out.append("")

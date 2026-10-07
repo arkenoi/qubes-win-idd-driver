@@ -101,6 +101,19 @@ inject(){ # $1 label, $2 predicate, $3 line to append as the defect
 inject "self-contained: no cell reaches into a scratch dir or a sibling worktree for its helpers" \
        self_contained 'source /home/user/wt-toasthold/mgmt/harness/a0-lib.sh'
 
+# THE LIBRARIES REFUSE WITHOUT WHAT THEY DEMAND, and they say so. e2e-lib.sh wants QTEST_VM ("there is
+# deliberately no default target"); a0-lib.sh wants $R and a log() BEFORE it is sourced. Sourcing either
+# without them ends the run on the spot - which is how L6 died on 2026-10-07 after L1-L5 had already passed,
+# the third time in this project that a library was sourced without its prerequisite. The check is ORDER.
+lib_prereqs(){ awk '
+  /^ *export QTEST_VM=|^ *QTEST_VM=.*export|^ *VM="\$SUBJ"; export QTEST_VM=/ {qv=NR}
+  /^ *R="\$OUT\/L6-a0.log"/ {r=NR}
+  /source .claude\/skills\/win-guest-e2e\/e2e-lib.sh/ {e=NR}
+  /source mgmt\/harness\/a0-lib.sh/ {a=NR}
+  END{exit !(qv && r && e && a && qv < e && r < a)}' "$1"; }
+shape "prereqs: QTEST_VM is exported before e2e-lib.sh and \$R is set before a0-lib.sh (both refuse without them)" \
+      lib_prereqs 'VM="$SUBJ"; export QTEST_VM="$SUBJ"'
+
 exits_nonzero(){ grep -qE '\[ "\$nf" = 0 \] && \[ "\$ni" = 0 \] && exit 0 \|\| exit 1' "$1"; }
 shape "exit: the routine exits non-zero when any cell failed or was invalid" \
       exits_nonzero '[ "$nf" = 0 ] && [ "$ni" = 0 ] && exit 0 || exit 1'
