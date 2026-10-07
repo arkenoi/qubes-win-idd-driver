@@ -1,0 +1,85 @@
+{
+ "note": "WHAT EACH RELEASE'S GATE ACTUALLY COVERED. tools/gate-scope.py counts the floor from this file and refuses a cut whose coverage does not include what the diff requires; `ledger-add` appends a record. RECONSTRUCTED, not measured, for the three releases below: they were cut before this scheme existed, so their `required` is empty and their `covered` lists only what their own records say was run (docs/RELEASE-NOTES-4.3.3*.md and the findings heads). NONE of them is a FULL run under this scheme - none ran fault injection - so the floor trips on the next release and the first gate under this scheme is the full one. That is the honest reading, and it is the conservative one.",
+ "releases": [
+  {
+   "version": "4.3.33",
+   "tag": "v4.3.33-agentcda961d",
+   "package_run": "",
+   "date": "2026-10-03T00:00:00Z",
+   "range": "",
+   "required": [],
+   "reconstructed": true,
+   "covered": [
+    "package-verify",
+    "win10-clean",
+    "win10-reinstall",
+    "win10-upgrade",
+    "win10-appvm",
+    "win11-clean",
+    "win11-reinstall",
+    "win11-upgrade",
+    "win11-appvm",
+    "notify-errors-guest-test",
+    "crop-before-map",
+    "template-update"
+   ],
+   "full": false,
+   "result": "pass",
+   "map_commit": ""
+  },
+  {
+   "version": "4.3.34",
+   "tag": "",
+   "package_run": "37206244684",
+   "date": "2026-10-04T00:00:00Z",
+   "range": "",
+   "required": [],
+   "reconstructed": true,
+   "covered": [
+    "package-verify",
+    "win10-clean",
+    "win10-reinstall",
+    "win10-upgrade",
+    "win10-appvm",
+    "win11-clean",
+    "win11-reinstall",
+    "win11-upgrade",
+    "win11-appvm",
+    "notify-errors-guest-test",
+    "crop-before-map",
+    "template-update"
+   ],
+   "full": false,
+   "result": "pass",
+   "map_commit": ""
+  },
+  {
+   "version": "4.3.35",
+   "tag": "v4.3.35-agentf613dc3",
+   "package_run": "37525894363",
+   "date": "2026-10-07T00:00:00Z",
+   "range": "",
+   "required": [],
+   "reconstructed": true,
+   "covered": [
+    "package-verify",
+    "win10-clean",
+    "win10-reinstall",
+    "win10-upgrade",
+    "win10-appvm",
+    "win11-clean",
+    "win11-reinstall",
+    "win11-upgrade",
+    "win11-appvm",
+    "notify-errors-guest-test",
+    "crop-before-map",
+    "template-update",
+    "toast-hold-test"
+   ],
+   "full": true,
+   "result": "pass",
+   "map_commit": "",
+   "note": "the 8 install cells, the three feature tests and the notification test on release-package 37525894363; NO fault injection, and the log sweep did not exist yet - so NOT a full run under this scheme"
+  }
+ ]
+}

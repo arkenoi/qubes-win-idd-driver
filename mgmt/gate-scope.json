@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "note": "THE SCOPE MAP: what a release's diff requires of the gate. Owner, 2026-10-07: 'we may optimize our acceptance a bit depending on what we touch and run full fault injection path and all install variants only when we touch certain things or once in 10 updates or so.' Read by tools/gate-scope.py, which refuses a cut the gate's coverage does not cover. Decided with Jev (scratchpad/tiering/answers.json): an UNMAPPED path requires the FULL set (0.97), the floor trips on whichever of four conditions comes first (0.96), and the enforcement computes and refuses rather than being written down (1.00). Patterns are fnmatch, matched against repo-relative paths, longest pattern first; a path matching none of them is UNMAPPED and forces the full set, naming the file.",
+
+  "core": {
+    "suites": ["package-verify", "win11-clean", "win11-upgrade", "notify-errors-guest-test", "log-sweep"],
+    "reason": "Every release can break these whatever was edited: the package's own identity, the two install entry paths users actually take on the primary target, the route that tells dom0 an error happened, and the sweep that reads the guest's logs afterwards. Jev 0.60 over 'package+sweep only' (0.08) and 'all eight cells always' (0.14)."
+  },
+
+  "full": {
+    "suites": ["package-verify", "win10-clean", "win10-reinstall", "win10-upgrade", "win10-appvm",
+               "win11-clean", "win11-reinstall", "win11-upgrade", "win11-appvm",
+               "notify-errors-guest-test", "crop-before-map", "template-update",
+               "failproof-gates", "failproof-faultinject", "gate-preflight", "p3a-etw-gate",
+               "toast-hold-test", "log-sweep"],
+    "reason": "Everything. Required by the floor, by an unmapped path, and by any pattern below that asks for it."
+  },
+
+  "floor": {
+    "releases": 10,
+    "days": 21,
+    "reason": "Whichever comes first, plus a failed previous full run, plus a change to this file. Releases alone would let a quiet month drift (4.3.33, 4.3.34 and 4.3.35 were cut in five days; before that a fortnight passed); days alone would let a burst of ten releases through on one full run. 21 days is three weeks - longer than any gap between the last ten releases, short enough that a regression cannot sit unmeasured for a month."
+  },
+
+  "patterns": {
+    "packaging/setup/**": { "suites": ["full"], "reason": "the installer itself decides every install path, including the ones only a reinstall or an upgrade reaches" },
+    "packaging/patch-installer-*.ps1": { "suites": ["full"], "reason": "a build-time patch to the MSI changes what every install does" },
+    "packaging/make-setup.ps1": { "suites": ["full"], "reason": "it decides what ships; a file left out is invisible until a guest misses it" },
+    "packaging/make-package.ps1": { "suites": ["full"], "reason": "as above, for the overlay channel" },
+    "packaging/stage-qwt-repo.ps1": { "suites": ["full"], "reason": "it substitutes our binaries into the MSI" },
+    "packaging/**": { "suites": ["win10-clean", "win11-clean", "win11-upgrade", "package-verify"], "reason": "other packaging work still reaches both clean paths and the upgrade" },
+    "patches/**": { "suites": ["full"], "reason": "a patch applies to pinned upstream source at build time; its effect is only visible on a guest" },
+    ".github/workflows/**": { "suites": ["full"], "reason": "the workflows decide what is built and packaged at all" },
+
+    "agent/gui-agent/lifecycle.*": { "suites": ["full"], "reason": "the agent/service lifecycle contract governs every boot and shutdown of every cell" },
+    "agent/watchdog/**": { "suites": ["full"], "reason": "the service that launches the agent; a mistake here costs the GUI on every guest" },
+    "agent/include/**": { "suites": ["full"], "reason": "shared between the agent and its service" },
+    "agent/gui-agent/wincapture.*": { "suites": ["win11-clean", "win11-appvm", "failproof-faultinject", "p3a-etw-gate", "toast-hold-test"], "reason": "the capture engine" },
+    "agent/gui-agent/toast*": { "suites": ["win11-clean", "toast-hold-test"], "reason": "the notification surfaces" },
+    "agent/gui-agent/notifyerr.*": { "suites": ["win11-clean", "notify-errors-guest-test"], "reason": "the loud-error route" },
+    "agent/gui-agent/errbox*": { "suites": ["win11-clean", "notify-errors-guest-test"], "reason": "the in-guest error window, the route's fallback" },
+    "agent/gui-agent/etwproxy.*": { "suites": ["win11-clean", "p3a-etw-gate"], "reason": "the ETW notification path" },
+    "agent/gui-agent/resolution.*": { "suites": ["win11-clean", "win11-appvm"], "reason": "mode changes and the IDD" },
+    "agent/gui-agent/**": { "suites": ["win10-clean", "win11-clean", "win11-appvm", "toast-hold-test"], "reason": "the agent is in every window dom0 shows" },
+    "agent/**": { "suites": ["win11-clean", "win11-appvm"], "reason": "anything else in the fork still ships inside the agent" },
+
+    "driver/**": { "suites": ["win11-clean", "win11-appvm"], "reason": "the IddCx driver, behind /idd" },
+
+    "tools/wgcbroker/**": { "suites": ["win11-clean", "win11-appvm", "failproof-faultinject", "toast-hold-test"], "reason": "the de-slice broker IS the capture engine on an eligible guest; its hang detection is what failproof-faultinject drives" },
+    "tools/notifhost/**": { "suites": ["win11-clean", "notify-errors-guest-test", "toast-hold-test"], "reason": "the notification bridge and the error route's sender" },
+    "tools/etwproxy/**": { "suites": ["win11-clean", "p3a-etw-gate"], "reason": "the ETW proxy" },
+
+    "guest/qubes-windows-update.ps1": { "suites": ["template-update"], "reason": "the updater pass dom0 drives" },
+    "guest/wu-update.ps1": { "suites": ["template-update"], "reason": "the updater's task action" },
+    "guest/install-updater-agent.ps1": { "suites": ["template-update", "win11-clean"], "reason": "it deploys the updater into a guest" },
+    "guest/qubes-updates-relay.cs": { "suites": ["template-update"], "reason": "the relay the updater serves through" },
+    "guest/qwt-notify-error.ps1": { "suites": ["notify-errors-guest-test"], "reason": "the error route itself" },
+    "guest/qwt-report-death.ps1": { "suites": ["notify-errors-guest-test"], "reason": "the one death reporter" },
+    "guest/pvnic-selfprime.ps1": { "suites": ["win11-clean", "win11-appvm"], "reason": "the PV NIC priming latch, exercised by an AppVM with a netvm" },
+    "guest/set-autologon.ps1": { "suites": ["win10-clean", "win11-clean"], "reason": "without autologon a guest sits at the sign-in screen" },
+    "guest/ensure-autologon.ps1": { "suites": ["win11-clean"], "reason": "the boot-time re-assert" },
+    "guest/health-check.ps1": { "suites": ["win11-clean"], "reason": "the guest self-check every cell grades" },
+    "guest/activate-idd.ps1": { "suites": ["win11-clean", "win11-appvm"], "reason": "the IDD activation path" },
+    "guest/**": { "suites": ["win11-clean"], "reason": "a guest script that ships at all is reached by a clean install" },
+
+    "mgmt/harness/**": { "suites": [], "reason": "the harness is the instrument, not the product: its own self-tests and lint cover it, and a harness change cannot ship to a user" },
+    "mgmt/**": { "suites": [], "reason": "rig management" },
+    "tools/tests/**": { "suites": [], "reason": "offline suites, run in CI on every push" },
+    "tools/hooks/**": { "suites": [], "reason": "session hooks on the dev qube" },
+    "tools/**": { "suites": [], "reason": "dev-qube tooling; the shipped helpers are matched by their own patterns above" },
+
+    "docs/**": { "suites": [], "reason": "records" },
+    "findings/**": { "suites": [], "reason": "records" },
+    "*.md": { "suites": [], "reason": "records" },
+    ".githooks/**": { "suites": [], "reason": "commit-time checks on the dev qube" },
+    ".claude/**": { "suites": [], "reason": "session configuration" },
+    ".gitignore": { "suites": [], "reason": "records" },
+    ".gitmodules": { "suites": ["full"], "reason": "it decides which fork a build takes its agent from" },
+    "dom0/**": { "suites": [], "reason": "dom0-side services the owner installs by hand; not part of the guest package" }
+  },
+
+  "submodules": {
+    "agent": { "prefix": "agent/", "reason": "a submodule pointer change is the whole diff of that submodule: its files are mapped by the agent/** patterns above" }
+  }
+}

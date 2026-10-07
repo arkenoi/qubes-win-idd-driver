@@ -245,6 +245,38 @@ else
   MRC=1
 fi
 
+# ---- 7. the coverage receipt ---------------------------------------------------------------------
+# WHAT THIS RUN ACTUALLY COVERED, written where the release-cut gate reads it (docs/ADR-acceptance.md
+# section 4). Only suites that RAN are named - a receipt is a record, not an intention - and the gate
+# re-runs tools/gate-scope.py check against it, so a receipt that does not satisfy the diff refuses the
+# cut exactly as an absent one does.
+COVHEAD=$(git rev-parse HEAD 2>/dev/null | cut -c1-12)
+if [ -n "$COVHEAD" ]; then
+  COVFILE="scratchpad/gate-coverage-$COVHEAD.json"
+  mkdir -p scratchpad
+  COVRAN="package-verify"
+  for _c in $CELLS; do COVRAN="$COVRAN $_c"; done
+  if [ "$SKIP_FEATURES" -eq 0 ]; then COVRAN="$COVRAN notify-errors-guest-test crop-before-map template-update"; fi
+  python3 - "$COVFILE" "$RUN" "$HEAD" "$MRC" $COVRAN <<'PYCOV'
+import json, sys
+out, run, head, rc, suites = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:]
+json.dump({"suites": sorted(set(suites)), "package_run": run, "built_from": head,
+           "result": "pass" if rc == "0" else "fail",
+           "note": "written by tools/release-acceptance.sh; names only the suites this run ran"},
+          open(out, "w"), indent=1)
+PYCOV
+  say "coverage receipt: $COVFILE ($(python3 -c "import json,sys;print(len(json.load(open(sys.argv[1]))['suites']))" "$COVFILE") suite(s))"
+  if [ -f tools/gate-scope.py ]; then
+    GSBASE=$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD^ 2>/dev/null || git rev-list --max-parents=0 HEAD 2>/dev/null)
+    if [ -n "$GSBASE" ] && python3 tools/gate-scope.py check "$COVFILE" "$GSBASE..$(git rev-parse HEAD)" >>"$LOG" 2>&1; then
+      say "PASS  gate scope: this run covers what the diff requires"
+    else
+      say "FAIL  gate scope: this run does NOT cover what the diff requires (see $LOG) - the release-cut gate will refuse the cut"
+      MRC=1
+    fi
+  fi
+fi
+
 say "=== release acceptance for $PV: $( [ $MRC -eq 0 ] && echo COMPLETE || echo INCOMPLETE/FAILED ) ==="
 say "setup: $SETUP"
 say "iso:   $ISO"
