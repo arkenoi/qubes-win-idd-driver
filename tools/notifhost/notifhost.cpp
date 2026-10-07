@@ -2082,6 +2082,10 @@ static DWORD WINAPI WalWatchThread(LPVOID)
 
 // The acquisition ladder for ONE toast + the CLASSIFY line. Runs on the shadow worker
 // (or, under P3AQ_DEFECT_HOTWAIT only, back on the poll thread as the seen-to-fail proof).
+// Defined with the activator cache further down; ShadowClassifyWork reads the cache and starts lookups (C3861 in CI 37553977560).
+static ToastActActivator ActivatorCacheGet(std::wstring const& aumid, std::wstring& clsid, const wchar_t*& src);
+static std::shared_ptr<ToastActLookupHandoff> ActivatorLookupStart(std::wstring const& aumid, bool* started);
+
 static void ShadowClassifyWork(ShadowJob& j)
 {
     try
