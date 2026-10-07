@@ -164,14 +164,28 @@ $verdictFirst = { param($f)
         default          { 9 }
     }
 }
-$sorted = @($cands | Sort-Object @{ Expression = $verdictFirst }, @{ Expression = 'LastWriteTimeUtc'; Descending = $true })
+# A VERDICT-DECIDING LOG IS NEVER DROPPED - the cap falls ENTIRELY on the chatty families. Ordering them first was
+# not enough: measured 2026-10-07 on the toast run, the budget ran out INSIDE the watchdog family and three watchdog
+# logs went missing, so the sweep could say nothing about that boot's agents. A cap that can cost the evidence is a
+# cap on the evidence. The chatty families (qrexec-wrapper, qubesdb, file-receiver) are what it may cut, newest first.
+$verdict = @($cands | Where-Object { (& $verdictFirst $_) -lt 9 } | Sort-Object LastWriteTimeUtc -Descending)
+$chatty  = @($cands | Where-Object { (& $verdictFirst $_) -eq 9 } | Sort-Object LastWriteTimeUtc -Descending)
 $skipped = 0
 $skippedNames = @()
-if ($sorted.Count -gt $MaxFiles) {
-    $dropped = @($sorted | Select-Object -Skip $MaxFiles)
+$budget = $MaxFiles - $verdict.Count
+if ($budget -lt 0) {
+    # More verdict logs than the whole cap: pull them all anyway and say so loudly. Dropping them would make every
+    # metric computed from them unsound, which is worse than a long pull.
+    Write-Output ("${Mark}CAPRAISED verdict=$($verdict.Count) cap=$MaxFiles - the cap is raised to keep every agent/watchdog/installer log")
+    $sorted = @($verdict)
+    $skipped = $chatty.Count
+    $skippedNames = @($chatty | ForEach-Object { $_.Name })
+} else {
+    $keepChatty = @($chatty | Select-Object -First $budget)
+    $dropped = @($chatty | Select-Object -Skip $budget)
     $skipped = $dropped.Count
     $skippedNames = @($dropped | ForEach-Object { $_.Name })
-    $sorted = @($sorted | Select-Object -First $MaxFiles)
+    $sorted = @($verdict) + @($keepChatty)
 }
 
 # ---- pull every file ---------------------------------------------------------------------------------------------

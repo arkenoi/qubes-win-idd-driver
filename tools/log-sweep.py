@@ -1499,7 +1499,12 @@ def run_jev(items, state_fn, workdir, jev_cmd, chunk, wire_log):
 # ----------------------------------------------------------------------------------------------- report
 def sig_json(s, with_examples=True):
     d = {"key": s["key"], "family": s["family"], "level": s["level"], "count": s["count"], "max_per_boot": s.get("max_per_boot"),
-         "per_boot": {str(k): v for k, v in sorted(s["per_boot"].items())}, "files": sorted(s["files"]),
+         # SORT BY THE STRING, because a boot key can be an int (a clustered boot) or a str ('?' for a line whose boot
+         # could not be attributed) and Python will not order those against each other: measured 2026-10-07, the
+         # analyzer CRASHED on a real capture ("'<' not supported between instances of 'int' and 'str'") after the
+         # boot-attribution change, and the rig wrapper then reported FINDINGS for a run that had produced no report
+         # at all. (# GUARD:bootkeysort)
+         "per_boot": {str(k): v for k, v in sorted(s["per_boot"].items(), key=lambda kv: str(kv[0]))}, "files": sorted(s["files"]),
          "first": fmt_ts(s["first_ts"]), "last": fmt_ts(s["last_ts"]), "baseline": s.get("baseline"), "match": s.get("match"),
          "count_fi": s.get("count_fi", 0), "count_nonfi": s.get("count_nonfi", 0)}
     if "rise_limit" in s:

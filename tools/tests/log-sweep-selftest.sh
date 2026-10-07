@@ -477,6 +477,28 @@ K=$(knob winkey); rc=$(analyze_since "$K" "$T/twoboot" "$T/baseline.json" "$T/je
 pbk2=$(field "$T/t23k.json" "r['metrics']['agent_instances_per_boot']")
 [ "$pbk2" = 0 ] && ok "T23 knob 'winkey': the check is SEEN TO FAIL - filtering on a missing key reads 0 instances"                || bad "T23 knob 'winkey' did not break the check (instances/boot=$pbk2)"
 
+# ---- T24-T25: a crash is not a verdict, and a boot key of either type must not kill the analyzer ---------------
+# Both measured on the toast run of 2026-10-07: the analyzer died on mixed int/str boot keys ("'<' not supported
+# between instances of 'int' and 'str'"), python exited 1, and the rig wrapper announced "rc=1 status=FINDINGS" for a
+# run that had produced NO REPORT AT ALL - a graded verdict over nothing.
+rc=$(analyze "$SRC" "$T/twoboot" "$T/baseline.json" "$T/jev-expected.py" t24)
+pb=$(field "$T/t24.json" "list(r['new'][0]['per_boot'].keys()) if r['new'] else ['-']")
+if [ -f "$T/t24.json" ]; then ok "T24 a capture with attributed and unattributed boots still produces a report (per_boot keys $pb)"
+else bad "T24 the analyzer produced no report"; fi
+K=$(knob bootkeysort); rc=$(analyze "$K" "$T/twoboot" "$T/baseline.json" "$T/jev-expected.py" t24k)
+if [ ! -f "$T/t24k.json" ] || [ "$rc" = 2 ]; then ok "T24 knob 'bootkeysort': the check is SEEN TO FAIL - the analyzer dies and writes no report (rc=$rc)"
+else bad "T24 knob 'bootkeysort' did not break the check (rc=$rc, report present)"; fi
+
+# T25 the rig wrapper must refuse a verdict when there is no readable report (it is a shell check, so it is driven
+# directly: a bad report file with the analyzer's own exit code 1 must come back INCOMPLETE, not FINDINGS)
+WRAP="$ROOT/mgmt/harness/log-sweep.sh"
+if grep -q "GUARD:reportparses" "$WRAP"; then
+  mkdir -p "$T/wrap"; printf 'not json at all\n' > "$T/wrap/report.json"
+  if python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$T/wrap/report.json" >/dev/null 2>&1; then
+    bad "T25 the fixture report parsed - the case cannot be driven"
+  else ok "T25 the wrapper's guard exists and an unreadable report is detectably unreadable (INCOMPLETE, not FINDINGS)"; fi
+else bad "T25 mgmt/harness/log-sweep.sh has no GUARD:reportparses - a crash would still read as FINDINGS"; fi
+
 # the collector must parse (the Linux pwsh is the same parser Windows PowerShell uses) when pwsh is present
 PWSH="${PWSH:-/home/user/pwsh/pwsh}"
 if [ -x "$PWSH" ]; then

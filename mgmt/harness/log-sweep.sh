@@ -110,6 +110,13 @@ python3 tools/log-sweep.py analyze "$OUT/logs" --baseline "$BASELINE" --out "$OU
   --since "$SINCE" --label "$VM" > "$OUT/analyze.out" 2>&1
 arc=$?
 cat "$OUT/summary.txt" 2>/dev/null | tee -a "$R"
+# A CRASH EXITS 1, AND SO DOES "findings" - SO THE REPORT MUST EXIST AND PARSE BEFORE ANY VERDICT IS BELIEVED
+# (measured 2026-10-07: the analyzer died on a real capture with "'<' not supported between instances of 'int' and
+# 'str'", python exited 1, and this wrapper announced "rc=1 status=FINDINGS" for a run that had produced no report at
+# all - a graded verdict over nothing. An exit code is not a result; the artefact is.)
+if ! python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$OUT/report.json" >/dev/null 2>&1; then   # GUARD:reportparses
+  result 4 INCOMPLETE "FAIL  the analyzer produced no readable report (exit $arc) - nothing was graded: $(tail -3 "$OUT/analyze.out" 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
+fi
 case $arc in
   0) result 0 CLEAN "PASS  no breach, no new defect, no missing data" ;;
   1) result 1 FINDINGS "FAIL  findings: $(grep -aE '^(BREACHES|NEW SIGNATURES)' "$OUT/summary.txt" | tr '\n' ' ' | cut -c1-200)" ;;
