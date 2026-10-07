@@ -9,18 +9,26 @@
 #                    hold, report.
 #
 # Word is always closed GRACEFULLY (WM_CLOSE) - Stop-Process is what produced the safe-mode
-# prompt in the first place and it poisons the next run.
+# prompt in the first place and it poisons the next run - and ONLY the instance THIS run started,
+# by the handle Start-Process -PassThru returned. A WINWORD this run did not start is not its to
+# end (owner 2026-10-07: nothing is killed by name); it is reported so the next run knows it
+# starts dirty.
 param([ValidateSet('Reset','FirstRun','Steady')][string]$Mode = 'Steady', [int]$HoldSeconds = 60)
 $ErrorActionPreference = 'SilentlyContinue'
 
+$script:Word = $null
 function Close-WordGracefully {
-    $p = Get-Process WINWORD -EA SilentlyContinue
+    $others = @(Get-Process WINWORD -EA SilentlyContinue | Where-Object { -not $script:Word -or $_.Id -ne $script:Word.Id })
+    if ($others.Count) { "WARN WINWORD not started by this run is open (pid " + (($others | ForEach-Object Id) -join ',') + ") - not stopped; close it by hand or the next run starts dirty" }
+    $p = $script:Word
     if (-not $p) { return }
-    foreach ($proc in $p) { $proc.CloseMainWindow() | Out-Null }
-    Start-Sleep -Seconds 8
-    # only if it refused - and say so, because it means the next run starts dirty
-    $left = Get-Process WINWORD -EA SilentlyContinue
-    if ($left) { "WARN word did not close gracefully; next run will start dirty"; $left | Stop-Process -Force }
+    try { if ($p.HasExited) { return } } catch { return }
+    [void]$p.CloseMainWindow()
+    if (-not $p.WaitForExit(8000)) {
+        # only if it refused - and say so, because it means the next run starts dirty
+        "WARN word did not close gracefully; next run will start dirty"
+        try { $p.Kill(); [void]$p.WaitForExit(5000) } catch { }
+    }
 }
 
 if ($Mode -eq 'Reset') {
@@ -42,7 +50,7 @@ $log = Get-ChildItem 'C:\Program Files\Qubes Tools\log' -Filter 'gui-agent-*.log
 "AGENT_PID_BEFORE=" + (Get-Process gui-agent -EA SilentlyContinue).Id
 "MODE=$Mode"
 "LAUNCH_AT=" + (Get-Date -Format o)
-Start-Process 'C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE' -ArgumentList '/w'
+$script:Word = Start-Process 'C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE' -ArgumentList '/w' -PassThru
 Start-Sleep -Seconds $HoldSeconds
 "HELD_AT=" + (Get-Date -Format o)
 "AGENT_PID_AFTER=" + (Get-Process gui-agent -EA SilentlyContinue).Id

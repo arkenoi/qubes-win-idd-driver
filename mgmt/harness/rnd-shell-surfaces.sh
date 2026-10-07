@@ -54,6 +54,7 @@ psrun(){ local b; b=$(python3 -c "
 import base64,sys; print(base64.b64encode(sys.stdin.read().encode('utf-16-le')).decode(), end='')" <<< "$1")
   r "cmd /c powershell -NoProfile -EncodedCommand $b"; }
 log(){ echo "$(date -u +%H:%M:%S) rnd[$VM]: $*" | tee -a "$OUT/rnd.log"; }
+source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the owner notepad this run starts is stopped by its recorded identity, never by name
 geom(){ QTEST_VM=$VM timeout -k 8 200 ./tools/qtest-geom 2>/dev/null; }
 
 parse_geom(){
@@ -151,7 +152,9 @@ log "=== disarm the update scan (P3: never concurrent with a rendering cell) ===
 cat > "$TMP/disarm.ps1" <<'PS'
 $t = Get-ScheduledTask -TaskName QubesWindowsUpdateScan -EA SilentlyContinue
 if ($t) { & schtasks /change /tn QubesWindowsUpdateScan /disable *>$null }
-Get-Process qubes-updates-relay -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+# A running scan PASS owns its relay: end the TASK (the owner) and the relay exits with it
+# (--parent-pid). Never the relay by name (owner 2026-10-07) - that was any process so named.
+if ($t -and "$($t.State)" -eq 'Running') { & schtasks /end /tn QubesWindowsUpdateScan *>$null }
 Write-Output 'DISARMED done'
 PS
 T=300 q pushrun "$TMP/disarm.ps1" >/dev/null 2>&1
@@ -179,7 +182,10 @@ log "=== scene reset: dismiss any leftover notifications ==="
 # the host respawns (measured: three runs in a row started with a leftover toast on screen). The
 # toast has to be removed from the per-user NOTIFICATION HISTORY, which means running as the user.
 q push guest/dismiss-toast.ps1 >/dev/null 2>&1
-r 'cmd /c taskkill /f /im notepad.exe & exit 0' >/dev/null 2>&1
+# A notepad left by an earlier run is NOT ours to stop (owner 2026-10-07: nothing is killed by
+# name): it is reported, and the geom readings below show it like any other leftover.
+left=$(r 'cmd /c tasklist /nh /fo csv /fi "imagename eq notepad.exe"' | grep -aci '^"notepad\.exe"'); left=${left:-0}
+[ "$left" -gt 0 ] && log "  WARNING: $left notepad.exe process(es) from an earlier run are on the guest - not started by this run, not stopped"
 T=300 q pushrun guest/run-as-user.ps1 -Tag dismiss -Script "$GUEST\\dismiss-toast.ps1" 2>/dev/null \
   | tr -d '\r' | grep -a '^{' | head -1 | sed 's/^/    /'
 sleep 8
@@ -200,8 +206,7 @@ log "  baseline dom0 list: total=${base%%|*} override_redirect=$baseo"
 # contamination between cells is a real failure mode; the cheap fix is ordering.
 # ------------------------------------------------------------------ RND-3: menus (synth design)
 log "=== RND-3: a menu must be SYNTHESIZED onto its owner, and the owner's pixels must change ==="
-r 'cmd /c taskkill /f /im notepad.exe & exit 0' >/dev/null 2>&1
-q run 'cmd /c start "" notepad.exe' >/dev/null 2>&1; sleep 16
+read -r _ NP_PID NP_START <<< "$(ctl_start notepad)"; sleep 16   # the owner, by handle (lifecycle-lib.sh)
 h_before=$(owner_hash before); png_before=$(owner_png before); log "  owner before menu: $h_before"
 mark=$(T=200 q pushrun "$TMP/mark.ps1" | tr -d '\r' | grep -ao 'AGENTMARK [0-9]*' | awk '{print $2}')
 T=200 q pushrun guest/run-as-user.ps1 -Tag menu -Script "$GUEST\\menu.ps1" -NoWait >/dev/null 2>&1
@@ -261,8 +266,8 @@ fi
 
 # ------------------------------------------------------------------ RND-4 / SG7: toasts
 log "=== RND-4 / SG7: a toast must reach the user - by EITHER path ==="
-r 'cmd /c taskkill /f /im notepad.exe & exit 0' >/dev/null 2>&1
-q run 'cmd /c start "" notepad.exe' >/dev/null 2>&1; sleep 16   # a synth owner, in case that path is used
+log "  RND-3 owner notepad: $(ctl_stop "${NP_PID:-0}" "${NP_START:-0}")"
+read -r _ NP_PID NP_START <<< "$(ctl_start notepad)"; sleep 16   # a synth owner, in case that path is used
 r 'cmd /c del /q C:\qwt-improved-setup\surface-watch.jsonl 2>nul & exit 0' >/dev/null 2>&1
 tmark=$(T=200 q pushrun "$TMP/mark.ps1" | tr -d '\r' | grep -ao 'AGENTMARK [0-9]*' | awk '{print $2}')
 th_before=$(owner_hash tb); tpng_before=$(owner_png tb)
@@ -404,6 +409,6 @@ TOAST)
   fi ;;
 esac
 
-r 'cmd /c taskkill /f /im notepad.exe & exit 0' >/dev/null 2>&1
+log "  owner notepad: $(ctl_stop "${NP_PID:-0}" "${NP_START:-0}")"
 log "=== finished rc=$rc ==="
 exit $rc

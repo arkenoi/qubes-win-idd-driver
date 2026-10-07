@@ -68,6 +68,7 @@ cd /home/user/qubes-win-idd-driver
 # invalid name loudly instead of quietly operating on a real guest.
 export QTEST_VM="${QTEST_VM:-__matrix_no_ambient_target__}"
 source .claude/skills/win-guest-e2e/e2e-lib.sh
+source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the notepad a cell starts is stopped by its recorded identity, never by name
 # P0-PRE (protocol H0): the wait primitives are sourced from the REPO, not from a session tmp
 # directory. They used to live under /home/user/.claude/jobs/<id>/tmp, which is session-scoped and
 # garbage-collectable - the same class of mistake that once nearly lost the only copy of a
@@ -1523,7 +1524,7 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the
       2) no "$3-appvm boot $b: no desktop shell within 600s"; return ;;
     esac
     # Pixels, not logs: open notepad and require a mapped, non-fullscreen window.
-    QTEST_VM=$app timeout -k 5 45 ./tools/qtest run 'cmd /c start "" notepad.exe' >/dev/null 2>&1
+    local nppid npstart; read -r _ nppid npstart <<< "$(QTEST_VM=$app T=45 ctl_start notepad)"   # by handle (lifecycle-lib.sh)
     local try W=0 big=0 f w h
     for try in 1 2 3 4 5 6; do
       sleep 7
@@ -1553,7 +1554,7 @@ d=open(sys.argv[1],'rb').read(33); w,h=struct.unpack('>II',d[16:24]); print(w,h)
     if [ "$W" -eq 0 ]; then
       gw=$(g_probe "$app" NPWIN 'Write-Host ("NPWIN=" + ((Get-Process notepad -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Measure-Object).Count))' 60)
     fi
-    QTEST_VM=$app timeout -k 5 45 ./tools/qtest run 'cmd /c taskkill /f /im notepad.exe' >/dev/null 2>&1
+    say "  notepad: $(QTEST_VM=$app T=45 ctl_stop "${nppid:-0}" "${npstart:-0}")"
     if [ "$big" = 1 ]; then no "$3-appvm boot $b: a FULLSCREEN-SIZED window was mapped"
     elif [ "$W" -gt 0 ]; then ok "$3-appvm boot $b: $W window(s) mapped, none fullscreen-sized"
     elif [ "${gw:-x}" -ge 1 ] 2>/dev/null; then

@@ -61,7 +61,7 @@ fi
 # ---- LINT GATE, SCOPED to the paths lint-harness.py actually lints. It used to run on EVERY
 # commit; with a standing backlog that made --no-verify routine, and --no-verify disables every
 # gate in this file including the capture gate above. Scoping removes the reason to bypass.
-if git diff --cached --name-only | grep -qE '^(findings/|mgmt/|tools/|guest/|protocol/)'; then
+if git diff --cached --name-only | grep -qE '^(findings/|mgmt/|tools/|guest/|protocol/|packaging/)'; then
   out=$(python3 tools/lint-harness.py --quiet --baseline tools/lint-baseline.txt 2>&1)
   if [ $? -ne 0 ]; then
     echo "$out"

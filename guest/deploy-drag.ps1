@@ -1,25 +1,27 @@
 # Deploy a new gui-agent AND set ShellManaged=1 (draggable shell surfaces), then restart.
 # For win11-fresh (EnableLUA=0, qtest runs elevated). Prints === RESULT === with hash + pid.
+# Push guest/restart-gui-agent.ps1 next to this script: the agent is stopped THROUGH THE SERVICE
+# THAT OWNS IT and proven gone by handle (Stop-GuiAgentOwner), the binary swapped, and the service
+# started with the NEW agent proven by its log turnover (Start-GuiAgentOwner). Owner 2026-10-07:
+# never `Get-Process gui-agent | Stop-Process`, which raced the watchdog's own relaunch.
 param([string]$NewAgent = 'C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\gui-agent.exe')
 $ErrorActionPreference = 'Continue'
-$r = [ordered]@{}
 $bin = 'C:\Program Files\Qubes Tools\bin\gui-agent.exe'
-$svc = 'QubesGuiWatchdog'
 $k = 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent'
 if (-not (Test-Path $k)) { New-Item $k -Force | Out-Null }
 Set-ItemProperty $k -Name ShellManaged -Value 1 -Type DWord   # draggable shell surfaces
 
-Stop-Service $svc -Force -ErrorAction SilentlyContinue
-Start-Sleep 2
-Get-Process gui-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep 2
+$helper = Join-Path $PSScriptRoot 'restart-gui-agent.ps1'
+if (-not (Test-Path -LiteralPath $helper)) { Write-Output '=== RESULT ==='; @{ ok = $false; error = 'restart-gui-agent.ps1 not pushed next to this script (tools/qtest push guest/restart-gui-agent.ps1)' } | ConvertTo-Json; exit 3 }
+. $helper
+$st = Stop-GuiAgentOwner
 if (-not (Test-Path "$bin.orig")) { Copy-Item $bin "$bin.orig" -Force }
 Copy-Item $NewAgent $bin -Force
-Start-Service $svc -ErrorAction SilentlyContinue
-Start-Sleep 6
-$p = Get-Process gui-agent -ErrorAction SilentlyContinue
+$ra = Start-GuiAgentOwner -Stopped $st
+foreach ($ln in @($ra.lines)) { Write-Output $ln }
 Write-Output '=== RESULT ==='
-@{ bin_sha256 = (Get-FileHash $bin -Algorithm SHA256).Hash
+@{ bin_sha256 = $(if (Test-Path $bin) { (Get-FileHash $bin -Algorithm SHA256).Hash } else { 'none' })
    shellmanaged = (Get-ItemProperty $k).ShellManaged
-   agent_pid = if ($p) { $p.Id } else { $null }
-   agent_running = [bool]$p } | ConvertTo-Json
+   agent_pid = $(if ($ra.ok) { $ra.new_pid } else { $null })
+   agent_running = $ra.ok
+   restart = $ra.verdict; restart_reason = $ra.reason } | ConvertTo-Json

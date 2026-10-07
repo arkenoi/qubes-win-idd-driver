@@ -14,9 +14,16 @@ $regGa = "$reg\gui-agent"
 if ($SetProto -ge 0) {
     if (-not (Test-Path $regGa)) { New-Item $regGa -Force | Out-Null }
     Set-ItemProperty $regGa -Name ProtoTrace -Value $SetProto -Type DWord
-    # Kill the agent; the watchdog service revives it with the new setting.
-    Get-Process gui-agent -ErrorAction SilentlyContinue | Stop-Process -Force
-    Start-Sleep -Seconds 10
+    # Restart the agent THROUGH THE SERVICE THAT OWNS IT, turnover proven (guest/restart-gui-agent.ps1
+    # pushed next to this script). Owner 2026-10-07: the old `Get-Process gui-agent | Stop-Process`
+    # raced the watchdog's own relaunch, so the setting could be measured on the survivor.
+    $helper = Join-Path $PSScriptRoot 'restart-gui-agent.ps1'
+    if (-not (Test-Path -LiteralPath $helper)) { Write-Output '=== META ==='; $meta.error = 'restart-gui-agent.ps1 not pushed next to this script (tools/qtest push guest/restart-gui-agent.ps1)'; $meta | ConvertTo-Json; exit 3 }
+    . $helper
+    $ra = Restart-GuiAgent
+    foreach ($ln in @($ra.lines)) { Write-Output $ln }
+    $meta.restart = $ra.verdict
+    if (-not $ra.ok) { Write-Output '=== META ==='; $meta.error = "agent restart not proven: $($ra.reason)"; $meta | ConvertTo-Json; exit 3 }
 }
 $meta.prototrace = (Get-ItemProperty $regGa -ErrorAction SilentlyContinue).ProtoTrace
 $meta.loglevel = (Get-ItemProperty $reg).LogLevel
@@ -53,12 +60,13 @@ public class Drag2 {
 }
 '@
 
-$p = Get-Process notepad -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-if (-not $p) {
-    Start-Process notepad; Start-Sleep -Seconds 2
-    $p = Get-Process notepad -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-}
-if (-not $p) { Write-Output '=== META ==='; $meta.error='no notepad'; $meta | ConvertTo-Json; exit 1 }
+# The drag target is a notepad THIS run started, by handle (owner 2026-10-07: a process found by name is someone
+# else's - never adopted as ours). A bounded wait for its main window replaces the old reuse-or-start.
+$p = Start-Process notepad -PassThru -ErrorAction SilentlyContinue
+$deadline = (Get-Date).AddSeconds(10)
+while ($p -and (Get-Date) -lt $deadline) { try { $p.Refresh() } catch { }; if ($p.MainWindowHandle -ne 0) { break }; Start-Sleep -Milliseconds 250 }
+if ($p -and $p.MainWindowHandle -eq 0) { $p = $null }
+if (-not $p) { Write-Output '=== META ==='; $meta.error='no notepad (the one started here showed no main window within 10 s)'; $meta | ConvertTo-Json; exit 1 }
 $h = $p.MainWindowHandle
 [Drag2]::SetForegroundWindow($h) | Out-Null
 Start-Sleep -Milliseconds 300

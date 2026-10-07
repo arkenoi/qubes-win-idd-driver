@@ -261,7 +261,11 @@ printf 'Write-Host ok\n' > "$D/guest/single.ps1"
 printf 'Write-Host ok\n' > "$D/packaging/setup/Install-QwtImproved.ps1"
 printf 'Write-Host ok\n' > "$D/packaging/payload/install-qwt-improved.ps1"
 printf 'Write-Host ok\n' > "$D/core-agent/src/qubes-rpc-services/handler.ps1"
-expect_silent L17-process-by-name "$D" "a by-name kill in a guest script make-setup does not ship"
+# WIDENED 2026-10-07 (owner: "why did you miss kill-by-name during the previous sweep?"): a guest script make-setup does
+# NOT ship is still ours and is linted - until then this exact case asserted SILENCE, which is how every dev script kept
+# its by-name kills through the 2026-10-03 sweep.
+expect_fires_in L17-process-by-name "$D" "guest/unshipped.ps1" "a by-name kill in a guest script make-setup does not ship (every script of ours is linted now)"
+printf 'Write-Host ok\n' > "$D/guest/unshipped.ps1"
 printf 'Stop-Process -Name foo -Force\n' > "$D/guest/shipped.ps1"
 expect_fires_in L17-process-by-name "$D" "guest/shipped.ps1" "a kill in a foreach-listed guest script (the updater payload)"
 printf 'Write-Host ok\n' > "$D/guest/shipped.ps1"
@@ -282,6 +286,116 @@ printf '& taskkill.exe /F /IM foo.exe\n' > "$D/core-agent/src/qubes-rpc-services
 expect_fires_in L17-process-by-name "$D" "core-agent/src/qubes-rpc-services/handler.ps1" "a taskkill /im in a core-agent rpc handler"
 printf 'Write-Host ok\n' > "$D/core-agent/src/qubes-rpc-services/handler.ps1"
 expect_silent L17-process-by-name "$D" "the widened scope with every shipped file clean (the fixed shapes: counting, waiting, -Id)"
+# ...and the 2026-10-07 widening to ALL our code: bash harnesses (the taskkill they run and the PowerShell they embed),
+# tools/ scripts, python tools. The correct shape - a control process stopped by the id the harness recorded when it
+# started it (lifecycle-lib.sh ctl_start/ctl_stop) - stays silent.
+D="$TMP/l17w1"; mk "$D"
+cat > "$D/mgmt/harness/bad.sh" <<'EOS'
+#!/bin/bash
+q run 'cmd /c taskkill /f /im notepad.exe 2>nul & exit 0' >/dev/null 2>&1
+EOS
+expect_fires_in L17-process-by-name "$D" "mgmt/harness/bad.sh" "a taskkill /im a bash harness runs on the guest"
+D="$TMP/l17w2"; mk "$D"
+cat > "$D/mgmt/harness/bad.sh" <<'EOS'
+#!/bin/bash
+psrun "Stop-Service QubesGuiWatchdog -Force -EA SilentlyContinue; Start-Sleep 3
+Get-Process gui-agent -EA SilentlyContinue | Stop-Process -Force; Start-Sleep 2"
+EOS
+expect_fires_in L17-process-by-name "$D" "mgmt/harness/bad.sh" "a by-name kill inside the PowerShell a bash harness sends"
+D="$TMP/l17w3"; mk "$D"; mkdir -p "$D/tools/viewcheck"
+printf 'Get-Process notepad -EA SilentlyContinue | Stop-Process -Force\n' > "$D/tools/viewcheck/t.ps1"
+expect_fires_in L17-process-by-name "$D" "tools/viewcheck/t.ps1" "a by-name kill in a tools/ script"
+D="$TMP/l17w4"; mk "$D"; mkdir -p "$D/tools"
+printf 'cmd = ["tools/qtest", "run", "cmd /c taskkill /f /im notepad.exe"]\n' > "$D/tools/judge.py"
+expect_fires_in L17-process-by-name "$D" "tools/judge.py" "a taskkill /im inside a python tool"
+D="$TMP/l17wok"; mk "$D"
+cat > "$D/mgmt/harness/good.sh" <<'EOS'
+#!/bin/bash
+read -r _ pid start <<< "$(ctl_start notepad)"
+left=$(r 'cmd /c tasklist /nh /fo csv /fi "imagename eq notepad.exe"' | grep -aci '^"notepad\.exe"')
+_lc_ps "Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue"
+EOS
+expect_silent L17-process-by-name "$D" "a harness stopping the control it started by the id it recorded, and a read-only tasklist count"
+
+# ---------------------------------------------------------------- L18 a relauncher's child ended while the relauncher is armed (owner 2026-10-07)
+# One fixture per shape, each planted alone, each the literal line a harness or dev script carried before the fix.
+D="$TMP/l18a"; mk "$D"
+cat > "$D/mgmt/harness/bad.sh" <<'EOS'
+#!/bin/bash
+psrun "Stop-Service QubesGuiWatchdog -Force -EA SilentlyContinue; Start-Sleep 3
+Get-Process gui-agent -EA SilentlyContinue | Stop-Process -Force; Start-Sleep 2
+Start-Service QubesGuiWatchdog"
+EOS
+expect_fires L18-relauncher-armed "$D" "the old harness restart: service stopped, then gui-agent killed by name anyway (the race this rule exists for)"
+D="$TMP/l18b"; mk "$D"; printf '& taskkill.exe /F /IM gui-agent.exe *>$null\n' > "$D/guest/x.ps1"
+expect_fires L18-relauncher-armed "$D" "taskkill /im gui-agent.exe"
+D="$TMP/l18c"; mk "$D"
+cat > "$D/guest/x.ps1" <<'EOS'
+$old = @(Get-Process gui-agent -EA SilentlyContinue)
+Start-Sleep 1
+foreach ($a in $old) { $a.Kill() }
+EOS
+expect_fires L18-relauncher-armed "$D" "gui-agent found by name, held in a variable, ended later by that handle"
+D="$TMP/l18d"; mk "$D"; printf 'Get-Process qubes-updates-relay -EA SilentlyContinue | ForEach-Object { $_.Kill() }\n' > "$D/guest/x.ps1"
+expect_fires L18-relauncher-armed "$D" "the updates relay ended by name (a pass's task relaunches it)"
+D="$TMP/l18e"; mk "$D"; printf 'Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue\n' > "$D/guest/x.ps1"
+expect_fires L18-relauncher-armed "$D" "explorer ended by name (Winlogon AutoRestartShell relaunches it)"
+D="$TMP/l18f"; mk "$D"; printf 'Get-Process ShellExperienceHost -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue\n' > "$D/guest/x.ps1"
+expect_fires L18-relauncher-armed "$D" "ShellExperienceHost ended by name (the shell relaunches it)"
+D="$TMP/l18g"; mk "$D"; printf 'Get-Process notifhost | Stop-Process -Force\n' > "$D/guest/x.ps1"
+expect_fires L18-relauncher-armed "$D" "notifhost ended by name (gui-agent relaunches it)"
+D="$TMP/l18h"; mk "$D"
+cat > "$D/mgmt/harness/bad.sh" <<'EOS'
+#!/bin/bash
+enc_run 'tasklist /nh /fo csv /fi "imagename eq etwproxy.exe"' | tr -d '\r' > "$OUT/t5-tasklist.csv"
+ppid=$(awk -F'","' '/[Ee]twproxy\.exe/ {gsub(/"/,"",$2); print $2}' "$OUT/t5-tasklist.csv" | head -1)
+qrun "taskkill /f /pid $ppid" >/dev/null 2>&1
+EOS
+expect_fires L18-relauncher-armed "$D" "a pid SELECTED by a tasklist imagename scan for etwproxy, then taskkill /pid (by name in two steps; the old p3a drill)"
+D="$TMP/l18i"; mk "$D"
+cat > "$D/guest/x.ps1" <<'EOS'
+$xml = @"
+<Task><Settings><RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure></Settings></Task>
+"@
+& schtasks /create /tn QwtRestarting /xml "$f" /f
+& schtasks /end /tn QwtRestarting
+EOS
+expect_fires L18-relauncher-armed "$D" "schtasks /end on a task whose definition carries RestartOnFailure, with no disable first"
+D="$TMP/l18iok"; mk "$D"
+cat > "$D/guest/x.ps1" <<'EOS'
+$xml = @"
+<Task><Settings><RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure></Settings></Task>
+"@
+& schtasks /create /tn QwtRestarting /xml "$f" /f
+& schtasks /change /tn QwtRestarting /disable
+& schtasks /end /tn QwtRestarting
+& schtasks /end /tn QwtPlain
+EOS
+expect_silent L18-relauncher-armed "$D" "schtasks /end after the task was disabled, and /end on a task with no restart policy"
+# ...and the correct shapes: the service restart with a wait on the old agent's HANDLE, a by-id stop of the shell window's
+# owner, a relay stopped by the handle its starter kept, a drill's taskkill /pid of the pid the AGENT logged (no name scan),
+# a by-name COUNT, a read-only tasklist, a comment.
+D="$TMP/l18ok"; mk "$D"
+cat > "$D/guest/restart.ps1" <<'EOS'
+$oldPid = 4242
+$oldProc = Get-Process -Id $oldPid -ErrorAction SilentlyContinue
+Stop-Service -Name QubesGuiWatchdog -Force -ErrorAction Stop
+[void]$oldProc.WaitForExit(45000)
+Start-Service -Name QubesGuiWatchdog
+$np = Get-Process -Id 5151 -ErrorAction SilentlyContinue
+$count = @(Get-Process gui-agent -ErrorAction SilentlyContinue).Count
+Stop-Process -Id $shellPid -Force -ErrorAction SilentlyContinue
+$relay = Start-Process -FilePath $exe -ArgumentList '--listen','8082' -PassThru
+$relay.Kill()
+# a comment: Get-Process gui-agent | Stop-Process must not fire
+EOS
+cat > "$D/mgmt/harness/good.sh" <<'EOS'
+#!/bin/bash
+pp=$(proxy_owned_pid); ppid=$(printf '%s' "$pp" | awk '{print $2}')
+qrun "taskkill /f /pid $ppid" >/dev/null 2>&1
+alive=$(r 'cmd /c tasklist /fi "imagename eq gui-agent.exe" /nh' | grep -ac 'gui-agent\.exe')
+EOS
+expect_silent L18-relauncher-armed "$D" "the service restart waiting on the old agent's handle, a by-id shell stop, a relay stopped by its own handle, a drill kill by the agent-logged pid, a count, a read, a comment"
 
 echo "  ---- $pass passed, $fail failed"
 exit $(( fail > 0 ? 1 : 0 ))

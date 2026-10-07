@@ -34,12 +34,13 @@ public class Drp {
 }
 '@
 $meta = [ordered]@{}
-$p = Get-Process notepad -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-if (-not $p) {
-    Start-Process notepad; Start-Sleep -Seconds 3
-    $p = Get-Process notepad -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-}
-if (-not $p) { Write-Output '=== META ==='; @{ error = 'no notepad' } | ConvertTo-Json; exit 1 }
+# The drag target is a notepad THIS run started, by handle (owner 2026-10-07: a process found by name is someone
+# else's - never adopted as ours). A bounded wait for its main window replaces the old reuse-or-start.
+$p = Start-Process notepad -PassThru -ErrorAction SilentlyContinue
+$deadline = (Get-Date).AddSeconds(10)
+while ($p -and (Get-Date) -lt $deadline) { try { $p.Refresh() } catch { }; if ($p.MainWindowHandle -ne 0) { break }; Start-Sleep -Milliseconds 250 }
+if ($p -and $p.MainWindowHandle -eq 0) { $p = $null }
+if (-not $p) { Write-Output '=== META ==='; @{ error = 'no notepad (the one started here showed no main window within 10 s)' } | ConvertTo-Json; exit 1 }
 $h = $p.MainWindowHandle
 $meta.hwnd = '0x{0:X}' -f $h.ToInt64()
 [void][Drp]::SetForegroundWindow($h)

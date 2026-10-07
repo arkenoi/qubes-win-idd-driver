@@ -46,6 +46,7 @@ import base64,sys; print(base64.b64encode(sys.stdin.read().encode('utf-16-le')).
 log(){ echo "$(date -u +%H:%M:%S) gates[$VM]: $*" | tee -a "$OUT/failproof.log"; }
 V="$OUT/verdicts.tsv"; EV=$(basename "$OUT"); rc=0
 KEY='HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent'
+source mgmt/harness/lifecycle-lib.sh   # agent_restart_ps / agent_restart_grade: the agent restarts through its service, proven by log turnover
 
 # LIVENESS BOUND (2026-09-04). The prove cycles repeat arm + agent-restart, and that cycling can
 # degrade the guest's qrexec/session (measured in the P5 preflight at 0x3 -> 0x14 -> 0x20: by
@@ -84,6 +85,7 @@ require_alive(){  # <context> <check-column> - 3 bounded probes, then the graded
 # would silently ignore FaultGateOff and every armed run would come back green - which would look
 # like "the gates all hold" and would in fact be "the bypass was never in force".
 require_alive "at sequence entry, before the banner check" gates-entry
+agent_restart_push || { log "FATAL: guest/restart-gui-agent.ps1 could not be pushed and proven on $VM - no agent restart is possible without it"; exit 2; }
 log "=== confirm the RUNNING agent understands FI_GATE_OFF ==="
 BAN=$(psrun '$d=(Get-ItemProperty "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\").LogDir
 $f=Get-ChildItem $d -Filter gui-agent-*.log | Sort LastWriteTime -Desc | Select -First 1
@@ -98,35 +100,24 @@ echo "$BAN" | grep -qa 'gateoff=' || {
   exit 2; }
 log "  gate-capable build CONFIRMED running"
 
-# AGENT RESTART WAITS ON A FACT, NOT A TIMER (audit 2026-09-08; same shape as gate-preflight.sh's
-# set_bits - do not let the two drift). This used to be `Start-Service; Start-Sleep 25`.
-# Start-Service returning says nothing about the agent: the watchdog reports RUNNING at once and
-# spawns gui-agent from its own 1 s loop, so a slow session had no agent yet at 25 s and p5 graded
-# a stale state, while a fast guest idled ~20 s per toggle (x7 toggles per run). Worse, -EA
-# SilentlyContinue hid a watchdog that never started, and any gui-agent left over from before the
-# kill then stood in for the "restarted" one. Now: the pre-kill PIDs are recorded and only a
-# gui-agent NOT among them counts (bounded 45 s poll), the service status is echoed for the caller
-# to grade, and the window-map witness is p5-run.sh's own control poll.
+# THE AGENT IS RESTARTED THROUGH THE SERVICE THAT OWNS IT, AND THE TURNOVER IS PROVEN (owner
+# 2026-10-07; same shape as gate-preflight.sh's set_bits and failproof-faultinject.sh's
+# restart_agent - all three call guest/restart-gui-agent.ps1 through mgmt/harness/lifecycle-lib.sh,
+# do not let them drift). History: this used to be `Start-Service; Start-Sleep 25` (audit
+# 2026-09-08: a timer, not a fact), then `Stop-Service; Get-Process gui-agent | Stop-Process -Force;
+# Start-Service` with a poll for a pid not seen before. That kill BY NAME raced the watchdog's own
+# relaunch of the agent it owns; the survivor was adopted and p5 graded cells under the PREVIOUS
+# gate bits - which this file then excused with an "old one survived Stop-Process" INVALID branch
+# instead of fixing. Now the helper stops the QubesGuiWatchdog service (since 2026-10-03 its stop
+# ends the agent IT started, by handle), starts it, and proves a NEW gui-agent-<ts>-<pid>.log with
+# a live pid; a missing proof is RESTART INVALID-INSTRUMENT and set_gate_checked grades it. The
+# registry write rides the same round trip, before the restart; the GATEOFF readback after it.
+# Nothing is killed, nothing is found by name. The window-map witness is p5-run.sh's own control poll.
 set_gate(){  # <hex-or-0>
-  psrun "New-Item -Path '$KEY' -Force | Out-Null
-Set-ItemProperty -Path '$KEY' -Name FaultGateOff -Value $1 -Type DWord
-\$old = @(Get-Process gui-agent -EA SilentlyContinue | ForEach-Object Id)
-Stop-Service QubesGuiWatchdog -Force -EA SilentlyContinue; Start-Sleep 3
-Get-Process gui-agent -EA SilentlyContinue | Stop-Process -Force; Start-Sleep 2
-\$wdErr = ''
-try { Start-Service QubesGuiWatchdog -EA Stop } catch { \$wdErr = \$_.Exception.Message }
-\$wd = (Get-Service QubesGuiWatchdog -EA SilentlyContinue).Status
-Write-Output ('WDSTART ' + \$wd + ' ' + \$wdErr)
-\$new = 0; \$sw = [Diagnostics.Stopwatch]::StartNew()
-while (\$sw.Elapsed.TotalSeconds -lt 45) {
-  \$p = @(Get-Process gui-agent -EA SilentlyContinue | Where-Object { \$old -notcontains \$_.Id })
-  if (\$p.Count -gt 0) { \$new = \$p[0].Id; break }
-  Start-Sleep -Milliseconds 500
-}
-Write-Output ('AGENTPID ' + \$new + ' after ' + [int]\$sw.Elapsed.TotalSeconds + 's')
-\$stillOld = @(Get-Process gui-agent -EA SilentlyContinue | Where-Object { \$old -contains \$_.Id })
-Write-Output ('OLDALIVE ' + \$stillOld.Count)
-Write-Output ('GATEOFF ' + (Get-ItemProperty '$KEY').FaultGateOff)" | grep -aE 'GATEOFF|WDSTART|AGENTPID|OLDALIVE'
+  psrun "$(agent_restart_ps "New-Item -Path '$KEY' -Force | Out-Null
+Set-ItemProperty -Path '$KEY' -Name FaultGateOff -Value $1 -Type DWord" \
+    "Write-Output ('GATEOFF ' + (Get-ItemProperty '$KEY').FaultGateOff)")" \
+    | grep -aE 'GATEOFF|SVCSTOP|OLDLOG|WDSTART|AGENTPID|OLDALIVE|NEWLOG|RESTART'
 }
 
 watchdog_failed(){  # <context> <check-column> - the watchdog is not Running after Start-Service:
@@ -156,23 +147,21 @@ set_gate_checked(){  # <hex-or-0> <context> <check-column>
   echo "$out" | sed 's/^/  /'
   echo "$out" | grep -qa 'WDSTART Running' || \
     watchdog_failed "$2: $(echo "$out" | grep -a WDSTART | head -1)" "$3"
-  # NO NEW AGENT + THE OLD ONE STILL ALIVE IS AN INVALID INSTRUMENT, NOT AN ANOMALY.
-  # Stop-Process is best-effort (-Force, no wait); if the old gui-agent survived it, the
-  # restarted watchdog ADOPTS it (watchdog.c) and the guest keeps running under the PREVIOUS
-  # gate bits. p5 would then grade cells the toggle never reached and this script would report
-  # "armed went red / did not go red" for a measurement of the old state. Only "no new agent
-  # AND no old agent" is the benign still-starting case worth a mere log line.
-  if echo "$out" | grep -qa 'AGENTPID 0 '; then
-    if echo "$out" | grep -qaE 'OLDALIVE [1-9]'; then
-      log "-> INVALID-INSTRUMENT: no NEW gui-agent within 45 s and the OLD one is STILL RUNNING ($2)."
-      log "   The watchdog adopted the surviving agent, so FaultGateOff=$1 was never applied to a"
-      log "   fresh process. Anything graded from here would describe the previous state."
-      T=120 set_gate 0 >/dev/null 2>&1 || true   # bounded clear so the subject is not left armed
-      printf 'GATES\t%s\tINVALID-INSTRUMENT\tno new gui-agent and the old one survived Stop-Process (%s); the toggle never took\t%s\n' \
-        "${3:-sequence}" "$2" "$EV" >> "$V"
-      exit 3
-    fi
-    log "  ANOMALY: watchdog Running, no NEW gui-agent within 45 s, and the old one IS gone ($2) - grading p5's control poll, not a guess"
+  # THE SERVICE RESTART MUST HAVE PRODUCED A NEW AGENT - a newer gui-agent-<ts>-<pid>.log with a
+  # live pid and the old agent gone (guest/restart-gui-agent.ps1 RESTART ok). Anything less - no
+  # new log inside the bound, the old agent surviving the service stop, the service not reaching
+  # Stopped - means FaultGateOff=$1 was never applied to a fresh process: p5 would grade cells the
+  # toggle never reached and this script would report "armed went red / did not go red" for a
+  # measurement of the old state. INVALID-INSTRUMENT, never an anomaly line and a guess.
+  local why
+  if ! why=$(agent_restart_grade "$out"); then
+    log "-> INVALID-INSTRUMENT: the service restart did not produce a new agent ($2): $why"
+    log "   FaultGateOff=$1 was never applied to a fresh process. Anything graded from here would"
+    log "   describe the previous state."
+    T=120 set_gate 0 >/dev/null 2>&1 || true   # bounded clear so the subject is not left armed
+    printf 'GATES\t%s\tINVALID-INSTRUMENT\tthe service restart did not produce a new agent (%s: %s); the toggle never took\t%s\n' \
+      "${3:-sequence}" "$2" "$why" "$EV" >> "$V"
+    exit 3
   fi
 }
 

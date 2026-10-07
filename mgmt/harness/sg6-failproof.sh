@@ -49,6 +49,7 @@ set -uo pipefail
 cd /home/user/qubes-win-idd-driver
 VM="${1:?usage: $0 <standalone-vm>}"
 source mgmt/harness/vmlock.sh; vm_lock "$VM"   # one harness per guest; see vmlock.sh
+source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop (inline qtest run, rule 1 holds): our notepad by its recorded identity, never by name
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/SG6-failproof-$VM}"
 mkdir -p "$OUT"
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
@@ -106,11 +107,11 @@ log "=== 1. CONTROL: an armed guest must have a SESSION and map a window ==="
 [ "$(qvm-ls --raw-data --fields STATE "$VM" | tail -1)" = Halted ] || shutdown_now
 boot_and_wait || { log "FATAL: $VM never answered qrexec in the control"; exit 2; }
 sleep 20
-r 'cmd /c start "" notepad.exe' >/dev/null 2>&1; sleep 14
+read -r _ NP_PID NP_START <<< "$(ctl_start notepad)"; sleep 14   # by handle (lifecycle-lib.sh)
 cd0=$(windows_mapped control); ctrl=${cd0%%|*}; cok=${cd0#*|}
 cs=$(session_count)
 log "  control: sessions=$cs windows=$ctrl (capture_ok=$cok)"
-r 'cmd /c taskkill /f /im notepad.exe' >/dev/null 2>&1
+log "  notepad: $(ctl_stop "${NP_PID:-0}" "${NP_START:-0}")"
 [ "${cs:-0}" -ge 1 ]   || { log "FATAL: no session in the control - the subject is already broken; a red would be meaningless"; exit 2; }
 [ "${ctrl:-0}" -ge 1 ] || { log "FATAL: control mapped no windows (capture_ok=$cok) - fix that before claiming a red"; exit 2; }
 

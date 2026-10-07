@@ -1,7 +1,8 @@
 # WU-through-proxy layered diagnostic. Isolates: (A) relay reachable from the guest,
 # (B) Windows' own connectivity verdict, (C) a DIRECT BITS transfer (no WU COM), (D) DO state.
-# Prints one === WUDIAG === JSON line. Non-destructive except it (re)starts the relay and
-# creates+cancels a throwaway BITS job.
+# Prints one === WUDIAG === JSON line. Non-destructive except it starts a relay of its own when
+# port 8082 is free (a relay already serving is someone else's: reported, never restarted) and
+# creates+cancels a throwaway BITS job. Push guest/relay-own.ps1 next to it.
 $ErrorActionPreference = 'Continue'
 $exe = 'C:\Users\Public\relaytest\qubes-updates-relay.exe'
 $IS  = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings'
@@ -19,11 +20,14 @@ SetV $DO 'DODownloadMode' 0 'DWord'
 & bitsadmin /util /setieproxy LOCALSYSTEM MANUAL_PROXY '127.0.0.1:8082' '<local>' 2>&1 | Out-Null
 
 $env:QUBES_UPDATES_MAXCONN = '256'
-Get-Process qubes-updates-relay -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
-Start-Sleep -Milliseconds 500
-Start-Process -FilePath $exe -ArgumentList '--listen','8082','--target','@default','--log','C:\Users\Public\relaytest' -WindowStyle Hidden
-Start-Sleep -Seconds 2
-$out.relay_running = [bool](Get-Process qubes-updates-relay -EA SilentlyContinue)
+# RELAY OWNED BY HANDLE (guest/relay-own.ps1 next to this script): a port that is not free is a
+# refusal naming its owner - never adopted, never killed (owner 2026-10-07); ours leaves with this
+# script (--parent-pid).
+$ro = Join-Path $PSScriptRoot 'relay-own.ps1'
+if (-not (Test-Path -LiteralPath $ro)) { Write-Output ('=== WUDIAG === ' + (@{ error = 'relay-own.ps1 not pushed next to this script (tools/qtest push guest/relay-own.ps1)' } | ConvertTo-Json -Compress)); exit 3 }
+. $ro
+try { [void](Start-OwnRelay -Exe $exe -Arguments @('--listen','8082','--target','@default','--log','C:\Users\Public\relaytest') -SettleSec 2); $out.relay_running = $true; $out.relay_pid = $script:OwnRelayPid }
+catch { $out.relay_running = $false; $out.relay_refusal = $_.Exception.Message }
 
 # --- LAYER A: relay reachable from the guest? ------------------------------------------
 $cab = 'http://ctldl.windowsupdate.com/msdownload/update/v3/static/trustedr/en/authrootstl.cab'

@@ -1,4 +1,6 @@
-# Tune the drag servo + latency knobs without a rebuild, then restart the agent.
+# Tune the drag servo + latency knobs without a rebuild, then restart the agent through the
+# service that owns it (guest/restart-gui-agent.ps1, pushed next to this script; owner 2026-10-07:
+# never `Get-Process gui-agent | Stop-Process`, which raced the watchdog's own relaunch).
 # All values live under the gui-agent MODULE key (the log library and perf.c both read the
 # module key first - a value on the parent key is silently overridden, which cost hours).
 param(
@@ -25,12 +27,14 @@ SetIf 'InputDragFreeze'          $Freeze
 SetIf 'InputDragFreezeContent'   $FreezeContent
 SetIf 'InputDragSlice'           $Slice
 SetIf 'DragEventPriority'        $EvtPrio
-Get-Process gui-agent -ErrorAction SilentlyContinue | Stop-Process -Force
-Start-Sleep 8
-$p = Get-Process gui-agent -ErrorAction SilentlyContinue
+$helper = Join-Path $PSScriptRoot 'restart-gui-agent.ps1'
+if (-not (Test-Path -LiteralPath $helper)) { Write-Output '=== RESULT ==='; @{ ok = $false; error = 'restart-gui-agent.ps1 not pushed next to this script (tools/qtest push guest/restart-gui-agent.ps1)' } | ConvertTo-Json -Compress; exit 3 }
+. $helper
+$ra = Restart-GuiAgent
+foreach ($ln in @($ra.lines)) { Write-Output $ln }
 $c = Get-ItemProperty $k
 Write-Output '=== RESULT ==='
-@{ agent_pid = if ($p) { $p.Id } else { $null }
+@{ agent_pid = $(if ($ra.ok) { $ra.new_pid } else { $null }); restart = $ra.verdict; restart_reason = $ra.reason
    gain = $c.InputDragServoGainPct; tau = $c.InputDragServoTauMs; deadband = $c.InputDragServoDeadbandPx
    moncache = $c.MonInfoCache; servo = $c.InputDragServo; freeze = $c.InputDragFreeze
    freezecontent = $c.InputDragFreezeContent; slice = $c.InputDragSlice; evtprio = $c.DragEventPriority } | ConvertTo-Json -Compress

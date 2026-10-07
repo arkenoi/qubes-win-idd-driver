@@ -36,6 +36,7 @@ OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/P4-$VM}"
 mkdir -p "$OUT"
 q(){ QTEST_VM=$VM timeout -k 8 "${T:-120}" ./tools/qtest "$@" 2>/dev/null; }
 log(){ echo "$(date -u +%H:%M:%S) p4[$VM]: $*" | tee -a "$OUT/p4.log"; }
+source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the chromerepro this run starts is stopped by its recorded identity, never by name
 
 # ---------------------------------------------------------------- precondition
 log "=== G-0c: disarm QubesWindowsUpdateScan BEFORE anything runs ==="
@@ -73,14 +74,16 @@ done
 if [ "$rc" = 0 ]; then
   log "=== RND-7: compound chrome - 5 HWNDs guest-side, exactly 1 mapped ==="
   q push artifacts/chromerepro.exe >/dev/null 2>&1
-  q run 'cmd /c start "" C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\chromerepro.exe' >/dev/null 2>&1
+  # Started by handle and stopped by that identity below (owner 2026-10-07: never `taskkill /im
+  # chromerepro.exe` - any process with that name, whoever started it).
+  read -r _ CR_PID CR_START <<< "$(ctl_start 'C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\chromerepro.exe')"
   sleep 20
   hw=$(T=300 q pushrun guest/enumwin.ps1 | tr -d '\r' | grep -aoE 'CHROMEREPRO_HWNDS [0-9]+' | awk '{print $2}')
   rm -f "$OUT/rnd7.tar"; q shot "$OUT/rnd7.tar" >/dev/null 2>&1
   mapped=$(tar tf "$OUT/rnd7.tar" 2>/dev/null | grep -c '\.png$'); mapped=${mapped:-0}
   log "  guest-side HWNDs=${hw:-?}  dom0 mapped=${mapped:-?}   (accept: 5 and 1)"
   echo "RND7 hwnds=${hw:-?} mapped=${mapped:-?}" >> "$OUT/rnd.txt"
-  q run 'cmd /c taskkill /f /im chromerepro.exe' >/dev/null 2>&1
+  log "  chromerepro: $(ctl_stop "${CR_PID:-0}" "${CR_START:-0}")"
 fi
 
 # ---------------------------------------------------------------- RND-5

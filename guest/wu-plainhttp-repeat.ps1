@@ -15,10 +15,12 @@ $relay = 'C:\Program Files\Qubes Tools\bin\qubes-updates-relay.exe'
 $wu    = 'C:\ProgramData\Qubes\wu'
 Write-Output '=== RESULT ==='
 Write-Output ("proxy target = {0}" -f $Target)
-Get-Process qubes-updates-relay -EA SilentlyContinue | ForEach-Object { $_.Kill() }
-Start-Sleep -Seconds 2
-Start-Process -FilePath $relay -ArgumentList '--listen','8082','--target',$Target,'--log',$wu -WindowStyle Hidden
-Start-Sleep -Seconds 3
+# RELAY OWNED BY HANDLE (guest/relay-own.ps1 next to this script; owner 2026-10-07): started once the
+# port is free (a serving relay is someone else's - refused, named, never killed), stopped at the end.
+$ro = Join-Path $PSScriptRoot 'relay-own.ps1'
+if (-not (Test-Path -LiteralPath $ro)) { Write-Output 'relay-own.ps1 not pushed next to this script (tools/qtest push guest/relay-own.ps1)'; exit 3 }
+. $ro
+try { [void](Start-OwnRelay -Exe $relay -Arguments @('--listen','8082','--target',$Target,'--log',$wu) -SettleSec 3) } catch { Write-Output $_.Exception.Message; exit 2 }
 $urls = [ordered]@{
     'disallowedcertstl.cab' = 'http://ctldl.windowsupdate.com/msdownload/update/v3/static/trustedr/en/disallowedcertstl.cab'
     'authrootstl.cab'       = 'http://ctldl.windowsupdate.com/msdownload/update/v3/static/trustedr/en/authrootstl.cab'
@@ -35,4 +37,5 @@ foreach ($name in $urls.Keys) {
     $b = if ($bytes.Count) { ($bytes | Sort-Object -Unique) -join ',' } else { 'n/a' }
     Write-Output ("{0,-24} ok={1}/{2}  failed={3}  bytes={4}" -f $name, $ok, $Repeats, $fail, $b)
 }
+Stop-OwnRelay
 Write-Output 'verdict: mixed ok/failed for the SAME url => the tunnel drops plain-HTTP requests intermittently'

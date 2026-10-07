@@ -10,6 +10,11 @@
 # Killing ShellExperienceHost does NOT work — the notification platform re-shows a reminder toast
 # when the host respawns. The toast must be removed from the NOTIFICATION HISTORY, which is per-user
 # state, so this has to run in the USER session (guest/run-as-user.ps1), not from qrexec's SYSTEM.
+# ShellExperienceHost is the platform's process, relaunched by the shell on demand: this script
+# never ends it (owner 2026-10-07: never a bare kill of a relauncher's child - it used to
+# `Get-Process ShellExperienceHost | Stop-Process` after the clear, "so anything already painted
+# goes away", which the platform's respawn then undid anyway). A banner still painted is the
+# caller's own window census to report, not something hidden here.
 #
 #   run-as-user.ps1 -Script ...\dismiss-toast.ps1 -Tag dismiss
 param(
@@ -31,10 +36,8 @@ try {
     exit 2
 }
 
-# Then restart the shell surface host so anything already painted goes away with it. On its own this
-# is NOT sufficient (the platform re-shows reminder toasts), which is why it comes AFTER the history
-# clear rather than instead of it.
-Get-Process ShellExperienceHost -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+# Let the Action Center settle after the clear. The shell surface host is NOT restarted from here
+# (see the header): it is the platform's, and a relauncher's child is never killed to "refresh" it.
 Start-Sleep -Seconds 3
 
 Write-Output '=== RESULT ==='

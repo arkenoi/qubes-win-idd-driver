@@ -1,5 +1,8 @@
 $ErrorActionPreference='SilentlyContinue'
-Get-Process notepad,chromerepro -EA SilentlyContinue | Stop-Process -Force
+# Windows left by an earlier scene are NOT ours to stop (owner 2026-10-07: nothing is killed by
+# name); they are reported, and this scene's own windows are started by handle below.
+$left = @(Get-Process notepad,chromerepro -EA SilentlyContinue)
+if ($left.Count) { Write-Output ("WARN leftover windows from an earlier run, not started here and not stopped: " + (($left | ForEach-Object { "$($_.ProcessName)/$($_.Id)" }) -join ',')) }
 Start-Sleep 2
 Add-Type -TypeDefinition @"
 using System;using System.Runtime.InteropServices;

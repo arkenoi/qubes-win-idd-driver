@@ -35,6 +35,7 @@ require_scripts(){
 require_scripts guest/disarm-update-scan.ps1 guest/fsgate-probe.ps1 guest/set-resolution.ps1 guest/open-start.ps1 guest/run-as-user.ps1
 VM="${1:?usage: $0 <vm> [outdir]}"
 source mgmt/harness/vmlock.sh; vm_lock "$VM"   # one harness per guest; see vmlock.sh
+source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the control and the probe are stopped by the identity this run recorded, never by name
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/P5-$VM}"
 mkdir -p "$OUT"
 TMP=$(mktemp -d)
@@ -143,11 +144,16 @@ cat > "$TMP/p5-fsgate-launch.ps1" <<'PS'
 param([string]$Mode,[int]$HoldSeconds=220,[int]$HostWidth=0,[int]$HostHeight=0,[string]$OutFile='')
 $probe = Join-Path $PSScriptRoot 'fsgate-probe.ps1'
 if (-not (Test-Path $probe)) { Write-Output "FSGATE-LAUNCH error=probe_not_found $probe"; exit 2 }
-Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList @(
+$pp = Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -PassThru -ArgumentList @(
   '-NoProfile','-ExecutionPolicy','Bypass','-File',$probe,
   '-Mode',$Mode,'-HoldSeconds',$HoldSeconds,'-HostWidth',$HostWidth,'-HostHeight',$HostHeight,
   '-OutFile',$OutFile)
-Write-Output "FSGATE-LAUNCH ok mode=$Mode out=$OutFile"
+# The probe's identity (pid + start time) goes next to its report, so the harness stops THIS probe
+# by handle (lifecycle-lib.sh ctl_stop) - never `taskkill /im powershell.exe`, which ended every
+# powershell on the guest, whoever started it (owner 2026-10-07).
+$st = 0; try { $st = $pp.StartTime.ToFileTimeUtc() } catch { }
+"$($pp.Id) $st" | Set-Content -LiteralPath "$OutFile.pid" -Encoding ASCII
+Write-Output "FSGATE-LAUNCH ok mode=$Mode out=$OutFile pid=$($pp.Id)"
 PS
 ensure_probe_pushed(){
   local i f ok
@@ -224,7 +230,8 @@ d=open(sys.argv[1],'rb').read(); w,h=struct.unpack('>II',d[16:24]); print(f'{w}x
 # never a pass.
 CONTROL_DIM=""; CONTROL_N=0
 start_control(){
-  q run 'cmd /c start "" notepad.exe' >/dev/null 2>&1
+  # by handle; the identity is kept so nothing here ever has to find a notepad by name
+  read -r _ CTL_PID CTL_START <<< "$(T=60 ctl_start notepad)"
   local d n
   for _ in $(seq 1 12); do
     sleep 8
@@ -256,8 +263,19 @@ wait_probe_ready(){  # $1 = guest file path
   return 1
 }
 
-q run 'cmd /c taskkill /f /im notepad.exe & taskkill /f /im chromerepro.exe & exit 0' >/dev/null 2>&1
+# Leftovers from an earlier run are NOT ours to stop (owner 2026-10-07: nothing is killed by name).
+# They are counted and reported; the control is identified BY SIZE in run_cell, so a leftover
+# cannot fake either verdict.
+left=$(q run 'cmd /c tasklist /nh /fo csv /fi "imagename eq notepad.exe" & tasklist /nh /fo csv /fi "imagename eq chromerepro.exe"' | tr -d '\r' | grep -aciE '^"(notepad|chromerepro)\.exe"'); left=${left:-0}
+[ "$left" -gt 0 ] && log "  WARNING: $left notepad/chromerepro process(es) from an earlier run are on the guest - not started by this run, not stopped"
 sleep 4
+# Stop the probe THIS cell launched, by the identity its launch stage recorded next to the report.
+probe_stop(){  # <guest report path>
+  local idf; idf=$(T=60 q run "cmd /c type $1.pid 2>nul" | tr -d '\r' | grep -aoE '^[0-9]+ [0-9]+' | head -1)
+  if [ -z "$idf" ]; then log "  probe: no launch record ($1.pid) - nothing of ours to stop"; return 0; fi
+  # shellcheck disable=SC2086
+  log "  probe: $(T=60 ctl_stop $idf)"
+}
 if ! start_control; then
     log "FATAL: the control window never became visible to local.WinScreenshot. The capture path is"
     log "       blind, so no 'nothing mapped' verdict from this rig could mean anything."
@@ -273,7 +291,7 @@ run_cell(){
   markraw=$(T=200 q pushrun "$TMP/p5-mark.ps1" | tr -d '\r' | grep -aoE 'AGENTMARK [0-9]+ [^ ]+' | head -1)
   mark=$(echo "$markraw" | awk '{print $2}'); markfile=$(echo "$markraw" | awk '{print $3}')
   local gf="C:\\ProgramData\\Qubes\\fsgate-$id.txt"
-  q run "cmd /c del /q $gf 2>nul & exit 0" >/dev/null 2>&1
+  q run "cmd /c del /q $gf $gf.pid 2>nul & exit 0" >/dev/null 2>&1
   # LAUNCH VERB: guest/run-as-user.ps1 (schtasks /ru user /it), NOT a detached
   # `cmd /c start "" powershell -WindowStyle Hidden`. Measured 2026-09-04 on win10-acc (fresh
   # 4.3.18 standalone, contained 1920x1080 < host): EVERY SG2/SG3/SG4 launch via the detached
@@ -310,12 +328,13 @@ run_cell(){
     wait_probe_ready "$gf"; ready=$?
     [ "$ready" -ne 1 ] && break          # 0 = visible; 2 = reported-not-visible: real, grade it
     [ "$attempt" -ge 3 ] && break        # bounded: a silent launch gets exactly two relaunches
-    log "  probe launch $attempt/3 produced no report file - killing strays, re-verifying the script, relaunching"
-    # a half-started probe must not double the window under the relaunch; same hammer as post-cell
-    q run 'cmd /c taskkill /f /im powershell.exe 2>nul & exit 0' >/dev/null 2>&1
+    log "  probe launch $attempt/3 produced no report file - stopping our half-started probe, re-verifying the script, relaunching"
+    # a half-started probe must not double the window under the relaunch: stopped by the identity
+    # its launch recorded, the same as post-cell
+    probe_stop "$gf"
     sleep 5
     ensure_probe_pushed || log "  WARNING: probe scripts still not verifiable on the guest"
-    q run "cmd /c del /q $gf 2>nul & exit 0" >/dev/null 2>&1
+    q run "cmd /c del /q $gf $gf.pid 2>nul & exit 0" >/dev/null 2>&1
     attempt=$((attempt+1))
   done
 
@@ -366,7 +385,7 @@ run_cell(){
   hits=$(T=300 q pushrun "$TMP/p5-since.ps1" -Mark "${mark:-0}" -Pattern "$disc" -MarkFile "${markfile:-}" | tr -d '\r')
   nh=$(echo "$hits" | grep -ao 'SINCE_HITS [0-9]*' | awk '{print $2}')
   { echo "$probe"; echo "$hits"; echo "AGENTMAP $phwnd -> ${nmap:-?}"; } > "$OUT/$id.probe.txt"
-  q run 'cmd /c taskkill /f /im powershell.exe 2>nul & exit 0' >/dev/null 2>&1
+  probe_stop "$gf"
   sleep 8
 
   local existed=no

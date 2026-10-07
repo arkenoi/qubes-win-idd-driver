@@ -17,10 +17,17 @@ SetV $POL 'ProxySettingsPerUser' 0 'DWord'; SetV $IS 'ProxyEnable' 1 'DWord'; Se
 
 # improved relay, high concurrency (read-first keeps DO's fan-out from fork-bombing)
 $env:QUBES_UPDATES_MAXCONN = '256'
-Get-NetTCPConnection -LocalPort 8082 -State Listen -EA SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -EA SilentlyContinue }
-Get-Process qubes-updates-relay -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+# RELAY OWNED BY HANDLE (owner 2026-10-07; the shape of guest/relay-own.ps1, inlined - this runs as a
+# scheduled task): a port that is not free is a REFUSAL naming its owner, never killed by pid or by
+# name; the relay this script starts leaves with it (--parent-pid).
+$owner = 0
+try { $l = @(Get-NetTCPConnection -LocalPort 8082 -State Listen -ErrorAction SilentlyContinue); if ($l.Count) { $owner = [int]$l[0].OwningProcess } } catch { $owner = -1 }
+if ($owner -ne 0) {
+    (@{ mode='clean-noreset'; refused="port 8082 is owned by pid $owner - not this script's; nothing started, nothing stopped" } | ConvertTo-Json -Compress) | Set-Content -LiteralPath 'C:\Users\Public\stage6clean-result.txt'
+    'DONE' | Set-Content -LiteralPath 'C:\Users\Public\stage6clean-done.txt'; exit 2
+}
 Remove-Item $log -EA SilentlyContinue
-Start-Process -FilePath $exe -ArgumentList '--listen','8082','--target','@default','--log','C:\Users\Public\relaytest' -WindowStyle Hidden
+$ownRelay = Start-Process -FilePath $exe -ArgumentList '--listen','8082','--target','@default','--log','C:\Users\Public\relaytest','--parent-pid',"$PID" -WindowStyle Hidden -PassThru
 Start-Sleep -Milliseconds 1500
 
 $out = [ordered]@{ mode='clean-noreset'; search=$null; title=$null; download=$null; install=$null; downloaded_mb=$null; reboot=$null; relay_conns=$null }

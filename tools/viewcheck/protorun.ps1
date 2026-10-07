@@ -1,10 +1,16 @@
 $ErrorActionPreference='SilentlyContinue'
 # Restart the agent so every window gets a traced CREATE/MAP. Without it, windows that existed
 # before the trace started have no announced origin, the occlusion check skips them, and the
-# run reports PASS while proving nothing.
-Get-Process gui-agent -EA SilentlyContinue | Stop-Process -Force
-Start-Sleep 14
-$f=(Get-ChildItem 'C:\Program Files\Qubes Tools\log' -Filter 'gui-agent*.log'|Sort LastWriteTime -Desc|Select -First 1)
+# run reports PASS while proving nothing. THROUGH THE SERVICE THAT OWNS IT, turnover proven
+# (guest/restart-gui-agent.ps1 pushed next to this script; owner 2026-10-07: never
+# `Get-Process gui-agent | Stop-Process`, which raced the watchdog's own relaunch).
+$helper = Join-Path $PSScriptRoot 'restart-gui-agent.ps1'
+if (-not (Test-Path -LiteralPath $helper)) { Write-Output 'RESTART INVALID-INSTRUMENT helper-missing: push guest/restart-gui-agent.ps1 next to this script'; exit 3 }
+. $helper
+$ra = Restart-GuiAgent
+foreach ($ln in @($ra.lines)) { Write-Output $ln }
+if (-not $ra.ok) { exit 3 }
+$f = Get-Item -LiteralPath (Join-Path $ra.log_dir $ra.new_log)
 Write-Output "LOGFILE $($f.Name)"
 Get-Content $f.FullName | Select-String 'QGAPROTO (on|off)' | Select-Object -Last 1 | ForEach-Object { "GATE: $_" }
 $mark=0   # log is fresh after the restart: read all of it, or startup CREATEs are missed
@@ -29,8 +35,10 @@ public class M{
    o.Add(string.Format("{0}\t{1}\t{2}\t{3}\t{4}\t{5}\t{6}",h.ToInt64(),r.l,r.t,w,ht,
      GetWindowLong(h,-16), c.ToString())); return true;},IntPtr.Zero); return o;}}
 "@
-$p=Get-Process notepad -EA SilentlyContinue|Select -First 1
-if(-not $p){$p=Start-Process notepad -PassThru;Start-Sleep 4}
+# the window to menu-test is a notepad THIS run started, by handle (owner 2026-10-07: never a notepad found by name)
+$p=Start-Process notepad -PassThru
+$deadline=(Get-Date).AddSeconds(10)
+while((Get-Date) -lt $deadline){ try{$p.Refresh()}catch{}; if($p.MainWindowHandle -ne 0){break}; Start-Sleep -Milliseconds 250 }
 [M]::SetForegroundWindow($p.MainWindowHandle)|Out-Null
 Start-Sleep 1
 [System.Windows.Forms.SendKeys]::SendWait("%f")

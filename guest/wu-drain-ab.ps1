@@ -21,17 +21,22 @@ $proxy = 'http://127.0.0.1:8082'
 $url   = 'http://ctldl.windowsupdate.com/msdownload/update/v3/static/trustedr/en/authrootstl.cab'
 $TRUE_LEN = 80043
 Write-Output '=== RESULT ==='
+# RELAY OWNED BY HANDLE (guest/relay-own.ps1 next to this script; owner 2026-10-07): each arm's relay
+# is started once the port is free (a serving relay is someone else's - refused, named, never killed)
+# and only that one is stopped between arms.
+$ro = Join-Path $PSScriptRoot 'relay-own.ps1'
+if (-not (Test-Path -LiteralPath $ro)) { Write-Output 'relay-own.ps1 not pushed next to this script (tools/qtest push guest/relay-own.ps1)'; exit 3 }
+. $ro
 
 $stats = @{}
 foreach ($d in 250, 3000, 8000) { $stats[$d] = [ordered]@{ ok=0; fail=0; full=0; sizes=New-Object 'System.Collections.Generic.HashSet[int]' } }
 
 for ($r = 1; $r -le $Rounds; $r++) {
     foreach ($drain in 250, 3000, 8000) {
-        Get-Process qubes-updates-relay -EA SilentlyContinue | ForEach-Object { $_.Kill() }
+        Stop-OwnRelay
         Start-Sleep -Seconds 2
         $env:QUBES_UPDATES_DRAINMS = "$drain"
-        Start-Process -FilePath $exe -ArgumentList '--listen','8082','--target','@default','--log',$wu -WindowStyle Hidden
-        Start-Sleep -Seconds 3
+        [void](Start-OwnRelay -Exe $exe -Arguments @('--listen','8082','--target','@default','--log',$wu) -SettleSec 3)
         for ($i = 1; $i -le $PerRound; $i++) {
             try {
                 $resp = Invoke-WebRequest $url -Proxy $proxy -UseBasicParsing -TimeoutSec 60
@@ -44,7 +49,7 @@ for ($r = 1; $r -le $Rounds; $r++) {
         }
     }
 }
-Get-Process qubes-updates-relay -EA SilentlyContinue | ForEach-Object { $_.Kill() }
+Stop-OwnRelay
 Remove-Item Env:\QUBES_UPDATES_DRAINMS -EA SilentlyContinue
 
 foreach ($d in 250, 3000, 8000) {
