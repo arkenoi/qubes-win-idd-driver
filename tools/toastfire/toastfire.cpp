@@ -47,13 +47,20 @@
 //                       DisplayName     = "toastfire"           (REG_SZ)
 //                       CustomActivator = "{CLSID}"             (REG_SZ)
 //                     HKCU\Software\Classes\CLSID\{CLSID}\LocalServer32
-//                       (default)       = "<exe> --com-activated"
+//                       (default)       = "<exe> --com-activated --aumid <AUMID>"
 //                   The CLSID is DERIVED DETERMINISTICALLY from the AUMID (first 16 bytes
 //                   of SHA-256(UTF-8 AUMID) with RFC-4122 version/variant bits forced), so
 //                   register/unregister/re-register always touch the same keys and the
-//                   harness can predict them. Activation CALLBACKS are out of scope - the
-//                   registration's existence is what differentiates listener/ETW/AUMID
-//                   behavior; a click would launch this exe with -Embedding, which exits 0.
+//                   harness can predict them. The activation CALLBACK IS IMPLEMENTED (since
+//                   the actionable-buttons route, docs/ADR-toasts.md 11): launched by COM as
+//                   that local server, this exe registers a class object serving
+//                   INotificationActivationCallback and RECORDS every Activate() it receives -
+//                   one "ACTIVATED aumid=<a> args='<args>' inputs=<n>" line on stdout and
+//                   appended to %LOCALAPPDATA%\toastfire-activations.log (the server's stdout
+//                   is not connected when COM launches it) - then exits after the first
+//                   activation or 30 s idle. That log is what a guest test reads to prove a
+//                   dom0 click (or `notifhost --invoke-activator`) reached the sender the way
+//                   the shell's own activation does.
 //                   AUMIDs containing '\' are REFUSED for this method (they would nest
 //                   registry keys and break hermetic teardown).
 //   bare            no registration at all - CreateToastNotifier(aumid) on a never-seen
@@ -68,6 +75,11 @@
 //   realchoice     scenario="reminder" + OK/Later buttons (window path)   -> window, row 3
 //   persistent     scenario="reminder" + one OK button (stays on screen)  -> window, row 3
 //   long           <toast duration="long"> text-only (~25s informational) -> bridge, row 6
+//   actionable     foreground OK/Later buttons + a foreground launch      -> row 4: window by the
+//                  XML alone; the bridge forwards it WITH actions when the sender has a toast
+//                  activator (--method com-activator), ADR-toasts 11 - the actionable route's fixture
+//   protocol       a protocol button + a protocol launch (ms-settings:about) -> bridge, row 5,
+//                  forwarded with actions whatever the registration method
 // The tool SELF-CHECKS every payload through the real classifier
 // (tools/notifhost/toastclassify.h, included directly) and refuses to fire if the verdict
 // row differs from the intended row - the fixtures can never drift from the classifier.
@@ -88,6 +100,8 @@
 #include <propkey.h>        // PKEY_AppUserModel_ID
 #include <knownfolders.h>   // FOLDERID_Programs
 #include <shlobj.h>         // SHGetKnownFolderPath
+
+#include <NotificationActivationCallback.h>   // INotificationActivationCallback: the activator this exe serves
 
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
@@ -244,6 +258,9 @@ static const ToastSpec kClasses[] = {
     { L"realchoice",    ToastRouteWindow, 3 },   // fire-demo-toast.ps1:29 / row3-reminder-two-buttons
     { L"persistent",    ToastRouteWindow, 3 },   // fire-demo-toast.ps1:32 / row3-persistent-informational
     { L"long",          ToastRouteBridge, 6 },   // duration="long" text-only: still row 6
+    { L"actionable",    ToastRouteWindow, 4 },   // row 4 by the XML; bridged WITH actions by toastactions.h when the
+                                                 // sender has a toast activator (ADR-toasts 11)
+    { L"protocol",      ToastRouteBridge, 5 },   // row5: protocol button + protocol launch, both carried as actions
 };
 
 static std::wstring BuildPayload(const std::wstring& cls,
@@ -264,6 +281,14 @@ static std::wstring BuildPayload(const std::wstring& cls,
     if (cls == L"persistent")
         return L"<toast scenario=\"reminder\">" + visual +
                L"<actions><action content=\"OK\" arguments=\"ok\"/></actions></toast>";
+    if (cls == L"actionable")   // the shell would call the sender's activator with "ok" / "later" / the launch string
+        return L"<toast launch=\"toastfire:default\" activationType=\"foreground\">" + visual +
+               L"<actions><action content=\"OK\" activationType=\"foreground\" arguments=\"ok\"/>"
+               L"<action content=\"Later\" activationType=\"foreground\" arguments=\"later\"/></actions></toast>";
+    if (cls == L"protocol")     // the shell would launch the URI; so does the bridge (ShellExecute as the user)
+        return L"<toast launch=\"ms-settings:about\" activationType=\"protocol\">" + visual +
+               L"<actions><action content=\"Settings\" activationType=\"protocol\" arguments=\"ms-settings:about\"/>"
+               L"</actions></toast>";
     return {};
 }
 
@@ -380,9 +405,109 @@ static bool RegisterComActivator(const std::wstring& aumid, std::wstring& detail
     std::wstring srvKey  = L"Software\\Classes\\CLSID\\" + clsid + L"\\LocalServer32";
     if (!SetRegSz(appKey, L"DisplayName", L"toastfire", detail)) return false;
     if (!SetRegSz(appKey, L"CustomActivator", clsid, detail)) return false;
-    if (!SetRegSz(srvKey, nullptr, L"\"" + ExePath() + L"\" --com-activated", detail)) return false;
+    // The server must know which CLSID to serve: COM appends -Embedding, the AUMID names the class.
+    if (!SetRegSz(srvKey, nullptr, L"\"" + ExePath() + L"\" --com-activated --aumid " + aumid, detail)) return false;
     detail = L"clsid=" + clsid + L" key=HKCU\\" + appKey;
     return true;
+}
+
+// ---------------------------------------------------------------- the activator (COM local server)
+// What a real desktop app runs when the shell - or the bridge's click handler (notifhost.cpp
+// WinToastActivator::Com) - CoCreates its ToastActivatorCLSID: a class object whose instances implement
+// INotificationActivationCallback. This one only RECORDS what it receives, so a test can prove the call
+// arrived with the arguments the toast carried.
+
+static std::wstring ActivationLogPath()
+{
+    wchar_t la[MAX_PATH] = { 0 };
+    if (!GetEnvironmentVariableW(L"LOCALAPPDATA", la, MAX_PATH)) return {};
+    return std::wstring(la) + L"\\toastfire-activations.log";
+}
+
+static HANDLE g_activatedEvt = nullptr;   // set once Activate() ran: the server then exits (after a grace)
+
+struct ToastActivatorCallback : INotificationActivationCallback
+{
+    LONG ref = 1;
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override
+    {
+        if (!ppv) return E_POINTER;
+        if (riid == __uuidof(IUnknown) || riid == __uuidof(INotificationActivationCallback))
+        { *ppv = static_cast<INotificationActivationCallback*>(this); AddRef(); return S_OK; }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override { return (ULONG)InterlockedIncrement(&ref); }
+    STDMETHODIMP_(ULONG) Release() override { ULONG r = (ULONG)InterlockedDecrement(&ref); if (!r) delete this; return r; }
+    STDMETHODIMP Activate(LPCWSTR aumid, LPCWSTR args, const NOTIFICATION_USER_INPUT_DATA*, ULONG count) override
+    {
+        std::wstring line = L"ACTIVATED aumid=" + std::wstring(aumid ? aumid : L"") +
+                            L" args='" + std::wstring(args ? args : L"") + L"' inputs=" + std::to_wstring(count);
+        Line(line);
+        std::wstring log = ActivationLogPath();
+        if (!log.empty())
+        {
+            HANDLE f = CreateFileW(log.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (f != INVALID_HANDLE_VALUE)
+            {
+                std::string u = Utf8(line) + "\r\n";
+                DWORD wr; WriteFile(f, u.data(), (DWORD)u.size(), &wr, nullptr);
+                CloseHandle(f);
+            }
+        }
+        if (g_activatedEvt) SetEvent(g_activatedEvt);
+        return S_OK;
+    }
+};
+
+struct ToastActivatorFactory : IClassFactory
+{
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override
+    {
+        if (!ppv) return E_POINTER;
+        if (riid == __uuidof(IUnknown) || riid == __uuidof(IClassFactory))
+        { *ppv = static_cast<IClassFactory*>(this); return S_OK; }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override { return 2; }     // a static lifetime object
+    STDMETHODIMP_(ULONG) Release() override { return 1; }
+    STDMETHODIMP CreateInstance(IUnknown* outer, REFIID riid, void** ppv) override
+    {
+        if (outer) return CLASS_E_NOAGGREGATION;
+        ToastActivatorCallback* cb = new ToastActivatorCallback();
+        HRESULT hr = cb->QueryInterface(riid, ppv);
+        cb->Release();
+        return hr;
+    }
+    STDMETHODIMP LockServer(BOOL) override { return S_OK; }
+};
+
+// Serve the activator for `aumid`'s derived CLSID until one activation has been recorded (plus a short
+// grace for the caller's Release) or `idleSecs` pass. Exit 0 = served (activated or idle), 2 = failed.
+static int ComActivatedMain(const std::wstring& aumid, long idleSecs)
+{
+    winrt::init_apartment(winrt::apartment_type::multi_threaded);   // the callback needs no message pump this way
+    std::wstring clsidStr = DeriveClsid(aumid);
+    CLSID clsid;
+    if (FAILED(CLSIDFromString(clsidStr.c_str(), &clsid))) { Line(L"ERROR com-activated: derived CLSID unparseable"); return 2; }
+    g_activatedEvt = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    static ToastActivatorFactory factory;
+    DWORD cookie = 0;
+    HRESULT hr = CoRegisterClassObject(clsid, &factory, CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE, &cookie);
+    if (FAILED(hr))
+    {
+        wchar_t buf[16]; swprintf(buf, 16, L"0x%08X", (uint32_t)hr);
+        Line(std::wstring(L"ERROR com-activated: CoRegisterClassObject failed hr=") + buf);
+        return 2;
+    }
+    Line(L"COM-ACTIVATED serving aumid=" + aumid + L" clsid=" + clsidStr + L" log=" + ActivationLogPath() +
+         L" (exits after the first Activate or " + std::to_wstring(idleSecs) + L" s idle)");
+    const DWORD w = WaitForSingleObject(g_activatedEvt, (DWORD)idleSecs * 1000);
+    if (w == WAIT_OBJECT_0) Sleep(2000);   // let the caller finish its Release before the class object goes
+    CoRevokeClassObject(cookie);
+    Line(w == WAIT_OBJECT_0 ? L"COM-ACTIVATED done: activation recorded" : L"COM-ACTIVATED done: idle, no activation");
+    return 0;
 }
 
 static bool UnregisterComActivator(const std::wstring& aumid, std::wstring& detail)
@@ -431,6 +556,9 @@ static void Usage()
     Line(L"  toastfire --fire [--method M] [--aumid A] [--class informational|realchoice|persistent|long]");
     Line(L"            [--title S] [--body S] [--tag S] [--group S] [--count N] [--interval-ms M]");
     Line(L"  toastfire --print-xml [--class C] [--title S] [--body S]   (offline: payload + sha, no fire)");
+    Line(L"  toastfire --com-activated [--aumid A] [--idle-secs N]      (the COM activator server COM launches;");
+    Line(L"            records each Activate() to stdout + %LOCALAPPDATA%\\toastfire-activations.log)");
+    Line(L"classes: informational realchoice persistent long actionable protocol");
     Line(L"defaults: class=informational title='demo toast' body='demo body' tag=toastfire group=toastfire");
     Line(L"          count=1 interval-ms=250; per-method default AUMIDs:");
     Line(L"          start-shortcut=QubesToastfire.StartShortcut com-activator=QubesToastfire.ComActivator");
@@ -442,12 +570,13 @@ static void Usage()
 
 int wmain(int argc, wchar_t** argv)
 {
-    // COM local-server activation (a click on a com-activator toast, or manual). We are a
-    // registration fixture, not a real activator: acknowledge and exit clean.
+    // COM local-server activation: the shell's click on a com-activator toast, the bridge's click handler
+    // (notifhost.cpp, a dom0 action), or `notifhost --invoke-activator`. COM appends -Embedding to the
+    // registered command line; the AUMID names the class to serve (see RegisterComActivator).
+    bool comActivated = false;
+    long idleSecs = 30;
     for (int i = 1; i < argc; i++)
-        if (wcscmp(argv[i], L"-Embedding") == 0 || wcscmp(argv[i], L"/Embedding") == 0 ||
-            wcscmp(argv[i], L"--com-activated") == 0)
-        { Line(L"COM-ACTIVATED (toastfire is a registration fixture; no activator implemented)"); return 0; }
+        if (wcscmp(argv[i], L"--com-activated") == 0) comActivated = true;
 
     std::wstring mode, method = L"start-shortcut", aumid, cls = L"informational";
     std::wstring title = L"demo toast", body = L"demo body", tag = L"toastfire", group = L"toastfire";
@@ -465,6 +594,9 @@ int wmain(int argc, wchar_t** argv)
             if (!mode.empty()) { Line(L"ERROR more than one mode given"); return 1; }
             mode = a.substr(2);
         }
+        else if (a == L"--com-activated") {}
+        else if (a == L"-Embedding" || a == L"/Embedding") {}   // appended by COM to the LocalServer32 command
+        else if (a == L"--idle-secs")   idleSecs = wcstol(need(i), nullptr, 10);
         else if (a == L"--method")      method = need(i);
         else if (a == L"--aumid")       aumid  = need(i);
         else if (a == L"--class")       cls    = need(i);
@@ -476,6 +608,13 @@ int wmain(int argc, wchar_t** argv)
         else if (a == L"--interval-ms") intervalMs = wcstol(need(i), nullptr, 10);
         else if (a == L"--help" || a == L"-h" || a == L"/?") { Usage(); return 0; }
         else { Line(L"ERROR unknown argument: " + a); Usage(); return 1; }
+    }
+    if (comActivated)
+    {
+        if (!mode.empty()) { Line(L"ERROR --com-activated is a mode of its own"); return 1; }
+        if (aumid.empty()) aumid = L"QubesToastfire.ComActivator";
+        if (idleSecs < 1 || idleSecs > 3600) { Line(L"ERROR --idle-secs out of range 1..3600"); return 1; }
+        return ComActivatedMain(aumid, idleSecs);
     }
     if (mode.empty()) { Usage(); return 1; }
 

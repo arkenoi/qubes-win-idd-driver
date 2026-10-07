@@ -32,15 +32,22 @@ static int g_workerRan;
 static HANDLE g_fakeThread = (HANDLE)0x7117;
 static int g_perrorCalls;
 static int g_logErrorCalls;
+static int g_logWarningCalls;
+static int g_workerAsksStop;      /* the SCM asks for the stop while the worker runs (the real order) */
 
 void _LogFormat(IN int level, IN BOOL raw, IN const char *fn, IN const WCHAR *fmt, ...)
 {
     (void)raw; (void)fn; (void)fmt;
     if (level == LOG_LEVEL_ERROR) g_logErrorCalls++;
+    if (level == LOG_LEVEL_WARNING) g_logWarningCalls++;
 }
 DWORD _win_perror(IN const char *fn, IN const WCHAR *prefix) { (void)fn; (void)prefix; g_perrorCalls++; return g_lastError; }
 DWORD _win_perror2(IN const char *fn, IN DWORD error, IN const WCHAR *prefix) { (void)fn; (void)prefix; g_perrorCalls++; return error; }
 DWORD GetLastError(void) { return g_lastError; }
+/* The interlocked intrinsics the wrapper uses for its stop latch; this harness is single-threaded (CreateThread
+   above runs the worker synchronously), so a plain read/write models them exactly. */
+LONG InterlockedExchange(volatile LONG *t, LONG v) { LONG old = *t; *t = v; return old; }
+LONG InterlockedCompareExchange(volatile LONG *t, LONG v, LONG cmp) { LONG old = *t; if (old == cmp) *t = v; return old; }
 
 BOOL StartServiceCtrlDispatcher(const SERVICE_TABLE_ENTRY *table)
 {
@@ -91,6 +98,10 @@ static DWORD WINAPI Worker(void *param)
 {
     PSERVICE_WORKER_CONTEXT ctx = param;
     (void)ctx;
+    /* A REQUESTED STOP, in the real order: the SCM calls the control handler while the worker is still
+       running, and the worker then finishes - here with whatever error the case gives it. */
+    if (g_workerAsksStop)
+        SvcCtrlHandlerEx(SERVICE_CONTROL_STOP, 0, NULL, NULL);
     return g_workerReturns;
 }
 
@@ -107,6 +118,7 @@ static void reset(void)
     memset(g_reported, 0, sizeof(g_reported));
     g_reportedCount = 0; g_workerReturns = 0; g_createThreadFails = 0; g_exitCodeThreadFails = 0;
     g_lastError = 0; g_threadResult = 0; g_workerRan = 0; g_perrorCalls = 0; g_logErrorCalls = 0;
+    g_logWarningCalls = 0; g_workerAsksStop = 0;
 }
 static const SERVICE_STATUS *last(void) { return g_reportedCount ? &g_reported[g_reportedCount - 1] : NULL; }
 static const SERVICE_STATUS *nth(DWORD state)
@@ -169,6 +181,27 @@ int main(void)
     SvcCtrlHandlerEx(SERVICE_CONTROL_STOP, 0, NULL, NULL);
     check("stop request: STOP_PENDING reported with exit code 0", last() && last()->dwCurrentState == SERVICE_STOP_PENDING && last()->dwWin32ExitCode == 0);
     free(g_Service); g_Service = NULL;
+
+    /* 7. A STOP THE SCM ASKED FOR IS NOT A FAILURE, whatever the worker returns (docs/ADR-supervision.md 5).
+          Measured 2026-10-06: a requested stop of QdbDaemon whose worker returned an error ended the service with
+          that error, so the SCM's armed recovery restarted it ~5 s later, behind an installer's device work. The
+          worker's outcome is still logged - a stop path that returns an error is a defect of ours. */
+    reset();
+    g_workerAsksStop = 1;
+    g_workerReturns = ERROR_TIMEOUT;
+    SvcMainLoop(L"QdbDaemon", 0, Worker, NULL, NULL, NULL);
+    check("requested stop: the last status is STOPPED", last() && last()->dwCurrentState == SERVICE_STOPPED);
+    check("requested stop: STOPPED carries exit code 0 - the SCM runs NO recovery action", last() && last()->dwWin32ExitCode == 0);
+    check("requested stop: the worker's error is still logged (at WARNING, not swallowed)", g_logWarningCalls >= 1);
+    check("requested stop: it is NOT logged as an unasked failure (no ERROR)", g_logErrorCalls == 0);
+
+    /* 8. the control case: the same worker error WITHOUT a stop request is still a failure the SCM must see */
+    reset();
+    g_workerAsksStop = 0;
+    g_workerReturns = ERROR_TIMEOUT;
+    SvcMainLoop(L"QdbDaemon", 0, Worker, NULL, NULL, NULL);
+    check("unasked exit: STOPPED still carries the worker's error (the recovery actions must fire)", last() && last()->dwWin32ExitCode == ERROR_TIMEOUT);
+    check("unasked exit: logged at ERROR", g_logErrorCalls >= 1);
 
     printf("%d checks, %d failed\n", g_run, g_fail);
     return g_fail ? 1 : 0;

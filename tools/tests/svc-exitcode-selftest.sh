@@ -78,5 +78,24 @@ if build defect "$OUT/service.orig.c"; then
     else say "FAIL  defect: the suite did NOT fail against the unpatched file (rc=$rc) - the test cannot see the defect"; bad=1; fi
 else say "FAIL  defect build: $(head -3 "$OUT/defect/build.err")"; bad=1; fi
 
+# ---- the knob for the REQUESTED-STOP exemption (docs/ADR-supervision.md 5) ------------------------------------
+# The patch has two halves: forward the worker's error (above), and never report it for a stop the SCM ASKED for.
+# A check never seen to fail is decoration, and the unpatched file cannot drive this one (it reports 0 for every
+# stop, asked or not), so the knob is the PATCHED file with only the exemption taken out: case 7 must then fail.
+python3 - "$OUT/service.patched.c" "$OUT/service.noexempt.c" <<'PY'
+import re, sys
+s = open(sys.argv[1]).read()
+m = re.search(r"\n        if \(InterlockedCompareExchange\(&g_StopRequested, 0, 0\) != 0\)\n        \{.*?\n        \}\n        else\n        \{\n(.*?)\n        \}\n", s, re.S)
+if not m:
+    sys.exit("the exemption branch was not found - the knob cannot be built")
+open(sys.argv[2], "w").write(s[:m.start()] + "\n" + m.group(1) + "\n" + s[m.end():])
+PY
+if [ -f "$OUT/service.noexempt.c" ] && build noexempt "$OUT/service.noexempt.c"; then
+    "$OUT/noexempt/run" >"$OUT/noexempt.out" 2>&1; rc=$?
+    if [ "$rc" -ne 0 ] && grep -q '^FAIL requested stop: STOPPED carries exit code 0' "$OUT/noexempt.out"; then
+        say "PASS  knob requested-exemption: with the exemption removed the suite FAILED as required (rc=$rc: $(grep -m1 '^FAIL' "$OUT/noexempt.out" | cut -c6-95))"
+    else say "FAIL  knob requested-exemption: the suite did NOT fail on a requested stop reporting the worker's error (rc=$rc)"; bad=1; fi
+else say "FAIL  knob requested-exemption: could not build the knob ($(head -2 "$OUT/noexempt/build.err" 2>/dev/null))"; bad=1; fi
+
 say "--- outputs in $OUT"
 exit $bad

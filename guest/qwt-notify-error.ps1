@@ -57,6 +57,9 @@
 #              'suppressed:duplicate', 'suppressed:cap', 'failed:transport', 'gated'). Transport
 #              failures are logged ONCE per process. An unwritable marker store means NO SEND
 #              (missing data fails: without persistence a relaunched helper would repeat).
+#   the window  'failed:transport' and 'gated' show the same text as a Windows message box on the
+#              console session (Show-QwtErrorWindow, WTSSendMessage) after the per-boot record is
+#              written - the same dedupe and cap as the dom0 notification; see the shower hook below.
 #
 # Windows PowerShell 5.1 (no ternary, no ??, no && chains). The test at
 # tools/tests/notifyerr-test.ps1 runs this file under pwsh on Linux with the hooks below
@@ -79,11 +82,45 @@ if (-not $script:QwtNotifyLauncher) {
     }
 }
 if (-not $script:QwtNotifyLogged) { $script:QwtNotifyLogged = @{} }
+# THE ERROR WINDOW (owner 2026-10-07; docs/ADR-supervision.md 6): when dom0 cannot be told - the transport failed, or
+# the operator's gate keeps the route off - the same text is shown as a Windows message box on the console session
+# through WTSSendMessage (the C twin: agent/gui-agent/errbox.h): a system-drawn box that exists on the desktop whether
+# or not the GUI agent is alive, which a live agent maps like any window and a restarted agent maps FIRST. Shown AFTER
+# the per-boot record is written, so it shares the dedupe and the cap: never a storm, never a box beside a dom0
+# notification for one error. Non-blocking, no timeout: the box stays until a human reads it. A test replaces the shower.
+if (-not $script:QwtNotifyBoxShower) {
+    $script:QwtNotifyBoxShower = {
+        param([string]$header, [string]$text)
+        if (-not ('QwtErrBox' -as [type])) {
+            Add-Type @'
+using System; using System.Runtime.InteropServices;
+public static class QwtErrBox {
+    [DllImport("kernel32.dll")] public static extern uint WTSGetActiveConsoleSessionId();
+    [DllImport("wtsapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    public static extern bool WTSSendMessageW(IntPtr hServer, uint SessionId, string pTitle, uint TitleLength,
+        string pMessage, uint MessageLength, uint Style, uint Timeout, out uint pResponse, bool bWait);
+}
+'@
+        }
+        $sid = [QwtErrBox]::WTSGetActiveConsoleSessionId()
+        if ($sid -eq [uint32]0xFFFFFFFF) { return $false }   # no console session: nobody to show it to
+        $title = $script:QwtNotifyBoxTitlePrefix
+        if ($header) { $title = $title + ' - ' + $header }
+        $resp = [uint32]0
+        # lengths in BYTES; Style = MB_OK (0) | MB_ICONERROR (0x10); Timeout 0 = none; bWait $false = do not wait
+        return [bool][QwtErrBox]::WTSSendMessageW([IntPtr]::Zero, $sid, $title, [uint32]($title.Length * 2), $text,
+                                                  [uint32]($text.Length * 2), [uint32]0x10, [uint32]0, [ref]$resp, $false)
+    }
+}
+if ($null -eq $script:QwtNotifyBoxWithoutRecord) { $script:QwtNotifyBoxWithoutRecord = $false }
 
 # --- constants (mirror notifyerr.h) ------------------------------------------------------------
 $script:QwtNotifyMaxText = 600
 $script:QwtNotifyMaxLines = 6
 $script:QwtNotifyCapPerBoot = 8
+# The title prefix of the error window - what the GUI agent recognizes the box by (main.c ErrBoxIsSystemBox); keep
+# identical to QERR_BOX_TITLE_PREFIX in agent/gui-agent/errbox.h.
+$script:QwtNotifyBoxTitlePrefix = 'Qubes Windows Tools'
 # Same key as QERR_BOOT_KEY in agent/gui-agent/notifyerr.h - the agent and this file must mint and
 # read ONE per-boot token, or a script and the agent would each dedupe against their own idea of
 # "this boot". Created REG_OPTION_VOLATILE, so the kernel drops it at shutdown.
@@ -272,6 +309,31 @@ function Format-QwtNotifyTechLine {
     return "$t; $Count. Evidence: $Evidence."
 }
 
+# --- the error window: ONE place it is shown from (mirrors notifyerr.c ShowWindowFallback) -------
+# $Status is what the route decided; the box appears only when dom0 was not told although the policy
+# said to tell it ('failed:transport', 'gated') - the same rule as the C twin's QerrWindowWanted.
+function Test-QwtNotifyWindowWanted {
+    param([string]$Status)
+    return ($Status -eq 'failed:transport' -or $Status -eq 'gated')
+}
+function Show-QwtErrorWindow {
+    param([string]$Status, [string]$Component, [string]$Id, [string]$Header, [string]$Text, [string]$Why)
+    if (-not (Test-QwtNotifyWindowWanted $Status)) { return }
+    try {
+        $shown = [bool](& $script:QwtNotifyBoxShower $Header $Text)   # GUARD:errbox
+        if ($shown) { & $script:QwtNotifyLog "QGAERRBOX $Component.$Id shown as an error window on the console session ($Why)" }
+        else { & $script:QwtNotifyLog "QGAERRBOX $Component.$Id could NOT be shown as an error window after $Why - the log is the only record" }
+    } catch { try { & $script:QwtNotifyLog "QGAERRBOX $Component.$Id could NOT be shown as an error window ($($_.Exception.Message)) after $Why - the log is the only record" } catch { } }
+}
+# No per-boot record could be written (no boot token, the store unwritable): no dedupe is possible, so the box is
+# shown at most ONCE per process - a window per call would storm, the defect the dedupe exists to prevent.
+function Show-QwtErrorWindowOnce {
+    param([string]$Component, [string]$Id, [string]$Header, [string]$Text, [string]$Why)
+    if ($script:QwtNotifyBoxWithoutRecord) { return }
+    $script:QwtNotifyBoxWithoutRecord = $true
+    Show-QwtErrorWindow -Status 'failed:transport' -Component $Component -Id $Id -Header $Header -Text $Text -Why $Why
+}
+
 # --- the entry point ------------------------------------------------------------------------
 function Send-QwtError {
     param(
@@ -284,7 +346,9 @@ function Send-QwtError {
         [string]$Tech = ''       # the technical line, Format-QwtNotifyTechLine
     )
     try {
-        if (-not (Get-QwtNotifyErrorsGate)) { return 'gated' }
+        # The gate is READ here and ACTED ON after the per-boot record: a gated error is not sent to dom0, but it is
+        # shown as a window (Jev 0.76: "not available" includes a disabled route), under the same dedupe and cap.
+        $gateOn = [bool](Get-QwtNotifyErrorsGate)
         $sevNum = 0
         if ($Severity -eq 'DEGRADED') { $sevNum = 1 }
         if ($Severity -eq 'ACTION') { $sevNum = 2 }
@@ -299,14 +363,15 @@ function Send-QwtError {
         $text = Format-QwtNotifyText -Header $Header -Next $Next -Cause $Cause -Tech $Tech
         $reason = Get-QwtNotifyRedactReason $text
         if ($reason) { & $script:QwtNotifyLog "$Component.$Id not sent: rejected:redact ($reason)"; return 'rejected:redact' }   # GUARD:redact
-
+        # GUARD:errboxdedupe
         $now = Get-QwtNotifyBootStamp
         # No boot identity means neither once-per-boot nor the cap can be honoured. Guessing would
         # either storm dom0 or swallow errors, so this fails LOUDLY - as SYSTEM this cannot happen
-        # by design, so it is a bug of ours, not a condition to degrade around.
+        # by design, so it is a bug of ours, not a condition to degrade around. The window is still
+        # the user's last chance to see it: once per process.
         # ONE LINE on purpose: the selftest proves this guard by DELETING its line, so a guard that
         # spans several lines would break the parse instead of failing a check.
-        if ($null -eq $now) { Write-QwtNotifyOnce 'boottoken' "no per-boot token (HKLM\$($script:QwtNotifyBootKey)) - dedupe and the per-boot cap cannot be honoured, so nothing is notified; errors are in the log only"; return 'failed:transport' }   # GUARD:boottoken
+        if ($null -eq $now) { Write-QwtNotifyOnce 'boottoken' "no per-boot token (HKLM\$($script:QwtNotifyBootKey)) - dedupe and the per-boot cap cannot be honoured, so nothing is notified; errors are in the log only"; Show-QwtErrorWindowOnce -Component $Component -Id $Id -Header $Header -Text $text -Why 'no boot identity'; return 'failed:transport' }   # GUARD:boottoken
         $markerPath = Join-Path $script:QwtNotifyStateDir "$Component.$Id"
         $countPath = Join-Path $script:QwtNotifyStateDir '.count'
         $markerBoot = Get-QwtNotifyKv (Read-QwtNotifySmall $markerPath) 'boot'
@@ -318,15 +383,24 @@ function Send-QwtError {
         if ($null -ne $countBoot -and $null -ne $count -and (Test-QwtNotifyBootMatch $countBoot $now)) { $have = [int]$count }
         if ($have -ge $script:QwtNotifyCapPerBoot) { & $script:QwtNotifyLog "$Component.$Id not sent: suppressed:cap"; return 'suppressed:cap' }   # GUARD:cap
 
-        # Persist the once-per-boot record BEFORE the transport. If this cannot be written there
-        # is no dedupe, and then there is no send (missing data fails).
+        # Persist the once-per-boot record BEFORE the transport - and before the choice between dom0 and
+        # the window, so the window shares it. If this cannot be written there is no dedupe, and then
+        # there is no send (missing data fails) and the window at most once per process.
         try {
             if (-not (Test-Path -LiteralPath $script:QwtNotifyStateDir)) { New-Item -ItemType Directory -Path $script:QwtNotifyStateDir -Force -ErrorAction Stop | Out-Null }
             [IO.File]::WriteAllText($markerPath, "boot=$now`n", [Text.Encoding]::ASCII)
             [IO.File]::WriteAllText($countPath, "boot=$now`ncount=$($have + 1)`n", [Text.Encoding]::ASCII)
         } catch {
             Write-QwtNotifyOnce 'store' "state dir $($script:QwtNotifyStateDir) is not writable - the route is OFF for this process (a notification with no once-per-boot record would repeat)"
+            Show-QwtErrorWindowOnce -Component $Component -Id $Id -Header $Header -Text $text -Why 'the state dir could not be written'
             return 'failed:transport'
+        }
+
+        # GATED: the operator turned the route off, so dom0 is not told - the user is, under the record just written.
+        if (-not $gateOn) {
+            & $script:QwtNotifyLog "$Component.$Id not sent to dom0: gated (service.notify-errors off) - shown as a window instead"
+            Show-QwtErrorWindow -Status 'gated' -Component $Component -Id $Id -Header $Header -Text $text -Why 'gated'
+            return 'gated'
         }
 
         $file = Join-Path $script:QwtNotifyStateDir ("out-$Component-" + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.txt')
@@ -334,18 +408,21 @@ function Send-QwtError {
             [IO.File]::WriteAllText($file, $text, [Text.Encoding]::Unicode)   # UTF-16LE + BOM, what notifhost reads
         } catch {
             Write-QwtNotifyOnce 'store' "cannot write $file - notification not sent"
+            Show-QwtErrorWindow -Status 'failed:transport' -Component $Component -Id $Id -Header $Header -Text $text -Why 'the notify file could not be written'
             return 'failed:transport'
         }
         # Two distinct failure kinds, each logged once: a missing exe is a PACKAGING GAP in the
         # reporting path itself; a launch that fails with the exe present is a runtime fault.
         if (-not (Test-Path -LiteralPath $script:QwtNotifyHostExe)) {
             Write-QwtNotifyOnce 'noexe' "notifhost.exe is NOT PRESENT at $($script:QwtNotifyHostExe) - dom0 notifications cannot be sent (packaging gap in the reporting path; the log remains the record)"
+            Show-QwtErrorWindow -Status 'failed:transport' -Component $Component -Id $Id -Header $Header -Text $text -Why 'notifhost.exe is missing'
             return 'failed:transport'
         }
         try {
             & $script:QwtNotifyLauncher $script:QwtNotifyHostExe $file
         } catch {
             Write-QwtNotifyOnce 'spawn' "notifhost --notify-file could not be started ($($_.Exception.Message)) - notification not sent; the log remains the record"
+            Show-QwtErrorWindow -Status 'failed:transport' -Component $Component -Id $Id -Header $Header -Text $text -Why 'notifhost could not be started'
             return 'failed:transport'
         }
         & $script:QwtNotifyLog "$Component.$Id sent to dom0 (#$($have + 1) this boot; delivery is notifhost's to log)"

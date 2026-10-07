@@ -393,6 +393,10 @@ function Restore-SweptBinaries { }
 function Remove-SweptAside { Rec 'sweep' }
 function Disable-XenbusMonitor { param([string]$Why = '', [switch]$FatalIfSurvives) Rec 'xbm'; if ($script:W['xbmFails']) { Fail 'xenbus_monitor survived its stop (test world)' } }
 function Set-QubesServiceRecovery { Rec 'recovery' }
+# The stop regions disarm the SCM's recovery before stopping one of our services (R1, 2026-10-07): the SCM is a
+# relauncher, and on a reinstall its actions were armed by the previous install. Recorded like every other call.
+function Suspend-QubesServiceRecovery { param([Parameter(Mandatory)][string]$Name) Rec "disarm:$Name"; return $true }
+function Resume-QubesServiceRecovery { param([string]$Name) Rec "rearm:$Name" }
 function Register-QwtEventSource { Rec 'evsrc' }
 function Register-QwtDeathReporter { param([string]$Root) Rec 'reporter' }
 # the RESULT writer as a recorder; the shipped one is dot-sourced in its own scenario (emit) and the recorder restored after
@@ -560,7 +564,7 @@ Check 'failure: an absent QdbDaemon is recorded ABSENT, flagged, and QrexecAgent
 New-World -Services @(@{ name = 'QdbDaemon'; status = 'Running'; startedAt = [datetime]'2026-10-04 10:28:00' }, @{ name = 'QrexecAgent'; status = 'Running' }, @{ name = 'QubesGuiWatchdog'; status = 'Running' }); Reset-Result
 $thrown = ''; try { Invoke-PostMsi } catch { $thrown = "$_" }
 Check 'violation: services found running right after msiexec are recorded in svc_msi_started with an ERROR line, and are not restarted' `
-      ($thrown -eq '' -and $script:Result.detail.svc_msi_started -eq 'QdbDaemon=Running,QrexecAgent=Running,QubesGuiWatchdog=Running' -and (Logged '^\[ERROR\] after msiexec: QdbDaemon=Running.*the MSI started them itself') -and @($script:W.calls | Where-Object { $_ -like 'start:*' }).Count -eq 0) "detail=$($script:Result.detail.svc_msi_started) calls=$(Calls)"
+      ($thrown -eq '' -and $script:Result.detail.svc_msi_started -eq 'QdbDaemon=Running,QrexecAgent=Running,QubesGuiWatchdog=Running' -and (Logged '^\[ERROR\] after msiexec: QdbDaemon=Running.*the serialized start did NOT hold') -and (Logged 'Started by:') -and @($script:W.calls | Where-Object { $_ -like 'start:*' }).Count -eq 0) "detail=$($script:Result.detail.svc_msi_started) calls=$(Calls)"
 Check 'violation: the serialized start then observes them as already-running (no flag of its own) - a running QrexecAgent is observed, never stopped to be held' `
       ("$($script:Result.detail.svc_serial_start)" -match '^QdbDaemon=already-running ready=[0-9.]+s; QrexecAgent=already-running; QubesGuiWatchdog=held-for-quiesce$' -and -not $script:Result.detail.Contains('svc_serial_start_failed') -and $script:QrexecAgentHeld -eq $false) "narr=$($script:Result.detail.svc_serial_start) held=$($script:QrexecAgentHeld)"
 try { Invoke-Release } catch { $thrown += "$_" }

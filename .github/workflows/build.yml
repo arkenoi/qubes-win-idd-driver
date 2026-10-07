@@ -600,7 +600,8 @@ jobs:
                            'TOASTHOLD_DEFECT_NORECLAIM', 'TOASTHOLD_DEFECT_NOIDENT_IGNORES_BRIDGE',
                            'TOASTHOLD_DEFECT_NOFORWARDBOUND', 'TOASTHOLD_DEFECT_NOCARD_UNPACED', 'TOASTHOLD_DEFECT_SIZE60',
                            'TOASTHOLD_DEFECT_DEADRECORDS', 'TOASTHOLD_DEFECT_NOBACKOFF',
-                           'TOASTIDENT_DEFECT_TIE_SLOTORDER', 'TOASTHOLD_DEFECT_RECLAIM_ANY')) {
+                           'TOASTIDENT_DEFECT_TIE_SLOTORDER', 'TOASTHOLD_DEFECT_RECLAIM_ANY',
+                           'TOASTIDENT_DEFECT_MARK_BY_SLOT')) {
             & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 `
                 /t:Rebuild "/p:ToastHoldDefect=$d"
             if ($LASTEXITCODE -ne 0) { throw "toasthold_test defect $d build failed to compile" }
@@ -785,7 +786,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "toasthold_bridge_test msbuild failed" }
           & $exe
           if ($LASTEXITCODE -ne 0) { throw "toasthold_bridge_test suite FAILED on the clean build" }
-          foreach ($d in @('TOASTIDENT_DEFECT_NOFOLD', 'TOASTIDENT_DEFECT_VERDICTOVERRIDE')) {
+          foreach ($d in @('TOASTIDENT_DEFECT_NOFOLD', 'TOASTIDENT_DEFECT_VERDICTOVERRIDE', 'TOASTIDENT_DEFECT_MARK_BY_SLOT')) {
             & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 `
                 /t:Rebuild "/p:ToastHoldBridgeDefect=$d"
             if ($LASTEXITCODE -ne 0) { throw "toasthold_bridge_test defect $d build failed to compile" }
@@ -795,6 +796,40 @@ jobs:
           }
           & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
           if ($LASTEXITCODE -ne 0) { throw "toasthold_bridge_test clean rebuild failed" }
+
+      - name: Toast actions suite (the actionable-buttons route's pure rules)
+        shell: pwsh
+        run: |
+          # tools/notifhost/toastactions_test.cpp over toastactions.h (docs/ADR-toasts.md 11): XML -> action list
+          # under the scope rules (protocol + Win32 COM-activator carried; packaged/background/inputs not), the
+          # all-or-nothing plan, generated keys the proxy accepts, the wire shape, the bounded per-notification
+          # table keyed by the proxy's id, ActionInvoked parsing + dispatch through a fake activator, the click
+          # ledger (cap, one outcome per click, the child-process step: reap/kill/keep), the bounded activator-lookup
+          # hand-off, and the choice
+          # after a failed activation (banner reopened vs dom0 notice). Clean build MUST pass; every defect build
+          # MUST FAIL (the same matrix runs with g++ on the dev qube: tools/tests/toastactions-selftest.sh).
+          $proj = 'tools\notifhost\toastactions_test.vcxproj'
+          $exe  = 'tools\notifhost\x64\Release\toastactions_test.exe'
+          & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
+          if ($LASTEXITCODE -ne 0) { throw "toastactions_test msbuild failed" }
+          & $exe
+          if ($LASTEXITCODE -ne 0) { throw "toastactions_test suite FAILED on the clean build" }
+          foreach ($d in @('TOASTACT_DEFECT_BACKGROUND_CARRIED', 'TOASTACT_DEFECT_PARTIAL_FORWARD', 'TOASTACT_DEFECT_PACKAGED_COM',
+                           'TOASTACT_DEFECT_BADKEY', 'TOASTACT_DEFECT_NONOTICE', 'TOASTACT_DEFECT_UNBOUNDED_TABLE',
+                           'TOASTACT_DEFECT_KEY_BY_SEQ', 'TOASTACT_DEFECT_NOCLICKBOUND', 'TOASTACT_DEFECT_NOKILL',
+                           'TOASTACT_DEFECT_DOUBLE_OUTCOME', 'TOASTACT_DEFECT_NOLOOKUPBOUND',
+                           'TOASTACT_DEFECT_AWAIT_FOR_INFO', 'TOASTACT_DEFECT_UNKNOWN_REFUSES',
+                           'TOASTACT_DEFECT_UNKNOWN_AS_KNOWN', 'TOASTACT_DEFECT_SCAN_PER_SENDER',
+                           'TOASTACT_DEFECT_SCAN_NORMAL_PRIORITY', 'TOASTACT_DEFECT_ALLOWLIST_BLIND')) {
+            & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 `
+                /t:Rebuild "/p:ToastActDefect=$d"
+            if ($LASTEXITCODE -ne 0) { throw "toastactions_test defect $d build failed to compile" }
+            & $exe
+            if ($LASTEXITCODE -eq 0) { throw "defect-reintroduction proof FAILED: toastactions_test passed with $d" }
+            Write-Host "defect proof OK: toast actions suite fails under $d"
+          }
+          & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
+          if ($LASTEXITCODE -ne 0) { throw "toastactions_test clean rebuild failed" }
 
       - name: Build wgcprobe
         shell: pwsh

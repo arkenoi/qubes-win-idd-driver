@@ -18,6 +18,15 @@
 //   row 5  only protocol actions                                         -> bridge
 //   row 6  only a system dismiss action, or no actions at all            -> bridge
 //
+// SINCE THE ACTIONABLE-BUTTONS ROUTE (docs/ADR-toasts.md 11, toastactions.h) row 4 is the
+// table's verdict over the XML ALONE, no longer the toast's route by itself: notifhost layers
+// ToastActionsBuild over this result, and a row-4 toast whose every banner button can be
+// carried as a dom0 action (protocol URIs; Win32 COM-activator foreground buttons of an
+// unpackaged sender with a registered activator) is forwarded WITH those actions, while any
+// button that cannot be carried keeps the whole toast on the window path, as here. Rows 5/6
+// are bridge as before and carry what they can. The table itself, its rows and this header's
+// fixtures are unchanged, and so is every other consumer (toastfire's self-check, --dump-wpndb).
+//
 // Documented edge cases (DESIGN-toast-bridge.md:174-177): placement="contextMenu"
 // actions are auxiliary (invisible on the banner) and are excluded from rows 4-6, so
 // contextMenu-only actions do NOT alone force the window path; buttons + a text box is
