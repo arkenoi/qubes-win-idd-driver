@@ -17,6 +17,34 @@ update's own command line, and a row is installed only when the installer succee
 a disagreement fails loudly. Reboots are counted: the guest requests, dom0 performs, none is speculative.
 Nothing is killed or adopted by name.
 
+**The qrexec protocol, and what the guest does with it.** dom0 calls one service -
+`qubes.WindowsUpdate` - and that service speaks the SAME contract as the Linux agent
+(`core-admin-linux vmupdate/qube_connection.py`), so dom0's own updater needs no Windows-specific
+knowledge:
+
+* progress is **bare float lines, 0..100, on STDERR**; dom0 parses each with `float(line)`, `100.0` ends
+  the progress phase, and any stderr line that is NOT a number is shown to the user as a message;
+* **stdout is logs**;
+* **exit 0 = success, exit 100 = no updates, anything else = an error.**
+
+Those floats must be formatted in the INVARIANT culture. PowerShell's `-f` formats with the current one,
+where `.` in a numeric format string is the decimal-separator placeholder - so on a German guest it emitted
+`75,0`, `float()` raised on every progress line from the first, and each one was displayed as a message
+instead of moving the bar. Only formatting that crosses this protocol needs that care; log text does not.
+
+Guest-side the handler (`guest/wu-update.ps1`) is a **protocol shim and nothing else**, because a qrexec
+handler runs unelevated and DISM needs admin. It baselines `update-status.json`, kicks the
+`QubesWindowsUpdateRun` SYSTEM scheduled task, tails that status file - which `qubes-windows-update.ps1`
+rewrites at every phase - and translates phases into the float protocol. Its waits are bounded: it never
+blocks dom0 indefinitely. Which on-demand task it drives is dom0's decision, not the guest's: the rpc
+service passes nothing and gets a full pass, while `vmupdate-shim.ps1` passes
+`QubesWindowsUpdateDownload` when dom0 asked for `--download-only`, so a download-only request cannot
+install. The `vmexec` feature is REQUIRED and must be set FROM DOM0 - the guest cannot advertise it for
+itself, and both fallback shapes fail before the shim is reached.
+
+In the other direction the guest uses two stock services: `qubes.NotifyUpdates` for the count (§2) and
+`qubes.UpdatesProxy`, through the relay, for every byte it fetches (§5).
+
 The whole path, in one picture (§1, §2, §4, §5, §12):
 
 ```mermaid
@@ -67,6 +95,7 @@ flowchart TD
 | 12 | Architecture: who does what, and who may touch which process | ACCEPTED (owner, Jev); shipped in 4.3.33 | 2026-10-03 |
 | 13 | The installer waits for a running scan; a refused updater deploy is never quiet | ACCEPTED (Jev); shipped in 4.3.35 | 2026-10-04 |
 | 14 | The cumulative goes first, and Windows is asked whether it registered it | ACCEPTED (Jev) | 2026-10-04 |
+| 15 | Outside data never becomes a command | ACCEPTED | 2026-10-07 |
 
 Status words and the section format are defined in `docs/ADR-README.md`.
 
@@ -510,3 +539,56 @@ restart blocks it - is inferred, not established, so the design does not rest on
 order rule ends in a truthful deferral or a failed row that requests the restart. The cost is at most
 one extra restart, and dom0 is told once that work is pending and a restart is required - the owner's
 rule - never that something will complete when it will not.
+
+---
+
+## 15. Outside data never becomes a command
+
+**Status:** ACCEPTED.
+
+**Decision.** The updater turns data it did not author - a host some process on the guest asked for, a file
+name from the Update Catalog, arguments from dom0 - into decisions and into arguments, never into a command
+line that something else parses.
+
+1. **No shell, anywhere on this path.** The relay spawns with `UseShellExecute = false`
+   (`guest/qubes-updates-relay.cs`, the `ProcessStartInfo` block); PowerShell calls native tools with `&` and
+   an argument array (`pnputil` takes `@('/add-driver', $inf.FullName, '/install')`). Nothing on this path
+   builds a string and hands it to `cmd /c`. A metacharacter in outside data therefore has nothing to mean.
+2. **A requested host decides a verdict; it never reaches an argument.** The relay parses the destination out
+   of `GET http://host/path` or `CONNECT host:443` only to answer the one question `Allowed(target)` asks,
+   and a disallowed one gets a FINAL 403 (§4). The spawn's four fields are
+   `target|qubes.UpdatesProxy|user|<self> --relay <port> <token>`: `<port>` is an int we bound, `<token>` is
+   one we minted, and the pass starts the relay with `--target @default --user SYSTEM` explicitly. **The host
+   the caller asked for appears in none of them** - that is the claim this section makes, and it is the one
+   that matters, because the relay is the one component whose input comes from whatever on the guest can
+   reach `127.0.0.1:8082`.
+   Two surfaces here are OURS rather than the caller's, and are written down so they are not mistaken for
+   guarantees:
+   - `target` falls back to the `QUBES_UPDATES_TARGET` environment variable when `--target` is absent, so
+     whoever can set this process's environment selects the qrexec target. The shipped path never relies on
+     that fallback, and dom0's qrexec policy - not this code - decides whether a call to any target is
+     allowed at all; that policy is the boundary, and this is a convenience inside it.
+   - the fields are joined with `|` and qrexec-client-vm splits on `|` without stripping quotes, so **no
+     field may contain a `|`** - including `<self>`, our own installed path. Nothing checks this today; it
+     holds because the path is `C:\Program Files\Qubes Tools\bin\...`.
+3. **A catalog file name is a path in our own working directory, passed as one argument.** `DISM /Online
+   /Add-Package /PackagePath:"$f"` quotes it, and `$f` is a file this pass fetched into `$WorkDir` - the name
+   comes from outside, the location does not.
+4. **dom0's arguments narrow, they do not compose.** `-OnlyKb` / `-OnlyUid` are matched against the offers a
+   pass already has; they are never interpolated into a command line, and they never narrow what dom0 is told
+   (§2.2).
+5. **Where a native tool's own parser forces a shape, the shape is documented at the call site AND asserted
+   by a test.** Two of ours have a parser of their own and both have bitten us:
+   `qrexec-client-vm.exe` splits its RAW command line on `|` and does not strip quotes, so the pipe string is
+   passed UNQUOTED and no field may contain a `|`; and `sc.exe failure <svc> ... actions=` rejects an empty
+   argument, which Windows PowerShell 5.1 silently produces from a bare `""`. The second one shipped three
+   times because its suite stubbed `sc.exe` as a PowerShell function - which cannot reproduce native argument
+   passing - and asserted the broken form as acceptable.
+6. **The verdict on such a call is the effect, not the exit code** (§3). A command line that a tool rejected,
+   or accepted and ignored, returns indistinguishably from one that worked; only reading back what it was
+   supposed to change tells them apart.
+
+**Why.** Our code never runs a vendor installer and never chooses its switches (§12): the vendor's own command
+line comes from the update's metadata and is executed by Windows Update's own installer. That rule removes the
+largest surface by construction. What remains is the handful of native tools we do call, and the rule for them
+is the same one: outside data is an argument or a decision, never syntax.
