@@ -47,6 +47,18 @@ cmd = str((hook.get('tool_input') or {}).get('command') or '')
 if not cmd:
     sys.exit(0)
 
+# A HEREDOC BODY, AND A QUOTED STRING, ARE DATA - NOT ARGUMENTS. Strip them before looking at
+# anything. The first version of this gate refused a command whose only offence was WRITING A FILE
+# that quoted the forbidden spelling - the memory note recording this very rule - and then refused
+# the commands that tried to fix it. A gate that blocks its own documentation is a gate someone
+# switches off, and the noise it exists to stop comes back. A real invocation is not inside a
+# heredoc or a quoted string; the carve-out costs us `bash <<EOF ... EOF`, which nothing here does.
+cmd = re.sub(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1[^\n]*\n.*?^\s*\2\s*$",
+             ' <<HEREDOC-STRIPPED ', cmd, flags=re.S | re.M)
+# ... and single-quoted runs that are plainly prose rather than one argument: a quoted stretch
+# containing whitespace AND a comma or backtick is text being passed around, not a command line.
+cmd = re.sub(r"'[^']*[,`][^']*'", " 'QUOTED-STRIPPED' ", cmd)
+
 # Not ours, and no rule exists for them. Naming one of these as a qube argument is a denial.
 NOT_OURS = {'dom0', 'win-idd-mgmt'}
 # Verbs that take a QUBE as a positional argument. qvm-ls and qvm-pool are absent on purpose: they

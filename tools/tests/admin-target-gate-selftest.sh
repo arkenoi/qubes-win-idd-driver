@@ -40,6 +40,15 @@ j(){ python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$1"; }
   && ok "C10 even inside an echo it is refused (conservative: the text is the only signal)" \
   || ok "C10 an echo mentioning it is allowed - acceptable either way, recorded"
 
+# THE OVER-BLOCK. The first version refused a command whose only offence was WRITING A FILE that
+# quoted the forbidden spelling - the memory note recording this rule - and then refused the
+# commands that tried to fix it. A gate that blocks its own documentation gets switched off, and
+# the noise comes back. A heredoc body is data, not arguments.
+hd=$(printf 'cat > m.md <<%sEOF%s\nnever qvm-ls --raw-data --fields NAME,TAGS, never qvm-tags dom0\nEOF\n' "'" "'")
+[ "$(run "$(j "$hd")")" = 0 ] \
+  && ok "C12 a heredoc that WRITES the forbidden spelling into a file -> allowed (it is data)" \
+  || bad "C12 over-blocks a file write that merely quotes the command"
+
 # the gate must be load-bearing
 [ "$(ADMIN_TARGET_GATE_DEFECT=1 run "$(j 'qvm-ls --raw-data --fields NAME,TAGS')" )" = 0 ] \
   && ok "C11 DEFECT RE-INTRODUCED: C1 is NOT blocked, so C1 proves the gate" \
