@@ -1,7 +1,7 @@
 #!/bin/bash
 # log-sweep.sh - the PROACTIVE LOG SWEEP as a post-step any harness can call after a run.
 #
-#   mgmt/harness/log-sweep.sh <vm> <since-utc> <outdir> [--fault-injection] [--marker FILE]...
+#   mgmt/harness/log-sweep.sh <vm> <since-utc> <outdir> [--fault-injection] [--marker FILE]... [--declare-error <regex> <why>]...
 #       <vm>         the guest (TAGGED win-idd-testbed; this is also QTEST_VM for every call - no default target)
 #       <since-utc>  logs modified / events recorded since this instant, as 2026-10-07T08:00:00Z (a harness passes
 #                    the time it started the run)
@@ -39,13 +39,19 @@ cd "$(git rev-parse --show-toplevel)" || exit 2
 
 VM="${1:-}"; SINCE="${2:-}"; OUT="${3:-}"
 if [ -z "$VM" ] || [ -z "$SINCE" ] || [ -z "$OUT" ]; then
-  echo "usage: $0 <vm> <since-utc e.g. 2026-10-07T08:00:00Z> <outdir> [--fault-injection] [--marker FILE]..." >&2; exit 2
+  echo "usage: $0 <vm> <since-utc e.g. 2026-10-07T08:00:00Z> <outdir> [--fault-injection] [--marker FILE]... [--declare-error <regex> <why>]..." >&2; exit 2
 fi
 shift 3
-FI_DECLARED=""; MARKERS=()
+DECL_PAT=(); DECL_WHY=(); FI_DECLARED=""; MARKERS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --fault-injection) FI_DECLARED=1 ;;
+    # A RUN THAT CAUSES AN ERROR DECLARES IT, with the stimulus named. The gate condition is that any
+    # UNDECLARED error line in our own logs is a defect (owner 2026-10-07: "Make clean error log the gate
+    # condition. Any error is fuckup!"), so a cell that ends a helper on purpose says so here rather than
+    # leaving the gate to read its own stimulus as the product's failure. A declaration that matches nothing
+    # is itself a breach, so this cannot be used as a standing allowlist.
+    --declare-error) DECL_PAT+=("${2:?--declare-error needs <regex> <why>}"); DECL_WHY+=("${3:?--declare-error needs <regex> <why>}"); shift 2 ;;
     --marker) [ -n "${2:-}" ] && [ -f "$2" ] || { echo "FAIL  --marker needs an existing file (got '${2:-}')" >&2; exit 2; }; MARKERS+=("$2"); shift ;;
     *) echo "FAIL  unknown option '$1'" >&2; exit 2 ;;
   esac
@@ -95,9 +101,21 @@ done
 log "pulled: $(grep -ac ': OK' "$OUT/decode.txt") blocks verified; $(grep -a '^DECODE FILEERR' "$OUT/decode.txt" | wc -l) read errors"
 
 # 2b. the context the caller declares, and the injection records it captured (evidence lives in the files, never in names)
-if [ -n "$FI_DECLARED" ]; then
-  printf '{"fault_injection_declared": true, "source": "log-sweep.sh --fault-injection (caller: %s)"}\n' "${0##*/}" > "$OUT/logs/context.json"
-  log "context: declared fault-injection (excuses nothing by itself; evidence decides)"
+if [ -n "$FI_DECLARED" ] || [ ${#DECL_PAT[@]} -gt 0 ]; then
+  python3 - "$OUT/logs/context.json" "${FI_DECLARED:-0}" "${0##*/}" "${#DECL_PAT[@]}" "${DECL_PAT[@]}" "${DECL_WHY[@]}" <<'PY'
+import json, sys
+out, fi, caller, n = sys.argv[1], sys.argv[2] == '1', sys.argv[3], int(sys.argv[4])
+pats, whys = sys.argv[5:5 + n], sys.argv[5 + n:5 + 2 * n]
+ctx = {"source": "log-sweep.sh (caller: %s)" % caller}
+if fi:
+    ctx["fault_injection_declared"] = True
+if n:
+    ctx["declared_errors"] = [{"pattern": p, "why": w} for p, w in zip(pats, whys)]
+with open(out, "w", encoding="utf-8") as f:
+    json.dump(ctx, f)
+PY
+  [ -n "$FI_DECLARED" ] && log "context: declared fault-injection (excuses nothing by itself; evidence decides)"
+  [ ${#DECL_PAT[@]} -gt 0 ] && log "context: ${#DECL_PAT[@]} declared error pattern(s) - one that matches nothing is itself a breach"
 fi
 if [ ${#MARKERS[@]} -gt 0 ]; then
   mkdir -p "$OUT/logs/markers"

@@ -158,6 +158,8 @@ DEFAULT_THRESHOLDS = {
     "agent_unrequested_deaths": {"max": 0, "severity": "P1", "why": "ADR-supervision 1: an unrequested death of ours is a major error"},
     "agent_deaths_at_shutdown": {"max": 0, "severity": "P1", "why": "a shutdown must stop the agent through the watchdog, never kill it"},
     "agent_relaunches_at_shutdown": {"max": 0, "severity": "P2", "why": "a relaunch into an ending session is the 2026-10-07 defect"},
+    "error_lines_undeclared": {"max": 0, "severity": "P2", "why": "owner 2026-10-07: a clean error log is THE gate condition - any error line our own code wrote, and that this run did not declare it caused, is a defect to fix at its cause (never to hide)"},
+    "declared_errors_unmatched": {"max": 0, "severity": "P2", "why": "a declared error that never appeared: the stimulus the run claims to have applied did not happen, so the run proved less than it says"},
     "agent_instances_per_shutdown": {"max": 1, "severity": "P2", "why": "one agent per shutdown; three = three vchan setups with dom0"},
     "agent_instances_per_boot": {"max": 1, "severity": "P2", "why": "the agent is started once per boot; a second instance is a death or a restart"},
     "agent_ends_unrecorded": {"max": 0, "severity": "P2", "why": "an agent log that stops with no requested stop and no death record"},
@@ -637,13 +639,22 @@ def load_context(logsdir):
     """context.json (written by the rig wrapper for --fault-injection) - a DECLARATION, not evidence."""
     p = os.path.join(logsdir, "context.json")
     if not os.path.exists(p):
-        return {"declared": False, "source": None}
+        return {"declared": False, "source": None, "declared_errors": []}
     try:
         with open(p, encoding="utf-8") as f:
             c = json.load(f)
-        return {"declared": bool(c.get("fault_injection_declared") or c.get("fault_injection")), "source": c.get("source")}
+        # declared_errors: [{"pattern": "<regex>", "why": "<the stimulus that caused it>"}]. A DECLARATION
+        # BELONGS TO THE RUN THAT CAUSED THE ERROR, never to a global list of errors we have decided to live
+        # with - that is the difference between a stimulus and hiding (owner 2026-10-07: "you should not HIDE
+        # it, you should find out why it is there and how to get rid of its cause properly"; Jev: a baseline
+        # exemption for the gate IS hiding, 0.64).
+        de = c.get("declared_errors") or []
+        if not isinstance(de, list):
+            de = []
+        return {"declared": bool(c.get("fault_injection_declared") or c.get("fault_injection")),
+                "source": c.get("source"), "declared_errors": de}
     except (OSError, ValueError) as e:
-        return {"declared": False, "source": "context.json unreadable: %s" % e}
+        return {"declared": False, "source": "context.json unreadable: %s" % e, "declared_errors": []}
 
 
 def load_logs(logsdir):
@@ -978,6 +989,7 @@ def join_fi(files, instances, agents, declared):
                 (hung["ts"] - reg["ts"]).total_seconds() * 1000, (back["ts"] - hung["ts"]).total_seconds() * 1000))
     evidenced = any(i["fi_build"] for i in instances) or bool(recs)
     ctx = {"fault_injection": bool(evidenced), "declared": bool(declared["declared"]), "declared_source": declared["source"],
+           "declared_errors": declared.get("declared_errors", []),
            "sources": sources, "records": recs, "detection_missing": missing,
            "unproven": bool(declared["declared"] and not evidenced)}
     return ctx
@@ -1108,7 +1120,7 @@ def build_structure(files, boots, declared=None):
             m = EV4001_RE.search(l.msg)
             ev_deaths.append({"exe": m.group(1) if m else "?", "pid": int(m.group(2)) if m else None, "code": m.group(3).lower() if m else None, "ts": l.ts, "line": l})
 
-    ctx = join_fi(files, instances, agents, declared or {"declared": False, "source": None})
+    ctx = join_fi(files, instances, agents, declared or {"declared": False, "source": None, "declared_errors": []})
     return {"launches": launches, "deaths": deaths, "goingdown": goingdown, "asked": asked, "gone": gone, "fastdeath": fastdeath,
             "preshutdown": preshutdown, "windows": windows, "instances": instances, "ev_deaths": ev_deaths, "events": events,
             "agents": agents, "watchdogs": watchdogs, "context": ctx}
@@ -1197,7 +1209,28 @@ def compute_metrics(files, boots, st, since, now=None):
     m["bugchecks"] = len([l for l in events if l.extra.get("log") == "System" and l.extra.get("id") == 1001 and "BugCheck" in (l.extra.get("provider") or "") and sel(l.ts)])
     m["task_failures"] = len([l for l in events if "TaskScheduler" in str(l.extra.get("log")) and l.extra.get("id") in (201, 203) and OUR_TASKS_RE.search(l.msg) and sel(l.ts)])
     m["fallbacks_fired"] = len([l for lf in files for l in lf.lines if FALLBACK_FIRED_RE.search(l.msg) and "fallback refused" not in l.msg and sel(l.ts)])
-    m["error_lines"] = len([l for lf in files for l in lf.lines if l.level == "E" and sel(l.ts)])
+    errs = [l for lf in files for l in lf.lines if l.level == "E" and sel(l.ts)]
+    m["error_lines"] = len(errs)
+    # THE OWNER'S GATE CONDITION, 2026-10-07: "Make clean error log the gate condition. Any error is fuckup!"
+    # Every error line in our own logs counts, EXCEPT one this run declared it caused (a fault injection, or a
+    # cell that ends a helper on purpose). Jev: zero-except-declared-injection 1.00; an exemption from the
+    # BASELINE would be hiding (0.64), so the baseline does not excuse anything here - it only says new vs known.
+    _decl, _bad = [], 0
+    for d in (st.get("context") or {}).get("declared_errors", []):
+        pat = d.get("pattern") if isinstance(d, dict) else None
+        if not pat:
+            _bad += 1
+            continue
+        try:
+            _decl.append(re.compile(pat))
+        except re.error:
+            _bad += 1   # a malformed declaration can match nothing, so it counts as one that never appeared
+    def _is_declared(line):
+        return any(rx.search(line.raw) for rx in _decl)
+    m["error_lines_undeclared"] = len([l for l in errs if not _is_declared(l)])
+    # a declaration that matches nothing is itself a finding: the stimulus it names did not happen, so the
+    # run proved less than it claims (the same rule as a check that has never been seen to fail)
+    m["declared_errors_unmatched"] = _bad + len([1 for rx in _decl if not any(rx.search(l.raw) for l in errs)])
     m["warning_lines"] = len([l for lf in files for l in lf.lines if l.level == "W" and sel(l.ts)])
     codes = Counter(d["code"] for d in st["deaths"] + st["goingdown"])
     for e in st["ev_deaths"]:

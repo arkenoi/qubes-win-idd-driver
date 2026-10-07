@@ -306,6 +306,16 @@ field(){ python3 -c "import json,sys; r=json.load(open(sys.argv[1])); print(eval
 for f in base newsig rise three stoperr empty twoboot skipnames skipchatty bootshut; do
   rc=$(decode "$SRC" "$T/$f.pull" "$T/$f")
   [ "$rc" = 0 ] || { echo "FATAL: the $f fixture did not decode (rc=$rc): $(tail -2 "$T/$f.decode.txt")"; exit 2; }
+  # EVERY LINE IN THESE CORPORA IS WRITTEN BY THIS TEST, so the run declares the errors it caused - which is
+  # what the gate condition asks of any run (owner 2026-10-07: a clean error log is the gate condition; Jev:
+  # zero-except-declared-injection 1.00). Without this the new threshold fires on the fixtures' own stimulus
+  # and every other assertion is measured through a breach that has nothing to do with it.
+  # ONLY where the fixture actually carries an error line - a declaration that matches nothing is itself a
+  # breach under the new rule, and declaring errors for a corpus that has none tripped exactly that on the
+  # clean fixture the first time round. The condition keeps the declarations honest as fixtures change.
+  if command grep -rqE '^\[[0-9]{8}\.[0-9]{6}\.[0-9]{3}-[0-9]+-E\]' "$T/$f/files" 2>/dev/null; then
+    printf '{"source": "log-sweep-selftest.sh fixture %s", "declared_errors": [{"pattern": ".", "why": "synthetic fixture: this suite wrote every line in it"}]}\n' "$f" > "$T/$f/context.json"
+  fi
 done
 cp -r "$T/base" "$T/missing" && rm "$T/missing/files/gui-agent-20261007-100031-1000.log"
 
@@ -543,6 +553,26 @@ rc=$(analyze "$SRC" "$T/three" "$T/baseline.json" "$T/jev-expected.py" t27)
 rl3=$(field "$T/t27.json" "r['metrics']['agent_relaunches_at_shutdown']")
 if [ "$rl3" -ge 1 ]; then ok "T27 the real shape still counts: a death at a shutdown followed by a launch = $rl3 relaunch(es)"
 else bad "T27 the 2026-10-07 defect shape now reports $rl3 relaunches - the fix silenced the metric instead of correcting it"; fi
+
+# T28 THE GATE CONDITION: an error line the run did not declare is a breach; a declared one is not; and a
+# declaration that matches nothing is a breach of its own (the stimulus it names did not happen).
+cp -r "$T/newsig" "$T/undeclared" && rm -f "$T/undeclared/context.json"
+rc=$(analyze "$SRC" "$T/undeclared" "$T/baseline.json" "$T/jev-expected.py" t28u)
+u=$(field "$T/t28u.json" "r['metrics']['error_lines_undeclared']"); b=$(field "$T/t28u.json" "[x['metric'] for x in r['breaches']]")
+if [ "$u" -ge 1 ] && printf '%s' "$b" | grep -q 'error_lines_undeclared'; then
+  ok "T28 an UNDECLARED error line breaches the gate (undeclared=$u)"
+else bad "T28 undeclared=$u breaches=$b - an error line nobody declared did not fail the gate"; fi
+rc=$(analyze "$SRC" "$T/newsig" "$T/baseline.json" "$T/jev-expected.py" t28d)
+d=$(field "$T/t28d.json" "r['metrics']['error_lines_undeclared']"); bd=$(field "$T/t28d.json" "[x['metric'] for x in r['breaches']]")
+if [ "$d" = 0 ] && ! printf '%s' "$bd" | grep -q 'error_lines_undeclared'; then
+  ok "T28 a DECLARED error line does not breach it (the stimulus the run caused)"
+else bad "T28 declared run: undeclared=$d breaches=$bd"; fi
+cp -r "$T/base" "$T/stale" && printf '{"source":"t28","declared_errors":[{"pattern":"ThisErrorNeverHappens0xDEAD","why":"a stimulus that was not applied"}]}\n' > "$T/stale/context.json"
+rc=$(analyze "$SRC" "$T/stale" "$T/baseline.json" "$T/jev-expected.py" t28s)
+sm=$(field "$T/t28s.json" "r['metrics']['declared_errors_unmatched']"); bs=$(field "$T/t28s.json" "[x['metric'] for x in r['breaches']]")
+if [ "$sm" -ge 1 ] && printf '%s' "$bs" | grep -q 'declared_errors_unmatched'; then
+  ok "T28 a declaration that matches NOTHING breaches too - the run proved less than it claims"
+else bad "T28 stale declaration: unmatched=$sm breaches=$bs"; fi
 
 # the collector must parse (the Linux pwsh is the same parser Windows PowerShell uses) when pwsh is present
 PWSH="${PWSH:-/home/user/pwsh/pwsh}"
