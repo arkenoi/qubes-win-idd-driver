@@ -19,10 +19,10 @@
 #                 cannot run while the system goes down - ERROR_SHUTDOWN_IN_PROGRESS)
 #   L6 toast      an actionable toast reaches dom0 WITH its actions, an informational one without and without
 #                 waiting for the action work; --click waits for the owner to press a button (no dom0 shell here)
-#   L7 pvnic      why QubesPvNicRearm is terminated (267014) instead of exiting: its limit and what -RearmOnly does
-#                 with an empty /netvm
-#   L7C control   the same read on a clone of the GOLDEN - an older package - which DATES the behaviour (Jev named
-#                 this as the measurement: "older, newly visible" 0.74, caused-today 0.00)
+#   L7 pvnic      the PV NIC shutdown re-arm LANDS its two registry writes (the measurement Jev named at 0.85) and
+#                 the next boot judges the previous session from the stamp, where a task can finish what it starts
+#   L7C control   the same measurement on a clone of the GOLDEN, whose package still has the defect: it DATES the
+#                 behaviour (Jev: "older, newly visible" 0.74, caused-today 0.00) and is where L7's check FAILS
 #
 # EVERY CELL: missing data FAILS. A wait has three exits and says which it took. Nothing is killed by name. The rig
 # lock is held for the whole run (mgmt/harness/vmlock.sh), and the log sweep grades the whole window at the end.
@@ -253,44 +253,80 @@ if has L6; then
   fi
 fi
 
-# ---- L7 the PV NIC re-arm's cause ----------------------------------------------------------------------------------
+# ---- L7 the PV NIC re-arm: do the writes LAND? ----------------------------------------------------------------------
+# The old shape: the task fired on User32 1074 (shutdown initiated) and its action was powershell.exe parsing a
+# ~500-line payload for two registry writes - about 2 s, inside the window where the Task Scheduler service
+# terminates actions as the system goes down. Last Result 267014 (0x41306 SCHED_S_TASK_TERMINATED) on every
+# shutdown, and qwt-report-death.ps1 ignores that code for every task, correctly - so a re-arm that never ran was
+# indistinguishable from one that completed. Jev: silent_hole 0.89, severity narrow-but-real 0.93, and the ONE
+# missing measurement "did the writes land" 0.85. That is what this cell measures, and L7C measures it with the
+# defect still present.
 if has L7; then
-  log "L7: why QubesPvNicRearm is terminated instead of exiting"
+  log "L7: the re-arm's writes land, and the boot run judges the previous session"
   cat > "$OUT/L7-probe.ps1" <<'PS'
 $ErrorActionPreference = 'Continue'
 function L($k,$v){ "L7|$k|$v" }
-$x = (& schtasks /query /tn QubesPvNicRearm /xml 2>&1 | Out-String)
-L 'limit' (([regex]::Match($x, '<ExecutionTimeLimit>([^<]+)')).Groups[1].Value)
-L 'trigger' (([regex]::Match($x, '<Subscription>([^<]{0,160})')).Groups[1].Value -replace '\s+',' ')
-L 'lastresult' ((([regex]::Match((& schtasks /query /tn QubesPvNicRearm /v /fo LIST 2>&1 | Out-String), '(?m)^\s*Last Result\s*:\s*(.+)$')).Groups[1].Value).Trim())
 $bin = 'C:\Program Files\Qubes Tools\bin'
+$x = (& schtasks /query /tn QubesPvNicRearm /xml 2>&1 | Out-String)
+L 'action_cmd' (([regex]::Match($x, '<Command>([^<]+)')).Groups[1].Value)
+L 'action_args' ((([regex]::Match($x, '<Arguments>([^<]{0,400})')).Groups[1].Value) -replace '\s+',' ')
+L 'limit' (([regex]::Match($x, '<ExecutionTimeLimit>([^<]+)')).Groups[1].Value)
+L 'lastresult' ((([regex]::Match((& schtasks /query /tn QubesPvNicRearm /v /fo LIST 2>&1 | Out-String), '(?m)^\s*Last Result\s*:\s*(.+)$')).Groups[1].Value).Trim())
 L 'netvm' ((& "$bin\qubesdb-read.exe" '/netvm' 2>&1 | Out-String).Trim())
-# what -RearmOnly does with no netvm: run it with a bound and record how it ends
+# the boot run's own judgement of the PREVIOUS session - the end-to-end signal, written where a task can finish
+L 'bootjudgement' (((Get-Content 'C:\ProgramData\QubesPvNic.log' -EA SilentlyContinue |
+                     Where-Object { $_ -match 'shutdown re-arm:' } | Select-Object -Last 1) -replace '\s+',' '))
+# DID THE WRITES LAND? Clear both, run the task, and watch. The latch is left ARMED either way.
+$stamp = 'C:\ProgramData\QubesPvNic-rearm.stamp'
+Remove-Item -LiteralPath $stamp -Force -EA SilentlyContinue
+& reg delete "HKLM\SYSTEM\CurrentControlSet\Services\XEN\Unplug" /v NICS /f 2>&1 | Out-Null
+L 'nics_cleared' (((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\XEN\Unplug' -EA SilentlyContinue).NICS -as [string]))
 $t0 = Get-Date
-$p = Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',"$bin\pvnic-boot.ps1",'-RearmOnly' -PassThru -WindowStyle Hidden
-if ($p.WaitForExit(120000)) { L 'rearm_exit' "$($p.ExitCode) after $([int]((Get-Date)-$t0).TotalSeconds)s" }
-else { L 'rearm_exit' "STILL RUNNING after 120s - it waits for something that is not coming"; try { $p.Kill() } catch {} }
+& schtasks /run /tn QubesPvNicRearm | Out-Null
+$landed = $false
+foreach ($i in 1..20) {
+    Start-Sleep -Milliseconds 500
+    $n = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\XEN\Unplug' -EA SilentlyContinue).NICS
+    if ((Test-Path -LiteralPath $stamp) -and $n -eq 1) { $landed = $true; break }
+}
+L 'writes_landed' ([string]$landed)
+L 'landed_after_ms' ([int]((Get-Date)-$t0).TotalMilliseconds)
+L 'nics_after' (((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\XEN\Unplug' -EA SilentlyContinue).NICS -as [string]))
+L 'stamp_after' (((Get-Item -LiteralPath $stamp -EA SilentlyContinue).LastWriteTime -as [string]))
+if (-not $landed) {
+    # leave the guest armed whatever the verdict was - the reading above is already recorded
+    & reg add "HKLM\SYSTEM\CurrentControlSet\Services\XEN\Unplug" /v NICS /t REG_DWORD /d 1 /f | Out-Null
+    L 'restored' 'the probe re-armed the latch itself'
+}
 L 'END' 'ok'
 PS
   guest_ps "$OUT/L7-probe.ps1" > "$OUT/L7.out" 2>&1
-  lim=$(grep -a '^L7|limit|' "$OUT/L7.out" | tail -1 | cut -d'|' -f3)
-  ex=$(grep -a '^L7|rearm_exit|' "$OUT/L7.out" | tail -1 | cut -d'|' -f3)
-  nv=$(grep -a '^L7|netvm|' "$OUT/L7.out" | tail -1 | cut -d'|' -f3)
-  if [ -n "$ex" ]; then
-    case "$ex" in
-      0*) verdict L7 PASS "-RearmOnly exits promptly with no netvm" "exit $ex, limit $lim, netvm '$nv'" ;;
-      *STILL*) verdict L7 FAIL "-RearmOnly exits promptly with no netvm" "it does not exit: $ex (limit $lim, netvm '$nv') - that is why the scheduler terminates it (267014)" ;;
-      *) verdict L7 FAIL "-RearmOnly exits promptly with no netvm" "exit $ex (limit $lim, netvm '$nv')" ;;
-    esac
+  g7(){ grep -a "^L7|$1|" "$OUT/L7.out" | tail -1 | cut -d'|' -f3-; }
+  ac=$(g7 action_cmd); wl=$(g7 writes_landed); ms=$(g7 landed_after_ms); bj=$(g7 bootjudgement); lr=$(g7 lastresult)
+  if [ -z "$wl" ]; then
+    verdict L7 INVALID "the re-arm's writes land and the boot run judges the previous session" \
+            "the probe produced no reading: $(tail -2 "$OUT/L7.out" | tr '\n' ' ' | cut -c1-180)"
+  elif ! printf '%s' "$ac" | grep -qi '^cmd.exe'; then
+    verdict L7 INVALID "the re-arm's writes land and the boot run judges the previous session" \
+            "the installed task still starts '$ac' - the artefact under test is NOT installed, so nothing here measures the fix"
+  elif [ "$wl" != True ]; then
+    verdict L7 FAIL "the re-arm's writes land" "writes_landed=$wl after ${ms:-?} ms (nics_after=$(g7 nics_after) stamp=$(g7 stamp_after))"
+  elif printf '%s' "$bj" | grep -q 'did not complete'; then
+    verdict L7 FAIL "the boot run judges the previous session" "the writes land (${ms} ms) but the boot run reports a MISSED arm: $bj"
+  elif [ -z "$bj" ]; then
+    verdict L7 INVALID "the boot run judges the previous session" "the writes land (${ms} ms) but the boot run left no 'shutdown re-arm:' line at all"
   else
-    verdict L7 INVALID "-RearmOnly exits promptly with no netvm" "$(tail -2 "$OUT/L7.out" | tr '\n' ' ' | cut -c1-180)"
+    verdict L7 PASS "the re-arm's writes land and the boot run judges the previous session" \
+            "landed in ${ms} ms with a stamp; boot run says '$bj'; task LastResult=$lr netvm='$(g7 netvm)'"
   fi
 fi
 
-# ---- L7C the control: the same read on an OLDER build ---------------------------------------------------------------
-# Jev, asked whether the QubesPvNicRearm termination is ours: "older behaviour, newly visible" 0.74, caused-today
-# 0.00, and the single measurement that would settle it is a CONTROL on an older package (plus reading the script,
-# which L7 does). The golden is never booted (it is a pristine base): the control is a clone of it.
+# ---- L7C the control: the same measurement with the DEFECT STILL PRESENT --------------------------------------------
+# Two jobs in one arm. It DATES the behaviour - Jev, asked whether the termination is ours: "older, newly visible"
+# 0.74, caused-today 0.00 - and it is the run where L7's check is seen to FAIL, which is what makes L7's PASS
+# evidence rather than decoration: the golden's package still has the powershell action and no stamp at all, so
+# writes_landed must come back False there while the subject comes back True.
+# The golden is never booted (it is a pristine base): the control is a clone of it.
 if has L7C; then
   CTL="${SUBJ}-ctl"
   log "L7C: the same read on a clone of $GOLDEN (the package that predates today's changes)"
@@ -305,15 +341,18 @@ if has L7C; then
     done
     if [ "$cd_ok" = 1 ]; then
       QTEST_VM="$CTL" timeout 300 ./tools/qtest pushrun "$OUT/L7-probe.ps1" > "$OUT/L7C.out" 2>&1
-      cl=$(grep -a '^L7|lastresult|' "$OUT/L7C.out" | tail -1 | cut -d'|' -f3)
-      cex=$(grep -a '^L7|rearm_exit|' "$OUT/L7C.out" | tail -1 | cut -d'|' -f3)
-      sl=$(grep -a '^L7|lastresult|' "$OUT/L7.out" 2>/dev/null | tail -1 | cut -d'|' -f3)
-      if [ -z "$cl$cex" ]; then
-        verdict L7C INVALID "the control dates the behaviour" "the probe produced nothing on $CTL: $(tail -2 "$OUT/L7C.out" | tr '\n' ' ' | cut -c1-160)"
-      elif printf '%s' "$cl" | grep -q '267014'; then
-        verdict L7C PASS "the termination PREDATES today - the control shows it too" "control($GOLDEN clone) LastResult=$cl rearm_exit='$cex'; subject=$sl"
+      c7(){ grep -a "^L7|$1|" "$OUT/L7C.out" | tail -1 | cut -d'|' -f3-; }
+      cl=$(c7 lastresult); cac=$(c7 action_cmd); cwl=$(c7 writes_landed); swl=$(grep -a '^L7|writes_landed|' "$OUT/L7.out" 2>/dev/null | tail -1 | cut -d'|' -f3)
+      if [ -z "$cac$cwl" ]; then
+        verdict L7C INVALID "the control shows the defect present" "the probe produced nothing on $CTL: $(tail -2 "$OUT/L7C.out" | tr '\n' ' ' | cut -c1-160)"
+      elif [ "$cwl" = False ] && [ "$swl" = True ]; then
+        verdict L7C PASS "the control shows the defect present - so L7's check has been seen to FAIL" \
+                "control($GOLDEN clone): action='$cac' writes_landed=False LastResult=$cl; subject: writes_landed=True"
+      elif [ "$cwl" = True ]; then
+        verdict L7C FAIL "the control shows the defect present" \
+                "the control ALSO lands its writes (action='$cac') - either it carries the fix or the defect was never there"
       else
-        verdict L7C FAIL "the termination predates today" "control LastResult=$cl (not 267014) while the subject reads $sl - it may be OURS after all"
+        verdict L7C INVALID "the control shows the defect present" "control writes_landed='$cwl' subject writes_landed='$swl' (one of them did not read)"
       fi
     else
       verdict L7C INVALID "the control dates the behaviour" "$CTL never answered (state $(qvm-ls --raw-data --fields STATE "$CTL" | tr -d '\n'))"
