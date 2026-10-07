@@ -1,0 +1,65 @@
+--- a/src/pipe-server.c
++++ b/src/pipe-server.c
+@@ -314,8 +314,24 @@
+         // reading will fail even if blocked when we call CancelIo() from QpsDisconnectClient
+         if (!ReadFile(pipe, buffer, server->PipeBufferSize, &transferred, NULL)) // this can block
+         {
+-            // win_perror("ReadFile");
+-            LogWarning("[%lld] read failed", client->Id);
++            // WHY THE READ ENDED, instead of one warning for every reason. This pipe protocol has
++            // no goodbye message - EOF IS the disconnect (qdb_close just closes the handles, and
++            // qrexec-client-vm's last act before exiting is CloseHandle(writePipe)) - so every
++            // completed session ended here, the error code was DISCARDED (the win_perror below was
++            // commented out) and an ordinary disconnect printed the same line as a real fault.
++            // Measured on a Qubes guest: 199 of these from qrexec-agent and ~60 from the qubesdb
++            // daemon in one install and three boots, all of them successful sessions. The Linux
++            // side returns the same event silently (qubes-core-qubesdb db-cmds.c: "/* EOF */ if
++            // (ret == 0) return 0;"), so this is a port artefact rather than the design.
++            // Every case that is NOT an expected end is now LOUDER than before: it gets ERROR
++            // level AND the Win32 code, which the old code-less warning never gave.
++            DWORD readError = GetLastError();
++            if (client->Disconnecting)
++                LogDebug("[%lld] read cancelled by our own disconnect (%lu)", client->Id, readError);
++            else if (readError == ERROR_BROKEN_PIPE || readError == ERROR_PIPE_NOT_CONNECTED)
++                LogDebug("[%lld] peer closed the pipe (end of session)", client->Id);
++            else
++                win_perror2(readError, "ReadFile(client pipe)");
+             // disconnect the client if the read failed because of other errors (broken pipe etc), it's harmless if we're already disconnecting
+             QpsReleaseClient(server, client);
+             QpsDisconnectClientInternal(server, param->ClientId, FALSE, TRUE);
+@@ -727,8 +743,19 @@
+             // that means we'll never have enough data: abort.
+             if (client->Disconnecting)
+             {
++                // HOW MUCH WAS PENDING decides what this is. Nothing pending = the consumer was
++                // between messages and the peer is gone: the ordinary end of a session. Some but
++                // not all of the requested bytes = a TRUNCATED message, i.e. a request lost in
++                // flight - which the old single warning could not be told apart from the clean
++                // case. That one is now an ERROR naming both counts, so this path gets LOUDER for
++                // the case that matters. The ERROR_BROKEN_PIPE return is unchanged either way, so
++                // no caller's control flow moves.
++                UINT64 pending = CmqGetUsedSize(client->ReadBuffer);
+                 QpsReleaseClient(Server, client);
+-                LogWarning("[%lld] client is disconnected", ClientId);
++                if (pending == 0)
++                    LogDebug("[%lld] peer gone, nothing pending", ClientId);
++                else
++                    LogError("[%lld] peer gone mid-message: %llu of %llu bytes", ClientId, pending, size);
+                 return ERROR_BROKEN_PIPE;
+             }
+ 
+@@ -756,9 +783,12 @@
+ 
+     if (client->Disconnecting)
+     {
+-        // pipe(s) broken, we won't be able to send anything
++        // pipe(s) broken, we won't be able to send anything. In a request/no-reply protocol a send
++        // to a peer that has already gone is an ordinary race, not a fault of this server's. The
++        // ERROR_BROKEN_PIPE return is unchanged, so a caller whose DATA MATTERED still decides and
++        // can be as loud as it likes - only this library's duplicate line goes quiet.
+         QpsReleaseClient(Server, client);
+-        LogWarning("[%lld] client is disconnected", ClientId);
++        LogDebug("[%lld] write to a peer that is already gone", ClientId);
+         return ERROR_BROKEN_PIPE;
+     }
+ 

@@ -217,6 +217,33 @@ jobs:
           if ($src -notmatch 'GetExitCodeThread\(g_Service->WorkerThread') { throw 'service-exit-code fix marker missing after patch' }
           if ($src -match 'UNREFERENCED_PARAMETER\(win32ExitCode\)') { throw 'the old exit-code swallow is still present after patching' }
           Write-Host "::notice title=windows-utils::service-exit-code fix applied"
+      # AN ORDINARY DISCONNECT IS NOT A WARNING. windows-utils' pipe server logged the normal END OF
+      # A CLIENT SESSION as "read failed" at WARNING with GetLastError DISCARDED (its win_perror was
+      # commented out), so a completed session and a real fault printed the same line. This protocol
+      # has no goodbye message - EOF IS the disconnect (qdb_close just closes the handles;
+      # qrexec-client-vm's last act is CloseHandle(writePipe)) - so every success ended there.
+      # Measured on a German 25H2 guest after one install and three boots: 199 of those lines from
+      # qrexec-agent and ~60 from the qubesdb daemon, all of them successful sessions, 259 of the 766
+      # error/warning lines in the whole log. The Linux side returns the same event silently
+      # (qubes-core-qubesdb db-cmds.c "/* EOF */ if (ret == 0) return 0;"), so it is a port artefact.
+      # The patch classifies WHY the read ended and makes every case that is NOT an expected end
+      # LOUDER than before - ERROR level AND the Win32 code, which the old code-less warning never
+      # gave - plus a new ERROR for a peer that goes away MID-MESSAGE, which used to print the same
+      # warning as a clean session end. Jev: root_cause_established 0.92, fix_is_real 0.88.
+      - name: Apply the windows-utils pipe-EOF classification fix (always)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = $env:GITHUB_WORKSPACE
+          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-pipe-eof.patch"
+          if ($LASTEXITCODE -ne 0) { throw "windows-utils pipe-EOF patch did not apply" }
+          # A patch that silently no-ops would ship the noise with a new version number.
+          $src = Get-Content "$ws\deps-src\windows-utils\src\pipe-server.c" -Raw
+          if ($src -notmatch 'peer closed the pipe \(end of session\)') { throw 'pipe-EOF marker missing after patch' }
+          if ($src -notmatch 'peer gone mid-message') { throw 'mid-message ERROR marker missing after patch' }
+          if ($src -notmatch 'win_perror2\(readError, "ReadFile\(client pipe\)"\)') { throw 'the loud non-EOF path is missing after patch' }
+          if ($src -match 'LogWarning\("\[%lld\] read failed"') { throw 'the unconditional read-failed warning is still present after patching' }
+          Write-Host "::notice title=windows-utils::pipe-EOF classification fix applied"
 
       # THE PRIVATE VOLUME IS OURS NOW. Stock's PreparePrivateImg custom action is one cold
       # `Get-Disk -Number 1` with Return="ignore": 4 of 28 clean Win10 installs finished with no Q:
