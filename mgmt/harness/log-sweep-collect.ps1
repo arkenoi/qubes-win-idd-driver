@@ -12,6 +12,10 @@
 #     set-gui-mode / qwtng-netsetup logs, bind-dirs, the module-bases and reboot-audit records - recursively;
 #     the NEWEST gui-watchdog and gui-agent logs are always included so the boot's launch lines are present;
 #   * C:\ProgramData\qubes-toast-bridge\bridge.log (+ .old);
+#   * EVERY OTHER LOG OF OURS OUTSIDE LogDir - the updater's C:\ProgramData\Qubes\wu\*.log (relay,
+#     relay-handler, agent), C:\ProgramData\QubesPvNic.log, QubesNetSetup.log, QubesIDD-diag.log, and
+#     the C:\ root's qubes-*/qwt-*/relocate-dir-* logs. Eight of these were read by NOTHING until
+#     2026-10-07, so the gate had never seen the update path, the PV NIC or the display driver;
 #   * the installer's logs: C:\qwt-improved-install.log (Install-QwtImproved.ps1 Write-Log), C:\qwt-install.log and
 #     C:\qwt-uninstall.log (msiexec /l*v, UTF-16 - re-encoded as UTF-8 here);
 #   * Windows event records since -SinceUtc, pre-filtered to what the sweep reads (docs/ADR-supervision.md):
@@ -53,6 +57,27 @@ $ErrorActionPreference = 'Continue'
 $Mark = 'LSW '
 $BridgeDir = 'C:\ProgramData\qubes-toast-bridge'
 $InstallerLogs = @('C:\qwt-improved-install.log', 'C:\qwt-install.log', 'C:\qwt-uninstall.log')
+
+# EVERY LOG OF OURS THAT IS NOT UNDER LogDir. MEASURED on a German 25H2 guest 2026-10-07, after an
+# install and three boots: 386 logs under Q:\Qubes Logs and TWELVE outside it, of which EIGHT were
+# collected by nothing - so the error gate had never read a line of them. They are not minor files:
+#   C:\ProgramData\Qubes\wu\qubes-updates-relay.log   67 KB   the whole dom0-driven update path
+#   C:\ProgramData\Qubes\wu\relay-handler.log         66 KB
+#   C:\ProgramData\Qubes\wu\agent.log                          the updater agent
+#   C:\ProgramData\QubesPvNic.log                               the PV NIC - and qwt-report-death's
+#       own impact text tells the user "its log (C:\ProgramData\QubesPvNic.log) names the step",
+#       pointing at a file the gate did not read
+#   C:\ProgramData\QubesNetSetup.log
+#   C:\ProgramData\QubesIDD-diag.log                            the display driver
+#   C:\qubes-win-idd-setup.log, C:\qubes-de-firstlogon.log, C:\relocate-dir-*.log
+# A clean error log is the gate condition, and a gate that reads some of the logs is not a gate.
+# THE REAL FIX IS ONE LOCATION - the writers belong under LogDir and are being moved there (BLog
+# went first, 7e349bac). This list closes the hole meanwhile, and keeps working for guests that
+# still carry the old paths. Owner: "keep logs in single place, sweep them together".
+$StrayLogDirs = @('C:\ProgramData', 'C:\ProgramData\Qubes', 'C:\ProgramData\Qubes\wu')
+$StrayLogRootFiles = @('C:\qubes-win-idd-setup.log', 'C:\qubes-de-firstlogon.log')
+$StrayLogRootGlobs = @('relocate-dir-*.log', 'qubes-*.log', 'qwt-*.log')
+$StrayLogRx = '(?i)^(Qubes[A-Za-z]*(-[A-Za-z]+)?|qubes-[a-z-]+|qwt-[a-z-]+|agent|relay-handler|dism[a-z-]*|vmexec|vmupdate-shim)\.log$'
 $OurExeRx = '(?i)\b(gui-agent|gui-watchdog|wgcbroker|notifhost|etwproxy|qrexec-agent|qrexec-wrapper|qrexec-client-vm|qubesdb-daemon|qwtng-netsetup|network-setup|relocate-dir|set-gui-mode|file-receiver|qubes-updates-relay|disable-autosleep|toastfire|winid|bind-dirs)(\.exe)?\b'
 $OurSvcRx = '(?i)(QdbDaemon|QrexecAgent|QubesGuiWatchdog|QgaWatchdog|QwtngNetSetup|Qubes [A-Za-z ]*(DB|qrexec|GUI|PV NIC)|Qubes Windows Tools)'
 $OurTaskRx = '(?i)\\?(Qwt[A-Za-z]+|Qubes[A-Za-z]+)'
@@ -142,7 +167,21 @@ if ($dirExists) {
 # C:\Users\Public\qwt-fi-*.txt: the knob files a fault-injection broker build reads (wgcbroker.cpp FiDeafHwnd) - their presence is
 # in-capture evidence of an injection; the analyzer keeps them as 'marker' files, never as a log.
 $fiKnobs = @(Get-ChildItem -LiteralPath 'C:\Users\Public' -Filter 'qwt-fi-*.txt' -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
-foreach ($p in @((Join-Path $BridgeDir 'bridge.log'), (Join-Path $BridgeDir 'bridge.log.old')) + $InstallerLogs + $fiKnobs) {
+# the stray logs enumerated above: only OUR names (StrayLogRx) from those directories, so a
+# third-party log in C:\ProgramData is never pulled off the guest
+$strays = [System.Collections.Generic.List[string]]::new()
+foreach ($d in $StrayLogDirs) {
+    if (-not (Test-Path -LiteralPath $d)) { continue }
+    foreach ($f in (Get-ChildItem -LiteralPath $d -Filter *.log -File -ErrorAction SilentlyContinue)) {
+        if ($f.Name -match $StrayLogRx) { $strays.Add($f.FullName) }
+    }
+}
+foreach ($g in $StrayLogRootGlobs) {
+    foreach ($f in (Get-ChildItem -LiteralPath 'C:\' -Filter $g -File -ErrorAction SilentlyContinue)) {
+        if ($f.Name -match $StrayLogRx) { $strays.Add($f.FullName) }
+    }
+}
+foreach ($p in @((Join-Path $BridgeDir 'bridge.log'), (Join-Path $BridgeDir 'bridge.log.old')) + $InstallerLogs + $StrayLogRootFiles + @($strays) + $fiKnobs) {
     if (Test-Path -LiteralPath $p) {
         $f = Get-Item -LiteralPath $p -ErrorAction SilentlyContinue
         if ($f -and $f.LastWriteTimeUtc -ge $sinceU) { $cands.Add($f) }
@@ -161,6 +200,31 @@ $verdictFirst = { param($f)
         '^qwt-.*install' { 2 }
         'bridge\.log'    { 3 }
         '^etwproxy'      { 4 }
+        # THE SOLE RECORD OF A WHOLE SUBSYSTEM IS NEVER CHATTY. These live outside LogDir, so each
+        # is the ONLY log its subsystem has: the dom0-driven update path (relay, relay-handler,
+        # agent), the PV NIC, the network setup, the display driver, and the first-boot/setup logs
+        # at the root of C:. Measured 2026-10-07: added to the candidate list, they ranked `default`
+        # and the 60-file cap - contested by 386 logs under LogDir - dropped them, so a WIDER window
+        # returned FEWER of them than a narrow one. A cap that can cost the evidence is a cap on the
+        # evidence, which is what the note below already says about the watchdog family.
+        # qwt-deaths.log IS THE RECORD OF EVERY DEATH NOTIFIED TO dom0, including the one the owner
+        # saw on his screen ("The Windows Update scan task failed"). Measured 2026-10-07: it ranked
+        # `default` and the cap DROPPED IT, because 368 qrexec-wrapper logs - one file per qrexec
+        # call - won the contest. The sweep could have reported on a run while discarding the list
+        # of what died in it. Same for the reboot audit and bind-dirs: one small file each, and the
+        # only record of their subject.
+        '^qwt-deaths\.log$'           { 2 }
+        '^reboot-audit\.log$'         { 5 }
+        '^bind-dirs(\.prev)?\.log$'   { 5 }
+        '^qubes-updates-relay\.log$'  { 5 }
+        '^relay-handler\.log$'        { 5 }
+        '^agent\.log$'                { 5 }
+        '^QubesPvNic\.log$'           { 5 }
+        '^QubesNetSetup\.log$'        { 5 }
+        '^QubesIDD-diag\.log$'        { 5 }
+        '^qubes-win-idd-setup\.log$'  { 5 }
+        '^qubes-de-firstlogon\.log$'  { 5 }
+        '^relocate-dir-'               { 5 }
         default          { 9 }
     }
 }
