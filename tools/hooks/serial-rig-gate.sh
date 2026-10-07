@@ -119,7 +119,14 @@ def segments(cmd):
 #             reading one of those names as an invocation is how this gate refused a plain
 #             `for f in ... mgmt/reprovision-usb.sh ...; do grep ...; done` on 2026-09-20.
 KW_PREFIX = {'if', 'elif', 'while', 'until', 'do', 'then', 'else', '!', 'time', '{', '}',
-             'nohup', 'exec', 'source', '.'}
+             'nohup', 'exec', 'source', '.',
+             # `command` and `builtin` only say WHICH grep to run - the command is the next word.
+             # Measured 2026-10-07: this gate refused `command grep ... quick-upgrade.out`, i.e.
+             # READING a running job's own evidence, which is the one moment that evidence matters
+             # (the same shape as the `cd` and `cp` exemptions below). `command grep` is the form
+             # this project uses deliberately: the tool-shell's bare `grep` is ugrep -I and skips
+             # non-UTF-8 guest captures.
+             'command', 'builtin'}
 KW_DATA = {'for', 'select', 'case', 'in', 'esac', 'fi', 'done', 'local', 'declare', 'export',
            'readonly', 'return', 'exit', 'break', 'continue', 'shift', 'set', 'unset', 'trap'}
 
