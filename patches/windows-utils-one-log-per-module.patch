@@ -1,15 +1,17 @@
 --- a/src/log.c
 +++ b/src/log.c
-@@ -47,6 +47,8 @@
+@@ -47,6 +47,10 @@
  static WCHAR g_Buffer[BUFFER_SIZE];
  static char g_BufferUtf8[CONVERT_MAX_BUFFER_LENGTH];
  static char g_PrefixBufferUtf8[CONVERT_MAX_BUFFER_LENGTH];
++// The log's own path, kept so LogFlush can reopen it: an append-only handle cannot be flushed.
++static WCHAR *g_LogFilePath = NULL;
 +// One line, one WriteFile: prefix, message and newline are composed here before the single write.
 +static char g_LineBufUtf8[CONVERT_MAX_BUFFER_LENGTH + 1024];
  
  static WCHAR g_LogLevelChar[] = {
      L'?',
-@@ -219,7 +221,9 @@
+@@ -219,7 +223,9 @@
  {
      SYSTEMTIME st;
      DWORD len = 0;
@@ -20,7 +22,7 @@
      WCHAR systemPath[MAX_PATH]; // this should be fine unless for some reason Windows dir is in a weird location
      DWORD versionMajor = 0, versionMinor = 0;
      HANDLE token;
-@@ -275,8 +279,7 @@
+@@ -275,8 +281,7 @@
      }
  
      if (FAILED(StringCchPrintf(logPath, MAX_PATH_LONG, format,
@@ -30,7 +32,7 @@
          )))
      {
          LogStart(NULL);
-@@ -376,6 +379,11 @@
+@@ -376,6 +381,11 @@
  {
      BYTE utf8Bom[3] = { 0xEF, 0xBB, 0xBF };
      DWORD len, status = ERROR_SUCCESS;
@@ -42,7 +44,7 @@
  
      if (!g_LoggerInitialized)
      {
-@@ -383,32 +391,54 @@
+@@ -383,32 +393,57 @@
  
          if (logfilePath)
          {
@@ -106,33 +108,64 @@
              }
  
 -            if (len == 0) // fresh file - write BOM
++            free(g_LogFilePath);
++            g_LogFilePath = _wcsdup(logfilePath);
++
 +            if (weCreatedTheLog) // fresh file - write BOM
              {
                  if (!WriteFile(g_LogfileHandle, utf8Bom, 3, &len, NULL))
                  {
-@@ -444,8 +474,20 @@
+@@ -444,8 +479,47 @@
  
  void LogFlush(void)
  {
-+    // Redundant now that a safe-flush log is write-through, and an append-only handle may refuse
-+    // it outright - so a failure is REPORTED ONCE instead of quietly doing nothing.
+-    if (g_LoggerInitialized && g_LogfileHandle != INVALID_HANDLE_VALUE)
+-        FlushFileBuffers(g_LogfileHandle);
++    // ITS CALLERS ARE THE ONES BEFORE ExitProcess (gui-agent lifecycle.c, at a session end), so this
++    // has to really flush. FlushFileBuffers documents a GENERIC_WRITE requirement that the
++    // append-only handle does not meet, so when it refuses, reopen the same file with write access
++    // and flush THAT: the cache is per file, so our appended lines go out with it. Per-line writes
++    // stay cached, so nothing in the hot path got slower to buy this.
 +    static BOOL flushFailureReported = FALSE;
 +
-     if (g_LoggerInitialized && g_LogfileHandle != INVALID_HANDLE_VALUE)
--        FlushFileBuffers(g_LogfileHandle);
++    if (!g_LoggerInitialized || g_LogfileHandle == INVALID_HANDLE_VALUE)
++        return;
++
++    if (FlushFileBuffers(g_LogfileHandle))
++        return;
++
++    if (g_LogFilePath)
 +    {
-+        if (!FlushFileBuffers(g_LogfileHandle) && !flushFailureReported)
++        HANDLE h = CreateFile(
++            g_LogFilePath,
++            GENERIC_WRITE,
++            FILE_SHARE_READ | FILE_SHARE_WRITE,
++            NULL,
++            OPEN_EXISTING,
++            FILE_ATTRIBUTE_NORMAL,
++            NULL);
++
++        if (h != INVALID_HANDLE_VALUE)
 +        {
-+            flushFailureReported = TRUE;
-+            fwprintf(stderr, L"LogFlush: FlushFileBuffers failed: error %d (the log is opened append-only; "
-+                             L"durability comes from FILE_FLAG_WRITE_THROUGH when safe flush is on)\n",
-+                     GetLastError());
++            BOOL flushed = FlushFileBuffers(h);
++            CloseHandle(h);
++            if (flushed)
++                return;
 +        }
++    }
++
++    // Both routes refused: the lines this call was meant to make durable may be lost on an abrupt
++    // end, and that is said once rather than never.
++    if (!flushFailureReported)
++    {
++        flushFailureReported = TRUE;
++        fwprintf(stderr, L"LogFlush: could not flush the log (error %d) - lines before an abrupt "
++                         L"process end may be lost\n", GetLastError());
 +    }
  }
  
  static void _LogFormatUnlocked(IN int level, IN BOOL raw, IN const char *functionName, IN const WCHAR *format, va_list args)
-@@ -459,7 +501,9 @@
+@@ -459,7 +533,9 @@
      size_t prefixBufferSize = 0;
      BOOL echoToStderr = level <= LOG_LEVEL_WARNING;
  
@@ -143,7 +176,7 @@
  #define PREFIX_FORMAT_FUNCNAME TEXT("%S: ")
      if (!raw)
      {
-@@ -468,7 +512,7 @@
+@@ -468,7 +544,7 @@
          prefixLen = swprintf_s(prefixBuffer, RTL_NUMBER_OF(prefixBuffer),
              functionName ? PREFIX_FORMAT PREFIX_FORMAT_FUNCNAME : PREFIX_FORMAT,
              st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
@@ -152,7 +185,7 @@
      }
  
      // format buffer
-@@ -489,42 +533,75 @@
+@@ -489,42 +565,75 @@
          goto cleanup;
      }
  
@@ -173,7 +206,8 @@
          {
 -            if (!WriteFile(g_LogfileHandle, g_PrefixBufferUtf8, (DWORD) prefixBufferSize, &written, NULL) || written != (DWORD) prefixBufferSize)
 +            if (!raw && prefixBufferSize > 0)
-+            {
+             {
+-                fwprintf(stderr, L"_LogFormat: WriteFile(prefix) failed: error %d\n", GetLastError());
 +                memcpy(g_LineBufUtf8, g_PrefixBufferUtf8, prefixBufferSize);
 +                lineSize = prefixBufferSize;
 +            }
@@ -185,8 +219,7 @@
 +                g_LineBufUtf8[lineSize++] = '\n';
 +
 +            if (!WriteFile(g_LogfileHandle, g_LineBufUtf8, (DWORD) lineSize, &written, NULL) || written != (DWORD) lineSize)
-             {
--                fwprintf(stderr, L"_LogFormat: WriteFile(prefix) failed: error %d\n", GetLastError());
++            {
 +                fwprintf(stderr, L"_LogFormat: WriteFile(line) failed: error %d\n", GetLastError());
                  goto cleanup;
              }

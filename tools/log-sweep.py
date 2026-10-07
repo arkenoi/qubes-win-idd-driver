@@ -344,7 +344,10 @@ class LogFile:
         self.total_lines = None
         self.written = None      # the collector's LastWriteTime (local), for dating BLog lines
         self.problems = []
-        # windows-utils instance facts
+        # windows-utils instance facts. ONE FILE CAN HOLD SEVERAL PROCESSES since 2026-10-07 (one
+        # file per module per day), so the single-value fields below are the LAST init's and are a
+        # hint only; `inits` is the real record and `pid` on each LINE is what identifies a process.
+        self.inits = []          # [{"ts","pid","uptime_s","boot_time","session","version"}] in order
         self.pid = None
         self.session = None
         self.version = None
@@ -417,18 +420,31 @@ def parse_winutils(lf, raw_lines):
             mm = re.match(r"Running as user: .*, process ID: (\d+)", msg)
             if mm:
                 lf.pid = int(mm.group(1))
+                # A NEW init record is a NEW PROCESS in this file, not an update to the old one.
+                lf.inits.append({"ts": ts, "pid": lf.pid, "uptime_s": None, "boot_time": None,
+                                 "session": None, "version": None})
             mm = re.match(r"System uptime: ([\d.]+) seconds", msg)
             if mm:
                 lf.uptime_s = float(mm.group(1))
                 lf.boot_time = ts - dt.timedelta(seconds=lf.uptime_s)
+                if lf.inits:
+                    lf.inits[-1]["uptime_s"] = lf.uptime_s
+                    lf.inits[-1]["boot_time"] = lf.boot_time
             mm = re.match(r"Session: (\d+)", msg)
             if mm:
                 lf.session = int(mm.group(1))
+                if lf.inits:
+                    lf.inits[-1]["session"] = lf.session
             mm = re.match(r"Module version: (\S+)", msg)
             if mm:
                 lf.version = mm.group(1)
+                if lf.inits:
+                    lf.inits[-1]["version"] = lf.version
     if lf.pid is None:
-        mm = re.search(r"-(\d+)\.log$", lf.name)
+        # ONLY the old per-process name shape carries a pid: "<module>-<yyyymmdd>-<hhmmss>-<pid>.log".
+        # The current shape is "<module>-<yyyymmdd>.log", and `-(\d+)\.log$` read that DATE as a
+        # process id - 20261007 - which then keyed every per-instance death and stop join.
+        mm = re.search(r"-\d{8}-\d{6}-(\d+)\.log$", lf.name)
         if mm:
             lf.pid = int(mm.group(1))
 
@@ -835,8 +851,12 @@ def cluster_boots(files):
                 cur = b["id"]
         return cur
     for lf in files:
+        # A FILE'S BOOT IS ONLY THE FILE'S WHEN THE FILE IS ONE PROCESS. With one file per module per
+        # day a file spans boots, and stamping every line with the LAST init's boot put a whole day's
+        # lines in one bucket - so a real per-boot rise could hide under a quiet neighbour.
+        one_process = len(lf.inits) <= 1
         for l in lf.lines:
-            l.boot = lf.boot if lf.boot else boot_for(l.ts)
+            l.boot = lf.boot if (lf.boot and one_process) else boot_for(l.ts)
     return boots
 
 
@@ -900,10 +920,14 @@ def m8_records(files, agents):
     return [r for r in recs if r.get("t_suspend")]
 
 
-def broker_events(lf):
-    """The broker supervision events of one agent instance, in order."""
+def broker_events(src):
+    """The broker supervision events of one agent instance, in order.
+
+    Takes the INSTANCE's own lines (or a LogFile, for callers that still have one): with one file per
+    module per day a file holds every process of the day, so a file's events are not an instance's.
+    """
     out = []
-    for l in lf.lines:
+    for l in getattr(src, "lines", src):
         if l.func not in ("BrokerSupervise", "BrokerRegister", "WgcLaunch"):
             continue
         m = BROKER_DIED_RE.match(l.msg)
@@ -939,13 +963,16 @@ def join_fi(files, instances, agents, declared):
     recs = m8_records(files, agents)
     sources = []
     for i in instances:
-        lf = next(f for f in agents if f.pid == i["pid"] and f.name == i["file"])
-        i["fi_build"] = any(FI_BANNER_RE.search(l.msg) for l in lf.lines)   # GUARD:ficontext DEFECT: i["fi_build"] = ("fi" in lf.name.lower())
-        i["fi_armed"] = any(FI_ARMED_RE.search(l.msg) for l in lf.lines)
-        i["broker_events"] = broker_events(lf)
+        # THE INSTANCE'S OWN LINES, not its file's. A file now holds every process of the day, so
+        # reading the banner file-wide put ONE fault-injection build's context on every other
+        # process of that day - and a line marked fi excuses a P1 broker death outright.
+        ilines = i.get("_lines") or []
+        i["fi_build"] = any(FI_BANNER_RE.search(l.msg) for l in ilines)   # GUARD:ficontext DEFECT: i["fi_build"] = ("fi" in i["file"].lower())
+        i["fi_armed"] = any(FI_ARMED_RE.search(l.msg) for l in ilines)
+        i["broker_events"] = broker_events(ilines)
         if i["fi_build"]:
-            sources.append("QGAFAULT-INIT banner in %s (pid %s)%s" % (lf.name, i["pid"], " - FAULTS ARE ARMED" if i["fi_armed"] else ""))
-            for l in lf.lines:
+            sources.append("QGAFAULT-INIT banner in %s (pid %s)%s" % (i["file"], i["pid"], " - FAULTS ARE ARMED" if i["fi_armed"] else ""))
+            for l in ilines:
                 l.fi = True
         for e in i["broker_events"]:
             e["fi"] = bool(i["fi_build"])   # GUARD:fideclared DEFECT: e["fi"] = bool(i["fi_build"]) or bool(declared["declared"])
@@ -1062,40 +1089,71 @@ def build_structure(files, boots, declared=None):
     for i, w in enumerate(windows):
         w["id"] = i + 1
 
-    # agent instances
+    # AGENT INSTANCES ARE PER PROCESS, NOT PER FILE. Until 2026-10-07 one agent log file WAS one
+    # agent process, so a file could stand in for an instance. The log is now one file per module per
+    # day, and reading a file as an instance collapsed every process that ran that day into one
+    # instance spanning the whole day - which silently zeroed the metric that exists for the
+    # three-instances-per-shutdown defect (agent_instances_per_shutdown), turned
+    # agent_relaunches_at_shutdown into 0, and with --since dropped the day-spanning instance
+    # altogether so agent_instances_per_boot read 0 and "nothing was running" looked like a clean run.
+    #
+    # The split is by the PID the patched logger now puts in every line's prefix, GROUPED rather than
+    # taken in consecutive runs, because concurrent processes interleave their lines in one file. A
+    # log with no pid in its prefix is an OLD one - written when the file really was per-process - so
+    # it stays a single instance keyed on the file's own init pid.
+    def _instance_groups(lf):
+        groups, order = {}, []
+        for l in lf.lines:
+            pid = (l.extra or {}).get("pid") or ""
+            key = int(pid) if pid else lf.pid   # GUARD:perfileinst DEFECT: key = lf.name
+            if key not in groups:
+                groups[key] = []
+                order.append(key)
+            groups[key].append(l)
+        return [(k, groups[k]) for k in order]
+
     instances = []
+    _segments = []
     for lf in sorted(agents, key=lambda f: (f.lines[0].ts if f.lines else dt.datetime.min)):
         if not lf.lines:
             continue
-        inst = {"pid": lf.pid, "file": lf.name, "boot": lf.boot, "session": lf.session, "version": lf.version,
-                "start": lf.lines[0].ts, "end": lf.lines[-1].ts, "lines": len(lf.lines),
-                "announces": sum(1 for l in lf.lines if l.func == "WatchForEvents" and l.msg.startswith("Awaiting for a vchan client")),
-                "connects": sum(1 for l in lf.lines if l.func == "WatchForEvents" and l.msg.startswith("A vchan client has connected")),
-                "handshake_refusals": sum(1 for l in lf.lines if "QGAHANDSHAKE" in l.msg),
-                "helper_launches": Counter(HELPER_LAUNCH_RE.search(l.msg).group(1) for l in lf.lines if HELPER_LAUNCH_RE.search(l.msg)),
-                "helper_deaths": sum(1 for l in lf.lines if HELPER_DEATH_RE.search(l.msg)),
-                "exit_logged": any(l.func == "WatchForEvents" and l.msg == "exiting" for l in lf.lines),
-                "end_kind": "unknown", "exit_code": None, "death": None, "stop": None, "errors_during_stop": [], "exit_errors": [], "_lines": lf.lines}
+        for _pid, _lines in _instance_groups(lf):
+            _segments.append((lf, _pid, _lines))
+    for lf, _pid, _lines in sorted(_segments, key=lambda t: (t[2][0].ts or dt.datetime.min)):
+        # the init record this process wrote, when it is in this file (it names the session/version)
+        _init = next((i for i in lf.inits if i["pid"] == _pid), None)
+        inst = {"pid": _pid, "file": lf.name,
+                "boot": (_lines[0].boot if len(lf.inits) > 1 else lf.boot),
+                "session": (_init or {}).get("session", lf.session) if _init else lf.session,
+                "version": (_init or {}).get("version", lf.version) if _init else lf.version,
+                "start": _lines[0].ts, "end": _lines[-1].ts, "lines": len(_lines),
+                "announces": sum(1 for l in _lines if l.func == "WatchForEvents" and l.msg.startswith("Awaiting for a vchan client")),
+                "connects": sum(1 for l in _lines if l.func == "WatchForEvents" and l.msg.startswith("A vchan client has connected")),
+                "handshake_refusals": sum(1 for l in _lines if "QGAHANDSHAKE" in l.msg),
+                "helper_launches": Counter(HELPER_LAUNCH_RE.search(l.msg).group(1) for l in _lines if HELPER_LAUNCH_RE.search(l.msg)),
+                "helper_deaths": sum(1 for l in _lines if HELPER_DEATH_RE.search(l.msg)),
+                "exit_logged": any(l.func == "WatchForEvents" and l.msg == "exiting" for l in _lines),
+                "end_kind": "unknown", "exit_code": None, "death": None, "stop": None, "errors_during_stop": [], "exit_errors": [], "_lines": _lines}
         # PIDs are recycled across boots: a watchdog record belongs to this instance only if it falls in its lifetime
         lo, hi = inst["start"] - dt.timedelta(seconds=2), inst["end"] + dt.timedelta(seconds=120)
         in_life = lambda ts: ts is not None and lo <= ts <= hi
-        d = next((x for x in deaths + goingdown if x["pid"] == lf.pid and in_life(x["ts"])), None)
+        d = next((x for x in deaths + goingdown if x["pid"] == _pid and in_life(x["ts"])), None)
         if d:
             inst["end_kind"] = "died" if d["kind"] == "unrequested" else "going-down"
             inst["exit_code"] = d["code"]
             inst["death"] = {"ts": d["ts"], "code": d["code"], "kind": d["kind"], "line": d["line"].raw}
-        if lf.pid in asked and in_life(asked[lf.pid].ts):
-            a = asked[lf.pid]
-            g = gone.get(lf.pid)
+        if _pid in asked and in_life(asked[_pid].ts):
+            a = asked[_pid]
+            g = gone.get(_pid)
             if g and not in_life(g[0].ts):
                 g = None
             inst["end_kind"] = "requested-stop"
             inst["stop"] = {"asked": a.ts, "gone": g[0].ts if g else None, "code": g[1] if g else None, "asked_line": a.raw, "gone_line": g[0].raw if g else None}
             inst["exit_code"] = g[1] if g else None
             hi = (g[0].ts if g else a.ts + dt.timedelta(seconds=10)) + dt.timedelta(milliseconds=500)
-            inst["errors_during_stop"] = [l for l in lf.lines if l.level == "E" and l.ts and a.ts <= l.ts <= hi]   # GUARD:stoperr DEFECT: inst["errors_during_stop"] = []
-        inst["exit_errors"] = [l for l in lf.lines if l.level == "E" and l.ts and (inst["end"] - l.ts).total_seconds() <= 2.0]
-        inst["stale_errors"] = [l for l in lf.lines if l.level == "E" and STALE_ERR_RE.search(l.msg)]
+            inst["errors_during_stop"] = [l for l in _lines if l.level == "E" and l.ts and a.ts <= l.ts <= hi]   # GUARD:stoperr DEFECT: inst["errors_during_stop"] = []
+        inst["exit_errors"] = [l for l in _lines if l.level == "E" and l.ts and (inst["end"] - l.ts).total_seconds() <= 2.0]
+        inst["stale_errors"] = [l for l in _lines if l.level == "E" and STALE_ERR_RE.search(l.msg)]
         instances.append(inst)
 
     # join instances / launches / deaths / announcements to the shutdown windows
@@ -1714,7 +1772,10 @@ def cmd_analyze(a):
         "out_of_context": [sig_json(s) for s in cmp["out_of_context"]],
         "header": {"label": a.label, "since": fmt_ts(since) if since else None, "generated": utcnow_iso(), "logsdir": os.path.abspath(a.logsdir),
                    "baseline": a.baseline, "files": len(files), "lines": sum(lf.scanned for lf in files), "boots": len(boots), "shutdowns": len(st["windows"]),
-                   "inventory": meta.get("inventory"), "invmodules": meta.get("invmodules") or [],
+                   # CORPUS MODE HAS NO META (load_logs returns None for a plain directory of
+                   # collected logs), so this must not reach into it - reading it unguarded crashed
+                   # `analyze <dir>` outright, and no test covered that mode.
+                   "inventory": (meta or {}).get("inventory"), "invmodules": (meta or {}).get("invmodules") or [],
                    "agent_instances": len(st["instances"]), "collector": meta.get("begin") if meta else None},
         "data_problems": problems,
         "files": [{"name": lf.name, "family": lf.family, "scanned": lf.scanned, "parsed": len(lf.lines), "ignored": lf.ignored, "unparsed": lf.unparsed, "skipped": lf.skipped,

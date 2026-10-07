@@ -226,6 +226,32 @@ def with_inventory(src, out, files=386, lines=41000, nbytes=5 * 1048576, mods=((
     write(out, L)
 with_inventory("base.pull", "inv.pull")
 
+# twoproc: ONE agent file holding TWO processes, written the way the patched logger writes - the
+# prefix carries pid:tid, and the file name carries only the date. This is the shape that made
+# "one file = one instance" collapse every process of the day into one, which zeroed the metric the
+# three-instances-per-shutdown defect is measured by. The two processes INTERLEAVE, because that is
+# what concurrent appenders to one file do.
+def wu2(t, pid, tid, lvl, func, msg):   # the patched prefix: [YYYYMMDD.HHMMSS.mmm-PID:TID-L]
+    return "[%s.%s-%d:%d-%s] %s: %s" % (D, t, pid, tid, lvl, func, msg)
+def agent_two_procs():
+    A, B = 1000, 1100
+    L = []
+    for pid, t0, up in ((A, "100031.200", "31.200"), (B, "100131.200", "91.200")):
+        L += [wu2(t0, pid, pid + 1, "I", "LogInit", "Log started, module name: gui-agent"),
+              wu2(t0, pid, pid + 1, "I", "LogInit", "System uptime: %s seconds" % up),
+              wu2(t0, pid, pid + 1, "I", "LogInit", "Running as user: SYSTEM, process ID: %d" % pid),
+              wu2(t0, pid, pid + 1, "I", "LogInit", "Session: 1"),
+              wu2(t0, pid, pid + 1, "I", "WatchForEvents", "Awaiting for a vchan client")]
+    # interleaved tails, so neither process's lines are contiguous in the file
+    L += [wu2("100200.000", A, A + 1, "I", "WatchForEvents", "A vchan client has connected"),
+          wu2("100200.100", B, B + 1, "I", "WatchForEvents", "A vchan client has connected"),
+          wu2("100200.200", A, A + 1, "I", "WatchForEvents", "exiting"),
+          wu2("100200.300", B, B + 1, "I", "WatchForEvents", "exiting")]
+    return L
+TP = [("gui-agent-%s.log" % D, "agent", agent_two_procs()),
+      ("gui-watchdog-%s.log" % D, "watchdog", watchdog())]
+write("twoproc.pull", stream(TP, ["EV NONE [Application]"]))
+
 # ---- fault-injection context fixtures (coordinator correction 2026-10-07) ----
 BANNER = [wu("100031.300", 200, "W", "FiInit", "QGAFAULT-INIT build=QGA-FAULT-INJECTION:on armdelay=30s negcreate=0(hwnd=0x0) ringstall=0s pumpstall=0s pumplose=0 captureexit=0 dupcreate=0 legacysend=0 rawcreate=0 pwfail=0 gateoff=0x0 damagedelay=0ms")]
 def broker_seq(reg="100500.000", hung="100502.008", died="100502.008", reap="100502.015", back="100502.540", pid=4000, with_hung=True, with_reap=True):
@@ -318,7 +344,7 @@ analyze(){ # $1=analyzer $2=logsdir $3=baseline $4=judge $5=tag -> rc; report at
 field(){ python3 -c "import json,sys; r=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$1" "$2"; }
 
 # ---- decode every fixture with the real decoder --------------------------------------------------------------------
-for f in base newsig rise three stoperr empty twoboot skipnames skipchatty bootshut inv; do
+for f in base newsig rise three stoperr empty twoboot skipnames skipchatty bootshut inv twoproc; do
   rc=$(decode "$SRC" "$T/$f.pull" "$T/$f")
   [ "$rc" = 0 ] || { echo "FATAL: the $f fixture did not decode (rc=$rc): $(tail -2 "$T/$f.decode.txt")"; exit 2; }
   # EVERY LINE IN THESE CORPORA IS WRITTEN BY THIS TEST, so the run declares the errors it caused - which is
@@ -540,6 +566,30 @@ rc=$(analyze "$SRC" "$T/base" "$T/baseline.json" "$T/jev-expected.py" t29k)
 if grep -q 'LOGDIR INVENTORY: absent' "$T/t29k.txt" && grep -q 'NOT KNOWN' "$T/t29k.txt"; then
   ok "T29 knob 'no inventory': the check is SEEN TO FAIL - the volume is reported as NOT KNOWN"
 else bad "T29 knob: a stream without an inventory does not say the volume is unknown"; fi
+
+# T30 AN AGENT INSTANCE IS A PROCESS, NOT A FILE. The log is one file per module per day now, so a
+# file holds every process that ran that day. Reading a file as an instance collapsed them into one
+# instance spanning the whole day, which zeroed agent_instances_per_shutdown - the metric the
+# three-instances-per-shutdown defect is measured by - and, with --since, dropped the day-spanning
+# instance entirely so agent_instances_per_boot read 0 and "nothing ran" looked like a clean run.
+rc=$(analyze "$SRC" "$T/twoproc" "$T/baseline.json" "$T/jev-expected.py" t30)
+ni=$(field "$T/t30.json" "r['metrics']['agent_instances']")
+pids=$(field "$T/t30.json" "sorted(i['pid'] for w in r['structure']['windows'] for i in w['instances']) if r.get('structure') else []")
+if [ "$ni" = 2 ]; then
+  ok "T30 two processes in ONE file are two instances (agent_instances=$ni)"
+else bad "T30 agent_instances=$ni for one file holding two processes (want 2)"; fi
+# the per-process facts must not be the whole file's: each instance announced ONCE, so a per-instance
+# sum over the shared file would read 2 and breach vchan_reconnects on an ordinary day
+vr=$(field "$T/t30.json" "r['metrics']['vchan_reconnects']")
+if [ "$vr" = 0 ]; then
+  ok "T30 per-instance counts are that process's own (vchan_reconnects=0, not a false breach)"
+else bad "T30 vchan_reconnects=$vr - the per-instance sums are counting the whole shared file"; fi
+# SEEN TO FAIL: with the per-file keying restored, the same corpus must read ONE instance
+K=$(knob perfileinst); rc=$(analyze "$K" "$T/twoproc" "$T/baseline.json" "$T/jev-expected.py" t30k)
+nik=$(field "$T/t30k.json" "r['metrics']['agent_instances']")
+if [ "$nik" = 1 ]; then
+  ok "T30 knob 'perfileinst': the check is SEEN TO FAIL - keying on the file reads $nik instance for two processes"
+else bad "T30 knob 'perfileinst' did not collapse the instances (agent_instances=$nik, want 1)"; fi
 
 # T23 a filter on a key that does not exist must not silently zero a metric (knob: winkey - the defect I shipped
 # for ten minutes while fixing T21, caught only because shutdowns_in_window=0 contradicted shutdowns=5)

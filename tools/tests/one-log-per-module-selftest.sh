@@ -137,11 +137,24 @@ command grep -qF 'if (bufferSize == 0)' "$SRC" \
 # g_SafeFlush exists so a line is on disk before a crash, and it was serviced by FlushFileBuffers -
 # which documents a GENERIC_WRITE requirement an append-only handle does not meet. Left alone, this
 # fix would have turned safe flush into a silent no-op. The OS does it at the open instead.
-if command grep -qF 'FILE_FLAG_WRITE_THROUGH' "$SRC" && command grep -qF 'flushFailureReported' "$SRC"; then
-  ok "safe_flush_survives: a safe-flush log is opened write-through, and LogFlush reports a refusal once"
+# The property is not "a flag is mentioned": it is that LogFlush still FLUSHES when the append-only
+# handle refuses. Its two real callers are agent/gui-agent/lifecycle.c:148 and :156, immediately
+# before ExitProcess at a session end - the lines that explain a shutdown. An earlier version of
+# this check passed on two greps while durability was gated on a registry value the MSI ships as 0,
+# which left exactly that hole open.
+flushblk=$(sed -n '/^void LogFlush/,/^}/p' "$SRC")
+if printf '%s' "$flushblk" | command grep -qF 'GENERIC_WRITE' \
+   && printf '%s' "$flushblk" | command grep -qF 'OPEN_EXISTING' \
+   && printf '%s' "$flushblk" | command grep -qF 'may be lost' \
+   && command grep -qF 'g_LogFilePath = _wcsdup' "$SRC"; then
+  ok "flush_still_flushes: LogFlush reopens the file with write access when the append handle refuses, and says so if both routes fail"
 else
-  bad "safe_flush_survives: durability still rests on FlushFileBuffers, which an append-only handle can refuse"
+  bad "flush_still_flushes: LogFlush cannot flush an append-only handle and has no second route - the lines before ExitProcess can be lost silently"
 fi
+# and the write-through path for a configured safe flush is still there
+command grep -qF 'FILE_FLAG_WRITE_THROUGH' "$SRC" \
+  && ok "safe_flush_honoured: a log configured for safe flush is still opened write-through" \
+  || bad "safe_flush_honoured: the configured safe-flush path is gone"
 
 # ---- 8b. EVERY LINE NAMES ITS PROCESS ----------------------------------------------------------
 # The pid used to live in the FILE NAME and nowhere else. With one file per module a line that does
