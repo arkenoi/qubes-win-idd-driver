@@ -107,14 +107,29 @@ inline std::wstring QwtLogDir()
 // Log file basename: bridge.log for every notifhost.exe mode; etwproxy.exe switches BOTH
 // values to {QwtLogDir(), etw-proxy.log} BEFORE its first BLog (it runs under a different
 // account - the bridge state dir's ACLs may deny it bridge.log, and interleaving two
-// accounts' writers would be noise anyway). Empty g_logDirOverride = use StateDir().
+// accounts' writers would be noise anyway).
+//
+// THE DEFAULT DIRECTORY IS THE COMMON QWT LOG DIRECTORY, not the bridge's state directory.
+// It was StateDir() from the first bridge commit (0c9f5ebc, 2026-09-04) for no recorded reason
+// beyond that directory already existing for the bridge's state - the stop file, the heartbeat,
+// the banner markers. The day after, etwproxy's log was deliberately pointed at QwtLogDir() with
+// a reason written down, which left the bridge the only QWT component logging somewhere else, and
+// nobody went back. The cost is not theoretical: a reader who opens the QWT log directory to find
+// out what the notification bridge did finds no bridge log there at all, and only a tool that
+// already knows about this path can collect it. Owner, 2026-10-07: "we have one common log
+// location!"
+//
+// There is no ACL obstacle, measured on a German 25H2 guest the same day: Q:\Qubes Logs carries
+// NT AUTHORITY\Authenticated Users:(I)(M) inherited onto files, so the bridge's interactive-user
+// process can append there. The state directory keeps the bridge's CONTROL surfaces, which is
+// what its restrictive ACLs are for; a log is not a control surface.
 inline const wchar_t* g_logName = L"\\bridge.log";
 inline std::wstring g_logDirOverride;
 
 inline void BLog(const wchar_t* fmt, ...)
 {
     static std::wstring path;
-    if (path.empty()) path = (g_logDirOverride.empty() ? StateDir() : g_logDirOverride) + g_logName;
+    if (path.empty()) path = (g_logDirOverride.empty() ? QwtLogDir() : g_logDirOverride) + g_logName;
     wchar_t line[2048];
     SYSTEMTIME st; GetLocalTime(&st);
     int off = swprintf(line, RTL_NUMBER_OF(line), L"%02u:%02u:%02u ", st.wHour, st.wMinute, st.wSecond);
