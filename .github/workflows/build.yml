@@ -383,6 +383,31 @@ jobs:
           if ($src -notmatch 'win_perror2\(readError, "ReadFile\(client pipe\)"\)') { throw 'the loud non-EOF path is missing after patch' }
           if ($src -match 'LogWarning\("\[%lld\] read failed"') { throw 'the unconditional read-failed warning is still present after patching' }
           Write-Host "::notice title=windows-utils::pipe-EOF classification fix applied"
+      # ONE LOG FILE PER MODULE PER DAY instead of one per PROCESS. Measured on a German 25H2 guest
+      # after one install and three boots: 386 log files, 368 of them qrexec-wrapper-*.log, one per
+      # qrexec call - which also starved the sweep's 60-file budget and made it skip the death
+      # record the gate exists to read. The date stays in the name because PurgeOldLogs deletes by
+      # creation time, so a dateless name would eventually have the retention sweep delete the live
+      # log. Several processes now share one file, so each line is composed and written with ONE
+      # WriteFile to an append-only handle - that single call is what the OS makes atomic.
+      # Jev: sink=one-file-per-module-single-write-append 0.79 (conf 0.72), append_atomic 0.84.
+      - name: Apply the windows-utils one-log-per-module fix (always)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = $env:GITHUB_WORKSPACE
+          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-one-log-per-module.patch"
+          if ($LASTEXITCODE -ne 0) { throw "windows-utils one-log-per-module patch did not apply" }
+          # A patch that silently no-ops would ship the file explosion with a new version number.
+          $src = Get-Content "$ws\deps-src\windows-utils\src\log.c" -Raw
+          if ($src -notmatch 'FILE_APPEND_DATA \| FILE_READ_ATTRIBUTES') { throw 'append-only open marker missing after patch' }
+          if ($src -notmatch 'WriteFile\(g_LogfileHandle, g_LineBufUtf8') { throw 'the single-write line marker is missing after patch' }
+          if ($src -notmatch '%s-%04d%02d%02d\.log') { throw 'per-module log name marker missing after patch' }
+          if ($src -match 'GetCurrentProcessId\(\)\s*\)\)\)') { throw 'the log name still carries the pid after patching' }
+          if ($src -match '%02d%02d%02d-%d\.log') { throw 'the per-process log name is still present after patching' }
+          if ($src -notmatch '%03d-%d:%d-%c') { throw 'the pid is missing from the line prefix after patch' }
+          if ($src -notmatch 'FILE_FLAG_WRITE_THROUGH') { throw 'safe flush would be a no-op on an append-only handle after patch' }
+          Write-Host "::notice title=windows-utils::one-log-per-module fix applied"
       - name: Shadow every set-version script with the QWT-NG stamper; unify version files
         shell: pwsh
         run: |

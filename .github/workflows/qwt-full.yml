@@ -244,6 +244,24 @@ jobs:
           if ($src -notmatch 'win_perror2\(readError, "ReadFile\(client pipe\)"\)') { throw 'the loud non-EOF path is missing after patch' }
           if ($src -match 'LogWarning\("\[%lld\] read failed"') { throw 'the unconditional read-failed warning is still present after patching' }
           Write-Host "::notice title=windows-utils::pipe-EOF classification fix applied"
+      # ONE LOG FILE PER MODULE PER DAY instead of one per PROCESS - see build.yml for the measured
+      # numbers and the reason the date stays in the name.
+      - name: Apply the windows-utils one-log-per-module fix (always)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = $env:GITHUB_WORKSPACE
+          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-one-log-per-module.patch"
+          if ($LASTEXITCODE -ne 0) { throw "windows-utils one-log-per-module patch did not apply" }
+          $src = Get-Content "$ws\deps-src\windows-utils\src\log.c" -Raw
+          if ($src -notmatch 'FILE_APPEND_DATA \| FILE_READ_ATTRIBUTES') { throw 'append-only open marker missing after patch' }
+          if ($src -notmatch 'WriteFile\(g_LogfileHandle, g_LineBufUtf8') { throw 'the single-write line marker is missing after patch' }
+          if ($src -notmatch '%s-%04d%02d%02d\.log') { throw 'per-module log name marker missing after patch' }
+          if ($src -match 'GetCurrentProcessId\(\)\s*\)\)\)') { throw 'the log name still carries the pid after patching' }
+          if ($src -match '%02d%02d%02d-%d\.log') { throw 'the per-process log name is still present after patching' }
+          if ($src -notmatch '%03d-%d:%d-%c') { throw 'the pid is missing from the line prefix after patch' }
+          if ($src -notmatch 'FILE_FLAG_WRITE_THROUGH') { throw 'safe flush would be a no-op on an append-only handle after patch' }
+          Write-Host "::notice title=windows-utils::one-log-per-module fix applied"
 
       # THE PRIVATE VOLUME IS OURS NOW. Stock's PreparePrivateImg custom action is one cold
       # `Get-Disk -Number 1` with Return="ignore": 4 of 28 clean Win10 installs finished with no Q:

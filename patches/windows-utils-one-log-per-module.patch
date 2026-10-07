@@ -1,0 +1,245 @@
+--- a/src/log.c
++++ b/src/log.c
+@@ -47,6 +47,8 @@
+ static WCHAR g_Buffer[BUFFER_SIZE];
+ static char g_BufferUtf8[CONVERT_MAX_BUFFER_LENGTH];
+ static char g_PrefixBufferUtf8[CONVERT_MAX_BUFFER_LENGTH];
++// One line, one WriteFile: prefix, message and newline are composed here before the single write.
++static char g_LineBufUtf8[CONVERT_MAX_BUFFER_LENGTH + 1024];
+ 
+ static WCHAR g_LogLevelChar[] = {
+     L'?',
+@@ -219,7 +221,9 @@
+ {
+     SYSTEMTIME st;
+     DWORD len = 0;
+-    WCHAR *format = L"%s\\%s-%04d%02d%02d-%02d%02d%02d-%d.log";
++    // ONE FILE PER MODULE PER DAY, not one per process. The date stays because PurgeOldLogs
++    // deletes by ftCreationTime: a dateless name would eventually have it delete the LIVE log.
++    WCHAR *format = L"%s\\%s-%04d%02d%02d.log";
+     WCHAR systemPath[MAX_PATH]; // this should be fine unless for some reason Windows dir is in a weird location
+     DWORD versionMajor = 0, versionMinor = 0;
+     HANDLE token;
+@@ -275,8 +279,7 @@
+     }
+ 
+     if (FAILED(StringCchPrintf(logPath, MAX_PATH_LONG, format,
+-        logDir, g_LogName, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
+-        GetCurrentProcessId()
++        logDir, g_LogName, st.wYear, st.wMonth, st.wDay
+         )))
+     {
+         LogStart(NULL);
+@@ -376,6 +379,11 @@
+ {
+     BYTE utf8Bom[3] = { 0xEF, 0xBB, 0xBF };
+     DWORD len, status = ERROR_SUCCESS;
++    BOOL weCreatedTheLog = FALSE;
++    // SAFE FLUSH IS DECIDED BEFORE THE OPEN, because the OPEN implements it now:
++    // FlushFileBuffers wants GENERIC_WRITE, which an append-only handle does not have, so leaving
++    // durability to it would make safe flush a silent no-op. Write-through does it at the source.
++    DWORD logFlags = FILE_ATTRIBUTE_NORMAL;
+ 
+     if (!g_LoggerInitialized)
+     {
+@@ -383,32 +391,54 @@
+ 
+         if (logfilePath)
+         {
++            // FILE_APPEND_DATA WITHOUT FILE_WRITE_DATA is what makes a single WriteFile atomic
++            // against the other writers; FILE_SHARE_WRITE lets them open it at all. Each line is
++            // written in ONE call, so two processes interleave lines but never bytes within one.
++            DWORD safeFlushCfg = 0;
++            if (CfgReadDword(g_LogName, LOG_CONFIG_FLUSH_VALUE, &safeFlushCfg, NULL) != ERROR_SUCCESS)
++                safeFlushCfg = 0;
++            if (safeFlushCfg != 0)
++                logFlags |= FILE_FLAG_WRITE_THROUGH;
++
+             g_LogfileHandle = CreateFile(
+                 logfilePath,
+-                GENERIC_WRITE,
+-                FILE_SHARE_READ,
++                FILE_APPEND_DATA | FILE_READ_ATTRIBUTES,
++                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                 NULL, // fixme: security attrs
+-                OPEN_ALWAYS,
+-                FILE_ATTRIBUTE_NORMAL,
++                CREATE_NEW,
++                logFlags,
+                 NULL);
+ 
+-            if (g_LogfileHandle == INVALID_HANDLE_VALUE)
++            // THE BOM BELONGS TO WHOEVER CREATES THE FILE. OPEN_ALWAYS plus a length check lets
++            // two simultaneous starters both read zero and both write one; one CREATE_NEW wins.
++            if (g_LogfileHandle != INVALID_HANDLE_VALUE)
+             {
+-                status = GetLastError();
+-                fwprintf(stderr, L"LogStart: CreateFile(%s) failed: error %d\n", logfilePath, GetLastError());
+-                goto fallback;
++                weCreatedTheLog = TRUE;
++            }
++            else if (GetLastError() == ERROR_FILE_EXISTS)
++            {
++                // Somebody else owns the BOM; we only append after it. DECLARED, not handled: a
++                // delete between the failed CREATE_NEW and this open drops THIS process to stderr
++                // for its lifetime - only the age-based purge deletes here, so it needs a
++                // retention near zero, and the next process recreates the file.
++                g_LogfileHandle = CreateFile(
++                    logfilePath,
++                    FILE_APPEND_DATA | FILE_READ_ATTRIBUTES,
++                    FILE_SHARE_READ | FILE_SHARE_WRITE,
++                    NULL, // fixme: security attrs
++                    OPEN_EXISTING,
++                    logFlags,
++                    NULL);
+             }
+ 
+-            // seek to end
+-            len = SetFilePointer(g_LogfileHandle, 0, 0, SEEK_END);
+-            if (INVALID_SET_FILE_POINTER == len)
++            if (g_LogfileHandle == INVALID_HANDLE_VALUE)
+             {
+                 status = GetLastError();
+-                fwprintf(stderr, L"LogStart: SetFilePointer(%s) failed: error %d\n", logfilePath, GetLastError());
++                fwprintf(stderr, L"LogStart: CreateFile(%s) failed: error %d\n", logfilePath, status);
+                 goto fallback;
+             }
+ 
+-            if (len == 0) // fresh file - write BOM
++            if (weCreatedTheLog) // fresh file - write BOM
+             {
+                 if (!WriteFile(g_LogfileHandle, utf8Bom, 3, &len, NULL))
+                 {
+@@ -444,8 +474,20 @@
+ 
+ void LogFlush(void)
+ {
++    // Redundant now that a safe-flush log is write-through, and an append-only handle may refuse
++    // it outright - so a failure is REPORTED ONCE instead of quietly doing nothing.
++    static BOOL flushFailureReported = FALSE;
++
+     if (g_LoggerInitialized && g_LogfileHandle != INVALID_HANDLE_VALUE)
+-        FlushFileBuffers(g_LogfileHandle);
++    {
++        if (!FlushFileBuffers(g_LogfileHandle) && !flushFailureReported)
++        {
++            flushFailureReported = TRUE;
++            fwprintf(stderr, L"LogFlush: FlushFileBuffers failed: error %d (the log is opened append-only; "
++                             L"durability comes from FILE_FLAG_WRITE_THROUGH when safe flush is on)\n",
++                     GetLastError());
++        }
++    }
+ }
+ 
+ static void _LogFormatUnlocked(IN int level, IN BOOL raw, IN const char *functionName, IN const WCHAR *format, va_list args)
+@@ -459,7 +501,9 @@
+     size_t prefixBufferSize = 0;
+     BOOL echoToStderr = level <= LOG_LEVEL_WARNING;
+ 
+-#define PREFIX_FORMAT TEXT("[%04d%02d%02d.%02d%02d%02d.%03d-%d-%c] ")
++// pid:tid, NOT tid alone: the pid was carried by the file NAME and nothing else, and a shared file
++// whose lines do not name their process is unreadable.
++#define PREFIX_FORMAT TEXT("[%04d%02d%02d.%02d%02d%02d.%03d-%d:%d-%c] ")
+ #define PREFIX_FORMAT_FUNCNAME TEXT("%S: ")
+     if (!raw)
+     {
+@@ -468,7 +512,7 @@
+         prefixLen = swprintf_s(prefixBuffer, RTL_NUMBER_OF(prefixBuffer),
+             functionName ? PREFIX_FORMAT PREFIX_FORMAT_FUNCNAME : PREFIX_FORMAT,
+             st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
+-            GetCurrentThreadId(), g_LogLevelChar[level], functionName);
++            GetCurrentProcessId(), GetCurrentThreadId(), g_LogLevelChar[level], functionName);
+     }
+ 
+     // format buffer
+@@ -489,42 +533,75 @@
+         goto cleanup;
+     }
+ 
+-    if (g_BufferUtf8[bufferSize - 1] != '\n')
++    if (bufferSize == 0)
++        addNewline = !raw; // an empty message still ends its own line; reading [-1] was undefined
++    else if (g_BufferUtf8[bufferSize - 1] != '\n')
+         addNewline = TRUE;
+ 
+     if (g_LogfileHandle != INVALID_HANDLE_VALUE)
+     {
+-        if (!raw)
++        // THE ONE WRITE. A single WriteFile to an append-only handle is atomic against the other
++        // processes sharing this file; three calls would let one shred a line mid-way. Same bytes.
++        size_t lineSize = 0;
++
++        if (prefixBufferSize + bufferSize + 1 <= sizeof(g_LineBufUtf8))
+         {
+-            if (!WriteFile(g_LogfileHandle, g_PrefixBufferUtf8, (DWORD) prefixBufferSize, &written, NULL) || written != (DWORD) prefixBufferSize)
++            if (!raw && prefixBufferSize > 0)
++            {
++                memcpy(g_LineBufUtf8, g_PrefixBufferUtf8, prefixBufferSize);
++                lineSize = prefixBufferSize;
++            }
++
++            memcpy(g_LineBufUtf8 + lineSize, g_BufferUtf8, bufferSize);
++            lineSize += bufferSize;
++
++            if (addNewline && !raw)
++                g_LineBufUtf8[lineSize++] = '\n';
++
++            if (!WriteFile(g_LogfileHandle, g_LineBufUtf8, (DWORD) lineSize, &written, NULL) || written != (DWORD) lineSize)
+             {
+-                fwprintf(stderr, L"_LogFormat: WriteFile(prefix) failed: error %d\n", GetLastError());
++                fwprintf(stderr, L"_LogFormat: WriteFile(line) failed: error %d\n", GetLastError());
+                 goto cleanup;
+             }
+         }
+-
+-        // bufferSize is at most INT_MAX*2
+-        if (!WriteFile(g_LogfileHandle, g_BufferUtf8, (DWORD) bufferSize, &written, NULL) || written != (DWORD) bufferSize)
++        else
+         {
+-            fwprintf(stderr, L"_LogFormat: WriteFile failed: error %d\n", GetLastError());
+-            goto cleanup;
+-        }
++            // Too long to compose: written piecewise and SAID, since truncating would be worse.
++            fwprintf(stderr, L"_LogFormat: line of %zu bytes exceeds the one-write buffer; writing piecewise\n",
++                prefixBufferSize + bufferSize + 1);
+ 
+-        if (addNewline && !raw)
+-        {
+-            if (!WriteFile(g_LogfileHandle, "\n", 1, &written, NULL) || written != 1)
++            if (!raw)
++            {
++                if (!WriteFile(g_LogfileHandle, g_PrefixBufferUtf8, (DWORD) prefixBufferSize, &written, NULL) || written != (DWORD) prefixBufferSize)
++                {
++                    fwprintf(stderr, L"_LogFormat: WriteFile(prefix) failed: error %d\n", GetLastError());
++                    goto cleanup;
++                }
++            }
++
++            // bufferSize is at most INT_MAX*2
++            if (!WriteFile(g_LogfileHandle, g_BufferUtf8, (DWORD) bufferSize, &written, NULL) || written != (DWORD) bufferSize)
+             {
+                 fwprintf(stderr, L"_LogFormat: WriteFile failed: error %d\n", GetLastError());
+                 goto cleanup;
+             }
++
++            if (addNewline && !raw)
++            {
++                if (!WriteFile(g_LogfileHandle, "\n", 1, &written, NULL) || written != 1)
++                {
++                    fwprintf(stderr, L"_LogFormat: WriteFile failed: error %d\n", GetLastError());
++                    goto cleanup;
++                }
++            }
+         }
+ 
+         if (echoToStderr)
+         {
+             if (!raw)
+-                fwprintf(stderr, prefixBuffer);
++                fwprintf(stderr, L"%s", prefixBuffer);
+ 
+-            fwprintf(stderr, g_Buffer);
++            fwprintf(stderr, L"%s", g_Buffer);
+             if (addNewline && !raw)
+             {
+                 fwprintf(stderr, L"\n");

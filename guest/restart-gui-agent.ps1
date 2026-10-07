@@ -16,25 +16,21 @@
 # (watchdog.c REG_CONFIG_AGENT_PATH_VALUE, written by the MSI). So a restart is: stop the service,
 # start the service. Nothing here finds a process by name, nothing here kills.
 #
-# THE PROOF (missing data FAILS, .claude/skills/experimenter rule 3). A file NAME is not an agent
-# (Jev review 2026-10-07, false_pass 0.34 / log-name-trust 0.60: a newer log can belong to a process
-# that already died, and the pid in a name can have been reused by anything). The agent writes
-# <LogDir>\gui-agent-<yyyyMMdd>-<HHmmss>-<pid>.log at init (qubes-windows-utils log.c, the pid last),
-# and its first lines carry "LogInit: Running as user: ..., process ID: N" - the bracket prefix of
-# every line holds the THREAD id, so the header text is the only in-content pid. The success path
-# requires ALL THREE, each with its own INVALID reason:
-#   1. IDENTITY from the log's CONTENT: the header pid must agree with the file name's pid
-#      (log-pid-mismatch otherwise - a disagreement is never tie-broken);
+# THE PROOF (missing data FAILS, .claude/skills/experimenter rule 3). A file NAME is not an agent,
+# and the log is one file per module per day - the name carries no pid and a restart produces no new
+# file - so identity comes only from CONTENT: the "LogInit: ... process ID: N" line each instance
+# writes (the bracket prefix holds the THREAD id, so that is the only in-content pid). All three are
+# required, each with its own INVALID reason:
+#   1. the LAST init record in the file: its pid, and its line timestamp at or after the service
+#      start (no-new-init otherwise - an older record is the previous instance's, same file);
 #   2. the PROCESS behind it: Get-Process -Id N exists (pid-not-alive), its Path is the exe the owner
-#      launches (pid-reused-path), and its StartTime lies between the service start and the log's
-#      creation - a process younger than its own log is a reused pid (pid-reused-start);
-#   3. SERVING, not merely started: the new agent's own post-Init marker in that log - "Awaiting for a
-#      vchan client" (main.c, written once init is complete and the agent listens for dom0) or
-#      "A vchan client has connected" (not-serving otherwise: started-but-dead-on-arrival, the case the
-#      old Stop-Process harnesses could not tell apart).
-# The OLD agent is held by the same identity (header pid, exe path) and must be gone after the service
-# reports Stopped; a survivor means the installed watchdog predates the stop-own-agent change and is
-# REPORTED, never killed. Every wait is a bounded failure detector; nothing here sleeps on a timer.
+#      launches (pid-reused-path), and its StartTime lies between the service start and that init
+#      line - a process younger than its own init line is a reused pid (pid-reused-start);
+#   3. SERVING: "Awaiting for a vchan client" or "A vchan client has connected" AFTER that init line
+#      (not-serving otherwise). The position matters: a previous instance's connected line is in the
+#      same file and would pass for this one.
+# The OLD agent is held by the same identity and must be gone once the service reports Stopped; a
+# survivor is REPORTED, never killed. Every wait is a bounded failure detector, not a timer.
 #
 # USE. Dot-source for the functions:   . "$PSScriptRoot\restart-gui-agent.ps1"; $r = Restart-GuiAgent
 #        A script that must SWAP the binary between the stop and the start (swap-agent.ps1 and the
@@ -45,9 +41,9 @@
 #      Run directly (pushrun / -File):  emits the marker lines below and one === RESULT === JSON line.
 # Marker lines (the harnesses grep these; keep them stable):
 #   SVCSTOP service=<Stopped|NOT stopped|absent> pid=<scm pid> process=<gone|STILL RUNNING|none>
-#   OLDLOG <name|none> pid=<name pid> header=<header pid> alive=<0|1>
+#   OLDLOG <name|none> pid=<init-record pid> initline=<line no> alive=<0|1>
 #   WDSTART <service status> <start error, if any>
-#   TURNOVER stage=<ok|no-new-log|log-pid-mismatch|pid-not-alive|pid-reused-path|pid-start-unreadable|pid-reused-start|not-serving> <detail>
+#   TURNOVER stage=<ok|no-new-init|no-init-record|init-timestamp-unreadable|pid-not-alive|pid-reused-path|pid-start-unreadable|pid-reused-start|not-serving> <detail>
 #   AGENTPID <new pid|0> after <n>s
 #   OLDALIVE <0|1>
 #   NEWLOG <name|none>
@@ -85,34 +81,52 @@ function Get-NewestGuiAgentLog([string]$Dir) {
              Sort-Object LastWriteTime -Descending | Select-Object -First 1) | Select-Object -First 1
 }
 
-function Get-GuiAgentLogPid([string]$Name) {
-    # gui-agent-<yyyyMMdd>-<HHmmss>-<pid>.log -> pid; 0 when the name is not that shape
-    if ($Name -match '^gui-agent-\d{8}-\d{6}-(\d+)\.log$') { return [int]$Matches[1] }
-    return 0
+function Get-GuiAgentLastInit([string]$Path) {
+    # The LAST init record ("LogInit: ... process ID: N"), because instances share one file per day
+    # and the head would give the pid of whichever one created the file this morning.
+    #   .pid 0 when no init record is present   .at from the line's own prefix   .line 1-based
+    $r = [ordered]@{ pid = 0; at = $null; line = 0 }
+    try { $lines = Get-Content -LiteralPath $Path -ErrorAction Stop } catch { return $r }
+    $n = 0
+    foreach ($ln in $lines) {
+        $n++
+        if ($ln -match 'process ID: (\d+)') {
+            $r.pid = [int]$Matches[1]
+            $r.line = $n
+            $r.at = $null
+            if ($ln -match '^﻿?\[(\d{8})\.(\d{6})\.(\d{3})-') {
+                try {
+                    $r.at = [datetime]::ParseExact("$($Matches[1])$($Matches[2]).$($Matches[3])",
+                        'yyyyMMddHHmmss.fff', [Globalization.CultureInfo]::InvariantCulture)
+                } catch { $r.at = $null }
+            }
+        }
+    }
+    return $r
 }
 
-function Get-GuiAgentLogHeaderPid([string]$Path) {
-    # The pid the agent itself wrote at init: "LogInit: Running as user: <who>, process ID: N" (log.c LogInit),
-    # within the first lines. 0 when it is not there (a truncated, foreign or still-empty file).
-    try { $head = @(Get-Content -LiteralPath $Path -TotalCount 40 -ErrorAction Stop) } catch { return 0 }
-    foreach ($ln in $head) { if ($ln -match 'process ID: (\d+)') { return [int]$Matches[1] } }
-    return 0
-}
-
-function Test-GuiAgentServing([string]$Path) {
+function Test-GuiAgentServing([string]$Path, [int]$AfterLine = 0) {
     # The post-Init marker only a running agent writes (main.c): 'awaiting' (listening for dom0's daemon),
     # 'connected' (the daemon is on the vchan), '' (neither - started but not serving, or dead on arrival).
-    try { $txt = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop } catch { return '' }
-    if ($txt -match 'A vchan client has connected') { return 'connected' }
-    if ($txt -match 'Awaiting for a vchan client') { return 'awaiting' }
-    return ''
+    # ONLY LINES AFTER -AfterLine COUNT: a previous instance's 'connected' line is in this file.
+    try { $lines = Get-Content -LiteralPath $Path -ErrorAction Stop } catch { return '' }
+    $n = 0
+    $serving = ''
+    foreach ($ln in $lines) {
+        $n++
+        if ($n -le $AfterLine) { continue }
+        if ($ln -match 'A vchan client has connected') { return 'connected' }
+        if ($ln -match 'Awaiting for a vchan client') { $serving = 'awaiting' }
+    }
+    return $serving
 }
 
 function Test-GuiAgentProcess {
-    # Is the pid a log names the agent that wrote it? By id, never by name: the process must exist, run the exe
-    # the owner launches, and have started no earlier than -NotBefore (the service start) and no later than the
-    # log's creation (the agent creates its log AFTER it starts; a process younger than the log is a reused pid).
-    param([int]$ProcId, [string]$ExpectedExe, [datetime]$NotBefore = [datetime]::MinValue, [datetime]$LogCreated = [datetime]::MaxValue)
+    # Is the pid an init record names the agent that wrote it? By id, never by name: the process must
+    # exist, run the exe the owner launches, and have started no earlier than -NotBefore (the service
+    # start) and no later than -InitAt, when it wrote that init line. -InitAt replaces the file's
+    # creation time, which means nothing once every instance appends to one file.
+    param([int]$ProcId, [string]$ExpectedExe, [datetime]$NotBefore = [datetime]::MinValue, [datetime]$InitAt = [datetime]::MaxValue)
     $r = [ordered]@{ ok = $false; reason = ''; proc = $null; path = ''; start = $null }
     if ($ProcId -le 0) { $r.reason = 'pid-not-alive'; return $r }
     $p = Get-Process -Id $ProcId -ErrorAction SilentlyContinue
@@ -123,24 +137,22 @@ function Test-GuiAgentProcess {
     try { $r.start = $p.StartTime } catch { $r.start = $null }
     if (-not $r.start) { $r.reason = 'pid-start-unreadable'; return $r }
     if ($r.start -lt $NotBefore) { $r.reason = 'pid-reused-start'; return $r }
-    if ($r.start -gt $LogCreated) { $r.reason = 'pid-reused-start'; return $r }
+    if ($r.start -gt $InitAt) { $r.reason = 'pid-reused-start'; return $r }
     $r.ok = $true
     return $r
 }
 
 function Get-GuiAgentIdentity {
-    # The agent a log file describes, by CONTENT: name pid, header pid, and whether the process behind the
-    # name is that agent (Test-GuiAgentProcess). .alive is true only when all of that holds.
+    # The agent a log describes, by CONTENT ALONE: the LAST init record's pid, and whether the process
+    # behind it is that agent. No name pid to cross-check any more, so 'log-pid-mismatch' is gone.
     param($Log, [string]$ExpectedExe)
-    $id = [ordered]@{ log = ''; name_pid = 0; header_pid = 0; agree = $false; created = $null; alive = $false; proc = $null; reason = 'no-log' }
+    $id = [ordered]@{ log = ''; init_pid = 0; init_at = $null; init_line = 0; alive = $false; proc = $null; reason = 'no-log' }
     if (-not $Log) { return $id }
     $id.log = $Log.Name
-    $id.name_pid = Get-GuiAgentLogPid $Log.Name
-    $id.header_pid = Get-GuiAgentLogHeaderPid $Log.FullName
-    try { $id.created = $Log.CreationTime } catch { $id.created = $null }
-    $id.agree = ($id.name_pid -gt 0 -and $id.name_pid -eq $id.header_pid)
-    if (-not $id.agree) { $id.reason = 'log-pid-mismatch'; return $id }
-    $t = Test-GuiAgentProcess -ProcId $id.name_pid -ExpectedExe $ExpectedExe
+    $init = Get-GuiAgentLastInit $Log.FullName
+    $id.init_pid = $init.pid; $id.init_at = $init.at; $id.init_line = $init.line
+    if ($id.init_pid -le 0) { $id.reason = 'no-init-record'; return $id }
+    $t = Test-GuiAgentProcess -ProcId $id.init_pid -ExpectedExe $ExpectedExe
     $id.proc = $t.proc; $id.alive = $t.ok; $id.reason = $(if ($t.ok) { 'ok' } else { $t.reason })
     return $id
 }
@@ -148,28 +160,39 @@ function Get-GuiAgentIdentity {
 function Resolve-GuiAgentTurnover {
     # ONE evaluation of the three facts against the newest log (the caller polls it under a bound):
     # stage names the first fact that is NOT established, so the INVALID reason is specific.
-    param([string]$LogDir, [string]$OldLog, [string]$ExpectedExe, [datetime]$NotBefore = [datetime]::MinValue)
-    $r = [ordered]@{ ok = $false; stage = 'no-new-log'; detail = ''; log = ''; name_pid = 0; header_pid = 0; created = $null; proc = $null; serving = '' }
+    # A restart produces no new FILE, so the turnover is a new INIT RECORD: the last one, written at
+    # or after the service start, by a pid that is not the one already running. -OldLog is kept for
+    # the message only; the name cannot distinguish two instances.
+    param([string]$LogDir, [string]$OldLog, [string]$ExpectedExe, [datetime]$NotBefore = [datetime]::MinValue, [int]$OldPid = 0)
+    $r = [ordered]@{ ok = $false; stage = 'no-new-init'; detail = ''; log = ''; init_pid = 0; init_at = $null; init_line = 0; proc = $null; serving = '' }
     $nl = Get-NewestGuiAgentLog $LogDir
-    if (-not $nl -or $nl.Name -eq $OldLog) { $r.detail = "newest log is $(if ($nl) { $nl.Name } else { 'none' })"; return $r }
+    if (-not $nl) { $r.detail = 'no gui-agent log in the log directory at all'; return $r }
     $r.log = $nl.Name
-    $r.name_pid = Get-GuiAgentLogPid $nl.Name
-    $r.header_pid = Get-GuiAgentLogHeaderPid $nl.FullName
-    try { $r.created = $nl.CreationTime } catch { $r.created = $null }
-    if ($r.name_pid -le 0 -or $r.header_pid -ne $r.name_pid) {
-        $r.stage = 'log-pid-mismatch'; $r.detail = "name says pid $($r.name_pid), the LogInit header says $($r.header_pid)"; return $r
+    $init = Get-GuiAgentLastInit $nl.FullName
+    $r.init_pid = $init.pid; $r.init_at = $init.at; $r.init_line = $init.line
+    if ($r.init_pid -le 0) {
+        $r.stage = 'no-init-record'; $r.detail = "$($nl.Name) carries no 'process ID:' init record"; return $r
     }
-    $created = $(if ($r.created) { $r.created } else { [datetime]::MaxValue })
-    $t = Test-GuiAgentProcess -ProcId $r.name_pid -ExpectedExe $ExpectedExe -NotBefore $NotBefore -LogCreated $created
+    # Before our start, or the pid already running: the previous instance's, which is the normal
+    # state of this shared file until the new one inits.
+    if (-not $init.at) {
+        $r.detail = "the init record for pid $($r.init_pid) in $($nl.Name) carries no readable timestamp, so it cannot be placed against the service start"
+        $r.stage = 'init-timestamp-unreadable'; return $r
+    }
+    if ($init.at -lt $NotBefore -or ($OldPid -gt 0 -and $r.init_pid -eq $OldPid)) {
+        $r.detail = "the newest init record is pid $($r.init_pid) at $($init.at.ToString('s')), before the service start $($NotBefore.ToString('s'))$(if ($OldPid -gt 0 -and $r.init_pid -eq $OldPid) { " and is the pid that was already running" })"
+        return $r
+    }
+    $t = Test-GuiAgentProcess -ProcId $r.init_pid -ExpectedExe $ExpectedExe -NotBefore $NotBefore -InitAt $init.at
     if (-not $t.ok) {
         $r.stage = $t.reason
-        $r.detail = "pid $($r.name_pid): path '$($t.path)' (expected '$ExpectedExe'), start $(if ($t.start) { $t.start.ToString('s') } else { 'unreadable' }), service start $($NotBefore.ToString('s')), log created $(if ($r.created) { $r.created.ToString('s') } else { 'unreadable' })"
+        $r.detail = "pid $($r.init_pid): path '$($t.path)' (expected '$ExpectedExe'), start $(if ($t.start) { $t.start.ToString('s') } else { 'unreadable' }), service start $($NotBefore.ToString('s')), init line $($init.line) at $($init.at.ToString('s'))"
         return $r
     }
     $r.proc = $t.proc
-    $r.serving = Test-GuiAgentServing $nl.FullName
-    if (-not $r.serving) { $r.stage = 'not-serving'; $r.detail = "pid $($r.name_pid) is alive but $($nl.Name) carries no 'Awaiting for a vchan client' / 'A vchan client has connected' line yet"; return $r }
-    $r.ok = $true; $r.stage = 'ok'; $r.detail = "pid $($r.name_pid), $($nl.Name), $($r.serving)"
+    $r.serving = Test-GuiAgentServing -Path $nl.FullName -AfterLine $init.line
+    if (-not $r.serving) { $r.stage = 'not-serving'; $r.detail = "pid $($r.init_pid) is alive but $($nl.Name) carries no 'Awaiting for a vchan client' / 'A vchan client has connected' line after its init at line $($init.line)"; return $r }
+    $r.ok = $true; $r.stage = 'ok'; $r.detail = "pid $($r.init_pid), $($nl.Name) line $($init.line), $($r.serving)"
     return $r
 }
 
@@ -181,7 +204,7 @@ function Stop-GuiAgentOwner {
     $r = [ordered]@{
         ok = $false; verdict = ''; reason = ''
         service = 'absent'; svc_pid = 0; svc_stopped = $false; svc_process = 'none'
-        log_dir = ''; expected_exe = ''; old_log = ''; old_pid = 0; old_header_pid = 0; old_alive_before = $false; old_gone = $true
+        log_dir = ''; expected_exe = ''; old_log = ''; old_pid = 0; old_init_line = 0; old_alive_before = $false; old_gone = $true
         wd_status = ''; wd_error = ''
         new_log = ''; new_pid = 0; serving = ''; turnover = ''; wait_s = 0
     }
@@ -195,10 +218,10 @@ function Stop-GuiAgentOwner {
     $oldLog = Get-NewestGuiAgentLog $r.log_dir
     $oldId = Get-GuiAgentIdentity -Log $oldLog -ExpectedExe $r.expected_exe
     $oldProc = $oldId.proc
-    $r.old_log = $oldId.log; $r.old_pid = $oldId.name_pid; $r.old_header_pid = $oldId.header_pid
+    $r.old_log = $oldId.log; $r.old_pid = $oldId.init_pid; $r.old_init_line = $oldId.init_line
     $r.old_alive_before = $oldId.alive
     if (-not $oldId.alive) { $oldProc = $null }
-    & $say ("OLDLOG " + $(if ($r.old_log) { $r.old_log } else { 'none' }) + " pid=" + $r.old_pid + " header=" + $r.old_header_pid + " alive=" + $(if ($oldProc) { 1 } else { 0 }))
+    & $say ("OLDLOG " + $(if ($r.old_log) { $r.old_log } else { 'none' }) + " pid=" + $r.old_pid + " initline=" + $r.old_init_line + " alive=" + $(if ($oldProc) { 1 } else { 0 }))
 
     # ---- stop the SERVICE (the owner) and wait for its own process, then for the agent it owned
     $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
@@ -259,17 +282,17 @@ function Start-GuiAgentOwner {
 
     # ---- the turnover: identity from the log's content, the process behind it, and its serving marker
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    $tv = [ordered]@{ ok = $false; stage = 'no-new-log'; detail = ''; log = ''; name_pid = 0; serving = '' }
+    $tv = [ordered]@{ ok = $false; stage = 'no-new-init'; detail = ''; log = ''; init_pid = 0; serving = '' }
     if ($r.service -ne 'absent' -and $r.log_dir -and $r.expected_exe) {
         while ($true) {
-            $tv = Resolve-GuiAgentTurnover -LogDir $r.log_dir -OldLog $r.old_log -ExpectedExe $r.expected_exe -NotBefore $startedAt
+            $tv = Resolve-GuiAgentTurnover -LogDir $r.log_dir -OldLog $r.old_log -ExpectedExe $r.expected_exe -NotBefore $startedAt -OldPid $r.old_pid
             if ($tv.ok -or $sw.Elapsed.TotalSeconds -ge $TimeoutSec) { break }
             Start-Sleep -Milliseconds 500
         }
     }
     $r.wait_s = [int]$sw.Elapsed.TotalSeconds
     $r.turnover = $tv.stage
-    if ($tv.ok) { $r.new_log = $tv.log; $r.new_pid = [int]$tv.name_pid; $r.serving = $tv.serving }
+    if ($tv.ok) { $r.new_log = $tv.log; $r.new_pid = [int]$tv.init_pid; $r.serving = $tv.serving }
     $oldStill = $false
     if ($oldProc) { try { $oldStill = -not $oldProc.HasExited } catch { $oldStill = $false } }
     if ($oldStill) { $r.old_gone = $false }
