@@ -22,11 +22,23 @@ HERE="$(cd "$(dirname "$0")/../.." && pwd)"
 . "$HERE/mgmt/harness/vmlock.sh"
 vm_lock "$VM" 2>/dev/null || { echo "INSTRUMENT: $VM is held by another job - not judged"; exit 2; }
 PS='$b = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
-$f = @(Get-ChildItem -Path "Q:\Qubes Logs" -Filter "gui-agent-*.log" -ErrorAction SilentlyContinue | Where-Object { $_.CreationTime -ge $b })
+$bs = $b.ToString("yyyyMMdd.HHmmss")
+$f = @(Get-ChildItem -Path "Q:\Qubes Logs" -Filter "gui-agent-*.log" -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -ge $b })
 Write-Output ("CWC-LOGS=" + $f.Count)
 foreach ($x in $f) {
-  Select-String -LiteralPath $x.FullName -Pattern "Init:", "AddWindow:.*class=(CASCADIA_HOSTING_WINDOW_CLASS|ConsoleWindowClass|PseudoConsoleWindow)" |
-    ForEach-Object { if ($_.Line -match "Init:") { "CWC-INIT|" + $x.Name } else { "CWC-HIT|" + $x.Name + "|" + $_.Line } }
+  $fs = $null
+  try {
+    $fs = [System.IO.File]::Open($x.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    $sr = New-Object System.IO.StreamReader($fs)
+    while ($null -ne ($ln = $sr.ReadLine())) {
+      if ($ln -notmatch "^.?\[(\d{8}\.\d{6})\.") { continue }
+      if ($Matches[1] -lt $bs) { continue }
+      if ($ln -match "Init:") { "CWC-INIT|" + $x.Name }
+      elseif ($ln -match "AddWindow:.*class=(CASCADIA_HOSTING_WINDOW_CLASS|ConsoleWindowClass|PseudoConsoleWindow)") { "CWC-HIT|" + $x.Name + "|" + $ln }
+    }
+    $sr.Dispose()
+  } catch { "CWC-UNREADABLE|" + $x.Name }
+  finally { if ($fs) { $fs.Dispose() } }
 }
 Write-Output "CWC-END"'
 enc=$(printf '%s' "$PS" | python3 -c "import sys,base64;print(base64.b64encode(sys.stdin.read().encode('utf-16-le')).decode())")
@@ -34,6 +46,8 @@ out=$(QTEST_VM="$VM" timeout -k 5 120 "$HERE/tools/qtest" run "powershell -NoPro
 echo "$out" | grep -aq '^CWC-END' || { echo "INSTRUMENT: no complete answer from $VM"; exit 2; }
 nlogs=$(echo "$out" | grep -ao '^CWC-LOGS=[0-9]*' | cut -d= -f2)
 [ "${nlogs:-0}" -ge 1 ] || { echo "INSTRUMENT: no gui-agent log created since this boot on $VM"; exit 2; }
+unread=$(echo "$out" | grep -ac '^CWC-UNREADABLE|')
+[ "${unread:-0}" = 0 ] || { echo "INSTRUMENT: $unread agent log(s) could not be read on $VM - missing data fails: $(echo "$out" | grep -a '^CWC-UNREADABLE|' | cut -d'|' -f2 | tr '\n' ' ')"; exit 2; }
 ninit=$(echo "$out" | grep -a '^CWC-INIT|' | cut -d'|' -f2 | sort -u | wc -l)
 [ "$ninit" -ge 1 ] || { echo "INSTRUMENT: $nlogs agent log(s) since boot but no Init: line read - not judged"; exit 2; }
 hits=$(echo "$out" | grep -a '^CWC-HIT|')

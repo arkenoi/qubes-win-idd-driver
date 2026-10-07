@@ -2,10 +2,12 @@
 # logvolume-measure.sh - does the one-log-per-module change actually reduce the log volume on a
 # guest? The claim in docs/ADR-logging.md is a PREDICTION until this runs.
 #
-#   mgmt/harness/logvolume-measure.sh <release-iso-or-setup-tree> <subject> <golden> [calls]
+#   mgmt/harness/logvolume-measure.sh <release-iso-or-setup-tree> <subject> <os-family> [calls]
 #
-# The subject and the golden are BOTH named, never defaulted (lint L10): this script runs
-# `qvm-remove -f` on the subject, so a defaulted name is the exact hazard that rule exists for.
+# <os-family> is what quick-upgrade.sh takes: it derives the golden as <os-family>-qwt, so win11r
+# means win11r-qwt. The subject and the family are BOTH named, never defaulted (lint L10).
+# quick-upgrade OWNS the subject: it self-cleans a leftover and clones it from the golden in the
+# create -> tag -> copy order tag-based policy needs, so nothing here touches the subject first.
 #
 # PRE-REGISTERED, before the run (.claude/skills/experimenter):
 #   HYPOTHESIS  after the fix, qrexec-wrapper holds AT MOST 2 log files (one per day, 2 allows a
@@ -31,12 +33,13 @@ set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PKG="${1:-}"
 SUBJ="${2:-}"
-GOLDEN="${3:-}"
+OSFAM="${3:-}"
 CALLS="${4:-25}"
+GOLDEN="${OSFAM}-qwt"
 OUT="${LOGVOL_OUT:-$HOME/qwt-logvolume}/$(date -u +%Y%m%dT%H%M%SZ)-${SUBJ:-unnamed}"
 
-[ -n "$PKG" ] && [ -n "$SUBJ" ] && [ -n "$GOLDEN" ] \
-    || { echo "usage: $0 <release-iso-or-setup-tree> <subject> <golden> [calls]"; exit 2; }
+[ -n "$PKG" ] && [ -n "$SUBJ" ] && [ -n "$OSFAM" ] \
+    || { echo "usage: $0 <release-iso-or-setup-tree> <subject> <os-family> [calls]"; exit 2; }
 [ -e "$PKG" ] || { echo "FATAL: $PKG does not exist"; exit 2; }
 # The subject is REMOVED and recreated below, so refuse anything that is not a testbed subject.
 case "$SUBJ" in
@@ -56,29 +59,35 @@ vm_lock "$SUBJ" || { echo "FATAL: another VM-mutating job holds the lock"; exit 
 SINCE="$(date -u +%Y-%m-%dT%H:%M:%S)"
 log "subject=$SUBJ golden=$GOLDEN package=$PKG calls=$CALLS out=$OUT"
 
-# ---- 1. a fresh subject from the golden ---------------------------------------------------------
-# Never reuse a killed or previously-measured guest: its LogDir already holds another run's files,
-# and this measurement is a file COUNT.
-if qvm-ls --raw-data --fields NAME 2>/dev/null | command grep -qx "$SUBJ"; then
-    log "removing the previous $SUBJ (its LogDir would carry the last run's files)"
-    qvm-kill "$SUBJ" >/dev/null 2>&1
-    qvm-remove -f "$SUBJ" >/dev/null 2>&1 || { log "FATAL: could not remove $SUBJ"; exit 2; }
-fi
-log "cloning $GOLDEN -> $SUBJ (clone-guest.sh: create, tag, THEN copy - policy here is tag-based)"
-"$ROOT/mgmt/clone-guest.sh" "$GOLDEN" "$SUBJ" >>"$OUT/clone.log" 2>&1 \
-    || { log "FATAL: clone failed, see $OUT/clone.log"; tail -5 "$OUT/clone.log"; exit 2; }
+# ---- 1. nothing to do: quick-upgrade owns the subject ------------------------------------------
+# It kills and removes a leftover (permitted exactly there - the volumes are about to be replaced)
+# and clones the golden in the create -> tag -> copy order. Doing it here as well would clone a
+# subject that is then immediately discarded, and would race its own guards.
+log "subject $SUBJ will be recreated from $GOLDEN by quick-upgrade"
 
 # ---- 2. the package, delivered the way the field gets it ---------------------------------------
 log "quick-upgrade over the golden (an MSI MajorUpgrade from a disc, as the field gets it)"
-QU_OUT="$OUT/quick-upgrade" "$ROOT/mgmt/harness/quick-upgrade.sh" "$PKG" "$SUBJ" win11 \
+QU_OUT="$OUT/quick-upgrade" "$ROOT/mgmt/harness/quick-upgrade.sh" "$PKG" "$SUBJ" "$OSFAM" \
     >>"$OUT/upgrade.log" 2>&1
 rc=$?
 log "quick-upgrade rc=$rc"
-if [ "$rc" != 0 ]; then
-    log "FATAL: the package did not install - nothing downstream of this is a measurement"
+# A NON-ZERO rc IS NOT "THE PACKAGE DID NOT INSTALL". quick-upgrade runs eleven checks after the
+# install, and the first run of this harness reported "the package did not install" when the install
+# had in fact verified completely - installed hash == the package reference, one QWT product at the
+# package version, agent running - and ONE post-install check had gone INVALID-INSTRUMENT. Discarding
+# a correctly installed subject over that throws the measurement away for nothing. So the install is
+# judged by the install's own evidence, and the failed checks are NAMED either way.
+failed=$(command grep -ac '^.*FAIL  ' "$OUT/upgrade.log" 2>/dev/null)
+if [ "${failed:-0}" != 0 ]; then
+    log "quick-upgrade reported $failed failed check(s):"
+    command grep -a 'FAIL  ' "$OUT/upgrade.log" | sed 's/^/    /' | tail -8 | tee -a "$OUT/run.log"
+fi
+if ! command grep -aq 'PASS  installed gui-agent.exe == package reference' "$OUT/upgrade.log"; then
+    log "FATAL: the install itself did not verify (no installed-hash PASS) - nothing downstream of this is a measurement"
     tail -15 "$OUT/upgrade.log" | sed 's/^/  /'
     exit 1
 fi
+log "the install VERIFIED (installed gui-agent.exe == the package reference), so the measurement stands"
 
 # ---- 3. THE RUNNING BINARY MUST BE THE ONE UNDER TEST ------------------------------------------
 # A measurement of a package that did not install is worse than no measurement. The marker is in

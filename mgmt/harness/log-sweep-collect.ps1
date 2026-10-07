@@ -301,7 +301,19 @@ foreach ($f in $invSrc) {
     $invFiles++
     $invBytes += $f.Length
     $n = 0
-    try { foreach ($void in [System.IO.File]::ReadLines($f.FullName)) { $n++ } }
+    # SHARING: the LIVE file is held by its writer with FILE_SHARE_READ | FILE_SHARE_WRITE, and a
+    # reader must permit what the existing opener holds - so FileShare.ReadWrite, not the
+    # FileShare.Read that [System.IO.File]::ReadLines defaults to. Measured 2026-10-08 on
+    # win11r-logvol: every module with a live file reported "1 UNREADABLE", i.e. the inventory could
+    # not count the lines of exactly the files that matter.
+    try {
+        $fs = [System.IO.File]::Open($f.FullName, [System.IO.FileMode]::Open,
+                                     [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try {
+            $sr = New-Object System.IO.StreamReader($fs)
+            try { while ($null -ne $sr.ReadLine()) { $n++ } } finally { $sr.Dispose() }
+        } finally { $fs.Dispose() }
+    }
     catch { $n = -1 }   # unreadable: reported as -1, never as zero - missing data must not read as empty
     if ($n -ge 0) { $invLines += $n }
     # the module is the name without the date (and without the old time-and-pid shape)
