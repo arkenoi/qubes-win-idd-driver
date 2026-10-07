@@ -50,6 +50,18 @@ applies them to a qube created later — you should not normally need to set the
 | `vmexec` | `1` | Makes dom0 use `qubes.VMExec` instead of `qubes.VMShell`. Without it dom0's update commands arrive at `cmd.exe` as POSIX shell text and the run aborts before our agent is reached | Qubes core; the admin sets it - nothing in this package does |
 | `gui`, `qrexec` | `1` | Qubes core treats the qube as GUI- and qrexec-capable | Qubes core |
 | `audio-model`, `timezone`, `no-monitor-layout`, `rpc-clipboard`, `stubdom-qrexec` | per qube | Qubes core only — **no code in this package reads any of them.** They appear here only because our clone tooling copies them (`mgmt/clone-to-template.sh:47-48`) | Qubes core |
+| `menu-items` (qube) / `default-menu-items` (template) | a space-separated list of `.desktop` names | Which application-menu entries are **enabled**. The guest reports what is **available** and dom0 enables *all* of it until one of these exists (`qubesappmenus/__init__.py:359-365` — both selection paths are list comprehensions over the available set, so they only ever narrow it). A new AppVM inherits `default-menu-items` from its template. **The guest cannot set either**, and `receive.py` never takes a default from it, so this is an admin step like `vmexec` | Qubes core; the admin sets it — nothing in this package does |
+
+**Composing `menu-items` without doing it by hand.** A Windows guest reports every Start Menu
+shortcut it finds. Measured on a stock German Windows 11 25H2 with no third-party software: 37
+entries, of which **20 are the single folder `Administrative Tools`** (Registry Editor, services,
+Event Viewer, iSCSI Initiator, ODBC ×2, Print Management, …). Every run of the guest's appmenu
+service therefore writes a suggested value to the guest log (`Q:\Qubes Logs`) on one line beginning
+`MENU-RECOMMENDATION`, listing the applications and leaving the administration consoles out — copy
+it into the command above. Nothing is hidden by this: all 37 remain available in
+Settings → Applications, which is the point. An earlier version of `get-appmenus.ps1` instead
+dropped those 20 from the report, which removed them from the available list too and made them
+impossible to enable at all; that was reverted.
 
 Also required, and applied by the same tools — a **preference**, not a feature:
 

@@ -4,12 +4,14 @@
 # WHY A GUEST AT ALL. tools/tests/appmenus-selftest.sh drives the pure decisions offline over a
 # measured Start Menu and that is where the branch coverage lives - but it cannot show that the
 # whole script still RUNS on Windows PowerShell 5.1, still exits 0 (a non-zero exit loses dom0's
-# entire application list), still emits well-formed lines, and that the exclusion fires against a
-# real Start Menu rather than a text fixture. Jev, asked whether the offline replay was enough:
-# guest_run_needed 0.78.
+# entire application list), still emits well-formed lines, that it reports the same entries against
+# a real Start Menu as against a text fixture, and that the suggested default selection reaches the
+# guest LOG and not stdout - top-level script code the offline suite cannot drive at all. Jev, asked
+# whether the offline replay was enough: guest_run_needed 0.78.
 #
-# HYPOTHESIS  the new script reports materially fewer entries than the installed one, with zero
-#             "Administrative" entries, exactly one "Microsoft Edge", and no folder-prefixed names.
+# HYPOTHESIS  the new script reports the SAME entries as the installed one (availability is the
+#             user's choice, not ours) minus the duplicate Edge, with no folder-prefixed names,
+#             and logs a suggested narrow default selection.
 # CONTROL     the INSTALLED script, run first, on the same guest and the same boot. It carries the
 #             defect, so the checks are seen to FAIL before they are seen to pass.
 # VARIABLE    one file: get-appmenus.ps1. Nothing else is touched.
@@ -96,15 +98,20 @@ n_a=$(report A)
 log "   $n_a report lines"
 
 log "pushing the script under test and verifying it is what landed"
-tools/qtest push "$SRC" 'C:\Windows\Temp\get-appmenus.new.ps1' >>"$OUT/push.log" 2>&1 || { log "FAIL push"; exit 2; }
+# `qtest push` takes FILES and lands them in QubesIncoming - it has no destination argument, and
+# passing one makes it treat the Windows path as a second local file ("fstatat(...): No such file").
+tools/qtest push "$SRC" >>"$OUT/push.log" 2>&1 || { log "FAIL push"; exit 2; }
+INC=$(tools/qtest incoming) || { log "FAIL could not discover QubesIncoming"; exit 2; }
+LANDED="$INC\\$(basename "$SRC")"
+log "   landed at $LANDED"
 want=$(sha256sum "$SRC" | cut -d' ' -f1)
-got=$(tools/qtest run 'powershell -NoProfile -Command "(Get-FileHash -Algorithm SHA256 C:\Windows\Temp\get-appmenus.new.ps1).Hash"' 2>/dev/null | tr -d '\r' | command grep -oiE '^[0-9a-f]{64}$' | head -1)
+got=$(tools/qtest run "powershell -NoProfile -Command \"(Get-FileHash -Algorithm SHA256 '$LANDED').Hash\"" 2>/dev/null | tr -d '\r' | command grep -oiE '^[0-9a-f]{64}$' | head -1)
 if [ "$(echo "$got" | tr 'A-Z' 'a-z')" != "$want" ]; then
   log "FAIL the pushed file is not the file under test (want ${want:0:16}, got ${got:0:16}) - nothing proven"
   exit 2
 fi
 log "   hash matches: ${want:0:16}..."
-tools/qtest run "powershell -NoProfile -Command \"Copy-Item -LiteralPath C:\\Windows\\Temp\\get-appmenus.new.ps1 -Destination '$GUEST_PATH' -Force; 'copied'\"" >>"$OUT/push.log" 2>&1
+tools/qtest run "powershell -NoProfile -Command \"Copy-Item -LiteralPath '$LANDED' -Destination '$GUEST_PATH' -Force; 'copied'\"" >>"$OUT/push.log" 2>&1
 got2=$(tools/qtest run "powershell -NoProfile -Command \"(Get-FileHash -Algorithm SHA256 '$GUEST_PATH').Hash\"" 2>/dev/null | tr -d '\r' | command grep -oiE '^[0-9a-f]{64}$' | head -1)
 [ "$(echo "$got2" | tr 'A-Z' 'a-z')" = "$want" ] || { log "FAIL the installed path still holds the old script"; exit 2; }
 log "   the INSTALLED path now holds the script under test"
@@ -128,12 +135,14 @@ printf 'dup labels:     control(A)=%s  under-test(B)=%s\n' "$(names A | tr 'A-Z'
 echo
 
 [ "$(count A)" -gt 0 ] && [ "$(count B)" -gt 0 ] || { bad "one arm produced no report at all - missing data"; }
-# 1. the exclusion fires on a REAL Start Menu, and the control shows it did not before
-if [ "$(names A | command grep -c 'Administrative')" -gt 0 ] && [ "$(names B | command grep -c 'Administrative')" = 0 ]; then
-  ok "admin_excluded_on_guest: control reported $(names A | command grep -c 'Administrative') Administrative entries, the build under test reports 0"
+# 1. the ADMIN CONSOLES ARE STILL REPORTED - the recommendation is what changes, not availability
+a_adm=$(names A | command grep -c 'Administrative'); b_adm=$(names B | command grep -c 'Administrative')
+if [ "$a_adm" -gt 0 ] && [ "$b_adm" = "$a_adm" ]; then
+  ok "admin_still_available: the control reported $a_adm Administrative entries and so does the build under test - they stay tickable in Settings -> Applications"
 else
-  bad "admin_excluded_on_guest: control=$(names A | command grep -c 'Administrative') test=$(names B | command grep -c 'Administrative')"
+  bad "admin_still_available: control=$a_adm test=$b_adm - the build under test must report the SAME ones (the exclusion was reverted)"
 fi
+
 # 2. Edge once, having been twice
 if [ "$(names A | command grep -cx 'Microsoft Edge')" -ge 2 ] && [ "$(names B | command grep -cx 'Microsoft Edge')" = 1 ]; then
   ok "edge_once_on_guest: control had $(names A | command grep -cx 'Microsoft Edge'), the build under test has 1"
@@ -155,6 +164,34 @@ fi
 rc=$(tools/qtest run "powershell -NoProfile -ExecutionPolicy Bypass -File \"$GUEST_PATH\" > nul 2>&1; echo RC=\$LASTEXITCODE" 2>/dev/null | tr -d '\r' | command grep -oE 'RC=[0-9-]+' | head -1)
 [ "$rc" = "RC=0" ] && ok "exit_zero_on_guest: the service exits 0 ($rc) - a non-zero exit loses dom0's whole app list" \
                    || bad "exit_zero_on_guest: got '$rc'"
+# 5b. NOTHING IS DROPPED. The available list must not shrink except for the duplicate Edge - this
+#     is the check that exists because an earlier version of the fix removed 20 entries from it.
+if [ "$(count B)" -ge "$(( $(count A) - 1 ))" ]; then
+  ok "nothing_dropped_on_guest: $(count B) entries still AVAILABLE against the control's $(count A) (the one difference is the duplicate Edge)"
+else
+  bad "nothing_dropped_on_guest: available fell from $(count A) to $(count B) - entries the user can no longer enable: $(comm -13 <(names B|sort) <(names A|sort) | tr '\n' ' ')"
+fi
+
+# 5c. the suggested default selection reaches the guest LOG (it must never reach stdout, where
+#     dom0 would print "Warning: ignoring key" for it). This is top-level script code that the
+#     offline suite cannot drive, so the guest is the only place it gets exercised.
+# findstr, not a PowerShell one-liner: nesting quotes through qtest is a lint rule of its own
+# (L3) and has produced more broken probes here than it has readings.
+rl=$(tools/qtest run 'cmd /c findstr /C:MENU-RECOMMENDATION "Q:\Qubes Logs\*.log"' 2>/dev/null | tr -d '\r' | command grep -a 'MENU-RECOMMENDATION' | tail -1)
+if [ -n "$rl" ]; then
+  echo "    $rl" > "$OUT/recommendation.txt"
+  if command grep -q 'menu-items' <<<"$rl" && ! command grep -q 'Administrative' <<<"$rl"; then
+    ok "recommendation_logged_on_guest: the suggested menu-items reached the guest log and leaves the administration consoles out"
+  else
+    bad "recommendation_logged_on_guest: the line is there but wrong: $rl"
+  fi
+  command grep -q 'MENU-RECOMMENDATION' "$OUT/B.lines" \
+    && bad "recommendation_not_on_stdout: it leaked into the report dom0 parses" \
+    || ok "recommendation_not_on_stdout: absent from the report dom0 parses, as it must be"
+else
+  bad "recommendation_logged_on_guest: no MENU-RECOMMENDATION line in the guest log (missing data fails)"
+fi
+
 # 6. the fixed ids dom0's own launchers point at
 for id in qubes-run-terminal qubes-open-file-manager; do
   command grep -q "^$id\.desktop:Name=" "$OUT/B.lines" && ok "fixed_id_on_guest: $id reported" \

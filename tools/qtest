@@ -134,6 +134,10 @@ case "${1:-}" in
   shutdown) adm admin.vm.Shutdown ;;
   kill)     adm admin.vm.Kill ;;
   state)    adm admin.vm.CurrentState ;;
+  # Where `push` lands a file, for a harness that then has to move it somewhere. Exposed because
+  # the alternative is every harness re-implementing qtest_incoming's discovery, and the last one
+  # that hardcoded C:\Users\user pushed into a profile that did not exist on the reporter's guest.
+  incoming) printf '%s\n' "$(qtest_incoming)" ;;
   fullshot) out="${2:-fullscreen.tar}"
            # Whole dom0 desktop + geometry (dom0/07-install-fullscreen-screenshot.sh):
            # the only way to see override-redirect windows and dom0-side rendering

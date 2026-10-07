@@ -53,10 +53,19 @@ from inside a guest, so apply them yourself to each Windows qube:
                                         qrexec (measured 259 s); the 60 s default aborts the run
                                         at exactly that moment
 
-Optional, for a usable application menu (a Windows guest reports every Start Menu shortcut it
-can find - 45 on a stock Windows 11, most of them uninstallers and vendor links):
+Optional, for a usable application menu. A Windows guest reports every Start Menu shortcut it can
+find, and dom0 ENABLES all of them until somebody makes a selection. MEASURED on a stock German
+Windows 11 25H2 with no third-party software: 37 entries, of which 20 are the single folder
+"Administrative Tools" - Registry Editor, services, Event Viewer, iSCSI Initiator, ODBC, Print
+Management and the rest of the MMC consoles. All 37 stay AVAILABLE in Settings -> Applications
+whatever you do here; this only picks what is enabled to begin with:
 
-  qvm-features <qube> menu-items "<a short list of the .desktop names you want>"
+  qvm-features <qube> menu-items "<the .desktop names you want enabled>"
+  qvm-features <template> default-menu-items "<the same>"   new AppVMs inherit this one
+
+You do not have to compose that list by hand. Every run of the guest's own appmenu service writes
+the suggested value to the guest log (Q:\Qubes Logs), on one line beginning MENU-RECOMMENDATION,
+with the administration consoles left out and the applications kept.
 
 UPDATES: with vmexec set, a Windows qube reports available updates to dom0 and is updated from
 the Qubes Update tool like any other qube - no separate command and no script from this package.

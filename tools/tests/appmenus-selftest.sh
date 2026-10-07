@@ -91,7 +91,8 @@ foreach ($line in (Get-Content -LiteralPath $Paths)) {
     # Concatenated, not Join-Path: Join-Path is provider-aware and refuses a C: path off Windows.
     $full = $Base.TrimEnd('\') + '\' + $rel
     $r = Get-QwtMenuRelativePath $full $Base
-    if (Test-QwtMenuExcluded $r) { Write-Output "EXCLUDED`t`t$rel"; continue }
+    # EVERY shortcut is reported - what is excluded is only the RECOMMENDED default selection
+    $rec = -not (Test-QwtMenuExcluded $r)
     # what Get-ChildItem's FileInfo.BaseName gives the real script. NOT
     # [IO.Path]::GetFileNameWithoutExtension: off Windows it does not treat '\' as a separator and
     # hands back the whole relative path, which silently turned this suite into a no-op.
@@ -101,7 +102,7 @@ foreach ($line in (Get-Content -LiteralPath $Paths)) {
     $emittedIds[(Get-QwtIdKey $id)] = $true
     $emittedNames[(Get-QwtNameKey $name)] = $true
     # the label as dom0 receives it, which is what the user reads
-    Write-Output "KEPT`t$id`t$(Get-QwtSafeValue $name)"
+    Write-Output "$(if ($rec) {'KEPT'} else {'NOTREC'})`t$id`t$(Get-QwtSafeValue $name)"
 }
 foreach ($b in $script:Builtins) {
     $why = Test-QwtBuiltinRedundant $b.id $b.name $emittedIds $emittedNames
@@ -115,16 +116,32 @@ PS
 menu(){ "$PWSH" -NoProfile -File "$OUT/drive.ps1" -Fn "${1:-$OUT/fn.ps1}" -Paths "$PATHS" 2>&1; }
 M="$OUT/menu.txt"; menu > "$M"
 grep -q 'KEPT' "$M" || { echo "FAIL  the driver produced no menu:"; cat "$M"; exit 2; }
-visible(){ awk -F'\t' '$1=="KEPT"||$1=="BUILTIN"' "${1:-$M}"; }
+# AVAILABLE = everything reported. RECOMMENDED = what a fresh qube should have enabled.
+visible(){ awk -F'\t' '$1=="KEPT"||$1=="BUILTIN"||$1=="NOTREC"' "${1:-$M}"; }
+recommended(){ awk -F'\t' '$1=="KEPT"||$1=="BUILTIN"' "${1:-$M}"; }
 
 # ---- the checks --------------------------------------------------------------------------------
-# 1. the twenty admin consoles are gone, and exactly those
-n_ex=$(awk -F'\t' '$1=="EXCLUDED"' "$M" | wc -l)
-n_admin=$(sed -e '/^#/d' -e '/^$/d' "$PATHS" | grep -c '^Administrative Tools\\')
-if [ "$n_ex" = "$n_admin" ] && [ "$n_ex" = 20 ] && ! visible | grep -q 'Administrative'; then
-  ok "exclude_admin_tools: $n_ex of 28 shortcuts dropped, all of them Administrative Tools, none left in the menu"
+# 1. NOTHING IS DROPPED. All 28 shortcuts stay AVAILABLE - this is the check that exists because
+#    an earlier version of the fix removed 20 of them from dom0's available list, so nobody could
+#    tick them in Settings -> Applications ever again.
+n_av=$(visible | wc -l)
+n_fix=$(sed -e '/^#/d' -e '/^$/d' "$PATHS" | wc -l)
+# n_fix shortcuts + 9 built-ins: ten are defined, and Edge's yields to the real "Microsoft Edge"
+# shortcut. That is the ONE entry this change removes from the 38 the guest used to report, and it
+# was a duplicate of another entry - not an application anybody could have wanted ticked twice.
+if [ "$n_av" = $((n_fix + 9)) ] && [ "$(awk -F'\t' '$1=="EXCLUDED"' "$M" | wc -l)" = 0 ]; then
+  ok "nothing_dropped: all $n_fix shortcuts plus 9 built-ins are AVAILABLE ($n_av entries); nothing is excluded from the report, and the only entry gone from the old 38 is the duplicate Edge"
 else
-  bad "exclude_admin_tools: excluded=$n_ex admin-in-fixture=$n_admin, admin entries still visible: $(visible | grep -c Administrative)"
+  bad "nothing_dropped: available=$n_av expected=$((n_fix + 9)); excluded=$(awk -F'\t' '$1=="EXCLUDED"' "$M" | wc -l) (must be 0)"
+fi
+
+# 1b. the RECOMMENDATION is the narrow one, and it is what leaves the admin consoles out
+n_rec=$(recommended | wc -l)
+n_admin=$(sed -e '/^#/d' -e '/^$/d' "$PATHS" | grep -c '^Administrative Tools\\')
+if [ "$n_admin" = 20 ] && [ "$n_rec" = 17 ] && ! recommended | grep -q 'Administrative'; then
+  ok "recommendation_is_narrow: $n_rec of $n_av recommended; the 20 Administrative Tools entries stay AVAILABLE and are simply not in the suggested default"
+else
+  bad "recommendation_is_narrow: recommended=$n_rec of $n_av, admin-in-fixture=$n_admin, admin recommended: $(recommended | grep -c Administrative)"
 fi
 
 # 2. nothing else was filtered - every non-admin shortcut survived
@@ -134,12 +151,12 @@ while IFS= read -r rel; do
   nm="${rel##*\\}"; nm="${nm%.lnk}"   # basename(1) does not split on '\\'
   visible | cut -f3 | grep -qxF "$nm" || missing="$missing $nm"
 done < "$PATHS"
-[ -z "$missing" ] && ok "apps_kept: all 8 non-administrative shortcuts are in the menu" \
-                   || bad "apps_kept: over-filtered -$missing"
+[ -z "$missing" ] && ok "apps_available: every non-administrative shortcut is available" \
+                   || bad "apps_available: missing -$missing"
 
 # 3. names carry no folder prefix - the exact eight, as the user will read them
 want_names=$'Microsoft Edge\nRemote Desktop Connection\nSteps Recorder\nWindows Media Player Legacy\nCharacter Map\nTask Manager\nWindows PowerShell ISE (x86)\nWindows PowerShell ISE'
-got_names=$(awk -F'\t' '$1=="KEPT"{print $3}' "$M" | sort)
+got_names=$(awk -F'\t' '$1=="KEPT"{print $3}' "$M" | sort)   # the recommended shortcuts
 if [ "$(printf '%s\n' "$want_names" | sort)" = "$got_names" ]; then
   ok "names_unmangled: all 8 scanned names are the shortcut's own, no folder prefix"
 else
@@ -173,9 +190,10 @@ else
 fi
 
 # 8. the menu a new qube gets: 8 real apps + 9 built-ins (edge yielded)
-n_vis=$(visible | wc -l)
-[ "$n_vis" = 17 ] && ok "menu_size: 17 entries (8 shortcuts + 9 built-ins), down from the measured 38" \
-                  || bad "menu_size: $n_vis entries, expected 17"
+n_vis=$(visible | wc -l); n_rec=$(recommended | wc -l)
+{ [ "$n_vis" = 37 ] && [ "$n_rec" = 17 ]; } \
+  && ok "menu_size: 37 AVAILABLE (the old 38 less the duplicate Edge - nothing else taken from the user) and 17 RECOMMENDED for a fresh qube" \
+  || bad "menu_size: available=$n_vis (expect 37) recommended=$n_rec (expect 17)"
 
 # 9. the two fixed ids dom0's own launchers are wired to must survive the dedup
 for id in qubes-run-terminal qubes-open-file-manager; do
@@ -190,8 +208,8 @@ Administrative Tools.lnk
 Deep\Administrative Tools\x.lnk
 EOF
 ec=$("$PWSH" -NoProfile -File "$OUT/drive.ps1" -Fn "$OUT/fn.ps1" -Paths "$OUT/edge-cases.paths" 2>&1)
-if echo "$ec" | grep -qP '^KEPT\tAdministrative_Tools\t' && echo "$ec" | grep -qP '^EXCLUDED\t\tDeep'; then
-  ok "file_own_name_never_excludes: the folder excludes, a file with the same name does not"
+if echo "$ec" | grep -qP '^KEPT\tAdministrative_Tools\t' && echo "$ec" | grep -qP '^NOTREC\tDeep-Administrative_Tools-x\t'; then
+  ok "file_own_name_never_excludes: only a DIRECTORY drops out of the recommendation; a file named 'Administrative Tools.lnk' is recommended, and both remain available"
 else
   bad "file_own_name_never_excludes:"; echo "$ec" | sed 's/^/        /'
 fi
@@ -284,7 +302,7 @@ knob(){ # $1 = name, $2 = sed program over fn.ps1, $3.. = checks that must break
   local broke=0 detail=""
   for c in "$@"; do
     case "$c" in
-      admin)  awk -F'\t' '$1=="KEPT"||$1=="BUILTIN"' "$km" | grep -q 'Administrative' && broke=1 || detail="$detail no-admin-leak";;
+      admin)  awk -F'\t' '$1=="KEPT"||$1=="BUILTIN"' "$km" | grep -q 'Administrative' && broke=1 || detail="$detail admin-still-unrecommended";;
       names)  awk -F'\t' '$1=="KEPT"{print $3}' "$km" | grep -q '^Windows PowerShell Windows PowerShell ISE$' && broke=1 || detail="$detail names-still-clean";;
       edge)   [ "$(awk -F'\t' '$1=="KEPT"||$1=="BUILTIN"' "$km" | cut -f3 | grep -cxF 'Microsoft Edge')" = 2 ] && broke=1 || detail="$detail edge-still-single";;
       umlaut) local u; u=$("$PWSH" -NoProfile -File "$OUT/drive.ps1" -Fn "$OUT/knob-$name.ps1" -Paths "$OUT/umlaut.paths" 2>&1)
@@ -295,7 +313,7 @@ knob(){ # $1 = name, $2 = sed program over fn.ps1, $3.. = checks that must break
                    || bad "knob $name: the defect did NOT come back ($detail) - the check proves nothing"
 }
 
-# revert 1: nothing is excluded (the state before this change)
+# revert 1: the recommendation stops leaving the administration folders out
 knob noexclude "s/^    'Administrative Tools'.*/    'ZZ-no-such-folder'/" admin
 # revert 2: the folder prefix goes back into the displayed name (upstream behaviour)
 knob prefixname "s|^    foreach (\\\$c in \\\$candidates) {|    \\\$candidates = @(\\\$candidates[\\\$candidates.Count - 1])\\n    foreach (\\\$c in \\\$candidates) {|" names
