@@ -109,6 +109,20 @@ shape "main.c: BrokerShutdown/NotifBridgeShutdown disarm the task, ask the helpe
 main_no_relaunch() { grep -q 'if (!g_WgcLaunched && !HelpersDisarmed()' "$1" && grep -q 'if (g_NotifLaunched || HelpersDisarmed()) return;' "$1" && ! grep -q 'relaunching after the exit reported' "$1" && ! grep -q 'now - g_WgcLastLaunch < 8000' "$1"; }
 shape "main.c: each helper is launched ONCE per agent life, never relaunched (Task Scheduler's restart-on-failure is the relauncher)" main_no_relaunch "$MAIN" 'if (g_NotifLaunched || HelpersDisarmed()) return;'
 # the task definitions carry Task Scheduler's own RestartOnFailure for the resident helpers
+# THE HELPER TASKS MUST QUEUE A NEW INSTANCE, NOT DROP IT. They fire on a RegistrationTrigger and the agent
+# re-registers them at every Init, so on a RESTART the start is requested while the previous helper - owned by
+# the agent that just exited - is still running as that task's instance. With IgnoreNew the scheduler silently
+# dropped it (measured 2026-10-07, twice: the agent logged the launch, the task came back Ready/0, the old
+# bridge exited two seconds later and nothing replaced it, and the guest had no notification bridge for the
+# rest of the session). Queue makes the scheduler serialize them instead of discarding one.
+# keyed to the XML LINE, not the word: the comment above the change in main.c names IgnoreNew to explain
+# what it replaced, and the first version of this predicate failed on that comment (the same self-matching
+# trap this suite has hit before).
+main_helper_queue() { grep -q '<MultipleInstancesPolicy>Queue</MultipleInstancesPolicy>' "$1" &&
+                      ! grep -qE '^ *L" *<MultipleInstancesPolicy>IgnoreNew' "$1"; }
+shape "main.c: a helper task QUEUES a new instance behind the outgoing one, never drops it (IgnoreNew)" \
+      main_helper_queue "$MAIN" '<MultipleInstancesPolicy>Queue</MultipleInstancesPolicy>'
+
 main_restart_on_failure() { grep -q '<RestartOnFailure><Interval>' "$1" && grep -q 'HelperTaskRegister(WGC_TASK_NAME, longExe, args, userId, TRUE,' "$1" && grep -q 'return NotifRunInSession(NOTIF_TASK_NAME, args, TRUE);' "$1"; }
 shape "main.c: the broker's and the bridge's tasks are registered with RestartOnFailure (the one-shots without)" main_restart_on_failure "$MAIN" 'return NotifRunInSession(NOTIF_TASK_NAME, args, TRUE);'
 # item I: the window-event thread's exit on request is INFO; the ERROR stays for a thread that dies while the agent runs
