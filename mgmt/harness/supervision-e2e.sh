@@ -440,6 +440,22 @@ if has L7C; then
   fi
 fi
 
+# ---- the sweep over the whole window, then the table ---------------------------------------------------------------
+log "the log sweep over everything this run touched"
+# THE SWEEP RUNS BEFORE THE TWO CELLS THAT BREAK THINGS ON PURPOSE, which is why L8 and L4 are the last
+# blocks in this file. L4 restarts the agent twice and a window containing that reads as agent churn
+# (measured 2026-10-07: instances_per_boot=2, nine ETW tier-downs, an ERROR during a requested stop - all of
+# it this harness's own doing). L8 ENDS THE BROKER on purpose, and broker_deaths is a P1 threshold in the
+# sweep - so a window containing L8 would report this harness's own injection as the product's worst class.
+(cd "$SWEEP" && timeout 1200 bash mgmt/harness/log-sweep.sh "$SUBJ" "$SINCE" "$OUT/sweep") > "$OUT/sweep.out" 2>&1
+sweepline=$(grep -a 'LOGSWEEP-RESULT' "$OUT/sweep.out" | tail -1)
+log "$sweepline"
+case "$sweepline" in
+  *status=CLEAN*) verdict SW PASS "the sweep finds nothing new or breached" "$sweepline" ;;
+  *status=*) verdict SW FAIL "the sweep finds nothing new or breached" "$sweepline" ;;
+  *) verdict SW INVALID "the sweep ran" "no LOGSWEEP-RESULT line" ;;
+esac
+
 # ---- L8 a death DURING a shutdown reaches dom0 at the NEXT boot, exactly once -----------------------------------------
 # The measurement L5 does not make. The death reporter is a scheduled task, and Task Scheduler REFUSES to start
 # actions once shutdown is in progress (ERROR_SHUTDOWN_IN_PROGRESS, 2147943515), so a death at that moment was
@@ -548,20 +564,6 @@ PS
     fi
   fi
 fi
-
-# ---- the sweep over the whole window, then the table ---------------------------------------------------------------
-log "the log sweep over everything this run touched"
-# THE SWEEP RUNS BEFORE L4, which is why L4 is the last cell in this file: it restarts the agent twice on
-# purpose, and a window containing that reads as agent churn (measured 2026-10-07: instances_per_boot=2,
-# nine ETW tier-downs, an ERROR during a requested stop - all of it this harness's own doing).
-(cd "$SWEEP" && timeout 1200 bash mgmt/harness/log-sweep.sh "$SUBJ" "$SINCE" "$OUT/sweep") > "$OUT/sweep.out" 2>&1
-sweepline=$(grep -a 'LOGSWEEP-RESULT' "$OUT/sweep.out" | tail -1)
-log "$sweepline"
-case "$sweepline" in
-  *status=CLEAN*) verdict SW PASS "the sweep finds nothing new or breached" "$sweepline" ;;
-  *status=*) verdict SW FAIL "the sweep finds nothing new or breached" "$sweepline" ;;
-  *) verdict SW INVALID "the sweep ran" "no LOGSWEEP-RESULT line" ;;
-esac
 
 # ---- L4 the restart helper: a live turnover, and a fail-proof driven by a REAL stimulus ------------------------------
 # The first version passed `-LogDir <nonexistent>` to a script that HAS NO SUCH PARAMETER - the helper reads the log

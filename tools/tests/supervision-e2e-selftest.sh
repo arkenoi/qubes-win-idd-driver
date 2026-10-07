@@ -141,6 +141,18 @@ probe_hoisted(){ awk '
 shape "independence: the L7 probe is written before any cell, so L7C never needs L7 to have run" \
       probe_hoisted 'cat > "$OUT/L7-probe.ps1" <<'"'"'PS'"'"''
 
+# THE SWEEP MUST NOT GRADE THIS HARNESS'S OWN DAMAGE. L4 restarts the agent twice and L8 ends the broker,
+# both on purpose; broker_deaths is a P1 threshold and agent_instances_per_boot a P2 one, so a sweep window
+# containing either cell reports the harness as the product (measured 2026-10-07: instances_per_boot=2 and
+# nine ETW tier-downs, all of it L4's). Order check: the sweep runs BEFORE both.
+sweep_before_destructive(){ awk '
+  /log-sweep.sh "\$SUBJ" "\$SINCE" "\$OUT\/sweep"/ {sw=NR}
+  /^if has L8;/ {l8=NR}
+  /^if has L4;/ {l4=NR}
+  END{exit !(sw && l8 && l4 && sw < l8 && sw < l4)}' "$1"; }
+shape "order: the sweep grades the window BEFORE the cells that break things on purpose (L8 kills the broker, L4 restarts the agent)" \
+      sweep_before_destructive 'bash mgmt/harness/log-sweep.sh "$SUBJ" "$SINCE" "$OUT/sweep"'
+
 exits_nonzero(){ grep -qE '\[ "\$nf" = 0 \] && \[ "\$ni" = 0 \] && exit 0 \|\| exit 1' "$1"; }
 shape "exit: the routine exits non-zero when any cell failed or was invalid" \
       exits_nonzero '[ "$nf" = 0 ] && [ "$ni" = 0 ] && exit 0 || exit 1'
