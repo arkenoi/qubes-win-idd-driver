@@ -397,7 +397,17 @@ if has L7C; then
   CTL="${SUBJ}-ctl"
   log "L7C: the same read on a clone of $GOLDEN (the package that predates today's changes)"
   if qvm-ls --raw-data --fields NAME 2>/dev/null | grep -qx "$CTL"; then qwt_shutdown "$CTL" 300 >/dev/null 2>&1; qvm-remove -f "$CTL" >/dev/null 2>&1; fi
+  # ONE GUEST AT A TIME. The subject comes DOWN before the control goes up: two Windows guests on this rig
+  # interleave their probes and fabricate verdicts (CLAUDE.md "Run VM-mutating jobs serially"), and
+  # tools/hooks/serial-rig-gate.sh refuses a launch that would do it. The subject is brought back up
+  # afterwards, because the sweep below reads ITS logs.
   if bash mgmt/clone-guest.sh "$GOLDEN" "$CTL" > "$OUT/L7C-clone.out" 2>&1; then
+    qwt_shutdown "$SUBJ" 600 > "$OUT/L7C-subject-down.out" 2>&1
+    if [ "$(state)" != Halted ]; then
+      verdict L7C INVALID "the control shows the defect present" \
+              "the subject would not halt, so the control cannot run without a second guest up: $(tail -1 "$OUT/L7C-subject-down.out" | cut -c1-110)"
+      CELLS="$(printf '%s' "$CELLS" | sed 's/L7C//')"
+    fi
     qvm-start "$CTL" >/dev/null 2>&1
     cd_ok=0; d=$((SECONDS+300))
     while [ $SECONDS -lt $d ]; do
@@ -421,11 +431,18 @@ if has L7C; then
         verdict L7C INVALID "the control shows the defect present" "control writes_landed='$cwl' subject writes_landed='$swl' (one of them did not read)"
       fi
     else
-      verdict L7C INVALID "the control dates the behaviour" "$CTL never answered (state $(qvm-ls --raw-data --fields STATE "$CTL" | tr -d '\n'))"
+      verdict L7C INVALID "the control shows the defect present" "$CTL never answered (state $(qvm-ls --raw-data --fields STATE "$CTL" | tr -d '\n'))"
     fi
-    qvm-shutdown "$CTL" >/dev/null 2>&1
+    # the control is a throwaway clone: asked down, then GONE - no stale claim, no second guest left up
+    qwt_shutdown "$CTL" 420 > "$OUT/L7C-ctl-down.out" 2>&1
+    qvm-remove -f "$CTL" >/dev/null 2>&1
   else
-    verdict L7C INVALID "the control dates the behaviour" "clone-guest.sh failed: $(tail -2 "$OUT/L7C-clone.out" | tr '\n' ' ' | cut -c1-160)"
+    verdict L7C INVALID "the control shows the defect present" "clone-guest.sh failed: $(tail -2 "$OUT/L7C-clone.out" | tr '\n' ' ' | cut -c1-160)"
+  fi
+  # and the subject comes back up, because the sweep reads its logs
+  if [ "$(state)" != Running ]; then
+    qvm-start "$SUBJ" >/dev/null 2>&1
+    w=$(wait_session 420); [ "$w" = up ] || log "WARNING: the subject did not return after the control (wait_session=$w) - the sweep will say so"
   fi
 fi
 

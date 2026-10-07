@@ -75,6 +75,14 @@ missing_is_not_pass(){ # every INVALID branch must exist for the cells that read
 shape "verdicts: every cell that reads guest output has an INVALID branch - missing data is never a PASS" \
       missing_is_not_pass 'verdict L3 INVALID "a 4 s suspension does not get the broker reaped"'
 
+# ONE GUEST AT A TIME. The first version of L7C booted the control while the subject was still up -
+# two Windows guests interleaving their probes, which is the rule the rig-cycle skill puts second and
+# the serial-rig hook refuses outright. The check is ORDER, not presence: the subject's shutdown must
+# come before the control's start.
+one_guest(){ awk '/^if has L7C/{f=1} f&&/qwt_shutdown "\$SUBJ"/{d=NR} f&&/qvm-start "\$CTL"/{s=NR; exit} END{exit !(d && s && d < s)}' "$1"; }
+shape "custody: L7C takes the subject DOWN before the control comes up - never two guests at once" \
+      one_guest 'qwt_shutdown "$SUBJ" 600 > "$OUT/L7C-subject-down.out" 2>&1'
+
 control_clones(){ grep -q 'clone-guest.sh "$GOLDEN" "$CTL"' "$1" && ! grep -qE 'qvm-start "\$GOLDEN"' "$1"; }
 shape "control: L7C clones the golden and never boots the golden itself (it is a pristine base)" \
       control_clones 'if bash mgmt/clone-guest.sh "$GOLDEN" "$CTL" > "$OUT/L7C-clone.out" 2>&1; then'
