@@ -72,18 +72,43 @@ vmshell() { printf '%s\n' "$1" | qrexec-client-vm "$VM" qubes.VMShell; }
 # QTEST_INCOMING still overrides, and a discovery that finds nothing falls back to the old path
 # with a word on stderr rather than silently guessing.
 qtest_incoming() {
-    [ -n "${QTEST_INCOMING:-}" ] && { printf '%s' "$QTEST_INCOMING"; return; }
     [ -n "${_QTEST_INCOMING_CACHE:-}" ] && { printf '%s' "$_QTEST_INCOMING_CACHE"; return; }
-    local h d found pref
+    local h d found pref prof
     h="$(hostname)"
+    # AN OVERRIDE IS CHECKED, NOT TRUSTED. ~/.bashrc on this qube exported
+    # QTEST_INCOMING='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt' - a path from the original
+    # provisioning handoff - so every shell inherited it, this function returned it immediately, and
+    # the discovery below never ran. On any guest whose account is not `user` (the German golden's
+    # is gerd-test) files landed in the real profile while every command addressed C:\Users\user,
+    # which read as "the file does not exist", in German. Measured twice on 2026-10-07.
+    if [ -n "${QTEST_INCOMING:-}" ]; then
+        prof="${QTEST_INCOMING%%\\Documents\\*}"
+        if [ "$prof" = "$QTEST_INCOMING" ] || vmshell "cmd /c if exist \"$prof\\\" echo YES" 2>/dev/null | tr -d '\r' | grep -q YES; then
+            _QTEST_INCOMING_CACHE="$QTEST_INCOMING"
+            printf '%s' "$_QTEST_INCOMING_CACHE"
+            return
+        fi
+        echo "qtest: ignoring QTEST_INCOMING=$QTEST_INCOMING - the profile '$prof' does not exist on $VM; discovering instead" >&2
+    fi
     found=$(vmshell "cmd /c for /d %D in (C:\Users\*) do @if exist \"%D\\Documents\\QubesIncoming\\$h\" echo %D" 2>/dev/null | tr -d '\r' | grep -aE '^C:\\Users\\' || true)
     pref=$(vmshell "cmd /c reg query \"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\" /v DefaultUserName 2>nul" 2>/dev/null | tr -d '\r' | awk '/DefaultUserName/{print $NF}' | tail -1)
     d=""
     if [ -n "$pref" ]; then d=$(printf '%s\n' "$found" | grep -aiE "\\\\$pref\$" | head -1); fi
     [ -z "$d" ] && d=$(printf '%s\n' "$found" | head -1)
+    # Nothing has received a file here yet, so no QubesIncoming directory exists to find. Derive it
+    # from the autologon account, whose profile DOES exist - this is the fresh-clone case, and the
+    # old code answered it with a hardcoded C:\Users\user.
+    if [ -z "$d" ] && [ -n "$pref" ]; then
+        vmshell "cmd /c if exist \"C:\\Users\\$pref\\\" echo YES" 2>/dev/null | tr -d '\r' | grep -q YES && d="C:\\Users\\$pref"
+    fi
     if [ -z "$d" ]; then
-        d="C:\\Users\\user"
-        echo "qtest: could not discover a QubesIncoming directory on $VM - falling back to $d (set QTEST_INCOMING to override)" >&2
+        d=$(vmshell "cmd /c for /d %D in (C:\Users\*) do @echo %D" 2>/dev/null | tr -d '\r' | grep -aE '^C:\\Users\\' | grep -avE '\\(Public|Default|Default User|All Users)$' | head -1)
+    fi
+    if [ -z "$d" ]; then
+        # No guess. A wrong path is indistinguishable from a missing file, which is exactly how the
+        # last failure read as "MISSING DATA" about a guest that was working perfectly.
+        echo "qtest: could not determine a user profile on $VM - refusing to guess a QubesIncoming path (set QTEST_INCOMING)" >&2
+        return 1
     fi
     _QTEST_INCOMING_CACHE="$d\\Documents\\QubesIncoming\\$h"
     printf '%s' "$_QTEST_INCOMING_CACHE"

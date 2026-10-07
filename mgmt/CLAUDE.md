@@ -66,7 +66,13 @@ The old text here granted rights over a single `win-idd-test` qube that has not 
    (needed by the dev qube's `QTEST_INCOMING`); `qvm-shutdown --wait` + `qvm-start`
    clean-reboot survives; final screenshot shows a desktop.
 8. **Handoff:** write PROVISION-LOG.md summary (image name, QWT version+source+verification,
-   quirks, QubesIncoming path — export it: `echo 'export QTEST_INCOMING=...' >> ~/.bashrc`),
+   quirks. **Do NOT export QTEST_INCOMING into ~/.bashrc** - this instruction used to say to, and
+   the value it planted (`C:\Users\user\...`) was then inherited by every shell for months and
+   silently addressed a profile that does not exist on any guest whose account is not `user`, such
+   as the German golden's `gerd-test`: files landed in the real profile while every command looked
+   in the wrong one, which reads exactly like "the file does not exist". `tools/qtest` discovers the
+   path per guest (`qtest incoming` prints it) and validates QTEST_INCOMING against the guest if it
+   is set, so an override is a deliberate per-run thing and never a dotfile),
    one-time dev prep: authenticate gh — if `~/qubes-win-idd/secrets/gh-token.txt` exists,
    `gh auth login --with-token < it` then `shred -u` it; otherwise have the user run
    `gh auth login` (device flow). Tell the user win-idd-test is ready and the dev session
