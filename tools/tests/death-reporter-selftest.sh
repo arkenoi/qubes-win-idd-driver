@@ -44,6 +44,7 @@ knob_line() {
         pidreuse)  printf '%s' '            # DEFECT: one pid is one death' ;;
         managedonly) printf '%s' '            if (-not (& $owned $exe '"'"''"'"')) { $r.reason = "managed application '"'"'$exe'"'"' is not ours"; return $r }   # DEFECT: any table executable' ;;
         installdir) printf '%s' '    if ($false) { }   # DEFECT: the registry install dir is ignored' ;;
+        endedbyshutdown) printf '%s' '                $ended = '"'"'not-ended'"'"'   # DEFECT: a task instance ended BY A SHUTDOWN is reported as a death anyway' ;;
         wdjoin)    printf '%s' '                    $r.rec = '"'"'scm-agentdied'"'"'   # DEFECT: the watchdog'"'"'s agent-died exit opens a death of its own (a second notification per agent death)' ;;
     esac
 }
@@ -59,6 +60,7 @@ knob_target() {
         pidreuse)  printf '%s' 'pid reuse: a second crash record of the SAME pid 5 min later is a second death' ;;
         managedonly) printf '%s' 'clr not ours: a foreign .NET program named like one of our native executables (autologon.exe) is not ours' ;;
         installdir) printf '%s' 'install dir: the registry InstallDir decides, else the folder above the script'"'"'s bin, else the default' ;;
+        endedbyshutdown) printf '%s' 'ended by shutdown: a 201 whose instance Task Scheduler ended while the system went down' ;;
         wdjoin)    printf '%s' 'wd exit: the watchdog'"'"'s 7024 with QGA_SVC_EXIT_AGENT_DIED attaches to the agent'"'"'s death' ;;
     esac
 }
@@ -78,7 +80,7 @@ EOF
     printf '%s' "$copy"
 }
 
-KNOBS="ours deathid anchorpid logfirst onerec werjoin helperjoin pidreuse managedonly installdir wdjoin"
+KNOBS="ours deathid anchorpid logfirst onerec werjoin helperjoin pidreuse managedonly installdir wdjoin endedbyshutdown"
 if [ -n "${DEATHREPORTER_DEFECT:-}" ]; then
     case " $KNOBS " in *" $DEATHREPORTER_DEFECT "*) ;; *) say "FAIL  unknown DEATHREPORTER_DEFECT='$DEATHREPORTER_DEFECT' ($KNOBS)"; exit 2 ;; esac
     copy=$(make_copy "$DEATHREPORTER_DEFECT") || exit 2

@@ -78,7 +78,14 @@ if (-not (Test-Path $src)) { throw "relay source not found at $src" }
 #     runs, the installer's catch records the error, a direct run exits non-zero. There is no
 #     "proceed anyway" branch to take.
 # ONE source for the limits this script registers (steps 3, 4, 7); the bound reads them too.
-$ScanTaskLimit = 'PT20M'   # QubesWindowsUpdateScan
+# QubesWindowsUpdateScan. PT2H, NOT PT20M, and the twenty minutes were measured to be too few:
+# a FIRST scan after Windows servicing ran >25 min and >66 min on the reporter's template. Task
+# Scheduler then ends the instance at the limit (event 111), the 201 records a non-zero result, the
+# death reporter correctly turns that into a dom0 notification, and the user is told "The Windows
+# Update scan task failed" about a scan that was working and simply had not finished. Killing it
+# sooner is not a fix and neither is hiding the report: the scan gets the time it actually needs,
+# which is the same budget the install and download passes already have.
+$ScanTaskLimit = 'PT2H'
 $PassTaskLimit = 'PT2H'    # QubesWindowsUpdateRun and QubesWindowsUpdateDownload
 # At its limit a task is first asked to stop and only then terminated (AllowHardTerminate=true) -
 # minutes, not instantaneous. The grace covers that; it is not a second deadline.

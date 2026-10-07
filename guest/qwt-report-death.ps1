@@ -392,6 +392,57 @@ function Format-QwtDeathRun {
     $ts = [TimeSpan]::FromMilliseconds([double]$Ms)
     return ('{0}:{1:00}:{2:00}' -f [int][Math]::Floor($ts.TotalHours), $ts.Minutes, $ts.Seconds)
 }
+# --- was this task instance ENDED, and was it ended because the system was going down? ----------
+#
+# Task Scheduler logs event 111 (InstanceId) when it TERMINATES a running instance, and the
+# accompanying 201 then carries whatever the killed process left behind - a non-zero code that
+# looks exactly like a failure. Measured 2026-10-07 on a faithful reproduction of the reporter's
+# case: \QubesWindowsUpdateScan 201 ResultCode 2147943691 (0x8007050B) at 20:35:38 with a 111 for
+# the same instance {2f1ee488-...} at the same second, because the guest was shut down while the
+# scan was running. dom0 was told "The Windows Update scan task failed" about a scan that was
+# working and was stopped.
+#
+# 267014 is already ignored for every task on exactly this principle - "a stop that was asked for,
+# not a death" - and the PV NIC re-arm note says the same. But 111 MUST NOT be ignored blindly:
+# Task Scheduler also raises it when a task exceeds its ExecutionTimeLimit, and with the scan's
+# budget now at PT2H (it was PT20M, which was measured to be too short for a first scan after
+# servicing) hitting that limit means a genuine two-hour hang. Ignoring that would conceal a real
+# failure, which is not a fix.
+#
+# So the discriminator is WHY it was ended, taken from the guest's own records: a system-shutdown
+# record close after the termination means the stop was asked for. Anything else is reported.
+# Both probes are indirected through script variables so the offline test can drive both arms.
+$script:QwtTaskEndedProbe = {
+    param([string]$instanceId)
+    if (-not $instanceId) { return $false }
+    try {
+        $x = "*[System[EventID=111]][EventData[Data[@Name='InstanceId']='$instanceId']]"
+        return ($null -ne (Get-WinEvent -LogName 'Microsoft-Windows-TaskScheduler/Operational' `
+                            -FilterXPath $x -MaxEvents 1 -ErrorAction Stop))
+    } catch { return $false }
+}
+# A shutdown was under way at $at. Kernel-General 109 is the kernel's own "the system is shutting
+# down"; User32 1074 records who asked for it; EventLog 6006 is the log service stopping.
+$script:QwtShutdownNearProbe = {
+    param([datetime]$at)
+    foreach ($q in @(@{ log = 'System'; x = "*[System[(EventID=109 or EventID=1074 or EventID=6006)]]" })) {
+        try {
+            $evs = @(Get-WinEvent -LogName $q.log -FilterXPath $q.x -MaxEvents 20 -ErrorAction Stop)
+            foreach ($e in $evs) {
+                # the shutdown is recorded at or just after the termination it caused
+                $d = ($e.TimeCreated - $at).TotalSeconds
+                if ($d -ge -30 -and $d -le 180) { return $true }
+            }
+        } catch { }
+    }
+    return $false
+}
+function Test-QwtTaskEndedByShutdown([string]$instanceId, [datetime]$at) {
+    if (-not [bool](& $script:QwtTaskEndedProbe $instanceId)) { return 'not-ended' }
+    if ([bool](& $script:QwtShutdownNearProbe $at)) { return 'shutdown' }
+    return 'ended-not-shutdown'
+}
+
 function Get-QwtDeathNodeText {
     param([xml]$Doc, [string]$Name)
     $n = $Doc.GetElementsByTagName($Name)
@@ -571,6 +622,22 @@ function ConvertFrom-QwtDeathEvent {
             if ($eventId -eq 201) {
                 if ($null -eq $code -or $code -eq 0) { $r.reason = "task '$task' ended with result 0"; return $r }
                 if ($code -eq 267014) { $r.ignore = $true; $r.reason = "task '$task' was ENDED by Task Scheduler (0x41306) - a stop that was asked for, not a death"; return $r }
+                # A terminated instance whose termination the system's own shutdown explains is the
+                # same thing one step removed: the code in the 201 is whatever the killed process
+                # left, not a verdict on it. An instance ended for ANY OTHER reason - its execution
+                # time limit, a hard terminate - is still reported, loudly.
+                $ended = Test-QwtTaskEndedByShutdown "$($named['TaskInstanceId'])" $time   # GUARD:endedbyshutdown
+                if ($ended -eq 'shutdown') {
+                    $r.ignore = $true
+                    $r.reason = ("task '$task' instance $($named['TaskInstanceId']) was ENDED by Task Scheduler (event 111) " +
+                                 "while the system was shutting down - a stop that was asked for, not a death; its result " +
+                                 "code $code is what the stopped process left behind")
+                    return $r
+                }
+                if ($ended -eq 'ended-not-shutdown') {
+                    $r.detail = ("Task Scheduler ENDED this instance (event 111) and no system shutdown explains it, so it " +
+                                 'hit its execution time limit or was terminated deliberately - reported rather than ignored.')
+                }
                 $r.ours = $true; $r.kind = 'task'; $r.rec = 'task-result'; $r.code = $code
                 if ($script:QwtDeathHelperTasks.ContainsKey($task)) { $r.label = "$($r.exe) (task $($r.taskName)) ended with a non-zero result" }
                 else { $r.label = "task $($r.taskName) ended with a non-zero result" }

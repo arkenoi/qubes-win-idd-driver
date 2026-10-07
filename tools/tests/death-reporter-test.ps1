@@ -227,6 +227,25 @@ Check 'task 201 helper: ours, the helper''s exe, join-only, result 0xC0000409' (
 $ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesPvNic' '1' $T0)
 Check 'task 201 script: ours, its own death, the component is the task''s machine id from the table' ($ev.ours -and $ev.anchor -eq 'nopid' -and $ev.component -eq 'pvnic' -and $ev.task -eq '\QubesPvNic' -and $ev.taskName -eq 'QubesPvNic')
 $ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesPvNic' '0' $T0)
+
+# --- a TERMINATED task instance: ended by a shutdown is not a death, ended for any other reason is
+# Measured 2026-10-07: \QubesWindowsUpdateScan 201 ResultCode 2147943691 (0x8007050B) with a 111 for
+# the same instance at the same second, because the guest was shut down mid-scan - and dom0 was told
+# "The Windows Update scan task failed" about a scan that was working and was stopped. 267014 was
+# already ignored on this principle; the terminated-instance case was not. Both probes are driven
+# here, because Get-WinEvent cannot run off Windows and would otherwise fail closed and test nothing.
+$script:QwtTaskEndedProbe    = { param([string]$i) return $true }
+$script:QwtShutdownNearProbe = { param([datetime]$t) return $true }
+$ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesWindowsUpdateScan' '2147943691' $T0)
+Check 'ended by shutdown: a 201 whose instance Task Scheduler ended while the system went down is ignored, not a death' `
+      ($ev.ignore -eq $true -and -not $ev.ours) "ignore=$($ev.ignore) ours=$($ev.ours) reason=$($ev.reason)"
+$script:QwtShutdownNearProbe = { param([datetime]$t) return $false }
+$ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesWindowsUpdateScan' '2147943691' $T0)
+Check 'ended NOT by shutdown: an instance ended at its execution time limit is STILL a death - nothing is concealed' `
+      ($ev.ours -eq $true -and $ev.ignore -ne $true) "ignore=$($ev.ignore) ours=$($ev.ours)"
+$script:QwtTaskEndedProbe    = { param([string]$i) return $false }
+$ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesWindowsUpdateScan' '2147943691' $T0)
+Check 'not ended: an ordinary non-zero task result is a death as before' ($ev.ours -eq $true -and $ev.ignore -ne $true)
 Check 'task 201 result 0: not a death' (-not $ev.ours)
 $ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\Qubes-NotifBridge' '267014' $T0)
 Check 'task 201 result 0x41306: ended by Task Scheduler on request, ignored' (-not $ev.ours -and $ev.ignore)
