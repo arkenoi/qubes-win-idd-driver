@@ -1544,8 +1544,41 @@ static bool RelayOutgrown(int i, const Channel& c, const WGCBRK_SLOT* s, SIZE* l
     return now - g_relaySeenTick[i] >= RELAY_SIZE_SETTLE_MS;                             // settled: re-open
 }
 
+// ONE SLOT'S CHANNEL OPEN MUST NOT MAKE ANOTHER SLOT'S REQUEST LOOK UNANSWERED (2026-10-07).
+//
+// Measured on 2026-10-01 (findings/issues.md P1; Jev: cause 0.92, this fix 0.97): an Explorer window registered on
+// slot 3 while this loop was inside OpenChannel for slot 0. The loop acknowledges each slot at the END of that slot's
+// own iteration, so slot 3's acknowledgement waited behind slot 0's open; the open took longer than the agent's
+// WGCBRK_ACK_DEADLINE_MS, the agent read "unacknowledged and no progress" as a hang, and it TERMINATED a broker that
+// was working. 1218 ms with every window withheld, and on an eligible guest there is no composite fallback.
+//
+// So a FIRST registration is acknowledged in this cheap pre-pass, before any per-slot work: it says "seen and
+// accepted", which is all the agent's liveness deadline asks, and the outcome of the open is reported as it always
+// was (ReqState / WGCBRK_E_DEAF, and the first frame the agent waits for anyway).
+//
+// WHY ONLY A SLOT WITH NO OPEN CHANNEL. The same acknowledgement doubles as "your buffers are mine no longer": the
+// agent reuses an arena region once the slot's CtlAck has reached the request that released it (R4, main.c
+// WgcArenaReapPending). Acknowledging a re-registration early would authorise that reuse while this process still
+// holds the old channel's buffers. A slot whose channel is not open has none of the agent's buffers in flight, which
+// is exactly the measured case - a brand-new window, CtlAck 0 wanted 1 - so that case is acknowledged early and
+// every other request keeps its acknowledgement after the work, where it still means what the agent reads it to mean.
+static void AckFirstRegistrations() {
+    for (int i = 0; i < WGCBRK_MAX_SLOTS; i++) {
+        WGCBRK_SLOT* s = &g_slots[i];
+        const LONG ctl = s->ControlSeq;
+        MemoryBarrier();
+        if ((LONG)((ULONG)s->CtlAck - (ULONG)ctl) >= 0) continue;      // nothing outstanding on this slot
+        if (s->ReqState != WGCBRK_REQUESTED) continue;                 // a release: its ack stays after CloseChannel
+        if (g_ch[i].hwnd != nullptr) continue;                         // a re-registration: buffers may be in flight
+        if (!(HWND)(ULONG_PTR)s->Hwnd) continue;                       // nothing to open
+        s->CtlAck = ctl;
+        InterlockedIncrement(&g_hdr->BrokerProgress);
+    }
+}
+
 static void Reconcile() {
     StageScope stage(WGCBRK_STG_RECONCILE, 0);
+    AckFirstRegistrations();   // GUARD:ackfirst - before any open, so no slot's work delays another slot's ack
     for (int i = 0; i < WGCBRK_MAX_SLOTS; i++) {
         WGCBRK_SLOT* s = &g_slots[i];
         // R1/R4 (rest-zero D): the request this pass answers, acknowledged in CtlAck once the slot has been handled below.
