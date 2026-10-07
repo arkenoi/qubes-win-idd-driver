@@ -121,11 +121,23 @@ shape "main.c: each helper is launched ONCE per agent life, never relaunched (Ta
 # THE COMPLETION SIGNAL IS SET WHERE THE WORK FINISHES. If it were set by whoever wakes on g_ExitDone, the
 # handoff between the two threads would be exactly the window in which the system's kill makes a COMPLETED
 # orderly exit read as a forced one - the false ERROR this whole mechanism exists to remove (Jev flagged that
-# first version at race-remains 0.70). So: SetEvent(g_Done) inside LifecycleExitDone, and nowhere else.
-lc_done_at_work() { awk '/^void LifecycleExitDone\(void\)/{f=1} f&&/SetEvent\(g_Done\)/{hit=1} f&&/^}/{exit} END{exit !hit}' "$1" &&
+# first version at race-remains 0.70).
+# TIGHTENED 2026-10-07: setting it in LifecycleExitDone was still TOO LATE. That runs once the main thread is
+# actually leaving - after the window-event thread's 2 s join - while the work the service cares about (the
+# vchan withdrawal, the UNMAP/DESTROY sweep, the staging grant) finished long before, and Windows reaps the
+# process during session teardown. Measured on a clean shutdown: the agent logged "orderly exit complete" at
+# 153432.110 and the watchdog logged QGAWDSESSIONEND-FORCED 104 ms later, with the 10 s budget never
+# approached. So the signal moved to LifecycleOrderlyComplete(), which main.c calls on the line after
+# CaptureStagingRevokeOnExit() - the last orderly step. The setter still lives in lifecycle.c ONLY.
+lc_done_at_work() { awk '/^void LifecycleOrderlyComplete\(void\)/{f=1} f&&/SetEvent\(g_Done\)/{hit=1} f&&/^}/{exit} END{exit !hit}' "$1" &&
                     [ "$(grep -c 'SetEvent(g_Done)' "$1")" -eq 1 ]; }
-shape "lifecycle.c: the orderly-exit signal is set in LifecycleExitDone - on the thread that finished the work, not on the one that wakes" \
+shape "lifecycle.c: the orderly-exit signal is set in LifecycleOrderlyComplete, and nowhere else in the file" \
       lc_done_at_work "$LC" 'SetEvent(g_Done);'
+
+# and the agent must actually CALL it at the completion point - a setter nobody calls signals nothing
+main_signals_at_completion() { awk '/CaptureStagingRevokeOnExit\(\);/{f=1; next} f&&/LifecycleOrderlyComplete\(\);/{hit=1; exit} f&&/LogInfo\("exiting"\)/{exit} END{exit !hit}' "$1"; }
+shape "main.c: LifecycleOrderlyComplete() is called right after the last orderly step (CaptureStagingRevokeOnExit), before 'exiting'" \
+      main_signals_at_completion "$MAIN" 'LifecycleOrderlyComplete();'
 
 main_helper_queue() { grep -q '<MultipleInstancesPolicy>Queue</MultipleInstancesPolicy>' "$1" &&
                       ! grep -qE '^ *L" *<MultipleInstancesPolicy>IgnoreNew' "$1"; }
