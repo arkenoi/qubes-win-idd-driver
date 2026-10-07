@@ -181,6 +181,8 @@ ERROR_FLAGS = [
     # -- supervision (docs/ADR-supervision.md 2-3): our Event Log source and the ONE death reporter task
     ('event_source',            lambda v: _s(v) != 'registered',          'Register-QwtEventSource WARN: the source our supervisors write their death events under is not registered (message file absent / reg add failed / threw)'),
     ('death_reporter',          lambda v: _s(v) != 'registered',          'Register-QwtDeathReporter WARN: the event-triggered QwtDeathReporter task is not registered - a death of ours stays in the guest logs only'),
+    ('death_catchup',           lambda v: _s(v) != 'registered',          'Register-QwtDeathCatchUp WARN: the boot-triggered QwtDeathCatchUp task is not registered, so a death DURING a shutdown is never reported (Task Scheduler refuses to start actions once shutdown is in progress)'),
+    ('svc_recovery_disarm_failed', nonempty,                              'Suspend-QubesServiceRecovery ERROR: "<svc>: sc failure=<rc> failureflag=<rc>" - the SCM recovery could NOT be disarmed, so stopping that service may have it restarted underneath the install (a relauncher left armed is the defect class this suspend exists for)'),
     ('autologon',               lambda v: _s(v) not in ('armed', 'skipped', 'not in payload'),
                                                                           'L1278 not-armed / L1285 error / L3384,L3416 unverified / L3409 no trailer / L3412 verify-error'),
 ]
@@ -190,6 +192,9 @@ ERROR_FLAGS = [
 # classified one way or the other - a new detail key that lands in neither list fails the selftest.
 INFORMATIONAL = (
     'private_disk_prepared_by',  # the Q: takeover: who created the private volume ('wrapper'); the verdict lives in private_disk_gate
+    'svc_recovery_suspended',    # Suspend-QubesServiceRecovery's record: '<svc>[<prior sc failure setting>] ...' - what was disarmed and what it was, so Resume puts back the FIRST reading
+    'svc_msi_started_actor',     # Assert-NoServiceStartedByMsi: WHO started them (the previous install's armed SCM recovery, the MSI, or us); the verdict lives in svc_msi_started
+    'svc_msi_started_evidence',  # the same check's evidence: the MSI log's StartServices condition plus the System 7023/7024/7031/7036 lines it read
     'xenbus_monitor',            # L438 'disabled'
     'swept_binaries_restored',   # L770 what the Fail path put back
     'next',                      # L1149/L1942 what the next boot does

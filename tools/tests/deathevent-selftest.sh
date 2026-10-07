@@ -99,7 +99,16 @@ nogui_agent_initrc()  { grep -q 'return (int)QGA_EXIT_NO_GUI_DOMAIN;' "$1" && gr
 # tools/tests/lifecycle-selftest.sh - and the service's only wait is INFINITE: no poll, no timeout, ever.)
 nogui_wd_latch()      { awk '/case QGA_DECIDE_NOGUI_LATCH:/{f=1} f{print} f&&/break;/{exit}' "$1" > "$OUT/nogui-latch.c"
                         grep -q 'LogInfo("QGAWDNOGUIDOMAIN' "$OUT/nogui-latch.c" && ! grep -q 'DeathEventReport' "$OUT/nogui-latch.c" && grep -q 'noGuiDomain = TRUE;' "$1"; }
-nogui_wd_wait()       { [ "$(grep -c 'WaitForMultipleObjects(waitCount, waitHandles, FALSE, INFINITE)' "$1")" -eq 1 ] && ! grep -q 'Sleep(' "$1"; }
+# The wait is INFINITE BY DEFAULT and there is no Sleep() poll - but it is no longer literally INFINITE at the
+# call, and asserting that spelling made this check fail on a change that improved the behaviour. The invariant
+# is: the default is INFINITE; the ONE thing that may make it finite is a latched session end with no agent of
+# ours left in that session (the single state nothing observable can leave); and that deadline LOGS
+# QGAWDSESSIONSTUCK and re-arms launching rather than quietly going round again.
+nogui_wd_wait()       { grep -q 'DWORD waitMs = INFINITE;' "$1" &&
+                        [ "$(grep -c 'WaitForMultipleObjects(waitCount, waitHandles, FALSE, waitMs)' "$1")" -eq 1 ] &&
+                        grep -q 'endedSessionAt != 0 && !agentProcess' "$1" &&
+                        grep -q 'QGAWDSESSIONSTUCK' "$1" &&
+                        ! grep -q 'Sleep(' "$1"; }
 nogui_wd_norelaunch() { awk '/if \(launchWanted && !agentProcess && !foreignProcess && !noGuiDomain\)/{a=NR} /StartTargetProcess\(cmdline/{b=NR} END{exit !(a && b && a<b)}' "$1"; }
 nogui() { # $1 label, $2 check fn, $3 file, $4 marker of the guarded line (the mutated copy drops the line carrying it)
     local mut="$OUT/nogui-mut-$2.c"
@@ -112,7 +121,7 @@ nogui() { # $1 label, $2 check fn, $3 file, $4 marker of the guarded line (the m
 nogui "the agent: the key absent is QGA_EXIT_NO_GUI_DOMAIN, logged once at INFO" nogui_agent_absent "$MAIN" 'status = QGA_EXIT_NO_GUI_DOMAIN;'
 nogui "the agent: the exit code is Init's own status, never GetLastError's 0" nogui_agent_initrc "$MAIN" 'return (int)win_perror2(initStatus'
 nogui "the watchdog: that exit latches, logs QGAWDNOGUIDOMAIN, writes no death record" nogui_wd_latch "$WD" 'QGA_NOGUI_LATCH'
-nogui "the watchdog: it waits with no timeout, ever (no poll)" nogui_wd_wait "$WD" 'WaitForMultipleObjects(waitCount, waitHandles, FALSE, INFINITE)'
+nogui "the watchdog: it waits with no deadline except a latched session end, and never polls" nogui_wd_wait "$WD" 'DWORD waitMs = INFINITE;'
 nogui "the watchdog: while latched it never launches" nogui_wd_norelaunch "$WD" 'QGA_NOGUI_NORELAUNCH'
 shape "main.c and watchdog.c include qga-exitcodes.h" "$(grep -q '#include "qga-exitcodes.h"' "$MAIN" && grep -q '#include "qga-exitcodes.h"' "$WD" && echo 1 || echo 0)"
 

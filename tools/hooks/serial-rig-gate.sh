@@ -136,6 +136,12 @@ def is_launch(toks, overstrip):
     while i < len(toks) and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', toks[i]):
         i += 1                      # step over leading env assignments
     while i < len(toks) and toks[i] in KW_PREFIX:
+        # `command -v X` / `command -V X` LOOKS UP a path and runs nothing, so X is DATA - the rule for
+        # that sits below, and stepping over `command` here made it dead code (cases C7i and C7k went
+        # from allowed to refused the moment `command` joined this set). Only step over the forms that
+        # really do run the next word. (# GUARD:cmdlookup)
+        if toks[i] in ('command', 'builtin') and i + 1 < len(toks) and toks[i + 1] in ('-v', '-V'):
+            break
         i += 1                      # `if`/`time`/`nohup` - the command is what comes after
     if i < len(toks) and toks[i] in KW_DATA:
         return False                # (# GUARD:keyword) the rest is a word list, not a command
