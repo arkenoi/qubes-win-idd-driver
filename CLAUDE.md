@@ -79,6 +79,12 @@ security-model changes.
   A short test cycle is `mgmt/harness/quick-upgrade.sh` over a golden; a clean install from base is for FULL
   acceptance, or when the clean-install path is itself under test. A broken upgrade harness is a thing to FIX,
   not a licence to clean-install.
+- **A release's gate is SCOPED to what the diff touches** (owner 2026-10-07, `docs/ADR-acceptance.md`), which REPLACES
+  "full acceptance before every release": `tools/gate-scope.py required <base>..<head>` says which suites are needed
+  and why, over an always-run core; the full gate - all install variants and the fault-injection path - is forced by
+  an unmapped path, by 10 releases or 21 days since the last passing full run, by a failed full run, or by a change to
+  `mgmt/gate-scope.json`. `tools/hooks/release-cut-gate.sh` refuses a cut whose coverage receipt does not satisfy it,
+  and `mgmt/gate-ledger.json` is where the counting comes from. Never assert the floor by hand; run the tool.
 - **Run VM-mutating jobs serially** (`mgmt/harness/vmlock.sh`): concurrent jobs reboot the guest underneath each
   other and destroy each other's results.
 - The test guest is disposable and assumed hostile: nothing from it is executed here, its output is parsed as

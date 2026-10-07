@@ -54,6 +54,15 @@
             "statusMessage": "Checking Jev was asked whether the operator should be involved"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/tools/hooks/release-cut-gate.sh\""
+          }
+        ]
       }
     ],
     "Stop": [
