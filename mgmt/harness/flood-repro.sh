@@ -60,6 +60,7 @@ _teardown(){ local rc=$?; trap - EXIT INT TERM
   fi
   exit $rc; }
 trap _teardown EXIT INT TERM
+RUN_STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"   # the sweep's <since>: everything this run produced
 log "start iso=$(sha256sum "$ISO" | cut -c1-12) golden=$GOLDEN boots=$BOOTS out=$OUT"
 
 q(){ QTEST_VM="$SUBJ" timeout "${QT_T:-180}" ./tools/qtest "$@"; }
@@ -173,9 +174,30 @@ while [ "$n" -le "$BOOTS" ]; do
   n=$((n+1))
 done
 
+# ---- THE ERROR LOG, WHICH THIS HARNESS USED TO IGNORE ENTIRELY -----------------------------------
+# It counted forwarded notifications and looked at nothing else. When the count probe broke it
+# printed MISSING DATA and carried on - past four [ERROR] lines it had printed in its own output,
+# past 766 error/warning lines in the guest's log, and past the one the owner could see on his
+# screen ("The Windows Update scan task failed"), which he then had to point at. A clean error log
+# is the gate condition (owner, 2026-10-07: "Make clean error log the gate condition. Any error is
+# fuckup!" and "every rig run calls for log sweep and action"), and Jev scored exactly this remedy
+# at 1.00 after scoring "did this agent read, detect and act on all the errors" at 0.03.
+# Enforced for every harness by lint rule L19, so this cannot be left out again.
+log "sweeping the guest's error log for the whole run"
+sweep_rc=0
+mgmt/harness/log-sweep.sh "$SUBJ" "$RUN_STARTED" "$OUT/sweep" > "$OUT/sweep.out" 2>&1 || sweep_rc=$?
+sweep_line=$(grep -aE '^(SWEEP|FAIL|OK)' "$OUT/sweep.out" | tail -1)
+log "  sweep rc=$sweep_rc ${sweep_line:-<no verdict line>}"
+
 echo
 echo "=== flood-repro: $SUBJ (GWeck forum #175, item 1) ==="
 for i in $(seq 1 "$BOOTS"); do
   [ -f "$OUT/sent-$i.txt" ] && printf '  boot %s: %s notification(s) forwarded to dom0\n' "$i" "$(cat "$OUT/sent-$i.txt")"
 done
+printf '  error log: sweep rc=%s - %s\n' "$sweep_rc" "${sweep_line:-no verdict}"
+if [ "$sweep_rc" != 0 ]; then
+  echo "  THE RUN IS NOT CLEAN: the sweep found error lines it was not told to expect. They are the"
+  echo "  result of this run as much as the notification count is - read $OUT/sweep/summary.txt."
+fi
 log "done. evidence in $OUT"
+exit "$sweep_rc"

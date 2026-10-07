@@ -60,6 +60,18 @@ def finding(lint: str, where: str, msg: str) -> None:
     findings.append((lint, where, msg))
 
 
+# A RULE THAT IS AGREED BUT NOT YET SATISFIED EVERYWHERE. It is printed in full, by name, and it
+# does NOT gate - because the alternatives are worse: tools/lint-baseline.txt forbids additions
+# ("Never ADD entries"), and a rule quietly weakened until it passes is the "baselined away"
+# failure this file warns about at the top. A pending rule gates as soon as its list is empty,
+# which is one line below. Nothing here is hidden; the count is printed whether or not anyone asks.
+pending: list[tuple[str, str, str]] = []
+
+
+def pending_finding(lint: str, where: str, msg: str) -> None:
+    pending.append((lint, where, msg))
+
+
 # --------------------------------------------------------------------------- L1
 def l1_no_double_background() -> None:
     """RULE 14. `nohup ... &` inside a harness makes the wrapper exit 0 while the runner keeps
@@ -129,6 +141,48 @@ def l2_vmlock_required() -> None:
             continue
         finding("L2-missing-vmlock", f.name,
                 "drives a guest via tools/qtest but never calls vm_lock")
+
+
+# --------------------------------------------------------------------------- L19
+def l19_guest_run_must_sweep_the_log() -> None:
+    """RULE: A HARNESS THAT DRIVES A GUEST MUST READ THAT GUEST'S ERROR LOG.
+
+    The owner made a clean error log the gate condition ("Make clean error log the gate
+    condition. Any error is fuckup!") and tools/log-sweep.py has carried an
+    error_lines_undeclared threshold for it since. Then a harness was written for a field report
+    that counted notifications and looked at nothing else: when its count probe broke it printed
+    MISSING DATA and carried on past four [ERROR] lines it had itself printed, and past 766
+    error/warning lines in the guest's log, including the one the owner could see on his screen.
+    He had to point at it. Asked whether this agent reads, detects and acts on all errors, Jev
+    answered 0.03, named this - a harness that does not check the logs - the worst of the four
+    failures at 0.65, and scored the remedy at 1.00: every rig harness runs the sweep and fails
+    on undeclared error lines, enforced so a harness without it cannot pass. Owner, same day:
+    "also yes, every rig run calls for log sweep and action".
+
+    A harness satisfies this by calling mgmt/harness/log-sweep.sh, or tools/log-sweep.py, or by
+    delegating to another harness that does. Exemptions are BY NAME, never by pattern, so a new
+    guest-driving harness cannot inherit one by accident."""
+    # a harness that merely reads one value off a guest is not a run; the rule targets the ones
+    # that BOOT or INSTALL, which is where a log accumulates something worth reading
+    drivers = ("qvm-start", "quick-upgrade.sh", "prime-run.sh", "clone-guest.sh")
+    sweepers = ("log-sweep.sh", "log-sweep.py")
+    # These are the sweep itself, or libraries sourced inside a caller that already sweeps, or
+    # single-purpose readers that boot nothing of their own.
+    exempt = ("log-sweep.sh", "vmlock.sh", "shutdown-lib.sh", "wu-liveness.sh", "e2e-wait.sh",
+              "env-assert.sh", "checkpoint.sh", "clone-guest.sh", "clone-to-template.sh",
+              "seal-qwt-golden.sh", "build-media.sh", "reprovision-usb.sh")
+    for f in HARNESS:
+        if f.name in exempt:
+            continue
+        txt = f.read_text(encoding="utf-8", errors="replace")
+        code = [ln for ln in txt.splitlines() if ln.lstrip() and not ln.lstrip().startswith("#")]
+        if not any(any(d in ln for d in drivers) for ln in code):
+            continue                                   # boots nothing: not a rig run
+        if any(any(sw in ln for sw in sweepers) for ln in code):
+            continue
+        pending_finding("L19-guest-run-without-log-sweep", f.name,
+                "boots or installs a guest but never sweeps its error log - a clean error log is "
+                "the gate condition, so a run that does not read the log cannot report on it")
 
 
 # --------------------------------------------------------------------------- L3
@@ -1012,6 +1066,7 @@ def main() -> int:
     l16_ps_script_scope_case_collision()
     l17_process_by_name()
     l18_relauncher_armed()
+    l19_guest_run_must_sweep_the_log()
     if a.ledger:
         l7_orphan_ledger_checks(a.ledger)
 
@@ -1042,6 +1097,17 @@ def main() -> int:
         print(f"\n{lint}  ({len(by_lint[lint])})")
         for where, msg in by_lint[lint]:
             print(f"  {where}\n      {msg}")
+
+    if pending and not a.quiet:
+        from collections import Counter as _C
+        print("\nPENDING RULES (agreed, enumerated, NOT YET GATING - each gates when its list empties):")
+        for lint, n in _C(l for l, _, _ in pending).most_common():
+            msg = next(m for ll, _, m in pending if ll == lint)
+            print(f"  {lint}  ({n} still to fix)")
+            print(f"      {msg}")
+            for ll, where, _m in pending:
+                if ll == lint:
+                    print(f"        - {where}")
 
     if not a.quiet:
         print("\nNOT LINTED (judgement, deliberately left as prose):")
