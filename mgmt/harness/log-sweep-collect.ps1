@@ -288,7 +288,15 @@ foreach ($f in $sorted) {
 $invFiles = 0; $invBytes = [long]0; $invLines = [long]0
 $invByModule = @{}
 $invSrc = @()
-if ($dirExists) { $invSrc = @(Get-ChildItem -LiteralPath $logDir -Filter *.log -File -ErrorAction SilentlyContinue) }
+$invOther = 0
+if ($dirExists) {
+    $invSrc = @(Get-ChildItem -LiteralPath $logDir -Filter *.log -File -ErrorAction SilentlyContinue)
+    # EVERYTHING ELSE IN THE DIRECTORY IS COUNTED TOO. The per-module stats below are about *.log,
+    # but a pile of .old / .txt / .etl / a subdirectory is still log volume, and an inventory that
+    # cannot see it would report a clean directory while something else filled it.
+    $invOther = @(Get-ChildItem -LiteralPath $logDir -File -Recurse -ErrorAction SilentlyContinue |
+                  Where-Object { $_.Extension -ne '.log' }).Count
+}
 foreach ($f in $invSrc) {
     $invFiles++
     $invBytes += $f.Length
@@ -303,7 +311,7 @@ foreach ($f in $invSrc) {
     $invByModule[$mod].bytes += $f.Length
     if ($n -ge 0) { $invByModule[$mod].lines += $n } else { $invByModule[$mod].unreadable++ }
 }
-Write-Output ("${Mark}INVENTORY direxists=$(if ($dirExists) { 1 } else { 0 }) files=$invFiles bytes=$invBytes lines=$invLines modules=$($invByModule.Count)")
+Write-Output ("${Mark}INVENTORY direxists=$(if ($dirExists) { 1 } else { 0 }) files=$invFiles bytes=$invBytes lines=$invLines modules=$($invByModule.Count) otherfiles=$invOther")
 foreach ($mod in ($invByModule.Keys | Sort-Object { -$invByModule[$_].files })) {
     $m = $invByModule[$mod]
     Write-Output ("${Mark}INVMODULE nameb64=$(Get-LswB64 $mod) files=$($m.files) bytes=$($m.bytes) lines=$($m.lines) unreadable=$($m.unreadable)")

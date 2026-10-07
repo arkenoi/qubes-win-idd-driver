@@ -1633,10 +1633,15 @@ def write_summary(rep, path):
     if inv:
         try:
             nf, nl, nb = int(inv.get("files", 0)), int(inv.get("lines", 0)), int(inv.get("bytes", 0))
-            L.append("LOGDIR INVENTORY: %d files, %d lines, %.1f MiB across %s module(s)%s" % (
+            other = inv.get("otherfiles")
+            L.append("LOGDIR INVENTORY: %d files, %d lines, %.1f MiB across %s module(s)%s%s" % (
                 nf, nl, nb / 1048576.0, inv.get("modules", "?"),
+                ("   + %s non-.log file(s)" % other) if other not in (None, "0") else "",
                 "" if inv.get("direxists") == "1" else "   -- THE LOG DIRECTORY DOES NOT EXIST"))
-            worst = sorted(rep["header"].get("invmodules") or [], key=lambda m: -int(m.get("files", 0)))[:5]
+            # RANKED BY LINES, not by file count: one file per module per day flattens the counts to
+            # about one each, so ranking by files would show nothing and hide whichever module is
+            # actually producing the volume.
+            worst = sorted(rep["header"].get("invmodules") or [], key=lambda m: -int(m.get("lines", 0)))[:5]
             for m in worst:
                 nm = b64dec_path(m.get("nameb64", "")) or "?"
                 unread = int(m.get("unreadable", 0))
