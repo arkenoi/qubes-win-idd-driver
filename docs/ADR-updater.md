@@ -475,3 +475,52 @@ the shipped notify route, the real grader), 42 checks, 11 defect knobs each fail
 
 **Open.** The dom0 notification of a REFUSED deploy arriving in dom0 is not measured (no refusal occurred on the
 rig); a scan reaching its limit during the wait is tested offline only.
+
+## 14. The cumulative goes first, and Windows is asked whether it registered it
+
+Decided 2026-10-04. Jev: picking the cumulative by DISM's identity 0.63 (Q1); a registration check is
+needed 0.88 (Q3); the order rule itself unsettled at 0.49 (Q2) - which is why the check, not the rule,
+carries the invariant. In `guest/qubes-windows-update.ps1` as `WU-PASS-ORDER`, `WU-INSTALL-MSUS`,
+`WU-CUMULATIVE-REGISTERED` and `WU-MSU-VERDICT`; replayed offline by
+`tools/tests/wu-cumulative-order-test.ps1`. (Written as 13 on its own branch; main had taken that number for the scan-wait section, so it is 14 here.)
+
+- **Only the `.msu` route is reordered.** The offer loop still resolves and fetches every offer in offer
+  order, and the Windows Update agent route (Defender, the Security platform, MSRT, no-KB offers with
+  static content) and the drivers resolved from the catalog by title still install inline, where they
+  always did and where 4.3.33 was measured working (Jev review 2026-10-04: moving them behind a staged
+  cumulative was the biggest risk, 0.78; the narrow design 0.73). The catalog `.msu` are queued and
+  installed after the loop: the cumulative first, then every other `.msu` in offer order.
+- **The inline routes are not CBS packages** and are NOT EXPECTED to set CBS `RebootPending` - not
+  measured. If one ever does, the gate below defers the cumulative truthfully, at the cost of one extra
+  restart; nothing is concealed.
+- **Which package is the cumulative is DISM's answer** - the package identity it reports for the file
+  (`OnePackage` or `RollupFix`) - never the title and never the filename (§6).
+- **The cumulative is installed only while nothing is pending.** CBS `RebootPending` is read at that
+  moment. Set - by Windows or by an earlier pass - the cumulative is DEFERRED with exactly that reason
+  and the restart is requested through `reboot_needed` (§8, §10). Unreadable, the cumulative proceeds
+  and the pass says so (§10: an unmeasured guard is announced, never assumed in either direction).
+- **The one-package-per-pass rule has exactly one relaxation.** A package that is not itself a
+  cumulative may stage behind a cumulative that this pass staged AND Windows registered. A second
+  cumulative is deferred. With no registered cumulative the rule stands as it was.
+- **For the cumulative, DISM's 3010 is not the answer; the package list is.** It is read before and
+  after the DISM call as structured data - `Get-WindowsPackage -Online`, the package name and the
+  `PackageState` enum, never `dism /format:table`, whose state words are localized (§6). A `RollupFix`
+  package must be NEWLY `InstallPending`: absent before, or not pending before. If it is not, the KB
+  FAILS, and its reason says that DISM accepted the package, that Windows did not register it, that it
+  is not staged, and that the pass after the requested restart retries it. An unreadable list is the
+  same failure with "unknown" in place of "did not register": missing data fails, and nothing
+  unverified is ever reported as staged.
+
+**Why:** measured on the reporter's German 25H2 template with 4.3.33, four fresh clones. .NET staged
+first and the cumulative second: DISM returned 3010 for both, no `RollupFix` package was ever
+registered, the build did not move at the restart and the update was re-offered - so DISM's 3010 alone
+would have had the updater report it staged, a §2 break in the direction that conceals. (That run lifted
+the one-package rule on purpose; shipped 4.3.33 defers the cumulative behind .NET instead - its second
+restart - and a cumulative it stages alone was verified to land, UBR 9457.) The same two packages
+in one DISM call: the same loss. The cumulative alone: its servicing stack installed online at once and
+the rollup registered `InstallPending`. The cumulative first and .NET second: both landed at one
+restart. The mechanism - the cumulative's bundled servicing stack must install online, and a pending
+restart blocks it - is inferred, not established, so the design does not rest on it: any miss of the
+order rule ends in a truthful deferral or a failed row that requests the restart. The cost is at most
+one extra restart, and dom0 is told once that work is pending and a restart is required - the owner's
+rule - never that something will complete when it will not.
