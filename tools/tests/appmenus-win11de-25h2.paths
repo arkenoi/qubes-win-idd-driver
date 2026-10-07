@@ -1,0 +1,37 @@
+# The Start Menu of a real guest, as get-appmenus.ps1's sweep found it.
+#
+# MEASURED 2026-10-07 on a clone of the win11de-qwt golden - German Windows 11 25H2
+# (26200.8037), QWT-NG installed, no third-party software. One path per line, relative to
+# "%ProgramData%\Microsoft\Windows\Start Menu\Programs", exactly as the sweep sees them.
+#
+# Note what the German guest proves: the DIRECTORY names are English. Windows localizes only
+# the displayed folder name, through desktop.ini - so matching a folder name literally is
+# correct across locales.
+Accessories\Remote Desktop Connection.lnk
+Accessories\Steps Recorder.lnk
+Accessories\System Tools\Character Map.lnk
+Accessories\Windows Media Player Legacy.lnk
+Administrative Tools\Component Services.lnk
+Administrative Tools\Computer Management.lnk
+Administrative Tools\Disk Cleanup.lnk
+Administrative Tools\Event Viewer.lnk
+Administrative Tools\Memory Diagnostics Tool.lnk
+Administrative Tools\ODBC Data Sources (32-bit).lnk
+Administrative Tools\ODBC Data Sources (64-bit).lnk
+Administrative Tools\Performance Monitor.lnk
+Administrative Tools\Print Management.lnk
+Administrative Tools\RecoveryDrive.lnk
+Administrative Tools\Registry Editor.lnk
+Administrative Tools\Resource Monitor.lnk
+Administrative Tools\Security Configuration Management.lnk
+Administrative Tools\System Configuration.lnk
+Administrative Tools\System Information.lnk
+Administrative Tools\Task Scheduler.lnk
+Administrative Tools\Windows Defender Firewall with Advanced Security.lnk
+Administrative Tools\dfrgui.lnk
+Administrative Tools\iSCSI Initiator.lnk
+Administrative Tools\services.lnk
+Microsoft Edge.lnk
+System Tools\Task Manager.lnk
+Windows PowerShell\Windows PowerShell ISE (x86).lnk
+Windows PowerShell\Windows PowerShell ISE.lnk
