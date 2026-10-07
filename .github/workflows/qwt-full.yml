@@ -74,6 +74,7 @@ env:
 jobs:
   qwt-full:
     runs-on: windows-2022
+    timeout-minutes: 120   # a hung step must fail the job, not hold a concurrency slot for the 6-hour default
     env:
       CONFIG: Release
       # The fourth FILEVERSION field of every OURS binary built here (packaging/version-stamp).

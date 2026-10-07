@@ -117,6 +117,7 @@ jobs:
   # installable payload.
   idd:
     runs-on: windows-2022
+    timeout-minutes: 120   # a hung step must fail the job, not hold a concurrency slot for the 6-hour default
     steps:
       - name: Require signing config
         shell: pwsh
@@ -284,6 +285,7 @@ jobs:
   setup:
     needs: [msi, idd, pv, cons]
     runs-on: windows-2022
+    timeout-minutes: 120   # a hung step must fail the job, not hold a concurrency slot for the 6-hour default
     steps:
       - uses: actions/checkout@v4
         with:
@@ -530,6 +532,7 @@ jobs:
   iso:
     needs: setup
     runs-on: ubuntu-latest
+    timeout-minutes: 120   # a hung step must fail the job, not hold a concurrency slot for the 6-hour default
     steps:
       - uses: actions/checkout@v4
 
@@ -622,6 +625,7 @@ jobs:
   rpm:
     needs: iso
     runs-on: ubuntu-latest
+    timeout-minutes: 120   # a hung step must fail the job, not hold a concurrency slot for the 6-hour default
     steps:
       - uses: actions/checkout@v4
 

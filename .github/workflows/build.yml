@@ -25,6 +25,7 @@ jobs:
   # ---------------------------------------------------------------- Track B: IddCx driver
   idd-driver:
     runs-on: windows-2022
+    timeout-minutes: 120   # a hung step must fail the job, not hold a concurrency slot for the 6-hour default
     steps:
       - uses: actions/checkout@v4
         with:
@@ -254,6 +255,7 @@ jobs:
   gui-agent:
     if: ${{ vars.AGENT_BUILD == 'true' }}
     runs-on: windows-2022
+    timeout-minutes: 120   # a hung step must fail the job, not hold a concurrency slot for the 6-hour default
     env:
       CONFIG: Release
       # Pinned to the versions QWT 4.2.2 installed in win-idd-test (read off the live guest).
@@ -633,10 +635,20 @@ jobs:
           #      never fails open), FAILCLOSED (doubt suppresses), NOPREEMPT (no pre-emption, the flash).
           $proj = 'agent\vs2022\toasthold-test\toasthold-test.vcxproj'
           $exe  = 'agent\vs2022\toasthold-test\x64\Release\toasthold_test.exe'
+          # BOUNDED, for the same reason as the toast-actions suite: TOASTHOLD_DEFECT_NOBOUND and
+          # TOASTHOLD_DEFECT_NOFORWARDBOUND remove a bound, so under them the suite is supposed to
+          # wait for ever, and an unbounded run here hangs the job until the 6-hour limit.
+          function Invoke-Bounded([string]$path, [int]$seconds) {
+            $p = Start-Process -FilePath $path -PassThru -NoNewWindow
+            if ($p.WaitForExit($seconds * 1000)) { return $p.ExitCode }
+            try { $p.Kill(); $p.WaitForExit(10000) } catch { }
+            return 124
+          }
           & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
           if ($LASTEXITCODE -ne 0) { throw "toasthold_test msbuild failed" }
-          & $exe
-          if ($LASTEXITCODE -ne 0) { throw "toasthold_test suite FAILED on the clean build" }
+          $rc = Invoke-Bounded $exe 300
+          if ($rc -eq 124) { throw "toasthold_test suite HUNG on the clean build - a clean suite must finish" }
+          if ($rc -ne 0) { throw "toasthold_test suite FAILED on the clean build (rc=$rc)" }
           #   8..11. the review's blockers and majors as knobs: PREEMPT_IDENTGATE (pre-emption ends while a read
           #      is in flight - the in-place swap maps the window while the bridged toast paints), SUPPRESS_FINAL
           #      (a suppressed banner ignores its record turning window / the bridge dying before dom0's ack - a
@@ -657,9 +669,10 @@ jobs:
             & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 `
                 /t:Rebuild "/p:ToastHoldDefect=$d"
             if ($LASTEXITCODE -ne 0) { throw "toasthold_test defect $d build failed to compile" }
-            & $exe
-            if ($LASTEXITCODE -eq 0) { throw "defect-reintroduction proof FAILED: toasthold_test passed with $d" }
-            Write-Host "defect proof OK: suite fails under $d"
+            $rc = Invoke-Bounded $exe 300
+            if ($rc -eq 0) { throw "defect-reintroduction proof FAILED: toasthold_test passed with $d" }
+            if ($rc -eq 124) { Write-Host "defect proof OK: suite HUNG at the bound under $d (an unbounded wait is what this defect is)" }
+            else { Write-Host "defect proof OK: suite fails under $d (rc=$rc)" }
           }
           # leave a clean binary behind (nothing packages it, but never leave a defect build around)
           & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
@@ -862,10 +875,22 @@ jobs:
           # MUST FAIL (the same matrix runs with g++ on the dev qube: tools/tests/toastactions-selftest.sh).
           $proj = 'tools\notifhost\toastactions_test.vcxproj'
           $exe  = 'tools\notifhost\x64\Release\toastactions_test.exe'
+          # EVERY RUN OF THIS SUITE IS BOUNDED. One of the defect knobs below,
+          # TOASTACT_DEFECT_NOLOOKUPBOUND, removes a bound so the suite waits FOR EVER by design -
+          # the dev-qube selftest runs it under `timeout` and counts rc=124 as the proof. This step
+          # ran it with no bound and hung until the job limit: twelve builds sat in_progress for
+          # hours, occupying every concurrency slot, with six more runs queued behind them.
+          function Invoke-Bounded([string]$path, [int]$seconds) {
+            $p = Start-Process -FilePath $path -PassThru -NoNewWindow
+            if ($p.WaitForExit($seconds * 1000)) { return $p.ExitCode }
+            try { $p.Kill(); $p.WaitForExit(10000) } catch { }
+            return 124   # the bound fired, as `timeout` reports it
+          }
           & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
           if ($LASTEXITCODE -ne 0) { throw "toastactions_test msbuild failed" }
-          & $exe
-          if ($LASTEXITCODE -ne 0) { throw "toastactions_test suite FAILED on the clean build" }
+          $rc = Invoke-Bounded $exe 300
+          if ($rc -eq 124) { throw "toastactions_test suite HUNG on the clean build - a clean suite must finish" }
+          if ($rc -ne 0) { throw "toastactions_test suite FAILED on the clean build (rc=$rc)" }
           foreach ($d in @('TOASTACT_DEFECT_BACKGROUND_CARRIED', 'TOASTACT_DEFECT_PARTIAL_FORWARD', 'TOASTACT_DEFECT_PACKAGED_COM',
                            'TOASTACT_DEFECT_BADKEY', 'TOASTACT_DEFECT_NONOTICE', 'TOASTACT_DEFECT_UNBOUNDED_TABLE',
                            'TOASTACT_DEFECT_KEY_BY_SEQ', 'TOASTACT_DEFECT_NOCLICKBOUND', 'TOASTACT_DEFECT_NOKILL',
@@ -876,9 +901,13 @@ jobs:
             & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 `
                 /t:Rebuild "/p:ToastActDefect=$d"
             if ($LASTEXITCODE -ne 0) { throw "toastactions_test defect $d build failed to compile" }
-            & $exe
-            if ($LASTEXITCODE -eq 0) { throw "defect-reintroduction proof FAILED: toastactions_test passed with $d" }
-            Write-Host "defect proof OK: toast actions suite fails under $d"
+            # The proof is that the suite does NOT pass. A knob whose defect IS an unbounded wait
+            # proves itself by hitting the bound, so 124 counts - and the message says which it was,
+            # because "it hung" and "it failed" are different findings.
+            $rc = Invoke-Bounded $exe 300
+            if ($rc -eq 0) { throw "defect-reintroduction proof FAILED: toastactions_test passed with $d" }
+            if ($rc -eq 124) { Write-Host "defect proof OK: toast actions suite HUNG at the bound under $d (an unbounded wait is what this defect is)" }
+            else { Write-Host "defect proof OK: toast actions suite fails under $d (rc=$rc)" }
           }
           & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
           if ($LASTEXITCODE -ne 0) { throw "toastactions_test clean rebuild failed" }
@@ -1006,6 +1035,7 @@ jobs:
     # Build the package whenever the agent built, even if the driver job failed.
     if: ${{ always() && needs.gui-agent.result == 'success' }}
     runs-on: windows-2022
+    timeout-minutes: 120   # a hung step must fail the job, not hold a concurrency slot for the 6-hour default
     steps:
       - uses: actions/checkout@v4
         with:
