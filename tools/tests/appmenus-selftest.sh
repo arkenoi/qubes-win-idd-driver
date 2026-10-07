@@ -50,7 +50,8 @@ for k in range(j, len(s)):
 out.append(s[m.start():k+1])
 
 # the functions, brace-counted rather than regex-truncated (tools/probe-review.py's lesson)
-for fn in ('Get-QwtSafeValue', 'Get-QwtIdKey', 'Get-QwtNameKey', 'Get-QwtMenuRelativePath',
+for fn in ('Get-QwtSafeValue', 'Get-QwtIdKey', 'Get-QwtDesktopName', 'Get-QwtNameKey',
+           'Get-QwtMenuRelativePath',
            'Test-QwtMenuExcluded', 'Get-QwtMenuName', 'Test-QwtBuiltinRedundant'):
     m = re.search(r'^Function\s+' + fn + r'\b', s, re.M)
     if not m: sys.exit(fn + " not found")
@@ -102,14 +103,14 @@ foreach ($line in (Get-Content -LiteralPath $Paths)) {
     $emittedIds[(Get-QwtIdKey $id)] = $true
     $emittedNames[(Get-QwtNameKey $name)] = $true
     # the label as dom0 receives it, which is what the user reads
-    Write-Output "$(if ($rec) {'KEPT'} else {'NOTREC'})`t$id`t$(Get-QwtSafeValue $name)"
+    Write-Output "$(if ($rec) {'KEPT'} else {'NOTREC'})`t$id`t$(Get-QwtSafeValue $name)`t$(Get-QwtDesktopName $id)"
 }
 foreach ($b in $script:Builtins) {
     $why = Test-QwtBuiltinRedundant $b.id $b.name $emittedIds $emittedNames
-    if ($why) { Write-Output "SKIPPED`t$($b.id)`t$($b.name)"; continue }
+    if ($why) { Write-Output "SKIPPED`t$($b.id)`t$($b.name)`t$(Get-QwtDesktopName $b.id)"; continue }
     $emittedIds[(Get-QwtIdKey $b.id)] = $true
     $emittedNames[(Get-QwtNameKey $b.name)] = $true
-    Write-Output "BUILTIN`t$($b.id)`t$(Get-QwtSafeValue $b.name)"
+    Write-Output "BUILTIN`t$($b.id)`t$(Get-QwtSafeValue $b.name)`t$(Get-QwtDesktopName $b.id)"
 }
 PS
 
@@ -225,7 +226,7 @@ One\Thing.lnk
 Two\Thing.lnk
 EOF
 co=$("$PWSH" -NoProfile -File "$OUT/drive.ps1" -Fn "$OUT/fn.ps1" -Paths "$OUT/collide.paths" 2>&1)
-if echo "$co" | grep -qP '^KEPT\tOne-Thing\tThing$' && echo "$co" | grep -qP '^KEPT\tTwo-Thing\tTwo Thing$'; then
+if echo "$co" | grep -qP '^KEPT\tOne-Thing\tThing\t' && echo "$co" | grep -qP '^KEPT\tTwo-Thing\tTwo Thing\t'; then
   ok "collision_disambiguated: the second 'Thing' falls back to 'Two Thing' rather than repeating"
 else
   bad "collision_disambiguated:"; echo "$co" | sed 's/^/        /'
@@ -285,6 +286,21 @@ if [ "$(echo "$kt" | head -1)" = 'id' ] && [ -z "$(echo "$kt" | sed -n 2p)" ]; t
   ok "id_key_is_shared: an id inserted sanitised+lower-cased is found by the built-in check, and a different id is not"
 else
   bad "id_key_is_shared: expected 'id' then empty, got: $(echo "$kt" | tr '\n' '/')"
+fi
+
+# 16. EVERY RECOMMENDED NAME MUST BE ONE dom0 WILL ACTUALLY HAVE. `menu-items` matching is
+#     `os.path.basename(x) in whitelist` (receive.py) and a name it cannot match is ignored in
+#     SILENCE. The recommendation was built from the raw id while Emit-Entry sanitises it, so it
+#     named "Windows_PowerShell-Windows_PowerShell_ISE_(x86).desktop" where the emitted line reads
+#     "..._ISE__x86_.desktop" - one entry an admin pasting that value would have lost, with nothing
+#     to say why. Found by reading the guest's own log, not by any check that existed.
+emitted(){ awk -F'\t' '$1=="KEPT"||$1=="BUILTIN"||$1=="NOTREC"{print $4}' "$M" | sort -u; }
+recnames(){ awk -F'\t' '$1=="KEPT"||$1=="BUILTIN"{print $4}' "$M" | sort -u; }
+orphan=$(comm -23 <(recnames) <(emitted))
+if [ -z "$orphan" ] && [ "$(recnames | wc -l)" = 17 ] && ! recnames | grep -q '[^a-zA-Z0-9._-]'; then
+  ok "recommended_names_resolvable: all 17 recommended names are names dom0 will have, and none carries a character Emit-Entry would rewrite"
+else
+  bad "recommended_names_resolvable: names dom0 will never see: $(echo "$orphan" | tr '\n' ' '); unsanitised: $(recnames | grep '[^a-zA-Z0-9._-]' | tr '\n' ' ')"
 fi
 
 # ---- the knobs: each fix reverted, and the check it owns must FAIL ------------------------------

@@ -129,16 +129,26 @@ count(){ names "$1" | wc -l; }
 echo
 echo "--- the guest's own reading -------------------------------------------------"
 printf 'entries:        control(A)=%s  under-test(B)=%s\n' "$(count A)" "$(count B)"
-printf 'Administrative: control(A)=%s  under-test(B)=%s\n' "$(names A | command grep -c 'Administrative')" "$(names B | command grep -c 'Administrative')"
+# by ID: the control's NAMES carry the folder prefix and the fix's do not, so counting the word
+# "Administrative" in a name counts the name fix, not the entries.
+printf 'Admin entries:  control(A)=%s  under-test(B)=%s  (by id - both must be equal)\n' \
+  "$(command grep -cE '^Administrative_Tools-[^:]*\.desktop:Name=' "$OUT/A.lines")" \
+  "$(command grep -cE '^Administrative_Tools-[^:]*\.desktop:Name=' "$OUT/B.lines")"
 printf 'Microsoft Edge: control(A)=%s  under-test(B)=%s\n' "$(names A | command grep -cx 'Microsoft Edge')" "$(names B | command grep -cx 'Microsoft Edge')"
 printf 'dup labels:     control(A)=%s  under-test(B)=%s\n' "$(names A | tr 'A-Z' 'a-z' | sort | uniq -d | wc -l)" "$(names B | tr 'A-Z' 'a-z' | sort | uniq -d | wc -l)"
 echo
 
 [ "$(count A)" -gt 0 ] && [ "$(count B)" -gt 0 ] || { bad "one arm produced no report at all - missing data"; }
-# 1. the ADMIN CONSOLES ARE STILL REPORTED - the recommendation is what changes, not availability
-a_adm=$(names A | command grep -c 'Administrative'); b_adm=$(names B | command grep -c 'Administrative')
+# 1. the ADMIN CONSOLES ARE STILL REPORTED - the recommendation changes, availability does not.
+#    BY ID, not by name. The first version of this check counted the word "Administrative" in the
+#    DISPLAYED NAME and read control=20 test=0 - because the control's names are folder-prefixed
+#    ("Administrative Tools Registry Editor") and the fix emits the shortcut's own name ("Registry
+#    Editor"). It was measuring the name fix and calling it a dropped entry. The ID keeps the
+#    folder prefix, which is what makes it unique, so the ID is what identifies the entry.
+adms(){ command grep -cE '^Administrative_Tools-[^:]*\.desktop:Name=' "$OUT/$1.lines"; }
+a_adm=$(adms A); b_adm=$(adms B)
 if [ "$a_adm" -gt 0 ] && [ "$b_adm" = "$a_adm" ]; then
-  ok "admin_still_available: the control reported $a_adm Administrative entries and so does the build under test - they stay tickable in Settings -> Applications"
+  ok "admin_still_available: $b_adm Administrative Tools entries reported by the build under test, the same $a_adm as the control - still tickable in Settings -> Applications"
 else
   bad "admin_still_available: control=$a_adm test=$b_adm - the build under test must report the SAME ones (the exclusion was reverted)"
 fi
@@ -160,26 +170,34 @@ fi
 [ "$(names B | tr 'A-Z' 'a-z' | sort | uniq -d | wc -l)" = 0 ] \
   && ok "no_dup_labels_on_guest: every reported entry reads differently" \
   || bad "no_dup_labels_on_guest: $(names B | tr 'A-Z' 'a-z' | sort | uniq -d | tr '\n' ' ')"
-# 5. the contract dom0 depends on: exit 0, and well-formed lines only
-rc=$(tools/qtest run "powershell -NoProfile -ExecutionPolicy Bypass -File \"$GUEST_PATH\" > nul 2>&1; echo RC=\$LASTEXITCODE" 2>/dev/null | tr -d '\r' | command grep -oE 'RC=[0-9-]+' | head -1)
+# 5. the contract dom0 depends on: exit 0 whatever happens, because a non-zero exit costs dom0
+#    the ENTIRE application list. Run from a PUSHED script: the first version inlined
+#    `echo RC=$LASTEXITCODE` inside a bash double-quoted string, so bash expanded it to nothing
+#    and the guest was asked to echo "RC=" - which then read as a missing exit code.
+cat > "$OUT/rcprobe.ps1" <<'PS1'
+$p = 'C:\Program Files\Qubes Tools\qubes-rpc-services\get-appmenus.ps1'
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p 2>&1 | Out-Null
+Write-Output "RC=$LASTEXITCODE"
+PS1
+rc=$(tools/qtest pushrun "$OUT/rcprobe.ps1" 2>/dev/null | tr -d '\r' | command grep -oE 'RC=[0-9-]+' | tail -1)
 [ "$rc" = "RC=0" ] && ok "exit_zero_on_guest: the service exits 0 ($rc) - a non-zero exit loses dom0's whole app list" \
-                   || bad "exit_zero_on_guest: got '$rc'"
-# 5b. NOTHING IS DROPPED. The available list must not shrink except for the duplicate Edge - this
-#     is the check that exists because an earlier version of the fix removed 20 entries from it.
+                   || bad "exit_zero_on_guest: got '$rc' (expected RC=0)"
+
+# 5b. NOTHING IS DROPPED. Available must not shrink except for the duplicate Edge - the check that
+#     exists because an earlier version of the fix removed 20 entries from dom0's available list.
 if [ "$(count B)" -ge "$(( $(count A) - 1 ))" ]; then
   ok "nothing_dropped_on_guest: $(count B) entries still AVAILABLE against the control's $(count A) (the one difference is the duplicate Edge)"
 else
-  bad "nothing_dropped_on_guest: available fell from $(count A) to $(count B) - entries the user can no longer enable: $(comm -13 <(names B|sort) <(names A|sort) | tr '\n' ' ')"
+  bad "nothing_dropped_on_guest: available fell from $(count A) to $(count B) - entries the user can no longer enable: $(comm -13 <(names B | sort) <(names A | sort) | tr '\n' ' ')"
 fi
 
-# 5c. the suggested default selection reaches the guest LOG (it must never reach stdout, where
-#     dom0 would print "Warning: ignoring key" for it). This is top-level script code that the
-#     offline suite cannot drive, so the guest is the only place it gets exercised.
-# findstr, not a PowerShell one-liner: nesting quotes through qtest is a lint rule of its own
-# (L3) and has produced more broken probes here than it has readings.
+# 5c. the suggested default selection reaches the guest LOG, and never stdout - dom0 prints
+#     "Warning: ignoring key" for anything on stdout it does not recognise. This is top-level
+#     script code the offline suite cannot drive, so the guest is the only place it is exercised.
+#     findstr, not a PowerShell one-liner: nesting quotes through qtest is its own lint rule (L3).
 rl=$(tools/qtest run 'cmd /c findstr /C:MENU-RECOMMENDATION "Q:\Qubes Logs\*.log"' 2>/dev/null | tr -d '\r' | command grep -a 'MENU-RECOMMENDATION' | tail -1)
 if [ -n "$rl" ]; then
-  echo "    $rl" > "$OUT/recommendation.txt"
+  printf '%s\n' "$rl" > "$OUT/recommendation.txt"
   if command grep -q 'menu-items' <<<"$rl" && ! command grep -q 'Administrative' <<<"$rl"; then
     ok "recommendation_logged_on_guest: the suggested menu-items reached the guest log and leaves the administration consoles out"
   else
@@ -204,4 +222,12 @@ cat "$OUT/B.menu"
 
 echo
 echo "appmenu-guest-ab: $pass passed, $fail failed   (raw: $OUT)"
+# A SUITE THAT SHRINKS IS NOT A PASS. An edit of mine sliced from "# 5." to "# 6." and silently
+# deleted three checks - including both that verify the recommendation, the only new behaviour here
+# - and the run then reported "7 passed, 0 failed" and looked greener than the one before it.
+EXPECT_CHECKS=${EXPECT_CHECKS:-10}
+if [ "$((pass + fail))" -lt "$EXPECT_CHECKS" ]; then
+  echo "FAIL  only $((pass + fail)) checks ran, expected at least $EXPECT_CHECKS - the suite has been gutted, not passed"
+  exit 1
+fi
 [ "$fail" = 0 ] || exit 1
