@@ -1,0 +1,1637 @@
+{
+ "version": 1,
+ "generated": "2026-10-07T06:29:25Z",
+ "source_reports": [
+  "bench-rz3.json",
+  "bench-rz7.json",
+  "bench-rz8.json",
+  "bench-rz9-unmarked.json",
+  "bench-rz9.json",
+  "deaths-1007.json",
+  "dom0-control-4335-1007-0453.json",
+  "dom0-win11-acc-headless.json",
+  "dom0-win11-app-headless.json",
+  "dom0-win11-nfy-headless.json",
+  "dom0-win11de-tup-headless.json",
+  "dom0-win11r-thold-0447.json",
+  "installer-all.json",
+  "thold-37230058013-20261006-155959.json",
+  "thold-37499041570-20261006-170129.json",
+  "thold-37499041570-20261006-180554.json",
+  "thold-37520334706-20261006-194759.json",
+  "thold-37525894363-20261006-203044.json",
+  "thold-37540488716-20261007-000922.json",
+  "thold-37554318731-20261007-010009.json"
+ ],
+ "note": "normalized SIGNATURE patterns + a reason each; never captured log content. status: expected | benign | known-defect | unsettled. max_per_boot is the rise ceiling (rise = > max(ceiling*rise_factor, ceiling+rise_min_delta)).",
+ "thresholds": {
+  "agent_unrequested_deaths": {
+   "max": 0,
+   "severity": "P1",
+   "why": "ADR-supervision 1: an unrequested death of ours is a major error"
+  },
+  "agent_deaths_at_shutdown": {
+   "max": 0,
+   "severity": "P1",
+   "why": "a shutdown must stop the agent through the watchdog, never kill it"
+  },
+  "agent_relaunches_at_shutdown": {
+   "max": 0,
+   "severity": "P2",
+   "why": "a relaunch into an ending session is the 2026-10-07 defect"
+  },
+  "agent_instances_per_shutdown": {
+   "max": 1,
+   "severity": "P2",
+   "why": "one agent per shutdown; three = three vchan setups with dom0"
+  },
+  "agent_instances_per_boot": {
+   "max": 1,
+   "severity": "P2",
+   "why": "the agent is started once per boot; a second instance is a death or a restart"
+  },
+  "agent_ends_unrecorded": {
+   "max": 0,
+   "severity": "P2",
+   "why": "an agent log that stops with no requested stop and no death record"
+  },
+  "vchan_setups_per_shutdown": {
+   "max": 0,
+   "severity": "P2",
+   "why": "no new vchan announcement while the guest is going down"
+  },
+  "vchan_announce_without_connect": {
+   "max": 0,
+   "severity": "P2",
+   "why": "an announced vchan that dom0 never connected to"
+  },
+  "vchan_reconnects": {
+   "max": 0,
+   "severity": "P2",
+   "why": "a second announcement in one instance is a reconnect"
+  },
+  "handshake_refusals": {
+   "max": 0,
+   "severity": "P2",
+   "why": "QGAHANDSHAKE: messages refused before the version exchange"
+  },
+  "broker_deaths": {
+   "max": 0,
+   "severity": "P1",
+   "why": "QGABROKERDIED outside a fault-injection context - owner policy 2026-10-07: a spontaneous de-slice broker death is P1 (findings/issues.md P1 'A SPONTANEOUS DE-SLICE BROKER DEATH OR HANG IS P1')"
+  },
+  "broker_hangs": {
+   "max": 0,
+   "severity": "P1",
+   "why": "QGABROKERHUNG outside a fault-injection context (same policy)"
+  },
+  "fi_detection_missing": {
+   "max": 0,
+   "severity": "P1",
+   "why": "an M8 injection record whose detection is absent (QGABROKERHUNG within 2 s of the next registration, then reap + relaunch): the test failing silently is the other half of M8"
+  },
+  "fi_context_unproven": {
+   "max": 0,
+   "severity": "P1",
+   "why": "the run was declared fault-injection, but no log carries QGAFAULT-INIT and no injection record is in the capture: the test build / injection was not running (the rz24 lesson); nothing is excused"
+  },
+  "closed_defect_recurrence": {
+   "max": 0,
+   "severity": "P1",
+   "why": "a signature whose issue the baseline records as CLOSED recurred: a regression"
+  },
+  "helper_deaths": {
+   "max": 0,
+   "severity": "P1",
+   "why": "QGANOTIFBRIDGEEXIT / ETWPROXYSUP exited: the notification bridge or etwproxy died (the broker has its own metric)"
+  },
+  "helper_relaunches": {
+   "max": 0,
+   "severity": "P2",
+   "why": "a helper launched more than once in one agent instance (broker relaunches after an injected hang excluded)"
+  },
+  "requested_stop_nonzero_exit": {
+   "max": 0,
+   "severity": "P2",
+   "why": "a requested stop must exit 0 (the 0xb7 case)"
+  },
+  "errors_during_requested_stop": {
+   "max": 0,
+   "severity": "P2",
+   "why": "no ERROR line between the watchdog's 'asked to exit' and 'is gone'"
+  },
+  "stale_error_lines": {
+   "max": 0,
+   "severity": "P2",
+   "why": "'failed with error 0x0: The operation completed successfully' is a stale error code"
+  },
+  "watchdog_fast_death_backoffs": {
+   "max": 0,
+   "severity": "P2",
+   "why": "the agent died within 10 s of launch, or a launch failed"
+  },
+  "service_failures": {
+   "max": 0,
+   "severity": "P1",
+   "why": "System 7023/7024/7031/7034/7043 for one of our services"
+  },
+  "wer_crashes": {
+   "max": 0,
+   "severity": "P1",
+   "why": "Application 1000/1001/1026 for one of our executables"
+  },
+  "death_events": {
+   "max": 0,
+   "severity": "P1",
+   "why": "Application 4001-4004 under 'Qubes Windows Tools': a supervisor recorded a death"
+  },
+  "death_record_mismatch": {
+   "max": 0,
+   "severity": "P2",
+   "why": "a watchdog death line without its 4001 record, or a 4001 without the line (ADR-supervision 2)"
+  },
+  "unexpected_shutdowns": {
+   "max": 0,
+   "severity": "P1",
+   "why": "System 6008 / Kernel-Power 41: the previous shutdown was not clean"
+  },
+  "bugchecks": {
+   "max": 0,
+   "severity": "P1",
+   "why": "System 1001 BugCheck"
+  },
+  "task_failures": {
+   "max": 0,
+   "severity": "P2",
+   "why": "TaskScheduler 201/203 for one of our tasks"
+  },
+  "fallbacks_fired": {
+   "max": 0,
+   "severity": "P2",
+   "why": "project rule: a fallback firing is an anomaly, logged loudly and diagnosed"
+  },
+  "rise_factor": 2.0,
+  "rise_min_delta": 3
+ },
+ "patterns": [
+  {
+   "regex": "^watchdog\\|E\\|WatchdogThread: Process 'gui-agent\\.exe' \\(PID N\\) exited with code 0xH without this service asking it to",
+   "status": "known-defect",
+   "issue": "shutdown-death-relaunch",
+   "reason": "the agent dies (0x40010004) when its session ends at shutdown and the watchdog relaunches it into the ending session - three instances per shutdown, each a vchan setup with dom0 (owner 2026-10-07); being fixed now"
+  },
+  {
+   "regex": "^watchdog\\|E\\|WatchdogThread: Process 'gui-agent\\.exe' died within N ms of starting",
+   "status": "known-defect",
+   "issue": "shutdown-death-relaunch",
+   "reason": "the relaunched agent dies at once in the ending session and the watchdog backs off and relaunches again (2026-10-07); being fixed now"
+  },
+  {
+   "regex": "^event\\|E\\|Application\\|4001\\|Qubes Windows Tools\\|The GUI agent \\(gui-agent\\.exe, PID N\\) exited without being asked to",
+   "status": "known-defect",
+   "issue": "shutdown-death-relaunch",
+   "reason": "the death record of the shutdown deaths above (the recorder is right; the death is the defect)"
+  },
+  {
+   "regex": "^agent\\|E\\|WinMain: WatchForEvents failed with error 0xH",
+   "status": "known-defect",
+   "issue": "stale-exit-error",
+   "reason": "a REQUESTED stop ends in win_perror(\"WatchForEvents\") with a stale GetLastError (0xb7, or 0x0 \"The operation completed successfully\") logged at ERROR and returned as the exit code (2026-10-07); being fixed now"
+  },
+  {
+   "regex": "QGABROKERDIED de-slice broker STOPPED HEARTBEATING",
+   "status": "known-defect",
+   "issue": "broker-heartbeat-reap (CLOSED 2026-09-27 - a recurrence is a REGRESSION)",
+   "reason": "4 events 2026-09-27 outside any injection: the heartbeat stopped within 0.1 s of the agent unmapping a window; the heartbeat criterion was replaced by an owned named mutex plus a per-request ack deadline (agent 45889d1, 2026-10-01)"
+  },
+  {
+   "regex": "duplication->(AcquireNextFrame|ReleaseFrame)[()]* failed with error 0xH: The keyed mutex was abandoned",
+   "status": "known-defect",
+   "issue": "findings/issues.md P2 \"win11-24H2 resolution-change capture FREEZE (0x887a0026 keyed-mutex-abandoned)\"; findings/capture.md",
+   "reason": "fires routinely on resolution/seamless transitions; RecreateDuplication recovers in place, windows kept (filed P2)"
+  },
+  {
+   "regex": "QGAWGCRECREATE",
+   "status": "known-defect",
+   "issue": "findings/issues.md P1 \"M7 IS NOT CLEAN ON rz25: ALT-NAV KEY-TIP BADGES ... POKED\" (the M7 badge-poke)",
+   "reason": "the broker recreated a WGC session after a false poke went unanswered; filed under the M7 badge-poke P1"
+  },
+  {
+   "regex": "QGABROKERHUNG de-slice broker process is still RUNNING",
+   "status": "expected",
+   "context": "fault-injection",
+   "issue": "rest-zero M8 (docs/DESIGN-rest-zero-capture.md); findings/issues.md P1 \"A SPONTANEOUS DE-SLICE BROKER DEATH OR HANG IS P1\"",
+   "reason": "the M8 cell suspends the broker (m8-suspend.ps1) and requires this line within 2 s of the next registration; outside an evidenced injection it is a real hang (P1)"
+  },
+  {
+   "regex": "QGABROKERDIED de-slice broker STOPPED SERVING",
+   "status": "expected",
+   "context": "fault-injection",
+   "issue": "rest-zero M8; findings/issues.md P1 \"A SPONTANEOUS DE-SLICE BROKER DEATH OR HANG IS P1\"",
+   "reason": "the death line the M8 reap produces; outside an evidenced injection it is a real death (P1)"
+  },
+  {
+   "regex": "QGABROKERREAP terminating hung de-slice broker",
+   "status": "expected",
+   "context": "fault-injection",
+   "issue": "rest-zero M8",
+   "reason": "the reap the M8 criterion requires after the detected hang"
+  },
+  {
+   "regex": "QGABROKERBACK de-slice broker RECOVERED",
+   "status": "expected",
+   "context": "fault-injection",
+   "issue": "rest-zero M8",
+   "reason": "the relaunch the M8 criterion requires; outside an injection it means a broker died"
+  }
+ ],
+ "signatures": {
+  "agent|E|BrokerRegister: QGABROKERREGFAIL hwnd 0xH (class CASCADIA_HOSTING_WINDOW_CLASS, NxN): the broker arena (H bytes) has no room for two N-byte buffers - the window is withheld until space frees": {
+   "status": "unsettled",
+   "reason": "Jev: defect 0.40 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 7,
+   "family": "agent",
+   "level": "E",
+   "jev": {
+    "choice": "defect",
+    "confidence": 0.4
+   }
+  },
+  "agent|E|BrokerSupervise: QGABROKERDIED de-slice broker STOPPED SERVING after being ready (death #N, pid was N). This is a MAJOR FAILURE, not a hiccup: while it is gone there is NO composite fallback on an eligible guest, so toasts, menus and Win": {
+   "status": "expected",
+   "reason": "the death line the M8 reap produces; outside an evidenced injection it is a real death (P1)",
+   "max_per_boot": 2,
+   "family": "agent",
+   "level": "E",
+   "issue": "rest-zero M8; findings/issues.md P1 \"A SPONTANEOUS DE-SLICE BROKER DEATH OR HANG IS P1\"",
+   "context": "fault-injection"
+  },
+  "agent|E|BrokerSupervise: QGABROKERHUNG de-slice broker process is still RUNNING but has not acknowledged the request on slot N for N ms (CtlAck N, wanted N) - a hang, not a crash; it is blocked in stage=loop (N) slot=N.": {
+   "status": "expected",
+   "reason": "the M8 cell suspends the broker (m8-suspend.ps1) and requires this line within 2 s of the next registration; outside an evidenced injection it is a real hang (P1)",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "E",
+   "issue": "rest-zero M8 (docs/DESIGN-rest-zero-capture.md); findings/issues.md P1 \"A SPONTANEOUS DE-SLICE BROKER DEATH OR HANG IS P1\"",
+   "context": "fault-injection"
+  },
+  "agent|E|BrokerSupervise: QGABROKERHUNG de-slice broker process is still RUNNING but has not acknowledged the request on slot N for N ms (CtlAck N, wanted N) - a hang, not a crash; it is blocked in stage=open-channel (N) slot=N.": {
+   "status": "expected",
+   "reason": "the M8 cell suspends the broker (m8-suspend.ps1) and requires this line within 2 s of the next registration; outside an evidenced injection it is a real hang (P1)",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "E",
+   "issue": "rest-zero M8 (docs/DESIGN-rest-zero-capture.md); findings/issues.md P1 \"A SPONTANEOUS DE-SLICE BROKER DEATH OR HANG IS P1\"",
+   "context": "fault-injection"
+  },
+  "agent|E|GetFrame: duplication->AcquireNextFrame() failed with error 0xH: The keyed mutex was abandoned.": {
+   "status": "known-defect",
+   "reason": "fires routinely on resolution/seamless transitions; RecreateDuplication recovers in place, windows kept (filed P2)",
+   "max_per_boot": 6,
+   "family": "agent",
+   "level": "E",
+   "issue": "findings/issues.md P2 \"win11-24H2 resolution-change capture FREEZE (0x887a0026 keyed-mutex-abandoned)\"; findings/capture.md"
+  },
+  "agent|E|QioReadBuffer: ReadFile failed with error 0xH: The pipe has been ended.": {
+   "status": "unsettled",
+   "reason": "Jev: defect 0.17 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "E",
+   "jev": {
+    "choice": "defect",
+    "confidence": 0.17
+   }
+  },
+  "agent|E|ReleaseFrame: duplication->ReleaseFrame failed with error 0xH: The keyed mutex was abandoned.": {
+   "status": "known-defect",
+   "reason": "fires routinely on resolution/seamless transitions; RecreateDuplication recovers in place, windows kept (filed P2)",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "E",
+   "issue": "findings/issues.md P2 \"win11-24H2 resolution-change capture FREEZE (0x887a0026 keyed-mutex-abandoned)\"; findings/capture.md"
+  },
+  "agent|E|UpdateWindowData: QGADIRECTSUPPRESS hwnd 0xH (class #N, NxN) NOT SHOWN: the direct per-window path is required on this guest and this window has never received a frame (sliceFed=N brokerSourced=N slot=N brokerActive=N). There is no compos": {
+   "status": "unsettled",
+   "reason": "Jev: insufficient-evidence 0.25 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 4,
+   "family": "agent",
+   "level": "E",
+   "jev": {
+    "choice": "insufficient-evidence",
+    "confidence": 0.25
+   }
+  },
+  "agent|E|UpdateWindowData: QGADIRECTSUPPRESS hwnd 0xH (class ApplicationFrameWindow, NxN) NOT SHOWN: the direct per-window path is required on this guest and this window has never received a frame (sliceFed=N brokerSourced=N slot=N brokerActive=N)": {
+   "status": "unsettled",
+   "reason": "Jev: expected 0.36 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "E",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.36
+   }
+  },
+  "agent|E|UpdateWindowData: QGADIRECTSUPPRESS hwnd 0xH (class CASCADIA_HOSTING_WINDOW_CLASS, NxN) NOT SHOWN: the direct per-window path is required on this guest and this window has never received a frame (sliceFed=N brokerSourced=N slot=N brokerAc": {
+   "status": "unsettled",
+   "reason": "Jev: expected 0.36 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 7,
+   "family": "agent",
+   "level": "E",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.36
+   }
+  },
+  "agent|E|UpdateWindowData: QGADIRECTSUPPRESS hwnd 0xH (class CabinetWClass, NxN) NOT SHOWN: the direct per-window path is required on this guest and this window has never received a frame (sliceFed=N brokerSourced=N slot=N brokerActive=N). There i": {
+   "status": "unsettled",
+   "reason": "Jev: insufficient-evidence 0.16 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 5,
+   "family": "agent",
+   "level": "E",
+   "jev": {
+    "choice": "insufficient-evidence",
+    "confidence": 0.16
+   }
+  },
+  "agent|E|UpdateWindowData: QGADIRECTSUPPRESS hwnd 0xH (class Notepad, NxN) NOT SHOWN: the direct per-window path is required on this guest and this window has never received a frame (sliceFed=N brokerSourced=N slot=N brokerActive=N). There is no c": {
+   "status": "unsettled",
+   "reason": "Jev: insufficient-evidence 0.13 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 2,
+   "family": "agent",
+   "level": "E",
+   "jev": {
+    "choice": "insufficient-evidence",
+    "confidence": 0.13
+   }
+  },
+  "agent|E|WinMain: WatchForEvents failed with error 0xH: Cannot create a file when that file already exists.": {
+   "status": "known-defect",
+   "reason": "a REQUESTED stop ends in win_perror(\"WatchForEvents\") with a stale GetLastError (0xb7, or 0x0 \"The operation completed successfully\") logged at ERROR and returned as the exit code (2026-10-07); being fixed now",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "E",
+   "issue": "stale-exit-error",
+   "jev": {
+    "choice": "defect",
+    "confidence": 0.63
+   }
+  },
+  "agent|E|WinMain: WatchForEvents failed with error 0xH: The operation completed successfully.": {
+   "status": "known-defect",
+   "reason": "a REQUESTED stop ends in win_perror(\"WatchForEvents\") with a stale GetLastError (0xb7, or 0x0 \"The operation completed successfully\") logged at ERROR and returned as the exit code (2026-10-07); being fixed now",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "E",
+   "issue": "stale-exit-error",
+   "jev": {
+    "choice": "defect",
+    "confidence": 1.0
+   }
+  },
+  "agent|E|WindowEventThreadProc: window event thread exiting - tracking falls back to periodic resync": {
+   "status": "unsettled",
+   "reason": "Jev: expected 0.32 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "E",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.32
+   }
+  },
+  "agent|I|CaptureStop: capture thread left in its acquire at exit (no timeout by design); the exit ends it": {
+   "status": "expected",
+   "reason": "Jev: expected 0.96 on the corpus",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.96
+   }
+  },
+  "agent|I|ToastHoldDecide: QGATOASTHOLD hwnd=0xH state=hold reason=no-identity ident=H s=H t=H m=H bridgeUp=N (banner withheld from dom0 until its verdict)": {
+   "status": "expected",
+   "reason": "Jev: expected 0.68 on the corpus",
+   "max_per_boot": 10,
+   "family": "agent",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.68
+   }
+  },
+  "agent|I|ToastHoldDecide: QGATOASTHOLD hwnd=0xH state=suppress ident=H id=N verdict=bridge held_ms=N (forwarded to dom0, the guest banner is never mapped; reopened if the record turns window or the bridge dies before dom0's ack)": {
+   "status": "expected",
+   "reason": "Jev: expected 0.92 on the corpus",
+   "max_per_boot": 4,
+   "family": "agent",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.92
+   }
+  },
+  "agent|I|ToastHoldDecide: QGATOASTHOLD hwnd=0xH state=suppress ident=H id=N verdict=forwarded held_ms=N (forwarded to dom0, the guest banner is never mapped; reopened if the record turns window or the bridge dies before dom0's ack)": {
+   "status": "expected",
+   "reason": "Jev: expected 0.81 on the corpus",
+   "max_per_boot": 5,
+   "family": "agent",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.81
+   }
+  },
+  "agent|I|UpdateWindowData: QGADIRECTWAIT hwnd 0xH (class #N, NxN) held: no painted frame yet (brokerState=N windowEligibleFor=N ms). This is the DEFINED young state, not a fault - the window is withheld rather than shown black, and maps as soon as": {
+   "status": "expected",
+   "reason": "Jev: expected 0.91 on the corpus",
+   "max_per_boot": 11,
+   "family": "agent",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.91
+   }
+  },
+  "agent|I|UpdateWindowData: QGADIRECTWAIT hwnd 0xH (class ApplicationFrameWindow, NxN) held: no painted frame yet (brokerState=N windowEligibleFor=N ms). This is the DEFINED young state, not a fault - the window is withheld rather than shown black,": {
+   "status": "expected",
+   "reason": "Jev: expected 1.00 on the corpus",
+   "max_per_boot": 2,
+   "family": "agent",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 1.0
+   }
+  },
+  "agent|I|UpdateWindowData: QGADIRECTWAIT hwnd 0xH (class CASCADIA_HOSTING_WINDOW_CLASS, NxN) held: no painted frame yet (brokerState=N windowEligibleFor=N ms). This is the DEFINED young state, not a fault - the window is withheld rather than shown": {
+   "status": "expected",
+   "reason": "Jev: expected 1.00 on the corpus",
+   "max_per_boot": 8,
+   "family": "agent",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 1.0
+   }
+  },
+  "agent|I|UpdateWindowData: QGADIRECTWAIT hwnd 0xH (class CabinetWClass, NxN) held: no painted frame yet (brokerState=N windowEligibleFor=N ms). This is the DEFINED young state, not a fault - the window is withheld rather than shown black, and maps": {
+   "status": "expected",
+   "reason": "Jev: expected 1.00 on the corpus",
+   "max_per_boot": 17,
+   "family": "agent",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 1.0
+   }
+  },
+  "agent|I|UpdateWindowData: QGADIRECTWAIT hwnd 0xH (class MSPaintApp, NxN) held: no painted frame yet (brokerState=N windowEligibleFor=N ms). This is the DEFINED young state, not a fault - the window is withheld rather than shown black, and maps as": {
+   "status": "expected",
+   "reason": "Jev: expected 1.00 on the corpus",
+   "max_per_boot": 5,
+   "family": "agent",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 1.0
+   }
+  },
+  "agent|I|UpdateWindowData: QGADIRECTWAIT hwnd 0xH (class Notepad, NxN) held: no painted frame yet (brokerState=N windowEligibleFor=N ms). This is the DEFINED young state, not a fault - the window is withheld rather than shown black, and maps as so": {
+   "status": "expected",
+   "reason": "Jev: expected 1.00 on the corpus",
+   "max_per_boot": 8,
+   "family": "agent",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 1.0
+   }
+  },
+  "agent|I|UpdateWindowData: QGADIRECTWAIT hwnd 0xH (class Windows.UI.Core.CoreWindow, NxN) held: no painted frame yet (brokerState=N windowEligibleFor=N ms). This is the DEFINED young state, not a fault - the window is withheld rather than shown bl": {
+   "status": "expected",
+   "reason": "Jev: expected 1.00 on the corpus",
+   "max_per_boot": 3,
+   "family": "agent",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 1.0
+   }
+  },
+  "agent|I|UpdateWindowData: QGAHELDMAP hwnd=0xH class=ApplicationFrameWindow w=N h=N held_ms=N reason=timeout menu=N toast=N": {
+   "status": "unsettled",
+   "reason": "Jev: expected 0.41 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 2,
+   "family": "agent",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.41
+   }
+  },
+  "agent|I|UpdateWindowData: QGAHELDMAP hwnd=0xH class=CASCADIA_HOSTING_WINDOW_CLASS w=N h=N held_ms=N reason=timeout menu=N toast=N": {
+   "status": "expected",
+   "reason": "Jev: expected 0.71 on the corpus",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.71
+   }
+  },
+  "agent|I|UpdateWindowData: QGAHELDMAP hwnd=0xH class=CabinetWClass w=N h=N held_ms=N reason=timeout menu=N toast=N": {
+   "status": "unsettled",
+   "reason": "Jev: expected 0.29 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 2,
+   "family": "agent",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.29
+   }
+  },
+  "agent|I|UpdateWindowData: QGAHELDMAP hwnd=0xH class=Notepad w=N h=N held_ms=N reason=timeout menu=N toast=N": {
+   "status": "unsettled",
+   "reason": "Jev: expected 0.24 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 4,
+   "family": "agent",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.24
+   }
+  },
+  "agent|I|UpdateWindowData: QGAHELDMAP hwnd=0xH class=Windows.UI.Core.CoreWindow w=N h=N held_ms=N reason=timeout menu=N toast=N": {
+   "status": "expected",
+   "reason": "Jev: expected 0.84 on the corpus",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.84
+   }
+  },
+  "agent|I|WatchForEvents: A vchan client has connected": {
+   "status": "expected",
+   "reason": "Jev: expected 0.88 on the corpus",
+   "max_per_boot": 7,
+   "family": "agent",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.88
+   }
+  },
+  "agent|I|WatchForEvents: Awaiting for a vchan client, write buffer size: N": {
+   "status": "expected",
+   "reason": "Jev: expected 0.65 on the corpus",
+   "max_per_boot": 7,
+   "family": "agent",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.87
+   }
+  },
+  "agent|I|WatchForEvents: exiting": {
+   "status": "expected",
+   "reason": "Jev: expected 0.88 on the corpus",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.88
+   }
+  },
+  "agent|W|ApplyGuestShadows: no usable interactive session yet (token/profile/helper); cannot disable guest shadows (will retry)": {
+   "status": "expected",
+   "reason": "Jev: expected 0.87 on the corpus",
+   "max_per_boot": 2,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.87
+   }
+  },
+  "agent|W|BrokerFreshFrame: BROKERDIMS hwnd 0xH feed LOST for N ms (frame NxN vs slab NxN) - not a resize in flight; forcing broker re-registration": {
+   "status": "unsettled",
+   "reason": "Jev: expected 0.49 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.49
+   }
+  },
+  "agent|W|BrokerReportDeaf: QGAWGCRECREATE hwnd 0xH slot N: the broker recreated its WGC session after an own-change poke went unanswered for N ms (quiet reroutes N, sessions opened N). A false poke or a session that stopped delivering - QGAPOKEWGC": {
+   "status": "known-defect",
+   "reason": "the broker recreated a WGC session after a false poke went unanswered; filed under the M7 badge-poke P1",
+   "max_per_boot": 277,
+   "family": "agent",
+   "level": "W",
+   "issue": "findings/issues.md P1 \"M7 IS NOT CLEAN ON rz25: ALT-NAV KEY-TIP BADGES ... POKED\" (the M7 badge-poke)"
+  },
+  "agent|W|BrokerSupervise: QGABROKERBACK de-slice broker RECOVERED after N ms down (deaths=N). The relaunch worked, but a broker death is a real failure - windows withheld during the outage were never shown. Collect the wgcbroker log for the crash": {
+   "status": "expected",
+   "reason": "the relaunch the M8 criterion requires; outside an injection it means a broker died",
+   "max_per_boot": 2,
+   "family": "agent",
+   "level": "W",
+   "issue": "rest-zero M8",
+   "context": "fault-injection"
+  },
+  "agent|W|BrokerSupervise: QGABROKERREAP terminating hung de-slice broker pid N before relaunch - without this the new instance exits on the singleton mutex and the outage never ends.": {
+   "status": "expected",
+   "reason": "the reap the M8 criterion requires after the detected hang",
+   "max_per_boot": 2,
+   "family": "agent",
+   "level": "W",
+   "issue": "rest-zero M8",
+   "context": "fault-injection"
+  },
+  "agent|W|CaptureThread: main loop slow: frame not processed after N ms (wedge at N)": {
+   "status": "unsettled",
+   "reason": "Jev: defect 0.44 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "defect",
+    "confidence": 0.44
+   }
+  },
+  "agent|W|EtwProxyExitCb: ETWPROXYSUP proxy exited rc=H after N ms - ANOMALY EtwProxyUnknownExit (0xH): not an ETWPROXY_EXIT_* code (N/N/N/N/N) and not the force-kill code N - the proxy binary has no such return path, so it CRASHED (check etw-pro": {
+   "status": "known-defect",
+   "reason": "Jev: defect 0.96 on the corpus - unfiled; confirm and file or downgrade",
+   "max_per_boot": 3,
+   "family": "agent",
+   "level": "W",
+   "issue": "unfiled",
+   "jev": {
+    "choice": "defect",
+    "confidence": 0.96
+   }
+  },
+  "agent|W|GetRealWindowRect: 0xH: inverted DWM bounds (N,N)-(N,N) and no usable GetWindowRect - rejecting": {
+   "status": "expected",
+   "reason": "Jev: expected 0.81 on the corpus",
+   "max_per_boot": 36,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.81
+   }
+  },
+  "agent|W|HandleFocus: 0xH: dom0 focus NOT applied - foreground held by 0xH (thread N)": {
+   "status": "unsettled",
+   "reason": "Jev: insufficient-evidence 0.43 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 9,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "insufficient-evidence",
+    "confidence": 0.43
+   }
+  },
+  "agent|W|Init: Failed to read 'StagingGrant' config value, using default (TRUE)": {
+   "status": "unsettled",
+   "reason": "Jev: expected 0.39 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 7,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "insufficient-evidence",
+    "confidence": 0.92
+   }
+  },
+  "agent|W|PlatLog: NOTIFYERR gate: enabled=N state=C:\\ProgramData\\Qubes\\notify-errors (secondary route: dom0 notification via notifhost/qubes.Notifications; needs qrexec-agent; the log stays primary)": {
+   "status": "expected",
+   "reason": "Jev: expected 0.68 on the corpus",
+   "max_per_boot": 7,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.91
+   }
+  },
+  "agent|W|ProcessNewFrame: BROKERHOLD hwnd 0xH holding last content rect=N,N,N,N brokerActive=N sourced=N slot=N (direct required: composite fallback refused)": {
+   "status": "expected",
+   "reason": "Jev: expected 0.91 on the corpus",
+   "max_per_boot": 70,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.91
+   }
+  },
+  "agent|W|ResolutionAdoptCurrent: RESDRIFT believed=0xH actual=NxN - adopting the actual mode": {
+   "status": "expected",
+   "reason": "Jev: expected 0.81 on the corpus",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.81
+   }
+  },
+  "agent|W|ResolutionAdoptCurrent: RESDRIFT believed=NxN actual=NxN - adopting the actual mode": {
+   "status": "expected",
+   "reason": "Jev: expected 0.64 on the corpus",
+   "max_per_boot": 2,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.64
+   }
+  },
+  "agent|W|SpawnHelperInSession: session helper '--set-shadows N' exited with code H - not applied, will retry": {
+   "status": "expected",
+   "reason": "Jev: expected 0.65 on the corpus",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.65
+   }
+  },
+  "agent|W|TcValidateInsets: 0xH: cropped size NxN below the NxN floor, leaving the toast uncropped": {
+   "status": "unsettled",
+   "reason": "Jev: defect 0.33 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 12,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "defect",
+    "confidence": 0.33
+   }
+  },
+  "agent|W|ToastHoldDecide: QGATOASTPREEMPT hwnd=0xH unmapped: a bridge-bound or still-pending toast (id=N) is queued behind the displayed banner and would paint into this window in place; the displayed window-path banner loses the rest of its dom0": {
+   "status": "expected",
+   "reason": "Jev: expected 0.77 on the corpus",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.77
+   }
+  },
+  "agent|W|UpdateWindowData: BROKERLATEREG hwnd 0xH registered with the broker LATE at NxN - it was added while the broker could not take it, and was withheld until now": {
+   "status": "expected",
+   "reason": "Jev: expected 0.73 on the corpus",
+   "max_per_boot": 8,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.73
+   }
+  },
+  "agent|W|UpdateWindowData: BROKERREREG hwnd 0xH re-registering broker capture at NxN crop N,N (stuck=N reqStale=N)": {
+   "status": "expected",
+   "reason": "Jev: expected 0.72 on the corpus",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.72
+   }
+  },
+  "agent|W|UpdateWindowData: QGACROPLATE hwnd 0xH (class ApplicationFrameWindow) mapped UNCROPPED: the shadow-crop did not resolve within N ms, so the window is shown at its full rect and will snap when the measurement lands. This is the line to quo": {
+   "status": "unsettled",
+   "reason": "Jev: expected 0.23 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 2,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.23
+   }
+  },
+  "agent|W|UpdateWindowData: QGACROPLATE hwnd 0xH (class CASCADIA_HOSTING_WINDOW_CLASS) mapped UNCROPPED: the shadow-crop did not resolve within N ms, so the window is shown at its full rect and will snap when the measurement lands. This is the line": {
+   "status": "unsettled",
+   "reason": "Jev: expected 0.44 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.44
+   }
+  },
+  "agent|W|UpdateWindowData: QGACROPLATE hwnd 0xH (class CabinetWClass) mapped UNCROPPED: the shadow-crop did not resolve within N ms, so the window is shown at its full rect and will snap when the measurement lands. This is the line to quote for a ": {
+   "status": "unsettled",
+   "reason": "Jev: expected 0.20 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 2,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.2
+   }
+  },
+  "agent|W|UpdateWindowData: QGACROPLATE hwnd 0xH (class Notepad) mapped UNCROPPED: the shadow-crop did not resolve within N ms, so the window is shown at its full rect and will snap when the measurement lands. This is the line to quote for a toast/": {
+   "status": "unsettled",
+   "reason": "Jev: expected 0.33 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 4,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.33
+   }
+  },
+  "agent|W|UpdateWindowData: QGACROPLATE hwnd 0xH (class Windows.UI.Core.CoreWindow) mapped UNCROPPED: the shadow-crop did not resolve within N ms, so the window is shown at its full rect and will snap when the measurement lands. This is the line to": {
+   "status": "unsettled",
+   "reason": "Jev: expected 0.49 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.49
+   }
+  },
+  "agent|W|UpdateWindowData: QGADIRECTDARK hwnd 0xH (class ApplicationFrameWindow) mapped UNPAINTED after N broker frame(s): the per-window feed is delivering, so the surface itself is dark - not a display fault. If it looks like a black window, thi": {
+   "status": "expected",
+   "reason": "Jev: expected 0.76 on the corpus",
+   "max_per_boot": 2,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.76
+   }
+  },
+  "agent|W|UpdateWindowData: QGADIRECTDARK hwnd 0xH (class CASCADIA_HOSTING_WINDOW_CLASS) mapped UNPAINTED after N broker frame(s): the per-window feed is delivering, so the surface itself is dark - not a display fault. If it looks like a black wind": {
+   "status": "expected",
+   "reason": "Jev: expected 0.72 on the corpus",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.72
+   }
+  },
+  "agent|W|UpdateWindowData: QGADIRECTDARK hwnd 0xH (class CabinetWClass) mapped UNPAINTED after N broker frame(s): the per-window feed is delivering, so the surface itself is dark - not a display fault. If it looks like a black window, this is the ": {
+   "status": "expected",
+   "reason": "Jev: expected 0.79 on the corpus",
+   "max_per_boot": 2,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.79
+   }
+  },
+  "agent|W|UpdateWindowData: QGADIRECTDARK hwnd 0xH (class Notepad) mapped UNPAINTED after N broker frame(s): the per-window feed is delivering, so the surface itself is dark - not a display fault. If it looks like a black window, this is the line t": {
+   "status": "expected",
+   "reason": "Jev: expected 0.85 on the corpus",
+   "max_per_boot": 4,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.85
+   }
+  },
+  "agent|W|UpdateWindowData: QGADIRECTDARK hwnd 0xH (class Windows.UI.Core.CoreWindow) mapped UNPAINTED after N broker frame(s): the per-window feed is delivering, so the surface itself is dark - not a display fault. If it looks like a black window,": {
+   "status": "expected",
+   "reason": "Jev: expected 0.91 on the corpus",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.91
+   }
+  },
+  "agent|W|VchanReceiveBuffer: (H, version): no data, blocking read": {
+   "status": "unsettled",
+   "reason": "Jev: expected 0.29 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 7,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "insufficient-evidence",
+    "confidence": 0.88
+   }
+  },
+  "agent|W|WaWatchThread: qdb_open failed (N consecutive), dom0 work area feed unavailable; retrying in N ms": {
+   "status": "unsettled",
+   "reason": "Jev: expected 0.44 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.44
+   }
+  },
+  "agent|W|WaWatchThread: qubesdb connection lost, reconnecting in N ms": {
+   "status": "unsettled",
+   "reason": "Jev: expected 0.44 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.44
+   }
+  },
+  "agent|W|WatchForEvents: A6LEAK exit by design: daemon still alive and mapping - skipping all revokes (xenbus revoke-vs-unmap race; see FINDINGS NNN cont N)": {
+   "status": "expected",
+   "reason": "Jev: expected 0.91 on the corpus",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.91
+   }
+  },
+  "bridge|W|CLASSIFY id=N src=etw-sig etw=sig-hit verdict=window row_latency=16ms signals=row3:time-critical-scenario-reminder-alarm-incomingcall corr=id-ok actions=refused:no-payload-fail-open activator=not-asked": {
+   "status": "expected",
+   "reason": "Jev: expected 0.75 on the corpus",
+   "max_per_boot": 1,
+   "family": "bridge",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.75
+   }
+  },
+  "bridge|W|CLASSIFY id=N src=etw-sig etw=sig-hit verdict=window row_latency=94ms signals=row3:time-critical-scenario-reminder-alarm-incomingcall corr=id-ok actions=refused:no-payload-fail-open activator=not-asked": {
+   "status": "expected",
+   "reason": "Jev: expected 0.80 on the corpus",
+   "max_per_boot": 1,
+   "family": "bridge",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.8
+   }
+  },
+  "bridge|W|ETW IPC disconnected (recs=N bad=N) - tier down, DB fallback, reconnecting": {
+   "status": "expected",
+   "reason": "Jev: expected 0.68 on the corpus",
+   "max_per_boot": 1,
+   "family": "bridge",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.68
+   }
+  },
+  "bridge|W|ETW IPC proxy pipe absent (N) - tier down, DB fallback (reconnect pending)": {
+   "status": "expected",
+   "reason": "Jev: expected 0.76 on the corpus",
+   "max_per_boot": 1,
+   "family": "bridge",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.76
+   }
+  },
+  "bridge|W|LIST trig=retry n=N new=N ms=N": {
+   "status": "unsettled",
+   "reason": "Jev: insufficient-evidence 0.29 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 5,
+   "family": "bridge",
+   "level": "W",
+   "jev": {
+    "choice": "insufficient-evidence",
+    "confidence": 0.29
+   }
+  },
+  "bridge|W|PUSH NotificationChanged unavailable - the ETW proxy's records drive the listing (N s floor only while the proxy is not live)": {
+   "status": "expected",
+   "reason": "Jev: expected 0.96 on the corpus",
+   "max_per_boot": 1,
+   "family": "bridge",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.96
+   }
+  },
+  "bridge|W|ShowBanner restored (absent) for Microsoft.ScreenSketch_8wekyb3d8bbwe!App": {
+   "status": "unsettled",
+   "reason": "Jev: expected 0.40 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 1,
+   "family": "bridge",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.4
+   }
+  },
+  "bridge|W|ShowBanner restored (absent) for Microsoft.Windows.Photos_8wekyb3d8bbwe!App": {
+   "status": "unsettled",
+   "reason": "Jev: expected 0.47 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 1,
+   "family": "bridge",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.47
+   }
+  },
+  "bridge|W|ShowBanner restored (absent) for Microsoft.WindowsCamera_8wekyb3d8bbwe!App": {
+   "status": "unsettled",
+   "reason": "Jev: expected 0.45 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 1,
+   "family": "bridge",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.45
+   }
+  },
+  "bridge|W|ShowBanner restored (absent) for Windows.SystemToast.BackupReminder": {
+   "status": "unsettled",
+   "reason": "Jev: expected 0.35 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 1,
+   "family": "bridge",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.35
+   }
+  },
+  "bridge|W|WPNTGT id=N advisory text mismatch - falling to signal fallback": {
+   "status": "unsettled",
+   "reason": "Jev: expected 0.40 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 2,
+   "family": "bridge",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.4
+   }
+  },
+  "bridge|W|connection down - toasts take the window path until it is back": {
+   "status": "expected",
+   "reason": "Jev: expected 0.88 on the corpus",
+   "max_per_boot": 1,
+   "family": "bridge",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.88
+   }
+  },
+  "bridge|W|skip id=N aumid=QubesToastfire.StartShortcut title='THT-2bcb77-S2-t1' (window path; classifier verdict; actions refused:no-payload-fail-open)": {
+   "status": "expected",
+   "reason": "Jev: expected 0.92 on the corpus",
+   "max_per_boot": 1,
+   "family": "bridge",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.92
+   }
+  },
+  "bridge|W|skip id=N aumid=QubesToastfire.StartShortcut title='THT-70720e-S2-t1' (window path; classifier verdict; actions refused:no-payload-fail-open)": {
+   "status": "expected",
+   "reason": "Jev: expected 0.92 on the corpus",
+   "max_per_boot": 1,
+   "family": "bridge",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.92
+   }
+  },
+  "event|E|Application|4001|Qubes Windows Tools|The GUI agent (gui-agent.exe, PID N) exited without being asked to - exit code 0xH - after running TS (N ms). A Qubes Windows Tools component died; this is a major error. The QubesGuiWatchdog service relaunches it (backe": {
+   "status": "known-defect",
+   "reason": "the death record of the shutdown deaths above (the recorder is right; the death is the defect)",
+   "max_per_boot": 2,
+   "family": "events",
+   "level": "E",
+   "issue": "shutdown-death-relaunch",
+   "jev": {
+    "choice": "defect",
+    "confidence": 0.45
+   }
+  },
+  "event|I|Microsoft-Windows-TerminalServices-LocalSessionManager/Operational|21|Microsoft-Windows-TerminalServices-LocalSessionManager|Remote Desktop Services: Session logon succeeded: / User: HOST\\user / Session ID: N": {
+   "status": "expected",
+   "reason": "Jev: expected 0.71 on the corpus",
+   "max_per_boot": 1,
+   "family": "events",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.71
+   }
+  },
+  "event|I|Microsoft-Windows-TerminalServices-LocalSessionManager/Operational|22|Microsoft-Windows-TerminalServices-LocalSessionManager|Remote Desktop Services: Shell start notification received: / User: HOST\\user / Session ID: N": {
+   "status": "expected",
+   "reason": "Jev: expected 0.71 on the corpus",
+   "max_per_boot": 1,
+   "family": "events",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.71
+   }
+  },
+  "event|I|Microsoft-Windows-TerminalServices-LocalSessionManager/Operational|23|Microsoft-Windows-TerminalServices-LocalSessionManager|Remote Desktop Services: Session logoff succeeded: / User: HOST\\user / Session ID: N": {
+   "status": "expected",
+   "reason": "Jev: expected 0.75 on the corpus",
+   "max_per_boot": 1,
+   "family": "events",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.75
+   }
+  },
+  "event|I|Microsoft-Windows-TerminalServices-LocalSessionManager/Operational|54|Microsoft-Windows-TerminalServices-LocalSessionManager|Local multi-user session manager received system shutdown message": {
+   "status": "expected",
+   "reason": "Jev: expected 0.93 on the corpus",
+   "max_per_boot": 1,
+   "family": "events",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.93
+   }
+  },
+  "event|I|System|1074|User32|The process C:\\WINDOWS\\System32\\xenagent_9_1_0_0.exe (HOST) has initiated the shutdown of computer HOST on behalf of user NT AUTHORITY\\SYSTEM for the following reason: No title for this reason could be found / Reason Cod": {
+   "status": "expected",
+   "reason": "Jev: expected 0.88 on the corpus",
+   "max_per_boot": 1,
+   "family": "events",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.88
+   }
+  },
+  "event|I|System|109|Microsoft-Windows-Kernel-Power|The kernel power manager has initiated a shutdown transition. / Action: Power Action Shutdown / Event Code: 0xH": {
+   "status": "expected",
+   "reason": "Jev: expected 0.80 on the corpus",
+   "max_per_boot": 1,
+   "family": "events",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.8
+   }
+  },
+  "event|I|System|13|Microsoft-Windows-Kernel-General|The operating system is shutting down at system time TS.": {
+   "status": "expected",
+   "reason": "Jev: expected 0.65 on the corpus",
+   "max_per_boot": 1,
+   "family": "events",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.65
+   }
+  },
+  "event|I|System|6005|EventLog|The Event log service was started.": {
+   "status": "unsettled",
+   "reason": "Jev: expected 0.48 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 1,
+   "family": "events",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.48
+   }
+  },
+  "event|I|System|6006|EventLog|The Event log service was stopped.": {
+   "status": "expected",
+   "reason": "Jev: expected 0.75 on the corpus",
+   "max_per_boot": 1,
+   "family": "events",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.75
+   }
+  },
+  "event|I|System|6009|EventLog|Microsoft (R) Windows (R) N. N Multiprocessor Free.": {
+   "status": "benign",
+   "reason": "Jev: noise 0.51 on the corpus",
+   "max_per_boot": 1,
+   "family": "events",
+   "level": "I",
+   "jev": {
+    "choice": "noise",
+    "confidence": 0.51
+   }
+  },
+  "event|I|System|6013|EventLog|The system uptime is N seconds.": {
+   "status": "unsettled",
+   "reason": "Jev: noise 0.47 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 1,
+   "family": "events",
+   "level": "I",
+   "jev": {
+    "choice": "noise",
+    "confidence": 0.47
+   }
+  },
+  "event|I|System|7045|Service Control Manager|A service was installed in the system. / Service Name: Qubes PV NIC address applier / Service File Name: C:\\Program Files\\Qubes Tools\\bin\\qwtng-netsetup.exe": {
+   "status": "expected",
+   "reason": "Jev: expected 0.63 on the corpus",
+   "max_per_boot": 1,
+   "family": "events",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.63
+   }
+  },
+  "guid|E|Failed to connect to gui-agent": {
+   "status": "unsettled",
+   "reason": "Jev: insufficient-evidence 0.64 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 1,
+   "family": "guid",
+   "level": "E",
+   "jev": {
+    "choice": "insufficient-evidence",
+    "confidence": 0.64
+   }
+  },
+  "guid|E|domain dead": {
+   "status": "unsettled",
+   "reason": "Jev: insufficient-evidence 0.49 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 1,
+   "family": "guid",
+   "level": "E",
+   "jev": {
+    "choice": "insufficient-evidence",
+    "confidence": 0.49
+   }
+  },
+  "guid|I|Icon size: NxN": {
+   "status": "unsettled",
+   "reason": "Jev: insufficient-evidence 0.39 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 3,
+   "family": "guid",
+   "level": "I",
+   "jev": {
+    "choice": "insufficient-evidence",
+    "confidence": 0.39
+   }
+  },
+  "guid|W|EOF": {
+   "status": "unsettled",
+   "reason": "Jev: insufficient-evidence 0.49 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 1,
+   "family": "guid",
+   "level": "W",
+   "jev": {
+    "choice": "insufficient-evidence",
+    "confidence": 0.49
+   }
+  },
+  "guid|W|libvchan_is_eof": {
+   "status": "unsettled",
+   "reason": "Jev: insufficient-evidence 0.75 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 2,
+   "family": "guid",
+   "level": "W",
+   "jev": {
+    "choice": "insufficient-evidence",
+    "confidence": 0.75
+   }
+  },
+  "installer|E|RESULT: stage=stage2-install ok=false error=completed with error-class flags: svc_msi_started flags=app_hwaccel,msi_startservices_condition,quiet_desktop,reboot_audit,session_lock": {
+   "status": "unsettled",
+   "reason": "Jev: defect 0.44 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 1,
+   "family": "installer",
+   "level": "E",
+   "jev": {
+    "choice": "defect",
+    "confidence": 0.44
+   }
+  },
+  "installer|E|after msiexec: QdbDaemon=Running - running although QWTNG_SERIALSTART=N was passed; the MSI started them itself and the serialized start did NOT hold on this guest (svc_msi_started)": {
+   "status": "known-defect",
+   "reason": "Jev: defect 0.85 on the corpus - unfiled; confirm and file or downgrade",
+   "max_per_boot": 1,
+   "family": "installer",
+   "level": "E",
+   "issue": "unfiled",
+   "jev": {
+    "choice": "defect",
+    "confidence": 0.85
+   }
+  },
+  "installer|E|stage N ran to completion but recorded error-class flags: svc_msi_started - this RESULT is ok:false; the flags name what is broken": {
+   "status": "unsettled",
+   "reason": "Jev: defect 0.47 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 1,
+   "family": "installer",
+   "level": "E",
+   "jev": {
+    "choice": "defect",
+    "confidence": 0.47
+   }
+  },
+  "installer|I|QwtngNetSetup recovery armed=True (restart 5s/15s/60s, non-crash flag)": {
+   "status": "expected",
+   "reason": "Jev: expected 0.71 on the corpus",
+   "max_per_boot": 1,
+   "family": "installer",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.71
+   }
+  },
+  "installer|I|RESULT: stage=stage1-prepare ok=true": {
+   "status": "expected",
+   "reason": "Jev: expected 0.97 on the corpus",
+   "max_per_boot": 1,
+   "family": "installer",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.97
+   }
+  },
+  "installer|I|RESULT: stage=stage2-install ok=true": {
+   "status": "expected",
+   "reason": "Jev: expected 0.99 on the corpus",
+   "max_per_boot": 1,
+   "family": "installer",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.99
+   }
+  },
+  "installer|I|TS the last update pass ('scan', last written TS) stopped at phase 'init' and its process (N) is gone - a scan only searches and installs nothing, so nothing is unknown; deploying (the updater's own rule)": {
+   "status": "expected",
+   "reason": "Jev: expected 0.68 on the corpus",
+   "max_per_boot": 1,
+   "family": "installer",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.68
+   }
+  },
+  "installer|I|death reporter registered: task QwtDeathReporter (event-triggered, SYSTEM, queued) -> C:\\Program Files\\Qubes Tools\\bin\\qwt-report-death.ps1; N executables, N services, N tasks subscribed": {
+   "status": "expected",
+   "reason": "Jev: expected 0.97 on the corpus",
+   "max_per_boot": 1,
+   "family": "installer",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.97
+   }
+  },
+  "installer|I|gui-agent restarted: this stage quiesced it and is NOT rebooting from here (gui-agent.exe verified running)": {
+   "status": "expected",
+   "reason": "Jev: expected 1.00 on the corpus",
+   "max_per_boot": 1,
+   "family": "installer",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 1.0
+   }
+  },
+  "installer|I|in dom0 - including this installer window. Nothing has crashed.": {
+   "status": "expected",
+   "reason": "Jev: expected 0.64 on the corpus",
+   "max_per_boot": 2,
+   "family": "installer",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.64
+   }
+  },
+  "installer|I|leftover sweep in C:\\Program Files\\Qubes Tools\\bin: moved aside [] absent [gui-agent.exe gui-watchdog.exe] stuck []": {
+   "status": "expected",
+   "reason": "Jev: expected 0.99 on the corpus",
+   "max_per_boot": 1,
+   "family": "installer",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.99
+   }
+  },
+  "installer|I|leftover sweep in C:\\Program Files\\Qubes Tools\\bin: moved aside [gui-agent.exe gui-watchdog.exe] absent [] stuck []": {
+   "status": "expected",
+   "reason": "Jev: expected 0.95 on the corpus",
+   "max_per_boot": 1,
+   "family": "installer",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.95
+   }
+  },
+  "installer|I|serial start: QdbDaemon already running (started earlier in this stage) - observed, not restarted": {
+   "status": "expected",
+   "reason": "Jev: expected 0.89 on the corpus",
+   "max_per_boot": 1,
+   "family": "installer",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.89
+   }
+  },
+  "installer|I|service recovery armed for QdbDaemon (restart 5s/15s/60s, flag on)": {
+   "status": "expected",
+   "reason": "Jev: expected 0.93 on the corpus",
+   "max_per_boot": 1,
+   "family": "installer",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.93
+   }
+  },
+  "installer|I|service recovery armed for QrexecAgent (restart 5s/15s/60s, flag on)": {
+   "status": "expected",
+   "reason": "Jev: expected 0.95 on the corpus",
+   "max_per_boot": 1,
+   "family": "installer",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.95
+   }
+  },
+  "installer|I|service recovery armed for QubesGuiWatchdog (restart 5s/15s/60s, flag on)": {
+   "status": "expected",
+   "reason": "Jev: expected 0.91 on the corpus",
+   "max_per_boot": 1,
+   "family": "installer",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.91
+   }
+  },
+  "installer|I|stopping QubesGuiWatchdog for the rest of stage N (restarted at the end of the stage, or by the reboot)": {
+   "status": "expected",
+   "reason": "Jev: expected 1.00 on the corpus",
+   "max_per_boot": 1,
+   "family": "installer",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 1.0
+   }
+  },
+  "installer|W|Windows Update agent deploy failed: QWTUPDSTATEUNKNOWN: the last update pass ('scan') stopped at phase 'init' and its process (N) is gone - it was terminated partway, so what it was doing is unknown; refusing to stop the": {
+   "status": "expected",
+   "reason": "Jev: expected 0.51 on the corpus",
+   "max_per_boot": 1,
+   "family": "installer",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.51
+   }
+  },
+  "installer|W|death reporter NOT registered: schtasks /create rc 'N': ERROR: The specified query is invalid. - a death of our components stays in the guest logs only, nothing reaches dom0 (non-fatal)": {
+   "status": "known-defect",
+   "reason": "Jev: defect 0.52 on the corpus - unfiled; confirm and file or downgrade",
+   "max_per_boot": 1,
+   "family": "installer",
+   "level": "W",
+   "issue": "unfiled",
+   "jev": {
+    "choice": "defect",
+    "confidence": 0.52
+   }
+  },
+  "watchdog|E|WatchdogThread: Process 'gui-agent.exe' (PID N) exited with code 0xH without this service asking it to - the agent DIED (servicestop=N sm_shuttingdown=N console=0xH wtsstate=N)": {
+   "status": "known-defect",
+   "reason": "the agent dies (0x40010004) when its session ends at shutdown and the watchdog relaunches it into the ending session - three instances per shutdown, each a vchan setup with dom0 (owner 2026-10-07); being fixed now",
+   "max_per_boot": 2,
+   "family": "watchdog",
+   "level": "E",
+   "issue": "shutdown-death-relaunch",
+   "jev": {
+    "choice": "defect",
+    "confidence": 0.43
+   }
+  },
+  "watchdog|E|WatchdogThread: Process 'gui-agent.exe' died within N ms of starting (exit code 0xH), N time(s) in a row - backing off to N ms (servicestop=N sm_shuttingdown=N console=0xH wtsstate=N). The guest has NO GUI while this lasts; the agent lo": {
+   "status": "known-defect",
+   "reason": "the relaunched agent dies at once in the ending session and the watchdog backs off and relaunches again (2026-10-07); being fixed now",
+   "max_per_boot": 1,
+   "family": "watchdog",
+   "level": "E",
+   "issue": "shutdown-death-relaunch",
+   "jev": {
+    "choice": "defect",
+    "confidence": 0.47
+   }
+  },
+  "watchdog|I|ControlHandlerEx: preshutdown - the agent will not be restarted from here on, stopping": {
+   "status": "expected",
+   "reason": "Jev: expected 0.99 on the corpus",
+   "max_per_boot": 1,
+   "family": "watchdog",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.99
+   }
+  },
+  "watchdog|I|ServiceMain: exiting": {
+   "status": "expected",
+   "reason": "Jev: expected 0.97 on the corpus",
+   "max_per_boot": 1,
+   "family": "watchdog",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.97
+   }
+  },
+  "watchdog|I|StopOwnAgent: service stopping: 'gui-agent.exe' (PID N) is gone, exit code 0xH": {
+   "status": "known-defect",
+   "reason": "Jev: defect 0.72 on the corpus - unfiled; confirm and file or downgrade",
+   "max_per_boot": 1,
+   "family": "watchdog",
+   "level": "I",
+   "issue": "unfiled",
+   "jev": {
+    "choice": "defect",
+    "confidence": 0.72
+   }
+  },
+  "watchdog|I|StopOwnAgent: service stopping: 'gui-agent.exe' (PID N) is gone, exit code ZERO": {
+   "status": "expected",
+   "reason": "Jev: expected 0.95 on the corpus",
+   "max_per_boot": 1,
+   "family": "watchdog",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.95
+   }
+  },
+  "watchdog|I|WatchdogThread: Process 'gui-agent.exe' has been up for N ms, restart delay reset": {
+   "status": "expected",
+   "reason": "Jev: expected 0.89 on the corpus",
+   "max_per_boot": 1,
+   "family": "watchdog",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.89
+   }
+  },
+  "watchdog|I|WatchdogThread: service stop requested, watchdog thread exiting": {
+   "status": "expected",
+   "reason": "Jev: expected 1.00 on the corpus",
+   "max_per_boot": 1,
+   "family": "watchdog",
+   "level": "I",
+   "jev": {
+    "choice": "expected",
+    "confidence": 1.0
+   }
+  },
+  "watchdog|W|WatchdogThread: Process 'gui-agent.exe' not running, restarting it (servicestop=N sm_shuttingdown=N console=0xH wtsstate=N)": {
+   "status": "expected",
+   "reason": "Jev: expected 0.55 on the corpus",
+   "max_per_boot": 2,
+   "family": "watchdog",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.55
+   }
+  }
+ }
+}
