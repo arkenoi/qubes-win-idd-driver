@@ -3,17 +3,23 @@
 #
 # WHAT IT GUARDS. A client that goes away before the wrapper connects wrote FOUR error lines of ours
 # per call - measured on win11r-logvol 2026-10-08, eight of the new binary's ten error lines, two
-# calls' worth. The first of the four is a PROBE: libvchan's client init reads the peer's xenstore
-# entry under the comment "test if the store entry exists; if not - wait a second time" and
-# DISCARDS the status on the next line, but XcStoreRead reports every failure at XLL_ERROR from
-# inside xencontrol. So we logged an error for a question we only wanted the answer to.
+# calls' worth. ONE FAILURE, ONE REPORT: the four become one, and this checks both patches that do
+# it, in the two repos the build clones.
 #
-# The handle's log level belongs to the caller (XcSetLogLevel) and xencontrol emits a message only
-# when its level <= the current one (`if (LogLevel > CurrentLogLevel) return;`), so 0 silences that
-# one read; it is restored to g_log_level immediately after. NOTHING ELSE IS QUIETENED: the real
-# ring-ref read in libxenvchan_client_init still reports with the path and the status, and
-# libvchan_client_init still reports the failure. Three of the four lines remain, which is what this
-# patch claims - see findings/issues.md for the rest of that class.
+#   XcStoreRead (the PROBE)   silenced  - libvchan's client init reads the peer's entry under its own
+#                                         comment "test if the store entry exists; if not - wait a
+#                                         second time" and DISCARDS the status on the next line, but
+#                                         XcStoreRead reports every failure at XLL_ERROR from inside
+#                                         xencontrol, so we logged an error for a question.
+#   XcStoreRead (the RING-REF read)  silenced - the layer above reports the same missing key with the
+#                                         path and the status, which is strictly more.
+#   libxenvchan_client_init   KEPT at ERROR - the one report, with the path and the status.
+#   libvchan_client_init      lowered to DEBUG - it repeated the layer below with less detail (the
+#                                         domain it adds is already inside that path).
+#
+# Nothing is made quieter: the surviving line carries everything the four carried. The level is
+# restored immediately in both patches, which checks 3 and 7 assert, because silencing without
+# restoring would quieten every later failure on the same handle - the opposite of the point.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PATCHFILE="$ROOT/patches/vchan-quiet-store-probe.patch"
@@ -83,21 +89,59 @@ else
   bad "restore_is_after_the_read: probe=$probe_line restore=$restore_line - the ordering is wrong"
 fi
 
-# ---- 4. NOTHING ELSE WAS QUIETENED -------------------------------------------------------------
-# The claim is one line of four. The other reports must still be there, at their own levels.
+# ---- 4. ONE REPORT SURVIVES, AND IT IS THE ONE WITH THE DETAIL -------------------------------
+# The duplicate goes to DEBUG; the neighbours that report DIFFERENT failures must be untouched.
+if command grep -qF 'Log(XLL_DEBUG, "libxenvchan_client_init(%u, %S) failed - reported above"' "$SRC" \
+   && ! command grep -qF 'Log(XLL_ERROR, "libxenvchan_client_init(%u, %S) failed"' "$SRC"; then
+  ok "duplicate_is_debug: libvchan stops repeating the failure the layer below already reported"
+else
+  bad "duplicate_is_debug: the duplicate report is still at ERROR, or the DEBUG replacement is missing"
+fi
 kept=0
-command grep -qF 'Log(XLL_ERROR, "libxenvchan_client_init(%u, %S) failed"' "$SRC" && kept=$((kept+1))
 command grep -qF 'Log(XLL_WARNING, "Wait for xenstore (2) failed' "$SRC" && kept=$((kept+1))
 command grep -qF 'Log(XLL_ERROR, "adding xenstore watch' "$SRC" && kept=$((kept+1))
+command grep -qF 'Log(XLL_ERROR, "CreateEvent(xs watch) failed' "$SRC" && kept=$((kept+1))
 if [ "$kept" = 3 ]; then
-  ok "nothing_else_quietened: the client-init failure, the watch failure and the second wait all still report"
+  ok "other_failures_untouched: the watch-add, the event-create and the second wait all still report"
 else
-  bad "nothing_else_quietened: only $kept of 3 neighbouring reports survived - this patch is one line, not a silencer"
+  bad "other_failures_untouched: only $kept of 3 unrelated reports survived - this is not a silencer"
 fi
-# and exactly ONE read is wrapped
+# and exactly ONE read is wrapped in this file
 n_zero=$(command grep -cF 'XcSetLogLevel(xc_handle, (XENCONTROL_LOG_LEVEL)0)' "$SRC")
-[ "$n_zero" = 1 ] && ok "one_read_only: exactly one read is silenced" \
-                  || bad "one_read_only: $n_zero reads are silenced (want 1)"
+[ "$n_zero" = 1 ] && ok "one_read_only: exactly one read is silenced in libvchan" \
+                  || bad "one_read_only: $n_zero reads are silenced in libvchan (want 1)"
+
+# ---- 4b. THE libxenvchan HALF ------------------------------------------------------------------
+PVPATCH="$ROOT/patches/libxenvchan-one-report-per-failure.patch"
+PVMIRROR="$ROOT/upstream/ro/qubes-vmm-xen-windows-pvdrivers"
+pvref=$(command grep -oE 'PVDRIVERS_REF: *[^ ]+' "$ROOT/.github/workflows/build.yml" | head -1 | awk '{print $2}')
+if [ ! -f "$PVPATCH" ]; then
+  bad "pv_patch_present: $PVPATCH is missing"
+else
+  mkdir -p "$OUT/pvref/src/libxenvchan"
+  if gh api "repos/QubesOS/qubes-vmm-xen-windows-pvdrivers/contents/src/libxenvchan/init.c?ref=$pvref" -q '.content' 2>/dev/null \
+       | base64 -d > "$OUT/pvref/src/libxenvchan/init.c" && [ -s "$OUT/pvref/src/libxenvchan/init.c" ]; then
+    ( cd "$OUT/pvref" && git init -q . 2>/dev/null; git apply --check "$PVPATCH" ) 2>"$OUT/pvref.err"
+    [ $? -eq 0 ] && ok "pv_applies_to_pinned_ref: it applies to PVDRIVERS_REF $pvref, which is what CI clones" \
+                 || bad "pv_applies_to_pinned_ref: does NOT apply to $pvref: $(head -2 "$OUT/pvref.err" | tr '\n' ' ')"
+  else
+    bad "pv_applies_to_pinned_ref: could not fetch $pvref, so it was NOT checked against what CI builds"
+  fi
+  rm -rf "$OUT/pv"; mkdir -p "$OUT/pv"; cp -r "$PVMIRROR"/. "$OUT/pv/" 2>/dev/null
+  ( cd "$OUT/pv" && git init -q . 2>/dev/null; git apply "$PVPATCH" ) 2>/dev/null
+  PVSRC="$OUT/pv/src/libxenvchan/init.c"
+  if command grep -qF 'XcSetLogLevel(ctrl->xc, (XENCONTROL_LOG_LEVEL)0)' "$PVSRC" \
+     && command grep -qF 'XcSetLogLevel(ctrl->xc, log_level)' "$PVSRC" \
+     && command grep -qF "failed to read '%S' from store" "$PVSRC"; then
+    ok "pv_one_report: the inner xencontrol report is silenced, the level restored, and the detailed line kept"
+  else
+    bad "pv_one_report: the libxenvchan half is not in place"
+  fi
+  # the ring-ref read is the ONLY one wrapped - the event-channel read right below it must not be
+  n_pv=$(command grep -cF 'XcSetLogLevel(ctrl->xc, (XENCONTROL_LOG_LEVEL)0)' "$PVSRC")
+  [ "$n_pv" = 1 ] && ok "pv_one_read_only: exactly one read is silenced in libxenvchan" \
+                  || bad "pv_one_read_only: $n_pv reads are silenced in libxenvchan (want 1)"
+fi
 
 # ---- 5. THE CHECKS MUST FAIL ON UNPATCHED SOURCE -----------------------------------------------
 UN="$MIRROR/windows/src/init.c"
@@ -113,8 +157,11 @@ for wf in build qwt-full; do
   f="$ROOT/.github/workflows/$wf.yml"
   if command grep -q 'vchan-quiet-store-probe.patch' "$f" \
      && command grep -q 'the probe is not silenced after patch' "$f" \
-     && command grep -q 'the probe does not restore the log level after patch' "$f"; then
-    ok "wired_$wf: applied unconditionally, with assertions for both the silence and the restore"
+     && command grep -q 'the probe does not restore the log level after patch' "$f" \
+     && command grep -q 'libxenvchan-one-report-per-failure.patch' "$f" \
+     && command grep -q 'the inner store report is not silenced after patch' "$f" \
+     && command grep -q 'the single remaining report is gone after patch' "$f"; then
+    ok "wired_$wf: BOTH patches applied unconditionally, each with silence and restore assertions"
   else
     bad "wired_$wf: not applied, or applied without the marker assertions"
   fi

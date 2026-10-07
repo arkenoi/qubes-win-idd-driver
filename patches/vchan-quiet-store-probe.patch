@@ -21,3 +21,17 @@
          status = WaitForSingleObject(path_watch_event, 500);
          if (status != WAIT_OBJECT_0) {
              Log(XLL_WARNING, "Wait for xenstore (2) failed: 0x%x", status);
+@@ -162,7 +174,12 @@
+     ctrl->xs_path = NULL;
+     ctrl->xenvchan = libxenvchan_client_init(g_logger, domain, xs_path, g_log_level);
+     if (!ctrl->xenvchan) {
+-        Log(XLL_ERROR, "libxenvchan_client_init(%u, %S) failed", domain, xs_path);
++        // ONE FAILURE, ONE REPORT. libxenvchan_client_init has ALREADY reported this at XLL_ERROR,
++        // with the full store path and the Win32 status - strictly more than this line carries, since
++        // the domain is inside that path. Repeating it here made one departed peer write two of its
++        // four error lines. This is not a failure made quieter: it is the same failure stopping being
++        // counted twice, and the layer that knows the detail is the one that keeps reporting it.
++        Log(XLL_DEBUG, "libxenvchan_client_init(%u, %S) failed - reported above", domain, xs_path);
+         goto fail;
+     }
+ 
