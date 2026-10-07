@@ -410,6 +410,27 @@ jobs:
           if ($src -notmatch '%03d-%d:%d-%c') { throw 'the pid is missing from the line prefix after patch' }
           if ($src -notmatch 'FILE_FLAG_WRITE_THROUGH') { throw 'safe flush would be a no-op on an append-only handle after patch' }
           Write-Host "::notice title=windows-utils::one-log-per-module fix applied"
+      # A DEPARTED PEER STOPS BEING AN ERROR OF OURS, at the first of the four lines it wrote.
+      # libvchan's client init PROBES the peer's xenstore entry - "test if the store entry exists;
+      # if not - wait a second time" - and discards the status on the next line. But XcStoreRead
+      # reports every failure at XLL_ERROR from inside xencontrol, so a client that had simply gone
+      # away produced an ERROR line for a question we only wanted the answer to. Measured on
+      # win11r-logvol 2026-10-08: eight of the new binary's ten error lines were this class, four
+      # per call. The handle's level is the caller's to set and a message is emitted only when its
+      # level <= the current one, so 0 silences that one read and is restored immediately; the real
+      # ring-ref read still reports with the path and the status.
+      - name: Apply the vchan quiet-store-probe fix (always)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = $env:GITHUB_WORKSPACE
+          git -C "$ws\deps-src\core-vchan-xen" apply --verbose "$ws\patches\vchan-quiet-store-probe.patch"
+          if ($LASTEXITCODE -ne 0) { throw "vchan quiet-store-probe patch did not apply" }
+          $src = Get-Content "$ws\deps-src\core-vchan-xen\windows\src\init.c" -Raw
+          if ($src -notmatch 'XcSetLogLevel\(xc_handle, \(XENCONTROL_LOG_LEVEL\)0\)') { throw 'the probe is not silenced after patch' }
+          if ($src -notmatch 'XcSetLogLevel\(xc_handle, g_log_level\)') { throw 'the probe does not restore the log level after patch' }
+          if ($src -notmatch 'entry_present') { throw 'the probe result marker is missing after patch' }
+          Write-Host "::notice title=vchan::quiet-store-probe fix applied"
       - name: Shadow every set-version script with the QWT-NG stamper; unify version files
         shell: pwsh
         run: |
