@@ -645,7 +645,6 @@ function Clear-BootResume {
 }
 
 # --------------------------------------------------------------- gui-agent registry seed
-# ---- SVC-RECOVERY-BEGIN  (tools/tests/supervision-install-test.ps1 extracts this function by marker)
 # ---- RECOVERY-SUSPEND-BEGIN  (tools/tests/procown-sites-test.ps1 extracts this region by marker)
 function Suspend-QubesServiceRecovery {
     # DISARM THE RELAUNCHER BEFORE ENDING ITS TARGET (the owner's rule, 2026-10-07: "if you terminate something
@@ -681,7 +680,12 @@ function Suspend-QubesServiceRecovery {
     $rc1 = $LASTEXITCODE
     & sc.exe failureflag $Name 0 2>&1 | Out-Null
     $rc2 = $LASTEXITCODE
-    $script:RecoverySuspended = $script:RecoverySuspended + @{ $Name = $before }   # GUARD:recovsuspend
+    # IDEMPOTENT, AND THE RECORD IS THE FIRST READING. Measured 2026-10-07 on win11r-gz: `$h = $h + @{k=v}` THROWS
+    # "Item has already been added" when the key is already there, and Stop-QwtRuntime runs from three sites, so the
+    # second suspend of QubesGuiWatchdog ended stage 2 with that exception and the install delivered nothing. Keeping
+    # the FIRST reading matters just as much: a second `sc qfailure` reads the DISARMED state, so overwriting would
+    # make the re-arm restore "no actions" - the very configuration the arming exists to prevent.
+    if (-not $script:RecoverySuspended.ContainsKey($Name)) { $script:RecoverySuspended[$Name] = $before }   # GUARD:recovsuspend
     if ($rc1 -eq 0 -and $rc2 -eq 0) {
         Write-Log "recovery disarmed for $Name before this stage stops it (was: $before); the SCM cannot restart it behind us"
         $script:Result.detail.svc_recovery_suspended = (($script:RecoverySuspended.GetEnumerator() | ForEach-Object { "$($_.Key)[$($_.Value)]" }) -join ' ')
@@ -714,6 +718,7 @@ function Resume-QubesServiceRecovery {
 }
 # ---- RECOVERY-SUSPEND-END
 
+# ---- SVC-RECOVERY-BEGIN  (tools/tests/supervision-install-test.ps1 extracts this function by marker)
 function Set-QubesServiceRecovery {
     # SELF-HEALING FOR THE CONTROL CHANNEL (2026-09-06, measured).
     #
