@@ -35,8 +35,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"; ROOT="$(cd "$ROOT/.." && pwd)"
 cd "$ROOT" || exit 2
 
 ISO=""; SUBJ="win11r-sup"; GOLDEN="win11r-qwt"; CELLS="L1 L2 L3 L4 L5 L6 L7 L7C"; CYCLES=2; CLICK=0
-HOLD="${HOLD_REPO:-/home/user/wt-toasthold}"      # the toast firing helpers (a0-lib raspush, toast-hold-fire.ps1)
-SWEEP="${SWEEP_REPO:-/home/user/wt-logsweep}"     # the log sweep
+HOLD="${HOLD_REPO:-$PWD}"                         # kept for an override; the helpers are in THIS repo now
+SWEEP="${SWEEP_REPO:-$PWD}"                       # the log sweep, likewise - no cross-worktree dependency
 TFEXE="${TFEXE:-}"                                # toastfire.exe for L6 (from the branch's build artifact)
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -196,7 +196,7 @@ $b = & powershell -NoProfile -ExecutionPolicy Bypass -File $h -LogDir 'Q:\NoSuch
 L 'nolog' (($b -split "`n" | Where-Object { $_ -match '^RESTART' } | Select-Object -Last 1) -replace "`r",'')
 L 'END' 'ok'
 PS
-  q push "$HOLD/../wt-harnesslc/guest/restart-gui-agent.ps1" >/dev/null 2>&1 || true
+  q push guest/restart-gui-agent.ps1 >/dev/null 2>&1 || true   # in-repo since the branches merged
   guest_ps "$OUT/L4-probe.ps1" > "$OUT/L4.out" 2>&1
   n=$(grep -a '^L4|normal|' "$OUT/L4.out" | tail -1 | cut -d'|' -f3-)
   f=$(grep -a '^L4|nolog|' "$OUT/L4.out" | tail -1 | cut -d'|' -f3-)
@@ -236,19 +236,85 @@ PS
   log "         registration is what this cell proves; the end-to-end catch-up stays owed."
 fi
 
-# ---- L6 the toast route --------------------------------------------------------------------------------------------
+# ---- L6 the toast route ---------------------------------------------------------------------------------------------
+# IN-REPO, deliberately. The first version of this cell called a script in a scratch directory that itself sourced
+# helpers out of a second worktree; three runs then measured the instrument instead of the product - a hand-rolled
+# raspush with the wrong argument form, a0-lib.sh sourced without the $R it refuses to run without, and the firing
+# tool never pushed. Everything it needs is now on this branch, so it fires from here and the keys it greps for are
+# the keys the bridge actually logs (TI-ACT, not TIACT - my own script printed "NOT MEASURABLE" on data that was
+# there, because I grepped for a tag I had not used).
 if has L6; then
-  log "L6: an actionable toast reaches dom0 WITH its actions"
+  log "L6: an actionable toast reaches dom0 WITH its actions, an informational one without"
   if [ -z "$TFEXE" ] || [ ! -f "$TFEXE" ]; then
-    verdict L6 INVALID "an actionable toast reaches dom0 with its actions" "--toastfire <toastfire.exe> is required and must exist (got '${TFEXE:-unset}')"
+    verdict L6 INVALID "an actionable toast reaches dom0 with its actions" \
+            "--toastfire <toastfire.exe> is required and must exist (got '${TFEXE:-unset}') - missing data fails"
   else
-    ( cd "$HOLD" && QTEST_VM="$SUBJ" QWT_VMLOCK_HELD="$SUBJ" TFEXE="$TFEXE" \
-        bash /home/user/qwt-retest/toast-fire.sh "$SUBJ" $([ "$CLICK" = 1 ] && echo --click) ) > "$OUT/L6.out" 2>&1
-    act=$(grep -aoE "actions=[^ ]+" "$OUT/L6.out" | head -1)
-    if grep -aq "actions=default:com,b0:com,b1:com" "$OUT/L6.out"; then
-      verdict L6 PASS "an actionable toast reaches dom0 with its buttons as actions" "$(grep -a "SENT id=" "$OUT/L6.out" | head -2 | tr '\n' ' ' | cut -c1-200)"
+    # a0-lib.sh demands $R and a log() BEFORE it is sourced, and says so; that is how the first attempt died in one
+    # line instead of half-working. VM is its subject variable.
+    VM="$SUBJ"; INCOMING="${INCOMING:-C:\\Users\\user\\Documents\\QubesIncoming\\win-idd-mgmt}"
+    source .claude/skills/win-guest-e2e/e2e-lib.sh
+    source mgmt/harness/a0-lib.sh
+    log "  push toastfire.exe ($(sha256sum "$TFEXE" | cut -c1-12)) - without it every fire is a silent no-op"
+    q push "$TFEXE" >/dev/null 2>&1
+    tfp=$(q run 'cmd /c if exist "C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\toastfire.exe" (echo TF_PRESENT) else (echo TF_MISSING)' 2>/dev/null | tr -d '\r' | grep -aoE 'TF_PRESENT|TF_MISSING' | head -1)
+    raspush guest/toast-hold-fire.ps1 "REG:com-activator" "areg$RANDOM" > "$OUT/L6-register.out" 2>&1
+    reg=$(grep -aoE 'REGISTERED|already registered' "$OUT/L6-register.out" | head -1)
+    log "  toastfire=$tfp activator=${reg:-NOT-REGISTERED}"
+    for k in actionable:ACT informational:INFO; do
+      cls=${k%%:*}; sfx=${k#*:}
+      raspush guest/toast-hold-fire.ps1 \
+        "FIRE:--fire+--method+com-activator+--class+$cls+--title+TI-$sfx+--tag+TI-$sfx" "f$sfx$RANDOM" \
+        > "$OUT/L6-fire-$sfx.out" 2>&1
+      grep -aq 'FIRED method=' "$OUT/L6-fire-$sfx.out" && log "  $cls fired (TI-$sfx)" || log "  $cls did NOT fire: $(grep -av '^$' "$OUT/L6-fire-$sfx.out" | tail -2 | tr '\n' ' ' | cut -c1-150)"
+      sleep 12
+    done
+    q run 'cmd /c type "C:\ProgramData\qubes-toast-bridge\bridge.log"' > "$OUT/L6-bridge.log" 2>&1
+    # the two claims, from the bridge's own record: the actionable one carries its buttons, the informational one
+    # does not, and neither waits on the action work (the forward latency per toast)
+    python3 - "$OUT/L6-bridge.log" > "$OUT/L6-claims.txt" 2>&1 <<'PY'
+import re, sys
+L = open(sys.argv[1], encoding='utf-8', errors='replace').read().splitlines()
+def secs(s):
+    m = re.match(r'(\d\d):(\d\d):(\d\d)', s)
+    return None if not m else int(m.group(1))*3600 + int(m.group(2))*60 + int(m.group(3))
+for tag in ('TI-ACT', 'TI-INFO'):
+    rows = [l for l in L if tag in l]
+    if not rows:
+        print(f"{tag} NOMEASURE no line at all"); continue
+    sent = next((l for l in rows if 'SENT' in l), None)
+    first, s_at = secs(rows[0]), (secs(sent) if sent else None)
+    acts = re.search(r'actions=(\S+)', sent) if sent else None
+    if s_at is None or first is None:
+        print(f"{tag} NOMEASURE first={first} sent={s_at}")
+    else:
+        print(f"{tag} LAT {s_at-first} ACTIONS {acts.group(1) if acts else 'none'}")
+PY
+    sed 's/^/    /' "$OUT/L6-claims.txt"
+    aact=$(awk '$1=="TI-ACT" && $2=="ACTIONS"{print $3} $1=="TI-ACT" && $4=="ACTIONS"{print $5}' "$OUT/L6-claims.txt")
+    iact=$(awk '$1=="TI-INFO" && $2=="ACTIONS"{print $3} $1=="TI-INFO" && $4=="ACTIONS"{print $5}' "$OUT/L6-claims.txt")
+    alat=$(awk '$1=="TI-ACT" && $2=="LAT"{print $3}' "$OUT/L6-claims.txt")
+    ilat=$(awk '$1=="TI-INFO" && $2=="LAT"{print $3}' "$OUT/L6-claims.txt")
+    if grep -q NOMEASURE "$OUT/L6-claims.txt" || [ -z "$aact" ] || [ -z "$iact" ]; then
+      verdict L6 INVALID "an actionable toast forwards WITH its buttons, an informational one without" \
+              "$(tr '\n' '; ' < "$OUT/L6-claims.txt" | cut -c1-200) (toastfire=$tfp activator=${reg:-none})"
+    elif printf '%s' "$aact" | grep -q 'b0:' && printf '%s' "$aact" | grep -q 'b1:' && [ "$iact" = default:com ]; then
+      verdict L6 PASS "an actionable toast forwards WITH its buttons, an informational one without" \
+              "actionable actions=$aact lat=${alat}s; informational actions=$iact lat=${ilat}s"
     else
-      verdict L6 FAIL "an actionable toast reaches dom0 with its buttons as actions" "${act:-no actions= line}; $(tail -2 "$OUT/L6.out" | tr '\n' ' ' | cut -c1-180)"
+      verdict L6 FAIL "an actionable toast forwards WITH its buttons, an informational one without" \
+              "actionable actions=$aact (want b0 and b1); informational actions=$iact (want default:com only)"
+    fi
+    if [ "$CLICK" = 1 ]; then
+      log "  THE CLICK: a dom0 notification for TI-ACT should be on screen with its buttons. Press one; this reads"
+      log "  the outcome for 180 s. It cannot press it - there is no dom0 shell here."
+      d=$((SECONDS+180)); seen=0
+      while [ $SECONDS -lt $d ]; do
+        q run 'cmd /c type "C:\ProgramData\qubes-toast-bridge\bridge.log"' > "$OUT/L6-bridge-after.log" 2>&1
+        grep -aq 'ACTION id=' "$OUT/L6-bridge-after.log" && { seen=1; break; }
+        sleep 10
+      done
+      if [ "$seen" = 1 ]; then verdict L6C PASS "a pressed button is carried out IN THE GUEST" "$(grep -a 'ACTION id=' "$OUT/L6-bridge-after.log" | tail -1 | cut -c1-180)"
+      else verdict L6C INVALID "a pressed button is carried out in the guest" "no ACTION line in 180 s - nobody pressed it, or the route did not carry it"; fi
     fi
   fi
 fi

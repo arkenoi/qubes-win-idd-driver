@@ -79,6 +79,20 @@ control_clones(){ grep -q 'clone-guest.sh "$GOLDEN" "$CTL"' "$1" && ! grep -qE '
 shape "control: L7C clones the golden and never boots the golden itself (it is a pristine base)" \
       control_clones 'if bash mgmt/clone-guest.sh "$GOLDEN" "$CTL" > "$OUT/L7C-clone.out" 2>&1; then'
 
+# SELF-CONTAINMENT. Three runs measured a broken instrument because this routine reached into a scratch
+# directory and a second worktree for its firing helpers. Everything is on this branch now, so a path
+# that leaves the repo is a defect - and this check INJECTS one rather than removing a line, because a
+# negative claim cannot be driven to fail by deletion.
+self_contained(){ ! grep -qE '/home/user/(wt-|qwt-retest)' "$1"; }
+inject(){ # $1 label, $2 predicate, $3 line to append as the defect
+  if ! "$2" "$S"; then bad "$1"; return; fi
+  { cat "$S"; printf '%s\n' "$3"; } > "$OUT/inject.sh"
+  if "$2" "$OUT/inject.sh"; then bad "$1 - still passes with the defect injected (decoration)"
+  else ok "$1 (and FAILS with the defect injected)"; fi
+}
+inject "self-contained: no cell reaches into a scratch dir or a sibling worktree for its helpers" \
+       self_contained 'source /home/user/wt-toasthold/mgmt/harness/a0-lib.sh'
+
 exits_nonzero(){ grep -qE '\[ "\$nf" = 0 \] && \[ "\$ni" = 0 \] && exit 0 \|\| exit 1' "$1"; }
 shape "exit: the routine exits non-zero when any cell failed or was invalid" \
       exits_nonzero '[ "$nf" = 0 ] && [ "$ni" = 0 ] && exit 0 || exit 1'
