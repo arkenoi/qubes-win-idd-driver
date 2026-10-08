@@ -1086,7 +1086,18 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
   # NO WINDOW NOBODY ASKED FOR (2026-09-30): a console/Terminal window our agent mapped since this boot is
   # ours or the harness's - the toast bridge shipped one on every Win11 boot for four weeks unseen.
   local cw cwrc
-  cw=$("$HERE/mgmt/harness/console-window-check.sh" "$vm" 2>&1); cwrc=$?
+  # THE CELL DECLARES ITS OWN INSTALLER CONSOLE, and only the cells that start one. The
+  # over-existing cells install from the release ISO by running <CD>\install.cmd in the guest's
+  # session; install.cmd is a batch file, so on Windows 11 25H2 cmd.exe is hosted by Windows
+  # Terminal and that window is legitimately mapped. The clean cell enters via prime-run with no
+  # session and declares nothing. Measured 2026-10-08: WIN11-upgrade failed here on exactly that
+  # window (class=CASCADIA_HOSTING_WINDOW_CLASS) while every Windows 10 cell passed, because
+  # conhost hosts it there. Jev: whose_defect = harness 0.94, product 0.00.
+  local cwflag=""
+  case "$lbl" in
+    *-reinstall|*-upgrade|*-seeded|*-stock) cwflag="--allow-installer-console" ;;
+  esac
+  cw=$("$HERE/mgmt/harness/console-window-check.sh" "$vm" $cwflag 2>&1); cwrc=$?
   case $cwrc in
     0) ok "$lbl: $cw" ;;
     1) no "$lbl: a console/Terminal window was mapped on this boot - $cw" ;;

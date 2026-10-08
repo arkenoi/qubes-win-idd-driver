@@ -12,10 +12,35 @@
 # window) for AddWindow lines of the console classes. Proof the logs were read: at least one
 # agent `Init:` line - no proof, no verdict.
 #
+# --allow-installer-console: the CALLING CELL DECLARES that it started a console itself, which is the
+# only case where a console window is expected. Measured 2026-10-08 on the 4.3.36 gate: WIN11-upgrade
+# and the template-update quick-upgrade both failed here on
+#   AddWindow: ... class=CASCADIA_HOSTING_WINDOW_CLASS w=1115 h=628 t=67265
+# which is the HARNESS's own installer: the upgrade path runs
+#   Start-Process -WindowStyle Minimized -FilePath '<DISC>\install.cmd' ...
+# and install.cmd is a batch file, so ShellExecute hosts it in cmd.exe - which on Windows 11 25H2 is
+# Windows Terminal (CASCADIA_HOSTING_WINDOW_CLASS). Windows 10 hosts it in conhost and those cells
+# passed. Jev 2026-10-08: whose_defect = harness 0.94, product 0.00;
+# agent_should_filter_consoles 0.15 (a user who runs install.cmd DOES want to see that window);
+# how_to_fix = the check excludes the cell's own installer, IDENTIFIED rather than assumed, 0.59.
+# So the exclusion is DECLARED by the cell, never inferred here, and it is deliberately narrow:
+# AT MOST ONE console window is tolerated under the flag. Two or more still FAIL, and any console
+# window at all fails when the flag is absent - which is the four-week helper defect this check was
+# written for.
+#
 # Exit: 0 = none mapped, 1 = FOUND (the defect), 2 = instrument failure (missing data fails).
 # Prints one line naming the logs read and, on 1, the first offending AddWindow line.
 set -uo pipefail
-VM=${1:?usage: $0 <vm>}
+ALLOW_INSTALLER=0
+_args=()
+for a in "$@"; do
+  case "$a" in
+    --allow-installer-console) ALLOW_INSTALLER=1 ;;
+    *) _args+=("$a") ;;
+  esac
+done
+set -- "${_args[@]:-}"
+VM=${1:?usage: $0 <vm> [--allow-installer-console]}
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
 # Serial rig: inside quick-upgrade/matrix the held lock passes straight through (QWT_VMLOCK_HELD is
 # exported there); run on its own, this takes the guest's lock like any other job.
@@ -81,7 +106,16 @@ ninit=$(echo "$out" | grep -a '^CWC-INIT|' | cut -d'|' -f2 | sort -u | wc -l)
 [ "$ninit" -ge 1 ] || { echo "INSTRUMENT: $nlogs agent log(s) read but no Init: line in any of them - not judged"; exit 2; }
 hits=$(echo "$out" | grep -a '^CWC-HIT|')
 if [ -n "$hits" ]; then
-  echo "FOUND $(echo "$hits" | wc -l) console/Terminal window(s) mapped since the agent's last Init ($nlogs agent log(s)): $(echo "$hits" | head -1 | cut -d'|' -f3- | cut -c1-200)"
+  nhits=$(echo "$hits" | wc -l)
+  first=$(echo "$hits" | head -1 | cut -d'|' -f3- | cut -c1-200)
+  if [ "$ALLOW_INSTALLER" = 1 ] && [ "$nhits" -eq 1 ]; then
+    # The cell DECLARED that it started a console. Exactly one is the installer's; it is still
+    # REPORTED, so it can never go unseen, and a second one is still the defect.
+    echo "ONE console/Terminal window mapped and the cell declared its own installer console - tolerated, reported: $first"
+    exit 0
+  fi
+  echo "FOUND $nhits console/Terminal window(s) mapped since the agent's last Init ($nlogs agent log(s)): $first"
+  [ "$ALLOW_INSTALLER" = 1 ] && echo "  (the cell declared ONE installer console; $nhits were mapped, so at least one is not it)"
   exit 1
 fi
 echo "NONE: no console/Terminal window mapped since the agent's last Init ($nlogs agent log(s), $ninit with Init)"

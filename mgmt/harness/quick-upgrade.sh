@@ -905,7 +905,11 @@ fi
 # (e) NO WINDOW NOBODY ASKED FOR (2026-09-30). The toast bridge put a blank Windows Terminal window on
 # every Win11 boot for four weeks and no check here could see it; seen to FAIL on the release that
 # carried it (36652188404) and to pass on the fix, same recipe (console-window-check.sh header).
-cw=$("$HERE/mgmt/harness/console-window-check.sh" "$SUBJECT" 2>&1); cwrc=$?
+# THIS SCRIPT STARTS A CONSOLE ITSELF: it runs <DISC>\install.cmd through Start-Process, and on
+# Windows 11 25H2 cmd.exe is hosted by Windows Terminal, so that window is legitimately mapped and
+# the check's premise ("no one opened a console") does not hold here. Declared, never inferred, and
+# still narrow: exactly one is tolerated and it is reported either way.
+cw=$("$HERE/mgmt/harness/console-window-check.sh" "$SUBJECT" --allow-installer-console 2>&1); cwrc=$?
 case $cwrc in
   0) ok "$cw" ;;
   1) no "a console/Terminal window was mapped on this boot - $cw" ;;
