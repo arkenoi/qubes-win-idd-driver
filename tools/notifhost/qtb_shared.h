@@ -123,6 +123,14 @@ inline std::wstring QwtLogDir()
 // NT AUTHORITY\Authenticated Users:(I)(M) inherited onto files, so the bridge's interactive-user
 // process can append there. The state directory keeps the bridge's CONTROL surfaces, which is
 // what its restrictive ACLs are for; a log is not a control surface.
+// EXIT CODES THIS BINARY RETURNS, and the agent's side of the contract (agent/gui-agent/main.c,
+// notifytexts.h): 0 = it did its work and finished, 2 = listener access denied, 3 = listener init
+// threw, 4 = ANOTHER INSTANCE IS ALREADY RUNNING.
+// 4 exists because 0 used to cover the singleton case too, which made a second instance look like
+// an unasked clean exit - a death - and produced one dom0 notification per relaunch. GWeck, forum
+// 42717 post 175 on 4.3.35: four of the notifications flooding his VM start were exactly that.
+#define QTB_EXIT_ALREADY_RUNNING 4u
+
 inline const wchar_t* g_logName = L"\\bridge.log";
 inline std::wstring g_logDirOverride;
 

@@ -503,6 +503,18 @@ $script:QwtShutdownResultCodes = @('0x8007045b', '0x8007050b', '2147943515', '21
 # user must hear about.
 # Keyed by task and by exact result, with the reason the user would otherwise have been given
 # wrongly. Nothing is added here without the task's own documented contract to point at.
+# The same idea for EXECUTABLES, keyed by image name and exact exit code.
+# notifhost.exe 4 = QTB_EXIT_ALREADY_RUNNING (tools/notifhost/qtb_shared.h): a second instance found
+# the singleton held and said so. FIELD-REPORTED by GWeck on 4.3.35 (forum 42717 post 175, with a
+# screenshot): four of the notifications flooding his VM start were this, as exit code 0, because 0
+# used to cover the singleton case as well as a real finish. The agent adopts code 4 now and does
+# not report it, and this covers a record written by an older binary on an upgraded guest.
+$script:QwtDeathExeBenignResults = @{
+    'notifhost.exe' = @{
+        '4' = 'another instance already holds the singleton, so the bridge IS running - it said so instead of exiting 0, which used to be indistinguishable from a real finish'
+    }
+}
+
 $script:QwtDeathTaskBenignResults = @{
     '\QubesAutologonGuard' = @{
         '3' = 'autologon could not be VERIFIED - ensure-autologon.ps1 could not query the LSA secret, which is no finding either way (its exit code 3 is deliberately not 2); the installer records it and a real failure to arm is exit 2'
@@ -938,6 +950,12 @@ function Format-QwtDeathNotice {
                 $what = 'disappeared'
                 $codeText = 'exit code unknown'
                 $cause = "Cause: $($script:QwtDeathSupervisorIds[$Death.eventId]) found it gone without observing an exit, so there is no exit code."
+            } elseif ($script:QwtDeathExeBenignResults[$Death.exe] -and
+                      $script:QwtDeathExeBenignResults[$Death.exe].ContainsKey("$($Death.code)")) {
+                # An exit the component uses to say something other than "I died".
+                $what = 'is already running'
+                $codeText = "exit code $($Death.code)"
+                $cause = "Cause: $($script:QwtDeathExeBenignResults[$Death.exe]["$($Death.code)"])."
             } elseif (Test-QwtDeathExceptionCode $Death.code) {
                 $what = 'crashed'
                 $codeText = Format-QwtDeathCode $Death.code 'exception'

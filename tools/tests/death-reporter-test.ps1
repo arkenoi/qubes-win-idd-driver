@@ -252,6 +252,24 @@ Check 'not ended: an ordinary non-zero task result is a death as before' ($ev.ou
 # expected output). A 201 whose result is 0 is a task that SUCCEEDED and is not a death.
 $ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesWindowsUpdateScan' '0' $T0)
 Check 'task 201 result 0: not a death' (-not $ev.ours)
+# AN EXE EXIT THAT MEANS "I AM ALREADY RUNNING" IS NOT A DEATH. FIELD-REPORTED by GWeck on 4.3.35
+# (forum 42717 post 175, screenshot): "a lot of notifications pop up" on VM start, FOUR of them
+# "The notification bridge exited unexpectedly ... Cause: a clean exit nobody asked for - exit code
+# 0", pids 8772/6796/10168/1232, each ran 0:00:00, numbered death 1, 2, 4 and 6 of ONE boot.
+# Asserted STRUCTURALLY rather than by building a 4003 record: my first version invented a helper
+# name that does not exist, and guessing an event's positional shape is how this class of mistake
+# starts. The agent-side fix (main.c adopts exit 4 without reporting) is the primary one; this map
+# covers a record written by an older binary on an upgraded guest.
+$src = Get-Content $ReporterPath -Raw
+Check 'exe benign map: notifhost exit 4 is recorded as already running, not a death' `
+      ($src -match "(?s)QwtDeathExeBenignResults.{0,400}notifhost\.exe.{0,200}'4'")
+# Simple and robust: the map name must appear with ContainsKey nearby. My first pattern tried to
+# escape $Death.exe through two layers of quoting and matched nothing, failing code that was right.
+Check 'exe benign map: the supervisor branch consults it before judging a death' `
+      ($src -match '(?s)QwtDeathExeBenignResults.{0,160}ContainsKey')
+Check 'exe benign map: a REAL non-zero exit is still a death (the map is keyed by exact code)' `
+      ($src -notmatch "(?s)QwtDeathExeBenignResults.{0,400}'0'\s*=")
+
 # A RESULT A TASK USES TO MEAN SOMETHING OTHER THAN FAILURE (owner 2026-10-08: user-facing error
 # lines are top priority). ensure-autologon.ps1's own contract: 0 armed, 2 NOT armed, 3 could not be
 # VERIFIED - "no positive finding either way", and "3 is deliberately not 2". The updater honoured

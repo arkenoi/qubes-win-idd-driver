@@ -3641,8 +3641,21 @@ static int BridgeMain()
 {
     NameThisThread(L"notifhost: bridge-main");
     SetUnhandledExceptionFilter(BridgeCrashFilter);   // crash breadcrumb (see BridgeCrashFilter)
+    // ALREADY RUNNING IS NOT "FINISHED". Returning 0 here made a second instance indistinguishable
+    // from one that did its work and exited, and the GUI agent reports an unasked clean exit as a
+    // death: FIELD-REPORTED by GWeck on 4.3.35 (forum 42717 post 175, screenshot) - "a lot of
+    // notifications pop up" on VM start, of which FOUR read "The notification bridge exited
+    // unexpectedly ... Cause: a clean exit nobody asked for - exit code 0", pids 8772/6796/10168/
+    // 1232, each "ran 0:00:00", numbered death 1, 2, 4 and 6 of that one boot. That is this line:
+    // the agent relaunches the bridge, the live instance holds the singleton, the new one exits 0
+    // instantly, and the user gets a dom0 notification - every 60 s.
+    // QTB_EXIT_ALREADY_RUNNING is its own code so the supervisor can tell "I am already running"
+    // from "I finished", and main.c treats it as proof the bridge is alive rather than as a death.
     HANDLE mtx = CreateMutexW(nullptr, FALSE, L"Local\\QubesToastBridgeSingleton");
-    if (mtx) { DWORD w = WaitForSingleObject(mtx, 0); if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED) return 0; }
+    if (mtx) { DWORD w = WaitForSingleObject(mtx, 0); if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED) {
+        BLog(L"SINGLETON another bridge instance already holds Local\\QubesToastBridgeSingleton - exiting %u (already running, NOT a death)",
+             (unsigned)QTB_EXIT_ALREADY_RUNNING);
+        return QTB_EXIT_ALREADY_RUNNING; } }
     ProcessIdToSessionId(GetCurrentProcessId(), &g_mySession);
 
     InitializeCriticalSection(&g_corrLock);
@@ -4642,8 +4655,12 @@ int wmain(int argc, wchar_t** argv)
 
     // ---- legacy in-guest toast interceptor (default mode) ----
     // single instance per session
+    // Same contract as the bridge singleton above: already running is not finished.
     HANDLE mtx = CreateMutexW(nullptr, FALSE, L"Local\\QubesNotifHostSingleton");
-    if (mtx) { DWORD w = WaitForSingleObject(mtx, 0); if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED) return 0; }
+    if (mtx) { DWORD w = WaitForSingleObject(mtx, 0); if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED) {
+        BLog(L"SINGLETON another notifhost instance already holds Local\\QubesNotifHostSingleton - exiting %u (already running, NOT a death)",
+             (unsigned)QTB_EXIT_ALREADY_RUNNING);
+        return QTB_EXIT_ALREADY_RUNNING; } }
     ProcessIdToSessionId(GetCurrentProcessId(), &g_mySession);
 
     init_apartment(apartment_type::multi_threaded);
