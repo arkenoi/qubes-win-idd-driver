@@ -16,7 +16,7 @@
 # check is also driven to FAIL with the defect injected, because a check never seen to fail is decoration.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-SRC="$ROOT/guest/pvnic-selfprime.ps1"
+SRC="${PVNIC_SRC:-$ROOT/guest/pvnic-selfprime.ps1}"
 PWSH="${PWSH:-/home/user/pwsh/pwsh}"
 OUT="${PVNIC_SELFTEST_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/pvnic-rearm-XXXXXX")}"
 mkdir -p "$OUT"
@@ -150,20 +150,24 @@ rshape "reporter: 267014 is still ignored for every task (a stop we asked for is
 rshape "reporter: the re-arm impact line no longer asserts the latch was not re-armed on that path" \
        '! command grep -q "The PV NIC latch was not re-armed at shutdown" "$REP"'
 
-# ---- A CONDITION THIS BOOT ALREADY REPAIRED MUST NOT FAIL THE TASK --------------------------------
-# Owner, 2026-10-08: "PV NIC setup failure still shown, whatever it means". The decision above was
-# right and its CONSEQUENCE was wrong, which is why the earlier fix did not stop the notification:
-# the 'report' branch called Fault, Fault sets $script:faulted, and Ok - the payload's only success
-# exit - exits 1 whenever anything faulted. Task Scheduler then records result 1 on QubesPvNic and
-# qwt-report-death.ps1 reports "The PV NIC setup task failed | Cause: incorrect function" to dom0.
+# ---- NO WARNING ON A NORMAL BOOT, A VISIBLE ERROR WHEN IT ACTUALLY MATTERS -----------------------
+# Owner, 2026-10-08: "PV NIC setup failure still shown, whatever it means" and then "we need no
+# warnings on normal operation and visible error on actual failure."
 #
-# The condition is REPAIRED BEFORE THE VERDICT, in the same process: the payload re-arms the latch
-# at its top (reg add NICS=1 + the VIF enum key) and LOGS the readback, ~90 lines before this check
-# runs - and the Fault message itself says "(the latch is re-armed by this boot's run)". So the
-# guest is correct at exit and dom0 is told it failed.
+# The DECISION above was right; its CONSEQUENCE was wrong, which is why the earlier fix did not stop
+# the notification: the 'report' branch called Fault, Fault sets $script:faulted, and Ok - the
+# payload's only success exit - exits 1 whenever anything faulted. Task Scheduler then recorded
+# result 1 on QubesPvNic and qwt-report-death.ps1 reported "The PV NIC setup task failed | Cause:
+# incorrect function" to dom0, on a guest with nothing wrong with it.
 #
-# NOT A SUPPRESSION, and these checks are what keep it from becoming one: the log line, the once-
-# per-boot guard and an Application event all stay, and an UNREPAIRED fault must still exit 1.
+# THE LEVEL COMES FROM THE MECHANISM, not from taste. xen.sys reads Services\XEN\Unplug\NICS
+# DELETE-ON-READ at boot start, so the payload's own re-arm (its first step) arms the NEXT boot and
+# does not fix this one. A missing stamp therefore means THIS boot ran with no unplug latch, and
+# that costs something only when there is a PV NIC to unplug:
+#   vif present -> xenvif's NET child can demand a restart instead of starting at problem 0
+#                  (findings/network.md) - a real, user-visible failure: ERROR, and the task fails
+#   no vif      -> nothing was unplugged because there was nothing to unplug: one log line, no
+#                  warning, no event, no marker, no non-zero exit
 PAY="$OUT/payload.ps1"
 python3 - "$SRC" "$PAY" <<'PY2'
 import sys, io
@@ -174,20 +178,17 @@ io.open(sys.argv[2], 'w', encoding='utf-8').write(s[s.index('\n', i)+1:j] + '\n'
 PY2
 [ -s "$PAY" ] || { echo "FAIL  the boot payload could not be extracted - nothing below ran"; exit 2; }
 
-# the 'report' branch's own line, isolated by the switch label so a Fault elsewhere cannot satisfy it
-report_line(){ command grep -nA3 "^    'report' *{" "$PAY" | command grep -E 'Fault |Repaired |Note '; }
-if report_line | command grep -q 'Fault '; then
-  bad "repaired_does_not_fail_task: the 'report' branch still calls Fault, so a guest whose latch IS armed reports result 1 to dom0"
-else
-  ok "repaired_does_not_fail_task: the 'report' branch records the condition without poisoning the task's exit code"
-fi
-
-# the marker health-check reads must NOT be written for a repaired condition
-if command grep -q 'function Repaired' "$PAY"; then
-  rbody=$(python3 - "$PAY" <<'PY3'
-import sys, io
+# the branch body, isolated by its switch label so a Fault elsewhere cannot satisfy these
+rep=$(python3 - "$PAY" <<'PY3'
+import sys, io, re
 s = io.open(sys.argv[1], encoding='utf-8').read()
-i = s.index('function Repaired')
+# THE SWITCH LABEL, not the first literal: Test-QwtRearmArm contains `return 'report'`, and
+# anchoring on the bare string extracted the tail of THAT function - which naturally contains
+# neither VifDevicePresent nor Fault, so two checks reported a defect the code did not have.
+m = re.search(r"^[ \t]*'report'[ \t]*\{", s, re.M)
+if not m:
+    raise SystemExit("the 'report' switch label is not present")
+i = m.start()
 d = 0; j = s.index('{', i)
 for k in range(j, len(s)):
     if s[k] == '{': d += 1
@@ -197,34 +198,41 @@ for k in range(j, len(s)):
 print(s[i:k+1])
 PY3
 )
-  if printf '%s' "$rbody" | command grep -q 'Set-Content \$mark'; then
-    bad "repaired_writes_no_failed_marker: Repaired still writes QubesPvNic-FAILED.txt, which health-check.ps1:912 reports as a failure"
-  else
-    ok "repaired_writes_no_failed_marker: no FAILED marker for a condition that is already fixed"
-  fi
-  if printf '%s' "$rbody" | command grep -q 'Write-EventLog' && printf '%s' "$rbody" | command grep -q 'L "' ; then
-    ok "repaired_is_still_loud: the log line and the Application event are both kept - nothing is lost"
-  else
-    bad "repaired_is_still_loud: the condition would be recorded nowhere"
-  fi
-  if printf '%s' "$rbody" | command grep -q 'script:faulted'; then
-    bad "repaired_keeps_verdict_clean: Repaired touches \$script:faulted - that is what decides the exit code"
-  else
-    ok "repaired_keeps_verdict_clean: Repaired leaves the verdict to Fault alone"
-  fi
+[ -n "$rep" ] || { echo "FAIL  the 'report' branch could not be isolated"; exit 2; }
+
+if printf '%s' "$rep" | command grep -q 'VifDevicePresent'; then
+  ok "level_decided_by_effect: the branch asks whether a PV NIC is present before deciding anything"
 else
-  bad "repaired_writes_no_failed_marker: there is no Repaired function - the only recorder is Fault, which fails the task"
-  bad "repaired_is_still_loud: there is no Repaired function"
-  bad "repaired_keeps_verdict_clean: there is no Repaired function"
+  bad "level_decided_by_effect: the branch does not consult the bus, so one level is applied to both cases"
+fi
+if printf '%s' "$rep" | command grep -q 'Fault '; then
+  ok "real_case_is_an_error: with a vif present it still Faults, so an actual failure stays visible"
+else
+  bad "real_case_is_an_error: nothing Faults - a boot that really lost its unplug latch would be silent"
+fi
+if printf '%s' "$rep" | command grep -qE 'EntryType +(Warning|Error)|Repaired '; then
+  bad "no_warning_on_normal_boot: the branch still raises a Warning/Error event on the no-vif path"
+else
+  ok "no_warning_on_normal_boot: the no-effect case is a log line only - no warning, no event"
+fi
+if printf '%s' "$rep" | command grep -q 'Set-Content \$mark'; then
+  bad "no_failed_marker_on_normal_boot: it writes QubesPvNic-FAILED.txt, which health-check.ps1 reports"
+else
+  ok "no_failed_marker_on_normal_boot: no FAILED marker on the path that cost nothing"
+fi
+# the claim that was WRONG and must not come back: this run's re-arm fixes the NEXT boot, not this one
+if printf '%s' "$rep" | command grep -qiE 'so the guest is correct now|re-armed by this (boot|run)'"'"'s'; then
+  bad "no_false_repair_claim: the branch claims this boot was fixed; the latch is delete-on-read, so it was not"
+else
+  ok "no_false_repair_claim: the message says the re-arm is for the NEXT boot"
 fi
 
-# AND AN UNREPAIRED FAULT MUST STILL FAIL. Driven, not read: the Fault/Ok/Repaired trio is extracted
-# and exercised, so "a real failure still exits 1" is a measurement.
+# AND THE VERDICT MACHINERY ITSELF, DRIVEN rather than read: a real fault must still exit 1.
 python3 - "$PAY" "$OUT/verdict.ps1" <<'PY4'
 import sys, io
 s = io.open(sys.argv[1], encoding='utf-8').read()
 out = []
-for name in ('Fault', 'Repaired', 'Ok'):
+for name in ('Fault', 'Ok'):
     i = s.find('function ' + name)
     if i < 0: continue
     d = 0; j = s.index('{', i)
@@ -251,14 +259,13 @@ drive_verdict(){ # $1 = the call to make before Ok; echoes the exit code
 }
 rc_clean=$(drive_verdict '')
 rc_fault=$(drive_verdict "Fault 'a step really failed'")
-[ "$rc_clean" = 0 ] && ok "clean_run_exits_zero: nothing faulted, Ok exits 0 (rc=$rc_clean)"                     || bad "clean_run_exits_zero: rc=$rc_clean"
-[ "$rc_fault" = 1 ] && ok "unrepaired_fault_still_exits_one: a real failure is STILL reported to dom0 (rc=$rc_fault)"                     || bad "unrepaired_fault_still_exits_one: rc=$rc_fault - a real failure would now be CONCEALED"
-if command grep -q 'function Repaired' "$PAY"; then
-  rc_rep=$(drive_verdict "Repaired 'the previous shutdown re-arm did not complete'")
-  [ "$rc_rep" = 0 ] && ok "repaired_exits_zero: a self-healed condition does not fail the task (rc=$rc_rep)"                     || bad "repaired_exits_zero: rc=$rc_rep - dom0 is still told the PV NIC setup failed"
-else
-  bad "repaired_exits_zero: there is no Repaired function"
-fi
+rc_log=$(drive_verdict "L 'a condition that cost nothing'")
+[ "$rc_clean" = 0 ] && ok "clean_run_exits_zero: nothing faulted, Ok exits 0 (rc=$rc_clean)" \
+                    || bad "clean_run_exits_zero: rc=$rc_clean"
+[ "$rc_fault" = 1 ] && ok "unrepaired_fault_still_exits_one: a real failure is STILL reported to dom0 (rc=$rc_fault)" \
+                    || bad "unrepaired_fault_still_exits_one: rc=$rc_fault - a real failure would now be CONCEALED"
+[ "$rc_log" = 0 ] && ok "log_line_does_not_fail_the_task: a logged no-effect condition leaves the verdict alone (rc=$rc_log)" \
+                  || bad "log_line_does_not_fail_the_task: rc=$rc_log"
 
 echo "--- $pass passed, $fail failed; outputs in $OUT"
 [ "$fail" = 0 ] && exit 0 || exit 1

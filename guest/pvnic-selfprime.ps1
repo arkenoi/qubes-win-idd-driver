@@ -741,23 +741,18 @@ function Fault([string]$why) {
     New-EventLog -LogName Application -Source QubesPvNic -EA SilentlyContinue
     Write-EventLog -LogName Application -Source QubesPvNic -EntryType Error -EventId 1001 -Message "PV NIC payload: $why" -EA SilentlyContinue
 }
-# A CONDITION THIS RUN HAS ALREADY REPAIRED IS NOT A FAILURE OF THIS RUN.
-# Owner, 2026-10-08: "PV NIC setup failure still shown, whatever it means." The DECISION that found
-# the condition was right; its consequence was not. The previous session's shutdown re-arm not
-# completing was recorded with Fault, Fault sets $script:faulted, and Ok - the only success exit -
-# exits 1 whenever anything faulted. Task Scheduler recorded result 1 on QubesPvNic and
-# qwt-report-death.ps1 duly told dom0 "The PV NIC setup task failed | Cause: incorrect function",
-# on a guest whose latch this very run had re-armed at its top (reg add NICS=1 + the VIF enum key,
-# with the readback logged) ~90 lines before the check ran. The Fault message said so itself:
-# "(the latch is re-armed by this boot's run)".
-# So: the record stays - log line, once-per-boot guard, and an Application event, at WARNING rather
-# than ERROR because an incomplete shutdown re-arm IS an anomaly worth seeing - and the VERDICT is
-# left to Fault alone, which still means "still broken when this run ended". No FAILED marker
-# either: health-check.ps1:912 reads it and would report the same failure by another route.
-function Repaired([string]$why) {
-    L "REPAIRED: $why"
-    New-EventLog -LogName Application -Source QubesPvNic -EA SilentlyContinue
-    Write-EventLog -LogName Application -Source QubesPvNic -EntryType Warning -EventId 1002 -Message "PV NIC (repaired by this run): $why" -EA SilentlyContinue
+# WHETHER A PV NIC IS PRESENT is what decides whether a missing unplug latch mattered, and step 1a
+# needs that answer long before the rest of the helpers are defined. Definitions have no side
+# effects, so the bus test lives up here; the duplicate further down is gone.
+function PvAdapter { Get-NetAdapter -EA SilentlyContinue | Where-Object { $_.PnPDeviceID -like 'XENVIF\*' } | Select-Object -First 1 }
+function VifDevicePresent {
+    # Bus-level view: a PRESENT XENBUS VIF PDO (pre-driver) or XENVIF devnode. Present iff a vif
+    # exists in xenstore, i.e. iff a netvm is attached - independent of driver state. MUST filter to
+    # present devices (-PresentOnly): a netvm that was once attached then removed leaves a GHOST
+    # devnode (Status=Unknown, Present=False) that must NOT count as a live vif, or the no-netvm
+    # quiet-exit would hang until the deadline on any guest that was ever networked.
+    $d = Get-PnpDevice -PresentOnly -EA SilentlyContinue | Where-Object { $_.InstanceId -like 'XENBUS\VEN_XP0001&DEV_VIF*' -or $_.InstanceId -like 'XENVIF\*' }
+    return (@($d).Count -gt 0)
 }
 function Ok([string]$what) {
     if ($script:faulted) { L "$what - but an earlier step FAILED ($script:faulted): marker kept, exit 1"; exit 1 }
@@ -813,7 +808,21 @@ switch (Test-QwtRearmArm $stampTime $prevBoot $unclean $reportedBoot $thisBoot) 
     'already-reported' { L 'shutdown re-arm: no stamp - already reported for this boot' }
     'report'           {
         if ($thisBoot) { Set-Content -LiteralPath $reportedPath -Value $thisBoot.ToString('o') -EA SilentlyContinue }
-        Repaired ("the previous session's shutdown re-arm did not complete: no stamp since {0:o} - the latch was re-armed by this run's own first step, so the guest is correct now" -f $prevBoot)
+        # WHAT A MISSING STAMP ACTUALLY COSTS, from the mechanism rather than from a level
+        # preference. xen.sys reads Services\XEN\Unplug\NICS DELETE-ON-READ at boot start, so
+        # this run's own re-arm (step 1, at the top) arms the NEXT boot - it does NOT fix this one,
+        # and an earlier version of this comment wrongly claimed it did. THIS boot therefore
+        # started with no latch, and that matters only if there is a PV NIC to unplug: with a vif
+        # present, xenvif's NET child can demand a restart instead of starting at problem 0
+        # (findings/network.md), a real and user-visible failure, reported as an ERROR. With no vif
+        # - no netvm attached - nothing was unplugged because there was nothing to unplug, so it is
+        # an ordinary fact about a normal boot and gets a log line and nothing else. Owner,
+        # 2026-10-08: "we need no warnings on normal operation and visible error on actual failure."
+        if (VifDevicePresent) {
+            Fault ("the previous session's shutdown re-arm did not complete: no stamp since {0:o}, so THIS boot started with no unplug latch while a PV NIC is present - the emulated adapter may not have been unplugged, and xenvif may have demanded a restart. Re-armed for the next boot." -f $prevBoot)
+        } else {
+            L ("shutdown re-arm: no stamp since {0:o}, so this boot had no unplug latch - no effect, this guest has no PV NIC device to unplug. Re-armed for the next boot." -f $prevBoot)
+        }
     }
 }
 
@@ -943,16 +952,6 @@ function Loud($why) {
 #    DNS: Qubes DNS is constant by design (net.py: always 10.139.1.1/10.139.1.2).
 $deadline = (Get-Date).AddSeconds(300)
 
-function PvAdapter { Get-NetAdapter -EA SilentlyContinue | Where-Object { $_.PnPDeviceID -like 'XENVIF\*' } | Select-Object -First 1 }
-function VifDevicePresent {
-    # Bus-level view: a PRESENT XENBUS VIF PDO (pre-driver) or XENVIF devnode. Present iff a vif
-    # exists in xenstore, i.e. iff a netvm is attached - independent of driver state. MUST filter to
-    # present devices (-PresentOnly): a netvm that was once attached then removed leaves a GHOST
-    # devnode (Status=Unknown, Present=False) that must NOT count as a live vif, or the no-netvm
-    # quiet-exit would hang until the deadline on any guest that was ever networked.
-    $d = Get-PnpDevice -PresentOnly -EA SilentlyContinue | Where-Object { $_.InstanceId -like 'XENBUS\VEN_XP0001&DEV_VIF*' -or $_.InstanceId -like 'XENVIF\*' }
-    return (@($d).Count -gt 0)
-}
 function QdbType {
     if (-not ('QdbP' -as [type])) {
         Add-Type @"
