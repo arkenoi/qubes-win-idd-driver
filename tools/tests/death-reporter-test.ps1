@@ -246,6 +246,11 @@ Check 'ended NOT by shutdown: an instance ended at its execution time limit is S
 $script:QwtTaskEndedProbe    = { param([string]$i) return $false }
 $ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesWindowsUpdateScan' '2147943691' $T0)
 Check 'not ended: an ordinary non-zero task result is a death as before' ($ev.ours -eq $true -and $ev.ignore -ne $true)
+# THIS CASE HAD NO EVENT. The line below was missing, so the check asserted on the PREVIOUS case's
+# event - a non-zero result, which is a death - and had been failing ever since, permanently, which
+# is how a suite stops being able to report a real regression ("142 checks, 1 failed" was the
+# expected output). A 201 whose result is 0 is a task that SUCCEEDED and is not a death.
+$ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesWindowsUpdateScan' '0' $T0)
 Check 'task 201 result 0: not a death' (-not $ev.ours)
 $ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\Qubes-NotifBridge' '267014' $T0)
 Check 'task 201 result 0x41306: ended by Task Scheduler on request, ignored' (-not $ev.ours -and $ev.ignore)

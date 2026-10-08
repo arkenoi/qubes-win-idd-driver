@@ -66,6 +66,10 @@ if (-not $script:QwtDeathStateDir) {
     else { $script:QwtDeathStateDir = '/tmp/qwt-notify-errors' }
 }
 if (-not $script:QwtDeathLogDir) { $script:QwtDeathLogDir = $null }   # $null = resolve LogDir from the registry
+# Where the record was MEANT to go, and whether we have already said it did not get there. Both
+# feed the one-per-process fallback marker in Write-QwtDeathLog.
+if (-not $script:QwtDeathLogDirConfigured) { $script:QwtDeathLogDirConfigured = $null }
+if (-not $script:QwtDeathLogDirSaid) { $script:QwtDeathLogDirSaid = $false }
 if (-not $script:QwtDeathWindowSec) { $script:QwtDeathWindowSec = 600 }
 if (-not $script:QwtDeathAdoptSec) { $script:QwtDeathAdoptSec = 30 }
 # OUR INSTALL DIRECTORY - where a crash record's faulting path must be for the crash to be ours. Resolved like the installer's
@@ -172,7 +176,7 @@ $script:QwtDeathNextOneShot = 'Nothing relaunches it; the step it was performing
 $script:QwtDeathLogHints = @{
     'gui-agent.exe' = 'the gui-agent and watchdog logs in {0}'
     'wgcbroker.exe' = 'gui-agent log lines QGABROKEREXIT and QGABROKERDIED in {0}'
-    'notifhost.exe' = 'bridge.log in ProgramData\qubes-toast-bridge'
+    'notifhost.exe' = 'bridge.log in {0}'
     'etwproxy.exe' = 'etw-proxy.log and gui-agent log line ETWPROXYSUP in {0}'
 }
 $script:QwtDeathLogHintHung = 'gui-agent log lines QGABROKERHUNG and QGABROKERDIED in {0}'
@@ -296,11 +300,24 @@ if (-not (Get-Command Format-QwtNotifyTechLine -ErrorAction SilentlyContinue)) {
 
 # --- our own log: ERROR for every death, before anything else --------------------------------
 function Get-QwtDeathLogDir {
-    if ($script:QwtDeathLogDir) { return $script:QwtDeathLogDir }
+    if ($script:QwtDeathLogDir) {
+        # A test hook (or a previous call) already decided. Record it as the CONFIGURED location too,
+        # so the offline suites - which set this hook - never trip the fallback marker below.
+        if (-not $script:QwtDeathLogDirConfigured) { $script:QwtDeathLogDirConfigured = $script:QwtDeathLogDir }
+        return $script:QwtDeathLogDir
+    }
     $dir = $null
     try {
         $v = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -Name 'LogDir' -ErrorAction SilentlyContinue).LogDir
-        if ($v -and (Test-Path -LiteralPath $v)) { $dir = $v }
+        # NO Test-Path GATE. It used to demand that the configured directory already EXIST, and
+        # diverted to %ProgramData%\Qubes when it did not - which the writer then creates one line
+        # later. So the one case the gate existed for was the case the writer handled for free, and
+        # its only effect was to prefer a second directory over the one common location. LogDir is on
+        # the private volume and this reporter has a BOOT trigger for its catch-up pass, so
+        # "configured but not there yet" is the normal case: the result was a SPLIT RECORD, in two
+        # directories on one guest, with the user-facing notification embedding whichever it got and
+        # the watermark moving with it. The writer falls back if it truly cannot write (below).
+        if ($v) { $dir = $v; $script:QwtDeathLogDirConfigured = $v }
     } catch { }
     if (-not $dir) {
         if ($env:ProgramData) { $dir = Join-Path $env:ProgramData 'Qubes' } else { $dir = '/tmp' }
@@ -312,11 +329,39 @@ function Write-QwtDeathLog {
     param([string]$Level, [string]$Message)
     $line = '{0} [{1}] {2}' -f ([DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss')), $Level, $Message
     try { Write-Host $line } catch { }
-    try {
-        $dir = Get-QwtDeathLogDir
-        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-        [IO.File]::AppendAllText((Join-Path $dir 'qwt-deaths.log'), $line + "`r`n", [Text.Encoding]::UTF8)
-    } catch { }
+    # TWO DESTINATIONS, TRIED IN ORDER, because the old single `try { } catch { }` wrapped the
+    # directory creation and the append together: with the Test-Path gate gone, a configured
+    # directory that cannot be created would have thrown into that empty catch and SWALLOWED THE
+    # DEATH RECORD - trading a split record for a lost one. Missing data FAILS.
+    $pd = '/tmp'
+    if ($env:ProgramData) { $pd = Join-Path $env:ProgramData 'Qubes' }
+    $dirs = @(Get-QwtDeathLogDir)
+    if ($dirs[0] -ne $pd) { $dirs += $pd }
+    foreach ($dir in $dirs) {
+        try {
+            # -ErrorAction Stop: without it the failure is non-terminating and the append throws
+            # instead, which still reaches the catch but makes the reason unreadable.
+            if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
+            $p = Join-Path $dir 'qwt-deaths.log'
+            # SAY IT IN THE RECORD, once per process. A stderr-only warning would be invisible on the
+            # path that matters: the shipped vehicle is the SYSTEM task QwtDeathReporter, whose Exec
+            # action carries no redirection, so Task Scheduler discards stdout and stderr both.
+            # AppendAllText directly, never Write-QwtDeathLog - that would recurse through
+            # Get-QwtDeathLogDir for ever. One test covers both causes: an unreadable registry value
+            # (Configured stays $null) and a configured directory that could not be used.
+            if ($dir -ne $script:QwtDeathLogDirConfigured -and -not $script:QwtDeathLogDirSaid) {
+                $script:QwtDeathLogDirSaid = $true
+                $meant = if ($script:QwtDeathLogDirConfigured) { $script:QwtDeathLogDirConfigured } else { '<LogDir unreadable>' }
+                $w = '{0} [WARN] the deaths log fell back to {1} - the configured location {2} could not be used, so this record is NOT in the one common log location' -f ([DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss')), $dir, $meant
+                try { Write-Host $w } catch { }
+                [IO.File]::AppendAllText($p, $w + "`r`n", [Text.Encoding]::UTF8)
+            }
+            [IO.File]::AppendAllText($p, $line + "`r`n", [Text.Encoding]::UTF8)
+            return
+        } catch { }
+    }
+    # The only remaining exit, and it says the line was LOST rather than dropping it in silence.
+    try { [Console]::Error.WriteLine("qwt-report-death: line LOST (no writable log directory among $($dirs -join ', ')): $line") } catch { }
 }
 
 # --- parsing helpers -----------------------------------------------------------------------------
