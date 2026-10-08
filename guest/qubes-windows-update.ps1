@@ -352,6 +352,26 @@ try {
     # .NET hands us the mutex with this exception; give it back before refusing, or this process
     # exits owning it and every later run inherits the same abandonment.
     try { $script:Mutex.ReleaseMutex() } catch { }
+    # A SCHEDULED SCAN DOES NOT FAIL OVER THIS, for the same reason GUARD:thisboot no longer refuses
+    # one: a scan only READS - it installs nothing and cannot land on top of unfinished servicing -
+    # so an abandoned mutex leaves it nothing to refuse. And the refusal has NOWHERE to go for a
+    # scan: wu-update.ps1's Get-FreshRefusal discards any record whose action is 'scan' by design
+    # ("never a scheduled scan's"), so the ONLY thing that reached the user was the non-zero task
+    # result, which the death reporter correctly renders as "The Windows Update scan task failed" -
+    # about a read-only operation that deliberately declined and changed nothing. Reachable exactly
+    # as reported: the install's own reboot cuts off the installer's pass, the boot+2min scheduled
+    # scan finds the mutex abandoned, and the user's first sight of a freshly installed qube is that
+    # error. The sibling branch above was fixed for this in 2026-10-07 and this one was left.
+    # YIELDING IS SELF-HEALING: .NET handed us the mutex with the exception and the release above
+    # clears the abandonment, so the next scheduled scan takes it cleanly. Nothing is hidden - the
+    # abandonment is a real anomaly and is logged as one; what is removed is a user-facing ERROR
+    # about a task that did exactly the right thing.
+    if ($Scheduled -and $Action -eq 'scan') {
+        Write-Host ("QWTUPDMUTEXABANDONED: a previous update operation was terminated without releasing " +
+                    "Global\QubesWindowsUpdate - the abandonment is cleared and this scheduled scan yields; " +
+                    "a scan only reads, so it has nothing to refuse. The next scheduled scan takes the mutex cleanly.")
+        exit 0
+    }
     Write-Refusal 'mutex-abandoned' ("QWTUPDMUTEXABANDONED: a previous update operation was terminated without releasing " +
                 "Global\QubesWindowsUpdate, so what it was doing is unknown; refusing to start a $Action " +
                 "on top of it, nothing was changed.")
