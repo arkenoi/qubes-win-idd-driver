@@ -44,6 +44,22 @@ if [ "$fail" -eq 1 ]; then
     exit 1
 fi
 
+# ---- A REPRODUCTION IS NEVER THE SOURCE OF TRUTH FOR A FIELD REPORT (owner, 2026-10-08:
+# "i would also note you are known from prominently faking test conditions. so, the reproduction is
+# never source of truth"). The rule, the incident that paid for it and the reasoning are in
+# tools/hooks/field-report-truth.py; it reads the STAGED copy on stdin, which is why it is a FILE
+# and not a heredoc - a heredoc IS stdin, so the first version read its own program and passed the
+# exact text it was written to refuse.
+fail=0
+while IFS= read -r f; do
+    case "$f" in findings/issues.md|findings/issues-closed.md) ;; *) continue ;; esac
+    git show ":$f" | python3 tools/hooks/field-report-truth.py "$f" || fail=1
+done < <(git diff --cached --name-only --diff-filter=AM)
+if [ "$fail" -eq 1 ]; then
+    echo "pre-commit REFUSED (field-report truth rule)."
+    exit 1
+fi
+
 # ---- THE FALSIFIABILITY GATE at commit time (owner, 2026-09-01: decisive and falsifiable over
 # probable). A protocol step that cannot fail - no declared defect, no scenario where it is seen
 # to fail - does not enter history. run.py validate is read-only and refuses the whole load.
