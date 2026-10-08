@@ -1,7 +1,14 @@
 #!/bin/bash
-# boot-noise-measure.sh - how many error lines does a NORMAL BOOT write, with nothing driving it?
+# cycle-noise-measure.sh - how many error lines does a FULL CLEAN CYCLE write, with nothing driving
+# it? Owner, 2026-10-08: "there should be clean startup and clean shutdown."
 #
-#   mgmt/harness/boot-noise-measure.sh <subject> [settle-seconds]
+#   mgmt/harness/cycle-noise-measure.sh <subject> [settle-seconds]
+#
+# THE CYCLE, all inside one --since window: boot, settle, clean shutdown, boot again, settle again.
+# The second boot is not padding - the guest has to be up for its logs to be collected at all, and
+# it doubles as a second clean startup. So the window covers TWO startups and ONE shutdown, and the
+# shutdown is the half the first version of this harness could not see: its two error lines turned
+# out to be shutdown deaths that the window had wrongly admitted from earlier runs.
 #
 # WHY THIS AND NOT THE OTHER RUNS. Every error-line count this project has is from a run where the
 # harness was driving the guest: an install, 25 qrexec calls, calls abandoned under a timeout. The
@@ -11,7 +18,8 @@
 # then sweep.
 #
 # PRE-REGISTERED, before the run (.claude/skills/experimenter):
-#   HYPOTHESIS  a boot with nothing driving it writes ZERO undeclared error lines. Refuted by any.
+#   HYPOTHESIS  a clean cycle with nothing driving it writes ZERO undeclared error lines, on the
+#               startups AND on the shutdown. Refuted by any.
 #   BASELINE    the same guest under load, 2026-10-08: 171 undeclared error lines, of which 148 were
 #               the MSI rollback plan (since fixed) and 8 were the departed-peer class from the
 #               harness's own abandoned calls. No quiet-boot number exists.
@@ -34,7 +42,7 @@ SUBJ="${1:-}"
 SETTLE="${2:-240}"
 [ -n "$SUBJ" ] || { echo "usage: $0 <subject> [settle-seconds]"; exit 2; }
 case "$SUBJ" in dom0|win-idd-mgmt) echo "FATAL: $SUBJ is not a testbed subject"; exit 2 ;; esac
-OUT="${BOOTNOISE_OUT:-$HOME/qwt-bootnoise}/$(date -u +%Y%m%dT%H%M%SZ)-$SUBJ"
+OUT="${CYCLENOISE_OUT:-$HOME/qwt-cyclenoise}/$(date -u +%Y%m%dT%H%M%SZ)-$SUBJ"
 mkdir -p "$OUT"
 log(){ echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$OUT/run.log"; }
 
@@ -70,7 +78,7 @@ log "booted; waiting for qrexec, then leaving it ALONE for ${SETTLE}s"
 answered=0
 deadline=$(( $(date +%s) + 300 ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
-    if QTEST_VM="$SUBJ" timeout 30 "$ROOT/tools/qtest" run "$SUBJ" 'cmd /c echo BOOTNOISE_UP' 2>/dev/null | command grep -aq BOOTNOISE_UP; then
+    if QTEST_VM="$SUBJ" timeout 30 "$ROOT/tools/qtest" run 'cmd /c echo BOOTNOISE_UP' 2>/dev/null | command grep -aq BOOTNOISE_UP; then
         answered=1; break
     fi
     st=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$SUBJ" '$1==v{print $2}')
@@ -80,6 +88,28 @@ done
 [ "$answered" = 1 ] || { log "FATAL: no qrexec answer within 300 s - nothing to measure"; exit 1; }
 log "qrexec answered; the ONE call above is the only thing driving it. Settling ${SETTLE}s."
 sleep "$SETTLE"
+log "first startup settled"
+
+# ---- 2b. THE SHUTDOWN UNDER TEST, then a second clean startup ----------------------------------
+log "clean shutdown (the half the boot-only version could not see)"
+qwt_shutdown "$SUBJ" 900 >>"$OUT/shutdown2.log" 2>&1
+st=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$SUBJ" '$1==v{print $2}')
+[ "$st" = Halted ] || { log "FATAL: $SUBJ is '$st' after the clean shutdown under test"; exit 1; }
+log "shutdown clean; booting again (the guest must be up for its logs to be collected)"
+qvm-start "$SUBJ" >>"$OUT/start2.log" 2>&1 || { log "FATAL: $SUBJ would not restart"; exit 1; }
+answered=0
+deadline=$(( $(date +%s) + 300 ))
+while [ "$(date +%s)" -lt "$deadline" ]; do
+    if QTEST_VM="$SUBJ" timeout 30 "$ROOT/tools/qtest" run 'cmd /c echo CYCLE_UP' 2>/dev/null | command grep -aq CYCLE_UP; then
+        answered=1; break
+    fi
+    st=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$SUBJ" '$1==v{print $2}')
+    [ "$st" = Halted ] && { log "FATAL: $SUBJ halted while waiting for the second boot's qrexec"; exit 1; }
+    sleep 15
+done
+[ "$answered" = 1 ] || { log "FATAL: no qrexec answer after the second boot within 300 s"; exit 1; }
+log "second startup up; settling 60s, then sweeping the whole cycle"
+sleep 60
 log "settle over; sweeping"
 
 # ---- 3. the sweep ------------------------------------------------------------------------------
@@ -101,20 +131,20 @@ rep, out = sys.argv[1], sys.argv[2]
 r = json.load(open(rep))
 m = r.get("metrics", {})
 und = m.get("error_lines_undeclared")
-print("BOOT NOISE  error_lines=%s  undeclared=%s  warning_lines=%s  boots=%s" % (
+print("CYCLE NOISE error_lines=%s  undeclared=%s  warning_lines=%s  boots=%s" % (
     m.get("error_lines"), und, m.get("warning_lines"), m.get("boots")))
 sigs = [s for s in (r.get("new") or []) + (r.get("out_of_context") or []) if s.get("level") == "E"]
 if sigs:
-    print("\nEVERY ERROR SIGNATURE THIS BOOT WROTE (%d):" % len(sigs))
+    print("\nEVERY ERROR SIGNATURE THIS CYCLE WROTE (%d):" % len(sigs))
     for s in sorted(sigs, key=lambda s: -int(s.get("count", 0))):
         j = s.get("jev") or {}
         print("  x%-4s %-10s %s%s" % (s.get("count"), s.get("family"), (s.get("key") or "")[:104],
               ("   Jev: %s %.2f" % (j.get("choice"), j.get("confidence"))) if j else ""))
 else:
-    print("\nno error signatures at all this boot")
+    print("\nno error signatures at all this cycle")
 ok = (und == 0)
 print()
-print("BOOTNOISE-RESULT %s undeclared=%s" % ("PASS" if ok else "FAIL", und))
+print("CYCLENOISE-RESULT %s undeclared=%s" % ("PASS" if ok else "FAIL", und))
 open(out + "/verdict.txt", "w").write(("PASS" if ok else "FAIL") + " undeclared=%s\n" % und)
 sys.exit(0 if ok else 1)
 PY
