@@ -4570,6 +4570,37 @@ function Invoke-Stage2 {
         $script:Result.detail.reboot_audit = 'not in payload'
     }
 
+    # --- clock sync: pull the time from dom0 at every boot -------------------------------
+    # The PUSH half (dom0 -> qubes.SetDateTime) always existed. The PULL half did not:
+    # update-time.bat has been in the tree the whole time and is called by nothing but
+    # qubes.SuspendPostAll, so a guest whose clock was wrong stayed wrong until dom0 happened
+    # to push. Measured 2026-10-08 on win11r-logvol: 3 h ahead of the host with the zone set to
+    # UTC, which silently widened every --since log window by three hours.
+    $clk = Join-Path $Root 'install-clock-sync.ps1'
+    if (Test-Path -LiteralPath $clk) {
+        Write-Log 'installing the boot-time clock pull (SYSTEM task, BootTrigger)'
+        try {
+            $co = & $clk 2>&1
+            foreach ($l in @($co | Select-Object -Last 4)) { Write-Log "  $l" }
+            $tr = @($co) | Where-Object { $_ -match '"ok"\s*:\s*(true|false)' } | Select-Object -Last 1
+            if ($tr -match '"ok"\s*:\s*true') {
+                $script:Result.detail.clock_sync = 'registered'
+            } elseif ($tr) {
+                $script:Result.detail.clock_sync = "refused: $(($tr | Out-String).Trim())"
+                Write-Log 'the clock pull did NOT register - this guest can keep a wrong clock' 'WARN'
+            } else {
+                $script:Result.detail.clock_sync = 'ran, no result trailer'
+                Write-Log 'install-clock-sync.ps1 printed no result trailer' 'WARN'
+            }
+        } catch {
+            Write-Log "clock sync install failed: $($_.Exception.Message) (non-fatal)" 'WARN'
+            $script:Result.detail.clock_sync = "error: $($_.Exception.Message)"
+        }
+    } else {
+        Write-Log 'install-clock-sync.ps1 not in payload - the clock is never pulled at boot' 'WARN'
+        $script:Result.detail.clock_sync = 'not in payload'
+    }
+
     # --- autologon: VERIFY what stage 1 armed -------------------------------------------
     # The arming happens in stage 1 (the password is only available there - see the note next to
     # it). What stage 2 can do, and must, is check the result and report it, so an install that

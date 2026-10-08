@@ -114,6 +114,13 @@
             Source  = 'guest/provision-etwproxy-account.ps1'
             Package = 'provision-etwproxy-account.ps1'
         }
+        @{
+            # The boot-time clock-pull INSTALLER, run from the payload root by stage 2. The
+            # puller it registers needs no entry: it lives in core-agent/src/qubes-rpc-services
+            # and the Mirrors rules above already verify that sweep, in the payload and in the MSI.
+            Source  = 'guest/install-clock-sync.ps1'
+            Package = 'install-clock-sync.ps1'
+        }
     )
 
     # --------------------------------------------------------------------------- Binaries

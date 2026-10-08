@@ -681,6 +681,26 @@ if ! printf '%s' "$pb" | grep -q clockskew; then
   ok "T32 an in-sync guest does NOT report a skew (no false positive)"
 else bad "T32 the unskewed fixture reports a clock skew: $pb"; fi
 
+# T33 A COUNTER AT ZERO IS NOT A FAILURE. bind-dirs writes a key=value RESULT RECORD whose first
+# line is "result=ok", and "failed=0" in it was graded an ERROR because the levelless-log vocabulary
+# matches the bare word "failed" - one of the eight undeclared error lines a clean cycle produced on
+# win11r-logvol. A NON-zero counter must still be an error, which is the half that makes this a fix
+# rather than a silencer.
+python3 - "$SRC" <<'PYZ' > /tmp/zc.$$ 2>&1
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("ls", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+want = {"failed=0": "I", "errors=0": "I", "warnings=0": "I", "failed=0x00000000": "I", "lost=0": "I",
+        "failed=3": "E", "errors=12": "E", "failed to open the ring": "E", "result=ok": "I"}
+bad = [("%s -> %s (want %s)" % (k, m.blog_level(k), v)) for k, v in want.items() if m.blog_level(k) != v]
+print("OK" if not bad else "BAD " + "; ".join(bad))
+PYZ
+zc=$(cat /tmp/zc.$$); rm -f /tmp/zc.$$
+case "$zc" in
+  OK*) ok "T33 failed=0 is INFO and failed=3 is still an ERROR (a zero counter is not a failure)" ;;
+  *)   bad "T33 $zc" ;;
+esac
+
 # T23 a filter on a key that does not exist must not silently zero a metric (knob: winkey - the defect I shipped
 # for ten minutes while fixing T21, caught only because shutdowns_in_window=0 contradicted shutdowns=5)
 pb2=$(field "$T/t21.json" "r['metrics']['agent_instances_per_boot']")

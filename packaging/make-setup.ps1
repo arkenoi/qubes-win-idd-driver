@@ -170,6 +170,10 @@ Copy-Item (Need (Join-Path $RepoRoot 'guest\bind-dirs-status.ps1') 'bind-dirs st
 # for it) with it - so an unattended reboot cannot be told apart from a dom0-requested one after
 # the fact. Event-triggered tasks copy those records onto the private volume as they are written.
 Copy-Item (Need (Join-Path $RepoRoot 'guest\install-reboot-audit.ps1') 'reboot-cause audit installer') $OutDir -Force
+# Clock sync: the installer registers a SYSTEM task that pulls the time from dom0 at every boot.
+# The PULLER itself needs no line here - it lives in core-agent/src/qubes-rpc-services and ships
+# through the sweep below, which is also what puts it at the persistent path the task points at.
+Copy-Item (Need (Join-Path $RepoRoot 'guest\install-clock-sync.ps1') 'boot-time clock-pull installer') $OutDir -Force
 # qrexec rpc handler scripts + service definitions. The MSI is assembled from the STOCK QWT
 # image plus our gui-agent binaries (stage-qwt-repo.ps1) - core-agent contributes only a
 # signing cert - so NOTHING edited under core-agent/src/qubes-rpc-services/ ever reaches the

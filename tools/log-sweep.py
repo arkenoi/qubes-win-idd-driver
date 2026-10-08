@@ -82,6 +82,18 @@ SUSPICIOUS_RE = re.compile(
 BLOG_E_RE = re.compile(r"\b(FAIL|CRASH|ERROR|error|failed|Failed|SCHEMA MISMATCH|refusing)\b")
 BLOG_W_RE = re.compile(r"(?i)\b(WARN|down|absent|disconnected|mismatch|fallback|refused|unavailable|lost|retry|"
                        r"not opened|not mapped|ignored|squatter|dropped|invalid|timeout|timed out|burst|sampling)\b")
+# A COUNTER AT ZERO IS NOT A FAILURE. bind-dirs writes a key=value RESULT RECORD whose own first
+# line is "result=ok", and the line "failed=0" in it was graded an ERROR because BLOG_E_RE matches
+# the bare word "failed" - one of the eight undeclared error lines a clean cycle produced on
+# win11r-logvol, 2026-10-08. Exactly the shape of the MSI rollback-plan defect: a token-based
+# classifier calling a success a failure. A NON-zero counter is still an error, which is the point.
+BLOG_ZERO_COUNTER_RE = re.compile(r"(?i)^\s*(failed|failures?|errors?|warnings?|faults?|drops?|dropped|lost|"
+                                  r"refused|crashes?)\s*[=:]\s*(0+|0x0+|none|no)\s*$")
+# ...AND A COUNTER THAT IS NOT ZERO *IS* A FAILURE, which the vocabulary missed: BLOG_E_RE has no
+# plural, so "errors=12" matched nothing (\berror\b does not match inside "errors") and a result
+# record reporting twelve failures was graded INFO. Found by the check written for the zero case.
+BLOG_NONZERO_COUNTER_RE = re.compile(r"(?i)^\s*(failed|failures?|errors?|faults?|crashes?)\s*[=:]\s*"
+                                     r"(?!0+\s*$)(?!0x0+\s*$)(\d+|0x[0-9a-f]+)\s*$")
 STALE_ERR_RE = re.compile(r"failed with error 0x0\b")
 MSI_SUSPECT_RE = re.compile(r"(Return value 3|Installation (failed|success or error status: [1-9])|Note: 1:|\bError \d+|-- Error|Failed to|rolled back|Rollback)")
 
@@ -455,6 +467,11 @@ def parse_winutils(lf, raw_lines):
 
 
 def blog_level(msg):
+    # the zero-counter check comes FIRST: "failed=0" is a success record's own accounting
+    if BLOG_ZERO_COUNTER_RE.match(msg):
+        return "I"
+    if BLOG_NONZERO_COUNTER_RE.match(msg):
+        return "E"
     if BLOG_E_RE.search(msg):
         return "E"
     if BLOG_W_RE.search(msg):
