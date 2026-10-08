@@ -154,7 +154,7 @@ elif [ -d "$PKG" ]; then
   ISO="$OUT/qwt-improved-setup-${tv:-unknown}.iso"
   log "package: setup tree $PKG -> wrapping into $ISO (packaging/make-iso.sh, as CI does)"
   ./packaging/make-iso.sh "$PKG" "$ISO" >"$OUT/make-iso.out" 2>&1 \
-    || finish 3 "REFUSED: make-iso failed - $(tail -3 "$OUT/make-iso.out" | tr '\n' ' ')"
+    || finish 3 "REFUSED: make-iso failed - $( { command grep -m2 -iE '^FATAL|error|cannot|no space|failed' "$OUT/make-iso.out" || tail -3 "$OUT/make-iso.out"; } | tr '\n' ' ')"
 else
   finish 3 "REFUSED: '$PKG' is neither an ISO file nor a setup tree"
 fi

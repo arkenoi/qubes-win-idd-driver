@@ -40,6 +40,20 @@ command -v xorriso >/dev/null || { echo "FATAL: xorriso not installed" >&2; exit
 # inherent, not a defect. (Stock has the same shape and worse: its own installer stops with a modal
 # telling the user to run `bcdedit /set testsigning on` by hand, because its drivers are signed by a
 # private CA. Ours enables testsigning itself in stage 1.)
+# ENOUGH ROOM TO DO THE VERIFY, SAID UP FRONT. This script stages a copy and then extracts the
+# finished image back out TWICE (Rock Ridge and Joliet), so it needs roughly three times the tree
+# in the temp filesystem - and on the dev qube /tmp is a 1 GiB tmpfs in RAM. When it ran out,
+# xorriso died inside the verify with its output swallowed, and the CALLER reported
+# "make-iso failed - ... completed successfully", quoting xorriso's own success line, because it
+# echoed the last three lines of a log whose real error was earlier. A failure that quotes a
+# success message is worse than no message.
+NEED_KB=$(( $(du -sk "$SETUP_DIR" | cut -f1) * 3 ))
+TMPBASE="${TMPDIR:-/tmp}"
+HAVE_KB=$(df -Pk "$TMPBASE" | awk 'NR==2 {print $4}')
+if [ "${HAVE_KB:-0}" -lt "$NEED_KB" ]; then
+    echo "FATAL: not enough room in $TMPBASE to build and verify the image: need ~${NEED_KB} KiB (3x the setup tree, which is staged once and extracted twice), have ${HAVE_KB:-0} KiB. Free it or set TMPDIR to a larger filesystem." >&2
+    exit 1
+fi
 STAGE="$(mktemp -d)"
 trap 'chmod -R u+w "$STAGE" 2>/dev/null; rm -rf "$STAGE"' EXIT
 cp -a "$SETUP_DIR/." "$STAGE/"
