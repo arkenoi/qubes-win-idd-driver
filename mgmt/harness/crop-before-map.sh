@@ -33,6 +33,11 @@
 # a whole-desktop capture to compensate (.claude/skills/guest-capture).
 #
 # Usage:  VM=win11-acc BUDGET_MS=700 mgmt/harness/crop-before-map.sh
+# NEEDS LogLevel >= 4 (DEBUG). The QGASLICEMAP line(s) this harness grades on are routine
+# per-window detail and moved to DEBUG on 2026-10-08 (owner: "ok for debug but not for regular
+# operation"), so a run at the shipped LogLevel 3 will find nothing and must not read that as a
+# clean result. Raise it first with guest/set-loglevel.ps1 4 (it restarts the agent through the
+# service that owns it and proves the turnover) and put it back afterwards.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 

@@ -64,6 +64,11 @@
 #   * the artefact under test is verified installed: certutil sha256 of the installed gui-agent.exe == the package
 #     MANIFEST's reference_binaries, read AFTER the arming cold boot, before the first fire.
 #   * nothing here lands in the repo: evidence under $TH_OUT (outside the tree), scenario titles are opaque slugs.
+# NEEDS LogLevel >= 4 (DEBUG). The QGAHELDDEFER / QGASLICEMAP line(s) this harness grades on are routine
+# per-window detail and moved to DEBUG on 2026-10-08 (owner: "ok for debug but not for regular
+# operation"), so a run at the shipped LogLevel 3 will find nothing and must not read that as a
+# clean result. Raise it first with guest/set-loglevel.ps1 4 (it restarts the agent through the
+# service that owns it and proves the turnover) and put it back afterwards.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$HERE" || exit 1
 

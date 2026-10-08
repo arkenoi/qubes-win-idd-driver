@@ -83,7 +83,12 @@ sleep "$SETTLE"
 log "settle over; sweeping"
 
 # ---- 3. the sweep ------------------------------------------------------------------------------
-QWT_VMLOCK_HELD=1 "$ROOT/mgmt/harness/log-sweep.sh" "$SUBJ" "$SINCE" "$OUT/sweep" >>"$OUT/sweep.log" 2>&1
+# NO QWT_VMLOCK_HELD OVERRIDE HERE. vm_lock exports it already, set to the VM NAME, and the
+# pass-through compares it to the vm being locked (vmlock.sh:106) - so setting it to 1 breaks the
+# very pass-through it looks like it is enabling. That is what made the first run of this harness
+# sweep nothing: "REFUSING TO START: another harness already holds win11r-logvol", the holder being
+# this script itself.
+"$ROOT/mgmt/harness/log-sweep.sh" "$SUBJ" "$SINCE" "$OUT/sweep" >>"$OUT/sweep.log" 2>&1
 sweeprc=$?
 log "log-sweep rc=$sweeprc ($(command grep -ao 'LOGSWEEP-RESULT.*' "$OUT/sweep.log" | tail -1))"
 REP=$(command grep -ao 'report=[^ ]*' "$OUT/sweep.log" | tail -1 | cut -d= -f2)
