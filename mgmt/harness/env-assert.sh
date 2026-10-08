@@ -48,6 +48,16 @@ $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
 "account_user_absent=$(if (Get-LocalUser -Name 'user' -ErrorAction SilentlyContinue) { 'false' } else { 'true' })"
 $p = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'Qubes*' } | Select-Object -First 1
 "qwt_version=$($p.DisplayVersion)"
+# OPEN-SHELL AND THE WINDOWS KEY. These two define the reported Start-menu case ("service.
+# enableWinKey 1, Open-Shell user") and NEITHER WAS EVER MEASURED, so the 5/5 scripted dismissals
+# that were recorded as verifying it ran on a guest with no Open-Shell installed at all - nothing
+# was there to catch the agent's injected Escape. Registry and file presence, never localized
+# output: Open-Shell registers under its own uninstall key and installs StartMenu.exe.
+$os = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -match 'Open[- ]?Shell|Classic Shell' } | Select-Object -First 1
+$osExe = @('C:\Program Files\Open-Shell\StartMenu.exe','C:\Program Files (x86)\Open-Shell\StartMenu.exe','C:\Program Files\Open Shell\StartMenu.exe') | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+"open_shell_installed=$(if ($os -or $osExe) { 'true' } else { 'false' })"
+"open_shell_version=$($os.DisplayVersion)"
+"open_shell_running=$(if (Get-Process -Name 'StartMenu' -ErrorAction SilentlyContinue) { 'true' } else { 'false' })"
 "ENVASSERT-END=1"
 PS1
 
@@ -63,12 +73,14 @@ fi
 # self-test drives the SAME append path the live run uses (see the newline note below).
 cls=""; nv=""; du=""; append=0
 if [ -n "${ENVASSERT_FAKE_QUBE:-}" ]; then
-  IFS='|' read -r cls nv du <<<"$ENVASSERT_FAKE_QUBE"; append=1
+  IFS='|' read -r cls nv du wk <<<"$ENVASSERT_FAKE_QUBE"; append=1
 elif [ -z "${ENVASSERT_FAKE_FACTS:-}" ]; then
   q=$(qvm-ls --raw-data --fields NAME,CLASS,NETVM "$VM" 2>/dev/null | head -1)
   [ -n "$q" ] || { echo "ENVASSERT FATAL: qvm-ls has no row for $VM" >&2; exit 2; }
   cls=$(echo "$q" | cut -d'|' -f2); nv=$(echo "$q" | cut -d'|' -f3); [ "$nv" = "-" ] && nv=""
-  du=$(qvm-prefs "$VM" default_user 2>/dev/null); append=1
+  du=$(qvm-prefs "$VM" default_user 2>/dev/null)
+  # service.enableWinKey is a QUBE feature, so it is read where netvm and default_user are read.
+  wk=$(qvm-features "$VM" service.enableWinKey 2>/dev/null); append=1
 fi
 if [ "$append" = 1 ]; then
   # NEWLINE-TERMINATE THE GUEST PROBE BEFORE APPENDING HOST FACTS.
@@ -83,7 +95,7 @@ if [ "$append" = 1 ]; then
   if [ "${ENVASSERT_DEFECT:-}" != "glue" ]; then
     [ -s "$FACTS" ] && [ "$(tail -c1 "$FACTS" | od -An -c | tr -d ' ')" != '\n' ] && printf '\n' >> "$FACTS"
   fi
-  { echo "qube_class=$cls"; echo "netvm=$nv"; echo "default_user=$du"; } >> "$FACTS"
+  { echo "qube_class=$cls"; echo "netvm=$nv"; echo "default_user=$du"; echo "service_enablewinkey=${wk:-}"; } >> "$FACTS"
 fi
 
 # ---- comparison ------------------------------------------------------------------------------

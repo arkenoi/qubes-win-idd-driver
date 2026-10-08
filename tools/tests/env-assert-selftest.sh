@@ -26,10 +26,14 @@ system_locale=de-DE
 accounts=Administrator;DefaultAccount;Guest;gerd-test;legacyuser;WDAGUtilityAccount
 account_user_absent=true
 qwt_version=4.3.29.0
+open_shell_installed=true
+open_shell_version=4.4.191
+open_shell_running=true
 ENVASSERT-END=1
 qube_class=TemplateVM
 netvm=
 default_user=gerd-test
+service_enablewinkey=1
 EOF
 }
 run(){ # $1=label $2=expected-exit $3=sed-expression applied to the good facts
@@ -49,12 +53,22 @@ run "default_user still user -> MISMATCH"                           3 's/^defaul
 run "Windows 10 build -> MISMATCH"                                  3 's/^current_build=.*/current_build=19045/; s/^display_version=.*/display_version=22H2/'
 run "ui_language not measured at all -> MISSING (exit 2)"           2 '/^ui_language=/d'
 run "class not measured -> MISSING (exit 2)"                        2 '/^qube_class=/d'
+# THE TWO FACTS THAT DEFINE THE REPORTED START-MENU CASE, and that nothing measured until
+# 2026-10-08. The 5/5 scripted Shift+Win dismissals recorded as verifying that defect ran on a
+# guest with NO Open-Shell installed: nothing was present to receive the agent's injected Escape,
+# which is the entire question. A clone without Open-Shell, or without the Windows key reaching the
+# guest, is NOT his environment and must be refused rather than graded.
+run "no Open-Shell installed -> MISMATCH"                           3 's/^open_shell_installed=.*/open_shell_installed=false/'
+run "Open-Shell not measured at all -> MISSING (exit 2)"            2 '/^open_shell_installed=/d'
+run "service.enableWinKey off -> MISMATCH"                          3 's/^service_enablewinkey=.*/service_enablewinkey=0/'
+run "service.enableWinKey unset -> MISMATCH"                        3 's/^service_enablewinkey=.*/service_enablewinkey=/'
+run "service.enableWinKey not measured -> MISSING (exit 2)"         2 '/^service_enablewinkey=/d'
 # The live shape (2026-09-16, first run on a guest): qtest ends the guest output with the cmd prompt
 # and NO newline; the host facts are appended after it. Guest-only fake file + ENVASSERT_FAKE_QUBE
 # drives the real append path. ENVASSERT_DEFECT=glue (no newline termination) must make this FAIL.
 run_glue(){ local f="$T/g.txt" rc out
-  good | grep -vE '^(qube_class|netvm|default_user)=' > "$f"; printf 'C:\\Windows\\System32>' >> "$f"
-  out=$(ENVASSERT_FAKE_FACTS="$f" ENVASSERT_FAKE_QUBE="TemplateVM||gerd-test" bash "$S" fake-vm gweck 2>&1); rc=$?
+  good | grep -vE '^(qube_class|netvm|default_user|service_enablewinkey)=' > "$f"; printf 'C:\\Windows\\System32>' >> "$f"
+  out=$(ENVASSERT_FAKE_FACTS="$f" ENVASSERT_FAKE_QUBE="TemplateVM||gerd-test|1" bash "$S" fake-vm gweck 2>&1); rc=$?
   if [ "$rc" = 0 ]; then pass=$((pass+1)); echo "ok    prompt-terminated guest output + appended qube facts -> OK (exit 0)"
   else fail=$((fail+1)); echo "FAIL  prompt-terminated guest output + appended qube facts: expected exit 0, got $rc"; echo "$out" | sed 's/^/      /' | head -14; fi
 }
