@@ -34,15 +34,25 @@ if (-not $tools) {
 }
 if (-not $tools -or -not (Test-Path -LiteralPath $tools)) { Result $false 'QUBES_TOOLS unset and InstallDir unreadable' }
 
-# THE ACTION PATH MUST OUTLIVE THE INSTALL. This script runs from the setup payload, which is a
-# temporary directory that is gone by the first boot the task fires on - so resolving the puller
-# beside THIS file (my first version) would have registered a task pointing at a path that no
-# longer exists, and the clock would stay wrong with a task that "registered fine".
-# The puller therefore ships through core-agent/src/qubes-rpc-services, which make-setup.ps1
-# sweeps and the installer copies to the guest's Qubes Tools tree - the same persistent directory
-# as set-time.ps1, which the puller calls.
-$puller = Join-Path $tools 'qubes-rpc-services\sync-clock-from-dom0.ps1'
-if (-not (Test-Path -LiteralPath $puller)) { Result $false "the puller is not installed at $puller (helpers ship only if staged)" }
+# THE ACTION PATH MUST OUTLIVE THE INSTALL, so this script INSTALLS the puller before registering
+# anything. It runs from the setup payload, a temporary directory that is gone by the first boot the
+# task fires on: resolving the puller beside THIS file (my first version) registered a task pointing
+# at a path that no longer exists, and the clock would have stayed wrong with a task that "registered
+# fine". install-reboot-audit.ps1 solves the same problem the same way - it materialises its recorder
+# into the Qubes Tools tree rather than trusting the payload to still be there.
+# The destination is the directory set-time.ps1 lives in, which is what the puller calls.
+$dest = Join-Path $tools 'qubes-rpc-services'
+$puller = Join-Path $dest 'sync-clock-from-dom0.ps1'
+$staged = Join-Path $PSScriptRoot 'sync-clock-from-dom0.ps1'
+if (Test-Path -LiteralPath $staged) {
+    try {
+        if (-not (Test-Path -LiteralPath $dest)) { New-Item -ItemType Directory -Path $dest -Force -ErrorAction Stop | Out-Null }
+        Copy-Item -LiteralPath $staged -Destination $puller -Force -ErrorAction Stop
+    } catch {
+        Result $false "could not install the puller to $puller : $($_.Exception.Message)"
+    }
+}
+if (-not (Test-Path -LiteralPath $puller)) { Result $false "sync-clock-from-dom0.ps1 is neither staged beside this script nor already installed at $puller (helpers ship only if staged)" }
 
 # BootTrigger with a short delay: qrexec is not up the instant the system starts, and the puller's
 # own bounded wait covers the rest. ExecutionTimeLimit is above that wait, so the task is never

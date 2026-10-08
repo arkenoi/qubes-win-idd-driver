@@ -115,11 +115,18 @@
             Package = 'provision-etwproxy-account.ps1'
         }
         @{
-            # The boot-time clock-pull INSTALLER, run from the payload root by stage 2. The
-            # puller it registers needs no entry: it lives in core-agent/src/qubes-rpc-services
-            # and the Mirrors rules above already verify that sweep, in the payload and in the MSI.
+            # The boot-time clock-pull INSTALLER, run from the payload root by stage 2.
             Source  = 'guest/install-clock-sync.ps1'
             Package = 'install-clock-sync.ps1'
+        }
+        @{
+            # The puller it installs. This is NOT under core-agent/src/qubes-rpc-services on
+            # purpose: that directory is swept into the payload AND mirrored into the built MSI,
+            # and a new file with no wxs component fails this guard on the MSI side (measured,
+            # run 37743438873). It ships at the payload root and install-clock-sync.ps1 copies it
+            # into the Qubes Tools tree, which is what makes the task's action path outlive setup.
+            Source  = 'guest/sync-clock-from-dom0.ps1'
+            Package = 'sync-clock-from-dom0.ps1'
         }
     )
 

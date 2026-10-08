@@ -18,7 +18,7 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 INST="$ROOT/guest/install-clock-sync.ps1"
-PULL="$ROOT/core-agent/src/qubes-rpc-services/sync-clock-from-dom0.ps1"
+PULL="$ROOT/guest/sync-clock-from-dom0.ps1"
 SETUP="$ROOT/packaging/setup/Install-QwtImproved.ps1"
 MK="$ROOT/packaging/make-setup.ps1"
 OW="$ROOT/packaging/ours-wins.psd1"
@@ -27,23 +27,40 @@ ok(){ pass=$((pass+1)); echo "PASS  $*"; }
 bad(){ fail=$((fail+1)); echo "FAIL  $*"; }
 W="${CLOCKSYNC_SELFTEST_OUT:-$(mktemp -d)}"; mkdir -p "$W"
 
-# ---- 1. the puller ships, and ships to a PERSISTENT place ---------------------------------------
-# core-agent/src/qubes-rpc-services is swept by make-setup.ps1 and copied by the installer into
-# the guest's Qubes Tools tree, which is the same directory set-time.ps1 lands in - and set-time.ps1
-# is what the puller calls, so colocating them is also what makes the call work.
+# ---- 1. the puller ships, and INSTALL puts it somewhere persistent ------------------------------
+# It ships at the payload ROOT, not through core-agent/src/qubes-rpc-services: that directory is
+# swept into the payload AND mirrored into the built MSI, where a file with no wxs component fails
+# the ours-wins guard - measured, release-package run 37743438873. install-clock-sync.ps1 copies it
+# into the Qubes Tools tree beside the set-time.ps1 it calls, which is what makes the registered
+# action path outlive the setup payload.
 if [ -f "$PULL" ]; then
-  ok "puller_in_swept_dir: sync-clock-from-dom0.ps1 is in core-agent/src/qubes-rpc-services (ships with no staging line)"
+  ok "puller_shipped: guest/sync-clock-from-dom0.ps1 exists"
 else
-  bad "puller_in_swept_dir: $PULL is missing - nothing ships the puller"
+  bad "puller_shipped: $PULL is missing - nothing ships the puller"
 fi
+if command grep -q 'Copy-Item -LiteralPath $staged' "$INST"; then
+  ok "puller_installed_persistently: the installer copies the puller out of the payload before registering"
+else
+  bad "puller_installed_persistently: the task would point into the setup payload, which is deleted"
+fi
+command grep -q "guest\\\\sync-clock-from-dom0.ps1" "$MK" \
+  && ok "puller_staged_on_medium: make-setup.ps1 puts the puller on the medium" \
+  || bad "puller_staged_on_medium: the installer would have nothing to copy"
+command grep -q "guest/sync-clock-from-dom0.ps1" "$OW" \
+  && ok "puller_guard_can_fail: ours-wins.psd1 lists the puller too" \
+  || bad "puller_guard_can_fail: nothing makes CI fail when the puller stops shipping"
 
 # ---- 2. the registered ACTION PATH is the persistent copy, never the payload --------------------
 action_persistent() {
   local f="$1"
-  # the task's Arguments must name the puller via the Qubes Tools dir, and the script must not
-  # fall back to its own directory (the payload) to find it.
-  command grep -q 'qubes-rpc-services\\sync-clock-from-dom0\.ps1' "$f" || return 1
-  command grep -q "Join-Path \$PSScriptRoot 'sync-clock-from-dom0\.ps1'" "$f" && return 1
+  # THE DISCRIMINATOR IS THE $puller ASSIGNMENT, not the mere presence of $PSScriptRoot: the script
+  # legitimately reads $PSScriptRoot to find the STAGED copy it installs FROM. What must never be
+  # payload-relative is the path the task's action is built from. My first version of this check
+  # banned $PSScriptRoot outright and then failed the correct code.
+  command grep -qE '^\s*\$dest = Join-Path \$tools .qubes-rpc-services.' "$f" || return 1
+  command grep -qE '^\s*\$puller = Join-Path \$dest ' "$f" || return 1
+  command grep -qE '^\s*\$puller = Join-Path \$PSScriptRoot' "$f" && return 1
+  command grep -q 'File \"\$puller\"' "$f" || return 1
   return 0
 }
 if action_persistent "$INST"; then
@@ -56,8 +73,9 @@ cp "$INST" "$W/payload-path.ps1"
 python3 - "$W/payload-path.ps1" <<'PY'
 import io,sys
 p=sys.argv[1]; s=io.open(p,encoding='utf-8').read()
-s=s.replace("""$puller = Join-Path $tools 'qubes-rpc-services\\sync-clock-from-dom0.ps1'""",
+s=s.replace("""$puller = Join-Path $dest 'sync-clock-from-dom0.ps1'""",
             """$puller = Join-Path $PSScriptRoot 'sync-clock-from-dom0.ps1'""")
+assert "$puller = Join-Path $PSScriptRoot" in s, "the mutation did not apply - the check would prove nothing"
 io.open(p,'w',encoding='utf-8').write(s)
 PY
 if action_persistent "$W/payload-path.ps1"; then
