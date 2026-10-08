@@ -55,6 +55,12 @@ PASS_START = "VM class (live from qubesdb)"
 REPORTED = re.compile(r"reported\s+(\d+)\s+update\(s\) to dom0")
 OFFERED = re.compile(r"scan:\s+(\d+)\s+update\(s\) offered")
 ERROR = re.compile(r"^ERROR:\s*(.+)$")
+# THE LOG ANNOUNCING ITS OWN GAP. guest/qubes-windows-update.ps1 writes this on the first
+# successful append after any line could not be written. A judge that reads this file to decide
+# whether a pass told dom0 the truth CANNOT trust a file with holes: on 2026-10-08 two dropped
+# lines ("relay started", "proxy up") were nearly written up as a product defect that did not
+# exist, because an absent line was read as an event that never happened.
+LOGLOST = re.compile(r"QWTUPDLOGLOST\s+(\d+)\s+line")
 HRESULT = re.compile(r"(0x[0-9A-Fa-f]{8})")
 NOOP = "Doing nothing"
 
@@ -181,6 +187,21 @@ def main():
     }
 
     fails, flags, graded = [], [], []
+    # A LOSSY LOG CANNOT WITNESS A PASS. Counted over the whole capture, not per pass: the notice is
+    # written once per pass that lost anything, and any loss at all makes every absence in this file
+    # unsafe to reason from.
+    lost = 0
+    try:
+        for _ln in open(a.agent_log, encoding="utf-8", errors="replace"):
+            _m = LOGLOST.search(_ln)
+            if _m:
+                lost += int(_m.group(1))
+    except OSError:
+        pass   # parse_passes already failed loudly on an unreadable log; never report a loss we did not read
+    if lost:
+        fails.append("LOSSY LOG: the updater's own log reports %d line(s) it could not write "
+                     "(QWTUPDLOGLOST). This file is incomplete, so no absence in it is evidence - "
+                     "and this judge decides by what the passes did and did not say" % lost)
     for p in silent:
         fails.append("SILENT pass at %s: ended on %s and never reported to dom0 - dom0 still holds the previous number"
                      % (p["t"], "; ".join(p["errors"])[:80]))

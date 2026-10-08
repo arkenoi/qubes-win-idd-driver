@@ -5,6 +5,9 @@
 #   WUCATCH_DEFECT=1          the `$st =` that silenced the remedy from e6037f5d (2026-09-21) to 2026-10-02;
 #   WUCATCH_DEFECT=race       phase=error published before the diagnosis - dom0 printed the bare HRESULT (rz31, 2026-10-02);
 #   WUCATCH_DEFECT=nofinally  a throwing diagnosis leaves the pass in 'diagnosing' with nothing terminal published.
+#   WUCATCH_DEFECT=rereads    the message is read a SECOND time from $_ instead of the captured value -
+#                             the shape of the 2026-10-08 failure, where the first read worked and the
+#                             second did not, so the remedy never fired.
 # Exit 0 only if all hold.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -25,5 +28,6 @@ leg(){ # $1 knob, $2 the check that must be among the failures
 leg 1 'the status object is still a dictionary'
 leg race 'no save published phase=error before the reason was final'
 leg nofinally 'a throwing diagnosis still ends with phase=error published'
-if [ "$bad" = 0 ]; then echo "PASS  clean leg passes; the \$st collision, the early terminal phase and the missing finally are each caught"; exit 0; fi
+leg rereads 'catch: the 0x8024402C guard uses the captured value, not a second read of'
+if [ "$bad" = 0 ]; then echo "PASS  clean leg passes; the \$st collision, the early terminal phase, the missing finally and a SECOND read of \$_ are each caught"; exit 0; fi
 echo "FAIL  see above"; exit 1

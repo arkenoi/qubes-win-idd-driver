@@ -48,6 +48,21 @@ New-Item -ItemType Directory -Path \$d -Force | Out-Null
 Log 'ordinary line'
 'OKDROPPED=' + \$script:LogDropped
 'OKPRESENT=' + ((Get-Content (Join-Path \$d 'agent.log') -Tail 1) -match 'ordinary line')
+# AND THE LOG MUST ANNOUNCE ITS OWN GAP once it can write again: drop two lines against an
+# unwritable dir, then point WorkDir at a writable one and log normally. tools/wu-pass-judge.py
+# FAILS a capture carrying QWTUPDLOGLOST, so the notice is what makes a lossy log gradeable.
+\$WorkDir = '/proc/definitely-not-writable'; \$script:LogDropped = 0; \$script:LogDropFirst = ''; \$script:LogLossReported = \$false
+Log 'relay started: pid 4188'
+Log 'proxy up: 127.0.0.1:8082'
+\$d2 = Join-Path ([IO.Path]::GetTempPath()) ('wulog2-' + [Guid]::NewGuid().ToString('N').Substring(0,8))
+New-Item -ItemType Directory -Path \$d2 -Force | Out-Null
+\$WorkDir = \$d2
+Log 'the next line that could be written'
+\$t = Get-Content (Join-Path \$d2 'agent.log') -Raw
+'NOTICE=' + (\$t -match 'QWTUPDLOGLOST 2 line')
+'NOTICEONCE=' + ([regex]::Matches(\$t, 'QWTUPDLOGLOST')).Count
+'NOTICEWHY=' + (\$t -match 'unsafe')
+
 # and the retry must SHORT-CIRCUIT once the log is plainly gone
 \$WorkDir = '/proc/definitely-not-writable'; \$script:LogDropped = 0
 \$t1 = Get-Date; 1..12 | ForEach-Object { Log \"line \$_\" }; \$ms2 = [int]((Get-Date) - \$t1).TotalMilliseconds
@@ -65,6 +80,12 @@ g(){ echo "$out" | command grep -ao "^$1=.*" | head -1 | cut -d= -f2-; }
   || bad "the normal path broke: dropped=$(g OKDROPPED) present=$(g OKPRESENT)"
 [ "$(g MANY)" = 12 ] && ok "every dropped line is counted, not just the first (12 of 12)" \
                      || bad "many=$(g MANY), expected 12"
+[ "$(g NOTICE)" = True ] && ok "the log ANNOUNCES its own gap (QWTUPDLOGLOST 2 line) on the first write that succeeds" \
+                         || bad "no QWTUPDLOGLOST notice after a loss - the gap is only a gap"
+[ "$(g NOTICEONCE)" = 1 ] && ok "and it says so ONCE, not on every later line" \
+                          || bad "the notice appeared $(g NOTICEONCE) times"
+[ "$(g NOTICEWHY)" = True ] && ok "and it warns that an absence in this file is not evidence" \
+                            || bad "the notice does not say why it matters"
 m=$(g MANYMS); [ -n "$m" ] && [ "$m" -lt 4000 ] \
   && ok "the retry short-circuits once the log is gone (12 lines in ${m} ms, not ~4500)" \
   || bad "12 dropped lines took ${m} ms - the retry is not short-circuiting"

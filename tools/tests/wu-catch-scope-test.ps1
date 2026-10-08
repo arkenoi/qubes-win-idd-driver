@@ -19,6 +19,12 @@ $m = [regex]::Match($src, "# ---- WU-MAIN-CATCH-BEGIN[^\n]*\n(.*?)# ---- WU-MAIN
 if (-not $m.Success) { Write-Output "INSTRUMENT: region WU-MAIN-CATCH not found"; exit 2 }
 $region = $m.Groups[1].Value
 switch ($env:WUCATCH_DEFECT) {
+  'rereads' {
+    # DEFECT: read the error message a SECOND time from $_ instead of the captured value. That
+    # is the shape the 2026-10-08 failure had, where the first read worked (the status carried
+    # the right HRESULT) and the second evidently did not, so the remedy never fired.
+    $region = $region.Replace('$msg = $script:ErrMsg', '$msg = "$($_.Exception.Message)"')
+  }
   '1' {
     $region = $region.Replace('$stackText = "$($_.ScriptStackTrace)"', '$st = "$($_.ScriptStackTrace)"').Replace('if ($stackText)', 'if ($st)').Replace('($stackText -split', '($st -split')
   }
@@ -79,6 +85,21 @@ function Test-ProxyServesWu { throw 'probe exploded' }
 try { throw 'Ausnahme von HRESULT: 0x8024402C' } catch { try { Invoke-Expression $region } catch { } }
 Check 'a throwing diagnosis still ends with phase=error published' ($script:Snaps.Count -gt 0 -and $script:Snaps[-1].phase -eq 'error')
 Check '...carrying the raw error, not nothing'                 ($script:Snaps.Count -gt 0 -and $script:Snaps[-1].error -match '0x8024402C')
+# THE MESSAGE IS READ ONCE. On 2026-10-08 the first read worked - the saved status carried the
+# correct "Ausnahme von HRESULT: 0x8024402C" - and the diagnosis's own second read of
+# $_.Exception.Message evidently did not, so its 0x8024402C branch never ran, no reason reached dom0
+# and no restart was requested. Five mechanisms for that were refuted by measurement, so the
+# DEPENDENCY was removed instead: one read into $script:ErrMsg, reused downstream.
+$noComment = (($region -split "`n") | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+$captures = ([regex]::Matches($noComment, [regex]::Escape('$script:ErrMsg = "$($_.Exception.Message)"'))).Count
+Check 'catch: the error message is CAPTURED once into $script:ErrMsg' ($captures -eq 1) "captures=$captures"
+Check 'catch: the 0x8024402C guard uses the captured value, not a second read of $_' `
+      ($noComment -match [regex]::Escape('$msg = $script:ErrMsg')) `
+      "the guard does not read $script:ErrMsg"
+Check 'catch: no second read of $_.Exception.Message into $msg' `
+      (-not ($noComment -match [regex]::Escape('$msg = "$($_.Exception.Message)"'))) `
+      "a second read of $_ is back"
+
 
 if ($fails -eq 0) { Write-Output 'PASS  the main catch keeps the status, runs the remedy at script scope, and publishes the terminal phase once, last'; exit 0 }
 Write-Output "FAIL  $fails check(s)"; exit 1

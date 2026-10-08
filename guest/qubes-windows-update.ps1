@@ -165,6 +165,7 @@ if ($Scheduled -and $Action -eq 'scan') {
 # status). Log used to swallow a failed append entirely - see the function below.
 $script:LogDropped = 0
 $script:LogDropFirst = ''
+$script:LogLossReported = $false
 $script:St = [ordered]@{ action=$Action; phase='init'; ts=$null; owner_pid=0; owner_pid_start=''; count=0; available=@();
                          downloading=$null; installing=$null; result=@(); reboot_needed=$false; error=$null; recovered='';
                          not_actionable=@(); satisfied=@() }
@@ -492,7 +493,21 @@ function Log($m){
   # the pass is not slowed down.
   $tries = if ($script:LogDropped -ge 3) { 1 } else { 5 }
   for ($i = 0; $i -lt $tries; $i++) {
-    try { Add-Content -LiteralPath $p -Value $line -EA Stop; return }
+    try {
+      # THE LOG REPORTS ITS OWN GAPS. A status field can go unread; a line in the log is seen by
+      # whoever reads the log, including tools/log-sweep.py. So the first write that SUCCEEDS after
+      # any loss states how many lines went missing and why - otherwise the only trace of a gap is
+      # the gap, and an absent line would again be mistaken for an event that did not happen.
+      if ($script:LogDropped -gt 0 -and -not $script:LogLossReported) {
+        $notice = (Get-Date -Format 'HH:mm:ss') + " QWTUPDLOGLOST $script:LogDropped line(s) could not be written to this log and are GONE (first reason: $script:LogDropFirst). Anything inferred from a MISSING line in this file is unsafe."
+        Add-Content -LiteralPath $p -Value $notice -EA Stop
+        # MARKED REPORTED ONLY ONCE IT IS ON DISK. Setting the flag first meant a notice that was
+        # ITSELF dropped counted as delivered, so the gap was never announced - caught by
+        # tools/tests/wu-log-loss-selftest.sh the first time it ran.
+        $script:LogLossReported = $true
+      }
+      Add-Content -LiteralPath $p -Value $line -EA Stop; return
+    }
     catch {
       if (-not $script:LogDropFirst) { $script:LogDropFirst = "$($_.Exception.Message)" }
       Start-Sleep -Milliseconds (25 * ($i + 1))
@@ -3081,7 +3096,19 @@ try {
   # HRESULT: 0x8024402C" while this status ended with the reason and the restart request. 'diagnosing' is not terminal, so the handler
   # keeps waiting; a pass that dies in it is still caught by the handler's dead-pass guard. The raw message is saved now so that a
   # failure inside the diagnosis cannot lose it; the terminal phase is published once, at the end of this region.
-  $script:St.phase='diagnosing'; $script:St.error="$($_.Exception.Message)"; Save
+  # THE MESSAGE IS READ ONCE AND REUSED. This read demonstrably works: on the 2026-10-08 failure the
+  # status carried the correct "Ausnahme von HRESULT: 0x8024402C", so $_ was intact here. The
+  # diagnosis below then read $_.Exception.Message AGAIN and its 0x8024402C branch did not run - the
+  # saved status kept this raw message instead of the measured reason, and no restart was requested.
+  # Five candidate mechanisms for that second read failing were refuted by measurement (on the
+  # guest's own Windows PowerShell 5.1.26100.7920 with a real COMException: $_ survives a function
+  # call, a nested try/catch, a failing Add-Content inside Log's empty catch, and ScriptStackTrace
+  # and InvocationInfo stay populated; Test-ProxyServesWu cannot throw - it returns "unreachable").
+  # The mechanism is still unknown, so the DEPENDENCY is removed rather than explained: one read,
+  # into a script-scope variable, and everything downstream uses that. tools/tests/
+  # wu-catch-scope-test.ps1 asserts the region reads it exactly once.
+  $script:ErrMsg = "$($_.Exception.Message)"
+  $script:St.phase='diagnosing'; $script:St.error=$script:ErrMsg; Save
   try {   # ...finally below: the terminal phase is published exactly once, whatever the diagnosis (or its logging) does
   Log "ERROR: $($script:St.error)"
   # WHERE it threw, not just what it said. Measured 2026-09-21: an install pass died with
@@ -3099,7 +3126,7 @@ try {
     $stackText = "$($_.ScriptStackTrace)"
     if ($stackText) { foreach($l in ($stackText -split "`n" | Select-Object -First 4)) { Log ("ERROR-STACK " + $l.Trim()) } }
   } catch { }
-  $msg = "$($_.Exception.Message)"
+  $msg = $script:ErrMsg
   $probeResult = if ($msg -match '8024402C') { Test-ProxyServesWu } else { '' }
 # ---- WU-DIAGNOSE-REASON-BEGIN
   # GUARD:reasonmeasured - the decision half. 0x8024402C is WU_E_PT_WINHTTP_NAME_NOT_RESOLVED, and
