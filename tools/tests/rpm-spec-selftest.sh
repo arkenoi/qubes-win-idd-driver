@@ -65,6 +65,27 @@ else
   ok "post_runs_nothing: %post only prints its notice"
 fi
 
+# ---- 4b. Conflicts WITH THE OFFICIAL PACKAGE -----------------------------------------------
+# Both packages own /usr/lib/qubes/qubes-windows-tools.iso. Without a Conflicts, installing this
+# one replaces a SIGNED vendor ISO with a TEST-SIGNED one, in dom0, silently. release-package.yml
+# asserts it on the BUILT rpm with `rpm -qp --conflicts`; this asserts it on the SOURCE, so the
+# absence is caught here in a second instead of forty minutes into a package build - which is
+# exactly how it was caught (run 37745241513).
+if rpmspec --parse "$SPEC" 2>/dev/null | command grep -qiE '^Conflicts:[[:space:]]*qubes-windows-tools[[:space:]]*$'; then
+  ok "conflicts_declared: the spec refuses to co-install with the official qubes-windows-tools"
+else
+  bad "conflicts_declared: no Conflicts - installing this would silently replace a signed vendor ISO"
+fi
+# SEEN TO FAIL: the same check against a copy with the line removed.
+nocon=$(mktemp "${TMPDIR:-/tmp}/spec-nocon-XXXXXX.spec")
+command grep -v '^Conflicts:' "$SPEC" > "$nocon"
+if rpmspec --parse "$nocon" 2>/dev/null | command grep -qiE '^Conflicts:[[:space:]]*qubes-windows-tools'; then
+  bad "conflicts_seen_to_fail: the check passes a spec with no Conflicts line"
+else
+  ok "conflicts_seen_to_fail: the check rejects a spec with the line removed"
+fi
+rm -f "$nocon"
+
 # ---- 5. THE CHECK MUST FAIL ON THE BROKEN REVISION ---------------------------------------------
 # A check never seen to fail is decoration. Parse the revision that shipped the defect.
 # Found by PARSING revisions, not by searching for a string: `git log -S` matches the commit that

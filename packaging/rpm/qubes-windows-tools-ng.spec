@@ -27,6 +27,12 @@ License:        GPL-2.0-or-later
 URL:            https://github.com/arkenoi/qubes-win-idd-driver
 BuildArch:      noarch
 
+# THE ONE PATH THIS PACKAGE OWNS IS ALSO THE PATH THE OFFICIAL PACKAGE OWNS. Without this,
+# installing this RPM replaces a SIGNED vendor ISO at /usr/lib/qubes/qubes-windows-tools.iso with a
+# TEST-SIGNED one, in dom0, with nothing said - so rpm must refuse instead of resolving it quietly.
+# release-package.yml asserts it with `rpm -qp --conflicts`, which is how its absence was caught.
+Conflicts:      qubes-windows-tools
+
 Source0:        qwt-improved-setup.iso
 Source1:        install-qwt.bat
 Source2:        README-qvm-create-windows-qube.md
