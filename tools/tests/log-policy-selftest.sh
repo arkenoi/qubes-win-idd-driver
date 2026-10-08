@@ -201,6 +201,44 @@ if [ -z "$DSM" ]; then bad "start_dismiss_targeted: DismissHiddenStartSurface co
     || ok "start_dismiss_no_global_fallback: a failed post is reported, never retried globally"
 fi
 
+# ---- ONE SITUATION, ONE NOTIFICATION: the broker-down report yields to QGADESKSTUCK ----------
+# FIELD-REPORTED by GWeck on 4.3.35 (forum 42717 post 175, screenshot): his VM start showed BOTH
+# "The guest is waiting at the sign-in or lock screen" AND "The notification and menu capture helper
+# is not running - wgcbroker.exe is installed but has not been running for over 30 s", in the same
+# stack, on the same guest, about the same 30 seconds. While the input desktop is secure nothing can
+# be captured - the agent freezes the frame path for exactly that reason - so a broker that is not
+# running is the CONSEQUENCE of the sign-in screen, not a second fault. Only one of the two is
+# actionable. Jev: i1-i2-helpers-not-running is the item to work first (0.72), and the pair reports a
+# real fault (0.66) - the real one being the one QGADESKSTUCK names.
+BS=$(python3 - "$SRC/main.c" <<'PYB'
+import sys, io, re
+s = io.open(sys.argv[1], encoding='utf-8', errors='replace').read()
+i = s.index('static void BrokerSupervise(void)')
+d = 0; j = s.index('{', i)
+for k in range(j, len(s)):
+    if s[k] == '{': d += 1
+    elif s[k] == '}':
+        d -= 1
+        if d == 0: break
+body = s[i:k+1]
+body = re.sub(r'(?m)^\s*//.*$', '', body)      # the comment explains the old behaviour deliberately
+print(body)
+PYB
+)
+if [ -z "$BS" ]; then bad "broker_down_yields: BrokerSupervise could not be isolated"; else
+  printf '%s' "$BS" | command grep -q 'g_OnSecureDesktop' \
+    && ok "broker_down_yields: the broker-down report checks the secure desktop before reporting" \
+    || bad "broker_down_yields: it still reports a down broker while the guest is at the sign-in screen"
+  # and it must NOT return early - the launch block after it has its own guard and must keep running
+  printf '%s' "$BS" | command grep -qE 'g_OnSecureDesktop\)[^}]*\{[^}]*return;' \
+    && bad "broker_down_keeps_launching: an early return also skips the broker launch below" \
+    || ok "broker_down_keeps_launching: only the report is skipped; the launch path still runs"
+  # the down-clock must not be reset, or a genuinely down broker reports a fresh short duration
+  printf '%s' "$BS" | command grep -qE 'g_OnSecureDesktop[^}]*g_BrokerDownSince = 0' \
+    && bad "broker_down_clock_kept: the down-clock is reset while the desktop is secure" \
+    || ok "broker_down_clock_kept: the down-clock keeps running, so the true duration is reported later"
+fi
+
 # ---- the harnesses that grade on the demoted lines must say they need the level ---------------
 for h in toast-hold-test.sh crop-before-map.sh; do
   f="$ROOT/mgmt/harness/$h"
