@@ -17,6 +17,7 @@ in `docs/DESIGN-*.md` and in the code headers. An ADR section goes stale only wh
 | `ADR-boot.md` | what may touch the device model (QEMU, Xen) in a fresh domain's first minutes: install stages and first boots | 2 |
 | `ADR-supervision.md` | how our processes and services are kept alive, and how their deaths are made loud | 4 |
 | `ADR-updater.md` | the dom0-owned Windows update path (Track C): invariants, verification, install routes, process ownership, the installer's deploy | 13 |
+| `ADR-uac.md` | elevation prompts a user in dom0 can answer: the prompt moved off the secure desktop, the stand-in window, a prompt Windows did not raise, what may elevate at all | 10 |
 
 ### Cross-cutting rules, and where they are decided
 
@@ -32,7 +33,9 @@ in `docs/DESIGN-*.md` and in the code headers. An ADR section goes stale only wh
   "Evidence" part.
 - **Nothing of ours is killed or adopted by name.** `ADR-updater` §12.4, `ADR-supervision` §4.
 - **Defects in components that are not ours go upstream only with the owner's approval of the exact text.**
-  `ADR-network` §8, `ADR-gui` §1, `ADR-boot` §1, `ADR-display` §6.
+  `ADR-network` §8, `ADR-gui` §1, `ADR-boot` §1, `ADR-display` §6, `ADR-uac` §10.
+- **A window nobody can reach is not a window.** `ADR-uac` §6 and §7 (a contentless stand-in is hidden, the
+  prompt itself is announced), `ADR-capture` §32, `ADR-windows` §10.
 
 ## How a section is written
 

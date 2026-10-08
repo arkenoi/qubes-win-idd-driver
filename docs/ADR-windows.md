@@ -152,13 +152,15 @@ from dom0's own UI.
 
 | mode | the secure desktop |
 |---|---|
-| seamless | never mapped. `AttachToInputDesktop` tracks `g_OnSecureDesktop`; `ShouldAcceptWindow` rejects everything while it is set, and the frame path freezes in `ProcessNewFrame` while the input desktop is not Default. A persistent freeze is logged `QGADESKSTUCK` after 30 s, then every 120 s. A pending UAC elevation is therefore INVISIBLE in seamless: the qube "does nothing" until the prompt is answered or times out, and the agent log says why (standing owner decision; UAC visibility is future work). |
+| seamless | never mapped. `AttachToInputDesktop` tracks `g_OnSecureDesktop`, and the frame path, the event path and the init enumeration all return early while the input desktop is not Default. **CORRECTED 2026-10-08:** this row said "`ShouldAcceptWindow` rejects everything while it is set" - that was v1 (07fb32d), replaced the same day by the three early returns because the accept-filter deny unmapped every already-open window; see `ADR-uac` §4. A persistent freeze is logged `QGADESKSTUCK` after 30 s, then every 120 s. A pending UAC elevation is therefore INVISIBLE in seamless: the qube "does nothing" until the prompt is answered or times out, and the agent log says why (standing owner decision; UAC visibility is future work). |
 | non-seamless | shown, secure or not: the sign-in screen or a prompt appears inside the one bounded desktop window (§5), which is what makes it safe. |
 
 Two settings follow from it:
 
 - **UAC prompts are drawn on the normal desktop** (`PromptOnSecureDesktop=0`, written by
-  `ApplyUacPromptPolicy`), so a prompt is an ordinary bordered window in both modes. Where the prompt is drawn
+  `ApplyUacPromptPolicy`), so a prompt is an ordinary bordered window in both modes. `ADR-uac.md` is the
+  UAC-specific record - what may elevate at all (§10), the stand-in window (§6) and a prompt Windows did not
+  raise (§7); this section stays the window-mapping rule. Where the prompt is drawn
   is deliberately not configurable. Protocol SG5 calls this load-bearing; the IDD boot-path measurement found
   it fixed nothing else (zero recorded UAC-desktop events).
 - **`service.uac-disable` acts only on an explicit `1`**, needs a reboot, and must be set on the TEMPLATE
