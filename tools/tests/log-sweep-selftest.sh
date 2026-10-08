@@ -632,6 +632,55 @@ if [ "$ebad" -ge 3 ]; then
   ok "T31 a FAILED install is still errors (errors=$ebad: Return value 3, Installation failed, MainEngineThread returning 1603)"
 else bad "T31 a failed install produced only $ebad error line(s) - the classifier has gone blind"; fi
 
+# T32 A --since WINDOW IS ONLY AS GOOD AS THE GUEST'S CLOCK. Measured 2026-10-08 on win11r-logvol:
+# the collector reported tz=+00:00 with now=nowutc=09:50:36 while this host's UTC was 06:50, so the
+# guest believed UTC was three hours later than it was. Every line looked newer than the window, and
+# a quiet boot's sweep silently admitted two shutdown errors from earlier runs. The direction of the
+# error is what makes it dangerous: a clean run reads dirty, and a declared fault-injection window
+# covers lines it never caused.
+python3 - "$T" <<'PYX'
+import json, os, sys
+T = sys.argv[1]
+src = os.path.join(T, "base", "meta.json")
+dst = os.path.join(T, "skew")
+os.makedirs(dst, exist_ok=True)
+for n in os.listdir(os.path.join(T, "base")):
+    s, d = os.path.join(T, "base", n), os.path.join(dst, n)
+    if os.path.isdir(s):
+        import shutil
+        shutil.rmtree(d, ignore_errors=True); shutil.copytree(s, d)
+    else:
+        import shutil; shutil.copy2(s, d)
+m = json.load(open(os.path.join(dst, "meta.json")))
+# the guest's own clock, three hours ahead of this host's, and it believes it is UTC
+import datetime as dt
+ahead = (dt.datetime.utcnow() + dt.timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
+m.setdefault("begin", {})["nowutc"] = ahead + "Z"
+m["begin"]["now"] = ahead
+m["begin"]["tz"] = "+00:00"
+json.dump(m, open(os.path.join(dst, "meta.json"), "w"))
+print("skew fixture written")
+PYX
+# Called directly, because the skew check needs the SECOND clock: --host-utc, which the helper does
+# not pass. The fixture's guest clock is three hours ahead of the host value given here.
+python3 "$SRC" analyze "$T/skew" --baseline "$T/baseline.json" --out "$T/t32.json" \
+  --summary "$T/t32.txt" --label t32 --workdir "$T/work-t32" --jev-cmd "$T/jev-expected.py" \
+  --since "2026-10-07 10:00:00" --host-utc "$(date -u +%Y-%m-%dT%H:%M:%S)" > "$T/t32.out" 2>&1
+pk=$(field "$T/t32.json" "[p[0] for p in r['data_problems']]")
+if printf '%s' "$pk" | grep -q clockskew; then
+  ok "T32 a guest clock 3 h from the host is a DATA problem, not absorbed ($pk)"
+else bad "T32 a 3 h guest clock skew was absorbed silently: data_problems=$pk"; fi
+# SEEN TO FAIL the other way: the unskewed fixture must NOT report it
+# the in-sync case: the fixture's own recorded clock, given as the host's, so they agree
+base_nowutc=$(python3 -c "import json,sys;print((json.load(open(sys.argv[1])).get('begin') or {}).get('nowutc','').rstrip('Z'))" "$T/base/meta.json")
+python3 "$SRC" analyze "$T/base" --baseline "$T/baseline.json" --out "$T/t32b.json" \
+  --summary "$T/t32b.txt" --label t32b --workdir "$T/work-t32b" --jev-cmd "$T/jev-expected.py" \
+  --since "2026-10-07 10:00:00" --host-utc "$base_nowutc" > "$T/t32b.out" 2>&1
+pb=$(field "$T/t32b.json" "[p[0] for p in r['data_problems']]")
+if ! printf '%s' "$pb" | grep -q clockskew; then
+  ok "T32 an in-sync guest does NOT report a skew (no false positive)"
+else bad "T32 the unskewed fixture reports a clock skew: $pb"; fi
+
 # T23 a filter on a key that does not exist must not silently zero a metric (knob: winkey - the defect I shipped
 # for ten minutes while fixing T21, caught only because shutdowns_in_window=0 contradicted shutdowns=5)
 pb2=$(field "$T/t21.json" "r['metrics']['agent_instances_per_boot']")

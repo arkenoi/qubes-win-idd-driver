@@ -126,6 +126,11 @@ WINUTILS_RE = re.compile(r"^\ufeff?\[(\d{8})\.(\d{6})\.(\d{3})-(\d+)(?::(\d+))?-
 BLOG_RE = re.compile(r"^\ufeff?(\d\d):(\d\d):(\d\d) (.*)$")
 INSTALLER_RE = re.compile(r"^\ufeff?(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d) \[(INFO|WARN|ERROR|FATAL|DEBUG)\] (.*)$")
 RESULT_RE = re.compile(r"^\ufeff?=== RESULT === (\{.*\})\s*$")
+# How far the guest's clock may be from this host's UTC before a --since window is untrustworthy.
+# The analyze runs within a minute or two of the collection, so this is generous and still catches
+# the three-hour skew measured on win11r-logvol.
+CLOCK_SKEW_TOLERANCE_S = 300
+
 MSI_RE = re.compile(r"^\ufeff?MSI \([sc]\) \([0-9A-Fa-f:!]+\) \[(\d\d):(\d\d):(\d\d):(\d{3})\]: ?(.*)$")
 EV_RE = re.compile(r"^EV (\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)\.(\d{3}) \[([^\]]+)\] id=(\d+) level=(\d+) ([^:]*): ?(.*)$")
 EV_NONE_RE = re.compile(r"^EV NONE \[([^\]]+)\]")
@@ -1730,6 +1735,30 @@ def cmd_analyze(a):
         if m:
             off = dt.timedelta(hours=int(m.group(2)), minutes=int(m.group(3)))
             since = since + off if m.group(1) == "+" else since - off
+    # A --since WINDOW IS ONLY AS GOOD AS THE GUEST'S CLOCK. The window arrives in UTC and the logs
+    # are in guest-local time, converted above with the offset the collector reports - but if the
+    # guest's clock itself is wrong, no conversion saves it. MEASURED 2026-10-08 on win11r-logvol:
+    # the collector reported tz=+00:00 with now=nowutc=09:50:36 while the host's UTC was 06:50, so
+    # the guest believed UTC was three hours later than it was, every line looked three hours newer
+    # than the window, and a quiet boot's sweep silently admitted the two shutdown errors from the
+    # previous run and the one before it. That is a DATA problem - the sweep is not complete - and
+    # never something to absorb, because the direction of the error makes a clean run look dirty and
+    # a declared fault-injection window cover lines it never caused.
+    # TWO CLOCKS, RECORDED AT THE SAME MOMENT. "now at analyze time" is not the second clock: a
+    # corpus analysed hours or days later would read as a huge skew, which is exactly what happened
+    # to this suite's own fixtures on the first attempt. The wrapper records the HOST's UTC when it
+    # runs the collector and passes it here; with no --host-utc there is no second clock and nothing
+    # is claimed either way.
+    if a.host_utc and meta and (meta.get("begin") or {}).get("nowutc"):
+        guest_now = parse_iso((meta["begin"]["nowutc"] or "").rstrip("Z"))
+        host_now = parse_iso(a.host_utc.rstrip("Z"))
+        if guest_now is not None and host_now is not None:
+            skew = (guest_now - host_now).total_seconds()
+            if abs(skew) > CLOCK_SKEW_TOLERANCE_S:
+                problems.append(("clockskew", a.logsdir,
+                    "the guest's clock is %+.0f s from the host's at collection time (guest said %s, tz %s; "
+                    "host said %s) - no --since window can be trusted, so every count may include lines from "
+                    "outside it" % (skew, meta["begin"]["nowutc"], (meta["begin"] or {}).get("tz"), a.host_utc)))
     if not files:
         problems.append(("missing", a.logsdir, "no log files at all"))
     boots = cluster_boots(files)
@@ -2051,7 +2080,9 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     d = sub.add_parser("decode"); d.add_argument("pullfile"); d.add_argument("--out", required=True)
     an = sub.add_parser("analyze"); an.add_argument("logsdir"); an.add_argument("--baseline", required=True); an.add_argument("--out", required=True)
-    an.add_argument("--summary"); an.add_argument("--since"); an.add_argument("--label", default="run"); an.add_argument("--workdir")
+    an.add_argument("--summary"); an.add_argument("--since")
+    an.add_argument("--host-utc", help="this host's UTC at the moment the collector ran, so the guest's "
+                                       "clock can be checked against a second clock rather than against now"); an.add_argument("--label", default="run"); an.add_argument("--workdir")
     an.add_argument("--jev-cmd", help="override the judge command (tests use a stub)")
     an.add_argument("--jev-max", type=int, default=25, help="questions per call; more items = more calls, each with its own items' state")
     an.add_argument("--no-jev", action="store_true", help="do not call the judge: any item to judge makes the run INCOMPLETE")

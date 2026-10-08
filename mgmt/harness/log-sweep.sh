@@ -87,6 +87,9 @@ st=$(_q 25 ./tools/qtest state | grep -aoE 'power_state=[A-Za-z]+' | head -1)
 # 2. pull (two attempts: a transfer that does not verify is retried once, then FAILS)
 verified=""
 for attempt in 1 2; do
+  # The host's UTC at the instant of collection: the SECOND clock the analyzer needs, to tell a
+  # skewed GUEST clock from a corpus that is simply being analysed later.
+  HOST_UTC_AT_COLLECT="$(date -u +%Y-%m-%dT%H:%M:%S)"
   _q 600 ./tools/qtest pushrun mgmt/harness/log-sweep-collect.ps1 -SinceUtc "$SINCE" > "$OUT/pull.txt"
   rc=$QRC
   if ! grep -aq '^LSW END ' "$OUT/pull.txt"; then
@@ -125,7 +128,7 @@ fi
 
 # 3. analyze (the analyzer calls Jev once per run; its rc is the verdict)
 python3 tools/log-sweep.py analyze "$OUT/logs" --baseline "$BASELINE" --out "$OUT/report.json" --summary "$OUT/summary.txt" \
-  --since "$SINCE" --label "$VM" > "$OUT/analyze.out" 2>&1
+  --since "$SINCE" --host-utc "$HOST_UTC_AT_COLLECT" --label "$VM" > "$OUT/analyze.out" 2>&1
 arc=$?
 cat "$OUT/summary.txt" 2>/dev/null | tee -a "$R"
 # A CRASH EXITS 1, AND SO DOES "findings" - SO THE REPORT MUST EXIST AND PARSE BEFORE ANY VERDICT IS BELIEVED
