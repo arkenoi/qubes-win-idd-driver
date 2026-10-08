@@ -741,6 +741,24 @@ function Fault([string]$why) {
     New-EventLog -LogName Application -Source QubesPvNic -EA SilentlyContinue
     Write-EventLog -LogName Application -Source QubesPvNic -EntryType Error -EventId 1001 -Message "PV NIC payload: $why" -EA SilentlyContinue
 }
+# A CONDITION THIS RUN HAS ALREADY REPAIRED IS NOT A FAILURE OF THIS RUN.
+# Owner, 2026-10-08: "PV NIC setup failure still shown, whatever it means." The DECISION that found
+# the condition was right; its consequence was not. The previous session's shutdown re-arm not
+# completing was recorded with Fault, Fault sets $script:faulted, and Ok - the only success exit -
+# exits 1 whenever anything faulted. Task Scheduler recorded result 1 on QubesPvNic and
+# qwt-report-death.ps1 duly told dom0 "The PV NIC setup task failed | Cause: incorrect function",
+# on a guest whose latch this very run had re-armed at its top (reg add NICS=1 + the VIF enum key,
+# with the readback logged) ~90 lines before the check ran. The Fault message said so itself:
+# "(the latch is re-armed by this boot's run)".
+# So: the record stays - log line, once-per-boot guard, and an Application event, at WARNING rather
+# than ERROR because an incomplete shutdown re-arm IS an anomaly worth seeing - and the VERDICT is
+# left to Fault alone, which still means "still broken when this run ended". No FAILED marker
+# either: health-check.ps1:912 reads it and would report the same failure by another route.
+function Repaired([string]$why) {
+    L "REPAIRED: $why"
+    New-EventLog -LogName Application -Source QubesPvNic -EA SilentlyContinue
+    Write-EventLog -LogName Application -Source QubesPvNic -EntryType Warning -EventId 1002 -Message "PV NIC (repaired by this run): $why" -EA SilentlyContinue
+}
 function Ok([string]$what) {
     if ($script:faulted) { L "$what - but an earlier step FAILED ($script:faulted): marker kept, exit 1"; exit 1 }
     L $what
@@ -795,7 +813,7 @@ switch (Test-QwtRearmArm $stampTime $prevBoot $unclean $reportedBoot $thisBoot) 
     'already-reported' { L 'shutdown re-arm: no stamp - already reported for this boot' }
     'report'           {
         if ($thisBoot) { Set-Content -LiteralPath $reportedPath -Value $thisBoot.ToString('o') -EA SilentlyContinue }
-        Fault ("the previous session's shutdown re-arm did not complete: no stamp since {0:o} (the latch is re-armed by this boot's run)" -f $prevBoot)
+        Repaired ("the previous session's shutdown re-arm did not complete: no stamp since {0:o} - the latch was re-armed by this run's own first step, so the guest is correct now" -f $prevBoot)
     }
 }
 
