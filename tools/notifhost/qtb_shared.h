@@ -131,6 +131,30 @@ inline std::wstring QwtLogDir()
 // 42717 post 175 on 4.3.35: four of the notifications flooding his VM start were exactly that.
 #define QTB_EXIT_ALREADY_RUNNING 4u
 
+// WHY IT LEFT, WHEN IT LEFT ON PURPOSE. Exit 0 still covers THREE intended departures besides "I
+// finished": the agent went away, the interactive session changed under it, and something wrote the
+// stop file (what `--bridge-stop` does). The agent reported all of them as "a clean exit nobody
+// asked for" - the same false death that QTB_EXIT_ALREADY_RUNNING removed for the fourth case, and
+// the remaining half of the flood in GWeck's screenshot (his first one ran 0:00:20, which the
+// singleton case cannot produce).
+//
+// THEY KEEP EXIT 0 DELIBERATELY. Task Scheduler restarts a non-zero exit (3 times, a minute apart)
+// and leaves a zero alone, so handing these their own codes would relaunch a bridge that was
+// deliberately stopped, or push one into a session that is gone - and nothing else relaunches it
+// since 2026-10-07. Jev: it is noise 0.90, the relaunch hazard is real 0.90, and of four ways to
+// separate them, keep-zero-and-record-the-reason 0.92 against distinct-codes 0.00.
+//
+// So the reason is RECORDED instead. One line, written to the bridge's own state directory - which
+// its interactive-user token owns, unlike the SYSTEM-written state elsewhere - as
+//   <pid> <reason>
+// The PID is what makes it evidence: the agent accepts the reason only from the instance that just
+// exited, so a file left by an earlier bridge can never excuse a later real death. The bridge
+// deletes it at startup for the same reason.
+#define QTB_EXITREASON_FILE   L"\\exit-reason"
+#define QTB_REASON_AGENT_GONE     L"agent-gone"
+#define QTB_REASON_SESSION_CHANGED L"session-changed"
+#define QTB_REASON_STOP_REQUESTED L"stop-requested"
+
 inline const wchar_t* g_logName = L"\\bridge.log";
 inline std::wstring g_logDirOverride;
 

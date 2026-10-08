@@ -3637,6 +3637,27 @@ static void ReportErrorSelf(const char* key)
 
 // --- bridge main --------------------------------------------------------------------------
 
+// RECORD A DEPARTURE WE ASKED FOR (qtb_shared.h). "<pid> <reason>", written next to the bridge's
+// other control surfaces, which its interactive-user token owns. The PID is what makes it evidence:
+// the agent accepts the reason only from the instance that just exited, so a file from an earlier
+// bridge cannot excuse a later real death. Best-effort by design - if the write fails the agent
+// simply sees no reason and reports the exit as before, which is the safe direction: a death
+// wrongly reported is noise, a death silently swallowed is the failure this project refuses.
+static void WriteExitReason(const wchar_t* reason)
+{
+    const std::wstring path = StateDir() + QTB_EXITREASON_FILE;
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+                           CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) { BLog(L"exit-reason: cannot write %s (%lu)", path.c_str(), GetLastError()); return; }
+    char line[128];
+    const int n = _snprintf_s(line, sizeof(line), _TRUNCATE, "%lu %ls\n",
+                              GetCurrentProcessId(), reason);
+    DWORD wr = 0;
+    if (n > 0) WriteFile(h, line, (DWORD)n, &wr, nullptr);
+    CloseHandle(h);
+    BLog(L"exit-reason recorded: %s (pid %lu) - an intended departure, not a death", reason, GetCurrentProcessId());
+}
+
 static int BridgeMain()
 {
     NameThisThread(L"notifhost: bridge-main");
@@ -3667,6 +3688,9 @@ static int BridgeMain()
 
     std::wstring stopf = StateDir() + L"\\stop";
     DeleteFileW(stopf.c_str());       // a stale stop request must not kill a fresh start
+    // Same rule for the exit reason (qtb_shared.h): a reason left by an earlier instance must never
+    // excuse THIS one's death. It is cleared here and written only at a deliberate departure.
+    DeleteFileW((StateDir() + QTB_EXITREASON_FILE).c_str());
     std::wstring hbf = StateDir() + L"\\heartbeat";
     // (Markers exist only from versions before the agent-side hold - ADR-toasts 10; this version writes none.)
     // Crash leftovers from a previous instance are POSITIVE evidence of a suppression gap:
@@ -3862,14 +3886,17 @@ static int BridgeMain()
         try
         {
         ULONGLONG now = GetTickCount64();
+        // ALL THREE OF THESE ARE DEPARTURES WE ASKED FOR, and each records WHY before it leaves
+        // (qtb_shared.h): they keep exit 0 so Task Scheduler does not relaunch them, and the agent
+        // reads the reason instead of calling the exit "a clean exit nobody asked for".
         if (g_agentAlive)
         {
             const DWORD aw = WaitForSingleObject(g_agentAlive, 0);
-            if (aw == WAIT_ABANDONED || aw == WAIT_OBJECT_0) { BLog(L"agent gone (its liveness mutex was released)"); break; }
+            if (aw == WAIT_ABANDONED || aw == WAIT_OBJECT_0) { BLog(L"agent gone (its liveness mutex was released)"); WriteExitReason(QTB_REASON_AGENT_GONE); break; }
         }
-        else if (AgentGone()) { BLog(L"agent gone"); break; }
-        if (WTSGetActiveConsoleSessionId() != g_mySession) { BLog(L"session changed"); break; }
-        if (GetFileAttributesW(stopf.c_str()) != INVALID_FILE_ATTRIBUTES) { BLog(L"stop requested"); break; }
+        else if (AgentGone()) { BLog(L"agent gone"); WriteExitReason(QTB_REASON_AGENT_GONE); break; }
+        if (WTSGetActiveConsoleSessionId() != g_mySession) { BLog(L"session changed"); WriteExitReason(QTB_REASON_SESSION_CHANGED); break; }
+        if (GetFileAttributesW(stopf.c_str()) != INVALID_FILE_ATTRIBUTES) { BLog(L"stop requested"); WriteExitReason(QTB_REASON_STOP_REQUESTED); break; }
 
         // connection maintenance. Down => toasts stay on the window path (fail-open: the listing below
         // publishes `window` for every toast it cannot forward) and the connection is re-established with
