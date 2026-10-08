@@ -70,8 +70,6 @@ flowchart TD
 - `findings/issues.md`: the open P2 (a pending elevation is invisible in seamless) and task #28.
 - `docs/ADR-windows.md` §4 (the secure desktop by mode) and §10 (autologon). This file is the UAC-specific
   record; §4 stays the window-mapping record.
-- Agent commits: 6b5b298, 07fb32d, 878ae5e, 7e3f0b6, 637299e, 1e45b8c, 149c930, 71fa0a4, ea2dad1, f821c06,
-  3cb057e, d3273de, 00a3e24.
 
 ## The decisions in detail
 

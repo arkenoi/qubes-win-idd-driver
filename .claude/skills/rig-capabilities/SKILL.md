@@ -249,10 +249,9 @@ there is completely mute.
 
 ## ONE OWNER PER GUEST, AND IT IS THE ORCHESTRATOR
 
-Same day, same incident. `mgmt/reprovision-usb.sh` was already running and correctly restarting
-win10-u10 on every halt (it holds `/tmp/reprovision-<vm>.lock` for exactly this reason). I did not
-check for it, diagnosed "nobody is restarting it between stages", and armed **two** ad-hoc monitors
-that also shut down and started the guest. One of them issued a reboot while the MSI was mid-flight.
+An orchestrator holds `/tmp/reprovision-<vm>.lock` precisely so a second one does not act on the
+same guest. Two ad-hoc monitors armed beside a running `mgmt/reprovision-usb.sh` once issued a
+reboot while the MSI was mid-flight.
 
 - **Check for the lock and for a running orchestrator before touching a guest**:
   `fuser -v /tmp/reprovision-<vm>.lock` and `ps -eo pid,etime,cmd | grep reprovision`.
@@ -265,11 +264,8 @@ that also shut down and started the guest. One of them issued a reboot while the
 
 ## WHEN GUEST STATE IS IN QUESTION, LOOK AT IT. YOU HAVE THE SCREENSHOT TOOL.
 
-Added 2026-08-30, after the owner asked: *"why i am always telling you what i see on the guest screen
-while you have the screenshot tool yourself?"*
-
-In ONE session the owner had to report, from their own screen, four things I could have captured at
-any moment with `qtest shot`:
+Four things the owner had to report from their own screen in one session, each capturable at any
+moment with `qtest shot`:
 
 | owner told me | what I was doing instead |
 |---|---|

@@ -184,7 +184,12 @@ def split_units(text):
             cur.append(l)
         i += 1
     flush(len(lines), "prose", len(lines))
-    return [u for u in units if u["text"].strip()]
+    out = [u for u in units if u["text"].strip()]
+    for u in out:
+        body = [l for l in u["text"].splitlines() if l.strip() and not re.match(r"^#{1,6} ", l)]
+        if not body:
+            u["kind"] = "heading"      # structure: excluded from classification, carried as context
+    return out
 
 
 def chunk(pairs):
@@ -214,10 +219,16 @@ def outline(text, units):
                "\n".join("  " + h[:120] for h in heads[:60]) or "  (none)"))
 
 
+def classifiable(pairs):
+    """Headings are structure. Asking whether a bare heading is load-bearing wastes a question and
+    invites a verdict that would delete it."""
+    return [(n, u) for n, u in pairs if u["kind"] != "heading"]
+
+
 def build_rubric(pairs, path, extra=None):
     """Terse per-question instructions; the guidance lives once in the state."""
     q = {}
-    for n, _u in pairs:
+    for n, _u in classifiable(pairs):
         q["u%d" % n] = {
             "type": "choice",
             "instructions": {"judge": "Classify UNIT u%d of %s per the state's guidance." % (n, path)},
@@ -330,7 +341,7 @@ def plan_units(a, out, jevdir):
         pairs = list(enumerate(units, 1))
 
         answers = {}
-        for ci, batch in enumerate(chunk(pairs), 1):
+        for ci, batch in enumerate(chunk(classifiable(pairs)), 1):
             extra = None
             if ci == 1:
                 extra = {"file_contributes": {
@@ -356,7 +367,8 @@ def plan_units(a, out, jevdir):
         # whole file as context instead of its neighbours.
         idx = {("u%d" % n): (n, u) for n, u in pairs}
         weak = [qid for qid, v in answers.items()
-                if qid in idx and float(v.get("confidence", 1)) < a.conf_floor]
+                if qid in idx and idx[qid][1]["kind"] != "heading"
+                and float(v.get("confidence", 1)) < a.conf_floor]
         weak.sort(key=lambda q: idx[q][0])
         reasked = {}
         if weak:
@@ -386,6 +398,12 @@ def plan_units(a, out, jevdir):
         rows = []
         for n, u in pairs:
             qid = "u%d" % n
+            if u["kind"] == "heading":
+                rows.append({"unit": qid, "lines": [u["start"], u["end"]], "kind": "heading",
+                             "bytes": len(u["text"]), "class": "structure", "conf": None,
+                             "first_pass": "(not asked: structure)", "final": "(not asked: structure)",
+                             "reasked": False, "head": u["text"].strip().splitlines()[0][:150]})
+                continue
             first = answers.get(qid, {})
             final = reasked.get(qid, first)
             rows.append({"unit": qid, "lines": [u["start"], u["end"]], "kind": u["kind"],
@@ -400,11 +418,13 @@ def plan_units(a, out, jevdir):
         keep = [r for r in rows if r["class"] == "load-bearing"]
         cut = [r for r in rows if r["class"] in ("narrative", "closed", "rant")]
         unclassified = [r for r in rows if not r["class"]]
+        structure = [r for r in rows if r["class"] == "structure"]
         plan = {"file": path, "mode": "units", "bytes": len(text), "units": len(units),
                 "high_stakes": is_high_stakes(path),
                 "file_contributes": verdict_line("file_contributes", fc),
                 "file_contributes_noul": fc.get("noul"),
-                "reasked": len(reasked), "unclassified": len(unclassified), "rows": rows,
+                "reasked": len(reasked), "unclassified": len(unclassified),
+                "structure": len(structure), "rows": rows,
                 "keep_bytes": sum(r["bytes"] for r in keep),
                 "cut_bytes": sum(r["bytes"] for r in cut)}
         with open(pp, "w", encoding="utf-8") as f:
@@ -536,7 +556,7 @@ def cmd_verify(a):
     newn = norm(new)
     # identifiers are what make a rule actionable: paths, log tags, commands, constants
     ident = re.compile(r"[A-Za-z_][A-Za-z0-9_\-/\\.]*\.(?:ps1|py|sh|c|cpp|h|md|json|exe|cmd)"
-                       r"|\b[A-Z][A-Z0-9_]{5,}\b|`[^`]+`")
+                       r"|\b[A-Z][A-Z0-9_]{5,}\b|`[^`\n]+`")
     lost, kept, unmatched = [], 0, []
     units = split_units(old)
     idx = {("u%d" % n): u for n, u in enumerate(units, 1)}

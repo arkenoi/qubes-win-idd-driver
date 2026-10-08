@@ -5,11 +5,7 @@ description: Delegate SEMANTIC judgments to Jev (TypeSafe System One) via tools/
 
 # Jev — the judgment instrument
 
-**Why this exists.** `tools/jev.py` has been in this repo since 2026-09-18 with, as of 2026-09-20,
-**zero callers anywhere outside itself**. The helper was built and then not used: sessions kept
-making semantic calls by hand and writing the verdict straight into `findings/`. Jev itself graded
-that gap as the single most essential missing piece of this project's environment knowledge
-(`missing_entry = jev-helper`, confidence 0.88).
+Every semantic judgment goes to `tools/jev.py`, not into `findings/` by hand.
 
 ## The division of labour — this is the whole rule
 
