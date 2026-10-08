@@ -1777,6 +1777,17 @@ for c in $CELLS; do
 done
 [ "$NEED_ISO" = 1 ] && ensure_release_loop
 for c in $CELLS; do
+  # PER CELL, NOT ONCE. The start-of-campaign check cannot see a pool that fills at cell 11, which is
+  # the case that matters: stopping cleanly between cells leaves every completed cell's verdict
+  # trustworthy, while filling MID-cell leaves a half-provisioned guest and a result nobody can read.
+  # A refusal here is INVALID-POOL for the cell that did not run, and the loop stops - it does not
+  # skip ahead, because the cells after it would be no better off.
+  if ! pool_gate "cell $c"; then
+    say "INVALID-$c  not run: the thin pool is below the floor. Cells completed before this one stand;"
+    say "            the campaign is INCOMPLETE and its coverage receipt must not claim this cell."
+    FAIL=$((FAIL+1)); INVALID=$((INVALID+1))
+    break
+  fi
   case $c in
     # INSTALL CELLS churn the disposable subjects A10/A11 - NEVER win10-tpl/win11-tpl (TARGET
     # MODEL above; matrix-4318: prime-run cannot recreate a template with a bound AppVM). The

@@ -58,9 +58,10 @@ else
 fi
 
 # ---- 3. THE WARNING BAND, which is the half that is easy to forget ------------------------------
-# Between the floor and the warn level a campaign may start but should say it will be tight. Today's
-# measured rig sits here: 131 GB free is above the 60 GB floor and below the 90 GB warn... it is not,
-# and that is the point of checking a value inside the band rather than today's number.
+# Between the floor and the warn level a campaign may start but should say it will be tight. The rig
+# measured 131 GB free today, which is above BOTH the floor and the warn level - so the band is
+# exercised with a value chosen to sit inside it (75), never with today's number. A check pinned to
+# whatever the rig happens to hold stops testing the thing the moment the rig changes.
 out=$(run_gate 75); rc=$?
 if [ "$rc" = 0 ] && printf '%s' "$out" | command grep -q 'POOL WARNING'; then
   ok "warns_in_the_band: 75 GB free starts, and says it is tight"
@@ -89,6 +90,29 @@ echo "$gate_src" | command grep -q 'parked snapshot' \
 echo "$gate_src" | command grep -q "pools\['vm-pool'\]" \
   && ok "reads_the_pool_itself: free space comes from the pool's own usage, not a prediction" \
   || bad "reads_the_pool_itself: the gate computes space some other way"
+
+# ---- 6. THE GATE IS CHECKED PER CELL, NOT ONCE ---------------------------------------------------
+# A start-of-campaign check cannot see a pool that fills at cell 11 - the case that matters. Stopping
+# cleanly BETWEEN cells leaves every completed cell's verdict trustworthy; filling MID-cell leaves a
+# half-provisioned guest and a result nobody can read.
+placed=$(python3 - "$M" <<'PYF'
+import io, sys
+s = io.open(sys.argv[1], encoding='utf-8', errors='replace').read()
+i = s.rindex('for c in $CELLS; do')
+seg = s[i:i+1400]
+g, c = seg.find('pool_gate "cell $c"'), seg.find('case $c in')
+if not (0 < g < c): print('NOT-IN-LOOP'); raise SystemExit
+body = seg[g:c]
+print('OK' if ('break' in body and 'INVALID' in body) else ('NO-BREAK' if 'break' not in body else 'NOT-INVALID'))
+PYF
+)
+case "$placed" in
+  OK) ok "gate_runs_per_cell: each cell is gated before it runs, and a refusal STOPS the campaign as INVALID" ;;
+  NOT-IN-LOOP) bad "gate_runs_per_cell: only the start of the campaign is gated - a pool that fills at cell 11 is unseen" ;;
+  NO-BREAK) bad "gate_runs_per_cell: a refused cell is skipped rather than stopping the run; the cells after it fare no better" ;;
+  *) bad "gate_runs_per_cell: $placed" ;;
+esac
+
 
 echo
 echo "matrix-pool-floor-selftest: $pass passed, $fail failed"
