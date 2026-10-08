@@ -19,7 +19,7 @@
 # no NOISE in normal operation, never a quieter failure.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-SRC="$ROOT/agent/gui-agent"
+SRC="${LOGPOLICY_SRC:-$ROOT/agent/gui-agent}"
 pass=0; fail=0
 ok(){ pass=$((pass+1)); echo "PASS  $*"; }
 bad(){ fail=$((fail+1)); echo "FAIL  $*"; }
@@ -122,6 +122,40 @@ for f in main.c send.c toasthold.c vchan-handlers.c; do
     bad "failures_untouched_$f: LogError $was_e->$now_e, LogWarning $was_w->$now_w - a failure path was demoted or deleted"
   fi
 done
+
+# ---- A RATE IS REPORTED AS A COUNT, NOT AS ONE LINE PER OCCURRENCE ---------------------------
+# Owner, 2026-10-08: "how many of those 'duplication recreated' are there? and should we count and
+# report on threshold instead of reporting every line?" MEASURED first: 10 in a whole day's agent
+# log, 9 benign and 1 geometry-changed, never more than 2 in one agent process.
+# The benign in-place recovery from an input-desktop switch is the system working, so it says so
+# ONCE at INFO and then goes to DEBUG; what earns a warning is the RATE crossing a stated
+# threshold. That preserves exactly the signal the old per-occurrence WARNING existed for - the
+# note at that site said Info "would have put it below the level anything watches, so a RISE ...
+# would have become invisible" - without the noise. The geometry-changed branch is NOT in scope: it
+# is the trigger of an open P2 and stays an ERROR per occurrence.
+CAP="$SRC/capture.c"
+if [ ! -f "$CAP" ]; then bad "recreate_rate: capture.c is missing"; else
+  if command grep -q 'LogWarning("duplication recreated in place' "$CAP"; then
+    bad "recreate_rate: the benign recovery is still a WARNING on every occurrence"
+  else
+    ok "recreate_rate: the benign recovery no longer warns per occurrence"
+  fi
+  command grep -q 'QGA_DUP_RECREATE_WARN_AT' "$CAP" \
+    && ok "recreate_rate_threshold: a named threshold exists rather than a bare number in the branch" \
+    || bad "recreate_rate_threshold: no threshold - a rise would be invisible, which is what the old warning was for"
+  command grep -q 'LogWarning("QGADDARECREATERATE' "$CAP" \
+    && ok "recreate_rate_warns: crossing the threshold still raises a WARNING naming the count" \
+    || bad "recreate_rate_warns: nothing warns on a rise - that IS a loss of signal"
+  command grep -q 'LogError("duplication recreated in place after %u attempt(s) - windows kept - BUT THE GEOMETRY CHANGED' "$CAP" \
+    && ok "geometry_changed_still_error: the open-P2 trigger is untouched and still an ERROR per occurrence" \
+    || bad "geometry_changed_still_error: the geometry-changed branch was demoted or renamed"
+  # the threshold must be justified in the file, not just present
+  # ONE LINE, because the justification is a wrapped comment: my first version grepped for a
+  # phrase that straddles two lines and failed the code for having it.
+  command grep -q 'never more than 2 in any one agent process' "$CAP" \
+    && ok "recreate_rate_justified: the number is tied to a measurement in the comment" \
+    || bad "recreate_rate_justified: the threshold has no stated basis"
+fi
 
 # ---- the harnesses that grade on the demoted lines must say they need the level ---------------
 for h in toast-hold-test.sh crop-before-map.sh; do
