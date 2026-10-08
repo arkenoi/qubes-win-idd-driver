@@ -292,7 +292,9 @@ FI_ARMED_RE = re.compile(r"QGAFAULT-INIT FAULTS ARE ARMED")
 M8_RE = re.compile(r"^M8\|name=([A-Za-z0-9_.-]+)\|pid=(\d+)\|(suspend|resume)=(-?\d+)\|t=(\d\d):(\d\d):(\d\d)(?:\.(\d{1,3}))?(?:\|alive=(\w+))?")
 BROKER_HUNG_RE = re.compile(r"^QGABROKERHUNG ")
 BROKER_DIED_RE = re.compile(r"^QGABROKERDIED .*?pid was (\d+)")
-BROKER_REAP_RE = re.compile(r"^QGABROKERREAP terminating hung de-slice broker pid (\d+)")
+# "terminating THE hung" is what agent/gui-agent/main.c:3484 writes; the article was missing here,
+# so this never matched either. Both spellings accepted for old corpora.
+BROKER_REAP_RE = re.compile(r"^QGABROKERREAP terminating (?:the )?hung de-slice broker pid (\d+)")
 BROKER_BACK_RE = re.compile(r"^QGABROKERBACK ")
 BROKER_REG_RE = re.compile(r"^QGABROKERREG hwnd=0x[0-9a-fA-F]+ slot=(\d+)")
 M8_DETECT_S = 2.5      # docs/DESIGN-rest-zero-capture.md M8: QGABROKERHUNG within 2 s of the next registration (+0.5 s slack)
@@ -960,7 +962,45 @@ def cluster_boots(files):
 
 
 LAUNCH_RE = re.compile(r"^Running process '(.*gui-agent\.exe)' in session (\d+)")
-DEATH_RE = re.compile(r"^Process 'gui-agent\.exe' \(PID (\d+)\) exited with code (0x[0-9a-fA-F]+) without this service asking it to")
+
+# ONE DEATH, TWO WORDINGS - AND THE METRIC WAS ABOUT TO GO SILENT AT THE NEXT RELEASE.
+# agent/watchdog/watchdog.c:498 writes, at HEAD:
+#     QGAWDDEATH '<image>' (PID N) exited with code 0xH without this service asking it to - the agent DIED
+# and HEAD carries NO "Process '..." form at all (grep for '"Process' in watchdog.c returns nothing).
+# Builds up to 4.3.35 wrote the old form, which is what the corpora captured on 2026-10-08 contain.
+# Matching only the old form meant agent_unrequested_deaths and agent_deaths_at_shutdown - BOTH P1,
+# both max 0 - would read 0 for ever on every build carrying the rename, including the one being cut.
+# A run that printed two QGAWDDEATH lines reported agent_unrequested_deaths=0.
+# Both wordings are accepted so an old corpus and a new build are read the same way.
+DEATH_RE = re.compile(r"^(?:QGAWDDEATH '(?P<img>[^']+)'|Process '(?P<imgold>gui-agent\.exe)') \(PID (?P<pid>\d+)\) exited with code (?P<code>0x[0-9a-fA-F]+) without this service asking it to")   # GUARD:deathwording DEFECT: DEATH_RE = re.compile(r"^Process '(?P<imgold>gui-agent\.exe)'(?P<img>) \(PID (?P<pid>\d+)\) exited with code (?P<code>0x[0-9a-fA-F]+) without this service asking it to")
+
+# THE SECOND, INDEPENDENT BREAK: the caller gates on the LOGGING FUNCTION. The old wording was written
+# from WatchdogThread; HEAD writes the decision from JudgeAgentExit, so a corrected regex alone would
+# still never be reached. Both names are accepted, and WATCHDOG_DECISION_TAGS below is what stops the
+# next rename doing this again.
+WATCHDOG_DEATH_FUNCS = ("WatchdogThread", "JudgeAgentExit")
+
+# EVERY DECISION TAG THE WATCHDOG CAN LOG, and what this gate does with it. A tag that is neither
+# matched by a regex above nor listed here as deliberately-not-a-death is a VOCABULARY DRIFT: the
+# producer learned a word the gate does not know, which is exactly how two P1 metrics became
+# unfailable. tools/tests/log-sweep-selftest.sh asserts this list against watchdog.c and FAILS when
+# they diverge, so the drift is caught at commit rather than by an audit months later.
+WATCHDOG_NOT_A_DEATH_TAGS = (
+    "QGAWDREQUESTED",            # exited on request - not a death, by the watchdog's own words
+    "QGAWDSESSIONEND",           # left with its session, notice acknowledged
+    "QGAWDSESSIONEND-UNNOTICED", # left with its session, notice never seen
+    "QGAWDSESSIONEND-REAPED",    # finished its orderly exit and was then reaped
+    "QGAWDSESSIONEND-FORCED",    # ended by the system after acknowledging the notice
+    "QGAWDNOTICEMISSED",         # ended by the system, notice missed
+    "QGAWDRECONNECT",            # exited to reconnect to a gui-daemon that went away
+    "QGAWDNOGUIDOMAIN",          # no GUI domain for this qube; not relaunched
+    "QGAWDFOREIGN",              # running but not started by this service
+    "QGAWDSQUAT", "QGAWDLAUNCH", "QGAWDNOLAUNCH", "QGAWDFAIL", "QGAWDSESSIONSTUCK",
+    # Found by the drift check itself, before it was finished - neither was in the first draft of
+    # this list, which is the whole argument for having the check rather than a hand-kept list.
+    "QGAWDSESSIONCONTINUES",     # a session end was cancelled; launches into it are allowed again
+    "QGAWDTRIGGER",              # session arrival bookkeeping: launch, or a reason not to
+)
 GOINGDOWN_RE = re.compile(r"^Process 'gui-agent\.exe' \(PID (\d+)\) exited with code (0x[0-9a-fA-F]+) while the system is going down")
 ASKED_RE = re.compile(r"^service stopping: asked 'gui-agent\.exe' \(PID (\d+)\) to exit")
 GONE_RE = re.compile(r"^service stopping: 'gui-agent\.exe' \(PID (\d+)\) is gone, exit code (0x[0-9a-fA-F]+)")
@@ -1136,10 +1176,12 @@ def build_structure(files, boots, declared=None):
         for l in wd.lines:
             if l.func == "StartTargetProcess" and LAUNCH_RE.match(l.msg):
                 launches.append(l)
-            elif l.func == "WatchdogThread":
+            elif l.func in WATCHDOG_DEATH_FUNCS:   # GUARD:deathfunc DEFECT: elif l.func == "WatchdogThread":
                 m = DEATH_RE.match(l.msg)
                 if m:
-                    deaths.append({"pid": int(m.group(1)), "code": m.group(2).lower(), "ts": l.ts, "line": l, "kind": "unrequested"})
+                    deaths.append({"pid": int(m.group("pid")), "code": m.group("code").lower(),
+                                   "image": m.group("img") or m.group("imgold"),
+                                   "ts": l.ts, "line": l, "kind": "unrequested"})
                     continue
                 m = GOINGDOWN_RE.match(l.msg)
                 if m:

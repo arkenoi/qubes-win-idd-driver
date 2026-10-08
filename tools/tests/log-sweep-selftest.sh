@@ -831,5 +831,90 @@ t35 203 'Task Scheduler failed to launch action "powershell.exe" in instance "{x
 t35 201 'Task Scheduler successfully completed task "\QubesPvNic" , action "powershell.exe" with return code 1' True 'a 201 with a non-zero result still counts'
 t35 203 'Task Scheduler failed to launch action in task "\NotOurs". Additional Data: Error Value: 2.' False 'a task that is not ours is not ours'
 
+# ---- VOCABULARY DRIFT: the gate must know every word the producer can say ----------------------
+# THE DEFECT THIS EXISTS FOR, measured 2026-10-08. agent/watchdog/watchdog.c:498 writes
+#   QGAWDDEATH '<image>' (PID N) exited with code 0xH without this service asking it to
+# while DEATH_RE matched only the older "Process '<image>' (PID N) ..." form, and the call site was
+# gated on l.func == "WatchdogThread" while HEAD logs the decision from JudgeAgentExit. Two P1
+# metrics with max 0 - agent_unrequested_deaths and agent_deaths_at_shutdown - were therefore
+# STRUCTURALLY ZERO on any build carrying the rename, and a run that printed two QGAWDDEATH lines
+# reported zero deaths. Nothing failed: the producer learned a word the gate did not know.
+#
+# Patching the regexes fixes today; THIS stops tomorrow. Every QGAWD* tag watchdog.c can log must be
+# either matched by DEATH_RE or listed in WATCHDOG_NOT_A_DEATH_TAGS, so a new or reworded tag fails
+# here at commit instead of silently pinning a metric to zero. It found two tags missing from the
+# first draft of that list (QGAWDSESSIONCONTINUES, QGAWDTRIGGER).
+drift=$(python3 - "$SRC" "$ROOT/agent/watchdog/watchdog.c" <<'PYF'
+import io, re, sys
+sweep = io.open(sys.argv[1], encoding='utf-8', errors='replace').read()
+try:
+    wc = io.open(sys.argv[2], encoding='utf-8', errors='replace').read()
+except OSError:
+    print("SKIP watchdog.c not readable from here"); raise SystemExit
+produced = set(re.findall(r'"(QGAWD[A-Z-]+)', wc))
+if not produced:
+    print("FAIL no QGAWD tags found in watchdog.c - the reconciliation has nothing to check"); raise SystemExit
+listed = set(re.findall(r'"(QGAWD[A-Z-]+)"', sweep))
+unclassified = sorted(t for t in produced if t != "QGAWDDEATH" and t not in listed)
+stale = sorted(t for t in listed if t not in produced and t != "QGAWDDEATH")
+if unclassified: print("FAIL unclassified tag(s) the gate does not know: " + ", ".join(unclassified))
+elif stale:      print("WARN listed but no longer produced: " + ", ".join(stale))
+else:            print("OK %d tags all classified" % len(produced))
+PYF
+)
+case "$drift" in
+  OK*|SKIP*|WARN*) ok "drift: $drift" ;;
+  *)               bad "drift: $drift" ;;
+esac
+
+# THE DEATH METRIC MUST SEE BOTH WORDINGS, checked against the REGEX itself rather than a fixture -
+# a fixture written to fit the regex is how these checks became decoration in the first place.
+wording=$(python3 - "$SRC" <<'PYF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("ls", sys.argv[1]); m = importlib.util.module_from_spec(spec)
+sys.modules["ls"] = m
+try: spec.loader.exec_module(m)
+except SystemExit: pass
+head = "QGAWDDEATH 'gui-agent.exe' (PID 7360) exited with code 0x40010004 without this service asking it to - the agent DIED"
+old  = "Process 'gui-agent.exe' (PID 5320) exited with code 0x40010004 without this service asking it to - the agent DIED"
+notd = "QGAWDREQUESTED 'gui-agent.exe' (PID 100) exited on request (0x0) - not a death, nothing relaunched"
+res = []
+if not m.DEATH_RE.match(head): res.append("HEAD wording (QGAWDDEATH) NOT matched")
+if not m.DEATH_RE.match(old):  res.append("pre-4.3.36 wording NOT matched")
+if m.DEATH_RE.match(notd):     res.append("QGAWDREQUESTED wrongly counted as a death")
+if "JudgeAgentExit" not in getattr(m, "WATCHDOG_DEATH_FUNCS", ()): res.append("JudgeAgentExit not in WATCHDOG_DEATH_FUNCS")
+print("OK" if not res else "FAIL " + "; ".join(res))
+PYF
+)
+case "$wording" in
+  OK) ok "death wording: HEAD and pre-4.3.36 forms both match, QGAWDREQUESTED does not, JudgeAgentExit is gated in" ;;
+  *)  bad "death wording: $wording" ;;
+esac
+
+# AND BOTH HALVES MUST BE SEEN TO FAIL. The knobs put the shipped defect back, one line each.
+for kn in deathwording deathfunc; do
+  K=$(knob "$kn") || { bad "knob $kn could not be built"; continue; }
+  r=$(python3 - "$K" "$kn" <<'PYF'
+import importlib.util, sys, io
+spec = importlib.util.spec_from_file_location("lsk", sys.argv[1]); m = importlib.util.module_from_spec(spec)
+sys.modules["lsk"] = m
+try: spec.loader.exec_module(m)
+except SystemExit: pass
+head = "QGAWDDEATH 'gui-agent.exe' (PID 7360) exited with code 0x40010004 without this service asking it to - the agent DIED"
+if sys.argv[2] == "deathwording":
+    print("BROKEN" if not m.DEATH_RE.match(head) else "STILL-SEES")
+else:
+    # THE KNOB REWRITES THE CALL SITE, NOT THE CONSTANT. A first version of this probe asked whether
+    # JudgeAgentExit was still in WATCHDOG_DEATH_FUNCS - which the knob never touches - so it reported
+    # STILL-SEES against a correctly applied defect. Read the source the knob produced.
+    src = io.open(sys.argv[1], encoding="utf-8", errors="replace").read()
+    gated = "elif l.func in WATCHDOG_DEATH_FUNCS:" in src
+    print("BROKEN" if not gated else "STILL-SEES")
+PYF
+)
+  [ "$r" = BROKEN ] && ok "knob $kn: with the defect back, the gate goes blind to the shipped wording" \
+                    || bad "knob $kn: the defect did not blind the gate ($r) - the check is decoration"
+done
+
 echo "--- $pass passed, $fail failed; fixtures/outputs in $T"
 [ "$fail" = 0 ] && exit 0 || exit 1
