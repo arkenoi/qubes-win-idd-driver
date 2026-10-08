@@ -153,12 +153,31 @@ def event_wanted(log, eid, provider, msg):
     if "LocalSessionManager" in log:
         return eid in (21, 22, 23, 24, 25, 54)
     if "TaskScheduler" in log:
-        return eid in (201, 203) and bool(OUR_TASKS_RE.search(msg))
+        if eid not in (201, 203) or not OUR_TASKS_RE.search(msg):
+            return False
+        # A LAUNCH THE SYSTEM REFUSED BECAUSE IT WAS SHUTTING DOWN IS NOT A TASK FAILURE. Task
+        # Scheduler reports id=203 "failed to launch action" with an Error Value, and when that
+        # value is ERROR_SHUTDOWN_IN_PROGRESS the scheduler is saying the action never started
+        # because the machine was going down - which is the one case guest/qwt-report-death.ps1
+        # already accepts on its own (QwtShutdownResultCodes), while this event-level count did not.
+        # MEASURED on win11r-err, 2026-10-08: \QwtDeathReporter, id=203, "Error Value: 2147943515"
+        # = 0x8007045B, on a CLEAN cycle - one of the 48 undeclared error lines, for a shutdown
+        # doing exactly what it should. The codes are matched in both notations because the event
+        # text carries the decimal and our own records carry the hex.
+        if eid == 203 and SHUTDOWN_LAUNCH_REFUSAL_RE.search(msg):
+            return False
+        return True
     return False
 
 # Two prefix shapes, both accepted: since 2026-10-07 the numbers are PID:TID (one log file per
 # module, so a line has to say which process wrote it), and before that there was one number and
 # it was the TID. Guests still hold logs in the old shape, so dropping it would blind the gate.
+# ERROR_SHUTDOWN_IN_PROGRESS (win32 1115) and ERROR_SHUTDOWN_CLUSTER_INVALID (1291), the two the
+# scheduler has been seen to report while a guest goes down, in the decimal the event text uses and
+# the hex our own records use. Anchored to the event's "Error Value" field so a code appearing in a
+# task NAME or a message body cannot excuse a real launch failure.
+SHUTDOWN_LAUNCH_REFUSAL_RE = re.compile(r"(?i)Error Value:\s*(?:2147943515|2147943691|0x8007045[bB]|0x8007050[bB])\b")
+
 WINUTILS_RE = re.compile(r"^\ufeff?\[(\d{8})\.(\d{6})\.(\d{3})-(\d+)(?::(\d+))?-([IWEDV])\] (?:([A-Za-z0-9_]+): )?(.*)$")
 BLOG_RE = re.compile(r"^\ufeff?(\d\d):(\d\d):(\d\d) (.*)$")
 INSTALLER_RE = re.compile(r"^\ufeff?(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d) \[(INFO|WARN|ERROR|FATAL|DEBUG)\] (.*)$")

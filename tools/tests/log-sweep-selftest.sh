@@ -809,5 +809,27 @@ t34 'LIST trig=retry n=3 new=0 ms=12' I
 t34 '/qubes-ip absent, the applier gave up' W
 t34 'the listener was disconnected' W
 
+# ---- T35 a launch the system refused because it was SHUTTING DOWN is not a task failure ------
+# MEASURED on win11r-err 2026-10-08, on a CLEAN cycle: id=203, task \QwtDeathReporter, "Error
+# Value: 2147943515" = 0x8007045B = ERROR_SHUTDOWN_IN_PROGRESS - the scheduler saying the action
+# never started because the machine was going down. guest/qwt-report-death.ps1 already accepts that
+# code on its own; this event-level count did not, so a shutdown doing exactly the right thing
+# contributed an undeclared error line. A REAL launch failure must still count, which is checked.
+t35(){ # $1=eid $2=message $3=expected(True|False) $4=label
+  got=$(python3 - "$ROOT/tools/log-sweep.py" "$1" "$2" <<'PY35'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("ls", sys.argv[1])
+ls = importlib.util.module_from_spec(spec); spec.loader.exec_module(ls)
+print(ls.event_wanted("Microsoft-Windows-TaskScheduler/Operational", int(sys.argv[2]),
+                      "Microsoft-Windows-TaskScheduler", sys.argv[3]))
+PY35
+)
+  if [ "$got" = "$3" ]; then ok "T35 $4"; else bad "T35 $4 -> $got (want $3)"; fi
+}
+t35 203 'Task Scheduler failed to launch action "powershell.exe" in instance "{x}" of task "\QwtDeathReporter". Additional Data: Error Value: 2147943515.' False 'a 203 refused for shutdown is not a failure'
+t35 203 'Task Scheduler failed to launch action "powershell.exe" in instance "{x}" of task "\QwtDeathReporter". Additional Data: Error Value: 2.' True 'a REAL 203 launch failure still counts'
+t35 201 'Task Scheduler successfully completed task "\QubesPvNic" , action "powershell.exe" with return code 1' True 'a 201 with a non-zero result still counts'
+t35 203 'Task Scheduler failed to launch action in task "\NotOurs". Additional Data: Error Value: 2.' False 'a task that is not ours is not ours'
+
 echo "--- $pass passed, $fail failed; fixtures/outputs in $T"
 [ "$fail" = 0 ] && exit 0 || exit 1
