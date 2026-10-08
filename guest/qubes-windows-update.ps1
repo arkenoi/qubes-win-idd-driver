@@ -161,6 +161,10 @@ if ($Scheduled -and $Action -eq 'scan') {
 # not_actionable is declared here so it always exists and always serialises: it is the DURABLE
 # record of what a previous pass proved the guest cannot action, and it has to survive a scan,
 # which writes an empty result. (GUARD:scanactioned / GUARD:prevstatus.)
+# A DROPPED LOG LINE IS A LOST ERROR, so the drops are COUNTED and reported (log_dropped in the
+# status). Log used to swallow a failed append entirely - see the function below.
+$script:LogDropped = 0
+$script:LogDropFirst = ''
 $script:St = [ordered]@{ action=$Action; phase='init'; ts=$null; owner_pid=0; owner_pid_start=''; count=0; available=@();
                          downloading=$null; installing=$null; result=@(); reboot_needed=$false; error=$null; recovered='';
                          not_actionable=@(); satisfied=@() }
@@ -178,6 +182,13 @@ $script:St = [ordered]@{ action=$Action; phase='init'; ts=$null; owner_pid=0; ow
 # status write must never be able to kill the install it is reporting on. (# GUARD:saveatomic)
 function Save {
     $script:St.ts = (Get-Date).ToString('s')
+    # THE LOG'S OWN LOSSES TRAVEL WITH THE STATUS. dom0 reads this file; if lines were dropped, the
+    # log it would be told to consult is incomplete, and that must be visible rather than inferred
+    # from a gap.
+    if ($script:LogDropped -gt 0) {
+        $script:St.log_dropped = $script:LogDropped
+        $script:St.log_drop_reason = $script:LogDropFirst
+    }
     $json = ($script:St | ConvertTo-Json -Depth 6)
     $tmp  = "$StatusFile.tmp"
     $err  = $null
@@ -462,7 +473,34 @@ function Test-RowKey($row, [string]$key) {
 function Log($m){
   $line = (Get-Date -Format 'HH:mm:ss')+' '+$m
   Write-Host $line
-  try { Add-Content -LiteralPath (Join-Path $WorkDir 'agent.log') -Value $line -EA SilentlyContinue } catch {}
+  # A DROPPED LOG LINE IS A LOST ERROR, AND THIS USED TO DROP THEM IN SILENCE. The old body was
+  #     try { Add-Content ... -EA SilentlyContinue } catch {}
+  # - a suppressed error inside an empty catch, so a failed append left no trace in the file, on the
+  # console, or in the status. MEASURED 2026-10-08 with an unwritable WorkDir: the call does not
+  # throw, writes nothing, and reports nothing.
+  # IT HAPPENED FOR REAL. On WIN11-upgrade and win11de-tup the pass's agent.log was missing
+  # "relay started: pid ..." and "proxy up: ..." although it plainly reached Sync-Revocation, which
+  # runs immediately AFTER Ensure-Proxy and only if Ensure-Proxy returned - and Ensure-Proxy's
+  # success path emits both. Add-Content takes a write lock, and the updater deploy was writing in
+  # that same second. Those two absences then became evidence for a defect that was never there.
+  # Save (above) has retried its write since it was written; this never did.
+  # Write-Host alone is not a record: under Task Scheduler there is no console to keep it.
+  $p = Join-Path $WorkDir 'agent.log'
+  # ONCE THE LOG IS PLAINLY GONE, STOP PAYING FOR IT. Retrying every line costs ~375 ms each, so a
+  # long pass against an unwritable log would spend minutes retrying a write that cannot work. After
+  # three drops the retry is skipped and the line is counted directly: the loss is still reported,
+  # the pass is not slowed down.
+  $tries = if ($script:LogDropped -ge 3) { 1 } else { 5 }
+  for ($i = 0; $i -lt $tries; $i++) {
+    try { Add-Content -LiteralPath $p -Value $line -EA Stop; return }
+    catch {
+      if (-not $script:LogDropFirst) { $script:LogDropFirst = "$($_.Exception.Message)" }
+      Start-Sleep -Milliseconds (25 * ($i + 1))
+    }
+  }
+  # Still unwritable after five tries: COUNT it. Save reports the count, so an incomplete log is a
+  # stated fact rather than a gap someone has to notice.
+  $script:LogDropped++
 }
 # The start gate (WU-PREVPASS-GATE) ran before Log existed; what it decided about a cut-off earlier pass goes on the record here.
 if ($script:St.recovered) { Log ("PREVPASS " + $script:St.recovered) }
