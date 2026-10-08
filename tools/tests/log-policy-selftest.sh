@@ -239,6 +239,36 @@ if [ -z "$BS" ]; then bad "broker_down_yields: BrokerSupervise could not be isol
     || ok "broker_down_clock_kept: the down-clock keeps running, so the true duration is reported later"
 fi
 
+# ---- A SECURE DESKTOP IS CLASSIFIED, NOT JUST REPORTED ---------------------------------------
+# Owner, 2026-10-08: "if it sits on the uac prompt we need to know what path brought us there and
+# how to handle it properly." The desktop NAME is "Winlogon" for the sign-in screen, the lock screen
+# AND a UAC prompt alike, so the name alone cannot say which - and the right answer differs:
+#   sign-in screen  -> arm autologon (what the existing advice says)
+#   lock screen     -> a user locked it
+#   consent.exe up  -> A UAC PROMPT IS ON THE SECURE DESKTOP, which this agent prevents by writing
+#                      PromptOnSecureDesktop=0. Being here with consent.exe up means that value was
+#                      NOT honoured - OUR defect - and telling the user to "arm autologon" would be
+#                      wrong advice for it.
+command grep -q 'QGAUACSECURE' "$SRC/main.c" \
+  && ok "secure_desktop_uac_is_its_own_error: a UAC prompt on the secure desktop is reported as our defect" \
+  || bad "secure_desktop_uac_is_its_own_error: a UAC prompt here is reported as a sign-in screen"
+command grep -q 'PATH: %s' "$SRC/main.c" \
+  && ok "secure_desktop_names_the_path: QGADESKSTUCK says WHICH secure desktop it is stuck on" \
+  || bad "secure_desktop_names_the_path: only the desktop name is logged, which cannot distinguish them"
+# the classifier must be implemented, not invented: a call with no definition does not compile, and
+# the first version of this change had exactly that.
+defs=$(command grep -c 'static BOOL ProcessRunningByName' "$SRC/main.c")
+uses=$(command grep -c 'ProcessRunningByName(L' "$SRC/main.c")
+if [ "${defs:-0}" -ge 1 ] && [ "${uses:-0}" -ge 1 ]; then
+  ok "secure_desktop_classifier_defined: ProcessRunningByName is defined ($defs) and used ($uses)"
+else
+  bad "secure_desktop_classifier_defined: defined=$defs used=$uses - an undefined call does not compile"
+fi
+# and the value it read is printed, so a reader never has to guess which case it was
+command grep -q 'PromptOnSecureDesktop=%s' "$SRC/main.c" \
+  && ok "secure_desktop_prints_the_policy: the PromptOnSecureDesktop value in force is reported" \
+  || bad "secure_desktop_prints_the_policy: the policy value is not reported"
+
 # ---- the harnesses that grade on the demoted lines must say they need the level ---------------
 for h in toast-hold-test.sh crop-before-map.sh; do
   f="$ROOT/mgmt/harness/$h"
