@@ -147,5 +147,21 @@ Check "pass: a genuine scan failure is STILL non-zero (exit 75, availability unk
 Check "pass: a SCHEDULED SCAN also yields on a HELD mutex (unchanged, checked so it cannot drift)" `
       ($pass -match '(?s)if \(-not \$script:HaveMutex\).{0,400}?\$Scheduled -and \$Action -eq ''scan''.{0,400}?exit 0')
 
+# 6. ONE EVENT, ONE USER-FACING MESSAGE (owner 2026-10-08: user-facing error lines are top
+#    priority). wu-update.ps1 states the contract itself - "A REFUSAL IS NOT A DEATH (WU-HOLDER).
+#    The pass stood down before it owned anything and recorded why - so no DIED line" - and renders
+#    "update refused by the qube: <message>" to dom0 from the refusal record. Meanwhile the refusal
+#    exited 1, Task Scheduler recorded a non-zero result, and qwt-report-death.ps1 sent the user
+#    "The Windows Update install task failed". TWO messages for one event, contradicting each other.
+#    A refusal that HAS been recorded exits 0; one that could NOT be recorded still exits non-zero,
+#    because then the exit code is the only signal left. Neither case is silent.
+Check "pass: Write-Refusal reports whether the record was written" ($wr.Success -and $wr.Value -match 'return \$true' -and $wr.Value -match 'return \$false')
+foreach ($site in @('state-unknown', 'mutex-abandoned', 'mutex-held')) {
+    Check "pass: a recorded '$site' refusal exits 0 and an unrecorded one exits 1" `
+          ($pass -match ("(?s)Write-Refusal '" + $site + "'.{0,400}?\) \{ exit 0 \} else \{ exit 1 \}"))
+}
+# AND THE RECORD MUST STILL BE WRITTEN FIRST - exiting 0 without it would be silence.
+Check "pass: no refusal exits 0 without having written the record" ($pass -notmatch "(?s)Write-Refusal '[a-z-]+'[^\n]*\n\s*exit 0")
+
 if ($fail -gt 0) { Write-Output "--- $fail FAILED"; exit 1 }
 Write-Output '--- contract kept'

@@ -244,6 +244,15 @@ function Test-WuOwnerAlive([int]$ownerPid, [string]$ownerStart) {
 # 2026-10-02, rz31 on GWeck's environment: the boot scan's relay, mid-search). Each refusal now also leaves this record next to the
 # status - never IN it, the status belongs to the holder - and the handler renders it (for 'mutex-held' it waits for the holder and
 # starts this pass again).
+# RETURNS $true WHEN THE RECORD WAS WRITTEN, because that record is the channel dom0 reads and the
+# caller's exit code now depends on it. wu-update.ps1 states the contract in its own words - "A
+# REFUSAL IS NOT A DEATH (WU-HOLDER). The pass stood down before it owned anything and recorded why
+# - so no DIED line" - and renders "update refused by the qube: <message>". Meanwhile the refusal
+# exited 1, Task Scheduler recorded a non-zero result, and qwt-report-death.ps1 sent the user "The
+# Windows Update install task failed": TWO user-facing messages for one event, contradicting each
+# other, which is the no-double-notification rule broken by our own two halves disagreeing.
+# So a refusal that HAS been recorded exits 0 - dom0 is told by the record - and a refusal that
+# could NOT be recorded still exits non-zero, because then the exit code is the only signal left.
 function Write-Refusal([string]$reason, [string]$message) {
     Write-Host $message
     try {
@@ -256,7 +265,9 @@ function Write-Refusal([string]$reason, [string]$message) {
         $f = Join-Path (Split-Path -Parent $StatusFile) 'update-refusal.json'
         ($rec | ConvertTo-Json -Compress) | Set-Content -LiteralPath "$f.tmp" -Encoding UTF8
         Move-Item -LiteralPath "$f.tmp" -Destination $f -Force
+        return $true
     } catch { Write-Host "QWTUPDREFUSALUNRECORDED: $($_.Exception.Message)" }
+    return $false
 }
 
 # ---- WU-PREVPASS-GATE-BEGIN   (tools/tests/wu-prevpass-gate-test.ps1 runs this region)
@@ -335,8 +346,9 @@ if ($wuPrev -and $wuPrev.phase -and ($WU_TERMINAL_PHASES -notcontains $wuPrev.ph
                 $m = ("QWTUPDSTATEUNKNOWN: $what in THIS boot - its Windows servicing may still be running; refusing to start a $Action " +
                       'on top of it, nothing was changed. Restart this qube once, then update again (a restart has been requested).' +
                       $recordErr)
-                Write-Refusal 'state-unknown' $m
-                exit 1   # GUARD:thisboot
+                # Recorded -> dom0 renders it and the task did not fail; unrecorded -> the exit code
+                # is the only signal left. GUARD:thisboot
+                if (Write-Refusal 'state-unknown' $m) { exit 0 } else { exit 1 }
             }
         }
     }
@@ -372,10 +384,9 @@ try {
                     "a scan only reads, so it has nothing to refuse. The next scheduled scan takes the mutex cleanly.")
         exit 0
     }
-    Write-Refusal 'mutex-abandoned' ("QWTUPDMUTEXABANDONED: a previous update operation was terminated without releasing " +
+    if (Write-Refusal 'mutex-abandoned' ("QWTUPDMUTEXABANDONED: a previous update operation was terminated without releasing " +
                 "Global\QubesWindowsUpdate, so what it was doing is unknown; refusing to start a $Action " +
-                "on top of it, nothing was changed.")
-    exit 1
+                "on top of it, nothing was changed.")) { exit 0 } else { exit 1 }
 }
 if (-not $script:HaveMutex) {
     if ($Scheduled -and $Action -eq 'scan') {
@@ -384,10 +395,9 @@ if (-not $script:HaveMutex) {
         Write-Host "QWTUPDMUTEXHELD: another Qubes update operation is in progress - skipping this scheduled scan"
         exit 0
     }
-    Write-Refusal 'mutex-held' ("QWTUPDMUTEXHELD: another Qubes update operation is in progress - refusing to run this " +
+    if (Write-Refusal 'mutex-held' ("QWTUPDMUTEXHELD: another Qubes update operation is in progress - refusing to run this " +
                 "$Action under it; nothing was changed. Let it finish (schtasks /query /tn QubesWindowsUpdateRun /v) " +
-                "or end it (schtasks /end /tn <task>) and retry.")
-    exit 1
+                "or end it (schtasks /end /tn <task>) and retry.")) { exit 0 } else { exit 1 }
 }
 # OWNERSHIP ON THE RECORD, IMMEDIATELY - before any work, so a kill from here on is detectable by
 # the gate above on the next start.
