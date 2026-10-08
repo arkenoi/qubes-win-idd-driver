@@ -165,6 +165,11 @@ FAMILY_BY_NAME = [
     (re.compile(r"(?i)^events\.txt$"), "events"),
     (re.compile(r"(?i)^(network-setup|relocate-dir|set-gui-mode|file-receiver|qwtng-netsetup|disable-autosleep|qubes-updates-relay)-.*\.log$"), "winutils"),
     (re.compile(r"(?i)^bind-dirs.*\.(log|txt)$"), "binddirs"),
+    # The PowerShell qrexec services log through core-agent/src/qubes-rpc-services/log.ps1, one
+    # file per script per day: "<script>.ps1-YYYYMMDD.log". Their prefix now carries a pid, so
+    # WINUTILS_RE matches and the content sniffer would reach the same answer - but by NAME is
+    # deterministic, where sniffing depends on the first five lines of whichever file is read.
+    (re.compile(r"(?i)^[A-Za-z0-9._-]+\.ps1-\d{8}\.log$"), "winutils"),
     (re.compile(r"(?i)^qwt-fi-.*\.txt$"), "marker"),
 ]
 WINUTILS_FAMILIES = {"agent", "watchdog", "qrexec", "qubesdb", "winutils"}

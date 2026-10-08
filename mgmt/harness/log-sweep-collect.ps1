@@ -222,6 +222,12 @@ $verdictFirst = { param($f)
         '^QubesPvNic\.log$'           { 5 }
         '^QubesNetSetup\.log$'        { 5 }
         '^QubesIDD-diag\.log$'        { 5 }
+        # VMExec's audit moved out of C:\ProgramData\Qubes and into LogDir, where rank 9 stops
+        # meaning "always collected" and starts contesting the whole module population - the exact
+        # mechanism described above, which once dropped qwt-deaths.log. This audit is how a non-zero
+        # step code in a dom0-driven update is attributed to the step that produced it; dom0 keeps
+        # code = max(all step codes) and does not say which step it was.
+        '^(VMExec\.ps1-\d{8}|vmexec)\.log$' { 5 }
         '^qubes-win-idd-setup\.log$'  { 5 }
         '^qubes-de-firstlogon\.log$'  { 5 }
         '^relocate-dir-'               { 5 }

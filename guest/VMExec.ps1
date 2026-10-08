@@ -64,11 +64,36 @@ $cmd = $decoded -join " "
 # Audit every VMExec call and the code we hand back. dom0 keeps code = max(all step codes), so a
 # single prep step returning nonzero turns a successful update into an ERROR verdict, and dom0's
 # output does not say which step it was. This log does.
+#
+# IT GOES IN THE ONE COMMON LOG LOCATION. It used to write C:\ProgramData\Qubes\vmexec.log,
+# outside LogDir, which only the log sweep's stray-path workaround collected - and the owner's rule
+# is "NOTHING should write log outside. we have one common log location!". The dot-source guard is
+# get-appmenus.ps1's, byte for byte: log.ps1 sits beside this script, and %QUBES_TOOLS% is not
+# depended on for finding it.
+#
+# LogAppendLine, NOT LogInfo: Log gates on `$level -le $qwtLogLevel`, so LogInfo would DROP this
+# line on a guest configured below INFO, while the write it replaces was unconditional.
+# LogAppendLine bypasses only that filter and keeps the bounded retry and the loud report of a line
+# it could not write.
+$logPs1 = Join-Path $PSScriptRoot 'log.ps1'
+if (-not (Test-Path -LiteralPath $logPs1) -and $env:QUBES_TOOLS) {
+    $logPs1 = Join-Path $env:QUBES_TOOLS 'qubes-rpc-services\log.ps1'
+}
+if (Test-Path -LiteralPath $logPs1) {
+    try { . $logPs1 } catch { }
+}
 function VMExecAudit([string]$what) {
     try {
         $who = try { [Security.Principal.WindowsIdentity]::GetCurrent().Name } catch { '?' }
-        Add-Content -LiteralPath 'C:\ProgramData\Qubes\vmexec.log' -Encoding ASCII -ErrorAction SilentlyContinue `
-            -Value ("{0} [{1}] {2}" -f (Get-Date -Format 'HH:mm:ss'), $who, $what)
+        $line = '[{0}-{1}-I] VMExecAudit: [{2}] {3}' -f (Get-Date -Format 'yyyyMMdd.HHmmss.fff'), $PID, $who, $what
+        if (Get-Command LogAppendLine -ErrorAction SilentlyContinue) {
+            if (-not $global:qwtLogPath) { LogStart }
+            LogAppendLine $line
+        } else {
+            # log.ps1 is not beside us and %QUBES_TOOLS% is unset: an audit line is not worth
+            # failing the qrexec call for, but it must not vanish without trace either.
+            [Console]::Error.WriteLine("VMExec: no logger available, audit line not recorded: $line")
+        }
     } catch { }
 }
 
