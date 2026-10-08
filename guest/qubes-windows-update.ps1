@@ -347,8 +347,16 @@ if ($wuPrev -and $wuPrev.phase -and ($WU_TERMINAL_PHASES -notcontains $wuPrev.ph
                       'on top of it, nothing was changed. Restart this qube once, then update again (a restart has been requested).' +
                       $recordErr)
                 # Recorded -> dom0 renders it and the task did not fail; unrecorded -> the exit code
-                # is the only signal left. GUARD:thisboot
-                if (Write-Refusal 'state-unknown' $m) { exit 0 } else { exit 1 }
+                # is the only signal left.
+                # THE MARKER BELONGS ON THE LINE THE KNOB MUST DEFEAT, and for a while it did not.
+                # tools/tests/wu-prevpass-gate-test.ps1's Knob() matches "# GUARD:<name>$" - the marker
+                # must END the line - and replaces that whole line to inject the defect. 8c9782cc moved
+                # this marker onto the COMMENT above, where two things broke at once: the regex stopped
+                # matching (the knob reported "expected exactly 1 '# GUARD:thisboot' line, found 0"), and
+                # even a match would have replaced a comment with a comment and injected nothing. The
+                # 'nothisboot' leg was decoration from then on - and 8c9782cc is the commit that fixed
+                # the scan refusal this guard sits next to, so the fix disabled its sibling's proof.
+                if (Write-Refusal 'state-unknown' $m) { exit 0 } else { exit 1 }   # GUARD:thisboot
             }
         }
     }
