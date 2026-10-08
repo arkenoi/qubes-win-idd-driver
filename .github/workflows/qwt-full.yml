@@ -263,6 +263,26 @@ jobs:
           if ($src -notmatch '%03d-%d:%d-%c') { throw 'the pid is missing from the line prefix after patch' }
           if ($src -notmatch 'FILE_FLAG_WRITE_THROUGH') { throw 'safe flush would be a no-op on an append-only handle after patch' }
           Write-Host "::notice title=windows-utils::one-log-per-module fix applied"
+      # A BLOCKING READ WITH NO DATA YET IS NOT A WARNING. VchanReceiveBuffer warned every time the
+      # ring held fewer bytes than the caller asked for, which is immediately followed by a
+      # libvchan_recv that blocks and succeeds. Measured 2026-10-08 on win11r-logvol: 6 of these on
+      # a FULLY IDLE clean cycle, and the count scales with every protocol message received, so
+      # under GUI load it is unbounded. Owner the same day, for our own components: "no warnings on
+      # normal operation. warning means something is not quite normal, yet workable." A read that
+      # fails or returns short is still an ERROR, two lines below, and the wedge breadcrumb is kept
+      # by the agent's own "CaptureThread: main loop slow" WARNING.
+      - name: Apply the windows-utils blocking-read level fix (always)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = $env:GITHUB_WORKSPACE
+          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-vchan-blocking-read.patch"
+          if ($LASTEXITCODE -ne 0) { throw "windows-utils blocking-read patch did not apply" }
+          $src = Get-Content "$ws\deps-src\windows-utils\src\vchan-common.c" -Raw
+          if ($src -notmatch 'no data yet, the read will block') { throw 'blocking-read marker missing after patch' }
+          if ($src -match 'LogWarning\("\(%p, %s\): no data, blocking read"') { throw 'the blocking-read WARNING is still present after patching' }
+          if ($src -notmatch 'LogError\("\(%p, %s\): failed to read') { throw 'a failed read is no longer an ERROR after patching' }
+          Write-Host "::notice title=windows-utils::blocking-read level fix applied"
       # A DEPARTED PEER STOPS BEING AN ERROR OF OURS, at the first of the four lines it wrote.
       # libvchan's client init PROBES the peer's xenstore entry - "test if the store entry exists;
       # if not - wait a second time" - and discards the status on the next line. But XcStoreRead

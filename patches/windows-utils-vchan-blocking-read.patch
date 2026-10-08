@@ -1,0 +1,23 @@
+--- a/src/vchan-common.c
++++ b/src/vchan-common.c
+@@ -124,8 +124,18 @@
+     LogVerbose("(%p, %s): %d bytes (available: %d)", vchan, what, size, VchanGetReadBufferSize(vchan));
+     if (VchanGetReadBufferSize(vchan) < size)
+     {
+-        // wait for data
+-        LogWarning("(%p, %s): no data, blocking read", vchan, what);
++        // WAITING FOR DATA IS THE ORDINARY STATE OF A BLOCKING READ, NOT AN ANOMALY. This warned
++        // every time the ring held fewer bytes than the caller asked for - which is immediately
++        // followed by a libvchan_recv that blocks and then succeeds, so nothing is wrong and
++        // nothing is lost. Measured 2026-10-08 on win11r-logvol: 6 of these on a FULLY IDLE clean
++        // cycle, and the count scales with every protocol message received, so under GUI load it is
++        // unbounded. Owner the same day, for our own components: "no warnings on normal operation.
++        // warning means something is not quite normal, yet workable."
++        // DEBUG, not INFO, because the shipped LogLevel is 3 and this is per-read flow detail. The
++        // breadcrumb value for the open wedge class is not lost: the agent's own
++        // "CaptureThread: main loop slow ... (wedge at N)" WARNING is kept, and a read that fails
++        // or returns short is still an ERROR two lines below.
++        LogDebug("(%p, %s): no data yet, the read will block", vchan, what);
+     }
+ 
+     if ((readSize = libvchan_recv(vchan, data, size)) < 0)
