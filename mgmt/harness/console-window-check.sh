@@ -21,20 +21,49 @@ HERE="$(cd "$(dirname "$0")/../.." && pwd)"
 # exported there); run on its own, this takes the guest's lock like any other job.
 . "$HERE/mgmt/harness/vmlock.sh"
 vm_lock "$VM" 2>/dev/null || { echo "INSTRUMENT: $VM is held by another job - not judged"; exit 2; }
-PS='$b = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
-$bs = $b.ToString("yyyyMMdd.HHmmss")
-$f = @(Get-ChildItem -Path "Q:\Qubes Logs" -Filter "gui-agent-*.log" -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -ge $b })
+# ANCHOR ON THE AGENT'S OWN Init RECORD, NOT ON CLOCK COMPARISONS. This selected files by
+# LastWriteTime >= LastBootUpTime and then filtered LINES by their timestamp against the boot stamp.
+# Both comparisons assume the file's timestamps and LastBootUpTime were recorded in the SAME clock
+# frame, and on this product they are not: the guest clock is corrected at boot (the QwtClockSync
+# task pulls it from dom0 at boot+15 s), so a log written before the correction and a boot time
+# recorded after it are minutes or hours apart in opposite directions. MEASURED 2026-10-08 on
+# win11r-noise - BOOT=20261008.122831 with the newest agent log written at 20261008.122746, 41 s
+# "before" the boot it belongs to - and the check returned CWC-LOGS=0 and could not judge on three
+# consecutive installs.
+# The agent writes an Init record every start, and this check ALREADY requires one as its proof of
+# having read the log. So that record is the anchor: take the newest few logs by NAME (one file per
+# module per day, so there are not many), find the LAST Init in each, and read only what follows it.
+# No clock arithmetic anywhere, and the LogDir is resolved rather than hardcoded.
+PS='$d = $null
+try { $d = (Get-ItemProperty "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools" -Name LogDir -EA Stop).LogDir } catch { }
+if (-not $d) { $d = (Join-Path $env:SystemDrive "Qubes Logs") }
+$f = @(Get-ChildItem -LiteralPath $d -Filter "gui-agent-*.log" -ErrorAction SilentlyContinue |
+       Sort-Object Name -Descending | Select-Object -First 1)
 Write-Output ("CWC-LOGS=" + $f.Count)
+Write-Output ("CWC-DIR=" + $d)
 foreach ($x in $f) {
   $fs = $null
   try {
     $fs = [System.IO.File]::Open($x.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
     $sr = New-Object System.IO.StreamReader($fs)
+    # TWO PASSES over the lines held in memory: find the FIRST Init in this file, then report every
+    # AddWindow after it. ONE FILE, THE NEWEST BY NAME, and from its FIRST Init: the log is one file
+    # per module per DAY, so every agent instance of this run is in it, and an agent restart must
+    # not hide an earlier window - which is why this takes the first Init and not the last. Reading
+    # the three newest files instead reported YESTERDAYS window as this runs, measured here.
+    $lines = New-Object System.Collections.ArrayList
     while ($null -ne ($ln = $sr.ReadLine())) {
-      if ($ln -notmatch "^.?\[(\d{8}\.\d{6})\.") { continue }
-      if ($Matches[1] -lt $bs) { continue }
-      if ($ln -match "Init:") { "CWC-INIT|" + $x.Name }
-      elseif ($ln -match "AddWindow:.*class=(CASCADIA_HOSTING_WINDOW_CLASS|ConsoleWindowClass|PseudoConsoleWindow)") { "CWC-HIT|" + $x.Name + "|" + $ln }
+      if ($ln -match "^.?\[(\d{8}\.\d{6})\.") { [void]$lines.Add($ln) }
+    }
+    $firstInit = -1
+    for ($k = 0; $k -lt $lines.Count; $k++) { if ($lines[$k] -match "Init:") { $firstInit = $k; break } }
+    if ($firstInit -ge 0) {
+      "CWC-INIT|" + $x.Name
+      for ($k = $firstInit; $k -lt $lines.Count; $k++) {
+        if ($lines[$k] -match "AddWindow:.*class=(CASCADIA_HOSTING_WINDOW_CLASS|ConsoleWindowClass|PseudoConsoleWindow)") {
+          "CWC-HIT|" + $x.Name + "|" + $lines[$k]
+        }
+      }
     }
     $sr.Dispose()
   } catch { "CWC-UNREADABLE|" + $x.Name }
@@ -45,15 +74,15 @@ enc=$(printf '%s' "$PS" | python3 -c "import sys,base64;print(base64.b64encode(s
 out=$(QTEST_VM="$VM" timeout -k 5 120 "$HERE/tools/qtest" run "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $enc" 2>/dev/null | tr -d '\r')
 echo "$out" | grep -aq '^CWC-END' || { echo "INSTRUMENT: no complete answer from $VM"; exit 2; }
 nlogs=$(echo "$out" | grep -ao '^CWC-LOGS=[0-9]*' | cut -d= -f2)
-[ "${nlogs:-0}" -ge 1 ] || { echo "INSTRUMENT: no gui-agent log created since this boot on $VM"; exit 2; }
+[ "${nlogs:-0}" -ge 1 ] || { echo "INSTRUMENT: no gui-agent log found in $(echo "$out" | grep -ao '^CWC-DIR=.*' | cut -d= -f2-) on $VM"; exit 2; }
 unread=$(echo "$out" | grep -ac '^CWC-UNREADABLE|')
 [ "${unread:-0}" = 0 ] || { echo "INSTRUMENT: $unread agent log(s) could not be read on $VM - missing data fails: $(echo "$out" | grep -a '^CWC-UNREADABLE|' | cut -d'|' -f2 | tr '\n' ' ')"; exit 2; }
 ninit=$(echo "$out" | grep -a '^CWC-INIT|' | cut -d'|' -f2 | sort -u | wc -l)
-[ "$ninit" -ge 1 ] || { echo "INSTRUMENT: $nlogs agent log(s) since boot but no Init: line read - not judged"; exit 2; }
+[ "$ninit" -ge 1 ] || { echo "INSTRUMENT: $nlogs agent log(s) read but no Init: line in any of them - not judged"; exit 2; }
 hits=$(echo "$out" | grep -a '^CWC-HIT|')
 if [ -n "$hits" ]; then
-  echo "FOUND $(echo "$hits" | wc -l) console/Terminal window(s) mapped since boot ($nlogs agent log(s)): $(echo "$hits" | head -1 | cut -d'|' -f3- | cut -c1-200)"
+  echo "FOUND $(echo "$hits" | wc -l) console/Terminal window(s) mapped since the agent's last Init ($nlogs agent log(s)): $(echo "$hits" | head -1 | cut -d'|' -f3- | cut -c1-200)"
   exit 1
 fi
-echo "NONE: no console/Terminal window mapped since boot ($nlogs agent log(s), $ninit with Init)"
+echo "NONE: no console/Terminal window mapped since the agent's last Init ($nlogs agent log(s), $ninit with Init)"
 exit 0
