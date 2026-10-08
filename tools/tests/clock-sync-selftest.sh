@@ -133,6 +133,45 @@ command grep -q 'Abs($residual)' "$ST" \
   && ok "settime_verifies: it re-reads the clock and reports a residual instead of assuming" \
   || bad "settime_verifies: 'it ran' and 'the clock is right' are still indistinguishable"
 
+# ---- 7. AND THE VALUE HANDED TO Set-Date MUST BE IN THE GUEST'S OWN FRAME -----------------------
+# The comment above this section ALREADY described this hazard - "a DateTime whose Kind is
+# Unspecified sets LOCAL time ... puts the clock out by exactly that zone" - and the check beside it
+# only asserted that the token SpecifyKind appears, which it did, while the code still passed the
+# UTC value straight to Set-Date. The test named the defect and could not see it. Set-Date sets the
+# LOCAL clock from the value's COMPONENTS (Win32 SetLocalTime); DateTimeKind is not consulted.
+#
+# MEASURED, 2026-10-08, on a clone built to match a German reporter's template (Europe/Berlin, +2):
+# a boot-scoped measurement carried exactly ONE error - "SETTIME the clock did not take: asked for
+# ...T15:05:09Z, it reads ...T13:05:09Z - still -7200 s out (was -3604.3 s out before)". Every rig
+# guest runs UTC, where the offset is zero and this is invisible.
+command grep -q 'Set-Date -Date \$utc\.ToLocalTime()' "$ST" \
+  && ok "settime_sets_local_frame: the instant is converted into the guest's zone before Set-Date" \
+  || bad "settime_sets_local_frame: a UTC value goes straight to Set-Date - on any guest not on UTC the clock lands off by the zone offset"
+if command grep -qE 'Set-Date -Date \$utc +-ErrorAction' "$ST"; then
+  bad "settime_no_bare_utc: Set-Date is still called with the bare UTC value"
+else
+  ok "settime_no_bare_utc: the bare UTC value is no longer passed to Set-Date"
+fi
+# BEHAVIOURAL, not lexical: compute what each form actually produces in a +2 zone and require the
+# old one to be wrong by 7200 s and the new one to be exact. This is the check that would have
+# caught it, and it is driven with the defect present.
+beh=$(TZ='Europe/Berlin' "${PWSH:-/home/user/pwsh/pwsh}" -NoProfile -Command '
+$utc = [datetime]::SpecifyKind([datetime]::Parse("2026-10-08T15:05:09Z").ToUniversalTime(), [DateTimeKind]::Utc)
+# Set-Date takes the components as LOCAL. Model both candidate arguments that way.
+$oldLocalComponents = $utc                 # the defect: UTC components treated as local
+$newLocalComponents = $utc.ToLocalTime()   # the fix
+$oldResultUtc = [datetime]::SpecifyKind($oldLocalComponents, [DateTimeKind]::Unspecified)
+$newResultUtc = [datetime]::SpecifyKind($newLocalComponents.DateTime, [DateTimeKind]::Unspecified)
+$oldOff = [math]::Round(([datetime]::SpecifyKind($oldResultUtc,[DateTimeKind]::Local).ToUniversalTime() - $utc).TotalSeconds)
+$newOff = [math]::Round(([datetime]::SpecifyKind($newResultUtc,[DateTimeKind]::Local).ToUniversalTime() - $utc).TotalSeconds)
+"OLD=$oldOff NEW=$newOff"
+' 2>/dev/null)
+case "$beh" in
+  "OLD=-7200 NEW=0") ok "settime_behaviour: in a +2 zone the OLD form lands 7200 s out and the NEW form lands exact ($beh)" ;;
+  "") bad "settime_behaviour: the model did not run - no verdict (missing data fails)" ;;
+  *)  bad "settime_behaviour: expected 'OLD=-7200 NEW=0', got '$beh' - the model no longer reproduces the measured skew" ;;
+esac
+
 echo
 echo "clock-sync-selftest: $pass passed, $fail failed; copies in $W"
 [ "$fail" = 0 ] || exit 1
