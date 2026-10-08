@@ -143,7 +143,45 @@ public static class QubesLsaRead {
     $lsa = [QubesLsaRead]::Present('DefaultPassword')
     $lsaKnown = $true
 } catch {
+    # NAME WHO WE RAN AS. Owner, 2026-10-08: "how is it possible that it 'could not be verified'?"
+    # It is possible in exactly three ways, all of them OURS, and none of them an ambiguous guest:
+    #   1. Add-Type could not compile the shim (no compiler, AV, a locked temp);
+    #   2. LsaOpenPolicy(POLICY_GET_PRIVATE_INFORMATION) returned non-zero - that access needs
+    #      SYSTEM or an elevated admin, so a non-elevated run gets STATUS_ACCESS_DENIED;
+    #   3. LsaRetrievePrivateData returned anything but success or STATUS_OBJECT_NAME_NOT_FOUND.
+    # A genuinely MISSING secret is NOT this state: 0xC0000034 is treated as a definitive absence
+    # and reports "absent" (exit 2). So "unverified" always means the probe itself could not run -
+    # and the identity is the one fact that was never recorded, while being the likeliest cause.
+    # The task is registered to run as SYSTEM (S-1-5-18); if this says otherwise, that is the bug.
+    $who = '?'; $elev = '?'
+    try { $who = [Security.Principal.WindowsIdentity]::GetCurrent().Name } catch { }
+    try {
+        $pr = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+        $elev = [string]$pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch { }
     Write-Output "WARN   could not query the LSA secret ($($_.Exception.Message.Split([char]10)[0]))"
+    Write-Output "WARN   the probe ran as '$who' (admin role: $elev) - reading an LSA secret needs SYSTEM"
+}
+
+# VERIFIED BY EFFECT, which needs no privileged read at all. If autologon is configured for a user
+# and that user IS logged on at the console, then autologon demonstrably happened on THIS boot -
+# this script runs from a boot task, so had it not happened the guest would be sitting at the
+# sign-in screen with no console user. That is a positive finding about the mechanism, from
+# something observable, and it is what makes "unverified" rare rather than routine.
+$effect = $false
+# RE-READ, not a variable that does not exist: my first version tested $auto, which this script
+# never defines (line 39 reads AutoAdminLogon inline and sets it to 1 when absent), so the whole
+# effect check would have been a silent no-op - a fix that does nothing is worse than none.
+if ((Get-WL 'AutoAdminLogon') -eq '1' -and $user) {
+    $consoleUser = ''
+    try { $consoleUser = "$((Get-CimInstance Win32_ComputerSystem -EA Stop).UserName)" } catch { }
+    if ($consoleUser) {
+        $leaf = $consoleUser.Split('\')[-1]
+        if ($leaf -and $leaf -ieq $user) {
+            $effect = $true
+            Write-Output "ok     autologon VERIFIED BY EFFECT: '$consoleUser' is logged on at the console and AutoAdminLogon=1, so it happened on this boot"
+        }
+    }
 }
 
 $unknown = 0
@@ -154,6 +192,10 @@ if ($lsa) {
     }
 } elseif ($pass) {
     Write-Output 'ok     DefaultPassword present (plaintext registry value - consumable)'
+} elseif ((-not $lsaKnown) -and $effect) {
+    # The probe could not run, but the mechanism was observed working this boot - so this is not an
+    # unknown, and it must not exit 3 and tell the user the guard failed.
+    Write-Output 'ok     the LSA secret could not be queried, but autologon was verified by effect above'
 } elseif (-not $lsaKnown) {
     # Probe fault, not a verdict: the secret may well be there. Loud (a probe that fails on an
     # eligible guest is a defect to diagnose), but NOT the "password consumed" finding - that one
