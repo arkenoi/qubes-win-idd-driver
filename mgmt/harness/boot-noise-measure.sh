@@ -18,9 +18,10 @@
 #   VARIABLE    the stimulus: none. Same guest, same package.
 #   INSTRUMENT  mgmt/harness/log-sweep.sh with --since at the boot instant, so only this boot counts;
 #               validated offline by tools/tests/log-sweep-selftest.sh (64 checks).
-#   BUDGET      shutdown + boot ~4 min, settle as given (default 240 s), sweep ~2 min. The waits are
-#               e2e-lib's, with terminal states and stall detection; nothing here sleeps on a timer
-#               except the deliberate settle, which is the measurement window.
+#   BUDGET      shutdown + boot ~4 min, settle as given (default 240 s), sweep ~2 min. The qrexec
+#               wait is this script's own and has three exits - it answered, the guest reached a
+#               terminal state (Halted), or the 300 s deadline - and nothing else sleeps on a timer
+#               except the deliberate settle, which IS the measurement window.
 #
 # THE SWEEP IS ITSELF A STIMULUS and that is accounted for, not ignored: collecting the logs needs
 # qrexec calls, so the wrapper will log for them. They are ORDINARY completed calls, not abandoned
@@ -45,8 +46,10 @@ log(){ echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$OUT/run.log"; }
 # shellcheck source=/dev/null
 . "$ROOT/mgmt/harness/shutdown-lib.sh"
 vm_lock "$SUBJ" || { echo "FATAL: another VM-mutating job holds the lock"; exit 2; }
-# shellcheck source=/dev/null
-. "$ROOT/.claude/skills/win-guest-e2e/e2e-lib.sh" 2>/dev/null || true
+# e2e-lib.sh is deliberately NOT sourced: its line 11 refuses to load without QTEST_VM set ("there
+# is deliberately no default target") by calling exit, which a `|| true` on the source cannot catch -
+# it killed this script silently right after the lock, on the first run. Nothing from it is used; the
+# one wait below is this script's own, with the three exits rule 6 requires.
 
 log "subject=$SUBJ settle=${SETTLE}s out=$OUT"
 
