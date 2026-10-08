@@ -2517,7 +2517,18 @@ try {
   # forward on purpose), so the guest decided on its own that dom0 should be told nothing while Windows went
   # on offering the update. GWeck, forum #175 on 4.3.35, unchanged since 4.3.33: "Trying to update from the
   # Qube manager still shows (wrongly) that no updates are available", with KB5101684 - the July 2026
-  # optional PREVIEW cumulative, which cannot install routeless - listed in his own Windows Update window.
+  # optional PREVIEW cumulative - listed in his own Windows Update window.
+  # CORRECTED 2026-10-08: this line said KB5101684 "cannot install routeless". That was an assumption
+  # carried in this very commit and it is FALSE, measured from the dev qube through the same dom0
+  # updates proxy: the catalog publishes it as a monolithic package (four rows; 25H2 x64 is
+  # windows11.0-kb5101684-x64, 5,097,279,731 bytes, with its SSU KB5043080 alongside), the SHIPPED
+  # Resolve-Catalog ranking picks exactly that row for a 25H2/26200/x64 guest (score 6; the arm64 rows
+  # are rejected on architecture and the 24H2 row at score 0), and a ranged GET through the relay
+  # answers 206 with Accept-Ranges, which is what Fetch-Msu's resume needs. So the update was never
+  # undeliverable - it was never ASKED FOR, because this count told dom0 there was nothing. Jev:
+  # why_not_delivered = count-concealment-so-nobody-asked 0.98, express_premise_false 0.93.
+  # STILL UNPROVEN, and not claimed: no guest has fetched 4.75 GiB through the relay or installed it
+  # (Jev, on whether "fixed" may be said today: 0.09).
   # Jev: is_concealment 0.89, true-count-always 0.87, and the owner's ESU ruling is untouched (0.28) because
   # that is the notice branch below, which keeps its own rule.
   # The actionable/informational split is not lost - it is recorded in the status, where the pass's own
@@ -2748,6 +2759,16 @@ try {
             # KB5071959-class: published ONLY as Delivery-Optimization delta streams. Not installable
             # on a netvm-free guest and it carries no content the catalog CU does not. Classify it
             # terminally - never chase it into the DO/BITS path that would fail forever.
+            #
+            # READ THE CONDITION ABOVE BEFORE BELIEVING THAT SENTENCE (corrected 2026-10-08). This
+            # branch is reached ONLY when Resolve-Catalog already returned zero rows, so it does not
+            # and cannot refuse an express-offered update that the catalog does publish - the catalog
+            # is tried first, for every KB. The sentence is nonetheless FALSE AS A GENERAL RULE
+            # (Jev 0.93): KB5101684, an express-offered preview cumulative, is catalog-published as a
+            # monolithic package and the shipped resolver picks it. It holds for KB5071959, which is
+            # the ESU phantom OOB the owner parked, and that is the class this branch was written
+            # around. What actually hid KB5101684 from the reporter was the scan COUNT, not this
+            # branch (GUARD:truecount, above).
             $script:WuOnlyExpressKbs += $u.kb
             Log "$($u.kb): published only as Delivery-Optimization express/UUP streams - terminally classified (not installable netvm-free, not chased)"
             continue
