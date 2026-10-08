@@ -200,6 +200,20 @@ FAMILY_BY_NAME = [
 WINUTILS_FAMILIES = {"agent", "watchdog", "qrexec", "qubesdb", "winutils"}
 BLOG_FAMILIES = {"bridge", "etwproxy", "blog"}
 STRUCTURED_FAMILIES = WINUTILS_FAMILIES | BLOG_FAMILIES | {"installer", "events", "msi"}
+# WHO OWNS THE LINE. Owner, 2026-10-08, after lifting the blanket no-warnings rule: "in our
+# components, though, it stands. warning means something is not quite normal, yet workable."
+# That rule can only be measured if the count is SPLIT, because the single biggest warning source on
+# a clean cycle is not ours: 135 of 132+ lines were qubesdb-daemon's "QpsRead ... failed: 109", a
+# client closing its pipe normally, from a binary qwt-full.yml:513 says is "deliberately NOT built
+# (wave 3: boot-critical service)" and therefore ships from the stock MSI.
+#   OURS   - this repo builds or ships it: the agent and watchdog, core-agent's qrexec pieces, the
+#            windows-utils modules and the PowerShell rpc services (winutils), the toast bridge and
+#            ETW proxy, our installer, bind-dirs, and the levelless logs our own scripts write.
+#   STOCK  - shipped from the stock QWT MSI and deliberately not built here.
+#   OTHER  - not a guest component of ours at all (msiexec's own log, the dom0 side, the PV console,
+#            event records), or 'plain', whose owner is by definition unknown.
+OUR_FAMILIES   = {"agent", "watchdog", "qrexec", "winutils", "bridge", "etwproxy", "installer", "binddirs", "blog"}
+STOCK_FAMILIES = {"qubesdb"}
 
 # Structural thresholds: the owner's rules, as numbers, each with the severity its breach is reported at. A baseline
 # may override any of them. P1 = a death of ours or a regression of a closed defect (owner policy 2026-10-07: "deslice
@@ -239,7 +253,8 @@ DEFAULT_THRESHOLDS = {
     "rise_factor": 2.0,
     "rise_min_delta": 3,
 }
-INFORMATIONAL_METRICS = ["error_lines", "warning_lines", "agent_instances", "boots", "shutdowns", "agent_going_down_exits",
+INFORMATIONAL_METRICS = ["error_lines", "warning_lines", "warning_lines_ours", "warning_lines_stock",
+                         "warning_lines_other", "agent_instances", "boots", "shutdowns", "agent_going_down_exits",
                          "deaths_by_exit_code", "broker_events_excused", "fi_records"]
 SEVERITY_ORDER = {"P1": 0, "P2": 1, "P3": 2}
 
@@ -1358,7 +1373,15 @@ def compute_metrics(files, boots, st, since, now=None):
     # a declaration that matches nothing is itself a finding: the stimulus it names did not happen, so the
     # run proved less than it claims (the same rule as a check that has never been seen to fail)
     m["declared_errors_unmatched"] = _bad + len([1 for rx in _decl if not any(rx.search(l.raw) for l in errs)])
-    m["warning_lines"] = len([l for lf in files for l in lf.lines if l.level == "W" and sel(l.ts)])
+    warns = [(lf, l) for lf in files for l in lf.lines if l.level == "W" and sel(l.ts)]
+    m["warning_lines"] = len(warns)
+    # SPLIT BY OWNER, so "no warnings on normal operation" is a number about OUR code rather than a
+    # number dominated by a stock binary we deliberately do not build. Informational for now: the
+    # split has to be seen to be right on real runs before it gates a release, and gating it is then
+    # one threshold entry.
+    m["warning_lines_ours"]  = len([1 for lf, l in warns if lf.family in OUR_FAMILIES])
+    m["warning_lines_stock"] = len([1 for lf, l in warns if lf.family in STOCK_FAMILIES])
+    m["warning_lines_other"] = len([1 for lf, l in warns if lf.family not in OUR_FAMILIES and lf.family not in STOCK_FAMILIES])
     codes = Counter(d["code"] for d in st["deaths"] + st["goingdown"])
     for e in st["ev_deaths"]:
         if e["code"] and not any(d["pid"] == e["pid"] for d in st["deaths"] + st["goingdown"]):
