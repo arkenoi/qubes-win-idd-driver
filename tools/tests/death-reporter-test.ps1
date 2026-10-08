@@ -252,6 +252,20 @@ Check 'not ended: an ordinary non-zero task result is a death as before' ($ev.ou
 # expected output). A 201 whose result is 0 is a task that SUCCEEDED and is not a death.
 $ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesWindowsUpdateScan' '0' $T0)
 Check 'task 201 result 0: not a death' (-not $ev.ours)
+# A RESULT A TASK USES TO MEAN SOMETHING OTHER THAN FAILURE (owner 2026-10-08: user-facing error
+# lines are top priority). ensure-autologon.ps1's own contract: 0 armed, 2 NOT armed, 3 could not be
+# VERIFIED - "no positive finding either way", and "3 is deliberately not 2". The updater honoured
+# that; the user was told "The autologon guard task failed" for a probe that could not run.
+$ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesAutologonGuard' '3' $T0)
+Check 'task 201 QubesAutologonGuard result 3: could not VERIFY is not a death' `
+      (-not $ev.ours -and $ev.ignore -and "$($ev.reason)" -match 'not a failure')
+# AND 2 IS STILL A DEATH - a qube that cannot log itself back in is exactly what the user must hear.
+$ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesAutologonGuard' '2' $T0)
+Check 'task 201 QubesAutologonGuard result 2: NOT armed IS still a death' ($ev.ours -and $ev.ignore -ne $true)
+# and the exemption is per TASK, not global: the same code from another task is still a death
+$ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesWindowsUpdateScan' '3' $T0)
+Check 'task 201 another task result 3: still a death (the exemption is per task)' ($ev.ours -and $ev.ignore -ne $true)
+
 $ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\Qubes-NotifBridge' '267014' $T0)
 Check 'task 201 result 0x41306: ended by Task Scheduler on request, ignored' (-not $ev.ours -and $ev.ignore)
 $ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QwtDeathReporter' '1' $T0)

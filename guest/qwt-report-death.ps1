@@ -491,6 +491,24 @@ $script:QwtShutdownNearProbe = {
 #               QwtDeathReporter at 2026-10-08 00:20:17.9), which is the shutdown reaping them.
 $script:QwtShutdownResultCodes = @('0x8007045b', '0x8007050b', '2147943515', '2147943691')
 
+# RESULTS THAT A TASK USES TO SAY SOMETHING OTHER THAN "I FAILED. Owner, 2026-10-08: user-facing
+# error lines are top priority. A task's exit code is the only thing Task Scheduler records, so a
+# script with a richer contract than pass/fail has nowhere else to put it - and this reporter turned
+# every non-zero into "The <name> task failed" for the user.
+# guest/ensure-autologon.ps1 says so in its own comment: "EXIT CODE IS A CONTRACT: 0 = autologon
+# will happen on the next boot, 2 = it will NOT and the qube would come back unreachable, 3 = it
+# could not be VERIFIED (the LSA probe itself failed; no positive finding either way)" - and "3 is
+# deliberately not 2". The updater already honours that distinction; the user was not told it. So 3
+# is not a death. 2 IS, and stays one: a qube that cannot log itself back in is exactly what the
+# user must hear about.
+# Keyed by task and by exact result, with the reason the user would otherwise have been given
+# wrongly. Nothing is added here without the task's own documented contract to point at.
+$script:QwtDeathTaskBenignResults = @{
+    '\QubesAutologonGuard' = @{
+        '3' = 'autologon could not be VERIFIED - ensure-autologon.ps1 could not query the LSA secret, which is no finding either way (its exit code 3 is deliberately not 2); the installer records it and a real failure to arm is exit 2'
+    }
+}
+
 function Test-QwtTaskEndedByShutdown {
     param([string]$instanceId, [datetime]$at, [string]$code = '')
 
@@ -695,6 +713,15 @@ function ConvertFrom-QwtDeathEvent {
             if ($eventId -eq 201) {
                 if ($null -eq $code -or $code -eq 0) { $r.reason = "task '$task' ended with result 0"; return $r }
                 if ($code -eq 267014) { $r.ignore = $true; $r.reason = "task '$task' was ENDED by Task Scheduler (0x41306) - a stop that was asked for, not a death"; return $r }
+                # A RESULT THE TASK USES TO MEAN SOMETHING ELSE. Only exact codes a task's own
+                # documented contract defines as not-a-failure; anything else, including every other
+                # code from the same task, is still a death.
+                $benign = $script:QwtDeathTaskBenignResults[$task]
+                if ($benign -and $benign.ContainsKey("$code")) {
+                    $r.ignore = $true
+                    $r.reason = "task '$task' ended with result $code, which is not a failure: $($benign["$code"])"
+                    return $r
+                }
                 # A terminated instance whose termination the system's own shutdown explains is the
                 # same thing one step removed: the code in the 201 is whatever the killed process
                 # left, not a verdict on it. An instance ended for ANY OTHER reason - its execution
