@@ -39,8 +39,37 @@ declare -F qrun >/dev/null || { echo "FATAL a0-lib.sh: qrun() missing - source .
 PSAUMID='{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
 CTLAUMID='Microsoft.Windows.Explorer'
 QT='C:\Program Files\Qubes Tools\bin'
-BLOG='C:\ProgramData\qubes-toast-bridge\bridge.log'
-HBF='C:\ProgramData\qubes-toast-bridge\heartbeat'
+# bridge.log IS IN THE COMMON LOG DIRECTORY, NOT THE BRIDGE'S STATE DIRECTORY. The writer moved
+# in 7e349bac (qtb_shared.h BLog: QwtLogDir(), i.e. HKLM LogDir, default %SYSTEMDRIVE%\Qubes Logs)
+# and these readers kept the old constant, so every one of them would have read a file that is not
+# there - and `cmd /c type <missing>` prints "The system cannot find the file specified", which the
+# consumers read as an empty window rather than as a failure. A reader pointed at an abandoned path
+# does not fail loudly, it grades on nothing.
+#
+# RESOLVED FROM THE GUEST, ONCE, AND NEVER VIA $( ). An earlier version of this resolver memoised
+# into a global but was called as `bp=$(blog_resolve)`: command substitution runs in a SUBSHELL, so
+# the assignment was discarded and every one of ~50 calls paid a fresh guest round-trip while the
+# comment claimed it was resolved once. It sets a global and is called bare.
+BLOGPATH=''
+blog_resolve(){
+  [ -n "$BLOGPATH" ] && return 0
+  local i d b64 ps
+  # A MARKER, because a VMShell stream carries cmd's banner: the path is located by its prefix
+  # rather than by being the only thing on the stream. -EncodedCommand for the same reason
+  # blog_len uses it - no banner self-match, no cmd backslash mangling.
+  ps='$d = $null
+try { $d = (Get-ItemProperty "HKLM:\Software\Invisible Things Lab\Qubes Tools" -Name LogDir -EA Stop).LogDir } catch { }
+if (-not $d) { $d = (Join-Path $env:SystemDrive "Qubes Logs") }
+Write-Output ("BLOGPATH=" + (Join-Path $d "bridge.log"))'
+  b64=$(printf '%s' "$ps" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)
+  for i in 1 2 3; do
+    d=$(qrun "powershell -NoProfile -EncodedCommand $b64" | tr -d '\r' | grep -a '^BLOGPATH=' | tail -1)
+    if [ -n "$d" ]; then BLOGPATH="${d#BLOGPATH=}"; return 0; fi
+    sleep 2
+  done
+  return 1
+}
+HBF='C:\ProgramData\qubes-toast-bridge\heartbeat'   # STATE, not a log - it belongs here
 
 # Run a pushed script IN THE INTERACTIVE USER SESSION (listener + HKCU are session-bound).
 # NEVER pass -Command with nested quotes through qtest - each hop re-splits and strips them
@@ -114,7 +143,8 @@ ors(){ awk '$6==1' ; }
 # transient cold-boot read; returns NONZERO on hard failure - callers MUST NOT default to 0.
 blog_len(){
   local i n ps b64
-  ps="if (Test-Path -LiteralPath '$BLOG') { (@(Get-Content -LiteralPath '$BLOG')).Count } else { 0 }"
+  blog_resolve || { echo "blog_len: could not resolve the bridge log location on $VM" >&2; return 1; }
+  ps="if (Test-Path -LiteralPath '$BLOGPATH') { (@(Get-Content -LiteralPath '$BLOGPATH')).Count } else { 0 }"
   b64=$(printf '%s' "$ps" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)
   for i in 1 2 3; do
     n=$(qrun "powershell -NoProfile -EncodedCommand $b64" | tr -d '\r' | grep -aoxE '[0-9]+' | head -1)
@@ -124,7 +154,13 @@ blog_len(){
   return 1
 }
 blog_since(){ # $1 = old line count
-  qrun "powershell -NoProfile -Command \"if (Test-Path '$BLOG') { Get-Content '$BLOG' | Select-Object -Skip $1 }\""
+  blog_resolve || { echo "blog_since: could not resolve the bridge log location on $VM" >&2; return 1; }
+  # -EncodedCommand, like blog_len: the resolved path contains a SPACE ("Qubes Logs"), and the
+  # -Command form re-splits at every qtest hop, which is what lint rule L3 exists for.
+  local ps b64
+  ps="if (Test-Path -LiteralPath '$BLOGPATH') { Get-Content -LiteralPath '$BLOGPATH' | Select-Object -Skip $1 }"
+  b64=$(printf '%s' "$ps" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)
+  qrun "powershell -NoProfile -EncodedCommand $b64"
 }
 
 # --- delivered-toast detectors (audit 2026-09-05, the dropped-SENT false-FAILs) --------------

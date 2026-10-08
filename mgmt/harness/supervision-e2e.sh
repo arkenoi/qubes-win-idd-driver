@@ -291,7 +291,16 @@ if has L6; then
       grep -aq 'FIRED method=' "$OUT/L6-fire-$sfx.out" && log "  $cls fired (TI-$sfx)" || log "  $cls did NOT fire: $(grep -av '^$' "$OUT/L6-fire-$sfx.out" | tail -2 | tr '\n' ' ' | cut -c1-150)"
       sleep 12
     done
-    q run 'cmd /c type "C:\ProgramData\qubes-toast-bridge\bridge.log"' > "$OUT/L6-bridge.log" 2>&1
+    # RESOLVED, not hardcoded: bridge.log is in the common log directory (7e349bac), and
+    # `type <missing file>` writes "The system cannot find the file specified" into the capture,
+    # which the python below reads as NOMEASURE - so a stale path produced a permanent INVALID
+    # rather than a result. a0-lib.sh is sourced above, so blog_resolve is in scope.
+    if blog_resolve; then
+        q run "cmd /c type \"$BLOGPATH\"" > "$OUT/L6-bridge.log" 2>&1
+    else
+        log "  INSTRUMENT: the bridge log location could not be resolved - the L6 claims are ungraded"
+        : > "$OUT/L6-bridge.log"
+    fi
     # the two claims, from the bridge's own record: the actionable one carries its buttons, the informational one
     # does not, and neither waits on the action work (the forward latency per toast)
     python3 - "$OUT/L6-bridge.log" > "$OUT/L6-claims.txt" 2>&1 <<'PY'
@@ -332,7 +341,11 @@ PY
       log "  the outcome for 180 s. It cannot press it - there is no dom0 shell here."
       d=$((SECONDS+180)); seen=0
       while [ $SECONDS -lt $d ]; do
-        q run 'cmd /c type "C:\ProgramData\qubes-toast-bridge\bridge.log"' > "$OUT/L6-bridge-after.log" 2>&1
+        if blog_resolve; then
+            q run "cmd /c type \"$BLOGPATH\"" > "$OUT/L6-bridge-after.log" 2>&1
+        else
+            : > "$OUT/L6-bridge-after.log"
+        fi
         grep -aq 'ACTION id=' "$OUT/L6-bridge-after.log" && { seen=1; break; }
         sleep 10
       done

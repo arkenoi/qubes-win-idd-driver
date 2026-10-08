@@ -3,7 +3,7 @@
 # Runs as SYSTEM over qubes.VMShell:
 #   tools/qtest run powershell -NoProfile -ExecutionPolicy Bypass -File "<QubesIncoming>\toast-hold-collect.ps1" -Mode <m> ...
 # SYSTEM reads the gui-agent log (registry LogDir, normally Q:\Qubes Logs - memory gui-agent-log-location) and the
-# toast bridge's log (C:\ProgramData\qubes-toast-bridge\bridge.log), and - because qrexec lands in the INTERACTIVE
+# toast bridge's log (bridge.log, in that same LogDir since 7e349bac), and - because qrexec lands in the INTERACTIVE
 # session on WinSta0 (guest/run-as-user.ps1 header, measured 2026-08-30) - can ask user32 whether the shell's banner
 # window is visible right now.
 #
@@ -42,7 +42,6 @@ param(
     [int]$Keep = 40
 )
 $ErrorActionPreference = 'Continue'
-$BridgePath = 'C:\ProgramData\qubes-toast-bridge\bridge.log'
 
 function Get-ThcNow { (Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff') }
 
@@ -51,6 +50,14 @@ function Get-ThcLogDir {
     if ($r -and $r.LogDir) { return [string]$r.LogDir }
     return 'Q:\Qubes Logs'
 }
+
+# bridge.log IS IN THE COMMON LOG DIRECTORY, resolved by the function right above - which was
+# already here and simply unused. The hardcoded C:\ProgramData\qubes-toast-bridge\bridge.log this
+# replaces named the bridge's STATE directory, which the writer left in 7e349bac, so Test-Path was
+# false and the two uses below recorded bridge_exists=0 / bridge_lines=0 on a perfectly healthy
+# guest. The assignment is HERE rather than at the top of the file because a PowerShell function is
+# not callable until its definition has been executed.
+$BridgePath = Join-Path (Get-ThcLogDir) 'bridge.log'
 
 function Get-ThcNewestAgentLog([string]$dir) {
     $f = @(Get-ChildItem -LiteralPath $dir -Filter 'gui-agent-*.log' -ErrorAction SilentlyContinue |

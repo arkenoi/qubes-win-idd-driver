@@ -102,7 +102,15 @@ $ErrorActionPreference = 'Continue'
 function L($k,$v){ "FL|$k|$v" }
 $boot = (Get-CimInstance Win32_OperatingSystem -EA SilentlyContinue).LastBootUpTime
 L 'boot' $(if ($boot) { $boot.ToString('HH:mm:ss') } else { 'unreadable' })
-$b = 'C:\ProgramData\qubes-toast-bridge\bridge.log'
+# bridge.log is in the COMMON log directory (qtb_shared.h BLog -> QwtLogDir, 7e349bac), not the
+# bridge's state directory. The constant this replaces meant Get-Content read nothing and every
+# count below came out 0 - a silent zero, which is the worst answer a probe can give.
+$bdir = $null
+try { $bdir = (Get-ItemProperty 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -Name LogDir -EA Stop).LogDir } catch { }
+if (-not $bdir) { $bdir = (Join-Path $env:SystemDrive 'Qubes Logs') }
+$b = Join-Path $bdir 'bridge.log'
+L 'bridge_log' $b
+if (-not (Test-Path -LiteralPath $b)) { L 'bridge_log_missing' $b }
 $lines = @(Get-Content -LiteralPath $b -EA SilentlyContinue)
 L 'bridge_lines' $lines.Count
 # THE COUNT THAT MATTERS: what we actually handed to dom0. Case-SENSITIVE - 'absent (' and 'consent'

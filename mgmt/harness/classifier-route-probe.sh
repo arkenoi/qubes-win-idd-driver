@@ -73,9 +73,15 @@ if printf '%s' "$ALLOW" | grep -qiE 'powershell|Windows\.Explorer'; then
 fi
 
 # 3. Offset FIRST: only lines written after this point are this probe's evidence.
-OFF=$(gq "cmd /c for %I in ($BLOG) do @echo %~zI" 60 | grep -aoE '^[0-9]+$' | tail -1)
+# The path comes from the guest (a0-lib.sh blog_resolve): bridge.log is in the common log
+# directory, and the constant this used to read named the bridge's state directory, which the
+# writer left in 7e349bac. An offset taken from a file that is not there is 0, and then EVERY line
+# ever written reads as this probe's evidence.
+blog_resolve || { log "TERMINAL: could not resolve the bridge log location on the guest - no offset, so nothing here can be graded"; exit 2; }
+log "bridge log: $BLOGPATH"
+OFF=$(gq "cmd /c for %I in (\"$BLOGPATH\") do @echo %~zI" 60 | grep -aoE '^[0-9]+$' | tail -1)
 log "bridge.log offset before firing: ${OFF:-0} bytes"
-tail_new(){ gqps "\$f = '$BLOG'
+tail_new(){ gqps "\$f = '$BLOGPATH'
 if (Test-Path \$f) { \$s = New-Object IO.FileStream(\$f,'Open','Read','ReadWrite'); \$s.Seek(${OFF:-0},'Begin') | Out-Null; (New-Object IO.StreamReader(\$s)).ReadToEnd() }" 120; }
 
 # fire_info / fire_ctl fire IN THE USER SESSION and return non-zero unless the guest confirmed

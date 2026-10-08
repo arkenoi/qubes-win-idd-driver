@@ -11,7 +11,10 @@
 #     gui-agent-*, gui-watchdog-*, qrexec-*, qubesdb-*, etw-proxy.log, file-receiver / network-setup / relocate-dir /
 #     set-gui-mode / qwtng-netsetup logs, bind-dirs, the module-bases and reboot-audit records - recursively;
 #     the NEWEST gui-watchdog and gui-agent logs are always included so the boot's launch lines are present;
-#   * C:\ProgramData\qubes-toast-bridge\bridge.log (+ .old);
+#   * bridge.log (+ .old) - under LogDir since 7e349bac, which is why it is in the first bullet now;
+#     C:\ProgramData\qubes-toast-bridge stays in $StrayLogDirs only to pick up a pre-7e349bac copy
+#     left on an upgraded guest, and holds the bridge's CONTROL surfaces (stop file, heartbeat,
+#     banner markers), which are not logs;
 #   * EVERY OTHER LOG OF OURS OUTSIDE LogDir - the updater's C:\ProgramData\Qubes\wu\*.log (relay,
 #     relay-handler, agent), C:\ProgramData\QubesPvNic.log, QubesNetSetup.log, QubesIDD-diag.log, and
 #     the C:\ root's qubes-*/qwt-*/relocate-dir-* logs. Eight of these were read by NOTHING until

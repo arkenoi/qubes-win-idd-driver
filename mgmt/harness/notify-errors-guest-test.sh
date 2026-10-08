@@ -255,7 +255,7 @@ else
     WITNESS=undecidable|WITNESS=capture-failed)
       : ;;   # already reported as INVALID-INSTRUMENT above; not counted as a product failure
     *)
-      no "NOT RENDERED: the witness fired the trigger and NOTHING visible appeared ($NV_VERDICT). Check C:\ProgramData\qubes-toast-bridge\bridge.log on the guest for 'relay never connected' - that is the session-0 defect" ;;
+      no "NOT RENDERED: the witness fired the trigger and NOTHING visible appeared ($NV_VERDICT). Check bridge.log in the guest's Qubes Logs directory (HKLM ... Qubes Tools:LogDir) for 'relay never connected' - that is the session-0 defect" ;;
   esac
 fi
 rm -f "$TRIG"
