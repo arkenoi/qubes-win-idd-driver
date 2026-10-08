@@ -157,6 +157,50 @@ if [ ! -f "$CAP" ]; then bad "recreate_rate: capture.c is missing"; else
     || bad "recreate_rate_justified: the threshold has no stated basis"
 fi
 
+# ---- THE AGENT NEVER ORIGINATES A GLOBAL KEYSTROKE ------------------------------------------
+# Owner, 2026-10-08: "the reproduction is never source of truth ... go do real RCA and real fix".
+# The Start dismissal shipped in 4.3.35 used SendInput(VK_ESCAPE), which injects into the SYSTEM
+# input queue: the foreground is read BEFORE the call and the key is delivered to whatever holds
+# the foreground when it is DEQUEUED, so the guard constrains the check and not the delivery. On
+# the very key press that opens Start, the process competing for the foreground is a third-party
+# menu - which is the configuration the defect was reported from. Jev on the mechanism alone,
+# independent of any field report: race_is_real 0.96. It posts to the Start surface's own queue now.
+# InjectInput in vchan-handlers.c is NOT in scope: that is real user input arriving from dom0,
+# which is the product's job. What is banned is a keystroke the AGENT originated going out globally.
+DSM=$(python3 - "$SRC/main.c" <<'PYD'
+import sys, io
+s = io.open(sys.argv[1], encoding='utf-8', errors='replace').read()
+i = s.index('static void DismissHiddenStartSurface')
+d = 0; j = s.index('{', i)
+for k in range(j, len(s)):
+    if s[k] == '{': d += 1
+    elif s[k] == '}':
+        d -= 1
+        if d == 0: break
+body = s[i:k+1]
+# COMMENTS STRIPPED. The comment explaining what this replaced names SendInput, and the first
+# version of the check grepped the raw body and failed the fixed code for describing the bug.
+import re as _re
+body = _re.sub(r'/\*.*?\*/', ' ', body, flags=_re.S)
+body = _re.sub(r'(?m)^\s*//.*$', '', body)
+print(body)
+PYD
+)
+if [ -z "$DSM" ]; then bad "start_dismiss_targeted: DismissHiddenStartSurface could not be isolated"; else
+  if printf '%s' "$DSM" | command grep -q 'SendInput'; then
+    bad "start_dismiss_targeted: it still injects GLOBALLY - our Escape can close another process's menu"
+  else
+    ok "start_dismiss_targeted: no global inject in the dismissal"
+  fi
+  printf '%s' "$DSM" | command grep -q 'PostMessage(start, WM_KEYDOWN, VK_ESCAPE' \
+    && ok "start_dismiss_posts_to_the_window: the key goes to the Start surface's own queue" \
+    || bad "start_dismiss_posts_to_the_window: the dismissal does not post to that window"
+  # AND NO FALLBACK. A fallback to a global inject would reintroduce the whole defect.
+  printf '%s' "$DSM" | command grep -qE 'else[^}]*SendInput' \
+    && bad "start_dismiss_no_global_fallback: it falls back to a global inject when posting fails" \
+    || ok "start_dismiss_no_global_fallback: a failed post is reported, never retried globally"
+fi
+
 # ---- the harnesses that grade on the demoted lines must say they need the level ---------------
 for h in toast-hold-test.sh crop-before-map.sh; do
   f="$ROOT/mgmt/harness/$h"
