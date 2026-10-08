@@ -79,7 +79,14 @@ SUSPICIOUS_RE = re.compile(
     r"backing off|deaf|withheld|not shown|unmapped unpainted|reaping|reap\b|wedge|exiting)\b")
 # Levelless logs (bridge / etw-proxy / plain): E and W by vocabulary; a routine line that merely CONTAINS one of
 # these words is still shown to Jev, which is the point.
-BLOG_E_RE = re.compile(r"\b(FAIL|CRASH|ERROR|error|failed|Failed|SCHEMA MISMATCH|refusing)\b")
+# CASE-INSENSITIVE, and FAILED is in it. The old list was case-SENSITIVE with only FAIL / failed /
+# Failed, so "\bFAIL\b" could not match "FAILED" and neither could the lowercase forms: an
+# ALL-CAPS "FAILED:" was invisible to the error vocabulary. That is not hypothetical - it is the
+# prefix guest/pvnic-selfprime.ps1's own Fault() writes (`L "FAILED: $why"`), so a REAL PV NIC fault
+# was graded WARNING by this gate. Measured 2026-10-08: "...nothing to apply - but an earlier step
+# FAILED (...)" came back level=W. Owner the same day: "visible error on actual failure".
+# The zero-counter rule above runs FIRST, so "failed=0" is still not an error.
+BLOG_E_RE = re.compile(r"(?i)\b(fail|failed|failure|crash|crashed|error|refusing|schema mismatch)\b")
 BLOG_W_RE = re.compile(r"(?i)\b(WARN|down|absent|disconnected|mismatch|fallback|refused|unavailable|lost|retry|"
                        r"not opened|not mapped|ignored|squatter|dropped|invalid|timeout|timed out|burst|sampling)\b")
 # A COUNTER AT ZERO IS NOT A FAILURE. bind-dirs writes a key=value RESULT RECORD whose own first
@@ -94,6 +101,24 @@ BLOG_ZERO_COUNTER_RE = re.compile(r"(?i)^\s*(failed|failures?|errors?|warnings?|
 # record reporting twelve failures was graded INFO. Found by the check written for the zero case.
 BLOG_NONZERO_COUNTER_RE = re.compile(r"(?i)^\s*(failed|failures?|errors?|faults?|crashes?)\s*[=:]\s*"
                                      r"(?!0+\s*$)(?!0x0+\s*$)(\d+|0x[0-9a-f]+)\s*$")
+# ...AND A LINE WHOSE OWN CONCLUSION IS "NOTHING WAS WRONG" IS NOT A WARNING, however many
+# vocabulary words it happens to contain. The bridge and blog families carry NO level field, so
+# this file assigns one - and BLOG_W_RE matched the bare word "absent" inside
+# "/qubes-ip absent, no vif device: no netvm, nothing to apply", which is guest/pvnic-selfprime's
+# statement that a guest with no netvm is CORRECT (its function is literally named Ok). Measured
+# 2026-10-08: 12 of the 132 warning lines on a clean cycle were that, plus 4 more from the bridge's
+# "LIST trig=retry", a scheduled pass matching "retry". Jev, asked whether this is an analyzer
+# defect of the same class as grading a success record's "failed=0" an error: 0.76.
+# IT ONLY OUTRANKS THE WARNING VOCABULARY, NEVER THE ERROR ONE - the order in blog_level() puts
+# BLOG_E_RE first - so a line that says "apply FAILED, nothing to do" is still an error.
+BLOG_BENIGN_CONCLUSION_RE = re.compile(r"(?i)\b(nothing to (apply|do|judge)|no effect|none was due|"
+                                       r"nothing to report|already (applied|current|armed)|no change(s)? (needed|required))\b")
+# AND A VOCABULARY WORD THAT IS ONLY A FIELD VALUE NAMES A KIND, NOT AN OUTCOME. The bridge logs
+# "LIST trig=retry n=3 new=0 ms=12" - the name of the trigger that scheduled a routine pass - and
+# BLOG_W_RE matched "retry" in it, 4 lines per clean cycle. This strips `key=value` pairs before the
+# WARNING vocabulary is applied, so a word has to appear in the PROSE to count. It is deliberately
+# NOT applied to the error vocabulary: "status=failed" is an outcome and must stay an error.
+KV_PAIR_RE = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z_][A-Za-z0-9_]*=[^\s]+")
 STALE_ERR_RE = re.compile(r"failed with error 0x0\b")
 MSI_SUSPECT_RE = re.compile(r"(Return value 3|Installation (failed|success or error status: [1-9])|Note: 1:|\bError \d+|-- Error|Failed to|rolled back|Rollback)")
 
@@ -479,7 +504,11 @@ def blog_level(msg):
         return "E"
     if BLOG_E_RE.search(msg):
         return "E"
-    if BLOG_W_RE.search(msg):
+    # after the ERROR vocabulary, before the WARNING one: a stated benign conclusion outranks an
+    # incidental warning word but can never outrank a real failure word.
+    if BLOG_BENIGN_CONCLUSION_RE.search(msg):
+        return "I"
+    if BLOG_W_RE.search(KV_PAIR_RE.sub(" ", msg)):
         return "W"
     return "I"
 

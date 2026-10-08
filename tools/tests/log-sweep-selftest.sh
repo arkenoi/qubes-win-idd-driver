@@ -781,5 +781,33 @@ else
   echo "skip  T12 collector parse-check: no pwsh at $PWSH"
 fi
 
+# ---- T34 the level vocabularies, in BOTH directions -------------------------------------------
+# Owner 2026-10-08: "visible error on actual failure" and, for OUR components, "no warnings on
+# normal operation. warning means something is not quite normal, yet workable."
+# Two defects were found here by measurement, not by reading:
+#   * the error vocabulary was case-SENSITIVE and had no FAILED, so "\bFAIL\b" could not match
+#     "FAILED" - the exact prefix guest/pvnic-selfprime.ps1's Fault() writes - and a REAL fault
+#     line came back level=W;
+#   * BLOG_W_RE matched vocabulary words inside key=value FIELD VALUES ("LIST trig=retry"), and
+#     warned over a line that merely names the trigger that scheduled a routine pass.
+t34(){ # $1 = message, $2 = expected level
+  got=$(python3 - "$ROOT/tools/log-sweep.py" "$1" <<'PY34'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("ls", sys.argv[1])
+ls = importlib.util.module_from_spec(spec); spec.loader.exec_module(ls)
+print(ls.blog_level(sys.argv[2]))
+PY34
+)
+  if [ "$got" = "$2" ]; then ok "T34 ${1:0:58} -> $2"; else bad "T34 ${1:0:58} -> $got (want $2)"; fi
+}
+t34 'FAILED: xenbus_monitor SURVIVED enforcement' E
+t34 'no netvm, nothing to apply - but an earlier step FAILED (the re-arm did not complete)' E
+t34 'status=failed' E
+t34 'apply FAILED, nothing to do' E
+t34 'qubesdb up, /qubes-ip absent, no vif device: no netvm, nothing to apply' I
+t34 'LIST trig=retry n=3 new=0 ms=12' I
+t34 '/qubes-ip absent, the applier gave up' W
+t34 'the listener was disconnected' W
+
 echo "--- $pass passed, $fail failed; fixtures/outputs in $T"
 [ "$fail" = 0 ] && exit 0 || exit 1
