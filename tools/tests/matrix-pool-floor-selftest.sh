@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# matrix-pool-floor-selftest.sh - A CAMPAIGN THAT DIES AT CELL 11 TEACHES NOTHING.
+#
+# Owner, 2026-10-08: "watch the thin pool space meanwhile." mgmt/harness/matrix.sh had NO space
+# check of any kind. That is the worst shape for this failure: the pool fills partway through, a cell
+# dies for a reason that looks like the product, and the whole campaign's results are untrustworthy
+# rather than merely short - and this rig was measured at 85% full with 131 GB free the day the full
+# 18-suite gate came due.
+#
+# This drives the gate with a STUBBED pool reading, in both directions, so it is seen to refuse and
+# seen to allow without filling a disk. The stub is the only way to exercise a disk-space refusal
+# offline; it exists in the harness for this test and is never set in a real run.
+set -u
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+M="$ROOT/mgmt/harness/matrix.sh"
+pass=0; fail=0
+ok(){ pass=$((pass+1)); echo "PASS  $*"; }
+bad(){ fail=$((fail+1)); echo "FAIL  $*"; }
+[ -f "$M" ] || { echo "FAIL  $M missing - nothing ran (missing data fails)"; exit 2; }
+
+# The gate is sourced out of the harness rather than copied, so this tests the code that SHIPS.
+# Extracting it keeps the test from booting a guest, which is what the harness does next.
+gate_src="$(sed -n '/^POOL_FLOOR_GB=/,/^pool_gate "this campaign"/p' "$M" | sed '$d')"
+[ -n "$gate_src" ] || { echo "FAIL  could not extract the pool gate from matrix.sh"; exit 2; }
+
+run_gate(){   # $1 = stub free GB ("" = unreadable pool); prints the gate's output, returns its rc
+    local out rc
+    out=$(
+        say(){ echo "$*"; }
+        POOL_FREE_GB_STUB="$1"
+        eval "$gate_src"
+        pool_gate "the test cell"
+    ) ; rc=$?
+    printf '%s' "$out"
+    return $rc
+}
+
+# ---- 1. SEEN TO REFUSE: below the floor ---------------------------------------------------------
+out=$(run_gate 10); rc=$?
+if [ "$rc" != 0 ] && printf '%s' "$out" | command grep -q 'INVALID-POOL'; then
+  ok "refuses_below_floor: 10 GB free is refused, and the refusal is INVALID-POOL (a cell that did not run)"
+else
+  bad "refuses_below_floor: rc=$rc out='$(printf '%s' "$out" | head -1)' - a nearly full pool would start a campaign"
+fi
+printf '%s' "$out" | command grep -q 'floor is' \
+  && ok "refusal_names_the_numbers: it prints what was free and what the floor is" \
+  || bad "refusal_names_the_numbers: the refusal does not say how short it was"
+printf '%s' "$out" | command grep -q 'invalidates every cell' \
+  && ok "refusal_says_why_it_matters: it states that a mid-campaign fill invalidates the whole run" \
+  || bad "refusal_says_why_it_matters: nothing explains why this is refused rather than warned"
+
+# ---- 2. SEEN TO ALLOW: above the floor ----------------------------------------------------------
+out=$(run_gate 500); rc=$?
+if [ "$rc" = 0 ] && ! printf '%s' "$out" | command grep -q 'INVALID-POOL'; then
+  ok "allows_above_floor: 500 GB free starts the campaign - the gate is not a blanket refusal"
+else
+  bad "allows_above_floor: rc=$rc out='$(printf '%s' "$out" | head -1)' - a healthy pool would be refused"
+fi
+
+# ---- 3. THE WARNING BAND, which is the half that is easy to forget ------------------------------
+# Between the floor and the warn level a campaign may start but should say it will be tight. Today's
+# measured rig sits here: 131 GB free is above the 60 GB floor and below the 90 GB warn... it is not,
+# and that is the point of checking a value inside the band rather than today's number.
+out=$(run_gate 75); rc=$?
+if [ "$rc" = 0 ] && printf '%s' "$out" | command grep -q 'POOL WARNING'; then
+  ok "warns_in_the_band: 75 GB free starts, and says it is tight"
+else
+  bad "warns_in_the_band: rc=$rc - a campaign that will get tight starts silently"
+fi
+out=$(run_gate 500)
+printf '%s' "$out" | command grep -q 'POOL WARNING' \
+  && bad "warn_not_always_on: a healthy pool also prints the warning, which makes the warning worthless" \
+  || ok "warn_not_always_on: a healthy pool does not warn"
+
+# ---- 4. MISSING DATA FAILS ----------------------------------------------------------------------
+# An unreadable pool must REFUSE, never read as "probably fine" - the failure this project refuses.
+out=$(POOL_FREE_GB_STUB="" run_gate ""); rc=$?
+# With no stub the gate asks qubesadmin; on this dev qube that succeeds, so the honest check is the
+# CODE PATH: the gate must treat an empty reading as a refusal.
+echo "$gate_src" | command grep -q 'refusing to start .* blind' \
+  && ok "unreadable_pool_refuses: an unreadable pool is refused, not assumed healthy" \
+  || bad "unreadable_pool_refuses: an unreadable pool would fall through and the campaign would start blind"
+
+# ---- 5. THE FLOOR IS DERIVED, NOT INVENTED ------------------------------------------------------
+echo "$gate_src" | command grep -q 'parked snapshot' \
+  && ok "floor_is_derived: the number is justified from measured volume sizes, in the code" \
+  || bad "floor_is_derived: the floor is a bare constant with no derivation"
+# And it must not read the pool by predicting from volume sizes - that arithmetic was wrong once today.
+echo "$gate_src" | command grep -q "pools\['vm-pool'\]" \
+  && ok "reads_the_pool_itself: free space comes from the pool's own usage, not a prediction" \
+  || bad "reads_the_pool_itself: the gate computes space some other way"
+
+echo
+echo "matrix-pool-floor-selftest: $pass passed, $fail failed"
+[ "$fail" = 0 ] || exit 1

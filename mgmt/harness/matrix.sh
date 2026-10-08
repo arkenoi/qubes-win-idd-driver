@@ -90,6 +90,58 @@ R=$M/matrix.log; : > "$R"
 say(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$R"; }
 PASS=0; FAIL=0; INVALID=0
 ok(){ PASS=$((PASS+1)); say "PASS  $*"; }
+
+# ---- THIN-POOL FLOOR ---------------------------------------------------------------------------
+# Owner, 2026-10-08: "watch the thin pool space meanwhile." This harness had NO space check of any
+# kind, which is the worst shape for this failure: the pool fills partway through, a cell dies for a
+# reason that looks like the product, and the whole campaign's results are untrustworthy rather than
+# merely short. A campaign that REFUSES up front with a number costs minutes; one that dies at cell
+# 11 costs the day and teaches nothing.
+#
+# WHERE THE NUMBER COMES FROM, so it is not invented: the largest Windows root volume measured on
+# this rig is 15 GiB (win11de-base). A cell provisions a subject (~15 GiB) and may PARK an installed
+# snapshot (~15 GiB more), so ~30 GiB is the worst case for one cell in flight. The floor is that
+# plus one cell of slack - refusing with less than 60 GB free, and WARNING below 90 GB so a campaign
+# that will get tight says so while there is still time to act.
+#
+# CORRECTED 2026-10-08, same day: an earlier reading of this rig estimated revisions as
+# "usage x revisions" and predicted ~31 GiB back from removing one spent subject. Removing it
+# returned 8.7 GB. Revisions are COPY-ON-WRITE and SHARE blocks with the live volume, so that
+# arithmetic overestimates badly - which is exactly why this gate reads the pool's own usage figure
+# and never computes a prediction from volume sizes.
+POOL_FLOOR_GB="${POOL_FLOOR_GB:-60}"
+POOL_WARN_GB="${POOL_WARN_GB:-90}"
+pool_free_gb(){
+    # Prints the free GB as an integer, or nothing if the pool cannot be read. POOL_FREE_GB_STUB
+    # exists so this gate can be driven to its refusal without filling a disk (it is seen to fail in
+    # tools/tests/matrix-pool-floor-selftest.sh); it is never set in a real run.
+    if [ -n "${POOL_FREE_GB_STUB:-}" ]; then echo "$POOL_FREE_GB_STUB"; return 0; fi
+    python3 - <<'PYF' 2>/dev/null
+import qubesadmin
+p = qubesadmin.Qubes().pools['vm-pool']
+print(int((int(p.size) - int(p.usage)) / 1e9))
+PYF
+}
+pool_gate(){   # $1 = what is about to run, for the message
+    local free; free="$(pool_free_gb)"
+    if [ -z "$free" ]; then
+        # MISSING DATA FAILS. An unreadable pool is not "probably fine": the one thing this gate
+        # exists to prevent is a campaign whose results cannot be trusted.
+        say "INVALID-POOL  the thin pool's free space could not be read - refusing to start $1 blind"
+        return 1
+    fi
+    if [ "$free" -lt "$POOL_FLOOR_GB" ]; then
+        say "INVALID-POOL  only ${free} GB free on vm-pool, floor is ${POOL_FLOOR_GB} GB - refusing $1."
+        say "              One cell needs ~30 GB at peak (a ~15 GiB subject plus a parked snapshot)."
+        say "              Reclaim first; a pool that fills mid-campaign invalidates every cell, not just this one."
+        return 1
+    fi
+    [ "$free" -lt "$POOL_WARN_GB" ] && say "POOL WARNING  ${free} GB free on vm-pool (warn below ${POOL_WARN_GB}) - enough to start, tight to finish"
+    say "pool: ${free} GB free on vm-pool (floor ${POOL_FLOOR_GB})"
+    return 0
+}
+pool_gate "this campaign" || { say "=== MATRIX: 0 passed, 1 failed ==="; exit 2; }
+
 # INVALID-* messages (a cell that did not run: precondition not met, instrument gave no data) are
 # counted TWICE on purpose: into FAIL, because the footer '=== MATRIX: N passed, M failed ===' and
 # the exit code are a machine-read contract (campaign.json s6-matrix + its defect-cell-fail
