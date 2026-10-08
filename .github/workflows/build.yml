@@ -418,36 +418,10 @@ jobs:
       # win11r-logvol 2026-10-08: eight of the new binary's ten error lines were this class, four
       # per call. The handle's level is the caller's to set and a message is emitted only when its
       # level <= the current one, so 0 silences that one read and is restored immediately; the real
-      # ring-ref read still reports with the path and the status.
-      - name: Apply the vchan quiet-store-probe fix (always)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ws = $env:GITHUB_WORKSPACE
-          git -C "$ws\deps-src\core-vchan-xen" apply --verbose "$ws\patches\vchan-quiet-store-probe.patch"
-          if ($LASTEXITCODE -ne 0) { throw "vchan quiet-store-probe patch did not apply" }
-          $src = Get-Content "$ws\deps-src\core-vchan-xen\windows\src\init.c" -Raw
-          if ($src -notmatch 'XcSetLogLevel\(xc_handle, \(XENCONTROL_LOG_LEVEL\)0\)') { throw 'the probe is not silenced after patch' }
-          if ($src -notmatch 'XcSetLogLevel\(xc_handle, g_log_level\)') { throw 'the probe does not restore the log level after patch' }
-          if ($src -notmatch 'entry_present') { throw 'the probe result marker is missing after patch' }
-          Write-Host "::notice title=vchan::quiet-store-probe fix applied"
       # THE SECOND HALF OF "ONE FAILURE, ONE REPORT" for a departed peer. XcStoreRead reports its
       # own failure at XLL_ERROR from inside xencontrol and libxenvchan_client_init then reports the
       # SAME missing key again with the path and the status, so one gone client wrote two error lines
       # here on top of the two the caller wrote. The handle's level is already set two lines above
-      # the read, so 0 silences the inner report for that read alone and is restored immediately.
-      - name: Apply the libxenvchan one-report-per-failure fix (always)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ws = $env:GITHUB_WORKSPACE
-          git -C "$ws\deps-src\pvdrivers" apply --verbose "$ws\patches\libxenvchan-one-report-per-failure.patch"
-          if ($LASTEXITCODE -ne 0) { throw "libxenvchan one-report-per-failure patch did not apply" }
-          $src = Get-Content "$ws\deps-src\pvdrivers\src\libxenvchan\init.c" -Raw
-          if ($src -notmatch 'XcSetLogLevel\(ctrl->xc, \(XENCONTROL_LOG_LEVEL\)0\)') { throw 'the inner store report is not silenced after patch' }
-          if ($src -notmatch 'XcSetLogLevel\(ctrl->xc, log_level\)') { throw 'the log level is not restored after patch' }
-          if ($src -notmatch "failed to read '%S' from store") { throw 'the single remaining report is gone after patch' }
-          Write-Host "::notice title=libxenvchan::one-report-per-failure fix applied"
       - name: Shadow every set-version script with the QWT-NG stamper; unify version files
         shell: pwsh
         run: |
