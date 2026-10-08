@@ -437,8 +437,36 @@ $script:QwtShutdownNearProbe = {
     }
     return $false
 }
-function Test-QwtTaskEndedByShutdown([string]$instanceId, [datetime]$at) {
-    if (-not [bool](& $script:QwtTaskEndedProbe $instanceId)) { return 'not-ended' }
+# TASK SCHEDULER RESULT CODES THAT NAME THE SHUTDOWN AS THE CAUSE. These are not inferred from an
+# absence - they are Task Scheduler stating why it could not run or finish the action:
+#   0x8007045B  win32 1115 ERROR_SHUTDOWN_IN_PROGRESS - the action could not be launched because the
+#               system is shutting down. Recorded as event 203, and unambiguous on its own.
+#   0x8007050B  win32 1291 - what a task instance killed by the shutdown leaves as its result. Seen
+#               on THREE unrelated tasks in the SAME SECOND (QubesPvNic, QwtModuleBases,
+#               QwtDeathReporter at 2026-10-08 00:20:17.9), which is the shutdown reaping them.
+$script:QwtShutdownResultCodes = @('0x8007045b', '0x8007050b', '2147943515', '2147943691')
+
+function Test-QwtTaskEndedByShutdown {
+    param([string]$instanceId, [datetime]$at, [string]$code = '')
+
+    # EVENT 111 IS NOT AVAILABLE EVERYWHERE, and requiring it made this whole path dead code.
+    # MEASURED 2026-10-08 on win11r-logvol: ZERO event 111 records in the entire collected corpus,
+    # so QwtTaskEndedProbe could never return true, every shutdown-terminated task was reported as a
+    # death, and the owner was told "The PV NIC setup task failed" for a task whose own log shows it
+    # had finished its work five seconds earlier ("no netvm, nothing to apply", correct for this
+    # guest). The suppression now rests on TWO POSITIVE detections - never on an absence:
+    #   a) the result code names the shutdown (the list above), or event 111 says the instance was
+    #      terminated; AND
+    #   b) QwtShutdownNearProbe finds a shutdown record at that instant (Kernel-General 109,
+    #      User32 1074 or EventLog 6006).
+    # ERROR_SHUTDOWN_IN_PROGRESS is accepted on its own, because it IS the statement of cause: Task
+    # Scheduler is saying the action never started because the system was going down.
+    $c = ("$code").Trim().ToLowerInvariant()
+    if ($c -and ($c -eq '0x8007045b' -or $c -eq '2147943515')) { return 'shutdown' }
+
+    $endedByEvent = [bool](& $script:QwtTaskEndedProbe $instanceId)
+    $codeSaysShutdown = $c -and ($script:QwtShutdownResultCodes -contains $c)
+    if (-not $endedByEvent -and -not $codeSaysShutdown) { return 'not-ended' }
     if ([bool](& $script:QwtShutdownNearProbe $at)) { return 'shutdown' }
     return 'ended-not-shutdown'
 }
@@ -626,7 +654,7 @@ function ConvertFrom-QwtDeathEvent {
                 # same thing one step removed: the code in the 201 is whatever the killed process
                 # left, not a verdict on it. An instance ended for ANY OTHER reason - its execution
                 # time limit, a hard terminate - is still reported, loudly.
-                $ended = Test-QwtTaskEndedByShutdown "$($named['TaskInstanceId'])" $time   # GUARD:endedbyshutdown
+                $ended = Test-QwtTaskEndedByShutdown "$($named['TaskInstanceId'])" $time $code   # GUARD:endedbyshutdown
                 if ($ended -eq 'shutdown') {
                     $r.ignore = $true
                     $r.reason = ("task '$task' instance $($named['TaskInstanceId']) was ENDED by Task Scheduler (event 111) " +
