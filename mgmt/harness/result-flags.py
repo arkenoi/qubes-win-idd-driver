@@ -183,6 +183,7 @@ ERROR_FLAGS = [
     ('death_reporter',          lambda v: _s(v) != 'registered',          'Register-QwtDeathReporter WARN: the event-triggered QwtDeathReporter task is not registered - a death of ours stays in the guest logs only'),
     ('death_catchup',           lambda v: _s(v) != 'registered',          'Register-QwtDeathCatchUp WARN: the boot-triggered QwtDeathCatchUp task is not registered, so a death DURING a shutdown is never reported (Task Scheduler refuses to start actions once shutdown is in progress)'),
     ('svc_recovery_disarm_failed', nonempty,                              'Suspend-QubesServiceRecovery ERROR: "<svc>: sc failure=<rc> failureflag=<rc>" - the SCM recovery could NOT be disarmed, so stopping that service may have it restarted underneath the install (a relauncher left armed is the defect class this suspend exists for)'),
+    ('clock_sync',              lambda v: _s(v) != 'registered',          'L4623 ERROR: the boot-time clock-sync task was NOT registered - "refused: <schtasks output>" | "ran, no result trailer" | "error: <msg>" | "not in payload" (the helper was never staged - the helpers-must-be-packaged class). A guest whose clock does not sync from dom0 drifts, and the installer then refuses its own driver catalogs as not-yet-valid (0x800B0101): the 4.3.36 clock P1. Only \'registered\' is success.'),
     ('svc_recovery_rearm_failed', nonempty,                               'Resume-QubesServiceRecovery ERROR: "<svc>: NO actions|unreadable (prior: ...)" - the recovery could not be put BACK, so the service would leave the installer with no SCM recovery at all while the log said "re-armed". The readback catches it; sc.exe returning 0 does not.'),
     ('autologon',               lambda v: _s(v) not in ('armed', 'skipped', 'not in payload'),
                                                                           'L1278 not-armed / L1285 error / L3384,L3416 unverified / L3409 no trailer / L3412 verify-error'),
@@ -193,6 +194,11 @@ ERROR_FLAGS = [
 # classified one way or the other - a new detail key that lands in neither list fails the selftest.
 INFORMATIONAL = (
     'private_disk_prepared_by',  # the Q: takeover: who created the private volume ('wrapper'); the verdict lives in private_disk_gate
+    'svc_recovery_absent',       # Suspend-QubesServiceRecovery: services that did not EXIST when their disarm was
+                                 # attempted, confirmed by sc qfailure AND sc query both answering 1060. Expected on a
+                                 # CLEAN install (the MSI creates ours later) and NOT graded here; a service that should
+                                 # exist by the end of the stage is caught by `service_recovery` above, which is
+                                 # error-class and fails the cell when arming it returns 1060.
     'svc_recovery_suspended',    # Suspend-QubesServiceRecovery's record: '<svc>[<prior sc failure setting>] ...' - what was disarmed and what it was, so Resume puts back the FIRST reading
     'svc_msi_started_actor',     # Assert-NoServiceStartedByMsi: WHO started them (the previous install's armed SCM recovery, the MSI, or us); the verdict lives in svc_msi_started
     'svc_msi_started_evidence',  # the same check's evidence: the MSI log's StartServices condition plus the System 7023/7024/7031/7036 lines it read

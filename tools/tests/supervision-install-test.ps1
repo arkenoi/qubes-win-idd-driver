@@ -61,6 +61,7 @@ function Set-GuardLine([string[]]$region, [string]$guard, [string]$replacement) 
 switch ($Defect) {
     '' { }
     'recovsuspend'   { $R['suspend']  = Set-GuardLine $R['suspend']  'recovsuspend'   '    $script:RecoverySuspended = $script:RecoverySuspended + @{ $Name = $before }   # DEFECT: throws on a second suspend of the same service (pre-2026-10-07)' }
+    'recovabsent'    { $R['suspend']  = Set-GuardLine $R['suspend']  'recovabsent'    '    if ($false) {   # DEFECT: an absent service is treated as a failed disarm (pre-2026-10-08: every clean cell went non-green)' }
     'recovquote'     { $R['suspend']  = Set-GuardLine $R['suspend']  'recovquote'     '    & sc.exe failure $Name reset= 0 actions= "" 2>&1 | Out-Null   # DEFECT: the bare "" Windows PowerShell 5.1 drops, so sc.exe gets `actions=` and answers 1639' }
     'recovreadback'  { $R['suspend']  = Set-GuardLine $R['suspend']  'recovreadback'  '    $after = @{ reset = ''0''; actions = @() }   # DEFECT: believe the exit code; never read the configuration back' }
     'rearmreadback'  { $R['suspend']  = Set-GuardLine $R['suspend']  'rearmreadback'  '        $now = @{ reset = ''86400''; actions = @(''restart/5000'') }   # DEFECT: assume the re-arm took' }
@@ -81,7 +82,7 @@ $bin = Join-Path $tmp 'bin'
 $env:TEMP = $tmp
 $script:W = @{ sc = New-Object System.Collections.ArrayList; reg = New-Object System.Collections.ArrayList
                wevtutil = New-Object System.Collections.ArrayList; schtasks = New-Object System.Collections.ArrayList
-               taskXml = @{}; scFailFor = @{}; scActions = @{}; scLieOnWrite = $false; regRc = 0; wevtRc = 0; schtasksCreateRc = 0; schtasksQueryRc = 0 }
+               taskXml = @{}; scFailFor = @{}; scQueryOkFor = @{}; scActions = @{}; scLieOnWrite = $false; regRc = 0; wevtRc = 0; schtasksCreateRc = 0; schtasksQueryRc = 0 }
 $script:logged = New-Object System.Collections.ArrayList
 function Write-Log { param([string]$Message, [string]$Level = 'INFO') [void]$script:logged.Add("[$Level] $Message") }
 function Write-Host { }
@@ -96,9 +97,21 @@ function Write-Host { }
 function sc.exe { param([Parameter(ValueFromRemainingArguments = $true)][string[]]$a)
     $call = ($a -join ' '); [void]$script:W.sc.Add($call)
     $svc = $a[1]
-    if ($script:W.scFailFor.ContainsKey($svc)) { $global:LASTEXITCODE = [int]$script:W.scFailFor[$svc]; return '' }
+    if ($script:W.scFailFor.ContainsKey($svc)) {
+        # scQueryOkFor models the DISAGREEMENT case: qfailure cannot read the configuration while the
+        # service plainly exists, which must NOT be taken for absence.
+        if ($a[0] -eq 'query' -and $script:W.scQueryOkFor.ContainsKey($svc)) {
+            $global:LASTEXITCODE = 0; return "SERVICE_NAME: $svc`n        STATE              : 4  RUNNING"
+        }
+        $global:LASTEXITCODE = [int]$script:W.scFailFor[$svc]; return ''
+    }
     $global:LASTEXITCODE = 0
     if (-not $script:W.scActions.ContainsKey($svc)) { $script:W.scActions[$svc] = @('restart/5000','restart/15000','restart/60000') }
+    if ($a[0] -eq 'query') {
+        # `sc query <name>` answers 1060 for a name the SCM does not know; scFailFor above already
+        # returned for that case, so reaching here means the service exists.
+        return (@("SERVICE_NAME: $svc", "        STATE              : 4  RUNNING") -join "`n")
+    }
     if ($a[0] -eq 'qfailure') {
         $acts = @($script:W.scActions[$svc])
         $out = @("[SC] QueryServiceConfig2 SUCCESS", "SERVICE_NAME: $svc",
@@ -285,7 +298,7 @@ Check 'netsetup: a failed arming is a failed priming (fail.netsetup_recovery)' (
 Reset-World
 . ([scriptblock]::Create(($R['suspend'] -join "`n")))
 $script:Result = @{ detail = @{} }
-$script:RecoverySuspended = @{}
+$script:RecoverySuspended = @{}; $script:RecoveryAbsent = @{}
 $thrown = ''
 try { [void](Suspend-QubesServiceRecovery -Name 'QubesGuiWatchdog') } catch { $thrown = "$_" }
 # THE COMMAND LINE IS NOW EXACT. It used to accept EITHER the literal-quote token OR the dropped empty one
@@ -303,6 +316,41 @@ try { [void](Suspend-QubesServiceRecovery -Name 'QubesGuiWatchdog') } catch { $t
 Check 'suspend: a SECOND call for the same service does not throw (Stop-QwtRuntime runs from three sites)' ($thrown -eq '') "thrown=$thrown"
 Check 'suspend: the record is still the FIRST reading, not the disarmed one it would read now' `
       ("$($script:RecoverySuspended['QubesGuiWatchdog'])" -match 'reset=86400') "rec=$($script:RecoverySuspended['QubesGuiWatchdog'])"
+# AN ABSENT SERVICE IS NOT A FAILED DISARM. On a clean install our services are created later by the MSI, so
+# the disarm runs against a name the SCM does not know and sc.exe answers 1060 for every call. Measured
+# 2026-10-08 on WIN10-clean and WIN11-clean of the 4.3.36 gate: the flag alone failed both cells.
+$script:W.sc.Clear(); $script:W.scFailFor['QubesGuiWatchdog'] = 1060
+$script:Result = @{ detail = @{} }; $script:RecoverySuspended = @{}; $script:RecoveryAbsent = @{}
+$thrown = ''; $rv = $null
+try { $rv = Suspend-QubesServiceRecovery -Name 'QubesGuiWatchdog' } catch { $thrown = "$_" }
+Check 'suspend: a service that does NOT exist (sc rc=1060) is not a failed disarm - nothing to restart behind us' `
+      ($thrown -eq '' -and $rv -eq $true -and $null -eq $script:Result.detail['svc_recovery_disarm_failed']) `
+      "thrown=$thrown rv=$rv flag=$($script:Result.detail['svc_recovery_disarm_failed'])"
+Check 'suspend: and an absent service is NOT recorded for resume (Resume- would restore onto a name that is still absent)' `
+      (-not $script:RecoverySuspended.ContainsKey('QubesGuiWatchdog')) "rec=$($script:RecoverySuspended.Keys -join ',')"
+Check 'suspend: the absent-service path does not try to WRITE recovery config' `
+      (@($script:W.sc | Where-Object { $_ -like 'failure *' -or $_ -like 'failureflag *' }).Count -eq 0) `
+      "sc=$($script:W.sc -join ' | ')"
+Check 'suspend: the absence is RECORDED in svc_recovery_absent, so a service that SHOULD exist cannot read green' `
+      ("$($script:Result.detail['svc_recovery_absent'])" -eq 'QubesGuiWatchdog') `
+      "absent=$($script:Result.detail['svc_recovery_absent'])"
+
+# DISAGREEMENT: qfailure says 1060 but the service plainly exists. That is NOT absence, and the
+# disarm must still be attempted rather than silently reported as nothing-to-do.
+$script:W.sc.Clear(); $script:W.scQueryOkFor['QdbDaemon'] = $true; $script:W.scFailFor['QdbDaemon'] = 1060
+$script:Result = @{ detail = @{} }; $script:RecoverySuspended = @{}; $script:RecoveryAbsent = @{}
+[void](Suspend-QubesServiceRecovery -Name 'QdbDaemon')
+Check 'suspend: qfailure 1060 but sc query says the service EXISTS is NOT treated as absent' `
+      ($null -eq $script:Result.detail['svc_recovery_absent'] `
+       -and @($script:W.sc | Where-Object { $_ -like 'failure QdbDaemon *' }).Count -eq 1) `
+      "absent=$($script:Result.detail['svc_recovery_absent']) sc=$($script:W.sc -join ' | ')"
+$script:W.scQueryOkFor.Remove('QdbDaemon'); $script:W.scFailFor.Remove('QdbDaemon')
+
+$script:W.scFailFor.Remove('QubesGuiWatchdog')
+$script:W.sc.Clear(); $script:W.scActions.Remove('QubesGuiWatchdog')
+$script:Result = @{ detail = @{} }; $script:RecoverySuspended = @{}; $script:RecoveryAbsent = @{}
+[void](Suspend-QubesServiceRecovery -Name 'QubesGuiWatchdog')
+
 $thrown = ''
 try { Resume-QubesServiceRecovery } catch { $thrown = "$_" }
 Check 'resume: the recorded configuration is restored, with the non-crash flag back on' `
@@ -319,7 +367,7 @@ Check 'resume: the re-arm is verified by effect too - actions are back and no re
 Reset-World
 . ([scriptblock]::Create(($R['suspend'] -join "`n")))
 $script:Result = @{ detail = @{} }
-$script:RecoverySuspended = @{}
+$script:RecoverySuspended = @{}; $script:RecoveryAbsent = @{}
 $script:W.scLieOnWrite = $true
 [void](Suspend-QubesServiceRecovery -Name 'QdbDaemon')
 Check 'suspend: a write that sc ACCEPTS but does not apply is caught by the readback, not believed' `
@@ -329,7 +377,7 @@ Check 'suspend: a write that sc ACCEPTS but does not apply is caught by the read
 Reset-World
 . ([scriptblock]::Create(($R['suspend'] -join "`n")))
 $script:Result = @{ detail = @{} }
-$script:RecoverySuspended = @{}
+$script:RecoverySuspended = @{}; $script:RecoveryAbsent = @{}
 [void](Suspend-QubesServiceRecovery -Name 'QdbDaemon')
 $script:W.scLieOnWrite = $true
 Resume-QubesServiceRecovery -Name 'QdbDaemon'
@@ -341,7 +389,7 @@ Check 'resume: a re-arm that does not take is an ERROR-class flag, never a "re-a
 Reset-World
 . ([scriptblock]::Create(($R['suspend'] -join "`n")))
 $script:Result = @{ detail = @{} }
-$script:RecoverySuspended = @{}
+$script:RecoverySuspended = @{}; $script:RecoveryAbsent = @{}
 $script:W.scFailFor['QdbDaemon'] = 1
 [void](Suspend-QubesServiceRecovery -Name 'QdbDaemon')
 Check 'suspend: an unreadable prior configuration is an ERROR-class flag, and the disarm is still attempted' `

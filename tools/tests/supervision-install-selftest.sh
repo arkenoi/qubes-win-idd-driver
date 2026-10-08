@@ -21,7 +21,7 @@ mkdir -p "$OUT"
 say() { printf '%s\n' "$*"; }
 if [ ! -x "$PWSH" ]; then say "FAIL  pwsh not found at $PWSH - nothing ran"; exit 2; fi
 
-KNOBS="recovsuspend recovquote recovreadback rearmreadback recovthree evsrc tasklog selftrigger argsinject netsetuprecov"
+KNOBS="recovabsent recovsuspend recovquote recovreadback rearmreadback recovthree evsrc tasklog selftrigger argsinject netsetuprecov"
 if [ -n "${SUPERV_DEFECT:-}" ]; then
     case " $KNOBS " in *" $SUPERV_DEFECT "*) ;; *) say "FAIL  unknown SUPERV_DEFECT='$SUPERV_DEFECT' ($KNOBS)"; exit 2 ;; esac
     "$PWSH" -NoProfile -File "$SUITE" -Defect "$SUPERV_DEFECT"; rc=$?
@@ -44,6 +44,7 @@ leg(){ # $1 knob, $2 target check (literal prefix)
         say "FAIL  defect $1: rc=$r target-failed=$(grep -cF "FAIL $2" "$OUT/defect-$1.out") first=[$(grep -m1 '^FAIL' "$OUT/defect-$1.out" | cut -c1-160)]"; bad=1
     fi
 }
+leg recovabsent   'suspend: a service that does NOT exist (sc rc=1060) is not a failed disarm'
 leg recovsuspend  'suspend: a SECOND call for the same service does not throw'
 leg recovquote    'suspend: the disarm sends a NON-EMPTY actions token'
 leg recovreadback 'suspend: a write that sc ACCEPTS but does not apply is caught by the readback'

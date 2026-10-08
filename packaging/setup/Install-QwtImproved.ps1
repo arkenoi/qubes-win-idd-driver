@@ -681,15 +681,47 @@ function Suspend-QubesServiceRecovery {
     # do not reach it. A disarm that fails is an ERROR-class detail the harness grades - never a silent continue,
     # because the stop that follows would then race a restart exactly as before.
     param([Parameter(Mandatory)][string]$Name)
+    # EXISTENCE IS PROBED FIRST AND ON ITS OWN, not inferred from the failure-configuration read.
+    # `sc query <name>` answers 1060 (ERROR_SERVICE_DOES_NOT_EXIST) for a name the SCM does not know,
+    # and that is the only question being asked here; a service that EXISTS but whose FAILURE
+    # configuration cannot be read is a different case and must keep taking the ERROR path below.
+    #
+    # WHY THIS BRANCH EXISTS. On a CLEAN install our services are created later by the MSI, so the
+    # disarm ran against a name the SCM does not know: both sc.exe writes answered 1060, the readback
+    # was $null, and the function set svc_recovery_disarm_failed - which result-flags.py grades as
+    # error-class, so the installer's RESULT read non-green on EVERY clean cell. Measured 2026-10-08
+    # on WIN10-clean and WIN11-clean of the 4.3.36 release gate:
+    #   svc_recovery_disarm_failed=QubesGuiWatchdog: still=unreadable (sc failure=1060 failureflag=1060)
+    # A service that does not exist cannot be restarted behind this stage, so there is nothing to
+    # disarm and that is not a failed disarm.
+    #
+    # THE ABSENCE IS STILL REPORTED. svc_recovery_absent is informational, and a service that SHOULD
+    # exist by the end of the stage is caught by Set-QubesServiceRecovery's arming, whose
+    # service_recovery detail IS error-class in result-flags.py. Nothing is hidden, and NOTHING is
+    # recorded in $script:RecoverySuspended, so Resume- never restores onto a name that may still be
+    # absent.
+    $exrc = 0
+    try { & sc.exe query $Name 2>&1 | Out-Null; $exrc = $LASTEXITCODE } catch { $exrc = -1 }
+    if ($exrc -eq 1060) {   # GUARD:recovabsent
+        Write-Log "recovery disarm for ${Name}: the service is not installed on this system (sc query rc=1060), so the SCM has nothing to restart behind this stage - nothing to disarm"
+        $script:RecoveryAbsent[$Name] = $true
+        $script:Result.detail.svc_recovery_absent = (($script:RecoveryAbsent.Keys | Sort-Object) -join ' ')
+        return $true
+    }
+
     $before = 'unreadable'
+    $qrc = -1
     try {
         $q = (& sc.exe qfailure $Name 2>&1 | Out-String)
-        if ($LASTEXITCODE -eq 0) {
+        $qrc = $LASTEXITCODE
+        if ($qrc -eq 0) {
             $reset = ([regex]::Match($q, 'RESET_PERIOD[^:]*:\s*(\d+)')).Groups[1].Value
             $acts  = ([regex]::Matches($q, '(RESTART|RUN PROCESS|REBOOT)\s*--\s*Delay\s*=\s*(\d+)') | ForEach-Object { "$($_.Groups[1].Value.ToLower())/$($_.Groups[2].Value)" }) -join '/'
             $before = "reset=$reset actions=$(if ($acts) { $acts } else { 'none' })"
-        } else { $before = "sc qfailure rc=$LASTEXITCODE" }
+        } else { $before = "sc qfailure rc=$qrc" }
     } catch { $before = "error: $($_.Exception.Message)" }
+    # Reaching here means `sc query` found the service, so a non-zero qfailure is NOT absence: the
+    # configuration could not be READ, which stays missing data and keeps the ERROR path below.
     # '""' IS A LITERAL TWO-QUOTE TOKEN, and the reason this function never worked. Windows PowerShell 5.1 -
     # what runs on the guest - DROPS a bare "" when calling a native executable, so sc.exe received
     # `failure <svc> reset= 0 actions=` with nothing after it and answered 1639, ERROR_INVALID_COMMAND_LINE.
@@ -889,6 +921,10 @@ $script:MsiSerialStartProperty = 'QWTNG_SERIALSTART'
 $script:QwtMsiServices = @('QdbDaemon', 'QrexecAgent', 'QubesGuiWatchdog')
 # What Suspend-QubesServiceRecovery disarmed, and what it was: the re-arm's source and the RESULT's record.
 $script:RecoverySuspended = @{}
+# Services that were ABSENT when their recovery disarm was attempted. Recorded, not fatal: a clean
+# install creates our services later, so absence there is expected - but it must stay VISIBLE, or a
+# service that should exist and does not would read green.
+$script:RecoveryAbsent = @{}
 
 function Read-QwtQubesDbValue {
     # One qubesdb read through the client DLL (System32\qubesdb-client.dll, installed by the MSI's Core
