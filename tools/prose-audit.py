@@ -53,6 +53,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_OUT = os.path.join(ROOT, "scratchpad", "prose-audit2")
@@ -63,6 +64,8 @@ DEFAULT_OUT = os.path.join(ROOT, "scratchpad", "prose-audit2")
 MAX_UNITS_PER_CALL = 35
 MAX_BYTES_PER_CALL = 30000
 REASK_CONTEXT_CAP = 40000   # whole-file context for a re-ask, above which the outline stands in
+JEV_ATTEMPTS = 4            # a transient judge error is retried, never swallowed
+JEV_BACKOFF = 8             # seconds, multiplied by the attempt number
 
 # Files whose loss would cost a rule: these get a MODEL verifier as well (Jev: script verification
 # alone 0.19). Everything else is verified by this script and escalation.
@@ -70,6 +73,39 @@ HIGH_STAKES = (
     "CLAUDE.md", "findings/rules.md", "findings/issues.md", "findings/issues-closed.md",
     ".claude/skills/", "docs/ADR-", "README.md",
 )
+
+IDENT_KEEP_WORDS = {
+    # ALLCAPS words that ARE load-bearing in this repo and must still be checked
+    "UNVERIFIED", "REPORTER", "CONFIRMED", "FIELD", "ACCEPTED", "REJECTED", "RETIRED",
+    "WITHDRAWN", "PROPOSED", "FATAL", "TERMINAL", "INVALID", "SYSTEM", "DEFAULT",
+}
+IDENT_STOP_WORDS = {
+    # ALLCAPS used for emphasis, not as a name. Dropping these is not a loss.
+    "COURSE", "FUCKING", "CORRECTED", "RETRACTED", "RESOLVED", "SUPERSEDED", "FEASIBILITY",
+    "MEASURED", "REALLY", "NEVER", "ALWAYS", "NOTHING", "EVERY", "BECAUSE", "WITHOUT",
+    "ALREADY", "INSTEAD", "ACTUALLY", "EXACTLY", "SHOULD", "CANNOT", "UNLESS", "BEFORE",
+    "AFTER", "DURING", "WHICH", "THERE", "THESE", "THOSE", "WHOLE", "ENTIRE", "SINGLE",
+    "ANYTHING", "SOMETHING", "EVERYTHING", "ANOTHER", "FURTHER", "HOWEVER", "THEREFORE",
+    "RECORD", "REASON", "CLOSED", "PARKED", "OPTIONAL", "REQUIRED", "STANDING", "BINDING",
+    "PRISTINE", "SEALED", "SERIAL", "SERIALLY", "PUBLIC", "PRIVATE", "SECOND", "FIRST",
+}
+
+
+def real_identifier(tok):
+    """Is this token a NAME (path, tag, constant, command) rather than a capitalised English word?"""
+    t = tok.strip("`").strip()
+    if len(t) <= 4:
+        return False
+    if any(c in t for c in "._-/\\=:" ) or any(c.isdigit() for c in t) or " " in t:
+        return True
+    if t.isupper():
+        # DEFAULT TO "IDENTIFIER" AND USE THE STOPLIST AS THE AUTHORITY. The first version required
+        # an ALLCAPS token to be on a keep-list, which rejected QGADESLICEDOWN - a log tag, and
+        # exactly the kind of thing whose loss matters. Reporting a false loss costs a look; hiding a
+        # real one costs the rule.
+        return t not in IDENT_STOP_WORDS
+    return True
+
 
 CLASSES = {
     "load-bearing": "a rule, caveat, specification, cost or fact that changes what someone would do",
@@ -274,11 +310,26 @@ def call_jev(rubric, state, workdir, tag):
         f.write(state)
     USAGE["state_bytes"] += len(state.encode())
     USAGE["rubric_bytes"] += os.path.getsize(rp)
-    p = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "jev.py"), rp, sp, "--out", ap],
-                       capture_output=True, text=True)
-    if p.returncode != 0:
-        # Exit 2 means the instrument did not run. It is never "nothing to cut".
-        sys.stderr.write("jev exit %d for %s\n%s%s\n" % (p.returncode, tag, p.stdout, p.stderr))
+    # A TRANSIENT IS RETRIED, LOUDLY; A TERMINAL FAILURE STILL ABORTS. One HTTP 520 killed a 61-file
+    # run at file 2 - and the experimenter rule is that a transient must not fail the run and must
+    # never be discarded silently. Retry with backoff and log the text; exhausting the retries, or
+    # any non-transient failure (no key, malformed rubric, a 4xx), is still exit 2.
+    for attempt in range(1, JEV_ATTEMPTS + 1):
+        p = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "jev.py"), rp, sp, "--out", ap],
+                           capture_output=True, text=True)
+        if p.returncode == 0:
+            break
+        err = (p.stdout or "") + (p.stderr or "")
+        transient = bool(re.search(r"HTTP 5\d\d|timed? ?out|timeout|connection|temporarily|"
+                                   r"rate.?limit|429|Remote end closed", err, re.I))
+        sys.stderr.write("jev exit %d for %s (attempt %d/%d, %s)\n%s\n"
+                         % (p.returncode, tag, attempt, JEV_ATTEMPTS,
+                            "TRANSIENT - retrying" if transient and attempt < JEV_ATTEMPTS
+                            else "not retried", err.strip()[:400]))
+        if not transient or attempt == JEV_ATTEMPTS:
+            return None
+        time.sleep(JEV_BACKOFF * attempt)
+    else:
         return None
     with open(ap, encoding="utf-8") as f:
         d = json.load(f)
@@ -407,7 +458,7 @@ def plan_units(a, out, jevdir):
             first = answers.get(qid, {})
             final = reasked.get(qid, first)
             rows.append({"unit": qid, "lines": [u["start"], u["end"]], "kind": u["kind"],
-                         "bytes": len(u["text"]),
+                         "bytes": len(u["text"].encode("utf-8")),
                          "class": final.get("choice"), "conf": final.get("confidence"),
                          "first_pass": verdict_line(qid, first),
                          "final": verdict_line(qid, final),
@@ -419,7 +470,8 @@ def plan_units(a, out, jevdir):
         cut = [r for r in rows if r["class"] in ("narrative", "closed", "rant")]
         unclassified = [r for r in rows if not r["class"]]
         structure = [r for r in rows if r["class"] == "structure"]
-        plan = {"file": path, "mode": "units", "bytes": len(text), "units": len(units),
+        plan = {"file": path, "mode": "units", "bytes": len(text.encode("utf-8")),
+                "chars": len(text), "units": len(units),
                 "high_stakes": is_high_stakes(path),
                 "file_contributes": verdict_line("file_contributes", fc),
                 "file_contributes_noul": fc.get("noul"),
@@ -594,6 +646,294 @@ def cmd_verify(a):
     return 0 if not lost else 1
 
 
+
+def sections(text, lv=None):
+    """Split into (heading, body) at heading level `lv`. Alignment material, not units.
+
+    The level is chosen from the ORIGINAL and then forced on the rewrite: BENCHMARKS.md dropped a
+    duplicate H1, so the original split at `#` (2 sections) and the rewrite at `##` (11), and nothing
+    aligned - 2 reported dropped and 11 orphaned on a rewrite that lost no section at all."""
+    lines = text.splitlines()
+    # SPLIT AT THE SHALLOWEST LEVEL THAT ACTUALLY DIVIDES THE FILE. Taking the shallowest heading
+    # present put every ADR under its single `#` title - one section - and the drop check was blind:
+    # removing section 27 outright was reported as nothing dropped.
+    counts = {}
+    for l in lines:
+        m = re.match(r"^(#{1,6}) ", l)
+        if m:
+            counts[len(m.group(1))] = counts.get(len(m.group(1)), 0) + 1
+    if not counts:
+        return [("(whole file)", text)]
+    if lv is None:
+        lv = next((k for k in sorted(counts) if counts[k] >= 2), max(counts))
+    out, head, buf = [], "(preamble)", []
+    pat = re.compile(r"^#{%d} " % lv)
+    for l in lines:
+        if pat.match(l):
+            if buf or head != "(preamble)":
+                out.append((head, "\n".join(buf)))
+            head, buf = l.strip(), []
+        else:
+            buf.append(l)
+    out.append((head, "\n".join(buf)))
+    return [(h, b) for h, b in out if b.strip() or h != "(preamble)"]
+
+
+def split_level(text):
+    """The heading level sections() would pick for this text."""
+    counts = {}
+    for l in text.splitlines():
+        m = re.match(r"^(#{1,6}) ", l)
+        if m:
+            counts[len(m.group(1))] = counts.get(len(m.group(1)), 0) + 1
+    if not counts:
+        return None
+    return next((k for k in sorted(counts) if counts[k] >= 2), max(counts))
+
+
+def align(old_secs, new_secs):
+    """Match sections old->new: exact heading, then normalised, then by leading ADR number."""
+    def norm(h):
+        return re.sub(r"\s+", " ", h).strip().lower()
+
+    def num(h):
+        m = re.match(r"^#+\s*(\d+)[.)]", h)
+        return m.group(1) if m else None
+
+    by_exact = {h: i for i, (h, _) in enumerate(new_secs)}
+    by_norm = {norm(h): i for i, (h, _) in enumerate(new_secs)}
+    by_num = {}
+    for i, (h, _) in enumerate(new_secs):
+        n = num(h)
+        if n and n not in by_num:
+            by_num[n] = i
+    pairs, used = [], set()
+    for (h, b) in old_secs:
+        j = by_exact.get(h)
+        if j is None:
+            j = by_norm.get(norm(h))
+        if j is None and num(h):
+            j = by_num.get(num(h))
+        if j is None or j in used:
+            pairs.append(((h, b), None))
+        else:
+            used.add(j)
+            pairs.append(((h, b), new_secs[j]))
+
+    # A RENAMED HEADING IS NOT A DROPPED SECTION. Shortening a heading is explicitly allowed, and
+    # without this every shortened heading showed up as one dropped section plus one orphan - three
+    # false losses on findings/windowing.md alone. Recover the pairing from BODY similarity, which is
+    # exact measurement over tokens, and label it a rename so it is never read as a loss.
+    def toks(x):
+        return set(re.findall(r"[A-Za-z_][A-Za-z0-9_]{3,}", x.lower()))
+
+    free = [i for i in range(len(new_secs)) if i not in used]
+    renamed = []
+    for k, ((h, b), m) in enumerate(pairs):
+        if m is not None or not free:
+            continue
+        ob = toks(b)
+        if not ob:
+            continue
+        best, score = None, 0.0
+        for i in free:
+            nb = toks(new_secs[i][1])
+            if not nb:
+                continue
+            r = len(ob & nb) / float(len(ob | nb))
+            if r > score:
+                best, score = i, r
+        if best is not None and score >= 0.45:
+            used.add(best)
+            free.remove(best)
+            pairs[k] = ((h, b), new_secs[best])
+            renamed.append((h, new_secs[best][0], round(score, 2)))
+    orphans = [new_secs[i] for i in range(len(new_secs)) if i not in used]
+    return pairs, orphans, renamed
+
+
+def cmd_judge(a):
+    """JEV EVALUATES THE REWRITE, SECTION BY SECTION.
+
+    The first version of this asked whether anything was lost while showing Jev only the FIRST LINE of
+    each load-bearing unit. A faithful rewrite that rewords a heading then reads as a loss, and
+    "nothing added" is not answerable at all without the original's text - so it scored
+    nothing_lost 0.11 on a rewrite whose own report, and the identifier check, said two identifiers
+    were missing. The verdict was about my state, not about the rewrite.
+
+    So: alignment is done HERE, by heading (exact -> normalised -> ADR number), which also answers
+    deterministically whether a section was dropped; and each aligned pair is judged with BOTH texts
+    present, which is the only state in which the question is answerable."""
+    out = a.plan or DEFAULT_OUT
+    rel = os.path.relpath(os.path.abspath(a.file), ROOT)
+    try:
+        old = open(a.file, encoding="utf-8", errors="replace").read()
+        new = open(a.rewrite, encoding="utf-8", errors="replace").read()
+    except OSError as e:
+        print("prose-audit judge: cannot run (%s)" % e)
+        return 2
+
+    def norm(x):
+        return re.sub(r"\s+", " ", x).strip().lower()
+
+    ident = re.compile(r"[A-Za-z_][A-Za-z0-9_\-/\\.]*\.(?:ps1|py|sh|c|cpp|h|md|json|exe|cmd)"
+                       r"|\b[A-Z][A-Z0-9_]{5,}\b|`[^`\n]+`")
+    newn = norm(new)
+    missing = sorted({i.strip("`") for i in ident.findall(old)
+                      if real_identifier(i) and norm(i.strip("`")) not in newn})
+
+    lv = split_level(old)
+    pairs, orphans, renamed = align(sections(old, lv), sections(new, lv))
+    dropped = [h for (h, _), m in pairs if m is None]
+
+    # A SECTION CAN BE THE WHOLE FILE. findings/*.md is routinely a title plus one "## CURRENT
+    # STATE" heading over dozens of bullets (CLAUDE.md L8: one bullet is one rule). Sending that
+    # whole pair as a single call blew the instrument's request budget outright
+    # (findings/wedge.md, 164KB combined -> HTTP 400 max_tokens_exceeded, not transient, not
+    # retried, never judged). A bullet is already a unit that must never be cut in half
+    # (split_units), so an oversized section is re-split at the bullet boundary and ALIGNED THE
+    # SAME WAY as sections are - recursively, never silently dropped.
+    def subunits(body):
+        out = []
+        for u in split_units(body):
+            if u["kind"] == "heading":
+                continue
+            t = u["text"].strip("\n")
+            first = next((ln for ln in t.splitlines() if ln.strip()), t[:200])
+            out.append((first[:200], t))
+        return out
+
+    work, extra_dropped, extra_orphans = [], [], []
+    for (o, m) in pairs:
+        if m is None:
+            continue
+        oh, ob = o
+        nh, nb = m
+        if len(ob) + len(nb) <= MAX_BYTES_PER_CALL:
+            work.append((o, m))
+            continue
+        subo, subn = subunits(ob), subunits(nb)
+        if not subo or not subn:
+            work.append((o, m))          # nothing finer to cut at; send whole (may still overflow)
+            continue
+        sp, sorph, _ = align(subo, subn)
+        for (sh, sb), sm in sp:
+            if sm is None:
+                extra_dropped.append("%s :: %s" % (oh, sh[:70]))
+            else:
+                work.append((
+                    (("%s :: %s" % (oh, sh))[:160], sb),
+                    (("%s :: %s" % (nh, sm[0]))[:160], sm[1]),
+                ))
+        for sh, _sb in sorph:
+            extra_orphans.append("%s :: %s" % (nh, sh[:70]))
+
+    # batch the aligned pairs so one call carries both texts but stays bounded
+    batches, cur, sz = [], [], 0
+    for (o, m) in work:
+        b = len(o[1]) + len(m[1])
+        if cur and sz + b > MAX_BYTES_PER_CALL:
+            batches.append(cur); cur, sz = [], 0
+        cur.append((o, m)); sz += b
+    if cur:
+        batches.append(cur)
+
+    rows = []
+    for ci, batch in enumerate(batches, 1):
+        q, L = {}, []
+        L += ["FILE: %s" % rel,
+              "Each PAIR below is one section of the ORIGINAL and the SAME section of the REWRITE.",
+              "Judge only that pair.",
+              "",
+              "THE REWRITE WAS AUTHORISED TO REMOVE THESE, SO THEIR ABSENCE IS NOT A LOSS:",
+              "  - dates and times that only record WHEN something was done or decided",
+              "    (a date is load-bearing only if acting on it depends on the date: an expiry, a",
+              "     Windows build or release date, an ordering that changes a conclusion);",
+              "  - per-run identifiers: CI run ids, package hashes, per-cell pass/fail tallies;",
+              "  - who said or found something, who was annoyed, how long it took, how many attempts;",
+              "  - quotes kept only for tone, and profanity;",
+              "  - judge/review scores that decided nothing;",
+              "  - a retelling of an incident, where the RULE it produced survives;",
+              "  - repetition of something stated elsewhere in the same file.",
+              "",
+              "A LOSS is: a rule, prohibition, caveat, threshold, constant, measured result, path,",
+              "command, flag, API or class name, log tag, error code, defect discriminator or cost",
+              "that is gone and is not implied by what remains. Shorter wording is NOT a loss.",
+              "An ADDITION is a claim, advice or generalisation not on the ORIGINAL side, or a",
+              "prohibition made weaker or conditional.", ""]
+        if missing:
+            L += ["A script checked every identifier in the whole original against the whole rewrite.",
+                  "MISSING IDENTIFIERS (measured fact, %d): %s" % (len(missing), ", ".join(missing[:40])), ""]
+        for k, ((oh, ob), (nh, nb)) in enumerate(batch, 1):
+            qid = "s%d" % k
+            q[qid + "_lost"] = {"type": "noul", "instructions": {"judge":
+                "PAIR %s (%s): judged against the authorised-removal list in the state, is anything "
+                "LOAD-BEARING from the ORIGINAL side missing from the REWRITE side? true = nothing "
+                "load-bearing was lost." % (qid, oh[:80])},
+                "criteria": {"true": "nothing load-bearing lost", "false": "something material is gone"}}
+            q[qid + "_added"] = {"type": "noul", "instructions": {"judge":
+                "PAIR %s: does the REWRITE side avoid adding any claim, advice or generalisation that "
+                "is not on the ORIGINAL side, and avoid softening any prohibition?" % qid},
+                "criteria": {"true": "nothing invented or softened", "false": "it adds or weakens something"}}
+            L += ["=" * 70, "PAIR %s" % qid,
+                  "--- ORIGINAL SECTION: %s" % oh, ob, "",
+                  "--- REWRITE SECTION: %s" % nh, nb, ""]
+        d = call_jev({"questions": q}, "\n".join(L), os.path.join(out, "jev"),
+                     "judge_%s_c%d" % (tag_for(a.file), ci))
+        if d is None:
+            print("prose-audit judge: the judge did not answer for %s batch %d" % (rel, ci))
+            return 2
+        ans = d.get("answers", {})
+        for k, ((oh, _), (nh, _)) in enumerate(batch, 1):
+            lost = ans.get("s%d_lost" % k, {})
+            add = ans.get("s%d_added" % k, {})
+            rows.append({"section": oh, "rewrite_section": nh,
+                         "lost_noul": lost.get("noul"), "added_noul": add.get("noul"),
+                         "lost_line": verdict_line("lost", lost), "added_line": verdict_line("added", add)})
+
+    bad = [r for r in rows if (r["lost_noul"] or 1) < 0.5]
+    addp = [r for r in rows if (r["added_noul"] or 1) < 0.5]
+    rec = {"file": rel, "rewrite": os.path.relpath(a.rewrite, ROOT),
+           "old_bytes": len(old.encode("utf-8")), "new_bytes": len(new.encode("utf-8")),
+           "sections": len(rows), "dropped_sections": dropped,
+           "orphan_sections": [h for h, _ in orphans],
+           "renamed_sections": [{"from": a_, "to": b_, "similarity": r} for a_, b_, r in renamed],
+           "dropped_subunits": extra_dropped, "orphan_subunits": extra_orphans,
+           "missing_identifiers": missing, "rows": rows,
+           "sections_with_loss": [r["section"] for r in bad],
+           "sections_with_addition": [r["section"] for r in addp]}
+    jd = os.path.join(out, "judged"); os.makedirs(jd, exist_ok=True)
+    with open(os.path.join(jd, tag_for(a.file) + ".judged.json"), "w", encoding="utf-8") as f:
+        json.dump(rec, f, indent=1)
+
+    print("JUDGE %-44s %7d -> %-7d (%3.0f%%)  %d section pair(s)"
+          % (rel, rec["old_bytes"], rec["new_bytes"],
+             100.0 * rec["new_bytes"] / max(1, rec["old_bytes"]), len(rows)))
+    if dropped:
+        print("  SECTION(S) DROPPED ENTIRELY (%d): %s" % (len(dropped), "; ".join(d[:60] for d in dropped[:6])))
+    if renamed:
+        print("  SECTION(S) RENAMED (%d, matched on body overlap - not a loss):" % len(renamed))
+        for a_, b_, r in renamed[:8]:
+            print("     %.2f  %s" % (r, a_[:46]))
+            print("           -> %s" % b_[:70])
+    if orphans:
+        print("  SECTION(S) ONLY IN THE REWRITE (%d): %s" % (len(orphans), "; ".join(h[:60] for h, _ in orphans[:6])))
+    if extra_dropped:
+        print("  SUBUNIT(S) (bullet/paragraph) DROPPED WITHIN A SECTION (%d): %s"
+              % (len(extra_dropped), "; ".join(d[:70] for d in extra_dropped[:6])))
+    if extra_orphans:
+        print("  SUBUNIT(S) ONLY IN THE REWRITE, WITHIN A SECTION (%d): %s"
+              % (len(extra_orphans), "; ".join(d[:70] for d in extra_orphans[:6])))
+    if missing:
+        print("  MISSING IDENTIFIERS (%d): %s" % (len(missing), ", ".join(missing[:12])))
+    print("  sections judged to LOSE something: %d    to ADD something: %d" % (len(bad), len(addp)))
+    for r in bad[:10]:
+        print("     LOSS  %-58s %s" % (r["section"][:58], r["lost_line"]))
+    for r in addp[:10]:
+        print("     ADDED %-58s %s" % (r["section"][:58], r["added_line"]))
+    return 0 if not (bad or addp or dropped or missing or extra_dropped) else 1
+
+
 def cmd_report(a):
     out = a.out or DEFAULT_OUT
     plans = save_plans(out)
@@ -654,9 +994,12 @@ def main():
     p2 = sub.add_parser("verify"); p2.add_argument("file"); p2.add_argument("--rewrite", required=True)
     p2.add_argument("--plan")
     p3 = sub.add_parser("report"); p3.add_argument("--out")
+    p5 = sub.add_parser("judge"); p5.add_argument("file"); p5.add_argument("--rewrite", required=True)
+    p5.add_argument("--plan")
     p4 = sub.add_parser("cost"); p4.add_argument("--out")
     a = ap.parse_args()
-    return {"plan": cmd_plan, "verify": cmd_verify, "report": cmd_report, "cost": cmd_cost}[a.cmd](a)
+    return {"plan": cmd_plan, "verify": cmd_verify, "report": cmd_report, "cost": cmd_cost,
+            "judge": cmd_judge}[a.cmd](a)
 
 
 if __name__ == "__main__":
