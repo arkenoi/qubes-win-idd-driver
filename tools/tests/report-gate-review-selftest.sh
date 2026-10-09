@@ -81,7 +81,39 @@ out=$(python3 "$TMP/flag.py" 2>&1)
 chk "the known-bad block FLAGS (this is the arm that failed)" "$(echo "$out" | awk '/^known-bad/{print $2}')"  "1"
 chk "a clean block does not flag"                             "$(echo "$out" | awk '/^known-good/{print $2}')" "0"
 
-# ---- 4. --list runs and finds sites in our own tree --------------------------------------------
+# ---- 4. a site's CALLER travels with it ---------------------------------------------------------
+# The deciding fact is often a parameter, so a block judged alone looks clock-only. Measured:
+# StartDismissCheckStuck scored clock_decides_alone 0.88 with a 2948-byte state and no caller in it,
+# and 0.24 once its callers were included. add_callers() does not help here - it skips a caller that
+# is already a site of its own, which is exactly this case - so the context must come from ANY site
+# in the file that calls the block.
+cat > "$TMP/callers.py" <<'PY'
+import importlib.util
+spec = importlib.util.spec_from_file_location('rgr', 'tools/report-gate-review.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+hit = [s for s in m.qualifying_sites(['agent/gui-agent/main.c'])
+       if s['block'] == 'StartDismissCheckStuck']
+if not hit:
+    print('added -1'); print('chars 0')
+else:
+    print('added', hit[0]['callers_added'])
+    print('chars', len(hit[0]['block_text']))
+PY
+out=$(timeout 300 python3 "$TMP/callers.py" 2>&1)
+added=$(echo "$out" | awk '/^added/{print $2}')
+chars=$(echo "$out" | awk '/^chars/{print $2}')
+if [ "${added:-0}" -ge 1 ] 2>/dev/null; then
+  printf '  ok    %-56s %s caller(s)\n' "a site's caller travels with it" "$added"; pass=$((pass+1))
+else
+  printf '  FAIL  %-56s got %s\n' "a site's caller travels with it" "${added:-none}"; fail=$((fail+1))
+fi
+if [ "${chars:-0}" -gt 5000 ] 2>/dev/null; then
+  printf '  ok    %-56s %s chars\n' "the state is more than the block alone" "$chars"; pass=$((pass+1))
+else
+  printf '  FAIL  %-56s got %s chars (the caller is missing)\n' "the state is more than the block alone" "${chars:-0}"; fail=$((fail+1))
+fi
+
+# ---- 5. --list runs and finds sites in our own tree --------------------------------------------
 n=$(timeout 300 python3 tools/report-gate-review.py --list agent/gui-agent 2>/dev/null | head -1 | awk '{print $1}')
 if [ "${n:-0}" -ge 1 ] 2>/dev/null; then
   printf '  ok    %-56s %s\n' "--list finds sites in agent/gui-agent" "$n"; pass=$((pass+1))

@@ -164,16 +164,47 @@ def qualifying_sites(paths: list[str]) -> list:
     about where a block begins and ends.
     """
     LR.HIT = HIT                                  # drive the shared extractor with our pattern
+    found = LR.sites(paths)
+    # THE DECIDING FACT IS OFTEN IN THE CALLER, SO THE CALLER TRAVELS WITH THE SITE. Measured
+    # 2026-10-09: StartDismissCheckStuck(IN HWND start, IN DWORD fgPid) was scored
+    # clock_decides_alone 0.88 - the highest of any site - because its block holds only a settle and
+    # a LogWarning. The fact ("the hidden Start menu is STILL open") is established by its CALLER and
+    # arrives as a parameter, and the state Jev was given was 2.9 KB with no caller in it at all.
+    # lifecycle-review.py's add_callers() already finds callers, but it records them as SEPARATE
+    # sites marked caller=True, and a caller block usually has no clock of its own - so this filter
+    # was dropping exactly the context the judgement needed. Judging a function in isolation
+    # systematically over-flags any whose precondition is a parameter.
+    # EVERY site in the file is a potential caller, not only the ones add_callers() marked. It skips
+    # a caller that is already a site of its own (`if name in targets or (rel, name) in out:
+    # continue`), so the first version of this - which collected only caller=True entries - still
+    # judged StartDismissCheckStuck with a 2948-byte state and no caller in it, identical before and
+    # after, and its score did not budge from 0.88. Its caller IS a subject in its own right, which
+    # is exactly the case that was being dropped.
+    by_file = {}
+    for st in found:
+        if st.get('code'):
+            by_file.setdefault(st['file'], []).append(st)
     keep = []
-    for site in LR.sites(paths):
+    for site in found:
         block = site.get('code') or ''
         rep = REPORT_RE.search(block)
         clk = CLOCK_RE.search(block)
-        if rep and clk:
-            site['block_text'] = block
-            site['report_sample'] = rep.group(0)
-            site['clock_sample'] = clk.group(0)
-            keep.append(site)
+        if not (rep and clk):
+            continue
+        extra = []
+        blk = site.get('block') or ''
+        if blk and not blk.startswith('top-level'):
+            for c in by_file.get(site['file'], []):
+                if c is site or c.get('block') == blk:
+                    continue
+                if re.search(rf'\b{re.escape(blk)}\s*\(', c['code'] or ''):
+                    extra.append(f"// ---- THE CALLER of {blk}, where its precondition may be established:\n"
+                                 + (c['code'] or ''))
+        site['block_text'] = block + ('\n\n' + '\n\n'.join(extra) if extra else '')
+        site['callers_added'] = len(extra)
+        site['report_sample'] = rep.group(0)
+        site['clock_sample'] = clk.group(0)
+        keep.append(site)
     return keep
 
 
