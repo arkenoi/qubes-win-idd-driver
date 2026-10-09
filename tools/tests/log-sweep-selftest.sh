@@ -246,6 +246,24 @@ VWD = [("gui-agent-20261007-100031-1000.log", "agent", VWD_LINES)]
 ev_vwd = ["EV 2026-10-07 10:00:20.000 [System] id=6013 level=4 EventLog: The system uptime is 20 seconds.",
           "EV NONE [Microsoft-Windows-TaskScheduler/Operational]"]
 write("vchanwd.pull", stream(VWD, ev_vwd))
+# phaseflip: a log that straddles the guest's clock correction, with ONE ERROR LINE in the
+# PRE-CORRECTION segment, built so the two readings of that line fall on OPPOSITE sides of a --since
+# window. The stream's collector clock is 10:20, so the ahead segment is stamped 13:00 (three hours
+# ahead of its real 10:00) and the corrected segment 10:00. THE JUMP IS THE OFFSET BY CONSTRUCTION:
+# 13:00:01 -> 10:00:01 is exactly 10800 s, so detect_clock_offset measures 3 h. A first version put
+# the corrected segment at 10:31, which made the jump 8941 s, so the shifted line landed at 10:31 -
+# still inside the window - and the case failed for the fixture's arithmetic rather than the code's.
+# With --since 10:30 the error line's STAMP (13:00) is inside the window while its TRUE time (10:00)
+# is outside - exactly how the real sweep came to report 35 error lines for a window in which the
+# guest wrote none.
+PF_LINES = (agent(1000, t0="130000.000", uptime="31.200", announce=False,
+                  tail=[wu("130001.000", 200, "E", "GetFrame", "duplication->AcquireNextFrame() failed with error 0x887a0026: pre-correction phase"),
+                        wu("100001.000", 200, "I", "WatchForEvents", "Awaiting for a vchan client, write buffer size: 65536"),
+                        wu("100002.000", 200, "I", "WatchForEvents", "A vchan client has connected"),
+                        wu("100003.000", 200, "I", "WatchForEvents", "VCHAN no client ever connected - the vchan announcement is withdrawn before exit")]))
+PF = [("gui-agent-20261007-130000-1000.log", "agent", PF_LINES)]
+ev_pf = ["EV NONE [Microsoft-Windows-TaskScheduler/Operational]"]
+write("phaseflip.pull", stream(PF, ev_pf))
 # skipnames / skipchatty: the collector's cap dropped files and NAMES them; a verdict-deciding family is louder
 import base64 as _b64
 def with_skip(src, names, out):
@@ -414,7 +432,7 @@ analyze(){ # $1=analyzer $2=logsdir $3=baseline $4=judge $5=tag -> rc; report at
 field(){ python3 -c "import json,sys; r=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$1" "$2"; }
 
 # ---- decode every fixture with the real decoder --------------------------------------------------------------------
-for f in base newsig rise three stoperr empty twoboot clockflip taskok vchanwd skipnames skipchatty bootshut inv twoproc msiok msibad; do
+for f in base newsig rise three stoperr empty twoboot clockflip taskok vchanwd phaseflip skipnames skipchatty bootshut inv twoproc msiok msibad; do
   rc=$(decode "$SRC" "$T/$f.pull" "$T/$f")
   [ "$rc" = 0 ] || { echo "FATAL: the $f fixture did not decode (rc=$rc): $(tail -2 "$T/$f.decode.txt")"; exit 2; }
   # EVERY LINE IN THESE CORPORA IS WRITTEN BY THIS TEST, so the run declares the errors it caused - which is
@@ -1029,6 +1047,24 @@ KW=$(knob vchanwithdrawn); rc=$(analyze "$KW" "$T/vchanwd" "$T/baseline.json" "$
 vwk=$(field "$T/t38k.json" 'r["metrics"]["vchan_announce_without_connect"]')
 [ "$vwk" = 1 ] && ok "knob vchanwithdrawn: with the withdrawal ignored, correct behaviour counts as a defect (=$vwk)" \
                || bad "knob vchanwithdrawn: got $vwk, want 1 - the case cannot be driven"
+
+# ---- T39 the --since window must mean REAL time, not pre-correction stamps --------------------
+# The analyze() helper passes no --since, so this case calls the analyzer directly with one.
+pf(){ # $1=analyzer $2=tag -> prints error_lines
+  python3 "$1" analyze "$T/phaseflip" --baseline "$T/baseline.json" --out "$T/$2.json" \
+      --summary "$T/$2.txt" --label "$2" --workdir "$T/work-$2" --jev-cmd "$T/jev-expected.py" \
+      --since 2026-10-07T10:30:00Z > "$T/$2.out" 2>&1
+  field "$T/$2.json" 'r["metrics"]["error_lines"]'
+}
+el=$(pf "$SRC" t39)
+sh=$(field "$T/t39.json" 'r["header"]["clock_phase_shifted_lines"]')
+[ "$el" = 0 ] && ok "T39 a pre-correction error line is OUTSIDE a window its stamp appears inside (error_lines=$el)" \
+              || bad "T39 error_lines=$el over phaseflip, want 0 - the window is still reading raw stamps"
+[ "${sh:-0}" -ge 1 ] && ok "T39 and the shift is reported, not silent (clock_phase_shifted_lines=$sh)" \
+                     || bad "T39 clock_phase_shifted_lines=$sh, want >=1"
+KP=$(knob phasenorm); elk=$(pf "$KP" t39k)
+[ "$elk" = 1 ] && ok "knob phasenorm: without the shift the same line is counted in a window it never belonged to (error_lines=$elk)" \
+               || bad "knob phasenorm: error_lines=$elk, want 1 - the case cannot be driven"
 
 echo "--- $pass passed, $fail failed; fixtures/outputs in $T"
 [ "$fail" = 0 ] && exit 0 || exit 1

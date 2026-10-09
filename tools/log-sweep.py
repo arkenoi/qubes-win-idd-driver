@@ -935,6 +935,68 @@ def load_logs(logsdir):
 
 
 # ----------------------------------------------------------------------------------------------- structure
+def normalize_clock_phase(files, anchor, offset):
+    """Shift lines stamped in the guest's PRE-CORRECTION phase back into real time.
+
+    WHY, MEASURED 2026-10-09 on win11-acc. The --since window arrives in real UTC and is compared
+    against each line's stamp, but this guest corrects its clock ~60 s into every boot, so lines
+    written before the correction carry a stamp one OFFSET too late. Every one of that capture's 35
+    error lines is stamped 045801..050338 while the window opened at 033824 real: subtract the
+    measured 10800 s and all 35 sit at 015801..020338, an hour and a half BEFORE the window. Counted
+    in code: 0 of 35 inside, 35 of 35 outside. The sweep counted them anyway and reported
+    error_lines=35 and error_lines_undeclared=35 - the metric carrying the owner's "a clean error log
+    is THE gate condition" - for a window in which the guest wrote NONE, plus four more breaches of
+    which the highest-scored (agent_relaunches_at_shutdown, Jev defect 0.83) was a 4.3.32 instance's
+    line from outside the window entirely.
+    The two-clocks check further down names this failure mode already ("every line looked three hours
+    newer than the window ... That is a DATA problem ... never something to absorb") but compares the
+    guest's clock to the host's AT COLLECTION; by then the guest has been corrected, so that skew
+    reads ~0 while the stored pre-correction lines stay 3 h ahead. Necessary, not sufficient.
+    THE ANCHOR IS THAT A LINE CANNOT BE STAMPED AFTER IT WAS READ: the collector's clock (the host's,
+    via --host-utc, when we have it) bounds every line in the capture, so one stamped later than it
+    cannot be in the corrected phase. Nothing is shifted without both an offset and an anchor.
+    EACH FIELD IS TESTED ON ITS OWN VALUE, and that is not a detail - it is the difference between
+    this working and not. An init's boot_time is ts minus its uptime, so for a long-running process
+    the two can sit either side of the anchor; deciding ONCE from ts and applying it to both shifted
+    boot_times that were already real, which scattered 1-2 stragglers per boot and reported FIFTEEN
+    boots where there are six. Four later attempts chased that by other routes - phase from each
+    file's own jumps (unsound: a per-day log is written by many processes CONCURRENTLY, so its lines
+    are not time-ordered), mapping an init to its line by timestamp (a LogInit block shares one
+    stamp) and by line index (stale for some inits) - and all of them failed the same way. Ask each
+    value the one question that applies to it.
+    """
+    if not offset or anchor is None:
+        return 0
+    # THE SLACK EXISTS TO PROTECT LINES WRITTEN WHILE THE COLLECTOR WAS RUNNING, which are stamped
+    # a little after the anchor and must not be touched: shifting one moves it a whole offset into
+    # the PAST, out of the window, and that is the direction that LOSES a finding rather than
+    # inventing one (Jev put this change's residual there at 0.96). 300 s covers a long collection
+    # while staying 1/36th of this guest's offset, so the two populations do not overlap.
+    # A HALF-OFFSET THRESHOLD WAS TRIED AND IS WRONG, because a pre-correction line is a full offset
+    # ahead of ITS OWN REAL TIME, not of the anchor: a line written at 01:58 real is stamped 04:58,
+    # which is only 1 h 16 m past a 03:42 anchor. With offset/2 it went unshifted and error_lines
+    # went straight back to 35.
+    # THE LIMIT, stated rather than discovered later: a line written more than (offset - slack)
+    # before collection has a stamp BELOW the anchor and is left alone, so a capture reaching back
+    # more than ~3 h would mis-attribute its oldest lines. Every --since window this harness uses is
+    # minutes to an hour, far inside that.
+    slack = dt.timedelta(seconds=300)
+    delta = dt.timedelta(seconds=offset)
+    moved = 0
+    for lf in files:
+        for l in lf.lines:
+            if l.ts is not None and l.ts > anchor + slack:
+                l.ts -= delta
+                moved += 1
+        for ini in (lf.inits or []):
+            for k in ("ts", "boot_time"):
+                if ini.get(k) is not None and ini[k] > anchor + slack:
+                    ini[k] -= delta
+        if lf.boot_time is not None and lf.boot_time > anchor + slack:
+            lf.boot_time -= delta
+    return moved
+
+
 def detect_clock_offset(files):
     """The size of the guest's once-per-boot clock correction, measured from the logs being read.
 
@@ -975,7 +1037,7 @@ def detect_clock_offset(files):
     return float(max(sorted(jumps), key=lambda k: (jumps[k], k)) * 60)
 
 
-def cluster_boots(files):
+def cluster_boots(files, phase_off=None):
     """Boot times from every windows-utils log (first ts - uptime) and from System 6013/6005; clustered at 150 s."""
     # TOLERANCE. Measured 2026-10-07: this was 150 s, and a test guest boots in ~55 s and is shut down ~30 s after
     # its session comes up - so consecutive boots are 90-110 s apart and TWO REAL BOOTS MERGED INTO ONE. The retest
@@ -1028,7 +1090,12 @@ def cluster_boots(files):
     # clustering already uses) are merged, so two genuinely distinct boots that happen to be three
     # hours apart are merged only if the guest also corrected its clock by exactly that much - and
     # in that case the earlier estimate is the corrected phase of the later boot anyway.
-    off = detect_clock_offset(files)
+    # NEVER RE-DETECT ON SHIFTED DATA: normalising leaves backward steps of its own where shifted
+    # and unshifted lines meet, and re-detecting read one as a 6120 s "correction" - which, since
+    # 01:57:18 + 6120 is 03:39:28, merged the 03:39 boot into the 01:57 one. The caller passes 0 once
+    # it has normalised, because that merge and the normalisation answer the SAME question and only
+    # one of them may be in force.
+    off = detect_clock_offset(files) if phase_off is None else phase_off
     if off:
         i = 0
         while i < len(boots):
@@ -1955,6 +2022,8 @@ def write_summary(rep, path):
     for r in c["records"]:
         for ch in r["checks"]:
             L.append("  M8 pid %s %s..%s: %s" % (r["pid"], r["t_suspend"], r["t_resume"], ch))
+    if h.get("clock_phase_note"):
+        L.append("CLOCK PHASE: %s" % h["clock_phase_note"])
     if rep["data_problems"]:
         L.append("DATA (%d) - the sweep is not complete; missing data FAILS:" % len(rep["data_problems"]))
         for p in rep["data_problems"]:
@@ -2040,7 +2109,25 @@ def cmd_analyze(a):
                     "outside it" % (skew, meta["begin"]["nowutc"], (meta["begin"] or {}).get("tz"), a.host_utc)))
     if not files:
         problems.append(("missing", a.logsdir, "no log files at all"))
-    boots = cluster_boots(files)
+    # BEFORE ANY WINDOW IS APPLIED OR ANY BOOT CLUSTERED: put every line in ONE clock phase so the
+    # --since window means what it says. The HOST's clock is the anchor when we have it
+    # (mgmt/harness/log-sweep.sh passes --host-utc, recorded on this side as the collector ran); the
+    # guest's own `now` is the fallback for a corpus analysed without it, and is itself a guest clock.
+    _anchor = parse_iso(a.host_utc.rstrip("Z")) if a.host_utc else None
+    if _anchor is None and meta and (meta.get("begin") or {}).get("now"):
+        _anchor = parse_iso((meta.get("begin") or {}).get("now"))
+    _phase_offset = detect_clock_offset(files)
+    _shifted = normalize_clock_phase(files, _anchor, _phase_offset)   # GUARD:phasenorm DEFECT: _shifted = 0
+    # REPORTED, NOT a data problem: a data problem sets rc=3 and says the sweep is incomplete, and
+    # this is the opposite - the lines are usable now. It goes in the header and the summary, because
+    # a correction nobody can see is indistinguishable from a lie.
+    _phase_note = None
+    if _shifted:
+        _phase_note = ("%d line(s) were stamped ahead of real time and have been shifted back by the %.0f s "
+                       "correction this guest applies mid-boot (anchor %s), so the --since window and every "
+                       "per-boot count mean what they say; the guest's clock, not this sweep, is what needs "
+                       "fixing" % (_shifted, _phase_offset, fmt_ts(_anchor)))
+    boots = cluster_boots(files, 0 if _shifted else _phase_offset)
     st = build_structure(files, boots, load_context(a.logsdir))
     now = parse_iso((meta.get("begin") or {}).get("now")) if meta and (meta.get("begin") or {}).get("now") else None
     metrics = compute_metrics(files, boots, st, since, now)
@@ -2094,7 +2181,7 @@ def cmd_analyze(a):
         "out_of_context": [sig_json(s) for s in cmp["out_of_context"]],
         "header": {"label": a.label, "since": fmt_ts(since) if since else None, "generated": utcnow_iso(), "logsdir": os.path.abspath(a.logsdir),
                    "baseline": a.baseline, "files": len(files), "lines": sum(lf.scanned for lf in files), "boots": len(boots), "shutdowns": len(st["windows"]),
-                   "clock_offset_s": detect_clock_offset(files),
+                   "clock_offset_s": _phase_offset, "clock_phase_shifted_lines": _shifted, "clock_phase_note": _phase_note,
                    # CORPUS MODE HAS NO META (load_logs returns None for a plain directory of
                    # collected logs), so this must not reach into it - reading it unguarded crashed
                    # `analyze <dir>` outright, and no test covered that mode.
