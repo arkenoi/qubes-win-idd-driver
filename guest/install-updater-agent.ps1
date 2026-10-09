@@ -245,7 +245,22 @@ $updGated = @()
 function Set-UpdTaskState([string]$name, [string]$how) {
     # schtasks, not Disable-ScheduledTask: this runs on guests where the cmdlet set has been
     # unavailable, and /change is the one spelling present everywhere.
-    $out = & schtasks /change /tn $name "/$how" 2>&1
+    #
+    # THE PREFERENCE IS LOWERED FOR THIS CALL, AND THAT IS THE WHOLE POINT. `2>&1` merges schtasks'
+    # stderr into the output stream, which PowerShell turns into a NativeCommandError - and under
+    # the inherited $ErrorActionPreference = 'Stop' that error is TERMINATING. On a CLEAN install
+    # none of these tasks exists yet, so the very first call threw
+    #     RemoteException: ERROR: The specified task name "QubesWindowsUpdateScan" does not exist
+    #                      in the system.
+    # before any Log ran. Measured on win10-acc 2026-10-09, both arms: absent task -> THREW,
+    # existing task -> RETURNED True. That is why the WIN10-clean acceptance cell failed with
+    # updater_agent_failed while WIN10-upgrade passed - the upgrade path HAS the tasks.
+    # An absent task is not a failure here: the caller keeps only the ones it really disabled, so
+    # "false" is the correct answer and must be returned, not thrown.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try   { $out = & schtasks /change /tn $name "/$how" 2>&1 }
+    finally { $ErrorActionPreference = $prev }
     return ($LASTEXITCODE -eq 0)
 }
 foreach ($t in $UpdTasks) {
