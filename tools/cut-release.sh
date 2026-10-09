@@ -177,6 +177,34 @@ say "package verified"
 # same reason there is no directory argument. Written by tools/record-acceptance.sh at the end of a
 # campaign. Owner rule (memory: full-acceptance-before-release-is-a-GATE): an explicit
 # "run full acceptance then release" is a HARD GATE, and 4.3.19 was published on a partial check.
+# ---------------------------------------------------------------- gate: NOT a fault-injection build
+# release-package.yml can now be dispatched with fault_injection=true, because two of the eighteen
+# required gate suites need an INSTALLED injector build and the only artifact that carried one was
+# not installable (2026-10-09). That variant must never be published: its gui-agent can be made to
+# break itself on purpose from the registry.
+# THE CHECK IS ON THE BYTES, not on a label. No manifest records the flag, and a manifest field
+# could be stale or wrong anyway; the injector's own marker string cannot be. It is emitted by code
+# that only exists when QGA_FAULT_INJECTION=1, and it is UTF-16 in the PE, so an ASCII grep would
+# report a clean binary either way - this reads both encodings (measured: that exact mistake made a
+# provenance check pass on a build that did not carry its change).
+for _a in "$WORK/assets"/qwt-improved-setup/reference/gui-agent.exe \
+          "$WORK/assets"/qwt-improved-setup/bin/gui-agent.exe; do
+    [ -f "$_a" ] || continue
+    if python3 - "$_a" <<'FIPY'
+import sys
+b = open(sys.argv[1], 'rb').read()
+m = b'QGA-FAULT-INJECTION:on'
+sys.exit(0 if (b.count(m) + b.count(m.decode().encode('utf-16-le'))) else 1)
+FIPY
+    then
+        die "REFUSING: this package's gui-agent.exe carries the FAULT INJECTOR
+  ($_a has the QGA-FAULT-INJECTION:on marker).
+  That build can be made to break itself from the registry and must never be published. It exists
+  so the failproof gate suites can run against an installed injector - dispatch release-package
+  WITHOUT fault_injection for anything that is meant to ship."
+    fi
+done
+
 ISO="$(find "$WORK/assets" -maxdepth 1 -name '*.iso' | head -1)"
 [ -n "$ISO" ] || die "no ISO among the fetched assets"
 ISOSHA="$(sha256sum "$ISO" | cut -d' ' -f1)"

@@ -70,6 +70,37 @@ kill_tree(){
   done
   RL_KILLED="${list% }"
   [ -n "${list// /}" ] || return 0
+
+  # LET AN IN-FLIGHT qrexec CALL FINISH CONNECTING FIRST.
+  #
+  # MEASURED 2026-10-09, and it is the gate's own breach: killing this tree while a
+  # qrexec-client-vm is still mid-connect makes the client vanish BEFORE the guest-side
+  # qrexec-wrapper reads the vchan's xenstore node, so the wrapper correctly reports a departed
+  # peer - "QGAVCHANFAIL ... xenstore node unreadable". Three of those fired within 0.3 s at uptime
+  # 261 s on win11-acc as five gate suites failed fast and their trees were reaped, and log-sweep
+  # counted them as error_lines_undeclared=1, breaching "a clean error log is THE gate condition".
+  # The product line is right and stays; the CAUSE is here. Jev refused the alternative of having
+  # the run declare the lines it caused (declaring_is_hiding 0.63), and named this the biggest gap
+  # at 0.80.
+  #
+  # WHY THIS IS SHORT AND BOUNDED: the exposed window is only the first moments of a call, while the
+  # client publishes the node and the guest spawns its wrapper. A client that has already connected
+  # is past that point and its death is reported by a different path. So this waits only for
+  # qrexec-client-vm descendants, only up to RL_QREXEC_GRACE seconds (default 12), and then proceeds
+  # exactly as before - a teardown can never be delayed indefinitely by a long-running call.
+  local qr grace="${RL_QREXEC_GRACE:-12}" waited=0
+  while [ "$waited" -lt "$grace" ]; do
+    qr=""
+    for p in $list; do
+      kill -0 "$p" 2>/dev/null || continue
+      case "$(cat /proc/$p/comm 2>/dev/null)" in qrexec-client-v*) qr+="$p " ;; esac
+    done
+    [ -z "${qr// /}" ] && break
+    sleep 1
+    waited=$((waited + 1))
+  done
+  [ "$waited" -gt 0 ] && echo "run-lib: waited ${waited}s for in-flight qrexec client(s) before teardown" >&2
+
   kill -TERM $list 2>/dev/null
   for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
     alive=""

@@ -19,6 +19,17 @@ on:
         description: 'ISO volume label'
         required: false
         default: 'QWT_IMPROVED'
+      fault_injection:
+        # A TEST-ONLY variant of the release package: identical in every way except that
+        # gui-agent.exe carries the fault injector, so the two failproof gate suites can be given
+        # an INSTALLED injector build through the normal install path. Every fault defaults off and
+        # needs an explicit registry value, so the tree behaves like the release until one is set.
+        # tools/cut-release.sh refuses to publish such a package - it checks the binary, not a
+        # label - so a run with this set can never become a release.
+        description: 'TEST ONLY: build the agent with the fault injector compiled in'
+        required: false
+        default: false
+        type: boolean'
   push:
     # t2/release-package is where this workflow is developed and validated. GitHub only
     # offers workflow_dispatch for files that exist on the DEFAULT branch, so until this
@@ -108,6 +119,8 @@ jobs:
     secrets: inherit
     with:
       build_rev: ${{ github.run_number }}
+      # false on a push build and on any dispatch that leaves it alone
+      fault_injection: ${{ inputs.fault_injection == true }}
 
   # --------------------------------------------------------------- the IddCx driver
   # Deliberately a slimmed copy of build.yml's idd-driver job: the release payload needs

@@ -33,6 +33,20 @@ on:
         description: 'Fourth FILEVERSION field for every binary (the release-package run number)'
         required: true
         type: string
+      fault_injection:
+        # EXPOSED TO workflow_call 2026-10-09. Two of the eighteen required gate suites
+        # (failproof-gates, failproof-faultinject) need an INSTALLED injector build, and the only
+        # artifact that carried one was qwt-full-package - which is not an installable tree (no
+        # install.cmd, no msi/). So those suites refused on every run and had only ever been
+        # dry-run, which left the gate unsatisfiable. Threading the flag here lets
+        # release-package.yml produce a full, installable setup tree with the injector, through the
+        # sanctioned package path instead of a hand-assembled payload.
+        # tools/cut-release.sh REFUSES to publish a package whose agent carries the injector, by
+        # checking the binary itself - so this input cannot turn into a shipped fault build.
+        description: 'Build gui-agent with the fault injector compiled in. TEST BUILDS ONLY.'
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [main]
     paths:

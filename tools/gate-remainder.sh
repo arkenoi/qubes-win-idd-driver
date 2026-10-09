@@ -23,6 +23,8 @@
 #
 # --dry resolves every variable and prints every command without touching a guest. Run it first.
 . "$(dirname "$0")/../mgmt/harness/shutdown-lib.sh" 2>/dev/null || true
+# settle() shuts guests down between suites, so it needs the per-guest lock (lint L2).
+. "$(dirname "$0")/../mgmt/harness/vmlock.sh" 2>/dev/null || true
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
@@ -98,6 +100,32 @@ fi
 # Only a suite that RAN and PASSED is recorded. A suite gate-scope does not require is skipped and
 # is never recorded either.
 PASSED=""; FAILED=""; SKIPPED=""
+
+# SETTLE THE RIG BETWEEN SUITES. Measured 2026-10-09, first non-dry run: toast-hold-test was
+# REFUSED because win11-acc was still Running from the suites before it ("REFUSED: these are not
+# Halted: win11-acc") - quick-upgrade refuses while any win1* guest is up, by design, and nothing
+# here put the previous subject down. tools/release-acceptance.sh already settles before each
+# feature test for exactly this reason; the remainder did not.
+settle() {            # settle <vm-to-leave-alone>
+  local keep="${1:-}" v st
+  [ "$DRY" = 1 ] && { echo "INTEND[dry] settle: halt other win1* subjects (keeping ${keep:-none})" | tee -a "$LOG"; return 0; }
+  for v in "$VM10" "$VM11" "${OS11}-p3a" "${OS11}-thold"; do
+    [ -n "$v" ] || continue
+    [ "$v" = "$keep" ] && continue
+    st=$(QTEST_VM="$v" tools/qtest state 2>/dev/null | command grep -ao 'power_state=[A-Za-z]*' | head -1)
+    [ "$st" = "power_state=Halted" ] && continue
+    [ -n "$st" ] || continue                      # no such qube: nothing to settle
+    say "    settling: $v is ${st#power_state=} - requesting shutdown"
+    # UNDER THE PER-GUEST LOCK (lint L2). This runs BETWEEN suites, so no lock is held and nothing
+    # is nested; taking it means a shutdown here can never land underneath another job's boot.
+    if vm_lock "$v"; then
+      qwt_shutdown "$v" 600 >>"$LOG" 2>&1 || say "    WARN $v did not halt cleanly"
+      vm_unlock
+    else
+      say "    WARN could not lock $v to settle it - leaving it alone"
+    fi
+  done
+}
 need() { echo "$REQ" | tr ' ' '\n' | grep -qx "$1"; }
 note() { if [ "$1" = 0 ]; then PASSED="$PASSED $2"; else FAILED="$FAILED $2"; fi; }
 
@@ -146,16 +174,40 @@ if need failproof-faultinject; then
 else SKIPPED="$SKIPPED failproof-faultinject"; fi
 
 if need p3a-etw-gate; then
-  run_it p3a-etw-gate bash mgmt/harness/p3a-etw-gate.sh "$SETUP" "${OS11}-p3a" "${OS11}-qwt"
+  # toastfire.exe comes from the `build` workflow, NOT from release-package: it is a TEST helper
+  # that fires toasts and has no business shipping inside the product. p3a-etw-gate looks for it in
+  # the setup tree and then accepts a TOASTFIRE= override; on the first non-dry run it found neither
+  # and died "FATAL toastfire.exe not in <setup>". So the gate fetches it from the build run at this
+  # same HEAD and passes it explicitly.
+  TF="${TOASTFIRE:-}"
+  if [ -z "$TF" ]; then
+    TFDIR="$DL/toastfire"
+    if [ "$DRY" = 1 ]; then
+      say "INTEND[dry] download toastfire from the build run at HEAD ${HEAD:0:12}"
+    else
+      BRUN=$(gh run list -w build -L 20 --json databaseId,headSha,conclusion \
+               -q "[.[]|select(.conclusion==\"success\" and (.headSha|startswith(\"${HEAD:0:12}\")))][0].databaseId" 2>/dev/null)
+      if [ -n "$BRUN" ] && [ "$BRUN" != "null" ]; then
+        [ -d "$TFDIR" ] || gh run download "$BRUN" -n toastfire -D "$TFDIR" >>"$LOG" 2>&1 || true
+        TF=$(find "$TFDIR" -iname 'toastfire.exe' 2>/dev/null | head -1)
+      fi
+      [ -n "$TF" ] && say "    toastfire from build run $BRUN: $TF" \
+                   || say "    WARN no toastfire.exe for HEAD ${HEAD:0:12} - p3a-etw-gate will refuse, as it should"
+    fi
+  fi
+  settle "${OS11}-p3a"
+  TOASTFIRE="$TF" run_it p3a-etw-gate bash mgmt/harness/p3a-etw-gate.sh "$SETUP" "${OS11}-p3a" "${OS11}-qwt"
   note $? p3a-etw-gate
 else SKIPPED="$SKIPPED p3a-etw-gate"; fi
 
 if need toast-hold-test; then
+  settle "${OS11}-thold"
   run_it toast-hold-test bash mgmt/harness/toast-hold-test.sh --run "$RUN" --os "$OS11"
   note $? toast-hold-test
 else SKIPPED="$SKIPPED toast-hold-test"; fi
 
 if need log-sweep; then
+  settle "$VM11"
   # LAST, deliberately: it reads what every suite above wrote into the guest's logs.
   run_it log-sweep bash mgmt/harness/log-sweep.sh "$VM11" "$SINCE" "$WORK/log-sweep"
   note $? log-sweep

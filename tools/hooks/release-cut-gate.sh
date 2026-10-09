@@ -38,7 +38,15 @@ if not cmd:
 
 # THE CUT, and only the cut. A v-name is what this project tags (v4.3.35-agent<sha>).
 CUT = [
-    (re.compile(r'\bgit\s+tag\b(?!.*\s-d\b)(?=.*\bv[0-9])'), 'git tag of a release name'),
+    # `git tag` CREATES only when handed a tagname. The read-only forms (--list/-l, --sort,
+    # --contains, --points-at, --merged, -n, --format) were being refused as cuts - measured twice
+    # on 2026-10-09, where a read-only listing was blocked because its GLOB contains a release
+    # number, and the second time it would have broken a release chain at its gate-scope step.
+    # Deletion (-d/--delete) was already excluded for the same reason.
+    (re.compile(r'\bgit\s+tag\b'
+                r'(?!.*\s(?:-d|--delete|-l|--list|--sort|--contains|--no-contains|--points-at'
+                r'|--merged|--no-merged|-n[0-9]*|--format)\b)'
+                r'(?=.*\bv[0-9])'), 'git tag of a release name'),
     (re.compile(r'\bgh\s+release\s+create\b'), 'gh release create'),
     (re.compile(r'\bgit\s+push\b.*\bv[0-9][^\s]*\b'), 'a push of a release tag'),
     (re.compile(r'\bgit\s+push\b.*--tags\b'), 'a push of tags'),

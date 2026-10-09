@@ -199,10 +199,18 @@ def l20_module_log_read_must_be_bounded() -> None:
     and promoted-checks.sh counted matches over the whole file.
 
     Bounded by any of: a mark plus `$all[$mark..]`, `-Last 1`, a slice from the last `process ID:`
-    record, or a timestamp filter. Pending, not gating, until the named list is empty."""
+    record, a timestamp filter, or a scope to the RUNNING instance's pid. The pid scope was added
+    2026-10-09: on this rig a timestamp filter is not usable at all (the guest clock flips ~3 h about
+    60 s into every boot), while the pid the process wrote into its own line prefix
+    ([date.time.ms-<pid>:<tid>-LEVEL]) is a strictly stronger bound than -Tail - it cannot match an
+    earlier instance, which is the whole point of the rule. A cell with two reboot arms in one day
+    needs exactly this: without it, arm A's lines are counted into arm B's verdict.
+    Pending, not gating, until the named list is empty."""
     # the read has to be of a windows-utils MODULE log - the ones several processes now share
     reads_module_log = re.compile(r"(gui-agent|qrexec-(?:agent|wrapper)|qubesdb-daemon)-\*?\.?log|Filter\s+'?(gui-agent|qrexec-\w+|qubesdb-daemon)-\*\.log")
-    bounded = ("-Last 1", "process ID:", "$all[", "-Tail", "total_lines", "KeepRx", "AfterLine")
+    bounded = ("-Last 1", "process ID:", "$all[", "-Tail", "total_lines", "KeepRx", "AfterLine",
+               # a scope to the running instance's pid, as written into the line prefix
+               "agentPid", "pidRx", "$runningPid")
     # PER READ SITE, not per file. A file-level version of this rule read p5-run.sh as clean because
     # ONE of its reads used -Tail while the AGENTMAP count right above it was unbounded - exactly the
     # false negative that let the defect through in the first place. Selecting the newest FILE with
