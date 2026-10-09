@@ -284,9 +284,39 @@ try {
 $logDirs += 'Q:\Qubes Logs'
 $logDirs += 'C:\Program Files\Qubes Tools\log'
 $logDirs = @($logDirs | Where-Object { $_ } | Select-Object -Unique)
-$logsThisBoot = @($logDirs | ForEach-Object {
-                      Get-ChildItem $_ -Filter 'gui-agent-*.log' -ErrorAction SilentlyContinue } |
-                  Where-Object { $boot -and $_.LastWriteTime -gt $boot })
+# ---- AGENT-LOG-FRESHNESS-BEGIN  (tools/tests/health-logfresh-test.ps1 extracts this region by marker)
+# IS THE BOOT STAMP EVEN USABLE? MEASURED 2026-10-09 on win11-acc: the guest boots with a clock
+# about three hours ahead (this rig's local offset), Windows stamps LastBootUpTime in that window,
+# our clock sync then corrects the RUNNING clock to real UTC - and LastBootUpTime is never
+# corrected. (Get-Date) - LastBootUpTime read -10576 s: a boot "in the future". So "files newer
+# than boot" is EMPTY however healthy the guest is, and that failed FIVE of the eight cells of the
+# 4.3.36 release gate on guests whose agent was running (pid 7648) and whose watchdog was Running
+# - reported as newest=NONE, which also drags idd_agent_identified down because it reads this
+# boot's log. The guest's own logs show both sides of the same event stamped three hours apart
+# (SETTIME 000543 "was -10803 s out, now 0 s" against CLOCKSYNC 030543).
+# A freshness test that a clock correction can invert is not a freshness test (Jev 2026-10-09:
+# where_to_fix = the-check-must-not-anchor-on-lastbootuptime 0.99).
+# WHAT IS STILL TRUSTWORTHY: file mtimes are correctly ordered RELATIVE TO EACH OTHER - they are
+# all stamped by the same clock. So when the stamp is unusable, the current instance is the NEWEST
+# log by that ordering, and it must prove itself with the agent's own 'Init:' line, which no clock
+# change can forge. Liveness still comes from agent_process. An agent that wrote nothing at all
+# has no newest log and no Init, so a genuinely silent agent still FAILS
+# (Jev check_can_still_catch_a_silent_agent 0.81).
+$bootSkewS = $null
+$bootUsable = $false
+if ($boot) {
+    $bootSkewS = [int]((Get-Date) - $boot).TotalSeconds
+    $bootUsable = ($bootSkewS -ge 0)
+}
+$allAgentLogs = @($logDirs | ForEach-Object {
+                      Get-ChildItem $_ -Filter 'gui-agent-*.log' -ErrorAction SilentlyContinue })
+if ($bootUsable) {
+    $logsThisBoot = @($allAgentLogs | Where-Object { $_.LastWriteTime -gt $boot })
+} else {
+    $logsThisBoot = @($allAgentLogs | Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
+                      Where-Object { Select-String -Path $_.FullName -Pattern 'Init:' -Quiet })
+}
+# ---- AGENT-LOG-FRESHNESS-END
 $log = $logsThisBoot | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 $logOk = $false; $badmode = -1; $grew = $false
 if ($log) {
@@ -317,13 +347,18 @@ if ($log) {
     $countOk = ($logsThisBoot.Count -eq 1) -or ($logsThisBoot.Count -eq 2 -and $benignExit)
     $logOk = $countOk -and $fresh -and ($badmode -eq 0)
 }
-if ($boot) {
+# JUDGED EITHER WAY. This was gated on $boot, so a guest with no readable stamp got no verdict at
+# all; and with an unusable stamp it got a false negative. Both are now decided, and the evidence
+# names which anchor was used.
+if ($true) {
     Check 'agent_log_healthy' $logOk `
         @{ log_dirs_searched = $logDirs
            logs_this_boot = $logsThisBoot.Count
            newest = if ($log) { $log.Name } else { 'NONE' }
            still_writing = $grew
            badmode_lines = $badmode
+           boot_stamp_usable = $bootUsable
+           boot_skew_s = $bootSkewS
            prior_instance_exited_on_vchan_disconnect = $benignExit }
 }
 
