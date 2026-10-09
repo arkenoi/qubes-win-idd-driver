@@ -1066,5 +1066,27 @@ KP=$(knob phasenorm); elk=$(pf "$KP" t39k)
 [ "$elk" = 1 ] && ok "knob phasenorm: without the shift the same line is counted in a window it never belonged to (error_lines=$elk)" \
                || bad "knob phasenorm: error_lines=$elk, want 1 - the case cannot be driven"
 
+# ---- T40 a thresholded per-instance metric must respect the --since window --------------------
+# MEASURED 2026-10-09 on win10-acc. SEVEN thresholded per-instance metrics were computed over every
+# instance in the capture rather than the windowed list, so a sweep graded OTHER RUNS and OLDER
+# BUILDS. That guest's only breach was errors_during_requested_stop = 2 (Jev: defect 1.00), and both
+# lines belong to instance pid 3228, "Module version: 4.3.35.795", whose requested stop ran at
+# 04:22:26 while the window opened at 05:32:20 - an older build, an hour outside the window. The logs
+# are per-DAY, so every capture holds earlier instances and this fired on all of them.
+# stoperr is reused: its instance logs an ERROR during its requested stop at ~10:01, and a window
+# opening at 10:30 puts that instance outside it.
+sw(){ # $1=analyzer $2=tag -> prints errors_during_requested_stop
+  python3 "$1" analyze "$T/stoperr" --baseline "$T/baseline.json" --out "$T/$2.json" \
+      --summary "$T/$2.txt" --label "$2" --workdir "$T/work-$2" --jev-cmd "$T/jev-expected.py" \
+      --since 2026-10-07T10:30:00Z > "$T/$2.out" 2>&1
+  field "$T/$2.json" 'r["metrics"]["errors_during_requested_stop"]'
+}
+ew=$(sw "$SRC" t40)
+[ "$ew" = 0 ] && ok "T40 an instance outside the window is not graded (errors_during_requested_stop=$ew)" \
+              || bad "T40 errors_during_requested_stop=$ew with the instance outside the window, want 0"
+KI=$(knob instwindow); ewk=$(sw "$KI" t40k)
+[ "$ewk" = 1 ] && ok "knob instwindow: with the window ignored, another run's instance is graded (=$ewk)" \
+               || bad "knob instwindow: got $ewk, want 1 - the case cannot be driven"
+
 echo "--- $pass passed, $fail failed; fixtures/outputs in $T"
 [ "$fail" = 0 ] && exit 0 || exit 1

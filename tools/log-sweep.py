@@ -1548,6 +1548,15 @@ def compute_metrics(files, boots, st, since, now=None):
     # like 0 because nothing happened. A window with no start is KEPT, never dropped: missing data must not shrink a
     # count. (# GUARD:winsince)
     win = [w for w in windows if w.get("start") is None or sel(w["start"])] if since is not None else windows   # GUARD:winsince DEFECT: win = windows
+    # insts IS THE WINDOWED INSTANCE LIST AND EVERY THRESHOLDED PER-INSTANCE METRIC MUST USE IT.
+    # MEASURED 2026-10-09 on win10-acc: seven thresholded metrics were computed over `inst` - every
+    # instance in the capture - so a sweep graded instances from OTHER RUNS and OLDER BUILDS. That
+    # guest's only breach was errors_during_requested_stop = 2 (Jev: defect 1.00), and both lines
+    # belong to instance pid 3228, "Module version: 4.3.35.795", whose requested stop ran at
+    # 04:22:26 while the window opened at 05:32:20 - an older build, an hour outside the window. The
+    # logs are per-DAY, so every run's capture contains earlier instances and this fired on all of
+    # them. Same family as the --since phase defect: a metric that ignores the window grades another
+    # run's work. `agent_instances` stays capture-wide on purpose - it is informational, not graded.
     insts = [i for i in inst if i.get("start") is None or sel(i["start"])] if since is not None else inst   # GUARD:winkey DEFECT: insts = [i for i in inst if sel(i.get("ts"))] if since is not None else inst
     m["shutdowns_in_window"] = len(win)
     m["agent_deaths_at_shutdown"] = sum(len(w["deaths"]) for w in win)
@@ -1567,14 +1576,14 @@ def compute_metrics(files, boots, st, since, now=None):
         # states the benign case explicitly; reading it is the same correction as excusing a 203 the
         # scheduler refused for shutdown. An instance that just STOPS with an unconnected
         # announcement and never says it withdrew still counts, which is the case worth catching.
-        m["vchan_announce_without_connect"] = len([i for i in inst if i["announces"] >= 1 and i["connects"] == 0
+        m["vchan_announce_without_connect"] = len([i for i in insts if i["announces"] >= 1 and i["connects"] == 0
                                                    and not i.get("withdrew_announce")   # GUARD:vchanwithdrawn DEFECT: and True
                                                    and (now - i["end"]).total_seconds() > 30])
     else:
         m["vchan_announce_without_connect"] = None
-    m["vchan_reconnects"] = sum(max(0, i["announces"] - 1) for i in inst)
-    m["handshake_refusals"] = sum(i["handshake_refusals"] for i in inst)
-    m["helper_deaths"] = sum(i["helper_deaths"] for i in inst)
+    m["vchan_reconnects"] = sum(max(0, i["announces"] - 1) for i in insts)
+    m["handshake_refusals"] = sum(i["handshake_refusals"] for i in insts)
+    m["helper_deaths"] = sum(i["helper_deaths"] for i in insts)
     # the broker: a hang / death counts unless EVIDENCE puts it in a fault-injection context (join_fi)
     bev = [e for i in inst for e in i.get("broker_events", [])]
     gate_on = True   # GUARD:brokersev DEFECT: gate_on = False
@@ -1594,12 +1603,12 @@ def compute_metrics(files, boots, st, since, now=None):
             else:
                 rel += max(0, n - 1)
     m["helper_relaunches"] = rel
-    m["requested_stop_nonzero_exit"] = len([i for i in inst if i["stop"] and i["stop"]["code"] not in (None, "0x0")])
-    m["errors_during_requested_stop"] = sum(len(i["errors_during_stop"]) for i in inst)
+    m["requested_stop_nonzero_exit"] = len([i for i in insts if i["stop"] and i["stop"]["code"] not in (None, "0x0")])
+    m["errors_during_requested_stop"] = sum(len(i["errors_during_stop"]) for i in insts)   # GUARD:instwindow DEFECT: m["errors_during_requested_stop"] = sum(len(i["errors_during_stop"]) for i in inst)
     m["stale_error_lines"] = len([l for lf in files for l in lf.lines if l.level == "E" and STALE_ERR_RE.search(l.msg) and sel(l.ts)])
     m["watchdog_fast_death_backoffs"] = len([l for l in st["fastdeath"] if sel(l.ts)])
     if now is not None:
-        m["agent_ends_unrecorded"] = len([i for i in inst if i["end_kind"] == "unknown" and (now - i["end"]).total_seconds() > 120 and not i["exit_logged"]])
+        m["agent_ends_unrecorded"] = len([i for i in insts if i["end_kind"] == "unknown" and (now - i["end"]).total_seconds() > 120 and not i["exit_logged"]])
     else:
         m["agent_ends_unrecorded"] = None   # not evaluable without the capture time (corpus mode)
     m["service_failures"] = len([l for l in events if l.extra.get("log") == "System" and l.extra.get("id") in (7023, 7024, 7031, 7034, 7043) and OUR_SERVICES_RE.search(l.msg) and sel(l.ts)])
