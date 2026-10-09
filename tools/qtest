@@ -53,10 +53,13 @@ esac
 if ! qvm-check --quiet "$VM" 2>/dev/null; then
     echo "qtest: target qube '$VM' does not exist — set QTEST_VM explicitly." >&2
     echo "       (an unset QTEST_VM defaults to '${VM}', which is not a live qube)" >&2
-    tagged=$(qvm-ls --raw-list 2>/dev/null | while read -r v; do
-                 qvm-tags "$v" list 2>/dev/null | grep -qx win-idd-testbed && echo "  $v"
-             done)
-    [ -n "$tagged" ] && { echo "       testbed qubes available:" >&2; echo "$tagged" >&2; }
+    # NO ENUMERATION. This used to list every qube and run `qvm-tags <v> list` on each to offer
+    # "testbed qubes available: ..." - which fires admin.vm.tag.List at EVERY qube, dom0 and this
+    # one included, and those two are denied by policy, so the helpful hint also produced the
+    # denials the owner sees in his logs. tools/hooks/admin-target-gate.sh quotes exactly those two
+    # lines in its own header; the hint was the thing it warns about, inside the tool it guards.
+    # A missing target is a typo or a retired name - naming the tag is as useful and costs nothing.
+    echo "       testbed qubes carry the tag 'win-idd-testbed'; name the one you mean in QTEST_VM." >&2
     exit 2
 fi
 vmshell() { printf '%s\n' "$1" | qrexec-client-vm "$VM" qubes.VMShell; }
