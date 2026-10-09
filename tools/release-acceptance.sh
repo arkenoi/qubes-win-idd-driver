@@ -223,11 +223,26 @@ if [ "$SKIP_FEATURES" -eq 0 ]; then
         # also refuses such a list at commit time).
         say "no runner arm for feature test '$t' - tools/release-feature-tests.txt names it"; rc=2 ;;
     esac
-    if [ $rc -eq 0 ]; then say "PASS  $t"; else say "FAIL  $t (rc=$rc, see $WORK/$t.log)"; MRC=1; fi
+    # AN INSTRUMENT FAILURE IS NOT A PRODUCT FAILURE, AND MUST NOT BE READ AS ONE. Every feature
+    # test here exits 2 when it could not measure the product at all; this loop used to print FAIL
+    # for any nonzero rc, so the 4.3.36 gate recorded crop-before-map (a suite that could not pass
+    # at the shipped LogLevel) and template-update (env-assert on a subject nothing could build)
+    # as DEFECTS OF THE PRODUCT. Jev, asked what would most change a verdict on the fix for the
+    # first of those: gate-classifies-instrument-as-product 0.99.
+    # WHAT DOES NOT CHANGE: the run still fails and the acceptance is still NOT recorded, so
+    # nothing ships on an instrument failure. A suite that measured nothing has not cleared the
+    # product, and treating "could not measure" as a pass is the one outcome worse than either.
+    if [ $rc -eq 0 ]; then say "PASS  $t"
+    elif [ $rc -eq 2 ]; then say "INSTRUMENT  $t (rc=2 - the suite could not measure the product; this is NOT a product defect, and the run still fails: see $WORK/$t.log)"; MRC=1
+    else say "FAIL  $t (rc=$rc, see $WORK/$t.log)"; MRC=1; fi
     # A FEATURE TEST IS PART OF THE RECORDED VERDICT. record-acceptance.sh derives the record from $CAMP/*.out only, so the
     # feature tests used to be invisible to it (rz30 recorded CLEAN with both never run). Each now leaves a cell-group in the
     # campaign dir with matrix.sh's footer; tools/acceptance-record-check.py requires feature-<test> among the recorded cells.
+    # The footer stays "0 passed, 1 failed" for BOTH kinds of failure - that is what makes the gate
+    # refuse the ISO - and the INSTRUMENT line beside it is what stops a reader attributing it to
+    # the product.
     { echo "[$(date +%T)]   cells: feature-$t"
+      [ $rc -eq 2 ] && echo "[$(date +%T)]   INSTRUMENT: feature-$t could not measure the product (rc=2); the run fails, the product is not implicated"
       if [ $rc -eq 0 ]; then echo "=== MATRIX: 1 passed, 0 failed ==="; else echo "=== MATRIX: 0 passed, 1 failed ==="; fi
     } > "$CAMP/feature-$t.out"
   done
