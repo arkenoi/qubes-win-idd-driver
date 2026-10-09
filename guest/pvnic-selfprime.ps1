@@ -734,6 +734,15 @@ param([switch]$RearmOnly)
 $ErrorActionPreference = 'SilentlyContinue'
 $log  = 'C:\ProgramData\QubesPvNic.log'
 $mark = 'C:\ProgramData\QubesPvNic-FAILED.txt'
+# GRACEFUL SHUTDOWN. Owner 2026-10-09: "if shutdown hits anything of ours, it should gracefully
+# terminate and not emit spontaneous errors to notification toasts." A task still running when the
+# system goes down is killed by Task Scheduler and leaves a non-zero result, which the death
+# reporter then tells dom0 about - measured: six of our tasks reaped with 0x8007050B in one
+# shutdown. The process cannot choose its exit code once it is killed, so it has to notice first.
+# SM_SHUTTINGDOWN (0x2000) is the OS asking; [Environment]::HasShutdownStarted is the CLR and does
+# not answer this.
+Add-Type -Namespace Q -Name Sd -MemberDefinition '[DllImport("user32.dll")] public static extern int GetSystemMetrics(int i);' -EA SilentlyContinue
+function ShuttingDown { try { return ([Q.Sd]::GetSystemMetrics(0x2000) -ne 0) } catch { return $false } }
 function L($m) { Add-Content -Path $log -Value ("{0} {1}" -f (Get-Date -Format 'HH:mm:ss'), $m) }
 if ((Get-Item $log -EA SilentlyContinue).Length -gt 262144) { Remove-Item $log -Force }
 
@@ -787,7 +796,13 @@ function VifDevicePresent {
     return (@($d).Count -gt 0)
 }
 function Ok([string]$what) {
-    if ($script:faulted) { L "$what - but an earlier step FAILED ($script:faulted): marker kept, exit 1"; exit 1 }
+    # AN EARLIER STEP'S FAULT IS NOT THIS TASK FAILING. Measured 2026-10-09: the config was applied
+    # and verified ("already applied on entry"), and this exited 1 because an unrelated earlier step
+    # had set $faulted - so dom0 was told "The PV NIC setup task failed" about a task whose work was
+    # in place. The task's RESULT CODE is what the death reporter turns into that notice, so a
+    # non-zero exit here is a claim about the whole task. The earlier fault keeps its own marker,
+    # its own log line and its own event-log entry; it is reported as itself, not as this.
+    if ($script:faulted) { L "$what - NOTE an earlier step FAILED ($script:faulted): marker kept, reported separately; this task's own work is in place so it exits 0" }
     L $what
     Remove-Item $mark -Force -EA SilentlyContinue
     exit 0
@@ -1113,11 +1128,15 @@ while ((Get-Date) -lt $deadline) {
         L 'verified; settle re-verify (+30s, +60s)'
         $stable = $true
         foreach ($i in 1..2) {
-            Start-Sleep -Seconds 30
+            foreach ($t in 1..30) {
+                if (ShuttingDown) { L 'shutdown started during settle - exiting cleanly (config is applied)'; exit 0 }
+                Start-Sleep -Seconds 1
+            }
             if (-not (Applied)) { L "settle re-verify #$i FAILED - state regressed, re-applying"; $stable = $false; break }
         }
         if ($stable) { $ok = $true; break }
     }
+    if (ShuttingDown) { L 'shutdown started while applying - exiting cleanly'; exit 0 }
     Start-Sleep -Seconds 2
 }
 

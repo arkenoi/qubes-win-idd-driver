@@ -215,6 +215,39 @@ if ($updPrev -and $updPrev.phase -and ($UpdTerminalPhases -notcontains $updPrev.
 }
 # ---- DEPLOY-PREVPASS-END
 # ---- DEPLOY-MUTEX-BEGIN   (tools/tests/wu-deploy-loud-test.ps1 runs this region after DEPLOY-PREVPASS, against a second process that really holds the mutex)
+# NO UPDATE TASK FIRES BEFORE ALL COMPONENTS ARE IN PLACE. Owner 2026-10-09: "on updates, no
+# update task should ever fire prematurely before all components are in place."
+# The mutex below serialises a pass that is ALREADY RUNNING, but it does not stop the previous
+# install's tasks from STARTING during this deploy - and a scan that starts here sets the
+# machine-wide proxy and launches the relay underneath the relay replacement and task rewrite that
+# follow. So the tasks are disabled for the duration and re-enabled at the end. On a fresh install
+# they do not exist yet and every call below is a no-op.
+$UpdTasks = @('QubesWindowsUpdateScan','QubesWindowsUpdateRun','QubesWindowsUpdateDownload')
+$updGated = @()
+function Set-UpdTaskState([string]$name, [string]$how) {
+    # schtasks, not Disable-ScheduledTask: this runs on guests where the cmdlet set has been
+    # unavailable, and /change is the one spelling present everywhere.
+    $out = & schtasks /change /tn $name "/$how" 2>&1
+    return ($LASTEXITCODE -eq 0)
+}
+foreach ($t in $UpdTasks) {
+    if (Set-UpdTaskState $t 'disable') { $updGated += $t }
+}
+if ($updGated.Count) { Log ("update tasks disabled for the deploy: " + ($updGated -join ', ')) }
+else { Log 'no pre-existing update tasks to disable (fresh install)' }
+# RE-ENABLED ON EVERY EXIT, including a throw: a failed deploy must not leave the guest with
+# updates switched off, which dom0 would see as a guest that simply never reports anything.
+$script:UpdUngate = {
+    foreach ($t in $script:updGatedList) {
+        if (Set-UpdTaskState $t 'enable') { Log "update task re-enabled: $t" }
+        else { Log "WARN could not re-enable $t - do it by hand (schtasks /change /tn $t /enable)" }
+    }
+}
+$script:updGatedList = $updGated
+# The comment above is only true if something actually runs on the failure path. A trap fires for a
+# terminating error anywhere below, re-enables, and rethrows so the deploy still fails loudly.
+trap { & $script:UpdUngate; throw }
+
 $updMutex = New-Object System.Threading.Mutex($false, 'Global\QubesWindowsUpdate')
 $haveUpdMutex = $false
 $updAbandoned = $false
@@ -629,5 +662,8 @@ Log 'set NoAutoUpdate=1 (dom0 owns updates; guest never installs on its own)'
 #     back as 'AppVM' and exits before any proxy activity, a StandaloneVM as 'StandaloneVM', a
 #     template as 'TemplateVM'. The guest reads its own vm-type fine (the old "unreadable" belief
 #     was a P/Invoke marshaling bug; see guest/qubesdb-read.ps1). Nothing is stamped here anymore.
+
+# Every component is in place now - this is the only point at which an update task may fire.
+& $script:UpdUngate
 
 Log 'updater agent deployed'
