@@ -34,6 +34,24 @@ function Log($m){ Write-Output ((Get-Date -Format 'HH:mm:ss') + ' ' + $m) }
 # and the actual cause never reached the log.
 $updMutex     = $null
 $haveUpdMutex = $false
+# AND THE UNGATE, FOR THE SAME REASON - learned the hard way twice in one file. The update-task
+# ungate below installs `# The ungate is a no-op until the tasks are actually gated (initialised at the top of the script),
+# so this trap can never be the thing that fails - it must only ever re-enable and rethrow.
+# `break`, NOT `throw`. A bare throw inside a trap does not rethrow the original error - it raises
+# ScriptHalted and the real message is LOST, which is the second way this trap destroyed evidence.
+# Measured offline, three arms: assignment-after-trap gives "The variable '$script:UpdUngate' cannot
+# be retrieved because it has not been set" (the campaign's error); top-level default + `throw` gives
+# "ScriptHalted"; top-level default + `break` gives "the REAL error ..." and still runs the ungate.
+# The mutex trap further down this file already uses break for exactly this reason.
+trap { try { & $script:UpdUngate } catch { Log ("WARN ungate failed on the error path: " + $_.Exception.Message) }; break }`, and a trap is hoisted to the WHOLE
+# script block, so it can fire from a throw that happens hundreds of lines ABOVE the assignment.
+# When it did, StrictMode turned the trap's read of the unset variable into
+#   "The variable '$script:UpdUngate' cannot be retrieved because it has not been set."
+# and that replaced the real error - measured 2026-10-09 in the WIN10-clean acceptance cell, which
+# failed with updater_agent_failed and NO indication of what had actually thrown. A no-op default
+# means the trap is always callable; the real ungate replaces it once the tasks are gated.
+$script:updGatedList = @()
+$script:UpdUngate    = { }
 
 # $PSScriptRoot arrives EMPTY in some invocation contexts (measured 2026-08-19 via the
 # qrexec->cmd->powershell -File chain on win11-fresh: the param default bound '', and the
