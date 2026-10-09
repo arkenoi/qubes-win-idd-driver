@@ -8,6 +8,16 @@ build carrying the fixes can be compared with the two captures that defined the 
 (win11-acc 35 error lines, win10-acc 11, both 2026-10-09).
 
     tools/errfam.py <logs-dir> [<baseline-logs-dir> ...]
+    tools/errfam.py --report <report.json>          # the LAST BOOT only, by family
+
+THE PER-BOOT FORM IS THE ONE THAT ANSWERS "DID THIS BOOT WRITE AN ERROR LINE". A guest writes a
+PER-DAY log per module, so counting a whole capture mixes every boot of the day with every
+deliberately induced failure - measured 2026-10-09, where a clean-boot capture counted 30 induced
+lines from three earlier cells. Archiving the logs first does NOT fix it: windows-utils opens its
+log with FILE_SHARE_READ only, so a live service's per-day log cannot be moved or renamed at all.
+What does fix it is already in log-sweep: it clusters boots from each instance's "System uptime"
+(no clock involved - the guest's flips ~3 h into every boot) and gives every signature a per_boot
+count. This mode reads those, takes the LAST boot, and labels each ERROR signature by family.
 
 Every argument is a directory holding pulled guest logs (log-sweep's <outdir>/logs). It recurses,
 reads every file, and matches the ERROR-level lines - the prefix is [date.time.ms-PID:TID-E] on
@@ -24,7 +34,9 @@ import collections
 
 ERR = re.compile(r'-\d+(?::\d+)?-E\]')
 
-# (family key, regex, what it is). Order matters: the first match wins.
+# (family key, regex, what it is). Order matters: the first match wins. A pattern that depends on
+# a NUMBER must accept both forms: raw log lines carry the value, while log-sweep's signatures are
+# normalised (digits -> N, hex -> 0xH), and --report mode matches against those.
 FAMILIES = [
     # THE COLLAPSED LINE MUST MATCH FIRST. It CARRIES the library records inside it, so with
     # ("vchan-store-read", ...) ahead of it every QGAVCHANFAIL line was counted as one of the
@@ -39,14 +51,14 @@ FAMILIES = [
     ("qdb-pipe-write",     r'WriteFile failed with error 0xe8',          "a write to the qubesdb pipe while it closes"),
     ("qdb-daemon-write",   r'write to daemon failed with error 0xe8',    "the qubesdb client's report of the same"),
     ("autostart-optional", r'CfgReadMultiString\(Autostart\)',           "an absent OPTIONAL registry value"),
-    ("watchforevents-0x0", r'WatchForEvents failed with error 0x0',      "a requested stop reported as a failure"),
+    ("watchforevents-0x0", r'WatchForEvents failed with error (0x0|0xH)', "a requested stop reported as a failure"),
     ("winevt-thread-exit", r'window event thread exiting',               "the window event thread leaving"),
     ("dda-access-lost",    r'AcquireNextFrame\(\) failed',               "DDA ACCESS_LOST, mis-rendered as a keyed mutex"),
     ("dda-release-frame",  r'ReleaseFrame failed',                       "the same on the release side"),
     ("monitor-handle",     r'GetMonitorInfo failed',                     "a stale monitor handle (display-change race)"),
     ("monitor-rect-caller",r'GetRealWindowRect failed',                  "the caller re-reporting the same condition"),
-    ("hold-overflow",      r'past the \d+ held were dropped',            "the library-record hold overflowing"),
-    ("vchan-send-closed",  r'vchan already closed with \d+ byte',         "a send into a vchan the peer already closed"),
+    ("hold-overflow",      r'past the (\d+|N) held were dropped',        "the library-record hold overflowing"),
+    ("vchan-send-closed",  r'vchan already closed with (\d+|N) byte',     "a send into a vchan the peer already closed"),
     ("dda-dirtyrects",     r'GetFrameDirtyRects failed',                 "DDA ACCESS_LOST on the dirty-rects path"),
 ]
 
@@ -89,10 +101,64 @@ def label(root):
     return base
 
 
+def report_mode(path):
+    """Classify the LAST boot's ERROR signatures from a log-sweep report.json."""
+    import json
+    try:
+        with open(path, encoding='utf-8') as fh:
+            rep = json.load(fh)
+    except (OSError, ValueError) as exc:
+        print(f"FAIL cannot read {path}: {exc}")
+        return 2
+    boots = rep.get('boots') or []
+    sigs = rep.get('signatures') or {}
+    if not boots:
+        print(f"FAIL {path} has no clustered boots - nothing to scope to; missing data is not a zero")
+        return 2
+    if not sigs:
+        print(f"FAIL {path} has no signatures - the capture read nothing")
+        return 2
+    last = str(boots[-1]['id'])
+    print(f"report: {path}")
+    print(f"boots clustered: {len(boots)}; LAST boot id {last} at {boots[-1].get('time')}")
+    rows = []
+    unknown = []
+    total = 0
+    for key, v in sigs.items():
+        if not isinstance(v, dict) or v.get('level') != 'E':
+            continue
+        n = (v.get('per_boot') or {}).get(last, 0)
+        if not n:
+            continue
+        total += n
+        body = key.split('|', 2)[-1]
+        for fam, rx, why in FAMILIES:
+            if re.search(rx, body):
+                rows.append((fam, n, why, body))
+                break
+        else:
+            unknown.append((n, body))
+    print(f"\nERROR lines attributed to the LAST boot: {total}")
+    if not rows and not unknown:
+        print("  (none - no ERROR-level signature occurs in that boot)")
+    for fam, n, why, body in sorted(rows, key=lambda r: -r[1]):
+        print(f"  x{n:<3} [{fam}] {why}")
+        print(f"        {body[:150]}")
+    for n, body in sorted(unknown, key=lambda r: -r[0]):
+        print(f"  x{n:<3} [UNCLASSIFIED - a signature no family covers]")
+        print(f"        {body[:150]}")
+    return 0
+
+
 def main(argv):
     if len(argv) < 2:
         print(__doc__)
         return 2
+    if argv[1] == '--report':
+        if len(argv) < 3:
+            print("FAIL --report needs a report.json path")
+            return 2
+        return report_mode(argv[2])
     results = []
     for root in argv[1:]:
         if not os.path.isdir(root):

@@ -36,27 +36,15 @@ SETUP="${3:-$(cat scratchpad/last-setup.txt 2>/dev/null)}"
 ref=$(sha256sum "$SETUP/reference/gui-agent.exe" | awk '{print $1}')
 say "reference from $SETUP: ${ref:0:12}"
 
-# BASELINE THE ACCUMULATING STATE (experimenter rule 14). The guest writes a PER-DAY log per
-# module, so a capture of "this boot" otherwise carries every earlier boot and every induced
-# failure of the same day - measured 2026-10-09, where a clean-boot capture reported 30 induced
-# QGAVCHANFAIL lines from three earlier cells. Archiving to a SIBLING directory (not a subdirectory
-# of the log dir, which the collector walks) makes the capture this boot's by construction, with no
-# clock and no per-line filtering involved.
-say "--- archiving the guest's existing logs so the capture is THIS boot's"
-arch=$(ps1 "\$d='Q:\Qubes Logs'; \$a='Q:\Qubes Logs Archive\' + (Get-Date -Format yyyyMMdd-HHmmss)
-if (-not (Test-Path \$d)) { Write-Host 'ARCH=nologdir'; exit }
-New-Item -ItemType Directory -Force -Path \$a | Out-Null
-\$f=@(Get-ChildItem -LiteralPath \$d -File -EA SilentlyContinue)
-\$moved=0
-foreach (\$x in \$f) { try { Move-Item -LiteralPath \$x.FullName -Destination \$a -Force -EA Stop; \$moved++ } catch { } }
-Write-Host ('ARCH=' + \$moved + '/' + \$f.Count)" | command grep -ao 'ARCH=[0-9a-z/]*' | head -1)
-say "archived: ${arch:-UNKNOWN}"
-case "${arch:-}" in
-  ARCH=0/0|ARCH=nologdir) say "FAIL nothing archived and no log dir - the guest is not in the state this cell measures"; exit 2 ;;
-  ARCH=*) ;;
-  *) say "FAIL could not archive the existing logs; a capture now would carry earlier boots"; exit 2 ;;
-esac
-
+# WHY THERE IS NO "ARCHIVE THE LOGS FIRST" STEP HERE. It was written, and it cannot work:
+# windows-utils opens its log with FILE_SHARE_READ only (upstream/ro/qubes-windows-utils/src/log.c),
+# so a live service's PER-DAY log - gui-agent, qrexec-agent, gui-watchdog, exactly the files that
+# accumulate - cannot be moved or renamed while it runs. A step that archives only what is already
+# closed would report success and leave the capture mixed.
+# WHAT SCOPES THE CAPTURE INSTEAD: log-sweep clusters boots from each instance's "System uptime"
+# (clock-free; the guest's clock flips ~3 h into every boot) and gives every signature a per_boot
+# count. tools/errfam.py --report reads those, takes the LAST boot, and labels its ERROR signatures
+# by family. That is the number this cell reports.
 say "--- clean cold boot (no induction, no hammering)"
 qwt_shutdown "$VM" 600 >/dev/null 2>&1
 SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -79,6 +67,8 @@ rm -rf "$OUT"
 timeout 900 mgmt/harness/log-sweep.sh "$VM" "$SINCE" "$OUT" > "$OUT.log" 2>&1; src=$?
 say "log-sweep rc=$src"
 [ -d "$OUT/logs" ] || { say "FAIL no logs/ in the capture - nothing measured"; tail -8 "$OUT.log"; exit 2; }
-say "--- per-family error-line counts, this capture vs the two old ones"
+say "--- THIS BOOT's error lines, by family (log-sweep's own boot clustering)"
+python3 tools/errfam.py --report "$OUT/report.json" || { say "FAIL could not scope the capture to a boot"; exit 2; }
+say "--- and the whole capture against the two baselines, for context (mixes every boot of the day)"
 python3 tools/errfam.py "$OUT/logs" scratchpad/sweep-win11-acc/logs scratchpad/sweep-win10-acc/logs
 say "evidence: $OUT  (sweep log $OUT.log)"
