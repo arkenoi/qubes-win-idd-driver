@@ -343,11 +343,26 @@ $anyHeld = (@($heldOpen.Values | Where-Object { $_ }).Count -gt 0)
 $instanceHits = @()
 foreach ($f in $allAgentLogs) {
     foreach ($p in $agentPids) {
+        # TWO PREFIX FORMATS, and only the newer one carries the pid. MEASURED 2026-10-09 on a
+        # 4.3.32 agent log left on win11-acc by the campaign's pre-upgrade boot: its lines read
+        # '[20261009.045802.150-2484-I]' while its own LogInit says 'process ID: 3412' - so in the
+        # older format that number is the THREAD id and the pid appears ONLY in the LogInit line.
+        # An anchor that matched '-<pid>:' alone would report "the running instance has written
+        # nothing" on any guest running an older agent, which the stock cells do. The LogInit line
+        # names the pid in BOTH formats, so it is the fallback - and it is still a line the running
+        # instance wrote, not a file attribute.
+        $pidInPrefix = $true
         $hits = @(Select-String -LiteralPath $f.FullName -Pattern ("-{0}:[0-9]+-[A-Z]\]" -f $p) `
                                 -ErrorAction SilentlyContinue)
+        if ($hits.Count -eq 0) {
+            $pidInPrefix = $false
+            $hits = @(Select-String -LiteralPath $f.FullName -Pattern ("LogInit:.*process ID: {0}(\D|$)" -f $p) `
+                                    -ErrorAction SilentlyContinue)
+        }
         if ($hits.Count -gt 0) {
             $instanceHits += [pscustomobject]@{ File = $f; AgentPid = $p; Lines = $hits.Count
-                                                HeldOpen = [bool]$heldOpen[$f.FullName] }
+                                                HeldOpen = [bool]$heldOpen[$f.FullName]
+                                                PidInPrefix = $pidInPrefix }
             break
         }
     }
@@ -380,8 +395,13 @@ if ($log) {
     # BADMODE IS SCOPED TO THE RUNNING INSTANCE'S LINES. The file spans a whole DAY (see (1)
     # above), so an unscoped count fails today's healthy agent for a BADMODE that an instance
     # hours ago logged. Scoped to this pid it answers the question the check actually asks.
-    $badmode = @(Select-String -LiteralPath $log.FullName `
-                   -Pattern ("-{0}:[0-9]+-[A-Z]\].*(BADMODE|0xfffffffe)" -f $inst.AgentPid) `
+    # SCOPING NEEDS THE PID IN THE PREFIX. On an older agent the prefix carries the thread id, so a
+    # pid-scoped pattern matches nothing and BADMODE would read 0 however many there are - an
+    # absence that would look like health. When the pid is not in the prefix the count is file-wide
+    # and `badmode_scope` says so, which is the safe direction for a line that is never benign.
+    $badmodePat = if ($inst.PidInPrefix) { "-{0}:[0-9]+-[A-Z]\].*(BADMODE|0xfffffffe)" -f $inst.AgentPid }
+                  else { '(BADMODE|0xfffffffe)' }
+    $badmode = @(Select-String -LiteralPath $log.FullName -Pattern $badmodePat `
                    -ErrorAction SilentlyContinue).Count
     # ...and count what that scoping EXCLUDES, so it can never hide anything (Jev
     # badmode_scoping_hides_a_defect 0.44 - near even, so the answer is to report both rather than
@@ -424,6 +444,7 @@ if ($true) {
            still_writing = $grew
            badmode_lines = $badmode
            badmode_lines_prior_instances = $badmodeOther
+           badmode_scope = if ($inst) { if ($inst.PidInPrefix) { 'this instance''s lines' } else { 'whole file (older agent: the prefix carries the thread id, not the pid)' } } else { $null }
            boot_stamp_usable = $bootUsable
            boot_skew_s = $bootSkewS
            prior_instance_exited_on_vchan_disconnect = $benignExit }
@@ -443,8 +464,9 @@ if (-not $NoIddExpected) {
     # a day, so an earlier instance's 'found IDD adapter' line would otherwise answer for this one.
     $soloLines = @()
     if ($inst) {
-        $soloLines = @(Select-String -LiteralPath $inst.File.FullName `
-                         -Pattern ("-{0}:[0-9]+-[A-Z]\].*IDD solo: found IDD adapter" -f $inst.AgentPid) `
+        $soloPat = if ($inst.PidInPrefix) { "-{0}:[0-9]+-[A-Z]\].*IDD solo: found IDD adapter" -f $inst.AgentPid }
+                   else { 'IDD solo: found IDD adapter' }
+        $soloLines = @(Select-String -LiteralPath $inst.File.FullName -Pattern $soloPat `
                          -ErrorAction SilentlyContinue | ForEach-Object { $_.Line })
     }
     $soloName = ''

@@ -233,6 +233,38 @@ Check 'no handle anywhere: the no-handle state is visible in $anyHeld for the ev
 Check 'the anchor string no longer advertises a degraded mode' `
       ($logAnchor -notmatch 'ONLY') "anchor=$logAnchor"
 
+# ---- 12. AN OLDER AGENT: the prefix carries the THREAD id, the pid only in LogInit -------------
+# MEASURED on a 4.3.32 agent log the campaign left on win11-acc: its lines read
+# '[20261009.045802.150-2484-I]' while its own LogInit says 'process ID: 3412'. An anchor matching
+# '-<pid>:' alone reports "this instance wrote nothing" on every such guest - and the stock cells
+# run one. The LogInit line names the pid in BOTH formats.
+release; reset
+$OLDFMT = 3412
+[void](mklog 'gui-agent-20261009.log' $now.AddHours(-3) @(
+        "[20261009.045802.150-2484-I] LogInit: Log started, module name: gui-agent",
+        "[20261009.045802.152-2484-I] LogInit: Running as user: SYSTEM, process ID: $OLDFMT",
+        "[20261009.045802.152-2484-I] LogInit: Module version: 4.3.32.612"))
+hold 'gui-agent-20261009.log'
+$agentProc = [pscustomobject]@{ Id = $OLDFMT }
+$boot = $now.AddMinutes(-2)
+. ([scriptblock]::Create($region))
+Check 'older agent: the instance is found via its LogInit process ID' `
+      (@($instanceHits).Count -eq 1 -and @($instanceHits)[0].AgentPid -eq $OLDFMT) `
+      "hits=$($instanceHits.Count) picked=$(names $instanceHits)"
+Check 'older agent: the hit records that the pid is NOT in the line prefix' `
+      (@($instanceHits).Count -eq 1 -and @($instanceHits)[0].PidInPrefix -eq $false) `
+      "pidInPrefix=$(@($instanceHits)[0].PidInPrefix)"
+# and the THREAD id in that prefix must not be mistaken for a running agent
+release; reset
+[void](mklog 'gui-agent-20261009.log' $now.AddHours(-3) @(
+        "[20261009.045802.150-2484-I] LogInit: Log started, module name: gui-agent",
+        "[20261009.045802.152-2484-I] LogInit: Running as user: SYSTEM, process ID: $OLDFMT"))
+hold 'gui-agent-20261009.log'
+$agentProc = [pscustomobject]@{ Id = 2484 }      # the THREAD id, not this log's process
+. ([scriptblock]::Create($region))
+Check 'older agent: a thread id equal to the running pid does NOT claim the log' `
+      ($instanceHits.Count -eq 0) "hits=$($instanceHits.Count) picked=$(names $instanceHits)"
+
 release
 Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
 Write-Output ""
