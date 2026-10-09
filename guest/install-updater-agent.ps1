@@ -35,21 +35,19 @@ function Log($m){ Write-Output ((Get-Date -Format 'HH:mm:ss') + ' ' + $m) }
 $updMutex     = $null
 $haveUpdMutex = $false
 # AND THE UNGATE, FOR THE SAME REASON - learned the hard way twice in one file. The update-task
-# ungate below installs `# The ungate is a no-op until the tasks are actually gated (initialised at the top of the script),
-# so this trap can never be the thing that fails - it must only ever re-enable and rethrow.
-# `break`, NOT `throw`. A bare throw inside a trap does not rethrow the original error - it raises
-# ScriptHalted and the real message is LOST, which is the second way this trap destroyed evidence.
-# Measured offline, three arms: assignment-after-trap gives "The variable '$script:UpdUngate' cannot
-# be retrieved because it has not been set" (the campaign's error); top-level default + `throw` gives
-# "ScriptHalted"; top-level default + `break` gives "the REAL error ..." and still runs the ungate.
-# The mutex trap further down this file already uses break for exactly this reason.
-trap { try { & $script:UpdUngate } catch { Log ("WARN ungate failed on the error path: " + $_.Exception.Message) }; break }`, and a trap is hoisted to the WHOLE
-# script block, so it can fire from a throw that happens hundreds of lines ABOVE the assignment.
-# When it did, StrictMode turned the trap's read of the unset variable into
+# ungate further down is called from a trap, and a trap is HOISTED to the whole script block, so it
+# can fire from a throw hundreds of lines ABOVE the line that assigns what it calls. When that
+# happened, StrictMode turned the trap's read of the unset variable into
 #   "The variable '$script:UpdUngate' cannot be retrieved because it has not been set."
-# and that replaced the real error - measured 2026-10-09 in the WIN10-clean acceptance cell, which
-# failed with updater_agent_failed and NO indication of what had actually thrown. A no-op default
-# means the trap is always callable; the real ungate replaces it once the tasks are gated.
+# and THAT replaced the real error - measured 2026-10-09 in the WIN10-clean acceptance cell, which
+# failed with updater_agent_failed and no indication of what had actually thrown. A no-op default
+# here means the trap is always callable; the real ungate replaces it once the tasks are gated.
+#
+# THIS COMMENT DELIBERATELY DOES NOT REPRODUCE THE TRAP LINE. It used to quote it verbatim, and a
+# scripted edit that replaced the FIRST occurrence of that text hit the copy in this comment rather
+# than the real statement - injecting executable text into the middle of a comment line, where the
+# trailing words became a bare comma that PowerShell then tried to run ("The term ',' is not
+# recognized..."). It parsed clean and failed only on a guest. Describe the code here; do not echo it.
 $script:updGatedList = @()
 $script:UpdUngate    = { }
 
@@ -279,7 +277,9 @@ $script:UpdUngate = {
 $script:updGatedList = $updGated
 # The comment above is only true if something actually runs on the failure path. A trap fires for a
 # terminating error anywhere below, re-enables, and rethrows so the deploy still fails loudly.
-trap { & $script:UpdUngate; throw }
+# `break`, not a bare throw: a bare throw inside a trap raises ScriptHalted and the original
+# message is LOST (measured offline in three arms). The mutex trap further down already does this.
+trap { try { & $script:UpdUngate } catch { Log ("WARN ungate failed on the error path: " + $_.Exception.Message) }; break }
 
 $updMutex = New-Object System.Threading.Mutex($false, 'Global\QubesWindowsUpdate')
 $haveUpdMutex = $false
