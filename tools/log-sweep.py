@@ -131,6 +131,40 @@ EV_MARKER_IDS = {1074, 1076, 13, 6005, 6006, 6008, 6009, 6013}
 EV_SERVICE_IDS = {7000, 7009, 7011, 7023, 7024, 7031, 7034, 7036, 7040, 7043, 7045}
 
 
+TASK_RETURN_CODE_RE = re.compile(r"with return code (-?\d+)")
+
+
+def task_record_is_failure(eid, msg):
+    """Is this TaskScheduler 201/203 record for one of our tasks actually a FAILURE?
+
+    MEASURED 2026-10-09 on win11-acc. task_failures counted every 201 and 203 for one of our tasks,
+    and 201 is "Task Scheduler SUCCESSFULLY COMPLETED task X ... with return code N". Our tasks are
+    supposed to run and complete at every boot - QwtClockSync, QubesPvNic, QwtModuleBases,
+    QubesPvNicRearm, QwtDeathReporter - so every healthy boot contributed records to a metric whose
+    threshold is max 0, and the gate could never read 0 however clean the guest was. In that
+    capture's window there were five such records: four with RETURN CODE 0, and one QwtDeathReporter
+    with 2147943691 = 0x8007045B = ERROR_SHUTDOWN_IN_PROGRESS - the shutdown reaping a task, which
+    this file ALREADY excuses for id=203 and which guest/qwt-report-death.ps1 accepts on its own.
+    So: a 201 is a failure only when it carries a NON-ZERO return code that is not one of the
+    shutdown codes; a 203 that reached here is a real launch failure, because event_wanted has
+    already dropped the shutdown-refused ones. A record with no parsable return code is counted -
+    missing data is not an excuse.
+    WHAT THIS SIGNAL CANNOT SEE, so that nobody reads more into a 0 than it carries: a task that
+    FAILED and still reported return code 0 is indistinguishable from one that worked, in this
+    record. That defect surfaces in the task's own log, which the sweep reads separately, not here -
+    Jev put this change's residual exactly there (zero-code-failure-missed 0.68).
+    """
+    if eid == 203:
+        return True
+    m = TASK_RETURN_CODE_RE.search(msg or "")
+    if not m:
+        return True
+    code = int(m.group(1))
+    if code == 0:
+        return False
+    return not SHUTDOWN_RESULT_CODES_RE.search(str(code))
+
+
 def event_wanted(log, eid, provider, msg):
     if provider == "Qubes Windows Tools":
         return True
@@ -176,6 +210,9 @@ def event_wanted(log, eid, provider, msg):
 # scheduler has been seen to report while a guest goes down, in the decimal the event text uses and
 # the hex our own records use. Anchored to the event's "Error Value" field so a code appearing in a
 # task NAME or a message body cannot excuse a real launch failure.
+# The same two codes as SHUTDOWN_LAUNCH_REFUSAL_RE, matched as a BARE value, for the "with return
+# code N" field of a 201 - where there is no "Error Value:" label to anchor to.
+SHUTDOWN_RESULT_CODES_RE = re.compile(r"^(?:2147943515|2147943691)$")
 SHUTDOWN_LAUNCH_REFUSAL_RE = re.compile(r"(?i)Error Value:\s*(?:2147943515|2147943691|0x8007045[bB]|0x8007050[bB])\b")
 
 WINUTILS_RE = re.compile(r"^\ufeff?\[(\d{8})\.(\d{6})\.(\d{3})-(\d+)(?::(\d+))?-([IWEDV])\] (?:([A-Za-z0-9_]+): )?(.*)$")
@@ -267,7 +304,7 @@ DEFAULT_THRESHOLDS = {
     "death_record_mismatch": {"max": 0, "severity": "P2", "why": "a watchdog death line without its 4001 record, or a 4001 without the line (ADR-supervision 2)"},
     "unexpected_shutdowns": {"max": 0, "severity": "P1", "why": "System 6008 / Kernel-Power 41: the previous shutdown was not clean"},
     "bugchecks": {"max": 0, "severity": "P1", "why": "System 1001 BugCheck"},
-    "task_failures": {"max": 0, "severity": "P2", "why": "TaskScheduler 201/203 for one of our tasks"},
+    "task_failures": {"max": 0, "severity": "P2", "why": "a TaskScheduler record for one of our tasks that is a FAILURE: a 203 launch failure the scheduler did not refuse for shutdown, or a 201 whose return code is non-zero and not a shutdown code. A 201 with return code 0 is a task doing its job and is not counted - counting it made this threshold unreachable on every healthy boot"},
     "fallbacks_fired": {"max": 0, "severity": "P2", "why": "project rule: a fallback firing is an anomaly, logged loudly and diagnosed"},
     "rise_factor": 2.0,
     "rise_min_delta": 3,
@@ -1499,7 +1536,9 @@ def compute_metrics(files, boots, st, since, now=None):
         m["death_record_mismatch"] = None   # not evaluable: needs both the watchdog log and the event block
     m["unexpected_shutdowns"] = len([l for l in events if l.extra.get("log") == "System" and l.extra.get("id") in (6008, 41) and sel(l.ts)])
     m["bugchecks"] = len([l for l in events if l.extra.get("log") == "System" and l.extra.get("id") == 1001 and "BugCheck" in (l.extra.get("provider") or "") and sel(l.ts)])
-    m["task_failures"] = len([l for l in events if "TaskScheduler" in str(l.extra.get("log")) and l.extra.get("id") in (201, 203) and OUR_TASKS_RE.search(l.msg) and sel(l.ts)])
+    m["task_failures"] = len([l for l in events if "TaskScheduler" in str(l.extra.get("log")) and l.extra.get("id") in (201, 203)
+                              and OUR_TASKS_RE.search(l.msg) and sel(l.ts)
+                              and task_record_is_failure(l.extra.get("id"), l.msg)])   # GUARD:taskrc DEFECT: and True])
     m["fallbacks_fired"] = len([l for lf in files for l in lf.lines if FALLBACK_FIRED_RE.search(l.msg) and "fallback refused" not in l.msg and sel(l.ts)])
     errs = [l for lf in files for l in lf.lines if l.level == "E" and sel(l.ts)]
     m["error_lines"] = len(errs)

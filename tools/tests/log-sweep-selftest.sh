@@ -222,6 +222,15 @@ CF_LINES = (agent(1000, t0="100031.200", uptime="31.200", announce=True,
 CF = [("gui-agent-20261007.log", "agent", CF_LINES)]
 ev_flip = ["EV NONE [Microsoft-Windows-TaskScheduler/Operational]"]
 write("clockflip.pull", stream(CF, ev_flip))
+# taskok: ONE task that COMPLETED with return code 0 and ONE that genuinely failed to launch, so the
+# difference between "ran" and "failed" is what the metric is driven on. Without this the taskrc knob
+# could not be driven by the suite at all - no other fixture carries a TaskScheduler 201.
+TOK = [("gui-agent-20261007-100031-1000.log", "agent", agent(1000, t0="100031.200", uptime="31.200"))]
+ev_taskok = ["EV 2026-10-07 10:00:20.000 [System] id=6013 level=4 EventLog: The system uptime is 20 seconds.",
+             'EV 2026-10-07 10:01:00.000 [Microsoft-Windows-TaskScheduler/Operational] id=201 level=4 Microsoft-Windows-TaskScheduler: Task Scheduler successfully completed task "\\QwtClockSync" , instance "{a}" , action "powershell.exe" with return code 0.',
+             'EV 2026-10-07 10:01:05.000 [Microsoft-Windows-TaskScheduler/Operational] id=203 level=3 Microsoft-Windows-TaskScheduler: Task Scheduler failed to launch action "powershell.exe" in instance "{b}" of task "\\QubesPvNic". Additional Data: Error Value: 2.',
+             "EV NONE [Microsoft-Windows-TaskScheduler/Operational]"]
+write("taskok.pull", stream(TOK, ev_taskok))
 # skipnames / skipchatty: the collector's cap dropped files and NAMES them; a verdict-deciding family is louder
 import base64 as _b64
 def with_skip(src, names, out):
@@ -390,7 +399,7 @@ analyze(){ # $1=analyzer $2=logsdir $3=baseline $4=judge $5=tag -> rc; report at
 field(){ python3 -c "import json,sys; r=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$1" "$2"; }
 
 # ---- decode every fixture with the real decoder --------------------------------------------------------------------
-for f in base newsig rise three stoperr empty twoboot clockflip skipnames skipchatty bootshut inv twoproc msiok msibad; do
+for f in base newsig rise three stoperr empty twoboot clockflip taskok skipnames skipchatty bootshut inv twoproc msiok msibad; do
   rc=$(decode "$SRC" "$T/$f.pull" "$T/$f")
   [ "$rc" = 0 ] || { echo "FATAL: the $f fixture did not decode (rc=$rc): $(tail -2 "$T/$f.decode.txt")"; exit 2; }
   # EVERY LINE IN THESE CORPORA IS WRITTEN BY THIS TEST, so the run declares the errors it caused - which is
@@ -959,6 +968,42 @@ K=$(knob allinits); rc=$(analyze "$K" "$T/clockflip" "$T/baseline.json" "$T/jev-
 ba=$(field "$T/t36a.json" 'r["header"]["boots"]')
 [ "$ba" = 1 ] && ok "knob allinits: with only the last init, a per-day file offers ONE boot (boots=$ba)" \
               || bad "knob allinits: boots=$ba, want 1 - the case cannot be driven"
+
+# ---- T37 a task that COMPLETED is not a task failure -------------------------------------------
+# MEASURED 2026-10-09 on win11-acc. task_failures counted every TaskScheduler 201 and 203 for one of
+# our tasks, and 201 reads "Task Scheduler SUCCESSFULLY COMPLETED task X ... with return code N".
+# Our tasks are meant to run and complete every boot (QwtClockSync, QubesPvNic, QwtModuleBases,
+# QubesPvNicRearm, QwtDeathReporter), so a metric whose threshold is max 0 could never read 0 however
+# clean the guest was - the same shape as a release suite that cannot pass. That capture's window held
+# five records: FOUR with return code 0 and one QwtDeathReporter with 2147943691 = 0x8007045B =
+# ERROR_SHUTDOWN_IN_PROGRESS, the shutdown reaping a task, which this analyzer already excuses for
+# id=203. On the real capture the metric went 19 -> 0 and the breach disappeared.
+t37(){ # $1=eid $2=message $3=expected(True|False) $4=label
+  got=$(python3 - "$ROOT/tools/log-sweep.py" "$1" "$2" <<'PY37'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("ls", sys.argv[1])
+ls = importlib.util.module_from_spec(spec); spec.loader.exec_module(ls)
+print(ls.task_record_is_failure(int(sys.argv[2]), sys.argv[3]))
+PY37
+)
+  if [ "$got" = "$3" ]; then ok "T37 $4"; else bad "T37 $4 -> $got (want $3)"; fi
+}
+t37 201 'Task Scheduler successfully completed task "\QwtClockSync" , action "powershell.exe" with return code 0' False 'a 201 with return code 0 is a success, not a failure'
+t37 201 'Task Scheduler successfully completed task "\QubesPvNic" , action "powershell.exe" with return code 1' True 'a 201 with a non-zero return code still counts'
+t37 201 'Task Scheduler successfully completed task "\QwtDeathReporter" , action "powershell.exe" with return code 2147943691' False 'a 201 carrying the shutdown code is the shutdown, not a defect'
+t37 201 'Task Scheduler successfully completed task "\QwtModuleBases" , action "x" with no code at all' True 'a 201 with no parsable return code counts - missing data is not an excuse'
+t37 203 'Task Scheduler failed to launch action "powershell.exe" in task "\QwtDeathReporter". Additional Data: Error Value: 2.' True 'a real 203 launch failure still counts'
+# THE METRIC, not the predicate: the knob drops the predicate from the count, so only a run over a
+# fixture carrying both kinds of record can drive it. taskok has one 201 (return code 0) and one real
+# 203, so the shipped analyzer must count ONE and the knob'd one TWO.
+rc=$(analyze "$SRC" "$T/taskok" "$T/baseline.json" "$T/jev-expected.py" t37m)
+tf=$(field "$T/t37m.json" 'r["metrics"]["task_failures"]')
+[ "$tf" = 1 ] && ok "T37 the metric counts the real 203 and not the completed 201 (task_failures=$tf)" \
+              || bad "T37 task_failures=$tf over taskok, want 1"
+KT=$(knob taskrc); rc=$(analyze "$KT" "$T/taskok" "$T/baseline.json" "$T/jev-expected.py" t37k)
+tfk=$(field "$T/t37k.json" 'r["metrics"]["task_failures"]')
+[ "$tfk" = 2 ] && ok "knob taskrc: with the return code ignored, the COMPLETED task counts too (task_failures=$tfk)" \
+               || bad "knob taskrc: task_failures=$tfk, want 2 - the case cannot be driven"
 
 echo "--- $pass passed, $fail failed; fixtures/outputs in $T"
 [ "$fail" = 0 ] && exit 0 || exit 1
