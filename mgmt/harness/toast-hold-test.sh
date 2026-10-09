@@ -15,7 +15,13 @@
 #   --subject    the churn guest quick-upgrade RECREATES from the golden (default <os>-thold).
 #   --toastfire  toastfire.exe to push (default: the `build` run of the same head sha, artifact gui-agent-package;
 #                the release ISO does not carry it - build.yml "Collect package").
-#   --skip-nonseamless   skip scenario 5 (the dom0 qubes.SetGuiMode round trip).
+#   --nonseamless        EXERCISE scenario 5 (the dom0 qubes.SetGuiMode round trip). OFF BY DEFAULT, and
+#                        opt-IN rather than opt-out because S5 maps the WHOLE GUEST DESKTOP as one dom0
+#                        window: owner, 2026-10-06, "why i see near-fullscreen windows again". Anything
+#                        that runs this suite unattended - tools/gate-remainder.sh does - would otherwise
+#                        take over his screen without warning. The S5 verdict says plainly that it was
+#                        not exercised, so the gate never reads the skip as a pass.
+#   --skip-nonseamless   accepted and now redundant (that is the default); kept so existing callers work.
 #   --reuse-subject      skip quick-upgrade when the subject already exists (iteration on this harness; the installed
 #                        agent hash is STILL verified against the package, so a wrong subject is refused).
 #   env: TH_OUT=<dir>   evidence root (default $HOME/qwt-toast-hold; outside the repo - captures and logs never enter
@@ -72,14 +78,17 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$HERE" || exit 1
 
-RID=""; OS=""; SUBJECT=""; TFEXE="${TOASTFIRE:-}"; SKIP_NS=0; REUSE=0
+RID=""; OS=""; SUBJECT=""; TFEXE="${TOASTFIRE:-}"; REUSE=0
+# S5 IS OFF UNLESS ASKED FOR. It maps the whole guest desktop as one dom0 window (see --nonseamless).
+SKIP_NS=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --run) RID="${2:-}"; shift 2 ;;
     --os) OS="${2:-}"; shift 2 ;;
     --subject) SUBJECT="${2:-}"; shift 2 ;;
     --toastfire) TFEXE="${2:-}"; shift 2 ;;
-    --skip-nonseamless) SKIP_NS=1; shift ;;
+    --skip-nonseamless) SKIP_NS=1; shift ;;          # the default; kept for existing callers
+    --nonseamless)      SKIP_NS=0; shift ;;          # opt IN to the whole-desktop window
     --reuse-subject) REUSE=1; shift ;;
     -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 1 ;;
@@ -515,7 +524,9 @@ switch_mode(){ # <FULLSCREEN|SEAMLESS> <want seamless 0|1> -> 0 observed / 1 ter
   done
 }
 if [ "$SKIP_NS" = 1 ]; then
-  verdict S5 "INFO not exercised by request (--skip-nonseamless): S5a/S5c carry no verdict in this run"
+  verdict S5 "INFO not exercised: S5a/S5c carry no verdict in this run. S5 maps the whole guest desktop as one dom0 window, so it is opt-in via --nonseamless (owner 2026-10-06); this is COVERAGE THIS RUN DOES NOT HAVE, not a pass"
+  log "S5 SKIPPED: the dom0 qubes.SetGuiMode round trip was not exercised. It puts a near-fullscreen"
+  log "  window on whoever is at the screen, so it is opt-in (--nonseamless). S5a/S5c carry no verdict."
 else
   if switch_mode FULLSCREEN 0; then
     scenario "S5a" nonseamless "$AUMID_A" "FIRE:$FA+informational+--title+@SLUG1@+--tag+@TAG1@"

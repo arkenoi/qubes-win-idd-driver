@@ -287,6 +287,12 @@ else SKIPPED="$SKIPPED p3a-etw-gate"; fi
 
 if need toast-hold-test; then
   settle "${OS11}-thold"
+  # S5 (the dom0 qubes.SetGuiMode round trip) is OPT-IN in that suite and this gate does not ask for
+  # it: it maps the whole guest desktop as one dom0 window, and this gate runs unattended (owner
+  # 2026-10-06, "why i see near-fullscreen windows again"). Say so here, so the gate's own log
+  # carries the coverage this run does not have rather than leaving it to the suite's verdict file.
+  say "    note: toast-hold S5 (whole-desktop SetGuiMode round trip) is NOT exercised by this gate -"
+  say "          it takes over the screen. Run the suite with --nonseamless deliberately for S5a/S5c."
   run_it toast-hold-test bash mgmt/harness/toast-hold-test.sh --run "$RUN" --os "$OS11"; thrc=$?
   # ONE RETRY, DRIVEN BY THE REFUSAL'S OWN TEXT. quick-upgrade refuses while ANY win1* guest is up,
   # and settle() above only knows the guests THIS gate names. Measured 2026-10-09: it refused with
