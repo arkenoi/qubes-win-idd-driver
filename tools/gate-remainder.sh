@@ -140,7 +140,66 @@ note() { if [ "$1" = 0 ]; then PASSED="$PASSED $2"; else FAILED="$FAILED $2"; fi
 # start for it.
 SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
+# THE SUBJECT MUST BE UP AND ANSWERING BEFORE A SUITE JUDGES IT. Measured 2026-10-09:
+# gate-preflight ran first, right after the campaign, and its own log says "liveness probe 1/3:
+# guest did not answer" and then printed NO WDSTART line at all - so the watchdog check had nothing
+# to read and the suite graded INVALID-INSTRUMENT. The guest was still settling from the campaign.
+# settle() halts the OTHER guests; this makes the named one ready, which is the other half.
+ready() {             # ready <vm>
+  local v="$1" st i
+  [ -n "$v" ] || return 0
+  [ "$DRY" = 1 ] && { echo "INTEND[dry] ready: $v up and answering qrexec" | tee -a "$LOG"; return 0; }
+  st=$(QTEST_VM="$v" tools/qtest state 2>/dev/null | command grep -ao 'power_state=[A-Za-z]*' | head -1)
+  [ -n "$st" ] || { say "    ready: no qube named $v"; return 1; }
+  if [ "$st" != "power_state=Running" ]; then
+    say "    ready: $v is ${st#power_state=} - starting it"
+    if vm_lock "$v"; then timeout 300 qvm-start "$v" >>"$LOG" 2>&1 || true; vm_unlock; fi
+  fi
+  # qrexec IS NOT THE PRECONDITION THESE SUITES NEED. Measured 2026-10-09 in this script's own log:
+  # "ready: win11-acc answers qrexec" at 16:03:19, and gate-preflight FATALed 14 s later because it
+  # could not push its restart helper (guest sha256 'none'). The same push by hand a moment later
+  # landed with an exact sha match. qrexec answers as SYSTEM early in a boot; a FILE COPY needs the
+  # receiver in a logged-on session, which comes later - so proving qrexec and then handing the
+  # guest to a suite whose first act is a push proves the wrong thing, and the suite grades the gap
+  # as INVALID-INSTRUMENT. Prove the copy itself.
+  # `qtest push` already deletes the name on the guest before copying (tools/qtest:152), so a
+  # repeated probe does not need a delete of its own - measured here, three pushes of the same
+  # name in a row all returned 0. Do not add one back on the theory that the receiver refuses to
+  # overwrite: it does refuse, and qtest is where that is handled.
+  local pushed=0 probe
+  probe="$WORK/ready-probe-$v.txt"
+  printf 'READYPROBE %s\n' "$v" > "$probe" 2>/dev/null
+  for i in $(seq 1 42); do
+    if QTEST_VM="$v" timeout 40 tools/qtest run 'cmd /c echo QREADY' 2>/dev/null | command grep -qa '^QREADY'; then
+      [ "$pushed" = 0 ] && { say "    ready: $v answers qrexec - now proving a file copy"; pushed=1; }
+      if QTEST_VM="$v" timeout 90 tools/qtest push "$probe" >>"$LOG" 2>&1; then
+        say "    ready: $v takes a file push (the receiver session is up)"; rm -f "$probe"
+        # AND ITS CLOCK, BEFORE ANY SUITE READS IT. No in-guest time setting survives a reboot (the
+        # domain is destroyed), so these guests come up ~3 h ahead. log-sweep REFUSES a collection
+        # whose guest clock is skewed from the host's - measured in this gate's own run, rc=3
+        # "clockskew ... the guest's clock is +10837 s from the host's at collection time" - so the
+        # sweep produced NO verdict and the receipt stayed empty. qtest synctime pushes this qube's
+        # clock in to ~0.3 s and is documented as the call to make after every VM start.
+        QTEST_VM="$v" timeout 120 tools/qtest synctime >>"$LOG" 2>&1 \
+          || say "    WARN could not push the clock into $v - a sweep may refuse on skew"
+        return 0
+      fi
+    fi
+    sleep 10
+  done
+  rm -f "$probe"
+  # SAY WHICH EXIT FIRED. These are different failures and lead to different work: no qrexec at all
+  # is a dead/unbooted guest, while qrexec-without-a-push is the session gap this probe exists for.
+  if [ "$pushed" = 1 ]; then
+    say "    WARN $v answers qrexec but never took a file push in 7 min - the suite will grade that"
+  else
+    say "    WARN $v never answered qrexec in 7 min - the suite will grade that itself"
+  fi
+  return 1
+}
+
 if need gate-preflight; then
+  settle "$VM11"; ready "$VM11"
   # <vm> <hex-bits>: the preflight bit-mask the suite documents; 0 exercises the no-fault path.
   run_it gate-preflight bash mgmt/harness/gate-preflight.sh "$VM11" 0; note $? gate-preflight
 else SKIPPED="$SKIPPED gate-preflight"; fi
@@ -160,7 +219,13 @@ if need p3a-etw-gate; then
       BRUN=$(gh run list -w build -L 20 --json databaseId,headSha,conclusion \
                -q "[.[]|select(.conclusion==\"success\" and (.headSha|startswith(\"${HEAD:0:12}\")))][0].databaseId" 2>/dev/null)
       if [ -n "$BRUN" ] && [ "$BRUN" != "null" ]; then
-        [ -d "$TFDIR" ] || gh run download "$BRUN" -n toastfire -D "$TFDIR" >>"$LOG" 2>&1 || true
+        # ARTIFACT `gui-agent-package`, NOT `toastfire`. This asked for -n toastfire, which is not an
+        # artifact that run publishes (it has idd-driver-package, gui-agent-package and
+        # qwt-improved-package), so the download failed, `|| true` swallowed it and the find came
+        # back empty - reported as "no toastfire.exe for HEAD", i.e. a missing helper rather than a
+        # wrong name. mgmt/harness/toast-hold-test.sh already had it right and fetched the same exe
+        # from gui-agent-package in the same run, which is how the two disagreed in one log.
+        [ -d "$TFDIR" ] || gh run download "$BRUN" -n gui-agent-package -D "$TFDIR" >>"$LOG" 2>&1 || true
         TF=$(find "$TFDIR" -iname 'toastfire.exe' 2>/dev/null | head -1)
       fi
       [ -n "$TF" ] && say "    toastfire from build run $BRUN: $TF" \
@@ -174,12 +239,31 @@ else SKIPPED="$SKIPPED p3a-etw-gate"; fi
 
 if need toast-hold-test; then
   settle "${OS11}-thold"
-  run_it toast-hold-test bash mgmt/harness/toast-hold-test.sh --run "$RUN" --os "$OS11"
-  note $? toast-hold-test
+  run_it toast-hold-test bash mgmt/harness/toast-hold-test.sh --run "$RUN" --os "$OS11"; thrc=$?
+  # ONE RETRY, DRIVEN BY THE REFUSAL'S OWN TEXT. quick-upgrade refuses while ANY win1* guest is up,
+  # and settle() above only knows the guests THIS gate names. Measured 2026-10-09: it refused with
+  # "REFUSED: these are not Halted: win11r-up" - a leftover from other work on the rig, which no
+  # static list here could have predicted. Rather than enumerate every qube (forbidden: that fires
+  # an admin call at each one, dom0 and this qube included), take the names out of the refusal,
+  # settle those, and retry once. A refusal naming nothing, or a second failure, is graded as before.
+  # The rc is captured in thrc: `note $?` after an `if` would read the BLOCK's status, not the suite's.
+  if [ "$DRY" = 0 ] && [ "$thrc" != 0 ]; then
+    stuck=$(command grep -aoE 'these are not Halted:[^"]*' "$WORK/toast-hold-test.out" 2>/dev/null \
+              | head -1 | sed 's/these are not Halted://')
+    if [ -n "${stuck// /}" ]; then
+      say "    toast-hold-test was refused over guests it does not own:${stuck} - settling them by name"
+      for v in $stuck; do
+        if vm_lock "$v"; then qwt_shutdown "$v" 600 >>"$LOG" 2>&1 || say "    WARN $v did not halt cleanly"; vm_unlock
+        else say "    WARN could not lock $v to settle it"; fi
+      done
+      run_it toast-hold-test bash mgmt/harness/toast-hold-test.sh --run "$RUN" --os "$OS11"; thrc=$?
+    fi
+  fi
+  note "$thrc" toast-hold-test
 else SKIPPED="$SKIPPED toast-hold-test"; fi
 
 if need log-sweep; then
-  settle "$VM11"
+  settle "$VM11"; ready "$VM11"
   # LAST, deliberately: it reads what every suite above wrote into the guest's logs.
   run_it log-sweep bash mgmt/harness/log-sweep.sh "$VM11" "$SINCE" "$WORK/log-sweep"
   note $? log-sweep

@@ -111,7 +111,15 @@ source mgmt/harness/e2e-wait.sh
 grun(){ QTEST_VM=$SUBJECT timeout -k 5 "${2:-60}" ./tools/qtest run "$1" 2>/dev/null | tr -d '\r'; }
 vercore(){ printf '%s' "$1" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' | head -1; }
 ver_gt(){ [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$1" ] && [ "$1" != "$2" ]; }
-qstate_of(){ qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$1" '$1==v{print $2}'; }
+# ONE QUBE, ASKED BY NAME. This was
+#   qvm-ls --raw-data --fields NAME,STATE | awk -F'|' -v v="$1" '$1==v{print $2}'
+# which lists EVERY qube - firing an admin call at each one, including dom0 and this qube - in order
+# to read the state of the single qube it was handed, and it is called four times per run. Owner,
+# 2026-10-09: "you again run admin.vm.tag.List to dom0 and self despite you promised me never to do
+# it". admin.vm.CurrentState addresses exactly the named qube, which is what tools/qtest state uses.
+# An unreadable or absent qube gives '', the same as before.
+qstate_of(){ QTEST_VM="$1" ./tools/qtest state 2>/dev/null \
+               | command grep -ao 'power_state=[A-Za-z]*' | head -1 | cut -d= -f2; }
 
 # The release loop is set up HERE and torn down HERE. It must never be deleted while a guest
 # may still hold the CD: the CD is a start-time attach and drops at the guest's first shutdown,

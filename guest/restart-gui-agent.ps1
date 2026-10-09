@@ -94,7 +94,16 @@ function Get-GuiAgentLastInit([string]$Path) {
             $r.pid = [int]$Matches[1]
             $r.line = $n
             $r.at = $null
-            if ($ln -match '^﻿?\[(\d{8})\.(\d{6})\.(\d{3})-') {
+            # THE ESCAPE \uFEFF, NOT A LITERAL BOM CHARACTER. This read '^<U+FEFF>?\[...' with the BOM written
+            # literally, i.e. the bytes EF BB BF inside the regex, and THIS FILE HAS NO BOM of its
+            # own - so Windows PowerShell 5.1 decodes it with the ANSI codepage and those three
+            # bytes become three characters, making the pattern require a literal mojibake prefix
+            # before the '['. A log line starting with '[' then never matched, .at stayed $null, and
+            # every restart graded 'init-timestamp-unreadable' - measured on win11-acc 2026-10-09,
+            # which is what made gate-preflight refuse. The optional-BOM tolerance had been
+            # inverted into a BOM REQUIREMENT. The escape is pure ASCII, so no decoding can change
+            # what it means; .NET regex resolves it to the same codepoint.
+            if ($ln -match '^\uFEFF?\[(\d{8})\.(\d{6})\.(\d{3})-') {
                 try {
                     $r.at = [datetime]::ParseExact("$($Matches[1])$($Matches[2]).$($Matches[3])",
                         'yyyyMMddHHmmss.fff', [Globalization.CultureInfo]::InvariantCulture)

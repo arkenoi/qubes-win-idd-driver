@@ -28,7 +28,8 @@ BITS="${2:?usage: $0 <vm> <hex-bits>}"
 source mgmt/harness/vmlock.sh; vm_lock "$VM"
 KEY='HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent'
 QTEST_BIN="${QTEST_BIN:-./tools/qtest}"   # overridable ONLY so the degraded-guest paths are provable off-rig
-source mgmt/harness/lifecycle-lib.sh   # agent_restart_ps / agent_restart_grade / ctl_start / ctl_stop: no process is killed by name
+source mgmt/harness/lifecycle-lib.sh   # ctl_start / ctl_stop: the control window, by handle - no process is killed by name
+source mgmt/harness/shutdown-lib.sh   # qwt_shutdown: the bit is applied across a reboot, see set_bits
 q(){ QTEST_VM=$VM timeout -k 8 "${T:-200}" "$QTEST_BIN" "$@" 2>/dev/null; }
 psrun(){ local b; b=$(python3 -c "
 import base64,sys; print(base64.b64encode(sys.stdin.read().encode('utf-16-le')).decode(), end='')" <<< "$1")
@@ -48,7 +49,7 @@ alive(){ T=30 q run 'cmd /c echo LIVE' | grep -qa LIVE; }
 
 guest_gone(){  # <context> - one bounded restore attempt, the verdict row, and OUT (exit 3)
   log "guest gone - one bounded FaultGateOff=0 restore attempt, then the verdict"
-  T=120 set_bits 0 >/dev/null 2>&1 || true   # 120: set_bits may now poll up to 45 s for the agent PID
+  T=120 write_bits 0 >/dev/null 2>&1 || true   # registry only: a reboot here would outlive the verdict
   log "-> INVALID-INSTRUMENT: guest unresponsive during the fault-toggle sequence"
   log "   (arm+agent-restart degraded the session at bit $BITS; $1)."
   log "   The failproof is NOT TAKEABLE this run - a graded, honest outcome: the SG rows it"
@@ -82,29 +83,93 @@ import struct,sys; b=open(sys.argv[1],'rb').read(); w,h=struct.unpack('>II',b[16
   rm -f "$t"; echo "$n|$d"
 }
 
-# THE AGENT IS RESTARTED THROUGH THE SERVICE THAT OWNS IT, AND THE TURNOVER IS PROVEN (owner
-# 2026-10-07; same shape as failproof-gates.sh's set_gate and failproof-faultinject.sh's
-# restart_agent - all three call guest/restart-gui-agent.ps1 through mgmt/harness/lifecycle-lib.sh,
-# do not let them drift). History: this used to be `Start-Service; Start-Sleep 22` (audit
-# 2026-09-08: a timer, not a fact), then `Stop-Service; Get-Process gui-agent | Stop-Process -Force;
-# Start-Service` with a poll for a pid not seen before. That kill BY NAME raced the watchdog's own
-# relaunch of the agent it owns; the survivor was adopted and the control was graded under the
-# PREVIOUS bits - which this file then excused with an "old one survived Stop-Process" INVALID
-# branch instead of fixing. Now the helper stops the QubesGuiWatchdog service (since 2026-10-03 its
-# stop ends the agent IT started, by handle), starts it, and proves a NEW gui-agent-<ts>-<pid>.log
-# with a live pid; a missing proof is RESTART INVALID-INSTRUMENT and set_bits_checked grades it.
-# The registry write rides the same round trip, before the restart; the GATEOFF readback after it.
-# Nothing is killed, nothing is found by name. The window-map witness is control_up's outcome poll.
-set_bits(){ psrun "$(agent_restart_ps "New-Item -Path '$KEY' -Force | Out-Null
-Set-ItemProperty -Path '$KEY' -Name FaultGateOff -Value $1 -Type DWord" \
-    "Write-Output ('GATEOFF ' + (Get-ItemProperty '$KEY').FaultGateOff)")" \
-    | grep -aE 'GATEOFF|SVCSTOP|OLDLOG|WDSTART|AGENTPID|OLDALIVE|NEWLOG|RESTART'; }
+# THE BIT IS APPLIED ACROSS A REBOOT, BECAUSE dom0 DOES NOT COME BACK FROM AN AGENT RESTART.
+# This used to write the bit and restart the agent through the QubesGuiWatchdog service (owner
+# 2026-10-07: through the owning service, nothing killed by name), then read dom0's window list.
+# MEASURED 2026-10-09 on win11-acc, same guest, same control, same probe, one variable:
+#   agent service restart -> notepad running guest-side with a visible HWND, the agent parked on
+#     "Awaiting for a vchan client" with NO connect line after its last init, dom0 shot = 0 PNGs
+#   guest reboot          -> "Awaiting for a vchan client" then "A vchan client has connected"
+#     0.32 s later, dom0 shot = 1 PNG
+# So dom0's gui-daemon does not reconnect after a gui-agent restart; it connects on a fresh boot.
+# That is the gap DESIGN-gui-daemon-restart-survival.md Sec. 3 already names - handle_vchan_error
+# never consults vchan_at_eof, diverging from the Linux agent's copy - and it is NOT ours to fix
+# here (GUI protocol / gui-daemon work needs a design writeup and the owner's review first).
+# What WAS ours is this suite's premise: "one agent restart and one screenshot" cannot see a control
+# on this rig, so every run graded REFUSING "the harness control is not visible" and blamed the rig
+# for a connection the restart had dropped. A reboot gives a fresh agent AND a fresh guid.
+#
+# AND THE CONNECTION IS NOW GRADED HERE, not inferred downstream from an empty window list. A guest
+# whose agent is up but has no vchan client can never show a control, and saying so is the whole
+# difference between a diagnosis and "0 windows".
+write_bits(){  # <value> -> GATEOFF readback only; no reboot. For the restore paths.
+  psrun "New-Item -Path '$KEY' -Force | Out-Null
+Set-ItemProperty -Path '$KEY' -Name FaultGateOff -Value $1 -Type DWord
+Write-Output ('GATEOFF ' + (Get-ItemProperty '$KEY').FaultGateOff)" | grep -aE 'GATEOFF'
+}
+
+boot_ready(){  # bounded: qrexec answers AND a file push lands (the receiver needs a logged-on
+               # session, which qrexec does not prove - the same gap that made this suite's own
+               # helper push fail 14 s after "answers qrexec"). rc 1 = never became ready.
+  local i probe; probe=$(mktemp); printf 'PFRDY\n' > "$probe"
+  for i in $(seq 1 42); do
+    if alive; then
+      if QTEST_VM=$VM timeout 90 "$QTEST_BIN" push "$probe" >/dev/null 2>&1; then
+        rm -f "$probe"
+        # THE CLOCK, BEFORE ANYTHING READS IT. These guests boot ~3 h ahead (no in-guest time
+        # setting survives a reboot - the domain is destroyed), and log-sweep REFUSES a collection
+        # whose guest clock is skewed from the host's: rc=3 "clockskew ... +10837 s", which is how
+        # the gate's sweep produced no verdict at all. qtest synctime pushes this qube's clock in,
+        # accurate to ~0.3 s, and is documented as the thing to call after every VM start.
+        QTEST_VM=$VM timeout 120 "$QTEST_BIN" synctime >/dev/null 2>&1 || true
+        return 0
+      fi
+    fi
+    sleep 10
+  done
+  rm -f "$probe"; return 1
+}
+
+# What the guest says about the agent THAT IS RUNNING NOW: its pid, and whether a vchan client
+# connected after its own init record. Scoped by the pid the process wrote, never by a clock - the
+# guest's clock jumps ~3 h backwards about a minute into every boot, so a time window here would
+# discard exactly the records this reads.
+AGENT_PROOF_PS='$ag = @(Get-Process -Name "gui-agent" -ErrorAction SilentlyContinue)
+if ($ag.Count -eq 0) { Write-Output "AGENTPID 0 after boot"; Write-Output "VCHANCONN 0"; exit }
+$p = $ag[0].Id
+Write-Output ("AGENTPID " + $p + " after boot")
+$dir = ""
+try { $dir = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools" -ErrorAction Stop).LogDir } catch { }
+if (-not $dir -or -not (Test-Path -LiteralPath $dir)) { Write-Output "VCHANCONN 0"; Write-Output "NEWLOG none"; exit }
+$f = @(Get-ChildItem -LiteralPath $dir -Filter "gui-agent-*.log" -ErrorAction SilentlyContinue |
+       Sort-Object LastWriteTime -Descending | Select-Object -First 1)
+if ($f.Count -eq 0) { Write-Output "VCHANCONN 0"; Write-Output "NEWLOG none"; exit }
+Write-Output ("NEWLOG " + $f[0].Name)
+$L = @(Get-Content -LiteralPath $f[0].FullName -ErrorAction SilentlyContinue)
+$init = 0; $i = 0
+foreach ($ln in $L) { $i++; if ($ln -match ("-" + $p + ":[0-9]+-[A-Z]\]") -and $ln -match "process ID: $p") { $init = $i } }
+if ($init -eq 0) { Write-Output "VCHANCONN 0"; Write-Output "INITLINE 0"; exit }
+Write-Output ("INITLINE " + $init)
+$conn = 0
+for ($j = $init; $j -lt $L.Count; $j++) { if ($L[$j] -match "A vchan client has connected") { $conn = 1 } }
+Write-Output ("VCHANCONN " + $conn)'
+
+set_bits(){  # <value> -> writes the bit, REBOOTS, and emits the boot-side proof lines
+  write_bits "$1" >/dev/null 2>&1 || true
+  qwt_shutdown "$VM" 600 >/dev/null 2>&1
+  timeout 300 qvm-start "$VM" >/dev/null 2>&1
+  boot_ready || { echo "BOOTREADY 0"; return 0; }   # the caller grades it; never out-waited
+  echo "BOOTREADY 1"
+  psrun "$AGENT_PROOF_PS
+Write-Output ('GATEOFF ' + (Get-ItemProperty '$KEY').FaultGateOff)" \
+    | grep -aE 'GATEOFF|AGENTPID|VCHANCONN|NEWLOG|INITLINE'
+}
 
 watchdog_failed(){  # <context> - the watchdog service is not Running after Start-Service: the
                     # toggle never restarted the agent, so nothing downstream measures the bit.
                     # Graded INVALID-INSTRUMENT (exit 3), never a silent proceed.
   log "watchdog did not start - one bounded FaultGateOff=0 restore attempt, then the verdict"
-  T=120 set_bits 0 >/dev/null 2>&1 || true
+  T=120 write_bits 0 >/dev/null 2>&1 || true
   log "-> INVALID-INSTRUMENT: QubesGuiWatchdog not Running after Start-Service ($1)."
   log "   The agent was never restarted under bit $BITS, so any control reading would grade a"
   log "   leftover state, not the bit. The failproof is NOT TAKEABLE this run."
@@ -115,43 +180,53 @@ watchdog_failed(){  # <context> - the watchdog service is not Running after Star
 
 # The GATEOFF echo must ROUND-TRIP or the toggle is graded, never assumed. Called only at top
 # level (never in a pipe/substitution) so guest_gone's exit actually terminates the script.
-set_bits_checked(){  # <value> <context>
+set_bits_checked(){  # <value> <context> - the bit must round-trip onto a FRESHLY BOOTED, CONNECTED agent
   local out; out=$(set_bits "$1")
+  echo "$out" | sed 's/^/  /'
+  _pf(){ echo "$out" | grep -aoE "^$1 [0-9]+" | head -1 | awk '{print $2}'; }   # one marker's value
+  if [ "$(_pf BOOTREADY)" != 1 ]; then
+    guest_gone "$2: the guest never answered qrexec and took a file push after the reboot that applies bit $1"
+  fi
   if ! echo "$out" | grep -qa GATEOFF; then
-    log "  no GATEOFF echo from the guest ($2)"
     require_alive "$2"
     out=$(set_bits "$1")   # answered liveness - one bounded retry, then grade
+    echo "$out" | sed 's/^/  /'
     echo "$out" | grep -qa GATEOFF || \
       guest_gone "$2: guest answers liveness but the FaultGateOff write never round-trips"
   fi
-  echo "$out" | sed 's/^/  /'
-  # A watchdog that is not Running is an instrument failure, graded here (see set_bits). A
-  # Running watchdog with no NEW gui-agent inside the bound is an anomaly worth a loud line, but
-  # not a verdict: control_up grades the OUTCOME (windows or none) against a live guest.
-  echo "$out" | grep -qa 'WDSTART Running' || \
-    watchdog_failed "$2: $(echo "$out" | grep -a WDSTART | head -1)"
-  # THE SERVICE RESTART MUST HAVE PRODUCED A NEW AGENT - a newer gui-agent-<ts>-<pid>.log with a
-  # live pid and the old agent gone (guest/restart-gui-agent.ps1 RESTART ok). Anything less - no
-  # new log inside the bound, the old agent surviving the service stop, the service not reaching
-  # Stopped - means bit $BITS was never applied to a fresh process: everything downstream would
-  # grade a control the toggle never reached, and the run would report CLEAR TO RUN for a
-  # measurement of the old state. INVALID-INSTRUMENT, never an anomaly line and a guess.
-  local why
-  if ! why=$(agent_restart_grade "$out"); then
-    log "-> INVALID-INSTRUMENT: the service restart did not produce a new agent ($2): $why"
-    log "   Bit $BITS was never applied to a fresh process. Anything graded from here would"
-    log "   describe the previous state."
-    printf 'PREFLIGHT\t%s\t%s\tINVALID-INSTRUMENT\tthe service restart did not produce a new agent (%s: %s); the toggle never took\n' \
-      "$VM" "$BITS" "$2" "$why"
+  local got; got=$(echo "$out" | grep -aoE 'GATEOFF [0-9]+' | head -1 | awk '{print $2}')
+  [ "${got:-x}" = "$1" ] || \
+    guest_gone "$2: FaultGateOff reads back '${got:-unreadable}' after the reboot, not '$1' - the bit was not applied"
+  # A FRESH AGENT. Without one the bit is not in any running process and everything downstream
+  # would grade the previous boot's state.
+  local apid; apid=$(_pf AGENTPID)
+  if [ "${apid:-0}" -le 0 ]; then
+    # NOT watchdog_failed: that line says "QubesGuiWatchdog not Running after Start-Service", which
+    # is a different fact and was never measured here. Say what was measured.
+    log "  no gui-agent process exists after the reboot that applies bit $1"
+    log "  INVALID-INSTRUMENT: the bit is in no running process, so nothing downstream measures it."
+    T=120 write_bits 0 >/dev/null 2>&1 || true
+    printf 'PREFLIGHT\t%s\t%s\tINVALID-INSTRUMENT\tno gui-agent process after the reboot applying bit %s (newest log %s); failproof not takeable this run\n' \
+      "$VM" "$BITS" "$1" "$(echo "$out" | grep -aoE 'NEWLOG [^ ]+' | head -1 | awk '{print $2}')"
     exit 3
   fi
+  # AND dom0 MUST BE CONNECTED TO IT. This is graded HERE, as an instrument precondition, because a
+  # guest whose agent has no vchan client cannot show any window to dom0 - which this suite used to
+  # report as "the harness control is not visible", blaming the rig for a missing connection.
+  local conn; conn=$(_pf VCHANCONN)
+  if [ "${conn:-0}" != 1 ]; then
+    log "  dom0's gui-daemon is NOT connected to the agent that just booted (pid ${apid:-?})"
+    log "  INVALID-INSTRUMENT: no window of this guest can reach dom0, so no control could be read."
+    log "  This is the gui-daemon reconnect gap (DESIGN-gui-daemon-restart-survival.md Sec. 3), not"
+    log "  a fault of bit $BITS - and not something this suite can measure around."
+    T=120 write_bits 0 >/dev/null 2>&1 || true
+    printf 'PREFLIGHT\t%s\t%s\tINVALID-INSTRUMENT\tdom0 gui-daemon not connected to the freshly booted agent (pid %s); no control can be visible; failproof not takeable this run\n' \
+      "$VM" "$BITS" "${apid:-0}"
+    exit 3
+  fi
+  log "  fresh agent pid ${apid:-?}, dom0 gui-daemon connected, FaultGateOff=$got"
 }
 
-# POLL for the control, never a fixed sleep. A fixed settle is how P5 once scored SG3 as FAIL
-# against a window the agent had already mapped: the settle was shorter than the guest needed to
-# draw. Measured again 2026-08-31 on a cold AppVM - 14 s was not enough for a first-run Notepad,
-# and the preflight reported "0 windows" for a guest whose agent was perfectly healthy (vchan
-# connected, seamless mode 1, no errors). Wait for the OUTCOME, with a deadline.
 # THE CONTROL IS OURS BY IDENTITY, NOT BY NAME (owner 2026-10-07). This used to `taskkill /f /im
 # notepad.exe` - any notepad on the guest, whoever started it - before each start and at the end.
 # Now the previous control THIS run started is stopped by the pid + start time recorded when it was
@@ -184,7 +259,13 @@ control_up(){  # -> echoes the window list once the control appears, or after th
 }
 
 require_alive "before the unarmed reference control"
-agent_restart_push || { log "FATAL: guest/restart-gui-agent.ps1 could not be pushed and proven on $VM - no agent restart is possible without it"; exit 2; }
+# NO HELPER GATE HERE ANY MORE. This was
+#   agent_restart_push || { log "FATAL: guest/restart-gui-agent.ps1 could not be pushed and proven
+#                           on $VM - no agent restart is possible without it"; exit 2; }
+# back when the bit was applied by restarting the agent through that helper. set_bits now applies
+# it across a reboot, so the helper is not used by this suite at all and a FATAL on pushing it
+# would refuse the run over an artefact nothing here reads. ctl_start/ctl_stop still come from
+# lifecycle-lib and do not need it.
 log "=== control WITHOUT the bit (this is the reference) ==="
 set_bits_checked 0 "clearing the gate for the reference run"
 BEFORE=$(control_up) || guest_gone "guest stopped answering while polling for the unarmed reference control"

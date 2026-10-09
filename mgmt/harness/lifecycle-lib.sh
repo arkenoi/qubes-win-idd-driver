@@ -42,9 +42,27 @@
 
 LC_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LC_HELPER_PS1="${LC_HELPER_PS1:-guest/restart-gui-agent.ps1}"
-# Where tools/qtest push lands files (its own default; QTEST_INCOMING overrides both the same way).
-LC_INCOMING="${QTEST_INCOMING:-C:\\Users\\user\\Documents\\QubesIncoming\\$(hostname)}"
-LC_HELPER_GUEST="${LC_INCOMING}\\$(basename "$LC_HELPER_PS1")"
+# WHERE tools/qtest push LANDS FILES - ASKED, NOT GUESSED. This was
+#   LC_INCOMING="${QTEST_INCOMING:-C:\\Users\\user\\Documents\\QubesIncoming\\$(hostname)}"
+# which hardcodes the profile `user` and this qube's hostname, and was computed at SOURCE time
+# before the caller had even named a subject. On any guest whose account is not `user` - the German
+# golden's is gerd-test - the file lands in the real profile while every command here looks in a
+# path that does not exist, which reads exactly like "the push did not work". mgmt/CLAUDE.md records
+# the same value being planted in a dotfile for months for the same reason. `qtest incoming` prints
+# the path for THAT guest, so ask it, once per guest, and cache it.
+LC_INCOMING=""          # resolved lazily by _lc_incoming; do not read directly
+_lc_incoming(){
+  local vm; vm="$(_lc_vm)"
+  if [ -n "${QTEST_INCOMING:-}" ]; then printf '%s' "$QTEST_INCOMING"; return 0; fi
+  if [ -z "${LC_INCOMING:-}" ]; then
+    LC_INCOMING=$(QTEST_VM="$vm" timeout 90 "${QTEST_BIN:-./tools/qtest}" incoming 2>/dev/null \
+                    | tr -d '\r' | command grep -aE '^[A-Za-z]:\\' | tail -1)
+  fi
+  # No fallback guess. A wrong path here is the failure this comment is about, and an empty answer
+  # makes the sha read below come back 'none', which the caller already reports as a refusal.
+  printf '%s' "${LC_INCOMING:-}"
+}
+_lc_helper_guest(){ printf '%s\\%s' "$(_lc_incoming)" "$(basename "$LC_HELPER_PS1")"; }
 LC_PUSHED=""
 
 _lc_vm(){ printf '%s' "${QTEST_VM:-${VM:-}}"; }
@@ -63,17 +81,47 @@ agent_restart_push(){
   [ -f "$LC_HELPER_PS1" ] || { echo "FATAL lifecycle-lib.sh: $LC_HELPER_PS1 is not in the repo" >&2; return 1; }
   local want have
   want=$(sha256sum "$LC_HELPER_PS1" | cut -d' ' -f1)
-  _lc_qtest push "$LC_HELPER_PS1" >/dev/null 2>&1
-  have=$(_lc_ps "Write-Output ('HELPERSHA ' + (Get-FileHash -LiteralPath '$LC_HELPER_GUEST' -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash)" \
-         | grep -aoE 'HELPERSHA [0-9A-Fa-f]{64}' | awk '{print tolower($2)}' | head -1)
-  if [ -n "$have" ] && [ "$have" = "$want" ]; then LC_PUSHED=yes; return 0; fi
-  echo "lifecycle-lib.sh: the restart helper on the guest is NOT the repo copy (guest sha256 '${have:-none}', repo $want) - refusing to restart the agent through an unproven helper" >&2
+  # RETRY, AND KEEP THE REASON. Measured 2026-10-09 in the gate's own run: gate-preflight started
+  # 0 s after the rig harness confirmed "win11-acc answers qrexec" and this FATALed 14 s later with
+  # guest sha 'none'. A hand push of the same file to the same guest a moment later landed with an
+  # exact sha match - so the file copy was not broken, it was EARLY. qrexec answers as SYSTEM within
+  # a minute of boot; a file copy needs the receiver in a LOGGED-ON session, which is later. A
+  # single attempt turns that gap into an INVALID-INSTRUMENT verdict for the whole suite.
+  # The push's own output was also discarded, which is why the reason never appeared.
+  local tries="${LC_PUSH_TRIES:-6}" out i
+  for i in $(seq 1 "$tries"); do
+    out=$(_lc_qtest push "$LC_HELPER_PS1" 2>&1)
+    have=$(_lc_ps "Write-Output ('HELPERSHA ' + (Get-FileHash -LiteralPath '$(_lc_helper_guest)' -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash)" \
+           | grep -aoE 'HELPERSHA [0-9A-Fa-f]{64}' | awk '{print tolower($2)}' | head -1)
+    if [ -n "$have" ] && [ "$have" = "$want" ]; then
+      [ "$i" -gt 1 ] && echo "lifecycle-lib.sh: the restart helper landed on attempt $i/$tries (the file receiver needs a logged-on session, which qrexec does not prove)" >&2
+      LC_PUSHED=yes; return 0
+    fi
+    [ "$i" -lt "$tries" ] && sleep 10
+  done
+  [ -n "${out:-}" ] && echo "lifecycle-lib.sh: the last push said: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-200)" >&2
+  echo "lifecycle-lib.sh: the restart helper on the guest is NOT the repo copy after $tries attempt(s) (guest sha256 '${have:-none}', repo $want) - refusing to restart the agent through an unproven helper" >&2
   LC_PUSHED=""; return 1
 }
 
 agent_restart_ps(){  # [preamble] [epilogue] -> PowerShell text
   printf '%s\n' "${1:-}"
-  printf '& %s -TimeoutSec %s\n' "'$LC_HELPER_GUEST'" "${AGENT_RESTART_TIMEOUT:-45}"
+  # THE EXECUTION POLICY BLOCKS A .ps1 FILE, AND THIS IS THE ONLY SITE IN THE REPO THAT FORGOT IT.
+  # This line was `& '<path>' -TimeoutSec N`. Measured on win11-acc 2026-10-09, with the helper
+  # pushed and its sha PROVEN equal to the repo copy:
+  #   & : File ...\restart-gui-agent.ps1 cannot be loaded because running scripts is disabled
+  #       on this system. ... PSSecurityException / UnauthorizedAccess
+  # The guest's effective policy is Restricted with every scope Undefined - the Windows default, not
+  # a misconfigured guest - and an -EncodedCommand payload is exempt while invoking a FILE is not.
+  # So the preamble and the epilogue both ran, the helper did not, and the harness saw a round-tripped
+  # GATEOFF with no SVCSTOP/WDSTART/AGENTPID/NEWLOG/RESTART at all. gate-preflight read that missing
+  # WDSTART as "QubesGuiWatchdog not Running after Start-Service" and graded the guest
+  # INVALID-INSTRUMENT - a blocked file invocation reported as a broken service.
+  # Every other .ps1-file invocation in this repo already passes -ExecutionPolicy Bypass (20+ call
+  # sites, e.g. guest/install-updater-agent.ps1:436, guest/pvnic-selfprime.ps1:1194); a child process
+  # is also what keeps the helper's own `exit` from truncating the epilogue.
+  printf 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File %s -TimeoutSec %s\n' \
+    "'$(_lc_helper_guest)'" "${AGENT_RESTART_TIMEOUT:-45}"
   printf '%s\n' "${2:-}"
 }
 
