@@ -201,6 +201,27 @@ ev_two = ["EV 2026-10-07 10:00:20.000 [System] id=6013 level=4 EventLog: The sys
           "EV 2026-10-07 10:02:45.000 [System] id=13 level=4 Microsoft-Windows-Kernel-General: The operating system is shutting down at system time 2026-10-07T10:02:45.000000000Z.",
           "EV NONE [Microsoft-Windows-TaskScheduler/Operational]"]
 write("twoboot.pull", stream(TB, ev_two))
+# clockflip: ONE PER-DAY AGENT LOG that straddles the guest's clock correction, plus a later boot in
+# the SAME file. MEASURED on win11-acc 2026-10-09, which is what this reproduces: the agent writes
+# 'gui-agent-<yyyymmdd>.log' and APPENDS to it all day, and the guest's clock jumps backwards ~60 s
+# into every boot when sync-clock-from-dom0 lands - so the agent's own lines run 055237 then 025240
+# inside one file. The boot estimates taken either side of that jump land one offset apart, and the
+# analyzer counted ONE boot TWICE (it reported boots=4 with 1@03:39:28 and 4@06:39:31); and because
+# lf.boot_time is overwritten by each LogInit, a per-day file offered a SINGLE estimate however many
+# boots it spanned. The offset here is 1 h rather than 3 so both phases stay inside the stream's
+# since-window; the detector's floor is 600 s, far below either.
+# EVERY tail IS EXPLICIT. agent()'s default tail lands at 100500.000, which would put the backward
+# jump at 100500->090100 = 4140 s instead of the 3600 s separating the two boot ESTIMATES - and the
+# merge only fires when the measured correction matches that separation, so the fixture would not
+# drive the case it exists for. (It did not, on the first run: offset read 4140.)
+CF_LINES = (agent(1000, t0="100031.200", uptime="31.200", announce=True,
+                  tail=[wu("100100.000", 200, "I", "WinMain",
+                           "QGAEXIT exiting with 0x20514703 (the session is ending (WM_ENDSESSION)) - an expected exit, not a failure")])
+            + agent(1001, t0="090100.000", uptime="60.000", announce=False, tail=[])   # SAME boot, corrected phase
+            + agent(1002, t0="091500.000", uptime="30.000", announce=False, tail=[]))  # a LATER, genuinely different boot
+CF = [("gui-agent-20261007.log", "agent", CF_LINES)]
+ev_flip = ["EV NONE [Microsoft-Windows-TaskScheduler/Operational]"]
+write("clockflip.pull", stream(CF, ev_flip))
 # skipnames / skipchatty: the collector's cap dropped files and NAMES them; a verdict-deciding family is louder
 import base64 as _b64
 def with_skip(src, names, out):
@@ -369,7 +390,7 @@ analyze(){ # $1=analyzer $2=logsdir $3=baseline $4=judge $5=tag -> rc; report at
 field(){ python3 -c "import json,sys; r=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$1" "$2"; }
 
 # ---- decode every fixture with the real decoder --------------------------------------------------------------------
-for f in base newsig rise three stoperr empty twoboot skipnames skipchatty bootshut inv twoproc msiok msibad; do
+for f in base newsig rise three stoperr empty twoboot clockflip skipnames skipchatty bootshut inv twoproc msiok msibad; do
   rc=$(decode "$SRC" "$T/$f.pull" "$T/$f")
   [ "$rc" = 0 ] || { echo "FATAL: the $f fixture did not decode (rc=$rc): $(tail -2 "$T/$f.decode.txt")"; exit 2; }
   # EVERY LINE IN THESE CORPORA IS WRITTEN BY THIS TEST, so the run declares the errors it caused - which is
@@ -915,6 +936,29 @@ PYF
   [ "$r" = BROKEN ] && ok "knob $kn: with the defect back, the gate goes blind to the shipped wording" \
                     || bad "knob $kn: the defect did not blind the gate ($r) - the check is decoration"
 done
+
+# ---- T36: the clock correction must not turn one boot into two, and a per-day file must offer
+# every instance's own estimate. Both were measured on win11-acc 2026-10-09 (see the fixture).
+rc=$(analyze "$SRC" "$T/clockflip" "$T/baseline.json" "$T/jev-expected.py" t36)
+b=$(field "$T/t36.json" 'r["header"]["boots"]')
+off=$(field "$T/t36.json" 'r["header"]["clock_offset_s"]')
+[ "$off" = "3600.0" ] && ok "T36 the clock correction is measured from the logs themselves (offset=${off}s)" \
+                      || bad "T36 offset read '$off', want 3600.0"
+[ "$b" = 2 ] && ok "T36 a per-day log spanning two boots yields two, not one" \
+             || bad "T36 boots=$b, want 2"
+# WHAT THIS FIXTURE DOES NOT DRIVE, said plainly rather than asserted: the ahead-phase boot estimate
+# does not survive into this fixture's cluster list, so the PHASE MERGE (GUARD:clockphase) and the
+# two-phase line attribution (GUARD:bootphase) are NOT exercised here - a synthetic one-file stream
+# does not reproduce enough of the per-file state the analyzer keeps. Both knobs were driven against
+# the REAL capture from win11-acc (scratchpad/sweep-win11-acc/logs, 57 files, 14849 lines), where
+# each changes exactly one line and compiles: shipped boots=6 / instances_per_boot=2;
+# knob clockphase boots=11; knob allinits boots=3 and instances_per_boot=5; knob bootphase
+# instances_per_boot=7. The shipped numbers were cross-checked by hand from the agent's own LogInit
+# uptime lines. Closing this gap means a fixture that carries two phases through the decoder.
+K=$(knob allinits); rc=$(analyze "$K" "$T/clockflip" "$T/baseline.json" "$T/jev-expected.py" t36a)
+ba=$(field "$T/t36a.json" 'r["header"]["boots"]')
+[ "$ba" = 1 ] && ok "knob allinits: with only the last init, a per-day file offers ONE boot (boots=$ba)" \
+              || bad "knob allinits: boots=$ba, want 1 - the case cannot be driven"
 
 echo "--- $pass passed, $fail failed; fixtures/outputs in $T"
 [ "$fail" = 0 ] && exit 0 || exit 1

@@ -898,6 +898,46 @@ def load_logs(logsdir):
 
 
 # ----------------------------------------------------------------------------------------------- structure
+def detect_clock_offset(files):
+    """The size of the guest's once-per-boot clock correction, measured from the logs being read.
+
+    MEASURED 2026-10-09 on win11-acc. Every Windows guest here boots ~3 h ahead of real UTC and our
+    own sync-clock-from-dom0 BootTrigger corrects it ~60 s in, so ONE boot's lines carry TWO clock
+    phases - the agent's own log jumps from 055237 to 025240 inside a single file. cluster_boots()
+    estimates a boot as "first line's timestamp minus that log's System uptime", which is the right
+    anchor, but the RESULT is a timestamp in whichever phase that log's first line was stamped in.
+    Two logs from one boot, one opened before the correction and one after, therefore land in
+    clusters ~3 h apart, and that is not a hypothetical: the first real run of this sweep reported
+    boots=4 with 1@03:39:28 and 4@06:39:31 - the SAME BOOT, three hours and three seconds apart -
+    which made agent_instances_per_boot read 5 against a max of 1 and left every other per-boot
+    metric unattributable. Counted clock-free from the agent's own LogInit uptime lines, that window
+    held six boots, not four.
+
+    A correction is a BACKWARD jump between consecutive lines of one file, which nothing else here
+    produces: ordinary jitter is sub-second, and lines are read in file order. The threshold is 600 s
+    so no plausible jitter or write-ordering artefact can be mistaken for one, and magnitudes are
+    bucketed to the minute before voting because the correction lands a few hundred ms differently
+    in every log. Returns 0.0 when no file shows one - a guest whose clock was right at boot, which
+    is the state this rig should eventually be in.
+    """
+    jumps = {}
+    for lf in files:
+        prev = None
+        for l in lf.lines:
+            ts = getattr(l, "ts", None)
+            if ts is None:
+                continue
+            if prev is not None:
+                back = (prev - ts).total_seconds()
+                if back > 600:
+                    k = int(round(back / 60.0))
+                    jumps[k] = jumps.get(k, 0) + 1
+            prev = ts
+    if not jumps:
+        return 0.0
+    return float(max(sorted(jumps), key=lambda k: (jumps[k], k)) * 60)
+
+
 def cluster_boots(files):
     """Boot times from every windows-utils log (first ts - uptime) and from System 6013/6005; clustered at 150 s."""
     # TOLERANCE. Measured 2026-10-07: this was 150 s, and a test guest boots in ~55 s and is shut down ~30 s after
@@ -913,7 +953,17 @@ def cluster_boots(files):
     BOOT_TOL_S = 45
     est = []
     for lf in files:
-        if lf.boot_time:
+        # EVERY INIT IN THE FILE, NOT JUST THE LAST. lf.boot_time is overwritten by each LogInit, so
+        # a PER-DAY APPEND log - which is exactly what the agent writes ('gui-agent-<yyyymmdd>.log',
+        # opened by every instance of that day) - contributed ONE estimate however many boots it
+        # spanned. Measured 2026-10-09: one such file held six LogInit uptimes (263.03, 50.19, 41.91,
+        # 44.86, 45.50, 50.91 s - each ~45 s one a fresh boot) and this loop offered a single boot
+        # from it. lf.inits already carries each instance's own (timestamp - System uptime), which is
+        # the clock-free anchor, so all of them are offered.
+        inits = [i.get("boot_time") for i in (lf.inits or []) if i.get("boot_time")]   # GUARD:allinits DEFECT: inits = []
+        for bt in inits:
+            est.append((bt, lf, True))
+        if not inits and lf.boot_time:
             est.append((lf.boot_time, lf, True))
         if lf.family == "events":
             for l in lf.lines:
@@ -935,22 +985,61 @@ def cluster_boots(files):
             near["times"].append(t)          # imprecise: joins, never opens
         else:
             boots.append({"times": [t]})
+    # ONE BOOT, TWO PHASES, ONE CLUSTER. Estimates from the same boot that were stamped either side
+    # of the clock correction sit ~offset apart; merging them is what stops a boot being counted
+    # twice. Only pairs separated by the MEASURED correction (within the same tolerance the
+    # clustering already uses) are merged, so two genuinely distinct boots that happen to be three
+    # hours apart are merged only if the guest also corrected its clock by exactly that much - and
+    # in that case the earlier estimate is the corrected phase of the later boot anyway.
+    off = detect_clock_offset(files)
+    if off:
+        i = 0
+        while i < len(boots):
+            rep_i = boots[i]["times"][len(boots[i]["times"]) // 2]
+            j = i + 1
+            while j < len(boots):
+                rep_j = boots[j]["times"][len(boots[j]["times"]) // 2]
+                apart = abs((rep_i - rep_j).total_seconds())
+                if abs(apart - off) <= BOOT_TOL_S:   # GUARD:clockphase DEFECT: if False:
+                    boots[i]["times"].extend(boots[j]["times"])
+                    del boots[j]
+                    continue
+                j += 1
+            i += 1
     for i, b in enumerate(boots):
         b["id"] = i + 1
-        b["time"] = b["times"][len(b["times"]) // 2]
+        # The CORRECTED phase is the truthful one and it is the SMALLER timestamp (the correction
+        # moves the clock back), so a merged cluster is labelled with its earliest estimate rather
+        # than a median that could fall in either phase.
+        b["time"] = min(b["times"]) if off else b["times"][len(b["times"]) // 2]
         b["label"] = "B%d@%s" % (b["id"], fmt_ts(b["time"]))
         del b["times"]
     for lf in files:
         if lf.boot_time:
-            lf.boot = min(boots, key=lambda b: abs((b["time"] - lf.boot_time).total_seconds()))["id"]
+            # Same two-phase choice: a single-process file whose first line was stamped before the
+            # correction would otherwise be assigned to a boot three hours from its own.
+            _c = [lf.boot_time] + ([lf.boot_time - dt.timedelta(seconds=off)] if off else [])
+            lf.boot = min(boots, key=lambda b: min(abs((b["time"] - x).total_seconds()) for x in _c))["id"]
     def boot_for(ts):
+        # A LINE'S TIMESTAMP CAN BE IN EITHER CLOCK PHASE, so both are tried and the line is
+        # attributed to the boot it most closely FOLLOWS. Without this, every line stamped before the
+        # correction is later than all corrected boots and falls into the last bucket: on the first
+        # real run that put all SEVEN agent instances in one boot and made agent_instances_per_boot
+        # read 7 against a max of 1 - a threshold breach manufactured entirely by the clock.
         if ts is None:
             return boots[-1]["id"] if boots else 0
-        cur = 0
-        for b in boots:
-            if b["time"] <= ts + dt.timedelta(seconds=150):
-                cur = b["id"]
-        return cur
+        cands = [ts]
+        if off:
+            cands.append(ts - dt.timedelta(seconds=off))   # GUARD:bootphase DEFECT: pass
+        best_dist, best_id = None, 0
+        for c in cands:
+            cur, dist = 0, None
+            for b in boots:
+                if b["time"] <= c + dt.timedelta(seconds=150):
+                    cur, dist = b["id"], (c - b["time"]).total_seconds()
+            if cur and (best_dist is None or dist < best_dist):
+                best_dist, best_id = dist, cur
+        return best_id
     for lf in files:
         # A FILE'S BOOT IS ONLY THE FILE'S WHEN THE FILE IS ONE PROCESS. With one file per module per
         # day a file spans boots, and stamping every line with the LAST init's boot put a whole day's
@@ -1950,6 +2039,7 @@ def cmd_analyze(a):
         "out_of_context": [sig_json(s) for s in cmp["out_of_context"]],
         "header": {"label": a.label, "since": fmt_ts(since) if since else None, "generated": utcnow_iso(), "logsdir": os.path.abspath(a.logsdir),
                    "baseline": a.baseline, "files": len(files), "lines": sum(lf.scanned for lf in files), "boots": len(boots), "shutdowns": len(st["windows"]),
+                   "clock_offset_s": detect_clock_offset(files),
                    # CORPUS MODE HAS NO META (load_logs returns None for a plain directory of
                    # collected logs), so this must not reach into it - reading it unguarded crashed
                    # `analyze <dir>` outright, and no test covered that mode.
