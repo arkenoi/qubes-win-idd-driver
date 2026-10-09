@@ -753,6 +753,25 @@ reg add "HKLM\SYSTEM\CurrentControlSet\Services\XEN\Unplug" /v NICS /t REG_DWORD
 reg add "HKLM\SYSTEM\CurrentControlSet\Enum\XENBUS\VEN_XP0001&DEV_VIF" /f | Out-Null
 if ($RearmOnly) { L 'rearm-only trigger: latch re-armed'; exit 0 }
 
+# COOLDOWN - BREAK THE SELF-RETRIGGER LOOP. This task triggers on NetworkProfile/Operational 10000,
+# and APPLYING the addressing is itself what makes Windows log that event, so every successful run
+# re-triggers the next one. Measured 2026-10-09 on win11r-up: `--- run start` at 14:31:32 and
+# 14:31:40 - eight seconds apart, each finding its work already done, indefinitely. The old guard
+# (`if (Applied) { Ok 'already applied on entry' }`) exits fast but still runs, still logs, and
+# still leaves an instance alive to be killed by a shutdown or to exit non-zero.
+# Jev put this loop ahead of the shutdown check as the likely cause of the reported notice
+# (refire_is_the_real_cause 0.61, a_gives_graceful 0.16).
+# A run inside the cooldown exits 0 BEFORE doing or logging anything. The window is deliberately
+# short so a genuine change is never ignored for long, and it is skipped entirely when the previous
+# run did not succeed - there is no stamp to read then.
+$okStamp = 'C:\ProgramData\QubesPvNic-lastok.txt'
+if (Test-Path $okStamp) {
+    try {
+        $lastOk = [datetime]::Parse((Get-Content $okStamp -Raw).Trim(), [Globalization.CultureInfo]::InvariantCulture)
+        if (((Get-Date) - $lastOk).TotalSeconds -lt 45) { exit 0 }
+    } catch { }
+}
+
 # LogDir now points at the PRIVATE volume (Q:\Qubes Logs), which PERSISTS - so that is the
 # directory that needs bounding, on templates and AppVMs alike. The 4.3.6 build kept pruning only
 # C:\ProgramData\QubesLogs, a directory QWT no longer writes to, while the real one grew without
@@ -805,6 +824,8 @@ function Ok([string]$what) {
     if ($script:faulted) { L "$what - NOTE an earlier step FAILED ($script:faulted): marker kept, reported separately; this task's own work is in place so it exits 0" }
     L $what
     Remove-Item $mark -Force -EA SilentlyContinue
+    # Written only here, on success, so a failed run leaves no stamp and the next trigger works.
+    try { Set-Content -Path $okStamp -Value ((Get-Date).ToString('o')) -EA SilentlyContinue } catch { }
     exit 0
 }
 
