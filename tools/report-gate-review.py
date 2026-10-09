@@ -75,6 +75,14 @@ REPORT = (r'QerrReportText\s*\(|QerrReport\s*\(|LogError\s*\(|LogWarning\s*\(|'
 CLOCK = (r'(>=|<=|>|<)\s*[^;\n]{0,40}\b[A-Z][A-Z0-9_]*_MS\b|'          # ... >= SOME_THRESHOLD_MS
          r'\b[A-Z][A-Z0-9_]*_MS\b[^;\n]{0,20}(>=|<=|>|<)|'              # SOME_MS < ...
          r'\b(now|GetTickCount64\(\))\s*-\s*\w+\s*(>=|<=|>|<)|'      # now - since >= ...
+         # AND THE CANONICAL SHAPE, which the first two narrowings both MISSED: the deadline is
+         # computed earlier and the comparison is against a plain variable - `now >= s_SecureNextWarn`
+         # (desktop-stuck) and `now >= g_BrokerNextWarn` (deslice-down), i.e. BOTH of the sites this
+         # tool exists for. Caught by its own defect arm: run against the pre-fix main.c it found 20
+         # sites and flagged none, because ProcessNewFrame was never extracted as a site at all.
+         # Comparing `now` against anything is a clock deciding, whatever the right-hand side is named.
+         r'\b(now|GetTickCount64\(\))\s*(>=|<=|>|<)\s*\w+|'            # now >= s_SomeDeadline
+         r'\w+\s*(>=|<=|>|<)\s*\w*(Next|Deadline|Due|Until|Expire)\w*|'
          r'\w+\s*-\s*s_\w+\s*(>=|<=|>|<)|'                            # x - s_since > ...
          r'(>=|<=|>|<)\s*\w*(deadline|Deadline|DEADLINE)|'
          r'\$\(\(\s*SECONDS\s*-\s*\w+\s*\)\)\s*-(lt|gt|le|ge)|'  # shell: $((SECONDS-t0)) -lt
@@ -169,6 +177,20 @@ def qualifying_sites(paths: list[str]) -> list:
     return keep
 
 
+def prob(ans: dict, q: str) -> float:
+    """A question's probability, under whichever key its type uses. jev.py puts a noul's value in
+    "noul" and a choice's confidence in "confidence"; there is no "p" key, and assuming one is how
+    this tool reported 0 flagged on a file whose known-bad block Jev had already scored."""
+    v = ans.get(q) or {}
+    for key in ('noul', 'confidence', 'score', 'p'):
+        if key in v:
+            try:
+                return float(v[key])
+            except (TypeError, ValueError):
+                return 0.0
+    return 0.0
+
+
 def judge(site: dict, wdir: Path):
     state = (f"FILE: {site['file']}\nBLOCK: {site['block']}\nROLE: {site.get('role', '?')}\n"
              f"REPORT FOUND: {site['report_sample']}\nCLOCK FOUND: {site['clock_sample']}\n\n"
@@ -185,9 +207,19 @@ def judge(site: dict, wdir: Path):
     if r.returncode == 2 or not af.exists():
         return site, None, (r.stderr or r.stdout).strip()[:200]
     try:
-        return site, json.loads(af.read_text()), None
+        raw = json.loads(af.read_text())
     except Exception as e:                      # noqa: BLE001 - a malformed answer is INCOMPLETE
         return site, None, f'unreadable answers: {e}'
+    # JEV'S SHAPE, NOT A GUESSED ONE. jev.py writes {"model": ..., "answers": {q: {...}}, "usage":
+    # ...} and a noul's value is under the key "noul", a choice's under "choice"/"confidence".
+    # Reading ans[q]['p'] - which is what this did - found nothing for every question, so the
+    # reviewer reported "0 flagged" no matter what Jev said. Caught by the defect arm: on the
+    # pre-fix main.c Jev had scored the known-bad block false_report_plausible 0.67,
+    # observable_available in-block 0.70 and load_bearing 0.87, and this still printed 0 flagged.
+    ans = raw.get('answers', raw)
+    if not isinstance(ans, dict):
+        return site, None, f'unexpected answers shape: {type(ans).__name__}'
+    return site, ans, None
 
 
 def main() -> int:
@@ -215,23 +247,22 @@ def main() -> int:
             if ans is None:
                 incomplete.append((site, err))
                 continue
-            hot = [q for q in DEFECT_Q if float(ans.get(q, {}).get('p', 0) or 0) >= 0.5]
+            hot = [q for q in DEFECT_Q if prob(ans, q) >= 0.5]
             if hot:
                 flagged.append((site, ans, hot))
 
     print(f'\n{len(flagged)} flagged, {len(incomplete)} INCOMPLETE, evidence in {wdir}')
-    for site, ans, hot in sorted(flagged, key=lambda t: -max(float(t[1][q]['p']) for q in t[2])):
-        worst = max(float(ans[q]['p']) for q in hot)
+    for site, ans, hot in sorted(flagged, key=lambda t: -max(prob(t[1], q) for q in t[2])):
+        worst = max(prob(ans, q) for q in hot)
         print(f"\n  {site['file']}:{site['start'] + 1}  {site['block']}   worst {worst:.2f}")
         for q in DEFECT_Q:
             if q in ans:
-                print(f"      {q} {float(ans[q]['p']):.2f}")
+                print(f"      {q} {prob(ans, q):.2f}")
         obs = ans.get('observable_available', {})
         if obs:
-            print(f"      observable_available={obs.get('choice')} conf {float(obs.get('confidence', 0)):.2f}")
-        lb = ans.get('load_bearing', {})
-        if lb:
-            print(f"      load_bearing {float(lb.get('p', 0)):.2f}")
+            print(f"      observable_available={obs.get('choice')} conf {float(obs.get('confidence') or 0):.2f}")
+        if 'load_bearing' in ans:
+            print(f"      load_bearing {prob(ans, 'load_bearing'):.2f}")
     for site, err in incomplete:
         print(f"  INCOMPLETE {site['file']}:{site['start'] + 1} - {err}")
 
