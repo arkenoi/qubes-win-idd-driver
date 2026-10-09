@@ -67,11 +67,111 @@ say "=== crop-before-map on $VM (budget ${BUDGET_MS} ms, $TOASTS toasts) ==="
 # underneath it would produce holds from a different boot. Serialise like every other VM-mutating
 # job here.
 source mgmt/harness/vmlock.sh
+source mgmt/harness/shutdown-lib.sh
 vm_lock "$VM"
-trap 'vm_unlock "$VM"' EXIT
+LL_RESTORE=""
+cleanup(){
+  # Put the level back even when the run failed, or the next boot of this guest logs DEBUG for ever
+  # and every later harness reads a noisier log than the product ships.
+  if [ -n "$LL_RESTORE" ]; then
+    # EACH KEY BACK TO WHAT IT WAS, ABSENCE INCLUDED. log.c reads the MODULE key first, so writing
+    # an explicit module value where there was none would override the global level on this guest
+    # for ever and silently suppress Debug lines in every later run. Measured on win11-acc: global
+    # 3, module ABSENT ('-').
+    say "restoring LogLevel to global=$LL_G module=$LL_M (takes effect at the agent's next start)"
+    restore_loglevel "$LL_G" "$LL_M" >/dev/null 2>&1 \
+      || say "WARN  could not restore LogLevel (wanted global=$LL_G module=$LL_M) - put it back by hand"
+  fi
+  vm_unlock "$VM"
+}
+trap cleanup EXIT
 
-CUR=$(ps_probe LG 'Write-Host ("LG=" + (Get-ChildItem "Q:\Qubes Logs\gui-agent-*.log" | Sort-Object LastWriteTime | Select-Object -Last 1).FullName)')
-[ -n "$CUR" ] || { no "no gui-agent log on the guest - nothing to grade"; exit 1; }
+# ---- THE INSTRUMENT'S PRECONDITION, ENFORCED RATHER THAN DOCUMENTED --------------------------
+# This file has said "NEEDS LogLevel >= 4, raise it first" since the lines moved to DEBUG on
+# 2026-10-08. Nothing enforced it, so the 4.3.36 release gate ran it at the shipped LogLevel 3,
+# found no QGASLICEMAP at all, and recorded "FAIL crop-before-map (rc=1)" against the PRODUCT - a
+# suite that could not pass, whose failure was counted as a defect. The level is now read, raised
+# if short, and restored; and a run that measured nothing exits 2 (INVALID INSTRUMENT), never 1.
+# THE GUEST IS REBOOTED, NOT THE AGENT: guest/set-loglevel.ps1 restarts the agent through its
+# service, and an agent restart is not normal operation here (Jev restart_is_acceptable 0.22) - a
+# restarted agent remaps every window, which is precisely the state this test measures.
+set_loglevel(){   # $1 = level; writes BOTH keys, because log.c reads the module key FIRST
+  ps_probe RL "\$k='HKLM:\\SOFTWARE\\Invisible Things Lab\\Qubes Tools'
+Set-ItemProperty \$k -Name LogLevel -Value $1 -Type DWord
+if (-not (Test-Path \"\$k\\gui-agent\")) { New-Item \"\$k\\gui-agent\" -Force | Out-Null }
+Set-ItemProperty \"\$k\\gui-agent\" -Name LogLevel -Value $1 -Type DWord
+\$g=0; \$m=0
+\$p=Get-ItemProperty \$k -Name LogLevel -ErrorAction SilentlyContinue; if (\$p) { \$g=[int]\$p.LogLevel }
+\$q=Get-ItemProperty \"\$k\\gui-agent\" -Name LogLevel -ErrorAction SilentlyContinue; if (\$q) { \$m=[int]\$q.LogLevel }
+Write-Host (\"RL=\" + \$g + '/' + \$m)" 120
+}
+restore_loglevel(){   # $1 = global ('-' = remove), $2 = module ('-' = remove)
+  ps_probe RS "\$k='HKLM:\\SOFTWARE\\Invisible Things Lab\\Qubes Tools'
+\$km=\"\$k\\gui-agent\"
+if ('$1' -eq '-') { Remove-ItemProperty \$k -Name LogLevel -ErrorAction SilentlyContinue }
+else { Set-ItemProperty \$k -Name LogLevel -Value $([ "$1" = "-" ] && echo 0 || echo "$1") -Type DWord }
+if ('$2' -eq '-') { Remove-ItemProperty \$km -Name LogLevel -ErrorAction SilentlyContinue }
+else { Set-ItemProperty \$km -Name LogLevel -Value $([ "$2" = "-" ] && echo 0 || echo "$2") -Type DWord }
+\$p=Get-ItemProperty \$k -Name LogLevel -ErrorAction SilentlyContinue
+\$q=Get-ItemProperty \$km -Name LogLevel -ErrorAction SilentlyContinue
+\$g='-'; if (\$p) { \$g=[string][int]\$p.LogLevel }
+\$m='-'; if (\$q) { \$m=[string][int]\$q.LogLevel }
+Write-Host (\"RS=\" + \$g + '/' + \$m)" 120
+}
+read_loglevel(){
+  ps_probe LL "\$k='HKLM:\\SOFTWARE\\Invisible Things Lab\\Qubes Tools'
+\$p=Get-ItemProperty \$k -Name LogLevel -ErrorAction SilentlyContinue
+\$q=Get-ItemProperty \"\$k\\gui-agent\" -Name LogLevel -ErrorAction SilentlyContinue
+\$m='-'; if (\$q) { \$m=[string][int]\$q.LogLevel }
+\$g='-'; if (\$p) { \$g=[string][int]\$p.LogLevel }
+Write-Host (\"LL=\" + \$g + '/' + \$m)" 120
+}
+LL=$(read_loglevel)
+[ -n "$LL" ] || { no "could not read LogLevel from the guest - the precondition cannot be established"; exit 2; }
+LL_G=${LL%%/*}; LL_M=${LL##*/}
+say "LogLevel on the guest: global=$LL_G module=$LL_M (this test needs >= 4 in BOTH)"
+llnum(){ case "$1" in ""|-) echo 0 ;; *) echo "$1" ;; esac; }
+if [ "$(llnum "$LL_G")" -lt 4 ] || [ "$(llnum "$LL_M")" -lt 4 ]; then
+  LL_RESTORE=1
+  say "raising LogLevel to 4 and REBOOTING $VM (an agent restart would remap every window)"
+  RL=$(set_loglevel 4)
+  [ "$RL" = "4/4" ] || { no "LogLevel did not read back as 4/4 (got '${RL:-<no answer>}') - refusing to grade"; exit 2; }
+  qwt_shutdown "$VM" 600 || { no "$VM would not halt for the LogLevel change"; exit 2; }
+  timeout 300 qvm-start "$VM" >/dev/null 2>&1
+  up=0
+  for i in $(seq 1 30); do
+    if gq 'cmd /c echo QREADY' 40 | grep -qa '^QREADY'; then up=1; say "qrexec back at t+$((i*10))s"; break; fi
+    sleep 10
+  done
+  [ "$up" = 1 ] || { no "$VM did not come back after the LogLevel reboot"; exit 2; }
+  # The toasts are fired into a logged-on session, so wait for one rather than racing it.
+  sess=0
+  for i in $(seq 1 30); do
+    if gq 'cmd /c query session' 40 | grep -aqE 'Aktiv|Active'; then sess=1; say "session active at t+$((i*10))s"; break; fi
+    sleep 10
+  done
+  [ "$sess" = 1 ] || { no "no logged-on session after the LogLevel reboot - toasts would go nowhere"; exit 2; }
+fi
+
+# THE RUNNING AGENT'S LOG IS FOUND BY ITS PID, NOT BY MTIME. This read used to take the newest
+# gui-agent log by LastWriteTime, which on this rig selects the WRONG FILE: the live log is per-day
+# and appended, NTFS updates its mtime lazily while the handle is open, and the clock jumps back ~3 h
+# ~60 s into every boot - so a per-instance file from the PREVIOUS boot carries a LATER stamp than
+# the file being written right now (measured 2026-10-09: 05:00:17 against 02:55:04). Baselining the
+# wrong file is one way this suite reports "no QGASLICEMAP" on a healthy guest. The agent stamps its
+# own pid into every line as '-<pid>:<tid>-', which no clock can forge. Same fix as
+# guest/health-check.ps1's agent_log_healthy.
+CUR=$(ps_probe LG '$a=@(Get-Process gui-agent -ErrorAction SilentlyContinue)
+if ($a.Count -eq 0) { Write-Host "LG="; exit }
+$hit=$null
+foreach ($f in @(Get-ChildItem "Q:\Qubes Logs\gui-agent-*.log" -ErrorAction SilentlyContinue)) {
+  foreach ($pr in $a) {
+    if (Select-String -LiteralPath $f.FullName -Pattern ("-" + $pr.Id + ":[0-9]+-[A-Z]\]") -Quiet -ErrorAction SilentlyContinue) { $hit=$f; break }
+  }
+  if ($hit) { break }
+}
+if ($hit) { Write-Host ("LG=" + $hit.FullName) } else { Write-Host "LG=" }')
+[ -n "$CUR" ] || { no "no gui-agent log on the guest carries a RUNNING agent's pid - either no agent is running or it has written nothing, so there is nothing to grade. INVALID INSTRUMENT, not a product verdict"; exit 2; }
 say "current boot log: $CUR"
 
 # BASELINE THE ACCUMULATING LOG. These lines persist across runs; without an offset a previous
@@ -81,7 +181,10 @@ BASE=$(ps_probe LN "Write-Host ('LN=' + @(Get-Content '$CUR').Count)")
 say "baseline: $BASE lines already in the log; only what follows is graded"
 
 QTEST_VM=$VM timeout -k 5 120 ./tools/qtest push guest/fire-toast.ps1 >/dev/null 2>&1
-INC='C:\Users\user\Documents\QubesIncoming\'$(hostname)
+# DISCOVERED, never assumed: a hardcoded C:\Users\user addresses a profile that does not exist on
+# any guest whose account is not `user`, and tools/qtest already works it out per guest.
+INC=$(QTEST_VM=$VM ./tools/qtest incoming)
+[ -n "$INC" ] || { no "could not discover the guest's QubesIncoming directory"; exit 2; }
 for n in $(seq 1 "$TOASTS"); do
   say "firing toast $n"
   gq "powershell -NoProfile -ExecutionPolicy Bypass -File $INC\\fire-toast.ps1 -Title CROPTEST$n -Body ordinal-$n" 180 >/dev/null
@@ -94,8 +197,10 @@ EV=$(gq "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $(b64 "Ge
      | grep -a '^L|' | sed 's/^L|//')
 
 if [ -z "$EV" ]; then
-  no "no QGASLICEMAP/TcApplyResult lines appeared - the toasts did not reach the agent, so nothing was measured (this is a harness failure, not a pass)"
-  say "=== crop-before-map: $pass passed, $fail failed ==="; exit 1
+  no "no QGASLICEMAP/TcApplyResult lines appeared - the toasts did not reach the agent, so nothing"
+  say "      was measured. LogLevel read $LL_G/$LL_M at entry. This is an INVALID INSTRUMENT (exit 2),"
+  say "      never a product verdict: a suite that measured nothing has not found a defect."
+  say "=== crop-before-map: $pass passed, $fail failed ==="; exit 2
 fi
 printf '%s\n' "$EV" | sed 's/^/    /' | tee -a "$LOG" >/dev/null
 
