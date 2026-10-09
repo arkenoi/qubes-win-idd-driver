@@ -61,6 +61,17 @@ def _load_lifecycle_review():
 
 LR = _load_lifecycle_review()
 
+# THE FAULT INJECTOR IS NOT A SUBJECT, and this is the one exclusion here - stated with its reason,
+# not a convenience list. agent/gui-agent/faultinject.c exists to SYNTHESISE faults on a registry
+# knob, so "a fault reported on a clock" is its specification rather than a defect, and the whole
+# file sits behind `#if QGA_FAULT_INJECTION` - its own comment says "compiled out of anything
+# shipped", and tools/cut-release.sh refuses any package whose binary carries the marker. Judging it
+# produced 9 of 23 flags on the first full run (FiPumpStallMs, FiPrintWindowFail, FiShouldCaptureExit,
+# FiMonStale, FiRingStallActive among them), every one a category error, which is enough noise to
+# make the real set unreadable. Nothing else is skipped: a skip list is how the previous sweep missed
+# a site, and the shapes already judged legitimate are given to Jev as context instead.
+LR.SKIP = re.compile(LR.SKIP.pattern + r'|(^|/)faultinject\.(c|h)$')
+
 # A FAULT REPORT. QerrReport* is the dom0 route; LogError/LogWarning are the guest log's own fault
 # lines; the shell and PowerShell forms are how the harnesses announce one.
 REPORT = (r'QerrReportText\s*\(|QerrReport\s*\(|LogError\s*\(|LogWarning\s*\(|'
