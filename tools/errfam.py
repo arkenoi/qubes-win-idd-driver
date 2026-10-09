@@ -26,12 +26,16 @@ ERR = re.compile(r'-\d+(?::\d+)?-E\]')
 
 # (family key, regex, what it is). Order matters: the first match wins.
 FAMILIES = [
+    # THE COLLAPSED LINE MUST MATCH FIRST. It CARRIES the library records inside it, so with
+    # ("vchan-store-read", ...) ahead of it every QGAVCHANFAIL line was counted as one of the
+    # families it replaces - measured 2026-10-09, where it reported 28 vchan-client-init lines on a
+    # build whose whole point is that it writes one line instead of those.
+    ("vchan-collapsed",    r'QGAVCHANFAIL',                              "THE ONE LINE that replaces the five below"),
     ("vchan-store-read",   r'IOCTL_XENIFACE_STORE_READ failed',          "xenstore read during a vchan connect"),
     ("vchan-ring-ref",     r"failed to read '.*ring-ref' from store",    "the vchan's ring-ref could not be read"),
     ("vchan-client-init",  r'libxenvchan_client_init\(.*\) failed',      "libvchan's own verdict on the connect"),
     ("vchan-evtchn-bind",  r'EVTCHN_BIND_INTERDOMAIN failed',            "event-channel bind during a connect"),
     ("vchan-evt-cli",      r'failed to bind event channel',              "libxenvchan's event-channel bind"),
-    ("vchan-collapsed",    r'QGAVCHANFAIL',                              "THE ONE LINE that replaces the five above"),
     ("qdb-pipe-write",     r'WriteFile failed with error 0xe8',          "a write to the qubesdb pipe while it closes"),
     ("qdb-daemon-write",   r'write to daemon failed with error 0xe8',    "the qubesdb client's report of the same"),
     ("autostart-optional", r'CfgReadMultiString\(Autostart\)',           "an absent OPTIONAL registry value"),
@@ -42,6 +46,8 @@ FAMILIES = [
     ("monitor-handle",     r'GetMonitorInfo failed',                     "a stale monitor handle (display-change race)"),
     ("monitor-rect-caller",r'GetRealWindowRect failed',                  "the caller re-reporting the same condition"),
     ("hold-overflow",      r'past the \d+ held were dropped',            "the library-record hold overflowing"),
+    ("vchan-send-closed",  r'vchan already closed with \d+ byte',         "a send into a vchan the peer already closed"),
+    ("dda-dirtyrects",     r'GetFrameDirtyRects failed',                 "DDA ACCESS_LOST on the dirty-rects path"),
 ]
 
 

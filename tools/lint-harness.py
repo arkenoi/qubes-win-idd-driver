@@ -165,7 +165,10 @@ def l19_guest_run_must_sweep_the_log() -> None:
     # a harness that merely reads one value off a guest is not a run; the rule targets the ones
     # that BOOT or INSTALL, which is where a log accumulates something worth reading
     drivers = ("qvm-start", "quick-upgrade.sh", "prime-run.sh", "clone-guest.sh")
-    sweepers = ("log-sweep.sh", "log-sweep.py")
+    # clean-boot-sweep.sh IS a sweeper: it archives the guest's logs, boots clean and calls
+    # log-sweep.sh. The rule already allows "delegating to another harness that does"; without
+    # the name here the lint cannot see the delegation and asks for a second sweep.
+    sweepers = ("log-sweep.sh", "log-sweep.py", "clean-boot-sweep.sh")
     # These are the sweep itself, or libraries sourced inside a caller that already sweeps, or
     # single-purpose readers that boot nothing of their own.
     exempt = ("log-sweep.sh", "vmlock.sh", "shutdown-lib.sh", "wu-liveness.sh", "e2e-wait.sh",
