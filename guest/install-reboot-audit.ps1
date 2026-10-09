@@ -45,14 +45,22 @@ $ErrorActionPreference = 'SilentlyContinue'
 $logDir = (Get-ItemProperty 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -Name LogDir).LogDir
 if (-not $logDir) { $logDir = 'C:\Users\Public\Documents\Qubes Logs' }
 $out = Join-Path $logDir 'reboot-audit.log'
-$ev = Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = $EventId } -MaxEvents 1
 $stamp = (Get-Date).ToString('yyyyMMdd.HHmmss')
-$up = [math]::Round(((Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime).TotalSeconds)
+# Uptime from the tick count, NOT from CIM. Get-CimInstance Win32_OperatingSystem takes seconds and
+# talks to a WMI service that is being torn down at exactly the moment this task runs; TickCount64
+# is a register read and needs no clock, which also makes it immune to this guest's boot-time clock
+# flip (LastBootUpTime is stamped in the pre-correction phase and reads hours out).
+$up = [math]::Round([Environment]::TickCount64 / 1000)
+# THE DURABLE WRITE COMES FIRST. This task is triggered BY the shutdown (User32 1074) and killed BY
+# the same shutdown - measured 2026-10-09, rc=0x8007050B - and it used to do two slow reads before
+# writing anything, so a reap cost the record AND left a non-zero result for the death reporter to
+# deal with. The line that matters is written with what is already known; the event's own text is an
+# enrichment appended afterwards, and losing it costs detail rather than the record.
+Add-Content -Path $out -Value "[$stamp] id=$EventId uptime=${up}s :: (triggered)"
+$ev = Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = $EventId } -MaxEvents 1
 if ($ev) {
     $msg = ($ev.Message -replace '\s*\r?\n\s*', ' ').Trim()
     Add-Content -Path $out -Value "[$stamp] id=$EventId uptime=${up}s provider=$($ev.ProviderName) :: $msg"
-} else {
-    Add-Content -Path $out -Value "[$stamp] id=$EventId uptime=${up}s :: (triggered, but the record could not be read back)"
 }
 '@
 try {
