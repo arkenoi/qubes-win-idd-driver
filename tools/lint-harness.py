@@ -901,6 +901,43 @@ def l17_process_by_name() -> None:
                     tainted.discard(v)
 
 
+# --------------------------------------------------------------------------- L21
+def l21_second_exit_trap_replaces_the_first() -> None:
+    """RULE: ONE `trap ... EXIT` PER SCRIPT. Bash keeps a SINGLE EXIT trap, so a second
+    installation silently REPLACES the first and whatever the first was cleaning is never cleaned.
+
+    Measured 2026-10-09 in packaging/make-iso.sh: two mktemp -d, each with its own
+    `trap ... EXIT`, so $STAGE leaked on every run. Eight 32 MiB trees had accumulated in /tmp -
+    a 1 GiB tmpfs on the rig qube - and the ninth run failed that script's OWN space check
+    ("need ~98124 KiB, have 89060"), taking an acceptance cell with it. mgmt/harness/p5-run.sh had
+    the same shape, with `trap restore EXIT` replacing `trap 'rm -rf "$TMP"' EXIT`.
+
+    A script with several things to clean uses ONE handler that cleans all of them (declare the
+    later variables empty up front so the handler can be installed once). Disarming - `trap ''
+    ... EXIT` inside a teardown, to stop recursion - is NOT a second handler and is not flagged."""
+    pat = re.compile(r"^\s*trap\s+(?P<h>'[^']*'|\"[^\"]*\"|[^\s]+)\s+[^#]*\bEXIT\b")
+    # HARNESS is mgmt/harness + tools; the measured defect was in packaging/make-iso.sh, which
+    # every acceptance cell runs, so this rule scans that directory too rather than leaving the
+    # one script it was found in out of scope.
+    for f in HARNESS + sorted((ROOT / "packaging").glob("*.sh")):
+        txt = f.read_text(encoding="utf-8", errors="replace")
+        armed = []
+        for i, ln in enumerate(txt.splitlines(), 1):
+            if ln.lstrip().startswith("#"):
+                continue
+            m = pat.match(ln)
+            if not m:
+                continue
+            handler = m.group("h").strip("'\"")
+            if handler.strip() == "":
+                continue                      # disarming, not a second handler
+            armed.append(i)
+        if len(armed) > 1:
+            finding("L21-second-exit-trap", f"{f.name}:{armed[1]}",
+                    f"a second `trap ... EXIT` (first at line {armed[0]}) - bash keeps one, so the "
+                    "first handler never runs and what it cleaned is leaked")
+
+
 # --------------------------------------------------------------------------- L18
 # Processes the rig KNOWS are relaunched by something that is still armed when a script ends them, and what that
 # relauncher is. Owner, 2026-10-07: "if you terminate something that relaunches you need to make sure it STOPS
@@ -1113,6 +1150,7 @@ def main() -> int:
     l18_relauncher_armed()
     l19_guest_run_must_sweep_the_log()
     l20_module_log_read_must_be_bounded()
+    l21_second_exit_trap_replaces_the_first()
     if a.ledger:
         l7_orphan_ledger_checks(a.ledger)
 

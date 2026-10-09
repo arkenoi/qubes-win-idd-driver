@@ -39,7 +39,11 @@ source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the control and the
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/P5-$VM}"
 mkdir -p "$OUT"
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
+# ONE EXIT TRAP (lint L21). `# (no trap here: _p5_exit above calls restore once it is defined - lint L21)` further down used to REPLACE this one, because bash
+# keeps a single EXIT trap - so $TMP was never removed. `declare -F` means an early exit, before
+# restore() exists, still cleans up and does not try to re-enable a task nothing disabled.
+_p5_exit(){ declare -F restore >/dev/null && restore; rm -rf "$TMP"; }
+trap _p5_exit EXIT
 GUEST='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
 q(){ QTEST_VM=$VM timeout -k 8 "${T:-120}" ./tools/qtest "$@" 2>/dev/null; }
 psrun(){ local b; b=$(python3 -c "
@@ -82,7 +86,7 @@ echo "$dis" | grep -aE '^(SCAN_|RELAY_|DISARMED)' | sed 's/^/  /' | tee "$OUT/di
 echo "$dis" | grep -qa 'DISARMED True' || { log "FATAL: scan not disarmed - refusing to run"; exit 2; }
 restore(){ log "=== re-enabling QubesWindowsUpdateScan ==="
            q run 'cmd /c schtasks /change /tn QubesWindowsUpdateScan /enable & echo REENABLED' | tr -d '\r' | grep -a REENABLED | sed 's/^/  /'; }
-trap restore EXIT
+# (no trap here: _p5_exit above calls restore once it is defined - lint L21)
 
 # ---------------------------------------------------------------- P5-3: containment
 HOSTW=$(xdpyinfo 2>/dev/null | awk '/dimensions:/{split($2,a,"x"); print a[1]}')

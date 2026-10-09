@@ -54,8 +54,15 @@ if [ "${HAVE_KB:-0}" -lt "$NEED_KB" ]; then
     echo "FATAL: not enough room in $TMPBASE to build and verify the image: need ~${NEED_KB} KiB (3x the setup tree, which is staged once and extracted twice), have ${HAVE_KB:-0} KiB. Free it or set TMPDIR to a larger filesystem." >&2
     exit 1
 fi
+# ONE EXIT TRAP, CLEANING BOTH DIRECTORIES. There are two mktemp -d here, and each used to install
+# its own `trap ... EXIT` - but bash keeps ONE EXIT trap, so the second silently REPLACED the first
+# and $STAGE was never removed. Measured 2026-10-09: eight leaked 32 MiB trees in /tmp, which is a
+# 1 GiB tmpfs on the rig qube, and the ninth run failed this script's own space check - "need ~98124
+# KiB, have 89060" - taking an acceptance cell with it. WORK is declared here, empty, so this trap
+# covers it from the start and the second mktemp -d does not need a trap of its own.
 STAGE="$(mktemp -d)"
-trap 'chmod -R u+w "$STAGE" 2>/dev/null; rm -rf "$STAGE"' EXIT
+WORK=""
+trap 'for d in "$STAGE" "$WORK"; do [ -n "$d" ] && { chmod -R u+w "$d" 2>/dev/null; rm -rf "$d"; }; done' EXIT
 cp -a "$SETUP_DIR/." "$STAGE/"
 ENTRY="$(cd "$STAGE" && ls qubes-tools-*.exe 2>/dev/null | head -1)"
 [ -n "$ENTRY" ] || ENTRY=install.cmd
@@ -72,8 +79,7 @@ xorriso -as mkisofs \
     -o "$OUT_ISO" \
     "$STAGE"
 
-WORK=$(mktemp -d)
-trap 'chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
+WORK=$(mktemp -d)   # covered by the single EXIT trap above
 
 echo "== verifying content (Rock Ridge view)"
 xorriso -osirrox on -indev "$OUT_ISO" -extract / "$WORK/rr" >/dev/null 2>&1
