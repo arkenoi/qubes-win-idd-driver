@@ -127,6 +127,50 @@ settle() {            # settle <vm-to-leave-alone>
   done
 }
 need() { echo "$REQ" | tr ' ' '\n' | grep -qx "$1"; }
+
+# THE ARTEFACT UNDER TEST MUST BE THE ONE INSTALLED (the evidence rule: running binary hash vs the
+# manifest). MEASURED 2026-10-09, and it invalidated a whole gate run: gate-preflight and log-sweep
+# grade $VM11 AS IT IS - neither installs anything - and at HEAD fe4337174ba8 that guest was still
+# carrying agent 4.3.32.612 while the candidate package was 4.3.36+agent.eb24cb5115ba. The proof is
+# in the sweep's own archived logs: every "LogInit: Module version" line reads 4.3.32.612, in a file
+# named gui-agent-20261009-190318-3824.log (the pre-4.3.33 name format), and the two keyed-mutex
+# ACCESS_LOST error lines the sweep reported as KNOWN-DEFECT PRESENT were written by THAT agent -
+# a build predating the fix for them, whose guard (status != DXGI_ERROR_ACCESS_LOST && ...) is
+# present in eb24cb5115ba and therefore could not have written them. So the gate spent a full run
+# grading a binary that was never the candidate, and reported a fixed defect as present.
+# REFUSE rather than install: the subject is prepared by the campaign, and silently upgrading it
+# here would hide which step failed to prepare it.
+assert_candidate() {  # assert_candidate <vm> - rc 0 = the guest runs the candidate agent
+  local v="$1" ref want got
+  [ "$DRY" = 1 ] && { echo "INTEND[dry] assert_candidate: $v runs the package's reference gui-agent" | tee -a "$LOG"; return 0; }
+  ref=$(find "$SETUP" -iname 'gui-agent.exe' 2>/dev/null | head -1)
+  [ -n "$ref" ] || { say "    REFUSING: no reference gui-agent.exe in $SETUP - cannot say what the candidate is"; return 2; }
+  want=$(sha256sum "$ref" | cut -d' ' -f1)
+  # -EncodedCommand, not -Command with escaped quotes: that form FAILS SILENTLY here (lint L5),
+  # and a silent failure in this probe would read as "no gui-agent running" and refuse a good guest.
+  local b64
+  b64=$(printf '%s' '$p=@(Get-Process -Name gui-agent -ErrorAction SilentlyContinue)
+if ($p.Count -gt 0) { Write-Output ("RUNSHA " + (Get-FileHash -LiteralPath $p[0].Path -Algorithm SHA256).Hash) }
+else { Write-Output "RUNSHA none" }' | iconv -f UTF-8 -t UTF-16LE | base64 -w0)
+  # QTEST_BIN is overridable ONLY so both arms of this check are provable off-rig, the same reason
+  # mgmt/harness/gate-preflight.sh exposes it. A check whose accept path has never been seen to
+  # accept is half a check.
+  got=$(QTEST_VM="$v" timeout 240 "${QTEST_BIN:-tools/qtest}" run "cmd /c powershell -NoProfile -EncodedCommand $b64" \
+          2>/dev/null | tr -d '\r' | command grep -aoE 'RUNSHA [0-9A-Za-z]+' | head -1 | awk '{print tolower($2)}')
+  if [ -z "$got" ] || [ "$got" = none ]; then
+    say "    REFUSING: no gui-agent is running on $v, so nothing can be graded on it"
+    return 2
+  fi
+  if [ "$got" != "$want" ]; then
+    say "    REFUSING: $v runs gui-agent ${got:0:16} but the candidate is ${want:0:16}"
+    say "              ($ref). The subject was never upgraded to the package under test, so any"
+    say "              verdict from it would be about another build - which is how a run at"
+    say "              fe4337174ba8 reported a FIXED keyed-mutex defect as present."
+    return 2
+  fi
+  say "    $v runs the candidate agent ${got:0:16}"
+  return 0
+}
 note() { if [ "$1" = 0 ]; then PASSED="$PASSED $2"; else FAILED="$FAILED $2"; fi; }
 
 # THE SWEEP'S WINDOW IS THIS RUN, NOT TWELVE HOURS OF HISTORY. This said '12 hours ago', which on a
@@ -200,8 +244,12 @@ ready() {             # ready <vm>
 
 if need gate-preflight; then
   settle "$VM11"; ready "$VM11"
+  if ! assert_candidate "$VM11"; then
+    say "FAIL  gate-preflight (subject is not the candidate)"; FAILED="$FAILED gate-preflight"
+  else
   # <vm> <hex-bits>: the preflight bit-mask the suite documents; 0 exercises the no-fault path.
   run_it gate-preflight bash mgmt/harness/gate-preflight.sh "$VM11" 0; note $? gate-preflight
+  fi
 else SKIPPED="$SKIPPED gate-preflight"; fi
 
 if need p3a-etw-gate; then
@@ -264,9 +312,13 @@ else SKIPPED="$SKIPPED toast-hold-test"; fi
 
 if need log-sweep; then
   settle "$VM11"; ready "$VM11"
+  if ! assert_candidate "$VM11"; then
+    say "FAIL  log-sweep (subject is not the candidate)"; FAILED="$FAILED log-sweep"
+  else
   # LAST, deliberately: it reads what every suite above wrote into the guest's logs.
   run_it log-sweep bash mgmt/harness/log-sweep.sh "$VM11" "$SINCE" "$WORK/log-sweep"
   note $? log-sweep
+  fi
 else SKIPPED="$SKIPPED log-sweep"; fi
 
 # --------------------------------------------------------------- the fault-injection suites, LAST
