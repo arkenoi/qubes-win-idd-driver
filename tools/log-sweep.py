@@ -284,7 +284,7 @@ DEFAULT_THRESHOLDS = {
     "agent_instances_per_boot": {"max": 1, "severity": "P2", "why": "the agent is started once per boot; a second instance is a death or a restart"},
     "agent_ends_unrecorded": {"max": 0, "severity": "P2", "why": "an agent log that stops with no requested stop and no death record"},
     "vchan_setups_per_shutdown": {"max": 0, "severity": "P2", "why": "no new vchan announcement while the guest is going down"},
-    "vchan_announce_without_connect": {"max": 0, "severity": "P2", "why": "an announced vchan that dom0 never connected to"},
+    "vchan_announce_without_connect": {"max": 0, "severity": "P2", "why": "an announced vchan that dom0 never connected to AND that the agent never withdrew - an announcement the agent takes back on its way out (it logs so) is correct behaviour, not a dangling vchan"},
     "vchan_reconnects": {"max": 0, "severity": "P2", "why": "a second announcement in one instance is a reconnect"},
     "handshake_refusals": {"max": 0, "severity": "P2", "why": "QGAHANDSHAKE: messages refused before the version exchange"},
     "broker_deaths": {"max": 0, "severity": "P1", "why": "QGABROKERDIED outside a fault-injection context - owner policy 2026-10-07: a spontaneous de-slice broker death is P1 (findings/issues.md P1 'A SPONTANEOUS DE-SLICE BROKER DEATH OR HANG IS P1')"},
@@ -1396,6 +1396,11 @@ def build_structure(files, boots, declared=None):
                 "start": _lines[0].ts, "end": _lines[-1].ts, "lines": len(_lines),
                 "announces": sum(1 for l in _lines if l.func == "WatchForEvents" and l.msg.startswith("Awaiting for a vchan client")),
                 "connects": sum(1 for l in _lines if l.func == "WatchForEvents" and l.msg.startswith("A vchan client has connected")),
+                # THE AGENT SAYS WHEN AN UNCONNECTED ANNOUNCEMENT IS THE BENIGN CASE, so read it
+                # instead of inferring. gui-agent logs "VCHAN no client ever connected - the vchan
+                # announcement is withdrawn before exit" when it takes its announcement back on the
+                # way out, which is correct behaviour and not a dangling vchan.
+                "withdrew_announce": any(l.func == "WatchForEvents" and "announcement is withdrawn" in l.msg for l in _lines),
                 "handshake_refusals": sum(1 for l in _lines if "QGAHANDSHAKE" in l.msg),
                 "helper_launches": Counter(HELPER_LAUNCH_RE.search(l.msg).group(1) for l in _lines if HELPER_LAUNCH_RE.search(l.msg)),
                 "helper_deaths": sum(1 for l in _lines if HELPER_DEATH_RE.search(l.msg)),
@@ -1485,8 +1490,19 @@ def compute_metrics(files, boots, st, since, now=None):
     m["agent_instances_per_boot"] = max(per_boot.values(), default=0)
     m["vchan_setups_per_shutdown"] = max([len(w["announces"]) for w in win], default=0)
     if now is not None:
-        # an instance that announced within the last 30 s of the capture may simply not have been connected yet
-        m["vchan_announce_without_connect"] = len([i for i in inst if i["announces"] >= 1 and i["connects"] == 0 and (now - i["end"]).total_seconds() > 30])
+        # an instance that announced within the last 30 s of the capture may simply not have been
+        # connected yet. AND AN ANNOUNCEMENT THE AGENT WITHDREW IS NOT A DANGLING ONE. MEASURED
+        # 2026-10-09 on win11-acc: instance pid 3704 started 263 s into an install boot, announced at
+        # 050142, dom0 never attached because the SESSION WAS ENDING, and the agent logged
+        # "WatchForEvents: VCHAN no client ever connected - the vchan announcement is withdrawn
+        # before exit" and left with 0x20514703 (WM_ENDSESSION) - "an expected exit, not a failure",
+        # in its own words. The gate counted that as a defect against a threshold of 0. The product
+        # states the benign case explicitly; reading it is the same correction as excusing a 203 the
+        # scheduler refused for shutdown. An instance that just STOPS with an unconnected
+        # announcement and never says it withdrew still counts, which is the case worth catching.
+        m["vchan_announce_without_connect"] = len([i for i in inst if i["announces"] >= 1 and i["connects"] == 0
+                                                   and not i.get("withdrew_announce")   # GUARD:vchanwithdrawn DEFECT: and True
+                                                   and (now - i["end"]).total_seconds() > 30])
     else:
         m["vchan_announce_without_connect"] = None
     m["vchan_reconnects"] = sum(max(0, i["announces"] - 1) for i in inst)

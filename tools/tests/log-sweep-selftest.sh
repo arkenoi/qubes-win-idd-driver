@@ -231,6 +231,21 @@ ev_taskok = ["EV 2026-10-07 10:00:20.000 [System] id=6013 level=4 EventLog: The 
              'EV 2026-10-07 10:01:05.000 [Microsoft-Windows-TaskScheduler/Operational] id=203 level=3 Microsoft-Windows-TaskScheduler: Task Scheduler failed to launch action "powershell.exe" in instance "{b}" of task "\\QubesPvNic". Additional Data: Error Value: 2.',
              "EV NONE [Microsoft-Windows-TaskScheduler/Operational]"]
 write("taskok.pull", stream(TOK, ev_taskok))
+# vchanwd: an instance that ANNOUNCED a vchan, was never connected to, and WITHDREW the announcement
+# on its way out - which the agent logs in those words. MEASURED on win11-acc 2026-10-09: pid 3704
+# started 263 s into an install boot, announced, dom0 never attached because the session was ending,
+# and it logged "VCHAN no client ever connected - the vchan announcement is withdrawn before exit"
+# and exited 0x20514703 (WM_ENDSESSION) - "an expected exit, not a failure", in its own words. The
+# gate counted that as a dangling vchan against a threshold of 0.
+VWD_LINES = (agent(1000, t0="100031.200", uptime="31.200", announce=False,
+                   tail=[wu("100100.000", 200, "I", "WatchForEvents", "Awaiting for a vchan client, write buffer size: 65536"),
+                         wu("100204.381", 200, "I", "WatchForEvents", "VCHAN no client ever connected - the vchan announcement is withdrawn before exit"),
+                         wu("100204.381", 200, "I", "WatchForEvents", "exiting"),
+                         wu("100204.405", 200, "I", "WinMain", "QGAEXIT exiting with 0x20514703 (the session is ending (WM_ENDSESSION)) - an expected exit, not a failure")]))
+VWD = [("gui-agent-20261007-100031-1000.log", "agent", VWD_LINES)]
+ev_vwd = ["EV 2026-10-07 10:00:20.000 [System] id=6013 level=4 EventLog: The system uptime is 20 seconds.",
+          "EV NONE [Microsoft-Windows-TaskScheduler/Operational]"]
+write("vchanwd.pull", stream(VWD, ev_vwd))
 # skipnames / skipchatty: the collector's cap dropped files and NAMES them; a verdict-deciding family is louder
 import base64 as _b64
 def with_skip(src, names, out):
@@ -399,7 +414,7 @@ analyze(){ # $1=analyzer $2=logsdir $3=baseline $4=judge $5=tag -> rc; report at
 field(){ python3 -c "import json,sys; r=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$1" "$2"; }
 
 # ---- decode every fixture with the real decoder --------------------------------------------------------------------
-for f in base newsig rise three stoperr empty twoboot clockflip taskok skipnames skipchatty bootshut inv twoproc msiok msibad; do
+for f in base newsig rise three stoperr empty twoboot clockflip taskok vchanwd skipnames skipchatty bootshut inv twoproc msiok msibad; do
   rc=$(decode "$SRC" "$T/$f.pull" "$T/$f")
   [ "$rc" = 0 ] || { echo "FATAL: the $f fixture did not decode (rc=$rc): $(tail -2 "$T/$f.decode.txt")"; exit 2; }
   # EVERY LINE IN THESE CORPORA IS WRITTEN BY THIS TEST, so the run declares the errors it caused - which is
@@ -1004,6 +1019,16 @@ KT=$(knob taskrc); rc=$(analyze "$KT" "$T/taskok" "$T/baseline.json" "$T/jev-exp
 tfk=$(field "$T/t37k.json" 'r["metrics"]["task_failures"]')
 [ "$tfk" = 2 ] && ok "knob taskrc: with the return code ignored, the COMPLETED task counts too (task_failures=$tfk)" \
                || bad "knob taskrc: task_failures=$tfk, want 2 - the case cannot be driven"
+
+# ---- T38 an announcement the agent WITHDREW is not a dangling vchan ---------------------------
+rc=$(analyze "$SRC" "$T/vchanwd" "$T/baseline.json" "$T/jev-expected.py" t38)
+vw=$(field "$T/t38.json" 'r["metrics"]["vchan_announce_without_connect"]')
+[ "$vw" = 0 ] && ok "T38 a withdrawn announcement is not counted (vchan_announce_without_connect=$vw)" \
+              || bad "T38 vchan_announce_without_connect=$vw over vchanwd, want 0"
+KW=$(knob vchanwithdrawn); rc=$(analyze "$KW" "$T/vchanwd" "$T/baseline.json" "$T/jev-expected.py" t38k)
+vwk=$(field "$T/t38k.json" 'r["metrics"]["vchan_announce_without_connect"]')
+[ "$vwk" = 1 ] && ok "knob vchanwithdrawn: with the withdrawal ignored, correct behaviour counts as a defect (=$vwk)" \
+               || bad "knob vchanwithdrawn: got $vwk, want 1 - the case cannot be driven"
 
 echo "--- $pass passed, $fail failed; fixtures/outputs in $T"
 [ "$fail" = 0 ] && exit 0 || exit 1
