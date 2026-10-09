@@ -79,6 +79,14 @@ grep -a -E '(^|: )FAIL  ' "$OUT/quick-upgrade.out" | sed 's/^/  quick-upgrade ch
 halt || verdict INSTRUMENT "$VM will not halt after the upgrade"
 qvm-prefs "$VM" guivm '' || verdict INSTRUMENT "could not make $VM headless"
 timeout 300 qvm-start "$VM" >/dev/null 2>&1; [ "$(state "$VM")" = Running ] || verdict INSTRUMENT "$VM did not start"
+# BUILD the reporter's environment on the subject BEFORE asserting it. The subject is cloned from
+# the sealed golden, which carries no Open-Shell and no enableWinKey feature, and the golden must
+# never be booted - so the two facts gweck.json asserts have to be built here. Without this the
+# 4.3.36 gate's template-update exited 2 on "open_shell_installed MISMATCH / service_enablewinkey
+# MISSING", and the one script that could fix it lived in gitignored scratchpad.
+mgmt/harness/reporter-env-build.sh "$VM" "$REPORTER" > "$OUT/reporter-env-build.txt" 2>&1 \
+  || verdict INSTRUMENT "could not build $REPORTER's environment on $VM - see $OUT/reporter-env-build.txt"
+say "reporter-env-build: $(tail -1 "$OUT/reporter-env-build.txt")"
 mgmt/harness/env-assert.sh "$VM" "$REPORTER" > "$OUT/env-assert.txt" 2>&1 \
   || verdict INSTRUMENT "env-assert $VM $REPORTER failed - not the reporter's environment ($OUT/env-assert.txt)"
 say "env-assert: $(tail -1 "$OUT/env-assert.txt")"
