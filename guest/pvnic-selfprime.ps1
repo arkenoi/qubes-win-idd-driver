@@ -124,6 +124,27 @@ public class QwtngNetSetup : ServiceBase {
     static extern int CM_Get_Device_ID_ListW(string filter, char[] buffer, uint len, uint flags);
     const uint CM_GETIDLIST_FILTER_PRESENT = 0x00000100;
 
+    // ASK THE DAEMON NOTHING UNTIL IT IS RUNNING. MEASURED 2026-10-09 on win11-acc: this service
+    // starts ~190 s into an install boot, calls qdb_open while OUR OWN stage 2 has QdbDaemon
+    // stopped (the install RESULT records vchan_prestop: QdbDaemon=absent), and that ONE failed
+    // open costs TWELVE ERROR lines in the client DLL's log - six
+    // "QioWriteBuffer: WriteFile failed with error 0xe8: The pipe is being closed." and six
+    // "send_command_to_daemon: write to daemon failed with error 0xe8" - all in the same
+    // millisecond. The retry below then succeeds and this service logs the correct verdict, so
+    // nothing was ever LOST; what it cost was 12 of the 27 error lines the build under test wrote
+    // in that capture, and the owner's gate condition is a CLEAN error log. The baseline may not
+    // excuse them (tools/log-sweep.py: "an exemption from the BASELINE would be hiding"), so the
+    // fix is to stop causing them: discover readiness by ASKING THE SCM instead of by failing.
+    // TRI-STATE ON PURPOSE: 1 running, 0 installed-but-not-running, -1 unknown. We wait only while
+    // it is DEFINITELY installed and not running, so a guest where QdbDaemon does not exist yet
+    // behaves exactly as before instead of sitting out a new wait.
+    static int QdbState() {
+        try {
+            using (ServiceController sc = new ServiceController("QdbDaemon"))
+                return sc.Status == ServiceControllerStatus.Running ? 1 : 0;
+        } catch { return -1; }
+    }
+
     const string LOG   = @"C:\ProgramData\QubesNetSetup.log";
     const string STAMP = @"C:\ProgramData\QubesNetSetup.applied";
     const string CACHE = @"Q:\qwtng-netcfg.txt";
@@ -378,6 +399,17 @@ public class QwtngNetSetup : ServiceBase {
         // cache is a FALLBACK; when it fires it is reported as an anomaly, not logged as routine.
         try {
             SetDllDirectory(@"C:\Program Files\Qubes Tools\bin");
+            // Bounded at 60 s, not the open loop's 180: the installer's stop window is seconds, and
+            // this must never become a new way to be late. On expiry we open anyway, exactly as
+            // before - a wait that outlived its reason must not also outlive the work.
+            int qwait = 0;
+            for (; qwait < 120; qwait++) {
+                if (QdbState() != 0) break;   // running, or we cannot tell: stop waiting either way
+                System.Threading.Thread.Sleep(500);
+            }
+            if (qwait > 0)
+                Log("waited " + (qwait / 2) + " s for QdbDaemon to reach Running before opening qubesdb"
+                    + (qwait >= 120 ? " - it never did, opening anyway" : ""));
             IntPtr h = IntPtr.Zero;
             int waited = 0;
             for (; waited < 360 && h == IntPtr.Zero; waited++) {
