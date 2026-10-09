@@ -528,17 +528,39 @@ if [ "$SKIP_NS" = 1 ]; then
   log "S5 SKIPPED: the dom0 qubes.SetGuiMode round trip was not exercised. It puts a near-fullscreen"
   log "  window on whoever is at the screen, so it is opt-in (--nonseamless). S5a/S5c carry no verdict."
 else
-  if switch_mode FULLSCREEN 0; then
-    scenario "S5a" nonseamless "$AUMID_A" "FIRE:$FA+informational+--title+@SLUG1@+--tag+@TAG1@"
-    if switch_mode SEAMLESS 1; then
-      scenario "S5c" seamless "$AUMID_A" "FIRE:$FA+informational+--title+@SLUG1@+--tag+@TAG1@"
-    else
-      verdict S5 "FAIL the guest did not return to seamless mode after qubes.SetGuiMode SEAMLESS (the agent never logged it) - left as it stands"
-    fi
-  else
-    verdict S5 "INSTRUMENT the switch to non-seamless was not observed (qubes.SetGuiMode FULLSCREEN; see $OUT/setguimode-FULLSCREEN.out) - scenario 5 not exercised"
-    switch_mode SEAMLESS 1 >/dev/null 2>&1 || log "  WARNING: SEAMLESS restore after the unobserved switch was not observed either - check the guest's mode"
-  fi
+  # THE THREE RETURN CODES ARE GRADED SEPARATELY, because switch_mode already distinguishes them
+  # (0 observed / 1 terminal / 2 deadline) and this caller used to collapse all of them into one
+  # branch. Two things were wrong with that, and tools/report-gate-review.py flagged this site as a
+  # GATE VERDICT DECIDED ON A CLOCK (clock_decides_alone 0.63, false_report_plausible 0.72):
+  #   * A DEAF GUEST was graded FAIL. A guest that stopped answering cannot be graded on a product
+  #     behaviour at all - that is INVALID-INSTRUMENT everywhere else in this harness
+  #     (mgmt/harness/gate-preflight.sh exits 3 for exactly this), and calling it a product failure
+  #     puts a red suite in the gate for a rig problem.
+  #   * THE SAME CONDITION GOT OPPOSITE VERDICTS depending on WHICH switch it was: the first
+  #     unobserved switch was INSTRUMENT, the second was FAIL. One of those is wrong whichever way
+  #     you read it.
+  # A deadline WITH THE GUEST STILL ANSWERING is a real observation and stays a FAIL - the agent was
+  # asked and did not honour it - but the text now says that is what it rests on, rather than
+  # implying the mode is known to be wrong.
+  switch_mode FULLSCREEN 0; nsrc=$?
+  case "$nsrc" in
+    0)
+      scenario "S5a" nonseamless "$AUMID_A" "FIRE:$FA+informational+--title+@SLUG1@+--tag+@TAG1@"
+      switch_mode SEAMLESS 1; ssrc=$?
+      case "$ssrc" in
+        0) scenario "S5c" seamless "$AUMID_A" "FIRE:$FA+informational+--title+@SLUG1@+--tag+@TAG1@" ;;
+        1) verdict S5 "INSTRUMENT the guest stopped answering while returning to seamless mode - a deaf guest cannot be graded on a product behaviour; S5c carries no verdict and the guest is left non-seamless" ;;
+        *) verdict S5 "FAIL the guest was still answering but the agent never logged the return to seamless mode within the switch deadline after qubes.SetGuiMode SEAMLESS - left as it stands" ;;
+      esac
+      ;;
+    1)
+      verdict S5 "INSTRUMENT the guest stopped answering at the switch to non-seamless - a deaf guest cannot be graded; scenario 5 not exercised"
+      ;;
+    *)
+      verdict S5 "INSTRUMENT the switch to non-seamless was not observed within the deadline while the guest answered (qubes.SetGuiMode FULLSCREEN; see $OUT/setguimode-FULLSCREEN.out) - scenario 5 not exercised"
+      switch_mode SEAMLESS 1 >/dev/null 2>&1 || log "  WARNING: SEAMLESS restore after the unobserved switch was not observed either - check the guest's mode"
+      ;;
+  esac
 fi
 
 # ---- 8. pull both logs (counts + sha verified), grade, aggregate -------------------------------------------------
