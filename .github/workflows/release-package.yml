@@ -85,7 +85,12 @@ on:
 # One release build at a time, newest wins. Without this, a 2026-08-06 background job
 # cancelled runs it took for duplicates and the cancellations looked like CI flakiness.
 concurrency:
-  group: release-package-${{ github.ref }}
+  # THE VARIANT IS PART OF THE GROUP. Measured 2026-10-09: dispatching the ordinary package and the
+  # fault_injection one on the same ref made the second CANCEL the first, because the group was the
+  # ref alone and cancel-in-progress is on. They are different artifacts and the gate needs BOTH at
+  # the same commit, so they must not evict each other. A push event has no inputs, which leaves the
+  # suffix empty and the group exactly as it was.
+  group: release-package-${{ github.ref }}-${{ inputs.fault_injection }}
   cancel-in-progress: true
 
 # REPRODUCIBLE BUILDS: /Brepro makes link.exe write a CONTENT HASH into the PE header's

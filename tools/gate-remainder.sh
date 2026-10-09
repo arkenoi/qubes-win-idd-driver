@@ -145,34 +145,6 @@ if need gate-preflight; then
   run_it gate-preflight bash mgmt/harness/gate-preflight.sh "$VM11" 0; note $? gate-preflight
 else SKIPPED="$SKIPPED gate-preflight"; fi
 
-if need failproof-gates; then
-  run_it failproof-gates bash mgmt/harness/failproof-gates.sh "$VM11" "$WORK/failproof-gates"
-  note $? failproof-gates
-else SKIPPED="$SKIPPED failproof-gates"; fi
-
-if need failproof-faultinject; then
-  # THE FAULT-INJECTION SUITE NEEDS A FAULT-INJECTION BUILD. qwt-full only compiles the injector
-  # when dispatched with -f fault_injection=true; against an ordinary package the suite cannot fire
-  # a fault and reports a vacuous pass (memory: a "regression" on rz24 was exactly this).
-  if [ -z "$FIRUN" ]; then
-    say "SKIP  failproof-faultinject: no --fi-run given, and an ordinary package cannot inject a"
-    say "      fault - recording it would be a vacuous pass. Dispatch qwt-full with"
-    say "      -f fault_injection=true and pass its run id."
-    SKIPPED="$SKIPPED failproof-faultinject"
-  else
-    FIDIR="$DL/qwt-fault-package"
-    if [ "$DRY" = 1 ]; then
-      say "INTEND[dry] download: gh run download $FIRUN -D $FIDIR"
-    elif [ ! -d "$FIDIR" ]; then
-      gh run download "$FIRUN" -D "$FIDIR" >>"$LOG" 2>&1 \
-        || { say "ERROR: could not download the fault-injection package"; exit 2; }
-    fi
-    FI_DIR="$FIDIR" run_it failproof-faultinject \
-      bash mgmt/harness/failproof-faultinject.sh "$VM11" "$WORK/failproof-faultinject"
-    note $? failproof-faultinject
-  fi
-else SKIPPED="$SKIPPED failproof-faultinject"; fi
-
 if need p3a-etw-gate; then
   # toastfire.exe comes from the `build` workflow, NOT from release-package: it is a TEST helper
   # that fires toasts and has no business shipping inside the product. p3a-etw-gate looks for it in
@@ -212,6 +184,66 @@ if need log-sweep; then
   run_it log-sweep bash mgmt/harness/log-sweep.sh "$VM11" "$SINCE" "$WORK/log-sweep"
   note $? log-sweep
 else SKIPPED="$SKIPPED log-sweep"; fi
+
+# --------------------------------------------------------------- the fault-injection suites, LAST
+# ORDER IS DELIBERATE. These two need an INSTALLED injector build, and installing it replaces the
+# release binaries on the subject - so everything that grades the RELEASE runs first and these run
+# at the end. Before 2026-10-09 they ran third and refused outright, because nothing installed
+# anything: the qwt-full artifact is not an installable tree. release-package.yml now accepts
+# fault_injection, so --fi-run names a run whose qwt-improved-setup carries the injector and goes
+# in through the ordinary install path. cut-release.sh refuses to publish such a package.
+fi_installed=0
+if need failproof-gates || need failproof-faultinject; then
+  if [ -z "$FIRUN" ]; then
+    say "SKIP  failproof-gates/failproof-faultinject: no --fi-run. Dispatch release-package with"
+    say "      -f fault_injection=true and pass its run id; an ordinary package cannot inject a"
+    say "      fault and recording a pass from one would be vacuous."
+  else
+    FISETUP="$DL/fi-setup/qwt-improved-setup"
+    if [ "$DRY" = 1 ]; then
+      say "INTEND[dry] download: gh run download $FIRUN -n qwt-improved-setup -D $FISETUP"
+      say "INTEND[dry] install the injector tree on $VM11 via quick-upgrade"
+      fi_installed=1
+    else
+      [ -s "$FISETUP/install.cmd" ] || gh run download "$FIRUN" -n qwt-improved-setup -D "$FISETUP" >>"$LOG" 2>&1 || true
+      if [ ! -s "$FISETUP/install.cmd" ]; then
+        say "ERROR: run $FIRUN has no installable qwt-improved-setup - was it dispatched on"
+        say "       release-package with -f fault_injection=true? (qwt-full alone is not installable)"
+      elif ! python3 - "$FISETUP/reference/gui-agent.exe" <<'FIMARK'
+import sys
+b=open(sys.argv[1],'rb').read(); m=b'QGA-FAULT-INJECTION:on'
+sys.exit(0 if (b.count(m)+b.count(m.decode().encode('utf-16-le'))) else 1)
+FIMARK
+      then
+        say "ERROR: run $FIRUN's agent does NOT carry the injector marker - it is an ordinary"
+        say "       package, so both suites would come back green for the wrong reason."
+      else
+        settle "$VM11"
+        say "--- installing the injector tree on $VM11 (its agent carries QGA-FAULT-INJECTION:on)"
+        if QU_OUT="$WORK/fi-install" bash mgmt/harness/quick-upgrade.sh "$FISETUP" "$VM11" "$OS11" \
+             >>"$WORK/fi-install.out" 2>&1; then
+          say "    injector build installed"; fi_installed=1
+        else
+          say "    FAIL could not install the injector tree - see $WORK/fi-install.out"
+        fi
+      fi
+    fi
+  fi
+fi
+
+if need failproof-gates && [ "$fi_installed" = 1 ]; then
+  run_it failproof-gates bash mgmt/harness/failproof-gates.sh "$VM11" "$WORK/failproof-gates"
+  note $? failproof-gates
+else SKIPPED="$SKIPPED failproof-gates"; fi
+
+if need failproof-faultinject && [ "$fi_installed" = 1 ]; then
+  # No download here: this suite reads nothing from a directory (it has zero references to FI_DIR).
+  # Its prerequisite is the INSTALLED injector build, which the step above put on the subject, and
+  # it verifies that itself from the running agent's QGAFAULT-INIT banner before grading anything.
+  run_it failproof-faultinject bash mgmt/harness/failproof-faultinject.sh "$VM11" "$WORK/failproof-faultinject"
+  note $? failproof-faultinject
+else SKIPPED="$SKIPPED failproof-faultinject"; fi
+
 
 say "passed:$PASSED"
 say "failed:$FAILED"
