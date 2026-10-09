@@ -101,7 +101,16 @@ PASSED=""; FAILED=""; SKIPPED=""
 need() { echo "$REQ" | tr ' ' '\n' | grep -qx "$1"; }
 note() { if [ "$1" = 0 ]; then PASSED="$PASSED $2"; else FAILED="$FAILED $2"; fi; }
 
-SINCE=$(date -u -d '12 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT00:00:00Z)
+# THE SWEEP'S WINDOW IS THIS RUN, NOT TWELVE HOURS OF HISTORY. This said '12 hours ago', which on a
+# rig whose guests are reinstalled all day means a window covering OTHER RUNS, OLDER BUILDS and the
+# install-era boots - and the sweep would report their lines as this run's findings. Measured
+# 2026-10-09: an install-era boot writes early-boot vchan transients (XcStoreRead 0x5,
+# libxenvchan_client_init ... ring-ref 0x5, at ~21 s uptime, upstream code, resolved on retry) that a
+# normal boot of a provisioned guest does NOT write - zero error lines on two swept guests - so a
+# window that reaches back into an install carries them and a window over this run does not. The
+# suites below all run after this point, and log-sweep runs last on purpose, so this is the right
+# start for it.
+SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 if need gate-preflight; then
   # <vm> <hex-bits>: the preflight bit-mask the suite documents; 0 exercises the no-fault path.
