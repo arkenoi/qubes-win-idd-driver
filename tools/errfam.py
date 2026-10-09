@@ -60,6 +60,13 @@ FAMILIES = [
     ("hold-overflow",      r'past the (\d+|N) held were dropped',        "the library-record hold overflowing"),
     ("vchan-send-closed",  r'vchan already closed with (\d+|N) byte',     "a send into a vchan the peer already closed"),
     ("dda-dirtyrects",     r'GetFrameDirtyRects failed',                 "DDA ACCESS_LOST on the dirty-rects path"),
+    # Surfaced by THIS tool's UNCLASSIFIED bucket on the first valid clean-boot sweep of a
+    # provenance-verified candidate build (2026-10-09, scratchpad/sweep-win11r-up-valid-175823).
+    # Our watchdog's judgement that the agent was ended by session teardown (0x40010004,
+    # DBG_TERMINATE_PROCESS) without sending its end-session notice, leaving its vchan announcement
+    # behind. Named here so it is counted rather than rediscovered: the previous two families were
+    # both found in this bucket, and a signature no family covers is the one nobody is tracking.
+    ("wd-notice-missed",   r'QGAWDNOTICEMISSED',                         "the agent was torn down without its end-session notice"),
 ]
 
 
