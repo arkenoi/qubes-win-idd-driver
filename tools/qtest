@@ -83,12 +83,33 @@ qtest_incoming() {
     # which read as "the file does not exist", in German. Measured twice on 2026-10-07.
     if [ -n "${QTEST_INCOMING:-}" ]; then
         prof="${QTEST_INCOMING%%\\Documents\\*}"
-        if [ "$prof" = "$QTEST_INCOMING" ] || vmshell "cmd /c if exist \"$prof\\\" echo YES" 2>/dev/null | tr -d '\r' | grep -q YES; then
+        # THE PROFILE DIRECTORY EXISTING IS NOT ENOUGH, measured 2026-10-09 on win11de-tup: that
+        # guest's account is gerd-test and `account_user_absent` asserts there is no `user` account -
+        # yet C:\Users\user EXISTS as a LEFTOVER DIRECTORY from the base image. So the check below
+        # accepted a stale override (this session inherited one from a shell snapshot taken before
+        # ~/.bashrc dropped it), qtest answered C:\Users\user\Documents\QubesIncoming\win-idd-mgmt,
+        # the push landed the file in gerd-test's real profile, and pushrun then reported, in German,
+        # that the script it had just copied did not exist. The override is now accepted only if the
+        # FULL incoming path is really there, or if its profile belongs to the guest's autologon
+        # account - which is what distinguishes "this guest's user" from "a directory called user".
+        # ANCHOR THE MARKER. qubes.VMShell returns cmd's banner AND THE ECHOED COMMAND LINE, so an
+        # unanchored `grep -q YES` matches the "echo YES" in the command it just sent - which is
+        # why the check above this one accepted every override ever set, including a stale one for
+        # a profile that is not the guest's. Measured 2026-10-09: `if exist` printed nothing on
+        # win11de-tup and the grep still matched. Only a line that IS the marker counts.
+        local okprof=0 defuser
+        if vmshell "cmd /c if exist \"$QTEST_INCOMING\\\" echo QTINCOK" 2>/dev/null | tr -d '\r' | grep -qa '^QTINCOK'; then
+            okprof=1
+        else
+            defuser=$(vmshell "cmd /c reg query \"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\" /v DefaultUserName 2>nul" 2>/dev/null | tr -d '\r' | awk '/DefaultUserName/{print $NF}' | tail -1)
+            [ -n "$defuser" ] && [ "${prof##*\\}" = "$defuser" ] && okprof=1
+        fi
+        if [ "$prof" = "$QTEST_INCOMING" ] || [ "$okprof" = 1 ]; then
             _QTEST_INCOMING_CACHE="$QTEST_INCOMING"
             printf '%s' "$_QTEST_INCOMING_CACHE"
             return
         fi
-        echo "qtest: ignoring QTEST_INCOMING=$QTEST_INCOMING - the profile '$prof' does not exist on $VM; discovering instead" >&2
+        echo "qtest: ignoring QTEST_INCOMING=$QTEST_INCOMING - that path is not present on $VM and '${prof##*\\}' is not its autologon account; discovering instead" >&2
     fi
     found=$(vmshell "cmd /c for /d %D in (C:\Users\*) do @if exist \"%D\\Documents\\QubesIncoming\\$h\" echo %D" 2>/dev/null | tr -d '\r' | grep -aE '^C:\\Users\\' || true)
     pref=$(vmshell "cmd /c reg query \"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\" /v DefaultUserName 2>nul" 2>/dev/null | tr -d '\r' | awk '/DefaultUserName/{print $NF}' | tail -1)
