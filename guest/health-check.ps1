@@ -285,78 +285,145 @@ $logDirs += 'Q:\Qubes Logs'
 $logDirs += 'C:\Program Files\Qubes Tools\log'
 $logDirs = @($logDirs | Where-Object { $_ } | Select-Object -Unique)
 # ---- AGENT-LOG-FRESHNESS-BEGIN  (tools/tests/health-logfresh-test.ps1 extracts this region by marker)
-# IS THE BOOT STAMP EVEN USABLE? MEASURED 2026-10-09 on win11-acc: the guest boots with a clock
-# about three hours ahead (this rig's local offset), Windows stamps LastBootUpTime in that window,
-# our clock sync then corrects the RUNNING clock to real UTC - and LastBootUpTime is never
-# corrected. (Get-Date) - LastBootUpTime read -10576 s: a boot "in the future". So "files newer
-# than boot" is EMPTY however healthy the guest is, and that failed FIVE of the eight cells of the
-# 4.3.36 release gate on guests whose agent was running (pid 7648) and whose watchdog was Running
-# - reported as newest=NONE, which also drags idd_agent_identified down because it reads this
-# boot's log. The guest's own logs show both sides of the same event stamped three hours apart
-# (SETTIME 000543 "was -10803 s out, now 0 s" against CLOCKSYNC 030543).
-# A freshness test that a clock correction can invert is not a freshness test (Jev 2026-10-09:
-# where_to_fix = the-check-must-not-anchor-on-lastbootuptime 0.99).
-# WHAT IS STILL TRUSTWORTHY: file mtimes are correctly ordered RELATIVE TO EACH OTHER - they are
-# all stamped by the same clock. So when the stamp is unusable, the current instance is the NEWEST
-# log by that ordering, and it must prove itself with the agent's own 'Init:' line, which no clock
-# change can forge. Liveness still comes from agent_process. An agent that wrote nothing at all
-# has no newest log and no Init, so a genuinely silent agent still FAILS
-# (Jev check_can_still_catch_a_silent_agent 0.81).
+# THE ANCHOR IS THE RUNNING AGENT'S OWN PID - NOT A CLOCK, NOT A FILE MTIME.
+# MEASURED 2026-10-09 on win11-acc, 14 samples across one boot plus a second read of the live file:
+#  1. THE LIVE LOG IS PER-DAY AND APPENDED: 'gui-agent-<yyyymmdd>.log'. Its head carries
+#     "LogInit ... process ID: 3704" from an EARLIER instance while pid 6852 appends to the same
+#     file, and the 'gui-agent-<date>-<time>-<pid>.log' files beside it are older instances. So
+#     "exactly one log file this boot" was never a respawn test for this naming.
+#  2. THE CLOCK FLIPS ONCE PER BOOT, ~t+60 s, when sync-clock-from-dom0 lands: the agent's own
+#     lines jump from 055237 to 025240 INSIDE ONE FILE. For the MINUTES AROUND THAT FLIP the boot
+#     stamp and the clock sit in different phases - measured skew +103 s and +54 s before it,
+#     -10734 s and -10689 s just after - and that window is exactly where the acceptance battery
+#     samples (it grades ~103 s after its reboot). The stamp does eventually re-derive into the
+#     corrected phase (the same guest read BOOT=02:51:42 SKEW=835 thirteen minutes in), so this is
+#     a transient disagreement, not a permanent one - which is worse, because it makes the check
+#     pass by hand later and fail in the gate. Process StartTime is in the ahead phase too
+#     (gui-agent pid 6852 start=05:52:31 while now=02:56:40), so no process clock rescues this.
+#  3. NTFS UPDATES LastWriteTime LAZILY FOR AN OPEN HANDLE: at 05:52:40 the directory entry still
+#     read 02:07:10 - the PREVIOUS boot's last write - while the agent had already appended at
+#     05:52:37.
+# RETRACTED HERE: this block used to say "file mtimes are correctly ordered RELATIVE TO EACH OTHER,
+# so the current instance is the NEWEST log". (2) and (3) both falsify that. The newest-by-mtime
+# file during that probe was '...-045802-3412.log' at 05:00:17 - an ahead-phase stamp from the
+# PREVIOUS boot - ranking above the live file at 02:55:04. The fallback picked it, found an 'Init:'
+# line in it and PASSED: a FALSE PASS on five cells of the 4.3.36 gate. The mirror error, (3),
+# failed WIN11-clean on the same gate (boot_stamp_usable=true, skew=+103, logs_this_boot=0,
+# newest=NONE) while its agent was running. Both directions come from reading a file's METADATA
+# instead of its CONTENT.
+# WHAT CANNOT LIE: the agent stamps its own pid into every line as
+# '[<yyyymmdd>.<hhmmss>.<ms>-<pid>:<tid>-<level>]'. A LIVE pid cannot be forged by a file from an
+# earlier boot and needs no clock. An agent that wrote nothing has no line carrying its pid
+# anywhere and still FAILS - which is the defect this check exists for.
+# The boot stamp is still REPORTED (boot_stamp_usable/boot_skew_s) because it documents the clock
+# defect, and it is used by nothing here.
 $bootSkewS = $null
 $bootUsable = $false
 if ($boot) {
     $bootSkewS = [int]((Get-Date) - $boot).TotalSeconds
     $bootUsable = ($bootSkewS -ge 0)
 }
+# PID REUSE IS THE ONE HOLE IN A PID ANCHOR (Jev 2026-10-09: anchor_sound 0.48 with
+# unsound-pid-reuse 0.29, biggest_residual = pid-reuse-unclosed 0.90), and an OPEN HANDLE closes
+# it without a clock: the writer holds its log open, a file from an earlier boot does not. Measured
+# on win11-acc - an exclusive open of the live 'gui-agent-20261009.log' was REFUSED while all four
+# older files opened freely. A stale file carrying a recycled pid therefore cannot be mistaken for
+# this instance's log.
+function Test-LogHeldOpen([string]$Path) {
+    try { $fs = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
+          $fs.Close(); return $false }
+    catch { return $true }
+}
+$agentPids = @(@($agentProc) | Where-Object { $_ } | ForEach-Object { $_.Id })
 $allAgentLogs = @($logDirs | ForEach-Object {
                       Get-ChildItem $_ -Filter 'gui-agent-*.log' -ErrorAction SilentlyContinue })
-if ($bootUsable) {
-    $logsThisBoot = @($allAgentLogs | Where-Object { $_.LastWriteTime -gt $boot })
-} else {
-    $logsThisBoot = @($allAgentLogs | Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
-                      Where-Object { Select-String -Path $_.FullName -Pattern 'Init:' -Quiet })
+$heldOpen = @{}
+foreach ($f in $allAgentLogs) { $heldOpen[$f.FullName] = (Test-LogHeldOpen $f.FullName) }
+$anyHeld = (@($heldOpen.Values | Where-Object { $_ }).Count -gt 0)
+$instanceHits = @()
+foreach ($f in $allAgentLogs) {
+    foreach ($p in $agentPids) {
+        $hits = @(Select-String -LiteralPath $f.FullName -Pattern ("-{0}:[0-9]+-[A-Z]\]" -f $p) `
+                                -ErrorAction SilentlyContinue)
+        if ($hits.Count -gt 0) {
+            $instanceHits += [pscustomobject]@{ File = $f; AgentPid = $p; Lines = $hits.Count
+                                                HeldOpen = [bool]$heldOpen[$f.FullName] }
+            break
+        }
+    }
 }
+# THE HANDLE IS REQUIRED UNCONDITIONALLY. An earlier draft degraded to the pid alone when nothing
+# held a log open, to avoid manufacturing a FAIL on a guest that might be healthy - and Jev was
+# right to split on it (anchor_sound: sound 0.50 against unsound-fallback-hole 0.48;
+# fallback_is_a_real_hole 0.59): the degraded mode reopened the very pid-reuse hole the handle was
+# added to close, in the one situation where nothing else could discriminate either. Missing data
+# FAILS here. If no agent log is held open, one of two things is true - the agent is not logging
+# (exactly the defect this check exists to catch) or its handle policy changed (a product change
+# that must be noticed, not absorbed) - and both deserve a loud, diagnosable FAIL rather than a
+# pass on a file nobody can attribute. Measured twice on win11-acc, 3 minutes apart and 13 and 20
+# minutes into one boot: the live log was held both times, so the healthy path does not rely on
+# luck.
+$logAnchor = 'running-agent-pid-in-line-prefix + open-handle'
+$instanceHits = @($instanceHits | Where-Object { $_.HeldOpen })
+$logsThisBoot = @($instanceHits | ForEach-Object { $_.File })
 # ---- AGENT-LOG-FRESHNESS-END
-$log = $logsThisBoot | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-$logOk = $false; $badmode = -1; $grew = $false
+$inst = $instanceHits | Sort-Object Lines -Descending | Select-Object -First 1
+$log = if ($inst) { $inst.File } else { $null }
+$logOk = $false; $badmode = -1; $badmodeAll = -1; $badmodeOther = -1
+$grew = $false; $instLines = 0; $benignExit = $false
 if ($log) {
+    $instLines = $inst.Lines
     $l1 = (Get-Item $log.FullName).Length
     Start-Sleep -Seconds 3
     $l2 = (Get-Item $log.FullName).Length
     $grew = ($l2 -gt $l1)
-    $badmode = @(Select-String -Path $log.FullName -Pattern 'BADMODE|0xfffffffe').Count
-    # An idle guest legitimately logs nothing for stretches; "alive" is grew-now OR
-    # written within the last 5 minutes. The acceptance harness generates activity
-    # (opens a window) before calling this, so a truly dead agent still fails.
-    # Liveness comes from the PROCESS, not from log writes: an idle guest legitimately
-    # logs nothing for long stretches, and requiring recent writes failed a healthy guest
-    # (2026-08-07). agent_process already asserts the agent is running; here we only need
-    # the log to belong to THIS boot, which $logsThisBoot already guarantees.
-    $fresh = [bool]$agentProc
-    # A respawn LOOP is the defect; ONE restart is not. Measured repeatedly 2026-08-07: the
-    # first instance dies seconds after boot with 'WatchForEvents: vchan disconnected' /
-    # A6EXIT because dom0's gui-daemon is not connected yet, the watchdog restarts it, and
-    # the second instance runs healthily for hours. Requiring logsThisBoot -eq 1 failed a
-    # perfectly good guest every time. What matters: the CURRENT instance is healthy, and
-    # the count is small. >2 instances, or an unhealthy current one, still fails.
-    $benignExit = $false
-    if ($logsThisBoot.Count -eq 2) {
-        $first = $logsThisBoot | Sort-Object LastWriteTime | Select-Object -First 1
-        $benignExit = [bool](Select-String -Path $first.FullName -Pattern 'vchan disconnected|A6EXIT' -Quiet)
+    # BADMODE IS SCOPED TO THE RUNNING INSTANCE'S LINES. The file spans a whole DAY (see (1)
+    # above), so an unscoped count fails today's healthy agent for a BADMODE that an instance
+    # hours ago logged. Scoped to this pid it answers the question the check actually asks.
+    $badmode = @(Select-String -LiteralPath $log.FullName `
+                   -Pattern ("-{0}:[0-9]+-[A-Z]\].*(BADMODE|0xfffffffe)" -f $inst.AgentPid) `
+                   -ErrorAction SilentlyContinue).Count
+    # ...and count what that scoping EXCLUDES, so it can never hide anything (Jev
+    # badmode_scoping_hides_a_defect 0.44 - near even, so the answer is to report both rather than
+    # to argue). A BADMODE from an instance that died minutes ago is real history worth seeing; it
+    # is not this instance's health, so it is reported and not graded.
+    $badmodeAll = @(Select-String -LiteralPath $log.FullName -Pattern '(BADMODE|0xfffffffe)' `
+                                  -ErrorAction SilentlyContinue).Count
+    $badmodeOther = $badmodeAll - $badmode
+    # Liveness is the PROCESS: an idle guest legitimately logs nothing for stretches (2026-08-07),
+    # so $grew is reported and not graded. What this check adds is that THIS instance has written
+    # at least one line of its own - the thing a stale file can never supply.
+    $logOk = ($instLines -gt 0) -and ($badmode -eq 0)
+    # Diagnostic: a restart's REASON is what separates one benign restart from a respawn loop.
+    # The newest agent log that is NOT this instance's is the previous instance's record.
+    $other = @($allAgentLogs | Where-Object { $_.FullName -ne $log.FullName } |
+               Sort-Object LastWriteTime -Descending | Select-Object -First 1)
+    if ($other.Count -gt 0) {
+        $benignExit = [bool](Select-String -LiteralPath $other[0].FullName `
+                               -Pattern 'vchan disconnected|A6EXIT' -Quiet -ErrorAction SilentlyContinue)
     }
-    $countOk = ($logsThisBoot.Count -eq 1) -or ($logsThisBoot.Count -eq 2 -and $benignExit)
-    $logOk = $countOk -and $fresh -and ($badmode -eq 0)
 }
-# JUDGED EITHER WAY. This was gated on $boot, so a guest with no readable stamp got no verdict at
-# all; and with an unusable stamp it got a false negative. Both are now decided, and the evidence
-# names which anchor was used.
+# JUDGED EITHER WAY, and with no dependence on the boot stamp: a guest whose stamp is unreadable
+# or in the future is still decided, and the evidence names the anchor that decided it.
 if ($true) {
     Check 'agent_log_healthy' $logOk `
         @{ log_dirs_searched = $logDirs
-           logs_this_boot = $logsThisBoot.Count
-           newest = if ($log) { $log.Name } else { 'NONE' }
+           anchor = $logAnchor
+           agent_pids = $agentPids
+           instance_log = if ($log) { $log.Name } else { 'NONE' }
+           instance_log_lines = $instLines
+           instance_log_held_open = if ($inst) { $inst.HeldOpen } else { $null }
+           agent_logs_seen = $allAgentLogs.Count
+           instance_logs_matched = $logsThisBoot.Count
+           any_agent_log_held_open = $anyHeld
+           no_match_reason = if ($log) { $null }
+                             elseif ($agentPids.Count -eq 0) { 'no gui-agent process is running (see agent_process)' }
+                             elseif ($allAgentLogs.Count -eq 0) { 'no gui-agent log exists in any searched directory' }
+                             elseif (-not $anyHeld) { 'no agent log is held open by any process: the agent is not logging, or its handle policy changed - DIAGNOSE, do not retry' }
+                             else { 'agent logs exist and one is held open, but none carries a line prefixed with a running agent pid - the running instance has written nothing' }
            still_writing = $grew
            badmode_lines = $badmode
+           badmode_lines_prior_instances = $badmodeOther
            boot_stamp_usable = $bootUsable
            boot_skew_s = $bootSkewS
            prior_instance_exited_on_vchan_disconnect = $benignExit }
@@ -369,12 +436,16 @@ if ($true) {
 # agent start - so on a guest with an IDD, this boot's log carries the 'found IDD adapter'
 # line. Its ABSENCE is the rename's silent failure mode: an agent that matches no name
 # manages no topology, logs only at Debug level, and every other check here still passes.
-if (-not $NoIddExpected -and $boot) {
+if (-not $NoIddExpected) {
+    # NOT gated on $boot any more: this read failed for the whole 4.3.36 gate purely because the
+    # freshness anchor above had emptied $logsThisBoot, and a missing boot stamp used to skip it
+    # silently. Scoped to the RUNNING instance's pid for the same reason BADMODE is: the file spans
+    # a day, so an earlier instance's 'found IDD adapter' line would otherwise answer for this one.
     $soloLines = @()
-    if ($logsThisBoot) {
-        $soloLines = @($logsThisBoot | ForEach-Object {
-            Select-String -Path $_.FullName -Pattern "IDD solo: found IDD adapter" -ErrorAction SilentlyContinue } |
-            ForEach-Object { $_.Line })
+    if ($inst) {
+        $soloLines = @(Select-String -LiteralPath $inst.File.FullName `
+                         -Pattern ("-{0}:[0-9]+-[A-Z]\].*IDD solo: found IDD adapter" -f $inst.AgentPid) `
+                         -ErrorAction SilentlyContinue | ForEach-Object { $_.Line })
     }
     $soloName = ''
     if ($soloLines.Count -gt 0) {
