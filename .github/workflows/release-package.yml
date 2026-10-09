@@ -90,7 +90,7 @@ concurrency:
   # ref alone and cancel-in-progress is on. They are different artifacts and the gate needs BOTH at
   # the same commit, so they must not evict each other. A push event has no inputs, which leaves the
   # suffix empty and the group exactly as it was.
-  group: release-package-${{ github.ref }}-${{ inputs.fault_injection }}
+  group: release-package-${{ github.ref }}-${{ inputs.fault_injection == 'true' || inputs.fault_injection == true }}
   cancel-in-progress: true
 
 # REPRODUCIBLE BUILDS: /Brepro makes link.exe write a CONTENT HASH into the PE header's
@@ -124,8 +124,13 @@ jobs:
     secrets: inherit
     with:
       build_rev: ${{ github.run_number }}
-      # false on a push build and on any dispatch that leaves it alone
-      fault_injection: ${{ inputs.fault_injection == true }}
+      # BOTH SPELLINGS. `inputs.fault_injection == true` was always FALSE: a workflow_dispatch input
+      # arrives as a STRING, and GitHub's == coerces both sides to numbers, so "true" becomes NaN and
+      # never equals 1. Measured from the build's own log - the agent step printed
+      # QGA_FAULT_INJECTION=0 on a run dispatched with -f fault_injection=true - which is why the
+      # injector package came out with no injector in it and the two failproof suites would have
+      # refused again. A push build has no inputs at all and both tests are false there.
+      fault_injection: ${{ inputs.fault_injection == 'true' || inputs.fault_injection == true }}
 
   # --------------------------------------------------------------- the IddCx driver
   # Deliberately a slimmed copy of build.yml's idd-driver job: the release payload needs
