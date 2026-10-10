@@ -114,6 +114,37 @@ case "$placed" in
 esac
 
 
+# ---- a dom0 desktop switch must not fail an AppVM cell -------------------------------------------
+# MEASURED 2026-10-10 and CONFIRMED BY THE OWNER ("yes at 14.12 it is plausible"): boot 1 of WIN10-appvm
+# graded INVALID-INSTRUMENT on six empty dom0 captures while the guest showed one notepad window, and
+# boots 2 and 3 of the SAME cell returned "1 window(s) mapped" minutes later. The detection was right;
+# the ACCOUNTING wrote a FAIL line per boot, which marked the cell, shortened the coverage receipt and
+# made gate-scope refuse the cut. The condition must REPEAT across the cell's boots before it marks
+# anything - and if NO boot ever mapped a window it must still fail, because that is not a switch.
+ii_shape() {  # $1 = a copy of matrix.sh -> "ok" or the reason
+  local f="$1"
+  command grep -q 'GUARD:iirepeat' "$f" || { echo "no cell-scope instrument verdict"; return; }
+  command grep -q 'local ii_boots=0 mapped_any=0' "$f" || { echo "the cell does not count its boots"; return; }
+  command grep -q 'ii_boots=$((ii_boots+1))' "$f" || { echo "an empty-capture boot is not counted, it is graded on the spot"; return; }
+  command grep -q 'mapped_any=1; ok ' "$f" || { echo "a boot that DID map a window is not recorded, so nothing can exonerate the others"; return; }
+  # the per-boot path must not call no() for the invalid-instrument case any more
+  command grep -q 'no "$3-appvm boot $b: INVALID-INSTRUMENT' "$f" && { echo "the per-boot FAIL is still there: one empty capture still marks the cell"; return; }
+  command grep -q 'ii_boots" -gt 0 ] && \[ "$mapped_any" = 1' "$f" || { echo "no arm for 'another boot mapped one' - the switch is still graded"; return; }
+  command grep -q 'every boot with a guest-side window returned an empty dom0 capture' "$f" || { echo "no arm for 'no boot ever mapped one' - a dead capture would pass"; return; }
+  echo ok
+}
+v=$(ii_shape "$M")
+[ "$v" = ok ] && ok "desktop_switch_not_graded: an empty dom0 capture is graded at CELL scope, and only when no boot of the cell mapped a window" \
+               || bad "desktop_switch_not_graded: $v"
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+sed 's/# GUARD:iirepeat//' "$M" > "$T/noguard.sh"
+sed 's/mapped_any=1; ok /ok /' "$M" > "$T/nomapped.sh"
+sed 's/      ii_boots=$((ii_boots+1))/      no "$3-appvm boot $b: INVALID-INSTRUMENT - graded on the spot"/' "$M" > "$T/perboot.sh"
+v1=$(ii_shape "$T/noguard.sh"); v2=$(ii_shape "$T/nomapped.sh"); v3=$(ii_shape "$T/perboot.sh")
+[ "$v1" != ok ] && [ "$v2" != ok ] && [ "$v3" != ok ] \
+  && ok "desktop_switch_not_graded SEEN TO FAIL: without the verdict '$v1'; without the mapped record '$v2'; graded per boot '$v3'" \
+  || bad "desktop_switch_not_graded: a defect copy passed (noguard='$v1' nomapped='$v2' perboot='$v3') - the check proves nothing"
+
 echo
 echo "matrix-pool-floor-selftest: $pass passed, $fail failed"
 [ "$fail" = 0 ] || exit 1
