@@ -183,8 +183,13 @@ commits first. A line the owner has retired stays closed until the owner reopens
 - **The gui-agent-restart-survival line - RETIRED** (owner 2026-10-10: *"guest daemon restart NEVER was
   the cure, stop chasing this path at all"*). `DESIGN-gui-daemon-restart-survival.md` §2 and §3 are closed:
   no graceful-stop work, no in-process re-listen, no G0 A/B of the restart procedure, nothing pending upstream.
-  §1.1 stays as mechanism reference only. The live document for the defect is `findings/BUG-dom0-no-windows.md`,
-  and the defect reproduces on a plain cold boot - an agent restart is not on its path.
+  §1.1 stays as mechanism reference only. **"dom0 shows no windows for a live guest" was never a reported
+  symptom** - it was assembled from that document, one harness line the harness itself grades
+  `INVALID-INSTRUMENT`, and an assistant's own notes quoted back as measurements (2026-10-10; the file that
+  carried it is deleted). What WAS reported are dom0 TOASTS: the register entries are `SHUTDOWNDEATHTOAST`,
+  `SWEEPNOTREAD` and `NOTIFYCLOCK` in `findings/issues.md`. A toast is traced from its text to its WRITER
+  before anything is grepped - the death family is watchdog/agent -> Application log 4001-4004 ->
+  `guest/qwt-report-death.ps1`, which shares no log tag with the agent's own `QerrReport` route.
 - **The xenbus bucket-lock line - RETIRED** (reverted entirely f7c16ce). Stock xenbus 9.1.0.0 in a guest is the
   INTENDED state. Do not name xenbus in a finding.
 - **set-gui-mode's "stale GetLastError" and "exit status 46" - both CLOSED** (43019f5: measured, the success path
