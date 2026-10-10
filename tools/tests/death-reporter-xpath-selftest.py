@@ -10,8 +10,11 @@ together with the reporter's tables (guest/qwt-report-death.ps1) and with what p
 
 HONEST LIMIT. lxml is XPath 1.0; Windows' Event Log evaluator is a documented SUBSET of it (no contains(), no
 namespaces - the event XML is matched without its xmlns, which is why the samples carry none). Every form used here
-(Provider[@Name=...], EventID=..., or/and, Data='x' over positional Data, Data[@Name='x']='y', !=0) is inside that
-subset; the release gate on a guest is what proves the task fires (a forced gui-agent crash -> Application 1000 ->
+(Provider[@Name=...], EventID=..., or/and, Data='x' over positional Data, Data[@Name='x']='y', !=0,
+Data[@Name='x']!='y') is inside that subset - the operator list of "Consuming Events (Windows Event Log)", XPath 1.0
+limitations, is "OR, AND, =, !=, <=, <, >=, >, and parentheses"; and the live receipt is the four shutdown refusals
+of 2026-10-08/10 on win10-acc, each launched by a 201 that only the "!=0 and (TaskName=...)" Select could have
+matched. The release gate on a guest is what proves the task fires (a forced gui-agent crash -> Application 1000 ->
 the task runs -> the deaths log). Run with no arguments: the clean matrix, then every knob below re-run in a
 subprocess and required to FAIL (a guard never seen to fail is decoration). XPATH_DEFECT=<knob> runs one knob:
     noexefilter   the 1000/1001 selects lose their executable filter   -> notepad.exe's crash is subscribed to
@@ -19,6 +22,8 @@ subprocess and required to FAIL (a guard never seen to fail is decoration). XPAT
     noerrorexit   the SCM select loses 7023/7024                        -> QrexecAgent's error exit is NOT subscribed to
     selftrigger   the task list gains \\QwtDeathReporter                -> the reporter would trigger itself
     onelist       the executables are one list again (both halves = all) -> a Select over 16 terms, which schtasks rejects
+    anyours       the select of our source loses its 4001-4004 list     -> a 4013 teardown record launches the task
+    reapedresult  the 201 select loses ResultCode!='2147943691'         -> our own task reaped by a shutdown launches it
 """
 import os, re, subprocess, sys
 from pathlib import Path
@@ -27,7 +32,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 INSTALLER = ROOT / 'packaging' / 'setup' / 'Install-QwtImproved.ps1'
 REPORTER = ROOT / 'guest' / 'qwt-report-death.ps1'
 MAKESETUP = ROOT / 'packaging' / 'make-setup.ps1'
-KNOBS = ('noexefilter', 'anyresult', 'noerrorexit', 'selftrigger', 'onelist')
+KNOBS = ('noexefilter', 'anyresult', 'noerrorexit', 'selftrigger', 'onelist', 'anyours', 'reapedresult')
 # Task Scheduler rejects a Select whose OR-list is too long (measured 2026-10-04 on win11-acc: 22 executables register, 24 do not;
 # the single list of 28 failed the reporter's registration on every install). Each Select is held to MAX_TERMS, with margin.
 MAX_TERMS = 16
@@ -84,6 +89,10 @@ def build_selects(reg: str, defect: str) -> dict[str, list[str]]:
             xp = xp.replace("Data[@Name='ResultCode']!=0 and ", '')
         if defect == 'noerrorexit' and '7031' in xp:
             xp = xp.replace(' or EventID=7023 or EventID=7024', '')
+        if defect == 'anyours' and "Provider[@Name='Qubes Windows Tools']" in xp:
+            xp = xp.replace(' and (EventID=4001 or EventID=4002 or EventID=4003 or EventID=4004)', '')
+        if defect == 'reapedresult' and 'EventID=201' in xp:
+            xp = xp.replace("Data[@Name='ResultCode']!='2147943691' and ", '')
         selects[path].append(xp)
     if not all(selects.values()):
         raise SystemExit(f'FAIL  the region yields no Select for some channel: { {k: len(v) for k, v in selects.items()} }')
@@ -119,6 +128,9 @@ def matrix(selects) -> list[tuple[str, bool, bool]]:
         ('1026 managed crash (unfiltered: the script decides)', clr('contoso.exe'), True),
         ('4001 our source',                             ours(4001), True),
         ('4004 our source',                             ours(4004), True),
+        # 4011-4014 (deathevent.h, agent cd73a56): the same children ended by the system with their session - recorded, not a
+        # death. A select on the provider alone launched the reporter for them (and for anything else our source ever writes).
+        ('4013 our source (a session teardown record: not subscribed)', ours(4013), False),
         ('Application Error 1002 (a hang: not subscribed)', ev('Application Error', 1002, 'Application', ['gui-agent.exe']), False),
         ('7031 Qubes RPC agent',                        scm(7031, 'Qubes RPC agent'), True),
         ('7034 QubesDB daemon',                         scm(7034, 'QubesDB daemon'), True),
@@ -129,6 +141,11 @@ def matrix(selects) -> list[tuple[str, bool, bool]]:
         ('201 \\Qubes-WgcBroker result 3221226505',    task(201, '\\Qubes-WgcBroker', '3221226505'), True),
         ('201 \\QubesPvNic result 1',                   task(201, '\\QubesPvNic', '1'), True),
         ('201 \\Qubes-WgcBroker result 0 (a clean exit)', task(201, '\\Qubes-WgcBroker', '0'), False),
+        # 2147943691 = 0x8007050B: the result an instance of OUR OWN task leaves when the shutdown reaps it (qwt-report-death.ps1
+        # QwtShutdownResultCodes). Measured on win10-acc: all four 2026-10-08/10 shutdown refusals of \QwtDeathReporter (203,
+        # ERROR_SHUTDOWN_IN_PROGRESS) were launched by such a 201 of \QubesPvNic or \QubesPvNicRearm, 43-781 ms earlier.
+        ('201 \\QubesPvNic result 2147943691 (our task reaped by the shutdown: not subscribed)', task(201, '\\QubesPvNic', '2147943691'), False),
+        ('201 \\QubesPvNic result 2147943515 (any other non-zero result: subscribed)', task(201, '\\QubesPvNic', '2147943515'), True),
         ('201 \\Microsoft\\Windows\\Defrag\\ScheduledDefrag result 1 (not ours)', task(201, '\\Microsoft\\Windows\\Defrag\\ScheduledDefrag', '1'), False),
         ('203 \\QubesAutologonGuard',                   task(203, '\\QubesAutologonGuard', '2147942402'), True),
         ('203 \\QwtDeathReporter (never: no self-trigger)', task(203, '\\QwtDeathReporter', '2147942402'), False),

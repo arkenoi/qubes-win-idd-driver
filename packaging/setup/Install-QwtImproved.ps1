@@ -1291,11 +1291,24 @@ function Register-QwtEventSource {
 #                is one of OUR executables - "Data='x'" matches any insertion string, which is the only
 #                positional form the Event Log XPath subset guarantees for classic events; .NET Runtime
 #                1026 unfiltered (its one Data field is free text and that subset has no contains(); the
-#                script filters it); every event of our own source
+#                script filters it); ids 4001-4004 of our own source - the explicit set, not the provider
+#                alone: 4011-4014 (the same children ended by the system with their session, deathevent.h)
+#                are recorded there and are not deaths, and a provider-only Select launched this task for
+#                them, during the shutdown that wrote them, where Task Scheduler refuses the launch (203,
+#                ERROR_SHUTDOWN_IN_PROGRESS) - one Error record per shutdown (measured 2026-10-10, win10-acc)
 #   System       7031/7034/7023/7024 (Service Control Manager) for OUR four services, by DISPLAY name,
 #                which is what param1 carries (English only: Package.en-us.wxl is the MSI's one locale)
-#   TaskScheduler/Operational  201 with a non-zero ResultCode, and 203, for OUR tasks - never for the
-#                reporter itself, so a failing reporter cannot trigger itself
+#   TaskScheduler/Operational  201 with a non-zero ResultCode other than 2147943691, and 203, for OUR
+#                tasks - never for the reporter itself, so a failing reporter cannot trigger itself.
+#                2147943691 (0x8007050B) is what an instance of OUR OWN task leaves when the shutdown reaps
+#                it: each of the four 2026-10-08/10 shutdown refusals of this task followed such a 201 of
+#                \QubesPvNic or \QubesPvNicRearm by 43-781 ms. The reporter ignores that record on its own
+#                (QwtShutdownResultCodes), and the boot catch-up pass still reads every record, so the one
+#                thing this Select stops is the launch that Windows was going to refuse. An instance ended
+#                with that result OUTSIDE a shutdown is reported by the catch-up pass at the next boot
+#                rather than at once; 267014 (ended on request) never launched it either.
+#                The string form '2147943691', not a numeric literal: the same shape as the TaskName
+#                comparison, which the four refusals prove this evaluator matches.
 # Microsoft-Windows-TaskScheduler/Operational is DISABLED by default on client Windows (Task Scheduler's
 # "Enable All Tasks History"); it is enabled here, or 201/203 would never be written at all.
 function Register-QwtDeathReporter {
@@ -1353,13 +1366,13 @@ function Register-QwtDeathReporter {
             "<Select Path=`"Application`">*[System[Provider[@Name='Windows Error Reporting'] and EventID=1001] and EventData[$exeOrA]]</Select>",
             "<Select Path=`"Application`">*[System[Provider[@Name='Windows Error Reporting'] and EventID=1001] and EventData[$exeOrB]]</Select>",
             "<Select Path=`"Application`">*[System[Provider[@Name='.NET Runtime'] and EventID=1026]]</Select>",
-            "<Select Path=`"Application`">*[System[Provider[@Name='Qubes Windows Tools']]]</Select>",
+            "<Select Path=`"Application`">*[System[Provider[@Name='Qubes Windows Tools'] and (EventID=4001 or EventID=4002 or EventID=4003 or EventID=4004)]]</Select>",
             '</Query>',
             '<Query Id="1" Path="System">',
             "<Select Path=`"System`">*[System[Provider[@Name='Service Control Manager'] and (EventID=7031 or EventID=7034 or EventID=7023 or EventID=7024)] and EventData[$svcOr]]</Select>",
             '</Query>',
             "<Query Id=`"2`" Path=`"$tsPath`">",
-            "<Select Path=`"$tsPath`">*[System[Provider[@Name='Microsoft-Windows-TaskScheduler'] and EventID=201] and EventData[Data[@Name='ResultCode']!=0 and ($taskOr)]]</Select>",
+            "<Select Path=`"$tsPath`">*[System[Provider[@Name='Microsoft-Windows-TaskScheduler'] and EventID=201] and EventData[Data[@Name='ResultCode']!=0 and Data[@Name='ResultCode']!='2147943691' and ($taskOr)]]</Select>",
             "<Select Path=`"$tsPath`">*[System[Provider[@Name='Microsoft-Windows-TaskScheduler'] and EventID=203] and EventData[$taskOr]]</Select>",
             '</Query>',
             '</QueryList>'
