@@ -167,6 +167,10 @@ Check 'meaning: a task result 1 is the script''s own exit, never TerminateProces
 Check 'meaning: a crash code in a task result is said to be its program''s crash' ((Get-QwtDeathCodeMeaning ([uint32]0xC0000005L) 'task') -eq 'its program crashed with an access violation')
 Check 'meaning: an executable''s documented exit code comes first (notifhost 2)' ((Get-QwtDeathCodeMeaning ([uint32]2) 'process' 'notifhost.exe') -like 'notification access is denied*')
 Check 'meaning: exit code 1 of a process is the TerminateProcess/own-failure ambiguity, said as such' ((Get-QwtDeathCodeMeaning ([uint32]1) 'process') -like 'exit code 1 - the code TerminateProcess imposes*')
+# 0x40010004 is DBG_TERMINATE_PROCESS: what Windows imposes on every process of a session it tears down - the commonest exit code at
+# shutdown. Measured 2026-10-10 on win10-acc: four records of our source carried it (gui-agent.exe twice, notifhost.exe twice) and the
+# table had no row, so qwt-deaths.log and the dom0 notification read "Cause: exit code 0x40010004 - not a code this reporter knows".
+Check 'meaning: 0x40010004 is Windows'' own session teardown (DBG_TERMINATE_PROCESS), a code this reporter knows' ((Get-QwtDeathCodeMeaning ([uint32]0x40010004L) 'process') -like 'Windows'' own session teardown (DBG_TERMINATE_PROCESS)*')
 Check 'exception: 0xC... and 0xE... codes are exceptions, HRESULTs and small codes are not' ((Test-QwtDeathExceptionCode ([uint32]0xC0000005L)) -and (Test-QwtDeathExceptionCode ([uint32]0xE06D7363L)) -and -not (Test-QwtDeathExceptionCode ([uint32]0x80070002L)) -and -not (Test-QwtDeathExceptionCode ([uint32]1)))
 Check 'format: a large code renders as 0x%08X' ((Format-QwtDeathCode ([uint32]0xC0000005L) 'exception') -eq 'exception 0xC0000005')
 Check 'format: a small code renders in decimal' ((Format-QwtDeathCode ([uint32]1460) 'Windows error') -eq 'Windows error 1460')
@@ -438,6 +442,41 @@ CheckStatus 'wd exit: a watchdog 7034 with no agent death nearby is its own deat
 $st = Invoke-QwtDeathReport (New-Crash 'gui-watchdog.exe' 3300 0xC0000005L $T0.AddSeconds(3500) 20)
 $st2 = Invoke-QwtDeathReport (New-Svc 7031 'Qubes GUI agent watchdog' $T0.AddSeconds(3501) @{ param2 = '2'; param3 = '15000'; param4 = 'Restart the service' })
 Check 'wd exit: a watchdog CRASH (1000) and its 7031 are one death of the watchdog, not of the agent' ($st -eq 'send' -and $st2 -eq 'enriched' -and $script:launched.Count -eq 6)
+
+# 6f. THE SESSION TEARDOWN CODE IN A RECORD OF OUR SOURCE (2026-10-10, win10-acc): qwt-deaths.log DEATH #2 at 07:39:33 for notifhost.exe
+#     pid 2248 (4003, exit 0x40010004, ran 27734 ms) said "not a code this reporter knows", and dom0 was told a component died of a major
+#     error. The agent writes such an end under 4011-4014 since cd73a56, but a record a PRE-cd73a56 binary wrote is still replayed by
+#     -CatchUp on an upgraded guest, so the rendering must name the code. Rendered directly: whether the record is escalated at all is a
+#     separate decision with its own rows, and these must hold either way.
+Reset-World
+$ev = ConvertFrom-QwtDeathEvent (New-Super 4003 'notifhost.exe' '2248' '0x40010004' '27734' $T0)
+$n = Format-QwtDeathNotice -Death $ev -Number 2
+Check 'teardown code: the cause names Windows'' own session teardown (DBG_TERMINATE_PROCESS) with the code, never "not a code this reporter knows"' `
+      ($n.Cause -like "Cause: Windows' own session teardown (DBG_TERMINATE_PROCESS)*- exit code 0x40010004." -and $n.Cause -notlike '*not a code this reporter knows*') $n.Cause
+$full = Format-QwtNotifyText -Header $n.Header -Next $n.Next -Cause $n.Cause -Tech $n.Tech
+Check 'teardown code: the full text stays inside the route''s 600 bytes' ([Text.Encoding]::UTF8.GetByteCount($full) -le 600) "$([Text.Encoding]::UTF8.GetByteCount($full))"
+# AND THE OTHER TWO PARTS ARE TRUE AS WELL (Jev 2026-10-10 chose: keep the escalation, fix the header and the advice). The family's
+# header said "exited unexpectedly" and line 1 promised "Task Scheduler restarts it on failure" - a restart into a session that is
+# going away - for a process Windows ended with its session. The record stays a counted, logged, notified death; its text changes.
+$st = Invoke-QwtDeathReport (New-Super 4003 'notifhost.exe' '2248' '0x40010004' '27734' $T0)
+Check 'teardown text: still escalated - sent as death 1, logged at ERROR, in the ledger' ($st -eq 'send' -and $script:launched.Count -eq 1 -and (Get-DeathLog) -match '\[ERROR\] DEATH #1 NEW Application/4003#' -and (@(Get-Ledger | Where-Object { $_ -like 'D|*' })).Count -eq 1) "status=$st launched=$($script:launched.Count)"
+$lines = @()
+if ($script:launched.Count) { $lines = @(([string]$script:launched[0]) -split "`r`n") }
+Check 'teardown text: the header says Windows ended it, not that it exited unexpectedly or crashed' ($lines.Count -ge 4 -and $lines[0] -eq 'The notification bridge ended by Windows') "$($lines | Select-Object -First 1)"
+Check 'teardown text: line 1 names the session end and the next sign-in, and promises no Task Scheduler restart' ($lines.Count -ge 4 -and $lines[1] -eq 'Windows ended it when its sign-in session ended; the GUI agent starts it again at the next sign-in.' -and $lines[1] -notlike '*Task Scheduler*' -and $lines[1] -notlike '*restarts it on failure*') "$($lines | Select-Object -Index 1)"
+Check 'teardown text: the cause and the technical line carry the code, and it is death 1 this boot' ($lines.Count -ge 4 -and $lines[2] -like 'Cause: Windows'' own session teardown (DBG_TERMINATE_PROCESS)*- exit code 0x40010004.' -and $lines[3] -like '*notifhost.exe pid 2248; exit code 0x40010004; ran 0:00:27; death 1 this boot.*')
+Check 'teardown text: the header obeys the header rules (no code, no file name, no count, no colon, a sentence)' ($lines.Count -ge 4 -and $lines[0] -notmatch '[0-9]' -and $lines[0] -notmatch '(?i)\.(exe|dll|log)\b' -and $lines[0] -notmatch ':' -and $lines[0] -cmatch '^[A-Z]' -and -not $lines[0].EndsWith('.'))
+Check 'teardown text: the whole notification is within the route''s 600 bytes' ($script:launched.Count -eq 1 -and [Text.Encoding]::UTF8.GetByteCount([string]$script:launched[0]) -le 600)
+# the GUI agent's own record (an older watchdog's 4001): line 1 names the watchdog service, which starts a new agent, not the agent
+$st = Invoke-QwtDeathReport (New-Super 4001 'gui-agent.exe' '4028' '0x40010004' '175546' $T0.AddSeconds(5))
+Check 'teardown text: the GUI agent''s own record - its header, and line 1 says the watchdog starts a new agent at the next sign-in' ($st -eq 'send' -and $script:launched.Count -eq 2 -and ([string]$script:launched[1]) -like "The GUI agent ended by Windows`r`nWindows ended it when its sign-in session ended; the watchdog service starts a new GUI agent at the next sign-in.`r`nCause: Windows' own session teardown*") "$(if ($script:launched.Count -ge 2) { ([string]$script:launched[1]) -replace "`r`n", ' | ' })"
+# the longest human name keeps the header within the 60 characters the route's suite holds every header to
+$ev2 = ConvertFrom-QwtDeathEvent (New-Super 4002 'wgcbroker.exe' '4100' '0x40010004' '125000' $T0.AddSeconds(10))
+$n2 = Format-QwtDeathNotice -Death $ev2 -Number 3
+Check 'teardown text: the longest name''s header stays within 60 characters' ($n2.Header.Length -le 60 -and $n2.Header -eq 'The notification and menu capture helper ended by Windows') "$($n2.Header.Length): $($n2.Header)"
+# and the family's wording is untouched for every other code: the same child, exit 2, still "exited unexpectedly" with its restart line
+$st = Invoke-QwtDeathReport (New-Super 4003 'notifhost.exe' '2249' '0x00000002' '30000' $T0.AddSeconds(20))
+Check 'teardown text: any other exit code keeps the family''s header and its Task Scheduler restart line' ($st -eq 'send' -and $script:launched.Count -eq 3 -and ([string]$script:launched[2]) -like "The notification bridge exited unexpectedly`r`nTask Scheduler restarts it on failure*")
 
 # 7. no boot token: an ERROR, nothing counted, nothing sent, no exception to the caller
 Reset-World

@@ -5,10 +5,12 @@
 # HOW IT IS RUN. The installer (Register-QwtDeathReporter) registers the SYSTEM task QwtDeathReporter with an
 # EventTrigger whose XPath subscription covers, filtered to OUR components:
 #   Application  1000 / 1001 (Application Error / Windows Error Reporting: a crash), .NET Runtime 1026
-#                (an unhandled managed exception), and every event of our source "Qubes Windows Tools"
-#                (ids 4001-4004: a supervisor's child exited unasked - the one death Windows cannot see)
+#                (an unhandled managed exception), and ids 4001-4004 of our source "Qubes Windows Tools"
+#                (a supervisor's child exited unasked - the one death Windows cannot see; 4011-4014, the same
+#                children ended by the system with their session, are recorded there and not subscribed)
 #   System       7031 / 7034 / 7023 / 7024 (Service Control Manager: a service of ours ended)
-#   TaskScheduler/Operational  201 with a non-zero result, and 203 (a task of ours failed)
+#   TaskScheduler/Operational  201 with a non-zero result other than 0x8007050B (an instance of ours the
+#                shutdown reaped - QwtShutdownResultCodes below), and 203 (a task of ours failed)
 # The task hands this script ONLY the record's channel and EventRecordID (ValueQueries); the event is read
 # back here with Get-WinEvent, so no event text ever travels through a command line.
 #
@@ -31,8 +33,8 @@
 # cannot hide a second death; the route's cap of 8 per boot still bounds a crash storm. Past the cap - and
 # whatever the route decides - every death is logged at ERROR here first, in qwt-deaths.log. The text has
 # the ONE shape every sender uses (qwt-notify-error.ps1, the agent's notifyerr.h; rz39):
-#   header   "The <human name> crashed / exited unexpectedly / stopped answering / service stopped with an
-#            error / task failed ..." - human names only, no codes, no file names, no counts
+#   header   "The <human name> crashed / exited unexpectedly / ended by Windows / stopped answering / service
+#            stopped with an error / task failed ..." - human names only, no codes, no file names, no counts
 #   line 1   what it means and what happens next: who relaunches it (the watchdog, the agent, Windows'
 #            recovery as the registry has it armed), what is withheld meanwhile, what the user can do
 #   line 2   "Cause: <meaning> - <code>." The meaning comes from the table of the code's SOURCE: the process
@@ -157,6 +159,22 @@ $script:QwtDeathNextByExe = @{
 }
 # the ETW signal proxy's rights failures (its exit codes 5 and 9): the agent parks it; nothing relaunches it either way
 $script:QwtDeathEtwParked = 'The GUI agent parks it for this boot (a rights problem a relaunch cannot fix); notifications still reach dom0 through the bridge''s other two sources.'
+# A CHILD WINDOWS ENDED WITH ITS SESSION (exit 0x40010004, DBG_TERMINATE_PROCESS; the process table names the code): still a death
+# record, still counted and escalated (Jev 2026-10-10: keep the escalation, tell the truth), but the family's header and line 1 are
+# false for it - "exited unexpectedly", and a Task Scheduler restart into a session that is going away. So it has its own: the header
+# follows the agent's own record of this end (deathevent.h 4011-4014, "was ended by Windows when the session was torn down"), cut to
+# the 60-character budget the route's suite holds every header to ('ended by Windows' is 16 characters; the longest human name leaves
+# 19), and line 1 promises only what the next sign-in does - the watchdog service launches the agent at logon, the agent launches its
+# helpers - never a restart into the ending session. notifytexts.h has no row for this event: its rows are the agent's own faults.
+$script:QwtDeathSessionEndCode = [uint32]0x40010004L
+$script:QwtDeathSessionEndWhat = 'ended by Windows'
+$script:QwtDeathNextSessionEnd = @{
+    'gui-agent.exe' = 'Windows ended it when its sign-in session ended; the watchdog service starts a new GUI agent at the next sign-in.'
+    'wgcbroker.exe' = 'Windows ended it when its sign-in session ended; the GUI agent starts it again at the next sign-in.'
+    'notifhost.exe' = 'Windows ended it when its sign-in session ended; the GUI agent starts it again at the next sign-in.'
+    'etwproxy.exe'  = 'Windows ended it when its sign-in session ended; the GUI agent starts it again at the next sign-in.'
+}
+$script:QwtDeathNextSessionEndOther = 'Windows ended it when its sign-in session ended.'
 # THE WATCHDOG SERVICE'S OWN EXIT CODES (agent/include/qga-exitcodes.h QGA_SVC_EXIT_*): the service ends itself for the SCM's
 # recovery. 0x20514710 = the agent it started died (its 7024 is a record of the agent's 4001 death); 0x20514711 = the agent could
 # not be launched at all (nothing ran: a death of the watchdog's own, the launch failure).
@@ -243,6 +261,10 @@ $script:QwtDeathCodeTables = @{
         [uint32]0xC0000135L = 'a DLL was not found'
         [uint32]0 = 'a clean exit nobody asked for'
         [uint32]1 = 'exit code 1 - the code TerminateProcess imposes (an external force-kill), or the program''s own failure exit'
+        # 0x40010004 DBG_TERMINATE_PROCESS: what Windows imposes on every process of a session it tears down (sign-out, shutdown) -
+        # the commonest exit code at shutdown, and one no program returns for itself. The agent records such an end under 4011-4014
+        # since cd73a56; a 4001-4004 that an older binary wrote, which -CatchUp replays on an upgraded guest, must still name it.
+        [uint32]0x40010004L = 'Windows'' own session teardown (DBG_TERMINATE_PROCESS): ended with its session, not by a fault of its own'
     }
     # a Windows error the Service Control Manager reports (event 7023: the service ended with this error)
     win32 = @{
@@ -891,8 +913,13 @@ function Format-QwtDeathDelay {
 }
 # line 1 for a crash or an unasked exit: what happens next, by executable (and the ETW proxy's parked codes)
 function Get-QwtDeathNext {
-    param([Parameter(Mandatory)]$Death)
+    param([Parameter(Mandatory)]$Death, [switch]$SessionEnd)
     $exe = $Death.exe
+    if ($SessionEnd) {
+        # Windows ended it with its session: what the next sign-in does, and nothing about a restart into the ending session
+        if ($script:QwtDeathNextSessionEnd.ContainsKey($exe)) { return "$($script:QwtDeathNextSessionEnd[$exe])" }
+        return $script:QwtDeathNextSessionEndOther
+    }
     if ($exe -eq 'etwproxy.exe' -and $null -ne $Death.code -and (([uint32]$Death.code) -eq 5 -or ([uint32]$Death.code) -eq 9)) { return $script:QwtDeathEtwParked }
     if ($script:QwtDeathNextByExe.ContainsKey($exe)) { return "$($script:QwtDeathNextByExe[$exe])" }
     if ($script:QwtDeathServices.Values -contains $exe) {
@@ -940,6 +967,8 @@ function Format-QwtDeathNotice {
         }
         'supervisor' {
             $hint = "$($script:QwtDeathLogHints[$Death.exe])"
+            # Windows ended it with its session: its own header and line 1 (QwtDeathSessionEnd* above), the cause from the table
+            $sysEnd = ($null -ne $Death.code -and [uint32]$Death.code -eq $script:QwtDeathSessionEndCode)   # GUARD:sysendtext
             if ($Death.hung) {
                 $what = 'stopped answering'
                 $codeText = 'hung (no exit code)'
@@ -956,6 +985,10 @@ function Format-QwtDeathNotice {
                 $what = 'is already running'
                 $codeText = "exit code $($Death.code)"
                 $cause = "Cause: $($script:QwtDeathExeBenignResults[$Death.exe]["$($Death.code)"])."
+            } elseif ($sysEnd) {
+                $what = $script:QwtDeathSessionEndWhat
+                $codeText = Format-QwtDeathCode $Death.code 'exit code'
+                $cause = Format-QwtDeathCause $Death.code 'process' $Death.exe $codeText "the program's log"
             } elseif (Test-QwtDeathExceptionCode $Death.code) {
                 $what = 'crashed'
                 $codeText = Format-QwtDeathCode $Death.code 'exception'
@@ -965,7 +998,7 @@ function Format-QwtDeathNotice {
                 $codeText = Format-QwtDeathCode $Death.code 'exit code'
                 $cause = Format-QwtDeathCause $Death.code 'process' $Death.exe $codeText "the program's log"
             }
-            $next = Get-QwtDeathNext $Death
+            $next = Get-QwtDeathNext $Death -SessionEnd:$sysEnd
             if (-not $hint) { $hint = "the program's log in $logDir" }
             $evidence = "$ourLog; $($hint -f $logDir); Application log, Qubes Windows Tools event $($Death.eventId)"
         }
