@@ -15,10 +15,21 @@
 #       REQUESTEDERROR   the agent logs an expected exit as a failure (the stale "WatchForEvents failed" ERROR line)
 #       HELPERSYSKILLDEATH  a helper the SYSTEM killed (0x40010004) is written up as a death - the measured 2026-10-10
 #                           defect: two 4003 records for notifhost.exe on ordinary shutdowns, each a dom0 "major error" toast
+#       HELPERSTOPTEARDOWN  a helper's stop wait expiring during the session's TEARDOWN is graded an ERROR miss - the
+#                           measured 2026-10-10 defect: "the bridge did not leave within 3 s of the stop file" at a
+#                           shutdown whose end the agent had logged 0.5 s before writing the file
+#       PRESHELLLOCK        a LOCK reading is asserted with no shell seen or found - the measured 2026-10-10 defect:
+#                           "the session is LOCKED after 0 s" on an agent's first secure frame, dom0 notified, on a
+#                           guest the owner saw was never locked
+#       SHELLPROCSILENT     an UNREADABLE process list is read as "no shell" on the LOCK-without-window path, so a
+#                           real lock met by a fresh agent would be PRE_SHELL and unsaid (the review's latch-never-set)
 #   UNCOMPILED SHAPE CHECKS, each also run against a copy with the guarded line removed and required to FAIL then:
 #       watchdog.c and lifecycle.c parse with gcc -fsyntax-only against the stubs; the channel is created before the
 #       agent is resumed; WinMain's first act is LifecycleStart; the exit path disarms helpers before any helper is
-#       told to leave; every exitLoop site names its reason; an expected exit of the window-event thread is INFO.
+#       told to leave; every exitLoop site names its reason; an expected exit of the window-event thread is INFO;
+#       both helper shutdowns grade their wait through QgaHelperStopOutcome and carry the facts; the lock report is
+#       QgaLockVerdict's LOCKED arm only, the shell-seen latch is set only through ShellWindowNow, and the 30 s
+#       classifier has its fourth arm.
 #   CI compiles the real thing; this proves the C is well-formed and the contract is pinned, nothing about linking.
 #
 #   AGENT_DIR=<path>           the agent checkout (default: the agent submodule); WINDOWS_UTILS_INC=<path> the real headers
@@ -50,7 +61,7 @@ if build clean ""; then
 else say "FAIL  clean build: $(head -3 "$OUT/clean.build.err")"; bad=1; fi
 
 # ---- every defect knob must make the suite FAIL --------------------------------------------------------
-for d in TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH; do
+for d in TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT; do
     if build "defect-$d" "-DQGA_LIFECYCLE_DEFECT_$d"; then
         "$OUT/defect-$d" >"$OUT/defect-$d.out" 2>&1; rc=$?
         f=$(grep -c '^FAIL' "$OUT/defect-$d.out")
@@ -157,6 +168,50 @@ shape "main.c: WinMain logs an expected exit at INFO with its reason and a failu
 # the etwproxy: one launch, no backoff relaunch, disarmed exits are expected
 etw_no_relaunch() { ! grep -q 'EtwProxyBackoffLocked\|EtwProxyRelaunchCb\|CreateTimerQueueTimer' "$1" && grep -q 'if (g_State != EPS_IDLE || g_Shutdown || g_Disarmed)' "$1" && grep -q 'while the session is ending - expected, not a death' "$1"; }
 shape "etwproxy.c: no backoff relaunch timer; no launch while disarmed; an exit while the session ends is expected" etw_no_relaunch "$AGENT/gui-agent/etwproxy.c" 'if (g_State != EPS_IDLE || g_Shutdown || g_Disarmed)'
+
+# A TEARDOWN IS NOT A STOP-FILE MISS (2026-10-10). Each helper shutdown grades its bounded wait through
+# QgaHelperStopOutcome with LifecycleSessionEnding(); the teardown arm is INFO, the miss stays ERROR, and both lines
+# carry the wait result, the elapsed ms, the helper's pid and the session-ending flag. Pinned per function so a
+# site that quietly goes back to "!= WAIT_OBJECT_0 -> LogError" fails here.
+main_stop_outcome() {
+    awk '/^static void BrokerShutdown/{f=1} f&&/const BOOL ending = LifecycleSessionEnding\(\);/{s=NR} f&&/switch \(QgaHelperStopOutcome\(ending, wait\)\)/{a=NR} f&&/case QGA_HELPER_STOP_TEARDOWN:/{b=NR} f&&/LogInfo\("WGCBROKER the broker pid %lu did not leave on the shutdown flag - Windows ends it with the/{c=NR} f&&/LogError\("WGCBROKER the broker pid %lu did not leave within 2 s of the shutdown flag/{d=NR} f&&/^}/{exit} END{exit !(s && a && b && c && d && s<a && a<b && b<c && c<d)}' "$1" &&
+    awk '/^static void NotifBridgeShutdown/{f=1} f&&/const BOOL ending = LifecycleSessionEnding\(\);/{s=NR} f&&/switch \(QgaHelperStopOutcome\(ending, wait\)\)/{a=NR} f&&/case QGA_HELPER_STOP_TEARDOWN:/{b=NR} f&&/LogInfo\("NOTIFBRIDGE the bridge pid %lu did not leave on the stop file - Windows ends it with the/{c=NR} f&&/LogError\("NOTIFBRIDGE the bridge pid %lu did not leave within 3 s of the stop file/{d=NR} f&&/^}/{exit} END{exit !(s && a && b && c && d && s<a && a<b && b<c && c<d)}' "$1" &&
+    [ "$(grep -c 'wait=0x%lx elapsed=%I64u ms session-ending=' "$1")" -eq 4 ]; }
+shape "main.c: BrokerShutdown and NotifBridgeShutdown grade their bounded wait through QgaHelperStopOutcome - a teardown expiry INFO, a miss ERROR, both carrying wait/elapsed/pid/session-ending" main_stop_outcome "$MAIN" 'switch (QgaHelperStopOutcome(ending, wait))'
+
+# A LOCK IS READ, NOT ASSUMED (2026-10-10). The report is QgaLockVerdict's LOCKED arm and nothing else returns TRUE
+# to the reporting site; the verdict is fed ShellSeenSinceStart(), the shell-PROCESS fact (read only on the
+# LOCK-without-window path, from the console session) and LifecycleSessionEnding() beside the WTS reading; the refused
+# PRE_SHELL arm is SAID (the fourth arm); the LOCKED line carries the facts it rests on, including which fact found
+# the shell (shell-by=window|process).
+main_lock_verdict() {
+    awk '/^static BOOL SecureDesktopLockedNow/{f=1} f&&/const BOOL shellSeen = ShellSeenSinceStart\(\);/{s=NR} f&&/const BOOL ending = LifecycleSessionEnding\(\);/{e=NR} f&&/if \(!shellSeen && !ending && r->Level == 1 && r->SessionFlags == WTS_SESSIONSTATE_LOCK\)/{l=NR} f&&/r->ShellProcess = ShellProcessInConsoleSession\(&r->ShellProcessError\);/{p=NR} f&&/QgaLockVerdict\(shellSeen, r->ShellProcess, ending, r->Level, r->SessionFlags\)/{a=NR} f&&/if \(v == QGA_LOCK_LOCKED\)/{b=NR} f&&/return TRUE;/{c=NR} f&&/case QGA_LOCK_PRE_SHELL:/{d=NR} f&&/LogInfo\("QGADESKPRESHELL /{g=NR} f&&/^}/{exit} END{exit !(s && e && l && p && a && b && c && d && g && s<l && e<l && l<p && p<a && a<b && b<c && c<d && d<g)}' "$1" &&
+    awk '/^static QGA_SHELL_PROCESS ShellProcessInConsoleSession/{f=1} f&&/CreateToolhelp32Snapshot\(TH32CS_SNAPPROCESS, 0\)/{a=NR} f&&/ProcessIdToSessionId\(pe.th32ProcessID, &psid\) && psid == csid/{b=NR} f&&/return QGA_SHELLPROC_UNREAD;/{u=NR} f&&/^}/{exit} END{exit !(a && b && u && a<b)}' "$1" &&
+    grep -q 'else if (SecureDesktopLockedNow(now, s_LockReported, &s_LockCheckNext, &s_LockArmsSaid,' "$1" &&
+    grep -q '&s_ShellProcAbsent, &lockRead))' "$1" && grep -q 's_ShellProcAbsent = FALSE;   // a new episode may have reached a shell since' "$1" &&
+    awk '/^static BOOL SecureDesktopLockedNow/{f=1} f&&/if \(\*shellAbsent\)/{a=NR} f&&/\*shellAbsent = TRUE;/{b=NR} f&&/^}/{exit} END{exit !(a && b && a<b)}' "$1" &&
+    [ "$(grep -c 'wts-flags=%lu level=%lu input-desktop=%s LogonUI.exe=%d' "$1")" -eq 2 ] &&
+    grep -q 'LogWarning("QGADESKSTUCK the session is LOCKED - dom0 is shown nothing; shell-by=%s secure-for=%I64u s "' "$1" &&
+    grep -q 'lockRead.ShellSeen ? L"window" : L"process"' "$1" &&
+    grep -q 'shell-seen=%d shell-process=%s shell-process-err=%lu' "$1" &&
+    grep -q 'C_ASSERT(QGA_WTS_SESSIONSTATE_LOCK == WTS_SESSIONSTATE_LOCK);' "$1"; }
+shape "main.c: the lock report is QgaLockVerdict's LOCKED arm only, fed shell-seen + the shell-process fact (read only on the LOCK-without-window path) + session-ending + the WTS reading; PRE_SHELL is said; the LOCKED line says shell-by=window|process" main_lock_verdict "$MAIN" 'if (v == QGA_LOCK_LOCKED)'
+
+# THE SHELL-SEEN LATCH IS SET ONLY BY CONSULTS THE AGENT ALREADY MAKES: the one GetShellWindow() call in code is the
+# one inside ShellWindowNow (comment-only lines are excluded from the count), and every phase gate asks through it.
+main_shell_latch() {
+    awk '/^static HWND ShellWindowNow\(void\)/{f=1} f&&/const HWND shell = GetShellWindow\(\);/{a=NR} f&&/InterlockedExchange\(&g_ShellSeen, 1\)/{b=NR} f&&/^}/{exit} END{exit !(a && b && a<b)}' "$1" &&
+    [ "$(grep -v '^[[:space:]]*//' "$1" | grep -c 'GetShellWindow()')" -eq 1 ] &&
+    grep -q 'if (!ShellWindowNow() && !g_WgcLaunched)' "$1" && grep -q 'sid != 0xFFFFFFFF && ShellWindowNow())' "$1" &&
+    grep -q 'if (!ShellWindowNow()) return FALSE;' "$1" && [ "$(grep -c '|| !ShellWindowNow()) return;' "$1")" -eq 2 ] &&
+    grep -q 'data->Handle == ShellWindowNow())' "$1" && grep -q '!ShellWindowNow() || g_OnSecureDesktop ||' "$1"; }
+shape "main.c: the shell-seen latch is set only through ShellWindowNow (the one GetShellWindow() call in code), which every phase gate asks" main_shell_latch "$MAIN" 'const HWND shell = GetShellWindow();'
+
+# THE FOURTH ARM of the 30 s classifier (docs/ADR-uac.md 5): LogonUI up before this agent saw a shell is named as that,
+# never as a lock, and the WARNING carries shell-seen beside console-user.
+main_preshell_arm() { grep -q 'else if (logonui && !shellSeen)' "$1" && grep -q 'console-user=%d shell-seen=%d' "$1" &&
+    awk '/else if \(logonui && !shellSeen\)/{a=NR} /else if \(logonui\)$/{b=NR} END{exit !(a && b && a<b)}' "$1"; }
+shape "main.c: the 30 s classifier has the fourth arm (LogonUI up before this agent saw a shell) ahead of the two-state LogonUI arm, and carries shell-seen" main_preshell_arm "$MAIN" 'else if (logonui && !shellSeen)'
 
 say "--- outputs in $OUT"
 exit $bad

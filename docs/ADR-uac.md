@@ -54,7 +54,7 @@ flowchart TD
 | 2 | Where the prompt is drawn is not configurable | ACCEPTED (one knob removed the day it was written) |
 | 3 | `service.uac-disable` acts only on an explicit `1`, is reversible, and belongs on the template | ACCEPTED |
 | 4 | The secure desktop is frozen out on the frame path, not denied in the accept filter | ACCEPTED (v1 CORRECTED) |
-| 5 | A secure desktop is classified before it is advised about; a UAC prompt there is OUR defect | ACCEPTED |
+| 5 | A secure desktop is classified before it is advised about; a UAC prompt there is OUR defect; a lock is READ and never asserted before this agent has seen the shell | ACCEPTED (v2, fourth arm 2026-10-10) |
 | 6 | The interim stand-in window stays hidden | ACCEPTED |
 | 7 | A prompt Windows did not raise is found by its process and announced; the taskbar is not the remedy | PROPOSED |
 | 8 | The agent never answers an elevation prompt | ACCEPTED |
@@ -203,24 +203,84 @@ and every 120 s after that, and a dom0 notification carries it (`desktop-stuck`)
 ## 5. A secure desktop is classified before it is advised about, and a UAC prompt there is OUR defect
 
 **Status:** ACCEPTED (owner, 2026-10-08: "if it sits on the uac prompt we need to know what path brought us
-there and how to handle it properly"). Agent 00a3e24.
+there and how to handle it properly"). Agent 00a3e24. **v2, 2026-10-10:** a fourth arm, and the immediate lock
+report gated on the shell having been seen (owner: "it was NEVER a locked guest. it was secure-desktop detected
+on display reattach before main desktop owns it"; the rule: "if there IS locked guest we need to report it,
+ONCE, but NEVER assume there is as based on inaccurate measurements"). Register entry `DESKLOCKFALSE`.
 
 **Context.** The desktop NAME is `Winlogon` for the sign-in screen, the lock screen and a UAC consent prompt
 alike, so one message covered three states and gave advice ("arm autologon") that is right for only one.
+There is a fourth state the three arms could not name: the secure desktop being CURRENT before the main desktop
+owns the session at all - a display reattach, the sign-in screen before logon, or a lock that predates this
+agent instance. On 2026-10-10 two agent instances (4.3.36.915, `gui-agent-20261010.log:569-570` and `:827-828`)
+each reported "the session is LOCKED after 0 s" about 2 s after their own start, on the first secure frame they
+ever saw, with no Default → secure transition observed, and dom0 was notified by each.
 
 **Decision.** `QGADESKSTUCK` reports the PATH with the evidence it used, and reads back the
 `PromptOnSecureDesktop` actually in force:
 - `consent.exe` present → a UAC prompt is on the secure desktop. §1 writes the value that is supposed to
   prevent exactly this, so being here means it was not honoured: a template policy, or admin-approval-mode.
   That is OUR defect, it gets its own `QGAUACSECURE` ERROR, and the autologon advice is suppressed for it.
+- `LogonUI.exe` present **and this agent instance has not seen a shell window since it started** → the fourth
+  arm: the secure desktop is current before the main desktop owns the session. Named as exactly that in the
+  PATH, LOGGED with its facts, and never asserted as a lock. (2026-10-10.)
 - `LogonUI.exe` present → the sign-in or lock screen, which the existing advice is for.
 - neither → `unclassified`, stated as such rather than guessed.
+
+**The immediate lock report, and what it may rest on (2026-10-09, v2 2026-10-10).** A locked session is reported
+at once, not at the 30 s warn point (owner, 2026-10-09: "if it is locked it should be detected fast"), and once
+per boot (the once is `notifyerr.c`'s persisted marker, unchanged). The fact is READ - `WTSSessionInfoEx` →
+`WTSINFOEX_LEVEL1.SessionFlags` - never inferred from "LogonUI up with a console user" (that pair also describes
+a shutdown, a credential prompt after a session ended, and the reattach case). The verdict is the pure
+`QgaLockVerdict` in `agent/include/qga-lifecycle.h`, held offline by `watchdog/lifecycle_test.c` with the knob
+`QGA_LIFECYCLE_DEFECT_PRESHELLLOCK` restoring the measured defect, and it has five arms: `NO_FACT` (the query
+failed, a level the union does not document, a flags value that is neither LOCK nor UNLOCK - `WTS_SESSIONSTATE_LOCK`
+is 0, so a zeroed buffer reads as a lock unless the level is checked - or, on the path below, an unreadable
+process list), `TEARDOWN` (the session is ending), `UNLOCKED`, `PRE_SHELL` (LOCK read, and the session has not
+reached a shell: no window seen by this instance and no shell process) and `LOCKED` (LOCK read, and a shell
+either SEEN or FOUND). Only `LOCKED` reports.
+The shell-seen latch is set by the `GetShellWindow()` consults the agent already makes at its phase gates
+(routed through `ShellWindowNow()`), not by a new poll; `GetShellWindow()` is per desktop, so it is NULL on the
+Winlogon desktop and on Default until Explorer registers, which is what "the main desktop owns the session"
+means in code. Jev on the discriminator (2026-10-10): `shell-seen-since-start` 0.73 at confidence 0.68 - a
+finding, not a certainty, and the reason every line now carries its measurement.
+
+**The absence of the window is not the absence of a session (review, 2026-10-10, `latch-never-set` 0.75).**
+Because `GetShellWindow()` is per desktop and the agent sits on the Winlogon desktop throughout a secure episode,
+a fresh agent whose first frame is secure never latches - and on the window alone a guest that really IS locked
+at that moment would be graded `PRE_SHELL` and degrade to the 30 s path's ten-minute backstop: the "report it,
+ONCE" half of the owner's rule traded for the "never assume" half, which he stated in one sentence. So when the
+reading says LOCK and no window was seen, the verdict turns on one desktop-independent fact: whether a shell
+process (`explorer.exe`) runs in the console session, read from the same Toolhelp pass that finds
+`LogonUI.exe`/`consent.exe` and matched to the console session by `ProcessIdToSessionId`. Present → a real lock
+met by a fresh agent, reported at once with `shell-by=process` on the line; absent → `PRE_SHELL`; unreadable →
+`NO_FACT` at WARNING with the error, never silently "absent" (knob `QGA_LIFECYCLE_DEFECT_SHELLPROCSILENT`). A
+user-name read would not do: `WTSUserName` is set at logon success, before any shell exists. The fact is read
+only on that one path, and once per secure-desktop episode after it says "no shell" (a shell starting switches
+the input desktop to Default, which ends the episode and latches the window on the next enumeration, so
+re-reading every second could only repeat the answer; an unreadable list is retried on the next tick), so the
+process list is not snapshotted per tick anywhere.
+
+Every arm is said once per secure-desktop episode with the facts it rests on - the `SessionFlags` value read,
+the `Level`, the input desktop's name, `LogonUI.exe`/`consent.exe` presence; the arm's own tag says whether the
+session had a shell, the `LOCKED` line says which fact established it (`shell-by=window|process`), and the 30 s
+line carries `shell-seen=` beside `console-user=` - so
+a report that did not go out can be found with the reason it was refused (`QGADESKPRESHELL`), a read that
+failed is a WARNING rather than a silent "not locked" (`QGADESKLOCKREAD`), and the `LOCKED` line itself
+(`QGADESKSTUCK ... LOCKED`) shows which Win32 fact made it true. That is the owner's "never assume based on
+inaccurate measurements" expressed in code, and it is also this fix's first measurement: the 2026-10-10 capture
+proved the branch was taken, not which fact made it true, and the next capture will.
 
 **Cost / the trap this rests on.** `findings/autologon.md` line 26: a RUNNING `consent.exe` is NOT evidence a
 prompt is shown - it also runs under `ConsentPromptBehaviorAdmin=0` and exits by itself after about 4 s. The
 valid signals are that the process PERSISTS, or that a consent window is mapped in dom0. The classification is
 therefore evaluated only on the 30 s re-warn tick, by which point a 4 s `consent.exe` is gone; a snapshot
 failure returns FALSE so the message degrades to `unclassified` rather than asserting what it did not observe.
+The pre-shell gate's own cost is now bounded by the process fact: a lock that predates this agent instance (the
+guest locked, the agent restarted) is reported at once through `shell-by=process`. What remains: a locked
+session whose shell has died (no `explorer.exe`) reads `PRE_SHELL` until the 30 s path's console-user arm names
+it; and if the owner's reattach state can arise on a logged-on session with WTS reading LOCK, that case reports
+again - `wts-flags=` and `shell-by=` on the line are what will show it, and it is not measured yet.
 
 **Open.** 25H2 runs `TypeOfAdminApprovalMode=1` with `ConsentPromptBehaviorEnhancedAdmin=1`. If Administrator
 protection (`TypeOfAdminApprovalMode=2`) is ever enabled, `ConsentPromptBehaviorAdmin` stops governing and
