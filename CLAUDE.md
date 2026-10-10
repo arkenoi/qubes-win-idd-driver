@@ -190,6 +190,13 @@ commits first. A line the owner has retired stays closed until the owner reopens
   `SWEEPNOTREAD` and `NOTIFYCLOCK` in `findings/issues.md`. A toast is traced from its text to its WRITER
   before anything is grepped - the death family is watchdog/agent -> Application log 4001-4004 ->
   `guest/qwt-report-death.ps1`, which shares no log tag with the agent's own `QerrReport` route.
+- **A gui-daemon RECONNECT is BEST EFFORT - never a mandate, never a sanctioned path** (owner 2026-10-10:
+  *"we MAY reconnect. but it is best effort, not a mandate nor a scantioned path"*). It may be OBSERVED, never
+  demanded: no suite, probe or acceptance criterion may require one to pass (Jev `suite_may_require` 0.27), and no
+  fix may be built on one. `gate-preflight` applies its bit across a REBOOT for exactly this reason. The sweep's
+  `vchan_reconnects` breach names the LOST connection, not the re-announce (Jev split it 0.53/0.36 - left graded,
+  the `why` string says which). Distinct from the NOTIFICATION BRIDGE's relay reconnect, which IS ours and IS
+  asserted (`a0-toast-bridge.sh` P6b); never conflate the two.
 - **The xenbus bucket-lock line - RETIRED** (reverted entirely f7c16ce). Stock xenbus 9.1.0.0 in a guest is the
   INTENDED state. Do not name xenbus in a finding.
 - **set-gui-mode's "stale GetLastError" and "exit status 46" - both CLOSED** (43019f5: measured, the success path

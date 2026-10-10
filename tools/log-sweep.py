@@ -285,7 +285,7 @@ DEFAULT_THRESHOLDS = {
     "agent_ends_unrecorded": {"max": 0, "severity": "P2", "why": "an agent log that stops with no requested stop and no death record"},
     "vchan_setups_per_shutdown": {"max": 0, "severity": "P2", "why": "no new vchan announcement while the guest is going down"},
     "vchan_announce_without_connect": {"max": 0, "severity": "P2", "why": "an announced vchan that dom0 never connected to AND that the agent never withdrew - an announcement the agent takes back on its way out (it logs so) is correct behaviour, not a dangling vchan"},
-    "vchan_reconnects": {"max": 0, "severity": "P2", "why": "a second announcement in one instance is a reconnect"},
+    "vchan_reconnects": {"max": 0, "severity": "P2", "why": "a second announcement in one instance means the session LOST its daemon - the breach is the loss, not the re-announce: reconnecting is best effort and PERMITTED (owner 2026-10-10), and no suite may require it"},
     "handshake_refusals": {"max": 0, "severity": "P2", "why": "QGAHANDSHAKE: messages refused before the version exchange"},
     "broker_deaths": {"max": 0, "severity": "P1", "why": "QGABROKERDIED outside a fault-injection context - owner policy 2026-10-07: a spontaneous de-slice broker death is P1 (findings/issues.md P1 'A SPONTANEOUS DE-SLICE BROKER DEATH OR HANG IS P1')"},
     "broker_hangs": {"max": 0, "severity": "P1", "why": "QGABROKERHUNG outside a fault-injection context (same policy)"},
