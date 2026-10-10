@@ -1581,6 +1581,16 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the
   fi
   say "  $app re-created FRESH from $tpl (private auto-seeded from the template's private at creation)"
   local b
+  # A dom0 DESKTOP SWITCH MUST NOT FAIL A CELL. Measured 2026-10-10 and CONFIRMED BY THE OWNER, who was
+  # switching dom0 desktops at 14:12: boot 1 graded INVALID-INSTRUMENT on six empty tars while the guest
+  # showed one notepad window, and boots 2 and 3 of the SAME cell, same guest, same window, minutes
+  # later, both returned "1 window(s) mapped". The detection was right and the ACCOUNTING was wrong - it
+  # wrote a FAIL line that marks the cell, release-acceptance turned that into a short coverage receipt,
+  # and gate-scope refused the cut because someone moved a window on his own screen. So the condition has
+  # to REPEAT across the cell's boots before it marks anything: one boot where dom0 saw the window proves
+  # the instrument works, and a single empty capture beside it is the switch, not a defect. If NO boot
+  # ever mapped a window, that is still a failure and still fails.
+  local ii_boots=0 mapped_any=0
   for b in 1 2 3; do
     say "  --- $3 AppVM cold boot $b/3 ---"
     if [ "$(w_state "$app")" != Halted ]; then
@@ -1638,11 +1648,18 @@ d=open(sys.argv[1],'rb').read(33); w,h=struct.unpack('>II',d[16:24]); print(w,h)
     fi
     say "  notepad: $(QTEST_VM=$app T=45 ctl_stop "${nppid:-0}" "${npstart:-0}")"
     if [ "$big" = 1 ]; then no "$3-appvm boot $b: a FULLSCREEN-SIZED window was mapped"
-    elif [ "$W" -gt 0 ]; then ok "$3-appvm boot $b: $W window(s) mapped, none fullscreen-sized"
+    elif [ "$W" -gt 0 ]; then mapped_any=1; ok "$3-appvm boot $b: $W window(s) mapped, none fullscreen-sized"
     elif [ "${gw:-x}" -ge 1 ] 2>/dev/null; then
-      no "$3-appvm boot $b: INVALID-INSTRUMENT - the guest shows $gw notepad window(s) but the dom0 capture returned none on six tries (a dom0 desktop switch or capture fault; not a product verdict)"
+      ii_boots=$((ii_boots+1))
+      say "  $3-appvm boot $b: INVALID-INSTRUMENT - the guest shows $gw notepad window(s) but the dom0 capture returned none on six tries (a dom0 desktop switch or capture fault; graded after the cell's other boots)"
     else no "$3-appvm boot $b: notepad opened but dom0 got NO window (guest-side notepad windows: ${gw:-unreadable})"; fi
   done
+  # THE CELL'S VERDICT ON THE INSTRUMENT, now that every boot has been seen. (# GUARD:iirepeat)
+  if [ "$ii_boots" -gt 0 ] && [ "$mapped_any" = 1 ]; then
+    say "  $3-appvm: $ii_boots of 3 boots returned an empty dom0 capture while the guest had a window, and another boot mapped one - a dom0 desktop switch, NOT graded (the owner confirmed one on 2026-10-10)"
+  elif [ "$ii_boots" -gt 0 ]; then
+    no "$3-appvm: every boot with a guest-side window returned an empty dom0 capture ($ii_boots of 3) - the capture never worked, which is not a desktop switch"
+  fi
 }
 
 # --------------------------------------------------------------------------- driver
