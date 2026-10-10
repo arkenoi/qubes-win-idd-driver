@@ -516,6 +516,29 @@ w_drain_and_shutdown(){ # $1=vm $2=logfn
   prev=$(qvm-prefs "$vm" qrexec_timeout 2>/dev/null); prev=${prev:-6000}
   W_DRAIN_PENDING=0; W_DRAIN_QREXEC_DEAD=0
 
+  # PULL WHAT dom0 WAS TOLD, WHILE THE GUEST IS STILL UP. This is the last moment the record is
+  # reachable: it lives on the guest's PRIVATE volume, so it dies with a disposable AppVM, and a
+  # whole day of toast work ran with nothing on this side - the owner had to read toasts aloud
+  # (2026-10-10, in capitals: "I SHOULD NEVER EVER READ FUCKING TOASTS TO YOU ALOUD"). Every
+  # harness that parks a guest comes through here, so the hook belongs here and not in each one.
+  # It never boots a guest (--no-start) and never blocks the park; an UNREADABLE record is said
+  # LOUDLY under its own tag so the sweep can grade it, because a silent nothing is
+  # indistinguishable from "dom0 was told nothing" - which is the hole being closed.
+  if [ "${W_SKIP_DOM0_SENDS:-0}" != 1 ] && [ -x tools/dom0-sends.sh ]; then
+    # NOT `tool | while read`: a pipeline's status is the LAST command's, so the failure arm below
+    # could never fire - and that arm is the whole point. Output to a file, then read the rc.
+    local sends_out sends_rc
+    sends_out=$(mktemp "${TMPDIR:-/tmp}/dom0-sends-park.XXXXXX")
+    timeout 300 bash tools/dom0-sends.sh "$vm" "park-$(date -u +%H%M%S)" --no-start > "$sends_out" 2>&1
+    sends_rc=$?
+    while IFS= read -r l; do $log "  $l"; done < "$sends_out"
+    rm -f "$sends_out"
+    if [ "$sends_rc" != 0 ]; then
+      $log "  DOM0SENDSUNREAD $vm: the dom0 notification record could not be read before the park (rc=$sends_rc) -"
+      $log "    this side now has NO record of what dom0 was told on this boot"
+    fi
+  fi
+
   pend=$(pgrep -f "qrexec-client-vm [${vm:0:1}]${vm:1} " 2>/dev/null)
   if [ -n "$pend" ]; then
     n=$(printf '%s\n' "$pend" | grep -c .)
@@ -523,8 +546,21 @@ w_drain_and_shutdown(){ # $1=vm $2=logfn
     $log "  drain: $n qrexec call(s) STILL PENDING for $vm at park time (ages below)"
     ps -o etime=,args= -p $(printf '%s' "$pend" | tr '\n' ' ') 2>/dev/null | cut -c1-150 \
       | while IFS= read -r l; do $log "    pending: $l"; done
-    pkill -f "qrexec-client-vm [${vm:0:1}]${vm:1} " 2>/dev/null
-    $log "  drain: killed $n queued call(s) so none can restart $vm after it halts"
+    # BY PID, AND VERIFIED. `pkill -f <pattern>` is prohibited outright (owner 2026-10-10:
+    # "PKILL IS HARD PROHIBITED FOREVER") because a pattern also matches the process doing the
+    # matching - a pgrep-fed kill took out my own tool shell twice in one hour. The pids are
+    # already in $pend; each one's /proc/<pid>/comm must say it really is a qrexec client before
+    # it is signalled, so a shell that merely CONTAINS this pattern in its command line survives.
+    local _k=0 _pp _comm
+    for _pp in $pend; do
+      _comm=$(cat "/proc/$_pp/comm" 2>/dev/null)
+      case "$_comm" in
+        qrexec-client*) kill -TERM "$_pp" 2>/dev/null && _k=$((_k+1)) ;;
+        "")             $log "  drain: pid $_pp vanished before the signal - nothing to do" ;;
+        *)              $log "  drain: pid $_pp is '$_comm', NOT a qrexec client - left alone" ;;
+      esac
+    done
+    $log "  drain: signalled $_k of $n queued call(s) by pid so none can restart $vm after it halts"
   else
     $log "  drain: no qrexec call pending for $vm (nothing to drain)"
   fi

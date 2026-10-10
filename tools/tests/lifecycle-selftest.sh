@@ -14,6 +14,9 @@
 #       RECONNECTDEATH   a reconnect exit writes a death record       REQUESTEDDEATH  a requested exit is a death
 #       REQUESTEDERROR   the agent logs an expected exit as a failure (the stale "WatchForEvents failed" ERROR line)
 #       HELPERSYSKILLDEATH  a helper the SYSTEM killed (0x40010004) is written up as a death - the measured 2026-10-10
+#       ZERODUE            a zeroed de-slice clock reads as "warning due now" - the 2026-10-11 defect that put one
+#                          false "the notification and menu capture helper is not running" toast on dom0 per cold
+#                          boot, with the agent's own uptime printed as the outage
 #       DISARMHIDESCRASH   once launches are disarmed, a helper CRASH is written up as expected - the hole the
 #                           owner closed 2026-10-10 ("a REAL abnormal termination should be always reported loudly")
 #                           defect: two 4003 records for notifhost.exe on ordinary shutdowns, each a dom0 "major error" toast
@@ -63,7 +66,7 @@ if build clean ""; then
 else say "FAIL  clean build: $(head -3 "$OUT/clean.build.err")"; bad=1; fi
 
 # ---- every defect knob must make the suite FAIL --------------------------------------------------------
-for d in TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT DISARMHIDESCRASH; do
+for d in TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT DISARMHIDESCRASH ZERODUE; do
     if build "defect-$d" "-DQGA_LIFECYCLE_DEFECT_$d"; then
         "$OUT/defect-$d" >"$OUT/defect-$d.out" 2>&1; rc=$?
         f=$(grep -c '^FAIL' "$OUT/defect-$d.out")

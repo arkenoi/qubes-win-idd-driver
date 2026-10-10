@@ -821,6 +821,15 @@ def l17_process_by_name() -> None:
     process found by name is ANY process with that name: killing it is a decision about something we did not start, adopting it
     hands our traffic to it. The 2026-10-02 process audit listed these sites and left them in place - hence a lint, not a note.
 
+    POSIX SHAPES - added 2026-10-10, owner: "PKILL IS HARD PROHIBITED FOREVER". The rule had only ever
+    covered the Windows spellings, so `pkill -f <pattern>` and `kill $(pgrep -f <pattern>)` were legal
+    in every harness - and a pattern matches THE PROCESS DOING THE MATCHING: my own tool shell carries
+    the whole script text I am searching for, so a `pgrep`-fed kill loop killed my own shell twice in
+    one hour, and an unanchored busy-check reported the rig busy because it found itself. There is no
+    safe pattern: a pid is either one a process wrote down (its own pidfile, $! without setsid, a
+    recorded lock) or it is a guess. `pgrep`/`pidof` for COUNTING or REPORTING stay legal; feeding one
+    to kill does not. A pid that must be killed is verified first (/proc/<pid>/comm).
+
     SHAPES (each has a fixture in tools/tests/lint-selftest.sh):
       kill   Stop-Process -Name / with a positional name; `Get-Process <name> | ... Stop-Process` or `| % { $_.Kill() }` on one
              line; taskkill /im; a Win32_Process selected by Name and Terminate'd; a variable bound to a by-name Get-Process (or an
@@ -851,9 +860,34 @@ def l17_process_by_name() -> None:
     taskkill_im = re.compile(r"\btaskkill(\.exe)?\b[^\n]*?/im\b", re.I)
     wmi_kill = re.compile(r"Win32_Process[^\n]*\bName\b[^\n]*\b(Terminate|Invoke-CimMethod)\b|\b(Terminate|Invoke-CimMethod)\b[^\n]*Win32_Process[^\n]*\bName\b", re.I)
     cond_block = re.compile(r"\s*(?:\}\s*)?(?:if|elseif|while)\s*\((.*)\)\s*\{(.*)$", re.I)
+    # POSIX: pkill/killall at all, and any kill fed from a pattern match
+    posix_pkill = re.compile(r"(?<![\w-])(pkill|killall)\b")
+    posix_kill_pgrep = re.compile(r"\bkill\b[^\n]*\$\(\s*(pgrep|pidof)\b"
+                                  r"|\bfor\s+\w+\s+in\s+\$\(\s*(pgrep|pidof)\b[^\n]*")
     for p in _all_our_scripts():
-        lines = _ps_code_lines(p.read_text(errors="replace"))
+        text = p.read_text(errors="replace")
         rel = p.relative_to(ROOT)
+        if p.suffix in (".sh", ".bash", "") or text.startswith("#!"):
+            for i, raw in enumerate(text.splitlines(), 1):
+                code = raw.split("#", 1)[0] if not raw.lstrip().startswith("#") else ""
+                if not code.strip():
+                    continue
+                # ADVICE about pkill, inside a string, is not a kill: vmlock.sh and
+                # serial-rig-gate.sh both carry the warning "never pkill -f", and flagging those
+                # would teach people to delete the warning. A real call has the token OUTSIDE any
+                # quotes, so quoted spans are removed before the search rather than guessing at
+                # which line shapes are messages.
+                bare = re.sub(r"'[^']*'|\"[^\"]*\"", "", code)
+                if posix_pkill.search(bare):
+                    finding("L17-process-by-name", f"{rel}:{i}",
+                            f"pkill/killall kills by PATTERN - prohibited outright (owner 2026-10-10). "
+                            f"Kill a pid the process wrote down, verified via /proc/<pid>/comm: {code.strip()[:90]}")
+                m = posix_kill_pgrep.search(bare)
+                if m:
+                    finding("L17-process-by-name", f"{rel}:{i}",
+                            f"kill fed from a pattern match - a pattern matches the matcher's own shell: "
+                            f"{code.strip()[:90]}")
+        lines = _ps_code_lines(text)
         tainted: set[str] = set()
         for i, code in enumerate(lines, 1):
             if not code.strip():

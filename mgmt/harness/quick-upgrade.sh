@@ -811,9 +811,26 @@ fi
 # 5. TWO REAL COLD BOOTS - boot #1 runs on the emulated disk, boot #2 re-binds xenvbd
 #    (findings/install.md); a pending file swap also lands on #1. Never a live restart.
 # =============================================================================================
+dom0_sends_park(){ # $1=vm $2=label - the notification record, pulled while the guest is still up
+  local out rc
+  [ "${W_SKIP_DOM0_SENDS:-0}" = 1 ] && return 0
+  [ -x tools/dom0-sends.sh ] || return 0
+  out=$(mktemp "${TMPDIR:-/tmp}/dom0-sends-park.XXXXXX")
+  timeout 300 bash tools/dom0-sends.sh "$1" "$2-$(date -u +%H%M%S)" --no-start > "$out" 2>&1
+  rc=$?
+  while IFS= read -r l; do log "  $l"; done < "$out"
+  rm -f "$out"
+  [ "$rc" = 0 ] || log "  DOM0SENDSUNREAD $1: no record of what dom0 was told on this boot (rc=$rc)"
+  return 0
+}
+
 coldboot(){ # $1=n
   local n=$1
   if [ "$(w_state "$SUBJECT")" != Halted ]; then
+    # PULL WHAT dom0 WAS TOLD before the guest goes down - the record lives on the guest's private
+    # volume and this side had none of it, which is how the owner ended up reading toasts aloud
+    # (2026-10-10). Never boots a guest; an unreadable record is said under its own tag.
+    dom0_sends_park "$SUBJECT" "boot$n"
     qvm-shutdown "$SUBJECT" >/dev/null 2>&1
     if ! w_halt "$SUBJECT" 420 "boot$n-halt" log; then
       log "  guest ignored ACPI shutdown for 420 s (screen=$(w_screen "$SUBJECT" "boot$n-stuck" "$OUT")) - killing as the last resort"

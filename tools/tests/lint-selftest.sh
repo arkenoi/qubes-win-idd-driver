@@ -189,6 +189,24 @@ D="$TMP/l17d"; mk "$D"; printf '& taskkill.exe /F /IM foo.exe *>$null\n' > "$D/g
 expect_fires L17-process-by-name "$D" "taskkill /im"
 D="$TMP/l17e"; mk "$D"; printf 'if (-not (Get-Process qubes-updates-relay -EA SilentlyContinue)) { Start-Relay }\n' > "$D/guest/upd.ps1"
 expect_fires L17-process-by-name "$D" "existence by name decides whether to start our own (the old Ensure-Proxy adoption)"
+# the POSIX shapes, added 2026-10-10 (owner: "PKILL IS HARD PROHIBITED FOREVER"). A pattern also
+# matches the process doing the matching: a pgrep-fed kill loop killed my own tool shell twice in one
+# hour, because my shell's command line carried the very text I was searching for.
+D="$TMP/l17p1"; mk "$D"; printf '#!/bin/bash\npkill -f "qrexec-client-vm foo "\n' > "$D/mgmt/harness/h.sh"
+expect_fires L17-process-by-name "$D" "pkill -f (prohibited outright)"
+D="$TMP/l17p2"; mk "$D"; printf '#!/bin/bash\nkill $(pgrep -f matrix.sh)\n' > "$D/mgmt/harness/h.sh"
+expect_fires L17-process-by-name "$D" "kill fed from a pattern match"
+D="$TMP/l17p3"; mk "$D"; printf '#!/bin/bash\nfor p in $(pgrep -f thing); do kill "$p"; done\n' > "$D/mgmt/harness/h.sh"
+expect_fires L17-process-by-name "$D" "for p in \$(pgrep ...); do kill"
+D="$TMP/l17p4"; mk "$D"; printf '#!/bin/bash\nkillall gui-agent\n' > "$D/mgmt/harness/h.sh"
+expect_fires L17-process-by-name "$D" "killall by name"
+# and the half that is easy to get wrong: ADVICE about pkill must stay silent, or the lint teaches
+# people to delete the warning (vmlock.sh and serial-rig-gate.sh both carry it)
+D="$TMP/l17p5"; mk "$D"; printf '#!/bin/bash\necho "kill it BY PID with SIGTERM - never with pkill -f"\nsay "(never pkill -f)"\n' > "$D/mgmt/harness/h.sh"
+expect_silent L17-process-by-name "$D" "advice about pkill inside a string is not a kill"
+D="$TMP/l17p6"; mk "$D"; printf '#!/bin/bash\npend=$(pgrep -f "qrexec-client-vm foo ")\nfor pp in $pend; do [ "$(cat /proc/$pp/comm)" = qrexec-client-vm ] && kill -TERM "$pp"; done\n' > "$D/mgmt/harness/h.sh"
+expect_silent L17-process-by-name "$D" "pids verified via /proc/<pid>/comm before the signal - the legal form"
+
 D="$TMP/l17f"; mk "$D"
 cat > "$D/guest/upd.ps1" <<'EOS'
 foreach ($p in @(Get-Process qubes-updates-relay -EA SilentlyContinue)) {
