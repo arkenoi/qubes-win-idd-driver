@@ -797,10 +797,14 @@ def load_context(logsdir):
     """context.json (written by the rig wrapper for --fault-injection) - a DECLARATION, not evidence."""
     p = os.path.join(logsdir, "context.json")
     if not os.path.exists(p):
-        return {"declared": False, "source": None, "declared_errors": []}
+        return {"declared": False, "source": None, "declared_errors": [], "guest_clock": None}
     try:
         with open(p, encoding="utf-8") as f:
             c = json.load(f)
+        # guest_clock: the wrapper's measurement of the guest's clock BEFORE it synced it (log-sweep.sh step 1b:
+        # presync_guest_utc, presync_host_utc, presync_skew_s, postsync_guest_utc). Carried into the report as-is;
+        # the clockskew data problem is about the sync not taking, this is about what the sync had to correct.
+        gc = c.get("guest_clock")
         # declared_errors: [{"pattern": "<regex>", "why": "<the stimulus that caused it>"}]. A DECLARATION
         # BELONGS TO THE RUN THAT CAUSED THE ERROR, never to a global list of errors we have decided to live
         # with - that is the difference between a stimulus and hiding (owner 2026-10-07: "you should not HIDE
@@ -810,9 +814,9 @@ def load_context(logsdir):
         if not isinstance(de, list):
             de = []
         return {"declared": bool(c.get("fault_injection_declared") or c.get("fault_injection")),
-                "source": c.get("source"), "declared_errors": de}
+                "source": c.get("source"), "declared_errors": de, "guest_clock": gc if isinstance(gc, dict) else None}
     except (OSError, ValueError) as e:
-        return {"declared": False, "source": "context.json unreadable: %s" % e, "declared_errors": []}
+        return {"declared": False, "source": "context.json unreadable: %s" % e, "declared_errors": [], "guest_clock": None}
 
 
 def load_logs(logsdir):
@@ -1352,7 +1356,7 @@ def join_fi(files, instances, agents, declared):
                 (hung["ts"] - reg["ts"]).total_seconds() * 1000, (back["ts"] - hung["ts"]).total_seconds() * 1000))
     evidenced = any(i["fi_build"] for i in instances) or bool(recs)
     ctx = {"fault_injection": bool(evidenced), "declared": bool(declared["declared"]), "declared_source": declared["source"],
-           "declared_errors": declared.get("declared_errors", []),
+           "declared_errors": declared.get("declared_errors", []), "guest_clock": declared.get("guest_clock"),
            "sources": sources, "records": recs, "detection_missing": missing,
            "unproven": bool(declared["declared"] and not evidenced)}
     return ctx
@@ -2026,6 +2030,15 @@ def write_summary(rep, path):
     L.append("CONTEXT: fault_injection=%s declared=%s%s records=%d%s" % (
         str(c["fault_injection"]).lower(), str(c["declared"]).lower(), (" (%s)" % c["declared_source"]) if c["declared"] else "", len(c["records"]),
         "  UNPROVEN: declared but no banner and no record - nothing excused" if c["unproven"] else ""))
+    gc = c.get("guest_clock")
+    if gc:
+        # the wrapper's measurement BEFORE it synced the guest (log-sweep.sh step 1b). A guest still hours off at
+        # collect time, with the product's own clock-sync task present, is a finding about the product; the
+        # clockskew data problem is about the sync not taking, this line is about what it had to correct.
+        sk = gc.get("presync_skew_s")
+        L.append("CLOCK: pre-sync skew %s (guest %s, host %s); post-sync guest %s" % (
+            ("%+d s" % sk) if isinstance(sk, (int, float)) else "unmeasured", gc.get("presync_guest_utc"), gc.get("presync_host_utc"),
+            gc.get("postsync_guest_utc") or "no answer"))
     for s_ in c["sources"]:
         L.append("  evidence: " + s_[:200])
     for r in c["records"]:
@@ -2184,6 +2197,7 @@ def cmd_analyze(a):
     rep = {
         "version": VERSION, "status": status, "rc": rc,
         "context": {"fault_injection": c["fault_injection"], "declared": c["declared"], "declared_source": c["declared_source"], "unproven": c["unproven"],
+                    "guest_clock": c.get("guest_clock"),   # GUARD:presyncskew DEFECT: "guest_clock": None,
                     "sources": c["sources"], "detection_missing": c["detection_missing"],
                     "records": [{"file": r["file"], "name": r["name"], "pid": r["pid"], "t_suspend": fmt_ts(r["t_suspend"]), "t_resume": fmt_ts(r["t_resume"]),
                                  "alive_after": r["alive"], "joined": r["joined"], "checks": r["checks"]} for r in c["records"]]},

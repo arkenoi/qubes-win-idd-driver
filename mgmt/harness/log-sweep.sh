@@ -13,6 +13,9 @@
 #                    breach (fi_context_unproven: the test build / injection was not running).
 #       --marker FILE       a harness-captured file carrying injection records (the `M8|name=...|pid=...|suspend=...|t=...`
 #                    lines m8-suspend.ps1 prints); copied into logs/markers/ so the analyzer can join them.
+#       LOGSWEEP_MAX_FILES=<n>  (env) the collector's file cap, default 400. The collector's own default is 60;
+#                    measured 2026-10-10 on win10-acc it skipped 12 files and the sweep graded itself rc=3 DATA for
+#                    the skip. The cap is raised, never reinterpreted: a skip is still missing data and still fails.
 #
 # WHY. Owner, 2026-10-07: "could you look for such abnormalities in logs IN ADVANCE, not waiting for crashes they
 # cause?" For days the GUI watchdog logged an agent death (0x40010004) and a relaunch into the ending session on
@@ -29,10 +32,13 @@
 #   * every guest call is BOUNDED (_q from the e2e lib: timeout, rc in QRC, stderr in QERR);
 #   * MISSING DATA FAILS: a guest that is not running, a pull that never verifies (counts/sha), a log the collector
 #     could not read, an unparseable log - all exit non-zero with a line that says which; nothing is skipped silently;
-#   * read-only on the guest: the collector reads logs and event records, it changes nothing.
+#   * read-only on the guest EXCEPT ITS CLOCK: the collector reads logs and event records and changes nothing; the
+#     wrapper reads the guest's clock, records the pre-sync skew, THEN syncs it to this qube's, THEN collects (step
+#     1b). The order is the point: the skew is evidence about the product's own clock sync, and the collector's
+#     `nowutc` must agree with --host-utc or the analyzer's clockskew check (rightly) refuses the window.
 #
 # EXIT CODES (the analyzer's, passed through): 0 CLEAN, 1 FINDINGS (a breach or a Jev-classified defect),
-# 3 DATA (missing/empty/partial/unparseable log, pull never verified, guest not running), 4 INCOMPLETE (the judge
+# 3 DATA (missing/empty/partial/unparseable log, pull never verified, guest not running, guest clock unreadable), 4 INCOMPLETE (the judge
 # did not run - jev.py exit 2). 2 = usage. The last line is always LOGSWEEP-RESULT vm=... rc=... status=... report=...
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
@@ -61,6 +67,7 @@ if ! printf '%s' "$SINCE" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]
   echo "FAIL  since-utc must be yyyy-mm-ddThh:mm:ssZ (got '$SINCE') - it travels as a single qrexec argument" >&2; exit 2
 fi
 date -u -d "$SINCE" +%s >/dev/null 2>&1 || { echo "FAIL  since-utc '$SINCE' is not a valid instant" >&2; exit 2; }
+printf '%s' "${LOGSWEEP_MAX_FILES:-400}" | grep -qE '^[1-9][0-9]*$' || { echo "FAIL  LOGSWEEP_MAX_FILES must be a positive integer (got '${LOGSWEEP_MAX_FILES:-}')" >&2; exit 2; }
 mkdir -p "$OUT" || exit 2
 R="$OUT/sweep.log"; : > "$R"
 log(){ echo "[$(date -u +%H:%M:%S)] log-sweep[$VM]: $*" | tee -a "$R"; }
@@ -84,13 +91,42 @@ log "=== log sweep: vm=$VM since=$SINCE out=$OUT baseline=$BASELINE ==="
 st=$(_q 25 ./tools/qtest state | grep -aoE 'power_state=[A-Za-z]+' | head -1)
 [ "$st" = "power_state=Running" ] || result 3 DATA "FAIL  guest $VM is not Running (state '${st:-no answer}', rc=$QRC) - nothing collected"
 
+# 1b. THE GUEST'S CLOCK: READ, RECORD, THEN SYNC - THE ORDER IS THE FIX. These guests boot ~3 h ahead (the virtual
+# RTC is re-derived from dom0's local wall clock at every start; see tools/qtest synctime) and the product's own
+# \QwtClockSync task is meant to correct that. Measured 2026-10-10 on win10-acc: this wrapper never synced, the
+# collector ran with the guest at +10804 s, the analyzer phase-corrected 1116 lines, and the sweep graded ITSELF
+# rc=3 DATA (clockskew) instead of returning a verdict. Syncing first would erase the number, and the number is a
+# finding whenever it is large late in a boot (whether \QwtClockSync had completed for that boot is NOT established in
+# the 2026-10-10 capture, and the live run of 2026-10-10 09:33Z read +10803 s only ~40 s after qrexec came up, inside
+# that task's own PT15S+retry window), so the skew is measured first and
+# kept as presync_skew_s (logs/context.json -> report.json context.guest_clock -> the summary's CLOCK line). Only
+# then is this qube's clock pushed in, so the collector's `nowutc` - what the analyzer's clockskew check reads -
+# agrees with --host-utc, and that check fails only when the sync did not take. A clock that cannot be read is
+# missing data, and missing data fails. The raw guest answers are kept (clock-presync.txt, clock-sync.txt): guest
+# output is data, parsed by shape, never trusted.
+ISO_RE='^2[0-9]{3}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z'
+t0=$(date -u +%s.%N)
+_q 60 ./tools/qtest ps "(Get-Date).ToUniversalTime().ToString('o')" > "$OUT/clock-presync.txt"   # GUARD:presyncread
+rc=$QRC; t1=$(date -u +%s.%N)
+PRESYNC_GUEST_UTC=$(grep -aoE "$ISO_RE" "$OUT/clock-presync.txt" | head -1)
+[ -n "$PRESYNC_GUEST_UTC" ] || result 3 DATA "FAIL  guest clock unreadable (qtest rc=$rc, $(wc -c < "$OUT/clock-presync.txt") bytes) - no pre-sync skew; nothing collected"
+gsec=$(date -u -d "$PRESYNC_GUEST_UTC" +%s.%N 2>/dev/null) || result 3 DATA "FAIL  guest clock '$PRESYNC_GUEST_UTC' is not an instant - no pre-sync skew; nothing collected"
+hmid=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.3f", (a+b)/2}')      # the host's instant for that answer: the call's midpoint
+PRESYNC_HOST_UTC=$(date -u -d "@$hmid" +%Y-%m-%dT%H:%M:%SZ)
+PRESYNC_SKEW_S=$(awk -v g="$gsec" -v h="$hmid" 'BEGIN{printf "%+.0f", g-h}')
+log "clock: guest $PRESYNC_GUEST_UTC, host $PRESYNC_HOST_UTC, pre-sync skew $PRESYNC_SKEW_S s"
+_q 120 ./tools/qtest synctime > "$OUT/clock-sync.txt"   # GUARD:synctime
+POSTSYNC_GUEST_UTC=$(grep -aoE "$ISO_RE" "$OUT/clock-sync.txt" | head -1)
+log "clock: synced, guest now ${POSTSYNC_GUEST_UTC:-no answer (qtest rc=$QRC)}"
+
 # 2. pull (two attempts: a transfer that does not verify is retried once, then FAILS)
 verified=""
 for attempt in 1 2; do
   # The host's UTC at the instant of collection: the SECOND clock the analyzer needs, to tell a
   # skewed GUEST clock from a corpus that is simply being analysed later.
   HOST_UTC_AT_COLLECT="$(date -u +%Y-%m-%dT%H:%M:%S)"
-  _q 600 ./tools/qtest pushrun mgmt/harness/log-sweep-collect.ps1 -SinceUtc "$SINCE" > "$OUT/pull.txt"
+  # -MaxFiles: on the collector's own default (60) a skip is a DATA failure of the sweep - LOGSWEEP_MAX_FILES in the header
+  _q 600 ./tools/qtest pushrun mgmt/harness/log-sweep-collect.ps1 -SinceUtc "$SINCE" -MaxFiles "${LOGSWEEP_MAX_FILES:-400}" > "$OUT/pull.txt"
   rc=$QRC
   if ! grep -aq '^LSW END ' "$OUT/pull.txt"; then
     log "pull attempt $attempt: no END line (qtest rc=$rc, $(grep -ac '^LSW ' "$OUT/pull.txt") LSW lines; stderr: $(tr '\n' ' ' < "$QERR" | cut -c1-200))"
@@ -103,13 +139,19 @@ done
 [ -n "$verified" ] || result 3 DATA "FAIL  the log pull never verified (counts/sha) - no evidence to sweep ($OUT/decode.txt)"
 log "pulled: $(grep -ac ': OK' "$OUT/decode.txt") blocks verified; $(grep -a '^DECODE FILEERR' "$OUT/decode.txt" | wc -l) read errors"
 
-# 2b. the context the caller declares, and the injection records it captured (evidence lives in the files, never in names)
-if [ -n "$FI_DECLARED" ] || [ ${#DECL_PAT[@]} -gt 0 ]; then
-  python3 - "$OUT/logs/context.json" "${FI_DECLARED:-0}" "${0##*/}" "${#DECL_PAT[@]}" "${DECL_PAT[@]}" "${DECL_WHY[@]}" <<'PY'
+# 2b. the clock as measured in 1b, the context the caller declares, and the injection records it captured (evidence
+# lives in the files, never in names). Written on every run: the clock fields always exist.
+python3 - "$OUT/logs/context.json" "${FI_DECLARED:-0}" "${0##*/}" "$PRESYNC_GUEST_UTC" "$PRESYNC_HOST_UTC" "$PRESYNC_SKEW_S" "$POSTSYNC_GUEST_UTC" "${#DECL_PAT[@]}" "${DECL_PAT[@]}" "${DECL_WHY[@]}" <<'PY'
 import json, sys
-out, fi, caller, n = sys.argv[1], sys.argv[2] == '1', sys.argv[3], int(sys.argv[4])
-pats, whys = sys.argv[5:5 + n], sys.argv[5 + n:5 + 2 * n]
-ctx = {"source": "log-sweep.sh (caller: %s)" % caller}
+out, fi, caller = sys.argv[1], sys.argv[2] == '1', sys.argv[3]
+g_utc, h_utc, skew, post = sys.argv[4:8]
+n = int(sys.argv[8])
+pats, whys = sys.argv[9:9 + n], sys.argv[9 + n:9 + 2 * n]
+ctx = {"source": "log-sweep.sh (caller: %s)" % caller,
+       # measured BEFORE the sync (step 1b); the analyzer carries it into report.json context.guest_clock and
+       # prints it as the summary's CLOCK line
+       "guest_clock": {"presync_guest_utc": g_utc, "presync_host_utc": h_utc, "presync_skew_s": int(skew),
+                       "postsync_guest_utc": post or None}}
 if fi:
     ctx["fault_injection_declared"] = True
 if n:
@@ -117,9 +159,8 @@ if n:
 with open(out, "w", encoding="utf-8") as f:
     json.dump(ctx, f)
 PY
-  [ -n "$FI_DECLARED" ] && log "context: declared fault-injection (excuses nothing by itself; evidence decides)"
-  [ ${#DECL_PAT[@]} -gt 0 ] && log "context: ${#DECL_PAT[@]} declared error pattern(s) - one that matches nothing is itself a breach"
-fi
+[ -n "$FI_DECLARED" ] && log "context: declared fault-injection (excuses nothing by itself; evidence decides)"
+[ ${#DECL_PAT[@]} -gt 0 ] && log "context: ${#DECL_PAT[@]} declared error pattern(s) - one that matches nothing is itself a breach"
 if [ ${#MARKERS[@]} -gt 0 ]; then
   mkdir -p "$OUT/logs/markers"
   for mf in "${MARKERS[@]}"; do cp -- "$mf" "$OUT/logs/markers/$(basename "$mf")"; done

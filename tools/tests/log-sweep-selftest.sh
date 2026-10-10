@@ -28,6 +28,9 @@
 #   fidetect    an injected hang the agent never detected is not counted          T16 M8: absence of the detection line = breach
 #   issuerefs   the baseline audit no longer requires the issue references        T17 heartbeat/slot-ack/keyed-mutex/M7 refs present
 #   closedrec   a CLOSED defect recurring is not a breach                         T18 closed-defect recurrence = P1 breach
+#   presyncskew the wrapper's pre-sync clock measurement is dropped from the report  T41 presync_skew_s survives into the report
+#   (T41/T42 also drive the rig WRAPPER's text, like T25: defect copies with the read, the sync, their order, or the
+#   collector's -MaxFiles taken out must each fail the check)
 #
 #   LOGSWEEP_SELFTEST_OUT=<dir>  keep the fixtures and outputs there (default: a mktemp dir, removed on exit)
 set -u
@@ -1087,6 +1090,101 @@ ew=$(sw "$SRC" t40)
 KI=$(knob instwindow); ewk=$(sw "$KI" t40k)
 [ "$ewk" = 1 ] && ok "knob instwindow: with the window ignored, another run's instance is graded (=$ewk)" \
                || bad "knob instwindow: got $ewk, want 1 - the case cannot be driven"
+
+# ---- T41-T42 the rig wrapper: the guest's clock is read BEFORE it is synced, and the collector's cap is passed ----
+# MEASURED 2026-10-10 on win10-acc: the wrapper never called `qtest synctime`, so the collector ran with the guest
+# at +10804 s - 1116 lines were phase-corrected and the sweep
+# graded ITSELF rc=3 DATA (clockskew) instead of returning a verdict; and the collector's default 60-file cap skipped
+# 12 files, the second reason for rc=3. The wrapper needs a guest, so like T25 these are shape checks on its text,
+# each SEEN TO FAIL on a copy with the fix taken out. THE ORDER IS THE FIX: syncing before measuring would destroy
+# the evidence (the skew is a finding about the product's clock sync), and syncing after collecting would leave the
+# analyzer's clockskew check (T31/T32) firing on every sweep.
+WRAP="$ROOT/mgmt/harness/log-sweep.sh"
+mkdir -p "$T/wrap"
+chg(){ diff "$WRAP" "$1" | grep -c '^[<>]'; }   # changed lines between the wrapper and a defect copy
+wrap_clock(){ # $1=wrapper -> "ok" or the reason: read (GUARD:presyncread) < sync (GUARD:synctime) < collector pushrun
+  local r s p
+  r=$(grep -an 'GUARD:presyncread' "$1" | cut -d: -f1 | head -1)
+  s=$(grep -an 'GUARD:synctime' "$1" | cut -d: -f1 | head -1)
+  p=$(grep -an 'qtest pushrun mgmt/harness/log-sweep-collect.ps1' "$1" | cut -d: -f1 | head -1)
+  [ -n "$r" ] || { echo "no pre-sync guest clock read"; return; }
+  [ -n "$s" ] || { echo "no synctime call"; return; }
+  [ -n "$p" ] || { echo "no collector pushrun"; return; }
+  grep -aq 'presync_skew_s' "$1" || { echo "the skew is never recorded (no presync_skew_s)"; return; }
+  [ "$r" -lt "$s" ] || { echo "the clock is read at :$r, AFTER the sync at :$s - the skew is measured once it is gone"; return; }
+  [ "$s" -lt "$p" ] || { echo "synctime at :$s runs AFTER the collector at :$p"; return; }
+  echo ok
+}
+v=$(wrap_clock "$WRAP")
+[ "$v" = ok ] && ok "T41 the wrapper reads the guest clock and records presync_skew_s, then syncs, then collects" \
+              || bad "T41 mgmt/harness/log-sweep.sh: $v"
+sed '/GUARD:presyncread/d' "$WRAP" > "$T/wrap/noread.sh"; vr=$(wrap_clock "$T/wrap/noread.sh")
+sed '/GUARD:synctime/d'    "$WRAP" > "$T/wrap/nosync.sh"; vs=$(wrap_clock "$T/wrap/nosync.sh")
+awk '{L[NR]=$0; if(index($0,"GUARD:presyncread")) r=NR; if(index($0,"GUARD:synctime")) s=NR}
+     END{for(i=1;i<=NR;i++){ if(i==r && s) print L[s]; if(i==s) continue; print L[i] }}' "$WRAP" > "$T/wrap/syncfirst.sh"
+vo=$(wrap_clock "$T/wrap/syncfirst.sh")
+m="noread=$(chg "$T/wrap/noread.sh") nosync=$(chg "$T/wrap/nosync.sh") syncfirst=$(chg "$T/wrap/syncfirst.sh")"
+[ "$m" = "noread=1 nosync=1 syncfirst=2" ] || bad "T41 the defect copies are not minimal mutants ($m changed lines)"
+[ "$vr" != ok ] && [ "$vs" != ok ] && [ "$vo" != ok ] \
+  && ok "T41 SEEN TO FAIL: without the read '$vr'; without the sync '$vs'; synced before reading '$vo'" \
+  || bad "T41 a defect copy passed (noread='$vr' nosync='$vs' syncfirst='$vo') - the check proves nothing"
+# ...and the measurement SURVIVES INTO THE REPORT: a context.json carrying the wrapper's fields (the 2026-10-10
+# numbers) lands in report.json context.guest_clock and on the summary's CLOCK line; knob presyncskew drops it.
+cp -r "$T/base" "$T/presync"
+python3 - "$T/presync/context.json" <<'PY'
+import json, os, sys
+p = sys.argv[1]
+c = json.load(open(p, encoding="utf-8")) if os.path.exists(p) else {"source": "log-sweep-selftest.sh fixture presync"}
+c["guest_clock"] = {"presync_guest_utc": "2026-10-10T10:59:54.1234567Z", "presync_host_utc": "2026-10-10T07:59:50Z",
+                    "presync_skew_s": 10804, "postsync_guest_utc": "2026-10-10T07:59:53.0000000Z"}
+json.dump(c, open(p, "w", encoding="utf-8"))
+PY
+rc=$(analyze "$SRC" "$T/presync" "$T/baseline.json" "$T/jev-expected.py" t41)
+sk=$(field "$T/t41.json" "r['context']['guest_clock']['presync_skew_s']")
+cl=$(grep -a '^CLOCK: pre-sync skew +10804 s' "$T/t41.txt" | head -1)
+[ "$sk" = 10804 ] && [ -n "$cl" ] && ok "T41 presync_skew_s=$sk survives into report.json and the summary ($cl)" \
+  || bad "T41 presync_skew_s='$sk' summary line '$cl' - the measured skew did not reach the report"
+K=$(knob presyncskew); rc=$(analyze "$K" "$T/presync" "$T/baseline.json" "$T/jev-expected.py" t41k)
+skk=$(field "$T/t41k.json" "r['context'].get('guest_clock')")
+[ "$skk" = None ] && ok "T41 knob presyncskew: SEEN TO FAIL - the report drops the measurement (guest_clock=$skk)" \
+  || bad "T41 knob presyncskew: guest_clock='$skk', want None - the case cannot be driven"
+# ...and because the wrapper now writes context.json on EVERY run, a context.json that carries only the clock must
+# declare nothing: the undeclared error line of newsig (T28) still breaches the gate through it.
+cp -r "$T/newsig" "$T/clockonly"
+python3 - "$T/clockonly/context.json" <<'PY'
+import json, sys
+json.dump({"source": "log-sweep-selftest.sh fixture clockonly",
+           "guest_clock": {"presync_guest_utc": "2026-10-10T10:59:54.1234567Z", "presync_host_utc": "2026-10-10T07:59:50Z",
+                           "presync_skew_s": 10804, "postsync_guest_utc": None}}, open(sys.argv[1], "w", encoding="utf-8"))
+PY
+rc=$(analyze "$SRC" "$T/clockonly" "$T/baseline.json" "$T/jev-expected.py" t41c)
+uc=$(field "$T/t41c.json" "r['metrics']['error_lines_undeclared']"); bc=$(field "$T/t41c.json" "[x['metric'] for x in r['breaches']]")
+if printf '%s' "$uc" | grep -qE '^[0-9]+$' && [ "$uc" -ge 1 ] && printf '%s' "$bc" | grep -q 'error_lines_undeclared'; then
+  ok "T41 a context.json carrying only the clock declares nothing (undeclared=$uc still breaches)"
+else bad "T41 clockonly: undeclared='$uc' breaches=$bc - the clock-only context.json silenced an undeclared error"; fi
+
+# T42 the collector's cap: on its own default (60) a skip is a DATA failure, so the wrapper passes
+# -MaxFiles "${LOGSWEEP_MAX_FILES:-N}" with N >= 400. Not re-graded: a skip under the raised cap still fails.
+wrap_cap(){ # $1=wrapper -> "ok" or the reason
+  local p n
+  p=$(grep -a 'qtest pushrun mgmt/harness/log-sweep-collect.ps1' "$1" | head -1)
+  [ -n "$p" ] || { echo "no collector pushrun"; return; }
+  n=$(printf '%s' "$p" | grep -oE -- '-MaxFiles "\$\{LOGSWEEP_MAX_FILES:-[0-9]+\}"' | grep -oE '[0-9]+')
+  [ -n "$n" ] || { echo "no -MaxFiles: the collector runs on its own default cap (60)"; return; }
+  [ "$n" -ge 400 ] || { echo "-MaxFiles default $n is below 400"; return; }
+  echo ok
+}
+v=$(wrap_cap "$WRAP")
+[ "$v" = ok ] && ok "T42 the wrapper passes -MaxFiles \"\${LOGSWEEP_MAX_FILES:-N}\" (N >= 400) to the collector" \
+              || bad "T42 mgmt/harness/log-sweep.sh: $v"
+sed -E '/qtest pushrun mgmt\/harness\/log-sweep-collect\.ps1/ s/ -MaxFiles "\$\{LOGSWEEP_MAX_FILES:-[0-9]+\}"//' "$WRAP" > "$T/wrap/nocap.sh"
+sed -E '/qtest pushrun mgmt\/harness\/log-sweep-collect\.ps1/ s/LOGSWEEP_MAX_FILES:-[0-9]+/LOGSWEEP_MAX_FILES:-60/' "$WRAP" > "$T/wrap/cap60.sh"
+vn=$(wrap_cap "$T/wrap/nocap.sh"); v6=$(wrap_cap "$T/wrap/cap60.sh")
+m="nocap=$(chg "$T/wrap/nocap.sh") cap60=$(chg "$T/wrap/cap60.sh")"
+[ "$m" = "nocap=2 cap60=2" ] || bad "T42 the defect copies are not minimal mutants ($m changed lines)"
+[ "$vn" != ok ] && [ "$v6" != ok ] \
+  && ok "T42 SEEN TO FAIL: without the token '$vn'; with the collector's own default '$v6'" \
+  || bad "T42 a defect copy passed (nocap='$vn' cap60='$v6') - the check proves nothing"
 
 echo "--- $pass passed, $fail failed; fixtures/outputs in $T"
 [ "$fail" = 0 ] && exit 0 || exit 1
