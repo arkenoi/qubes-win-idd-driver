@@ -1,152 +1,122 @@
-# BUG: a live Windows guest shows no windows in dom0, permanently
+# BUG: a live Windows guest shows no windows in dom0
 
 ## CURRENT STATE
 
-**OPEN, P1, cause NOT established.** Written 2026-10-10 as a cold-read handover; this whole file is
-the current state, nothing here is a dated log. Maintain by editing in place.
+**OPEN, P1. This machine holds NO measured occurrence of the defect** — only source reading and
+self-authored notes (Jev `occurrence_measured` = `no-only-source-reading`, **conf 1.00**, 2026-10-10;
+wire: `scratchpad/jev-wire.jsonl`). Onset unknown. Whether it is a regression is unknown.
 
-The guest is alive and has windows; dom0 shows none; it never recovers without a qube restart. It
-reproduces TODAY (F1). The daemon dies first and the agent only notices (F3). Whether the GUI comes
-back is decided inside dom0's guid by which of its two EOF paths fires (F4) — but **every daemon death
-whose cause was ever established here was OUR protocol violation**, class (i), which bypasses
-`restart_guid` and can never self-heal (F5). **On no occurrence has the exit path been established**,
-because no dom0 guid log was ever collected (F6, F7).
+Every claim was put to Jev on its own. Three passed; they are the only facts here.
 
-**The agent-restart line is CLOSED by the owner (2026-10-10) — a restart was never the cure, and the
-defect reproduces on a plain cold boot with no restart in the run.** Do not re-open
-`DESIGN-gui-daemon-restart-survival.md` §2, and do not propose an A/B of a restart procedure.
+- **F1 [verified 2026-10-10] Jev 0.88 — our agent has a code path that reports the daemon gone for good.**
+  `agent/gui-agent/main.c:13328` logs `dom0's gui-daemon for this qube is gone and is not coming back on
+  its own`, reached only when `!g_VchanClientConnected` has held for `VCHAN_FIRST_CLIENT_WAIT_MS` across
+  `VCHAN_FIRST_CLIENT_MAX_RESTARTS` respawns with `REG_CONFIG_HAD_CLIENT_VALUE` set.
+  `agent/include/common.h:68-69`: **90000 ms** and **3**.
+- **F2 [verified 2026-10-10] Jev 0.79 — our agent deliberately drops some windows, and dom0 then shows
+  nothing, correctly.** A DWM-cloaked window is folded into `IsVisible` and dropped
+  (`agent/gui-agent/main.c:1888`, `:8213`). `SanitizeWireGeometry` refuses any window whose width or
+  height is not positive, sends nothing, and logs `GEOMDROP` (`agent/gui-agent/send.c:118-124`).
+- **F3 [verified 2026-10-10] source read — the harness cannot tell this defect from its own blind
+  spots.** Its guest-side window probe is `Get-Process notepad | Where-Object { $_.MainWindowHandle -ne
+  0 }` (`mgmt/harness/matrix.sh:1639`): no window class, no cloak state, no geometry, no hung state. The
+  harness grades "guest window present + empty dom0 capture" as **`INVALID-INSTRUMENT … not a product
+  verdict`** (`:1643`), and `:1627-1636` records a false positive of the empty-capture reading as the
+  reason that probe exists at all.
 
-Next action: arm a send-side record of the last N wire messages in the agent, flushed when the daemon
-stops draining (bottom of this file). It names what WE sent before guid went away, which is the only
-established cause class, guest-side, with no restart and no dom0 action.
+## NOT established
 
----
+- **When the defect first appeared — no date, no commit** [verified 2026-10-10]. Earliest material is
+  `DESIGN-gui-daemon-restart-survival.md` (2026-08-04), about incidents whose logs are not in this repo.
+- **That a guest ever emitted the F1 line** [verified 2026-10-10] Jev **0.03**. No raw gui-agent log on
+  this machine contains it; all 7 matches are files the assistant wrote (its own Jev state, wire log,
+  grep script, notes).
+- **The 2026-10-10 six-empty-captures reading** [verified 2026-10-10] Jev **0.05**. The harness code is
+  receipted; the occurrence is not. It was never a reproduction.
+- **The 2026-09-11 campaign false positive** [verified 2026-10-10] Jev **0.16**. The source comment is a
+  receipt that this project *recorded* it, not that the campaign facts were verified.
+- **Whether that notepad window was real, a ghost, cloaked or zero-sized** [verified 2026-10-10]. The F3
+  probe reads none of those. `IsHungAppWindow` exists in the agent (`workarea.c:131`), unused by it.
+- **Everything in `DESIGN-gui-daemon-restart-survival.md`** [verified 2026-10-10] — guid's two EOF paths,
+  `handle_vchan_error` skipping `vchan_at_eof`, the class (i)/(ii) split, "the daemon dies first", the
+  discriminator strings. Read from an upstream clone never version-matched to dom0's installed daemon.
+  Mechanism reference only. Its `E1`/`E2`/`E3`/`E9` numbers are internal to it; `findings/wedge.md`'s
+  E-series is unrelated (install stalls).
+- **The agent-restart line is CLOSED** [verified 2026-10-10] — owner: *"guest daemon restart NEVER was
+  the cure, stop chasing this path at all"*. §2/§3 of that doc, including its G0, are retired. Do not
+  propose a restart, a reconnect, or a survival strategy for one.
 
-## The defect
+## Conditions observed on
 
-A Windows guest with our QWT reaches a state where **the guest is alive and has windows, and dom0
-shows none of them — and it never recovers on its own.** qrexec keeps working, the agent keeps
-running, applications keep launching and painting guest-side. Only a qube shutdown/start restores the
-GUI.
+Three readings exist. **Only the first was measured**; the other two are listed so nobody mistakes them
+for observations.
 
-The guest-side terminal state is: the agent is parked on `Awaiting for a vchan client` with its vchan
-server node published and healthy, and **no `qubes-guid` process exists in dom0 for that domain.**
+| | guest | VM class | Windows | our build | trigger | standing |
+|---|---|---|---|---|---|---|
+| 2026-10-09 | `win11-acc` | **StandaloneVM**, `virt_mode=hvm`, `netvm=None`, `os=Windows`, `gui=1` | Win11, exact build pending | not recorded per-observation | **agent service restart** (one variable, same guest, same window, same probe) | MEASURED |
+| 2026-10-10 | `WIN10-appvm` cell | **AppVM**, created by the cell | Win10 | the release package under test | plain boot (boot 3) | NOT established, Jev 0.05 |
+| 2026-10-07 | `win11r-gz` | guest no longer exists on the rig | Win11 retail lineage | — | — | NOT established, Jev 0.03 |
 
----
+What the measured row consists of (`findings/issues.md` GUIDNORECONNECT, verified 2026-10-09): notepad
+running guest-side with `hwnd=459290 visible=True`, the agent parked on `Awaiting for a vchan client`
+with no `A vchan client has connected` after its last init record, and the dom0 per-window capture
+returning **0** PNGs. After a guest reboot: `A vchan client has connected` 0.32 s later, capture **1**
+PNG. Note `visible=True` — that probe read visibility, which the F3 probe does not; it still did not read
+class, cloak state, rect or hung state.
 
-## Established facts
+Two cautions on that row, both from the owner. He **closed** it on 2026-10-09 as dom0-side, and on
+2026-10-10 closed the agent-restart path entirely. So it is the only measured instance of the symptom,
+and its trigger is not a path to work on.
 
-Seven, each with a receipt. Nothing here is inference.
+**Our build version is not recorded against any of the three.** This session's work was on **4.3.36**
+(unreleased); the last release is **v4.3.35-agentf613dc3**. Which package was installed on `win11-acc`
+when the 10-09 reading was taken is not established — and per this project's own evidence rule, the
+running binary's hash against the manifest is what "our build" means, not a release tag.
 
-**F1 — It reproduces, currently, and it is the reported condition.** 2026-10-10, inside the gate, on an
-unrelated run: `FAIL WIN10-appvm boot 3: the guest shows 1 notepad window(s) but the dom0 capture
-returned none on six tries`. Measured deliberately the same night, one guest, one variable: after an
-agent restart notepad had a visible top-level HWND, the agent sat on `Awaiting for a vchan client`,
-`qtest shot` returned 0 PNGs; after a qube reboot the agent logged `A vchan client has connected`
-0.32 s later and the same capture returned 1.
+## Reproduction sequence
 
-**F2 — The agent states the condition in its own log**, and this line is the one to grep for in any
-report (`main.c:13328`):
-`no gui-daemon client in 90000 ms after 3 restarts, but this guest HAS had one before - dom0's
-gui-daemon for this qube is gone and is not coming back on its own. The qube keeps running (qrexec
-works) and will show no windows until it is restarted.`
-Before that line the agent deliberately exits and is respawned 3 times (`VCHAN_FIRST_CLIENT_MAX_RESTARTS`),
-each respawn re-announcing its vchan node. So a log from this defect contains 3 agent generations; that
-is by design, not a crash loop.
+**Not known to be deterministic** — this is the sequence the condition was seen in, not a recipe known
+to fire. One guest at a time.
 
-**F3 — The daemon dies first; the agent only notices.** In the 08-04 incident the dying agent logged
-`libxenvchan_send: vchan not open` on `MSG_MAP`/`MSG_SHMIMAGE` *before* `WatchForEvents: vchan
-disconnected`. That ordering is what `libxenvchan_write` produces when the peer is **already** gone
-(`io.c:355` returns −1 on `!is_open`). The agent is not emitting a bad message at that moment.
+1. Start a Windows AppVM with our QWT; let it reach the desktop.
+2. Open an app window. **Confirm dom0 shows it.** Required, not a sanity check: F1 only reports "daemon
+   gone" on a guest that has had a daemon client before.
+3. Reboot the guest normally; let it reach the desktop again.
+4. Open an app window again.
+5. Look at dom0. The defect: no window appears, the guest stays alive (qrexec answers), and nothing
+   short of shutting the qube down and starting it again brings the GUI back.
+6. **Do not reboot, do not kill, do not restart the agent** until everything below is collected. A
+   restart loses the only generation of evidence there is.
 
-**F4 — Whether it self-heals is decided by which of guid's two EOF paths fires**, and only one of them
-restarts (`gui-common/txrx-vchan.c`, source-verified):
+## Evidence to look for
 
-| path | outcome |
+Agent log, `Q:\Qubes Logs`, read as SYSTEM. Prefix `[YYYYMMDD.HHMMSS.mmm-PID:TID-LEVEL]`; three
+different PIDs in one boot are the agent's three deliberate respawns, not a crash loop.
+
+| look for | what it tells you |
 |---|---|
-| poll helper → `libvchan_is_eof` → `vchan_at_eof()` | `restart_guid()` → re-`execv` → **GUI recovers** |
-| write helper → `handle_vchan_error` → `exit(0)` | **no restart, ever** → this defect |
+| `GEOMDROP` | **check first.** If present, we refused to send that window ourselves (F2) and dom0 is correctly empty. Flips the diagnosis |
+| `A vchan client has connected` | whether a daemon connected this boot, and when. Absent = never arrived; present = arrived, then went away |
+| `dom0's gui-daemon for this qube is gone and is not coming back on its own` | F1: 90 s with no client, three times, on a guest that had had one |
+| `Awaiting for a vchan client` | the parked state |
 
-`handle_vchan_error` never consults `vchan_at_eof`. The precondition for the fatal path is only *"the
-daemon had anything to send at that instant"* — `libxenvchan_buffer_space` does not check `is_open`, so
-it returns non-zero ring space after the peer dies. The daemon writes back constantly in response to us
-(every honoured `MSG_MAP` produces a `MSG_MAP` write-back, `xside.c:2510-2513`; every destroy a
-`MSG_DESTROY` echo at protocol ≥ 1.5, and we negotiate minor 8). Matches the record: 08-03 recovered
-twice, 08-04 did not, twice.
+About the window itself, for the exact hwnd. None of it is collected today, and without it the guest
+side proves nothing (F3):
 
-**F5 — Every daemon death here whose cause WAS established was our own protocol violation.** E1
-`img_data_size`, E2 UNMAP/DESTROY-then-SHMIMAGE, E3 materialisation, E9 `msg 0x86`, E7 by inference.
-That is class (i): guid `exit(1)`s fail-closed on bad guest input (`xside.c:3943-3957`), which **bypasses
-`restart_guid` entirely and can never self-heal.** This class is ours, in our code, and fixable guest-side.
-`agent/gui-agent/send.c` carries the known death sites and the geometry sanitizer written against them —
-including `MSG_WINDOW_DUMP` over the protocol maximum → `errx(1)`, daemon dies (`xside.c:3894`).
+| read | why |
+|---|---|
+| window **class** | a `Ghost` class means the app hung and Windows substituted a stand-in — no real window to show, no display bug |
+| `DWMWA_CLOAKED`, `IsWindowVisible` | a cloaked window is one we drop on purpose |
+| the window **rect** | zero or negative width/height is one we refuse on purpose |
+| `IsHungAppWindow` | whether the app pumps messages at all |
 
-**F6 — On no occurrence has the exit path ever been established.** Four candidates produce an *identical*
-guest-side symptom: `exit(0)` write-path EOF (F4); `exit(1)` protocol violation (F5); `exit(1)` failed
-reconnect; killed by signal or exiting via `get_boot_lock`, which prints nothing. No dom0 guid log has
-ever been collected for any occurrence. **This is the single biggest hole and every ranking is provisional
-until it is closed.**
+Two read-only dom0 facts separate "daemon gone" from "daemon stuck", for whoever has dom0 access, taken
+before the recovery restart: whether a `qubes-guid` process exists for that domain, and whether
+`/run/qubes/guid-running.<domid>` exists.
 
-**F7 — The discriminators exist, are source-verified, and the evidence is perishable.** In
-`/var/log/qubes/guid.<vm>.log`: `libvchan_is_eof` = restarting path; a bare `EOF` = fatal write path;
-`Failed to connect to gui-agent` = stale node; `msg 0x.. without CREATE` = protocol `exit(1)`; **no line
-at all** is a distinct pre-registered outcome, not "inconclusive". guid rotates `.log`→`.log.old` and
-`O_TRUNC`s on every start without `-f`, and the recovery reboot is exactly such a start — **the failing
-generation survives exactly one recovery cycle.** Reproduce → recover → copy both files immediately.
+## To measure first
 
----
-
-## What this is NOT
-
-- **Not a reconnect race** [verified 2026-08-04] - read in the upstream clone.
-  `libvchan_client_init` polls with an infinite timeout while the node is
-  merely absent, aborting only if the domain is dead (`init.c:210-217, 245-275`). A re-exec'd guid cannot
-  fail because `gui-agent.exe` is briefly missing. The "shorten the agent-absent window" family is dead.
-- **Not the stale-node variant** — that one is closed [verified 2026-10-07].
-  An agent that exited without ever having had a
-  client used to leave a live-looking node pointing at a revoked ring; `main.c:14234` now withdraws the
-  announcement unconditionally. It was the leading candidate for dom0's `outdated protocol (0:0)` dialog
-  (Jev 0.87), chain never established (0.11).
-- **Not fixed by anything done on 2026-10-09/10** [verified 2026-10-10].
-  Asked with fair facts, Jev: `reported_defect_fixed`
-  **0.03**, `symptom_still_reproduces` **0.97**, `fixes_address_the_report` = **adjacent-not-causal,
-  conf 1.00**. Those six fixes (a notification gate, autologon, capture log levels, a helper's task
-  registration, an installer step) are real defects and several ship — none is on the path by which dom0
-  displays a guest's windows.
-- **NOT an agent-restart problem, and the restart line is CLOSED** [verified 2026-10-10].
-  Owner, 2026-10-10: *"guest daemon restart NEVER was the cure, stop chasing this path at all."*
-  **It stays closed until he reopens it in writing.** That retires the whole of
-  `DESIGN-gui-daemon-restart-survival.md` §2 as a line of work — the graceful stop, the in-process
-  re-listen, and the G0 A/B of the restart procedure that this file named as its next action in its first
-  revision. The defect does not need a restart to appear: **F1's reproduction is a plain cold BOOT**
-  (`WIN10-appvm boot 3`), with no agent restart anywhere in the run. Any A/B of a restart procedure
-  therefore measures a path the defect does not travel.
-
----
-
-## What is actually next
-
-The symptom appears on an ordinary boot, so the question is what **our agent put on the wire** in the
-seconds before dom0's guid stopped reading. F5 is the only established cause class, F6 says the exit path
-has never once been captured, and F7's discriminator sits in a dom0 log this project cannot read. So the
-discriminator has to be built **on the sending side, in our agent, where the whole message history
-already passes through one file.**
-
-**Arm the send-side record first, then let any run catch it.** The occurrence in F1 was incidental — it is
-not reproducible on demand, so an instrument that is merely *available* is worth nothing; it has to be
-shipping and on by default when the next occurrence happens. The pieces already exist in
-`agent/gui-agent/send.c`: `SanitizeWireGeometry` (refuses/clamps what guid would `VERIFY` on, logging
-`GEOMDROP`), `MaySendForWindowLocked` (the `msg without CREATE` gate that is one of the four exit
-candidates), and `ProtoTrace` for the full stream. What is missing is that none of it is retained at the
-moment that matters: a bounded in-memory ring of the last N sends — type, hwnd, geometry, length — flushed
-to the log when the daemon stops draining. The trigger also already exists: `VchanSendDegraded()` /
-`VchanSendWedged()` (`vchan.c`) is how the agent already distinguishes "daemon not draining" from "vchan
-closed", and `main.c:14196` acts on it.
-
-That turns the next occurrence from a shrug into the named message, guest-side, with no restart and no dom0
-action. Per evidence rule 5 it counts only once it has been seen to fire with a violation deliberately
-re-introduced on a scratch build (an oversized `MSG_WINDOW_DUMP` is the cheapest: `xside.c:3894`, `errx(1)`).
-
-Residual, stated plainly: this names **what we sent**, which settles F5 — our violation or not. It cannot
-by itself distinguish F4's write-path `exit(0)` from a signal or a boot-lock exit; those are
-indistinguishable guest-side and need the dom0 guid log (F7), which is out of scope here.
+1. **Capture one raw occurrence** — pull the agent log off a failing guest and keep it. Nothing can be
+   dated or attributed until such an artefact exists here.
+2. **Fix the F3 probe before any run grades this again** — the four window reads above, for the specific
+   hwnd. Until then an empty-capture result is uninterpretable, which is what the harness already says.
