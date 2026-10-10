@@ -1186,5 +1186,31 @@ m="nocap=$(chg "$T/wrap/nocap.sh") cap60=$(chg "$T/wrap/cap60.sh")"
   && ok "T42 SEEN TO FAIL: without the token '$vn'; with the collector's own default '$v6'" \
   || bad "T42 a defect copy passed (nocap='$vn' cap60='$v6') - the check proves nothing"
 
+# ---- T43 the collector tells "could not read" from "filtered everything" -------------------------
+# MEASURED 2026-10-10 on win10-acc, in TWO separate captures: the System channel reported
+# "EV NONE [System]" while the EVENTS line said required_missing=- , so the sweep was blind to every
+# shutdown marker (109/1074/6006) and every SCM record (7023/7024/7031/7034) and still reported itself
+# complete. System is declared Required in the collector's own channel table. The collector needs a
+# guest, so this is a shape check on its text, seen to fail on a copy with the guard removed.
+COLL="$ROOT/mgmt/harness/log-sweep-collect.ps1"
+coll_raw(){ # $1=collector -> "ok" or the reason
+  command grep -aq 'GUARD:channelraw' "$1" || { echo "no raw-vs-kept guard"; return; }
+  command grep -aq '\$raw = \$recs.Count' "$1" || { echo "the raw record count is never taken"; return; }
+  command grep -aq 'raw -eq 0 -and \$ch.Required' "$1" || { echo "a required channel with no records at all is not flagged"; return; }
+  command grep -aq 'EV NONE \[\$log\] raw=\$raw kept=0' "$1" || { echo "the NONE line does not carry raw/kept"; return; }
+  echo ok
+}
+v=$(coll_raw "$COLL")
+[ "$v" = ok ] && ok "T43 the collector distinguishes a channel it could not read from one whose filters dropped everything, and fails a REQUIRED channel that returned nothing" \
+              || bad "T43 mgmt/harness/log-sweep-collect.ps1: $v"
+mkdir -p "$T/coll"
+sed '/raw -eq 0 -and \$ch.Required/d' "$COLL" > "$T/coll/noflag.ps1"; vn=$(coll_raw "$T/coll/noflag.ps1")
+sed '/\$raw = \$recs.Count/d'        "$COLL" > "$T/coll/noraw.ps1";  vr=$(coll_raw "$T/coll/noraw.ps1")
+m="noflag=$(diff "$COLL" "$T/coll/noflag.ps1" | grep -c '^[<>]') noraw=$(diff "$COLL" "$T/coll/noraw.ps1" | grep -c '^[<>]')"
+[ "$m" = "noflag=1 noraw=1" ] || bad "T43 the defect copies are not minimal mutants ($m changed lines)"
+[ "$vn" != ok ] && [ "$vr" != ok ] \
+  && ok "T43 SEEN TO FAIL: without the flag '$vn'; without the raw count '$vr'" \
+  || bad "T43 a defect copy passed (noflag='$vn' noraw='$vr') - the check proves nothing"
+
 echo "--- $pass passed, $fail failed; fixtures/outputs in $T"
 [ "$fail" = 0 ] && exit 0 || exit 1

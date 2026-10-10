@@ -360,6 +360,7 @@ if (-not $NoEvents) {
         $log = $ch.Log
         try {
             $recs = @(Get-WinEvent -FilterHashtable @{ LogName = $log; Id = $ch.Ids; StartTime = $sinceL } -ErrorAction Stop)
+            $raw = $recs.Count
             $kept = 0
             foreach ($r in ($recs | Sort-Object TimeCreated)) {
                 $msg = $r.Message
@@ -379,7 +380,17 @@ if (-not $NoEvents) {
                 $kept++
                 $ev.Add("EV $($r.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss.fff')) [$log] id=$($r.Id) level=$($r.Level) ${prov}: $msg")
             }
-            if ($kept -eq 0) { $ev.Add("EV NONE [$log]") }
+            # TWO DIFFERENT NOTHINGS, AND THE DIFFERENCE IS THE EVIDENCE. Measured 2026-10-10 on
+            # win10-acc, twice: the System channel reported `EV NONE [System]` with
+            # required_missing=- , so the sweep was blind to every shutdown marker (109/1074/6006)
+            # and every SCM record (7023/7024/7031/7034) while reporting itself complete. A
+            # REQUIRED channel that returns no records at all is missing data and must fail; one
+            # that returned records this filter then dropped is an answer, and says so.
+            # (# GUARD:channelraw)
+            if ($kept -eq 0) {
+                $ev.Add("EV NONE [$log] raw=$raw kept=0")
+                if ($raw -eq 0 -and $ch.Required) { $requiredMissing.Add("$log (no records at all)") }
+            }
         } catch {
             $m = $_.Exception.Message
             if ($m -match 'No events were found') { $ev.Add("EV NONE [$log]") }
