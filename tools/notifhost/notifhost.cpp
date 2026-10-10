@@ -157,6 +157,7 @@
                                                 // the agent (wgcbroker_ipc.h include convention)
 #include "../../agent/gui-agent/notifytexts.h" // this helper's own notification texts, as rows the
                                                 // agent's offline render test holds to the rules
+#include "../../agent/gui-agent/modver.h"      // this image's file version: the technical line's "build"
 #include "../../agent/gui-agent/toastident.h"  // the toast-hold contract: identity normalization/hashes
                                                 // + the per-notification record ring the agent reads
 
@@ -490,12 +491,13 @@ static std::wstring BannerKey(std::wstring const& aumid)
 // the verdict as far as this bridge knows it (pending -> bridge/window), the arrival tick. Written into
 // the section the agent created (--hold) and announced with a SetEvent on the agent's verdict event
 // (--verdict) - the agent's main loop waits on it; nothing polls on either side. Without --hold (an
-// older agent) nothing is published and the agent maps banners as before.
+// older agent) nothing is published and the agent maps banners as before. A section that cannot be opened
+// means no records this run: the agent shows every banner it cannot decide.
 
 static void HoldOpen(const wchar_t* name)
 {
     HANDLE m = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, name);
-    if (!m) { BLog(L"HOLD section %s not opened (%lu) - no records this run; the agent shows every banner it cannot decide", name, GetLastError()); return; }
+    if (!m) { BLog(L"HOLD section %s not opened (%lu), banners are not held this run", name, GetLastError()); return; }
     void* base = MapViewOfFile(m, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, 0);
     CloseHandle(m);   // the view keeps the section alive
     if (!base) { BLog(L"HOLD section %s not mapped (%lu)", name, GetLastError()); return; }
@@ -505,9 +507,10 @@ static void HoldOpen(const wchar_t* name)
 
 static void HoldSignal() { if (g_holdVerdictEvt) SetEvent(g_holdVerdictEvt); }
 
+// No --hold means an older agent (a mixed install?): nothing is held for this bridge's verdicts.
 static void HoldStart()
 {
-    if (!g_hold) { BLog(L"HOLD no --hold section from the agent (mixed install?) - banners are not held for this bridge's verdicts"); return; }
+    if (!g_hold) { BLog(L"HOLD no --hold section from the agent, banners are not held this run"); return; }
     g_hold->BridgeStartTick = GetTickCount64();
     TI_STORE32(&g_hold->BridgeAlive, 1);
     HoldSignal();
@@ -918,9 +921,9 @@ static WpnCorr WpnCorrelate(std::wstring const& aumid, long long creationFt,
         sqlite3_stmt* st = nullptr;
         if (q->prepare_v2(db, sql.c_str(), -1, &st, nullptr) != WPN_SQLITE_OK)
         {
-            // Missing table/column: THE schema gate. Permanent for this process, loud once.
-            BLog(L"WPNDB SCHEMA MISMATCH: %hs (shadow classifier disabled for this run, fail-open)",
-                 q->errmsg(db));
+            // Missing table/column: THE schema gate. Permanent for this process, loud once: the shadow classifier is
+            // disabled for the run and the listing fails open (every toast on the window path).
+            BLog(L"WPNDB SCHEMA MISMATCH: %hs, shadow classifier off this run", q->errmsg(db));
             schemaState = 2;
             q->close_v2(db);
             return done("schema-mismatch");
@@ -2138,15 +2141,16 @@ static void ShadowClassifyWork(ShadowJob& j)
                             if (h->WaitFor(kToastActRouteLookupBudgetMs, ignored, ignoredSrc)) actState = ActivatorResolveNow(j.aumid, actClsid, actSrc);
                             if (actState == ToastActActivator::Unknown)
                             {
+                                // A row-4 toast past its budget: the guest's buttons stay with the user on the window path, and the
+                                // map, once built, serves the next toast.
                                 actSrc = L"budget-exceeded";
-                                BLog(L"ACTIVATOR id=%u aumid=%s: the shortcut scan is not done within the %llu ms route budget - this row-4 toast "
-                                     L"takes the window path (the guest's buttons stay with the user); the map serves the next toast",
+                                BLog(L"ACTIVATOR id=%u aumid=%s: shortcut scan not done within the %llu ms budget, this toast takes the window path",
                                      j.id, j.aumid.c_str(), (ULONGLONG)kToastActRouteLookupBudgetMs);
                             }
                         }
                         else
-                            BLog(L"ACTIVATOR id=%u aumid=%s: the shortcut map is not built yet (%s) - NOT awaited for an informational toast "
-                                 L"(its route does not depend on it; its default click is not carried this time)", j.id, j.aumid.c_str(), actSrc);
+                            // An informational toast's route does not depend on the map; its default click is not carried this time.
+                            BLog(L"ACTIVATOR id=%u aumid=%s: shortcut map not built yet (%s), not awaited for an informational toast", j.id, j.aumid.c_str(), actSrc);
                     }
                 }
                 ToastActCtx ctx{ j.packaged, actState };
@@ -2532,8 +2536,9 @@ static DWORD WINAPI ShortcutScanThread(LPVOID)
     const ULONGLONG t0 = GetTickCount64();
     try
     {
+        // No COM apartment (CoInitializeEx failed): activator lookups are registry-only for the run.
         if (co) files = ShortcutScanAll(entries);
-        else BLog(L"ACTIVATOR scan: no COM apartment - the shortcut map is empty this run (registry-only lookups)");
+        else BLog(L"ACTIVATOR scan: COM init failed, the shortcut map is empty this run");
     }
     catch (...) { BLog(L"ACTIVATOR scan threw - the map holds what was read before it"); }
     unsigned withActivator = 0;
@@ -2669,9 +2674,8 @@ static void ActFailQueue(ToastActEntry const& entry, std::string const& key, std
     const uint32_t id = entry.guestId;
     LONG seq = 0;
     const bool found = HoldVerdictSeq(id, TH_VERDICT_WINDOW, false, &seq);
-    BLog(L"ACTION id=%u dom0=%u key=%hs %s: %s - record %s (seq %ld); the guest banner is reopened if it is still "
-         L"displayed, else dom0 gets an error notice", id, entry.dom0Id, key.c_str(), how, detail.c_str(),
-         found ? L"turned window" : L"gone from the ring", seq);
+    BLog(L"ACTION id=%u dom0=%u key=%hs %s: %s - record %s (seq %ld), banner reopened or dom0 notified", id, entry.dom0Id,
+         key.c_str(), how, detail.c_str(), found ? L"turned window" : L"gone from the ring", seq);
     ActFail f;
     f.guestId = id; f.seq = seq; f.recordFound = found; f.flippedAt = GetTickCount64();
     f.app = entry.app; f.title = entry.title; f.label = L"?"; f.detail = detail;
@@ -3312,8 +3316,10 @@ static void ActPump(ULONGLONG now, ULONGLONG* nextDue)
         std::wstring summary, body;
         ToastActNoticeText(f.entry, act, f.detail, summary, body);
         const bool ok = ForwardText(summary, body, 0, NotifyKind::Error);
-        BLog(L"ACTION id=%u key=%hs failure reported to dom0 as an error notice: %s (banner %s)", f.guestId, f.key.c_str(),
-             ok ? L"OK" : L"FAIL (connection; retried)", f.recordFound ? L"gone before the correction could show it" : L"record already gone");
+        // The banner arm: the record was flipped to window but the agent never marked it shown - the banner was gone
+        // before the correction could show it - or the record had already left the ring.
+        BLog(L"ACTION id=%u key=%hs failure sent to dom0 as an error notice: %s (banner %s)", f.guestId, f.key.c_str(),
+             ok ? L"OK" : L"FAIL (connection, retried)", f.recordFound ? L"gone before it could be reopened" : L"record already gone");
         if (!ok) keep.push_back(std::move(f));
     }
     if (!keep.empty())
@@ -3553,15 +3559,17 @@ static bool WriteSmallA(std::wstring const& path, const void* data, DWORD len)
 }
 
 // key = a row of notifytexts.h ("listener-denied", "listener-init"): the text is rendered the way
-// the agent's offline render test renders it - header, line 1, the cause with this helper's exit
-// code, and the technical line with this process's pid.
+// the agent's offline render test renders it - header, line 1, the cause, and the technical line
+// with this process's pid, this helper's exit code and this image's build (modver.h; "" renders
+// "build unknown").
 static void ReportErrorSelf(const char* key)
 {
     const QerrText* t = QerrTextFind(key);
     if (!t) { BLog(L"NOTIFYERR no text row '%S' (a bug of ours) - not sent", key); return; }
     const char* id = t->id;
-    char text[QERR_MAX_TEXT + 256], header[200];
-    if (!QerrRenderText(text, sizeof(text), t, nullptr, (unsigned long)GetCurrentProcessId()) ||
+    char text[QERR_MAX_TEXT + 256], header[200], build[32] = { 0 };
+    (void)QerrModuleVersion(build, sizeof(build));
+    if (!QerrRenderText(text, sizeof(text), t, nullptr, (unsigned long)GetCurrentProcessId(), build) ||
         !QerrFormatHeader(header, sizeof(header), t->header, nullptr))
     { BLog(L"NOTIFYERR notifhost.%S not sent: the text did not render", id); return; }
 
@@ -3596,8 +3604,8 @@ static void ReportErrorSelf(const char* key)
     if (!QerrFormatMarker(kv, sizeof(kv), now) || !WriteSmallA(marker, kv, (DWORD)strlen(kv)) ||
         !QerrFormatCount(kv, sizeof(kv), now, newCnt) || !WriteSmallA(countPath, kv, (DWORD)strlen(kv)))
     {
-        // No per-boot record, so no send and no dedupe: the box once (this process reports at most twice and exits).
-        BLog(L"NOTIFYERR state dir not writable - not sent (no once-per-boot record, so no send)");
+        // No once-per-boot record, so no send and no dedupe: the box once (this process reports at most twice and exits).
+        BLog(L"NOTIFYERR state dir not writable, not sent (a box is shown instead)");
         ShowErrorBoxSelf(QERR_FAIL_TRANSPORT, id, header, text, L"the state dir could not be written");
         return;
     }
@@ -3671,10 +3679,11 @@ static int BridgeMain()
     // the agent relaunches the bridge, the live instance holds the singleton, the new one exits 0
     // instantly, and the user gets a dom0 notification - every 60 s.
     // QTB_EXIT_ALREADY_RUNNING is its own code so the supervisor can tell "I am already running"
-    // from "I finished", and main.c treats it as proof the bridge is alive rather than as a death.
+    // from "I finished", and main.c treats it as proof the bridge is alive rather than as a death. The mutex
+    // is Local\\QubesToastBridgeSingleton; the holder is the running bridge, and exiting on it is NOT a death.
     HANDLE mtx = CreateMutexW(nullptr, FALSE, L"Local\\QubesToastBridgeSingleton");
     if (mtx) { DWORD w = WaitForSingleObject(mtx, 0); if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED) {
-        BLog(L"SINGLETON another bridge instance already holds Local\\QubesToastBridgeSingleton - exiting %u (already running, NOT a death)",
+        BLog(L"SINGLETON another bridge instance already holds the singleton, exiting %u",
              (unsigned)QTB_EXIT_ALREADY_RUNNING);
         return QTB_EXIT_ALREADY_RUNNING; } }
     ProcessIdToSessionId(GetCurrentProcessId(), &g_mySession);
@@ -3766,8 +3775,8 @@ static int BridgeMain()
         }
         catch (...)
         {
-            BLog(L"PUSH NotificationChanged unavailable - the ETW proxy's records drive the listing (2 s floor only while "
-                 L"the proxy is not live)");
+            // The proxy's records are the push source then; the 2 s floor applies only while the proxy is not live.
+            BLog(L"PUSH NotificationChanged unavailable, the ETW proxy's signal drives the listing instead");
         }
     }
     // THE LISTING FLOOR (rest-zero S4c): only while the bridge has NO push source at all. With NotificationChanged armed,
@@ -3844,8 +3853,9 @@ static int BridgeMain()
         else BLog(L"BRIDGE no --ready from the agent (mixed install?) - it will find our pid only on its own wakes");
     }
     HoldStart();   // the toast-hold records are live from here (ADR-toasts 10)
+    // Without --alive (an older agent: a mixed install?) the agent's death falls back to the 30 s pid probe.
     if (!g_agentAlive)
-        BLog(L"BRIDGE no --alive from the agent (mixed install?) - the agent's death falls back to the 30 s pid probe");
+        BLog(L"BRIDGE no --alive from the agent, its death is seen only by a 30 s poll");
     g_mainWake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     HANDLE stopChg = FindFirstChangeNotificationW(StateDir().c_str(), FALSE, FILE_NOTIFY_CHANGE_FILE_NAME);
     if (stopChg == INVALID_HANDLE_VALUE) { stopChg = nullptr; BLog(L"BRIDGE stop-dir watch failed %lu - the stop file is seen on the next wake only", GetLastError()); }
@@ -3861,7 +3871,8 @@ static int BridgeMain()
                 RegNotifyChangeKeyValue(k, TRUE, REG_NOTIFY_CHANGE_LAST_SET | REG_NOTIFY_THREAD_AGNOSTIC, consentEvt, TRUE);
     };
     armConsent();
-    if (!consentKeys[0] && !consentKeys[1]) BLog(L"BRIDGE consent keys not watchable - revocation is noticed when a listing fails");
+    // Neither consent key opened: a revocation is noticed only when a listing fails, not the moment it happens.
+    if (!consentKeys[0] && !consentKeys[1]) BLog(L"BRIDGE consent keys not watchable, revoked access is noticed when a listing fails");
     HWND msgWnd = nullptr;
     {
         WNDCLASSEXW wc{}; wc.cbSize = sizeof(wc); wc.lpfnWndProc = DefWindowProcW;
@@ -3922,12 +3933,12 @@ static int BridgeMain()
             {
                 // A fresh connection must trigger an immediate listing pass: toasts left
                 // deliberately unseen while disconnected (fail-open retry) forward NOW,
-                // not at the next NotificationChanged / 30 s floor.
+                // not at the next NotificationChanged / 30 s floor. Banners are held per toast by the agent (ADR-toasts
+                // 10): no ShowBanner writes from here.
                 if (ConnUp())
                 {
                     backoff = 0; connected = true; toastSignaled = true;
-                    BLog(L"connection up - %u allowlisted app(s); banners are held per toast by the agent (no ShowBanner writes)",
-                         (UINT)allow.size());
+                    BLog(L"connection up - %u allowlisted app(s)", (UINT)allow.size());
                 }
                 else
                 {
@@ -4020,17 +4031,18 @@ static int BridgeMain()
                 };
                 std::vector<NewToast> fresh;
                 // NON-SEAMLESS MODE (ADR-toasts 10): the agent says whether the hold exists right now. While it does
-                // not, every toast listed here takes the window path - the guest banner inside the desktop window is
-                // the one copy the user gets. Logged once per change, not per toast.
+                // not, every toast listed here takes the window path - the guest draws its banner inside the desktop
+                // window, which is the one copy the user gets, and forwarding it would double it. Seamless, toasts
+                // are routed: the agent holds each banner for its verdict. Logged once per change, not per toast; the
+                // line names the mode and the path, the why stays here.
                 const bool seamless = HoldSeamless();
                 {
                     static bool lastSeamless = true;
                     if (seamless != lastSeamless)
                     {
                         lastSeamless = seamless;
-                        BLog(seamless ? L"MODE seamless - toasts are routed (the agent holds each banner for its verdict)"
-                                      : L"MODE non-seamless - every toast takes the window path: the guest draws its banner inside "
-                                        L"the desktop window, forwarding would double it");
+                        BLog(seamless ? L"MODE seamless - toasts are routed"
+                                      : L"MODE non-seamless - every toast takes the window path");
                     }
                 }
                 for (auto const& un : list)
@@ -4070,10 +4082,11 @@ static int BridgeMain()
                                 (listed ? TH_REC_FLAG_ALLOWLISTED : 0u) | (windowOnly ? TH_REC_FLAG_WINDOWONLY : 0u) |
                                 (app.empty() ? TH_REC_FLAG_NO_SENDER : 0u));
                     ShadowClassify(un, id, aumid);
+                    // A window-only app: its click is its action, so the banner stays in the guest and nothing is forwarded.
                     if (windowOnly)
                     {
                         seen.insert(id); VerdictForget(id);
-                        BLog(L"skip id=%u aumid=%s title='%s' (window path; window-only app - its click is its action)", id, aumid.c_str(), title.c_str());
+                        BLog(L"skip id=%u aumid=%s title='%s' (window path; window-only app)", id, aumid.c_str(), title.c_str());
                         continue;
                     }
                     if (!seamless)
@@ -4134,7 +4147,10 @@ static int BridgeMain()
                                  id, aumid.c_str(), title.c_str(), kVerdictMaxPasses);
                         }
                         else
-                            BLog(L"route id=%u aumid=%s (bridge; %s verdict; actions=%s)", id, aumid.c_str(), listed ? L"allowlisted sender, classifier" : L"classifier",
+                            // The bridge route WITH a verdict (the ForwardBlind rung above is the allowlisted shortcut without
+                            // one): the classifier decided, the sender may also be allowlisted, and the plan's actions ride
+                            // with the toast. Facts only on the line; who decided is the verdict= value.
+                            BLog(L"route id=%u aumid=%s bridge verdict=%s actions=%s", id, aumid.c_str(), listed ? L"classifier+allowlisted" : L"classifier",
                                  ToastActSlug(ve.plan).c_str());
                         if (!listed)
                         {
@@ -4274,9 +4290,10 @@ static int BridgeMain()
                          (ok && withActions) ? L" dom0=" : L"", (ok && withActions) ? std::to_wstring(dom0Id).c_str() : L"",
                          e.allowlisted ? L" (allowlisted)" : L"");
                     // The assertion (guest finding 2026-10-07): a row-4 toast - real-choice buttons - must never go to dom0 as text.
+                    // SENT with actions=none is a bug of ours: decision 4 forbids a half-way forward, and the guest banner is held
+                    // by the hold, so the choice is lost in dom0.
                     if (ok && ToastActSentAnomaly(e.row, actions.size() / 2))
-                        BLog(L"ANOMALY id=%u: a row-4 toast (real-choice buttons) was SENT with actions=none - a bug of ours (decision 4 "
-                             L"forbids a half-way forward); its guest banner is held by the hold, so the choice is lost in dom0", e.id);
+                        BLog(L"ANOMALY id=%u: a toast with choice buttons went to dom0 without them, the choice is lost", e.id);
                 }
             }
             // bound the seen-set: INTERSECT with what is still in the center. A plain rebuild
@@ -4616,6 +4633,7 @@ int wmain(int argc, wchar_t** argv)
     if (actExecFile) return ActExecMain(actExecFile);
     if (resolveAumid) return ResolveActivatorMain(resolveAumid);
     if (invokeAumid) return InvokeActivatorMain(invokeAumid, invokeArgs);
+    // A bare --hold derives the section and verdict-event names from the --alive name; without one nothing opens.
     if (holdDerive)
     {
         const size_t suffix = wcslen(L"_alive");
@@ -4628,7 +4646,7 @@ int wmain(int argc, wchar_t** argv)
             if (!g_holdVerdictEvt) BLog(L"HOLD verdict event %s_verdict not opened (%lu)", prefix.c_str(), GetLastError());
         }
         else
-            BLog(L"HOLD a bare --hold needs an --alive name ending in _alive to derive the section and event from - no records published");
+            BLog(L"HOLD a bare --hold needs an --alive name ending in _alive, no records published");
     }
     if (etwproxy)
     {
@@ -4641,7 +4659,7 @@ int wmain(int argc, wchar_t** argv)
         // line) instead of treadmilling - never a silent no-op.
         printf("NOTIFHOST FAIL --etw-proxy has moved to etwproxy.exe (GUI-DLL-free console "
                "split); launch that binary instead - refusing\n");
-        BLog(L"NOTIFHOST FAIL --etw-proxy invoked on the WinRT/user32 binary - moved to etwproxy.exe, refusing");
+        BLog(L"NOTIFHOST FAIL --etw-proxy belongs to etwproxy.exe now, refusing (exit 9)");
         return 9;
     }
     if (relayPipe) return RelayMain(relayPipe);
@@ -4682,10 +4700,11 @@ int wmain(int argc, wchar_t** argv)
 
     // ---- legacy in-guest toast interceptor (default mode) ----
     // single instance per session
-    // Same contract as the bridge singleton above: already running is not finished.
+    // Same contract as the bridge singleton above: already running is not finished. The mutex is
+    // Local\\QubesNotifHostSingleton, and exiting on it is NOT a death.
     HANDLE mtx = CreateMutexW(nullptr, FALSE, L"Local\\QubesNotifHostSingleton");
     if (mtx) { DWORD w = WaitForSingleObject(mtx, 0); if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED) {
-        BLog(L"SINGLETON another notifhost instance already holds Local\\QubesNotifHostSingleton - exiting %u (already running, NOT a death)",
+        BLog(L"SINGLETON another notifhost instance already holds the singleton, exiting %u",
              (unsigned)QTB_EXIT_ALREADY_RUNNING);
         return QTB_EXIT_ALREADY_RUNNING; } }
     ProcessIdToSessionId(GetCurrentProcessId(), &g_mySession);

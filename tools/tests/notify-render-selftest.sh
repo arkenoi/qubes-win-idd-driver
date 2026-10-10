@@ -17,6 +17,9 @@
 #         codetable  the process table for every source (rz39 defect 3)     redactfallback a .NET type the route refuses is sent
 #         hang       a hang rendered as an exit (rz39 defect 2)              taskid         the old task ids (rz39 defect 6)
 #         scmwords   "time 1 per the SCM" (rz39 defect 4)                    bodylines      the body collapses into one line (route)
+#         build      the technical line names no build (route; owner        shortbuild     the over-length short form drops the build
+#                    2026-10-10: a toast with no build cannot be told                       (reporter)
+#                    from a control run's)
 #
 #   AGENT_DIR=<path>   the agent checkout (default: the agent submodule)      NOTIFYRENDER_OUT=<dir>   outputs (default: mktemp)
 set -u
@@ -38,7 +41,7 @@ if cbuild c-clean ""; then
     if [ $rc -eq 0 ] && [ "$f" -eq 0 ] && [ "$n" -ge 100 ]; then say "PASS  C clean: rc=0 ok=$n fail=0 (every row of notifytexts.h rendered: $OUT/c-clean.out)"
     else say "FAIL  C clean: rc=$rc ok=$n fail=$f ($(grep -m1 '^FAIL' "$OUT/c-clean.out"))"; bad=1; fi
 else say "FAIL  C clean build: $(head -3 "$OUT/c-clean.build.err")"; bad=1; fi
-for d in NOTIFYTEXT_DEFECT_HEADER NOTIFYERR_DEFECT_FLATBODY NOTIFYERR_DEFECT_NOTECH NOTIFYTEXT_DEFECT_WRONGSOURCE NOTIFYTEXT_DEFECT_SECRETWORD; do
+for d in NOTIFYTEXT_DEFECT_HEADER NOTIFYERR_DEFECT_FLATBODY NOTIFYERR_DEFECT_NOTECH NOTIFYTEXT_DEFECT_WRONGSOURCE NOTIFYTEXT_DEFECT_SECRETWORD NOTIFYERR_DEFECT_NOBUILD; do
     if cbuild "c-$d" "-D$d"; then
         "$OUT/c-$d" >"$OUT/c-$d.out" 2>&1; rc=$?
         f=$(grep -c '^FAIL' "$OUT/c-$d.out")
@@ -69,9 +72,11 @@ else
     else say "FAIL  PS clean: rc=$rc ok=$n fail=$f ($(grep -m1 -E '^FAIL' "$OUT/ps-clean.out" || grep -m1 -iE 'exception|error' "$OUT/ps-clean.out" | cut -c1-200))"; bad=1; fi
 
     # knob -> (which file, the defect line that replaces the GUARD line, the check it must fail)
-    knob_file() { case "$1" in bodylines) printf '%s' "$HELPER" ;; *) printf '%s' "$REPORTER" ;; esac; }
+    knob_file() { case "$1" in bodylines|build) printf '%s' "$HELPER" ;; *) printf '%s' "$REPORTER" ;; esac; }
     knob_line() {
         case "$1" in
+            build)          printf '%s' '    # DEFECT: the technical line does not name the build that produced it' ;;
+            shortbuild)     printf '%s' '    $techShort = (Format-QwtNotifyTechLine -Subject $subject -ProcessId $procId -Code $codeText -Ran $ran -Count "death $Number this boot" -Evidence '"'"'qwt-deaths.log'"'"') -replace '"'"'; build [^ ]+'"'"', '"'"''"'"'   # DEFECT: the short form drops the build' ;;
             hdrplain)       printf '%s' '    $header = "Qubes Windows Tools, $($Death.component): DIED: $($Death.exe) $what; $codeText; death $Number this boot"   # DEFECT: the old header' ;;
             techline)       printf '%s' '    $tech = '"'"'see the log; reported once per boot'"'"'   # DEFECT: no technical line' ;;
             codetable)      printf '%s' '    $table = $script:QwtDeathCodeTables['"'"'process'"'"']   # DEFECT: the process table for every source' ;;
@@ -85,6 +90,8 @@ else
     }
     knob_target() {
         case "$1" in
+            build)          printf '%s' 'technical line names the build that produced it' ;;
+            shortbuild)     printf '%s' 'the short form still carries the build' ;;
             hdrplain)       printf '%s' 'header has no product prefix' ;;
             techline)       printf '%s' 'technical line says where the evidence is' ;;
             codetable)      printf '%s' 'cause is not phrased by another table or in jargon (no '"'"'TerminateProcess'"'"')' ;;
@@ -96,7 +103,7 @@ else
             bodylines)      printf '%s' 'body is 2 to 4 lines' ;;
         esac
     }
-    for k in hdrplain techline codetable redactfallback hang taskid scmwords lengthfallback bodylines; do
+    for k in hdrplain techline codetable redactfallback hang taskid scmwords lengthfallback bodylines build shortbuild; do
         src=$(knob_file "$k"); copy="$OUT/defect-$k.ps1"
         hits=$(grep -c "# GUARD:$k\$" "$src")
         if [ "$hits" -ne 1 ]; then say "FAIL  PS knob $k: expected exactly 1 '# GUARD:$k' line in $(basename "$src"), found $hits"; bad=1; continue; fi
@@ -107,7 +114,7 @@ repl = os.environ['REPL']
 out = [repl if line.endswith('# GUARD:' + knob) else line for line in open(src, encoding='utf-8').read().split('\n')]
 open(dst, 'w', encoding='utf-8').write('\n'.join(out))
 EOF
-        if [ "$k" = bodylines ]; then "$PWSH" -NoProfile -File "$SUITE" -HelperPath "$copy" >"$OUT/ps-defect-$k.out" 2>&1; rc=$?
+        if [ "$src" = "$HELPER" ]; then "$PWSH" -NoProfile -File "$SUITE" -HelperPath "$copy" >"$OUT/ps-defect-$k.out" 2>&1; rc=$?
         else "$PWSH" -NoProfile -File "$SUITE" -ReporterPath "$copy" >"$OUT/ps-defect-$k.out" 2>&1; rc=$?; fi
         f=$(grep -c '^FAIL' "$OUT/ps-defect-$k.out")
         if [ $rc -ne 0 ] && grep -qF "FAIL $(knob_target "$k")" "$OUT/ps-defect-$k.out" 2>/dev/null || { [ $rc -ne 0 ] && grep -q "^FAIL .*$(knob_target "$k")" "$OUT/ps-defect-$k.out"; }; then

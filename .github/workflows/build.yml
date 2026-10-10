@@ -764,7 +764,7 @@ jobs:
           & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
           if ($LASTEXITCODE -ne 0) { throw "pwcarry_test clean rebuild failed" }
 
-      - name: notifyerr_test - secondary error route policy core (clean + 5 defect proofs)
+      - name: notifyerr_test - secondary error route policy core (clean + 6 defect proofs)
         shell: pwsh
         run: |
           # agent/gui-agent/notifyerr.h + notifyerr.c through their plain-C test layer
@@ -779,7 +779,7 @@ jobs:
           $env:NOTIFYERR_TEST_DIR = $env:RUNNER_TEMP
           & $exe
           if ($LASTEXITCODE -ne 0) { throw "notifyerr_test suite FAILED on the clean build" }
-          foreach ($d in 'SEVERITY', 'RATELIMIT', 'CAP', 'REDACT', 'FAILOPEN') {
+          foreach ($d in 'SEVERITY', 'RATELIMIT', 'CAP', 'REDACT', 'FAILOPEN', 'NOBUILD') {
             & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 `
                 /t:Rebuild "/p:NotifyErrDefect=NOTIFYERR_DEFECT_$d"
             if ($LASTEXITCODE -ne 0) { throw "notifyerr_test defect $d build failed to compile" }

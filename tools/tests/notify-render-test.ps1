@@ -70,6 +70,7 @@ $script:QwtNotifyBootStamp = $BOOT
 $script:QwtNotifyLog = { param($m) [void]$script:logLines.Add($m) }
 $script:QwtNotifyLauncher = { param($exe, $file) [void]$script:launched.Add([IO.File]::ReadAllText($file, [Text.Encoding]::Unicode)) }
 $script:QwtNotifyLogged = @{}
+$script:QwtNotifyBuild = '4.3.36.915'   # the installed build every technical line names; pinned (the resolver reads a guest's gui-agent.exe)
 $script:QwtDeathLibraryOnly = $true
 $script:QwtDeathHelper = $HelperPath
 $script:QwtDeathStateDir = $stateDir
@@ -131,6 +132,16 @@ function New-Task([int]$id, [string]$task, [string]$result, [DateTime]$time) {
 }
 
 # --- the rules, applied to one rendered notification ------------------------------------------------
+# THE PHRASES THE OWNER STRUCK (2026-10-10, reading the teardown notification: "too much prose") and their kin: reassurance,
+# a line restating the header, the retry schedule, a packaging explanation, a log-line tag inside a sentence, SCM jargon. The
+# knowledge they carried lives in the comment beside each string now.
+$script:struck = @('not by a fault of its own', 'nobody asked for', 'Windows ended it when its sign-in session ended', 'relaunches nothing',
+                   'a packaging gap', 'it is not repeated here', 'the whole story', 'a minute apart', '(log line', 'on a system that needs it',
+                   'per the SCM')
+# what a header can say happened (its tail after the human name): line 1 must not say it again
+$script:whats = @('crashed', 'exited unexpectedly', 'ended by Windows', 'stopped answering', 'disappeared', 'is already running',
+                  'stopped with an error', 'stopped unexpectedly', 'task ended with an error', 'failed', 'could not start',
+                  'needs a reboot that was refused', 'could not be activated')
 function Test-NotifyRules([string]$case, [string]$text, [string]$subject, [string]$countPhrase) {
     $lines = @($text -split "`r`n")
     $header = $lines[0]
@@ -141,13 +152,33 @@ function Test-NotifyRules([string]$case, [string]$text, [string]$subject, [strin
     Check $case 'header has no product prefix' ($header -notmatch 'Qubes Windows Tools' -and $header -notmatch ':')
     Check $case 'header is a sentence (capital first letter, no trailing period)' ($header -cmatch '^[A-Z]' -and -not $header.EndsWith('.'))
     Check $case 'body is 2 to 4 lines' ($lines.Count -ge 3 -and $lines.Count -le 5) "$($lines.Count - 1) body lines"
+    # the shape (owner 2026-10-10): one clause for the condition, one for the consequence, then the facts - short lines, each
+    # fact once, nothing he struck
+    Check $case 'line 1 is at most 120 characters' ($lines[1].Length -le 120) "$($lines[1].Length): $($lines[1])"
+    $what = ''
+    foreach ($w in $script:whats) { if ($header.EndsWith(" $w")) { $what = $w; break } }
+    Check $case 'the header ends in a known condition phrase' ($what -ne '') $header
+    if ($what) { Check $case "line 1 does not restate the header (no '$what')" ($lines[1] -notlike "*$what*") $lines[1] }
+    $hit = ''
+    foreach ($p in $script:struck) { if ($text -like "*$p*") { $hit = $p; break } }
+    Check $case 'none of the phrases the owner struck' ($hit -eq '') $hit
     $tech = $lines[-1]
     Check $case 'technical line names the executable or task first' ($tech.StartsWith($subject)) $tech
-    Check $case 'technical line says how often it is reported' ($tech -like "*; $countPhrase. Evidence: *")
-    Check $case 'technical line says where the evidence is' ($tech -match '\. Evidence: .+\.$')
+    Check $case 'technical line says how often it is reported, then the build' ($tech -like "*; $countPhrase; build *. Evidence: *") $tech
+    Check $case 'technical line names the build that produced it' ($tech -like '*; build 4.3.36.915. Evidence: *') $tech
+    Check $case 'technical line says where the evidence is - ONE pointer, no list' ($tech -match '\. Evidence: [^;]+\.$') $tech
+    Check $case 'technical line is at most 220 characters' ($tech.Length -le 220) "$($tech.Length)"
+    $exe = ($subject -split '[ ;]')[0]
+    if ($exe -like '*.exe' -or $exe -like '*.ps1') {
+        $above = @($lines | Select-Object -First ($lines.Count - 1) | Where-Object { $_ -like "*$exe*" })
+        Check $case 'the executable is named in the technical line only (the header and line 1 use human names)' ($above.Count -eq 0) ($above -join ' | ')
+    }
     Check $case 'the route''s redaction accepts the text' ($null -eq (Get-QwtNotifyRedactReason $text)) "$(Get-QwtNotifyRedactReason $text)"
     Check $case 'under the route''s 600 bytes' ([Text.Encoding]::UTF8.GetByteCount($text) -le 600) "$([Text.Encoding]::UTF8.GetByteCount($text))"
-    if ($lines.Count -ge 4) { Check $case 'the cause line starts with Cause:' ($lines[2].StartsWith('Cause: ')) $lines[2] }
+    if ($lines.Count -ge 4) {
+        Check $case 'the cause line starts with Cause:' ($lines[2].StartsWith('Cause: ')) $lines[2]
+        Check $case 'the cause is at most 100 characters' ($lines[2].Length -le 100) "$($lines[2].Length): $($lines[2])"
+    }
 }
 
 # =====================================================================================================
@@ -156,22 +187,22 @@ Say "==== the deaths (guest/qwt-report-death.ps1 through guest/qwt-notify-error.
 #           carry; meaning = words the cause must carry; not = words the cause must NOT carry; header = words the header must carry;
 #           comp = the route component the log must show }
 $cases = [ordered]@{
-    '1000 crash: gui-agent.exe 0xC0000409'          = @{ rec = { New-Crash 'gui-agent.exe' 6100 0xC0000409L $T0 754 }; subject = 'gui-agent.exe pid 6100'; code = 'exception 0xC0000409'; meaning = 'fast-fail abort'; header = 'The GUI agent crashed'; comp = 'gui-agent'; next = 'Windows restarts it' }
-    '1000 crash: qrexec-agent.exe 0xC0000005'       = @{ rec = { New-Crash 'qrexec-agent.exe' 2200 0xC0000005L $T0 30 }; subject = 'qrexec-agent.exe pid 2200'; code = 'exception 0xC0000005'; meaning = 'access violation'; header = 'The Qubes RPC agent crashed'; comp = 'qrexec-agent'; next = 'Windows restarts it automatically' }
-    '1000 crash: clipboard-copy.exe 0xC0000005'     = @{ rec = { New-Crash 'clipboard-copy.exe' 4400 0xC0000005L $T0 2 }; subject = 'clipboard-copy.exe pid 4400'; code = 'exception 0xC0000005'; meaning = 'access violation'; header = 'The clipboard copy tool crashed'; comp = 'clipboard-copy'; next = 'Nothing relaunches it' }
+    '1000 crash: gui-agent.exe 0xC0000409'          = @{ rec = { New-Crash 'gui-agent.exe' 6100 0xC0000409L $T0 754 }; subject = 'gui-agent.exe pid 6100'; code = 'exception 0xC0000409'; meaning = 'fast-fail abort'; header = 'The GUI agent crashed'; comp = 'gui-agent'; next = 'Windows restarts its watchdog service' }
+    '1000 crash: qrexec-agent.exe 0xC0000005'       = @{ rec = { New-Crash 'qrexec-agent.exe' 2200 0xC0000005L $T0 30 }; subject = 'qrexec-agent.exe pid 2200'; code = 'exception 0xC0000005'; meaning = 'access violation'; header = 'The Qubes RPC agent crashed'; comp = 'qrexec-agent'; next = 'Windows restarts it in 5 s' }
+    '1000 crash: clipboard-copy.exe 0xC0000005'     = @{ rec = { New-Crash 'clipboard-copy.exe' 4400 0xC0000005L $T0 2 }; subject = 'clipboard-copy.exe pid 4400'; code = 'exception 0xC0000005'; meaning = 'access violation'; header = 'The clipboard copy tool crashed'; comp = 'clipboard-copy'; next = 'Not relaunched' }
     '1000 crash: gui-agent.exe 0xC0000AAA (unknown code)' = @{ rec = { New-Crash 'gui-agent.exe' 6101 0xC0000AAAL $T0 10 }; subject = 'gui-agent.exe pid 6101'; code = 'exception 0xC0000AAA'; meaning = 'not a code this reporter knows'; header = 'The GUI agent crashed'; comp = 'gui-agent' }
     '1026 .NET: qubes-updates-relay.exe'            = @{ rec = { New-Clr 'qubes-updates-relay.exe' 'System.IO.IOException' $T0 }; subject = 'qubes-updates-relay.exe;'; meaning = 'System.IO.IOException'; header = 'The updates relay crashed'; comp = 'updates-relay' }
     '1026 .NET: a type the route would refuse'      = @{ rec = { New-Clr 'qwtng-netsetup.exe' 'System.IdentityModel.Tokens.SecurityTokenException' $T0 }; subject = 'qwtng-netsetup.exe;'; meaning = 'unhandled .NET exception'; not = 'Token'; header = 'The PV NIC address applier crashed'; comp = 'qwtng-netsetup' }
-    '4001 watchdog: gui-agent.exe exit 0'           = @{ rec = { New-Super 4001 'gui-agent.exe' '6100' '0x00000000' '90000' $T0 }; subject = 'gui-agent.exe pid 6100'; code = 'exit code 0'; meaning = 'clean exit nobody asked for'; header = 'The GUI agent exited unexpectedly'; comp = 'gui-agent' }
+    '4001 watchdog: gui-agent.exe exit 0'           = @{ rec = { New-Super 4001 'gui-agent.exe' '6100' '0x00000000' '90000' $T0 }; subject = 'gui-agent.exe pid 6100'; code = 'exit code 0'; meaning = 'a clean exit'; header = 'The GUI agent exited unexpectedly'; comp = 'gui-agent' }
     '4002 agent: wgcbroker.exe exited 0xC0000005'   = @{ rec = { New-Super 4002 'wgcbroker.exe' '4100' '0xC0000005' '125000' $T0 }; subject = 'wgcbroker.exe pid 4100'; code = 'exception 0xC0000005'; meaning = 'access violation'; header = 'The notification and menu capture helper crashed'; comp = 'wgcbroker' }
-    '4002 agent: wgcbroker.exe HUNG'                = @{ rec = { New-Super 4002 'wgcbroker.exe' '4100' 'hung' '125000' $T0 }; subject = 'wgcbroker.exe pid 4100'; techcode = 'hung (no exit code)'; meaning = 'a hang, not a crash'; header = 'The notification and menu capture helper stopped answering'; comp = 'wgcbroker'; hang = $true }
-    '4002 agent: wgcbroker.exe gone, no exit seen'  = @{ rec = { New-Super 4002 'wgcbroker.exe' '4100' 'unknown' '125000' $T0 }; subject = 'wgcbroker.exe pid 4100'; techcode = 'exit code unknown'; meaning = 'without observing an exit'; header = 'The notification and menu capture helper disappeared'; comp = 'wgcbroker' }
+    '4002 agent: wgcbroker.exe HUNG'                = @{ rec = { New-Super 4002 'wgcbroker.exe' '4100' 'hung' '125000' $T0 }; subject = 'wgcbroker.exe pid 4100'; techcode = 'hung (no exit code)'; meaning = 'a hang'; header = 'The notification and menu capture helper stopped answering'; comp = 'wgcbroker'; hang = $true }
+    '4002 agent: wgcbroker.exe gone, no exit seen'  = @{ rec = { New-Super 4002 'wgcbroker.exe' '4100' 'unknown' '125000' $T0 }; subject = 'wgcbroker.exe pid 4100'; techcode = 'exit code unknown'; meaning = 'no exit was seen'; header = 'The notification and menu capture helper disappeared'; comp = 'wgcbroker' }
     '4003 agent: notifhost.exe exit 2'              = @{ rec = { New-Super 4003 'notifhost.exe' '777' '0x00000002' '30000' $T0 }; subject = 'notifhost.exe pid 777'; code = 'exit code 2'; meaning = 'notification access is denied'; header = 'The notification bridge exited unexpectedly'; comp = 'notifhost' }
-    '4003 agent: notifhost.exe exit 0x40010004 (session end)' = @{ rec = { New-Super 4003 'notifhost.exe' '2248' '0x40010004' '27734' $T0 }; subject = 'notifhost.exe pid 2248'; code = 'exit code 0x40010004'; meaning = "Windows' own session teardown (DBG_TERMINATE_PROCESS)"; header = 'The notification bridge ended by Windows'; comp = 'notifhost'; next = 'at the next sign-in'; not = 'Task Scheduler restarts it on failure' }
-    '4004 agent: etwproxy.exe exit 1'               = @{ rec = { New-Super 4004 'etwproxy.exe' '3300' '0x00000001' '600000' $T0 }; subject = 'etwproxy.exe pid 3300'; code = 'exit code 1'; meaning = 'TerminateProcess'; header = 'The ETW signal proxy exited unexpectedly'; comp = 'etwproxy'; next = 'Nothing relaunches it before the next GUI agent start' }
-    '4004 agent: etwproxy.exe exit 5 (parked)'      = @{ rec = { New-Super 4004 'etwproxy.exe' '3300' '0x00000005' '600000' $T0 }; subject = 'etwproxy.exe pid 3300'; code = 'exit code 5'; meaning = 'trace access was denied'; header = 'The ETW signal proxy exited unexpectedly'; comp = 'etwproxy'; next = 'parks it for this boot' }
-    '7023 SCM: Qubes RPC agent error 1460'          = @{ rec = { New-Svc 7023 'Qubes RPC agent' $T0 @{ param2 = '%%1460' } }; subject = 'qrexec-agent.exe (service QrexecAgent)'; code = 'Windows error 1460'; meaning = 'the operation timed out'; not = 'TerminateProcess'; header = 'The Qubes RPC agent service stopped with an error'; comp = 'qrexec-agent'; next = 'Windows restarts it automatically' }
-    '7024 SCM: QubesDB daemon service-specific 1'   = @{ rec = { New-Svc 7024 'QubesDB daemon' $T0 @{ param2 = '1' } }; subject = 'qubesdb-daemon.exe (service QdbDaemon)'; code = 'service error 1'; meaning = 'a code the service itself defines'; not = 'TerminateProcess'; header = 'The QubesDB daemon service stopped with an error'; comp = 'qubesdb-daemon' }
+    '4003 agent: notifhost.exe exit 0x40010004 (session end)' = @{ rec = { New-Super 4003 'notifhost.exe' '2248' '0x40010004' '27734' $T0 }; subject = 'notifhost.exe pid 2248'; code = 'exit code 0x40010004'; meaning = 'session teardown (DBG_TERMINATE_PROCESS)'; header = 'The notification bridge ended by Windows'; comp = 'notifhost'; next = 'at the next sign-in'; not = 'Task Scheduler restarts it' }
+    '4004 agent: etwproxy.exe exit 1'               = @{ rec = { New-Super 4004 'etwproxy.exe' '3300' '0x00000001' '600000' $T0 }; subject = 'etwproxy.exe pid 3300'; code = 'exit code 1'; meaning = 'TerminateProcess'; header = 'The ETW signal proxy exited unexpectedly'; comp = 'etwproxy'; next = 'Not relaunched until the next GUI agent start' }
+    '4004 agent: etwproxy.exe exit 5 (parked)'      = @{ rec = { New-Super 4004 'etwproxy.exe' '3300' '0x00000005' '600000' $T0 }; subject = 'etwproxy.exe pid 3300'; code = 'exit code 5'; meaning = 'trace access was denied'; header = 'The ETW signal proxy exited unexpectedly'; comp = 'etwproxy'; next = 'Parked by the GUI agent for this boot' }
+    '7023 SCM: Qubes RPC agent error 1460'          = @{ rec = { New-Svc 7023 'Qubes RPC agent' $T0 @{ param2 = '%%1460' } }; subject = 'qrexec-agent.exe (service QrexecAgent)'; code = 'Windows error 1460'; meaning = 'the operation timed out'; not = 'TerminateProcess'; header = 'The Qubes RPC agent service stopped with an error'; comp = 'qrexec-agent'; next = 'Windows restarts it in 5 s' }
+    '7024 SCM: QubesDB daemon service-specific 1'   = @{ rec = { New-Svc 7024 'QubesDB daemon' $T0 @{ param2 = '1' } }; subject = 'qubesdb-daemon.exe (service QdbDaemon)'; code = 'service error 1'; meaning = 'a service-specific code'; not = 'TerminateProcess'; header = 'The QubesDB daemon service stopped with an error'; comp = 'qubesdb-daemon' }
     '7031 SCM: Qubes RPC agent unexpected, restart' = @{ rec = { New-Svc 7031 'Qubes RPC agent' $T0 @{ param2 = '1'; param3 = '5000'; param4 = 'Restart the service' } }; subject = 'qrexec-agent.exe (service QrexecAgent)'; meaning = 'failure 1'; not = 'per the SCM'; header = 'The Qubes RPC agent service stopped unexpectedly'; comp = 'qrexec-agent'; next = 'Windows restarts it in 5 s' }
     '7034 SCM: Qubes GUI agent watchdog, no action' = @{ rec = { New-Svc 7034 'Qubes GUI agent watchdog' $T0 @{ param2 = '2' } }; subject = 'gui-watchdog.exe (service QubesGuiWatchdog)'; meaning = 'failure 2'; not = 'per the SCM'; header = 'The GUI agent watchdog service stopped unexpectedly'; comp = 'gui-watchdog'; next = 'Windows does not restart it' }
     '201 task: \QubesPvNic result 1'                = @{ rec = { New-Task 201 '\QubesPvNic' '1' $T0 }; subject = 'task QubesPvNic;'; code = 'result 1'; meaning = 'the script reported a failure'; not = 'TerminateProcess'; header = 'The PV NIC setup task failed'; comp = 'pvnic' }
@@ -193,15 +224,18 @@ foreach ($k in $cases.Keys) {
     Check $k 'no "once per boot" (each death has its own id)' ($text -notlike '*once per boot*')
     if ($c.next) { Check $k 'line 1 says what happens next' ($lines[1] -like "*$($c.next)*") $lines[1] }
     if ($c.code) {
-        Check $k 'the cause line and the technical line carry the code' (($lines[2] -like "*$($c.code)*") -and ($lines[-1] -like "*$($c.code)*")) "$($lines[2]) | $($lines[-1])"
+        Check $k 'the technical line carries the code, and the cause does not repeat it (a fact appears once)' (($lines[-1] -like "*; $($c.code);*") -and ($lines[2] -notlike "*$($c.code)*")) "$($lines[2]) | $($lines[-1])"
+        Check $k 'the code phrase appears exactly once in the whole text' (([regex]::Matches($text, [regex]::Escape($c.code))).Count -eq 1) $c.code
+        $num = ($c.code -split ' ')[-1]
+        if ($num -like '0x*') { Check $k 'the hex code appears exactly once in the whole text' (([regex]::Matches($text, [regex]::Escape($num))).Count -eq 1) $num }
     }
     if ($c.techcode) {
-        Check $k 'the technical line says there is no code, and why' (($lines[-1] -like "*; $($c.techcode);*") -and ($lines[2] -like '*no exit code*')) "$($lines[2]) | $($lines[-1])"
+        Check $k 'the technical line says there is no code' ($lines[-1] -like "*; $($c.techcode);*") "$($lines[2]) | $($lines[-1])"
     }
     Check $k 'the cause names the code''s meaning from its own source''s table' ($lines[2] -like "*$($c.meaning)*") $lines[2]
     if ($c.not) { Check $k "cause is not phrased by another table or in jargon (no '$($c.not)')" ($text -notlike "*$($c.not)*") $lines[2] }
     if ($c.hang) {
-        Check $k 'the hang is rendered as a hang (stopped answering; no exit; no "exited")' ($lines[0] -like '*stopped answering*' -and $lines[2] -like '*no exit code*' -and $text -notlike '*exited*')
+        Check $k 'the hang is rendered as a hang (stopped answering; ended by its supervisor; no "exited")' ($lines[0] -like '*stopped answering*' -and $lines[2] -like '*ended it*' -and $text -notlike '*exited*')
     }
     $sent = @($script:logLines | Where-Object { $_ -like "$($c.comp).death-1 sent to dom0*" })
     Check $k 'the component is the task''s or executable''s machine id' ($sent.Count -eq 1) ($script:logLines -join ' / ')
@@ -210,10 +244,16 @@ foreach ($k in $cases.Keys) {
 # the service wording follows the SCM's recovery settings as the registry has them
 Say "`n==== a service death under each recovery state ===="
 # ---- a long log directory: the full text would be over the route's limit; the death must still be sent (GUARD:lengthfallback) ----
-$k = '4002 HUNG with a long log directory (~130 characters)'
+# With ONE pointer the directory appears once, so only a directory of ~240 characters (a custom path near MAX_PATH) can push
+# the text over 600 bytes; the pointer is then cut to the file name, and the build survives into that line (GUARD:shortbuild).
+$k = '4002 HUNG with a log directory of ~270 characters (the full text is over the limit)'
 Reset-World
 # a realistic long path - words and separators; a 40-character run without one is the route's key-shaped rule, a different refusal
-$longDir = Join-Path $tmpRoot 'Program Files/Invisible Things Lab/Qubes Tools/log/a custom directory for this qube/kept on the private volume/deaths'
+$longDir = $tmpRoot
+foreach ($seg in 'Program Files', 'Invisible Things Lab', 'Qubes Tools', 'log', 'a custom directory for this qube', 'kept on the private volume',
+                 'with a name long enough to push one pointer', 'past the six hundred bytes the route accepts', 'and then some more for the fallback', 'deaths') {
+    $longDir = Join-Path $longDir $seg
+}
 New-Item -ItemType Directory -Force -Path $longDir | Out-Null
 $savedLogDir = $script:QwtDeathLogDir; $script:QwtDeathLogDir = $longDir
 $st = Invoke-QwtDeathReport (New-Super 4002 'wgcbroker.exe' '4100' 'hung' '125000' $T0)
@@ -222,8 +262,9 @@ if ($script:launched.Count) { Say ([string]$script:launched[-1]) } else { Say '(
 Check $k 'the death is sent even when the full text is over the limit' ($st -eq 'send' -and $script:launched.Count -eq 1) $st
 if ($script:launched.Count) {
     $text = [string]$script:launched[-1]
-    Check $k 'the sent technical line names the deaths log' ($text -like '*qwt-deaths.log*') ''
-    Check $k 'the shortening is logged' ((Get-Content -LiteralPath (Join-Path $longDir 'qwt-deaths.log') -Raw) -like '*evidence cut to the deaths log*') ''
+    Check $k 'the sent technical line names the deaths log by file name (the pointer cut to it)' ($text -like '*. Evidence: qwt-deaths.log.') ''
+    Check $k 'the short form still carries the build' ($text -like '*; death 1 this boot; build 4.3.36.915. Evidence: qwt-deaths.log.') $text
+    Check $k 'the shortening is logged' ((Get-Content -LiteralPath (Join-Path $longDir 'qwt-deaths.log') -Raw) -like '*pointer cut to the file name*') ''
 }
 $script:QwtDeathLogDir = $savedLogDir
 
@@ -239,8 +280,8 @@ foreach ($state in 'not-armed', 'crash-only', 'unreadable') {
     $lines = @($text -split "`r`n")
     Say "`n---- 7023 with recovery $state ----"; Say $text
     switch ($state) {
-        'not-armed'  { Check "7023 recovery $state" 'line 1 says Windows does NOT restart it and what to do' ($lines[1] -like 'Windows does NOT restart it (no restart is armed): start it again or reboot this qube;*') $lines[1] }
-        'crash-only' { Check "7023 recovery $state" 'line 1 says an error exit is not covered' ($lines[1] -like 'Windows does NOT restart it after an error exit*') $lines[1] }
+        'not-armed'  { Check "7023 recovery $state" 'line 1 says Windows does not restart it and what to do' ($lines[1] -like 'Windows does not restart it: start it or restart the qube;*') $lines[1] }
+        'crash-only' { Check "7023 recovery $state" 'line 1 says an error exit is not covered' ($lines[1] -like 'Windows does not restart it after an error exit: start it or restart the qube;*') $lines[1] }
         'unreadable' { Check "7023 recovery $state" 'line 1 does not guess' ($lines[1] -like 'Windows restarts it only if its recovery is armed*') $lines[1] }
     }
     Test-NotifyRules "7023 recovery $state" $text 'qrexec-agent.exe (service QrexecAgent)' 'death 1 this boot'

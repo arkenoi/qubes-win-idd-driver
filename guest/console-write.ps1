@@ -46,10 +46,11 @@ $base = "HKLM:\SYSTEM\CurrentControlSet\Control\DeviceClasses\$guid"
 
 # The interface KEY NAME is the symbolic link with its leading separators escaped as '#'.
 # Do NOT look for a '#' subkey holding SymbolicLink - that layout is not present on 19045,
-# and assuming it was is why the first attempt reported "no interface" on a bound driver.
+# and assuming it was is why the first attempt reported "no interface" on a bound driver. No interface
+# at all means xencons is not bound (or PnP has not started it yet).
 $key = (Get-ChildItem $base -ErrorAction SilentlyContinue | Select-Object -First 1).PSChildName
 if (-not $key) {
-    Write-Error "no XENCONS device interface - is xencons bound? (XENBUS\VEN_XP0001&DEV_CONS)"
+    Write-Error "no XENCONS device interface (XENBUS\VEN_XP0001&DEV_CONS), nothing written to the console"
     exit 1
 }
 $path = '\\?\' + $key.Substring(4)

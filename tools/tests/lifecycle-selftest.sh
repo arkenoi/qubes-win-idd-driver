@@ -14,6 +14,8 @@
 #       RECONNECTDEATH   a reconnect exit writes a death record       REQUESTEDDEATH  a requested exit is a death
 #       REQUESTEDERROR   the agent logs an expected exit as a failure (the stale "WatchForEvents failed" ERROR line)
 #       HELPERSYSKILLDEATH  a helper the SYSTEM killed (0x40010004) is written up as a death - the measured 2026-10-10
+#       DISARMHIDESCRASH   once launches are disarmed, a helper CRASH is written up as expected - the hole the
+#                           owner closed 2026-10-10 ("a REAL abnormal termination should be always reported loudly")
 #                           defect: two 4003 records for notifhost.exe on ordinary shutdowns, each a dom0 "major error" toast
 #       HELPERSTOPTEARDOWN  a helper's stop wait expiring during the session's TEARDOWN is graded an ERROR miss - the
 #                           measured 2026-10-10 defect: "the bridge did not leave within 3 s of the stop file" at a
@@ -61,7 +63,7 @@ if build clean ""; then
 else say "FAIL  clean build: $(head -3 "$OUT/clean.build.err")"; bad=1; fi
 
 # ---- every defect knob must make the suite FAIL --------------------------------------------------------
-for d in TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT; do
+for d in TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT DISARMHIDESCRASH; do
     if build "defect-$d" "-DQGA_LIFECYCLE_DEFECT_$d"; then
         "$OUT/defect-$d" >"$OUT/defect-$d.out" 2>&1; rc=$?
         f=$(grep -c '^FAIL' "$OUT/defect-$d.out")
@@ -160,7 +162,7 @@ shape "main.c: a helper task QUEUES a new instance behind the outgoing one, neve
 main_restart_on_failure() { grep -q '<RestartOnFailure><Interval>' "$1" && grep -q 'HelperTaskRegister(WGC_TASK_NAME, longExe, args, userId, TRUE,' "$1" && grep -q 'return NotifRunInSession(NOTIF_TASK_NAME, args, TRUE);' "$1"; }
 shape "main.c: the broker's and the bridge's tasks are registered with RestartOnFailure (the one-shots without)" main_restart_on_failure "$MAIN" 'return NotifRunInSession(NOTIF_TASK_NAME, args, TRUE);'
 # item I: the window-event thread's exit on request is INFO; the ERROR stays for a thread that dies while the agent runs
-main_winevt_expected() { grep -q 'QGA_WINEVT_EXPECTED' "$1" && grep -q 'LogError("QGAWINEVTDEAD window event thread exiting while the agent keeps running' "$1" && ! grep -q 'LogError("window event thread exiting - tracking falls back to periodic resync")' "$1"; }
+main_winevt_expected() { grep -q 'QGA_WINEVT_EXPECTED' "$1" && grep -q 'LogError("QGAWINEVTDEAD window event thread died unexpectedly, using fallback")' "$1" && ! grep -q 'LogError("window event thread exiting - tracking falls back to periodic resync")' "$1"; }
 shape "main.c: the window-event thread's exit on the agent's request is INFO, a death while running stays ERROR (QGAWINEVTDEAD)" main_winevt_expected "$MAIN" 'QGA_WINEVT_EXPECTED'
 # item I: WinMain never logs "WatchForEvents failed"; an expected exit is INFO with its reason, a failure ERROR with its code
 main_exit_log() { ! grep -q 'win_perror("WatchForEvents")' "$1" && grep -q 'if (QgaExitIsExpected(exitCode))' "$1" && grep -q 'LogError("QGAEXIT exiting with 0x%x: %s"' "$1"; }
@@ -174,8 +176,8 @@ shape "etwproxy.c: no backoff relaunch timer; no launch while disarmed; an exit 
 # carry the wait result, the elapsed ms, the helper's pid and the session-ending flag. Pinned per function so a
 # site that quietly goes back to "!= WAIT_OBJECT_0 -> LogError" fails here.
 main_stop_outcome() {
-    awk '/^static void BrokerShutdown/{f=1} f&&/const BOOL ending = LifecycleSessionEnding\(\);/{s=NR} f&&/switch \(QgaHelperStopOutcome\(ending, wait\)\)/{a=NR} f&&/case QGA_HELPER_STOP_TEARDOWN:/{b=NR} f&&/LogInfo\("WGCBROKER the broker pid %lu did not leave on the shutdown flag - Windows ends it with the/{c=NR} f&&/LogError\("WGCBROKER the broker pid %lu did not leave within 2 s of the shutdown flag/{d=NR} f&&/^}/{exit} END{exit !(s && a && b && c && d && s<a && a<b && b<c && c<d)}' "$1" &&
-    awk '/^static void NotifBridgeShutdown/{f=1} f&&/const BOOL ending = LifecycleSessionEnding\(\);/{s=NR} f&&/switch \(QgaHelperStopOutcome\(ending, wait\)\)/{a=NR} f&&/case QGA_HELPER_STOP_TEARDOWN:/{b=NR} f&&/LogInfo\("NOTIFBRIDGE the bridge pid %lu did not leave on the stop file - Windows ends it with the/{c=NR} f&&/LogError\("NOTIFBRIDGE the bridge pid %lu did not leave within 3 s of the stop file/{d=NR} f&&/^}/{exit} END{exit !(s && a && b && c && d && s<a && a<b && b<c && c<d)}' "$1" &&
+    awk '/^static void BrokerShutdown/{f=1} f&&/const BOOL ending = LifecycleSessionEnding\(\);/{s=NR} f&&/switch \(QgaHelperStopOutcome\(ending, wait\)\)/{a=NR} f&&/case QGA_HELPER_STOP_TEARDOWN:/{b=NR} f&&/LogInfo\("WGCBROKER broker pid %lu still up at session end, Windows ends it: "/{c=NR} f&&/LogError\("WGCBROKER broker pid %lu did not stop within 2 s, ending it by task delete: "/{d=NR} f&&/^}/{exit} END{exit !(s && a && b && c && d && s<a && a<b && b<c && c<d)}' "$1" &&
+    awk '/^static void NotifBridgeShutdown/{f=1} f&&/const BOOL ending = LifecycleSessionEnding\(\);/{s=NR} f&&/switch \(QgaHelperStopOutcome\(ending, wait\)\)/{a=NR} f&&/case QGA_HELPER_STOP_TEARDOWN:/{b=NR} f&&/LogInfo\("NOTIFBRIDGE the bridge pid %lu did not leave on the stop file - Windows ends it with the/{c=NR} f&&/LogError\("NOTIFBRIDGE bridge pid %lu did not stop within 3 s, ending it by task delete: "/{d=NR} f&&/^}/{exit} END{exit !(s && a && b && c && d && s<a && a<b && b<c && c<d)}' "$1" &&
     [ "$(grep -c 'wait=0x%lx elapsed=%I64u ms session-ending=' "$1")" -eq 4 ]; }
 shape "main.c: BrokerShutdown and NotifBridgeShutdown grade their bounded wait through QgaHelperStopOutcome - a teardown expiry INFO, a miss ERROR, both carrying wait/elapsed/pid/session-ending" main_stop_outcome "$MAIN" 'switch (QgaHelperStopOutcome(ending, wait))'
 
@@ -191,7 +193,7 @@ main_lock_verdict() {
     grep -q '&s_ShellProcAbsent, &lockRead))' "$1" && grep -q 's_ShellProcAbsent = FALSE;   // a new episode may have reached a shell since' "$1" &&
     awk '/^static BOOL SecureDesktopLockedNow/{f=1} f&&/if \(\*shellAbsent\)/{a=NR} f&&/\*shellAbsent = TRUE;/{b=NR} f&&/^}/{exit} END{exit !(a && b && a<b)}' "$1" &&
     [ "$(grep -c 'wts-flags=%lu level=%lu input-desktop=%s LogonUI.exe=%d' "$1")" -eq 2 ] &&
-    grep -q 'LogWarning("QGADESKSTUCK the session is LOCKED - dom0 is shown nothing; shell-by=%s secure-for=%I64u s "' "$1" &&
+    grep -q 'LogWarning("QGADESKSTUCK session LOCKED, seamless inactive until unlocked: shell-by=%s secure-for=%I64u s "' "$1" &&
     grep -q 'lockRead.ShellSeen ? L"window" : L"process"' "$1" &&
     grep -q 'shell-seen=%d shell-process=%s shell-process-err=%lu' "$1" &&
     grep -q 'C_ASSERT(QGA_WTS_SESSIONSTATE_LOCK == WTS_SESSIONSTATE_LOCK);' "$1"; }

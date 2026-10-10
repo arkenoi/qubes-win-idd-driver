@@ -17,9 +17,12 @@
 #            no file names, no counts, no product prefix (dom0 shows the source qube); <= ~60 chars
 #   -Next    what it means for the user and what the system does next; what the user can do, only
 #            when there is something
-#   -Cause   the cause in words WITH the code (optional)
+#   -Cause   the cause in words (optional) - WITHOUT the code: the technical line carries it, and a
+#            fact appears once (owner 2026-10-10, "too much prose": one short clause for the
+#            condition, one for the consequence, then the facts; explanation goes in a source comment)
 #   -Tech    ONE technical line, Format-QwtNotifyTechLine: the executable, pid, code, how long it
-#            ran, "death n this boot" or "reported once per boot", and where the evidence is
+#            ran, "death n this boot" or "reported once per boot", the BUILD that produced it, and
+#            ONE pointer to where the detail is
 # A code's meaning comes from the table of the code's SOURCE (a process exit or exception code, a
 # Windows error the SCM reports, a service-specific code, a task result) - the death reporter holds
 # those tables; never the process table for the others.
@@ -113,6 +116,15 @@ public static class QwtErrBox {
     }
 }
 if ($null -eq $script:QwtNotifyBoxWithoutRecord) { $script:QwtNotifyBoxWithoutRecord = $false }
+# THE BUILD (owner 2026-10-10: "i see win11-acc error on screen, but since dom0 toasts do not have timestamps, i cannot
+# figure out if it is a botched fix or control reproduction run"). Every technical line names the installed build: the
+# fixed file version of the installed gui-agent.exe, spelled as the agent's own LogInit line "Module version: 4.3.36.915"
+# (the fourth part is the release run's build number, tools/stamp-version.ps1), so a toast and the agent log agree at
+# a glance. NOT a timestamp: these guests come up about three hours ahead until a boot task corrects the clock, so a
+# guest time in a user-facing line would be wrong in a way that looks authoritative (Jev: version-only 1.00, a clock
+# would mislead 0.95). $null = resolve once per process (Get-QwtNotifyBuild); '' = none could be read, and the line
+# then says "build unknown" rather than printing an empty field. A test pins it.
+if ($null -eq $script:QwtNotifyBuild) { $script:QwtNotifyBuild = $null }
 
 # --- constants (mirror notifyerr.h) ------------------------------------------------------------
 $script:QwtNotifyMaxText = 600
@@ -289,10 +301,34 @@ function Format-QwtNotifyText {
     [void]$lines.Add((Format-QwtNotifyPart $Tech))
     return ($lines -join "`r`n")   # GUARD:bodylines
 }
+# The installed build, resolved once per process: the fixed file version of gui-agent.exe under the registry's InstallDir
+# (the installer's key; both views, like the death reporter), else next to notifhost.exe. The four FIXED numbers, never the
+# free-text FileVersion string, so it is the agent's "Module version" spelling exactly. '' when none could be read.
+function Get-QwtNotifyBuild {
+    if ($null -ne $script:QwtNotifyBuild) { return [string]$script:QwtNotifyBuild }
+    $b = ''
+    try {
+        $dir = $null
+        foreach ($k in 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools', 'HKLM:\SOFTWARE\WOW6432Node\Invisible Things Lab\Qubes Tools') {
+            try { $v = (Get-ItemProperty -LiteralPath $k -Name 'InstallDir' -ErrorAction SilentlyContinue).InstallDir; if ($v) { $dir = Join-Path ([string]$v) 'bin'; break } } catch { }
+        }
+        if (-not $dir) { $dir = Split-Path -Parent $script:QwtNotifyHostExe }
+        $exe = Join-Path $dir 'gui-agent.exe'
+        if (Test-Path -LiteralPath $exe) {
+            $vi = [Diagnostics.FileVersionInfo]::GetVersionInfo($exe)
+            $b = '{0}.{1}.{2}.{3}' -f $vi.FileMajorPart, $vi.FileMinorPart, $vi.FileBuildPart, $vi.FilePrivatePart
+            if ($b -eq '0.0.0.0') { $b = '' }   # no version resource: nothing to name
+        }
+    } catch { $b = '' }
+    $script:QwtNotifyBuild = $b
+    return $b
+}
 # The technical line (mirrors QerrFormatTechLine):
-#   "<subject>[ pid <n>][; <code>][; ran <h:mm:ss>]; <count>. Evidence: <where>."
+#   "<subject>[ pid <n>][; <code>][; ran <h:mm:ss>]; <count>; build <m.m.p.b>. Evidence: <where>."
 # Subject = the executable, script or task; Code = "exit code 2" / "exception 0xC0000409" / ... already
-# phrased by the source's table; Count = "death 3 this boot" or "reported once per boot".
+# phrased by the source's table; Count = "death 3 this boot" or "reported once per boot"; the build is the
+# installed one (Get-QwtNotifyBuild), "build unknown" when none could be read; Evidence = ONE pointer to
+# where the detail is.
 function Format-QwtNotifyTechLine {
     param(
         [Parameter(Mandatory)][string]$Subject,
@@ -306,7 +342,11 @@ function Format-QwtNotifyTechLine {
     if ($ProcessId -gt 0) { $t += " pid $ProcessId" }
     if ($Code) { $t += "; $Code" }
     if ($Ran) { $t += "; ran $Ran" }
-    return "$t; $Count. Evidence: $Evidence."
+    $t += "; $Count"
+    $b = Get-QwtNotifyBuild
+    if (-not $b) { $b = 'unknown' }
+    $t += "; build $b"   # GUARD:build
+    return "$t. Evidence: $Evidence."
 }
 
 # --- the error window: ONE place it is shown from (mirrors notifyerr.c ShowWindowFallback) -------

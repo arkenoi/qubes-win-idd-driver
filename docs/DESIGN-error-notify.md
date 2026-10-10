@@ -154,14 +154,30 @@ The notification has ONE shape for every sender (the agent's `notifyerr.h`, noti
   colour itself (origin marking is the proxy's and unforgeable). At most ~60 characters.
 - **line 1**: what it means for the user and what the system does next (relaunch, Windows'
   recovery, nothing), and what the user can do — only when there is something.
-- **line 2**: the cause in words WITH the code: `Cause: an access violation - exception
-  0xC0000005.` The meaning comes from the table of the code's SOURCE — a process exit or exception
-  code, a Windows error the SCM reports (7023), a service-specific code (7024; the service defines
-  it, no table of ours), a task result (201/203) — never the process table for the others.
+- **line 2**: the cause in words: `Cause: an access violation.` The meaning comes from the table of
+  the code's SOURCE — a process exit or exception code, a Windows error the SCM reports (7023), a
+  service-specific code (7024; the service defines it, no table of ours), a task result (201/203) —
+  never the process table for the others. The code itself is NOT on this line (2026-10-10): the
+  technical line carries it, and a fact appears once.
 - **line 3**, the technical line: `<executable>[ pid <n>][; <code>][; ran <h:mm:ss>]; death <n>
-  this boot | reported once per boot. Evidence: <log path>; <WER folder prefix>; <event log + id>.`
+  this boot | reported once per boot; build <m.m.p.b>. Evidence: <one pointer>.`
   The death reporter says `death n this boot` (each death has its own id, up to the cap); the
   agent, notifhost and the scripts say `reported once per boot` (one per (component, id) per boot).
+  `build` is the sender's own image version (the agent and notifhost: `VS_FIXEDFILEINFO` of the
+  running image, `agent/gui-agent/modver.h`; the scripts and the death reporter: the installed
+  `gui-agent.exe`, `Get-QwtNotifyBuild`), spelled exactly as the agent log's `LogInit: Module version`
+  line, so a toast can be matched to the build that produced it (owner 2026-10-10: a toast with no
+  build could not be told from a control run's; a guest TIMESTAMP would mislead, the clock being ~3 h
+  off until a boot task corrects it). `build unknown` when the version cannot be read - never an
+  empty field. The evidence is ONE pointer: the deaths log (whose own line carries the WER folder
+  prefix, the program's log and the event id under `detail:`) or the sender's log.
+
+**Terse by rule** (owner 2026-10-09 "way too many words", 2026-10-10 "too much prose"): one short
+clause for the condition (the header), one for the consequence (line 1), then the facts. No line
+restates the header, no line reassures ("not by a fault of its own"), no line carries a retry
+schedule or a packaging explanation - that knowledge lives in the comment beside the string. The
+render tests pin it: line 1 at most 120 characters, the cause at most 100, the code once, one
+pointer, and a list of struck phrases.
 
 The agent's and notifhost's texts are rows of `agent/gui-agent/notifytexts.h`, rendered offline by
 `notifyrender_test.c`; the deaths and the scripts' texts are rendered by

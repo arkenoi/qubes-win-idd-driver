@@ -1360,7 +1360,7 @@ def join_fi(files, instances, agents, declared):
            "sources": sources, "records": recs, "detection_missing": missing,
            "unproven": bool(declared["declared"] and not evidenced)}
     return ctx
-FALLBACK_FIRED_RE = re.compile(r"(?i)(falling back to|falling to [a-z ]*fallback|falls back to|fallback (fired|active|engaged|path taken)|DB fallback|signal fallback|tier down)")
+FALLBACK_FIRED_RE = re.compile(r"(?i)(falling back to|falling to [a-z ]*fallback|falls back to|fallback (fired|active|engaged|path taken)|using fallback|on the fallback|DB fallback|signal fallback|tier down)")
 
 
 def build_structure(files, boots, declared=None):

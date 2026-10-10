@@ -37,13 +37,17 @@
 #            stopped with an error / task failed ..." - human names only, no codes, no file names, no counts
 #   line 1   what it means and what happens next: who relaunches it (the watchdog, the agent, Windows'
 #            recovery as the registry has it armed), what is withheld meanwhile, what the user can do
-#   line 2   "Cause: <meaning> - <code>." The meaning comes from the table of the code's SOURCE: the process
-#            table for a crash's exception or a supervisor's exit code (plus the codes an executable
-#            documents), the Windows-error table for the SCM's 7023, no table for a service-specific 7024
-#            (the service defines it), the task-result table for 201/203. Never the process table for the
-#            others ("ended by TerminateProcess" for a task result was rz39 defect 3).
-#   line 3   the technical line: executable, pid, code, run time, "death n this boot", the evidence (this
-#            log, the WER folder by prefix, the event log and id)
+#   line 2   "Cause: <meaning>." The meaning comes from the table of the code's SOURCE: the process table for a
+#            crash's exception or a supervisor's exit code (plus the codes an executable documents), the
+#            Windows-error table for the SCM's 7023, no table for a service-specific 7024 (the service defines
+#            it), the task-result table for 201/203. Never the process table for the others ("ended by
+#            TerminateProcess" for a task result was rz39 defect 3). The CODE is not on this line: the
+#            technical line carries it, and a fact appears once (owner 2026-10-10, "too much prose": one short
+#            clause for the condition, one for the consequence, then the facts; explanation goes in a comment).
+#   line 3   the technical line: executable, pid, code, run time, "death n this boot", the build that produced
+#            it (the route reads it from the installed gui-agent.exe - never a timestamp, the guest clock is
+#            ~3 h off until a boot task corrects it), and ONE pointer: this log, whose DEATH line carries the
+#            rest (the WER folder by prefix, the program's own log, the event log and id) under "detail:"
 # No window titles, no user data: every name in the text comes from the tables below, every number is
 # parsed and re-rendered, the WER folder is named by its prefix (its hash would trip the route's redaction
 # and tells a human nothing), and a .NET exception type the route would refuse is left out.
@@ -150,15 +154,23 @@ $script:QwtDeathHuman = @{
 # WHAT HAPPENS NEXT when one of ours dies, by executable - the supervisors' measured behaviour (watchdog.c, main.c,
 # etwproxy.c); a service's answer comes from the SCM's recovery settings (below), a one-shot tool's is "nothing"
 # (2026-10-07, docs/ADR-supervision.md 4-5: nothing of ours relaunches anything; Windows does, or nothing does)
+# TERSE BY RULE (owner 2026-10-10 "too much prose"; 2026-10-09 "way too many words"): the consequence only. What the lines
+# used to explain, kept here: the watchdog service ends itself with QGA_SVC_EXIT_AGENT_DIED so the SCM's recovery restarts
+# it after 5 s, then 15 s, then 60 s, and the restarted service launches a new agent; this qube's windows are gone from
+# dom0 until then. Task Scheduler's restart-on-failure for the helpers is three tries a minute apart; the GUI agent
+# relaunches nothing (docs/ADR-supervision.md 4-5). The ETW proxy is relaunched only by the next GUI agent start, and
+# toasts still reach dom0 through the bridge's two other sources meanwhile. The updates relay served an update pass
+# whose network path is gone with it.
 $script:QwtDeathNextByExe = @{
-    'gui-agent.exe' = 'Its watchdog service ends itself so Windows restarts it (after 5 s, then 15 s, then 60 s) and the restarted service starts a new GUI agent; this qube''s windows close in dom0 until then - if they do not reopen, restart the qube.'
-    'wgcbroker.exe' = 'Task Scheduler restarts it on failure (three tries, a minute apart); until then menus, modern app windows and notifications do not appear in dom0.'
-    'notifhost.exe' = 'Task Scheduler restarts it on failure (three tries, a minute apart); guest toasts show as plain windows meanwhile.'
-    'etwproxy.exe' = 'Nothing relaunches it before the next GUI agent start; notifications still reach dom0 meanwhile, through the bridge''s other two sources.'
-    'qubes-updates-relay.exe' = 'Nothing relaunches it; the update pass it was serving has lost its network path and cannot finish.'
+    'gui-agent.exe' = 'Windows restarts its watchdog service, which starts a new GUI agent; if the windows do not reopen, restart the qube.'
+    'wgcbroker.exe' = 'Task Scheduler restarts it (up to three times); until then menus, modern apps and notifications do not appear in dom0.'
+    'notifhost.exe' = 'Task Scheduler restarts it (up to three times); guest toasts show as plain windows until then.'
+    'etwproxy.exe' = 'Not relaunched until the next GUI agent start; notifications still reach dom0.'
+    'qubes-updates-relay.exe' = 'Not relaunched; the update pass it served cannot finish.'
 }
-# the ETW signal proxy's rights failures (its exit codes 5 and 9): the agent parks it; nothing relaunches it either way
-$script:QwtDeathEtwParked = 'The GUI agent parks it for this boot (a rights problem a relaunch cannot fix); notifications still reach dom0 through the bridge''s other two sources.'
+# the ETW signal proxy's rights failures (its exit codes 5 and 9): the agent parks it for the boot - a rights problem a
+# relaunch cannot fix - and notifications still reach dom0 through the bridge's other two sources
+$script:QwtDeathEtwParked = 'Parked by the GUI agent for this boot; notifications still reach dom0.'
 # A CHILD WINDOWS ENDED WITH ITS SESSION (exit 0x40010004, DBG_TERMINATE_PROCESS; the process table names the code). During a
 # shutdown it is not a death and is suppressed (ConvertFrom-QwtDeathEvent; owner 2026-10-10 "suppress only on shutdown"). Outside
 # one it is still a counted, escalated death, but the family's header and line 1 are false for it - "exited unexpectedly", and a Task
@@ -169,28 +181,30 @@ $script:QwtDeathEtwParked = 'The GUI agent parks it for this boot (a rights prob
 # helpers - never a restart into the ending session. notifytexts.h has no row for this event: its rows are the agent's own faults.
 $script:QwtDeathSessionEndCode = [uint32]0x40010004L
 $script:QwtDeathSessionEndWhat = 'ended by Windows'
+# Line 1 says only what the next sign-in does (the header already says Windows ended it - owner 2026-10-10: a line that
+# restates the header is prose): the watchdog service launches the agent at logon, the agent launches its helpers.
 $script:QwtDeathNextSessionEnd = @{
-    'gui-agent.exe' = 'Windows ended it when its sign-in session ended; the watchdog service starts a new GUI agent at the next sign-in.'
-    'wgcbroker.exe' = 'Windows ended it when its sign-in session ended; the GUI agent starts it again at the next sign-in.'
-    'notifhost.exe' = 'Windows ended it when its sign-in session ended; the GUI agent starts it again at the next sign-in.'
-    'etwproxy.exe'  = 'Windows ended it when its sign-in session ended; the GUI agent starts it again at the next sign-in.'
+    'gui-agent.exe' = 'The watchdog service starts a new GUI agent at the next sign-in.'
+    'wgcbroker.exe' = 'The GUI agent starts it again at the next sign-in.'
+    'notifhost.exe' = 'The GUI agent starts it again at the next sign-in.'
+    'etwproxy.exe'  = 'The GUI agent starts it again at the next sign-in.'
 }
-$script:QwtDeathNextSessionEndOther = 'Windows ended it when its sign-in session ended.'
+$script:QwtDeathNextSessionEndOther = 'Not relaunched; the step it was performing did not complete.'
 # THE WATCHDOG SERVICE'S OWN EXIT CODES (agent/include/qga-exitcodes.h QGA_SVC_EXIT_*): the service ends itself for the SCM's
 # recovery. 0x20514710 = the agent it started died (its 7024 is a record of the agent's 4001 death); 0x20514711 = the agent could
 # not be launched at all (nothing ran: a death of the watchdog's own, the launch failure).
 $script:QwtDeathWatchdogAgentDied = [uint32]0x20514710L
 $script:QwtDeathWatchdogLaunchFailed = [uint32]0x20514711L
 $script:QwtDeathWatchdogCodes = @{
-    [uint32]0x20514710L = 'the GUI agent it supervises died, so the service ended itself for Windows to restart it and a new GUI agent'
-    [uint32]0x20514711L = 'the GUI agent could not be started, so the service ended itself for Windows to restart it and retry'
+    [uint32]0x20514710L = 'the GUI agent it supervises died; the service ended itself for Windows to restart both'
+    [uint32]0x20514711L = 'the GUI agent could not be started; the service ended itself for a retry'
 }
 # one-shot programs: the RPC handlers dom0 invokes, and the setup/boot-time tools
 $script:QwtDeathRpcExes = @('clipboard-copy.exe', 'clipboard-paste.exe', 'file-receiver.exe', 'file-sender.exe', 'get-image-rgba.exe',
                             'open-in-vm.exe', 'open-url.exe', 'vm-file-editor.exe', 'set-gui-mode.exe', 'qrexec-client-vm.exe',
                             'qrexec-wrapper.exe', 'qubesdb-cmd.exe', 'qubesdb-read.exe')
-$script:QwtDeathNextRpc = 'Nothing relaunches it: the request it was handling failed - repeat the action from dom0.'
-$script:QwtDeathNextOneShot = 'Nothing relaunches it; the step it was performing did not complete.'
+$script:QwtDeathNextRpc = 'Not relaunched; the request failed - repeat the action from dom0.'
+$script:QwtDeathNextOneShot = 'Not relaunched; the step it was performing did not complete.'
 # where each supervised child's own evidence is (the technical line), beyond this log and the event record
 $script:QwtDeathLogHints = @{
     'gui-agent.exe' = 'the gui-agent and watchdog logs in {0}'
@@ -214,10 +228,10 @@ $script:QwtDeathServiceKeys = @{
 }
 # what a service's absence means (line 1, after what Windows does)
 $script:QwtDeathServiceImpact = @{
-    'qrexec-agent.exe' = 'while it is down this qube cannot be reached from dom0'
-    'qubesdb-daemon.exe' = 'while it is down the Qubes RPC agent, which depends on it, cannot run'
-    'gui-watchdog.exe' = 'while it is down the GUI agent is not supervised'
-    'qwtng-netsetup.exe' = 'while it is down a newly attached PV NIC gets no address'
+    'qrexec-agent.exe' = 'dom0 cannot reach this qube until then'
+    'qubesdb-daemon.exe' = 'the Qubes RPC agent cannot run until then'
+    'gui-watchdog.exe' = 'the GUI agent is unsupervised until then'
+    'qwtng-netsetup.exe' = 'a new PV NIC gets no address until then'
 }
 # tasks whose action IS a helper of ours (its 201 is another record of the helper's death)
 $script:QwtDeathHelperTasks = @{ '\Qubes-WgcBroker' = 'wgcbroker.exe'; '\Qubes-NotifBridge' = 'notifhost.exe' }
@@ -226,17 +240,22 @@ $script:QwtDeathScriptTasks = @('\QubesPvNic', '\QubesPvNicRearm', '\QubesNetwor
                                 '\QubesAutologonGuard', '\QubesWindowsUpdateScan', '\QubesWindowsUpdateRun',
                                 '\QubesWindowsUpdateDownload', '\QwtImprovedSetup')
 # each script task's MACHINE ID (the route component, in the same style as the executables'), its HUMAN NAME, and what its
-# failure means (line 1) - from the tasks' own registrations (their <Description>)
+# failure means (line 1) - from the tasks' own registrations (their <Description>), cut to the consequence (owner
+# 2026-10-10). What the lines used to carry: QubesPvNic's log is C:\ProgramData\QubesPvNic.log and names the step, and a
+# failure can also be a previous session's shutdown re-arm of the unplug latch not completing; QubesPvNicRearm fails only
+# when a registry write returned an error (a run the shutdown itself ENDED is not reported - result 267014 is ignored for
+# every task - and the next boot judges that from the re-arm stamp); the autologon guard's miss shows after an update or
+# a sign-out, as a sign-in screen seamless mode cannot show; the setup task's own log says where it stopped.
 $script:QwtDeathTaskNames = @{
-    '\QubesPvNic'                 = @{ id = 'pvnic';           human = 'PV NIC setup task';             impact = 'The PV NIC setup task reported a failure, and its log (C:\ProgramData\QubesPvNic.log) names the step: the guest''s network may stay unconfigured until it runs again, or a previous session''s shutdown re-arm of the unplug latch did not complete.' }
-    '\QubesPvNicRearm'            = @{ id = 'pvnic-rearm';     human = 'PV NIC re-arm task';            impact = 'A shutdown re-arm of the PV NIC latch failed outright - a registry write returned an error - so the next boot''s PV NIC binding is at risk. A run the shutdown itself ENDED is not reported here (result 267014 is ignored for every task); the next boot judges that from the re-arm stamp.' }
-    '\QubesNetworkReapply'        = @{ id = 'network-reapply'; human = 'network re-apply task';         impact = 'The network configuration was not re-applied for the interface that appeared.' }
-    '\QubesQuietDesktopGuard'     = @{ id = 'quiet-desktop';   human = 'quiet-desktop guard task';      impact = 'The consumer-nag policies were not re-asserted this boot; Windows may show its nags again.' }
-    '\QubesAutologonGuard'        = @{ id = 'autologon-guard'; human = 'autologon guard task';          impact = 'Autologon was not re-asserted: after an update or a sign-out this qube may stop at the sign-in screen, unreachable in seamless mode.' }
-    '\QubesWindowsUpdateScan'     = @{ id = 'update-scan';     human = 'Windows Update scan task';      impact = 'The Windows Update scan did not complete; dom0 gets no fresh availability report from it.' }
-    '\QubesWindowsUpdateRun'      = @{ id = 'update-run';      human = 'Windows Update install task';   impact = 'The Windows update pass did not complete; dom0''s update run reports the failure.' }
-    '\QubesWindowsUpdateDownload' = @{ id = 'update-download'; human = 'Windows Update download task';  impact = 'The update download pass did not complete; dom0''s update run reports the failure.' }
-    '\QwtImprovedSetup'           = @{ id = 'qwt-setup';       human = 'Qubes Tools setup task';        impact = 'The Qubes Tools setup step did not complete; the install may be unfinished - its log says where it stopped.' }
+    '\QubesPvNic'                 = @{ id = 'pvnic';           human = 'PV NIC setup task';             impact = 'The guest''s network may stay unconfigured until it runs again.' }
+    '\QubesPvNicRearm'            = @{ id = 'pvnic-rearm';     human = 'PV NIC re-arm task';            impact = 'The next boot''s PV NIC binding is at risk.' }
+    '\QubesNetworkReapply'        = @{ id = 'network-reapply'; human = 'network re-apply task';         impact = 'The network configuration was not re-applied to the new interface.' }
+    '\QubesQuietDesktopGuard'     = @{ id = 'quiet-desktop';   human = 'quiet-desktop guard task';      impact = 'Windows may show its consumer nags again this boot.' }
+    '\QubesAutologonGuard'        = @{ id = 'autologon-guard'; human = 'autologon guard task';          impact = 'Autologon was not re-asserted; after a sign-out this qube may stop at the sign-in screen.' }
+    '\QubesWindowsUpdateScan'     = @{ id = 'update-scan';     human = 'Windows Update scan task';      impact = 'dom0 gets no fresh update availability report.' }
+    '\QubesWindowsUpdateRun'      = @{ id = 'update-run';      human = 'Windows Update install task';   impact = 'dom0''s update run reports the failure.' }
+    '\QubesWindowsUpdateDownload' = @{ id = 'update-download'; human = 'Windows Update download task';  impact = 'dom0''s update run reports the failure.' }
+    '\QwtImprovedSetup'           = @{ id = 'qwt-setup';       human = 'Qubes Tools setup task';        impact = 'The install may be unfinished.' }
 }
 # our own source: event id -> the supervisor that wrote it (include/deathevent.h)
 $script:QwtDeathSupervisorIds = @{ 4001 = 'the GUI agent watchdog'; 4002 = 'the GUI agent'; 4003 = 'the GUI agent'; 4004 = 'the GUI agent' }
@@ -246,7 +265,7 @@ $script:QwtDeathCodeTables = @{
     # a process exit or exception code: a crash record's exception, a supervisor's exit code
     process = @{
         [uint32]0xC0000005L = 'an access violation'
-        [uint32]0xC0000409L = 'a fast-fail abort (stack buffer overrun, __fastfail or an abort)'
+        [uint32]0xC0000409L = 'a fast-fail abort (stack buffer overrun or __fastfail)'
         [uint32]0xC0000374L = 'heap corruption'
         [uint32]0xC00000FDL = 'a stack overflow'
         [uint32]0xC0000017L = 'out of memory'
@@ -260,12 +279,13 @@ $script:QwtDeathCodeTables = @{
         [uint32]0xC000013AL = 'a console control (Ctrl-C, or the console closed)'
         [uint32]0xC0000142L = 'a DLL failed to initialize'
         [uint32]0xC0000135L = 'a DLL was not found'
-        [uint32]0 = 'a clean exit nobody asked for'
-        [uint32]1 = 'exit code 1 - the code TerminateProcess imposes (an external force-kill), or the program''s own failure exit'
+        [uint32]0 = 'a clean exit'   # the header already says it was unasked ("exited unexpectedly")
+        [uint32]1 = 'a force-kill (the code TerminateProcess imposes), or the program''s own failure exit'
         # 0x40010004 DBG_TERMINATE_PROCESS: what Windows imposes on every process of a session it tears down (sign-out, shutdown) -
         # the commonest exit code at shutdown, and one no program returns for itself. The agent records such an end under 4011-4014
         # since cd73a56; a 4001-4004 that an older binary wrote, which -CatchUp replays on an upgraded guest, must still name it.
-        [uint32]0x40010004L = 'Windows'' own session teardown (DBG_TERMINATE_PROCESS): ended with its session, not by a fault of its own'
+        # the "not by a fault of its own" the meaning used to add is reassurance (owner 2026-10-10); the header says who ended it
+        [uint32]0x40010004L = 'session teardown (DBG_TERMINATE_PROCESS)'
     }
     # a Windows error the Service Control Manager reports (event 7023: the service ended with this error)
     win32 = @{
@@ -277,7 +297,7 @@ $script:QwtDeathCodeTables = @{
         [uint32]1060 = 'the service does not exist'; [uint32]1062 = 'the service has not been started'
         [uint32]1067 = 'the process terminated unexpectedly'; [uint32]1068 = 'a service it depends on failed to start'
         [uint32]1069 = 'the service could not log on'; [uint32]1115 = 'a system shutdown is in progress'
-        [uint32]1450 = 'insufficient system resources (on this guest: an exhausted Xen grant table, which only a reboot clears)'
+        [uint32]1450 = 'insufficient system resources (an exhausted Xen grant table; only a reboot clears it)'
         [uint32]1460 = 'the operation timed out'; [uint32]1722 = 'the RPC server is unavailable'
         [uint32]10054 = 'the connection was reset by the peer'
     }
@@ -287,21 +307,21 @@ $script:QwtDeathCodeTables = @{
         [uint32]0x80070420L = 'an instance of the task is already running'
         [uint32]0x800710E0L = 'the operator or administrator refused the request'
         [uint32]0x80070569L = 'the account is not granted this logon type'
-        [uint32]0x8007052EL = 'the account could not log on (its sign-in details were rejected)'
+        [uint32]0x8007052EL = 'the account could not log on'
         [uint32]0x8007010BL = 'the working directory is invalid'; [uint32]0x80070001L = 'incorrect function'
         [uint32]0x41301 = 'the task is currently running'; [uint32]0x41303 = 'the task has not yet run'
         [uint32]0x41306 = 'the last run was ended by Task Scheduler'
-        [uint32]1 = 'the script reported a failure or hit an error it did not handle'
+        [uint32]1 = 'the script reported a failure or an unhandled error'
     }
 }
 # exit codes an executable of ours documents (the process table's per-executable refinement)
 $script:QwtDeathExeCodes = @{
-    'notifhost.exe' = @{ [uint32]2 = 'notification access is denied for this user (the toast listener may not read toasts)'
+    'notifhost.exe' = @{ [uint32]2 = 'notification access is denied for this user'
                          [uint32]3 = 'the toast listener threw while starting' }
-    'etwproxy.exe'  = @{ [uint32]5 = 'trace access was denied under the per-session DACL'
+    'etwproxy.exe'  = @{ [uint32]5 = 'trace access was denied'
                          [uint32]7 = 'the trace consumer could not be opened'
                          [uint32]8 = 'its pipe could not be created'
-                         [uint32]9 = 'it refused to run under an account that is not SYSTEM' }
+                         [uint32]9 = 'run under an account that is not SYSTEM' }
 }
 
 # --- the route (qwt-notify-error.ps1, shipped next to this file) -------------------------------
@@ -317,7 +337,8 @@ if (-not (Get-Command Format-QwtNotifyTechLine -ErrorAction SilentlyContinue)) {
         if ($ProcessId -gt 0) { $t += " pid $ProcessId" }
         if ($Code) { $t += "; $Code" }
         if ($Ran) { $t += "; ran $Ran" }
-        return "$t; $Count. Evidence: $Evidence."
+        # the route resolves the installed build (Get-QwtNotifyBuild); without the route none is known, and the line says so
+        return "$t; $Count; build unknown. Evidence: $Evidence."
     }
 }
 
@@ -444,15 +465,13 @@ function Format-QwtDeathCode {
     if ($c -ge 0x10000) { $txt = ('0x{0:X8}' -f $c) } else { $txt = "$c" }
     return "$Kind $txt"
 }
-# "Cause: <meaning> - <code>." from the source's table; a code the table does not know is said to be unknown, never guessed
+# "Cause: <meaning>." from the source's table. The CODE is not here - the technical line carries it, and a fact appears once
+# (owner 2026-10-10). A code the table does not know is said to be unknown, never guessed; the event record has the detail.
 function Format-QwtDeathCause {
-    param($Code, [string]$Source, [string]$Exe, [string]$CodeText, [string]$DetailWhere)
+    param($Code, [string]$Source, [string]$Exe)
     $m = Get-QwtDeathCodeMeaning $Code $Source $Exe
-    if ($m) {
-        if ($m -like "$CodeText *") { return "Cause: $m." }   # the meaning already opens with the code (exit code 1)
-        return "Cause: $m - $CodeText."
-    }
-    return "Cause: $CodeText - not a code this reporter knows; $DetailWhere has the detail."
+    if ($m) { return "Cause: $m." }
+    return 'Cause: not a code this reporter knows.'
 }
 function Format-QwtDeathRun {
     param($Ms)
@@ -545,7 +564,7 @@ $script:QwtShutdownResultCodes = @('0x8007045b', '0x8007050b', '2147943515', '21
 # not report it, and this covers a record written by an older binary on an upgraded guest.
 $script:QwtDeathExeBenignResults = @{
     'notifhost.exe' = @{
-        '4' = 'another instance already holds the singleton, so the bridge IS running - it said so instead of exiting 0, which used to be indistinguishable from a real finish'
+        '4' = 'another instance already holds the singleton'
     }
 }
 
@@ -720,6 +739,22 @@ function ConvertFrom-QwtDeathEvent {
             if ($eventId -notin 7031, 7034, 7023, 7024) { $r.reason = "Service Control Manager $eventId is not a service-death record"; return $r }
             $display = "$($named['param1'])"
             if (-not $script:QwtDeathServices.ContainsKey($display)) { $r.reason = "service '$display' is not ours"; return $r }
+            # A SERVICE THE SHUTDOWN STOPPED IS NOT A FAILING SERVICE (owner 2026-10-10: the toast surface
+            # is reduced to things that require attention, and "if we shut down the guest, none of its
+            # components should complain about the fact"). At every shutdown the SCM stops these
+            # services and 7023/7024 carry whatever code the stop produced; this class had NO shutdown
+            # test at all, which Jev scored the worst remaining source of toast noise (0.79) and this
+            # narrowing at 0.93. Only a POSITIVE yes from the probe suppresses: no answer reports, as
+            # everywhere else in this file, because missing data must not buy silence.
+            if ($timeKnown) {
+                $nearSd = $null
+                try { $nearSd = & $script:QwtShutdownNearProbe $time } catch { $nearSd = $null }
+                if ($nearSd -is [bool] -and $nearSd) {   # GUARD:scmshutdown
+                    $r.ours = $false; $r.ignore = $true
+                    $r.reason = "service '$display' stopped during a shutdown - the stop the shutdown asked for, not a failure"
+                    return $r
+                }
+            }
             $r.ours = $true; $r.kind = 'service'; $r.exe = $script:QwtDeathServices[$display]; $r.component = $script:QwtDeathExes[$r.exe]
             $r.svcKey = "$($script:QwtDeathServiceKeys[$display])"
             if ($eventId -in 7023, 7024) { $r.rec = 'scm-error' } else { $r.rec = 'scm-unexpected' }
@@ -807,6 +842,17 @@ function ConvertFrom-QwtDeathEvent {
                 if ($script:QwtDeathHelperTasks.ContainsKey($task)) { $r.label = "$($r.exe) (task $($r.taskName)) ended with a non-zero result" }
                 else { $r.label = "task $($r.taskName) ended with a non-zero result" }
             } else {
+                # A LAUNCH WINDOWS REFUSED BECAUSE IT IS SHUTTING DOWN IS NOT A FAILING TASK. Measured
+                # 2026-10-10: Task Scheduler refused \QwtDeathReporter four times in one capture with
+                # Error Value 2147943515 = 0x8007045B = Win32 1115 ERROR_SHUTDOWN_IN_PROGRESS, once per
+                # shutdown. The boot catch-up pass already covers whatever that launch would have
+                # reported, so the refusal itself needs no toast (Jev: narrow 0.93). Any OTHER reason a
+                # launch fails still reports - that is a task that cannot run when nothing is going down.
+                if ($code -eq 2147943515) {   # GUARD:launchshutdown
+                    $r.ignore = $true
+                    $r.reason = "task $($r.taskName) was not launched: a system shutdown is in progress (0x8007045B) - the boot catch-up pass covers it"
+                    return $r
+                }
                 $r.ours = $true; $r.kind = 'launchfail'; $r.rec = 'task-launch'; $r.code = $code; $r.anchor = 'nopid'
                 $r.label = "task $($r.taskName) could not start its action"
             }
@@ -923,16 +969,18 @@ function Get-QwtDeathServiceRecovery {
     try { return (& $script:QwtDeathRecoveryProbe $Key) } catch { return $null }
 }
 # what Windows does for a service of ours that died: from its recovery settings; an error exit needs the non-crash flag as well
+# unreadable settings get no guess; "in N s" is the FIRST restart delay (the SCM's later ones differ); an error exit is
+# restarted only with FailureActionsOnNonCrashFailures set - without it the recovery is armed for crashes alone
 function Format-QwtDeathRecovery {
     param($Rec, [bool]$ErrorExit)
-    if ($null -eq $Rec) { return 'Windows restarts it only if its recovery is armed; if it stays down, start it again or reboot this qube' }
+    if ($null -eq $Rec) { return 'Windows restarts it only if its recovery is armed; else restart the qube' }
     $armed = $Rec.restart -and ((-not $ErrorExit) -or $Rec.onError)
     if ($armed) {
         $d = [Math]::Round([double]$Rec.delayMs / 1000.0, 1)
-        return "Windows restarts it automatically (its recovery is armed; the first restart after $d s)"
+        return "Windows restarts it in $d s"
     }
-    if ($ErrorExit -and $Rec.restart) { return 'Windows does NOT restart it after an error exit (its recovery is armed only for crashes): start it again or reboot this qube' }
-    return 'Windows does NOT restart it (no restart is armed): start it again or reboot this qube'
+    if ($ErrorExit -and $Rec.restart) { return 'Windows does not restart it after an error exit: start it or restart the qube' }
+    return 'Windows does not restart it: start it or restart the qube'
 }
 # "N s" / "N ms" from the SCM's delay field, or the phrase when the field was not a number
 function Format-QwtDeathDelay {
@@ -960,13 +1008,16 @@ function Get-QwtDeathNext {
     if ($exe -in $script:QwtDeathRpcExes) { return $script:QwtDeathNextRpc }
     return $script:QwtDeathNextOneShot
 }
-# the whole notification for one death: header / line 1 / cause / technical line (qwt-notify-error.ps1's shape)
+# the whole notification for one death: header / line 1 / cause / technical line (qwt-notify-error.ps1's shape), plus Detail -
+# the other places the record's detail lives (the WER folder prefix, the program's own log, the event log and id) - for the
+# deaths-log line ONLY. The notification's Evidence is ONE pointer, this log (owner 2026-10-10, "too much prose": the list
+# named three files when the reader needs the one that has the detail), and the log's DEATH line carries the rest.
 function Format-QwtDeathNotice {
     param([Parameter(Mandatory)]$Death, [Parameter(Mandatory)][int]$Number)
     $human = Get-QwtDeathHuman $Death
     $logDir = Get-QwtDeathLogDir
     $ourLog = "$logDir\qwt-deaths.log"
-    $what = ''; $next = ''; $cause = ''; $codeText = ''; $evidence = $ourLog; $subject = $Death.exe
+    $what = ''; $next = ''; $cause = ''; $codeText = ''; $detail = ''; $subject = $Death.exe
     $ran = Format-QwtDeathRun $Death.ranMs
     $procId = 0
     if ($null -ne $Death.pid) { $procId = [long]$Death.pid }
@@ -975,15 +1026,15 @@ function Format-QwtDeathNotice {
             $what = 'crashed'
             $next = Get-QwtDeathNext $Death
             $codeText = Format-QwtDeathCode $Death.code 'exception'
-            $cause = Format-QwtDeathCause $Death.code 'process' $Death.exe $codeText 'the WER report'
-            $evidence = "$ourLog; WER folder AppCrash_$($Death.exe)_*; Application log event 1000"
+            $cause = Format-QwtDeathCause $Death.code 'process' $Death.exe
+            $detail = "WER folder AppCrash_$($Death.exe)_*; Application log event 1000"
         }
         'wer' {
             $what = 'crashed'
             $next = Get-QwtDeathNext $Death
             $codeText = Format-QwtDeathCode $Death.code 'exception'
-            $cause = Format-QwtDeathCause $Death.code 'process' $Death.exe $codeText 'the WER report'
-            $evidence = "$ourLog; WER folder AppCrash_$($Death.exe)_*; Application log event 1001"
+            $cause = Format-QwtDeathCause $Death.code 'process' $Death.exe
+            $detail = "WER folder AppCrash_$($Death.exe)_*; Application log event 1001"
         }
         'clr' {
             $what = 'crashed'
@@ -993,23 +1044,24 @@ function Format-QwtDeathNotice {
             $type = "$($Death.clrType)"
             if ($type -and (Get-Command Get-QwtNotifyRedactReason -ErrorAction SilentlyContinue) -and (Get-QwtNotifyRedactReason $type)) { $type = '' }   # GUARD:redactfallback
             if ($type) { $cause = "Cause: an unhandled .NET exception, $type." }
-            else { $cause = 'Cause: an unhandled .NET exception (its type is in the event record).' }
-            $evidence = "$ourLog; Application log, .NET Runtime event 1026"
+            else { $cause = 'Cause: an unhandled .NET exception; its type is in the event record.' }
+            $detail = 'Application log, .NET Runtime event 1026'
         }
         'supervisor' {
             $hint = "$($script:QwtDeathLogHints[$Death.exe])"
             # Windows ended it with its session: its own header and line 1 (QwtDeathSessionEnd* above), the cause from the table
             $sysEnd = ($null -ne $Death.code -and [uint32]$Death.code -eq $script:QwtDeathSessionEndCode)   # GUARD:sysendtext
             if ($Death.hung) {
+                # a hang, not a crash: the agent ended it after it stopped answering, so there is no exit code of its own
                 $what = 'stopped answering'
                 $codeText = 'hung (no exit code)'
-                $cause = "Cause: it stopped answering $($script:QwtDeathSupervisorIds[$Death.eventId])'s requests - a hang, not a crash; the agent ended it, so there is no exit code."
+                $cause = "Cause: a hang, $($script:QwtDeathSupervisorIds[$Death.eventId]) ended it."
                 $hint = $script:QwtDeathLogHintHung
             } elseif ($null -eq $Death.code) {
                 # 'disappeared': found gone with no exit observed - and it keeps the longest name's header within 60 characters
                 $what = 'disappeared'
                 $codeText = 'exit code unknown'
-                $cause = "Cause: $($script:QwtDeathSupervisorIds[$Death.eventId]) found it gone without observing an exit, so there is no exit code."
+                $cause = "Cause: $($script:QwtDeathSupervisorIds[$Death.eventId]) found it gone, no exit was seen."
             } elseif ($script:QwtDeathExeBenignResults[$Death.exe] -and
                       $script:QwtDeathExeBenignResults[$Death.exe].ContainsKey("$($Death.code)")) {
                 # An exit the component uses to say something other than "I died".
@@ -1019,53 +1071,57 @@ function Format-QwtDeathNotice {
             } elseif ($sysEnd) {
                 $what = $script:QwtDeathSessionEndWhat
                 $codeText = Format-QwtDeathCode $Death.code 'exit code'
-                $cause = Format-QwtDeathCause $Death.code 'process' $Death.exe $codeText "the program's log"
+                $cause = Format-QwtDeathCause $Death.code 'process' $Death.exe
             } elseif (Test-QwtDeathExceptionCode $Death.code) {
                 $what = 'crashed'
                 $codeText = Format-QwtDeathCode $Death.code 'exception'
-                $cause = Format-QwtDeathCause $Death.code 'process' $Death.exe $codeText 'the WER report'
+                $cause = Format-QwtDeathCause $Death.code 'process' $Death.exe
             } else {
                 $what = 'exited unexpectedly'
                 $codeText = Format-QwtDeathCode $Death.code 'exit code'
-                $cause = Format-QwtDeathCause $Death.code 'process' $Death.exe $codeText "the program's log"
+                $cause = Format-QwtDeathCause $Death.code 'process' $Death.exe
             }
             $next = Get-QwtDeathNext $Death -SessionEnd:$sysEnd
-            if (-not $hint) { $hint = "the program's log in $logDir" }
-            $evidence = "$ourLog; $($hint -f $logDir); Application log, Qubes Windows Tools event $($Death.eventId)"
+            if (-not $hint) { $hint = "the program's log in {0}" }
+            $detail = "$($hint -f $logDir); Application log, Qubes Windows Tools event $($Death.eventId)"
         }
         'service' {
             $impact = "$($script:QwtDeathServiceImpact[$Death.exe])"
-            if (-not $impact) { $impact = 'its work stops while it is down' }
+            if (-not $impact) { $impact = 'its work stops until then' }
             switch ($Death.eventId) {
                 7023 {
                     $what = 'stopped with an error'
                     $codeText = Format-QwtDeathCode $Death.code 'Windows error'
-                    $cause = Format-QwtDeathCause $Death.code 'win32' $Death.exe $codeText "the service's log"
+                    $cause = Format-QwtDeathCause $Death.code 'win32' $Death.exe
                     $next = (Format-QwtDeathRecovery (Get-QwtDeathServiceRecovery $Death.svcKey) $true) + "; $impact."
                 }
                 7024 {
                     $what = 'stopped with an error'
                     $codeText = Format-QwtDeathCode $Death.code 'service error'
-                    $cause = "Cause: a code the service itself defines, not a Windows error - $codeText; its log has the meaning."
+                    # a code the service itself defines, not a Windows error: no table of ours; its log has the meaning
+                    $cause = 'Cause: a service-specific code, see its log.'
                     if ($Death.exe -eq 'gui-watchdog.exe' -and $null -ne $Death.code -and $script:QwtDeathWatchdogCodes.ContainsKey([uint32]$Death.code)) {
-                        $cause = "Cause: $($script:QwtDeathWatchdogCodes[[uint32]$Death.code]) - $codeText."
+                        $cause = "Cause: $($script:QwtDeathWatchdogCodes[[uint32]$Death.code])."
                     }
                     $next = (Format-QwtDeathRecovery (Get-QwtDeathServiceRecovery $Death.svcKey) $true) + "; $impact."
                 }
                 7031 {
+                    # the SCM's 7031: the service process ended without a stop request, counted in its reset period
                     $what = 'stopped unexpectedly'
-                    $cause = "Cause: the service process ended without reporting a stop to Windows - failure $($Death.svcCount) in the current reset period."   # GUARD:scmwords
+                    $cause = "Cause: ended without being asked to stop, failure $($Death.svcCount) in the reset period."   # GUARD:scmwords
                     if ($Death.svcAction -eq 'Restart the service') { $next = "Windows restarts it in $(Format-QwtDeathDelay $Death.svcDelay); $impact." }
                     else { $next = "Windows runs its recovery action ($($Death.svcAction)) in $(Format-QwtDeathDelay $Death.svcDelay); $impact." }
                 }
                 7034 {
+                    # the SCM's 7034: the service process ended without a stop request, counted in its reset period
                     $what = 'stopped unexpectedly'
-                    $cause = "Cause: the service process ended without reporting a stop to Windows - failure $($Death.svcCount) in the current reset period."
-                    $next = "Windows does not restart it (no recovery action is configured): start it again or reboot this qube; $impact."
+                    $cause = "Cause: ended without being asked to stop, failure $($Death.svcCount) in the reset period."
+                    # no recovery action is configured for this service
+                    $next = "Windows does not restart it: start it or restart the qube; $impact."
                 }
             }
             $subject = "$($Death.exe) (service $($Death.svcKey))"
-            $evidence = "$ourLog; System log, Service Control Manager event $($Death.eventId)"
+            $detail = "System log, Service Control Manager event $($Death.eventId)"
         }
         'task' {
             if ($Death.task) {
@@ -1078,24 +1134,27 @@ function Format-QwtDeathNotice {
                 $subject = "$($Death.exe) (task $($Death.taskName))"
             }
             $codeText = Format-QwtDeathCode $Death.code 'result'
-            $cause = Format-QwtDeathCause $Death.code 'task' '' $codeText "the task's log"
-            $evidence = "$ourLog; Task Scheduler history (TaskScheduler/Operational) event 201"
+            $cause = Format-QwtDeathCause $Death.code 'task' ''
+            $detail = 'Task Scheduler history (TaskScheduler/Operational) event 201'
         }
         'launchfail' {
             $what = 'could not start'
-            $next = "$($script:QwtDeathTaskNames[$Death.task].impact) Nothing ran, so it left no log of its own: the result code is the whole story."
+            # nothing ran, so the task left no log of its own: the result code is the whole record
+            $next = "Nothing ran. $($script:QwtDeathTaskNames[$Death.task].impact)"
             $subject = "task $($Death.taskName)"
             $codeText = Format-QwtDeathCode $Death.code 'result'
-            $cause = Format-QwtDeathCause $Death.code 'task' '' $codeText 'the Task Scheduler history'
-            $evidence = "$ourLog; Task Scheduler history (TaskScheduler/Operational) event 203"
+            $cause = Format-QwtDeathCause $Death.code 'task' ''
+            $detail = 'Task Scheduler history (TaskScheduler/Operational) event 203'
         }
     }
     $header = "The $human $what"   # GUARD:hdrplain
-    $tech = Format-QwtNotifyTechLine -Subject $subject -ProcessId $procId -Code $codeText -Ran $ran -Count "death $Number this boot" -Evidence $evidence   # GUARD:techline
-    # the same line with the evidence cut to the deaths log (which holds the full record) - what is sent when the full text would
-    # be over the route's byte limit; see GUARD:lengthfallback
-    $techShort = Format-QwtNotifyTechLine -Subject $subject -ProcessId $procId -Code $codeText -Ran $ran -Count "death $Number this boot" -Evidence $ourLog
-    return @{ Component = $Death.component; Header = $header; Next = $next; Cause = $cause; Tech = $tech; TechShort = $techShort }
+    # THE TECHNICAL LINE: the facts and ONE pointer - this log, which holds the whole record (its DEATH line carries $detail);
+    # the route adds the build. The same line goes to the log, so the two cannot drift.
+    $tech = Format-QwtNotifyTechLine -Subject $subject -ProcessId $procId -Code $codeText -Ran $ran -Count "death $Number this boot" -Evidence $ourLog   # GUARD:techline
+    # the same line with the pointer cut to the file name - what is sent when the full text would be over the route's byte limit
+    # (see GUARD:lengthfallback); the build survives into it, because a notice that long is still one the reader must place
+    $techShort = Format-QwtNotifyTechLine -Subject $subject -ProcessId $procId -Code $codeText -Ran $ran -Count "death $Number this boot" -Evidence 'qwt-deaths.log'   # GUARD:shortbuild
+    return @{ Component = $Death.component; Header = $header; Next = $next; Cause = $cause; Tech = $tech; TechShort = $techShort; Detail = $detail }
 }
 
 # --- the whole thing for one record: log at ERROR, count, notify ----------------------------------
@@ -1113,7 +1172,10 @@ function Invoke-QwtDeathReport {
     if (Get-Command Get-QwtNotifyBootStamp -ErrorAction SilentlyContinue) { $boot = Get-QwtNotifyBootStamp }
     if ($null -eq $boot) {
         # No boot identity: the death cannot be counted and the route will refuse. Still an ERROR here.
-        Write-QwtDeathLog 'ERROR' "DEATH $($ev.origin) $($ev.label) - NO per-boot token (qwt-notify-error.ps1 absent or its volatile key unreadable): not counted, not notified; the record is in the event log"
+        # No token means the route could not be asked for one - qwt-notify-error.ps1 absent, or its
+        # volatile key unreadable - so this death is neither counted against the cap nor notified.
+        # Windows' own event log still holds the record.
+        Write-QwtDeathLog 'ERROR' "DEATH $($ev.origin) $($ev.label) NOT notified: no per-boot token"
         return 'failed:transport'
     }
     $reg = Register-QwtDeath -Death $ev -Boot $boot
@@ -1124,27 +1186,31 @@ function Invoke-QwtDeathReport {
     $notice = Format-QwtDeathNotice -Death $ev -Number $reg.number
     $tag = 'AGAIN'
     if ($reg.new) { $tag = 'NEW' }
-    $extra = ''
-    if ($ev.evidence) { $extra += "; evidence $($ev.evidence)" }
-    if ($ev.detail) { $extra += "; $($ev.detail)" }
-    Write-QwtDeathLog 'ERROR' "DEATH #$($reg.number) $tag $($ev.origin): $($notice.Header) | $($ev.label) | $($notice.Cause) | $($notice.Tech)$extra"   # GUARD:logfirst
+    # the notification carries ONE pointer (this log); the log's own line carries the rest of the record's places
+    $more = "$($notice.Detail)"
+    if ($ev.evidence) { $more += "; evidence $($ev.evidence)" }
+    if ($ev.detail) { $more += "; $($ev.detail)" }
+    Write-QwtDeathLog 'ERROR' "DEATH #$($reg.number) $tag $($ev.origin): $($notice.Header) | $($ev.label) | $($notice.Cause) | $($notice.Tech) | detail: $more"   # GUARD:logfirst
     if (-not $reg.new) { return 'enriched' }
     if (-not (Get-Command Send-QwtError -ErrorAction SilentlyContinue)) {
-        Write-QwtDeathLog 'ERROR' "DEATH #$($reg.number) NOT notified: qwt-notify-error.ps1 is not next to this script (packaging gap in the reporting path)"
+        # A packaging gap in the reporting path, not a guest condition: the route ships beside this script, and
+        # here it is not next to it.
+    Write-QwtDeathLog 'ERROR' "DEATH #$($reg.number) NOT notified: qwt-notify-error.ps1 is missing beside this script"
         return 'failed:transport'
     }
     $id = 'death-' + $reg.number   # GUARD:deathid
-    # THE ROUTE REFUSES A TEXT OVER ITS BYTE LIMIT, AND A REFUSED DEATH IS A SILENT ONE. The text carries the log directory twice,
-    # so a long LogDir (a legacy install, a custom path) could push a death past the limit. Then the evidence is cut to the
-    # deaths log - which holds the full record - and the death is sent; the shortening is logged.
+    # THE ROUTE REFUSES A TEXT OVER ITS BYTE LIMIT, AND A REFUSED DEATH IS A SILENT ONE. The text carries the log directory once,
+    # so only a LogDir of ~240 characters (a custom path near MAX_PATH) can push a death past the limit. Then the pointer is cut
+    # to the file name - the deaths log holds the full record - and the death is sent, build included; the shortening is logged.
     $techSent = $notice.Tech; $shortened = $false
     $full = Format-QwtNotifyText -Header $notice.Header -Next $notice.Next -Cause $notice.Cause -Tech $notice.Tech
     $why = "$(Get-QwtNotifyRedactReason $full)"
     if ($why -like 'too long*' -and $notice.TechShort) { $techSent = $notice.TechShort; $shortened = $true }   # GUARD:lengthfallback
-    if ($shortened) { Write-QwtDeathLog 'WARN' "DEATH #$($reg.number): the full text is $([Text.Encoding]::UTF8.GetByteCount($full)) bytes, over the route's limit - sent with the evidence cut to the deaths log" }
+    if ($shortened) { Write-QwtDeathLog 'WARN' "DEATH #$($reg.number): full text $([Text.Encoding]::UTF8.GetByteCount($full)) bytes, over the route's limit, pointer cut to the file name" }
     $st = Send-QwtError -Component $notice.Component -Id $id -Severity ACTION -Header $notice.Header -Next $notice.Next -Cause $notice.Cause -Tech $techSent
     if ($st -eq 'send') { Write-QwtDeathLog 'INFO' "DEATH #$($reg.number) notified to dom0 as $($notice.Component).$id" }
-    elseif ($st -eq 'suppressed:cap') { Write-QwtDeathLog 'ERROR' "DEATH #$($reg.number) NOT notified: the route's cap of 8 per boot is reached (a crash storm); every further death is still logged here" }
+    elseif ($st -eq 'suppressed:cap') { # The cap bounds a crash storm; past it every further death is still logged here, just not sent.
+    Write-QwtDeathLog 'ERROR' "DEATH #$($reg.number) NOT notified: the limit of 8 per boot is reached" }
     else { Write-QwtDeathLog 'ERROR' "DEATH #$($reg.number) NOT notified: route status $st" }
     return $st
 }
@@ -1180,8 +1246,9 @@ function Read-QwtDeathWatermark {
         foreach ($n in $o.PSObject.Properties.Name) { $h[$n] = [long]$o.$n }
         return $h
     } catch {
-        Write-QwtDeathLog 'WARN' "the watermark could not be read ($($_.Exception.Message)) - this pass starts from the end of each channel"
-        return $null          # NOT @{}: an unreadable watermark must not look like a fresh install
+        Write-QwtDeathLog 'WARN' "the watermark could not be read ($($_.Exception.Message)), this pass only sets a new watermark"
+        return $null          # NOT @{}: an unreadable watermark must not look like a fresh install; the caller then
+                              # reports nothing and starts from the end of each channel
     }
 }
 function Write-QwtDeathWatermark {

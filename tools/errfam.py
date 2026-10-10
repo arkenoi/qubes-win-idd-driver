@@ -52,7 +52,7 @@ FAMILIES = [
     ("qdb-daemon-write",   r'write to daemon failed with error 0xe8',    "the qubesdb client's report of the same"),
     ("autostart-optional", r'CfgReadMultiString\(Autostart\)',           "an absent OPTIONAL registry value"),
     ("watchforevents-0x0", r'WatchForEvents failed with error (0x0|0xH)', "a requested stop reported as a failure"),
-    ("winevt-thread-exit", r'window event thread exiting',               "the window event thread leaving"),
+    ("winevt-thread-exit", r'window event thread (exiting|died unexpectedly)', "the window event thread leaving"),
     ("dda-access-lost",    r'AcquireNextFrame\(\) failed',               "DDA ACCESS_LOST, mis-rendered as a keyed mutex"),
     ("dda-release-frame",  r'ReleaseFrame failed',                       "the same on the release side"),
     ("monitor-handle",     r'GetMonitorInfo failed',                     "a stale monitor handle (display-change race)"),

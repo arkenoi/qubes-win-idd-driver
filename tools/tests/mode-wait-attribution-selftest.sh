@@ -82,7 +82,9 @@ fi
 command grep -q 'ResolutionWaitExpiredFor(ctx->width, ctx->height' "$C" \
   && ok "own_cause_checked_first: the geometry-changed branch asks whether WE were the ones waiting" \
   || bad "own_cause_checked_first: a mode we gave up on is still reported as the P2's trigger"
-command grep -q 'NOT the P2 resolution-change trigger' "$C" \
+# CODE ONLY, like check 1: the comment beside the line now carries the P2 disclaimer the line used to end
+# with (the message rule, owner 2026-10-09), so a whole-file grep would pass on that comment with the line gone.
+code_only "$C" | command grep -q 'LogInfo("RecreateDuplication: own late mode' \
   && ok "own_cause_says_so: the line states plainly that this change is ours" \
   || bad "own_cause_says_so: nothing distinguishes our own late mode in the log"
 # AND THE REAL P2 ERROR MUST SURVIVE. This is the guard against the fix becoming a suppression:

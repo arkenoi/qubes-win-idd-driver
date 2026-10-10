@@ -547,10 +547,11 @@ static int EtwProxyMain(const wchar_t* clientSid)
         if (gle == ERROR_ACCESS_DENIED)
         {
             // The consume-denied datum: the per-session DACL grant did not authorize
-            // real-time consumption on this build. The agent parks the tier on exit 5.
+            // real-time consumption on this build (the grant was insufficient). The agent parks the
+            // tier on exit 5: no ETW signal for the rest of the boot.
             printf("ETWPROXY FAIL OpenTrace/ProcessTrace denied - per-session DACL grant "
                    "insufficient\n");
-            BLog(L"ETWPROXY FAIL OpenTrace/ProcessTrace denied - per-session DACL grant insufficient");
+            BLog(L"ETWPROXY FAIL OpenTrace/ProcessTrace denied, no ETW signal this boot (exit 5)");
             return 5;
         }
         printf("ETWPROXY FAIL OpenTrace %lu (agent-started session absent?)\n", gle);
@@ -681,8 +682,9 @@ static int EtwProxyMain(const wchar_t* clientSid)
         else if (ce == ERROR_NO_DATA)
         {
             // A client connected and already disconnected before we listened again -
-            // the normal bridge-restart race, not a fault. Reset and listen again.
-            BLog(L"ETWPROXY client came and went before accept (ERROR_NO_DATA) - re-listening");
+            // the normal bridge-restart race, not a fault: a client that came and went. Reset and
+            // listen again (re-listening is the whole answer).
+            BLog(L"ETWPROXY client left before accept (ERROR_NO_DATA), listening again");
             DisconnectNamedPipe(pipe);
             if (WaitForSingleObject(g_px.stopEvt, 0) == WAIT_OBJECT_0 ||
                 WaitForSingleObject(etwThread, 0) == WAIT_OBJECT_0) break;
@@ -740,11 +742,11 @@ static int EtwProxyMain(const wchar_t* clientSid)
     if (ptrc == ERROR_ACCESS_DENIED)
     {
         // ProcessTrace itself was refused: real-time consumption is denied despite the
-        // agent's per-session DACL grant. This must surface as the consume-denied exit so
+        // agent's per-session DACL grant (insufficient on this build). This must surface as the consume-denied exit so
         // the agent parks on a TRUE finding - never a masquerading clean exit 0.
         printf("ETWPROXY FAIL OpenTrace/ProcessTrace denied - per-session DACL grant "
                "insufficient\n");
-        BLog(L"ETWPROXY FAIL OpenTrace/ProcessTrace denied - per-session DACL grant insufficient");
+        BLog(L"ETWPROXY FAIL OpenTrace/ProcessTrace denied, no ETW signal this boot (exit 5)");
         exitCode = 5;
     }
     printf("ETWPROXY stop rc=%d captured=%ld sent=%ld dropped=%ld\n",

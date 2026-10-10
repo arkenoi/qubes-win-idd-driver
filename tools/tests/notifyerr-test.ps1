@@ -64,6 +64,7 @@ $script:QwtNotifyBootStamp = $BOOT
 $script:QwtNotifyLog = { param($m) [void]$script:logLines.Add($m) }
 $script:QwtNotifyLauncher = { param($exe, $file) [void]$script:launched.Add($file) }
 $script:QwtNotifyLogged = @{}
+$script:QwtNotifyBuild = '4.3.36.915'   # the installed build the technical line names; pinned (the resolver reads a guest's gui-agent.exe)
 # the error window: every box the route shows is recorded (header + text), as WTSSendMessage would get them
 $script:boxes = New-Object System.Collections.ArrayList
 $script:QwtNotifyBoxShower = { param($h, $t) [void]$script:boxes.Add(@{ header = $h; text = $t }); return $true }
@@ -82,7 +83,7 @@ function Reset-Store {
 function LogCount([string]$needle) { return @($script:logLines | Where-Object { $_ -like "*$needle*" }).Count }
 
 # --- 1. pure redaction --------------------------------------------------------------------------
-$clean = "The display driver needs a reboot that was refused`r`nThe new display driver is not primary until this qube is rebooted by hand.`r`nCause: Windows refused the reboot request (shutdown.exe returned an error).`r`nactivate-idd.ps1; reported once per boot. Evidence: C:\qwt-idd-activate.log."
+$clean = "The display driver needs a reboot that was refused`r`nThe new display driver is not primary until this qube is restarted by hand from dom0.`r`nCause: Windows refused the reboot request; the log has shutdown.exe's code.`r`nactivate-idd.ps1; reported once per boot; build 4.3.36.915. Evidence: C:\qwt-idd-activate.log."
 Check 'redact: templated text with a log path is clean' ($null -eq (Get-QwtNotifyRedactReason $clean))
 Check "redact: 'password=' refused" ($null -ne (Get-QwtNotifyRedactReason 'agent failed: password=hunter2'))
 Check "redact: 'DefaultPassword' refused" ($null -ne (Get-QwtNotifyRedactReason 'LSA DefaultPassword missing'))
@@ -143,11 +144,24 @@ $bytes = [IO.File]::ReadAllBytes($script:launched[0])
 Check 'send: notify file is UTF-16LE with BOM (what notifhost reads)' (($bytes.Length -gt 2) -and ($bytes[0] -eq 0xFF) -and ($bytes[1] -eq 0xFE))
 $content = [Text.Encoding]::Unicode.GetString($bytes, 2, $bytes.Length - 2)
 Check 'send: line 1 is the header, alone' ($content.StartsWith("The display driver needs a reboot that was refused`r`n"))
-Check 'send: the body is line 1, the cause and the technical line, CRLF-separated' ($content -eq "The display driver needs a reboot that was refused`r`nThe new display driver is not primary until this qube is rebooted by hand.`r`nCause: Windows refused the reboot request.`r`nactivate-idd.ps1; reported once per boot. Evidence: C:\qwt-idd-activate.log.")
+Check 'send: the body is line 1, the cause and the technical line, CRLF-separated' ($content -eq "The display driver needs a reboot that was refused`r`nThe new display driver is not primary until this qube is rebooted by hand.`r`nCause: Windows refused the reboot request.`r`nactivate-idd.ps1; reported once per boot; build 4.3.36.915. Evidence: C:\qwt-idd-activate.log.")
 Check 'text: Format-QwtNotifyText with no cause is three lines' ((Format-QwtNotifyText -Header 'H' -Next 'N' -Tech 'T') -eq "H`r`nN`r`nT")
 Check 'text: a CR/LF inside a part is folded to a space (it cannot move text into another line)' ((Format-QwtNotifyText -Header "H`r`nx" -Next "N`ny" -Cause "C`rz" -Tech 'T') -eq "H x`r`nN y`r`nC z`r`nT")
-Check 'tech: every part, in order' ((Format-QwtNotifyTechLine -Subject 'gui-agent.exe' -ProcessId 6100 -Code 'exception 0xC0000409' -Ran '0:12:34' -Count 'death 1 this boot' -Evidence 'C:\ProgramData\Qubes\qwt-deaths.log; WER folder AppCrash_gui-agent.exe_*') -eq 'gui-agent.exe pid 6100; exception 0xC0000409; ran 0:12:34; death 1 this boot. Evidence: C:\ProgramData\Qubes\qwt-deaths.log; WER folder AppCrash_gui-agent.exe_*.')
-Check 'tech: no pid, no code, no run time -> subject, count and evidence only' ((Format-QwtNotifyTechLine -Subject 'activate-idd.ps1' -Count 'reported once per boot' -Evidence 'C:\x.log') -eq 'activate-idd.ps1; reported once per boot. Evidence: C:\x.log.')
+Check 'tech: every part, in order - the build after the count, before the one pointer' ((Format-QwtNotifyTechLine -Subject 'gui-agent.exe' -ProcessId 6100 -Code 'exception 0xC0000409' -Ran '0:12:34' -Count 'death 1 this boot' -Evidence 'C:\ProgramData\Qubes\qwt-deaths.log') -eq 'gui-agent.exe pid 6100; exception 0xC0000409; ran 0:12:34; death 1 this boot; build 4.3.36.915. Evidence: C:\ProgramData\Qubes\qwt-deaths.log.')
+Check 'tech: no pid, no code, no run time -> subject, count, build and evidence only' ((Format-QwtNotifyTechLine -Subject 'activate-idd.ps1' -Count 'reported once per boot' -Evidence 'C:\x.log') -eq 'activate-idd.ps1; reported once per boot; build 4.3.36.915. Evidence: C:\x.log.')
+# THE BUILD (owner 2026-10-10: "i see win11-acc error on screen, but since dom0 toasts do not have timestamps, i cannot figure
+# out if it is a botched fix or control reproduction run"): every technical line names it; when none could be read the line
+# SAYS so - "build unknown" - rather than printing an empty field, because a notice nobody can date is when the build matters.
+Check 'tech: the line names the build that produced it' ((Format-QwtNotifyTechLine -Subject 'x.ps1' -Count 'reported once per boot' -Evidence 'C:\x.log') -like '*; reported once per boot; build 4.3.36.915. Evidence: C:\x.log.')
+$script:QwtNotifyBuild = ''
+Check 'tech: no build known -> "build unknown", never an empty field' ((Format-QwtNotifyTechLine -Subject 'x.ps1' -Count 'reported once per boot' -Evidence 'C:\x.log') -eq 'x.ps1; reported once per boot; build unknown. Evidence: C:\x.log.')
+# the resolver itself, on a host with no registry and no gui-agent.exe next to the (fake) notifhost: '' and no exception
+$script:QwtNotifyBuild = $null
+$threw = $false
+try { $line = Format-QwtNotifyTechLine -Subject 'x.ps1' -Count 'reported once per boot' -Evidence 'C:\x.log' } catch { $threw = $true; $line = 'THREW' }
+Check 'tech: the resolver finds no gui-agent.exe to read -> build unknown, no exception' ((-not $threw) -and $line -eq 'x.ps1; reported once per boot; build unknown. Evidence: C:\x.log.')
+Check 'tech: the resolver''s answer is cached as "none" for the process' ($script:QwtNotifyBuild -eq '')
+$script:QwtNotifyBuild = '4.3.36.915'
 CheckStatus 'compose: a report with no header is refused (never a silent drop)' (Send-QwtError -Component 'activate-idd' -Id 'no-header' -Header '' -Next 'y' -Tech 'z') 'rejected:redact'
 Check 'compose: the refusal is logged' ((LogCount 'did not compose') -eq 1)
 Check 'send: marker and count files written' ((Test-Path (Join-Path $stateDir 'activate-idd.reboot-refused')) -and (Test-Path (Join-Path $stateDir '.count')))
