@@ -28,6 +28,9 @@ ROUTE_RE = [
     # every send line missing: the same blindness one layer down.
     re.compile(r"NOTIFYERR ([A-Za-z0-9_-]+\.[A-Za-z0-9._-]+) (?:sent to dom0|not sent)"),
     re.compile(r"QGAERRBOX ([A-Za-z0-9_-]+\.[A-Za-z0-9._-]+)"),
+    # the notifhost one-shot route: "<TAG>: user notification sent (...)" with no NOTIFYERR line.
+    # Missing this is how a QGASTARTDISMISS toast reached the owner and not the ledger (2026-10-11).
+    re.compile(r"\b(QGA[A-Z]+): user notification sent"),
     re.compile(r"notification(?: \(generic\))? for ([a-z0-9.-]+)"),
     re.compile(r"\b(QGANOTIFSESSION|QGAWGCDEAF|QGABROKERMISSING|QGADESKSTUCK|QGAUACPENDING|"
                r"QGABROKERDIED|QGABROKERHUNG|QGAWGCRECREATE|QGAWGCITEMCLOSED)\b"),
@@ -37,7 +40,8 @@ ROUTE_RE = [
 ]
 WHERE_RE = re.compile(r"^\[([^:\]]+):(\d+)\]\s*(.*)$")
 # the decision the error route returned, which says whether dom0 was actually told
-DECISION_RE = re.compile(r"\b(QERR_[A-Z_]+|SUPPRESSED_DUPLICATE|CAPPED|REJECT[A-Z_]*)\b"
+DECISION_RE = re.compile(r"(user notification sent[^\n]{0,40})"
+                         r"|\b(QERR_[A-Z_]+|SUPPRESSED_DUPLICATE|CAPPED|REJECT[A-Z_]*)\b"
                          r"|(sent to dom0 \(#\d+ this boot\))|(not sent[^.]*)")
 
 

@@ -41,6 +41,8 @@ case "\$1" in
     echo "SEND [gui-agent-20261010.log:813] 2026-10-10 20:01:02.120 W NOTIFYERR gui-agent.capture-deaf-notepad.exe sent to dom0 (#1 this boot)"
     echo "SEND [gui-agent-20261010.log:814] 2026-10-10 20:04:55.001 W NOTIFYERR gui-agent.session-changed not sent: gated (service.notify-errors off) - shown as a window instead"
     echo "SEND [qubes-windows-update-20261010.log:44] 2026-10-10 20:03:10 reported 7 update(s) to dom0 qubes.NotifyUpdates (exit 0)"
+    # the SECOND mechanism: a notifhost one-shot, which logs no NOTIFYERR line at all
+    echo "SEND [gui-agent-20261011.log:901] 2026-10-11 02:01:30.999 I StartDismissNotifyUser: QGASTARTDISMISS: user notification sent (once per agent run)"
     echo "BOOT [gui-agent-20261010.log:1] 2026-10-10 20:00:00 Init: version 4.3.36.919"
     echo "SENDS DONE"
     ;;
@@ -69,8 +71,8 @@ fi
 out=$(run_tool ok); rc=$?
 [ "$rc" = 0 ] && ok "reads_the_record: rc=0 on a guest that answers" || bad "reads_the_record: rc=$rc"
 n=$(wc -l < "$T/ledger.jsonl" 2>/dev/null || echo 0)
-[ "$n" = 5 ] && ok "ledger_has_every_send: 5 line(s) appended" || bad "ledger_has_every_send: $n line(s), want 5"
-for want in QGAWGCDEAF capture-deaf-notepad.exe qubes.NotifyUpdates "sent to dom0 (#1 this boot)" "not sent"; do
+[ "$n" = 6 ] && ok "ledger_has_every_send: 6 line(s) appended" || bad "ledger_has_every_send: $n line(s), want 6"
+for want in QGAWGCDEAF capture-deaf-notepad.exe qubes.NotifyUpdates "sent to dom0 (#1 this boot)" "not sent" QGASTARTDISMISS "user notification sent"; do
   command grep -q "$want" "$T/ledger.jsonl" \
     && ok "ledger_carries_$want" || bad "ledger_carries_$want: absent from the ledger"
 done
