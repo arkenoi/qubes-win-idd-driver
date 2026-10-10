@@ -4,9 +4,12 @@
 path at all."*** It stays closed until he reopens it in writing. §2 (graceful stop, in-process re-listen,
 unconditional node removal, the G0 A/B of the restart procedure) is retired as a line of work, and §3's
 upstream proposals are not pending — nothing here is to be submitted. **§1.1 remains valid as mechanism
-reference** (guid's two EOF paths, the write-path `exit(0)`, the class (i)/(ii) split) and is cited as
-F3–F5 by `findings/BUG-dom0-no-windows.md`, which is the live document for the defect. Read this file for
-the daemon's internals, never for what to do next.
+reference** (guid's two EOF paths, the write-path `exit(0)`, the class (i)/(ii) split), read in a
+read-only upstream clone that was never version-matched to dom0's installed daemon - indicative, not a
+measurement of any failing system here. **Nothing in this file is evidence that any symptom occurred.**
+A handoff built on it in 2026-10 described "a live guest shows no windows in dom0", which nobody had
+reported; that file is deleted and the real record is `findings/issues.md`. Read this one for the
+daemon's internals, never for what to do next.
 
 **Original status:** proposal, needs approval before any code. Written 2026-08-04.
 **Scope note:** all dom0/daemon line numbers below come from the read-only upstream clone in the scratchpad. dom0's *installed* `qubes-gui-daemon` was never version-matched (that would be a dom0 action). Treat daemon line numbers as indicative and daemon *strings* as robust.
