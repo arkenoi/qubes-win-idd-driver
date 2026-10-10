@@ -159,9 +159,10 @@ $script:QwtDeathNextByExe = @{
 }
 # the ETW signal proxy's rights failures (its exit codes 5 and 9): the agent parks it; nothing relaunches it either way
 $script:QwtDeathEtwParked = 'The GUI agent parks it for this boot (a rights problem a relaunch cannot fix); notifications still reach dom0 through the bridge''s other two sources.'
-# A CHILD WINDOWS ENDED WITH ITS SESSION (exit 0x40010004, DBG_TERMINATE_PROCESS; the process table names the code): still a death
-# record, still counted and escalated (Jev 2026-10-10: keep the escalation, tell the truth), but the family's header and line 1 are
-# false for it - "exited unexpectedly", and a Task Scheduler restart into a session that is going away. So it has its own: the header
+# A CHILD WINDOWS ENDED WITH ITS SESSION (exit 0x40010004, DBG_TERMINATE_PROCESS; the process table names the code). During a
+# shutdown it is not a death and is suppressed (ConvertFrom-QwtDeathEvent; owner 2026-10-10 "suppress only on shutdown"). Outside
+# one it is still a counted, escalated death, but the family's header and line 1 are false for it - "exited unexpectedly", and a Task
+# Scheduler restart into a session that is going away. So it has its own: the header
 # follows the agent's own record of this end (deathevent.h 4011-4014, "was ended by Windows when the session was torn down"), cut to
 # the 60-character budget the route's suite holds every header to ('ended by Windows' is 16 characters; the longest human name leaves
 # 19), and line 1 promises only what the next sign-in does - the watchdog service launches the agent at logon, the agent launches its
@@ -490,19 +491,30 @@ $script:QwtTaskEndedProbe = {
 }
 # A shutdown was under way at $at. Kernel-General 109 is the kernel's own "the system is shutting
 # down"; User32 1074 records who asked for it; EventLog 6006 is the log service stopping.
+# THREE ANSWERS, not two: $true (a shutdown record is near), $false (the log was read and holds none
+# near) and $null (the log could not be read, so nothing is known). "No events were found" is a read
+# that found nothing - an answer - told apart by its error id, which does not change with the guest's
+# language. Test-QwtTaskEndedByShutdown takes [bool] of the answer, so no answer still reads as "not a
+# shutdown" there (the instance is reported); the session-end rule in ConvertFrom-QwtDeathEvent reports
+# on no answer as well. Missing data never buys silence.
 $script:QwtShutdownNearProbe = {
     param([datetime]$at)
+    $answered = $false
     foreach ($q in @(@{ log = 'System'; x = "*[System[(EventID=109 or EventID=1074 or EventID=6006)]]" })) {
         try {
             $evs = @(Get-WinEvent -LogName $q.log -FilterXPath $q.x -MaxEvents 20 -ErrorAction Stop)
+            $answered = $true
             foreach ($e in $evs) {
                 # the shutdown is recorded at or just after the termination it caused
                 $d = ($e.TimeCreated - $at).TotalSeconds
                 if ($d -ge -30 -and $d -le 180) { return $true }
             }
-        } catch { }
+        } catch {
+            if ("$($_.FullyQualifiedErrorId)" -like 'NoMatchingEventsFound*' -or "$($_.Exception.Message)" -match 'No events were found') { $answered = $true }
+        }
     }
-    return $false
+    if ($answered) { return $false }
+    return $null
 }
 # TASK SCHEDULER RESULT CODES THAT NAME THE SHUTDOWN AS THE CAUSE. These are not inferred from an
 # absence - they are Task Scheduler stating why it could not run or finish the action:
@@ -588,9 +600,10 @@ function ConvertFrom-QwtDeathEvent {
     $channel = Get-QwtDeathNodeText $doc 'Channel'
     $recordId = Get-QwtDeathNodeText $doc 'EventRecordID'
     $time = [DateTime]::UtcNow
+    $timeKnown = $false   # a record with no usable TimeCreated cannot be placed against a shutdown (the session-end rule below)
     $tc = $doc.GetElementsByTagName('TimeCreated')
     if ($tc.Count -gt 0) {
-        try { $time = [DateTime]::Parse("$($tc[0].GetAttribute('SystemTime'))", [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal) } catch { }
+        try { $time = [DateTime]::Parse("$($tc[0].GetAttribute('SystemTime'))", [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal); $timeKnown = $true } catch { }
     }
     $positional = New-Object System.Collections.ArrayList
     $named = @{}
@@ -683,6 +696,24 @@ function ConvertFrom-QwtDeathEvent {
             $r.detail = (& $pos 5)
             if ($r.hung) { $r.label = "$($r.exe) stopped answering (a hang) and was ended by $($script:QwtDeathSupervisorIds[$eventId])" }
             else { $r.label = "$($r.exe) exited without being asked to" }
+            # SUPPRESSED ON SHUTDOWN ONLY (owner 2026-10-10, over Jev's keep-the-escalation: "suppress only on shutdown"). A 4001-4004
+            # carrying 0x40010004 is Windows ending the child with its session - a record an older binary wrote (the agent writes such
+            # an end under 4011-4014 since cd73a56), replayed by -CatchUp on an upgraded guest. During a shutdown it is not a death:
+            # the question is the one Test-QwtTaskEndedByShutdown asks of a task (QwtShutdownNearProbe: Kernel-General 109, User32 1074
+            # or EventLog 6006 within -30..180 s of the record), and only a positive yes suppresses. No answer - the System log
+            # unreadable, no usable timestamp on the record - reports: missing data buys no silence. A session end with no shutdown
+            # near it is reported with its own text (Format-QwtDeathNotice, QwtDeathSessionEnd*); any other code during a shutdown is
+            # the death it always was. Measured 2026-10-10 on win10-acc: five such records, every one at a shutdown - all five silent.
+            if ($null -ne $r.code -and [uint32]$r.code -eq $script:QwtDeathSessionEndCode) {
+                $near = $null
+                if ($timeKnown) { try { $near = & $script:QwtShutdownNearProbe $time } catch { $near = $null } }
+                if ($near -is [bool] -and $near) {   # GUARD:sysendisdeath
+                    $r.ours = $false; $r.ignore = $true
+                    $r.reason = "$($r.exe) pid $($r.pid) was ended by Windows with its session (exit code 0x40010004) during a shutdown - a session end the shutdown caused, not a death"
+                } elseif (-not ($near -is [bool])) {
+                    $r.detail = ("$($r.detail) the shutdown probe could not answer (the System log unreadable, or no usable timestamp on the record), so this session end is reported rather than suppressed").Trim()
+                }
+            }
             return $r
         }
         'Service Control Manager' {

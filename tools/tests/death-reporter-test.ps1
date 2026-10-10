@@ -478,6 +478,40 @@ Check 'teardown text: the longest name''s header stays within 60 characters' ($n
 $st = Invoke-QwtDeathReport (New-Super 4003 'notifhost.exe' '2249' '0x00000002' '30000' $T0.AddSeconds(20))
 Check 'teardown text: any other exit code keeps the family''s header and its Task Scheduler restart line' ($st -eq 'send' -and $script:launched.Count -eq 3 -and ([string]$script:launched[2]) -like "The notification bridge exited unexpectedly`r`nTask Scheduler restarts it on failure*")
 
+# 6g. SUPPRESSED ON SHUTDOWN ONLY (owner 2026-10-10, overriding Jev's keep-the-escalation: "suppress only on shutdown"). The question is
+#     the one the task path already asks - QwtShutdownNearProbe, behind Test-QwtTaskEndedByShutdown and the 267014 precedent - and the
+#     answer must be a positive yes: a probe that cannot answer (the System log unreadable, a record with no usable timestamp) reports,
+#     because missing data buys no silence. The suppression keys on the TEARDOWN CODE AND the shutdown, never on the shutdown alone.
+#     Measured control: five Error records on win10-acc, all 0x40010004, every one at a shutdown - all five silent under this rule.
+Reset-World
+$script:QwtShutdownNearProbe = { param([datetime]$t) return $true }
+$st = Invoke-QwtDeathReport (New-Super 4003 'notifhost.exe' '2248' '0x40010004' '27734' $T0)
+Check 'shutdown teardown: a 4003 carrying 0x40010004 near a shutdown is ignored - nothing launched, ledger empty' ($st -eq 'ignored' -and $script:launched.Count -eq 0 -and (Get-Ledger).Count -eq 0) "status=$st launched=$($script:launched.Count)"
+Check 'shutdown teardown: one INFO line names why, and nothing at ERROR or WARN' ((Get-DeathLog) -match '\[INFO\] Application/4003#\d+ ignored: notifhost\.exe pid 2248 was ended by Windows with its session \(exit code 0x40010004\) during a shutdown - a session end the shutdown caused, not a death' -and @((Get-DeathLog) -split "`n" | Where-Object { $_ -match '\[(ERROR|WARN)\]' }).Count -eq 0) (Get-DeathLog)
+$st = Invoke-QwtDeathReport (New-Super 4001 'gui-agent.exe' '4028' '0x40010004' '175546' $T0.AddSeconds(1))
+Check 'shutdown teardown: the GUI agent''s own 4001 near a shutdown (the 2026-10-08 records) is ignored too' ($st -eq 'ignored' -and $script:launched.Count -eq 0 -and (Get-Ledger).Count -eq 0) "status=$st"
+$st = Invoke-QwtDeathReport (New-Super 4003 'notifhost.exe' '2250' '0xC0000005' '30000' $T0.AddSeconds(2))
+Check 'shutdown teardown: a CRASH during a shutdown is still a crash - the suppression keys on the code, never on the shutdown alone' ($st -eq 'send' -and $script:launched.Count -eq 1 -and ([string]$script:launched[0]) -like "The notification bridge crashed`r`n*") "status=$st"
+Reset-World
+$script:QwtShutdownNearProbe = { param([datetime]$t) return $false }
+$st = Invoke-QwtDeathReport (New-Super 4003 'notifhost.exe' '2248' '0x40010004' '27734' $T0)
+Check 'shutdown teardown: NOT near a shutdown it is reported, with the session-end text and no Task Scheduler promise' ($st -eq 'send' -and $script:launched.Count -eq 1 -and ([string]$script:launched[0]) -like "The notification bridge ended by Windows`r`nWindows ended it when its sign-in session ended; the GUI agent starts it again at the next sign-in.`r`nCause: Windows' own session teardown*" -and ([string]$script:launched[0]) -notlike '*Task Scheduler*') "status=$st"
+Reset-World
+$script:QwtShutdownNearProbe = { param([datetime]$t) return $null }   # the System log could not be read: no answer either way
+$st = Invoke-QwtDeathReport (New-Super 4003 'notifhost.exe' '2248' '0x40010004' '27734' $T0)
+Check 'shutdown teardown: a probe UNABLE TO ANSWER reports, never suppresses, and the log line says so' ($st -eq 'send' -and $script:launched.Count -eq 1 -and (Get-DeathLog) -match '\[ERROR\] DEATH #1 NEW Application/4003#.*the shutdown probe could not answer') "status=$st"
+Reset-World
+$script:QwtShutdownNearProbe = { param([datetime]$t) throw 'System log unreadable' }   # a probe that throws is no answer either
+$st = Invoke-QwtDeathReport (New-Super 4003 'notifhost.exe' '2248' '0x40010004' '27734' $T0)
+Check 'shutdown teardown: a probe that throws reports as well, and the reporter does not fall over' ($st -eq 'send' -and $script:launched.Count -eq 1) "status=$st"
+# a record with no usable timestamp cannot be placed against a shutdown: reported, even with a shutdown near "now"
+Reset-World
+$script:QwtShutdownNearProbe = { param([datetime]$t) return $true }
+$noTime = (New-Super 4003 'notifhost.exe' '2248' '0x40010004' '27734' $T0) -replace '<TimeCreated SystemTime="[^"]*" />', ''
+$st = Invoke-QwtDeathReport $noTime
+Check 'shutdown teardown: a record with no usable timestamp is reported even with a shutdown near "now"' ($st -eq 'send' -and $script:launched.Count -eq 1 -and (Get-DeathLog) -match 'the shutdown probe could not answer') "status=$st"
+$script:QwtShutdownNearProbe = { param([datetime]$t) return $false }   # the suite's default again for what follows
+
 # 7. no boot token: an ERROR, nothing counted, nothing sent, no exception to the caller
 Reset-World
 $script:QwtNotifyBootStamp = $null; $script:QwtNotifyBootCached = $null

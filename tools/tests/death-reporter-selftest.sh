@@ -20,7 +20,9 @@
 #                  per agent death (2026-10-07, docs/ADR-supervision.md 5)
 #      sysendtext  a child Windows ended with its session (exit 0x40010004) gets the family's text -> dom0 is told it "exited
 #                  unexpectedly" and that Task Scheduler restarts it, into a session that is going away (the measured 2026-10-10
-#                  shutdown notifications; the record is still escalated, only its header and line 1 are its own)
+#                  shutdown notifications; outside a shutdown the record is still escalated, with its own header and line 1)
+#      sysendisdeath a child Windows ended with its session DURING A SHUTDOWN is escalated -> the measured 2026-10-10 defect: five
+#                  dom0 notifications on win10-acc, every one an ordinary shutdown (owner: "suppress only on shutdown")
 #   DEATHREPORTER_DEFECT=<knob>  run only that knob and exit with the suite's own code (non-zero is the required outcome)
 #   DEATHREPORTER_OUT=<dir>      outputs (default: a mktemp dir)
 set -u
@@ -50,6 +52,7 @@ knob_line() {
         endedbyshutdown) printf '%s' '                $ended = '"'"'not-ended'"'"'   # DEFECT: a task instance ended BY A SHUTDOWN is reported as a death anyway' ;;
         wdjoin)    printf '%s' '                    $r.rec = '"'"'scm-agentdied'"'"'   # DEFECT: the watchdog'"'"'s agent-died exit opens a death of its own (a second notification per agent death)' ;;
         sysendtext) printf '%s' '            $sysEnd = $false   # DEFECT: a child Windows ended with its session gets the family'"'"'s header and advice (exited unexpectedly, a Task Scheduler restart)' ;;
+        sysendisdeath) printf '%s' '                if ($false) {   # DEFECT: a child Windows ended with its session during a shutdown is escalated as a death (the measured five)' ;;
     esac
 }
 knob_target() {
@@ -67,6 +70,7 @@ knob_target() {
         endedbyshutdown) printf '%s' 'ended by shutdown: a 201 whose instance Task Scheduler ended while the system went down' ;;
         wdjoin)    printf '%s' 'wd exit: the watchdog'"'"'s 7024 with QGA_SVC_EXIT_AGENT_DIED attaches to the agent'"'"'s death' ;;
         sysendtext) printf '%s' 'teardown text: the header says Windows ended it, not that it exited unexpectedly or crashed' ;;
+        sysendisdeath) printf '%s' 'shutdown teardown: a 4003 carrying 0x40010004 near a shutdown is ignored - nothing launched, ledger empty' ;;
     esac
 }
 make_copy() { # $1 knob -> the copy's path on stdout
@@ -85,7 +89,7 @@ EOF
     printf '%s' "$copy"
 }
 
-KNOBS="ours deathid anchorpid logfirst onerec werjoin helperjoin pidreuse managedonly installdir wdjoin endedbyshutdown sysendtext"
+KNOBS="ours deathid anchorpid logfirst onerec werjoin helperjoin pidreuse managedonly installdir wdjoin endedbyshutdown sysendtext sysendisdeath"
 if [ -n "${DEATHREPORTER_DEFECT:-}" ]; then
     case " $KNOBS " in *" $DEATHREPORTER_DEFECT "*) ;; *) say "FAIL  unknown DEATHREPORTER_DEFECT='$DEATHREPORTER_DEFECT' ($KNOBS)"; exit 2 ;; esac
     copy=$(make_copy "$DEATHREPORTER_DEFECT") || exit 2
