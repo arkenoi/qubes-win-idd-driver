@@ -1225,14 +1225,33 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
   # FORWARD SLASHES ON PURPOSE: with backslashes this literal reaches python as
   # C:\Windows...\xenbus.sys, and \xenbus is a truncated \xXX escape - python raised
   # SyntaxError, b64 came out EMPTY and the probe silently reported <unreadable>.
-  local b64 got
+  # RETRIED, AND THE REASON IS KEPT. One read used to decide this, and its output was thrown away -
+  # so a momentary unavailability became a cell failure with nothing to diagnose it from. MEASURED
+  # 2026-10-10: WIN11-reinstall failed the whole campaign with "INVALID-INSTRUMENT - could not read
+  # the guest's xenbus.sys version", and the identical probe against that same guest afterwards
+  # returned XBVER=9.1.0.0 with the file present - so the read was TRANSIENT. The race is in the
+  # installer's own words, "The PV drivers bind at the guest's NEXT start": this cell REINSTALLS,
+  # so the probe can land across that reboot, when the guest is not answering or the driver file is
+  # mid-replacement. A transient must not fail the run and must never be discarded silently
+  # (.claude/skills/experimenter rule 11); three reads 10 s apart cost nothing when the first works.
+  local b64 got raw i alive
   b64=$(python3 -c "import base64;print(base64.b64encode('Write-Host (\"XBVER=\" + (Get-Item C:/Windows/System32/drivers/xenbus.sys).VersionInfo.FileVersion)'.encode('utf-16-le')).decode())")
-  got=$(QTEST_VM=$vm timeout -k 5 90 ./tools/qtest run \
-        "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $b64" \
-        2>/dev/null | tr -d '\r\0' | grep -aoE 'XBVER=[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | tail -1 | cut -d= -f2)
+  got=""; raw=""
+  for i in 1 2 3; do
+    raw=$(QTEST_VM=$vm timeout -k 5 90 ./tools/qtest run \
+          "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $b64" 2>&1 | tr -d '\r\0')
+    got=$(printf '%s' "$raw" | grep -aoE 'XBVER=[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | tail -1 | cut -d= -f2)
+    [ -n "$got" ] && break
+    [ "$i" -lt 3 ] && { say "  $lbl xenbus read $i/3 gave nothing - retrying in 10 s"; sleep 10; }
+  done
   say "  $lbl xenbus bound version: ${got:-<unreadable>} (expected the MSI's own)"
   if [ -z "$got" ]; then
-    no "$lbl: INVALID-INSTRUMENT - could not read the guest's xenbus.sys version (missing data never reads as a pass)"
+    # WHICH failure it is decides what a reader does next: a guest that is not answering is a rig
+    # state, a guest that answers without the version is a driver state. Both are INVALID, and
+    # saying which - with what the guest actually sent - is the difference between a diagnosis and
+    # a dead end.
+    alive=$(QTEST_VM=$vm timeout 40 ./tools/qtest run 'cmd /c echo ALIVE' 2>/dev/null | grep -ac ALIVE)
+    no "$lbl: INVALID-INSTRUMENT - could not read the guest's xenbus.sys version after 3 reads (missing data never reads as a pass; qrexec answers=${alive:-0}; last output: $(printf '%s' "$raw" | tr '\n' ' ' | cut -c1-180))"
   else
     ok "$lbl: xenbus bound is $got, from the MSI - nothing of ours layered on top"
   fi
