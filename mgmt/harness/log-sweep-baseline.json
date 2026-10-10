@@ -231,18 +231,20 @@
    "reason": "the death line the M8 reap produces; outside an evidenced injection it is a real death (P1)"
   },
   {
-   "regex": "QGABROKERREAP terminating hung de-slice broker",
+   "regex": "QGABROKERREAP terminating",
    "status": "expected",
    "context": "fault-injection",
    "issue": "rest-zero M8",
-   "reason": "the reap the M8 criterion requires after the detected hang"
+   "reason": "the reap the M8 criterion requires after the detected hang",
+   "rewording_note": "anchored on the tag after the 2026-10-10 rewording made 'QGABROKERREAP terminating hung de-slice broker' unmatchable (the entry is REQUIRED_REFS; without it an INJECTED reap/recovery grades as a new signature)"
   },
   {
-   "regex": "QGABROKERBACK de-slice broker RECOVERED",
+   "regex": "QGABROKERBACK de-slice broker",
    "status": "expected",
    "context": "fault-injection",
    "issue": "rest-zero M8",
-   "reason": "the relaunch the M8 criterion requires; outside an injection it means a broker died"
+   "reason": "the relaunch the M8 criterion requires; outside an injection it means a broker died",
+   "rewording_note": "anchored on the tag after the 2026-10-10 rewording made 'QGABROKERBACK de-slice broker RECOVERED' unmatchable (the entry is REQUIRED_REFS; without it an INJECTED reap/recovery grades as a new signature)"
   }
  ],
  "signatures": {

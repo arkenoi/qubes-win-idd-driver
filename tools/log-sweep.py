@@ -345,8 +345,8 @@ REQUIRED_REFS = [
     (r"QGABROKERDIED de-slice broker STOPPED HEARTBEATING", "known-defect", {"issue": "broker-heartbeat-reap (CLOSED 2026-09-27"}),
     (r"QGABROKERHUNG de-slice broker process is still RUNNING", "expected", {"context": "fault-injection"}),
     (r"QGABROKERDIED de-slice broker STOPPED SERVING", "expected", {"context": "fault-injection"}),
-    (r"QGABROKERREAP terminating hung de-slice broker", "expected", {"context": "fault-injection"}),
-    (r"QGABROKERBACK de-slice broker RECOVERED", "expected", {"context": "fault-injection"}),
+    (r"QGABROKERREAP terminating", "expected", {"context": "fault-injection"}),
+    (r"QGABROKERBACK de-slice broker", "expected", {"context": "fault-injection"}),
     (r"AcquireNextFrame\(\) failed with error 0xH: The keyed mutex was abandoned", None, {"issue": "0x887a0026"}),
     (r"QGAWGCRECREATE", None, {"issue": "M7"}),
 ]
