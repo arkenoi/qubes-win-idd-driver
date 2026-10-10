@@ -1,6 +1,14 @@
 # Design: surviving a gui-agent restart without killing the qube's GUI
 
-**Status:** proposal, needs approval before any code. Written 2026-08-04.
+**Status: CLOSED BY THE OWNER, 2026-10-10 — *"guest daemon restart NEVER was the cure, stop chasing this
+path at all."*** It stays closed until he reopens it in writing. §2 (graceful stop, in-process re-listen,
+unconditional node removal, the G0 A/B of the restart procedure) is retired as a line of work, and §3's
+upstream proposals are not pending — nothing here is to be submitted. **§1.1 remains valid as mechanism
+reference** (guid's two EOF paths, the write-path `exit(0)`, the class (i)/(ii) split) and is cited as
+F3–F5 by `findings/BUG-dom0-no-windows.md`, which is the live document for the defect. Read this file for
+the daemon's internals, never for what to do next.
+
+**Original status:** proposal, needs approval before any code. Written 2026-08-04.
 **Scope note:** all dom0/daemon line numbers below come from the read-only upstream clone in the scratchpad. dom0's *installed* `qubes-gui-daemon` was never version-matched (that would be a dom0 action). Treat daemon line numbers as indicative and daemon *strings* as robust.
 
 ---

@@ -12,8 +12,13 @@ whose cause was ever established here was OUR protocol violation**, class (i), w
 `restart_guid` and can never self-heal (F5). **On no occurrence has the exit path been established**,
 because no dom0 guid log was ever collected (F6, F7).
 
-Next action: **G0** (bottom of this file) — guest-side, ~10 cold boots, never run. It decides class (i)
-vs class (ii), i.e. whether this is our bug. Nothing else should be spent before it.
+**The agent-restart line is CLOSED by the owner (2026-10-10) — a restart was never the cure, and the
+defect reproduces on a plain cold boot with no restart in the run.** Do not re-open
+`DESIGN-gui-daemon-restart-survival.md` §2, and do not propose an A/B of a restart procedure.
+
+Next action: arm a send-side record of the last N wire messages in the agent, flushed when the daemon
+stops draining (bottom of this file). It names what WE sent before guid went away, which is the only
+established cause class, guest-side, with no restart and no dom0 action.
 
 ---
 
@@ -108,20 +113,40 @@ generation survives exactly one recovery cycle.** Reproduce → recover → copy
   conf 1.00**. Those six fixes (a notification gate, autologon, capture log levels, a helper's task
   registration, an installer step) are real defects and several ship — none is on the path by which dom0
   displays a guest's windows.
+- **NOT an agent-restart problem, and the restart line is CLOSED** [verified 2026-10-10].
+  Owner, 2026-10-10: *"guest daemon restart NEVER was the cure, stop chasing this path at all."*
+  **It stays closed until he reopens it in writing.** That retires the whole of
+  `DESIGN-gui-daemon-restart-survival.md` §2 as a line of work — the graceful stop, the in-process
+  re-listen, and the G0 A/B of the restart procedure that this file named as its next action in its first
+  revision. The defect does not need a restart to appear: **F1's reproduction is a plain cold BOOT**
+  (`WIN10-appvm boot 3`), with no agent restart anywhere in the run. Any A/B of a restart procedure
+  therefore measures a path the defect does not travel.
 
 ---
 
-## The next experiment, and why it is first
+## What is actually next
 
-**G0 — does the defect track our binary?** Entirely guest-side, needs no dom0 action, has never been run.
-Cold-boot A/B of the in-place-restart procedure: a current build vs the 08-04 build (`aaa8c37`/`6b5b298`),
-n≥5 per side, interleaved, hash-verified install, with a forcing function (a map/unmap storm running until
-the instant of the stop — without daemon→guest traffic at that moment a control passes by luck and voids
-the comparison). **Pass = the newly started agent logs `A vchan client has connected` within 30 s.**
+The symptom appears on an ordinary boot, so the question is what **our agent put on the wire** in the
+seconds before dom0's guid stopped reading. F5 is the only established cause class, F6 says the exit path
+has never once been captured, and F7's discriminator sits in a dom0 log this project cannot read. So the
+discriminator has to be built **on the sending side, in our agent, where the whole message history
+already passes through one file.**
 
-It is first because it splits F5 from F4 with ~10 cold boots: if the defect tracks the binary it is class
-(i), our bug, in our code, and most of the daemon-side analysis is irrelevant. A dead GUI must be recorded
-as a distinct **VOID** outcome, never a FAIL, or dead-daemon rounds silently corrupt every A/B.
+**Arm the send-side record first, then let any run catch it.** The occurrence in F1 was incidental — it is
+not reproducible on demand, so an instrument that is merely *available* is worth nothing; it has to be
+shipping and on by default when the next occurrence happens. The pieces already exist in
+`agent/gui-agent/send.c`: `SanitizeWireGeometry` (refuses/clamps what guid would `VERIFY` on, logging
+`GEOMDROP`), `MaySendForWindowLocked` (the `msg without CREATE` gate that is one of the four exit
+candidates), and `ProtoTrace` for the full stream. What is missing is that none of it is retained at the
+moment that matters: a bounded in-memory ring of the last N sends — type, hwnd, geometry, length — flushed
+to the log when the daemon stops draining. The trigger also already exists: `VchanSendDegraded()` /
+`VchanSendWedged()` (`vchan.c`) is how the agent already distinguishes "daemon not draining" from "vchan
+closed", and `main.c:14196` acts on it.
 
-The one fact G0 cannot supply is F6 — which exit path fired. That needs the dom0 guid log of a failing
-generation (F7), captured before the recovery reboot truncates it.
+That turns the next occurrence from a shrug into the named message, guest-side, with no restart and no dom0
+action. Per evidence rule 5 it counts only once it has been seen to fire with a violation deliberately
+re-introduced on a scratch build (an oversized `MSG_WINDOW_DUMP` is the cheapest: `xside.c:3894`, `errx(1)`).
+
+Residual, stated plainly: this names **what we sent**, which settles F5 — our violation or not. It cannot
+by itself distinguish F4's write-path `exit(0)` from a signal or a boot-lock exit; those are
+indistinguishable guest-side and need the dom0 guid log (F7), which is out of scope here.
