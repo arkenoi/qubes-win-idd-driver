@@ -20,10 +20,18 @@ capture may show a window that is BLACK: the owner's criterion is "slicefed wind
 broker comes up AND NOTHING WEIRD HAPPENS IN BETWEEN" (2026-10-11), so a window that flashed black
 at t+3 and was correct at t+15 is a failure, and grading only the best capture would pass it.
 
+With --ledger (scratchpad/dom0-notifications.jsonl) the INDEPENDENT half is graded: not what the
+agent's log says it sent, but what tools/dom0-sends.sh pulled off the guest. A row counts as noise
+by its own DECISION field - "user notification sent" or "sent to dom0 (#N this boot)" - never by a
+route allowlist, because an allowlist rots exactly the way the three notifyerr needles did. Normal
+traffic (qubes.NotifyTools, qubes.Notifications) carries no such decision and is ignored. --since
+bounds it to this run; without it the whole ledger is graded, which fails on any historical send.
+
 rc 0 pass, 1 fail, 2 could not grade. The level is the field between the last '-' and ']' in the
 agent's own stamp: [20261011.102247.645-4448:4452-I].
 """
 import argparse
+import json
 import re
 import sys
 
@@ -55,6 +63,9 @@ def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("excerpt")
     ap.add_argument("--pixels")
+    ap.add_argument("--ledger", help="scratchpad/dom0-notifications.jsonl - what was PULLED off the guest")
+    ap.add_argument("--since", help="ISO pulled_at lower bound, e.g. 2026-10-11T08:00:00Z")
+    ap.add_argument("--vm", help="only rows for this guest")
     ap.add_argument("--quiet", action="store_true")
     a = ap.parse_args(argv[1:])
     try:
@@ -115,6 +126,36 @@ def main(argv):
                              % ((len(black), len(caps)) + min(black, key=lambda c: c[1])))
             else:
                 notes.append("no capture shows a mapped black window (%d graded)" % len(caps))
+
+    if a.ledger:
+        try:
+            rows = [json.loads(l) for l in open(a.ledger, encoding="utf-8") if l.strip()]
+        except OSError as e:
+            print("GRADE 2 could not read %s: %s" % (a.ledger, e))
+            return 2
+        except ValueError as e:
+            print("GRADE 2 %s is not valid JSONL: %s" % (a.ledger, e))
+            return 2
+        sel = [r for r in rows
+               if (not a.vm or r.get("vm") == a.vm)
+               and (not a.since or (r.get("pulled_at") or "") >= a.since)]
+        if not sel:
+            # The ledger is the receipt that dom0 was told nothing. No rows in the window means the
+            # pull never happened, which is the blindness this whole instrument exists to end -
+            # not a quiet guest.
+            fails.append("ledger: NO rows for %s since %s - the send record was never pulled, and "
+                         "that is indistinguishable from 'dom0 was told nothing'"
+                         % (a.vm or "any vm", a.since or "the beginning"))
+        else:
+            sent = [r for r in sel
+                    if "user notification sent" in (r.get("decision") or "")
+                    or "sent to dom0" in (r.get("decision") or "")]
+            if sent:
+                fails.append("ledger: %d of %d pulled row(s) record a send to dom0 | %s"
+                             % (len(sent), len(sel),
+                                (sent[0].get("text") or "")[:150]))
+            else:
+                notes.append("ledger %d pulled row(s), none recording a send to dom0" % len(sel))
 
     if not a.quiet:
         for n in notes:

@@ -112,5 +112,49 @@ rc=$(G "$T/quiet.txt" --pixels "$T/nonexistent.txt")
 [ "$rc" = 2 ] && ok "pixels_unreadable_is_rc2: the instrument did not run, which is not a pass" \
   || bad "pixels_unreadable_is_rc2: rc=$rc"
 
+# ---- 6. THE LEDGER: the independent half - what was PULLED, not what the log claims -----------
+quiet "$T/quiet.txt"
+L="$T/led.jsonl"
+mk_row(){ python3 -c 'import json,sys; print(json.dumps({"pulled_at":sys.argv[1],"vm":sys.argv[2],"file":"f","line":1,"route":sys.argv[3],"decision":sys.argv[4] or None,"text":sys.argv[5]}))' "$@"; }
+: > "$L"
+mk_row 2026-10-11T09:00:00Z win11-app qubes.NotifyTools "" "reported tools to dom0" >> "$L"
+mk_row 2026-10-11T09:00:01Z win11-app qubes.Notifications "" "protocol traffic" >> "$L"
+rc=$(G "$T/quiet.txt" --ledger "$L" --vm win11-app --since 2026-10-11T08:00:00Z)
+[ "$rc" = 0 ] && ok "ledger_normal_traffic_passes: NotifyTools/Notifications carry no send decision" \
+  || bad "ledger_normal_traffic_passes: rc=$rc - $(tail -2 "$T/out" | tr '\n' ' ')"
+mk_row 2026-10-11T09:00:02Z win11-app capture-deaf-notepad.exe "user notification sent (1 suppressed window(s))" "DirectSuppressNotifyUser: QGADIRECTSUPPRESS user notification sent" >> "$L"
+rc=$(G "$T/quiet.txt" --ledger "$L" --vm win11-app --since 2026-10-11T08:00:00Z)
+if [ "$rc" = 1 ] && grep -q "record a send to dom0" "$T/out"; then
+  ok "ledger_send_fails: a pulled row whose DECISION says a notification was sent fails"
+else
+  bad "ledger_send_fails: rc=$rc - the independent half would miss a real dom0 popup"
+fi
+# the NOTIFYERR route's own wording is caught too, not only the notifhost one
+: > "$L"; mk_row 2026-10-11T09:00:03Z win11-app gui-agent.deslice-down "sent to dom0 (#1 this boot)" "NOTIFYERR gui-agent.deslice-down sent to dom0 (#1 this boot)" >> "$L"
+rc=$(G "$T/quiet.txt" --ledger "$L" --vm win11-app --since 2026-10-11T08:00:00Z)
+[ "$rc" = 1 ] && ok "ledger_notifyerr_fails: the error route's own send record fails too" \
+  || bad "ledger_notifyerr_fails: rc=$rc"
+# MISSING DATA FAILS: nothing pulled in the window is not a quiet guest
+: > "$L"; mk_row 2026-10-10T09:00:00Z win11-app qubes.NotifyTools "" "yesterday" >> "$L"
+rc=$(G "$T/quiet.txt" --ledger "$L" --vm win11-app --since 2026-10-11T08:00:00Z)
+if [ "$rc" = 1 ] && grep -q "never pulled" "$T/out"; then
+  ok "ledger_no_rows_fails: no rows in the window means the pull did not happen"
+else
+  bad "ledger_no_rows_fails: rc=$rc - a silent nothing would read as 'dom0 was told nothing'"
+fi
+# another guest's rows are not this guest's receipt
+: > "$L"; mk_row 2026-10-11T09:00:00Z win11-acc qubes.NotifyTools "" "other guest" >> "$L"
+rc=$(G "$T/quiet.txt" --ledger "$L" --vm win11-app --since 2026-10-11T08:00:00Z)
+[ "$rc" = 1 ] && ok "ledger_other_vm_not_credited: another guest's rows do not count" \
+  || bad "ledger_other_vm_not_credited: rc=$rc"
+# an unreadable ledger is rc 2, never a pass
+rc=$(G "$T/quiet.txt" --ledger "$T/nonexistent.jsonl" --vm win11-app)
+[ "$rc" = 2 ] && ok "ledger_unreadable_is_rc2: the instrument did not run" \
+  || bad "ledger_unreadable_is_rc2: rc=$rc"
+printf 'not json\n' > "$T/bad.jsonl"
+rc=$(G "$T/quiet.txt" --ledger "$T/bad.jsonl" --vm win11-app)
+[ "$rc" = 2 ] && ok "ledger_malformed_is_rc2: a corrupt ledger is not a quiet guest" \
+  || bad "ledger_malformed_is_rc2: rc=$rc"
+
 echo "--- $pass passed, $fail failed, $skip not driven here"
 [ "$fail" = 0 ]
