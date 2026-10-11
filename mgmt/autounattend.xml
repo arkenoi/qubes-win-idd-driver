@@ -192,11 +192,6 @@
           <Description>UAC off (test rig only - the dev qube must be able to run elevated work over qrexec)</Description>
           <Order>11</Order>
         </SynchronousCommand>
-        <SynchronousCommand wcm:action="add">
-          <CommandLine>cmd /c net accounts /maxpwage:unlimited</CommandLine>
-          <Description>no machine-wide password expiry (default 42 days = a dated stuck boot)</Description>
-          <Order>12</Order>
-        </SynchronousCommand>
       </FirstLogonCommands>
       <OOBE>
         <HideEULAPage>true</HideEULAPage>
