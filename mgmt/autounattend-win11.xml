@@ -274,8 +274,8 @@
           <Order>17</Order>
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add">
-          <CommandLine>cmd /c wmic useraccount where "name='user'" set PasswordExpires=FALSE</CommandLine>
-          <Description>the account's own password never expires</Description>
+          <CommandLine>cmd /c powershell -NoProfile -ExecutionPolicy Bypass -Command "$l='C:\qubes-pwfix.log'; function N($s){\"[{0:yyyy-MM-dd HH:mm:ss}] {1}\" -f (Get-Date),$s|Add-Content $l}; N ('BEFORE '+(((net accounts) -match 'Maximum password age') -replace '\s+',' ')); net accounts /maxpwage:unlimited|Out-Null; foreach($u in Get-LocalUser|Where-Object{$_.Enabled}){net user $u.Name /logonpasswordchg:no|Out-Null; try{Set-LocalUser -Name $u.Name -PasswordNeverExpires $true}catch{N ('SET FAILED '+$u.Name)}}; N ('AFTER '+(((net accounts) -match 'Maximum password age') -replace '\s+',' ')); foreach($u in Get-LocalUser|Where-Object{$_.Enabled}){N ('AFTER account '+$u.Name+' expires='+$(if($null -eq $u.PasswordExpires){'NEVER'}else{$u.PasswordExpires}))}"</CommandLine>
+          <Description>clear the must-change latch then pin never-expires (wmic is gone on 26xxx)</Description>
           <Order>18</Order>
         </SynchronousCommand>
       </FirstLogonCommands>

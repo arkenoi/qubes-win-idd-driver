@@ -14,9 +14,15 @@ rem  This hook runs as SYSTEM at boot, before and independently of any interacti
 rem  the one place that can clear the fuse in time. No password is needed: "expired" is derived from
 rem  pwdLastSet + maxPwdAge unless DONT_EXPIRE_PASSWORD is set, so setting that flag makes the
 rem  expired condition false immediately. Both levers, because either alone can be re-imposed.
+rem
+rem  NOT wmic: deprecated and ABSENT from recent Windows 11 builds (these guests are 26100/
+rem  26300), so it would SILENTLY do nothing on exactly the images that matter.
+rem  ORDER MATTERS: "must change at next logon" and "password never expires" are MUTUALLY
+rem  EXCLUSIVE, so Set-LocalUser THROWS while the latch is set - an account sitting at the
+rem  expired wall would keep its fuse. Clear the latch first, then pin. Logs to C:\qubes-pwfix.log.
 rem ===============================================================================================
 net accounts /maxpwage:unlimited >nul 2>&1
-wmic useraccount where "Disabled=FALSE" set PasswordExpires=FALSE >nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$l='C:\qubes-pwfix.log'; function N($s){\"[{0:yyyy-MM-dd HH:mm:ss}] {1}\" -f (Get-Date),$s|Add-Content $l}; N ('BEFORE '+(((net accounts) -match 'Maximum password age') -replace '\s+',' ')); net accounts /maxpwage:unlimited|Out-Null; foreach($u in Get-LocalUser|Where-Object{$_.Enabled}){net user $u.Name /logonpasswordchg:no|Out-Null; try{Set-LocalUser -Name $u.Name -PasswordNeverExpires $true}catch{N ('SET FAILED '+$u.Name)}}; N ('AFTER '+(((net accounts) -match 'Maximum password age') -replace '\s+',' ')); foreach($u in Get-LocalUser|Where-Object{$_.Enabled}){N ('AFTER account '+$u.Name+' expires='+$(if($null -eq $u.PasswordExpires){'NEVER'}else{$u.PasswordExpires}))}" >nul 2>&1
 rem ===============================================================================================
 rem  PRIME JOB: install GENUINE stock QWT 4.2.2 into a pristine, primed guest.
 rem
