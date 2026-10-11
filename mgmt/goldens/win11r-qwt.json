@@ -1,5 +1,5 @@
 {
-  "note": "QWT 4.3.32 golden for quick-upgrade",
+  "note": "re-sealed 2026-10-11 after clearing the 42-day password fuse (net accounts /maxpwage:unlimited; per account logonpasswordchg:no then PasswordNeverExpires). The win10 image's password was set 30/08/2026 and expired 11/10/2026, leaving the first boot stuck on \"Your password has expired\" with autologon unable to proceed. Booted deliberately to apply it; see C:\\qubes-pwfix.log inside the image.",
   "props": {
     "klass": "StandaloneVM",
     "maxmem": "0",
@@ -7,26 +7,26 @@
     "vcpus": "4",
     "virt_mode": "hvm"
   },
-  "sealed_utc": "2026-10-02T15:09:06Z",
+  "sealed_utc": "2026-10-11T13:04:29Z",
   "vm": "win11r-qwt",
   "volumes": {
     "private": {
       "revisions": [
-        "1790953503-back",
-        "1790953741-back"
+        "1791723163-back",
+        "1791723775-back"
       ],
       "revisions_to_keep": "2",
       "size": "21474836480",
-      "usage": "648540061"
+      "usage": "650687545"
     },
     "root": {
       "revisions": [
-        "1790953503-back",
-        "1790953741-back"
+        "1791723163-back",
+        "1791723775-back"
       ],
       "revisions_to_keep": "2",
       "size": "85899345920",
-      "usage": "13331578486"
+      "usage": "13357348290"
     }
   }
 }

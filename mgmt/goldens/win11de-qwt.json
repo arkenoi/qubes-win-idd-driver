@@ -1,5 +1,5 @@
 {
-  "note": "German Windows 11 25H2 (26200.8037, de-DE media CCCOMA_X64FRE_DE-DE_DV9) + QWT-NG 4.3.29 from release-package run 35104113559 (ec82353), account gerd-test (stock 'user' renamed legacyuser), autologon armed, TemplateVM netvm='' - GWeck's environment BEFORE any Windows Update pass (env-assert gweck OK on its source win11de-gwt 2026-09-16). Owner 2026-09-16: keep, with QWT, to avoid lengthy reinstalls. Cloned from the pretuesday park, never booted.",
+  "note": "re-sealed 2026-10-11 after clearing the 42-day password fuse (net accounts /maxpwage:unlimited; per account logonpasswordchg:no then PasswordNeverExpires). The win10 image's password was set 30/08/2026 and expired 11/10/2026, leaving the first boot stuck on \"Your password has expired\" with autologon unable to proceed. Booted deliberately to apply it; see C:\\qubes-pwfix.log inside the image.",
   "props": {
     "klass": "TemplateVM",
     "maxmem": "0",
@@ -7,12 +7,13 @@
     "vcpus": "4",
     "virt_mode": "hvm"
   },
-  "sealed_utc": "2026-09-16T19:15:11Z",
+  "sealed_utc": "2026-10-11T13:04:32Z",
   "vm": "win11de-qwt",
   "volumes": {
     "private": {
       "revisions": [
-        "1789586077-back"
+        "1789586077-back",
+        "1791723859-back"
       ],
       "revisions_to_keep": "2",
       "size": "21474836480",
@@ -20,11 +21,12 @@
     },
     "root": {
       "revisions": [
-        "1789586078-back"
+        "1789586078-back",
+        "1791723859-back"
       ],
       "revisions_to_keep": "2",
       "size": "85899345920",
-      "usage": "15341623181"
+      "usage": "15418932592"
     }
   }
 }
