@@ -75,9 +75,20 @@ def main(argv):
         return 2
     fails, notes = [], []
 
+    # THE NEEDLE MUST NOT MATCH THE NEGATION. notifyerr.c has two lines one word apart:
+    #   :266  "NOTIFYERR <c>.<id> sent to dom0 (#N this boot)"      dom0 WAS told
+    #   :239  "NOTIFYERR <c>.<id> not sent to dom0: gated (...) - shown as a window instead"
+    # A bare "sent to dom0" substring matches both, so a GATED error - dom0 not told, the user shown
+    # a window - would have been reported as a send to dom0. The success line is identified by its
+    # "(#" counter, which the gated line does not have. Both still fail the receipt: a window shown
+    # to the user on a healthy boot is the noise the owner is talking about. They fail with
+    # DIFFERENT wording because they are different events, and a receipt that names the wrong one
+    # sends the next reader to the wrong emitter.
     for bad, what in (("QGADIRECTSUPPRESS", "a display fault was declared"),
                       ("user notification sent", "dom0 was told by a notifhost one-shot"),
-                      ("sent to dom0", "dom0 was told by the error route")):
+                      ("sent to dom0 (#", "dom0 was told by the error route"),
+                      ("not sent to dom0", "an error was raised and SHOWN AS A WINDOW to the user "
+                                           "(the dom0 route was gated) - dom0 was NOT told")):
         hits = [l for l in lines if bad in l]
         if hits:
             fails.append("%s: %s (%d line(s)) | %s" % (bad, what, len(hits), hits[0][:150]))

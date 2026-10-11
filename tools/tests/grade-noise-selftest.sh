@@ -58,9 +58,20 @@ done <<'CASES'
 directsuppress [20261011.063835.047-4448:4452-E] ProcessNewFrame: QGADIRECTSUPPRESS hwnd 0x10094 (class Notepad, 1428x783) NOT SHOWN: never received a frame
 notifhost_send [20261011.063835.064-4448:4452-I] DirectSuppressNotifyUser: user notification sent (1 suppressed window(s))
 notifyerr_send [20261011.063835.070-4448:4452-W] NOTIFYERR gui-agent.capture-deaf sent to dom0 (#1 this boot)
+notifyerr_gated [20261011.063835.070-4448:4452-W] NOTIFYERR gui-agent.session-changed not sent to dom0: gated (service.notify-errors off) - shown as a window instead
 hold_warning [20261011.102247.645-4448:4452-W] ProcessNewFrame: BROKERHOLD hwnd 0x30228 holding last content brokerActive=0 sourced=0 slot=-1
 latereg_warning [20261011.102258.001-4448:4452-W] UpdateWindowData: BROKERLATEREG hwnd 0x30228 registered with the broker LATE at 3828x1017
 CASES
+
+# the two notifyerr lines are one word apart; each must be named as the event it IS
+quiet "$T/g.txt"
+printf '%s\n' "[20261011.063835.070-4448:4452-W] NOTIFYERR gui-agent.session-changed not sent to dom0: gated (service.notify-errors off) - shown as a window instead" >> "$T/g.txt"
+rc=$(G "$T/g.txt")
+if [ "$rc" = 1 ] && grep -q "SHOWN AS A WINDOW" "$T/out" && ! grep -q "dom0 was told by the error route" "$T/out"; then
+  ok "gated_named_correctly: a gated error is failed as a window shown, NOT as a send to dom0"
+else
+  bad "gated_named_correctly: rc=$rc - $(grep -c FAIL "$T/out") fail line(s); the needle matched the negation"
+fi
 
 # ---- 4. MISSING DATA FAILS: an excerpt that never met the condition is not quiet ---------------
 : > "$T/empty.txt"
