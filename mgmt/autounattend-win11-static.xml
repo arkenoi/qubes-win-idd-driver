@@ -284,6 +284,26 @@
           <Description>test rig: disable UAC so the elevated agent swap works (never ship)</Description>
           <Order>16</Order>
         </SynchronousCommand>
+        <!-- THE PASSWORD MUST NOT EXPIRE. Windows' default "Maximum password age" is 42 days, and
+             the account this file creates inherits it, so every image acquires a 42-day fuse at
+             build time. MEASURED 2026-10-11: the win10 test image's password was set 30/08/2026
+             and came due 11/10/2026 - the first boot after that sat on "Your password has expired",
+             autologon could not proceed, and the guest was unreachable until a later boot. That is
+             a stuck boot for EVERY guest derived from such an image, on a date nobody chose.
+             guest/set-autologon.ps1 and guest/ensure-autologon.ps1 do set PasswordNeverExpires, but
+             they run after QWT is installed - far too late to stop the logon screen winning the
+             race. Pin it here, where the account is created. Both levers: the per-account flag and
+             the machine's maximum age, because either alone can be re-imposed by the other. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c net accounts /maxpwage:unlimited</CommandLine>
+          <Description>no machine-wide password expiry (default 42 days = a dated stuck boot)</Description>
+          <Order>17</Order>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c wmic useraccount where "name='user'" set PasswordExpires=FALSE</CommandLine>
+          <Description>the account's own password never expires</Description>
+          <Order>18</Order>
+        </SynchronousCommand>
       </FirstLogonCommands>
       <OOBE>
         <HideEULAPage>true</HideEULAPage>

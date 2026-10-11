@@ -1,4 +1,22 @@
 @echo off
+
+rem ===============================================================================================
+rem  CLEAR THE DATED PASSWORD FUSE, BEFORE ANYTHING ELSE IN THIS JOB NEEDS A LOGON.
+rem
+rem  Windows' default "Maximum password age" is 42 days and every image inherits it, so each golden
+rem  carries an expiry set at build time. MEASURED 2026-10-11: the win10 image's password was set
+rem  30/08/2026 and came due 11/10/2026 - that first boot sat on "Your password has expired",
+rem  autologon could not proceed, qrexec never came up, and the guest was unreachable. prime-run
+rem  CLONES a base and boots it rather than reinstalling, so a blown fuse in the base breaks every
+rem  clean-install cell that enters through it.
+rem
+rem  This hook runs as SYSTEM at boot, before and independently of any interactive logon, so it is
+rem  the one place that can clear the fuse in time. No password is needed: "expired" is derived from
+rem  pwdLastSet + maxPwdAge unless DONT_EXPIRE_PASSWORD is set, so setting that flag makes the
+rem  expired condition false immediately. Both levers, because either alone can be re-imposed.
+rem ===============================================================================================
+net accounts /maxpwage:unlimited >nul 2>&1
+wmic useraccount where "Disabled=FALSE" set PasswordExpires=FALSE >nul 2>&1
 rem ===============================================================================================
 rem  PRIME JOB: selftest - the smallest possible payload that PROVES the primer channel works.
 rem
