@@ -258,6 +258,11 @@
           <Description>test rig: disable UAC so the elevated agent swap works (never ship)</Description>
           <Order>16</Order>
         </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c net accounts /maxpwage:unlimited</CommandLine>
+          <Description>no machine-wide password expiry (default 42 days = a dated stuck boot)</Description>
+          <Order>17</Order>
+        </SynchronousCommand>
       </FirstLogonCommands>
       <OOBE>
         <HideEULAPage>true</HideEULAPage>
