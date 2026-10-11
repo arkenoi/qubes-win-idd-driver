@@ -115,11 +115,24 @@ throughout, because it checks that the baseline MENTIONS the text, not that anyt
 FIXED: both patterns and both audit rows re-anchored on the part of the line the tag owns, which both
 wordings share. The new `QGABROKERREAP TerminateProcess failed` ERROR line is deliberately left unlisted -
 it is a real failure to reap and should be judged if it ever fires.
-STILL OPEN: the general case. ~50 further tracked signatures carry prose no current emitter produces (dated
-reports from older builds, plus earlier rewordings); a scratchpad tool classifies them
-(`scratchpad/baseline-coverage.py`, five documented matching traps) but its LOST bucket still mislabels at
-least one entry whose emitter is intact, so it is NOT in the tree and its output is a candidate list, never a
-verdict. The structural fix is to anchor tracked entries on TAGS rather than prose.
+STILL OPEN: the general case. MEASURED 2026-10-11 08:16Z with `scratchpad/baseline-coverage.py report`:
+**29 tracked entries are unreachable** (not ~50 - that figure predates the 10-10 rewordings being partly
+settled), over 2211 templates in 384 files; buckets EMITTABLE 55, COVERED 5, LOST 28, GONE 1,
+NEEDS-JUDGMENT 25. `repair` would settle 6 tag-anchored patterns and drop 1 dead key deterministically.
+Several of the 29 fire on ORDINARY boots (`agent|W|Init: Failed to read '<x>' config value ...`), so they
+arrive at every sweep as NEW signatures to be judged again.
+FOUR CONFLICTS `repair` correctly refuses, and one of them is OURS: a tag that now emits at more than one
+LEVEL cannot take the old entry's status on both arms - `patch_for` says so in its own comment, citing
+ETWPROXYSUP, where an early draft stamped a W `known-defect` onto the new INFO line. Since 9e93f02
+`BROKERLATEREG` is such a tag (I for the designed cold-boot path, W for a fault), as are `QGABROKERREAP`,
+`ETWPROXYSUP` and `QGATOASTPREEMPT`. Assigning a status to the new INFO arm is a judgment, so it goes to
+Jev with the two arms' facts, not to a hand call. The tool's stated blocker (a LOST mislabel) is separate
+and still unresolved, so it stays out of the tree and its output is a candidate list.
+NOT REPAIRED BEFORE THE NOISE RECEIPT, deliberately: `tools/grade-receipt.sh` now counts the sweep's verdict,
+and repairing the baseline first would change that verdict so the fix's effect could not be told from the
+baseline change. The expectation was pre-registered in writing before the sweep ran
+(`scratchpad/receipt-080311Z/sweep-expectation.txt`), naming which results would falsify the fix and which
+would merely be baseline drift.
 
 ### guest-stability
 - P1 [updates, user-facing; OURS - guest/install-updater-agent.ps1 + the installer's deploy step; FIELD-REPORTED (GWeck #172, 4.3.33) and REPRODUCED 2026-10-04 on his registered environment with the RELEASED 4.3.34] [verified 2026-10-04] **AN UPGRADE SILENTLY KEEPS THE OLD WINDOWS UPDATE AGENT WHEN THE OLD AGENT'S SCAN IS RUNNING: THE DEPLOY REFUSES (QWTUPDMUTEXHELD) AND THE INSTALLER STILL REPORTS ok:true.** Measured: quick-upgrade of 4.3.34 (release-package 37206244684) over win11de-qwt (German 25H2 TemplateVM, 4.3.29) -> installer RESULT ok:true with updater_agent=error QWTUPDMUTEXHELD (Global\QubesWindowsUpdate held by a running updater pass) - evidence /home/user/qwt-quick-upgrade/win11de-sm-20261004-182847. The previous agent's scan task runs at boot+2 min (limit 20 min) and holds the mutex; the deploy takes it with WaitOne(0) and throws; the installer logs one WARN and finishes; dom0 and the user are not told; the old agent stays (his symptom: Qube Manager shows no updates). Timing-dependent: gate #6's template-update upgrade on the same golden passed. 4.3.34 fixed only the cut-off-pass refusal. FIXED for 4.3.35 (07d4f3aa, merged on rel-4.3.35; owner: "better cut a release that would fix his problems"): a running scan is waited for on the mutex (bounded by its task's limit, loud at expiry), identified by a live recorded owner or by the Running Scan task plus a record written by that run; the deploy moved after the stage-2 qrexec release; a refused deploy is ERROR + updater_agent_failed (ok:false) + plain-words verdict + dom0 notification (docs/ADR-updater.md 13, findings/updates.md). Offline suites green with every knob seen to fail. What was shown on a clone of his environment (RC release-package 37230058013): collision runs against a real 4.3.29 scan (witness B, waited 18 s) and a real 4.3.35 scan (witness A, waited 28 s) both deployed; two RC quick-upgrades RESULT ok:true. **THAT IS THE COLLISION CASE ONLY, AND "VERIFIED ON HIS ENVIRONMENT" IS RETRACTED 2026-10-08**: he has reported failures on 4.3.35, 4.3.35 carried this change (07d4f3aa), and which failures he saw is not yet known here - so this change is an eligible suspect for them, not a settled fix. **DOES NOT CLOSE with 4.3.35's release.**
