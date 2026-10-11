@@ -95,6 +95,21 @@ if p.returncode != 0:
 {p.stderr.strip()}
   Run the suites named above and record them in {receipt}, or run the full gate.
   The command refused was: {why}.""")
+
+# AND CI MUST BE GREEN FOR THIS SHA. Added 2026-10-11, after build.yml had been red for 14 runs and
+# ~15 h while every receipt and status cited a release-package run's conclusion. Coverage says the
+# right SUITES ran on a guest; it says nothing about whether the code compiles and the offline
+# batteries pass. Nothing else in the cut path asked.
+c = subprocess.run([sys.executable, 'tools/ci-state.py', head], capture_output=True, text=True)
+if c.returncode != 0:
+    block(f"""BLOCKED by tools/hooks/release-cut-gate.sh: CI is not green for this HEAD ({head[:12]}).
+{c.stdout.strip()}
+{c.stderr.strip()}
+  rc 1 = a required workflow is RED or has no run where one was due; rc 2 = one is unfinished or gh
+  could not be read, which is 'no verdict', never a pass. One workflow's conclusion is not the sha's:
+  on 2026-10-11 release-package was green while build.yml had been red for 14 runs (CIREDUNREAD).
+      tools/ci-state.py {head[:12]}
+  The command refused was: {why}.""")
 sys.exit(0)
 PY
 rc=$?

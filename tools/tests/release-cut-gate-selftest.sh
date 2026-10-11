@@ -24,7 +24,19 @@ fail() { n=$((n+1)); bad=1; say "FAIL  $1"; [ -n "${2:-}" ] && say "      $2"; }
 
 # ---- a fixture repository with the tool, a map, a ledger and a v-tag ----------------------------------
 FX="$OUT/fx"; rm -rf "$FX"; mkdir -p "$FX"/{tools/hooks,mgmt,scratchpad,agent/gui-agent,packaging/setup}
-cp "$ROOT/tools/gate-scope.py" "$FX/tools/"
+cp "$ROOT/tools/gate-scope.py" "$ROOT/tools/ci-state.py" "$FX/tools/"
+# the CI arm needs workflows to enumerate and a gh to answer for them. build.yml has no path
+# filter (so it is DUE for every sha); test.yml is filtered, which exercises the inherit path.
+mkdir -p "$FX/.github/workflows"
+printf 'name: build\non:\n  push:\n    branches: [main]\n' > "$FX/.github/workflows/build.yml"
+printf 'name: test\non:\n  push:\n    branches: [main]\n    paths:\n      - \x27guest/**\x27\n' > "$FX/.github/workflows/test.yml"
+cat > "$OUT/gh" <<'STUB'
+#!/bin/bash
+# answers every workflow with $CI_STUB ("completed success" by default), headSha = the fixture HEAD
+read -r st cn <<< "${CI_STUB:-completed success}"
+printf '[{"headSha":"%s","status":"%s","conclusion":"%s","databaseId":7,"createdAt":"x"}]' "$CI_STUB_SHA" "$st" "$cn"
+STUB
+chmod +x "$OUT/gh"
 cp "$HOOK" "$FX/tools/hooks/"
 cd "$FX" && git init -q . && git config user.email t@t && git config user.name t
 cat > mgmt/gate-scope.json <<'JSON'
@@ -53,10 +65,12 @@ HEAD12="$(git rev-parse HEAD | cut -c1-12)"
 
 hook() { # $1 command; prints rc, stderr to $OUT/last.err
     printf '{"tool_input":{"command":%s}}' "$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$1")" |
+        GH_BIN="$OUT/gh" CI_STUB_SHA="$(git -C "$FX" rev-parse HEAD)" CI_STUB="${CI_STUB:-completed success}" \
         CLAUDE_PROJECT_DIR="$FX" bash "$FX/tools/hooks/release-cut-gate.sh" 2>"$OUT/last.err" >/dev/null
     echo $?
 }
 knob() { printf '{"tool_input":{"command":%s}}' "$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$1")" |
+        GH_BIN="$OUT/gh" CI_STUB_SHA="$(git -C "$FX" rev-parse HEAD)" \
         RELEASE_CUT_GATE_DEFECT=1 CLAUDE_PROJECT_DIR="$FX" bash "$FX/tools/hooks/release-cut-gate.sh" 2>/dev/null >/dev/null
     echo $?; }
 
@@ -84,6 +98,23 @@ printf '{"suites":["package-verify","win11-clean"]}\n' > "scratchpad/gate-covera
 rc=$(hook "$CUT")
 if [ "$rc" -eq 0 ]; then ok "cut-satisfied: a receipt covering every required suite allows the cut"
 else fail "cut-satisfied (rc=$rc)" "$(head -3 "$OUT/last.err")"; fi
+
+# ---- COVERAGE SATISFIED BUT CI RED: still blocked --------------------------------------------------
+# The receipt says the right suites ran on a guest; it says nothing about whether the code compiles.
+# On 2026-10-11 build.yml was red for 14 runs while release-package was green and nothing in the cut
+# path asked (CIREDUNREAD). The receipt below is the SAME one that just allowed the cut.
+rc=$(CI_STUB="completed failure" hook "$CUT")
+if [ "$rc" -eq 2 ] && grep -q 'CI is not green' "$OUT/last.err" && grep -q 'RED  build.yml' "$OUT/last.err"; then
+    ok "cut-ci-red: full coverage plus a RED required workflow is BLOCKED, naming the workflow"
+else fail "cut-ci-red (rc=$rc)" "$(head -3 "$OUT/last.err")"; fi
+[ "$(CI_STUB='completed failure' knob "$CUT")" -eq 0 ] && ok "knob cut-ci-red: allowed with the knob set (the check is seen to fail)" ||
+    fail "knob cut-ci-red: the knob did not disable the gate"
+
+# an UNFINISHED required workflow is 'no verdict', never a pass
+rc=$(CI_STUB="in_progress -" hook "$CUT")
+if [ "$rc" -eq 2 ] && grep -q 'CI is not green' "$OUT/last.err"; then
+    ok "cut-ci-running: an unfinished required workflow blocks the cut (no verdict is not a pass)"
+else fail "cut-ci-running (rc=$rc)" "$(head -3 "$OUT/last.err")"; fi
 
 # ---- passive commands are never touched ------------------------------------------------------------
 pass_all=1
