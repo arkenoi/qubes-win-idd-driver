@@ -14,6 +14,9 @@
 #       RECONNECTDEATH   a reconnect exit writes a death record       REQUESTEDDEATH  a requested exit is a death
 #       REQUESTEDERROR   the agent logs an expected exit as a failure (the stale "WatchForEvents failed" ERROR line)
 #       HELPERSYSKILLDEATH  a helper the SYSTEM killed (0x40010004) is written up as a death - the measured 2026-10-10
+#       LATEREGALWAYSLOUD  a cold boot's late registration is written up as a fault, which is what the FIRST
+#                          attempt at this fix left in place: it asked whether the broker was ready at a site
+#                          reached only once it is, so the quiet branch was unreachable (receipted 2026-10-11)
 #       FAULTFROMREG       the per-window fault clock runs from REGISTRATION even when the broker could not
 #                          feed the window yet, so a window registered into a broker that was still coming up
 #                          is declared NOT SHOWN and dom0 is told "a window could not be shown" - measured
@@ -76,7 +79,7 @@ if build clean ""; then
 else say "FAIL  clean build: $(head -3 "$OUT/clean.build.err")"; bad=1; fi
 
 # ---- every defect knob must make the suite FAIL --------------------------------------------------------
-for d in TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT DISARMHIDESCRASH ZERODUE SHELLBYNAME HOLDALWAYSLOUD FAULTFROMREG; do
+for d in TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT DISARMHIDESCRASH ZERODUE SHELLBYNAME HOLDALWAYSLOUD FAULTFROMREG LATEREGALWAYSLOUD; do
     if build "defect-$d" "-DQGA_LIFECYCLE_DEFECT_$d"; then
         "$OUT/defect-$d" >"$OUT/defect-$d.out" 2>&1; rc=$?
         f=$(grep -c '^FAIL' "$OUT/defect-$d.out")
@@ -174,6 +177,22 @@ shape "main.c: a helper task QUEUES a new instance behind the outgoing one, neve
 
 main_restart_on_failure() { grep -q '<RestartOnFailure><Interval>' "$1" && grep -q 'HelperTaskRegister(WGC_TASK_NAME, longExe, args, userId, TRUE,' "$1" && grep -q 'return NotifRunInSession(NOTIF_TASK_NAME, args, TRUE);' "$1"; }
 shape "main.c: the broker's and the bridge's tasks are registered with RestartOnFailure (the one-shots without)" main_restart_on_failure "$MAIN" 'return NotifRunInSession(NOTIF_TASK_NAME, args, TRUE);'
+# THE LEVEL OF BROKERLATEREG IS FED FROM A SNAPSHOT, and the reused flag is what makes that fragile:
+# PwRegFailLogged is a one-shot LOG flag whose value is now load-bearing for a log LEVEL, so a future
+# change to QGABROKERREGFAIL's logging could silently turn a healthy cold boot loud again. Jev flagged
+# exactly that (worst_residual reused-flag 0.28, 2026-10-11). This pins the three things that must hold
+# together: both facts are read BEFORE the retry, the level comes from QgaLateRegIsStartup, and the
+# dead gate it replaces (a broker-ready test at a site reached only once the broker is ready) is gone.
+main_latereg_level() { grep -q 'const BOOL refusedWhileUp = windowData->PwRegFailLogged;' "$1" &&
+                       grep -q 'const BOOL hadSlotBefore  = windowData->PwBrokerEverSourced;' "$1" &&
+                       grep -q 'if (QgaLateRegIsStartup(refusedWhileUp, hadSlotBefore))' "$1" &&
+                       ! grep -q 'if (QgaHoldIsStartup(FALSE, g_BrokerReadyAt != 0))' "$1" &&
+                       # the snapshot must precede the call it is a snapshot of
+                       [ "$(grep -n 'const BOOL refusedWhileUp' "$1" | cut -d: -f1)" -lt \
+                         "$(grep -n 'if (BrokerRegister(windowData))' "$1" | cut -d: -f1)" ]; }
+shape "main.c: BROKERLATEREG's level comes from QgaLateRegIsStartup fed by flags snapshotted BEFORE the retry (never the inert broker-ready test)" \
+      main_latereg_level "$MAIN" 'if (QgaLateRegIsStartup(refusedWhileUp, hadSlotBefore))'
+
 # item I: the window-event thread's exit on request is INFO; the ERROR stays for a thread that dies while the agent runs
 main_winevt_expected() { grep -q 'QGA_WINEVT_EXPECTED' "$1" && grep -q 'LogError("QGAWINEVTDEAD window event thread died unexpectedly, using fallback")' "$1" && ! grep -q 'LogError("window event thread exiting - tracking falls back to periodic resync")' "$1"; }
 shape "main.c: the window-event thread's exit on the agent's request is INFO, a death while running stays ERROR (QGAWINEVTDEAD)" main_winevt_expected "$MAIN" 'QGA_WINEVT_EXPECTED'
