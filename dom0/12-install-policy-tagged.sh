@@ -28,6 +28,18 @@ qubes.Filecopy        *  $DEV  @tag:win-idd-testbed  allow
 # dev qube gets "Request refused" and the knob can only be exercised by hand from inside the guest,
 # which tests the agent but NOT the path a user actually takes. Same tag scope as everything else.
 qubes.SetGuiMode      *  $DEV  @tag:win-idd-testbed  allow
+# THE APPLICATION-MENU PATH, which is how a user actually starts an app in a Windows qube and which
+# nothing here covered until 2026-10-11. dom0 writes `Exec=qvm-run -q -a --service -- %VMNAME%
+# qubes.StartApp+<name>` into each .desktop (qubesappmenus/receive.py:270), so testing what the
+# owner does means making that exact call - and without a rule it resolves through whatever the
+# stock default happens to be rather than through anything we chose. GetAppmenus is the sync half:
+# `qvm-sync-appmenus` and `qrexec-client-vm <vm> qubes.GetAppmenus` both answered "Request refused"
+# from the dev qube, so the menu could only ever be rebuilt by hand in dom0. GetImageRGBA is how
+# dom0 fetches an entry's icon by hash; without it entries list but come up blank.
+# `*` is the ARGUMENT column, so one rule covers qubes.StartApp+<any app>.
+qubes.StartApp        *  $DEV  @tag:win-idd-testbed  allow
+qubes.GetAppmenus     *  $DEV  @tag:win-idd-testbed  allow
+qubes.GetImageRGBA    *  $DEV  @tag:win-idd-testbed  allow
 admin.vm.Start        *  $DEV  @tag:win-idd-testbed  allow target=dom0
 admin.vm.Shutdown     *  $DEV  @tag:win-idd-testbed  allow target=dom0
 admin.vm.Kill         *  $DEV  @tag:win-idd-testbed  allow target=dom0
