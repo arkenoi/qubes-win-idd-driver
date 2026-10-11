@@ -15,7 +15,10 @@ A boot PASSES only if all of these hold on the excerpt:
   6. both tags present            - an excerpt with neither did not exercise the condition at all,
                                     and MISSING DATA FAILS: it must never read as quiet
 With --pixels, the capture must also show the window delivered (windows>=1 and a non-black mean),
-because "no noise" on a boot that never showed the window is not the result being claimed.
+because "no noise" on a boot that never showed the window is not the result being claimed. AND no
+capture may show a window that is BLACK: the owner's criterion is "slicefed window is held until
+broker comes up AND NOTHING WEIRD HAPPENS IN BETWEEN" (2026-10-11), so a window that flashed black
+at t+3 and was correct at t+15 is a failure, and grading only the best capture would pass it.
 
 rc 0 pass, 1 fail, 2 could not grade. The level is the field between the last '-' and ']' in the
 agent's own stamp: [20261011.102247.645-4448:4452-I].
@@ -26,6 +29,15 @@ import sys
 
 STAMP = re.compile(r"^\[\d{8}\.\d{6}\.\d{3}-\d+:\d+-([A-Z])\]")
 PIX = re.compile(r"windows=(\d+).*?mean=([0-9.]+)")
+# below this a capture is black, not dim: the measured correct delivery is mean 0.9906-0.9939
+# and an unpainted window measures ~0.00
+BLACK = 0.05
+# SCOPE, stated because it bounds what a PASS means: race-pixels.sh writes ONE line per capture
+# carrying up to four windows ("windows=2 win-0.png=... mean=... win-1.png=... mean=..."), and this
+# pattern needs `windows=` before `mean=`, so it grades the FIRST window of each capture only. That
+# is deliberate - the subject is the one window the probe opened, and grading every window would
+# fail on any legitimately dark surface that happens to be captured. A black SECOND window would
+# not be caught here; it would be caught by the agent-log arms, which are per-window.
 
 
 def levels(lines, tag):
@@ -86,12 +98,23 @@ def main(argv):
             fails.append("pixels: no 'windows=N ... mean=M' capture line at all - the window was "
                          "never graded, and absence is not delivery")
         else:
-            best = max((int(n), float(m)) for n, m in ms)
-            if best[0] < 1 or best[1] < 0.05:
+            caps = [(int(n), float(m)) for n, m in ms]
+            best = max(caps)
+            if best[0] < 1 or best[1] < BLACK:
                 fails.append("pixels: best capture windows=%d mean=%.4f - the window was not "
                              "delivered with content" % best)
             else:
-                notes.append("pixels windows=%d mean=%.4f" % best)
+                notes.append("pixels windows=%d mean=%.4f (best of %d captures)" % (best + (len(caps),)))
+            # NOTHING WEIRD IN BETWEEN. A mapped window with no content is the defect the hold
+            # exists to prevent, and it is invisible if only the best capture is graded.
+            black = [c for c in caps if c[0] >= 1 and c[1] < BLACK]
+            if black:
+                fails.append("pixels: %d of %d capture(s) show a MAPPED BLACK window (worst "
+                             "windows=%d mean=%.4f) - held means not mapped at all, so a black "
+                             "frame in between is the defect"
+                             % ((len(black), len(caps)) + min(black, key=lambda c: c[1])))
+            else:
+                notes.append("no capture shows a mapped black window (%d graded)" % len(caps))
 
     if not a.quiet:
         for n in notes:

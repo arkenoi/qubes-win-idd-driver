@@ -90,6 +90,24 @@ echo "[07:27:02] t+15 dom0: windows=1 win-0.png=3828x1053 mean=0.000000" > "$T/p
 rc=$(G "$T/quiet.txt" --pixels "$T/pix-black.txt")
 [ "$rc" = 1 ] && ok "pixels_black_fails: a black window is noise-free and still not a result" \
   || bad "pixels_black_fails: rc=$rc"
+# NOTHING WEIRD IN BETWEEN: a black capture mid-hold fails even when the last one is perfect
+printf '%s\n' \
+  "[07:27:02] t+3 dom0: windows=1 win-0.png=3828x1053 mean=0.000000" \
+  "[07:27:20] t+15 dom0: windows=1 win-0.png=3828x1053 mean=0.993941" > "$T/pix-flash.txt"
+rc=$(G "$T/quiet.txt" --pixels "$T/pix-flash.txt")
+if [ "$rc" = 1 ] && grep -q "MAPPED BLACK" "$T/out"; then
+  ok "pixels_black_flash_fails: a black window at t+3 fails although t+15 is perfect"
+else
+  bad "pixels_black_flash_fails: rc=$rc - grading only the best capture hides the flash"
+fi
+# and the held case - windows=0 while the broker starts - is NOT a black window
+printf '%s\n' \
+  "[07:27:02] t+3 dom0: windows=0" \
+  "[07:27:20] t+15 dom0: windows=1 win-0.png=3828x1053 mean=0.993941" > "$T/pix-held.txt"
+rc=$(G "$T/quiet.txt" --pixels "$T/pix-held.txt")
+[ "$rc" = 0 ] && ok "pixels_held_then_delivered_passes: windows=0 during the hold is the designed path" \
+  || bad "pixels_held_then_delivered_passes: rc=$rc - $(tail -2 "$T/out" | tr '\n' ' ')"
+
 rc=$(G "$T/quiet.txt" --pixels "$T/nonexistent.txt")
 [ "$rc" = 2 ] && ok "pixels_unreadable_is_rc2: the instrument did not run, which is not a pass" \
   || bad "pixels_unreadable_is_rc2: rc=$rc"
