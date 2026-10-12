@@ -34,6 +34,17 @@
         ]
       },
       {
+        "matcher": "Bash|Workflow|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/tools/hooks/committed-procedure-gate.sh\"",
+            "timeout": 15,
+            "statusMessage": "Checking heavy rig mutation uses the committed procedure (Jev required)"
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [
           {
