@@ -94,10 +94,48 @@ case "$cmd" in
     # _state exits 3 when the tamper signal is unreadable. Sealing anyway would write a seal that
     # cannot detect anything - exactly the failure being fixed here.
     _state "$vm" > "$tmp" || { echo "REFUSING to seal $vm: state could not be read"; rm -f "$tmp"; exit 3; }
-    python3 - "$tmp" "${3:-}" <<'PY' > "$SEALDIR/$vm.json"
+    # THE RECORD-DESTROYING RE-SEAL (2026-10-11, the incident this guard exists for). All four
+    # bases were booted - which burned their ONE-SHOT primer hook - and then RE-SEALED. The boots
+    # alone were still recoverable: each base's sealed revision was sitting right there and a
+    # `qvm-volume revert` brought it back on 2026-10-12. What made the loss invisible was the
+    # re-seal, because it overwrote the only record that said what the golden had been. Afterwards
+    # `verify` reported "intact" on three bases that had no channel into them, and nothing in the
+    # rig disagreed for a day.
+    #
+    # So: a re-seal that would erase the record of revisions THAT ARE ALREADY GONE is refused. It
+    # is still permitted - a legitimate rebuild loses every old revision - but only as a DELIBERATE,
+    # RECORDED act, which is this tool's whole premise. GOLDEN_RESEAL_REASON is written into the
+    # seal, so the next reader sees why the previous state was abandoned.
+    if [ "${GOLDEN_RESEAL_DEFECT:-}" != "1" ] && [ -f "$SEALDIR/$vm.json" ]; then   # GUARD:reseal
+        python3 - "$SEALDIR/$vm.json" "$tmp" "${GOLDEN_RESEAL_REASON:-}" <<'PY' || { rm -f "$tmp"; exit 4; }
+import json, sys
+old = json.load(open(sys.argv[1])); new = json.load(open(sys.argv[2])); reason = sys.argv[3]
+lost = {}
+for v, ov in old.get("volumes", {}).items():
+    gone = [r for r in ov.get("revisions", []) if r not in new.get("volumes", {}).get(v, {}).get("revisions", [])]
+    if gone:
+        lost[v] = gone
+if lost and not reason.strip():
+    print(f"REFUSING to re-seal: it would erase the record of a state you can no longer reach.")
+    for v, gone in sorted(lost.items()):
+        print(f"  {v}: sealed revision(s) {', '.join(gone)} are GONE from this volume")
+    print(f"  previous seal: {old.get('sealed_utc','?')}")
+    print("  This golden was started, or its revisions aged out (revisions_to_keep is small).")
+    print("  If a sealed revision still EXISTS, recover instead of re-sealing:")
+    print(f"    qvm-volume revert <vm>:root <revision>   # and :private, to the SAME revision")
+    print("  If you really mean to abandon that state, say why and it is recorded:")
+    print("    GOLDEN_RESEAL_REASON='rebuilt from vendor media 2026-..-..' mgmt/golden.sh seal <vm> '<note>'")
+    sys.exit(4)
+PY
+    fi
+    python3 - "$tmp" "${3:-}" "${GOLDEN_RESEAL_REASON:-}" <<'PY' > "$SEALDIR/$vm.json"
 import json, sys, subprocess
 d = json.load(open(sys.argv[1]))
 d["note"] = sys.argv[2] if len(sys.argv) > 2 else ""
+# Written only when this seal ABANDONED a state the previous seal recorded. Its presence is the
+# marker that a recoverable golden was deliberately given up, and why.
+if len(sys.argv) > 3 and sys.argv[3].strip():
+    d["reseal_reason"] = sys.argv[3].strip()
 d["sealed_utc"] = subprocess.run(["date","-u","+%Y-%m-%dT%H:%M:%SZ"],
                                  capture_output=True, text=True).stdout.strip()
 print(json.dumps(d, indent=2, sort_keys=True))

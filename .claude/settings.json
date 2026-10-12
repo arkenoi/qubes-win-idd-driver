@@ -45,6 +45,17 @@
         ]
       },
       {
+        "matcher": "Bash|Workflow|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/tools/hooks/golden-boot-gate.sh\"",
+            "timeout": 15,
+            "statusMessage": "Checking this does not START a sealed golden (a golden is cloned, never started)"
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [
           {
