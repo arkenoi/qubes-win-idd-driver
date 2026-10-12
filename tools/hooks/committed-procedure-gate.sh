@@ -36,13 +36,13 @@ fi
 
 # Normal case: command fragment + committed-procedure marker (or quick-upgrade mention)
 recent=$(awk -v frag="$frag" '
-  line ~ /committed_procedure|use_committed|procedure_delta/ && (index(line, substr(frag,1,20))>0 || index(line,"quick-upgrade")>0) {print NR}
+  $0 ~ /committed_procedure|use_committed|procedure_delta/ && (index($0, substr(frag,1,20))>0 || index($0,"quick-upgrade")>0) {print NR}
 ' "$WIRE" | tail -1)
 
 # Exception: recreate-goldens sequence (no short-cycle alternative exists)
 if [ -z "${recent:-}" ]; then
   recent=$(awk '
-    line ~ /recreate_goldens|PROCEDURE-recreate-goldens/ {print NR}
+    $0 ~ /recreate_goldens|PROCEDURE-recreate-goldens/ {print NR}
   ' "$WIRE" | tail -1)
 fi
 
