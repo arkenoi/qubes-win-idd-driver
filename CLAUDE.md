@@ -12,6 +12,7 @@ Improve Windows-guest desktop fidelity and responsiveness in QWT seamless mode. 
 - Control every qube tagged win-idd-testbed. Create + tag immediately. Pre-authorised: qvm-prefs/tags/firewall/volume, power, qtest.
 - Off-limits: dom0 shell, sudo, qrexec policy edits, untagged qubes.
 - **Never invent a procedure.** Short cycle = mgmt/harness/quick-upgrade.sh over golden (or clone-guest.sh for GWeck). Heavier paths (prime-run, reprovision, full matrix) require a recent Jev call whose state quotes the exact command + the rejected short-cycle alternative. Enforced by tools/hooks/committed-procedure-gate.sh.
+- If no golden exists (win10-base / win11-base / win10-qwt / win11-qwt missing or seals fail), follow docs/PROCEDURE-recreate-goldens.md exactly. A Jev state with recreate_goldens satisfies the gate for that sequence.
 - Before any install/boot/reboot job: read .claude/skills/rig-cycle/SKILL.md.
 - VM-mutating jobs are serial (mgmt/harness/vmlock.sh).
 - Never write a limitation until you have grepped the repo and run the cheapest disproving probe. See .claude/skills/rig-capabilities/SKILL.md.
