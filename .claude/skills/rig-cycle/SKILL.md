@@ -12,6 +12,10 @@ Short cycle = `mgmt/harness/quick-upgrade.sh` over a golden (or `mgmt/clone-gues
 Heavier paths only when the clean-install path itself is under test, or after a recent Jev call that quotes the exact command and the rejected short-cycle alternative.
 Enforced by `tools/hooks/committed-procedure-gate.sh`.
 
+## Recreate goldens (exception)
+If `win10-base`, `win11-base`, `win10-qwt` and `win11-qwt` are all missing or fail `mgmt/golden.sh verify`, follow `docs/PROCEDURE-recreate-goldens.md` exactly.
+There is no short-cycle alternative in that case. A Jev state containing `recreate_goldens` and quoting that procedure satisfies the gate for the heavy steps in the sequence.
+
 ## Which harness
 | Task | Use |
 |------|-----|
@@ -19,9 +23,11 @@ Enforced by `tools/hooks/committed-procedure-gate.sh`.
 | GWeck report (German 25H2) | clone-guest.sh win11de-qwt <subject> + env-assert.sh |
 | Full release acceptance | matrix.sh |
 | Clean-install path under test | prime-run.sh from base |
+| Goldens missing | docs/PROCEDURE-recreate-goldens.md |
 
 A broken quick-upgrade is a bug to fix, not a reason to clean-install.
 Answer before launch: is the clean-install path the thing under test? If no → quick-upgrade.
+If no golden exists → recreate-goldens procedure.
 
 ## Serial always
 One VM-mutating job. `source mgmt/harness/vmlock.sh; vm_lock <vm>`.
