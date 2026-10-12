@@ -95,6 +95,16 @@
             "statusMessage": "Checking every capability limit and guest state named this turn carries a measurement"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/tools/hooks/evidence-receipt-gate.sh\"",
+            "timeout": 15,
+            "statusMessage": "Checking golden-recreation claims have verify output and screenshots"
+          }
+        ]
       }
     ]
   },
