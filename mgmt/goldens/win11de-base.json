@@ -1,5 +1,5 @@
 {
-  "note": "pristine German Win11 25H2 (Win11_25H2_German_x64_v2.iso, install.wim BUILD 26200.8037, de-DE), primer hook installed, testsigning OFF, no QWT",
+  "note": "RESTORED 2026-10-12 by qvm-volume revert of root+private to 1789581791-back - the newest revision recorded in this golden's ORIGINAL pre-damage seal (2026-09-16T18:03:21Z). Reason: on 2026-10-11 all four bases were driven through their ONE-SHOT QubesPrime primer hook to clear a password fuse and were then re-sealed, which burned the hook and overwrote the record that would have shown it; golden.sh verify reported 'intact' against that post-damage seal. This revert returns the volumes to the originally sealed pristine content. PRIMER HOOK NOT YET RE-VERIFIED on this seal - mgmt/prime-selftest.sh over a CLONE is the proving instrument and is blocked until win10-base is Halted.",
   "props": {
     "klass": "StandaloneVM",
     "maxmem": "8192",
@@ -7,13 +7,13 @@
     "vcpus": "4",
     "virt_mode": "hvm"
   },
-  "sealed_utc": "2026-09-16T18:03:21Z",
+  "sealed_utc": "2026-10-12T19:08:58Z",
   "vm": "win11de-base",
   "volumes": {
     "private": {
       "revisions": [
-        "1789579953-back",
-        "1789581791-back"
+        "1789581791-back",
+        "1791725130-back"
       ],
       "revisions_to_keep": "2",
       "size": "21474836480",
@@ -21,12 +21,12 @@
     },
     "root": {
       "revisions": [
-        "1789579953-back",
-        "1789581791-back"
+        "1789581791-back",
+        "1791725130-back"
       ],
       "revisions_to_keep": "2",
       "size": "85899345920",
-      "usage": "15848429322"
+      "usage": "15333033246"
     }
   }
 }

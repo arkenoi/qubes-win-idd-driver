@@ -1,5 +1,5 @@
 {
-  "note": "pristine RETAIL Win11 Pro 26300.9457 en-US (Win11_26300_English_x64.iso, Microsoft download 2026-09-30), primer hook from the answer stick, testsigning OFF, no QWT; installed 2026-10-01 with a STATIC DiskConfiguration + InstallTo Disk 0 (RunSynchronous partitioning + InstallToAvailablePartition fails 0x800700FF-0x40030 on 26300; its WinPE has no WMIC)",
+  "note": "RESTORED 2026-10-12 by qvm-volume revert of root+private to 1790863893-back - the newest revision recorded in this golden's ORIGINAL pre-damage seal (2026-10-01T14:11:47Z). Reason: on 2026-10-11 all four bases were driven through their ONE-SHOT QubesPrime primer hook to clear a password fuse and were then re-sealed, which burned the hook and overwrote the record that would have shown it; golden.sh verify reported 'intact' against that post-damage seal. This revert returns the volumes to the originally sealed pristine content. PRIMER HOOK NOT YET RE-VERIFIED on this seal - mgmt/prime-selftest.sh over a CLONE is the proving instrument and is blocked until win10-base is Halted.",
   "props": {
     "klass": "StandaloneVM",
     "maxmem": "8192",
@@ -7,13 +7,13 @@
     "vcpus": "4",
     "virt_mode": "hvm"
   },
-  "sealed_utc": "2026-10-01T14:11:47Z",
+  "sealed_utc": "2026-10-12T19:08:56Z",
   "vm": "win11r-base",
   "volumes": {
     "private": {
       "revisions": [
-        "1790862099-back",
-        "1790863893-back"
+        "1790863893-back",
+        "1791724559-back"
       ],
       "revisions_to_keep": "2",
       "size": "21474836480",
@@ -21,12 +21,12 @@
     },
     "root": {
       "revisions": [
-        "1790862099-back",
-        "1790863893-back"
+        "1790863893-back",
+        "1791724559-back"
       ],
       "revisions_to_keep": "2",
       "size": "85899345920",
-      "usage": "14027363188"
+      "usage": "13718125543"
     }
   }
 }
