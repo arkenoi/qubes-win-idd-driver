@@ -14,7 +14,7 @@
 #       --harness-log <file>     the harness's own log; its tail travels in the package
 #       --timeline <file>        'utc state source' lines the harness recorded (power-state readings)
 #       --no-core                never fetch a memory image (default: fetch on a classified wedge)
-#       --no-sweep               do not run the live log sweep (the offline analysis of the volume still runs)
+# #       --no-sweep               do not run the live log sweep (the offline analysis of the volume still runs)
 #       --unresponsive-secs <n>  how long one liveness probe may take before the guest counts as unresponsive (40)
 #
 # ORDER, AND WHY: (1) the secondary volume FIRST, read on the host with mtools while the guest is in
@@ -46,11 +46,11 @@ cd "$ROOT" || exit 2
 
 VM="${1:-}"; OUT="${2:-}"; REASON="${3:-}"
 if [ -z "$VM" ] || [ -z "$OUT" ] || [ -z "$REASON" ]; then
-  sed -n '4,22p' "$0" >&2; exit 2
+  sed -n '4,24p' "$0" >&2; exit 2
 fi
 shift 3
 SINCE=""; SINCE_SOURCE=""; LOGVOL_IMG="${LOGVOL_IMG:-}"; LOGVOL_MF=""; HARNESS_CMD_ARG=""; HARNESS_LOG=""; TIMELINE_IN=""
-NO_CORE=0; NO_SWEEP=0; UNRESP="${CF_UNRESPONSIVE_SECS:-40}"
+NO_CORE=0; NO_SWEEP=0; NO_QREXEC=0; UNRESP="${CF_UNRESPONSIVE_SECS:-40}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --since) SINCE="${2:?--since needs <utc>}"; SINCE_SOURCE="argument"; shift ;;
@@ -60,6 +60,7 @@ while [ $# -gt 0 ]; do
     --harness-log) HARNESS_LOG="${2:?--harness-log needs <file>}"; shift ;;
     --timeline) TIMELINE_IN="${2:?--timeline needs <file>}"; shift ;;
     --no-core) NO_CORE=1 ;;
+    --no-qrexec) NO_QREXEC=1 ;;
     --no-sweep) NO_SWEEP=1 ;;
     --unresponsive-secs) UNRESP="${2:?--unresponsive-secs needs <n>}"; shift ;;
     *) echo "collect-failure: unknown option '$1'" >&2; exit 2 ;;
@@ -146,8 +147,43 @@ fi
 # ---- 3. liveness, then the branch the state dictates ------------------------------------------------
 LIVENESS="not-running"; SWEEP_RC=""; SWEEP_STATUS=""; SWEEP_DIR=""; SCREEN=""; WEDGE_CLASS=""; CORE_STATUS="not-attempted"; CORE_PATH=""
 if [ "$POWER" = Running ]; then
-  if q "$UNRESP" run 'cmd /c echo QREADY' | grep -qa 'QREADY'; then LIVENESS="alive"; else LIVENESS="unresponsive"; fi   # GUARD:unresponsive DEFECT: LIVENESS="alive"
-  log "liveness: $LIVENESS (one probe, bound ${UNRESP}s)"
+  # A GUEST THAT NEVER HAD QREXEC IS NOT WEDGED BY BEING SILENT. A pristine base carries no QWT -
+  # that is what makes it pristine - so it can never answer, and its silence says nothing about its
+  # health. Measured 2026-10-13: a base build failed on a HARNESS bug (a shell function that was not
+  # sourced), the guest was perfectly healthy, and this read its silence as a wedge and wrote an
+  # 8.1 GB memory core of it, filling /home to 97%.
+  #
+  # The CALLER declares it, the way --logvol none declares a cell that ran without a log volume. The
+  # caller always knows: reprovision-usb.sh knows it is building a QWT-free base, quick-upgrade.sh
+  # and matrix.sh know their subject carries QWT. Inferring it from the qrexec FEATURE instead was
+  # judged the wrong discriminator (Jev 0.27 vs 0.87 for a declaration): the feature is harness-set
+  # state, so a genuinely wedged guest whose feature was never set would be silently skipped - a real
+  # wedge going unclassified with no core is a worse failure than the one being fixed.
+  #
+  # The probe is skipped entirely rather than run and ignored: it can only ever fail here, and a
+  # 40-second wait for an answer that cannot come is not a measurement.
+  if [ "$NO_QREXEC" = 1 ]; then                                     # GUARD:declqwtfree DEFECT: if false; then
+    LIVENESS="no-qrexec-by-design"
+    log "liveness: not probed - the caller declares this guest carries no QWT, so silence is expected"
+  else
+    # CAPTURE, THEN MATCH - never `q ... | grep -q`. MEASURED 2026-10-14, 200 probes of a HEALTHY
+    # producer: 86 of them read "unresponsive". `grep -q` exits the instant it matches, which SIGPIPEs
+    # the still-writing left side, `timeout` reports that death as 141, and `set -o pipefail` (line 43)
+    # makes 141 the status of the whole pipeline - so a guest that answered correctly is graded dead
+    # about two times in five, and the collector then classifies a wedge and fetches a multi-GB memory
+    # image of a healthy guest. The same command alone returns 0 every time; capture-then-match was
+    # 200/200. The pipeline statuses seen were exactly {0, 141}.
+    PROBE=$(q "$UNRESP" run 'cmd /c echo QREADY')
+    case "$PROBE" in *QREADY*) LIVENESS="alive" ;; *) LIVENESS="unresponsive" ;; esac   # GUARD:unresponsive DEFECT: LIVENESS="alive"
+    # BACKSTOP for a caller that forgot the flag. It does not silently do the right thing: it refuses
+    # the expensive step AND records a gap, so the run is incomplete (rc=1) and the caller gets fixed.
+    # Loud, diagnosed, never quietly recovered from.
+    if [ "$LIVENESS" = unresponsive ] && [ -z "$(qvm-features "$VM" qrexec 2>/dev/null)" ]; then   # GUARD:qwtfreebackstop DEFECT: if false; then
+      LIVENESS="no-qrexec-undeclared"
+      gap "$VM has no qrexec feature and the caller did not pass --no-qrexec: its silence cannot be read as a wedge, so nothing was classified and no memory image was taken. Fix the caller."
+    fi
+    log "liveness: $LIVENESS (one probe, bound ${UNRESP}s)"
+  fi
 fi
 printf '%s %s liveness\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$LIVENESS" >> "$TIMELINE"
 
@@ -187,6 +223,14 @@ elif [ "$LIVENESS" = unresponsive ]; then
   esac
   SCREEN=$(w_screen "$VM" screen "$OUT")
   log "screen (per-window capture): $SCREEN"
+elif [ "$LIVENESS" = no-qrexec-by-design ] || [ "$LIVENESS" = no-qrexec-undeclared ]; then
+  # Nothing can be asked of this guest, so nothing is asked: no live sweep (it needs qrexec), no wedge
+  # classification, no memory image. The per-window capture is a DOM0 service that needs nothing from
+  # the guest, so it still runs - on a QWT-free guest it is the only instrument there is. On 2026-10-13
+  # the answer-file dialog that stalled a base build sat on screen for 90 minutes while nothing looked.
+  SCREEN=$(w_screen "$VM" screen "$OUT")                            # GUARD:qwtfreescreen DEFECT: SCREEN=""
+  CORE_STATUS="skipped-no-qrexec"
+  log "screen (per-window capture): $SCREEN - dom0-side, the only instrument that needs nothing from the guest"
 else
   log "guest is $POWER - no live sweep, no capture; the secondary volume is the source"
 fi

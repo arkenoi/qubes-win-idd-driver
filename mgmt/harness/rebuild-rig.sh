@@ -62,13 +62,22 @@ open(sys.argv[1],'a').write(json.dumps({
     "step": sys.argv[2], "event": sys.argv[3], "detail": sys.argv[4]})+"\n")
 PY
 }
+# WHICH STEPS RUN A GUEST THAT CARRIES NO QWT BY DESIGN: a pristine base and its primer proof. A base
+# has no QWT - that is what makes it pristine - so it can never answer qrexec, and collect-failure is
+# TOLD so rather than left to read that silence as a wedge. On 2026-10-13 it was not told, and wrote an
+# 8.1 GB memory image of a perfectly healthy base, filling /home to 97%. The iqi and tpl steps ARE
+# supposed to carry QWT, so silence there is a real anomaly and stays classifiable; if QWT never got
+# installed at all, the collector's own backstop records a gap instead of taking a core.
+QWT_FREE_STEPS=" base10 base11 prove10 prove11 "
+
 # THE ONLY EXIT THAT ASKS FOR A HUMAN OR A MODEL. Everything a normal run does is above this line.
-fail(){ local step="$1" why="$2" vm="${3:-}"
+fail(){ local step="$1" why="$2" vm="${3:-}"; local cfopt=()
     say "FAIL [$step]: $why"
     record "$step" fail "$why"
+    case "$QWT_FREE_STEPS" in *" $step "*) cfopt+=(--no-qrexec) ;; esac
     if [ -n "$vm" ] && [ -x mgmt/harness/collect-failure.sh ]; then
-        say "collecting failure package for $vm"
-        mgmt/harness/collect-failure.sh "$vm" "$OUT/failure-$step" "$why" >>"$LOG" 2>&1 \
+        say "collecting failure package for $vm${cfopt[0]:+ (QWT-free: silence is expected)}"
+        mgmt/harness/collect-failure.sh "$vm" "$OUT/failure-$step" "$why" "${cfopt[@]}" >>"$LOG" 2>&1 \
             && say "package -> $OUT/failure-$step" || say "WARNING: collect-failure.sh itself failed"
     fi
     echo "LLM-NEEDED step=$step vm=${vm:-none} evidence=$OUT"

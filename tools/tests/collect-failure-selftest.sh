@@ -17,8 +17,15 @@
 #              image is fetched, kept beside the package and NOT in the tarball
 #   refused    the core fetch refuses for space: recorded as the instrument-fail it is, specimen left alive
 #   no-volume  no --logvol and no manifest entry is a GAP; '--logvol none' is a declaration, not a gap
+#   qwtfree    --no-qrexec DECLARES a guest that carries no QWT: the probe is skipped, nothing is classified,
+#              no memory image is taken, and the dom0-side per-window capture still runs
+#   undecl     the same guest with the flag FORGOTTEN: the core is still refused, but a GAP is recorded so the
+#              run is incomplete and the caller gets fixed - never silently right
+#   bound      a guest that answers later than --unresponsive-secs is unresponsive (the only case where the
+#              real `timeout` fires; every other silent case answers nothing instantly, so no case races a clock)
 #   refusals   an outdir inside the tracked tree, a bad --since, a missing argument -> rc 2, nothing written
-#   knobs      logvolgap, unresponsive, manifestlast, snapshotgaps, gaprecord (collector); missingtails (snapshot)
+#   knobs      logvolgap, unresponsive, declqwtfree, qwtfreebackstop, qwtfreescreen, manifestlast, snapshotgaps,
+#              gaprecord (collector); missingtails (snapshot)
 #
 #   CF_SELFTEST_OUT=<dir>  keep fixtures and outputs (default: a mktemp dir, removed on exit)
 set -u
@@ -89,13 +96,29 @@ mkdir -p "$T/vol/cell1"; cp "$T/logs"/*.log "$T/vol/cell1/"
 mcopy -s -i "$IMG" "$T/vol/cell1" ::/qwt-logs/ >/dev/null 2>&1
 
 # ---- the stubs -------------------------------------------------------------------------------------------
-# tools/qtest: state from $QSTATE; the liveness probe answers only when $ALIVE=1 (else it outlasts the bound)
+# tools/qtest: state from $QSTATE; the liveness probe answers only when $ALIVE=1.
+#
+# A GUEST THAT CANNOT ANSWER IS MODELLED BY ANSWERING NOTHING, INSTANTLY - never by outlasting a
+# timeout. Until 2026-10-14 the silent case slept 30 s against a 12 s bound, which made BOTH
+# directions a wall-clock race: on a loaded machine the HEALTHY fixture's instant answer also missed
+# the bound, so the alive case read unresponsive, classified a wedge SPIN 1.00 and fetched a memory
+# core. Three identical runs that day scored 46/0, 44/2 and 39/7 - an instrument that disagrees with
+# itself cannot validate anything (CLAUDE.md: a metric is shown stable on ONE unchanged binary over
+# >= 3 runs before any verdict).
+#
+# The observable is identical either way - empty output, no QREADY - so the collector's branch is
+# exercised exactly as before, and now nothing here depends on how busy the machine is.
+# ALIVE=timeout keeps ONE case that genuinely makes `timeout` fire, so the bound itself stays tested.
 cat > "$FX/tools/qtest" <<'SH'
 #!/bin/bash
 echo "qtest $*" >> "$CALLS"
 case "$1" in
   state) echo "power_state=${QSTATE:-Running}" ;;
-  run) if [ "${ALIVE:-1}" = 1 ]; then echo "C:\\Windows\\System32>$2"; echo "QREADY"; else sleep 30; fi ;;
+  run) case "${ALIVE:-1}" in
+         1)       echo "C:\\Windows\\System32>$2"; echo "QREADY" ;;
+         timeout) sleep $(( ${CF_UNRESPONSIVE_SECS:-40} + 30 )) ;;
+         *)       exit 1 ;;
+       esac ;;
   shot) : > "$2" ;;   # an EMPTY tar: w_screen grades NOWINDOW, the legitimate verdict for a guest with no window
   *) echo "stub: $*" ;;
 esac
@@ -122,6 +145,22 @@ if [ "${CORE_STUB:-ok}" = refuse ]; then
 fi
 mkdir -p "$(dirname "$2")"; head -c 4096 /dev/zero > "$2"; echo "fetch-core: OK: $2"; exit 0
 SH
+# qvm-features: the fixture subject is a guest that CARRIES QWT - that is what a wedge subject is.
+# collect-failure now refuses to classify a wedge or take a memory image when the guest has no
+# qrexec FEATURE, because a QWT-free pristine base can never answer and its silence means nothing.
+# Without this stub the real qvm-features is asked about a VM that does not exist, answers empty,
+# and every wedge case here is skipped - which is what happened when that guard was added.
+cat > "$T/bin/qvm-features" <<'SH'
+#!/bin/bash
+echo "qvm-features $*" >> "$CALLS"
+case "$2" in
+  qrexec) [ -n "${QREXEC_FEATURE-1}" ] && echo "${QREXEC_FEATURE-1}" ;;   # QREXEC_FEATURE='' = the feature is absent
+  *) ;;
+esac
+true
+SH
+chmod +x "$T/bin/qvm-features"
+
 # qrexec-client-vm: the dom0 forensics service - two vcpu-list samples 10 s apart, vcpu 0 spinning
 cat > "$T/bin/qrexec-client-vm" <<'SH'
 #!/bin/bash
@@ -216,6 +255,12 @@ lv=$(grep -n 'secondary volume:' "$T/out/wedged/collect.log" | head -1 | cut -d:
 ! grep -qE 'qtest (shutdown|kill|start)' "$CALLS" && ok "wedged: the specimen was left alive" || bad "wedged: lifecycle call made"
 [ "$(sfield wedged "len(r['module_logs'])")" = 3 ] && ok "wedged: the snapshot still carries every module tail - from the volume, no guest needed" || bad "wedged: snapshot tails: $(sfield wedged "list(r['module_logs'])")"
 
+# ---- the BOUND itself: a guest that answers too late is unresponsive ---------------------------------------
+# Every other silent case answers nothing instantly, so this is the only one where `timeout` actually
+# fires. Its own 3 s bound keeps it cheap; the stub sleeps bound+30, so the margin is not a race.
+rc=$(QSTATE=Running ALIVE=timeout CF_UNRESPONSIVE_SECS=3 collect mgmt/harness/collect-failure.sh toolate --logvol "$IMG" --since 2026-10-13T09:00:00Z --harness-cmd x --no-core)
+[ "$(mfield toolate "r['liveness']")" = unresponsive ] && ok "bound: a guest that answers later than --unresponsive-secs is unresponsive (timeout fired)" || bad "bound: liveness=$(mfield toolate "r['liveness']") rc=$rc"
+
 # ---- refused core -------------------------------------------------------------------------------------------
 rc=$(QSTATE=Running ALIVE=0 CORE_STUB=refuse collect mgmt/harness/collect-failure.sh refused --logvol "$IMG" --since 2026-10-13T09:00:00Z --harness-cmd x)
 [ "$rc" = 1 ] && [ "$(mfield refused "r['sources']['core']['status']")" = refused-space ] && mfield refused "r['gaps']" | grep -q 'SHORT BY 912 MiB' && mfield refused "r['gaps']" | grep -q 'SPECIMEN STAYS ALIVE' \
@@ -228,6 +273,30 @@ rc=$(QSTATE=Running ALIVE=1 collect mgmt/harness/collect-failure.sh novol --sinc
 [ "$rc" = 1 ] && mfield novol "r['gaps']" | grep -q 'secondary volume: none named' && ok "no-volume: a cell that named no volume is a GAP (rc=1)" || bad "no-volume: rc=$rc gaps=$(mfield novol "r['gaps']")"
 rc=$(QSTATE=Running ALIVE=1 collect mgmt/harness/collect-failure.sh declnone --logvol none --since 2026-10-13T09:00:00Z --harness-cmd x)
 [ "$rc" = 0 ] && [ "$(mfield declnone "r['sources']['secondary_volume']['status']")" = declared-none ] && ok "--logvol none: a DECLARED absence is recorded, not a gap (rc=0)" || bad "declared none: rc=$rc gaps=$(mfield declnone "r['gaps']")"
+
+# ---- a guest that carries NO QWT: its silence is declared, never read as a wedge ------------------------------
+# 2026-10-13: a pristine base build failed on a harness bug, the guest was healthy, and its normal qrexec
+# silence was classified as a wedge - an 8.1 GB memory core of a healthy guest filled /home to 97%.
+# $CALLS is cumulative across cases, so each of these reads only the lines ITS case appended.
+before=$(wc -l < "$CALLS")
+rc=$(QSTATE=Running ALIVE=0 CORE_STUB=ok collect mgmt/harness/collect-failure.sh qwtfree --logvol "$IMG" --since 2026-10-13T09:00:00Z --harness-cmd x --no-qrexec)
+tail -n +$((before+1)) "$CALLS" > "$T/calls-qwtfree.log"
+# rc=1 with ONE gap, the clock, is the HONEST outcome and the same one the halted case gets: the clock
+# skew is read from the guest and this guest cannot be asked. The declaration suppresses the wedge
+# verdict and the core, never the accounting of what could not be read.
+[ "$rc" = 1 ] && [ "$(mfield qwtfree "len(r['gaps'])")" = 1 ] && mfield qwtfree "r['gaps'][0]" | grep -q 'clock_skew' \
+  && [ "$(mfield qwtfree "r['liveness']")" = no-qrexec-by-design ] && [ "$(mfield qwtfree "r['sources']['core']['status']")" = skipped-no-qrexec ] && ! mfield qwtfree "r['sources']['wedge_class']" | grep -qE 'SPIN|BLOCKED' \
+  && ok "--no-qrexec: a declared QWT-free guest is not classified and no memory image is taken; the only gap is the clock" \
+  || bad "--no-qrexec: rc=$rc gaps=$(mfield qwtfree "r['gaps']") liveness=$(mfield qwtfree "r['liveness']") core=$(mfield qwtfree "r['sources']['core']") class=$(mfield qwtfree "r['sources']['wedge_class']")"
+! grep -q '^qtest run' "$T/calls-qwtfree.log" && ok "--no-qrexec: the liveness probe is not run at all - it could only ever fail, and waiting for it is not a measurement" || bad "--no-qrexec: the guest was probed: $(grep '^qtest run' "$T/calls-qwtfree.log" | head -1)"
+[ "$(mfield qwtfree "r['sources']['screen']")" = NOWINDOW ] && ok "--no-qrexec: the dom0-side per-window capture still runs - the only instrument that needs nothing from the guest" || bad "--no-qrexec: screen=$(mfield qwtfree "r['sources']['screen']")"
+
+# The backstop for a caller that forgot the flag: it refuses the expensive step AND records a gap, so the
+# run is incomplete and the CALLER gets fixed. It never silently does the right thing.
+rc=$(QSTATE=Running ALIVE=0 CORE_STUB=ok QREXEC_FEATURE='' collect mgmt/harness/collect-failure.sh undecl --logvol "$IMG" --since 2026-10-13T09:00:00Z --harness-cmd x)
+[ "$rc" = 1 ] && [ "$(mfield undecl "r['liveness']")" = no-qrexec-undeclared ] && [ "$(mfield undecl "r['sources']['core']['status']")" = skipped-no-qrexec ] && mfield undecl "r['gaps']" | grep -q 'did not pass --no-qrexec' \
+  && ok "backstop: a forgotten --no-qrexec refuses the core AND records a gap (rc=1) - loud, not silently right" \
+  || bad "backstop: rc=$rc liveness=$(mfield undecl "r['liveness']") core=$(mfield undecl "r['sources']['core']") gaps=$(mfield undecl "r['gaps']")"
 # a manifest entry names the image, no --logvol needed
 MF="$T/lv-manifest.json"; printf '{"logvol":[{"vm":"win11-cell","id":"cell1","image":"%s","loop":"loop5","frontend":"xvdj"}]}\n' "$IMG" > "$MF"
 rc=$(QSTATE=Running ALIVE=1 collect mgmt/harness/collect-failure.sh viamf --logvol-manifest "$MF" --since 2026-10-13T09:00:00Z --harness-cmd x)
@@ -250,6 +319,12 @@ rc=$(HARNESS_CMD="mgmt/harness/matrix.sh via env" QSTATE=Running ALIVE=1 collect
 # ---- the knobs: each check seen to fail -----------------------------------------------------------------------
 K=$(knob logvolgap) || exit 2; rc=$(QSTATE=Running ALIVE=1 collect "$K" k-logvolgap --since 2026-10-13T09:00:00Z --harness-cmd x)
 [ "$rc" = 0 ] && [ "$(mfield k-logvolgap "r['complete']")" = True ] && ok "knob 'logvolgap': a missing volume no longer counts - the check is SEEN TO FAIL (complete=true)" || bad "knob logvolgap: rc=$rc"
+K=$(knob declqwtfree) || exit 2; rc=$(QSTATE=Running ALIVE=0 CORE_STUB=ok collect "$K" k-declqf --logvol "$IMG" --since 2026-10-13T09:00:00Z --harness-cmd x --no-qrexec)
+[ "$(mfield k-declqf "r['sources']['core']['status']")" = fetched ] && ok "knob 'declqwtfree': the declaration is ignored and the QWT-free guest is cored again - the check is SEEN TO FAIL" || bad "knob declqwtfree: core=$(mfield k-declqf "r['sources']['core']")"
+K=$(knob qwtfreebackstop) || exit 2; rc=$(QSTATE=Running ALIVE=0 CORE_STUB=ok QREXEC_FEATURE='' collect "$K" k-backstop --logvol "$IMG" --since 2026-10-13T09:00:00Z --harness-cmd x)
+[ "$(mfield k-backstop "r['sources']['core']['status']")" = fetched ] && ok "knob 'qwtfreebackstop': a forgotten flag cores a featureless guest again - the check is SEEN TO FAIL" || bad "knob qwtfreebackstop: core=$(mfield k-backstop "r['sources']['core']")"
+K=$(knob qwtfreescreen) || exit 2; rc=$(QSTATE=Running ALIVE=0 collect "$K" k-qfscreen --logvol "$IMG" --since 2026-10-13T09:00:00Z --harness-cmd x --no-qrexec)
+[ "$(mfield k-qfscreen "r['sources']['screen']")" = None ] && ok "knob 'qwtfreescreen': the one working instrument goes unused - the check is SEEN TO FAIL" || bad "knob qwtfreescreen: screen=$(mfield k-qfscreen "r['sources']['screen']")"
 K=$(knob unresponsive) || exit 2; rc=$(QSTATE=Running ALIVE=0 CORE_STUB=ok collect "$K" k-unresp --logvol "$IMG" --since 2026-10-13T09:00:00Z --harness-cmd x)
 [ "$(mfield k-unresp "r['liveness']")" = alive ] && ! grep -q 'fetch-core' "$CALLS" && ok "knob 'unresponsive': a dead guest reads as alive and no core is taken - the check is SEEN TO FAIL" || bad "knob unresponsive: liveness=$(mfield k-unresp "r['liveness']")"
 # manifestlast: make the tarball fail (a tar that exits 1) - shipped: no manifest, rc=2; knob: a manifest for an unverified package
