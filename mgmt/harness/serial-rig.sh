@@ -46,6 +46,21 @@ _sr_running_guests() {
                       if (s!="" && s!="Halted") print n, s }')
 }
 
+# For a job that owns the WHOLE rig and is about to destroy and rebuild everything: no guest at all
+# may be up, not even one. Separate from assert_sole_guest on purpose - that one REQUIRES the caller
+# to name the guest it owns, and passing it an empty string to mean "none" trips its ${1:?} guard
+# and kills the shell mid-preflight (measured 2026-10-13 on rebuild-rig.sh's first run). Expressing
+# "none" needs its own name, not a special value.
+assert_no_guest() {
+    local others
+    others=$(_sr_running_guests "" | tr '\n' ' ')
+    [ -z "${others// /}" ] && return 0
+    echo "REFUSING: a Windows guest is up - $others" >&2
+    echo "  This job owns the entire rig and would destroy and rebuild every golden." >&2
+    echo "  Shut it down first with qwt_shutdown from mgmt/harness/shutdown-lib.sh." >&2
+    return 1
+}
+
 assert_sole_guest() {
     local vm="${1:?assert_sole_guest needs the vm this job owns}"
     local others

@@ -80,7 +80,30 @@ qvm-tags "$VM" add win-idd-testbed
 # The stick reaches the guest as an emulated USB mass storage device: the PV block device is
 # handed to the stubdom as xvdi and QEMU re-exports it over an xHCI controller. bootindex=99
 # keeps it out of the boot order.
-qvm-features "$VM" qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99' || exit 1
+# THE COMPLETION MARKER VOLUME. A pristine base has no QWT and therefore no qrexec, so the host
+# cannot ask it anything. It gets a small WRITABLE FAT volume labelled DIAG instead, and the last
+# line of the answer stick's payload (mgmt/primer/install-primer.cmd) writes PRIMED-OK.TXT onto it.
+# That file is a DIRECT statement from the thing that knows it finished - not a guess from CPU load,
+# not a screen classifier that calls a modal error dialog VERDICT=DESKTOP. The host reads it with
+# mtools, needing nothing from the guest, while it still runs.
+MARKIMG="${MARKIMG:-/home/user/win-iso/rebuild-marker.img}"
+MARKLOOP=""
+if [ "${PRISTINE:-0}" = 1 ]; then
+    [ -f "$MARKIMG" ] || { truncate -s 8M "$MARKIMG" && mkfs.fat -F 16 -n DIAG "$MARKIMG" >/dev/null 2>&1; }
+    # fresh every run: a stale PRIMED-OK.TXT from the previous build would end this one instantly
+    mkfs.fat -F 16 -n DIAG "$MARKIMG" >/dev/null 2>&1
+    MARKLOOP=$(losetup -l 2>/dev/null | awk -v f="$MARKIMG" '$6==f{sub("/dev/","",$1);print $1;exit}')
+    [ -n "$MARKLOOP" ] || { udisksctl loop-setup -f "$MARKIMG" >/dev/null 2>&1; MARKLOOP=$(losetup -l 2>/dev/null | awk -v f="$MARKIMG" '$6==f{sub("/dev/","",$1);print $1;exit}'); }
+    [ -n "$MARKLOOP" ] || { log "FAIL: no loop for the completion-marker volume $MARKIMG"; exit 1; }
+    log "completion marker volume: $MARKIMG on /dev/$MARKLOOP -> xvdj"
+fi
+if [ -n "$MARKLOOP" ]; then
+    qvm-features "$VM" qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99 -drive file=/dev/xvdj,format=host_device,if=none,id=markdrv -device usb-storage,bus=ansusb.0,drive=markdrv,removable=on' || exit 1
+    qvm-device block assign --required -o frontend-dev=xvdj -o devtype=disk -o read-only=false "$VM" "$HOLDER:$MARKLOOP" >/dev/null 2>&1 \
+        || { log "FAIL: could not assign the completion-marker volume"; exit 1; }
+else
+    qvm-features "$VM" qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99' || exit 1
+fi
 qvm-device block assign --required -o frontend-dev=xvdi -o devtype=disk "$VM" "$HOLDER:$STICKLOOP" || exit 1
 # Positive proof the assignment stuck: this qube may not LIST block devices, but a second
 # assign answers "already assigned" exactly when the first one took effect.
@@ -157,6 +180,13 @@ _cpu(){
         | awk '/^cpu_usage_raw$/{getline v; if(v+0>m)m=v+0; n++} END{if(n==0)print 9999; else print m}'
 }
 while [ $(( $(date +%s) - t0 )) -lt "$BUDGET" ]; do
+    # THE COMPLETION SIGNAL, checked first and on its own. Direct and unambiguous: the guest wrote
+    # PRIMED-OK.TXT or it did not. Everything below this is advisory logging only - BUDGET is now a
+    # backstop that FAILS, never the thing that ends a healthy run.
+    if [ -n "$MARKLOOP" ] && MTOOLS_SKIP_CHECK=1 mcopy -n -i "$MARKIMG" ::/PRIMED-OK.TXT - >/dev/null 2>&1; then
+        log "PRIMED-OK marker present after $(( $(date +%s) - t0 ))s - provisioning finished (guest said so)"
+        exit 0
+    fi
     if [ "${PRISTINE:-0}" = 1 ]; then
         v=$(_grab || echo NOSHOT)
         el=$(( $(date +%s) - t0 ))

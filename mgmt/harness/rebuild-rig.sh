@@ -42,6 +42,7 @@ set -uo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 2
 . mgmt/harness/vmlock.sh          # vm_lock also asserts sole-guest
 . mgmt/harness/serial-rig.sh
+. mgmt/harness/shutdown-lib.sh    # qwt_shutdown: a bounded stop that reports what it did
 
 RUN_ID="rebuild-$(date -u +%Y%m%d-%H%M%S)"
 OUT="$PWD/evidence/$RUN_ID"; mkdir -p "$OUT"
@@ -154,7 +155,23 @@ assert_template(){ # $1=tpl $2=appvm
 
 step_preflight(){
     say "=== preflight ==="
-    assert_sole_guest "" || fail preflight "a guest is already up - this script owns the whole rig"
+    # EVERY function and tool this run needs, checked NOW. The first full run died nineteen minutes
+    # in, after a clean Win10 install, on `qwt_shutdown: command not found` - shutdown-lib.sh was
+    # never sourced. A dependency that is missing is missing at second zero; discovering it after
+    # the expensive step is pure waste.
+    local f t
+    for f in qwt_shutdown vm_lock assert_sole_guest assert_no_guest; do
+        declare -F "$f" >/dev/null 2>&1 || fail preflight "required shell function '$f' is not defined - a library is not sourced"
+    done
+    for t in qvm-ls qvm-volume qvm-pool qvm-start qvm-remove losetup udisksctl python3 sha256sum; do
+        command -v "$t" >/dev/null 2>&1 || fail preflight "required tool '$t' is not on PATH"
+    done
+    for f in mgmt/build-answer-stick.sh mgmt/reprovision-usb.sh mgmt/golden.sh mgmt/prime-selftest.sh \
+             mgmt/harness/prime-run.sh mgmt/clone-to-template.sh; do
+        [ -x "$f" ] || fail preflight "required script '$f' is missing or not executable"
+    done
+    say "dependencies: functions, tools and scripts all present"
+    assert_no_guest || fail preflight "a guest is already up - this script owns the whole rig"
     for f in "$ISO10" "$ISO11" "$STICK10" "$STICK11"; do
         [ -f "$f" ] || fail preflight "missing required file: $f"
     done
