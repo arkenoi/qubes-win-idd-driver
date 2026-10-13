@@ -25,9 +25,11 @@ declare -A KEEP=(
   [win11-iqi]="previous-ours ENTRY FIXTURE (4.3.17) for the win11-upgrade acceptance cell (G11 default); same story - keep it"
   [win11de-qwt]="sealed golden - German Win11 25H2 + QWT-NG 4.3.29, account gerd-test, TemplateVM, UN-UPDATED: GWeck's environment before a Windows Update pass. Owner 2026-09-16: keep, with QWT, to avoid lengthy reinstalls; never delete, never boot - clone it"
   [win10-tpl]="TemplateVM - win10-app derives from it, and the named gap 'install has never run on a
-               TemplateVM' needs one. NOTE: contaminated by the U1 diagnosis; rebuild from win10-base
-               before grading any template cell on it"
-  [win11-tpl]="TemplateVM - win11-app derives from it"
+               TemplateVM' needs one. Rebuild it with: mgmt/harness/rebuild-rig.sh --only tpl10
+               (this line used to read 'rebuild from win10-base', which CANNOT work: clone-to-template
+               waits for qrexec on its settle boot and a pristine base has no QWT, so it never
+               answers - seven minutes of timeout, measured 2026-10-13. It is built from win10-iqi.)"
+  [win11-tpl]="TemplateVM - win11-app derives from it. Rebuild: mgmt/harness/rebuild-rig.sh --only tpl11"
   [win10-app]="AppVM carrying netvm - the PV-network half of the matrix needs it (0.3 GB)"
   [win11-app]="AppVM carrying netvm - same (0.5 GB)"
   [win10-p46]="current clean subject: P4/P5 ran on it, and RND-3/RND-4/RND-8 are still unrun"
