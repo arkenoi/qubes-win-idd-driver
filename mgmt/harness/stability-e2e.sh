@@ -148,6 +148,8 @@ dst.memory=8192; dst.maxmem=0; dst.vcpus=4; dst.qrexec_timeout=6000
 print('cloned', sys.argv[1], '->', sys.argv[2])
 EOF
   say "$TAG: template re-cloned from the golden image"
+  declare -F assert_sole_guest >/dev/null 2>&1 || . "$(dirname "${BASH_SOURCE[0]}")/serial-rig.sh"
+  assert_sole_guest "$TPL" || exit 1
   qvm-start "$TPL" >/dev/null 2>&1
   export QTEST_VM="$TPL"
   bootwait 25 say || { no "$TAG: template never formed a session before install"; return 1; }

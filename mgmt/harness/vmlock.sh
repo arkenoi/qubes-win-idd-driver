@@ -104,6 +104,17 @@ vm_lock(){
   local vm="${1:?vm_lock <vm>}"
   # already held by an ancestor of this job - the whole point is to serialise JOBS, not calls
   if [ "${QWT_VMLOCK_HELD:-}" = "$vm" ]; then return 0; fi
+
+  # ONE GUEST AT A TIME, asserted here because this is the one place every guest-mutating harness
+  # already passes through with the VM's name in hand. The per-guest lock above only stops two jobs
+  # fighting over the SAME guest; it says nothing about a second guest being up, and on 2026-10-13
+  # win11r-base was created and booted while win10-dptest was still Running - two 8 GiB guests at
+  # once - because the only serial enforcement was a PreToolUse hook that reads the launching
+  # command's TEXT, and the launch was wrapped in a script. See mgmt/harness/serial-rig.sh.
+  if ! declare -F assert_sole_guest >/dev/null 2>&1; then
+    . "$(dirname "${BASH_SOURCE[0]}")/serial-rig.sh"
+  fi
+  assert_sole_guest "$vm" || exit 1
   local lf="${TMPDIR:-/tmp}/qwt-vmlock-$vm"
   : >> "$lf" 2>/dev/null || { echo "FATAL: cannot open lock $lf" >&2; exit 2; }
 

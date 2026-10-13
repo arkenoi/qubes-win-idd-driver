@@ -56,6 +56,8 @@ qvm-device block assign --required -o frontend-dev=xvdi -o devtype=disk "$CHURN"
 
 SHOTDIR="$HERE/evidence/prime-selftest-$CHURN-$(date -u +%Y%m%d-%H%M%S)"; mkdir -p "$SHOTDIR"
 log "booting $CHURN - the hook should fire, run the job, and reboot"
+declare -F assert_sole_guest >/dev/null 2>&1 || . "$(dirname "${BASH_SOURCE[0]}")/harness/serial-rig.sh"
+assert_sole_guest "$CHURN" || exit 1
 qvm-start "$CHURN" >/dev/null 2>&1
 
 # The job reboots the guest, and on_reboot=destroy means that HALTS it. Restarting is this script's

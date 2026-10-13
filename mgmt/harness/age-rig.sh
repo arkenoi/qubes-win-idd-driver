@@ -33,6 +33,8 @@ say "aging $N cycles from $GOLDEN; pool at start: $(pool)%"
 for i in $(seq 1 "$N"); do
   qvm-check "$VM" >/dev/null 2>&1 && { qwt_shutdown "$VM" 300 >/dev/null 2>&1 || timeout 120 qvm-kill "$VM" >/dev/null 2>&1; timeout 300 qvm-remove -f "$VM" >/dev/null 2>&1; }
   bash mgmt/clone-guest.sh "$GOLDEN" "$VM" >/dev/null 2>&1 || { say "cycle $i: clone FAILED - pool at $(pool)%"; break; }
+  declare -F assert_sole_guest >/dev/null 2>&1 || . "$(dirname "${BASH_SOURCE[0]}")/serial-rig.sh"
+  assert_sole_guest "$VM" || exit 1
   timeout 300 qvm-start "$VM" >/dev/null 2>&1 || { say "cycle $i: start FAILED"; continue; }
   # A boot that never reaches a session is itself worth knowing about, but it is not a stall of the
   # kind under study: record and carry on rather than aborting the aging.

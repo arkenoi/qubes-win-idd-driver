@@ -19,6 +19,8 @@ while :; do
   s=$(st)
   if [ "$s" = "Halted" ]; then
      echo "HALT (phase boundary) - restarting without cdrom"
+     declare -F assert_sole_guest >/dev/null 2>&1 || . "$(dirname "${BASH_SOURCE[0]}")/harness/serial-rig.sh"
+     assert_sole_guest "$VM" || exit 1
      qvm-start "$VM" >/dev/null 2>&1 || { echo "FAIL: qvm-start rc=$?"; exit 1; }
      stall=0; prevcpu=0; sleep 30; continue
   fi

@@ -162,6 +162,8 @@ start_vm(){
   # channel. Measured out-of-band in the background so it cannot perturb what it measures and
   # cannot delay the caller - the caller's own w_session wait is untouched.
   local vm="$1" t0; t0=$(date +%s)
+  declare -F assert_sole_guest >/dev/null 2>&1 || . "$(dirname "${BASH_SOURCE[0]}")/serial-rig.sh"
+  assert_sole_guest "$vm" || exit 1
   timeout -k 10 150 qvm-start "$vm" >/dev/null 2>&1 & disown
   (
     for i in $(seq 1 150); do          # 150 x 4s = 10 min ceiling, then give up and SAY so

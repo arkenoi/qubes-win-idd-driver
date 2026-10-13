@@ -78,6 +78,8 @@ grep -a -E '(^|: )FAIL  ' "$OUT/quick-upgrade.out" | sed 's/^/  quick-upgrade ch
 [ "$(qvm-ls --raw-data --fields class "$VM" 2>/dev/null)" = TemplateVM ] || verdict INSTRUMENT "subject $VM is not a TemplateVM after the upgrade"
 halt || verdict INSTRUMENT "$VM will not halt after the upgrade"
 qvm-prefs "$VM" guivm '' || verdict INSTRUMENT "could not make $VM headless"
+declare -F assert_sole_guest >/dev/null 2>&1 || . "$(dirname "${BASH_SOURCE[0]}")/serial-rig.sh"
+assert_sole_guest "$VM" || exit 1
 timeout 300 qvm-start "$VM" >/dev/null 2>&1; [ "$(state "$VM")" = Running ] || verdict INSTRUMENT "$VM did not start"
 # BUILD the reporter's environment on the subject BEFORE asserting it. The subject is cloned from
 # the sealed golden, which carries no Open-Shell and no enableWinKey feature, and the golden must

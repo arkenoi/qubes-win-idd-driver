@@ -307,6 +307,8 @@ log "  restarting it is THIS script's job (protocol 0.8: one owner per guest, wa
 # assertion below and reported "the guest started but the answer stick is NOT attached" - naming
 # the wrong thing entirely, in two live campaigns. Measured 2026-09-21: the guest had not started
 # at all. Capture it, and say what libxl actually said.
+declare -F assert_sole_guest >/dev/null 2>&1 || . "$(dirname "${BASH_SOURCE[0]}")/serial-rig.sh"
+assert_sole_guest "$CHURN" || exit 1
 if ! _bootout=$(qvm-start "$CHURN" 2>&1); then
     log "TERMINAL: the DOMAIN WOULD NOT START - the guest never ran, so nothing about the stick,"
     log "  the payload or the product is inferable from this:"

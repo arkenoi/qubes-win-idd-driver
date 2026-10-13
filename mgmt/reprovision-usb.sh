@@ -15,6 +15,12 @@ ISOLOOP="${2:?}"
 STICKLOOP="${3:?}"
 HOLDER=win-idd-mgmt
 BUDGET=${BUDGET:-5400}
+# ONE guest at a time, asked of the RIG rather than of the command line. The PreToolUse hook that
+# used to be the only enforcement inspects the text of the launching command, so wrapping this
+# script in another script walked straight past it - measured 2026-10-13, when win11r-base was
+# created and booted while win10-dptest was still Running. See mgmt/harness/serial-rig.sh.
+. "$(dirname "$0")/harness/serial-rig.sh"
+assert_sole_guest "$VM" || exit 1
 # PRISTINE=1: building an ST0 (QWT-free) image. Success is a settled DESKTOP on screen rather than
 # qrexec, which such an image never gets. See the completion-criterion note at the wait loop.
 PRISTINE=${PRISTINE:-0}

@@ -137,7 +137,10 @@ def l2_vmlock_required() -> None:
         # it by accident, and tools/tests/lint-selftest.sh drives L2 against a fixture to prove
         # the rule still fires for everything else. wu-liveness.sh joined on 2026-10-02: the pass-liveness
         # probe wu-e2e.sh and the killed-pass cell source while they hold the guest's lock.
-        if f.name in ("shutdown-lib.sh", "wu-liveness.sh"):
+        # logvol-lib.sh joined on 2026-10-13: the secondary log volume library (PLAN-acceptance-optimization
+        # section 3) reads one power state and pushes its guest-side binder, both from a cell harness that
+        # already holds the lock; its own caller contract says so in its header.
+        if f.name in ("shutdown-lib.sh", "wu-liveness.sh", "logvol-lib.sh"):
             continue
         finding("L2-missing-vmlock", f.name,
                 "drives a guest via tools/qtest but never calls vm_lock")
@@ -1156,6 +1159,76 @@ def l18_relauncher_armed() -> None:
                             f"it) and it was not disabled or deleted first in this function: {code.strip()[:100]}")
 
 
+def l22_vm_start_must_assert_sole_guest() -> None:
+    """L22: anything that STARTS a guest must first call assert_sole_guest from
+    mgmt/harness/serial-rig.sh.
+
+    WHY A LINT AND NOT A HOOK. tools/hooks/serial-rig-gate.sh already refuses a launch while another
+    guest is up - but it is a PreToolUse hook, so it can only inspect the TEXT of the command being
+    run. On 2026-10-13 a vendor-media install was launched as `nohup bash /tmp/.../win11r.sh`: the
+    command text named no harness, the hook saw nothing, and win11r-base was created and booted while
+    win10-dptest was still Running from a run that had ended five minutes earlier. Two 8 GiB guests
+    at once. The same wrapper defeats tools/hooks/golden-boot-gate.sh identically. A gate that is
+    stepped around by moving the command into a file is a reminder, not a gate - so the assertion has
+    to live in the script that does the starting, where it holds however the script was invoked.
+
+    SCOPE IS WIDER THAN HARNESS ON PURPOSE. HARNESS globs mgmt/harness/*.sh and tools/*.sh, which
+    does NOT include mgmt/*.sh - and mgmt/reprovision-usb.sh, the script that actually booted the
+    second guest, lives there. A rule that could not see the file that caused the incident would be
+    theatre.
+
+    Exemptions are BY NAME, never by pattern, so a new guest-driving harness cannot inherit one:
+    serial-rig.sh owns the function, and the sourced libraries run inside a caller that has already
+    asserted."""
+    exempt = ("serial-rig.sh", "vmlock.sh", "shutdown-lib.sh", "provision-recipe.sh",
+              "e2e-wait.sh", "log-sweep.sh")
+    files = sorted((ROOT / "mgmt").glob("*.sh")) + \
+            sorted((ROOT / "mgmt" / "harness").glob("*.sh")) + \
+            [p for p in sorted((ROOT / "tools").glob("*.sh")) if "tests" not in p.parts]
+    for f in files:
+        if f.name in exempt:
+            continue
+        text = f.read_text(errors="replace")
+        # A usage message that PRINTS `qvm-start` is advice, not a launch. Three of the first 13
+        # findings were exactly that - echo lines in the stick/disc/iso builders telling the reader
+        # how to attach the medium. A rule that cannot tell an invocation from prose about an
+        # invocation is the same self-matching defect as L17's.
+        heredoc = None
+        starts = []
+        for i, ln in enumerate(text.splitlines(), 1):
+            s = ln.lstrip()
+            if heredoc is not None:
+                if s == heredoc:
+                    heredoc = None
+                continue
+            m = re.search(r"<<-?\s*[\'\"]?(\w+)", ln)
+            if m:
+                heredoc = m.group(1)
+                continue
+            if not s or s.startswith("#"):
+                continue
+            if re.match(r"(echo|printf|say|log)\b", s):
+                continue
+            # qvm-run auto-starts a halted guest, so it starts one just as surely as qvm-start.
+            if re.search(r"\bqvm-start\b", ln) or re.search(r"\bqvm-run\b", ln):
+                starts.append(i)
+        if not starts:
+            continue
+        # vm_lock asserts it internally (mgmt/harness/vmlock.sh) - it is the one place every
+        # guest-mutating harness already passes through WITH the vm name, so taking the lock
+        # is the same guarantee and does not need a second call.
+        if "vm_lock" in text:
+            continue
+        if "assert_sole_guest" in text and "serial-rig.sh" in text:
+            continue
+        finding("L22-serial-rig-not-asserted", f"{f.name}:{starts[0]}",
+                "starts a guest without asserting it is the only one: source "
+                "mgmt/harness/serial-rig.sh and call `assert_sole_guest \"$VM\"` before the start. "
+                "The PreToolUse hook cannot cover this - it reads the launching command's text, so "
+                "wrapping the script in another script walks past it (measured 2026-10-13, two "
+                "guests up at once)")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ledger", type=Path, default=None, help="verdicts.tsv, enables L7")
@@ -1193,6 +1266,7 @@ def main() -> int:
     l19_guest_run_must_sweep_the_log()
     l20_module_log_read_must_be_bounded()
     l21_second_exit_trap_replaces_the_first()
+    l22_vm_start_must_assert_sole_guest()
     if a.ledger:
         l7_orphan_ledger_checks(a.ledger)
 

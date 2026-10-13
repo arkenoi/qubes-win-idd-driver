@@ -44,6 +44,8 @@ while :; do
         fi
         restarts=$((restarts+1))
         echo "halt #$restarts after ${up}s uptime - restarting (no cdrom)"
+        declare -F assert_sole_guest >/dev/null 2>&1 || . "$(dirname "${BASH_SOURCE[0]}")/harness/serial-rig.sh"
+        assert_sole_guest "$VM" || exit 1
         qvm-start "$VM" >/dev/null 2>&1 || { echo "FAIL: qvm-start rc=$?"; exit 1; }
         last_start=$(date +%s)
         ;;

@@ -201,6 +201,8 @@ prime_latch() {
     # off it entirely.
     log "settle boot (offline, quiet) before seeding the latch"
     qvm-prefs "$vm" netvm '' >/dev/null 2>&1
+    declare -F assert_sole_guest >/dev/null 2>&1 || . "$(dirname "${BASH_SOURCE[0]}")/harness/serial-rig.sh"
+    assert_sole_guest "$vm" || exit 1
     qvm-start "$vm" >/dev/null 2>&1
     wait_alive "$vm" 420 || { log "FAIL: $vm never answered qrexec on its settle boot"; return 1; }
     sleep 90

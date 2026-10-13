@@ -42,6 +42,8 @@ ensure_up(){  # <vm>
   st=$(qvm-ls --raw-data --fields STATE "$vm" 2>/dev/null | tail -1)
   if [ "$st" != Running ]; then
     log "  starting $vm (was $st)"
+    declare -F assert_sole_guest >/dev/null 2>&1 || . "$(dirname "${BASH_SOURCE[0]}")/serial-rig.sh"
+    assert_sole_guest "$vm" || exit 1
     timeout -k 10 240 qvm-start "$vm" >/dev/null 2>&1 &
     disown
   fi
