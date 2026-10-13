@@ -16,43 +16,34 @@
     <component name="Microsoft-Windows-Setup" processorArchitecture="amd64"
         publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
         xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-      <!-- STATIC DiskConfiguration, and NO windowsPE RunSynchronousCommand at all.
-           WHY (measured 2026-10-13, five runs, a screenshot each). This pass used to call
-           diskprep.cmd from a RunSynchronousCommand to partition the LARGEST disk by size.
-           Every run that did so stopped dead at a modal "Windows could not apply the Windows
-           PE bootstrap setting specified in the unattend answer file" over "Setup is
-           starting", and nothing installed. The RunSynchronousCommand is the only
-           bootstrap-stage setting this file has, and a control in which diskprep.cmd did
-           nothing and exited 0 did NOT produce the dialog - Setup went on to ImageInstall and
-           failed only for lack of a partition. With the command removed and Setup given this
-           static layout, the install completes unattended.
-           WHAT THIS COSTS, STATED PLAINLY. A Qubes HVM presents THREE disks (root 80 GiB,
-           private 20 GiB, volatile 10 GiB) and WinPE's enumeration order is NOT guaranteed to
-           match the installed OS's. Size-based selection existed because on 2026-08-07 Setup
-           picked a small disk and died on "requires at least 20000 MB of free space". Pinning
-           DiskID 0 reintroduces that exposure: it landed correctly on 2026-10-13, which is an
-           observation, not a guarantee. The committed Win11 static template carries the same
-           exposure and guards it with diskprep CHECK0, which needs a RunSynchronousCommand -
-           the thing that fails here. Restoring size-based selection needs a windowsPE command
-           written from scratch, not a repair of diskprep.cmd. -->
-      <DiskConfiguration>
-        <WillShowUI>OnError</WillShowUI>
-        <Disk wcm:action="add">
-          <DiskID>0</DiskID>
-          <WillWipeDisk>true</WillWipeDisk>
-          <CreatePartitions>
-            <CreatePartition wcm:action="add">
-              <Order>1</Order><Type>Primary</Type><Extend>true</Extend>
-            </CreatePartition>
-          </CreatePartitions>
-          <ModifyPartitions>
-            <ModifyPartition wcm:action="add">
-              <Order>1</Order><PartitionID>1</PartitionID><Active>true</Active>
-              <Format>NTFS</Format><Label>Windows</Label><Letter>C</Letter>
-            </ModifyPartition>
-          </ModifyPartitions>
-        </Disk>
-      </DiskConfiguration>
+      <!-- SIZE-BASED disk selection, via a windowsPE RunSynchronousCommand calling diskprep.cmd.
+           A Qubes HVM presents THREE disks - root 80 GiB, private 20 GiB, volatile 10 GiB - and
+           WinPE's enumeration order is NOT guaranteed to match the installed OS's. A fixed DiskID
+           is therefore unsafe: on 2026-08-07 Setup picked a small disk and died on "requires at
+           least 20000 MB of free space". Note the private volume is 20 GiB, which is ITSELF big
+           enough to satisfy Setup - so "it installed" never proves the right disk was chosen.
+           THE 2026-10-13 OUTAGE, so nobody reinstates the old script. From 2026-10-11 every
+           vendor-media install stopped at a modal "Windows could not apply the Windows PE
+           bootstrap setting specified in the unattend answer file" over "Setup is starting", with
+           nothing installed - five runs, a screenshot each. A RunSynchronousCommand that exits
+           non-zero aborts the whole windowsPE pass, and this is the only bootstrap-stage setting
+           in this file, so the old diskprep.cmd's `exit /b 1` paths surfaced as that one opaque
+           dialog. Proven by control: a diskprep.cmd that did NOTHING and exited 0 produced no
+           dialog at all - Setup went on to ImageInstall and failed only for want of a partition.
+           diskprep.cmd was then rewritten from scratch (never exits non-zero; no labels or goto;
+           diskpart only - no wmic, findstr, where or PowerShell; rows matched by token position,
+           never by localised words). Two clean installs on 2026-10-13 completed unattended and
+           BOTH selected the 80 GiB root, measured afterwards as root usage ~10.4 GB against an
+           untouched private volume. Jev: runsync_works 0.94, adopt 0.89.
+           If this ever regresses, the failure will again be the opaque bootstrap dialog. Do not
+           guess: a diskprep.cmd that does nothing and exits 0 isolates it in one 5-minute run. -->
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Description>partition the largest disk (size-based, not DiskID-based)</Description>
+          <Path>cmd /c for %d in (C D E F G H I J K L M N O P Q R S T U V) do @if exist %d:\diskprep.cmd call %d:\diskprep.cmd</Path>
+        </RunSynchronousCommand>
+      </RunSynchronous>
       <ImageInstall>
         <OSImage>
           <InstallFrom>
@@ -61,7 +52,7 @@
             </MetaData>
           </InstallFrom>
           <!-- diskprep.cmd leaves exactly one installable NTFS partition (C:) -->
-          <InstallTo><DiskID>0</DiskID><PartitionID>1</PartitionID></InstallTo>
+          <InstallToAvailablePartition>true</InstallToAvailablePartition>
         </OSImage>
       </ImageInstall>
       <!-- No RunSynchronous payload copy here: windowsPE answer-file settings execute

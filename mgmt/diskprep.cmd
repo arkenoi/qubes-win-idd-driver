@@ -1,104 +1,108 @@
 @echo off
 REM ===========================================================================
-REM  WinPE disk preparation: partition the LARGEST disk, by size, not by ID.
+REM  WinPE disk preparation - partition the LARGEST disk, selected by size.
 REM
-REM  WHY THIS EXISTS (measured 2026-08-07): the answer file used to hardcode
-REM  <DiskID>0</DiskID>. A Qubes HVM presents THREE disks - root (80 GiB),
-REM  private (2 GiB) and volatile (10 GiB) - and WinPE's enumeration order is
-REM  NOT guaranteed to match the installed OS's (which shows root as Disk 0).
-REM  On one clean-path run Setup selected a small disk and died with "Windows
-REM  cannot be installed to the selected partition. Installation requires at
-REM  least 20000 MB of free space", wasting a whole install cycle. Selecting by
-REM  size removes the ambiguity permanently: only the root volume is ever large
-REM  enough, and the other two are left RAW so Setup cannot pick them.
+REM  WRITTEN FROM SCRATCH 2026-10-13. The previous implementations are in git
+REM  history; nothing here is carried over from them. Four design rules, each
+REM  from a failure measured on this rig today:
 REM
-REM  Runs from the media root in the windowsPE pass, BEFORE image apply.
-REM  Everything is logged to X:\diskprep.log (visible in a Shift+F10 shell and
-REM  copied nowhere - WinPE's X: is a ramdisk).
+REM  1. NEVER EXIT NON-ZERO. This script is called from a windowsPE
+REM     RunSynchronousCommand. A RunSynchronousCommand that exits non-zero
+REM     aborts the whole pass, and Windows reports it as the opaque modal
+REM     "Windows could not apply the Windows PE bootstrap setting specified in
+REM     the unattend answer file" - which names nothing, appears minutes in,
+REM     and leaves its reason on a ramdisk nobody can reach. That dialog cost
+REM     two days. If this script cannot do its job it now FAILS OPEN: it logs
+REM     why and exits 0, so Setup continues and stops instead at
+REM     "cannot locate the disk and partition specified in <ImageInstall>",
+REM     which names the actual problem. A legible failure beats an opaque one.
+REM  2. NO LABELS, NO GOTO. This file has LF-only line endings (the repo's
+REM     normal state) and cmd.exe mishandles label lookup in LF-only batch
+REM     files, which can abort the script mid-run with a non-zero code - see
+REM     rule 1 for what that then looks like.
+REM  3. ONLY diskpart. No wmic (absent from the WinPE of Win11 26300), no
+REM     findstr, no where, no PowerShell (not all WinPE images carry it).
+REM     diskpart is in every WinPE this rig installs.
+REM  4. POSITION, NEVER WORDS. diskpart's output is localised ("Disk" /
+REM     "Datentraeger", and every status word), so a row is recognised by token
+REM     position and by its size column being a number - never by matching a
+REM     word.
+REM
+REM  WHY SIZE AND NOT A FIXED DiskID: a Qubes HVM presents THREE disks - root
+REM  (80 GiB), private (20 GiB) and volatile (10 GiB) - and WinPE's enumeration
+REM  order is NOT guaranteed to match the installed OS's. On 2026-08-07 a fixed
+REM  DiskID had Setup pick a small disk and die on "requires at least 20000 MB
+REM  of free space". Note the private volume is 20 GiB, which is itself large
+REM  enough to satisfy Setup - so "partition everything and let
+REM  InstallToAvailablePartition choose" is NOT safe here, and the largest disk
+REM  really does have to be identified.
+REM
+REM  Everything is logged to X:\diskprep.log (WinPE's X: is a ramdisk).
 REM ===========================================================================
 setlocal EnableDelayedExpansion
 set LOG=X:\diskprep.log
 echo === diskprep %DATE% %TIME% === > %LOG%
 
-REM --- find the largest disk -------------------------------------------------
-REM diskpart's own "list disk", NOT wmic. WMIC is GONE from the WinPE of Win11 build 26300
-REM (retail 26300.9457, measured 2026-10-01: 0 wmic.exe in its boot.wim against 10 in the German
-REM 25H2 one), and with it this script found no disk, partitioned nothing, and Setup stopped on its
-REM "Select location to install Windows 11" page for good. diskpart is in every WinPE.
-REM Its output is LOCALISED ("Disk"/"Datentraeger", the status words), so a row is recognised by
-REM POSITION, never by a word: token 2 a disk number, token 4 a size number, token 5 its unit
-REM (KB/MB/GB/TB, not localised). Header, separator and banner lines fail the number tests. A
-REM two-word status ("No Media") shifts the tokens and its row is skipped - no install target.
-REM The number tests use the FOR variables (%%b, %%d): a !delayed! variable is NOT expanded on the
-REM left of a pipe, which runs in a child cmd without delayed expansion.
+REM --- ask diskpart what disks exist -----------------------------------------
+echo list disk > X:\dp-list.txt
+diskpart /s X:\dp-list.txt > X:\dp-list.out 2>&1
+echo --- list disk --- >> %LOG%
+type X:\dp-list.out >> %LOG%
+
+REM --- pick the largest ------------------------------------------------------
+REM Columns on a disk row are: Disk <n> <status> <size> <unit> [free] [unit].
+REM tokens=2,4,5 therefore give the disk number, the size and its unit.
+REM The numeric test is `set /a`: an undefined word ("Size", "Status") evaluates
+REM to 0 and a punctuation row ("--------") is a syntax error whose output is
+REM discarded - both leave SZ at 0 and are skipped. No findstr needed.
 set BEST=
 set BESTMB=0
-echo list disk > X:\diskprep-ld.txt
-diskpart /s X:\diskprep-ld.txt > X:\diskprep-ld.out 2>&1
-type X:\diskprep-ld.out >> %LOG%
-for /f "tokens=1-5" %%a in (X:\diskprep-ld.out) do (
-    set NUM=1
-    echo %%b| findstr /r "^[0-9][0-9]*$" >nul || set NUM=0
-    echo %%d| findstr /r "^[0-9][0-9]*$" >nul || set NUM=0
-    if "!NUM!"=="1" (
-        set SZMB=
-        if /i "%%e"=="TB" set /a SZMB=%%d*1048576
-        if /i "%%e"=="GB" set /a SZMB=%%d*1024
-        if /i "%%e"=="MB" set /a SZMB=%%d
-        if /i "%%e"=="KB" set SZMB=0
-        if defined SZMB (
-            echo candidate disk %%b size %%d %%e ~!SZMB! MB >> %LOG%
-            if !SZMB! GTR !BESTMB! (
-                set BESTMB=!SZMB!
-                set BEST=%%b
+for /f "tokens=2,4,5" %%a in (X:\dp-list.out) do (
+    set SZ=0
+    set /a SZ=%%b+0 2>nul
+    set MB=0
+    if !SZ! GTR 0 (
+        if /i "%%c"=="TB" set /a MB=!SZ!*1048576
+        if /i "%%c"=="GB" set /a MB=!SZ!*1024
+        if /i "%%c"=="MB" set /a MB=!SZ!
+        if !MB! GTR 0 (
+            echo candidate: disk %%a is !MB! MB >> %LOG%
+            if !MB! GTR !BESTMB! (
+                set BESTMB=!MB!
+                set BEST=%%a
             )
         )
     )
 )
 
 if "%BEST%"=="" (
-    echo FATAL: no disk recognised in diskpart list disk - see the listing above >> %LOG%
-    exit /b 1
-)
-REM A Windows 10/11 install needs ~20 GB. Refusing here produces a clear log line
-REM instead of Setup's generic partition error further down the line.
-if %BESTMB% LSS 25000 (
-    echo FATAL: largest disk is %BEST% at ~%BESTMB% MB - too small to install Windows >> %LOG%
-    exit /b 1
-)
-echo selected disk %BEST% (~%BESTMB% MB) >> %LOG%
-
-REM CHECK0 MODE (mgmt/autounattend-win11-static.xml): Setup partitions Disk 0 itself there, so only VERIFY that Disk 0 is
-REM the largest disk - the root volume - and power WinPE off at once if it is not, rather than let Setup install to a small
-REM disk (Jev 2026-10-01: an unguarded static DiskID was the blocker, 0.91). No argument = the partitioning below, unchanged.
-if /i "%~1"=="CHECK0" (
-    if not "%BEST%"=="0" (
-        echo FATAL: the largest disk is %BEST%, not 0 - a static Disk 0 layout would miss the root volume >> %LOG%
-        wpeutil shutdown
-        exit /b 1
-    )
-    echo CHECK0 OK: disk 0 is the largest >> %LOG%
+    echo GIVING UP: no disk row recognised in the listing above. >> %LOG%
+    echo Exiting 0 on purpose so Setup reports a legible ImageInstall error. >> %LOG%
     exit /b 0
 )
+if %BESTMB% LSS 25000 (
+    echo GIVING UP: largest disk is %BEST% at %BESTMB% MB, too small for Windows. >> %LOG%
+    echo Exiting 0 on purpose so Setup reports a legible ImageInstall error. >> %LOG%
+    exit /b 0
+)
+echo selected disk %BEST% at %BESTMB% MB >> %LOG%
 
 REM --- partition it ----------------------------------------------------------
-REM MBR + one active primary spanning the disk: Qubes HVMs boot BIOS/SeaBIOS.
-(
-    echo select disk %BEST%
-    echo clean
-    echo convert mbr
-    echo create partition primary
-    echo select partition 1
-    echo active
-    echo format fs=ntfs quick label="Windows"
-    echo assign letter=C
-    echo exit
-) > X:\diskprep-dp.txt
-diskpart /s X:\diskprep-dp.txt >> %LOG% 2>&1
-set DPRC=%ERRORLEVEL%
-echo diskpart rc=%DPRC% >> %LOG%
-if not "%DPRC%"=="0" exit /b %DPRC%
+REM MBR, one active primary spanning the disk: Qubes HVMs boot BIOS/SeaBIOS.
+REM The other disks are deliberately left RAW, so that even if Setup were to
+REM fall back to choosing a partition itself, there is only one to choose.
+echo select disk %BEST%            > X:\dp-part.txt
+echo clean                        >> X:\dp-part.txt
+echo convert mbr                  >> X:\dp-part.txt
+echo create partition primary     >> X:\dp-part.txt
+echo select partition 1           >> X:\dp-part.txt
+echo active                       >> X:\dp-part.txt
+echo format fs=ntfs quick label="Windows" >> X:\dp-part.txt
+echo assign letter=C              >> X:\dp-part.txt
+echo exit                         >> X:\dp-part.txt
+echo --- partitioning disk %BEST% --- >> %LOG%
+diskpart /s X:\dp-part.txt >> %LOG% 2>&1
+echo diskpart returned %ERRORLEVEL% >> %LOG%
 
-REM Leave the other disks RAW on purpose: with no installable partition on them,
-REM InstallToAvailablePartition in the answer file can only land on C:.
+REM Rule 1: the return code is recorded above, never propagated.
 exit /b 0
