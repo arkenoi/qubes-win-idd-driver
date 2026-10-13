@@ -87,6 +87,24 @@ if %BESTMB% LSS 25000 (
 )
 echo selected disk %BEST% at %BESTMB% MB >> %LOG%
 
+REM --- CHECK0 mode: VERIFY ONLY, partition nothing ----------------------------
+REM mgmt/autounattend-win11-static.xml calls this script as `diskprep.cmd CHECK0`. There Setup
+REM partitions Disk 0 itself from a static DiskConfiguration, so all this script may do is confirm
+REM that Disk 0 really IS the largest disk - the root volume - and then get out of the way. Running
+REM the partitioning below in that mode would have two things formatting the same disk.
+REM If Disk 0 is NOT the largest, powering WinPE off is the honest stop: Setup would otherwise
+REM install to a small disk, and a halted guest is unmissable. It also does not depend on an exit
+REM code, which rule 1 forbids us from using.
+if /i "%~1"=="CHECK0" (
+    if not "%BEST%"=="0" (
+        echo CHECK0 FAILED: largest disk is %BEST%, not 0 - a static Disk 0 layout would miss the root volume >> %LOG%
+        wpeutil shutdown
+        exit /b 0
+    )
+    echo CHECK0 OK: disk 0 is the largest >> %LOG%
+    exit /b 0
+)
+
 REM --- partition it ----------------------------------------------------------
 REM MBR, one active primary spanning the disk: Qubes HVMs boot BIOS/SeaBIOS.
 REM The other disks are deliberately left RAW, so that even if Setup were to
