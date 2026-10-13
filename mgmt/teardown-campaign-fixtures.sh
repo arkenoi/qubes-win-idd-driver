@@ -11,28 +11,44 @@
 . "$(dirname "$0")/harness/shutdown-lib.sh"
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver
-GO=0; [ "${1:-}" = --go ] && GO=1
+GO=0; REBUILD=0
+case "${1:-}" in
+  --go)              GO=1 ;;
+  --rebuild-missing) REBUILD=1 ;;
+esac
+
+# WHICH rebuild-rig STEP PRODUCES EACH KEEP ITEM. This is a MAP, not a sentence: a KEEP entry that
+# is absent is rebuilt by running its step, and this script runs it. It used to carry prose telling
+# the reader how to rebuild win10-tpl, and that prose was WRONG - it said "from win10-base", which
+# cannot work because clone-to-template waits for qrexec on its settle boot and a pristine base has
+# no QWT (seven minutes of timeout, measured 2026-10-13). Instructions rot because nothing executes
+# them; a step name is checked every time the step runs.
+declare -A REBUILD_STEP=(
+  [win10-base]=base10   [win11r-base]=base11
+  [win10-iqi]=iqi10     [win11-iqi]=iqi11
+  [win10-tpl]=tpl10     [win10-app]=tpl10
+  [win11-tpl]=tpl11     [win11-app]=tpl11
+)
 
 # ------------------------------------------------------------------ KEEP, with the reason
+# REMOVED FROM KEEP 2026-10-13, deliberately, so this list states what is true:
+#   win11-base                   expired Enterprise Evaluation; superseded by win11r-base 2026-10-01
+#   win11de-base                 no gate suite enters from it - the German work is served by
+#                                win11de-qwt, so rebuilding it costs ~30 min and 15 GB for nothing
+#   ckpt-win11de-gwt-pretuesday  park of win11de-gwt, which no longer exists
+#   win11de-gwt, win10-p46       gone
+# A KEEP list naming things nobody keeps is the same rot as a comment describing a procedure nobody
+# runs: it reads as a decision when it is only a leftover.
 declare -A KEEP=(
   [win10-base]="sealed golden - the only pristine Win10 base; never delete, never boot"
-  [win11-base]="sealed golden - the pristine Win11 24H2 Enterprise EVALUATION base (expired licence: guests from it shut down an hour after boot - superseded by win11r-base for Win11 work, owner 2026-10-01); never delete, never boot"
   [win11r-base]="sealed golden - pristine RETAIL Win11 Pro 26300.9457 en-US, no QWT; THE Win11 base since 2026-10-01 (owner: no time-limited eval); never delete, never boot"
-  [win11de-base]="sealed golden - pristine GERMAN Win11 25H2 (26200.8037), no QWT; the base for GWeck-environment tests; never delete, never boot (owner 2026-09-16)"
-  [win11de-gwt]="GERMAN Win11 25H2 TemplateVM with the non-user account (gerd-test) - GWeck's environment; owner 2026-09-17: keep it for more GWeck testing; restore its pre-update state with checkpoint.sh unpark win11de-gwt pretuesday"
-  [ckpt-win11de-gwt-pretuesday]="the pre-update park of win11de-gwt (German 25H2 + QWT, no Windows Update pass) - the entry state for every GWeck update test; keep (owner 2026-09-17)"
   [win10-iqi]="previous-ours ENTRY FIXTURE (4.3.17) for the win10-upgrade acceptance cell (tools/release-acceptance.sh G10 default); pruned once on 2026-09-17 and the campaign went PARTIAL - rebuild costs ~10 min, keep it"
   [win11-iqi]="previous-ours ENTRY FIXTURE (4.3.17) for the win11-upgrade acceptance cell (G11 default); same story - keep it"
   [win11de-qwt]="sealed golden - German Win11 25H2 + QWT-NG 4.3.29, account gerd-test, TemplateVM, UN-UPDATED: GWeck's environment before a Windows Update pass. Owner 2026-09-16: keep, with QWT, to avoid lengthy reinstalls; never delete, never boot - clone it"
-  [win10-tpl]="TemplateVM - win10-app derives from it, and the named gap 'install has never run on a
-               TemplateVM' needs one. Rebuild it with: mgmt/harness/rebuild-rig.sh --only tpl10
-               (this line used to read 'rebuild from win10-base', which CANNOT work: clone-to-template
-               waits for qrexec on its settle boot and a pristine base has no QWT, so it never
-               answers - seven minutes of timeout, measured 2026-10-13. It is built from win10-iqi.)"
-  [win11-tpl]="TemplateVM - win11-app derives from it. Rebuild: mgmt/harness/rebuild-rig.sh --only tpl11"
+  [win10-tpl]="TemplateVM - win10-app derives from it; the 'install has never run on a TemplateVM' gap needs one"
+  [win11-tpl]="TemplateVM - win11-app derives from it"
   [win10-app]="AppVM carrying netvm - the PV-network half of the matrix needs it (0.3 GB)"
   [win11-app]="AppVM carrying netvm - same (0.5 GB)"
-  [win10-p46]="current clean subject: P4/P5 ran on it, and RND-3/RND-4/RND-8 are still unrun"
 )
 
 # ------------------------------------------------------------------ SPENT, with what consumed it
@@ -59,7 +75,17 @@ PY
 
 echo "=== KEEP ==="
 for v in "${!KEEP[@]}"; do
-  qvm-check "$v" >/dev/null 2>&1 || { printf "  %-14s (absent)\n" "$v"; continue; }
+  if ! qvm-check "$v" >/dev/null 2>&1; then
+    step="${REBUILD_STEP[$v]:-}"
+    if [ -z "$step" ]; then printf "  %-14s (absent, no rebuild step defined)\n" "$v"; continue; fi
+    if [ "$REBUILD" = 1 ]; then
+      printf "  %-14s ABSENT -> rebuilding with step %s\n" "$v" "$step"
+      mgmt/harness/rebuild-rig.sh --only "$step" || { echo "  rebuild of $v FAILED - see its evidence dir" >&2; exit 10; }
+    else
+      printf "  %-14s (absent; --rebuild-missing runs step %s)\n" "$v" "$step"
+    fi
+    continue
+  fi
   printf "  %-14s %5s GB  %s\n" "$v" "$(size_gb "$v")" "$(echo "${KEEP[$v]}" | tr -s ' \n' ' ')"
 done
 
