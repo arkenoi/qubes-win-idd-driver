@@ -1,5 +1,5 @@
 {
-  "note": "primed pristine Win10 22H2 base (build 19045.2965): no QWT, testsigning OFF, QubesPrime hook installed and PROVEN to fire - selftest 2026-08-30 ran as nt authority\\system off D:\\qubes-prime\\, task self-unregistered. Clone+drive = ~5s vs ~20min reinstall.",
+  "note": "pristine base rebuilt rebuild-20261013-194724 from Win10_22H2_EnglishInternational_x64v1.iso, PRIMER=1, no QWT",
   "props": {
     "klass": "StandaloneVM",
     "maxmem": "8192",
@@ -7,13 +7,14 @@
     "vcpus": "4",
     "virt_mode": "hvm"
   },
-  "sealed_utc": "2026-08-30T10:27:32Z",
+  "reseal_reason": "rebuilt from vendor media by rebuild-20261013-194724",
+  "sealed_utc": "2026-10-13T20:04:11Z",
   "vm": "win10-base",
   "volumes": {
     "private": {
       "revisions": [
-        "1788083861-back",
-        "1788085389-back"
+        "1791921442-back",
+        "1791921843-back"
       ],
       "revisions_to_keep": "2",
       "size": "21474836480",
@@ -21,12 +22,12 @@
     },
     "root": {
       "revisions": [
-        "1788083861-back",
-        "1788085389-back"
+        "1791921442-back",
+        "1791921843-back"
       ],
       "revisions_to_keep": "2",
       "size": "85899345920",
-      "usage": "11897059409"
+      "usage": "10642928959"
     }
   }
 }
