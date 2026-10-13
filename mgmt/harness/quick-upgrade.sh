@@ -107,6 +107,12 @@ job_on_abort(){
 # Wait primitives with failure modes (w_state/w_alive/w_session/w_halt/w_screen) - REUSED, not
 # rewritten. They call ./tools/qtest relative to the repo root, which is the cwd here.
 source mgmt/harness/e2e-wait.sh
+# THE SECONDARY LOG VOLUME (PLAN-acceptance-optimization section 3). Its purpose is the WEDGE: when
+# the guest hangs, qrexec is dead and nothing can be asked of it, QWT's own per-module logs are on a
+# volume this qube reads with mtools - guest running, wedged or halted, nothing detached. Until this
+# wiring the library existed and NO harness called it, so a wedged cell still lost its logs.
+source mgmt/harness/logvol-lib.sh
+LOGVOL_IMG=""
 
 grun(){ QTEST_VM=$SUBJECT timeout -k 5 "${2:-60}" ./tools/qtest run "$1" 2>/dev/null | tr -d '\r'; }
 vercore(){ printf '%s' "$1" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' | head -1; }
@@ -137,6 +143,13 @@ release_loop(){
 }
 finish(){ # $1=rc $2=message  - every exit goes through here and says which exit it took
   local rc=$1; shift
+  # Pull the log volume on EVERY exit, pass or fail. Host-side, nothing detached, so it works with
+  # the guest still running or wedged - which is the whole point: the wedge is the case to catch.
+  if [ -n "${LOGVOL_IMG:-}" ]; then
+    logvol_pull "$LOGVOL_IMG" "$OUT/logvol" >/dev/null 2>&1 \
+      && log "log volume pulled -> $OUT/logvol" \
+      || log "WARNING: log volume could not be pulled from $LOGVOL_IMG"
+  fi
   release_loop
   log "$*"
   log "summary: $PASS passed, $FAIL failed; evidence in $OUT"
@@ -312,6 +325,15 @@ rm -f "mgmt/fixtures/$SUBJECT.aborted" "mgmt/fixtures/$SUBJECT.json"
 # 3. BOOT WITH THE DISC (start-time attach - the rig's proven ISO path; live block attach gets
 #    "empty response from qubesd" here, see matrix.sh boot_with_release_iso)
 # =============================================================================================
+# Attach the log volume BEFORE the first start: --required assignments are satisfied at domain
+# creation, so a volume added afterwards is invisible to this boot.
+LOGVOL_IMG=$(logvol_image "$SUBJECT")
+if logvol_create "$LOGVOL_IMG" "$SUBJECT" >/dev/null 2>&1 && logvol_attach "$SUBJECT" "$LOGVOL_IMG" "$OUT/manifest.json" >/dev/null 2>&1; then
+  log "log volume attached: $LOGVOL_IMG (read it with logvol_pull even if the guest wedges)"
+else
+  log "WARNING: log volume could not be attached - a wedge here will lose the QWT logs"
+  LOGVOL_IMG=""
+fi
 log "booting $SUBJECT with the release ISO as CD (qvm-start --cdrom=$HOLDER:$LOOP)"
 timeout -k 10 150 qvm-start "$SUBJECT" --cdrom="$HOLDER:$LOOP" >"$OUT/cdboot.out" 2>&1 & disown
 # A START THAT FAILED IS NOT A DARK BOOT. Measured 2026-09-20: qvm-start returned
@@ -335,6 +357,16 @@ case $? in
   1) finish 1 "TERMINAL: clone reached a terminal state before any session (see $OUT/cdboot*.png; start log $OUT/cdboot.out)" ;;
   2) finish 2 "DEADLINE: clone gave no session within 900 s (start log $OUT/cdboot.out)" ;;
 esac
+
+# Point QWT's logs at the volume now that a session exists. Done AFTER the session rather than at
+# attach time because the binder runs in the guest.
+if [ -n "$LOGVOL_IMG" ]; then
+  if logvol_bind_guest "$SUBJECT" "$SUBJECT" >>"$OUT/logvol-bind.out" 2>&1; then
+    log "QWT logs bound to the log volume"
+  else
+    log "WARNING: log-volume bind failed (see $OUT/logvol-bind.out) - logs stay on C: and a wedge loses them"
+  fi
+fi
 
 # CLOCK, BEFORE ANYTHING IS INSTALLED. Windows with RealTimeIsUniversal unset reads the hardware
 # clock as LOCAL time, so guest_UTC = RTC_content - guest_TZ_offset. What the RTC holds depends on

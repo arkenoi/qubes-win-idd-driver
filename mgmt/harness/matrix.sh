@@ -69,6 +69,26 @@ cd /home/user/qubes-win-idd-driver
 export QTEST_VM="${QTEST_VM:-__matrix_no_ambient_target__}"
 source .claude/skills/win-guest-e2e/e2e-lib.sh
 source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the notepad a cell starts is stopped by its recorded identity, never by name
+source mgmt/harness/logvol-lib.sh
+# THE SECONDARY LOG VOLUME (PLAN-acceptance-optimization section 3), for the WEDGE case: when a cell
+# hangs with qrexec dead, QWT's per-module logs sit on a volume this qube reads with mtools - guest
+# running or not, nothing detached. The library landed 2026-10-13 and NO harness called it, so a
+# wedged cell still lost exactly the logs that show vchan pressure. LOGVOL_VM/LOGVOL_IMG are set
+# when a subject boots and consumed by the pull after each cell.
+LOGVOL_VM=""; LOGVOL_IMG=""
+# Bind QWT's logs to the volume once a SESSION exists. The binder runs INSIDE the guest via
+# `qtest pushrun`, which needs a logged-on session, so it cannot be done when the volume is attached
+# (that happens before the guest is even created). Without this the volume is attached and stays
+# EMPTY, and the pull after the cell yields nothing - an instrument that reports success and
+# collects no data, which is worse than no instrument.
+logvol_bind_now(){ # $1=vm $2=label
+  [ -n "$LOGVOL_IMG" ] || return 0
+  if logvol_bind_guest "$1" "$1" >>"$M/$2-logvol-bind.out" 2>&1; then
+    say "  $2: QWT logs bound to the log volume"
+  else
+    say "  $2: WARNING log-volume bind failed (see $M/$2-logvol-bind.out) - logs stay on C: and a wedge loses them"
+  fi
+}
 # P0-PRE (protocol H0): the wait primitives are sourced from the REPO, not from a session tmp
 # directory. They used to live under /home/user/.claude/jobs/<id>/tmp, which is session-scoped and
 # garbage-collectable - the same class of mistake that once nearly lost the only copy of a
@@ -393,6 +413,15 @@ boot_with_release_iso(){ # $1=vm $2=label - boot a HALTED subject with the relea
   # a guest that never boots is dead silence for the whole qrexec_timeout). The start's output is
   # kept: if the disc never shows up in the guest, $M/$lbl-cdboot.out says whether the start
   # itself refused.
+  # BEFORE the start: a --required assignment is satisfied at domain creation, so a volume attached
+  # after the boot is invisible to it.
+  LOGVOL_VM="$vm"; LOGVOL_IMG=$(logvol_image "$vm")
+  if logvol_create "$LOGVOL_IMG" "$vm" >/dev/null 2>&1 && logvol_attach "$vm" "$LOGVOL_IMG" "$M/logvol-manifest.json" >/dev/null 2>&1; then
+    say "  $lbl: log volume attached ($LOGVOL_IMG)"
+  else
+    say "  $lbl: WARNING log volume not attached - a wedge here loses the QWT logs"
+    LOGVOL_IMG=""
+  fi
   say "  $lbl: booting $vm with the release ISO as CD (qvm-start --cdrom=win-idd-mgmt:$RELEASE_LOOP)"
   timeout -k 10 150 qvm-start "$vm" --cdrom="win-idd-mgmt:$RELEASE_LOOP" >"$M/$lbl-cdboot.out" 2>&1 & disown
   sleep 8
@@ -1354,6 +1383,7 @@ cell_reinstall(){ # $1=subject $2=tag - same-version reinstall of the release ov
   unpark_installed "$vm" "$tag-reinstall" || return
   boot_with_release_iso "$vm" "$tag-reinstall" || return
   w_session "$vm" 900 "$tag-reinstall-boot" "$M" say || { no "$tag-reinstall: unparked subject did not boot"; return; }
+  logvol_bind_now "$vm" "$tag-reinstall"
   locate_release_disc "$vm" "$tag-reinstall" || return
   ENTRY_PRISTINE=0; EXPECT_MODE=in-place-same-version-reinstall; CELL_PRIMED=1
   run_install "$vm" "$tag-reinstall" "$RELDISC"
@@ -1375,6 +1405,7 @@ cell_upgrade(){ # $1=previous-ours entry image $2=subject $3=tag - previous rele
   reclone "$prev" "$vm" || { no "$tag-upgrade: could not reclone"; return; }
   boot_with_release_iso "$vm" "$tag-upgrade" || return
   w_session "$vm" 900 "$tag-upgrade-boot" "$M" say || { no "$tag-upgrade: clone did not boot"; return; }
+  logvol_bind_now "$vm" "$tag-upgrade"
   # QWT presence via the installer's OWN signal (MSI product registrations - qwt_products), never
   # the ITL "Qubes Tools\Version" reg key: our NG QWT does not populate that key, so it
   # false-negatives on exactly the entries this cell exists for. Measured on matrix-4318:
@@ -1410,6 +1441,7 @@ cell_seeded(){ # $1=QWT-carrying entry image $2=subject $3=tag
   reclone "$1" "$2" || { no "$3-seeded: could not reclone"; return; }
   boot_with_release_iso "$2" "$3-seeded" || return
   w_session "$2" 600 "$3-seeded-boot" "$M" say || { no "$3-seeded: clone did not boot"; return; }
+  logvol_bind_now "$2" "$3-seeded"
   # The entry must CARRY a QWT: the seeded cell models a PV reboot Request arriving over an
   # EXISTING install (the field's state). Same authoritative presence signal as cell_upgrade -
   # MSI product registrations (qwt_products), never the ITL Version key, which is empty on our
@@ -1479,6 +1511,7 @@ cell_stock(){ # $1=stock-4.2.2 fixture $2=subject $3=tag - CAPABILITY ONLY, neve
   reclone "$entry" "$vm" || { no "$tag-stock: could not reclone"; return; }
   boot_with_release_iso "$vm" "$tag-stock" || return
   w_session "$vm" 900 "$tag-stock-boot" "$M" say || { no "$tag-stock: clone did not boot"; return; }
+  logvol_bind_now "$vm" "$tag-stock"
   # PRESENCE via the authoritative signal (MSI product registrations - qwt_products); the ITL
   # Version key is then a legitimate STOCKNESS discriminator, because stock 4.2.2 writes it and
   # our NG QWT does not. So here "key empty" means "not stock" - never "no QWT", which qwt_products
@@ -1868,6 +1901,17 @@ for c in $CELLS; do
     # silently shrink the matrix and the summary would still read as a clean run.
     *) say "FATAL: unknown cell '$c'"; FAIL=$((FAIL+1)) ;;
   esac
+  # PULL AFTER EVERY CELL, pass or fail, wedged or clean. Host-side with mtools: nothing is asked of
+  # the guest and nothing is detached, so a cell that hung with qrexec dead still yields its logs -
+  # the entire reason the volume exists.
+  if [ -n "$LOGVOL_IMG" ]; then
+    if logvol_pull "$LOGVOL_IMG" "$M/logvol-$c" >/dev/null 2>&1; then
+      say "  $c: log volume pulled -> $M/logvol-$c"
+    else
+      say "  $c: WARNING could not pull the log volume $LOGVOL_IMG"
+    fi
+    LOGVOL_IMG=""; LOGVOL_VM=""
+  fi
 done
 # PRECONDITION EVIDENCE for the book's s7 judgement (p1-precondition-authority): one entry per
 # install cell, carrying the '=== PRECONDITION ===' line from THIS run's log slice (the .cur file
