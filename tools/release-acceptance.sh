@@ -141,7 +141,7 @@ fi
 for _c in $CELLS; do
   case "$_c" in
     win10-upgrade|win10-seeded) _g="$G10"; _b=win10-base ;;
-    win11-upgrade|win11-seeded) _g="$G11"; _b=win11-base ;;
+    win11-upgrade|win11-seeded) _g="$G11"; _b=win11r-base ;;
     *) continue ;;
   esac
   if ! qvm-check "$_g" >/dev/null 2>&1; then
@@ -232,6 +232,9 @@ if [ "$SKIP_FEATURES" -eq 0 ]; then
     # WHAT DOES NOT CHANGE: the run still fails and the acceptance is still NOT recorded, so
     # nothing ships on an instrument failure. A suite that measured nothing has not cleared the
     # product, and treating "could not measure" as a pass is the one outcome worse than either.
+    # Each feature test's exit travels into the coverage receipt (step 7), where 2 is INSTRUMENT (uncovered)
+    # and any other non-zero is a product failure (covered, result fail) - tools/coverage-receipt.py.
+    FEATRCS="${FEATRCS:-} --feature $t=$rc"
     if [ $rc -eq 0 ]; then say "PASS  $t"
     elif [ $rc -eq 2 ]; then say "INSTRUMENT  $t (rc=2 - the suite could not measure the product; this is NOT a product defect, and the run still fails: see $WORK/$t.log)"; MRC=1
     else say "FAIL  $t (rc=$rc, see $WORK/$t.log)"; MRC=1; fi
@@ -262,27 +265,28 @@ fi
 
 # ---- 7. the coverage receipt ---------------------------------------------------------------------
 # WHAT THIS RUN ACTUALLY COVERED, written where the release-cut gate reads it (docs/ADR-acceptance.md
-# section 4). Only suites that RAN are named - a receipt is a record, not an intention - and the gate
-# re-runs tools/gate-scope.py check against it, so a receipt that does not satisfy the diff refuses the
-# cut exactly as an absent one does.
+# section 4). DERIVED from the campaign's own verdict lines by tools/coverage-receipt.py, never from the
+# intended cell list (this block used to name every cell in $CELLS whatever happened - a receipt is a
+# record, not an intention). PRODUCT-FAIL and INSTRUMENT-FAIL are told apart (PLAN-acceptance-optimization
+# section 6): a cell whose FAIL lines are all INVALID-* and a feature test exiting 2 could not MEASURE the
+# product - they are listed under instrument_fail and left OUT of `suites`, so the gate below (and the
+# release-cut hook, which re-runs the same check) refuses the cut until they are re-run; a FAIL line that
+# names the product is covered (it ran and measured) with result=fail, and the acceptance RECORD refuses
+# the cut (Jev 2026-10-13: covered-with-fail-flag 0.94).
 COVHEAD=$(git rev-parse HEAD 2>/dev/null | cut -c1-12)
 if [ -n "$COVHEAD" ]; then
   COVFILE="scratchpad/gate-coverage-$COVHEAD.json"
   mkdir -p scratchpad
-  COVRAN="package-verify"
-  for _c in $CELLS; do COVRAN="$COVRAN $_c"; done
-  if [ "$SKIP_FEATURES" -eq 0 ]; then COVRAN="$COVRAN notify-errors-guest-test crop-before-map template-update"; fi
-  python3 - "$COVFILE" "$RUN" "$HEAD" "$MRC" $COVRAN <<'PYCOV'
-import json, sys
-out, run, head, rc, suites = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:]
-json.dump({"suites": sorted(set(suites)), "package_run": run, "built_from": head,
-           "result": "pass" if rc == "0" else "fail",
-           "note": "written by tools/release-acceptance.sh; names only the suites this run ran"},
-          open(out, "w"), indent=1)
-PYCOV
-  say "coverage receipt: $COVFILE ($(python3 -c "import json,sys;print(len(json.load(open(sys.argv[1]))['suites']))" "$COVFILE") suite(s))"
-  if [ -f tools/gate-scope.py ]; then
-    GSBASE=$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD^ 2>/dev/null || git rev-list --max-parents=0 HEAD 2>/dev/null)
+  GSBASE=$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD^ 2>/dev/null || git rev-list --max-parents=0 HEAD 2>/dev/null)
+  # package-verify is rc 0 here by construction: step 3 dies on any other outcome before a guest is touched.
+  # shellcheck disable=SC2086  # FEATRCS is a list of --feature name=rc words
+  if python3 tools/coverage-receipt.py --out "$COVFILE" --campaign "$CAMP" --cells "$CELLS" ${FEATRCS:-} \
+       --package-verify-rc 0 --package-run "$RUN" --built-from "$HEAD" --range "${GSBASE:-?}..$(git rev-parse HEAD)" >>"$LOG" 2>&1; then
+    say "coverage receipt: $COVFILE - $(python3 -c "import json,sys;r=json.load(open(sys.argv[1]));print('covered %d, product_fail %s, instrument_fail %s, not_run %s' % (len(r['suites']), r['product_fail'] or '-', r['instrument_fail'] or '-', r['not_run'] or '-'))" "$COVFILE")"
+  else
+    say "FAIL  coverage receipt could not be written (see $LOG) - no receipt, no cut"; MRC=1
+  fi
+  if [ -f tools/gate-scope.py ] && [ -s "$COVFILE" ]; then
     if [ -n "$GSBASE" ] && python3 tools/gate-scope.py check "$COVFILE" "$GSBASE..$(git rev-parse HEAD)" >>"$LOG" 2>&1; then
       say "PASS  gate scope: this run covers what the diff requires"
     else
