@@ -415,5 +415,27 @@ alive=$(r 'cmd /c tasklist /fi "imagename eq gui-agent.exe" /nh' | grep -ac 'gui
 EOS
 expect_silent L18-relauncher-armed "$D" "the service restart waiting on the old agent's handle, a by-id shell stop, a relay stopped by its own handle, a drill kill by the agent-logged pid, a count, a read, a comment"
 
+# ---------------------------------------------------------------- L23 a guest probe piped into grep -q
+# The defect this file's own expect_fires warned about on 2026-08-31 - `lint | grep -q` reporting the
+# LEFT side's status - turned out to be live in the harnesses too: w_alive and nine other liveness
+# probes graded a guest that ANSWERED as dead, 86 times in 200, and the collector then fetched a
+# multi-GB memory image of a healthy guest.
+D="$TMP/l23"; mk "$D"
+printf '#!/bin/bash\nset -uo pipefail\nalive(){ timeout -k 5 45 ./tools/qtest run %s | grep -qa PONG; }\n' "'cmd /c echo PONG'" > "$D/mgmt/harness/probe.sh"
+expect_fires L23-pipe-into-grep-q-probe "$D" "a qtest liveness probe piped into grep -q under pipefail"
+
+# the correct shape, and the shape that is correct BECAUSE pipefail is absent - both must stay silent
+D="$TMP/l23ok"; mk "$D"
+printf '#!/bin/bash\nset -uo pipefail\nalive(){ grep -qa PONG <<< "$(timeout -k 5 45 ./tools/qtest run %s)"; }\n' "'cmd /c echo PONG'" > "$D/mgmt/harness/good.sh"
+printf '#!/bin/bash\nset -u\nalive(){ timeout 30 qrexec-client-vm "$1" qubes.VMShell | grep -q QALIVE_OK; }\n' > "$D/mgmt/harness/nopipefail.sh"
+expect_silent L23-pipe-into-grep-q-probe "$D" "capture-then-match, and a pipe into grep -q with NO pipefail (where the status is grep's own)"
+
+# a LIBRARY that sets nothing itself inherits pipefail from whoever sources it - exactly how
+# e2e-wait.sh carried this into every harness that sources it
+D="$TMP/l23lib"; mk "$D"
+printf '#!/bin/bash\nw_alive(){ timeout -k 5 40 ./tools/qtest run %s | grep -qa QREADY; }\n' "'cmd /c echo QREADY'" > "$D/mgmt/harness/wait-lib.sh"
+printf '#!/bin/bash\nset -uo pipefail\nsource mgmt/harness/wait-lib.sh\nw_alive x\n' > "$D/mgmt/harness/user.sh"
+expect_fires L23-pipe-into-grep-q-probe "$D" "a sourced library's probe, with pipefail coming from the caller"
+
 echo "  ---- $pass passed, $fail failed"
 exit $(( fail > 0 ? 1 : 0 ))

@@ -55,7 +55,8 @@ wedge_now(){ # 0 = spin fingerprint, 1 = not it, 2 = UNMEASURED; reason in $WEDG
     *)      WEDGE_WHY="cpu_time UNREADABLE - executing-or-not UNMEASURED, which is NOT a negative"; return 2 ;;
   esac
 }
-alive(){ QTEST_VM="$SUBJECT" timeout -k 5 45 ./tools/qtest run 'cmd /c echo PONG' 2>/dev/null | grep -qa PONG; }
+# capture then match: `| grep -q` SIGPIPEs the producer and pipefail grades a live guest dead
+alive(){ grep -qa PONG <<< "$(QTEST_VM="$SUBJECT" timeout -k 5 45 ./tools/qtest run 'cmd /c echo PONG' 2>/dev/null)"; }
 
 stalls=0; fails=0; clean=0; core_taken=0
 for r in $(seq 1 "$N"); do

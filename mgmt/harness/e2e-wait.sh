@@ -94,7 +94,13 @@ w_screen(){ # $1=vm $2=tag $3=outdir
   case "$out" in *VERDICT=*) echo "${out##*VERDICT=}" ;; *) echo NOWINDOW ;; esac
 }
 
-w_alive(){ QTEST_VM=$1 timeout -k 5 40 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null | grep -qa QREADY; }
+# CAPTURE, THEN MATCH. `producer | grep -q` loses a SIGPIPE race: grep -q exits on the first match,
+# the still-writing producer dies of SIGPIPE, timeout reports that as 141, and `set -o pipefail` in the
+# sourcing harness (matrix, prime-run, quick-upgrade, collect-failure all set it) makes 141 the
+# pipeline's status - so a guest that ANSWERED is graded dead. Measured 2026-10-14: 41 of 300 here, 86
+# of 200 in the collector's own probe. This is the project's canonical liveness predicate and w_session,
+# w_install, w_halt_stable and the 10-minute TERMINAL verdict below all rest on it.
+w_alive(){ grep -qa QREADY <<< "$(QTEST_VM=$1 timeout -k 5 40 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null)"; }
 
 # Wait for a usable session. 0=session 1=terminal 2=deadline
 w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn

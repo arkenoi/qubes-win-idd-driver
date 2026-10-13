@@ -1159,6 +1159,64 @@ def l18_relauncher_armed() -> None:
                             f"it) and it was not disabled or deleted first in this function: {code.strip()[:100]}")
 
 
+def l23_no_pipe_into_grep_q_for_a_guest_probe() -> None:
+    """L23: a guest probe must CAPTURE its output and match it, never pipe it into `grep -q`.
+
+    MEASURED 2026-10-14, and it decides whether a guest is alive. `grep -q` exits the instant it
+    matches; the producer is usually still writing, so it dies of SIGPIPE; `timeout` reports that
+    death as 141; and `set -o pipefail` - which matrix.sh, prime-run.sh, quick-upgrade.sh and
+    collect-failure.sh all set, and which a sourced library inherits - makes 141 the status of the
+    whole pipeline. A guest that ANSWERED CORRECTLY is then graded dead.
+
+    Rates measured on a healthy producer: 86 of 200 in collect-failure's own probe, 41 of 300 and
+    8 of 150 in two shapes of w_alive. It is silent, it is intermittent, and every consumer of
+    w_alive rested on it - w_session, w_install, w_halt_stable and the 10-minute TERMINAL verdict.
+    A phantom wedge also made the collector fetch a multi-GB memory image of a healthy guest.
+
+    The fix is local: `grep -qa X <<< "$(producer)"`, or capture into a variable and use `case`.
+    The substitution completes before grep starts, so there is no pipe to break - 0 of 300 after.
+
+    Only GUEST-CALLING producers are flagged. A pipeline out of a local, fast command is a
+    different risk and flagging all of them would bury this rule in noise until it got baselined
+    away, which is how a real rule dies.
+
+    AND ONLY WHERE pipefail IS ACTUALLY IN EFFECT. Without it the pipeline returns grep's own
+    status and the shape is correct - mgmt/clone-to-template.sh and mgmt/win-install-watch.sh both
+    use it under a plain `set -u` and are not defective. A library counts too, because pipefail
+    comes from whoever sourced it: that is precisely how e2e-wait.sh, which sets nothing itself,
+    carried this defect into every harness that sources it."""
+    probe = re.compile(r"(?:\btimeout\b|\./tools/qtest\b|\bqrexec-client-vm\b)[^|]*\|\s*grep\s+-[a-zA-Z]*q")
+    files = sorted((ROOT / "mgmt").glob("*.sh")) + \
+            sorted((ROOT / "mgmt" / "harness").glob("*.sh")) + \
+            [p for p in sorted((ROOT / "tools").glob("*.sh")) if "tests" not in p.parts]
+    bodies = {f: f.read_text(errors="replace") for f in files}
+    pipefail = {f for f, t in bodies.items() if re.search(r"set\s+-[a-zA-Z]*o\s+pipefail|set\s+-o\s+pipefail", t)}
+    # a file sourced BY a pipefail file inherits it at run time
+    inherits = {f for f in files
+                if any(re.search(r"(?:^|\s)(?:source|\.)\s+\S*" + re.escape(f.name), bodies[g], re.M)
+                       for g in pipefail)}
+    for f in files:
+        if f not in pipefail and f not in inherits:
+            continue
+        heredoc = None
+        for n, ln in enumerate(bodies[f].splitlines(), 1):
+            st = ln.lstrip()
+            if heredoc is not None:
+                if st == heredoc:
+                    heredoc = None
+                continue
+            m = re.search(r"<<-?\s*[\'\"]?(\w+)", ln)
+            if m and "<<<" not in ln:
+                heredoc = m.group(1)
+                continue
+            if not st or st.startswith("#"):
+                continue
+            if probe.search(ln):
+                finding("L23-pipe-into-grep-q-probe", f"{f.name}:{n}",
+                        "a guest probe piped into grep -q: SIGPIPE + pipefail grade a live guest "
+                        "dead (measured 86/200); capture it and match instead")
+
+
 def l22_vm_start_must_assert_sole_guest() -> None:
     """L22: anything that STARTS a guest must first call assert_sole_guest from
     mgmt/harness/serial-rig.sh.
@@ -1267,6 +1325,7 @@ def main() -> int:
     l20_module_log_read_must_be_bounded()
     l21_second_exit_trap_replaces_the_first()
     l22_vm_start_must_assert_sole_guest()
+    l23_no_pipe_into_grep_q_for_a_guest_probe()
     if a.ledger:
         l7_orphan_ledger_checks(a.ledger)
 

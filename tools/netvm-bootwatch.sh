@@ -22,7 +22,9 @@ mkdir -p "$(dirname "$OUT")"
 
 state() { qrexec-client-vm "$VM" admin.vm.CurrentState </dev/null 2>/dev/null | tr -d '\0'; }
 cput() { state | grep -oE 'cputime=[0-9]+' | cut -d= -f2; }
-probe() { timeout 15 bash -c "printf 'echo QOK\r\n' | qrexec-client-vm $VM qubes.VMShell 2>/dev/null" | grep -q QOK && echo up || echo down; }
+# capture then match: `| grep -q` SIGPIPEs the producer and pipefail grades a live guest down
+probe() { local out; out=$(timeout 15 bash -c "printf 'echo QOK\r\n' | qrexec-client-vm $VM qubes.VMShell 2>/dev/null")
+          case "$out" in *QOK*) echo up ;; *) echo down ;; esac; }
 
 echo "elapsed_s,cputime_ns,delta_cores,qrexec" >> "$OUT"
 t0=$(date +%s); prev_c=$(cput); prev_t=$t0

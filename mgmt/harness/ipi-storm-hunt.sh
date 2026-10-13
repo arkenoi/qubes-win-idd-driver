@@ -37,7 +37,8 @@ state(){ qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$VM
 # always false and this harness COULD NOT have detected a wedge - its negatives are weaker than
 # they read. Measured 2026-09-23, after the same bug discarded a real stall in the upgrade loop.
 cputime(){ w_cpu_time "$VM"; }
-alive(){ timeout -k 5 45 ./tools/qtest run 'cmd /c echo PONG' 2>/dev/null | grep -qa PONG; }
+# capture then match: `| grep -q` SIGPIPEs the producer and pipefail grades a live guest dead
+alive(){ grep -qa PONG <<< "$(timeout -k 5 45 ./tools/qtest run 'cmd /c echo PONG' 2>/dev/null)"; }
 
 if [ -n "${VCPUS:-}" ]; then
   [ "$(state)" = Halted ] || { qvm-shutdown "$VM" >/dev/null 2>&1; for _ in $(seq 1 18); do [ "$(state)" = Halted ] && break; sleep 10; done; }

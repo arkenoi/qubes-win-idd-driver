@@ -46,7 +46,8 @@ alive(){ r 'cmd /c echo ALIVE' | grep -qa ALIVE; }
 # watch loop below then takes ONE sample and waits, i.e. it does not watch the boot at all, which is
 # the only interval in which the defect could appear. Measured 2026-08-31: "dom0 watch: 0 sample(s)"
 # with the loop reporting "sample 1", and my "~4s" was arithmetic, not elapsed time.
-alive_fast(){ QTEST_VM=$VM timeout -k 2 5 ./tools/qtest run 'cmd /c echo ALIVE' 2>/dev/null | grep -qa ALIVE; }
+# capture then match: `| grep -q` SIGPIPEs the producer and pipefail grades a live guest dead
+alive_fast(){ grep -qa ALIVE <<< "$(QTEST_VM=$VM timeout -k 2 5 ./tools/qtest run 'cmd /c echo ALIVE' 2>/dev/null)"; }
 
 # ------------------------------------------------------------------ preconditions
 alive || { log "FATAL: $VM is not answering qrexec before we start"; exit 2; }

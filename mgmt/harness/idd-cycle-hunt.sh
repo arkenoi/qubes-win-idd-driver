@@ -39,7 +39,8 @@ state(){ qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$VM
 # live wedge would have read as healthy (measured 2026-09-23 - it discarded a real stall in the
 # upgrade loop). Missing data must FAIL, never read as a negative.
 cpu(){ w_cpu_time "$1"; }
-alive(){ timeout -k 5 45 ./tools/qtest run 'cmd /c echo PONG' 2>/dev/null | grep -qa PONG; }
+# capture then match: `| grep -q` SIGPIPEs the producer and pipefail grades a live guest dead
+alive(){ grep -qa PONG <<< "$(timeout -k 5 45 ./tools/qtest run 'cmd /c echo PONG' 2>/dev/null)"; }
 wedge_check(){ # $1=tag -> 0 healthy, 1 wedged+captured
   local c1 c2; c1=$(cpu); sleep 20; c2=$(cpu)
   if [ "${c2:-0}" -gt "${c1:-0}" ]; then

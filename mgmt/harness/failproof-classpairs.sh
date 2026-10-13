@@ -49,7 +49,7 @@ ensure_up(){  # <vm>
   fi
   local i
   for i in $(seq 1 40); do
-    QTEST_VM=$vm timeout -k 5 40 ./tools/qtest run 'cmd /c echo UP' 2>/dev/null | grep -qa UP && { log "  $vm answering qrexec"; return 0; }
+    grep -qa UP <<< "$(QTEST_VM=$vm timeout -k 5 40 ./tools/qtest run 'cmd /c echo UP' 2>/dev/null)" && { log "  $vm answering qrexec"; return 0; }
     sleep 15
   done
   log "  FATAL: $vm never answered qrexec"; return 1

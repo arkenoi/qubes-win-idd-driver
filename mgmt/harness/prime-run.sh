@@ -483,7 +483,7 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
                 log "  the domain left Running during the quiet window (state=$(state "$CHURN")) - a stage ended; the loop takes it from here"
                 continue
             fi
-            if ! QTEST_VM=$CHURN timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null | grep -qa QREADY; then
+            if ! grep -qa QREADY <<< "$(QTEST_VM=$CHURN timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null)"; then
                 log "  NO ANSWER after the quiet window - the guest went deaf while nothing called it; NOT a pass, the loop runs on to its deadline"
                 continue
             fi
@@ -541,7 +541,7 @@ done
 if [ "$ready" = 1 ]; then
     log "  qrexec answered - settling ${SETTLE_SECS:-90}s to catch a post-install reboot the job may still do"
     rl_fg sleep "${SETTLE_SECS:-90}"   # interruptible: a TERM must not defer teardown by the settle window
-    if ! QTEST_VM=$CHURN timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null | grep -qa QREADY; then
+    if ! grep -qa QREADY <<< "$(QTEST_VM=$CHURN timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null)"; then
         log "  the guest stopped answering during the settle window - the job rebooted it after install"
         # WAIT FOR THE POWER-OFF TO LAND before deciding. This used to take ONE state sample, right
         # here - and a guest that is powering off reads Transient, not Halted, so the restart was
@@ -570,7 +570,7 @@ if [ "$ready" = 1 ]; then
             sleep 20
             [ "$(state "$CHURN")" = Halted ] && { log "  guest halted again - starting it"; qvm-start "$CHURN" >/dev/null 2>&1; continue; }
             [ "$(state "$CHURN")" = Running ] || continue   # Transient: mid-transition, do not probe
-            if QTEST_VM=$CHURN timeout -k 5 30 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null | grep -qa QREADY; then
+            if grep -qa QREADY <<< "$(QTEST_VM=$CHURN timeout -k 5 30 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null)"; then
                 ready=1; log "  qrexec back after the post-install reboot"; break
             fi
         done
