@@ -19,6 +19,17 @@ pass=0; fail=0
 hookjson() { python3 -c '
 import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]}}))' "$1"; }
 
+# Rewrite a seal so every volume it records names a revision that cannot be reached - the exact
+# state the re-seal guard exists for, built rather than borrowed.
+doctor_seal() { python3 - "$1" <<'EOPY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for v in d.get("volumes", {}).values():
+    v["revisions"] = ["selftest-revision-that-cannot-exist"]
+json.dump(d, open(sys.argv[1], "w"), indent=1)
+EOPY
+}
+
 # $1 = expectation (BLOCK|ALLOW), $2 = label, $3 = command
 case_is() {
     local want=$1 label=$2 cmd=$3 rc rc_defect
@@ -76,14 +87,24 @@ EOF'
 
 echo
 echo "PART B - re-sealing over a record you can no longer reach"
-# win10-base is the genuine case: its committed seal records two revisions that have both aged out.
+# THE LOST STATE IS CONSTRUCTED HERE, NOT BORROWED FROM THE RIG. This case used to rely on
+# win10-base's committed seal happening to name two revisions that had aged out. That is a moving
+# target: win10-base was rebuilt on 2026-10-14, its seal named reachable revisions again, the guard
+# correctly allowed the re-seal - and the check reported FAIL while nothing was wrong. A check whose
+# premise is "some real file is currently in the broken state" inverts silently the moment the rig
+# is repaired, which is the opposite of what a regression test is for. So the seal is doctored to
+# name a revision that cannot exist, and the guard is asked about THAT.
 VICTIM=win10-base; SEAL=mgmt/goldens/$VICTIM.json
+VSTATE=$(qvm-ls --raw-data --fields STATE "$VICTIM" 2>/dev/null | tail -1)
 if [ ! -f "$SEAL" ]; then
     echo "  SKIP  no $SEAL - cannot drive the real case"
+elif [ "$VSTATE" != Halted ]; then
+    echo "  SKIP  $VICTIM is ${VSTATE:-absent}, not Halted - seal refuses before reaching this guard"
 else
     BK=$(mktemp); cp "$SEAL" "$BK"
     restore() { cp "$BK" "$SEAL"; rm -f "$BK"; }
     trap restore EXIT
+    doctor_seal "$SEAL"
     before=$(sha256sum "$SEAL" | cut -c1-16)
 
     out=$(mgmt/golden.sh seal "$VICTIM" "selftest - must be refused" 2>&1); rc=$?
@@ -96,8 +117,20 @@ else
         echo "$out" | sed 's/^/        /' | head -4
     fi
 
+    # A re-seal over a lost record IS permitted as a deliberate, recorded act - that is the guard's
+    # whole premise, and a gate that refused a legitimate rebuild would just get worked around.
+    cp "$BK" "$SEAL"; doctor_seal "$SEAL"
+    out=$(GOLDEN_RESEAL_REASON="selftest - a deliberate rebuild" mgmt/golden.sh seal "$VICTIM" "selftest - reason given" 2>&1); rc=$?
+    if [ "$rc" -eq 0 ]; then
+        pass=$((pass+1)); printf '  PASS  %-46s allowed when a reason is RECORDED\n' "re-seal over a lost record"
+    else
+        fail=$((fail+1)); printf '  FAIL  %-46s REFUSED even with GOLDEN_RESEAL_REASON (rc=%s)\n' "re-seal over a lost record" "$rc"
+        echo "$out" | sed 's/^/        /' | head -4
+    fi
+
     # The knob must restore the old behaviour, or the refusal above proves nothing about this guard.
-    cp "$BK" "$SEAL"
+    cp "$BK" "$SEAL"; doctor_seal "$SEAL"
+    before=$(sha256sum "$SEAL" | cut -c1-16)
     out=$(GOLDEN_RESEAL_DEFECT=1 mgmt/golden.sh seal "$VICTIM" "selftest - defect knob" 2>&1); rc=$?
     after=$(sha256sum "$SEAL" | cut -c1-16)
     if [ "$rc" -eq 0 ] && [ "$before" != "$after" ]; then
