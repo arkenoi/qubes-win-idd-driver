@@ -214,9 +214,18 @@ prime_latch() {
     log "installing latch seed + tasks (guest/pvnic-selfprime.ps1)"
     local out
     out="$(QTEST_VM=$vm "$repo/tools/qtest" pushrun "$repo/guest/pvnic-selfprime.ps1" 2>/dev/null | tr -d '\r' | grep -A1 '^MARKJSON' | tail -1)"
+    # WHAT IT SAYS IS NOT A GATE - WHAT IT DID IS. This used to abort the build when the installer's
+    # own MARKJSON line did not contain "ok":true, and on 2026-10-13 that is exactly what happened:
+    # the line came back EMPTY four seconds after a qrexec check had just passed, and the build died.
+    # An identical re-run minutes later succeeded with nothing changed, so the installer was fine and
+    # the missing self-report was the only "evidence" of failure.
+    # The real check is twenty lines below and always was: a verification BOOT, then latch_readback /
+    # latch_ok confirming NICS=1, the veto key and the tasks survived a reboot - state, on the guest,
+    # across a power cycle. A report-based gate in front of a state-based verification can only ever
+    # add false failures; it cannot catch anything the readback would miss.
     case "$out" in
-        *'"ok":true'*) log "  installer: ok ($(printf '%s' "$out" | sed -n 's/.*"payload_sha256":"\([a-f0-9]\{12\}\).*/payload \1.../p'))" ;;
-        *) log "FAIL: latch installer did not report ok - guest said: ${out:-<nothing>}"; return 1 ;;
+        *'"ok":true'*) log "  installer reported ok ($(printf '%s' "$out" | sed -n 's/.*"payload_sha256":"\([a-f0-9]\{12\}\).*/payload \1.../p'))" ;;
+        *) log "  installer reported nothing usable (${out:-<nothing>}) - continuing; the verification boot below decides" ;;
     esac
 
     # NOTE: the updater's VmClass/RootIdentity deploy-time stamps are RETIRED. The updater now
