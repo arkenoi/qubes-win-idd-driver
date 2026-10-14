@@ -1786,6 +1786,10 @@ B11="${B11:?set B11 to the Win11 base golden - there is no default target}"
 # them freely, ensure_churn_target creates them on demand, and nothing - no AppVM, no derived
 # state - may ever bind to them. The templates (win10-tpl/win11-tpl) are NEVER an install-cell
 # target; only the appvm cell touches them, by volume restore.
+# The instant the campaign started, for the guest-log collector's --since window below. Taken once
+# so every cell reports against the same base, and NEVER from a guest clock (the guest's clock flips
+# ~3 h about 60 s into every boot, which has broken three freshness checks here).
+CAMPAIGN_SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 A10=win10-acc
 A11=win11-acc
 
@@ -1913,6 +1917,35 @@ for c in $CELLS; do
       say "  $c: [WARN] could not pull the log volume $LOGVOL_IMG"
     fi
     LOGVOL_IMG=""; LOGVOL_VM=""
+  fi
+
+  # PRESERVE THE GUEST'S OWN LOGS FOR EVERY CELL, not just the two that bind a volume.
+  #
+  # The volume is bound on the reinstall and upgrade cells only (logvol_bind_now, two call sites),
+  # so the clean and appvm cells contributed NOTHING guest-side: measured on the 2026-10-14 campaign,
+  # the clean cell's evidence dir held 48 lines across four files and ZERO in QWT or installer
+  # format. The end-of-campaign sweep then reads harness bash lines for half the matrix, and a
+  # "clean sweep" over that is clean across half the evidence - the same false comfort as the
+  # 96-of-96 campaign that shipped with "log-volume bind failed" in its own log. The owner, asked
+  # what the sweep can read from cells we did not preserve: nothing.
+  #
+  # mgmt/harness/log-sweep.sh is the sanctioned collector and matrix.sh was one of the ~50 harnesses
+  # that never called it (findings HARNESSLOGUNSWEPT). It pulls host-side into <out>/logs/, so it
+  # needs the guest to answer; where it cannot, that is REPORTED rather than passed over, and the
+  # volume still covers the cells that bound one.
+  case "$c" in
+    win10-*) _slv="$A10" ;;
+    win11-*) _slv="$A11" ;;
+    *)       _slv="" ;;
+  esac
+  if [ -n "$_slv" ] && qvm-check "$_slv" >/dev/null 2>&1; then
+    if ./mgmt/harness/log-sweep.sh "$_slv" "$CAMPAIGN_SINCE" "$M/$c-guestlogs" >"$M/$c-logsweep.out" 2>&1; then
+      say "  $c: guest logs collected -> $M/$c-guestlogs ($(find "$M/$c-guestlogs" -type f 2>/dev/null | wc -l) file(s))"
+    else
+      say "  $c: [WARN] guest log collection FAILED (see $M/$c-logsweep.out) - the campaign sweep has no guest logs for this cell"
+    fi
+  else
+    say "  $c: [WARN] no subject to collect guest logs from - the campaign sweep has no guest logs for this cell"
   fi
 done
 
