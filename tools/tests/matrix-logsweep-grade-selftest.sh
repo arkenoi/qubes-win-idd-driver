@@ -22,6 +22,12 @@ M=$(ls mgmt/harness/matri*.sh | head -1)
 # THE SHIPPED FUNCTION, not a transcription of it: a copy here would pass while the file rotted.
 eval "$(sed -n '/^grade_cell_logsweep(){/,/^}$/p' "$M")"
 declare -f grade_cell_logsweep >/dev/null || { echo "FAIL could not extract grade_cell_logsweep from $M"; exit 1; }
+# ITS HELPER TOO. grade_cell_logsweep calls _matrix_logvol_state when a cell has zero QWT lines.
+# Extracted and NOT stubbed: without it the zero-line path ran here with the helper simply absent -
+# the command substitution failed, the message lost its clause, and every assertion still passed.
+# A test that exercises a path whose helper is missing is testing the other half of the function.
+eval "$(sed -n '/^_matrix_logvol_state(){/,/^}$/p' "$M")"
+declare -f _matrix_logvol_state >/dev/null || { echo "FAIL could not extract _matrix_logvol_state from $M"; exit 1; }
 
 CAMPAIGN_SINCE="2026-10-14T12:00:00Z"
 pass=0; fail=0
@@ -87,6 +93,37 @@ for spec in "0 3 2" "1 4 1" "3 2 0" "4 6 3" "2 1 1"; do
   printf '%s' "$LINES" | grep -q "$real_f file(s), $real_q QWT line(s)" || { bad=$((bad+1)); echo "   rc=$1: message does not state $real_f/$real_q"; }
 done
 ck "no arm's counts contradict the disk" "0" "$bad"
+
+# ---- ZERO QWT LINES MUST NAME THE INSTRUMENT'S STATE -------------------------------------------
+# On 2026-10-14 all four cells reported "guest logs incomplete (1 file(s), 0 QWT line(s))" and I
+# went looking at the guest. The cause was the instrument every time: no volume attached on the
+# clean path, and on the ISO path a clone with no QWT. A verdict that cannot tell "the guest wrote
+# nothing" from "there was nothing to write to" is a verdict about nothing.
+state_is(){ # <label> <expected fragment> ; uses M (the pull dir root) and LOGVOL_IMG as set by caller
+  local got; got=$(_matrix_logvol_state "statecell")
+  case "$got" in
+    *"$2"*) pass=$((pass+1)); echo "ok   $1" ;;
+    *)      fail=$((fail+1)); echo "FAIL $1: expected to contain '$2', got '$got'" ;;
+  esac
+}
+SAVED_M="$M"; M="$T/state"; mkdir -p "$M"
+
+LOGVOL_IMG=""
+state_is "no volume attached is said plainly"      "no log volume was attached"
+
+LOGVOL_IMG="$T/state/img"
+state_is "a volume that was never pulled is said" "never pulled"
+
+mkdir -p "$M/logvol-statecell/files"
+state_is "attached but never bound is said"       "attached, never bound"
+
+mkdir -p "$M/logvol-statecell/files/qwt-logs"
+state_is "an EMPTY qwt-logs is said"              "qwt-logs is EMPTY"
+
+printf 'not a qwt line\n' > "$M/logvol-statecell/files/qwt-logs/something.log"
+state_is "files with no QWT shape are said"       "none in QWT's line shape"
+
+M="$SAVED_M"
 
 echo "matrix-logsweep-grade-selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
