@@ -94,6 +94,15 @@
             "command": "bash \"$CLAUDE_PROJECT_DIR/tools/hooks/admin-target-gate.sh\""
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/tools/hooks/kill-by-pattern-gate.sh\""
+          }
+        ]
       }
     ],
     "Stop": [

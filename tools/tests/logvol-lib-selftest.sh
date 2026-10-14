@@ -252,6 +252,35 @@ grep -qE '^exit /b 0$' "$CMDF" && ! grep -v '^REM' "$CMDF" | grep -qE 'exit /b [
 grep -q 'LOGVOL.TAG' "$CMDF" && ! grep -v '^REM' "$CMDF" | grep -qiE 'findstr|wmic|powershell|goto|^:' && ok "winpe: finds the volume by tag file; no findstr/wmic/PowerShell/goto" || bad "winpe: forbidden construct or no tag lookup"
 
 echo
+# ---- keep_only_ours: dropping the PRIMING sticks must not drop THIS volume -----------------------
+# A harness that finishes priming has to clear the answer stick and the DIAG stick while keeping the
+# log volume, which rides the SAME nec-usb-xhci controller. matrix.sh used to do it with a blanket
+# `qvm-features --unset <vm> qemu-extra-args`, which deleted our drive, our usb-storage device AND
+# that shared controller. Because qemu-extra-args applies at DOMAIN CREATION, the running guest kept
+# its volume and the loss appeared one boot later - at the cell's park/restore - with LogDir still
+# naming a drive letter that no longer existed. Measured TWICE (2026-10-14 and the relaunch):
+# `agent_log_healthy` false, "no agent log is held open by any process", and the IDD check that
+# reads a line out of that log failing with it. The input below is prime-run.sh's REAL value.
+PRIMEARGS='-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99 -drive file=/dev/xvdj,format=host_device,if=none,id=diagdrv -device usb-storage,bus=ansusb.0,drive=diagdrv,removable=on'
+both=$(run "$LIB" "logvol_qemu_args_compose '$PRIMEARGS'")
+kept=$(run "$LIB" "logvol_qemu_args_keep_only_ours '$both'")
+printf '%s' "$kept" | command grep -q 'id=logdrv' \
+  && ok "keep_only_ours: OUR drive survives" || bad "keep_only_ours: our drive was dropped ($kept)"
+printf '%s' "$kept" | command grep -q 'drive=logdrv,removable=on' \
+  && ok "keep_only_ours: our usb-storage device survives" || bad "keep_only_ours: our device was dropped"
+printf '%s' "$kept" | command grep -q 'nec-usb-xhci,id=ansusb' \
+  && ok "keep_only_ours: the SHARED controller survives (ours rides it)" || bad "keep_only_ours: the controller was dropped - our device has no bus"
+printf '%s' "$kept" | command grep -qE 'id=ansdrv|id=diagdrv|drive=ansdrv|drive=diagdrv' \
+  && bad "keep_only_ours: a priming stick survived ($kept)" || ok "keep_only_ours: both priming sticks are gone"
+# With no volume of ours in the value there is nothing to keep the controller for: clear it, so the
+# caller unsets the feature instead of leaving a bus with nothing on it.
+[ -z "$(run "$LIB" "logvol_qemu_args_keep_only_ours '$PRIMEARGS'")" ] \
+  && ok "keep_only_ours: with no volume of ours it clears entirely" || bad "keep_only_ours: kept something with no volume of ours"
+# And the harness must use it rather than the blanket unset.
+command grep -q 'logvol_qemu_args_keep_only_ours' "$ROOT/mgmt/harness/matrix.sh" \
+  && ok "keep_only_ours: matrix.sh uses it instead of unsetting the whole feature" \
+  || bad "keep_only_ours: matrix.sh does not call it - the blanket unset is back"
+
 # A BIND WITH NO MATCHING UNBIND IS THE DEFECT. logvol_bind_guest points LogDir at the volume, so
 # any detach must restore it first or the guest logs to a drive letter that is gone - measured
 # 2026-10-14 on WIN10-clean as `agent_log_healthy: no agent log is held open by any process`.

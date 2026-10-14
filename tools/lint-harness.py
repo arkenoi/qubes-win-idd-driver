@@ -881,7 +881,17 @@ def l17_process_by_name() -> None:
     # POSIX: pkill/killall at all, and any kill fed from a pattern match
     posix_pkill = re.compile(r"(?<![\w-])(pkill|killall)\b")
     posix_kill_pgrep = re.compile(r"\bkill\b[^\n]*\$\(\s*(pgrep|pidof)\b"
-                                  r"|\bfor\s+\w+\s+in\s+\$\(\s*(pgrep|pidof)\b[^\n]*")
+                                  r"|\bfor\s+\w+\s+in\s+\$\(\s*(pgrep|pidof)\b[^\n]*"
+                                  # THE /proc SPELLING, added 2026-10-15 after it killed my own
+                                  # tool shells. The rule knew `pkill -f` and `kill $(pgrep -f ...)`
+                                  # but not a scan of /proc/<glob>/cmdline whose matches feed kill -
+                                  # which is the same defect, and the same mechanism: a tool shell's
+                                  # cmdline contains the whole command being run, pattern included,
+                                  # so the matcher matches itself. tools/hooks/kill-by-pattern-gate.sh
+                                  # catches it in a command I TYPE; this catches it in a script.
+                                  r"|/proc/[\[\*][^\n]*\bkill\b"
+                                  r"|\bkill\b[^\n]*/proc/[\[\*]"
+                                  r"|\bps\s+(?:-[A-Za-z]+|a?u?x)\b[^\n]*\|[^\n]*\bkill\b")
     for p in _all_our_scripts():
         text = p.read_text(errors="replace")
         rel = p.relative_to(ROOT)

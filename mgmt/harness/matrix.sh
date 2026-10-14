@@ -641,7 +641,24 @@ clear_prime_leftovers(){ # $1=vm - prime-run's own exit text: "The stick is stil
       say "  note: no loop backing ${img%%\\*} for $vm (not assigned this run)"
     fi
   done
-  qvm-features --unset "$vm" qemu-extra-args 2>/dev/null
+  # NOT A BLANKET UNSET. This used to be `qvm-features --unset <vm> qemu-extra-args`, which also
+  # deleted the LOG VOLUME's -drive and usb-storage lines and the nec-usb-xhci controller they share
+  # with the answer stick. qemu-extra-args applies at DOMAIN CREATION, so the running guest kept its
+  # volume and the loss surfaced one boot later - at this cell's park/restore - with LogDir still
+  # naming a drive letter that no longer existed. Measured twice (2026-10-14 and the relaunch):
+  # `agent_log_healthy` false, "no agent log is held open by any process: the agent is not logging",
+  # and the IDD check that reads a line out of that log failing with it. A product FAIL made by the
+  # harness. So: keep ours, drop the priming sticks', and unset only when nothing of ours remains.
+  local qcur qnew
+  qcur=$(qvm-features "$vm" qemu-extra-args 2>/dev/null || true)
+  qnew=$(logvol_qemu_args_keep_only_ours "$qcur")
+  if [ -n "$qnew" ]; then
+    qvm-features "$vm" qemu-extra-args -- "$qnew" >/dev/null 2>&1 \
+      && say "  $vm: priming sticks dropped from qemu-extra-args; the log volume's device KEPT" \
+      || say "  [WARN] could not rewrite qemu-extra-args on $vm - the priming sticks stay until next prime"
+  else
+    qvm-features --unset "$vm" qemu-extra-args 2>/dev/null
+  fi
 }
 
 qwt_products(){ # $1=vm - echo the count of MSI-REGISTERED QWT products; echo nothing if unreadable.

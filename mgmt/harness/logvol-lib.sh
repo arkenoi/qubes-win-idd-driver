@@ -238,6 +238,31 @@ logvol_qemu_args_strip(){ # <existing> -> the value with our fragments removed (
   printf '%s' "$out" | sed -E 's/  +/ /g; s/^ //; s/ $//'
 }
 
+logvol_qemu_args_keep_only_ours(){ # <existing> -> the value with the PRIMING sticks removed and ours kept
+  # THE INVERSE OF logvol_qemu_args_strip, and it exists because a harness that finishes priming has
+  # to drop the priming sticks WITHOUT dropping this volume, which rides the same controller.
+  # WHY A BLANKET UNSET IS WRONG, measured twice on 2026-10-14/15: matrix.sh's clear_prime_leftovers
+  # ended with `qvm-features --unset <vm> qemu-extra-args`, which deletes our -drive and usb-storage
+  # lines AND the nec-usb-xhci controller they share with the answer stick. qemu-extra-args applies at
+  # DOMAIN CREATION, so the running guest keeps its volume and the loss only appears at the cell's
+  # next boot - the park/restore - where LogDir still names a drive letter that no longer exists.
+  # The visible result was a product FAIL: `agent_log_healthy` false, "no agent log is held open by
+  # any process", and the IDD check that reads that log failing with it.
+  local cur="${1:-}" out
+  [ -n "$cur" ] || { printf ''; return 0; }
+  # Drop the answer stick and the DIAG stick by their ids, leaving the controller and ours.
+  out=$(printf '%s' "$cur" | sed -E '
+    s#-drive file=/dev/[a-z]+,format=host_device,if=none,readonly=on,id=ansdrv##g;
+    s#-drive file=/dev/[a-z]+,format=host_device,if=none,id=(ansdrv|diagdrv)##g;
+    s#-device usb-storage,bus=[A-Za-z0-9_]+\.0,drive=(ansdrv|diagdrv),removable=on(,bootindex=[0-9]+)?##g')
+  # If OUR drive is gone too, there is nothing of ours to keep the controller for.
+  case " $out " in
+    *"id=$LOGVOL_DRIVE_ID"*) : ;;
+    *) printf ''; return 0 ;;
+  esac
+  printf '%s' "$out" | sed -E 's/  +/ /g; s/^ //; s/ $//'
+}
+
 logvol_qemu_apply(){ # <vm> - set the composed value on the qube; prints the previous value on stdout
   local vm="${1:?[ERROR] logvol_qemu_apply <vm>}" cur new
   cur=$(qvm-features "$vm" qemu-extra-args 2>/dev/null || true)
