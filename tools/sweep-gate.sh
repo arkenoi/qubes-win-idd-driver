@@ -235,7 +235,11 @@ if [ "${SILENT:-}" = 1 ]; then
         own=""; hit=0
         for l in "$@"; do
             [ -f "$l" ] || continue
-            case "$l" in *"$label"*) own="$l"; grep -qaE "$LEVELS" "$l" 2>/dev/null && hit=1; break ;; esac
+            # a label must be long enough to be a label. A one-character one ("a") matches almost
+            # any path - including the temp directory holding the fixture - and joined a verdict to
+            # a log that has nothing to do with it.
+            [ "${#label}" -ge 2 ] || continue
+            case "$(basename "$l")" in *"$label"*) own="$l"; grep -qaE "$LEVELS" "$l" 2>/dev/null && hit=1; break ;; esac
         done
         if [ -z "$own" ]; then
             unmeas=$((unmeas+1))

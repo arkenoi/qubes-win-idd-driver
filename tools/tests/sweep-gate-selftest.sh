@@ -236,10 +236,13 @@ printf '[20261014.120000.001-1-E] something broke here\n' > "$T/sf/cellA.log"
 printf 'nothing declared at all, just progress\n' > "$T/sf/cellB.log"
 m=$(bash tools/sweep-gate.sh --silent-failures "$T/sf/verdicts.txt" "$T/sf"/*.log 2>&1)
 printf 'zzz|FAIL unjoinable\n' > "$T/sf/v2.txt"
+# a label that joins no log is NOT MEASURABLE per-label; the answer then comes from the suite level
+# (does this run declare anything at all?) rather than from a number that pretends to be per-label.
 u=$(bash tools/sweep-gate.sh --silent-failures "$T/sf/v2.txt" "$T/sf/cellA.log" 2>&1); urc=$?
 if printf '%s' "$m" | grep -qa 'measured=2 left_a_declared_error=1 silent=1' \
-   && [ $urc -eq 2 ] && printf '%s' "$u" | grep -qa 'INCONCLUSIVE'; then
-  ok "T15 a failure with a silent log is counted, and a label with no log is INCONCLUSIVE not zero"
+   && printf '%s' "$u" | grep -qa 'no_log_of_their_own=1' \
+   && [ $urc -eq 0 ] && printf '%s' "$u" | grep -qa 'NOT SILENT'; then
+  ok "T15 a failure with a silent log is counted; an unjoinable label falls back to the suite-level answer"
 else
   no "T15 blind-spot measurement wrong (urc=$urc)" "measured: $(printf '%s' "$m" | tail -1) | unjoinable: $(printf '%s' "$u" | tail -1)"
 fi
