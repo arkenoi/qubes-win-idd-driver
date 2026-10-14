@@ -58,7 +58,13 @@ if [ "${#ROOTS[@]}" -eq 0 ]; then
   # always behind the runs that create them.
   ROOTS=( "$HOME"/qwt-* "$HOME/rel" "$HOME/rel-idd" "$HOME/tmp"
           "$R/scratchpad" "$R/artifacts" "$R/evidence" )
-  KEEP_PATHS+=( "$R/artifacts/chromerepro.exe" "$R/scratchpad/gweck" )
+  # VENDOR BINARIES A REPORTER ENVIRONMENT NEEDS ARE NOT BULK. Measured the hard way 2026-10-14:
+  # this tool deleted scratchpad/openshell/OpenShellSetup_4_4_198.exe - an .exe under scratchpad,
+  # older than the age guard, matched by no keep rule - and the next full acceptance died with
+  # "the reporter asserts Open-Shell and win11de-tup does not have it". A release gate's required
+  # suite was taken out by a disk cleanup. These files are re-fetchable but NOT from our CI, so
+  # they are not "a gh run download away" the way every other binary here is.
+  KEEP_PATHS+=( "$R/artifacts/chromerepro.exe" "$R/scratchpad/gweck" "$R/scratchpad/openshell" )
 fi
 
 BULK=( -name '*.iso' -o -name '*.exe' -o -name '*.rpm' -o -name '*.msi' -o -name '*.cab'
@@ -94,6 +100,11 @@ if [ -s "$LIST" ]; then
 fi
 
 if [ "$APPLY" = 1 ]; then
+  # RECORD WHAT WENT. Without this the only way to answer "did the cleanup delete X" is inference,
+  # which is exactly the position the Open-Shell deletion left me in.
+  MANIFEST="${PURGE_MANIFEST:-scratchpad/purge-deleted-$(date -u +%Y%m%dT%H%M%SZ).txt}"
+  mkdir -p "$(dirname "$MANIFEST")" 2>/dev/null
+  cp "$LIST" "$MANIFEST" 2>/dev/null && echo "deleted-file manifest: $MANIFEST"
   xargs -a "$LIST" -d '\n' rm -f -- 2>/dev/null
   for r in "${ROOTS[@]}"; do [ -d "$r" ] && find "$r" -mindepth 1 -type d -empty -delete 2>/dev/null; done
   echo "PURGE-RESULT applied=$n"
