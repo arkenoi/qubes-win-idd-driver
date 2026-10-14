@@ -1968,7 +1968,13 @@ B11="${B11:?set B11 to the Win11 base golden - there is no default target}"
 # so every cell reports against the same base, and NEVER from a guest clock (the guest's clock flips
 # ~3 h about 60 s into every boot, which has broken three freshness checks here).
 CAMPAIGN_SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-A10="${A10:-win10-acc}"   # the CHURN target: overridable so a preserved specimen keeps its name (findings/issues.md SPECIMENHANDBOOT)
+# THE CHURN TARGETS. The DEFAULTS are the documented names - docs/ACCEPTANCE-PROTOCOL.md's cell
+# table names win10-acc/win11-acc as what every cell reclones into, and the checkpoint names,
+# the AppVM derivation and the log-volume image paths are all derived from them. Overridable
+# only for a deliberate one-off (e.g. keeping a preserved specimen's name free); an override
+# DEVIATES from the committed procedure, so it needs the same justification any heavy path does
+# - put to Jev on 2026-10-14 it scored 0.75 as the thing to fix rather than ship.
+A10="${A10:-win10-acc}"
 A11="${A11:-win11-acc}"
 
 # CUSTODY GATE - two acceptable provenances, both strict, neither optional.

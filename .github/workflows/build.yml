@@ -430,6 +430,32 @@ jobs:
           if ($src -match 'LogWarning\("\(%p, %s\): no data, blocking read"') { throw 'the blocking-read WARNING is still present after patching' }
           if ($src -notmatch 'LogError\("\(%p, %s\): failed to read') { throw 'a failed read is no longer an ERROR after patching' }
           Write-Host "::notice title=windows-utils::blocking-read level fix applied"
+      # A CLIENT THAT DISCONNECTED BEFORE ITS THREAD RAN KILLED THE WHOLE SERVICE. QpsConnectClient
+      # starts a reader and a writer thread and returns; each one's FIRST statement was a
+      # dereference of QpsGetClient's result, which is NULL once the client has been unlinked.
+      # MEASURED on a Win10 acceptance cell 2026-10-14 (QREXECAGENTAV): qrexec-agent.exe took
+      # c0000005 reading address 0x18 - WritePipe's offset in PIPE_CLIENT - 116 ms after "[2] (...)
+      # connected", with "[2] not connected" logged in between, and the Qubes RPC agent service
+      # STOPPED (watchdog: System/7031). That is the release goal's own failure mode: an agent that
+      # dies mid-call is how dom0's callers lose stdout, stderr and the agent log. Every other
+      # function in pipe-server.c answers this race with ERROR_NOT_CONNECTED (0x8ca) - which the
+      # same seconds show a client call receiving - so the two thread entries now do the same.
+      - name: Apply the windows-utils pipe-client NULL fix (always)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = $env:GITHUB_WORKSPACE
+          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-pipe-client-null.patch"
+          if ($LASTEXITCODE -ne 0) { throw "windows-utils pipe-client NULL patch did not apply" }
+          $src = Get-Content "$ws\deps-src\windows-utils\src\pipe-server.c" -Raw
+          if ($src -notmatch 'not in the client list; reader thread exits') { throw 'reader guard marker missing after patch' }
+          if ($src -notmatch 'not in the client list; writer thread exits') { throw 'writer guard marker missing after patch' }
+          if ($src -notmatch 'NOTHING TO RELEASE IF THE CLIENT IS ALREADY GONE') { throw 'release guard marker missing after patch' }
+          # The defects themselves: a lookup immediately followed by the dereference, in either
+          # thread, and the refcount decrement reached before any NULL check.
+          if ($src -match '(?m)QpsGetClient\(server, param->ClientId\);\r?\n\s*HANDLE pipe =') { throw 'a thread entry still dereferences the client without checking it' }
+          if ($src -match '(?m)the global server lock isn''t ideal[^\n]*\r?\n\s*EnterCriticalSection\(&Server->Lock\);\r?\n\s*InterlockedDecrement') { throw 'QpsReleaseClient still decrements the refcount without checking the client' }
+          Write-Host "::notice title=windows-utils::pipe-client NULL fix applied"
       # A DEPARTED PEER STOPS BEING AN ERROR OF OURS, at the first of the four lines it wrote.
       # libvchan's client init PROBES the peer's xenstore entry - "test if the store entry exists;
       # if not - wait a second time" - and discards the status on the next line. But XcStoreRead

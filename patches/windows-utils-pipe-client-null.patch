@@ -1,0 +1,65 @@
+--- a/src/pipe-server.c
++++ b/src/pipe-server.c
+@@ -250,6 +250,13 @@
+     // it's possible that multiple threads hit the refcount==0 comparison simultaneously, locking is needed
+     // can't use the client lock obviously since client's data is being freed
+     // the global server lock isn't ideal but we would use it anyway to protect access to the client list...
++    // NOTHING TO RELEASE IF THE CLIENT IS ALREADY GONE. The public QpsDisconnectClient calls this
++    // with the result of QpsGetClientRaw, which returns NULL for a client that has just been
++    // unlinked - and InterlockedDecrement WRITES through the pointer (RefCount is at offset 0x78),
++    // so this is the same defect as the two thread entries at a different address.
++    if (!Client)
++        return;
++
+     EnterCriticalSection(&Server->Lock);
+     InterlockedDecrement(&Client->RefCount);
+     LogVerbose("[%lld] (%p) refs: %ld", Client->Id, Client, Client->RefCount);
+@@ -292,6 +299,31 @@
+     struct THREAD_PARAM *param = Param;
+     PIPE_SERVER server = param->Server;
+     PPIPE_CLIENT client = QpsGetClient(server, param->ClientId);
++
++    // THE CLIENT CAN BE GONE BEFORE THIS THREAD RUNS, and then there is nothing to read from.
++    // QpsConnectClient starts this thread and returns; a disconnect landing in between unlinks the
++    // client, QpsGetClient returns NULL, and the dereference below used to be this thread's FIRST
++    // statement. Every other function in this file answers the same race with ERROR_NOT_CONNECTED;
++    // the two thread entries answered it with an access violation, which kills the whole service.
++    // MEASURED on a Qubes Windows guest 2026-10-14: qrexec-agent.exe took c0000005 reading address
++    // 0x18 - WritePipe, the writer thread's version of this line - 116 ms after "[2] (...)
++    // connected" and 54 ms after a disconnect had logged "[2] not connected", and the Qubes RPC
++    // agent service stopped (System/7031). In the same seconds a client call got the HANDLED form
++    // of the race, ERROR_NOT_CONNECTED (0x8ca), from QpsRead.
++    // A DISCONNECT IS NOT THE ONLY WAY IN. QpsConnectClient creates both threads BEFORE
++    // InsertTailList, and each of its error paths after the first CreateThread returns without
++    // inserting the client, without stopping the thread it already started and without freeing
++    // anything - so that thread looks up an id the list will never hold. The lookup failing is
++    // therefore an ordinary outcome, not an exotic race, and it is handled rather than assumed away.
++    // The line below states the FACT the lookup gives - the id is not in the list - and not a
++    // cause: "disconnected" would be wrong on the never-inserted path.
++    if (!client)
++    {
++        LogWarning("[%lld] not in the client list; reader thread exits", param->ClientId);
++        free(param);
++        return 1;
++    }
++
+     HANDLE pipe = client->ReadPipe;
+     PVOID buffer = malloc(server->PipeBufferSize);
+     DWORD transferred;
+@@ -362,6 +394,16 @@
+     struct THREAD_PARAM *param = Param;
+     PIPE_SERVER server = param->Server;
+     PPIPE_CLIENT client = QpsGetClient(server, param->ClientId);
++
++    // The same race, and THIS is the one measured killing the service: 0x18 is WritePipe's offset
++    // in PIPE_CLIENT (ListEntry 16 + Id 8). See QpsReaderThread above for the full record.
++    if (!client)
++    {
++        LogWarning("[%lld] not in the client list; writer thread exits", param->ClientId);
++        free(param);
++        return 1;
++    }
++
+     HANDLE pipe = client->WritePipe;
+     PVOID data = malloc(server->InternalBufferSize);
+     UINT64 size;
