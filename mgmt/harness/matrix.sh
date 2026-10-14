@@ -91,7 +91,9 @@ logvol_bind_now(){ # $1=vm $2=label
   # boot and nothing after the cell's park/restore, failing agent_log_healthy, the IDD check and the
   # console-window check on a healthy guest. An acceptance run measures the SHIPPED configuration;
   # redirecting the product's log directory onto a test stick substitutes test conditions.
-  [ "${LOGVOL_BIND:-0}" = 1 ] || { say "  $2: log volume NOT bound (LOGVOL_BIND unset) - the guest logs where it ships to"; return 0; }
+  # ON BY DEFAULT now that the letter is resolved by label and PINNED (logvol-bind.ps1 Pin-LogVol),
+  # so LogDir can no longer name a letter that moved. LOGVOL_BIND=0 is the kill switch.
+  [ "${LOGVOL_BIND:-1}" = 1 ] || { say "  $2: log volume NOT bound (LOGVOL_BIND=0) - the guest logs where it ships to"; return 0; }
   [ -n "$LOGVOL_IMG" ] || return 0
   if logvol_bind_guest "$1" "$1" >>"$M/$2-logvol-bind.out" 2>&1; then
     say "  $2: QWT logs bound to the log volume"
@@ -533,9 +535,10 @@ boot_with_release_iso(){ # $1=vm $2=label - boot a HALTED subject with the relea
   # drive letter the private volume normally takes, which decided a cell's verdict on 2026-09-08
   # (user_data_on_private and agent_log_healthy both failed on a guest whose install was perfect).
   # "Instrument off" has to mean nothing extra is attached.
-  LOGVOL_VM=""; LOGVOL_IMG=""
-  if [ "${LOGVOL_BIND:-0}" = 1 ]; then
-    LOGVOL_VM="$vm"; LOGVOL_IMG=$(logvol_image "$vm")
+  # ALWAYS: one evidence stick per subject, carrying the install markers and the logs. It is the
+  # DIAG stick, which has been attached unconditionally since 2026-09-08.
+  LOGVOL_VM="$vm"; LOGVOL_IMG=$(logvol_image "$vm")
+  if true; then
     if logvol_create "$LOGVOL_IMG" "$vm" >>"$M/$lbl-logvol-setup.out" 2>&1 \
        && logvol_attach "$vm" "$LOGVOL_IMG" "$M/logvol-manifest.json" >>"$M/$lbl-logvol-setup.out" 2>&1; then
       say "  $lbl: log volume attached ($LOGVOL_IMG)"

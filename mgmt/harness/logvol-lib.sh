@@ -106,10 +106,10 @@
 LOGVOL_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOGVOL_ROOT="$(cd "$LOGVOL_LIB_DIR/../.." && pwd)"
 LOGVOL_HOLDER="${LOGVOL_HOLDER:-win-idd-mgmt}"      # the qube that holds the loop device (this one)
-LOGVOL_FRONTEND="${LOGVOL_FRONTEND:-xvdk}"           # OUR OWN slot: xvdi is the answer stick, xvdj is prime-run's DIAG stick
+LOGVOL_FRONTEND="${LOGVOL_FRONTEND:-xvdj}"   # ONE stick, on the slot the DIAG stick has always used           # OUR OWN slot: xvdi is the answer stick, xvdj is prime-run's DIAG stick
                                                      # (it was xvdj until 2026-10-14, which collided with the DIAG stick and
                                                      #  is why this volume could not simply be attached on the prime-run path)
-LOGVOL_LABEL="${LOGVOL_LABEL:-LOGVOL}"
+LOGVOL_LABEL="${LOGVOL_LABEL:-DIAG}"        # ONE stick: the label the install itself resolves at write time (`vol %d: | findstr /i "DIAG"`)
 LOGVOL_SIZE_MB="${LOGVOL_SIZE_MB:-256}"              # a day of module logs is ~0.2 MiB; MSI verbose logs are MBs
 LOGVOL_DIR="${LOGVOL_DIR:-$HOME/win-iso/logvol}"     # images live OUTSIDE the repo (never a tracked path)
 LOGVOL_ARCHIVE_DIR="${LOGVOL_ARCHIVE_DIR:-$LOGVOL_DIR/archive}"

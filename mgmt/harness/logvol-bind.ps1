@@ -36,7 +36,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $RegKey = 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools'
-$Label = 'LOGVOL'
+$Label = 'DIAG'   # one stick, and this is the label the install's own cmd resolves
 
 function B64([string]$s) { if ($null -eq $s) { $s = '' }; return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s)) }
 function Fail([string]$why) { Write-Output ("LOGVOL-BIND fail reason=" + $why); exit 1 }
@@ -51,6 +51,35 @@ function Find-LogVol {
         if (Test-Path -LiteralPath $tag) { return $d.DeviceID }
     }
     return $null
+}
+
+function Pin-LogVol([string]$cur) {
+    # THE LETTER MUST NOT MOVE, because LogDir records one and every module reads it once at init.
+    # The volume is found BY LABEL above, which is correct and letter-independent; the defect was
+    # writing whatever letter it happened to have into the registry. That letter is a function of
+    # which OTHER removable volumes are attached: measured 2026-10-14/15 across four acceptance
+    # runs, the stick bound as F: while the answer stick and the DIAG stick were present and came
+    # back as D: once they were dropped, so LogDir named a letter nothing answered to and every
+    # log-derived check failed on a healthy guest. Binding later did not help: unassigning a claim
+    # and rewriting qemu-extra-args only take effect at the NEXT domain creation, so the running
+    # guest still showed three volumes at bind time.
+    # So the mapping is PINNED. mountvol records volume->letter under MountedDevices keyed by the
+    # volume's own GUID, which survives reboots and any change in the device set. After this the
+    # label resolves to a letter that stays put, and LogDir is written to THAT.
+    $want = 'Z:'
+    if ($cur -eq $want) { return $want }
+    $vol = Get-CimInstance Win32_Volume -Filter ("DriveLetter='" + $cur + "'") -ErrorAction SilentlyContinue
+    if (-not $vol -or -not $vol.DeviceID) { return $cur }
+    # NEVER STEAL A LETTER IN USE. If something already holds Z:, keep the current one rather than
+    # unmounting a volume this script knows nothing about.
+    $taken = Get-CimInstance Win32_Volume -Filter ("DriveLetter='" + $want + "'") -ErrorAction SilentlyContinue
+    if ($taken) { return $cur }
+    & mountvol $want $vol.DeviceID 2>&1 | Out-Null
+    Start-Sleep -Milliseconds 700
+    $check = Get-CimInstance Win32_Volume -Filter ("DriveLetter='" + $want + "'") -ErrorAction SilentlyContinue
+    if ($check -and $check.DeviceID -eq $vol.DeviceID) { return $want }
+    # The pin did not take; carry on with the letter we have and say so in the receipt.
+    return $cur
 }
 
 function Get-RegValue([string]$name) {
@@ -91,6 +120,10 @@ if (-not $Id) { Fail 'no_id' }
 if ($Id -notmatch '^[A-Za-z0-9._-]+$') { Fail 'bad_id' }
 $drive = Find-LogVol
 if (-not $drive) { Fail ('no_volume_labelled_' + $Label + '_with_LOGVOL.TAG') }
+# Found by label; now make that label resolve to a letter that does not move, and redirect THERE.
+$found = $drive
+$drive = Pin-LogVol $drive
+$pinned = if ($drive -eq $found) { 'same' } else { 'pinned' }
 $old = [string](Get-RegValue 'LogDir')
 if (-not $old) { $old = 'Q:\Qubes Logs' }
 $new = Join-Path $drive ('qwt-logs\' + $Id)
@@ -117,7 +150,7 @@ if ($Mode -eq 'registry') {
         Set-ItemProperty -Path $RegKey -Name 'LogDirPreLogvol' -Value $old
     }
     Set-ItemProperty -Path $RegKey -Name 'LogDir' -Value $new
-    Write-Output ("LOGVOL-BIND ok mode=registry id=" + $Id + " drive=" + $drive + " old=" + (B64 $old) + " new=" + (B64 $new) + " copied=" + $copied + " safeflush=1")
+    Write-Output ("LOGVOL-BIND ok mode=registry id=" + $Id + " drive=" + $drive + " found=" + $found + " letter=" + $pinned + " old=" + (B64 $old) + " new=" + (B64 $new) + " copied=" + $copied + " safeflush=1")
     exit 0
 }
 

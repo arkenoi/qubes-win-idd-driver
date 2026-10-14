@@ -265,26 +265,23 @@ qvm-device block assign "${_req[@]}" -o frontend-dev=xvdi -o devtype=disk "$CHUR
 # this small FAT volume (label DIAG) instead, and the HOST reads them back with mtools needing
 # nothing from the guest. It is attached READ-WRITE because it is scratch; the answer stick above
 # stays read-only because it is the thing being tested.
-DIAGIMG=/home/user/win-iso/answer-usb-413.img
-DIAGLOOP=$(ensure_loop "$DIAGIMG" rw)
-if [ -n "$DIAGLOOP" ]; then
-    # ARCHIVE BEFORE WIPING. The markers are the only evidence a stalled prime leaves, and this
-    # reformat would destroy the previous run's set - the same "discard the evidence" mistake that
-    # already cost two failure states. Keep every set on disk, timestamped, before wiping.
-    mkdir -p "$HERE/evidence/diag-archive"
-    if mcopy -n -i "$DIAGIMG" ::/prime-progress.log \
-         "$HERE/evidence/diag-archive/$(date -u +%Y%m%d-%H%M%S)-$CHURN.log" 2>/dev/null; then
-        log "previous diag markers archived to evidence/diag-archive/"
-    fi
-    mkfs.fat -F 32 -n DIAG "$DIAGIMG" >/dev/null 2>&1   # fresh per run: markers are per-prime
-    if qvm-device block assign "${_req[@]}" -o frontend-dev=xvdj -o devtype=disk -o read-only=false \
-           "$CHURN" "$HOLDER:$DIAGLOOP" 2>/dev/null; then
-        log "diag stick on /dev/$DIAGLOOP -> xvdj (writable, markers only)"
-    else
-        log "[WARN] diag stick could not be assigned - a stall will be undiagnosable, not fatal"
-    fi
+# ONE EVIDENCE STICK, carrying the install's markers AND QWT's logs. It used to be two volumes with
+# identical plumbing - this DIAG stick, and a second "log volume" whose only difference was that it
+# REDIRECTED LogDir and so recorded a drive letter that moved. The owner, seeing them side by side:
+# "why the fuck did we need separate log stick when we have the same mechanism working as diag" -
+# and he was right: the mechanism here is the one that always worked, because the install resolves
+# the drive BY LABEL at write time (`vol %d: | findstr /i "DIAG"`) and stores nothing.
+# So there is one image per subject, labelled DIAG, on xvdj, created and tagged by the library (which
+# archives the previous contents instead of discarding them) and attached the same way. The guest's
+# markers and its logs end up on the same volume, and one host-side read with mtools shows both.
+OUT_SETUP="$HERE/evidence/prime-stick-$CHURN.out"
+DIAGIMG=$(logvol_image "$CHURN")
+if logvol_create "$DIAGIMG" "$CHURN" >>"$OUT_SETUP" 2>&1 \
+   && logvol_attach "$CHURN" "$DIAGIMG" "$HERE/evidence/logvol-manifest-$CHURN.json" >>"$OUT_SETUP" 2>&1; then
+    log "evidence stick on $LOGVOL_FRONTEND ($DIAGIMG, label $LOGVOL_LABEL) - markers and logs, read with mtools, no guest needed"
 else
-    log "[WARN] $DIAGIMG is not on a loop device - no diag stick this run"
+    DIAGIMG=""
+    log "[WARN] evidence stick not attached - a stall leaves no markers and a wedge no logs: $(tail -1 "$OUT_SETUP" 2>/dev/null | cut -c1-140)"
 fi
 
 OUT="$HERE/evidence/prime-$JOB-$CHURN-$(date -u +%Y%m%d-%H%M%S)"; mkdir -p "$OUT"
@@ -300,31 +297,8 @@ log "evidence -> $OUT"
 # and this attach COMPOSES qemu-extra-args rather than overwriting the value set earlier.
 # BEFORE THE START, and after qemu-extra-args: a --required assignment is satisfied at domain
 # creation, so a volume attached later is invisible to the guest.
-# OPT-IN, AND OFF BY DEFAULT, because binding it SUBSTITUTES TEST CONDITIONS. The bind points
-# QWT's LogDir at a REMOVABLE USB volume, and a removable volume need not be mounted when a service
-# starts: measured 2026-10-15 on three consecutive campaign runs, the agent logged to the volume on
-# the post-install boot (21:11:59-21:14:00 UTC) and wrote NOTHING there after the cell's
-# park/restore boot, so every log-derived acceptance check failed - `agent_log_healthy` ("no agent
-# log is held open by any process"), the IDD check that reads a line out of that log, and the
-# console-window check ("no gui-agent log found in F:\qwt-logs\win10-acc"). The guest was healthy
-# every time.
-# An acceptance run must measure the product in its SHIPPED configuration; moving the log directory
-# onto a test stick is exactly the substitution this project forbids. So the volume is for a
-# DELIBERATE wedge hunt (LOGVOL_BIND=1), where losing the logs is the thing being prevented and a
-# stale LogDir costs nothing.
-if [ "${LOGVOL_BIND:-0}" = 1 ]; then
-  LOGVOL_IMG_PRIME=$(logvol_image "$CHURN")
-  if logvol_create "$LOGVOL_IMG_PRIME" "$CHURN" >>"$OUT/logvol-setup.out" 2>&1 \
-     && logvol_attach "$CHURN" "$LOGVOL_IMG_PRIME" "$OUT/logvol-manifest.json" >>"$OUT/logvol-setup.out" 2>&1; then
-      log "log volume on $LOGVOL_FRONTEND ($LOGVOL_IMG_PRIME) - read it with logvol_pull, no guest needed"
-  else
-      LOGVOL_IMG_PRIME=""
-      log "[WARN] log volume not attached - a wedge or a refused shutdown loses the QWT logs: $(tail -1 "$OUT/logvol-setup.out" 2>/dev/null | cut -c1-140)"
-  fi
-else
-  LOGVOL_IMG_PRIME=""
-  log "log volume NOT attached (LOGVOL_BIND unset): the guest logs where it ships to, which is what acceptance must measure"
-fi
+# The evidence stick is attached above - there is no second volume any more.
+LOGVOL_IMG_PRIME="$DIAGIMG"
 
 # --- LOOK AT THE SCREEN, do not infer from qrexec silence -------------------------------------
 # Cost of not doing this, measured 2026-09-08: a clean install froze the guest, the wait below saw

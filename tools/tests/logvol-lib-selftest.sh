@@ -15,7 +15,7 @@
 #   compose     our drive + device are ADDED to an existing answer-stick controller, never overwrite it
 #               (knob: compose); the drive carries cache=writethrough (knob: writethrough); idempotent (knob: idempotent)
 #   strip       our fragments are removed and the stick's are untouched; our own controller goes with them
-#   attach      loop + --required assign at xvdk read-only=false + qemu args + manifest, in that order;
+#   attach      loop + --required assign at xvdj read-only=false + qemu args + manifest, in that order;
 #               a sealed golden is REFUSED (knob: seal)
 #   detach      unassign + strip; the loop is released only when the guest is Halted
 #   bind        the guest binder parses (pwsh) and sets LogSafeFlush=1 and LogDir at the root key
@@ -165,7 +165,7 @@ printf '%s' "$ck" | grep -q 'cache=writethrough' && bad "knob 'writethrough' did
 K=$(knob compose) || exit 2; ck=$(run "$K" "logvol_qemu_args_compose '$STICK'")
 [ "${ck#"$STICK"}" = "$ck" ] && ok "compose: knob 'compose' OVERWRITES the stick's args - the check is seen to fail" || bad "knob 'compose' did not break composition"
 c0=$(run "$LIB" "logvol_qemu_args_compose ''")
-printf '%s' "$c0" | grep -q -- '-device nec-usb-xhci,id=logusb -drive file=/dev/xvdk,format=host_device,if=none,id=logdrv,cache=writethrough -device usb-storage,bus=logusb.0,drive=logdrv,removable=on' \
+printf '%s' "$c0" | grep -q -- '-device nec-usb-xhci,id=logusb -drive file=/dev/xvdj,format=host_device,if=none,id=logdrv,cache=writethrough -device usb-storage,bus=logusb.0,drive=logdrv,removable=on' \
   && ok "compose: with no existing args our OWN controller is added (logusb)" || bad "compose empty: '$c0'"
 c2=$(run "$LIB" "logvol_qemu_args_compose '$c'")
 [ "$c2" = "$c" ] && ok "compose: idempotent - composing twice adds nothing" || bad "compose: not idempotent: '$c2'"
@@ -180,20 +180,28 @@ s0=$(run "$LIB" "logvol_qemu_args_strip '$c0'")
 : > "$CALLS"; rm -f "$FEATSTORE"; printf '%s' "$STICK" > "$FEATSTORE"
 MF="$T/manifest.json"
 out=$(run "$LIB" "logvol_attach win11-cell '$IMG' '$MF'"); rc=$?
-if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q 'LOGVOL-ATTACHED vm=win11-cell id=cell-A1 .*loop=loop77 frontend=xvdk cache=writethrough'; then ok "attach: $out"; else bad "attach: rc=$rc $out $(cat "$T/last.err")"; fi
+if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q 'LOGVOL-ATTACHED vm=win11-cell id=cell-A1 .*loop=loop77 frontend=xvdj cache=writethrough'; then ok "attach: $out"; else bad "attach: rc=$rc $out $(cat "$T/last.err")"; fi
 grep -q 'udisksctl loop-setup -f ' "$CALLS" && ok "attach: a WRITABLE loop (udisksctl loop-setup -f, no -r)" || bad "attach: loop-setup call wrong: $(grep udisksctl "$CALLS")"
-grep -q 'qvm-device block assign --required -o frontend-dev=xvdk -o devtype=disk -o read-only=false win11-cell win-idd-mgmt:loop77' "$CALLS" \
-  && ok "attach: assign --required at xvdk, devtype=disk, read-only=false, holder win-idd-mgmt:loop77" || bad "attach: assign call wrong: $(grep qvm-device "$CALLS")"
-# THE SLOT MUST NOT BE THE DIAG STICK'S. This volume sat on xvdj until 2026-10-14, which is
-# prime-run's DIAG slot - the collision is why the clean-install path could not simply attach it,
-# and why that path ran with no log volume at all while its grading blamed the guest.
+grep -q 'qvm-device block assign --required -o frontend-dev=xvdj -o devtype=disk -o read-only=false win11-cell win-idd-mgmt:loop77' "$CALLS" \
+  && ok "attach: assign --required at xvdj, devtype=disk, read-only=false, holder win-idd-mgmt:loop77" || bad "attach: assign call wrong: $(grep qvm-device "$CALLS")"
+# ONE STICK, ON ONE SLOT. This volume and prime-run's DIAG stick were two volumes with identical
+# plumbing; the only difference was that this one redirected LogDir, and that redirect cost four
+# acceptance runs. They are now the same stick: one image per subject, label DIAG, slot xvdj,
+# carrying the install's markers and the guest's logs together.
 # Read the DEFAULT out of the library rather than the environment: this test drives the lib in
 # shimmed subshells, so the variable is not bound in this shell (`set -u` aborted the check here).
 LVFE=$(sed -n 's/^LOGVOL_FRONTEND="${LOGVOL_FRONTEND:-\([a-z0-9]*\)}".*/\1/p' mgmt/harness/logvol-lib.sh | head -1)
-{ [ -n "$LVFE" ] && [ "$LVFE" != xvdj ]; } \
-  && ok "attach: the slot ($LVFE) is not prime-run's DIAG stick (xvdj)" || bad "attach: LOGVOL_FRONTEND default is '$LVFE' - xvdj is prime-run's DIAG stick"
-grep -q 'frontend-dev=xvdj' mgmt/harness/prime-run.sh \
-  && ok "attach: prime-run still owns xvdj for DIAG" || bad "attach: prime-run no longer assigns xvdj - re-check which slot is free"
+[ "$LVFE" = xvdj ] \
+  && ok "attach: one stick, on xvdj - the slot the DIAG stick has always used" \
+  || bad "attach: LOGVOL_FRONTEND default is '$LVFE' - the collapsed design is one stick on xvdj"
+LVLB=$(sed -n 's/^LOGVOL_LABEL="${LOGVOL_LABEL:-\([A-Z0-9]*\)}".*/\1/p' mgmt/harness/logvol-lib.sh | head -1)
+[ "$LVLB" = DIAG ] \
+  && ok "attach: labelled DIAG - the label the install's own cmd resolves at write time" \
+  || bad "attach: label is '$LVLB', so the install's `vol | findstr DIAG` will not find it"
+# And prime-run must no longer attach a SECOND stick of its own.
+[ "$(command grep -c 'answer-usb-413' mgmt/harness/prime-run.sh)" -eq 0 ] \
+  && ok "attach: prime-run no longer attaches a separate DIAG image - one stick only" \
+  || bad "attach: prime-run still attaches answer-usb-413.img as well, which collides on xvdj"
 if [ "$(grep -n -E 'loop-setup|block assign|qvm-features win11-cell qemu-extra-args --' "$CALLS" | cut -d: -f1 | tr '\n' ' ')" = "$(grep -n -E 'loop-setup|block assign|qvm-features win11-cell qemu-extra-args --' "$CALLS" | cut -d: -f1 | sort -n | tr '\n' ' ')" ] \
    && grep -q 'loop-setup' "$CALLS" && grep -q 'block assign' "$CALLS" && grep -q 'qemu-extra-args --' "$CALLS"; then
   ok "attach: order is loop -> assign -> qemu args"
@@ -281,6 +289,99 @@ command grep -q 'logvol_qemu_args_keep_only_ours' "$ROOT/mgmt/harness/matrix.sh"
   && ok "keep_only_ours: matrix.sh uses it instead of unsetting the whole feature" \
   || bad "keep_only_ours: matrix.sh does not call it - the blanket unset is back"
 
+# ---- THE LETTER IS RESOLVED BY LABEL AND THEN PINNED -------------------------------------------
+# The volume was always found by LABEL, which is correct. The defect was writing whatever letter it
+# happened to have into LogDir, where every module reads it once at init: the letter depends on which
+# OTHER removable volumes are attached, so it moved from F: to D: when the priming sticks were
+# dropped and four acceptance runs failed on a healthy guest. "Fix it by timing" was wrong - the
+# owner: "what the fuck is 'fix by timing'. find out what the letter is and redirect there, no
+# fucking guesses" - and binding later cannot work anyway, because unassigning a claim and rewriting
+# qemu-extra-args only take effect at the next domain creation.
+B=mgmt/harness/logvol-bind.ps1
+bcode(){ sed -E 's/(^|[^`])#.*/\1/' "$B"; }
+[ "$(bcode | command grep -c 'VolumeName -eq \$Label')" -ge 1 ] \
+  && ok "bind: the volume is found BY LABEL" || bad "bind: the volume is not found by label"
+[ "$(bcode | command grep -c 'LOGVOL.TAG')" -ge 1 ] \
+  && ok "bind: and confirmed by our own tag file, not just the label" || bad "bind: no tag-file confirmation"
+[ "$(bcode | command grep -c 'mountvol')" -ge 1 ] \
+  && ok "bind: the resolved letter is PINNED with mountvol, so the mapping survives reboots" \
+  || bad "bind: nothing pins the letter - it will move again when the device set changes"
+[ "$(bcode | command grep -c 'Pin-LogVol')" -ge 2 ] \
+  && ok "bind: the pin is applied to what the label resolved, before LogDir is written" \
+  || bad "bind: the pin is defined but not applied"
+# It must never take a letter another volume holds.
+[ "$(bcode | command grep -c "DriveLetter='\" + \$want")" -ge 1 ] \
+  && ok "bind: refuses to steal a letter already in use" || bad "bind: could unmount an unrelated volume"
+# And the receipt has to say which letter was found and whether it moved, so a reader can tell.
+[ "$(bcode | command grep -c 'found=')" -ge 1 ] && ok "bind: the receipt records the letter found" || bad "bind: the receipt hides which letter was used"
+
+# ---- THE BIND MUST HAPPEN AFTER THE DEVICE SET IS FINAL ----------------------------------------
+# LogDir is written with the volume's DRIVE LETTER as it is at bind time, and that letter depends on
+# which other removable volumes are attached. prime-run used to bind while BOTH priming sticks were
+# present; the cell then unassigns them, the volume moves up the alphabet on the next boot, and
+# LogDir points at a letter nothing answers to. Three campaign runs died there, each one blamed on
+# the guest. MEASURED by mgmt/harness/logvol-chain-check.sh (win10-acc, 2026-10-15): with the device
+# set stable the chain holds across a reboot - mounted at D:, LogDir on it, 7 logs held open, 266
+# QWT lines host-side, same letter after the reboot, 266 -> 568 lines. 15 links, 0 broken.
+# COMMENTS STRIPPED FIRST: prime-run's comment NAMES logvol_bind_guest to explain why it is not
+# called there, so grepping the raw file finds the explanation and calls it a call. Nth time today.
+[ "$(sed 's@#.*@@' "$ROOT/mgmt/harness/prime-run.sh" | command grep -c 'logvol_bind_guest')" -eq 0 ] \
+  && ok "bind timing: prime-run does NOT bind (its device set still has both priming sticks)" \
+  || bad "bind timing: prime-run still binds before the sticks are removed"
+# and the cell binds AFTER the sweep, by line order
+cell=$(awk '/^cell_clean\(\)|clear_prime_leftovers "\$vm"/,/logvol_bind_now/' "$ROOT/mgmt/harness/matrix.sh" | sed 's@#.*@@')
+sw=$(printf '%s\n' "$cell" | command grep -n 'clear_prime_leftovers' | head -1 | cut -d: -f1)
+bd=$(printf '%s\n' "$cell" | command grep -n 'logvol_bind_now' | head -1 | cut -d: -f1)
+{ [ -n "$sw" ] && [ -n "$bd" ] && [ "$sw" -lt "$bd" ]; } \
+  && ok "bind timing: the cell sweeps the sticks (line $sw) BEFORE binding (line $bd)" \
+  || bad "bind timing: sweep at '$sw', bind at '$bd' - the letter can still move after the bind"
+# the chain check itself must exist and cover the reboot, or none of this is verifiable
+[ -x "$ROOT/mgmt/harness/logvol-chain-check.sh" ] \
+  && ok "bind timing: the whole-chain check exists and is executable" || bad "bind timing: no chain check"
+command grep -q 'G4b same drive letter across the reboot' "$ROOT/mgmt/harness/logvol-chain-check.sh" \
+  && ok "bind timing: the chain check asserts the LETTER survives a reboot" \
+  || bad "bind timing: the chain check does not check the letter across a reboot"
+
+# ---- THE STICK IS ALWAYS THERE; THE REDIRECT IS ON BY DEFAULT ---------------------------------
+# The stick carries the install's markers, which a stalled install needs whether or not logs are
+# redirected, so it is attached unconditionally - as the DIAG stick always was. The redirect is on
+# by default now that the letter is resolved by label and PINNED, so it cannot name a letter that
+# moved; LOGVOL_BIND=0 remains as a kill switch.
+[ "$(command grep -c 'LOGVOL_BIND:-1' "$ROOT/mgmt/harness/matrix.sh")" -ge 1 ] \
+  && ok "posture: the redirect is ON by default (LOGVOL_BIND=0 disables it)" \
+  || bad "posture: the redirect is not on by default"
+[ "$(command grep -c 'LOGVOL_BIND:-0' "$ROOT/mgmt/harness/matrix.sh")" -eq 0 ] \
+  && ok "posture: no off-by-default gate left in the matrix" || bad "posture: an off-by-default gate remains"
+[ "$(sed -E 's/(^|[^`])#.*/\1/' "$ROOT/mgmt/harness/prime-run.sh" | command grep -c 'LOGVOL_BIND')" -eq 0 ] \
+  && ok "posture: prime-run attaches the stick unconditionally and never binds" \
+  || bad "posture: prime-run still gates or binds the stick"
+
+# ---- THE LETTER IS RESOLVED BY LABEL AND THEN PINNED -------------------------------------------
+# The volume was always found by LABEL, which is correct. The defect was writing whatever letter it
+# happened to have into LogDir, where every module reads it once at init: the letter depends on which
+# OTHER removable volumes are attached, so it moved from F: to D: when the priming sticks were
+# dropped and four acceptance runs failed on a healthy guest. "Fix it by timing" was wrong - the
+# owner: "what the fuck is 'fix by timing'. find out what the letter is and redirect there, no
+# fucking guesses" - and binding later cannot work anyway, because unassigning a claim and rewriting
+# qemu-extra-args only take effect at the next domain creation.
+B=mgmt/harness/logvol-bind.ps1
+bcode(){ sed -E 's/(^|[^`])#.*/\1/' "$B"; }
+[ "$(bcode | command grep -c 'VolumeName -eq \$Label')" -ge 1 ] \
+  && ok "bind: the volume is found BY LABEL" || bad "bind: the volume is not found by label"
+[ "$(bcode | command grep -c 'LOGVOL.TAG')" -ge 1 ] \
+  && ok "bind: and confirmed by our own tag file, not just the label" || bad "bind: no tag-file confirmation"
+[ "$(bcode | command grep -c 'mountvol')" -ge 1 ] \
+  && ok "bind: the resolved letter is PINNED with mountvol, so the mapping survives reboots" \
+  || bad "bind: nothing pins the letter - it will move again when the device set changes"
+[ "$(bcode | command grep -c 'Pin-LogVol')" -ge 2 ] \
+  && ok "bind: the pin is applied to what the label resolved, before LogDir is written" \
+  || bad "bind: the pin is defined but not applied"
+# It must never take a letter another volume holds.
+[ "$(bcode | command grep -c "DriveLetter='\" + \$want")" -ge 1 ] \
+  && ok "bind: refuses to steal a letter already in use" || bad "bind: could unmount an unrelated volume"
+# And the receipt has to say which letter was found and whether it moved, so a reader can tell.
+[ "$(bcode | command grep -c 'found=')" -ge 1 ] && ok "bind: the receipt records the letter found" || bad "bind: the receipt hides which letter was used"
+
 # ---- THE BIND MUST HAPPEN AFTER THE DEVICE SET IS FINAL ----------------------------------------
 # LogDir is written with the volume's DRIVE LETTER as it is at bind time, and that letter depends on
 # which other removable volumes are attached. prime-run used to bind while BOTH priming sticks were
@@ -310,23 +411,9 @@ command grep -q 'G4b same drive letter across the reboot' "$ROOT/mgmt/harness/lo
 
 # ---- THE BIND IS OPT-IN, because it substitutes test conditions ---------------------------------
 # Binding LogDir onto a REMOVABLE volume makes the product's logging depend on a device that need
-# not be mounted when a service starts. Measured 2026-10-15 across three campaign runs: the agent
-# logged to the volume on the post-install boot and NOTHING after the cell's park/restore, failing
-# agent_log_healthy, the IDD check that reads that log, and the console-window check - on a guest
-# that was healthy every time. An acceptance run measures the SHIPPED configuration.
-# ONE gate in prime-run, not two: it attaches (gated) and no longer binds at all - the bind moved
-# to the cell, where the device set is final. The old expectation of two was written when prime-run
-# still did both.
-[ "$(command grep -c 'LOGVOL_BIND:-0' "$ROOT/mgmt/harness/prime-run.sh")" -eq 1 ] \
-  && ok "opt-in: prime-run gates its attach on LOGVOL_BIND and does not bind" \
-  || bad "opt-in: prime-run has $(command grep -c 'LOGVOL_BIND:-0' "$ROOT/mgmt/harness/prime-run.sh") gate(s), expected exactly the attach"
-[ "$(command grep -c 'LOGVOL_BIND:-0' "$ROOT/mgmt/harness/matrix.sh")" -ge 1 ] \
-  && ok "opt-in: the matrix bind is gated too" || bad "opt-in: the matrix bind is still unconditional"
-# And the default must be OFF: a bare run of either must not redirect anything.
-for f in prime-run.sh matrix.sh; do
-  command grep -qE 'LOGVOL_BIND:-0' "$ROOT/mgmt/harness/$f" \
-    && ok "opt-in: $f defaults to NOT binding" || bad "opt-in: $f default is not off"
-done
+# not be mounted when a service starts - until the letter is PINNED, which is what
+# logvol-bind.ps1's Pin-LogVol now does. With the mapping persisted by volume GUID the
+# redirect is stable across reboots and device-set changes, so it is on by default again.
 
 # A BIND WITH NO MATCHING UNBIND IS THE DEFECT. logvol_bind_guest points LogDir at the volume, so
 # any detach must restore it first or the guest logs to a drive letter that is gone - measured
