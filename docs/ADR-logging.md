@@ -101,6 +101,41 @@ header, or took *any* matching line as the current instance's, is now wrong:
   since PowerShell has no atomic-append primitive the append retries a bounded number of times on a
   sharing collision and then **says the line was lost** on stderr.
 
+### The log volume is an instrument, and it does not decide where the product logs
+
+A removable FAT volume (label `DIAG`, frontend `xvdj`) is attached to every acceptance subject. It
+exists for ONE purpose: reading a WEDGED guest's logs from the host with mtools, without the guest's
+cooperation and without detaching anything. That part works and is kept.
+
+What it must NOT do by default is redirect the product's own `LogDir` onto itself. Two reasons, and
+the second is measured:
+
+* **It substitutes test conditions.** An acceptance run is supposed to measure the configuration we
+  ship. Pointing `LogDir` at a test stick measures a configuration no user has. On a guest that is
+  not wedged there is nothing to recover anyway — qrexec reads the logs.
+* **`LogInit` does not wait for a USB volume.** Every module reads `LogDir` once, when it starts.
+  The volume is a USB device behind an emulated xHCI controller and enumerates on its own schedule,
+  so a module that starts first opens no log at all — and never retries. Measured 2026-10-15 with
+  the drive letter already pinned and verified: the bind reported `drive=Z: found=E: letter=pinned
+  copied=21`, the volume was mounted at `Z:`, 23 files were readable on it from the host — and
+  nothing was written to it after the cell's park/restore. `agent_log_healthy` returned
+  `any_agent_log_held_open: false` while the agent was alive; the IDD check found no line to read;
+  the console-window check reported `INVALID-INSTRUMENT`.
+
+The control settles it: the `WIN10-clean` accept battery PASSED in the two campaigns before this
+redirect was wired into that cell and failed in every campaign after.
+
+So `LOGVOL_BIND` defaults to 0. `LOGVOL_BIND=1` is for hunting a wedge. The stick stays attached
+either way, because it also carries the installer's own diagnostic markers, which a stalled install
+needs whether or not logs are redirected.
+
+**The mistake worth remembering is not the race, it is the override.** The comment above that gate
+already carried the measurement — "need not be mounted when a service starts" — and, in the same
+paragraph, "ON BY DEFAULT now that the letter is resolved by label and PINNED". Pinning the letter
+was a real fix for a real defect; it simply had nothing to do with whether the volume is mounted
+before the agent's `LogInit`. "Mounted at a stable letter" and "mounted in time" are different
+claims, and a theory about the first was allowed to overrule a measurement about the second.
+
 ### Not done
 
 * Nothing has run on a guest: every file-count claim is a prediction until then.
