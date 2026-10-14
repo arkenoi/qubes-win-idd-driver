@@ -111,13 +111,13 @@ no(){ FAIL=\$((FAIL+1)); case \"\$*\" in *INVALID*) INVALID=\$((INVALID+1)) ;; e
 $blk
 echo \"RESULT FAIL=\$FAIL INVALID=\$INVALID\"" 2>&1
 }
-mkdir -p "$T/dirty/logvol-win11-up/qwt-logs" "$T/clean"
+mkdir -p "$T/dirty/logvol-win11-up/files/qwt-logs/win11-up" "$T/clean"
 printf '12:00:00 matrix: campaign start\n' > "$T/dirty/run.log"
 printf '12:00:00 matrix: campaign start\n' > "$T/clean/run.log"
-printf '[20261014.120004.001-1234-W] gui-agent.exe died within 10000 ms of starting, 2 time(s) in a row\n'   > "$T/dirty/logvol-win11-up/qwt-logs/gui-agent-20261014.log"
+printf '[20261014.120004.001-1234-W] gui-agent.exe died within 10000 ms of starting, 2 time(s) in a row\n'   > "$T/dirty/logvol-win11-up/files/qwt-logs/win11-up/gui-agent-20261014.log"
 od=$(run_block "$T/dirty"); oc=$(run_block "$T/clean")
 if printf '%s' "$od" | grep -qa 'RESULT FAIL=1 INVALID=1' && printf '%s' "$oc" | grep -qa 'RESULT FAIL=0 INVALID=0'; then
-  ok "T9 the campaign wiring blocks on a GUEST log in a subdir, and passes a clean campaign"
+  ok "T9 the campaign wiring blocks on a GUEST log at depth 5, where logvol_pull puts it"
 else
   no "T9 campaign wiring wrong" "dirty: $(printf '%s' "$od" | tail -1) | clean: $(printf '%s' "$oc" | tail -1)"
 fi
