@@ -146,4 +146,20 @@ if [ "$erc" = 4 ]; then
 elif [ "$erc" != 0 ] && [ "$erc" != 3 ]; then
   verdict INSTRUMENT "wu-e2e exited $erc"
 fi
+# HARDWIRED ERROR SWEEP, BEFORE ANY PASS (findings/issues.md HARNESSLOGUNSWEPT). Nothing swept this
+# suite's own logs, so an error-shaped line was graded by whoever read it - and on 2026-10-14 that
+# meant four "cause UNKNOWN" lines and a WARNING waved through by a model. An unexplained line means
+# this suite cannot certify the product, which is INSTRUMENT, not FAIL: the run does not pass and the
+# product is not implicated. Declared patterns live in mgmt/harness/harness-log-declared.txt WITH a
+# reason, and that file ships with no excuses in it.
+if [ -z "${EVAL_ONLY:-}" ] && [ -x tools/sweep-gate.sh ]; then
+  swlogs=""
+  for f in "$OUT/wu-e2e.out" "$E2E/run.log" "$LOG"; do [ -s "$f" ] && swlogs="$swlogs $f"; done
+  if [ -n "$swlogs" ]; then
+    # shellcheck disable=SC2086  # swlogs is a deliberate list of log paths
+    bash tools/sweep-gate.sh $swlogs > "$OUT/sweep-gate.out" 2>&1 \
+      || verdict INSTRUMENT "undeclared error-shaped line(s) in this suite's own logs - $(grep -ac '^  ' "$OUT/sweep-gate.out") of them, see $OUT/sweep-gate.out"
+    say "sweep-gate: no undeclared error-shaped line in this suite's logs"
+  fi
+fi
 verdict PASS "the update completed on a TemplateVM in $REPORTER's environment ($remedy remedy round(s), last round PASS)"

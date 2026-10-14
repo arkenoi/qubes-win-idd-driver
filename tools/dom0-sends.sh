@@ -45,7 +45,13 @@ fi
 # first version did `push <local> <remote-path>` + `run`, which qtest reads as TWO LOCAL FILES - it
 # failed with fstatat("C:\Windows\Temp\...") on the first real guest, after passing a selftest
 # whose stub ignored its arguments. The stub now asserts the argument shape for exactly that reason.
-QTEST_VM="$VM" timeout 420 $QT pushrun "$P" > "$OUT/raw.txt" 2>"$OUT/raw.err"
+# A TOOL WHOSE OWN BOUND EXCEEDS ITS CALLER'S CAN NEVER REPORT. This was `timeout 420` while
+# quick-upgrade.sh's dom0_sends_park wraps the whole script in `timeout 300`, so the outer bound
+# always fired first and the caller saw a bare rc=124 - never the "FAIL the record was NOT read"
+# line below, which is the only line that says WHY. Measured 2026-10-14 on win11de-fix: four such
+# 124s, one per boot, each costing 300 s and losing that boot's record (DOM0SENDSPARKHANG).
+# The default now leaves room under a 300 s caller; a caller with a different bound sets the knob.
+QTEST_VM="$VM" timeout "${DOM0_SENDS_PUSHRUN_SECS:-240}" $QT pushrun "$P" > "$OUT/raw.txt" 2>"$OUT/raw.err"
 rc=$?
 # MISSING DATA FAILS. The capture always prints SENDS DONE, so its absence means the read did not
 # happen - and a silent "no sends" is exactly the hole this tool exists to close.
