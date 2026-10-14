@@ -324,6 +324,34 @@ jobs:
           if ($src -match '(?m)QpsGetClient\(server, param->ClientId\);\r?\n\s*HANDLE pipe =') { throw 'a thread entry still dereferences the client without checking it' }
           if ($src -match '(?m)QpsGetClientRaw\(Server, ClientId, FALSE\);\r?\n\s*QpsReleaseClient') { throw 'QpsDisconnectClient still passes an unchecked lookup to QpsReleaseClient' }
           Write-Host "::notice title=windows-utils::pipe-client NULL fix applied"
+      # A CLIENT IS PUBLISHED BEFORE ITS THREADS CAN RUN. QpsConnectClient used to insert the client
+      # into the server's list as its LAST statement, with both worker threads running since several
+      # statements earlier - and each thread's first act is to look itself up in that list. MEASURED
+      # 2026-10-14 (QREXECAGENTAV): qrexec-agent.exe took c0000005 reading address 0x18, WritePipe's
+      # offset in PIPE_CLIENT, and the Qubes RPC agent service STOPPED (watchdog System/7031). Every
+      # error return in that body also abandoned the half-built client, its buffers, its critical
+      # section, its thread parameters and any thread handle (CONNECTERRORLEAK), leaving a thread
+      # looking up an id that would never appear. The function is REWRITTEN rather than guarded: the
+      # threads are created CREATE_SUSPENDED, the client is published under the server lock, and only
+      # then are they resumed - so the race cannot be constructed. One failure path, reached only
+      # while nothing is published and no thread has run.
+      - name: Apply the windows-utils connect-order rewrite (always)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = $env:GITHUB_WORKSPACE
+          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-pipe-connect-rewrite.patch"
+          if ($LASTEXITCODE -ne 0) { throw "windows-utils connect-order rewrite did not apply" }
+          $src = Get-Content "$ws\deps-src\windows-utils\src\pipe-server.c" -Raw
+          if ($src -notmatch 'nothing was published') { throw 'unwind marker missing after patch' }
+          if ($src -notmatch 'QpsReaderThread, readerParam, CREATE_SUSPENDED') { throw 'the reader thread is not created suspended after patch' }
+          if ($src -notmatch 'QpsWriterThread, writerParam, CREATE_SUSPENDED') { throw 'the writer thread is not created suspended after patch' }
+          if ($src -notmatch 'ResumeThread\(client->ReaderThread\)') { throw 'the reader thread is never resumed after patch' }
+          # THE ORDERING INVARIANT, the whole point: the insert must come BEFORE any resume.
+          if ($src -notmatch '(?s)InsertTailList\(&Server->Clients.*ResumeThread\(client->ReaderThread\)') { throw 'a thread is resumed before the client is published' }
+          # And the old shape must be gone: a bare return from the middle of the construction.
+          if ($src -match '(?m)if \(client->ReadBuffer == NULL\)\r?\n\s*\{\r?\n\s*LeaveCriticalSection\(&Server->Lock\);\r?\n\s*return') { throw 'QpsConnectClient still returns from the middle of a half-built client' }
+          Write-Host "::notice title=windows-utils::connect-order rewrite applied"
       # A DEPARTED PEER STOPS BEING AN ERROR OF OURS, at the first of the four lines it wrote.
       # libvchan's client init PROBES the peer's xenstore entry - "test if the store entry exists;
       # if not - wait a second time" - and discards the status on the next line. But XcStoreRead

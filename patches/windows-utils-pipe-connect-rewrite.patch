@@ -1,0 +1,184 @@
+--- a/src/pipe-server.c
++++ b/src/pipe-server.c
+@@ -434,8 +434,32 @@
+     IN  HANDLE ReadPipe
+     )
+ {
+-    struct THREAD_PARAM *param;
++    // A CLIENT IS PUBLISHED BEFORE ITS THREADS CAN RUN, and that ordering is the whole point of
++    // this function's shape.
++    //
++    // It used to insert the client into Server->Clients as its LAST statement, with both worker
++    // threads running since several statements earlier. Each thread's first act is to look itself
++    // up in that list (QpsGetClient by id), so a thread could run before its own client existed
++    // there and get NULL - and both thread entries then dereferenced it. MEASURED 2026-10-14 on a
++    // Qubes Windows guest: qrexec-agent.exe took c0000005 reading address 0x18 (WritePipe's offset
++    // in PIPE_CLIENT) and the Qubes RPC agent service stopped (System/7031). Every error return in
++    // the old body also abandoned the half-built client, its buffers, its critical section, its
++    // thread parameters and any thread handle, and left any already-created thread looking up an id
++    // that would never appear.
++    //
++    // So: build everything that can fail while none of it is reachable; create both threads
++    // SUSPENDED, because creating a thread is not the same as letting it run; publish the client
++    // under the server lock; and only then resume. One failure path, reached only while the client
++    // is unpublished and both threads are suspended - which is what makes releasing everything here
++    // safe without touching refcounts or the disconnect machinery.
++    //
++    // The server lock now covers the publish instead of the whole construction. Nothing under
++    // construction is reachable until the insert, and the old shape held a global lock across two
++    // mallocs, two CmqCreate calls and two CreateThread calls.
++    struct THREAD_PARAM *readerParam = NULL;
++    struct THREAD_PARAM *writerParam = NULL;
+     PPIPE_CLIENT client;
++    DWORD status;
+ 
+     if (!Server->AcceptConnections)
+         return ERROR_SHUTDOWN_IN_PROGRESS;
+@@ -445,69 +469,58 @@
+         return ERROR_NOT_ENOUGH_MEMORY;
+ 
+     ZeroMemory(client, sizeof(PIPE_CLIENT));
+-
+-    EnterCriticalSection(&Server->Lock);
+     client->Id = ClientId;
+-
+-    InitializeCriticalSection(&client->Lock);
+-
+-    client->ReadBuffer = CmqCreate(Server->InternalBufferSize);
+-    if (client->ReadBuffer == NULL)
+-    {
+-        LeaveCriticalSection(&Server->Lock);
+-        return ERROR_NOT_ENOUGH_MEMORY;
+-    }
+-
+-    client->WriteBuffer = CmqCreate(Server->InternalBufferSize);
+-    if (client->WriteBuffer == NULL)
+-    {
+-        LeaveCriticalSection(&Server->Lock);
+-        return ERROR_NOT_ENOUGH_MEMORY;
+-    }
+-
+     client->WritePipe = WritePipe;
+     client->ReadPipe = ReadPipe;
+     client->Disconnecting = FALSE;
++    InitializeCriticalSection(&client->Lock);
+ 
+-    // start the reader thread
+-    param = malloc(sizeof(struct THREAD_PARAM));
+-    if (!param)
+-    {
+-        LeaveCriticalSection(&Server->Lock);
+-        return ERROR_NOT_ENOUGH_MEMORY;
+-    }
+-
+-    param->Server = Server;
+-    param->ClientId = client->Id;
+-    client->ReaderThread = CreateThread(NULL, 0, QpsReaderThread, param, 0, NULL);
+-    if (!client->ReaderThread)
++    client->ReadBuffer = CmqCreate(Server->InternalBufferSize);
++    client->WriteBuffer = CmqCreate(Server->InternalBufferSize);
++    readerParam = malloc(sizeof(struct THREAD_PARAM));
++    writerParam = malloc(sizeof(struct THREAD_PARAM));
++    if (!client->ReadBuffer || !client->WriteBuffer || !readerParam || !writerParam)
+     {
+-        LeaveCriticalSection(&Server->Lock);
+-        return ERROR_NO_SYSTEM_RESOURCES;
++        status = ERROR_NOT_ENOUGH_MEMORY;
++        goto fail;
+     }
+ 
+-    // start the writer thread
+-    param = malloc(sizeof(struct THREAD_PARAM));
+-    if (!param)
+-    {
+-        LeaveCriticalSection(&Server->Lock);
+-        return ERROR_NOT_ENOUGH_MEMORY;
+-    }
++    readerParam->Server = Server;
++    readerParam->ClientId = ClientId;
++    writerParam->Server = Server;
++    writerParam->ClientId = ClientId;
+ 
+-    param->Server = Server;
+-    param->ClientId = client->Id;
+-    client->WriterThread = CreateThread(NULL, 0, QpsWriterThread, param, 0, NULL);
+-    if (!client->WriterThread)
++    // SUSPENDED: the lookup these threads begin with must not race the insert below.
++    client->ReaderThread = CreateThread(NULL, 0, QpsReaderThread, readerParam, CREATE_SUSPENDED, NULL);
++    client->WriterThread = CreateThread(NULL, 0, QpsWriterThread, writerParam, CREATE_SUSPENDED, NULL);
++    if (!client->ReaderThread || !client->WriterThread)
+     {
+-        LeaveCriticalSection(&Server->Lock);
+-        return ERROR_NO_SYSTEM_RESOURCES;
++        status = ERROR_NO_SYSTEM_RESOURCES;
++        goto fail;
+     }
+ 
++    // PUBLISH. After this the client is findable, so the threads may run - and from here on the
++    // client belongs to the server: it is torn down by QpsDisconnectClient/QpsReleaseClient, never
++    // by this function.
++    EnterCriticalSection(&Server->Lock);
+     InsertTailList(&Server->Clients, &client->ListEntry);
+     Server->NumberClients++;
+     LogInfo("[%lld] (%p) connected (%lld total)", client->Id, client, Server->NumberClients);
+     LeaveCriticalSection(&Server->Lock);
+ 
++    // CHECKED, because a PUBLISHED client whose pumps never run is a silent hang - worse to
++    // diagnose than a crash, and the one new failure mode this ordering introduces. Near-impossible
++    // (the handles are ours, created moments ago), so it is reported at ERROR and the client is
++    // disconnected through the normal path rather than left half-alive.
++    if (ResumeThread(client->ReaderThread) == (DWORD)-1 ||
++        ResumeThread(client->WriterThread) == (DWORD)-1)
++    {
++        win_perror("ResumeThread");
++        LogError("[%lld] worker threads could not be resumed; disconnecting", ClientId);
++        QpsDisconnectClientInternal(Server, ClientId, FALSE, FALSE);
++        return ERROR_NO_SYSTEM_RESOURCES;
++    }
++
+     if (Server->ConnectCallback)
+     {
+         // Increase the refcount if the connect callback is registered (pretty much always).
+@@ -519,6 +532,42 @@
+     }
+ 
+     return ERROR_SUCCESS;
++
++fail:
++    // UNPUBLISHED AND SUSPENDED, so nothing else can be looking at any of this: the client was
++    // never inserted, and neither thread has executed an instruction. Release in reverse order of
++    // construction. TerminateThread is safe for exactly this case and no other - a thread that has
++    // never run holds no lock and owns nothing but its parameter, which is freed here.
++    if (client->WriterThread)
++    {
++        TerminateThread(client->WriterThread, 0);
++        CloseHandle(client->WriterThread);
++    }
++    if (client->ReaderThread)
++    {
++        TerminateThread(client->ReaderThread, 0);
++        CloseHandle(client->ReaderThread);
++    }
++    if (writerParam)
++        free(writerParam);
++    if (readerParam)
++        free(readerParam);
++    if (client->WriteBuffer)
++        CmqDestroy(client->WriteBuffer);
++    if (client->ReadBuffer)
++        CmqDestroy(client->ReadBuffer);
++    DeleteCriticalSection(&client->Lock);
++    free(client);
++    // THE PIPES, WHICH NOBODY ELSE WILL CLOSE: the accept loop creates them and hands them in, and
++    // on failure its caller does `if (status != ERROR_SUCCESS) return status;` without touching
++    // them. On success they belong to the client and QpsDisconnectClientInternal closes them, so
++    // this function owns them in both outcomes or a handle pair leaks per failure.
++    if (WritePipe)
++        CloseHandle(WritePipe);
++    if (ReadPipe)
++        CloseHandle(ReadPipe);
++    LogWarning("[%lld] connect failed (0x%x); nothing was published", ClientId, status);
++    return status;
+ }
+ 
+ // Public API. Decreases the client's refcount.
