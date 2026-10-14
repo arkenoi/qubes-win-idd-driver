@@ -76,7 +76,20 @@ while ((Get-Date) -lt $deadline) {
     # TERMINAL STATES, so a permanent condition is not retried into a log flood. A usage error means
     # THIS SCRIPT is wrong and no amount of waiting fixes it; each retry made the client log its own
     # usage error again, which is where 34 of the 36 new error lines came from.
-    if ($out -match 'wmain: Usage:') { $exit = 'bad-invocation'; break }
+    # CLASSIFY ON THE CODE, NOT ON THE WORDS. These two branches matched free English text, and
+    # part of what they matched is win_perror output - which FormatMessage renders in the SYSTEM
+    # locale, so on a German guest 'denied' is "Zugriff verweigert" and the branch never fired. The
+    # product must be locale-independent; the rendered sentence is for the log line only.
+    #
+    # The codes come from core-agent/src/qrexec-client-vm/qrexec-client-vm.c, read rather than
+    # assumed: it returns ERROR_INVALID_PARAMETER (87) for its own usage/argument errors (lines 64
+    # and 82), ERROR_OUTOFMEMORY (14), and otherwise whatever win_perror2 was given - so ACCESS
+    # DENIED (5) and FILE_NOT_FOUND (2) arrive as themselves.
+    if ($rc -eq 87 -or $rc -eq 1 -or $out -match 'wmain: Usage:') { $exit = 'bad-invocation'; break }
+    if ($rc -eq 5 -or $rc -eq 2 -or $rc -eq 1722) { $exit = 'dom0-refused'; break }
+    # LAST RESORT, and locale-bound by nature, so it is NOT the primary signal: a build whose
+    # client reports a refusal only in text. If this is what fires on a German guest it will miss,
+    # which is exactly why the numeric branches are first.
     if ($rc -ne 0 -and $out -match 'denied|refused|no such domain') { $exit = 'dom0-refused'; break }
     Start-Sleep -Seconds $IntervalSeconds
 }

@@ -1383,6 +1383,56 @@ def l24_failure_report_must_declare_a_level() -> None:
                     "it - write [ERROR] or [WARN] into the message, or mark the line as prose")
 
 
+# --------------------------------------------------------------------------- L25
+# Phrases Windows renders through FormatMessage, i.e. in the SYSTEM locale. Branching on one is a
+# locale dependency; the numeric code beside it is not. This is a word list, and a word list is the
+# wrong tool for CLASSIFYING an error - but it is the right tool for pointing a reviewer at a line.
+OS_MESSAGE_PHRASES = (
+    "access is denied", "the pipe has been ended", "cannot find the file",
+    "the system cannot find", "is not recognized", "was abandoned", "not enough",
+    "permission denied", "no such file", "already exists", "zugriff verweigert",
+    "wurde beendet", "nicht finden", "nicht erkannt", "wurde abgebrochen",
+)
+
+def l25_product_must_not_branch_on_localised_text() -> None:
+    """RULE: PRODUCT CODE MUST NOT DECIDE ANYTHING FROM A LOCALISED OS MESSAGE.
+
+    FormatMessage renders a Win32 code in the SYSTEM locale, so the same failure reads "Die Pipe
+    wurde beendet." on a German guest and "The pipe has been ended." on an English one. A branch
+    taken on those words works on one guest and silently does nothing on the other - and this rig's
+    main subject is a German 25H2 image, so the failing case is the normal case here.
+
+    Found 2026-10-14 in guest/sync-clock-from-dom0.ps1: a terminal 'dom0-refused' decision was
+    taken on `$out -match 'denied|refused|no such domain'`, where part of $out is win_perror output.
+    The numeric code was available the whole time. The owner's rule: the harness may carry EN+DE
+    with caveats, the product may not.
+
+    The code is the locale-independent identity - branch on $rc / the HRESULT, and keep the rendered
+    sentence for the log line only. HARNESS and TEST paths are exempt: a fixture that proves we
+    handle a German guest has to contain German. Pending, not gating."""
+    PRODUCT = ("agent/", "core-agent/", "guest/")
+    decides = re.compile(r"-match|-eq|==|\bif\b.*\bgrep\b|Select-String|findstr|\bcase\b")
+    for p in sorted(ROOT.rglob("*.ps1")) + sorted(ROOT.rglob("*.c")) + sorted(ROOT.rglob("*.cpp")):
+        rel = str(p.relative_to(ROOT)).replace("\\", "/")
+        if not rel.startswith(PRODUCT) or "/tests/" in rel or rel.endswith("-test.ps1"):
+            continue
+        try:
+            lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for n, line in enumerate(lines, 1):
+            st = line.strip()
+            if st.startswith("#") or st.startswith("//"):
+                continue
+            low = line.lower()
+            if not any(ph in low for ph in OS_MESSAGE_PHRASES) or not decides.search(line):
+                continue
+            pending_finding("L25-product-branches-on-localised-text", f"{rel}:{n}",
+                    "decides something from a localised OS message - FormatMessage renders it in "
+                    "the system locale, so this works on one guest and silently does not on "
+                    "another; branch on the numeric code and keep the sentence for the log")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ledger", type=Path, default=None, help="verdicts.tsv, enables L7")
@@ -1423,6 +1473,7 @@ def main() -> int:
     l22_vm_start_must_assert_sole_guest()
     l23_no_pipe_into_grep_q_for_a_guest_probe()
     l24_failure_report_must_declare_a_level()
+    l25_product_must_not_branch_on_localised_text()
     if a.ledger:
         l7_orphan_ledger_checks(a.ledger)
 
