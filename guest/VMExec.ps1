@@ -98,7 +98,17 @@ function VMExecAudit([string]$what) {
 }
 
 $shim = Join-Path $env:QUBES_TOOLS 'qubes-rpc-services\vmupdate-shim.ps1'
-if ((Test-Path $shim) -and ($cmd -match '/run/qubes-update|\\run\\qubes-update|entrypoint\.py')) {
+# THE AGENT LOG IS STEP 6 OF DOM0'S SEQUENCE AND IT WAS NEVER ROUTED HERE. dom0 finishes an update
+# pass with `cat /var/log/qubes/qubes-update/update-agent.log`, and update_manager.py treats that
+# output as the operator-facing log ("critical -> always write agent logs"). That path contains
+# neither the updater WORKDIR (/run/qubes-update) nor entrypoint.py, so it fell through to cmd.exe,
+# which has no `cat` - and the shim's own `cat` branch, written precisely to answer this step from
+# OUR log plus update-status.json, has never once run. Proven on a guest 2026-10-14: the shim's
+# audit for an update round records mkdir, tar, entrypoint and rm, and NO cat entry at all.
+# Matched on the LOG FILE, not on the directory: broadening this to any path containing
+# 'qubes-update' would route unrelated commands into the shim, whose default branch is a no-op, and
+# silently swallowing a caller's command is worse than not handling it.
+if ((Test-Path $shim) -and ($cmd -match '/run/qubes-update|\\run\\qubes-update|entrypoint\.py|qubes-update[/\\]update-agent\.log')) {
     & $shim @decoded
     $rc = $LASTEXITCODE
     if ($null -eq $rc) { $rc = 0 }
