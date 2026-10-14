@@ -240,7 +240,15 @@ if ($CoreAgentBins -and (Test-Path -LiteralPath $CoreAgentBins)) {
     # guest's manageability outright. No benefit, real risk: leave them stock until their source
     # actually diverges (the guard's CompiledSources check fails the build the moment it does).
     $binStaged = @()
-    foreach ($b in 'qrexec-wrapper.exe', 'bind-dirs.exe') {
+    # get-image-rgba.exe JOINED THIS LIST on 2026-10-14, by the rule stated above: it stayed stock
+    # while its source matched the 4.2.2 base, and the CompiledSources guard failed the build the
+    # moment the source diverged - "COMPILED FIX SHIPS NOWHERE ... no DirBinaries mapping covers
+    # it". The divergence is the AppMap two-hive lookup: dom0 resolves ICONS through this helper,
+    # which read HKEY_CURRENT_USER only, so on a template-based qube the icons stay missing even
+    # once the launch path works (APPMAPWRONGHIVE). Shipping ours is what makes that fix real.
+    # The risk calculus the paragraph above applies to qrexec-agent does NOT apply here: this is a
+    # leaf helper dom0 invokes to render an icon, not the service dom0 manages the guest through.
+    foreach ($b in 'qrexec-wrapper.exe', 'bind-dirs.exe', 'get-image-rgba.exe') {
         $p = Join-Path $CoreAgentBins $b
         if (Test-Path -LiteralPath $p) {
             Copy-Item -LiteralPath $p (Join-Path $OutDir 'bin') -Force

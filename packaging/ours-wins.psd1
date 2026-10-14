@@ -148,6 +148,10 @@
         # absence means the build silently fell back to stock - the exact failure that let
         # the drain-race fix miss every guest for a week.
         @{ Package = 'bin/qrexec-wrapper.exe';     Stock = 'qrexec-wrapper.exe'; Required = $true }
+        # The fork get-image-rgba via the same bin\ overlay. Stock HAS this binary, so the
+        # differ-from-stock tripwire applies: if our build ever stops differing, the AppMap hive
+        # fix has been lost and this entry is what says so.
+        @{ Package = 'bin/get-image-rgba.exe';     Stock = 'get-image-rgba.exe'; Required = $true }
         # User-session HELPERS staged into bin\ by make-setup.ps1 (Install-QwtImproved's
         # bin-overlay installs them next to gui-agent.exe). NoStock: these do not exist in the
         # stock 4.2.2 image, so there is no differ-from-stock check - the entry exists so they
@@ -265,6 +269,18 @@
             # same representative-binary reasoning as version_common.rc below); a change under
             # src/bind-dirs is covered here. Staged path = the setup tree's bin\, not the MSI image.
             'src/bind-dirs'        = 'bin/bind-dirs.exe'
+            # dom0 resolves app-menu ICONS through this helper. It stayed stock while its source
+            # matched the 4.2.2 base; the AppMap two-hive lookup diverged it on 2026-10-14 and this
+            # guard failed the build with "COMPILED FIX SHIPS NOWHERE", exactly as designed, so
+            # make-setup.ps1 now substitutes ours into the setup tree's bin\ beside the wrapper.
+            # UNVERIFIED ON A GUEST, and stated here rather than assumed: qubes.GetImageRGBA
+            # contains the BARE command 'get-image-rgba.exe', and a bare command resolves from the
+            # CALLING process's own directory first (the same reasoning as advertise-tools above).
+            # The caller is in Qubes Tools\bin, which is where this overlay stages ours - but
+            # whether ours wins over the stock copy the MSI installed is the exact "which binary
+            # actually runs" question the qrexec-wrapper incident was about, and it is answered by
+            # hashing the file the guest resolves, not by reading this file. On the checklist.
+            'src/qubes-rpc-services/get-image-rgba' = 'bin/get-image-rgba.exe'
             # Beside qrexec-agent.exe: qrexec-agent launches it as the bare command
             # 'advertise-tools.exe 1', and CreateProcess searches the calling process's own
             # directory first - which is the only way that launch resolves today.
