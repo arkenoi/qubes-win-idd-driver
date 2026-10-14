@@ -83,7 +83,9 @@ LOGVOL_VM=""; LOGVOL_IMG=""
 # (that happens before the guest is even created). Without this the volume is attached and stays
 # EMPTY, and the pull after the cell yields nothing - an instrument that reports success and
 # collects no data, which is worse than no instrument.
+# Every caller of this has just finished an install, so the clock feature needs clearing here too.
 logvol_bind_now(){ # $1=vm $2=label
+  clock_feature_reset "$1" "$2"
   # OFF BY DEFAULT (LOGVOL_BIND=1 to enable). The bind points LogDir at a REMOVABLE volume, which
   # need not be mounted when a service starts - measured 2026-10-15: the agent logged to it on one
   # boot and nothing after the cell's park/restore, failing agent_log_healthy, the IDD check and the
@@ -614,6 +616,28 @@ detach_release_iso(){ # $1=vm $2=label - best effort. The CD is a start-time att
   fi
 }
 
+# THE QUBE'S timezone FEATURE COMES BACK AT EVERY INSTALL, so it has to be cleared AFTER one.
+# The feature decides what the qube's RTC holds: unset (the Qubes default, and what every Linux
+# qube here has) means true UTC; `localtime` means DOM0 LOCAL. Our images set
+# RealTimeIsUniversal=1, i.e. Windows reads the RTC as UTC - correct only while the feature stays
+# unset.
+# MEASURED 2026-10-15 on the acceptance run: the harness unset it BEFORE the install, the install
+# reported os=Windows to dom0 (core-agent/src/advertise-tools writes /qubes-tools/{version,os,qrexec,
+# gui} and calls qubes.NotifyTools), and the feature came back as `localtime` on every QWT-carrying
+# guest - win10-acc, win10-iqi, win11r-qwt, win11de-qwt - while the pristine bases and a fresh
+# qvm-create qube have it unset. The guest then read a dom0-local RTC as UTC and sat 3 hours out on
+# every boot after the first, our puller correcting it each time: clock_boot_correction_s = 10800
+# against a max of 60, a P1 that failed the cell.
+# Nothing in dom0 is touched by this - a qube's own feature is ours to set.
+clock_feature_reset(){ # <vm> <label>
+  local before; before=$(qvm-features "$1" timezone 2>/dev/null)
+  if [ -n "$before" ]; then
+    qvm-features --unset "$1" timezone 2>/dev/null \
+      && say "  $2: qube timezone feature was '$before' after the install - cleared, so the RTC holds UTC" \
+      || say "  $2: [WARN] could not clear the qube timezone feature (was '$before') - the guest will read a dom0-local RTC as UTC and sit its offset out"
+  fi
+}
+
 clear_prime_leftovers(){ # $1=vm - prime-run's own exit text: "The stick is still assigned
   # --required and qemu-extra-args is still set - clear both before using this guest as a cell
   # subject." Without this, every later boot of the subject depends on this qube's loop layout.
@@ -673,6 +697,8 @@ clear_prime_leftovers(){ # $1=vm - prime-run's own exit text: "The stick is stil
   else
     qvm-features --unset "$vm" qemu-extra-args 2>/dev/null
   fi
+  # And the clock feature, which the install just put back.
+  clock_feature_reset "$vm" "$vm"
 }
 
 qwt_products(){ # $1=vm - echo the count of MSI-REGISTERED QWT products; echo nothing if unreadable.

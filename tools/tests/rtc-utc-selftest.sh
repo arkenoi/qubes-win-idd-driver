@@ -72,5 +72,26 @@ ck "e2e-wait.sh still provides it to ITS callers"          "RESOLVES" \
 ck "and no harness still forces a localtime RTC"           "0" \
    "$(grep -vE '^[[:space:]]*#' mgmt/harness/*.sh | grep -c 'timezone localtime')"
 
+# ---- THE QUBE FEATURE COMES BACK AT EVERY INSTALL --------------------------------------------
+# `timezone` decides what the qube's RTC holds: unset = true UTC (the Qubes default, and what every
+# Linux qube here has), `localtime` = DOM0 LOCAL. Our images set RealTimeIsUniversal=1, so Windows
+# reads the RTC as UTC - correct only while the feature stays unset.
+# MEASURED 2026-10-15 on the acceptance run: the harness unset it BEFORE the install, the install
+# reported os=Windows to dom0 and the feature came back as `localtime` on every QWT-carrying guest
+# (win10-acc, win10-iqi, win11r-qwt, win11de-qwt) while the bases and a fresh qvm-create qube had it
+# unset. The guest then read a dom0-local RTC as UTC: 3 hours out on every boot after the first,
+# clock_boot_correction_s = 10800 against a max of 60. So it must be cleared AFTER an install, not
+# only before - a qube's own feature is ours to set, and nothing in dom0 is touched by doing so.
+ck "a post-install reset exists"                  "1" \
+   "$(command grep -c '^clock_feature_reset()' mgmt/harness/matrix.sh)"
+# It must run where an install has JUST happened: the post-prime sweep and the per-cell bind hook.
+ck "called after the prime sweep"                 "1" \
+   "$(awk '/^clear_prime_leftovers\(\)/,/^\}/' mgmt/harness/matrix.sh | command grep -c 'clock_feature_reset')"
+ck "and on the per-cell post-install hook"        "1" \
+   "$(awk '/^logvol_bind_now\(\)/,/^\}/' mgmt/harness/matrix.sh | command grep -c 'clock_feature_reset')"
+# and it must not be gated behind the log-volume switch, which is unrelated to the clock
+ck "not gated behind the log volume"              "1" \
+   "$(awk '/^logvol_bind_now\(\)/,/LOGVOL_BIND/' mgmt/harness/matrix.sh | command grep -c 'clock_feature_reset')"
+
 echo "rtc-utc-selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
