@@ -122,5 +122,17 @@ else
   no "T9 campaign wiring wrong" "dirty: $(printf '%s' "$od" | tail -1) | clean: $(printf '%s' "$oc" | tail -1)"
 fi
 
+# T10 - A DISPOSITIONED MESSAGE MUST RE-SURFACE WHEN IT RISES, and the threshold must scale. The
+# reason written in a ledger can be WRONG, and a rising count is the only signal that contradicts it
+# from outside. A flat "double it" would have let the x102 inverted-DWM-bounds message reach 205.
+printf '# t\n102 GetRealWindowRect: <HEX>: inverted DWM bounds (N,N)-(N,N) and no usable GetWindowRect - rejecting   # reviewed: correct handling\n' > "$T/rose-led.txt"
+mk(){ python3 -c "open('$1','w').write('[20261014.120000.001-1-E] GetRealWindowRect: 0xdead: inverted DWM bounds (1,2)-(3,4) and no usable GetWindowRect - rejecting\n'*$2)"; }
+mk "$T/r130.log" 130; mk "$T/r110.log" 110
+o130=$(SWEEP_GATE_LEDGER="$T/rose-led.txt" bash tools/sweep-gate.sh "$T/r130.log" 2>&1)
+o110=$(SWEEP_GATE_LEDGER="$T/rose-led.txt" bash tools/sweep-gate.sh "$T/r110.log" 2>&1)
+if printf '%s' "$o130" | grep -qa 'risen=1' && printf '%s' "$o110" | grep -qa 'risen=0'; then
+  ok "T10 a dispositioned x102 re-surfaces at x130 and stays quiet at x110 (scaled threshold)"
+else no "T10 rise threshold wrong" "130: $(printf '%s' "$o130" | grep -a RESULT) | 110: $(printf '%s' "$o110" | grep -a RESULT)"; fi
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

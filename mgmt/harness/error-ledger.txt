@@ -1,37 +1,24 @@
-# error-ledger.txt - a DISPOSITION for each declared error our code emits on a run reviewed
-# as clean. Format:  <count> <message>   # why this is not a defect
+# error-ledger.txt - a RECEIPTED disposition for a declared error our code emits.
 #
-# An entry means somebody READ that error and recorded what it means. It is a disposition for
-# ONE message, never a silencer for a class, and a row whose reason is a TODO accounts for
-# nothing. Nothing is hidden either way: sweep-gate prints accounted messages too, every run.
+# Format:  <count> <message>   # why it is not a defect <file:line receipt>
 #
-# A FILED DEFECT DOES NOT BELONG HERE. It gets fixed, stays out, and surfaces every run until
-# it is gone. Deliberately absent, so the gate keeps reporting them:
-#   x1    KEYEDMUTEX - DDA capture abandons the keyed mutex
-#   x1    a fallback firing; fallbacks are anomalies, logged and diagnosed
-#   x1    KEYEDMUTEX - DDA capture abandons the keyed mutex
-#   x3    a gui-agent exit the watchdog had to react to
-#   x2    the gui-agent crash loop (grant-table exhaustion, NO GUI)
-#   x3    the watchdog restarting gui-agent - the crash loop again
-#   x1    vchan client setup failing - the install-stall lead
-#   x1    vchan client setup failing - the install-stall lead
-#   x1    vchan client setup failing - the install-stall lead
+# AN ENTRY NEEDS A RECEIPT, NOT A RATIONALE. The first version of this file was written in one batch
+# by pattern-matching plausible explanations onto 18 messages without reading one line of the code
+# that emits them. Jev scored the hiding risk 0.65 for exactly that, and reading the code showed the
+# largest entry was WRONG: "inverted DWM bounds - rejecting" at x102 was dispositioned as correct
+# handling that is merely over-logged, but agent/gui-agent/main.c:1583 logs it at WARNING precisely
+# because it is NOT the routine case - the routine one logs at Debug on line 1537 and falls back to
+# GetWindowRect, while this one returns ERROR_INVALID_DATA and the window is REJECTED. x102 is 102
+# windows not rendered. It is out of this file and it blocks.
 #
-13 ApplyGuestShadows: no usable interactive session yet (token<PATH>); cannot disable guest shadows (will retry)   # before console logon there is no interactive token; the retry succeeds once a session exists
-102 GetRealWindowRect: <HEX>: inverted DWM bounds (N,N)-(N,N) and no usable GetWindowRect - rejecting   # rejecting inverted DWM bounds IS the correct handling; the reject is logged at E, which is over-logging tracked separately, not a failure
-3 Init: Failed to read 'StagingGrant' config value, using default (TRUE)   # the value is optional and absent by default; the documented default TRUE is applied
-3 PlatLog: NOTIFYERR gate: enabled=N state=<PATH> (secondary route: dom0 notification via notifhost<PATH>; needs qrexec-agent; the log stays primary)   # reports the secondary-route gate state at startup; it is a state line, not a failure
-2 ProcessAutostarts: CfgReadMultiString(Autostart) failed with error <HEX>: Das System kann die angegebene Datei nicht finden.   # no Autostart key is configured on these images, so the read legitimately finds nothing
-1 ProcessNewFrame: BROKERHOLD hwnd <HEX> holding last content rect=N,N,N,N brokerActive=N sourced=N slot=N (direct required: composite fallback refused)   # holding the last content rect and refusing a composite fallback is the INTENDED policy on direct-capable guests
-1 QioReadBuffer: ReadFile failed with error <HEX>: Die Pipe wurde beendet.   # the peer closed the pipe at session end; the read failing is how that is observed
-35 QpsRead: [N] client is disconnected   # a client disconnecting at session end; logged at E/W but it is the normal teardown path
-39 QpsReaderThread: [N] read failed   # a client disconnecting at session end; logged at E/W but it is the normal teardown path
-1 QpsWrite: [N] client is disconnected   # a client disconnecting at session end; logged at E/W but it is the normal teardown path
-1 VchanReceiveBuffer: (000001E600C314A0, version): no data, blocking read   # a blocking read with nothing queued yet - the normal wait, logged at W
-1 VchanReceiveBuffer: (0000023FDC7D1130, version): no data, blocking read   # a blocking read with nothing queued yet - the normal wait, logged at W
-1 VchanReceiveBuffer: (000002BC462D0390, version): no data, blocking read   # a blocking read with nothing queued yet - the normal wait, logged at W
-1 WaWatchThread: qdb_open failed (N consecutive), dom0 work area feed unavailable; retrying in N ms   # qubesdb is unavailable during early boot and at shutdown; the feed reconnects and the retry is bounded
-1 WaWatchThread: qubesdb connection lost, reconnecting in N ms   # qubesdb is unavailable during early boot and at shutdown; the feed reconnects and the retry is bounded
-2 XcStoreRead: IOCTL_XENIFACE_STORE_READ failed: <HEX>   # the xenstore key is absent on these images; the IOCTL failing is how absence is reported
-35 pipe_thread_client: QpsRead from client N failed: N   # a client disconnecting at session end; logged at E/W but it is the normal teardown path
-1 pipe_thread_client: handle_client_data failed, disconnecting client N   # a client disconnecting at session end; logged at E/W but it is the normal teardown path
+# So: no entry without a file:line that shows the condition handled. Everything else stays
+# unaccounted and surfaces every run until somebody reads it. That is not a backlog of noise - as of
+# 2026-10-14 it is 23 distinct declared error messages in our own logs that nobody has investigated.
+#
+# A row whose reason is a TODO accounts for nothing. Nothing is hidden either way: accounted
+# messages are printed with their reason on every run, and a count that rises past a scaled
+# threshold re-surfaces the message even with a reason on file.
+13 ApplyGuestShadows: no usable interactive session yet (token<PATH>); cannot disable guest shadows (will retry)   # before console logon there is no interactive token; the site returns FALSE and retries agent/gui-agent/main.c:5544
+3 Init: Failed to read 'StagingGrant' config value, using default (TRUE)   # the value is optional; the site applies the documented default agent/gui-agent/main.c:152
+2 ProcessAutostarts: CfgReadMultiString(Autostart) failed with error <HEX>: Das System kann die angegebene Datei nicht finden.   # the value is OPTIONAL and absence is the normal configuration, stated at the site: ERROR_FILE_NOT_FOUND means no autostart entries core-agent/src/qrexec-agent/qrexec-agent.c:1577
+1 WaWatchThread: qdb_open failed (N consecutive), dom0 work area feed unavailable; retrying in N ms   # qubesdb is unavailable in early boot and at shutdown; the site retries on a bounded interval agent/gui-agent/workarea.c:397

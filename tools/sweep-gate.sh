@@ -174,6 +174,20 @@ while IFS= read -r row; do
     # act of seeding a ledger would account for every error in the run it was seeded from - which is
     # precisely the silencing this redesign removed, reintroduced through the back door.
     case "$note" in TODO*|todo*|XXX*|FIXME*) note="" ;; esac
+    # A RISE RE-SURFACES A DISPOSITIONED MESSAGE, and the threshold must SCALE with the count. A
+    # flat "double it" is right at a count of 1 and nonsense at 102: the inverted-DWM-bounds message
+    # is dispositioned at x102, so doubling would let it reach 205 - a 100% regression - unreported.
+    # A reason written in the ledger can also simply be WRONG, and a rising count is the only signal
+    # that contradicts it from outside, which is why this is the tight one.
+    #   base < 10  : needs > base*2, and at least > base+3   (1 -> 2 is not news)
+    #   base >= 10 : needs > base + (base+3)/4               (a quarter more of a busy message is)
+    if [ -n "${base:-}" ]; then
+        if [ "$base" -lt 10 ]; then
+            rose_at=$(( base * 2 )); [ "$rose_at" -lt $(( base + 3 )) ] && rose_at=$(( base + 3 ))
+        else
+            rose_at=$(( base + (base + 3) / 4 ))
+        fi
+    else rose_at=0; fi
     if [ -z "$base" ] || [ -z "$note" ]; then
         [ "$newn" = 0 ] && [ "$rose" = 0 ] && echo "SWEEP-GATE: declared error/warning not accounted for:"
         newn=$((newn+1))
@@ -182,9 +196,9 @@ while IFS= read -r row; do
         else
             printf '  UNACCOUNTED x%-4s %s\n' "$cnt" "$(printf '%s' "$msg" | cut -c1-140)"
         fi
-    elif [ "$cnt" -gt "$((base * 2))" ] && [ "$cnt" -gt $((base + 3)) ]; then
+    elif [ "$cnt" -gt "$rose_at" ]; then
         [ "$newn" = 0 ] && [ "$rose" = 0 ] && echo "SWEEP-GATE: declared error/warning not accounted for:"
-        rose=$((rose+1)); printf '  ROSE        x%-4s (ledger x%s) %s\n' "$cnt" "$base" "$(printf '%s' "$msg" | cut -c1-120)"
+        rose=$((rose+1)); printf '  ROSE        x%-4s (ledger x%s, surfaces above x%s) %s\n' "$cnt" "$base" "$rose_at" "$(printf '%s' "$msg" | cut -c1-104)"
     else
         acc=$((acc+1)); printf '  ACCOUNTED   x%-4s %s\n     -> %s\n' "$cnt" "$(printf '%s' "$msg" | cut -c1-110)" "$(printf '%s' "$note" | cut -c1-110)" >> "$ACCLIST"
     fi
