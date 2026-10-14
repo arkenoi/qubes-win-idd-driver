@@ -158,16 +158,34 @@ inline std::wstring QwtLogDir()
 inline const wchar_t* g_logName = L"\\bridge.log";
 inline std::wstring g_logDirOverride;
 
-inline void BLog(const wchar_t* fmt, ...)
+// SEVERITY IS DECLARED BY THE WRITER, never inferred from the words. These logs carried NO level
+// field, so tools/log-sweep.py assigned one BY VOCABULARY - and its own comments record what that
+// cost: "absent" inside "/qubes-ip absent, no vif device: no netvm, nothing to apply" (which is
+// pvnic-selfprime's statement that this is CORRECT - its function is named Ok) was graded a
+// warning, 12 of 132 warning lines on a clean cycle; and "errors=12" was graded INFO because
+// \berror\b does not match the plural, so a record reporting twelve failures read as routine. Jev
+// scored that analyzer-defect class 0.76. A vocabulary cannot be fixed by growing it.
+//
+// ADDITIVE ON PURPOSE. BLog's line format is unchanged, because consumers anchor on it -
+// mgmt/harness/a0-lib.sh:198 counts '^[0-9]{2}:[0-9]{2}:[0-9]{2} (SENT |FWD_RTT )'. Only a FAILURE
+// gains a tag, which is what a sweeper needs to judge it without reading the message.
+inline void BLogV(const wchar_t* tag, const wchar_t* fmt, va_list ap);
+
+inline void BLogW(const wchar_t* fmt, ...)
+{ va_list ap; va_start(ap, fmt); BLogV(L"[WARN] ", fmt, ap); va_end(ap); }
+
+inline void BLogE(const wchar_t* fmt, ...)
+{ va_list ap; va_start(ap, fmt); BLogV(L"[ERROR] ", fmt, ap); va_end(ap); }
+
+inline void BLogV(const wchar_t* tag, const wchar_t* fmt, va_list ap)
 {
     static std::wstring path;
     if (path.empty()) path = (g_logDirOverride.empty() ? QwtLogDir() : g_logDirOverride) + g_logName;
     wchar_t line[2048];
     SYSTEMTIME st; GetLocalTime(&st);
-    int off = swprintf(line, RTL_NUMBER_OF(line), L"%02u:%02u:%02u ", st.wHour, st.wMinute, st.wSecond);
-    va_list ap; va_start(ap, fmt);
+    int off = swprintf(line, RTL_NUMBER_OF(line), L"%02u:%02u:%02u %s", st.wHour, st.wMinute,
+                       st.wSecond, tag ? tag : L"");
     vswprintf(line + off, RTL_NUMBER_OF(line) - off - 2, fmt, ap);
-    va_end(ap);
     wcscat_s(line, L"\r\n");
     // rotate at ~1 MB so a chatty failure can never eat the disk
     WIN32_FILE_ATTRIBUTE_DATA fad;
@@ -195,6 +213,17 @@ inline void BLog(const wchar_t* fmt, ...)
     DWORD wr; WriteFile(f, u.data(), (DWORD)u.size(), &wr, nullptr);
     CloseHandle(f);
 }
+
+// EVERY LINE DECLARES, including the routine ones. Leaving INFO untagged kept a vocabulary alive in
+// the reader for the untagged majority - 188 alternation terms plus 16 regexes that are exceptions
+// to them, each added because an earlier guess was wrong. With [INFO] here there is nothing left to
+// infer: a sweeper shows E and W and drops I, and the guessing machinery is deleted rather than
+// outranked. The installer log already looks like this (log-sweep.py's INSTALLER_RE expects
+// [(INFO|WARN|ERROR|FATAL|DEBUG)]), so this is the house format, not a new one.
+// ONE consumer anchored on the old shape - mgmt/harness/a0-lib.sh:198, counting
+// '^HH:MM:SS (SENT |FWD_RTT )' - and it is updated in the same change.
+inline void BLog(const wchar_t* fmt, ...)
+{ va_list ap; va_start(ap, fmt); BLogV(L"[INFO] ", fmt, ap); va_end(ap); }
 
 // DIAGNOSTIC (2026-09-05 silent-vanish localization): last-chance crash breadcrumb. Under
 // /EHsc catch(...) sees only C++ exceptions; an SEH fault (AV etc.) bypasses every guard and

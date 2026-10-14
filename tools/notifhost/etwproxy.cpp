@@ -438,7 +438,7 @@ static bool EtwProxyTokenCensusIsDrifted()
                "re-run guest/provision-etwproxy-account.ps1; design sec 10.17.2)\n",
                plu ? "Performance-Log-Users " : "",
                profilePriv ? "SeSystemProfilePrivilege " : "");
-        BLog(L"ETWPROXY FAIL token DRIFT: %s%spresent - refusing (sec 10.17.2)",
+        BLogE(L"ETWPROXY FAIL token DRIFT: %s%spresent - refusing (sec 10.17.2)",
              plu ? L"Performance-Log-Users " : L"",
              profilePriv ? L"SeSystemProfilePrivilege " : L"");
         return true;
@@ -456,7 +456,7 @@ static void EtwProxyShedAllPrivileges()
 {
     HANDLE tok = nullptr;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &tok))
-    { BLog(L"ETWPROXY WARN OpenProcessToken(adjust) failed %lu - privileges NOT shed", GetLastError()); return; }
+    { BLogW(L"ETWPROXY WARN OpenProcessToken(adjust) failed %lu - privileges NOT shed", GetLastError()); return; }
 
     DWORD cb = 0;
     GetTokenInformation(tok, TokenPrivileges, nullptr, 0, &cb);
@@ -481,7 +481,7 @@ static void EtwProxyShedAllPrivileges()
              removed, tp->PrivilegeCount);
     }
     else
-        BLog(L"ETWPROXY WARN could not read token privileges %lu - none shed", GetLastError());
+        BLogW(L"ETWPROXY WARN could not read token privileges %lu - none shed", GetLastError());
     CloseHandle(tok);
 }
 
@@ -506,7 +506,7 @@ static int EtwProxyMain(const wchar_t* clientSid)
         printf("ETWPROXY FAIL refusing to run the untrusted ETW/TDH parse under a privileged "
                "token: %ls (this path must be the least-privilege qubes-etwproxy account only)\n",
                why.c_str());
-        BLog(L"ETWPROXY FAIL never-SYSTEM guard tripped: %s - refusing", why.c_str());
+        BLogE(L"ETWPROXY FAIL never-SYSTEM guard tripped: %s - refusing", why.c_str());
         return 9;
     }
 
@@ -551,11 +551,11 @@ static int EtwProxyMain(const wchar_t* clientSid)
             // tier on exit 5: no ETW signal for the rest of the boot.
             printf("ETWPROXY FAIL OpenTrace/ProcessTrace denied - per-session DACL grant "
                    "insufficient\n");
-            BLog(L"ETWPROXY FAIL OpenTrace/ProcessTrace denied, no ETW signal this boot (exit 5)");
+            BLogE(L"ETWPROXY FAIL OpenTrace/ProcessTrace denied, no ETW signal this boot (exit 5)");
             return 5;
         }
         printf("ETWPROXY FAIL OpenTrace %lu (agent-started session absent?)\n", gle);
-        BLog(L"ETWPROXY FAIL OpenTrace %lu (agent-started session absent?)", gle);
+        BLogE(L"ETWPROXY FAIL OpenTrace %lu (agent-started session absent?)", gle);
         return 7;
     }
     SetConsoleCtrlHandler(PxCtrlHandler, TRUE);
@@ -585,12 +585,12 @@ static int EtwProxyMain(const wchar_t* clientSid)
         {
             printf("ETWPROXY WARN --client-sid '%ls' is not a valid SID - pipe DACL empty "
                    "(deny everyone), bridge tier stays down\n", clientSid);
-            BLog(L"ETWPROXY WARN --client-sid invalid - pipe DACL empty (deny everyone)");
+            BLogW(L"ETWPROXY WARN --client-sid invalid - pipe DACL empty (deny everyone)");
         }
         else
         {
             printf("ETWPROXY WARN no --client-sid: pipe DACL empty - nobody can connect (bridge tier stays down)\n");
-            BLog(L"ETWPROXY WARN no --client-sid: pipe DACL empty - nobody can connect");
+            BLogW(L"ETWPROXY WARN no --client-sid: pipe DACL empty - nobody can connect");
         }
     }
     if (canon) LocalFree(canon);
@@ -610,7 +610,7 @@ static int EtwProxyMain(const wchar_t* clientSid)
     if (pipe == INVALID_HANDLE_VALUE)
     {
         printf("ETWPROXY FAIL CreateNamedPipe %lu (squatter holding the name?)\n", GetLastError());
-        BLog(L"ETWPROXY FAIL CreateNamedPipe %lu", GetLastError());
+        BLogE(L"ETWPROXY FAIL CreateNamedPipe %lu", GetLastError());
         CloseTrace(cons);   // never the session - the agent owns it
         return 8;
     }
@@ -631,7 +631,7 @@ static int EtwProxyMain(const wchar_t* clientSid)
     if (!etwThread)
     {
         printf("ETWPROXY FAIL consumer thread %lu\n", GetLastError());
-        BLog(L"ETWPROXY FAIL consumer thread %lu", GetLastError());
+        BLogE(L"ETWPROXY FAIL consumer thread %lu", GetLastError());
         CloseTrace(cons);   // never the session - the agent owns it
         CloseHandle(pipe);
         return 7;
@@ -746,7 +746,7 @@ static int EtwProxyMain(const wchar_t* clientSid)
         // the agent parks on a TRUE finding - never a masquerading clean exit 0.
         printf("ETWPROXY FAIL OpenTrace/ProcessTrace denied - per-session DACL grant "
                "insufficient\n");
-        BLog(L"ETWPROXY FAIL OpenTrace/ProcessTrace denied, no ETW signal this boot (exit 5)");
+        BLogE(L"ETWPROXY FAIL OpenTrace/ProcessTrace denied, no ETW signal this boot (exit 5)");
         exitCode = 5;
     }
     printf("ETWPROXY stop rc=%d captured=%ld sent=%ld dropped=%ld\n",

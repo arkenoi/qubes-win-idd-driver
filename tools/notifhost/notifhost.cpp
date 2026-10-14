@@ -4659,7 +4659,7 @@ int wmain(int argc, wchar_t** argv)
         // line) instead of treadmilling - never a silent no-op.
         printf("NOTIFHOST FAIL --etw-proxy has moved to etwproxy.exe (GUI-DLL-free console "
                "split); launch that binary instead - refusing\n");
-        BLog(L"NOTIFHOST FAIL --etw-proxy belongs to etwproxy.exe now, refusing (exit 9)");
+        BLogE(L"NOTIFHOST FAIL --etw-proxy belongs to etwproxy.exe now, refusing (exit 9)");
         return 9;
     }
     if (relayPipe) return RelayMain(relayPipe);

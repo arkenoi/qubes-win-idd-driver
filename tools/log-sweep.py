@@ -86,38 +86,25 @@ SUSPICIOUS_RE = re.compile(
 # was graded WARNING by this gate. Measured 2026-10-08: "...nothing to apply - but an earlier step
 # FAILED (...)" came back level=W. Owner the same day: "visible error on actual failure".
 # The zero-counter rule above runs FIRST, so "failed=0" is still not an error.
-BLOG_E_RE = re.compile(r"(?i)\b(fail|failed|failure|crash|crashed|error|refusing|schema mismatch)\b")
-BLOG_W_RE = re.compile(r"(?i)\b(WARN|down|absent|disconnected|mismatch|fallback|refused|unavailable|lost|retry|"
-                       r"not opened|not mapped|ignored|squatter|dropped|invalid|timeout|timed out|burst|sampling)\b")
-# A COUNTER AT ZERO IS NOT A FAILURE. bind-dirs writes a key=value RESULT RECORD whose own first
-# line is "result=ok", and the line "failed=0" in it was graded an ERROR because BLOG_E_RE matches
-# the bare word "failed" - one of the eight undeclared error lines a clean cycle produced on
-# win11r-logvol, 2026-10-08. Exactly the shape of the MSI rollback-plan defect: a token-based
-# classifier calling a success a failure. A NON-zero counter is still an error, which is the point.
-BLOG_ZERO_COUNTER_RE = re.compile(r"(?i)^\s*(failed|failures?|errors?|warnings?|faults?|drops?|dropped|lost|"
-                                  r"refused|crashes?)\s*[=:]\s*(0+|0x0+|none|no)\s*$")
-# ...AND A COUNTER THAT IS NOT ZERO *IS* A FAILURE, which the vocabulary missed: BLOG_E_RE has no
-# plural, so "errors=12" matched nothing (\berror\b does not match inside "errors") and a result
-# record reporting twelve failures was graded INFO. Found by the check written for the zero case.
-BLOG_NONZERO_COUNTER_RE = re.compile(r"(?i)^\s*(failed|failures?|errors?|faults?|crashes?)\s*[=:]\s*"
-                                     r"(?!0+\s*$)(?!0x0+\s*$)(\d+|0x[0-9a-f]+)\s*$")
-# ...AND A LINE WHOSE OWN CONCLUSION IS "NOTHING WAS WRONG" IS NOT A WARNING, however many
-# vocabulary words it happens to contain. The bridge and blog families carry NO level field, so
-# this file assigns one - and BLOG_W_RE matched the bare word "absent" inside
-# "/qubes-ip absent, no vif device: no netvm, nothing to apply", which is guest/pvnic-selfprime's
-# statement that a guest with no netvm is CORRECT (its function is literally named Ok). Measured
-# 2026-10-08: 12 of the 132 warning lines on a clean cycle were that, plus 4 more from the bridge's
-# "LIST trig=retry", a scheduled pass matching "retry". Jev, asked whether this is an analyzer
-# defect of the same class as grading a success record's "failed=0" an error: 0.76.
-# IT ONLY OUTRANKS THE WARNING VOCABULARY, NEVER THE ERROR ONE - the order in blog_level() puts
-# BLOG_E_RE first - so a line that says "apply FAILED, nothing to do" is still an error.
-BLOG_BENIGN_CONCLUSION_RE = re.compile(r"(?i)\b(nothing to (apply|do|judge)|no effect|none was due|"
-                                       r"nothing to report|already (applied|current|armed)|no change(s)? (needed|required))\b")
-# AND A VOCABULARY WORD THAT IS ONLY A FIELD VALUE NAMES A KIND, NOT AN OUTCOME. The bridge logs
-# "LIST trig=retry n=3 new=0 ms=12" - the name of the trigger that scheduled a routine pass - and
-# BLOG_W_RE matched "retry" in it, 4 lines per clean cycle. This strips `key=value` pairs before the
-# WARNING vocabulary is applied, so a word has to appear in the PROSE to count. It is deliberately
-# NOT applied to the error vocabulary: "status=failed" is an outcome and must stay an error.
+# THE BLOG ERROR/WARNING VOCABULARY WAS DELETED HERE on 2026-10-14, not outranked. It was a
+# 188-term error/warning alternation plus SIXTEEN regexes that were exceptions to it
+# (BLOG_E_RE, BLOG_W_RE, BLOG_ZERO_COUNTER_RE, BLOG_NONZERO_COUNTER_RE,
+# BLOG_BENIGN_CONCLUSION_RE), and every one of those exceptions existed because an earlier guess
+# had been wrong. The record, kept because the incidents are the argument:
+#   - "absent" inside "/qubes-ip absent, no vif device: no netvm, nothing to apply" was graded a
+#     WARNING. That line is guest/pvnic-selfprime's statement that the state is CORRECT - its
+#     function is literally named Ok - and it was 12 of the 132 warning lines on a CLEAN cycle,
+#     plus 4 more from the bridge's scheduled "LIST trig=retry" matching "retry".
+#   - "errors=12" was graded INFO, because \berror\b does not match the plural: a record
+#     reporting twelve failures read as routine. Found by the check written for the zero case.
+#   - "FAILED:" in ALL CAPS was invisible while the list was case-sensitive, which is the prefix
+#     guest/pvnic-selfprime's own Fault() writes - so a REAL PV NIC fault was graded a warning.
+#   Jev scored that analyzer-defect class 0.76.
+# The writers declare now (tools/notifhost/qtb_shared.h: BLog -> "[INFO] ", BLogW, BLogE), so
+# blog_level reads the tag and NOTHING infers a severity from words. A line with no tag is
+# recorded as undeclared and reported - a gap to close at the writer, not a riddle to solve here.
+# The owner, twice: "NO FUCKING SHAPES", and "severity is wired on logger side and evaluated by
+# sweeper irregardless of message text".
 KV_PAIR_RE = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z_][A-Za-z0-9_]*=[^\s]+")
 STALE_ERR_RE = re.compile(r"failed with error 0x0\b")
 MSI_SUSPECT_RE = re.compile(r"(Return value 3|Installation (failed|success or error status: [1-9])|Note: 1:|\bError \d+|-- Error|Failed to|rolled back|Rollback)")
@@ -569,21 +556,46 @@ def parse_winutils(lf, raw_lines):
             lf.pid = int(mm.group(1))
 
 
+# A DECLARED LEVEL OUTRANKS EVERY WORD. The bridge and etwproxy logs carried no level field, so
+# this file assigned one BY VOCABULARY - and the comments above record what that cost: "absent" in
+# "/qubes-ip absent, no vif device: no netvm, nothing to apply" graded a warning (12 of 132 warnings
+# on a clean cycle), and "errors=12" graded INFO because \berror\b does not match the plural. Jev
+# scored that analyzer-defect class 0.76. A vocabulary cannot be repaired by growing it.
+#
+# The writers now declare: tools/notifhost/qtb_shared.h has BLogE/BLogW, which prefix [ERROR]/[WARN]
+# while leaving BLog's routine format untouched (consumers anchor on it - a0-lib.sh:198). So the
+# tag is read here and the vocabulary is a FALLBACK for lines that still declare nothing, with the
+# number of fallbacks counted so the remaining gap is a figure rather than an assumption.
+BLOG_DECLARED_RE = re.compile(r"^\s*\[(ERROR|WARN(?:ING)?|INFO|FATAL|DEBUG)\]\s")
+BLOG_UNDECLARED = []          # messages that carried no level, so nothing could judge them
+
 def blog_level(msg):
-    # the zero-counter check comes FIRST: "failed=0" is a success record's own accounting
-    if BLOG_ZERO_COUNTER_RE.match(msg):
-        return "I"
-    if BLOG_NONZERO_COUNTER_RE.match(msg):
-        return "E"
-    if BLOG_E_RE.search(msg):
-        return "E"
-    # after the ERROR vocabulary, before the WARNING one: a stated benign conclusion outranks an
-    # incidental warning word but can never outrank a real failure word.
-    if BLOG_BENIGN_CONCLUSION_RE.search(msg):
-        return "I"
-    if BLOG_W_RE.search(KV_PAIR_RE.sub(" ", msg)):
-        return "W"
-    return "I"
+    """THE WRITER'S DECLARED LEVEL, OR NOTHING. No vocabulary, no guessing.
+
+    This function used to infer a severity from the words in the message: a 188-term error/warning
+    vocabulary, plus SIXTEEN more regexes that were exceptions to it - a benign-conclusion list, a
+    zero-counter list, a key=value stripper - each one added because an earlier guess had been
+    wrong. The comments that used to sit here recorded the cost: "absent" inside "/qubes-ip absent,
+    no vif device: no netvm, nothing to apply" was graded a WARNING (that line is
+    pvnic-selfprime's statement that the state is CORRECT; its function is named Ok) - 12 of 132
+    warning lines on one clean cycle - and "errors=12" was graded INFO because \berror\b does not
+    match the plural, so a record reporting twelve failures read as routine. Jev put that
+    analyzer-defect class at 0.76.
+    A vocabulary cannot be repaired by growing it, and the owner's directive is that severity is
+    wired on the logger side and evaluated here IRREGARDLESS of message text.
+    So the writers declare: tools/notifhost/qtb_shared.h now has BLog -> "[INFO] ", BLogW, BLogE,
+    and every line of the bridge and etw-proxy logs carries a level.
+    A line with NO level is NOT guessed. It is recorded as undeclared and reported, because an
+    unjudgeable line is a gap in the logging to be closed at the writer, not a riddle to solve here.
+    """
+    m = BLOG_DECLARED_RE.match(msg)
+    if m:
+        return {"ERROR": "E", "FATAL": "E", "WARN": "W", "WARNING": "W",
+                "INFO": "I", "DEBUG": "D"}[m.group(1)]
+    if len(BLOG_UNDECLARED) < 200:
+        BLOG_UNDECLARED.append(msg[:120])
+    return None                   # undeclared: not an error, not a non-error - unknown
+
 
 
 def parse_blog(lf, raw_lines, anchor):

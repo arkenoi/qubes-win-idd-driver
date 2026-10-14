@@ -35,7 +35,15 @@ done
 # artifact - but which extras to include is exactly the kind of decision that becomes advocacy if it
 # is remade every run. So the rule is stated once here and applied every time:
 #
-#   include the thing, its TESTS, and the code that CALLS it. Nothing else, and never a narrative.
+#   include EVERY IMPLEMENTATION of the function being judged, its TESTS, and the code that CALLS
+#   it. Nothing else, and never a narrative.
+#
+# "Every implementation" is not pedantry, it is the hole this rule was first written with. An error
+# detector was judged sound from tools/sweep-gate.sh - which reads only declared severity and never
+# guesses - while tools/log-sweep.py, the sweeper that actually handles the GUEST logs, was
+# assigning E and W BY VOCABULARY the whole time. Both answer "is this line an error"; only one was
+# in the artifact, so the score was never about the question it appeared to answer. Curating the
+# narrative and curating the SCOPE are the same mistake.
 #
 # If a named source has an obvious test file beside it and that file was not named, this says so
 # rather than quietly sending a partial artifact.

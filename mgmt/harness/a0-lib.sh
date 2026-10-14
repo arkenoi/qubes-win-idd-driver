@@ -195,7 +195,9 @@ fwd_attempts(){ # $1 = FILE; counts lines evidencing ANY dom0-forward ATTEMPT (S
                 # outcome, FWD_RTT any ok=) - for the must-be-ZERO negative assertions
                 # (P4b control / P6a consent-revoked / P8 legacy-off). An attempted-but-
                 # rejected forward there is just as much a leak as an acked one.
-  grep -caE '^[0-9]{2}:[0-9]{2}:[0-9]{2} (SENT |FWD_RTT )' "$1" || true
+  # the bridge now declares a level on every line (qtb_shared.h BLog -> "[INFO] "), so the anchor
+  # allows an optional tag. Anchored rather than substring on purpose: it counts bridge RECORDS.
+  grep -caE '^[0-9]{2}:[0-9]{2}:[0-9]{2} (\[[A-Z]+\] )?(SENT |FWD_RTT )' "$1" || true
 }
 # Seen-to-fail proof (autonomy rule 5), pure text, no VM contact: fwd_count must count the
 # dropped-SENT shape (FWD_RTT ok=1, no SENT - THE 2026-09-05 regression), dedupe the pair,

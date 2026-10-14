@@ -747,23 +747,43 @@ if ! printf '%s' "$pb" | grep -q clockskew; then
   ok "T32 an in-sync guest does NOT report a skew (no false positive)"
 else bad "T32 the unskewed fixture reports a clock skew: $pb"; fi
 
-# T33 A COUNTER AT ZERO IS NOT A FAILURE. bind-dirs writes a key=value RESULT RECORD whose first
-# line is "result=ok", and "failed=0" in it was graded an ERROR because the levelless-log vocabulary
-# matches the bare word "failed" - one of the eight undeclared error lines a clean cycle produced on
-# win11r-logvol. A NON-zero counter must still be an error, which is the half that makes this a fix
-# rather than a silencer.
+# T33 SEVERITY COMES FROM THE WRITER'S DECLARED LEVEL, AND FROM NOTHING ELSE. This used to test a
+# vocabulary: that "failed=0" was not an error (a success record's own accounting), that "failed=3"
+# was, that "absent" in a line whose conclusion is "nothing to apply" was not a warning. Every one
+# of those cases existed because the vocabulary had been WRONG about it, and the exceptions needed
+# their own exceptions - "errors=12" read as routine because \berror\b does not match the plural.
+# The vocabulary is deleted. The writers declare (qtb_shared.h BLog/BLogW/BLogE,
+# pvnic-selfprime.ps1 L/LW/LE), so a declared tag decides and an UNDECLARED line is not guessed at
+# all - it returns None and is recorded, because an unjudgeable line is a gap to close at the
+# writer. Owner: "severity is wired on logger side and evaluated by sweeper irregardless of
+# message text", and "if you drop the vocabulary and fucking guesswork? it is abomination".
 python3 - "$SRC" <<'PYZ' > /tmp/zc.$$ 2>&1
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("ls", sys.argv[1])
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-want = {"failed=0": "I", "errors=0": "I", "warnings=0": "I", "failed=0x00000000": "I", "lost=0": "I",
-        "failed=3": "E", "errors=12": "E", "failed to open the ring": "E", "result=ok": "I"}
-bad = [("%s -> %s (want %s)" % (k, m.blog_level(k), v)) for k, v in want.items() if m.blog_level(k) != v]
+# DECLARED: the tag decides, including where the old vocabulary got it backwards.
+declared = {
+    "[INFO] failed=0":                                        "I",
+    "[ERROR] errors=12":                                      "E",   # plural the vocabulary missed
+    "[ERROR] FAILED: xenbus_monitor SURVIVED enforcement":    "E",   # ALL-CAPS it could not see
+    "[INFO] /qubes-ip absent, no vif device: nothing to apply":"I",   # "absent" is not a warning
+    "[WARN] LIST trig=retry n=3":                             "W",
+    "[WARN] the listener was disconnected":                   "W",
+    "[FATAL] the ring could not be opened":                   "E",
+}
+# UNDECLARED: never guessed, whatever words it contains.
+undeclared = ["failed=3", "apply FAILED, nothing to do", "status=failed",
+              "the listener was disconnected", "/qubes-ip absent, the applier gave up"]
+bad = ["%s -> %s (want %s)" % (k, m.blog_level(k), v) for k, v in declared.items() if m.blog_level(k) != v]
+bad += ["%s -> %s (want None: undeclared must not be guessed)" % (k, m.blog_level(k))
+        for k in undeclared if m.blog_level(k) is not None]
+if len(m.BLOG_UNDECLARED) != len(undeclared):
+    bad.append("recorded %d undeclared, expected %d" % (len(m.BLOG_UNDECLARED), len(undeclared)))
 print("OK" if not bad else "BAD " + "; ".join(bad))
 PYZ
 zc=$(cat /tmp/zc.$$); rm -f /tmp/zc.$$
 case "$zc" in
-  OK*) ok "T33 failed=0 is INFO and failed=3 is still an ERROR (a zero counter is not a failure)" ;;
+  OK*) ok "T33 a declared tag decides the level; an undeclared line is recorded, never guessed" ;;
   *)   bad "T33 $zc" ;;
 esac
 
@@ -847,33 +867,37 @@ else
   echo "skip  T12 collector parse-check: no pwsh at $PWSH"
 fi
 
-# ---- T34 the level vocabularies, in BOTH directions -------------------------------------------
-# Owner 2026-10-08: "visible error on actual failure" and, for OUR components, "no warnings on
-# normal operation. warning means something is not quite normal, yet workable."
-# Two defects were found here by measurement, not by reading:
-#   * the error vocabulary was case-SENSITIVE and had no FAILED, so "\bFAIL\b" could not match
-#     "FAILED" - the exact prefix guest/pvnic-selfprime.ps1's Fault() writes - and a REAL fault
-#     line came back level=W;
-#   * BLOG_W_RE matched vocabulary words inside key=value FIELD VALUES ("LIST trig=retry"), and
-#     warned over a line that merely names the trigger that scheduled a routine pass.
-t34(){ # $1 = message, $2 = expected level
-  got=$(python3 - "$ROOT/tools/log-sweep.py" "$1" <<'PY34'
-import sys, importlib.util
+# ---- T34 THE VOCABULARY MUST NOT COME BACK -----------------------------------------------------
+# This block used to test a 188-term error/warning vocabulary "in BOTH directions". It is deleted,
+# and these are the exact lines it used to grade - every one a real log line, and every one a case
+# the vocabulary had been WRONG about at least once. None of them may receive a severity now,
+# whatever words they contain: the writer declares, or the line is unjudgeable and reported as such.
+# This is a regression guard, not a behaviour test - if any of these starts returning a level
+# again, a vocabulary has been reintroduced somewhere.
+python3 - "$SRC" <<'PYV' > /tmp/t34.$$ 2>&1
+import importlib.util, sys
 spec = importlib.util.spec_from_file_location("ls", sys.argv[1])
-ls = importlib.util.module_from_spec(spec); spec.loader.exec_module(ls)
-print(ls.blog_level(sys.argv[2]))
-PY34
-)
-  if [ "$got" = "$2" ]; then ok "T34 ${1:0:58} -> $2"; else bad "T34 ${1:0:58} -> $got (want $2)"; fi
-}
-t34 'FAILED: xenbus_monitor SURVIVED enforcement' E
-t34 'no netvm, nothing to apply - but an earlier step FAILED (the re-arm did not complete)' E
-t34 'status=failed' E
-t34 'apply FAILED, nothing to do' E
-t34 'qubesdb up, /qubes-ip absent, no vif device: no netvm, nothing to apply' I
-t34 'LIST trig=retry n=3 new=0 ms=12' I
-t34 '/qubes-ip absent, the applier gave up' W
-t34 'the listener was disconnected' W
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+was_graded = [
+    "FAILED: xenbus_monitor SURVIVED enforcement",
+    "no netvm, nothing to apply - but an earlier step FAILED (the latch)",
+    "status=failed",
+    "apply FAILED, nothing to do",
+    "qubesdb up, /qubes-ip absent, no vif device: no netvm, nothing to apply",
+    "LIST trig=retry n=3 new=0 ms=12",
+    "/qubes-ip absent, the applier gave up",
+    "the listener was disconnected",
+    "failed=0", "errors=12", "crash in the decode loop", "schema mismatch",
+]
+guessed = [(l, m.blog_level(l)) for l in was_graded if m.blog_level(l) is not None]
+print("OK" if not guessed else "BAD a vocabulary graded: " +
+      "; ".join("%s -> %s" % (l[:40], v) for l, v in guessed))
+PYV
+t34=$(cat /tmp/t34.$$); rm -f /tmp/t34.$$
+case "$t34" in
+  OK*) ok "T34 none of the 12 lines the deleted vocabulary used to grade receives a severity now" ;;
+  *)   bad "T34 $t34" ;;
+esac
 
 # ---- T35 a launch the system refused because it was SHUTTING DOWN is not a task failure ------
 # MEASURED on win11r-err 2026-10-08, on a CLEAN cycle: id=203, task \QwtDeathReporter, "Error

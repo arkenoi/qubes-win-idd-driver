@@ -743,7 +743,17 @@ $mark = 'C:\ProgramData\QubesPvNic-FAILED.txt'
 # not answer this.
 Add-Type -Namespace Q -Name Sd -MemberDefinition '[DllImport("user32.dll")] public static extern int GetSystemMetrics(int i);' -EA SilentlyContinue
 function ShuttingDown { try { return ([Q.Sd]::GetSystemMetrics(0x2000) -ne 0) } catch { return $false } }
-function L($m) { Add-Content -Path $log -Value ("{0} {1}" -f (Get-Date -Format 'HH:mm:ss'), $m) }
+# EVERY LINE DECLARES ITS SEVERITY, and callers do not spell it in words. tools/log-sweep.py used to
+# infer a level from this log's TEXT, and this file is where that went wrong most often: its own
+# "FAILED:" prefix was invisible while the vocabulary was case-sensitive, so a real PV NIC fault
+# read as a warning; and its "/qubes-ip absent, no vif device: no netvm, nothing to apply" - which
+# is Ok()'s way of saying the state is CORRECT - was graded a WARNING, 12 of 132 warning lines on a
+# clean cycle. The vocabulary is deleted now, so an undeclared line is simply unjudgeable.
+function L($m, [string]$lvl = 'INFO') {
+    Add-Content -Path $log -Value ("{0} [{1}] {2}" -f (Get-Date -Format 'HH:mm:ss'), $lvl, $m)
+}
+function LW($m) { L $m 'WARN' }
+function LE($m) { L $m 'ERROR' }
 if ((Get-Item $log -EA SilentlyContinue).Length -gt 262144) { Remove-Item $log -Force }
 
 # 1. RE-ARM THE LATCH. xen.sys deleted the value at this boot's start (delete-on-read);
@@ -796,7 +806,7 @@ L "latch re-armed NICS=$((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Servi
 $script:faulted = $null
 function Fault([string]$why) {
     $script:faulted = $why
-    L "FAILED: $why"
+    LE "FAILED: $why"
     Set-Content $mark ("QubesPvNic FAILED: {0} at {1}" -f $why, (Get-Date -Format o))
     New-EventLog -LogName Application -Source QubesPvNic -EA SilentlyContinue
     Write-EventLog -LogName Application -Source QubesPvNic -EntryType Error -EventId 1001 -Message "PV NIC payload: $why" -EA SilentlyContinue
@@ -998,8 +1008,8 @@ function Diagnose {
 
 function Loud($why) {
     $dx = Diagnose
-    L "FAILED: $why"
-    L "diagnosis: $($dx.short) [$($dx.detail)]"
+    LE "FAILED: $why"
+    LE "diagnosis: $($dx.short) [$($dx.detail)]"
     Set-Content $mark ("QubesPvNic FAILED: {0} at {1}`r`ndiagnosis: {2} [{3}]" -f $why, (Get-Date -Format o), $dx.short, $dx.detail)
     New-EventLog -LogName Application -Source QubesPvNic -EA SilentlyContinue
     Write-EventLog -LogName Application -Source QubesPvNic -EntryType Error -EventId 1000 -Message "PV NIC: $why`r`ndiagnosis: $($dx.short) [$($dx.detail)]" -EA SilentlyContinue
