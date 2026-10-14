@@ -25,59 +25,61 @@ trap 'rm -rf "$T"' EXIT INT TERM
 pass=0; fail=0
 ck(){ if [ "$2" = "$3" ]; then pass=$((pass+1)); echo "ok   $1"; else fail=$((fail+1)); echo "FAIL $1: expected '$2', got '$3'"; fi; }
 
-python3 - "$T" > "$T/out.txt" 2>&1 <<'PY'
-import importlib.util, sys
+python3 - "$T" > "$T/out.txt" 2>&1 <<'PYIN'
+import importlib.util
 spec = importlib.util.spec_from_file_location("ls", "tools/log-sweep.py")
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 
-class L:  # the smallest stand-in for a parsed line
-    def __init__(self, msg): self.msg = msg
+class L:
+    def __init__(self, msg, lvl): self.msg, self.level = msg, lvl
 class F:
-    def __init__(self, name, msgs, family="agent"):
-        self.name, self.lines, self.family, self.path = name, [L(x) for x in msgs], family, None
+    def __init__(self, name, pairs, family="agent"):
+        self.name, self.lines, self.family, self.path = name, [L(a, b) for a, b in pairs], family, None
 
-files = [F("gui-agent-20261014.log", [
-    "NotifIpcEnsure: QGANOTIFIPC toast-hold records section created (2624 bytes, 32 records)",
-    "Init: NOTIFYERR gate: enabled=1 source=default (ACTION faults also go to dom0)",   # configuration, not a send
-    "Received request from client 3: domain '@default', service 'qubes.Notifications', user 'user'",
-    "NotifRunInSession: NOTIFHOST launched via Task Scheduler (user session 1, resident)",
-    "Received request from client 3: domain '@default', service 'qubes.Notifications', user 'user'",  # duplicate
+files = [F("bridge.log", [
+    ("NOTIFY one-shot: sent ok=1 summary=hello",                                     "I"),
+    ("NOTIFY one-shot: sent ok=0 summary=hello - notification LOST",                 "E"),
+    ("NOTIFY one-shot: no connection to dom0 (policy refusal?) - notification LOST", "E"),
+    ("NOTIFY handoff: no active console session - this message reaches nobody",      "W"),
+    ("NotifRunInSession: NOTIFHOST launched via Task Scheduler (args ...notify-errors...)", "I"),
+    ("Init: NOTIFYERR gate: enabled=1 source=default",                               "I"),
+    ("QGAERRBOX: shown to the user",                                                 "E"),
+    ("CaptureThread: main loop slow",                                                "W"),
 ])]
-sends, _ = m.dom0_sends(files)
-print("SENDS", len(sends))
-print("CONFIG_EXCLUDED", 0 if any("gate: enabled=" in s[1] for s in sends) else 1)
-
-cmp = {"breaches": [], "new": [], "rose": [], "out_of_context": []}
-items = m.build_jev_items(cmp, None, {}, files, None, sends)
-loud = [i for i in items if i["kind"] == "loud"]
-print("ITEMS", len(loud))
-rub = m.jev_rubric(loud)
-crit = sorted(list(rub["questions"].values())[0]["criteria"].keys()) if rub["questions"] else []
-print("CRITERIA", ",".join(crit))
-# the clock metric that must never be absorbed again
-t = m.DEFAULT_THRESHOLDS.get("clock_boot_correction_s", {})
-print("CLOCKMETRIC", t.get("max"), t.get("severity"))
-PY
-cat "$T/out.txt" | sed 's/^/     /' | head -8
+loud = m.dom0_loud(files)
+print("LOUD", len(loud))
+print("SUCCESS_EXCLUDED", 0 if any("ok=1" in x[2] for x in loud) else 1)
+print("LAUNCH_EXCLUDED",  0 if any("NOTIFHOST launched" in x[2] for x in loud) else 1)
+print("CONFIG_EXCLUDED",  0 if any("gate: enabled=" in x[2] for x in loud) else 1)
+print("OFFPATH_EXCLUDED", 0 if any("CaptureThread" in x[2] for x in loud) else 1)
+t = m.DEFAULT_THRESHOLDS.get("dom0_loud_failures", {})
+print("METRIC", t.get("max"), t.get("severity"))
+cmp = m.compare({}, {"thresholds": {}}, {"dom0_loud_failures": len(loud)})
+print("BREACHES", len(cmp["breaches"]))
+PYIN
+cat "$T/out.txt" | sed 's/^/     /' | head -9
 
 g(){ grep -a "^$1 " "$T/out.txt" | head -1 | cut -d' ' -f2-; }
 
-# 3 = the QGANOTIF line + the two identical qubes.Notifications requests. The NOTIFHOST
-# launch line in this fixture matches no pattern at all, which is correct: it is not a send.
-ck "candidate sends are extracted"                 "3"   "$(g SENDS)"
-ck "a line that only CONFIGURES the route is not a send" "1" "$(g CONFIG_EXCLUDED)"
-ck "distinct candidates become Jev items (deduped)" "2"   "$(g ITEMS)"
-ck "the judgement is Jev's, with loudness as a class" "insufficient-evidence,loud_failure,not_a_send,working_as_intended" "$(g CRITERIA)"
-ck "the clock correction is a P1 metric"           "60 P1" "$(g CLOCKMETRIC)"
+# A dom0-path line its own writer declared W or E. Both facts come from the right place: the level
+# from the writer, the path from OUR OWN protocol tokens - neither is guessed, and no judge is
+# needed to combine them.
+ck "a dom0-path line declared W or E is LOUD"             "4" "$(g LOUD)"
+ck "a SUCCESSFUL send is not loud"                        "1" "$(g SUCCESS_EXCLUDED)"
+# this one fooled a hand-written classifier: it matches the dictionary (its args name a
+# notify-errors path) but is written at INFO, because it is a launch, not a failed send.
+ck "a launch line that merely names the path is not loud" "1" "$(g LAUNCH_EXCLUDED)"
+ck "a line that only CONFIGURES the route is not loud"    "1" "$(g CONFIG_EXCLUDED)"
+ck "a W line that is NOT on the dom0 path is not loud"    "1" "$(g OFFPATH_EXCLUDED)"
+ck "loudness is P1, with a zero threshold"                "0 P1" "$(g METRIC)"
+ck "and it breaches"                                      "1" "$(g BREACHES)"
 
-# The shipped file must act on the verdict, not merely collect it.
-ck "a loud_failure verdict fails the sweep"        "1" \
-   "$(grep -c 'it\["kind"\] == "loud" and j\["choice"\] == "loud_failure"' tools/log-sweep.py)"
-ck "loud findings are carried into the report"     "1" \
-   "$(grep -c '"loud_failures": loud_failures' tools/log-sweep.py)"
-# And nothing may decide loudness by pattern any more.
-ck "no regex decides which send is a failure"      "0" \
-   "$(grep -c 'DOM0_LOUD_RE' tools/log-sweep.py)"
+# A release gate should give the same answer twice and cost nothing to run, so no judge sits in
+# this path. The dictionary is the sanctioned exception to "no vocabulary": it decides the PATH,
+# never the severity, which still comes from the writer's declared level.
+ck "no Jev item kind for loudness remains"       "0" "$(grep -c 'kind.\] == .loud.' tools/log-sweep.py)"
+ck "the dom0 token dictionary still exists"      "1" "$(grep -c '^DOM0_SEND_RE' tools/log-sweep.py)"
+ck "severity is never taken from the dictionary" "1" "$(awk '/^def dom0_loud/,/^    return loud$/' tools/log-sweep.py | grep -c 'not in ("W", "E")')"
 
 echo "loudness-channel-selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

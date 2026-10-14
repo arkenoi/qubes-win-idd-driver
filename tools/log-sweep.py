@@ -282,6 +282,42 @@ DOM0_SEND_RE = re.compile(
     r"|NOTIFY one-shot|NOTIFY handoff")
 
 
+def dom0_loud(files):
+    """Lines that are a dom0-bound send AND were written at W or E: LOUD, therefore P1.
+
+    THE DICTIONARY IS A DELIBERATE EXCEPTION TO "NO VOCABULARY", AND A NARROW ONE. The rule this
+    project fought for is that SEVERITY comes from the writer's declared level, never from guessing
+    at English words - that is what made the sweeper trustworthy. This match does not touch
+    severity. It answers a different, mechanical question: is this line ON THE DOM0 PATH? And the
+    tokens are OUR OWN protocol strings (NOTIFYERR, QGAERRBOX, qubes.Notifications, NOTIFY
+    one-shot), fixed in our source, identical on every guest and in every locale - not a word list
+    someone guessed at. The owner, having had the vocabulary removed everywhere else: "for loudness
+    you do not need jev. simple regexp matching (reintroducing an exception for dictionary we
+    dropped) would suffice".
+
+    THE TWO FACTS COMPOSE, and each comes from the right place:
+        declared level (the writer said this is a failure)  AND  dictionary (it is a dom0 send)
+    A judge is not needed to combine them, and a release gate is better for not depending on one:
+    this is deterministic, free, and gives the same answer twice.
+
+    It also fixes by construction the false positive a hand-written classifier produced here:
+    "NOTIFHOST launched via Task Scheduler ... args: ...notify-errors..." matches the dictionary but
+    is written at INFO, because it is a launch, not a failed send - so the declared level excludes
+    it without anyone deciding anything.
+    """
+    loud = []
+    for lf in files:
+        for l in getattr(lf, "lines", []) or []:
+            if getattr(l, "level", None) not in ("W", "E"):
+                continue
+            msg = getattr(l, "msg", "") or ""
+            if "gate: enabled=" in msg or "source=default" in msg:
+                continue        # configures the route; sends nothing
+            if DOM0_SEND_RE.search(msg):
+                loud.append((lf.name, getattr(l, "level", "?"), msg))
+    return loud
+
+
 def dom0_sends(files):
     """-> (all dom0-bound send lines, the subset announcing our own failure to the user).
 
@@ -308,6 +344,7 @@ DEFAULT_THRESHOLDS = {
     "error_lines_undeclared": {"max": 0, "severity": "P2", "why": "owner 2026-10-07: a clean error log is THE gate condition - any error line our own code wrote, and that this run did not declare it caused, is a defect to fix at its cause (never to hide)"},
     "declared_errors_unmatched": {"max": 0, "severity": "P2", "why": "a declared error that never appeared: the stimulus the run claims to have applied did not happen, so the run proved less than it says"},
     "agent_instances_per_shutdown": {"max": 1, "severity": "P2", "why": "one agent per shutdown; three = three vchan setups with dom0"},
+    "dom0_loud_failures": {"max": 0, "severity": "P1", "why": "our own code told dom0 to show the USER that something of ours failed - a line on the dom0 notification path that its own writer declared W or E. A failure the user can SEE is P1 on this project; the severity comes from the writer and the path comes from our own protocol tokens, so neither is guessed"},
     "clock_boot_correction_s": {"max": 60, "severity": "P1", "why": "the guest's clock had to be moved this far mid-boot: its RTC does not hold what the guest thinks it holds (qube `timezone` feature vs the guest's own zone). Measured 2026-10-14 at 10800 s - three hours - on every cell, while this analyser SILENTLY SHIFTED 2249 lines to compensate and raised nothing. Every timestamp judgement on such a guest is unsound, and the owner sees a guest whose clock is wrong"},
     "agent_instances_per_boot": {"max": 1, "severity": "P2", "why": "the agent is started once per boot; a second instance is a death or a restart"},
     "agent_ends_unrecorded": {"max": 0, "severity": "P2", "why": "an agent log that stops with no requested stop and no death record"},
@@ -1939,28 +1976,13 @@ def breach_evidence(b, st, metrics):
     return out[:40]
 
 
-def build_jev_items(cmp, st, metrics, files, since, loud_candidates=None):
+def build_jev_items(cmp, st, metrics, files, since):
     items = []
     n = 0
     for b in cmp["breaches"]:
         n += 1
         items.append({"id": "b%02d_%s" % (n, re.sub(r"[^a-z0-9_]", "_", b["metric"])), "kind": "breach", "metric": b["metric"], "value": b["value"], "max": b["max"],
                       "why": b["why"], "evidence": breach_evidence(b, st, metrics)})
-    # LOUDNESS: one item per DISTINCT candidate send. A failure the USER CAN SEE is P1 here, and
-    # nothing in a metric table knows what reached the user - the channel does. Jev decides whether
-    # a line is our code announcing OUR failure to the user, the product forwarding an application's
-    # notification (which is it working), or neither. Deduplicated and capped so a chatty boot
-    # cannot crowd out the breaches.
-    seen_loud = set()
-    for fname, msg in (loud_candidates or []):
-        key = re.sub(r"\d+", "N", msg)[:160]
-        if key in seen_loud:
-            continue
-        seen_loud.add(key)
-        if len(seen_loud) > 25:
-            break
-        n += 1
-        items.append({"id": "l%02d" % n, "kind": "loud", "file": fname, "line": msg[:400]})
     order = {"E": 0, "W": 1, "I": 2, "D": 3, "V": 3}
     for s in sorted(cmp["new"], key=lambda s: (order.get(s["level"], 9), -s["count"], s["key"])):
         n += 1
@@ -2009,12 +2031,6 @@ def jev_state_text(items, meta, boots, st, metrics, label, since):
             out.append("metric %s = %s, threshold max %s. Rule: %s" % (it["metric"], it["value"], it["max"], it["why"]))
             out.append("Question: does this breach indicate a DEFECT in our components or their supervision, or is it EXPECTED in this capture (e.g. a harness-driven agent restart), NOISE, or undecidable?")
             out.extend("  " + e for e in it["evidence"])
-        elif it["kind"] == "loud":
-            out.append("file=%s" % it["file"])
-            out.append("line: " + it["line"])
-            out.append("Question: is this our code asking dom0 to SHOW THE USER that something of ours failed (LOUD, "
-                       "therefore P1), the product forwarding an application's notification (working as intended), or "
-                       "neither (it only configures, launches, or names the route)?")
         else:
             s = it["sig"]
             out.append("family=%s level=%s signature=%s" % (s["family"], s["level"], s["key"]))
@@ -2050,18 +2066,6 @@ def jev_rubric(items):
             judge = "Item %s: a known signature's per-boot count ROSE above its baseline ceiling. From the state under 'ITEM %s' only: does the rise indicate a defect, or is it expected, noise, or undecidable?" % (it["id"], it["id"])
         elif it["kind"] == "context":
             judge = "Item %s: a signature the baseline expects ONLY under fault injection was seen OUTSIDE any evidenced injection. From the state under 'ITEM %s' only, and against the PREMISES: a defect, expected, noise, or undecidable?" % (it["id"], it["id"])
-        elif it["kind"] == "loud":
-            judge = ("Item %s: a line from the guest's own log that mentions the route by which this product can ask dom0 "
-                     "to display something to the USER. On this project a failure the user can SEE is P1, whatever a "
-                     "metric table says about it. From the state under 'ITEM %s' only, decide what this line IS. Do not "
-                     "treat a line that merely configures, launches or names the route as a send.")
-            q[it["id"]] = {"type": "choice", "instructions": {"judge": judge % (it["id"], it["id"])},
-                           "criteria": {
-                "loud_failure": "our code telling dom0 to SHOW THE USER that something of ours failed, is missing, died or threw - a user-visible failure, therefore P1",
-                "working_as_intended": "the product forwarding a guest application's own notification to dom0, or otherwise doing the job it exists to do",
-                "not_a_send": "nothing is displayed to anyone by this line - it configures the route, launches a component, or merely mentions a path or setting",
-                "insufficient-evidence": "the line cannot be placed in any of those from what is given"}}
-            continue
         else:
             judge = "Item %s: a NEW log signature not in the baseline. From the state under 'ITEM %s' only, and against the PREMISES: is it a defect, expected behaviour, noise, or undecidable?" % (it["id"], it["id"])
         q[it["id"]] = {"type": "choice", "instructions": {"judge": judge},
@@ -2312,17 +2316,12 @@ def cmd_analyze(a):
     # its own competence. The offset is now a metric with a threshold, so the guest's clock being
     # wrong fails the sweep instead of being quietly accommodated.
     metrics["clock_boot_correction_s"] = int(abs(_phase_offset or 0))
-    # LOUDNESS IS A JUDGEMENT, SO IT GOES TO JEV, NOT TO A REGEX.
-    # The candidates are prefiltered cheaply below and each DISTINCT one becomes a Jev item: is this
-    # line our code telling dom0 to SHOW THE USER that something of ours failed (loud), the product
-    # forwarding an application's notification (working as intended), or neither? My own attempt to
-    # split them with a second regex called "NOTIFHOST launched via Task Scheduler ... args:" a
-    # user-visible failure, because the arguments mention a notify-errors path. That is exactly the
-    # class of call this project gives to Jev.
-    _all_sends, _ = dom0_sends(files)
+    # LOUDNESS, DECIDED NOT JUDGED: a dom0-path line whose own writer declared W or E.
+    _loud = dom0_loud(files)
+    metrics["dom0_loud_failures"] = len(_loud)
     sigs = collect_signatures(files, since)
     cmp = compare(sigs, baseline, metrics)
-    items = build_jev_items(cmp, st, metrics, files, since, _all_sends)
+    items = build_jev_items(cmp, st, metrics, files, since)
 
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     workdir = a.workdir or os.path.join(repo, "scratchpad", "log-sweep", time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + re.sub(r"[^A-Za-z0-9_-]", "_", a.label or "run"))
@@ -2336,7 +2335,6 @@ def cmd_analyze(a):
             answers, calls, jrc, jreason = run_jev(items, lambda part: jev_state_text(part, meta, boots, st, metrics, a.label, since),
                                                    workdir, jev_cmd, a.jev_max, wire_log)
     judged_defects = []
-    loud_failures = []
     for it in items:
         ans = answers.get(it["id"])
         if ans:
@@ -2345,19 +2343,11 @@ def cmd_analyze(a):
                 for b in cmp["breaches"]:
                     if b["metric"] == it["metric"]:
                         b["jev"] = j
-            elif it["kind"] == "loud":
-                it["jev"] = j
             else:
                 it["sig"]["jev"] = j
-            # A LINE JEV CALLS loud_failure IS A USER-VISIBLE FAILURE, AND THOSE ARE P1 HERE.
-            # It fails the sweep exactly as a judged defect does; the owner's rule is that a loud
-            # failure is never filed below P1, and until this item kind existed nothing in this
-            # tool could even tell a silent log line from one the user was shown.
-            is_defect = (j["choice"] == "defect") or (it["kind"] == "loud" and j["choice"] == "loud_failure")   # GUARD:defect DEFECT: is_defect = False
+            is_defect = (j["choice"] == "defect")   # GUARD:defect DEFECT: is_defect = False
             if is_defect:
                 judged_defects.append(it["id"])
-                if it["kind"] == "loud":
-                    loud_failures.append({"id": it["id"], "file": it["file"], "line": it["line"], "jev": j})
 
     incomplete = (jrc != 0)   # GUARD:jev2 DEFECT: incomplete = False
     if problems:
@@ -2404,7 +2394,7 @@ def cmd_analyze(a):
                        "errors_during_stop": [l.raw[:300] for l in i["errors_during_stop"]], "exit_errors": [l.raw[:300] for l in i["exit_errors"]],
                        "stale_errors": [l.raw[:300] for l in i["stale_errors"]]} for i in st["instances"]],
         "metrics": metrics, "thresholds": {k: v for k, v in cmp["thresholds"].items() if isinstance(v, dict)},
-        "breaches": cmp["breaches"], "judged_defects": judged_defects, "loud_failures": loud_failures,
+        "breaches": cmp["breaches"], "judged_defects": judged_defects, "loud_failures": [list(x) for x in _loud],
         "new": [sig_json(s) for s in cmp["new"]], "rose": [sig_json(s) for s in cmp["rose"]],
         "known_defects_present": [sig_json(s, False) for s in cmp["known"]], "unsettled_present": [sig_json(s, False) for s in cmp["unsettled"]],
         "expected_present": len(cmp["expected"]),
