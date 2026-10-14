@@ -610,15 +610,20 @@ clear_prime_leftovers(){ # $1=vm - prime-run's own exit text: "The stick is stil
   # user_data_on_private + agent_log_healthy both failed on a guest whose install was perfect -
   # pv_disk_bound was True the whole time. It passed on the next run, because which volume wins
   # the letter is a race. A leftover from priming must never be able to decide a cell's verdict.
-  # AND THE LOG VOLUME, since 2026-10-14: prime-run now attaches it on xvdk, so a fixture it built
-  # carries a THIRD --required claim. Left behind, that claim names a loop this qube will recycle,
-  # and a claim on a released loop makes the guest uncreatable with nothing but "libxenlight failed
-  # to create new domain" (CLAIMSTALELOOP). The same leftover-decides-a-verdict argument applies:
-  # an extra removable volume competes for the drive letter the private volume normally takes.
+  # THE LOG VOLUME IS NOT A LEFTOVER, and sweeping it here BROKE A CELL. I added it to this loop on
+  # 2026-10-14 reasoning that prime-run leaves a third `--required` claim; it does, but that volume
+  # is the cell's INSTRUMENT - attached before the guest starts, BOUND so QWT's modules write to it,
+  # and pulled at cell end. Detaching it mid-cell leaves LogDir pointing at a drive letter that no
+  # longer exists, so the agent writes nowhere. Measured minutes later on WIN10-clean:
+  # `agent_log_healthy` false with "no agent log is held open by any process: the agent is not
+  # logging" and `idd_agent_identified` false for want of the line it reads out of that log - a
+  # product FAIL caused entirely by the harness. The stale-claim risk that prompted it is covered
+  # where it belongs: claim_sweep_stale runs before every start, so a claim on a released loop
+  # cannot make a subject uncreatable.
   local vm=$1 stickloop img
-  # `[.]` not `\.`: awk warns "escape sequence \. treated as plain ." on every call, three lines of
+  # `[.]` not `\.`: awk warns "escape sequence \. treated as plain ." on every call, two lines of
   # noise per cell in a log that is read for findings.
-  for img in 'answer-usb[.]img$' 'answer-usb-413[.]img$' "logvol/logs-$vm[.]img\$"; do
+  for img in 'answer-usb[.]img$' 'answer-usb-413[.]img$'; do
     stickloop=$(losetup -l 2>/dev/null | awk -v pat="$img" '$6 ~ pat {sub("/dev/","",$1); print $1; exit}')
     if [ -n "$stickloop" ]; then
       local uerr

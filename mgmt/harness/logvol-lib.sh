@@ -314,6 +314,19 @@ logvol_detach(){ # <vm> <manifest.json> - AFTER the guest halted (the loop must 
   local vm="${1:?[ERROR] logvol_detach <vm> <manifest>}" mf="${2:?[ERROR] logvol_detach <vm> <manifest>}" dev st rc=0
   dev=$(logvol_manifest_lookup "$mf" "$vm" loop)
   [ -n "$dev" ] || { _lv_say "no logvol recorded for $vm in $mf - nothing to detach"; return 0; }
+  # UNBIND BEFORE DETACHING, always. logvol_bind_guest points QWT's LogDir at this volume, so
+  # taking the volume away without restoring LogDir leaves every module writing to a drive letter
+  # that no longer exists. Measured 2026-10-14 on WIN10-clean, where a harness sweep detached the
+  # volume mid-cell: `agent_log_healthy` came back false with "no agent log is held open by any
+  # process: the agent is not logging", and the IDD check that reads a line out of that log failed
+  # with it - a product FAIL manufactured by the instrument. A bind with no matching unbind is the
+  # defect; this is the matching unbind. Best-effort on a guest that cannot answer: an unreachable
+  # guest cannot be unbound, and that is not a reason to leave the volume attached.
+  if logvol_unbind_guest "$vm" >/dev/null 2>&1; then
+    _lv_say "LogDir restored on $vm before detaching the volume"
+  else
+    _lv_say "[WARN] could not restore LogDir on $vm (unreachable?) - if it comes back, its modules log to a volume that is gone"
+  fi
   logvol_unassign "$vm" "$dev" || rc=1
   logvol_qemu_remove "$vm" || rc=1
   st=$(QTEST_VM="$vm" timeout 25 "$LOGVOL_QTEST" state 2>/dev/null | grep -aoE 'power_state=[A-Za-z]+' | head -1)

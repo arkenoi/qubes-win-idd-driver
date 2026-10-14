@@ -252,5 +252,15 @@ grep -qE '^exit /b 0$' "$CMDF" && ! grep -v '^REM' "$CMDF" | grep -qE 'exit /b [
 grep -q 'LOGVOL.TAG' "$CMDF" && ! grep -v '^REM' "$CMDF" | grep -qiE 'findstr|wmic|powershell|goto|^:' && ok "winpe: finds the volume by tag file; no findstr/wmic/PowerShell/goto" || bad "winpe: forbidden construct or no tag lookup"
 
 echo
+# A BIND WITH NO MATCHING UNBIND IS THE DEFECT. logvol_bind_guest points LogDir at the volume, so
+# any detach must restore it first or the guest logs to a drive letter that is gone - measured
+# 2026-10-14 on WIN10-clean as `agent_log_healthy: no agent log is held open by any process`.
+det=$(sed -n '/^logvol_detach()/,/^}$/p' mgmt/harness/logvol-lib.sh | sed 's@#.*@@')
+ub=$(printf '%s\n' "$det" | command grep -n 'logvol_unbind_guest' | head -1 | cut -d: -f1)
+ua=$(printf '%s\n' "$det" | command grep -n 'logvol_unassign' | head -1 | cut -d: -f1)
+{ [ -n "$ub" ] && [ -n "$ua" ] && [ "$ub" -lt "$ua" ]; } \
+  && ok "detach: LogDir is restored (line $ub) BEFORE the volume is unassigned (line $ua)" \
+  || bad "detach: unbind at '$ub', unassign at '$ua' - the guest would be left logging to a volume that is gone"
+
 echo "RESULT: $pass passed, $fail failed  (fixtures: $T)"
 [ "$fail" -eq 0 ]
