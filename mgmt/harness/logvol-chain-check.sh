@@ -104,7 +104,7 @@ logvol_bind_guest "$VM" "$VM" >>"$OUT/bind.out" 2>&1 \
 # whether any file under LogDir is held open. Asked as ONE call so the answers are consistent.
 probe(){ # -> KEY=value lines
   local ps
-  ps='$v=Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.FileSystemLabel -eq "LOGVOL" };
+  ps='$v=Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.FileSystemLabel -eq "__LABEL__" };
 if ($v) { "VOL_LETTER=" + $v.DriveLetter; "VOL_FS=" + $v.FileSystem } else { "VOL_LETTER="; "VOL_FS=" }
 $d=(Get-ItemProperty "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools" -EA SilentlyContinue).LogDir; "LOGDIR=" + $d
 if ($d -and (Test-Path $d)) {
@@ -114,6 +114,11 @@ if ($d -and (Test-Path $d)) {
   $ga=@(Get-ChildItem $d -Filter "gui-agent-*.log" -EA SilentlyContinue); "AGENTLOG=" + $ga.Count
   if ($ga.Count) { "AGENTLINES=" + (@(Get-Content $ga[0].FullName -EA SilentlyContinue).Count) } else { "AGENTLINES=0" }
 } else { "LOGFILES=-1"; "LOGHELD=-1"; "AGENTLOG=-1"; "AGENTLINES=-1" }'
+  # THE LABEL COMES FROM THE LIBRARY, never from a string here: this check reported six broken
+  # links on 2026-10-15 because it still looked for 'LOGVOL' after the sticks were collapsed onto the
+  # install's own 'DIAG' label - a hardcoded name in the checker, which is the very class of bug it
+  # exists to catch. LogDir was Z: and the logs were arriving the whole time.
+  ps=${ps//__LABEL__/$LOGVOL_LABEL}
   QTEST_VM="$VM" timeout -k 5 120 ./tools/qtest run \
     "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $(python3 -c "import sys,base64;print(base64.b64encode(sys.argv[1].encode('utf-16-le')).decode())" "$ps")" \
     2>/dev/null | tr -d '\r'
@@ -123,7 +128,7 @@ g(){ printf '%s\n' "$1" | sed -n "s/^$2=//p" | tail -1; }
 
 L1=$(g "$p1" VOL_LETTER)
 [ -n "$L1" ] && good "G1 the volume is MOUNTED at ${L1}: (fs $(g "$p1" VOL_FS))" \
-             || broke "G1 no volume labelled LOGVOL is mounted in the guest"
+             || broke "G1 no volume labelled $LOGVOL_LABEL is mounted in the guest"
 LD1=$(g "$p1" LOGDIR)
 case "$LD1" in
   "${L1}:"*) good "G2 LogDir is on the volume ($LD1)" ;;
@@ -152,7 +157,7 @@ alive=0; for _ in $(seq 1 40); do w_alive "$VM" && { alive=1; break; }; sleep 10
 p2=$(probe); printf '%s\n' "$p2" > "$OUT/probe-boot2.txt"
 L2=$(g "$p2" VOL_LETTER)
 [ -n "$L2" ] && good "G4a the volume is mounted after the reboot (${L2}:)" \
-             || broke "G4a NO volume labelled LOGVOL after the reboot - a removable volume need not be mounted when a service starts"
+             || broke "G4a NO volume labelled $LOGVOL_LABEL after the reboot - a removable volume need not be mounted when a service starts"
 [ -n "$L2" ] && [ "$L1" = "$L2" ] && good "G4b same drive letter across the reboot (${L1}:)" \
                                   || broke "G4b the letter CHANGED across the reboot (${L1:-none}: -> ${L2:-none}:) - LogDir names a letter, so it now points nowhere"
 [ "$(g "$p2" LOGHELD)" -ge 1 ] 2>/dev/null \

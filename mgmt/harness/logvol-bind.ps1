@@ -56,29 +56,45 @@ function Find-LogVol {
 function Pin-LogVol([string]$cur) {
     # THE LETTER MUST NOT MOVE, because LogDir records one and every module reads it once at init.
     # The volume is found BY LABEL above, which is correct and letter-independent; the defect was
-    # writing whatever letter it happened to have into the registry. That letter is a function of
-    # which OTHER removable volumes are attached: measured 2026-10-14/15 across four acceptance
-    # runs, the stick bound as F: while the answer stick and the DIAG stick were present and came
-    # back as D: once they were dropped, so LogDir named a letter nothing answered to and every
-    # log-derived check failed on a healthy guest. Binding later did not help: unassigning a claim
-    # and rewriting qemu-extra-args only take effect at the NEXT domain creation, so the running
-    # guest still showed three volumes at bind time.
-    # So the mapping is PINNED. mountvol records volume->letter under MountedDevices keyed by the
-    # volume's own GUID, which survives reboots and any change in the device set. After this the
-    # label resolves to a letter that stays put, and LogDir is written to THAT.
-    $want = 'Z:'
-    if ($cur -eq $want) { return $want }
-    $vol = Get-CimInstance Win32_Volume -Filter ("DriveLetter='" + $cur + "'") -ErrorAction SilentlyContinue
-    if (-not $vol -or -not $vol.DeviceID) { return $cur }
-    # NEVER STEAL A LETTER IN USE. If something already holds Z:, keep the current one rather than
-    # unmounting a volume this script knows nothing about.
-    $taken = Get-CimInstance Win32_Volume -Filter ("DriveLetter='" + $want + "'") -ErrorAction SilentlyContinue
+    # writing whatever letter it happened to have. That letter depends on which OTHER removable
+    # volumes are attached, and the priming sticks are still present in the RUNNING guest when this
+    # binds (unassigning a claim only takes effect at the next domain creation) - so the stick binds
+    # as E: or F: and comes back as D: on the next boot, which is exactly how four acceptance runs
+    # failed on a healthy guest.
+    #
+    # CHANGING a letter is Set-Partition's job, not mountvol's. mountvol ADDS a mount point and
+    # leaves the existing letter in place: measured 2026-10-15, the receipt came back
+    # "drive=E: found=E: letter=same" with the volume still on E:, so nothing was pinned and the
+    # next boot would have moved it again. Set-Partition rewrites the assignment, which Windows
+    # persists under MountedDevices keyed by the volume's own GUID, so it survives reboots and any
+    # change in the device set. diskpart is the fallback for a guest whose Storage module is absent.
+    $want = 'Z'
+    if ($cur -eq ($want + ':')) { return $cur }
+    $curLetter = $cur.TrimEnd(':')
+
+    # NEVER TAKE A LETTER IN USE: keep the current one rather than displacing a volume this script
+    # knows nothing about.
+    $taken = Get-CimInstance Win32_Volume -Filter ("DriveLetter='" + $want + ":'") -ErrorAction SilentlyContinue
     if ($taken) { return $cur }
-    & mountvol $want $vol.DeviceID 2>&1 | Out-Null
-    Start-Sleep -Milliseconds 700
-    $check = Get-CimInstance Win32_Volume -Filter ("DriveLetter='" + $want + "'") -ErrorAction SilentlyContinue
-    if ($check -and $check.DeviceID -eq $vol.DeviceID) { return $want }
-    # The pin did not take; carry on with the letter we have and say so in the receipt.
+
+    try {
+        $p = Get-Partition -DriveLetter $curLetter -ErrorAction Stop
+        $p | Set-Partition -NewDriveLetter $want -ErrorAction Stop
+    } catch {
+        # No Storage module, or it refused: fall back to diskpart, which every Windows has.
+        $vol = Get-CimInstance Win32_Volume -Filter ("DriveLetter='" + $cur + "'") -ErrorAction SilentlyContinue
+        if (-not $vol) { return $cur }
+        $script = Join-Path $env:TEMP 'logvol-pin.txt'
+        @("select volume $curLetter", "assign letter=$want", 'exit') | Set-Content -LiteralPath $script -Encoding ASCII
+        & diskpart /s $script 2>&1 | Out-Null
+        Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue
+    }
+
+    # VERIFY, never assume: re-resolve by label and report what actually happened.
+    Start-Sleep -Milliseconds 900
+    $after = Find-LogVol
+    if ($after -eq ($want + ':')) { return $after }
+    if ($after) { return $after }
     return $cur
 }
 

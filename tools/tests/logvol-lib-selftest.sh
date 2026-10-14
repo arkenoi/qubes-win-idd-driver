@@ -303,12 +303,41 @@ bcode(){ sed -E 's/(^|[^`])#.*/\1/' "$B"; }
   && ok "bind: the volume is found BY LABEL" || bad "bind: the volume is not found by label"
 [ "$(bcode | command grep -c 'LOGVOL.TAG')" -ge 1 ] \
   && ok "bind: and confirmed by our own tag file, not just the label" || bad "bind: no tag-file confirmation"
-[ "$(bcode | command grep -c 'mountvol')" -ge 1 ] \
-  && ok "bind: the resolved letter is PINNED with mountvol, so the mapping survives reboots" \
-  || bad "bind: nothing pins the letter - it will move again when the device set changes"
+# MOUNTVOL CANNOT DO THIS, and asserting it was this check's own defect. `mountvol <L:> <guid>`
+# ADDS a mount point and leaves the existing letter alone: measured 2026-10-15, the receipt came
+# back "drive=E: found=E: letter=same" while the volume sat on E: - a pin that pinned nothing, and
+# a check that passed on it. CHANGING a letter is Set-Partition's job (diskpart as the fallback for
+# a guest with no Storage module), and Windows persists that assignment under MountedDevices keyed
+# by the volume's own GUID, so it survives both a reboot and a change in the device set.
+[ "$(bcode | command grep -c 'Set-Partition -NewDriveLetter')" -ge 1 ] \
+  && ok "bind: the letter is CHANGED with Set-Partition, the only call that rewrites it" \
+  || bad "bind: nothing changes the letter - mountvol only adds a mount point (measured letter=same)"
+[ "$(bcode | command grep -c 'assign letter=')" -ge 1 ] \
+  && ok "bind: diskpart fallback for a guest with no Storage module" \
+  || bad "bind: no fallback - a guest without Get-Partition silently keeps its moving letter"
 [ "$(bcode | command grep -c 'Pin-LogVol')" -ge 2 ] \
   && ok "bind: the pin is applied to what the label resolved, before LogDir is written" \
   || bad "bind: the pin is defined but not applied"
+# AND THE PIN IS VERIFIED, by resolving the label AGAIN afterwards rather than trusting the call.
+# That is what caught mountvol: the receipt's own found= came back equal to the old letter.
+[ "$(bcode | sed -n '/function Pin-LogVol/,/^}/p' | command grep -c 'Find-LogVol')" -ge 1 ] \
+  && ok "bind: the pin re-resolves BY LABEL to confirm the letter actually moved" \
+  || bad "bind: the pin trusts Set-Partition instead of re-reading the letter"
+# SEEN TO FAIL: strip the pin out and the three checks above must all go red. Without this, a future
+# rewrite that drops the pin entirely leaves six greps passing on a file that no longer pins.
+BDEF=$(mktemp "${TMPDIR:-/tmp}/logvol-bind-nopin.XXXXXX.ps1")
+sed -e 's/Set-Partition -NewDriveLetter/Write-Output #/' -e 's/assign letter=/rem /' \
+    -e '/function Pin-LogVol/,/^}/{/Find-LogVol/d;}' "$B" > "$BDEF"
+nopin=0
+for rx in 'Set-Partition -NewDriveLetter' 'assign letter='; do
+  sed -E 's/(^|[^`])#.*/\1/' "$BDEF" | command grep -q "$rx" || nopin=$((nopin+1))
+done
+sed -E 's/(^|[^`])#.*/\1/' "$BDEF" | sed -n '/function Pin-LogVol/,/^}/p' \
+  | command grep -q 'Find-LogVol' || nopin=$((nopin+1))
+rm -f "$BDEF"
+[ "$nopin" -eq 3 ] \
+  && ok "bind: all three pin checks go red on a script with the pin removed (seen to fail)" \
+  || bad "bind: the pin checks still pass with the pin stripped out ($nopin/3 caught) - they are vacuous"
 # It must never take a letter another volume holds.
 [ "$(bcode | command grep -c "DriveLetter='\" + \$want")" -ge 1 ] \
   && ok "bind: refuses to steal a letter already in use" || bad "bind: could unmount an unrelated volume"
@@ -321,8 +350,10 @@ bcode(){ sed -E 's/(^|[^`])#.*/\1/' "$B"; }
 # present; the cell then unassigns them, the volume moves up the alphabet on the next boot, and
 # LogDir points at a letter nothing answers to. Three campaign runs died there, each one blamed on
 # the guest. MEASURED by mgmt/harness/logvol-chain-check.sh (win10-acc, 2026-10-15): with the device
-# set stable the chain holds across a reboot - mounted at D:, LogDir on it, 7 logs held open, 266
-# QWT lines host-side, same letter after the reboot, 266 -> 568 lines. 15 links, 0 broken.
+# set stable AND the letter pinned the chain holds across a reboot - mounted at Z:, LogDir on it,
+# 5 logs held open, 279 QWT lines host-side, SAME letter after the reboot (Z:), 279 -> 549 lines.
+# 15 links, 0 broken. The earlier run of this check sat at D: with nothing pinning it, which is the
+# state four campaign runs died in.
 # COMMENTS STRIPPED FIRST: prime-run's comment NAMES logvol_bind_guest to explain why it is not
 # called there, so grepping the raw file finds the explanation and calls it a call. Nth time today.
 [ "$(sed 's@#.*@@' "$ROOT/mgmt/harness/prime-run.sh" | command grep -c 'logvol_bind_guest')" -eq 0 ] \
