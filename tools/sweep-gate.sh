@@ -49,26 +49,84 @@ fi
 ANYLEVEL="${QWT}[DIWE]\\]|\\[(ERROR|WARN|WARNING|INFO|DEBUG)\\]"
 
 # Reduce a line to its message. Hex FIRST, so 0x887a0026 does not become NxNaN.
+#
+# TWO THINGS ARE DELIBERATELY KEPT, because normalising them merges distinct failures:
+#
+#   the ESCALATION COUNT. "died within 10000 ms of starting, 1 time(s) in a row" and "... 2
+#   time(s) in a row" were ONE message, so a crash loop escalating was invisible. Measured on 257
+#   declared lines from a real campaign: this splits exactly 1 message, 27 -> 28. Small and real.
+#
+#   the ERROR CODE in an error-code position - after "error", "with error", "status", "rc=". A bare
+#   hex is NOT a code: 0x1009a in "GetRealWindowRect: 0x1009a: inverted DWM bounds" is a window
+#   HANDLE, and 82 windows hitting one condition is one message, not 82. Keeping every hex took 27
+#   messages to 183 and would bury the real findings under handles - which is how the FIRST design
+#   of this tool failed. Keeping only codes had NO measured effect on these logs (27 -> 27); it is
+#   insurance so that "failed with error 0x6d" and "failed with error 0x5aa" can never merge, not
+#   a fix for anything observed here. Said plainly rather than claimed as a win.
+#
+# The placeholders are LETTER-indexed. A digit-indexed one gets eaten by the \b[0-9]+\b rule below,
+# which silently dropped the kept values and made the first measurement of this read "no change".
 message() {
-    sed -E \
-        -e 's/0x[0-9A-Fa-f]+/<HEX>/g' \
-        -e 's/^\[[0-9]{8}\.[0-9]{6}\.[0-9]{3}-[0-9]+(:[0-9]+)?-[DIWE]\][[:space:]]*//' \
-        -e 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9:.]+[[:space:]]*//' \
-        -e 's/^\[?[0-9]{2}:[0-9]{2}:[0-9]{2}\]?[[:space:]]*//' \
-        -e 's#[A-Za-z]:\\[^ ,;)]+#<PATH>#g' \
-        -e 's#/[A-Za-z0-9._/-]{8,}#<PATH>#g' \
-        -e 's/\b(WIN|Win)[0-9]+[a-z]*-[a-z0-9]+/<CELL>/g' \
-        -e 's/\bwin[0-9]+[a-z]*-[a-z0-9]+\b/<VM>/g' \
-        -e 's/\b[0-9]+\b/N/g' \
-        -e 's/[[:space:]]+/ /g' -e 's/^ //; s/ $//'
+    # Python, not sed: the two kept fields need placeholders, and \x01 in a sed REPLACEMENT is not
+    # portable - both substitutions silently did nothing, the handles merged correctly and the
+    # escalation count and error codes did not, which looked like a working change.
+    python3 -c '
+import re, sys, string
+LET = string.ascii_uppercase + string.ascii_lowercase
+CODE = re.compile(r"((?:failed with error|with error|with code|exit(?:ed)? code|error|status|code|rc)[ =:]+)(0x[0-9A-Fa-f]+|\d+)", re.I)   # an EXIT code is as diagnostic as an error code:
+#   "Process (PID N) exited with code <HEX>" showed 3 distinct values merged into one message
+ESC  = re.compile(r"(\d+)(\s*time\(s\) in a row)")
+for line in sys.stdin:
+    l, holes = line.rstrip("\n"), []
+    def mk(v):
+        holes.append(v)
+        return "\x00" + LET[(len(holes) - 1) % len(LET)] + "\x00"
+    l = CODE.sub(lambda m: m.group(1) + mk(m.group(2)), l)
+    l = ESC.sub(lambda m: mk(m.group(1)) + m.group(2), l)
+    l = re.sub(r"0x[0-9A-Fa-f]+", "<HEX>", l)
+    l = re.sub(r"^\[\d{8}\.\d{6}\.\d{3}-\d+(:\d+)?-[DIWE]\]\s*", "", l)
+    l = re.sub(r"^\d{4}-\d{2}-\d{2}[ T][\d:.]+\s*", "", l)
+    l = re.sub(r"^\[?\d{2}:\d{2}:\d{2}\]?\s*", "", l)
+    l = re.sub(r"[A-Za-z]:\\[^ ,;)]+", "<PATH>", l)
+    l = re.sub(r"/[A-Za-z0-9._/-]{8,}", "<PATH>", l)
+    l = re.sub(r"\b(WIN|Win)[0-9]+[a-z]*-[a-z0-9]+", "<CELL>", l)
+    l = re.sub(r"\bwin[0-9]+[a-z]*-[a-z0-9]+\b", "<VM>", l)
+    l = re.sub(r"\b\d+\b", "N", l)
+    l = re.sub(r"\s+", " ", l).strip()
+    for i, v in enumerate(holes):
+        l = l.replace("\x00" + LET[i % len(LET)] + "\x00", v)
+    # second field: the line with only the timestamp prefix removed. Merging is correct for
+    # counting, but it IS information loss, so the number of DISTINCT lines behind a message is
+    # carried through and printed. 82 window handles collapsing to one message is the right
+    # aggregation; "82 distinct" in the report is what stops that aggregation from hiding them.
+    raw = re.sub(r"^\[\d{8}\.\d{6}\.\d{3}-\d+(:\d+)?-[DIWE]\]\s*", "", line.rstrip("\n"))
+    print(l + "\t" + re.sub(r"\s+", " ", raw).strip())
+'
 }
 
 # `|| true` on the grep: it returns 1 for a file with no matches, and under `set -o pipefail` that
 # made the whole loop fail and this tool exit 2 with NO OUTPUT, depending only on whether the LAST
 # file happened to contain one. 20 logs reported findings; 130 reported nothing. Measured 2026-10-14.
-declared() { for l in "$@"; do [ -f "$l" ] || { echo "sweep-gate: $l does not exist" >&2; return 2; }
-               grep -ahE "$LEVELS" "$l" 2>/dev/null || true; done | message | sort | uniq -c \
-             | sed -E 's/^[[:space:]]*([0-9]+)[[:space:]]+/\1 /'; }
+# <count> <message>, ledger-compatible. VARIANTS writes "<distinct> <message>" beside it when a
+# path is given, so the report can say how many distinct lines a merged message stands for.
+declared() { local vfile="${SWEEP_GATE_VARIANTS:-}"
+             for l in "$@"; do [ -f "$l" ] || { echo "sweep-gate: $l does not exist" >&2; return 2; }
+               grep -ahE "$LEVELS" "$l" 2>/dev/null || true; done | message \
+             | VFILE="$vfile" python3 -c '
+import collections, os, sys
+occ, var = collections.Counter(), collections.defaultdict(set)
+for line in sys.stdin:
+    parts = line.rstrip("\n").split("\t", 1)
+    msg = parts[0]
+    occ[msg] += 1
+    if len(parts) > 1: var[msg].add(parts[1])
+for m in sorted(occ):
+    print("%d %s" % (occ[m], m))
+vf = os.environ.get("VFILE") or ""
+if vf:
+    with open(vf, "w", encoding="utf-8") as fh:
+        for m in sorted(occ): fh.write("%d %s\n" % (len(var[m]), m))
+'; }
 
 unlevelled() { local n=0 t=0 a b
     for l in "$@"; do
@@ -149,7 +207,8 @@ if [ "$VERIFY" = 1 ]; then
 fi
 
 [ -f "$LEDGER" ] || { echo "sweep-gate: REFUSING - no ledger at $LEDGER (seed it with --write-ledger)" >&2; exit 2; }
-NOW=$(mktemp); declared "$@" > "$NOW" || { rm -f "$NOW"; exit 2; }
+NOW=$(mktemp); VAR=$(mktemp)
+SWEEP_GATE_VARIANTS="$VAR" declared "$@" > "$NOW" || { rm -f "$NOW" "$VAR"; exit 2; }
 LD=$(mktemp); grep -vE '^\s*(#|$)' "$LEDGER" > "$LD" || true
 
 # NOTHING IS EVER HIDDEN. A ledger entry does NOT remove a message from the report; it only decides
@@ -174,6 +233,9 @@ while IFS= read -r row; do
     # act of seeding a ledger would account for every error in the run it was seeded from - which is
     # precisely the silencing this redesign removed, reintroduced through the back door.
     case "$note" in TODO*|todo*|XXX*|FIXME*) note="" ;; esac
+    # how many DISTINCT lines this one message stands for
+    nv=$(grep -aF -- " $msg" "$VAR" 2>/dev/null | head -1 | sed -E 's/^([0-9]+) .*/\1/')
+    vtag=""; [ -n "${nv:-}" ] && [ "${nv:-1}" -gt 1 ] && vtag=" [${nv} distinct]"
     # A RISE RE-SURFACES A DISPOSITIONED MESSAGE, and the threshold must SCALE with the count. A
     # flat "double it" is right at a count of 1 and nonsense at 102: the inverted-DWM-bounds message
     # is dispositioned at x102, so doubling would let it reach 205 - a 100% regression - unreported.
@@ -194,13 +256,13 @@ while IFS= read -r row; do
         if [ -n "$base" ] && [ -z "$note" ]; then
             printf '  UNACCOUNTED x%-4s %s\n     (a ledger row exists but records no reason - that is not an account)\n' "$cnt" "$(printf '%s' "$msg" | cut -c1-140)"
         else
-            printf '  UNACCOUNTED x%-4s %s\n' "$cnt" "$(printf '%s' "$msg" | cut -c1-140)"
+            printf '  UNACCOUNTED x%-4s%s %s\n' "$cnt" "$vtag" "$(printf '%s' "$msg" | cut -c1-132)"
         fi
     elif [ "$cnt" -gt "$rose_at" ]; then
         [ "$newn" = 0 ] && [ "$rose" = 0 ] && echo "SWEEP-GATE: declared error/warning not accounted for:"
         rose=$((rose+1)); printf '  ROSE        x%-4s (ledger x%s, surfaces above x%s) %s\n' "$cnt" "$base" "$rose_at" "$(printf '%s' "$msg" | cut -c1-104)"
     else
-        acc=$((acc+1)); printf '  ACCOUNTED   x%-4s %s\n     -> %s\n' "$cnt" "$(printf '%s' "$msg" | cut -c1-110)" "$(printf '%s' "$note" | cut -c1-110)" >> "$ACCLIST"
+        acc=$((acc+1)); printf '  ACCOUNTED   x%-4s%s %s\n     -> %s\n' "$cnt" "$vtag" "$(printf '%s' "$msg" | cut -c1-104)" "$(printf '%s' "$note" | cut -c1-110)" >> "$ACCLIST"
     fi
 done < "$NOW"
 # printed ALWAYS, pass or fail, so a recurring known error stays visible instead of becoming silence
@@ -209,8 +271,21 @@ if [ "$acc" -gt 0 ]; then
     cat "$ACCLIST"
 fi
 rm -f "$ACCLIST"
-rm -f "$NOW" "$LD"
 
+# ORPHANED LEDGER ROWS. A row that matched nothing in this run is either a condition that did not
+# occur (fine, and common) or a row whose text no longer matches what the normaliser produces (a
+# LOST disposition - the error will come back as unaccounted and the reason is gone). The two are
+# indistinguishable from one run, so this reports the count rather than guessing, and --verify-ledger
+# is the check that fails when a row cannot be produced by the current normaliser at all.
+orph=0
+while IFS= read -r lrow; do
+    [ -n "$lrow" ] || continue
+    lmsg=${lrow#* }; lmsg=${lmsg%%   #*}
+    grep -aqF -- " $lmsg" "$NOW" 2>/dev/null || orph=$((orph+1))
+done < "$LD"
+[ "${orph:-0}" -gt 0 ] && echo "SWEEP-GATE-LEDGER $orph of $(grep -c . "$LD") row(s) matched nothing this run (a condition that did not occur, or a row whose text has drifted - check with --verify-ledger)"
+
+rm -f "$NOW" "$LD" "$VAR"
 read -r nolevel total < <(unlevelled "$@")
 echo "SWEEP-GATE-COVERAGE lines=$total with_declared_level=$((total - nolevel)) without=$nolevel"
 [ "${nolevel:-0}" -gt 0 ] && echo "  $nolevel line(s) carry NO declared level, so this tool cannot judge them. That is the gap, named."

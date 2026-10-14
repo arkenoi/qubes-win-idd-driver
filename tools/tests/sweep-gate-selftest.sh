@@ -134,5 +134,30 @@ if printf '%s' "$o130" | grep -qa 'risen=1' && printf '%s' "$o110" | grep -qa 'r
   ok "T10 a dispositioned x102 re-surfaces at x130 and stays quiet at x110 (scaled threshold)"
 else no "T10 rise threshold wrong" "130: $(printf '%s' "$o130" | grep -a RESULT) | 110: $(printf '%s' "$o110" | grep -a RESULT)"; fi
 
+# T11 - NORMALISATION KEEPS WHAT IS DIAGNOSTIC AND MERGES WHAT IS NOT, and says how much it merged.
+# Measured on a real campaign's 257 declared lines: keeping the escalation count splits exactly one
+# message (a crash loop going from 1 to 2 in a row was invisible); keeping every hex would take 27
+# messages to 183, because a bare hex is a window HANDLE and 82 handles hitting one condition is
+# one message - that explosion is how the FIRST version of this tool failed.
+printf '%s\n' \
+  "[20261014.120000.001-1-W] WatchdogThread: died within 10000 ms of starting, 1 time(s) in a row" \
+  "[20261014.120001.001-1-W] WatchdogThread: died within 10000 ms of starting, 2 time(s) in a row" \
+  "[20261014.120002.001-1-E] QioReadBuffer: ReadFile failed with error 0x6d: pipe ended" \
+  "[20261014.120003.001-1-E] QioReadBuffer: ReadFile failed with error 0x5aa: pipe ended" \
+  "[20261014.120004.001-1-W] GetRealWindowRect: 0x1009a: inverted DWM bounds (0,0)-(0,0) rejecting" \
+  "[20261014.120005.001-1-W] GetRealWindowRect: 0x1009c: inverted DWM bounds (0,0)-(0,0) rejecting" \
+  > "$T/norm.log"
+printf '# empty\n' > "$T/norm-led.txt"
+nout=$(SWEEP_GATE_LEDGER="$T/norm-led.txt" bash tools/sweep-gate.sh "$T/norm.log" 2>&1)
+esc=$(printf '%s' "$nout" | grep -ac 'time(s) in a row')
+cod=$(printf '%s' "$nout" | grep -acE 'error (0x6d|0x5aa)')
+hnd=$(printf '%s' "$nout" | grep -ac 'inverted DWM bounds')
+vtag=$(printf '%s' "$nout" | grep -ac '\[2 distinct\] GetRealWindowRect')
+if [ "$esc" = 2 ] && [ "$cod" = 2 ] && [ "$hnd" = 1 ] && [ "$vtag" = 1 ]; then
+  ok "T11 escalation counts and error codes are kept, window handles merge, and the merge reports [2 distinct]"
+else
+  no "T11 normalisation wrong (escalation=$esc want 2, codes=$cod want 2, handles=$hnd want 1, variant-tag=$vtag want 1)" "$(printf '%s' "$nout" | grep -a UNACCOUNTED | head -4)"
+fi
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
