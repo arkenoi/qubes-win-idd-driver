@@ -1694,9 +1694,17 @@ def collect_signatures(files, since):
         for l in lf.lines:
             if since is not None and l.ts is not None and l.ts < since:
                 continue
-            if l.level in ("D", "V") and not SUSPICIOUS_RE.search(l.msg):
+            # SIGNATURES COME FROM DECLARED ERRORS AND WARNINGS. These two lines used to keep a
+            # D/V or I line if the VOCABULARY liked its words - the last place in this file where
+            # message text decided anything about our own logs, and the owner's directive is that
+            # it decides nothing. A line the writer declared INFO is, by the writer's own
+            # statement, not a failure; if a writer declares a failure at INFO that is an emitter
+            # defect to fix at the writer, which is the whole direction of this change.
+            # The two exemptions that remain are STRUCTURAL, not textual: the events/guid families
+            # carry their level in a field of their own, and a RESULT record is a verdict.
+            if l.level in ("D", "V"):
                 continue
-            if l.level == "I" and lf.family not in ("events", "guid") and not SUSPICIOUS_RE.search(l.msg) and l.func != "RESULT":
+            if l.level == "I" and lf.family not in ("events", "guid") and l.func != "RESULT":
                 continue
             k = l.key()
             s = sigs.get(k)
