@@ -2152,6 +2152,23 @@ for c in $CELLS; do
   # while 37 files sat beside it.
   if [ -n "$_slv" ] && qvm-check "$_slv" >/dev/null 2>&1; then
     grade_cell_logsweep "$c" "$_slv" "$M"
+    # THE DOM0 CALLER CHANNEL, which this gate could not see. The release goal is "qrexec behavior
+    # is aligned with dom0 callers: updaters and start menu, from cold qube as well", and dom0
+    # drives the update agent over qubes.VMExec: stdout is taken as the agent's log, bare floats on
+    # stderr drive the Update GUI's progress bar. On 2026-10-14 a 4.3.36 guest ran the command,
+    # returned its exit code and delivered NEITHER stream (VMEXECNOSTDOUT) - and grepping this
+    # harness, the protocol and its runner for a stdout assertion on that service returned nothing.
+    # A gate that cannot see the goal's own clause cannot pass it. Only when the guest still answers:
+    # on a dead cell this would add a second failure that says nothing new.
+    if [ "$(w_state "$_slv")" = Running ] && w_alive "$_slv"; then
+      if ./mgmt/harness/vmexec-channel-check.sh "$_slv" say >>"$M/$c-vmexec.out" 2>&1; then
+        say "  $c: dom0 caller channel aligned (stdout, stderr, exit code, grandchild)"
+      else
+        no "$c: the dom0 caller channel is NOT aligned - see $M/$c-vmexec.out"
+      fi
+    else
+      say "  $c: [WARN] guest not answering; the dom0 caller channel went unmeasured for this cell"
+    fi
   else
     say "  $c: [WARN] no guest left to collect from; the volume pull left $(find "$M/logvol-$c" -type f 2>/dev/null | wc -l) file(s) for this cell"
   fi
