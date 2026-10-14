@@ -1457,7 +1457,7 @@ static DWORD WINAPI EtwIpcThread(LPVOID)
                 InterlockedExchange(&g_etw.state, ETW_STATE_DOWN);
                 if (!loggedDown)   // once per outage, not once per attempt
                 {
-                    BLog(L"ETW IPC proxy pipe absent (%lu) - tier down, DB fallback (reconnect pending)",
+                    BLogW(L"ETW IPC proxy pipe absent (%lu) - tier down, DB fallback (reconnect pending)",
                          GetLastError());
                     loggedDown = true;
                 }
@@ -1478,7 +1478,7 @@ static DWORD WINAPI EtwIpcThread(LPVOID)
             CloseHandle(pipe);
             if (WaitForSingleObject(g_etw.stopEvt, 0) == WAIT_OBJECT_0) return 0;
             InterlockedExchange(&g_etw.state, ETW_STATE_DOWN);
-            BLog(L"ETW IPC disconnected (recs=%ld bad=%ld) - tier down, DB fallback, reconnecting",
+            BLogW(L"ETW IPC disconnected (recs=%ld bad=%ld) - tier down, DB fallback, reconnecting",
                  g_etw.recTotal, g_etw.recBad);
             InterlockedExchange(&g_listWanted, 1);
             if (g_mainWake) SetEvent(g_mainWake);   // the listing may have lost its only push source: floor back on
@@ -1487,7 +1487,7 @@ static DWORD WINAPI EtwIpcThread(LPVOID)
     catch (...)
     {
         InterlockedExchange(&g_etw.state, ETW_STATE_DEAD);
-        BLog(L"ETW IPC thread threw - tier disabled for this run, DB fallback");
+        BLogW(L"ETW IPC thread threw - tier disabled for this run, DB fallback");
     }
     return 0;
 }
@@ -1506,7 +1506,7 @@ static void EtwTierStart()
     if (!g_etw.thread)
     {
         InterlockedExchange(&g_etw.state, ETW_STATE_DEAD);
-        BLog(L"ETW IPC thread create failed %lu - tier disabled, DB fallback", GetLastError());
+        BLogW(L"ETW IPC thread create failed %lu - tier disabled, DB fallback", GetLastError());
     }
 }
 
@@ -1705,7 +1705,7 @@ static WpnTarget WpnTargetedRead(uint32_t rowId, std::vector<EtwToastRec> const&
                         if (!want.empty() &&
                             WpnFirstTextW(WpnPayloadToW(rowPayload)) != want)
                         {
-                            BLog(L"WPNTGT id=%llu advisory text mismatch - falling to signal fallback",
+                            BLogW(L"WPNTGT id=%llu advisory text mismatch - falling to signal fallback",
                                  (ULONGLONG)s.notifIdNum);
                             tryFallback = true;
                         }
@@ -2326,7 +2326,10 @@ static void ShadowClassify(WinUserNotification const& un, uint32_t id, std::wstr
             if (g_shadow.q.size() >= 32) { g_shadow.q.pop_front(); overflow = true; }
             g_shadow.q.push_back(std::move(j));
         }
-        if (overflow) BLog(L"SHADOWQ overflow - oldest job dropped (measure-only)");
+        // WARN, not ERROR: the line says measure-only, so a dropped job here is a gap in a MEASUREMENT
+        // path, not a lost product notification. The "nothing lost" P1 is about notifications the
+        // user should have seen. Downgraded deliberately rather than left loud on the word "dropped".
+        if (overflow) BLogW(L"SHADOWQ overflow - oldest job dropped (measure-only)");
         SetEvent(g_shadow.evt);
 #endif
     }
@@ -2684,7 +2687,7 @@ static void ActFailQueue(ToastActEntry const& entry, std::string const& key, std
     {
         CsGuard g(&g_actLock);
         if (g_actFails.size() < 32) g_actFails.push_back(std::move(f));
-        else BLog(L"ACTION id=%u failure queue full - its dom0 notice is dropped (logged here instead)", id);
+        else BLogE(L"ACTION id=%u failure queue full - its dom0 notice is dropped (logged here instead)", id);
     }
     if (g_mainWake) SetEvent(g_mainWake);   // the main loop pumps g_actFails on every wake (no listing is asked for)
 }
@@ -3441,7 +3444,7 @@ static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring con
     std::vector<BYTE> raw; raw.push_back(0xFF); raw.push_back(0xFE);
     raw.insert(raw.end(), (const BYTE*)text.data(), (const BYTE*)text.data() + text.size() * sizeof(wchar_t));
     if (!WriteSmallA(file, raw.data(), (DWORD)raw.size()))
-    { BLog(L"NOTIFY handoff: cannot write %s", file.c_str()); return false; }
+    { BLogE(L"NOTIFY handoff: cannot write %s", file.c_str()); return false; }
 
     wchar_t self[MAX_PATH] = { 0 };
     GetModuleFileNameW(nullptr, self, RTL_NUMBER_OF(self));
@@ -3565,13 +3568,13 @@ static bool WriteSmallA(std::wstring const& path, const void* data, DWORD len)
 static void ReportErrorSelf(const char* key)
 {
     const QerrText* t = QerrTextFind(key);
-    if (!t) { BLog(L"NOTIFYERR no text row '%S' (a bug of ours) - not sent", key); return; }
+    if (!t) { BLogE(L"NOTIFYERR no text row '%S' (a bug of ours) - not sent", key); return; }
     const char* id = t->id;
     char text[QERR_MAX_TEXT + 256], header[200], build[32] = { 0 };
     (void)QerrModuleVersion(build, sizeof(build));
     if (!QerrRenderText(text, sizeof(text), t, nullptr, (unsigned long)GetCurrentProcessId(), build) ||
         !QerrFormatHeader(header, sizeof(header), t->header, nullptr))
-    { BLog(L"NOTIFYERR notifhost.%S not sent: the text did not render", id); return; }
+    { BLogE(L"NOTIFYERR notifhost.%S not sent: the text did not render", id); return; }
 
     wchar_t pd[MAX_PATH];
     if (!GetEnvironmentVariableW(L"ProgramData", pd, RTL_NUMBER_OF(pd))) wcscpy_s(pd, L"C:\\ProgramData");
@@ -3598,7 +3601,7 @@ static void ReportErrorSelf(const char* key)
     int mp = ReadSmallA(marker, s) && QerrParseMarker(s.c_str(), &mb);
     int cp = ReadSmallA(countPath, s) && QerrParseCount(s.c_str(), &cb, &cnt);
     QerrDecision d = QerrDecide(t->sev, t->component, id, text, mp, mb, cp, cb, cnt, now, &newCnt);
-    if (d != QERR_SEND) { BLog(L"NOTIFYERR notifhost.%S not sent: %S", id, QerrDecisionName(d)); return; }
+    if (d != QERR_SEND) { BLogE(L"NOTIFYERR notifhost.%S not sent: %S", id, QerrDecisionName(d)); return; }
 
     char kv[64];
     if (!QerrFormatMarker(kv, sizeof(kv), now) || !WriteSmallA(marker, kv, (DWORD)strlen(kv)) ||
@@ -3612,7 +3615,7 @@ static void ReportErrorSelf(const char* key)
     // GATED: dom0 is not told (the operator's choice), the user is - under the record just written.
     if (!g_notifyErrorsGate)
     {
-        BLog(L"NOTIFYERR notifhost.%S not sent to dom0: gated - shown as a window instead", id);
+        BLogE(L"NOTIFYERR notifhost.%S not sent to dom0: gated - shown as a window instead", id);
         ShowErrorBoxSelf(QERR_GATED, id, header, text, L"gated");
         return;
     }
