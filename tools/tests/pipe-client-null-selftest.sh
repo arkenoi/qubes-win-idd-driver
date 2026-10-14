@@ -106,13 +106,13 @@ n_bad_before=$(command grep -E -A1 "$defect_re" "$PRISTINE" | command grep -c 'H
 # result of QpsGetClientRaw - NULL for a client that has just been unlinked. RefCount is at offset
 # 0x78 and InterlockedDecrement WRITES through the pointer, so that is a distinct crash of the same
 # class; a fix guarding only the two thread entries would have been a repeat waiting to happen.
-rel_after=$(awk '/^static void QpsReleaseClient/,/^}/' "$SRC" | command grep -c 'if (!Client)')
-rel_before=$(awk '/^static void QpsReleaseClient/,/^}/' "$PRISTINE" | command grep -c 'if (!Client)')
+rel_after=$(awk '/^void QpsDisconnectClient\(/,/^}/' "$SRC" | command grep -c 'if (client)')
+rel_before=$(awk '/^void QpsDisconnectClient\(/,/^}/' "$PRISTINE" | command grep -c 'if (client)')
 [ "$rel_after" -ge 1 ] \
-  && ok "sibling: QpsReleaseClient checks the client before decrementing its refcount" \
-  || bad "sibling: QpsReleaseClient still decrements through an unchecked pointer"
+  && ok "sibling: QpsDisconnectClient checks the lookup before releasing it" \
+  || bad "sibling: QpsDisconnectClient still passes an unchecked lookup to QpsReleaseClient"
 [ "$rel_before" -eq 0 ] \
-  && ok "sibling: UNPATCHED QpsReleaseClient has no check (the check can fail)" \
+  && ok "sibling: UNPATCHED QpsDisconnectClient has no check (the check can fail)" \
   || bad "sibling: the mirror already checks - re-read the source, this test is asserting nothing"
 # And the guard must come BEFORE the decrement, not merely exist somewhere in the function.
 # COMPARE THE LINE NUMBERS. The first attempt grepped for a literal '1:' prefix, which is the
@@ -121,13 +121,13 @@ rel_before=$(awk '/^static void QpsReleaseClient/,/^}/' "$PRISTINE" | command gr
 # COMMENTS STRIPPED FIRST. The guard's own comment contains the word InterlockedDecrement, so the
 # comparison below matched the EXPLANATION and placed the write before the check - the same trap as
 # a scripted edit landing inside the comment describing it, and the fourth time today in some form.
-rel_body=$(awk '/^static void QpsReleaseClient/,/^}/' "$SRC" | sed 's@//.*@@')
-ln_check=$(printf '%s\n' "$rel_body" | command grep -nE 'if \(!Client\)' | head -1 | cut -d: -f1)
-ln_dec=$(printf '%s\n' "$rel_body" | command grep -nE 'InterlockedDecrement' | head -1 | cut -d: -f1)
+rel_body=$(awk '/^void QpsDisconnectClient\(/,/^}/' "$SRC" | sed 's@//.*@@')
+ln_check=$(printf '%s\n' "$rel_body" | command grep -nE 'if \(client\)' | head -1 | cut -d: -f1)
+ln_dec=$(printf '%s\n' "$rel_body" | command grep -nE 'QpsReleaseClient' | head -1 | cut -d: -f1)
 if [ -n "$ln_check" ] && [ -n "$ln_dec" ] && [ "$ln_check" -lt "$ln_dec" ]; then
-  ok "sibling: the check (line $ln_check) precedes the decrement (line $ln_dec)"
+  ok "sibling: the check (line $ln_check) precedes the release call (line $ln_dec)"
 else
-  bad "sibling: check at '$ln_check', decrement at '$ln_dec' - the guard does not precede the write"
+  bad "sibling: check at '$ln_check', release at '$ln_dec' - the guard does not precede the call"
 fi
 
 # ---- 5. the guard's own behaviour --------------------------------------------------------------

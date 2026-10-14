@@ -1,20 +1,6 @@
 --- a/src/pipe-server.c
 +++ b/src/pipe-server.c
-@@ -250,6 +250,13 @@
-     // it's possible that multiple threads hit the refcount==0 comparison simultaneously, locking is needed
-     // can't use the client lock obviously since client's data is being freed
-     // the global server lock isn't ideal but we would use it anyway to protect access to the client list...
-+    // NOTHING TO RELEASE IF THE CLIENT IS ALREADY GONE. The public QpsDisconnectClient calls this
-+    // with the result of QpsGetClientRaw, which returns NULL for a client that has just been
-+    // unlinked - and InterlockedDecrement WRITES through the pointer (RefCount is at offset 0x78),
-+    // so this is the same defect as the two thread entries at a different address.
-+    if (!Client)
-+        return;
-+
-     EnterCriticalSection(&Server->Lock);
-     InterlockedDecrement(&Client->RefCount);
-     LogVerbose("[%lld] (%p) refs: %ld", Client->Id, Client, Client->RefCount);
-@@ -292,6 +299,31 @@
+@@ -292,6 +292,31 @@
      struct THREAD_PARAM *param = Param;
      PIPE_SERVER server = param->Server;
      PPIPE_CLIENT client = QpsGetClient(server, param->ClientId);
@@ -46,7 +32,7 @@
      HANDLE pipe = client->ReadPipe;
      PVOID buffer = malloc(server->PipeBufferSize);
      DWORD transferred;
-@@ -362,6 +394,16 @@
+@@ -362,6 +387,16 @@
      struct THREAD_PARAM *param = Param;
      PIPE_SERVER server = param->Server;
      PPIPE_CLIENT client = QpsGetClient(server, param->ClientId);
@@ -63,3 +49,17 @@
      HANDLE pipe = client->WritePipe;
      PVOID data = malloc(server->InternalBufferSize);
      UINT64 size;
+@@ -534,7 +569,12 @@
+     QpsDisconnectClientInternal(Server, ClientId, FALSE, FALSE);
+     // We need to decrease the refcount without increasing it.
+     client = QpsGetClientRaw(Server, ClientId, FALSE);
+-    QpsReleaseClient(Server, client);
++    // NOTHING TO RELEASE IF THE CLIENT IS ALREADY GONE: QpsDisconnectClientInternal above may have
++    // taken the last reference, and QpsReleaseClient WRITES through this pointer
++    // (InterlockedDecrement on RefCount, offset 0x78). Checked here because that is what every
++    // other caller of a lookup in this file does.
++    if (client)
++        QpsReleaseClient(Server, client);
+ }
+ 
+ static void QpsDisconnectClientInternal(

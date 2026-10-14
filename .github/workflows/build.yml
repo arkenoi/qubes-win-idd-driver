@@ -450,11 +450,11 @@ jobs:
           $src = Get-Content "$ws\deps-src\windows-utils\src\pipe-server.c" -Raw
           if ($src -notmatch 'not in the client list; reader thread exits') { throw 'reader guard marker missing after patch' }
           if ($src -notmatch 'not in the client list; writer thread exits') { throw 'writer guard marker missing after patch' }
-          if ($src -notmatch 'NOTHING TO RELEASE IF THE CLIENT IS ALREADY GONE') { throw 'release guard marker missing after patch' }
+          if ($src -notmatch 'NOTHING TO RELEASE IF THE CLIENT IS ALREADY GONE') { throw 'release-call-site guard marker missing after patch' }
           # The defects themselves: a lookup immediately followed by the dereference, in either
           # thread, and the refcount decrement reached before any NULL check.
           if ($src -match '(?m)QpsGetClient\(server, param->ClientId\);\r?\n\s*HANDLE pipe =') { throw 'a thread entry still dereferences the client without checking it' }
-          if ($src -match '(?m)the global server lock isn''t ideal[^\n]*\r?\n\s*EnterCriticalSection\(&Server->Lock\);\r?\n\s*InterlockedDecrement') { throw 'QpsReleaseClient still decrements the refcount without checking the client' }
+          if ($src -match '(?m)QpsGetClientRaw\(Server, ClientId, FALSE\);\r?\n\s*QpsReleaseClient') { throw 'QpsDisconnectClient still passes an unchecked lookup to QpsReleaseClient' }
           Write-Host "::notice title=windows-utils::pipe-client NULL fix applied"
       # A DEPARTED PEER STOPS BEING AN ERROR OF OURS, at the first of the four lines it wrote.
       # libvchan's client init PROBES the peer's xenstore entry - "test if the store entry exists;
