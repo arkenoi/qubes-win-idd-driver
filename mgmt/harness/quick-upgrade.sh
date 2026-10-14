@@ -152,6 +152,19 @@ finish(){ # $1=rc $2=message  - every exit goes through here and says which exit
   fi
   release_loop
   log "$*"
+  # HARDWIRED ERROR SWEEP over this run's own log. Every error-shaped line is either declared in
+  # mgmt/harness/harness-log-declared.txt with a reason, or this says so and the run is not clean.
+  # It does not change $rc - it cannot silently rescue a pass - but a run whose log carries an
+  # unexplained error can no longer LOOK clean (owner, 2026-10-14: "HARDWIRE ERROR LOG SWEEP").
+  if [ -s "$R" ] && [ -x tools/sweep-gate.sh ]; then
+    if bash tools/sweep-gate.sh "$R" >>"$OUT/sweep-gate.out" 2>&1; then
+      log "sweep-gate: no undeclared error-shaped line in this run's log"
+    else
+      log "SWEEP-GATE FINDINGS in this run's own log - see $OUT/sweep-gate.out"
+      grep -a '^  ' "$OUT/sweep-gate.out" | tail -8 | while IFS= read -r l; do log "  $l"; done
+      [ "$rc" = 0 ] && rc=1
+    fi
+  fi
   log "summary: $PASS passed, $FAIL failed; evidence in $OUT"
   exit "$rc"
 }
@@ -740,7 +753,26 @@ while :; do
     if [ "${cpu:-9999}" -lt 15 ] 2>/dev/null; then quiet=$((quiet+1)); else quiet=0; fi
     unreach=$(( $(date +%s) - lastalive ))
     # cpu/quiet are LOGGING AIDS ONLY - never an exit (see the block comment above the loop).
-    log "  t+${el}s no qrexec for ${unreach}s (cause UNKNOWN - this sampler cannot see why) cpu=${cpu} quiet=$quiet"
+    # READ THE LOG VOLUME. qrexec being down is EXACTLY the case the secondary volume exists for:
+    # mtools reads it on the host with the guest running, wedged or Halted, nothing detached and
+    # nothing asked of the guest. This used to log "cause UNKNOWN - this sampler cannot see why" on
+    # every sample of the MSI's silent window - four such lines in one upgrade - while the volume
+    # holding the answer was already attached by this very script (owner, 2026-10-14: "you were
+    # supposed to put logs on readable external volume"). A sampler that says UNKNOWN while the
+    # answer is on a volume it attached is not reporting, it is guessing.
+    lastknown=""
+    if [ -n "${LOGVOL_IMG:-}" ]; then
+      if logvol_pull "$LOGVOL_IMG" "$OUT/logvol-live" >/dev/null 2>&1; then
+        lastknown=$(find "$OUT/logvol-live/files" -type f -name '*.log' -printf '%T@ %p\n' 2>/dev/null \
+                    | sort -rn | head -1 | cut -d' ' -f2- \
+                    | xargs -r -d '\n' sh -c 'grep -a . "$0" 2>/dev/null | tail -1' 2>/dev/null | cut -c1-110)
+      fi
+    fi
+    if [ -n "$lastknown" ]; then
+      log "  t+${el}s no qrexec for ${unreach}s; from the log VOLUME (host-side, guest untouched): ${lastknown} | cpu=${cpu} quiet=$quiet"
+    else
+      log "  t+${el}s no qrexec for ${unreach}s - and the log volume could not be read either (no volume attached, or mtools found nothing): THAT is the gap, not the silence | cpu=${cpu} quiet=$quiet"
+    fi
     # The stall clock for an unreachable guest runs from the last qrexec ANSWER, not from the
     # last log-line change, so it cannot fire on the MSI's ~60 s silent window (STALL_SECS is
     # 300 by default); the same rule w_install applies for matrix.sh. A guest that answers

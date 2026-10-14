@@ -1,0 +1,6 @@
+# DECLARED harness-log lines, for tools/sweep-gate.sh. One extended-regex per line, each with a
+# '# why:' reason. A line that matches nothing here FAILS the run.
+#
+# This file starts EMPTY of excuses on purpose. Every entry below had to be justified once, in
+# writing, and is reviewable in the diff. Adding a pattern to silence a line you have not understood
+# is the exact failure this gate exists to prevent (owner, 2026-10-14: "WTF RATIONALIZED").
