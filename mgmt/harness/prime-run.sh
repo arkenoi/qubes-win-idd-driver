@@ -181,7 +181,18 @@ qvm-features "$CHURN" os Windows
 # catalogs come out not-yet-valid (0x800B0101, a 25-minute silent drvinst hang,
 # measured 2026-09-25). The goldens carry timezone=localtime; a create path that copies
 # only the volumes did not, so the subject differed from its golden in exactly that.
-qvm-features "$CHURN" timezone "$(qvm-features "$BASE" timezone 2>/dev/null || echo localtime)"
+# THE RTC HOLDS UTC, WHICH IS THE QUBES DEFAULT - WE DO NOT SET THIS FEATURE.
+# `timezone=localtime` makes the qube present dom0's LOCAL time in the RTC. No ordinary qube has
+# that; this harness set it itself, to stop a German guest computing a UTC BEHIND real UTC and
+# failing driver-catalog validation (0x800B0101). But that only happened because Windows was
+# reading the RTC as local time - RealTimeIsUniversal unset - so we worked around a missing
+# registry value with a non-standard clock, and every UTC guest then ran +dom0_offset ahead:
+# measured 2026-10-14 as a permanent +3 h that the clock puller re-corrected three times in six
+# minutes while the log analyser silently shifted 2249 lines to hide it.
+# The answer file now sets RealTimeIsUniversal=1 in the specialize pass, so the guest reads the
+# RTC as UTC and its own timezone is a display matter only - correct for EVERY guest zone.
+# Leaving the feature unset is therefore both the Qubes default and the correct setting.
+qvm-features --unset "$CHURN" timezone 2>/dev/null || true
 for p in memory:8192 maxmem:8192 vcpus:4 qrexec_timeout:600; do qvm-prefs "$CHURN" "${p%%:*}" "${p##*:}"; done
 qvm-prefs "$CHURN" netvm '' 2>/dev/null
 python3 - "$BASE" "$CHURN" <<'PY' || { log "[ERROR] TERMINAL: volume clone failed"; exit 1; }

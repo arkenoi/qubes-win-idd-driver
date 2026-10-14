@@ -100,6 +100,25 @@
     </component>
   </settings>
   <settings pass="specialize">
+    <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64"
+        publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
+        xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <!-- THE HARDWARE CLOCK IS UTC AND THE OS APPLIES THE ZONE - the ordinary convention, and the
+           one Qubes expects. Without this Windows reads the RTC as LOCAL time, so the guest's UTC
+           comes out wrong by its own zone offset or by dom0's, depending on the qube's `timezone`
+           feature. Measured 2026-10-14: every acceptance guest ran 10800 s ahead for its whole
+           life, our clock puller corrected it three times in six minutes and lost, and the log
+           analyser silently SHIFTED 2249 lines to compensate instead of reporting it.
+           Set here, in specialize, because it must be true before OOBE, before our installer, and
+           before any driver catalog is validated against the system clock. -->
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add">
+          <Path>cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation" /v RealTimeIsUniversal /t REG_DWORD /d 1 /f</Path>
+          <Description>hardware clock is UTC; the OS applies the time zone</Description>
+          <Order>1</Order>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
         publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <ComputerName>win11-idd-test</ComputerName>

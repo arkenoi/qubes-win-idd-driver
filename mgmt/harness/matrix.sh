@@ -597,7 +597,7 @@ qwt_products(){ # $1=vm - echo the count of MSI-REGISTERED QWT products; echo no
   return 1
 }
 
-ensure_churn_target(){ # $1=vm - create the disposable churn StandaloneVM if it does not exist.
+ensure_churn_target(){ # $1=vm [$2=source golden] - create the disposable churn StandaloneVM if it does not exist.
   # The reclone-entry cells (upgrade/seeded/stock) clone volumes INTO an existing qube, so on a
   # rig where the clean cell has not run yet (prime-run creates the subject) the churn target may
   # simply not exist. Create it exactly the way prime-run.sh does: create -> TAG -> everything
@@ -613,9 +613,17 @@ ensure_churn_target(){ # $1=vm - create the disposable churn StandaloneVM if it 
   # timezone: without it the RTC holds TRUE UTC while Windows reads it as LOCAL, so a
   # non-UTC guest computes a UTC behind real UTC by its own offset and CI-minted driver
   # catalogs come out not-yet-valid (0x800B0101, a 25-minute silent drvinst hang,
-  # measured 2026-09-25). The goldens carry timezone=localtime; a create path that copies
-  # only the volumes did not, so the subject differed from its golden in exactly that.
-  qvm-features "$vm" timezone localtime
+  # measured 2026-09-25). A create path that copies only the volumes loses the feature, so the
+  # subject differed from its golden in exactly that.
+  #
+  # BUT WE DO NOT SET IT AT ALL. This forced the localtime feature unconditionally, justified by
+  # "the goldens carry timezone=localtime" - and win10-base and win11r-base do NOT: they are UTC
+  # guests whose RTC must hold true UTC, which is what an UNSET feature gives. Forcing localtime
+  # onto a UTC guest makes it read +dom0_offset, measured 2026-10-14 as a permanent +3 h that the
+  # clock puller re-corrected three times in six minutes. Both consistent pairings are safe
+  # against the certificate hang - a UTC guest with the feature unset sits AT true UTC, never
+  # behind it - so the golden's own setting is the one to carry over.
+  qvm-features --unset "$vm" timezone 2>/dev/null || true
   for p in memory:8192 maxmem:8192 vcpus:4 qrexec_timeout:600; do qvm-prefs "$vm" "${p%%:*}" "${p##*:}"; done
   qvm-prefs "$vm" netvm '' 2>/dev/null
   return 0
@@ -1492,7 +1500,7 @@ cell_upgrade(){ # $1=previous-ours entry image $2=subject $3=tag - previous rele
   # discipline guarantees; override with UPGRADE_EXPECT_MODE only for a deliberate variant.
   say "######## CELL $3-upgrade (previous ours [$1] -> release, installed from the ISO) ########"
   local prev=$1 vm=$2 tag=$3
-  ensure_churn_target "$vm" || return
+  ensure_churn_target "$vm" "$prev" || return
   reclone "$prev" "$vm" || { no "$tag-upgrade: could not reclone"; return; }
   boot_with_release_iso "$vm" "$tag-upgrade" || return
   w_session "$vm" 900 "$tag-upgrade-boot" "$M" say || { no "$tag-upgrade: clone did not boot"; return; }
@@ -1528,7 +1536,7 @@ cell_seeded(){ # $1=QWT-carrying entry image $2=subject $3=tag
   say "######## CELL $3-seeded (pending xenbus Request + monitor auto-start, install from the ISO) ########"
   say "  THIS IS THE SUSPECTED BRICK. Control (seed off) completed in 90 s and stayed healthy;"
   say "  the seeded run halted at 80 s mid-MSI and came back in Automatic Repair. n=2, unproven."
-  ensure_churn_target "$2" || return
+  ensure_churn_target "$2" "$1" || return
   reclone "$1" "$2" || { no "$3-seeded: could not reclone"; return; }
   boot_with_release_iso "$2" "$3-seeded" || return
   w_session "$2" 600 "$3-seeded-boot" "$M" say || { no "$3-seeded: clone did not boot"; return; }
@@ -1598,7 +1606,7 @@ cell_stock(){ # $1=stock-4.2.2 fixture $2=subject $3=tag - CAPABILITY ONLY, neve
   # the provisioning job). Then: the release ISO as a CD installs over stock.
   say "######## CELL $3-stock (stock 4.2.2 fixture [$1] -> release, installed from the ISO) ########"
   local entry=$1 vm=$2 tag=$3
-  ensure_churn_target "$vm" || return
+  ensure_churn_target "$vm" "$entry" || return
   reclone "$entry" "$vm" || { no "$tag-stock: could not reclone"; return; }
   boot_with_release_iso "$vm" "$tag-stock" || return
   w_session "$vm" 900 "$tag-stock-boot" "$M" say || { no "$tag-stock: clone did not boot"; return; }
@@ -1696,7 +1704,7 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the
   qvm-tags "$app" add win-idd-testbed \
     || { no "$3-appvm: could not TAG $app win-idd-testbed - dom0 policy will refuse every call to it; not proceeding"; return; }
   qvm-features "$app" os Windows >/dev/null 2>&1
-  qvm-features "$app" timezone localtime >/dev/null 2>&1   # see the timezone note above
+  qvm-features --unset "$app" timezone >/dev/null 2>&1 || true   # RTC holds UTC; see the note above
   qvm-prefs "$app" memory 8192 >/dev/null 2>&1; qvm-prefs "$app" maxmem 0 >/dev/null 2>&1
   qvm-prefs "$app" vcpus 4 >/dev/null 2>&1; qvm-prefs "$app" qrexec_timeout 6000 >/dev/null 2>&1
   if [ "$had_app" = 1 ]; then

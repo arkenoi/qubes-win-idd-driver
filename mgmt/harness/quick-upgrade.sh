@@ -310,7 +310,8 @@ qvm-features "$SUBJECT" os Windows
 # and drvinst blocked for 25 minutes. The golden it was cloned from had timezone=localtime all
 # along; this create path copied the VOLUMES and not the features, so the subject differed from
 # its own golden in exactly the variable that decides the failure.
-qvm-features "$SUBJECT" timezone "$(qvm-features "$GOLDEN" timezone 2>/dev/null || echo localtime)"
+# The RTC holds UTC (Qubes default); see prime-run.sh. We do not set this feature.
+qvm-features --unset "$SUBJECT" timezone 2>/dev/null || true
 # THE REST OF THE GOLDEN'S FEATURES - the same list mgmt/clone-guest.sh copies. The timezone fix
 # above closed one feature of this gap and left the others: measured 2026-09-28, every subject this
 # path created (win11de-v5, -v7, -sub, -bq ...) carried os+timezone only, while the golden carries
