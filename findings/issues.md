@@ -27,8 +27,9 @@
   together 100%. A harness that reports a failure without declaring a severity cannot be judged by
   any reader, which is why `WARNING log-volume bind failed` was invisible and `summary: 3 passed, 2
   failed` is indistinguishable from `summary: 5 passed, 0 failed` unless the line that knows $FAIL
-  says so. In the 11 files that grade a release, **26 of 97 failure-reporting sites declared a level
-  before, 80 of 97 now**, via chokepoints rather than line-by-line labelling: `no()` in matrix.sh and
+  says so. In the 11 files that grade a release the fix went in via CHOKEPOINTS rather than
+  line-by-line labelling (a site COUNT is deliberately not quoted here - lint L24's own count swung
+  97 -> 215 -> 76 on an unchanged tree as its detector changed, so it is a review aid, not a metric): `no()` in matrix.sh and
   quick-upgrade.sh (every failing check routes through them, [ERROR] for a product FAIL and [WARN]
   for an ungraded INVALID), `verdict_aggregate()` which already COMPUTED the class and never declared
   it, `finish()` through which every exit passes, the campaign summary, and wu-e2e's 12 round

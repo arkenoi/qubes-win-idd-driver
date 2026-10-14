@@ -1309,10 +1309,38 @@ def l24_failure_report_must_declare_a_level() -> None:
 
     EXEMPT, deliberately: byte-exact machine contracts (the '=== MATRIX:' and '=== done:' markers
     other tools parse), and prose - a line that explains a condition rather than reporting one.
-    Pending, not gating, while the named list is worked down."""
+
+    ITS COUNT IS NOT A COVERAGE METRIC. Do not quote it as one. The site count has been 97 (a word
+    list), then 215 (control flow, too loose), then 76 (tightened) - for the same unchanged tree,
+    because every version of this detector has its own false positives and negatives. Known
+    false positives right now include e2e-wait.sh:118 and :124, which are a progress line and a
+    status line that sit near a `return 1`. The author tightened the regex, watched 215 become 76,
+    and presented that as progress while BOTH of those lines were still flagged - i.e. the number
+    moved and the defects did not. A detector whose own count swings 3x is a review aid, not a
+    measurement, and the honest denominator for "how much of our failure reporting declares a
+    severity" is not available from it.
+
+    What it IS good for: pointing at a specific line a human should look at. That is why it is
+    pending and never gating."""
     reports = re.compile(r'\b(say|log|_vs_log|_lv_say|echo)\b[^|]*"')
-    failure = re.compile(r"(FAIL|FAILED|REFUS|ERROR|cannot|UNEXPECTED|could not|would not"
-                         r"|no record|missing data)")
+    # A FAILURE SITE IS CONTROL FLOW, NOT VOCABULARY. This rule used to find them with a word list
+    # (FAIL|REFUS|ERROR|cannot|UNEXPECTED|...) - the exact technique tools/sweep-gate.sh exists to
+    # replace, and it was wrong in both directions: it missed a report whose words happened not to
+    # be on the list, and it counted explanatory prose that contains "cannot". It also produced the
+    # site COUNT this rule was quoted for, so that number could never be trusted either.
+    #
+    # What makes a line a failure REPORT is where control goes next: the run ends non-zero, or a
+    # verdict helper records a failure. Those are structural and enumerable.
+    #   no() / verdict FAIL     - the harnesses' own verdict recorders
+    #   Fail / finish <nonzero> - the single-exit helpers
+    #   exit <nonzero>, return <nonzero> on the same line or the next few
+    # `no` is a COMMAND here, not the English word. Matching \bno\s flagged
+    # `DEADLINE ${dl}s with no session` and a dozen like it, which is the same false-positive
+    # disease as the word list, just with a shorter list. So: statement position, and an argument.
+    failure = re.compile(r"(^|[;&|{]\s*|\bthen\s+|\bdo\s+|\belse\s+)no\s+[\"'$]"
+                         r"|(^|[;&|{]\s*)Fail\s+[\"'$]"
+                         r"|\bfinish\s+[1-9]|\bverdict\s+(FAIL|INVALID)"
+                         r"|\bexit\s+[1-9]|\breturn\s+[1-9]")
     # DECLARED, counting the three ways a line can carry a level without spelling it out:
     #   a literal tag; an interpolated guard (${sev}/${_mx_sev}) set immediately above; and
     #   declaration BY THE CALLEE - `finish <nonzero>` goes through finish(), which prefixes
@@ -1332,10 +1360,21 @@ def l24_failure_report_must_declare_a_level() -> None:
     for f in HARNESS:
         if f.name not in RELEASE_GRADING:
             continue
-        for n, line in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+        lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+        for n, line in enumerate(lines, 1):
             if line.lstrip().startswith("#") or not reports.search(line):
                 continue
-            if not failure.search(line) or declared.search(line) or prose.search(line):
+            # the exit may be on this line or just after it: `log "..."; exit 1` and
+            #   log "..."
+            #   exit 1
+            # are the same site. Three lines of lookahead, code only.
+            # THE EXIT MUST BE IMMEDIATE. A three-line lookahead attributed a `return 1` to the
+            # progress lines above it, flagging `t+${now}s qvm=... screen=...` as a failure report.
+            # Same line, or the very next line of code, and nothing else in between.
+            nxt = next((l for l in lines[n:n + 4]
+                        if l.strip() and not l.lstrip().startswith("#")), "")
+            window = line + " ;; " + nxt
+            if not failure.search(window) or declared.search(line) or prose.search(line):
                 continue
             if not_a_report.search(line):
                 continue
