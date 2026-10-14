@@ -88,7 +88,14 @@
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
         publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <ComputerName>win-idd-test</ComputerName>
-      <TimeZone>UTC</TimeZone>
+      <!-- THE OS APPLIES THE ZONE; THE HARDWARE CLOCK IS UTC (RealTimeIsUniversal, set in the
+           specialize pass above). This was UTC, which made every rig guest display UTC instead of
+           the wall-clock time its user would see - and set-time.ps1 records that a zone-offset bug
+           "was never seen here" for exactly that reason: with the offset pinned to zero, a wrong
+           zone cannot show up. dom0's zone is Europe/Sofia, whose Windows id is this one; the
+           installer also reads /qubes-timezone from qubesdb and matches it, so a guest installed
+           anywhere else still lands on its own host's zone. -->
+      <TimeZone>FLE Standard Time</TimeZone>
     </component>
   </settings>
   <settings pass="oobeSystem">

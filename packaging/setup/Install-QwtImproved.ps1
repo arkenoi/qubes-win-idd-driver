@@ -5336,6 +5336,76 @@ function Test-SigningClockSane {
     return $true
 }
 
+function Set-GuestTimeZoneFromHost {
+    # THE HARDWARE CLOCK IS UTC AND THE OS APPLIES THE ZONE - this is the second half of that.
+    # Set-RtcIsUtc makes the guest read the RTC as UTC, which fixes its notion of UTC. The guest
+    # still has to DISPLAY the right wall-clock time, and a Windows desktop pinned to UTC shows the
+    # user a clock that is not their clock. dom0 publishes its own zone in qubesdb as an IANA name
+    # (/qubes-timezone, e.g. "Europe/Sofia"), so the guest can match it instead of guessing.
+    #
+    # WHY NOT JUST LEAVE IT: our own rig pinned every image to UTC, where a zone offset is zero -
+    # and set-time.ps1 records that that is exactly why a zone-offset bug "was never seen here".
+    # A guest whose zone is wrong computes a wrong UTC the moment anything reads a local timestamp.
+    #
+    # tzutil takes WINDOWS zone ids, not IANA ones, and .NET Framework on the guest has no
+    # IANA conversion (TryConvertIanaIdToWindowsId is .NET 6+). So the common zones are mapped
+    # here and anything else is REPORTED rather than guessed at - a wrong zone is worse than a
+    # zone we admit we could not map.
+    $iana = $null
+    try { $iana = Get-QubesDbValue '/qubes-timezone' } catch { }
+    if ([string]::IsNullOrWhiteSpace($iana)) {
+        Write-Log '  clock: dom0 publishes no /qubes-timezone - leaving the guest timezone alone' 'WARN'
+        return
+    }
+    $map = @{
+        'UTC'='UTC'; 'Etc/UTC'='UTC'; 'Etc/GMT'='UTC'
+        'Europe/London'='GMT Standard Time'; 'Europe/Dublin'='GMT Standard Time'; 'Europe/Lisbon'='GMT Standard Time'
+        'Europe/Berlin'='W. Europe Standard Time'; 'Europe/Amsterdam'='W. Europe Standard Time'
+        'Europe/Vienna'='W. Europe Standard Time'; 'Europe/Zurich'='W. Europe Standard Time'
+        'Europe/Rome'='W. Europe Standard Time'; 'Europe/Stockholm'='W. Europe Standard Time'
+        'Europe/Oslo'='W. Europe Standard Time'
+        'Europe/Paris'='Romance Standard Time'; 'Europe/Madrid'='Romance Standard Time'
+        'Europe/Brussels'='Romance Standard Time'; 'Europe/Copenhagen'='Romance Standard Time'
+        'Europe/Warsaw'='Central European Standard Time'
+        'Europe/Prague'='Central Europe Standard Time'; 'Europe/Budapest'='Central Europe Standard Time'
+        'Europe/Sofia'='FLE Standard Time'; 'Europe/Kiev'='FLE Standard Time'; 'Europe/Kyiv'='FLE Standard Time'
+        'Europe/Helsinki'='FLE Standard Time'; 'Europe/Riga'='FLE Standard Time'
+        'Europe/Tallinn'='FLE Standard Time'; 'Europe/Vilnius'='FLE Standard Time'
+        'Europe/Athens'='GTB Standard Time'; 'Europe/Bucharest'='GTB Standard Time'
+        'Europe/Chisinau'='E. Europe Standard Time'; 'Europe/Minsk'='Belarus Standard Time'
+        'Europe/Moscow'='Russian Standard Time'; 'Europe/Istanbul'='Turkey Standard Time'
+        'America/New_York'='Eastern Standard Time'; 'America/Toronto'='Eastern Standard Time'
+        'America/Chicago'='Central Standard Time'; 'America/Denver'='Mountain Standard Time'
+        'America/Phoenix'='US Mountain Standard Time'
+        'America/Los_Angeles'='Pacific Standard Time'; 'America/Vancouver'='Pacific Standard Time'
+        'America/Anchorage'='Alaskan Standard Time'; 'Pacific/Honolulu'='Hawaiian Standard Time'
+        'America/Sao_Paulo'='E. South America Standard Time'; 'America/Mexico_City'='Central Standard Time (Mexico)'
+        'Asia/Tokyo'='Tokyo Standard Time'; 'Asia/Shanghai'='China Standard Time'
+        'Asia/Hong_Kong'='China Standard Time'; 'Asia/Singapore'='Singapore Standard Time'
+        'Asia/Seoul'='Korea Standard Time'; 'Asia/Kolkata'='India Standard Time'
+        'Asia/Calcutta'='India Standard Time'; 'Asia/Dubai'='Arabian Standard Time'
+        'Asia/Jerusalem'='Israel Standard Time'
+        'Australia/Sydney'='AUS Eastern Standard Time'; 'Australia/Melbourne'='AUS Eastern Standard Time'
+        'Australia/Perth'='W. Australia Standard Time'; 'Pacific/Auckland'='New Zealand Standard Time'
+        'Africa/Cairo'='Egypt Standard Time'; 'Africa/Johannesburg'='South Africa Standard Time'
+        'Africa/Lagos'='W. Central Africa Standard Time'; 'Africa/Nairobi'='E. Africa Standard Time'
+    }
+    $want = $map[$iana]
+    if (-not $want) {
+        Write-Log "  clock: dom0's zone '$iana' is not in this installer's IANA->Windows map - leaving the guest timezone alone (its UTC is still correct: the RTC is read as UTC)" 'WARN'
+        return
+    }
+    $cur = (& tzutil /g 2>&1 | Select-Object -First 1)
+    if ("$cur".Trim() -eq $want) { Write-Log "  clock: timezone already '$want' (dom0: $iana)"; return }
+    & tzutil /s "$want" 2>&1 | Out-Null
+    $back = (& tzutil /g 2>&1 | Select-Object -First 1)
+    if ("$back".Trim() -eq $want) {
+        Write-Log "  clock: timezone set to '$want' to match dom0's $iana (was '$cur')"
+    } else {
+        Write-Log "  clock: could not set the timezone to '$want' (reads back '$back') - the guest will display the wrong wall-clock time" 'WARN'
+    }
+}
+
 function Set-RtcIsUtc {
     # THE HARDWARE CLOCK IS UTC AND THE OS APPLIES THE ZONE. Qubes presents the RTC as UTC to a
     # qube unless that qube is given the `timezone` feature, and Windows with RealTimeIsUniversal
@@ -5480,6 +5550,7 @@ function Assert-Stage1Preflight {
     # 2026-09-25 on a German 25H2 guest: 25 minutes at 0.125 s of CPU, the install log saying only
     # 'installing xenvif', the answer only in setupapi.dev.log as Error = 0x800B0101.
     Set-RtcIsUtc
+    Set-GuestTimeZoneFromHost
     $skewed = Assert-PayloadClockSane -Root $Root -Why 'stage 1 pre-flight'
     if ($skewed.Count -gt 0) {
         Fail ("pre-flight REFUSAL (nothing changed on this guest): this guest's clock cannot " +

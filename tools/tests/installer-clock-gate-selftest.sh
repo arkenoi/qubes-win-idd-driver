@@ -249,6 +249,38 @@ else
   echo "  FAIL rtc not ordered before the clock gate (rtc=${rtc_line:-none} gate=${gate_line:-none})"; fail=1
 fi
 
+# ---- THE OS APPLIES THE ZONE -------------------------------------------------------------------
+# Setting the RTC convention fixes the guest's notion of UTC. It still has to DISPLAY the user's
+# wall-clock time, and a desktop pinned to UTC does not. dom0 publishes its own zone in qubesdb as
+# an IANA name (/qubes-timezone), so the installer matches it instead of guessing - and tzutil
+# takes WINDOWS ids, which .NET Framework on the guest cannot derive from IANA.
+I=packaging/setup/Install-QwtImproved.ps1
+if command grep -q 'function Set-GuestTimeZoneFromHost' "$I"; then echo "  OK   tz: the installer matches dom0's zone"
+else echo "  FAIL tz: the installer does not set the guest timezone"; fail=1; fi
+if tr -d '\r' < "$I" | awk '/function Set-GuestTimeZoneFromHost/,/^}$/' | command grep -q "/qubes-timezone"; then
+  echo "  OK   tz: read from qubesdb, not hardcoded"
+else echo "  FAIL tz: the zone is not read from /qubes-timezone"; fail=1; fi
+# an unmapped zone must be REPORTED, never guessed: a wrong zone is worse than an admitted gap
+if tr -d '\r' < "$I" | awk '/function Set-GuestTimeZoneFromHost/,/^}$/' | command grep -q 'not in this installer'; then
+  echo "  OK   tz: an unmapped IANA zone is reported, not guessed"
+else echo "  FAIL tz: an unmapped zone would be guessed at or silently skipped"; fail=1; fi
+if tr -d '\r' < "$I" | awk '/function Set-GuestTimeZoneFromHost/,/^}$/' | command grep -q 'already'; then
+  echo "  OK   tz: idempotent when the zone already matches"
+else echo "  FAIL tz: it would rewrite the zone on every install"; fail=1; fi
+if tr -d '\r' < "$I" | awk '/function Set-GuestTimeZoneFromHost/,/^}$/' | command grep -q 'reads back'; then
+  echo "  OK   tz: the result is read back"
+else echo "  FAIL tz: the tzutil result is assumed"; fail=1; fi
+# the two zones this project actually ships must map correctly
+for pair in "Europe/Sofia:FLE Standard Time" "Europe/Berlin:W. Europe Standard Time"; do
+  ia=${pair%%:*}; wz=${pair#*:}
+  if tr -d '\r' < "$I" | command grep -q "'$ia'='$wz'"; then echo "  OK   tz: $ia -> $wz"
+  else echo "  FAIL tz: $ia is not mapped to '$wz'"; fail=1; fi
+done
+# and no image we install may pin UTC any more
+nutc=$(command grep -l '<TimeZone>UTC</TimeZone>' mgmt/autounattend*.xml 2>/dev/null | wc -l)
+if [ "$nutc" = 0 ]; then echo "  OK   tz: no answer file pins the guest to UTC"
+else echo "  FAIL tz: $nutc answer file(s) still pin TimeZone=UTC"; fail=1; fi
+
 if [ "$fail" = 0 ]; then echo "PASS: the gate refuses exactly the clock-broken cases"; exit 0; fi
 echo "FAIL: the installer would not refuse a clock-broken driver package"
 exit 1

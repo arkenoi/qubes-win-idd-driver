@@ -38,6 +38,20 @@ assert_sole_guest "$VM" || die "another guest is up - run this serially"
 st=$(qvm-ls --raw-data --fields STATE "$VM" 2>/dev/null)
 [ "$st" = Halted ] || die "$VM is '$st', not Halted"
 
+# THIS ROUTE NEEDS QREXEC, WHICH NEEDS QWT. A pristine base carries neither, so starting one here
+# only burns a revision and ten minutes waiting for an answer that cannot come - which is exactly
+# what it did to win11r-base on 2026-10-14, costing that golden its seal for nothing.
+# The fixture goldens (<name>-qwt) have QWT; the bases do not. Refuse early and name the route that
+# does work, rather than discovering it in a timeout.
+case "$VM" in
+  *-qwt) : ;;
+  *) die "$VM has no QWT, so qrexec cannot be asked to set the value. A pristine base is fixed by
+       REBUILDING it from the updated answer stick (mgmt/harness/rebuild-rig.sh --only base10|base11),
+       which bakes RealTimeIsUniversal in at install. Note it may not need it at all: with the qube's
+       timezone feature unset the RTC holds true UTC, so a base pinned to TZ=UTC is already correct -
+       the value changes the answer only for a guest whose zone is NOT UTC." ;;
+esac
+
 # The seal must be intact BEFORE we touch it: re-sealing over an already-drifted golden would
 # record our change and silently bless whatever else had happened to it.
 ./mgmt/golden.sh verify "$VM" >/dev/null 2>&1 || die "$VM does not match its seal - fix that first, do not re-seal over it"
