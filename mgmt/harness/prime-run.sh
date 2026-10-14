@@ -502,6 +502,7 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
         fi
         ready=1
         log "  t+${el}s QREXEC ANSWERS after $restarts restart(s) - the guest carries a working QWT"
+        w_rtc_utc "$CHURN" log || true
         # ARM THE MODULE-BASE RECORDER, HERE, WHILE THE GUEST STILL ANSWERS.
         # Until 2026-09-23 this script's failure banner PROMISED the recorder was armed - "a RIP
         # captured with dom0 debug-keys d/v will resolve to driver+offset" - and nothing in this
