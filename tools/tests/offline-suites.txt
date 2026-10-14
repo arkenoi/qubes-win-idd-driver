@@ -1,0 +1,71 @@
+# The offline selftest suites that a plain Linux runner can execute.
+#
+# WHY A CURATED LIST. tools/tests/ holds 117 *-selftest.sh files and `.github/workflows/`
+# mentioned them only inside COMMENTS ("Proven offline by tools/tests/svc-exitcode-selftest.sh"
+# and five more of that shape). So `test` going green said nothing about any of them, and every
+# receipt in the register held only as long as someone kept running them by hand. That is
+# SELFTESTSUNRUNINCI.
+#
+# HOW THIS LIST WAS BUILT - measured, not guessed. Each candidate was first excluded statically
+# if its code (comments stripped) calls qvm-*, qubesadmin, qrexec-client-vm, udisksctl, losetup,
+# pwsh/powershell, mtools or a compiler, because a GitHub runner has none of those. The 46 that
+# remained were then RUN, serially, on 2026-10-15; the 40 that exited 0 are listed, plus
+# offline-runner-selftest.sh, written afterwards to prove this list's own runner (17 checks).
+# A suite is in this file because it was observed to pass, not because it looked portable.
+#
+# SERIALLY, AND THAT IS NOT A STYLE CHOICE: blockclaim-selftest.sh reported "10 passed, 2 failed"
+# when run in the same command as logvol-lib-selftest.sh and "12 passed, 0 failed" alone, twice -
+# both bind and delete loop devices and loop numbers are global (BLOCKCLAIMSELFTESTRACES). A
+# parallel runner would reintroduce that false red.
+#
+# NOT LISTED, and why - these four are RED at the release sha (0c6d54b8 / agent 5c483cd9), each
+# asserting that a fix is absent from the source. They are registered as SUITESREDATRELEASE, not
+# silently dropped: a suite left out of CI because it fails is the thing this file exists to stop.
+#   bridge-exit-reason-selftest.sh    not_a_death: every exit 0 reported as 'a clean exit nobody asked for'
+#   broker-down-anchor-selftest.sh    held_without_a_shell: the deadline runs before the broker can launch
+#   log-policy-selftest.sh            2 routine per-window LogInfo lines (main.c BROKERLATEREG, BROKERHOLD)
+#   wrapper-exit-reason-selftest.sh   no_new_wait: 2 Sleep() calls against 1 before the fix
+#
+# Everything else in tools/tests/ needs a Qubes rig, a loop device, PowerShell, mtools or a
+# compiler and is run on the dev qube.
+acceptance-record-selftest.sh
+cell-coverage-selftest.sh
+ci-state-selftest.sh
+console-window-check-selftest.sh
+coverage-receipt-selftest.sh
+dirty-union-selftest.sh
+dom0-callers-selftest.sh
+exit-decision-coverage-selftest.sh
+gate-candidate-selftest.sh
+gate-scope-selftest.sh
+grade-noise-selftest.sh
+grade-receipt-selftest.sh
+launch-determination-selftest.sh
+logsweep-rotation-placeholder-selftest.sh
+logvol-guesttext-selftest.sh
+logvol-level-reaches-gate-selftest.sh
+loudness-channel-selftest.sh
+matrix-logsweep-grade-selftest.sh
+matrix-runmarker-selftest.sh
+matrix-sweep-tally-selftest.sh
+mode-wait-attribution-selftest.sh
+offline-runner-selftest.sh
+one-log-per-module-selftest.sh
+pipe-client-null-selftest.sh
+pipe-connect-order-selftest.sh
+pipe-eof-selftest.sh
+pipefail-grepq-selftest.sh
+qcon-session-selftest.sh
+release-cut-gate-selftest.sh
+resolve-rip-selftest.sh
+result-flags-selftest.sh
+retired-names-gate-selftest.sh
+rtc-utc-selftest.sh
+stock-ab-selftest.sh
+sweep-gate-selftest.sh
+toastactions-selftest.sh
+uac-prompt-reachable-selftest.sh
+verdict-jev-selftest.sh
+verdict-lib-selftest.sh
+wu-liveness-selftest.sh
+xen-core-small-selftest.sh

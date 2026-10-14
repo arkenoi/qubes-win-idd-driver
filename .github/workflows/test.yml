@@ -160,6 +160,28 @@ jobs:
 
           if ($bad) { throw "$bad invariant(s) violated" }
 
+  offline-suites:
+    # SELFTESTSUNRUNINCI: tools/tests/ holds 117 *-selftest.sh files and this workflow named them
+    # only inside comments ("Proven offline by tools/tests/svc-exitcode-selftest.sh" and five more
+    # of that shape). So a green `test` said nothing about any of them, and every offline receipt in
+    # findings/issues.md - the windows-utils patch suites, the gate suites, the harness libraries -
+    # held only as long as someone kept running them by hand on the dev qube.
+    #
+    # The list is curated and MEASURED: candidates are excluded statically when they need a Qubes
+    # rig, a loop device, PowerShell, mtools or a compiler, and what remained was run and observed
+    # to pass. tools/tests/offline-suites.txt carries the list, the method and the four suites that
+    # are RED at this sha with their reasons, so a suite can never be dropped from CI in silence.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      # The windows-utils patch suites apply patches against the vendored read-only mirror, so the
+      # checkout has to carry it. Without this they would report "patch failed to apply" and look
+      # like product regressions - which is exactly what a stale worktree path did on the dev qube.
+      - name: Offline selftest suites (serial, with a floor)
+        run: tools/tests/run-offline-suites.sh
+
   bind-dirs-offline:
     # The bind-dirs core (core-agent/src/bind-dirs/bind-dirs.c, docs/BIND-DIRS.md) is portable C
     # built with gcc against an in-memory fake FS: config grammar, path refusals, the
