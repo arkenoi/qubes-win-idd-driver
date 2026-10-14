@@ -69,11 +69,20 @@ fi
 # the definition as qubes.GetAppMenus, so the installer lays down the lowercase name too; calling
 # the spelling dom0 uses is the point, not the one our tree happens to contain.
 SVC=qubes.GetAppmenus
+# THE OUTER BOUND COMES FROM THE QUBE, NOT FROM A NUMBER I LIKED. A cold call has to pay for the
+# whole boot before the service is even reached, and this check's first version capped it at a flat
+# 180s - which would have cut off a legitimate cold start and reported it as the defect it hunts, an
+# empty stream. dom0's own caller gives up at qrexec_timeout, so that is the only bound that means
+# anything here; the margin covers qrexec's own setup, and the floor covers a qube with a tiny value
+# set for some other reason. This is a BOUND so the check cannot hang, never a fix for a slow path.
+qt_pref=$(qvm-prefs "$VM" qrexec_timeout 2>/dev/null)
+case "$qt_pref" in (*[!0-9]*|'') qt_pref=0 ;; esac
+bound=$(( qt_pref + 60 )); [ "$bound" -lt 180 ] && bound=180
 t0=$(date +%s)
 if [ -n "$FIXTURE" ]; then
   cat "$FIXTURE" >"$T/out" 2>"$T/err"; call_rc=$?
 else
-  timeout -k 5 180 qrexec-client-vm "$VM" "$SVC" </dev/null >"$T/out" 2>"$T/err"
+  timeout -k 5 "$bound" qrexec-client-vm "$VM" "$SVC" </dev/null >"$T/out" 2>"$T/err"
   call_rc=$?
 fi
 elapsed=$(( $(date +%s) - t0 ))
@@ -82,7 +91,10 @@ mode=warm; [ "$COLD" -eq 1 ] && mode=cold
 
 # ---- 0. refusal vs silence --------------------------------------------------------------------
 if [ "$bytes" -eq 0 ]; then
-  if [ -s "$T/err" ]; then
+  if [ "$call_rc" -ge 124 ] && [ -z "$FIXTURE" ]; then
+    bad "$SVC did not finish inside ${bound}s (rc=$call_rc) - a HANG, which is not the same as an empty menu"
+    $LG "  CALLERS: the bound came from this qube's qrexec_timeout (${qt_pref}s) + 60s, so dom0's caller had already given up"
+  elif [ -s "$T/err" ]; then
     bad "$SVC returned NOTHING and stderr says: $(tr -d '\r' <"$T/err" | head -2 | tr '\n' ' ')"
     $LG "  CALLERS: that is a refusal or a transport failure, not an empty menu ($mode, rc=$call_rc, ${elapsed}s)"
   else
@@ -103,10 +115,10 @@ if [ "$COLD" -eq 1 ] && [ -z "$FIXTURE" ]; then
   now=$(qvm-ls --raw-data --fields STATE "$VM" 2>/dev/null)
   [ "$now" = Running ] && good "the cold call started the qube (Halted -> $now)" \
     || bad "after a cold call $VM is '$now' - this stream did not come from a qube this call started"
-  qt=$(qvm-prefs "$VM" qrexec_timeout 2>/dev/null)
-  if [ -n "$qt" ] && [ "$elapsed" -gt "$qt" ] 2>/dev/null; then
+  qt=$qt_pref
+  if [ "$qt" -gt 0 ] && [ "$elapsed" -gt "$qt" ]; then
     bad "the cold call took ${elapsed}s against qrexec_timeout=${qt}s - dom0's caller gives up first"
-  elif [ -n "$qt" ]; then
+  elif [ "$qt" -gt 0 ]; then
     good "cold answer in ${elapsed}s, inside qrexec_timeout=${qt}s"
   fi
 fi
