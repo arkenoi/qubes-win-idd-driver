@@ -224,5 +224,25 @@ else
   no "T14 census wrong (clean rc=$crc, defect rc=$drc)" "clean: $(printf '%s' "$cout" | tail -2) | defect: $(printf '%s' "$dout" | tail -1)"
 fi
 
+# T15 - THE BLIND SPOT IS MEASURED, AND UNMEASURABLE IS NOT ZERO. Reading declared severity is
+# structurally blind to a failure that declares NOTHING, which is the case this tool exists for, so
+# its size must be a number. A verdict ledger is an independent witness: a recorded FAIL whose log
+# carries no declared error is a failure this detector would have missed. The first version joined
+# label to log by filename and, on a real campaign dir whose logs are named agent-etwproxysup.log,
+# matched nothing and called 14 of 14 failures "silent" - a broken join reported as a result.
+mkdir -p "$T/sf"
+printf 'cellA|FAIL the product misbehaved\ncellB|FAIL also broke\ncellC|PASS fine\n' > "$T/sf/verdicts.txt"
+printf '[20261014.120000.001-1-E] something broke here\n' > "$T/sf/cellA.log"
+printf 'nothing declared at all, just progress\n' > "$T/sf/cellB.log"
+m=$(bash tools/sweep-gate.sh --silent-failures "$T/sf/verdicts.txt" "$T/sf"/*.log 2>&1)
+printf 'zzz|FAIL unjoinable\n' > "$T/sf/v2.txt"
+u=$(bash tools/sweep-gate.sh --silent-failures "$T/sf/v2.txt" "$T/sf/cellA.log" 2>&1); urc=$?
+if printf '%s' "$m" | grep -qa 'measured=2 left_a_declared_error=1 silent=1' \
+   && [ $urc -eq 2 ] && printf '%s' "$u" | grep -qa 'INCONCLUSIVE'; then
+  ok "T15 a failure with a silent log is counted, and a label with no log is INCONCLUSIVE not zero"
+else
+  no "T15 blind-spot measurement wrong (urc=$urc)" "measured: $(printf '%s' "$m" | tail -1) | unjoinable: $(printf '%s' "$u" | tail -1)"
+fi
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

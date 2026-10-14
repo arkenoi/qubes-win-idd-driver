@@ -32,10 +32,11 @@
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 2
 
-WRITE=""; VERIFY=0; CENSUS=0
+WRITE=""; VERIFY=0; CENSUS=0; SILENT=0
 if [ "${1:-}" = "--write-ledger" ]; then WRITE="${2:?--write-ledger needs an output path}"; shift 2; fi
 if [ "${1:-}" = "--verify" ]; then VERIFY=1; shift; fi
 if [ "${1:-}" = "--census" ]; then CENSUS=1; shift; fi
+if [ "${1:-}" = "--silent-failures" ]; then SILENT=1; shift; fi
 [ $# -ge 1 ] || [ "$VERIFY" = 1 ] || { echo "usage: $0 [--verify] [--census] [--write-ledger <out>] <log> [...]" >&2; exit 2; }
 LEDGER="${SWEEP_GATE_LEDGER:-mgmt/harness/error-ledger.txt}"
 
@@ -194,6 +195,56 @@ fi
 # anything this tool invented - and requires the tool's own dump to account for exactly those lines.
 # Two implementations in two languages agreeing on a real corpus is evidence; the earlier --verify
 # that compared this tool's regex with itself was not, and printed EXHAUSTIVE over a real miss.
+# --silent-failures: THE BLIND SPOT THIS DETECTOR CANNOT SEE FROM LOG TEXT ALONE, measured.
+#
+# Reading declared severity finds every failure our code DECLARES. It is structurally blind to a
+# failure that declares nothing - and that is the case this whole tool exists for, so the size of
+# the blind spot has to be a number, not a caveat. There is an independent witness: a verdict
+# ledger. A row classed FAIL or INVALID is a failure somebody recorded, so its run's log must
+# contain at least one declared error or warning. A failed verdict with a SILENT log is exactly a
+# failure this detector would have missed, and counting them bounds the blind spot from outside.
+#
+#   tools/sweep-gate.sh --silent-failures <verdict-ledger> <log> [...]
+if [ "${SILENT:-}" = 1 ]; then
+    vled="${1:?--silent-failures needs a verdict ledger then the logs}"; shift
+    [ -f "$vled" ] || { echo "sweep-gate: no verdict ledger at $vled" >&2; exit 2; }
+    [ $# -ge 1 ] || { echo "sweep-gate: --silent-failures needs at least one log" >&2; exit 2; }
+    nfail=0; silent=0; covered=0; unmeas=0
+    while IFS= read -r row; do
+        case "$row" in *'|'*) ;; *) continue ;; esac
+        label="${row%%|*}"; text="${row#*|}"
+        case "$text" in
+          PASS*|SUPERSEDED*|RETRACTED*) continue ;;
+        esac
+        nfail=$((nfail+1))
+        # THREE BUCKETS, because two of them were one and the number was wrong. A label with NO log
+        # of its own is NOT MEASURABLE - it is not evidence of a silent failure. The first version
+        # matched a log by filename containing the label; in a real campaign dir the logs are named
+        # agent-etwproxysup.log and bridge-full.log, so nothing ever matched and it reported 14 of
+        # 14 failures "silent", which is not a measurement, it is a broken join.
+        own=""; hit=0
+        for l in "$@"; do
+            [ -f "$l" ] || continue
+            case "$l" in *"$label"*) own="$l"; grep -qaE "$LEVELS" "$l" 2>/dev/null && hit=1; break ;; esac
+        done
+        if [ -z "$own" ]; then
+            unmeas=$((unmeas+1))
+        elif [ "$hit" = 1 ]; then
+            covered=$((covered+1))
+        else
+            silent=$((silent+1)); printf '  SILENT FAILURE  %-20s %s\n' "$label" "$(printf '%s' "$text" | cut -c1-84)"
+        fi
+    done < "$vled"
+    echo "SWEEP-GATE-SILENT graded_failures=$nfail measured=$((covered+silent)) left_a_declared_error=$covered silent=$silent no_log_of_their_own=$unmeas"
+    if [ "$nfail" -eq 0 ]; then echo "  INCONCLUSIVE: the ledger records no failure, so the blind spot was not measured."; exit 2; fi
+    if [ "$((covered+silent))" -eq 0 ]; then
+        echo "  INCONCLUSIVE: none of the $nfail recorded failures has a log named after it, so NOTHING was measured here - this is a limit of joining a verdict label to a file, not a result."
+        exit 2
+    fi
+    [ "$silent" -eq 0 ] && echo "  BOUNDED on what could be measured: all $covered of them left a declared error behind."
+    exit 0
+fi
+
 if [ "${CENSUS:-}" = 1 ]; then
     [ $# -ge 1 ] || { echo "usage: $0 --census <log> [...]" >&2; exit 2; }
     cfile=$(mktemp); dfile=$(mktemp)
