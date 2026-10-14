@@ -78,6 +78,18 @@ CODE = re.compile(r"((?:failed with error|with error|with code|exit(?:ed)? code|
 ESC  = re.compile(r"(\d+)(\s*time\(s\) in a row)")
 for line in sys.stdin:
     l, holes = line.rstrip("\n"), []
+    # LOCALE INDEPENDENCE. win_perror2 renders a Win32 code through FormatMessage, which uses the
+    # SYSTEM locale, so the same error reads "Die Pipe wurde beendet." on a German guest and "The
+    # pipe has been ended." on an English one. Keying a ledger on that sentence makes the
+    # disposition locale-dependent - it would simply miss on the other guest, and the error would
+    # come back unaccounted with its reason orphaned. The CODE is the locale-independent identity
+    # and is kept above, so the rendered sentence is replaced. (The product itself does not MATCH on
+    # localised text - checked - and making win_perror2 emit English regardless of locale is not
+    # possible from this tree: it lives in windows-utils, which this repository does not contain.)
+    l = re.sub(r"((?:error|code|status)[ =:]+(?:0x[0-9A-Fa-f]+|\d+): ).*$", r"\1<OSMSG>", l)
+    # ^ runs BEFORE the code is protected: once CODE.sub has replaced it with a placeholder there is
+    #   no literal hex left for this rule to anchor on, so it silently did nothing and orphaned a
+    #   ledger row. The orphaned-row report is what caught that.
     def mk(v):
         holes.append(v)
         return "\x00" + LET[(len(holes) - 1) % len(LET)] + "\x00"

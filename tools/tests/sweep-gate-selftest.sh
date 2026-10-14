@@ -159,5 +159,26 @@ else
   no "T11 normalisation wrong (escalation=$esc want 2, codes=$cod want 2, handles=$hnd want 1, variant-tag=$vtag want 1)" "$(printf '%s' "$nout" | grep -a UNACCOUNTED | head -4)"
 fi
 
+# T12 - LOCALE INDEPENDENCE. win_perror2 renders a Win32 code through FormatMessage, which uses the
+# SYSTEM locale, so the same failure reads "Die Pipe wurde beendet." on a German guest and "The pipe
+# has been ended." on an English one. A ledger keyed on that sentence misses on the other guest and
+# orphans its disposition. The owner's rule: the harness may carry EN+DE with caveats, the product
+# may not. So the key carries the CODE, which is locale-independent, and <OSMSG> for the sentence.
+printf '%s\n' \
+  "[20261014.120000.001-1-E] QioReadBuffer: ReadFile failed with error 0x6d: Die Pipe wurde beendet." \
+  "[20261014.120001.001-1-E] QioReadBuffer: ReadFile failed with error 0x6d: The pipe has been ended." \
+  "[20261014.120002.001-1-E] QioReadBuffer: ReadFile failed with error 0x5aa: Nicht genug Ressourcen." \
+  > "$T/loc.log"
+printf '# empty\n' > "$T/loc-led.txt"
+lout=$(SWEEP_GATE_LEDGER="$T/loc-led.txt" bash tools/sweep-gate.sh "$T/loc.log" 2>&1)
+same=$(printf '%s' "$lout" | grep -ac 'error 0x6d: <OSMSG>')
+diff2=$(printf '%s' "$lout" | grep -ac 'error 0x5aa: <OSMSG>')
+nonascii=$(printf '%s' "$lout" | grep -aE '^  (UN)?ACCOUNTED' | grep -ac '[^ -~]')
+if [ "$same" = 1 ] && [ "$diff2" = 1 ] && [ "$nonascii" = 0 ]; then
+  ok "T12 the same code in two languages is ONE message, a different code is another, no localised text in any key"
+else
+  no "T12 locale dependence (0x6d groups=$same want 1, 0x5aa=$diff2 want 1, localised keys=$nonascii want 0)" "$(printf '%s' "$lout" | grep -a UNACCOUNTED)"
+fi
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
