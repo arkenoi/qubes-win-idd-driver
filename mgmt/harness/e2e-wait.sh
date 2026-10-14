@@ -540,7 +540,7 @@ w_drain_and_shutdown(){ # $1=vm $2=logfn
     while IFS= read -r l; do $log "  $l"; done < "$sends_out"
     rm -f "$sends_out"
     if [ "$sends_rc" != 0 ]; then
-      $log "  DOM0SENDSUNREAD $vm: the dom0 notification record could not be read before the park (rc=$sends_rc) -"
+      $log "  [WARN] DOM0SENDSUNREAD $vm: the dom0 notification record could not be read before the park (rc=$sends_rc) -"
       $log "    this side now has NO record of what dom0 was told on this boot"
     fi
   fi

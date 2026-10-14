@@ -1287,6 +1287,51 @@ def l22_vm_start_must_assert_sole_guest() -> None:
                 "guests up at once)")
 
 
+# --------------------------------------------------------------------------- L24
+RELEASE_GRADING = {"matrix.sh", "quick-upgrade.sh", "wu-e2e.sh", "e2e-wait.sh", "verdict-lib.sh",
+                   "logvol-lib.sh", "run-lib.sh", "shutdown-lib.sh", "lifecycle-lib.sh",
+                   "template-update-test.sh", "prime-run.sh"}
+
+def l24_failure_report_must_declare_a_level() -> None:
+    """RULE: IN A HARNESS THAT GRADES A RELEASE, A LINE REPORTING A FAILURE MUST DECLARE A SEVERITY.
+
+    tools/sweep-gate.sh can only judge a line whose WRITER declared Error or Warning - that is the
+    whole point of it, after two predecessors tried to recognise an error by its wording and missed
+    a gui-agent crash loop because no word in the line was on their list. A failure reported without
+    a level is therefore invisible to the sweep, and the sweep is what stops a run LOOKING clean
+    while its own log carries an unread error. That is not hypothetical: a 96-of-96 campaign shipped
+    `WARNING log-volume bind failed` on both upgrade cells and every reader, model included, missed
+    it. Measured 2026-10-14: 27% of the failure-reporting sites in these files declared a level.
+
+    Declare it by writing [ERROR] or [WARN] into the message, or a bare WARNING/ERROR/FATAL label.
+    Where the severity depends on a count, decide it at the emitter - only the line that knows $FAIL
+    can tell "summary: 3 passed, 2 failed" from "summary: 5 passed, 0 failed".
+
+    EXEMPT, deliberately: byte-exact machine contracts (the '=== MATRIX:' and '=== done:' markers
+    other tools parse), and prose - a line that explains a condition rather than reporting one.
+    Pending, not gating, while the named list is worked down."""
+    reports = re.compile(r'\b(say|log|_vs_log|_lv_say|echo)\b[^|]*"')
+    failure = re.compile(r"(FAIL|FAILED|REFUS|ERROR|cannot|UNEXPECTED|could not|would not"
+                         r"|no record|missing data)")
+    declared = re.compile(r"\[(ERROR|WARN|WARNING)\]|\b(WARNING|ERROR|FATAL|CRITICAL)\b:?\s"
+                          r"|_mx_sev|_l=|sev=|printf '\[ERROR\]")
+    # a line that EXPLAINS rather than reports, and the two parsed markers
+    prose = re.compile(r"=== (MATRIX|done):|this cannot tell them apart|it cannot occur here"
+                       r"|harmless:|the open question|its contract requires|not calling this"
+                       r"|INJECTED |rows = ")
+    for f in HARNESS:
+        if f.name not in RELEASE_GRADING:
+            continue
+        for n, line in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            if line.lstrip().startswith("#") or not reports.search(line):
+                continue
+            if not failure.search(line) or declared.search(line) or prose.search(line):
+                continue
+            pending_finding("L24-failure-report-without-a-level", f"{f.name}:{n}",
+                    "reports a failure with no declared severity, so tools/sweep-gate.sh cannot see "
+                    "it - write [ERROR] or [WARN] into the message, or mark the line as prose")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ledger", type=Path, default=None, help="verdicts.tsv, enables L7")
@@ -1326,6 +1371,7 @@ def main() -> int:
     l21_second_exit_trap_replaces_the_first()
     l22_vm_start_must_assert_sole_guest()
     l23_no_pipe_into_grep_q_for_a_guest_probe()
+    l24_failure_report_must_declare_a_level()
     if a.ledger:
         l7_orphan_ledger_checks(a.ledger)
 

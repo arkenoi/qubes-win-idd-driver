@@ -79,7 +79,7 @@ dom0_avail(){ local i a b
     [ "$a" = "$b" ] && { printf '%s' "$a"; return 0; }
     sleep 2
   done
-  log "WARNING: dom0's updates-available never read the same twice - reporting the last value '$a'"
+  log "[WARN] dom0's updates-available never read the same twice - reporting the last value '$a'"
   printf '%s' "$a"; }
 
 guest_file(){  # $1 = windows path -> stdout, without the cmd banner
@@ -133,7 +133,7 @@ if ! ss -ltn 2>/dev/null | grep -q ':8082'; then
   tinyproxy -c /home/user/updates-tinyproxy.conf >/dev/null 2>&1
   sleep 2
 fi
-ss -ltn 2>/dev/null | grep -q ':8082' || { echo "INSTRUMENT: no updates proxy on 127.0.0.1:8082 and it would not start"; exit 2; }
+ss -ltn 2>/dev/null | grep -q ':8082' || { echo "[ERROR] INSTRUMENT: no updates proxy on 127.0.0.1:8082 and it would not start"; exit 2; }
 # RETRY: the FIRST request through this proxy after it has been idle regularly hangs the whole
 # timeout and returns nothing, while the next one answers instantly. Measured 2026-09-21: probe 1
 # empty after 40 s, probes 2 and 3 http=200 in under a second - and the single-shot version of this
@@ -260,7 +260,7 @@ for r in $(seq 1 "$ROUNDS"); do
   refused=''
   if grep -q 'update refused by the qube:' "$RD/replay.out"; then
     refused=$(grep -m1 'update refused by the qube:' "$RD/replay.out" | sed 's/^ *err: //')
-    log "round $r: REFUSED by the qube (the product's own report): $(printf '%s' "$refused" | cut -c1-300)"
+    log "[WARN] round $r: REFUSED by the qube (the product's own report): $(printf '%s' "$refused" | cut -c1-300)"
     fails=1
   fi
   # ...and a pass can also die with NO report: the replay ends (its own step bound, a handler that crashed) while the pass's last
@@ -300,11 +300,11 @@ for r in $(seq 1 "$ROUNDS"); do
   jargs=(--agent-log "$RD/agent.log" --json "$RD/verdict.json")
   case "$after" in ''|*[!0-9]*) : ;; *) jargs+=(--dom0-reported "$after") ;; esac
   if [ -n "$refused" ]; then
-    log "round $r: JUDGE REFUSED (no pass ran - the refusal above is this round's outcome)"
+    log "[WARN] round $r: JUDGE REFUSED (no pass ran - the refusal above is this round's outcome)"
   elif python3 tools/wu-pass-judge.py "${jargs[@]}" > "$RD/judge.out" 2>&1; then
     log "round $r: JUDGE PASS"
   else
-    log "round $r: JUDGE FAIL"; sed 's/^/    /' "$RD/judge.out" | head -12 | tee -a "$OUT/run.log"; fails=1
+    log "[ERROR] round $r: JUDGE FAIL"; sed 's/^/    /' "$RD/judge.out" | head -12 | tee -a "$OUT/run.log"; fails=1
   fi
 
   # OSCILLATION CHECK. An install pass settling dom0 is not enough: the very next SCAN must not
@@ -329,10 +329,10 @@ for r in $(seq 1 "$ROUNDS"); do
     done
     dom0_after_scan=$(dom0_avail)
     if [ "$scan_seen" = 0 ]; then
-      log "round $r: FAIL - the scan never ran, so the oscillation check did not happen (missing data fails)"
+      log "[ERROR] round $r: FAIL - the scan never ran, so the oscillation check did not happen (missing data fails)"
       fails=1
     elif [ "${dom0_before_scan:-}" != "${dom0_after_scan:-}" ]; then
-      log "round $r: FAIL OSCILLATION - dom0 was '${dom0_before_scan:-<empty>}' after the pass and '${dom0_after_scan:-<empty>}' after the scan"
+      log "[ERROR] round $r: FAIL OSCILLATION - dom0 was '${dom0_before_scan:-<empty>}' after the pass and '${dom0_after_scan:-<empty>}' after the scan"
       fails=1
     else
       log "round $r: oscillation OK - dom0 stayed '${dom0_after_scan:-<empty>}' across the pass and the scan"
@@ -367,7 +367,7 @@ PY
     _sd=$(( $(date +%s) + 1800 ))
     while [ "$(date +%s)" -lt "$_sd" ] && [ "$(qstate)" != Halted ]; do sleep 20; done
     if [ "$(qstate)" != Halted ]; then
-      if stalled; then log "round $r: STALLED during shutdown"; else log "round $r: FAIL - the guest did not power off, so the requested reboot did NOT happen"; fi
+      if stalled; then log "[ERROR] round $r: STALLED during shutdown"; else log "[ERROR] round $r: FAIL - the guest did not power off, so the requested reboot did NOT happen"; fi
       fails=1; break
     fi
     log "round $r: guest is down; bringing it back to complete the requested cycle"
@@ -375,19 +375,19 @@ PY
     if wait_qrexec 900; then
       note_performed
     else
-      log "round $r: FAIL - the guest did not come back, so the requested reboot is INCOMPLETE"
+      log "[ERROR] round $r: FAIL - the guest did not come back, so the requested reboot is INCOMPLETE"
       fails=1; break
     fi
   elif [ "$reboot_needed" = unknown ]; then
     # Unreadable status is missing data, and missing data fails - it must never be treated as
     # "no reboot needed", because that silently turns a requested cycle into none.
-    log "round $r: FAIL - update-status.json unreadable, so reboot_needed is UNKNOWN (missing data fails)"
+    log "[ERROR] round $r: FAIL - update-status.json unreadable, so reboot_needed is UNKNOWN (missing data fails)"
     fails=1
   fi
 done
 
 if [ "$reboots_performed" != "$reboots_requested" ]; then
-  log "FAIL REBOOT ACCOUNTING: $reboots_performed performed vs $reboots_requested requested - a power cycle happened that nobody asked for (or a requested one was skipped)"
+  log "[ERROR] FAIL REBOOT ACCOUNTING: $reboots_performed performed vs $reboots_requested requested - a power cycle happened that nobody asked for (or a requested one was skipped)"
   fails=1
 else
   log "reboot accounting OK: $reboots_performed performed = $reboots_requested requested"
@@ -452,7 +452,7 @@ PYEOF
     if [ "$grc" = 0 ]; then
       log "exclusion audit REPLAYED from $WU_EXCLUSION_VERDICT: every excluded item positively judged"
     else
-      log "FAIL EXCLUSION AUDIT (rc=$grc): an excluded item is a concealed failure, unproven, or uncovered"
+      log "[ERROR] FAIL EXCLUSION AUDIT (rc=$grc): an excluded item is a concealed failure, unproven, or uncovered"
       fails=1
     fi
   else

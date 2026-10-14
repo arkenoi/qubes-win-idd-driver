@@ -98,7 +98,7 @@ verdict_aggregate(){ # $1 = ledger file, $2 = optional extended regex of LABELs 
   VS_FAIL_LABELS=""; VS_INVALID_LABELS=""; VS_DATUM_LABELS=""; VS_ATTENDED_LABELS=""
   VS_STATUS=UNUSABLE; VS_RC=3
   if [ ! -s "$f" ]; then
-    _vs_log "VERDICTS: UNUSABLE - no ledger at '$f' (nothing was graded; V3: that is missing data, not a pass)"
+    _vs_log "[ERROR] VERDICTS: UNUSABLE - no ledger at '$f' (nothing was graded; V3: that is missing data, not a pass)"
     return 3
   fi
   while IFS= read -r line || [ -n "$line" ]; do
@@ -120,7 +120,7 @@ verdict_aggregate(){ # $1 = ledger file, $2 = optional extended regex of LABELs 
   VS_FAIL_LABELS="${VS_FAIL_LABELS# }"; VS_INVALID_LABELS="${VS_INVALID_LABELS# }"
   VS_DATUM_LABELS="${VS_DATUM_LABELS# }"; VS_ATTENDED_LABELS="${VS_ATTENDED_LABELS# }"
   if [ "$VS_TOTAL" -eq 0 ]; then
-    _vs_log "VERDICTS: UNUSABLE - '$f' has no LABEL|TEXT rows"
+    _vs_log "[ERROR] VERDICTS: UNUSABLE - '$f' has no LABEL|TEXT rows"
     return 3
   fi
   if   [ "$VS_FAIL" -gt 0 ];    then VS_STATUS=BROKEN;              VS_RC=2
@@ -130,11 +130,16 @@ verdict_aggregate(){ # $1 = ledger file, $2 = optional extended regex of LABELs 
   _vs_log "VERDICTS: $VS_TOTAL rows = $VS_PASS PASS + $VS_DATUM PASS-DATUM + $VS_FAIL FAIL + $VS_INVALID ungraded (INSTRUMENT/INVALID) + $VS_ATTENDED attended-pending + $VS_OTHER untyped"
   # Two channels, printed separately on purpose - a FAIL is a defect report, an ungraded row is a
   # re-run request; one number for both is the disease this file exists to cure.
-  [ "$VS_FAIL" -gt 0 ]     && _vs_log "VERDICTS: PRODUCT GATE: $VS_FAIL FAIL -> $VS_FAIL_LABELS"
-  [ "$VS_INVALID" -gt 0 ]  && _vs_log "VERDICTS: UNGRADED (re-run to close; NOT a product verdict): $VS_INVALID -> $VS_INVALID_LABELS"
+  [ "$VS_FAIL" -gt 0 ]     && _vs_log "[ERROR] VERDICTS: PRODUCT GATE: $VS_FAIL FAIL -> $VS_FAIL_LABELS"
+  [ "$VS_INVALID" -gt 0 ]  && _vs_log "[WARN] VERDICTS: UNGRADED (re-run to close; NOT a product verdict): $VS_INVALID -> $VS_INVALID_LABELS"
   [ "$VS_DATUM" -gt 0 ]    && _vs_log "VERDICTS: PASS-DATUM (drill un-stageable because the product is reliable - measured, passes): $VS_DATUM -> $VS_DATUM_LABELS"
-  [ "$VS_ATTENDED" -gt 0 ] && _vs_log "VERDICTS: ATTENDED-PENDING (captured, operator must read it): $VS_ATTENDED -> $VS_ATTENDED_LABELS"
-  _vs_log "VERDICTS: STATUS=$VS_STATUS (0 CLEAN / 1 EXECUTED-WITH-GAPS / 2 BROKEN -> rc=$VS_RC)"
+  [ "$VS_ATTENDED" -gt 0 ] && _vs_log "[WARN] VERDICTS: ATTENDED-PENDING (captured, operator must read it): $VS_ATTENDED -> $VS_ATTENDED_LABELS"
+  # THE SEVERITY IS ALREADY COMPUTED HERE. This library classifies every verdict row; the sweep
+  # gate could not see a single one of them because the class was never DECLARED on the line. One
+  # emitter covers every harness that routes through verdict_aggregate, which is every harness that
+  # grades a release - the alternative was hand-labelling 365 scattered echo lines, which would have
+  # relabelled explanatory prose as errors and rebuilt the pattern-guessing this gate replaced.
+  _vs_log "$(case "$VS_STATUS" in BROKEN) printf '[ERROR] ';; EXECUTED-WITH-GAPS) printf '[WARN] ';; esac)VERDICTS: STATUS=$VS_STATUS (0 CLEAN / 1 EXECUTED-WITH-GAPS / 2 BROKEN -> rc=$VS_RC)"
   return "$VS_RC"
 }
 

@@ -83,14 +83,14 @@ AGENT_PATH='C:\Program Files\Qubes Tools\bin\gui-agent.exe'
 # perfectly good goldens for no safety gain - measured 2026-09-20, when it refused
 # win11de-qwt (the sealed German 25H2 golden, which verifies intact) and so left the one
 # environment a registered field report must be re-tested on with no upgrade path at all.
-case "$OS" in win[0-9]*) ;; *) echo "FATAL: os must look like win<version> (got '$OS'); the golden \"$OS-qwt\" must exist and pass its seal check"; exit 3 ;; esac
+case "$OS" in win[0-9]*) ;; *) echo "[ERROR] FATAL: os must look like win<version> (got '$OS'); the golden \"$OS-qwt\" must exist and pass its seal check"; exit 3 ;; esac
 
 OUT="${QU_OUT:-$HOME/qwt-quick-upgrade}/$SUBJECT-$(date -u +%Y%m%d-%H%M%S)"; mkdir -p "$OUT"
 R="$OUT/quick-upgrade.log"; : > "$R"
 log(){ echo "$(date -u +%H:%M:%S) quick-upgrade[$SUBJECT]: $*" | tee -a "$R"; }
 PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); log "PASS  $*"; }
-no(){ FAIL=$((FAIL+1)); log "FAIL  $*"; }
+no(){ FAIL=$((FAIL+1)); log "[ERROR] FAIL  $*"; }
 
 # --- lifecycle: per-guest lock + orphan-free teardown (run-lib.sh, same as prime-run) -------
 source mgmt/harness/vmlock.sh
@@ -139,7 +139,7 @@ release_loop(){
     return 0
   fi
   udisksctl loop-delete -b "/dev/$LOOP" >/dev/null 2>&1 && log "  release loop /dev/$LOOP deleted" \
-    || log "  WARNING: could not delete /dev/$LOOP - free it by hand: udisksctl loop-delete -b /dev/$LOOP"
+    || log "  [WARN] could not delete /dev/$LOOP - free it by hand: udisksctl loop-delete -b /dev/$LOOP"
 }
 finish(){ # $1=rc $2=message  - every exit goes through here and says which exit it took
   local rc=$1; shift
@@ -148,12 +148,14 @@ finish(){ # $1=rc $2=message  - every exit goes through here and says which exit
   if [ -n "${LOGVOL_IMG:-}" ]; then
     logvol_pull "$LOGVOL_IMG" "$OUT/logvol" >/dev/null 2>&1 \
       && log "log volume pulled -> $OUT/logvol" \
-      || log "WARNING: log volume could not be pulled from $LOGVOL_IMG"
+      || log "[WARN] log volume could not be pulled from $LOGVOL_IMG"
   fi
   release_loop
-  log "$*"
+  # EVERY exit of this harness goes through here, so this one line decides whether a sweep can see
+  # that the cell ended badly. rc is the fact; the level is what makes it readable by an instrument.
+  log "$([ "$rc" = 0 ] || printf '[ERROR] ')$*"
   # HARDWIRED ERROR SWEEP over this run's own log. Every error-shaped line is either declared in
-  # mgmt/harness/harness-log-declared.txt with a reason, or this says so and the run is not clean.
+  # mgmt/harness/error-ledger.txt with a reason, or this says so and the run is not clean.
   # It does not change $rc - it cannot silently rescue a pass - but a run whose log carries an
   # unexplained error can no longer LOOK clean (owner, 2026-10-14: "HARDWIRE ERROR LOG SWEEP").
   if [ -s "$R" ] && [ -x tools/sweep-gate.sh ]; then
@@ -162,13 +164,16 @@ finish(){ # $1=rc $2=message  - every exit goes through here and says which exit
     else
       log "SWEEP-GATE FINDINGS in this run's own log - see $OUT/sweep-gate.out"
       grep -a '^  ' "$OUT/sweep-gate.out" | tail -8 | while IFS= read -r l; do log "  $l"; done
-      # REPORTS, DOES NOT GATE - yet. Jev on this instrument: design_sound 0.78 but
-      # safe_to_gate_a_release 0.30, with "a baselined shape hides genuine future instances of it"
-      # (0.85) as the dominant flaw. A young instrument that can fail a release is worse than one
-      # that only speaks, so it speaks loudly and the rc is left alone until the shape COUNTS land.
+      # REPORTS, DOES NOT GATE - yet. The instrument is measured against a committed corpus of real
+      # filed defects (tools/sweep-gate.sh --verify); it is wired to speak here, and the decision to
+      # let it raise rc is a separate one, taken when its coverage and its judge's score support it.
     fi
   fi
-  log "summary: $PASS passed, $FAIL failed; evidence in $OUT"
+  # A cell that failed says so with a LEVEL, because "summary: 3 passed, 2 failed" and
+  # "summary: 5 passed, 0 failed" are the same shape and opposite facts - only this line, which
+  # knows $FAIL, can tell a sweep which one it is.
+  sev=""; [ "${FAIL:-0}" -gt 0 ] && sev="[ERROR] "
+  log "${sev}summary: $PASS passed, $FAIL failed; evidence in $OUT"
   exit "$rc"
 }
 
@@ -215,7 +220,7 @@ mnt=$(udisksctl mount --block-device "/dev/$LOOP" 2>/dev/null | sed -n 's/^Mount
 if [ -z "${RELEASE_COMMIT:-}" ]; then
   RELEASE_COMMIT=$(python3 -c "import json;print((json.load(open('$mnt/MANIFEST.json')).get('source') or {}).get('driver_repo_commit') or '')" 2>/dev/null)
   [ -n "$RELEASE_COMMIT" ] && log "RELEASE_COMMIT from the disc MANIFEST: ${RELEASE_COMMIT:0:12} (self-consistency; pass RELEASE_COMMIT=<sha> to pin externally)" \
-                           || log "WARNING: RELEASE_COMMIT unset and the MANIFEST names no commit - gating against HEAD"
+                           || log "[WARN] RELEASE_COMMIT unset and the MANIFEST names no commit - gating against HEAD"
 fi
 RELEASE_REF="${RELEASE_COMMIT:-HEAD}"
 RELEASE_SHA=$(git rev-parse "$RELEASE_REF" 2>/dev/null)
@@ -239,7 +244,7 @@ MSHA=$(python3 -c "import json;print((json.load(open('$mnt/MANIFEST.json')).get(
 [ -n "$ASHA" ] && [ "$ASHA" = "$MSHA" ] || { udisksctl unmount --block-device "/dev/$LOOP" >/dev/null 2>&1; finish 3 "REFUSED: reference/gui-agent.exe sha ($ASHA) disagrees with MANIFEST reference_binaries ($MSHA)"; }
 cp "$mnt/MANIFEST.json" "$OUT/MANIFEST.json" 2>/dev/null
 udisksctl unmount --block-device "/dev/$LOOP" >/dev/null 2>&1
-findmnt -no TARGET "/dev/$LOOP" >/dev/null 2>&1 && log "  WARNING: /dev/$LOOP still mounted locally after unmount - the attach is read-only, but investigate"
+findmnt -no TARGET "/dev/$LOOP" >/dev/null 2>&1 && log "  [WARN] /dev/$LOOP still mounted locally after unmount - the attach is read-only, but investigate"
 log "package: version $PV (core $PVCORE), agent ${ASHA:0:12}, commit ${RELEASE_SHA:0:12}"
 
 # =============================================================================================
@@ -262,7 +267,7 @@ if [ -n "$GOLDCORE" ]; then
     || finish 3 "REFUSED: package $PVCORE is not strictly newer than golden $GOLDEN's sealed $GOLDCORE - install.cmd would take uninstall-first (PV-disk gated, refused on a PV-booted guest), not a MajorUpgrade. Use a newer package, or re-seal an older golden."
   log "ordering: package $PVCORE > golden $GOLDCORE - in-place MajorUpgrade expected"
 else
-  log "WARNING: mgmt/fixtures/$GOLDEN.json records no sealed_version - ordering unchecked; the entry-version probe below is the only guard"
+  log "[WARN] mgmt/fixtures/$GOLDEN.json records no sealed_version - ordering unchecked; the entry-version probe below is the only guard"
 fi
 
 # H3.6 - one Windows guest at a time. The SUBJECT is excluded: it is about to be killed and
@@ -347,7 +352,7 @@ LOGVOL_IMG=$(logvol_image "$SUBJECT")
 if logvol_create "$LOGVOL_IMG" "$SUBJECT" >/dev/null 2>&1 && logvol_attach "$SUBJECT" "$LOGVOL_IMG" "$OUT/manifest.json" >/dev/null 2>&1; then
   log "log volume attached: $LOGVOL_IMG (read it with logvol_pull even if the guest wedges)"
 else
-  log "WARNING: log volume could not be attached - a wedge here will lose the QWT logs"
+  log "[WARN] log volume could not be attached - a wedge here will lose the QWT logs"
   LOGVOL_IMG=""
 fi
 log "booting $SUBJECT with the release ISO as CD (qvm-start --cdrom=$HOLDER:$LOOP)"
@@ -380,7 +385,7 @@ if [ -n "$LOGVOL_IMG" ]; then
   if logvol_bind_guest "$SUBJECT" "$SUBJECT" >>"$OUT/logvol-bind.out" 2>&1; then
     log "QWT logs bound to the log volume"
   else
-    log "WARNING: log-volume bind failed (see $OUT/logvol-bind.out) - logs stay on C: and a wedge loses them"
+    log "[WARN] log-volume bind failed (see $OUT/logvol-bind.out) - logs stay on C: and a wedge loses them"
   fi
 fi
 
@@ -409,7 +414,7 @@ fi
 if QTEST_VM="$SUBJECT" "$HERE/tools/qtest" synctime >/dev/null 2>&1; then
   log "guest clock synced to this qube before install (see findings/issues.md: 0x800B0101 skew)"
 else
-  log "WARNING: could not sync the guest clock - a driver catalog may be refused as not-yet-valid" 
+  log "[WARN] could not sync the guest clock - a driver catalog may be refused as not-yet-valid" 
 fi
 
 # ENTRY PRECONDITIONS, asserted on the SAME signals the verify uses (experimenter 5b), so that
@@ -532,19 +537,19 @@ if [ "${STALL_REPRO:-0}" = 1 ]; then
     log "stall-repro gate: PASS MAY RUN - $(cat "$OUT/REPRO-FIDELITY.txt" 2>/dev/null)"
   else
     grc=$?
-    log "stall-repro gate REFUSED (rc=$grc): $(tail -2 "$OUT/stall-gate.log" | tr '\n' ' ')"
+    log "[WARN] stall-repro gate REFUSED (rc=$grc): $(tail -2 "$OUT/stall-gate.log" | tr '\n' ' ')"
     finish 3 "REFUSED: this pass is not the reference situation - correct it instead of spending the run (see $OUT/stall-gate.log)"
   fi
 fi
 
 ./tools/guest-config-snapshot.sh "$SUBJECT" "$OUT" entry >>"$OUT/snapshot.log" 2>&1 \
   && log "entry guest-config snapshot: $OUT/guest-config-entry.txt" \
-  || log "WARNING: entry guest-config snapshot failed - see $OUT/snapshot.log (the run continues)"
+  || log "[WARN] entry guest-config snapshot failed - see $OUT/snapshot.log (the run continues)"
 
 if VM="$SUBJECT" OUT="$OUT/modbases" ./mgmt/harness/arm-module-bases.sh >>"$OUT/armlog.txt" 2>&1; then
   log "module-base recorder armed BEFORE the install (a stall's RIP will resolve to driver+offset)"
 else
-  log "WARNING: module-base recorder NOT armed - a stall here would leave a raw, unresolvable RIP"
+  log "[WARN] module-base recorder NOT armed - a stall here would leave a raw, unresolvable RIP"
 fi
 # THIS LINE USED TO LIE. It printed "install.cmd launched" unconditionally, so a run where the
 # guest stopped answering DURING the launch call read as a run where the installer was working -
@@ -772,9 +777,9 @@ while :; do
       fi
     fi
     if [ -n "$lastknown" ]; then
-      log "  t+${el}s no qrexec for ${unreach}s; from the log VOLUME (host-side, guest untouched): ${lastknown} | cpu=${cpu} quiet=$quiet"
+      log "  [WARN] t+${el}s no qrexec for ${unreach}s; from the log VOLUME (host-side, guest untouched): ${lastknown} | cpu=${cpu} quiet=$quiet"
     else
-      log "  t+${el}s no qrexec for ${unreach}s - and the log volume could not be read either (no volume attached, or mtools found nothing): THAT is the gap, not the silence | cpu=${cpu} quiet=$quiet"
+      log "  [ERROR] t+${el}s no qrexec for ${unreach}s - and the log volume could not be read either (no volume attached, or mtools found nothing): THAT is the gap, not the silence | cpu=${cpu} quiet=$quiet"
     fi
     # The stall clock for an unreachable guest runs from the last qrexec ANSWER, not from the
     # last log-line change, so it cannot fire on the MSI's ~60 s silent window (STALL_SECS is
@@ -811,7 +816,7 @@ while :; do
         timeout 300 qrexec-client-vm dom0 "local.WinWedgeForensics+$SUBJECT" </dev/null \
           > "$OUT/forensics.tar" 2>"$OUT/forensics.err" \
           && log "    forensics -> $OUT/forensics.tar" \
-          || log "    WARNING: dom0 forensics capture failed - see $OUT/forensics.err"
+          || log "    [WARN] dom0 forensics capture failed - see $OUT/forensics.err"
         if bash mgmt/harness/fetch-wedge-core.sh "$SUBJECT" "$OUT/guest.core" >>"$OUT/core.log" 2>&1; then
           log "    memory image -> $OUT/guest.core"
           log "    name the code: tools/core-module-list.py $OUT/guest.core --contains 0x<rip>"
@@ -870,7 +875,7 @@ if [ "$phase" = RESULT ]; then
     rm -f "$OUT/msi-b64.tmp"
     log "no MSI verbose log on the guest (C:\\qwt-install.log absent) - the guest ANSWERED, so this is not a transport failure"
   else
-    log "WARNING: could not fetch the MSI verbose log - kept $OUT/msi-b64.tmp for inspection"
+    log "[WARN] could not fetch the MSI verbose log - kept $OUT/msi-b64.tmp for inspection"
   fi
 fi
 
@@ -887,7 +892,7 @@ dom0_sends_park(){ # $1=vm $2=label - the notification record, pulled while the 
   rc=$?
   while IFS= read -r l; do log "  $l"; done < "$out"
   rm -f "$out"
-  [ "$rc" = 0 ] || log "  DOM0SENDSUNREAD $1: no record of what dom0 was told on this boot (rc=$rc)"
+  [ "$rc" = 0 ] || log "  [WARN] DOM0SENDSUNREAD $1: no record of what dom0 was told on this boot (rc=$rc)"
   return 0
 }
 

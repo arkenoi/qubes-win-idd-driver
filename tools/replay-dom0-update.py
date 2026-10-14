@@ -56,7 +56,11 @@ def vmshell(command, payload=b"", timeout=120):
 
 def show(step, rc, out, err=b"", expect=None):
     verdict = "" if expect is None else ("  <-- OK" if rc in expect else "  <-- UNEXPECTED")
-    print(f"[{step}] rc={rc}{verdict}")
+    # DECLARE THE SEVERITY. dom0's own sequence failing a step is the failure this replay exists to
+    # catch, and for 2026-10-14 it was printed as a bare `[cat log] rc=1  <-- UNEXPECTED` that no
+    # sweep could judge, because the line named no level. rc is the fact; the level is the claim.
+    bad = (rc != 0) if expect is None else (rc not in expect)
+    print(f"{'[ERROR] ' if bad else ''}[{step}] rc={rc}{verdict}")
     for label, blob in (("out", out), ("err", err)):
         text = blob.decode("utf-8", "replace").strip()
         if text:

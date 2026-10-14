@@ -203,7 +203,7 @@ function Save {
             Start-Sleep -Milliseconds 150
         }
     }
-    try { Log ("WARNING: could not update the status file after 10 attempts (" + $err.Exception.Message + ") - continuing") } catch {}
+    try { Log ("[WARN] could not update the status file after 10 attempts (" + $err.Exception.Message + ") - continuing") } catch {}
 }
 # ---- WU-SAVE-ATOMIC-END
 
@@ -1937,7 +1937,7 @@ function Install-ViaAgentCache($u){
       }
       if(-not $settleKey){ break }   # no artefact key to watch: the read above decides
       if(-not $watch.armed){   # GUARD:settleunarmed - the instrument is missing: loud, and the read above decides (never a poll in its place)
-        Log ("  ERROR: $label : the $probe effect wait could not be armed on HKLM\$($settleKey.rel) ($($watch.why)) - the row is decided on the read above")
+        Log ("  [ERROR] $label : the $probe effect wait could not be armed on HKLM\$($settleKey.rel) ($($watch.why)) - the row is decided on the read above")
         break
       }
       $ms = [int][Math]::Floor(($settleUntil - (Get-Date)).TotalMilliseconds)
@@ -2072,11 +2072,11 @@ function Install-Msus($files){
     } elseif ($reg.known) {
       $cumRow.registered = $false
       $cumRow.why = "DISM accepted $cumFile (rc=3010; the cumulative) but Windows did NOT register it: $($reg.why). It is NOT staged and will not complete at a restart; this pass requests the restart that clears the state which blocked it, and the pass after the restart retries this package"
-      Log "  ERROR: $($cumRow.why)"
+      Log "  [ERROR] $($cumRow.why)"
     } else {
       $cumRow.registered = 'unknown'   # GUARD:unreadablefails - missing data fails: not reported as staged
       $cumRow.why = "DISM accepted $cumFile (rc=3010; the cumulative) but whether Windows registered it is UNKNOWN: $($reg.why). NOT reported as staged; this pass requests a restart, which settles it either way, and the pass after the restart retries this package if Windows did not take it"
-      Log "  ERROR: $($cumRow.why)"
+      Log "  [ERROR] $($cumRow.why)"
     }
   }
   return $rows
@@ -2138,7 +2138,7 @@ public static class CbsRegNotify {
       } catch {
         # A working registry notification is the instrument here; losing it is an anomaly, not a
         # mode. Say so, then keep the bounded poll so the settle verdict is still reached.
-        Log "  WARNING: RebootPending registry notification unavailable ($($_.Exception.Message)) - polling every 5 s instead"
+        Log "  [WARN] RebootPending registry notification unavailable ($($_.Exception.Message)) - polling every 5 s instead"
         while (-not $seen -and (Get-Date) -lt $deadline) {
           if (Test-Path $rp) { $seen = $true; break }
           Start-Sleep -Seconds 5
@@ -2149,7 +2149,7 @@ public static class CbsRegNotify {
     Log ("  settle: CBS RebootPending={0} after staging, servicing processes still up={1}" -f $seen, $ti)
     $script:St.reboot_pending_confirmed = $seen
     if (-not $seen) {
-      Log '  WARNING: staged but CBS never reported RebootPending - a reboot now would lose it'
+      Log '  [WARN] staged but CBS never reported RebootPending - a reboot now would lose it'
     }
     # Let TiWorker finish its post-DISM work; rebooting mid-registration is what loses a package.
     # Wait ON the process, not for it (audit 2026-09-08): the 10 s Get-Process poll re-listed every
@@ -2164,7 +2164,7 @@ public static class CbsRegNotify {
       try { [void]$tiw[0].WaitForExit($ms) }
       catch {
         # Cannot open the process for SYNCHRONIZE - an anomaly on the SYSTEM task this runs as.
-        Log "  WARNING: WaitForExit on TiWorker failed ($($_.Exception.Message)) - polling every 10 s instead"
+        Log "  [WARN] WaitForExit on TiWorker failed ($($_.Exception.Message)) - polling every 10 s instead"
         Start-Sleep -Seconds 10
       }
     }
@@ -2235,7 +2235,7 @@ function Install-MsuPlan($plan){
         Log "$($u.kb): DEFERRED - $why"
         continue
       }
-      if($null -eq $rp){ Log "  WARNING: $($u.kb): CBS RebootPending could not be read - the cumulative proceeds (an unmeasured guard is never assumed); the registration check after the DISM call is the backstop" }   # GUARD:rpunreadable
+      if($null -eq $rp){ Log "  [WARN] $($u.kb): CBS RebootPending could not be read - the cumulative proceeds (an unmeasured guard is never assumed); the registration check after the DISM call is the backstop" }   # GUARD:rpunreadable
       else { Log "  $($u.kb): CBS RebootPending=false - the cumulative goes first" }
     }
     $script:St.phase='install'; Save
@@ -3110,7 +3110,7 @@ try {
   $script:ErrMsg = "$($_.Exception.Message)"
   $script:St.phase='diagnosing'; $script:St.error=$script:ErrMsg; Save
   try {   # ...finally below: the terminal phase is published exactly once, whatever the diagnosis (or its logging) does
-  Log "ERROR: $($script:St.error)"
+  Log "[ERROR] $($script:St.error)"
   # WHERE it threw, not just what it said. Measured 2026-09-21: an install pass died with
   # "Dieser Vorgang wird fuer einen relativen URI nicht unterstuetzt" and the log named no line,
   # no function and no call path - so locating a one-line defect needed a second guest run and a

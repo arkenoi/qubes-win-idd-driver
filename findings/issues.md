@@ -7,7 +7,50 @@
 - LOGVOLBINDUPGRADE [log recovery, upgrade cells; P2, OPEN] UNVERIFIED [raised 2026-10-14 - found by the new sweep gate, not by a human] **THE LOG VOLUME IS ATTACHED BUT NOT BOUND ON THE UPGRADE CELLS, SO THOSE CELLS KEEP WRITING TO C: AND A WEDGE THERE STILL LOSES THE LOGS.** Both upgrade cells of the 2026-10-14 campaign logged `WARNING log-volume bind failed - logs stay on C: and a wedge loses them`, and the bind log says `no LOGVOL-BIND line came back from <vm> (missing data fails): C:\Windows\system32>` - the pushrun returned a bare prompt and nothing else. The REINSTALL cells bound fine in the same campaign (`LOGVOL-BIND ok mode=registry ... copied=21 safeflush=1`), so it is specific to the upgrade path, where the subject is a clone of the N-1 fixture. NOT diagnosed: a prompt with no output is the shape of a `pushrun` whose script never produced a line, and the Windows file receiver REFUSES to overwrite a name already in QubesIncoming (rc=17), which a fixture clone may well carry from the prime-run that built it. It does not block a release - the volume is a diagnostic - but it defeats the wiring on exactly the cells where an upgrade can wedge.
   THIS IS THE FIRST THING THE SWEEP GATE FOUND, AND IT HAD BEEN SITTING IN A PRODUCT-CLEAN CAMPAIGN (96 of 96) THAT EVERYONE INCLUDING ME READ AS GREEN.
 
-  **`tools/sweep-gate.sh` now does the enumerating.** REBUILT ONCE, after Jev scored the first design `design_sound` **0.27** and `survives_contact` **0.32**: that version demanded a hand-written regex plus reason for every error-shaped line, and on the product-clean campaign it flagged 19 lines of which ~14 were explanatory prose and summary text ("it cannot occur here", "could not detach the ISO (harmless: ...)", "product-FAIL=0"). Jev's named flaw - "matching line text catches explanatory prose and summaries, so the signal is swamped" - is the "baselined away" death `tools/lint-baseline.txt` already warns about. It now works the way `log-sweep.sh` does: each error-shaped line is NORMALISED to a shape (timestamps, paths, vm names, cell labels, hex and digits to placeholders, so "no qrexec for 38s" and "for 135s" are one shape) and compared against a reviewed baseline, reporting only what is NEW. 19 lines collapse to 5 shapes; 4 were seeded as benign and 1 was deliberately left out because it is the real defect above. Re-run, the gate reports exactly that one shape and nothing else. Jev on the redesign: `design_sound` **0.78**, `survives_contact` 0.57, `safe_to_gate_a_release` **0.30** with `standing-silencer` 0.85 ("a baselined shape hides genuine future instances") as the dominant flaw - so it REPORTS in both wired harnesses and does not raise rc or turn a measured product result into INSTRUMENT until per-shape COUNTS close that hole. Wired into `quick-upgrade.sh`'s single exit path, where it cannot silently rescue a pass (it only raises rc, never lowers it) but a run whose own log carries an unexplained error can no longer LOOK clean. Run over the two logs I had been reading by eye, it listed all five lines immediately.
+  **`tools/sweep-gate.sh` NOW READS THE SEVERITY THE WRITER DECLARED.** REBUILT TWICE. The first
+  version listed error-ish words and missed the gui-agent crash loop ("died within 10000 ms ... the
+  guest has NO GUI ... grant-table exhaustion 0x5aa") because no word in that line was on the list,
+  while burying ten real findings under a driver inventory its hex pattern matched; Jev 0.07. The
+  second normalised every error-shaped line to a SHAPE against a reviewed baseline; Jev design_sound
+  0.78 but safe_to_gate_a_release 0.30, dominant flaw "a baselined shape hides genuine future
+  instances" 0.85, and the owner rejected it outright: *"NO FUCKING SHAPES. ALL error messages should
+  be handled."*
+  THE THIRD DESIGN GUESSES NOTHING. Our code already declares severity at the write site - 102 C
+  `LogError/LogWarning`, 201 bare `WARNING`/`ERROR` labels in bash, 12 PowerShell `Write-Error`, 11
+  bracketed - so the gate extracts the lines whose WRITER said Error or Warning, reduces each to its
+  message, and requires an accounted entry. **A ledger entry no longer hides anything**: every
+  declared error is printed on every run under ACCOUNTED or UNACCOUNTED, the ledger decides only
+  whether a message BLOCKS, and a row without a written reason does not account for anything. That
+  moved Jev `ledger_can_hide_a_recurring_real_error` from **0.96 to 0.17**.
+  THE REAL FIX WAS AT THE EMITTERS, NOT IN THE READER. Measured by ablation against the corpus:
+  the reader change alone takes recall 14% -> 24%; the emitter changes alone take it to **90%**;
+  together 100%. A harness that reports a failure without declaring a severity cannot be judged by
+  any reader, which is why `WARNING log-volume bind failed` was invisible and `summary: 3 passed, 2
+  failed` is indistinguishable from `summary: 5 passed, 0 failed` unless the line that knows $FAIL
+  says so. In the 11 files that grade a release, **26 of 97 failure-reporting sites declared a level
+  before, 80 of 97 now**, via chokepoints rather than line-by-line labelling: `no()` in matrix.sh and
+  quick-upgrade.sh (every failing check routes through them, [ERROR] for a product FAIL and [WARN]
+  for an ungraded INVALID), `verdict_aggregate()` which already COMPUTED the class and never declared
+  it, `finish()` through which every exit passes, the campaign summary, and wu-e2e's 12 round
+  verdicts. The 17 left undeclared were reviewed individually: two are byte-exact machine contracts
+  (`=== MATRIX:` and `=== done:`) and the rest are prose. **Lint L24** fails review for a new
+  failure report without a level in those files (pending, names 5).
+  IT IS MEASURED AGAINST GROUND TRUTH IT CANNOT HAVE BEEN FITTED TO. `mgmt/harness/error-corpus.txt`
+  holds 21 MUST + 13 BENIGN: the FILED entries are quoted verbatim from defect reports written before
+  the gate existed, and the GENERATED ones are produced by `tools/regen-error-corpus.sh`, which
+  expands the emitting statement's own literal out of the source or EXECUTES the emitting function
+  against a stub printer - so the expected text comes from the code under test and is never typed by
+  hand. Each fixed emitter contributes BOTH its failing and its passing path, so an emitter that
+  labelled everything would fail precision. `--verify` reports recall and precision: **21/21 and
+  13/13**. `tools/tests/sweep-gate-selftest.sh` is 8/8 and asserts a corpus FLOOR first, because this
+  suite once printed 8/8 green after a broken regenerator silently cut the corpus to four entries.
+  TWO FALSE GREENS THIS INSTRUMENT PRODUCED, both caught by hand and both now tested against: a
+  `--verify` that compared its own regex with itself and printed EXHAUSTIVE while MISSING the very
+  incident above, and the shrinking corpus. WHAT IS STILL OPEN: Jev `design_sound` **0.49**, with
+  `coverage_adequate_to_gate_a_release` **0.13** - the coverage gain is in the CODE and no campaign
+  has run since, so it is an inference from the emitters, not a measurement of a run. The gate
+  REPORTS and changes no exit code until that is measured.
+
   THE SAMPLER NOW READS THE LOG VOLUME INSTEAD OF SAYING UNKNOWN (owner: *"you were supposed to put logs on readable external volume"*). `cause UNKNOWN - this sampler cannot see why` was emitted on every sample of the MSI's silent window **while the secondary log volume holding the answer was already attached by that same script**. mtools reads it host-side with the guest running, wedged or Halted, nothing asked of the guest - which is the entire reason the volume exists. The unreachable branch now pulls it and reports the newest guest log's last line; if the volume cannot be read either, THAT is named as the gap rather than the silence.
   STILL TO WIRE: `matrix.sh`, `wu-e2e.sh`, `template-update-test.sh` and the other 47.
 

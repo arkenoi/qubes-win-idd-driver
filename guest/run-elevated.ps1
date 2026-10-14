@@ -25,7 +25,7 @@ param(
 )
 $ErrorActionPreference = 'Continue'
 
-if (-not (Test-Path $Script)) { Write-Output "ERROR: no such script: $Script"; exit 2 }
+if (-not (Test-Path $Script)) { Write-Output "[ERROR] no such script: $Script"; exit 2 }
 
 $stamp = [Guid]::NewGuid().ToString('N').Substring(0, 8)
 $log   = "C:\Windows\Temp\elevated-$stamp.log"
@@ -55,10 +55,10 @@ $tr = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $
 # time" warning - schtasks /run fires it immediately regardless.
 $st = (Get-Date).AddMinutes(2).ToString('HH:mm')
 $create = schtasks /create /tn $TaskName /tr $tr /sc once /st $st /rl HIGHEST /f 2>&1
-if ($LASTEXITCODE -ne 0) { Write-Output "ERROR: schtasks create failed: $create"; exit 3 }
+if ($LASTEXITCODE -ne 0) { Write-Output "[ERROR] schtasks create failed: $create"; exit 3 }
 
 schtasks /run /tn $TaskName 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) { Write-Output 'ERROR: schtasks run failed'; schtasks /delete /tn $TaskName /f | Out-Null; exit 4 }
+if ($LASTEXITCODE -ne 0) { Write-Output '[ERROR] schtasks run failed'; schtasks /delete /tn $TaskName /f | Out-Null; exit 4 }
 
 $deadline = (Get-Date).AddSeconds($TimeoutSec)
 while (-not (Test-Path $rc) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }

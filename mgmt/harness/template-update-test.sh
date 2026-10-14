@@ -44,7 +44,7 @@ halt(){ local i; [ "$(state "$VM")" = Halted ] && return 0
   timeout 120 qvm-shutdown "$VM" >/dev/null 2>&1
   for i in $(seq 1 90); do [ "$(state "$VM")" = Halted ] && return 0; sleep 10; done
   say "$VM did not halt in 15 min - left as it is, for examination"; return 1; }
-verdict(){ say "VERDICT $1: $2"; [ -n "${EVAL_ONLY:-}" ] || halt || true; case "$1" in PASS) exit 0 ;; FAIL) exit 1 ;; *) exit 2 ;; esac; }
+verdict(){ say "$([ "$1" = PASS ] || printf '[ERROR] ')VERDICT $1: $2"; [ -n "${EVAL_ONLY:-}" ] || halt || true; case "$1" in PASS) exit 0 ;; FAIL) exit 1 ;; *) exit 2 ;; esac; }
 
 if [ -n "${EVAL_ONLY:-}" ]; then
   say "template-update-test EVAL_ONLY=$EVAL_ONLY rounds=$ROUNDS (no rig)"

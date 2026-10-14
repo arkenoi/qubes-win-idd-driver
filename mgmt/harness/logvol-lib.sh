@@ -122,7 +122,7 @@ _lv_say(){ echo "logvol: $*" >&2; }
 # ---------------------------------------------------------------------------------------------- image
 logvol_image(){ # <id> -> the image path for a cell/campaign id
   local id="${1:?logvol_image <id>}"
-  case "$id" in *[!A-Za-z0-9._-]*|'') _lv_say "REFUSED: id '$id' is not [A-Za-z0-9._-]"; return 2 ;; esac
+  case "$id" in *[!A-Za-z0-9._-]*|'') _lv_say "[ERROR] REFUSED: id '$id' is not [A-Za-z0-9._-]"; return 2 ;; esac
   printf '%s/logs-%s.img' "$LOGVOL_DIR" "$id"
 }
 
@@ -133,9 +133,9 @@ _lv_serial(){ printf '%s' "$1" | sha256sum | cut -c1-8; }
 
 logvol_create(){ # <img> <id> [size_mb] - a FRESH volume; the previous contents are archived first, never discarded
   local img="${1:?logvol_create <img> <id> [size_mb]}" id="${2:?logvol_create <img> <id> [size_mb]}" mb="${3:-$LOGVOL_SIZE_MB}"
-  command -v mkfs.fat >/dev/null || { _lv_say "REFUSED: mkfs.fat is not installed"; return 2; }
-  command -v mcopy >/dev/null || { _lv_say "REFUSED: mtools (mcopy) is not installed - memory: mtools-mcopy-recovery"; return 2; }
-  case "$id" in *[!A-Za-z0-9._-]*|'') _lv_say "REFUSED: id '$id' is not [A-Za-z0-9._-]"; return 2 ;; esac
+  command -v mkfs.fat >/dev/null || { _lv_say "[ERROR] REFUSED: mkfs.fat is not installed"; return 2; }
+  command -v mcopy >/dev/null || { _lv_say "[ERROR] REFUSED: mtools (mcopy) is not installed - memory: mtools-mcopy-recovery"; return 2; }
+  case "$id" in *[!A-Za-z0-9._-]*|'') _lv_say "[ERROR] REFUSED: id '$id' is not [A-Za-z0-9._-]"; return 2 ;; esac
   mkdir -p "$(dirname "$img")" || return 1
   if [ -s "$img" ]; then
     # ARCHIVE BEFORE WIPING (prime-run's rule): the volume's contents are the only evidence a dead
@@ -155,12 +155,12 @@ logvol_create(){ # <img> <id> [size_mb] - a FRESH volume; the previous contents 
   else
     rm -f "$img"
   fi
-  truncate -s "${mb}M" "$img" || { _lv_say "could not size $img"; return 1; }
+  truncate -s "${mb}M" "$img" || { _lv_say "[ERROR] could not size $img"; return 1; }
   mkfs.fat -F 32 -n "$LOGVOL_LABEL" -i "$(_lv_serial "$id")" "$img" >/dev/null 2>&1 \
     || { _lv_say "mkfs.fat failed on $img"; return 1; }
   local tag; tag=$(mktemp)
   printf 'id=%s\ncreated=%s\nlabel=%s\nfrontend=%s\n' "$id" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$LOGVOL_LABEL" "$LOGVOL_FRONTEND" > "$tag"
-  mcopy -i "$img" "$tag" ::/LOGVOL.TAG && mmd -i "$img" ::/qwt-logs || { rm -f "$tag"; _lv_say "could not write LOGVOL.TAG"; return 1; }
+  mcopy -i "$img" "$tag" ::/LOGVOL.TAG && mmd -i "$img" ::/qwt-logs || { rm -f "$tag"; _lv_say "[ERROR] could not write LOGVOL.TAG"; return 1; }
   rm -f "$tag"
   _lv_say "created $img (${mb}M, label $LOGVOL_LABEL, serial $(_lv_serial "$id"), id $id)"
   return 0
@@ -183,7 +183,7 @@ logvol_loop(){ # <img> -> loopN (reused when present; else udisksctl loop-setup,
 
 logvol_loop_release(){ # <loopN>
   local dev="${1:?logvol_loop_release <loopN>}"
-  udisksctl loop-delete -b "/dev/$dev" >/dev/null 2>&1 || { _lv_say "could not delete /dev/$dev - free it by hand: udisksctl loop-delete -b /dev/$dev"; return 1; }
+  udisksctl loop-delete -b "/dev/$dev" >/dev/null 2>&1 || { _lv_say "[ERROR] could not delete /dev/$dev - free it by hand: udisksctl loop-delete -b /dev/$dev"; return 1; }
 }
 
 # ----------------------------------------------------------------------------------------- assignment
@@ -235,7 +235,7 @@ logvol_qemu_apply(){ # <vm> - set the composed value on the qube; prints the pre
   local vm="${1:?logvol_qemu_apply <vm>}" cur new
   cur=$(qvm-features "$vm" qemu-extra-args 2>/dev/null || true)
   new=$(logvol_qemu_args_compose "$cur")
-  qvm-features "$vm" qemu-extra-args -- "$new" >/dev/null || { _lv_say "could not set qemu-extra-args on $vm"; return 1; }
+  qvm-features "$vm" qemu-extra-args -- "$new" >/dev/null || { _lv_say "[ERROR] could not set qemu-extra-args on $vm"; return 1; }
   printf '%s' "$cur"
 }
 
@@ -286,14 +286,14 @@ PY
 # --------------------------------------------------------------------------------------------- attach
 logvol_attach(){ # <vm> <img> <manifest.json> - BEFORE the guest starts (first boot of an install included)
   local vm="${1:?logvol_attach <vm> <img> <manifest>}" img="${2:?}" mf="${3:?logvol_attach <vm> <img> <manifest>}" dev before cid
-  [ -s "$img" ] || { _lv_say "REFUSED: no image at $img (logvol_create first)"; return 2; }
+  [ -s "$img" ] || { _lv_say "[ERROR] REFUSED: no image at $img (logvol_create first)"; return 2; }
   # NEVER A SEALED GOLDEN. A golden that is booted is not a golden any more (mgmt/golden.sh), and
   # the assignment persists while loop numbers do not - a stale claim makes the guest unstartable.
   if [ -f "$LOGVOL_ROOT/mgmt/goldens/$vm.json" ] && [ "${GOLDEN_UNSEAL:-}" != "$vm" ]; then   # GUARD:seal DEFECT: if false; then
-    _lv_say "REFUSED: $vm carries a committed seal (mgmt/goldens/$vm.json) - test cells clone a golden, never attach to it"; return 2
+    _lv_say "[ERROR] REFUSED: $vm carries a committed seal (mgmt/goldens/$vm.json) - test cells clone a golden, never attach to it"; return 2
   fi
   cid=$(mcopy -i "$img" ::/LOGVOL.TAG - 2>/dev/null | sed -n 's/^id=//p' | head -1)
-  [ -n "$cid" ] || { _lv_say "REFUSED: $img carries no LOGVOL.TAG - not a volume logvol_create made"; return 2; }
+  [ -n "$cid" ] || { _lv_say "[ERROR] REFUSED: $img carries no LOGVOL.TAG - not a volume logvol_create made"; return 2; }
   dev=$(logvol_loop "$img") || return 1
   logvol_assign "$vm" "$dev" || return 1
   before=$(logvol_qemu_apply "$vm") || return 1
@@ -349,8 +349,8 @@ logvol_salvage(){ # <img> <outdir> -> <outdir>/salvage.txt, prints the count of 
 # --------------------------------------------------------------------------------------- guest binding
 logvol_bind_guest(){ # <vm> <id> - push the binder and run it; the LOGVOL-BIND line is the receipt
   local vm="${1:?logvol_bind_guest <vm> <id>}" id="${2:?logvol_bind_guest <vm> <id>}" mode="${LOGVOL_BIND_MODE:-registry}" out line
-  [ -f "$LOGVOL_BIND_PS1" ] || { _lv_say "REFUSED: $LOGVOL_BIND_PS1 is missing"; return 2; }
-  case "$mode" in registry|junction) ;; *) _lv_say "REFUSED: LOGVOL_BIND_MODE must be registry or junction (got '$mode')"; return 2 ;; esac
+  [ -f "$LOGVOL_BIND_PS1" ] || { _lv_say "[ERROR] REFUSED: $LOGVOL_BIND_PS1 is missing"; return 2; }
+  case "$mode" in registry|junction) ;; *) _lv_say "[ERROR] REFUSED: LOGVOL_BIND_MODE must be registry or junction (got '$mode')"; return 2 ;; esac
   out=$(QTEST_VM="$vm" timeout -k 10 240 "$LOGVOL_QTEST" pushrun "$LOGVOL_BIND_PS1" -Id "$id" -Mode "$mode" 2>&1 | tr -d '\r')
   # KEEP THE WHOLE TRANSCRIPT. This used to report only `tail -2` of it, and on 2026-10-14 both
   # upgrade cells of a full campaign failed here with the entire diagnosis reduced to
@@ -369,7 +369,7 @@ logvol_bind_guest(){ # <vm> <id> - push the binder and run it; the LOGVOL-BIND l
     printf '%s' "$out" | grep -qaiE 'cannot find path|does not exist|is not recognized|FileNotFound' && shape="the binder never arrived in QubesIncoming"
     printf '%s' "$out" | grep -qaiE 'Exception|FullyQualifiedErrorId|At line:' && shape="the binder threw"
     _lv_say "no LOGVOL-BIND line from $vm ($shape) - full transcript: $bindlog"
-    _lv_say "  first error-shaped line: $(printf '%s' "$out" | grep -aiE 'error|exception|cannot|not recognized|denied' | head -1 | cut -c1-150)"
+    _lv_say "  [ERROR] first error-shaped line: $(printf '%s' "$out" | grep -aiE 'error|exception|cannot|not recognized|denied' | head -1 | cut -c1-150)"
     return 1
   fi
   echo "$line"
@@ -380,7 +380,7 @@ logvol_unbind_guest(){ # <vm> - put LogDir and LogSafeFlush back (registry mode)
   local vm="${1:?logvol_unbind_guest <vm>}" out line
   out=$(QTEST_VM="$vm" timeout -k 10 240 "$LOGVOL_QTEST" pushrun "$LOGVOL_BIND_PS1" -Restore 2>&1 | tr -d '\r')
   line=$(printf '%s\n' "$out" | grep -a '^LOGVOL-BIND ' | tail -1)
-  [ -n "$line" ] || { _lv_say "no LOGVOL-BIND line came back from $vm"; return 1; }
+  [ -n "$line" ] || { _lv_say "[ERROR] no LOGVOL-BIND line came back from $vm"; return 1; }
   echo "$line"
   case "$line" in "LOGVOL-BIND restored "*) return 0 ;; *) return 1 ;; esac
 }

@@ -61,7 +61,7 @@ try {
     } elseif ($auto) {
         Write-Output "left Autostart alone (not network-setup.exe): $auto"
     }
-} catch { Write-Output "WARNING: could not clear the stock Autostart value: $($_.Exception.Message)" }
+} catch { Write-Output "[WARN] could not clear the stock Autostart value: $($_.Exception.Message)" }
 
 # ============ REPLACE network-setup.exe FOR GOOD ============================================
 # The stock binary is DELETED and its job taken over by an auto-start service. Everything below is
@@ -644,7 +644,7 @@ public class QwtngNetSetup : ServiceBase {
             $old = Get-Service QwtngNetSetup -EA SilentlyContinue
             if ($old) { try { $old.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30)) } catch { } }
             if ($oldProc -and -not $oldProc.WaitForExit(15000)) {
-                Write-Output "WARNING: qwtng-netsetup.exe (pid $oldPid, the pid the SCM reported for QwtngNetSetup) still running 15 s after its service stopped - terminating that pid"
+                Write-Output "[WARN] qwtng-netsetup.exe (pid $oldPid, the pid the SCM reported for QwtngNetSetup) still running 15 s after its service stopped - terminating that pid"
                 try { $oldProc.Kill(); [void]$oldProc.WaitForExit(5000) } catch { }
             }
             # GUARD:netsetupbyname
@@ -699,7 +699,7 @@ public class QwtngNetSetup : ServiceBase {
                 & schtasks /delete /tn QubesNetworkReapply /f 2>$null | Out-Null
                 & schtasks /query /tn QubesNetworkReapply 2>$null | Out-Null
                 if ($LASTEXITCODE -eq 0) {
-                    Write-Output 'WARNING: QubesNetworkReapply still registered after delete - a second consumer of NetworkProfile event 10000 remains beside QubesPvNic'
+                    Write-Output '[WARN] QubesNetworkReapply still registered after delete - a second consumer of NetworkProfile event 10000 remains beside QubesPvNic'
                 }
             } else {
                 $fail['netsetup_register'] = 'sc create failed after retries: ' + $cr.Trim()

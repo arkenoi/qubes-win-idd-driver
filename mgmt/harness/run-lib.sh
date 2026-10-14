@@ -185,7 +185,7 @@ rl_fg(){
 run_verified(){
   local logf="${1:?run_verified <logfile> <timeout_s> <cmd...>}" tmo="${2:?timeout}"; shift 2
   local re="${RL_START_RE:-VMLOCK-ACQUIRED}"
-  : >>"$logf" 2>/dev/null || { echo "run_verified: cannot write log $logf" >&2; return 3; }
+  : >>"$logf" 2>/dev/null || { echo "[ERROR] run_verified: cannot write log $logf" >&2; return 3; }
   local mark; mark=$(wc -c <"$logf")
   "$@" >>"$logf" 2>&1 &
   local pid=$! t0=$SECONDS rc

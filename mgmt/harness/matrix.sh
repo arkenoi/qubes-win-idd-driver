@@ -86,7 +86,7 @@ logvol_bind_now(){ # $1=vm $2=label
   if logvol_bind_guest "$1" "$1" >>"$M/$2-logvol-bind.out" 2>&1; then
     say "  $2: QWT logs bound to the log volume"
   else
-    say "  $2: WARNING log-volume bind failed (see $M/$2-logvol-bind.out) - logs stay on C: and a wedge loses them"
+    say "  $2: [WARN] log-volume bind failed (see $M/$2-logvol-bind.out) - logs stay on C: and a wedge loses them"
   fi
 }
 # P0-PRE (protocol H0): the wait primitives are sourced from the REPO, not from a session tmp
@@ -147,7 +147,7 @@ pool_gate(){   # $1 = what is about to run, for the message
     if [ -z "$free" ]; then
         # MISSING DATA FAILS. An unreadable pool is not "probably fine": the one thing this gate
         # exists to prevent is a campaign whose results cannot be trusted.
-        say "INVALID-POOL  the thin pool's free space could not be read - refusing to start $1 blind"
+        say "[ERROR] INVALID-POOL  the thin pool's free space could not be read - refusing to start $1 blind"
         return 1
     fi
     if [ "$free" -lt "$POOL_FLOOR_GB" ]; then
@@ -156,7 +156,7 @@ pool_gate(){   # $1 = what is about to run, for the message
         say "              Reclaim first; a pool that fills mid-campaign invalidates every cell, not just this one."
         return 1
     fi
-    [ "$free" -lt "$POOL_WARN_GB" ] && say "POOL WARNING  ${free} GB free on vm-pool (warn below ${POOL_WARN_GB}) - enough to start, tight to finish"
+    [ "$free" -lt "$POOL_WARN_GB" ] && say "[WARN] POOL  ${free} GB free on vm-pool (warn below ${POOL_WARN_GB}) - enough to start, tight to finish"
     say "pool: ${free} GB free on vm-pool (floor ${POOL_FLOOR_GB})"
     return 0
 }
@@ -170,7 +170,9 @@ pool_gate "this campaign" || { say "=== MATRIX: 0 passed, 1 failed ==="; exit 2;
 # is never folded into FAIL") applied additively, without touching the contract. The TSV ledger
 # campaign-verdict.sh reads keeps the classes distinct already; this only stops the LOG from
 # conflating them (the residual recorded in protocol/rule-coverage.json).
-no(){ FAIL=$((FAIL+1)); case "$*" in *INVALID*) INVALID=$((INVALID+1)) ;; esac; say "FAIL  $*"; }
+# Every failing check in this campaign is reported HERE, so this one line decides whether a sweep
+# can see any of them. A product FAIL and an ungraded INVALID are different severities and say so.
+no(){ FAIL=$((FAIL+1)); local _l="[ERROR] "; case "$*" in *INVALID*) INVALID=$((INVALID+1)); _l="[WARN] " ;; esac; say "${_l}FAIL  $*"; }
 # qvm-start BLOCKS until qrexec connects (up to qrexec_timeout). On a guest that never boots
 # that is dead silence for the whole timeout - measured today: 15 minutes of a harness that
 # looked hung was simply sitting inside qvm-start. Fire it and poll the state ourselves.
@@ -246,7 +248,7 @@ _halt_other_windows(){ # $1=the guest this cell is about to use
       sleep 5
     done
     if [ "$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v n="$v" '$1==n{print $2}')" != Halted ]; then
-      say "  WARNING: $v did not halt within 300s - refusing to run two Windows guests is now unenforceable"
+      say "  [WARN] $v did not halt within 300s - refusing to run two Windows guests is now unenforceable"
     fi
   done
 }
@@ -280,7 +282,7 @@ for v in ('root', 'private'):
 dst.virt_mode='hvm'; dst.kernel=''
 dst.memory=8192; dst.maxmem=0; dst.vcpus=4; dst.qrexec_timeout=600
 EOF
-  ) || { say "  clone attempt 1 FAILED: $(echo "$cerr" | tail -1 | cut -c1-200)"; }
+  ) || { say "  [WARN] clone attempt 1 FAILED: $(echo "$cerr" | tail -1 | cut -c1-200)"; }
 
   # RETRY WITH RECOVERY, up to three more times. A guest that was killed - or one that bricked and
   # never completed startup - leaves its volumes dirty and qubesd refuses the import. The error
@@ -304,7 +306,7 @@ EOF
     local v rev
     for v in root private; do
       rev=$(printf '' | timeout 15 qrexec-client-vm "$t" admin.vm.volume.ListSnapshots+$v 2>/dev/null | tr -d '\0' | tr ' ' '\n' | grep -a 'back' | head -1)
-      [ -n "$rev" ] || { say "    no snapshot for $v - cannot revert"; continue; }
+      [ -n "$rev" ] || { say "    [WARN] no snapshot for $v - cannot revert"; continue; }
       printf '%s' "$rev" | timeout 60 qrexec-client-vm "$t" admin.vm.volume.Revert+$v >/dev/null 2>&1
       say "    reverted $v to $rev"
     done
@@ -317,9 +319,9 @@ dst.virt_mode='hvm'; dst.kernel=''
 dst.memory=8192; dst.maxmem=0; dst.vcpus=4; dst.qrexec_timeout=600
 EOF
 ) && { cerr=''; break; }
-    say "  clone attempt $att FAILED: $(echo "$cerr" | tail -1 | cut -c1-200)"
+    say "  [WARN] clone attempt $att FAILED: $(echo "$cerr" | tail -1 | cut -c1-200)"
   done
-  [ -z "$cerr" ] || { say "  clone FAILED after every retry"; return 1; }
+  [ -z "$cerr" ] || { say "  [ERROR] clone FAILED after every retry"; return 1; }
   say "  cloned $g -> $t"
 }
 
@@ -337,8 +339,8 @@ ensure_release_loop(){ # resolves RELEASE_LOOP (loopN on THIS qube backing the r
   # invented; findings/install.md [verified 2026-08-29]). Protocol 0.5 Route A requires the loop
   # to be backed by the intended file and NOT "(deleted)", or the guest reads a stale disc.
   if [ -z "${RELEASE_LOOP:-}" ]; then
-    [ -n "${RELEASE_ISO:-}" ] || { say "FATAL: over-existing cells need RELEASE_ISO (path to qwt-improved-setup.iso) or RELEASE_LOOP (an existing loopN)"; exit 1; }
-    [ -s "$RELEASE_ISO" ] || { say "FATAL: RELEASE_ISO=$RELEASE_ISO missing or empty"; exit 1; }
+    [ -n "${RELEASE_ISO:-}" ] || { say "[ERROR] FATAL: over-existing cells need RELEASE_ISO (path to qwt-improved-setup.iso) or RELEASE_LOOP (an existing loopN)"; exit 1; }
+    [ -s "$RELEASE_ISO" ] || { say "[ERROR] FATAL: RELEASE_ISO=$RELEASE_ISO missing or empty"; exit 1; }
     # REUSE AN EXISTING LOOP FOR THIS EXACT FILE INSTEAD OF ADDING ANOTHER. This function created a
     # fresh loop on every call and nothing ever removed it, so they accumulated for as long as the
     # rig ran: measured 2026-09-10, 45 loop devices, NINE of them backing the same 4.3.24 ISO and six
@@ -355,7 +357,7 @@ ensure_release_loop(){ # resolves RELEASE_LOOP (loopN on THIS qube backing the r
       say "  release ISO already on /dev/$RELEASE_LOOP - reusing it ($RELEASE_ISO)"
     else
       dev=$(udisksctl loop-setup -r -f "$RELEASE_ISO" 2>&1 | grep -o '/dev/loop[0-9]*' | head -1)
-      [ -n "$dev" ] || { say "FATAL: udisksctl loop-setup failed for $RELEASE_ISO"; exit 1; }
+      [ -n "$dev" ] || { say "[ERROR] FATAL: udisksctl loop-setup failed for $RELEASE_ISO"; exit 1; }
       RELEASE_LOOP=${dev#/dev/}
       MATRIX_LOOP_CREATED="$RELEASE_LOOP"      # only OURS is released at exit
       say "  release ISO on /dev/$RELEASE_LOOP ($RELEASE_ISO)"
@@ -363,9 +365,9 @@ ensure_release_loop(){ # resolves RELEASE_LOOP (loopN on THIS qube backing the r
   fi
   local backing
   backing=$(losetup -l 2>/dev/null | awk -v d="/dev/$RELEASE_LOOP" '$1==d{print $6}')
-  [ -n "$backing" ] || { say "FATAL: /dev/$RELEASE_LOOP is not an active loop device"; exit 1; }
+  [ -n "$backing" ] || { say "[ERROR] FATAL: /dev/$RELEASE_LOOP is not an active loop device"; exit 1; }
   case "$backing" in *'(deleted)'*)
-    say "FATAL: /dev/$RELEASE_LOOP backing file is DELETED - the guest would read a stale disc"; exit 1;; esac
+    say "[ERROR] FATAL: /dev/$RELEASE_LOOP backing file is DELETED - the guest would read a stale disc"; exit 1;; esac
   say "  /dev/$RELEASE_LOOP backed by $backing"
   # GATE-0 ON THE DISC ITSELF, not only on the setup tree: mount locally, run assert-payload
   # (sums + provenance commit + installer bytes), unmount. A truncated or stale ISO is caught
@@ -373,7 +375,7 @@ ensure_release_loop(){ # resolves RELEASE_LOOP (loopN on THIS qube backing the r
   local mnt
   mnt=$(udisksctl mount --block-device "/dev/$RELEASE_LOOP" 2>/dev/null | sed -n 's/^Mounted .* at //p' | sed 's/\.$//')
   [ -n "$mnt" ] || mnt=$(findmnt -no TARGET "/dev/$RELEASE_LOOP" 2>/dev/null | head -1)
-  [ -n "$mnt" ] || { say "FATAL: could not mount /dev/$RELEASE_LOOP to verify the ISO content"; exit 1; }
+  [ -n "$mnt" ] || { say "[ERROR] FATAL: could not mount /dev/$RELEASE_LOOP to verify the ISO content"; exit 1; }
   # $RELEASE_SHA, not $RELEASE_REF: the ref is "HEAD" by default and resolving it HERE would
   # re-read the worktree, so a commit made while the campaign runs (which happens - a session
   # keeps working during the ~75 min) would turn this gate into a false FATAL. The SHA was
@@ -381,14 +383,14 @@ ensure_release_loop(){ # resolves RELEASE_LOOP (loopN on THIS qube backing the r
   if ./tools/assert-payload.sh "$mnt" "$RELEASE_SHA" >"$M/iso-gate0.out" 2>&1; then
     say "  Gate-0 (ISO): $(tail -1 "$M/iso-gate0.out")"
   else
-    say "FATAL: Gate-0 FAILED on the ISO at /dev/$RELEASE_LOOP:"
+    say "[ERROR] FATAL: Gate-0 FAILED on the ISO at /dev/$RELEASE_LOOP:"
     tail -3 "$M/iso-gate0.out" | sed 's/^/    /' | tee -a "$R"
     udisksctl unmount --block-device "/dev/$RELEASE_LOOP" >/dev/null 2>&1
     exit 1
   fi
   udisksctl unmount --block-device "/dev/$RELEASE_LOOP" >/dev/null 2>&1
   findmnt -no TARGET "/dev/$RELEASE_LOOP" >/dev/null 2>&1 \
-    && say "  WARNING: /dev/$RELEASE_LOOP is still mounted locally after unmount - attach proceeds read-only, but investigate"
+    && say "  [WARN] /dev/$RELEASE_LOOP is still mounted locally after unmount - attach proceeds read-only, but investigate"
 }
 
 # RELEASE-ISO DELIVERY: AT BOOT, VIA qvm-start --cdrom (2026-09-03, supersedes the live attach).
@@ -419,7 +421,7 @@ boot_with_release_iso(){ # $1=vm $2=label - boot a HALTED subject with the relea
   if logvol_create "$LOGVOL_IMG" "$vm" >/dev/null 2>&1 && logvol_attach "$vm" "$LOGVOL_IMG" "$M/logvol-manifest.json" >/dev/null 2>&1; then
     say "  $lbl: log volume attached ($LOGVOL_IMG)"
   else
-    say "  $lbl: WARNING log volume not attached - a wedge here loses the QWT logs"
+    say "  $lbl: [WARN] log volume not attached - a wedge here loses the QWT logs"
     LOGVOL_IMG=""
   fi
   say "  $lbl: booting $vm with the release ISO as CD (qvm-start --cdrom=win-idd-mgmt:$RELEASE_LOOP)"
@@ -486,7 +488,7 @@ clear_prime_leftovers(){ # $1=vm - prime-run's own exit text: "The stick is stil
       if qvm-device block unassign "$vm" "win-idd-mgmt:$stickloop" >/dev/null 2>&1; then
         say "  $vm: prime stick unassigned (win-idd-mgmt:$stickloop)"
       else
-        say "  WARNING: could not unassign win-idd-mgmt:$stickloop from $vm - its boots depend on this qube's loop layout until cleared"
+        say "  [WARN] could not unassign win-idd-mgmt:$stickloop from $vm - its boots depend on this qube's loop layout until cleared"
       fi
     else
       say "  note: no loop backing ${img%%\\*} for $vm (not assigned this run)"
@@ -732,7 +734,7 @@ if (Test-Path 'C:/qwt-install.log') {
     # Distinguished on purpose: an empty or truncated transfer is MY failure, not the guest's, and
     # must not be recorded as "there was no log". The raw capture is kept so it can be told apart.
     rm -f "$M/$lbl-msi-verbose.log"
-    say "  $lbl: MSI verbose log NOT retrieved (transfer empty/truncated, raw kept at $M/$lbl-msi-b64.tmp) - a failure in this cell cannot be diagnosed from it"
+    say "  $lbl: [WARN] MSI verbose log NOT retrieved (transfer empty/truncated, raw kept at $M/$lbl-msi-b64.tmp) - a failure in this cell cannot be diagnosed from it"
   fi
   return 0
 }
@@ -1610,7 +1612,7 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the
   qvm-prefs "$app" vcpus 4 >/dev/null 2>&1; qvm-prefs "$app" qrexec_timeout 6000 >/dev/null 2>&1
   if [ "$had_app" = 1 ]; then
     qvm-prefs "$app" netvm "${appnetvm:-}" 2>/dev/null \
-      || say "  WARNING: could not restore netvm='${appnetvm:-}' on $app - re-apply it before any network use"
+      || say "  [WARN] could not restore netvm='${appnetvm:-}' on $app - re-apply it before any network use"
   else
     qvm-prefs "$app" netvm '' >/dev/null 2>&1
   fi
@@ -1721,11 +1723,11 @@ if [ -z "${RELEASE_ISO:-}" ] && [ -z "${RELEASE_LOOP:-}" ] && [ -n "${MATRIX_WOR
   say "RELEASE_ISO derived from MATRIX_WORK: $RELEASE_ISO"
 fi
 [ -n "${RELEASE_SETUP:-}" ] || {
-  say "FATAL: RELEASE_SETUP is unset. Point it at the release setup tree, e.g."
+  say "[ERROR] FATAL: RELEASE_SETUP is unset. Point it at the release setup tree, e.g."
   say "  RELEASE_SETUP=\$HOME/deslice-dl-setup RELEASE_ISO=\$HOME/rel/qwt-improved-setup.iso \\"
   say "  RELEASE_COMMIT=<sha> CELLS=\"win10-clean win10-reinstall\" G10=win10-iqi mgmt/harness/matrix.sh"
   exit 1; }
-[ -d "$RELEASE_SETUP" ] || { say "FATAL: RELEASE_SETUP=$RELEASE_SETUP is not a directory"; exit 1; }
+[ -d "$RELEASE_SETUP" ] || { say "[ERROR] FATAL: RELEASE_SETUP=$RELEASE_SETUP is not a directory"; exit 1; }
 # RELEASE_COMMIT, when the caller does not pin one, comes from the setup tree's OWN MANIFEST
 # (source.driver_repo_commit) - the artifact then gates against the commit it says it was built
 # from, which keeps Gate-0's sums/installer checks honest for a standalone invocation. A CAMPAIGN
@@ -1737,16 +1739,16 @@ if [ -z "${RELEASE_COMMIT:-}" ]; then
   if [ -n "$RELEASE_COMMIT" ]; then
     say "RELEASE_COMMIT derived from the setup MANIFEST: ${RELEASE_COMMIT:0:12} (self-consistency only - a campaign passes the pin explicitly)"
   else
-    say "WARNING: RELEASE_COMMIT unset and the MANIFEST names no commit - gating against HEAD, which is WRONG for a campaign"
+    say "[WARN] RELEASE_COMMIT unset and the MANIFEST names no commit - gating against HEAD, which is WRONG for a campaign"
   fi
 fi
 RELEASE_REF="${RELEASE_COMMIT:-HEAD}"
 RELEASE_SHA=$(git rev-parse "$RELEASE_REF" 2>/dev/null)
-[ -n "$RELEASE_SHA" ] || { say "FATAL: cannot resolve RELEASE_COMMIT='$RELEASE_REF' in this repo"; exit 1; }
+[ -n "$RELEASE_SHA" ] || { say "[ERROR] FATAL: cannot resolve RELEASE_COMMIT='$RELEASE_REF' in this repo"; exit 1; }
 if ./tools/assert-payload.sh "$RELEASE_SETUP" "$RELEASE_REF" >"$M/setup-gate0.out" 2>&1; then
   say "Gate-0 (setup tree): $(tail -1 "$M/setup-gate0.out")"
 else
-  say "FATAL: Gate-0 FAILED on RELEASE_SETUP=$RELEASE_SETUP:"
+  say "[ERROR] FATAL: Gate-0 FAILED on RELEASE_SETUP=$RELEASE_SETUP:"
   tail -3 "$M/setup-gate0.out" | sed 's/^/  /' | tee -a "$R"
   exit 1
 fi
@@ -1756,13 +1758,13 @@ fi
 # WRONGBUILD). The release ships the byte-exact agent at reference/gui-agent.exe and names its
 # hash in MANIFEST.json reference_binaries; require BOTH and require them to AGREE. Fail closed.
 [ -s "$RELEASE_SETUP/reference/gui-agent.exe" ] || {
-  say "FATAL: $RELEASE_SETUP/reference/gui-agent.exe missing - without it the agent-hash check"
+  say "[ERROR] FATAL: $RELEASE_SETUP/reference/gui-agent.exe missing - without it the agent-hash check"
   say "       silently matches any build and every cell would report a vacuous PASS."
   exit 1; }
 ASHA=$(sha256sum "$RELEASE_SETUP/reference/gui-agent.exe" | cut -c1-12)
 MSHA=$(python3 -c "import json;print((json.load(open('$RELEASE_SETUP/MANIFEST.json')).get('reference_binaries') or {}).get('gui-agent.exe',''))" 2>/dev/null | cut -c1-12)
 { [ -n "$ASHA" ] && [ "$ASHA" = "$MSHA" ]; } || {
-  say "FATAL: reference/gui-agent.exe hash ('$ASHA') disagrees with MANIFEST reference_binaries ('$MSHA')"
+  say "[ERROR] FATAL: reference/gui-agent.exe hash ('$ASHA') disagrees with MANIFEST reference_binaries ('$MSHA')"
   exit 1; }
 PV=$(python3 -c "import json;print(json.load(open('$RELEASE_SETUP/MANIFEST.json'))['package_version'])")
 # ENTRY IMAGES + CUSTODY GATE.
@@ -1800,7 +1802,7 @@ A11=win11-acc
 for g in "$B10" "$B11" "${G10:-}" "${G11:-}"; do
   case "$g" in
     "$A10"|"$A11")
-      say "FATAL: entry image '$g' is a CHURN TARGET (disposable install subject) - the cells"
+      say "[ERROR] FATAL: entry image '$g' is a CHURN TARGET (disposable install subject) - the cells"
       say "       recreate it freely, so it can never serve as an entry image. Name a sealed"
       say "       base (B10/B11) or a fixture (G10/G11) instead."
       exit 1 ;;
@@ -1813,7 +1815,7 @@ for g in "${G10:-}" "${G11:-}"; do
   elif ./mgmt/golden.sh fixture "$g" >/dev/null 2>&1; then
     say "  entry $g: CAMPAIGN FIXTURE, $(./mgmt/golden.sh fixture "$g" | head -1 | sed 's/^FIXTURE //')"
   else
-    say "FATAL: entry image $g has NEITHER an intact seal NOR a fixture record."
+    say "[ERROR] FATAL: entry image $g has NEITHER an intact seal NOR a fixture record."
     say "       ./mgmt/golden.sh verify $g    # if it is meant to be a sealed golden"
     say "       ./mgmt/golden.sh fixture $g   # if it is meant to be a campaign fixture"
     say "       Cloning from it would inherit whatever it happens to contain."
@@ -1826,7 +1828,7 @@ say "=== MATRIX for $PV (agent $ASHA) ==="
 # straight through and print "0 passed, 0 failed" - a run that looks completed and tested nothing.
 # A campaign with no cells is an operator error, not a default.
 [ -n "${CELLS:-}" ] || {
-  say "FATAL: CELLS is unset. Name the cells explicitly, e.g."
+  say "[ERROR] FATAL: CELLS is unset. Name the cells explicitly, e.g."
   say "  CELLS=\"win10-clean win10-reinstall win10-upgrade win10-appvm win11-clean win11-appvm\""
   say "  (win1X-stock exists as a capability but is never a default: stock is not re-tested per campaign)"
   exit 1; }
@@ -1841,19 +1843,19 @@ NEED_ISO=0
 for c in $CELLS; do
   case $c in
     win10-upgrade|win10-seeded|win10-stock)
-      [ -n "${G10:-}" ] || { say "FATAL: cell '$c' needs G10 set (the Win10 entry image: previous-ours or stock fixture)"; exit 1; }
+      [ -n "${G10:-}" ] || { say "[ERROR] FATAL: cell '$c' needs G10 set (the Win10 entry image: previous-ours or stock fixture)"; exit 1; }
       NEED_ISO=1 ;;
     win11-upgrade|win11-seeded|win11-stock)
-      [ -n "${G11:-}" ] || { say "FATAL: cell '$c' needs G11 set (the Win11 entry image: previous-ours or stock fixture)"; exit 1; }
+      [ -n "${G11:-}" ] || { say "[ERROR] FATAL: cell '$c' needs G11 set (the Win11 entry image: previous-ours or stock fixture)"; exit 1; }
       NEED_ISO=1 ;;
     win10-reinstall|win11-reinstall) NEED_ISO=1 ;;
     win10-clean)
       ./mgmt/golden.sh verify "$B10" >/dev/null 2>&1 \
-        || { say "FATAL: base $B10 failed its seal check - a clean cell cannot enter from a drifted base"; exit 1; }
+        || { say "[ERROR] FATAL: base $B10 failed its seal check - a clean cell cannot enter from a drifted base"; exit 1; }
       say "  base $B10: SEALED GOLDEN, intact" ;;
     win11-clean)
       ./mgmt/golden.sh verify "$B11" >/dev/null 2>&1 \
-        || { say "FATAL: base $B11 failed its seal check - a clean cell cannot enter from a drifted base"; exit 1; }
+        || { say "[ERROR] FATAL: base $B11 failed its seal check - a clean cell cannot enter from a drifted base"; exit 1; }
       say "  base $B11: SEALED GOLDEN, intact" ;;
   esac
 done
@@ -1892,14 +1894,14 @@ for c in $CELLS; do
     # The RETIRED selectors fail with the reason, not as a bare typo: they are the cells that
     # installed from a PUSHED payload, which the owner forbids absolutely.
     win10-fresh|win11-fresh|win10-1stage|win11-1stage|win10-2stage|win11-2stage)
-      say "FATAL: cell '$c' is RETIRED - it installed from a pushed payload tree (push_payload"
+      say "[ERROR] FATAL: cell '$c' is RETIRED - it installed from a pushed payload tree (push_payload"
       say "       q4315), which is forbidden: our code enters a guest ONLY from the release"
       say "       package. Clean install = win1X-clean (prime-run from the pristine base; the"
       say "       base's testsigning OFF makes it the true two-stage path)."
       FAIL=$((FAIL+1)) ;;
     # An unknown selector must FAIL the campaign, not be narrated past: a typo would otherwise
     # silently shrink the matrix and the summary would still read as a clean run.
-    *) say "FATAL: unknown cell '$c'"; FAIL=$((FAIL+1)) ;;
+    *) say "[ERROR] FATAL: unknown cell '$c'"; FAIL=$((FAIL+1)) ;;
   esac
   # PULL AFTER EVERY CELL, pass or fail, wedged or clean. Host-side with mtools: nothing is asked of
   # the guest and nothing is detached, so a cell that hung with qrexec dead still yields its logs -
@@ -1908,7 +1910,7 @@ for c in $CELLS; do
     if logvol_pull "$LOGVOL_IMG" "$M/logvol-$c" >/dev/null 2>&1; then
       say "  $c: log volume pulled -> $M/logvol-$c"
     else
-      say "  $c: WARNING could not pull the log volume $LOGVOL_IMG"
+      say "  $c: [WARN] could not pull the log volume $LOGVOL_IMG"
     fi
     LOGVOL_IMG=""; LOGVOL_VM=""
   fi
@@ -1943,7 +1945,12 @@ say ""
 # '^=== MATRIX: N passed, M failed ===$' and s6-nonvacuous greps the same anchor in matrix.log).
 # A timestamped footer matches neither - measured as exactly the book<->code divergence class
 # this file was reconciled for on 2026-09-03.
-say "classes: product-FAIL=$((FAIL-INVALID)) INVALID-*(cell did not run, ungraded)=$INVALID - the footer's 'failed' is both (contract kept; see mgmt/harness/verdict-lib.sh for the three-class rule)"
+# The footer below is an ANCHORED machine contract ('^=== MATRIX: N passed, M failed ===$') and
+# stays byte-exact, so the campaign's severity is declared HERE, on the line that carries the same
+# two numbers. Without it a campaign could end with failing cells and no line any sweep could judge
+# - which is how a 96-of-96 "clean" campaign carried a log-volume bind failure nobody read.
+_mx_sev=""; [ "$((FAIL-INVALID))" -gt 0 ] && _mx_sev="[ERROR] " || { [ "$INVALID" -gt 0 ] && _mx_sev="[WARN] "; }
+say "${_mx_sev}classes: product-FAIL=$((FAIL-INVALID)) INVALID-*(cell did not run, ungraded)=$INVALID - the footer's 'failed' is both (contract kept; see mgmt/harness/verdict-lib.sh for the three-class rule)"
 echo "=== MATRIX: $PASS passed, $FAIL failed ===" | tee -a "$R"
 # Parks are campaign-scoped: pool cost grows as content diverges, so remove them when the
 # campaign is DONE (not per cell - later cells unpark them). NEVER park or remove a golden.

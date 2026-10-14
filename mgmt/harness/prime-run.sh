@@ -93,7 +93,7 @@ job_on_abort(){
   qvm-shutdown "$CHURN" >/dev/null 2>&1
 }
 
-[ -f "$JOBDIR/onboot.cmd" ] || { log "TERMINAL: no job at $JOBDIR/onboot.cmd"; exit 1; }
+[ -f "$JOBDIR/onboot.cmd" ] || { log "[ERROR] TERMINAL: no job at $JOBDIR/onboot.cmd"; exit 1; }
 
 # H3.6 — one Windows guest at a time, and a campaign step starts with zero. Concurrent runs have
 # rebooted each other's guests and destroyed hours of results.
@@ -103,22 +103,22 @@ job_on_abort(){
 # OTHER running win*/prime- guest still refuses.
 running=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null \
           | awk -F'|' -v churn="$CHURN" '$2!="Halted" && $1!=churn && $1 ~ /^(win(10|11)|prime-)/ {print $1}' | tr '\n' ' ')
-[ -z "${running// /}" ] || { log "TERMINAL: refusing, these are not Halted: $running"; exit 1; }
+[ -z "${running// /}" ] || { log "[ERROR] TERMINAL: refusing, these are not Halted: $running"; exit 1; }
 
 # Golden custody (0.4). An unsealed or drifted base fails CLOSED: every clone would inherit
 # whatever changed, silently.
-./mgmt/golden.sh verify "$BASE" || { log "TERMINAL: $BASE failed its seal check"; exit 1; }
-[ "$(state "$BASE")" = Halted ] || { log "TERMINAL: $BASE is not Halted"; exit 1; }
+./mgmt/golden.sh verify "$BASE" || { log "[ERROR] TERMINAL: $BASE failed its seal check"; exit 1; }
+[ "$(state "$BASE")" = Halted ] || { log "[ERROR] TERMINAL: $BASE is not Halted"; exit 1; }
 
 # --- stage the payload and flags into the job -----------------------------------------------
 if [ -n "$PAYLOAD" ]; then
-  [ -d "$PAYLOAD" ] || { log "TERMINAL: --payload $PAYLOAD is not a directory"; exit 1; }
+  [ -d "$PAYLOAD" ] || { log "[ERROR] TERMINAL: --payload $PAYLOAD is not a directory"; exit 1; }
   rm -rf "$JOBDIR/setup"
-  cp -r "$PAYLOAD" "$JOBDIR/setup" || { log "TERMINAL: could not stage payload"; exit 1; }
+  cp -r "$PAYLOAD" "$JOBDIR/setup" || { log "[ERROR] TERMINAL: could not stage payload"; exit 1; }
   # The jobs run C:\qwtsetup\install.cmd; if the tree has no install.cmd at its root the job dies
   # in-guest where nothing can see it. Fail here instead, where the message is readable.
   [ -f "$JOBDIR/setup/install.cmd" ] || {
-    log "TERMINAL: staged payload has no install.cmd at its root ($JOBDIR/setup)"; exit 1; }
+    log "[ERROR] TERMINAL: staged payload has no install.cmd at its root ($JOBDIR/setup)"; exit 1; }
   log "payload staged: $(find "$JOBDIR/setup" -type f | wc -l) files from $PAYLOAD"
 fi
 # CLEAR STALE FLAGS FIRST. Flags are files in the job directory, and the job directory persists
@@ -152,9 +152,9 @@ STICKSIZE=$(( $(stat -c%s "$STICKIMG") / 1024 / 1024 ))
 log "building the '$JOB' stick into $STICKIMG (${STICKSIZE}M)"
 PRIME_JOB="$JOBDIR" OUT="$STICKIMG" SIZE_MB="$STICKSIZE" \
     ./mgmt/build-answer-stick.sh >"$HERE/.prime-stick.log" 2>&1 || {
-    log "TERMINAL: stick build failed - $(tail -3 "$HERE/.prime-stick.log")"; exit 1; }
+    log "[ERROR] TERMINAL: stick build failed - $(tail -3 "$HERE/.prime-stick.log")"; exit 1; }
 STICKLOOP=$(ensure_loop "$STICKIMG" ro)
-[ -n "$STICKLOOP" ] || { log "TERMINAL: could not attach $STICKIMG to a loop device"; exit 1; }
+[ -n "$STICKLOOP" ] || { log "[ERROR] TERMINAL: could not attach $STICKIMG to a loop device"; exit 1; }
 log "stick on /dev/$STICKLOOP"
 
 # --- clone the base --------------------------------------------------------------------------
@@ -166,15 +166,15 @@ if [ -n "$(state "$CHURN")" ] && [ "$(state "$CHURN")" != Halted ]; then
     log "leftover $CHURN is $(state "$CHURN") - killing it (being discarded, not reused)"
     qvm-kill "$CHURN" >/dev/null 2>&1
     for _i in 1 2 3 4 5 6 7 8 9 10 11 12; do [ "$(state "$CHURN")" = Halted ] && break; sleep 10; done
-    [ "$(state "$CHURN")" = Halted ] || { log "TERMINAL: leftover $CHURN would not halt after qvm-kill"; exit 1; }
+    [ "$(state "$CHURN")" = Halted ] || { log "[ERROR] TERMINAL: leftover $CHURN would not halt after qvm-kill"; exit 1; }
 fi
 qvm-remove -f "$CHURN" >/dev/null 2>&1
 # create -> TAG -> copy volumes, in that order. A single qvm-clone copies volumes before the tags
 # exist, and dom0 policy here is TAG-based, so the volume call lands on a qube policy does not yet
 # cover and is refused.
 qvm-create --class StandaloneVM --label red --property virt_mode=hvm --property kernel='' "$CHURN" \
-  || { log "TERMINAL: could not create $CHURN"; exit 1; }
-qvm-tags "$CHURN" add win-idd-testbed || { log "TERMINAL: could not tag $CHURN"; exit 1; }
+  || { log "[ERROR] TERMINAL: could not create $CHURN"; exit 1; }
+qvm-tags "$CHURN" add win-idd-testbed || { log "[ERROR] TERMINAL: could not tag $CHURN"; exit 1; }
 qvm-features "$CHURN" os Windows
 # timezone: without it the RTC holds TRUE UTC while Windows reads it as LOCAL, so a
 # non-UTC guest computes a UTC behind real UTC by its own offset and CI-minted driver
@@ -184,7 +184,7 @@ qvm-features "$CHURN" os Windows
 qvm-features "$CHURN" timezone "$(qvm-features "$BASE" timezone 2>/dev/null || echo localtime)"
 for p in memory:8192 maxmem:8192 vcpus:4 qrexec_timeout:600; do qvm-prefs "$CHURN" "${p%%:*}" "${p##*:}"; done
 qvm-prefs "$CHURN" netvm '' 2>/dev/null
-python3 - "$BASE" "$CHURN" <<'PY' || { log "TERMINAL: volume clone failed"; exit 1; }
+python3 - "$BASE" "$CHURN" <<'PY' || { log "[ERROR] TERMINAL: volume clone failed"; exit 1; }
 import sys, qubesadmin
 app = qubesadmin.Qubes(); src = app.domains[sys.argv[1]]; dst = app.domains[sys.argv[2]]
 for v in ('root', 'private'):
@@ -206,7 +206,7 @@ rm -f "mgmt/fixtures/$CHURN.aborted"
 # disk it showed up as disk4, Online and writable, with NO volume and NO drive letter - so the
 # job's label scan found nothing and wrote no markers (measured 2026-09-07 on win11-2stk).
 qvm-features "$CHURN" qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99 -drive file=/dev/xvdj,format=host_device,if=none,id=diagdrv -device usb-storage,bus=ansusb.0,drive=diagdrv,removable=on' \
-  || { log "TERMINAL: could not set qemu-extra-args"; exit 1; }
+  || { log "[ERROR] TERMINAL: could not set qemu-extra-args"; exit 1; }
 # NOT --required, MEASURED 2026-09-21. A `--required` assignment cannot be satisfied at domain
 # creation on this rig at present: with one the domain is not created at all (6/6, across two
 # subjects, a loop the guest had never seen, a different frontend slot, a different devtype, and a
@@ -236,7 +236,7 @@ PRIME_ASSIGN_MODE="${PRIME_ASSIGN_MODE:-required}"
 _req=(); [ "$PRIME_ASSIGN_MODE" = required ] && _req=(--required)
 log "stick assignment mode: $PRIME_ASSIGN_MODE${_req:+ (--required)}"
 qvm-device block assign "${_req[@]}" -o frontend-dev=xvdi -o devtype=disk "$CHURN" "$HOLDER:$STICKLOOP" \
-  || { log "TERMINAL: could not assign the stick"; exit 1; }
+  || { log "[ERROR] TERMINAL: could not assign the stick"; exit 1; }
 
 # --- DIAG stick: the instrument, kept off the medium under test --------------------------------
 # A pristine base has no QWT, so a stalled prime has no qrexec, no gui-agent log and no xencons -
@@ -260,10 +260,10 @@ if [ -n "$DIAGLOOP" ]; then
            "$CHURN" "$HOLDER:$DIAGLOOP" 2>/dev/null; then
         log "diag stick on /dev/$DIAGLOOP -> xvdj (writable, markers only)"
     else
-        log "WARNING: diag stick could not be assigned - a stall will be undiagnosable, not fatal"
+        log "[WARN] diag stick could not be assigned - a stall will be undiagnosable, not fatal"
     fi
 else
-    log "WARNING: $DIAGIMG is not on a loop device - no diag stick this run"
+    log "[WARN] $DIAGIMG is not on a loop device - no diag stick this run"
 fi
 
 OUT="$HERE/evidence/prime-$JOB-$CHURN-$(date -u +%Y%m%d-%H%M%S)"; mkdir -p "$OUT"
@@ -310,7 +310,7 @@ log "  restarting it is THIS script's job (protocol 0.8: one owner per guest, wa
 declare -F assert_sole_guest >/dev/null 2>&1 || . "$(dirname "${BASH_SOURCE[0]}")/serial-rig.sh"
 assert_sole_guest "$CHURN" || exit 1
 if ! _bootout=$(qvm-start "$CHURN" 2>&1); then
-    log "TERMINAL: the DOMAIN WOULD NOT START - the guest never ran, so nothing about the stick,"
+    log "[ERROR] TERMINAL: the DOMAIN WOULD NOT START - the guest never ran, so nothing about the stick,"
     log "  the payload or the product is inferable from this:"
     log "    ${_bootout}"
     exit 1
@@ -329,7 +329,7 @@ print(','.join(d.port_id for d in me.devices['block']
                 if getattr(getattr(d,'attachment',None),'name','')=='$CHURN') or 'NONE')" 2>/dev/null)
 case "$_attached" in
   *"$STICKLOOP"*) log "  answer stick $STICKLOOP is ATTACHED to $CHURN (asserted, not assumed)" ;;
-  *) log "TERMINAL: the guest started but the answer stick is NOT attached (attached: ${_attached:-unreadable})."
+  *) log "[ERROR] TERMINAL: the guest started but the answer stick is NOT attached (attached: ${_attached:-unreadable})."
      log "  A plain assign auto-attaches and this one did not, so the guest is booting with no medium."
      log "  It would sit waiting for a stick that is absent - NOT a guest defect, and not gradeable."
      exit 1 ;;
@@ -440,7 +440,7 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
     if [ "$st" = Halted ]; then
         restarts=$((restarts+1))
         if [ "$restarts" -gt "$MAX_RESTARTS" ]; then
-            log "TERMINAL: guest halted for the ${restarts}th time - it is crash-looping, not installing."
+            log "[ERROR] TERMINAL: guest halted for the ${restarts}th time - it is crash-looping, not installing."
             log "  Guest LEFT HALTED and NOT removed - its state is the evidence (H3.5). Read $OUT."
             exit 1
         fi
@@ -510,7 +510,7 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
             log "  module-base recorder ARMED and host copy taken ($MB_OUT/module-bases.txt) - a wedge RIP is resolvable"
         else
             MB_ARMED=0
-            log "  WARNING: module-base arming FAILED (see $OUT/arm-module-bases.log) - a wedge RIP on this boot will NOT resolve to a driver"
+            log "  [WARN] module-base arming FAILED (see $OUT/arm-module-bases.log) - a wedge RIP on this boot will NOT resolve to a driver"
         fi
         break
     fi
@@ -575,7 +575,7 @@ if [ "$ready" = 1 ]; then
             fi
         done
         qvm-prefs "$CHURN" qrexec_timeout 600 2>/dev/null
-        [ "$ready" = 1 ] || log "  WARNING: guest did not return within 900s of its post-install reboot (state=$(state "$CHURN")); before calling this a guest fault, DRAIN the qrexec queue - qrexec_timeout 15, probe, restore 600"
+        [ "$ready" = 1 ] || log "  [WARN] guest did not return within 900s of its post-install reboot (state=$(state "$CHURN")); before calling this a guest fault, DRAIN the qrexec queue - qrexec_timeout 15, probe, restore 600"
     else
         log "  still answering after the settle window - the job is genuinely finished"
     fi
@@ -673,7 +673,7 @@ if [ "$ready" != 1 ]; then
              > "$OUT/forensics.tar" 2>"$OUT/forensics.err"; then
             log "    forensics -> $OUT/forensics.tar"
         else
-            log "    WARNING: dom0 forensics capture failed - see $OUT/forensics.err"
+            log "    [WARN] dom0 forensics capture failed - see $OUT/forensics.err"
         fi
         # fetch-wedge-core.sh refuses before writing a byte unless this qube has guest-RAM + 1 GiB
         # free, so a full disk costs a log line here rather than a half-written image.
