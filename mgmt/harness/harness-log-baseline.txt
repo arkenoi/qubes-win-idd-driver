@@ -1,5 +1,5 @@
 # harness-log-baseline.txt - NORMALISED error-shaped lines seen on runs reviewed as clean.
-# Seeded 2026-10-14T07:03:38Z from: /home/user/qwt-accept/rel-38144346213/campaign/runner.log
+# Seeded 2026-10-14T07:06:36Z from: /home/user/qwt-accept/rel-38144346213/campaign/runner.log
 #
 # tools/sweep-gate.sh reports only shapes that are NOT here. Adding a line is a deliberate
 # act in a commit: it says 'this shape was looked at and is not a finding'. A shape that IS

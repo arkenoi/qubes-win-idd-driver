@@ -44,7 +44,14 @@ BASE="${SWEEP_GATE_BASELINE:-mgmt/harness/harness-log-baseline.txt}"
 # 0xC0000142, and silent-result shapes like stdout_bytes=0. A gate that cannot see a STALL is not a
 # gate. False positives from the widening are absorbed by the baseline, which is the whole point of
 # comparing shapes rather than matching text once.
-SHAPES='ERROR|FAIL|FATAL|WARNING|WARN:|refus|REFUS|cannot|could not|cause UNKNOWN|timed out|timeout|TIMEOUT|abort|ABORT|INVALID|unreadable|no qrexec|not Halted|exception|Exception|Traceback|STALL|WEDGE|alive=dead|=DEAD|=UNREAD|rc=[1-9]|exit code [1-9]|0x[0-9A-Fa-f]{8}|denied|verweigert|nicht gefunden|falsch geschrieben|Fehler|not recognized|No such|_bytes=0|SKIPPED|INCONCLUSIVE|BLOCKED|expired|abgelaufen|has stopped|wedged'
+SHAPES='ERROR|FAIL|FATAL|WARNING|WARN:|refus|REFUS|cannot|could not|cause UNKNOWN|timed out|timeout|TIMEOUT|abort|ABORT|INVALID|unreadable|no qrexec|not Halted|exception|Exception|Traceback|STALL|WEDGE|alive=dead|=DEAD|=UNREAD|rc=[1-9]|exit code [1-9]|0x[0-9A-Fa-f]{8}|denied|verweigert|nicht gefunden|falsch geschrieben|Fehler|not recognized|No such|_bytes=0|SKIPPED|INCONCLUSIVE|BLOCKED|expired|abgelaufen|has stopped|wedged|exit=[1-9]|status=[1-9]|code=[1-9]|=LOST|=MISSING|BROKEN|UNREACHABLE|windows=0|never (came|arrived|appeared|fired|ran)|konnte nicht|panic|assert(ion)? fail'
+
+# DEFECT KNOB for tools/tests/sweep-gate-selftest.sh ONLY: the pre-2026-10-14 shape list, which
+# missed the stall verdict, bare rc=, German OS text, hex status codes and expiry. The recall cases
+# in that self-test must FAIL with this set, or none of them is evidence about the widening.
+if [ "${SWEEP_GATE_DEFECT:-}" = "1" ]; then   # GUARD:shapes
+  SHAPES='ERROR|FAIL|FATAL|WARNING|refus|cannot|could not|timeout|abort|INVALID|exception'
+fi
 
 normalise() {
     sed -E \
