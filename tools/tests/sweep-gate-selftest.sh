@@ -202,5 +202,27 @@ else
   no "T13 the dump lost or invented lines (distinct=$indump want 3, messages=$hdrs want 2)" "$(head -6 "$T/dmp.out" 2>/dev/null)"
 fi
 
+# T14 - TWO INDEPENDENT IMPLEMENTATIONS MUST AGREE ON THE POPULATION. A corpus the author curated
+# can only measure the author's judgement; the FIRST version of --verify compared this tool's regex
+# with itself and printed EXHAUSTIVE while missing a real incident. --census extracts the declared
+# lines in AWK, from the log FORMAT (the writers' format, not anything this tool invented), and
+# requires the tool's own dump to account for exactly those. On 83 real guest logs both reach 185.
+printf '%s\n' \
+  "[20261014.120000.001-1-E] first real error" \
+  "[20261014.120001.001-1-W] a warning" \
+  "[20261014.120002.001-1-I] progress, not an error" \
+  "[20261014.120003.001-1-D] debug, not an error" \
+  "[ERROR] a bracketed one" \
+  "ordinary line with no level at all" \
+  > "$T/cen.log"
+cout=$(bash tools/sweep-gate.sh --census "$T/cen.log" 2>&1); crc=$?
+dout=$(SWEEP_GATE_DEFECT=1 bash tools/sweep-gate.sh --census "$T/cen.log" 2>&1); drc=$?
+if [ $crc -eq 0 ] && printf '%s' "$cout" | grep -qa 'AGREE' && printf '%s' "$cout" | grep -qa 'the same 3 distinct' \
+   && [ $drc -ne 0 ] && printf '%s' "$dout" | grep -qa 'DISAGREE'; then
+  ok "T14 an independent awk pass and the tool agree on the 3 declared lines, and DISAGREE when the tool is broken"
+else
+  no "T14 census wrong (clean rc=$crc, defect rc=$drc)" "clean: $(printf '%s' "$cout" | tail -2) | defect: $(printf '%s' "$dout" | tail -1)"
+fi
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

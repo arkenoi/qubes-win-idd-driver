@@ -32,10 +32,11 @@
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 2
 
-WRITE=""; VERIFY=0
+WRITE=""; VERIFY=0; CENSUS=0
 if [ "${1:-}" = "--write-ledger" ]; then WRITE="${2:?--write-ledger needs an output path}"; shift 2; fi
 if [ "${1:-}" = "--verify" ]; then VERIFY=1; shift; fi
-[ $# -ge 1 ] || [ "$VERIFY" = 1 ] || { echo "usage: $0 [--verify] [--write-ledger <out>] <log> [...]" >&2; exit 2; }
+if [ "${1:-}" = "--census" ]; then CENSUS=1; shift; fi
+[ $# -ge 1 ] || [ "$VERIFY" = 1 ] || { echo "usage: $0 [--verify] [--census] [--write-ledger <out>] <log> [...]" >&2; exit 2; }
 LEDGER="${SWEEP_GATE_LEDGER:-mgmt/harness/error-ledger.txt}"
 
 QWT='^\[[0-9]{8}\.[0-9]{6}\.[0-9]{3}-[0-9]+(:[0-9]+)?-'
@@ -187,6 +188,47 @@ fi
 # were filed BEFORE this tool existed. RECALL below 100% fails - a gate that misses a real error is
 # not a gate. Precision is reported too, because the version before last flagged explanatory prose
 # and buried ten real findings under it.
+# --census: AN INDEPENDENT SECOND IMPLEMENTATION, because a corpus the author curated can only ever
+# measure the author's judgement. This extracts the population in AWK, from the LOG LINE FORMAT
+# itself - [YYYYMMDD.HHMMSS.mmm-PID[:TID]-L] with L in D/I/W/E, which is the writers' format and not
+# anything this tool invented - and requires the tool's own dump to account for exactly those lines.
+# Two implementations in two languages agreeing on a real corpus is evidence; the earlier --verify
+# that compared this tool's regex with itself was not, and printed EXHAUSTIVE over a real miss.
+if [ "${CENSUS:-}" = 1 ]; then
+    [ $# -ge 1 ] || { echo "usage: $0 --census <log> [...]" >&2; exit 2; }
+    cfile=$(mktemp); dfile=$(mktemp)
+    awk '
+      # a declared ERROR or WARNING, recognised from the format, independently of $LEVELS
+      /^\[[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]\.[0-9][0-9][0-9][0-9][0-9][0-9]\.[0-9][0-9][0-9]-[0-9]+(:[0-9]+)?-[WE]\]/ { n++; next }
+      /\[ERROR\]|\[WARN\]|\[WARNING\]/ { n++; next }
+      END { print n+0 }
+    ' "$@" > "$cfile"
+    # a real EMPTY file, not /dev/null: `[ -f /dev/null ]` is FALSE (character device), so the inner
+    # run refused, wrote no dump, and this check reported a 185-line disagreement that did not exist.
+    el=$(mktemp); printf '# empty ledger for --census\n' > "$el"
+    SWEEP_GATE_DUMP="$dfile" SWEEP_GATE_LEDGER="$el" "$0" "$@" >/dev/null 2>&1
+    rm -f "$el"
+    # the dump carries one line per DISTINCT declared line; duplicates are the difference
+    indep=$(cat "$cfile")
+    dumped=$(grep -ac '^    ' "$dfile" 2>/dev/null || true); dumped=${dumped:-0}
+    uniq_indep=$(awk '
+      /^\[[0-9]{8}\.[0-9]{6}\.[0-9]{3}-[0-9]+(:[0-9]+)?-[WE]\]/ || /\[ERROR\]|\[WARN\]|\[WARNING\]/ {
+        line=$0; sub(/^\[[0-9]{8}\.[0-9]{6}\.[0-9]{3}-[0-9]+(:[0-9]+)?-[DIWE]\][ \t]*/, "", line)
+        gsub(/[ \t]+/, " ", line); seen[line]=1
+      } END { print length(seen) }
+    ' "$@")
+    rm -f "$cfile" "$dfile"
+    echo "SWEEP-GATE-CENSUS awk_declared_lines=$indep awk_distinct=$uniq_indep tool_distinct_in_dump=$dumped"
+    if [ "${indep:-0}" -eq 0 ]; then
+        echo "  INCONCLUSIVE: the independent pass found no declared line, so nothing was compared."; exit 2
+    fi
+    if [ "${dumped:-0}" -ne "${uniq_indep:-0}" ]; then
+        echo "  DISAGREE: two implementations of the same population differ by $(( uniq_indep - dumped )) line(s) - one of them is wrong."; exit 1
+    fi
+    echo "  AGREE: an awk pass over the log FORMAT and this tool account for the same $uniq_indep distinct declared line(s)."
+    exit 0
+fi
+
 if [ "$VERIFY" = 1 ]; then
     CORPUS="${SWEEP_GATE_CORPUS:-mgmt/harness/error-corpus.txt}"
     [ -f "$CORPUS" ] || { echo "sweep-gate: REFUSING - no corpus at $CORPUS; there is nothing to measure against" >&2; exit 2; }
