@@ -28,14 +28,27 @@
 #     to name the guest, so it cannot be left lying around as a blanket opt-out, and it shows up in
 #     the transcript next to the command it authorised.
 #
+# SECOND RULE, SAME PARSER: a SPENT SPECIMEN is not started by hand either. When a cell fails and
+# leaves its subject as it stands (matrix.sh's H3.5 path), mgmt/harness/specimen-lib.sh writes
+# scratchpad/specimens/<vm>.spent, and a start verb aimed at that name is blocked. On 2026-10-14 I
+# started win10-acc by hand to read its logs, minutes after the campaign had deliberately preserved
+# it, with the owner watching: "starting WHAT THE FUCK to read the logs, we agreed to move the logs
+# off to stick". The logs never needed the guest - logvol_pull reads the secondary log volume as an
+# image file in THIS qube, with mtools, while the guest runs, wedges or sits Halted - and that boot
+# could not have worked anyway, because the ISO cell had left a `--required` claim on a released
+# loop device. Authorise one guest with SPECIMEN_BOOT=<vm> when a boot really is the only route.
+# It lives in this file, not a second hook, because the start-verb parser below is the hard part
+# and two copies of one parser drift apart - which cost a whole acceptance cell earlier that day.
+#
 # stdin: the hook JSON. Exit 0 = allow, 2 = block (message handed back to the model).
-# Self-test: tools/tests/golden-guard-selftest.sh. GOLDEN_BOOT_GATE_DEFECT=1 re-introduces the
-# original state (nothing enforces) and the self-test must then FAIL.
+# Self-test: tools/tests/golden-guard-selftest.sh and tools/tests/specimen-boot-gate-selftest.sh.
+# GOLDEN_BOOT_GATE_DEFECT=1 re-introduces the original state (nothing enforces) and both self-tests
+# must then FAIL.
 set -u
 cd "${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 0
 if [ "${GOLDEN_BOOT_GATE_DEFECT:-}" = "1" ]; then exit 0; fi   # GUARD:golden-boot-gate
 input=$(cat)
-GOLDEN_UNSEAL="${GOLDEN_UNSEAL:-}" python3 - "$input" <<'PY'
+GOLDEN_UNSEAL="${GOLDEN_UNSEAL:-}" SPECIMEN_BOOT="${SPECIMEN_BOOT:-}" python3 - "$input" <<'PY'
 import glob, json, os, re, shlex, sys
 
 try:
@@ -55,8 +68,11 @@ if not cmd.strip():
     sys.exit(0)
 
 GOLDENS = {os.path.basename(p)[:-5] for p in glob.glob('mgmt/goldens/*.json')}
-if not GOLDENS:
-    sys.exit(0)            # nothing sealed - nothing to protect
+# A spent specimen: the harness wrote this down when it chose to leave a guest as it stands.
+SPEC_DIR = os.environ.get('SPECIMEN_DIR') or 'scratchpad/specimens'
+SPECIMENS = {os.path.basename(p)[:-len('.spent')] for p in glob.glob(f'{SPEC_DIR}/*.spent')}
+if not GOLDENS and not SPECIMENS:
+    sys.exit(0)            # nothing sealed and nothing preserved - nothing to protect
 
 def strip_prose(c):
     """A commit message or a heredoc body that TALKS about starting a golden is prose, not a
@@ -118,7 +134,9 @@ START = {'qvm-start', 'qvm-run', 'reprovision-usb.sh'}
 QTEST_START = {'start', 'run', 'push', 'pushrun', 'kill', 'shutdown'}
 
 unseal = os.environ.get('GOLDEN_UNSEAL', '').strip()
+sboot = os.environ.get('SPECIMEN_BOOT', '').strip()
 hits = []
+shits = []
 
 for toks in segments(strip_prose(cmd)):
     if not toks:
@@ -140,20 +158,53 @@ for toks in segments(strip_prose(cmd)):
 
     # Per-segment GOLDEN_UNSEAL=... counts, so the authorisation sits on the command it authorises.
     permit = env_here.get('GOLDEN_UNSEAL', unseal).strip()
+    spermit = env_here.get('SPECIMEN_BOOT', sboot).strip()
 
-    target = None
+    # The names this segment would START, before we know what they are. ONE parse, then membership
+    # is tested against both protected sets - a second copy of the parser is what drifts.
+    names = []
     if name in START:
-        target = next((a for a in rest if a in GOLDENS), None)
+        names = rest
     elif name == 'qtest' or name.endswith('/qtest'):
         if any(a in QTEST_START for a in rest):
             cand = env_here.get('QTEST_VM', os.environ.get('QTEST_VM', ''))
-            target = cand if cand in GOLDENS else next((a for a in rest if a in GOLDENS), None)
+            names = ([cand] if cand else []) + rest
+
+    target = next((a for a in names if a in GOLDENS), None)
+    starget = next((a for a in names if a in SPECIMENS), None)
 
     if target and target != permit:
         hits.append((target, name))
+    if starget and starget != spermit:
+        shits.append((starget, name))
+
+if not hits and not shits:
+    sys.exit(0)
 
 if not hits:
-    sys.exit(0)
+    tgt, verb = shits[0]
+    f = f'{SPEC_DIR}/{tgt}.spent'
+    rec = {}
+    try:
+        for ln in open(f):
+            k, _, v = ln.strip().partition('=')
+            rec[k] = v
+    except Exception:
+        pass
+    sys.stderr.write(f"""BLOCKED by golden-boot-gate.sh: `{verb}` would START the spent specimen {tgt}.
+A failed cell kept it as evidence, so it is not a machine any more. Marked {rec.get('marked_utc','?')}.
+  why:   {rec.get('why','?')}
+  where: {rec.get('where','?')}
+Its QWT logs do not need it running - the secondary log volume is an image FILE in this qube:
+  . mgmt/harness/logvol-lib.sh
+  logvol_pull  $(logvol_image {tgt}) <outdir>      # mtools; guest running, wedged or Halted
+  logvol_salvage $(logvol_image {tgt}) <outdir>    # raw-image scan for a tail mcopy will not reach
+  mgmt/harness/collect-failure.sh {tgt} <outdir>   # that pull plus the rest of the evidence
+A start also tends to FAIL here: an ISO cell leaves a `--required` claim on a loop device that is
+later released, and the domain then cannot be created at all.
+If a boot really is the only route, authorise that one guest:  SPECIMEN_BOOT={tgt} <your command>
+""")
+    sys.exit(2)
 
 tgt, verb = hits[0]
 seal = f'mgmt/goldens/{tgt}.json'

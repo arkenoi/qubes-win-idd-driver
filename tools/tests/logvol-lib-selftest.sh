@@ -15,7 +15,7 @@
 #   compose     our drive + device are ADDED to an existing answer-stick controller, never overwrite it
 #               (knob: compose); the drive carries cache=writethrough (knob: writethrough); idempotent (knob: idempotent)
 #   strip       our fragments are removed and the stick's are untouched; our own controller goes with them
-#   attach      loop + --required assign at xvdj read-only=false + qemu args + manifest, in that order;
+#   attach      loop + --required assign at xvdk read-only=false + qemu args + manifest, in that order;
 #               a sealed golden is REFUSED (knob: seal)
 #   detach      unassign + strip; the loop is released only when the guest is Halted
 #   bind        the guest binder parses (pwsh) and sets LogSafeFlush=1 and LogDir at the root key
@@ -165,7 +165,7 @@ printf '%s' "$ck" | grep -q 'cache=writethrough' && bad "knob 'writethrough' did
 K=$(knob compose) || exit 2; ck=$(run "$K" "logvol_qemu_args_compose '$STICK'")
 [ "${ck#"$STICK"}" = "$ck" ] && ok "compose: knob 'compose' OVERWRITES the stick's args - the check is seen to fail" || bad "knob 'compose' did not break composition"
 c0=$(run "$LIB" "logvol_qemu_args_compose ''")
-printf '%s' "$c0" | grep -q -- '-device nec-usb-xhci,id=logusb -drive file=/dev/xvdj,format=host_device,if=none,id=logdrv,cache=writethrough -device usb-storage,bus=logusb.0,drive=logdrv,removable=on' \
+printf '%s' "$c0" | grep -q -- '-device nec-usb-xhci,id=logusb -drive file=/dev/xvdk,format=host_device,if=none,id=logdrv,cache=writethrough -device usb-storage,bus=logusb.0,drive=logdrv,removable=on' \
   && ok "compose: with no existing args our OWN controller is added (logusb)" || bad "compose empty: '$c0'"
 c2=$(run "$LIB" "logvol_qemu_args_compose '$c'")
 [ "$c2" = "$c" ] && ok "compose: idempotent - composing twice adds nothing" || bad "compose: not idempotent: '$c2'"
@@ -180,10 +180,20 @@ s0=$(run "$LIB" "logvol_qemu_args_strip '$c0'")
 : > "$CALLS"; rm -f "$FEATSTORE"; printf '%s' "$STICK" > "$FEATSTORE"
 MF="$T/manifest.json"
 out=$(run "$LIB" "logvol_attach win11-cell '$IMG' '$MF'"); rc=$?
-if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q 'LOGVOL-ATTACHED vm=win11-cell id=cell-A1 .*loop=loop77 frontend=xvdj cache=writethrough'; then ok "attach: $out"; else bad "attach: rc=$rc $out $(cat "$T/last.err")"; fi
+if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q 'LOGVOL-ATTACHED vm=win11-cell id=cell-A1 .*loop=loop77 frontend=xvdk cache=writethrough'; then ok "attach: $out"; else bad "attach: rc=$rc $out $(cat "$T/last.err")"; fi
 grep -q 'udisksctl loop-setup -f ' "$CALLS" && ok "attach: a WRITABLE loop (udisksctl loop-setup -f, no -r)" || bad "attach: loop-setup call wrong: $(grep udisksctl "$CALLS")"
-grep -q 'qvm-device block assign --required -o frontend-dev=xvdj -o devtype=disk -o read-only=false win11-cell win-idd-mgmt:loop77' "$CALLS" \
-  && ok "attach: assign --required at xvdj, devtype=disk, read-only=false, holder win-idd-mgmt:loop77" || bad "attach: assign call wrong: $(grep qvm-device "$CALLS")"
+grep -q 'qvm-device block assign --required -o frontend-dev=xvdk -o devtype=disk -o read-only=false win11-cell win-idd-mgmt:loop77' "$CALLS" \
+  && ok "attach: assign --required at xvdk, devtype=disk, read-only=false, holder win-idd-mgmt:loop77" || bad "attach: assign call wrong: $(grep qvm-device "$CALLS")"
+# THE SLOT MUST NOT BE THE DIAG STICK'S. This volume sat on xvdj until 2026-10-14, which is
+# prime-run's DIAG slot - the collision is why the clean-install path could not simply attach it,
+# and why that path ran with no log volume at all while its grading blamed the guest.
+# Read the DEFAULT out of the library rather than the environment: this test drives the lib in
+# shimmed subshells, so the variable is not bound in this shell (`set -u` aborted the check here).
+LVFE=$(sed -n 's/^LOGVOL_FRONTEND="${LOGVOL_FRONTEND:-\([a-z0-9]*\)}".*/\1/p' mgmt/harness/logvol-lib.sh | head -1)
+{ [ -n "$LVFE" ] && [ "$LVFE" != xvdj ]; } \
+  && ok "attach: the slot ($LVFE) is not prime-run's DIAG stick (xvdj)" || bad "attach: LOGVOL_FRONTEND default is '$LVFE' - xvdj is prime-run's DIAG stick"
+grep -q 'frontend-dev=xvdj' mgmt/harness/prime-run.sh \
+  && ok "attach: prime-run still owns xvdj for DIAG" || bad "attach: prime-run no longer assigns xvdj - re-check which slot is free"
 if [ "$(grep -n -E 'loop-setup|block assign|qvm-features win11-cell qemu-extra-args --' "$CALLS" | cut -d: -f1 | tr '\n' ' ')" = "$(grep -n -E 'loop-setup|block assign|qvm-features win11-cell qemu-extra-args --' "$CALLS" | cut -d: -f1 | sort -n | tr '\n' ' ')" ] \
    && grep -q 'loop-setup' "$CALLS" && grep -q 'block assign' "$CALLS" && grep -q 'qemu-extra-args --' "$CALLS"; then
   ok "attach: order is loop -> assign -> qemu args"

@@ -60,6 +60,7 @@ state(){ qvm-ls --raw-data --fields state "$1" 2>/dev/null; }
 # next prime-run recreates it from the sealed base and clears the marker after the clone).
 source mgmt/harness/run-lib.sh
 source mgmt/harness/prime-rescue-lib.sh   # rescue_quiet_step / rescue_noshow_step / rescue_should_fire
+source mgmt/harness/logvol-lib.sh         # the secondary log volume: QWT's logs readable from THIS qube, with no guest
 
 # cpu_time is CUMULATIVE - flat across a sample means the domain is not executing. Local copy so
 # prime-run stays independent of e2e-wait.sh, which it does not source. UNREADABLE = MOVING: a
@@ -280,6 +281,25 @@ fi
 OUT="$HERE/evidence/prime-$JOB-$CHURN-$(date -u +%Y%m%d-%H%M%S)"; mkdir -p "$OUT"
 log "evidence -> $OUT"
 
+# --- THE SECONDARY LOG VOLUME ------------------------------------------------------------------
+# QWT's own per-module logs, on a volume THIS qube reads with mtools - guest running, wedged or
+# halted. Until 2026-10-14 this path had none: logvol_create/logvol_attach were called from exactly
+# one place in matrix.sh (the release-ISO boot), so the CLEAN cell - the one that installs the
+# release - ran with no log volume at all, and its grading then reported "guest logs incomplete
+# (1 file, 0 QWT lines)" about an instrument that was never there. It could not simply be added
+# either: the library's slot was xvdj, which is the DIAG stick above. It has its own now (xvdk),
+# and this attach COMPOSES qemu-extra-args rather than overwriting the value set earlier.
+# BEFORE THE START, and after qemu-extra-args: a --required assignment is satisfied at domain
+# creation, so a volume attached later is invisible to the guest.
+LOGVOL_IMG_PRIME=$(logvol_image "$CHURN")
+if logvol_create "$LOGVOL_IMG_PRIME" "$CHURN" >>"$OUT/logvol-setup.out" 2>&1 \
+   && logvol_attach "$CHURN" "$LOGVOL_IMG_PRIME" "$OUT/logvol-manifest.json" >>"$OUT/logvol-setup.out" 2>&1; then
+    log "log volume on $LOGVOL_FRONTEND ($LOGVOL_IMG_PRIME) - read it with logvol_pull, no guest needed"
+else
+    LOGVOL_IMG_PRIME=""
+    log "[WARN] log volume not attached - a wedge or a refused shutdown loses the QWT logs: $(tail -1 "$OUT/logvol-setup.out" 2>/dev/null | cut -c1-140)"
+fi
+
 # --- LOOK AT THE SCREEN, do not infer from qrexec silence -------------------------------------
 # Cost of not doing this, measured 2026-09-08: a clean install froze the guest, the wait below saw
 # only "no qrexec" and reported the guest unreachable; I then called the IMAGE permanently broken
@@ -473,8 +493,12 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
         quiet=0; noshow=0; t_start=$(date +%s)   # the rescue clock runs from THIS boot, see RESCUE_QUIET
         continue
     fi
-    if QTEST_VM=$CHURN timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null \
-         | grep -qa QREADY; then
+    # CAPTURE, then match - never pipe a probe into `grep -q`. grep exits at the first match, the
+    # producer dies of SIGPIPE, timeout reports 141, and this script's `set -o pipefail` makes 141
+    # the status: the guest ANSWERED and the probe said it did not. The three other probes in this
+    # file were fixed on 2026-10-14; this one hid behind a line continuation, where lint L23's
+    # per-line scan could not see it. It is the probe that decides a clean install succeeded.
+    if grep -qa QREADY <<< "$(QTEST_VM=$CHURN timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null)"; then
         # QUIET AFTER THE FIRST ANSWER (QUIET_AFTER_FIRST=1; owner-approved 2026-10-04, findings/wedge.md "REVERSE CODE QUALITY").
         # The stall is QEMU in the stub domain no longer completing the guest's requests, and it strikes in a fresh domain's first
         # minutes under concentrated activity. This script's first answer in stage 2 lands seconds after msiexec started QWT's
@@ -720,6 +744,22 @@ if [ "$rescued" = 1 ]; then
     # which is all this script promises); the caller reads rescued=1 from prime-run.meta.
     log "OK-WITH-RESCUE: $CHURN is up ONLY because of the one-shot rescue reboot (rescued=1 in prime-run.meta)."
     log "  ANOMALY - grade the job's reboot contract / qrexec startup from $OUT/rescue-* before trusting this fixture."
+fi
+# BIND QWT'S LOGS TO THE VOLUME, LAST. The binder runs inside the guest and needs a logged-on
+# session, so it cannot happen when the volume is attached (the guest does not exist yet). It is
+# also deliberately NOT done at the first qrexec answer: this script makes no guest call there
+# (QUIET_AFTER_FIRST), because that is where the stub-domain stall strikes.
+# WHAT THIS DOES AND DOES NOT BUY. windows-utils reads LogDir at LogInit, i.e. at each module's
+# NEXT START, so the modules running right now keep writing to C: and every boot FROM HERE ON
+# writes to the volume. The install's own final shutdown is therefore NOT covered by this call -
+# that needs the value present before the modules start, which is the answer file's job and is not
+# done yet (findings/issues.md LOGVOLBINDLATE).
+if [ -n "${LOGVOL_IMG_PRIME:-}" ]; then
+    if logvol_bind_guest "$CHURN" "$CHURN" >>"$OUT/logvol-bind.out" 2>&1; then
+        log "QWT logs bound to the log volume (effective from the NEXT boot of $CHURN)"
+    else
+        log "[WARN] log-volume bind failed (see $OUT/logvol-bind.out) - logs stay on C: and a wedge loses them"
+    fi
 fi
 log "OK: $CHURN is up. Evidence in $OUT. The stick is still assigned --required and"
 log "  qemu-extra-args is still set - clear both before using this guest as a cell subject."

@@ -1210,6 +1210,7 @@ def l23_no_pipe_into_grep_q_for_a_guest_probe() -> None:
         if f not in pipefail and f not in inherits:
             continue
         heredoc = None
+        buf, bufn = "", None
         for n, ln in enumerate(bodies[f].splitlines(), 1):
             st = ln.lstrip()
             if heredoc is not None:
@@ -1222,8 +1223,17 @@ def l23_no_pipe_into_grep_q_for_a_guest_probe() -> None:
                 continue
             if not st or st.startswith("#"):
                 continue
-            if probe.search(ln):
-                finding("L23-pipe-into-grep-q-probe", f"{f.name}:{n}",
+            # A BACKSLASH CONTINUATION HIDES THE PIPE from a per-line scan. That is not
+            # hypothetical: prime-run.sh:476 wrote the probe on one line and `| grep -qa QREADY` on
+            # the next, and carried this exact defect - in the clean-install path, at the moment the
+            # guest first answers - past this gate until 2026-10-14. Join them before matching.
+            cur, curn = (buf + " " + st, bufn) if buf else (st, n)
+            if cur.rstrip().endswith("\\"):
+                buf, bufn = cur.rstrip()[:-1], curn
+                continue
+            buf, bufn = "", None
+            if probe.search(cur):
+                finding("L23-pipe-into-grep-q-probe", f"{f.name}:{curn}",
                         "a guest probe piped into grep -q: SIGPIPE + pipefail grade a live guest "
                         "dead (measured 86/200); capture it and match instead")
 

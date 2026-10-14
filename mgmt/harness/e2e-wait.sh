@@ -136,6 +136,13 @@ w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
         # Not a bare timeout: the wedge signature was present and persisted to the deadline. Say so,
         # so a caller and a reader see a CLASSIFIED outcome instead of "something did not answer".
         $log "  $lbl: DEADLINE ${dl}s - and QWTWEDGESUSPECT held throughout. Treating as TERMINAL, guest LEFT AS IT STANDS."
+        # This is the moment the guest stops being a machine and becomes evidence, so it is the
+        # moment to write that down. The marker makes tools/hooks/golden-boot-gate.sh refuse a
+        # hand-typed start of this name - the mistake made on 2026-10-14, minutes after this very
+        # line fired. Guarded by `type`, so sourcing this file alone still works.
+        if type specimen_mark >/dev/null 2>&1; then
+          specimen_mark "$vm" "$lbl: no session by ${dl}s, kept as evidence" "$dir" >/dev/null || true
+        fi
         return 1
       fi
       $log "  $lbl: DEADLINE ${dl}s with no session (screen=$(w_screen "$vm" "$lbl-dl" "$dir"))"

@@ -55,35 +55,57 @@ case_is() {
 echo "PART A - starting a sealed golden"
 echo "  sealed goldens seen: $(ls mgmt/goldens/*.json 2>/dev/null | wc -l)"
 
+# THE NAMES COME FROM THE SEAL DIRECTORY, NEVER FROM THIS FILE. Until 2026-10-14 every blocking
+# case here named win11-base and win11de-base by hand. Both lost their seals when the rig was
+# re-sealed that day, the gate correctly ignored two unsealed names, and SIX of the eight blocking
+# cases silently stopped testing anything - the test still reported them as its own failures rather
+# than as a stale fixture. A test that names rig state is a test that expires; derive it.
+mapfile -t SEALED < <(ls mgmt/goldens/*.json 2>/dev/null | xargs -r -n1 basename | sed 's/\.json$//')
+if [ "${#SEALED[@]}" -lt 2 ]; then
+    echo "  FATAL: fewer than two sealed goldens exist - this gate cannot be exercised"; exit 2
+fi
+G=${SEALED[0]}; G2=${SEALED[1]}
+echo "  exercising with: $G and $G2"
+# And the names must BE sealed, or an ALLOW case could pass for the wrong reason.
+for n in "$G" "$G2"; do
+    [ -f "mgmt/goldens/$n.json" ] || { echo "  FATAL: $n is not sealed"; exit 2; }
+done
+# An unsealed, unmarked name for the negative case, likewise not hardcoded to a guest that may
+# since have been sealed or marked as a specimen.
+UNSEALED=__selftest_no_such_qube__
+
 # --- must BLOCK: these start or overwrite the golden itself
-case_is BLOCK "qvm-start"                  'qvm-start win11-base'
-case_is BLOCK "qvm-run (it auto-starts)"   'qvm-run win11-base "cmd /c ver"'
-case_is BLOCK "qtest run via QTEST_VM"     'QTEST_VM=win11-base ./tools/qtest run whoami'
-case_is BLOCK "qtest start positional"     './tools/qtest start win11de-base'
-case_is BLOCK "reprovision overwrites"     'PRISTINE=1 mgmt/reprovision-usb.sh win10-base loop3 loop4'
-case_is BLOCK "second line of a script"    'echo preparing
-qvm-start win11r-base'
-case_is BLOCK "inside an if"               'if true; then qvm-start win11-base; fi'
-case_is BLOCK "after a pipeline"           'cat /dev/null | qvm-start win11-base'
+case_is BLOCK "qvm-start"                  "qvm-start $G"
+case_is BLOCK "qvm-run (it auto-starts)"   "qvm-run $G \"cmd /c ver\""
+case_is BLOCK "qtest run via QTEST_VM"     "QTEST_VM=$G ./tools/qtest run whoami"
+case_is BLOCK "qtest start positional"     "./tools/qtest start $G2"
+case_is BLOCK "reprovision overwrites"     "PRISTINE=1 mgmt/reprovision-usb.sh $G loop3 loop4"
+case_is BLOCK "second line of a script"    "echo preparing
+qvm-start $G2"
+case_is BLOCK "inside an if"               "if true; then qvm-start $G; fi"
+case_is BLOCK "after a pipeline"           "cat /dev/null | qvm-start $G"
 
 # --- must ALLOW: reads, clones, prose, unsealed guests, and an explicit authorisation
-case_is ALLOW "golden.sh verify"           'mgmt/golden.sh verify win11-base'
-case_is ALLOW "golden.sh seal"             'mgmt/golden.sh seal win11-base "note"'
-case_is ALLOW "quick-upgrade CLONES"       'mgmt/harness/quick-upgrade.sh win11de-qwt subj'
-case_is ALLOW "prime-selftest CLONES"      'mgmt/prime-selftest.sh win11r-base'
-case_is ALLOW "qvm-volume info"            'qvm-volume info win11-base:root'
-case_is ALLOW "qvm-ls"                     'qvm-ls --raw-data --fields STATE win11-base'
-case_is ALLOW "grep names a golden"        'grep -n win11-base mgmt/golden.sh'
-case_is ALLOW "commit message is prose"    'git commit -m "qvm-start win11-base is now refused"'
-case_is ALLOW "unsealed qube"              'qvm-start win11-acc'
-case_is ALLOW "usage request"              'qvm-start --help win11-base'
-case_is ALLOW "explicit authorisation"     'GOLDEN_UNSEAL=win10-base mgmt/reprovision-usb.sh win10-base loop3 loop4'
-case_is ALLOW "authorisation is per-guest" 'GOLDEN_UNSEAL=win10-base mgmt/golden.sh verify win11-base'
+case_is ALLOW "golden.sh verify"           "mgmt/golden.sh verify $G"
+case_is ALLOW "golden.sh seal"             "mgmt/golden.sh seal $G \"note\""
+case_is ALLOW "quick-upgrade CLONES"       "mgmt/harness/quick-upgrade.sh $G2 subj"
+case_is ALLOW "prime-selftest CLONES"      "mgmt/prime-selftest.sh $G"
+case_is ALLOW "qvm-volume info"            "qvm-volume info $G:root"
+case_is ALLOW "qvm-ls"                     "qvm-ls --raw-data --fields STATE $G"
+case_is ALLOW "grep names a golden"        "grep -n $G mgmt/golden.sh"
+case_is ALLOW "commit message is prose"    "git commit -m \"qvm-start $G is now refused\""
+case_is ALLOW "unsealed qube"              "qvm-start $UNSEALED"
+case_is ALLOW "usage request"              "qvm-start --help $G"
+case_is ALLOW "explicit authorisation"     "GOLDEN_UNSEAL=$G mgmt/reprovision-usb.sh $G loop3 loop4"
+# Per-guest scoping, tested where it can actually fail: authorising one golden must not start
+# ANOTHER. As an ALLOW case on `golden.sh verify` (a read, which no authorisation is needed for)
+# this asserted nothing.
+case_is BLOCK "authorisation is per-guest" "GOLDEN_UNSEAL=$G qvm-start $G2"
 
 # A heredoc body that TALKS about the forbidden command must not trip the gate.
-case_is ALLOW "heredoc body is prose"      'cat > /tmp/x <<EOF
-qvm-start win11-base
-EOF'
+case_is ALLOW "heredoc body is prose"      "cat > /tmp/x <<EOF
+qvm-start $G
+EOF"
 
 echo
 echo "PART B - re-sealing over a record you can no longer reach"

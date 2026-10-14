@@ -70,6 +70,8 @@ export QTEST_VM="${QTEST_VM:-__matrix_no_ambient_target__}"
 source .claude/skills/win-guest-e2e/e2e-lib.sh
 source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the notepad a cell starts is stopped by its recorded identity, never by name
 source mgmt/harness/logvol-lib.sh
+source mgmt/harness/specimen-lib.sh   # a cell that keeps its subject as evidence writes that down; the boot gate then refuses a hand-typed start
+source mgmt/harness/blockclaim-lib.sh # a --required claim on a released loop makes a subject UNCREATABLE; swept before every start, dropped at exit
 # THE SECONDARY LOG VOLUME (PLAN-acceptance-optimization section 3), for the WEDGE case: when a cell
 # hangs with qrexec dead, QWT's per-module logs sit on a volume this qube reads with mtools - guest
 # running or not, nothing detached. The library landed 2026-10-13 and NO harness called it, so a
@@ -182,6 +184,21 @@ no(){ FAIL=$((FAIL+1)); local _l="[ERROR] "; case "$*" in *INVALID*) INVALID=$((
 # line states what is actually on disk, and a finding reaches the TALLY rather than only printing -
 # a line that only prints is a line nobody reads.
 # LOGSWEEP_CMD exists so the self-test can drive each exit code without a guest.
+# WHY THERE ARE NO QWT LINES, in the instrument's own terms. "guest logs incomplete (1 file(s), 0
+# QWT line(s))" was printed for all four cells on 2026-10-14 and sent me looking at the guest; the
+# cause was the instrument every time - no volume attached on the clean path, and a clone with no
+# QWT on the ISO path. A data verdict that cannot distinguish "the guest wrote nothing" from "there
+# was nothing to write to" is a verdict about nothing.
+_matrix_logvol_state(){ # <cell> -> one clause naming the instrument's state
+  local d="$M/logvol-$1/files"
+  [ -n "${LOGVOL_IMG:-}" ] || { echo "no log volume was attached for this cell"; return; }
+  [ -d "$d" ]              || { echo "the log volume was never pulled, so nothing could be read"; return; }
+  [ -d "$d/qwt-logs" ]     || { echo "the volume carries no qwt-logs dir - attached, never bound"; return; }
+  local n; n=$(find "$d/qwt-logs" -type f 2>/dev/null | wc -l)
+  [ "$n" -gt 0 ]           || { echo "qwt-logs is EMPTY - the bind applies at a module's next start, and no boot followed it"; return; }
+  echo "qwt-logs holds $n file(s), none in QWT's line shape"
+}
+
 grade_cell_logsweep(){ # <cell> <vm> <matrix-dir>
   local c="${1:?grade_cell_logsweep <cell> <vm> <dir>}" vm="${2:?}" m="${3:?}" rc f q have
   "${LOGSWEEP_CMD:-./mgmt/harness/log-sweep.sh}" "$vm" "$CAMPAIGN_SINCE" "$m/$c-guestlogs" >"$m/$c-logsweep.out" 2>&1
@@ -190,6 +207,7 @@ grade_cell_logsweep(){ # <cell> <vm> <matrix-dir>
   # QWT's own line shape, so "collected" is never satisfied by harness bash lines (LOGVOLBINDUPGRADE).
   q=$(grep -rhoaE '^\[[0-9]{8}\.[0-9]{6}\.[0-9]{3}-[0-9]+' "$m/$c-guestlogs/logs" 2>/dev/null | wc -l)
   have="$f file(s), $q QWT line(s)"
+  [ "$q" -gt 0 ] || have="$have; $(_matrix_logvol_state "$c")"
   case "$rc" in
     0) say "  $c: guest logs swept CLEAN ($have) -> $m/$c-guestlogs" ;;
     1) no "$c: the guest log sweep found a breach or a defect ($have). See $m/$c-logsweep.out" ;;
@@ -246,8 +264,10 @@ start_vm(){
   (
     for i in $(seq 1 150); do          # 150 x 4s = 10 min ceiling, then give up and SAY so
       sleep 4
-      if QTEST_VM="$vm" timeout -k 5 20 "$HERE/tools/qtest" run 'cmd /c echo QREADY' 2>/dev/null \
-           | grep -qa QREADY; then
+      # CAPTURE, then match. Piped into `grep -q` the producer dies of SIGPIPE, timeout reports
+      # 141, and pipefail makes 141 the status - a live guest graded dead. The continuation hid
+      # this shape from lint L23 until 2026-10-14.
+      if grep -qa QREADY <<< "$(QTEST_VM="$vm" timeout -k 5 20 "$HERE/tools/qtest" run 'cmd /c echo QREADY' 2>/dev/null)"; then
         printf '%s\t%s\t%s\n' "$vm" "$(( $(date +%s) - t0 ))" "answered" >> "$M/boot-to-qrexec.tsv"
         exit 0
       fi
@@ -263,8 +283,20 @@ start_vm(){
 # Best-effort: a guest still holding the disc makes the delete fail, which is exactly when reuse
 # above is what keeps the count flat.
 MATRIX_LOOP_CREATED=""
+# Every subject this run handed the release ISO to. `qvm-start --cdrom=<holder>:loopN` leaves a
+# `--required` cdrom claim on the guest, and the loop below is then released from under it: from
+# that moment the subject CANNOT BE CREATED, and Qubes says only "libxenlight failed to create new
+# domain". Measured 2026-10-14 - win10-acc kept `win-idd-mgmt:loop14:*` after this very function
+# released /dev/loop14 at 20:47:45, and stayed unstartable. So the claims go before the loop does.
+MATRIX_CDROM_CLAIMED=""
 _matrix_release_loop(){
   [ -n "${MATRIX_LOOP_CREATED:-}" ] || return 0
+  local v
+  for v in $MATRIX_CDROM_CLAIMED; do
+    claim_drop_loop "$v" "$MATRIX_LOOP_CREATED" >/dev/null 2>&1 \
+      && say "  $v: release-ISO claim on /dev/$MATRIX_LOOP_CREATED dropped" \
+      || say "  $v: [WARN] could not drop the claim on /dev/$MATRIX_LOOP_CREATED - it may not start next time"
+  done
   if udisksctl loop-delete -b "/dev/$MATRIX_LOOP_CREATED" >/dev/null 2>&1; then
     say "  released /dev/$MATRIX_LOOP_CREATED"
   else
@@ -390,6 +422,10 @@ EOF
   done
   [ -z "$cerr" ] || { say "  [ERROR] clone FAILED after every retry"; return 1; }
   say "  cloned $g -> $t"
+  # The volumes just became a fresh copy of the entry image, so whatever this subject was
+  # preserving is gone and its marker must go with it. A marker that outlives its specimen would
+  # block the NEXT campaign, which is how a guard turns into something to switch off.
+  specimen_clear "$t" >/dev/null || true
 }
 
 # ------------------------------------------------------------------- release delivery + snapshots
@@ -492,7 +528,11 @@ boot_with_release_iso(){ # $1=vm $2=label - boot a HALTED subject with the relea
     say "  $lbl: [WARN] log volume not attached - a wedge here loses the QWT logs: $(tail -1 "$M/$lbl-logvol-setup.out" 2>/dev/null | cut -c1-140)"
     LOGVOL_IMG=""
   fi
+  # A claim left by an EARLIER run on a loop that is now gone would make this start fail with
+  # nothing but "libxenlight failed to create new domain" - swept here, where it is cheap.
+  claim_sweep_stale "$vm" say || say "  $lbl: [WARN] a stale block claim survived - the start below may fail"
   say "  $lbl: booting $vm with the release ISO as CD (qvm-start --cdrom=win-idd-mgmt:$RELEASE_LOOP)"
+  MATRIX_CDROM_CLAIMED="$MATRIX_CDROM_CLAIMED $vm"   # dropped before the loop is released
   timeout -k 10 150 qvm-start "$vm" --cdrom="win-idd-mgmt:$RELEASE_LOOP" >"$M/$lbl-cdboot.out" 2>&1 & disown
   sleep 8
 }
@@ -1446,9 +1486,16 @@ cell_clean(){ # $1=pristine-base $2=subject $3=tag
   local base=$1 vm=$2 tag=$3
   _halt_other_windows "$vm"
   say "  prime-run $base -> $vm (job ours, payload $RELEASE_SETUP)"
+  # prime-run REMOVES and recreates its target, so any specimen marker on it dies with the guest.
+  specimen_clear "$vm" >/dev/null || true
   ./mgmt/harness/prime-run.sh "$base" "$vm" ours --payload "$RELEASE_SETUP" >"$M/$tag-clean-prime.log" 2>&1
   local prc=$?
   say "  prime-run tail: $(tail -1 "$M/$tag-clean-prime.log" | cut -c1-180)"
+  # prime-run attached and bound the log volume for this subject, so the cell-end pull must read
+  # THAT image. Without these two lines the clean cell's pull read whatever stale image happened to
+  # be at the path, and reported "guest logs incomplete" about a volume from an earlier run
+  # (measured 2026-10-14: the archived volume it read had been created five hours before the cell).
+  LOGVOL_VM="$vm"; LOGVOL_IMG=$(logvol_image "$vm")
   # A CELL THE RIG PREVENTED FROM RUNNING IS NOT A PRODUCT FAILURE. prime-run refuses outright when
   # another Windows guest is still up ("TERMINAL: refusing, these are not Halted: ..."), which is a
   # rig-state condition - the release was never given a chance to fail. It was nevertheless scored
@@ -1941,6 +1988,29 @@ for g in "${G10:-}" "${G11:-}"; do
     say "       ./mgmt/golden.sh verify $g    # if it is meant to be a sealed golden"
     say "       ./mgmt/golden.sh fixture $g   # if it is meant to be a campaign fixture"
     say "       Cloning from it would inherit whatever it happens to contain."
+    exit 1
+  fi
+  # CUSTODY IS NOT CAPABILITY. The check above proves we know what the image IS; it says nothing
+  # about whether it carries QWT, and an over-existing cell needs QWT for two separate reasons: the
+  # MSI is a major UPGRADE over an existing install, and every readiness probe in the cell is
+  # qrexec, which does not exist without it. MEASURED 2026-10-14: G10 was win10-base, a pristine
+  # base. The clone booted perfectly - it mounted the FAT log volume and wrote System Volume
+  # Information - and then sat idle (cpu_usage_raw 149-463, an order of magnitude BELOW the idle
+  # band) while the cell waited 900 s for a qrexec answer that could never come, and reported
+  # "clone did not boot" plus a wedge suspicion. Nothing was wrong with the guest.
+  # A fixture record IS the receipt that a QWT build was installed (it carries package_version and
+  # gui_agent_sha256); a sealed golden carries QWT only if it is one of the -qwt fixtures, because
+  # on this rig "<name>-qwt have QWT; the bases do not".
+  if ./mgmt/golden.sh fixture "$g" >/dev/null 2>&1; then :
+  elif [ "${g%-qwt}" != "$g" ]; then :
+  else
+    say "[ERROR] FATAL: entry image $g carries NO QWT, so an over-existing cell cannot run on it."
+    say "       The cell installs the release OVER an existing QWT and probes readiness by qrexec;"
+    say "       on a pristine base neither exists, so it waits out its whole deadline and reports"
+    say "       a boot failure that never happened (measured 2026-10-14, WIN10-upgrade, 900 s)."
+    say "       Name a QWT-carrying entry: a -qwt golden, or a fixture built by prime-run:"
+    say "         mgmt/harness/prime-run.sh <base> <fixture> ours --payload <previous setup tree>"
+    say "       Sealed goldens here: $(ls mgmt/goldens/*.json 2>/dev/null | xargs -r -n1 basename | sed 's/\.json$//' | tr '\n' ' ')"
     exit 1
   fi
 done
