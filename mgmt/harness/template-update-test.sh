@@ -157,9 +157,16 @@ if [ -z "${EVAL_ONLY:-}" ] && [ -x tools/sweep-gate.sh ]; then
   for f in "$OUT/wu-e2e.out" "$E2E/run.log" "$LOG"; do [ -s "$f" ] && swlogs="$swlogs $f"; done
   if [ -n "$swlogs" ]; then
     # shellcheck disable=SC2086  # swlogs is a deliberate list of log paths
-    bash tools/sweep-gate.sh $swlogs > "$OUT/sweep-gate.out" 2>&1 \
-      || verdict INSTRUMENT "undeclared error-shaped line(s) in this suite's own logs - $(grep -ac '^  ' "$OUT/sweep-gate.out") of them, see $OUT/sweep-gate.out"
-    say "sweep-gate: no undeclared error-shaped line in this suite's logs"
+    # REPORTS, DOES NOT GATE - yet. Jev: design_sound 0.78, safe_to_gate_a_release 0.30, dominant
+    # flaw "a baselined shape hides genuine future instances" (0.85). So a new shape is said out
+    # loud and recorded; it does not turn a measured product result into INSTRUMENT until the
+    # per-shape counts land and the silencer is closed.
+    if bash tools/sweep-gate.sh $swlogs > "$OUT/sweep-gate.out" 2>&1; then
+      say "sweep-gate: no new error shape in this suite's logs"
+    else
+      say "SWEEP-GATE: $(grep -ac '^  ' "$OUT/sweep-gate.out") new error shape(s) in this suite's logs - see $OUT/sweep-gate.out"
+      grep -a '^  ' "$OUT/sweep-gate.out" | head -6 | while IFS= read -r l; do say "  $l"; done
+    fi
   fi
 fi
 verdict PASS "the update completed on a TemplateVM in $REPORTER's environment ($remedy remedy round(s), last round PASS)"

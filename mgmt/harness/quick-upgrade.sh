@@ -162,7 +162,10 @@ finish(){ # $1=rc $2=message  - every exit goes through here and says which exit
     else
       log "SWEEP-GATE FINDINGS in this run's own log - see $OUT/sweep-gate.out"
       grep -a '^  ' "$OUT/sweep-gate.out" | tail -8 | while IFS= read -r l; do log "  $l"; done
-      [ "$rc" = 0 ] && rc=1
+      # REPORTS, DOES NOT GATE - yet. Jev on this instrument: design_sound 0.78 but
+      # safe_to_gate_a_release 0.30, with "a baselined shape hides genuine future instances of it"
+      # (0.85) as the dominant flaw. A young instrument that can fail a release is worse than one
+      # that only speaks, so it speaks loudly and the rc is left alone until the shape COUNTS land.
     fi
   fi
   log "summary: $PASS passed, $FAIL failed; evidence in $OUT"

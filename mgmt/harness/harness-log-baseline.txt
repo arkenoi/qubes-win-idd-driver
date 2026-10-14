@@ -1,0 +1,11 @@
+# harness-log-baseline.txt - NORMALISED error-shaped lines seen on runs reviewed as clean.
+# Seeded 2026-10-14T06:49:28Z from: /home/user/qwt-accept/rel-38144346213/campaign/runner.log
+#
+# tools/sweep-gate.sh reports only shapes that are NOT here. Adding a line is a deliberate
+# act in a commit: it says 'this shape was looked at and is not a finding'. A shape that IS
+# a finding gets FIXED, not added - two lines in the seeding run were the log-volume bind
+# failing on both upgrade cells, and they are deliberately absent from this file.
+<CELL>: could not detach the ISO (harmless: the start-time attach drops at the guest's next shutdown)
+Xen PV Network Class event, so it cannot occur here. NET-N owns this claim.
+classes: product-FAIL=N INVALID-*(cell did not run, ungraded)=N - the footer's 'failed' is both (contract kept; see mgmt<PATH> for the three-class rule)
+drain: no qrexec call pending for <VM> (nothing to drain)
