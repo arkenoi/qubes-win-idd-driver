@@ -180,5 +180,27 @@ else
   no "T12 locale dependence (0x6d groups=$same want 1, 0x5aa=$diff2 want 1, localised keys=$nonascii want 0)" "$(printf '%s' "$lout" | grep -a UNACCOUNTED)"
 fi
 
+# T13 - GROUPING MUST NOT LOSE A LINE. Merging is right for a report (82 window handles are one
+# message, and keeping every hex took 27 messages to 183 and buried the findings). But the distinct
+# lines behind a message are evidence, and they were being discarded. SWEEP_GATE_DUMP writes every
+# one under its message, so the aggregation is presentation rather than loss - asserted here by
+# counting, not by claiming.
+printf '%s\n' \
+  "[20261014.120000.001-1-W] GetRealWindowRect: 0x1009a: inverted DWM bounds (0,0)-(0,0) rejecting" \
+  "[20261014.120001.001-1-W] GetRealWindowRect: 0x1009c: inverted DWM bounds (0,0)-(0,0) rejecting" \
+  "[20261014.120002.001-1-W] GetRealWindowRect: 0x1009c: inverted DWM bounds (0,0)-(0,0) rejecting" \
+  "[20261014.120003.001-1-E] QioReadBuffer: ReadFile failed with error 0x6d: pipe ended" \
+  > "$T/dmp.log"
+printf '# empty\n' > "$T/dmp-led.txt"
+SWEEP_GATE_LEDGER="$T/dmp-led.txt" SWEEP_GATE_DUMP="$T/dmp.out" bash tools/sweep-gate.sh "$T/dmp.log" >/dev/null 2>&1
+# 4 lines in, 3 DISTINCT (one exact duplicate) -> the dump must carry all 3 and no more
+indump=$(grep -ac '^    ' "$T/dmp.out" 2>/dev/null || echo 0)
+hdrs=$(grep -ac '^=== x' "$T/dmp.out" 2>/dev/null || echo 0)
+if [ "${indump:-0}" = 3 ] && [ "${hdrs:-0}" = 2 ]; then
+  ok "T13 every distinct line is recoverable from the dump (3 distinct of 4 lines, under 2 messages)"
+else
+  no "T13 the dump lost or invented lines (distinct=$indump want 3, messages=$hdrs want 2)" "$(head -6 "$T/dmp.out" 2>/dev/null)"
+fi
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

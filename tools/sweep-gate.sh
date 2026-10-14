@@ -124,7 +124,7 @@ for line in sys.stdin:
 declared() { local vfile="${SWEEP_GATE_VARIANTS:-}"
              for l in "$@"; do [ -f "$l" ] || { echo "sweep-gate: $l does not exist" >&2; return 2; }
                grep -ahE "$LEVELS" "$l" 2>/dev/null || true; done | message \
-             | VFILE="$vfile" python3 -c '
+             | VFILE="$vfile" DUMPFILE="${SWEEP_GATE_DUMP:-}" python3 -c '
 import collections, os, sys
 occ, var = collections.Counter(), collections.defaultdict(set)
 for line in sys.stdin:
@@ -138,6 +138,16 @@ vf = os.environ.get("VFILE") or ""
 if vf:
     with open(vf, "w", encoding="utf-8") as fh:
         for m in sorted(occ): fh.write("%d %s\n" % (len(var[m]), m))
+# GROUPING MUST NOT BE LOSSY. Merging 82 window handles into one message is the right aggregation
+# for a report, but the distinct lines behind it are evidence and were being discarded. With
+# SWEEP_GATE_DUMP set, every distinct raw line is written under its message, so nothing the tool
+# grouped is unrecoverable - the aggregation becomes presentation, not loss.
+dmp = os.environ.get("DUMPFILE") or ""
+if dmp:
+    with open(dmp, "w", encoding="utf-8") as fh:
+        for m in sorted(occ):
+            fh.write("=== x%d, %d distinct :: %s\n" % (occ[m], len(var[m]), m))
+            for raw in sorted(var[m]): fh.write("    %s\n" % raw)
 '; }
 
 unlevelled() { local n=0 t=0 a b
@@ -304,6 +314,7 @@ echo "SWEEP-GATE-COVERAGE lines=$total with_declared_level=$((total - nolevel)) 
 
 if [ "$newn" -gt 0 ] || [ "$rose" -gt 0 ]; then
     echo "SWEEP-GATE-RESULT unaccounted=$newn risen=$rose accounted=$acc"
+[ -z "${SWEEP_GATE_DUMP:-}" ] && echo "  every distinct line behind these messages: re-run with SWEEP_GATE_DUMP=<path> - grouping is presentation, nothing is discarded"
     echo "  Each is a real error our code declared. It is a defect to fix, or an entry for $LEDGER"
     echo "  recording what it means. Reading it and moving on is not one of the options."
     exit 1
