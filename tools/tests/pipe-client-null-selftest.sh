@@ -151,17 +151,30 @@ for t in Reader Writer; do
   fi
 done
 
-# ---- 6. CI actually applies it ------------------------------------------------------------------
-if command grep -q 'windows-utils-pipe-client-null.patch' "$ROOT/.github/workflows/build.yml"; then
-  ok "wired: build.yml applies the patch"
-else
-  bad "wired: build.yml never applies the patch - it would ship unfixed"
-fi
-if command grep -q 'pipe-client NULL patch did not apply' "$ROOT/.github/workflows/build.yml"; then
-  ok "wired: the build step FAILS if the patch does not apply"
-else
-  bad "wired: a failed apply would pass silently"
-fi
+# ---- 6. EVERY PRODUCER APPLIES EVERY PATCH ------------------------------------------------------
+# COUNT THE PRODUCERS. Two workflows clone windows-utils and each carries its OWN copy of the
+# apply steps: build.yml, and qwt-full.yml - which is the one the RELEASE PACKAGE is built from
+# (release-package.yml calls it). This fix first went into build.yml alone, so the package would
+# have been built WITHOUT it while a different workflow applied it, and every offline check here
+# would still have passed. So the invariant is checked for all patches against all producers,
+# not for this patch against one.
+mapfile -t PRODUCERS < <(command grep -rl 'deps-src.windows-utils' "$ROOT/.github/workflows/" | sort)
+mapfile -t ALLPATCHES < <(ls "$ROOT"/patches/windows-utils-*.patch | xargs -n1 basename | sort)
+[ "${#PRODUCERS[@]}" -ge 2 ] \
+  && ok "producers: ${#PRODUCERS[@]} workflows clone windows-utils ($(printf '%s ' "${PRODUCERS[@]##*/}"))" \
+  || bad "producers: only ${#PRODUCERS[@]} found - if a producer was removed, re-check this test"
+missing=0
+for w in "${PRODUCERS[@]}"; do
+  for pf in "${ALLPATCHES[@]}"; do
+    command grep -q "$pf" "$w" || { bad "producers: $(basename "$w") never applies $pf"; missing=$((missing+1)); }
+  done
+done
+[ "$missing" -eq 0 ] && ok "producers: every windows-utils patch is applied by every producer (${#ALLPATCHES[@]} patches x ${#PRODUCERS[@]} workflows)"
+for w in "${PRODUCERS[@]}"; do
+  command grep -q 'pipe-client NULL patch did not apply' "$w" \
+    && ok "producers: $(basename "$w") FAILS the build if this patch does not apply" \
+    || bad "producers: $(basename "$w") would let a failed apply pass silently"
+done
 
 echo "pipe-client-null-selftest: $pass passed, $fail failed  (tree: $OUT)"
 [ "$fail" -eq 0 ]
