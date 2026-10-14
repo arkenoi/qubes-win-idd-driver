@@ -1942,7 +1942,12 @@ if [ -x tools/sweep-gate.sh ]; then
   # BOUNDED, AND IT SAYS SO WHEN IT IS. A capped sweep that reads as clean is worse than no sweep,
   # so the cap is reported and raises the INVALID class exactly like an unaccounted error would.
   SW_CAP="${MATRIX_SWEEP_FILE_CAP:-600}"
-  mapfile -t _swl < <(find "$M" -maxdepth 3 -type f \( -name '*.out' -o -name '*.log' -o -name '*.cur' \
+  # NO DEPTH LIMIT - the cap below is the bound, not the depth. This read -maxdepth 3 and the guest
+  # logs land at $M/logvol-<cell>/files/qwt-logs/<vm>/*.log, which is depth 5, so the limit excluded
+  # exactly the files the previous commit added scope for and claimed were covered. Measured on a
+  # real evidence tree: of the logs carrying a declared error, ALL of them were below the limit -
+  # depth 3 reached 20 of 83 logs and 0 of the 10 that had errors in them.
+  mapfile -t _swl < <(find "$M" -type f \( -name '*.out' -o -name '*.log' -o -name '*.cur' \
                         -o -name '*.tail' \) -size -8M -size +0 2>/dev/null | sort)
   sw_total=${#_swl[@]}
   swlogs="$R"; n=0
