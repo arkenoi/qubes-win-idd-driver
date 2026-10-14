@@ -79,6 +79,11 @@ CODE = re.compile(r"((?:failed with error|with error|with code|exit(?:ed)? code|
 #   "Process (PID N) exited with code <HEX>" showed 3 distinct values merged into one message
 ESC  = re.compile(r"(\d+)(\s*time\(s\) in a row)")
 for line in sys.stdin:
+    # A BOM IS ENCODING, NOT MESSAGE. Some guest logs arrive UTF-8-BOM, and the mark sat in front
+    # of the timestamp so the prefix rules below could not anchor - the same message then reported
+    # twice, once as "\ufeffN-N-N N:N:N [ERROR] DEATH #N ...". It also split the independent
+    # census from this tool by one line. Stripped here, where both the key and the raw variant see it.
+    line = line.lstrip("\ufeff")
     l, holes = line.rstrip("\n"), []
     # LOCALE INDEPENDENCE. win_perror2 renders a Win32 code through FormatMessage, which uses the
     # SYSTEM locale, so the same error reads "Die Pipe wurde beendet." on a German guest and "The
@@ -130,12 +135,28 @@ for line in sys.stdin:
 # the campaign gained PHANTOM findings - in a gate that raises INVALID and blocks a release.
 # Measured, not theorised: one real error became two. Detected by content, not filename, so it
 # holds however a caller names the file.
-_is_own_report() { head -c 4000 "$1" 2>/dev/null | grep -qa 'SWEEP-GATE-\(RESULT\|COVERAGE\|CENSUS\|SILENT\|LEDGER\|VERIFY\)'; }
+# UTF-16 IS INVISIBLE TO EVERY REGEX IN THIS FILE, AND A WINDOWS GUEST WRITES IT BY DEFAULT.
+# PowerShell 5.1's `>` redirection produces UTF-16LE, so a log a harness pulls that way reads as
+# binary here: each character is followed by a NUL and no pattern matches. Measured on the
+# 2026-10-14 campaign, 3 of 86 preserved files were UTF-16 (msiexec's verbose log at 1526 lines,
+# and bind-dirs.log, which is OURS). None happened to carry a declared error that run - so this was
+# a hole with nothing in it yet, which is the only kind worth closing before it has something.
+# The analyzer path is unaffected: mgmt/harness/log-sweep-collect.ps1 reads guest files through
+# PowerShell, which honours the BOM, so the collected copies arrive as UTF-8 already.
+# Decided by the BOM, never by the file's name or extension.
+_text() { # <file> -> its text as UTF-8 on stdout
+    case "$(head -c2 "$1" 2>/dev/null | od -An -tx1 | tr -d ' \n')" in
+        fffe|feff) iconv -f UTF-16 -t UTF-8 "$1" 2>/dev/null || cat -- "$1" 2>/dev/null ;;
+        *)         cat -- "$1" 2>/dev/null ;;
+    esac
+}
+
+_is_own_report() { local _h; _h=$(_text "$1" | head -c 4000); grep -qa 'SWEEP-GATE-\(RESULT\|COVERAGE\|CENSUS\|SILENT\|LEDGER\|VERIFY\)' <<<"$_h"; }
 
 declared() { local vfile="${SWEEP_GATE_VARIANTS:-}" skipped=0
              for l in "$@"; do [ -f "$l" ] || { echo "sweep-gate: $l does not exist" >&2; return 2; }
                _is_own_report "$l" && { skipped=$((skipped+1)); continue; }
-               grep -ahE "$LEVELS" "$l" 2>/dev/null || true; done | message \
+               _text "$l" | grep -ahE "$LEVELS" || true; done | message \
              | VFILE="$vfile" DUMPFILE="${SWEEP_GATE_DUMP:-}" python3 -c '
 import collections, os, sys
 occ, var = collections.Counter(), collections.defaultdict(set)
@@ -162,15 +183,25 @@ if dmp:
             for raw in sorted(var[m]): fh.write("    %s\n" % raw)
 '; }
 
-unlevelled() { local n=0 t=0 a b
+# A THIRD-PARTY LOG HAS NO SEVERITY TO READ, AND SAYING SO IS NOT THE SAME AS EXCUSING OURS.
+# A campaign preserves msiexec's verbose log for forensics - 3047 of the 3547 unlevelled lines on
+# the 2026-10-14 run, 86% of them. Reported as one number, "that is the gap, named" reads as 3558
+# lines of our own undisciplined logging, when the actionable share is ~500. A gap we can close and
+# a gap Microsoft owns are different facts and the report now separates them.
+# Recognised from the file's OWN header, the way the QWT format is recognised - not from vocabulary,
+# and not from the file's name, which the harness chooses.
+_is_msi_verbose() { local _h; _h=$(_text "$1" | head -c 400); grep -qa 'Verbose logging started:.*Calling process:.*msiexec\.exe' <<<"$_h"; }
+
+unlevelled() { local n=0 t=0 m=0 a b
     for l in "$@"; do
-        a=$(grep -ac . "$l" 2>/dev/null || true)
+        a=$(_text "$l" | grep -ac . || true)
         # BOTH counts over the same population - non-empty lines. Counting `without` over every line
         # including blanks made with_declared_level go NEGATIVE (-20) on a real set of logs.
-        b=$(grep -a . "$l" 2>/dev/null | grep -avcE "$ANYLEVEL" || true)
+        b=$(_text "$l" | grep -a . | grep -avcE "$ANYLEVEL" || true)
         t=$((t + ${a:-0})); n=$((n + ${b:-0}))
+        _is_msi_verbose "$l" && m=$((m + ${b:-0}))
     done
-    echo "${n:-0} ${t:-0}"; }
+    echo "${n:-0} ${t:-0} ${m:-0}"; }
 
 if [ -n "$WRITE" ]; then
     { echo "# error-ledger.txt - every ERROR and WARNING our code DECLARED on runs reviewed as clean,"
@@ -239,7 +270,7 @@ if [ "${SILENT:-}" = 1 ]; then
             # any path - including the temp directory holding the fixture - and joined a verdict to
             # a log that has nothing to do with it.
             [ "${#label}" -ge 2 ] || continue
-            case "$(basename "$l")" in *"$label"*) own="$l"; grep -qaE "$LEVELS" "$l" 2>/dev/null && hit=1; break ;; esac
+            case "$(basename "$l")" in *"$label"*) own="$l"; [ "$(_text "$l" | grep -acE "$LEVELS")" -gt 0 ] && hit=1; break ;; esac
         done
         if [ -z "$own" ]; then
             unmeas=$((unmeas+1))
@@ -261,7 +292,7 @@ if [ "${SILENT:-}" = 1 ]; then
         for l in "$@"; do
             [ -f "$l" ] || continue
             _is_own_report "$l" && continue
-            n=$(grep -acE "$LEVELS" "$l" 2>/dev/null || true); anyerr=$((anyerr + ${n:-0}))
+            n=$(_text "$l" | grep -acE "$LEVELS" || true); anyerr=$((anyerr + ${n:-0}))
         done
         echo "  no verdict label joins a log, so measured at SUITE level instead: $nfail recorded failure(s), $anyerr declared error/warning line(s) in the logs"
         if [ "$anyerr" -eq 0 ]; then
@@ -283,7 +314,7 @@ if [ "${CENSUS:-}" = 1 ]; then
       /^\[[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]\.[0-9][0-9][0-9][0-9][0-9][0-9]\.[0-9][0-9][0-9]-[0-9]+(:[0-9]+)?-[WE]\]/ { n++; next }
       /\[ERROR\]|\[WARN\]|\[WARNING\]/ { n++; next }
       END { print n+0 }
-    ' "$@" > "$cfile"
+    ' < <(for l in "$@"; do _text "$l"; done) > "$cfile"
     # a real EMPTY file, not /dev/null: `[ -f /dev/null ]` is FALSE (character device), so the inner
     # run refused, wrote no dump, and this check reported a 185-line disagreement that did not exist.
     el=$(mktemp); printf '# empty ledger for --census\n' > "$el"
@@ -292,12 +323,21 @@ if [ "${CENSUS:-}" = 1 ]; then
     # the dump carries one line per DISTINCT declared line; duplicates are the difference
     indep=$(cat "$cfile")
     dumped=$(grep -ac '^    ' "$dfile" 2>/dev/null || true); dumped=${dumped:-0}
+    # THE GUEST'S LOGS ARE CRLF, AND [ \t] IS NOT \s. This pass collapsed spaces and tabs but left
+    # the carriage return on, so one message counted TWICE - once bare, once with \r - while the
+    # tool's own normaliser uses \s+ and .strip() and counts it once. Measured 2026-10-14 over a
+    # real campaign: awk 52 distinct vs the tool's 48, and all four of the difference were \r.
+    # A cross-check that reports DISAGREE on every Windows log it reads is worse than none: it
+    # would have masked a real disagreement. The fixture it passed on was mine, and had no CRLF.
+    # The BOM strip is the same class: a UTF-8 BOM keeps the ^ anchor from matching the prefix,
+    # which this pass needs and the tool's unanchored reader does not.
     uniq_indep=$(awk '
+      { sub(/^\xef\xbb\xbf/, ""); gsub(/\r/, "") }
       /^\[[0-9]{8}\.[0-9]{6}\.[0-9]{3}-[0-9]+(:[0-9]+)?-[WE]\]/ || /\[ERROR\]|\[WARN\]|\[WARNING\]/ {
         line=$0; sub(/^\[[0-9]{8}\.[0-9]{6}\.[0-9]{3}-[0-9]+(:[0-9]+)?-[DIWE]\][ \t]*/, "", line)
         gsub(/[ \t]+/, " ", line); seen[line]=1
       } END { print length(seen) }
-    ' "$@")
+    ' < <(for l in "$@"; do _text "$l"; done))
     rm -f "$cfile" "$dfile"
     echo "SWEEP-GATE-CENSUS awk_declared_lines=$indep awk_distinct=$uniq_indep tool_distinct_in_dump=$dumped"
     if [ "${indep:-0}" -eq 0 ]; then
@@ -431,9 +471,15 @@ done < "$LD"
 [ "${orph:-0}" -gt 0 ] && echo "SWEEP-GATE-LEDGER $orph of $(grep -c . "$LD") row(s) matched nothing this run (a condition that did not occur, or a row whose text has drifted - check with --verify-ledger)"
 
 rm -f "$NOW" "$LD" "$VAR"
-read -r nolevel total < <(unlevelled "$@")
-echo "SWEEP-GATE-COVERAGE lines=$total with_declared_level=$((total - nolevel)) without=$nolevel"
-[ "${nolevel:-0}" -gt 0 ] && echo "  $nolevel line(s) carry NO declared level, so this tool cannot judge them. That is the gap, named."
+read -r nolevel total msilevel < <(unlevelled "$@")
+echo "SWEEP-GATE-COVERAGE lines=$total with_declared_level=$((total - nolevel)) without=$nolevel third_party=${msilevel:-0}"
+if [ "${nolevel:-0}" -gt 0 ]; then
+    echo "  $nolevel line(s) carry NO declared level, so this tool cannot judge them. That is the gap, named."
+    if [ "${msilevel:-0}" -gt 0 ]; then
+        echo "  of those, $msilevel are msiexec's own verbose log - a third-party format with no severity to read."
+        echo "  $((nolevel - msilevel)) are OURS, and those are the ones an emitter can be made to declare."
+    fi
+fi
 
 if [ "$newn" -gt 0 ] || [ "$rose" -gt 0 ]; then
     echo "SWEEP-GATE-RESULT unaccounted=$newn risen=$rose accounted=$acc"

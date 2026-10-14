@@ -110,7 +110,10 @@ command grep -q "guest/install-clock-sync.ps1" "$OW" \
 # ---- 5. the puller's wait has three named exits, and a failure is an ERROR line -----------------
 # A wait with only a deadline is a hang, and a clock left unset must never be silence.
 miss=""
-for x in "'set'" "'dom0-refused'" "'setter-refused'" "default"; do
+# EVERY ARM MUST BE REACHABLE. This list asserted 'dom0-refused' and 'setter-refused', and nothing
+# in the script set either - so the suite was holding the puller to a claim it could not produce,
+# and it stayed green while the real classification was wrong.
+for x in "'set'" "'bad-invocation'" "default"; do
   command grep -qF "$x {" "$PULL" || miss="$miss [$x]"
 done
 [ -z "$miss" ] && ok "three_named_exits: the pull says which exit it took (set / refused / deadline)" \
@@ -118,6 +121,61 @@ done
 n_err=$(command grep -c 'LogError' "$PULL")
 [ "$n_err" -ge 3 ] && ok "failure_is_loud: $n_err LogError paths - an unset clock is never silence" \
                    || bad "failure_is_loud: only $n_err LogError path(s) in the puller"
+
+# ---- 5b. THE TRANSIENT CODE MUST BE RETRIED, NOT GRADED TERMINAL ------------------------------
+# 2026-10-14: this suite passed 18/18 while the puller was broken, because it checked that the exits
+# are NAMED and that failure is LOUD and never which CODE maps to which exit. The commit that made
+# the classification locale-independent put ERROR_FILE_NOT_FOUND (2) in the terminal dom0-refused
+# branch with a `break`. But 0x2 here is QpsConnect failing to open the LOCAL agent pipe
+# (core-agent/src/qrexec-client-vm/qrexec-client-vm.c:104, `return win_perror("open agent pipe")`):
+# this guest's own qrexec agent is not up yet, nothing has been asked of dom0, so there is nothing
+# for dom0 to refuse. It is the NORMAL state early in boot. The loop left on its first attempt, the
+# clock was never pulled, the ~3 h boot skew came back - and the log line said "dom0 refused" while
+# quoting "open agent pipe failed with error 0x2" as its own evidence.
+# So: the codes are pinned to their exits, not merely counted.
+# The checks read CODE, never the comments that describe it: the fix's own comment explains the
+# shape it replaced, and matching that made two of these pass judgement on prose.
+cs_code(){ command grep -vE '^[[:space:]]*#' "$PULL"; }
+
+# A. THE ONLY TERMINAL CONDITION IS "THIS SCRIPT IS WRONG". Waiting cannot fix a usage error, and
+#    retrying one floods the log (34 of 36 error lines once came from exactly that).
+b87=$(cs_code | command grep -nE "rc -eq 87" | head -1)
+printf '%s' "$b87" | command grep -q 'break' \
+  && ok "usage_is_terminal: ERROR_INVALID_PARAMETER (87) is terminal - this script is wrong, not the guest" \
+  || bad "usage_is_terminal: rc=87 is not terminal: ${b87:-<no branch>}"
+
+# B. NOTHING MAY BE CALLED A dom0 REFUSAL. qrexec-client-vm writes the request to THIS guest's agent
+#    and exits without reading a response (qrexec-client-vm.c:140), so a refusal by dom0 happens
+#    where no exit code of its can report it. The branch that read ACCESS_DENIED as "dom0 refused"
+#    claimed what the source cannot support, and the branch that read FILE_NOT_FOUND the same way
+#    killed the feature: 0x2 is the local agent pipe not up yet, the ordinary state early in boot.
+if [ "$(cs_code | command grep -c "exit = 'dom0-refused'")" -eq 0 ]; then
+  ok "no_unsupportable_refusal: no exit claims dom0 refused - this client cannot observe that"
+else
+  bad "no_unsupportable_refusal: an exit still claims dom0 refused, which this client cannot observe"
+fi
+
+# C. NO OTHER CODE MAY BE TERMINAL. Every remaining return path is a win_perror pass-through from
+#    opening or writing the local agent pipe, i.e. "not up YET" - so each must be retried.
+nterm=$(cs_code | command grep -cE "rc -eq (1|2|5|14|1722)\b")
+[ "$nterm" -eq 0 ] \
+  && ok "only_receipted_codes: no code is classified without a receipt in the client's source" \
+  || bad "only_receipted_codes: $nterm branch(es) classify a code the source does not account for"
+
+# D. AND THE FALLTHROUGH MUST ACTUALLY RETRY: a sleep inside the loop, and the loop bounded.
+if cs_code | command grep -q 'Start-Sleep -Seconds $IntervalSeconds' && cs_code | command grep -q 'while ((Get-Date) -lt $deadline)'; then
+  ok "fallthrough_retries_bounded: an unrecognised rc waits and retries, inside a deadline"
+else
+  bad "fallthrough_retries_bounded: the fallthrough does not wait, or the loop is unbounded"
+fi
+
+# E. The one text match left selects on OUR OWN literal, so it cannot change with the guest's
+#    language: win_perror renders only the sentence AFTER the colon through FormatMessage.
+if [ "$(cs_code | command grep -cF '$out -match')" -eq 1 ] && cs_code | command grep -q "wmain: Usage:"; then
+  ok "match_is_our_literal: the single text match is our own usage string, not a localised sentence"
+else
+  bad "match_is_our_literal: a branch matches text that is not our own fixed literal"
+fi
 
 # ---- 6. set-time.ps1 parses INVARIANTLY and verifies the result ---------------------------------
 # This product ships German goldens; Set-Date on a string parses with the CURRENT culture, and a

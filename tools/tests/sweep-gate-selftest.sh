@@ -284,5 +284,32 @@ else
   no "T17 suite-level silence wrong (silent rc=$qrc, declared rc=$rrc)" "$(printf '%s' "$q" | tail -1)"
 fi
 
+# T18 - CRLF AND A BOM ARE ENCODING, NOT CONTENT, AND THE CROSS-CHECK MUST AGREE ON REAL LOGS.
+# The guest's logs are CRLF and some arrive UTF-8-BOM. The census's awk pass collapsed [ \t] but
+# not \r, so one message counted twice - once bare, once with the carriage return - and the BOM sat
+# in front of the timestamp so neither side's prefix rule could anchor. Measured over the real
+# 2026-10-14 campaign: awk 52 distinct against the tool's 48, every one of the difference a \r, and
+# the cross-check announced "one of them is wrong" on data where the tool was right.
+# A cross-check that disagrees on every Windows log it reads cannot report a real disagreement.
+# T14 passed throughout, because the fixture it compares on is one I wrote, with Unix newlines.
+mkdir -p "$T/crlf"
+printf '[20261014.150607.123-1234-E] GetFrame: failed with error 0x887a0026: The keyed mutex was abandoned.\r\n' >  "$T/crlf/agent.log"
+printf '[20261014.150608.456-1234-E] GetFrame: failed with error 0x887a0026: The keyed mutex was abandoned.\n'     >> "$T/crlf/agent.log"
+printf '\xef\xbb\xbf2026-10-14 15:07:05 [ERROR] DEATH #1 NEW System/7031: the agent stopped unexpectedly\r\n'    >  "$T/crlf/watchdog.log"
+printf '2026-10-14 15:07:06 [ERROR] DEATH #2 NEW System/7031: the agent stopped unexpectedly\n'                    >> "$T/crlf/watchdog.log"
+c=$(bash tools/sweep-gate.sh --census "$T/crlf/agent.log" "$T/crlf/watchdog.log" 2>&1)
+if printf '%s' "$c" | grep -qa 'AGREE'; then
+  ok "T18 the census agrees on CRLF and BOM logs, where the guest's actually are"
+else
+  no "T18 the census disagrees on CRLF/BOM input - it cannot cross-check a real guest log" "$(printf '%s' "$c" | head -2 | tr '\n' ' ')"
+fi
+# And the BOM must not reach the reported message: it read "\ufeffN-N-N N:N:N [ERROR] DEATH #N".
+d=$(bash tools/sweep-gate.sh "$T/crlf/watchdog.log" 2>&1)
+if ! printf '%s' "$d" | grep -qa $'\xef\xbb\xbf'; then
+  ok "T18b no BOM survives into a reported message"
+else
+  no "T18b a BOM reached the reported message" "$(printf '%s' "$d" | grep -a UNACCOUNTED | head -1)"
+fi
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -11,8 +11,11 @@
 # fixing the agent would have fixed that.
 #
 # THE WAIT IS A BOUNDED FAILURE DETECTOR, not a fix for a race: qrexec is not up the instant the
-# task fires, so this retries, and it says WHICH exit it took - the time arrived, dom0 refused, or
-# the deadline passed. A clock left unset is an ERROR line in the guest's own log, never silence.
+# task fires, so this retries, and it says WHICH exit it took - the time arrived, this script was
+# called wrongly, or the deadline passed with the agent still unreachable. A clock left unset is an
+# ERROR line in the guest's own log, never silence. It does NOT claim dom0 refused anything: the
+# client it calls writes the request to the local agent and exits without reading a response, so a
+# refusal by dom0 happens where no exit code of its can report it.
 param(
     [int]$DeadlineSeconds = 180,
     [int]$IntervalSeconds = 10
@@ -73,24 +76,29 @@ while ((Get-Date) -lt $deadline) {
         break
     }
     $lastErr = "rc=$rc out='$(($out | Out-String).Trim() -replace '\s+', ' ')'"
-    # TERMINAL STATES, so a permanent condition is not retried into a log flood. A usage error means
-    # THIS SCRIPT is wrong and no amount of waiting fixes it; each retry made the client log its own
-    # usage error again, which is where 34 of the 36 new error lines came from.
-    # CLASSIFY ON THE CODE, NOT ON THE WORDS. These two branches matched free English text, and
-    # part of what they matched is win_perror output - which FormatMessage renders in the SYSTEM
-    # locale, so on a German guest 'denied' is "Zugriff verweigert" and the branch never fired. The
-    # product must be locale-independent; the rendered sentence is for the log line only.
+    # ONLY WHAT THE CLIENT CAN ACTUALLY TELL US. Every return path in
+    # core-agent/src/qrexec-client-vm/qrexec-client-vm.c is one of three things:
+    #   * ERROR_INVALID_PARAMETER (87) for its own usage/argument errors - lines 64 and 82;
+    #   * ERROR_OUTOFMEMORY (14) - line 86;
+    #   * otherwise a win_perror/win_perror2 pass-through while converting its arguments, OPENING
+    #     the local agent pipe (line 104) or WRITING the request into it (lines 110-134).
     #
-    # The codes come from core-agent/src/qrexec-client-vm/qrexec-client-vm.c, read rather than
-    # assumed: it returns ERROR_INVALID_PARAMETER (87) for its own usage/argument errors (lines 64
-    # and 82), ERROR_OUTOFMEMORY (14), and otherwise whatever win_perror2 was given - so ACCESS
-    # DENIED (5) and FILE_NOT_FOUND (2) arrive as themselves.
-    if ($rc -eq 87 -or $rc -eq 1 -or $out -match 'wmain: Usage:') { $exit = 'bad-invocation'; break }
-    if ($rc -eq 5 -or $rc -eq 2 -or $rc -eq 1722) { $exit = 'dom0-refused'; break }
-    # LAST RESORT, and locale-bound by nature, so it is NOT the primary signal: a build whose
-    # client reports a refusal only in text. If this is what fires on a German guest it will miss,
-    # which is exactly why the numeric branches are first.
-    if ($rc -ne 0 -and $out -match 'denied|refused|no such domain') { $exit = 'dom0-refused'; break }
+    # THE CLIENT NEVER READS A RESPONSE. It writes the request to this guest's own qrexec agent and
+    # exits at line 140; whether dom0 then allows or refuses the service happens afterwards, between
+    # the agent and dom0, where this process cannot see it. So NO exit code from this client can
+    # mean "dom0 refused" - and the branch that read ACCESS_DENIED (5) as a dom0 refusal was
+    # claiming something the source cannot support. 0x2 was read the same way, and that is what
+    # killed the feature: FILE_NOT_FOUND on line 104 is the local agent pipe not being there yet,
+    # the ordinary state early in boot, and grading it terminal left the loop on its first attempt.
+    # Measured on one build, 2026-10-14: one boot logged "dom0 refused ... open agent pipe failed
+    # with error 0x2" while another logged the clock pulled successfully. A race, not a refusal.
+    #
+    # So the only terminal condition is the one that says THIS SCRIPT is wrong, which waiting cannot
+    # fix and which floods the log if retried (34 of 36 error lines once came from exactly that).
+    # Everything else is the local agent not being reachable YET: retried until the deadline, then
+    # reported by the deadline exit, which carries the rc and the client's own output.
+    if ($rc -eq 87 -or $out -match 'wmain: Usage:') { $exit = 'bad-invocation'; break }
+    $lastErr = "$lastErr (the local qrexec agent is not reachable yet - retrying until the deadline)"
     Start-Sleep -Seconds $IntervalSeconds
 }
 
@@ -104,14 +112,6 @@ switch ($exit) {
         LogError ("CLOCKSYNC this script called qrexec-client-vm with the wrong arguments and stopped rather " +
                   "than retrying - a usage error is permanent, and each retry makes the client log it again. " +
                   "It needs domain|service|user|program, four fields. Last output: $lastErr")
-        exit 1
-    }
-    'setter-refused' {
-        LogError "CLOCKSYNC dom0 gave the time but set-time.ps1 refused it - see its SETTIME line; the clock is UNCHANGED at $($after.ToString('o'))"
-        exit 1
-    }
-    'dom0-refused' {
-        LogError "CLOCKSYNC dom0 refused qubes.GetDate ($lastErr) - the clock stays at $($after.ToString('o')) and every log window on this guest is suspect"
         exit 1
     }
     default {
