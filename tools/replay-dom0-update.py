@@ -20,7 +20,16 @@ if os.environ.get("QUBESADMIN_SRC"):
     sys.path.insert(0, os.environ["QUBESADMIN_SRC"])
 from qubesadmin.utils import encode_for_vmexec  # noqa: E402
 
-VM = sys.argv[1] if len(sys.argv) > 1 else "win11-fresh"
+# NAME THE TARGET, NEVER DEFAULT IT. This read `sys.argv[1] if len(sys.argv) > 1 else "win11-fresh"`,
+# so running it with no argument fired a real qrexec call at a guest nobody asked for - observed
+# 2026-10-14, answered "Request refused", and it would have RUN had that qube existed and been
+# tagged. A tool that drives a guest must be told which guest; lint L10 says exactly this for the
+# shell harnesses and this file is python, so the rule did not reach it.
+if len(sys.argv) < 2 or sys.argv[1].startswith("-"):
+    sys.exit("usage: %s <vm> [--no-vmexec] [--with-entrypoint]\n"
+             "       name the target guest explicitly - this drives a REAL update sequence against it"
+             % sys.argv[0])
+VM = sys.argv[1]
 WORKDIR = "/run/qubes-update/"
 ARCH = WORKDIR + "agent.tar.gz"
 

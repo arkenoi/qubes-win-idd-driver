@@ -11,7 +11,14 @@ if os.environ.get("QUBESADMIN_SRC"):
     sys.path.insert(0, os.environ["QUBESADMIN_SRC"])
 from qubesadmin.utils import encode_for_vmexec  # noqa: E402
 
-VM = sys.argv[1] if len(sys.argv) > 1 else "win11-fresh"
+# NAME THE TARGET, NEVER DEFAULT IT (lint L10). This drives a real qrexec sequence, so a missing
+# argument must refuse rather than pick a guest. Found 2026-10-14 when L10 was taught the python
+# idiom - the rule had only ever known shell's ${VAR:-default}, so both python tools that did this
+# were invisible to it.
+if len(sys.argv) < 2 or sys.argv[1].startswith("-"):
+    sys.exit("usage: %s <vm>\n       name the target guest explicitly - this drives a REAL qrexec "
+             "sequence against it" % sys.argv[0])
+VM = sys.argv[1]
 WORKDIR, ARCH = "/run/qubes-update/", "/run/qubes-update/agent.tar.gz"
 
 

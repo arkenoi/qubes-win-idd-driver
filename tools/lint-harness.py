@@ -430,9 +430,14 @@ NOT_LINTED = [
 TARGET_VARS = r'(?:QTEST_VM|VM|SUBJ|SUBJECT|CHURN|TARGET|GUEST|TPL|DEST|HOLDER|BASE|SRC|GOLDEN|MGMT|DEV|B10|B11|G10|G11|OS|OS_FAMILY)'
 # Also catches the unbraced `X=${1:-win...}` form and the OS-FAMILY selectors, which pick
 # WHICH golden gets driven and so target the wrong guest just as surely as a qube name.
+# Shell's ${VAR:-default}, and PYTHON's `else "default"`. Extending the FILE scope to .py was not
+# enough - this pattern only knew the shell idiom, so `sys.argv[1] if len(sys.argv) > 1 else
+# "win11-fresh"` still went unreported after tools/ .py files were being scanned. Both forms now.
 DEFAULT_TARGET_RE = re.compile(
     r'(?:\$\{' + TARGET_VARS + r'|\b' + TARGET_VARS + r'="?\$\{\d+)'
-    r'[^}]*:-(dom0|win[0-9a-z-]*)\}')
+    r'[^}]*:-(dom0|win[0-9a-z-]*)\}'
+    r'''|else\s+["'](dom0|win[0-9a-z][0-9a-z-]*)["']'''
+    r'''|\.get\([^)]*,\s*["'](dom0|win[0-9a-z][0-9a-z-]*)["']\)''')
 
 def l10_no_default_target_guest() -> None:
     """RULE 21 (owner, 2026-09-21: "no attempts to target dom0 or self as default target qube
@@ -448,8 +453,13 @@ def l10_no_default_target_guest() -> None:
     for sub in ("dom0", "tools"):
         d = ROOT / sub
         if d.is_dir():
+            # .py TOO. This scanned only .sh and qtest, and tools/replay-dom0-update.py read
+            # `VM = sys.argv[1] if len(sys.argv) > 1 else "win11-fresh"` - so running it with no
+            # argument fired a real qrexec call at a guest nobody named (observed 2026-10-14).
+            # The comment above already records this exact gap biting once; the fix then reached
+            # shell only.
             scanned += sorted(p for p in d.iterdir()
-                              if p.is_file() and (p.suffix == ".sh" or p.name == "qtest"))
+                              if p.is_file() and (p.suffix in (".sh", ".py") or p.name == "qtest"))
     for f in scanned:
         for n, line in enumerate(f.read_text(errors="replace").splitlines(), 1):
             s = line.lstrip()
@@ -457,8 +467,9 @@ def l10_no_default_target_guest() -> None:
                 continue
             m = DEFAULT_TARGET_RE.search(line)
             if m:
+                hit = next((g for g in m.groups() if g), "?")
                 finding("L10-default-target-guest", f"{f.name}:{n}",
-                        f"defaults a target to '{m.group(1)}' - name it explicitly or refuse")
+                        f"defaults a target to '{hit}' - name it explicitly or refuse")
 
 
 # --------------------------------------------------------------------------- L11
