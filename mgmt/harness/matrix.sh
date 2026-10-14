@@ -494,11 +494,32 @@ locate_release_disc(){ # $1=vm $2=label -> sets RELDISC (e.g. "E:") on success. 
   [ -n "$RELDISC" ] || { no "$lbl: no drive carries install.cmd + MANIFEST.json - was this boot made by boot_with_release_iso? (start log: $M/$lbl-cdboot.out)"; return 1; }
   # Provenance of the DISC AS THE GUEST SEES IT - Gate-0's last leg. Its MANIFEST must name the
   # commit under test; a plausible-looking stale medium has voided a cell before (2026-08-29).
-  local got
-  got=$(QTEST_VM=$vm timeout -k 5 60 ./tools/qtest run "cmd /c type $RELDISC\\MANIFEST.json" 2>/dev/null \
-        | tr -d '\r' | grep -a 'driver_repo_commit' | grep -ao '[0-9a-f]\{40\}' | head -1)
+  # AN UNREADABLE MANIFEST IS NOT A WRONG DISC, AND ONE SILENT ANSWER IS NOT A READ.
+  # This read once, then reported "built from 'unreadable'" - conflating an instrument failure with
+  # a provenance failure, in a message that said so in plain sight. On 2026-10-14 it hard-FAILED
+  # WIN10-reinstall on a medium Gate-0 had already verified from this side, 8 s after the log-volume
+  # bind and ~48 s into a boot whose clock sync had died; the drive-letter probe just before it had
+  # answered. A silent guest is not a dead one, so the read retries while cpu_time moves, and an
+  # empty read is graded INVALID-INSTRUMENT: nothing is established about the medium either way.
+  # No `| head -1` either: grep -q/-o into head closes the pipe and pipefail returns 141.
+  local got _dtry
+  for _dtry in 1 2 3 4; do
+    got=$(QTEST_VM=$vm timeout -k 5 60 ./tools/qtest run "cmd /c type $RELDISC\\MANIFEST.json" 2>/dev/null \
+          | tr -d '\r' | grep -a 'driver_repo_commit' | grep -aoEm1 '[0-9a-f]{40}')
+    [ -n "$got" ] && break
+    if w_cpu_moving "$vm" 10; then
+      say "  $lbl: MANIFEST read came back empty while the guest IS EXECUTING - retry $_dtry/4"
+    else
+      say "  $lbl: MANIFEST read came back empty and cpu_time is FLAT - the guest is not executing"
+      break
+    fi
+  done
+  if [ -z "$got" ]; then
+    no "$lbl: INVALID-INSTRUMENT - could not read $RELDISC\\MANIFEST.json ($_dtry attempt(s)); nothing is established about the medium"
+    return 1
+  fi
   if [ "${got:0:12}" != "${RELEASE_SHA:0:12}" ]; then
-    no "$lbl: disc at $RELDISC was built from '${got:-unreadable}', expected ${RELEASE_SHA:0:12} - refusing to install from it"
+    no "$lbl: disc at $RELDISC was built from ${got:0:12}, expected ${RELEASE_SHA:0:12} - refusing to install from it"
     return 1
   fi
   ok "$lbl: release disc verified at $RELDISC (driver_repo_commit ${got:0:12})"

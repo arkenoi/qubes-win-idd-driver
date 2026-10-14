@@ -53,5 +53,22 @@ ck "matrix.sh no longer head -1's the marker"  "0" "$(grep -c "grep -ao 'PRESENT
 ck "matrix.sh retries while cpu_time moves"    "1" "$(grep -c 'run marker no answer yet, but the guest IS EXECUTING' "$m")"
 ck "both marker reads go through the reader"   "2" "$(grep -c 'seen=$(_mark_seen' "$m")"
 
+# THE DISC CHECK HAD THE SAME TWO FAULTS, in the step just before this one. It read the release
+# disc's MANIFEST once and, on an empty answer, reported "built from 'unreadable'" - conflating an
+# instrument failure with a provenance failure, in a message that said so in plain sight. On
+# 2026-10-14 that hard-FAILED a cell on a medium Gate-0 had already verified from this side.
+# Reading CODE, not the comments that describe it.
+mcode(){ grep -vE '^[[:space:]]*#' "$m"; }
+ck "the MANIFEST read retries while the guest executes" "1" \
+   "$(mcode | grep -c 'MANIFEST read came back empty while the guest IS EXECUTING')"
+ck "and stops when cpu_time is flat"                    "1" \
+   "$(mcode | grep -c 'MANIFEST read came back empty and cpu_time is FLAT')"
+ck "an unreadable MANIFEST is INVALID-INSTRUMENT"       "1" \
+   "$(mcode | grep -c 'INVALID-INSTRUMENT - could not read \$RELDISC')"
+ck "a wrong commit is still a provenance FAIL"          "1" \
+   "$(mcode | grep -c 'was built from \${got:0:12}')"
+ck "no 'unreadable' is passed off as a commit"          "0" \
+   "$(mcode | grep -c "built from '\${got:-unreadable}'")"
+
 echo "matrix-runmarker-selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
