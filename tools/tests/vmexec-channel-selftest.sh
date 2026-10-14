@@ -114,9 +114,21 @@ command grep -vE '^[[:space:]]*#' "$CHECK" | command grep -q 'qubes.VMShell' \
 command grep -q 'vmexec-channel-check.sh' mgmt/harness/matrix.sh \
   && ok "wired: the acceptance matrix runs it per cell" || bad "wired: no harness calls it - it would gate nothing"
 # And a failure must reach the TALLY, not just print: `no` is what counts a cell failed here.
+# IT DOES NOT GATE YET, DELIBERATELY. The matrix is wired to fail the cell on a non-zero exit, and
+# the check currently exits 0 after reporting, because it has never run against a guest: whether
+# `qubes.VMExec` is reachable from this qube under dom0's policy is unmeasured, and a refusal looks
+# exactly like the defect it hunts. An instrument never seen to WORK must not decide a release -
+# the log volume failed three campaign runs on a healthy guest for precisely that reason. Flip it by
+# removing the early `exit 0` once a guest run shows all four channels arriving.
 [ "$(awk '/vmexec-channel-check.sh/,/^    fi$/' mgmt/harness/matrix.sh | command grep -c '^\s*no "')" -ge 1 ] \
-  && ok "wired: a lost channel fails the cell instead of only printing" \
+  && ok "wired: the matrix WOULD fail the cell on a non-zero exit" \
   || bad "wired: a lost channel would print without failing the cell"
+command grep -q 'NOT GATING yet' "$CHECK" \
+  && ok "wired: and it says plainly that it is not gating yet" \
+  || bad "wired: it gates without ever having run on a guest"
+[ "$(command grep -c 'exit 0' "$CHECK")" -ge 2 ] \
+  && ok "wired: a lost channel still exits 0 for now, and says why" \
+  || bad "wired: the non-gating exit is missing"
 
 echo "vmexec-channel-selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
