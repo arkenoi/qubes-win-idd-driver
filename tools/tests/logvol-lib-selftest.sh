@@ -281,6 +281,53 @@ command grep -q 'logvol_qemu_args_keep_only_ours' "$ROOT/mgmt/harness/matrix.sh"
   && ok "keep_only_ours: matrix.sh uses it instead of unsetting the whole feature" \
   || bad "keep_only_ours: matrix.sh does not call it - the blanket unset is back"
 
+# ---- THE BIND MUST HAPPEN AFTER THE DEVICE SET IS FINAL ----------------------------------------
+# LogDir is written with the volume's DRIVE LETTER as it is at bind time, and that letter depends on
+# which other removable volumes are attached. prime-run used to bind while BOTH priming sticks were
+# present; the cell then unassigns them, the volume moves up the alphabet on the next boot, and
+# LogDir points at a letter nothing answers to. Three campaign runs died there, each one blamed on
+# the guest. MEASURED by mgmt/harness/logvol-chain-check.sh (win10-acc, 2026-10-15): with the device
+# set stable the chain holds across a reboot - mounted at D:, LogDir on it, 7 logs held open, 266
+# QWT lines host-side, same letter after the reboot, 266 -> 568 lines. 15 links, 0 broken.
+# COMMENTS STRIPPED FIRST: prime-run's comment NAMES logvol_bind_guest to explain why it is not
+# called there, so grepping the raw file finds the explanation and calls it a call. Nth time today.
+[ "$(sed 's@#.*@@' "$ROOT/mgmt/harness/prime-run.sh" | command grep -c 'logvol_bind_guest')" -eq 0 ] \
+  && ok "bind timing: prime-run does NOT bind (its device set still has both priming sticks)" \
+  || bad "bind timing: prime-run still binds before the sticks are removed"
+# and the cell binds AFTER the sweep, by line order
+cell=$(awk '/^cell_clean\(\)|clear_prime_leftovers "\$vm"/,/logvol_bind_now/' "$ROOT/mgmt/harness/matrix.sh" | sed 's@#.*@@')
+sw=$(printf '%s\n' "$cell" | command grep -n 'clear_prime_leftovers' | head -1 | cut -d: -f1)
+bd=$(printf '%s\n' "$cell" | command grep -n 'logvol_bind_now' | head -1 | cut -d: -f1)
+{ [ -n "$sw" ] && [ -n "$bd" ] && [ "$sw" -lt "$bd" ]; } \
+  && ok "bind timing: the cell sweeps the sticks (line $sw) BEFORE binding (line $bd)" \
+  || bad "bind timing: sweep at '$sw', bind at '$bd' - the letter can still move after the bind"
+# the chain check itself must exist and cover the reboot, or none of this is verifiable
+[ -x "$ROOT/mgmt/harness/logvol-chain-check.sh" ] \
+  && ok "bind timing: the whole-chain check exists and is executable" || bad "bind timing: no chain check"
+command grep -q 'G4b same drive letter across the reboot' "$ROOT/mgmt/harness/logvol-chain-check.sh" \
+  && ok "bind timing: the chain check asserts the LETTER survives a reboot" \
+  || bad "bind timing: the chain check does not check the letter across a reboot"
+
+# ---- THE BIND IS OPT-IN, because it substitutes test conditions ---------------------------------
+# Binding LogDir onto a REMOVABLE volume makes the product's logging depend on a device that need
+# not be mounted when a service starts. Measured 2026-10-15 across three campaign runs: the agent
+# logged to the volume on the post-install boot and NOTHING after the cell's park/restore, failing
+# agent_log_healthy, the IDD check that reads that log, and the console-window check - on a guest
+# that was healthy every time. An acceptance run measures the SHIPPED configuration.
+# ONE gate in prime-run, not two: it attaches (gated) and no longer binds at all - the bind moved
+# to the cell, where the device set is final. The old expectation of two was written when prime-run
+# still did both.
+[ "$(command grep -c 'LOGVOL_BIND:-0' "$ROOT/mgmt/harness/prime-run.sh")" -eq 1 ] \
+  && ok "opt-in: prime-run gates its attach on LOGVOL_BIND and does not bind" \
+  || bad "opt-in: prime-run has $(command grep -c 'LOGVOL_BIND:-0' "$ROOT/mgmt/harness/prime-run.sh") gate(s), expected exactly the attach"
+[ "$(command grep -c 'LOGVOL_BIND:-0' "$ROOT/mgmt/harness/matrix.sh")" -ge 1 ] \
+  && ok "opt-in: the matrix bind is gated too" || bad "opt-in: the matrix bind is still unconditional"
+# And the default must be OFF: a bare run of either must not redirect anything.
+for f in prime-run.sh matrix.sh; do
+  command grep -qE 'LOGVOL_BIND:-0' "$ROOT/mgmt/harness/$f" \
+    && ok "opt-in: $f defaults to NOT binding" || bad "opt-in: $f default is not off"
+done
+
 # A BIND WITH NO MATCHING UNBIND IS THE DEFECT. logvol_bind_guest points LogDir at the volume, so
 # any detach must restore it first or the guest logs to a drive letter that is gone - measured
 # 2026-10-14 on WIN10-clean as `agent_log_healthy: no agent log is held open by any process`.

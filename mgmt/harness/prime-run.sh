@@ -300,13 +300,30 @@ log "evidence -> $OUT"
 # and this attach COMPOSES qemu-extra-args rather than overwriting the value set earlier.
 # BEFORE THE START, and after qemu-extra-args: a --required assignment is satisfied at domain
 # creation, so a volume attached later is invisible to the guest.
-LOGVOL_IMG_PRIME=$(logvol_image "$CHURN")
-if logvol_create "$LOGVOL_IMG_PRIME" "$CHURN" >>"$OUT/logvol-setup.out" 2>&1 \
-   && logvol_attach "$CHURN" "$LOGVOL_IMG_PRIME" "$OUT/logvol-manifest.json" >>"$OUT/logvol-setup.out" 2>&1; then
-    log "log volume on $LOGVOL_FRONTEND ($LOGVOL_IMG_PRIME) - read it with logvol_pull, no guest needed"
+# OPT-IN, AND OFF BY DEFAULT, because binding it SUBSTITUTES TEST CONDITIONS. The bind points
+# QWT's LogDir at a REMOVABLE USB volume, and a removable volume need not be mounted when a service
+# starts: measured 2026-10-15 on three consecutive campaign runs, the agent logged to the volume on
+# the post-install boot (21:11:59-21:14:00 UTC) and wrote NOTHING there after the cell's
+# park/restore boot, so every log-derived acceptance check failed - `agent_log_healthy` ("no agent
+# log is held open by any process"), the IDD check that reads a line out of that log, and the
+# console-window check ("no gui-agent log found in F:\qwt-logs\win10-acc"). The guest was healthy
+# every time.
+# An acceptance run must measure the product in its SHIPPED configuration; moving the log directory
+# onto a test stick is exactly the substitution this project forbids. So the volume is for a
+# DELIBERATE wedge hunt (LOGVOL_BIND=1), where losing the logs is the thing being prevented and a
+# stale LogDir costs nothing.
+if [ "${LOGVOL_BIND:-0}" = 1 ]; then
+  LOGVOL_IMG_PRIME=$(logvol_image "$CHURN")
+  if logvol_create "$LOGVOL_IMG_PRIME" "$CHURN" >>"$OUT/logvol-setup.out" 2>&1 \
+     && logvol_attach "$CHURN" "$LOGVOL_IMG_PRIME" "$OUT/logvol-manifest.json" >>"$OUT/logvol-setup.out" 2>&1; then
+      log "log volume on $LOGVOL_FRONTEND ($LOGVOL_IMG_PRIME) - read it with logvol_pull, no guest needed"
+  else
+      LOGVOL_IMG_PRIME=""
+      log "[WARN] log volume not attached - a wedge or a refused shutdown loses the QWT logs: $(tail -1 "$OUT/logvol-setup.out" 2>/dev/null | cut -c1-140)"
+  fi
 else
-    LOGVOL_IMG_PRIME=""
-    log "[WARN] log volume not attached - a wedge or a refused shutdown loses the QWT logs: $(tail -1 "$OUT/logvol-setup.out" 2>/dev/null | cut -c1-140)"
+  LOGVOL_IMG_PRIME=""
+  log "log volume NOT attached (LOGVOL_BIND unset): the guest logs where it ships to, which is what acceptance must measure"
 fi
 
 # --- LOOK AT THE SCREEN, do not infer from qrexec silence -------------------------------------
@@ -754,22 +771,16 @@ if [ "$rescued" = 1 ]; then
     log "OK-WITH-RESCUE: $CHURN is up ONLY because of the one-shot rescue reboot (rescued=1 in prime-run.meta)."
     log "  ANOMALY - grade the job's reboot contract / qrexec startup from $OUT/rescue-* before trusting this fixture."
 fi
-# BIND QWT'S LOGS TO THE VOLUME, LAST. The binder runs inside the guest and needs a logged-on
-# session, so it cannot happen when the volume is attached (the guest does not exist yet). It is
-# also deliberately NOT done at the first qrexec answer: this script makes no guest call there
-# (QUIET_AFTER_FIRST), because that is where the stub-domain stall strikes.
-# WHAT THIS DOES AND DOES NOT BUY. windows-utils reads LogDir at LogInit, i.e. at each module's
-# NEXT START, so the modules running right now keep writing to C: and every boot FROM HERE ON
-# writes to the volume. The install's own final shutdown is therefore NOT covered by this call -
-# that needs the value present before the modules start, which is the answer file's job and is not
-# done yet (findings/issues.md LOGVOLBINDLATE).
-if [ -n "${LOGVOL_IMG_PRIME:-}" ]; then
-    if logvol_bind_guest "$CHURN" "$CHURN" >>"$OUT/logvol-bind.out" 2>&1; then
-        log "QWT logs bound to the log volume (effective from the NEXT boot of $CHURN)"
-    else
-        log "[WARN] log-volume bind failed (see $OUT/logvol-bind.out) - logs stay on C: and a wedge loses them"
-    fi
-fi
+# THE BIND IS NOT DONE HERE, and the reason is measured. logvol_bind_guest writes LogDir with the
+# volume's DRIVE LETTER as it is AT BIND TIME, and at this point the answer stick and the DIAG stick
+# are still attached. The caller then unassigns both (matrix.sh's clear_prime_leftovers), the log
+# volume moves UP the alphabet on the next boot, and LogDir points at a letter nothing answers to.
+# MEASURED 2026-10-15, mgmt/harness/logvol-chain-check.sh on win10-acc: with the device set stable
+# the whole chain holds - volume mounted at D:, LogDir on it, 7 log files held open, 266 QWT lines
+# read host-side, and across a REBOOT the letter stayed D: with new lines arriving (266 -> 568),
+# 15 links, 0 broken. In the campaign the same bind produced LogDir=F: and, once the two sticks were
+# dropped, every log-derived check failed on a healthy guest for three runs running.
+# So the CELL binds, after the device set is final: matrix.sh's logvol_bind_now.
 log "OK: $CHURN is up. Evidence in $OUT. The stick is still assigned --required and"
 log "  qemu-extra-args is still set - clear both before using this guest as a cell subject."
 exit 0

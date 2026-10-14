@@ -84,6 +84,12 @@ LOGVOL_VM=""; LOGVOL_IMG=""
 # EMPTY, and the pull after the cell yields nothing - an instrument that reports success and
 # collects no data, which is worse than no instrument.
 logvol_bind_now(){ # $1=vm $2=label
+  # OFF BY DEFAULT (LOGVOL_BIND=1 to enable). The bind points LogDir at a REMOVABLE volume, which
+  # need not be mounted when a service starts - measured 2026-10-15: the agent logged to it on one
+  # boot and nothing after the cell's park/restore, failing agent_log_healthy, the IDD check and the
+  # console-window check on a healthy guest. An acceptance run measures the SHIPPED configuration;
+  # redirecting the product's log directory onto a test stick substitutes test conditions.
+  [ "${LOGVOL_BIND:-0}" = 1 ] || { say "  $2: log volume NOT bound (LOGVOL_BIND unset) - the guest logs where it ships to"; return 0; }
   [ -n "$LOGVOL_IMG" ] || return 0
   if logvol_bind_guest "$1" "$1" >>"$M/$2-logvol-bind.out" 2>&1; then
     say "  $2: QWT logs bound to the log volume"
@@ -520,13 +526,21 @@ boot_with_release_iso(){ # $1=vm $2=label - boot a HALTED subject with the relea
   # itself refused.
   # BEFORE the start: a --required assignment is satisfied at domain creation, so a volume attached
   # after the boot is invisible to it.
-  LOGVOL_VM="$vm"; LOGVOL_IMG=$(logvol_image "$vm")
-  if logvol_create "$LOGVOL_IMG" "$vm" >>"$M/$lbl-logvol-setup.out" 2>&1 \
-     && logvol_attach "$vm" "$LOGVOL_IMG" "$M/logvol-manifest.json" >>"$M/$lbl-logvol-setup.out" 2>&1; then
-    say "  $lbl: log volume attached ($LOGVOL_IMG)"
-  else
-    say "  $lbl: [WARN] log volume not attached - a wedge here loses the QWT logs: $(tail -1 "$M/$lbl-logvol-setup.out" 2>/dev/null | cut -c1-140)"
-    LOGVOL_IMG=""
+  # GATED WITH THE BIND. With LOGVOL_BIND unset nothing redirects the guest's logs, so an attached
+  # volume would carry nothing - and it would still be an extra REMOVABLE device competing for the
+  # drive letter the private volume normally takes, which decided a cell's verdict on 2026-09-08
+  # (user_data_on_private and agent_log_healthy both failed on a guest whose install was perfect).
+  # "Instrument off" has to mean nothing extra is attached.
+  LOGVOL_VM=""; LOGVOL_IMG=""
+  if [ "${LOGVOL_BIND:-0}" = 1 ]; then
+    LOGVOL_VM="$vm"; LOGVOL_IMG=$(logvol_image "$vm")
+    if logvol_create "$LOGVOL_IMG" "$vm" >>"$M/$lbl-logvol-setup.out" 2>&1 \
+       && logvol_attach "$vm" "$LOGVOL_IMG" "$M/logvol-manifest.json" >>"$M/$lbl-logvol-setup.out" 2>&1; then
+      say "  $lbl: log volume attached ($LOGVOL_IMG)"
+    else
+      say "  $lbl: [WARN] log volume not attached - a wedge here loses the QWT logs: $(tail -1 "$M/$lbl-logvol-setup.out" 2>/dev/null | cut -c1-140)"
+      LOGVOL_IMG=""
+    fi
   fi
   # A claim left by an EARLIER run on a loop that is now gone would make this start fail with
   # nothing but "libxenlight failed to create new domain" - swept here, where it is cheap.
@@ -1558,6 +1572,13 @@ cell_clean(){ # $1=pristine-base $2=subject $3=tag
     *) no "$tag-clean: prime-run rc=$prc (see $M/$tag-clean-prime.log)"; return ;;
   esac
   clear_prime_leftovers "$vm"
+  # BIND NOW, NOT IN prime-run. The volume's drive letter depends on which other removable
+  # volumes are attached, and LogDir is written with the letter at bind time. prime-run binds
+  # while both priming sticks are present; the sweep above then removes them and the volume
+  # shifts letter on the next boot, leaving LogDir pointing at nothing - three campaign runs
+  # died that way. logvol-chain-check.sh measured the chain holding across a reboot (15/15)
+  # once the device set is stable, which is exactly here.
+  logvol_bind_now "$vm" "$tag-clean"
   # Park FIRST, grade the parked state AFTER: the snapshot must be the clean installed state,
   # not one carrying grading residue (notepad, typed markers, an extra boot's mutations).
   park_installed "$vm" "$tag-clean" || say "  $tag-clean: continuing without a park - snapshot cells will refuse loudly"
