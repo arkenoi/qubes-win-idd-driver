@@ -93,5 +93,34 @@ o2=$(SWEEP_GATE_LEDGER="$T/td-real.txt" bash tools/sweep-gate.sh "$T/td.log" 2>&
 if [ $r1 -ne 0 ] && [ $r2 -eq 0 ]; then ok "T8 a TODO does not account for an error; a written reason does"
 else no "T8 ledger note handling wrong (todo rc=$r1 expect non-zero, real rc=$r2 expect 0)" "$o1"; fi
 
+# T9 - THE WIRING, not just the tool. Coverage depends on matrix.sh actually CALLING the gate over
+# the right files and raising a class that blocks. The block is read OUT of matrix.sh and executed
+# against two fixtures, so this test cannot drift from the harness it checks. The guest log sits in
+# a SUBDIRECTORY because logvol_pull puts it there and a flat glob missed it - the first version of
+# the wiring would have passed a campaign whose guest log carried a gui-agent crash loop.
+blk=$(python3 - <<'PYX'
+s = open('mgmt/harness/matrix.sh', encoding='utf-8').read()
+a = s.index('if [ -x tools/sweep-gate.sh ]; then'); b = s.index('# PRECONDITION EVIDENCE')
+print(s[a:b].rstrip())
+PYX
+)
+run_block(){ # $1 = campaign dir
+  bash -c "FAIL=0; INVALID=0; R='$1/run.log'; M='$1'
+say(){ echo \"\$*\"; }
+no(){ FAIL=\$((FAIL+1)); case \"\$*\" in *INVALID*) INVALID=\$((INVALID+1)) ;; esac; echo \"NO \$*\"; }
+$blk
+echo \"RESULT FAIL=\$FAIL INVALID=\$INVALID\"" 2>&1
+}
+mkdir -p "$T/dirty/logvol-win11-up/qwt-logs" "$T/clean"
+printf '12:00:00 matrix: campaign start\n' > "$T/dirty/run.log"
+printf '12:00:00 matrix: campaign start\n' > "$T/clean/run.log"
+printf '[20261014.120004.001-1234-W] gui-agent.exe died within 10000 ms of starting, 2 time(s) in a row\n'   > "$T/dirty/logvol-win11-up/qwt-logs/gui-agent-20261014.log"
+od=$(run_block "$T/dirty"); oc=$(run_block "$T/clean")
+if printf '%s' "$od" | grep -qa 'RESULT FAIL=1 INVALID=1' && printf '%s' "$oc" | grep -qa 'RESULT FAIL=0 INVALID=0'; then
+  ok "T9 the campaign wiring blocks on a GUEST log in a subdir, and passes a clean campaign"
+else
+  no "T9 campaign wiring wrong" "dirty: $(printf '%s' "$od" | tail -1) | clean: $(printf '%s' "$oc" | tail -1)"
+fi
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

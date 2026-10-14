@@ -69,8 +69,8 @@ HERE="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$HERE" || exit 1
 STAGE_TO_C=0
 _args=(); for _a in "$@"; do case "$_a" in --stage-to-c) STAGE_TO_C=1 ;; *) _args+=("$_a") ;; esac; done
 set -- ${_args+"${_args[@]}"}
-PKG="${1:?usage: quick-upgrade.sh <release-iso-or-setup-tree> [subject] [os] [--stage-to-c]}"
-OS="${3:?usage: $0 <iso> <subject> <win10|win11> - name the OS family; it selects the golden and there is no default target}"
+PKG="${1:?[ERROR] usage: quick-upgrade.sh <release-iso-or-setup-tree> [subject] [os] [--stage-to-c]}"
+OS="${3:?[ERROR] usage: $0 <iso> <subject> <win10|win11> - name the OS family; it selects the golden and there is no default target}"
 SUBJECT="${2:-$OS-up}"
 GOLDEN="$OS-qwt"
 HOLDER=win-idd-mgmt

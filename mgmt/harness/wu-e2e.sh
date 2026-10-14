@@ -32,7 +32,7 @@
 # Exit 0 every round PASSED, 3 a round FAILED, STALLED or DEAD, 2 instrument error.
 set -u
 
-VM="${1:?usage: $0 <vm> [rounds] [outdir]}"
+VM="${1:?[ERROR] usage: $0 <vm> [rounds] [outdir]}"
 ROUNDS="${2:-3}"
 
 # SERIAL, ALWAYS. This drives a guest for hours across reboots; a second job on the same guest
@@ -466,7 +466,24 @@ else
   log "no excluded items in any round - dom0 was told about everything the guest saw"
 fi
 
-log "DONE: rounds=$ROUNDS fails=$fails unjudged_exclusions=$unjudged out=$OUT"
+# HARDWIRED ERROR SWEEP over this suite's own log, and it BLOCKS. This is the suite that drives the
+# updater, i.e. the one whose log carried the lines nobody read (HARNESSLOGUNSWEPT). A declared
+# error is accounted for by an entry in mgmt/harness/error-ledger.txt that records WHY it is not a
+# defect; a row with no reason accounts for nothing, and accounted messages are still printed.
+# It can only ever RAISE the exit code - it never rescues a failing round.
+sweep_rc=0
+if [ -x tools/sweep-gate.sh ] && [ -s "$OUT/run.log" ]; then
+  if bash tools/sweep-gate.sh "$OUT/run.log" > "$OUT/sweep-gate.out" 2>&1; then
+    log "sweep-gate: every declared error in this suite's own log is accounted for"
+  else
+    log "[ERROR] SWEEP-GATE: $(grep -ac '^  UNACCOUNTED' "$OUT/sweep-gate.out" || true) unaccounted declared error(s) in $OUT/run.log - read $OUT/sweep-gate.out"
+    grep -aE '^  (UNACCOUNTED|ROSE)' "$OUT/sweep-gate.out" | head -8 | while IFS= read -r l; do log "  $l"; done
+    sweep_rc=5
+  fi
+fi
+
+log "DONE: rounds=$ROUNDS fails=$fails unjudged_exclusions=$unjudged sweep=$sweep_rc out=$OUT"
 [ "$fails" = 0 ] || exit 3
 [ "$unjudged" = 0 ] || exit 4   # passed every round, but exclusions are unjudged: NOT green
+[ "$sweep_rc" = 0 ] || exit 5   # rounds passed, but this suite's own log carries an unread error
 exit 0

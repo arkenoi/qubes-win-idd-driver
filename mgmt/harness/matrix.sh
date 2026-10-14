@@ -1915,6 +1915,53 @@ for c in $CELLS; do
     LOGVOL_IMG=""; LOGVOL_VM=""
   fi
 done
+
+# HARDWIRED ERROR SWEEP OVER THE CAMPAIGN'S OWN LOGS, AND IT BLOCKS.
+#
+# Nothing swept these. A campaign that reported 96 of 96 clean carried "log-volume bind failed" on
+# BOTH upgrade cells, and every reader including a model read the run as green (HARNESSLOGUNSWEPT,
+# LOGVOLBINDUPGRADE). Reporting was not enough - a line nobody reads is a line nobody reads whether
+# or not a tool printed it.
+#
+# IT RAISES THE *INVALID* CLASS, NEVER PRODUCT FAIL. An unaccounted error in our own harness logs is
+# missing or unexplained INSTRUMENT data, not a demonstrated product defect, and verdict-lib's V2
+# invariant is that INVALID-* is never folded into FAIL. INVALID blocks the release gate on its own
+# (the gate requires zero INVALID), so this stops a cut without inventing a product verdict.
+#
+# A declared error is accounted for by an entry in mgmt/harness/error-ledger.txt that RECORDS WHY it
+# is not a defect. A row with no reason does not account for anything, and nothing is ever hidden:
+# accounted messages are printed too, every run.
+if [ -x tools/sweep-gate.sh ]; then
+  # THE GUEST'S OWN LOGS ARE IN SCOPE, and they are where the product's errors are. logvol_pull
+  # drops them under $M/logvol-<cell>/, which a flat "$M"/*.log glob does not see - the first
+  # version of this block swept only the harness's bash output and would have reported a campaign
+  # clean while the guest's gui-agent log carried a crash loop. No release-grading harness calls
+  # log-sweep.sh either (measured: 0 references in matrix.sh, quick-upgrade.sh and wu-e2e.sh), so
+  # before this nothing swept the product's logs during a campaign at all.
+  #
+  # BOUNDED, AND IT SAYS SO WHEN IT IS. A capped sweep that reads as clean is worse than no sweep,
+  # so the cap is reported and raises the INVALID class exactly like an unaccounted error would.
+  SW_CAP="${MATRIX_SWEEP_FILE_CAP:-600}"
+  mapfile -t _swl < <(find "$M" -maxdepth 3 -type f \( -name '*.out' -o -name '*.log' -o -name '*.cur' \
+                        -o -name '*.tail' \) -size -8M -size +0 2>/dev/null | sort)
+  sw_total=${#_swl[@]}
+  swlogs="$R"; n=0
+  for o in "${_swl[@]}"; do [ "$n" -ge "$SW_CAP" ] && break; swlogs="$swlogs $o"; n=$((n+1)); done
+  if [ "$sw_total" -gt "$SW_CAP" ]; then
+    no "INVALID-SWEEP-CAPPED  the campaign produced $sw_total log files and the sweep read $SW_CAP - the rest are UNREAD, so this campaign is not swept (raise MATRIX_SWEEP_FILE_CAP and re-sweep $M)"
+  fi
+  say "sweep-gate: reading $n of $sw_total log file(s) under $M, plus the campaign log"
+  # shellcheck disable=SC2086
+  if bash tools/sweep-gate.sh $swlogs > "$M/sweep-gate.out" 2>&1; then
+    say "sweep-gate: every declared error in the campaign's own logs is accounted for"
+  else
+    nun=$(grep -ac '^  UNACCOUNTED' "$M/sweep-gate.out" 2>/dev/null || true); nun=${nun:-0}
+    nro=$(grep -ac '^  ROSE' "$M/sweep-gate.out" 2>/dev/null || true); nro=${nro:-0}
+    no "INVALID-SWEEP  ${nun:-0} unaccounted + ${nro:-0} risen declared error(s) in the campaign's own logs - read $M/sweep-gate.out, then fix the defect or record why it is not one"
+    grep -aE '^  (UNACCOUNTED|ROSE)' "$M/sweep-gate.out" | head -10 | while IFS= read -r l; do say "  $l"; done
+  fi
+fi
+
 # PRECONDITION EVIDENCE for the book's s7 judgement (p1-precondition-authority): one entry per
 # install cell, carrying the '=== PRECONDITION ===' line from THIS run's log slice (the .cur file
 # verify_installed cut past the run marker; the full final log only when no slice exists). The

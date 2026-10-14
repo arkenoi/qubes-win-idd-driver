@@ -1313,8 +1313,18 @@ def l24_failure_report_must_declare_a_level() -> None:
     reports = re.compile(r'\b(say|log|_vs_log|_lv_say|echo)\b[^|]*"')
     failure = re.compile(r"(FAIL|FAILED|REFUS|ERROR|cannot|UNEXPECTED|could not|would not"
                          r"|no record|missing data)")
+    # DECLARED, counting the three ways a line can carry a level without spelling it out:
+    #   a literal tag; an interpolated guard (${sev}/${_mx_sev}) set immediately above; and
+    #   declaration BY THE CALLEE - `finish <nonzero>` goes through finish(), which prefixes
+    #   [ERROR] for any non-zero rc, so the caller must not repeat it.
     declared = re.compile(r"\[(ERROR|WARN|WARNING)\]|\b(WARNING|ERROR|FATAL|CRITICAL)\b:?\s"
-                          r"|_mx_sev|_l=|sev=|printf '\[ERROR\]")
+                          r"|\$\{_?mx_?sev(:-)?[^}]*\}|\$\{sev(:-)?[^}]*\}"
+                          r"|_mx_sev=|_l=|sev=|printf '\[ERROR\]"
+                          r"|\bfinish\s+[1-9]")
+    # NOT A REPORT AT ALL: a classifier branch that echoes a CLASS, and a pipeline that re-prints
+    # lines out of a file some other emitter already levelled. Neither originates a failure line.
+    not_a_report = re.compile(r"\)\s*echo\s+(INVALID|FAIL|PASS)\b"
+                              r"|grep\s[^|]*\|\s*(sed|tee|head|tail)")
     # a line that EXPLAINS rather than reports, and the two parsed markers
     prose = re.compile(r"=== (MATRIX|done):|this cannot tell them apart|it cannot occur here"
                        r"|harmless:|the open question|its contract requires|not calling this"
@@ -1326,6 +1336,8 @@ def l24_failure_report_must_declare_a_level() -> None:
             if line.lstrip().startswith("#") or not reports.search(line):
                 continue
             if not failure.search(line) or declared.search(line) or prose.search(line):
+                continue
+            if not_a_report.search(line):
                 continue
             pending_finding("L24-failure-report-without-a-level", f"{f.name}:{n}",
                     "reports a failure with no declared severity, so tools/sweep-gate.sh cannot see "
