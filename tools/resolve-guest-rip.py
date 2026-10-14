@@ -27,25 +27,52 @@ Usage:
 import re
 import sys
 
-REC = re.compile(r'MODBASE boot=(\S+) base=0x([0-9a-fA-F]+) name=(.+?)\s*$')
+# TWO RECORD SHAPES, and the older one must keep parsing. Kernel lines come from
+# EnumDeviceDrivers, which reports no size:
+#     MODBASE boot=<iso> base=0x<16hex> name=<file>
+# User-mode lines carry a size and the space they belong to, because a module list read per process
+# CAN report one:
+#     MODBASE boot=<iso> base=0x<16hex> size=0x<hex> space=user name=<file>
+# Every archived capture is the first shape, so the optional groups are what keeps them readable.
+REC = re.compile(r'MODBASE boot=(\S+) base=0x([0-9a-fA-F]+)'
+                 r'(?: size=0x([0-9a-fA-F]+))?'
+                 r'(?: space=(\S+))?'
+                 r' name=(.+?)\s*$')
+# The recorder says so when it dropped user-mode records rather than letting a short table look
+# complete; a truncated table resolves a RIP to the WRONG module.
+TRUNC = re.compile(r'MODBASE-TRUNCATED boot=(\S+)')
 
 
 def load(path):
-    boots = {}
+    """-> ({boot: [(base, name, size|None, space)]}, {boot: truncation note})"""
+    boots, trunc = {}, {}
     with open(path, errors='ignore') as fh:
         for line in fh:
-            m = REC.match(line.strip())
+            line = line.strip()
+            t = TRUNC.search(line)
+            if t:
+                trunc[t.group(1)] = line
+                continue
+            m = REC.match(line)
             if not m:
                 continue
-            boot, base, name = m.group(1), int(m.group(2), 16), m.group(3)
-            boots.setdefault(boot, []).append((base, name))
+            boot = m.group(1)
+            base = int(m.group(2), 16)
+            size = int(m.group(3), 16) if m.group(3) else None
+            space = m.group(4) or 'kernel'
+            boots.setdefault(boot, []).append((base, m.group(5), size, space))
     for b in boots:
         boots[b].sort()
-    return boots
+    return boots, trunc
 
 
 def resolve(mods, rip):
-    """Highest base at or below rip. Sizes are unknown, so containment is bounded, not proven."""
+    """Highest base at or below rip.
+
+    Containment is PROVEN where a size is recorded (user-mode) and merely bounded where none is
+    (kernel, which EnumDeviceDrivers cannot report). A proven MISS is not a weaker answer than a
+    guess - it is the difference between naming the right module and naming a neighbour.
+    """
     lo, hi, best = 0, len(mods) - 1, None
     while lo <= hi:
         mid = (lo + hi) // 2
@@ -71,7 +98,7 @@ def main():
         print("no RIP given")
         return 2
 
-    boots = load(path)
+    boots, trunc = load(path)
     if not boots:
         print(f"FAIL  no MODBASE records in {path}. Missing data fails - resolve nothing from this.")
         return 1
@@ -87,8 +114,16 @@ def main():
         return 1
 
     mods = boots[want]
-    print(f"boot {want}: {len(mods)} modules, "
+    nker = sum(1 for m in mods if m[3] == 'kernel')
+    nusr = len(mods) - nker
+    print(f"boot {want}: {len(mods)} modules ({nker} kernel, {nusr} user-mode), "
           f"bases 0x{mods[0][0]:x} .. 0x{mods[-1][0]:x}")
+    if nusr == 0:
+        print("NOTE  no user-mode records in this capture: a user-mode RIP (0x00007f...) cannot be")
+        print("      attributed from it. That is what left the 2026-10-14 access violation in")
+        print("      qrexec-agent anonymous - the recorder read kernel drivers only.")
+    if want in trunc:
+        print(f"WARN  {trunc[want]}")
     rc = 0
     for a in args:
         rip = int(a, 16)
@@ -97,15 +132,26 @@ def main():
             print(f"  {a}  UNRESOLVED - below every recorded base. Not attributing it.")
             rc = 1
             continue
-        base, name = hit
+        base, name, size, space = hit
         off = rip - base
         flag = ''
-        # An offset larger than any plausible kernel module means the owning module was not in the
-        # table (it may have loaded after the record, or be a user-mode address). Say so loudly
-        # rather than printing a confident module name with an absurd offset.
-        if off > 0x2000000:
-            flag = '  <-- IMPLAUSIBLE OFFSET (>32 MB): the real owner is probably NOT in this table'
-            rc = 1
+        if size is not None:
+            # A SIZE MAKES THIS DECIDABLE. Outside the module's extent the nearest base below is a
+            # NEIGHBOUR, not the owner, and printing its name would be a confident wrong answer.
+            if off >= size:
+                print(f"  {a}  UNRESOLVED - falls 0x{off - size:x} past the end of {name} "
+                      f"(base 0x{base:x} + 0x{size:x}) and inside no recorded module. Not attributing it.")
+                rc = 1
+                continue
+            flag = f'  [{space}, containment PROVEN within 0x{size:x}]'
+        else:
+            # No size: kernel records cannot report one, so containment stays bounded by the next
+            # base up. An offset past any plausible module means the owner is simply absent.
+            if off > 0x2000000:
+                flag = '  <-- IMPLAUSIBLE OFFSET (>32 MB): the real owner is probably NOT in this table'
+                rc = 1
+            else:
+                flag = f'  [{space}, containment BOUNDED - no size recorded]'
         print(f"  {a}  ->  {name} + 0x{off:x}{flag}")
     if rc == 0:
         print("Next: match the RVA against that build's symbols. The module file itself is on the")

@@ -13,7 +13,10 @@
 # The information needed to resolve that RIP exists only DURING the boot that later wedges, and
 # nobody was recording it. That is the whole reason specimen 2's function is unknown.
 #
-# So record it up front. This arms a guest so that every boot appends its kernel module table -
+# So record it up front. This arms a guest so that every boot appends its module table - kernel
+# drivers AND user-mode images - and `--snapshot` takes one NOW for the boot still running, which
+# is what a user-mode crash needs: our own EXEs may not have loaded when the onstart task fired.
+# Originally kernel-only -
 # module name, base address, size - to a file on the PERSISTENT volume, before anything can wedge.
 # Any later capture then resolves: module + RVA, and the RVA can be matched against that build's
 # symbols offline (tools/resolve-guest-rip.py does the arithmetic).
@@ -64,7 +67,8 @@ if [ "$MODE" = --dump ]; then
 fi
 
 cat > "$OUT/record-module-bases.ps1" <<'PS1'
-# Append this boot's kernel module table to the persistent volume. Runs as SYSTEM at boot.
+# Append this boot's module table - KERNEL drivers and USER-MODE images - to the persistent
+# volume. Runs as SYSTEM at boot.
 $ErrorActionPreference = 'SilentlyContinue'
 Add-Type -Language CSharp @'
 using System; using System.Text; using System.Runtime.InteropServices;
@@ -90,13 +94,53 @@ $path = Join-Path $dir 'module-bases.txt'
 
 $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o')
 $lines = New-Object System.Collections.Generic.List[string]
-$lines.Add("=== BOOT $boot host=$env:COMPUTERNAME recorded=$([datetime]::UtcNow.ToString('o')) modules=$count")
 foreach ($p in $arr) {
   $sb = New-Object System.Text.StringBuilder 260
   if ([Drv]::GetDeviceDriverBaseNameA($p, $sb, $sb.Capacity) -gt 0) {
     $lines.Add(("MODBASE boot={0} base=0x{1} name={2}" -f $boot, $p.ToString('x16'), $sb.ToString()))
   }
 }
+
+# USER-MODE BASES TOO. EnumDeviceDrivers answers for the KERNEL ONLY, so every base above is
+# 0xfffff..., and on 2026-10-14 that left the thing we most needed to name unnameable: qrexec-agent
+# took an access violation at 0x00007FFFF52E54A8 - a user-mode address - and 330 recorded bases
+# could not resolve it (findings QREXECAGENTAV). A recorder blind to the half of the address space
+# our own services run in is not a RIP recorder.
+#
+# WHY A BOOT SNAPSHOT IS ENOUGH FOR A LATER CRASH: Windows randomises a shared image's load address
+# once per BOOT, not per process, so ntdll, kernelbase and our own EXEs sit at the same base in
+# every process of this boot - including ones started afterwards, such as the qrexec-wrapper spawned
+# per call. Deduplicating on (name, base) therefore collapses the DLLs every process shares into one
+# record each, and the table stays small without losing anything.
+#
+# THESE RECORDS CARRY size=, which the kernel ones cannot: containment can be PROVEN for them
+# instead of assumed from "the highest base below the RIP". Kernel lines keep their exact old
+# format, byte for byte, so every existing reader and every archived file still parses.
+$seen = New-Object 'System.Collections.Generic.HashSet[string]'
+$umode = 0; $uskip = 0; $utrunc = 0
+$UCAP = 6000
+foreach ($proc in Get-Process) {
+  $mods = $null
+  # A 32-bit process read from 64-bit PowerShell, and any protected process, throws here. That is
+  # expected and counted - never silently dropped, because a module we could not read is a module
+  # whose RIPs will not resolve.
+  try { $mods = $proc.Modules } catch { $uskip++; continue }
+  if ($null -eq $mods) { $uskip++; continue }
+  foreach ($m in $mods) {
+    if ($lines.Count -ge ($count + $UCAP)) { $utrunc++; continue }
+    $b = $m.BaseAddress.ToString('x16')
+    if (-not $seen.Add(($m.ModuleName + '|' + $b))) { continue }
+    $lines.Add(("MODBASE boot={0} base=0x{1} size=0x{2} space=user name={3}" -f `
+                $boot, $b, ([int]$m.ModuleMemorySize).ToString('x'), $m.ModuleName))
+    $umode++
+  }
+}
+# A TRUNCATED TABLE IS WORSE THAN NONE - it resolves a RIP to the wrong module - so saying so is
+# part of the record, exactly as the kernel two-call pattern above refuses to guess a size.
+if ($utrunc -gt 0) {
+  $lines.Add("=== MODBASE-TRUNCATED boot=$boot user-mode records dropped after ${UCAP}: $utrunc. Do NOT resolve a user-mode RIP against this boot.")
+}
+$lines.Insert(0, "=== BOOT $boot host=$env:COMPUTERNAME recorded=$([datetime]::UtcNow.ToString('o')) modules=$count usermode=$umode procskipped=$uskip")
 # APPEND, never overwrite: the record of an earlier boot is exactly what is needed if a LATER boot
 # is the one that wedges and cannot be asked anything.
 Add-Content -LiteralPath $path -Value $lines -Encoding ASCII
@@ -157,6 +201,48 @@ _recorder_run(){
   QTEST_VM=$VM timeout -k 5 300 ./tools/qtest run \
     "powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\Qubes Tools\\diag\\record-module-bases.ps1\"" 2>&1 | tr -d '\r'
 }
+# --snapshot: TAKE A TABLE NOW, FOR THE BOOT THAT IS STILL RUNNING.
+#
+# The onstart task fires before our own services have all started, so an EXE of ours can be missing
+# from the boot record - while the address that needs resolving comes from a crash minutes or hours
+# later. Windows fixes a shared image's load address per BOOT, not per process, so a snapshot taken
+# AFTER the crash carries the same bases the crashing process had, provided the guest has not
+# rebooted since. That is the case the 2026-10-14 access violation was in: the guest was still up,
+# and nothing could be asked of it for user-mode bases because this mode did not exist.
+#
+# It APPENDS. The boot record is not cleared: the earlier table is the fallback if this guest is the
+# one that wedges next, and clearing it to make a tidier file would throw that away.
+if [ "$MODE" = --snapshot ]; then
+  say "snapshot: running the recorder on $VM now; the table is APPENDED to, never cleared"
+  _snap=$(_recorder_run now)
+  [ -n "$_snap" ] && say "  recorder said: $(printf '%s' "$_snap" | tail -2 | tr '\n' ' ' | cut -c1-140)"
+  QTEST_VM=$VM timeout -k 5 300 ./tools/qtest run \
+    'cmd /c type "Q:\Qubes Logs\module-bases.txt" 2>nul || type "C:\module-bases.txt" 2>nul' 2>/dev/null \
+    | tr -d '\r' > "$OUT/module-bases.txt"
+  _nk=$(grep -ac 'MODBASE boot=[^ ]* base=0x[0-9a-f]* name=' "$OUT/module-bases.txt" 2>/dev/null) || _nk=0
+  _nu=$(grep -ac 'space=user' "$OUT/module-bases.txt" 2>/dev/null) || _nu=0
+  say "pulled $_nk kernel + $_nu user-mode record(s) -> $OUT/module-bases.txt"
+  # MISSING DATA FAILS. A snapshot with no user-mode records is the blind spot this mode exists to
+  # close, so it is reported as a failure rather than filed as a table.
+  if [ "${_nu:-0}" -eq 0 ]; then
+    say "FAIL: no user-mode records. Either the guest carries an older recorder (re-arm it), or the"
+    say "  enumeration was refused. A user-mode RIP cannot be resolved against this file."
+    exit 1
+  fi
+  # NAME THE BOOT THIS SNAPSHOT BELONGS TO. Bases are fixed per boot, so a snapshot can only
+  # explain an address captured in the SAME boot - and if the guest rebooted between the crash and
+  # the snapshot, the table is correct and the answer would still be wrong. The resolver keys every
+  # record by boot and refuses to mix them, but the operator has to be able to SEE which boot this
+  # is in order to compare it with the capture.
+  _snapboot=$(grep -a '^MODBASE ' "$OUT/module-bases.txt" | sed -E 's/.*boot=([^ ]+).*/\1/' | sort -u | tail -1)
+  _nboots=$(grep -a '^MODBASE ' "$OUT/module-bases.txt" | sed -E 's/.*boot=([^ ]+).*/\1/' | sort -u | grep -ac . || true)
+  say "snapshot belongs to boot $_snapboot (${_nboots:-?} boot(s) in this file)"
+  say "  it can only explain an address captured in THAT boot; if the guest rebooted since the"
+  say "  capture, the bases are right and the attribution would still be wrong."
+  say "resolve a user-mode RIP with:  tools/resolve-guest-rip.py $OUT/module-bases.txt --boot $_snapboot 0x00007ffff52e54a8"
+  exit 0
+fi
+
 # CLEAR THE TABLE FIRST, AND PROVE IT IS GONE. Measured 2026-09-22: with the first run replaced by
 # a no-op (ARM_DEFECT=firstrun-noop), the arming still reported "ARMED AND PROVEN: 1293 records" -
 # because the check only asks whether a table EXISTS, and a table written by an earlier arming on
