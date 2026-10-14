@@ -86,14 +86,32 @@ LOGVOL_VM=""; LOGVOL_IMG=""
 # Every caller of this has just finished an install, so the clock feature needs clearing here too.
 logvol_bind_now(){ # $1=vm $2=label
   clock_feature_reset "$1" "$2"
-  # OFF BY DEFAULT (LOGVOL_BIND=1 to enable). The bind points LogDir at a REMOVABLE volume, which
-  # need not be mounted when a service starts - measured 2026-10-15: the agent logged to it on one
-  # boot and nothing after the cell's park/restore, failing agent_log_healthy, the IDD check and the
-  # console-window check on a healthy guest. An acceptance run measures the SHIPPED configuration;
-  # redirecting the product's log directory onto a test stick substitutes test conditions.
-  # ON BY DEFAULT now that the letter is resolved by label and PINNED (logvol-bind.ps1 Pin-LogVol),
-  # so LogDir can no longer name a letter that moved. LOGVOL_BIND=0 is the kill switch.
-  [ "${LOGVOL_BIND:-1}" = 1 ] || { say "  $2: log volume NOT bound (LOGVOL_BIND=0) - the guest logs where it ships to"; return 0; }
+  # OFF BY DEFAULT (LOGVOL_BIND=1 to enable), and this default has now been wrong in both
+  # directions, so the reasoning is written out once.
+  #
+  # THE BIND POINTS LogDir AT A REMOVABLE VOLUME, WHICH NEED NOT BE MOUNTED WHEN A SERVICE STARTS.
+  # Every QWT module reads LogDir once, at its own LogInit. A USB volume behind an emulated xHCI
+  # controller enumerates on its own schedule, so a module that starts first opens no log at all -
+  # and never retries.
+  # MEASURED, twice, and the second time with the letter already fixed: run 8 (2026-10-15) bound
+  # cleanly - `LOGVOL-BIND ok drive=Z: found=E: letter=pinned copied=21`, the volume mounted, 23
+  # files on it host-side - and then NOTHING was written to it after the cell's park/restore. The
+  # host read shows no file newer than the bind itself. agent_log_healthy came back
+  # `any_agent_log_held_open: false` with the agent alive (pid 3972), the IDD check found no line to
+  # read, and the console-window check reported INVALID-INSTRUMENT.
+  # THE PIN WAS NOT THE ANSWER TO THIS. Pin-LogVol fixed the LETTER - the volume is at Z: and stays
+  # there across a reboot (logvol-chain-check.sh, 15 links, 0 broke). "Mounted at a stable letter"
+  # and "mounted before the agent's LogInit" are different claims, and only the first was fixed.
+  # This comment previously carried the measurement above AND "ON BY DEFAULT now that the letter is
+  # PINNED" directly beneath it; a theory was allowed to override a measurement in the same
+  # paragraph.
+  # AND THE CONTROL IS UNAMBIGUOUS: WIN10-clean's accept battery PASSED in the campaigns before this
+  # instrument was wired into it (rel-38522636380, rel-38571770442) and has failed in every campaign
+  # since. An acceptance run measures the SHIPPED configuration; redirecting the product's log
+  # directory onto a test stick substitutes test conditions, and on an unwedged guest qrexec pulls
+  # the logs anyway. LOGVOL_BIND=1 is for hunting a wedge, which is what the volume was built for.
+  # The stick itself stays ATTACHED either way - it carries the installer's own diag markers.
+  [ "${LOGVOL_BIND:-0}" = 1 ] || { say "  $2: log volume NOT bound (LOGVOL_BIND=0) - the guest logs where it ships to"; return 0; }
   [ -n "$LOGVOL_IMG" ] || return 0
   if logvol_bind_guest "$1" "$1" >>"$M/$2-logvol-bind.out" 2>&1; then
     say "  $2: QWT logs bound to the log volume"

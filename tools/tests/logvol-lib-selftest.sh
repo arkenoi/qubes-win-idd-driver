@@ -373,16 +373,31 @@ command grep -q 'G4b same drive letter across the reboot' "$ROOT/mgmt/harness/lo
   && ok "bind timing: the chain check asserts the LETTER survives a reboot" \
   || bad "bind timing: the chain check does not check the letter across a reboot"
 
-# ---- THE STICK IS ALWAYS THERE; THE REDIRECT IS ON BY DEFAULT ---------------------------------
+# ---- THE STICK IS ALWAYS THERE; THE REDIRECT IS OFF BY DEFAULT --------------------------------
 # The stick carries the install's markers, which a stalled install needs whether or not logs are
-# redirected, so it is attached unconditionally - as the DIAG stick always was. The redirect is on
-# by default now that the letter is resolved by label and PINNED, so it cannot name a letter that
-# moved; LOGVOL_BIND=0 remains as a kill switch.
-[ "$(command grep -c 'LOGVOL_BIND:-1' "$ROOT/mgmt/harness/matrix.sh")" -ge 1 ] \
-  && ok "posture: the redirect is ON by default (LOGVOL_BIND=0 disables it)" \
-  || bad "posture: the redirect is not on by default"
-[ "$(command grep -c 'LOGVOL_BIND:-0' "$ROOT/mgmt/harness/matrix.sh")" -eq 0 ] \
-  && ok "posture: no off-by-default gate left in the matrix" || bad "posture: an off-by-default gate remains"
+# redirected, so it is attached unconditionally - as the DIAG stick always was.
+#
+# THE REDIRECT IS OFF, AND THIS CHECK USED TO ASSERT THE OPPOSITE. It read "the redirect is on by
+# default now that the letter is resolved by label and PINNED, so it cannot name a letter that
+# moved" - true about the letter, and not the claim that matters. LogDir is read once per module at
+# LogInit, and a USB volume behind an emulated xHCI controller need not be MOUNTED by then; a module
+# that starts first opens no log and never retries. Measured on run 8 with the pin working: the bind
+# receipt read `drive=Z: found=E: letter=pinned copied=21`, the volume mounted at Z:, and nothing
+# was written to it after the cell's park/restore - `any_agent_log_held_open: false` with the agent
+# alive. The control is unambiguous: WIN10-clean's accept battery PASSED in the campaigns before
+# this instrument was wired into that cell (rel-38522636380, rel-38571770442) and failed in every
+# campaign after.
+# So: an acceptance run measures the SHIPPED log configuration, and LOGVOL_BIND=1 is for hunting a
+# wedge - which is the only thing the volume was ever built for.
+[ "$(command grep -c 'LOGVOL_BIND:-0' "$ROOT/mgmt/harness/matrix.sh")" -ge 1 ] \
+  && ok "posture: the redirect is OFF by default (LOGVOL_BIND=1 enables it for a wedge hunt)" \
+  || bad "posture: the redirect is not off by default - acceptance would measure a redirected LogDir"
+[ "$(command grep -c 'LOGVOL_BIND:-1' "$ROOT/mgmt/harness/matrix.sh")" -eq 0 ] \
+  && ok "posture: no on-by-default gate left in the matrix" || bad "posture: an on-by-default gate remains"
+# The stick must still be attached with the redirect off, or a wedge loses the installer's markers.
+[ "$(sed -E 's/(^|[^`])#.*/\1/' "$ROOT/mgmt/harness/matrix.sh" | command grep -c 'logvol_attach')" -ge 1 ] \
+  && ok "posture: the stick is still attached regardless of the redirect" \
+  || bad "posture: nothing attaches the stick - a wedge loses the installer's diag markers"
 [ "$(sed -E 's/(^|[^`])#.*/\1/' "$ROOT/mgmt/harness/prime-run.sh" | command grep -c 'LOGVOL_BIND')" -eq 0 ] \
   && ok "posture: prime-run attaches the stick unconditionally and never binds" \
   || bad "posture: prime-run still gates or binds the stick"
