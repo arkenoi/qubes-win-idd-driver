@@ -352,8 +352,26 @@ logvol_bind_guest(){ # <vm> <id> - push the binder and run it; the LOGVOL-BIND l
   [ -f "$LOGVOL_BIND_PS1" ] || { _lv_say "REFUSED: $LOGVOL_BIND_PS1 is missing"; return 2; }
   case "$mode" in registry|junction) ;; *) _lv_say "REFUSED: LOGVOL_BIND_MODE must be registry or junction (got '$mode')"; return 2 ;; esac
   out=$(QTEST_VM="$vm" timeout -k 10 240 "$LOGVOL_QTEST" pushrun "$LOGVOL_BIND_PS1" -Id "$id" -Mode "$mode" 2>&1 | tr -d '\r')
+  # KEEP THE WHOLE TRANSCRIPT. This used to report only `tail -2` of it, and on 2026-10-14 both
+  # upgrade cells of a full campaign failed here with the entire diagnosis reduced to
+  # "  C:\Windows\system32>" - the cmd prompt. The bind failed, the volume stayed empty, those cells
+  # kept logging to C:, and the ONE thing that could say why had been thrown away before anyone
+  # read it (findings/issues.md LOGVOLBINDUPGRADE). LOGVOL_BIND_OUT names the file; otherwise it
+  # goes beside the volume so it is never nowhere.
+  local bindlog="${LOGVOL_BIND_OUT:-${LOGVOL_DIR:-scratchpad}/logvol-bind-$vm.transcript}"
+  mkdir -p "$(dirname "$bindlog")" 2>/dev/null
+  printf '%s\n' "$out" > "$bindlog" 2>/dev/null
   line=$(printf '%s\n' "$out" | grep -a '^LOGVOL-BIND ' | tail -1)
-  [ -n "$line" ] || { _lv_say "no LOGVOL-BIND line came back from $vm (missing data fails): $(printf '%s' "$out" | tail -2 | tr '\n' ' ' | cut -c1-200)"; return 1; }
+  if [ -z "$line" ]; then
+    # Say WHICH failure shape it is, because they need different fixes: a script that never
+    # arrived, one that threw, or one that ran and printed nothing.
+    local shape="ran and printed no receipt"
+    printf '%s' "$out" | grep -qaiE 'cannot find path|does not exist|is not recognized|FileNotFound' && shape="the binder never arrived in QubesIncoming"
+    printf '%s' "$out" | grep -qaiE 'Exception|FullyQualifiedErrorId|At line:' && shape="the binder threw"
+    _lv_say "no LOGVOL-BIND line from $vm ($shape) - full transcript: $bindlog"
+    _lv_say "  first error-shaped line: $(printf '%s' "$out" | grep -aiE 'error|exception|cannot|not recognized|denied' | head -1 | cut -c1-150)"
+    return 1
+  fi
   echo "$line"
   case "$line" in "LOGVOL-BIND ok "*) return 0 ;; *) return 1 ;; esac
 }

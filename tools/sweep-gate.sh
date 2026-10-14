@@ -37,7 +37,14 @@ if [ "${1:-}" = "--write-baseline" ]; then WRITE="${2:?--write-baseline needs an
 [ $# -ge 1 ] || { echo "usage: $0 [--write-baseline <out>] <harness-log> [...]" >&2; exit 2; }
 BASE="${SWEEP_GATE_BASELINE:-mgmt/harness/harness-log-baseline.txt}"
 
-SHAPES='ERROR|FAIL|FATAL|WARNING|WARN:|refus|REFUS|cannot|could not|cause UNKNOWN|timed out|timeout|TIMEOUT|abort|ABORT|INVALID|unreadable|no qrexec|not Halted|exception|Exception|Traceback'
+# WIDENED 2026-10-14 after measuring RECALL on a real corpus (296 logs, 31214 lines). The first
+# shape list missed, among others: "=> STALL (alive=dead halt=ignored ...)" - a stall verdict, the
+# single thing this rig cares most about - plus every bare nonzero `rc=`, German OS error text
+# ("nicht gefunden", "falsch geschrieben", "Fehler", "Zugriff verweigert"), hex status codes like
+# 0xC0000142, and silent-result shapes like stdout_bytes=0. A gate that cannot see a STALL is not a
+# gate. False positives from the widening are absorbed by the baseline, which is the whole point of
+# comparing shapes rather than matching text once.
+SHAPES='ERROR|FAIL|FATAL|WARNING|WARN:|refus|REFUS|cannot|could not|cause UNKNOWN|timed out|timeout|TIMEOUT|abort|ABORT|INVALID|unreadable|no qrexec|not Halted|exception|Exception|Traceback|STALL|WEDGE|alive=dead|=DEAD|=UNREAD|rc=[1-9]|exit code [1-9]|0x[0-9A-Fa-f]{8}|denied|verweigert|nicht gefunden|falsch geschrieben|Fehler|not recognized|No such|_bytes=0|SKIPPED|INCONCLUSIVE|BLOCKED|expired|abgelaufen|has stopped|wedged'
 
 normalise() {
     sed -E \
@@ -53,8 +60,14 @@ normalise() {
         -e 's/^ //; s/ $//'
 }
 
+# WITH COUNTS. A baseline entry is otherwise a standing silencer: once "could not detach the ISO" is
+# accepted, a genuine later instance of it is invisible. Jev scored that the dominant remaining flaw
+# at 0.85. So the baseline records "<count> <shape>" and the gate reports a known shape whose count
+# ROSE as well as one that is NEW - the same NEW/ROSE split log-sweep.sh uses against its baseline.
 collect() { for l in "$@"; do [ -f "$l" ] || { echo "sweep-gate: $l does not exist" >&2; return 2; }
-              grep -ahE "$SHAPES" "$l" 2>/dev/null; done | normalise | sort -u; }
+              grep -ahE "$SHAPES" "$l" 2>/dev/null; done | normalise | sort | uniq -c \
+            | sed -E 's/^[[:space:]]*([0-9]+)[[:space:]]+/\1 /'; }
+shapes_only() { sed -E 's/^[0-9]+ //'; }
 
 if [ -n "$WRITE" ]; then
     { echo "# harness-log-baseline.txt - NORMALISED error-shaped lines seen on runs reviewed as clean."
@@ -71,13 +84,26 @@ if [ -n "$WRITE" ]; then
 fi
 
 [ -f "$BASE" ] || { echo "sweep-gate: REFUSING - no baseline at $BASE (seed it with --write-baseline)" >&2; exit 2; }
-newshapes=$(comm -23 <(collect "$@") <(grep -vE '^\s*(#|$)' "$BASE" | sort -u) 2>/dev/null)
-if [ -n "${newshapes//[[:space:]]/}" ]; then
-    echo "SWEEP-GATE: error shape(s) NOT in the baseline:"
-    printf '%s\n' "$newshapes" | while IFS= read -r s; do [ -n "$s" ] && printf '  %s\n' "$(printf '%s' "$s" | cut -c1-150)"; done
-    echo "SWEEP-GATE-RESULT new_shapes=$(printf '%s\n' "$newshapes" | grep -c .)"
+NOW=$(mktemp); collect "$@" > "$NOW" || { rm -f "$NOW"; exit 2; }
+BL=$(mktemp); grep -vE '^\s*(#|$)' "$BASE" > "$BL"
+newn=0; rose=0
+while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    cnt=${row%% *}; shape=${row#* }
+    base=$(grep -aF -- " $shape" "$BL" | head -1 | sed -E 's/^([0-9]+) .*/\1/')
+    if [ -z "$base" ]; then
+        [ "$newn" = 0 ] && [ "$rose" = 0 ] && echo "SWEEP-GATE:"
+        newn=$((newn+1)); printf '  NEW   x%-4s %s\n' "$cnt" "$(printf '%s' "$shape" | cut -c1-140)"
+    elif [ "$cnt" -gt "$((base * 2))" ] && [ "$cnt" -gt $((base + 3)) ]; then
+        [ "$newn" = 0 ] && [ "$rose" = 0 ] && echo "SWEEP-GATE:"
+        rose=$((rose+1)); printf '  ROSE  x%-4s (baseline x%s) %s\n' "$cnt" "$base" "$(printf '%s' "$shape" | cut -c1-120)"
+    fi
+done < "$NOW"
+rm -f "$NOW" "$BL"
+if [ "$newn" -gt 0 ] || [ "$rose" -gt 0 ]; then
+    echo "SWEEP-GATE-RESULT new_shapes=$newn risen_shapes=$rose"
     echo "  Each is a finding, or a shape that belongs in $BASE by a deliberate commit. Reading it and"
     echo "  moving on is not one of the options."
     exit 1
 fi
-echo "SWEEP-GATE-RESULT new_shapes=0"
+echo "SWEEP-GATE-RESULT new_shapes=0 risen_shapes=0"
