@@ -278,7 +278,8 @@ DOM0_SEND_RE = re.compile(
     r"|QerrText|QGANOTIF|QGABROKERMISSING|QGAWGCDEAF|QGAWGCRECREATE|QGAWGCITEMCLOSED|QGADESKSTUCK"
     r"|QGAUACPENDING|QGASTARTDISMISS|qubes\.Notifications|qubes\.NotifyUpdates|qubes\.NotifyTools"
     r"|reported .* update|notify-error|listener-init|listener-denied|deslice-down|broker-died"
-    r"|broker-missing|session-changed")
+    r"|broker-missing|session-changed"
+    r"|NOTIFY one-shot|NOTIFY handoff")
 
 
 def dom0_sends(files):

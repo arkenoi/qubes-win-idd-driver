@@ -199,6 +199,27 @@ grade_cell_logsweep(){ # <cell> <vm> <matrix-dir>
     # counts beside it may show plenty. State the rc, state what is there, claim nothing more.
     *) no "$c: INVALID-SWEEP-RC  the guest log sweep exited rc=$rc, which it does not document ($have). See $m/$c-logsweep.out" ;;
   esac
+  # RENDER WITNESS - OFF BY DEFAULT, FOR DEBUGGING NOTIFICATIONS THEMSELVES.
+  # Whether dom0 PAINTED a notification cannot be read from any log: the bubble is override-redirect,
+  # absent from _NET_CLIENT_LIST, so the only witness is a photograph of the dom0 desktop - which is
+  # the OWNER'S screen, with whatever else is on it. That is why this is a knob and not a default.
+  # The owner, asked: "behind a flag, but wtf. if something sends to dom0 and this fact cannot be
+  # seen in the logs, it is wrong on so many levels. we need it only when we debug notifications
+  # themselves." The logs now DO carry it - notifhost declares E on every delivery that did not land
+  # ("NOTIFY one-shot: sent ok=0 ... LOST") and those lines are loudness candidates - so acceptance
+  # judges delivery from logs, and this exists only for the case he named.
+  if [ "${NOTIFY_WITNESS:-}" = 1 ] && [ -n "$_slv" ]; then
+    _nvid="acc-$(date -u +%Y%m%d%H%M%S)-$$"
+    _nvout=$(NV_VM="$_slv" NV_ROOT="$PWD" NV_ID="$_nvid" \
+             NV_HELPER='C:\Program Files\Qubes Tools\qubes-rpc-services\qwt-notify-error.ps1' \
+             ./mgmt/harness/dom0-notify-witness.sh "$_slv" "acc-$c" ./mgmt/harness/notify-render-trigger.sh 2>&1 | tail -40)
+    case "$(printf '%s' "$_nvout" | grep -aoE 'WITNESS=[a-z-]+' | tail -1)" in
+      WITNESS=RENDERED) say "  $c: dom0 RENDER witnessed (a notification was actually painted)" ;;
+      WITNESS=*)        say "  $c: [WARN] render witness did not confirm a painted notification: $(printf '%s' "$_nvout" | grep -aoE 'WITNESS=[a-z-]+.*' | tail -1 | cut -c1-90)" ;;
+      *)                say "  $c: [WARN] render witness produced no verdict - see its evidence dir" ;;
+    esac
+  fi
+
   # ONE CONDITION, ONE ENTRY IN THE TALLY. Every arm above except rc=0 has already raised, so
   # raising here as well would count a single failed collection twice. The case left to catch is
   # the dangerous one: a sweep that returns CLEAN having read no guest line at all - a clean

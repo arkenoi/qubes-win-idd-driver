@@ -3410,12 +3410,12 @@ static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring con
     DWORD mySession = 0;
     ProcessIdToSessionId(GetCurrentProcessId(), &mySession);
     DWORD active = WTSGetActiveConsoleSessionId();
-    if (active == 0xFFFFFFFF) { BLog(L"NOTIFY handoff: no active console session"); return false; }
+    if (active == 0xFFFFFFFF) { BLogW(L"NOTIFY handoff: no active console session - this message reaches nobody"); return false; }
 
     wchar_t* user = nullptr; DWORD userLen = 0;
     if (!WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, active, WTSUserName, &user, &userLen)
         || !user || !*user)
-    { if (user) WTSFreeMemory(user); BLog(L"NOTIFY handoff: no user in session %lu", active); return false; }
+    { if (user) WTSFreeMemory(user); BLogW(L"NOTIFY handoff: no user in session %lu - this message reaches nobody", active); return false; }
     std::wstring who(user); WTSFreeMemory(user);
 
     // THE TEST IS THE ACCOUNT, NOT THE SESSION - and getting that wrong is why the first version of
@@ -3433,7 +3433,7 @@ static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring con
     // So: hand off whenever this process is not already running AS the console user, whatever
     // session it is in.
     wchar_t me[256] = { 0 }; DWORD meLen = RTL_NUMBER_OF(me);
-    if (!GetUserNameW(me, &meLen)) { BLog(L"NOTIFY handoff: cannot read own user (%lu)", GetLastError()); return false; }
+    if (!GetUserNameW(me, &meLen)) { BLogE(L"NOTIFY handoff: cannot read own user (%lu) - handoff abandoned", GetLastError()); return false; }
     if (_wcsicmp(me, who.c_str()) == 0 && active == mySession)
         return false;                                 // genuinely the console user: send inline
 
@@ -3461,14 +3461,14 @@ static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring con
              task.c_str(), shortSelf, shortFile, who.c_str());
     STARTUPINFOW si = { sizeof(si) }; PROCESS_INFORMATION pi = {};
     if (!CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
-    { BLog(L"NOTIFY handoff: schtasks /create failed %lu", GetLastError()); return false; }
+    { BLogE(L"NOTIFY handoff: schtasks /create failed %lu - this message reaches nobody", GetLastError()); return false; }
     WaitForSingleObject(pi.hProcess, 15000);
     CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
 
     swprintf(cmd, RTL_NUMBER_OF(cmd), L"schtasks.exe /run /tn %s", task.c_str());
     STARTUPINFOW si2 = { sizeof(si2) }; PROCESS_INFORMATION pi2 = {};
     if (!CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si2, &pi2))
-    { BLog(L"NOTIFY handoff: schtasks /run failed %lu", GetLastError()); return false; }
+    { BLogE(L"NOTIFY handoff: schtasks /run failed %lu - this message reaches nobody", GetLastError()); return false; }
     WaitForSingleObject(pi2.hProcess, 15000);
     CloseHandle(pi2.hThread); CloseHandle(pi2.hProcess);
 
@@ -3498,9 +3498,14 @@ static int NotifyOnceMain(std::wstring const& summary, std::wstring const& body,
     g_connStop = CreateEventW(nullptr, TRUE,  FALSE, nullptr);
     g_ackEvt   = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!g_rdEvt || !g_wrEvt || !g_connStop || !g_ackEvt) return 3;
-    if (!ConnUp()) { BLog(L"NOTIFY one-shot: no connection (policy refusal? no dom0 session?)"); return 3; }
+    if (!ConnUp()) { BLogE(L"NOTIFY one-shot: no connection to dom0 (policy refusal? no dom0 session?) - notification LOST"); return 3; }
     bool ok = ForwardText(summary, body, 0, kind);   // an error stays until dismissed; --severity warning/info expire
-    BLog(L"NOTIFY one-shot: sent ok=%d summary=%s", ok ? 1 : 0, summary.c_str());
+    if (ok) BLog(L"NOTIFY one-shot: sent ok=1 summary=%s", summary.c_str());
+    // A send that did not land is a LOST user-facing message, and the log is the only place
+    // it can be seen - dom0 cannot be asked, and the bubble is override-redirect so no
+    // per-window capture can witness it either. It is declared E so a severity-reading
+    // sweeper sees it; it read INFO, identical to a success, until 2026-10-14.
+    else BLogE(L"NOTIFY one-shot: sent ok=0 summary=%s - notification LOST", summary.c_str());
     ConnDown();
     return ok ? 0 : 4;
 }
@@ -4670,7 +4675,7 @@ int wmain(int argc, wchar_t** argv)
     {
         std::wstring fs, fb;
         if (!ReadNotifyFile(notifyFile, fs, fb))
-        { BLog(L"NOTIFY one-shot: unreadable/empty %s", notifyFile); return 3; }
+        { BLogE(L"NOTIFY one-shot: unreadable/empty %s - notification LOST", notifyFile); return 3; }
         return NotifyOnceMain(fs, fb, notifyKind);
     }
     if (!notifySummary.empty()) return NotifyOnceMain(notifySummary, notifyBody, notifyKind);
