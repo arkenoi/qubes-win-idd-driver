@@ -1955,8 +1955,8 @@ B11="${B11:?set B11 to the Win11 base golden - there is no default target}"
 # so every cell reports against the same base, and NEVER from a guest clock (the guest's clock flips
 # ~3 h about 60 s into every boot, which has broken three freshness checks here).
 CAMPAIGN_SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-A10=win10-acc
-A11=win11-acc
+A10="${A10:-win10-acc}"   # the CHURN target: overridable so a preserved specimen keeps its name (findings/issues.md SPECIMENHANDBOOT)
+A11="${A11:-win11-acc}"
 
 # CUSTODY GATE - two acceptable provenances, both strict, neither optional.
 #   sealed golden : golden.sh verify   - untouched since it was sealed

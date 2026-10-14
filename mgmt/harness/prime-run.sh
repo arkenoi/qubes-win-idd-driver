@@ -114,8 +114,16 @@ running=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null \
 # --- stage the payload and flags into the job -----------------------------------------------
 if [ -n "$PAYLOAD" ]; then
   [ -d "$PAYLOAD" ] || { log "[ERROR] TERMINAL: --payload $PAYLOAD is not a directory"; exit 1; }
+  # A PAYLOAD COPIED OFF AN ISO IS READ-ONLY, and so is the staging copy made from it: iso9660
+  # gives every file mode 444 and every directory 555, `cp` carries that across, and the next run's
+  # `rm -rf` then fails on each file while REPORTING only the symptom it hits afterwards ("staged
+  # payload has no install.cmd at its root"). Measured 2026-10-14 staging the 4.3.35 release's own
+  # setup tree as the N-1 entry payload: two launches lost to it. Make the tree writable before
+  # removing it, and after copying, so neither end of the cycle depends on the source's modes.
+  [ ! -e "$JOBDIR/setup" ] || chmod -R u+w "$JOBDIR/setup" 2>/dev/null
   rm -rf "$JOBDIR/setup"
   cp -r "$PAYLOAD" "$JOBDIR/setup" || { log "[ERROR] TERMINAL: could not stage payload"; exit 1; }
+  chmod -R u+w "$JOBDIR/setup" 2>/dev/null
   # The jobs run C:\qwtsetup\install.cmd; if the tree has no install.cmd at its root the job dies
   # in-guest where nothing can see it. Fail here instead, where the message is readable.
   [ -f "$JOBDIR/setup/install.cmd" ] || {
