@@ -226,7 +226,12 @@ rm -f "mgmt/fixtures/$CHURN.aborted"
 # table), and Windows mounts that layout on REMOVABLE media only. Attached as a plain Xen block
 # disk it showed up as disk4, Online and writable, with NO volume and NO drive letter - so the
 # job's label scan found nothing and wrote no markers (measured 2026-09-07 on win11-2stk).
-qvm-features "$CHURN" qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99 -drive file=/dev/xvdj,format=host_device,if=none,id=diagdrv -device usb-storage,bus=ansusb.0,drive=diagdrv,removable=on' \
+# THE ANSWER STICK AND ITS CONTROLLER ONLY. The evidence stick's own -drive and usb-storage are
+# added by logvol_attach below, which COMPOSES onto this value - so declaring xvdj here too put TWO
+# drives on one frontend and qemu refused the domain outright: "libxenlight failed to create new
+# domain", measured 2026-10-15 the first time the collapsed single stick was used. The old
+# `diagdrv` fragment existed because prime-run attached its own DIAG volume; it does not any more.
+qvm-features "$CHURN" qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99' \
   || { log "[ERROR] TERMINAL: could not set qemu-extra-args"; exit 1; }
 # NOT --required, MEASURED 2026-09-21. A `--required` assignment cannot be satisfied at domain
 # creation on this rig at present: with one the domain is not created at all (6/6, across two
