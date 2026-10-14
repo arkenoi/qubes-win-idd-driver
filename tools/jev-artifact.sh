@@ -29,6 +29,24 @@ for a in "$@"; do
 done
 [ "${#SRC[@]}" -gt 0 ] || { echo "jev-artifact: name at least one source file" >&2; exit 2; }
 
+# COMPLETENESS IS A FIXED RULE, NOT A PER-RUN CHOICE. Sending only the tool's source scored it 0.64;
+# adding its TEST SOURCE and the code that WIRES it scored the same unchanged tool 0.72, because the
+# judge could finally see what is actually asserted and where it runs. That is a real gap in the
+# artifact - but which extras to include is exactly the kind of decision that becomes advocacy if it
+# is remade every run. So the rule is stated once here and applied every time:
+#
+#   include the thing, its TESTS, and the code that CALLS it. Nothing else, and never a narrative.
+#
+# If a named source has an obvious test file beside it and that file was not named, this says so
+# rather than quietly sending a partial artifact.
+for f in "${SRC[@]}"; do
+    base=$(basename "$f"); stem="${base%.*}"
+    for cand in "tools/tests/${stem}-selftest.sh" "tools/tests/${stem}-test.sh" "tools/tests/${stem}.ps1"; do
+        [ -f "$cand" ] || continue
+        case " ${SRC[*]} " in *" $cand "*) ;; *) echo "jev-artifact: NOTE $cand exists and was not included - a partial artifact understates the thing being judged" >&2 ;; esac
+    done
+done
+
 ART=$(mktemp); trap 'rm -f "$ART"' EXIT
 {
   # FIXED header. The caller cannot supply or edit it - that is the whole point.
