@@ -50,8 +50,10 @@ ck "the unconfirmed case says so in its line"              "1" \
    "$(grep -ac 'could not confirm RealTimeIsUniversal' "$T/calls-bad.txt.out")"
 
 # Wiring: one call site, at the point every harness's subject becomes answerable.
-ck "asserted at the common session-up path"                "1" \
+ck "NOT on the common session-up path"                     "0" \
    "$(grep -c 'w_rtc_utc "\$vm" "\$log"' mgmt/harness/e2e-wait.sh)"
+ck "called where a subject is PREPARED, once"              "1" \
+   "$(grep -c 'w_rtc_utc "\$CHURN" log' mgmt/harness/prime-run.sh)"
 ck "and no harness still forces a localtime RTC"           "0" \
    "$(grep -vE '^[[:space:]]*#' mgmt/harness/*.sh | grep -c 'timezone localtime')"
 

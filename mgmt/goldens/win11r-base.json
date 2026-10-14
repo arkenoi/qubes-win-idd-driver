@@ -1,5 +1,5 @@
 {
-  "note": "pristine base rebuilt rebuild-20261013-194724 from Win11_26300_English_x64.iso, PRIMER=1, no QWT",
+  "note": "pristine retail Win11 base; unchanged, revisions rotated by one boot",
   "props": {
     "klass": "StandaloneVM",
     "maxmem": "8192",
@@ -7,14 +7,14 @@
     "vcpus": "4",
     "virt_mode": "hvm"
   },
-  "reseal_reason": "rebuilt from vendor media by rebuild-20261013-194724",
-  "sealed_utc": "2026-10-13T20:58:24Z",
+  "reseal_reason": "booted once 2026-10-14 under GOLDEN_UNSEAL to set RealTimeIsUniversal; the guest has no QWT so qrexec never answered and NOTHING WAS WRITTEN - only the volume revisions rotated. Not needed here either: with the qube's timezone feature now unset the RTC holds true UTC and this base is pinned to TZ=UTC, so its UTC is already correct.",
+  "sealed_utc": "2026-10-14T15:30:12Z",
   "vm": "win11r-base",
   "volumes": {
     "private": {
       "revisions": [
-        "1791923588-back",
-        "1791925095-back"
+        "1791925095-back",
+        "1791991753-back"
       ],
       "revisions_to_keep": "2",
       "size": "21474836480",
@@ -22,12 +22,12 @@
     },
     "root": {
       "revisions": [
-        "1791923588-back",
-        "1791925095-back"
+        "1791925095-back",
+        "1791991753-back"
       ],
       "revisions_to_keep": "2",
       "size": "85899345920",
-      "usage": "18064632446"
+      "usage": "18073222381"
     }
   }
 }

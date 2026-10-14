@@ -141,7 +141,7 @@ w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
       $log "  $lbl: DEADLINE ${dl}s with no session (screen=$(w_screen "$vm" "$lbl-dl" "$dir"))"
       return 2
     fi
-    w_alive "$vm" && { $log "  $lbl: session up at t+${now}s"; w_rtc_utc "$vm" "$log" >/dev/null 2>&1 || true; return 0; }
+    w_alive "$vm" && { $log "  $lbl: session up at t+${now}s"; return 0; }
     if [ $(( now / 60 )) -gt "$shots" ]; then
       shots=$(( now / 60 )); st=$(w_screen "$vm" "$lbl-t${now}" "$dir")
       $log "  $lbl: t+${now}s qvm=$(w_state "$vm") screen=$st"
@@ -177,21 +177,44 @@ w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
         # So it does the one useful thing it can: REPORT THE SIGNATURE LOUDLY AND IMMEDIATELY, once,
         # while the specimen is still alive and interrogable - three specimens were lost because
         # nothing said "capture this now" - and keep waiting to the deadline rather than guessing.
-        if [ "$dark" -ge 3 ] && [ "${cpu:-NA}" != NA ] && [ "$cpu" -gt 0 ] 2>/dev/null; then
-          if [ "$wedgesus" = 0 ]; then
+        # CLASSIFY IT, DO NOT ASSERT IT. This fired on `cpu > 0` - ANY non-zero counter - and then
+        # announced "the measured wedge signature: ... BURNING CPU". mgmt/harness/wedge-lib.sh
+        # calibrated that same counter on 2026-09-23 and records what it is worth:
+        #     idle, healthy .................   9,865  and  44,540
+        #     PEGGED (4-thread storm) ....... 130,976
+        #     unreachable, all vCPUs blocked .  96,262
+        # "A pegged guest and an idle unreachable one are INDISTINGUISHABLE in that counter, so
+        # every verdict built on it was unsound in both directions." On 2026-10-14 this printed
+        # cpu_usage_raw=14736 and 272 - idle-band and far below it - called both a wedge, told the
+        # reader not to clean up, and sent them to dom0 for xl dumps. Both guests then came down
+        # normally. The owner: "i do not think there ever was a real wedge ... it is more bs".
+        #
+        # What actually discriminates is `xl vcpu-list` sampled twice, and that is reachable from
+        # here: wedge_classify calls the POLICIED dom0 service local.WinWedgeForensics - no dom0
+        # shell, no sudo, nothing for a human to run. Asking it costs one call and answers the
+        # question this block existed to raise.
+        if [ "$dark" -ge 3 ] && [ "$wedgesus" = 0 ]; then
             wedgesus=1
-            $log "  $lbl: QWTWEDGESUSPECT vm=$vm dark=${dark}min screen=$st cpu_usage_raw=$cpu qvm=$(w_state "$vm")"
-            $log "  $lbl: This is the measured wedge signature: no usable screen, deaf to qrexec, and BURNING CPU."
-            $log "  $lbl: It may still be a legitimately busy headless guest - this cannot tell them apart."
-            $log "  $lbl: DO NOT KILL, REVERT OR CLONE OVER THIS GUEST. If it is the wedge, it is the only"
-            $log "  $lbl: interrogable form of the defect, and three specimens were already lost to cleanup."
-            $log "  $lbl: Capture it in dom0 NOW, read-only, with a RECORDED interval between the two dumps"
-            $log "  $lbl: (without an interval a frozen host cannot be told from a hot loop - the open question):"
-            $log "  $lbl:   date -u +%FT%T.%NZ; sudo xl dmesg -c >/dev/null; sudo xl debug-keys d; sudo xl dmesg > d1.txt"
-            $log "  $lbl:   sleep 30; date -u +%FT%T.%NZ; sudo xl dmesg -c >/dev/null; sudo xl debug-keys d; sudo xl dmesg > d2.txt"
-            $log "  $lbl:   sudo xl dmesg -c >/dev/null; sudo xl debug-keys v; sudo xl dmesg > v1.txt   # VM_EXIT per vCPU"
-            $log "  $lbl:   sudo xl vcpu-list $vm; sudo xl list -l $vm"
-          fi
+            _wdir="${4:-${TMPDIR:-/tmp}}/wedge-$vm-$(date -u +%H%M%S)"
+            # shellcheck disable=SC1091
+            [ -z "${WEDGE_LIB_SOURCED:-}" ] && { . mgmt/harness/wedge-lib.sh 2>/dev/null && WEDGE_LIB_SOURCED=1; }
+            _wv=$(wedge_classify "$vm" "$_wdir" 2>/dev/null | tail -1)
+            $log "  $lbl: dark ${dark}min, screen=$st, qvm=$(w_state "$vm") - asked the forensics service: ${_wv:-UNREADABLE}"
+            case "${_wv%% *}" in
+              SPINNING)
+                $log "  $lbl: SPINNING - a vCPU is consuming a full core while the guest is unreachable."
+                $log "  $lbl: DO NOT KILL, REVERT OR CLONE OVER THIS GUEST: it is the only interrogable"
+                $log "  $lbl: form of the defect, and three specimens were already lost to cleanup."
+                $log "  $lbl: Evidence: $_wdir" ;;
+              BLOCKED)
+                $log "  $lbl: BLOCKED - every vCPU is idle and the guest is unreachable. Not a spin;"
+                $log "  $lbl: it is waiting on something. Evidence: $_wdir" ;;
+              UNREADABLE|"")
+                $log "  $lbl: the forensics service could not be read, so NOTHING is claimed about why"
+                $log "  $lbl: this guest is dark - it is unreachable, and that is all this knows." ;;
+              *)
+                $log "  $lbl: forensics verdict '${_wv}' - evidence: $_wdir" ;;
+            esac
           # deliberately NOT resetting $dark and NOT returning: the signature persists in the log
           # every minute, and the deadline below classifies the outcome.
         elif [ "$dark" -ge 3 ]; then

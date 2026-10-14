@@ -1,5 +1,5 @@
 {
-  "note": "pristine base rebuilt rebuild-20261013-194724 from Win10_22H2_EnglishInternational_x64v1.iso, PRIMER=1, no QWT",
+  "note": "pristine base recreated 2026-10-14; hardware clock is UTC",
   "props": {
     "klass": "StandaloneVM",
     "maxmem": "8192",
@@ -7,14 +7,14 @@
     "vcpus": "4",
     "virt_mode": "hvm"
   },
-  "reseal_reason": "rebuilt from vendor media by rebuild-20261013-194724",
-  "sealed_utc": "2026-10-13T20:04:11Z",
+  "reseal_reason": "rebuilt from vendor media 2026-10-14 with the updated answer stick (RealTimeIsUniversal=1 in the specialize pass); desktop confirmed visually, guest clock read 15:17 UTC against host 15:20 UTC - no longer dom0-local",
+  "sealed_utc": "2026-10-14T15:21:47Z",
   "vm": "win10-base",
   "volumes": {
     "private": {
       "revisions": [
-        "1791921442-back",
-        "1791921843-back"
+        "1791990660-back",
+        "1791991284-back"
       ],
       "revisions_to_keep": "2",
       "size": "21474836480",
@@ -22,12 +22,12 @@
     },
     "root": {
       "revisions": [
-        "1791921442-back",
-        "1791921843-back"
+        "1791990660-back",
+        "1791991284-back"
       ],
       "revisions_to_keep": "2",
       "size": "85899345920",
-      "usage": "10642928959"
+      "usage": "10625749090"
     }
   }
 }
