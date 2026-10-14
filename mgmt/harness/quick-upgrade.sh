@@ -604,7 +604,7 @@ LAUNCH_TRIES=${LAUNCH_TRIES:-2}
 
 # Pure text predicate so it can be driven offline, both ways, without a guest:
 # tools/tests/launch-determination-selftest.sh. Marker on $1, log body on stdin.
-log_has_progress_after(){ sed -n "/$1/,\$p" | grep -qaE '^[0-9]{4}-[0-9]{2}-[0-9]{2}|^=== RESULT ==='; }
+log_has_progress_after(){ [ "$(sed -n "/$1/,\$p" | grep -acE '^[0-9]{4}-[0-9]{2}-[0-9]{2}|^=== RESULT ===')" -gt 0 ]; }
 # The lines after the LAST occurrence of this run's marker in a file (nothing if it never occurs).
 # Byte-wise (LC_ALL=C): the German guest's log is not UTF-8.
 after_last_mark(){ LC_ALL=C awk -v m="$E2E_MARK" 'index($0, m) { buf = ""; seen = 1; next } seen { buf = buf $0 "\n" } END { printf "%s", buf }' "$1"; }

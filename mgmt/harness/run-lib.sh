@@ -191,7 +191,10 @@ run_verified(){
   local pid=$! t0=$SECONDS rc
   echo "run_verified: launched pid=$pid: $* (log=$logf; stop it with: kill -TERM $pid - its traps tear down the tree)"
   while :; do
-    if tail -c "+$((mark+1))" "$logf" 2>/dev/null | grep -aq "$re"; then
+    # COUNT, never `grep -q`: the log is still being written, so an early match closes the pipe,
+    # tail dies of SIGPIPE, pipefail returns 141 - and a job that DID start is reported as never
+    # having started. grep -c reads to EOF.
+    if [ "$(tail -c "+$((mark+1))" "$logf" 2>/dev/null | grep -ac "$re")" -gt 0 ]; then
       echo "run_verified: STARTED pid=$pid - '$re' confirmed in $logf"
       RL_STARTED_PID=$pid
       return 0

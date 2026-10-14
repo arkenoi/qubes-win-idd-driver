@@ -527,9 +527,9 @@ if ! grep -qa '^Se' "$OUT/t1-userrights.inf"; then
 else
   urpat="$ACCT"; [ -n "$ACCTSID" ] && urpat="$ACCTSID|$ACCT"
   urfail=""
-  grep -a '^SeBatchLogonRight' "$OUT/t1-userrights.inf" | grep -qaE "$urpat" || urfail="$urfail batch-missing"
+  [ "$(grep -a '^SeBatchLogonRight' "$OUT/t1-userrights.inf" | grep -acE "$urpat")" -gt 0 ] || urfail="$urfail batch-missing"
   for right in SeDenyInteractiveLogonRight SeDenyRemoteInteractiveLogonRight SeDenyNetworkLogonRight; do
-    grep -a "^$right" "$OUT/t1-userrights.inf" | grep -qaE "$urpat" || urfail="$urfail $right-missing"
+    [ "$(grep -a "^$right" "$OUT/t1-userrights.inf" | grep -acE "$urpat")" -gt 0 ] || urfail="$urfail $right-missing"
   done
   [ -z "$urfail" ] && verdict T1e "PASS rights: +SeBatchLogonRight, deny interactive/remote/network (matched by name-or-SID in secedit export)" \
     || verdict T1e "FAIL rights:$urfail (export in t1-userrights.inf; pattern '$urpat')"
@@ -604,7 +604,7 @@ enc_run "icacls '$PLOG'" | tr -d '\r' > "$OUT/t1-acl-plog.txt" 2>/dev/null
 enc_run "icacls '$STATEDIR'" | tr -d '\r' > "$OUT/t1-acl-statedir.txt" 2>/dev/null
 aclfail=""
 grep -qai "$ACCT" "$OUT/t1-acl-plog.txt" || aclfail="$aclfail no-$ACCT-ACE-on-own-log"
-grep -ai "$ACCT" "$OUT/t1-acl-statedir.txt" | grep -qai 'deny' || aclfail="$aclfail no-deny-on-state-dir(TODO(RIG)#3)"
+[ "$(grep -ai "$ACCT" "$OUT/t1-acl-statedir.txt" | grep -aci 'deny')" -gt 0 ] || aclfail="$aclfail no-deny-on-state-dir(TODO(RIG)#3)"
 [ -z "$aclfail" ] && verdict T1i "PASS ACLs: $ACCT ACE on its own log, deny on $STATEDIR" \
   || verdict T1i "FAIL ACLs:$aclfail (see t1-acl-*.txt)"
 
@@ -748,7 +748,10 @@ else
   if [ "$t2frames" -ge 1 ]; then
     if [ -n "$nshed" ] && [ -n "$ncen" ] && [ -n "$nsig" ] && [ "$nshed" -lt "$nsig" ] && [ "$ncen" -lt "$nsig" ]; then
       # the census the proxy printed must ALSO be clean (perf-log-users=0 se-system-profile=0)
-      grep -a 'ETWPROXY token enabled-groups=' "$OUT/t2-plog-full.txt" | head -1 | grep -qa 'perf-log-users=0 se-system-profile=0' \
+      # The census line is taken ONCE and matched as a value. Piping the file into a quiet match
+      # returns 141 under pipefail on a long plog, and the PASS arm becomes unreachable.
+      t2census=$(grep -a 'ETWPROXY token enabled-groups=' "$OUT/t2-plog-full.txt" | head -1)
+      [ "$(printf '%s' "$t2census" | grep -ac 'perf-log-users=0 se-system-profile=0')" -gt 0 ] \
         && verdict T2 "PASS DECISIVE: grant suffices - $t2frames/3 methods delivered payload-free SIGNAL frames (proxy SIG + bridge SIG) under a shed, census-clean token (shed@$nshed census@$ncen < first SIG@$nsig)" \
         || verdict T2 "FAIL signal frames arrived but the proxy's own census is not clean: $(grep -a 'ETWPROXY token enabled-groups=' "$OUT/t2-plog-full.txt" | head -1 | head -c 160)"
     else
