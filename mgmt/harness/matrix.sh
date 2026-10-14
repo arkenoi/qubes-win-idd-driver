@@ -173,6 +173,41 @@ pool_gate "this campaign" || { say "=== MATRIX: 0 passed, 1 failed ==="; exit 2;
 # Every failing check in this campaign is reported HERE, so this one line decides whether a sweep
 # can see any of them. A product FAIL and an ungraded INVALID are different severities and say so.
 no(){ FAIL=$((FAIL+1)); local _l="[ERROR] "; case "$*" in *INVALID*) INVALID=$((INVALID+1)); _l="[WARN] " ;; esac; say "${_l}FAIL  $*"; }
+
+# GRADE THE SWEEP'S EXIT CODE, DO NOT READ IT AS A BOOLEAN. log-sweep.sh exits 0 CLEAN, 1 FINDINGS,
+# 3 DATA (collected, but something was empty or unparseable), 4 INCOMPLETE (the judge never ran).
+# The first version of this treated every non-zero rc as "collection FAILED ... no guest logs for
+# this cell", and the first cell it ran on proved that wrong: rc=3 for ONE empty rotation file while
+# 37 files and 2631 QWT-format lines sat in the output dir. So each code gets its own line, every
+# line states what is actually on disk, and a finding reaches the TALLY rather than only printing -
+# a line that only prints is a line nobody reads.
+# LOGSWEEP_CMD exists so the self-test can drive each exit code without a guest.
+grade_cell_logsweep(){ # <cell> <vm> <matrix-dir>
+  local c="${1:?grade_cell_logsweep <cell> <vm> <dir>}" vm="${2:?}" m="${3:?}" rc f q have
+  "${LOGSWEEP_CMD:-./mgmt/harness/log-sweep.sh}" "$vm" "$CAMPAIGN_SINCE" "$m/$c-guestlogs" >"$m/$c-logsweep.out" 2>&1
+  rc=$?
+  f=$(find "$m/$c-guestlogs" -type f 2>/dev/null | wc -l)
+  # QWT's own line shape, so "collected" is never satisfied by harness bash lines (LOGVOLBINDUPGRADE).
+  q=$(grep -rhoaE '^\[[0-9]{8}\.[0-9]{6}\.[0-9]{3}-[0-9]+' "$m/$c-guestlogs/logs" 2>/dev/null | wc -l)
+  have="$f file(s), $q QWT line(s)"
+  case "$rc" in
+    0) say "  $c: guest logs swept CLEAN ($have) -> $m/$c-guestlogs" ;;
+    1) no "$c: the guest log sweep found a breach or a defect ($have). See $m/$c-logsweep.out" ;;
+    3) no "$c: INVALID-SWEEP-DATA  guest logs incomplete ($have): $(sed -n 's/.*missing or unparseable data[^:]*: *//p' "$m/$c-logsweep.out" 2>/dev/null | head -1 | cut -c1-120)" ;;
+    4) no "$c: INVALID-SWEEP-UNJUDGED  guest logs collected ($have) but the judge never ran - this cell has no sweep verdict" ;;
+    # NOT "collection failed": an undocumented rc says nothing about what reached the disk, and the
+    # counts beside it may show plenty. State the rc, state what is there, claim nothing more.
+    *) no "$c: INVALID-SWEEP-RC  the guest log sweep exited rc=$rc, which it does not document ($have). See $m/$c-logsweep.out" ;;
+  esac
+  # ONE CONDITION, ONE ENTRY IN THE TALLY. Every arm above except rc=0 has already raised, so
+  # raising here as well would count a single failed collection twice. The case left to catch is
+  # the dangerous one: a sweep that returns CLEAN having read no guest line at all - a clean
+  # verdict over nothing, which is the 96-of-96 false comfort this step exists to end.
+  if [ "$rc" = 0 ] && [ "$q" -eq 0 ]; then
+    no "$c: INVALID-SWEEP-BLIND  the sweep returned CLEAN with no QWT-format line to read ($have)"
+  fi
+  return 0
+}
 # qvm-start BLOCKS until qrexec connects (up to qrexec_timeout). On a guest that never boots
 # that is dead silence for the whole timeout - measured today: 15 minutes of a harness that
 # looked hung was simply sitting inside qvm-start. Fire it and poll the state ourselves.
@@ -219,6 +254,17 @@ trap _matrix_release_loop EXIT
 
 GLOG='C:\qwt-improved-install.log'
 INC='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
+
+# ONE READER FOR THE RUN MARKER, because two copies of this read is how the bug below survived.
+# SELF-MATCH-SAFE: `qtest run` echoes the prompt line WITH THE COMMAND ON IT, and that command text
+# carries both PRESENT and ABSENT. A `grep | head -1` therefore reports PRESENT off the echo
+# whenever the guest answers at all - the check can never fail - and reports empty when it does not
+# answer, so it is wrong in both directions. quick-upgrade.sh fixed exactly this and the fix was
+# never ported here. Strip the banner, then take the guest's OWN last word.
+_mark_seen(){ # <vm> -> PRESENT | ABSENT | (empty: no answer)
+  QTEST_VM=$1 qrun "cmd /c findstr /c:\"$E2E_MARK\" $GLOG >nul 2>&1 && echo PRESENT || echo ABSENT" 2>/dev/null \
+    | tr -d '\r' | _shell_echo_strip | grep -ao 'PRESENT\|ABSENT' | tail -1
+}
 
 # H3.6 ENFORCEMENT: exactly one Windows guest up at a time, structurally rather than by discipline.
 # Cells never shut their target down when they finish, and reclone only halts its OWN target - so a
@@ -418,10 +464,11 @@ boot_with_release_iso(){ # $1=vm $2=label - boot a HALTED subject with the relea
   # BEFORE the start: a --required assignment is satisfied at domain creation, so a volume attached
   # after the boot is invisible to it.
   LOGVOL_VM="$vm"; LOGVOL_IMG=$(logvol_image "$vm")
-  if logvol_create "$LOGVOL_IMG" "$vm" >/dev/null 2>&1 && logvol_attach "$vm" "$LOGVOL_IMG" "$M/logvol-manifest.json" >/dev/null 2>&1; then
+  if logvol_create "$LOGVOL_IMG" "$vm" >>"$M/$lbl-logvol-setup.out" 2>&1 \
+     && logvol_attach "$vm" "$LOGVOL_IMG" "$M/logvol-manifest.json" >>"$M/$lbl-logvol-setup.out" 2>&1; then
     say "  $lbl: log volume attached ($LOGVOL_IMG)"
   else
-    say "  $lbl: [WARN] log volume not attached - a wedge here loses the QWT logs"
+    say "  $lbl: [WARN] log volume not attached - a wedge here loses the QWT logs: $(tail -1 "$M/$lbl-logvol-setup.out" 2>/dev/null | cut -c1-140)"
     LOGVOL_IMG=""
   fi
   say "  $lbl: booting $vm with the release ISO as CD (qvm-start --cdrom=win-idd-mgmt:$RELEASE_LOOP)"
@@ -761,7 +808,28 @@ run_install(){ # $1=vm $2=label $3=install-source (drive/dir carrying install.cm
   export E2E_MARK
   QTEST_VM=$vm qrun "cmd /c echo $E2E_MARK >> $GLOG & del /f /q C:\\qwt-install.log 2>nul & echo MARKED" >/dev/null 2>&1
   local seen
-  seen=$(QTEST_VM=$vm qrun "cmd /c findstr /c:\"$E2E_MARK\" $GLOG >nul 2>&1 && echo PRESENT || echo ABSENT" 2>/dev/null | tr -d '\r' | grep -ao 'PRESENT\|ABSENT' | head -1)
+  seen=$(_mark_seen "$vm")
+  # A SILENT GUEST IS NOT A DEAD ONE - RETRY WHILE IT IS EXECUTING.
+  # quick-upgrade.sh carries this retry (2026-09-14: this very read got 'no answer' while the guest
+  # measured cpu_time +66935 over 20 s, busy mid-install, and the run was killed as TERMINAL). It
+  # was never ported to this file, and on 2026-10-14 the acceptance campaign's WIN10-reinstall cell
+  # took 'no answer' three seconds after a SUCCESSFUL guest read ("release disc verified at E:"),
+  # refused to run the install, and then graded itself INVALID-INSTRUMENT twice - over an install
+  # that had never been attempted. A timeout is a failure only once cpu_time is FLAT.
+  if [ "$seen" != PRESENT ]; then
+    local _mtry
+    for _mtry in 1 2 3 4 5 6; do
+      if w_cpu_moving "$vm" 15; then
+        say "  $lbl: run marker no answer yet, but the guest IS EXECUTING (cpu_time moving) - retry $_mtry/6"
+      else
+        say "  $lbl: run marker no answer and cpu_time FLAT - the guest is not executing"
+        break
+      fi
+      QTEST_VM=$vm qrun "cmd /c echo $E2E_MARK >> $GLOG & echo MARKED" >/dev/null 2>&1
+      seen=$(_mark_seen "$vm")
+      [ "$seen" = PRESENT ] && { say "  $lbl: run marker written on retry $_mtry"; break; }
+    done
+  fi
   if [ "$seen" != PRESENT ]; then
     no "$lbl: could not write the run marker into $GLOG (got '${seen:-no answer}') - refusing to run, this cell could not be told apart from a previous one"
     return 1
@@ -1911,10 +1979,10 @@ for c in $CELLS; do
   # the guest and nothing is detached, so a cell that hung with qrexec dead still yields its logs -
   # the entire reason the volume exists.
   if [ -n "$LOGVOL_IMG" ]; then
-    if logvol_pull "$LOGVOL_IMG" "$M/logvol-$c" >/dev/null 2>&1; then
+    if logvol_pull "$LOGVOL_IMG" "$M/logvol-$c" >>"$M/$c-logvol-pull.out" 2>&1; then
       say "  $c: log volume pulled -> $M/logvol-$c"
     else
-      say "  $c: [WARN] could not pull the log volume $LOGVOL_IMG"
+      say "  $c: [WARN] could not pull the log volume $LOGVOL_IMG: $(tail -1 "$M/$c-logvol-pull.out" 2>/dev/null | cut -c1-140)"
     fi
     LOGVOL_IMG=""; LOGVOL_VM=""
   fi
@@ -1938,14 +2006,15 @@ for c in $CELLS; do
     win11-*) _slv="$A11" ;;
     *)       _slv="" ;;
   esac
+  # One cell's guest-log sweep, graded. grade_cell_logsweep() is a function so it can be exercised
+  # without a guest: tools/tests/matrix-logsweep-grade-selftest.sh drives every exit code through it
+  # and checks that one condition produces exactly one tally entry and that each message's numbers
+  # come off the disk. Grading this inline is how it shipped claiming a cell had "no guest logs"
+  # while 37 files sat beside it.
   if [ -n "$_slv" ] && qvm-check "$_slv" >/dev/null 2>&1; then
-    if ./mgmt/harness/log-sweep.sh "$_slv" "$CAMPAIGN_SINCE" "$M/$c-guestlogs" >"$M/$c-logsweep.out" 2>&1; then
-      say "  $c: guest logs collected -> $M/$c-guestlogs ($(find "$M/$c-guestlogs" -type f 2>/dev/null | wc -l) file(s))"
-    else
-      say "  $c: [WARN] guest log collection FAILED (see $M/$c-logsweep.out) - the campaign sweep has no guest logs for this cell"
-    fi
+    grade_cell_logsweep "$c" "$_slv" "$M"
   else
-    say "  $c: [WARN] no subject to collect guest logs from - the campaign sweep has no guest logs for this cell"
+    say "  $c: [WARN] no guest left to collect from; the volume pull left $(find "$M/logvol-$c" -type f 2>/dev/null | wc -l) file(s) for this cell"
   fi
 done
 
@@ -1981,7 +2050,9 @@ if [ -x tools/sweep-gate.sh ]; then
   # real evidence tree: of the logs carrying a declared error, ALL of them were below the limit -
   # depth 3 reached 20 of 83 logs and 0 of the 10 that had errors in them.
   mapfile -t _swl < <(find "$M" -type f \( -name '*.out' -o -name '*.log' -o -name '*.cur' \
-                        -o -name '*.tail' \) -size -8M -size +0 2>/dev/null | sort)
+                        -o -name '*.tail' \) -size -8M -size +0 \
+                        ! -name '*-logsweep.out' ! -path '*-guestlogs/analyze.out' \
+                        ! -path '*-guestlogs/sweep.log' 2>/dev/null | sort)
   sw_total=${#_swl[@]}
   swlogs="$R"; n=0
   for o in "${_swl[@]}"; do [ "$n" -ge "$SW_CAP" ] && break; swlogs="$swlogs $o"; n=$((n+1)); done
@@ -1995,7 +2066,19 @@ if [ -x tools/sweep-gate.sh ]; then
   else
     nun=$(grep -ac '^  UNACCOUNTED' "$M/sweep-gate.out" 2>/dev/null || true); nun=${nun:-0}
     nro=$(grep -ac '^  ROSE' "$M/sweep-gate.out" 2>/dev/null || true); nro=${nro:-0}
-    no "INVALID-SWEEP  ${nun:-0} unaccounted + ${nro:-0} risen declared error(s) in the campaign's own logs - read $M/sweep-gate.out, then fix the defect or record why it is not one"
+    # PRINTED, BUT NOT COUNTED TWICE. no() writes every failing check into this same log as
+    # "[ERROR] FAIL  <what>" and increments the tally in the same breath, so the gate re-reads our
+    # own graded verdicts and each one would add a SECOND entry - classed INVALID, which asserts
+    # that nothing graded it. One failure, two entries, the wrong class on the second; on this
+    # project a double is a P1, and a cell failure belongs in the cell tally above.
+    # They are still printed below: a declared error that stops being shown is how the original
+    # incident happened. What changes is only whether they move the counter.
+    ngr=$(grep -acE '^  UNACCOUNTED .*\[(ERROR|WARN)\] FAIL +' "$M/sweep-gate.out" 2>/dev/null || true); ngr=${ngr:-0}
+    nun=$((nun - ngr)); [ "$nun" -lt 0 ] && nun=0
+    [ "$ngr" -gt 0 ] && say "sweep-gate: $ngr line(s) are this campaign's own graded verdicts, already in the tally above - shown, not counted again"
+    if [ $((nun + nro)) -gt 0 ]; then
+      no "INVALID-SWEEP  ${nun:-0} unaccounted + ${nro:-0} risen declared error(s) in the campaign's own logs - read $M/sweep-gate.out, then fix the defect or record why it is not one"
+    fi
     grep -aE '^  (UNACCOUNTED|ROSE)' "$M/sweep-gate.out" | head -10 | while IFS= read -r l; do say "  $l"; done
   fi
 fi

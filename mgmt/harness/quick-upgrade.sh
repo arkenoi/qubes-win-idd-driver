@@ -146,9 +146,9 @@ finish(){ # $1=rc $2=message  - every exit goes through here and says which exit
   # Pull the log volume on EVERY exit, pass or fail. Host-side, nothing detached, so it works with
   # the guest still running or wedged - which is the whole point: the wedge is the case to catch.
   if [ -n "${LOGVOL_IMG:-}" ]; then
-    logvol_pull "$LOGVOL_IMG" "$OUT/logvol" >/dev/null 2>&1 \
+    logvol_pull "$LOGVOL_IMG" "$OUT/logvol" >>"$OUT/logvol-pull.out" 2>&1 \
       && log "log volume pulled -> $OUT/logvol" \
-      || log "[WARN] log volume could not be pulled from $LOGVOL_IMG"
+      || log "[WARN] log volume could not be pulled from $LOGVOL_IMG: $(tail -1 "$OUT/logvol-pull.out" 2>/dev/null | cut -c1-140)"
   fi
   release_loop
   # EVERY exit of this harness goes through here, so this one line decides whether a sweep can see
@@ -349,10 +349,11 @@ rm -f "mgmt/fixtures/$SUBJECT.aborted" "mgmt/fixtures/$SUBJECT.json"
 # Attach the log volume BEFORE the first start: --required assignments are satisfied at domain
 # creation, so a volume added afterwards is invisible to this boot.
 LOGVOL_IMG=$(logvol_image "$SUBJECT")
-if logvol_create "$LOGVOL_IMG" "$SUBJECT" >/dev/null 2>&1 && logvol_attach "$SUBJECT" "$LOGVOL_IMG" "$OUT/manifest.json" >/dev/null 2>&1; then
+if logvol_create "$LOGVOL_IMG" "$SUBJECT" >>"$OUT/logvol-setup.out" 2>&1 \
+   && logvol_attach "$SUBJECT" "$LOGVOL_IMG" "$OUT/manifest.json" >>"$OUT/logvol-setup.out" 2>&1; then
   log "log volume attached: $LOGVOL_IMG (read it with logvol_pull even if the guest wedges)"
 else
-  log "[WARN] log volume could not be attached - a wedge here will lose the QWT logs"
+  log "[WARN] log volume could not be attached - a wedge here will lose the QWT logs: $(tail -1 "$OUT/logvol-setup.out" 2>/dev/null | cut -c1-140)"
   LOGVOL_IMG=""
 fi
 log "booting $SUBJECT with the release ISO as CD (qvm-start --cdrom=$HOLDER:$LOOP)"
@@ -770,7 +771,7 @@ while :; do
     # answer is on a volume it attached is not reporting, it is guessing.
     lastknown=""
     if [ -n "${LOGVOL_IMG:-}" ]; then
-      if logvol_pull "$LOGVOL_IMG" "$OUT/logvol-live" >/dev/null 2>&1; then
+      if logvol_pull "$LOGVOL_IMG" "$OUT/logvol-live" >>"$OUT/logvol-live.out" 2>&1; then
         lastknown=$(find "$OUT/logvol-live/files" -type f -name '*.log' -printf '%T@ %p\n' 2>/dev/null \
                     | sort -rn | head -1 | cut -d' ' -f2- \
                     | xargs -r -d '\n' sh -c 'grep -a . "$0" 2>/dev/null | tail -1' 2>/dev/null | cut -c1-110)

@@ -119,6 +119,11 @@ LOGVOL_CACHE="writethrough"                          # L2 of the durability chai
 
 _lv_say(){ echo "logvol: $*" >&2; }
 
+# Guest text is DATA, never part of the line's structure: the guest is untrusted and this logger
+# declares severity, so a reply carrying "[ERROR]" or a newline could forge or mask a level for
+# tools/sweep-gate.sh. Flatten it, take the brackets away, bound the length.
+_lv_guest(){ printf '%s' "$1" | tr -d '\r\n' | tr '[]' '()' | cut -c1-160; }
+
 # ---------------------------------------------------------------------------------------------- image
 logvol_image(){ # <id> -> the image path for a cell/campaign id
   local id="${1:?[ERROR] logvol_image <id>}"
@@ -136,20 +141,20 @@ logvol_create(){ # <img> <id> [size_mb] - a FRESH volume; the previous contents 
   command -v mkfs.fat >/dev/null || { _lv_say "[ERROR] REFUSED: mkfs.fat is not installed"; return 2; }
   command -v mcopy >/dev/null || { _lv_say "[ERROR] REFUSED: mtools (mcopy) is not installed - memory: mtools-mcopy-recovery"; return 2; }
   case "$id" in *[!A-Za-z0-9._-]*|'') _lv_say "[ERROR] REFUSED: id '$id' is not [A-Za-z0-9._-]"; return 2 ;; esac
-  mkdir -p "$(dirname "$img")" || return 1
+  mkdir -p "$(dirname "$img")" || { _lv_say "[ERROR] could not create the image directory for $img"; return 1; }
   if [ -s "$img" ]; then
     # ARCHIVE BEFORE WIPING (prime-run's rule): the volume's contents are the only evidence a dead
     # cell leaves, and this reformat destroys them. Every set is kept, timestamped, before the wipe.
     local arch="$LOGVOL_ARCHIVE_DIR/$(date -u +%Y%m%dT%H%M%SZ)-$id"
     if logvol_pull "$img" "$arch" >/dev/null 2>&1; then _lv_say "previous contents archived to $arch"   # GUARD:archive DEFECT: if false; then :
-    else rm -rf "$arch"; _lv_say "previous image held nothing readable (no archive made)"; fi
+    else rm -rf "$arch"; _lv_say "[WARN] previous image held nothing readable (no archive made)"; fi
   fi
   # THE LOOP DEVICE CACHES THE BACKING FILE'S CAPACITY (prime-run.sh:149): an image that is already on
   # a loop must keep its size, or the guest sees a stale geometry.
   local cur; cur=$(logvol_loop_of "$img")
   if [ -n "$cur" ]; then
     local have; have=$(( $(stat -c%s "$img") / 1024 / 1024 ))
-    [ "$have" = "$mb" ] || { _lv_say "image is on /dev/$cur at ${have}M - keeping that size, not ${mb}M"; mb=$have; }
+    [ "$have" = "$mb" ] || { _lv_say "[WARN] image is on /dev/$cur at ${have}M - keeping that size, not ${mb}M"; mb=$have; }
     # mkfs below rewrites the file in place (same inode, same size): the loop keeps serving it.
     : > "$img"
   else
@@ -157,7 +162,7 @@ logvol_create(){ # <img> <id> [size_mb] - a FRESH volume; the previous contents 
   fi
   truncate -s "${mb}M" "$img" || { _lv_say "[ERROR] could not size $img"; return 1; }
   mkfs.fat -F 32 -n "$LOGVOL_LABEL" -i "$(_lv_serial "$id")" "$img" >/dev/null 2>&1 \
-    || { _lv_say "mkfs.fat failed on $img"; return 1; }
+    || { _lv_say "[ERROR] mkfs.fat failed on $img"; return 1; }
   local tag; tag=$(mktemp)
   printf 'id=%s\ncreated=%s\nlabel=%s\nfrontend=%s\n' "$id" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$LOGVOL_LABEL" "$LOGVOL_FRONTEND" > "$tag"
   mcopy -i "$img" "$tag" ::/LOGVOL.TAG && mmd -i "$img" ::/qwt-logs || { rm -f "$tag"; _lv_say "[ERROR] could not write LOGVOL.TAG"; return 1; }
@@ -177,7 +182,7 @@ logvol_loop(){ # <img> -> loopN (reused when present; else udisksctl loop-setup,
   dev=$(logvol_loop_of "$img")
   if [ -n "$dev" ] && [ -e "/dev/$dev" ]; then printf '%s' "$dev"; return 0; fi
   dev=$(udisksctl loop-setup -f "$img" 2>&1 | grep -o '/dev/loop[0-9]*' | head -1)
-  [ -n "$dev" ] || { _lv_say "udisksctl loop-setup failed for $img"; return 1; }
+  [ -n "$dev" ] || { _lv_say "[ERROR] udisksctl loop-setup failed for $img"; return 1; }
   printf '%s' "${dev#/dev/}"
 }
 
@@ -195,14 +200,14 @@ logvol_assign(){ # <vm> <loopN> - --required: the assignment is satisfied at dom
           "$vm" "$LOGVOL_HOLDER:$dev" 2>&1)
   local rc=$?
   if [ $rc -ne 0 ] && ! printf '%s' "$out" | grep -qi 'already assigned'; then
-    _lv_say "assign failed for $vm <- $LOGVOL_HOLDER:$dev: $(printf '%s' "$out" | tail -1)"; return 1
+    _lv_say "[ERROR] assign failed for $vm <- $LOGVOL_HOLDER:$dev: $(printf '%s' "$out" | tail -1)"; return 1
   fi
   return 0
 }
 
 logvol_unassign(){ # <vm> <loopN>
   local vm="${1:?[ERROR] logvol_unassign <vm> <loopN>}" dev="${2:?[ERROR] logvol_unassign <vm> <loopN>}"
-  qvm-device block unassign "$vm" "$LOGVOL_HOLDER:$dev" >/dev/null 2>&1 || { _lv_say "unassign of $LOGVOL_HOLDER:$dev from $vm failed (stale claims make a guest UNSTARTABLE - findings/rig.md)"; return 1; }
+  qvm-device block unassign "$vm" "$LOGVOL_HOLDER:$dev" >/dev/null 2>&1 || { _lv_say "[ERROR] unassign of $LOGVOL_HOLDER:$dev from $vm failed (stale claims make a guest UNSTARTABLE - findings/rig.md)"; return 1; }
 }
 
 # -------------------------------------------------------------------------------------- qemu-extra-args
@@ -244,8 +249,10 @@ logvol_qemu_remove(){ # <vm>
   cur=$(qvm-features "$vm" qemu-extra-args 2>/dev/null || true)
   [ -n "$cur" ] || return 0
   new=$(logvol_qemu_args_strip "$cur")
-  if [ -z "$new" ]; then qvm-features --unset "$vm" qemu-extra-args >/dev/null 2>&1 || return 1
-  else qvm-features "$vm" qemu-extra-args -- "$new" >/dev/null || return 1; fi
+  if [ -z "$new" ]; then qvm-features --unset "$vm" qemu-extra-args >/dev/null 2>&1 \
+    || { _lv_say "[ERROR] could not unset qemu-extra-args on $vm - the guest keeps the old device line"; return 1; }
+  else qvm-features "$vm" qemu-extra-args -- "$new" >/dev/null \
+    || { _lv_say "[ERROR] could not set qemu-extra-args on $vm - the guest will not see the log volume"; return 1; }; fi
 }
 
 # ------------------------------------------------------------------------------------------- manifest
@@ -297,7 +304,7 @@ logvol_attach(){ # <vm> <img> <manifest.json> - BEFORE the guest starts (first b
   dev=$(logvol_loop "$img") || return 1
   logvol_assign "$vm" "$dev" || return 1
   before=$(logvol_qemu_apply "$vm") || return 1
-  logvol_manifest_record "$mf" "$vm" "$cid" "$img" "$dev" "$before" || { _lv_say "manifest $mf not written"; return 1; }
+  logvol_manifest_record "$mf" "$vm" "$cid" "$img" "$dev" "$before" || { _lv_say "[ERROR] manifest $mf not written"; return 1; }
   echo "LOGVOL-ATTACHED vm=$vm id=$cid image=$img loop=$dev frontend=$LOGVOL_FRONTEND cache=$LOGVOL_CACHE manifest=$mf"
 }
 
@@ -309,7 +316,7 @@ logvol_detach(){ # <vm> <manifest.json> - AFTER the guest halted (the loop must 
   logvol_qemu_remove "$vm" || rc=1
   st=$(QTEST_VM="$vm" timeout 25 "$LOGVOL_QTEST" state 2>/dev/null | grep -aoE 'power_state=[A-Za-z]+' | head -1)
   if [ "$st" = "power_state=Halted" ]; then logvol_loop_release "$dev" || rc=1
-  else _lv_say "$vm is '${st:-unreadable}', not Halted - /dev/$dev LEFT IN PLACE; free it once the guest is down: udisksctl loop-delete -b /dev/$dev"; fi
+  else _lv_say "[WARN] $vm is '${st:-unreadable}', not Halted - /dev/$dev LEFT IN PLACE; free it once the guest is down: udisksctl loop-delete -b /dev/$dev"; fi
   echo "LOGVOL-DETACHED vm=$vm loop=$dev rc=$rc"
   return $rc
 }
@@ -319,13 +326,13 @@ logvol_pull(){ # <img> <outdir> - read the volume on the HOST: guest running, we
   # A live read (the guest may be mid-write), exactly like prime-run's marker reads; the listing and
   # the copy are both kept so a short file can be seen for what it is.
   local img="${1:?[ERROR] logvol_pull <img> <outdir>}" out="${2:?[ERROR] logvol_pull <img> <outdir>}" n
-  [ -s "$img" ] || { _lv_say "no image at $img"; return 1; }
-  mkdir -p "$out/files" || return 1
-  mdir -i "$img" -/ ::/ > "$out/listing.txt" 2>"$out/listing.err" || { _lv_say "mdir failed on $img: $(tail -1 "$out/listing.err")"; return 1; }
-  mcopy -s -n -Q -i "$img" ::/ "$out/files/" >"$out/mcopy.out" 2>&1 || _lv_say "mcopy reported a problem (partial copy kept): $(tail -1 "$out/mcopy.out")"
+  [ -s "$img" ] || { _lv_say "[ERROR] no image at $img"; return 1; }
+  mkdir -p "$out/files" || { _lv_say "[ERROR] could not create $out/files"; return 1; }
+  mdir -i "$img" -/ ::/ > "$out/listing.txt" 2>"$out/listing.err" || { _lv_say "[ERROR] mdir failed on $img: $(_lv_guest "$(tail -1 "$out/listing.err")")"; return 1; }
+  mcopy -s -n -Q -i "$img" ::/ "$out/files/" >"$out/mcopy.out" 2>&1 || _lv_say "[WARN] mcopy reported a problem (partial copy kept): $(_lv_guest "$(tail -1 "$out/mcopy.out")")"
   n=$(find "$out/files" -type f | wc -l)
   printf 'image=%s\nread_utc=%s\nfiles=%s\n' "$img" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$n" > "$out/pull.txt"
-  [ "$n" -gt 0 ] || { _lv_say "the volume holds no files"; return 1; }   # GUARD:pullempty DEFECT: true
+  [ "$n" -gt 0 ] || { _lv_say "[ERROR] the volume holds no files"; return 1; }   # GUARD:pullempty DEFECT: true
   echo "LOGVOL-PULLED image=$img files=$n out=$out"
 }
 
@@ -335,8 +342,8 @@ logvol_pull(){ # <img> <outdir> - read the volume on the HOST: guest running, we
 # returned is in here too - salvage.txt is a superset to be diffed against the copy, never the copy.
 logvol_salvage(){ # <img> <outdir> -> <outdir>/salvage.txt, prints the count of lines found
   local img="${1:?[ERROR] logvol_salvage <img> <outdir>}" out="${2:?[ERROR] logvol_salvage <img> <outdir>}" n
-  [ -s "$img" ] || { _lv_say "no image at $img"; return 1; }
-  mkdir -p "$out" || return 1
+  [ -s "$img" ] || { _lv_say "[ERROR] no image at $img"; return 1; }
+  mkdir -p "$out" || { _lv_say "[ERROR] could not create $out"; return 1; }
   # windows-utils lines: [yyyymmdd.hhmmss.mmm-pid:tid-L] or the pre-4.3.33 [date.time.ms-tid-L];
   # EV event records; the BLog/PowerShell '[yyyy-mm-dd hh:mm:ss' shapes. Null bytes and CRs stripped.
   tr -d '\000\r' < "$img" \
@@ -368,12 +375,15 @@ logvol_bind_guest(){ # <vm> <id> - push the binder and run it; the LOGVOL-BIND l
     local shape="ran and printed no receipt"
     printf '%s' "$out" | grep -qaiE 'cannot find path|does not exist|is not recognized|FileNotFound' && shape="the binder never arrived in QubesIncoming"
     printf '%s' "$out" | grep -qaiE 'Exception|FullyQualifiedErrorId|At line:' && shape="the binder threw"
-    _lv_say "no LOGVOL-BIND line from $vm ($shape) - full transcript: $bindlog"
-    _lv_say "  [ERROR] first error-shaped line: $(printf '%s' "$out" | grep -aiE 'error|exception|cannot|not recognized|denied' | head -1 | cut -c1-150)"
+    _lv_say "[ERROR] no LOGVOL-BIND line from $vm ($shape) - full transcript: $bindlog"
+    _lv_say "  [ERROR] first error-shaped line: $(_lv_guest "$(printf '%s' "$out" | grep -aiE 'error|exception|cannot|not recognized|denied' | head -1)")"
     return 1
   fi
   echo "$line"
-  case "$line" in "LOGVOL-BIND ok "*) return 0 ;; *) return 1 ;; esac
+  case "$line" in
+    "LOGVOL-BIND ok "*) return 0 ;;
+    *) _lv_say "[ERROR] the binder refused: $(_lv_guest "$line")"; return 1 ;;
+  esac
 }
 
 logvol_unbind_guest(){ # <vm> - put LogDir and LogSafeFlush back (registry mode) or queue the reverse renames (junction)
@@ -382,5 +392,8 @@ logvol_unbind_guest(){ # <vm> - put LogDir and LogSafeFlush back (registry mode)
   line=$(printf '%s\n' "$out" | grep -a '^LOGVOL-BIND ' | tail -1)
   [ -n "$line" ] || { _lv_say "[ERROR] no LOGVOL-BIND line came back from $vm"; return 1; }
   echo "$line"
-  case "$line" in "LOGVOL-BIND restored "*) return 0 ;; *) return 1 ;; esac
+  case "$line" in
+    "LOGVOL-BIND restored "*) return 0 ;;
+    *) _lv_say "[ERROR] the binder did not restore: $(_lv_guest "$line")"; return 1 ;;
+  esac
 }

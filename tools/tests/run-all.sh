@@ -59,7 +59,7 @@ sweep(){ local n=0 d
 
 mapfile -t TESTS < <(ls tools/tests/${PAT}.sh 2>/dev/null | grep -v '/run-all\.sh$')
 [ "${#TESTS[@]}" -gt 0 ] || { echo "run-all: no test matches '$PAT'" >&2; exit 2; }
-echo "run-all: ${#TESTS[@]} test(s), TMPDIR=$TMPDIR, /tmp $(tmp_pct)%, ${$(free_mb):-?} MB available"
+echo "run-all: ${#TESTS[@]} test(s), TMPDIR=$TMPDIR, /tmp $(tmp_pct)%, $(free_mb) MB available"
 : > "$OUT/_rcs.txt"
 pass=0; fail=0
 for t in "${TESTS[@]}"; do
@@ -70,7 +70,7 @@ for t in "${TESTS[@]}"; do
   sweep
   # A run that eats the qube's memory is stopped here, not after the GUI has gone.
   if [ "$(free_mb)" -lt 400 ] || [ "$(tmp_pct)" -ge 80 ]; then
-    echo "run-all: STOPPING at $b - available ${$(free_mb):-?} MB, /tmp $(tmp_pct)%. $pass passed, $fail failed so far."
+    echo "run-all: STOPPING at $b - available $(free_mb) MB, /tmp $(tmp_pct)%. $pass passed, $fail failed so far."
     exit 3
   fi
 done

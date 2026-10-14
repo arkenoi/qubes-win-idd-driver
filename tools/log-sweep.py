@@ -831,9 +831,38 @@ def load_context(logsdir):
         return {"declared": False, "source": "context.json unreadable: %s" % e, "declared_errors": [], "guest_clock": None}
 
 
+# QWT's logger rotates <log> -> <log>.old once the live file passes ~1 MB (tools/notifhost/
+# qtb_shared.h: MoveFileExW when nFileSizeLow > 1024*1024), and guest/provision-etwproxy-account.ps1
+# PRE-CREATES BOTH NAMES as empty files, because the ACE for the rotation rename needs DELETE on
+# each of them. So a 0-byte .old is the ordinary state of a log that has not yet reached the
+# threshold - it is not missing data, and calling it missing data cost the 2026-10-14 acceptance
+# campaign a DATA failure on EVERY cell (rc=3 on an empty etw-proxy.log.old while 37 files and 2631
+# QWT-format lines sat beside it), which is exactly the kind of standing false alarm that trains a
+# reader to ignore the gate.
+#
+# THIS IS NOT A NAME ALLOWLIST. The live counterpart must have been collected AND still be under
+# the threshold. An empty .old next to a live log that is already over it means the rotation did
+# NOT happen, and that stays a problem - which is the condition a name allowlist would have hidden.
+ROTATE_BYTES = 1024 * 1024
+
+
+def rotation_placeholder(name, guest_bytes):
+    """Why an empty <log>.old is expected here, or None if its emptiness is a real problem."""
+    if not name.endswith(".old"):
+        return None
+    live = name[:-len(".old")]
+    if live not in guest_bytes:
+        return None        # no live counterpart in this collection - nothing says it is expected
+    n = guest_bytes[live]
+    if n >= ROTATE_BYTES:
+        return None        # the live log is past the threshold: the rotation owed us this file
+    return "rotation target, not yet rotated into (%s is %d B, under the %d B rotation threshold)" % (live, n, ROTATE_BYTES)
+
+
 def load_logs(logsdir):
-    """Returns (meta, [LogFile], problems). meta is the decode's meta.json or None (corpus mode)."""
+    """Returns (meta, [LogFile], problems, placeholders). meta is the decode's meta.json or None (corpus mode)."""
     problems = []
+    placeholders = []   # empty files the rotation rule explains; reported, never silently skipped
     meta = None
     mp = os.path.join(logsdir, "meta.json")
     if os.path.exists(mp):
@@ -850,6 +879,20 @@ def load_logs(logsdir):
                 files.append(LogFile(p, n, "marker"))
     if meta:
         now = parse_iso((meta.get("begin") or {}).get("now", "").replace("T", " ")) if (meta.get("begin") or {}).get("now") else None
+        # GUEST-SIDE sizes by file name, for the rotation rule. The collector's FILE record carries
+        # bytes=<n> measured ON THE GUEST, so this does not depend on what the pull capped.
+        guest_bytes = {}
+        for fe in meta.get("files", []):
+            gn = os.path.basename(b64dec_path(fe.get("pathb64", "")) or fe.get("local") or "")
+            # ONLY A SIZE WE ACTUALLY READ. An absent or unparseable bytes= must NOT default to 0,
+            # because 0 is "under the threshold" and would exempt the rotation file on no evidence -
+            # the rule would then pass for a missing field, which is the hole it exists to close.
+            # Leaving the name out makes rotation_placeholder() return None, i.e. still a problem.
+            if gn and fe.get("bytes") is not None:
+                try:
+                    guest_bytes[gn] = int(fe["bytes"])
+                except (TypeError, ValueError):
+                    pass
         for fe in meta.get("files", []):
             local = fe.get("local")
             path = os.path.join(logsdir, local) if local else None
@@ -862,7 +905,11 @@ def load_logs(logsdir):
                 problems.append(("missing", name, "listed by the collector but absent from the decode output"))   # GUARD:missing DEFECT: pass
                 continue
             if int(fe.get("lines", 0) or 0) == 0 and os.path.getsize(path) == 0:
-                problems.append(("empty", name, "the collector found this log empty (0 lines)"))   # GUARD:empty DEFECT: pass
+                _why = rotation_placeholder(name, guest_bytes)
+                if _why is None:
+                    problems.append(("empty", name, "the collector found this log empty (0 lines)"))   # GUARD:empty DEFECT: pass
+                else:
+                    placeholders.append(("empty-expected", name, _why))
             if lf.partial:
                 problems.append(("partial", name, "over the collector's size cap: head + W/E/suspicious lines + tail only (%s lines in the file)" % lf.total_lines))
             files.append(lf)
@@ -910,7 +957,15 @@ def load_logs(logsdir):
                     continue
                 p = os.path.join(root, n)
                 if os.path.getsize(p) == 0:
-                    problems.append(("empty", n, "0 bytes"))   # (corpus mode: the same gate, no collector table to compare against)
+                    # Same rotation rule; corpus mode has no collector table, so the live
+                    # counterpart's size comes off this disk instead of off the guest.
+                    _live = os.path.join(root, n[:-len(".old")]) if n.endswith(".old") else ""
+                    _gb = {n[:-len(".old")]: os.path.getsize(_live)} if _live and os.path.exists(_live) else {}
+                    _why = rotation_placeholder(n, _gb)
+                    if _why is None:
+                        problems.append(("empty", n, "0 bytes"))   # (corpus mode: the same gate, no collector table to compare against)
+                    else:
+                        placeholders.append(("empty-expected", n, _why))
                 files.append(LogFile(p, n, family_of(n)))
     for lf in files:
         if not lf.path or not os.path.exists(lf.path):
@@ -947,7 +1002,7 @@ def load_logs(logsdir):
             lf.lines = []
             lf.scanned = lf.ignored = lf.unparsed = 0
             parse_blog(lf, raw, newest)
-    return meta, files, problems
+    return meta, files, problems, placeholders
 
 
 # ----------------------------------------------------------------------------------------------- structure
@@ -2066,6 +2121,8 @@ def write_summary(rep, path):
             L.append("  M8 pid %s %s..%s: %s" % (r["pid"], r["t_suspend"], r["t_resume"], ch))
     if h.get("clock_phase_note"):
         L.append("CLOCK PHASE: %s" % h["clock_phase_note"])
+    for _k, _n, _w in rep.get("data_placeholders", []):
+        L.append("EXPECTED-EMPTY  %s: %s" % (_n, _w))
     if rep["data_problems"]:
         L.append("DATA (%d) - the sweep is not complete; missing data FAILS:" % len(rep["data_problems"]))
         for p in rep["data_problems"]:
@@ -2117,7 +2174,7 @@ def cmd_analyze(a):
     if a.baseline and a.baseline != "none":
         with open(a.baseline, encoding="utf-8") as f:
             baseline = json.load(f)
-    meta, files, problems = load_logs(a.logsdir)
+    meta, files, problems, placeholders = load_logs(a.logsdir)
     # --since is UTC (the wrapper's contract); the guest's logs and event records are in GUEST LOCAL time. The collector
     # reports the offset (tz=+hh:mm); a guest not pinned to UTC (the German images) is shifted here, never assumed.
     if since is not None and meta and (meta.get("begin") or {}).get("tz"):
@@ -2231,6 +2288,7 @@ def cmd_analyze(a):
                    "inventory": (meta or {}).get("inventory"), "invmodules": (meta or {}).get("invmodules") or [],
                    "agent_instances": len(st["instances"]), "collector": meta.get("begin") if meta else None},
         "data_problems": problems,
+        "data_placeholders": placeholders,
         "files": [{"name": lf.name, "family": lf.family, "scanned": lf.scanned, "parsed": len(lf.lines), "ignored": lf.ignored, "unparsed": lf.unparsed, "skipped": lf.skipped,
                    "partial": lf.partial, "pid": lf.pid, "boot": lf.boot, "version": lf.version} for lf in files],
         "boots": [{"id": b["id"], "time": fmt_ts(b["time"])} for b in boots],

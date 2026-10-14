@@ -75,4 +75,11 @@ ART=$(mktemp); trap 'rm -f "$ART"' EXIT
   done
 } > "$ART"
 echo "jev-artifact: $(wc -c < "$ART") bytes, $(wc -l < "$ART") lines, ${#SRC[@]} source(s), ${#CMD[@]} command(s)" >&2
-python3 tools/jev.py "$RUB" "$ART"
+# JEV_ARTIFACT_OUT writes the judge's full answer objects, so a mid score can be READ instead of
+# guessed at. It cannot touch the artifact - that is still built above from sources and commands
+# only, under the fixed header.
+if [ -n "${JEV_ARTIFACT_OUT:-}" ]; then
+    python3 tools/jev.py "$RUB" "$ART" --out "$JEV_ARTIFACT_OUT"
+else
+    python3 tools/jev.py "$RUB" "$ART"
+fi
