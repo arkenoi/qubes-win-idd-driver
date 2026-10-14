@@ -218,6 +218,37 @@ raise SystemExit(bad)
 PYPROVE
 fi
 
+# ---- THE RTC CONVENTION, which is why the clock was wrong in the first place --------------------
+# The gate above refuses an install whose catalogs cannot validate at the guest's clock. That clock
+# is wrong because Windows with RealTimeIsUniversal UNSET reads the hardware clock as LOCAL time, so
+# the guest computes its UTC off by its own zone offset - and a guest ahead of UTC lands BEHIND real
+# time, which is exactly what makes a fresh catalog "not yet valid". Qubes presents the RTC as UTC,
+# so the convention is Qubes' and QWT is the layer that should declare it. Measured 2026-10-14:
+# unset, plus a qube given the localtime feature, put every acceptance guest 10800 s ahead for its
+# whole life while our own clock puller re-corrected it three times in six minutes.
+for f in packaging/setup/Install-QwtImproved.ps1 mgmt/prime-jobs/ours/setup/Install-QwtImproved.ps1; do
+  b=$(echo "$f" | cut -d/ -f1)
+  # the prime-jobs tree is gitignored local staging: checked when it exists, never required
+  [ -f "$f" ] || { echo "  SKIP rtc($b): $f not present (local staging tree)"; continue; }
+  if command grep -q 'function Set-RtcIsUtc' "$f"; then echo "  OK   rtc($b) declares the hardware clock is UTC"
+  else echo "  FAIL rtc($b): the installer does not set RealTimeIsUniversal"; fail=1; fi
+  if command grep -q 'RealTimeIsUniversal already 1' "$f"; then echo "  OK   rtc($b) idempotent on an already-correct guest"
+  else echo "  FAIL rtc($b): no already-set path - it would rewrite on every install"; fail=1; fi
+  if tr -d '\r' < "$f" | awk '/function Set-RtcIsUtc/,/^}$/' | command grep -q 'did not read back as 1'; then echo "  OK   rtc($b) reads the value back"
+  else echo "  FAIL rtc($b): the write is assumed to have worked"; fail=1; fi
+  if tr -d '\r' < "$f" | awk '/function Set-RtcIsUtc/,/^}$/' | command grep -q 'Fail '; then
+    echo "  FAIL rtc($b): a failed write aborts the install - that is not what this breaks"; fail=1
+  else echo "  OK   rtc($b) reported, never fatal"; fi
+done
+# It must run BEFORE the pre-flight gate, so the NEXT boot is right even when this one refuses.
+rtc_line=$(command grep -n '^    Set-RtcIsUtc$' packaging/setup/Install-QwtImproved.ps1 | tail -1 | cut -d: -f1)
+gate_line=$(command grep -n "Assert-PayloadClockSane -Root .Root -Why 'stage 1 pre-flight'" packaging/setup/Install-QwtImproved.ps1 | head -1 | cut -d: -f1)
+if [ -n "$rtc_line" ] && [ -n "$gate_line" ] && [ "$rtc_line" -lt "$gate_line" ]; then
+  echo "  OK   rtc declared (line $rtc_line) before the pre-flight clock gate (line $gate_line)"
+else
+  echo "  FAIL rtc not ordered before the clock gate (rtc=${rtc_line:-none} gate=${gate_line:-none})"; fail=1
+fi
+
 if [ "$fail" = 0 ]; then echo "PASS: the gate refuses exactly the clock-broken cases"; exit 0; fi
 echo "FAIL: the installer would not refuse a clock-broken driver package"
 exit 1

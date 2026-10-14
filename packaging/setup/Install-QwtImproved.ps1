@@ -5336,6 +5336,43 @@ function Test-SigningClockSane {
     return $true
 }
 
+function Set-RtcIsUtc {
+    # THE HARDWARE CLOCK IS UTC AND THE OS APPLIES THE ZONE. Qubes presents the RTC as UTC to a
+    # qube unless that qube is given the `timezone` feature, and Windows with RealTimeIsUniversal
+    # UNSET reads the RTC as LOCAL time - so the guest computes guest_UTC = RTC - its_own_offset
+    # and lands that far from real UTC. On a guest whose zone is ahead of UTC that puts it BEHIND
+    # real time, which is precisely how a freshly minted driver catalog becomes "not yet valid"
+    # and drvinst HANGS instead of failing (0x800B0101) - the refusal immediately below.
+    #
+    # THIS IS OURS TO SET. It is not rewriting the user's clock, which this installer deliberately
+    # refuses to do; it is declaring which convention the hardware clock follows, and on a Qubes
+    # guest that convention is decided by Qubes. QWT is the integration layer that should know it.
+    # Measured 2026-10-14: with it unset and the qube additionally given `timezone=localtime`, every
+    # acceptance guest ran 10800 s ahead for its whole life while the clock puller re-corrected it.
+    #
+    # It takes effect at the NEXT boot - Windows reads the RTC through this value at startup - so it
+    # does not rescue the current session, and the clock gate below still has to run. Idempotent,
+    # read back rather than assumed, and never fatal: a guest that refuses the write is reported and
+    # the install continues, because the install is not what this breaks.
+    $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\TimeZoneInformation'
+    try {
+        $cur = (Get-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -ErrorAction Stop).RealTimeIsUniversal
+    } catch { $cur = $null }
+    if ($cur -eq 1) { Write-Log '  clock: RealTimeIsUniversal already 1 (hardware clock is UTC)'; return }
+    try {
+        New-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -PropertyType DWord -Value 1 -Force -ErrorAction Stop | Out-Null
+        $back = (Get-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -ErrorAction Stop).RealTimeIsUniversal
+        if ($back -eq 1) {
+            Write-Log ('  clock: RealTimeIsUniversal set to 1 (was ' + $(if ($null -eq $cur) { 'unset' } else { $cur }) +
+                       ') - the hardware clock is read as UTC from the next boot')
+        } else {
+            Write-Log "  clock: RealTimeIsUniversal did not read back as 1 (got '$back') - this guest may read its hardware clock as local time" 'WARN'
+        }
+    } catch {
+        Write-Log "  clock: could not set RealTimeIsUniversal ($($_.Exception.Message)) - this guest may read its hardware clock as local time" 'WARN'
+    }
+}
+
 function Assert-PayloadClockSane {
     # THE WHOLE-PAYLOAD CLOCK GATE. Every driver this package installs is validated against the
     # guest's system clock, so ONE skewed clock poisons ALL of them - not just the one site the
@@ -5442,6 +5479,7 @@ function Assert-Stage1Preflight {
     # the PV drivers, and drvinst waits on a not-yet-valid catalog rather than failing it. Measured
     # 2026-09-25 on a German 25H2 guest: 25 minutes at 0.125 s of CPU, the install log saying only
     # 'installing xenvif', the answer only in setupapi.dev.log as Error = 0x800B0101.
+    Set-RtcIsUtc
     $skewed = Assert-PayloadClockSane -Root $Root -Why 'stage 1 pre-flight'
     if ($skewed.Count -gt 0) {
         Fail ("pre-flight REFUSAL (nothing changed on this guest): this guest's clock cannot " +
