@@ -610,14 +610,27 @@ clear_prime_leftovers(){ # $1=vm - prime-run's own exit text: "The stick is stil
   # user_data_on_private + agent_log_healthy both failed on a guest whose install was perfect -
   # pv_disk_bound was True the whole time. It passed on the next run, because which volume wins
   # the letter is a race. A leftover from priming must never be able to decide a cell's verdict.
+  # AND THE LOG VOLUME, since 2026-10-14: prime-run now attaches it on xvdk, so a fixture it built
+  # carries a THIRD --required claim. Left behind, that claim names a loop this qube will recycle,
+  # and a claim on a released loop makes the guest uncreatable with nothing but "libxenlight failed
+  # to create new domain" (CLAIMSTALELOOP). The same leftover-decides-a-verdict argument applies:
+  # an extra removable volume competes for the drive letter the private volume normally takes.
   local vm=$1 stickloop img
-  for img in 'answer-usb\.img$' 'answer-usb-413\.img$'; do
+  # `[.]` not `\.`: awk warns "escape sequence \. treated as plain ." on every call, three lines of
+  # noise per cell in a log that is read for findings.
+  for img in 'answer-usb[.]img$' 'answer-usb-413[.]img$' "logvol/logs-$vm[.]img\$"; do
     stickloop=$(losetup -l 2>/dev/null | awk -v pat="$img" '$6 ~ pat {sub("/dev/","",$1); print $1; exit}')
     if [ -n "$stickloop" ]; then
-      if qvm-device block unassign "$vm" "win-idd-mgmt:$stickloop" >/dev/null 2>&1; then
+      local uerr
+      if uerr=$(qvm-device block unassign "$vm" "win-idd-mgmt:$stickloop" 2>&1); then
         say "  $vm: prime stick unassigned (win-idd-mgmt:$stickloop)"
+      elif printf '%s' "$uerr" | grep -qi 'not assigned'; then
+        # ALREADY CLEAR IS NOT A FAILURE. This ran twice on 2026-10-14 and the second pass reported
+        # "could not unassign" three times about claims that were gone - a warning that reads as the
+        # leftover still being there.
+        say "  $vm: no claim on win-idd-mgmt:$stickloop (already clear)"
       else
-        say "  [WARN] could not unassign win-idd-mgmt:$stickloop from $vm - its boots depend on this qube's loop layout until cleared"
+        say "  [WARN] could not unassign win-idd-mgmt:$stickloop from $vm - its boots depend on this qube's loop layout until cleared: $(printf '%s' "$uerr" | tr -d '\r\n' | tail -c 120)"
       fi
     else
       say "  note: no loop backing ${img%%\\*} for $vm (not assigned this run)"

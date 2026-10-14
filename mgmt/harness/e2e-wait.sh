@@ -100,28 +100,12 @@ w_screen(){ # $1=vm $2=tag $3=outdir
 # pipeline's status - so a guest that ANSWERED is graded dead. Measured 2026-10-14: 41 of 300 here, 86
 # of 200 in the collector's own probe. This is the project's canonical liveness predicate and w_session,
 # w_install, w_halt_stable and the 10-minute TERMINAL verdict below all rest on it.
-# THE HARDWARE CLOCK IS UTC AND THE OS APPLIES THE ZONE - asserted on a guest we did not install.
-#
-# The answer file sets RealTimeIsUniversal in the specialize pass, so every image installed from it
-# is right from its first boot. Every golden on this rig predates that, and a subject cloned from
-# one inherits the old registry: Windows then reads the RTC as LOCAL time and the guest's UTC comes
-# out wrong by dom0's offset, which is the permanent +3 h measured on 2026-10-14 (CLOCKRTCLOCALTIME).
-# Subjects are disposable, so this sets it on the subject rather than waiting for every golden to be
-# rebuilt - and it is the correct setting for a Qubes Windows guest either way.
-#
-# It takes effect at the NEXT boot: Windows reads the RTC through this value at startup. The current
-# session is corrected by our own clock pull. Reports what it did; a guest that cannot be asked is
-# not silently assumed to be fine.
-w_rtc_utc(){ # $1=vm [$2=log fn]
-  local vm="${1:?w_rtc_utc <vm>}" lg="${2:-echo}" out
-  out=$(QTEST_VM="$vm" timeout -k 5 90 ./tools/qtest run \
-        'cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation" /v RealTimeIsUniversal /t REG_DWORD /d 1 /f & reg query "HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation" /v RealTimeIsUniversal' \
-        2>/dev/null | tr -d '\r')
-  case "$out" in
-    *RealTimeIsUniversal*0x1*) $lg "  RTC: RealTimeIsUniversal=1 on $vm (hardware clock is UTC; takes effect next boot)" ; return 0 ;;
-    *) $lg "  RTC: [WARN] could not confirm RealTimeIsUniversal on $vm - its clock may read dom0 local time (CLOCKRTCLOCALTIME)" ; return 1 ;;
-  esac
-}
+
+# The RTC helper lives in its own file so prime-run.sh can source it WITHOUT sourcing this
+# one, which it deliberately does not (prime-run.sh:66). Calling it from there while it was
+# defined here resolved to nothing: `w_rtc_utc: command not found`, measured 2026-10-14.
+# shellcheck disable=SC1091
+source "$(dirname "${BASH_SOURCE[0]}")/rtc-lib.sh"
 
 w_alive(){ grep -qa QREADY <<< "$(QTEST_VM=$1 timeout -k 5 40 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null)"; }
 

@@ -31,7 +31,7 @@ chmod +x "$T/tools/qtest"
 
 run_case(){ # <mode> <logfile> -> rc
   ( cd "$T" && STUBLOG="$T/$2" STUBMODE="$1" bash -c '
-      eval "$(sed -n "/^w_rtc_utc()/,/^}$/p" "$0/mgmt/harness/e2e-wait.sh")"
+      eval "$(sed -n "/^w_rtc_utc()/,/^}$/p" "$0/mgmt/harness/rtc-lib.sh")"
       w_rtc_utc stubvm echo' "$ROOT" >"$T/$2.out" 2>&1 )
 }
 
@@ -54,6 +54,21 @@ ck "NOT on the common session-up path"                     "0" \
    "$(grep -c 'w_rtc_utc "\$vm" "\$log"' mgmt/harness/e2e-wait.sh)"
 ck "called where a subject is PREPARED, once"              "1" \
    "$(grep -c 'w_rtc_utc "\$CHURN" log' mgmt/harness/prime-run.sh)"
+
+# AND THE NAME MUST RESOLVE THERE. This suite asserted the call's TEXT and nothing else, so it
+# passed while the call could not work: the function lived in e2e-wait.sh, prime-run deliberately
+# does not source that file (prime-run.sh:66), and the first real run printed
+# `line 537: w_rtc_utc: command not found` - the subject was never given the value.
+ck "the file prime-run sources DEFINES it"                 "1" \
+   "$(grep -c '^w_rtc_utc()' mgmt/harness/rtc-lib.sh)"
+ck "prime-run sources that file"                           "1" \
+   "$(grep -c '^source mgmt/harness/rtc-lib.sh' mgmt/harness/prime-run.sh)"
+# The chain, actually executed: source exactly what prime-run sources, then ask bash whether the
+# name is a function. A grep cannot answer this; this can.
+ck "and the name resolves in prime-run's context"          "RESOLVES" \
+   "$(bash -c 'eval "$(grep -E "^source mgmt/harness/" mgmt/harness/prime-run.sh)" 2>/dev/null; declare -f w_rtc_utc >/dev/null && echo RESOLVES || echo UNRESOLVED')"
+ck "e2e-wait.sh still provides it to ITS callers"          "RESOLVES" \
+   "$(bash -c 'source mgmt/harness/e2e-wait.sh 2>/dev/null; declare -f w_rtc_utc >/dev/null && echo RESOLVES || echo UNRESOLVED')"
 ck "and no harness still forces a localtime RTC"           "0" \
    "$(grep -vE '^[[:space:]]*#' mgmt/harness/*.sh | grep -c 'timezone localtime')"
 

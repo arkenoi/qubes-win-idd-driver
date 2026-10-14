@@ -61,6 +61,7 @@ state(){ qvm-ls --raw-data --fields state "$1" 2>/dev/null; }
 source mgmt/harness/run-lib.sh
 source mgmt/harness/prime-rescue-lib.sh   # rescue_quiet_step / rescue_noshow_step / rescue_should_fire
 source mgmt/harness/logvol-lib.sh         # the secondary log volume: QWT's logs readable from THIS qube, with no guest
+source mgmt/harness/rtc-lib.sh            # w_rtc_utc: called at line ~537 and UNRESOLVED until 2026-10-14, because it lived in e2e-wait.sh
 
 # cpu_time is CUMULATIVE - flat across a sample means the domain is not executing. Local copy so
 # prime-run stays independent of e2e-wait.sh, which it does not source. UNREADABLE = MOVING: a

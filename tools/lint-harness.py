@@ -140,7 +140,11 @@ def l2_vmlock_required() -> None:
         # logvol-lib.sh joined on 2026-10-13: the secondary log volume library (PLAN-acceptance-optimization
         # section 3) reads one power state and pushes its guest-side binder, both from a cell harness that
         # already holds the lock; its own caller contract says so in its header.
-        if f.name in ("shutdown-lib.sh", "wu-liveness.sh", "logvol-lib.sh"):
+        # rtc-lib.sh joined on 2026-10-14: w_rtc_utc sets RealTimeIsUniversal and reads it back -
+        # two qtest calls - from a harness that already holds the guest's lock. It exists as its own
+        # file precisely so prime-run.sh can source it without sourcing e2e-wait.sh; while it lived
+        # in the latter, the call resolved to nothing (RTCCALLUNRESOLVED).
+        if f.name in ("shutdown-lib.sh", "wu-liveness.sh", "logvol-lib.sh", "rtc-lib.sh"):
             continue
         finding("L2-missing-vmlock", f.name,
                 "drives a guest via tools/qtest but never calls vm_lock")
