@@ -244,5 +244,23 @@ else
   no "T15 blind-spot measurement wrong (urc=$urc)" "measured: $(printf '%s' "$m" | tail -1) | unjoinable: $(printf '%s' "$u" | tail -1)"
 fi
 
+# T16 - IT MUST NOT READ ITS OWN REPORT. The report quotes the messages it found, so a bracketed
+# one is still a declared line when the report is swept. matrix.sh globs "$M"/*.out and writes its
+# report to "$M"/sweep-gate.out, so before this a re-run gained PHANTOM findings - in a gate that
+# raises INVALID and blocks a release. Measured: one real error became two.
+mkdir -p "$T/own"
+printf '[ERROR] DISM rc=3010 state_after=Not Present\n' > "$T/own/cell.log"
+printf '# empty\n' > "$T/own/led.txt"
+SWEEP_GATE_LEDGER="$T/own/led.txt" bash tools/sweep-gate.sh "$T/own/cell.log" > "$T/own/sweep-gate.out" 2>&1
+again=$(SWEEP_GATE_LEDGER="$T/own/led.txt" bash tools/sweep-gate.sh "$T/own/cell.log" "$T/own/sweep-gate.out" 2>&1)
+alone=$(SWEEP_GATE_LEDGER="$T/own/led.txt" bash tools/sweep-gate.sh "$T/own/cell.log" 2>&1)
+n2=$(printf '%s' "$again" | grep -aoE 'unaccounted=[0-9]+' | head -1)
+n1=$(printf '%s' "$alone" | grep -aoE 'unaccounted=[0-9]+' | head -1)
+if [ "$n2" = "unaccounted=1" ] && [ "$n1" = "unaccounted=1" ]; then
+  ok "T16 sweeping its own report adds nothing ($n1 alone, $n2 with the report beside it)"
+else
+  no "T16 it re-detects its own output ($n1 alone, $n2 with its report)" "$(printf '%s' "$again" | grep -a UNACCOUNTED | head -3)"
+fi
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

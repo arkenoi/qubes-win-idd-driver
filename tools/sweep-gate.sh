@@ -123,8 +123,18 @@ for line in sys.stdin:
 # file happened to contain one. 20 logs reported findings; 130 reported nothing. Measured 2026-10-14.
 # <count> <message>, ledger-compatible. VARIANTS writes "<distinct> <message>" beside it when a
 # path is given, so the report can say how many distinct lines a merged message stands for.
-declared() { local vfile="${SWEEP_GATE_VARIANTS:-}"
+# IT MUST NOT READ ITS OWN REPORT. The report QUOTES the messages it found, so a bracketed one -
+# "[ERROR] DISM rc=3010 state_after=Not Present" - is still a declared line when the report is
+# swept, and comes back as "UNACCOUNTED x1 UNACCOUNTED x1 [ERROR] DISM ...". matrix.sh globs
+# "$M"/*.out for the campaign sweep and writes its report to "$M"/sweep-gate.out, so on any re-run
+# the campaign gained PHANTOM findings - in a gate that raises INVALID and blocks a release.
+# Measured, not theorised: one real error became two. Detected by content, not filename, so it
+# holds however a caller names the file.
+_is_own_report() { head -c 4000 "$1" 2>/dev/null | grep -qa 'SWEEP-GATE-\(RESULT\|COVERAGE\|CENSUS\|SILENT\|LEDGER\|VERIFY\)'; }
+
+declared() { local vfile="${SWEEP_GATE_VARIANTS:-}" skipped=0
              for l in "$@"; do [ -f "$l" ] || { echo "sweep-gate: $l does not exist" >&2; return 2; }
+               _is_own_report "$l" && { skipped=$((skipped+1)); continue; }
                grep -ahE "$LEVELS" "$l" 2>/dev/null || true; done | message \
              | VFILE="$vfile" DUMPFILE="${SWEEP_GATE_DUMP:-}" python3 -c '
 import collections, os, sys
