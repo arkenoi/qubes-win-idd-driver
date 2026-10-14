@@ -248,8 +248,24 @@ if [ "${SILENT:-}" = 1 ]; then
     echo "SWEEP-GATE-SILENT graded_failures=$nfail measured=$((covered+silent)) left_a_declared_error=$covered silent=$silent no_log_of_their_own=$unmeas"
     if [ "$nfail" -eq 0 ]; then echo "  INCONCLUSIVE: the ledger records no failure, so the blind spot was not measured."; exit 2; fi
     if [ "$((covered+silent))" -eq 0 ]; then
-        echo "  INCONCLUSIVE: none of the $nfail recorded failures has a log named after it, so NOTHING was measured here - this is a limit of joining a verdict label to a file, not a result."
-        exit 2
+        # NO PER-LABEL JOIN, so fall back to the SUITE-LEVEL question, which is still answerable and
+        # still the one that matters: this run recorded N failures - do its logs carry ANY declared
+        # error at all? Measured on a real September run: 14 non-PASS verdicts, 7 log files, ZERO
+        # declared error or warning lines. A detector reading declared severity would have seen
+        # NOTHING on a run with 14 recorded failures. That is the blind spot, with a number on it.
+        anyerr=0
+        for l in "$@"; do
+            [ -f "$l" ] || continue
+            _is_own_report "$l" && continue
+            n=$(grep -acE "$LEVELS" "$l" 2>/dev/null || true); anyerr=$((anyerr + ${n:-0}))
+        done
+        echo "  no verdict label joins a log, so measured at SUITE level instead: $nfail recorded failure(s), $anyerr declared error/warning line(s) in the logs"
+        if [ "$anyerr" -eq 0 ]; then
+            echo "  SILENT RUN: a detector reading declared severity would have seen NOTHING here. Every one of those $nfail failures is invisible to it."
+            exit 1
+        fi
+        echo "  NOT SILENT: the run declared something, though which failure each line belongs to is not determinable from these names."
+        exit 0
     fi
     [ "$silent" -eq 0 ] && echo "  BOUNDED on what could be measured: all $covered of them left a declared error behind."
     exit 0

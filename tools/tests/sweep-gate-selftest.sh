@@ -262,5 +262,24 @@ else
   no "T16 it re-detects its own output ($n1 alone, $n2 with its report)" "$(printf '%s' "$again" | grep -a UNACCOUNTED | head -3)"
 fi
 
+# T17 - A SILENT RUN MUST BE CALLED SILENT. Where verdict labels do not name logs, the per-label
+# join cannot answer, but the SUITE-level question still can: this run recorded N failures - do its
+# logs declare anything at all? Measured on a real September campaign: 14 non-PASS verdicts, 7 log
+# files, ZERO declared error lines, i.e. a detector reading declared severity would have seen
+# nothing. The same verdicts through today's verdict library declare three lines naming all 11
+# failing labels, which is the blind spot being closed rather than described.
+mkdir -p "$T/sr"
+printf 'a|FAIL one\nb|FAIL two\nc|INSTRUMENT three\n' > "$T/sr/verdicts.txt"
+printf 'progress only, nothing declared\nstill nothing\n' > "$T/sr/suite.log"
+q=$(bash tools/sweep-gate.sh --silent-failures "$T/sr/verdicts.txt" "$T/sr/suite.log" 2>&1); qrc=$?
+printf '[ERROR] VERDICTS: PRODUCT GATE: 2 FAIL -> a b\n' >> "$T/sr/suite.log"
+r=$(bash tools/sweep-gate.sh --silent-failures "$T/sr/verdicts.txt" "$T/sr/suite.log" 2>&1); rrc=$?
+if [ $qrc -ne 0 ] && printf '%s' "$q" | grep -qa 'SILENT RUN' \
+   && [ $rrc -eq 0 ] && printf '%s' "$r" | grep -qa 'NOT SILENT'; then
+  ok "T17 a run with failures and no declared line is SILENT; one declared line makes it NOT SILENT"
+else
+  no "T17 suite-level silence wrong (silent rc=$qrc, declared rc=$rrc)" "$(printf '%s' "$q" | tail -1)"
+fi
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
