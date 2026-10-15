@@ -516,76 +516,68 @@ $script:QwtTaskEndedProbe = {
 # language. Test-QwtTaskEndedByShutdown takes [bool] of the answer, so no answer still reads as "not a
 # shutdown" there (the instance is reported); the session-end rule in ConvertFrom-QwtDeathEvent reports
 # on no answer as well. Missing data never buys silence.
-$script:QwtShutdownNearProbe = {
-    param([datetime]$at)
-    # THE WINDOW IS THE QUERY, not a record count plus arithmetic here. This body used to read the
-    # 20 newest 109/1074/6006 records and compare their TimeCreated to $at, and that was wrong twice.
-    #
-    # (1) KIND. $at is UTC - ConvertFrom-QwtDeathEvent parses the record's SystemTime with
-    # AdjustToUniversal - while Get-WinEvent's TimeCreated is LOCAL, and DateTime subtraction
-    # ignores Kind, so the difference came out as the UTC offset itself. MEASURED on win10-acc
-    # 2026-10-15: a User32 1074 1.4 s before the reap read as 10798 s against a [-30,180] window, so
-    # the probe could not return true for ANY shutdown on that guest, and dom0 was told "The PV NIC
-    # setup task failed" about an instance the shutdown had reaped - the exact report this whole path
-    # exists to prevent. It passed before only because our guests ran a UTC clock, where local ==
-    # UTC and the mistake cancelled: our own wrong clock convention was concealing it, and
-    # correcting the clock is what exposed it.
-    #
-    # (2) COUNT. One shutdown cycle writes several of these records - xenagent, shutdown.exe and
-    # winlogon each log a 1074, plus 109 and 6006 - so 20 is a few cycles, and in a multi-reboot
-    # install the shutdown that reaped the task scrolls out of reach while the reporter, itself
-    # reaped, reads the backlog on a later boot.
-    #
-    # StartTime/EndTime asks the log for the window the caller means and leaves the frame conversion
-    # to the cmdlet, so no cross-kind arithmetic is left here to get wrong. The ids are not
-    # provider-qualified, exactly as before.
-    $atU = $at
-    if ($at.Kind -eq [DateTimeKind]::Local) { $atU = $at.ToUniversalTime() }
-    elseif ($at.Kind -eq [DateTimeKind]::Unspecified) { $atU = [DateTime]::SpecifyKind($at, [DateTimeKind]::Utc) }  # every caller here builds UTC
-    # THE SHUTDOWN RECORD PRECEDES THE KILL, AND BY MINUTES. This window was [-30, +180] on the
-    # belief - written in this comment - that "the shutdown is recorded at or just after the
-    # termination it caused". That is backwards. Windows writes User32 1074 when a shutdown is
-    # INITIATED and then spends minutes stopping services, during which Task Scheduler terminates
-    # the tasks still running. MEASURED on win10-clean, acceptance run 38787325142, 2026-10-15:
-    #     22:55:53  1074  xenagent_9_1_0_0.exe initiated the shutdown
-    #     22:59:37  201+111  QubesAutologonGuard killed, 0x8007050B
-    #     22:59:38  201+111  QubesPvNicRearm    killed, 0x8007050B
-    # a gap of 224 s against a 30 s lookback, so BOTH were reported to the user as failed tasks on a
-    # clean install. The re-arm task makes it structural rather than unlucky: its only trigger IS
-    # User32 1074, so the shutdown record necessarily precedes its death by however long it ran.
-    # The lookback now spans a slow shutdown.
-    #
-    # AND A LONGER LOOKBACK MUST NOT EXCUSE A DEATH FROM AN EARLIER SHUTDOWN. If the guest booted
-    # between that shutdown record and this death, the shutdown is over and explains nothing - so a
-    # boot marker in between disqualifies it. That is what keeps this from becoming a blanket amnesty.
-    $filter = @{
-        LogName   = 'System'
-        ID        = 109, 1074, 6006
-        StartTime = $atU.AddSeconds(-900)
-        EndTime   = $atU.AddSeconds(180)
-    }
+# IS THE SYSTEM GOING DOWN? ASK THE SYSTEM. Not the event log, not a clock, not a window.
+#
+# This probe was wrong three times, and every time for the same reason: it tried to INFER a system
+# state by correlating records. (1) It compared Get-WinEvent's LOCAL TimeCreated against a UTC $at,
+# so on a dom0-local guest the difference was the zone offset - 10798 s against a [-30,180] window.
+# (2) It took the 20 newest records and hoped the right one was among them. (3) With both of those
+# fixed it still missed the measured case, because the window looked back 30 s while the shutdown
+# record precedes the kill by minutes - on win10-clean a User32 1074 at 22:55:53 and the kills at
+# 22:59:37/38, a gap of 224 s - and two tasks reaped by a shutdown were reported to the user as
+# FAILED on a clean install. Widening the window would only have moved the number.
+#
+# SM_SHUTTINGDOWN IS THE STATE ITSELF. GetSystemMetrics(0x2000) is the kernel answering "is a
+# shutdown in progress", with no timestamps, no record ids, no log retention and no clock involved -
+# so none of the three defects above can recur in it. The reporter is RUNNING when this matters:
+# on win10-clean it reported those deaths at 22:59:35/36, one second before the kills it was asked
+# about, and it was itself reaped moments later. guest/pvnic-selfprime.ps1 already relies on this
+# same metric for the same reason: "the process cannot choose its exit code once it is killed, so
+# it has to notice first".
+#
+# THREE ANSWERS, as before: $true (a shutdown is under way), $false (it is not), $null (the call
+# could not be made, so nothing is known). Callers take [bool] of the answer, so $null still reads
+# as "not a shutdown" and the instance is reported. Missing data never buys silence.
+if (-not ("QwtSd" -as [type])) {
     try {
-        $sd = Get-WinEvent -FilterHashtable $filter -MaxEvents 1 -ErrorAction Stop
-        if ($null -eq $sd) { return $false }
-        # 6005 (event log service started), 6009 (kernel version banner) and Kernel-General 12 are
-        # the boot markers; any of them between the shutdown record and $at means a boot intervened.
-        $sdU = $sd.TimeCreated.ToUniversalTime()
-        if ($sdU -lt $atU) {
-            try {
-                $boot = Get-WinEvent -FilterHashtable @{ LogName = 'System'; ID = 6005, 6009, 12
-                                                         StartTime = $sdU; EndTime = $atU } -MaxEvents 1 -ErrorAction Stop
-                if ($null -ne $boot) { return $false }   # the guest came back up in between
-            } catch {
-                if (-not ("$($_.FullyQualifiedErrorId)" -like 'NoMatchingEventsFound*' -or "$($_.Exception.Message)" -match 'No events were found')) { return $null }
-            }
-        }
-        return $true
-    } catch {
-        # "No events were found" is a read that found nothing - an answer, not a failure to read.
-        # Told apart by its error id, which does not change with the guest's language.
-        if ("$($_.FullyQualifiedErrorId)" -like 'NoMatchingEventsFound*' -or "$($_.Exception.Message)" -match 'No events were found') { return $false }
-        return $null
+        Add-Type -Namespace Qwt -Name Sd -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern int GetSystemMetrics(int nIndex);
+'@ -ErrorAction Stop
+    } catch { }
+}
+# The OS call is behind a script variable for the same reason the other probes are: so the offline
+# suite can drive the PROBE'S OWN BODY while stubbing only the thing that cannot run off Windows.
+# Stubbing the probe instead is what let three defects live inside it untested.
+$script:QwtShuttingDownMetric = { try { return [Qwt.Sd]::GetSystemMetrics(0x2000) } catch { return $null } }
+# AND THE SESSION THAT ALREADY ENDED. The live metric answers for deaths this process SEES during
+# the shutdown, which is the measured case - but the reporter is reaped too, so some records are
+# only read on the next boot, when the shutdown is over and the metric reads clear. Inferring that
+# from the log is what failed three times, so the session states it instead: while the metric is
+# set, the reporter drops a mark; the next start CONSUMES that mark and clears it. One file, one
+# writer, one reader, cleared on startup - no window to tune, no record to correlate, and nothing
+# left behind to excuse a later session.
+# It cannot become a blanket amnesty: Test-QwtTaskEndedByShutdown only consults this probe once the
+# RESULT CODE already names a shutdown, so an ordinary crash is reported whatever the mark says.
+$script:QwtShutdownMarkPath = { Join-Path ([IO.Path]::GetTempPath()) 'qwt-session-shutdown.mark' }
+$script:QwtPrevSessionEndedInShutdown = $false
+try {
+    $mp = & $script:QwtShutdownMarkPath
+    if (Test-Path $mp) {
+        $script:QwtPrevSessionEndedInShutdown = $true
+        Remove-Item $mp -Force -ErrorAction SilentlyContinue   # consumed on startup, as designed
     }
+} catch { }
+$script:QwtShutdownNearProbe = {
+    param([datetime]$at)   # kept for the caller's signature; a system state needs no instant
+    $v = & $script:QwtShuttingDownMetric
+    if ($null -eq $v) { return $null }     # the call could not be made: no answer, never silence
+    if ($v -ne 0) {
+        # record it for the run that reads this session's backlog after the reboot
+        try { Set-Content -Path (& $script:QwtShutdownMarkPath) -Value 'shutting down' -ErrorAction SilentlyContinue } catch { }
+        return $true
+    }
+    return $script:QwtPrevSessionEndedInShutdown
 }
 # TASK SCHEDULER RESULT CODES THAT NAME THE SHUTDOWN AS THE CAUSE. These are not inferred from an
 # absence - they are Task Scheduler stating why it could not run or finish the action:
@@ -594,7 +586,15 @@ $script:QwtShutdownNearProbe = {
 #   0x8007050B  win32 1291 - what a task instance killed by the shutdown leaves as its result. Seen
 #               on THREE unrelated tasks in the SAME SECOND (QubesPvNic, QwtModuleBases,
 #               QwtDeathReporter at 2026-10-08 00:20:17.9), which is the shutdown reaping them.
-$script:QwtShutdownResultCodes = @('0x8007045b', '0x8007050b', '2147943515', '2147943691')
+#   0xC000013A  STATUS_CONTROL_C_EXIT (3221225786) - what a CONSOLE process leaves when the
+#               shutdown sends it CTRL_SHUTDOWN_EVENT and it does not handle it. MEASURED on
+#               win10-reinstall, acceptance run 38787325142: \QubesWindowsUpdateScan ended
+#               0xC000013A and the user was told "The Windows Update scan task failed". It is the
+#               same event as the 0x8007050B pair on win10-clean wearing a different number, and it
+#               was on no list. Listing it suppresses NOTHING by itself - the caller still requires
+#               a shutdown record in the SAME BOOT SESSION - so a real Ctrl-C crash with no
+#               shutdown around it is still reported.
+$script:QwtShutdownResultCodes = @('0x8007045b', '0x8007050b', '0xc000013a', '2147943515', '2147943691', '3221225786')
 
 # RESULTS THAT A TASK USES TO SAY SOMETHING OTHER THAN "I FAILED. Owner, 2026-10-08: user-facing
 # error lines are top priority. A task's exit code is the only thing Task Scheduler records, so a
