@@ -282,8 +282,14 @@ DOM0_SEND_RE = re.compile(
     r"|NOTIFY one-shot|NOTIFY handoff")
 
 
+# A LINE THAT RECORDS A SEND HAVING HAPPENED, as opposed to one that configures the route or
+# launches the host. "sent ok=1" is the emitter reporting on ITS OWN action, which is why it is
+# written at INFO - and why the level of that line says nothing about what the user was shown.
+DOM0_SENT_RE = re.compile(r"\bsent\b|\bsend ok\b|user notification sent")
+
+
 def dom0_loud(files):
-    """Lines that are a dom0-bound send AND were written at W or E: LOUD, therefore P1.
+    """Lines that put one of our failures in front of the USER: LOUD, therefore P1.
 
     THE DICTIONARY IS A DELIBERATE EXCEPTION TO "NO VOCABULARY", AND A NARROW ONE. The rule this
     project fought for is that SEVERITY comes from the writer's declared level, never from guessing
@@ -300,21 +306,35 @@ def dom0_loud(files):
     A judge is not needed to combine them, and a release gate is better for not depending on one:
     this is deterministic, free, and gives the same answer twice.
 
-    It also fixes by construction the false positive a hand-written classifier produced here:
-    "NOTIFHOST launched via Task Scheduler ... args: ...notify-errors..." matches the dictionary but
-    is written at INFO, because it is a launch, not a failed send - so the declared level excludes
-    it without anyone deciding anything.
+    THE LEVEL GATE ALONE WAS A CATEGORY ERROR, AND IT MADE THIS P1 UNABLE TO FIRE. Requiring the
+    line's own level to be W or E conflates two different severities: the level of a SEND line
+    describes whether the send succeeded, while the thing that matters is what the user was shown.
+    An emitter that successfully delivers a failure toast correctly writes INFO - it is reporting
+    its own success. MEASURED 2026-10-15 on win10-clean: the guest logged
+        [INFO] NOTIFY one-shot: sent ok=1 summary=The PV NIC setup task failed
+    dom0 showed the user that a component of ours had failed, and this metric read 0 on that cell,
+    with the battery PASSING. A P1 whose max is 0 had never once been able to fire.
+    So a line that records a send HAVING HAPPENED counts whatever its level, and the level gate is
+    kept only for the other dom0-path lines, where it still does useful work.
+
+    The false positive the level gate used to exclude is excluded by token instead, which is where
+    it belonged: "NOTIFHOST launched via Task Scheduler ... args: ...notify-errors..." matches the
+    path dictionary but records a LAUNCH, not a send, so DOM0_SENT_RE does not match it.
     """
     loud = []
     for lf in files:
         for l in getattr(lf, "lines", []) or []:
-            if getattr(l, "level", None) not in ("W", "E"):
-                continue
             msg = getattr(l, "msg", "") or ""
             if "gate: enabled=" in msg or "source=default" in msg:
                 continue        # configures the route; sends nothing
-            if DOM0_SEND_RE.search(msg):
-                loud.append((lf.name, getattr(l, "level", "?"), msg))
+            if not DOM0_SEND_RE.search(msg):
+                continue        # not on the dom0 path at all
+            lvl = getattr(l, "level", None)
+            # EITHER the writer declared a failure on the dom0 path, OR the line records that a
+            # notification was actually SENT - the second is what the user saw, and its level
+            # belongs to the sender's own success, not to the payload.
+            if lvl in ("W", "E") or DOM0_SENT_RE.search(msg):
+                loud.append((lf.name, lvl or "?", msg))
     return loud
 
 

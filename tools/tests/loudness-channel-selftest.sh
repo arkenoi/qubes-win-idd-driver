@@ -61,11 +61,20 @@ cat "$T/out.txt" | sed 's/^/     /' | head -9
 
 g(){ grep -a "^$1 " "$T/out.txt" | head -1 | cut -d' ' -f2-; }
 
-# A dom0-path line its own writer declared W or E. Both facts come from the right place: the level
-# from the writer, the path from OUR OWN protocol tokens - neither is guessed, and no judge is
-# needed to combine them.
-ck "a dom0-path line declared W or E is LOUD"             "4" "$(g LOUD)"
-ck "a SUCCESSFUL send is not loud"                        "1" "$(g SUCCESS_EXCLUDED)"
+# WHAT THIS SUITE USED TO ASSERT, AND WHY IT HELD THE DEFECT IN PLACE. It required a dom0-path
+# line to be declared W or E, and it asserted that a SUCCESSFUL send was NOT loud - with
+# "NOTIFY one-shot: sent ok=1 summary=hello" at level I sitting in the fixture above as the case it
+# excluded. That is a category error: the level of a SEND line describes whether the send
+# succeeded, not what the user was shown. An emitter that successfully delivers a failure toast
+# correctly writes INFO, because it is reporting its own success.
+# MEASURED 2026-10-15 on win10-clean: the guest logged
+#     [INFO] NOTIFY one-shot: sent ok=1 summary=The PV NIC setup task failed
+# dom0 put that in front of the user, dom0_loud_failures read 0 for that cell, and the battery
+# PASSED. A P1 with max 0 had never once been able to fire - and this suite was green throughout,
+# because it asserted the exclusion AND asserted the source still contained the level gate.
+# A test that pins a belief into the code cannot discover the belief is wrong.
+ck "a dom0-path line declared W or E is LOUD"             "5" "$(g LOUD)"
+ck "a SUCCESSFUL send IS loud - the user saw it"          "0" "$(g SUCCESS_EXCLUDED)"
 # this one fooled a hand-written classifier: it matches the dictionary (its args name a
 # notify-errors path) but is written at INFO, because it is a launch, not a failed send.
 ck "a launch line that merely names the path is not loud" "1" "$(g LAUNCH_EXCLUDED)"
@@ -77,9 +86,37 @@ ck "and it breaches"                                      "1" "$(g BREACHES)"
 # A release gate should give the same answer twice and cost nothing to run, so no judge sits in
 # this path. The dictionary is the sanctioned exception to "no vocabulary": it decides the PATH,
 # never the severity, which still comes from the writer's declared level.
-ck "no Jev item kind for loudness remains"       "0" "$(grep -c 'kind.\] == .loud.' tools/log-sweep.py)"
-ck "the dom0 token dictionary still exists"      "1" "$(grep -c '^DOM0_SEND_RE' tools/log-sweep.py)"
-ck "severity is never taken from the dictionary" "1" "$(awk '/^def dom0_loud/,/^    return loud$/' tools/log-sweep.py | grep -c 'not in ("W", "E")')"
+#
+# NOTHING BELOW ASSERTS ON THE SOURCE TEXT. Four checks here used to grep log-sweep.py for the
+# expressions the implementation happened to contain, which is how the previous version of this
+# suite held the defect in place: it required the source to still say `lvl in ("W", "E")`, so the
+# code could not be corrected without the test going red. The two properties those greps claimed
+# are already asserted by the fixture above, as behaviour: LOUD=5 counts the W-level
+# "NOTIFY handoff" line, which IS a dom0-path line that is not a send, so the level still
+# qualifies those; and the same 5 counts the INFO "sent ok=1" line, so a send is recognised on its
+# own. A property worth protecting is worth planting a line for.
+
+# SEEN TO FAIL, because this check never had been. Put the level gate back as the ONLY filter and
+# the INFO send must stop counting - that is the defect this suite used to require.
+python3 - <<'PYDEF' > "$T/defect.txt" 2>&1
+import importlib.util, re, sys
+src = open("tools/log-sweep.py", encoding="utf-8").read()
+src = src.replace('if lvl in ("W", "E") or DOM0_SENT_RE.search(msg):', 'if lvl in ("W", "E"):')
+ns = {}
+spec = importlib.util.spec_from_loader("lsdef", loader=None)
+m = importlib.util.module_from_spec(spec)
+try:
+    exec(compile(src, "lsdef", "exec"), m.__dict__)
+except SystemExit:
+    pass
+class L:
+    def __init__(s, msg, lvl): s.msg, s.level = msg, lvl
+class F:
+    def __init__(s, name, pairs): s.name, s.lines = name, [L(a, b) for a, b in pairs]
+f = F("bridge.log", [("NOTIFY one-shot: sent ok=1 summary=The PV NIC setup task failed", "I")])
+print("DEFECT_COUNTED", len(m.dom0_loud([f])))
+PYDEF
+ck "with the level gate back, the INFO send is missed" "DEFECT_COUNTED 0" "$(grep -a '^DEFECT_COUNTED' "$T/defect.txt")"
 
 echo "loudness-channel-selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
