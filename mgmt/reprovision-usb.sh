@@ -75,6 +75,15 @@ qvm-volume extend "$VM:root" 80GiB
 # typically enough").
 qvm-volume extend "$VM:private" 20GiB || { log "FAIL: could not extend $VM:private"; exit 1; }
 qvm-features "$VM" os Windows
+# AND `timezone=localtime` BEFORE THE GUEST EVER BOOTS. Xen reads this at DOMAIN CREATION and puts
+# dom0's LOCAL time on the emulated clock; absent, it defaults to true UTC. dom0 sets it by itself
+# for any Windows qube, but only once the GUEST has reported os+qrexec - which cannot happen before
+# the first install - so a qube created without it runs its whole Windows Setup on a true-UTC clock
+# while the answer file gives the guest dom0's zone, i.e. hours behind real time, and then has the
+# clock change under it one boot after the install. Setting it here means the clock holds dom0 local
+# from the first instant of Setup onward, Windows reads it as local (its default; we declare
+# nothing), and the guest's zone is dom0's throughout. One configuration, nothing to converge.
+qvm-features "$VM" timezone localtime
 qvm-tags "$VM" add win-idd-testbed
 
 # The stick reaches the guest as an emulated USB mass storage device: the PV block device is

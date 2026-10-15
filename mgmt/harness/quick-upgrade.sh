@@ -310,20 +310,18 @@ qvm-features "$SUBJECT" os Windows
 # and drvinst blocked for 25 minutes. The golden it was cloned from had timezone=localtime all
 # along; this create path copied the VOLUMES and not the features, so the subject differed from
 # its own golden in exactly the variable that decides the failure.
-# THE QUBE'S `timezone` FEATURE IS NOT OURS TO TOUCH - NOT EVEN TO UNSET IT. It decides what the
-# qube's RTC holds: undefined means true UTC (Xen's default), `localtime` means DOM0 LOCAL. dom0
-# sets `localtime` for every os=Windows qube the moment the GUEST reports itself through
-# qubes.NotifyTools, so a user's Windows qube HAS it - and unsetting it here put the rig in the one
-# configuration where a wrong RealTimeIsUniversal is invisible (Jev: harness_clear_hides_it 0.84).
-# The create path leaves it alone, clock_feature_report records what the cell ran under, and the
-# PRODUCT derives the matching registry value. See docs/ADR-clock.md.
-# THE REST OF THE GOLDEN'S FEATURES - the same list mgmt/clone-guest.sh copies. The timezone fix
-# above closed one feature of this gap and left the others: measured 2026-09-28, every subject this
-# path created (win11de-v5, -v7, -sub, -bq ...) carried os+timezone only, while the golden carries
-# gui=1, qrexec=1, stubdom-qrexec=1 and more. Without qrexec=1 dom0 does not hold qvm-start until
-# the guest's qrexec agent has connected, so every probe this harness issues during the boot
-# queues in dom0 and they all land in the same second the agent comes up - a burst at qrexec-up,
-# the onset shape of the stall under investigation - on a configuration no real guest has.
+# SET `timezone=localtime` AT CREATE TIME, BEFORE THE GUEST EVER BOOTS. Xen reads this at DOMAIN
+# CREATION and puts dom0's LOCAL time on the emulated clock; absent, it defaults to true UTC. dom0
+# sets it by itself for any Windows qube - but only once the GUEST has reported os+qrexec, which
+# cannot happen before the first install, so a qube created without it spends its whole install on a
+# true-UTC clock and then has the clock change under it one boot later. That transition is the
+# ENTIRE source of clock_boot_correction_s = 10800: one boot reading a UTC clock through dom0's
+# zone (3 h behind), the next reading a dom0-local clock through a convention latched from the
+# first (3 h ahead). Setting it here removes the window instead of converging out of it - the clock
+# holds dom0 local on every boot, Windows reads it as local on every boot (its default; we declare
+# nothing), and the guest's zone is dom0's on every boot. Nothing to settle.
+# This is also what a user's qube ends up with, so it is the configuration to test, not a shortcut.
+qvm-features "$SUBJECT" timezone localtime >/dev/null 2>&1 || true
 python3 - "$GOLDEN" "$SUBJECT" <<'PY' || finish 1 "TERMINAL: could not copy the golden's features to $SUBJECT"
 import sys, qubesadmin
 app = qubesadmin.Qubes(); src = app.domains[sys.argv[1]]; dst = app.domains[sys.argv[2]]

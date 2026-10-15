@@ -218,178 +218,40 @@ raise SystemExit(bad)
 PYPROVE
 fi
 
-# ---- THE RTC CONVENTION IS A PAIR, NOT A CONSTANT ----------------------------------------------
-# This block has now been inverted three times in one day, because each version asserted whichever
-# constant I believed at the time. The constant is not the invariant. The invariant is:
-#
-#   * the INSTALLER picks an OPENING value, DERIVED from whether QWT is already installed. A qube
-#     being cleanly installed has no `timezone` feature yet - qubes-core-admin gives it one only
-#     once it knows the guest is Windows with working qrexec (qubes/ext/windows.py:
-#     `if guest_os == "Windows" and qrexec:`), which it learns from qubes.NotifyTools, which OUR
-#     agent calls when it starts. So no QWT means the RTC still holds TRUE UTC, and reading that as
-#     local puts the guest BEHIND real time - the one direction that breaks a driver install
-#     (0x800B0101, drvinst at 0.125 s of CPU for 25 minutes, measured 2026-09-25). QWT present
-#     means the guest HAS reported, so the RTC holds dom0 local and Windows' default is right.
-#     Neither derivation is provable from inside the guest (Jev ~0.60 for both available ones),
-#     which is exactly why it is an opening value and not a verdict.
-#   * the PER-BOOT TASK derives the convention from dom0's real UTC and FLIPS that value when it no
-#     longer fits, because once dom0 has set `localtime` the RTC holds dom0 local and 1 puts the
-#     guest dom0's whole offset AHEAD - measured 2026-10-15 at exactly 10800 s on a live guest.
-#
-# Either half alone is a shipped defect: 1 without the convergence is the +3 h we shipped, and 0 in
-# the installer reintroduces the 25-minute hang (Jev scored that shape at 0.88 for the feature-unset
-# qube). So this asserts BOTH, and that neither place decides alone.
-# THE STAGED TREE IS NOT THE PRODUCT, AND MUST NOT GATE IT. mgmt/prime-jobs/<job>/setup is where
-# prime-run COPIES the payload it was handed (`--payload`), so it holds whatever release was last
-# installed on the rig - by design often an OLDER one, since upgrade cells install a previous
-# version on purpose. Gating today's product shape on it fails on any machine that has primed an
-# older package, which is noise rather than signal, and in CI the directory does not exist at all so
-# the check was silently absent exactly where it would have mattered. The product is packaging/.
-for f in packaging/setup/Install-QwtImproved.ps1; do
-  b=$(echo "$f" | cut -d/ -f1)
-  [ -f "$f" ] || { echo "  FAIL rtc($b): the product installer is missing"; fail=1; continue; }
-  if command grep -q 'function Set-RtcConventionForNextBoot' "$f"; then echo "  OK   rtc($b) declares the RTC convention"
-  else echo "  FAIL rtc($b): the installer has no RTC convention step"; fail=1; fi
-  if tr -d '\r' < "$f" | sed 's/^ *#.*//' | command grep -cE 'New-ItemProperty[^|]*RealTimeIsUniversal' | command grep -q '^1$'; then
-    echo "  OK   rtc($b) exactly one writer"
-  else echo "  FAIL rtc($b): not exactly one RealTimeIsUniversal writer"; fail=1; fi
-  if tr -d '\r' < "$f" | command grep -qE '^ *\$fixed = Set-RtcConventionForNextBoot *$'; then
-    echo "  OK   rtc($b) reached from the clock gate's failure branch, by its return value"
-  else echo "  FAIL rtc($b): the convention is not written in response to the measurement"; fail=1; fi
-  if tr -d '\r' < "$f" | awk '/function Set-RtcConventionForNextBoot/,/^}$/' | command grep -q 'already 1'; then
-    echo "  OK   rtc($b) idempotent, and says so when the RTC is not the fault"
-  else echo "  FAIL rtc($b): it would rewrite a value that is already set"; fail=1; fi
-  if tr -d '\r' < "$f" | awk '/function Set-RtcConventionForNextBoot/,/^}$/' | command grep -q 'sync-clock-from-dom0'; then
-    echo "  OK   rtc($b) names the convergence that makes the guess safe"
-  else echo "  FAIL rtc($b): it guesses without naming what corrects it later"; fail=1; fi
-  if tr -d '\r' < "$f" | awk '/function Set-RtcConventionForNextBoot/,/^}$/' | command grep -q 'did not read back as'; then echo "  OK   rtc($b) reads the value back"
-  else echo "  FAIL rtc($b): the write is assumed to have worked"; fail=1; fi
-  if tr -d '\r' < "$f" | awk '/function Set-RtcConventionForNextBoot/,/^}$/' | command grep -q 'Fail '; then
-    echo "  FAIL rtc($b): a failed write aborts the install - that is not what this breaks"; fail=1
-  else echo "  OK   rtc($b) reported, never fatal"; fi
-done
-# THE LATE STEP SETS THE ZONE, AND MUST NOT PREDICT THE CONVENTION. Its first version wrote
-# RealTimeIsUniversal=0 for the next boot, reasoning that dom0 would have set `timezone=localtime`
-# by then. That is a prediction about a domain creation that has not happened: a subject can be
-# CREATED with the feature unset - the acceptance harness does exactly that - so the next boot can
-# still have a true-UTC RTC, and 0 then subtracts the guest's offset. Only a MEASUREMENT can say
-# which convention applies, and the per-boot task makes it.
-# The ZONE is different and is set here unconditionally: it is correct under either convention, it
-# is what makes the guest show the user's own wall clock, and the pre-flight cannot do it because
-# qubesdb is not up that early (measured on a fresh install: "qubesdb is not readable yet").
-# THE STAGED TREE IS NOT THE PRODUCT, AND MUST NOT GATE IT. mgmt/prime-jobs/<job>/setup is where
-# prime-run COPIES the payload it was handed (`--payload`), so it holds whatever release was last
-# installed on the rig - by design often an OLDER one, since upgrade cells install a previous
-# version on purpose. Gating today's product shape on it fails on any machine that has primed an
-# older package, which is noise rather than signal, and in CI the directory does not exist at all so
-# the check was silently absent exactly where it would have mattered. The product is packaging/.
-for f in packaging/setup/Install-QwtImproved.ps1; do
-  b=$(echo "$f" | cut -d/ -f1)
-  [ -f "$f" ] || { echo "  FAIL late($b): the product installer is missing"; fail=1; continue; }
-  if command grep -q 'function Set-GuestClockForNextBoot' "$f"; then echo "  OK   late($b) a late zone step exists"
-  else echo "  FAIL late($b): nothing sets the zone where qubesdb is readable"; fail=1; fi
-  # COMMENTS STRIPPED FIRST. The block's own prose explains why it must NOT write the
-  # convention, so grepping raw text finds that explanation and calls it a write - the same
-  # mistake this repo's checks have made repeatedly. The prose check below uses raw text.
-  blkraw=$(tr -d '\r' < "$f" | awk '/function Set-GuestClockForNextBoot/,/^}$/')
-  blk=$(printf '%s' "$blkraw" | sed 's/#.*//')
-  printf '%s' "$blk" | command grep -q 'Set-GuestTimeZoneFromHost' \
-    && echo "  OK   late($b) retries the zone where qubesdb IS readable" \
-    || { echo "  FAIL late($b): it does not retry the zone"; fail=1; }
-  # A WRITE, not a mention: the step's own log line says the per-boot task "sets
-  # RealTimeIsUniversal from what it finds", and matching that string called the message a write.
-  printf '%s' "$blk" | command grep -qE 'New-ItemProperty|Set-ItemProperty|reg add' \
-    && { echo "  FAIL late($b): it writes the convention from a PREDICTION - only a measurement may set it"; fail=1; } \
-    || echo "  OK   late($b) never writes the convention - that is the per-boot task's measurement"
-  printf '%s' "$blk" | command grep -q 'per-boot task' \
-    && echo "  OK   late($b) names what does decide it" \
-    || { echo "  FAIL late($b): it does not say where the convention comes from"; fail=1; }
-  [ "$(sed 's/#.*//' "$f" | command grep -c 'Set-GuestClockForNextBoot')" -ge 2 ] \
-    && echo "  OK   late($b) is called, not just defined" \
-    || { echo "  FAIL late($b): defined and never called"; fail=1; }
-  # DOM0'S ZONE IS PROPAGATED, EVEN OVER ONE THE GUEST HELD - and this check asserted the opposite
-  # until the scope was settled. A `timezone=localtime` qube's clock holds dom0's LOCAL time and
-  # carries no zone label, so a guest on any other zone computes a UTC wrong by the difference, on
-  # every boot, and no RealTimeIsUniversal value corrects it. Preserving such a zone preserves a
-  # broken clock while looking like respect for a preference the system cannot honour. A guest that
-  # needs its own zone requires a UTC hardware clock - a separate feature, not this release.
-  # Jev, re-scored under that premise: propagate 0.78, and name what was replaced 0.97.
-  tzblk=$(tr -d '\r' < "$f" | awk '/function Set-GuestTimeZoneFromHost/,/^}$/')
-  if printf '%s' "$tzblk" | command grep -q "replacing this guest's timezone"; then
-    echo "  OK   late($b) a differing guest timezone is REPLACED with dom0's"
-  else echo "  FAIL late($b): it does not propagate dom0's zone over a differing one"; fail=1; fi
-  # the old skip must be GONE: that branch must not return before tzutil runs
-  if printf '%s' "$tzblk" | awk "/notin @\('UTC', ''\)/,/^    \}/" | command grep -q 'return \$false'; then
-    echo "  FAIL late($b): the old skip is still there - a differing zone is preserved, and so is its wrong clock"; fail=1
-  else echo "  OK   late($b) the skip is gone; the override is logged, not silent"; fi
-  # THE OVERRIDE IS REPORTED TO THE USER, AS AN ERROR. Replacing a zone someone set is the system
-  # overruling a deliberate choice; doing it silently is the kind of correction this project keeps
-  # having to undo. It cannot happen on a normal install - our images ship at UTC - so reaching it
-  # means the user has stepped into a configuration this release does not support, and ACTION is the
-  # severity that says so. The text must be TEMPLATED: the notify route refuses a value read from
-  # the system (docs/DESIGN-error-notify.md 8), and both zone names were read from the system.
-  notifyblk=$(tr -d '\r' < "$f" | awk '/TZ-OVERRIDE-NOTIFY-BEGIN/,/TZ-OVERRIDE-NOTIFY-END/')
-  if [ -n "$notifyblk" ]; then echo "  OK   late($b) the override has a dom0 notification"
-  else echo "  FAIL late($b): the override is logged but never reaches the user"; fail=1; fi
-  printf '%s' "$notifyblk" | command grep -q "Severity ACTION" \
-    && echo "  OK   late($b) reported at ACTION - an unsupported configuration, not a courtesy note" \
-    || { echo "  FAIL late($b): the override is not reported at ACTION severity"; fail=1; }
-  printf '%s' "$notifyblk" | command grep -q "QrexecAgent" \
-    && echo "  OK   late($b) guarded on QrexecAgent, with the no-channel case logged" \
-    || { echo "  FAIL late($b): it would notify without a channel to notify over"; fail=1; }
-  # the zone NAMES must not travel in the notification - they are values read from the system
-  if printf '%s' "$notifyblk" | command grep -E -q 'Send-QwtError|-Header|-Next|-Cause' && \
-     printf '%s' "$notifyblk" | command grep -E 'Send-QwtError|-Header |-Next |-Cause ' | command grep -qE '\$cur|\$want|\$iana'; then
-    echo "  FAIL late($b): the notification embeds a zone read from the system - the route refuses that"; fail=1
-  else echo "  OK   late($b) the notification text is templated; the zone names stay in the log and RESULT"; fi
-  printf '%s' "$tzblk" | command grep -q 'Result.detail.timezone_overridden' \
-    && echo "  OK   late($b) and the RESULT carries the detail for dom0" \
-    || { echo "  FAIL late($b): dom0 gets no machine-readable record of the override"; fail=1; }
-  printf '%s' "$tzblk" | command grep -q 'does not support' \
-    && echo "  OK   late($b) and it names the UTC-clock case as out of scope" \
-    || { echo "  FAIL late($b): it does not say why the guest cannot keep its zone"; fail=1; }
-done
-
-# THE SECOND HALF MUST EXIST, or the constant above is the +3 h defect on every boot.
+# ---- THERE IS NO RTC CONVENTION TO SET, AND NOTHING SETS ONE ----------------------------------
+# This region asserted five different shapes of a RealTimeIsUniversal write over two weeks - a
+# constant, a derived value, a value written only on this gate's failure branch, each with a
+# per-boot task converging it. All of it was machinery for a window that only existed because the
+# qube's `timezone` feature is set LATE: dom0 sets it when the GUEST reports os+qrexec, which cannot
+# happen before the first install. The window is removed instead - every path that creates a guest
+# sets `timezone=localtime` before its first boot - so the clock holds dom0 local time on every
+# boot, Windows reads it as local (its default), and the guest's zone is dom0's. Nothing to declare.
+# The absence is asserted in full by tools/tests/rtc-utc-selftest.sh; here we only check that this
+# installer, whose gate this suite is about, writes none and names the real fix when it refuses.
+I=packaging/setup/Install-QwtImproved.ps1
+W='New-ItemProperty[^|]*RealTimeIsUniversal|Set-ItemProperty[^|]*RealTimeIsUniversal|reg(\.exe)? +add[^|]*RealTimeIsUniversal'
+if [ "$(tr -d '\r' < "$I" | sed 's/^ *#.*//' | command grep -cE "$W")" = 0 ]; then
+  echo "  OK   rtc: the installer sets no hardware-clock convention"
+else echo "  FAIL rtc: the installer writes RealTimeIsUniversal - nothing should"; fail=1; fi
+if tr -d '\r' < "$I" | awk '/function Assert-Stage1Preflight/,/^}$/' | command grep -q 'qvm-features <vm> timezone localtime'; then
+  echo "  OK   rtc: the clock refusal names the qube feature as the fix"
+else echo "  FAIL rtc: the refusal does not name 'qvm-features <vm> timezone localtime'"; fail=1; fi
 C=guest/sync-clock-from-dom0.ps1
-if command grep -q 'CLOCKCONV' "$C"; then echo "  OK   rtc(boot) the per-boot task derives the convention"
-else echo "  FAIL rtc(boot): nothing converges the value after dom0 sets the timezone feature"; fail=1; fi
-if awk '/CLOCKCONV the RTC fits NEITHER/,0' "$C" | command grep -q 'diagnose, do not guess'; then
-  echo "  OK   rtc(boot) an RTC fitting neither convention is an anomaly, not a guess"
-else echo "  FAIL rtc(boot): an unexplainable RTC would be guessed at"; fail=1; fi
-if command grep -qE 'Value \$want' "$C"; then echo "  OK   rtc(boot) it writes the DERIVED value, not a constant"
-else echo "  FAIL rtc(boot): the per-boot task writes a constant too"; fail=1; fi
-# THE UNATTENDED IMAGES MUST DECLARE NOTHING. They used to write 1 in the specialize pass, and that
-# is what made the rig unable to measure its own product: the value was baked into every golden and
-# inherited by every clone, so whatever the installer and the per-boot task derived was pre-empted.
-# Windows' own default - the value absent, the RTC read as LOCAL time - is already the half that
-# PAIRS with the `timezone=localtime` Qubes gives every Windows qube. An image that declares a
-# convention is deciding something only a measurement can decide.
-# XML COMMENTS ARE STRIPPED FIRST, because each of these files now EXPLAINS the write it used to
-# carry - and a raw grep finds that explanation and calls it a write. Stripping the prose and then
-# matching ANY mention is stronger than matching one spelling of `reg add`: it fails whatever way a
-# future edit reintroduces the value.
+if [ "$(tr -d '\r' < "$C" | sed 's/^ *#.*//' | command grep -cE "$W")" = 0 ]; then
+  echo "  OK   rtc(boot): the per-boot task sets no convention either - it only pulls the clock"
+else echo "  FAIL rtc(boot): the per-boot task writes a convention"; fail=1; fi
+
+# THE ANSWER FILES PIN A REAL ZONE. The clock holds dom0 LOCAL time from the first instant of Setup
+# (the feature is set at create time), so the zone that makes the arithmetic right is dom0's, not
+# UTC. This check asserted the opposite for one afternoon, while the feature was still set late.
 for x in mgmt/autounattend*.xml; do
   [ -f "$x" ] || continue
-  body=$(python3 -c "import re,sys;print(re.sub(r'<!--.*?-->','',open(sys.argv[1],encoding='utf-8').read(),flags=re.S))" "$x")
-  if printf '%s' "$body" | command grep -q 'RealTimeIsUniversal'; then
-    echo "  FAIL rtc($(basename "$x")): the image declares an RTC convention - that is the product's to derive"; fail=1
-  else echo "  OK   rtc($(basename "$x")) declares no convention; Windows' default pairs with localtime"
-  fi
+  b=$(basename "$x"); z=$(command grep -aoE '<TimeZone>[^<]*' "$x" | head -1 | cut -d'>' -f2)
+  if [ "$z" = "UTC" ]; then
+    echo "  FAIL tz($b): pins UTC, but this qube's clock holds dom0 local time from its first boot"; fail=1
+  elif [ -n "$z" ]; then echo "  OK   tz($b) pins a real zone ('$z')"
+  else echo "  FAIL tz($b): no TimeZone element"; fail=1; fi
 done
-# THE ORDER IS INVERTED ON PURPOSE, AND THAT IS THE ASSERTION. The convention used to be declared
-# BEFORE the gate - unconditionally, on every install - and this check used to require exactly that.
-# The normal configuration is already correct, so nothing may be declared until a measurement says
-# otherwise: the gate runs FIRST and the convention is written only from its failure branch. A write
-# that still came first would be the unconditional write this release removed.
-gate_line=$(command grep -n "Assert-PayloadClockSane -Root .Root -Why 'stage 1 pre-flight'" packaging/setup/Install-QwtImproved.ps1 | head -1 | cut -d: -f1)
-rtc_line=$(command grep -nE '^ *\$fixed = Set-RtcConventionForNextBoot *$' packaging/setup/Install-QwtImproved.ps1 | head -1 | cut -d: -f1)
-ncalls=$(command grep -cE '^ *\$?[a-z]* *=? *Set-RtcConventionForNextBoot *$' packaging/setup/Install-QwtImproved.ps1)
-if [ -n "$gate_line" ] && [ -n "$rtc_line" ] && [ "$gate_line" -lt "$rtc_line" ] && [ "$ncalls" = 1 ]; then
-  echo "  OK   the clock is MEASURED (line $gate_line) before the convention is written (line $rtc_line), once"
-else
-  echo "  FAIL the convention is not written from the gate's verdict (gate=${gate_line:-none} write=${rtc_line:-none} calls=$ncalls)"; fail=1
-fi
 
 # ---- THE OS APPLIES THE ZONE -------------------------------------------------------------------
 # Setting the RTC convention fixes the guest's notion of UTC. It still has to DISPLAY the user's
@@ -417,28 +279,6 @@ for pair in "Europe/Sofia:FLE Standard Time" "Europe/Berlin:W. Europe Standard T
   ia=${pair%%:*}; wz=${pair#*:}
   if tr -d '\r' < "$I" | command grep -q "'$ia'='$wz'"; then echo "  OK   tz: $ia -> $wz"
   else echo "  FAIL tz: $ia is not mapped to '$wz'"; fail=1; fi
-done
-# THE SETUP WINDOW MUST PIN A ZERO-OFFSET ZONE, and this check asserted the opposite for a day.
-# The zone and the RTC convention are two halves of one sum: Windows computes
-# guest_UTC = RTC_content - guest_zone_offset. During Setup the qube has no `timezone` feature yet,
-# so Xen gives the RTC its default and it holds TRUE UTC - and the only zone that makes that sum
-# come out right is one whose offset is ZERO. A non-zero zone there puts the guest BEHIND real time,
-# which is the direction that makes a CI-minted catalog look not-yet-valid (0x800B0101, 25 minutes).
-# 'FLE Standard Time' worked for exactly one day, and only because the same commit also forced
-# RealTimeIsUniversal=1; removing that half and keeping this one is how a pair becomes a defect.
-# The REAL zone is set by the installer from /qubes-timezone at the end of the install, so every
-# boot the sweep measures still runs with a non-zero offset (Jev: coverage_after_the_change 0.82).
-# THE GERMAN FILE IS A DOCUMENTED EXCEPTION: it is the reproduction environment for the hang, and
-# the only rig image that enters the Setup window with a non-zero offset. Nothing in the gate matrix
-# clean-installs from it.
-for x in mgmt/autounattend*.xml; do
-  [ -f "$x" ] || continue
-  b=$(basename "$x"); z=$(command grep -aoE '<TimeZone>[^<]*' "$x" | head -1 | cut -d'>' -f2)
-  case "$b" in
-    *-de.xml) echo "  OK   tz($b) keeps its own zone '$z' - the documented reproduction environment" ;;
-    *) if [ "$z" = "UTC" ]; then echo "  OK   tz($b) pins a zero-offset zone for the Setup window"
-       else echo "  FAIL tz($b): Setup zone '$z' has a non-zero offset while the RTC holds true UTC - this guest installs BEHIND real time and the catalog gate refuses it"; fail=1; fi ;;
-  esac
 done
 # and the late transition must exist, or the guest never reaches dom0's zone at all
 if tr -d '\r' < "$I" | awk '/function Set-GuestClockForNextBoot/,/^}$/' | command grep -q 'Set-GuestTimeZoneFromHost'; then

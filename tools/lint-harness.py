@@ -1468,73 +1468,36 @@ def l25_product_must_not_branch_on_localised_text() -> None:
                     "another; branch on the numeric code and keep the sentence for the log")
 
 
-def _write_is_gate_triggered(body: str) -> bool:
-    """The installer's literal write is legitimate only when it is REACHED FROM A MEASUREMENT.
+def l26_no_hardware_clock_convention_is_written() -> None:
+    """RULE: NOTHING WRITES RealTimeIsUniversal, AND NOTHING CLEARS A QUBE'S `timezone` FEATURE.
 
-    Structural, not textual: the payload-clock gate must be evaluated, the single call to the
-    convention-setter must come AFTER it, and the write itself must live inside that setter. Any
-    other arrangement is an unconditional write, which is what shipped the +3 h."""
-    lines = body.splitlines()
-    gate = call = None
-    for i, ln in enumerate(lines):
-        if gate is None and "Assert-PayloadClockSane" in ln and "stage 1 pre-flight" in ln:
-            gate = i
-        if re.match(r"\s*\$\w+ = Set-RtcConventionForNextBoot\s*$", ln):
-            if call is not None:
-                return False                      # more than one call site
-            call = i
-    if gate is None or call is None or call <= gate:
-        return False
-    # and the write must be inside the setter, not loose in the script
-    inside, fn = False, False
-    for ln in lines:
-        if re.match(r"^function Set-RtcConventionForNextBoot \{", ln):
-            fn = True
-        elif fn and re.match(r"^\}", ln):
-            fn = False
-        if "RealTimeIsUniversal" in ln and re.search(r"New-ItemProperty|Set-ItemProperty|reg(\.exe)? +add", ln):
-            if not fn:
-                return False
-            inside = True
-    return inside
+    Windows reads a hardware clock as LOCAL time - always, unless RealTimeIsUniversal says otherwise
+    - and a Qubes qube with `timezone=localtime` presents DOM0'S LOCAL time on that clock. They
+    already agree. The guest needs one thing on top: dom0's zone, which the installer reads from
+    /qubes-timezone. Stock QWT sets neither a zone nor a convention; its whole time handling is
+    update-time.bat, one line asking dom0 for the date.
 
-def l26_rtc_convention_has_exactly_two_derived_writers() -> None:
-    """RULE: ONLY THE PRODUCT MAY DECLARE THE RTC CONVENTION, AND ONLY FROM A MEASUREMENT.
+    THE VALUE WAS WRITTEN IN FIVE DIFFERENT SHAPES OVER TWO WEEKS - forced in four answer files,
+    baked into a golden, written by the harness after every install, written as a constant by the
+    installer, then derived by it, then latched by a per-boot task from a witness - and every one of
+    them was machinery for a window that only existed because the qube's `timezone` feature is set
+    LATE. dom0 sets it when the GUEST reports os+qrexec, which cannot happen before the first
+    install, so a qube created without it runs its whole install on a true-UTC clock and then has the
+    clock change under it a boot later: one boot three hours behind, the next three hours ahead,
+    clock_boot_correction_s = 10800 against a max of 60.
 
-    `RealTimeIsUniversal` tells Windows whether to read the emulated RTC as UTC (1) or as local
-    time (absent/0), and it is consulted only at boot. Which value is correct is a property of the
-    QUBE, not of Windows: qubes-core-admin gives a qube `timezone=localtime` - making Xen present
-    the RTC as DOM0 LOCAL time - once the GUEST reports os=Windows+qrexec through qubes.NotifyTools,
-    and before that the RTC holds true UTC. No constant is right in both windows.
-
-    THIS RULE EXISTS BECAUSE PROSE DID NOT HOLD. The value was forced in four answer files, in a
-    golden-baking script, and by the harness itself (`w_rtc_utc`, called from prime-run the moment
-    qrexec answered). The gate therefore measured the forcing instead of the product: the installer
-    logged `set to 0 for the next boot` while every following boot ran with 1, three hours out, for
-    weeks - clock_boot_correction_s = 10800 against a max of 60. Each layer had a comment saying why
-    it was right.
-
-    So: exactly two writers, both in the product, both writing a VARIABLE. The installer picks an
-    opening value from a measurement (is QWT installed?) and the per-boot task converges it from an
-    independent witness. An image, a golden, a harness or a test fixture that writes this value is
-    pre-empting a decision only a measurement can make. See docs/ADR-clock.md."""
-    SANCTIONED = {
-        "packaging/setup/Install-QwtImproved.ps1",   # opening value, derived from QWT presence
-        "guest/sync-clock-from-dom0.ps1",            # convergence, derived from the SETTIME witness
-    }
-    # A WRITE, NOT A MENTION. Every one of these files now explains the writes that were removed,
-    # so matching the bare name finds the explanation and calls it a write - the mistake this repo's
-    # checks have made repeatedly. Only these spellings change the value.
+    The window is removed, not managed: every path that CREATES a guest sets `timezone=localtime`
+    before its first boot. So there is no convention to declare and no second state to converge to,
+    and a new writer of that value - or anything clearing that feature - is a return to the defect.
+    See docs/ADR-clock.md."""
     write = re.compile(r"(New-ItemProperty|Set-ItemProperty|reg(\.exe)? +add)[^\n]*RealTimeIsUniversal"
                        r"|RealTimeIsUniversal[^\n]*(/t +REG_DWORD|-PropertyType +DWord)")
     for p in sorted(ROOT.rglob("*")):
         if not p.is_file():
             continue
         rel = str(p.relative_to(ROOT)).replace("\\", "/")
-        # EXEMPT: this rule's own regex, and the offline selftests that prove it fires. A detector
-        # must not flag its own pattern, and a fixture that proves we catch a forced write has to
-        # contain one - the same carve-out L25 makes for harness and test paths. mgmt/prime-jobs is
-        # gitignored staging holding whatever release was last primed, not our source.
+        # EXEMPT: this rule's own regex, and the offline selftests that prove it fires - a detector
+        # must not flag its own pattern, and a fixture proving we catch a forced write contains one.
         if rel.startswith(("upstream/", ".git/", "scratchpad/", "evidence/", "mgmt/prime-jobs/",
                            "tools/tests/")) or rel == "tools/lint-harness.py":
             continue
@@ -1546,56 +1509,29 @@ def l26_rtc_convention_has_exactly_two_derived_writers() -> None:
             continue
         if "RealTimeIsUniversal" not in txt:
             continue
-        # strip comment prose: XML comments, and #-comments in scripts
         body = re.sub(r"<!--.*?-->", "", txt, flags=re.S)
         body = "\n".join(re.sub(r"(?<!\$)#.*$", "", ln) for ln in body.splitlines())
         for n, line in enumerate(body.splitlines(), 1):
-            if not write.search(line):
-                continue
-            if rel in SANCTIONED:
-                # A SANCTIONED WRITE MUST BE TIED TO A MEASUREMENT, one way or the other. There are
-                # exactly two legitimate shapes, and the value's literalness is not what separates
-                # them - WHEN the line is reached is:
-                #   * the per-boot task writes a value DERIVED from its witness (-Value $want);
-                #   * the installer writes a literal 1, but only from the failure branch of its
-                #     payload-clock gate - the one moment the convention demonstrably matters. A
-                #     literal is right there precisely because the trigger carries the evidence.
-                # An earlier version of this rule demanded a variable everywhere, which flagged the
-                # correct installer shape as a defect - the rule chasing the design instead of the
-                # invariant, which is the mistake this whole area keeps making.
-                if re.search(r"-Value +\$\w+", line):
-                    continue
-                if rel == "packaging/setup/Install-QwtImproved.ps1" and _write_is_gate_triggered(body):
-                    continue
-                finding("L26-rtc-convention-written-without-a-trigger", f"{rel}:{n}",
-                        "writes RealTimeIsUniversal as a literal that is not reached from a "
-                        "measurement - the installer may write it ONLY on the failure branch of "
-                        "Assert-PayloadClockSane, and the per-boot task only from its witness "
-                        "(docs/ADR-clock.md)")
-            else:
-                finding("L26-rtc-convention-declared-outside-the-product", f"{rel}:{n}",
-                        "writes RealTimeIsUniversal, which only the product may do and only from a "
-                        "measurement - an image, golden or harness that forces it makes the gate "
-                        "measure the forcing instead of the product (docs/ADR-clock.md)")
-    # AND THE OTHER HALF OF THE PAIR: the qube feature is dom0's to set, not ours to clear.
-    # Unsetting it puts the rig in the one configuration where a wrong value is invisible.
+            if write.search(line):
+                finding("L26-hardware-clock-convention-written", f"{rel}:{n}",
+                        "writes RealTimeIsUniversal - nothing should. A qube with timezone=localtime "
+                        "already presents dom0 local time and Windows already reads a hardware clock "
+                        "as local; set the qube feature at create time instead (docs/ADR-clock.md)")
     unset = re.compile(r"qvm-features +--unset +\S+ +timezone")
     for p in sorted(ROOT.rglob("*.sh")) + sorted(ROOT.rglob("*.py")):
         rel = str(p.relative_to(ROOT)).replace("\\", "/")
-        if rel.startswith(("upstream/", "scratchpad/", "evidence/")):
+        if rel.startswith(("upstream/", "scratchpad/", "evidence/", "tools/tests/")):
             continue
         try:
             lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             continue
         for n, line in enumerate(lines, 1):
-            code = re.sub(r"#.*$", "", line)
-            if unset.search(code):
+            if unset.search(re.sub(r"#.*$", "", line)):
                 finding("L26-qube-timezone-feature-cleared", f"{rel}:{n}",
-                        "clears the qube's `timezone` feature - dom0 sets it from what the GUEST "
-                        "reports, and clearing it puts the rig in the one configuration where a "
-                        "wrong RealTimeIsUniversal is invisible (Jev: harness_clear_hides_it 0.84)")
-
+                        "clears the qube's `timezone` feature - that puts the guest's clock back on "
+                        "true UTC and brings the whole transition back; it must be SET at create "
+                        "time, never cleared (docs/ADR-clock.md)")
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1638,7 +1574,7 @@ def main() -> int:
     l23_no_pipe_into_grep_q_for_a_guest_probe()
     l24_failure_report_must_declare_a_level()
     l25_product_must_not_branch_on_localised_text()
-    l26_rtc_convention_has_exactly_two_derived_writers()
+    l26_no_hardware_clock_convention_is_written()
     if a.ledger:
         l7_orphan_ledger_checks(a.ledger)
 

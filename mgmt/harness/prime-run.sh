@@ -191,13 +191,18 @@ qvm-features "$CHURN" os Windows
 # catalogs come out not-yet-valid (0x800B0101, a 25-minute silent drvinst hang,
 # measured 2026-09-25). The goldens carry timezone=localtime; a create path that copies
 # only the volumes did not, so the subject differed from its golden in exactly that.
-# THE QUBE'S `timezone` FEATURE IS NOT OURS TO TOUCH - NOT EVEN TO UNSET IT. It decides what the
-# qube's RTC holds: undefined means true UTC (Xen's default), `localtime` means DOM0 LOCAL. dom0
-# sets `localtime` for every os=Windows qube the moment the GUEST reports itself through
-# qubes.NotifyTools, so a user's Windows qube HAS it - and unsetting it here put the rig in the one
-# configuration where a wrong RealTimeIsUniversal is invisible (Jev: harness_clear_hides_it 0.84).
-# The create path leaves it alone, clock_feature_report records what the cell ran under, and the
-# PRODUCT derives the matching registry value. See docs/ADR-clock.md.
+# SET `timezone=localtime` AT CREATE TIME, BEFORE THE GUEST EVER BOOTS. Xen reads this at DOMAIN
+# CREATION and puts dom0's LOCAL time on the emulated clock; absent, it defaults to true UTC. dom0
+# sets it by itself for any Windows qube - but only once the GUEST has reported os+qrexec, which
+# cannot happen before the first install, so a qube created without it spends its whole install on a
+# true-UTC clock and then has the clock change under it one boot later. That transition is the
+# ENTIRE source of clock_boot_correction_s = 10800: one boot reading a UTC clock through dom0's
+# zone (3 h behind), the next reading a dom0-local clock through a convention latched from the
+# first (3 h ahead). Setting it here removes the window instead of converging out of it - the clock
+# holds dom0 local on every boot, Windows reads it as local on every boot (its default; we declare
+# nothing), and the guest's zone is dom0's on every boot. Nothing to settle.
+# This is also what a user's qube ends up with, so it is the configuration to test, not a shortcut.
+qvm-features "$CHURN" timezone localtime >/dev/null 2>&1 || true
 
 for p in memory:8192 maxmem:8192 vcpus:4 qrexec_timeout:600; do qvm-prefs "$CHURN" "${p%%:*}" "${p##*:}"; done
 qvm-prefs "$CHURN" netvm '' 2>/dev/null

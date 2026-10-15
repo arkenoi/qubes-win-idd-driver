@@ -791,13 +791,18 @@ ensure_churn_target(){ # $1=vm [$2=source golden] - create the disposable churn 
   # measured 2026-09-25). A create path that copies only the volumes loses the feature, so the
   # subject differed from its golden in exactly that.
   #
-  # THE QUBE'S `timezone` FEATURE IS NOT OURS TO TOUCH - NOT EVEN TO UNSET IT. It decides what the
-  # qube's RTC holds: undefined means true UTC (Xen's default), `localtime` means DOM0 LOCAL. dom0
-  # sets `localtime` for every os=Windows qube the moment the GUEST reports itself through
-  # qubes.NotifyTools, so a user's Windows qube HAS it - and unsetting it here put the rig in the one
-  # configuration where a wrong RealTimeIsUniversal is invisible (Jev: harness_clear_hides_it 0.84).
-  # The create path leaves it alone, clock_feature_report records what the cell ran under, and the
-  # PRODUCT derives the matching registry value. See docs/ADR-clock.md.
+  # SET `timezone=localtime` AT CREATE TIME, BEFORE THE GUEST EVER BOOTS. Xen reads this at DOMAIN
+  # CREATION and puts dom0's LOCAL time on the emulated clock; absent, it defaults to true UTC. dom0
+  # sets it by itself for any Windows qube - but only once the GUEST has reported os+qrexec, which
+  # cannot happen before the first install, so a qube created without it spends its whole install on a
+  # true-UTC clock and then has the clock change under it one boot later. That transition is the
+  # ENTIRE source of clock_boot_correction_s = 10800: one boot reading a UTC clock through dom0's
+  # zone (3 h behind), the next reading a dom0-local clock through a convention latched from the
+  # first (3 h ahead). Setting it here removes the window instead of converging out of it - the clock
+  # holds dom0 local on every boot, Windows reads it as local on every boot (its default; we declare
+  # nothing), and the guest's zone is dom0's on every boot. Nothing to settle.
+  # This is also what a user's qube ends up with, so it is the configuration to test, not a shortcut.
+  qvm-features "$vm" timezone localtime >/dev/null 2>&1 || true
   for p in memory:8192 maxmem:8192 vcpus:4 qrexec_timeout:600; do qvm-prefs "$vm" "${p%%:*}" "${p##*:}"; done
   qvm-prefs "$vm" netvm '' 2>/dev/null
   return 0
@@ -1936,7 +1941,7 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the
   qvm-tags "$app" add win-idd-testbed \
     || { no "$3-appvm: could not TAG $app win-idd-testbed - dom0 policy will refuse every call to it; not proceeding"; return; }
   qvm-features "$app" os Windows >/dev/null 2>&1
-  # (the AppVM inherits its template's `timezone` feature, and neither is ours to set - see above)
+  qvm-features "$app" timezone localtime >/dev/null 2>&1 || true   # same reason as the create path above
   qvm-prefs "$app" memory 8192 >/dev/null 2>&1; qvm-prefs "$app" maxmem 0 >/dev/null 2>&1
   qvm-prefs "$app" vcpus 4 >/dev/null 2>&1; qvm-prefs "$app" qrexec_timeout 6000 >/dev/null 2>&1
   if [ "$had_app" = 1 ]; then
