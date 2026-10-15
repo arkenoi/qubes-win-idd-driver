@@ -93,8 +93,16 @@ def main(argv):
         print("P1 BREACHES (%d):" % len(p1s))
         for cell, m, v, mx, (jc, jconf) in p1s:
             print("  [P1] %-18s %-28s = %s (max %s)  Jev: %s %s" % (cell, m, v, mx, jc, jconf))
+    # NO REPORT IS NOT A CLEAN REPORT. The first version printed "CAMPAIGN CLEAN - 0 cell(s) with
+    # a report" while the campaign was still on its first cell, which is the exact shape this file
+    # exists to remove: a zero that reads as reassurance because nothing was measured. A campaign
+    # with no cell verdict yet has no verdict, and says so.
+    have = len([r for r in rows if r[1]])
+    if have == 0:
+        print("CAMPAIGN NO-VERDICT - no cell has produced a sweep report yet; this is not a pass")
+        return 2
     print("CAMPAIGN %s - %d cell(s) with a report, %d not CLEAN, %d P1" %
-          ("FINDINGS" if (bad or p1s) else "CLEAN", len([r for r in rows if r[1]]), len(bad), len(p1s)))
+          ("FINDINGS" if (bad or p1s) else "CLEAN", have, len(bad), len(p1s)))
     return 1 if (bad or p1s) else 0
 
 
@@ -140,6 +148,12 @@ def selftest():
         shutil.rmtree(os.path.join(m, "nolog-guestlogs"))
         rows, p1s, bad = summarise(t)
         ck("a wholly clean campaign exits zero", not bad and not p1s)
+        # SEEN TO FAIL: an empty campaign must not read as a pass. The first version printed
+        # "CAMPAIGN CLEAN - 0 cell(s) with a report" on a campaign that had not graded anything.
+        shutil.rmtree(os.path.join(m, "clean-guestlogs"))
+        rows2, p1s2, bad2 = summarise(t)
+        ck("an EMPTY campaign is not clean - it has no verdict at all",
+           len([r for r in rows2 if r[1]]) == 0 and not bad2 and not p1s2)
         print("campaign-state selftest: %d passed, %d failed" % (ok, fail))
         return 0 if fail == 0 else 1
     finally:
