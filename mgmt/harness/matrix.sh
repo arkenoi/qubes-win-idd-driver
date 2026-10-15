@@ -905,6 +905,37 @@ unpark_installed(){ # $1=vm $2=label - restore the campaign's 'installed' snapsh
   fi
 }
 
+grade_dom0_callers(){ # $1=vm $2=label - the goal's SECOND clause, measured where the guest is up.
+  # "qrexec behavior is aligned with dom0 callers: updaters and start menu, from cold qube as well".
+  # BOTH checks used to live in the end-of-campaign collection loop, guarded on the cell's guest
+  # still answering - and every cell halts, parks or removes its subject as its last act, so only
+  # the final cell could ever have a live guest there. MEASURED: run 8's matrix log contains ZERO
+  # lines matching VMEXEC, i.e. the check written for this clause had not executed once in eight
+  # campaign runs; run 9 reached the loop and measured THREE win11 cells, with every win10 cell
+  # reporting "guest not answering" (CALLERCHECKATENDONLY). A gate that measures the channel the
+  # goal names for three cells out of eight cannot settle it.
+  # So it runs HERE, per cell, next to every other per-cell assertion, while the guest is up.
+  local vm=$1 lbl=$2
+  if [ "$(w_state "$vm")" != Running ] || ! w_alive "$vm"; then
+    no "$lbl: guest not answering - the dom0 caller channel could not be measured for this cell"
+    return
+  fi
+  # THE UPDATER CALLER: dom0 takes stdout as the update agent's log and parses bare floats on
+  # stderr for the Update GUI's progress bar. Gating since run 9 showed all four channels arriving.
+  if ./mgmt/harness/vmexec-channel-check.sh "$vm" say >>"$M/$lbl-vmexec.out" 2>&1; then
+    ok "$lbl: dom0 caller channel aligned (stdout, stderr, exit code, grandchild)"
+  else
+    no "$lbl: the dom0 caller channel is NOT aligned - see $M/$lbl-vmexec.out"
+  fi
+  # THE START-MENU CALLER: receive.py ignores what it cannot parse IN SILENCE, so the stream is
+  # asserted line by line rather than sampled.
+  if ./mgmt/harness/dom0-callers-check.sh "$vm" say >>"$M/$lbl-callers.out" 2>&1; then
+    ok "$lbl: start-menu caller aligned (dom0 can parse every line it is sent)"
+  else
+    no "$lbl: the start-menu caller is NOT aligned - see $M/$lbl-callers.out"
+  fi
+}
+
 accept_grade(){ # $1=vm $2=label - the post-install acceptance battery, REUSED not reinvented
   # (owner model: grading an already-installed guest = tools/accept-clean.sh SKIP_PROVISION=1 -
   # boot-path reboot, WU posture, health-check.ps1, pixels-actually-change, window chrome).
@@ -927,6 +958,8 @@ accept_grade(){ # $1=vm $2=label - the post-install acceptance battery, REUSED n
   else
     no "$lbl: accept-clean battery FAILED (see $M/$lbl-accept.out)"
   fi
+  # The goal's second clause, per cell, with the guest still up.
+  grade_dom0_callers "$vm" "$lbl"
 }
 
 # Run the installer and judge the outcome. Sets CELL_RC.

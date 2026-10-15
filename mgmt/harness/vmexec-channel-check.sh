@@ -103,14 +103,14 @@ if [ "$rc_all" -eq 0 ]; then
   $LG "  VMEXEC: all four channel checks passed on $VM"
   exit 0
 fi
+# IT HAS NOW BEEN SEEN TO WORK ON A GUEST, so it gates. Campaign run 9 (2026-10-15) reported
+# `dom0 caller channel aligned (stdout, stderr, exit code, grandchild)` on win11-clean,
+# win11-reinstall and win11-upgrade - three independent cells, all four channels arriving. That was
+# the condition this check was written to wait for: until then a refusal by dom0's tag-based policy
+# would have looked exactly like the defect it hunts (an empty stream), and an instrument that has
+# never been seen to WORK must not decide a release.
+# Before that run it had never executed AT ALL, because it was only called from the end-of-campaign
+# collection loop and every cell halts its subject as its last act (CALLERCHECKATENDONLY). It is now
+# called per cell, while the guest is up.
 $LG "  VMEXEC: [ERROR] the dom0 caller channel is NOT aligned on $VM"
-# NOT GATING UNTIL IT HAS BEEN SEEN TO WORK ON A GUEST. This check has never run against a real
-# guest: the encoder is proven against the shipped decoder offline, but whether `qubes.VMExec` is
-# even reachable from THIS qube under dom0's tag-based policy is unmeasured, and a refusal looks
-# exactly like the defect it hunts - an empty stream. An instrument that has never been seen to
-# WORK must not decide a release: that is how the log volume failed three campaign runs on a healthy
-# guest in the hours before this was written. The measurement is still taken and still LOUD, and the
-# evidence is kept per cell; the moment a guest run shows all four channels arriving, this returns
-# $rc_all and the cell fails on a lost stream as it should.
-$LG "  VMEXEC: NOT GATING yet - this instrument has not been seen working on a guest (see the cell's vmexec evidence)"
-exit 0
+exit "$rc_all"
