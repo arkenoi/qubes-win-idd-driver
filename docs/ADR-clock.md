@@ -86,6 +86,59 @@ guess would be worse than the puller we already have.
 This is also why a used subject cannot validate this decision. The measurement that matters comes
 from a fresh install, where the persisted offset starts at zero.
 
+### Who owns the value: the product, from a measurement
+
+**The harness must not write it, and that was the whole bug.** `mgmt/harness/rtc-lib.sh` used to
+carry `w_rtc_utc`, which did `reg add ... RealTimeIsUniversal /d 1` inside the subject, and
+`prime-run.sh` called it the moment qrexec answered — after the install. So whatever the installer
+and the per-boot task derived was overwritten on every primed subject, and the gate could not
+measure the product at all. `set-rtc-utc-golden.sh` did the same to a sealed golden, so every clone
+inherited a forced value too.
+
+Measured on run 11: the installer logged `clock: RealTimeIsUniversal set to 0 for the next boot
+(was 1)` and the boots that followed ran with **1** and a three-hour error.
+
+Only one of the two values is correct for a given qube, and which one depends on a dom0-side feature
+set at runtime in response to the guest reporting in. A harness cannot know that, so it has no
+business deciding it. It now only REPORTS, via `w_rtc_report`, which prints the value *and* the zone
+so a cell's verdict can be read against both. Jev: `report_not_decide_is_right` 0.94.
+
+### The measurement needs a witness that is not the guest's clock
+
+The per-boot derivation first compared the guest's clock BEFORE the time pull with its clock AFTER
+it, and concluded the convention fitted whenever they agreed. But the script cannot see whether the
+pull did anything: qrexec hands dom0's date straight to `set-time.ps1`, whose exit code does not come
+back through the client. A pull that changes nothing makes both readings the same number, so the test
+could not fail — and it reported `RealTimeIsUniversal=1 matches this qube's RTC convention` four
+times on a guest three hours out.
+
+`set-time.ps1` DID see dom0's value, and logs it:
+
+```
+SETTIME clock set to 2026-10-15T09:24:50.0000000Z (was -10821.2 s out, now 0 s;
+        guest zone FLE Standard Time, offset 02:00:00)
+```
+
+dom0's UTC, the pre-set skew (negative when the guest ran ahead) and the guest's offset — all
+measured before anything wrote to the clock, which is exactly what the decision needs. From those,
+what the RTC held is recoverable, and whether it equals dom0's UTC or dom0's local time names the
+value Windows should carry. **No witness, or a zero offset where the two conventions are the same
+arithmetic, means no decision and a loud line.** Jev: `detector_is_now_sound` 0.84.
+
+### What `clock_boot_correction_s` actually measures
+
+I claimed twice that this metric was an artefact — first that it counted an unavoidable install-era
+boot, then that the sweep was reading QWT's local-time log stamps as UTC. **Both were wrong.**
+`detect_clock_offset` finds a BACKWARD JUMP between consecutive lines of one log file, which nothing
+but a real mid-boot correction produces. The sweep was right every time. Forcing `1` on a qube whose
+RTC holds dom0 local made the guest boot dom0's offset ahead, the puller corrected it back, and that
+correction *was* the jump.
+
+The lesson is the method rather than the arithmetic: the deviation was found by writing the invariant
+down and grepping every file that touches it — seven deviations across five harness files, a
+golden-baking script, two selftests and three stale comments — after three campaigns of chasing one
+symptom each. One of the target state's own entries was withdrawn by that same exercise.
+
 ## Rejected
 
 * **`xenagent`'s `HostTime=UTC`.** The vendor documents a registry knob on the PV drivers' agent that
@@ -102,8 +155,9 @@ from a fresh install, where the persisted offset starts at zero.
 
 ## Not done
 
-* The pairing has not been measured on a FRESH install. Every reading so far comes from a subject
-  with months of clock-write history (see the anomaly above). That measurement is the acceptance run.
+* The pairing has not yet been measured on a fresh install with the harness no longer forcing the
+  value. That measurement is the acceptance run against sha 425fb58a; until it reports
+  `clock_boot_correction_s = 0`, the enforcement is reasoned and Jev-confirmed but not witnessed.
 * `/qubes-timezone` carries an IANA name and `tzutil` takes Windows zone ids. The installer maps the
   common zones and REPORTS anything it cannot map rather than guessing; an unmapped zone therefore
   leaves the guest's zone alone while the RTC convention has changed, and those two then disagree.
