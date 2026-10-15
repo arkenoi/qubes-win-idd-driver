@@ -47,7 +47,13 @@ done
 HOLDER=win-idd-mgmt
 STICKIMG=/home/user/win-iso/answer-usb.img
 JOBDIR="mgmt/prime-jobs/$JOB"
-log(){ echo "$(date -u +%H:%M:%S) prime-run[$CHURN]: $*"; }
+# EVERY LINE DECLARES ITS LEVEL - same reason as quick-upgrade.sh and matrix.sh: a gate that can
+# only judge tagged lines is blind to the rest, and it will not gate until its coverage is real.
+log(){ case "$*" in
+         "[ERROR]"*|"[WARN]"*|"[WARNING]"*|"[INFO]"*|"[DEBUG]"*) _m="$*" ;;
+         *) _m="[INFO] $*" ;;
+       esac
+       echo "$(date -u +%H:%M:%S) prime-run[$CHURN]: $_m"; }
 state(){ qvm-ls --raw-data --fields state "$1" 2>/dev/null; }
 
 # --- lifecycle (run-lib.sh): a killed prime-run must leave NO orphans and a MARKED subject ---

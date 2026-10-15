@@ -151,7 +151,16 @@ _text() { # <file> -> its text as UTF-8 on stdout
     esac
 }
 
-_is_own_report() { local _h; _h=$(_text "$1" | head -c 4000); grep -qa 'SWEEP-GATE-\(RESULT\|COVERAGE\|CENSUS\|SILENT\|LEDGER\|VERIFY\)' <<<"$_h"; }
+# A TOOL'S REPORT IS NOT AN EMITTER'S LOG. This matched only sweep-gate's own output, so the
+# analysers' reports counted against coverage: measured on run 38787325142, the four
+# <cell>-logsweep.out files contributed 1443 of 2142 "undeclared OURS" lines. They are
+# log-sweep.py's rendered findings - prose about other logs - and asking them to declare a severity
+# per line would be asking a report to pretend it is a log. Both markers are the tools' own result
+# lines, which no emitter writes.
+# THE WHOLE FILE, not its first 4 KB. A tool writes its result line at the END: measured, the
+# <cell>-logsweep.out files carry LOGSWEEP-RESULT at byte 38576 of 38959, so a head-bounded probe
+# could never see it and four analyser reports counted 1443 lines against coverage.
+_is_own_report() { _text "$1" | grep -qa 'SWEEP-GATE-\(RESULT\|COVERAGE\|CENSUS\|SILENT\|LEDGER\|VERIFY\)\|LOGSWEEP-RESULT'; }
 
 declared() { local vfile="${SWEEP_GATE_VARIANTS:-}" skipped=0
              for l in "$@"; do [ -f "$l" ] || { echo "sweep-gate: $l does not exist" >&2; return 2; }
@@ -202,7 +211,14 @@ unlevelled() { local n=0 t=0 m=0 a b
         a=$(_text "$l" | grep -ac . || true)
         # BOTH counts over the same population - non-empty lines. Counting `without` over every line
         # including blanks made with_declared_level go NEGATIVE (-20) on a real set of logs.
-        b=$(_text "$l" | grep -a . | grep -avcE "$ANYLEVEL" || true)
+        # OURS means a line one of OUR BASH LOGGERS wrote, not every line in every file. The
+        # campaign's directory also holds CAPTURES of other programs - msiexec's log, the guest's
+        # installer console, the output of a command under test - and asking a capture to declare a
+        # severity is asking it to pretend it is a log. Measured on run 38787325142: of 699 lines
+        # left after excluding the analysers' own reports, 320 were matrix's narration and 80
+        # prime-run's (both now declare), while *-final.log, *-msi.log and *-callers.out are
+        # captures. Our loggers have one of two shapes, and only those are held to the rule.
+        b=$(_text "$l" | grep -a . | grep -aE '^[0-9]{2}:[0-9]{2}:[0-9]{2} [a-z0-9-]+\[[^]]*\]: |^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] ' | grep -avcE "$ANYLEVEL" || true)
         t=$((t + ${a:-0})); n=$((n + ${b:-0}))
         _is_msi_verbose "$l" && m=$((m + ${b:-0}))
     done

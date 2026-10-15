@@ -349,5 +349,26 @@ else
   no "T19d the escape hatch did not behave" "rc=$arc"
 fi
 
+# T19e - A CAPTURE IS NOT AN EMITTER. The campaign directory holds msiexec's log, the guest's
+# installer console and the output of commands under test. Those are captures; asking them to
+# declare a severity is asking them to pretend they are logs. Only lines written by OUR bash
+# loggers are held to the rule - measured on run 38787325142, that distinction took the count from
+# 2142 to 472, and the 472 were matrix's and prime-run's own narration, which now declares.
+printf 'Microsoft Windows [Version 10.0.19045.2965]\nC:\\>install.cmd /auto\nInstalling...\n' > "$T/cov/capture.log"
+bash tools/sweep-gate.sh "$T/cov/capture.log" >"$T/cov/c.out" 2>&1; crc=$?
+if [ "$crc" -eq 0 ] && ! grep -qa 'undeclared_ours' "$T/cov/c.out"; then
+  ok "T19e a capture of another program's output does not count against coverage"
+else
+  no "T19e a capture was held to the emitter rule" "rc=$crc $(grep -a SWEEP-GATE-RESULT "$T/cov/c.out" | head -1)"
+fi
+# but one of OUR logger lines in the same file still does
+printf '22:36:24 quick-upgrade[v]: booting\nInstalling...\n' > "$T/cov/mixed.log"
+bash tools/sweep-gate.sh "$T/cov/mixed.log" >"$T/cov/m.out" 2>&1; mrc=$?
+if [ "$mrc" -ne 0 ] && grep -qa 'undeclared_ours=1' "$T/cov/m.out"; then
+  ok "T19f an undeclared line from OUR logger still blocks, even beside a capture"
+else
+  no "T19f our own undeclared line did not block" "rc=$mrc $(grep -a SWEEP-GATE-RESULT "$T/cov/m.out" | head -1)"
+fi
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

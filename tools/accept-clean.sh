@@ -16,7 +16,13 @@ VM="${1:?usage: $0 <vm> <loopN> [outdir]}"
 LOOP="${2:?usage: $0 <vm> <loopN> [outdir]}"
 OUT="${3:-evidence/accept-$VM-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$OUT"
-log() { echo "$(date -u +%H:%M:%S) accept[$VM]: $*" | tee -a "$OUT/accept.log"; }
+# EVERY LINE DECLARES ITS LEVEL - same reason as the other harness loggers: sweep-gate judges only
+# tagged lines, so untagged narration makes it blind to the run it is supposed to judge.
+log() { case "$*" in
+          "[ERROR]"*|"[WARN]"*|"[WARNING]"*|"[INFO]"*|"[DEBUG]"*) _m="$*" ;;
+          *) _m="[INFO] $*" ;;
+        esac
+        echo "$(date -u +%H:%M:%S) accept[$VM]: $_m" | tee -a "$OUT/accept.log"; }
 fail() { log "ACCEPT=FAIL reason=$*"; exit 1; }
 
 qq() { QTEST_VM="$VM" timeout "${QT:-60}" "$HERE/tools/qtest" "$@"; }
