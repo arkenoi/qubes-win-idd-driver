@@ -295,6 +295,17 @@ invariant down and grepping every file that touches it.
 
 ## Not done
 
+* **`win11de-qwt` still carries the forced value physically**, and is deliberately not rebuilt. Its
+  seal note is literally `RealTimeIsUniversal=1`. No gate suite enters from it — it is the German
+  reproduction environment, reached by `clone-guest.sh`, and `rebuild-rig.sh` excludes the German
+  base by design. A clone of it boots `1` over a dom0-local RTC, so it starts dom0's offset AHEAD
+  (harmless to catalog validation) and the per-boot task converges it within one boot. That is the
+  convergence doing exactly the job it exists for, and it is recorded here so the next reader does
+  not read that seal note as a live defect. Rebuild it when the German base is next rebuilt.
+* The goldens acceptance DOES enter from — `win10-base` and `win11r-base`, plus the `-iqi` and
+  `-tpl` fixtures built from them — are rebuilt from vendor media with the corrected answer files.
+
+
 * The pairing has not yet been measured on a fresh install from a golden rebuilt without a forced
   value. That measurement is the acceptance run after the golden rebuild; until it reports
   `clock_boot_correction_s = 0`, the enforcement is reasoned, Jev-confirmed and offline-tested, but
