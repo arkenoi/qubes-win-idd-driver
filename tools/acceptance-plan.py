@@ -4,7 +4,7 @@ this diff, as exact harness invocations with their expected exits and cheapest p
 volume is required. Claude executes the plan and feeds every non-PASS exit to the collector and the verdict wrapper;
 it never chooses cells or invents procedures.
 
-    tools/acceptance-plan.py [--range <base>..<head>] [--out acceptance-plan.json] [--package-run <id>] [--fi-run <id>]
+    tools/acceptance-plan.py [--range <base>..<head>] [--out scratchpad/acceptance-plan.json] [--package-run <id>] [--fi-run <id>]
                              [--setup <dir>] [--vm10 <vm>] [--vm11 <vm>] [--os11 <label>]
                              [--g10 <img>] [--g11 <img>] [--b10 <golden>] [--b11 <golden>] [--f11 <label>]
 
@@ -101,7 +101,11 @@ def ledger_summary() -> dict | None:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--range", help="base..head (default: the newest v-tag that is an ancestor of HEAD, to HEAD)")
-    ap.add_argument("--out", default="acceptance-plan.json")
+    # DEFAULT INTO scratchpad/, NOT THE REPO ROOT. This is a generated per-run artefact in a PUBLIC
+    # repo and the root is not gitignored, so the old default left a 27 KB internal plan one careless
+    # `git add` from being tracked - found sitting there on 2026-10-15, dated two days earlier.
+    # scratchpad/ is local-only by the owner's 2026-08-10 decision, which is where this belongs.
+    ap.add_argument("--out", default="scratchpad/acceptance-plan.json")
     ap.add_argument("--package-run", help="the release-package workflow run id the cells install from")
     ap.add_argument("--fi-run", help="a release-package run dispatched with fault_injection=true (the FI suites need it)")
     ap.add_argument("--setup", help="the downloaded qwt-improved-setup tree (default: $HOME/qwt-accept/rel-<run>/dl/qwt-improved-setup)")

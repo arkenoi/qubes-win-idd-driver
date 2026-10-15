@@ -61,3 +61,6 @@ mgmt/fixtures/
 # reasoning as mgmt/fixtures/ above.
 mgmt/checkpoints/
 .prime-stick.log
+
+# Generated per-run acceptance plan: belongs in scratchpad/, never at the root of a public repo.
+/acceptance-plan.json
