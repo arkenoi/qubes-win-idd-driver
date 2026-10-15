@@ -518,22 +518,45 @@ $script:QwtTaskEndedProbe = {
 # on no answer as well. Missing data never buys silence.
 $script:QwtShutdownNearProbe = {
     param([datetime]$at)
-    $answered = $false
-    foreach ($q in @(@{ log = 'System'; x = "*[System[(EventID=109 or EventID=1074 or EventID=6006)]]" })) {
-        try {
-            $evs = @(Get-WinEvent -LogName $q.log -FilterXPath $q.x -MaxEvents 20 -ErrorAction Stop)
-            $answered = $true
-            foreach ($e in $evs) {
-                # the shutdown is recorded at or just after the termination it caused
-                $d = ($e.TimeCreated - $at).TotalSeconds
-                if ($d -ge -30 -and $d -le 180) { return $true }
-            }
-        } catch {
-            if ("$($_.FullyQualifiedErrorId)" -like 'NoMatchingEventsFound*' -or "$($_.Exception.Message)" -match 'No events were found') { $answered = $true }
-        }
+    # THE WINDOW IS THE QUERY, not a record count plus arithmetic here. This body used to read the
+    # 20 newest 109/1074/6006 records and compare their TimeCreated to $at, and that was wrong twice.
+    #
+    # (1) KIND. $at is UTC - ConvertFrom-QwtDeathEvent parses the record's SystemTime with
+    # AdjustToUniversal - while Get-WinEvent's TimeCreated is LOCAL, and DateTime subtraction
+    # ignores Kind, so the difference came out as the UTC offset itself. MEASURED on win10-acc
+    # 2026-10-15: a User32 1074 1.4 s before the reap read as 10798 s against a [-30,180] window, so
+    # the probe could not return true for ANY shutdown on that guest, and dom0 was told "The PV NIC
+    # setup task failed" about an instance the shutdown had reaped - the exact report this whole path
+    # exists to prevent. It passed before only because our guests ran a UTC clock, where local ==
+    # UTC and the mistake cancelled: our own wrong clock convention was concealing it, and
+    # correcting the clock is what exposed it.
+    #
+    # (2) COUNT. One shutdown cycle writes several of these records - xenagent, shutdown.exe and
+    # winlogon each log a 1074, plus 109 and 6006 - so 20 is a few cycles, and in a multi-reboot
+    # install the shutdown that reaped the task scrolls out of reach while the reporter, itself
+    # reaped, reads the backlog on a later boot.
+    #
+    # StartTime/EndTime asks the log for the window the caller means and leaves the frame conversion
+    # to the cmdlet, so no cross-kind arithmetic is left here to get wrong. The ids are not
+    # provider-qualified, exactly as before.
+    $atU = $at
+    if ($at.Kind -eq [DateTimeKind]::Local) { $atU = $at.ToUniversalTime() }
+    elseif ($at.Kind -eq [DateTimeKind]::Unspecified) { $atU = [DateTime]::SpecifyKind($at, [DateTimeKind]::Utc) }  # every caller here builds UTC
+    # the shutdown is recorded at or just after the termination it caused
+    $filter = @{
+        LogName   = 'System'
+        ID        = 109, 1074, 6006
+        StartTime = $atU.AddSeconds(-30)
+        EndTime   = $atU.AddSeconds(180)
     }
-    if ($answered) { return $false }
-    return $null
+    try {
+        return ($null -ne (Get-WinEvent -FilterHashtable $filter -MaxEvents 1 -ErrorAction Stop))
+    } catch {
+        # "No events were found" is a read that found nothing - an answer, not a failure to read.
+        # Told apart by its error id, which does not change with the guest's language.
+        if ("$($_.FullyQualifiedErrorId)" -like 'NoMatchingEventsFound*' -or "$($_.Exception.Message)" -match 'No events were found') { return $false }
+        return $null
+    }
 }
 # TASK SCHEDULER RESULT CODES THAT NAME THE SHUTDOWN AS THE CAUSE. These are not inferred from an
 # absence - they are Task Scheduler stating why it could not run or finish the action:
@@ -622,7 +645,18 @@ function ConvertFrom-QwtDeathEvent {
     $timeKnown = $false   # a record with no usable TimeCreated cannot be placed against a shutdown (the session-end rule below)
     $tc = $doc.GetElementsByTagName('TimeCreated')
     if ($tc.Count -gt 0) {
-        try { $time = [DateTime]::Parse("$($tc[0].GetAttribute('SystemTime'))", [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal); $timeKnown = $true } catch { }
+        # ONE FRAME IN THIS FILE, pinned where the instant is BUILT. AdjustToUniversal only converts
+        # when the text carries a zone: a SystemTime without the trailing Z parses to
+        # Kind=Unspecified, and the consumers then disagree about what that means - QwtShutdownNearProbe
+        # reads Unspecified as UTC, while ConvertTo-QwtDeathEpoch's ToUniversalTime() reads it as LOCAL
+        # and shifts the dedup key by the host's offset. Windows always writes the Z, so this is not a
+        # measured failure; it is the shape that produced the measured one (a local instant meeting a
+        # UTC one in a subtraction), and it costs one line to make unreachable.
+        try {
+            $time = [DateTime]::Parse("$($tc[0].GetAttribute('SystemTime'))", [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal)
+            if ($time.Kind -ne [DateTimeKind]::Utc) { $time = [DateTime]::SpecifyKind($time, [DateTimeKind]::Utc) }
+            $timeKnown = $true
+        } catch { }
     }
     $positional = New-Object System.Collections.ArrayList
     $named = @{}

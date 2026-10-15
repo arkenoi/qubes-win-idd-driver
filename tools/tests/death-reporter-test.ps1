@@ -240,6 +240,107 @@ $ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesPvNic' '0' $T0)
 # "The Windows Update scan task failed" about a scan that was working and was stopped. 267014 was
 # already ignored on this principle; the terminated-instance case was not. Both probes are driven
 # here, because Get-WinEvent cannot run off Windows and would otherwise fail closed and test nothing.
+# --- THE REAL QwtShutdownNearProbe BODY, EXERCISED ONCE BEFORE ANY STUB GOES IN -----------------
+# Every line after this section replaces the probe with a constant. That is right for testing its
+# CALLERS - and it is exactly why a defect INSIDE the probe survived: 13 stub sites, zero executions
+# of its body. MEASURED on win10-acc 2026-10-15: the body compared Get-WinEvent's LOCAL TimeCreated
+# against a UTC $at and, DateTime subtraction ignoring Kind, read a User32 1074 logged 1.4 s before
+# the reap as 10798 s away. No shutdown could ever be found on that guest, so dom0 was told "The PV
+# NIC setup task failed" about an instance the shutdown had reaped - the report this path exists to
+# prevent. Here Get-WinEvent is stubbed, because it cannot run off Windows; THE PROBE IS NOT.
+#
+# The fixture is that measured pair, not a model: a System 1074 at 2026-10-15T17:10:52.884Z and the
+# 201 it belongs to at 17:10:54.329Z, on a guest at UTC+3. A real log carries both frames - SystemTime
+# is UTC, TimeCreated is that instant rendered LOCAL - so the stub keeps the UTC instant it filters on
+# AND the local wall-clock it hands back, which is what makes the Kind mistake visible at all. The
+# local value is built literally, never through ToLocalTime(), so this cannot pass by accident on a
+# build host whose own zone is UTC.
+$script:GweFixture = @(
+    @{ utc   = [DateTime]::new(2026, 10, 15, 17, 10, 52, 884, [DateTimeKind]::Utc)
+       local = [DateTime]::new(2026, 10, 15, 20, 10, 52, 884, [DateTimeKind]::Local) }
+)
+$script:GweLastFilter = $null
+# Accepts BOTH call shapes, so the seen-to-fail case below can drive the OLD body through it too.
+function Get-WinEvent {
+    param([hashtable]$FilterHashtable, [string]$LogName, [string]$FilterXPath, [int]$MaxEvents, $ErrorAction)
+    $script:GweLastFilter = $FilterHashtable
+    $recs = @()
+    foreach ($f in $script:GweFixture) {
+        if ($FilterHashtable -and $FilterHashtable.ContainsKey('StartTime')) {
+            # a real log selects on the record's UTC SystemTime, never on its local rendering
+            if ($f.utc -lt $FilterHashtable.StartTime.ToUniversalTime()) { continue }
+            if ($f.utc -gt $FilterHashtable.EndTime.ToUniversalTime())   { continue }
+        }
+        $recs += [pscustomobject]@{ TimeCreated = $f.local; Id = 1074 }
+    }
+    if ($recs.Count -eq 0) {
+        throw (New-Object System.Management.Automation.ErrorRecord(
+                 (New-Object Exception 'No events were found that match the specified selection criteria.'),
+                 'NoMatchingEventsFound', 'ObjectNotFound', $null))
+    }
+    return $recs
+}
+$script:RealNearProbe = $script:QwtShutdownNearProbe
+$atUtc = [DateTime]::new(2026, 10, 15, 17, 10, 54, 329, [DateTimeKind]::Utc)   # the 201, as its caller builds it
+$near  = & $script:RealNearProbe $atUtc
+Check 'near-probe REAL body: a shutdown 1.4 s before the reap IS found, with the record local and $at UTC' `
+      ($near -eq $true) "probe=$near"
+Check 'near-probe REAL body: it asked the LOG for the window - StartTime/EndTime, not the newest N records' `
+      ($null -ne $script:GweLastFilter -and $script:GweLastFilter.ContainsKey('StartTime') -and $script:GweLastFilter.ContainsKey('EndTime') `
+       -and [Math]::Round(($script:GweLastFilter.EndTime - $script:GweLastFilter.StartTime).TotalSeconds) -eq 210) `
+      "filter=$($script:GweLastFilter | Out-String)"
+Check 'near-probe REAL body: the window is derived from $at IN UTC, not shifted by the host zone' `
+      ([Math]::Round(($script:GweLastFilter.StartTime.ToUniversalTime() - $atUtc).TotalSeconds) -eq -30)
+$far = & $script:RealNearProbe ([DateTime]::new(2026, 10, 15, 19, 10, 54, 329, [DateTimeKind]::Utc))
+Check 'near-probe REAL body: a shutdown two hours away is NOT near - it is a real window, not always-true' `
+      ($far -eq $false) "probe=$far"
+# SEEN TO FAIL. The old body, verbatim, against that same fixture: it must MISS the 1074. If this
+# ever reads $true the case has stopped testing anything and the regression can come back unseen.
+$oldProbe = {
+    param([datetime]$at)
+    $answered = $false
+    foreach ($q in @(@{ log = 'System'; x = "*[System[(EventID=109 or EventID=1074 or EventID=6006)]]" })) {
+        try {
+            $evs = @(Get-WinEvent -LogName $q.log -FilterXPath $q.x -MaxEvents 20 -ErrorAction Stop)
+            $answered = $true
+            foreach ($e in $evs) { $d = ($e.TimeCreated - $at).TotalSeconds; if ($d -ge -30 -and $d -le 180) { return $true } }
+        } catch {
+            if ("$($_.FullyQualifiedErrorId)" -like 'NoMatchingEventsFound*' -or "$($_.Exception.Message)" -match 'No events were found') { $answered = $true }
+        }
+    }
+    if ($answered) { return $false }
+    return $null
+}
+$old = & $oldProbe $atUtc
+Check 'near-probe SEEN TO FAIL: the old body misses that very 1074, so the fixture does detect the defect' `
+      ($old -eq $false) "oldprobe=$old"
+Check 'near-probe SEEN TO FAIL: and the delta it computed was the zone offset (10798 s), not the 1.4 s gap' `
+      ([int][Math]::Floor(($script:GweFixture[0].local - $atUtc).TotalSeconds) -eq 10798) `
+      "delta=$(($script:GweFixture[0].local - $atUtc).TotalSeconds)"
+# A log that cannot be READ is no answer either way - and no answer never buys silence.
+function Get-WinEvent { param([hashtable]$FilterHashtable, [string]$LogName, [string]$FilterXPath, [int]$MaxEvents, $ErrorAction) throw 'the System log could not be opened' }
+$unread = & $script:RealNearProbe $atUtc
+Check 'near-probe REAL body: an unreadable System log is NO ANSWER ($null), not a quiet "no shutdown"' `
+      ($null -eq $unread) "probe=$unread"
+
+# ONE FRAME. AdjustToUniversal only CONVERTS when the text carries a zone, so a SystemTime without
+# the trailing Z parses to Kind=Unspecified - and the consumers then disagree about what it means:
+# the shutdown probe reads Unspecified as UTC, ConvertTo-QwtDeathEpoch's ToUniversalTime() reads it
+# as LOCAL and shifts the dedup key by the host's offset. ConvertFrom-QwtDeathEvent pins the kind
+# where the instant is built, so both read the same instant.
+$xmlZ   = New-Task 201 '\QubesPvNic' '1' $atUtc
+$xmlNoZ = $xmlZ -replace '(SystemTime="[^"]*)Z"', '$1"'
+$evZ    = ConvertFrom-QwtDeathEvent $xmlZ
+$evNoZ  = ConvertFrom-QwtDeathEvent $xmlNoZ
+Check 'one frame: a SystemTime WITHOUT the trailing Z still yields a UTC instant, so every consumer reads it alike' `
+      ($evNoZ.time.Kind -eq [DateTimeKind]::Utc) "kind=$($evNoZ.time.Kind)"
+Check 'one frame: the Z form is unchanged - same kind, same instant' `
+      ($evZ.time.Kind -eq [DateTimeKind]::Utc -and $evZ.time -eq $evNoZ.time) "z=$($evZ.time) noz=$($evNoZ.time)"
+# SEEN TO FAIL: that same text, parsed the way the line used to parse it and nothing more, is
+# Unspecified - so the pin is what makes the two consumers agree, not an accident of the fixture.
+Check 'one frame SEEN TO FAIL: the bare parse of that text is Unspecified, so the pin is load-bearing' `
+      ([DateTime]::Parse(($xmlNoZ -replace '(?s).*SystemTime="([^"]*)".*', '$1'), [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal).Kind -eq [DateTimeKind]::Unspecified)
+
 $script:QwtTaskEndedProbe    = { param([string]$i) return $true }
 $script:QwtShutdownNearProbe = { param([datetime]$t) return $true }
 $ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesWindowsUpdateScan' '2147943691' $T0)
