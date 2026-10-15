@@ -1,5 +1,5 @@
 {
-  "note": "pristine base rebuilt rebuild-20261015-124838 from Win10_22H2_EnglishInternational_x64v1.iso, PRIMER=1, no QWT",
+  "note": "pristine base rebuilt rebuild-20261015-161724 from Win10_22H2_EnglishInternational_x64v1.iso, PRIMER=1, no QWT",
   "props": {
     "klass": "StandaloneVM",
     "maxmem": "8192",
@@ -7,14 +7,14 @@
     "vcpus": "4",
     "virt_mode": "hvm"
   },
-  "reseal_reason": "rebuilt from vendor media 2026-10-15 with the CORRECTED answer file: the previous image wrote RealTimeIsUniversal=1 in the specialize pass AND pinned a non-zero Setup zone (RTIUFORCEDINIMAGES) - a pair that only worked together, inherited by every clone, which made the acceptance gate measure our own forcing. Owner: 'redo from scratch, dont reuse'. The new image declares no RTC convention and pins UTC for the Setup window, where the qube has no timezone feature and its RTC holds true UTC; the installer sets dom0's zone late (docs/ADR-clock.md)",
-  "sealed_utc": "2026-10-15T13:06:36Z",
+  "reseal_reason": "rebuilt 2026-10-15 for the SIMPLIFIED clock design: the qube carries timezone=localtime from CREATE time, so its hardware clock holds dom0 local time from the first instant of Setup; the answer file gives the guest dom0's zone; Windows reads the clock as local, which is its default, and this product declares nothing. No RealTimeIsUniversal anywhere - installer, per-boot task and all four answer files - and no convention to converge. The previous images carried a forced value and/or a UTC Setup zone, which is what produced clock_boot_correction_s=10800. See docs/ADR-clock.md",
+  "sealed_utc": "2026-10-15T16:36:44Z",
   "vm": "win10-base",
   "volumes": {
     "private": {
       "revisions": [
-        "1792069174-back",
-        "1792069590-back"
+        "1792081743-back",
+        "1792082199-back"
       ],
       "revisions_to_keep": "2",
       "size": "21474836480",
@@ -22,12 +22,12 @@
     },
     "root": {
       "revisions": [
-        "1792069174-back",
-        "1792069590-back"
+        "1792081743-back",
+        "1792082199-back"
       ],
       "revisions_to_keep": "2",
       "size": "85899345920",
-      "usage": "10651518894"
+      "usage": "10660108828"
     }
   }
 }
