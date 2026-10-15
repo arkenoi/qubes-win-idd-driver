@@ -288,6 +288,42 @@ $rc2 = & $script:RealNearProbe ([DateTime]::UtcNow)
 Check 'session mark: with no mark consumed and the metric clear, a death is REPORTED' ($rc2 -eq $false) "probe=$rc2"
 Remove-Item $mp -Force -ErrorAction SilentlyContinue
 
+# --- A LIVE-NOTIFIED RECORD IS NEVER SENT AGAIN, AND NOTHING BELOW IT IS SKIPPED ----------------
+# MEASURED on win10-reinstall, run 38787325142: TaskScheduler record 345 was notified at 20:04:59,
+# the guest rebooted, and the boot catch-up notified the user AGAIN at 20:09:51 - same record, both
+# lines NEW. Write-QwtDeathWatermark had one caller, inside the catch-up, so the live path never
+# recorded what it had sent.
+# The fix records the RECORD, not a new high-water mark: raising the channel mark would claim the
+# live path had scanned everything below it, and a death of ours just below - arriving while this
+# process was not running - would then be skipped and the user never told. That direction is worse.
+$wmp = Get-QwtDeathWatermarkPath
+Remove-Item -LiteralPath $wmp -Force -ErrorAction SilentlyContinue
+$CH = 'Microsoft-Windows-TaskScheduler/Operational'
+[void](Write-QwtDeathWatermark -Marks @{ $CH = 100 })
+[void](Step-QwtDeathWatermark -Channel $CH -RecordId '345')
+$m = Read-QwtDeathWatermark
+Check 'notified set: a live-notified record is remembered' (Test-QwtDeathAlreadyNotified -Channel $CH -RecordId 345 -Marks $m)
+Check 'notified set: the channel MARK is NOT raised - nothing below 345 is claimed as scanned' ([long]$m[$CH] -eq 100) "mark=$($m[$CH])"
+Check 'notified set: a record of ours at 344 is still unseen, so the catch-up will report it' `
+      (-not (Test-QwtDeathAlreadyNotified -Channel $CH -RecordId 344 -Marks $m))
+[void](Step-QwtDeathWatermark -Channel $CH -RecordId '345')
+$m = Read-QwtDeathWatermark
+Check 'notified set: recording the same record twice keeps one entry' (@(@($m["notified/$CH"]) | Where-Object { $_ -eq 345 }).Count -eq 1)
+Check 'notified set: a non-numeric record id is refused' (-not (Step-QwtDeathWatermark -Channel $CH -RecordId 'x'))
+# the set survives a read/write round trip - it is a LIST, and the reader used to cast every value
+# to [long], which would have destroyed it
+[void](Write-QwtDeathWatermark -Marks (Read-QwtDeathWatermark))
+$m = Read-QwtDeathWatermark
+Check 'notified set: survives a write/read round trip as a list' (Test-QwtDeathAlreadyNotified -Channel $CH -RecordId 345 -Marks $m)
+# SEEN TO FAIL: the shipped behaviour - no record kept - leaves 345 indistinguishable from unseen,
+# which is exactly how the user was told twice.
+Remove-Item -LiteralPath $wmp -Force -ErrorAction SilentlyContinue
+[void](Write-QwtDeathWatermark -Marks @{ $CH = 100 })
+$m = Read-QwtDeathWatermark
+Check 'notified set SEEN TO FAIL: with nothing recorded, 345 reads as unseen and is re-reported' `
+      ((-not (Test-QwtDeathAlreadyNotified -Channel $CH -RecordId 345 -Marks $m)) -and (345 -gt [long]$m[$CH]))
+Remove-Item -LiteralPath $wmp -Force -ErrorAction SilentlyContinue
+
 # SEEN TO FAIL: the measured case, against the body this replaced. On win10-clean the shutdown
 # record sat 224 s before the kill and the old window looked back 30 s, so it missed it and the
 # user was told the task had failed. Run here with a stub that answers like the real log did.

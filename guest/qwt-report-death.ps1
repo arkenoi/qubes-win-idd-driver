@@ -696,6 +696,7 @@ function ConvertFrom-QwtDeathEvent {
     $pos = { param($i) if ($i -lt $positional.Count) { return "$($positional[$i])" } else { return '' } }
 
     $r = [ordered]@{ ours = $false; ignore = $false; reason = ''; kind = ''; origin = "$channel/$eventId#$recordId"; time = $time
+                     channel = $channel; recordId = $recordId   # carried so a notified record can advance the watermark
                      exe = ''; component = ''; pid = $null; code = $null; ranMs = $null
                      anchor = 'enrich'; label = ''; evidence = ''; detail = ''; rec = ''; eventId = $eventId
                      hung = $false; clrType = ''; task = ''; taskName = ''; svcKey = ''; svcCount = ''; svcDelay = ''; svcAction = ''
@@ -1254,7 +1255,11 @@ function Invoke-QwtDeathReport {
     if ($ev.evidence) { $more += "; evidence $($ev.evidence)" }
     if ($ev.detail) { $more += "; $($ev.detail)" }
     Write-QwtDeathLog 'ERROR' "DEATH #$($reg.number) $tag $($ev.origin): $($notice.Header) | $($ev.label) | $($notice.Cause) | $($notice.Tech) | detail: $more"   # GUARD:logfirst
-    if (-not $reg.new) { return 'enriched' }
+    if (-not $reg.new) {
+        # handled: it joined a death already reported. Record it, or the next boot calls it NEW.
+        [void](Step-QwtDeathWatermark -Channel $ev.channel -RecordId $ev.recordId)
+        return 'enriched'
+    }
     if (-not (Get-Command Send-QwtError -ErrorAction SilentlyContinue)) {
         # A packaging gap in the reporting path, not a guest condition: the route ships beside this script, and
         # here it is not next to it.
@@ -1275,6 +1280,14 @@ function Invoke-QwtDeathReport {
     elseif ($st -eq 'suppressed:cap') { # The cap bounds a crash storm; past it every further death is still logged here, just not sent.
     Write-QwtDeathLog 'ERROR' "DEATH #$($reg.number) NOT notified: the limit of 8 per boot is reached" }
     else { Write-QwtDeathLog 'ERROR' "DEATH #$($reg.number) NOT notified: route status $st" }
+    # RECORD EVERY OUTCOME THE USER HAS ALREADY LIVED THROUGH, not just a successful send. A record
+    # that came back 'enriched' joined a death someone was already told about, and one suppressed by
+    # the per-boot cap was a deliberate silence - but the per-boot ledger is keyed on a VOLATILE
+    # token and is empty after a reboot, so the catch-up would re-read either of them, call it NEW,
+    # and put a fresh toast in front of the user for a death already handled. 'failed:transport' is
+    # deliberately NOT recorded: that death never reached dom0, and the catch-up retrying it is the
+    # whole reason the catch-up exists.
+    if ($st -ne 'failed:transport') { [void](Step-QwtDeathWatermark -Channel $ev.channel -RecordId $ev.recordId) }
     return $st
 }
 
@@ -1306,7 +1319,12 @@ function Read-QwtDeathWatermark {
     try {
         $o = Get-Content -LiteralPath $p -Raw -ErrorAction Stop | ConvertFrom-Json
         $h = @{}
-        foreach ($n in $o.PSObject.Properties.Name) { $h[$n] = [long]$o.$n }
+        foreach ($n in $o.PSObject.Properties.Name) {
+            # A 'notified/<channel>' entry is a LIST of record ids the live path has already sent;
+            # casting it to [long] like a mark would destroy it (and throw on more than one id).
+            if ($n -like "$($script:QwtDeathNotifiedKey)/*") { $h[$n] = @($o.$n | ForEach-Object { [long]$_ }) }
+            else { $h[$n] = [long]$o.$n }
+        }
         return $h
     } catch {
         Write-QwtDeathLog 'WARN' "the watermark could not be read ($($_.Exception.Message)), this pass only sets a new watermark"
@@ -1328,6 +1346,46 @@ function Write-QwtDeathWatermark {
         return $false
     }
 }
+# ADVANCE THE MARK FOR ONE RECORD, which the LIVE path never did. MEASURED on win10-reinstall,
+# acceptance run 38787325142: TaskScheduler record 345 was notified at 20:04:59, the guest rebooted,
+# and the boot catch-up re-read from a mark that predated it and notified the user AGAIN at 20:09:51
+# - the same record, both lines announcing themselves as NEW. A double notification is P1 here.
+# Write-QwtDeathWatermark had exactly one caller, inside the catch-up pass, so the watermark's own
+# promise - "per channel and monotonic, so a record is never reported twice" - held only for records
+# the catch-up reported. The per-boot ledger cannot cover this: it is keyed on a VOLATILE registry
+# token and resets every boot by design, which is right for "death N this boot" and useless across
+# one. Monotonic: a mark never moves backwards, so an out-of-order or re-delivered record cannot
+# rewind it and uncover records already seen.
+# IT RECORDS THE RECORD, NOT A NEW HIGH-WATER MARK. Moving the channel's mark up to this record
+# would claim the live path had SCANNED everything below it, and it has not: the live subscription
+# only ever sees the events it is subscribed to. A death of ours sitting just below - one that
+# arrived while this process was not running - would then be skipped by the catch-up and the user
+# would never be told. A silently dropped death is the defect this whole route exists to prevent,
+# so the notified ids are kept exactly, as a set ABOVE the mark, and the catch-up skips them. The
+# catch-up prunes them when its own mark passes them, so the set stays small by construction.
+$script:QwtDeathNotifiedKey = 'notified'
+function Step-QwtDeathWatermark {
+    param([Parameter(Mandatory)][string]$Channel, [Parameter(Mandatory)][string]$RecordId)
+    if (-not $Channel -or $RecordId -notmatch '^\d+$') { return $false }
+    $rid = [long]$RecordId
+    $marks = Read-QwtDeathWatermark
+    if ($null -eq $marks) { return $false }   # unreadable: the catch-up's own fresh-start rule owns that case
+    if ($marks.ContainsKey($Channel) -and [long]$marks[$Channel] -ge $rid) { return $true }   # the mark already covers it
+    $key = "$($script:QwtDeathNotifiedKey)/$Channel"
+    $seen = @()
+    if ($marks.ContainsKey($key)) { $seen = @($marks[$key]) }
+    if ($seen -contains $rid) { return $true }
+    $marks[$key] = @($seen + $rid | Sort-Object -Unique)
+    return (Write-QwtDeathWatermark -Marks $marks)
+}
+function Test-QwtDeathAlreadyNotified {
+    param([Parameter(Mandatory)][string]$Channel, [Parameter(Mandatory)][long]$RecordId, $Marks)
+    if ($null -eq $Marks) { return $false }
+    $key = "$($script:QwtDeathNotifiedKey)/$Channel"
+    if (-not $Marks.ContainsKey($key)) { return $false }
+    return (@($Marks[$key]) -contains $RecordId)
+}
+
 function Invoke-QwtDeathCatchUp {
     # Returns @{ reported = n; scanned = n; channels = @{...} }. Never throws: a catch-up that fails must not keep the
     # boot's other work from running, and it says so at ERROR.
@@ -1340,16 +1398,35 @@ function Invoke-QwtDeathCatchUp {
         $from = if ($marks.ContainsKey($ch)) { [long]$marks[$ch] } else { -1 }
         $newest = $from
         try {
-            $evs = @(Get-WinEvent -LogName $ch -MaxEvents 400 -ErrorAction Stop)
+            # THE WATERMARK IS THE BOUND, NOT A COUNT. This read was `-MaxEvents 400`, which takes
+            # the NEWEST 400 records - so if more than 400 arrived since the mark, the oldest of
+            # them were never examined while $newest still jumped to the newest of the 400 and the
+            # mark moved past them. Those records are then skipped FOREVER: a death of ours in that
+            # gap is never reported and the user is never told. Same trap as the shutdown probe's
+            # old `-MaxEvents 20`, and the silent direction is the dangerous one here.
+            # Asking for EventRecordID > the mark returns exactly the unseen records, however many
+            # that is; on a fresh run there is no mark, and the pass only records the end of each
+            # channel rather than reporting the machine's whole history, so one record is enough.
+            if ($from -lt 0) { $evs = @(Get-WinEvent -LogName $ch -MaxEvents 1 -ErrorAction Stop) }
+            else { $evs = @(Get-WinEvent -LogName $ch -FilterXPath "*[System[EventRecordID>$from]]" -ErrorAction Stop) }
         } catch {
             Write-QwtDeathLog 'WARN' "catch-up: $ch could not be read ($($_.Exception.Message))"
             if ($marks.ContainsKey($ch)) { $next[$ch] = $marks[$ch] }
             continue
         }
+        # THE MARK ONLY MOVES PAST RECORDS THAT WERE ACTUALLY HANDLED. It used to advance for every
+        # record seen, including one whose processing THREW - the failure was logged at WARN and the
+        # mark moved past it anyway, so that record was never looked at again and a death inside it
+        # was lost in silence. Now a record that cannot be read stops this channel's mark where it
+        # is: the pass says so, and the next boot tries again. A channel that stalls is loud and
+        # recoverable; a death dropped quietly is neither.
         foreach ($e in ($evs | Sort-Object RecordId)) {
             $rid = [long]$e.RecordId
-            if ($rid -gt $newest) { $newest = $rid }
-            if ($from -lt 0 -or $rid -le $from) { continue }       # already seen, or the first run (watermark only)
+            if ($from -lt 0) { if ($rid -gt $newest) { $newest = $rid }; continue }   # first run: the end only
+            if ($rid -le $from) { continue }                       # already seen
+            # and the live path may already have notified this exact record, in this or an earlier
+            # boot - that is what kept record 345 from being sent to the user twice.
+            if (Test-QwtDeathAlreadyNotified -Channel $ch -RecordId $rid -Marks $marks) { $newest = $rid; continue }
             $r.scanned++
             try {
                 # Invoke-QwtDeathReport decides itself whether a record is one of ours ('not-ours' / 'ignored') and
@@ -1360,12 +1437,23 @@ function Invoke-QwtDeathCatchUp {
                     Write-QwtDeathLog 'INFO' "catch-up: $ch record $rid was never reported (its trigger could not run) - reported now ($verdict)"
                     $r.reported++
                 }
+                $newest = $rid      # handled: the mark may pass it
             } catch {
-                Write-QwtDeathLog 'WARN' "catch-up: $ch record $rid could not be read ($($_.Exception.Message))"
+                Write-QwtDeathLog 'WARN' "catch-up: $ch record $rid could not be read ($($_.Exception.Message)) - this channel's watermark stays at $newest and the next pass retries from there"
+                break               # do NOT advance past a record we could not read
             }
         }
         if ($newest -ge 0) { $next[$ch] = $newest }
         $r.channels[$ch] = @{ from = $from; to = $newest }
+    }
+    # PRUNE: once this pass's mark covers a notified id, the set no longer needs it. Carrying the
+    # rest forward is what keeps a live-notified record suppressed across the next boot.
+    foreach ($k in @($marks.Keys)) {
+        if ($k -notlike "$($script:QwtDeathNotifiedKey)/*") { continue }
+        $chan = $k.Substring($script:QwtDeathNotifiedKey.Length + 1)
+        $mark = if ($next.ContainsKey($chan)) { [long]$next[$chan] } else { -1 }
+        $keep = @(@($marks[$k]) | Where-Object { [long]$_ -gt $mark })
+        if ($keep.Count -gt 0) { $next[$k] = $keep }
     }
     [void](Write-QwtDeathWatermark -Marks $next)
     if ($fresh) {

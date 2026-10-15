@@ -1950,6 +1950,22 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the
   else
     qvm-prefs "$app" netvm '' >/dev/null 2>&1
   fi
+  # THE EVIDENCE STICK, WHICH THIS CELL NEVER HAD. Every other cell gets a DIAG log volume on the
+  # prime-run path above; this one derives an AppVM from a template instead and never reached that
+  # code, so LOGVOL_IMG stayed unset and grade_cell_logsweep reported "no log volume was attached
+  # for this cell". MEASURED in run 38787325142: win10-appvm pulled ONE file - a zero-byte
+  # sweep.log, 0 QWT lines - and its sweep FAILED for missing data, which it should. One cell in
+  # eight had produced no guest evidence in any run.
+  # BEFORE THE FIRST BOOT: a --required assignment is satisfied at domain creation, so a volume
+  # attached after the start is invisible to the guest.
+  LOGVOL_VM="$app"; LOGVOL_IMG=$(logvol_image "$app")
+  if logvol_create "$LOGVOL_IMG" "$app" >>"$M/$3-appvm-logvol-setup.out" 2>&1 \
+     && logvol_attach "$app" "$LOGVOL_IMG" "$M/logvol-manifest.json" >>"$M/$3-appvm-logvol-setup.out" 2>&1; then
+    say "  $3-appvm: log volume attached ($LOGVOL_IMG)"
+  else
+    say "  $3-appvm: [WARN] log volume not attached - this cell's guest logs cannot be swept: $(tail -1 "$M/$3-appvm-logvol-setup.out" 2>/dev/null | cut -c1-140)"
+    LOGVOL_IMG=""
+  fi
   say "  $app re-created FRESH from $tpl (private auto-seeded from the template's private at creation)"
   local b
   # A dom0 DESKTOP SWITCH MUST NOT FAIL A CELL. Measured 2026-10-10 and CONFIRMED BY THE OWNER, who was
