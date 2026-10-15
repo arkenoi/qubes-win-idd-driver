@@ -311,5 +311,43 @@ else
   no "T18b a BOM reached the reported message" "$(printf '%s' "$d" | grep -a UNACCOUNTED | head -1)"
 fi
 
+# --- T19: AN UNDECLARED LINE OF OURS BLOCKS, because a gate that judges a fraction of the run
+# must not report silence. MEASURED 2026-10-16: this gate read `lines=65 with_declared_level=6
+# without=59 third_party=0` on a real quick-upgrade log - 9% judged - printed "that is the gap,
+# named" and exited 0. quick-upgrade.sh:167 said it would only gate once its coverage supported it,
+# so the two halves locked each other and a run passed with real errors in its log.
+mkdir -p "$T/cov"
+printf '22:36:24 quick-upgrade[v]: booting v with the release ISO as CD\n22:37:54 quick-upgrade[v]:   cdboot: session up\n' > "$T/cov/undeclared.log"
+printf '22:36:24 quick-upgrade[v]: [INFO] booting v with the release ISO as CD\n22:37:54 quick-upgrade[v]: [INFO]   cdboot: session up\n' > "$T/cov/declared.log"
+printf '22:36:24 quick-upgrade[v]: [INFO] booting\n22:37:57 quick-upgrade[v]: [WARN] log-volume bind failed - logs stay on C:\n' > "$T/cov/declared-warn.log"
+
+bash tools/sweep-gate.sh "$T/cov/undeclared.log" >"$T/cov/u.out" 2>&1; urc=$?
+if [ "$urc" -ne 0 ] && grep -qa 'undeclared_ours=2' "$T/cov/u.out"; then
+  ok "T19 a log of OURS with no declared level BLOCKS, and says how many it could not judge"
+else
+  no "T19 undeclared lines of ours did not block" "rc=$urc $(grep -a SWEEP-GATE-RESULT "$T/cov/u.out" | head -1)"
+fi
+
+bash tools/sweep-gate.sh "$T/cov/declared.log" >"$T/cov/d.out" 2>&1; drc=$?
+if [ "$drc" -eq 0 ] && grep -qa 'with_declared_level=2 without=0' "$T/cov/d.out"; then
+  ok "T19b the same run with every line declared is fully judged and passes"
+else
+  no "T19b a fully declared clean log did not pass" "rc=$drc $(grep -a COVERAGE "$T/cov/d.out" | head -1)"
+fi
+
+bash tools/sweep-gate.sh "$T/cov/declared-warn.log" >"$T/cov/w.out" 2>&1; wrc=$?
+if [ "$wrc" -ne 0 ] && grep -qa 'unaccounted=' "$T/cov/w.out" && ! grep -qa 'undeclared_ours=' "$T/cov/w.out"; then
+  ok "T19c a declared warning blocks for being UNACCOUNTED, not for coverage - the reasons stay distinct"
+else
+  no "T19c the block reason was wrong" "rc=$wrc $(grep -a SWEEP-GATE-RESULT "$T/cov/w.out" | head -1)"
+fi
+
+SWEEP_GATE_ALLOW_UNDECLARED=1 bash tools/sweep-gate.sh "$T/cov/undeclared.log" >"$T/cov/a.out" 2>&1; arc=$?
+if [ "$arc" -eq 0 ] && grep -qa 'allowed by SWEEP_GATE_ALLOW_UNDECLARED' "$T/cov/a.out"; then
+  ok "T19d the escape hatch works and RECORDS itself in the output rather than hiding"
+else
+  no "T19d the escape hatch did not behave" "rc=$arc"
+fi
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

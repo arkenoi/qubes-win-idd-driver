@@ -87,7 +87,18 @@ case "$OS" in win[0-9]*) ;; *) echo "[ERROR] FATAL: os must look like win<versio
 
 OUT="${QU_OUT:-$HOME/qwt-quick-upgrade}/$SUBJECT-$(date -u +%Y%m%d-%H%M%S)"; mkdir -p "$OUT"
 R="$OUT/quick-upgrade.log"; : > "$R"
-log(){ echo "$(date -u +%H:%M:%S) quick-upgrade[$SUBJECT]: $*" | tee -a "$R"; }
+# EVERY LINE DECLARES ITS LEVEL. MEASURED 2026-10-16: sweep-gate reported
+# `lines=65 with_declared_level=6 without=59 third_party=0` on this log - it could judge 9% of its
+# input, said so in prose ("that is the gap, named"), and exited 0 anyway. The two halves locked
+# each other: the gate stays advisory until its coverage is credible, and coverage was 9% because
+# this narration carried no tag. Guessing a level from the words is not the fix - blog_level
+# refuses vocabulary for good reason - so the EMITTER declares, which is the owner's standing rule.
+# A caller that already passes a level keeps it; everything else is INFO, because narration is.
+log(){ case "$*" in
+         "[ERROR]"*|"[WARN]"*|"[WARNING]"*|"[INFO]"*|"[DEBUG]"*) _m="$*" ;;
+         *) _m="[INFO] $*" ;;
+       esac
+       echo "$(date -u +%H:%M:%S) quick-upgrade[$SUBJECT]: $_m" | tee -a "$R"; }
 PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); log "PASS  $*"; }
 no(){ FAIL=$((FAIL+1)); log "[ERROR] FAIL  $*"; }

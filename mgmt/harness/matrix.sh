@@ -142,7 +142,14 @@ R=$M/matrix.log; : > "$R"
 # saying which: measured 2026-10-14, the driver wrote "[20:29:12] PASS release package verified"
 # and this wrote "[23:29:13] Gate-0 ... PASS" for events seconds apart (CAMPAIGNLOGTZSPLIT).
 # Guest-side stamps are UTC too, so UTC is the one scale every artefact of a campaign shares.
-say(){ echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$R"; }
+# EVERY LINE DECLARES ITS LEVEL - same reason as quick-upgrade.sh's log(): a sweep that can only
+# judge the lines carrying a tag is blind to everything else, and it will not gate until its
+# coverage is credible. The emitter declares; a caller that already passed a level keeps it.
+say(){ case "$*" in
+         "[ERROR]"*|"[WARN]"*|"[WARNING]"*|"[INFO]"*|"[DEBUG]"*) _m="$*" ;;
+         *) _m="[INFO] $*" ;;
+       esac
+       echo "[$(date -u +%H:%M:%S)] $_m" | tee -a "$R"; }
 PASS=0; FAIL=0; INVALID=0
 ok(){ PASS=$((PASS+1)); say "PASS  $*"; }
 

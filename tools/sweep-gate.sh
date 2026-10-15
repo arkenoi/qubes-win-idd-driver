@@ -194,6 +194,11 @@ _is_msi_verbose() { local _h; _h=$(_text "$1" | head -c 400); grep -qa 'Verbose 
 
 unlevelled() { local n=0 t=0 m=0 a b
     for l in "$@"; do
+        # NOT ITS OWN REPORT. The report is swept alongside the logs on a re-run (matrix globs
+        # "$M"/*.out and writes "$M"/sweep-gate.out into it), and its own narration carries no
+        # level - so counting it made the gate block on its own output. The message census already
+        # skips it for exactly this reason; the coverage census must agree.
+        _is_own_report "$l" && continue
         a=$(_text "$l" | grep -ac . || true)
         # BOTH counts over the same population - non-empty lines. Counting `without` over every line
         # including blanks made with_declared_level go NEGATIVE (-20) on a real set of logs.
@@ -473,14 +478,33 @@ done < "$LD"
 rm -f "$NOW" "$LD" "$VAR"
 read -r nolevel total msilevel < <(unlevelled "$@")
 echo "SWEEP-GATE-COVERAGE lines=$total with_declared_level=$((total - nolevel)) without=$nolevel third_party=${msilevel:-0}"
+# AND NOW IT COUNTS. Naming the gap and exiting 0 is what kept this instrument advisory: it
+# reported `lines=65 with_declared_level=6 without=59 third_party=0` - 9% of its input judged - and
+# passed, while quick-upgrade.sh:167 said it would only gate "when its coverage and its judge's
+# score support it". The two halves locked each other, so a run could pass with real errors in its
+# log. The emitters declare now (quick-upgrade.sh log(), matrix.sh say()), which takes coverage to
+# 100% on our own logs, so a line of OURS without a level is an emitter REGRESSION and is treated
+# as one. msiexec's verbose log is third-party and has no severity to read; it is excluded by count.
+blind=0
 if [ "${nolevel:-0}" -gt 0 ]; then
     echo "  $nolevel line(s) carry NO declared level, so this tool cannot judge them. That is the gap, named."
     if [ "${msilevel:-0}" -gt 0 ]; then
         echo "  of those, $msilevel are msiexec's own verbose log - a third-party format with no severity to read."
-        echo "  $((nolevel - msilevel)) are OURS, and those are the ones an emitter can be made to declare."
+    fi
+    blind=$(( nolevel - ${msilevel:-0} ))
+    if [ "$blind" -gt 0 ]; then
+        echo "  $blind of them are OURS. An emitter that does not declare makes this gate judge a FRACTION of the run,"
+        echo "  which is how it came to read 6 lines in 65 and pass. Declare the level at the emitter; guessing it"
+        echo "  from the words is not an option here (blog_level refuses vocabulary, and was right to)."
+        echo "  To run anyway while an emitter is being fixed: SWEEP_GATE_ALLOW_UNDECLARED=1."
+        [ "${SWEEP_GATE_ALLOW_UNDECLARED:-0}" = 1 ] && { echo "  (allowed by SWEEP_GATE_ALLOW_UNDECLARED=1 - recorded, not hidden)"; blind=0; }
     fi
 fi
 
+if [ "${blind:-0}" -gt 0 ]; then
+    echo "SWEEP-GATE-RESULT undeclared_ours=$blind - this gate judged only part of the run, so its silence means nothing"
+    exit 1
+fi
 if [ "$newn" -gt 0 ] || [ "$rose" -gt 0 ]; then
     echo "SWEEP-GATE-RESULT unaccounted=$newn risen=$rose accounted=$acc"
 [ -z "${SWEEP_GATE_DUMP:-}" ] && echo "  every distinct line behind these messages: re-run with SWEEP_GATE_DUMP=<path> - grouping is presentation, nothing is discarded"
