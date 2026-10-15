@@ -101,8 +101,16 @@ creation?"*
 
 ## Not done
 
-* The first guest built under this design has not yet been measured. Until a cell reports
-  `clock_boot_correction_s = 0`, this is reasoned and offline-tested, not witnessed.
+* **MEASURED 2026-10-15, witnessed.** A `win10-clean` cell against package 38771352401 (head
+  3ca82a2c), clean-installed from the rebuilt `win10-base`: **`clock_boot_correction_s = 0`** against
+  a max of 60, where the same cell read 10800 that morning. P1 breaches on that cell: **0**.
+  Corroborating, from the same subject: the sweep's own pre-sync probe read `skew -6 s` (it read
+  ±10800 on every prior run); guest local `20:09:26` against dom0 `20:09:34`; guest zone
+  `FLE Standard Time`, which is dom0's `Europe/Sofia`; `RealTimeIsUniversal` -> `ERROR: the system
+  was unable to find the specified registry key or value`; installer RESULT `ok:true` with no
+  error-class flags. Three guests at three stages read dom0's clock with nothing declared: the
+  pristine base at 19:36, the primer churn at 19:58 (its own output `Date: 15/10/2026 19:54:29`),
+  and the installed subject above.
 * `win11de-qwt` was booted twice on 2026-10-15 and its seal could not be rewritten either time
   (`w_halt` expired at 900 s with the guest still Running - DEGOLDENHALTSLOW), so its seal describes
   pre-boot revisions. Its measured state is `RealTimeIsUniversal` absent and zone `FLE Standard Time`.
