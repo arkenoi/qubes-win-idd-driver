@@ -77,27 +77,28 @@
     <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64"
         publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
         xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-      <!-- THE HARDWARE CLOCK IS UTC AND THE OS APPLIES THE ZONE - the ordinary convention, and the
-           one Qubes expects. Without this Windows reads the RTC as LOCAL time, so the guest's UTC
-           comes out wrong by its own zone offset or by dom0's, depending on the qube's `timezone`
-           feature. Measured 2026-10-14: every acceptance guest ran 10800 s ahead for its whole
-           life, our clock puller corrected it three times in six minutes and lost, and the log
-           analyser silently SHIFTED 2249 lines to compensate instead of reporting it.
-           Set here, in specialize, because it must be true before OOBE, before our installer, and
-           before any driver catalog is validated against the system clock. -->
-      <RunSynchronous>
-        <RunSynchronousCommand wcm:action="add">
-          <Path>cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation" /v RealTimeIsUniversal /t REG_DWORD /d 1 /f</Path>
-          <Description>hardware clock is UTC; the OS applies the time zone</Description>
-          <Order>1</Order>
-        </RunSynchronousCommand>
-      </RunSynchronous>
+      <!-- THIS PASS DELIBERATELY WRITES NOTHING ABOUT THE HARDWARE CLOCK, and that is the fix.
+           It used to set RealTimeIsUniversal=1 here, which is what made the rig unable to measure
+           its own product: a forced value in the image was inherited by every golden and every
+           clone, so whatever the installer and the per-boot task derived was overwritten before
+           anything could observe it. Worse, it is the WRONG half of the pair for a qube in normal
+           service - measured 2026-10-15, a guest whose RTC holds dom0's local time booted dom0's
+           whole offset AHEAD, exactly 10800 s, which our clock puller corrected on every boot and
+           the log analyser silently compensated for.
+           WINDOWS' OWN DEFAULT IS ALREADY CORRECT HERE. With the value absent Windows reads the
+           RTC as LOCAL time, and qubes-core-admin gives every Windows qube `timezone=localtime`,
+           which is what makes Xen present the RTC as dom0's local time. Set the guest's zone from
+           /qubes-timezone and the two agree, with nothing to correct and nothing to declare.
+           The PRODUCT derives the value, in the only two places that can: the installer chooses an
+           opening value for a clean install - the one window where the guest has no time source at
+           all, no qrexec and no dom0 - and guest\sync-clock-from-dom0.ps1 converges it at every
+           boot against dom0's own time. An image must not pre-empt either. See docs/ADR-clock.md. -->
     </component>
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
         publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <ComputerName>win11-idd-test</ComputerName>
-      <!-- THE OS APPLIES THE ZONE; THE HARDWARE CLOCK IS UTC (RealTimeIsUniversal, set in the
-           specialize pass above). This was UTC, which made every rig guest display UTC instead of
+      <!-- THE OS APPLIES THE ZONE TO WHATEVER THE HARDWARE CLOCK HOLDS, and nothing in this
+           answer file declares which convention that is any more (see above). This was UTC, which made every rig guest display UTC instead of
            the wall-clock time its user would see - and set-time.ps1 records that a zone-offset bug
            "was never seen here" for exactly that reason: with the offset pinned to zero, a wrong
            zone cannot show up. dom0's zone is Europe/Sofia, whose Windows id is this one; the

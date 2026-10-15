@@ -43,10 +43,17 @@ foreach ($p in @($client, $setter)) {
 }
 
 $before = (Get-Date).ToUniversalTime()
-$deadline = (Get-Date).AddSeconds($DeadlineSeconds)
+# THE BOUND IS MONOTONIC, BECAUSE THIS LOOP CAN STRADDLE THE CLOCK CORRECTION IT CAUSES.
+# The pull is fire-and-forget: a request that succeeds hands dom0's date to a SEPARATE set-time.ps1
+# process, which may set the clock while this loop is still running. A wall-clock bound then breaks
+# in both directions - a guest corrected BACKWARD by dom0's offset (three hours, measured) would
+# loop for three hours past its own limit, and one corrected forward would exit instantly.
+# Stopwatch is QueryPerformanceCounter and a clock set cannot move it. The clock READINGS below stay
+# wall-clock on purpose: comparing dom0's stamp against our own clock IS the measurement.
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
 $exit = 'deadline'
 $lastErr = ''
-while ((Get-Date) -lt $deadline) {
+while ($sw.Elapsed.TotalSeconds -lt $DeadlineSeconds) {
     # FOUR FIELDS, AND THE SERVICE IS PIPED TO A LOCAL PROGRAM. Measured the hard way on
     # win11r-err 2026-10-08: passing '@default|qubes.GetDate' produced 34 copies of
     # "wmain: Usage: qrexec-client-vm.exe domain name|qrexec service name|local user name|local
@@ -135,39 +142,92 @@ $after = (Get-Date).ToUniversalTime()
 # NO WITNESS MEANS NO DECISION. If there is no SETTIME line from this boot, or it cannot be parsed,
 # this says so and changes nothing - which is the behaviour the old version lacked.
 function Get-ClockWitness {
-    # The newest SETTIME line, as a hashtable, or $null.
+    # The newest SETTIME line BY THE DOM0 TIMESTAMP IT CARRIES, as a hashtable, or $null.
+    #
+    # CHOSEN BY CONTENT, NOT BY FILE ORDER, AND NEVER BY MTIME. This used to sort the files by
+    # LastWriteTime descending and then take the LAST match the pipeline emitted - which is the
+    # newest line of the OLDEST file, not the newest line overall. It also anchored freshness on
+    # guest file timestamps, which this very script moves backwards by hours when it corrects the
+    # clock. dom0's own UTC, carried inside the line, is the only monotone reference available here.
     $dir = $null
     try { $dir = (Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -Name LogDir -ErrorAction Stop).LogDir } catch { }
     if ([string]::IsNullOrWhiteSpace($dir)) { $dir = Join-Path $tools 'log' }
     if (-not (Test-Path -LiteralPath $dir)) { return $null }
-    $line = $null
+    $best = $null
+    $inv  = [Globalization.CultureInfo]::InvariantCulture
     try {
-        $line = Get-ChildItem -LiteralPath $dir -Filter 'set-time.ps1-*.log' -ErrorAction Stop |
-                Sort-Object LastWriteTime -Descending |
-                ForEach-Object { Select-String -LiteralPath $_.FullName -Pattern 'SETTIME clock set to ' -ErrorAction SilentlyContinue } |
-                Select-Object -Last 1
+        foreach ($f in @(Get-ChildItem -LiteralPath $dir -Filter 'set-time.ps1-*.log' -ErrorAction Stop)) {
+            foreach ($hit in @(Select-String -LiteralPath $f.FullName -Pattern 'SETTIME clock set to ' -ErrorAction SilentlyContinue)) {
+                $mm = [regex]::Match($hit.Line, 'SETTIME clock set to (?<utc>\S+) \(was (?<skew>-?[0-9.]+) s out, now (?<res>-?[0-9.]+) s; guest zone (?<zone>.+?), offset (?<off>[-0-9:.]+)\)')
+                if (-not $mm.Success) { continue }
+                [datetime]$u = [datetime]::MinValue
+                if (-not [datetime]::TryParse($mm.Groups['utc'].Value, $inv,
+                        ([Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal), [ref]$u)) { continue }
+                [timespan]$o = [timespan]::Zero
+                if (-not [timespan]::TryParse($mm.Groups['off'].Value, $inv, [ref]$o)) { continue }
+                if ($null -ne $best -and $u -le $best.Dom0Utc) { continue }
+                $best = @{
+                    Dom0Utc = [datetime]::SpecifyKind($u, [DateTimeKind]::Utc)
+                    SkewS   = [double]$mm.Groups['skew'].Value
+                    Offset  = $o
+                }
+            }
+        }
     } catch { }
-    if (-not $line) { return $null }
-    $m = [regex]::Match($line.Line, 'SETTIME clock set to (?<utc>\S+) \(was (?<skew>-?[0-9.]+) s out, now (?<res>-?[0-9.]+) s; guest zone (?<zone>.+?), offset (?<off>[-0-9:.]+)\)')
-    if (-not $m.Success) { return $null }
-    $inv = [Globalization.CultureInfo]::InvariantCulture
-    [datetime]$u = [datetime]::MinValue
-    if (-not [datetime]::TryParse($m.Groups['utc'].Value, $inv,
-            ([Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal), [ref]$u)) { return $null }
-    [timespan]$o = [timespan]::Zero
-    if (-not [timespan]::TryParse($m.Groups['off'].Value, $inv, [ref]$o)) { return $null }
-    return @{
-        Dom0Utc = [datetime]::SpecifyKind($u, [DateTimeKind]::Utc)
-        SkewS   = [double]$m.Groups['skew'].Value
-        Offset  = $o
+    return $best
+}
+
+function Wait-ClockWitness {
+    # THE PULL IS FIRE-AND-FORGET, SO THE WITNESS LANDS AFTER WE ASKED FOR IT. The client writes the
+    # request to this guest's own qrexec agent and exits; dom0 then pipes its date into a SEPARATE
+    # set-time.ps1 process, which writes the SETTIME line whenever it gets there. Reading the log
+    # immediately afterwards therefore finds the PREVIOUS boot's line, or nothing at all - measured
+    # on run 13's first cell, where CLOCKCONV refused at 14:18:14.479 while the line it needed was
+    # written at 14:18:14.305, 174 ms earlier (CLOCKWITNESSMISSEDONFIRSTBOOT). That refusal was read
+    # as "no witness exists", which is a different fact from "it has not landed yet".
+    #
+    # FRESHNESS IS JUDGED ON CONTENT, NOT ON A CLOCK THIS SCRIPT IS MOVING. A witness from this boot
+    # carries dom0's UTC as it was moments ago, and the pull has just made our own clock agree with
+    # dom0 - so this boot's witness sits close to our clock while an earlier boot's is hours or days
+    # off. The clock is RE-READ on every attempt, because set-time.ps1 may correct it DURING the
+    # wait, which is the whole reason for waiting.
+    #
+    # THREE EXITS: a fresh witness, the deadline with nothing on disk, or the deadline with only a
+    # stale line - and the last two are reported rather than guessed around. Bounded, because a
+    # witness that never arrives must not hold up the boot.
+    # THE BOUND IS MONOTONIC AND THE FRESHNESS TEST IS NOT, and that split is the point. This wait
+    # exists to span the moment set-time.ps1 sets the clock, so a wall-clock bound is exactly the
+    # wrong instrument: a backward correction of dom0's offset - three hours, measured - would leave
+    # the limit unreached for three hours and hang the boot. Stopwatch cannot be moved by a clock
+    # set. The freshness comparison below MUST stay on the wall clock, because comparing dom0's own
+    # stamp against our just-corrected clock is the measurement being made.
+    param([int]$TimeoutSeconds = 20, [int]$ToleranceSeconds = 120)
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $stale = $null
+    while ($true) {
+        $cand = Get-ClockWitness
+        if ($null -ne $cand) {
+            $age = [math]::Abs(((Get-Date).ToUniversalTime() - $cand.Dom0Utc).TotalSeconds)
+            if ($age -le $ToleranceSeconds) { return $cand }
+            $stale = $cand
+        }
+        if ($sw.Elapsed.TotalSeconds -ge $TimeoutSeconds) { break }
+        Start-Sleep -Seconds 1
     }
+    if ($null -ne $stale) {
+        LogWarning ("CLOCKCONV the only SETTIME witness on disk is from an earlier boot (dom0 time " +
+                    $stale.Dom0Utc.ToString('o') + " against this guest's " +
+                    (Get-Date).ToUniversalTime().ToString('o') + ") - waited $TimeoutSeconds s for " +
+                    "this boot's line and it did not arrive, so the convention was NOT decided")
+    }
+    return $null
 }
 
 if ($exit -eq 'set') {
     try {
-        $w = Get-ClockWitness
+        $w = Wait-ClockWitness
         if ($null -eq $w) {
-            LogWarning ('CLOCKCONV no usable SETTIME witness from this boot, so the RTC convention was NOT decided - ' +
+            LogWarning ('CLOCKCONV no usable SETTIME witness arrived within the wait, so the RTC convention was NOT decided - ' +
                         'RealTimeIsUniversal is untouched and the clock stays as the pull left it. This script cannot ' +
                         'see dom0 time itself: qrexec hands it to set-time.ps1, whose exit code does not come back.')
         } else {

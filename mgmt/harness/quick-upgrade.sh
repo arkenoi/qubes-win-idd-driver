@@ -310,8 +310,13 @@ qvm-features "$SUBJECT" os Windows
 # and drvinst blocked for 25 minutes. The golden it was cloned from had timezone=localtime all
 # along; this create path copied the VOLUMES and not the features, so the subject differed from
 # its own golden in exactly the variable that decides the failure.
-# The RTC holds UTC (Qubes default); see prime-run.sh. We do not set this feature.
-qvm-features --unset "$SUBJECT" timezone 2>/dev/null || true
+# THE QUBE'S `timezone` FEATURE IS NOT OURS TO TOUCH - NOT EVEN TO UNSET IT. It decides what the
+# qube's RTC holds: undefined means true UTC (Xen's default), `localtime` means DOM0 LOCAL. dom0
+# sets `localtime` for every os=Windows qube the moment the GUEST reports itself through
+# qubes.NotifyTools, so a user's Windows qube HAS it - and unsetting it here put the rig in the one
+# configuration where a wrong RealTimeIsUniversal is invisible (Jev: harness_clear_hides_it 0.84).
+# The create path leaves it alone, clock_feature_report records what the cell ran under, and the
+# PRODUCT derives the matching registry value. See docs/ADR-clock.md.
 # THE REST OF THE GOLDEN'S FEATURES - the same list mgmt/clone-guest.sh copies. The timezone fix
 # above closed one feature of this gap and left the others: measured 2026-09-28, every subject this
 # path created (win11de-v5, -v7, -sub, -bq ...) carried os+timezone only, while the golden carries

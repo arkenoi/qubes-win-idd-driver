@@ -645,10 +645,10 @@ detach_release_iso(){ # $1=vm $2=label - best effort. The CD is a start-time att
 # THE QUBE'S timezone FEATURE COMES BACK AT EVERY INSTALL, AND THAT IS THE USER'S CONFIGURATION.
 # The feature decides what the qube's RTC holds: unset (the Qubes default, and what every Linux
 # qube here has) means true UTC; `localtime` means DOM0 LOCAL. dom0 sets it to `localtime` for every
-# os=Windows qube when it receives qubes.NotifyTools, so a user's Windows qube HAS it. Our images set
-# RealTimeIsUniversal=1, i.e. Windows reads the RTC as UTC - which is true only while the feature
-# stays unset, and it does not. That contradiction is the product defect RTIUWRONGDEFAULT; this
-# harness records which convention a cell ran under and changes nothing.
+# os=Windows qube when it receives qubes.NotifyTools, so a user's Windows qube HAS it. Our images no
+# longer declare a convention at all: Windows' default is to read the RTC as LOCAL time, which is
+# the half that PAIRS with `localtime`, and the product derives the value per guest. This harness
+# records which convention a cell ran under and changes nothing.
 # MEASURED 2026-10-15 on the acceptance run: the harness unset it BEFORE the install, the install
 # reported os=Windows to dom0 (core-agent/src/advertise-tools writes /qubes-tools/{version,os,qrexec,
 # gui} and calls qubes.NotifyTools), and the feature came back as `localtime` on every QWT-carrying
@@ -791,14 +791,13 @@ ensure_churn_target(){ # $1=vm [$2=source golden] - create the disposable churn 
   # measured 2026-09-25). A create path that copies only the volumes loses the feature, so the
   # subject differed from its golden in exactly that.
   #
-  # BUT WE DO NOT SET IT AT ALL. This forced the localtime feature unconditionally, justified by
-  # "the goldens carry timezone=localtime" - and win10-base and win11r-base do NOT: they are UTC
-  # guests whose RTC must hold true UTC, which is what an UNSET feature gives. Forcing localtime
-  # onto a UTC guest makes it read +dom0_offset, measured 2026-10-14 as a permanent +3 h that the
-  # clock puller re-corrected three times in six minutes. Both consistent pairings are safe
-  # against the certificate hang - a UTC guest with the feature unset sits AT true UTC, never
-  # behind it - so the golden's own setting is the one to carry over.
-  qvm-features --unset "$vm" timezone 2>/dev/null || true
+  # THE QUBE'S `timezone` FEATURE IS NOT OURS TO TOUCH - NOT EVEN TO UNSET IT. It decides what the
+  # qube's RTC holds: undefined means true UTC (Xen's default), `localtime` means DOM0 LOCAL. dom0
+  # sets `localtime` for every os=Windows qube the moment the GUEST reports itself through
+  # qubes.NotifyTools, so a user's Windows qube HAS it - and unsetting it here put the rig in the one
+  # configuration where a wrong RealTimeIsUniversal is invisible (Jev: harness_clear_hides_it 0.84).
+  # The create path leaves it alone, clock_feature_report records what the cell ran under, and the
+  # PRODUCT derives the matching registry value. See docs/ADR-clock.md.
   for p in memory:8192 maxmem:8192 vcpus:4 qrexec_timeout:600; do qvm-prefs "$vm" "${p%%:*}" "${p##*:}"; done
   qvm-prefs "$vm" netvm '' 2>/dev/null
   return 0
@@ -1937,7 +1936,7 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the
   qvm-tags "$app" add win-idd-testbed \
     || { no "$3-appvm: could not TAG $app win-idd-testbed - dom0 policy will refuse every call to it; not proceeding"; return; }
   qvm-features "$app" os Windows >/dev/null 2>&1
-  qvm-features --unset "$app" timezone >/dev/null 2>&1 || true   # RTC holds UTC; see the note above
+  # (the AppVM inherits its template's `timezone` feature, and neither is ours to set - see above)
   qvm-prefs "$app" memory 8192 >/dev/null 2>&1; qvm-prefs "$app" maxmem 0 >/dev/null 2>&1
   qvm-prefs "$app" vcpus 4 >/dev/null 2>&1; qvm-prefs "$app" qrexec_timeout 6000 >/dev/null 2>&1
   if [ "$had_app" = 1 ]; then

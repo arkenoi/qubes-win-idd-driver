@@ -5,6 +5,13 @@
 AUTHORITATIVE. Maintain by editing in place; never append dated sections (the pre-commit hook
 refuses them).
 
+**The normal configuration is left alone until a measurement says otherwise.** The answer files
+declare nothing, no golden carries a forced value, the harness only reports, and
+`tools/lint-harness.py` L26 refuses a new writer. The product touches the convention in exactly two
+places: the installer writes it ONLY on the failure branch of its payload-clock gate — the one
+moment it demonstrably matters — and the per-boot task converges it from an independent witness.
+Every bound that can span a correction is monotonic.
+
 ## In plain English
 
 A PC keeps a battery-backed clock, and two operating-system families disagree about what it holds.
@@ -28,50 +35,170 @@ Windows declares which convention it believes through one registry value,
 `HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation\RealTimeIsUniversal`: 1 means "read the
 RTC as UTC", absent or 0 means "read it as local time". It is consulted **only at boot**.
 
-So a correct Qubes Windows guest is: `RealTimeIsUniversal` **0**, and the guest's own timezone equal
-to dom0's — which Qubes publishes to every qube in qubesdb as `/qubes-timezone` (an IANA name such
-as `Europe/Sofia`). Then `guest_UTC = RTC − dom0_offset = dom0_local − dom0_offset = real UTC`,
-right from the first instant of the boot, with nothing to correct.
+## The two defaults were already consistent, and we broke the pairing
 
-## The decision, and why it is not a constant
+Windows' own default is to read the RTC as **local time**. Qubes makes a Windows qube's RTC hold
+**dom0's local time**. Those are the two halves of the same convention. Set the guest's zone to
+dom0's — which Qubes publishes to every qube in qubesdb as `/qubes-timezone`, an IANA name such as
+`Europe/Sofia` — and the guest is correct from the first instant of the boot:
 
-**The correct value changes during a guest's life**, because the extension above is driven by what
-the guest REPORTS, not by what dom0 already knows. Both `guest_os` and `qrexec` are read out of the
-`untrusted_features` payload of a `features-request` event, which our own agent triggers by calling
-`qubes.NotifyTools` when it first starts. Setting `qvm-features <vm> os Windows` from dom0 does not
-trigger it.
+```
+guest_local = RTC = dom0_local          and          guest_UTC = dom0_local − dom0_offset = real UTC
+```
 
-| phase | RTC holds | correct `RealTimeIsUniversal` |
+with nothing written, nothing derived and nothing to correct. **Writing 1 is what broke it.** A
+guest told to read a dom0-local RTC as UTC sits dom0's whole offset AHEAD, for ever. Measured
+2026-10-15 on a live guest: `RealTimeIsUniversal=1`, guest timezone UTC, guest clock `10:38:51Z`
+against a real UTC of `07:38:40Z` — exactly +10800 s.
+
+So the design is: **the image declares nothing, and the product derives what it needs.** Jev,
+premise-framed on the measured mechanism: `defaults_are_already_consistent` 0.79,
+`forcing_vs_product_write` = stop forcing, keep a derived product write, 0.92.
+
+### Why the bug emerged before the forcing was removed
+
+Because every layer forced the value, and each had a comment explaining why it was right:
+
+| layer | what it did | why it was wrong |
 |---|---|---|
-| Windows Setup and the first install, before QWT reports | true UTC | **1** |
-| every boot after dom0 has set `localtime` | dom0 local | **0** |
+| four `mgmt/autounattend*.xml` | `reg add … RealTimeIsUniversal /d 1` in the specialize pass | baked into every image, inherited by every golden and clone |
+| `mgmt/harness/set-rtc-utc-golden.sh` | wrote it into a sealed golden | the harness deciding a product setting, one layer earlier |
+| `w_rtc_utc`, called from `prime-run.sh` | wrote it into the subject the moment qrexec answered — i.e. AFTER the install | whatever the installer and the per-boot task derived was overwritten on every primed subject |
+| four create paths | `qvm-features --unset <vm> timezone` | made the RTC hold true UTC, the one configuration where a wrong value is invisible |
 
-Measured independently: `win10-base` (pristine, no QWT) and a fresh `qvm-create` qube have the
-feature unset; every QWT-carrying guest has `localtime`.
+The gate therefore measured the forcing, not the product. On run 11 the installer logged
+`RealTimeIsUniversal set to 0 for the next boot (was 1)` and every boot that followed ran with **1**
+and a three-hour error. Jev: `report_not_decide_is_right` 0.94, `harness_clear_hides_it` 0.84.
 
-Each window has a real failure mode, and both have been observed:
+That is also why the metric looked like an artefact and was not. `detect_clock_offset` finds a
+BACKWARD JUMP between consecutive lines of one log file, which nothing but a real mid-boot
+correction produces. I claimed twice that it was an artefact — first an unavoidable install-era
+boot, then the sweep misreading local-time stamps as UTC. **Both were wrong.** Forcing 1 on a qube
+whose RTC holds dom0 local made the guest boot an offset ahead, the puller corrected it back, and
+that correction *was* the jump.
 
-* **Getting it wrong early breaks driver installation.** A true-UTC RTC read as local puts the guest
-  BEHIND real time by its own zone offset, and Windows validates driver catalogs against the clock —
-  a certificate minted on the CI runner then looks *not yet valid*. Measured 2026-09-25 on a German
-  25H2 guest: `0x800B0101`, with `drvinst` sitting at 0.125 s of CPU for twenty-five minutes rather
-  than failing. The rig never reproduced it because every rig image is pinned to UTC, where that
-  offset is zero.
-* **Getting it wrong later puts the guest dom0's whole offset ahead, for ever.** Measured 2026-10-15
-  on a live guest: `RealTimeIsUniversal=1`, guest timezone UTC, guest clock `10:38:51Z` against a
-  real UTC of `07:38:40Z` — exactly +10800 s. Ahead is harmless to the catalog gate, which is why it
-  survived unnoticed while our own clock puller re-corrected it on every boot and the log analyser
-  silently shifted the timestamps.
+## Where the product touches it, and why only there
 
-So the installer and the answer files write **1**, which is right for their window and harmless
-afterwards, and the per-boot task **derives** the convention and flips the value when it no longer
-fits (`CLOCKCONV` in `guest/sync-clock-from-dom0.ps1`). The derivation is possible because that task
-has just learned real UTC from dom0: inverting what the guest believed gives what the RTC actually
-holds, and comparing that against real UTC says which convention fits. The write takes effect at the
-next boot, so a guest converges within one boot instead of being corrected for ever.
+### 1. The installer: only on the failure branch of a measurement
 
-**Either half alone is a shipped defect.** 1 without the convergence is the +3 h we shipped. 0 in the
-installer reintroduces the twenty-five-minute hang. A constant cannot be right in both windows.
+**The normal configuration is already correct, so the installer declares nothing by default.** It
+used to write 1 unconditionally on every install, and the answer files wrote it before that — which
+is how a forced value reached every golden and every clone. An install that writes a convention into
+a healthy guest is pre-empting a decision it has no evidence for.
+
+There is exactly one moment the value matters, and it is measurable: a guest whose clock cannot
+validate the payload's driver catalogs. `Assert-PayloadClockSane` already measures that, for the
+WHOLE payload rather than one driver — the audit that produced it found four sites that would hang
+identically, including `msiexec`'s own `ADDLOCAL InstallDriverPackages`. So:
+
+```
+$skewed = Assert-PayloadClockSane -Root $Root -Why 'stage 1 pre-flight'
+if ($skewed.Count -gt 0) { $fixed = Set-RtcConventionForNextBoot; Fail (... cause, and the fix ...) }
+```
+
+measure, branch on the result, then act. Nothing writes the value on the healthy path, and
+`rtc-utc-selftest.sh` asserts that ORDER — measurement line before the branch, branch before the
+call — rather than asserting a value, because every previous version of that check asserted whichever
+constant I believed that morning and went green each time I changed my mind.
+
+**Why 1 is the right thing to write at that moment, and the only lever available.** A guest that
+fails the gate is BEHIND real time: `drvinst` rejects a certificate minted on the CI runner as
+not-yet-valid and then waits rather than failing — `0x800B0101`, measured 2026-09-25 on a German
+25H2 guest as twenty-five minutes at 0.125 s of CPU. There is no time source to correct it with: a
+clean install has no qrexec and no dom0. Setting `RealTimeIsUniversal=1` moves the guest FORWARD by
+its own zone offset, which is exactly what a behind clock needs, and if the RTC's content turns out
+to be dom0-local instead, being wrong in THAT direction leaves the guest AHEAD — which every driver
+catalog still validates against. Our rig never reproduced the hang because every rig image is pinned
+to UTC, where the offset is zero and there is nothing to be behind by.
+
+The value takes effect only at the next boot, so this install is still refused — but the refusal now
+names the cause and a one-reboot fix instead of a clock the user must repair by hand, and it happens
+TERMINALLY and EARLY: before a CI certificate is trusted as a machine root CA, before testsigning,
+before autologon, before any reboot.
+
+### 2. The per-boot task: convergence, from an independent witness
+
+`guest/sync-clock-from-dom0.ps1` (`CLOCKCONV`) runs at every boot, has just learned real UTC from
+dom0, and is the only actor that can see both what the RTC holds and what the time really is. Jev
+0.85 that it must keep WRITING rather than only reporting: the installer's lever is a one-way nudge
+taken with no time source, so a guest it moved has to be able to come back.
+
+**Either half alone is a shipped defect.** A write with no convergence is the +3 h we shipped — a
+guest nudged forward and left there. Convergence with no write at all leaves a behind guest unable
+to install anything, because the convergence needs qrexec and the install is what delivers it. So
+`rtc-utc-selftest.sh` asserts the PAIR: that the installer's write is reachable only from a
+measurement, that it NAMES the convergence it depends on, and that the named convergence exists.
+
+### The measurement needs a witness that is not the guest's clock
+
+The derivation first compared the guest's clock BEFORE the time pull with its clock AFTER it, and
+concluded the convention fitted whenever they agreed. But the script cannot see whether the pull did
+anything: qrexec hands dom0's date straight to `set-time.ps1`, whose exit code does not come back
+through the client. A pull that changes nothing makes both readings the same number, so the test
+could not fail — and it reported `RealTimeIsUniversal=1 matches this qube's RTC convention` four
+times on a guest three hours out.
+
+`set-time.ps1` DID see dom0's value, and logs it:
+
+```
+SETTIME clock set to 2026-10-15T09:24:50.0000000Z (was -10821.2 s out, now 0 s;
+        guest zone FLE Standard Time, offset 02:00:00)
+```
+
+dom0's UTC, the pre-set skew (negative when the guest ran ahead) and the guest's offset — all
+measured before anything wrote to the clock. From those, what the RTC held is recoverable, and
+whether it equals dom0's UTC or dom0's local time names the value Windows should carry. **No
+witness, or a zero offset where the two conventions are the same arithmetic, means no decision and a
+loud line.** Jev: `detector_is_now_sound` 0.84.
+
+Two defects in reading that witness, both fixed:
+
+* **The offset must be the one IN EFFECT, not the zone's base.** `set-time.ps1` logs
+  `(Get-TimeZone).BaseUtcOffset`, which for FLE Standard Time is `02:00:00` all year while the
+  offset in effect under DST is `03:00:00`. Using the base value made a real three-hour displacement
+  match NEITHER hypothesis, so the convention was never flipped. The block takes the effective
+  offset from `[TimeZoneInfo]::Local` and reports both, so the two can never be confused again.
+* **The pull is fire-and-forget, so the witness lands after we asked for it.** The client writes the
+  request to the guest's own qrexec agent and exits; dom0 then pipes its date into a SEPARATE
+  `set-time.ps1` process. Reading the log immediately afterwards finds the PREVIOUS boot's line, or
+  nothing — measured on run 13 cell 1, where `CLOCKCONV` refused at `14:18:14.479` while the line it
+  needed was written at `14:18:14.305`, 174 ms earlier. `Wait-ClockWitness` now waits, bounded, for
+  a witness whose freshness is judged **on content** (dom0's own UTC, close to the clock the pull has
+  just corrected) rather than on a file mtime this script moves backwards by hours. Three exits: a
+  fresh witness, the deadline with nothing, the deadline with only a stale line — and the last two
+  are reported rather than guessed around. `Get-ClockWitness` also picks the newest line BY CONTENT:
+  it used to sort files by mtime descending and take the last match the pipeline emitted, which is
+  the newest line of the OLDEST file.
+
+### The two fragile moments a correction can touch
+
+Reaching the consistent state EARLIER is better, and the pairing above reaches it at the first
+instant of the boot with no correction at all. Where a correction still happens — the one-boot
+convergence case — it lands in a boot that has two clock-sensitive moments, and both are now
+explicitly protected.
+
+**1. Certificate and catalog validation.** Windows validates driver catalogs against the system
+clock, so a guest BEHIND real time rejects a freshly minted CI certificate as not-yet-valid and
+`drvinst` waits rather than failing. Protected by `Assert-PayloadClockSane`, which refuses the
+install TERMINALLY and EARLY — before a CI certificate is trusted as a machine root CA, before
+testsigning, before autologon, before any reboot — and now names the cause and a one-reboot fix
+rather than a clock the user must repair by hand.
+
+**2. The timers that bring the agents up.** Both relevant triggers are BOOT-relative and therefore
+immune to a wall-clock jump: the clock task is a `BootTrigger` with `Delay=PT15S`, and the `-Auto`
+resume task is `ONSTART+30 s`. What is NOT immune is a wall-clock *deadline* that spans the
+correction. `(Get-Date).AddSeconds(n)` compared against `Get-Date` breaks in both directions: a
+backward correction of dom0's offset — 10800 s, measured — leaves the limit unreached for three
+hours, and a forward one expires it instantly. Both bounds in `sync-clock-from-dom0.ps1` are now
+`[Diagnostics.Stopwatch]`, which is `QueryPerformanceCounter` and cannot be moved by a clock set:
+the retry loop that asks dom0 for the time, and `Wait-ClockWitness`, whose entire purpose is to span
+the moment `set-time.ps1` sets the clock. The clock READINGS stay on the wall clock on purpose —
+comparing dom0's own stamp against our just-corrected clock IS the measurement.
+
+That split is tested rather than asserted: `clock-convention-selftest.sh` PART J stubs `Get-Date` to
+hand out the real time once and three hours earlier on every call after it, which is the shape of
+the correction. With the monotonic bound the wait returns; reverting that one line to the wall clock
+makes it hang past a 25 s limit (verified, rc=124).
 
 ### An RTC that fits neither convention is an anomaly
 
@@ -84,60 +211,24 @@ correct-and-reboot cycle. The derivation says so loudly and changes nothing in t
 guess would be worse than the puller we already have.
 
 This is also why a used subject cannot validate this decision. The measurement that matters comes
-from a fresh install, where the persisted offset starts at zero.
+from a fresh install on a golden rebuilt without a forced value.
 
-### Who owns the value: the product, from a measurement
+## Enforcement, because prose did not hold
 
-**The harness must not write it, and that was the whole bug.** `mgmt/harness/rtc-lib.sh` used to
-carry `w_rtc_utc`, which did `reg add ... RealTimeIsUniversal /d 1` inside the subject, and
-`prime-run.sh` called it the moment qrexec answered — after the install. So whatever the installer
-and the per-boot task derived was overwritten on every primed subject, and the gate could not
-measure the product at all. `set-rtc-utc-golden.sh` did the same to a sealed golden, so every clone
-inherited a forced value too.
+Every layer that forced the value carried a comment saying why it was right, and the forcing
+survived three campaigns of chasing one symptom each. The deviation was found only by writing the
+invariant down and grepping every file that touches it.
 
-Measured on run 11: the installer logged `clock: RealTimeIsUniversal set to 0 for the next boot
-(was 1)` and the boots that followed ran with **1** and a three-hour error.
-
-Only one of the two values is correct for a given qube, and which one depends on a dom0-side feature
-set at runtime in response to the guest reporting in. A harness cannot know that, so it has no
-business deciding it. It now only REPORTS, via `w_rtc_report`, which prints the value *and* the zone
-so a cell's verdict can be read against both. Jev: `report_not_decide_is_right` 0.94.
-
-### The measurement needs a witness that is not the guest's clock
-
-The per-boot derivation first compared the guest's clock BEFORE the time pull with its clock AFTER
-it, and concluded the convention fitted whenever they agreed. But the script cannot see whether the
-pull did anything: qrexec hands dom0's date straight to `set-time.ps1`, whose exit code does not come
-back through the client. A pull that changes nothing makes both readings the same number, so the test
-could not fail — and it reported `RealTimeIsUniversal=1 matches this qube's RTC convention` four
-times on a guest three hours out.
-
-`set-time.ps1` DID see dom0's value, and logs it:
-
-```
-SETTIME clock set to 2026-10-15T09:24:50.0000000Z (was -10821.2 s out, now 0 s;
-        guest zone FLE Standard Time, offset 02:00:00)
-```
-
-dom0's UTC, the pre-set skew (negative when the guest ran ahead) and the guest's offset — all
-measured before anything wrote to the clock, which is exactly what the decision needs. From those,
-what the RTC held is recoverable, and whether it equals dom0's UTC or dom0's local time names the
-value Windows should carry. **No witness, or a zero offset where the two conventions are the same
-arithmetic, means no decision and a loud line.** Jev: `detector_is_now_sound` 0.84.
-
-### What `clock_boot_correction_s` actually measures
-
-I claimed twice that this metric was an artefact — first that it counted an unavoidable install-era
-boot, then that the sweep was reading QWT's local-time log stamps as UTC. **Both were wrong.**
-`detect_clock_offset` finds a BACKWARD JUMP between consecutive lines of one log file, which nothing
-but a real mid-boot correction produces. The sweep was right every time. Forcing `1` on a qube whose
-RTC holds dom0 local made the guest boot dom0's offset ahead, the puller corrected it back, and that
-correction *was* the jump.
-
-The lesson is the method rather than the arithmetic: the deviation was found by writing the invariant
-down and grepping every file that touches it — seven deviations across five harness files, a
-golden-baking script, two selftests and three stale comments — after three campaigns of chasing one
-symptom each. One of the target state's own entries was withdrawn by that same exercise.
+* `tools/lint-harness.py` **L26** — exactly two writers, both in the product, both writing a
+  variable; and no `qvm-features --unset … timezone` anywhere. Seen to fail: planting a forced write
+  in an answer file is reported at that file and line. Exempt: the rule's own regex and
+  `tools/tests/`, which must contain the shape to prove they catch it.
+* `tools/tests/rtc-utc-selftest.sh` — the invariant, including that BOTH halves exist, with a
+  mutation that turns the derived write back into a constant and is seen to fail.
+* `tools/tests/clock-convention-selftest.sh` — runs the shipped decision block with the registry and
+  the log stubbed, including the stale-witness, fresh-witness and content-selection cases.
+* `clock_boot_correction_s` (P1, max 60) — the acceptance witness. With nothing forcing the value, a
+  correctly-paired guest needs no mid-boot correction at all.
 
 ## Rejected
 
@@ -147,19 +238,37 @@ symptom each. One of the target state's own entries was withdrawn by that same e
   Drivers` key is absent on our guests. The agent IS running and does call `SetSystemTime`, so it is
   a third actor on the clock — we simply cannot configure it at this version.
 * **Clearing the qube's `timezone` feature from the harness.** It makes the RTC hold true UTC, which
-  makes `RealTimeIsUniversal=1` true — on the rig only. A user's qube keeps `localtime`, so this puts
-  the rig in the one configuration where a shipped defect is invisible. Jev: 0.84 that it hid the
-  defect from the gate. Removed; the harness now only reports which convention a cell ran under.
+  makes `RealTimeIsUniversal=1` true — on the rig only. A user's qube keeps `localtime`, so this put
+  the rig in the one configuration where a shipped defect is invisible. Jev 0.84. Removed from all
+  four create paths and refused by L26.
+* **Forcing the value in the images, and patching it into a sealed golden in place.** Both are the
+  gate measuring our own forcing. The goldens are rebuilt from vendor media with the corrected
+  answer files rather than edited (owner: "redo from scratch, dont reuse"), so a golden is what the
+  answer file would now produce rather than a patched copy of what it used to.
+* **Removing the product's write entirely.** The Windows default paired with dom0's zone is correct
+  for a qube in service, but a guest that has been MEASURED behind the payload's certificates cannot
+  install anything and has no time source to fix itself with; Jev scored `remove-every-write` at
+  0.08. The write stays — on that branch only.
+* **Deriving the installer's value from whether QWT is installed, and writing it on every install.**
+  An intermediate version of this decision did that: no QWT meant the qube had never reported, so
+  its RTC held true UTC, so write 1. Jev scored that derivation at ~0.60 and named its residual at
+  0.90 — a clean install onto a qube dom0 has ALREADY flagged, which is every reinstall cell and
+  every user reinstalling Windows in an existing qube, sees no QWT while the RTC already holds dom0
+  local. The owner's rule settled it: take the normal initial configuration and do not touch it
+  until it is needed, exactly when it is needed. A guess on every install is not that; the gate's
+  own verdict is.
 * **Asking dom0 to publish or change anything.** Out of scope by standing rule, and unnecessary: the
   guest already has everything it needs in `/qubes-timezone` plus the time it pulls at every boot.
 
 ## Not done
 
-* The pairing has not yet been measured on a fresh install with the harness no longer forcing the
-  value. That measurement is the acceptance run against sha 425fb58a; until it reports
-  `clock_boot_correction_s = 0`, the enforcement is reasoned and Jev-confirmed but not witnessed.
+* The pairing has not yet been measured on a fresh install from a golden rebuilt without a forced
+  value. That measurement is the acceptance run after the golden rebuild; until it reports
+  `clock_boot_correction_s = 0`, the enforcement is reasoned, Jev-confirmed and offline-tested, but
+  not witnessed on a guest.
 * `/qubes-timezone` carries an IANA name and `tzutil` takes Windows zone ids. The installer maps the
   common zones and REPORTS anything it cannot map rather than guessing; an unmapped zone therefore
-  leaves the guest's zone alone while the RTC convention has changed, and those two then disagree.
+  leaves the guest's zone alone while the RTC convention may have changed, and those two then
+  disagree.
 * The installer's map is duplicated in the installer only; the per-boot task does not set the zone,
-  so a guest whose install-time qubesdb read fails keeps a UTC zone until the next install.
+  so a guest whose install-time qubesdb read fails keeps its previous zone until the next install.

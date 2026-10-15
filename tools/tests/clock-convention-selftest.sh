@@ -52,13 +52,18 @@ fi
 ok "extracted the shipped CLOCKCONV block ($blines lines)"
 command grep -q 'Get-ClockWitness' "$T/block.ps1" \
   && ok "the extract carries the witness reader" || bad "the extract has no witness reader - wrong region"
+command grep -q 'function Wait-ClockWitness' "$T/block.ps1" \
+  && ok "and the bounded wait" || bad "the extract has no bounded wait - wrong region"
+command grep -q '\$w = Wait-ClockWitness' "$T/block.ps1" \
+  && ok "and the decision reads the witness THROUGH the wait" \
+  || bad "the decision calls the reader directly - the fire-and-forget race is back"
 command grep -q "if (\$exit -eq 'set')" "$T/block.ps1" \
   && ok "and the decision itself" || bad "the extract stops before the decision - wrong region"
 
 # ---- the harness -------------------------------------------------------------------------------
 # $REAL is dom0's UTC. SkewS is (dom0 - guest_clock_before), so it is NEGATIVE when the guest ran
 # ahead - the shape measured on run 11 ("was -10821.2 s out"). Offset is the guest's zone offset.
-mk(){ # <cur> <body of the Get-ClockWitness stub>
+mk(){ # <cur> <body of the Wait-ClockWitness stub>
   {
     printf '%s\n' \
       "\$ErrorActionPreference='Stop'" \
@@ -78,9 +83,12 @@ mk(){ # <cur> <body of the Get-ClockWitness stub>
     # THE STUB COMES FIRST. PowerShell executes top to bottom, so a function defined after its call
     # site does not exist yet - an earlier version appended it and every case died with
     # "Get-ClockWitness is not recognized", which the catch turned into "could not decide".
-    printf 'function Get-ClockWitness { %s }\n' "$2"
-    # and the shipped reader is dropped, so the stub is the only definition.
-    awk '/^function Get-ClockWitness \{/,/^\}$/ { next } { print }' "$T/block.ps1"
+    printf 'function Wait-ClockWitness { %s }\n' "$2"
+    # and BOTH shipped functions are dropped, so the stub is the only definition. The decision
+    # reads its witness through Wait-ClockWitness, so THAT is what these cases stub: each one plants
+    # a witness and asserts the verdict, with no log files and no waiting. The wait and the reader
+    # are real code with their own cases (PART H and PART I), where their behaviour IS the subject.
+    awk '/^function (Get|Wait)-ClockWitness \{/,/^\}$/ { next } { print }' "$T/block.ps1"
     printf '%s\n' "\"WROTE=\$script:Written\"" "\$script:Log | ForEach-Object { \"LOG=\$_\" }"
   } > "$T/run.ps1"
 }
@@ -148,6 +156,97 @@ printf '%s' "$out" | command grep -q 'WROTE=0' \
 printf '%s' "$out" | command grep -q "the zone's base is" \
   && ok "and the line reports both offsets, so the two can never be confused again" \
   || bad "the message does not distinguish the effective offset from the base"
+
+# ---- the REAL wait, on planted log files -------------------------------------------------------
+# A runner that keeps BOTH shipped functions and gives them a log directory to read.
+wait_case(){ # <settime line> <extra args to Wait-ClockWitness>
+  rm -rf "$T/log"; mkdir -p "$T/log"
+  printf '%s\n' "$1" > "$T/log/set-time.ps1-a.log"
+  {
+    printf '%s\n' "\$ErrorActionPreference='Stop'" \
+      "\$script:Log = @()" \
+      "function LogWarning([string]\$m) { \$script:Log += \$m }" \
+      "function Get-ItemProperty { param([string]\$LiteralPath,[string]\$Name,\$ErrorAction) return [pscustomobject]@{} }" \
+      "\$tools = '$T'"
+    awk '/^function (Get|Wait)-ClockWitness \{/,/^\}$/' "$T/block.ps1"
+    printf '%s\n' "\$w = Wait-ClockWitness $2" \
+      "if (\$null -eq \$w) { 'GOT=NONE' } else { \"GOT=\" + \$w.Dom0Utc.ToString('o') }" \
+      "\$script:Log | ForEach-Object { \"LOG=\$_\" }"
+  } > "$T/wait.ps1"
+  "$PWSH" -NoProfile -File "$T/wait.ps1" 2>&1
+}
+NOWZ=$(date -u '+%Y-%m-%dT%H:%M:%S.0000000Z')
+
+echo "PART H  the bounded wait: a witness from an EARLIER boot is stale and is NOT used"
+# THE DEFECT IT EXISTS FOR: the pull is fire-and-forget - the qrexec client writes the request and
+# exits while a SEPARATE set-time.ps1 process writes the line - so reading the log straight afterwards
+# finds the PREVIOUS boot's line, or nothing. Measured on run 13 cell 1: CLOCKCONV refused at
+# 14:18:14.479 while the line it needed was written at 14:18:14.305, 174 ms earlier
+# (CLOCKWITNESSMISSEDONFIRSTBOOT). Taking the stale line instead would decide this boot's convention
+# from the PREVIOUS boot's RTC - the one outcome worse than not deciding.
+out=$(wait_case 'SETTIME clock set to 2020-01-01T00:00:00.0000000Z (was -1.0 s out, now 0 s; guest zone FLE Standard Time, offset 02:00:00)' '-TimeoutSeconds 0')
+printf '%s' "$out" | command grep -q 'GOT=NONE' \
+  && ok "a stale witness is refused" || { bad "the wait returned a stale witness"; printf '%s\n' "$out" | sed 's/^/        /' | head -5; }
+printf '%s' "$out" | command grep -q 'from an earlier boot' \
+  && ok "and it says so, with both timestamps" || bad "the stale witness is silent"
+printf '%s' "$out" | command grep -q 'did not arrive' \
+  && ok "and distinguishes stale from never-written" || bad "stale and absent are conflated"
+
+echo "PART H2  a witness from THIS boot is accepted"
+out=$(wait_case "SETTIME clock set to $NOWZ (was -1.0 s out, now 0 s; guest zone FLE Standard Time, offset 02:00:00)" '-TimeoutSeconds 0')
+printf '%s' "$out" | command grep -q 'GOT=' && printf '%s' "$out" | command grep -qv 'GOT=NONE' \
+  && ok "a fresh witness is returned" || { bad "the wait refused a witness from this boot"; printf '%s\n' "$out" | sed 's/^/        /' | head -5; }
+
+echo "PART J  the wait's BOUND is monotonic - a clock that jumps back mid-wait must not hang it"
+# THE FRAGILE MOMENT, NAMED BY THE OWNER: this wait exists to span the instant set-time.ps1 sets the
+# clock, and a correction of dom0's offset is a BACKWARD jump of hours (10800 s, measured). A
+# wall-clock bound - `$deadline = (Get-Date).AddSeconds(n)` compared against `Get-Date` - is then
+# unreachable for that whole offset, so the boot hangs in the one place a hang is least acceptable:
+# while the agents are coming up. Stopwatch is QueryPerformanceCounter and a clock set cannot move
+# it. This stub hands out the real time ONCE (so any deadline is computed from it) and three hours
+# EARLIER on every call after that, which is exactly the shape of the correction.
+rm -rf "$T/log"; mkdir -p "$T/log"
+printf 'SETTIME clock set to 2020-01-01T00:00:00.0000000Z (was -1.0 s out, now 0 s; guest zone FLE Standard Time, offset 02:00:00)\n' > "$T/log/set-time.ps1-a.log"
+{
+  printf '%s\n' "\$ErrorActionPreference='Stop'" \
+    "function LogWarning([string]\$m) { }" \
+    "function Get-ItemProperty { param([string]\$LiteralPath,[string]\$Name,\$ErrorAction) return [pscustomobject]@{} }" \
+    "\$tools = '$T'" \
+    "\$script:n = 0" \
+    "\$script:t0 = [datetime]::Now" \
+    "function Get-Date { \$script:n++; if (\$script:n -le 1) { return \$script:t0 } return \$script:t0.AddHours(-3) }"
+  awk '/^function (Get|Wait)-ClockWitness \{/,/^\}$/' "$T/block.ps1"
+  printf '%s\n' "\$null = Wait-ClockWitness -TimeoutSeconds 2" "'RETURNED'"
+} > "$T/jump.ps1"
+# 25 s is far longer than the 2 s bound and far shorter than the 3 h a wall-clock bound would wait.
+if jout=$(timeout 25 "$PWSH" -NoProfile -File "$T/jump.ps1" 2>&1) && printf '%s' "$jout" | command grep -q 'RETURNED'; then
+  ok "the wait returns under a backward clock jump (the bound is monotonic)"
+else
+  bad "the wait did NOT return under a backward clock jump - the bound is on the wall clock, so a correction hangs the boot"
+  printf '%s\n' "$jout" | sed 's/^/        /' | head -5
+fi
+
+echo "PART I  the REAL reader picks the newest line BY CONTENT, not by file order"
+# THE DEFECT: the reader sorted the log files by LastWriteTime DESCENDING and then took the last
+# match the pipeline emitted - which is the newest line of the OLDEST file. It also anchored
+# freshness on guest file mtimes, which this very script moves backwards by hours. Here the OLDER
+# file is given the NEWER mtime, so file order and content disagree and only content is right.
+rm -rf "$T/log"; mkdir -p "$T/log"
+printf 'SETTIME clock set to 2026-10-15T06:00:00.0000000Z (was -1.0 s out, now 0 s; guest zone FLE Standard Time, offset 02:00:00)\n' > "$T/log/set-time.ps1-old.log"
+printf 'SETTIME clock set to 2026-10-15T09:24:50.0000000Z (was -2.0 s out, now 0 s; guest zone FLE Standard Time, offset 02:00:00)\n' > "$T/log/set-time.ps1-new.log"
+touch -d '2020-01-01' "$T/log/set-time.ps1-new.log"   # the line we WANT, in the file with the OLDEST mtime
+{
+  printf '%s\n' "\$ErrorActionPreference='Stop'" \
+    "function LogWarning([string]\$m) { }" \
+    "function Get-ItemProperty { param([string]\$LiteralPath,[string]\$Name,\$ErrorAction) return [pscustomobject]@{} }" \
+    "\$tools = '$T'"
+  awk "/^function Get-ClockWitness \\{/,/^\\}$/" "$T/block.ps1"
+  printf '%s\n' "\$w = Get-ClockWitness" "if (\$null -eq \$w) { 'PICKED=NONE' } else { \"PICKED=\" + \$w.Dom0Utc.ToString('o') }"
+} > "$T/reader.ps1"
+rout=$("$PWSH" -NoProfile -File "$T/reader.ps1" 2>&1)
+printf '%s' "$rout" | command grep -q 'PICKED=2026-10-15T09:24:50' \
+  && ok "the newest line wins even when its file has the oldest mtime" \
+  || { bad "the reader picked by file order, not content"; printf '%s\n' "$rout" | sed 's/^/        /' | head -6; }
 
 echo "PART G  seen to fail: break the branch PART A reaches"
 # An earlier version of this part mutated an arm case A never takes, so it passed while proving

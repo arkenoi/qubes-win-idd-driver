@@ -5376,10 +5376,12 @@ function Test-SigningClockSane {
 }
 
 function Set-GuestTimeZoneFromHost {
-    # THE HARDWARE CLOCK IS UTC AND THE OS APPLIES THE ZONE - this is the second half of that.
-    # Set-RtcIsUtc makes the guest read the RTC as UTC, which fixes its notion of UTC. The guest
-    # still has to DISPLAY the right wall-clock time, and a Windows desktop pinned to UTC shows the
-    # user a clock that is not their clock. dom0 publishes its own zone in qubesdb as an IANA name
+    # THE ZONE IS THE OTHER HALF OF THE PAIR, AND THE HALF THAT MAKES THE DEFAULT WORK.
+    # Set-RtcConventionForNextBoot settles how the RTC is READ; this settles what the guest does
+    # with it. They are only correct together: Qubes presents the RTC as DOM0 LOCAL time, so a guest
+    # reading it as local time (Windows' default) lands on the right wall clock and the right UTC
+    # ONLY IF its zone is dom0's. A guest left pinned to UTC also shows the user a clock that is not
+    # their clock. dom0 publishes its own zone in qubesdb as an IANA name
     # (/qubes-timezone, e.g. "Europe/Sofia"), so the guest can match it instead of guessing.
     #
     # WHY NOT JUST LEAVE IT: our own rig pinned every image to UTC, where a zone offset is zero -
@@ -5453,7 +5455,20 @@ function Set-GuestTimeZoneFromHost {
     }
     $want = $map[$iana]
     if (-not $want) {
-        Write-Log "  clock: dom0's zone '$iana' is not in this installer's IANA->Windows map - leaving the guest timezone alone (its UTC is still correct: the RTC is read as UTC)" 'WARN'
+        # THE CONSEQUENCE IS NAMED, because this message used to deny there was one. It said "its UTC
+        # is still correct: the RTC is read as UTC", which was true only while we FORCED
+        # RealTimeIsUniversal=1. The RTC is now read as LOCAL time, which is correct only when this
+        # guest's zone matches dom0's - so an unmapped zone leaves the guest's idea of UTC wrong by
+        # the difference between the two, and the per-boot puller corrects it on every boot instead
+        # of converging. Worse, if the guest's zone offset happens to be ZERO the two conventions
+        # become the same arithmetic and the per-boot derivation cannot decide at all. A wrong zone
+        # is still worse than an admitted gap, so this reports rather than guessing.
+        Write-Log ("  clock: dom0's zone '$iana' is not in this installer's IANA->Windows map - leaving " +
+                   "the guest timezone alone. CONSEQUENCE: this guest reads its hardware clock as local " +
+                   "time (the Windows default), which is only correct when its zone matches dom0's, so " +
+                   "its UTC will be out by the difference and the per-boot clock task will correct it on " +
+                   "every boot rather than converging. FIX: add '$iana' to the map, or set the guest's " +
+                   "timezone to dom0's by hand.") 'WARN'
         return $false
     }
     $cur = (& tzutil /g 2>&1 | Select-Object -First 1)
@@ -5479,54 +5494,62 @@ function Set-GuestTimeZoneFromHost {
     return $false
 }
 
-function Set-RtcIsUtc {
-    # THE CORRECT VALUE CHANGES DURING A GUEST'S LIFE, so this sets the one that is right for THIS
-    # moment and the per-boot task converges afterwards. Both halves are needed; either alone is a
-    # defect that has already shipped.
+function Set-RtcConventionForNextBoot {
+    # CALLED ONLY WHEN THE CLOCK HAS ALREADY BEEN MEASURED WRONG. Nothing here runs on a guest whose
+    # clock is fine, and that is the whole design: the NORMAL configuration is already correct, so
+    # the installer touches it only at the moment it is demonstrably needed.
     #
-    # BEFORE QWT REPORTS ITSELF, THE RTC HOLDS TRUE UTC. qubes-core-admin only gives a qube the
-    # `timezone` feature once it knows the guest is Windows WITH working qrexec -
-    # qubes/ext/windows.py: `if guest_os == "Windows" and qrexec:` - and it learns that from
-    # qubes.NotifyTools, which our own agent calls when it starts. So a qube being installed has NO
-    # such feature yet and gets Xen's default, a UTC RTC. Windows with this value absent reads that
-    # as LOCAL time and computes a UTC BEHIND real time by its own zone offset - and behind is the
-    # one direction that breaks a driver install, because Windows validates catalogs against the
-    # clock and a CI-minted certificate then looks not-yet-valid. MEASURED 2026-09-25 on a German
-    # 25H2 guest: 0x800B0101 and drvinst sitting at 0.125 s of CPU for twenty-five minutes. That is
-    # what this value is for, and it is still 1 for exactly that reason.
+    # WHY THE NORMAL CONFIGURATION IS CORRECT. Windows' default, with RealTimeIsUniversal absent, is
+    # to read the RTC as LOCAL time. qubes-core-admin gives every Windows qube `timezone=localtime`
+    # once the GUEST reports os=Windows+qrexec through qubes.NotifyTools, which makes Xen present the
+    # RTC as DOM0 LOCAL time. Those are the two halves of one convention: with the guest's zone set
+    # from /qubes-timezone the clock is right from the first instant, with nothing declared. Forcing
+    # 1 in our images did not fix a defect, it broke that pairing - measured 2026-10-15 as a
+    # permanent +10800 s on every acceptance guest.
     #
-    # AFTER QWT REPORTS, dom0 sets `timezone=localtime` and the RTC starts holding DOM0 LOCAL time.
-    # This value then makes the guest read local time as UTC and sit dom0's whole offset AHEAD -
-    # measured 2026-10-15 at exactly 10800 s on a live guest (its UTC read 10:38:51Z against a real
-    # 07:38:40Z), which the sweep raises as clock_boot_correction_s. Ahead is harmless to the
-    # catalog gate, which is why it survived unnoticed while the clock puller re-corrected it.
+    # THE ONE MOMENT IT MATTERS. A guest whose RTC holds TRUE UTC - which is every qube before it has
+    # reported, including one being cleanly installed - reading that as local time computes a UTC
+    # BEHIND real time by its own zone offset. Behind is the single direction that breaks a driver
+    # install: Windows validates catalogs against the clock, so a certificate minted on the CI runner
+    # looks NOT YET VALID and drvinst waits rather than failing - 0x800B0101, measured 2026-09-25 on
+    # a German 25H2 guest as twenty-five minutes at 0.125 s of CPU. Our own rig never reproduced it
+    # because every rig image is pinned to UTC, where that offset is zero.
     #
-    # SO THE CONVERGENCE LIVES IN guest\sync-clock-from-dom0.ps1 (CLOCKCONV), which runs at every
-    # boot, has just learned real UTC from dom0, and derives which convention the RTC actually
-    # follows - flipping this value when it no longer fits. An earlier attempt at this fix wrote 0
-    # here instead, which is correct only AFTER dom0 has set the feature and reintroduces the 25
-    # minute drvinst hang before it. Jev scored that shape as breaking the feature-unset qube at
-    # 0.88. A constant cannot be right in both windows; do not make this one again.
+    # SO THE TRIGGER IS THE MEASUREMENT, NOT A GUESS ABOUT WHICH WINDOW WE ARE IN.
+    # Assert-PayloadClockSane has just established that this guest's clock cannot validate the
+    # payload's catalogs. 1 is the only lever available without a time source, and it is the right
+    # one: it moves the guest FORWARD by its zone offset, which is what a behind clock needs, and
+    # being wrong about the RTC's content in that direction leaves the guest AHEAD - harmless to
+    # catalog validation. It takes effect at the NEXT boot, so the install this refuses will work
+    # after a reboot, and guest\sync-clock-from-dom0.ps1 (CLOCKCONV) converges the value from a real
+    # reading of dom0 time once qrexec is up. Jev 0.85 that the convergence must keep WRITING.
     #
-    # Takes effect at the NEXT boot: Windows reads the RTC through this value only at startup.
-    # Idempotent, read back rather than assumed, and never fatal.
+    # Idempotent, read back rather than assumed, and never fatal in itself - the caller decides.
     $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\TimeZoneInformation'
     try {
         $cur = (Get-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -ErrorAction Stop).RealTimeIsUniversal
     } catch { $cur = $null }
-    if ($cur -eq 1) { Write-Log '  clock: RealTimeIsUniversal already 1 (correct until dom0 sets the qube timezone feature; the per-boot task converges after that)'; return }
+    if ($cur -eq 1) {
+        Write-Log ('  clock: RealTimeIsUniversal is already 1 and this guest still cannot validate the ' +
+                   'payload - the RTC convention is NOT what is wrong here; the clock itself is') 'WARN'
+        return $false
+    }
     try {
         New-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -PropertyType DWord -Value 1 -Force -ErrorAction Stop | Out-Null
         $back = (Get-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -ErrorAction Stop).RealTimeIsUniversal
         if ($back -eq 1) {
-            Write-Log ('  clock: RealTimeIsUniversal set to 1 (was ' + $(if ($null -eq $cur) { 'unset' } else { $cur }) +
-                       ') - this qube has no timezone feature yet, so its RTC holds true UTC; the per-boot task flips this once dom0 sets it')
-        } else {
-            Write-Log "  clock: RealTimeIsUniversal did not read back as 1 (got '$back') - a driver catalog may be rejected as not-yet-valid on this guest" 'WARN'
+            Write-Log ('  clock: RealTimeIsUniversal set to 1 for the NEXT boot (was ' +
+                       $(if ($null -eq $cur) { 'unset' } else { "$cur" }) + ') - this guest reads its RTC as local ' +
+                       'time while the RTC holds true UTC, which puts it behind real time and makes the ' +
+                       "payload's driver catalogs look not-yet-valid. The per-boot task converges this " +
+                       'once qrexec is up.')
+            return $true
         }
+        Write-Log "  clock: RealTimeIsUniversal did not read back as 1 (got '$back') - the clock stays behind and the driver catalogs stay invalid" 'WARN'
     } catch {
-        Write-Log "  clock: could not set RealTimeIsUniversal ($($_.Exception.Message)) - a driver catalog may be rejected as not-yet-valid on this guest" 'WARN'
+        Write-Log "  clock: could not set RealTimeIsUniversal ($($_.Exception.Message)) - the clock stays behind and the driver catalogs stay invalid" 'WARN'
     }
+    return $false
 }
 
 function Assert-PayloadClockSane {
@@ -5635,17 +5658,34 @@ function Assert-Stage1Preflight {
     # the PV drivers, and drvinst waits on a not-yet-valid catalog rather than failing it. Measured
     # 2026-09-25 on a German 25H2 guest: 25 minutes at 0.125 s of CPU, the install log saying only
     # 'installing xenvif', the answer only in setupapi.dev.log as Error = 0x800B0101.
-    Set-RtcIsUtc
-    Set-GuestTimeZoneFromHost
+    # MEASURE FIRST, AND TOUCH THE CLOCK CONVENTION ONLY IF THE MEASUREMENT SAYS TO. The normal
+    # configuration is already correct - Windows reads the RTC as local time by default, and Qubes
+    # presents a Windows qube's RTC as dom0 local time - so declaring a convention here is only ever
+    # right when this guest has been SHOWN to be behind. It used to be written unconditionally, in
+    # the answer files and here, and that forced value was inherited by every golden and every clone;
+    # the gate then measured our own forcing instead of the product (docs/ADR-clock.md).
     $skewed = Assert-PayloadClockSane -Root $Root -Why 'stage 1 pre-flight'
     if ($skewed.Count -gt 0) {
-        Fail ("pre-flight REFUSAL (nothing changed on this guest): this guest's clock cannot " +
-              "validate the payload's driver catalogs ($($skewed -join ', ')). The driver installs " +
-              'would HANG rather than fail (0x800B0101, not-yet-valid catalog). ' +
-              'FIX, from dom0:  qvm-sync-clock   then re-run this installer.')
+        # THE ONE MOMENT THE CONVENTION MATTERS, and the only lever available with no time source.
+        # It takes effect at the next boot, so this install is still refused - but the refusal now
+        # names a cause the user can act on in one reboot rather than a clock they must fix by hand.
+        $fixed = Set-RtcConventionForNextBoot
+        Fail ("pre-flight REFUSAL (nothing installed on this guest): its clock cannot validate the " +
+              "payload's driver catalogs ($($skewed -join ', ')). The driver installs would HANG " +
+              'rather than fail (0x800B0101, not-yet-valid catalog). ' +
+              $(if ($fixed) {
+                    'CAUSE AND FIX: this guest reads its hardware clock as local time while that clock ' +
+                    'holds true UTC, so its idea of UTC is its own zone offset behind real time. ' +
+                    'RealTimeIsUniversal has been set for the NEXT boot - reboot this guest and re-run ' +
+                    'this installer. '
+                } else {
+                    'The RTC convention is already correct, so the clock itself is wrong. ' +
+                    'FIX, from dom0:  qvm-sync-clock   then re-run this installer. '
+                }))
     }
-
+    Set-GuestTimeZoneFromHost
     $existing = @(Get-InstalledQwt)
+
     if ($existing.Count -eq 0) { return }
     Write-Log "pre-flight: $($existing.Count) installed QWT product(s) - checking stage 2's refusals before touching the guest"
     $inPlace = $false

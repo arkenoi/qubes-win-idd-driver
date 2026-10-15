@@ -222,12 +222,16 @@ fi
 # This block has now been inverted three times in one day, because each version asserted whichever
 # constant I believed at the time. The constant is not the invariant. The invariant is:
 #
-#   * the INSTALLER writes 1, because a qube being installed has NO `timezone` feature yet -
-#     qubes-core-admin gives it one only once it knows the guest is Windows with working qrexec
-#     (qubes/ext/windows.py: `if guest_os == "Windows" and qrexec:`), which it learns from
-#     qubes.NotifyTools, which our agent calls when it starts. Until then the RTC holds TRUE UTC,
-#     and reading it as local puts the guest BEHIND real time - the one direction that breaks a
-#     driver install (0x800B0101, drvinst at 0.125 s of CPU for 25 minutes, measured 2026-09-25).
+#   * the INSTALLER picks an OPENING value, DERIVED from whether QWT is already installed. A qube
+#     being cleanly installed has no `timezone` feature yet - qubes-core-admin gives it one only
+#     once it knows the guest is Windows with working qrexec (qubes/ext/windows.py:
+#     `if guest_os == "Windows" and qrexec:`), which it learns from qubes.NotifyTools, which OUR
+#     agent calls when it starts. So no QWT means the RTC still holds TRUE UTC, and reading that as
+#     local puts the guest BEHIND real time - the one direction that breaks a driver install
+#     (0x800B0101, drvinst at 0.125 s of CPU for 25 minutes, measured 2026-09-25). QWT present
+#     means the guest HAS reported, so the RTC holds dom0 local and Windows' default is right.
+#     Neither derivation is provable from inside the guest (Jev ~0.60 for both available ones),
+#     which is exactly why it is an opening value and not a verdict.
 #   * the PER-BOOT TASK derives the convention from dom0's real UTC and FLIPS that value when it no
 #     longer fits, because once dom0 has set `localtime` the RTC holds dom0 local and 1 puts the
 #     guest dom0's whole offset AHEAD - measured 2026-10-15 at exactly 10800 s on a live guest.
@@ -235,23 +239,32 @@ fi
 # Either half alone is a shipped defect: 1 without the convergence is the +3 h we shipped, and 0 in
 # the installer reintroduces the 25-minute hang (Jev scored that shape at 0.88 for the feature-unset
 # qube). So this asserts BOTH, and that neither place decides alone.
-for f in packaging/setup/Install-QwtImproved.ps1 mgmt/prime-jobs/ours/setup/Install-QwtImproved.ps1; do
+# THE STAGED TREE IS NOT THE PRODUCT, AND MUST NOT GATE IT. mgmt/prime-jobs/<job>/setup is where
+# prime-run COPIES the payload it was handed (`--payload`), so it holds whatever release was last
+# installed on the rig - by design often an OLDER one, since upgrade cells install a previous
+# version on purpose. Gating today's product shape on it fails on any machine that has primed an
+# older package, which is noise rather than signal, and in CI the directory does not exist at all so
+# the check was silently absent exactly where it would have mattered. The product is packaging/.
+for f in packaging/setup/Install-QwtImproved.ps1; do
   b=$(echo "$f" | cut -d/ -f1)
-  # the prime-jobs tree is gitignored local staging: checked when it exists, never required
-  [ -f "$f" ] || { echo "  SKIP rtc($b): $f not present (local staging tree)"; continue; }
-  if command grep -q 'function Set-RtcIsUtc' "$f"; then echo "  OK   rtc($b) declares the RTC convention"
-  else echo "  FAIL rtc($b): the installer does not set RealTimeIsUniversal"; fail=1; fi
-  if tr -d '\r' < "$f" | awk '/function Set-RtcIsUtc/,/^}$/' | command grep -q 'PropertyType DWord -Value 1'; then
-    echo "  OK   rtc($b) writes 1 - correct while the qube has no timezone feature"
-  else echo "  FAIL rtc($b): it does not write 1; a true-UTC RTC read as local puts the guest BEHIND and drvinst hangs"; fail=1; fi
-  if tr -d '\r' < "$f" | awk '/function Set-RtcIsUtc/,/^}$/' | command grep -q 'per-boot task'; then
-    echo "  OK   rtc($b) names the convergence that makes the constant safe"
-  else echo "  FAIL rtc($b): it writes a constant without naming what flips it later"; fail=1; fi
-  if command grep -q 'RealTimeIsUniversal already 1' "$f"; then echo "  OK   rtc($b) idempotent on an already-correct guest"
-  else echo "  FAIL rtc($b): no already-set path - it would rewrite on every install"; fail=1; fi
-  if tr -d '\r' < "$f" | awk '/function Set-RtcIsUtc/,/^}$/' | command grep -q 'did not read back as 1'; then echo "  OK   rtc($b) reads the value back"
+  [ -f "$f" ] || { echo "  FAIL rtc($b): the product installer is missing"; fail=1; continue; }
+  if command grep -q 'function Set-RtcConventionForNextBoot' "$f"; then echo "  OK   rtc($b) declares the RTC convention"
+  else echo "  FAIL rtc($b): the installer has no RTC convention step"; fail=1; fi
+  if tr -d '\r' < "$f" | sed 's/^ *#.*//' | command grep -cE 'New-ItemProperty[^|]*RealTimeIsUniversal' | command grep -q '^1$'; then
+    echo "  OK   rtc($b) exactly one writer"
+  else echo "  FAIL rtc($b): not exactly one RealTimeIsUniversal writer"; fail=1; fi
+  if tr -d '\r' < "$f" | command grep -qE '^ *\$fixed = Set-RtcConventionForNextBoot *$'; then
+    echo "  OK   rtc($b) reached from the clock gate's failure branch, by its return value"
+  else echo "  FAIL rtc($b): the convention is not written in response to the measurement"; fail=1; fi
+  if tr -d '\r' < "$f" | awk '/function Set-RtcConventionForNextBoot/,/^}$/' | command grep -q 'already 1'; then
+    echo "  OK   rtc($b) idempotent, and says so when the RTC is not the fault"
+  else echo "  FAIL rtc($b): it would rewrite a value that is already set"; fail=1; fi
+  if tr -d '\r' < "$f" | awk '/function Set-RtcConventionForNextBoot/,/^}$/' | command grep -q 'sync-clock-from-dom0'; then
+    echo "  OK   rtc($b) names the convergence that makes the guess safe"
+  else echo "  FAIL rtc($b): it guesses without naming what corrects it later"; fail=1; fi
+  if tr -d '\r' < "$f" | awk '/function Set-RtcConventionForNextBoot/,/^}$/' | command grep -q 'did not read back as'; then echo "  OK   rtc($b) reads the value back"
   else echo "  FAIL rtc($b): the write is assumed to have worked"; fail=1; fi
-  if tr -d '\r' < "$f" | awk '/function Set-RtcIsUtc/,/^}$/' | command grep -q 'Fail '; then
+  if tr -d '\r' < "$f" | awk '/function Set-RtcConventionForNextBoot/,/^}$/' | command grep -q 'Fail '; then
     echo "  FAIL rtc($b): a failed write aborts the install - that is not what this breaks"; fail=1
   else echo "  OK   rtc($b) reported, never fatal"; fi
 done
@@ -264,9 +277,15 @@ done
 # The ZONE is different and is set here unconditionally: it is correct under either convention, it
 # is what makes the guest show the user's own wall clock, and the pre-flight cannot do it because
 # qubesdb is not up that early (measured on a fresh install: "qubesdb is not readable yet").
-for f in packaging/setup/Install-QwtImproved.ps1 mgmt/prime-jobs/ours/setup/Install-QwtImproved.ps1; do
+# THE STAGED TREE IS NOT THE PRODUCT, AND MUST NOT GATE IT. mgmt/prime-jobs/<job>/setup is where
+# prime-run COPIES the payload it was handed (`--payload`), so it holds whatever release was last
+# installed on the rig - by design often an OLDER one, since upgrade cells install a previous
+# version on purpose. Gating today's product shape on it fails on any machine that has primed an
+# older package, which is noise rather than signal, and in CI the directory does not exist at all so
+# the check was silently absent exactly where it would have mattered. The product is packaging/.
+for f in packaging/setup/Install-QwtImproved.ps1; do
   b=$(echo "$f" | cut -d/ -f1)
-  [ -f "$f" ] || continue
+  [ -f "$f" ] || { echo "  FAIL late($b): the product installer is missing"; fail=1; continue; }
   if command grep -q 'function Set-GuestClockForNextBoot' "$f"; then echo "  OK   late($b) a late zone step exists"
   else echo "  FAIL late($b): nothing sets the zone where qubesdb is readable"; fail=1; fi
   # COMMENTS STRIPPED FIRST. The block's own prose explains why it must NOT write the
@@ -304,21 +323,36 @@ if awk '/CLOCKCONV the RTC fits NEITHER/,0' "$C" | command grep -q 'diagnose, do
 else echo "  FAIL rtc(boot): an unexplainable RTC would be guessed at"; fail=1; fi
 if command grep -qE 'Value \$want' "$C"; then echo "  OK   rtc(boot) it writes the DERIVED value, not a constant"
 else echo "  FAIL rtc(boot): the per-boot task writes a constant too"; fail=1; fi
-# THE UNATTENDED IMAGES RUN IN THE SAME EARLY WINDOW as the installer: Setup is long before QWT
-# reports anything, so they must agree with it, not with the post-report value.
+# THE UNATTENDED IMAGES MUST DECLARE NOTHING. They used to write 1 in the specialize pass, and that
+# is what made the rig unable to measure its own product: the value was baked into every golden and
+# inherited by every clone, so whatever the installer and the per-boot task derived was pre-empted.
+# Windows' own default - the value absent, the RTC read as LOCAL time - is already the half that
+# PAIRS with the `timezone=localtime` Qubes gives every Windows qube. An image that declares a
+# convention is deciding something only a measurement can decide.
+# XML COMMENTS ARE STRIPPED FIRST, because each of these files now EXPLAINS the write it used to
+# carry - and a raw grep finds that explanation and calls it a write. Stripping the prose and then
+# matching ANY mention is stronger than matching one spelling of `reg add`: it fails whatever way a
+# future edit reintroduces the value.
 for x in mgmt/autounattend*.xml; do
   [ -f "$x" ] || continue
-  if command grep -q 'RealTimeIsUniversal /t REG_DWORD /d 1 /f' "$x"; then echo "  OK   rtc($(basename "$x")) writes 1, as Setup's window requires"
-  elif command grep -q 'RealTimeIsUniversal' "$x"; then echo "  FAIL rtc($(basename "$x")): writes RealTimeIsUniversal but not 1"; fail=1
+  body=$(python3 -c "import re,sys;print(re.sub(r'<!--.*?-->','',open(sys.argv[1],encoding='utf-8').read(),flags=re.S))" "$x")
+  if printf '%s' "$body" | command grep -q 'RealTimeIsUniversal'; then
+    echo "  FAIL rtc($(basename "$x")): the image declares an RTC convention - that is the product's to derive"; fail=1
+  else echo "  OK   rtc($(basename "$x")) declares no convention; Windows' default pairs with localtime"
   fi
 done
-# It must run BEFORE the pre-flight gate, so the NEXT boot is right even when this one refuses.
-rtc_line=$(command grep -n '^    Set-RtcIsUtc$' packaging/setup/Install-QwtImproved.ps1 | tail -1 | cut -d: -f1)
+# THE ORDER IS INVERTED ON PURPOSE, AND THAT IS THE ASSERTION. The convention used to be declared
+# BEFORE the gate - unconditionally, on every install - and this check used to require exactly that.
+# The normal configuration is already correct, so nothing may be declared until a measurement says
+# otherwise: the gate runs FIRST and the convention is written only from its failure branch. A write
+# that still came first would be the unconditional write this release removed.
 gate_line=$(command grep -n "Assert-PayloadClockSane -Root .Root -Why 'stage 1 pre-flight'" packaging/setup/Install-QwtImproved.ps1 | head -1 | cut -d: -f1)
-if [ -n "$rtc_line" ] && [ -n "$gate_line" ] && [ "$rtc_line" -lt "$gate_line" ]; then
-  echo "  OK   rtc declared (line $rtc_line) before the pre-flight clock gate (line $gate_line)"
+rtc_line=$(command grep -nE '^ *\$fixed = Set-RtcConventionForNextBoot *$' packaging/setup/Install-QwtImproved.ps1 | head -1 | cut -d: -f1)
+ncalls=$(command grep -cE '^ *\$?[a-z]* *=? *Set-RtcConventionForNextBoot *$' packaging/setup/Install-QwtImproved.ps1)
+if [ -n "$gate_line" ] && [ -n "$rtc_line" ] && [ "$gate_line" -lt "$rtc_line" ] && [ "$ncalls" = 1 ]; then
+  echo "  OK   the clock is MEASURED (line $gate_line) before the convention is written (line $rtc_line), once"
 else
-  echo "  FAIL rtc not ordered before the clock gate (rtc=${rtc_line:-none} gate=${gate_line:-none})"; fail=1
+  echo "  FAIL the convention is not written from the gate's verdict (gate=${gate_line:-none} write=${rtc_line:-none} calls=$ncalls)"; fail=1
 fi
 
 # ---- THE OS APPLIES THE ZONE -------------------------------------------------------------------

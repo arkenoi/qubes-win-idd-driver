@@ -31,8 +31,11 @@ set -uo pipefail
 
 w_rtc_report(){ # $1=vm [$2=log fn] - report the convention; never change it. Always returns 0.
   local vm="${1:?w_rtc_report <vm>}" lg="${2:-echo}" out
+  # A DELIMITER, BECAUSE THE TWO ANSWERS SHARE ONE STREAM. Parsing the zone by position after the
+  # registry value printed `0x1  FLE Standard Time C:\Windows\system32>` - the reg value, the zone
+  # and cmd's own prompt in one line. `tzutil /g` writes no newline, so the prompt lands on it too.
   out=$(QTEST_VM="$vm" timeout -k 5 90 ./tools/qtest run \
-        'cmd /c reg query "HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation" /v RealTimeIsUniversal & tzutil /g' \
+        'cmd /c reg query "HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation" /v RealTimeIsUniversal & echo ZONEIS: & tzutil /g & echo .' \
         2>/dev/null | tr -d '\r')
   case "$out" in
     *RealTimeIsUniversal*0x1*)
@@ -46,8 +49,10 @@ w_rtc_report(){ # $1=vm [$2=log fn] - report the convention; never change it. Al
   esac
   # The zone matters as much as the value: the pairing is only correct when the guest's offset
   # equals dom0's, so a reader needs both numbers side by side.
-  case "$out" in
-    *Time*) $lg "  RTC: guest zone on $vm: $(printf '%s' "$out" | tr '\n' ' ' | sed 's/.*RealTimeIsUniversal[^ ]*  *[^ ]*  *//' | cut -c1-60)" ;;
+  zone=$(printf '%s' "$out" | sed -n '/^ZONEIS:/,$p' | sed '1d' | command grep -am1 '[A-Za-z]' | sed 's/[[:space:]]*$//')
+  case "$zone" in
+    ""|.*) $lg "  RTC: guest zone on $vm could not be read (tzutil printed nothing)" ;;
+    *)     $lg "  RTC: guest zone on $vm: $zone" ;;
   esac
   return 0
 }
