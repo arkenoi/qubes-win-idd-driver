@@ -22,5 +22,14 @@ rem 44-48%% against a 15%% threshold, so that gate can never fire there and the 
 rem until its 90-minute budget expired with the guest finished the whole time (measured 2026-10-13,
 rem twice, ~40 wasted minutes each). A real marker ends the wait within one poll of being true.
 rem No nested quotes here on purpose: cmd has no backslash escape and lint rule L3 refuses them.
-for %%d in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do @vol %%d: 2>nul | find /i "DIAG" >nul && echo PRIMED-OK %DATE% %TIME% > %%d:\PRIMED-OK.TXT
-echo completion marker written to the DIAG volume >> C:\qubes-win-idd-setup.log
+rem AND IT MUST SAY WHICH. The line below used to announce "completion marker written to the DIAG
+rem volume" UNCONDITIONALLY, after a for/&& that writes nothing when no volume matches - so the
+rem setup log claimed success on every build while the marker was never produced. MEASURED
+rem 2026-10-15: across every pristine build on record the host attached the marker volume 6 times
+rem and logged "PRIMED-OK marker present" ZERO times, and the budget-expiry this marker was added
+rem to cure (the 2026-10-13 measurement in the comment above) happened a third time, on win11r-base,
+rem wasting 86 minutes. A success message that cannot fail hides the one fact worth having.
+set PRIMEDOK=
+for %%d in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do @vol %%d: 2>nul | find /i "DIAG" >nul && (echo PRIMED-OK %DATE% %TIME% > %%d:\PRIMED-OK.TXT) && set PRIMEDOK=%%d
+if defined PRIMEDOK echo completion marker written to %PRIMEDOK%: >> C:\qubes-win-idd-setup.log
+if not defined PRIMEDOK echo COMPLETION MARKER NOT WRITTEN - no volume labelled DIAG was visible to the guest >> C:\qubes-win-idd-setup.log
