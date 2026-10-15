@@ -137,7 +137,12 @@ source "$(dirname "${BASH_SOURCE[0]}")/e2e-wait.sh"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 M="${MATRIX_OUT:-$HOME/qwt-matrix/$(date -u +%Y%m%d-%H%M%S)}"; mkdir -p "$M"
 R=$M/matrix.log; : > "$R"
-say(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$R"; }
+# UTC, LIKE THE RUNNER THAT DRIVES THIS. tools/release-acceptance.sh stamps `date -u` and this
+# stamped `date` (local), so one campaign produced two logs three hours apart with neither line
+# saying which: measured 2026-10-14, the driver wrote "[20:29:12] PASS release package verified"
+# and this wrote "[23:29:13] Gate-0 ... PASS" for events seconds apart (CAMPAIGNLOGTZSPLIT).
+# Guest-side stamps are UTC too, so UTC is the one scale every artefact of a campaign shares.
+say(){ echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$R"; }
 PASS=0; FAIL=0; INVALID=0
 ok(){ PASS=$((PASS+1)); say "PASS  $*"; }
 
@@ -1148,13 +1153,13 @@ run_install(){ # $1=vm $2=label $3=install-source (drive/dir carrying install.cm
       QTEST_VM=$vm timeout -k 5 60 ./tools/qtest run \
         'cmd /c reg add "HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Request\xenvbd" /v Reboot /t REG_DWORD /d 1 /f /reg:64 & echo REQ_WRITTEN' \
         2>/dev/null | tr -d '\r' | grep -a REQ_WRITTEN >> "$M/$lbl-seed.log" 2>&1
-      echo "request written at install+${SEED_DELAY}s ($(date +%H:%M:%S))" >> "$M/$lbl-seed.log" ) &
+      echo "request written at install+${SEED_DELAY}s ($(date -u +%H:%M:%S))" >> "$M/$lbl-seed.log" ) &
   fi
   # Probe the MONITOR PROCESS directly. tasklist is far cheaper than reading a growing log, so it
   # keeps answering while the guest is busy - which is exactly where every file-read poll lost the
   # race and cost us the six lines that mattered.
   ( for _p in $(seq 1 90); do
-      echo "[$(date +%H:%M:%S)] $(QTEST_VM=$vm timeout -k 3 25 ./tools/qtest run \
+      echo "[$(date -u +%H:%M:%S)] $(QTEST_VM=$vm timeout -k 3 25 ./tools/qtest run \
         'cmd /c tasklist | findstr /i xenbus & sc query xenbus_monitor | findstr /i STATE' \
         2>/dev/null | tr -d '\r' | tr '\n' ' ' | cut -c1-150)" >> "$M/$lbl-monitor.log" 2>&1
       sleep 5
