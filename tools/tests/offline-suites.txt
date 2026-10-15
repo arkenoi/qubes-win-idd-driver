@@ -73,6 +73,7 @@ matrix-sweep-tally-selftest.sh
 mode-wait-attribution-selftest.sh
 offline-runner-selftest.sh
 qcon-session-selftest.sh
+qtest-push-selftest.sh
 release-cut-gate-selftest.sh
 resolve-rip-selftest.sh
 result-flags-selftest.sh

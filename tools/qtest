@@ -147,19 +147,56 @@ case "${1:-}" in
            # ("A file named ... already exists"). Delete the targets first so re-pushing
            # an edited file during iteration just works.
            INCOMING="$(qtest_incoming)"
+           # SAME ASSERTION AS pushrun: a copy that moved no bytes used to be indistinguishable from
+           # a copy that worked, because neither the delete's failure nor qvm-copy-to-vm's exit
+           # status was read. A caller that pushes a file and then uses it deserves to know.
+           rc=0
            for f in "$@"; do
                b="$(basename "$f")"
+               want=$(stat -c%s "$f" 2>/dev/null || echo 0)
                vmshell "cmd /c del /q /f \"$INCOMING\\$b\" 2>nul" >/dev/null 2>&1 || true
+               qvm-copy-to-vm "$VM" "$f" >/dev/null 2>&1 || true
+               got=$(vmshell "cmd /c if exist \"$INCOMING\\$b\" (for %A in (\"$INCOMING\\$b\") do @echo QSIZE=%~zA) else @echo QSIZE=0" 2>/dev/null \
+                     | tr -d '\r\0' | sed -n 's/^QSIZE=\([0-9][0-9]*\)$/\1/p' | tail -1)
+               if [ -n "$got" ] && [ "$got" = "$want" ]; then
+                   echo "qtest push: $b delivered ($want bytes)"
+               else
+                   echo "qtest push: $b arrived as ${got:-0} of $want byte(s) - NOT delivered" >&2
+                   rc=4
+               fi
            done
-           qvm-copy-to-vm "$VM" "$@" ;;
+           exit "$rc" ;;
   pushrun) shift
            # Extra args after the script are FORWARDED to it. They used to be dropped
            # silently, so a caller passing e.g. -NoIddExpected got the default behaviour
            # and no warning (found 2026-08-07 while wiring the health gate's non-IDD mode).
            INCOMING="$(qtest_incoming)"
            f="$1"; shift; base="$(basename "$f")"
-           vmshell "cmd /c del /q /f \"$INCOMING\\$base\" 2>nul" >/dev/null 2>&1 || true
-           qvm-copy-to-vm "$VM" "$f"
+           # THE FILE MUST ARRIVE BEFORE WE RUN IT. This used to delete (ignoring failure), copy
+           # (ignoring the exit status) and then run the script with no check that it was there.
+           # MEASURED on win11r-lt twice, 2026-10-15 21:21 and 2026-10-16 22:37: the transcript
+           # reads `sent 0/11 KB` and then `The argument '...logvol-bind.ps1' to the -File parameter
+           # does not exist`. The log-volume bind failed both times, so QWT's logs stayed on C: and
+           # the DIAG image - the store the HOST can read with mtools when the guest is wedged -
+           # held 155 bytes. The harness then says, correctly, "no qrexec for 41s and the log volume
+           # could not be read either: THAT is the gap, not the silence."
+           # So: assert the byte count the guest actually has, retry, and fail LOUDLY rather than
+           # run a script that is not there and report its absence as the guest's fault.
+           want=$(stat -c%s "$f" 2>/dev/null || echo 0)
+           delivered=0
+           for attempt in 1 2 3; do
+               vmshell "cmd /c del /q /f \"$INCOMING\\$base\" 2>nul" >/dev/null 2>&1 || true
+               qvm-copy-to-vm "$VM" "$f" >/dev/null 2>&1 || true
+               got=$(vmshell "cmd /c if exist \"$INCOMING\\$base\" (for %A in (\"$INCOMING\\$base\") do @echo QSIZE=%~zA) else @echo QSIZE=0" 2>/dev/null \
+                     | tr -d '\r\0' | sed -n 's/^QSIZE=\([0-9][0-9]*\)$/\1/p' | tail -1)
+               [ -n "$got" ] && [ "$got" = "$want" ] && { delivered=1; break; }
+               echo "qtest pushrun: $base arrived as ${got:-0} of $want byte(s) on attempt $attempt - retrying" >&2
+               sleep 5
+           done
+           if [ "$delivered" != 1 ]; then
+               echo "qtest pushrun: FAILED to deliver $base ($want bytes) to $VM after 3 attempts - refusing to run a script that is not there" >&2
+               exit 4
+           fi
            vmshell "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"$INCOMING\\$base\" $*" ;;
   synctime) # Push this qube's clock into the guest (accurate to ~0.3 s).
            # WHY this exists: the guest's virtual RTC is re-derived from dom0's LOCAL wall
