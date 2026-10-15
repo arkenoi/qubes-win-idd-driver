@@ -568,16 +568,37 @@ try {
         Remove-Item $mp -Force -ErrorAction SilentlyContinue   # consumed on startup, as designed
     }
 } catch { }
+# AND THE CASE THE LIVE METRIC CANNOT SEE AT ALL. The reporter is EVENT-TRIGGERED, and Task
+# Scheduler refuses to launch an action while the system is going down - this file documents that
+# two hundred lines below, with the measurement. So for the deaths that matter most, the reporter
+# is NOT ALIVE during the shutdown: it reads them from the backlog on the next boot, when
+# SM_SHUTTINGDOWN is 0 and no mark was ever written because nothing of ours was running to write
+# one. MEASURED on win10-clean, acceptance run 38815268798:
+#     23:32:40 DEATH #1 NEW .../201#285: The PV NIC setup task failed
+#     23:32:41 catch-up: record 285 was never reported (ITS TRIGGER COULD NOT RUN) - reported now
+# Three tasks reaped by a shutdown, all reported to the user on the following boot. An earlier fix
+# of mine rested on the live metric and was structurally unable to help here; the live case I had
+# measured - the reporter reporting one second before being reaped - was the exception.
+#
+# THE SURVIVING EVIDENCE NEEDS NO TIMESTAMPS. A record reaches the catch-up only because the live
+# path never saw it, and the live path misses a record only when its trigger was refused, which is
+# what Task Scheduler does while the system goes down. Pair that with a result code that already
+# NAMES a reap and the shutdown is established from state, not from correlating clocks. The code is
+# still required, so an ordinary crash in the backlog is reported exactly as before.
+$script:QwtDeathInCatchUp = $false
 $script:QwtShutdownNearProbe = {
     param([datetime]$at)   # kept for the caller's signature; a system state needs no instant
     $v = & $script:QwtShuttingDownMetric
-    if ($null -eq $v) { return $null }     # the call could not be made: no answer, never silence
-    if ($v -ne 0) {
+    if ($null -eq $v -and -not $script:QwtDeathInCatchUp) { return $null }   # no answer, never silence
+    if ($v -ne 0 -and $null -ne $v) {
         # record it for the run that reads this session's backlog after the reboot
         try { Set-Content -Path (& $script:QwtShutdownMarkPath) -Value 'shutting down' -ErrorAction SilentlyContinue } catch { }
         return $true
     }
-    return $script:QwtPrevSessionEndedInShutdown
+    if ($script:QwtPrevSessionEndedInShutdown) { return $true }
+    # the backlog case: this record is here BECAUSE the reporter could not be launched
+    if ($script:QwtDeathInCatchUp) { return $true }
+    return $false
 }
 # TASK SCHEDULER RESULT CODES THAT NAME THE SHUTDOWN AS THE CAUSE. These are not inferred from an
 # absence - they are Task Scheduler stating why it could not run or finish the action:
@@ -647,7 +668,17 @@ function Test-QwtTaskEndedByShutdown {
     $endedByEvent = [bool](& $script:QwtTaskEndedProbe $instanceId)
     $codeSaysShutdown = $c -and ($script:QwtShutdownResultCodes -contains $c)
     if (-not $endedByEvent -and -not $codeSaysShutdown) { return 'not-ended' }
-    if ([bool](& $script:QwtShutdownNearProbe $at)) { return 'shutdown' }
+    $near = & $script:QwtShutdownNearProbe $at
+    if ([bool]$near) {
+        # THE CATCH-UP'S OWN EVIDENCE IS NOT A BLANKET EXCUSE. Being in the backlog shows a
+        # shutdown refused the trigger, but event 111 is ALSO raised when a task exceeds its
+        # ExecutionTimeLimit - a genuine hang, which this reporter exists to surface. So in the
+        # backlog the RESULT CODE must name the reap as well; without it the death is reported,
+        # exactly as before. Caught by the suite: a 0xC0000005 crash found in the backlog was being
+        # ignored, which is the over-suppression this whole path must never introduce.
+        if ($script:QwtDeathInCatchUp -and -not $codeSaysShutdown) { return 'ended-not-shutdown' }
+        return 'shutdown'
+    }
     return 'ended-not-shutdown'
 }
 
@@ -1432,7 +1463,8 @@ function Invoke-QwtDeathCatchUp {
                 # Invoke-QwtDeathReport decides itself whether a record is one of ours ('not-ours' / 'ignored') and
                 # dedupes per boot, so the catch-up hands it every new record and counts what it accepted. The
                 # subscription's XPath is not available here - this is a scan, and the classifier is the same one.
-                $verdict = Invoke-QwtDeathReport -XmlText $e.ToXml()
+                $script:QwtDeathInCatchUp = $true      # see QwtShutdownNearProbe: being here IS the evidence
+                try { $verdict = Invoke-QwtDeathReport -XmlText $e.ToXml() } finally { $script:QwtDeathInCatchUp = $false }
                 if ($verdict -notin @('not-ours', 'ignored', 'not-a-death')) {
                     Write-QwtDeathLog 'INFO' "catch-up: $ch record $rid was never reported (its trigger could not run) - reported now ($verdict)"
                     $r.reported++

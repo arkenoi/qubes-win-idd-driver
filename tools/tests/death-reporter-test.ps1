@@ -324,6 +324,34 @@ Check 'notified set SEEN TO FAIL: with nothing recorded, 345 reads as unseen and
       ((-not (Test-QwtDeathAlreadyNotified -Channel $CH -RecordId 345 -Marks $m)) -and (345 -gt [long]$m[$CH]))
 Remove-Item -LiteralPath $wmp -Force -ErrorAction SilentlyContinue
 
+# THE BACKLOG CASE, which the live metric cannot see. MEASURED on win10-clean, acceptance run
+# 38815268798: three tasks reaped by a shutdown were reported to the user on the NEXT boot, because
+# the reporter is event-triggered and Task Scheduler refuses to launch it while the system goes
+# down - "catch-up: record 285 was never reported (its trigger could not run) - reported now".
+# So the metric reads 0 and no mark was written, because nothing of ours was alive to write one.
+$script:QwtShuttingDownMetric = { return 0 }
+$script:QwtPrevSessionEndedInShutdown = $false
+$script:QwtDeathInCatchUp = $false
+$rNorm = & $script:RealNearProbe ([DateTime]::UtcNow)
+Check 'backlog: outside the catch-up, a clear metric still means NO shutdown - a death is reported' ($rNorm -eq $false) "probe=$rNorm"
+$script:QwtDeathInCatchUp = $true
+$rCatch = & $script:RealNearProbe ([DateTime]::UtcNow)
+Check 'backlog: INSIDE the catch-up, the record is here because the trigger was refused - that IS the shutdown' ($rCatch -eq $true) "probe=$rCatch"
+$script:QwtDeathInCatchUp = $false
+# and the CODE is still required: the caller only consults this probe once the result names a reap,
+# so an ordinary crash found in the backlog is reported exactly as before.
+$script:QwtTaskEndedProbe = { param([string]$i) return $true }
+$script:QwtDeathInCatchUp = $true
+$ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesPvNic' '3221225477' $T0)   # 0xC0000005, a crash
+Check 'backlog: a CRASH code in the backlog is still a death - the code gates the excuse' ($ev.ours -eq $true -and $ev.ignore -ne $true) "ignore=$($ev.ignore)"
+$ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesPvNic' '2147943691' $T0)   # 0x8007050B, a reap
+Check 'backlog: a REAP code in the backlog is explained by the shutdown that refused the trigger' ($ev.ignore -eq $true) "ignore=$($ev.ignore) reason=$($ev.reason)"
+$script:QwtDeathInCatchUp = $false
+# SEEN TO FAIL: with the backlog context removed - the shipped behaviour - that same reap is
+# reported, which is exactly the three toasts win10-clean put in front of the user.
+$ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesPvNic' '2147943691' $T0)
+Check 'backlog SEEN TO FAIL: without the catch-up context the same reap is REPORTED to the user' ($ev.ignore -ne $true) "ignore=$($ev.ignore)"
+
 # SEEN TO FAIL: the measured case, against the body this replaced. On win10-clean the shutdown
 # record sat 224 s before the kill and the old window looked back 30 s, so it missed it and the
 # user was told the task had failed. Run here with a stub that answers like the real log did.
