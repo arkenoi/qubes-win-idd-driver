@@ -1,8 +1,8 @@
 #!/bin/bash
 # offline-runner-selftest.sh - the CI producer's own guards must FIRE.
 #
-# tools/tests/run-offline-suites.sh is what makes 41 offline suites visible to CI
-# (SELFTESTSUNRUNINCI). A runner that iterates a list cannot, by itself, tell "all 41 passed" from
+# tools/tests/run-offline-suites.sh is what makes 42 offline suites visible to CI
+# (SELFTESTSUNRUNINCI). A runner that iterates a list cannot, by itself, tell "all 42 passed" from
 # "the list was emptied" - and losing a gate suite's producer is this project's most repeated
 # failure: the gate that required 18 suites where 12 had a producer, and the selftest whose RESULT
 # line was deduped away so it could no longer fail. So the runner carries a FLOOR and an EMPTY rule,

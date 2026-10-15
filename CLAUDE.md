@@ -28,6 +28,7 @@ Improve Windows-guest desktop fidelity and responsiveness in QWT seamless mode. 
 
 ## Working rules (binding)
 - Operator intervention is Jev-bound (tools/hooks/ask-operator-gate.sh). Ask Jev whether to interrupt; act on the verdict.
+- **Check the clock before asking.** Between 01:00 and 06:00 local, do not ask a scope question - pick the option that keeps working, state the assumption, and leave the question for the morning. A lengthy task is a reason to START. Enforced by the same hook.
 - Do not stop to report. End a turn when the goal is met or a real external blocker is hit.
 - Escalate to owner only for: dom0/sudo/policy, upstream contact, acceptance stuck after ~3 iterations, guest reinstall, or isolation-weakening tradeoff.
 

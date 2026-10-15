@@ -29,6 +29,7 @@
 # Everything else in tools/tests/ needs a Qubes rig, a loop device, PowerShell, mtools or a
 # compiler and is run on the dev qube.
 acceptance-record-selftest.sh
+ask-operator-night-selftest.sh
 cell-coverage-selftest.sh
 ci-state-selftest.sh
 console-window-check-selftest.sh

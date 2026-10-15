@@ -16,14 +16,48 @@
 # enforces that the question was ASKED, not which way it was answered - deciding for the model
 # would just move the judgement back into a script.
 #
+# AND IT CHECKS THE CLOCK (owner, 2026-10-15): "before asking principal, check time. if it is in
+# range 1am-6am, better keep yourself busy overnight rather than ask 'should i do that lengthy
+# task'". A scope question at 03:00 does not get answered at 03:00 - it stops the rig until morning
+# and throws away the hours that are the cheapest ones to spend. The owner said this after I asked,
+# at 03:05, whether to spend a multi-hour campaign on a clock fix; the right move was to start it.
+# So between 01:00 and 05:59 local this refuses, and the model picks the option that keeps working.
+#
 # Exit 0 = allow. Exit 2 = block, and the message on stderr goes back to the model.
 set -u
 WINDOW_MIN="${ASK_GATE_WINDOW_MIN:-20}"
+NIGHT_FROM="${ASK_GATE_NIGHT_FROM:-1}"   # inclusive hour
+NIGHT_TO="${ASK_GATE_NIGHT_TO:-6}"       # exclusive hour
 ROOT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 WIRE="${JEV_WIRE_LOG:-$ROOT/scratchpad/jev-wire.jsonl}"
 
 # Markers that say "this Jev call was about whether to involve the operator".
 MARKERS='ask_operator|should_ask|operator_intervention|escalate_to_owner|interrupt_the_owner|blocking_question'
+
+# ---- THE CLOCK, BEFORE ANYTHING ELSE -----------------------------------------------------------
+# NIGHT HOURS. Nothing here judges how important the question is: a question asked at 03:00 waits
+# until morning whatever it is, so the only thing that changes is whether the intervening hours were
+# spent. ASK_OPERATOR_NIGHT_OK=1 exists for the one case this cannot cover - proceeding under ANY
+# assumption would be unsafe or destructive - and it is not for "this decision is a big one".
+hour=$(date +%-H)
+if [ "${ASK_OPERATOR_NIGHT_OK:-}" != "1" ] && [ "$hour" -ge "$NIGHT_FROM" ] && [ "$hour" -lt "$NIGHT_TO" ]; then
+    cat >&2 <<EOM
+BLOCKED by tools/hooks/ask-operator-gate.sh: it is $(date +%H:%M) local, inside the ${NIGHT_FROM}:00-${NIGHT_TO}:00 night window.
+The owner's rule: "before asking principal, check time. if it is in range 1am-6am, better keep
+yourself busy overnight rather than ask 'should i do that lengthy task'."
+
+A scope question now is not answered now - it parks the rig until morning and spends none of the
+hours that are cheapest to spend. So:
+  1. Pick the option that KEEPS WORKING. If one path is longer but reversible, take it.
+  2. State the assumption you proceeded under, in the turn and in findings/issues.md.
+  3. Leave the question for the morning only if it is still open then.
+A lengthy task is a REASON TO START, not a reason to ask.
+
+ASK_OPERATOR_NIGHT_OK=1 overrides this, and only for a decision where proceeding under any
+assumption would be unsafe or destructive - never for "this one is big".
+EOM
+    exit 2
+fi
 
 if [ ! -s "$WIRE" ]; then
     cat >&2 <<EOM
