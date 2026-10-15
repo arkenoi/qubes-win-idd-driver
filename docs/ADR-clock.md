@@ -295,13 +295,15 @@ invariant down and grepping every file that touches it.
 
 ## Not done
 
-* **`win11de-qwt` still carries the forced value physically**, and is deliberately not rebuilt. Its
-  seal note is literally `RealTimeIsUniversal=1`. No gate suite enters from it — it is the German
-  reproduction environment, reached by `clone-guest.sh`, and `rebuild-rig.sh` excludes the German
-  base by design. A clone of it boots `1` over a dom0-local RTC, so it starts dom0's offset AHEAD
-  (harmless to catalog validation) and the per-boot task converges it within one boot. That is the
-  convergence doing exactly the job it exists for, and it is recorded here so the next reader does
-  not read that seal note as a live defect. Rebuild it when the German base is next rebuilt.
+* **`win11de-qwt` is corrected IN PLACE, not rebuilt** — the owner's distinction: where QWT is
+  present the value can be fixed on the run, and only the rest needs a redeploy. This golden carries
+  QWT, so qrexec answers; its defect is one registry value, where `win10-base`'s is its provenance.
+  Rebuilding it would also need German vendor media and a base `rebuild-rig` deliberately excludes.
+  The operation is one authorised boot under `GOLDEN_UNSEAL`, a DELETE of the value (absent is
+  Windows' default — 0 would be the same instruction with an extra claim), a read-back, a clean
+  shutdown and a re-seal whose reason carries the measured before/after. The seal is rewritten
+  whatever the outcome, because `revisions_to_keep` is 2 and the boot alone rotates the revisions the
+  previous seal named; a failed revert therefore produces a seal that says so.
 * The goldens acceptance DOES enter from — `win10-base` and `win11r-base`, plus the `-iqi` and
   `-tpl` fixtures built from them — are rebuilt from vendor media with the corrected answer files.
 
