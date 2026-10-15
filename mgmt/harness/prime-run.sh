@@ -195,7 +195,7 @@ qvm-features "$CHURN" os Windows
 # `timezone=localtime` makes the qube present dom0's LOCAL time in the RTC. No ordinary qube has
 # that; this harness set it itself, to stop a German guest computing a UTC BEHIND real UTC and
 # failing driver-catalog validation (0x800B0101). But that only happened because Windows was
-# reading the RTC as local time - RealTimeIsUniversal unset - so we worked around a missing
+# reading the RTC as local time - RealTimeIsUniversal unset at the time - so we worked around a missing
 # registry value with a non-standard clock, and every UTC guest then ran +dom0_offset ahead:
 # measured 2026-10-14 as a permanent +3 h that the clock puller re-corrected three times in six
 # minutes while the log analyser silently shifted 2249 lines to hide it.
@@ -531,7 +531,13 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
         fi
         ready=1
         log "  t+${el}s QREXEC ANSWERS after $restarts restart(s) - the guest carries a working QWT"
-        w_rtc_utc "$CHURN" log || true
+        # REPORT the convention; the PRODUCT decides it. This used to call w_rtc_utc, which WROTE
+        # RealTimeIsUniversal=1 here - after the install, overwriting whatever the installer and the
+        # per-boot task had derived, on every primed subject. Measured on run 11: the installer
+        # logged "RealTimeIsUniversal set to 0 for the next boot" and the following boots ran with 1
+        # and a three-hour error. A harness that sets the thing the gate is meant to measure cannot
+        # measure it.
+        w_rtc_report "$CHURN" log || true
         # ARM THE MODULE-BASE RECORDER, HERE, WHILE THE GUEST STILL ANSWERS.
         # Until 2026-09-23 this script's failure banner PROMISED the recorder was armed - "a RIP
         # captured with dom0 debug-keys d/v will resolve to driver+offset" - and nothing in this

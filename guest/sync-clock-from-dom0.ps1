@@ -104,64 +104,109 @@ while ((Get-Date) -lt $deadline) {
 
 $after = (Get-Date).ToUniversalTime()
 
-# ---- WHICH CONVENTION DOES THIS QUBE'S RTC FOLLOW? Decided by MEASUREMENT, once per boot. -------
+# ---- WHICH CONVENTION DOES THIS QUBE'S RTC FOLLOW? Decided from an INDEPENDENT witness. -------
 # RealTimeIsUniversal declares whether Windows reads the emulated RTC as UTC (1) or as local time
-# (0). Only ONE of the two is true for a given qube, and which one depends on a dom0-side feature
-# the guest cannot read:
-#   * qubes-core-admin sets `timezone=localtime` for every os=Windows qube with qrexec, and Xen then
-#     presents the RTC as DOM0 LOCAL time -> the correct value is 0.
-#   * a qube whose `timezone` feature is UNSET gets a true-UTC RTC -> the correct value is 1.
-# Shipping either value blind is wrong for the other case. Measured 2026-10-15 on a live guest:
-# shipping 1 on a localtime qube put it 10800 s ahead on every boot (its UTC was 10:38:51Z against a
-# real 07:38:40Z), and Jev scored the opposite default as breaking the feature-unset qube at 0.88.
+# (0). Only one is true for a given qube and the guest cannot be told which: dom0 sets the qube's
+# `timezone` feature after we report in, which changes what the RTC holds at the next domain
+# creation, and a subject can also be CREATED with that feature unset.
 #
-# SO IT IS DERIVED, NOT ASSUMED. This script has just learned real UTC from dom0, and $before is
-# what the guest believed UTC was a moment earlier - computed from the RTC under the CURRENT setting.
-# Inverting that gives what the RTC actually holds, and comparing it against real UTC says which
-# convention fits. The write takes effect at the NEXT boot (Windows reads this only at startup), so
-# a guest converges within one boot instead of being re-corrected for ever.
+# THE FIRST VERSION OF THIS COMPARED THE GUEST'S CLOCK WITH ITSELF. It took the clock before the
+# pull and the clock after it, and concluded "fits" whenever they agreed - but a pull that changes
+# nothing makes those the same number, and this script cannot see whether the pull did anything:
+# qrexec pipes dom0's date straight into set-time.ps1 and that script's exit code does not come back
+# through the client (see the comment on the pull above, which says so). Measured on run 11: it
+# reported "RealTimeIsUniversal=1 matches this qube's RTC convention" four times on a guest that was
+# three hours out. A test whose reference is the thing under test cannot fail.
 #
-# NEITHER HYPOTHESIS FITTING IS AN ANOMALY, NOT A DEFAULT. On Xen a guest's own clock writes move a
-# per-VM offset that the toolstack persists (/vm/<uuid>/rtc/timeoffset), so a subject corrected on
-# every boot for weeks can hold an RTC that matches nothing - measured on win10-acc, which read
-# dom0-local PLUS three hours after a correction cycle (RTCOFFSETWRITEBACK). In that case this says
-# so, loudly, and changes nothing: a wrong guess would be worse than the puller we already have.
+# THE WITNESS IS set-time.ps1, WHICH DID SEE DOM0'S VALUE. It logs, on every successful set:
+#   SETTIME clock set to 2026-10-15T09:24:50.0000000Z (was -10821.2 s out, now 0 s; guest zone FLE
+#   Standard Time, offset 02:00:00)
+# That line carries everything this decision needs, all of it measured BEFORE the clock was touched:
+#   * dom0's own UTC             - the reference, from outside this guest
+#   * `was <skew> s out`         - dom0_utc MINUS the guest's clock, so the pre-set clock is
+#                                  recoverable exactly (skew is negative when the guest ran ahead)
+#   * `offset <hh:mm:ss>`        - the guest's zone offset at that moment
+# From those, what the RTC held before anything wrote to it:
+#   RealTimeIsUniversal=1  ->  RTC = clock_before
+#   RealTimeIsUniversal=0  ->  RTC = clock_before + offset
+# and the RTC holds true UTC when that equals dom0's value, or dom0 LOCAL when it equals dom0's
+# value plus the offset. Each case names the value Windows should carry.
+#
+# NO WITNESS MEANS NO DECISION. If there is no SETTIME line from this boot, or it cannot be parsed,
+# this says so and changes nothing - which is the behaviour the old version lacked.
+function Get-ClockWitness {
+    # The newest SETTIME line, as a hashtable, or $null.
+    $dir = $null
+    try { $dir = (Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -Name LogDir -ErrorAction Stop).LogDir } catch { }
+    if ([string]::IsNullOrWhiteSpace($dir)) { $dir = Join-Path $tools 'log' }
+    if (-not (Test-Path -LiteralPath $dir)) { return $null }
+    $line = $null
+    try {
+        $line = Get-ChildItem -LiteralPath $dir -Filter 'set-time.ps1-*.log' -ErrorAction Stop |
+                Sort-Object LastWriteTime -Descending |
+                ForEach-Object { Select-String -LiteralPath $_.FullName -Pattern 'SETTIME clock set to ' -ErrorAction SilentlyContinue } |
+                Select-Object -Last 1
+    } catch { }
+    if (-not $line) { return $null }
+    $m = [regex]::Match($line.Line, 'SETTIME clock set to (?<utc>\S+) \(was (?<skew>-?[0-9.]+) s out, now (?<res>-?[0-9.]+) s; guest zone (?<zone>.+?), offset (?<off>[-0-9:.]+)\)')
+    if (-not $m.Success) { return $null }
+    $inv = [Globalization.CultureInfo]::InvariantCulture
+    [datetime]$u = [datetime]::MinValue
+    if (-not [datetime]::TryParse($m.Groups['utc'].Value, $inv,
+            ([Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal), [ref]$u)) { return $null }
+    [timespan]$o = [timespan]::Zero
+    if (-not [timespan]::TryParse($m.Groups['off'].Value, $inv, [ref]$o)) { return $null }
+    return @{
+        Dom0Utc = [datetime]::SpecifyKind($u, [DateTimeKind]::Utc)
+        SkewS   = [double]$m.Groups['skew'].Value
+        Offset  = $o
+    }
+}
+
 if ($exit -eq 'set') {
     try {
-        $key  = 'HKLM:\SYSTEM\CurrentControlSet\Control\TimeZoneInformation'
-        $cur  = $null
-        try { $cur = (Get-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -ErrorAction Stop).RealTimeIsUniversal } catch { $cur = 0 }
-        if ($null -eq $cur) { $cur = 0 }
-        $off  = [TimeZoneInfo]::Local.GetUtcOffset($after)
-        # What the RTC holds, inverted from what the guest believed before the pull.
-        $rtc  = if ($cur -eq 1) { $before } else { $before + $off }
-        # Tolerance covers the seconds between $before and $after plus RTC second-granularity.
-        $tol  = [TimeSpan]::FromSeconds(90)
-        $fitsUtc   = ([Math]::Abs(($rtc - $after).TotalSeconds) -lt $tol.TotalSeconds)
-        $fitsLocal = ([Math]::Abs((($rtc - $off) - $after).TotalSeconds) -lt $tol.TotalSeconds)
-        $want = $null
-        if ($fitsUtc -and -not $fitsLocal)      { $want = 1 }
-        elseif ($fitsLocal -and -not $fitsUtc)  { $want = 0 }
-        elseif ($fitsUtc -and $fitsLocal)       { $want = $cur }   # zero offset: both fit, nothing to choose
-        if ($null -eq $want) {
-            LogWarning ("CLOCKCONV the RTC matches NEITHER convention: it holds $($rtc.ToString('o')), " +
-                        "real UTC is $($after.ToString('o')), this guest's offset is $off. On Xen a guest's own " +
-                        "clock writes move a persisted per-VM RTC offset, so this subject's RTC may carry the " +
-                        "history of earlier corrections. RealTimeIsUniversal left at $cur and the clock stays " +
-                        "pulled from dom0 - diagnose, do not guess.")
-        } elseif ($want -ne $cur) {
-            New-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -PropertyType DWord -Value $want -Force -ErrorAction Stop | Out-Null
-            $back = (Get-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -ErrorAction Stop).RealTimeIsUniversal
-            if ($back -eq $want) {
-                LogWarning ("CLOCKCONV RealTimeIsUniversal was $cur and this qube's RTC says it should be $want " +
-                            "(the RTC holds $($rtc.ToString('o')), real UTC $($after.ToString('o')), offset $off) - " +
-                            "corrected; it takes effect at the next boot, and this boot needed a pull of " +
-                            "$([int]($after - $before).TotalSeconds) s")
-            } else {
-                LogError "CLOCKCONV RealTimeIsUniversal did not read back as $want (got '$back') - this guest will keep needing a pull every boot"
-            }
+        $w = Get-ClockWitness
+        if ($null -eq $w) {
+            LogWarning ('CLOCKCONV no usable SETTIME witness from this boot, so the RTC convention was NOT decided - ' +
+                        'RealTimeIsUniversal is untouched and the clock stays as the pull left it. This script cannot ' +
+                        'see dom0 time itself: qrexec hands it to set-time.ps1, whose exit code does not come back.')
         } else {
-            LogInfo "CLOCKCONV RealTimeIsUniversal=$cur matches this qube's RTC convention"
+            $key   = 'HKLM:\SYSTEM\CurrentControlSet\Control\TimeZoneInformation'
+            $cur   = $null
+            try { $cur = (Get-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -ErrorAction Stop).RealTimeIsUniversal } catch { $cur = 0 }
+            if ($null -eq $cur) { $cur = 0 }
+            # The clock as it stood BEFORE set-time touched it: dom0's value minus the skew it measured.
+            $clockBefore = $w.Dom0Utc.AddSeconds(-1 * $w.SkewS)
+            $rtc  = if ($cur -eq 1) { $clockBefore } else { $clockBefore + $w.Offset }
+            $tol  = 90
+            $fitsUtc   = ([Math]::Abs(($rtc - $w.Dom0Utc).TotalSeconds) -lt $tol)
+            $fitsLocal = ([Math]::Abs((($rtc - $w.Offset) - $w.Dom0Utc).TotalSeconds) -lt $tol)
+            $want = $null
+            if ($fitsUtc -and -not $fitsLocal)     { $want = 1 }
+            elseif ($fitsLocal -and -not $fitsUtc) { $want = 0 }
+            # A zero offset makes the two tests identical: there is nothing to tell apart, so nothing
+            # is decided. Saying "it matches" there is how the old version justified itself.
+            elseif ($fitsUtc -and $fitsLocal)      { $want = $null }
+            if ($null -eq $want) {
+                LogWarning ("CLOCKCONV the RTC fits NEITHER convention unambiguously: it held $($rtc.ToString('o')), " +
+                            "dom0 said $($w.Dom0Utc.ToString('o')), this guest's offset is $($w.Offset). " +
+                            "With a zero offset the two conventions are the same arithmetic and there is nothing to " +
+                            "choose; otherwise the RTC carries the history of earlier clock writes, which Xen persists " +
+                            "per VM. RealTimeIsUniversal left at $cur - diagnose, do not guess.")
+            } elseif ($want -ne $cur) {
+                New-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -PropertyType DWord -Value $want -Force -ErrorAction Stop | Out-Null
+                $back = (Get-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -ErrorAction Stop).RealTimeIsUniversal
+                if ($back -eq $want) {
+                    LogWarning ("CLOCKCONV RealTimeIsUniversal was $cur and this qube's RTC says $want (the RTC held " +
+                                "$($rtc.ToString('o')), dom0 said $($w.Dom0Utc.ToString('o')), offset $($w.Offset), " +
+                                "the clock was $($w.SkewS) s out) - corrected; it takes effect at the next boot")
+                } else {
+                    LogError "CLOCKCONV RealTimeIsUniversal did not read back as $want (got '$back') - this guest will keep needing a pull every boot"
+                }
+            } else {
+                LogInfo ("CLOCKCONV RealTimeIsUniversal=$cur matches what the RTC held ($($rtc.ToString('o')) against " +
+                         "dom0's $($w.Dom0Utc.ToString('o')), offset $($w.Offset))")
+            }
         }
     } catch {
         LogWarning "CLOCKCONV could not decide the RTC convention ($($_.Exception.Message)) - the clock is pulled, the setting is untouched"

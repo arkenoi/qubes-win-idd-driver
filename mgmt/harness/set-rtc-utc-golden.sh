@@ -74,7 +74,15 @@ say "qrexec answers"
 
 # w_rtc_utc sets the value AND reads it back; a write that cannot be confirmed is a failure here,
 # because the whole point of this run is that the image carries it.
-w_rtc_utc "$VM" say || { qwt_shutdown "$VM" 600 >/dev/null 2>&1; die "could not set RealTimeIsUniversal - nothing re-sealed"; }
+# RETIRED. This script baked RealTimeIsUniversal=1 into a sealed golden, which is the harness
+# deciding a product setting - and only one of the two values is correct for a given qube, decided
+# at runtime by whether dom0 has given it the `timezone` feature. A golden carrying a forced value
+# hands every subject cloned from it a convention nobody measured.
+# The product derives it instead: guest/sync-clock-from-dom0.ps1 (CLOCKCONV) reads set-time.ps1's
+# own SETTIME witness - dom0's UTC, the pre-set skew, the guest's offset - and sets the value from
+# what it finds, converging within one boot. Nothing needs baking.
+die "RETIRED: this script forced RealTimeIsUniversal into a golden. The product derives the RTC convention per boot from set-time.ps1's SETTIME witness (CLOCKCONV in guest/sync-clock-from-dom0.ps1); a forced value in a golden is the harness deciding what the gate is supposed to measure. If a golden really must be re-sealed, do it for a reason that is not this one."
+
 
 say "shutting down cleanly (qwt_shutdown: --wait KILLS at its timeout, and a killed golden is a contaminated one)"
 qwt_shutdown "$VM" 900
