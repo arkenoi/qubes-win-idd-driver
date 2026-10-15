@@ -84,7 +84,11 @@ mk(){ # <cur> <body of the Get-ClockWitness stub>
     printf '%s\n' "\"WROTE=\$script:Written\"" "\$script:Log | ForEach-Object { \"LOG=\$_\" }"
   } > "$T/run.ps1"
 }
-run(){ "$PWSH" -NoProfile -File "$T/run.ps1" 2>&1; }
+# TZ CHOOSES THE EFFECTIVE OFFSET, because the block derives it from [TimeZoneInfo]::Local rather
+# than trusting the witness's field - the witness logs the zone's BASE offset, which for FLE is
+# 02:00:00 all year while the offset in effect under DST is 03:00:00. Europe/Sofia on the test date
+# (2026-10-15) is in DST, so +03:00.
+run(){ TZ="${1:-Europe/Sofia}" "$PWSH" -NoProfile -File "$T/run.ps1" 2>&1; }
 W_AHEAD='return @{ Dom0Utc = $REAL; SkewS = -10800.0; Offset = [timespan]::FromHours(3) }'
 W_BEHIND='return @{ Dom0Utc = $REAL; SkewS = 10800.0; Offset = [timespan]::FromHours(3) }'
 W_JUNK='return @{ Dom0Utc = $REAL; SkewS = -21600.0; Offset = [timespan]::FromHours(3) }'
@@ -114,7 +118,7 @@ printf '%s' "$out" | command grep -q 'diagnose, do not guess' \
   && ok "and tells the reader not to guess" || bad "the anomaly message does not say what to do"
 
 echo "PART D  a zero-offset guest has nothing to choose, and must not thrash"
-mk 1 "$W_ZERO"; out=$(run)
+mk 1 "$W_ZERO"; out=$(run UTC)
 printf '%s' "$out" | command grep -q 'WROTE=NONE' \
   && ok "no write when both conventions coincide (offset 0)" || bad "it wrote a value where there was nothing to decide"
 printf '%s' "$out" | command grep -q 'same arithmetic' \
@@ -129,7 +133,23 @@ printf '%s' "$out" | command grep -q 'no usable SETTIME witness' \
 printf '%s' "$out" | command grep -q 'exit code does not come back' \
   && ok "and says why this script cannot see dom0 time itself" || bad "it does not explain why a witness is needed"
 
-echo "PART F  seen to fail: break the branch PART A reaches"
+echo "PART F  the EFFECTIVE offset is used, not the zone's base offset"
+# THE DEFECT THIS CATCHES, measured on run 12's first cell. set-time.ps1 logs
+# `(Get-TimeZone).BaseUtcOffset` - 02:00:00 for FLE Standard Time, all year - while the offset in
+# effect under DST is 03:00:00. Using the base value made a real three-hour displacement match
+# NEITHER hypothesis, so the convention was never flipped and the guest kept needing a correction:
+# "the RTC fits NEITHER convention unambiguously: it held 13:34:15Z, dom0 said 10:34:06Z, this
+# guest's offset is 02:00:00". The witness still REPORTS the base offset; the block must ignore it.
+mk 1 'return @{ Dom0Utc = $REAL; SkewS = -10800.0; Offset = [timespan]::FromHours(2) }'
+out=$(run Europe/Sofia)
+printf '%s' "$out" | command grep -q 'WROTE=0' \
+  && ok "a witness reporting the BASE offset still resolves, using the effective one" \
+  || { bad "the base offset was used - a DST displacement resolves to neither convention"; printf '%s\n' "$out" | sed 's/^/        /' | head -6; }
+printf '%s' "$out" | command grep -q "the zone's base is" \
+  && ok "and the line reports both offsets, so the two can never be confused again" \
+  || bad "the message does not distinguish the effective offset from the base"
+
+echo "PART G  seen to fail: break the branch PART A reaches"
 # An earlier version of this part mutated an arm case A never takes, so it passed while proving
 # nothing. This flips the verdict case A actually reaches.
 sed 's/{ \$want = 0 }/{ $want = 1 }/' "$T/block.ps1" > "$T/block.bad"
@@ -138,10 +158,10 @@ if command grep -q '{ \$want = 1 }' "$T/block.bad"; then
   mk 1 "$W_AHEAD"; out=$(run)
   cp "$T/block.keep" "$T/block.ps1"
   printf '%s' "$out" | command grep -q 'WROTE=0' \
-    && bad "the broken branch still chose 0 - PART A proves nothing" \
+    && bad "the broken branch still chose 0 - PART A proves nothing (G)" \
     || ok "breaking the chosen branch changes the verdict (PART A is real)"
 else
-  bad "PART F could not plant its defect - the branch text moved"
+  bad "PART G could not plant its defect - the branch text moved"
 fi
 
 finish

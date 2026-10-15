@@ -175,12 +175,20 @@ if ($exit -eq 'set') {
             $cur   = $null
             try { $cur = (Get-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -ErrorAction Stop).RealTimeIsUniversal } catch { $cur = 0 }
             if ($null -eq $cur) { $cur = 0 }
+            # THE OFFSET MUST BE THE ONE IN EFFECT, NOT THE ZONE'S BASE. set-time.ps1 logs
+            # `(Get-TimeZone).BaseUtcOffset`, which for FLE Standard Time is 02:00:00 all year - while
+            # the offset actually in effect under DST is 03:00:00. Using the base value made a real
+            # three-hour displacement match NEITHER hypothesis, so the convention was never flipped:
+            # measured on run 12's first cell - "the RTC fits NEITHER convention unambiguously: it held
+            # 13:34:15Z, dom0 said 10:34:06Z, this guest's offset is 02:00:00". Derived here instead,
+            # for the instant dom0's value belongs to, which is DST-aware by construction.
+            $off = [TimeZoneInfo]::Local.GetUtcOffset($w.Dom0Utc)
             # The clock as it stood BEFORE set-time touched it: dom0's value minus the skew it measured.
             $clockBefore = $w.Dom0Utc.AddSeconds(-1 * $w.SkewS)
-            $rtc  = if ($cur -eq 1) { $clockBefore } else { $clockBefore + $w.Offset }
+            $rtc  = if ($cur -eq 1) { $clockBefore } else { $clockBefore + $off }
             $tol  = 90
             $fitsUtc   = ([Math]::Abs(($rtc - $w.Dom0Utc).TotalSeconds) -lt $tol)
-            $fitsLocal = ([Math]::Abs((($rtc - $w.Offset) - $w.Dom0Utc).TotalSeconds) -lt $tol)
+            $fitsLocal = ([Math]::Abs((($rtc - $off) - $w.Dom0Utc).TotalSeconds) -lt $tol)
             $want = $null
             if ($fitsUtc -and -not $fitsLocal)     { $want = 1 }
             elseif ($fitsLocal -and -not $fitsUtc) { $want = 0 }
@@ -189,7 +197,8 @@ if ($exit -eq 'set') {
             elseif ($fitsUtc -and $fitsLocal)      { $want = $null }
             if ($null -eq $want) {
                 LogWarning ("CLOCKCONV the RTC fits NEITHER convention unambiguously: it held $($rtc.ToString('o')), " +
-                            "dom0 said $($w.Dom0Utc.ToString('o')), this guest's offset is $($w.Offset). " +
+                            "dom0 said $($w.Dom0Utc.ToString('o')), the clock was $($w.SkewS) s out, " +
+                            "this guest's effective offset is $off (the zone's base is $($w.Offset)). " +
                             "With a zero offset the two conventions are the same arithmetic and there is nothing to " +
                             "choose; otherwise the RTC carries the history of earlier clock writes, which Xen persists " +
                             "per VM. RealTimeIsUniversal left at $cur - diagnose, do not guess.")
@@ -198,14 +207,15 @@ if ($exit -eq 'set') {
                 $back = (Get-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -ErrorAction Stop).RealTimeIsUniversal
                 if ($back -eq $want) {
                     LogWarning ("CLOCKCONV RealTimeIsUniversal was $cur and this qube's RTC says $want (the RTC held " +
-                                "$($rtc.ToString('o')), dom0 said $($w.Dom0Utc.ToString('o')), offset $($w.Offset), " +
+                                "$($rtc.ToString('o')), dom0 said $($w.Dom0Utc.ToString('o')), effective offset $off " +
+                                "(the zone's base is $($w.Offset)), " +
                                 "the clock was $($w.SkewS) s out) - corrected; it takes effect at the next boot")
                 } else {
                     LogError "CLOCKCONV RealTimeIsUniversal did not read back as $want (got '$back') - this guest will keep needing a pull every boot"
                 }
             } else {
                 LogInfo ("CLOCKCONV RealTimeIsUniversal=$cur matches what the RTC held ($($rtc.ToString('o')) against " +
-                         "dom0's $($w.Dom0Utc.ToString('o')), offset $($w.Offset))")
+                         "dom0's $($w.Dom0Utc.ToString('o')), effective offset $off, clock was $($w.SkewS) s out)")
             }
         }
     } catch {
