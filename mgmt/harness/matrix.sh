@@ -85,7 +85,7 @@ LOGVOL_VM=""; LOGVOL_IMG=""
 # collects no data, which is worse than no instrument.
 # Every caller of this has just finished an install, so the clock feature needs clearing here too.
 logvol_bind_now(){ # $1=vm $2=label
-  clock_feature_reset "$1" "$2"
+  clock_feature_report "$1" "$2"
   # OFF BY DEFAULT (LOGVOL_BIND=1 to enable), and this default has now been wrong in both
   # directions, so the reasoning is written out once.
   #
@@ -637,11 +637,13 @@ detach_release_iso(){ # $1=vm $2=label - best effort. The CD is a start-time att
   fi
 }
 
-# THE QUBE'S timezone FEATURE COMES BACK AT EVERY INSTALL, so it has to be cleared AFTER one.
+# THE QUBE'S timezone FEATURE COMES BACK AT EVERY INSTALL, AND THAT IS THE USER'S CONFIGURATION.
 # The feature decides what the qube's RTC holds: unset (the Qubes default, and what every Linux
-# qube here has) means true UTC; `localtime` means DOM0 LOCAL. Our images set
-# RealTimeIsUniversal=1, i.e. Windows reads the RTC as UTC - correct only while the feature stays
-# unset.
+# qube here has) means true UTC; `localtime` means DOM0 LOCAL. dom0 sets it to `localtime` for every
+# os=Windows qube when it receives qubes.NotifyTools, so a user's Windows qube HAS it. Our images set
+# RealTimeIsUniversal=1, i.e. Windows reads the RTC as UTC - which is true only while the feature
+# stays unset, and it does not. That contradiction is the product defect RTIUWRONGDEFAULT; this
+# harness records which convention a cell ran under and changes nothing.
 # MEASURED 2026-10-15 on the acceptance run: the harness unset it BEFORE the install, the install
 # reported os=Windows to dom0 (core-agent/src/advertise-tools writes /qubes-tools/{version,os,qrexec,
 # gui} and calls qubes.NotifyTools), and the feature came back as `localtime` on every QWT-carrying
@@ -650,12 +652,23 @@ detach_release_iso(){ # $1=vm $2=label - best effort. The CD is a start-time att
 # every boot after the first, our puller correcting it each time: clock_boot_correction_s = 10800
 # against a max of 60, a P1 that failed the cell.
 # Nothing in dom0 is touched by this - a qube's own feature is ours to set.
-clock_feature_reset(){ # <vm> <label>
-  local before; before=$(qvm-features "$1" timezone 2>/dev/null)
-  if [ -n "$before" ]; then
-    qvm-features --unset "$1" timezone 2>/dev/null \
-      && say "  $2: qube timezone feature was '$before' after the install - cleared, so the RTC holds UTC" \
-      || say "  $2: [WARN] could not clear the qube timezone feature (was '$before') - the guest will read a dom0-local RTC as UTC and sit its offset out"
+clock_feature_report(){ # <vm> <label> - REPORT the qube's clock convention; never change it.
+  # THIS USED TO UNSET THE FEATURE, AND THAT HID A P1 FROM THE GATE. dom0 sets `timezone=localtime`
+  # for every os=Windows qube when it receives qubes.NotifyTools, which makes the RTC hold DOM0 LOCAL
+  # time; the product ships RealTimeIsUniversal=1, which declares the RTC holds UTC. The two
+  # contradict, and the guest reads its dom0's offset ahead until the clock puller corrects it
+  # mid-boot (measured 10800 s on every cell). Unsetting the feature here put the rig into the ONE
+  # configuration where the shipped default is true, so the gate stopped measuring what a user gets.
+  # Jev: harness_clear_hides_it 0.84, harness_feature_clear_is_substitution 0.74 (separate calls,
+  # different sources). I added the unset to clear that P1, and clearing the P1 was the whole of what
+  # it did - the same mistake as the log-volume redirect, in a different place.
+  # So this now only RECORDS the convention, which is what the sweep's clock_boot_correction_s needs
+  # to be read against. The defect belongs in the product: see RTIUWRONGDEFAULT.
+  local tz; tz=$(qvm-features "$1" timezone 2>/dev/null)
+  if [ -n "$tz" ]; then
+    say "  $2: qube timezone feature is '$tz' - the RTC holds dom0 LOCAL time, as a user's qube does"
+  else
+    say "  $2: qube timezone feature is unset - the RTC holds true UTC"
   fi
 }
 
@@ -718,8 +731,8 @@ clear_prime_leftovers(){ # $1=vm - prime-run's own exit text: "The stick is stil
   else
     qvm-features --unset "$vm" qemu-extra-args 2>/dev/null
   fi
-  # And the clock feature, which the install just put back.
-  clock_feature_reset "$vm" "$vm"
+  # And the clock convention the install just set, RECORDED not changed (see clock_feature_report).
+  clock_feature_report "$vm" "$vm"
 }
 
 qwt_products(){ # $1=vm - echo the count of MSI-REGISTERED QWT products; echo nothing if unreadable.
@@ -1818,6 +1831,17 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the
   # everything else first, the template included (the AppVM must be derived from a HALTED template
   # anyway, which the check just below re-asserts).
   _halt_other_windows "$app"
+  # EXISTENCE FIRST. w_state reports an EMPTY string for a VM that does not exist, and "" != Halted,
+  # so an ABSENT template used to enter this branch, get a silent qvm-shutdown, and then be waited on
+  # for 420 s before failing as "template would not halt". Both appvm cells of run 9 failed exactly
+  # that way - `DEADLINE 420s, still ` with a blank state - while neither win10-tpl nor win11-tpl has
+  # ever existed on this rig: `rebuild-rig.sh --only tpl10/tpl11` builds them and had not been run.
+  # Four of that campaign's eleven failures were this one message. A missing FIXTURE is an
+  # infrastructure fact, knowable in one call, and it must not read as a guest that refused to halt.
+  if ! qvm-check "$tpl" >/dev/null 2>&1; then
+    no "$3-appvm: template '$tpl' DOES NOT EXIST - build it with mgmt/harness/rebuild-rig.sh --only ${tpl%%-*}... (tpl10/tpl11); this cell derives an AppVM from it and cannot create it"
+    return
+  fi
   if [ "$(w_state "$tpl")" != Halted ]; then
     qvm-shutdown "$tpl" >/dev/null 2>&1
     w_halt "$tpl" 420 "$3-appvm-tplhalt" say || { no "$3-appvm: template would not halt"; return; }

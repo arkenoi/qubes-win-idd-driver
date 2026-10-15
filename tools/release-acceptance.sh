@@ -149,6 +149,24 @@ for _c in $CELLS; do
   fi
   [ -f "mgmt/fixtures/$_g.json" ] || say "WARNING: $_g exists but has no fixture record mgmt/fixtures/$_g.json - matrix.sh's custody gate may refuse it"
 done
+
+# ---- 4c. THE APPVM CELLS' TEMPLATES EXIST, same rule, found the same way.
+# An appvm cell derives an AppVM from a TEMPLATE and restores the campaign's 'installed' park into
+# it; it cannot create the template. Neither win10-tpl nor win11-tpl has ever existed on this rig,
+# and the cell's halt guard read an absent VM's EMPTY state as "not Halted": run 9's two appvm cells
+# each waited 420 s and failed as "template would not halt", four of that campaign's eleven
+# failures, for a fixture that was simply never built. Refused here, in one call per cell, with the
+# command that builds it.
+for _c in $CELLS; do
+  case "$_c" in
+    win10-appvm) _t=win10-tpl; _s=tpl10 ;;
+    win11-appvm) _t=win11-tpl; _s=tpl11 ;;
+    *) continue ;;
+  esac
+  qvm-check "$_t" >/dev/null 2>&1 || \
+    die "cell $_c needs TEMPLATE '$_t' and it does NOT EXIST on the rig. Build it: mgmt/harness/rebuild-rig.sh --only $_s (that step is build_template from the matching -iqi fixture, which must exist first). The cell derives an AppVM from this template and cannot create it; refusing to start a campaign that is PARTIAL by construction."
+done
+
 if [ "$SKIP_FEATURES" -eq 0 ]; then
   [ -n "$F11" ] || die "set F11 to the Win11 golden family for the feature tests (they quick-upgrade the sealed golden <F11>-qwt) - there is no default target"
   qvm-check "$F11-qwt" >/dev/null 2>&1 || die "the feature tests need the sealed golden '$F11-qwt' and it does NOT EXIST on the rig. Seal it from the PREVIOUS release's setup tree: mgmt/harness/seal-qwt-golden.sh $F11 <N-1 setup tree>; refusing to start a run whose feature tests cannot run."

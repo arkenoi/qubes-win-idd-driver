@@ -80,18 +80,52 @@ ck "and no harness still forces a localtime RTC"           "0" \
 # reported os=Windows to dom0 and the feature came back as `localtime` on every QWT-carrying guest
 # (win10-acc, win10-iqi, win11r-qwt, win11de-qwt) while the bases and a fresh qvm-create qube had it
 # unset. The guest then read a dom0-local RTC as UTC: 3 hours out on every boot after the first,
-# clock_boot_correction_s = 10800 against a max of 60. So it must be cleared AFTER an install, not
-# only before - a qube's own feature is ours to set, and nothing in dom0 is touched by doing so.
-ck "a post-install reset exists"                  "1" \
-   "$(command grep -c '^clock_feature_reset()' mgmt/harness/matrix.sh)"
-# It must run where an install has JUST happened: the post-prime sweep and the per-cell bind hook.
+# clock_boot_correction_s = 10800 against a max of 60.
+#
+# AND CLEARING IT IN THE HARNESS WAS THE WRONG FIX - this block asserted that clearing, which is how
+# the inversion stayed green. dom0 sets the feature for EVERY os=Windows qube, so a user's qube keeps
+# `localtime`; unsetting it on the rig puts the rig into the one configuration where the shipped
+# RealTimeIsUniversal=1 is true, and the gate then stops measuring what a user gets. Jev:
+# harness_clear_hides_it 0.84, harness_feature_clear_is_substitution 0.74 (separate calls, different
+# sources). The defect belongs in the product (RTIUWRONGDEFAULT); the harness only REPORTS the
+# convention so clock_boot_correction_s can be read against it.
+#
+# COMMENTS STRIPPED FIRST, because the prose above names both the old function and the command it
+# ran, and a grep of the raw file would find its own explanation - which has happened repeatedly in
+# this repo's checks.
+mcode(){ sed 's/#.*//' mgmt/harness/matrix.sh; }
+ck "the harness REPORTS the convention"           "1" \
+   "$(command grep -c '^clock_feature_report()' mgmt/harness/matrix.sh)"
+# THE UNSET THAT MATTERS IS A POST-INSTALL ONE. Normalising a FRESH subject at create time is
+# legitimate and is not what hid the P1: dom0 re-sets the feature during the install anyway, so a
+# create-time unset says only "start out like the golden". What concealed the defect was unsetting it
+# AFTER the install, in the per-cell hooks, which is where the gate reads the clock from. So these
+# checks name the post-install hooks rather than counting unsets anywhere - the broad count flagged
+# ensure_churn_target and cell_appvm, both of which run before any install.
+ck "the post-prime sweep never unsets it"         "0" \
+   "$(awk '/^clear_prime_leftovers\(\)/,/^\}/' mgmt/harness/matrix.sh | sed 's/#.*//' | command grep -cE 'qvm-features +--unset +[^ ]+ +timezone')"
+ck "the per-cell hook never unsets it"            "0" \
+   "$(awk '/^logvol_bind_now\(\)/,/^\}/' mgmt/harness/matrix.sh | sed 's/#.*//' | command grep -cE 'qvm-features +--unset +[^ ]+ +timezone')"
+ck "the reporter itself never unsets it"          "0" \
+   "$(awk '/^clock_feature_report\(\)/,/^\}/' mgmt/harness/matrix.sh | sed 's/#.*//' | command grep -cE 'qvm-features +--unset')"
+# And the only remaining unsets are the two create-time ones, so a third cannot appear unnoticed.
+ck "exactly two create-time unsets remain"        "2" \
+   "$(mcode | command grep -cE 'qvm-features +--unset +[^ ]+ +timezone')"
+ck "the old clearing function is gone"            "0" \
+   "$(mcode | command grep -c 'clock_feature_reset')"
+# It must still run where an install has JUST happened, so the convention is recorded per cell.
 ck "called after the prime sweep"                 "1" \
-   "$(awk '/^clear_prime_leftovers\(\)/,/^\}/' mgmt/harness/matrix.sh | command grep -c 'clock_feature_reset')"
+   "$(awk '/^clear_prime_leftovers\(\)/,/^\}/' mgmt/harness/matrix.sh | sed 's/#.*//' | command grep -c 'clock_feature_report')"
 ck "and on the per-cell post-install hook"        "1" \
-   "$(awk '/^logvol_bind_now\(\)/,/^\}/' mgmt/harness/matrix.sh | command grep -c 'clock_feature_reset')"
+   "$(awk '/^logvol_bind_now\(\)/,/^\}/' mgmt/harness/matrix.sh | sed 's/#.*//' | command grep -c 'clock_feature_report')"
 # and it must not be gated behind the log-volume switch, which is unrelated to the clock
 ck "not gated behind the log volume"              "1" \
-   "$(awk '/^logvol_bind_now\(\)/,/LOGVOL_BIND/' mgmt/harness/matrix.sh | command grep -c 'clock_feature_reset')"
+   "$(awk '/^logvol_bind_now\(\)/,/LOGVOL_BIND/' mgmt/harness/matrix.sh | sed 's/#.*//' | command grep -c 'clock_feature_report')"
+# The report must name BOTH conventions, or a reader cannot tell which one the cell ran under.
+ck "it names the localtime case"                  "1" \
+   "$(awk '/^clock_feature_report\(\)/,/^\}/' mgmt/harness/matrix.sh | command grep -c 'dom0 LOCAL time')"
+ck "it names the unset case"                      "1" \
+   "$(awk '/^clock_feature_report\(\)/,/^\}/' mgmt/harness/matrix.sh | command grep -c 'true UTC')"
 
 echo "rtc-utc-selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
