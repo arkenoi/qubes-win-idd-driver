@@ -307,11 +307,47 @@ for f in packaging/setup/Install-QwtImproved.ps1; do
   [ "$(sed 's/#.*//' "$f" | command grep -c 'Set-GuestClockForNextBoot')" -ge 2 ] \
     && echo "  OK   late($b) is called, not just defined" \
     || { echo "  FAIL late($b): defined and never called"; fail=1; }
-  # A ZONE THE USER CHOSE IS NOT OURS TO OVERWRITE.
+  # DOM0'S ZONE IS PROPAGATED, EVEN OVER ONE THE GUEST HELD - and this check asserted the opposite
+  # until the scope was settled. A `timezone=localtime` qube's clock holds dom0's LOCAL time and
+  # carries no zone label, so a guest on any other zone computes a UTC wrong by the difference, on
+  # every boot, and no RealTimeIsUniversal value corrects it. Preserving such a zone preserves a
+  # broken clock while looking like respect for a preference the system cannot honour. A guest that
+  # needs its own zone requires a UTC hardware clock - a separate feature, not this release.
+  # Jev, re-scored under that premise: propagate 0.78, and name what was replaced 0.97.
   tzblk=$(tr -d '\r' < "$f" | awk '/function Set-GuestTimeZoneFromHost/,/^}$/')
-  printf '%s' "$tzblk" | command grep -q "notin @('UTC', '')" \
-    && echo "  OK   late($b) a non-default guest timezone is left alone" \
-    || { echo "  FAIL late($b): it would overwrite a timezone the user chose"; fail=1; }
+  if printf '%s' "$tzblk" | command grep -q "replacing this guest's timezone"; then
+    echo "  OK   late($b) a differing guest timezone is REPLACED with dom0's"
+  else echo "  FAIL late($b): it does not propagate dom0's zone over a differing one"; fail=1; fi
+  # the old skip must be GONE: that branch must not return before tzutil runs
+  if printf '%s' "$tzblk" | awk "/notin @\('UTC', ''\)/,/^    \}/" | command grep -q 'return \$false'; then
+    echo "  FAIL late($b): the old skip is still there - a differing zone is preserved, and so is its wrong clock"; fail=1
+  else echo "  OK   late($b) the skip is gone; the override is logged, not silent"; fi
+  # THE OVERRIDE IS REPORTED TO THE USER, AS AN ERROR. Replacing a zone someone set is the system
+  # overruling a deliberate choice; doing it silently is the kind of correction this project keeps
+  # having to undo. It cannot happen on a normal install - our images ship at UTC - so reaching it
+  # means the user has stepped into a configuration this release does not support, and ACTION is the
+  # severity that says so. The text must be TEMPLATED: the notify route refuses a value read from
+  # the system (docs/DESIGN-error-notify.md 8), and both zone names were read from the system.
+  notifyblk=$(tr -d '\r' < "$f" | awk '/TZ-OVERRIDE-NOTIFY-BEGIN/,/TZ-OVERRIDE-NOTIFY-END/')
+  if [ -n "$notifyblk" ]; then echo "  OK   late($b) the override has a dom0 notification"
+  else echo "  FAIL late($b): the override is logged but never reaches the user"; fail=1; fi
+  printf '%s' "$notifyblk" | command grep -q "Severity ACTION" \
+    && echo "  OK   late($b) reported at ACTION - an unsupported configuration, not a courtesy note" \
+    || { echo "  FAIL late($b): the override is not reported at ACTION severity"; fail=1; }
+  printf '%s' "$notifyblk" | command grep -q "QrexecAgent" \
+    && echo "  OK   late($b) guarded on QrexecAgent, with the no-channel case logged" \
+    || { echo "  FAIL late($b): it would notify without a channel to notify over"; fail=1; }
+  # the zone NAMES must not travel in the notification - they are values read from the system
+  if printf '%s' "$notifyblk" | command grep -E -q 'Send-QwtError|-Header|-Next|-Cause' && \
+     printf '%s' "$notifyblk" | command grep -E 'Send-QwtError|-Header |-Next |-Cause ' | command grep -qE '\$cur|\$want|\$iana'; then
+    echo "  FAIL late($b): the notification embeds a zone read from the system - the route refuses that"; fail=1
+  else echo "  OK   late($b) the notification text is templated; the zone names stay in the log and RESULT"; fi
+  printf '%s' "$tzblk" | command grep -q 'Result.detail.timezone_overridden' \
+    && echo "  OK   late($b) and the RESULT carries the detail for dom0" \
+    || { echo "  FAIL late($b): dom0 gets no machine-readable record of the override"; fail=1; }
+  printf '%s' "$tzblk" | command grep -q 'does not support' \
+    && echo "  OK   late($b) and it names the UTC-clock case as out of scope" \
+    || { echo "  FAIL late($b): it does not say why the guest cannot keep its zone"; fail=1; }
 done
 
 # THE SECOND HALF MUST EXIST, or the constant above is the +3 h defect on every boot.

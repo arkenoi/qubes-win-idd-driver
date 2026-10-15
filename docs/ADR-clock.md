@@ -5,6 +5,15 @@
 AUTHORITATIVE. Maintain by editing in place; never append dated sections (the pre-commit hook
 refuses them).
 
+**THE SUPPORTED CONFIGURATION IS ONE: a `timezone=localtime` qube, whose hardware clock holds dom0's
+local time; the guest's zone set to dom0's; and `RealTimeIsUniversal` absent, so Windows reads that
+clock as local time.** That is what Qubes gives a Windows qube by itself, and the three halves agree
+with no correction. A guest holding a zone of its own requires a UTC hardware clock and is a
+SEPARATE FEATURE, not this release (owner, 2026-10-15: "for now, lets assume clock is localtime. if
+we ever add ability to change guest time zone, it will be separate feature"). The product still
+DERIVES the convention rather than assuming it, because the install window genuinely has a UTC clock
+until the guest first reports itself.
+
 **The normal configuration is left alone until a measurement says otherwise.** The answer files
 declare nothing, no golden carries a forced value, the harness only reports, and
 `tools/lint-harness.py` L26 refuses a new writer. The product touches the convention in exactly two
@@ -150,6 +159,13 @@ and we cannot guarantee that in general.** The configuration that is proof again
 is the other one: a UTC hardware clock, where zone, half-hours and DST rules are display concerns and
 cannot affect correctness.
 
+**That configuration is OUT OF SCOPE for this release, deliberately.** It is not a second supported
+mode to build toward in passing; it is a separate feature, and anything that half-supports it — a
+preserved guest zone, a convention withheld "just in case" — produces a guest that is quietly wrong
+instead of correctly configured. What this release does is make the unsupported case VISIBLE: the
+per-boot detector names a zone mismatch as one and prints both remedies, and an unmappable dom0 zone
+is reported with its consequence rather than skipped.
+
 ### What the product does about it
 
 * **Propagates** dom0's zone when it can map it, late in the install, where qubesdb is readable.
@@ -168,8 +184,23 @@ cannot affect correctness.
 * **Does not set the qube's feature itself.** Which hardware-clock convention a qube gets is a
   dom0-side decision about that qube, and the same reasoning that took this value away from the
   harness applies: we report what we measure and name the fix.
-* **Does not force the guest's zone over a user's choice.** On a UTC-RTC qube that choice is
-  legitimate and free; forcing it would break the one configuration that handles complex offsets.
+* **Propagates dom0's zone even over one the guest already held**, and says in the install log what
+  it replaced, what it set, dom0's IANA name and why. This skipped a guest whose zone was neither
+  UTC nor empty until 2026-10-15, on the reasoning that "a zone the user chose is not ours to
+  overwrite" — and a Jev call scored overwriting it 0.81 as the one thing this step makes worse.
+  **That answered a question which assumed the guest could legitimately hold its own zone.** Under
+  the supported configuration it cannot: preserving the zone preserves a wrong clock while looking
+  like respect for a preference the system has no way to honour. Re-scored under the correct
+  premise: propagate 0.78, name what was replaced 0.97, report-and-continue on an unmappable zone
+  1.00.
+* **Reports that override to the user as an ERROR, not a courtesy note.** It cannot happen on a
+  normal install — our images ship at UTC — so reaching it means the user has stepped into a
+  configuration this release does not support, and they have to know that rather than discover it
+  later as a wrong clock. A dom0 notification at **ACTION** severity, guarded on `QrexecAgent` with
+  the no-channel case logged as an error, plus `timezone_overridden` in the RESULT for dom0 and both
+  zone names in the install log. The notification text is **templated**: the notify route refuses a
+  value read from the system (`docs/DESIGN-error-notify.md` §8) and both zone names were read from
+  the system, so they stay in the log and the RESULT and never travel in the toast.
 
 ## Where the product touches it, and why only there
 

@@ -210,6 +210,9 @@ $script:UpdaterDeployFailure = $null
 # A Fail between the two restores them - see Restore-SweptBinaries.
 $script:SweptAside = @()
 $script:MsiInstallCompleted = $false
+# Set when the late zone step REPLACES a zone the guest was already holding - read at the end of
+# stage 2 to notify dom0. Initialised here because Set-StrictMode makes an unwritten variable throw.
+$script:TzOverridden = $false
 $script:AutoRuns = 0
 $script:GuiQuiesced = $false
 $script:GuiQuiesceHeld = $false
@@ -5266,6 +5269,39 @@ public static class QdbPrime {
     # qubesdb is finally readable (the pre-flight's attempt runs before the Qubes services exist).
     try { Set-GuestClockForNextBoot } catch { Write-Log "clock: settling the next boot's convention failed ($($_.Exception.Message))" 'WARN' }
 
+    # ---- TZ-OVERRIDE-NOTIFY-BEGIN
+    # SAY IT ALOUD IF WE REPLACED A ZONE THE GUEST WAS HOLDING, AND SAY IT AS AN ERROR. It cannot
+    # happen on a normal install - our images ship at UTC - so reaching it means someone set a zone
+    # on this qube and has thereby stepped into a configuration this release does not support: a
+    # hardware clock holding dom0's local time carries no zone of its own, so a guest keeping a
+    # different one computes a wrong UTC on every boot and no setting of ours corrects it. ACTION,
+    # not INFO: the install continues and the clock is made right, but the user's intent cannot be
+    # honoured and they have to know that rather than discover it later as a wrong clock.
+    if ($script:TzOverridden) {
+        $qa2 = Get-Service -Name 'QrexecAgent' -ErrorAction SilentlyContinue
+        if ($qa2 -and "$($qa2.Status)" -eq 'Running') {
+            $nh = Join-Path $Root 'qwt-notify-error.ps1'
+            $sentTz = 'unavailable:helper-absent'
+            if (Test-Path -LiteralPath $nh) {
+                try {
+                    . $nh
+                    # TEMPLATED TEXT ONLY - no zone names here. The notify route refuses a value read
+                    # from the system, and both zones were read from the system (tzutil and qubesdb).
+                    $sentTz = Send-QwtError -Component 'installer' -Id 'timezone-overridden' -Severity ACTION `
+                        -Header 'The time zone set on this qube was not kept' `
+                        -Next 'Setting a time zone here is not supported: it was replaced with dom0 time zone, the only one this qube clock can carry.' `
+                        -Cause 'Cause: the hardware clock carries dom0 local time, which has no zone of its own.' `
+                        -Tech (Format-QwtNotifyTechLine -Subject 'Install-QwtImproved.ps1' -Code 'QWTTZOVERRIDE' -Count 'reported once per install' -Evidence 'C:\qwt-improved-install.log')
+                } catch { $sentTz = "failed: $($_.Exception.Message)" }
+            }
+            Write-Log "  dom0 notification installer.timezone-overridden: $sentTz"
+            if ("$sentTz" -ne 'send') { Write-Log "  dom0 was NOT notified of the timezone override ($sentTz) - the RESULT (timezone_overridden) and this log carry it" 'ERROR' }
+        } else {
+            Write-Log '  dom0 was NOT notified of the timezone override from this boot: QrexecAgent is not running - the RESULT (timezone_overridden) and this log carry it' 'ERROR'
+        }
+    }
+    # ---- TZ-OVERRIDE-NOTIFY-END
+
     if ($Auto -and $RebootAtEnd) {
         Write-Log 'powering off in 2 s (-RebootAtEnd); start the qube again for the finished, PV-bound state'
         Emit-ResultThenPowerOff 0
@@ -5473,16 +5509,34 @@ function Set-GuestTimeZoneFromHost {
     }
     $cur = (& tzutil /g 2>&1 | Select-Object -First 1)
     if ("$cur".Trim() -eq $want) { Write-Log "  clock: timezone already '$want' (dom0: $iana)"; return $true }
-    # A ZONE THE USER CHOSE IS NOT OURS TO OVERWRITE. Our images ship pinned to UTC, so a guest whose
-    # zone is anything else was changed deliberately - by the user, or by something that is not this
-    # installer. Matching dom0's zone is right for a guest that never expressed a preference and
-    # wrong for one that did; Jev scored overwriting it as the one thing this step makes worse, 0.81.
-    # Returning false here also withholds RealTimeIsUniversal=0, which is the correct consequence:
-    # 0 is only right when the guest's offset EQUALS dom0's, so a guest keeping its own zone keeps
-    # the previous convention and the per-boot clock puller, exactly as it did before this existed.
+    # DOM0'S ZONE IS PROPAGATED, EVEN OVER ONE THE GUEST ALREADY HELD - and the log says so.
+    #
+    # THIS USED TO SKIP a guest whose zone was neither UTC nor empty, on the reasoning that "a zone
+    # the user chose is not ours to overwrite", and a Jev call scored overwriting it 0.81 as the one
+    # thing this step makes worse. That answered a question which ASSUMED the guest could legitimately
+    # hold a zone of its own. It cannot, under the clock this qube actually has: a `timezone=localtime`
+    # qube's hardware clock holds DOM0's local time and carries no zone label, so
+    # guest_UTC - real_UTC = dom0_offset - guest_offset. A guest on any other zone has a WRONG notion
+    # of UTC on every boot, permanently, and no RealTimeIsUniversal value corrects it. Preserving that
+    # zone preserves a broken clock while LOOKING like respect for a preference the system cannot
+    # honour. Re-scored under the correct premise: propagate, 0.78; and say what was replaced, 0.97.
+    #
+    # A guest holding its own zone needs a UTC hardware clock, which is a SEPARATE FEATURE and not
+    # this release (owner: "for now, lets assume clock is localtime"). See docs/ADR-clock.md.
     if ("$cur".Trim() -notin @('UTC', '')) {
-        Write-Log "  clock: this guest's timezone is '$cur', which is not our shipped default - leaving it alone (dom0 is $iana). Its clock convention is left as it is too." 'WARN'
-        return $false
+        # RECORDED FOR THE USER, NOT ONLY THE LOG. This should not happen on a normal install - our
+        # images ship at UTC - so reaching it means something set a zone on this guest, most likely
+        # the user. Replacing it silently would be the system overruling a deliberate choice without
+        # saying so. The RESULT carries the detail for dom0; stage 2 raises a dom0 notification, whose
+        # text is TEMPLATED because the notify route refuses values read from the system
+        # (docs/DESIGN-error-notify.md 8) - the zone names live here, in the log, and in the RESULT.
+        $script:TzOverridden = $true
+        $script:Result.detail.timezone_overridden = "'$cur' -> '$want' (dom0 $iana)"
+        Write-Log ("  clock: replacing this guest's timezone '$cur' with '$want' to match dom0's $iana. " +
+                   "This qube's hardware clock holds dom0's LOCAL time, which carries no zone label, so a " +
+                   "guest on any other zone computes a UTC that is wrong by the difference on every boot - " +
+                   "the zone is propagated here, not chosen. A guest that needs its own zone requires a UTC " +
+                   "hardware clock, which this release does not support.") 'WARN'
     }
     & tzutil /s "$want" 2>&1 | Out-Null
     $back = (& tzutil /g 2>&1 | Select-Object -First 1)
