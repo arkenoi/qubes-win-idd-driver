@@ -1,5 +1,5 @@
 {
-  "note": "pristine retail Win11 base; unchanged, revisions rotated by one boot",
+  "note": "pristine base rebuilt rebuild-20261015-130658 from Win11_26300_English_x64.iso, PRIMER=1, no QWT",
   "props": {
     "klass": "StandaloneVM",
     "maxmem": "8192",
@@ -7,14 +7,14 @@
     "vcpus": "4",
     "virt_mode": "hvm"
   },
-  "reseal_reason": "booted once 2026-10-14 under GOLDEN_UNSEAL to set RealTimeIsUniversal; the guest has no QWT so qrexec never answered and NOTHING WAS WRITTEN - only the volume revisions rotated. Not needed here either: with the qube's timezone feature now unset the RTC holds true UTC and this base is pinned to TZ=UTC, so its UTC is already correct.",
-  "sealed_utc": "2026-10-14T15:30:12Z",
+  "reseal_reason": "rebuilt from vendor media 2026-10-15 with the corrected answer files: the previous images forced RealTimeIsUniversal=1 in the specialize pass AND pinned a non-zero Setup zone - a pair that only worked together and was inherited by every clone, which made the acceptance gate measure our own forcing (RTIUFORCEDINIMAGES). Owner: 'redo from scratch, dont reuse'. See docs/ADR-clock.md",
+  "sealed_utc": "2026-10-15T13:53:50Z",
   "vm": "win11r-base",
   "volumes": {
     "private": {
       "revisions": [
-        "1791925095-back",
-        "1791991753-back"
+        "1792071669-back",
+        "1792072426-back"
       ],
       "revisions_to_keep": "2",
       "size": "21474836480",
@@ -22,12 +22,12 @@
     },
     "root": {
       "revisions": [
-        "1791925095-back",
-        "1791991753-back"
+        "1792071669-back",
+        "1792072426-back"
       ],
       "revisions_to_keep": "2",
       "size": "85899345920",
-      "usage": "18073222381"
+      "usage": "17746804867"
     }
   }
 }

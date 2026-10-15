@@ -1,5 +1,5 @@
 {
-  "note": "pristine base recreated 2026-10-14; hardware clock is UTC",
+  "note": "pristine base rebuilt rebuild-20261015-124838 from Win10_22H2_EnglishInternational_x64v1.iso, PRIMER=1, no QWT",
   "props": {
     "klass": "StandaloneVM",
     "maxmem": "8192",
@@ -7,14 +7,14 @@
     "vcpus": "4",
     "virt_mode": "hvm"
   },
-  "reseal_reason": "rebuilt from vendor media 2026-10-14 with the updated answer stick (RealTimeIsUniversal=1 in the specialize pass); desktop confirmed visually, guest clock read 15:17 UTC against host 15:20 UTC - no longer dom0-local",
-  "sealed_utc": "2026-10-14T15:21:47Z",
+  "reseal_reason": "rebuilt from vendor media 2026-10-15 with the CORRECTED answer file: the previous image wrote RealTimeIsUniversal=1 in the specialize pass AND pinned a non-zero Setup zone (RTIUFORCEDINIMAGES) - a pair that only worked together, inherited by every clone, which made the acceptance gate measure our own forcing. Owner: 'redo from scratch, dont reuse'. The new image declares no RTC convention and pins UTC for the Setup window, where the qube has no timezone feature and its RTC holds true UTC; the installer sets dom0's zone late (docs/ADR-clock.md)",
+  "sealed_utc": "2026-10-15T13:06:36Z",
   "vm": "win10-base",
   "volumes": {
     "private": {
       "revisions": [
-        "1791990660-back",
-        "1791991284-back"
+        "1792069174-back",
+        "1792069590-back"
       ],
       "revisions_to_keep": "2",
       "size": "21474836480",
@@ -22,12 +22,12 @@
     },
     "root": {
       "revisions": [
-        "1791990660-back",
-        "1791991284-back"
+        "1792069174-back",
+        "1792069590-back"
       ],
       "revisions_to_keep": "2",
       "size": "85899345920",
-      "usage": "10625749090"
+      "usage": "10651518894"
     }
   }
 }
