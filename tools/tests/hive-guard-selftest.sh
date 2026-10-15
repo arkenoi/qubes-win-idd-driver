@@ -17,7 +17,17 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PWSH="${PWSH:-/home/user/bin/pwsh7/pwsh}"
-OUT="${HIVEGUARD_OUT:-$(mktemp -d /tmp/hive-guard-selftest-XXXXXX)}"
+# RAM-BACKED /tmp, AND THIS LEAKED A DIRECTORY PER RUN. /tmp here is a 1 GB tmpfs on a 4 GB
+# machine, and tools/release-acceptance.sh refuses to start with under 200 MB free - a floor it
+# has because a full /tmp OOM-killed two campaigns, one of them after it had already passed.
+# Fifteen of these dirs (89 MB total) were found left behind on 2026-10-15. So: honour TMPDIR,
+# and clean up only what WE created - a directory the caller NAMED belongs to the caller. The
+# dir is KEPT when the suite fails, because a preserved failure is the thing worth having.
+OUT="${HIVEGUARD_OUT:-}"
+if [ -z "$OUT" ]; then
+  OUT=$(mktemp -d "${TMPDIR:-/tmp}/hive-guard-selftest-XXXXXX")
+  trap 'rc=$?; if [ "$rc" -eq 0 ]; then rm -rf "$OUT"; else printf "kept %s for inspection (rc=%s)\n" "$OUT" "$rc" >&2; fi' EXIT
+fi
 mkdir -p "$OUT"
 bad=0
 say() { printf '%s\n' "$*"; }
