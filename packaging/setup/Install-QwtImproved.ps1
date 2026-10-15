@@ -5429,53 +5429,52 @@ function Set-GuestTimeZoneFromHost {
 }
 
 function Set-RtcIsUtc {
-    # THE RTC ON A QUBES WINDOWS QUBE HOLDS DOM0 LOCAL TIME, NOT UTC - and this function used to
-    # assert the opposite. Its own first paragraph named the exception and then ignored it: "Qubes
-    # presents the RTC as UTC to a qube UNLESS that qube is given the `timezone` feature". Every
-    # Windows qube IS given it, by dom0, automatically - qubes-core-admin's qubes/ext/windows.py:
-    #     if guest_os == "Windows" and qrexec:
-    #         if vm.features.check_with_template("timezone", None) is None:
-    #             vm.features["timezone"] = "localtime"
-    # so the RTC holds dom0 LOCAL time on every guest this installer ever runs on. Writing
-    # RealTimeIsUniversal=1 then tells Windows to read that local time AS UTC, and the guest lands
-    # dom0's whole offset ahead of real time.
+    # THE CORRECT VALUE CHANGES DURING A GUEST'S LIFE, so this sets the one that is right for THIS
+    # moment and the per-boot task converges afterwards. Both halves are needed; either alone is a
+    # defect that has already shipped.
     #
-    # MEASURED ON A LIVE GUEST, 2026-10-15: RealTimeIsUniversal=1, guest timezone UTC, guest clock
-    # 2026-10-15T10:38:51Z against a real UTC of 07:38:40Z - exactly +10800 s, dom0's +03:00. The
-    # acceptance sweep raises it as clock_boot_correction_s = 10800 against a max of 60, on every
-    # cell, and ~284 log lines per boot are stamped three hours ahead before the clock puller
-    # corrects it.
+    # BEFORE QWT REPORTS ITSELF, THE RTC HOLDS TRUE UTC. qubes-core-admin only gives a qube the
+    # `timezone` feature once it knows the guest is Windows WITH working qrexec -
+    # qubes/ext/windows.py: `if guest_os == "Windows" and qrexec:` - and it learns that from
+    # qubes.NotifyTools, which our own agent calls when it starts. So a qube being installed has NO
+    # such feature yet and gets Xen's default, a UTC RTC. Windows with this value absent reads that
+    # as LOCAL time and computes a UTC BEHIND real time by its own zone offset - and behind is the
+    # one direction that breaks a driver install, because Windows validates catalogs against the
+    # clock and a CI-minted certificate then looks not-yet-valid. MEASURED 2026-09-25 on a German
+    # 25H2 guest: 0x800B0101 and drvinst sitting at 0.125 s of CPU for twenty-five minutes. That is
+    # what this value is for, and it is still 1 for exactly that reason.
     #
-    # AND THE WRITE WAS INERT WHERE IT MATTERED. Windows computes UTC as (RTC - guest_TZ_offset)
-    # when the value is unset and as (RTC) when it is 1. These guests have a UTC timezone, so both
-    # branches give RTC = real+3h: identical. The value only ever made a difference on a guest whose
-    # zone was already correct - where it broke it.
+    # AFTER QWT REPORTS, dom0 sets `timezone=localtime` and the RTC starts holding DOM0 LOCAL time.
+    # This value then makes the guest read local time as UTC and sit dom0's whole offset AHEAD -
+    # measured 2026-10-15 at exactly 10800 s on a live guest (its UTC read 10:38:51Z against a real
+    # 07:38:40Z), which the sweep raises as clock_boot_correction_s. Ahead is harmless to the
+    # catalog gate, which is why it survived unnoticed while the clock puller re-corrected it.
     #
-    # SO THE CORRECT PAIRING IS RealTimeIsUniversal=0 plus a guest timezone equal to dom0's, which
-    # Set-GuestTimeZoneFromHost sets from /qubes-timezone. Then guest_UTC = RTC - dom0_offset =
-    # dom0_local - dom0_offset = real UTC, correct from the first instant of the boot with nothing
-    # to correct. Written explicitly rather than left absent, because a guest upgrading from an
-    # earlier release of ours already carries 1 and absence would leave it there.
+    # SO THE CONVERGENCE LIVES IN guest\sync-clock-from-dom0.ps1 (CLOCKCONV), which runs at every
+    # boot, has just learned real UTC from dom0, and derives which convention the RTC actually
+    # follows - flipping this value when it no longer fits. An earlier attempt at this fix wrote 0
+    # here instead, which is correct only AFTER dom0 has set the feature and reintroduces the 25
+    # minute drvinst hang before it. Jev scored that shape as breaking the feature-unset qube at
+    # 0.88. A constant cannot be right in both windows; do not make this one again.
     #
-    # Takes effect at the NEXT boot: Windows reads the RTC through this value only at startup. The
-    # clock gate below therefore still runs for the current session. Idempotent, read back rather
-    # than assumed, and never fatal.
+    # Takes effect at the NEXT boot: Windows reads the RTC through this value only at startup.
+    # Idempotent, read back rather than assumed, and never fatal.
     $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\TimeZoneInformation'
     try {
         $cur = (Get-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -ErrorAction Stop).RealTimeIsUniversal
     } catch { $cur = $null }
-    if ($cur -eq 0) { Write-Log '  clock: RealTimeIsUniversal already 0 (the RTC holds dom0 local time, as Qubes presents it)'; return }
+    if ($cur -eq 1) { Write-Log '  clock: RealTimeIsUniversal already 1 (correct until dom0 sets the qube timezone feature; the per-boot task converges after that)'; return }
     try {
-        New-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -PropertyType DWord -Value 0 -Force -ErrorAction Stop | Out-Null
+        New-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -PropertyType DWord -Value 1 -Force -ErrorAction Stop | Out-Null
         $back = (Get-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -ErrorAction Stop).RealTimeIsUniversal
-        if ($back -eq 0) {
-            Write-Log ('  clock: RealTimeIsUniversal set to 0 (was ' + $(if ($null -eq $cur) { 'unset' } else { $cur }) +
-                       ') - the RTC is read as dom0 local time from the next boot')
+        if ($back -eq 1) {
+            Write-Log ('  clock: RealTimeIsUniversal set to 1 (was ' + $(if ($null -eq $cur) { 'unset' } else { $cur }) +
+                       ') - this qube has no timezone feature yet, so its RTC holds true UTC; the per-boot task flips this once dom0 sets it')
         } else {
-            Write-Log "  clock: RealTimeIsUniversal did not read back as 0 (got '$back') - this guest will read a dom0-local RTC as UTC and sit dom0's offset ahead" 'WARN'
+            Write-Log "  clock: RealTimeIsUniversal did not read back as 1 (got '$back') - a driver catalog may be rejected as not-yet-valid on this guest" 'WARN'
         }
     } catch {
-        Write-Log "  clock: could not set RealTimeIsUniversal ($($_.Exception.Message)) - this guest may read a dom0-local RTC as UTC" 'WARN'
+        Write-Log "  clock: could not set RealTimeIsUniversal ($($_.Exception.Message)) - a driver catalog may be rejected as not-yet-valid on this guest" 'WARN'
     }
 }
 
