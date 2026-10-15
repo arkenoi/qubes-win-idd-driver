@@ -255,6 +255,41 @@ for f in packaging/setup/Install-QwtImproved.ps1 mgmt/prime-jobs/ours/setup/Inst
     echo "  FAIL rtc($b): a failed write aborts the install - that is not what this breaks"; fail=1
   else echo "  OK   rtc($b) reported, never fatal"; fi
 done
+# THE LATE SETTLE IS WHAT CLOSES THE ONE STRUCTURAL BOOT. dom0 gives the qube `timezone=localtime`
+# only after the GUEST reports in, so the boot AFTER an install is the first with a dom0-local RTC.
+# The pre-flight cannot prepare for it: qubesdb is not up that early, measured on a fresh install as
+# "qubesdb is not readable yet (/name empty too)". A late call, after QWT is installed and qrexec
+# answers, CAN read /qubes-timezone - and that is the difference between a window nobody could close
+# and one that closes itself.
+# ORDER AND GATING: RealTimeIsUniversal=0 is correct only once the guest's zone equals dom0's. With
+# the zone still UTC, 0 is exactly as wrong as 1 (offset zero makes both arithmetically identical)
+# and the per-boot derivation cannot discriminate either. So the write must be GATED on the zone.
+for f in packaging/setup/Install-QwtImproved.ps1 mgmt/prime-jobs/ours/setup/Install-QwtImproved.ps1; do
+  b=$(echo "$f" | cut -d/ -f1)
+  [ -f "$f" ] || continue
+  if command grep -q 'function Set-GuestClockForNextBoot' "$f"; then echo "  OK   late($b) a late settle exists"
+  else echo "  FAIL late($b): nothing prepares the convention for the boot after the install"; fail=1; fi
+  blk=$(tr -d '\r' < "$f" | awk '/function Set-GuestClockForNextBoot/,/^}$/')
+  printf '%s' "$blk" | command grep -q 'Set-GuestTimeZoneFromHost' \
+    && echo "  OK   late($b) retries the zone where qubesdb IS readable" \
+    || { echo "  FAIL late($b): it does not retry the zone"; fail=1; }
+  printf '%s' "$blk" | command grep -q 'if (-not $zoneSet)' \
+    && echo "  OK   late($b) the RealTimeIsUniversal write is GATED on the zone being set" \
+    || { echo "  FAIL late($b): it would write 0 without the zone, which is just as wrong as 1"; fail=1; }
+  printf '%s' "$blk" | command grep -q 'PropertyType DWord -Value 0' \
+    && echo "  OK   late($b) writes 0 for the next boot" \
+    || { echo "  FAIL late($b): it does not write 0"; fail=1; }
+  # A ZONE THE USER CHOSE IS NOT OURS TO OVERWRITE, and refusing it must also withhold the 0.
+  tzblk=$(tr -d '\r' < "$f" | awk '/function Set-GuestTimeZoneFromHost/,/^}$/')
+  printf '%s' "$tzblk" | command grep -q "notin @('UTC', '')" \
+    && echo "  OK   late($b) a non-default guest timezone is left alone" \
+    || { echo "  FAIL late($b): it would overwrite a timezone the user chose"; fail=1; }
+  # and it must be CALLED on the success path, not merely defined
+  [ "$(sed 's/#.*//' "$f" | command grep -c 'Set-GuestClockForNextBoot')" -ge 2 ] \
+    && echo "  OK   late($b) is called, not just defined" \
+    || { echo "  FAIL late($b): defined and never called"; fail=1; }
+done
+
 # THE SECOND HALF MUST EXIST, or the constant above is the +3 h defect on every boot.
 C=guest/sync-clock-from-dom0.ps1
 if command grep -q 'CLOCKCONV' "$C"; then echo "  OK   rtc(boot) the per-boot task derives the convention"

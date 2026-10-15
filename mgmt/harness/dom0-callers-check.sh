@@ -32,6 +32,18 @@ COLD=0
 [ "${1:-}" = "--cold" ] && { COLD=1; shift; }
 VM="${1:?usage: $0 [--cold] <vm> [logfn]}"
 LG="${2:-echo}"
+# A FUNCTION NAME IS NOT A COMMAND IN A CHILD PROCESS, and this cost two evidence files their
+# contents. matrix.sh calls these checks with its own `say` as the log function - `say` is a shell
+# FUNCTION, not exported, so in a child `bash script.sh` every log call died with
+# "say: command not found". In vmexec-channel-check.sh that was SILENT: its verdict comes from
+# $rc_all, computed independently, so it reported PASS while its evidence file contained nothing but
+# those errors - in every campaign run since it was written. In dom0-callers-check.sh it was worse:
+# the cell FAILED and the reason was unreadable. So the log target is validated here rather than
+# trusted, and a caller that passes something unrunnable gets stdout instead of silence.
+if ! command -v "$LG" >/dev/null 2>&1; then
+  echo "  (log target '$LG' is not a command here - a shell function does not cross into a child process; using echo)"
+  LG=echo
+fi
 
 T=$(mktemp -d "${TMPDIR:-/tmp}/dom0callers.XXXXXX") || exit 2
 trap 'rm -rf "$T"' EXIT INT TERM

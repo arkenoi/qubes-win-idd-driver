@@ -5262,6 +5262,10 @@ public static class QdbPrime {
         }
     }
     # ---- UPDATER-DEPLOY-VERDICT-END
+    # The next boot is the first with a dom0-local RTC, so settle the convention for it HERE, where
+    # qubesdb is finally readable (the pre-flight's attempt runs before the Qubes services exist).
+    try { Set-GuestClockForNextBoot } catch { Write-Log "clock: settling the next boot's convention failed ($($_.Exception.Message))" 'WARN' }
+
     if ($Auto -and $RebootAtEnd) {
         Write-Log 'powering off in 2 s (-RebootAtEnd); start the qube again for the finished, PV-bound state'
         Emit-ResultThenPowerOff 0
@@ -5269,6 +5273,55 @@ public static class QdbPrime {
     Write-Log 'No reboot from here. qrexec answers in this boot (QrexecAgent started after the device work); PV drivers and their'
     Write-Log 'emulated-device handover complete the next time the qube starts.'
     Emit-Result 0
+}
+
+function Set-GuestClockForNextBoot {
+    # THE ONE BOOT NOBODY COULD GET RIGHT, CLOSED HERE. dom0 gives a Windows qube the
+    # `timezone=localtime` feature only after the GUEST reports os=Windows with working qrexec -
+    # qubes-core-admin's windows extension, driven by a features-request our own agent triggers - and
+    # that changes what the emulated RTC holds, from true UTC to DOM0 LOCAL, at the next domain
+    # creation. Windows reads RealTimeIsUniversal only at boot. So the boot AFTER this install runs
+    # with a dom0-local RTC, and if it still carries the value that was right for a UTC RTC it lands
+    # dom0's whole offset ahead: measured 10800 s on a fresh install, on every clean cell.
+    #
+    # THIS FUNCTION IS CALLED LATE ON PURPOSE. The pre-flight tries to set the zone before anything is
+    # installed, and qubesdb is not up then - measured on a fresh install: "qubesdb is not readable
+    # yet (/name empty too)". By HERE, QWT is installed and qrexec answers in this very boot, so
+    # /qubes-timezone is readable. That is the whole difference between a window nobody could close
+    # and one that closes itself.
+    #
+    # ORDER MATTERS AND THE GATE IS THE ZONE. RealTimeIsUniversal=0 is correct only if the guest's own
+    # timezone equals dom0's: then guest_UTC = RTC - dom0_offset = dom0_local - dom0_offset = real UTC.
+    # With the zone still UTC, 0 is just as wrong as 1 (offset zero makes both arithmetically
+    # identical), AND the per-boot derivation cannot tell the two conventions apart either. So 0 is
+    # written ONLY when the zone was actually set; otherwise the value stays as it is and the per-boot
+    # task converges later. Never fatal: this decides the next boot's clock, not this install.
+    Write-Log 'clock: settling the convention for the NEXT boot (dom0 sets the qube timezone feature once we report in)'
+    $zoneSet = $false
+    try { $zoneSet = [bool](Set-GuestTimeZoneFromHost) } catch {
+        Write-Log "  clock: the late timezone attempt failed ($($_.Exception.Message))" 'WARN'
+    }
+    if (-not $zoneSet) {
+        Write-Log '  clock: the guest timezone is still not dom0-s, so RealTimeIsUniversal is left as it is - the per-boot clock task derives it from dom0-s time instead' 'WARN'
+        return
+    }
+    $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\TimeZoneInformation'
+    try {
+        $cur = (Get-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -ErrorAction Stop).RealTimeIsUniversal
+    } catch { $cur = $null }
+    if ($cur -eq 0) { Write-Log '  clock: RealTimeIsUniversal already 0 and the zone matches dom0 - the next boot reads the RTC as dom0 local, correctly'; return }
+    try {
+        New-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -PropertyType DWord -Value 0 -Force -ErrorAction Stop | Out-Null
+        $back = (Get-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -ErrorAction Stop).RealTimeIsUniversal
+        if ($back -eq 0) {
+            Write-Log ('  clock: RealTimeIsUniversal set to 0 for the next boot (was ' + $(if ($null -eq $cur) { 'unset' } else { $cur }) +
+                       '); with the zone matching dom0 that boot needs no correction at all')
+        } else {
+            Write-Log "  clock: RealTimeIsUniversal did not read back as 0 (got '$back') - the next boot will need the clock puller" 'WARN'
+        }
+    } catch {
+        Write-Log "  clock: could not set RealTimeIsUniversal for the next boot ($($_.Exception.Message)) - the puller will correct it" 'WARN'
+    }
 }
 
 # ---- CLOCK SANITY, CHECKED BEFORE ANY DRIVER IS TOUCHED -----------------------------
@@ -5367,7 +5420,7 @@ function Set-GuestTimeZoneFromHost {
     $iana = $null
     try { $iana = Read-QwtQubesDbValue '/qubes-timezone' } catch {
         Write-Log "  clock: reading /qubes-timezone FAILED ($($_.Exception.Message)) - the guest timezone is left alone" 'WARN'
-        return
+        return $false
     }
     if ([string]::IsNullOrWhiteSpace($iana)) {
         $probe = $null
@@ -5377,7 +5430,7 @@ function Set-GuestTimeZoneFromHost {
         } else {
             Write-Log '  clock: dom0 publishes no /qubes-timezone - leaving the guest timezone alone' 'WARN'
         }
-        return
+        return $false
     }
     $map = @{
         'UTC'='UTC'; 'Etc/UTC'='UTC'; 'Etc/GMT'='UTC'
@@ -5415,17 +5468,29 @@ function Set-GuestTimeZoneFromHost {
     $want = $map[$iana]
     if (-not $want) {
         Write-Log "  clock: dom0's zone '$iana' is not in this installer's IANA->Windows map - leaving the guest timezone alone (its UTC is still correct: the RTC is read as UTC)" 'WARN'
-        return
+        return $false
     }
     $cur = (& tzutil /g 2>&1 | Select-Object -First 1)
-    if ("$cur".Trim() -eq $want) { Write-Log "  clock: timezone already '$want' (dom0: $iana)"; return }
+    if ("$cur".Trim() -eq $want) { Write-Log "  clock: timezone already '$want' (dom0: $iana)"; return $true }
+    # A ZONE THE USER CHOSE IS NOT OURS TO OVERWRITE. Our images ship pinned to UTC, so a guest whose
+    # zone is anything else was changed deliberately - by the user, or by something that is not this
+    # installer. Matching dom0's zone is right for a guest that never expressed a preference and
+    # wrong for one that did; Jev scored overwriting it as the one thing this step makes worse, 0.81.
+    # Returning false here also withholds RealTimeIsUniversal=0, which is the correct consequence:
+    # 0 is only right when the guest's offset EQUALS dom0's, so a guest keeping its own zone keeps
+    # the previous convention and the per-boot clock puller, exactly as it did before this existed.
+    if ("$cur".Trim() -notin @('UTC', '')) {
+        Write-Log "  clock: this guest's timezone is '$cur', which is not our shipped default - leaving it alone (dom0 is $iana). Its clock convention is left as it is too." 'WARN'
+        return $false
+    }
     & tzutil /s "$want" 2>&1 | Out-Null
     $back = (& tzutil /g 2>&1 | Select-Object -First 1)
     if ("$back".Trim() -eq $want) {
         Write-Log "  clock: timezone set to '$want' to match dom0's $iana (was '$cur')"
-    } else {
-        Write-Log "  clock: could not set the timezone to '$want' (reads back '$back') - the guest will display the wrong wall-clock time" 'WARN'
+        return $true
     }
+    Write-Log "  clock: could not set the timezone to '$want' (reads back '$back') - the guest will display the wrong wall-clock time" 'WARN'
+    return $false
 }
 
 function Set-RtcIsUtc {
