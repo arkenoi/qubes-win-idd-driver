@@ -3321,8 +3321,12 @@ static void ActPump(ULONGLONG now, ULONGLONG* nextDue)
         const bool ok = ForwardText(summary, body, 0, NotifyKind::Error);
         // The banner arm: the record was flipped to window but the agent never marked it shown - the banner was gone
         // before the correction could show it - or the record had already left the ring.
-        BLog(L"ACTION id=%u key=%hs failure sent to dom0 as an error notice: %s (banner %s)", f.guestId, f.key.c_str(),
-             ok ? L"OK" : L"FAIL (connection, retried)", f.recordFound ? L"gone before it could be reopened" : L"record already gone");
+        // DECLARED E for the same reason as NotifyOnceMain below: this line records that a FAILURE
+        // was put in front of the user (NotifyKind::Error, three lines up), so a severity-reading
+        // sweeper must see it as an error. Its own wording says "failure sent to dom0 as an error
+        // notice" and it read INFO.
+        BLogE(L"ACTION id=%u key=%hs failure sent to dom0 as an error notice: %s (banner %s)", f.guestId, f.key.c_str(),
+              ok ? L"OK" : L"FAIL (connection, retried)", f.recordFound ? L"gone before it could be reopened" : L"record already gone");
         if (!ok) keep.push_back(std::move(f));
     }
     if (!keep.empty())
@@ -3500,7 +3504,21 @@ static int NotifyOnceMain(std::wstring const& summary, std::wstring const& body,
     if (!g_rdEvt || !g_wrEvt || !g_connStop || !g_ackEvt) return 3;
     if (!ConnUp()) { BLogE(L"NOTIFY one-shot: no connection to dom0 (policy refusal? no dom0 session?) - notification LOST"); return 3; }
     bool ok = ForwardText(summary, body, 0, kind);   // an error stays until dismissed; --severity warning/info expire
-    if (ok) BLog(L"NOTIFY one-shot: sent ok=1 summary=%s", summary.c_str());
+    // A DELIVERED LINE DECLARES WHAT IT DELIVERED, not whether the send worked. This logged INFO for
+    // every successful send, including the ones that put a FAILURE in front of the user - so
+    // `[INFO] NOTIFY one-shot: sent ok=1 summary=The PV NIC setup task failed` was, to any
+    // severity-reading sweeper, indistinguishable from an informational toast. Measured on
+    // win10-acc 2026-10-15: dom0 told the user a component of ours had failed and the run's
+    // error_lines read 0.
+    // The level now follows the notification's OWN kind, which this function already carries:
+    // Error -> E, Warning -> W, Info -> I. That is precise rather than blanket - an informational
+    // toast still reads INFO - and it means the generic "any undeclared error line is a defect"
+    // gate catches a user-visible failure without needing to know anything about this path.
+    if (ok) {
+        if (kind == NotifyKind::Error)        BLogE(L"NOTIFY one-shot: sent ok=1 summary=%s", summary.c_str());
+        else if (kind == NotifyKind::Warning) BLogW(L"NOTIFY one-shot: sent ok=1 summary=%s", summary.c_str());
+        else                                  BLog (L"NOTIFY one-shot: sent ok=1 summary=%s", summary.c_str());
+    }
     // A send that did not land is a LOST user-facing message, and the log is the only place
     // it can be seen - dom0 cannot be asked, and the bubble is override-redirect so no
     // per-window capture can witness it either. It is declared E so a severity-reading
