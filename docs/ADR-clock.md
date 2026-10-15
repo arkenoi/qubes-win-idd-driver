@@ -55,6 +55,39 @@ So the design is: **the image declares nothing, and the product derives what it 
 premise-framed on the measured mechanism: `defaults_are_already_consistent` 0.79,
 `forcing_vs_product_write` = stop forcing, keep a derived product write, 0.92.
 
+### The guest's ZONE has a correct value per window too, and that is the other half
+
+The zone and the convention are two halves of one sum: `guest_UTC = RTC_content − guest_zone_offset`.
+Each half has a correct value, and which one depends on the qube's `timezone` feature at that moment.
+
+| window | the feature | the RTC holds | correct convention | correct guest zone |
+|---|---|---|---|---|
+| Windows Setup and the first install | not set yet | true UTC | read as UTC, or a zero-offset zone | **UTC** (offset 0) |
+| every boot after the guest has reported | `localtime` | dom0 local | read as LOCAL (the default) | **dom0's** |
+
+So our answer files pin `<TimeZone>UTC</TimeZone>`, and the installer sets dom0's zone LATE, from
+`/qubes-timezone`, at the end of the install — that late step IS the transition between the two
+windows. By the first real boot both halves are right and there is nothing to correct.
+
+**This was `FLE Standard Time` for one day, and that is instructive.** Commit `27f4b320` changed the
+zone and added the forced `RealTimeIsUniversal=1` in the same breath, and the two only worked
+together: with the convention forced to "read as UTC", a non-zero Setup zone is harmless. When the
+forced half was removed and the zone half left behind, a fresh install would have landed its own
+offset BEHIND real time — the direction that makes a CI-minted catalog look not-yet-valid — and the
+installer's own gate would have refused every clean-install cell. **One half of a pair going missing
+is the exact failure mode this area keeps producing**, and it nearly shipped again in the commit that
+was fixing it. It was caught by predicting the arithmetic before running the campaign, not by the
+campaign.
+
+The objection that pinning UTC hides zone bugs — recorded in the answer file when UTC was removed —
+is answered by where the measurement happens: the real zone is set before the first boot the
+acceptance sweep ever sees, so every measured boot runs with dom0's non-zero offset and a wrong zone
+still shows up as `clock_boot_correction_s`. Only the Setup window, which validates no catalog
+against a guest zone, has a zero offset. Jev: `coverage_after_the_change` 0.82. The German answer
+file keeps its own zone deliberately — it is the reproduction environment for the hang and the only
+rig image that enters the Setup window with a non-zero offset; nothing in the gate matrix
+clean-installs from it.
+
 ### Why the bug emerged before the forcing was removed
 
 Because every layer forced the value, and each had a comment explaining why it was right:

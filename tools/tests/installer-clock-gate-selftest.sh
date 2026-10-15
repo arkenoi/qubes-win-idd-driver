@@ -382,10 +382,32 @@ for pair in "Europe/Sofia:FLE Standard Time" "Europe/Berlin:W. Europe Standard T
   if tr -d '\r' < "$I" | command grep -q "'$ia'='$wz'"; then echo "  OK   tz: $ia -> $wz"
   else echo "  FAIL tz: $ia is not mapped to '$wz'"; fail=1; fi
 done
-# and no image we install may pin UTC any more
-nutc=$(command grep -l '<TimeZone>UTC</TimeZone>' mgmt/autounattend*.xml 2>/dev/null | wc -l)
-if [ "$nutc" = 0 ]; then echo "  OK   tz: no answer file pins the guest to UTC"
-else echo "  FAIL tz: $nutc answer file(s) still pin TimeZone=UTC"; fail=1; fi
+# THE SETUP WINDOW MUST PIN A ZERO-OFFSET ZONE, and this check asserted the opposite for a day.
+# The zone and the RTC convention are two halves of one sum: Windows computes
+# guest_UTC = RTC_content - guest_zone_offset. During Setup the qube has no `timezone` feature yet,
+# so Xen gives the RTC its default and it holds TRUE UTC - and the only zone that makes that sum
+# come out right is one whose offset is ZERO. A non-zero zone there puts the guest BEHIND real time,
+# which is the direction that makes a CI-minted catalog look not-yet-valid (0x800B0101, 25 minutes).
+# 'FLE Standard Time' worked for exactly one day, and only because the same commit also forced
+# RealTimeIsUniversal=1; removing that half and keeping this one is how a pair becomes a defect.
+# The REAL zone is set by the installer from /qubes-timezone at the end of the install, so every
+# boot the sweep measures still runs with a non-zero offset (Jev: coverage_after_the_change 0.82).
+# THE GERMAN FILE IS A DOCUMENTED EXCEPTION: it is the reproduction environment for the hang, and
+# the only rig image that enters the Setup window with a non-zero offset. Nothing in the gate matrix
+# clean-installs from it.
+for x in mgmt/autounattend*.xml; do
+  [ -f "$x" ] || continue
+  b=$(basename "$x"); z=$(command grep -aoE '<TimeZone>[^<]*' "$x" | head -1 | cut -d'>' -f2)
+  case "$b" in
+    *-de.xml) echo "  OK   tz($b) keeps its own zone '$z' - the documented reproduction environment" ;;
+    *) if [ "$z" = "UTC" ]; then echo "  OK   tz($b) pins a zero-offset zone for the Setup window"
+       else echo "  FAIL tz($b): Setup zone '$z' has a non-zero offset while the RTC holds true UTC - this guest installs BEHIND real time and the catalog gate refuses it"; fail=1; fi ;;
+  esac
+done
+# and the late transition must exist, or the guest never reaches dom0's zone at all
+if tr -d '\r' < "$I" | awk '/function Set-GuestClockForNextBoot/,/^}$/' | command grep -q 'Set-GuestTimeZoneFromHost'; then
+  echo "  OK   tz: the real zone is set late, where qubesdb is readable"
+else echo "  FAIL tz: nothing transitions the guest off the Setup zone"; fail=1; fi
 
 if [ "$fail" = 0 ]; then echo "PASS: the gate refuses exactly the clock-broken cases"; exit 0; fi
 echo "FAIL: the installer would not refuse a clock-broken driver package"

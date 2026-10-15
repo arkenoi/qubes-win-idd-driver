@@ -97,14 +97,28 @@
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
         publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <ComputerName>win11-idd-test</ComputerName>
-      <!-- THE OS APPLIES THE ZONE TO WHATEVER THE HARDWARE CLOCK HOLDS, and nothing in this
-           answer file declares which convention that is any more (see above). This was UTC, which made every rig guest display UTC instead of
-           the wall-clock time its user would see - and set-time.ps1 records that a zone-offset bug
-           "was never seen here" for exactly that reason: with the offset pinned to zero, a wrong
-           zone cannot show up. dom0's zone is Europe/Sofia, whose Windows id is this one; the
-           installer also reads /qubes-timezone from qubesdb and matches it, so a guest installed
-           anywhere else still lands on its own host's zone. -->
-      <TimeZone>FLE Standard Time</TimeZone>
+      <!-- UTC, BECAUSE THAT IS THE ARITHMETICALLY CORRECT ZONE FOR THE WINDOW THIS FILE GOVERNS.
+           The zone and the RTC convention are two halves of one sum: Windows computes
+           guest_UTC = RTC_content - guest_zone_offset. During Setup and the first install the qube
+           has NO `timezone` feature - qubes-core-admin sets it only after the GUEST reports
+           os=Windows+qrexec through qubes.NotifyTools - so Xen gives the RTC its default and it
+           holds TRUE UTC. The only zone that makes that sum come out right is one whose offset is
+           ZERO. A non-zero zone here puts the guest its own offset BEHIND real time, and behind is
+           the direction that makes a CI-minted driver catalog look not-yet-valid: 0x800B0101, with
+           drvinst waiting twenty-five minutes rather than failing (measured 2026-09-25).
+           THIS WAS 'FLE Standard Time' FOR ONE DAY, and only worked because the same commit also
+           forced RealTimeIsUniversal=1, which made the guest read the UTC clock as UTC. That half
+           had to go - it survived into the window where dom0 has set `timezone=localtime` and made
+           every guest boot +10800 s - so this half goes back too. Changing one and keeping the
+           other is how a pair becomes a defect.
+           THE REAL ZONE IS SET LATER, by the installer, from /qubes-timezone - at the END of the
+           install, where qubesdb is readable. That is the transition to the other window: by the
+           first real boot dom0 has set `timezone=localtime`, the RTC holds DOM0 LOCAL time, and the
+           guest's zone is dom0's, so the sum is right again with nothing declared. Every boot the
+           acceptance sweep measures therefore runs with a NON-ZERO offset, which is where a wrong
+           zone or a wrong convention still shows up as clock_boot_correction_s. See
+           docs/ADR-clock.md. -->
+      <TimeZone>UTC</TimeZone>
     </component>
   </settings>
   <settings pass="oobeSystem">
