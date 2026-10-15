@@ -2305,16 +2305,36 @@ for c in $CELLS; do
     # stderr drive the Update GUI's progress bar. On 2026-10-14 a 4.3.36 guest ran the command,
     # returned its exit code and delivered NEITHER stream (VMEXECNOSTDOUT) - and grepping this
     # harness, the protocol and its runner for a stdout assertion on that service returned nothing.
-    # A gate that cannot see the goal's own clause cannot pass it. Only when the guest still answers:
-    # on a dead cell this would add a second failure that says nothing new.
+    #
+    # THE WARM CHECKS HAVE MOVED INTO THE CELL (grade_dom0_callers, called from accept_grade), where
+    # the guest is up. They used to run HERE, guarded on the cell's guest still answering - and every
+    # cell halts, parks or removes its subject as its last act, so only the final cell could ever
+    # have a live guest at this point. Run 8's matrix log contains ZERO lines matching VMEXEC; run 9
+    # measured three win11 cells and reported "guest not answering" for every win10 one.
+    #
+    # WHAT STAYS HERE IS THE COLD CASE, because this is the one place a subject is legitimately
+    # Halted: "from cold qube as well" is a clause of the release goal, and dom0 calling a service on
+    # a Halted Windows qube is a different path from calling one on a running guest - qrexec has to
+    # start the qube and the agent has to be serving before the call is handed over. It is measured
+    # ONCE per campaign rather than once per cell: a cold start costs a boot, the path does not vary
+    # by cell, and zero measurements is what it was before.
     if [ "$(w_state "$_slv")" = Running ] && w_alive "$_slv"; then
-      if ./mgmt/harness/vmexec-channel-check.sh "$_slv" say >>"$M/$c-vmexec.out" 2>&1; then
-        say "  $c: dom0 caller channel aligned (stdout, stderr, exit code, grandchild)"
-      else
-        no "$c: the dom0 caller channel is NOT aligned - see $M/$c-vmexec.out"
+      if [ "${COLD_CALLER_DONE:-0}" = 0 ]; then
+        COLD_CALLER_DONE=1
+        say "  $c: halting $_slv to measure the COLD caller path (the goal's 'from cold qube as well')"
+        qwt_shutdown "$_slv" 600 >>"$M/$c-coldcallers.out" 2>&1 || true
+        if [ "$(w_state "$_slv")" = Halted ]; then
+          if ./mgmt/harness/dom0-callers-check.sh --cold "$_slv" say >>"$M/$c-coldcallers.out" 2>&1; then
+            ok "$c: start-menu caller aligned FROM A COLD QUBE (the call started it and dom0 could parse the answer)"
+          else
+            no "$c: the start-menu caller is NOT aligned from a cold qube - see $M/$c-coldcallers.out"
+          fi
+        else
+          say "  $c: [WARN] $_slv would not halt, so the cold caller path went unmeasured"
+        fi
       fi
     else
-      say "  $c: [WARN] guest not answering; the dom0 caller channel went unmeasured for this cell"
+      say "  $c: [WARN] guest not answering; the cold caller path went unmeasured for this cell"
     fi
   else
     say "  $c: [WARN] no guest left to collect from; the volume pull left $(find "$M/logvol-$c" -type f 2>/dev/null | wc -l) file(s) for this cell"
