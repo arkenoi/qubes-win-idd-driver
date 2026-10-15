@@ -37,19 +37,36 @@ w_rtc_report(){ # $1=vm [$2=log fn] - report the convention; never change it. Al
   out=$(QTEST_VM="$vm" timeout -k 5 90 ./tools/qtest run \
         'cmd /c reg query "HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation" /v RealTimeIsUniversal & echo ZONEIS: & tzutil /g & echo .' \
         2>/dev/null | tr -d '\r')
-  case "$out" in
-    *RealTimeIsUniversal*0x1*)
+  # CLASSIFY ON THE REG OUTPUT LINE, NEVER ON THE WHOLE STREAM. `qtest run` returns cmd's banner AND
+  # THE ECHOED COMMAND, and that command contains the string RealTimeIsUniversal - so a `case` over
+  # the raw stream matched the catch-all whenever the value was ABSENT and reported "present but
+  # unreadable" for "not there". Measured 2026-10-15 on win10-iqi, whose value is absent: the line
+  # read `RealTimeIsUniversal present but unreadable ... Microsoft Windows [Version 10.0.19045.2965]`.
+  # Only `reg query` writes `<name>    REG_DWORD    0x<n>`, so that shape is the value and nothing
+  # else is. Same class as the VMShell banner trap: locate the payload, never match the raw stream.
+  val=$(printf '%s' "$out" | command grep -aoE 'RealTimeIsUniversal[[:space:]]+REG_DWORD[[:space:]]+0x[0-9a-fA-F]+' \
+        | head -1 | command grep -aoE '0x[0-9a-fA-F]+$')
+  case "$val" in
+    0x1)
       $lg "  RTC: RealTimeIsUniversal=1 on $vm - the guest reads its RTC as UTC (correct only while the qube's timezone feature is unset)" ;;
-    *RealTimeIsUniversal*0x0*)
-      $lg "  RTC: RealTimeIsUniversal=0 on $vm - the guest reads its RTC as local time (correct only while the qube's timezone feature is localtime)" ;;
-    *RealTimeIsUniversal*)
-      $lg "  RTC: RealTimeIsUniversal present but unreadable on $vm: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-120)" ;;
+    0x0)
+      $lg "  RTC: RealTimeIsUniversal=0 on $vm - the guest reads its RTC as local time (same as unset; correct while the qube's timezone feature is localtime)" ;;
+    "")
+      case "$out" in
+        *"unable to find"*|*"nicht gefunden"*|*"cannot find"*)
+          $lg "  RTC: RealTimeIsUniversal is ABSENT on $vm - Windows reads the RTC as local time, which is the half that pairs with timezone=localtime" ;;
+        *)
+          $lg "  RTC: RealTimeIsUniversal could not be read on $vm (no REG_DWORD line in the reply) - the probe, not the guest, is what failed here" ;;
+      esac ;;
     *)
-      $lg "  RTC: RealTimeIsUniversal is UNSET on $vm - Windows reads the RTC as local time by default" ;;
+      $lg "  RTC: RealTimeIsUniversal=$val on $vm - an unexpected value; Windows treats anything non-zero as 'read the RTC as UTC'" ;;
   esac
   # The zone matters as much as the value: the pairing is only correct when the guest's offset
   # equals dom0's, so a reader needs both numbers side by side.
-  zone=$(printf '%s' "$out" | sed -n '/^ZONEIS:/,$p' | sed '1d' | command grep -am1 '[A-Za-z]' | sed 's/[[:space:]]*$//')
+  # tzutil /g WRITES NO TRAILING NEWLINE, so the terminator `echo .` lands on the same line and the
+  # zone came back as 'UTC.' (measured on win10-iqi). Strip the terminator as well as the whitespace.
+  zone=$(printf '%s' "$out" | sed -n '/^ZONEIS:/,$p' | sed '1d' | command grep -am1 '[A-Za-z]' \
+         | sed 's/[[:space:]]*$//; s/\.[[:space:]]*$//')
   case "$zone" in
     ""|.*) $lg "  RTC: guest zone on $vm could not be read (tzutil printed nothing)" ;;
     *)     $lg "  RTC: guest zone on $vm: $zone" ;;
