@@ -32,6 +32,7 @@ acceptance-record-selftest.sh
 ask-operator-night-selftest.sh
 cell-coverage-selftest.sh
 ci-state-selftest.sh
+clock-convention-selftest.sh
 console-window-check-selftest.sh
 coverage-receipt-selftest.sh
 dirty-union-selftest.sh

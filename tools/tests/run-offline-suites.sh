@@ -11,7 +11,7 @@
 # in one command (BLOCKCLAIMSELFTESTRACES): loop numbers are global, so each can observe the other's
 # device. Parallelism here would buy a minute and cost a believable red.
 #
-# THE FLOOR IS THE POINT. A runner that iterates a list cannot tell "all 42 passed" from "the list
+# THE FLOOR IS THE POINT. A runner that iterates a list cannot tell "all 43 passed" from "the list
 # was emptied" - and a gate suite losing its producer is this project's most repeated failure
 # (count-the-producers, the selftest whose RESULT line was deduped away, the gate that required 18
 # suites where 12 had a producer). So the count is asserted against a floor that only moves in a
@@ -24,7 +24,7 @@ cd "$(dirname "$0")/../.." || exit 2
 # stop, so they are proven against planted suites rather than asserted in this comment.
 LIST=${OFFLINE_SUITES_LIST:-tools/tests/offline-suites.txt}
 SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
-FLOOR=${OFFLINE_SUITES_FLOOR:-42}
+FLOOR=${OFFLINE_SUITES_FLOOR:-43}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"

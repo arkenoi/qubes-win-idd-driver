@@ -103,6 +103,71 @@ while ((Get-Date) -lt $deadline) {
 }
 
 $after = (Get-Date).ToUniversalTime()
+
+# ---- WHICH CONVENTION DOES THIS QUBE'S RTC FOLLOW? Decided by MEASUREMENT, once per boot. -------
+# RealTimeIsUniversal declares whether Windows reads the emulated RTC as UTC (1) or as local time
+# (0). Only ONE of the two is true for a given qube, and which one depends on a dom0-side feature
+# the guest cannot read:
+#   * qubes-core-admin sets `timezone=localtime` for every os=Windows qube with qrexec, and Xen then
+#     presents the RTC as DOM0 LOCAL time -> the correct value is 0.
+#   * a qube whose `timezone` feature is UNSET gets a true-UTC RTC -> the correct value is 1.
+# Shipping either value blind is wrong for the other case. Measured 2026-10-15 on a live guest:
+# shipping 1 on a localtime qube put it 10800 s ahead on every boot (its UTC was 10:38:51Z against a
+# real 07:38:40Z), and Jev scored the opposite default as breaking the feature-unset qube at 0.88.
+#
+# SO IT IS DERIVED, NOT ASSUMED. This script has just learned real UTC from dom0, and $before is
+# what the guest believed UTC was a moment earlier - computed from the RTC under the CURRENT setting.
+# Inverting that gives what the RTC actually holds, and comparing it against real UTC says which
+# convention fits. The write takes effect at the NEXT boot (Windows reads this only at startup), so
+# a guest converges within one boot instead of being re-corrected for ever.
+#
+# NEITHER HYPOTHESIS FITTING IS AN ANOMALY, NOT A DEFAULT. On Xen a guest's own clock writes move a
+# per-VM offset that the toolstack persists (/vm/<uuid>/rtc/timeoffset), so a subject corrected on
+# every boot for weeks can hold an RTC that matches nothing - measured on win10-acc, which read
+# dom0-local PLUS three hours after a correction cycle (RTCOFFSETWRITEBACK). In that case this says
+# so, loudly, and changes nothing: a wrong guess would be worse than the puller we already have.
+if ($exit -eq 'set') {
+    try {
+        $key  = 'HKLM:\SYSTEM\CurrentControlSet\Control\TimeZoneInformation'
+        $cur  = $null
+        try { $cur = (Get-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -ErrorAction Stop).RealTimeIsUniversal } catch { $cur = 0 }
+        if ($null -eq $cur) { $cur = 0 }
+        $off  = [TimeZoneInfo]::Local.GetUtcOffset($after)
+        # What the RTC holds, inverted from what the guest believed before the pull.
+        $rtc  = if ($cur -eq 1) { $before } else { $before + $off }
+        # Tolerance covers the seconds between $before and $after plus RTC second-granularity.
+        $tol  = [TimeSpan]::FromSeconds(90)
+        $fitsUtc   = ([Math]::Abs(($rtc - $after).TotalSeconds) -lt $tol.TotalSeconds)
+        $fitsLocal = ([Math]::Abs((($rtc - $off) - $after).TotalSeconds) -lt $tol.TotalSeconds)
+        $want = $null
+        if ($fitsUtc -and -not $fitsLocal)      { $want = 1 }
+        elseif ($fitsLocal -and -not $fitsUtc)  { $want = 0 }
+        elseif ($fitsUtc -and $fitsLocal)       { $want = $cur }   # zero offset: both fit, nothing to choose
+        if ($null -eq $want) {
+            LogWarning ("CLOCKCONV the RTC matches NEITHER convention: it holds $($rtc.ToString('o')), " +
+                        "real UTC is $($after.ToString('o')), this guest's offset is $off. On Xen a guest's own " +
+                        "clock writes move a persisted per-VM RTC offset, so this subject's RTC may carry the " +
+                        "history of earlier corrections. RealTimeIsUniversal left at $cur and the clock stays " +
+                        "pulled from dom0 - diagnose, do not guess.")
+        } elseif ($want -ne $cur) {
+            New-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -PropertyType DWord -Value $want -Force -ErrorAction Stop | Out-Null
+            $back = (Get-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -ErrorAction Stop).RealTimeIsUniversal
+            if ($back -eq $want) {
+                LogWarning ("CLOCKCONV RealTimeIsUniversal was $cur and this qube's RTC says it should be $want " +
+                            "(the RTC holds $($rtc.ToString('o')), real UTC $($after.ToString('o')), offset $off) - " +
+                            "corrected; it takes effect at the next boot, and this boot needed a pull of " +
+                            "$([int]($after - $before).TotalSeconds) s")
+            } else {
+                LogError "CLOCKCONV RealTimeIsUniversal did not read back as $want (got '$back') - this guest will keep needing a pull every boot"
+            }
+        } else {
+            LogInfo "CLOCKCONV RealTimeIsUniversal=$cur matches this qube's RTC convention"
+        }
+    } catch {
+        LogWarning "CLOCKCONV could not decide the RTC convention ($($_.Exception.Message)) - the clock is pulled, the setting is untouched"
+    }
+}
+
 switch ($exit) {
     'set' {
         LogInfo "CLOCKSYNC the clock was pulled from dom0 at boot (was $($before.ToString('o')), now $($after.ToString('o')))"

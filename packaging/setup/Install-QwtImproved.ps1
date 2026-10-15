@@ -5351,10 +5351,32 @@ function Set-GuestTimeZoneFromHost {
     # IANA conversion (TryConvertIanaIdToWindowsId is .NET 6+). So the common zones are mapped
     # here and anything else is REPORTED rather than guessed at - a wrong zone is worse than a
     # zone we admit we could not map.
+    # THE READER IS CALLED Read-QwtQubesDbValue. This said `Get-QubesDbValue`, which is not defined
+    # anywhere in this installer - the name belongs to guest/qubesdb-read.ps1, which is NOT loaded
+    # here and is named only in a comment a hundred lines up. So the call threw
+    # CommandNotFoundException, the bare `catch { }` swallowed it, $iana stayed $null, and the guest
+    # was told dom0 had published nothing. MEASURED on a live guest 2026-10-15: dom0 publishes
+    # /qubes-timezone = 'Europe/Sofia', which this maps to 'FLE Standard Time' two lines below. The
+    # zone was never set, and the message blamed dom0 for it on every install since.
+    #
+    # AND THE TWO CASES ARE NOW TOLD APART. $null from the reader means "unreadable" - no daemon, no
+    # pipe, dom0 not connected yet, OR key absent - so an install that runs before our own qubesdb
+    # service is up looks exactly like a dom0 that published nothing. /name is always present when
+    # the daemon is connected, so it answers which happened. A WARN that names the wrong party is
+    # worse than no WARN: this one hid a real defect for the life of the feature.
     $iana = $null
-    try { $iana = Get-QubesDbValue '/qubes-timezone' } catch { }
+    try { $iana = Read-QwtQubesDbValue '/qubes-timezone' } catch {
+        Write-Log "  clock: reading /qubes-timezone FAILED ($($_.Exception.Message)) - the guest timezone is left alone" 'WARN'
+        return
+    }
     if ([string]::IsNullOrWhiteSpace($iana)) {
-        Write-Log '  clock: dom0 publishes no /qubes-timezone - leaving the guest timezone alone' 'WARN'
+        $probe = $null
+        try { $probe = Read-QwtQubesDbValue '/name' } catch { }
+        if ([string]::IsNullOrWhiteSpace($probe)) {
+            Write-Log '  clock: qubesdb is not readable yet (/name empty too) - the guest timezone is left alone, and the per-boot clock task sets it' 'WARN'
+        } else {
+            Write-Log '  clock: dom0 publishes no /qubes-timezone - leaving the guest timezone alone' 'WARN'
+        }
         return
     }
     $map = @{
@@ -5407,39 +5429,53 @@ function Set-GuestTimeZoneFromHost {
 }
 
 function Set-RtcIsUtc {
-    # THE HARDWARE CLOCK IS UTC AND THE OS APPLIES THE ZONE. Qubes presents the RTC as UTC to a
-    # qube unless that qube is given the `timezone` feature, and Windows with RealTimeIsUniversal
-    # UNSET reads the RTC as LOCAL time - so the guest computes guest_UTC = RTC - its_own_offset
-    # and lands that far from real UTC. On a guest whose zone is ahead of UTC that puts it BEHIND
-    # real time, which is precisely how a freshly minted driver catalog becomes "not yet valid"
-    # and drvinst HANGS instead of failing (0x800B0101) - the refusal immediately below.
+    # THE RTC ON A QUBES WINDOWS QUBE HOLDS DOM0 LOCAL TIME, NOT UTC - and this function used to
+    # assert the opposite. Its own first paragraph named the exception and then ignored it: "Qubes
+    # presents the RTC as UTC to a qube UNLESS that qube is given the `timezone` feature". Every
+    # Windows qube IS given it, by dom0, automatically - qubes-core-admin's qubes/ext/windows.py:
+    #     if guest_os == "Windows" and qrexec:
+    #         if vm.features.check_with_template("timezone", None) is None:
+    #             vm.features["timezone"] = "localtime"
+    # so the RTC holds dom0 LOCAL time on every guest this installer ever runs on. Writing
+    # RealTimeIsUniversal=1 then tells Windows to read that local time AS UTC, and the guest lands
+    # dom0's whole offset ahead of real time.
     #
-    # THIS IS OURS TO SET. It is not rewriting the user's clock, which this installer deliberately
-    # refuses to do; it is declaring which convention the hardware clock follows, and on a Qubes
-    # guest that convention is decided by Qubes. QWT is the integration layer that should know it.
-    # Measured 2026-10-14: with it unset and the qube additionally given `timezone=localtime`, every
-    # acceptance guest ran 10800 s ahead for its whole life while the clock puller re-corrected it.
+    # MEASURED ON A LIVE GUEST, 2026-10-15: RealTimeIsUniversal=1, guest timezone UTC, guest clock
+    # 2026-10-15T10:38:51Z against a real UTC of 07:38:40Z - exactly +10800 s, dom0's +03:00. The
+    # acceptance sweep raises it as clock_boot_correction_s = 10800 against a max of 60, on every
+    # cell, and ~284 log lines per boot are stamped three hours ahead before the clock puller
+    # corrects it.
     #
-    # It takes effect at the NEXT boot - Windows reads the RTC through this value at startup - so it
-    # does not rescue the current session, and the clock gate below still has to run. Idempotent,
-    # read back rather than assumed, and never fatal: a guest that refuses the write is reported and
-    # the install continues, because the install is not what this breaks.
+    # AND THE WRITE WAS INERT WHERE IT MATTERED. Windows computes UTC as (RTC - guest_TZ_offset)
+    # when the value is unset and as (RTC) when it is 1. These guests have a UTC timezone, so both
+    # branches give RTC = real+3h: identical. The value only ever made a difference on a guest whose
+    # zone was already correct - where it broke it.
+    #
+    # SO THE CORRECT PAIRING IS RealTimeIsUniversal=0 plus a guest timezone equal to dom0's, which
+    # Set-GuestTimeZoneFromHost sets from /qubes-timezone. Then guest_UTC = RTC - dom0_offset =
+    # dom0_local - dom0_offset = real UTC, correct from the first instant of the boot with nothing
+    # to correct. Written explicitly rather than left absent, because a guest upgrading from an
+    # earlier release of ours already carries 1 and absence would leave it there.
+    #
+    # Takes effect at the NEXT boot: Windows reads the RTC through this value only at startup. The
+    # clock gate below therefore still runs for the current session. Idempotent, read back rather
+    # than assumed, and never fatal.
     $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\TimeZoneInformation'
     try {
         $cur = (Get-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -ErrorAction Stop).RealTimeIsUniversal
     } catch { $cur = $null }
-    if ($cur -eq 1) { Write-Log '  clock: RealTimeIsUniversal already 1 (hardware clock is UTC)'; return }
+    if ($cur -eq 0) { Write-Log '  clock: RealTimeIsUniversal already 0 (the RTC holds dom0 local time, as Qubes presents it)'; return }
     try {
-        New-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -PropertyType DWord -Value 1 -Force -ErrorAction Stop | Out-Null
+        New-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -PropertyType DWord -Value 0 -Force -ErrorAction Stop | Out-Null
         $back = (Get-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -ErrorAction Stop).RealTimeIsUniversal
-        if ($back -eq 1) {
-            Write-Log ('  clock: RealTimeIsUniversal set to 1 (was ' + $(if ($null -eq $cur) { 'unset' } else { $cur }) +
-                       ') - the hardware clock is read as UTC from the next boot')
+        if ($back -eq 0) {
+            Write-Log ('  clock: RealTimeIsUniversal set to 0 (was ' + $(if ($null -eq $cur) { 'unset' } else { $cur }) +
+                       ') - the RTC is read as dom0 local time from the next boot')
         } else {
-            Write-Log "  clock: RealTimeIsUniversal did not read back as 1 (got '$back') - this guest may read its hardware clock as local time" 'WARN'
+            Write-Log "  clock: RealTimeIsUniversal did not read back as 0 (got '$back') - this guest will read a dom0-local RTC as UTC and sit dom0's offset ahead" 'WARN'
         }
     } catch {
-        Write-Log "  clock: could not set RealTimeIsUniversal ($($_.Exception.Message)) - this guest may read its hardware clock as local time" 'WARN'
+        Write-Log "  clock: could not set RealTimeIsUniversal ($($_.Exception.Message)) - this guest may read a dom0-local RTC as UTC" 'WARN'
     }
 }
 

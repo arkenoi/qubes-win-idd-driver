@@ -218,27 +218,47 @@ raise SystemExit(bad)
 PYPROVE
 fi
 
-# ---- THE RTC CONVENTION, which is why the clock was wrong in the first place --------------------
-# The gate above refuses an install whose catalogs cannot validate at the guest's clock. That clock
-# is wrong because Windows with RealTimeIsUniversal UNSET reads the hardware clock as LOCAL time, so
-# the guest computes its UTC off by its own zone offset - and a guest ahead of UTC lands BEHIND real
-# time, which is exactly what makes a fresh catalog "not yet valid". Qubes presents the RTC as UTC,
-# so the convention is Qubes' and QWT is the layer that should declare it. Measured 2026-10-14:
-# unset, plus a qube given the localtime feature, put every acceptance guest 10800 s ahead for its
-# whole life while our own clock puller re-corrected it three times in six minutes.
+# ---- THE RTC CONVENTION, and this block used to assert the WRONG one ---------------------------
+# It required RealTimeIsUniversal=1 ("the hardware clock is UTC"). On a Qubes Windows qube the RTC
+# holds DOM0 LOCAL TIME, because qubes-core-admin's qubes/ext/windows.py sets the qube's `timezone`
+# feature to `localtime` for every os=Windows qube with working qrexec. The old comment here even
+# said "Qubes presents the RTC as UTC" - true only for a qube WITHOUT that feature, which no QWT
+# guest is.
+# MEASURED ON A LIVE GUEST, 2026-10-15: RealTimeIsUniversal=1, guest timezone UTC, guest clock
+# 10:38:51Z against a real UTC of 07:38:40Z - exactly dom0's +03:00. And the write was INERT where
+# it was introduced: Windows computes UTC as (RTC - guest_TZ_offset) unset and (RTC) when 1, and
+# these guests have a UTC zone, so both give real+3h. It only ever changed anything on a guest whose
+# zone was already right - where it broke it.
+# THE CORRECT PAIRING is RealTimeIsUniversal=0 plus a guest timezone equal to dom0's, which
+# Set-GuestTimeZoneFromHost sets from /qubes-timezone. Verified on the guest: with TZ='FLE Standard
+# Time' and the value 0, local time reads dom0's local time and UTC reads real UTC.
 for f in packaging/setup/Install-QwtImproved.ps1 mgmt/prime-jobs/ours/setup/Install-QwtImproved.ps1; do
   b=$(echo "$f" | cut -d/ -f1)
   # the prime-jobs tree is gitignored local staging: checked when it exists, never required
   [ -f "$f" ] || { echo "  SKIP rtc($b): $f not present (local staging tree)"; continue; }
-  if command grep -q 'function Set-RtcIsUtc' "$f"; then echo "  OK   rtc($b) declares the hardware clock is UTC"
+  if command grep -q 'function Set-RtcIsUtc' "$f"; then echo "  OK   rtc($b) declares the RTC convention"
   else echo "  FAIL rtc($b): the installer does not set RealTimeIsUniversal"; fail=1; fi
-  if command grep -q 'RealTimeIsUniversal already 1' "$f"; then echo "  OK   rtc($b) idempotent on an already-correct guest"
+  if tr -d '\r' < "$f" | awk '/function Set-RtcIsUtc/,/^}$/' | command grep -q 'PropertyType DWord -Value 0'; then
+    echo "  OK   rtc($b) writes 0 - the RTC holds dom0 local time"
+  else echo "  FAIL rtc($b): it does not write 0; a dom0-local RTC read as UTC puts the guest dom0's offset ahead"; fail=1; fi
+  if tr -d '\r' < "$f" | awk '/function Set-RtcIsUtc/,/^}$/' | command grep -q 'PropertyType DWord -Value 1'; then
+    echo "  FAIL rtc($b): it still writes 1 somewhere in that function"; fail=1
+  else echo "  OK   rtc($b) never writes 1"; fi
+  if command grep -q 'RealTimeIsUniversal already 0' "$f"; then echo "  OK   rtc($b) idempotent on an already-correct guest"
   else echo "  FAIL rtc($b): no already-set path - it would rewrite on every install"; fail=1; fi
-  if tr -d '\r' < "$f" | awk '/function Set-RtcIsUtc/,/^}$/' | command grep -q 'did not read back as 1'; then echo "  OK   rtc($b) reads the value back"
+  if tr -d '\r' < "$f" | awk '/function Set-RtcIsUtc/,/^}$/' | command grep -q 'did not read back as 0'; then echo "  OK   rtc($b) reads the value back"
   else echo "  FAIL rtc($b): the write is assumed to have worked"; fail=1; fi
   if tr -d '\r' < "$f" | awk '/function Set-RtcIsUtc/,/^}$/' | command grep -q 'Fail '; then
     echo "  FAIL rtc($b): a failed write aborts the install - that is not what this breaks"; fail=1
   else echo "  OK   rtc($b) reported, never fatal"; fi
+done
+# THE UNATTENDED IMAGES MUST AGREE. Setup writes this value too, so an image built with /d 1 runs
+# dom0's offset ahead from first boot until QWT installs - and the goldens are built from these.
+for x in mgmt/autounattend*.xml; do
+  [ -f "$x" ] || continue
+  if command grep -q 'RealTimeIsUniversal /t REG_DWORD /d 0 /f' "$x"; then echo "  OK   rtc($(basename "$x")) writes 0"
+  elif command grep -q 'RealTimeIsUniversal' "$x"; then echo "  FAIL rtc($(basename "$x")): writes RealTimeIsUniversal but not 0"; fail=1
+  fi
 done
 # It must run BEFORE the pre-flight gate, so the NEXT boot is right even when this one refuses.
 rtc_line=$(command grep -n '^    Set-RtcIsUtc$' packaging/setup/Install-QwtImproved.ps1 | tail -1 | cut -d: -f1)
