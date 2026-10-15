@@ -542,15 +542,44 @@ $script:QwtShutdownNearProbe = {
     $atU = $at
     if ($at.Kind -eq [DateTimeKind]::Local) { $atU = $at.ToUniversalTime() }
     elseif ($at.Kind -eq [DateTimeKind]::Unspecified) { $atU = [DateTime]::SpecifyKind($at, [DateTimeKind]::Utc) }  # every caller here builds UTC
-    # the shutdown is recorded at or just after the termination it caused
+    # THE SHUTDOWN RECORD PRECEDES THE KILL, AND BY MINUTES. This window was [-30, +180] on the
+    # belief - written in this comment - that "the shutdown is recorded at or just after the
+    # termination it caused". That is backwards. Windows writes User32 1074 when a shutdown is
+    # INITIATED and then spends minutes stopping services, during which Task Scheduler terminates
+    # the tasks still running. MEASURED on win10-clean, acceptance run 38787325142, 2026-10-15:
+    #     22:55:53  1074  xenagent_9_1_0_0.exe initiated the shutdown
+    #     22:59:37  201+111  QubesAutologonGuard killed, 0x8007050B
+    #     22:59:38  201+111  QubesPvNicRearm    killed, 0x8007050B
+    # a gap of 224 s against a 30 s lookback, so BOTH were reported to the user as failed tasks on a
+    # clean install. The re-arm task makes it structural rather than unlucky: its only trigger IS
+    # User32 1074, so the shutdown record necessarily precedes its death by however long it ran.
+    # The lookback now spans a slow shutdown.
+    #
+    # AND A LONGER LOOKBACK MUST NOT EXCUSE A DEATH FROM AN EARLIER SHUTDOWN. If the guest booted
+    # between that shutdown record and this death, the shutdown is over and explains nothing - so a
+    # boot marker in between disqualifies it. That is what keeps this from becoming a blanket amnesty.
     $filter = @{
         LogName   = 'System'
         ID        = 109, 1074, 6006
-        StartTime = $atU.AddSeconds(-30)
+        StartTime = $atU.AddSeconds(-900)
         EndTime   = $atU.AddSeconds(180)
     }
     try {
-        return ($null -ne (Get-WinEvent -FilterHashtable $filter -MaxEvents 1 -ErrorAction Stop))
+        $sd = Get-WinEvent -FilterHashtable $filter -MaxEvents 1 -ErrorAction Stop
+        if ($null -eq $sd) { return $false }
+        # 6005 (event log service started), 6009 (kernel version banner) and Kernel-General 12 are
+        # the boot markers; any of them between the shutdown record and $at means a boot intervened.
+        $sdU = $sd.TimeCreated.ToUniversalTime()
+        if ($sdU -lt $atU) {
+            try {
+                $boot = Get-WinEvent -FilterHashtable @{ LogName = 'System'; ID = 6005, 6009, 12
+                                                         StartTime = $sdU; EndTime = $atU } -MaxEvents 1 -ErrorAction Stop
+                if ($null -ne $boot) { return $false }   # the guest came back up in between
+            } catch {
+                if (-not ("$($_.FullyQualifiedErrorId)" -like 'NoMatchingEventsFound*' -or "$($_.Exception.Message)" -match 'No events were found')) { return $null }
+            }
+        }
+        return $true
     } catch {
         # "No events were found" is a read that found nothing - an answer, not a failure to read.
         # Told apart by its error id, which does not change with the guest's language.

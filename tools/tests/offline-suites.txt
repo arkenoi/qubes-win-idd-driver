@@ -49,6 +49,7 @@
 # when run in the same command as logvol-lib-selftest.sh and "12 passed, 0 failed" alone, twice -
 acceptance-record-selftest.sh
 ask-operator-night-selftest.sh
+campaign-state-selftest.sh
 cell-coverage-selftest.sh
 ci-state-selftest.sh
 console-window-check-selftest.sh
