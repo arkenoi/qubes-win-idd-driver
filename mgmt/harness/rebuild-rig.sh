@@ -227,7 +227,10 @@ build_base(){
     qwt_shutdown "$vm" 600
     [ "$(qvm-ls --raw-data --fields STATE "$vm" 2>/dev/null | tail -1)" = Halted ] \
         || fail "base:$vm" "did not halt cleanly" "$vm"
-    GOLDEN_RESEAL_REASON="rebuilt from vendor media by $RUN_ID" \
+    # AN EXPLICIT REASON WINS, because the seal is the only record a future reader gets of why the
+    # previous state was abandoned. The generic default is right for a routine rebuild; a rebuild
+    # done to remove something the old image carried should say so in the seal itself.
+    GOLDEN_RESEAL_REASON="${GOLDEN_RESEAL_REASON:-rebuilt from vendor media by $RUN_ID}" \
         mgmt/golden.sh seal "$vm" "pristine base rebuilt $RUN_ID from $(basename "$iso"), PRIMER=1, no QWT" >>"$LOG" 2>&1 \
         || fail "base:$vm" "seal failed"
     mgmt/golden.sh verify "$vm" >>"$LOG" 2>&1 || fail "base:$vm" "seal does not verify after sealing"
