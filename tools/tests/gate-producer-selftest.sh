@@ -210,5 +210,67 @@ print(sum(1 for n in names if (m.get(n) or 0) == 0))
 ")
 ck "SEEN TO FAIL: over a corpus without them, all ten read zero" 10 "$qz"
 
+# ================================================================================================
+# THE FOUR STRUCTURE-DRIVEN GATES. These cannot be tripped by one planted line: they need agent and
+# watchdog INSTANCES, a shutdown window, and a capture time. That is the only reason they were left
+# out of the first corpus, and leaving them out is how they stayed unproven.
+python3 - "$T" <<'PYSTRUCT'
+import base64, hashlib, os, sys
+T = sys.argv[1]
+def block(name, lines):
+    text="\n".join(lines); data=text.encode("utf-8")
+    b64=base64.b64encode(data).decode(); chunks=[b64[i:i+76] for i in range(0,len(b64),76)]
+    out=["LSW PULL name=%s lines=%d bytes=%d sha256=%s b64lines=%d"%(name,len(lines),len(data),hashlib.sha256(data).hexdigest(),len(chunks))]
+    out+=["LSW B|"+c for c in chunks]; out.append("LSW PULLEND name=%s b64lines=%d"%(name,len(chunks))); return out
+def stream(files, ev):
+    S=["LSW BEGIN v=1 now=2026-10-07T10:20:00.000 nowutc=2026-10-07T10:20:00.000Z tz=+00:00 "
+       "host=RklYVFVSRQ== user=U1lTVEVN session=0 since=2026-10-07T09:00:00Z sincelocal=2026-10-07T09:00:00.000",
+       "LSW LOGDIR pathb64=%s exists=1"%base64.b64encode(b"Q:\\Qubes Logs").decode()]
+    for n,(name,fam,lines) in enumerate(files,1):
+        p=base64.b64encode(("Q:\\Qubes Logs\\"+name).encode()).decode()
+        S.append("LSW FILE id=f%d pathb64=%s family=%s bytes=%d lines=%d written=2026-10-07T10:13:00.500 "
+                 "created=2026-10-07T10:00:30.000 partial=0 total_lines=%d"%(n,p,fam,len("\n".join(lines).encode()),len(lines),len(lines)))
+        S+=block("f%d"%n,lines)
+    S.append("LSW EVENTS channels=4 required_missing=-"); S+=block("events",ev)
+    S.append("LSW END files=%d pulled=%d errors=0 event_errors=0"%(len(files),len(files))); return S
+def L(ts,pid,lvl,func,msg): return "[20261007.%s.000-%d-%s] %s: %s"%(ts,pid,lvl,func,msg)
+
+# AGENT pid 1000. Its log simply STOPS at 10:12:30 - no requested stop, no death record - and the
+# capture time is 10:20:00, so the instance ends "unknown" more than 120 s before the capture
+# (agent_ends_unrecorded). WGCBROKER is launched TWICE inside this one instance
+# (helper_relaunches). The vchan announcement at 10:12:30 falls inside the shutdown window opened
+# by the 1074 at 10:12:00 (vchan_setups_per_shutdown: a new vchan announcement while going down).
+agent=[L("100031",1000,"I","Init","agent starting"),
+       L("100040",1000,"I","Helpers","WGCBROKER launched pid 2100"),
+       L("100100",1000,"I","Helpers","WGCBROKER launched pid 2231"),
+       L("101230",1000,"I","WatchForEvents","Awaiting for a vchan client")]
+# WATCHDOG: a launch, then the agent dying inside 10 s of it (watchdog_fast_death_backoffs).
+watchdog=[L("100030",700,"I","StartTargetProcess","Running process 'C:\\Program Files\\Qubes Tools\\bin\\gui-agent.exe' in session 1"),
+          L("100035",700,"E","WatchdogThread","Process 'gui-agent.exe' died within 500 ms of starting")]
+events=["EV 2026-10-07 09:59:00.000 [System] id=6005 level=4 EventLog: The Event log service was started.",
+        "EV 2026-10-07 10:12:00.000 [System] id=1074 level=4 User32: The process shutdown.exe has initiated the power off of computer WIN-IDD-TEST"]
+open(os.path.join(T,"struct.pull"),"w",encoding="utf-8").write("\r\n".join(stream(
+    [("gui-watchdog-20261007-100030-700.log","watchdog",watchdog),
+     ("gui-agent-20261007-100031-1000.log","agent",agent)],events))+"\r\n")
+PYSTRUCT
+python3 "$SRC" decode "$T/struct.pull" --out "$T/slogs" > "$T/sdecode.txt" 2>&1
+python3 "$SRC" analyze "$T/slogs" --baseline "$T/baseline.json" --out "$T/s.json" \
+        --summary "$T/s.txt" --label struct --workdir "$T/swork" > "$T/sanalyze.out" 2>&1
+[ -f "$T/s.json" ] || { echo "FATAL: no structure report: $(tail -5 "$T/sanalyze.out")"; exit 2; }
+sv(){ python3 -c "
+import json,sys
+m=(json.load(open('$T/s.json')).get('metrics') or {})
+print(m.get(sys.argv[1],'ABSENT'))" "$1"; }
+sfired(){ v=$(sv "$1"); case "$v" in ''|ABSENT|None|0|0.0) echo "no($v)" ;; *) echo yes ;; esac; }
+
+echo "--- the four structure-driven gates"
+for g in vchan_setups_per_shutdown agent_ends_unrecorded helper_relaunches watchdog_fast_death_backoffs; do
+  printf '     %-30s %s\n' "$g" "$(sv "$g")"
+done
+ck "vchan_setups_per_shutdown fires on an announcement during the shutdown window" yes "$(sfired vchan_setups_per_shutdown)"
+ck "agent_ends_unrecorded fires on a log that stops with no stop and no death"      yes "$(sfired agent_ends_unrecorded)"
+ck "helper_relaunches fires on WGCBROKER launched twice in one instance"            yes "$(sfired helper_relaunches)"
+ck "watchdog_fast_death_backoffs fires on a death within 10 s of launch"            yes "$(sfired watchdog_fast_death_backoffs)"
+
 printf 'gate-producer-selftest: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
