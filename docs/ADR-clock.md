@@ -110,6 +110,67 @@ boot, then the sweep misreading local-time stamps as UTC. **Both were wrong.** F
 whose RTC holds dom0 local made the guest boot an offset ahead, the puller corrected it back, and
 that correction *was* the jump.
 
+## A localtime RTC PROPAGATES dom0's zone; only a UTC RTC lets the guest choose one
+
+**This is a constraint of the mechanism, not a policy of ours.** A hardware clock holding dom0's
+local time carries no zone label, so the guest cannot recover real UTC from it without knowing
+dom0's offset:
+
+```
+guest_UTC − real_UTC = dom0_offset − guest_offset        (with a localtime RTC)
+guest_UTC           = RTC = real UTC, whatever the zone  (with a UTC RTC)
+```
+
+So, in the owner's words: *a guest may choose its own timezone only if its RTC is UTC; if it is
+localtime, the zone is propagated with it.* On a `timezone=localtime` qube — which is what
+qubes-core-admin gives every Windows qube — a guest set to any zone but dom0's is wrong by the
+difference, on every boot, for ever, and **no `RealTimeIsUniversal` value can correct it**. Our
+per-boot puller would re-correct the clock each boot and never converge, which is a silent paper-over.
+
+### How the guest learns dom0's zone, and how far that actually goes
+
+dom0 publishes it in qubesdb as `/qubes-timezone`. Verified 2026-10-15 from a qube on this host:
+`qubesdb-read /qubes-timezone` → `Europe/Sofia`, matching dom0's `Timezone=Europe/Sofia`. That part
+works and is not an assumption.
+
+**What does not scale is the translation.** `/qubes-timezone` carries an IANA name and `tzutil` takes
+Windows zone ids, which .NET Framework on the guest cannot convert (`TryConvertIanaIdToWindowsId` is
+.NET 6+). The installer therefore carries a hand-written map, and its real coverage is:
+
+* **60 entries against ~598 IANA zones** on this host — about 10%, chosen for the regions we ship to.
+* **The quarter- and half-hour zones are mostly absent.** `Asia/Kolkata` (+05:30) is mapped; Nepal
+  (+05:45), Iran (+03:30), Afghanistan (+04:30), Myanmar (+06:30), Chatham (+12:45) and Lord Howe
+  are not.
+* **A Windows zone id is not a faithful IANA zone.** One id covers several zones with different DST
+  histories — the map sends `Europe/Rome` and `Europe/Berlin` to the same id — so even a "mapped"
+  zone can disagree with dom0 around a transition or after a rule change.
+
+**Therefore the localtime pairing is only safe where the guest's zone can be made EXACTLY dom0's,
+and we cannot guarantee that in general.** The configuration that is proof against arbitrary offsets
+is the other one: a UTC hardware clock, where zone, half-hours and DST rules are display concerns and
+cannot affect correctness.
+
+### What the product does about it
+
+* **Propagates** dom0's zone when it can map it, late in the install, where qubesdb is readable.
+* **Reports and does not guess** when it cannot map it — and the message now names the consequence
+  (the guest's UTC will be out, and the per-boot task will correct it every boot rather than
+  converge) instead of the older line, which claimed the guest's UTC was "still correct" and was only
+  true while we forced the convention.
+* **Names a zone mismatch as one.** A guest whose offset differs from dom0's lands in the
+  fits-NEITHER branch by construction — `fitsLocal` tests exactly `|dom0_offset − guest_offset| < tol`
+  — and used to be told only that the RTC "fits neither convention", which reads like a convention
+  problem and sends the reader to the wrong fix. `CLOCKCONV` now recovers dom0's offset from the
+  witness (`rtc − dom0_utc` under the localtime hypothesis), reports the difference, and names both
+  remedies: match dom0's zone, or give the qube a UTC clock (`qvm-features <vm> timezone utc`, which
+  dom0 does not overwrite once defined — it fills that feature only when it is undefined) and keep a
+  zone of its own. Covered by `clock-convention-selftest.sh` PART K.
+* **Does not set the qube's feature itself.** Which hardware-clock convention a qube gets is a
+  dom0-side decision about that qube, and the same reasoning that took this value away from the
+  harness applies: we report what we measure and name the fix.
+* **Does not force the guest's zone over a user's choice.** On a UTC-RTC qube that choice is
+  legitimate and free; forcing it would break the one configuration that handles complex offsets.
+
 ## Where the product touches it, and why only there
 
 ### 1. The installer: only on the failure branch of a measurement

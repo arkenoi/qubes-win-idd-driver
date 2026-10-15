@@ -248,6 +248,26 @@ printf '%s' "$rout" | command grep -q 'PICKED=2026-10-15T09:24:50' \
   && ok "the newest line wins even when its file has the oldest mtime" \
   || { bad "the reader picked by file order, not content"; printf '%s\n' "$rout" | sed 's/^/        /' | head -6; }
 
+echo "PART K  a ZONE mismatch is named as one, not reported as a convention problem"
+# THE CASE THE OWNER NAMED: "guest may choose its time zone only if its rtc is utc. if it is
+# localtime, tz is propagated with it." A localtime RTC carries no zone label, so
+# guest_UTC - real_UTC = dom0_offset - guest_offset, for ever, and no RealTimeIsUniversal value
+# fixes it. The detector already lands such a guest in the fits-NEITHER branch - `fitsLocal` tests
+# |dom0_offset - guest_offset| < tol, which is exactly this mismatch - but it USED to report only
+# "fits neither convention", which reads like a convention problem and sends the reader to the
+# wrong fix. Here dom0's offset is 2 h while the guest sits on Europe/Sofia (+3 h in October).
+W_ZONE='return @{ Dom0Utc = $REAL; SkewS = 3600.0; Offset = [timespan]::FromHours(2) }'
+mk 0 "$W_ZONE"; out=$(run Europe/Sofia)
+printf '%s' "$out" | command grep -q 'WROTE=NONE' \
+  && ok "nothing is written for a zone mismatch" \
+  || { bad "it wrote a convention value for what is a zone difference"; printf '%s\n' "$out" | sed 's/^/        /' | head -6; }
+printf '%s' "$out" | command grep -q 'ZONE MISMATCH AND NOT' \
+  && ok "and it is named as a zone mismatch" || bad "the zone mismatch is still reported as a convention problem"
+printf '%s' "$out" | command grep -q 'propagates dom0' \
+  && ok "and says the zone is propagated, not chosen" || bad "it does not explain why the guest cannot choose"
+printf '%s' "$out" | command grep -q 'timezone utc' \
+  && ok "and names the configuration that frees the zone" || bad "it does not name the fix"
+
 echo "PART G  seen to fail: break the branch PART A reaches"
 # An earlier version of this part mutated an arm case A never takes, so it passed while proving
 # nothing. This flips the verdict case A actually reaches.

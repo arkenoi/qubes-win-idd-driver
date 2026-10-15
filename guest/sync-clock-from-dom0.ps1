@@ -262,6 +262,30 @@ if ($exit -eq 'set') {
                             "With a zero offset the two conventions are the same arithmetic and there is nothing to " +
                             "choose; otherwise the RTC carries the history of earlier clock writes, which Xen persists " +
                             "per VM. RealTimeIsUniversal left at $cur - diagnose, do not guess.")
+                # AND NAME THE LIKELIEST CAUSE, because "fits neither" is where a ZONE mismatch lands and
+                # the message above reads like a convention problem. Under the localtime hypothesis the RTC
+                # holds DOM0's local time, so dom0's own offset is recoverable as rtc - dom0Utc. If that
+                # differs from THIS guest's offset, the convention is not what is wrong - the zone is, and no
+                # RealTimeIsUniversal value can fix it.
+                #
+                # WHY: a localtime RTC carries no zone label, so the guest's zone is PROPAGATED from dom0
+                # rather than chosen - guest_UTC - real_UTC = dom0_offset - guest_offset, on every boot, for
+                # ever. Only a UTC hardware clock leaves the guest free to pick its own zone, and only a UTC
+                # clock is proof against offsets this installer cannot map: it maps 60 of the ~600 IANA
+                # zones, a Windows zone id is not a faithful IANA zone (one id covers several zones with
+                # different DST histories), and the quarter- and half-hour zones are mostly absent.
+                $dom0Off   = $rtc - $w.Dom0Utc
+                $zoneDelta = $dom0Off - $off
+                if ([Math]::Abs($zoneDelta.TotalSeconds) -ge $tol) {
+                    LogWarning ("CLOCKCONV IF THIS QUBE'S RTC HOLDS DOM0 LOCAL TIME, THIS IS A ZONE MISMATCH AND NOT " +
+                                "A CONVENTION ONE: dom0's offset would be $dom0Off while this guest's is $off, a " +
+                                "difference of $zoneDelta. A qube whose hardware clock holds dom0's local time " +
+                                "propagates dom0's zone - the guest does not get to choose one - so this guest's UTC " +
+                                "stays out by that difference on every boot and no RealTimeIsUniversal value can " +
+                                "correct it. FIX, either: set this guest's timezone to dom0's, or give the qube a UTC " +
+                                "hardware clock (`qvm-features <vm> timezone utc` from dom0, which is not overwritten " +
+                                "once defined) and this guest may then keep a zone of its own.")
+                }
             } elseif ($want -ne $cur) {
                 New-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -PropertyType DWord -Value $want -Force -ErrorAction Stop | Out-Null
                 $back = (Get-ItemProperty -LiteralPath $key -Name RealTimeIsUniversal -ErrorAction Stop).RealTimeIsUniversal
