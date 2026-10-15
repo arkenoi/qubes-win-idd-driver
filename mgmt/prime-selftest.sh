@@ -40,6 +40,12 @@ qvm-remove -f "$CHURN" >/dev/null 2>&1
 qvm-create --class StandaloneVM --label red --property virt_mode=hvm --property kernel='' "$CHURN" || exit 1
 qvm-tags "$CHURN" add win-idd-testbed || exit 1
 qvm-features "$CHURN" os Windows
+# AND THE CLOCK, at create time. Xen reads `timezone` at DOMAIN CREATION: `localtime` puts dom0's
+# local time on the emulated clock, absent it defaults to true UTC. A clone does NOT inherit it -
+# measured 2026-10-15 on this very script's churn, which booted reading 16:46 where dom0 said 19:46.
+# Every path that creates a Windows guest sets it, or that guest runs on a clock three hours from
+# the one its host keeps (docs/ADR-clock.md).
+qvm-features "$CHURN" timezone localtime
 for p in memory:8192 maxmem:8192 vcpus:4 qrexec_timeout:300; do qvm-prefs "$CHURN" "${p%%:*}" "${p##*:}"; done
 qvm-prefs "$CHURN" netvm '' 2>/dev/null
 python3 - "$BASE" "$CHURN" <<'EOF' || exit 1

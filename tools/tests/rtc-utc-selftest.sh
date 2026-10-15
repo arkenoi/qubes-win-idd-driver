@@ -47,15 +47,18 @@ done
 ck "the golden-baking script is gone"           "absent" \
    "$([ -e mgmt/harness/set-rtc-utc-golden.sh ] && echo present || echo absent)"
 
-echo "---- B. the qube carries timezone=localtime from CREATE time ----"
-# Xen reads this at DOMAIN CREATION and puts dom0's local time on the clock; absent, it defaults to
-# true UTC. Every path that creates a guest must set it, or that guest gets the transition back.
-for f in mgmt/reprovision-usb.sh mgmt/harness/prime-run.sh mgmt/harness/quick-upgrade.sh; do
-  ck "$(basename "$f") sets it at create"       "1" \
-     "$(sed 's/#.*//' "$f" | command grep -cE 'qvm-features +"?\$[A-Za-z_]+"? +timezone +localtime')"
+echo "---- B. every creator of a Windows guest sets timezone=localtime ----"
+# DERIVED, NOT ENUMERATED. The first version of this listed the five files I had edited, and missed
+# mgmt/prime-selftest.sh - which creates its own churn and was therefore booting guests on a true-UTC
+# clock. Measured 2026-10-15: that churn read 16:46 where dom0 said 19:46. So the check now starts
+# from the thing that defines a Windows guest - `qvm-features <vm> os Windows` - and requires the
+# same file to give that guest its clock, with the SAME number of sites. A new creator cannot be
+# added without tripping this, which is what the enumerated version could not do.
+for f in $(command grep -rla 'qvm-features .* os Windows' --include='*.sh' mgmt/ tools/ 2>/dev/null | sort); do
+  o=$(sed 's/#.*//' "$f" | command grep -cE 'qvm-features +"?\$[A-Za-z_]+"? +os +Windows')
+  t=$(sed 's/#.*//' "$f" | command grep -cE 'qvm-features +"?\$[A-Za-z_]+"? +timezone +localtime')
+  ck "$(basename "$f"): $o os-Windows site(s) each get a clock" "$o" "$t"
 done
-ck "matrix.sh sets it on both create paths"     "2" \
-   "$(sed 's/#.*//' mgmt/harness/matrix.sh | command grep -cE 'qvm-features +"?\$[A-Za-z_]+"? +timezone +localtime')"
 ck "and nothing ever CLEARS it"                 "0" \
    "$(sed 's/#.*//' mgmt/harness/*.sh mgmt/*.sh 2>/dev/null | command grep -cE 'qvm-features +--unset +[^ ]+ +timezone')"
 
