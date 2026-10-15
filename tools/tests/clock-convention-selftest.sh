@@ -21,7 +21,10 @@
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 SRC=guest/sync-clock-from-dom0.ps1
-PWSH=${PWSH:-/home/user/.local/pwsh/pwsh}
+# FIND pwsh, DO NOT HARDCODE THE DEV QUBE'S PATH. The first version pinned
+# /home/user/.local/pwsh/pwsh, which is where the tarball lives on this qube and nowhere else - so
+# this suite went red on its first CI run while passing locally. A GitHub runner has pwsh on PATH.
+PWSH=${PWSH:-$(command -v pwsh || echo /home/user/.local/pwsh/pwsh)}
 pass=0; fail=0
 T=$(mktemp -d "${TMPDIR:-/tmp}/clockconv.XXXXXX") || exit 2
 trap 'rm -rf "$T"' EXIT INT TERM
@@ -30,7 +33,7 @@ ok(){ pass=$((pass+1)); printf '  PASS  %s\n' "$1"; }
 bad(){ fail=$((fail+1)); printf '  FAIL  %s\n' "$1"; }
 
 [ -r "$SRC" ] || { echo "no $SRC"; exit 2; }
-[ -x "$PWSH" ] || { echo "no pwsh at $PPWSH - set PWSH=<path>"; exit 2; }
+[ -x "$PWSH" ] || { echo "no pwsh found (tried PATH and the local tarball) - set PWSH=<path>"; exit 2; }
 
 # ---- extract the shipped block -----------------------------------------------------------------
 awk '/^if \(\$exit -eq .set.\) \{$/,/^\}$/' "$SRC" > "$T/block.ps1"

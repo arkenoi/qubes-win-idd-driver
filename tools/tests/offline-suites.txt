@@ -27,7 +27,26 @@
 #   wrapper-exit-reason-selftest.sh   no_new_wait: 2 Sleep() calls against 1 before the fix
 #
 # Everything else in tools/tests/ needs a Qubes rig, a loop device, PowerShell, mtools or a
-# compiler and is run on the dev qube.
+# compiler and is run on the dev qube.#
+# AND THEN MEASURED AGAIN, IN THE ENVIRONMENT THAT ACTUALLY RUNS IT. The first version of this list
+# was validated on the dev qube and went red on its first CI run: 36 green, 7 red. Six of those
+# cannot run on a clean checkout at all, and the seventh was a bug in a suite of mine that pinned
+# this qube's pwsh path. "Measured" has to mean measured where it runs - the dev qube has a vendored
+# mirror, a different grep and a rig; a GitHub runner has none of them.
+#
+# NOT LISTED because a clean checkout cannot run them, with the reason:
+#   one-log-per-module / pipe-client-null / pipe-connect-order / pipe-eof
+#       apply patches against upstream/ro/qubes-windows-utils, which is GITIGNORED (.gitignore:
+#       "Vendored read-only upstream checkouts") and so never exists in CI. No coverage is lost:
+#       build.yml clones windows-utils fresh from upstream at WINDOWS_UTILS_REF and applies the same
+#       patches there. They remain dev-qube suites.
+#   pipefail-grepq
+#       asserts that a pipe into `grep -q` returns 141 under pipefail. That is the behaviour of THIS
+#       qube's grep (ugrep); a GNU grep returns 1, so the suite measures the local implementation
+#       rather than the invariant. Worth resolving in the suite, not by excluding it from the gate
+#       forever - registered.
+#   stock-ab
+#       drives the stock-vs-ours harness and needs rig paths.
 acceptance-record-selftest.sh
 ask-operator-night-selftest.sh
 cell-coverage-selftest.sh
@@ -52,18 +71,12 @@ matrix-runmarker-selftest.sh
 matrix-sweep-tally-selftest.sh
 mode-wait-attribution-selftest.sh
 offline-runner-selftest.sh
-one-log-per-module-selftest.sh
-pipe-client-null-selftest.sh
-pipe-connect-order-selftest.sh
-pipe-eof-selftest.sh
-pipefail-grepq-selftest.sh
 qcon-session-selftest.sh
 release-cut-gate-selftest.sh
 resolve-rip-selftest.sh
 result-flags-selftest.sh
 retired-names-gate-selftest.sh
 rtc-utc-selftest.sh
-stock-ab-selftest.sh
 sweep-gate-selftest.sh
 toastactions-selftest.sh
 uac-prompt-reachable-selftest.sh
