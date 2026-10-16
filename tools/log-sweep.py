@@ -671,12 +671,38 @@ def parse_winutils(lf, raw_lines):
         lf.lines.append(ln)
         prev = ln
         if func == "LogInit":
+            # THE RECORD IS OPENED BY THE FIRST LINE OF THE INIT, NOT BY THE PID LINE.
+            #
+            # windows-utils writes the block in this order:
+            #     LogInit: Log started, module name: gui-agent
+            #     LogInit: System uptime: 14.125 seconds
+            #     LogInit: Running as user: SYSTEM, process ID: 3824
+            # and this opened the record on the LAST of those three. So "System uptime" - the only
+            # clock-free boot anchor there is - was written onto inits[-1], which at that moment is
+            # the PREVIOUS process's record, and the FIRST instance in a file had no record to write
+            # it to at all, so its estimate was dropped on the floor.
+            #
+            # MEASURED on the win10-clean fixture built from the real 2026-10-16 capture: four
+            # instances at 09:10:32/09:13:54/09:14:54/09:15:56 with uptimes 14.125/10.750/9.453/
+            # 10.093 offered THREE estimates - 09:13:43, 09:14:44, 09:15:45 - each one its own
+            # instance's value attached to the instance BEFORE it, with 09:10:18 missing. A per-day
+            # log therefore under-reports its boots by one and mis-attributes the rest; on a real
+            # guest the first boot was only recovered because the watchdog's own log and System
+            # 6013 happened to corroborate it.
+            if re.match(r"Log started, module name:", msg):
+                lf.inits.append({"ts": ts, "pid": None, "uptime_s": None, "boot_time": None,
+                                 "session": None, "version": None})
             mm = re.match(r"Running as user: .*, process ID: (\d+)", msg)
             if mm:
                 lf.pid = int(mm.group(1))
-                # A NEW init record is a NEW PROCESS in this file, not an update to the old one.
-                lf.inits.append({"ts": ts, "pid": lf.pid, "uptime_s": None, "boot_time": None,
-                                 "session": None, "version": None})
+                # A NEW init record is a NEW PROCESS in this file, not an update to the old one - but
+                # only open one here if "Log started" did not already (a rotated file can begin
+                # mid-block, and then the pid line is the first thing seen).
+                if not lf.inits or lf.inits[-1]["pid"] is not None:   # GUARD:initopen DEFECT: if True:
+                    lf.inits.append({"ts": ts, "pid": lf.pid, "uptime_s": None, "boot_time": None,
+                                     "session": None, "version": None})
+                else:
+                    lf.inits[-1]["pid"] = lf.pid
             mm = re.match(r"System uptime: ([\d.]+) seconds", msg)
             if mm:
                 lf.uptime_s = float(mm.group(1))
@@ -1313,13 +1339,15 @@ def cluster_boots(files, phase_off=None):
     for t, lf, exact in est:
         if boots and abs((t - boots[-1]["times"][-1]).total_seconds()) <= BOOT_TOL_S:   # GUARD:boottol DEFECT: if boots and abs((t - boots[-1]["times"][-1]).total_seconds()) <= 150:
             boots[-1]["times"].append(t)
+            if exact:
+                boots[-1]["exact"].append(t)
         elif exact:
-            boots.append({"times": [t]})
+            boots.append({"times": [t], "exact": [t]})
         elif boots:
             near = min(boots, key=lambda b: min(abs((x - t).total_seconds()) for x in b["times"]))
             near["times"].append(t)          # imprecise: joins, never opens
         else:
-            boots.append({"times": [t]})
+            boots.append({"times": [t], "exact": []})
     # ONE BOOT, TWO PHASES, ONE CLUSTER. Estimates from the same boot that were stamped either side
     # of the clock correction sit ~offset apart; merging them is what stops a boot being counted
     # twice. Only pairs separated by the MEASURED correction (within the same tolerance the
@@ -1360,6 +1388,34 @@ def cluster_boots(files, phase_off=None):
             # correction would otherwise be assigned to a boot three hours from its own.
             _c = [lf.boot_time] + ([lf.boot_time - dt.timedelta(seconds=off)] if off else [])
             lf.boot = min(boots, key=lambda b: min(abs((b["time"] - x).total_seconds()) for x in _c))["id"]
+    # HOW FAR A BOOT MAY REACH FORWARD TO CLAIM A LINE STAMPED BEFORE IT.
+    #
+    # It exists only to absorb the error in a boot ESTIMATE: a cluster's representative time can sit
+    # a little after the true boot instant (a System 6005 estimate is "eventlog start - 45 s" and can
+    # be tens of seconds out), and then the first lines of that boot precede their own boot and would
+    # fall into the previous one. It is NOT licence to claim a line from before a boot that had not
+    # happened yet.
+    #
+    # It was a flat 150 s, and that is bigger than the gap between consecutive boots on this rig.
+    # MEASURED on win10-clean, package 38857675399, 2026-10-16: four boots at 09:10:09, 09:13:43,
+    # 09:14:45, 09:15:40 - 214 s, 62 s and 55 s apart - with ONE agent instance each, every one
+    # starting ~10 s into its boot (LogInit uptimes 14.1, 10.8, 9.5, 10.1 s) and every one exiting
+    # "QGAEXIT ... an expected exit, not a failure". Because the window reached 150 s FORWARD and the
+    # loop keeps the LAST boot it admits, boots 2, 3 and 4 all claimed the instance that preceded
+    # them, three of the four landed in boot 4, and agent_instances_per_boot read 3 against a max of
+    # 1. The owner asked whether the agent was restarting three times a boot. It was not; the grader
+    # said so. That is the third time this metric has been manufactured by attribution (see
+    # cluster_boots' tolerance note and the clock-phase note below), so the bound is now DERIVED:
+    #   * never more than BOOT_TOL_S - two estimates further apart than that are DIFFERENT boots by
+    #     this function's own clustering rule, so reaching further contradicts it;
+    #   * never more than half the gap to the next boot - a line is never pulled past the midpoint
+    #     between two boots, whatever the spacing happens to be.
+    def _fwd_allow(i):
+        allow = float(BOOT_TOL_S)
+        if i + 1 < len(boots):
+            allow = min(allow, (boots[i + 1]["time"] - boots[i]["time"]).total_seconds() / 2.0)
+        return max(allow, 0.0)
+
     def boot_for(ts):
         # A LINE'S TIMESTAMP CAN BE IN EITHER CLOCK PHASE, so both are tried and the line is
         # attributed to the boot it most closely FOLLOWS. Without this, every line stamped before the
@@ -1371,14 +1427,19 @@ def cluster_boots(files, phase_off=None):
         cands = [ts]
         if off:
             cands.append(ts - dt.timedelta(seconds=off))   # GUARD:bootphase DEFECT: pass
-        best_dist, best_id = None, 0
+        best_key, best_id = None, 0
         for c in cands:
             cur, dist = 0, None
-            for b in boots:
-                if b["time"] <= c + dt.timedelta(seconds=150):
+            for i, b in enumerate(boots):
+                if b["time"] <= c + dt.timedelta(seconds=_fwd_allow(i)):   # GUARD:fwdallow DEFECT: if b["time"] <= c + dt.timedelta(seconds=150):
                     cur, dist = b["id"], (c - b["time"]).total_seconds()
-            if cur and (best_dist is None or dist < best_dist):
-                best_dist, best_id = dist, cur
+            # A LINE THAT SITS AFTER A BOOT BEATS ONE THAT ONLY FITS INSIDE THE ALLOWANCE. Comparing
+            # raw distances preferred the SMALLEST, and a boot admitted by the allowance has a
+            # NEGATIVE distance - so the phase that put the line before a boot always won.
+            if cur:
+                key = (dist < 0, abs(dist))
+                if best_key is None or key < best_key:
+                    best_key, best_id = key, cur
         return best_id
     for lf in files:
         # A FILE'S BOOT IS ONLY THE FILE'S WHEN THE FILE IS ONE PROCESS. With one file per module per

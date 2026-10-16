@@ -225,6 +225,31 @@ CF_LINES = (agent(1000, t0="100031.200", uptime="31.200", announce=True,
 CF = [("gui-agent-20261007.log", "agent", CF_LINES)]
 ev_flip = ["EV NONE [Microsoft-Windows-TaskScheduler/Operational]"]
 write("clockflip.pull", stream(CF, ev_flip))
+# rapidboot: FOUR BOOTS CLOSER TOGETHER THAN THE FORWARD ATTRIBUTION WINDOW, one agent instance each.
+# This is the MEASURED geometry of win10-clean under package 38857675399 on 2026-10-16: boots 214 s,
+# 62 s and 55 s apart, each instance starting ~10-20 s into its own boot (real LogInit uptimes 14.125,
+# 10.750, 9.453, 10.093 s), each exiting "an expected exit, not a failure". boot_for() reached 150 s
+# FORWARD and kept the LAST boot it admitted, so boots 2, 3 and 4 each claimed the instance that ran
+# BEFORE them, three of the four landed in boot 4, and agent_instances_per_boot read 3 against a max
+# of 1 - with the owner asking whether the agent was restarting three times a boot. It was not.
+# Every number below is that capture's, so nothing here is a shape I invented.
+# The prefix must carry pid:tid, because that is what the instance split keys on and what the
+# patched logger writes; this block predates wu2(), so it spells the prefix out itself.
+def _rb(pid, t0, uptime, texit):
+    p = lambda t, f, m: "[%s.%s-%d:%d-I] %s: %s" % (D, t, pid, pid + 4, f, m)
+    L = [p(t0, "LogInit", "Log started, module name: gui-agent"),
+         p(t0, "LogInit", "System uptime: %s seconds" % uptime),
+         p(t0, "LogInit", "Running as user: SYSTEM, process ID: %d" % pid),
+         p(t0, "LogInit", "Module version: 4.3.36.977"),
+         p(t0, "LogInit", "Session: 1")]
+    if texit:
+        L.append(p(texit, "WinMain", "QGAEXIT exiting with 0x20514703 (the session is ending "
+                                     "(WM_ENDSESSION)) - an expected exit, not a failure"))
+    return L
+RB = [("gui-agent-20261007.log", "agent",
+       _rb(3824, "091032.353", "14.125", "091243.431") + _rb(3844, "091354.000", "10.750", "091358.000")
+       + _rb(3864, "091454.000", "9.453", "091525.000") + _rb(3884, "091556.000", "10.093", None))]
+write("rapidboot.pull", stream(RB, ["EV NONE [Microsoft-Windows-TaskScheduler/Operational]"]))
 # taskok: ONE task that COMPLETED with return code 0 and ONE that genuinely failed to launch, so the
 # difference between "ran" and "failed" is what the metric is driven on. Without this the taskrc knob
 # could not be driven by the suite at all - no other fixture carries a TaskScheduler 201.
@@ -435,7 +460,7 @@ analyze(){ # $1=analyzer $2=logsdir $3=baseline $4=judge $5=tag -> rc; report at
 field(){ python3 -c "import json,sys; r=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$1" "$2"; }
 
 # ---- decode every fixture with the real decoder --------------------------------------------------------------------
-for f in base newsig rise three stoperr empty twoboot clockflip taskok vchanwd phaseflip skipnames skipchatty bootshut inv twoproc msiok msibad; do
+for f in base newsig rise three stoperr empty twoboot clockflip rapidboot taskok vchanwd phaseflip skipnames skipchatty bootshut inv twoproc msiok msibad; do
   rc=$(decode "$SRC" "$T/$f.pull" "$T/$f")
   [ "$rc" = 0 ] || { echo "FATAL: the $f fixture did not decode (rc=$rc): $(tail -2 "$T/$f.decode.txt")"; exit 2; }
   # EVERY LINE IN THESE CORPORA IS WRITTEN BY THIS TEST, so the run declares the errors it caused - which is
@@ -1024,6 +1049,26 @@ off=$(field "$T/t36.json" 'r["header"]["clock_offset_s"]')
 # knob clockphase boots=11; knob allinits boots=3 and instances_per_boot=5; knob bootphase
 # instances_per_boot=7. The shipped numbers were cross-checked by hand from the agent's own LogInit
 # uptime lines. Closing this gap means a fixture that carries two phases through the decoder.
+# ---- T36b BOOTS CLOSER TOGETHER THAN THE ATTRIBUTION WINDOW ------------------------------------
+# The grader must not invent a restart out of boot spacing. Four boots, one instance each; the
+# forward allowance is now derived (never past BOOT_TOL_S, never past the midpoint to the next boot)
+# instead of a flat 150 s that was wider than the 55 s gaps this rig actually produces.
+rc=$(analyze "$SRC" "$T/rapidboot" "$T/baseline.json" "$T/jev-expected.py" t36b)
+rbb=$(field "$T/t36b.json" 'r["header"]["boots"]')
+rbi=$(field "$T/t36b.json" 'r["metrics"]["agent_instances"]')
+rbp=$(field "$T/t36b.json" 'r["metrics"]["agent_instances_per_boot"]')
+[ "$rbb" = 4 ] && ok "T36b four boots 214/62/55 s apart are four boots (boots=$rbb)" \
+               || bad "T36b boots=$rbb, want 4"
+[ "$rbi" = 4 ] && ok "T36b all four agent instances are seen (agent_instances=$rbi)" \
+               || bad "T36b agent_instances=$rbi, want 4"
+[ "$rbp" = 1 ] && ok "T36b each lands in its OWN boot - no restart is invented (agent_instances_per_boot=$rbp)" \
+               || bad "T36b agent_instances_per_boot=$rbp, want 1"
+# SEEN TO FAIL: with the flat 150 s forward window back, the later boots claim the earlier instances.
+KF=$(knob fwdallow); rc=$(analyze "$KF" "$T/rapidboot" "$T/baseline.json" "$T/jev-expected.py" t36bk)
+rbpk=$(field "$T/t36bk.json" 'r["metrics"]["agent_instances_per_boot"]')
+[ "$rbpk" = 3 ] && ok "knob fwdallow: the flat 150 s window puts 3 of 4 instances in one boot (=$rbpk)" \
+                || bad "knob fwdallow: agent_instances_per_boot=$rbpk, want 3 - the case cannot be driven"
+
 K=$(knob allinits); rc=$(analyze "$K" "$T/clockflip" "$T/baseline.json" "$T/jev-expected.py" t36a)
 ba=$(field "$T/t36a.json" 'r["header"]["boots"]')
 [ "$ba" = 1 ] && ok "knob allinits: with only the last init, a per-day file offers ONE boot (boots=$ba)" \
