@@ -1,5 +1,5 @@
 {
-  "note": "pristine base rebuilt rebuild-20261015-130658 from Win11_26300_English_x64.iso, PRIMER=1, no QWT",
+  "note": "pristine base rebuilt rebuild-20261015-171712 from Win11_26300_English_x64.iso, PRIMER=1, no QWT",
   "props": {
     "klass": "StandaloneVM",
     "maxmem": "8192",
@@ -7,14 +7,14 @@
     "vcpus": "4",
     "virt_mode": "hvm"
   },
-  "reseal_reason": "rebuilt from vendor media 2026-10-15 with the corrected answer files: the previous images forced RealTimeIsUniversal=1 in the specialize pass AND pinned a non-zero Setup zone - a pair that only worked together and was inherited by every clone, which made the acceptance gate measure our own forcing (RTIUFORCEDINIMAGES). Owner: 'redo from scratch, dont reuse'. See docs/ADR-clock.md",
-  "sealed_utc": "2026-10-15T13:53:50Z",
+  "reseal_reason": "rebuilt 2026-10-15 under the simplified clock design: the qube carries timezone=localtime from CREATE time so its hardware clock holds dom0 local from the first boot, the answer file gives the guest dom0's zone, and nothing writes RealTimeIsUniversal anywhere. See docs/ADR-clock.md",
+  "sealed_utc": "2026-10-15T18:48:04Z",
   "vm": "win11r-base",
   "volumes": {
     "private": {
       "revisions": [
-        "1792071669-back",
-        "1792072426-back"
+        "1792086326-back",
+        "1792090076-back"
       ],
       "revisions_to_keep": "2",
       "size": "21474836480",
@@ -22,12 +22,12 @@
     },
     "root": {
       "revisions": [
-        "1792071669-back",
-        "1792072426-back"
+        "1792086326-back",
+        "1792090076-back"
       ],
       "revisions_to_keep": "2",
       "size": "85899345920",
-      "usage": "17746804867"
+      "usage": "15590731284"
     }
   }
 }
