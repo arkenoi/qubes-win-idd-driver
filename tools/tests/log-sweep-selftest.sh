@@ -1281,7 +1281,6 @@ m="noflag=$(diff "$COLL" "$T/coll/noflag.ps1" | grep -c '^[<>]') noraw=$(diff "$
   && ok "T43 SEEN TO FAIL: without the flag '$vn'; without the raw count '$vr'" \
   || bad "T43 a defect copy passed (noflag='$vn' noraw='$vr') - the check proves nothing"
 
-echo "--- $pass passed, $fail failed; fixtures/outputs in $T"
 
 # --- T-CLOCK: A CHANNEL BOUNDARY IS NOT A CLOCK CORRECTION --------------------------------------
 # detect_clock_offset's rule is "a backward jump between consecutive lines of ONE FILE, which
@@ -1337,4 +1336,43 @@ sys.exit(1 if bad else 0)
 PYCLK
 if [ $? -eq 0 ]; then pass=$((pass+4)); else fail=$((fail+1)); fi
 
+# --- dom0_lost: a RECOVERABLE handoff attempt is not a loss, a real loss still is ----------------
+# MEASURED on win11-nfy 2026-10-16. "this message reaches nobody" is written at four sites, all in
+# NotifyHandoffToSession, all returning false to a caller that falls through to ConnUp - and one of
+# them breached notifications_lost at P1 one second before FWD_RTT ok=1 delivered the message.
+# The opposite error is just as bad and was also live: `NOTIFY defer` was absent from DOM0_SEND_RE,
+# so the deferral fix's own loss line ("cannot write ... notification LOST") counted as ZERO - a
+# loss path added to the product with the gate for lost notifications blind to it.
+python3 - "$ROOT/tools/log-sweep.py" <<'PYLOST'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("ls", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+class L:
+    def __init__(s, msg): s.msg, s.level = msg, "W"
+class F:
+    name = "bridge.log"
+    def __init__(s, msgs): s.lines = [L(x) for x in msgs]
+CASES = [
+ (0, "handoff no-user attempt",   "NOTIFY handoff: no user in session 2 - this message reaches nobody"),
+ (0, "handoff no console session","NOTIFY handoff: no active console session - this message reaches nobody"),
+ (0, "handoff schtasks /create",  "NOTIFY handoff: schtasks /create failed 2 - this message reaches nobody"),
+ (0, "handoff schtasks /run",     "NOTIFY handoff: schtasks /run failed 2 - this message reaches nobody"),
+ (1, "one-shot no connection",    "NOTIFY one-shot: no connection to dom0 - notification LOST summary=x"),
+ (1, "defer queue write failed",  "NOTIFY defer: cannot write C:\\x - notification LOST summary=x"),
+ (0, "deferred and queued",       "NOTIFY deferred: no route yet - queued as deferred-1.txt, the session bridge sends it summary=x"),
+ (1, "death not notified",        "DEATH #1 NOT notified: qwt-notify-error.ps1 is missing"),
+]
+bad = 0
+for want, label, msg in CASES:
+    got = len(m.dom0_lost([F([msg])]))
+    if got != want:
+        print("FAIL dom0_lost %-26s want=%d got=%d" % (label, want, got)); bad += 1
+sys.exit(1 if bad else 0)
+PYLOST
+if [ $? -eq 0 ]; then pass=$((pass+8)); else fail=$((fail+1)); fi
+
+# THE COUNT IS PRINTED AFTER THE LAST CHECK. It used to be emitted ~90 lines early, so every
+# block below it added passes that were never reported - the suite under-stated its own size,
+# and a new case appended at the end (dom0_lost, 2026-10-16) moved the total by nothing.
+echo "--- $pass passed, $fail failed; fixtures/outputs in $T"
 [ "$fail" = 0 ] && exit 0 || exit 1

@@ -279,7 +279,15 @@ DOM0_SEND_RE = re.compile(
     r"|QGAUACPENDING|QGASTARTDISMISS|qubes\.Notifications|qubes\.NotifyUpdates|qubes\.NotifyTools"
     r"|reported .* update|notify-error|listener-init|listener-denied|deslice-down|broker-died"
     r"|broker-missing|session-changed"
-    r"|NOTIFY one-shot|NOTIFY handoff")
+    # `NOTIFY defer` WAS MISSING, AND IT IS THE ONE PATH I ADDED. The deferral fix
+    # (NOTIFYLOSTINSESSIONGAP) introduced three lines - "NOTIFY deferred: no route yet ... queued
+    # as X", "NOTIFY defer: cannot write X - notification LOST", "NOTIFY defer-drain: X sent rc=N" -
+    # and none of them was in this dictionary, so dom0_lost() could not see any of them. The middle
+    # one is a REAL loss: the queue write failed, so the message is gone with nothing holding it.
+    # Driven 2026-10-16 against this very detector: it returned 0 for that line. I added a loss path
+    # to the product and left the gate for lost notifications blind to it - the same shape as
+    # count-the-producers, from the producing side.
+    r"|NOTIFY one-shot|NOTIFY handoff|NOTIFY defer")
 
 
 # A LINE THAT RECORDS A SEND HAVING HAPPENED, as opposed to one that configures the route or
@@ -306,6 +314,24 @@ DOM0_SEND_RE = re.compile(
 # connection to dom0 - notification LOST", was being reported as a user-visible failure.
 DOM0_SHOWN_RE = re.compile(r"\bsent\b|\bsend ok\b|user notification sent|shown to the user")
 DOM0_LOST_RE  = re.compile(r"notification LOST|reaches nobody|NOT notified")
+# A HANDOFF ATTEMPT IS NOT A LOSS, AND IT SAYS SO ONE SECOND BEFORE THE MESSAGE ARRIVES.
+# "this message reaches nobody" is written at exactly four sites, ALL inside
+# NotifyHandoffToSession (notifhost.cpp:3417/3422/3468/3475 - no console session, no user in the
+# session, schtasks /create, schtasks /run), and every one returns false to a caller that reads
+# `if (NotifyHandoffToSession(summary, body)) return 0;` - so a false return FALLS THROUGH to the
+# ConnUp path. MEASURED on win11-nfy 2026-10-16, consecutive lines in one bridge.log:
+#   16:48:18 [WARN]  NOTIFY handoff: no user in session 2 - this message reaches nobody
+#   16:48:19 [INFO]  FWD_RTT guest_id=0 seq=1 ms=27 ok=1
+#   16:48:19 [ERROR] NOTIFY one-shot: sent ok=1 summary=deferproof-manual
+# The message was delivered in 27 ms, `NOTIFY deferred` and `notification LOST` were both absent,
+# and this still breached notifications_lost=1 at P1 - the metric that exists to count messages the
+# user never got. The phrase itself stays in the pattern: a FINAL loss is free to use it, and the
+# six "notification LOST" sites and the "NOT notified" ones (no per-boot token, helper missing,
+# per-boot cap) are real and still counted. Only the handoff's recoverable attempt is skipped.
+# THE WORDING IS A PRODUCT DEFECT TOO - those four lines assert a delivery failure they cannot know
+# about yet - but fixing notifhost.cpp would invalidate the package under acceptance, so it is filed
+# (HANDOFFCLAIMSLOSSBEFOREFALLBACK) rather than changed here.
+HANDOFF_ATTEMPT_RE = re.compile(r"NOTIFY handoff:")
 DOM0_OUTCOME_RE = re.compile(DOM0_SHOWN_RE.pattern + "|" + DOM0_LOST_RE.pattern)
 DOM0_SENT_RE = DOM0_OUTCOME_RE   # kept: existing callers name it this
 
@@ -380,6 +406,8 @@ def dom0_lost(files):
         for l in getattr(lf, "lines", []):
             msg = getattr(l, "msg", "") or ""
             if not DOM0_SEND_RE.search(msg):
+                continue
+            if HANDOFF_ATTEMPT_RE.search(msg):   # GUARD:handoffnotloss DEFECT: if False:
                 continue
             if DOM0_LOST_RE.search(msg):
                 lost.append((lf.name, getattr(l, "level", None) or "?", msg))

@@ -128,6 +128,35 @@ variants would never run.
 
 ---
 
+## 6. 4.3.36 is cut on `core`, by owner override, and that is recorded as an override
+
+Owner, 2026-10-16 ("go 3"): cut on the `core` set - `package-verify win11-clean win11-upgrade
+notify-errors-guest-test log-sweep` - rather than the 18 this scheme computed as required.
+
+THE FACTS THE DECISION WAS TAKEN ON, all measured that day:
+
+* `gate-scope required` asks for the FULL 18 because 6 paths are UNMAPPED (`agent`, `core-agent`,
+  `protocol/run.py`, `protocol/selftest.sh`, `protocol/failproofs.json`,
+  `contrib/auto-qwt/qwt-ng-fix-qwcq`). The time floor is NOT what forced it: `0 release(s) and
+  9 day(s) since the last full gate (4.3.35)`.
+* **18 has never been reached.** Across the 23 `scratchpad/gate-coverage-*.json` receipts the
+  maximum ever recorded is 12. `gate-remainder` exists to close that 12 -> 18 gap and, on its first
+  live run, closed 1 of 6 - and not one of the five failures was a product defect (a missing build
+  artifact, a slice boundary, a gate counting the test's own notifications, and two baselines that
+  refused to attribute a later red).
+* The receipt is keyed per-HEAD and is not accumulated, so committing between runs discards
+  coverage. Assembling 18 requires one frozen sha for ~7 h of serial rig time.
+
+WHY IT IS AN OVERRIDE AND NOT A NEW RULE. This repository's standing rule is "full acceptance
+before release is a GATE - never downgrade to a partial check and ship". Section 3's floor is
+deliberately unchanged, so the next release still owes a full gate, and the floor also trips on any
+edit to `mgmt/gate-scope.json` - which is why narrowing the map (the obvious "fix") cannot take
+effect until a full 18-suite run has validated it. Nothing here makes `core` the bar; it records
+that one release was cut below the computed bar, with the reasons above on the record.
+
+Both routes to a genuine 18/18 are planned and DEFERRED under GATE18NEVERREACHED in
+findings/issues.md, with per-suite estimates.
+
 ## What this scheme does NOT protect against
 
 - **A pattern that maps too narrowly.** The closure catches a shared *file*; it cannot catch a change whose effect

@@ -80,6 +80,58 @@
    "result": "pass",
    "map_commit": "",
    "note": "the 8 install cells, the three feature tests and the notification test on release-package 37525894363; NO fault injection, and the log sweep did not exist yet - so NOT a full run under this scheme"
+  },
+  {
+   "version": "4.3.36",
+   "tag": "v4.3.36-agent7603457",
+   "package_run": "38889297394",
+   "date": "2026-10-16T17:11:09Z",
+   "range": "v4.3.35-agentf613dc3..8fe8828a51f70db536fb04476cdb6625c6f9390e",
+   "required": [
+    "package-verify",
+    "win10-clean",
+    "win10-reinstall",
+    "win10-upgrade",
+    "win10-appvm",
+    "win11-clean",
+    "win11-reinstall",
+    "win11-upgrade",
+    "win11-appvm",
+    "notify-errors-guest-test",
+    "crop-before-map",
+    "template-update",
+    "failproof-gates",
+    "failproof-faultinject",
+    "gate-preflight",
+    "p3a-etw-gate",
+    "toast-hold-test",
+    "log-sweep"
+   ],
+   "covered": [
+    "crop-before-map",
+    "gate-preflight",
+    "notify-errors-guest-test",
+    "package-verify",
+    "win10-appvm",
+    "win10-clean",
+    "win10-reinstall",
+    "win10-upgrade",
+    "win11-appvm",
+    "win11-clean",
+    "win11-reinstall",
+    "win11-upgrade"
+   ],
+   "full": false,
+   "result": "core-override: cut by owner decision 2026-10-16; 0 P1 product breaches; template-update log-sweep toast-hold-test p3a-etw-gate failproof-gates failproof-faultinject did NOT pass (instrument)",
+   "map_commit": "1976b9002704a1cce0776865e0958d4988e0403f",
+   "missing": [
+    "failproof-faultinject",
+    "failproof-gates",
+    "log-sweep",
+    "p3a-etw-gate",
+    "template-update",
+    "toast-hold-test"
+   ]
   }
  ]
 }

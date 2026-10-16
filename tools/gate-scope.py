@@ -293,8 +293,20 @@ def main() -> int:
         rec = {'version': a.version, 'tag': a.tag or '', 'package_run': a.run or '',
                'date': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), 'range': a.range,
                'required': res['suites'], 'covered': sorted(set(a.covered.split(','))),
-               'full': sorted(set(a.covered.split(','))) >= sorted(set(m['full']['suites'])) or
-                       set(m['full']['suites']) <= set(a.covered.split(',')),
+               # A SUPERSET TEST, NOT A LEXICOGRAPHIC LIST COMPARE. The first clause used to be
+               # `sorted(set(covered)) >= sorted(set(full))`, which compares two LISTS element by
+               # element as strings - so it answered "is this list alphabetically later", not "does
+               # it contain every required suite". MEASURED 2026-10-16 recording 4.3.36 with 12 of
+               # the 18 suites: the broken clause returned True, the correct one False, and six
+               # suites were missing (failproof-faultinject, failproof-gates, log-sweep,
+               # p3a-etw-gate, template-update, toast-hold-test). It was OR'd with the correct test,
+               # so it could only ever turn a partial release INTO a full one.
+               # WHAT THAT COSTS: `full` is what floor_state() reads to find the last full gate, and
+               # the floor (10 releases / 21 days / a failed full run / a map change) is the only
+               # thing that forces a full gate back. A partial release recorded as full resets that
+               # clock, so the debt disappears silently - which is how a release ships under-tested
+               # and nothing says so.
+               'full': set(m['full']['suites']) <= set(a.covered.split(',')),
                'result': a.result, 'map_commit': git('log', '-1', '--format=%H', '--', 'mgmt/gate-scope.json').strip()}
         led.setdefault('releases', []).append(rec)
         LEDGER.write_text(json.dumps(led, indent=1) + '\n')

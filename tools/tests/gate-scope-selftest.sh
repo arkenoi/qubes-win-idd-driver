@@ -212,5 +212,39 @@ if [ "${pon:-0}" -gt 0 ] && printf '%s' "$on" | grep -q 'win10-reinstall' &&
     ok "knob closure: with the closure off the shared helper no longer reaches the installer's suites - the check FAILS as required (on=$pon off=$poff)"
 else fail "knob closure: the knob did not change the verdict (on=${pon:-?} off=${poff:-?})" "ON: $(printf '%s' "$on" | head -3) || OFF: $(printf '%s' "$off" | head -3)"; fi
 
+# --- ledger-full: `full` IS A SUPERSET TEST, and nothing drove ledger-add until 2026-10-16 -------
+# `full` is what floor_state() reads to find the last FULL gate, and the floor is the only thing
+# that forces a full gate back. It was computed as
+#     sorted(set(covered)) >= sorted(set(full))  or  set(full) <= set(covered)
+# and the first clause compares two LISTS element-wise as strings - "is this alphabetically later",
+# not "does it contain everything". MEASURED recording 4.3.36 with 12 of 18 suites: the broken
+# clause returned True, so a partial release was written as a full gate and reset the 21-day clock.
+# No suite drove ledger-add at all, which is why a load-bearing field went unchecked.
+FULLSET=$(python3 -c "import json;print(','.join(json.load(open('$FX/mgmt/gate-scope.json'))['full']['suites']))" 2>/dev/null)
+PARTIAL=$(python3 -c "
+import json
+s=json.load(open('$FX/mgmt/gate-scope.json'))['full']['suites']
+print(','.join(sorted(s)[:max(1,len(s)-3)]))" 2>/dev/null)
+ledger_full_flag() {   # $1 = covered list -> the `full` value ledger-add wrote
+  run ledger-add --version "9.9.$2" --tag "v9.9.$2" --run 1 \
+      --range "$HKC..$HKC2" --covered "$1" --result selftest >/dev/null 2>&1
+  python3 -c "
+import json
+r=[x for x in json.load(open('$FX/mgmt/gate-ledger.json'))['releases'] if x.get('version')=='9.9.$2']
+print(str(bool(r and r[-1].get('full'))).lower() if r else 'norecord')"
+}
+n=$((n+1)); gf_partial=$(ledger_full_flag "$PARTIAL" 1)
+if [ "$gf_partial" = false ]; then
+  ok "ledger-full: coverage missing required suites is recorded full=false, so the floor still counts the debt"
+else fail "ledger-full: a PARTIAL coverage list was recorded full=$gf_partial - the floor would treat it as a full gate" "covered=$PARTIAL"; fi
+n=$((n+1)); gf_all=$(ledger_full_flag "$FULLSET" 2)
+if [ "$gf_all" = true ]; then
+  ok "ledger-full: complete coverage IS recorded full=true - the test is a superset check, not a refusal"
+else fail "ledger-full: complete coverage was recorded full=$gf_all" "covered=$FULLSET"; fi
+n=$((n+1))
+if [ "$gf_partial" != "$gf_all" ]; then
+  ok "SEEN TO FAIL: the flag tracks coverage (partial=$gf_partial vs complete=$gf_all); the lexicographic compare gave true for both"
+else fail "SEEN TO FAIL: partial and complete coverage recorded the SAME flag ($gf_partial)" "the superset test is inert"; fi
+
 say "--- $n check(s), $( [ $bad -eq 0 ] && echo 0 || echo 'at least 1') failed; fixtures and outputs in $OUT"
 exit $bad

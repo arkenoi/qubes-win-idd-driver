@@ -21,26 +21,39 @@ Anywhere this README says "stock", it means unmodified upstream QWT 4.2.2 as shi
 
 ## Download
 
-Release **[v4.3.35-agentf613dc3](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.35-agentf613dc3)** — agent `f613dc3`, package `4.3.35`, built from commit `9478cae`. See
-[`docs/RELEASE-NOTES-4.3.35.md`](docs/RELEASE-NOTES-4.3.35.md) for what changed and what was
-verified: the Windows Update agent is installed even while an update check is running; the hidden Windows Start menu no longer
-takes clicks; an app's first notification reaches dom0 once instead of twice; the account autologon uses no longer expires; dom0
-notifications stay by kind (errors until dismissed, warnings 60 s, information 20 s); and the windowed desktop no longer covers
-the screen. The full matrix — clean install, same-version reinstall, in-place upgrade from 4.3.33, and template→AppVM derivation
-with cold boots, on **both Windows 10 and Windows 11** — passed against this exact package, both feature tests passed, and the
-same package passed the template update test on the field reporter's environment.
+Release **[v4.3.36-agent7603457](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.36-agent7603457)** — agent `7603457`, package `4.3.36`, built from commit `8fe8828a`. See
+[`docs/RELEASE-NOTES-4.3.36.md`](docs/RELEASE-NOTES-4.3.36.md) for what changed and what was
+verified. The largest change is the guest clock: a Windows qube used to be pinned to UTC and so showed the wrong wall-clock time,
+while our own clock task "corrected" the same offset on every boot — and on Xen each of those corrections wrote a per-VM RTC
+offset that survived a restart. The qube now takes dom0's timezone and the matching hardware-clock convention. A notification
+raised when it has no way out to dom0 is now kept on disk and sent by the first process that has a route, instead of being
+discarded; and the same guest death is no longer reported to you twice.
+
+**What was verified, and what was not.** The matrix — clean install, same-version reinstall, in-place upgrade, and
+template→AppVM derivation with cold boots, on **both Windows 10 and Windows 11** — ran against this exact package with **no P1
+breach**, and dom0's two callers (the updater and the Start menu) answered correctly on six cells, including from a **cold
+qube**. The updater completed a real Windows Update pass on the field reporter's German 25H2 template: dom0's
+updates-available went from one to none, five hotfixes installed, exactly one reboot. A dom0 notification was photographed on
+the desktop.
+
+Not verified, and said plainly: five of the eighteen suites this diff requires could not produce a verdict — for instrument
+reasons rather than product ones — so this release is cut on the smaller `core` set by a deliberate decision recorded in
+[`docs/ADR-acceptance.md`](docs/ADR-acceptance.md) section 6, not because the full gate was met. The notification-deferral and
+death-deduplication fixes above are in the build, but the conditions they guard never occurred during acceptance, so neither is
+a field measurement. One known issue: on a fully updated guest a scan-only Windows Update pass can flip dom0's
+updates-available back to "available"; the cause is not yet established.
 
 | file | use it for |
 |---|---|
-| [`qubes-windows-tools-ng-4.3.35-1.agentf613dc344d9e.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.35-agentf613dc3/qubes-windows-tools-ng-4.3.35-1.agentf613dc344d9e.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and runs nothing in dom0 |
-| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.35-agentf613dc3/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
-| [`qubes-tools-4.3.35.exe`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.35-agentf613dc3/qubes-tools-4.3.35.exe) | the installer on its own, if you already have a way to get a file into the guest |
-| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.35-agentf613dc3/SHA256SUMS.txt) | checksums for all of them |
+| [`qubes-windows-tools-ng-4.3.36-1.agent7603457c1da8.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.36-agent7603457/qubes-windows-tools-ng-4.3.36-1.agent7603457c1da8.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and runs nothing in dom0 |
+| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.36-agent7603457/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
+| [`qubes-tools-4.3.36.exe`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.36-agent7603457/qubes-tools-4.3.36.exe) | the installer on its own, if you already have a way to get a file into the guest |
+| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.36-agent7603457/SHA256SUMS.txt) | checksums for all of them |
 
 The dom0 RPM is unsigned, so `qubes-dom0-update` will refuse it; install it directly:
 
 ```
-sudo rpm -i qubes-windows-tools-ng-4.3.35-1.agentf613dc344d9e.noarch.rpm
+sudo rpm -i qubes-windows-tools-ng-4.3.36-1.agent7603457c1da8.noarch.rpm
 ```
 
 With the RPM in place, dom0 can attach the media itself — `qvm-start <vm> --install-windows-tools`
@@ -49,24 +62,25 @@ hands the guest exactly this ISO as a CD.
 Upgrading a guest that already runs stock QWT or an older build of this package is a
 plain in-place upgrade — run the installer, it detects the older version and lets the
 MSI replace it in one transaction. Validated end to end for an upgrade **from an older
-build of this package** — 4.3.35's acceptance upgraded a 4.3.33 guest in place on both
-Windows 10 and Windows 11. An upgrade from **stock QWT 4.2.2** uses the same unchanged
+build of this package** — 4.3.36's acceptance ran the in-place upgrade cell on both
+Windows 10 and Windows 11, with no P1 breach. An upgrade from **stock QWT 4.2.2** uses the same unchanged
 MSI machinery but has not been exercised on our testbed since August 2026, because the
 test images themselves carry a newer build.
 
 **Hand-created qube?** Run `qvm-features <qube> vmexec 1` and `qvm-prefs <qube> qrexec_timeout 1800`
 in dom0 (on the template; AppVMs inherit), or the Qubes Update tool fails against it.
 
-**What changed in 4.3.35 — the field reporter's two defects, and notifications shown once.** On a German Windows 11 25H2 template
-an upgrade could quietly keep the previous Windows Update agent when the template's own update check was running; the installer now
-waits for that check and then installs the agent, and a failed install is reported to dom0 in plain words. With a third-party
-start menu or Shift+Win, Windows opened its own Start menu invisibly in seamless mode, taking clicks; it is now closed at once. With
-the notification bridge on, an app's first notification no longer reaches dom0 twice: the agent keeps the guest's banner off the
-screen until the bridge has decided where it goes (one known case remains - see the notes). The account autologon signs in with is
-set never to expire, notifications stay on screen by kind, the windowed desktop keeps its windowed size (a 4.3.33/4.3.34
-regression), and the GUI agent sends its protocol version before anything else. Full story in
-[`docs/RELEASE-NOTES-4.3.35.md`](docs/RELEASE-NOTES-4.3.35.md); earlier releases:
-[4.3.34](docs/RELEASE-NOTES-4.3.34.md), [4.3.33](docs/RELEASE-NOTES-4.3.33.md), [4.3.32](docs/RELEASE-NOTES-4.3.32.md).
+**What changed in 4.3.36 — the guest's clock, a notification that is kept instead of dropped, and a death reported once.**
+A Windows qube was created with its hardware clock declared UTC while the zone inside the guest stayed as the image shipped it,
+so every application showed the wrong time for anyone not living on UTC — and our per-boot clock task then re-applied the same
+correction on every start, each write persisting a per-VM RTC offset on the host that survived a restart. The qube now takes
+dom0's timezone and the matching convention, settled late in the install where qubesdb is readable, and a timezone you set
+deliberately is reported rather than overwritten. A notification raised while there is no route to dom0 — at shutdown, most
+often — used to be discarded with no record of which one; it is now written to disk and sent by the first process that has a
+route, exactly once. The same guest death is no longer reported twice across a reboot, and the reporter asks Windows whether it
+is shutting down instead of inferring it. Full story, including what was *not* verified, in
+[`docs/RELEASE-NOTES-4.3.36.md`](docs/RELEASE-NOTES-4.3.36.md); earlier releases:
+[4.3.35](docs/RELEASE-NOTES-4.3.35.md), [4.3.34](docs/RELEASE-NOTES-4.3.34.md), [4.3.33](docs/RELEASE-NOTES-4.3.33.md), [4.3.32](docs/RELEASE-NOTES-4.3.32.md).
 
 **Provenance.** Every asset above is built by GitHub Actions from this repository at the tagged
 commit; the agent is `f613dc3` on

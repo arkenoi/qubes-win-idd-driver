@@ -78,7 +78,13 @@ g(){ grep -a "^$1 " "$T/out.txt" | head -1 | cut -d' ' -f2-; }
 # actually shown) and three he did not (a failed send, a refused connection, a handoff that
 # reaches nobody). They are different defects and they are counted separately now.
 ck "only what the user SAW counts as loud"                "2" "$(g LOUD)"
-ck "and what he did NOT see counts as lost"               "3" "$(g LOSTN)"
+# 2, NOT 3: the planted "NOTIFY handoff: ... reaches nobody" is an ATTEMPT, not a loss. MEASURED
+# on win11-nfy 2026-10-16 - that line is followed one second later by "FWD_RTT ok=1" and
+# "NOTIFY one-shot: sent ok=1", because NotifyHandoffToSession returns false to a caller that
+# falls through to ConnUp. It breached notifications_lost at P1 over a message that arrived.
+# Nothing is lost by skipping it: every handoff failure is followed by the real outcome - a send,
+# a deferral, or "notification LOST" - and the two genuine LOST lines here still count.
+ck "and what he did NOT see counts as lost"               "2" "$(g LOSTN)"
 ck "a SUCCESSFUL send IS loud - the user saw it"          "0" "$(g SUCCESS_EXCLUDED)"
 # this one fooled a hand-written classifier: it matches the dictionary (its args name a
 # notify-errors path) but is written at INFO, because it is a launch, not a failed send.
@@ -130,7 +136,7 @@ cmp = m.compare({}, {"thresholds": {}}, {"notifications_lost": len(m.dom0_lost([
 print("LOSTBREACH", len(cmp["breaches"]))
 PYSPLIT
 ck "a DELIVERED failure counts as seen"                 "1" "$(grep -a '^SHOWN ' "$T/split.txt" | cut -d' ' -f2)"
-ck "the two LOST shapes count as lost, not as seen"     "2" "$(grep -a '^LOST ' "$T/split.txt" | cut -d' ' -f2)"
+ck "a genuine loss counts as lost, a handoff ATTEMPT does not" "1" "$(grep -a '^LOST ' "$T/split.txt" | cut -d' ' -f2)"
 ck "the seen metric contains no LOST line"              "SHOWN_HAS_LOST 0" "$(grep -a '^SHOWN_HAS_LOST' "$T/split.txt")"
 ck "the lost metric contains no delivered line"         "LOST_HAS_SHOWN 0" "$(grep -a '^LOST_HAS_SHOWN' "$T/split.txt")"
 ck "notifications_lost is P1 with a zero threshold"     "LOSTMETRIC 0 P1" "$(grep -a '^LOSTMETRIC' "$T/split.txt")"
