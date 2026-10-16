@@ -54,6 +54,7 @@ cell-coverage-selftest.sh
 ci-state-selftest.sh
 console-window-check-selftest.sh
 coverage-receipt-selftest.sh
+death-reporter-selftest.sh
 dirty-union-selftest.sh
 dom0-callers-selftest.sh
 exit-decision-coverage-selftest.sh
@@ -63,6 +64,7 @@ gate-scope-selftest.sh
 grade-noise-selftest.sh
 grade-receipt-selftest.sh
 launch-determination-selftest.sh
+log-sweep-selftest.sh
 logsweep-rotation-placeholder-selftest.sh
 logvol-guesttext-selftest.sh
 logvol-level-reaches-gate-selftest.sh

@@ -272,21 +272,20 @@ $rB = & $script:RealNearProbe ([DateTime]::new(2001,  1,  1,  0,  0,  0, [DateTi
 Check 'near-probe: the verdict is the SYSTEM STATE, not a function of $at (same answer, 25 years apart, different Kind)' `
       ($rA -eq $true -and $rB -eq $true) "rA=$rA rB=$rB"
 
-# THE SESSION MARK: written while the shutdown is seen, consumed and cleared on the next start.
-$mp = & $script:QwtShutdownMarkPath
-Remove-Item $mp -Force -ErrorAction SilentlyContinue
-$script:QwtPrevSessionEndedInShutdown = $false
-$script:QwtShuttingDownMetric = { return 1 }
-[void](& $script:RealNearProbe ([DateTime]::UtcNow))
-Check 'session mark: seeing the shutdown leaves a mark for the run that reads the backlog' (Test-Path $mp)
+# THE PROBE IS THE LIVE KERNEL STATE AND NOTHING ELSE. The cross-boot session mark is gone with the
+# cross-boot backlog read (owner 2026-10-16: reading it is "misleading and overreaching"), so there
+# is no second input left that could excuse a record this process did not witness.
 $script:QwtShuttingDownMetric = { return 0 }
-$script:QwtPrevSessionEndedInShutdown = $true     # as a fresh start would set it, having consumed the mark
-$rb = & $script:RealNearProbe ([DateTime]::UtcNow)
-Check 'session mark: after the reboot the metric is clear, but the ended session still explains the backlog' ($rb -eq $true) "probe=$rb"
-$script:QwtPrevSessionEndedInShutdown = $false    # a session that did NOT end in a shutdown
 $rc2 = & $script:RealNearProbe ([DateTime]::UtcNow)
-Check 'session mark: with no mark consumed and the metric clear, a death is REPORTED' ($rc2 -eq $false) "probe=$rc2"
-Remove-Item $mp -Force -ErrorAction SilentlyContinue
+Check 'probe: a clear metric means NO shutdown - a death is REPORTED' ($rc2 -eq $false) "probe=$rc2"
+$script:QwtShuttingDownMetric = { return 1 }
+$rc3 = & $script:RealNearProbe ([DateTime]::UtcNow)
+Check 'probe: the metric set means the system IS going down' ($rc3 -eq $true) "probe=$rc3"
+$script:QwtShuttingDownMetric = { return $null }
+$rc4 = & $script:RealNearProbe ([DateTime]::UtcNow)
+Check 'probe: no answer is NEVER a silence' ($null -eq $rc4) "probe=$rc4"
+Check 'probe: the cross-boot mark is gone, not wired to a constant' `
+      ($null -eq (Get-Variable -Name QwtPrevSessionEndedInShutdown -Scope Script -ErrorAction SilentlyContinue))
 
 # --- A LIVE-NOTIFIED RECORD IS NEVER SENT AGAIN, AND NOTHING BELOW IT IS SKIPPED ----------------
 # MEASURED on win10-reinstall, run 38787325142: TaskScheduler record 345 was notified at 20:04:59,
@@ -324,33 +323,52 @@ Check 'notified set SEEN TO FAIL: with nothing recorded, 345 reads as unseen and
       ((-not (Test-QwtDeathAlreadyNotified -Channel $CH -RecordId 345 -Marks $m)) -and (345 -gt [long]$m[$CH]))
 Remove-Item -LiteralPath $wmp -Force -ErrorAction SilentlyContinue
 
-# THE BACKLOG CASE, which the live metric cannot see. MEASURED on win10-clean, acceptance run
-# 38815268798: three tasks reaped by a shutdown were reported to the user on the NEXT boot, because
-# the reporter is event-triggered and Task Scheduler refuses to launch it while the system goes
-# down - "catch-up: record 285 was never reported (its trigger could not run) - reported now".
-# So the metric reads 0 and no mark was written, because nothing of ours was alive to write one.
+# THE PREVIOUS BOOT'S BACKLOG IS NOT READ AT ALL. Owner 2026-10-16: reporting it "is misleading and
+# overreaching". The boundary is the per-boot token - a VOLATILE registry value, dropped by the
+# kernel at shutdown - compared against the one stamped into the watermark when it was written. No
+# clock is involved, which matters because this guest's clock is corrected mid-boot.
+#
+# This also RETIRES the excuse that used to live here. The pass previously inferred, from a record's
+# mere presence in the backlog, that a shutdown had reaped it; that inference is what put "The PV
+# NIC setup task failed" in front of the user on win10-clean (run 38815268798, three tasks, next
+# boot). With nothing from another boot read, there is no record to excuse and no inference to make.
+Remove-Item -LiteralPath $wmp -Force -ErrorAction SilentlyContinue
+# Drive the REAL accessor through the variable it honours. An earlier version of this block defined
+# its own Get-QwtNotifyBootStamp, which shadowed it for the rest of the file and broke the per-boot
+# ledger's own "a new boot restarts the count" checks 200 lines further down.
+$_bsSave = $script:QwtNotifyBootStamp; $_bcSave = $script:QwtNotifyBootCached
+$script:QwtNotifyBootStamp = 4242; $script:QwtNotifyBootCached = $null
+[void](Write-QwtDeathWatermark -Marks @{ $CH = 100 })
+$m = Read-QwtDeathWatermark
+Check 'boot boundary: the watermark records the boot it was written under' `
+      ([long]$m[$script:QwtDeathBootKey] -eq 4242) "boot=$($m[$script:QwtDeathBootKey])"
+Check 'boot boundary: the same boot IS this boot - the mark is honoured' (Test-QwtDeathMarkIsThisBoot $m)
+$script:QwtNotifyBootStamp = 9999; $script:QwtNotifyBootCached = $null   # as the next boot would mint it
+Check 'boot boundary: a watermark from ANOTHER boot is not this boot - nothing below it is replayed' `
+      (-not (Test-QwtDeathMarkIsThisBoot $m))
+$script:QwtNotifyBootStamp = $null; $script:QwtNotifyBootCached = $null  # no boot identity at all
+Check 'boot boundary: no token is NOT this boot - an unprovable claim never becomes a notification' `
+      (-not (Test-QwtDeathMarkIsThisBoot $m))
+$script:QwtNotifyBootStamp = 4242; $script:QwtNotifyBootCached = $null
+Check 'boot boundary: a watermark with no boot stamp at all is not this boot' `
+      (-not (Test-QwtDeathMarkIsThisBoot @{ $CH = 100 }))
+Check 'boot boundary: an unreadable watermark is not this boot' (-not (Test-QwtDeathMarkIsThisBoot $null))
+$script:QwtNotifyBootStamp = $_bsSave; $script:QwtNotifyBootCached = $_bcSave
+Remove-Item -LiteralPath $wmp -Force -ErrorAction SilentlyContinue
+# AND THE REAP EXCUSE NO LONGER EXISTS. The same record that used to be ignored because it was "in
+# the backlog" is now simply never read; judged on its own, with the metric clear, it is a death.
 $script:QwtShuttingDownMetric = { return 0 }
-$script:QwtPrevSessionEndedInShutdown = $false
-$script:QwtDeathInCatchUp = $false
-$rNorm = & $script:RealNearProbe ([DateTime]::UtcNow)
-Check 'backlog: outside the catch-up, a clear metric still means NO shutdown - a death is reported' ($rNorm -eq $false) "probe=$rNorm"
-$script:QwtDeathInCatchUp = $true
-$rCatch = & $script:RealNearProbe ([DateTime]::UtcNow)
-Check 'backlog: INSIDE the catch-up, the record is here because the trigger was refused - that IS the shutdown' ($rCatch -eq $true) "probe=$rCatch"
-$script:QwtDeathInCatchUp = $false
-# and the CODE is still required: the caller only consults this probe once the result names a reap,
-# so an ordinary crash found in the backlog is reported exactly as before.
 $script:QwtTaskEndedProbe = { param([string]$i) return $true }
-$script:QwtDeathInCatchUp = $true
-$ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesPvNic' '3221225477' $T0)   # 0xC0000005, a crash
-Check 'backlog: a CRASH code in the backlog is still a death - the code gates the excuse' ($ev.ours -eq $true -and $ev.ignore -ne $true) "ignore=$($ev.ignore)"
 $ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesPvNic' '2147943691' $T0)   # 0x8007050B, a reap
-Check 'backlog: a REAP code in the backlog is explained by the shutdown that refused the trigger' ($ev.ignore -eq $true) "ignore=$($ev.ignore) reason=$($ev.reason)"
-$script:QwtDeathInCatchUp = $false
-# SEEN TO FAIL: with the backlog context removed - the shipped behaviour - that same reap is
-# reported, which is exactly the three toasts win10-clean put in front of the user.
+Check 'no backlog excuse: with the metric clear a reap code is NOT silently excused' ($ev.ignore -ne $true) "ignore=$($ev.ignore)"
+$ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesPvNic' '3221225477' $T0)   # 0xC0000005, a crash
+Check 'no backlog excuse: a crash is a death, as it always was' ($ev.ours -eq $true -and $ev.ignore -ne $true) "ignore=$($ev.ignore)"
+# and while the kernel itself says the system is going down, the reap IS explained - that is the one
+# shutdown input left, and it needs no inference.
+$script:QwtShuttingDownMetric = { return 1 }
 $ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesPvNic' '2147943691' $T0)
-Check 'backlog SEEN TO FAIL: without the catch-up context the same reap is REPORTED to the user' ($ev.ignore -ne $true) "ignore=$($ev.ignore)"
+Check 'live shutdown: a reap seen WHILE the system goes down is still not a death' ($ev.ignore -eq $true) "ignore=$($ev.ignore) reason=$($ev.reason)"
+$script:QwtShuttingDownMetric = { return 0 }
 
 # SEEN TO FAIL: the measured case, against the body this replaced. On win10-clean the shutdown
 # record sat 224 s before the kill and the old window looked back 30 s, so it missed it and the
@@ -683,7 +701,7 @@ Reset-World
 # NOT \QwtDeathReporter: the reporter deliberately excludes its OWN task ("self"), so a 203 for it never
 # reached this class - the first draft of this row failed for exactly that reason, which is the check working.
 $st = Invoke-QwtDeathReport (New-Task 203 '\QubesPvNic' '2147943515' $T0)
-Check 'purge: a launch refused because a shutdown is in progress is ignored - the boot catch-up covers it' ($st -eq 'ignored' -and $script:launched.Count -eq 0)
+Check 'purge: a launch refused because a shutdown is in progress is ignored - a launch that did not happen is not a death' ($st -eq 'ignored' -and $script:launched.Count -eq 0)
 Check 'purge: that one needs no probe - the code itself says a shutdown is in progress' ((Get-DeathLog) -match '0x8007045B')
 Reset-World
 $st = Invoke-QwtDeathReport (New-Task 203 '\QubesAutologonGuard' '2147942402' $T0)
@@ -715,6 +733,58 @@ function Get-QwtNotifyBootStamp { return $null }
 $st = Invoke-QwtDeathReport (New-Crash 'gui-agent.exe' 6700 0xC0000409L $T0)
 CheckStatus 'no boot token: the reporter says failed:transport' $st 'failed:transport'
 Check 'no boot token: logged at ERROR, no ledger, no send' ((Get-DeathLog) -match '\[ERROR\] DEATH .*NO per-boot token' -and (Get-Ledger).Count -eq 0 -and $script:launched.Count -eq 0)
+
+# =====================================================================================================
+# 8. THE BOOT BOUNDARY, DRIVEN THROUGH THE REAL PASS. The checks above test the predicate; this one
+# runs Invoke-QwtDeathCatchUp itself, because the predicate being right proves nothing about whether
+# the pass consults it. Owner 2026-10-16: reading the previous boot's backlog "is misleading and
+# overreaching", so a watermark from another boot must report NOTHING and only re-seed.
+Reset-World
+# Section 7 left a Get-QwtNotifyBootStamp stub that returns $null for every caller. With that in
+# force the foreign-boot case below would pass because there is NO token at all, not because the
+# tokens DIFFER - the weaker reading, and not the one being tested. This restores the real
+# accessor's own first rule: the script variable wins.
+function Get-QwtNotifyBootStamp { if ($null -ne $script:QwtNotifyBootStamp) { return [long]$script:QwtNotifyBootStamp } return $null }
+$script:QwtNotifyBootStamp = 7777; $script:QwtNotifyBootCached = $null
+$CHB = 'Microsoft-Windows-TaskScheduler/Operational'
+# Two records of ours above the mark: a crash (a death on any reading) and a reap.
+$script:cuRecords = @(
+    [pscustomobject]@{ RecordId = 501; Xml = (New-Task 201 '\QubesPvNic' '3221225477' $T0) },
+    [pscustomobject]@{ RecordId = 502; Xml = (New-Task 201 '\QubesAutologonGuard' '2147943691' $T0) }
+) | ForEach-Object {
+    $o = $_
+    $o | Add-Member -MemberType ScriptMethod -Name ToXml -Value { return $this.Xml } -PassThru
+}
+function Get-WinEvent { param([hashtable]$FilterHashtable, [string]$LogName, [string]$FilterXPath, [int]$MaxEvents, $ErrorAction)
+    if ($LogName -ne $CHB) {
+        throw (New-Object System.Management.Automation.ErrorRecord((New-Object Exception 'No events were found'), 'NoMatchingEventsFound', 'ObjectNotFound', $null))
+    }
+    if ($MaxEvents -eq 1) { return @($script:cuRecords[-1]) }   # the "record the end only" read
+    return $script:cuRecords
+}
+$wmp2 = Get-QwtDeathWatermarkPath
+# A WATERMARK WRITTEN BY THE PREVIOUS BOOT'S OWN PASS, with its mark BELOW both records. It is
+# written WHILE that boot's token is current, because that is the only way one is ever produced -
+# Write-QwtDeathWatermark stamps the running boot, so a mark cannot be forged with a foreign token.
+Remove-Item -LiteralPath $wmp2 -Force -ErrorAction SilentlyContinue
+$script:QwtNotifyBootStamp = 4242; $script:QwtNotifyBootCached = $null
+[void](Write-QwtDeathWatermark -Marks @{ $CHB = 500 })
+$script:QwtNotifyBootStamp = 7777; $script:QwtNotifyBootCached = $null   # and then the guest rebooted
+$cu = Invoke-QwtDeathCatchUp
+Check 'catch-up: a watermark from another boot reports NOTHING' ($cu.reported -eq 0) "reported=$($cu.reported)"
+Check 'catch-up: and it examines nothing from that boot either' ($cu.scanned -eq 0) "scanned=$($cu.scanned)"
+Check 'catch-up: nothing was sent to the user' ($script:launched.Count -eq 0) "sent=$($script:launched.Count)"
+Check 'catch-up: it says so in the log, naming the boundary' ((Get-DeathLog) -match 'the watermark is from another boot')
+Check 'catch-up: and it re-seeds to the end of the channel, so the next pass starts there' `
+      ([long](Read-QwtDeathWatermark)[$CHB] -eq 502) "mark=$((Read-QwtDeathWatermark)[$CHB])"
+# THE SAME BOOT still scans - or the check above would pass with a pass that never reads anything.
+Reset-World
+$script:QwtNotifyBootStamp = 7777; $script:QwtNotifyBootCached = $null
+Remove-Item -LiteralPath $wmp2 -Force -ErrorAction SilentlyContinue
+[void](Write-QwtDeathWatermark -Marks @{ $CHB = 500 })   # stamped 7777: the boot that is running
+$cu2 = Invoke-QwtDeathCatchUp
+Check 'catch-up: a watermark from THIS boot is read - the pass is not inert' ($cu2.scanned -eq 2) "scanned=$($cu2.scanned)"
+Remove-Item -LiteralPath $wmp2 -Force -ErrorAction SilentlyContinue
 
 Microsoft.PowerShell.Utility\Write-Host "$($script:run) checks, $($script:fail) failed"
 Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue

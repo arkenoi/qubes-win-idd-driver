@@ -550,24 +550,12 @@ public static extern int GetSystemMetrics(int nIndex);
 # suite can drive the PROBE'S OWN BODY while stubbing only the thing that cannot run off Windows.
 # Stubbing the probe instead is what let three defects live inside it untested.
 $script:QwtShuttingDownMetric = { try { return [Qwt.Sd]::GetSystemMetrics(0x2000) } catch { return $null } }
-# AND THE SESSION THAT ALREADY ENDED. The live metric answers for deaths this process SEES during
-# the shutdown, which is the measured case - but the reporter is reaped too, so some records are
-# only read on the next boot, when the shutdown is over and the metric reads clear. Inferring that
-# from the log is what failed three times, so the session states it instead: while the metric is
-# set, the reporter drops a mark; the next start CONSUMES that mark and clears it. One file, one
-# writer, one reader, cleared on startup - no window to tune, no record to correlate, and nothing
-# left behind to excuse a later session.
-# It cannot become a blanket amnesty: Test-QwtTaskEndedByShutdown only consults this probe once the
-# RESULT CODE already names a shutdown, so an ordinary crash is reported whatever the mark says.
-$script:QwtShutdownMarkPath = { Join-Path ([IO.Path]::GetTempPath()) 'qwt-session-shutdown.mark' }
-$script:QwtPrevSessionEndedInShutdown = $false
-try {
-    $mp = & $script:QwtShutdownMarkPath
-    if (Test-Path $mp) {
-        $script:QwtPrevSessionEndedInShutdown = $true
-        Remove-Item $mp -Force -ErrorAction SilentlyContinue   # consumed on startup, as designed
-    }
-} catch { }
+# THE CROSS-BOOT MARK IS GONE TOO. A mark dropped while the metric was set, and consumed by the
+# next start, existed for exactly one reader: the pass that read the previous boot's backlog. That
+# pass no longer reports, so the mark could only ever excuse a record from a boot that is over -
+# the overreach itself. It is DELETED rather than left wired to a constant: a predicate fed a
+# constant at its call site is inert, and this project has filed that defect four times.
+# One source of live shutdown evidence remains, and it is a kernel state read.
 # AND THE CASE THE LIVE METRIC CANNOT SEE AT ALL. The reporter is EVENT-TRIGGERED, and Task
 # Scheduler refuses to launch an action while the system is going down - this file documents that
 # two hundred lines below, with the measurement. So for the deaths that matter most, the reporter
@@ -580,24 +568,18 @@ try {
 # of mine rested on the live metric and was structurally unable to help here; the live case I had
 # measured - the reporter reporting one second before being reaped - was the exception.
 #
-# THE SURVIVING EVIDENCE NEEDS NO TIMESTAMPS. A record reaches the catch-up only because the live
-# path never saw it, and the live path misses a record only when its trigger was refused, which is
-# what Task Scheduler does while the system goes down. Pair that with a result code that already
-# NAMES a reap and the shutdown is established from state, not from correlating clocks. The code is
-# still required, so an ordinary crash in the backlog is reported exactly as before.
-$script:QwtDeathInCatchUp = $false
+# THAT INFERENCE IS GONE, AND SO IS THE NEED FOR IT. It read the record's own PRESENCE in the
+# backlog as proof that a shutdown had reaped it - "this record is here because the reporter could
+# not be launched, and only a shutdown refuses the launch". Owner, 2026-10-16: reading the previous
+# boot's backlog at all is "misleading and overreaching". Invoke-QwtDeathCatchUp now stops at the
+# boot boundary, so no record this process could not witness ever reaches a judgement, and the only
+# shutdown evidence left is the one that needs no inference: the live kernel state, plus a Task
+# Scheduler result code that NAMES the reap.
 $script:QwtShutdownNearProbe = {
     param([datetime]$at)   # kept for the caller's signature; a system state needs no instant
     $v = & $script:QwtShuttingDownMetric
-    if ($null -eq $v -and -not $script:QwtDeathInCatchUp) { return $null }   # no answer, never silence
-    if ($v -ne 0 -and $null -ne $v) {
-        # record it for the run that reads this session's backlog after the reboot
-        try { Set-Content -Path (& $script:QwtShutdownMarkPath) -Value 'shutting down' -ErrorAction SilentlyContinue } catch { }
-        return $true
-    }
-    if ($script:QwtPrevSessionEndedInShutdown) { return $true }
-    # the backlog case: this record is here BECAUSE the reporter could not be launched
-    if ($script:QwtDeathInCatchUp) { return $true }
+    if ($null -eq $v) { return $null }        # no answer, never silence
+    if ($v -ne 0) { return $true }
     return $false
 }
 # TASK SCHEDULER RESULT CODES THAT NAME THE SHUTDOWN AS THE CAUSE. These are not inferred from an
@@ -670,13 +652,11 @@ function Test-QwtTaskEndedByShutdown {
     if (-not $endedByEvent -and -not $codeSaysShutdown) { return 'not-ended' }
     $near = & $script:QwtShutdownNearProbe $at
     if ([bool]$near) {
-        # THE CATCH-UP'S OWN EVIDENCE IS NOT A BLANKET EXCUSE. Being in the backlog shows a
-        # shutdown refused the trigger, but event 111 is ALSO raised when a task exceeds its
-        # ExecutionTimeLimit - a genuine hang, which this reporter exists to surface. So in the
-        # backlog the RESULT CODE must name the reap as well; without it the death is reported,
-        # exactly as before. Caught by the suite: a 0xC0000005 crash found in the backlog was being
-        # ignored, which is the over-suppression this whole path must never introduce.
-        if ($script:QwtDeathInCatchUp -and -not $codeSaysShutdown) { return 'ended-not-shutdown' }
+        # The backlog bound that used to sit here is gone with the backlog read itself: event 111 is
+        # ALSO raised when a task exceeds its ExecutionTimeLimit - a genuine hang this reporter
+        # exists to surface - so a record nobody witnessed needed its result code to name the reap
+        # before it could be excused. Nothing from another boot is judged now, and $near is true
+        # only while the kernel itself says the system is going down.
         return 'shutdown'
     }
     return 'ended-not-shutdown'
@@ -940,12 +920,16 @@ function ConvertFrom-QwtDeathEvent {
                 # A LAUNCH WINDOWS REFUSED BECAUSE IT IS SHUTTING DOWN IS NOT A FAILING TASK. Measured
                 # 2026-10-10: Task Scheduler refused \QwtDeathReporter four times in one capture with
                 # Error Value 2147943515 = 0x8007045B = Win32 1115 ERROR_SHUTDOWN_IN_PROGRESS, once per
-                # shutdown. The boot catch-up pass already covers whatever that launch would have
-                # reported, so the refusal itself needs no toast (Jev: narrow 0.93). Any OTHER reason a
-                # launch fails still reports - that is a task that cannot run when nothing is going down.
+                # shutdown. A task that was never launched did not fail and nothing of ours died in
+                # it, so the refusal needs no toast on its own account (Jev: narrow 0.93). Any OTHER
+                # reason a launch fails still reports - that is a task that cannot run when nothing
+                # is going down.
+                # IT NO LONGER CLAIMS THE CATCH-UP COVERS IT. That sentence was true while the boot
+                # pass replayed the previous boot's backlog; it stops at the boot boundary now, so
+                # the honest statement is the narrow one: a launch that did not happen is not a death.
                 if ($code -eq 2147943515) {   # GUARD:launchshutdown
                     $r.ignore = $true
-                    $r.reason = "task $($r.taskName) was not launched: a system shutdown is in progress (0x8007045B) - the boot catch-up pass covers it"
+                    $r.reason = "task $($r.taskName) was not launched: a system shutdown is in progress (0x8007045B) - a launch that did not happen is not a death"
                     return $r
                 }
                 $r.ours = $true; $r.kind = 'launchfail'; $r.rec = 'task-launch'; $r.code = $code; $r.anchor = 'nopid'
@@ -1368,6 +1352,14 @@ function Write-QwtDeathWatermark {
     $p = Get-QwtDeathWatermarkPath
     if (-not $p) { return $false }
     try {
+        # STAMP THE BOOT THIS MARK BELONGS TO. The file is on disk and therefore survives a reboot,
+        # which is what let the catch-up read the PREVIOUS boot's backlog; the token is the volatile
+        # registry key qwt-notify-error.ps1 mints per boot, so a watermark from another boot is
+        # recognisable without a clock or a log. See Invoke-QwtDeathCatchUp.
+        if (Get-Command Get-QwtNotifyBootStamp -ErrorAction SilentlyContinue) {
+            $bt = Get-QwtNotifyBootStamp
+            if ($null -ne $bt) { $Marks[$script:QwtDeathBootKey] = [long]$bt }
+        }
         $tmp = "$p.tmp"
         ($Marks | ConvertTo-Json -Compress) | Set-Content -LiteralPath $tmp -Encoding UTF8 -ErrorAction Stop
         Move-Item -LiteralPath $tmp -Destination $p -Force -ErrorAction Stop   # replace, never a half-written file
@@ -1395,6 +1387,7 @@ function Write-QwtDeathWatermark {
 # so the notified ids are kept exactly, as a set ABOVE the mark, and the catch-up skips them. The
 # catch-up prunes them when its own mark passes them, so the set stays small by construction.
 $script:QwtDeathNotifiedKey = 'notified'
+$script:QwtDeathBootKey = 'boot'        # the per-boot token the watermark was written under
 function Step-QwtDeathWatermark {
     param([Parameter(Mandatory)][string]$Channel, [Parameter(Mandatory)][string]$RecordId)
     if (-not $Channel -or $RecordId -notmatch '^\d+$') { return $false }
@@ -1408,6 +1401,22 @@ function Step-QwtDeathWatermark {
     if ($seen -contains $rid) { return $true }
     $marks[$key] = @($seen + $rid | Sort-Object -Unique)
     return (Write-QwtDeathWatermark -Marks $marks)
+}
+function Test-QwtDeathMarkIsThisBoot {
+    # Does this watermark belong to the boot that is running? The watermark file is on disk and
+    # survives a reboot; the per-boot token is a VOLATILE registry value the kernel drops at
+    # shutdown, so comparing the two answers the question with no clock and no log - which matters
+    # because this guest's clock is corrected mid-boot and any timestamp comparison across a boot
+    # is unsound here by measurement.
+    param($Marks)
+    if ($null -eq $Marks) { return $false }
+    $now = $null
+    if (Get-Command Get-QwtNotifyBootStamp -ErrorAction SilentlyContinue) { $now = Get-QwtNotifyBootStamp }
+    # NO TOKEN IS NOT THIS BOOT. Without a boot identity nothing can show a record belongs to the
+    # running boot, and an unprovable claim does not become a notification.
+    if ($null -eq $now) { return $false }
+    if (-not $Marks.ContainsKey($script:QwtDeathBootKey)) { return $false }
+    try { return ([long]$Marks[$script:QwtDeathBootKey] -eq [long]$now) } catch { return $false }
 }
 function Test-QwtDeathAlreadyNotified {
     param([Parameter(Mandatory)][string]$Channel, [Parameter(Mandatory)][long]$RecordId, $Marks)
@@ -1424,9 +1433,25 @@ function Invoke-QwtDeathCatchUp {
     $marks = Read-QwtDeathWatermark
     $fresh = ($null -eq $marks)
     if ($fresh) { $marks = @{} }
+    # THE PREVIOUS BOOT'S BACKLOG IS NOT READ. Owner, 2026-10-16: reporting it "is misleading and
+    # overreaching". A record from before this boot describes a machine state that no longer exists
+    # - the component it names has since been restarted by the boot that is running now - so a toast
+    # about it tells the user about a condition they cannot act on and that may well be gone.
+    #
+    # It also removes the reason the shutdown excuse existed. Task Scheduler refuses to launch an
+    # action while the system is going down, so the kills it performs at shutdown were only ever
+    # visible to THIS pass; the pass had to guess, from its own existence, that a record it could
+    # not have witnessed was a shutdown reap rather than a death - and that guess is what put "The
+    # PV NIC setup task failed" in front of the user for tasks Windows had simply stopped. Nothing
+    # from another boot is read now, so there is nothing to excuse and no guess to make.
+    #
+    # The boundary is the per-boot token (volatile registry, minted by qwt-notify-error.ps1 and
+    # dropped by the kernel at shutdown), NOT a clock or a log: this guest's clock is corrected
+    # mid-boot, so any timestamp comparison across a boot is unsound here by measurement.
+    $seed = ($fresh -or -not (Test-QwtDeathMarkIsThisBoot $marks))   # GUARD:bootbacklog
     $next = @{}
     foreach ($ch in @('Application', 'System', 'Microsoft-Windows-TaskScheduler/Operational')) {
-        $from = if ($marks.ContainsKey($ch)) { [long]$marks[$ch] } else { -1 }
+        $from = if ($marks.ContainsKey($ch) -and -not $seed) { [long]$marks[$ch] } else { -1 }
         $newest = $from
         try {
             # THE WATERMARK IS THE BOUND, NOT A COUNT. This read was `-MaxEvents 400`, which takes
@@ -1463,8 +1488,7 @@ function Invoke-QwtDeathCatchUp {
                 # Invoke-QwtDeathReport decides itself whether a record is one of ours ('not-ours' / 'ignored') and
                 # dedupes per boot, so the catch-up hands it every new record and counts what it accepted. The
                 # subscription's XPath is not available here - this is a scan, and the classifier is the same one.
-                $script:QwtDeathInCatchUp = $true      # see QwtShutdownNearProbe: being here IS the evidence
-                try { $verdict = Invoke-QwtDeathReport -XmlText $e.ToXml() } finally { $script:QwtDeathInCatchUp = $false }
+                $verdict = Invoke-QwtDeathReport -XmlText $e.ToXml()
                 if ($verdict -notin @('not-ours', 'ignored', 'not-a-death')) {
                     Write-QwtDeathLog 'INFO' "catch-up: $ch record $rid was never reported (its trigger could not run) - reported now ($verdict)"
                     $r.reported++
@@ -1491,6 +1515,9 @@ function Invoke-QwtDeathCatchUp {
     if ($fresh) {
         Write-QwtDeathLog 'INFO' ("catch-up: no watermark yet - this pass recorded the end of each channel and reported nothing " +
                                   "(a fresh install does not replay the machine's history)")
+    } elseif ($seed) {
+        Write-QwtDeathLog 'INFO' ("catch-up: the watermark is from another boot - the end of each channel is recorded and " +
+                                  "nothing is reported; a record from before this boot is not this boot's news")
     } else {
         Write-QwtDeathLog 'INFO' "catch-up: $($r.scanned) new record(s) since the last pass, $($r.reported) death(s) reported"
     }

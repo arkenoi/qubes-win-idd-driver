@@ -32,7 +32,12 @@
 #   DEATHREPORTER_OUT=<dir>      outputs (default: a mktemp dir)
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PWSH="${PWSH:-/home/user/pwsh/pwsh}"
+# pwsh, FROM THE PATH IF IT IS THERE. The two dev-qube paths were the only candidates, so this suite
+# could not run anywhere else - which is why it was never in tools/tests/offline-suites.txt and why the
+# battery that gates every commit did not cover the death reporter at all. GitHub's ubuntu runners ship
+# pwsh on the PATH, so the PATH is tried first and the dev-qube paths remain as fallbacks.
+PWSH="${PWSH:-$(command -v pwsh 2>/dev/null || true)}"
+[ -n "$PWSH" ] && [ -x "$PWSH" ] || PWSH=/home/user/pwsh/pwsh
 [ -x "$PWSH" ] || PWSH=/home/user/bin/pwsh7/pwsh
 OUT="${DEATHREPORTER_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/death-reporter-selftest-XXXXXX")}"
 SUITE="$ROOT/tools/tests/death-reporter-test.ps1"
@@ -55,6 +60,7 @@ knob_line() {
         pidreuse)  printf '%s' '            # DEFECT: one pid is one death' ;;
         managedonly) printf '%s' '            if (-not (& $owned $exe '"'"''"'"')) { $r.reason = "managed application '"'"'$exe'"'"' is not ours"; return $r }   # DEFECT: any table executable' ;;
         installdir) printf '%s' '    if ($false) { }   # DEFECT: the registry install dir is ignored' ;;
+        bootbacklog) printf '%s' '    $seed = $fresh   # DEFECT: the previous boot'"'"'s backlog is read and reported - the toasts the owner called misleading' ;;
         endedbyshutdown) printf '%s' '                $ended = '"'"'not-ended'"'"'   # DEFECT: a task instance ended BY A SHUTDOWN is reported as a death anyway' ;;
         wdjoin)    printf '%s' '                    $r.rec = '"'"'scm-agentdied'"'"'   # DEFECT: the watchdog'"'"'s agent-died exit opens a death of its own (a second notification per agent death)' ;;
         sysendtext) printf '%s' '            $sysEnd = $false   # DEFECT: a child Windows ended with its session gets the family'"'"'s header and advice (exited unexpectedly, a Task Scheduler restart)' ;;
@@ -81,12 +87,13 @@ knob_target() {
         pidreuse)  printf '%s' 'pid reuse: a second crash record of the SAME pid 5 min later is a second death' ;;
         managedonly) printf '%s' 'clr not ours: a foreign .NET program named like one of our native executables (autologon.exe) is not ours' ;;
         installdir) printf '%s' 'install dir: the registry InstallDir decides, else the folder above the script'"'"'s bin, else the default' ;;
+        bootbacklog) printf '%s' 'catch-up: a watermark from another boot reports NOTHING' ;;
         endedbyshutdown) printf '%s' 'ended by shutdown: a 201 whose instance Task Scheduler ended while the system went down' ;;
         wdjoin)    printf '%s' 'wd exit: the watchdog'"'"'s 7024 with QGA_SVC_EXIT_AGENT_DIED attaches to the agent'"'"'s death' ;;
         sysendtext) printf '%s' 'teardown text: the header says Windows ended it, not that it exited unexpectedly or crashed' ;;
         sysendisdeath) printf '%s' 'shutdown teardown: a 4003 carrying 0x40010004 near a shutdown is ignored - nothing launched, ledger empty' ;;
         scmshutdown) printf '%s' 'purge: a service the shutdown stopped is ignored - no toast for the stop the shutdown asked for' ;;
-        launchshutdown) printf '%s' 'purge: a launch refused because a shutdown is in progress is ignored - the boot catch-up covers it' ;;
+        launchshutdown) printf '%s' 'purge: a launch refused because a shutdown is in progress is ignored - a launch that did not happen is not a death' ;;
     esac
 }
 make_copy() { # $1 knob -> the copy's path on stdout
@@ -106,7 +113,7 @@ EOF
     printf '%s' "$copy"
 }
 
-KNOBS="ours deathid anchorpid logfirst onerec werjoin helperjoin pidreuse managedonly installdir wdjoin endedbyshutdown sysendtext sysendisdeath build shortbuild scmshutdown launchshutdown"
+KNOBS="ours deathid anchorpid logfirst onerec werjoin helperjoin pidreuse managedonly installdir wdjoin endedbyshutdown sysendtext sysendisdeath build shortbuild scmshutdown launchshutdown bootbacklog"
 # the suite against a copy with one knob applied: the route's knobs go in through -HelperPath, the reporter's through -ReporterPath
 run_knob() { # $1 knob, $2 copy, $3 output file
     if [ "$(knob_file "$1")" = "$HELPER" ]; then "$PWSH" -NoProfile -File "$SUITE" -HelperPath "$2" >"$3" 2>&1
