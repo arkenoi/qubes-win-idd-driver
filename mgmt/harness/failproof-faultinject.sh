@@ -111,9 +111,18 @@ fi
 # killed, nothing is found by name. The pixel witness is RND-8's own shot_hash (NOCAP/NOWIN are
 # graded there).
 source mgmt/harness/lifecycle-lib.sh
+# RND-8 GRADES PIXELS, so every restart here waits for the agent to be SERVING, not merely alive
+# (lifecycle-lib.sh -> restart-gui-agent.ps1 -WaitServing; 0 is the default everywhere else).
+# MEASURED 2026-10-16 on win11-nfy: the unarmed baseline ran straight after a DISARMED restart
+# and came back INVALID-INSTRUMENT with 'keyed mutex: 3 abandonment(s), 22 RecreateDuplication,
+# 5 thread death(s)' and an EMPTY pixels field - the capture pipeline thrashing because dom0's
+# gui-daemon had not attached yet. The suite then aborted: 'the fault build is not green with
+# nothing armed ... either the build differs from the release in more than the injector, or the
+# subject is dirty'. Neither was true; the agent was simply not serving yet.
+export AGENT_RESTART_WAIT_SERVING="${AGENT_RESTART_WAIT_SERVING:-120}"
 agent_restart_push || { log "FATAL: guest/restart-gui-agent.ps1 could not be pushed and proven on $VM - no agent restart is possible without it"; exit 2; }
 restart_agent(){  # <ps-preamble> <marker-echo-line>
-  psrun "$(agent_restart_ps "$1" "$2")" | grep -aE 'SVCSTOP|OLDLOG|WDSTART|AGENTPID|OLDALIVE|NEWLOG|RESTART|ARMED|DISARMED'
+  psrun "$(agent_restart_ps "$1" "$2")" | grep -aE 'SVCSTOP|OLDLOG|WDSTART|AGENTPID|OLDALIVE|NEWLOG|SERVINGWAIT|RESTART|ARMED|DISARMED'
 }
 
 DISARM_PS="Remove-ItemProperty -Path '$KEY' -Name FaultCaptureExit -EA SilentlyContinue
@@ -151,6 +160,13 @@ restart_agent_checked(){  # <ps-preamble> <marker-echo-line> <marker> <context>
   if ! why=$(agent_restart_grade "$out"); then
     toggle_invalid "$4" "the service restart did not produce a new agent: $why; the toggle never took"
   fi
+  # AND IT MUST BE SERVING. An agent dom0 has not attached to maps nothing, so RND-8's pixels are
+  # empty and the capture pipeline churns (RecreateDuplication) - which reads as a dirty subject or
+  # a wrong build, the two things this suite's abort message blames. Named, not guessed.
+  local _sv
+  _sv=$(echo "$out" | grep -aoE 'serving=[a-z-]+' | tail -1 | cut -d= -f2)
+  [ "${_sv:-none}" = connected ] || \
+    toggle_invalid "$4" "the restarted agent never reached serving=connected (serving=${_sv:-none}); RND-8 grades pixels and would see none"
 }
 
 # ---------------------------------------------------------------- D-6: arm the fault, expect RED
