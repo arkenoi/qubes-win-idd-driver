@@ -96,27 +96,47 @@ ck "and it breaches"                                      "1" "$(g BREACHES)"
 # qualifies those; and the same 5 counts the INFO "sent ok=1" line, so a send is recognised on its
 # own. A property worth protecting is worth planting a line for.
 
-# SEEN TO FAIL, because this check never had been. Put the level gate back as the ONLY filter and
-# the INFO send must stop counting - that is the defect this suite used to require.
+# SEEN TO FAIL, BOTH WAYS. This metric has now been wrong in two opposite directions and each
+# shipped: first the level gate alone, which could not see an INFO send (the delivered failure, on
+# win10-clean 2026-10-15); then "level OR send token", which called an internal diagnostic a
+# user-visible failure - on win11-appvm, acceptance run 38826875627, the single line it raised a P1
+# for was `[W] BrokerReportDeaf: QGAWGCITEMCLOSED ... reopened at once`, a condition that recovered
+# immediately, with no NOTIFY line anywhere in that cell's bridge.log. So the fixture carries BOTH
+# shapes and the two previous rules must each get one of them wrong.
 python3 - <<'PYDEF' > "$T/defect.txt" 2>&1
-import importlib.util, re, sys
+import importlib.util, sys
 src = open("tools/log-sweep.py", encoding="utf-8").read()
-src = src.replace('if lvl in ("W", "E") or DOM0_SENT_RE.search(msg):', 'if lvl in ("W", "E"):')
-ns = {}
-spec = importlib.util.spec_from_loader("lsdef", loader=None)
-m = importlib.util.module_from_spec(spec)
-try:
-    exec(compile(src, "lsdef", "exec"), m.__dict__)
-except SystemExit:
-    pass
+def load(s):
+    spec = importlib.util.spec_from_loader("lsdef", loader=None)
+    m = importlib.util.module_from_spec(spec)
+    try: exec(compile(s, "lsdef", "exec"), m.__dict__)
+    except SystemExit: pass
+    return m
 class L:
     def __init__(s, msg, lvl): s.msg, s.level = msg, lvl
 class F:
     def __init__(s, name, pairs): s.name, s.lines = name, [L(a, b) for a, b in pairs]
-f = F("bridge.log", [("NOTIFY one-shot: sent ok=1 summary=The PV NIC setup task failed", "I")])
-print("DEFECT_COUNTED", len(m.dom0_loud([f])))
+DELIVERED = ("NOTIFY one-shot: sent ok=1 summary=The PV NIC setup task failed", "I")
+DIAGNOSTIC = ("BrokerReportDeaf: QGAWGCITEMCLOSED hwnd 0x40020 slot 0: Windows closed the capture item, reopened at once", "W")
+f = F("bridge.log", [DELIVERED, DIAGNOSTIC])
+
+now = load(src)
+got = [x[2][:28] for x in now.dom0_loud([f])]
+print("NOW_COUNT", len(got))
+print("NOW_HAS_DELIVERED", int(any("sent ok=1" in x for x in got)))
+print("NOW_HAS_DIAGNOSTIC", int(any("BrokerReportDeaf" in x for x in got)))
+
+# rule 1: the level gate alone - misses the delivered failure
+one = load(src.replace("if DOM0_OUTCOME_RE.search(msg):", 'if lvl in ("W", "E"):'))
+print("RULE1_HAS_DELIVERED", int(any("sent ok=1" in x[2] for x in one.dom0_loud([f]))))
+# rule 2: level OR token - counts the recovered diagnostic
+two = load(src.replace("if DOM0_OUTCOME_RE.search(msg):", 'if lvl in ("W", "E") or DOM0_OUTCOME_RE.search(msg):'))
+print("RULE2_HAS_DIAGNOSTIC", int(any("BrokerReportDeaf" in x[2] for x in two.dom0_loud([f]))))
 PYDEF
-ck "with the level gate back, the INFO send is missed" "DEFECT_COUNTED 0" "$(grep -a '^DEFECT_COUNTED' "$T/defect.txt")"
+ck "now: the delivered failure IS counted"                  "NOW_HAS_DELIVERED 1"     "$(grep -a '^NOW_HAS_DELIVERED' "$T/defect.txt")"
+ck "now: the recovered diagnostic is NOT"                   "NOW_HAS_DIAGNOSTIC 0"    "$(grep -a '^NOW_HAS_DIAGNOSTIC' "$T/defect.txt")"
+ck "SEEN TO FAIL rule 1 (level only): misses the delivered failure" "RULE1_HAS_DELIVERED 0" "$(grep -a '^RULE1_HAS_DELIVERED' "$T/defect.txt")"
+ck "SEEN TO FAIL rule 2 (level OR token): counts the recovered diagnostic" "RULE2_HAS_DIAGNOSTIC 1" "$(grep -a '^RULE2_HAS_DIAGNOSTIC' "$T/defect.txt")"
 
 echo "loudness-channel-selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

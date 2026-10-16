@@ -285,7 +285,22 @@ DOM0_SEND_RE = re.compile(
 # A LINE THAT RECORDS A SEND HAVING HAPPENED, as opposed to one that configures the route or
 # launches the host. "sent ok=1" is the emitter reporting on ITS OWN action, which is why it is
 # written at INFO - and why the level of that line says nothing about what the user was shown.
-DOM0_SENT_RE = re.compile(r"\bsent\b|\bsend ok\b|user notification sent")
+# WHAT THE USER ACTUALLY GOT, not what a line mentions. This was `sent|send ok|user notification
+# sent`, paired with "any dom0-path line declared W or E" - and that second arm is what the metric
+# got wrong. MEASURED on win11-appvm, acceptance run 38826875627: the one line it called a
+# user-visible failure was
+#   [W] BrokerReportDeaf: QGAWGCITEMCLOSED hwnd 0x40020 slot 0: Windows closed the capture item,
+#       reopened at once
+# an internal diagnostic about a condition that RECOVERED IMMEDIATELY. Nothing was sent - that
+# cell's bridge.log holds no NOTIFY line at all - and the user saw nothing, while the metric said
+# "our own code told dom0 to show the USER that something of ours failed" and raised a P1.
+# A notification either reached the user or demonstrably failed to; both are outcomes a line
+# RECORDS, and a line that merely names a protocol token records neither. So the test is the
+# OUTCOME, which keeps every real case: a delivered send, a lost one, a handoff that reaches
+# nobody, and an error box actually shown.
+DOM0_OUTCOME_RE = re.compile(r"\bsent\b|\bsend ok\b|user notification sent|notification LOST|"
+                             r"reaches nobody|shown to the user|NOT notified")
+DOM0_SENT_RE = DOM0_OUTCOME_RE   # kept: existing callers name it this
 
 
 def dom0_loud(files):
@@ -333,7 +348,12 @@ def dom0_loud(files):
             # EITHER the writer declared a failure on the dom0 path, OR the line records that a
             # notification was actually SENT - the second is what the user saw, and its level
             # belongs to the sender's own success, not to the payload.
-            if lvl in ("W", "E") or DOM0_SENT_RE.search(msg):
+            # THE OUTCOME IS THE EVIDENCE. The old second arm - any dom0-path line whose writer
+            # declared W or E - treated a mention of a protocol token as proof the user was told,
+            # and a recovered internal diagnostic raised a P1 on win11-appvm. A line must record
+            # what became of a notification; its level then says nothing extra, because a delivered
+            # failure is INFO (the sender reporting its own success) and that was the original bug.
+            if DOM0_OUTCOME_RE.search(msg):
                 loud.append((lf.name, lvl or "?", msg))
     return loud
 
