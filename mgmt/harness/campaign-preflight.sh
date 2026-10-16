@@ -29,8 +29,11 @@ GOLDENS_DIR="${GOLDENS_DIR:-mgmt/goldens}"
 FIXTURES_DIR="${FIXTURES_DIR:-mgmt/fixtures}"
 # The fix under test must be IN the package. Named rather than assumed, so a campaign cannot be run
 # against a build that predates the thing it is meant to prove.
-FIX_FILE="${FIX_FILE:-guest/qwt-report-death.ps1}"
-FIX_MARKER="${FIX_MARKER:-GUARD:bootbacklog}"
+# EVERY FIX THIS CAMPAIGN IS MEANT TO PROVE, as <file>:<marker> pairs. One pair was enough while one
+# fix was under test; a campaign that tests a package missing the P1 fix would report a clean run for
+# a build that cannot have fixed it, which is the shape of a receipt for work nobody did. Add a pair
+# when a campaign is the receipt for a new fix.
+FIX_MARKERS="${FIX_MARKERS:-guest/qwt-report-death.ps1:GUARD:bootbacklog tools/notifhost/notifhost.cpp:NotifyDeferDrain}"
 ENTRY_GOLDENS="${ENTRY_GOLDENS:-win10-base win11r-base win11r-qwt}"
 ENTRY_FIXTURES="${ENTRY_FIXTURES:-win10-iqi:win10-base win11-iqi:win11r-base}"
 SUBJECTS="${SUBJECTS:-win11r-lt win10-clean win11-clean win10-appvm win11-appvm win10-acc win11-acc}"
@@ -79,9 +82,19 @@ git merge-base --is-ancestor "$PKGSHA" HEAD 2>/dev/null || die 13 "${PKGSHA:0:8}
 # shellcheck disable=SC2086
 drift=$(git diff --name-only "$PKGSHA"..HEAD -- $PRODUCT_PATHS 2>/dev/null)
 [ -z "$drift" ] || die 13 "the product changed since the package was built: $(printf '%s' "$drift" | tr '\n' ' ')"
-git show "$PKGSHA:$FIX_FILE" 2>/dev/null | grep -qa -- "$FIX_MARKER" \
-    || die 13 "${PKGSHA:0:8} does not carry $FIX_MARKER in $FIX_FILE - wrong package for this campaign"
-log "package $PKG built from ${PKGSHA:0:8}, carries $FIX_MARKER, no product drift since"
+for _fm in $FIX_MARKERS; do
+    _ff=${_fm%%:*}; _mk=${_fm#*:}
+    # NOT grep. This shell's `grep` can be ugrep, which treats a large .cpp as binary and SKIPS it -
+    # so the gate said "8fe8828a does not carry NotifyDeferDrain" about a commit that carries it
+    # twice, and `command grep` on the same input said present. A gate whose verdict depends on
+    # which grep is installed is not a gate; python3 is already a hard dependency of every check
+    # above and reads the stream the same way everywhere.
+    git show "$PKGSHA:$_ff" 2>/dev/null \
+        | python3 -c 'import sys; sys.exit(0 if sys.argv[1].encode() in sys.stdin.buffer.read() else 1)' "$_mk" \
+        || die 13 "${PKGSHA:0:8} does not carry '"'"'$_mk'"'"' in $_ff - wrong package for this campaign"
+    log "package carries '$_mk' in $_ff"
+done
+log "package $PKG built from ${PKGSHA:0:8}, carries every fix under test, no product drift since"
 
 # ---- 4. CI green for THAT commit, from its own runs --------------------------------------------
 # ci-state refuses an inherited green for a required gate, so "green" here means a run against this
