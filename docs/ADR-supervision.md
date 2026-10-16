@@ -361,3 +361,36 @@ notepad, whoever started it), the shell and the shell surface host (Winlogon's a
 refused; an INVALID verdict is graded rc 1; a Linux run reports `service-absent`): the on-guest fail-proof - the
 service stop leaving its agent running (a pre-4.3.34 watchdog), or no new log inside the bound - is driven on the
 rig before any harness result built on it is written as PASS.
+
+## 6. SCHEDULED (next cycle): the agent's identity channel reimplements handle inheritance
+
+**Not a decision yet - a finding, recorded so it is not lost. The owner has scheduled the supervision rework for the NEXT cycle (2026-10-16), so nothing here is actioned in this one.** The owner asked whether Windows already has a
+mechanism covering the watchdog's "launcher with identity" function. It does, and this repo already uses it
+for a different child.
+
+**What is there now.** The lifecycle channel is four NAMED events, and every defence it has is a consequence of
+the name being guessable: the name carries the agent's pid (`QGA_LIFECYCLE_NAME_FMT`), the DACL is SYSTEM-only
+(`D:P(A;;GA;;;SY)`), a name that already exists is refused (`ERROR_ALREADY_EXISTS`) and the suspended agent is
+ended before it ran, and the agent is created `CREATE_SUSPENDED` so nothing can win the naming race. The agent
+rebuilds the name and opens each event (`agent/gui-agent/lifecycle.c:222`).
+
+**What Windows gives for free.** `bInheritHandles = TRUE` with `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` in a
+`STARTUPINFOEX` (Vista+) passes EXACTLY the handles named in the list and nothing else. An UNNAMED event has no
+name to guess or pre-create, so the pid-naming, the SDDL, the exists-check and the reason for `CREATE_SUSPENDED`
+all go away. `agent/watchdog/watchdog.c:296` currently passes `FALSE` for `bInheritHandles`.
+
+**And the precedent is in-house.** `agent/gui-agent/etwproxy.c:612` creates its job object as
+`CreateJobObjectW(NULL, NULL)` with the comment "anonymous: nothing can open it by name" - the same principle,
+applied two files away. A job would also cover the LIFETIME half better than holding a process handle:
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` means no agent outlives its supervisor, and `JOB_OBJECT_MSG_EXIT_PROCESS`
+on an IO completion port is the exit notification.
+
+**What does NOT cover it**, so the alternatives are not re-litigated later: Task Scheduler session/logon
+triggers (how `notifhost` and `wgcbroker` are launched) give restart-on-failure but no process handle and no
+per-instance channel, so no identity; `SERVICE_INTERACTIVE_PROCESS` has been dead since Session 0 isolation;
+Restart Manager (`RegisterApplicationRestart`) is WER-driven self-restart for interactive apps and hands the
+supervisor no exit classification, which is the watchdog's main remaining job.
+
+**Cost, which is why this is not folded into the boot-boundary commit.** The child must receive the handle
+VALUES (command line, or `STARTUPINFO.lpReserved2`) instead of deriving names, so both binaries change and
+`agent/watchdog/lifecycle_test.c` changes with them. One commit is one mandate; this is its own.
