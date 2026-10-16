@@ -291,8 +291,23 @@ public class QwtngNetSetup : ServiceBase {
         int t0 = Environment.TickCount, passes = 0;
         while (true) {
             passes++;
-            k.ip = rd("/qubes-ip"); k.mask = rd("/qubes-netmask"); k.gw = rd("/qubes-gateway");
-            k.d1 = rd("/qubes-primary-dns"); k.d2 = rd("/qubes-secondary-dns");
+            // ONE WAITING PASS, ONE READ - NOT FIVE. The client library logs EVERY failed qdb_read
+            // twice at ERROR: once from the transport (QioWriteBuffer: WriteFile failed with error
+            // 0xe8: The pipe is being closed) and once from its caller (send_command_to_daemon,
+            // same 0xe8). So a pass over five keys while the pipe is closing wrote 10-12 ERROR
+            // lines into our own log - measured on win11-nfy 2026-10-16: 12 of that run's 23
+            // undeclared error lines, the single largest contributor to a metric whose max is 0.
+            // No liveness guess is needed and none is made: this loop requires ip AND mask AND gw
+            // together, so an absent /qubes-ip means there is nothing to apply whatever the reason,
+            // and the other four reads cannot change that. Read ip first, skip the rest when it is
+            // absent. (A /name liveness probe was tried first and is wrong: qdb_read returns NULL
+            // both for "not published yet" and "daemon gone", so the probe only moves the guess -
+            // and pvnic-netsetup-verdict-selftest caught it, because its reader serves no /name.)
+            k.ip = rd("/qubes-ip");
+            if (k.ip != null) {
+                k.mask = rd("/qubes-netmask"); k.gw = rd("/qubes-gateway");
+                k.d1 = rd("/qubes-primary-dns"); k.d2 = rd("/qubes-secondary-dns");
+            }
             if (k.ip != null && k.mask != null && k.gw != null) {
                 k.verdict = "keys";
                 if (passes > 1) k.why = "published after " + (Environment.TickCount - t0) + " ms, " + passes + " reads";
