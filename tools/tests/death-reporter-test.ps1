@@ -373,9 +373,16 @@ $script:QwtShuttingDownMetric = { return 0 }
 # SEEN TO FAIL: the measured case, against the body this replaced. On win10-clean the shutdown
 # record sat 224 s before the kill and the old window looked back 30 s, so it missed it and the
 # user was told the task had failed. Run here with a stub that answers like the real log did.
+# THE GAP IS THE FACT; THE HOST'S ZONE IS NOT. This record was built with Kind=Local at a fixed
+# wall-clock time, so its UTC value - and therefore whether it fell inside the old window - depended
+# on the machine running the suite. On this dev qube (UTC+3) it landed 224 s before the death and the
+# demo held; on a UTC runner the same literal landed INSIDE the window and the check failed. Measured
+# 2026-10-16, the first time this suite ran in CI after being registered in offline-suites.txt.
+# The measured fact is the 224 s gap, so it is expressed as a gap from $at and the zone drops out.
+$script:T224 = [DateTime]::new(2026, 10, 15, 19, 59, 37, [DateTimeKind]::Utc)
 function Get-WinEvent { param([hashtable]$FilterHashtable, [string]$LogName, [string]$FilterXPath, [int]$MaxEvents, $ErrorAction)
-    # the only record is the 1074, 224 s before the death
-    $rec = [pscustomobject]@{ TimeCreated = [DateTime]::new(2026, 10, 15, 22, 55, 53, [DateTimeKind]::Local); Id = 1074 }
+    # the only record is the 1074, 224 s before the death - on any host, in any zone
+    $rec = [pscustomobject]@{ TimeCreated = $script:T224.AddSeconds(-224); Id = 1074 }
     $t = $rec.TimeCreated.ToUniversalTime()
     if ($FilterHashtable.ContainsKey('StartTime') -and $t -lt $FilterHashtable.StartTime.ToUniversalTime()) {
         throw (New-Object System.Management.Automation.ErrorRecord((New-Object Exception 'No events were found'), 'NoMatchingEventsFound', 'ObjectNotFound', $null))
@@ -387,7 +394,7 @@ $oldWindow = {
     $f = @{ LogName = 'System'; ID = 109, 1074, 6006; StartTime = $at.AddSeconds(-30); EndTime = $at.AddSeconds(180) }
     try { return ($null -ne (Get-WinEvent -FilterHashtable $f -MaxEvents 1 -ErrorAction Stop)) } catch { return $false }
 }
-$rOld = & $oldWindow ([DateTime]::new(2026, 10, 15, 19, 59, 37, [DateTimeKind]::Utc))
+$rOld = & $oldWindow $script:T224
 Check 'near-probe SEEN TO FAIL: the old [-30,+180] window MISSES the measured 224 s gap' ($rOld -eq $false) "oldwindow=$rOld"
 
 $script:QwtTaskEndedProbe    = { param([string]$i) return $true }
