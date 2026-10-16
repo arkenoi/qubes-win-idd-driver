@@ -49,7 +49,23 @@ export QTEST_VM="$VM"
 : "${QTEST_INCOMING:=C:\\Users\\gerd-test\\Documents\\QubesIncoming\\win-idd-mgmt}"
 export QTEST_INCOMING
 
-log(){ echo "$(date -u +%H:%M:%S) wu-e2e[$VM]: $*" | tee -a "$OUT/run.log"; }
+# EVERY LINE DECLARES ITS LEVEL, because an emitter that does not makes the sweep gate judge a
+# FRACTION of the run and say so. MEASURED on the 4.3.36 campaign: this suite finished its product
+# work cleanly - `DONE: rounds=3 fails=0 unjudged_exclusions=0` - and still failed the release, with
+#     SWEEP-GATE-COVERAGE lines=32 with_declared_level=0 without=32 third_party=0
+#     SWEEP-GATE-RESULT undeclared_ours=32 - this gate judged only part of the run, so its silence
+#                                            means nothing
+# so wu-e2e exited 5, template-update was classed INSTRUMENT ("could not measure the product" - it
+# HAD measured it), and gate-scope then refused the cut over a required suite reported uncovered.
+# The gate was right and honest; the 32 undeclared lines were ours. Same shape as quick-upgrade.sh's
+# log(), including the leading-whitespace strip: the house style for a sub-step is `log "  [WARN] "`,
+# and testing the token at position zero stamps those as INFO *and* WARN, declaring two levels.
+log(){ _lv="$*"; _lv="${_lv#"${_lv%%[![:space:]]*}"}"
+       case "$_lv" in
+         "[ERROR]"*|"[WARN]"*|"[WARNING]"*|"[INFO]"*|"[DEBUG]"*) _m="$*" ;;
+         *) _m="[INFO] $*" ;;
+       esac
+       echo "$(date -u +%H:%M:%S) wu-e2e[$VM]: $_m" | tee -a "$OUT/run.log"; }
 # RETRY, and never let a failed CALL look like a STATE. `qvm-ls` can fail transiently (qubesd
 # busy, a call racing a domain transition) and then this returned the empty string, which every
 # caller reads as "not Halted" or "not Running" - so a shutdown loop, a reboot ledger and a stall
