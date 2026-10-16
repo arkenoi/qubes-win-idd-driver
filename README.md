@@ -42,8 +42,17 @@ Not verified, and said plainly: five of the eighteen suites this diff requires c
 reasons rather than product ones — so this release is cut on the smaller `core` set by a deliberate decision recorded in
 [`docs/ADR-acceptance.md`](docs/ADR-acceptance.md) section 6, not because the full gate was met. The notification-deferral and
 death-deduplication fixes above are in the build, but the conditions they guard never occurred during acceptance, so neither is
-a field measurement. One known issue: on a fully updated guest a scan-only Windows Update pass can flip dom0's
-updates-available back to "available"; the cause is not yet established.
+a field measurement.
+
+**On "updates available" reappearing right after an update — this is Windows Defender, and dom0 is telling you the truth.**
+On a freshly updated guest, dom0's updates-available can go back to "available" within a minute of clearing. We chased this as a
+possible defect and it is not one: the guest's own scan record names what it found — `KB2267602`, a Microsoft Defender Security
+Intelligence update, flagged actionable with a download URL. Microsoft republishes Defender definitions several times a day, so
+by the time a scan runs there genuinely is a new one. A Windows qube with Defender enabled will therefore show "updates
+available" again shortly after you update it, indefinitely, and that is correct rather than a bug — the definitions are real
+updates, they are simply published faster than anyone installs them. What it did break was our own acceptance check, which
+asserted dom0's view must not change across a scan; that check now compares dom0's flag against the guest's own count instead,
+so it fails only when dom0 claims work the guest does not have.
 
 | file | use it for |
 |---|---|
