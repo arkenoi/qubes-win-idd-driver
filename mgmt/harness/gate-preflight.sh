@@ -45,7 +45,7 @@ log(){ echo "$(date -u +%H:%M:%S) preflight[$VM $BITS]: $*"; }
 # out-wait: every further probe against a dead guest manufactures the same emptiness. Nothing
 # here touches the responsive paths: an ALIVE guest still flows to CLEAR TO RUN / DO NOT SPEND /
 # REFUSING exactly as before, so an armed run's power to prove the SG can fail is unchanged.
-alive(){ T=30 q run 'cmd /c echo LIVE' | grep -qa LIVE; }
+alive(){ grep -qa LIVE <<< "$(T=30 q run 'cmd /c echo LIVE')"; }
 
 guest_gone(){  # <context> - one bounded restore attempt, the verdict row, and OUT (exit 3)
   log "guest gone - one bounded FaultGateOff=0 restore attempt, then the verdict"

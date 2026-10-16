@@ -481,7 +481,9 @@ DEFAULT_THRESHOLDS = {
 }
 INFORMATIONAL_METRICS = ["error_lines", "warning_lines", "warning_lines_ours", "warning_lines_stock",
                          "warning_lines_other", "agent_instances", "boots", "shutdowns", "agent_going_down_exits",
-                         "deaths_by_exit_code", "broker_events_excused", "fi_records"]
+                         "deaths_by_exit_code", "broker_events_excused", "fi_records",
+                         # what the build filter set aside, so an exclusion is never silent
+                         "error_lines_prior_build", "warning_lines_prior_build", "prior_build_mix"]
 SEVERITY_ORDER = {"P1": 0, "P2": 1, "P3": 2}
 
 # FAULT-INJECTION CONTEXT - decided from EVIDENCE in the capture, never from a file name (coordinator, 2026-10-07):
@@ -595,6 +597,88 @@ _NORM_RULES = [
 ]
 
 
+def _version_tuple(v):
+    try:
+        return tuple(int(x) for x in str(v).split("."))
+    except (TypeError, ValueError):
+        return None
+
+
+def module_builds(files, build=None):
+    """{module: {"versions": [...], "newest": v}} over the whole capture.
+
+    `build` NAMES THE BUILD UNDER TEST when the caller knows it (the package MANIFEST does), and
+    then it wins over "highest version seen" for every module that declared it. Without it the rule
+    below is self-calibrating, which is right for an upgrade and WRONG FOR A DOWNGRADE: installing
+    an older build over a newer one would make the superseded half the one kept. Jev scored the
+    self-calibrating rule 0.61 with 0.39 on "it has a failure mode that matters" - this is it.
+
+    THE WINDOW IS TEMPORAL; THE THING UNDER TEST IS A BUILD. On a quick-upgrade cell - our short
+    cycle, so nearly every cell - the OLD build is running when the upgrade starts, writes its last
+    lines, and is replaced three minutes later. Both builds therefore run INSIDE one --since window
+    and no timestamp separates them. MEASURED on win11-nfy 2026-10-16: gui-agent 4.3.35.795 ran at
+    18:53Z and 4.3.36.981 at 18:56Z, logs side by side in one directory, and the sweep billed the
+    old build's "WinMain: WatchForEvents failed with error 0x0" and qrexec-agent's pre-fix
+    CfgReadMultiString error to the NEW build - whose binaries provably do not contain either string
+    (installed gui-agent.exe == the package's reference_binaries hash). Two fixes were reported as
+    not working, and a release was briefly suspected of shipping stale binaries, on that one line.
+    The 2026-10-09 comment on `insts` found the same class for per-instance metrics and fixed it
+    with the time window; this is the half the time window cannot reach.
+
+    SELF-CALIBRATING, so it needs no --build argument and no package knowledge: a module that
+    declared ONE version in the capture has no prior build here, whatever that version is. That is
+    what keeps the stock modules whole - file-receiver 4.2.2.0, qubesdb-daemon 4.3.1.0, and our own
+    qwtng-netsetup 0.0.0.0, which has no version resource at all (measured, same guest).
+    """
+    seen = {}
+    for lf in files:
+        for i in lf.inits:
+            mod, ver = i.get("module") or lf.module, i.get("version")
+            if mod and ver:
+                seen.setdefault(mod, set()).add(ver)
+    out = {}
+    for mod, vers in seen.items():
+        ranked = sorted(vers, key=lambda v: (_version_tuple(v) is not None, _version_tuple(v) or (), v))
+        newest = build if (build and build in vers) else ranked[-1]
+        out[mod] = {"versions": sorted(vers), "newest": newest}
+    return out
+
+
+def line_version(lf, l):
+    """The module version that wrote this line, or None when nothing declared one.
+
+    By PID first - since 2026-10-07 one file holds several processes and every line carries its pid -
+    and only then by the init in force at the line's timestamp (inits are appended in file order,
+    which is chronological).
+    """
+    pid = str((l.extra or {}).get("pid") or "")
+    if pid:
+        for i in lf.inits:
+            if i.get("pid") is not None and str(i["pid"]) == pid:
+                return i.get("version")
+    gov = None
+    for i in lf.inits:
+        if i.get("ts") is not None and i["ts"] <= l.ts:
+            gov = i
+        else:
+            break
+    return (gov or {}).get("version")
+
+
+def is_prior_build(lf, l, builds):
+    """True when this line was written by a build the capture itself shows was superseded."""
+    mod = lf.module
+    if not mod or mod not in builds:
+        return False
+    info = builds[mod]
+    if len(info["versions"]) < 2:
+        return False      # one version: nothing was superseded, so nothing is excluded
+    v = line_version(lf, l)
+    if not v:
+        return False      # AN UNKNOWN VERSION NEVER SHRINKS A COUNT - the GUARD:winsince rule
+    return v != info["newest"]
+
+
 def normalize(msg):
     s = msg
     for rx, rep in _NORM_RULES:
@@ -639,6 +723,9 @@ class LogFile:
         # hint only; `inits` is the real record and `pid` on each LINE is what identifies a process.
         self.inits = []          # [{"ts","pid","uptime_s","boot_time","session","version"}] in order
         self.pid = None
+        self.module = None       # from "LogInit: Log started, module name: <mod>"; identifies the BUILD-bearing
+                                 # module, since one file is one module and a module can run at two versions
+                                 # inside one capture (see module_builds)
         self.session = None
         self.version = None
         self.uptime_s = None
@@ -725,9 +812,11 @@ def parse_winutils(lf, raw_lines):
             # log therefore under-reports its boots by one and mis-attributes the rest; on a real
             # guest the first boot was only recovered because the watchdog's own log and System
             # 6013 happened to corroborate it.
-            if re.match(r"Log started, module name:", msg):
+            mm = re.match(r"Log started, module name: (\S+)", msg)
+            if mm:
+                lf.module = mm.group(1)
                 lf.inits.append({"ts": ts, "pid": None, "uptime_s": None, "boot_time": None,
-                                 "session": None, "version": None})
+                                 "session": None, "version": None, "module": lf.module})
             mm = re.match(r"Running as user: .*, process ID: (\d+)", msg)
             if mm:
                 lf.pid = int(mm.group(1))
@@ -736,7 +825,7 @@ def parse_winutils(lf, raw_lines):
                 # mid-block, and then the pid line is the first thing seen).
                 if not lf.inits or lf.inits[-1]["pid"] is not None:   # GUARD:initopen DEFECT: if True:
                     lf.inits.append({"ts": ts, "pid": lf.pid, "uptime_s": None, "boot_time": None,
-                                     "session": None, "version": None})
+                                     "session": None, "version": None, "module": lf.module})
                 else:
                     lf.inits[-1]["pid"] = lf.pid
             mm = re.match(r"System uptime: ([\d.]+) seconds", msg)
@@ -763,6 +852,12 @@ def parse_winutils(lf, raw_lines):
         mm = re.search(r"-\d{8}-\d{6}-(\d+)\.log$", lf.name)
         if mm:
             lf.pid = int(mm.group(1))
+    if lf.module is None:
+        # A rotated file can begin after the "Log started" line, so take the module from the name.
+        # Both shapes are "<module>-<date>[-<time>-<pid>].log"; the module never contains a digit run.
+        lf.module = re.sub(r"-\d{8}(-\d{6}-\d+)?\.log$", "", lf.name, flags=re.I) or None
+        if lf.module and lf.module.lower().endswith(".log"):
+            lf.module = lf.module[:-4]
 
 
 # A DECLARED LEVEL OUTRANKS EVERY WORD. The bridge and etwproxy logs carried no level field, so
@@ -1860,7 +1955,7 @@ def build_structure(files, boots, declared=None):
             "agents": agents, "watchdogs": watchdogs, "context": ctx}
 
 
-def compute_metrics(files, boots, st, since, now=None):
+def compute_metrics(files, boots, st, since, now=None, build=None):
     """now = the capture time (the collector's clock) - without it the two 'still running?' metrics are not evaluable."""
     m = {}
     inst = st["instances"]
@@ -1964,8 +2059,26 @@ def compute_metrics(files, boots, st, since, now=None):
     m["task_failures"] = len([l for l in events if "TaskScheduler" in str(l.extra.get("log")) and l.extra.get("id") in (201, 203)
                               and OUR_TASKS_RE.search(l.msg) and sel(l.ts)
                               and task_record_is_failure(l.extra.get("id"), l.msg)])   # GUARD:taskrc DEFECT: and True])
-    m["fallbacks_fired"] = len([l for lf in files for l in lf.lines if FALLBACK_FIRED_RE.search(l.msg) and "fallback refused" not in l.msg and sel(l.ts)])
-    errs = [l for lf in files for l in lf.lines if l.level == "E" and sel(l.ts)]
+    # EVERY LINE-LEVEL METRIC BELOW IS SCOPED TO THE BUILD UNDER TEST, not just to the time window.
+    # module_builds() carries the measurement that forced this; `_prior` is the one place it applies.
+    _builds = module_builds(files, build)
+    def _prior(lf, l):
+        return is_prior_build(lf, l, _builds)   # GUARD:priorbuild DEFECT: return False
+    m["prior_build_mix"] = {k: v["versions"] for k, v in sorted(_builds.items()) if len(v["versions"]) > 1}
+    # A ZERO FROM "NOTHING WAS CONSIDERED" READS EXACTLY LIKE A ZERO FROM "NOTHING HAPPENED" (the
+    # GUARD:winsince lesson, and three metrics lost to it). The filter can only produce that if a
+    # superseded module's NEWEST build wrote nothing in the window at all - an upgrade right at the
+    # window's end. Named here so the condition is a figure rather than an assumption.
+    m["modules_superseded_silent"] = sorted(
+        mod for mod, info in _builds.items() if len(info["versions"]) > 1
+        and not any(lf.module == mod and sel(l.ts) and line_version(lf, l) == info["newest"]
+                    for lf in files for l in lf.lines))
+    m["fallbacks_fired"] = len([l for lf in files for l in lf.lines if FALLBACK_FIRED_RE.search(l.msg) and "fallback refused" not in l.msg and sel(l.ts) and not _prior(lf, l)])
+    _errs_all = [(lf, l) for lf in files for l in lf.lines if l.level == "E" and sel(l.ts)]
+    errs = [l for lf, l in _errs_all if not _prior(lf, l)]
+    # NOT hidden: the excluded lines are a reported figure, because a large count here means the
+    # cycle spent most of the window on the old build and the new build was barely exercised.
+    m["error_lines_prior_build"] = len(_errs_all) - len(errs)
     m["error_lines"] = len(errs)
     # THE OWNER'S GATE CONDITION, 2026-10-07: "Make clean error log the gate condition. Any error is fuckup!"
     # Every error line in our own logs counts, EXCEPT one this run declared it caused (a fault injection, or a
@@ -1987,7 +2100,9 @@ def compute_metrics(files, boots, st, since, now=None):
     # a declaration that matches nothing is itself a finding: the stimulus it names did not happen, so the
     # run proved less than it claims (the same rule as a check that has never been seen to fail)
     m["declared_errors_unmatched"] = _bad + len([1 for rx in _decl if not any(rx.search(l.raw) for l in errs)])
-    warns = [(lf, l) for lf in files for l in lf.lines if l.level == "W" and sel(l.ts)]
+    _warns_all = [(lf, l) for lf in files for l in lf.lines if l.level == "W" and sel(l.ts)]
+    warns = [(lf, l) for lf, l in _warns_all if not _prior(lf, l)]
+    m["warning_lines_prior_build"] = len(_warns_all) - len(warns)
     m["warning_lines"] = len(warns)
     # SPLIT BY OWNER, so "no warnings on normal operation" is a number about OUR code rather than a
     # number dominated by a stock binary we deliberately do not build. Informational for now: the
@@ -2491,7 +2606,7 @@ def cmd_analyze(a):
     boots = cluster_boots(files, 0 if _shifted else _phase_offset)
     st = build_structure(files, boots, load_context(a.logsdir))
     now = parse_iso((meta.get("begin") or {}).get("now")) if meta and (meta.get("begin") or {}).get("now") else None
-    metrics = compute_metrics(files, boots, st, since, now)
+    metrics = compute_metrics(files, boots, st, since, now, getattr(a, "build", None))
     # THE CORRECTION THIS ANALYSER APPLIES IS ITSELF A MEASUREMENT, AND IT HAS TO BE GRADED.
     # normalize_clock_phase() exists so the --since window means what it says, and it worked - but
     # it also ABSORBED the defect: on 2026-10-14 every cell's guest ran three hours ahead at boot,
@@ -2500,6 +2615,27 @@ def cmd_analyze(a):
     # its own competence. The offset is now a metric with a threshold, so the guest's clock being
     # wrong fails the sweep instead of being quietly accommodated.
     metrics["clock_boot_correction_s"] = int(abs(_phase_offset or 0))
+    # THE BUILD FILTER'S TWO WAYS OF BEING WRONG, BOTH MADE INTO FAILURES RATHER THAN NOTES.
+    # Jev on the filter, 2026-10-16: not hiding (0.30 against a baseline exemption's 0.64), an
+    # unattributable line must still count (0.75), but `sufficient` on the zero question held only
+    # 0.55 with needs-hard-failure at 0.30, and the self-calibrating rule scored 0.61 with 0.39 on
+    # "it has a failure mode that matters". It does, and it is a DOWNGRADE: the rule calls the
+    # HIGHEST version in the capture the build under test, so a cell that installs an older build
+    # over a newer one would filter out exactly the half being tested. --build names the build when
+    # the caller knows it (the package MANIFEST does), and a disagreement is reported, never
+    # silently preferred.
+    if metrics.get("modules_superseded_silent"):   # GUARD:silentbuild DEFECT: if False:
+        problems.append(("build-scope", ",".join(metrics["modules_superseded_silent"]),
+                         "an upgraded module's NEWEST build wrote no line in the window, so its "
+                         "zero means nothing was considered, not that nothing happened"))
+    _bu = getattr(a, "build", None)
+    if _bu:
+        _down = sorted(m for m, i in module_builds(files).items()
+                       if _bu in i["versions"] and i["newest"] != _bu)
+        if _down:
+            problems.append(("build-scope", ",".join(_down),
+                             "--build %s is not the newest version these modules declared - a "
+                             "downgrade, so the filter is scoped to --build, not to newest" % _bu))
     # LOUDNESS, DECIDED NOT JUDGED: a dom0-path line whose own writer declared W or E.
     #
     # AND A RUN'S OWN NOTIFICATIONS DO NOT COUNT AGAINST IT - the same exemption, from the same
@@ -2846,6 +2982,10 @@ def main(argv=None):
     d = sub.add_parser("decode"); d.add_argument("pullfile"); d.add_argument("--out", required=True)
     an = sub.add_parser("analyze"); an.add_argument("logsdir"); an.add_argument("--baseline", required=True); an.add_argument("--out", required=True)
     an.add_argument("--summary"); an.add_argument("--since")
+    # The build under test, e.g. 4.3.36.981 (the package MANIFEST's file version). Without it the
+    # build filter calls the highest version in the capture the build under test, which is right
+    # for an upgrade and wrong for a downgrade.
+    an.add_argument("--build")
     an.add_argument("--host-utc", help="this host's UTC at the moment the collector ran, so the guest's "
                                        "clock can be checked against a second clock rather than against now"); an.add_argument("--label", default="run"); an.add_argument("--workdir")
     an.add_argument("--jev-cmd", help="override the judge command (tests use a stub)")

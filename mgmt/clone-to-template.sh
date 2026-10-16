@@ -129,8 +129,7 @@ guest_alive() {
     # LIVENESS ONLY, and deliberately NOT pvnic_problem(). On the offline settle boot there is no
     # XENVIF device, so the problem-code probe returns empty on a perfectly healthy guest - using it
     # for liveness makes the settle boot time out and abort the run every time.
-    printf '%s\n' "echo QALIVE_OK" \
-        | timeout 30 qrexec-client-vm "$1" qubes.VMShell 2>/dev/null | grep -q QALIVE_OK
+    grep -q QALIVE_OK <<< "$(printf '%s\n' "echo QALIVE_OK"  | timeout 30 qrexec-client-vm "$1" qubes.VMShell 2>/dev/null)"
 }
 
 wait_alive() {

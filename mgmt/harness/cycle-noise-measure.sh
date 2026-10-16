@@ -78,7 +78,7 @@ log "booted; waiting for qrexec, then leaving it ALONE for ${SETTLE}s"
 answered=0
 deadline=$(( $(date +%s) + 300 ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
-    if QTEST_VM="$SUBJ" timeout 30 "$ROOT/tools/qtest" run 'cmd /c echo BOOTNOISE_UP' 2>/dev/null | command grep -aq BOOTNOISE_UP; then
+    if command grep -aq BOOTNOISE_UP <<< "$(QTEST_VM="$SUBJ" timeout 30 "$ROOT/tools/qtest" run 'cmd /c echo BOOTNOISE_UP' 2>/dev/null)"; then
         answered=1; break
     fi
     st=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$SUBJ" '$1==v{print $2}')
@@ -100,7 +100,7 @@ qvm-start "$SUBJ" >>"$OUT/start2.log" 2>&1 || { log "FATAL: $SUBJ would not rest
 answered=0
 deadline=$(( $(date +%s) + 300 ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
-    if QTEST_VM="$SUBJ" timeout 30 "$ROOT/tools/qtest" run 'cmd /c echo CYCLE_UP' 2>/dev/null | command grep -aq CYCLE_UP; then
+    if command grep -aq CYCLE_UP <<< "$(QTEST_VM="$SUBJ" timeout 30 "$ROOT/tools/qtest" run 'cmd /c echo CYCLE_UP' 2>/dev/null)"; then
         answered=1; break
     fi
     st=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$SUBJ" '$1==v{print $2}')

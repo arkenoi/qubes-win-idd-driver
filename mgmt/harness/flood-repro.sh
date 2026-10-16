@@ -69,7 +69,7 @@ state(){ qvm-ls --raw-data --fields STATE "$SUBJ" 2>/dev/null | tr -d '\n'; }
 wait_session(){ local d=$((SECONDS+${1:-420}));
   while [ $SECONDS -lt $d ]; do
     [ "$(state)" = Halted ] && { echo "halted"; return 1; }
-    q run 'cmd /c echo UP' 2>/dev/null | grep -q UP && { echo "up"; return 0; }
+    grep -q UP <<< "$(q run 'cmd /c echo UP' 2>/dev/null)" && { echo "up"; return 0; }
     sleep 10
   done; echo "deadline"; return 1; }
 

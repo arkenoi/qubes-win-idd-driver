@@ -164,6 +164,14 @@ findings/issues.md, with per-suite estimates.
   judgement, and a wrong one is only visible when something ships.
 - **A suite that does not assert the thing.** Scoping decides which suites run, not what they check. The defect that
   prompted all of this was invisible to every cell; the log sweep in the core is the answer to that, not the map.
+- **The sweep judging the wrong build.** Added 2026-10-16 after it happened. The sweep's window is a time range, but
+  what a gate judges is a BUILD - and the short cycle is `quick-upgrade`, where the old build is running when the
+  upgrade starts and the new one starts minutes later, both inside one window. Ten error lines from gui-agent
+  4.3.35.795 were billed to 4.3.36.981, three committed fixes were reported as not working, and the cut release was
+  suspected of shipping stale binaries (it was not; the installed hash matched the package's own reference). The
+  sweep now scopes every line metric by the version each module declared, reporting what it set aside
+  (`error_lines_prior_build`, `prior_build_mix`) and naming the one case where the filter could manufacture a zero
+  (`modules_superseded_silent`). A gate instrument that cannot say which build wrote a line cannot grade a release.
 - **The ledger being wrong.** It is written by the tool, but its first three records were reconstructed from release
   notes, and they are marked as such. None of them is a full run under this scheme, so the first gate after this lands
   is a full one.

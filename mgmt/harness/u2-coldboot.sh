@@ -45,7 +45,7 @@ V="$OUT/verdicts.tsv"; EV=$(basename "$OUT"); rc=0
 klass=$(qvm-prefs "$VM" klass 2>/dev/null)
 [ "$klass" = TemplateVM ] || { log "REFUSING: $VM is a $klass. The QdbDaemon race is template-specific."; exit 2; }
 
-alive(){ r 'cmd /c echo ALIVE' | grep -qa ALIVE; }
+alive(){ grep -qa ALIVE <<< "$(r 'cmd /c echo ALIVE')"; }
 alive || { log "FATAL: $VM not answering qrexec"; exit 2; }
 
 # ---------------------------------------------------------------- scan must be ARMED, not disarmed

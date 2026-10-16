@@ -72,7 +72,7 @@ esac
 # Three exits: answered, terminal (qrexec gone), deadline.
 up=0
 for i in $(seq 1 24); do
-  if timeout 30 tools/qtest run 'cmd /c echo QREXEC_UP' 2>/dev/null | command grep -qa '^QREXEC_UP'; then
+  if command grep -qa '^QREXEC_UP' <<< "$(timeout 30 tools/qtest run 'cmd /c echo QREXEC_UP' 2>/dev/null)"; then
       up=1; say "qrexec answered at t+$((i*10))s"; break; fi
   sleep 10
 done
@@ -113,9 +113,9 @@ fi
 # pushing before a session exists dies with "sent 0/NNNN KBEOF" (measured 2026-10-08 on win11de-ur1).
 sess=0
 for i in $(seq 1 30); do
-  if timeout 30 tools/qtest run 'cmd /c query session' 2>/dev/null | command grep -aqE 'Aktiv|Active'; then
+  if command grep -aqE 'Aktiv|Active' <<< "$(timeout 30 tools/qtest run 'cmd /c query session' 2>/dev/null)"; then
       sess=1; say "a session is active at t+$((i*10))s"; break; fi
-  if ! timeout 20 tools/qtest run 'cmd /c echo ALIVE' 2>/dev/null | command grep -qa '^ALIVE'; then
+  if ! command grep -qa '^ALIVE' <<< "$(timeout 20 tools/qtest run 'cmd /c echo ALIVE' 2>/dev/null)"; then
       echo "FAIL  qrexec went away while waiting for a session - terminal, nothing pushed"; exit 2; fi
   sleep 10
 done

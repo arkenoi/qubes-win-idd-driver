@@ -77,7 +77,7 @@ boot_and_wait(){
   timeout -k 10 200 qvm-start "$VM" >/dev/null 2>&1 & disown
   sleep 35
   for _ in $(seq 1 40); do
-    r 'cmd /c echo ALIVE' | grep -qa ALIVE && return 0
+    grep -qa ALIVE <<< "$(r 'cmd /c echo ALIVE')" && return 0
     sleep 15
   done
   return 1
@@ -99,7 +99,7 @@ session_count(){  r 'cmd /c query user'                                         
 explorer_count(){ r 'cmd /c tasklist /fi "imagename eq explorer.exe" /nh'        | grep -ac 'explorer\.exe'; }
 logonui_count(){  r 'cmd /c tasklist /fi "imagename eq LogonUI.exe" /nh'         | grep -ac 'LogonUI\.exe'; }
 autologon_val(){  r "cmd /c reg query \"$WL\" /v AutoAdminLogon" | grep -a 'REG_SZ' | awk '{print $NF}' | head -1; }
-guard_present(){  r 'cmd /c schtasks /query /tn QubesAutologonGuard 2>&1' | grep -qa 'QubesAutologonGuard *N/A' && echo yes || echo no; }
+guard_present(){ grep -qa 'QubesAutologonGuard *N/A' <<< "$(r 'cmd /c schtasks /query /tn QubesAutologonGuard 2>&1')" && echo yes || echo no; }
 state_block(){ echo "    sessions=$(session_count) explorer=$(explorer_count) logonui=$(logonui_count) autologon=$(autologon_val) guard=$(guard_present)"; }
 
 # --------------------------------------------------------------- 1. control

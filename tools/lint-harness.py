@@ -1205,12 +1205,35 @@ def l23_no_pipe_into_grep_q_for_a_guest_probe() -> None:
     different risk and flagging all of them would bury this rule in noise until it got baselined
     away, which is how a real rule dies.
 
-    AND ONLY WHERE pipefail IS ACTUALLY IN EFFECT. Without it the pipeline returns grep's own
-    status and the shape is correct - mgmt/clone-to-template.sh and mgmt/win-install-watch.sh both
-    use it under a plain `set -u` and are not defective. A library counts too, because pipefail
-    comes from whoever sourced it: that is precisely how e2e-wait.sh, which sets nothing itself,
-    carried this defect into every harness that sources it."""
-    probe = re.compile(r"(?:\btimeout\b|\./tools/qtest\b|\bqrexec-client-vm\b)[^|]*\|\s*grep\s+-[a-zA-Z]*q")
+    THE SECOND HARM, AND WHY pipefail IS NO LONGER A CONDITION. This rule used to fire only where
+    pipefail was in effect, on the reasoning that "without it the pipeline returns grep's own status
+    and the shape is correct - mgmt/clone-to-template.sh and mgmt/win-install-watch.sh both use it
+    under a plain `set -u` and are not defective". The first paragraph above refutes that in its own
+    words: the producer dies of SIGPIPE whatever the shell's pipefail setting is. Mis-grading is the
+    harm pipefail adds; killing the guest's caller is there without it.
+    MEASURED on win11-nfy 2026-10-16: `alive(){ T=30 q run 'cmd /c echo LIVE' | grep -qa LIVE; }`
+    (gate-preflight.sh, failproof-gates.sh) killed qrexec-client-vm between the request and the
+    guest-side connect-back twice in 163 calls, and the GUEST logged
+    `InitVchan: QGAVCHANFAIL ... xenstore node unreadable (0x5 = absent or denied); request dropped`
+    - an ERROR line against the owner's clean-error-log gate condition, whose level is settled as
+    ERROR (findings/issues.md QGAVCHANFAIL: demotion scored 0.39, gate forgiveness 0.73 as hiding).
+    So the caller must stop creating the condition, which is this rule.
+
+    AND WHY IT FOUND NOTHING FOR TWO DAYS. On 2026-10-16 the rule reported 0 findings against 30
+    live sites - including quick-upgrade.sh, matrix.sh and gate-remainder.sh. Three holes, each
+    fixed in the pattern below: the producer had to be a literal `timeout`/`./tools/qtest`/
+    `qrexec-client-vm`, so a local wrapper (`q run`, `gq`, `grun`, `r`, `qrun`) hid it; the grep had
+    to be the first word after the pipe, so `| command grep -qa` hid it; and the pipefail gate hid
+    the rest. A detector that has never fired on the real population is a receipt for a check
+    nobody ran. `cmd /c` is in the producer set because it only ever addresses a Windows guest,
+    which is what makes a local wrapper detectable at all."""
+    # A guest-calling producer by any spelling in use here, including a wrapper named by its payload.
+    _prod = (r"(?:\./tools/qtest\b|\btools/qtest\b|\$\{?QTEST_BIN\}?|\bqrexec-client-vm\b"
+             r"|\bqvm-run\b|cmd\s+/c\b)")
+    # grep may be reached through `command`, `env`, or a VAR=value prefix.
+    _grepq = (r"(?:\|)\s*(?:command\s+|env\s+|LC_ALL=\S+\s+|[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*"
+              r"grep\s+-[a-zA-Z]*q")
+    probe = re.compile(_prod + r"[^|]*" + _grepq)
     files = sorted((ROOT / "mgmt").glob("*.sh")) + \
             sorted((ROOT / "mgmt" / "harness").glob("*.sh")) + \
             [p for p in sorted((ROOT / "tools").glob("*.sh")) if "tests" not in p.parts]
@@ -1221,8 +1244,6 @@ def l23_no_pipe_into_grep_q_for_a_guest_probe() -> None:
                 if any(re.search(r"(?:^|\s)(?:source|\.)\s+\S*" + re.escape(f.name), bodies[g], re.M)
                        for g in pipefail)}
     for f in files:
-        if f not in pipefail and f not in inherits:
-            continue
         heredoc = None
         buf, bufn = "", None
         for n, ln in enumerate(bodies[f].splitlines(), 1):
@@ -1247,9 +1268,13 @@ def l23_no_pipe_into_grep_q_for_a_guest_probe() -> None:
                 continue
             buf, bufn = "", None
             if probe.search(cur):
+                # Both harms are real; pipefail decides whether the SECOND one is also present.
+                also = (" and pipefail then grades a live guest dead (86/200)"
+                        if f in pipefail or f in inherits else "")
                 finding("L23-pipe-into-grep-q-probe", f"{f.name}:{curn}",
-                        "a guest probe piped into grep -q: SIGPIPE + pipefail grade a live guest "
-                        "dead (measured 86/200); capture it and match instead")
+                        "a guest probe piped into grep -q: grep's early exit SIGPIPEs the qrexec "
+                        "client mid-connect, and the guest logs QGAVCHANFAIL request dropped"
+                        + also + "; capture it and match instead")
 
 
 def l22_vm_start_must_assert_sole_guest() -> None:

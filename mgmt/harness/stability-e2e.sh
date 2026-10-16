@@ -155,7 +155,7 @@ EOF
   bootwait 25 say || { no "$TAG: template never formed a session before install"; return 1; }
   sleep 20
   timeout -k 8 600 ./tools/qtest push "$TAR" >/dev/null 2>&1 || { no "$TAG: push failed"; return 1; }
-  qrun "cmd /c \"rmdir /s /q C:\\q4314 2>nul & mkdir C:\\q4314 & tar -xzf $INC\\$(basename $TAR) -C C:\\q4314 && echo EXTRACT_OK\"" | grep -qx EXTRACT_OK || { no "$TAG: extract failed"; return 1; }
+  grep -qx EXTRACT_OK <<< "$(qrun "cmd /c \"rmdir /s /q C:\\q4314 2>nul & mkdir C:\\q4314 & tar -xzf $INC\\$(basename $TAR) -C C:\\q4314 && echo EXTRACT_OK\"")" || { no "$TAG: extract failed"; return 1; }
   # DEFECT DELIBERATELY RE-INTRODUCED before the install, so the suppressor is tested against the
   # state the field hit rather than against a guest that never prompts anyway: a pending PV reboot
   # Request plus xenbus_monitor set to auto-start. The MSI starts the service during its own run -

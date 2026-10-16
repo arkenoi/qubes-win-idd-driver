@@ -424,11 +424,35 @@ D="$TMP/l23"; mk "$D"
 printf '#!/bin/bash\nset -uo pipefail\nalive(){ timeout -k 5 45 ./tools/qtest run %s | grep -qa PONG; }\n' "'cmd /c echo PONG'" > "$D/mgmt/harness/probe.sh"
 expect_fires L23-pipe-into-grep-q-probe "$D" "a qtest liveness probe piped into grep -q under pipefail"
 
-# the correct shape, and the shape that is correct BECAUSE pipefail is absent - both must stay silent
+# NO PIPEFAIL IS NOT A DEFENCE, and this case used to assert that it was. Without pipefail the
+# pipeline does return grep's own status - but grep's early exit still SIGPIPEs the qrexec client
+# mid-connect, and the GUEST then writes `QGAVCHANFAIL ... request dropped` at ERROR, against the
+# owner's clean-error-log gate condition. MEASURED on win11-nfy 2026-10-16: twice in 163 calls, from
+# `alive(){ T=30 q run 'cmd /c echo LIVE' | grep -qa LIVE; }`, whose own file sets no pipefail.
+D="$TMP/l23nopf"; mk "$D"
+printf '#!/bin/bash\nset -u\nalive(){ timeout 30 qrexec-client-vm "$1" qubes.VMShell | grep -q QALIVE_OK; }\n' > "$D/mgmt/harness/nopipefail.sh"
+expect_fires L23-pipe-into-grep-q-probe "$D" "a pipe into grep -q with NO pipefail: it still kills the guest's caller"
+
+# THE THREE HOLES that let this rule report 0 findings against 30 live sites on 2026-10-16.
+D="$TMP/l23holes"; mk "$D"
+# (1) the producer is a LOCAL WRAPPER, named only by its guest payload
+printf '#!/bin/bash\nset -u\nalive(){ T=30 q run %s | grep -qa LIVE; }\n' "'cmd /c echo LIVE'" > "$D/mgmt/harness/wrapper.sh"
+expect_fires L23-pipe-into-grep-q-probe "$D" "hole 1: a local wrapper (q run 'cmd /c ...') hid the producer"
+D="$TMP/l23holes2"; mk "$D"
+# (2) grep reached through `command`, so it is not the first word after the pipe
+printf '#!/bin/bash\nset -u\nup(){ QTEST_VM=$VM timeout 40 tools/qtest run %s 2>/dev/null | command grep -qa QREADY; }\n' "'cmd /c echo QREADY'" > "$D/mgmt/harness/cmdgrep.sh"
+expect_fires L23-pipe-into-grep-q-probe "$D" "hole 2: 'command grep -qa' hid the consumer"
+D="$TMP/l23holes3"; mk "$D"
+# (3) $QTEST_BIN as the producer's spelling
+printf '#!/bin/bash\nset -u\nup(){ QTEST_VM=$VM timeout 40 "$QTEST_BIN" run %s | grep -qa QREADY; }\n' "'cmd /c echo QREADY'" > "$D/mgmt/harness/qtestbin.sh"
+expect_fires L23-pipe-into-grep-q-probe "$D" "hole 3: \$QTEST_BIN hid the producer"
+
+# the correct shape stays silent - including a pipeline out of a LOCAL command, which is a
+# different risk and must not be swept in (flagging those is how a real rule dies in noise)
 D="$TMP/l23ok"; mk "$D"
 printf '#!/bin/bash\nset -uo pipefail\nalive(){ grep -qa PONG <<< "$(timeout -k 5 45 ./tools/qtest run %s)"; }\n' "'cmd /c echo PONG'" > "$D/mgmt/harness/good.sh"
-printf '#!/bin/bash\nset -u\nalive(){ timeout 30 qrexec-client-vm "$1" qubes.VMShell | grep -q QALIVE_OK; }\n' > "$D/mgmt/harness/nopipefail.sh"
-expect_silent L23-pipe-into-grep-q-probe "$D" "capture-then-match, and a pipe into grep -q with NO pipefail (where the status is grep's own)"
+printf '#!/bin/bash\nset -uo pipefail\nhas(){ timeout 5 cat /etc/hosts | grep -q localhost; }\n' > "$D/mgmt/harness/local.sh"
+expect_silent L23-pipe-into-grep-q-probe "$D" "capture-then-match, and a purely LOCAL pipeline under pipefail"
 
 # a LIBRARY that sets nothing itself inherits pipefail from whoever sources it - exactly how
 # e2e-wait.sh carried this into every harness that sources it

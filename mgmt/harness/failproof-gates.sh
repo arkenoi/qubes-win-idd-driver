@@ -56,7 +56,7 @@ source mgmt/harness/lifecycle-lib.sh   # agent_restart_ps / agent_restart_grade:
 # without this bound three 28-minute cycles would grind against a dead guest until the step
 # timeout killed the run with NO verdicts.tsv at all (rule 14's worst shape). Nothing here
 # weakens the responsive path: an ALIVE guest still runs every armed->RED->cleared->green flip.
-alive(){ T=30 q run 'cmd /c echo LIVE' | grep -qa LIVE; }
+alive(){ grep -qa LIVE <<< "$(T=30 q run 'cmd /c echo LIVE')"; }
 
 guest_gone(){  # <context> <check-column> - one bounded clear attempt, the verdict row, and OUT (exit 3)
   log "guest gone - one bounded FaultGateOff=0 clear attempt, then the verdict"

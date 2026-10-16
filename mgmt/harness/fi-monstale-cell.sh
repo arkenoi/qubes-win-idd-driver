@@ -39,7 +39,7 @@ K='HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent'
 ps1(){ QTEST_VM=$VM timeout "${T:-240}" tools/qtest run \
          "powershell -NoProfile -EncodedCommand $(printf '%s' "$1" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)" 2>&1; }
 wait_qrexec(){ for _i in $(seq 1 42); do
-    if QTEST_VM=$VM timeout 40 tools/qtest run 'cmd /c echo QREADY' 2>/dev/null | command grep -qa '^QREADY'; then return 0; fi
+    if command grep -qa '^QREADY' <<< "$(QTEST_VM=$VM timeout 40 tools/qtest run 'cmd /c echo QREADY' 2>/dev/null)"; then return 0; fi
     sleep 10; done; return 1; }
 restore(){ ps1 "Remove-ItemProperty '$K' -Name FaultMonStale -EA SilentlyContinue; Write-Host 'KNOB=removed'" \
              | command grep -ao 'KNOB=removed' || say "WARN could not remove FaultMonStale - do it by hand"; }

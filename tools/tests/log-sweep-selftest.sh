@@ -69,12 +69,12 @@ def watchdog(pid=700, stop_pid=1000, extra_mid=(), stop_exit="0x0", asked="10100
           wu("101000.401", 103, "I", "ServiceMain", "exiting")]
     return L
 
-def agent(pid=1000, t0="100031.200", uptime="31.200", mid=(), tail=None, announce=True):
+def agent(pid=1000, t0="100031.200", uptime="31.200", mid=(), tail=None, announce=True, ver="9.9.9.1"):
     tid = 200
     L = [wu(t0, tid, "I", "LogInit", "Log started, module name: gui-agent"),
          wu(t0, tid, "I", "LogInit", "System uptime: %s seconds" % uptime),
          wu(t0, tid, "I", "LogInit", "Running as user: SYSTEM, process ID: %d" % pid),
-         wu(t0, tid, "I", "LogInit", "Module version: 9.9.9.1"),
+         wu(t0, tid, "I", "LogInit", "Module version: %s" % ver),
          wu(t0, tid, "I", "LogInit", "Session: 1"),
          wu(t0, tid, "I", "PerfInit", "QGAPROTO off (wobble probe off, drag-only trace off)")]
     if announce:
@@ -439,6 +439,27 @@ wd_bs = [wu("100955.000", 100, "I", "LogInit", "Log started, module name: gui-wa
 ag_bs = agent(1010, t0="100957.200", uptime="7.200")
 write("bootshut.pull", stream([(WDB, "watchdog", wd_bs), (AGB, "agent", ag_bs)], events()))
 
+# ---- twobuild: ONE module, TWO builds, both inside one window -------------------------------------------------
+# THE SHAPE MEASURED ON win11-nfy 2026-10-16, which is the shape of every quick-upgrade cell: the OLD build is
+# running when the upgrade starts, writes its last lines, and the NEW build starts three minutes later. One log
+# directory then holds `gui-agent-<date>-<time>-<pid>.log` (old build, the per-process name) beside
+# `gui-agent-<date>.log` (new build, the per-day name), and NO timestamp separates the two builds.
+# The ERROR line below is the real one: the old build's "WatchForEvents failed with error 0x0", which the sweep
+# billed to the new build - whose binary provably does not contain that string - so a committed fix was reported
+# as not working and the release was briefly suspected of shipping stale binaries.
+TBO = "gui-agent-20261007-100031-1000.log"
+TBN = "gui-agent-20261007.log"
+tb_old = agent(ver="9.9.9.0", mid=[wu("100200.000", 200, "E", "WinMain",
+                                      "WatchForEvents failed with error 0x0: The operation completed successfully.")])
+tb_new = [wu("100400.000", "3992:4016", "I", "LogInit", "Log started, module name: gui-agent"),
+          wu("100400.000", "3992:4016", "I", "LogInit", "System uptime: 240.000 seconds"),
+          wu("100400.001", "3992:4016", "I", "LogInit", "Running as user: SYSTEM, process ID: 3992"),
+          wu("100400.001", "3992:4016", "I", "LogInit", "Module version: 9.9.9.1"),
+          wu("100400.001", "3992:4016", "I", "LogInit", "Session: 1"),
+          wu("100401.000", "3992:4016", "I", "WatchForEvents", "A vchan client has connected"),
+          wu("100500.000", "3992:4016", "I", "WatchForEvents", "exiting")]
+write("twobuild.pull", stream([(TBO, "agent", tb_old), (TBN, "agent", tb_new)], events()))
+
 PY
 [ $? -eq 0 ] || { echo "FATAL: fixture generation failed"; exit 2; }
 
@@ -460,7 +481,7 @@ analyze(){ # $1=analyzer $2=logsdir $3=baseline $4=judge $5=tag -> rc; report at
 field(){ python3 -c "import json,sys; r=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$1" "$2"; }
 
 # ---- decode every fixture with the real decoder --------------------------------------------------------------------
-for f in base newsig rise three stoperr empty twoboot clockflip rapidboot taskok vchanwd phaseflip skipnames skipchatty bootshut inv twoproc msiok msibad; do
+for f in base newsig rise three stoperr empty twoboot clockflip rapidboot taskok vchanwd phaseflip skipnames skipchatty bootshut inv twoproc msiok msibad twobuild; do
   rc=$(decode "$SRC" "$T/$f.pull" "$T/$f")
   [ "$rc" = 0 ] || { echo "FATAL: the $f fixture did not decode (rc=$rc): $(tail -2 "$T/$f.decode.txt")"; exit 2; }
   # EVERY LINE IN THESE CORPORA IS WRITTEN BY THIS TEST, so the run declares the errors it caused - which is
@@ -1159,6 +1180,75 @@ ew=$(sw "$SRC" t40)
 KI=$(knob instwindow); ewk=$(sw "$KI" t40k)
 [ "$ewk" = 1 ] && ok "knob instwindow: with the window ignored, another run's instance is graded (=$ewk)" \
                || bad "knob instwindow: got $ewk, want 1 - the case cannot be driven"
+
+# ---- T44 the window is TEMPORAL; the thing under test is a BUILD ------------------------------
+# T40 fixed half of this class with the time window. This is the half a window cannot reach: on a
+# quick-upgrade cell both builds run INSIDE it, minutes apart. MEASURED win11-nfy 2026-10-16 - see
+# the twobuild fixture. A line is a prior build's only when its own module declared a newer version
+# somewhere in the capture, which is what leaves single-version stock modules (file-receiver
+# 4.2.2.0, qubesdb-daemon 4.3.1.0, qwtng-netsetup 0.0.0.0) untouched.
+tb(){ # $1=analyzer $2=tag -> prints "<error_lines> <error_lines_prior_build> <mix>"
+  python3 "$1" analyze "$T/twobuild" --baseline "$T/baseline.json" --out "$T/$2.json" \
+      --summary "$T/$2.txt" --label "$2" --workdir "$T/work-$2" --jev-cmd "$T/jev-expected.py" > "$T/$2.out" 2>&1
+  field "$T/$2.json" 'str(r["metrics"]["error_lines"])+" "+str(r["metrics"].get("error_lines_prior_build"))+" "+str(r["metrics"].get("prior_build_mix"))'
+}
+read -r t44e t44p t44m <<<"$(tb "$SRC" t44)"
+[ "$t44e" = 0 ] && ok "T44 the superseded build's ERROR line is not billed to the build under test (error_lines=$t44e)" \
+                || bad "T44 error_lines=$t44e, want 0 - the old build's line is still counted as the new build's"
+[ "$t44p" = 1 ] && ok "T44 and the exclusion is REPORTED, not silent (error_lines_prior_build=$t44p)" \
+                || bad "T44 error_lines_prior_build=$t44p, want 1 - an excluded line must stay a figure"
+case "$t44m" in *9.9.9.0*9.9.9.1*) ok "T44 the version mix is named (prior_build_mix=$t44m)" ;;
+                *) bad "T44 prior_build_mix=$t44m, want both versions of gui-agent" ;; esac
+KB=$(knob priorbuild); read -r t44ke _ _ <<<"$(tb "$KB" t44k)"
+[ "$t44ke" = 1 ] && ok "knob priorbuild: SEEN TO FAIL - without the build scope the old build's line is graded as the new build's (error_lines=$t44ke)" \
+                 || bad "knob priorbuild: error_lines=$t44ke, want 1 - the case cannot be driven"
+# AND THE FILTER MUST NOT EAT A SINGLE-VERSION MODULE: the clean fixture has one build only, so its
+# error/warning counts must be untouched by all of the above (a filter that over-reaches here would
+# zero the gate metric on every normal run, which reads exactly like a pass).
+bw=$(field "$T/t2.json" 'r["metrics"]["warning_lines"]')
+bp=$(field "$T/t2.json" 'str(r["metrics"].get("error_lines_prior_build"))+" "+str(r["metrics"].get("prior_build_mix"))')
+[ "${bw:-0}" -ge 1 ] && [ "$bp" = "0 {}" ] && ok "T44 a single-build capture is untouched (warning_lines=$bw, prior_build=$bp)" \
+                     || bad "T44 single-build capture disturbed: warning_lines=$bw prior_build=$bp, want >=1 and '0 {}'"
+
+# ---- T45 --build names the build under test, because a DOWNGRADE inverts "newest" --------------
+# Jev scored the self-calibrating rule 0.61 with 0.39 on "it has a failure mode that matters", and
+# this is the one: installing an OLDER build over a newer one makes the superseded half the half
+# that is kept. --build wins over "highest version seen", and the disagreement is a DATA PROBLEM,
+# never a silent preference.
+tbb(){ # $1=--build value $2=tag -> "<error_lines> <prior_build> <problem kinds>"
+  python3 "$SRC" analyze "$T/twobuild" --baseline "$T/baseline.json" --out "$T/$2.json" \
+      --summary "$T/$2.txt" --label "$2" --workdir "$T/work-$2" --jev-cmd "$T/jev-expected.py" \
+      --build "$1" > "$T/$2.out" 2>&1
+  field "$T/$2.json" 'str(r["metrics"]["error_lines"])+" "+str(r["metrics"]["error_lines_prior_build"])+" "+str(sorted({p[0] for p in r["data_problems"]}))'
+}
+read -r t45e t45p t45k <<<"$(tbb 9.9.9.1 t45)"
+[ "$t45e" = 0 ] && [ "$t45p" = 1 ] && ok "T45 --build agreeing with newest changes nothing (error_lines=$t45e prior=$t45p)" \
+                || bad "T45 --build 9.9.9.1 gave error_lines=$t45e prior=$t45p, want 0 and 1"
+read -r t45de t45dp t45dk <<<"$(tbb 9.9.9.0 t45d)"
+[ "$t45de" = 1 ] && [ "$t45dp" = 0 ] && ok "T45 a DOWNGRADE scopes to --build, not to newest (error_lines=$t45de prior=$t45dp)" \
+                 || bad "T45 --build 9.9.9.0 gave error_lines=$t45de prior=$t45dp, want 1 and 0 - the filter still prefers newest"
+case "$t45dk" in *build-scope*) ok "T45 and the downgrade is a DATA PROBLEM, not a silent choice ($t45dk)" ;;
+                 *) bad "T45 downgrade raised no build-scope data problem (kinds=$t45dk)" ;; esac
+
+# ---- T46 a superseded module whose NEWEST build wrote nothing in the window is a FAILURE -------
+# The one way the filter can manufacture a zero: the upgrade lands at the very end of the window,
+# so the build under test has written no line and its 0 means "nothing was considered". The
+# GUARD:winsince comment records three metrics already lost to that reading.
+sb(){ # $1=analyzer $2=tag -> "<rc> <problem kinds> <silent modules>"
+  python3 "$1" analyze "$T/twobuild" --baseline "$T/baseline.json" --out "$T/$2.json" \
+      --summary "$T/$2.txt" --label "$2" --workdir "$T/work-$2" --jev-cmd "$T/jev-expected.py" \
+      --since 2026-10-07T10:06:00Z > "$T/$2.out" 2>&1
+  printf '%s ' "$?"
+  field "$T/$2.json" 'str(sorted({p[0] for p in r["data_problems"]}))+" "+str(r["metrics"]["modules_superseded_silent"])'
+}
+read -r t46rc t46k t46m <<<"$(sb "$SRC" t46)"
+case "$t46k$t46m" in *build-scope*gui-agent*) ok "T46 the newest build writing nothing in the window FAILS (rc=$t46rc kinds=$t46k silent=$t46m)" ;;
+                     *) bad "T46 kinds=$t46k silent=$t46m, want a build-scope problem naming gui-agent" ;; esac
+[ "$t46rc" != 0 ] && ok "T46 and it is a non-zero rc, not a pass (rc=$t46rc)" \
+                  || bad "T46 rc=$t46rc - a sweep that considered nothing must not pass"
+KS=$(knob silentbuild); read -r t46krc t46kk _ <<<"$(sb "$KS" t46k)"
+case "$t46kk" in *build-scope*) bad "knob silentbuild: still raised the problem (kinds=$t46kk) - the case cannot be driven" ;;
+                 *) ok "knob silentbuild: SEEN TO FAIL - without it the empty window passes silently (kinds=$t46kk)" ;; esac
 
 # ---- T41-T42 the rig wrapper: the guest's clock is read BEFORE it is synced, and the collector's cap is passed ----
 # MEASURED 2026-10-10 on win10-acc: the wrapper never called `qtest synctime`, so the collector ran with the guest

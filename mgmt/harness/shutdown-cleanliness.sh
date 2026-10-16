@@ -39,7 +39,7 @@ psp(){ local k="$1"; gq "powershell -NoProfile -ExecutionPolicy Bypass -EncodedC
        | grep -aoE "^$k=.*" | head -1 | sed "s/^$k=//"; }
 state(){ qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$VM" '$1==v{print $2}'; }
 
-wait_up(){ for i in $(seq 1 50); do gq 'cmd /c echo UP' 25 | grep -qa UP && return 0; sleep 15; done; return 1; }
+wait_up(){ for i in $(seq 1 50); do grep -qa UP <<< "$(gq 'cmd /c echo UP' 25)" && return 0; sleep 15; done; return 1; }
 wait_halt(){ for i in $(seq 1 60); do [ "$(state)" = Halted ] && return 0; sleep 5; done; return 1; }
 
 # The two signals nobody was asking. Kernel-Power 41 is the OS saying it "rebooted without cleanly

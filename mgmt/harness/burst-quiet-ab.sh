@@ -138,8 +138,7 @@ burst_round(){ # $1=cycle $2=round
       echo "$? $(( $(date +%s) - s ))" > "$OUT/push/res-p$i" ) & pids+=($!)
   done
   for i in $(seq 1 "$CALLS"); do
-    ( s=$(date +%s); QTEST_VM="$VM" timeout -k 5 90 ./tools/qtest run "cmd /c echo BQ$c.$r.$i" 2>/dev/null \
-        | grep -qa "BQ$c\.$r\.$i"
+    ( s=$(date +%s); grep -qa "BQ$c\.$r\.$i" <<< "$(QTEST_VM="$VM" timeout -k 5 90 ./tools/qtest run "cmd /c echo BQ$c.$r.$i" 2>/dev/null)"
       echo "$? $(( $(date +%s) - s ))" > "$OUT/push/res-c$i" ) & pids+=($!)
   done
   wait "${pids[@]}"

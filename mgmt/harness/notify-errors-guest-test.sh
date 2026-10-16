@@ -87,8 +87,8 @@ reboot_proven(){
     for i in $(seq 1 40); do [ "$(state)" = Halted ] && break; sleep 10; done
     [ "$(state)" = Halted ] || { no "$label: never Halted (state=$(state))"; return 1; }
     qvm-start "$VM" >/dev/null 2>&1
-    for i in $(seq 1 60); do gq 'cmd /c echo PING=UP' 30 | grep -q 'PING=UP' && break; sleep 10; done
-    gq 'cmd /c echo PING=UP' 30 | grep -q 'PING=UP' || { no "$label: no qrexec within 10 min"; return 1; }
+    for i in $(seq 1 60); do grep -q 'PING=UP' <<< "$(gq 'cmd /c echo PING=UP' 30)" && break; sleep 10; done
+    grep -q 'PING=UP' <<< "$(gq 'cmd /c echo PING=UP' 30)" || { no "$label: no qrexec within 10 min"; return 1; }
     after=$(boot_id); [ -n "$after" ] || { no "$label: no LastBootUpTime AFTER"; return 1; }
     [ "$after" != "$before" ] || { no "$label: boot UNCHANGED ($after)"; return 1; }
     ok "$label: reboot PROVEN ($before -> $after)"; return 0

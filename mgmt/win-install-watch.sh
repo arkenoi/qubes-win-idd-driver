@@ -24,7 +24,7 @@ while :; do
      qvm-start "$VM" >/dev/null 2>&1 || { echo "FAIL: qvm-start rc=$?"; exit 1; }
      stall=0; prevcpu=0; sleep 30; continue
   fi
-  if timeout 20 bash -c "printf 'echo QREXEC_OK\n' | qrexec-client-vm $VM qubes.VMShell" 2>/dev/null | grep -q QREXEC_OK; then
+  if grep -q QREXEC_OK <<< "$(timeout 20 bash -c "printf 'echo QREXEC_OK\n' | qrexec-client-vm $VM qubes.VMShell" 2>/dev/null)"; then
      echo "QREXEC UP - install finished"; exit 0
   fi
   n=$((n+1)); t="$D/shot-$(printf '%03d' $n).tar"

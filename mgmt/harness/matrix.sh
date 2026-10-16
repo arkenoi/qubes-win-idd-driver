@@ -1834,8 +1834,7 @@ cell_seeded(){ # $1=QWT-carrying entry image $2=subject $3=tag
   # set to auto-start cannot restart anything during this install, so grading the installer's
   # kill-the-survivor logic against it would be vacuous - that logic exists precisely because
   # disabling the SERVICE does not stop the already-running PROCESS (the 81d2b79 brick).
-  QTEST_VM=$2 qrun "cmd /c sc config xenbus_monitor start= auto >nul & sc start xenbus_monitor >nul 2>&1 & echo ARMED" 2>/dev/null \
-    | grep -qa ARMED || { no "$3-seeded: could not arm - cell inconclusive"; return; }
+  grep -qa ARMED <<< "$(QTEST_VM=$2 qrun "cmd /c sc config xenbus_monitor start= auto >nul & sc start xenbus_monitor >nul 2>&1 & echo ARMED" 2>/dev/null)" || { no "$3-seeded: could not arm - cell inconclusive"; return; }
   local mst; mst=$(QTEST_VM=$2 qrun 'cmd /c sc query xenbus_monitor' 2>/dev/null | tr -d '\r' | grep -aoE 'RUNNING|STOPPED' | head -1)
   if [ "$mst" = RUNNING ]; then
     ok "$3-seeded: monitor armed AND RUNNING (start=auto) - the field state"

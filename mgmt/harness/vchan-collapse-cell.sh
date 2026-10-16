@@ -66,7 +66,7 @@ for i in $(seq 1 60); do
 done
 up=0
 for i in $(seq 1 30); do
-  if QTEST_VM=$VM timeout 40 tools/qtest run 'cmd /c echo QREADY' 2>/dev/null | command grep -qa '^QREADY'; then up=1; break; fi
+  if command grep -qa '^QREADY' <<< "$(QTEST_VM=$VM timeout 40 tools/qtest run 'cmd /c echo QREADY' 2>/dev/null)"; then up=1; break; fi
   sleep 10
 done
 [ "$up" = 1 ] || { say "FAIL qrexec never answered after the induction boot"; exit 4; }

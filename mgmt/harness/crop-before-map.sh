@@ -140,14 +140,14 @@ if [ "$(llnum "$LL_G")" -lt 4 ] || [ "$(llnum "$LL_M")" -lt 4 ]; then
   timeout 300 qvm-start "$VM" >/dev/null 2>&1
   up=0
   for i in $(seq 1 30); do
-    if gq 'cmd /c echo QREADY' 40 | grep -qa '^QREADY'; then up=1; say "qrexec back at t+$((i*10))s"; break; fi
+    if grep -qa '^QREADY' <<< "$(gq 'cmd /c echo QREADY' 40)"; then up=1; say "qrexec back at t+$((i*10))s"; break; fi
     sleep 10
   done
   [ "$up" = 1 ] || { no "$VM did not come back after the LogLevel reboot"; exit 2; }
   # The toasts are fired into a logged-on session, so wait for one rather than racing it.
   sess=0
   for i in $(seq 1 30); do
-    if gq 'cmd /c query session' 40 | grep -aqE 'Aktiv|Active'; then sess=1; say "session active at t+$((i*10))s"; break; fi
+    if grep -aqE 'Aktiv|Active' <<< "$(gq 'cmd /c query session' 40)"; then sess=1; say "session active at t+$((i*10))s"; break; fi
     sleep 10
   done
   [ "$sess" = 1 ] || { no "no logged-on session after the LogLevel reboot - toasts would go nowhere"; exit 2; }

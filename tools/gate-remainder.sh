@@ -214,7 +214,7 @@ ready() {             # ready <vm>
   probe="$WORK/ready-probe-$v.txt"
   printf 'READYPROBE %s\n' "$v" > "$probe" 2>/dev/null
   for i in $(seq 1 42); do
-    if QTEST_VM="$v" timeout 40 tools/qtest run 'cmd /c echo QREADY' 2>/dev/null | command grep -qa '^QREADY'; then
+    if command grep -qa '^QREADY' <<< "$(QTEST_VM="$v" timeout 40 tools/qtest run 'cmd /c echo QREADY' 2>/dev/null)"; then
       [ "$pushed" = 0 ] && { say "    ready: $v answers qrexec - now proving a file copy"; pushed=1; }
       if QTEST_VM="$v" timeout 90 tools/qtest push "$probe" >>"$LOG" 2>&1; then
         say "    ready: $v takes a file push (the receiver session is up)"; rm -f "$probe"

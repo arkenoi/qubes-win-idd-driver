@@ -41,7 +41,7 @@ r(){ q run "$1" | tr -d '\r' | grep -avE '^(Microsoft Windows \[Version|\(c\) Mi
 log(){ echo "$(date -u +%H:%M:%S) sg1[$VM]: $*" | tee -a "$OUT/sg1u2.log"; }
 rc=0
 
-alive(){ r 'cmd /c echo ALIVE' | grep -qa ALIVE; }
+alive(){ grep -qa ALIVE <<< "$(r 'cmd /c echo ALIVE')"; }
 # SHORT timeout. `alive` inherits T=150, so during a boot it BLOCKS until qrexec comes up - the
 # watch loop below then takes ONE sample and waits, i.e. it does not watch the boot at all, which is
 # the only interval in which the defect could appear. Measured 2026-08-31: "dom0 watch: 0 sample(s)"

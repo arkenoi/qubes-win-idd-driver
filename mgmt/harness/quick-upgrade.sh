@@ -1090,7 +1090,7 @@ grun 'cmd /c powershell -NoProfile -Command "if(Test-Path C:\qwt-install.log){Ge
 sleep 60
 live=0
 for attempt in 1 2; do
-  if grun 'cmd /c echo PONG' 45 | grep -qa PONG; then live=1; break; fi
+  if grep -qa PONG <<< "$(grun 'cmd /c echo PONG' 45)"; then live=1; break; fi
   sleep 15
 done
 if [ "$live" = 1 ]; then
