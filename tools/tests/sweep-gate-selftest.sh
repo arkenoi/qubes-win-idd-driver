@@ -18,7 +18,14 @@ no(){ fail=$((fail+1)); printf '  FAIL  %s\n     -> %s\n' "$1" "$2"; }
 # T0 - THE CORPUS MUST NOT SHRINK. Every recall ratio gets easier as the ground truth gets smaller,
 # and this suite once printed 7/7 green after a broken regenerator silently cut the corpus to four
 # MUST lines. The floor is asserted before any ratio is believed.
-FLOOR_MUST=21; FLOOR_BENIGN=13
+# MOVED DELIBERATELY 2026-10-16, 21/13 -> 20/15, and this is the reason rather than a silent edit.
+# The COVERED qrexec-gap line was demoted from [WARN] to no level on purpose: it fires only when the
+# harness has the guest log in hand, so it is not an error, and it could never be dispositioned
+# anyway (SWEEPWARNUNLEDGERABLE). It did not leave the corpus - it moved to BENIGN, where it asserts
+# the gate does NOT flag it, and the witness line it now carries joined as BENIGN too. So the ground
+# truth GREW, 34 -> 35; one line changed which direction it is asserted in. A MUST floor that only
+# ever goes down on prose is how a gate gets easier, so: down by exactly one, up by two.
+FLOOR_MUST=20; FLOOR_BENIGN=15
 nm=$(grep -ac '^MUST' mgmt/harness/error-corpus.txt || echo 0)
 nb=$(grep -ac '^BENIGN' mgmt/harness/error-corpus.txt || echo 0)
 if [ "${nm:-0}" -ge "$FLOOR_MUST" ] && [ "${nb:-0}" -ge "$FLOOR_BENIGN" ]; then
@@ -412,6 +419,58 @@ SWEEP_GATE_LEDGER="$T/t20-empty.txt" bash tools/sweep-gate.sh "$T/t20a.log" > "$
 grep -a '^  ' "$T/t20e.out" >/dev/null 2>&1   # printed, and that was all it did
 if [ "$rc_old" = 0 ]; then ok "T20e SEEN TO FAIL: the report-only shape leaves rc 0 over that same error"
 else no "T20e SEEN TO FAIL: the report-only shape leaves rc 0" "rc_old=$rc_old"; fi
+
+# T21 - A DURATION IS NOT AN IDENTITY, SO A RECURRING BENIGN WARNING MUST BE LEDGERABLE.
+# MEASURED 2026-10-16, and it was MY OWN REGRESSION. T20 made the short cycle's gate move the
+# verdict; the first clean upgrade it judged then FAILED (rc=3 over "11 passed, 0 failed") on two
+# harness lines that are the GOOD path:
+#   [WARN] t+76s  no qrexec for 35s; from the log VOLUME (host-side, guest untouched): ...
+#   [WARN] t+108s no qrexec for 68s; from the log VOLUME (host-side, guest untouched): ...
+# quick-upgrade.sh:813 emits that when the MSI's silent window has qrexec down AND the harness has
+# just read the guest's last log line off the volume it attached itself - it is REPORTING, with the
+# answer in hand, not failing. The ERROR branch two lines below is the failing one.
+#
+# It could not be dispositioned at all: `\b\d+\b` needs a word boundary AFTER the digits, and in
+# `108s` there is none, so the durations survive normalisation and every run mints a brand-new
+# message. A ledger row written today misses tomorrow's run by design. That is not a noisy warning,
+# it is an UNLEDGERABLE one - the one shape that can never be cleared, so a blocking gate fails
+# every clean run for ever. The number rule has to reach a number with a unit glued to it.
+printf '%s\n' \
+  "[12:00:01]   [WARN] t+76s no qrexec for 35s; from the log VOLUME (host-side, guest untouched): HandleData | cpu=107 quiet=0" \
+  "[12:00:02]   [WARN] t+108s no qrexec for 68s; from the log VOLUME (host-side, guest untouched): HandleData | cpu=252 quiet=0" \
+  > "$T/t21-both.log"
+printf '# empty\n' > "$T/t21-empty.txt"
+o=$(SWEEP_GATE_LEDGER="$T/t21-empty.txt" bash tools/sweep-gate.sh "$T/t21-both.log" 2>&1)
+n=$(printf '%s' "$o" | grep -ac 'no qrexec for')
+if [ "$n" = 1 ]; then ok "T21a two readings of one warning are ONE message, not one per duration"
+else no "T21a durations split one message into $n (want 1) - so it can never be dispositioned" "$(printf '%s' "$o" | grep -a 'no qrexec' | head -3)"; fi
+
+# (b) AND THE DISPOSITION MUST CARRY. This is the half that matters: a reason written from one run
+# has to account for the NEXT run, whose durations are different numbers. Seeded by the tool itself
+# rather than hand-spelled, so the case cannot pass by my guessing the placeholder spelling.
+printf '%s\n' \
+  "[12:00:01]   [WARN] t+76s no qrexec for 35s; from the log VOLUME (host-side, guest untouched): HandleData | cpu=107 quiet=0" \
+  > "$T/t21-run1.log"
+printf '%s\n' \
+  "[13:30:02]   [WARN] t+312s no qrexec for 207s; from the log VOLUME (host-side, guest untouched): HandleData | cpu=98 quiet=0" \
+  > "$T/t21-run2.log"
+bash tools/sweep-gate.sh --write-ledger "$T/t21-led.txt" "$T/t21-run1.log" >/dev/null
+sed -i 's|# TODO.*|# the MSI silent window has qrexec down by design and the volume read SUCCEEDED, so this is the reporting path, not the gap mgmt/harness/quick-upgrade.sh:813|' "$T/t21-led.txt"
+o2=$(SWEEP_GATE_LEDGER="$T/t21-led.txt" bash tools/sweep-gate.sh "$T/t21-run2.log" 2>&1); r2=$?
+if [ "$r2" -eq 0 ]; then ok "T21b a disposition written for one run's durations accounts for the next run's"
+else no "T21b the ledger row missed the same warning at other durations - unledgerable, so every clean run blocks" "$(printf '%s' "$o2" | grep -a UNACCOUNTED | head -2)"; fi
+
+# (c) AND IT MUST STILL SPLIT WHAT IS DIAGNOSTIC. A rule broad enough to merge durations must not
+# merge a KB number or a drive letter - the identity of an update and of a volume are the whole
+# content of their messages. Asserted here because this is the rule T21a/b widen.
+printf '%s\n' \
+  "[12:00:01] [ERROR] KB5007651 failed to install" \
+  "[12:00:02] [ERROR] KB5034441 failed to install" \
+  > "$T/t21-kb.log"
+o3=$(SWEEP_GATE_LEDGER="$T/t21-empty.txt" bash tools/sweep-gate.sh "$T/t21-kb.log" 2>&1)
+k=$(printf '%s' "$o3" | grep -ac 'failed to install')
+if [ "$k" = 2 ]; then ok "T21c two different KB numbers stay two messages - the widened rule does not eat an identity"
+else no "T21c KB identity was merged away ($k messages, want 2)" "$(printf '%s' "$o3" | grep -a 'failed to install' | head -3)"; fi
 
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

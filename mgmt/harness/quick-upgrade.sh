@@ -94,7 +94,14 @@ R="$OUT/quick-upgrade.log"; : > "$R"
 # this narration carried no tag. Guessing a level from the words is not the fix - blog_level
 # refuses vocabulary for good reason - so the EMITTER declares, which is the owner's standing rule.
 # A caller that already passes a level keeps it; everything else is INFO, because narration is.
-log(){ case "$*" in
+# THE LEVEL TOKEN MAY BE INDENTED. This tested "$*" at position zero, and the house style for a
+# sub-step is `log "  [WARN] ..."` with two leading spaces - which misses every pattern below and
+# gets stamped "[INFO]   [WARN] ...", declaring TWO levels on one line with INFO first. The gate's
+# own output showed it: `quick-upgrade[<VM>]: [INFO] [WARN] t+100s no qrexec for 65s`. Nothing was
+# hidden - the gate matches a [WARN] token wherever it sits - but this project's severity doctrine
+# reads the level the WRITER declared (DOM0LOUDNEVERFIRES), and a line declaring both has none.
+log(){ _lv="$*"; _lv="${_lv#"${_lv%%[![:space:]]*}"}"
+       case "$_lv" in
          "[ERROR]"*|"[WARN]"*|"[WARNING]"*|"[INFO]"*|"[DEBUG]"*) _m="$*" ;;
          *) _m="[INFO] $*" ;;
        esac
@@ -154,6 +161,7 @@ release_loop(){
 }
 finish(){ # $1=rc $2=message  - every exit goes through here and says which exit it took
   local rc=$1; shift
+  local _gate_override=0
   # Pull the log volume on EVERY exit, pass or fail. Host-side, nothing detached, so it works with
   # the guest still running or wedged - which is the whole point: the wedge is the case to catch.
   if [ -n "${LOGVOL_IMG:-}" ]; then
@@ -187,12 +195,19 @@ finish(){ # $1=rc $2=message  - every exit goes through here and says which exit
         log "sweep-gate: the only error-shaped lines are this run's own graded verdicts"
       else
         log "[ERROR] SWEEP-GATE FINDINGS in this run's own log - see $OUT/sweep-gate.out"
-        [ "$rc" = 0 ] && rc=3
+        [ "$rc" = 0 ] && { rc=3; _gate_override=1; }
       fi
     fi
   fi
   # EVERY exit of this harness goes through here, so this one line decides whether a sweep can see
   # that the cell ended badly. rc is the fact; the level is what makes it readable by an instrument.
+  #
+  # AND WHEN THE GATE OVERRIDES THE rc IT MUST OVERRIDE THE WORDS. The caller's text is fixed before
+  # this function runs the sweep - `finish 0 "OK: ..."` - so a clean upgrade the gate then failed
+  # printed `[ERROR] OK: win11-nfy upgraded 4.3.35.795 -> 4.3.36.980 ... and verified`: a level and
+  # a noun that contradict each other, and the noun is what a reader believes. The cell's own
+  # verdict is kept, as the subordinate clause it now is.
+  [ "$_gate_override" = 1 ] && set -- "NOT OK: the sweep gate found findings in this run's own log. The cell's own checks said: $*"
   log "$([ "$rc" = 0 ] || printf '[ERROR] ')$*"
   # A cell that failed says so with a LEVEL, because "summary: 3 passed, 2 failed" and
   # "summary: 5 passed, 0 failed" are the same shape and opposite facts - only this line, which
@@ -806,11 +821,27 @@ while :; do
       if logvol_pull "$LOGVOL_IMG" "$OUT/logvol-live" >>"$OUT/logvol-live.out" 2>&1; then
         lastknown=$(find "$OUT/logvol-live/files" -type f -name '*.log' -printf '%T@ %p\n' 2>/dev/null \
                     | sort -rn | head -1 | cut -d' ' -f2- \
-                    | xargs -r -d '\n' sh -c 'grep -a . "$0" 2>/dev/null | tail -1' 2>/dev/null | cut -c1-110)
+                    | xargs -r -d '\n' sh -c 'grep -a . "$0" 2>/dev/null | tail -1' 2>/dev/null | cut -c1-110 | tr -d '[]')
       fi
     fi
     if [ -n "$lastknown" ]; then
-      log "  [WARN] t+${el}s no qrexec for ${unreach}s; from the log VOLUME (host-side, guest untouched): ${lastknown} | cpu=${cpu} quiet=$quiet"
+      # TWO LINES, AND THE COVERED CASE IS NOT ERROR-SHAPED. This was one [WARN] carrying the guest's
+      # last log line, and it could not be dispositioned by anything (SWEEPWARNUNLEDGERABLE): the
+      # durations defeated the gate's number rule, the embedded guest line differs every run, and
+      # `cut -c1-110` shifted with the duration digits so even the same guest line truncated
+      # differently. A blocking gate plus an unledgerable message fails every clean run for ever.
+      #
+      # IT IS ALSO NOT A WARNING. This branch is reached only when the volume read SUCCEEDED, i.e.
+      # qrexec is down during the MSI's own silent window - which this script's own stall comment
+      # below calls expected - AND we are holding the answer. The failing case is the ERROR branch
+      # two lines down, and the real detector for a guest that is actually gone is the stall clock
+      # at STALL_SECS, which is untouched. Nothing is demoted that can fail.
+      #
+      # AND THE PAYLOAD CANNOT FORGE A LEVEL: `tr -d '[]'` above strips the brackets, and every
+      # alternative in the gate's LEVELS regex needs a literal ']'. Without that, a guest whose last
+      # log line was an ERROR made THIS line declare an error that was the guest's, as the harness's.
+      log "  t+${el}s no qrexec for ${unreach}s; the guest's own log is readable host-side, so this silence is covered | cpu=${cpu} quiet=$quiet"
+      log "  qrexec-gap witness (log VOLUME, host-side, guest untouched): ${lastknown}"
     else
       log "  [ERROR] t+${el}s no qrexec for ${unreach}s - and the log volume could not be read either (no volume attached, or mtools found nothing): THAT is the gap, not the silence | cpu=${cpu} quiet=$quiet"
     fi

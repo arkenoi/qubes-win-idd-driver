@@ -11,7 +11,11 @@ CORPUS="mgmt/harness/error-corpus.txt"
 lines=[]
 SITES = [
  ("LOGVOLBINDUPGRADE", "mgmt/harness/logvol-lib.sh",    "no LOGVOL-BIND line came back from"),
- ("HARNESSLOGUNSWEPT", "mgmt/harness/quick-upgrade.sh", "no qrexec for ${unreach}s; from the log VOLUME"),
+ # The COVERED case (the volume read succeeded) carries no level by design - it is expected, and the
+ # stall clock is the detector (SWEEPWARNUNLEDGERABLE). It stays a site: with the level-based class
+ # below it lands in BENIGN, which asserts it is NOT flagged, so re-adding a [WARN] fails precision.
+ ("HARNESSLOGUNSWEPT", "mgmt/harness/quick-upgrade.sh", "no qrexec for ${unreach}s; the guest"),
+ ("HARNESSGAPWITNESS", "mgmt/harness/quick-upgrade.sh", "qrexec-gap witness (log VOLUME"),
  ("HARNESSLOGUNSWEPT", "mgmt/harness/quick-upgrade.sh", "no qrexec for ${unreach}s - and the log volume"),
  ("DOM0SENDSPARKHANG", "mgmt/harness/quick-upgrade.sh", "DOM0SENDSUNREAD $1: no record of what dom0"),
  ("CELLFAILSUMMARY",   "mgmt/harness/quick-upgrade.sh", "summary: $PASS passed, $FAIL failed"),
@@ -55,7 +59,15 @@ for tag, path, anchor in SITES:
                          capture_output=True, text=True)
     if out.returncode != 0 or not out.stdout.strip():
         print("REGEN-MISS %s: literal would not expand (%s)" % (tag, out.stderr.strip()[:80]), file=sys.stderr); bad = 1; continue
-    lines.append("MUST\t%s\t%s" % (tag, out.stdout))
+    # THE CLASS COMES FROM THE EXPANDED LINE, NOT FROM THE SITE LIST. Every shell site here used to
+    # be written MUST unconditionally, so demoting an emitter on purpose left the corpus demanding
+    # that the gate still flag it - and the regenerator reported the deliberate change as a MISS.
+    # The same rule the VERDICTGATE live site already uses: a line that DECLARES a level must be
+    # surfaced (MUST), one that does not must not be (BENIGN). Searched anywhere in the line, not at
+    # position zero: these payloads are indented, and LOGVOLBINDWARN carries its level mid-line
+    # ("win11-up: [WARN] log-volume bind failed"), so a startswith() test would misfile it.
+    _lvl = re.search(r'\[(?:ERROR|WARN|WARNING)\]|-[WE]\]', out.stdout)
+    lines.append("%s\t%s\t%s" % ("MUST" if _lvl else "BENIGN", tag, out.stdout))
 
 for tag, path, anchor, env in PYSITES:
     src = [l for l in open(path, encoding='utf-8') if anchor.split('[{step}]')[0][-28:] in l]

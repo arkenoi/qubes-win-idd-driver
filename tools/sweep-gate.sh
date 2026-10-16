@@ -110,7 +110,17 @@ for line in sys.stdin:
     l = re.sub(r"/[A-Za-z0-9._/-]{8,}", "<PATH>", l)
     l = re.sub(r"\b(WIN|Win)[0-9]+[a-z]*-[a-z0-9]+", "<CELL>", l)
     l = re.sub(r"\bwin[0-9]+[a-z]*-[a-z0-9]+\b", "<VM>", l)
-    l = re.sub(r"\b\d+\b", "N", l)
+    # A NUMBER WITH ITS UNIT GLUED ON IS STILL A NUMBER. \b\d+\b needs a word boundary AFTER the
+    # digits, and in "108s" there is none - so durations survived normalisation, every run minted a
+    # brand-new message, and a ledger row written today missed the next run BY CONSTRUCTION. That is
+    # not a noisy message, it is an UNLEDGERABLE one: the single shape that can never be cleared, so
+    # once the gate began to block (SWEEPGATEADVISORY) it failed every clean run for ever. It failed
+    # the first one it judged. The lookahead keeps the boundary requirement at the FRONT, so
+    # "KB5007651" and "1920x1080" are untouched - an identity glued to digits is not a duration, and
+    # tools/tests/sweep-gate-selftest.sh T21c holds that line.
+    # NO APOSTROPHES IN THIS BLOCK: it is python3 -c inside single quotes, so one closes the string
+    # and bash parses the regex. "the next run" above was "tomorrow" + apostrophe + "s run" first.
+    l = re.sub(r"\b\d+(?=[a-zA-Z]*\b)", "N", l)   # GUARD:unitnum DEFECT: l = re.sub(r"\b\d+\b", "N", l)
     l = re.sub(r"\s+", " ", l).strip()
     for i, v in enumerate(holes):
         l = l.replace("\x00" + LET[i % len(LET)] + "\x00", v)
