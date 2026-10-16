@@ -348,7 +348,29 @@ for r in $(seq 1 "$ROUNDS"); do
       log "[ERROR] round $r: FAIL - the scan never ran, so the oscillation check did not happen (missing data fails)"
       fails=1
     elif [ "${dom0_before_scan:-}" != "${dom0_after_scan:-}" ]; then
+      # THE GUEST'S OWN POST-SCAN VIEW IS THE DISCRIMINATOR, IT WAS ALREADY IN HAND, AND IT WAS
+      # THROWN AWAY. dom0 changing across a scan is the SYMPTOM; whether dom0 was told wrong or the
+      # scan genuinely found newly-applicable work is answered by the counts the guest wrote during
+      # that same scan, and $st_now already holds them (the wait loop above breaks on them).
+      # MEASURED 2026-10-16 on win11de-tup: a REAL oscillation failure ('<empty>' -> '1') reported
+      # the symptom with no cause, and by the time anyone read it the guest was Halted - and booting
+      # it to look runs the per-boot task, which rewrites the very state that would answer the
+      # question. So the answer has to be captured AT the failure or it does not exist.
+      printf '%s' "$st_now" > "$RD/update-status-after-scan.json"
+      _osc=$(python3 - "$RD/update-status-after-scan.json" <<'PY' 2>/dev/null
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding='utf-8-sig'))
+except Exception:
+    print('unreadable'); raise SystemExit
+print('count=%s offered=%s actionable=%s remaining=%s available=%d not_actionable=%d satisfied=%d' % (
+    d.get('count'), d.get('offered'), d.get('actionable'), d.get('remaining'),
+    len(d.get('available') or []), len(d.get('not_actionable') or []), len(d.get('satisfied') or [])))
+PY
+      )
       log "[ERROR] round $r: FAIL OSCILLATION - dom0 was '${dom0_before_scan:-<empty>}' after the pass and '${dom0_after_scan:-<empty>}' after the scan"
+      log "  the guest's OWN status from that scan: ${_osc:-unreadable}  (kept at $RD/update-status-after-scan.json)"
+      log "  all-zero counts mean the guest had nothing and dom0 was told wrong - our defect; non-zero means the scan found newly-applicable work and dom0 is right, which makes this check too strict"
       fails=1
     else
       log "round $r: oscillation OK - dom0 stayed '${dom0_after_scan:-<empty>}' across the pass and the scan"
