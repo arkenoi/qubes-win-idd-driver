@@ -239,6 +239,25 @@ _matrix_logvol_state(){ # <cell> -> one clause naming the instrument's state
   echo "qwt-logs holds $n file(s), none in QWT's line shape"
 }
 
+# WHICH GUEST DOES THIS CELL'S SWEEP BELONG TO? A function, so it can be exercised without a
+# guest - the same reason grade_cell_logsweep() is one. It was an inline prefix match,
+# `win10-*) _slv="$A10"`, and `win10-appvm` matches `win10-*`: the appvm cell's sweep therefore
+# targeted the CHURN subject (win10-acc) and not the AppVM it had just graded (win10-app). By
+# sweep time the churn subject is parked, so the collector found nothing.
+# MEASURED on acceptance run 38826875627: both appvm cells produced NO sweep verdict at all -
+# `win10-appvm-guestlogs` held ONE file against win10-clean's FORTY - while the evidence stick they
+# had just been given attached and pulled correctly. Two defects were stacked on the same cell, and
+# fixing the visible one left it just as blind. The appvm arms must precede the prefix arms.
+_matrix_sweep_subject(){ # <cell> <win10-churn> <win11-churn>
+  case "$1" in
+    win10-appvm) printf '%s' "win10-app" ;;
+    win11-appvm) printf '%s' "win11-app" ;;
+    win10-*)     printf '%s' "$2" ;;
+    win11-*)     printf '%s' "$3" ;;
+    *)           printf '%s' "" ;;
+  esac
+}
+
 grade_cell_logsweep(){ # <cell> <vm> <matrix-dir>
   local c="${1:?grade_cell_logsweep <cell> <vm> <dir>}" vm="${2:?}" m="${3:?}" rc f q have
   "${LOGSWEEP_CMD:-./mgmt/harness/log-sweep.sh}" "$vm" "$CAMPAIGN_SINCE" "$m/$c-guestlogs" >"$m/$c-logsweep.out" 2>&1
@@ -2319,11 +2338,7 @@ for c in $CELLS; do
   # that never called it (findings HARNESSLOGUNSWEPT). It pulls host-side into <out>/logs/, so it
   # needs the guest to answer; where it cannot, that is REPORTED rather than passed over, and the
   # volume still covers the cells that bound one.
-  case "$c" in
-    win10-*) _slv="$A10" ;;
-    win11-*) _slv="$A11" ;;
-    *)       _slv="" ;;
-  esac
+  _slv="$(_matrix_sweep_subject "$c" "$A10" "$A11")"
   # One cell's guest-log sweep, graded. grade_cell_logsweep() is a function so it can be exercised
   # without a guest: tools/tests/matrix-logsweep-grade-selftest.sh drives every exit code through it
   # and checks that one condition produces exactly one tally entry and that each message's numbers

@@ -125,5 +125,24 @@ state_is "files with no QWT shape are said"       "none in QWT's line shape"
 
 M="$SAVED_M"
 
+# --- WHICH GUEST A CELL'S SWEEP BELONGS TO ------------------------------------------------------
+# It was an inline prefix match and `win10-appvm` matches `win10-*`, so the appvm cell's sweep
+# targeted the CHURN subject instead of the AppVM it had just graded. MEASURED on acceptance run
+# 38826875627: BOTH appvm cells produced no sweep verdict at all - one file against win10-clean's
+# forty - while the evidence stick they had just been given attached and pulled correctly. Two
+# defects stacked on one cell; fixing the visible one left it blind.
+eval "$(sed -n '/^_matrix_sweep_subject(){/,/^}/p' mgmt/harness/matrix.sh)"
+sub_is(){ local got; got="$(_matrix_sweep_subject "$1" win10-acc win11-acc)"
+  if [ "$got" = "$2" ]; then pass=$((pass+1)); printf '  PASS  %s -> %s\n' "$1" "$2"
+  else fail=$((fail+1)); printf '  FAIL  %s -> %s (want %s)\n' "$1" "$got" "$2"; fi; }
+sub_is win10-appvm     win10-app      # the cell's own guest, NOT the churn subject
+sub_is win11-appvm     win11-app
+sub_is win10-clean     win10-acc      # every other win10 cell still resolves to the churn subject
+sub_is win10-reinstall win10-acc
+sub_is win10-upgrade   win10-acc
+sub_is win11-clean     win11-acc
+sub_is win11-upgrade   win11-acc
+sub_is nonsense        ""             # an unknown cell names no guest rather than guessing one
+
 echo "matrix-logsweep-grade-selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
