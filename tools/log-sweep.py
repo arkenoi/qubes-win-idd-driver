@@ -2501,9 +2501,32 @@ def cmd_analyze(a):
     # wrong fails the sweep instead of being quietly accommodated.
     metrics["clock_boot_correction_s"] = int(abs(_phase_offset or 0))
     # LOUDNESS, DECIDED NOT JUDGED: a dom0-path line whose own writer declared W or E.
-    _loud = dom0_loud(files)
+    #
+    # AND A RUN'S OWN NOTIFICATIONS DO NOT COUNT AGAINST IT - the same exemption, from the same
+    # channel, that error_lines_undeclared already honours ("every error line counts EXCEPT one this
+    # run declared it caused"; Jev: zero-except-declared-injection 1.00). MEASURED 2026-10-16 on
+    # win11-nfy: dom0_loud_failures breached at 6, P1, and ALL SIX were notifications a suite fired
+    # on purpose - "gate default check", "acceptance probe: a human should act" x2, "Render witness:
+    # a human should see this", and two deferral probes of mine. Zero were the product telling dom0
+    # about a failure of its own. notify-errors-guest-test EXISTS to put user-visible error toasts
+    # on the dom0 desktop and ends on a photograph of one, so any sweep over that window counts them
+    # for ever. A P1 that fires on the test's own fixtures devalues the one signal built to be
+    # trusted (LOUDNESSUNREADABLE, DOM0LOUDNEVERFIRES), which is worse than it being noisy.
+    # DECLARING IS NOT A FREE PASS: declared_errors_unmatched already fails a declaration that
+    # matches nothing, so a run that claims a notification it did not fire is itself a finding.
+    _decl_rx = []
+    for _d in (st.get("context") or {}).get("declared_errors", []):
+        _p = _d.get("pattern") if isinstance(_d, dict) else None
+        if _p:
+            try:
+                _decl_rx.append(re.compile(_p))
+            except re.error:
+                pass   # malformed declarations are already counted by declared_errors_unmatched
+    def _declared_line(raw):
+        return any(rx.search(raw) for rx in _decl_rx)
+    _loud = [x for x in dom0_loud(files) if not _declared_line(x[2])]
     metrics["dom0_loud_failures"] = len(_loud)
-    metrics["notifications_lost"] = len(dom0_lost(files))
+    metrics["notifications_lost"] = len([x for x in dom0_lost(files) if not _declared_line(x[2])])
     sigs = collect_signatures(files, since)
     cmp = compare(sigs, baseline, metrics)
     items = build_jev_items(cmp, st, metrics, files, since)

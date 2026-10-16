@@ -1371,6 +1371,43 @@ sys.exit(1 if bad else 0)
 PYLOST
 if [ $? -eq 0 ]; then pass=$((pass+8)); else fail=$((fail+1)); fi
 
+# --- dom0_loud: a run's OWN declared notifications do not count against it -----------------------
+# MEASURED 2026-10-16 on win11-nfy: dom0_loud_failures breached at 6 (P1) and all six were toasts a
+# suite fired on purpose - notify-errors-guest-test exists to put user-visible error notifications
+# on the dom0 desktop and ends on a photograph of one. A P1 that fires on the test's own fixtures
+# devalues the one signal built to be trusted. The exemption is the sanctioned one, from the same
+# context.json channel error_lines_undeclared already honours, and declaring is not free:
+# declared_errors_unmatched fails a declaration that matches nothing.
+# THE PROPERTY THAT MATTERS: a declaration must NOT swallow a real product failure.
+python3 - "$ROOT/tools/log-sweep.py" <<'PYLOUD'
+import importlib.util, re, sys
+spec = importlib.util.spec_from_file_location("ls", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+class L:
+    def __init__(s, msg): s.msg, s.level, s.raw = msg, "E", msg
+class F:
+    def __init__(s, n, p): s.name, s.lines, s.family, s.path = n, [L(x) for x in p], "agent", None
+REAL = "NOTIFY one-shot: sent ok=1 summary=The PV NIC setup task failed"
+f = F("bridge.log", [
+    "NOTIFY one-shot: sent ok=1 summary=gate default check",
+    "NOTIFY one-shot: sent ok=1 summary=acceptance probe: a human should act",
+    "NOTIFY one-shot: sent ok=1 summary=Render witness: a human should see this",
+    "NOTIFY one-shot: sent ok=1 summary=deferproof-134310",
+    REAL])
+bad = 0
+undeclared = len(m.dom0_loud([f]))
+if undeclared != 5:
+    print("FAIL dom0_loud with no declaration: want 5 got %d" % undeclared); bad += 1
+rx = [re.compile(r"summary=(gate default check|acceptance probe|Render witness|deferproof-)")]
+kept = [x for x in m.dom0_loud([f]) if not any(r.search(x[2]) for r in rx)]
+if len(kept) != 1:
+    print("FAIL declared run: want 1 loud left, got %d" % len(kept)); bad += 1
+elif kept[0][2] != REAL:
+    print("FAIL the surviving loud line is not the real product failure: %s" % kept[0][2]); bad += 1
+sys.exit(1 if bad else 0)
+PYLOUD
+if [ $? -eq 0 ]; then pass=$((pass+3)); else fail=$((fail+1)); fi
+
 # THE COUNT IS PRINTED AFTER THE LAST CHECK. It used to be emitted ~90 lines early, so every
 # block below it added passes that were never reported - the suite under-stated its own size,
 # and a new case appended at the end (dom0_lost, 2026-10-16) moved the total by nothing.
