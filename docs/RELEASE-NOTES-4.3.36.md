@@ -1,11 +1,27 @@
-# QWT-NG 4.3.36 — the guest's clock tells dom0's time, a notification with no route is kept instead of dropped, and a death is reported once
+# QWT-NG 4.3.36 — no more notifications about what happened before the last shutdown
 
-Everything in 4.3.35 is carried forward. The largest change is the guest clock. 4.3.35 only
-*diagnosed* it - its installer logged that `RealTimeIsUniversal` was unset, so Windows read the
-hardware clock as local time - and set nothing. This release sets the guest's timezone from dom0 and
-measures the hardware-clock convention per boot instead of predicting it. The notification route
-keeps a message that has no way out instead of discarding it, says plainly when one is lost, and no
-longer reports the same guest death to you twice.
+Everything in 4.3.35 is carried forward.
+
+**The change you will actually notice: a restarted qube stops telling you about things that are
+already over.** When something of ours died, the reporter notified you - and after a reboot it read
+the *previous* boot's backlog and notified you about those deaths too. So restarting a Windows qube
+produced a burst of notifications about failures that had happened before the shutdown, were no
+longer true, and that you could do nothing about. Worse, the same death record could arrive twice -
+five minutes and one reboot apart - each announcing itself as the first death of that boot.
+
+The reporter now mints a token that lives only for the running boot and reports only what happened
+in it; the previous boot's backlog is not read at all. It also asks Windows whether it is shutting
+down instead of inferring that from a task result, and the live path records what it notified so the
+boot catch-up pass starts after it - so a record is reported once, across a reboot included. This is
+the largest single change in the release: `guest/qwt-report-death.ps1` is 787 lines added and 116
+removed, and 4.3.35 had none of the boot-boundary machinery.
+
+## Notifications about the previous boot are gone
+
+See above - this is the headline. Two things made the old behaviour worse than noisy: the backlog
+was read on every boot, so one real failure could be re-announced after every restart until the
+record aged out; and because the catch-up pass and the live path did not share a watermark, a record
+the live path had already shown you could be shown again by the catch-up.
 
 ## The guest clock follows dom0
 
@@ -49,17 +65,16 @@ back through a named pipe that does not cross a session boundary.
 Separately, a delivered notification's log line now declares what it delivered rather than only
 that the send worked, and a fallback firing declares itself a warning instead of passing silently.
 
-## A guest death is reported once
+## A guest death is reported once, and only if it is this boot's
 
-The same death record could be shown to you twice, five minutes and one reboot apart, each time
-announcing itself as the first death of that boot. The live reporting path now records the record it
-just notified and the boot-catch-up pass starts after it, so a record is reported once across a
-reboot. The reporter also asks Windows whether it is shutting down instead of inferring it from a
-task result, and no longer reads the previous boot's backlog — which was both misleading and more
-than it was ever asked to do.
+The companion to the headline. The live reporting path now records the record it just notified, and
+the boot catch-up pass starts after it, so the same death cannot be announced twice across a reboot.
 
-As with the deferral: the campaign produced **no deaths at all** (`death_events = 0` on the cell
-that originally showed the double), so this fix is in the build but not independently re-measured.
+As with the deferral below: the campaign produced **no deaths at all** (`death_events = 0` on the
+cell that originally showed the double), so this is in the build but not independently re-measured.
+What *is* measured is the boot boundary itself - the per-boot token is minted into a volatile
+registry key the kernel drops at shutdown, which is what makes "this boot" decidable without
+trusting a guest clock.
 
 ## Smaller, user-visible
 
