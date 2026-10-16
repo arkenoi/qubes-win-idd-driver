@@ -1562,13 +1562,21 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
   start=$(echo "$q" | grep -aiE 'START_TYPE' | head -1 | sed 's/^[[:space:]]*//')
   state=$(echo "$q" | grep -aiE '^\s*STATE' | head -1 | sed 's/^[[:space:]]*//')
   say "  $lbl xenbus_monitor: ${start:-<no service>} | ${state:-<no state>}"
+  # THE FOUR XENBUS CONFIRMATIONS BELOW ARE DEMOTED TO say(), NOT DROPPED (owner 2026-10-16).
+  # They assert that we keep our hands off xenbus: the monitor is disabled by the shipped INF, it is
+  # not running, the package ships none of ours, and the bound version is the MSI's. All four have
+  # stood since 2026-08-29 / 2026-09-14 and all four pass on every cell - the owner's words: an
+  # obvious result, "like i did not forget to wipe my ass after i shit". A PASS line per cell for
+  # something that cannot plausibly be otherwise is noise that crowds out the lines a reader needs.
+  # WHAT DID NOT CHANGE: every FAILING branch is still no() and still fails the cell. Silent when
+  # true, loud when false - the confirmations stop printing, the regression guard does not move.
   if echo "$start" | grep -qai 'DISABLED'; then
-    ok "$lbl: xenbus_monitor is DISABLED by the shipped INF"
+    say "  $lbl: xenbus_monitor is DISABLED by the shipped INF"
   else
     no "$lbl: xenbus_monitor start type is NOT disabled ($start) - the INF patch did not reach this guest"
   fi
   if echo "$state" | grep -qai 'STOPPED'; then
-    ok "$lbl: xenbus_monitor is not running"
+    say "  $lbl: xenbus_monitor is not running"
   else
     no "$lbl: xenbus_monitor is RUNNING ($state) - it can still restart the guest"
   fi
@@ -1584,7 +1592,7 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
   if [ -e "$RELEASE_SETUP/pv-drivers/xenbus" ]; then
     no "$lbl: the package carries pv-drivers/xenbus again - we ship stock xenbus (f7c16ce); the build is regressed"
   else
-    ok "$lbl: the package ships NO xenbus of ours - the guest keeps the MSI's own"
+    say "  $lbl: the package ships NO xenbus of ours - the guest keeps the MSI's own"
   fi
   # ENCODED, not quoted: escaped quotes inside -Command fail SILENTLY (tools/lint-harness.py L3).
   # And a MARKER, not a bare version: `qtest run` echoes cmd's banner - "Microsoft Windows
@@ -1621,7 +1629,7 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
     alive=$(QTEST_VM=$vm timeout 40 ./tools/qtest run 'cmd /c echo ALIVE' 2>/dev/null | grep -ac ALIVE)
     no "$lbl: INVALID-INSTRUMENT - could not read the guest's xenbus.sys version after 3 reads (missing data never reads as a pass; qrexec answers=${alive:-0}; last output: $(printf '%s' "$raw" | tr '\n' ' ' | cut -c1-180))"
   else
-    ok "$lbl: xenbus bound is $got, from the MSI - nothing of ours layered on top"
+    say "  $lbl: xenbus bound is $got, from the MSI - nothing of ours layered on top"
   fi
 }
 
