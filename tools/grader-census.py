@@ -19,9 +19,10 @@ producers of every gate suite": 18 required, 12 had one).
     tools/grader-census.py --json          machine-readable
 
 IT NAMES, IT DOES NOT GUESS. "Covered" means some file under tools/tests/ mentions the function by
-name - the weakest honest definition, deliberately: a stronger one would need a judgement about what
-the test asserts, and overstating coverage is the failure mode here. A name that appears only in a
-comment counts as covered, so the number this prints is a FLOOR on the problem, never a ceiling.
+name, EXCEPT where the only mention is a stub definition of it - see mentions(). A stronger
+definition would need a judgement about what the test asserts, and overstating coverage is the one
+failure mode this file exists to avoid; a name that appears only in a comment still counts, so the
+number this prints remains a FLOOR on the problem and never a ceiling.
 """
 import argparse
 import json
@@ -66,12 +67,34 @@ def test_blobs():
     return blobs
 
 
+STUB_RE = "^[ \t]*%s\\(\\)[ \t]*\\{"
+
+
+def mentions(blob, fn):
+    """Does this suite EXERCISE fn, or merely define a stub with that name?
+
+    A SUITE THAT STUBS A FUNCTION IS NOT TESTING IT - it is replacing it. Counting a stub as
+    coverage is how this census briefly read 29 untested decisions when the true number was higher:
+    suites for the cell graders stub locate_release_disc, ensure_churn_target and
+    boot_with_release_iso to keep the cell under test from running them, and every one was then
+    scored as covered. Overstating coverage is the one failure mode this file exists to avoid, so a
+    name that appears ONLY as a stub definition does not count.
+    """
+    if fn not in blob:
+        return False
+    if not re.search(STUB_RE % re.escape(fn), blob, re.M):
+        return True
+    # it IS stubbed here; it counts only if the name also appears somewhere that is not the stub
+    without = re.sub(STUB_RE % re.escape(fn) + r".*$", "", blob, flags=re.M)
+    return fn in without
+
+
 def census():
     blobs = test_blobs()
     rows = []
     for h in HARNESSES:
         for fn, n in graders(h).items():
-            hits = sorted(t for t, b in blobs.items() if fn in b)
+            hits = sorted(t for t, b in blobs.items() if mentions(b, fn))
             rows.append({"harness": h, "grader": fn, "decisions": n, "suites": hits})
     rows.sort(key=lambda r: (-r["decisions"], r["grader"]))
     return rows
