@@ -260,7 +260,21 @@ _matrix_sweep_subject(){ # <cell> <win10-churn> <win11-churn>
 
 grade_cell_logsweep(){ # <cell> <vm> <matrix-dir>
   local c="${1:?grade_cell_logsweep <cell> <vm> <dir>}" vm="${2:?}" m="${3:?}" rc f q have
-  "${LOGSWEEP_CMD:-./mgmt/harness/log-sweep.sh}" "$vm" "$CAMPAIGN_SINCE" "$m/$c-guestlogs" >"$m/$c-logsweep.out" 2>&1
+  # OWNER DECISION 2026-10-17 ("declare those 4 for now"): the geometry-changed branch of
+  # RecreateDuplication is DECLARED, not demoted and not fixed. It is the only error line left on a
+  # current build once the netsetup fix is packaged, and the gate cannot be satisfied without
+  # settling it: rnd8-resolution.sh's own header says "demanding ZERO occurrences would fail a
+  # correctly-behaving build", while error_lines_undeclared has max 0. The receipt that would settle
+  # it needs a harness that knows about the de-slice, which this one does not
+  # (GEOMETRYERRORUNSETTLEABLE). This is an OVERRIDE recorded as an override - the same shape as
+  # cutting 4.3.36 on `core` - and it expires with that finding, not with this campaign.
+  # It is narrow on purpose: a declaration that matches nothing is itself a finding
+  # (declared_errors_unmatched), and this one must not cover the FAILED-recovery branch, which is a
+  # different line ("failed to recreate duplication after N attempt(s)") and stays an error.
+  "${LOGSWEEP_CMD:-./mgmt/harness/log-sweep.sh}" "$vm" "$CAMPAIGN_SINCE" "$m/$c-guestlogs" \
+      --declare-error 'RecreateDuplication: .*BUT THE GEOMETRY CHANGED' \
+                      'owner 2026-10-17: a resolution change recovers in place (staging grant kept, work area re-applied, PWCARRY rows carried) and DXGI signals staleness this way by design; declared pending the pixel receipt in GEOMETRYERRORUNSETTLEABLE' \
+      >"$m/$c-logsweep.out" 2>&1
   rc=$?
   f=$(find "$m/$c-guestlogs" -type f 2>/dev/null | wc -l)
   # QWT's own line shape, so "collected" is never satisfied by harness bash lines (LOGVOLBINDUPGRADE).
