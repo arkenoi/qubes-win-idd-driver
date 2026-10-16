@@ -261,28 +261,32 @@ fi
 rm -f "$TRIG"
 
 # --- 8. THE DEFERRAL: a message with no route is QUEUED, not dropped ----------------------------
-# THE P1 THIS RELEASE EXISTS TO CLOSE (NOTIFYLOSTINSESSIONGAP). Measured on win10-reinstall in run
-# 38826875627: the bridge stopped at 06:41:28, a one-shot fired at 06:41:47, a session handoff
-# succeeded five seconds later - and the message raised in that gap was DROPPED, with nothing in the
-# log able to name which one. notifhost.cpp now persists it (NotifyDeferWrite) and the next bridge
-# start sends it (NotifyDeferDrain). Until this check existed the fix had run on a guest EIGHT TIMES
-# with zero `NOTIFY deferred` lines, because nothing ever created the gap - a campaign that cannot
-# produce the condition is not evidence about the fix for it.
+# THE P1 THIS RELEASE EXISTS TO CLOSE (NOTIFYLOSTINSESSIONGAP). The fix persists a notification that
+# has no route (notifhost.cpp NotifyDeferWrite, rc 5) and the next bridge start sends it
+# (NotifyDeferDrain). It has now run on a guest NINE TIMES with zero `NOTIFY deferred` lines,
+# notifications_lost=0 and no defer-drain anywhere, because nothing ever created the gap.
 #
-# HOW THE GAP IS PRODUCED ON PURPOSE, which is the part that was missing. ConnUp() passes
-# GetUserNameW() as qrexec-client-vm's local-user field, so a caller running as SYSTEM asks the agent
-# to spawn the relay for "SYSTEM" and the relay never connects back (notifhost.cpp:3505 says so in
-# as many words). `qtest run` IS SYSTEM in session 0 on this rig (classifier-route-probe.sh:24), so
-# the one-shot below has no route BY CONSTRUCTION - no logoff, no bridge kill, no race, and the
-# guest stays exactly as the other checks left it.
+# WHAT THE GAP IS NOT, both MEASURED on win11-nfy 2026-10-16 rather than reasoned:
+#   * NOT "the caller is SYSTEM". notifhost.cpp:3505 says ConnUp passes GetUserNameW() as
+#     qrexec-client-vm local-user field "so under SYSTEM the relay never connects back", and I read
+#     that as sufficient. `qtest run` IS SYSTEM in session 0, and the one-shot returned 0 - a route.
+#   * NOT "no console session" either. With the console session logged OFF (query session showing
+#     `>console` with no user, state Conn - the guest parked at LogonUI, findings/autologon.md:19),
+#     the one-shot STILL returned 0 and queued nothing. A named pipe does not cross a session
+#     boundary, so qrexec-agent spawns the relay in session 0 and it connects back fine.
+# What ConnUp actually needs is the qrexec ROUTE: it gives the relay 15 s and then logs "relay never
+# connected (policy refusal? no session?)". That is what dies at SHUTDOWN, which is where the field
+# report put it - the bridge stopped at 06:41:28, the one-shot fired at 06:41:47, a session handoff
+# succeeded five seconds later. So the gap has to be produced by taking the route away, not the
+# session, and this check does not yet know how to do that without breaking its own channel.
 #
-# AND IT DOES NOT REST ON A LOG LINE. BLog opens bridge.log FILE_SHARE_READ and silently drops a
-# line when two writers collide - a0-lib.sh fwd_count records the measured casualties of that - so a
-# missing line proves nothing either way. The two decisive assertions are an EXIT CODE and a FILE:
-#   rc=5            the one-shot queued it. rc=3 + "notification LOST" is the OLD contract, so this
-#                   check cannot pass against a package that predates the fix.
-#   deferred-*.txt  present, then GONE after the next bridge start. The --notify-file reader deletes
-#                   it ONLY on a successful send, so its absence is the delivery receipt itself.
+# SO IT REFUSES TO CONCLUDE. Two rules, both of which this check broke on its first run:
+#   1. a probe that cannot create its precondition reports INVALID-INSTRUMENT, never FAIL. The run
+#      above recorded two product FAILs for a gap my probe had failed to open - exactly the
+#      misreading the campaign loop was fixed for ("an instrument failure is not a product failure").
+#   2. NOTHING DOWNSTREAM IS ASSERTED unless something was actually queued. The drain check read
+#      "queue empty after a reboot" and PASSED on 0 -> 0, announcing a drain that never happened -
+#      a check that cannot fail, on the one fix this release exists for.
 QTBIN='C:\Program Files\Qubes Tools\bin'
 SDIR='C:\ProgramData\qubes-toast-bridge'
 defcount(){ ps_probe DEF "Write-Host ('DEF=' + @(Get-ChildItem -LiteralPath '$SDIR' -Filter 'deferred-*.txt' -File -EA SilentlyContinue).Count)"; }
@@ -290,33 +294,46 @@ TAG="deferproof-$(date -u +%H%M%S)"
 
 d0=$(defcount)
 say "deferral: the queue holds ${d0:-<unreadable>} message(s) before the probe"
-rc8=$(ps_probe RC "& '$QTBIN\\notifhost.exe' --notify '$TAG' 'An acceptance probe: nothing in the guest is wrong.' | Out-Null; Write-Host (\"RC=\" + \$LASTEXITCODE)" 180)
-if [ "$rc8" = 5 ]; then ok "DEFERRED: a one-shot with no route returned 5 (queued), not 3 (LOST)"
-else no "the no-route one-shot returned '${rc8:-<none>}', want 5 - rc=3 is the pre-fix 'notification LOST' contract, and rc=0 would mean it found a route and this probe never produced the gap"; fi
-
+rc8=$(ps_probe RC "& '$QTBIN\\notifhost.exe' --notify '$TAG' 'An acceptance probe: nothing in the guest is wrong.' | Out-Null; Write-Host (\"RC=\" + \$LASTEXITCODE)" 200)
 d1=$(defcount)
-if [ -n "$d1" ] && [ "${d1:-0}" -gt "${d0:-0}" ]; then ok "PERSISTED: the message is on disk, not gone ($d0 -> $d1 queued)"
-else no "nothing was queued in the state directory ($d0 -> ${d1:-<unreadable>}) - with no persisted message there is nothing to deliver later, which is the P1 itself"; fi
+queued=0
+case "${rc8:-none}" in
+  5) if [ -n "$d1" ] && [ "${d1:-0}" -gt "${d0:-0}" ]; then
+       queued=1; ok "DEFERRED AND PERSISTED: no route, rc=5, and the message is on disk ($d0 -> $d1 queued)"
+     else
+       no "the one-shot said it queued (rc=5) and the state directory did not grow ($d0 -> ${d1:-<unreadable>}) - the queue is where the message has to survive"
+     fi ;;
+  3) no "the one-shot returned 3 - 'notification LOST'. That is the PRE-FIX contract: a user-facing message was dropped and the log cannot say which one. This is NOTIFYLOSTINSESSIONGAP, unfixed in the package under test" ;;
+  0) say "INVALID-INSTRUMENT  the one-shot found a route (rc=0) and queued nothing, so THE GAP WAS NEVER OPENED."
+     say "                    This says NOTHING about the fix, in either direction. The route is what"
+     say "                    has to be absent - see the header: being SYSTEM is not enough, and"
+     say "                    logging the console session off is not enough either, both measured." ;;
+  *) no "the one-shot returned '${rc8:-<no answer>}', which is not a documented outcome of the --notify path (0 sent, 3 lost, 5 queued)" ;;
+esac
 
-# THE DRAIN, ACROSS A REBOOT - the field shape of this P1, not a convenient one. A message raised
-# with no route is typically raised at shutdown, so surviving to the NEXT boot's bridge start is the
-# property that matters; draining within one uptime would be the easier half.
-d2=""
-if reboot_proven "deferral drain"; then
-  for i in $(seq 1 30); do d2=$(defcount); [ "${d2:-1}" = 0 ] && break; sleep 10; done
-  if [ "${d2:-x}" = 0 ]; then ok "DRAINED ACROSS A REBOOT: the queue is empty after the next bridge start, and the reader empties it only on a successful send"
-  else no "the deferred message is STILL queued after a proven reboot (${d2:-<unreadable>} left) - it was persisted and never delivered, so the loss became a stall instead of a drop"; fi
-  # CORROBORATION ONLY. A dropped BLog line must not fail a run whose file-level receipts hold, so
-  # this is said out loud and counted as neither pass nor fail.
-  dl=$(ps_probe DL '$d=$null
+# THE DRAIN, ACROSS A REBOOT - and ONLY if something is actually queued. A message with no route is
+# typically raised at shutdown, so surviving to the NEXT boot bridge start is the property that
+# matters; and with an empty queue there is nothing to survive, so there is nothing to assert.
+if [ "$queued" = 1 ]; then
+  if reboot_proven "deferral drain"; then
+    d2=""
+    for i in $(seq 1 30); do d2=$(defcount); [ "${d2:-1}" = 0 ] && break; done
+    if [ "${d2:-x}" = 0 ]; then ok "DRAINED ACROSS A REBOOT: the queue emptied after the next bridge start, and the reader empties it only on a successful send"
+    else no "the deferred message is STILL queued after a proven reboot (${d2:-<unreadable>} left) - it was persisted and never delivered, so the loss became a stall instead of a drop"; fi
+    # CORROBORATION ONLY: BLog opens bridge.log FILE_SHARE_READ and drops a line when two writers
+    # collide (a0-lib.sh fwd_count records the measured casualties), so a missing line proves nothing.
+    dl=$(ps_probe DL '$d=$null
 try { $d = (Get-ItemProperty "HKLM:\Software\Invisible Things Lab\Qubes Tools" -Name LogDir -EA Stop).LogDir } catch { }
 if (-not $d) { $d = (Join-Path $env:SystemDrive "Qubes Logs") }
 $p = Join-Path $d "bridge.log"
 $n = 0
 if (Test-Path -LiteralPath $p) { $n = @(Select-String -LiteralPath $p -Pattern "defer-drain" -SimpleMatch -EA SilentlyContinue).Count }
 Write-Host ("DL=" + $n)')
-  if [ -n "$dl" ] && [ "${dl:-0}" -gt 0 ]; then say "        corroborated: bridge.log carries $dl defer-drain line(s)"
-  else say "        note: no defer-drain line in bridge.log (BLog drops lines under writer contention) - the file receipts above stand on their own"; fi
+    if [ -n "$dl" ] && [ "${dl:-0}" -gt 0 ]; then say "        corroborated: bridge.log carries $dl defer-drain line(s)"
+    else say "        note: no defer-drain line in bridge.log (BLog drops lines under contention) - the file receipts above stand on their own"; fi
+  fi
+else
+  say "deferral: nothing was queued, so the drain is NOT asserted - a drain check over an empty queue passes on 0 -> 0 and proves nothing"
 fi
 
 say "=== notify-errors guest test: $pass passed, $fail failed ==="
