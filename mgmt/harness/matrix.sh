@@ -2388,6 +2388,25 @@ for c in $CELLS; do
   fi
 done
 
+# THE COLD CALLER PATH MUST HAVE BEEN MEASURED, AND ZERO MEASUREMENTS IS NOT A PASS.
+#
+# COLD_CALLER_DONE was SET and never READ. The cold measurement is guarded on the cell's subject
+# still answering, and when that guard fails the loop above says "[WARN] ... the cold caller path
+# went unmeasured for this cell" - a WARN - and the campaign carries on and can finish green. This
+# file's own notes record it happening: "Run 8's matrix log contains ZERO lines matching VMEXEC; run
+# 9 measured three win11 cells and reported 'guest not answering' for every win10 one."
+#
+# "from cold qube as well" is a CLAUSE OF THE RELEASE GOAL. A campaign that never measured it has
+# not tested the goal, so it does not get to pass quietly: the absence is graded, exactly like a
+# missing log is graded rather than assumed clean. It is INVALID rather than FAIL because an
+# unmeasured path is missing instrument data, not a demonstrated product defect - the same rule the
+# sweep below follows.
+if [ "${COLD_CALLER_DONE:-0}" = 0 ]; then
+  no "INVALID-COLDCALLER  the cold dom0-caller path was never measured this campaign - 'from cold qube as well' is a release-goal clause, and zero measurements of it is not a pass (see the per-cell *-coldcallers.out, and the guard in the grading loop above)"
+else
+  ok "the cold dom0-caller path was measured this campaign"
+fi
+
 # HARDWIRED ERROR SWEEP OVER THE CAMPAIGN'S OWN LOGS, AND IT BLOCKS.
 #
 # Nothing swept these. A campaign that reported 96 of 96 clean carried "log-volume bind failed" on
