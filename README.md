@@ -23,11 +23,13 @@ Anywhere this README says "stock", it means unmodified upstream QWT 4.2.2 as shi
 
 Release **[v4.3.36-agent7603457](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.36-agent7603457)** — agent `7603457`, package `4.3.36`, built from commit `8fe8828a`. See
 [`docs/RELEASE-NOTES-4.3.36.md`](docs/RELEASE-NOTES-4.3.36.md) for what changed and what was
-verified. The largest change is the guest clock: a Windows qube used to be pinned to UTC and so showed the wrong wall-clock time,
-while our own clock task "corrected" the same offset on every boot — and on Xen each of those corrections wrote a per-VM RTC
-offset that survived a restart. The qube now takes dom0's timezone and the matching hardware-clock convention. A notification
-raised when it has no way out to dom0 is now kept on disk and sent by the first process that has a route, instead of being
-discarded; and the same guest death is no longer reported to you twice.
+verified. The guest clock is the largest change: 4.3.35's installer only *diagnosed* the problem - it
+logged "RealTimeIsUniversal is unset, so Windows reads the hardware clock as LOCAL" and set nothing. 4.3.36 reads dom0's
+`/qubes-timezone` and sets the guest's zone to match, and a new per-boot script MEASURES what the hardware clock actually holds
+and sets the convention from that measurement instead of predicting it. If you have deliberately set a different timezone in a
+qube, the installer reports the override to dom0 rather than changing it silently. A notification raised when it has no way out
+to dom0 is now kept on disk and sent by the first process that has a route, instead of being discarded; and the same guest death
+is no longer reported to you twice.
 
 **What was verified, and what was not.** The matrix — clean install, same-version reinstall, in-place upgrade, and
 template→AppVM derivation with cold boots, on **both Windows 10 and Windows 11** — ran against this exact package with **no P1
@@ -71,14 +73,14 @@ test images themselves carry a newer build.
 in dom0 (on the template; AppVMs inherit), or the Qubes Update tool fails against it.
 
 **What changed in 4.3.36 — the guest's clock, a notification that is kept instead of dropped, and a death reported once.**
-A Windows qube was created with its hardware clock declared UTC while the zone inside the guest stayed as the image shipped it,
-so every application showed the wrong time for anyone not living on UTC — and our per-boot clock task then re-applied the same
-correction on every start, each write persisting a per-VM RTC offset on the host that survived a restart. The qube now takes
-dom0's timezone and the matching convention, settled late in the install where qubesdb is readable, and a timezone you set
-deliberately is reported rather than overwritten. A notification raised while there is no route to dom0 — at shutdown, most
-often — used to be discarded with no record of which one; it is now written to disk and sent by the first process that has a
-route, exactly once. The same guest death is no longer reported twice across a reboot, and the reporter asks Windows whether it
-is shutting down instead of inferring it. Full story, including what was *not* verified, in
+Windows reads an unset `RealTimeIsUniversal` as "the hardware clock is local time", and 4.3.35 only said so in a log line: it set
+no timezone and no convention. 4.3.36's installer reads dom0's `/qubes-timezone` and matches the guest's zone to it, and a new
+per-boot script measures what the RTC holds against what dom0 reports and sets the convention from the measurement - not from a
+prediction about the next boot, which is what an earlier draft of this did and what was removed. A timezone you set yourself is
+reported to dom0 as an override instead of being overwritten. A notification raised while there is no route to dom0 - at
+shutdown, most often - used to be discarded with no record of which one; it is now written to disk and sent by the first process
+that has a route, exactly once. The same guest death is no longer reported twice across a reboot, and the reporter asks Windows
+whether it is shutting down instead of inferring it. Full story, including what was *not* verified, in
 [`docs/RELEASE-NOTES-4.3.36.md`](docs/RELEASE-NOTES-4.3.36.md); earlier releases:
 [4.3.35](docs/RELEASE-NOTES-4.3.35.md), [4.3.34](docs/RELEASE-NOTES-4.3.34.md), [4.3.33](docs/RELEASE-NOTES-4.3.33.md), [4.3.32](docs/RELEASE-NOTES-4.3.32.md).
 

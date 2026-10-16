@@ -1,28 +1,35 @@
 # QWT-NG 4.3.36 — the guest's clock tells dom0's time, a notification with no route is kept instead of dropped, and a death is reported once
 
-Everything in 4.3.35 is carried forward. The largest change in this release is the guest clock: a
-Windows qube used to be pinned to UTC and so showed the wrong wall-clock time for anyone not living
-on it, and our own clock puller then corrected the same three-hour error on every boot. The qube now
-takes dom0's timezone and the hardware-clock convention that goes with it. The notification route
+Everything in 4.3.35 is carried forward. The largest change is the guest clock. 4.3.35 only
+*diagnosed* it - its installer logged that `RealTimeIsUniversal` was unset, so Windows read the
+hardware clock as local time - and set nothing. This release sets the guest's timezone from dom0 and
+measures the hardware-clock convention per boot instead of predicting it. The notification route
 keeps a message that has no way out instead of discarding it, says plainly when one is lost, and no
 longer reports the same guest death to you twice.
 
 ## The guest clock follows dom0
 
-A Windows qube's clock was set from a hardware clock we declared to be UTC, while the zone inside
-the guest was left as the image shipped it. On a machine three hours from UTC that showed the wrong
-time in every application, and the per-boot clock task then "corrected" the guest by the same
-10800 s after every start — a correction fighting a cause rather than removing it. Worse, each of
-those corrections wrote the emulated RTC, and on Xen a guest's clock write is persisted as a
-per-VM offset that survives a restart, so the error was being fed back into the next boot.
+Windows treats an unset `RealTimeIsUniversal` as "the hardware clock holds local time". 4.3.35 already
+**diagnosed** this - its installer logged *"Cause: RealTimeIsUniversal is unset, so Windows reads the
+hardware clock as LOCAL"* - and then set nothing: no timezone, no convention.
 
-The qube is now created with `timezone=localtime`, the installer propagates dom0's zone into the
-guest, and the convention is settled late in the install where qubesdb is actually readable. If you
-have deliberately set a different timezone inside a qube, the install says so in
-`C:\qwt-improved-install.log` rather than changing it silently.
+4.3.36 acts on it. The installer reads dom0's `/qubes-timezone` and sets the guest's zone to match
+(`Set-GuestTimeZoneFromHost`, new in this release), and a new per-boot script
+(`guest/sync-clock-from-dom0.ps1`) measures what the RTC actually holds against what dom0 reports and
+sets the convention from that measurement. It does **not** predict the convention from the qube's
+features, which an earlier draft did and which is removed. If you set a timezone in a qube yourself,
+the installer reports the override to dom0 instead of overwriting it silently.
+
+**Scoped honestly, because an earlier draft of these notes was not.** Two things in this area were
+*not* product changes and are not claimed as such: giving a qube `timezone=localtime` at creation is
+done by our acceptance harness, not by anything shipped here; and the repeated per-boot clock
+correction seen during testing was substantially the harness itself writing `RealTimeIsUniversal=1`
+onto its own subjects, which is recorded as the root cause of that symptom. A 4.3.35 user did not
+necessarily see a clock hours out - what they had was an unset convention and no zone propagation,
+which is what this release addresses.
 
 Measured on the acceptance campaign: `clock_boot_correction_s` is 0 on every cell that creates a
-guest. One path — restoring a parked template for the reinstall cell — still shows a correction of
+guest. One path - restoring a parked template for the reinstall cell - still shows a correction of
 960-1080 s and is recorded as open (`REINSTALLCLOCKPHASE`); the live clock on that guest is correct.
 
 ## A notification with no route is kept, not dropped
@@ -87,10 +94,17 @@ Not verified, stated so it is not mistaken for coverage:
   release is cut on the `core` set by owner decision; see `docs/ADR-acceptance.md` section 6, which
   records it as an override rather than as the gate being met.
 
-## Known issue
+## Known issue, now explained
 
-On a fully updated guest, a scan-only Windows Update pass can flip dom0's updates-available back to
-"available" after it had cleared. The cause is not established — it may be a genuinely newly
-applicable update, or our scan reporting work that is not actionable — and the instrument now
-captures the guest's own counts at the moment it happens so the next run can say which.
-Tracked as `UPDATESAVAILABLEOSCILLATES`.
+A scan-only Windows Update pass can flip dom0's updates-available back to "available" shortly after
+it cleared. **Diagnosed 2026-10-16 and it is not a defect in this package.** The guest's own status
+file from the scan that did it names what it found: `count=1 offered=1 actionable=1 remaining=1`,
+and the one item is `KB2267602` - a Microsoft Defender Security Intelligence update, version
+1.461.56.0, flagged actionable with a download URL. Microsoft republishes those several times a
+day, so dom0 was told the truth: an update really had become available in the minute since the
+previous pass.
+
+What this does invalidate is our own check: the acceptance suite asserts dom0's view must not change
+across a scan, which cannot hold on any guest that receives Defender definitions. That makes
+`template-update` fail intermittently for a reason that has nothing to do with the product, and it
+is tracked against the harness as `UPDATESAVAILABLEOSCILLATES` rather than against this release.
