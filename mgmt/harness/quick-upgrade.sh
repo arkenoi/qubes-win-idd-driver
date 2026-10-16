@@ -162,29 +162,46 @@ finish(){ # $1=rc $2=message  - every exit goes through here and says which exit
       || log "[WARN] log volume could not be pulled from $LOGVOL_IMG: $(tail -1 "$OUT/logvol-pull.out" 2>/dev/null | cut -c1-140)"
   fi
   release_loop
-  # EVERY exit of this harness goes through here, so this one line decides whether a sweep can see
-  # that the cell ended badly. rc is the fact; the level is what makes it readable by an instrument.
-  log "$([ "$rc" = 0 ] || printf '[ERROR] ')$*"
   # HARDWIRED ERROR SWEEP over this run's own log. Every error-shaped line is either declared in
-  # mgmt/harness/error-ledger.txt with a reason, or this says so and the run is not clean.
-  # It does not change $rc - it cannot silently rescue a pass - but a run whose log carries an
-  # unexplained error can no longer LOOK clean (owner, 2026-10-14: "HARDWIRE ERROR LOG SWEEP").
+  # mgmt/harness/error-ledger.txt with a reason, or this says so and the run is not clean
+  # (owner, 2026-10-14: "HARDWIRE ERROR LOG SWEEP").
+  #
+  # IT RUNS BEFORE THIS CALL'S OWN VERDICT LINE IS WRITTEN. It used to run after, so a FAILING run
+  # handed the gate its own "[ERROR] <why it failed>" and the gate reported it as an unexplained
+  # error - one failure, two findings, the second of them false. Nothing is lost by the order: the
+  # verdict line is still in the file for every later reader, it is simply not swept by the pass
+  # that exists to find errors the harness did NOT already grade.
   if [ -s "$R" ] && [ -x tools/sweep-gate.sh ]; then
     if bash tools/sweep-gate.sh "$R" >>"$OUT/sweep-gate.out" 2>&1; then
       log "sweep-gate: no undeclared error-shaped line in this run's log"
     else
-      log "SWEEP-GATE FINDINGS in this run's own log - see $OUT/sweep-gate.out"
       grep -a '^  ' "$OUT/sweep-gate.out" | tail -8 | while IFS= read -r l; do log "  $l"; done
-      # REPORTS, DOES NOT GATE - yet. The instrument is measured against a committed corpus of real
-      # filed defects (tools/sweep-gate.sh --verify); it is wired to speak here, and the decision to
-      # let it raise rc is a separate one, taken when its coverage and its judge's score support it.
+      # IT GATES NOW. It used to print the findings and say, in a comment, "REPORTS, DOES NOT GATE
+      # - yet", so the short cycle - the sanctioned path for every fix on this project - could carry
+      # an unexplained declared error in its own log and still exit 0. Owner, 2026-10-16: "the sweep
+      # gate SHOULD be fixed." The decision is sweep_gate_rc (mgmt/harness/run-lib.sh), which reads
+      # the gate's STRUCTURED line rather than the shape of its messages, treats the blind case -
+      # a gate that judged only part of the run - as a finding too, and discounts this harness's own
+      # graded verdicts so a failing run is not counted twice.
+      if sweep_gate_rc "$OUT/sweep-gate.out"; then
+        log "sweep-gate: the only error-shaped lines are this run's own graded verdicts"
+      else
+        log "[ERROR] SWEEP-GATE FINDINGS in this run's own log - see $OUT/sweep-gate.out"
+        [ "$rc" = 0 ] && rc=3
+      fi
     fi
   fi
+  # EVERY exit of this harness goes through here, so this one line decides whether a sweep can see
+  # that the cell ended badly. rc is the fact; the level is what makes it readable by an instrument.
+  log "$([ "$rc" = 0 ] || printf '[ERROR] ')$*"
   # A cell that failed says so with a LEVEL, because "summary: 3 passed, 2 failed" and
   # "summary: 5 passed, 0 failed" are the same shape and opposite facts - only this line, which
   # knows $FAIL, can tell a sweep which one it is.
-  sev=""; [ "${FAIL:-0}" -gt 0 ] && sev="[ERROR] "
-  log "${sev}summary: $PASS passed, $FAIL failed; evidence in $OUT"
+  # AND IT KEYS ON rc AS WELL AS $FAIL. A run the sweep gate failed has rc 3 and may have 0 failed
+  # checks, so keying on $FAIL alone printed "0 failed" over a non-zero exit - the same shape and
+  # the opposite fact, which is the defect this very line exists to prevent.
+  sev=""; { [ "${FAIL:-0}" -gt 0 ] || [ "$rc" != 0 ]; } && sev="[ERROR] "
+  log "${sev}summary: $PASS passed, $FAIL failed, rc=$rc; evidence in $OUT"
   exit "$rc"
 }
 

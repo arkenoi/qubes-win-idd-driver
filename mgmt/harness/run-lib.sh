@@ -214,3 +214,44 @@ run_verified(){
     sleep 1
   done
 }
+
+# ---------------------------------------------------------------------------------------------
+# sweep_gate_rc - DOES THE ERROR SWEEP OF A RUN'S OWN LOG MOVE THE VERDICT?
+#
+#   sweep_gate_rc <gate-output-file>
+#       0  nothing in that output must move a counter
+#       1  it must: unaccounted or risen declared errors remain after the caller's own graded
+#          verdicts are discounted
+#
+# WHY IT IS A FUNCTION AND NOT A LINE IN THE HARNESS. `quick-upgrade.sh` ran the gate, printed its
+# findings and then said, in a comment, "REPORTS, DOES NOT GATE - yet". So the short cycle - the
+# sanctioned path for every fix on this project - could carry an unexplained declared error in its
+# own log and still exit 0. Owner, 2026-10-16: "the sweep gate SHOULD be fixed."
+#
+# IT READS THE GATE'S STRUCTURED LINE, NOT ITS PROSE. tools/sweep-gate.sh prints
+# `SWEEP-GATE-RESULT unaccounted=<n> risen=<n> accounted=<n>`, and the blind case prints
+# `SWEEP-GATE-RESULT undeclared_ours=<n>` instead - a gate that judged only part of the run, whose
+# silence means nothing. Both must move the verdict. Counting the printed UNACCOUNTED lines with
+# grep is what this replaces: a watcher built on the shape of a message is how four cells' worth of
+# findings were read as "0 FAIL" on 2026-10-15.
+#
+# AND IT DOES NOT COUNT THE CALLER'S OWN VERDICTS TWICE. A harness writes its own failures into the
+# same log at `[ERROR] ...`/`[WARN] ...`, and a failing run therefore hands the gate its own words.
+# Those are already in the caller's tally, so UNACCOUNTED lines that are a graded verdict of ours
+# (`FAIL `, `summary: `, `no `) are discounted here - shown by the gate, never counted again.
+sweep_gate_rc(){
+    local out=${1:?sweep_gate_rc needs the gate output file}
+    [ -s "$out" ] || return 0
+    local res blind un ro own
+    res=$(grep -a '^SWEEP-GATE-RESULT' "$out" | tail -1)
+    [ -n "$res" ] || return 0            # the gate did not get far enough to have a verdict
+    blind=$(printf '%s\n' "$res" | sed -n 's/.*undeclared_ours=\([0-9][0-9]*\).*/\1/p')
+    if [ -n "$blind" ] && [ "$blind" -gt 0 ]; then return 1; fi
+    un=$(printf '%s\n' "$res" | sed -n 's/.*unaccounted=\([0-9][0-9]*\).*/\1/p'); un=${un:-0}
+    ro=$(printf '%s\n' "$res" | sed -n 's/.*risen=\([0-9][0-9]*\).*/\1/p');       ro=${ro:-0}
+    own=$(grep -acE '^  UNACCOUNTED .*\[(ERROR|WARN)\] +(FAIL |summary: |no )' "$out" 2>/dev/null || true)
+    own=${own:-0}
+    un=$((un - own)); [ "$un" -lt 0 ] && un=0
+    [ $((un + ro)) -gt 0 ] && return 1
+    return 0
+}

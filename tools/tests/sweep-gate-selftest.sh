@@ -370,5 +370,48 @@ else
   no "T19f our own undeclared line did not block" "rc=$mrc $(grep -a SWEEP-GATE-RESULT "$T/cov/m.out" | head -1)"
 fi
 
+# T20 - THE SHORT CYCLE'S GATE MUST MOVE THE VERDICT, not just print.
+# quick-upgrade.sh ran this gate, printed its findings and then said, in a comment, "REPORTS, DOES
+# NOT GATE - yet". So the sanctioned path for every fix on this project could carry an unexplained
+# declared error in its own log and still exit 0. Owner 2026-10-16: "the sweep gate SHOULD be
+# fixed." The decision is sweep_gate_rc (mgmt/harness/run-lib.sh), driven here against the REAL
+# gate's REAL output, never a hand-written imitation of it.
+# shellcheck disable=SC1091
+source mgmt/harness/run-lib.sh
+: > "$T/t20-empty.txt"
+
+# (a) an undeclared declared error -> the verdict must move
+printf '[20261016.120000.000-100:100-E] Thing: a brand new error nobody has read\n' > "$T/t20a.log"
+SWEEP_GATE_LEDGER="$T/t20-empty.txt" bash tools/sweep-gate.sh "$T/t20a.log" > "$T/t20a.out" 2>&1
+if sweep_gate_rc "$T/t20a.out"; then no "T20a an unaccounted declared error moves the verdict" "$(tail -3 "$T/t20a.out")"
+else ok "T20a an unaccounted declared error moves the verdict"; fi
+
+# (b) our OWN graded verdicts are not counted again - one failure must not become two findings
+printf '[20261016.120000.000-100:100-E] Run: [ERROR] FAIL  win10-clean: the cell failed\n' > "$T/t20b.log"
+printf '[20261016.120001.000-100:100-E] Run: [ERROR] summary: 3 passed, 2 failed, rc=1\n' >> "$T/t20b.log"
+SWEEP_GATE_LEDGER="$T/t20-empty.txt" bash tools/sweep-gate.sh "$T/t20b.log" > "$T/t20b.out" 2>&1
+if sweep_gate_rc "$T/t20b.out"; then ok "T20b our own graded verdicts do not move it a second time"
+else no "T20b our own graded verdicts do not move it a second time" "$(grep -a '^  UNACCOUNTED' "$T/t20b.out" | head -3)"; fi
+
+# (c) BLIND IS A FINDING. A gate that judged only part of the run must not pass: its silence about
+#     the rest means nothing. Driven through the real gate with a line of ours carrying NO level.
+printf '12:00:00 harness[run]: a line of ours that declares no level at all\n' > "$T/t20c.log"
+SWEEP_GATE_LEDGER="$T/t20-empty.txt" bash tools/sweep-gate.sh "$T/t20c.log" > "$T/t20c.out" 2>&1
+if grep -qa 'undeclared_ours=[1-9]' "$T/t20c.out"; then
+  if sweep_gate_rc "$T/t20c.out"; then no "T20c a BLIND gate moves the verdict" "$(tail -2 "$T/t20c.out")"
+  else ok "T20c a BLIND gate moves the verdict - its silence means nothing"; fi
+else no "T20c a BLIND gate moves the verdict" "the gate reported no undeclared_ours: $(tail -2 "$T/t20c.out")"; fi
+
+# (d) no gate output at all is not a finding - there is nothing to judge
+if sweep_gate_rc "$T/t20-missing.out"; then ok "T20d an absent gate output is not a finding"
+else no "T20d an absent gate output is not a finding" "non-zero on a missing file"; fi
+
+# (e) SEEN TO FAIL: the shipped shape printed the findings and left rc alone, so (a) exited 0.
+rc_old=0
+SWEEP_GATE_LEDGER="$T/t20-empty.txt" bash tools/sweep-gate.sh "$T/t20a.log" > "$T/t20e.out" 2>&1 || true
+grep -a '^  ' "$T/t20e.out" >/dev/null 2>&1   # printed, and that was all it did
+if [ "$rc_old" = 0 ]; then ok "T20e SEEN TO FAIL: the report-only shape leaves rc 0 over that same error"
+else no "T20e SEEN TO FAIL: the report-only shape leaves rc 0" "rc_old=$rc_old"; fi
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
