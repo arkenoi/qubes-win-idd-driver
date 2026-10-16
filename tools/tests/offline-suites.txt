@@ -72,6 +72,7 @@ logsweep-rotation-placeholder-selftest.sh
 logvol-guesttext-selftest.sh
 logvol-level-reaches-gate-selftest.sh
 loudness-channel-selftest.sh
+matrix-appvmcell-grade-selftest.sh
 matrix-appvmwindow-grade-selftest.sh
 matrix-coldcaller-grade-selftest.sh
 matrix-dom0callers-grade-selftest.sh
