@@ -19,7 +19,8 @@ producers of every gate suite": 18 required, 12 had one).
     tools/grader-census.py --json          machine-readable
 
 IT NAMES, IT DOES NOT GUESS. "Covered" means some file under tools/tests/ mentions the function by
-name, EXCEPT where the only mention is a stub definition of it - see mentions(). A stronger
+name in CODE - comments and docstrings are stripped, and a stub definition does not count
+(see mentions() and decomment()). A stronger
 definition would need a judgement about what the test asserts, and overstating coverage is the one
 failure mode this file exists to avoid; a name that appears only in a comment still counts, so the
 number this prints remains a FLOOR on the problem and never a ceiling.
@@ -70,6 +71,39 @@ def test_blobs():
 STUB_RE = "^[ \t]*%s\\(\\)[ \t]*\\{"
 
 
+def decomment(blob):
+    """Drop comment text, so PROSE ABOUT a grader is not counted as coverage of it.
+
+    MEASURED TWICE, in two guises. First the census counted a suite's STUB of a function as
+    coverage; then, with that fixed, cell_appvm dropped off the uncovered list because a new suite's
+    header comment merely DISCUSSED it - and its 18 decisions silently left the untested count,
+    taking the headline from 36 of 156 to 12. Writing about a grader is not testing it, and a census
+    that rewards prose is worse than none because it reads as progress.
+
+    The strip is approximate - an unquoted '#' to end of line, plus python docstrings - and
+    deliberately so: over-stripping can only make the reported number WORSE, never flattering,
+    which is the safe direction for this file.
+    """
+    out = []
+    for line in blob.splitlines():
+        q = None
+        cut = len(line)
+        for i, ch in enumerate(line):
+            if q:
+                if ch == q:
+                    q = None
+            elif ch in "'\"":
+                q = ch
+            elif ch == "#":
+                cut = i
+                break
+        out.append(line[:cut])
+    txt = "\n".join(out)
+    # python triple-quoted docstrings in .py suites
+    txt = re.sub(r'""".*?"""', "", txt, flags=re.S)
+    return txt
+
+
 def mentions(blob, fn):
     """Does this suite EXERCISE fn, or merely define a stub with that name?
 
@@ -80,6 +114,7 @@ def mentions(blob, fn):
     scored as covered. Overstating coverage is the one failure mode this file exists to avoid, so a
     name that appears ONLY as a stub definition does not count.
     """
+    blob = decomment(blob)
     if fn not in blob:
         return False
     if not re.search(STUB_RE % re.escape(fn), blob, re.M):

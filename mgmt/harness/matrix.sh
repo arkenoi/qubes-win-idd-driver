@@ -1889,6 +1889,63 @@ cell_stock(){ # $1=stock-4.2.2 fixture $2=subject $3=tag - CAPABILITY ONLY, neve
   accept_grade "$vm" "$tag-stock"
 }
 
+# grade_appvm_window - ONE BOOT'S WINDOW VERDICT, as a function so it can be exercised.
+#
+# WHY IT IS A FUNCTION. This was the tail of cell_appvm's boot loop, and it is what made that
+# cell impossible to drive offline: an extracted cell_appvm ran on into these dom0 captures and
+# lifecycle-lib helpers, so a suite that stubbed them shifted the cell's own verdicts and a suite
+# that did not left unbound state. Three runs of such a suite gave 14/1, 15/0 and 10/5 - a flaky
+# check, which is worse than none. The same split was made for grade_cell_logsweep and
+# grade_dom0_callers for exactly this reason, and both have suites.
+#
+# IT GRADES, AND RETURNS WHAT THE CALLER MUST COUNT:
+#   0  window(s) mapped, none fullscreen-sized   (caller: mapped_any=1)
+#   1  a FULLSCREEN-SIZED window was mapped      (graded here)
+#   2  guest has a window, dom0 capture empty    (caller: ii_boots+1; INVALID, not a verdict)
+#   3  notepad opened and dom0 got no window     (graded here)
+# The messages are unchanged, so a campaign log reads exactly as before.
+grade_appvm_window(){ # $1=appvm $2=tag $3=boot-number
+  local app=$1 lbl=$2 b=$3
+  # Pixels, not logs: open notepad and require a mapped, non-fullscreen window.
+  local nppid npstart; read -r _ nppid npstart <<< "$(QTEST_VM=$app T=45 ctl_start notepad)"   # by handle (lifecycle-lib.sh)
+  local try W=0 big=0 f w h
+  for try in 1 2 3 4 5 6; do
+    sleep 7
+    rm -f $M/$lbl-appvm-b$b.tar
+    QTEST_VM=$app timeout -k 8 120 ./tools/qtest shot $M/$lbl-appvm-b$b.tar >/dev/null 2>&1
+    [ -s $M/$lbl-appvm-b$b.tar ] && [ "$(tar tf $M/$lbl-appvm-b$b.tar 2>/dev/null | grep -c '\.png$')" -gt 0 ] && break
+  done
+  rm -rf $M/$lbl-appvm-b$b-png; mkdir -p $M/$lbl-appvm-b$b-png
+  tar xf $M/$lbl-appvm-b$b.tar -C $M/$lbl-appvm-b$b-png 2>/dev/null
+  for f in $M/$lbl-appvm-b$b-png/*.png; do
+    [ -e "$f" ] || continue
+    W=$((W+1)); read -r w h < <(python3 -c "
+import struct,sys
+d=open(sys.argv[1],'rb').read(33); w,h=struct.unpack('>II',d[16:24]); print(w,h)" "$f" 2>/dev/null)
+    [ -z "${w:-}" ] && continue
+    say "    $(basename $f) ${w}x${h}"
+    [ "$w" -ge $(( 5120 * 99 / 100 )) ] && [ "$h" -ge $(( 1440 * 99 / 100 )) ] && big=1
+  done
+  # AN EMPTY dom0 CAPTURE IS NOT "NO WINDOW" (memory rule, and measured 2026-09-11: campaign
+  # 34594988407 graded WIN11-appvm boot 2 a product FAIL on six empty tars while qrexec answered
+  # and the guest took an orderly ACPI shutdown 58 s later - the owner was switching dom0
+  # desktops, and the screenshot service returns only windows on the CURRENT one). So before
+  # grading, ask the GUEST whether notepad has a top-level window. Guest window present + dom0
+  # capture empty = INVALID-INSTRUMENT (ungraded), never a product verdict. Probed BEFORE the
+  # taskkill, or there is nothing left to ask about.
+  local gw=""
+  if [ "$W" -eq 0 ]; then
+    gw=$(g_probe "$app" NPWIN 'Write-Host ("NPWIN=" + ((Get-Process notepad -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Measure-Object).Count))' 60)
+  fi
+  say "  notepad: $(QTEST_VM=$app T=45 ctl_stop "${nppid:-0}" "${npstart:-0}")"
+  if [ "$big" = 1 ]; then no "$lbl-appvm boot $b: a FULLSCREEN-SIZED window was mapped"; return 1
+  elif [ "$W" -gt 0 ]; then ok "$lbl-appvm boot $b: $W window(s) mapped, none fullscreen-sized"; return 0
+  elif [ "${gw:-x}" -ge 1 ] 2>/dev/null; then
+    say "  $lbl-appvm boot $b: INVALID-INSTRUMENT - the guest shows $gw notepad window(s) but the dom0 capture returned none on six tries (a dom0 desktop switch or capture fault; graded after the cell's other boots)"
+    return 2
+  else no "$lbl-appvm boot $b: notepad opened but dom0 got NO window (guest-side notepad windows: ${gw:-unreadable})"; return 3; fi
+}
+
 cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the 'installed' park)
   say "######## CELL $3-appvm (restore 'installed' park into the template, derive AppVM, cold boot) ########"
   local tpl=$2 app=${4:-} acc=${5:-}
@@ -2028,44 +2085,17 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the
       1) no "$3-appvm boot $b: logon session but NO desktop shell - STALE PRIVATE VOLUME (an AppVM reused across a template re-base; the re-create in this cell exists to prevent exactly this - see the w_appvm_shell diagnosis in $R)"; return ;;
       2) no "$3-appvm boot $b: no desktop shell within 600s"; return ;;
     esac
-    # Pixels, not logs: open notepad and require a mapped, non-fullscreen window.
-    local nppid npstart; read -r _ nppid npstart <<< "$(QTEST_VM=$app T=45 ctl_start notepad)"   # by handle (lifecycle-lib.sh)
-    local try W=0 big=0 f w h
-    for try in 1 2 3 4 5 6; do
-      sleep 7
-      rm -f $M/$3-appvm-b$b.tar
-      QTEST_VM=$app timeout -k 8 120 ./tools/qtest shot $M/$3-appvm-b$b.tar >/dev/null 2>&1
-      [ -s $M/$3-appvm-b$b.tar ] && [ "$(tar tf $M/$3-appvm-b$b.tar 2>/dev/null | grep -c '\.png$')" -gt 0 ] && break
-    done
-    rm -rf $M/$3-appvm-b$b-png; mkdir -p $M/$3-appvm-b$b-png
-    tar xf $M/$3-appvm-b$b.tar -C $M/$3-appvm-b$b-png 2>/dev/null
-    for f in $M/$3-appvm-b$b-png/*.png; do
-      [ -e "$f" ] || continue
-      W=$((W+1)); read -r w h < <(python3 -c "
-import struct,sys
-d=open(sys.argv[1],'rb').read(33); w,h=struct.unpack('>II',d[16:24]); print(w,h)" "$f" 2>/dev/null)
-      [ -z "${w:-}" ] && continue
-      say "    $(basename $f) ${w}x${h}"
-      [ "$w" -ge $(( 5120 * 99 / 100 )) ] && [ "$h" -ge $(( 1440 * 99 / 100 )) ] && big=1
-    done
-    # AN EMPTY dom0 CAPTURE IS NOT "NO WINDOW" (memory rule, and measured 2026-09-11: campaign
-    # 34594988407 graded WIN11-appvm boot 2 a product FAIL on six empty tars while qrexec answered
-    # and the guest took an orderly ACPI shutdown 58 s later - the owner was switching dom0
-    # desktops, and the screenshot service returns only windows on the CURRENT one). So before
-    # grading, ask the GUEST whether notepad has a top-level window. Guest window present + dom0
-    # capture empty = INVALID-INSTRUMENT (ungraded), never a product verdict. Probed BEFORE the
-    # taskkill, or there is nothing left to ask about.
-    local gw=""
-    if [ "$W" -eq 0 ]; then
-      gw=$(g_probe "$app" NPWIN 'Write-Host ("NPWIN=" + ((Get-Process notepad -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Measure-Object).Count))' 60)
-    fi
-    say "  notepad: $(QTEST_VM=$app T=45 ctl_stop "${nppid:-0}" "${npstart:-0}")"
-    if [ "$big" = 1 ]; then no "$3-appvm boot $b: a FULLSCREEN-SIZED window was mapped"
-    elif [ "$W" -gt 0 ]; then mapped_any=1; ok "$3-appvm boot $b: $W window(s) mapped, none fullscreen-sized"
-    elif [ "${gw:-x}" -ge 1 ] 2>/dev/null; then
-      ii_boots=$((ii_boots+1))
-      say "  $3-appvm boot $b: INVALID-INSTRUMENT - the guest shows $gw notepad window(s) but the dom0 capture returned none on six tries (a dom0 desktop switch or capture fault; graded after the cell's other boots)"
-    else no "$3-appvm boot $b: notepad opened but dom0 got NO window (guest-side notepad windows: ${gw:-unreadable})"; fi
+    # EVERY BOOT IS STILL GRADED. None of the four verdicts ended the cell before this split, and
+    # none does now: the loop runs all three boots whatever one of them says, because the
+    # instrument verdict below needs to know how many of the three were affected. Mapping the
+    # fullscreen and no-window cases to `return` here would have aborted the cell after the first
+    # bad boot - a silent behaviour change introduced by the refactor, not by anyone's decision.
+    grade_appvm_window "$app" "$3" "$b"
+    case $? in
+      0) mapped_any=1 ;;                 # window(s) mapped, none fullscreen-sized
+      2) ii_boots=$((ii_boots+1)) ;;     # guest had a window, dom0 capture empty: INVALID, counted
+      1|3) : ;;                          # graded inside the function; the cell continues
+    esac
   done
   # THE CELL'S VERDICT ON THE INSTRUMENT, now that every boot has been seen. (# GUARD:iirepeat)
   if [ "$ii_boots" -gt 0 ] && [ "$mapped_any" = 1 ]; then
