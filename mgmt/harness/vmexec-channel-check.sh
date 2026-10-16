@@ -26,7 +26,9 @@
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 2
 
-VM="${1:?usage: $0 <vm> [logfn]}"
+COLD=0
+[ "${1:-}" = "--cold" ] && { COLD=1; shift; }
+VM="${1:?usage: $0 [--cold] <vm> [logfn]}"
 LG="${2:-echo}"
 # A FUNCTION NAME IS NOT A COMMAND IN A CHILD PROCESS, and this cost two evidence files their
 # contents. matrix.sh calls these checks with its own `say` as the log function - `say` is a shell
@@ -70,6 +72,63 @@ T=$(mktemp -d "${TMPDIR:-/tmp}/vmexec-chan.XXXXXX") || exit 2
 trap 'rm -rf "$T"' EXIT INT TERM
 rc_all=0
 
+# ---- THE COLD CLAUSE FOR THE UPDATER CALLER ---------------------------------------------------
+# The goal is "updaters and start menu, from COLD qube as well". dom0-callers-check.sh covers the
+# start menu cold (matrix.sh:2411); this service - the one dom0 drives the Windows update agent
+# over - was only ever called warm (matrix.sh:960), so the updater half of that clause had no
+# instrument at all.
+#
+# THE COLD CALL IS THE GRANDCHILD SHAPE, NOT THE SIMPLE ONE. Only the FIRST call to a Halted qube
+# is cold - after it the qube is Running and everything else is warm, whatever it is labelled. So
+# the one cold call has to be the shape that matters, and that is `cmd /c cmd /c echo` : the updater
+# is powershell under cmd, two processes deep, and a fresh console given to the GRANDCHILD is the
+# measured cause of VMEXECNOSTDOUT. Checks 1-4 below then run warm against the qube this call
+# started, and the log says so rather than implying four cold calls.
+#
+# The precondition is a REFUSAL, not a warning: a cold check against an already-Running guest
+# measures the warm path under a cold label, which has its own entry in this project's history.
+if [ "$COLD" -eq 1 ]; then
+  state=$(qvm-ls --raw-data --fields STATE "$VM" 2>/dev/null)
+  [ "$state" = Halted ] || { $LG "  VMEXEC: [ERROR] --cold needs $VM Halted and it is '$state' - refusing to label a warm call cold"; exit 2; }
+  # The bound comes from the qube, not from a number I liked: a cold call pays for the whole boot
+  # before the service is reached, and dom0's own caller gives up at qrexec_timeout.
+  qt_pref=$(qvm-prefs "$VM" qrexec_timeout 2>/dev/null)
+  case "$qt_pref" in (*[!0-9]*|'') qt_pref=0 ;; esac
+  bound=$(( qt_pref + 60 )); [ "$bound" -lt 180 ] && bound=180
+  svc=$(vmexec_service cmd.exe /c "cmd /c echo $MARK")
+  t0=$(date +%s)
+  timeout -k 5 "$bound" qrexec-client-vm "$VM" "$svc" </dev/null >"$T/c0" 2>"$T/c0e"
+  crc=$?
+  elapsed=$(( $(date +%s) - t0 ))
+  if command grep -qa "$MARK" "$T/c0"; then
+    $LG "  VMEXEC: COLD grandchild stdout delivered ($(wc -c <"$T/c0") bytes in ${elapsed}s, rc=$crc)"
+  elif [ "$crc" -ge 124 ]; then
+    $LG "  VMEXEC: [ERROR] the COLD call did not finish inside ${bound}s (rc=$crc) - a HANG, not an empty stream; dom0's caller (qrexec_timeout=${qt_pref}s) had already given up"
+    rc_all=1
+  elif [ -s "$T/c0e" ]; then
+    $LG "  VMEXEC: [ERROR] the COLD call returned no stdout and stderr says: $(tr -d '\r' <"$T/c0e" | head -2 | tr '\n' ' ') - a refusal or transport failure, not an empty stream"
+    rc_all=1
+  else
+    $LG "  VMEXEC: [ERROR] the COLD call returned 0 bytes of stdout with a SILENT stderr (rc=$crc, ${elapsed}s) - dom0 would read the update agent's log as empty"
+    rc_all=1
+  fi
+  # The call itself had to bring the qube up; if it is still Halted, something else answered.
+  now=$(qvm-ls --raw-data --fields STATE "$VM" 2>/dev/null)
+  if [ "$now" = Running ]; then
+    $LG "  VMEXEC: the cold call started the qube (Halted -> $now)"
+  else
+    $LG "  VMEXEC: [ERROR] after a cold call $VM is '$now' - this stream did not come from a qube this call started"
+    rc_all=1
+  fi
+  if [ "$qt_pref" -gt 0 ] && [ "$elapsed" -gt "$qt_pref" ]; then
+    $LG "  VMEXEC: [ERROR] the cold call took ${elapsed}s against qrexec_timeout=${qt_pref}s - dom0's caller gives up first"
+    rc_all=1
+  elif [ "$qt_pref" -gt 0 ]; then
+    $LG "  VMEXEC: cold answer in ${elapsed}s, inside qrexec_timeout=${qt_pref}s"
+  fi
+  $LG "  VMEXEC: checks 1-4 below run WARM, against the qube that cold call started"
+fi
+
 # 1. STDOUT. The marker is echoed by the child; if the channel is broken the call still succeeds
 # and the file is empty, which is exactly how this defect hid.
 vmexec_run "$T/o1" "$T/e1" cmd.exe /c "echo $MARK"; rc=$?
@@ -112,7 +171,9 @@ else
 fi
 
 if [ "$rc_all" -eq 0 ]; then
-  $LG "  VMEXEC: all four channel checks passed on $VM"
+  [ "$COLD" -eq 1 ] \
+    && $LG "  VMEXEC: the updater caller is aligned on $VM - one COLD call in the updater's grandchild shape, then all four channels warm" \
+    || $LG "  VMEXEC: all four channel checks passed on $VM"
   exit 0
 fi
 # IT HAS NOW BEEN SEEN TO WORK ON A GUEST, so it gates. Campaign run 9 (2026-10-15) reported

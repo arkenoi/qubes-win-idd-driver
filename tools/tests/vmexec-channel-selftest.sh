@@ -135,5 +135,35 @@ command grep -qE '^exit "\$rc_all"' "$CHECK" \
   && ok "wired: a lost channel now FAILS the cell (exit \$rc_all)" \
   || bad "wired: the final exit is not \$rc_all, so a lost channel does not fail"
 
+# ---- 5. THE COLD HALF OF THE GOAL'S SECOND CLAUSE ---------------------------------------------
+# "updaters and start menu, from COLD qube as well". The start menu got a cold check on 2026-10-15
+# (dom0-callers-check.sh --cold, matrix.sh); this service had none, so the UPDATER half of that
+# clause was unmeasured while the clause read as covered.
+command grep -q 'vmexec-channel-check.sh --cold' mgmt/harness/matrix.sh \
+  && ok "wired: the matrix measures the updater caller FROM A COLD QUBE" \
+  || bad "wired: nothing calls this check --cold, so the goal's cold updater clause is unmeasured"
+[ "$(awk '/vmexec-channel-check.sh --cold/,/^          fi$/' mgmt/harness/matrix.sh | command grep -c '^\s*no "')" -ge 1 ] \
+  && ok "wired: a cold updater failure reaches the TALLY" \
+  || bad "wired: a cold updater failure would print without failing the cell"
+# A COLD CHECK AGAINST A RUNNING GUEST IS A WARM CHECK WITH A COLD LABEL, and substituting test
+# conditions has its own history here. The precondition must be a REFUSAL.
+command grep -q 'refusing to label a warm call cold' "$CHECK" \
+  && ok "cold: it refuses a guest that is not Halted rather than relabelling it" \
+  || bad "cold: no refusal - a warm guest would be measured and reported as cold"
+# Only the FIRST call to a Halted qube is cold, so the one cold call must be the shape that broke.
+command grep -qE 'vmexec_service cmd.exe /c "cmd /c echo \$MARK"' "$CHECK" \
+  && ok "cold: the single cold call is the updater's GRANDCHILD shape" \
+  || bad "cold: the cold call is not the grandchild shape - the measured defect would pass it"
+# The cold receipt is that the call brought the qube up; without it the stream proves nothing.
+command grep -q 'the cold call started the qube' "$CHECK" \
+  && ok "cold: it asserts the call itself started the qube" \
+  || bad "cold: nothing asserts Halted -> Running, so another qube could have answered"
+# A hang, a refusal and an empty stream are three different findings and all arrive as 0 bytes.
+for want in "a HANG, not an empty stream" "a refusal or transport failure" "SILENT stderr"; do
+  command grep -qF "$want" "$CHECK" \
+    && ok "cold: it distinguishes '$want'" \
+    || bad "cold: it cannot report '$want' apart from the others"
+done
+
 echo "vmexec-channel-selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

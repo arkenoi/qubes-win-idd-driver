@@ -2413,6 +2413,22 @@ for c in $CELLS; do
           else
             no "$c: the start-menu caller is NOT aligned from a cold qube - see $M/$c-coldcallers.out"
           fi
+          # THE GOAL NAMES TWO CALLERS, AND ONLY ONE OF THEM HAD A COLD CHECK. "updaters and start
+          # menu, from cold qube as well" - qubes.VMExec, the service dom0 drives the Windows update
+          # agent over, was called warm only (the per-cell call above). ONLY THE FIRST call to a
+          # Halted qube is cold, and the start-menu check just used it, so this costs a second halt.
+          # Once per campaign, like the first: the path does not vary by cell.
+          say "  $c: halting $_slv again to measure the COLD UPDATER caller (qubes.VMExec)"
+          qwt_shutdown "$_slv" 600 >>"$M/$c-coldvmexec.out" 2>&1 || true
+          if [ "$(w_state "$_slv")" = Halted ]; then
+            if ./mgmt/harness/vmexec-channel-check.sh --cold "$_slv" say >>"$M/$c-coldvmexec.out" 2>&1; then
+              ok "$c: updater caller aligned FROM A COLD QUBE (the grandchild's stdout arrived on a qube the call started)"
+            else
+              no "$c: the updater caller is NOT aligned from a cold qube - see $M/$c-coldvmexec.out"
+            fi
+          else
+            say "  $c: [WARN] $_slv would not halt a second time, so the cold UPDATER path went unmeasured"
+          fi
         else
           say "  $c: [WARN] $_slv would not halt, so the cold caller path went unmeasured"
         fi
