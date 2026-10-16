@@ -36,7 +36,11 @@ printf '[{"headSha":"%s","status":"%s","conclusion":"%s","databaseId":99,"create
 STUB
 chmod +x "$T/gh"; }
 set_all(){ for w in "$ROOT"/.github/workflows/*.yml; do echo "MINE $1 $2" > "$T/$(basename "$w").state"; done; }
-run(){ GH_BIN="$T/gh" CI_STATE_CHANGED="${CHANGED:-tools/x.py}" python3 tools/ci-state.py "$SHA" >"$T/out" 2>&1; echo $?; }
+# CI_STATE_BRANCH is set UNCONDITIONALLY: an assignment prefix built by expansion
+# (${BRANCH:+CI_STATE_BRANCH=...}) is a WORD, which bash then tries to execute - rc 127. Empty is
+# fine, because ci-state falls back to the working tree's branch on an empty value.
+run(){ GH_BIN="$T/gh" CI_STATE_CHANGED="${CHANGED:-tools/x.py}" CI_STATE_BRANCH="${BRANCH:-}" \
+         python3 tools/ci-state.py "$SHA" >"$T/out" 2>&1; echo $?; }
 
 mk_gh
 # ---- 1. THE INCIDENT: one green workflow does not make the sha green --------------------------
@@ -112,6 +116,39 @@ fi
 set_all completed success; echo "BROKEN" > "$T/build.yml.state"
 rc=$(run); [ "$rc" = 2 ] && ok "unreadable_is_rc2: gh answering nonsense is 'no verdict', not 'green'" \
   || bad "unreadable_is_rc2: rc=$rc - $(tail -1 "$T/out")"
+
+# ---- A BLOCKED REQUIRED GATE IS NOT GREEN ------------------------------------------------------
+# MEASURED 2026-10-16 on sweep-gate-severity: test.yml and build.yml are `branches: [main]`, the
+# diff touched guest/ and tools/ - exactly the paths test.yml guards - and both REQUIRED gates were
+# reported green from 7fbf7c18's runs. The gate had something to say and could not run; an
+# ancestor's green is not a receipt for this sha. A path-filtered workflow is the opposite case and
+# must still inherit, which the three cases above pin.
+# An ANCESTOR green and NO run for this sha - the shape the incident had.
+set_all completed success; echo "OTHER completed success" > "$T/test.yml.state"
+rc=$(CHANGED="tools/qtest" BRANCH="some-topic-branch" run)
+if [ "$rc" = 1 ] && grep -q "MISS test.yml" "$T/out" && grep -q "cannot run on this branch" "$T/out"; then
+  ok "branchblocked_required_not_green: paths matched, branch cannot run it -> not this sha's green"
+else
+  bad "branchblocked_required_not_green: rc=$rc - $(tail -1 "$T/out")"
+fi
+# and on the branch it DOES run on, the same sha is green - or the check above would pass by
+# refusing everything.
+set_all completed success
+rc=$(CHANGED="tools/qtest" BRANCH="main" run)
+if [ "$rc" = 0 ]; then
+  ok "branchblocked_onmain_is_green: on main the required gates are satisfied by their own runs"
+else
+  bad "branchblocked_onmain_is_green: rc=$rc - $(tail -1 "$T/out")"
+fi
+# SEEN TO FAIL: the shipped reason-string blamed the PATHS for a branch exclusion, so the output
+# said "path-filtered" about a diff whose paths matched. Assert the real filter is named.
+set_all completed success; echo "OTHER completed success" > "$T/test.yml.state"
+rc2=$(CHANGED="tools/qtest" BRANCH="some-topic-branch" run)
+if grep -q "branch-filtered" "$T/out" && ! grep -q "path-filtered for" "$T/out"; then
+  ok "branchblocked_names_the_real_filter: the note says branch-filtered, not path-filtered"
+else
+  bad "branchblocked_names_the_real_filter: $(grep -a 'test.yml' "$T/out" | head -1)"
+fi
 
 echo "--- $pass passed, $fail failed"
 [ "$fail" = 0 ]

@@ -69,6 +69,21 @@ def push_paths(wf):
     return (push.get("paths"), push.get("paths-ignore"))
 
 
+def push_branches(wf):
+    """the workflow's on.push.branches, or None when it runs on a push to any branch."""
+    try:
+        with open(wf, encoding="utf-8") as f:
+            y = yaml.safe_load(f)
+    except Exception:
+        return None
+    on = y.get("on", y.get(True, {})) if isinstance(y, dict) else {}
+    push = (on or {}).get("push") or {}
+    if not isinstance(push, dict):
+        return None
+    b = push.get("branches")
+    return b if b else None
+
+
 def matches(path, pats):
     for p in pats:
         if p.endswith("/**"):
@@ -79,22 +94,53 @@ def matches(path, pats):
     return False
 
 
-def would_run(wf, changed):
-    """would a push of these changed files start this workflow?"""
+def would_run(wf, changed, branch=None):
+    """would a push of these changed files, on this branch, start this workflow?
+
+    Returns (ok, reason, blocked_by) with blocked_by one of None, "paths", "branch". THE BRANCH FILTER WAS NOT READ AT ALL, and that is not
+    a cosmetic gap: on 2026-10-15 this reported test.yml as "path-filtered for this sha; inherited
+    from <ancestor>" for a sha whose diff matched test.yml's paths exactly. The real reason was
+    `branches: [main]` - the workflow cannot run on a topic branch however the paths match - so the
+    tool named the wrong filter AND presented an ancestor's green as this sha's. A required gate
+    that silently inherits is the shape this file exists to refuse.
+    """
+    # The two filters are judged SEPARATELY, because they mean opposite things for a required gate:
+    #   path-filtered  - the diff touches none of this workflow's paths, so it has nothing to say
+    #                    about this sha and inheriting its last run is correct. Without that, every
+    #                    sha would be un-receiptable forever.
+    #   branch-filtered - the paths DO match, so the gate had something to say, and the only reason
+    #                    it is silent is that it cannot run on this branch. Inheriting there hands
+    #                    back an ancestor's green for a change nobody tested.
     paths, ignore = push_paths(wf)
-    if paths is None and ignore is None:
-        return True                       # no filter: every push starts it
-    if changed is None:
-        return True                       # cannot tell -> assume it was due, so an absence is loud
-    if paths and not any(matches(c, paths) for c in changed):
-        return False
-    if ignore and changed and all(matches(c, ignore) for c in changed):
-        return False
-    return True
+    paths_ok = True
+    if paths is not None or ignore is not None:
+        if changed is None:
+            paths_ok = True               # cannot tell -> assume it was due, so an absence is loud
+        elif paths and not any(matches(c, paths) for c in changed):
+            paths_ok = False
+        elif ignore and changed and all(matches(c, ignore) for c in changed):
+            paths_ok = False
+    br = push_branches(wf)
+    branch_ok = True
+    if br is not None and branch is not None:
+        branch_ok = any(fnmatch.fnmatch(branch, pat) for pat in br)
+    if not paths_ok:
+        return (False, "path-filtered", "paths")
+    if not branch_ok:
+        # IT IS STILL DUE. The paths matched, so this workflow had something to say about the sha;
+        # the branch is the only thing stopping it. The wording keeps "DUE for this sha" because
+        # that is the fact - due, blocked, and therefore not green.
+        return (False, "DUE for this sha (its paths matched) but branch-filtered: runs on push to %s only"
+                % ", ".join(br), "branch")
+    return (True, None, None)
 
 
 def main(argv):
     sha = argv[1] if len(argv) > 1 else sh(["git", "rev-parse", "HEAD"]).strip()
+    # THE BRANCH MATTERS AS MUCH AS THE PATHS. A workflow with `branches: [main]` cannot run on a
+    # topic branch, so without this the tool called a required gate "path-filtered" and handed back
+    # an ancestor's green. CI_STATE_BRANCH overrides for a sha that is not on the current branch.
+    branch = os.environ.get("CI_STATE_BRANCH") or sh(["git", "rev-parse", "--abbrev-ref", "HEAD"]).strip() or None
     if not sha:
         print("CI 2 could not read a sha")
         return 2
@@ -118,6 +164,7 @@ def main(argv):
                 if h[:8] == sha[:8]:
                     mine = r
                     break
+        _due, _why, _blocked = would_run(wf, changed, branch)
         mark, status, concl, rid, note = "    ", "-", "-", "-", ""
         if rows is None:
             mark, status, note = "????", "UNREAD", "gh could not be read"
@@ -135,11 +182,12 @@ def main(argv):
                 mark = "run "
                 if req:
                     running = True
-        elif not would_run(wf, changed):
-            # path-filtered out for this sha. Inherit the latest run anywhere, and say from where.
+        elif not _due:
+            # NOT DUE for this sha, and the note says WHICH filter excluded it. Inherit the latest
+            # run anywhere, and say from where - an inherited green is never this sha's receipt.
             latest = rows[0] if rows else None
             if latest is None:
-                mark, status, note = "none", "NORUN", "path-filtered, and no run exists at all"
+                mark, status, note = "none", "NORUN", "%s, and no run exists at all" % _why
                 if req:
                     rc = 1
                     mark = "MISS"
@@ -147,9 +195,20 @@ def main(argv):
                 status = latest.get("status")
                 concl = latest.get("conclusion") or "-"
                 rid = latest.get("databaseId")
-                note = "path-filtered for this sha; inherited from %s" % (latest.get("headSha", "")[:8])
+                note = "%s; inherited from %s" % (_why, latest.get("headSha", "")[:8])
                 if status == "completed" and concl == "success":
                     mark = "inh "
+                    # A BLOCKED REQUIRED GATE IS NOT GREEN. When the exclusion is the BRANCH, this
+                    # workflow's paths DID match the diff - it had something to say and could not
+                    # run - so an ancestor's green is not a receipt for this sha. Measured
+                    # 2026-10-16 on sweep-gate-severity: a diff touching guest/ and tools/ had both
+                    # required gates satisfied by 7fbf7c18's runs. A path-filtered workflow is a
+                    # different case and still inherits: it has nothing to say about this sha.
+                    if req and _blocked == "branch":
+                        mark = "MISS"
+                        rc = 1
+                        note += " - REQUIRED, its paths matched, and it cannot run on this branch:" \
+                                " dispatch it for this sha"
                 elif status == "completed":
                     mark = "RED "
                     if req:
