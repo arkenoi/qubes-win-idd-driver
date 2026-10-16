@@ -408,7 +408,15 @@ def dom0_sends(files):
 DEFAULT_THRESHOLDS = {
     "agent_unrequested_deaths": {"max": 0, "severity": "P1", "why": "ADR-supervision 1: an unrequested death of ours is a major error"},
     "agent_deaths_at_shutdown": {"max": 0, "severity": "P1", "why": "a shutdown must stop the agent through the watchdog, never kill it"},
-    "agent_relaunches_at_shutdown": {"max": 0, "severity": "P2", "why": "a relaunch into an ending session is the 2026-10-07 defect"},
+    # P1 BY THE OWNER'S RULING, 2026-10-16: "if we have agent relaunch, it is not p2, it is p1
+    # demoted by lack of reporting." The level was P2 because nothing tells the user it happened -
+    # which is the reporting hole, not the severity. Rule 1 of this file's own doctrine (below, and
+    # docs/ADR-supervision.md 1) already said it: anything of ours that dies unexpectedly is a MAJOR
+    # ERROR and must be loud, and a relaunch is never a quiet recovery. So P2 contradicted the rule
+    # printed in this same module. NOT the same thing as a restart-only defect, which stays off P1
+    # (owner 2026-10-02): that is about a guest being restarted deliberately, not about our agent
+    # dying and being put back silently.
+    "agent_relaunches_at_shutdown": {"max": 0, "severity": "P1", "why": "something of ours died and was silently put back: a relaunch into an ending session is the 2026-10-07 defect, and the silence is the reporting hole, not a lower severity"},
     "error_lines_undeclared": {"max": 0, "severity": "P2", "why": "owner 2026-10-07: a clean error log is THE gate condition - any error line our own code wrote, and that this run did not declare it caused, is a defect to fix at its cause (never to hide)"},
     "declared_errors_unmatched": {"max": 0, "severity": "P2", "why": "a declared error that never appeared: the stimulus the run claims to have applied did not happen, so the run proved less than it says"},
     "agent_instances_per_shutdown": {"max": 1, "severity": "P2", "why": "one agent per shutdown; three = three vchan setups with dom0"},
