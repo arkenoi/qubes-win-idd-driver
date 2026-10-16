@@ -298,8 +298,15 @@ DOM0_SEND_RE = re.compile(
 # RECORDS, and a line that merely names a protocol token records neither. So the test is the
 # OUTCOME, which keeps every real case: a delivered send, a lost one, a handoff that reaches
 # nobody, and an error box actually shown.
-DOM0_OUTCOME_RE = re.compile(r"\bsent\b|\bsend ok\b|user notification sent|notification LOST|"
-                             r"reaches nobody|shown to the user|NOT notified")
+# TWO OUTCOMES, TWO DEFECTS. `dom0_loud_failures` means "a failure the USER CAN SEE". A LOST
+# notification is the opposite - the user saw nothing - and counting it in the same metric makes
+# that metric's name untrue and its number ambiguous. Both are P1 here ("no doubles, nothing
+# lost"), so nothing is excused by separating them; the loss simply gates under its own name.
+# MEASURED on win10-reinstall, acceptance run 38826875627: one line, "NOTIFY one-shot: no
+# connection to dom0 - notification LOST", was being reported as a user-visible failure.
+DOM0_SHOWN_RE = re.compile(r"\bsent\b|\bsend ok\b|user notification sent|shown to the user")
+DOM0_LOST_RE  = re.compile(r"notification LOST|reaches nobody|NOT notified")
+DOM0_OUTCOME_RE = re.compile(DOM0_SHOWN_RE.pattern + "|" + DOM0_LOST_RE.pattern)
 DOM0_SENT_RE = DOM0_OUTCOME_RE   # kept: existing callers name it this
 
 
@@ -353,9 +360,30 @@ def dom0_loud(files):
             # and a recovered internal diagnostic raised a P1 on win11-appvm. A line must record
             # what became of a notification; its level then says nothing extra, because a delivered
             # failure is INFO (the sender reporting its own success) and that was the original bug.
-            if DOM0_OUTCOME_RE.search(msg):
+            # a send that LANDED is what this metric is named for; a loss is dom0_lost() below
+            if DOM0_SHOWN_RE.search(msg) and not DOM0_LOST_RE.search(msg):
                 loud.append((lf.name, lvl or "?", msg))
     return loud
+
+
+def dom0_lost(files):
+    """Notifications our code RAISED and could not deliver - the user was told NOTHING.
+
+    The counterpart to dom0_loud(): same path dictionary, opposite outcome. P1 for the same reason
+    and a different one - the owner's standing rule is "no doubles, nothing lost", and a message
+    that never arrived is the second half of it. MEASURED on win10-reinstall, acceptance run
+    38826875627: "NOTIFY one-shot: no connection to dom0 (policy refusal? no dom0 session?) -
+    notification LOST", raised in the gap between the bridge stopping and a session existing.
+    """
+    lost = []
+    for lf in files:
+        for l in getattr(lf, "lines", []):
+            msg = getattr(l, "msg", "") or ""
+            if not DOM0_SEND_RE.search(msg):
+                continue
+            if DOM0_LOST_RE.search(msg):
+                lost.append((lf.name, getattr(l, "level", None) or "?", msg))
+    return lost
 
 
 def dom0_sends(files):
@@ -384,6 +412,7 @@ DEFAULT_THRESHOLDS = {
     "error_lines_undeclared": {"max": 0, "severity": "P2", "why": "owner 2026-10-07: a clean error log is THE gate condition - any error line our own code wrote, and that this run did not declare it caused, is a defect to fix at its cause (never to hide)"},
     "declared_errors_unmatched": {"max": 0, "severity": "P2", "why": "a declared error that never appeared: the stimulus the run claims to have applied did not happen, so the run proved less than it says"},
     "agent_instances_per_shutdown": {"max": 1, "severity": "P2", "why": "one agent per shutdown; three = three vchan setups with dom0"},
+    "notifications_lost": {"max": 0, "severity": "P1", "why": "our own code raised a user-facing message and could NOT deliver it - the user was told nothing. The counterpart to dom0_loud_failures, which counts what the user DID see; the owner's rule is 'no doubles, nothing lost' and this is the second half of it"},
     "dom0_loud_failures": {"max": 0, "severity": "P1", "why": "our own code told dom0 to show the USER that something of ours failed - a line on the dom0 notification path that its own writer declared W or E. A failure the user can SEE is P1 on this project; the severity comes from the writer and the path comes from our own protocol tokens, so neither is guessed"},
     "clock_boot_correction_s": {"max": 60, "severity": "P1", "why": "the guest's clock had to be moved this far mid-boot: its RTC does not hold what the guest thinks it holds (qube `timezone` feature vs the guest's own zone). Measured 2026-10-14 at 10800 s - three hours - on every cell, while this analyser SILENTLY SHIFTED 2249 lines to compensate and raised nothing. Every timestamp judgement on such a guest is unsound, and the owner sees a guest whose clock is wrong"},
     "agent_instances_per_boot": {"max": 1, "severity": "P2", "why": "the agent is started once per boot; a second instance is a death or a restart"},
@@ -2377,6 +2406,7 @@ def cmd_analyze(a):
     # LOUDNESS, DECIDED NOT JUDGED: a dom0-path line whose own writer declared W or E.
     _loud = dom0_loud(files)
     metrics["dom0_loud_failures"] = len(_loud)
+    metrics["notifications_lost"] = len(dom0_lost(files))
     sigs = collect_signatures(files, since)
     cmp = compare(sigs, baseline, metrics)
     items = build_jev_items(cmp, st, metrics, files, since)

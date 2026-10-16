@@ -48,6 +48,7 @@ files = [F("bridge.log", [
 ])]
 loud = m.dom0_loud(files)
 print("LOUD", len(loud))
+print("LOSTN", len(m.dom0_lost(files)))
 print("SUCCESS_EXCLUDED", 0 if any("ok=1" in x[2] for x in loud) else 1)
 print("LAUNCH_EXCLUDED",  0 if any("NOTIFHOST launched" in x[2] for x in loud) else 1)
 print("CONFIG_EXCLUDED",  0 if any("gate: enabled=" in x[2] for x in loud) else 1)
@@ -73,7 +74,11 @@ g(){ grep -a "^$1 " "$T/out.txt" | head -1 | cut -d' ' -f2-; }
 # PASSED. A P1 with max 0 had never once been able to fire - and this suite was green throughout,
 # because it asserted the exclusion AND asserted the source still contained the level gate.
 # A test that pins a belief into the code cannot discover the belief is wrong.
-ck "a dom0-path line declared W or E is LOUD"             "5" "$(g LOUD)"
+# the fixture holds FIVE notification outcomes: two the user saw (a delivered send, an error box
+# actually shown) and three he did not (a failed send, a refused connection, a handoff that
+# reaches nobody). They are different defects and they are counted separately now.
+ck "only what the user SAW counts as loud"                "2" "$(g LOUD)"
+ck "and what he did NOT see counts as lost"               "3" "$(g LOSTN)"
 ck "a SUCCESSFUL send IS loud - the user saw it"          "0" "$(g SUCCESS_EXCLUDED)"
 # this one fooled a hand-written classifier: it matches the dictionary (its args name a
 # notify-errors path) but is written at INFO, because it is a launch, not a failed send.
@@ -95,6 +100,41 @@ ck "and it breaches"                                      "1" "$(g BREACHES)"
 # "NOTIFY handoff" line, which IS a dom0-path line that is not a send, so the level still
 # qualifies those; and the same 5 counts the INFO "sent ok=1" line, so a send is recognised on its
 # own. A property worth protecting is worth planting a line for.
+
+# --- A LOST NOTIFICATION IS A DIFFERENT DEFECT FROM A SEEN ONE ---------------------------------
+# dom0_loud_failures means "a failure the USER CAN SEE". A LOST notification is the opposite - the
+# user saw nothing - and counting both in one metric makes its name untrue and its number
+# ambiguous. Both are P1 ("no doubles, nothing lost"), so separating them excuses nothing: the loss
+# gates under its own name. MEASURED on win10-reinstall, acceptance run 38826875627, where one
+# "NOTIFY one-shot: no connection to dom0 - notification LOST" was reported as user-visible.
+python3 - <<'PYSPLIT' > "$T/split.txt" 2>&1
+import importlib.util
+spec = importlib.util.spec_from_file_location("ls", "tools/log-sweep.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+class L:
+    def __init__(s, msg, lvl): s.msg, s.level = msg, lvl
+class F:
+    def __init__(s, n, p): s.name, s.lines, s.family, s.path = n, [L(a, b) for a, b in p], "agent", None
+f = F("bridge.log", [
+    ("NOTIFY one-shot: sent ok=1 summary=The PV NIC setup task failed", "I"),
+    ("NOTIFY one-shot: no connection to dom0 (policy refusal?) - notification LOST", "E"),
+    ("NOTIFY handoff: no active console session - this message reaches nobody", "W"),
+    ("BrokerReportDeaf: QGAWGCITEMCLOSED hwnd 0x40020 slot 0: reopened at once", "W")])
+print("SHOWN", len(m.dom0_loud([f])))
+print("LOST", len(m.dom0_lost([f])))
+print("SHOWN_HAS_LOST", int(any("LOST" in x[2] for x in m.dom0_loud([f]))))
+print("LOST_HAS_SHOWN", int(any("sent ok=1" in x[2] for x in m.dom0_lost([f]))))
+t = m.DEFAULT_THRESHOLDS.get("notifications_lost", {})
+print("LOSTMETRIC", t.get("max"), t.get("severity"))
+cmp = m.compare({}, {"thresholds": {}}, {"notifications_lost": len(m.dom0_lost([f]))})
+print("LOSTBREACH", len(cmp["breaches"]))
+PYSPLIT
+ck "a DELIVERED failure counts as seen"                 "1" "$(grep -a '^SHOWN ' "$T/split.txt" | cut -d' ' -f2)"
+ck "the two LOST shapes count as lost, not as seen"     "2" "$(grep -a '^LOST ' "$T/split.txt" | cut -d' ' -f2)"
+ck "the seen metric contains no LOST line"              "SHOWN_HAS_LOST 0" "$(grep -a '^SHOWN_HAS_LOST' "$T/split.txt")"
+ck "the lost metric contains no delivered line"         "LOST_HAS_SHOWN 0" "$(grep -a '^LOST_HAS_SHOWN' "$T/split.txt")"
+ck "notifications_lost is P1 with a zero threshold"     "LOSTMETRIC 0 P1" "$(grep -a '^LOSTMETRIC' "$T/split.txt")"
+ck "and it BREACHES - the gate has been seen to fire"   "LOSTBREACH 1" "$(grep -a '^LOSTBREACH' "$T/split.txt")"
 
 # SEEN TO FAIL, BOTH WAYS. This metric has now been wrong in two opposite directions and each
 # shipped: first the level gate alone, which could not see an INFO send (the delivered failure, on
@@ -127,10 +167,10 @@ print("NOW_HAS_DELIVERED", int(any("sent ok=1" in x for x in got)))
 print("NOW_HAS_DIAGNOSTIC", int(any("BrokerReportDeaf" in x for x in got)))
 
 # rule 1: the level gate alone - misses the delivered failure
-one = load(src.replace("if DOM0_OUTCOME_RE.search(msg):", 'if lvl in ("W", "E"):'))
+one = load(src.replace('if DOM0_SHOWN_RE.search(msg) and not DOM0_LOST_RE.search(msg):', 'if lvl in ("W", "E"):'))
 print("RULE1_HAS_DELIVERED", int(any("sent ok=1" in x[2] for x in one.dom0_loud([f]))))
 # rule 2: level OR token - counts the recovered diagnostic
-two = load(src.replace("if DOM0_OUTCOME_RE.search(msg):", 'if lvl in ("W", "E") or DOM0_OUTCOME_RE.search(msg):'))
+two = load(src.replace('if DOM0_SHOWN_RE.search(msg) and not DOM0_LOST_RE.search(msg):', 'if lvl in ("W", "E") or DOM0_SHOWN_RE.search(msg):'))
 print("RULE2_HAS_DIAGNOSTIC", int(any("BrokerReportDeaf" in x[2] for x in two.dom0_loud([f]))))
 PYDEF
 ck "now: the delivered failure IS counted"                  "NOW_HAS_DELIVERED 1"     "$(grep -a '^NOW_HAS_DELIVERED' "$T/defect.txt")"
