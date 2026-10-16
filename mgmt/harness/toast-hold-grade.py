@@ -200,7 +200,18 @@ HASH_VECTORS = [
 # --------------------------------------------------------------------------------------------- parsing
 TS_FMT = "%Y-%m-%d %H:%M:%S.%f"
 AGENT_RE = re.compile(r"^\[(\d{4})(\d{2})(\d{2})\.(\d{2})(\d{2})(\d{2})\.(\d{3})[^\]]*\]\s*(.*)$")
-BRIDGE_RE = re.compile(r"^(\d{2}):(\d{2}):(\d{2}) (.*)$")
+# THE WRITER DECLARES A LEVEL NOW, AND THIS PARSER ANCHORED WHERE THE TEXT USED TO START.
+# qtb_shared.h's BLog/BLogW/BLogE prefix every bridge line with "[INFO] " / "[WARN] " /
+# "[ERROR] " so a sweep can read severity from the writer. This regex captured everything
+# after the timestamp as the message, so msg became "[INFO] connected (server version 1.0)"
+# and EVERY msg.startswith(...) below missed. MEASURED 2026-10-16 on the win11r-thold evidence:
+# parse_bridge returned ZERO events from a 470-line log - no CONNECTED, no HOLDLIVE, no ARMED -
+# so the BRIDGE precondition read "the bridge never logged connected ... nothing could be
+# forwarded", HOLD-IPC read "FAIL ... `HOLD records live` absent - mixed install" about a line
+# sitting at line 19 of that same file, and 12 of the suite's 21 rows went ungraded. A suite
+# grading under a third of itself is not a measurement, and this is why.
+# The level is OPTIONAL so a pre-prefix capture still parses.
+BRIDGE_RE = re.compile(r"^(\d{2}):(\d{2}):(\d{2}) (?:\[(?:ERROR|WARN|WARNING|INFO|DEBUG)\] )?(.*)$")
 KV_RE = re.compile(r"\b([A-Za-z_]+)=([0-9A-Za-z._:/\\-]+)")
 HEX_RE = r"0x([0-9a-fA-F]+)"
 
@@ -1058,7 +1069,14 @@ class Fx:
                 f.write(f"[{t.strftime('%Y%m%d.%H%M%S.%f')[:-3]}-1234-5678] gui-agent: {msg}\n")
         with open(os.path.join(self.d, "bridge.log"), "w", encoding="utf-8") as f:
             for t, msg in sorted(self.bridge, key=lambda x: x[0]):
-                f.write(f"{t.strftime('%H:%M:%S')} {msg}\r\n")
+                # THE LEVEL THE REAL WRITER EMITS. qtb_shared.h's BLog prefixes every bridge line
+                # with "[INFO] " (BLogW/BLogE for W/E), and this fixture wrote the PRE-PREFIX shape -
+                # so the selftest stayed CLEAN while BRIDGE_RE captured "[INFO] connected (server
+                # version 1.0)" as the message and every startswith() in parse_bridge missed.
+                # MEASURED 2026-10-16: zero events parsed from a real 470-line bridge.log, 12 of 21
+                # rows ungraded, and a HOLD-IPC "FAIL" about a line present in that same file.
+                # A fixture has to come from a CAPTURE, not from a memory of the format.
+                f.write(f"{t.strftime('%H:%M:%S')} [INFO] {msg}\r\n")
         with open(os.path.join(self.d, "fires.jsonl"), "w", encoding="utf-8") as f:
             for r in self.fires:
                 f.write(json.dumps(r) + "\n")
