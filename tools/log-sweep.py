@@ -1188,19 +1188,37 @@ def detect_clock_offset(files):
     in every log. Returns 0.0 when no file shows one - a guest whose clock was right at boot, which
     is the state this rig should eventually be in.
     """
+    # "ONE FILE" IS NOT ONE SEQUENCE IN events.txt. The docstring above says a backward jump between
+    # consecutive lines of one file is produced by nothing but a clock correction. That holds for a
+    # log with ONE writer appending in order; it does not hold for the event stream, which is
+    # several CHANNELS concatenated, each in its own time order, so every channel boundary is a
+    # backward jump of however far apart the two channels' windows are.
+    # MEASURED on win10-reinstall, acceptance run 38826875627:
+    #   EV 2026-10-16 04:17:02.159 [TerminalServices-LocalSessionManager/Operational]
+    #   EV 2026-10-16 04:00:50.316 [TaskScheduler/Operational]
+    # a 972 s "correction" that buckets to the 960 this metric reported as a P1 - on a guest whose
+    # pre-sync skew was THREE SECONDS. A corpus-wide scan found ZERO backward jumps over 600 s in
+    # any single-writer log; the only one was that channel boundary. The same artefact gave
+    # win11-reinstall 1260 s, and it appeared on the reinstall cells alone because their event
+    # windows straddle the restore.
+    # So the sequence is per WRITER: one channel for an event line, the file itself otherwise. A
+    # real correction inside a channel is still caught, and the gate is not weakened - the previous
+    # value was measuring the collector, not the guest.
     jumps = {}
     for lf in files:
-        prev = None
+        prev = {}
         for l in lf.lines:
             ts = getattr(l, "ts", None)
             if ts is None:
                 continue
-            if prev is not None:
-                back = (prev - ts).total_seconds()
+            seq = (getattr(l, "extra", None) or {}).get("log") or "\x00file"
+            p0 = prev.get(seq)
+            if p0 is not None:
+                back = (p0 - ts).total_seconds()
                 if back > 600:
                     k = int(round(back / 60.0))
                     jumps[k] = jumps.get(k, 0) + 1
-            prev = ts
+            prev[seq] = ts
     if not jumps:
         return 0.0
     return float(max(sorted(jumps), key=lambda k: (jumps[k], k)) * 60)

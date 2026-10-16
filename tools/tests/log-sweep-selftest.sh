@@ -1237,4 +1237,59 @@ m="noflag=$(diff "$COLL" "$T/coll/noflag.ps1" | grep -c '^[<>]') noraw=$(diff "$
   || bad "T43 a defect copy passed (noflag='$vn' noraw='$vr') - the check proves nothing"
 
 echo "--- $pass passed, $fail failed; fixtures/outputs in $T"
+
+# --- T-CLOCK: A CHANNEL BOUNDARY IS NOT A CLOCK CORRECTION --------------------------------------
+# detect_clock_offset's rule is "a backward jump between consecutive lines of ONE FILE, which
+# nothing else here produces". That holds for a log with one writer appending in order. events.txt
+# is several CHANNELS concatenated, each in its own time order, so every channel boundary is a
+# backward jump of however far apart their windows are. MEASURED on win10-reinstall, acceptance run
+# 38826875627: TerminalServices at 04:17:02 followed by TaskScheduler at 04:00:50 - a 972 s
+# "correction" reported as a P1 on a guest whose pre-sync skew was THREE SECONDS. A corpus-wide
+# scan found zero backward jumps over 600 s in any single-writer log. Re-measured with the fix, the
+# real corpora went 960 -> 0 and 1260 -> 0, while win10-clean stayed 0.
+python3 - <<'PYCLK'
+import importlib.util, datetime, sys
+spec = importlib.util.spec_from_file_location("ls", "tools/log-sweep.py")
+m = importlib.util.module_from_spec(spec)
+try: spec.loader.exec_module(m)
+except SystemExit: pass
+class L:
+    def __init__(s, ts, log=None): s.ts = ts; s.extra = ({"log": log} if log else {})
+class F:
+    def __init__(s, lines): s.lines = lines
+T = datetime.datetime(2026, 10, 16, 4, 0, 0)
+d = datetime.timedelta
+bad = 0
+art = [L(T+d(seconds=1000), "ChanA"), L(T+d(seconds=1020), "ChanA"),
+       L(T+d(seconds=50), "ChanB"),   L(T+d(seconds=70), "ChanB")]
+v = m.detect_clock_offset([F(art)])
+print(("  PASS  " if v == 0.0 else "  FAIL  ") + "a channel boundary is not a correction (got %s)" % v)
+bad += (v != 0.0)
+real = [L(T+d(seconds=1000), "ChanA"), L(T+d(seconds=20), "ChanA")]
+v = m.detect_clock_offset([F(real)])
+print(("  PASS  " if v >= 900 else "  FAIL  ") + "a real correction INSIDE a channel is still caught (got %s)" % v)
+bad += (v < 900)
+plain = [L(T+d(seconds=1000)), L(T+d(seconds=20))]
+v = m.detect_clock_offset([F(plain)])
+print(("  PASS  " if v >= 900 else "  FAIL  ") + "a real correction in a single-writer log is still caught (got %s)" % v)
+bad += (v < 900)
+# SEEN TO FAIL: the previous rule - one `prev` for the whole file - calls the artefact a correction
+def old_rule(files):
+    jumps = {}
+    for lf in files:
+        prev = None
+        for l in lf.lines:
+            if prev is not None:
+                back = (prev - l.ts).total_seconds()
+                if back > 600:
+                    k = int(round(back/60.0)); jumps[k] = jumps.get(k, 0) + 1
+            prev = l.ts
+    return float(max(sorted(jumps), key=lambda k: (jumps[k], k)) * 60) if jumps else 0.0
+v = old_rule([F(art)])
+print(("  PASS  " if v > 0 else "  FAIL  ") + "SEEN TO FAIL: the old whole-file rule reports %s on that artefact" % v)
+bad += (v <= 0)
+sys.exit(1 if bad else 0)
+PYCLK
+if [ $? -eq 0 ]; then pass=$((pass+4)); else fail=$((fail+1)); fi
+
 [ "$fail" = 0 ] && exit 0 || exit 1
