@@ -260,6 +260,65 @@ else
 fi
 rm -f "$TRIG"
 
+# --- 8. THE DEFERRAL: a message with no route is QUEUED, not dropped ----------------------------
+# THE P1 THIS RELEASE EXISTS TO CLOSE (NOTIFYLOSTINSESSIONGAP). Measured on win10-reinstall in run
+# 38826875627: the bridge stopped at 06:41:28, a one-shot fired at 06:41:47, a session handoff
+# succeeded five seconds later - and the message raised in that gap was DROPPED, with nothing in the
+# log able to name which one. notifhost.cpp now persists it (NotifyDeferWrite) and the next bridge
+# start sends it (NotifyDeferDrain). Until this check existed the fix had run on a guest EIGHT TIMES
+# with zero `NOTIFY deferred` lines, because nothing ever created the gap - a campaign that cannot
+# produce the condition is not evidence about the fix for it.
+#
+# HOW THE GAP IS PRODUCED ON PURPOSE, which is the part that was missing. ConnUp() passes
+# GetUserNameW() as qrexec-client-vm's local-user field, so a caller running as SYSTEM asks the agent
+# to spawn the relay for "SYSTEM" and the relay never connects back (notifhost.cpp:3505 says so in
+# as many words). `qtest run` IS SYSTEM in session 0 on this rig (classifier-route-probe.sh:24), so
+# the one-shot below has no route BY CONSTRUCTION - no logoff, no bridge kill, no race, and the
+# guest stays exactly as the other checks left it.
+#
+# AND IT DOES NOT REST ON A LOG LINE. BLog opens bridge.log FILE_SHARE_READ and silently drops a
+# line when two writers collide - a0-lib.sh fwd_count records the measured casualties of that - so a
+# missing line proves nothing either way. The two decisive assertions are an EXIT CODE and a FILE:
+#   rc=5            the one-shot queued it. rc=3 + "notification LOST" is the OLD contract, so this
+#                   check cannot pass against a package that predates the fix.
+#   deferred-*.txt  present, then GONE after the next bridge start. The --notify-file reader deletes
+#                   it ONLY on a successful send, so its absence is the delivery receipt itself.
+QTBIN='C:\Program Files\Qubes Tools\bin'
+SDIR='C:\ProgramData\qubes-toast-bridge'
+defcount(){ ps_probe DEF "Write-Host ('DEF=' + @(Get-ChildItem -LiteralPath '$SDIR' -Filter 'deferred-*.txt' -File -EA SilentlyContinue).Count)"; }
+TAG="deferproof-$(date -u +%H%M%S)"
+
+d0=$(defcount)
+say "deferral: the queue holds ${d0:-<unreadable>} message(s) before the probe"
+rc8=$(ps_probe RC "& '$QTBIN\\notifhost.exe' --notify '$TAG' 'An acceptance probe: nothing in the guest is wrong.' | Out-Null; Write-Host (\"RC=\" + \$LASTEXITCODE)" 180)
+if [ "$rc8" = 5 ]; then ok "DEFERRED: a one-shot with no route returned 5 (queued), not 3 (LOST)"
+else no "the no-route one-shot returned '${rc8:-<none>}', want 5 - rc=3 is the pre-fix 'notification LOST' contract, and rc=0 would mean it found a route and this probe never produced the gap"; fi
+
+d1=$(defcount)
+if [ -n "$d1" ] && [ "${d1:-0}" -gt "${d0:-0}" ]; then ok "PERSISTED: the message is on disk, not gone ($d0 -> $d1 queued)"
+else no "nothing was queued in the state directory ($d0 -> ${d1:-<unreadable>}) - with no persisted message there is nothing to deliver later, which is the P1 itself"; fi
+
+# THE DRAIN, ACROSS A REBOOT - the field shape of this P1, not a convenient one. A message raised
+# with no route is typically raised at shutdown, so surviving to the NEXT boot's bridge start is the
+# property that matters; draining within one uptime would be the easier half.
+d2=""
+if reboot_proven "deferral drain"; then
+  for i in $(seq 1 30); do d2=$(defcount); [ "${d2:-1}" = 0 ] && break; sleep 10; done
+  if [ "${d2:-x}" = 0 ]; then ok "DRAINED ACROSS A REBOOT: the queue is empty after the next bridge start, and the reader empties it only on a successful send"
+  else no "the deferred message is STILL queued after a proven reboot (${d2:-<unreadable>} left) - it was persisted and never delivered, so the loss became a stall instead of a drop"; fi
+  # CORROBORATION ONLY. A dropped BLog line must not fail a run whose file-level receipts hold, so
+  # this is said out loud and counted as neither pass nor fail.
+  dl=$(ps_probe DL '$d=$null
+try { $d = (Get-ItemProperty "HKLM:\Software\Invisible Things Lab\Qubes Tools" -Name LogDir -EA Stop).LogDir } catch { }
+if (-not $d) { $d = (Join-Path $env:SystemDrive "Qubes Logs") }
+$p = Join-Path $d "bridge.log"
+$n = 0
+if (Test-Path -LiteralPath $p) { $n = @(Select-String -LiteralPath $p -Pattern "defer-drain" -SimpleMatch -EA SilentlyContinue).Count }
+Write-Host ("DL=" + $n)')
+  if [ -n "$dl" ] && [ "${dl:-0}" -gt 0 ]; then say "        corroborated: bridge.log carries $dl defer-drain line(s)"
+  else say "        note: no defer-drain line in bridge.log (BLog drops lines under writer contention) - the file receipts above stand on their own"; fi
+fi
+
 say "=== notify-errors guest test: $pass passed, $fail failed ==="
 qvm-features --unset "$VM" service.notify-errors >/dev/null 2>&1
 vm_unlock "$VM"
