@@ -120,8 +120,12 @@ agent_restart_ps(){  # [preamble] [epilogue] -> PowerShell text
   # Every other .ps1-file invocation in this repo already passes -ExecutionPolicy Bypass (20+ call
   # sites, e.g. guest/install-updater-agent.ps1:436, guest/pvnic-selfprime.ps1:1194); a child process
   # is also what keeps the helper's own `exit` from truncating the epilogue.
-  printf 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File %s -TimeoutSec %s\n' \
-    "'$(_lc_helper_guest)'" "${AGENT_RESTART_TIMEOUT:-45}"
+  # AGENT_RESTART_WAIT_SERVING (seconds, default 0 = today's behaviour) asks the helper to wait for
+  # the restarted agent to reach serving=connected, not merely alive. Only a caller that goes on to
+  # grade WINDOWS needs it - failproof-gates aborted a whole 89-minute run in 63 seconds because its
+  # baseline suite ran against an agent still 'awaiting' a vchan client and produced no verdicts.
+  printf 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File %s -TimeoutSec %s -WaitServing %s\n' \
+    "'$(_lc_helper_guest)'" "${AGENT_RESTART_TIMEOUT:-45}" "${AGENT_RESTART_WAIT_SERVING:-0}"
   printf '%s\n' "${2:-}"
 }
 

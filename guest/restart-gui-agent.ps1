@@ -49,7 +49,7 @@
 #   NEWLOG <name|none>
 #   SERVING <awaiting|connected|none>
 #   RESTART ok new=<pid> log=<name> serving=<marker>   |   RESTART INVALID-INSTRUMENT <reason>
-param([int]$TimeoutSec = 45)
+param([int]$TimeoutSec = 45, [int]$WaitServing = 0)
 
 function Get-GuiAgentLogDir {
     # The agent's log directory, from the same registry value the agent reads. '' when unreadable.
@@ -302,6 +302,33 @@ function Start-GuiAgentOwner {
     $r.wait_s = [int]$sw.Elapsed.TotalSeconds
     $r.turnover = $tv.stage
     if ($tv.ok) { $r.new_log = $tv.log; $r.new_pid = [int]$tv.init_pid; $r.serving = $tv.serving }
+    # OPT-IN: WAIT FOR THE AGENT TO BE SERVING, NOT MERELY ALIVE. 'awaiting' means the agent logged
+    # "Awaiting for a vchan client" - it started, and dom0's gui-daemon has not attached yet, so it
+    # can map nothing. A caller that goes on to grade WINDOWS needs 'connected'.
+    # MEASURED 2026-10-16 on win11-nfy: failproof-gates restarted the agent, got "RESTART ok
+    # ... serving=awaiting", ran its baseline p5 suite immediately, and the suite produced an empty
+    # verdicts.tsv - which p5() reports as NORESULT, which failed the SG4 baseline check, which
+    # aborted the whole run with "SG4 is not green at baseline, so no later red is attributable".
+    # A 63-second abort against an 89-minute suite, and nothing in it named the cause.
+    # DEFAULT 0 KEEPS TODAY'S BEHAVIOUR for the other two callers; only a caller that needs windows
+    # asks for the wait. THREE EXITS, and a REAL marker for each: connected (the agent's own
+    # 'A vchan client' line, which Test-GuiAgentServing already reads), the bound expiring (the
+    # state it reached is reported, so the caller can grade it instead of guessing), and the pid
+    # dying under us (reported as such - a dead agent is not a slow one).
+    if ($tv.ok -and $WaitServing -gt 0 -and $r.serving -ne 'connected') {
+        $wsw = [Diagnostics.Stopwatch]::StartNew()
+        $nlp = Join-Path $r.log_dir $r.new_log
+        while ($wsw.Elapsed.TotalSeconds -lt $WaitServing) {
+            $gone = $false
+            try { $gone = $tv.proc.HasExited } catch { $gone = $false }
+            if ($gone) { $r.serving = 'pid-exited'; break }
+            $sv = Test-GuiAgentServing -Path $nlp -AfterLine $tv.init_line
+            if ($sv) { $r.serving = $sv }
+            if ($r.serving -eq 'connected') { break }
+            Start-Sleep -Milliseconds 500
+        }
+        & $say ("SERVINGWAIT " + $r.serving + " after " + [int]$wsw.Elapsed.TotalSeconds + "s of " + $WaitServing + "s")
+    }
     $oldStill = $false
     if ($oldProc) { try { $oldStill = -not $oldProc.HasExited } catch { $oldStill = $false } }
     if ($oldStill) { $r.old_gone = $false }

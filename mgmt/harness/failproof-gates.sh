@@ -85,6 +85,10 @@ require_alive(){  # <context> <check-column> - 3 bounded probes, then the graded
 # would silently ignore FaultGateOff and every armed run would come back green - which would look
 # like "the gates all hold" and would in fact be "the bypass was never in force".
 require_alive "at sequence entry, before the banner check" gates-entry
+# p5 GRADES WINDOWS, so every restart in this script waits for the agent to be SERVING, not
+# merely alive (lifecycle-lib.sh -> restart-gui-agent.ps1 -WaitServing). 0 is the default
+# everywhere else; only a caller that needs windows pays for the wait.
+export AGENT_RESTART_WAIT_SERVING="${AGENT_RESTART_WAIT_SERVING:-120}"
 agent_restart_push || { log "FATAL: guest/restart-gui-agent.ps1 could not be pushed and proven on $VM - no agent restart is possible without it"; exit 2; }
 log "=== confirm the RUNNING agent understands FI_GATE_OFF ==="
 BAN=$(psrun '$d=(Get-ItemProperty "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\").LogDir
@@ -162,6 +166,25 @@ set_gate_checked(){  # <hex-or-0> <context> <check-column>
     T=120 set_gate 0 >/dev/null 2>&1 || true   # bounded clear so the subject is not left armed
     printf 'GATES\t%s\tINVALID-INSTRUMENT\tthe service restart did not produce a new agent (%s: %s); the toggle never took\t%s\n' \
       "${3:-sequence}" "$2" "$why" "$EV" >> "$V"
+    exit 3
+  fi
+  # ALIVE IS NOT SERVING, AND p5 GRADES WINDOWS. 'serving=awaiting' means the agent started and
+  # dom0's gui-daemon has not attached, so it can map nothing - and p5 then writes an empty
+  # verdicts.tsv, which p5() reports as NORESULT, which fails the SG4 baseline, which aborts the
+  # run with "SG4 is not green at baseline, so no later red is attributable". MEASURED 2026-10-16 on
+  # win11-nfy: the whole 89-minute suite aborted in 63 seconds and not one line named the cause.
+  # The helper now waits for 'connected' (AGENT_RESTART_WAIT_SERVING, set at the top of this
+  # script), so reaching here without it is a real, named instrument failure rather than a silence.
+  local _sv
+  _sv=$(echo "$out" | grep -aoE 'serving=[a-z-]+' | tail -1 | cut -d= -f2)
+  if [ "${_sv:-none}" != connected ]; then
+    log "-> INVALID-INSTRUMENT: the agent restarted but never reached serving=connected ($2): serving='${_sv:-none}'"
+    log "   p5 grades WINDOWS, and an agent dom0's gui-daemon has not attached to maps none - its"
+    log "   suite would write no verdicts and this run would abort on an empty baseline instead."
+    echo "$out" | grep -a 'SERVINGWAIT' | sed 's/^/   /'
+    T=120 set_gate 0 >/dev/null 2>&1 || true   # bounded clear so the subject is not left armed
+    printf 'GATES\t%s\tINVALID-INSTRUMENT\tthe restarted agent never reached serving=connected (%s: serving=%s); p5 grades windows and would see none\t%s\n' \
+      "${3:-sequence}" "$2" "${_sv:-none}" "$EV" >> "$V"
     exit 3
   fi
 }

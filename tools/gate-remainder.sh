@@ -322,7 +322,19 @@ if need log-sweep; then
     say "FAIL  log-sweep (subject is not the candidate)"; FAILED="$FAILED log-sweep"
   else
   # LAST, deliberately: it reads what every suite above wrote into the guest's logs.
-  run_it log-sweep bash mgmt/harness/log-sweep.sh "$VM11" "$SINCE" "$WORK/log-sweep"
+  # DECLARE THE NOTIFICATIONS THE ACCEPTANCE SUITES FIRE ON PURPOSE, or this sweep counts them as
+  # user-visible failures of the product. MEASURED 2026-10-16 on win11-nfy: dom0_loud_failures
+  # breached at 6 (P1) and ALL SIX were toasts a suite had fired deliberately - that guest had just
+  # been through notify-errors-guest-test, which exists to put user-visible error notifications on
+  # the dom0 desktop and ends on a photograph of one. Zero were the product reporting its own
+  # failure. The summaries are literals in mgmt/harness/notify-errors-guest-test.sh (its gate check,
+  # its ACTION/once-per-boot probes, the render witness trigger, and check 8's deferral probe).
+  # A DECLARATION IS NOT AN EXCUSE: log-sweep's declared_errors_unmatched fails a declaration that
+  # matches nothing, so if those suites stop firing these the declaration itself becomes a finding -
+  # and anything NOT matching still counts, which is what keeps a real product toast P1.
+  run_it log-sweep bash mgmt/harness/log-sweep.sh "$VM11" "$SINCE" "$WORK/log-sweep" \
+    --declare-error 'summary=(gate default check|acceptance probe|Render witness|deferproof-)' \
+                    'notifications the acceptance suites fire on purpose (notify-errors-guest-test and its deferral probe) - not the product reporting a failure'
   note $? log-sweep
   fi
 else SKIPPED="$SKIPPED log-sweep"; fi
