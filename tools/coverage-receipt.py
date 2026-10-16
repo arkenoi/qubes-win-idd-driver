@@ -29,7 +29,18 @@ Self-test: tools/tests/coverage-receipt-selftest.sh (knob: instrumentcovered).
 from __future__ import annotations
 import argparse, glob, json, os, re, sys, time
 
-VERDICT_RE = re.compile(r"^(?:\[[0-9:]+\]\s*)?(PASS|FAIL)  ([A-Za-z0-9]+-[A-Za-z0-9-]+?)(?: boot \d+)?:\s*(.*)$")
+# THE LEVEL TOKEN SITS BETWEEN THE TIMESTAMP AND THE VERDICT, AND THIS PATTERN HAD NO SLOT FOR IT.
+# matrix.sh's verdict lines are tagged with the writer's level so a sweep can tell "3 passed, 2
+# failed" from "5 passed, 0 failed" - the right change, and it silently blinded this parser:
+#     [11:13:08] [ERROR] FAIL  win10-clean: the guest log sweep found a breach or a defect
+# matched nothing, so EVERY matrix cell read as not_run while its report.json sat on disk with
+# graded breaches. The 4.3.36 campaign ran all eight cells and the receipt said `covered=3`,
+# `not_run=[all eight]`, and gate-scope then refused the cut with "required 18, covered 3" - a
+# release blocked by a regex, with the evidence it wanted already written.
+# The self-test did not catch it because its fixture carried the PRE-TAGGING shape, so it was green
+# against text nothing emits any more (the standing trap: a fixture comes from a CAPTURE, not from a
+# model of the format). Its fixture is now the captured shape, and the legacy forms stay parsed.
+VERDICT_RE = re.compile(r"^(?:\[[0-9:]+\]\s*)?(?:\[(?:ERROR|WARN|WARNING|INFO|DEBUG)\]\s*)?(PASS|FAIL)  ([A-Za-z0-9]+-[A-Za-z0-9-]+?)(?: boot \d+)?:\s*(.*)$")
 FOOTER_RE = re.compile(r"^=== MATRIX: (\d+) passed, (\d+) failed ===$")
 CELLS_RE = re.compile(r"^(?:\[[0-9:]+\])?\s*cells:\s*(.*)$")
 INSTRUMENT_TOKENS = ("INVALID", "INSTRUMENT", "INCONCLUSIVE", "BLOCKED", "SKIPPED")

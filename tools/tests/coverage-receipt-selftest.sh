@@ -16,7 +16,7 @@
 #   RECEIPT_SELFTEST_OUT=<dir>  keep fixtures and outputs (default: a mktemp dir, removed on exit)
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-SRC="$ROOT/tools/coverage-receipt.py"
+SRC="${COVERAGE_RECEIPT_SRC:-$ROOT/tools/coverage-receipt.py}"
 T="${RECEIPT_SELFTEST_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/receipt-selftest-XXXXXX")}"
 [ -n "${RECEIPT_SELFTEST_OUT:-}" ] || trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/camp"
@@ -25,17 +25,25 @@ ok(){ pass=$((pass+1)); echo "PASS  $*"; }
 bad(){ fail=$((fail+1)); echo "FAIL  $*"; }
 [ -f "$SRC" ] || { echo "FAIL  $SRC is missing - nothing ran"; exit 2; }
 
+# THE FIXTURE IS THE CAPTURED SHAPE, LEVEL TOKENS AND ALL. It used to carry `[HH:MM:SS] PASS  <cell>:`
+# with no level, which is what matrix.sh emitted BEFORE its verdict lines were tagged with the
+# writer's level - so this suite stayed green against text nothing emits any more, and the parser's
+# blindness to `[11:13:08] [ERROR] FAIL  win10-clean: ...` went unnoticed until it cost a release:
+# the 4.3.36 campaign ran all eight cells and the receipt reported covered=3, not_run=[all eight].
+# Lines below are copied from that campaign's own full.out (ERROR on a product FAIL, WARN on an
+# INVALID one, INFO on a PASS). One line is deliberately left UNTAGGED so the legacy form, which
+# older captures and some callers still produce, stays parsed too.
 cat > "$T/camp/full.out" <<'EOF'
 [16:56:51] === MATRIX for 4.3.36+agent.5c483cd956c1 (agent 4aa66e251841) ===
 [16:56:51]   cells: win10-clean win11-clean win11-reinstall win11-upgrade win11-appvm
-[11:16:13] PASS  WIN11-clean: prime-run delivered a qrexec-answering installed guest
-[11:20:13] PASS  WIN11-clean: installer RESULT ok:true and no error-class detail flags (2 trailer(s) judged)
-[15:21:34] FAIL  WIN10-clean: accept-clean battery FAILED (see /x/WIN10-clean-accept.out)
+[11:16:13] [INFO] PASS  WIN11-clean: prime-run delivered a qrexec-answering installed guest
+[11:20:13] [INFO] PASS  WIN11-clean: installer RESULT ok:true and no error-class detail flags (2 trailer(s) judged)
+[15:21:34] [ERROR] FAIL  WIN10-clean: accept-clean battery FAILED (see /x/WIN10-clean-accept.out)
 [15:21:35] PASS  WIN10-clean: autologon armed
-[15:37:19] FAIL  WIN11-reinstall: console-window check could not judge - INVALID-INSTRUMENT: INSTRUMENT: no complete answer from win11-acc
-[15:37:23] PASS  WIN11-reinstall: PV console bound (CONS:err=0 svc=xencons)
-[16:30:00] PASS  WIN11-appvm boot 1: notepad window captured
-[16:31:00] FAIL  WIN11-appvm boot 2: INVALID-PRECONDITION - cell claims a pristine entry but the installer saw: x
+[15:37:19] [ERROR] FAIL  WIN11-reinstall: console-window check could not judge - INVALID-INSTRUMENT: INSTRUMENT: no complete answer from win11-acc
+[15:37:23] [INFO] PASS  WIN11-reinstall: PV console bound (CONS:err=0 svc=xencons)
+[16:30:00] [INFO] PASS  WIN11-appvm boot 1: notepad window captured
+[16:31:00] [WARN] FAIL  WIN11-appvm boot 2: INVALID-PRECONDITION - cell claims a pristine entry but the installer saw: x
 === MATRIX: 5 passed, 3 failed ===
 EOF
 printf '[17:00:00]   cells: win10-appvm\n[17:00:01] PASS  WIN10-appvm: started\n' > "$T/camp/unfinished.out"   # no footer: did not finish
