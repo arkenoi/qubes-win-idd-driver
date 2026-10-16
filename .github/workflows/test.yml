@@ -13,13 +13,6 @@
 name: test
 
 on:
-  # DISPATCHABLE, because the push trigger below is `branches: [main]` and this is a REQUIRED gate.
-  # Without this it could not run on a topic branch at all, so every branch sha inherited main's
-  # green for the very paths this workflow guards - measured 2026-10-16 on sweep-gate-severity,
-  # whose diff touched guest/ and tools/ and whose required gates were satisfied by an ancestor.
-  # tools/ci-state.py now refuses an inherited run for a required workflow, which makes a branch
-  # that cannot run it un-receiptable; this is the other half of that fix.
-  workflow_dispatch:
   push:
     branches: [main]
     paths:
