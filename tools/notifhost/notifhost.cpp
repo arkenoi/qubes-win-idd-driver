@@ -3502,7 +3502,15 @@ static int NotifyOnceMain(std::wstring const& summary, std::wstring const& body,
     g_connStop = CreateEventW(nullptr, TRUE,  FALSE, nullptr);
     g_ackEvt   = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!g_rdEvt || !g_wrEvt || !g_connStop || !g_ackEvt) return 3;
-    if (!ConnUp()) { BLogE(L"NOTIFY one-shot: no connection to dom0 (policy refusal? no dom0 session?) - notification LOST"); return 3; }
+    // NAME WHAT WAS LOST. Every other outcome on this path carries the summary - "sent ok=1
+    // summary=%s", "sent ok=0 summary=%s - notification LOST" - and this one, the only total
+    // failure, carried none. MEASURED on win10-reinstall, acceptance run 38826875627: the bridge
+    // stopped at 06:41:28, this line fired at 06:41:47, and a session handoff succeeded five
+    // seconds later - so a user-facing message was dropped in the gap and the log cannot say which
+    // one. A loss we can name is a bug report; a loss we cannot is a hole. (The drop itself is
+    // NOTIFYLOSTINSESSIONGAP: the handoff needs a console session to know which user to schedule
+    // as, and asks once, before one exists.)
+    if (!ConnUp()) { BLogE(L"NOTIFY one-shot: no connection to dom0 (policy refusal? no dom0 session?) - notification LOST summary=%s", summary.c_str()); return 3; }
     bool ok = ForwardText(summary, body, 0, kind);   // an error stays until dismissed; --severity warning/info expire
     // A DELIVERED LINE DECLARES WHAT IT DELIVERED, not whether the send worked. This logged INFO for
     // every successful send, including the ones that put a FAILURE in front of the user - so
