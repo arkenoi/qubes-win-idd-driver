@@ -368,10 +368,56 @@ print('count=%s offered=%s actionable=%s remaining=%s available=%d not_actionabl
     len(d.get('available') or []), len(d.get('not_actionable') or []), len(d.get('satisfied') or [])))
 PY
       )
-      log "[ERROR] round $r: FAIL OSCILLATION - dom0 was '${dom0_before_scan:-<empty>}' after the pass and '${dom0_after_scan:-<empty>}' after the scan"
-      log "  the guest's OWN status from that scan: ${_osc:-unreadable}  (kept at $RD/update-status-after-scan.json)"
-      log "  all-zero counts mean the guest had nothing and dom0 was told wrong - our defect; non-zero means the scan found newly-applicable work and dom0 is right, which makes this check too strict"
-      fails=1
+      # AND NOW IT JUDGES ON AGREEMENT, NOT ON THE FLAG MOVING. The bar this check exists for is in
+      # its own words above: "the admin was told there was work when there was none". A flag that
+      # CHANGED is not that bar - dom0 reporting work the guest also reports is dom0 being right.
+      # DIAGNOSED 2026-10-16 on win11de-tup. The leg failed '<empty>' -> '1' and the scan's own
+      # status, read off the preserved specimen, said count=1 offered=1 actionable=1 remaining=1
+      # with one item: KB2267602, Microsoft Defender Security Intelligence v1.461.56.0, actionable,
+      # with a download URL. Microsoft republishes Defender definitions several times a day, so an
+      # update really did become available in the minute between the pass and the scan - dom0 was
+      # told the truth and this leg failed it anyway. On any guest that receives definitions the old
+      # comparison fails intermittently for ever, and it is what failed template-update, one of the
+      # six suites missing from the 4.3.36 gate.
+      # SO: the guest's own count decides. Nonzero and dom0 says available -> they AGREE, no defect.
+      # Zero while dom0 says available -> the admin was told work exists that the guest does not
+      # have, which IS the bar, and it fails. Unreadable -> missing data fails, as everywhere here.
+      _cnt=$(python3 - "$RD/update-status-after-scan.json" <<'PY' 2>/dev/null
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding='utf-8-sig'))
+except Exception:
+    print('unreadable'); raise SystemExit
+# the guest's own answer to "is there work": the count it published, backed by the item list
+n = d.get('count')
+if not isinstance(n, int):
+    n = len(d.get('available') or [])
+print(max(int(n), len(d.get('available') or [])))
+PY
+      )
+      _items=$(python3 - "$RD/update-status-after-scan.json" <<'PY' 2>/dev/null
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding='utf-8-sig'))
+except Exception:
+    raise SystemExit
+print('; '.join((u.get('kb') or u.get('uid') or '?') for u in (d.get('available') or [])) or '(none listed)')
+PY
+      )
+      if [ "${_cnt:-unreadable}" = unreadable ]; then
+        log "[ERROR] round $r: FAIL - dom0 went '${dom0_before_scan:-<empty>}' -> '${dom0_after_scan:-<empty>}' across the scan and the guest's own status is UNREADABLE, so agreement cannot be judged (missing data fails)"
+        fails=1
+      elif [ -n "$dom0_after_scan" ] && [ "${_cnt:-0}" -gt 0 ]; then
+        log "round $r: oscillation OK - dom0 went '${dom0_before_scan:-<empty>}' -> '${dom0_after_scan:-<empty>}' and the guest AGREES: its own scan published ${_cnt} actionable item(s) [${_items:-?}]. dom0 was told what the guest found, which is not the defect this leg looks for"
+      elif [ -z "$dom0_after_scan" ] && [ "${_cnt:-0}" -gt 0 ]; then
+        log "[ERROR] round $r: FAIL - the guest's scan published ${_cnt} actionable item(s) [${_items:-?}] and dom0's updates-available is EMPTY: work the user cannot see"
+        log "  the guest's OWN status from that scan: ${_osc:-unreadable}  (kept at $RD/update-status-after-scan.json)"
+        fails=1
+      else
+        log "[ERROR] round $r: FAIL - dom0's updates-available is '${dom0_after_scan:-<empty>}' while the guest's own scan published ${_cnt:-0} actionable item(s): the admin was told there was work when there was none"
+        log "  the guest's OWN status from that scan: ${_osc:-unreadable}  (kept at $RD/update-status-after-scan.json)"
+        fails=1
+      fi
     else
       log "round $r: oscillation OK - dom0 stayed '${dom0_after_scan:-<empty>}' across the pass and the scan"
     fi
