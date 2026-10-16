@@ -27,7 +27,7 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # 36 since 2026-10-15: clock-convention-selftest.sh was DELETED with the decision block it tested.
 # The floor only ever moves in a commit, and this is that commit - a suite that loses its subject is
 # removed deliberately, not left to rot green.
-FLOOR=${OFFLINE_SUITES_FLOOR:-41}
+FLOOR=${OFFLINE_SUITES_FLOOR:-43}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"
