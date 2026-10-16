@@ -3489,6 +3489,78 @@ static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring con
     return true;
 }
 
+// --- A MESSAGE WITH NO ROUTE IS DEFERRED, NOT DROPPED (NOTIFYLOSTINSESSIONGAP) ----------------
+//
+// MEASURED on win10-reinstall, acceptance run 38826875627:
+//   06:41:28 BRIDGE stopped (rc=0)
+//   06:41:47 [ERROR] NOTIFY one-shot: no connection to dom0 ... - notification LOST
+//   06:41:52 [INFO]  NOTIFY handoff: ran in session 1 as user (this process is session 0)
+// A user-facing message was raised in the 19 s gap between the bridge stopping and a session being
+// available, and it was dropped. FIVE SECONDS LATER a handoff ran fine, so the route was coming -
+// the message just had nowhere to wait. The owner's rule on this project is "no doubles, nothing
+// lost", and a loss is P1.
+//
+// WHY NOT A RETRY OR A WAIT. Both routes need something this process cannot summon: the handoff
+// needs a console session to know which user to schedule as, and ConnUp() needs to be running AS
+// that user (it passes GetUserNameW() as qrexec-client-vm's local-user field, so under SYSTEM the
+// relay never connects back). Spinning on either would be a timer against someone else's progress,
+// which is not how anything here waits. So the message is PERSISTED and delivered by the first
+// process that genuinely has a route.
+//
+// THE FORMAT AND THE SEND PATH ARE BOTH REUSED, not reinvented: the file is the same UTF-16LE+BOM
+// shape ReadNotifyFile() already parses (summary on line 1, body the rest), and the drain spawns
+// `self --notify-file <f>`, the same proven one-shot the handoff and the NotifyErr route use. The
+// reader deletes the file, so a deferred message is sent exactly ONCE - deferral cannot become a
+// double, which would be the same P1 from the other side.
+static bool NotifyDeferWrite(std::wstring const& summary, std::wstring const& body)
+{
+    std::wstring file = StateDir() + L"\\deferred-" + std::to_wstring(GetTickCount64())
+                      + L"-" + std::to_wstring(GetCurrentProcessId()) + L".txt";
+    std::wstring text = summary; if (!body.empty()) { text += L"\n"; text += body; }
+    std::vector<BYTE> raw; raw.push_back(0xFF); raw.push_back(0xFE);
+    raw.insert(raw.end(), (const BYTE*)text.data(), (const BYTE*)text.data() + text.size() * sizeof(wchar_t));
+    if (!WriteSmallA(file, raw.data(), (DWORD)raw.size()))
+    { BLogE(L"NOTIFY defer: cannot write %s - notification LOST summary=%s", file.c_str(), summary.c_str()); return false; }
+    BLogW(L"NOTIFY deferred: no route yet (no console session, and this process is not the console user) - "
+          L"queued as %s, the session bridge sends it summary=%s", file.c_str(), summary.c_str());
+    return true;
+}
+
+// Called by the session-resident bridge at startup - the one place that reliably HAS a route.
+static void NotifyDeferDrain()
+{
+    std::wstring pat = StateDir() + L"\\deferred-*.txt";
+    WIN32_FIND_DATAW fd = {};
+    HANDLE h = FindFirstFileW(pat.c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    wchar_t self[MAX_PATH] = { 0 };
+    GetModuleFileNameW(nullptr, self, RTL_NUMBER_OF(self));
+    int n = 0;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        std::wstring f = StateDir() + L"\\" + fd.cFileName;
+        wchar_t cmd[MAX_PATH * 2 + 64];
+        swprintf(cmd, RTL_NUMBER_OF(cmd), L"\"%s\" --notify-file \"%s\"", self, f.c_str());
+        STARTUPINFOW si = { sizeof(si) }; PROCESS_INFORMATION pi = {};
+        if (CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+        {
+            WaitForSingleObject(pi.hProcess, 30000);
+            DWORD rc = 1; GetExitCodeProcess(pi.hProcess, &rc);
+            CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+            // THE READER DELETES THE FILE ON A SUCCESSFUL SEND. A file still here after a non-zero
+            // exit is left alone deliberately: the next bridge start tries it again, which is the
+            // whole point of deferring. It is said out loud either way - a queue that drains
+            // silently is indistinguishable from one that loses.
+            BLog(L"NOTIFY defer-drain: %s sent rc=%lu%s", fd.cFileName, rc,
+                 rc == 0 ? L"" : L" - left queued for the next bridge start");
+        }
+        else BLogE(L"NOTIFY defer-drain: CreateProcess for %s failed %lu - still queued", fd.cFileName, GetLastError());
+        ++n;
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    if (n) BLogW(L"NOTIFY defer-drain: %d deferred notification(s) found at bridge start", n);
+}
+
 static int NotifyOnceMain(std::wstring const& summary, std::wstring const& body, NotifyKind kind)
 {
     // SESSION 0 CANNOT DELIVER. Hand off to the interactive session rather than failing there.
@@ -3510,7 +3582,14 @@ static int NotifyOnceMain(std::wstring const& summary, std::wstring const& body,
     // one. A loss we can name is a bug report; a loss we cannot is a hole. (The drop itself is
     // NOTIFYLOSTINSESSIONGAP: the handoff needs a console session to know which user to schedule
     // as, and asks once, before one exists.)
-    if (!ConnUp()) { BLogE(L"NOTIFY one-shot: no connection to dom0 (policy refusal? no dom0 session?) - notification LOST summary=%s", summary.c_str()); return 3; }
+    // NO CONNECTION IS NOT A LOSS ANY MORE - it is a deferral (NOTIFYLOSTINSESSIONGAP above). The
+    // ERROR line stays for the case where even the queue cannot be written, because that IS a loss.
+    if (!ConnUp())
+    {
+        if (NotifyDeferWrite(summary, body)) return 5;   // queued; the session bridge will send it
+        BLogE(L"NOTIFY one-shot: no connection to dom0 (policy refusal? no dom0 session?) - notification LOST summary=%s", summary.c_str());
+        return 3;
+    }
     bool ok = ForwardText(summary, body, 0, kind);   // an error stays until dismissed; --severity warning/info expire
     // A DELIVERED LINE DECLARES WHAT IT DELIVERED, not whether the send worked. This logged INFO for
     // every successful send, including the ones that put a FAILURE in front of the user - so
@@ -3728,6 +3807,13 @@ static int BridgeMain()
     g_wrEvt = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_connStop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_ackEvt = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+
+    // DRAIN ANY DEFERRED NOTIFICATION FIRST. This process is the session-resident bridge, so it is
+    // the one place with a route when the one-shot path had none (NOTIFYLOSTINSESSIONGAP): a message
+    // raised in the gap between a bridge stopping and a session existing is queued by
+    // NotifyDeferWrite and sent here. Before the stop file is cleared and before any polling, so a
+    // queued user-facing message is not held behind this instance's own startup.
+    NotifyDeferDrain();
 
     std::wstring stopf = StateDir() + L"\\stop";
     DeleteFileW(stopf.c_str());       // a stale stop request must not kill a fresh start
