@@ -233,6 +233,7 @@ int main(int argc, char** argv){
   bool frameArrived=false, nonBlank=false; int framesSeen=0, distinct=0, cw=0, ch=0;
   bool rectInside=false, rectClamped=false; int rectMax=0, rectDistinctN=0;
   unsigned long long rectTotal=0, rectNonZero=0;
+  DWORD rseen[16]{};   // the rect's distinct colours THEMSELVES - an occluder is found by its colour
   DWORD deadline=GetTickCount()+8000;
   while((LONG)(GetTickCount()-deadline)<0){
     if(ownWin){ InvalidateRect(hwnd,nullptr,FALSE); }
@@ -265,7 +266,6 @@ int main(int argc, char** argv){
         rectClamped = (x0!=rx)||(y0!=ry)||(x1!=rx+rw)||(y1!=ry+rh);
         rectInside = (x1>x0)&&(y1>y0);
         rectTotal=0; rectNonZero=0; rectMax=0; rectDistinctN=0;
-        DWORD rseen[16];
         if(rectInside){
           int rsx=(x1-x0)>64?(x1-x0)/64:1, rsy=(y1-y0)>64?(y1-y0)/64:1;
           for(int y=y0;y<y1;y+=rsy){ const BYTE* row=(const BYTE*)mp.pData+(size_t)y*mp.RowPitch;
@@ -293,8 +293,16 @@ int main(int argc, char** argv){
   printf("frameArrived=%d framesSeen=%d nonBlank=%d content=%dx%d distinctColors=%d target=%s borderSet=%d\n",
       frameArrived,framesSeen,nonBlank,cw,ch,distinct,how,borderSet);
   if(rectMode)
+  {
     printf("rect=%d,%d %dx%d inside=%d clamped=%d nonblack=%llu/%llu maxchannel=%d distinct=%d\n",
         rx,ry,rw,rh,rectInside,rectClamped,rectNonZero,rectTotal,rectMax,rectDistinctN);
+    // OCCLUSION IS ANSWERED BY A COLOUR, so print the colours. A caller that painted a known solid
+    // colour over part of this rect looks for it here: present means another window's pixels are
+    // inside this window's crop, which is the bleed the de-slice work exists to prevent.
+    printf("rectcolors=");
+    for(int i=0;i<rectDistinctN;i++) printf("%s%06X", i?",":"", (unsigned)rseen[i]);
+    printf("\n");
+  }
   printf("=== WGCPROBE JSON ===\n"
     "{\"brokerViable\":%s,\"isSupported\":true,\"hresult\":\"0x00000000\",\"itemCreated\":%s,"
     "\"frameArrived\":%s,\"nonBlank\":%s,\"framesSeen\":%d,\"contentW\":%d,\"contentH\":%d,"
