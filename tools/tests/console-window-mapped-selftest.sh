@@ -87,5 +87,38 @@ n=$(drive "$D/unmapped.log" | command grep -c '^CWC-HIT' || true)
 if [ "$n" = 0 ]; then ok "unmapped: a window accepted and never mapped is not reported"
 else bad "unmapped: an accepted-but-never-mapped window was reported ($n hits)"; fi
 
+# THE PAYLOAD MUST FIT A WINDOWS COMMAND LINE. cmd.exe truncates at 8191 characters, mid-base64,
+# and runs the rest as a command: eleven comment lines added to $PS took the invocation to 8682 and
+# the guest answered "Die eingegebene Zeile ist zu lang", so the check reported INVALID-INSTRUMENT
+# and failed an upgrade. UTF-16 then base64 costs ~2.7x per source character.
+n=$(python3 - "$CHK" <<'PY2'
+import re, base64, sys, pathlib
+t = re.search(r"PS='(.*?)'\n", pathlib.Path(sys.argv[1]).read_text(), re.S).group(1)
+print(len(base64.b64encode(t.encode('utf-16-le')).decode()) + 62)
+PY2
+)
+if [ "$n" -le 8000 ]; then ok "payload: the encoded probe is $n characters, inside the cmd.exe limit"
+else bad "payload: $n characters - cmd.exe truncates at 8191 and the probe never completes"; fi
+# and the guard in the script must FIRE on an oversized payload
+# The padded copy must live where its own "$0/../.." still resolves to the repo root, or it dies on
+# its includes before reaching the guard. It is removed on exit either way.
+big="$HERE/mgmt/harness/.cwc-oversize-probe.sh"
+trap 'rm -rf -- "$D"; rm -f "$big"' EXIT
+python3 - "$CHK" "$big" <<'PY3'
+import re, sys, pathlib
+s = pathlib.Path(sys.argv[1]).read_text()
+m = re.search(r"PS='(.*?)'\n", s, re.S)
+pad = "\n" + "\n".join("# pad %d" % i for i in range(400))
+pathlib.Path(sys.argv[2]).write_text(s[:m.start(1)] + m.group(1) + pad + s[m.end(1):])
+PY3
+# The guard returns BEFORE anything is sent, so this needs a guest that passes the preconditions
+# (a bogus name exits earlier and the guard is never reached). Nothing touches the guest.
+# CAPTURE, THEN MATCH. Under `set -o pipefail` a pipeline returns the PRODUCER's non-zero status,
+# and this probe exits 2 by design - so `probe | grep -q` reported failure while grep had matched.
+probe_out=$(bash "$big" "${CWC_GUEST:-win11de-sm}" --allow-installer-console 2>&1 || true)
+if printf '%s' "$probe_out" | command grep -q 'past cmd.exe'; then
+    ok "guard: an oversized payload is refused before it is sent"
+else bad "guard: oversized payload not refused - said: ${probe_out:0:90}"; fi
+
 echo "console-window-mapped: $pass passed, $fail failed"
 [ "$fail" -eq 0 ] || exit 1

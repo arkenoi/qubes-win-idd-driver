@@ -86,17 +86,7 @@ foreach ($x in $f) {
       $accepted = @{}   # hwnd -> its AddWindow line, until a SendWindowMap names it
       "CWC-INIT|" + $x.Name
       for ($k = $firstInit; $k -lt $lines.Count; $k++) {
-        # MAPPED MEANS MAPPED. This counted AddWindow lines while every message about it - the
-        # header above, the harness FAIL text, the ledger - says "mapped". AddWindow is the
-        # agent ACCEPTING a window into tracking; SendWindowMap is what puts it on the dom0 screen,
-        # and a window can be accepted and then never mapped.
-        # MEASURED 2026-10-17 on win11de-sm: a Windows Terminal hosting window was accepted at
-        # t=72562 with brokerslot=-1 while the broker was still coming up, held ("no painted frame
-        # yet"), and NEVER mapped; its replacement 0x201e4 arrived 3.3 s later, got slot 0, took a
-        # first WGC frame and was mapped. One terminal, one mapped window - and this check reported
-        # "FOUND 2 console/Terminal windows mapped", failing an otherwise clean cycle on a
-        # premise that was not what it measured.
-        # So: remember the accepted ones, and report only those a SendWindowMap names.
+        # accepted here, reported only when a SendWindowMap names it
         if ($lines[$k] -match "AddWindow:.*hwnd=(0x[0-9a-fA-F]+).*class=(CASCADIA_HOSTING_WINDOW_CLASS|ConsoleWindowClass|PseudoConsoleWindow)") {
           $accepted[$Matches[1].ToLower()] = $lines[$k]
         }
@@ -115,6 +105,17 @@ foreach ($x in $f) {
 }
 Write-Output "CWC-END"'
 enc=$(printf '%s' "$PS" | python3 -c "import sys,base64;print(base64.b64encode(sys.stdin.read().encode('utf-16-le')).decode())")
+# cmd.exe TRUNCATES A COMMAND LINE AT 8191 CHARACTERS, mid-base64, and runs the remainder as a
+# command. MEASURED 2026-10-17: eleven comment lines added to $PS took the invocation from 5086 to
+# 8682 and the guest answered "Die eingegebene Zeile ist zu lang", so this check reported
+# INVALID-INSTRUMENT and failed an upgrade. UTF-16 then base64 is 8/3 bytes per source character,
+# so prose in $PS costs ~2.7x its length in command line. Keep the payload terse; the reasoning
+# belongs in THIS file, which is never transmitted.
+cmdlen=$(( ${#enc} + 62 ))
+if [ "$cmdlen" -gt 8000 ]; then
+    echo "INSTRUMENT: the encoded probe is $cmdlen characters, past cmd.exe's 8191 limit - it would be truncated mid-base64. Shorten \$PS (comments cost ~2.7x)." >&2
+    exit 2
+fi
 out=$(QTEST_VM="$VM" timeout -k 5 120 "$HERE/tools/qtest" run "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $enc" 2>/dev/null | tr -d '\r')
 echo "$out" | grep -aq '^CWC-END' || { echo "INSTRUMENT: no complete answer from $VM"; exit 2; }
 nlogs=$(echo "$out" | grep -ao '^CWC-LOGS=[0-9]*' | cut -d= -f2)
