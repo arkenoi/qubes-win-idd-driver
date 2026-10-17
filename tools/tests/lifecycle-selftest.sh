@@ -369,5 +369,16 @@ perf_provenance_appended() {
 }
 shape "perf.c: the value's source is APPENDED to the two settings lines, so the prefix consumers still match" perf_provenance_appended "$PERF" 'LogInfo("QGASHELLMANAGED policy=%u (0=none 1=all 2=start-only) (%s)", g_ShellManaged,'
 
+# EVERY xencontrol logger, not just the one I happened to patch. There are two (capture.c and
+# perwindow.c); guarding only capture.c left 98 of 118 per-notify Debug lines alive, because the
+# per-window path is the busy one. This counts the callbacks and requires each to ask the predicate.
+xc_all_loggers_guarded() {
+    local n g
+    n=$(command grep -rlE 'XENCONTROL_LOG_LEVEL logLevel, IN const char\* function' "$1"/*.c 2>/dev/null | wc -l)
+    g=$(command grep -rl 'QgaXcLineKept' "$1"/*.c 2>/dev/null | wc -l)
+    [ "$n" -ge 2 ] && [ "$n" = "$g" ]
+}
+shape "agent: EVERY xencontrol logger asks QgaXcLineKept, not just one of them" xc_all_loggers_guarded "$AGENT/gui-agent" 'if (!QgaXcLineKept((int)logLevel, function))   // GUARD:xcnotify'
+
 say "--- outputs in $OUT"
 exit $bad
