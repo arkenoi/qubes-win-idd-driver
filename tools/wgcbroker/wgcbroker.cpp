@@ -1197,7 +1197,17 @@ static void OpenChannel(int i) {
     HWND target = hwnd;
     const bool relayVetoed = g_noRelay[i];
     g_noRelay[i] = false;            // one-shot, same discipline as g_forcePw
-    if (fallback && g_RelayOn && !relayVetoed && !monitor && hwnd) {
+    // ABI 23: THE AGENT CAN ASK FOR THE RELAY AT OPEN TIME. Until now the only ways onto this route
+    // were a relay re-opening itself (RelayOutgrown) or a quiet relay re-opening - both of which
+    // require the slot to ALREADY be a relay - so no window could ever ENTER it. Measured on the live
+    // broker 2026-10-17: relayOk=0 AND relayFail=0 on every slot, i.e. zero attempts, while
+    // relayCapable=1 advertised the route as available. Meanwhile the class that needs it (shell
+    // CoreWindows: toast host, Start, Search) was served black frames by a session on itself, which
+    // the quiet ladder cannot detect because the frames DO arrive. The agent classifies the window
+    // anyway and now says so in ReqRoute. This is the "route for a window OPENED on it" that
+    // ADR-capture 32 kept when it removed the relay as a LADDER RUNG; the ladder is untouched here.
+    const bool wantRelay = (s->ReqRoute == (LONG)WGCBRK_ROUTE_RELAY);
+    if ((fallback || wantRelay) && g_RelayOn && !relayVetoed && !monitor && hwnd) {
         int rw = 0, rh = 0; HTHUMBNAIL th = nullptr;
         HWND dest;
         { StageScope st(WGCBRK_STG_RELAY_DWM, i); dest = RelayOpenDest(hwnd, &th, &rw, &rh); }
@@ -1213,8 +1223,13 @@ static void OpenChannel(int i) {
     // NO PRINTWINDOW RUNG (rest-zero E/G, c2 0.05). Below a fresh WGC session the ladder's only rungs are the relay - where
     // the probe (RelayUsable) showed its destination can be captured - and the deaf hold. A ladder open whose relay did not
     // open is DEAF: FAILED + WGCBRK_E_DEAF, held until the agent asks again, never a polled PrintWindow.
-    if (fallback && !c.relay) { DeclareDeaf(i); return; }
-    if (!fallback || c.relay) try {
+    // FAIL HARD, DO NOT SERVE BLACK. A window that asked for the relay cannot be captured by a
+    // session on itself, so falling through to one would re-create the exact defect this fixes -
+    // frames that arrive and are empty, which nothing downstream can distinguish from a dark app.
+    // The deaf hold is the honest answer and the agent reports it (owner: "no fallback on a system
+    // that supports the direct path. just no. fail hard and investigate.").
+    if ((fallback || wantRelay) && !c.relay) { DeclareDeaf(i); return; }
+    if (!(fallback || wantRelay) || c.relay) try {
         auto interop = get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
         GraphicsCaptureItem item{ nullptr };
         if (monitor)
