@@ -37,9 +37,6 @@ grep -aE '^  UNACCOUNTED x[0-9]+' "$SW" | while IFS= read -r row; do
   cnt=$(printf '%s' "$row" | sed -E 's/^  UNACCOUNTED x([0-9]+).*/\1/')
   msg=$(printf '%s' "$row" | sed -E 's/^  UNACCOUNTED x[0-9]+ +//')
   fn=${msg%%:*}
-  # the emitter: first file that names the function, and the lines around the matching log call
-  src=$(grep -rln --include=*.c --include=*.cpp --include=*.h -- "$fn" agent core-agent 2>/dev/null | head -1)
-  [ -n "$src" ] || { echo "SKIP x$cnt $fn - emitter not in our source"; continue; }
   # THE KEY IS THE LONGEST LITERAL RUN OF WORDS IN THE MESSAGE, taken from the message as logged.
   # Two earlier attempts failed on the same line: cutting at the first placeholder gave an EMPTY key
   # for "GetRealWindowRect: <HEX>: inverted DWM bounds ...", and dropping words shorter than four
@@ -52,15 +49,83 @@ import os, re
 m = os.environ["KMSG"]
 m = re.sub(r'<[A-Z]+>', ' ', m)                      # placeholders the normaliser put in
 m = re.sub(r'\([0-9N,\- ]*\)', ' ', m)               # (N,N)-(N,N) coordinate groups
-runs = [r.strip() for r in re.split(r'[^A-Za-z ]+|\s{2,}', m)]
+# AND `N` IS A PLACEHOLDER TOO - it stands for a %d the emitter fills in, so any key containing
+# one can never match the source. Six of 21 messages skipped on exactly that in run 38994277148:
+# 'QGAVCHANFAIL vchan to domain N port N never opened', 'frame not processed after N ms',
+# 'NOTIFBRIDGESYSKILL Windows killed the bridge pid N before announcing session end'. The split
+# below has to happen AFTER this, or the run spans a hole and matches nothing.
+m = re.sub(r'\bN\b', ' | ', m)
+runs = [r.strip() for r in re.split(r'[^A-Za-z ]+|\s{2,}|\|', m)]
 runs = [r for r in runs if len(r.split()) >= 2 and len(r) >= 12]
-print(max(runs, key=len) if runs else "")
+# EVERY CANDIDATE, LONGEST FIRST - not just the longest one. The longest run is not the most
+# findable: for "QGAVCHANFAIL vchan to %s port %d never opened: xenstore node unreadable%s" the
+# longest run spans the %s ("QGAVCHANFAIL vchan to domain") and matches nothing, while the
+# emitter sits at qrexec-wrapper.c:1440 and "xenstore node unreadable" finds it at once. Taking
+# only the longest reported that emitter as not present in this repository at all.
+print("\n".join(sorted(set(runs), key=len, reverse=True)))
 PYK
 )
-  ln=""
-  [ -n "$key" ] && ln=$(grep -nF -- "$key" "$src" 2>/dev/null | head -1 | cut -d: -f1)
-  [ -n "$ln" ] || ln=$(grep -nE "Log(Error|Warning).*$fn|$fn.*Log(Error|Warning)" "$src" 2>/dev/null | head -1 | cut -d: -f1)
-  [ -n "$ln" ] || { echo "SKIP x$cnt $fn - cannot locate the emitting line in $src (key='$key'), so there is no evidence to judge"; continue; }
+  # FIND THE EMITTER BY ITS MESSAGE, NOT BY ITS FUNCTION NAME. This took the FIRST file that merely
+  # NAMED the function, which on a real run was the wrong file almost every time - capture.h for
+  # CaptureThread, qrexec-wrapper.h for InitVchan, qga-exitcodes.h for WatchForEvents - and then
+  # failed to find the message in it and skipped. MEASURED on run 38994277148: of 21 unaccounted
+  # messages it could judge FOUR; searching by the message key instead locates 9 of the 13 whose
+  # emitter is in this tree. That locator is why the ledger has carried "23 distinct declared error
+  # messages that nobody has investigated" since 2026-10-14: the policy says a row needs Jev over
+  # the emitting code, and the tool that was supposed to produce it could not find the code.
+  src=""; ln=""
+  if [ -n "$key" ]; then
+    # .c and .cpp first: a header may carry the string in a comment while the emitter is the unit.
+    # THE HARNESSES ARE EMITTERS TOO, and they are not vendored anywhere. This searched only
+    # agent/ and core-agent/, so three bash/PowerShell lines in run 38994277148 - the MSI-log
+    # warning, the clock warning and the REINSTALL=ALL feature warning - were reported as
+    # "emitted by vendored code this repository does not carry", which is simply false about a
+    # line written by mgmt/harness/matrix.sh. Saying that would have sent the reason into the
+    # ledger as unknowable.
+    # NOT THIS TOOL'S OWN SOURCE, AND NOT THE GATE'S BOOKKEEPING. Adding tools/ to the search made
+    # this script match its OWN comments - which quote these very messages - and Jev was then asked
+    # to classify the emitter of 'QGAVCHANFAIL ...' from classify-errors.sh:54. It answered
+    # defect=0.72. A confident verdict about the wrong file is the worst output available here, and
+    # it would have gone into the ledger as a receipt. Same self-match that the ledger verifier hit.
+    while IFS= read -r _k; do
+      [ -n "$_k" ] || continue
+      for _pat in '*.c' '*.cpp' '*.h' '*.sh' '*.ps1' '*.py'; do
+        src=$(grep -rln --exclude-dir=.git --exclude=error-ledger.txt --exclude=error-corpus.txt \
+                --exclude=log-sweep-baseline.json --exclude='classify-errors.sh' \
+                --exclude='sweep-gate*' --include="$_pat" \
+                -F -- "$_k" agent core-agent guest mgmt/harness mgmt/prime-jobs 2>/dev/null | head -1)
+        [ -n "$src" ] && break
+      done
+      if [ -n "$src" ]; then
+        ln=$(grep -nF -- "$_k" "$src" 2>/dev/null | head -1 | cut -d: -f1)
+        key="$_k"; break
+      fi
+    done <<< "$key"
+  fi
+  # NO BLIND FALLBACK. This used to look up a file by FUNCTION NAME and then take the first log
+  # call in it, and this file's own comment already records where that leads: "the lookup fell back
+  # to the function name, matched line 1, and Jev was handed a file header - answering 'undecided'
+  # about nothing, which is the worst outcome available: a judgement that looks real." Widening the
+  # search brought it straight back - QioWriteBuffer and send_command_to_daemon were both judged
+  # from mgmt/harness/matrix.sh:301, an unrelated line, at 0.86 and 0.93 handled. If the message
+  # itself cannot be found, there is no evidence, and no evidence is reported as no evidence.
+  # AND "NOT IN THIS TREE" IS AN ANSWER, NOT A GAP. windows-utils and the qrexec pipe server are
+  # vendored elsewhere, so QioWriteBuffer, pipe_thread_client, send_command_to_daemon and
+  # QpsDisconnectClientInternal genuinely cannot be read from here. Saying which of the two it is
+  # matters: one is a tool failure to fix, the other is a disposition to write by hand.
+  if [ -z "$ln" ]; then
+    if [ -z "$src" ]; then
+      echo "EXTERNAL x$cnt $fn - no file under agent/ core-agent/ guest/ mgmt/ tools/ carries this message or function, so it comes from vendored code this repository does not contain (windows-utils, the qrexec pipe server, libvchan). No Jev verdict is possible from here; the ledger row has to say that."
+    else
+      echo "SKIP x$cnt $fn - found $src but cannot locate the emitting line (key='$key'), so there is no evidence to judge"
+    fi
+    continue
+  fi
+  # A STAGED PAYLOAD IS NOT THE SOURCE OF TRUTH. mgmt/prime-jobs/*/setup/ holds a release
+  # package's own installer, so a receipt that points there rots at the next package. It is still
+  # the real emitting text, so it is used - and labelled, rather than quietly recorded as ours.
+  _origin=""
+  case "$src" in mgmt/prime-jobs/*) _origin=" [STAGED PAYLOAD - the packaged installer's own text, not a file this repo authors]" ;; esac
   st="$OUTD/state.txt"
   { echo "THE LOGGED LINE, seen $cnt time(s) across one campaign's guest logs:"
     echo "  $msg"
@@ -69,6 +134,6 @@ PYK
     sed -n "$((ln>20?ln-20:1)),$((ln+12))p" "$src"
   } > "$st"
   v=$(python3 tools/jev.py "$RUB" "$st" 2>&1 | tail -1)
-  echo "x$cnt  $fn  ($src:$ln)  -> $v"
+  echo "x$cnt  $fn  ($src:$ln)$_origin  -> $v"
   n=$((n+1))
 done

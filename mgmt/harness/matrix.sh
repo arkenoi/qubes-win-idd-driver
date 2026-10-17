@@ -145,8 +145,22 @@ R=$M/matrix.log; : > "$R"
 # EVERY LINE DECLARES ITS LEVEL - same reason as quick-upgrade.sh's log(): a sweep that can only
 # judge the lines carrying a tag is blind to everything else, and it will not gate until its
 # coverage is credible. The emitter declares; a caller that already passed a level keeps it.
+#
+# A LINE DECLARES ONE LEVEL, AND IT IS THE ONE THE SWEEP READS. This matched a level only at the
+# very START of the message, and 23 call sites in this file write it after an indent or after the
+# cell label - "  $lbl: [WARN] ..." - so each of them produced a line declaring BOTH: "[INFO]
+# WIN11-upgrade: [WARN] MSI verbose log NOT retrieved". sweep-gate's level regex matches anywhere,
+# so it judged those lines WARNING while they announced INFO, and the two readings of one line
+# disagreed. Measured in run 38994277148 on the MSI line; the other 22 are the same shape, latent.
+# So: prepend only when the message carries no level at all, which makes "what this line declares"
+# single-valued and equal to what the gate reads.
+#
+# This does not widen the payload's reach. A payload that contains a bracketed level already
+# decides how the gate reads the line, whatever this function prepends - the guard against that is
+# `tr -d '[]'` where guest text is interpolated (quick-upgrade.sh:824, and the xenbus probe below),
+# not a second level on the front.
 say(){ case "$*" in
-         "[ERROR]"*|"[WARN]"*|"[WARNING]"*|"[INFO]"*|"[DEBUG]"*) _m="$*" ;;
+         *'[ERROR]'*|*'[WARN]'*|*'[WARNING]'*|*'[INFO]'*|*'[DEBUG]'*) _m="$*" ;;
          *) _m="[INFO] $*" ;;
        esac
        echo "[$(date -u +%H:%M:%S)] $_m" | tee -a "$R"; }
@@ -1238,10 +1252,19 @@ run_install(){ # $1=vm $2=label $3=install-source (drive/dir carrying install.cm
   # Probe the MONITOR PROCESS directly. tasklist is far cheaper than reading a growing log, so it
   # keeps answering while the guest is busy - which is exactly where every file-read poll lost the
   # race and cost us the six lines that mattered.
+  # IT DECLARES ITS OWN LEVEL, AND THE GUEST CANNOT SET IT. This line wears the bash logger's exact
+  # shape ("[HH:MM:SS] ..."), so sweep-gate counted all 90 of its polls as undeclared lines of OURS
+  # - 71 of the 141 that made the gate refuse to judge the campaign at all (run 38994277148). It is
+  # the harness writing, so it declares [INFO]: the poll result is a witness, never a verdict.
+  # `tr -d '[]'` is the same guard quick-upgrade.sh:824 already applies - every level alternative in
+  # the gate's regex needs a literal ']', and the captured payload really does arrive with brackets
+  # in it ("Microsoft Windows [Version 10.0.26300.9457]"), so without this the GUEST chooses the
+  # severity of our line. Jev: declare-and-strip 0.69 over excluding the file as a capture 0.31,
+  # payload-can-forge 0.65.
   ( for _p in $(seq 1 90); do
-      echo "[$(date -u +%H:%M:%S)] $(QTEST_VM=$vm timeout -k 3 25 ./tools/qtest run \
+      echo "[$(date -u +%H:%M:%S)] [INFO] xenbus-probe: $(QTEST_VM=$vm timeout -k 3 25 ./tools/qtest run \
         'cmd /c tasklist | findstr /i xenbus & sc query xenbus_monitor | findstr /i STATE' \
-        2>/dev/null | tr -d '\r' | tr '\n' ' ' | cut -c1-150)" >> "$M/$lbl-monitor.log" 2>&1
+        2>/dev/null | tr -d '\r' | tr '\n' ' ' | tr -d '[]' | cut -c1-150)" >> "$M/$lbl-monitor.log" 2>&1
       sleep 5
     done ) &
   PROBE_PID=$!

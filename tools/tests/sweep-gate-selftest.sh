@@ -472,5 +472,130 @@ k=$(printf '%s' "$o3" | grep -ac 'failed to install')
 if [ "$k" = 2 ]; then ok "T21c two different KB numbers stay two messages - the widened rule does not eat an identity"
 else no "T21c KB identity was merged away ($k messages, want 2)" "$(printf '%s' "$o3" | grep -a 'failed to install' | head -3)"; fi
 
+
+# T22 - THE EMITTERS MUST DECLARE, AND THE GUEST MUST NOT BE ABLE TO CHOOSE THE LEVEL.
+#
+# Run 38994277148 ended with `SWEEP-GATE-RESULT undeclared_ours=141 - this gate judged only part of
+# the run, so its silence means nothing`, and exited 1 on that alone, BEFORE it reported a single
+# unaccounted error. Three loggers wrote lines in the bash-logger shape with no level: matrix.sh's
+# xenbus probe (71), arm-module-bases.sh (40 via summary.log and matrix's capture of its stdout) and
+# release-acceptance.sh (the run's whole top-level narration, its own FAIL verdicts included).
+#
+# Each case below was seen to fail against the pre-fix emitters.
+_say_of(){ sed -n '/^say(){/,/tee -a/p' "$1"; }   # all three share one shape
+
+# (a) EVERY CALL SITE'S REAL TEXT IS JUDGED. Not a sample I chose - the strings are taken from the
+# scripts themselves, so a new say() with no level cannot slip past this suite.
+for _f in mgmt/harness/arm-module-bases.sh tools/release-acceptance.sh; do
+  OUT="$T/e"; LOG="$T/e/log"; mkdir -p "$OUT"; : > "$LOG"
+  ( eval "$(_say_of "$_f")"
+    grep -ao 'say "[^"]*"' "$_f" | sed -E 's/^say "//; s/"$//' | while IFS= read -r _l; do
+      [ -n "$_l" ] && say "$_l" >/dev/null
+    done ) 2>/dev/null
+  _src=$([ "$_f" = tools/release-acceptance.sh ] && echo "$LOG" || echo "$OUT/summary.log")
+  u=$(bash tools/sweep-gate.sh "$_src" 2>&1 | grep -ao 'undeclared_ours=[0-9]*' | head -1)
+  if [ -z "$u" ]; then ok "T22a every say() in $(basename "$_f") declares a level"
+  else no "T22a $(basename "$_f") still writes undeclared lines ($u)" "$(bash tools/sweep-gate.sh "$_src" 2>&1 | grep -a 'of them are OURS' | head -1)"; fi
+  rm -rf "$T/e"
+done
+
+# (b) AND A FAILURE STILL READS AS ONE. The whole risk of giving a logger a default is that the
+# default swallows the failures: this script reports its own as bare "FAIL:"/"VOID:" text, and a
+# blanket [INFO] would have marked eight real failure lines informational (Jev 0.74 - silencer).
+OUT="$T/f"; mkdir -p "$OUT"
+( eval "$(_say_of mgmt/harness/arm-module-bases.sh)"
+  say "VOID: win11-x is not answering qrexec" >/dev/null
+  say "FAIL: the recorder wrote NOTHING on this boot (found=none)." >/dev/null
+  say "ARMED AND PROVEN: 170 module records written on this boot." >/dev/null ) 2>/dev/null
+nE=$(grep -ac '\[WARN\]\|\[ERROR\]' "$OUT/summary.log" || echo 0)
+nI=$(grep -ac '\[INFO\]' "$OUT/summary.log" || echo 0)
+if [ "${nE:-0}" = 2 ] && [ "${nI:-0}" = 1 ]; then
+  ok "T22b arming's VOID:/FAIL: lines declare W and surface; its narration stays I"
+else no "T22b the default swallowed a failure (W/E=$nE want 2, I=$nI want 1)" "$(cat "$OUT/summary.log")"; fi
+rm -rf "$T/f"
+
+# (c) THE PAYLOAD CANNOT FORGE A LEVEL (Jev 0.65 that it can, unguarded). Every level alternative in
+# the gate's regex needs a literal ']', and the captured guest text really does arrive with brackets
+# in it - "Microsoft Windows [Version 10.0.26300.9457]" was measured in this very run. So a guest
+# whose output contained [ERROR] would have made OUR probe line declare an error that was not ours.
+# This is the same guard quick-upgrade.sh:824 already applied, one line.
+_hostile='xenbus.exe [ERROR] something exploded'
+printf '[12:00:00] [INFO] xenbus-probe: %s\n' "$(printf '%s' "$_hostile" | tr -d '\r' | tr '\n' ' ' | tr -d '[]')" > "$T/t22c.log"
+# A REAL EMPTY LEDGER, not a path that does not exist: the gate REFUSES with rc 2 on a missing one,
+# and rc 2 is "nothing could be read", which must never be mistaken for "nothing to report".
+printf '# empty ledger for T22c\n' > "$T/t22-empty.txt"
+o=$(SWEEP_GATE_LEDGER="$T/t22-empty.txt" bash tools/sweep-gate.sh "$T/t22c.log" 2>&1); r=$?
+if [ "$r" -eq 0 ] && ! printf '%s' "$o" | grep -qa 'something exploded'; then
+  ok "T22c a guest payload carrying [ERROR] does not make our probe line declare one"
+else no "T22c the guest forged a level on our line" "$(printf '%s' "$o" | grep -a 'UNACCOUNTED\|undeclared' | head -2)"; fi
+
+# (d) AND THE WRITER KEEPS BOTH HALVES. (c) tests the pipeline; this tests that matrix.sh still has
+# it, so removing either the declaration or the strip fails here rather than in a campaign an hour in.
+_mw=$(sed -n '/xenbus-probe/,/sleep 5/p' mgmt/harness/matrix.sh)
+if printf '%s' "$_mw" | grep -qa '\[INFO\]' && printf '%s' "$_mw" | grep -qa "tr -d '\[\]'"; then
+  ok "T22d the xenbus probe writer declares [INFO] and strips the payload's brackets"
+else no "T22d the probe writer lost its declaration or its forging guard" "$(printf '%s' "$_mw" | head -3)"; fi
+
+
+# T23 - THREE METERING DEFECTS FOUND IN RUN 38994277148'S OWN GATE OUTPUT.
+printf '# empty ledger for T23\n' > "$T/t23-led.txt"
+
+# (a) ONE FILE READ TWICE DOUBLES EVERY COUNT IT CARRIES. matrix.sh names its own log explicitly
+# AND finds it again walking its output dir (R=$M/matrix.log, $M is what the find walks), so the
+# campaign's own verdicts were counted x2 against one occurrence on disk. That is not cosmetic: the
+# ROSE threshold compares a count against the ledger's base, so a doubled count forges a regression.
+printf '[20261017.060540.123-100-W] Thing: a thing happened\n' > "$T/t23-dup.log"
+o=$(SWEEP_GATE_LEDGER="$T/t23-led.txt" bash tools/sweep-gate.sh "$T/t23-dup.log" "$T/t23-dup.log" 2>&1)
+c=$(printf '%s' "$o" | sed -nE 's/^  UNACCOUNTED x([0-9]+).*a thing happened.*/\1/p')
+if [ "${c:-0}" = 1 ] && printf '%s' "$o" | grep -qa 'SWEEP-GATE-INPUT 1 of 2'; then
+  ok "T23a a file named twice is read once, and the gate says so"
+else no "T23a the same file counted twice (x${c:-?}, want x1)" "$(printf '%s' "$o" | grep -a 'UNACCOUNTED\|INPUT' | head -2)"; fi
+
+# (b) A POINTER WITHOUT AN 0x IS STILL A POINTER. win_perror2 and VchanWaitForSendSpace print raw
+# handles, so ONE message arrived as three unaccounted ones - x27, x12, x4, one per address. Like
+# the duration bug in T21, that is an UNLEDGERABLE shape: every run mints new addresses, so no row
+# written today can ever match tomorrow. The three real addresses from that run are used here.
+printf '%s\n' \
+  "[20261017.060540.123-100-W] VchanWaitForSendSpace: (000001B810D49540, output data): vchan buffer full, blocking write" \
+  "[20261017.060541.123-100-W] VchanWaitForSendSpace: (000001CDC8BA5DE0, output data): vchan buffer full, blocking write" \
+  "[20261017.060542.123-100-W] VchanWaitForSendSpace: (00000273BDE29530, output data): vchan buffer full, blocking write" \
+  > "$T/t23-ptr.log"
+o=$(SWEEP_GATE_LEDGER="$T/t23-led.txt" bash tools/sweep-gate.sh "$T/t23-ptr.log" 2>&1)
+n=$(printf '%s' "$o" | grep -ac 'vchan buffer full')
+if [ "$n" = 1 ] && printf '%s' "$o" | grep -qa '\[3 distinct\]'; then
+  ok "T23b three raw handles are ONE message, and the 3 distinct lines behind it are still reported"
+else no "T23b raw handles still split one message ($n messages, want 1)" "$(printf '%s' "$o" | grep -a 'vchan buffer' | head -3)"; fi
+
+# (c) AND THE WIDER HEX RULE MUST NOT EAT AN IDENTITY, which means asserting its BOUNDARY. 12 is
+# the floor so that a KB number keeps being its own message (T21c's line, re-asserted against the
+# new rule - merging two updates' failures is exactly what would hide one). An 11-character token
+# must be left alone and a 12-character one taken, or "12+" is prose rather than the rule.
+# (A dotted version is NOT a case for this rule: 4.3.36.989 was already N.N.N.N under the
+# pre-existing number rule. Asserting it here would have been asserting someone else's behaviour -
+# it is what this case first got wrong.)
+printf '%s\n' "[12:00:01] [ERROR] KB5007651 failed to install" \
+              "[12:00:02] [ERROR] KB5034441 failed to install" \
+              "[12:00:03] [ERROR] tag abcdef012345 taken" \
+              "[12:00:04] [ERROR] tag abcdef01234 kept" > "$T/t23-id.log"
+o=$(SWEEP_GATE_LEDGER="$T/t23-led.txt" bash tools/sweep-gate.sh "$T/t23-id.log" 2>&1)
+if [ "$(printf '%s' "$o" | grep -ac 'failed to install')" = 2 ] \
+   && printf '%s' "$o" | grep -qa 'tag <HEX> taken' \
+   && printf '%s' "$o" | grep -qa 'tag abcdef01234 kept'; then
+  ok "T23c a KB number survives; 12 hex chars are a pointer and 11 are not"
+else no "T23c the widened hex rule ate an identity or missed its boundary" "$(printf '%s' "$o" | grep -a 'UNACCOUNTED' | head -4)"; fi
+
+# (d) A LINE DECLARES ONE LEVEL. 23 say() sites in matrix.sh write the level after an indent or
+# after the cell label, and the old front-anchored match prepended [INFO] to every one of them:
+# "[INFO]   WIN11-upgrade: [WARN] MSI verbose log NOT retrieved". The gate's regex matches a level
+# anywhere, so it judged those lines WARNING while they announced INFO.
+_say=$(sed -n '/^say(){ case/,/tee -a "\$R"/p' mgmt/harness/matrix.sh)
+R="$T/t23-say.log"; : > "$R"
+( eval "$_say"
+  say "  WIN11-upgrade: [WARN] MSI verbose log NOT retrieved" >/dev/null
+  say "plain narration" >/dev/null ) 2>/dev/null
+if [ "$(grep -ac '\[INFO\].*\[WARN\]' "$R")" = 0 ] && [ "$(grep -ac '\[INFO\] plain narration' "$R")" = 1 ]; then
+  ok "T23d a message that already carries a level is not given a second one"
+else no "T23d a line declared two levels at once" "$(cat "$R")"; fi
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

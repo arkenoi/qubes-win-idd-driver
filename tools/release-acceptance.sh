@@ -72,7 +72,25 @@ fi
 WORK="${WORK:-$HOME/qwt-accept/rel-$RUN}"
 mkdir -p "$WORK/dl"
 LOG="$WORK/release-acceptance.log"
-say(){ echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$LOG"; }
+# EVERY LINE DECLARES A LEVEL. This logger emitted none, so sweep-gate could not judge a single line
+# of the run's top-level narration - including its own FAIL verdicts. The level follows the prefix
+# this script already writes, so the words it has used for years keep their meaning:
+#   FATAL:/FAIL      -> E   the run failed, and that is the verdict line a reader looks for
+#   INSTRUMENT/WARNING -> W  the suite could not measure the product, or the rig is not settled
+#   everything else  -> I
+# A blanket [INFO] would have marked its own FAIL lines informational; on this instrument that is a
+# silencer (Jev 0.74 on the same shape in arm-module-bases.sh).
+#
+# matrix.sh:2568 already excludes "[ERROR]/[WARN] FAIL " lines from the unaccounted tally as "this
+# campaign's own graded verdicts, already in the tally above", so declaring them does not make a
+# failing run fail twice - which on this project is a P1.
+say(){ case "$*" in
+         "[ERROR]"*|"[WARN]"*|"[WARNING]"*|"[INFO]"*|"[DEBUG]"*) _m="$*" ;;
+         FATAL:*|FAIL*)            _m="[ERROR] $*" ;;
+         INSTRUMENT*|WARNING:*)    _m="[WARN] $*" ;;
+         *)                        _m="[INFO] $*" ;;
+       esac
+       echo "[$(date -u +%H:%M:%S)] $_m" | tee -a "$LOG"; }
 die(){ say "FATAL: $*"; exit 1; }
 
 # REFUSE TO START UNDER A STRAY HARNESS PROCESS. An orphaned prime-run kept driving win10-acc after
@@ -202,7 +220,7 @@ if [ "$SKIP_FEATURES" -eq 0 ]; then
     say "settling the rig before $1"
     for vm in $(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' '$1 ~ /^win1/ && $2!="Halted"{print $1}'); do
       say "  shutting down $vm (left running)"
-      qwt_shutdown "$vm" 600 || { say "  $vm did not halt in 600s - killing it; the next clone from its volume may be dirty"; timeout 60 qvm-kill "$vm" >/dev/null 2>&1; }
+      qwt_shutdown "$vm" 600 || { say "[WARN]   $vm did not halt in 600s - killing it; the next clone from its volume may be dirty"; timeout 60 qvm-kill "$vm" >/dev/null 2>&1; }
     done
     for i in $(seq 1 40); do
       busy=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' '$1 ~ /^win1/ && $2!="Halted"{print $1}' | tr '\n' ' ')

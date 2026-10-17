@@ -41,7 +41,27 @@ VM="${VM:?set VM}"
 MODE="${1:-arm}"
 OUT="${OUT:-/home/user/rel/modbases-$(date -u +%Y%m%dT%H%M%SZ)}"
 mkdir -p "$OUT"
-say(){ echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$OUT/summary.log"; }
+# EVERY LINE DECLARES A LEVEL, and the failures declare it EXPLICITLY. This emitted no severity at
+# all, so sweep-gate could not judge one line of it: 40 of the 141 undeclared lines that made the
+# gate refuse the whole campaign (run 38994277148) came from here, through summary.log and through
+# matrix's capture of this script's stdout.
+#
+# A DEFAULT OF [INFO] ALONE WOULD HAVE BEEN A SILENCER (Jev 0.74). This script reports its own
+# failures as bare text - "VOID: $VM is not answering qrexec", "FAIL: could not land the recorder",
+# "FAIL: the recorder wrote NOTHING on this boot" - and a blanket default would have handed the
+# error gate eight real failure lines marked informational. So the prefixes are read here and the
+# level follows the line.
+#
+# W, NOT E: matrix.sh:1163 checks this script's exit code, records "NOT armed", and deliberately
+# grades nothing on it ("records evidence, grades nothing"). W still surfaces in sweep-gate - which
+# is the point, because losing the recorder silently is what left an earlier specimen unresolvable -
+# while matching that recorded decision. Jev: WARNING 0.70 over ERROR 0.17 and INFO 0.13.
+say(){ case "$*" in
+         "[ERROR]"*|"[WARN]"*|"[WARNING]"*|"[INFO]"*|"[DEBUG]"*) _m="$*" ;;
+         FAIL:*|VOID:*|"NOTHING RECORDED"*) _m="[WARN] $*" ;;
+         *) _m="[INFO] $*" ;;
+       esac
+       echo "[$(date -u +%H:%M:%S)] $_m" | tee -a "$OUT/summary.log"; }
 
 source mgmt/harness/vmlock.sh
 vm_lock "$VM"
@@ -127,7 +147,7 @@ QTEST_VM=$VM timeout -k 5 120 ./tools/qtest run \
 QTEST_VM=$VM timeout -k 5 240 ./tools/qtest run \
   "powershell -NoProfile -ExecutionPolicy Bypass -Command \"[IO.File]::WriteAllBytes('$DEST',[Convert]::FromBase64String('$B64'))\"" >/dev/null 2>&1
 if [ "$(_landed)" = 0 ]; then
-  say "VMShell transfer did not land the recorder - falling back to qvm-copy-to-vm (needs a session)"
+  say "[WARN] VMShell transfer did not land the recorder - falling back to qvm-copy-to-vm (needs a session)"
   QTEST_VM=$VM timeout -k 5 90 ./tools/qtest push "$OUT/record-module-bases.ps1" >/dev/null 2>&1 \
     && QTEST_VM=$VM timeout -k 5 240 ./tools/qtest run \
          "cmd /c copy /y \"$INC\\record-module-bases.ps1\" \"$DEST\"" >/dev/null 2>&1
@@ -138,7 +158,7 @@ fi
 
 armed=$(QTEST_VM=$VM timeout -k 5 240 ./tools/qtest run \
   "schtasks /create /tn QwtModuleBases /ru SYSTEM /sc onstart /rl HIGHEST /f /tr \"powershell -NoProfile -ExecutionPolicy Bypass -File \\\"C:\\Qubes Tools\\diag\\record-module-bases.ps1\\\"\"" 2>/dev/null | tr -d '\r')
-say "schtasks: ${armed:-<no output>}"
+say "schtasks: $(printf '%s' "${armed:-<no output>}" | tr -d '[]')"
 
 # RUN IT NOW TOO, so this boot is recorded rather than only future ones - and so the arming is
 # PROVEN to work rather than assumed. A task that was created but silently cannot run is exactly the
@@ -188,7 +208,7 @@ check=$(_count)
 # replacing its own PV drivers is the least settled it ever is, so one transient must not leave the
 # cell unarmed; and if the retry also writes nothing, the recorder's own output now says why.
 if [ -z "${check:-}" ] || [ "${check:-0}" -eq 0 ] 2>/dev/null; then
-  say "first run wrote nothing - settling 15s and retrying once (a guest that just replaced its PV stack is not settled)"
+  say "[WARN] first run wrote nothing - settling 15s and retrying once (a guest that just replaced its PV stack is not settled)"
   sleep 15
   runout2=$(_recorder_run retry)
   printf '%s\n' "$runout2" >> "$OUT/recorder-run.out"

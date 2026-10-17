@@ -32,12 +32,13 @@
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 2
 
-WRITE=""; VERIFY=0; CENSUS=0; SILENT=0
+WRITE=""; VERIFY=0; CENSUS=0; SILENT=0; VLED=0
 if [ "${1:-}" = "--write-ledger" ]; then WRITE="${2:?--write-ledger needs an output path}"; shift 2; fi
 if [ "${1:-}" = "--verify" ]; then VERIFY=1; shift; fi
 if [ "${1:-}" = "--census" ]; then CENSUS=1; shift; fi
+if [ "${1:-}" = "--verify-ledger" ]; then VLED=1; shift; fi
 if [ "${1:-}" = "--silent-failures" ]; then SILENT=1; shift; fi
-[ $# -ge 1 ] || [ "$VERIFY" = 1 ] || { echo "usage: $0 [--verify] [--census] [--write-ledger <out>] <log> [...]" >&2; exit 2; }
+[ $# -ge 1 ] || [ "$VERIFY" = 1 ] || [ "$VLED" = 1 ] || { echo "usage: $0 [--verify] [--verify-ledger] [--census] [--write-ledger <out>] <log> [...]" >&2; exit 2; }
 LEDGER="${SWEEP_GATE_LEDGER:-mgmt/harness/error-ledger.txt}"
 
 QWT='^\[[0-9]{8}\.[0-9]{6}\.[0-9]{3}-[0-9]+(:[0-9]+)?-'
@@ -102,6 +103,15 @@ for line in sys.stdin:
         return "\x00" + LET[(len(holes) - 1) % len(LET)] + "\x00"
     l = CODE.sub(lambda m: m.group(1) + mk(m.group(2)), l)
     l = ESC.sub(lambda m: mk(m.group(1)) + m.group(2), l)
+    # A POINTER WITHOUT AN 0x IS STILL A POINTER. This matched only the 0x-prefixed form, and
+    # win_perror2/VchanWaitForSendSpace print raw handles: "(000001B810D49540, output data): vchan
+    # buffer full, blocking write" came out as THREE separate unaccounted messages in run
+    # 38994277148 - x27, x12 and x4 - one per address, i.e. one message that can never be
+    # dispositioned because every run mints new addresses. The same unledgerable shape as the
+    # duration bug below, by a different route.
+    # 12+ HEX DIGITS, so an identity is safe: a KB number is 7 digits (T21c holds that line), a
+    # version is dotted, and a timestamp has been stripped by the prefix rules above.
+    l = re.sub(r"\b[0-9A-Fa-f]{12,}\b", "<HEX>", l)
     l = re.sub(r"0x[0-9A-Fa-f]+", "<HEX>", l)
     l = re.sub(r"^\[\d{8}\.\d{6}\.\d{3}-\d+(:\d+)?-[DIWE]\]\s*", "", l)
     l = re.sub(r"^\d{4}-\d{2}-\d{2}[ T][\d:.]+\s*", "", l)
@@ -337,6 +347,48 @@ if [ "${SILENT:-}" = 1 ]; then
     exit 0
 fi
 
+# --verify-ledger: CAN EACH ROW STILL BE PRODUCED AT ALL?
+#
+# THE FLAG THIS IMPLEMENTS WAS ADVERTISED AND ABSENT. The orphan report below has told the reader
+# for weeks to "check with --verify-ledger" - a flag the parser never accepted - so the one
+# diagnosis the gate prescribes for a drifted row could not be run, and drift stayed
+# indistinguishable from a condition that did not occur. Run 38994277148 said "5 of 7 row(s)
+# matched nothing this run" and nobody could tell which kind they were.
+#
+# ONE OF THEM WAS REAL. The ledger carries
+#     ApplyGuestShadows: no usable interactive session yet (token<PATH>); cannot disable guest ...
+# while the emitter (agent/gui-agent/main.c:5610) now says
+#     no usable interactive session yet, cannot %s guest shadows (will retry)
+# The message was reworded, the row stopped matching, and that error came back UNACCOUNTED x18 in
+# the same run with its reason orphaned on disk - the exact loss this report was written to warn
+# about, undetectable for want of its own check.
+#
+# TWO INDEPENDENT FAILURES, because a row can be unmatchable for two different reasons:
+#   NOT-A-FIXED-POINT  the normaliser does not reproduce the row from itself, so it cannot ever
+#                      equal a message this tool emits. Pure arithmetic, no tree needed.
+#   TEXT-GONE          no literal run of >= 20 characters from the row appears anywhere in the
+#                      source tree, so whatever used to emit it does not say that any more.
+# CONSERVATIVE ON PURPOSE: a row passes if ANY of its long runs is found, because a run may
+# straddle a %s the emitter fills in, and a false LOST would send someone chasing a row that is
+# merely dormant. It reports, it does not guess.
+if [ "${VLED:-}" = 1 ]; then
+    [ -f "$LEDGER" ] || { echo "sweep-gate: REFUSING - no ledger at $LEDGER" >&2; exit 2; }
+    # THE SEARCH CORPUS IS THE EMITTERS, AND NOT THIS TOOL'S OWN BOOKKEEPING. The first version
+    # searched mgmt/ and tools/ whole - which hold the ledger itself, log-sweep's baseline and this
+    # script's comments quoting these very rows - so every row matched ITSELF and the check could
+    # only ever say OK. It reported the one row already KNOWN to be drifted as fine.
+    # (And every --exclude must precede the `--`, or grep reads it as a file to search: written
+    # after it, all five exclusions were inert and the self-matching came straight back.)
+    SRC=$(mktemp)
+    grep -ra --exclude-dir=.git --exclude=error-ledger.txt --exclude=error-corpus.txt \
+         --exclude=log-sweep-baseline.json --exclude='sweep-gate*' -h '' \
+         agent core-agent guest mgmt/harness mgmt/prime-jobs tools 2>/dev/null > "$SRC"
+    python3 tools/sweep-gate-verify-ledger.py "$LEDGER" "$SRC"
+    _vrc=$?
+    rm -f "$SRC"
+    exit $_vrc
+fi
+
 if [ "${CENSUS:-}" = 1 ]; then
     [ $# -ge 1 ] || { echo "usage: $0 --census <log> [...]" >&2; exit 2; }
     cfile=$(mktemp); dfile=$(mktemp)
@@ -423,6 +475,24 @@ if [ "$VERIFY" = 1 ]; then
 fi
 
 [ -f "$LEDGER" ] || { echo "sweep-gate: REFUSING - no ledger at $LEDGER (seed it with --write-ledger)" >&2; exit 2; }
+# NEVER READ ONE FILE TWICE. matrix.sh passes its own log explicitly AND finds it again when it
+# walks its output directory (R=$M/matrix.log, and $M is the directory the find walks), so every
+# message that log carried was counted TWICE. MEASURED in run 38994277148: "install STALLED" was
+# reported x2 against a single occurrence on disk, and the run's own line census differed from a
+# de-duplicated one by 249 lines. A doubled count is not cosmetic here - the ROSE threshold
+# compares the count against the ledger's recorded base, so a file read twice can resurface a
+# dispositioned message as a regression that never happened.
+# Deduplicated HERE rather than in the caller: the gate takes arbitrary paths from several
+# harnesses, and it should be impossible to inflate its counts by naming a file twice.
+_args=(); _seen=$(mktemp)
+for _a in "$@"; do
+    _rp=$(readlink -f -- "$_a" 2>/dev/null || printf '%s' "$_a")
+    grep -qxF -- "$_rp" "$_seen" 2>/dev/null && continue
+    printf '%s\n' "$_rp" >> "$_seen"; _args+=("$_a")
+done
+_dupes=$(( $# - ${#_args[@]} )); rm -f "$_seen"
+[ "$_dupes" -gt 0 ] && echo "SWEEP-GATE-INPUT $_dupes of $# path(s) named the same file twice - read once each (a doubled count can forge a ROSE)"
+set -- "${_args[@]}"
 NOW=$(mktemp); VAR=$(mktemp)
 SWEEP_GATE_VARIANTS="$VAR" declared "$@" > "$NOW" || { rm -f "$NOW" "$VAR"; exit 2; }
 LD=$(mktemp); grep -vE '^\s*(#|$)' "$LEDGER" > "$LD" || true
