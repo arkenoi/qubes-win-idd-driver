@@ -32,6 +32,15 @@
 #                          1000 ms bound, twice on win11de-sm) would then never be reported at all
 #       STARTRETURNNULL    activation is handed to the shell desktop even when there is no shell
 #                          window, i.e. to NULL - at logon and shutdown there is none
+#       COMPANIONSHOWN     the SearchHost companion of a hidden Start opening is presented, so a
+#                          menu declared not-shown still puts a slice of itself on dom0's screen
+#       SEARCHALWAYSHIDDEN the opposite direction: a standalone Win+S Search the user asked for is
+#                          refused too - the discriminator has two halves and both must be seen
+#       SEARCHASTOAST      a Search flyout is measured by the TOAST card rule, which is how the
+#                          single-BOOL selector behaved; measured, both its candidates collapse to a
+#                          728x32 sliver at one raw size, so any crop from them clips the flyout
+#       XCNOTIFYKEPT       xencontrol's per-notify Debug line is kept - 118 identical lines in one
+#                          run saying the vchan transport worked
 #       HOLDREASONALLNORMAL  every BROKERHOLD reason reads as normal, so a broker that dropped a slot
 #                          or a feed lost past its bound goes as quiet as a first frame that has not
 #                          landed yet - the blanket demotion that was already made once and reverted
@@ -93,7 +102,7 @@ if build clean ""; then
 else say "FAIL  clean build: $(head -3 "$OUT/clean.build.err")"; bad=1; fi
 
 # ---- every defect knob must make the suite FAIL --------------------------------------------------------
-for d in TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT DISARMHIDESCRASH ZERODUE SHELLBYNAME HOLDALWAYSLOUD FAULTFROMREG LATEREGALWAYSLOUD SLOWALWAYSLOUD HOLDREASONALLNORMAL STARTCLOSEUNSAID STARTNEVERSTUCK STARTRETURNNULL; do
+for d in TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT DISARMHIDESCRASH ZERODUE SHELLBYNAME HOLDALWAYSLOUD FAULTFROMREG LATEREGALWAYSLOUD SLOWALWAYSLOUD HOLDREASONALLNORMAL STARTCLOSEUNSAID STARTNEVERSTUCK STARTRETURNNULL COMPANIONSHOWN SEARCHALWAYSHIDDEN SEARCHASTOAST XCNOTIFYKEPT; do
     if build "defect-$d" "-DQGA_LIFECYCLE_DEFECT_$d"; then
         "$OUT/defect-$d" >"$OUT/defect-$d.out" 2>&1; rc=$?
         f=$(grep -c '^FAIL' "$OUT/defect-$d.out")

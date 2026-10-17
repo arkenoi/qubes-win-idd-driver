@@ -1596,6 +1596,44 @@ def l26_no_hardware_clock_convention_is_written() -> None:
                         "true UTC and brings the whole transition back; it must be SET at create "
                         "time, never cleared (docs/ADR-clock.md)")
 
+def l28_c_file_includes_its_own_header() -> None:
+    """A .c file must include its sibling .h, or its own declarations are unchecked.
+
+    MEASURED, and it cost a build: util.h gained `FOREGROUND_HOW` and `ApplyForeground`, util.c
+    defined ApplyForeground - and util.c did not include util.h. gcc never saw it (the file cannot
+    be syntax-checked offline: aclapi.h is not in the stubs), and the offline check I did run
+    DECLARED the typedef itself, so it could not notice the missing include. MSVC found it:
+    "util.c(296,42): error C2081: 'FOREGROUND_HOW': name in formal parameter list illegal",
+    run 39029243791.
+
+    The real hazard is not the compile error - that is loud. It is that a definition whose
+    declaration the compiler never sees is never checked AGAINST that declaration, so a signature
+    can drift from its header silently for as long as every caller happens to agree with one of them.
+    """
+    for c in sorted((ROOT / "agent").rglob("*.c")):
+        h = c.with_suffix(".h")
+        if not h.exists():
+            continue
+        try:
+            src = c.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if f'#include "{h.name}"' in src:
+            continue
+        rel = c.relative_to(ROOT)
+        msg = (f"defines things declared in {h.name} but never includes it, so its definitions are "
+               f"not checked against their declarations (util.c did this and broke the MSVC build)")
+        # TWO LEGACY OFFENDERS, named rather than baselined away. They predate this rule, neither
+        # can be syntax-checked on this qube (the win32 stubs do not cover their headers), and
+        # adding an include to them could surface real signature drift in files no mandate here
+        # touches - so they are PENDING, printed every run, and this rule gates the moment the list
+        # is empty. A NEW offender gates immediately, which is the case that cost a build.
+        if rel.name in ("debug.c", "xorg-keymap.c"):
+            pending_finding("L28-c-file-skips-its-own-header", str(rel), msg + " [legacy: predates the rule]")
+            continue
+        finding("L28-c-file-skips-its-own-header", str(rel), msg)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ledger", type=Path, default=None, help="verdicts.tsv, enables L7")
@@ -1613,6 +1651,7 @@ def main() -> int:
         _rescan()
     findings.clear()
 
+    l28_c_file_includes_its_own_header()
     l1_no_double_background()
     l2_vmlock_required()
     l2b_reboot_must_be_proven()
