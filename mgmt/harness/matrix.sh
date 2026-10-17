@@ -2476,8 +2476,21 @@ for c in $CELLS; do
     # ONCE per campaign rather than once per cell: a cold start costs a boot, the path does not vary
     # by cell, and zero measurements is what it was before.
     if [ "$(w_state "$_slv")" = Running ] && w_alive "$_slv"; then
-      if [ "${COLD_CALLER_DONE:-0}" = 0 ]; then
-        COLD_CALLER_DONE=1
+      # ONCE PER OS FAMILY, NOT ONCE PER CAMPAIGN. The budget used to be one campaign-wide latch,
+      # so whichever cell ran first consumed it - and the cell order puts win10 first, so run
+      # 38994277148 evidenced the goal clause "from cold qube as well" on WIN10 and on no win11
+      # cell at all (the three win11 cells carry the warm checks only). Win11 is this project's
+      # stated target, and the premise the single latch rested on - "the path does not vary by
+      # cell" - is exactly what should not be assumed ACROSS FAMILIES here: the defect this goal
+      # exists to close was named as DETACHED_PROCESS plus a grandchild on Win11, and the agent,
+      # the wrapper and the boot timing all differ between the two. Jev: once per OS family 0.87
+      # (leave as is 0.00), premise should not be assumed across families 0.91.
+      # Cost is one extra halt-and-boot per campaign, which is what buys the clause on the target.
+      _cf=win_other
+      case "$c" in win10*|WIN10*) _cf=win10 ;; win11*|WIN11*) _cf=win11 ;; esac
+      eval "_cdone=\${COLD_CALLER_DONE_$_cf:-0}"
+      if [ "$_cdone" = 0 ]; then
+        eval "COLD_CALLER_DONE_$_cf=1"
         say "  $c: halting $_slv to measure the COLD caller path (the goal's 'from cold qube as well')"
         qwt_shutdown "$_slv" 600 >>"$M/$c-coldcallers.out" 2>&1 || true
         if [ "$(w_state "$_slv")" = Halted ]; then
@@ -2490,7 +2503,8 @@ for c in $CELLS; do
           # menu, from cold qube as well" - qubes.VMExec, the service dom0 drives the Windows update
           # agent over, was called warm only (the per-cell call above). ONLY THE FIRST call to a
           # Halted qube is cold, and the start-menu check just used it, so this costs a second halt.
-          # Once per campaign, like the first: the path does not vary by cell.
+          # Once per OS FAMILY, like the first - see the latch above for why the campaign-wide
+          # version left the goal's cold clause evidenced on win10 only.
           say "  $c: halting $_slv again to measure the COLD UPDATER caller (qubes.VMExec)"
           qwt_shutdown "$_slv" 600 >>"$M/$c-coldvmexec.out" 2>&1 || true
           if [ "$(w_state "$_slv")" = Halted ]; then

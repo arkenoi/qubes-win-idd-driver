@@ -35,9 +35,12 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # discriminator between a vanished window and a monitor-topology fault.
 # 52 since 2026-10-17: wait-bound-selftest.sh ADDED, after a probe bounded below the boot it waited
 # for abandoned a request on every boot and the guest logged a dropped request for each one.
+# 56 -> 57 on 2026-10-17: cold-caller-family-selftest.sh, which pins the release goal's cold-qube
+# clause to EVERY OS family rather than to whichever cell ran first (it was evidenced on win10 only
+# in run 38994277148, with win11 - the target - unmeasured).
 # The floor only ever moves in a commit, and this is that commit - a suite that loses its subject is
 # removed deliberately, not left to rot green.
-FLOOR=${OFFLINE_SUITES_FLOOR:-56}
+FLOOR=${OFFLINE_SUITES_FLOOR:-57}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"

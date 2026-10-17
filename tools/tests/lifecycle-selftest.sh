@@ -24,6 +24,9 @@
 #       HOLDALWAYSLOUD     every broker hold is written up as a fault, so the ~11 s on each cold boot in which
 #                          the broker simply has not started yet produces three WARNINGs about correct
 #                          behaviour - the log noise the owner refuses
+#       HOLDREASONALLNORMAL  every BROKERHOLD reason reads as normal, so a broker that dropped a slot
+#                          or a feed lost past its bound goes as quiet as a first frame that has not
+#                          landed yet - the blanket demotion that was already made once and reverted
 #       SLOWALWAYSLOUD     the capture loop warns from the FIRST second of a slow pass, so a guest merely
 #                          busy installing produces a warning every second - measured as 13 lines over ~9
 #                          passes of 1-3 s against a 15 s wedge that never fired once
@@ -82,7 +85,7 @@ if build clean ""; then
 else say "FAIL  clean build: $(head -3 "$OUT/clean.build.err")"; bad=1; fi
 
 # ---- every defect knob must make the suite FAIL --------------------------------------------------------
-for d in TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT DISARMHIDESCRASH ZERODUE SHELLBYNAME HOLDALWAYSLOUD FAULTFROMREG LATEREGALWAYSLOUD SLOWALWAYSLOUD; do
+for d in TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT DISARMHIDESCRASH ZERODUE SHELLBYNAME HOLDALWAYSLOUD FAULTFROMREG LATEREGALWAYSLOUD SLOWALWAYSLOUD HOLDREASONALLNORMAL; do
     if build "defect-$d" "-DQGA_LIFECYCLE_DEFECT_$d"; then
         "$OUT/defect-$d" >"$OUT/defect-$d.out" 2>&1; rc=$?
         f=$(grep -c '^FAIL' "$OUT/defect-$d.out")
@@ -193,6 +196,21 @@ main_latereg_level() { grep -q 'const BOOL refusedWhileUp = windowData->PwRegFai
                        # the snapshot must precede the call it is a snapshot of
                        [ "$(grep -n 'const BOOL refusedWhileUp' "$1" | cut -d: -f1)" -lt \
                          "$(grep -n 'if (BrokerRegister(windowData))' "$1" | cut -d: -f1)" ]; }
+# A HOLD WHOSE REASON IS NORMAL IS NOT LOGGED, AND MUST NOT SPEND THE ONE-SHOT. Owner 2026-10-17:
+# "we should not log this at all. we should log when something goes wrong." PwHoldLogged is one-shot
+# PER WINDOW, so a silent first-frame hold that still SET it would suppress that window's one real
+# line for ever - a later hold for slot-holds-another-hwnd or dims-mismatch-STUCK would never be
+# said. The guard is therefore the CONJUNCTION in the condition, not the absence of a log call.
+mc_hold_quiet_keeps_latch() {
+    # the gate tests both the latch AND the reason, so a normal reason returns without touching it
+    grep -q 'if (!entry->PwHoldLogged && !QgaHoldReasonIsNormal(holdWhy))' "$1" &&
+    # and the reason reached it from the refusal itself
+    grep -q 'PwConsumeBrokerFrame(entry, &pwRect, &holdWhy)' "$1" &&
+    # a normal reason has NO log call of its own: exactly two BROKERHOLD arms remain
+    [ "$(grep -c 'Log\(Info\|Warning\)("BROKERHOLD' "$1")" = 2 ]
+}
+shape "main.c: a BROKERHOLD reason classed normal logs NOTHING and does not spend the one-shot, so a later real reason still reports" \
+      mc_hold_quiet_keeps_latch "$MAIN" 'if (!entry->PwHoldLogged && !QgaHoldReasonIsNormal(holdWhy))'
 shape "main.c: BROKERLATEREG's level comes from QgaLateRegIsStartup fed by flags snapshotted BEFORE the retry (never the inert broker-ready test)" \
       main_latereg_level "$MAIN" 'if (QgaLateRegIsStartup(refusedWhileUp, hadSlotBefore))'
 

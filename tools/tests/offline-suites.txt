@@ -1,9 +1,9 @@
 #
-#
-#
-#
-#
-#
+#                                   point of it - proving the wire format against the code that
+#                                   reads it, not against my reading of it. 28 checks, run on
+#                                   silently absent, which this file's own policy forbids.
+#                                   the dev qube. It was in NEITHER list until 2026-10-17, i.e.
+#                                   through the SHIPPED VMExec-Decode.ps1 itself, which is the
 #       "Vendored read-only upstream checkouts") and so never exists in CI. No coverage is lost:
 #       apply patches against upstream/ro/qubes-windows-utils, which is GITIGNORED (.gitignore:
 #       asserts that a pipe into `grep -q` returns 141 under pipefail. That is the behaviour of THIS
@@ -19,18 +19,13 @@
 #   one-log-per-module / pipe-client-null / pipe-connect-order / pipe-eof
 #   pipefail-grepq
 #   stock-ab
+#   vmexec-channel-selftest.sh      needs pwsh: it round-trips the service-argument encoder
 #   wrapper-exit-reason-selftest.sh   no_new_wait: 2 Sleep() calls against 1 before the fix
 # A suite is in this file because it was observed to pass, not because it looked portable.
 # AND THEN MEASURED AGAIN, IN THE ENVIRONMENT THAT ACTUALLY RUNS IT. The first version of this list
 # Everything else in tools/tests/ needs a Qubes rig, a loop device, PowerShell, mtools or a
 # HOW THIS LIST WAS BUILT - measured, not guessed. Each candidate was first excluded statically
 # NOT LISTED because a clean checkout cannot run them, with the reason:
-#   vmexec-channel-selftest.sh      needs pwsh: it round-trips the service-argument encoder
-#                                   through the SHIPPED VMExec-Decode.ps1 itself, which is the
-#                                   point of it - proving the wire format against the code that
-#                                   reads it, not against my reading of it. 28 checks, run on
-#                                   the dev qube. It was in NEITHER list until 2026-10-17, i.e.
-#                                   silently absent, which this file's own policy forbids.
 # NOT LISTED, and why - these four are RED at the release sha (0c6d54b8 / agent 5c483cd9), each
 # SELFTESTSUNRUNINCI.
 # SERIALLY, AND THAT IS NOT A STYLE CHOICE: blockclaim-selftest.sh reported "10 passed, 2 failed"
@@ -59,6 +54,7 @@ campaign-preflight-selftest.sh
 campaign-state-selftest.sh
 cell-coverage-selftest.sh
 ci-state-selftest.sh
+cold-caller-family-selftest.sh
 committed-procedure-gate-selftest.sh
 console-window-check-selftest.sh
 coverage-receipt-selftest.sh
