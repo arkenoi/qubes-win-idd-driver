@@ -587,18 +587,27 @@ static bool PublishCard(int i, ID3D11Texture2D* full, int texW, int texH, const 
     // So when ReqCardX/Y are supplied (>= 0), the offset is derived here, against the window's rect
     // at capture time. -1 means not supplied and nothing changes - which is every non-shell window.
     int cropX = s->ReqCropX, cropY = s->ReqCropY;
-    if (s->ReqCardValid && ch.hwnd && IsWindow(ch.hwnd)) {
-        RECT wr{};
-        if (GetWindowRect(ch.hwnd, &wr)) {
-            s->CropWinX = wr.left; s->CropWinY = wr.top;
-            const int lx = s->ReqCardX - wr.left, ly = s->ReqCardY - wr.top;
-            if (lx >= 0 && ly >= 0 && lx + w <= texW && ly + h <= texH) {
-                cropX = lx; cropY = ly;
-            }
-            // Out of the texture: keep the agent's inset rather than publish a wrong rectangle.
-            // The card is genuinely outside what this capture covers (the 1392-vs-1440 case), and
-            // a clamped crop would be pixels from the wrong place, which is worse than none.
+    // THE WINDOW ORIGIN IS PUBLISHED WHENEVER THERE IS ONE, not only when a card position was
+    // supplied. CropWinX/Y used to be written only inside the derivation below, so a slot whose
+    // derivation never ran left them at their zero-initialised value - and a reader cannot tell
+    // "the window really is at 0,0" from "nobody wrote this". The agent's QGACROPFALLBACK compares
+    // CropUsed against ReqCard - CropWin, so an unwritten origin made a perfectly healthy window
+    // look mis-cropped: measured 2026-10-18, the Start card painted at 100% non-black and the agent
+    // still warned "card outside the capture - cropped 0,0 not 2239,654", because its source was
+    // the card-sized window (origin 2239,654) and CropWin read 0. A warning on a healthy window is
+    // the boot noise the owner refuses, so the origin is published unconditionally and the compare
+    // becomes exact in both directions.
+    RECT wr{};
+    const bool haveRect = ch.hwnd && IsWindow(ch.hwnd) && GetWindowRect(ch.hwnd, &wr);
+    if (haveRect) { s->CropWinX = wr.left; s->CropWinY = wr.top; }
+    if (s->ReqCardValid && haveRect) {
+        const int lx = s->ReqCardX - wr.left, ly = s->ReqCardY - wr.top;
+        if (lx >= 0 && ly >= 0 && lx + w <= texW && ly + h <= texH) {
+            cropX = lx; cropY = ly;
         }
+        // Out of the texture: keep the agent's inset rather than publish a wrong rectangle.
+        // The card is genuinely outside what this capture covers (the 1392-vs-1440 case), and
+        // a clamped crop would be pixels from the wrong place, which is worse than none.
     }
     if (w <= 0 || h <= 0 || cropX < 0 || cropY < 0) return false;
     // SAY WHAT WAS USED (ABI 26). This broker has no log, so a black cropped copy could not be
