@@ -1399,7 +1399,7 @@ static void OpenChannel(int i) {
         // WHICH WRITER IS FEEDING THIS SLOT (ABI 8). Both of these are arrival-driven; only
         // WGCBRK_ROUTE_PW below is polled. "How many slots are still on PW" is the number that says
         // whether the fallback is going away, and it cannot be read if the two are collapsed.
-        s->Route = c.relay ? WGCBRK_ROUTE_RELAY : WGCBRK_ROUTE_WGC;
+        s->Route = c.relay ? WGCBRK_ROUTE_RELAY : (monitor ? WGCBRK_ROUTE_MONITOR : WGCBRK_ROUTE_WGC);
         s->AckState = WGCBRK_ACTIVE; s->FailHr = 0;
         return;
     } catch (hresult_error const& e) {
