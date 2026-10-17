@@ -37,7 +37,7 @@ import argparse, json, os, re, sys
 # gen3 stems that MUST still exist in the emitter. Each is the invariant part of one line - no
 # format specifiers, no hwnd - so it survives wording changes around it but not a real rename.
 CURRENT_STEMS = [
-    "closed (%s) %llu ms after activation returned",
+    "closed (%s) %llu ms after %s",
     "activation returned to 0x%x",
     "still open %llu ms after activation returned",
     "activation to 0x%x refused",
@@ -54,7 +54,14 @@ ATTEMPT = re.compile(r"activation returned to 0x([0-9a-fA-F]+)"
                     r"|activation to 0x([0-9a-fA-F]+) refused"
                     r"|nothing to return activation to"
                     r"|posted Escape (?:TO THAT WINDOW|to 0x([0-9a-fA-F]+))")
-CLOSED = re.compile(r"closed \((surface cloaked|foreground left)\) (\d+) ms after activation returned|closed it with Escape")
+# gen4 states WHETHER the activation was applied, because gen3 said "after activation returned"
+# even when the foreground lock had refused it - a sentence that claims this agent closed a
+# surface it did not, and Jev reading that capture concluded exactly that (0.63).
+CLOSED = re.compile(r"closed \((surface cloaked|foreground left)\) (\d+) ms after "
+                   r"(?:(activation returned - closed by this request)"
+                   r"|(a REFUSED activation - NOT closed by this request)"
+                   r"|activation returned)"
+                   r"|closed it with Escape")
 STUCK = re.compile(r"(?:still open|STILL open) (\d+) ms after (?:activation returned|Escape)")
 CLOSING = re.compile(r"(?:closing, (\d+) ms after activation returned|Start still closing (\d+) ms after Escape)")
 REFUSED = re.compile(r"activation to 0x([0-9a-fA-F]+) refused")
@@ -111,7 +118,10 @@ def grade(events):
         cur["lines"].append("%s %s %s" % (e["ts"], e["level"], msg))
         m = CLOSED.search(msg)
         if m:
-            cur["closed"] = {"why": m.group(1) or "escape", "ms": int(m.group(2)) if m.group(2) else None}
+            cur["closed"] = {"why": m.group(1) or "escape",
+                             "ms": int(m.group(2)) if m.group(2) else None,
+                             # None on gen1-gen3, which could not say
+                             "by_us": True if m.group(3) else (False if m.group(4) else None)}
         m = STUCK.search(msg)
         if m:
             cur["stuck"] = int(m.group(1))
@@ -165,8 +175,9 @@ def main():
         closure = ""
         if o["closed"]:
             ms = o["closed"]["ms"]
-            closure = " - the surface DID close (%s%s), but not by this request" % (
-                o["closed"]["why"], "" if ms is None else ", after %d ms" % ms)
+            closure = " - the surface DID close (%s%s)%s" % (
+                o["closed"]["why"], "" if ms is None else ", after %d ms" % ms,
+                "" if o["closed"].get("by_us") else ", and the emitter says NOT by this request")
         if o["notarget"]:
             fails.append("%s: nothing to return activation to - the hidden menu was left open%s" % (where, closure))
         elif o["refused"]:

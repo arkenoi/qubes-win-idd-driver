@@ -36,7 +36,11 @@ g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
 D = sys.argv[2]
 def fill(stem, **kw):
     s = stem.replace("%llu", str(kw.get("ms", 42))).replace("%x", kw.get("hwnd", "1017a"))
-    return s.replace("%s", kw.get("why", "surface cloaked"))
+    # the closure stem carries TWO %s: the reason, then whether the activation was applied
+    for v in (kw.get("why", "surface cloaked"),
+              kw.get("by", "activation returned - closed by this request")):
+        s = s.replace("%s", v, 1)
+    return s
 def line(ts, lvl, func, msg):
     return "[20261017.%s.000-6600:6604-%s] %s: QGASTARTDISMISS 0x1017a: %s" % (ts, lvl, func, msg)
 S = {k: s for k, s in zip(
@@ -52,6 +56,11 @@ open(D + "/g3-stuck.log", "w").write("\n".join([
 ]) + "\n")
 open(D + "/g3-refused.log", "w").write(
     line("130200", "E", "StartOpeningExamine", fill(S["refused"]) + " - foreground held by pid 6116; the hidden menu may take clicks") + "\n")
+open(D + "/g4-closed-not-ours.log", "w").write("\n".join([
+    line("130500", "E", "StartOpeningExamine", fill(S["refused"]) + " - foreground held by pid 6116; the hidden menu may take clicks"),
+    line("130502", "I", "StartOpeningExamine", fill(S["closed"], ms=1734, why="foreground left",
+                                                    by="a REFUSED activation - NOT closed by this request")),
+]) + "\n")
 open(D + "/g3-notarget.log", "w").write(
     line("130300", "E", "StartOpeningExamine", S["notarget"] + " - the hidden menu may take clicks") + "\n")
 # gen2: an opening with an attempt and NO terminal line - the old success shape, which is also the
@@ -79,6 +88,14 @@ for case in refused notarget; do
     if [ "$(rc "$D/g3-$case.log")" = 3 ]; then ok "gen3: $case is a FAIL - the menu was left open"
     else bad "gen3 $case graded $(printf '%s' "$r" | grep -m1 verdict)"; fi
 done
+
+# A CLOSURE AFTER A REFUSED ACTIVATION IS NOT OURS. gen3's line said "after activation returned"
+# even when the foreground lock had refused it, and Jev reading that real capture concluded the agent
+# HAD closed the surface (confirmed-agent-closed-it 0.63) - from my own sentence.
+r=$(run "$D/g4-closed-not-ours.log")
+if [ "$(rc "$D/g4-closed-not-ours.log")" = 3 ] && printf '%s' "$r" | grep -q 'NOT by this request'; then
+    ok "gen4: a closure after a refused activation is reported as not ours"
+else bad "gen4: graded $(printf '%s' "$r" | head -1)"; fi
 
 # AN ABSENT TERMINAL LINE IS NOT A PASS. This is the one that would have hidden the P1: on gen2 a
 # successful dismissal and one that never happened both ended in silence.
