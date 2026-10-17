@@ -25,6 +25,8 @@ cd "$(dirname "$0")/../.." || exit 2
 LIST=${OFFLINE_SUITES_LIST:-tools/tests/offline-suites.txt}
 SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # 36 since 2026-10-15: clock-convention-selftest.sh was DELETED with the decision block it tested.
+# 56 since 2026-10-17: notifbridge-pid-selftest.sh ADDED, after the agent reported a
+# predecessor's bridge exiting as its own bridge crashing.
 # 55 since 2026-10-17: desktop-stuck-lock-selftest.sh ADDED, after an ACTION notification told
 # the user to sign in to a guest that signed itself in 8 s later.
 # 54 since 2026-10-17: wrapper-one-line-selftest.sh ADDED, holding one truncated transfer to
@@ -35,7 +37,7 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # for abandoned a request on every boot and the guest logged a dropped request for each one.
 # The floor only ever moves in a commit, and this is that commit - a suite that loses its subject is
 # removed deliberately, not left to rot green.
-FLOOR=${OFFLINE_SUITES_FLOOR:-55}
+FLOOR=${OFFLINE_SUITES_FLOOR:-56}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"

@@ -90,6 +90,7 @@ matrix-runmarker-selftest.sh
 matrix-sweep-tally-selftest.sh
 matrix-verifyinstalled-grade-selftest.sh
 mode-wait-attribution-selftest.sh
+notifbridge-pid-selftest.sh
 offline-runner-selftest.sh
 qcon-session-selftest.sh
 qtest-push-selftest.sh
