@@ -295,7 +295,24 @@ main_dismiss_no_keystroke() {
     grep -q 'QgaHiddenStartVerdict(' "$1" &&
     awk '/^static void StartOpeningExamine/{f=1} f&&/PostMessage|SendInput|VK_ESCAPE|InjectInput/{bad=1} f&&/^}/&&f{exit bad} END{exit bad}' "$1"
 }
-shape "main.c: the hidden-Start dismissal posts no keystroke and injects no input" main_dismiss_no_keystroke "$MAIN" 'const QGA_START_VERDICT verdict = QgaHiddenStartVerdict('
+shape "main.c: the hidden-Start dismissal posts NO KEYSTROKE of its own" main_dismiss_no_keystroke "$MAIN" 'const QGA_START_VERDICT verdict = QgaHiddenStartVerdict('
+# AND THE ONLY INJECTION ON THAT PATH IS A ZERO-DISTANCE MOUSE MOVE. The dismissal reaches
+# SendInput through the shared ApplyForeground, which nudges the input queue so the foreground lock
+# allows the activation - measured, because without it the guest answered "activation to 0x30062
+# refused - foreground held by pid 6088" twice in one run. Jev nudge-is-allowed 0.91, on the
+# grounds that the ban is on a KEYSTROKE (one was measured closing Open-Shell's own menu) and a
+# cursor-less mouse move cannot dismiss anything. So this pins the event TYPE and that it carries
+# no displacement: if the nudge ever becomes a key, or gains a dx/dy, it fails here.
+util_nudge_is_a_bare_mouse_move() {
+    awk '/^BOOL ApplyForeground/{f=1}
+         f&&/nudge\.type *= *INPUT_MOUSE/{m=1}
+         f&&/nudge\.mi\.dwFlags *= *MOUSEEVENTF_MOVE/{z=1}
+         f&&/nudge\.(type *= *INPUT_KEYBOARD|ki\.)/{bad=1}
+         f&&/nudge\.mi\.(dx|dy) *= *[^0]/{bad=1}
+         f&&/^}/{exit !(m&&z) || bad}
+         END{exit !(m&&z) || bad}' "$1"
+}
+shape "util.c: the activation nudge is a MOUSE move with no displacement, never a key" util_nudge_is_a_bare_mouse_move "$ROOT/agent/gui-agent/util.c" 'nudge.mi.dwFlags = MOUSEEVENTF_MOVE;   // dx = dy = 0: the cursor does not move'
 # A STUCK hidden menu is an ERROR, not a warning: it is taking the user's clicks, which is not a
 # workable state (it was a LogWarning until 2026-10-17).
 main_dismiss_stuck_error() {

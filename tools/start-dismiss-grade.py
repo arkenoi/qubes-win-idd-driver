@@ -47,7 +47,13 @@ CURRENT_STEMS = [
 TAG = "QGASTARTDISMISS"
 # One opening begins at an ATTEMPT line. gen1 had no separate attempt line (it logged only the
 # closure), so a gen1 capture is graded on its closures alone.
-ATTEMPT = re.compile(r"activation returned to 0x([0-9a-fA-F]+)|posted Escape (?:TO THAT WINDOW|to 0x([0-9a-fA-F]+))")
+# An attempt is the agent ACTING on an opening, which includes the two arms where the action
+# did not land: a refused activation and a no-target. Reading only the success wording
+# mis-grouped the 2026-10-17 capture as ONE opening when the log holds two.
+ATTEMPT = re.compile(r"activation returned to 0x([0-9a-fA-F]+)"
+                    r"|activation to 0x([0-9a-fA-F]+) refused"
+                    r"|nothing to return activation to"
+                    r"|posted Escape (?:TO THAT WINDOW|to 0x([0-9a-fA-F]+))")
 CLOSED = re.compile(r"closed \((surface cloaked|foreground left)\) (\d+) ms after activation returned|closed it with Escape")
 STUCK = re.compile(r"(?:still open|STILL open) (\d+) ms after (?:activation returned|Escape)")
 CLOSING = re.compile(r"(?:closing, (\d+) ms after activation returned|Start still closing (\d+) ms after Escape)")
@@ -152,10 +158,19 @@ def main():
     fails, notes = [], []
     for o in openings:
         where = "%s 0x%s" % (o["ts"], o["hwnd"] or "?")
+        # A refusal and a later closure can BOTH be true of one opening, and neither may hide the
+        # other: the surface closing is what the user sees, the refusal is why the agent cannot
+        # claim it closed it. Measured 2026-10-17: "activation to 0x30062 refused" and then
+        # "closed (foreground left) 2140 ms after" on the same opening. Jev both-named 0.98.
+        closure = ""
+        if o["closed"]:
+            ms = o["closed"]["ms"]
+            closure = " - the surface DID close (%s%s), but not by this request" % (
+                o["closed"]["why"], "" if ms is None else ", after %d ms" % ms)
         if o["notarget"]:
-            fails.append("%s: nothing to return activation to - the hidden menu was left open" % where)
+            fails.append("%s: nothing to return activation to - the hidden menu was left open%s" % (where, closure))
         elif o["refused"]:
-            fails.append("%s: activation REFUSED by the foreground lock - the hidden menu was left open" % where)
+            fails.append("%s: activation REFUSED by the foreground lock%s" % (where, closure or " - the hidden menu was left open"))
         elif o["stuck"] is not None:
             fails.append("%s: STILL OPEN %d ms after the dismissal - clicks go to a menu the user cannot see"
                          % (where, o["stuck"]))
