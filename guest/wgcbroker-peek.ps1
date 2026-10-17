@@ -30,7 +30,16 @@ param([int]$Samples = 2, [int]$IntervalSec = 6, [switch]$All)
 
 $WANT_ABI = 27
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
-$STRIDE = 3480    # sizeof(WGCBRK_SLOT) at ABI 27 (ReqCardValid at 3468). 3472 at ABI 26 (CropUsedX/Y 3456/3460, CropWinX/Y 3464/3468). 3456 at ABI 25 (ReqCardX/ReqCardY appended at 3444/3448; the
+$STRIDE = 3472    # sizeof(WGCBRK_SLOT) at ABI 27, TAKEN FROM THE COMPILER, not from arithmetic by hand:
+                  # ReqCardValid is a LONG appended at 3468, which FILLS the padding ABI 26 already had, so
+                  # the size does NOT grow - it stays 3472. This line said 3480 from ABI 27 until 2026-10-18
+                  # and that is an 8-byte-per-index error: slot0 reads correctly and EVERY LATER SLOT is
+                  # garbage, which is how it was found (slot1 reporting hwnd=0x2d600000282, publishes=13586208,
+                  # bytes=1 while the agent's own log named a live hwnd for that slot). Verified offsets:
+                  # ReqCardX 3444, ReqCardY 3448, CropUsedX 3452, CropUsedY 3456, CropWinX 3460, CropWinY 3464,
+                  # ReqCardValid 3468, sizeof 3472. Re-derive with a 3-line C file that includes this header
+                  # behind a windows.h shim typedefing LONG/LONGLONG/UINT64 at Windows widths and prints
+                  # sizeof + offsetof; never by counting fields. 3456 at ABI 25 (ReqCardX/ReqCardY appended at 3444/3448; the
                   # struct's 8-byte alignment rounds 3452 up to 3456). 3448 at ABI 23 (ReqRoute, a LONG, appended at 3440; the struct's
                   # 8-byte alignment rounds 3444 up to 3448 - get this wrong and every slot after
                   # slot0 is read at the wrong base, which is what the ABI guard above exists to
@@ -86,6 +95,15 @@ for ($n = 0; $n -lt $Samples; $n++) {
     $b = $HDR + $i*$STRIDE
     $hw = RdL $b
     if ($hw -eq 0 -and -not $All) { continue }
+    # STRIDE SELF-CHECK. The ABI guard cannot catch a wrong $STRIDE - the ABI lives in the header at a
+    # fixed offset and reads correctly under any stride, while the slots after slot0 go silently wrong.
+    # ReqState/AckState are a 4-value enum (FREE/REQUESTED/ACTIVE/FAILED) and a window handle fits in
+    # 32 bits here, so an impossible triple means the layout is wrong, not that the broker is broken.
+    $rqS = RdI ($b+24); $akS = RdI ($b+56)
+    if ($hw -ne 0 -and ($hw -gt 0xFFFFFFFF -or $rqS -lt 0 -or $rqS -gt 3 -or $akS -lt 0 -or $akS -gt 3)) {
+      Write-Output ("S{0} slot{1} PEEK-MISALIGNED hwnd=0x{2:x} req={3} ack={4} - impossible for ABI {5}; `$STRIDE={6} is wrong, every slot after slot0 is garbage" -f $n,$i,$hw,$rqS,$akS,$WANT_ABI,$STRIDE)
+      continue
+    }
     Write-Output ("S{0} slot{1} hwnd=0x{2:x} req={3} ctlseq={4} ack={5} failhr=0x{6:x} req={7}x{8} frame={9}x{10} seq={11} fid={12} captick={13} crop={14},{15}" -f `
       $n,$i,$hw,(RdI ($b+24)),(RdI ($b+28)),(RdI ($b+56)),(RdI ($b+60)),(RdI ($b+8)),(RdI ($b+12)),(RdI ($b+64)),(RdI ($b+68)),(RdI ($b+80)),(RdL ($b+88)),(RdL ($b+96)),(RdI ($b+16)),(RdI ($b+20)),(RdI ($b+3468)))
     Write-Output ("S{0} slot{1} FRAMES arrived={2} published={3} dropsize={4} recreateOk={5} recreateFail={6} lastContent={7}x{8} pool={9}x{10} pw={11} polls={12}" -f `
