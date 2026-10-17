@@ -28,9 +28,9 @@
 # section's value $secAbi; tools/tests/peek-abi-assert-selftest.sh fails if they ever collide again.
 param([int]$Samples = 2, [int]$IntervalSec = 6, [switch]$All)
 
-$WANT_ABI = 25
+$WANT_ABI = 26
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
-$STRIDE = 3456    # sizeof(WGCBRK_SLOT) at ABI 25 (ReqCardX/ReqCardY appended at 3444/3448; the
+$STRIDE = 3472    # sizeof(WGCBRK_SLOT) at ABI 26 (CropUsedX/Y 3456/3460, CropWinX/Y 3464/3468). 3456 at ABI 25 (ReqCardX/ReqCardY appended at 3444/3448; the
                   # struct's 8-byte alignment rounds 3452 up to 3456). 3448 at ABI 23 (ReqRoute, a LONG, appended at 3440; the struct's
                   # 8-byte alignment rounds 3444 up to 3448 - get this wrong and every slot after
                   # slot0 is read at the wrong base, which is what the ABI guard above exists to
@@ -103,6 +103,10 @@ for ($n = 0; $n -lt $Samples; $n++) {
     $rqn = switch ($rq) { 0 { 'wgc/any' } 1 { 'RELAY' } 2 { 'PW' } default { "?$rq" } }
     Write-Output ("S{0} slot{1} ROUTE {2} ({3}) reqroute={4} ({5}) relayOk={6} relayFail={7} relayDest=0x{8:x}" -f `
       $n,$i,$rt,$rn,$rq,$rqn,(RdI ($b+272)),(RdI ($b+276)),(RdL ($b+280)))
+    # ABI 26: the crop the broker USED and the window origin it derived it from, so "the crop was
+    # wrong" and "the crop was right and the pixels were not there" stop being indistinguishable.
+    Write-Output ("S{0} slot{1} CROP used={2},{3} winorigin={4},{5} reqcard={6},{7} reqcrop={8},{9}" -f `
+      $n,$i,(RdI ($b+3456)),(RdI ($b+3460)),(RdI ($b+3464)),(RdI ($b+3468)),(RdI ($b+3444)),(RdI ($b+3448)),(RdI ($b+16)),(RdI ($b+20)))
     # ABI 9. arrivalRaw climbing while FRAMES arrived stays flat = the guard is throwing frames away,
     # which the quiet detector then reads as a dead feed. Flat arrivalRaw = the event really stopped.
     Write-Output ("S{0} slot{1} ARRIVALS raw={2} rejected={3}" -f `

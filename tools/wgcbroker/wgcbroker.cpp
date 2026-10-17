@@ -590,6 +590,7 @@ static bool PublishCard(int i, ID3D11Texture2D* full, int texW, int texH, const 
     if (s->ReqCardX >= 0 && s->ReqCardY >= 0 && ch.hwnd && IsWindow(ch.hwnd)) {
         RECT wr{};
         if (GetWindowRect(ch.hwnd, &wr)) {
+            s->CropWinX = wr.left; s->CropWinY = wr.top;
             const int lx = s->ReqCardX - wr.left, ly = s->ReqCardY - wr.top;
             if (lx >= 0 && ly >= 0 && lx + w <= texW && ly + h <= texH) {
                 cropX = lx; cropY = ly;
@@ -600,6 +601,10 @@ static bool PublishCard(int i, ID3D11Texture2D* full, int texW, int texH, const 
         }
     }
     if (w <= 0 || h <= 0 || cropX < 0 || cropY < 0) return false;
+    // SAY WHAT WAS USED (ABI 26). This broker has no log, so a black cropped copy could not be
+    // told apart from a wrong crop. Published before the bounds test so even a refused publish
+    // leaves its reasoning visible.
+    s->CropUsedX = cropX; s->CropUsedY = cropY;
     if (cropX + w > texW || cropY + h > texH) return false;   // capture does not cover the card yet
     if ((LONGLONG)w * h * 4 > s->BufBytes) return false;      // agent sized for ReqW*ReqH*4; skip oversize
 
