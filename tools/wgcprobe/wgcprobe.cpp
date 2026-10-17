@@ -186,6 +186,17 @@ int main(int argc, char** argv){
   // ---- target: argv[1]=="mon" -> primary monitor (CreateForMonitor); else hex HWND ->
   //      Notepad -> own gradient window (CreateForWindow) ----
   bool monMode = (argc>=2 && _stricmp(argv[1],"mon")==0);
+  // ---- "mon <x> <y> <w> <h>": sample ONLY that sub-rect of the monitor capture.
+  // A whole-monitor capture is non-blank whenever the desktop has anything on it, so the bare
+  // mon answer cannot say whether a PARTICULAR surface is present in it. The question this exists
+  // for (2026-10-17): the Start and Search CoreWindows come back black from a WGC session on the
+  // window itself, from a WGC session on a DWM thumbnail of it, and from
+  // PrintWindow(PW_RENDERFULLCONTENT) - all three measured on the same visible, uncloaked surface.
+  // The architecture pinned 2026-09-02 says these surfaces come from ONE monitor capture, sliced.
+  // This measures that claim on THIS build before any more routing code is written.
+  int rx=0, ry=0, rw=0, rh=0; bool rectMode=false;
+  if(monMode && argc>=6){ rx=atoi(argv[2]); ry=atoi(argv[3]); rw=atoi(argv[4]); rh=atoi(argv[5]);
+                          rectMode = (rw>0 && rh>0); }
   HWND hwnd=nullptr; const char* how = monMode?"monitor":"argv"; bool ownWin=false;
   if(!monMode){
     if(argc>=2){ unsigned long long v=_strtoui64(argv[1],nullptr,16); if(v) hwnd=(HWND)(uintptr_t)v; }
@@ -220,6 +231,8 @@ int main(int argc, char** argv){
   catch(hresult_error const& e){ CloseHandle(evt); emitDead("start",(unsigned)e.code().value); return 1; }
   catch(...){ CloseHandle(evt); emitDead("start",0xFFFFFFFF); return 1; }
   bool frameArrived=false, nonBlank=false; int framesSeen=0, distinct=0, cw=0, ch=0;
+  bool rectInside=false, rectClamped=false; int rectMax=0, rectDistinctN=0;
+  unsigned long long rectTotal=0, rectNonZero=0;
   DWORD deadline=GetTickCount()+8000;
   while((LONG)(GetTickCount()-deadline)<0){
     if(ownWin){ InvalidateRect(hwnd,nullptr,FALSE); }
@@ -243,8 +256,31 @@ int main(int argc, char** argv){
       for(int y=0;y<H;y+=sy){ const BYTE* row=(const BYTE*)mp.pData+(size_t)y*mp.RowPitch;
         for(int x=0;x<W;x+=sx){ DWORD px=((const DWORD*)row)[x]&0x00FFFFFF; if(px) nonZero++;
           bool k=false; for(int i=0;i<seenN;i++) if(seen[i]==px){k=true;break;} if(!k&&seenN<16) seen[seenN++]=px; } }
+      // THE SUB-RECT, sampled from the SAME mapped frame so the two answers describe one capture.
+      // Clamped to the texture, and a rect that falls entirely outside is reported as such rather
+      // than as "black" - an off-screen rect and an empty one are different findings.
+      if(rectMode){
+        int x0=rx<0?0:rx, y0=ry<0?0:ry, x1=rx+rw, y1=ry+rh;
+        if(x1>W) x1=W; if(y1>H) y1=H;
+        rectClamped = (x0!=rx)||(y0!=ry)||(x1!=rx+rw)||(y1!=ry+rh);
+        rectInside = (x1>x0)&&(y1>y0);
+        rectTotal=0; rectNonZero=0; rectMax=0; rectDistinctN=0;
+        DWORD rseen[16];
+        if(rectInside){
+          int rsx=(x1-x0)>64?(x1-x0)/64:1, rsy=(y1-y0)>64?(y1-y0)/64:1;
+          for(int y=y0;y<y1;y+=rsy){ const BYTE* row=(const BYTE*)mp.pData+(size_t)y*mp.RowPitch;
+            for(int x=x0;x<x1;x+=rsx){ DWORD px=((const DWORD*)row)[x]&0x00FFFFFF; rectTotal++;
+              if(px) rectNonZero++;
+              DWORD mx=(px&0xFF); DWORD g=(px>>8)&0xFF; DWORD r2=(px>>16)&0xFF;
+              if(g>mx) mx=g; if(r2>mx) mx=r2; if((int)mx>rectMax) rectMax=(int)mx;
+              bool k=false; for(int i=0;i<rectDistinctN;i++) if(rseen[i]==px){k=true;break;}
+              if(!k&&rectDistinctN<16) rseen[rectDistinctN++]=px; } }
+        }
+      }
       d.ctx->Unmap(staging.get(),0);
       distinct=seenN; nonBlank=(distinct>=2)&&(nonZero>0);
+      // In rect mode the VERDICT is the rect's, not the monitor's: the monitor is always non-blank.
+      if(rectMode) nonBlank = rectInside && (rectNonZero>0) && (rectDistinctN>=2);
     }catch(...){ /* keep polling; a bad frame is not fatal */ }
     if(nonBlank) break;
   }
@@ -256,6 +292,9 @@ int main(int argc, char** argv){
   bool brokerViable = supported && frameArrived && nonBlank;
   printf("frameArrived=%d framesSeen=%d nonBlank=%d content=%dx%d distinctColors=%d target=%s borderSet=%d\n",
       frameArrived,framesSeen,nonBlank,cw,ch,distinct,how,borderSet);
+  if(rectMode)
+    printf("rect=%d,%d %dx%d inside=%d clamped=%d nonblack=%llu/%llu maxchannel=%d distinct=%d\n",
+        rx,ry,rw,rh,rectInside,rectClamped,rectNonZero,rectTotal,rectMax,rectDistinctN);
   printf("=== WGCPROBE JSON ===\n"
     "{\"brokerViable\":%s,\"isSupported\":true,\"hresult\":\"0x00000000\",\"itemCreated\":%s,"
     "\"frameArrived\":%s,\"nonBlank\":%s,\"framesSeen\":%d,\"contentW\":%d,\"contentH\":%d,"

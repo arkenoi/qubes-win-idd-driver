@@ -26,11 +26,14 @@
 # yielding hwnd=0x2, hwnd=0xa, req=17410688x0 - and a census built on it graded "1 slot" and reported
 # staleness NO DATA, which reads exactly like a product failure. The constant is now $WANT_ABI and the
 # section's value $secAbi; tools/tests/peek-abi-assert-selftest.sh fails if they ever collide again.
-param([int]$Samples = 2, [int]$IntervalSec = 6)
+param([int]$Samples = 2, [int]$IntervalSec = 6, [switch]$All)
 
-$WANT_ABI = 22
+$WANT_ABI = 23
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
-$STRIDE = 3440    # sizeof(WGCBRK_SLOT) at ABI 22 (DirtyPublishes 3424, DirtyFullCopies 3428, DirtyBytes 3432 appended); 3424 at ABI 19 (unchanged from 18: CtlAck took _padTick2 at 188, DeafHolds _padAbi6 at 228; header AgentFrameWakes 80, AgentStalls 84, AgentStallTick 88 from _pad2) - ABI 18 (HungSkips 84 (was padding); PubTiles[3072] at 316; lifecycle+GenFrames 3388..3404; ItemClosed 3408, Republished 3412 (was padding), ItemClosedTick 3416); header BrokerStage at 20 (was padding)
+$STRIDE = 3448    # sizeof(WGCBRK_SLOT) at ABI 23 (ReqRoute, a LONG, appended at 3440; the struct's
+                  # 8-byte alignment rounds 3444 up to 3448 - get this wrong and every slot after
+                  # slot0 is read at the wrong base, which is what the ABI guard above exists to
+                  # stop). 3440 at ABI 22 (DirtyPublishes 3424, DirtyFullCopies 3428, DirtyBytes 3432 appended); 3424 at ABI 19 (unchanged from 18: CtlAck took _padTick2 at 188, DeafHolds _padAbi6 at 228; header AgentFrameWakes 80, AgentStalls 84, AgentStallTick 88 from _pad2) - ABI 18 (HungSkips 84 (was padding); PubTiles[3072] at 316; lifecycle+GenFrames 3388..3404; ItemClosed 3408, Republished 3412 (was padding), ItemClosedTick 3416); header BrokerStage at 20 (was padding)
 $SLOTS  = 32
 
 $proc = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*QubesWgcBrk*' } | Select-Object -First 1
@@ -81,7 +84,7 @@ for ($n = 0; $n -lt $Samples; $n++) {
   for ($i = 0; $i -lt $SLOTS; $i++) {
     $b = $HDR + $i*$STRIDE
     $hw = RdL $b
-    if ($hw -eq 0) { continue }
+    if ($hw -eq 0 -and -not $All) { continue }
     Write-Output ("S{0} slot{1} hwnd=0x{2:x} req={3} ctlseq={4} ack={5} failhr=0x{6:x} req={7}x{8} frame={9}x{10} seq={11} fid={12} captick={13} crop={14},{15}" -f `
       $n,$i,$hw,(RdI ($b+24)),(RdI ($b+28)),(RdI ($b+56)),(RdI ($b+60)),(RdI ($b+8)),(RdI ($b+12)),(RdI ($b+64)),(RdI ($b+68)),(RdI ($b+80)),(RdL ($b+88)),(RdL ($b+96)),(RdI ($b+16)),(RdI ($b+20)))
     Write-Output ("S{0} slot{1} FRAMES arrived={2} published={3} dropsize={4} recreateOk={5} recreateFail={6} lastContent={7}x{8} pool={9}x{10} pw={11} polls={12}" -f `
