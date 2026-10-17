@@ -29,6 +29,9 @@
 #                          the window registered and holding a slot, no usable frame on ONE pass (a resize,
 #                          measured as six pairs ~1 s apart whose rect differed by one pixel). A window that
 #                          is held and never fed is still an ERROR, from QGADIRECTSUPPRESS's own clock
+#       SLOWALWAYSLOUD     the capture loop warns from the FIRST second of a slow pass, so a guest merely
+#                          busy installing produces a warning every second - measured as 13 lines over ~9
+#                          passes of 1-3 s against a 15 s wedge that never fired once
 #       SHELLBYNAME        the shell fact matches the literal explorer.exe, so a KIOSK guest whose Winlogon\Shell
 #                          is one app reads ABSENT although it has a desktop - and the lock verdict then says
 #                          "no session" about a running one
@@ -84,7 +87,7 @@ if build clean ""; then
 else say "FAIL  clean build: $(head -3 "$OUT/clean.build.err")"; bad=1; fi
 
 # ---- every defect knob must make the suite FAIL --------------------------------------------------------
-for d in TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT DISARMHIDESCRASH ZERODUE SHELLBYNAME HOLDALWAYSLOUD FAULTFROMREG LATEREGALWAYSLOUD HOLDFEEDALWAYSLOUD; do
+for d in TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT DISARMHIDESCRASH ZERODUE SHELLBYNAME HOLDALWAYSLOUD FAULTFROMREG LATEREGALWAYSLOUD HOLDFEEDALWAYSLOUD SLOWALWAYSLOUD; do
     if build "defect-$d" "-DQGA_LIFECYCLE_DEFECT_$d"; then
         "$OUT/defect-$d" >"$OUT/defect-$d.out" 2>&1; rc=$?
         f=$(grep -c '^FAIL' "$OUT/defect-$d.out")
