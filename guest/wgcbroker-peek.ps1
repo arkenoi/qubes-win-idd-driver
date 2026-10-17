@@ -28,9 +28,10 @@
 # section's value $secAbi; tools/tests/peek-abi-assert-selftest.sh fails if they ever collide again.
 param([int]$Samples = 2, [int]$IntervalSec = 6, [switch]$All)
 
-$WANT_ABI = 24
+$WANT_ABI = 25
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
-$STRIDE = 3448    # sizeof(WGCBRK_SLOT) at ABI 23 (ReqRoute, a LONG, appended at 3440; the struct's
+$STRIDE = 3456    # sizeof(WGCBRK_SLOT) at ABI 25 (ReqCardX/ReqCardY appended at 3444/3448; the
+                  # struct's 8-byte alignment rounds 3452 up to 3456). 3448 at ABI 23 (ReqRoute, a LONG, appended at 3440; the struct's
                   # 8-byte alignment rounds 3444 up to 3448 - get this wrong and every slot after
                   # slot0 is read at the wrong base, which is what the ABI guard above exists to
                   # stop). 3440 at ABI 22 (DirtyPublishes 3424, DirtyFullCopies 3428, DirtyBytes 3432 appended); 3424 at ABI 19 (unchanged from 18: CtlAck took _padTick2 at 188, DeafHolds _padAbi6 at 228; header AgentFrameWakes 80, AgentStalls 84, AgentStallTick 88 from _pad2) - ABI 18 (HungSkips 84 (was padding); PubTiles[3072] at 316; lifecycle+GenFrames 3388..3404; ItemClosed 3408, Republished 3412 (was padding), ItemClosedTick 3416); header BrokerStage at 20 (was padding)

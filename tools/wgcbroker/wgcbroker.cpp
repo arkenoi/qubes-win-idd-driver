@@ -573,7 +573,32 @@ static bool PublishCard(int i, ID3D11Texture2D* full, int texW, int texH, const 
     // guests (owner 2026-09-06, "no fallback ... fail hard") it would freeze the window for
     // ever, so the crop is implemented here rather than worked around there.
     const int w = s->ReqWidth, h = s->ReqHeight;
-    const int cropX = s->ReqCropX, cropY = s->ReqCropY;
+    // THE CROP FROM LIVE GEOMETRY WHEN THE AGENT SUPPLIES THE CARD'S SCREEN POSITION (ABI 25).
+    //
+    // ReqCropX/Y are an offset INSIDE the window, measured by the agent's card walk at one moment
+    // and applied here to whatever the window is NOW. For a shell surface those disagree: the walk
+    // reported "toast card in 666x750 window, insets l=12 t=12" while the same handle measured
+    // 5120x1392 seconds later - the shell's CoreWindow is full-screen while it composes and
+    // card-sized once the menu is placed. Cropping at (12,12) in the full-screen state lifts the
+    // empty top-left corner of the screen, which is the QGASLICEBLACK nonblack=0/7371 that has made
+    // the Start menu unpaintable. A crop whose frame of reference depends on WHEN it was measured
+    // is a race, and the owner's standing rule is that races are not tolerated.
+    //
+    // So when ReqCardX/Y are supplied (>= 0), the offset is derived here, against the window's rect
+    // at capture time. -1 means not supplied and nothing changes - which is every non-shell window.
+    int cropX = s->ReqCropX, cropY = s->ReqCropY;
+    if (s->ReqCardX >= 0 && s->ReqCardY >= 0 && ch.hwnd && IsWindow(ch.hwnd)) {
+        RECT wr{};
+        if (GetWindowRect(ch.hwnd, &wr)) {
+            const int lx = s->ReqCardX - wr.left, ly = s->ReqCardY - wr.top;
+            if (lx >= 0 && ly >= 0 && lx + w <= texW && ly + h <= texH) {
+                cropX = lx; cropY = ly;
+            }
+            // Out of the texture: keep the agent's inset rather than publish a wrong rectangle.
+            // The card is genuinely outside what this capture covers (the 1392-vs-1440 case), and
+            // a clamped crop would be pixels from the wrong place, which is worse than none.
+        }
+    }
     if (w <= 0 || h <= 0 || cropX < 0 || cropY < 0) return false;
     if (cropX + w > texW || cropY + h > texH) return false;   // capture does not cover the card yet
     if ((LONGLONG)w * h * 4 > s->BufBytes) return false;      // agent sized for ReqW*ReqH*4; skip oversize
