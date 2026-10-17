@@ -97,9 +97,9 @@ for ($n = 0; $n -lt $Samples; $n++) {
     # 2=polled PrintWindow. Routes 0 and 1 are arrival-driven; 2 is the fallback the relay exists to
     # retire, so "how many slots are still on route 2" is the number that measures progress.
     $rt = RdI ($b+268)
-    $rn = switch ($rt) { 0 { 'WGC' } 1 { 'RELAY' } 2 { 'PW' } 3 { 'MONITOR' } default { "?$rt" } }
+    $rn = switch ($rt) { 0 { 'WGC' } 1 { 'RELAY' } 2 { 'PW' } default { "?$rt" } }
     $rq = RdI ($b+3440)
-    $rqn = switch ($rq) { 0 { 'wgc/any' } 1 { 'RELAY' } 2 { 'PW' } 3 { 'MONITOR' } default { "?$rq" } }
+    $rqn = switch ($rq) { 0 { 'wgc/any' } 1 { 'RELAY' } 2 { 'PW' } default { "?$rq" } }
     Write-Output ("S{0} slot{1} ROUTE {2} ({3}) reqroute={4} ({5}) relayOk={6} relayFail={7} relayDest=0x{8:x}" -f `
       $n,$i,$rt,$rn,$rq,$rqn,(RdI ($b+272)),(RdI ($b+276)),(RdL ($b+280)))
     # ABI 9. arrivalRaw climbing while FRAMES arrived stays flat = the guard is throwing frames away,

@@ -1169,17 +1169,9 @@ static void OpenChannel(int i) {
     // the earlier open was being consumed. So the block is claimed only once this open has a real
     // capture item, and a failed open now leaves the working one's record intact.
     const LONGLONG openT = QpcNow();
-    const bool monSentinel = (s->Hwnd == WGCBRK_MONITOR_HWND);
-    // ABI 23: a REAL window can ask to be sourced from the monitor capture (ReqRoute=MONITOR). The
-    // capture ITEM is then the monitor, but everything else about the channel stays the window's -
-    // above all c.hwnd below, which Reconcile compares against the slot's Hwnd (`want`); giving it
-    // the sentinel would make every pass see a mismatch and tear the channel down and rebuild it.
-    // The crop the publish path already applies is what turns a monitor frame into this window's
-    // card, so the agent sees an ordinary per-window frame and no desktop pixels ever leave here.
-    const bool wantMonitor = !monSentinel && (s->ReqRoute == (LONG)WGCBRK_ROUTE_MONITOR);
-    bool monitor = monSentinel || wantMonitor;
-    HWND hwnd = monSentinel ? nullptr : (HWND)(ULONG_PTR)s->Hwnd;
-    if (!monSentinel && (!hwnd || !IsWindow(hwnd))) { s->AckState = WGCBRK_FAILED; s->FailHr = E_HANDLE; return; }
+    bool monitor = (s->Hwnd == WGCBRK_MONITOR_HWND);
+    HWND hwnd = monitor ? nullptr : (HWND)(ULONG_PTR)s->Hwnd;
+    if (!monitor && (!hwnd || !IsWindow(hwnd))) { s->AckState = WGCBRK_FAILED; s->FailHr = E_HANDLE; return; }
     // A UWP-STYLE FRAME IS CAPTURED ON THE WINDOW ITSELF, like any other window (2026-09-30). Until now a window whose
     // content comes from a child in ANOTHER process (ApplicationFrameWindow + its CoreWindow) was routed up front to the
     // relay and, when that failed, to polled PrintWindow, on the 2026-09-25 reading that a WGC session on such a frame
@@ -1215,7 +1207,7 @@ static void OpenChannel(int i) {
     // anyway and now says so in ReqRoute. This is the "route for a window OPENED on it" that
     // ADR-capture 32 kept when it removed the relay as a LADDER RUNG; the ladder is untouched here.
     const bool wantRelay = (s->ReqRoute == (LONG)WGCBRK_ROUTE_RELAY);
-    if ((fallback || wantRelay) && g_RelayOn && !relayVetoed && !monitor && hwnd) {
+    if (fallback && g_RelayOn && !relayVetoed && !monitor && hwnd) {
         int rw = 0, rh = 0; HTHUMBNAIL th = nullptr;
         HWND dest;
         { StageScope st(WGCBRK_STG_RELAY_DWM, i); dest = RelayOpenDest(hwnd, &th, &rw, &rh); }
@@ -1236,8 +1228,8 @@ static void OpenChannel(int i) {
     // frames that arrive and are empty, which nothing downstream can distinguish from a dark app.
     // The deaf hold is the honest answer and the agent reports it (owner: "no fallback on a system
     // that supports the direct path. just no. fail hard and investigate.").
-    if ((fallback || wantRelay) && !c.relay) { DeclareDeaf(i); return; }
-    if (!(fallback || wantRelay) || c.relay) try {
+    if (fallback && !c.relay) { DeclareDeaf(i); return; }
+    if (!fallback || c.relay) try {
         auto interop = get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
         GraphicsCaptureItem item{ nullptr };
         if (monitor)
@@ -1279,7 +1271,7 @@ static void OpenChannel(int i) {
                 try { session.MinUpdateInterval(winrt::Windows::Foundation::TimeSpan{ std::chrono::milliseconds(g_minUpdateMs) }); } catch (...) {}
             }
         }
-        c.hwnd = monSentinel ? (HWND)(ULONG_PTR)WGCBRK_MONITOR_HWND : hwnd;   // NOT `monitor`: see wantMonitor
+        c.hwnd = monitor ? (HWND)(ULONG_PTR)WGCBRK_MONITOR_HWND : hwnd;
         c.item = item; c.pool = pool; c.session = session; c.slot = i;
         // OBSERVATION ONLY. WGC can CLOSE a capture item, after which FrameArrived never fires again for
         // that session - and until now nothing here subscribed, so that state looked exactly like a
@@ -1399,7 +1391,7 @@ static void OpenChannel(int i) {
         // WHICH WRITER IS FEEDING THIS SLOT (ABI 8). Both of these are arrival-driven; only
         // WGCBRK_ROUTE_PW below is polled. "How many slots are still on PW" is the number that says
         // whether the fallback is going away, and it cannot be read if the two are collapsed.
-        s->Route = c.relay ? WGCBRK_ROUTE_RELAY : (monitor ? WGCBRK_ROUTE_MONITOR : WGCBRK_ROUTE_WGC);
+        s->Route = c.relay ? WGCBRK_ROUTE_RELAY : WGCBRK_ROUTE_WGC;
         s->AckState = WGCBRK_ACTIVE; s->FailHr = 0;
         return;
     } catch (hresult_error const& e) {
