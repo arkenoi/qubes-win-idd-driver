@@ -127,15 +127,18 @@ function Sample-Window([IntPtr]$h, [int]$w, [int]$ht) {
 # SCOPED TO THE SHELL HOSTS, the way probe-start-windows.ps1 scopes: a bare "every visible
 # CoreWindow" sweep pulls in unrelated UWP windows (and the 5120x1392 one that caused the timeout).
 function Find-ShellSurfaces {
-    $pids = @{}
+    # SCRIPT SCOPE, NOT FUNCTION LOCALS: the callback below runs as a delegate and cannot see a
+    # function's locals. As locals these were $null inside it and every callback silently added
+    # nothing, so this returned 0 on every run and only the foreground fallback measured anything.
+    $script:pids = @{}
     foreach ($n in 'StartMenuExperienceHost', 'ShellExperienceHost', 'SearchHost') {
-        foreach ($p in (Get-Process $n -ErrorAction SilentlyContinue)) { $pids[[uint32]$p.Id] = $n }
+        foreach ($p in (Get-Process $n -ErrorAction SilentlyContinue)) { $script:pids[[uint32]$p.Id] = $n }
     }
-    $acc = New-Object System.Collections.Generic.List[object]
+    $script:acc = New-Object System.Collections.Generic.List[object]
     $cb = [PX.W+EnumProc] {
         param($h, $l)
         $pid2 = [uint32]0; [void][PX.W]::GetWindowThreadProcessId($h, [ref]$pid2)
-        if ($pids.ContainsKey($pid2) -and [PX.W]::IsWindowVisible($h)) {
+        if ($script:pids.ContainsKey($pid2) -and [PX.W]::IsWindowVisible($h)) {
             $sb = New-Object System.Text.StringBuilder 256
             [void][PX.W]::GetClassNameW($h, $sb, 256)
             $r = New-Object PX.W+RECT
@@ -150,14 +153,14 @@ function Find-ShellSurfaces {
             # subject, and the probe then said "no surfaces" in the same run where the FOREGROUND
             # window was one of them.
             if ($w -gt 16 -and $ht -gt 16 -and $w -le 16384 -and $ht -le 16384) {
-                $acc.Add([pscustomobject]@{ h = $h; cls = $sb.ToString(); proc = $pids[$pid2];
+                $script:acc.Add([pscustomobject]@{ h = $h; cls = $sb.ToString(); proc = $script:pids[$pid2];
                                             cloak = $cloak; x = $r.left; y = $r.top; w = $w; ht = $ht })
             }
         }
         return $true
     }
     [void][PX.W]::EnumWindows($cb, [IntPtr]::Zero)
-    return $acc
+    return $script:acc
 }
 
 Say ("startpixel session=" + [System.Diagnostics.Process]::GetCurrentProcess().SessionId + " user=" + (whoami) + " opener=" + $Opener)
