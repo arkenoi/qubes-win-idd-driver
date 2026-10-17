@@ -461,5 +461,24 @@ printf '#!/bin/bash\nw_alive(){ timeout -k 5 40 ./tools/qtest run %s | grep -qa 
 printf '#!/bin/bash\nset -uo pipefail\nsource mgmt/harness/wait-lib.sh\nw_alive x\n' > "$D/mgmt/harness/user.sh"
 expect_fires L23-pipe-into-grep-q-probe "$D" "a sourced library's probe, with pipefail coming from the caller"
 
+# ---------------------------------------------------------------- L27 a detached guest launch via `start`
+# `start` passes every inheritable handle whatever the redirection, so the launched process inherits
+# the qrexec data vchan's pipes and holds them for its whole life; the wrapper's output pumps never
+# see EOF. MEASURED 2026-09-27 (d3fe180): `cmd /c start ... <nul >nul` did NOT prevent it. MEASURED
+# AGAIN 2026-10-17 on campaign run 38994277148, because the finding lived in one harness and was
+# never applied in the others - two matrix.sh launches left wrappers reporting at ERROR that output
+# "may not have reached the peer", the only two undeclared error lines that cell carried.
+D="$TMP/l27"; mk "$D"
+printf '#!/bin/bash\nqrun(){ :; }\narm(){ qrun "cmd /c start \\"w\\" /min powershell -File C:\\\\w.ps1"; }\n' > "$D/mgmt/harness/detach.sh"
+expect_fires L27-detached-guest-launch-uses-start "$D" "a detached guest launch via cmd /c start"
+# A REDIRECTION IS NOT THE FIX and must not silence it - that is the measurement d3fe180 recorded.
+D="$TMP/l27red"; mk "$D"
+printf '#!/bin/bash\nqrun(){ :; }\narm(){ qrun "cmd /c start \\"w\\" /min powershell -File C:\\\\w.ps1 >nul 2>&1"; }\n' > "$D/mgmt/harness/detachred.sh"
+expect_fires L27-detached-guest-launch-uses-start "$D" "the same launch WITH a redirection - start passes the handles anyway"
+# Start-Process goes through ShellExecute and inherits nothing: silent.
+D="$TMP/l27ok"; mk "$D"
+printf '#!/bin/bash\nqrun(){ :; }\narm(){ qrun "powershell -NoProfile -Command \\"Start-Process -FilePath %s -ArgumentList %s\\""; }\n' "'powershell.exe'" "'-File','C:\\w.ps1'" > "$D/mgmt/harness/detachok.sh"
+expect_silent L27-detached-guest-launch-uses-start "$D" "Start-Process, which inherits no handles"
+
 echo "  ---- $pass passed, $fail failed"
 exit $(( fail > 0 ? 1 : 0 ))

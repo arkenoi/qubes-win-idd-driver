@@ -179,7 +179,9 @@ EOF
   clearlog
   # /autologon:qubes exercises the real arming path; without it the installer correctly refuses
   # to guess a password and reports not-armed.
-  qrun 'cmd /c start "" /min C:\q4314\install.cmd /auto /autologon:qubes' >/dev/null 2>&1
+  # Start-Process, not `start`: a detached installer that inherits this call's pipes keeps the
+  # wrapper's output pumps alive for the whole install (lint L27, measured d3fe180).
+  qrun 'powershell -NoProfile -Command "Start-Process -WindowStyle Minimized -FilePath '"'"'C:\q4314\install.cmd'"'"' -ArgumentList '"'"'/auto'"'"','"'"'/autologon:qubes'"'"'"' >/dev/null 2>&1
   # STREAM STAGE 1 OUT WHILE THE GUEST IS STILL ALIVE. Every WIN10 attempt so far produced a
   # ZERO-BYTE install log: stage 1 reboots, the guest does not come back, and the log - which
   # lives on the guest's C: - becomes unreadable, so the run that most needs telemetry is the one

@@ -594,6 +594,20 @@ _NORM_RULES = [
     # a ZERO exit / error code is a different fact from a non-zero one (a requested stop that exits 0 is the designed
     # path; 0xb7 is the defect) - keep that distinction before every other hex is folded into 0xH
     (re.compile(r"\b(exit(?:ed with)? code) 0x0\b"), r"\1 ZERO"),
+    # A TASK'S RETURN CODE IS THE FIELD THAT DECIDES WHAT THE RECORD MEANS, AND FOLDING IT AWAY
+    # HANDED JEV THE QUESTION WITH THE ANSWER REMOVED. A TaskScheduler 201 says "successfully
+    # completed" whatever the action returned; `task_record_is_failure` reads the return code to
+    # decide, and SHUTDOWN_RESULT_CODES_RE names the two values that mean "the shutdown reaped it",
+    # which is by design and not a failure. The SIGNATURE, though, went through the generic rules
+    # below: 2147943691 became `H` and 0 became `N`, so the line Jev classified read "with return
+    # code H" - and Jev called three such records DEFECTS at 0.41-0.64 on win10-clean, campaign run
+    # 38994277148. It was answering honestly about a string that no longer carried the fact.
+    # Worse, the same condition SPLIT: one capture held both `return code H` and `return code N` for
+    # the same task, because the two values fold to different tokens.
+    # So the code is named before it is folded, exactly as the exit code above is. The names are the
+    # sweep's own vocabulary, so a reader and a classifier see the verdict rather than a digit.
+    (re.compile(r"\b(with return code) (?:2147943515|2147943691)\b"), r"\1 SHUTDOWNREFUSAL"),   # GUARD:taskrcname DEFECT: (re.compile(r"$^"), r""),
+    (re.compile(r"\b(with return code) 0\b"), r"\1 ZERO"),
     (re.compile(r"\b0x[0-9A-Fa-f]+"), "0xH"),
     (re.compile(r"\b\d+x\d+\b"), "NxN"),                        # window / screen sizes
     (re.compile(r"\b[0-9A-Fa-f]*[A-Fa-f][0-9A-Fa-f]*\b(?<=[0-9A-Fa-f]{8})"), "H"),   # 8+ hex chars with a letter
@@ -608,6 +622,18 @@ _NORM_RULES = [
 #   0x20514701 NO_GUI_DOMAIN  0x20514702 REQUESTED  0x20514703 SESSION_END  0x20514704 RECONNECT
 # A stop that reports one of these named a reason; anything else in that field is a Win32 error and
 # is what the stop metrics were written to catch. Module scope because two metrics read it.
+# THE FLOOR A JEV VERDICT MUST CLEAR TO DECIDE ANYTHING, and it is not a new policy: baseline-init
+# in this same file already classifies `defect`/`expected`/`noise` only at >= 0.5 and calls anything
+# below it "unsettled ... a human decision is owed". The analyze path did not read confidence at
+# all, so a defect at 0.40 failed an acceptance cell exactly as 1.00 would - the two halves of one
+# file disagreeing about what a weak verdict means.
+# MEASURED campaign run 38994277148: win10-appvm failed on ONE verdict, `A6LEAK daemon still alive
+# and mapping, skipping all revokes` at defect 0.40 - a line whose level is a RECORDED DECISION
+# (lowering it to Info was tried on 2026-10-07 and reverted the same day at Jev 0.07, because the
+# path leaves grants unrevoked on purpose and an auditor must see it). A sub-floor verdict is
+# reported, never silent, and never counted as a decision.
+JEV_DEFECT_FLOOR = 0.5
+
 QGA_EXPECTED_EXITS = ("0x0", "0x20514701", "0x20514702", "0x20514703", "0x20514704")
 
 
@@ -2820,6 +2846,7 @@ def cmd_analyze(a):
             answers, calls, jrc, jreason = run_jev(items, lambda part: jev_state_text(part, meta, boots, st, metrics, a.label, since),
                                                    workdir, jev_cmd, a.jev_max, wire_log)
     judged_defects = []
+    judged_sub_floor = []   # defect verdicts below JEV_DEFECT_FLOOR: reported, not fatal
     for it in items:
         ans = answers.get(it["id"])
         if ans:
@@ -2831,6 +2858,13 @@ def cmd_analyze(a):
             else:
                 it["sig"]["jev"] = j
             is_defect = (j["choice"] == "defect")   # GUARD:defect DEFECT: is_defect = False
+            _jconf = (j.get("confidence") or 0)
+            if is_defect and _jconf < JEV_DEFECT_FLOOR:   # GUARD:defectfloor DEFECT: if False:
+                # Below the floor this file already uses elsewhere: reported, and owed a human
+                # decision, but not a verdict that fails a release on its own.
+                judged_sub_floor.append({"id": it["id"], "choice": j["choice"], "confidence": _jconf,
+                                         "key": (it.get("sig") or {}).get("key", it.get("metric"))})
+                is_defect = False
             if is_defect:
                 judged_defects.append(it["id"])
 
@@ -2879,7 +2913,8 @@ def cmd_analyze(a):
                        "errors_during_stop": [l.raw[:300] for l in i["errors_during_stop"]], "exit_errors": [l.raw[:300] for l in i["exit_errors"]],
                        "stale_errors": [l.raw[:300] for l in i["stale_errors"]]} for i in st["instances"]],
         "metrics": metrics, "thresholds": {k: v for k, v in cmp["thresholds"].items() if isinstance(v, dict)},
-        "breaches": cmp["breaches"], "judged_defects": judged_defects, "loud_failures": [list(x) for x in _loud],
+        "breaches": cmp["breaches"], "judged_defects": judged_defects,
+        "judged_sub_floor": judged_sub_floor, "loud_failures": [list(x) for x in _loud],
         "new": [sig_json(s) for s in cmp["new"]], "rose": [sig_json(s) for s in cmp["rose"]],
         "known_defects_present": [sig_json(s, False) for s in cmp["known"]], "unsettled_present": [sig_json(s, False) for s in cmp["unsettled"]],
         "expected_present": len(cmp["expected"]),

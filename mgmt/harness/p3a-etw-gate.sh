@@ -1129,7 +1129,10 @@ fi
 log "T6: latency - same burst as T5, tier up; CLASSIFY row_latency etw-sig-vs-db + heartbeat gap"
 # background heartbeat mtime sampler (SYSTEM, survives the qrexec call; read back afterwards)
 hbps='$o="C:\ProgramData\Qubes\p3a-hbsample.txt"; Remove-Item $o -Force -EA SilentlyContinue; $hb="C:\ProgramData\qubes-toast-bridge\heartbeat"; 1..40 | ForEach-Object { $t=0; $it=Get-Item -LiteralPath $hb -EA SilentlyContinue; if ($it) { $t=$it.LastWriteTimeUtc.Ticks }; Add-Content -LiteralPath $o -Value "$t"; Start-Sleep -Milliseconds 900 }'
-qrun "cmd /c start /b powershell -NoProfile -EncodedCommand $(_ps_enc "$hbps")" >/dev/null 2>&1
+# Start-Process, not `start`: start passes every inheritable handle whatever the redirection, so a
+  # detached launch holds this call's vchan pipes and the wrapper's pumps never see EOF (lint L27,
+  # measured d3fe180 and again on campaign run 38994277148). ShellExecute inherits none.
+  qrun "powershell -NoProfile -Command \"Start-Process -WindowStyle Hidden -FilePath 'powershell.exe' -ArgumentList '-NoProfile','-EncodedCommand','$(_ps_enc "$hbps")'\"" >/dev/null 2>&1
 sleep 2
 if ! L6=$(blog_len); then
   # A 0-default would pull T5's src=db rows and T2/T3's src=etw-sig rows into this window and
@@ -1495,7 +1498,8 @@ if [ -z "$spid" ]; then
   verdict T8c "INSTRUMENT no running etwproxy.exe (tier already down?) - squatter drill ungraded"
 else
   log "T8c: launching self-killing busy-grab squatter (live proxy pid=$spid)"
-  qrun "cmd /c start /b powershell -NoProfile -EncodedCommand $(_ps_enc "$sq")" >/dev/null 2>&1
+  # Start-Process, not `start` - see the note at the heartbeat launch above (lint L27).
+  qrun "powershell -NoProfile -Command \"Start-Process -WindowStyle Hidden -FilePath 'powershell.exe' -ArgumentList '-NoProfile','-EncodedCommand','$(_ps_enc "$sq")'\"" >/dev/null 2>&1
   t8cexit=""; _w8x=$SECONDS
   for i in $(seq 1 24); do   # exit 8 lands within the first relaunch backoffs (floor 5s)
     # wall cap 150s (the documented 120s window + margin; asince is a ~55s-capped enc_run

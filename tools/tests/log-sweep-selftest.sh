@@ -413,15 +413,16 @@ with open(os.path.join(T, "context-declared.json"), "w") as f:
     json.dump({"fault_injection_declared": True, "source": "selftest: a declared run"}, f)
 
 # the stub judges: every question answered 'expected' / 'defect', or the instrument failing (exit 2)
-def stub(name, choice=None, rc=0):
+def stub(name, choice=None, rc=0, conf=0.91):
     body = ["#!/usr/bin/env python3", "import json, sys",
             "rub = json.load(open(sys.argv[1])); out = sys.argv[sys.argv.index('--out') + 1] if '--out' in sys.argv else None"]
     if rc != 0:
         body.append("print('INSTRUMENT: stub - the judge did not run'); sys.exit(%d)" % rc)
     else:
-        body.append("ans = {q: {'type': 'choice', 'choice': %r, 'confidence': 0.91, 'probabilities': {%r: 0.91}} for q in rub['questions']}" % (choice, choice))
+        body.append(("ans = {q: {'type': 'choice', 'choice': %r, 'confidence': " + repr(conf) +
+                     ", 'probabilities': {%r: " + repr(conf) + "}} for q in rub['questions']}") % (choice, choice))
         body.append("json.dump({'model': 'stub', 'answers': ans}, open(out, 'w'))")
-        body.append("[print('%%s choice=%%s conf=0.91' %% (q, %r)) for q in ans]" % choice)
+        body.append(("[print('%%s choice=%%s conf=" + repr(conf) + "' %% (q, %r)) for q in ans]") % choice)
     p = os.path.join(T, name)
     with open(p, "w") as f:
         f.write("\n".join(body) + "\n")
@@ -429,6 +430,12 @@ def stub(name, choice=None, rc=0):
 stub("jev-expected.py", "expected")
 stub("jev-defect.py", "defect")
 stub("jev-exit2.py", rc=2)
+# A DEFECT VERDICT BELOW THE FLOOR. baseline-init in log-sweep.py classifies a Jev choice only at
+# >= 0.5 and calls anything below it "unsettled ... a human decision is owed"; the analyze path read
+# no confidence at all, so 0.40 failed a release cell exactly as 1.00 would. Measured on campaign
+# run 38994277148: win10-appvm failed on ONE such verdict, A6LEAK at defect 0.40, whose WARNING
+# level is itself a recorded decision (lowering it was reverted the same day at Jev 0.07).
+stub("jev-defect-weak.py", "defect", conf=0.40)
 print("fixtures written to", T)
 # bootshut: a BOOT whose agent launch lands ONE SECOND before the shutdown marker - the install's own reboot
 # chain, and the shape that was reported on 2026-10-07 as a relaunch into an ending session (a P2 breach, Jev
@@ -1476,6 +1483,71 @@ read -r t50p t50r <<<"$(sv "$SRC" t50)"
 KV=$(knob svcrestart); read -r t50kp _ <<<"$(sv "$KV" t50k)"
 [ "$t50kp" = 2 ] && ok "knob svcrestart: SEEN TO FAIL - the installer's restart counts as a second instance (per_boot=$t50kp)" \
                 || bad "knob svcrestart: per_boot=$t50kp, want 2 - the case cannot be driven"
+
+# ---- T51 a task's RETURN CODE is the field that decides what the record means -----------------
+# A TaskScheduler 201 says "successfully completed" whatever the action returned, so the return code
+# is the whole content of the record. `task_record_is_failure` reads it, and SHUTDOWN_RESULT_CODES_RE
+# names the two values that mean "the shutdown reaped the task" - by design, not a failure. But the
+# SIGNATURE went through the generic folding: 2147943691 -> H, 0 -> N. MEASURED win10-clean, campaign
+# run 38994277148: Jev classified three such records as DEFECTS at 0.41-0.64, answering honestly
+# about a string from which the deciding fact had been removed - and the same condition SPLIT in two,
+# because the two values fold to different tokens.
+nrm(){ # $1=analyzer $2=text -> the normalised tail
+  python3 - "$1" "$2" <<'PYX'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("ls", sys.argv[1])
+ls = importlib.util.module_from_spec(spec); spec.loader.exec_module(ls)
+print(ls.normalize(sys.argv[2]))
+PYX
+}
+T51BASE='Task Scheduler successfully completed task "\QubesPvNic" , instance "{2dc8b2aa}" , action "powershell.exe" with return code'
+case "$(nrm "$SRC" "$T51BASE 2147943691.")" in
+  *"return code SHUTDOWNREFUSAL"*) ok "T51 a shutdown-reaped task is NAMED, not folded to a digit" ;;
+  *) bad "T51 the refusal code is still folded: $(nrm "$SRC" "$T51BASE 2147943691.")" ;;
+esac
+case "$(nrm "$SRC" "$T51BASE 0.")" in
+  *"return code ZERO"*) ok "T51 a clean return is ZERO, distinct from the refusal" ;;
+  *) bad "T51 return code 0 did not become ZERO" ;;
+esac
+# A GENUINE failure code must stay distinguishable from both - it is neither zero nor a refusal.
+r51=$(nrm "$SRC" "$T51BASE 1603.")
+case "$r51" in
+  *SHUTDOWNREFUSAL*|*ZERO*) bad "T51 a real failure code (1603) was named as a refusal or a zero: $r51" ;;
+  *) ok "T51 a real failure code is neither - it stays distinguishable" ;;
+esac
+KN=$(knob taskrcname)
+case "$(nrm "$KN" "$T51BASE 2147943691.")" in
+  *"return code SHUTDOWNREFUSAL"*) bad "knob taskrcname: the refusal is still named - the case cannot be driven" ;;
+  *) ok "knob taskrcname: SEEN TO FAIL - without the rule the deciding fact folds away again" ;;
+esac
+
+# ---- T52 a Jev verdict below the floor is REPORTED and owed a decision, not a release failure --
+# baseline-init in log-sweep.py already classifies defect/expected/noise only at >= 0.5 and calls
+# anything below it "unsettled ... a human decision is owed". The analyze path read no confidence at
+# all, so the two halves of one file disagreed about what a weak verdict means. MEASURED campaign
+# run 38994277148: win10-appvm failed on ONE verdict - A6LEAK at defect 0.40 - with zero metric
+# breaches and zero undeclared error lines, on a line whose WARNING level is a recorded decision
+# (lowering it was reverted the same day at Jev 0.07). A sub-floor verdict is still in the report.
+wk(){ # $1=analyzer $2=tag -> "<status> <judged_defects> <sub_floor>"
+  python3 "$1" analyze "$T/newsig" --baseline "$T/baseline.json" --out "$T/$2.json" \
+      --summary "$T/$2.txt" --label "$2" --workdir "$T/work-$2" --jev-cmd "$T/jev-defect-weak.py" > "$T/$2.out" 2>&1
+  field "$T/$2.json" 'str(r["status"])+" "+str(len(r.get("judged_defects") or []))+" "+str(len(r.get("judged_sub_floor") or []))'
+}
+read -r t52s t52d t52f <<<"$(wk "$SRC" t52)"
+[ "$t52d" = 0 ] && ok "T52 a defect at 0.40 does not fail the run (judged_defects=$t52d, status=$t52s)" \
+               || bad "T52 judged_defects=$t52d with a 0.40 verdict, want 0 - below the floor this file uses elsewhere"
+[ "$t52f" -ge 1 ] && ok "T52 and it IS reported, not silent (judged_sub_floor=$t52f)" \
+                  || bad "T52 judged_sub_floor=$t52f - a sub-floor verdict must still be visible"
+KD=$(knob defectfloor); read -r t52ks t52kd _ <<<"$(wk "$KD" t52k)"
+[ "$t52kd" -ge 1 ] && ok "knob defectfloor: SEEN TO FAIL - without it a 0.40 verdict fails the run (judged_defects=$t52kd, status=$t52ks)" \
+                   || bad "knob defectfloor: judged_defects=$t52kd, want >=1 - the case cannot be driven"
+# AND A CONFIDENT DEFECT MUST STILL FAIL: the floor must not become a blanket.
+cf(){ python3 "$SRC" analyze "$T/newsig" --baseline "$T/baseline.json" --out "$T/$1.json" \
+        --summary "$T/$1.txt" --label "$1" --workdir "$T/work-$1" --jev-cmd "$T/jev-defect.py" > "$T/$1.out" 2>&1
+      field "$T/$1.json" 'str(len(r.get("judged_defects") or []))'; }
+t52c=$(cf t52c)
+[ "$t52c" -ge 1 ] && ok "T52 a defect at 0.91 still fails the run (judged_defects=$t52c)" \
+                  || bad "T52 a CONFIDENT defect no longer fails - the floor became a blanket"
 
 # ---- T41-T42 the rig wrapper: the guest's clock is read BEFORE it is synced, and the collector's cap is passed ----
 # MEASURED 2026-10-10 on win10-acc: the wrapper never called `qtest synctime`, so the collector ran with the guest

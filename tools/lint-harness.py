@@ -1277,6 +1277,44 @@ def l23_no_pipe_into_grep_q_for_a_guest_probe() -> None:
                         + also + "; capture it and match instead")
 
 
+def l27_detached_guest_launch_must_not_use_start() -> None:
+    """L27: a guest call that DETACHES a long-running process must not use `cmd /c start`.
+
+    `start` passes every inheritable handle whatever the redirection, so the launched process
+    inherits the qrexec data vchan's pipes and holds them for its whole life. The wrapper's output
+    pumps then never see EOF and the call cannot finish.
+
+    MEASURED 2026-09-27, commit d3fe180: `cmd /c start ... <nul >nul` did NOT prevent it and the
+    call still died at the installer's own service stop on win11de-v3/-v4 (rc=255 after 51-55 s).
+    quick-upgrade.sh carries that finding and the remedy - Start-Process goes through ShellExecute,
+    which inherits no handles, so the call returns as soon as the launch is done. THE REDIRECTION IS
+    NOT THE FIX, which is why this rule does not accept one.
+
+    MEASURED AGAIN 2026-10-17, campaign run 38994277148, cell win11-reinstall, because the finding
+    was recorded in one harness and never applied in the others: two matrix.sh launches (the
+    reboot-dialog watcher, 2700 s, and install.cmd) each left a wrapper with a live output pump
+    until a console control event tore it down 118 s and 63 s in, both reporting at ERROR that
+    output "may not have reached the peer" - the only two undeclared error lines that cell carried.
+    The same shape produced a 120 s TRUNCATED transfer and a lost exit code on the previous
+    campaign. Jev, asked whether to demote that ERROR instead: fix-the-callers 0.79."""
+    bad_start = re.compile(r"(?:\bqrun\b|\bgrun\b|\bgq\b|\./tools/qtest\b|\btools/qtest\b|\$\{?QTEST_BIN\}?)"
+                           r"[^#]*?cmd\s+/c\s+(?:\\?\")?start\b")
+    files = sorted((ROOT / "mgmt").glob("*.sh")) + \
+            sorted((ROOT / "mgmt" / "harness").glob("*.sh")) + \
+            [p for p in sorted((ROOT / "tools").glob("*.sh")) if "tests" not in p.parts]
+    for f in files:
+        for n, ln in enumerate(f.read_text(errors="replace").splitlines(), 1):
+            st = ln.lstrip()
+            if not st or st.startswith("#"):
+                continue
+            if bad_start.search(st):
+                finding("L27-detached-guest-launch-uses-start", f"{f.name}:{n}",
+                        "a detached guest launch via `cmd /c start`: start passes every inheritable "
+                        "handle whatever the redirection, so the launched process holds this call's "
+                        "vchan pipes and the wrapper's pumps never see EOF (measured d3fe180, and "
+                        "again 2026-10-17); use Start-Process, which inherits none")
+
+
 def l22_vm_start_must_assert_sole_guest() -> None:
     """L22: anything that STARTS a guest must first call assert_sole_guest from
     mgmt/harness/serial-rig.sh.
@@ -1600,6 +1638,7 @@ def main() -> int:
     l24_failure_report_must_declare_a_level()
     l25_product_must_not_branch_on_localised_text()
     l26_no_hardware_clock_convention_is_written()
+    l27_detached_guest_launch_must_not_use_start()
     if a.ledger:
         l7_orphan_ledger_checks(a.ledger)
 

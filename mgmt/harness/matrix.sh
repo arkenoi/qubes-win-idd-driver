@@ -1180,9 +1180,29 @@ run_install(){ # $1=vm $2=label $3=install-source (drive/dir carrying install.cm
   # reported "watcher produced NO summary - INVALID", which fails closed and so never produced a
   # false PASS - but it also meant the dialog criterion could never actually be met. Measured
   # 2026-08-30 on win10-app: no jsonl, no powershell process.
-  QTEST_VM=$vm qrun "cmd /c start \"dlgwatch\" /min powershell -NoProfile -ExecutionPolicy Bypass -File $INC\\reboot-dialog-watch.ps1 -DurationSeconds 2700" >/dev/null 2>&1
+  # A DETACHED LAUNCH MUST NOT INHERIT THIS CALL'S HANDLES, AND `start` CANNOT AVOID IT.
+  # `start` passes every inheritable handle whatever the redirection - MEASURED 2026-09-27, commit
+  # d3fe180: `cmd /c start ... <nul >nul` did NOT prevent it and the call still died at the
+  # installer's own service stop on win11de-v3/-v4 (rc=255 after 51-55 s). quick-upgrade.sh:703-710
+  # carries that finding and the remedy: Start-Process goes through ShellExecute, which inherits no
+  # handles, so the call returns as soon as the launch is done.
+  # WHY IT MATTERS HERE: the inherited handles are the qrexec data vchan's pipes, so the launched
+  # process holds them for its whole life - 2700 s for this watcher - and the wrapper's output pumps
+  # never see EOF. MEASURED win11-reinstall, campaign run 38994277148: wrapper 9140 (this call) and
+  # 7080 (the install below) each sat with a live pump until a console control event tore them down
+  # 118 s and 63 s in, both reporting at ERROR that output "may not have reached the peer" - the only
+  # two undeclared error lines that cell carried. The same shape produced the 120 s TRUNCATED
+  # transfer and the lost exit code on the previous campaign.
+  # Jev, asked whether to demote that ERROR instead: fix-the-callers 0.79, demotion borderline
+  # hiding 0.52. So the caller stops creating the condition.
+  QTEST_VM=$vm qrun "powershell -NoProfile -Command \"Start-Process -WindowStyle Minimized -FilePath 'powershell.exe' -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','$INC\\reboot-dialog-watch.ps1','-DurationSeconds','2700'\"" >/dev/null 2>&1
   say "  $lbl: reboot-dialog watcher armed"
-  QTEST_VM=$vm qrun "cmd /c start \"\" /min $src\\install.cmd /auto /autologon:qubes $extra" >/dev/null 2>&1
+  # Same mechanism as the watcher above, and the same form quick-upgrade.sh has proven on this rig.
+  # $extra is empty in every current caller (all four pass three arguments) but is threaded rather
+  # than silently dropped.
+  _extraArgs=""
+  [ -n "$extra" ] && _extraArgs=$(printf ",'%s'" $extra)
+  QTEST_VM=$vm qrun "powershell -NoProfile -Command \"Start-Process -WindowStyle Minimized -FilePath '$src\\install.cmd' -ArgumentList '/auto','/autologon:qubes'$_extraArgs\"" >/dev/null 2>&1
   # SEED_DELAY: write the PV reboot Request mid-MSI, which is when the field gets it.
   #
   # CONTAMINATION GUARD, added 2026-08-29. SEED_DELAY is an ENVIRONMENT variable, so if it is set
