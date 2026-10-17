@@ -24,6 +24,10 @@
 #       HOLDALWAYSLOUD     every broker hold is written up as a fault, so the ~11 s on each cold boot in which
 #                          the broker simply has not started yet produces three WARNINGs about correct
 #                          behaviour - the log noise the owner refuses
+#       DISMISSTOSTART     the Escape that closes the hidden Start menu is posted to the TRACKED Start
+#                          surface however the focus sits - the measured 2026-10-17 failure, Escape to
+#                          0x10180 while SearchHost's 0x1018a held the input and the menu stayed open
+#                          1031 ms later, twice (GWeck #172 reproducing on the current build)
 #       HOLDREASONALLNORMAL  every BROKERHOLD reason reads as normal, so a broker that dropped a slot
 #                          or a feed lost past its bound goes as quiet as a first frame that has not
 #                          landed yet - the blanket demotion that was already made once and reverted
@@ -85,7 +89,7 @@ if build clean ""; then
 else say "FAIL  clean build: $(head -3 "$OUT/clean.build.err")"; bad=1; fi
 
 # ---- every defect knob must make the suite FAIL --------------------------------------------------------
-for d in TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT DISARMHIDESCRASH ZERODUE SHELLBYNAME HOLDALWAYSLOUD FAULTFROMREG LATEREGALWAYSLOUD SLOWALWAYSLOUD HOLDREASONALLNORMAL; do
+for d in TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT DISARMHIDESCRASH ZERODUE SHELLBYNAME HOLDALWAYSLOUD FAULTFROMREG LATEREGALWAYSLOUD SLOWALWAYSLOUD HOLDREASONALLNORMAL DISMISSTOSTART; do
     if build "defect-$d" "-DQGA_LIFECYCLE_DEFECT_$d"; then
         "$OUT/defect-$d" >"$OUT/defect-$d.out" 2>&1; rc=$?
         f=$(grep -c '^FAIL' "$OUT/defect-$d.out")
