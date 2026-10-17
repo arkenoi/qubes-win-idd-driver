@@ -83,10 +83,29 @@ foreach ($x in $f) {
     $firstInit = -1
     for ($k = 0; $k -lt $lines.Count; $k++) { if ($lines[$k] -match "Init:") { $firstInit = $k; break } }
     if ($firstInit -ge 0) {
+      $accepted = @{}   # hwnd -> its AddWindow line, until a SendWindowMap names it
       "CWC-INIT|" + $x.Name
       for ($k = $firstInit; $k -lt $lines.Count; $k++) {
-        if ($lines[$k] -match "AddWindow:.*class=(CASCADIA_HOSTING_WINDOW_CLASS|ConsoleWindowClass|PseudoConsoleWindow)") {
-          "CWC-HIT|" + $x.Name + "|" + $lines[$k]
+        # MAPPED MEANS MAPPED. This counted AddWindow lines while every message about it - the
+        # header above, the harness FAIL text, the ledger - says "mapped". AddWindow is the
+        # agent ACCEPTING a window into tracking; SendWindowMap is what puts it on the dom0 screen,
+        # and a window can be accepted and then never mapped.
+        # MEASURED 2026-10-17 on win11de-sm: a Windows Terminal hosting window was accepted at
+        # t=72562 with brokerslot=-1 while the broker was still coming up, held ("no painted frame
+        # yet"), and NEVER mapped; its replacement 0x201e4 arrived 3.3 s later, got slot 0, took a
+        # first WGC frame and was mapped. One terminal, one mapped window - and this check reported
+        # "FOUND 2 console/Terminal windows mapped", failing an otherwise clean cycle on a
+        # premise that was not what it measured.
+        # So: remember the accepted ones, and report only those a SendWindowMap names.
+        if ($lines[$k] -match "AddWindow:.*hwnd=(0x[0-9a-fA-F]+).*class=(CASCADIA_HOSTING_WINDOW_CLASS|ConsoleWindowClass|PseudoConsoleWindow)") {
+          $accepted[$Matches[1].ToLower()] = $lines[$k]
+        }
+        if ($lines[$k] -match "SendWindowMap:.*?(0x[0-9a-fA-F]+)") {
+          $h = $Matches[1].ToLower()
+          if ($accepted.ContainsKey($h)) {
+            "CWC-HIT|" + $x.Name + "|" + $accepted[$h]
+            [void]$accepted.Remove($h)
+          }
         }
       }
     }
