@@ -587,7 +587,7 @@ static bool PublishCard(int i, ID3D11Texture2D* full, int texW, int texH, const 
     // So when ReqCardX/Y are supplied (>= 0), the offset is derived here, against the window's rect
     // at capture time. -1 means not supplied and nothing changes - which is every non-shell window.
     int cropX = s->ReqCropX, cropY = s->ReqCropY;
-    if (s->ReqCardX >= 0 && s->ReqCardY >= 0 && ch.hwnd && IsWindow(ch.hwnd)) {
+    if (s->ReqCardValid && ch.hwnd && IsWindow(ch.hwnd)) {
         RECT wr{};
         if (GetWindowRect(ch.hwnd, &wr)) {
             s->CropWinX = wr.left; s->CropWinY = wr.top;

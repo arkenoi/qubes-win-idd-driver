@@ -28,9 +28,9 @@
 # section's value $secAbi; tools/tests/peek-abi-assert-selftest.sh fails if they ever collide again.
 param([int]$Samples = 2, [int]$IntervalSec = 6, [switch]$All)
 
-$WANT_ABI = 26
+$WANT_ABI = 27
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
-$STRIDE = 3472    # sizeof(WGCBRK_SLOT) at ABI 26 (CropUsedX/Y 3456/3460, CropWinX/Y 3464/3468). 3456 at ABI 25 (ReqCardX/ReqCardY appended at 3444/3448; the
+$STRIDE = 3480    # sizeof(WGCBRK_SLOT) at ABI 27 (ReqCardValid at 3468). 3472 at ABI 26 (CropUsedX/Y 3456/3460, CropWinX/Y 3464/3468). 3456 at ABI 25 (ReqCardX/ReqCardY appended at 3444/3448; the
                   # struct's 8-byte alignment rounds 3452 up to 3456). 3448 at ABI 23 (ReqRoute, a LONG, appended at 3440; the struct's
                   # 8-byte alignment rounds 3444 up to 3448 - get this wrong and every slot after
                   # slot0 is read at the wrong base, which is what the ABI guard above exists to
@@ -87,7 +87,7 @@ for ($n = 0; $n -lt $Samples; $n++) {
     $hw = RdL $b
     if ($hw -eq 0 -and -not $All) { continue }
     Write-Output ("S{0} slot{1} hwnd=0x{2:x} req={3} ctlseq={4} ack={5} failhr=0x{6:x} req={7}x{8} frame={9}x{10} seq={11} fid={12} captick={13} crop={14},{15}" -f `
-      $n,$i,$hw,(RdI ($b+24)),(RdI ($b+28)),(RdI ($b+56)),(RdI ($b+60)),(RdI ($b+8)),(RdI ($b+12)),(RdI ($b+64)),(RdI ($b+68)),(RdI ($b+80)),(RdL ($b+88)),(RdL ($b+96)),(RdI ($b+16)),(RdI ($b+20)))
+      $n,$i,$hw,(RdI ($b+24)),(RdI ($b+28)),(RdI ($b+56)),(RdI ($b+60)),(RdI ($b+8)),(RdI ($b+12)),(RdI ($b+64)),(RdI ($b+68)),(RdI ($b+80)),(RdL ($b+88)),(RdL ($b+96)),(RdI ($b+16)),(RdI ($b+20)),(RdI ($b+3468)))
     Write-Output ("S{0} slot{1} FRAMES arrived={2} published={3} dropsize={4} recreateOk={5} recreateFail={6} lastContent={7}x{8} pool={9}x{10} pw={11} polls={12}" -f `
       $n,$i,(RdI ($b+192)),(RdI ($b+196)),(RdI ($b+200)),(RdI ($b+204)),(RdI ($b+208)),(RdI ($b+212)),(RdI ($b+216)),(RdI ($b+220)),(RdI ($b+224)),(RdI ($b+132)),(RdI ($b+184)))
     Write-Output ("S{0} slot{1} POKE seq={2} ack={3} serviced={4} skipped={5} safety={6} reroutes={7} sameFrames={8} quietReroutes={9} probeBounces={10}" -f `
@@ -105,8 +105,8 @@ for ($n = 0; $n -lt $Samples; $n++) {
       $n,$i,$rt,$rn,$rq,$rqn,(RdI ($b+272)),(RdI ($b+276)),(RdL ($b+280)))
     # ABI 26: the crop the broker USED and the window origin it derived it from, so "the crop was
     # wrong" and "the crop was right and the pixels were not there" stop being indistinguishable.
-    Write-Output ("S{0} slot{1} CROP used={2},{3} winorigin={4},{5} reqcard={6},{7} reqcrop={8},{9}" -f `
-      $n,$i,(RdI ($b+3456)),(RdI ($b+3460)),(RdI ($b+3464)),(RdI ($b+3468)),(RdI ($b+3444)),(RdI ($b+3448)),(RdI ($b+16)),(RdI ($b+20)))
+    Write-Output ("S{0} slot{1} CROP used={2},{3} winorigin={4},{5} reqcard={6},{7} valid={10} reqcrop={8},{9}" -f `
+      $n,$i,(RdI ($b+3452)),(RdI ($b+3456)),(RdI ($b+3460)),(RdI ($b+3464)),(RdI ($b+3444)),(RdI ($b+3448)),(RdI ($b+16)),(RdI ($b+20)))
     # ABI 9. arrivalRaw climbing while FRAMES arrived stays flat = the guard is throwing frames away,
     # which the quiet detector then reads as a dead feed. Flat arrivalRaw = the event really stopped.
     Write-Output ("S{0} slot{1} ARRIVALS raw={2} rejected={3}" -f `
