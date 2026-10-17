@@ -515,6 +515,27 @@ fr_ev = ["EV 2026-10-07 01:32:45.327 [Microsoft-Windows-TerminalServices-LocalSe
          "EV NONE [Microsoft-Windows-TaskScheduler/Operational]"]
 write("fastreboot.pull", stream([(FRA, "agent", fr_ag), (FRW, "watchdog", fr_wdl)], fr_ev))
 
+# ---- svcrestart: ONE boot, TWO agents, an ORDERLY SERVICE STOP between them ---------------------
+# The win11-reinstall shape: a same-version reinstall stops the services, replaces the files and
+# starts them again, so two agent instances share one boot. MEASURED 2026-10-17, boot 3:
+#   02:11:03 ControlHandlerEx: stopping...
+#   02:11:03 StopOwnAgent: asked (PID 4556) to exit via Global\QGA_SHUTDOWN
+#   02:11:04 StopOwnAgent: (PID 4556) is gone, exit code 0x20514702   <- QGA_EXIT_REQUESTED
+#   02:11:04 ServiceMain: exiting
+#   02:12:24 a NEW gui-watchdog LogInit (uptime 268.843 s - the SAME boot) launches the next agent
+SRA = "gui-agent-20261007.log"
+SRW = "gui-watchdog-20261007.log"
+sr_ag = (fr_agent("020836.998", "41.331", 4556, 4560, "021104.083")
+       + fr_agent("021224.767", "269.100", 7268, 7272, "021241.097"))
+sr_wd = (fr_wd("020835.900", 4356, 4360, "020835.900")
+       + [wu("021103.389", "4356:4424", "I", "ControlHandlerEx", "stopping..."),
+          wu("021103.389", "4356:4424", "I", "WatchdogThread", "service stop requested, watchdog thread exiting"),
+          wu("021103.389", "4356:4424", "I", "StopOwnAgent", "service stopping: asked 'gui-agent.exe' (PID 4556) to exit via Global\\QGA_SHUTDOWN, waiting up to 10000 ms on its handle"),
+          wu("021104.170", "4356:4424", "I", "StopOwnAgent", "service stopping: 'gui-agent.exe' (PID 4556) is gone, exit code 0x20514702"),
+          wu("021104.171", "4356:4412", "I", "ServiceMain", "exiting")]
+       + fr_wd("021224.503", 7196, 8832, "021224.505"))
+write("svcrestart.pull", stream([(SRA, "agent", sr_ag), (SRW, "watchdog", sr_wd)], ["EV NONE [Microsoft-Windows-TaskScheduler/Operational]"]))
+
 PY
 [ $? -eq 0 ] || { echo "FATAL: fixture generation failed"; exit 2; }
 
@@ -536,7 +557,7 @@ analyze(){ # $1=analyzer $2=logsdir $3=baseline $4=judge $5=tag -> rc; report at
 field(){ python3 -c "import json,sys; r=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$1" "$2"; }
 
 # ---- decode every fixture with the real decoder --------------------------------------------------------------------
-for f in base newsig rise three stoperr empty twoboot clockflip rapidboot taskok vchanwd phaseflip skipnames skipchatty bootshut inv twoproc msiok msibad twobuild fastreboot reqstop; do
+for f in base newsig rise three stoperr empty twoboot clockflip rapidboot taskok vchanwd phaseflip skipnames skipchatty bootshut inv twoproc msiok msibad twobuild fastreboot reqstop svcrestart; do
   rc=$(decode "$SRC" "$T/$f.pull" "$T/$f")
   [ "$rc" = 0 ] || { echo "FATAL: the $f fixture did not decode (rc=$rc): $(tail -2 "$T/$f.decode.txt")"; exit 2; }
   # EVERY LINE IN THESE CORPORA IS WRITTEN BY THIS TEST, so the run declares the errors it caused - which is
@@ -1437,6 +1458,24 @@ t49=$(rs "$SRC" t49)
 KR=$(knob reqstopreason); t49k=$(rs "$KR" t49k)
 [ "$t49k" = 1 ] && ok "knob reqstopreason: SEEN TO FAIL - demanding 0x0 breaches on the named reason (=$t49k)" \
                 || bad "knob reqstopreason: got $t49k, want 1 - the case cannot be driven"
+
+# ---- T50 the installer's own SERVICE RESTART is not a second instance of the boot -------------
+# A same-version reinstall stops and starts the services inside one boot. The metric's why is "the
+# agent is started once per boot; a second instance is a death or a restart" - an orderly requested
+# service stop is NEITHER, and forgiving it is counted rather than hidden.
+sv(){ # $1=analyzer $2=tag -> "<per_boot> <service_restarts>"
+  python3 "$1" analyze "$T/svcrestart" --baseline "$T/baseline.json" --out "$T/$2.json" \
+      --summary "$T/$2.txt" --label "$2" --workdir "$T/work-$2" --jev-cmd "$T/jev-expected.py" > "$T/$2.out" 2>&1
+  field "$T/$2.json" 'str(r["metrics"]["agent_instances_per_boot"])+" "+str(r["metrics"].get("agent_service_restarts"))'
+}
+read -r t50p t50r <<<"$(sv "$SRC" t50)"
+[ "$t50p" = 1 ] && ok "T50 two agents in one boot across an orderly service stop count as one (per_boot=$t50p)" \
+               || bad "T50 agent_instances_per_boot=$t50p, want 1 - the installer's own restart is counted"
+[ "$t50r" = 1 ] && ok "T50 and the forgiveness is a FIGURE, not an absence (agent_service_restarts=$t50r)" \
+               || bad "T50 agent_service_restarts=$t50r, want 1"
+KV=$(knob svcrestart); read -r t50kp _ <<<"$(sv "$KV" t50k)"
+[ "$t50kp" = 2 ] && ok "knob svcrestart: SEEN TO FAIL - the installer's restart counts as a second instance (per_boot=$t50kp)" \
+                || bad "knob svcrestart: per_boot=$t50kp, want 2 - the case cannot be driven"
 
 # ---- T41-T42 the rig wrapper: the guest's clock is read BEFORE it is synced, and the collector's cap is passed ----
 # MEASURED 2026-10-10 on win10-acc: the wrapper never called `qtest synctime`, so the collector ran with the guest

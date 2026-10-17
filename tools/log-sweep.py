@@ -486,7 +486,10 @@ INFORMATIONAL_METRICS = ["error_lines", "warning_lines", "warning_lines_ours", "
                          "error_lines_prior_build", "warning_lines_prior_build", "prior_build_mix",
                          # what was declared, with its kind and whether it matched - the audit trail
                          # for the tolerated kind, whose absence deliberately cannot breach
-                         "declared_errors_tolerated", "declared_errors_detail"]
+                         "declared_errors_tolerated", "declared_errors_detail",
+                         # instances forgiven as an orderly service restart, so the forgiveness is
+                         # a figure and not an absence
+                         "agent_service_restarts"]
 SEVERITY_ORDER = {"P1": 0, "P2": 1, "P3": 2}
 
 # FAULT-INJECTION CONTEXT - decided from EVIDENCE in the capture, never from a file name (coordinator, 2026-10-07):
@@ -598,6 +601,14 @@ _NORM_RULES = [
     (re.compile(r"-?\b\d+(\.\d+)?\b"), "N"),
     (re.compile(r"\s+"), " "),
 ]
+
+
+# THE AGENT'S OWN EXPECTED EXIT REASONS, mirroring QgaExitIsExpected() in
+# agent/include/qga-lifecycle.h over the constants in agent/include/qga-exitcodes.h:
+#   0x20514701 NO_GUI_DOMAIN  0x20514702 REQUESTED  0x20514703 SESSION_END  0x20514704 RECONNECT
+# A stop that reports one of these named a reason; anything else in that field is a Win32 error and
+# is what the stop metrics were written to catch. Module scope because two metrics read it.
+QGA_EXPECTED_EXITS = ("0x0", "0x20514701", "0x20514702", "0x20514703", "0x20514704")
 
 
 def _version_tuple(v):
@@ -2047,7 +2058,34 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
     m["agent_deaths_at_shutdown"] = sum(len(w["deaths"]) for w in win)
     m["agent_relaunches_at_shutdown"] = sum(len(w["relaunches"]) for w in win)
     m["agent_instances_per_shutdown"] = max([len(w["instances"]) for w in win], default=0)   # GUARD:instances DEFECT: m["agent_instances_per_shutdown"] = 0
-    per_boot = Counter(i["boot"] for i in insts)
+    # AN ORDERLY SERVICE RESTART IS NOT A SECOND INSTANCE OF THE BOOT.
+    # MEASURED win11-reinstall 2026-10-17: boot 3 held pid 4556 (02:08:36-02:11:04) and pid 7268
+    # (02:12:24-02:12:41), and the watchdog log says exactly what happened between them -
+    # `ControlHandlerEx: stopping...`, `StopOwnAgent: asked (PID 4556) to exit via
+    # Global\QGA_SHUTDOWN`, `is gone, exit code 0x20514702` (QGA_EXIT_REQUESTED), `ServiceMain:
+    # exiting`, and then a NEW watchdog service LogInit (pid 7196, uptime 268.843 s, the SAME boot)
+    # launching the next agent. A same-version REINSTALL stops the services, replaces the files and
+    # starts them again: that is the installer's contract, and both transitions here are orderly.
+    # This metric's own `why` is "the agent is started once per boot; a second instance is a death
+    # or a restart" - an orderly requested service stop is NEITHER. The sweep already knew the shape
+    # (its windowing comment records "the installer deliberately stops and starts the agent several
+    # times, and that read as shutdown churn") but that fix was the --since window, and a reinstall
+    # happens INSIDE one boot where a window cannot reach it.
+    # NARROW: only an instance whose PREDECESSOR IN THE SAME BOOT recorded a stop with a named
+    # QGA_EXIT_* reason is forgiven. A death, or a relaunch with no service stop before it, still
+    # counts - which is what keeps the 2026-10-07 defect visible.
+    def _after_orderly_stop(prev):
+        _c = ((prev or {}).get("stop") or {}).get("code")
+        return bool(_c) and _c.lower() in QGA_EXPECTED_EXITS and _c.lower() != "0x0"
+    per_boot, _prev_in_boot, _svc_restarts = Counter(), {}, 0
+    for _i in sorted(insts, key=lambda x: x["start"] or dt.datetime.min):
+        _b = _i["boot"]
+        if _after_orderly_stop(_prev_in_boot.get(_b)):   # GUARD:svcrestart DEFECT: if False:
+            _svc_restarts += 1
+        else:
+            per_boot[_b] += 1
+        _prev_in_boot[_b] = _i
+    m["agent_service_restarts"] = _svc_restarts
     m["agent_instances_per_boot"] = max(per_boot.values(), default=0)
     m["vchan_setups_per_shutdown"] = max([len(w["announces"]) for w in win], default=0)
     if now is not None:
@@ -2100,7 +2138,6 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
     # accepts REQUESTED / SESSION_END / RECONNECT / NO_GUI_DOMAIN. The grader uses the same set,
     # kept beside the header it mirrors, and still breaches on anything else - a Win32 error in that
     # field is exactly what this was written to catch.
-    QGA_EXPECTED_EXITS = ("0x0", "0x20514701", "0x20514702", "0x20514703", "0x20514704")
     m["requested_stop_nonzero_exit"] = len([i for i in insts if i["stop"]
                                             and i["stop"]["code"] is not None
                                             and i["stop"]["code"].lower() not in QGA_EXPECTED_EXITS])   # GUARD:reqstopreason DEFECT: and i["stop"]["code"] not in (None, "0x0")])
