@@ -417,8 +417,23 @@ if ($relayOwner -ne 0) {   # GUARD:relaynokill
         $reason = "QWTRELAYBUSY: pid $relayOwner ($who) is still listening on 127.0.0.1:8082 after 20 s while this deploy holds the updater mutex - it is not a running pass's relay (that exits with its pass) and it is NOT killed (nothing is killed by name, ADR-updater 12.4)"
     }
     if (Test-Path -LiteralPath $exe) {
-        $skipRelayCompile = $true
-        Log ($reason + ". The relay is NOT recompiled: the previous exe at $exe is kept, since a running copy would hold it open. Find out what that listener is, then rerun this deploy (install.cmd /updatesonly) to install the new relay.")
+        # THE KEPT EXE IS NOT VOUCHED FOR. Keeping it is right - a running copy holds the file open,
+        # and deleting it could strand the guest with no relay at all (Jev 2026-10-03, 0.80). What
+        # was wrong is reporting SUCCESS afterwards: the deploy went on to place the new
+        # qubes-windows-update.ps1 beside a binary of unknown vintage and logged "updater agent
+        # deployed", so the RESULT said ok:true.
+        # MEASURED on win11de-sm 2026-10-17: that pair shipped a 2026-09-16 relay with the 4.3.36
+        # script. The script passes --parent-pid; a binary predating that flag assigns the flag's
+        # VALUE as its listen port, so the relay bound the updater's own PID (5128, 8276, 5524) and
+        # never 8082, and every Windows Update pass died in Ensure-Proxy. Read directly from the
+        # installed binary, with a positive control: --listen=2, --target=2, --parent-pid=0.
+        # So it refuses, through the SAME route the no-exe branch below uses - a throw, which is the
+        # only upward channel carrying a message. The message keeps its leading QWTRELAYBUSY token
+        # because the installer's cause/remedy table keys on that and already has a branch for it.
+        # ${exe}, not $exe: - PowerShell 5.1 parses "$exe:" as a drive-qualified variable.
+        $msg = $reason + ". The compile was skipped, so this deploy cannot vouch for the kept relay at ${exe}: refusing - nothing compiled, nothing killed. Find out what that listener is, then rerun install.cmd /updatesonly."
+        Log $msg
+        throw $msg   # GUARD:vouchexe
     } else {
         $msg = $reason + ". No previous relay exe exists at $exe to keep, so this deploy cannot leave the guest with a relay it can vouch for: refusing - nothing compiled, nothing killed. Find out what that listener is and rerun."
         Log $msg

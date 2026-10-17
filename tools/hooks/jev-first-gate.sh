@@ -38,28 +38,56 @@ else:
 ')
 [ "$verdict" = "gate" ] || exit 0
 
-last=""
-if [ -s "$WIRE" ]; then
-    last=$(tail -n 200 "$WIRE" | python3 -c '
-import json, sys, datetime
-best = None
-for line in sys.stdin:
-    try:
-        ts = json.loads(line).get("ts")
-        t = datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S%z").timestamp()
-    except Exception:
-        continue
-    best = t if best is None or t > best else best
-print(int(best) if best else "")
+# THE RECEIPT IS NAMED, not merely recent. This used to allow any launch with a Jev call in the
+# window - so unrelated calls kept it warm and a workflow whose own fork was never asked went
+# through. It cost ~1.1M subagent tokens over three passes on 2026-10-17; the question, asked
+# afterwards, answered in one call and invalidated the result. A window cannot show WHICH decision
+# was asked. So the launcher names the answers file, and this checks that file.
+fork=$(printf '%s' "$input" | python3 -c '
+import json, re, sys
+try: o = json.loads(sys.stdin.read() or "{}")
+except Exception: sys.exit(0)
+ti = o.get("tool_input") or {}
+hay = " ".join(str(ti.get(k, "")) for k in ("script", "prompt", "name", "description"))
+m = re.search(r"JEV-FORK:\s*(\S+)", hay)
+print(m.group(1) if m else "")
 ')
+if [ -z "$fork" ]; then
+    cat >&2 <<EOM
+BLOCKED by tools/hooks/jev-first-gate.sh: this launch names no Jev fork receipt.
+
+JEV FIRST is about THIS decision, not about having called Jev recently. Put the fork to Jev in a
+small premise-framed call, write the answers with --out, then name that file in the launch:
+
+    JEV-FORK: scratchpad/jev-<fork>-out.json
+
+in the workflow script (a comment line is fine) or in the agent prompt. The gate checks the file
+exists, parses as Jev answers, and is newer than $WINDOW_MIN minutes. It does not read the verdict.
+EOM
+    exit 2
 fi
+if [ ! -s "$ROOT/$fork" ] && [ ! -s "$fork" ]; then
+    echo "BLOCKED by tools/hooks/jev-first-gate.sh: named fork receipt '$fork' does not exist or is empty." >&2
+    exit 2
+fi
+fpath="$ROOT/$fork"; [ -s "$fpath" ] || fpath="$fork"
+if ! python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+a = d.get("answers", d)
+if not isinstance(a, dict) or not a: raise SystemExit(1)
+' "$fpath" 2>/dev/null; then
+    echo "BLOCKED by tools/hooks/jev-first-gate.sh: '$fork' is not a Jev answers file (no answers map)." >&2
+    exit 2
+fi
+last=$(date -r "$fpath" +%s 2>/dev/null || echo "")
 now=$(date +%s)
 if [ -n "$last" ] && [ $((now - last)) -le $((WINDOW_MIN * 60)) ]; then
     exit 0
 fi
 
 cat >&2 <<EOM
-BLOCKED by tools/hooks/jev-first-gate.sh: no Jev call in the last $WINDOW_MIN minutes before a
+BLOCKED by tools/hooks/jev-first-gate.sh: the named fork receipt is older than $WINDOW_MIN minutes, before a
 Workflow / Fable agent.
 
 JEV FIRST (owner, 2026-10-01): put the semantic forks to Jev before fanning out - a few questions per
