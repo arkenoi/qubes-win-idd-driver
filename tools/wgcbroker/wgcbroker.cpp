@@ -624,6 +624,35 @@ static bool PublishCard(int i, ID3D11Texture2D* full, int texW, int texH, const 
             bytes += (LONGLONG)rb * (y1 - y0);
         });
     }
+    // THE OPAQUE BOUNDING BOX, ON THIS PATH TOO. PublishPrintWindow has always measured it and the
+    // agent tightens its crop to it "instead of UIA's +/-1-2px estimate"; the WGC path never did,
+    // so a WGC-captured popup fell back to that estimate and kept a rim of its transparent shadow
+    // margin - which a premultiplied capture delivers as OPAQUE BLACK. Photographed 2026-10-17 on
+    // a Notepad teaching tip (Microsoft.UI.Content.PopupWindowSiteBridge): scanning in from the
+    // announced edge gave 2 px of dom0's label border, then 3 px (left) and 6 px (top) of
+    // (0,0,0), then the popup's own (249,249,249). The owner, looking at the same window: "the o-r
+    // pop up could be either properly synthesized or properly cut, and it is neither."
+    //
+    // Measured on a WHOLE publish only - a registration answer, a resize, or a first frame - so a
+    // static popup pays for it once rather than on every arrival, which is the same discipline the
+    // PrintWindow path uses. Non-black is any channel > 16, as there.
+    if (whole) {
+        int minx = texW, miny = texH, maxx = -1, maxy = -1;
+        for (int y = 0; y < texH; y++) {
+            const BYTE* rr = (const BYTE*)map.pData + (size_t)y * map.RowPitch;
+            for (int x = 0; x < texW; x++) {
+                const BYTE* q = rr + (size_t)x * 4;
+                if (q[0] > 16 || q[1] > 16 || q[2] > 16) {
+                    if (x < minx) minx = x; if (x > maxx) maxx = x;
+                    if (y < miny) miny = y; if (y > maxy) maxy = y;
+                }
+            }
+        }
+        if (maxx >= minx && maxy >= miny) {
+            s->OpaqueL = minx; s->OpaqueT = miny;
+            s->OpaqueR = texW - 1 - maxx; s->OpaqueB = texH - 1 - maxy;
+        }
+    }
     g_ctx->Unmap(full, 0);
     MemoryBarrier();
     InterlockedExchangeAdd64(&s->DirtyBytes, bytes);
