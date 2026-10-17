@@ -107,7 +107,20 @@ w_screen(){ # $1=vm $2=tag $3=outdir
 # shellcheck disable=SC1091
 source "$(dirname "${BASH_SOURCE[0]}")/rtc-lib.sh"
 
-w_alive(){ grep -qa QREADY <<< "$(QTEST_VM=$1 timeout -k 5 40 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null)"; }
+# A BOUND SHORTER THAN THE EVENT IT WAITS FOR ABANDONS A REQUEST EVERY TIME.
+# The default 40 s is right for "is this guest still answering" - a settled guest answers in under a
+# second, and a long bound would only delay the caller's own deadline. It is WRONG for waiting on a
+# BOOT: MEASURED win11-clean 2026-10-17, the session came up at t+56 s, so every probe before that
+# was killed at 40 s while its request was still QUEUED. Queued qrexec is delivered when the agent
+# finally starts, so all the abandoned requests arrived at once - three wrappers inside 33 ms, on
+# consecutive ports, each finding its caller gone - and the guest logged
+# `InitVchan: QGAVCHANFAIL ... request dropped` once per abandoned probe, against a gate whose
+# condition is a clean error log. Nothing was lost: the caller had already given up and re-polls.
+# Jev: the per-probe bound below the awaited event is itself the defect, 0.82.
+# So the bound is a PARAMETER. Callers polling a settled guest keep 40 s; a caller waiting for a
+# boot passes one that exceeds the boot, so its single outstanding probe answers instead of being
+# abandoned. w_session's own deadline remains the real bound, which is why this one may be generous.
+w_alive(){ grep -qa QREADY <<< "$(QTEST_VM=$1 timeout -k 5 "${2:-40}" ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null)"; }
 
 # Wait for a usable session. 0=session 1=terminal 2=deadline
 w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
@@ -132,7 +145,10 @@ w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
       $log "  $lbl: DEADLINE ${dl}s with no session (screen=$(w_screen "$vm" "$lbl-dl" "$dir"))"
       return 2
     fi
-    w_alive "$vm" && { $log "  $lbl: session up at t+${now}s"; return 0; }
+    # 90 s: above the ~55-56 s this rig measures from start to session (win10 and win11 both), so a
+    # healthy guest answers on ONE probe and abandons nothing; still short enough that the per-minute
+    # screen and wedge checks below keep running on a guest that never comes up.
+    w_alive "$vm" "${W_ALIVE_BOOT_BOUND:-90}" && { $log "  $lbl: session up at t+${now}s"; return 0; }
     if [ $(( now / 60 )) -gt "$shots" ]; then
       shots=$(( now / 60 )); st=$(w_screen "$vm" "$lbl-t${now}" "$dir")
       $log "  $lbl: t+${now}s qvm=$(w_state "$vm") screen=$st"
@@ -352,7 +368,9 @@ w_install(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn $6=guest-log-path
     if [ "$(w_state "$vm")" = Halted ]; then
       $log "  $lbl: guest HALTED at t+${now}s (install rebooted or shut it down)"; return 3
     fi
-    if w_alive "$vm"; then
+    # Same boot bound as w_session: this wait spans the install's own reboots, so a 40 s probe
+    # would be abandoned mid-queue on every one of them (see w_alive).
+    if w_alive "$vm" "${W_ALIVE_BOOT_BOUND:-90}"; then
       # WHO issues a reboot: event 1074 records the process and reason for an OS-initiated
       # shutdown; 1076/6008 cover the unexpected ones. On a guest that is about to become
       # unbootable this must be read WHILE IT LIVES - afterwards there is nothing to ask.
@@ -696,8 +714,10 @@ g_reboot_proven(){ # $1=vm $2=label
   st=$(w_state "$vm")
   [ "$st" = Halted ] || { echo "$label: never reached Halted (state=$st) - it did not reboot" >&2; return 1; }
   qvm-start "$vm" >/dev/null 2>&1
-  for i in $(seq 1 60); do w_alive "$vm" && break; sleep 10; done
-  w_alive "$vm" || { echo "$label: no qrexec within 10 min of start - TERMINAL" >&2; return 1; }
+  # The boot bound here too: this loop waits for a START, so a 40 s probe is abandoned mid-queue on
+  # the way up and the guest logs a dropped request for each one (see w_alive).
+  for i in $(seq 1 60); do w_alive "$vm" "${W_ALIVE_BOOT_BOUND:-90}" && break; sleep 10; done
+  w_alive "$vm" "${W_ALIVE_BOOT_BOUND:-90}" || { echo "$label: no qrexec within 10 min of start - TERMINAL" >&2; return 1; }
   after=$(g_boot_id "$vm"); [ -n "$after" ] || { echo "$label: no boot id AFTER" >&2; return 1; }
   [ "$after" != "$before" ] || { echo "$label: boot id UNCHANGED ($after) - it did not reboot" >&2; return 1; }
   echo "$before -> $after"

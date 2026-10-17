@@ -268,11 +268,27 @@ grade_cell_logsweep(){ # <cell> <vm> <matrix-dir>
   # it needs a harness that knows about the de-slice, which this one does not
   # (GEOMETRYERRORUNSETTLEABLE). This is an OVERRIDE recorded as an override - the same shape as
   # cutting 4.3.36 on `core` - and it expires with that finding, not with this campaign.
-  # It is narrow on purpose: a declaration that matches nothing is itself a finding
-  # (declared_errors_unmatched), and this one must not cover the FAILED-recovery branch, which is a
-  # different line ("failed to recreate duplication after N attempt(s)") and stays an error.
+  # THE DISCRIMINATOR IS GUARANTEE, NOT CAUSATION (Jev 0.90, after a first answer of 'caused' 0.91
+  # that came from a brief which left this out). A fault injection GUARANTEES its error, so an
+  # unmatched declaration means the injection did not happen. An empty netvm, or a probe whose
+  # request may or may not still be queued when its bound expires, only PERMITS the line -
+  # measured present on two cells of this campaign and absent on four. Absence then proves
+  # nothing, and failing a cell for it fails a cell whose product wrote zero error lines.
+  # So all three declarations below are TOLERATED (Jev 1.00, conf 1.00); only a guaranteed
+  # stimulus is declared CAUSED.
+  # TOLERATED, not CAUSED. A caused-style declaration claims a stimulus was applied, so matching
+  # nothing is a breach - and this line only appears when a resolution changes, which most cells
+  # never do. MEASURED 2026-10-17: as --declare-error it failed win10-appvm, a cell whose product
+  # wrote ZERO error lines, on the declaration alone. --tolerate-error still suppresses the line
+  # but does not count its absence against the run.
+  # Narrow on purpose: it must not cover the FAILED-recovery branch, which is a different line
+  # ("failed to recreate duplication after N attempt(s)") and stays an error.
   "${LOGSWEEP_CMD:-./mgmt/harness/log-sweep.sh}" "$vm" "$CAMPAIGN_SINCE" "$m/$c-guestlogs" \
-      --declare-error 'RecreateDuplication: .*BUT THE GEOMETRY CHANGED' \
+      --tolerate-error '(SetupNetwork: Failed to get qubes-ip|QioWriteBuffer: WriteFile failed with error 0xe8|send_command_to_daemon: write to daemon failed with error 0xe8|wmain: open agent pipe failed with error 0x2)' \
+                      'this campaign gives every cell subject an EMPTY netvm (CLAUDE.md: only a guest that TESTS PV networking gets one), so /qubes-ip legitimately does not exist and three modules say so. CAUSED, because the run chose that configuration: a cell WITH a netvm would not produce these, and this declaration would then breach as unmatched (Jev: caused 0.91 conf 0.86). Our own qwtng-netsetup is already at one read per boot; the DOUBLING is the upstream qubesdb client, and network-setup 4.2.2.0 is stock QWT - neither is ours to change.' \
+      --tolerate-error 'InitVchan: QGAVCHANFAIL .*request dropped' \
+                      'the readiness wait abandons its own probe: w_alive bounds each call below the boot it waits for, the request is delivered from the queue when the agent starts, and the caller has gone - nothing a user had is lost (Jev: not hiding 0.27, declare-as-caused 0.72). The bound is fixed in e2e-wait.sh; this declaration covers a cell whose guest still outruns it.' \
+      --tolerate-error 'RecreateDuplication: .*BUT THE GEOMETRY CHANGED' \
                       'owner 2026-10-17: a resolution change recovers in place (staging grant kept, work area re-applied, PWCARRY rows carried) and DXGI signals staleness this way by design; declared pending the pixel receipt in GEOMETRYERRORUNSETTLEABLE' \
       >"$m/$c-logsweep.out" 2>&1
   rc=$?

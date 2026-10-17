@@ -134,6 +134,11 @@ WD = "gui-watchdog-20261007-100030-700.log"
 AG = "gui-agent-20261007-100031-1000.log"
 # base: one boot, one agent, a clean requested stop at shutdown
 write("base.pull", stream([(WD, "watchdog", watchdog()), (AG, "agent", agent())], events()))
+# reqstop: the base cycle, but the requested stop exits with the code that NAMES the request.
+# MEASURED win11-upgrade/win11-reinstall 2026-10-17: the watchdog asks via Global\QGA_SHUTDOWN and
+# the agent is gone 773 ms later with 0x20514702 = QGA_EXIT_REQUESTED (agent/include/
+# qga-exitcodes.h:22). The grader demanded 0x0 and breached on the product naming its own reason.
+write("reqstop.pull", stream([(WD, "watchdog", watchdog(stop_exit="0x20514702")), (AG, "agent", agent())], events()))
 # newsig: base + an ERROR line that is in no baseline
 new_mid = [wu("100600.000", 200, "E", "FixtureNovelty", "a brand new failure 0x1234 that nobody has seen before")]
 write("newsig.pull", stream([(WD, "watchdog", watchdog()), (AG, "agent", agent(mid=new_mid))], events()))
@@ -245,6 +250,15 @@ def _rb(pid, t0, uptime, texit):
     if texit:
         L.append(p(texit, "WinMain", "QGAEXIT exiting with 0x20514703 (the session is ending "
                                      "(WM_ENDSESSION)) - an expected exit, not a failure"))
+    # ONE GRADED LINE PER BOOT, so the forward attribution window has a LINE-level observable.
+    # Added 2026-10-17: the anchor now decides an INSTANCE's boot (GUARD:instboot), which is a
+    # strict improvement where an uptime line exists - and it left the fwdallow guard with nothing
+    # to move, because every observable in this fixture was the instance count. The forward window
+    # still governs LINES (log-sweep.py: `l.boot = lf.boot if (lf.boot and one_process) else
+    # boot_for(l.ts)`), and this file holds four processes, so one_process is False and boot_for
+    # decides. A signature present once per boot therefore measures exactly what the window does.
+    L.append("[%s.%s-%d:%d-W] %s: %s" % (D, t0, pid, pid + 4, "WorkAreaApply",
+             "FWDPROBE one graded line per boot, for the forward-window guard"))
     return L
 RB = [("gui-agent-20261007.log", "agent",
        _rb(3824, "091032.353", "14.125", "091243.431") + _rb(3844, "091354.000", "10.750", "091358.000")
@@ -460,6 +474,47 @@ tb_new = [wu("100400.000", "3992:4016", "I", "LogInit", "Log started, module nam
           wu("100500.000", "3992:4016", "I", "WatchForEvents", "exiting")]
 write("twobuild.pull", stream([(TBO, "agent", tb_old), (TBN, "agent", tb_new)], events()))
 
+# ---- fastreboot: TWO BOOTS 37 s APART, one agent each -------------------------------------------
+# THE NUMBERS ARE THE MEASURED ONES, not a model of them. win10-clean 2026-10-17, the installer's
+# own reboot chain: agent instances at 01:30:23.851/01:33:57.838/01:34:32.832 reporting System
+# uptime 19.437/13.406/11.281 s, i.e. boots at 01:30:04.414, 01:33:44.432 and 01:34:21.551 - the
+# last two 37.1 s apart, inside BOOT_TOL_S=45, so they merged. The merged boot's instance then fell
+# inside the previous shutdown window and the relaunch test fired. Four P2 breaches, one cause.
+# The watchdog here does what the real one did: a FRESH service pid per boot, one StartTargetProcess
+# at its own startup, and NOT ONE "not running, restarting it" line anywhere.
+FRA = "gui-agent-20261007.log"
+FRW = "gui-watchdog-20261007.log"
+def fr_agent(t0, up, pid, tid, last):
+    return [wu(t0, "%d:%d" % (pid, tid), "I", "LogInit", "Log started, module name: gui-agent"),
+            wu(t0, "%d:%d" % (pid, tid), "I", "LogInit", "System uptime: %s seconds" % up),
+            wu(t0, "%d:%d" % (pid, tid), "I", "LogInit", "Running as user: SYSTEM, process ID: %d" % pid),
+            wu(t0, "%d:%d" % (pid, tid), "I", "LogInit", "Module version: 9.9.9.1"),
+            wu(t0, "%d:%d" % (pid, tid), "I", "LogInit", "Session: 1"),
+            wu(t0, "%d:%d" % (pid, tid), "I", "WatchForEvents", "Awaiting for a vchan client, write buffer size: 65536"),
+            wu(t0, "%d:%d" % (pid, tid), "I", "WatchForEvents", "A vchan client has connected"),
+            wu(last, "%d:%d" % (pid, tid), "I", "WatchForEvents", "exiting")]
+def fr_wd(t0, pid, tid, agent_t):
+    return [wu(t0, "%d:%d" % (pid, tid), "I", "LogInit", "Log started, module name: gui-watchdog"),
+            wu(t0, "%d:%d" % (pid, tid), "I", "LogInit", "Running as user: SYSTEM, process ID: %d" % pid),
+            wu(t0, "%d:%d" % (pid, tid), "I", "LogInit", "Module version: 9.9.9.1"),
+            wu(agent_t, "%d:%d" % (pid, tid), "I", "StartTargetProcess", "Running process 'C:\\Program Files\\Qubes Tools\\bin\\gui-agent.exe' in session 1")]
+fr_ag = (fr_agent("013023.851", "19.437", 3716, 3720, "013246.008")
+       + fr_agent("013357.838", "13.406", 3912, 3916, "013404.640")
+       + fr_agent("013432.832", "11.281", 3844, 3848, "013509.256"))
+fr_wdl = (fr_wd("013023.739", 3572, 3664, "013023.739")
+        + fr_wd("013357.765", 3760, 3896, "013357.765")
+        + fr_wd("013432.791", 3780, 3832, "013432.791")
+        + [wu("013246.810", "3572:3576", "I", "ControlHandlerEx", "preshutdown - the agent will not be restarted from here on, stopping")])
+# The SECOND marker is the win11-appvm shape: a shutdown message landing 3 s AFTER a boot
+# (01:34:21 from pid 3844's uptime anchor), so that boot's own agent launch and startup announce
+# fall inside a window whose end is a guess - with nothing of ours ended before them. Measured
+# 2026-10-17: that produced vchan_setups_per_shutdown=1 against a guest whose watchdog log shows a
+# fresh service start, its own StartTargetProcess, and `nothing starts in session 1` at the end.
+fr_ev = ["EV 2026-10-07 01:32:45.327 [Microsoft-Windows-TerminalServices-LocalSessionManager/Operational] id=54 level=4 Microsoft-Windows-TerminalServices-LocalSessionManager: Local multi-user session manager received system shutdown message",
+         "EV 2026-10-07 01:34:24.100 [Microsoft-Windows-TerminalServices-LocalSessionManager/Operational] id=54 level=4 Microsoft-Windows-TerminalServices-LocalSessionManager: Local multi-user session manager received system shutdown message",
+         "EV NONE [Microsoft-Windows-TaskScheduler/Operational]"]
+write("fastreboot.pull", stream([(FRA, "agent", fr_ag), (FRW, "watchdog", fr_wdl)], fr_ev))
+
 PY
 [ $? -eq 0 ] || { echo "FATAL: fixture generation failed"; exit 2; }
 
@@ -481,7 +536,7 @@ analyze(){ # $1=analyzer $2=logsdir $3=baseline $4=judge $5=tag -> rc; report at
 field(){ python3 -c "import json,sys; r=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$1" "$2"; }
 
 # ---- decode every fixture with the real decoder --------------------------------------------------------------------
-for f in base newsig rise three stoperr empty twoboot clockflip rapidboot taskok vchanwd phaseflip skipnames skipchatty bootshut inv twoproc msiok msibad twobuild; do
+for f in base newsig rise three stoperr empty twoboot clockflip rapidboot taskok vchanwd phaseflip skipnames skipchatty bootshut inv twoproc msiok msibad twobuild fastreboot reqstop; do
   rc=$(decode "$SRC" "$T/$f.pull" "$T/$f")
   [ "$rc" = 0 ] || { echo "FATAL: the $f fixture did not decode (rc=$rc): $(tail -2 "$T/$f.decode.txt")"; exit 2; }
   # EVERY LINE IN THESE CORPORA IS WRITTEN BY THIS TEST, so the run declares the errors it caused - which is
@@ -1084,11 +1139,25 @@ rbp=$(field "$T/t36b.json" 'r["metrics"]["agent_instances_per_boot"]')
                || bad "T36b agent_instances=$rbi, want 4"
 [ "$rbp" = 1 ] && ok "T36b each lands in its OWN boot - no restart is invented (agent_instances_per_boot=$rbp)" \
                || bad "T36b agent_instances_per_boot=$rbp, want 1"
-# SEEN TO FAIL: with the flat 150 s forward window back, the later boots claim the earlier instances.
-KF=$(knob fwdallow); rc=$(analyze "$KF" "$T/rapidboot" "$T/baseline.json" "$T/jev-expected.py" t36bk)
-rbpk=$(field "$T/t36bk.json" 'r["metrics"]["agent_instances_per_boot"]')
-[ "$rbpk" = 3 ] && ok "knob fwdallow: the flat 150 s window puts 3 of 4 instances in one boot (=$rbpk)" \
-                || bad "knob fwdallow: agent_instances_per_boot=$rbpk, want 3 - the case cannot be driven"
+# SEEN TO FAIL: with the flat 150 s forward window back, the later boots claim the earlier LINES.
+# THE OBSERVABLE MOVED, AND WHY. This knob used to be driven through agent_instances_per_boot. Since
+# 2026-10-17 an instance's boot comes from ITS OWN uptime anchor (GUARD:instboot) - strictly better
+# than a forward window wherever an anchor exists - so the knob could no longer move the instance
+# count and this check could not be driven at all. The forward window still governs LINES, so the
+# guard is driven there now: a signature written once per boot shows exactly what the window did.
+# Deleting the check instead would have left the feature with no test, which is how a real rule dies.
+KF=$(knob fwdallow)
+pbv(){ # $1=analyzer $2=tag -> "<distinct boots> <max_per_boot>" for the FWDPROBE signature
+  python3 "$1" analyze "$T/rapidboot" --baseline none --out "$T/$2.json" --summary "$T/$2.txt" \
+      --label "$2" --workdir "$T/work-$2" --jev-cmd "$T/jev-expected.py" > "$T/$2.out" 2>&1
+  field "$T/$2.json" '(lambda v: str(len((v.get("per_boot") or {}))) + " " + str(v.get("max_per_boot")))([x for x in r["signatures"].values() if "FWDPROBE" in x["key"]][0])'
+}
+read -r fwb fwm <<<"$(pbv "$SRC" t36bl)"
+[ "$fwb" = 4 ] && [ "$fwm" = 1 ] && ok "T36b each boot keeps its OWN line (boots=$fwb max_per_boot=$fwm)" \
+                || bad "T36b FWDPROBE spread over $fwb boot(s), max_per_boot=$fwm - want 4 and 1"
+read -r fwbk fwmk <<<"$(pbv "$KF" t36bk)"
+[ "$fwmk" = 3 ] && ok "knob fwdallow: SEEN TO FAIL - the flat 150 s window puts 3 of 4 boots' lines in one boot (boots=$fwbk max_per_boot=$fwmk)" \
+               || bad "knob fwdallow: boots=$fwbk max_per_boot=$fwmk, want max_per_boot=3 - the case cannot be driven"
 
 K=$(knob allinits); rc=$(analyze "$K" "$T/clockflip" "$T/baseline.json" "$T/jev-expected.py" t36a)
 ba=$(field "$T/t36a.json" 'r["header"]["boots"]')
@@ -1249,6 +1318,125 @@ case "$t46k$t46m" in *build-scope*gui-agent*) ok "T46 the newest build writing n
 KS=$(knob silentbuild); read -r t46krc t46kk _ <<<"$(sb "$KS" t46k)"
 case "$t46kk" in *build-scope*) bad "knob silentbuild: still raised the problem (kinds=$t46kk) - the case cannot be driven" ;;
                  *) ok "knob silentbuild: SEEN TO FAIL - without it the empty window passes silently (kinds=$t46kk)" ;; esac
+
+# ---- T47 TWO BOOTS 37 s APART MUST NOT MERGE, and each instance belongs to ITS OWN boot --------
+# MEASURED win10-clean 2026-10-17 and reproduced by the fastreboot fixture with the same numbers.
+# One clustering error produced FOUR P2 breaches on a build whose watchdog log carries zero
+# "not running, restarting it" lines: agent_instances_per_boot, agent_instances_per_shutdown,
+# agent_relaunches_at_shutdown and vchan_setups_per_shutdown. Jev scored the relaunch one defect
+# 0.87 against a correct binary, which is what a grader artefact costs when nobody checks the
+# emitter. Two knobs, because the defect had TWO independent halves and fixing one left the other.
+fr(){ # $1=analyzer $2=tag -> "<boots> <per_boot> <per_shutdown> <relaunches> <vchan>"
+  python3 "$1" analyze "$T/fastreboot" --baseline "$T/baseline.json" --out "$T/$2.json" \
+      --summary "$T/$2.txt" --label "$2" --workdir "$T/work-$2" --jev-cmd "$T/jev-expected.py" > "$T/$2.out" 2>&1
+  field "$T/$2.json" 'str(len(r["boots"]))+" "+str(r["metrics"]["agent_instances_per_boot"])+" "+str(r["metrics"]["agent_instances_per_shutdown"])+" "+str(r["metrics"]["agent_relaunches_at_shutdown"])+" "+str(r["metrics"]["vchan_setups_per_shutdown"])'
+}
+read -r b47 pb47 ps47 rl47 vc47 <<<"$(fr "$SRC" t47)"
+[ "$pb47" = 1 ] && ok "T47 one agent per boot, with boots 37 s apart kept apart (boots=$b47 per_boot=$pb47)" \
+               || bad "T47 agent_instances_per_boot=$pb47 (boots=$b47), want 1 - two boots 37 s apart merged"
+[ "$rl47" = 0 ] && ok "T47 and no relaunch is invented from a boot's own agent (relaunches=$rl47)" \
+               || bad "T47 agent_relaunches_at_shutdown=$rl47, want 0 - the watchdog never logged a restart"
+[ "$ps47" = 1 ] && [ "$vc47" = 0 ] && ok "T47 the shutdown-window metrics are clean too (per_shutdown=$ps47 vchan=$vc47)" \
+                || bad "T47 per_shutdown=$ps47 vchan=$vc47, want 1 and 0"
+KE=$(knob exacttol); read -r b47e pb47e _ _ rl47e <<<"$(fr "$KE" t47e)"
+[ "$pb47e" -ge 2 ] || [ "$rl47e" -ge 1 ] \
+  && ok "knob exacttol: SEEN TO FAIL - with one tolerance for exact and inexact estimates the boots merge (boots=$b47e per_boot=$pb47e)" \
+  || bad "knob exacttol: boots=$b47e per_boot=$pb47e - the case cannot be driven"
+KA=$(knob announceneedsend); read -r _ _ _ _ vc47a <<<"$(fr "$KA" t47a)"
+[ "$vc47a" -ge 1 ] \
+  && ok "knob announceneedsend: SEEN TO FAIL - a boot's OWN startup announce counts as a vchan setup while going down (=$vc47a)" \
+  || bad "knob announceneedsend: vchan_setups_per_shutdown=$vc47a, want >=1 - the case cannot be driven"
+KB=$(knob instboot); read -r b47i pb47i _ _ _ <<<"$(fr "$KB" t47i)"
+[ "$pb47i" -ge 2 ] \
+  && ok "knob instboot: SEEN TO FAIL - with the clusters right, a line's boot still mis-attributes the instance (per_boot=$pb47i)" \
+  || bad "knob instboot: per_boot=$pb47i, want >=2 - the case cannot be driven"
+
+# ---- T48 a TOLERATED declaration claims no stimulus, so its absence is not a breach ------------
+# MEASURED 2026-10-17: the owner declared the geometry-changed line ("declare those 4 for now"),
+# and as a CAUSED declaration it failed win10-appvm - a cell whose product wrote ZERO error lines -
+# because the line only appears when a resolution changes and that cell never changes one. A caused
+# declaration is a claim that a stimulus was APPLIED, so unmatched is rightly a breach; a tolerated
+# one is an owner override and its absence is good news.
+td(){ # $1=analyzer $2=tag $3=1 for tolerate -> "<unmatched> <tolerated> <undeclared>"
+  python3 - "$T/base/context.json" "$3" <<'PYX'
+import json,sys
+d={"pattern":"FixtureNoveltyNeverAppears","why":"a pattern that matches nothing in the clean fixture"}
+if sys.argv[2]=="1": d["tolerate"]=True
+json.dump({"source":"selftest T48","declared_errors":[d]},open(sys.argv[1],"w"))
+PYX
+  python3 "$1" analyze "$T/base" --baseline "$T/baseline.json" --out "$T/$2.json" \
+      --summary "$T/$2.txt" --label "$2" --workdir "$T/work-$2" --jev-cmd "$T/jev-expected.py" > "$T/$2.out" 2>&1
+  field "$T/$2.json" 'str(r["metrics"]["declared_errors_unmatched"])+" "+str(r["metrics"].get("declared_errors_tolerated"))+" "+str(r["metrics"]["error_lines_undeclared"])'
+}
+_ctxsave="$T/base/context.json.t48save"; [ -f "$T/base/context.json" ] && cp "$T/base/context.json" "$_ctxsave"
+read -r u48t tl48t _ <<<"$(td "$SRC" t48t 1)"
+[ "$u48t" = 0 ] && [ "$tl48t" = 1 ] && ok "T48 an unmatched TOLERATED declaration is not a breach (unmatched=$u48t tolerated=$tl48t)" \
+                || bad "T48 unmatched=$u48t tolerated=$tl48t, want 0 and 1"
+read -r u48c tl48c _ <<<"$(td "$SRC" t48c 0)"
+[ "$u48c" = 1 ] && ok "T48 an unmatched CAUSED declaration still breaches - the stimulus did not happen (unmatched=$u48c)" \
+               || bad "T48 unmatched=$u48c for a caused declaration, want 1 - the old rule must survive"
+KT=$(knob tolerate); read -r u48k _ _ <<<"$(td "$KT" t48k 1)"
+[ "$u48k" = 1 ] && ok "knob tolerate: SEEN TO FAIL - without the kind, a tolerated declaration breaches on its own absence (unmatched=$u48k)" \
+               || bad "knob tolerate: unmatched=$u48k, want 1 - the case cannot be driven"
+
+# ---- T48b THE WRAPPER MUST ACTUALLY WRITE THE KIND --------------------------------------------
+# log-sweep.py reading `tolerate: true` is only half of it: mgmt/harness/log-sweep.sh has to put it
+# there from --tolerate-error. That plumbing was UNTESTED, and if it were wrong every declaration
+# the matrix passes would arrive as CAUSED and every cell without the line would breach as
+# unmatched - the exact failure these tests exist to prevent. Jev scored the test set 0.56 with
+# this gap in it. Driven by extracting the wrapper's own context block and running it.
+wrapctx(){ # $1=the wrapper to drive -> "<caused-flag> <tolerated-flag>"
+  python3 - "$1" <<'PYX'
+import subprocess, json, os, re, sys, tempfile
+src = open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r"(python3 - \"\$OUT/logs/context\.json\".*?\nPY\n)", src, re.S)
+if not m:
+    print("NOBLOCK NOBLOCK"); raise SystemExit(0)
+d = tempfile.mkdtemp(); os.makedirs(os.path.join(d, "logs"))
+harness = "set -uo pipefail\nOUT=%s\nFI_DECLARED=\"\"\n" % d
+harness += "PRESYNC_GUEST_UTC=x; PRESYNC_HOST_UTC=y; PRESYNC_SKEW_S=0; POSTSYNC_GUEST_UTC=z\n"
+harness += "DECL_PAT=(); DECL_WHY=(); DECL_TOL=()\n"
+harness += 'DECL_PAT+=("CAUSEDPAT"); DECL_WHY+=("guaranteed"); DECL_TOL+=(0)\n'
+harness += 'DECL_PAT+=("TOLPAT"); DECL_WHY+=("permitted"); DECL_TOL+=(1)\n'
+harness += m.group(1)
+r = subprocess.run(["bash", "-c", harness], capture_output=True)
+try:
+    ctx = json.load(open(os.path.join(d, "logs", "context.json")))
+    got = {e["pattern"]: bool(e.get("tolerate", False)) for e in ctx.get("declared_errors", [])}
+    print("%s %s" % (got.get("CAUSEDPAT"), got.get("TOLPAT")))
+except Exception:
+    print("ERR ERR")
+PYX
+}
+read -r wc1 wt1 <<<"$(wrapctx "$ROOT/mgmt/harness/log-sweep.sh")"
+[ "$wc1" = False ] && [ "$wt1" = True ] \
+  && ok "T48b the wrapper writes tolerate=true for --tolerate-error and nothing for --declare-error (caused=$wc1 tolerated=$wt1)" \
+  || bad "T48b wrapper wrote caused=$wc1 tolerated=$wt1, want False and True - the kind does not reach context.json"
+# SEEN TO FAIL: with the kind stripped out of the wrapper, both arrive as caused.
+sed -E 's/\*\*\(\{"tolerate": True\} if t == "1" else \{\}\)/**{}/' "$ROOT/mgmt/harness/log-sweep.sh" > "$T/wrapper-nokind.sh"
+read -r wc2 wt2 <<<"$(wrapctx "$T/wrapper-nokind.sh")"
+[ "$wt2" = False ] \
+  && ok "T48b SEEN TO FAIL: with the kind stripped, a tolerated declaration arrives as CAUSED (tolerated=$wt2)" \
+  || bad "T48b the stripped wrapper still wrote tolerated=$wt2 - the case cannot be driven"
+[ -f "$_ctxsave" ] && mv "$_ctxsave" "$T/base/context.json" || rm -f "$T/base/context.json"
+
+# ---- T49 a requested stop REPORTS ITS REASON, and a named reason is not a failure -------------
+# The agent exits with QGA_EXIT_REQUESTED when the watchdog asks it to stop through
+# Global\QGA_SHUTDOWN. requested_stop_nonzero_exit demanded 0x0 and so fired on the product
+# correctly naming the request it was given - and its own `why` still cites "the 0xb7 case", the
+# stale-GetLastError defect of 2026-10-07 that these reason codes were introduced to fix.
+# The product owns this decision in QgaExitIsExpected(); the grader uses the same set.
+rs(){ # $1=analyzer $2=tag -> requested_stop_nonzero_exit
+  python3 "$1" analyze "$T/reqstop" --baseline "$T/baseline.json" --out "$T/$2.json" \
+      --summary "$T/$2.txt" --label "$2" --workdir "$T/work-$2" --jev-cmd "$T/jev-expected.py" > "$T/$2.out" 2>&1
+  field "$T/$2.json" 'r["metrics"]["requested_stop_nonzero_exit"]'
+}
+t49=$(rs "$SRC" t49)
+[ "$t49" = 0 ] && ok "T49 a requested stop exiting QGA_EXIT_REQUESTED is not a non-zero failure (=$t49)" \
+               || bad "T49 requested_stop_nonzero_exit=$t49, want 0 - the agent named the reason it was asked for"
+KR=$(knob reqstopreason); t49k=$(rs "$KR" t49k)
+[ "$t49k" = 1 ] && ok "knob reqstopreason: SEEN TO FAIL - demanding 0x0 breaches on the named reason (=$t49k)" \
+                || bad "knob reqstopreason: got $t49k, want 1 - the case cannot be driven"
 
 # ---- T41-T42 the rig wrapper: the guest's clock is read BEFORE it is synced, and the collector's cap is passed ----
 # MEASURED 2026-10-10 on win10-acc: the wrapper never called `qtest synctime`, so the collector ran with the guest

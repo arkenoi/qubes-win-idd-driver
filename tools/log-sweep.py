@@ -483,7 +483,10 @@ INFORMATIONAL_METRICS = ["error_lines", "warning_lines", "warning_lines_ours", "
                          "warning_lines_other", "agent_instances", "boots", "shutdowns", "agent_going_down_exits",
                          "deaths_by_exit_code", "broker_events_excused", "fi_records",
                          # what the build filter set aside, so an exclusion is never silent
-                         "error_lines_prior_build", "warning_lines_prior_build", "prior_build_mix"]
+                         "error_lines_prior_build", "warning_lines_prior_build", "prior_build_mix",
+                         # what was declared, with its kind and whether it matched - the audit trail
+                         # for the tolerated kind, whose absence deliberately cannot breach
+                         "declared_errors_tolerated", "declared_errors_detail"]
 SEVERITY_ORDER = {"P1": 0, "P2": 1, "P3": 2}
 
 # FAULT-INJECTION CONTEXT - decided from EVIDENCE in the capture, never from a file name (coordinator, 2026-10-07):
@@ -1467,8 +1470,32 @@ def cluster_boots(files, phase_off=None):
                     est.append((l.ts - dt.timedelta(seconds=45), None, False))
     est.sort(key=lambda e: e[0])
     boots = []
+    # TWO EXACT ESTIMATES 37 s APART ARE TWO BOOTS, AND THE FLAG TO SAY SO IS ALREADY HERE.
+    # The comment above states it: an uptime-derived estimate "is accurate to about a second" while
+    # the 6005 estimate "can be tens of seconds out" - which is why the latter may only JOIN a
+    # cluster. But BOTH were compared with the same 45 s tolerance, so two exact estimates from
+    # genuinely distinct boots merged whenever the guest rebooted faster than the tolerance.
+    # MEASURED win10-clean 2026-10-17, the installer's own reboot chain: uptime anchors gave boots at
+    # 01:30:04, 01:33:44, 01:34:21 and 01:35:30 - one agent instance each, which is correct product
+    # behaviour - and the 01:33:44 and 01:34:21 pair, 37 s apart, merged. The merged boot's instance
+    # then fell inside the PREVIOUS shutdown window (which ends at the merged boot's time), after an
+    # earlier instance had ended in it, and the relaunch test fired: agent_instances_per_boot=2,
+    # agent_instances_per_shutdown=2, agent_relaunches_at_shutdown=1, vchan_setups_per_shutdown=1 -
+    # FOUR P2 breaches from ONE clustering error, with Jev scoring the relaunch one defect 0.87
+    # against a binary whose watchdog log carries ZERO "not running, restarting it" lines and four
+    # StartTargetProcess lines from four DIFFERENT watchdog pids, i.e. four service starts.
+    # This is not a retune of BOOT_TOL_S: its own comment records the opposite defect (letting an
+    # imprecise estimate open a cluster split one boot in two), and its premise that "consecutive
+    # boots are 90-110 s apart" is what the installer's reboot chain falsifies. The precision of the
+    # estimate decides the tolerance, which is the distinction the `exact` flag already carries.
+    # 10 s is far above the ~1 s the exact anchors are accurate to and far below the 37 s measured.
+    EXACT_TOL_S = 10
     for t, lf, exact in est:
-        if boots and abs((t - boots[-1]["times"][-1]).total_seconds()) <= BOOT_TOL_S:   # GUARD:boottol DEFECT: if boots and abs((t - boots[-1]["times"][-1]).total_seconds()) <= 150:
+        if boots and exact and boots[-1]["exact"]:
+            _same = abs((t - boots[-1]["exact"][-1]).total_seconds()) <= EXACT_TOL_S   # GUARD:exacttol DEFECT: _same = abs((t - boots[-1]["exact"][-1]).total_seconds()) <= BOOT_TOL_S
+        else:
+            _same = bool(boots) and abs((t - boots[-1]["times"][-1]).total_seconds()) <= BOOT_TOL_S
+        if _same:   # GUARD:boottol DEFECT: if boots and abs((t - boots[-1]["times"][-1]).total_seconds()) <= 150:
             boots[-1]["times"].append(t)
             if exact:
                 boots[-1]["exact"].append(t)
@@ -1884,8 +1911,24 @@ def build_structure(files, boots, declared=None):
     for lf, _pid, _lines in sorted(_segments, key=lambda t: (t[2][0].ts or dt.datetime.min)):
         # the init record this process wrote, when it is in this file (it names the session/version)
         _init = next((i for i in lf.inits if i["pid"] == _pid), None)
+        # THE INSTANCE'S OWN ANCHOR DECIDES ITS BOOT - not its first LINE's, and not the FILE's.
+        # Both of those are wrong for the shape the agent actually writes. `lf.boot` comes from
+        # lf.boot_time, which every LogInit overwrites, so in a per-day file it is the LAST
+        # instance's boot; the `_lines[0].boot` branch exists to dodge that, but a line's boot is
+        # assigned by a forward-reaching window that absorbs estimate error, so a process that
+        # starts 13 s after its own boot can be claimed by the NEXT cluster.
+        # MEASURED win10-clean 2026-10-17: with the clusters correct (01:33:44 and 01:34:21, 37 s
+        # apart), pid 3912 - whose own init says uptime 13.406 s at 01:33:57.838, i.e. boot
+        # 01:33:44 - was still attributed to the 01:34:21 cluster, leaving agent_instances_per_boot
+        # = 2 on a guest that ran exactly one agent per boot, four boots in a row. Each init record
+        # already carries the clock-free (timestamp - System uptime) for ITS OWN process, so it is
+        # the thing to match, and nothing else is as precise.
+        _ibt = (_init or {}).get("boot_time")
+        _bid = (_lines[0].boot if len(lf.inits) > 1 else lf.boot)
+        if _ibt and boots:
+            _bid = min(boots, key=lambda b: abs((b["time"] - _ibt).total_seconds()))["id"]   # GUARD:instboot DEFECT: pass
         inst = {"pid": _pid, "file": lf.name,
-                "boot": (_lines[0].boot if len(lf.inits) > 1 else lf.boot),
+                "boot": _bid,
                 "session": (_init or {}).get("session", lf.session) if _init else lf.session,
                 "version": (_init or {}).get("version", lf.version) if _init else lf.version,
                 "start": _lines[0].ts, "end": _lines[-1].ts, "lines": len(_lines),
@@ -1938,7 +1981,21 @@ def build_structure(files, boots, declared=None):
         # ended before it is the boot's own launch, and a boot that is followed by a shutdown is not it.
         _ends = [i["end"] for i in w["instances"] if i.get("end")] + [d["ts"] for d in w["deaths"] if d.get("ts")]
         w["relaunches"] = [l for l in w["launches"] if any(e <= l.ts for e in _ends)]   # GUARD:relaunchneedsend DEFECT: w["relaunches"] = w["launches"]
-        w["announces"] = [l for i in w["instances"] for l in i["_lines"] if l.func == "WatchForEvents" and l.msg.startswith("Awaiting for a vchan client") and lo <= l.ts <= w["end"]]
+        # AN ANNOUNCE IS NOT A SETUP "WHILE GOING DOWN" IF IT IS THE BOOT'S OWN STARTUP ANNOUNCE.
+        # This test had no guard at all, while w["relaunches"] three lines up has one for exactly the
+        # same confusion - a launch only counts if something of OURS ENDED before it in the window.
+        # MEASURED win11-appvm 2026-10-17 (and it breaches three cells of that campaign): window 5
+        # opens on a TerminalServices id=54 marker at 03:03:50, three seconds after boot 4 at
+        # 03:03:47, and its END is a 120 s GUESS. Inside it the guest's own log shows a textbook
+        # correct startup: a FRESH gui-watchdog service LogInit at 03:04:32.923 with uptime 45.593 s
+        # (so this boot's watchdog), its StartTargetProcess launching agent 4400, that agent
+        # announcing at 03:04:33.842 - 43 s AFTER the window opened and before anything of ours had
+        # ended - and later `QGAWDSESSIONEND ... nothing starts in session 1`, the 2026-10-07 guard
+        # doing its job. vchan_setups_per_shutdown=1 against a build that behaved perfectly.
+        # So the announce carries the same condition as the relaunch: it counts only if one of our
+        # instances had already ENDED in this window. The boot's own announce never will.
+        _asetup = [l for i in w["instances"] for l in i["_lines"] if l.func == "WatchForEvents" and l.msg.startswith("Awaiting for a vchan client") and lo <= l.ts <= w["end"]]
+        w["announces"] = [l for l in _asetup if any(e <= l.ts for e in _ends)]   # GUARD:announceneedsend DEFECT: w["announces"] = _asetup
         w["stops"] = [i for i in w["instances"] if i["stop"] and i["stop"]["asked"] and lo <= i["stop"]["asked"] <= w["end"] + dt.timedelta(seconds=60)]
         w["label"] = "S%d %s..%s%s" % (w["id"], fmt_ts(w["start"]), fmt_ts(w["end"]), " (approximate window)" if w["approx"] or w["approx_end"] else "")
 
@@ -2031,7 +2088,22 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
             else:
                 rel += max(0, n - 1)
     m["helper_relaunches"] = rel
-    m["requested_stop_nonzero_exit"] = len([i for i in insts if i["stop"] and i["stop"]["code"] not in (None, "0x0")])
+    # A REQUESTED STOP NOW REPORTS *WHY* IT STOPPED, AND THAT IS NOT A NON-ZERO FAILURE.
+    # This demanded 0x0 and so breached on the agent correctly naming its own exit reason. MEASURED
+    # win11-upgrade and win11-reinstall 2026-10-17: the watchdog logs `asked 'gui-agent.exe' (PID
+    # 4336) to exit via Global\QGA_SHUTDOWN` and 773 ms later `is gone, exit code 0x20514702` -
+    # which is QGA_EXIT_REQUESTED, "requested through Global\QGA_SHUTDOWN" (agent/include/
+    # qga-exitcodes.h:22). The agent exited with the code that NAMES the request it was given.
+    # The metric's own `why` still cites "the 0xb7 case" - the stale-GetLastError defect of
+    # 2026-10-07 that these reason codes were introduced to FIX, so it predates them.
+    # The product already owns this decision: QgaExitIsExpected() in agent/include/qga-lifecycle.h
+    # accepts REQUESTED / SESSION_END / RECONNECT / NO_GUI_DOMAIN. The grader uses the same set,
+    # kept beside the header it mirrors, and still breaches on anything else - a Win32 error in that
+    # field is exactly what this was written to catch.
+    QGA_EXPECTED_EXITS = ("0x0", "0x20514701", "0x20514702", "0x20514703", "0x20514704")
+    m["requested_stop_nonzero_exit"] = len([i for i in insts if i["stop"]
+                                            and i["stop"]["code"] is not None
+                                            and i["stop"]["code"].lower() not in QGA_EXPECTED_EXITS])   # GUARD:reqstopreason DEFECT: and i["stop"]["code"] not in (None, "0x0")])
     m["errors_during_requested_stop"] = sum(len(i["errors_during_stop"]) for i in insts)   # GUARD:instwindow DEFECT: m["errors_during_requested_stop"] = sum(len(i["errors_during_stop"]) for i in inst)
     m["stale_error_lines"] = len([l for lf in files for l in lf.lines if l.level == "E" and STALE_ERR_RE.search(l.msg) and sel(l.ts)])
     m["watchdog_fast_death_backoffs"] = len([l for l in st["fastdeath"] if sel(l.ts)])
@@ -2084,22 +2156,54 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
     # Every error line in our own logs counts, EXCEPT one this run declared it caused (a fault injection, or a
     # cell that ends a helper on purpose). Jev: zero-except-declared-injection 1.00; an exemption from the
     # BASELINE would be hiding (0.64), so the baseline does not excuse anything here - it only says new vs known.
-    _decl, _bad = [], 0
+    # TWO KINDS OF DECLARATION, AND ONLY ONE OF THEM IS A CLAIM ABOUT A STIMULUS.
+    #   caused    "this run APPLIED something that produces errors" - a fault injection, a cell that
+    #             ends a helper on purpose. If it matches nothing the stimulus did not happen and the
+    #             run proved less than it claims, so unmatched IS a finding. This is the default.
+    #   tolerated "this known line is accepted IF it appears" - an owner override for a condition
+    #             that is not a defect and is not fixable here. Its absence is GOOD NEWS, not a
+    #             failed stimulus, so it must not breach declared_errors_unmatched.
+    # MEASURED 2026-10-17: the owner's declaration of the geometry-changed line (an override, recorded
+    # as one) made EVERY cell that does not change resolution breach declared_errors_unmatched -
+    # win10-appvm failed the sweep on that alone, with error_lines=0, i.e. a cell whose product wrote
+    # no error line at all failed the clean-error-log gate because of the declaration meant to let it
+    # pass. The mechanism modelled only the first kind.
+    # A tolerated declaration still has to be USED to suppress, so it cannot hide a line it never
+    # matched; what changes is only whether its ABSENCE is counted against the run.
+    _decl, _tol, _bad = [], [], 0
     for d in (st.get("context") or {}).get("declared_errors", []):
         pat = d.get("pattern") if isinstance(d, dict) else None
         if not pat:
             _bad += 1
             continue
         try:
-            _decl.append(re.compile(pat))
+            rx = re.compile(pat)
         except re.error:
             _bad += 1   # a malformed declaration can match nothing, so it counts as one that never appeared
+            continue
+        _decl.append(rx)
+        if isinstance(d, dict) and d.get("tolerate"):
+            _tol.append(rx)
     def _is_declared(line):
         return any(rx.search(line.raw) for rx in _decl)
     m["error_lines_undeclared"] = len([l for l in errs if not _is_declared(l)])
     # a declaration that matches nothing is itself a finding: the stimulus it names did not happen, so the
-    # run proved less than it claims (the same rule as a check that has never been seen to fail)
-    m["declared_errors_unmatched"] = _bad + len([1 for rx in _decl if not any(rx.search(l.raw) for l in errs)])
+    # run proved less than it claims (the same rule as a check that has never been seen to fail) - unless it
+    # was declared TOLERATED, which claims no stimulus and whose absence proves nothing was wrong
+    m["declared_errors_unmatched"] = _bad + len([1 for rx in _decl
+                                                 if rx not in _tol   # GUARD:tolerate DEFECT: if True
+                                                 and not any(rx.search(l.raw) for l in errs)])
+    m["declared_errors_tolerated"] = len(_tol)
+    # EVERY DECLARATION IS AUDITABLE, because the tolerated kind is the one an author will reach for
+    # to make a cell pass (Jev, asked which of these six changes is weakest: tolerated-declarations
+    # 0.91). Its absence cannot breach - that is the point of it - so the defence is VISIBILITY: each
+    # declaration is reported with its kind and whether it actually matched anything here. A
+    # tolerated declaration that matches nothing on any cell of a campaign has earned no place, and
+    # this is the field that shows it.
+    m["declared_errors_detail"] = [{"pattern": rx.pattern[:120],
+                                    "kind": "tolerated" if rx in _tol else "caused",
+                                    "matched": sum(1 for l in errs if rx.search(l.raw))}
+                                   for rx in _decl]
     _warns_all = [(lf, l) for lf in files for l in lf.lines if l.level == "W" and sel(l.ts)]
     warns = [(lf, l) for lf, l in _warns_all if not _prior(lf, l)]
     m["warning_lines_prior_build"] = len(_warns_all) - len(warns)

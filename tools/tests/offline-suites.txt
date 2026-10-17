@@ -102,5 +102,6 @@ toastactions-selftest.sh
 uac-prompt-reachable-selftest.sh
 verdict-jev-selftest.sh
 verdict-lib-selftest.sh
+wait-bound-selftest.sh
 wu-liveness-selftest.sh
 xen-core-small-selftest.sh
