@@ -32,6 +32,11 @@
 #                          1000 ms bound, twice on win11de-sm) would then never be reported at all
 #       STARTRETURNNULL    activation is handed to the shell desktop even when there is no shell
 #                          window, i.e. to NULL - at logon and shutdown there is none
+#       GIANTSHELLFRAME    a SCREEN-SIZED shell surface is announced as a normal WM-managed window,
+#                          so dom0 gets a full-screen framed draggable window instead of a menu -
+#                          the 2026-08-12 shape ("a shell CoreWindow announced or=0 at 5120x1336"),
+#                          which the crop gate alone does not stop because a crop can resolve to the
+#                          window's own full extent
 #       COMPANIONSHOWN     the SearchHost companion of a hidden Start opening is presented, so a
 #                          menu declared not-shown still puts a slice of itself on dom0's screen
 #       SEARCHALWAYSHIDDEN the opposite direction: a standalone Win+S Search the user asked for is
@@ -102,7 +107,7 @@ if build clean ""; then
 else say "FAIL  clean build: $(head -3 "$OUT/clean.build.err")"; bad=1; fi
 
 # ---- every defect knob must make the suite FAIL --------------------------------------------------------
-for d in TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT DISARMHIDESCRASH ZERODUE SHELLBYNAME HOLDALWAYSLOUD FAULTFROMREG LATEREGALWAYSLOUD SLOWALWAYSLOUD HOLDREASONALLNORMAL STARTCLOSEUNSAID STARTNEVERSTUCK STARTRETURNNULL COMPANIONSHOWN SEARCHALWAYSHIDDEN SEARCHASTOAST XCNOTIFYKEPT; do
+for d in TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT DISARMHIDESCRASH ZERODUE SHELLBYNAME HOLDALWAYSLOUD FAULTFROMREG LATEREGALWAYSLOUD SLOWALWAYSLOUD HOLDREASONALLNORMAL STARTCLOSEUNSAID STARTNEVERSTUCK STARTRETURNNULL GIANTSHELLFRAME COMPANIONSHOWN SEARCHALWAYSHIDDEN SEARCHASTOAST XCNOTIFYKEPT MENUKEYALWAYSFORWARD; do
     if build "defect-$d" "-DQGA_LIFECYCLE_DEFECT_$d"; then
         "$OUT/defect-$d" >"$OUT/defect-$d.out" 2>&1; rc=$?
         f=$(grep -c '^FAIL' "$OUT/defect-$d.out")
@@ -324,7 +329,7 @@ shape "main.c: a Start still open past the bound is reported at ERROR" main_dism
 main_dismiss_closure_said() {
     awk '/case QGA_START_CLOSED_CLOAKED:/{f=NR} f&&NR>f&&NR<f+14&&/LogInfo\(/{i=1} f&&NR>f&&NR<f+14&&/g_StartDismissSent = FALSE;/{r=1} END{exit !(i&&r)}' "$1"
 }
-shape "main.c: a closed hidden Start is recorded at Info and re-arms" main_dismiss_closure_said "$MAIN" 'LogInfo("QGASTARTDISMISS 0x%x: closed (%s) %llu ms after activation returned",'
+shape "main.c: a closed hidden Start is recorded at Info and re-arms" main_dismiss_closure_said "$MAIN" 'LogInfo("QGASTARTDISMISS 0x%x: closed (%s) %llu ms after %s",'
 # ONE ACTIVATION BODY, two callers. Two copies of an attach-and-detach would drift, and the easy
 # way to write it wrong is to leave out the detach.
 shape_apply_both() {
