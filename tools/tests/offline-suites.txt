@@ -63,6 +63,7 @@ committed-procedure-gate-selftest.sh
 console-window-check-selftest.sh
 coverage-receipt-selftest.sh
 death-reporter-selftest.sh
+desktop-stuck-lock-selftest.sh
 dirty-union-selftest.sh
 dom0-callers-selftest.sh
 exit-decision-coverage-selftest.sh
@@ -104,5 +105,6 @@ verdict-jev-selftest.sh
 verdict-lib-selftest.sh
 wait-bound-selftest.sh
 window-measure-selftest.sh
+wrapper-one-line-selftest.sh
 wu-liveness-selftest.sh
 xen-core-small-selftest.sh
