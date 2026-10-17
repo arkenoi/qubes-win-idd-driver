@@ -705,6 +705,58 @@ def line_version(lf, l):
     return (gov or {}).get("version")
 
 
+def line_boot(lf, l, boots):
+    """The boot id this line was written in, from its own init's CLOCK-FREE anchor.
+
+    WHY NOT THE LINE'S TIMESTAMP. cluster_boots attributes a line in a multi-init file with
+    `boot_for(l.ts)` - a timestamp lookup - and every Windows guest on this rig is known to run its
+    clock through phase shifts of HOURS (the agent's own log jumps 055237 -> 025240 inside one
+    file, which is why cluster_boots has a phase correction at all). A timestamp compared against a
+    boot table is therefore not a reliable attribution, while `ts - System uptime` is: the uptime is
+    the guest's own count since boot and no clock change moves it.
+
+    MEASURED on run 38994277148, win11-upgrade: `network-setup-20261017.log` holds pid 7700 at
+    uptime 28.234 s and pid 7852 at uptime 46.062 s - 93 s apart on the wall, 18 s apart in uptime,
+    so two DIFFERENT boots (06:57:04 and 06:58:20), and the boot census has exactly those as ids 6
+    and 7. The timestamp lookup put BOTH lines in boot 7, so the file reported `boots=[7]` and a
+    reader - me - wrote up two boots as one. The owner: "we have log turnover issue when it is not
+    recognized over reboots."
+
+    Resolution order mirrors line_version: the line's own pid, then the init in force at it, then
+    the timestamp lookup as the last resort (a file with no init at all has no anchor to offer).
+    """
+    # A PID IS NOT UNIQUE ACROSS BOOTS, so matching the FIRST init with this pid is wrong - and
+    # measurably so. In this same capture qubesdb-daemon logs pid 7604 TWICE, at uptime 24.00 s and
+    # at 45.70 s, i.e. in two different boots (Windows reuses pids freely and a per-day file keeps
+    # both). Taking the first match put every boot-7 line in boot 6 and the file then reported
+    # boots=[1,2,3,4,5,6] against a capture whose anchors resolve to all seven. So: pid narrows the
+    # candidates - which is what disambiguates the concurrent processes sharing a file, 144 of them
+    # in qrexec-wrapper's - and the line's position picks which occurrence of that pid it is.
+    i = None
+    pid = str((l.extra or {}).get("pid") or "")
+    if pid:
+        for c in lf.inits:
+            if c.get("pid") is not None and str(c["pid"]) == pid and c.get("ts") is not None and c["ts"] <= l.ts:   # GUARD:pidts DEFECT: if c.get("pid") is not None and str(c["pid"]) == pid:
+                i = c   # keep walking: the LAST such init with this pid governs
+        if i is None:
+            # the line precedes every init with its pid (a log whose head was rotated away):
+            # fall back to the earliest occurrence of that pid rather than to another process
+            for c in lf.inits:
+                if c.get("pid") is not None and str(c["pid"]) == pid:
+                    i = c
+                    break
+    if i is None:
+        for c in lf.inits:
+            if c.get("ts") is not None and c["ts"] <= l.ts:
+                i = c
+            else:
+                break
+    bt = (i or {}).get("boot_time")
+    if bt is None or not boots:
+        return None
+    return min(boots, key=lambda b: abs((b["time"] - bt).total_seconds()))["id"]
+
+
 def is_prior_build(lf, l, builds):
     """True when this line was written by a build the capture itself shows was superseded."""
     mod = lf.module
@@ -1470,6 +1522,33 @@ def detect_clock_offset(files):
     return float(max(sorted(jumps), key=lambda k: (jumps[k], k)) * 60)
 
 
+def _file_pids(lf):
+    """Every process id that INITED inside this log file, in order of appearance.
+
+    A windows-utils log is one file per module per DAY, so a module that runs once per boot (or once
+    per call, like qrexec-wrapper) writes many init records into one file. lf.pid is whichever came
+    last. This is what the file actually holds.
+    """
+    out = []
+    for i in (lf.inits or []):
+        p = i.get("pid")
+        if p and p not in out:
+            out.append(p)
+    if not out and lf.pid:
+        out = [lf.pid]
+    return out
+
+
+def _file_boots(lf):
+    """Every boot id this file's LINES fall in, ascending - the file's real span.
+
+    Read from the lines rather than from lf.boot, because l.boot is already attributed per line
+    (cluster_boots falls back to a timestamp lookup for a file with more than one init) while
+    lf.boot is the last init's. A file whose lines were never attributed returns [].
+    """
+    return sorted({l.boot for l in (lf.lines or []) if getattr(l, "boot", None)})
+
+
 def cluster_boots(files, phase_off=None):
     """Boot times from every windows-utils log (first ts - uptime) and from System 6013/6005; clustered at 150 s."""
     # TOLERANCE. Measured 2026-10-07: this was 150 s, and a test guest boots in ~55 s and is shut down ~30 s after
@@ -1642,7 +1721,15 @@ def cluster_boots(files, phase_off=None):
         # lines in one bucket - so a real per-boot rise could hide under a quiet neighbour.
         one_process = len(lf.inits) <= 1
         for l in lf.lines:
-            l.boot = lf.boot if (lf.boot and one_process) else boot_for(l.ts)
+            if lf.boot and one_process:
+                l.boot = lf.boot
+                continue
+            # THE LINE'S OWN INIT ANCHOR FIRST, the timestamp lookup only when there is none.
+            # `boot_for(l.ts)` compares a guest timestamp against the boot table on a guest whose
+            # clock is known to shift by hours, and it put two boots' worth of network-setup
+            # records into one boot on win11-upgrade. line_boot() reads ts - System uptime, which
+            # no clock change moves.
+            l.boot = line_boot(lf, l, boots) or boot_for(l.ts)   # GUARD:lineboot DEFECT: l.boot = boot_for(l.ts)
     return boots
 
 
@@ -1961,7 +2048,13 @@ def build_structure(files, boots, declared=None):
         # already carries the clock-free (timestamp - System uptime) for ITS OWN process, so it is
         # the thing to match, and nothing else is as precise.
         _ibt = (_init or {}).get("boot_time")
-        _bid = (_lines[0].boot if len(lf.inits) > 1 else lf.boot)
+        # THE FALLBACK IS LAST-INIT-WINS, DELIBERATELY, so the anchor override below is observably
+        # doing the work. This used to fall back to `_lines[0].boot` for a multi-init file, and once
+        # LINES became anchored too (GUARD:lineboot) that fallback was already correct - which left
+        # GUARD:instboot injecting a defect that could no longer produce a wrong answer, i.e. a
+        # guard that cannot fail. `lf.boot` is the last init's whatever the file holds, so for the
+        # per-day files this all exists for it is wrong until the anchor corrects it.
+        _bid = lf.boot
         if _ibt and boots:
             _bid = min(boots, key=lambda b: abs((b["time"] - _ibt).total_seconds()))["id"]   # GUARD:instboot DEFECT: pass
         inst = {"pid": _pid, "file": lf.name,
@@ -2897,8 +2990,30 @@ def cmd_analyze(a):
                    "agent_instances": len(st["instances"]), "collector": meta.get("begin") if meta else None},
         "data_problems": problems,
         "data_placeholders": placeholders,
+        # A FILE RECORD MAY NOT CLAIM ONE BOOT AND ONE PID WHEN THE FILE SPANS SEVERAL.
+        # `lf.pid` and `lf.boot` are LAST-INIT-WINS: every LogInit overwrites them, so a per-day
+        # append log - which is what every windows-utils module writes, `<module>-<yyyymmdd>.log` -
+        # was published here as belonging to its last process and last boot however many it held.
+        # MEASURED on run 38994277148, win11-upgrade: `network-setup-20261017.log` was reported
+        # `pid 7852, boot 7` while holding pid 7700 at uptime 28.234 s (boot 6, 06:57:04) AND pid
+        # 7852 at uptime 46.062 s (boot 7, 06:58:13) - two boots, one run each. The boot CENSUS had
+        # both (cluster_boots offers every init), and per-line attribution falls back to a timestamp
+        # lookup when a file has more than one init, so the metrics were not wrong; the published
+        # record was, and it is what a reader reads. `qrexec-wrapper-20261017.log` is the extreme
+        # case: one process per CALL, 1344 lines, published as `pid 2100, boot 7`.
+        # I read that record, took "boot 7" at face value, and wrote up two boots as one - which is
+        # the whole reason this is a defect and not a cosmetic nicety. The owner: "we have log
+        # turnover issue when it is not recognized over reboots."
+        # SO: the span is published. `pids` and `boots` list what the file actually holds, and the
+        # singular `pid`/`boot` stay ONLY when the file is unambiguous - null otherwise, so a
+        # consumer that wants one value gets no answer instead of the wrong one.
         "files": [{"name": lf.name, "family": lf.family, "scanned": lf.scanned, "parsed": len(lf.lines), "ignored": lf.ignored, "unparsed": lf.unparsed, "skipped": lf.skipped,
-                   "partial": lf.partial, "pid": lf.pid, "boot": lf.boot, "version": lf.version} for lf in files],
+                   "partial": lf.partial,
+                   "pid": (lf.pid if len(_file_pids(lf)) <= 1 else None),
+                   "boot": (lf.boot if len(_file_boots(lf)) <= 1 else None),
+                   "pids": _file_pids(lf), "boots": _file_boots(lf),
+                   "spans_boots": len(_file_boots(lf)) > 1, "spans_processes": len(_file_pids(lf)) > 1,
+                   "version": lf.version} for lf in files],
         "boots": [{"id": b["id"], "time": fmt_ts(b["time"])} for b in boots],
         "shutdowns": [{"id": w["id"], "start": fmt_ts(w["start"]), "end": fmt_ts(w["end"]), "approximate": w["approx"] or w["approx_end"], "markers": w["markers"],
                        "instances": [i["pid"] for i in w["instances"]], "launches": len(w["launches"]), "deaths": [(d["pid"], d["code"]) for d in w["deaths"]],

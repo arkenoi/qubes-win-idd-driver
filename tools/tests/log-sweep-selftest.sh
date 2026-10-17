@@ -257,12 +257,25 @@ def _rb(pid, t0, uptime, texit):
     # still governs LINES (log-sweep.py: `l.boot = lf.boot if (lf.boot and one_process) else
     # boot_for(l.ts)`), and this file holds four processes, so one_process is False and boot_for
     # decides. A signature present once per boot therefore measures exactly what the window does.
-    L.append("[%s.%s-%d:%d-W] %s: %s" % (D, t0, pid, pid + 4, "WorkAreaApply",
-             "FWDPROBE one graded line per boot, for the forward-window guard"))
+    # THE FWDPROBE SIGNATURE MOVED OUT OF THIS FILE (2026-10-17). It was put here when the forward
+    # window governed LINES; now a line in a file WITH init records is attributed from its own
+    # uptime anchor (GUARD:lineboot), so a probe in THIS file measures the anchor, not the window.
+    # It lives in the un-anchored blog file appended to RB below, which is what boot_for still
+    # decides - and only there, so the signature selector is unambiguous.
     return L
 RB = [("gui-agent-20261007.log", "agent",
        _rb(3824, "091032.353", "14.125", "091243.431") + _rb(3844, "091354.000", "10.750", "091358.000")
        + _rb(3864, "091454.000", "9.453", "091525.000") + _rb(3884, "091556.000", "10.093", None))]
+# AND THE FORWARD WINDOW'S OWN OBSERVABLE, in a file that has NO init anchor. Since 2026-10-17 a
+# line in a file WITH LogInit records is attributed from its own uptime (GUARD:lineboot), which is
+# strictly better - and it took the FWDPROBE signature above out of boot_for's hands, leaving
+# GUARD:fwdallow undrivable for the second time. The forward window still decides every line in a
+# file that declares no init at all (blog/plain families: QubesPvNic.log, agent.log, bridge.log -
+# all present in a real capture), so that is where the guard is driven now. `blog` is HH:MM:SS plus
+# text, with no pid and no uptime, so there is nothing for an anchor to read.
+RB.append(("QubesPvNic.log", "blog",
+           ["%s [WARN] FWDPROBE one graded line per boot, for the forward-window guard" % t
+            for t in ("09:10:25", "09:13:50", "09:14:50", "09:15:52")]))
 write("rapidboot.pull", stream(RB, ["EV NONE [Microsoft-Windows-TaskScheduler/Operational]"]))
 # taskok: ONE task that COMPLETED with return code 0 and ONE that genuinely failed to launch, so the
 # difference between "ran" and "failed" is what the metric is driven on. Without this the taskrc knob
@@ -381,6 +394,34 @@ write("msibad.pull", stream([("msi-verbose.log", "msi", MSI_FAILED)], ["EV NONE 
 TP = [("gui-agent-%s.log" % D, "agent", agent_two_procs()),
       ("gui-watchdog-%s.log" % D, "watchdog", watchdog())]
 write("twoproc.pull", stream(TP, ["EV NONE [Application]"]))
+
+# turnover: A PER-DAY LOG THAT SPANS TWO BOOTS, with the REAL numbers from run 38994277148's
+# win11-upgrade capture - nothing here is a shape I invented. Every windows-utils module writes one
+# file per DAY ('<module>-<yyyymmdd>.log'), so a module that runs once per boot puts several boots
+# into one file and the turnover is invisible unless each record is anchored on its OWN uptime.
+#   network-setup: pid 7700 at 06:57:32.825 uptime 28.234 s, pid 7852 at 06:59:06.125 uptime
+#                  46.062 s - 93 s apart on the wall, 18 s apart in uptime, so TWO boots.
+#   qubesdb-daemon: pid 7604 at 06:57:28 uptime 24.00 s AND pid 7604 at 06:59:05 uptime 45.70 s -
+#                  the SAME pid in two different boots, because Windows reuses pids freely.
+# Both facts were read off the capture; both are what the two knobs below break.
+def _wuinit(name, pid, t, up, ver):
+    return [wu2(t, pid, pid + 4, "I", "LogInit", "Log started, module name: %s" % name),
+            wu2(t, pid, pid + 4, "I", "LogInit", "System uptime: %s seconds" % up),
+            wu2(t, pid, pid + 4, "I", "LogInit", "Running as user: SYSTEM, process ID: %d" % pid),
+            wu2(t, pid, pid + 4, "I", "LogInit", "Module version: %s" % ver),
+            wu2(t, pid, pid + 4, "I", "LogInit", "Session: 1")]
+TO = [("network-setup-20261007.log", "winutils",
+       _wuinit("network-setup", 7700, "065732.825", "28.234", "4.2.2.0")
+       + _wuinit("network-setup", 7852, "065906.125", "46.062", "4.2.2.0")),
+      ("qubesdb-daemon-20261007.log", "qubesdb",
+       _wuinit("qubesdb-daemon", 7604, "065728.000", "24.000", "4.3.1.0")
+       + _wuinit("qubesdb-daemon", 7604, "065905.000", "45.700", "4.3.1.0"))]
+# 6013 states the uptime, so the boot census has both boots from a source OUTSIDE the files whose
+# attribution is under test - otherwise this case could only ever agree with itself.
+ev_turnover = ["EV 2026-10-07 06:57:04.585 [System] id=6013 level=4 EventLog: The system uptime is 0 seconds.",
+               "EV 2026-10-07 06:58:13.963 [System] id=6013 level=4 EventLog: The system uptime is 0 seconds.",
+               "EV NONE [Application]"]
+write("turnover.pull", stream(TO, ev_turnover))
 
 # ---- fault-injection context fixtures (coordinator correction 2026-10-07) ----
 BANNER = [wu("100031.300", 200, "W", "FiInit", "QGAFAULT-INIT build=QGA-FAULT-INJECTION:on armdelay=30s negcreate=0(hwnd=0x0) ringstall=0s pumpstall=0s pumplose=0 captureexit=0 dupcreate=0 legacysend=0 rawcreate=0 pwfail=0 gateoff=0x0 damagedelay=0ms")]
@@ -564,7 +605,7 @@ analyze(){ # $1=analyzer $2=logsdir $3=baseline $4=judge $5=tag -> rc; report at
 field(){ python3 -c "import json,sys; r=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$1" "$2"; }
 
 # ---- decode every fixture with the real decoder --------------------------------------------------------------------
-for f in base newsig rise three stoperr empty twoboot clockflip rapidboot taskok vchanwd phaseflip skipnames skipchatty bootshut inv twoproc msiok msibad twobuild fastreboot reqstop svcrestart; do
+for f in base newsig rise three stoperr empty twoboot clockflip rapidboot taskok vchanwd phaseflip skipnames skipchatty bootshut inv twoproc msiok msibad twobuild fastreboot reqstop svcrestart turnover; do
   rc=$(decode "$SRC" "$T/$f.pull" "$T/$f")
   [ "$rc" = 0 ] || { echo "FATAL: the $f fixture did not decode (rc=$rc): $(tail -2 "$T/$f.decode.txt")"; exit 2; }
   # EVERY LINE IN THESE CORPORA IS WRITTEN BY THIS TEST, so the run declares the errors it caused - which is
@@ -1799,6 +1840,48 @@ if [ $? -eq 0 ]; then pass=$((pass+3)); else fail=$((fail+1)); fi
 
 # THE COUNT IS PRINTED AFTER THE LAST CHECK. It used to be emitted ~90 lines early, so every
 # block below it added passes that were never reported - the suite under-stated its own size,
+# ---- T53: A PER-DAY LOG SPANS BOOTS, AND THE RECORD MUST SAY WHICH -------------------------------------------------
+# The owner, 2026-10-17: "we have log turnover issue when it is not recognized over reboots."
+# What it cost: the file record published `pid` and `boot` from the LAST init, so
+# network-setup-20261017.log read `pid 7852, boot 7` while holding pid 7700 in boot 6 AND pid 7852
+# in boot 7. That record was taken at face value and two boots were written up as one - a whole
+# line of investigation on a phantom. qrexec-wrapper-20261017.log is the extreme case: one process
+# per CALL, 1344 lines, 144 pids, all published as a single pid and a single boot.
+# Every number in the fixture is from run 38994277148's win11-upgrade capture, and the boot census
+# here comes from System 6013 records - OUTSIDE the files under test - so this cannot pass by
+# agreeing with itself.
+rc=$(analyze "$SRC" "$T/turnover" "$T/baseline.json" "$T/jev-expected.py" t53)
+_ns(){ field "$T/$1.json" "[f['boots'] for f in r['files'] if 'network-setup' in f['name']][0]"; }
+_qd(){ field "$T/$1.json" "[f['boots'] for f in r['files'] if 'qubesdb-daemon' in f['name']][0]"; }
+if [ "$(_ns t53)" = "[1, 2]" ] && [ "$(_qd t53)" = "[1, 2]" ]; then
+  ok "T53a a per-day log spanning two boots reports BOTH"
+else no "T53a the boot span is wrong (network-setup=$(_ns t53) qubesdb=$(_qd t53), want [1, 2] and [1, 2])" "$(tail -3 "$T/t53.out")"; fi
+
+# (b) AND THE SINGULAR FIELDS REFUSE TO GUESS: a consumer wanting one boot for a file that has two
+# gets NULL, not the last one - which is the field that was misread.
+if [ "$(field "$T/t53.json" "[f['boot'] for f in r['files'] if 'network-setup' in f['name']][0]")" = "None" ] \
+   && [ "$(field "$T/t53.json" "[f['pid'] for f in r['files'] if 'network-setup' in f['name']][0]")" = "None" ]; then
+  ok "T53b a file with two boots and two pids publishes neither as its one value"
+else no "T53b the file still claims one boot/pid for a file that spans two" "$(tail -2 "$T/t53.out")"; fi
+
+# (c) SEEN TO FAIL - the timestamp lookup. GUARD:lineboot restores `boot_for(l.ts)`, which compares a
+# guest timestamp against the boot table on guests whose clock is known to jump by HOURS (the agent's
+# own log jumps 055237 -> 025240 inside one file). On the real capture it collapsed network-setup's
+# two boots into one.
+K=$(knob lineboot); rc=$(analyze "$K" "$T/turnover" "$T/baseline.json" "$T/jev-expected.py" t53c)
+if [ "$(_ns t53c)" != "[1, 2]" ]; then
+  ok "T53c SEEN TO FAIL: the timestamp lookup loses the turnover (network-setup=$(_ns t53c))"
+else no "T53c the lineboot knob changed nothing - the guard is decoration" "network-setup=$(_ns t53c)"; fi
+
+# (d) SEEN TO FAIL - pid reuse. GUARD:pidts drops the `c["ts"] <= l.ts` condition from the pid match,
+# so the FIRST init carrying a pid wins. Windows reuses pids and this capture really does log pid
+# 7604 in two different boots (uptime 24.00 s and 45.70 s); on the real data that knob lost a boot.
+K=$(knob pidts); rc=$(analyze "$K" "$T/turnover" "$T/baseline.json" "$T/jev-expected.py" t53d)
+if [ "$(_qd t53d)" != "[1, 2]" ]; then
+  ok "T53d SEEN TO FAIL: one pid in two boots collapses when the first init wins (qubesdb=$(_qd t53d))"
+else no "T53d the pidts knob changed nothing - the guard is decoration" "qubesdb=$(_qd t53d)"; fi
+
+
 # and a new case appended at the end (dom0_lost, 2026-10-16) moved the total by nothing.
 echo "--- $pass passed, $fail failed; fixtures/outputs in $T"
 [ "$fail" = 0 ] && exit 0 || exit 1
