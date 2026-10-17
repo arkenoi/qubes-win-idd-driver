@@ -1292,6 +1292,29 @@ static void OpenChannel(int i) {
         s->PoolTick = QpcNow();
         try { session.IsCursorCaptureEnabled(false); } catch (...) {}
         try { session.IsBorderRequired(false); } catch (...) {}   // borderDisableOk proven on 26100
+        // OWNED POPUPS COME WITH THE OWNER. A WinUI popup - a tooltip, a flyout, a teaching tip -
+        // is its own TOP-LEVEL HWND, so by default an owner's capture excludes it and the agent
+        // has to announce it to dom0 as a separate window. dom0 then marks it, like any window,
+        // with the qube's 2 px label border: a coloured rectangle drawn INSIDE the parent, around
+        // a popup that lies wholly within it. Photographed 2026-10-17 on a Notepad teaching tip.
+        // Cropping cannot finish the job either - that popup has a callout BEAK, so the rows
+        // beside the beak are transparent, transparency arrives as opaque black, and no rectangle
+        // can exclude them.
+        //
+        // IncludeSecondaryWindows makes Windows composite owned windows into the OWNER's frames,
+        // with their real transparency. MEASURED on 26200 before enabling it: same owner window,
+        // same rectangle, two captures - with it off the rect held the parent's own text
+        // (rectcolors ... 585858,474747,383838,767676), with it on that text was gone and the rect
+        // was the popup's light panel. The property is present (secondaryWindowsApi=1) and applies
+        // (set=1).
+        //
+        // It costs nothing: no extra capture, no extra copy, and the owner's feed changes when the
+        // popup opens AND when it closes, so there is no stale region to repair afterwards. The
+        // agent's side of this is to stop announcing a popup that lies wholly inside a tracked
+        // owner; a popup that extends beyond its owner - most context menus - still needs its own
+        // window and is unaffected, because it is still captured and announced as before.
+        try { session.IncludeSecondaryWindows(true); } catch (...) {}
+        
         // DIRTY REGIONS (rest-zero S1) on a direct window session only: the relay's destination and the monitor keep the
         // whole-frame path. ReportOnly: complete surfaces, regions reported; PublishFrame reads only the regions.
         if (g_dirtyApi && !monitor && !c.relay) {

@@ -28,7 +28,7 @@
 # section's value $secAbi; tools/tests/peek-abi-assert-selftest.sh fails if they ever collide again.
 param([int]$Samples = 2, [int]$IntervalSec = 6, [switch]$All)
 
-$WANT_ABI = 23
+$WANT_ABI = 24
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
 $STRIDE = 3448    # sizeof(WGCBRK_SLOT) at ABI 23 (ReqRoute, a LONG, appended at 3440; the struct's
                   # 8-byte alignment rounds 3444 up to 3448 - get this wrong and every slot after
