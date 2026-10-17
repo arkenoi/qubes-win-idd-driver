@@ -19,10 +19,17 @@ speaking to dom0.
 CODE (load-bearing, fixed strings the updater emits - counted over EVERY pass, never sampled):
   passes        segments starting at "VM class (live from qubesdb)" - one per agent invocation.
   reported      a pass that reached "reported N update(s) to dom0 qubes.NotifyUpdates".
-  errored       a pass whose last substantive line is "ERROR: ...".
+  errored       a pass whose last substantive line declares ERROR - either "[ERROR] ..." (the form
+                the writer emits since e4162c79) or the older bare "ERROR: ...". Both, always: see
+                SEEN TO FAIL below for what reading only one of them cost.
   noop          a pass that declined by design ("Doing nothing" - e.g. a StandaloneVM, which is
                 template-only by design and is NOT a failure).
   SILENT        errored AND never reported: dom0 was left holding a stale number. Any is a FAIL.
+  DIED MID-PASS a pass that reported nothing, declared nothing and declined nothing, with a LATER
+                pass proving it was over - so it was cut off (scheduler, reboot, crash) and left
+                dom0 stale in total silence. SILENT cannot see this: it requires an error line.
+                The LAST pass is only FLAGGED - from this log a kill and a still-running pass are
+                the same thing, and only the caller knows whether the round had ended.
   contradictory reported AND errored in the same pass: the number dom0 got is not trustworthy. FAIL.
   --dom0-reported N, when given, is what dom0 actually holds; it must equal the last reported value,
   or the guest and dom0 disagree and that is a FAIL.
@@ -44,6 +51,15 @@ SEEN TO FAIL, on real captured data, which is the only reason its PASS means any
   without telling dom0 anything. WUPASS_DEFECT=silent re-introduces the original state (the silent
   check does not fire) and the judge then reports PASS on that same log, which is the proof that the
   check is load-bearing rather than decorative.
+
+  qwt-accept/rel-38994277148/template-update.d/wu-e2e/round1/agent.log (release 4.3.36, win11de-tup):
+  one pass that threw in Ensure-Proxy and never reported. This judge graded it
+  "errored=0 silent=0 verdict: PASS" for three rounds, and the cell reported fails=0 - a RELEASE
+  GATE passing a guest whose updater was dead, for three days. Cause: the error pattern was anchored
+  at the front of the message, and on 2026-10-14 e4162c79 made the writer declare its level THERE
+  ("[ERROR] msg"). Nothing matched, and `errors` is what drives silent, contradictory AND whether
+  Jev is consulted at all - so one unmatched prefix turned the whole judge off in silence.
+  WUPASS_DEFECT=levelprefix restores that blindness and the judge reports PASS on that capture again.
 """
 import argparse, json, os, re, sys
 
@@ -54,12 +70,37 @@ TS = re.compile(r"^(\d\d):(\d\d):(\d\d)\s+(.*)$")
 PASS_START = "VM class (live from qubesdb)"
 REPORTED = re.compile(r"reported\s+(\d+)\s+update\(s\) to dom0")
 OFFERED = re.compile(r"scan:\s+(\d+)\s+update\(s\) offered")
-ERROR = re.compile(r"^ERROR:\s*(.+)$")
+# BOTH FORMS THE WRITER HAS EVER DECLARED, because this pattern is anchored where a level tag goes.
+# "[ERROR] msg" since e4162c79 (2026-10-14), bare "ERROR: msg" before it. A log captured across an
+# upgrade holds both. What the single old form cost is in SEEN TO FAIL above.
+# ERROR-SITE and ERROR-STACK are the SAME failure's continuation lines (the throwing source line and
+# its PowerShell stack). They must not match: three lines would count as three errors and the
+# diagnosis handed to Jev would be a source line instead of the message. Requiring "]" or ":"
+# immediately after ERROR is what excludes them - as does it exclude a "C:\..." path line.
+ERROR = re.compile(r"^(?:\[ERROR\]|ERROR:)\s*(.+)$")
+# GUARD:levelprefix - the 2026-10-14 blindness, reachable with WUPASS_DEFECT=levelprefix so the
+# check above is proven load-bearing against the real capture that it let through.
+ERROR_FRONT_ANCHORED_ONLY = re.compile(r"^ERROR:\s*(.+)$")
+# DELIBERATELY NOT ERRORS, so the next reader does not re-derive it: the writer also declares
+# "[WARN]" (one site - the status file could not be written) and "ANOMALY:" (two - a relay that did
+# not exit when this pass stopped it). Neither says the PASS failed, and this tool judges passes.
+# Counted 2026-10-17 over 170 captured agent logs: "[WARN]" 0, "ANOMALY:" 0, QWTUPDLOGLOST 0 - so
+# treating them as errors would be machinery for a shape never once observed. Worth knowing if that
+# changes: the ANOMALY pair reports a lingering relay, which is the condition that strands a stale
+# relay exe on the next deploy (findings/updates.md, QWTRELAYBUSY), and the [WARN] means dom0's
+# status file is stale - both are about this tool's own subject.
 # THE LOG ANNOUNCING ITS OWN GAP. guest/qubes-windows-update.ps1 writes this on the first
 # successful append after any line could not be written. A judge that reads this file to decide
 # whether a pass told dom0 the truth CANNOT trust a file with holes: on 2026-10-08 two dropped
 # lines ("relay started", "proxy up") were nearly written up as a product defect that did not
 # exist, because an absent line was read as an event that never happened.
+# EVERY by-design decline is gated on the CLASS, not on its sentence. guest/qubes-windows-update.ps1
+# falls through to the work only for TemplateVM (2421); StandaloneVM with direct internet, offline
+# StandaloneVM, and any other class each log one line and exit 0 (2423-2436). Reading the sentences
+# knew only one of the three: measured 2026-10-17 over 170 captured logs, three StandaloneVM passes
+# that declined exactly as designed were about to be reported as deaths by the DIED MID-PASS rule,
+# because "Doing nothing" was the only decline this tool could recognise. The class is the fact.
+VMCLASS = re.compile(r"VM class \(live from qubesdb\):\s*(\S+)")
 LOGLOST = re.compile(r"QWTUPDLOGLOST\s+(\d+)\s+line")
 HRESULT = re.compile(r"(0x[0-9A-Fa-f]{8})")
 NOOP = "Doing nothing"
@@ -125,6 +166,8 @@ def classify(p):
     """Code facts for one pass - fixed strings only, no interpretation."""
     reported, offered, errors = None, None, []
     noop = False
+    vmclass = None
+    err_re = ERROR_FRONT_ANCHORED_ONLY if os.environ.get("WUPASS_DEFECT") == "levelprefix" else ERROR
     for line in p["lines"]:
         msg = line.split(" ", 1)[1] if " " in line else line
         m = REPORTED.search(msg)
@@ -133,11 +176,18 @@ def classify(p):
         m = OFFERED.search(msg)
         if m:
             offered = int(m.group(1))
-        m = ERROR.match(msg)
+        m = err_re.match(msg)
         if m:
             errors.append(m.group(1))
         if NOOP in msg:
             noop = True
+        m = VMCLASS.search(msg)
+        if m:
+            vmclass = m.group(1)
+    # A pass on anything but a template declines by design and never reports: that is the contract,
+    # not a failure. GUARD:classnoop
+    if vmclass is not None and vmclass != "TemplateVM" and os.environ.get("WUPASS_DEFECT") != "classnoop":
+        noop = True
     hres = [h for e in errors for h in HRESULT.findall(e)]
     p.update(reported=reported, offered=offered, errors=errors, hresults=hres, noop=noop)
     # GUARD:silent - the load-bearing rule. WUPASS_DEFECT=silent re-introduces the original state
@@ -168,6 +218,23 @@ def main():
 
     silent = [p for p in passes if p["silent"]]
     contradictory = [p for p in passes if p["contradictory"]]
+    # GUARD:vanished - A PASS THAT SAID NOTHING AT ALL. `silent` above requires an error line, so
+    # the one thing it structurally could not see was actual silence: a pass ended between its first
+    # line and its terminal one - the Task Scheduler cutting it off, a reboot, a crash - declared
+    # nothing, reported nothing, and graded PASS. Measured 2026-10-17 against a real capture
+    # truncated at that point: "passes=2 reported=1 errored=0 silent=0 verdict: PASS", with the
+    # dead pass provably over. dom0 keeps the previous number, which is the exact field failure this
+    # tool exists for.
+    # A segment always means a pass that really began: every refusal exits by line 418 of
+    # guest/qubes-windows-update.ps1 and "VM class" is logged at 2420, so a refused pass writes no
+    # pass-start line and cannot appear here. The LAST segment, though, may simply still be running
+    # when the log was captured - from the log alone that is indistinguishable from a kill - so it is
+    # FLAGGED, never failed. Only the caller knows whether the round had ended.
+    def _mute(p):
+        return p["reported"] is None and not p["errors"] and not p["noop"]
+    vanished = [p for p in passes[:-1] if _mute(p)]
+    if os.environ.get("WUPASS_DEFECT") == "vanished":
+        vanished = []
     reported = [p for p in passes if p["reported"] is not None]
     errored = [p for p in passes if p["errors"]]
     codes = {}
@@ -181,6 +248,7 @@ def main():
         "errored": len(errored),
         "noop": sum(1 for p in passes if p["noop"]),
         "silent": len(silent),
+        "vanished": len(vanished),
         "contradictory": len(contradictory),
         "hresults": codes,
         "last_reported": reported[-1]["reported"] if reported else None,
@@ -205,6 +273,12 @@ def main():
     for p in silent:
         fails.append("SILENT pass at %s: ended on %s and never reported to dom0 - dom0 still holds the previous number"
                      % (p["t"], "; ".join(p["errors"])[:80]))
+    for p in vanished:
+        fails.append("DIED MID-PASS at %s: a later pass started, so this one was over - it never reported "
+                     "and never declared an error, so nothing anywhere says dom0's number is stale" % p["t"])
+    if passes and _mute(passes[-1]):
+        flags.append("FINAL pass at %s said nothing terminal: a kill and a pass still running look the "
+                     "same in this log - if the round had ended, this is a silent death" % passes[-1]["t"])
     for p in contradictory:
         fails.append("CONTRADICTORY pass at %s: reported %d to dom0 AND logged %s"
                      % (p["t"], p["reported"], "; ".join(p["errors"])[:60]))
