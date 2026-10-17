@@ -325,5 +325,32 @@ util_apply_detaches() {
 }
 shape "util.c: ApplyForeground always detaches the input queue it attached" util_apply_detaches "$ROOT/agent/gui-agent/util.c" 'AttachThreadInput(ourThread, fgThread, FALSE);'
 
+# ---- the startup dump: governing settings at Info, labelled experiments at Debug (2026-10-17) ----
+# The owner's rule is that normal operation is quiet. 27 Info lines per start described 27 feature
+# switches. Only FOUR moved, and the number is the honest one: Jev, given the author's own
+# descriptions, would not call either the drag/DDA family (noul 0.42) or the instrumentation family
+# (0.41) experiment knobs, and chose "move only the ones the source itself labels" (0.61). perf.h
+# heads exactly one block "Feature switches for attribution" and calls FocusRaise an experiment, so
+# those four moved and the rest stay until there is better evidence than 0.57.
+PERF="$AGENT/gui-agent/perf.c"
+perf_labelled_at_debug() {
+    grep -q 'LogInfo("QGASTARTPOLICY' "$1" || return 1
+    for t in QGADDACAPTURE QGAFRAMEDROP QGASWEEPEXEMPT QGAFOCUSRAISE; do
+        grep -q "LogDebug(\"$t" "$1" || return 1
+        grep -q "LogInfo(\"$t" "$1" && return 1
+    done
+    # and the dump stays bounded: a new Info line per switch is the thing being prevented
+    local n; n=$(awk '/^void PerfInit/,/^}/' "$1" | grep -c 'LogInfo(')
+    [ "$n" -le 24 ]
+}
+shape "perf.c: the labelled attribution switches log at Debug, the cell is said once at Info, and the dump stays bounded" perf_labelled_at_debug "$PERF" 'LogInfo("QGASTARTPOLICY blockkey=%s seamlessStart=%s -> %s",'
+# PROVENANCE IS APPENDED, NEVER INSERTED. guest/verify-running-agent.ps1 matches the prefix
+# 'QGASHELLMANAGED policy=', and a prefix inserted in FRONT blinded three consumers on 2026-10-16.
+perf_provenance_appended() {
+    grep -q 'LogInfo("QGASHELLMANAGED policy=%u (0=none 1=all 2=start-only) (%s)"' "$1" &&
+    grep -q 'LogInfo("QGASEAMLESSSTART %s (%s)"' "$1"
+}
+shape "perf.c: the value's source is APPENDED to the two settings lines, so the prefix consumers still match" perf_provenance_appended "$PERF" 'LogInfo("QGASHELLMANAGED policy=%u (0=none 1=all 2=start-only) (%s)", g_ShellManaged,'
+
 say "--- outputs in $OUT"
 exit $bad

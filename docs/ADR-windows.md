@@ -354,3 +354,100 @@ session, so Winlogon reads the value we write. Trap recorded: Windows PREFERS a 
 `DefaultPassword` over the LSA secret, so a stray writer of the plaintext value voids any measurement of this
 path; the script prints the registry state before deciding. Session presence is measured with
 `Win32_ComputerSystem.UserName`, never with qrexec (which answers from a session-less guest).
+
+## 11. A hidden Start menu is CLOSED by returning activation, and the closure is recorded once
+
+**Decided 2026-10-17.** In seamless mode with `SeamlessStart=0` the native Start menu is not
+presented. "Not presented" was not the same as "closed": the surface stayed up, invisible, holding
+the keyboard and taking clicks the user could not see (GWeck #172, reproduced twice on 4.3.36).
+
+**The mechanism is activation, not a keystroke.** Three successive fixes were spent inside a
+keystroke mechanism that this repo had already measured as ineffective - `main.c`'s own comment of
+2026-10-04 reads *"A posted WM_KEYDOWN Escape to that window does NOT close Start; a real Escape
+keystroke does (measured)"*. The change from `SendInput` to `PostMessage` was made for a good
+reason (a global inject was measured closing Open-Shell's own menu, Jev race_is_real 0.96) but it
+kept the targeting property and dropped the only mechanism known to work. A later fix repaired that
+posted Escape's *target* and was refuted on the guest the same day, twice, with the menu still open
+1000 and 1063 ms later.
+
+So: **no keystroke is posted or injected from this path, ever** - a shape check fails if one
+returns - and the menu is dismissed the way Windows dismisses a light-dismiss surface, by something
+else taking activation. The Start app's own state stays consistent, unlike `SW_HIDE` (keyboard focus
+remains in an invisible search box) or `WM_CLOSE` (the shell's Start component is destroyed).
+
+**Activation goes to the window dom0 named**, recorded by `HandleFocus` as dom0's decisions arrive,
+and to the shell desktop only when dom0 has named none. This is not the agent choosing a window to
+focus - the behaviour the owner rejected ("i do not want it to intercept focus"); it returns the
+host's own choice and records rather than chooses. When there is neither a dom0 window nor a shell
+window (logon, shutdown) the verdict is `NO_TARGET`: an error is logged and nothing is activated,
+because an activation of NULL is not a request. Jev on precisely that distinction, 0.94.
+
+**One activation body serves both callers.** `ApplyForeground` (util.c) is the body lifted out of
+`HandleFocus`, which now calls it; two copies of an attach-and-detach would drift, and the easy way
+to write it wrong is to omit the detach. A shape check pins that it always detaches. The dom0 focus
+path keeps its input nudge; the dismissal injects no input at all. Known and stated:
+`SetForegroundWindow` has no timeout, so a wedged target can block the calling thread - an exposure
+the dom0 focus path has always had on the vchan thread, now also on the tracking thread.
+
+**The closure is recorded, once per opening.** Both ways an opening used to end were silent (the
+tracked handle cleared when the surface cloaked; the flag cleared when the foreground left), so a
+dismissal that worked and one that never ran left identical logs and only failures were written
+down. A menu still holding input past the settle bound is an **error**, not a warning: the user's
+clicks reaching a window they cannot see is a failure (Jev 0.93).
+
+**The companion surface is refused too.** A 25H2 Start opening brings up a SearchHost surface as
+well; refusing only the Start one left that on screen. The stock rule for this compared a handle
+against `FindWindow(..., L"Search")`, which is `0x0` on any non-English guest - measured on the
+German guest the defect was reported from as `start: 0x10180, search: 0x0` while the caption is
+`Suche`. Deleted, not repaired: a caption is not an identity here. The discriminator is whether a
+hidden Start opening is in flight, which is locale-independent, and a standalone Win+S Search the
+user asked for is still presented.
+
+### What was NOT decided, and why
+
+Two proposals were cut down by reading the capture before writing the code, and the readings are
+recorded here so they are not re-derived:
+
+- **A Search flyout gets no crop rule.** The proposal was to measure its card with the union rule.
+  Measured, the same window at its two raw sizes: at 800x798 the walk finds a plausible card
+  (largest 774x724, union 775x777), but at 800x750 *both* candidates collapse to the same `728x32`
+  sliver - the search input field. Either crop would clip the flyout, so the window is announced
+  uncropped and shows its ~13 px shadow margin. Jev on the walk lines alone, 0.72.
+- **No broker hold was demoted.** The proposal was to read `slot-not-ACTIVE` holds as normal,
+  being the agent's own unacknowledged re-registration after a size change. Of four such holds in
+  the only capture that has them, just one plausibly follows a size change. The premise is
+  unproven, a blanket demotion here was already made once and reverted at 0.60, and so nothing was
+  quieted - only the reason string was split (`slot-ack-pending` / `slot-FAILED` /
+  `slot-not-ACTIVE`) so the next capture can answer the question. Jev 0.89.
+- **The startup dump shrank by four lines, not seventeen.** Given the author's own descriptions,
+  Jev would not classify either the drag/DDA family (0.42) or the instrumentation family (0.41) as
+  experiment knobs, and chose "move only the ones the source itself labels" (0.61). `perf.h` heads
+  exactly one block *"Feature switches for attribution"* and calls one more an experiment, so those
+  four moved to Debug and the rest stay until there is better evidence than a 0.57 split.
+
+### The companion discriminator, confirmed on the capture
+
+Refusing the Search companion rests on one fact: that a SearchHost surface belonging to a Start
+opening can be told from a standalone Win+S Search the user asked for. The only separating fact
+available is whether a hidden Start opening is in flight, and the 2026-10-17 capture confirms it
+separates cleanly. Graded per stimulus group:
+
+- group C (Win+S, Search alone): **0** Start-surface examinations, both presses.
+- group D (Win key, with Open-Shell installed): **4 and 3** examinations, and one
+  "still open" line each - the P1 reproducing.
+- groups A/B (Shift+Win): 0 - that stimulus did not open the native Start at all on this guest,
+  which is a separate open question about the stimulus, not about the suppression.
+
+So no Search-alone press produced a Start-surface examination, and every examination fell in a
+group where Start really was opening. The refusal cannot misfire on a standalone Search through
+this fact on this evidence.
+
+That grading only exists because two stale anchors in the test's own grader were repaired: it
+matched a success string removed in 0429a93, and - the deeper one - its log pattern expected
+`-<pid>-` where the agent writes `-<pid>:<tid>-`, so it had never parsed an agent log at all and
+reported "no stamped lines - missing data" every run. A grader that cannot read its input reports
+no evidence, which reads exactly like a clean result.
+
+**Unmeasured, and it is the whole point:** whether the menu actually closes on a guest. That needs
+the dedicated Start test on the German 25H2 subject. Until then this is a mechanism change with
+offline proof only (161 assertions, three defect knobs each seen to fail on its own checks).
