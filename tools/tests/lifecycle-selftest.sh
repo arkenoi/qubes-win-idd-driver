@@ -24,10 +24,14 @@
 #       HOLDALWAYSLOUD     every broker hold is written up as a fault, so the ~11 s on each cold boot in which
 #                          the broker simply has not started yet produces three WARNINGs about correct
 #                          behaviour - the log noise the owner refuses
-#       DISMISSTOSTART     the Escape that closes the hidden Start menu is posted to the TRACKED Start
-#                          surface however the focus sits - the measured 2026-10-17 failure, Escape to
-#                          0x10180 while SearchHost's 0x1018a held the input and the menu stayed open
-#                          1031 ms later, twice (GWeck #172 reproducing on the current build)
+#       STARTCLOSEUNSAID   both ways a hidden-Start opening ENDS stay silent and simply re-arm, as they
+#                          did before 2026-10-17 - so a dismissal that worked and one that never ran
+#                          leave identical logs, and only the FAILURE is ever written down
+#       STARTNEVERSTUCK    a hidden Start still holding input past the settle time reads as "still
+#                          closing", for ever - the measured GWeck #172 shape (1031 ms against a
+#                          1000 ms bound, twice on win11de-sm) would then never be reported at all
+#       STARTRETURNNULL    activation is handed to the shell desktop even when there is no shell
+#                          window, i.e. to NULL - at logon and shutdown there is none
 #       HOLDREASONALLNORMAL  every BROKERHOLD reason reads as normal, so a broker that dropped a slot
 #                          or a feed lost past its bound goes as quiet as a first frame that has not
 #                          landed yet - the blanket demotion that was already made once and reverted
@@ -89,7 +93,7 @@ if build clean ""; then
 else say "FAIL  clean build: $(head -3 "$OUT/clean.build.err")"; bad=1; fi
 
 # ---- every defect knob must make the suite FAIL --------------------------------------------------------
-for d in TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT DISARMHIDESCRASH ZERODUE SHELLBYNAME HOLDALWAYSLOUD FAULTFROMREG LATEREGALWAYSLOUD SLOWALWAYSLOUD HOLDREASONALLNORMAL DISMISSTOSTART; do
+for d in TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT DISARMHIDESCRASH ZERODUE SHELLBYNAME HOLDALWAYSLOUD FAULTFROMREG LATEREGALWAYSLOUD SLOWALWAYSLOUD HOLDREASONALLNORMAL STARTCLOSEUNSAID STARTNEVERSTUCK STARTRETURNNULL; do
     if build "defect-$d" "-DQGA_LIFECYCLE_DEFECT_$d"; then
         "$OUT/defect-$d" >"$OUT/defect-$d.out" 2>&1; rc=$?
         f=$(grep -c '^FAIL' "$OUT/defect-$d.out")
@@ -271,6 +275,46 @@ shape "main.c: the shell-seen latch is set only through ShellWindowNow (the one 
 main_preshell_arm() { grep -q 'else if (logonui && !shellSeen)' "$1" && grep -q 'console-user=%d shell-seen=%d' "$1" &&
     awk '/else if \(logonui && !shellSeen\)/{a=NR} /else if \(logonui\)$/{b=NR} END{exit !(a && b && a<b)}' "$1"; }
 shape "main.c: the 30 s classifier has the fourth arm (LogonUI up before this agent saw a shell) ahead of the two-state LogonUI arm, and carries shell-seen" main_preshell_arm "$MAIN" 'else if (logonui && !shellSeen)'
+
+# ---- the hidden Start dismissal: the MECHANISM, pinned in shape (2026-10-17) ----------------------------
+# NO KEYSTROKE, EVER, from this path. SendInput was measured closing Open-Shell's own menu (Jev
+# race_is_real 0.96) and the posted replacement does not close Start at all - main.c's own comment
+# of 2026-10-04 says so and two guest runs agree. If either comes back, this fails.
+# Anchored on the PRESENCE of the verdict call as well as the absence of a keystroke: a pure
+# absence check can never be made to fail by removing a line, which this harness rightly refuses.
+main_dismiss_no_keystroke() {
+    grep -q 'QgaHiddenStartVerdict(' "$1" &&
+    awk '/^static void StartOpeningExamine/{f=1} f&&/PostMessage|SendInput|VK_ESCAPE|InjectInput/{bad=1} f&&/^}/&&f{exit bad} END{exit bad}' "$1"
+}
+shape "main.c: the hidden-Start dismissal posts no keystroke and injects no input" main_dismiss_no_keystroke "$MAIN" 'const QGA_START_VERDICT verdict = QgaHiddenStartVerdict('
+# A STUCK hidden menu is an ERROR, not a warning: it is taking the user's clicks, which is not a
+# workable state (it was a LogWarning until 2026-10-17).
+main_dismiss_stuck_error() {
+    awk '/case QGA_START_STUCK:/{f=NR} f&&NR>f&&NR<f+12&&/LogError\(/{ok=1} END{exit !ok}' "$1"
+}
+shape "main.c: a Start still open past the bound is reported at ERROR" main_dismiss_stuck_error "$MAIN" 'LogError("QGASTARTDISMISS 0x%x: still open %llu ms after activation returned'
+# THE CLOSURE IS SAID. Both ways an opening ends report at Info and re-arm, so a dismissal that
+# worked is distinguishable from one that never ran - which it was not before.
+main_dismiss_closure_said() {
+    awk '/case QGA_START_CLOSED_CLOAKED:/{f=NR} f&&NR>f&&NR<f+14&&/LogInfo\(/{i=1} f&&NR>f&&NR<f+14&&/g_StartDismissSent = FALSE;/{r=1} END{exit !(i&&r)}' "$1"
+}
+shape "main.c: a closed hidden Start is recorded at Info and re-arms" main_dismiss_closure_said "$MAIN" 'LogInfo("QGASTARTDISMISS 0x%x: closed (%s) %llu ms after activation returned",'
+# ONE ACTIVATION BODY, two callers. Two copies of an attach-and-detach would drift, and the easy
+# way to write it wrong is to leave out the detach.
+shape_apply_both() {
+    grep -q 'ApplyForeground(target, &how)' "$1" && ! grep -q 'AttachThreadInput' "$1"
+}
+shape "main.c: the dismissal activates through the shared ApplyForeground, with no attach logic of its own" shape_apply_both "$MAIN" 'const BOOL applied = ApplyForeground(target, &how);'
+vch_records_dom0_focus() {
+    grep -q 'InterlockedExchangePointer((PVOID volatile\*)&g_Dom0FocusWindow, (PVOID)window);' "$1" &&
+    grep -q 'ApplyForeground(window, &how)' "$1"
+}
+shape "vchan-handlers.c: dom0's focus decision is recorded, and applied through the shared body" vch_records_dom0_focus "$ROOT/agent/gui-agent/vchan-handlers.c" 'InterlockedExchangePointer((PVOID volatile*)&g_Dom0FocusWindow, (PVOID)window);'
+# util.c's shared body must always detach what it attached.
+util_apply_detaches() {
+    awk '/^BOOL ApplyForeground/{f=1} f&&/AttachThreadInput\(ourThread, fgThread, TRUE\)/{a=1} f&&/AttachThreadInput\(ourThread, fgThread, FALSE\)/{d=1} f&&/^}/&&a{exit !d} END{exit !(a&&d)}' "$1"
+}
+shape "util.c: ApplyForeground always detaches the input queue it attached" util_apply_detaches "$ROOT/agent/gui-agent/util.c" 'AttachThreadInput(ourThread, fgThread, FALSE);'
 
 say "--- outputs in $OUT"
 exit $bad
