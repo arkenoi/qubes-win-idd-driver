@@ -516,7 +516,25 @@ cmd /c cmd /c echo (a grandchild)             NO_WINDOW 21 B    ok   DETACHED  0
   WHY IT MATTERS BEYOND THE UPDATER: dom0 drives the agent run over `qubes.VMExec` with no feature check and no fallback, so NO text can reach dom0 from a Windows guest on that path - not the updater's log, not the shim's own lines (`mkdir`, `tar`, `rm` all write output and all of it was absent from dom0's transcript), and not dom0's step-6 `cat` of the agent log. Any dom0 tool that reads VMExec output is affected.
   OUR SIDE ALREADY IMPLEMENTS ALL THREE CHANNELS - THE TRANSPORT IS THE ONLY BLOCKER. Verified in source 2026-10-14: `guest/wu-update.ps1`'s `Prog` writes `$Err.WriteLine([string]::Format([Globalization.CultureInfo]::InvariantCulture,'{0:0.0}',$p))` - bare floats on STDERR, locale-proof (a German guest's "75,0" would make dom0's `float(line)` raise, and that was already fixed); the pass's log goes to stdout; and the shim's `cat` branch answers dom0's agent-log read from our log plus `update-status.json`. So nothing new has to be written for dom0 - two channels are discarded in transit and the third was mis-routed.
   THE MIS-ROUTING IS FIXED (84117a38): `guest/VMExec.ps1`'s predicate now also matches `qubes-update[/\]update-agent\.log`, matched on the LOG FILE rather than the directory because the shim's default branch is a no-op and a wide predicate would silently swallow a caller's command. `tools/tests/vmexec-dispatch-test.ps1` reads the pattern out of the file so it cannot drift: 9/9 over dom0's five routed steps plus near-misses that must still reach cmd, and with `-Defect` it fails exactly the agent-log case.
-  THE COLD-QUBE CLAUSE, NOT YET VERIFIED: core-agent `9ad4dfc` (2026-10-11) added `QwWaitForConsoleLogon`, a 90 s wait before a user-context service, which is the shape `STARTAPPCOLDSILENT` needs - and `qrexec_timeout` is 600 s on these guests (6000 on win11-app), so dom0 was never the party giving up at 70 s and the wait has room to finish. Whether a cold app-menu launch now succeeds is UNMEASURED; `scratchpad/cold-start-test.sh` grades it on rc, elapsed time, whether stderr carries anything, and whether the wrapper logged the wait instead of failing silently.
+  THE COLD-QUBE CLAUSE, NOW VERIFIED ON THE CURRENT BUILD (2026-10-17, win11de-cold = win11de-qwt
+  upgraded to 4.3.36+agent.bbf26ae, `mgmt/harness/dom0-callers-check.sh --cold`): `qubes.GetAppmenus
+  answered: 26173 bytes in 83s (cold, rc=0)`, the cold call STARTED the qube (Halted -> Running),
+  79 entries, every line parses as receive.py parses it, every entry carries a Name, no two read
+  alike, and both of dom0's fixed launchers are reported - `the start-menu caller is aligned
+  (cold, 79 entries, 83s)`. Warm on the same guest: aligned, 7s. The updater caller on the same
+  build (`vmexec-channel-check.sh`): stdout 19 B, stderr 20 B, exit code passed through, and stdout
+  delivered FROM A GRANDCHILD - the updater's own shape - all four channel checks passed.
+  THE SAME CHECK FAILED AN HOUR EARLIER AND THAT IS WHY THIS ONE COUNTS: run against a clone of the
+  4.3.29 golden it returned `0 bytes with a SILENT stderr (cold, rc=46, 58s) - dom0 would show an
+  empty menu`, plus a duplicate menu label warm. That golden was tagged 2026-09-12 and the fix
+  (core-agent 9ad4dfc, since renamed QwWaitForInteractiveLogon) landed 2026-10-11, so the failure
+  was a month-old build, not the product - my measurement, caught by checking the subject's version
+  AFTER reporting it as a product defect. The wait is present in the SHIPPED wrapper, read out of
+  the binary rather than the source: "waiting for interactive logon (%lu of %lu ms)" /
+  "no interactive logon after %u ms; service '%s' as '%s' is not started".
+  NOT COVERED BY TODAY'S RUN: vmexec-channel-check.sh has no cold mode, so the updater's COLD leg
+  still rests on the 2026-10-14 reading (`COLD VMExec rc=0 elapsed=85.9s stdout=14`).
+  PREVIOUS STATE, kept because it is what the entry was opened for: core-agent `9ad4dfc` (2026-10-11) added `QwWaitForConsoleLogon`, a 90 s wait before a user-context service, which is the shape `STARTAPPCOLDSILENT` needs - and `qrexec_timeout` is 600 s on these guests (6000 on win11-app), so dom0 was never the party giving up at 70 s and the wait has room to finish. Whether a cold app-menu launch now succeeds is UNMEASURED; `scratchpad/cold-start-test.sh` grades it on rc, elapsed time, whether stderr carries anything, and whether the wrapper logged the wait instead of failing silently.
 
   A SECOND, SMALLER DEFECT THAT IS OURS, found alongside: `guest/VMExec.ps1`'s dispatch predicate is `/run/qubes-update|\run\qubes-update|entrypoint\.py`, which does NOT match dom0's step 6, `cat /var/log/qubes/qubes-update/update-agent.log`. Proven by the guest's own `vmupdate-shim.log`, which records mkdir, tar, entrypoint and rm for the round and **no `cat` entry at all** - so the shim's purpose-built `cat` branch (the one that emits our log AND `update-status.json` to dom0) has never once run. It is a one-line predicate fix, but it is moot until VMEXECNOSTDOUT is fixed, because its output would be discarded too.
 
