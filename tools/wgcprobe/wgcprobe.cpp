@@ -162,8 +162,9 @@ int main(int argc, char** argv){
   printf("wgcprobe host=%s user=%s session=%lu winsta=%s desktop=%s interactive=%d build=%s\n",
       host.c_str(),user.c_str(),(unsigned long)sid,winsta.c_str(),desktop.c_str(),interactive,osb.c_str());
   // ---- feature-presence (ApiInformation only; no symbol reference -> no SDK compile gate) ----
-  bool borderApi=false, cursorApi=false, dirtyApi=false, dirtyModeApi=false;
+  bool borderApi=false, cursorApi=false, dirtyApi=false, dirtyModeApi=false, secondaryApi=false;
   try{ borderApi   = meta::ApiInformation::IsPropertyPresent(kSess,L"IsBorderRequired");
+       secondaryApi= meta::ApiInformation::IsPropertyPresent(kSess,L"IncludeSecondaryWindows");
        cursorApi   = meta::ApiInformation::IsPropertyPresent(kSess,L"IsCursorCaptureEnabled");
        dirtyModeApi= meta::ApiInformation::IsPropertyPresent(kSess,L"DirtyRegionMode");
        dirtyApi    = meta::ApiInformation::IsPropertyPresent(kFrame,L"DirtyRegions"); }catch(...){}
@@ -172,8 +173,8 @@ int main(int argc, char** argv){
   try{ supported = GraphicsCaptureSession::IsSupported(); }
   catch(hresult_error const& e){ threw=true; supHr=(unsigned)e.code().value; } // 0x8007000E lands here
   catch(...){ threw=true; supHr=0xFFFFFFFF; }
-  printf("IsSupported=%d threw=%d hr=0x%08X borderApi=%d cursorApi=%d dirtyRegionsApi=%d dirtyModeApi=%d\n",
-      supported,threw,supHr,borderApi,cursorApi,dirtyApi,dirtyModeApi);
+  printf("IsSupported=%d threw=%d hr=0x%08X borderApi=%d cursorApi=%d dirtyRegionsApi=%d dirtyModeApi=%d secondaryWindowsApi=%d\n",
+      supported,threw,supHr,borderApi,cursorApi,dirtyApi,dirtyModeApi,secondaryApi);
   auto emitDead=[&](const char* stage,unsigned hr){
     printf("=== WGCPROBE JSON ===\n{\"brokerViable\":false,\"stage\":\"%s\",\"isSupported\":%s,"
       "\"hresult\":\"0x%08X\",\"itemCreated\":false,\"frameArrived\":false,\"nonBlank\":false,"
@@ -194,9 +195,17 @@ int main(int argc, char** argv){
   // PrintWindow(PW_RENDERFULLCONTENT) - all three measured on the same visible, uncloaked surface.
   // The architecture pinned 2026-09-02 says these surfaces come from ONE monitor capture, sliced.
   // This measures that claim on THIS build before any more routing code is written.
-  int rx=0, ry=0, rw=0, rh=0; bool rectMode=false;
-  if(monMode && argc>=6){ rx=atoi(argv[2]); ry=atoi(argv[3]); rw=atoi(argv[4]); rh=atoi(argv[5]);
-                          rectMode = (rw>0 && rh>0); }
+  int rx=0, ry=0, rw=0, rh=0; bool rectMode=false, wantSecondary=false;
+  if(argc>=6){ rx=atoi(argv[2]); ry=atoi(argv[3]); rw=atoi(argv[4]); rh=atoi(argv[5]);
+               rectMode = (rw>0 && rh>0); }
+  // "sec": ask the session to include SECONDARY (owned) windows. THE QUESTION THIS ANSWERS: a
+  // WinUI popup is its own top-level HWND, so an owner's capture normally excludes it and the
+  // agent must announce it as a separate dom0 window - which dom0 then marks with the qube's
+  // label border, inside the parent. If the owner's own capture can contain the popup, composited
+  // by Windows with its real transparency, there is nothing to announce and nothing to copy.
+  // Measure before building that: this reports whether the property EXISTS and what the owner's
+  // frame holds at the popup's rect with it on.
+  for(int a=1;a<argc;a++) if(_stricmp(argv[a],"sec")==0) wantSecondary=true;
   HWND hwnd=nullptr; const char* how = monMode?"monitor":"argv"; bool ownWin=false;
   if(!monMode){
     if(argc>=2){ unsigned long long v=_strtoui64(argv[1],nullptr,16); if(v) hwnd=(HWND)(uintptr_t)v; }
@@ -217,6 +226,16 @@ int main(int argc, char** argv){
   try{
     pool=Direct3D11CaptureFramePool::CreateFreeThreaded(d.rt,DirectXPixelFormat::B8G8R8A8UIntNormalized,2,isz);
     session=pool.CreateCaptureSession(item);
+    // SECONDARY (OWNED) WINDOWS. Off by default, which is why an owner's capture excludes its own
+    // WinUI popups and the agent has to announce each popup as its own dom0 window. With it on,
+    // Windows composites them into the owner's frames with their real transparency. Set only when
+    // asked AND present, and reported either way so "it did nothing" and "it is not there" cannot
+    // be confused.
+    bool secondarySet=false;
+    if(wantSecondary && secondaryApi){
+      try{ session.IncludeSecondaryWindows(true); secondarySet=true; }catch(...){ secondarySet=false; }
+    }
+    printf("secondaryWindows requested=%d present=%d set=%d\n", wantSecondary?1:0, secondaryApi?1:0, secondarySet?1:0);
     if(cursorApi){ try{ session.IsCursorCaptureEnabled(false); }catch(...){} }
     if(borderApi){ try{ session.IsBorderRequired(false); borderSet=true; }catch(hresult_error const& e){ borderHr=(unsigned)e.code().value; }catch(...){} }
   }catch(hresult_error const& e){ emitDead("pool",(unsigned)e.code().value); return 1; }
