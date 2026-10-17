@@ -41,7 +41,14 @@
 #     clue. Every stage flushes, exceptions are caught and written, and SP_DONE means completed -
 #     so a partial run is still evidence of where it stopped.
 param([ValidateSet('ctrlesc', 'shiftwin', 'win')] [string] $Opener = 'ctrlesc',
-      [int] $WaitMs = 2500, [int] $SecondSampleMs = 500, [int] $TaskTimeoutSec = 90)
+      [int] $WaitMs = 2500, [int] $SecondSampleMs = 500, [int] $TaskTimeoutSec = 90,
+      # A MONITOR CAPTURE, MEASURED IN THE SAME INSTANT AS THE PER-WINDOW ONE. Path to wgcprobe.exe
+      # (pushed next to this script). When given, the task runs `wgcprobe mon <surface rect>` while
+      # the menu is STILL OPEN and appends its answer, so "the window's own pixels are black" and
+      # "the monitor capture has pixels there" are read off one opening rather than two runs.
+      # It must run from inside this task: wgcprobe is a console program, and a console taking the
+      # foreground closes the menu.
+      [string] $WgcProbe = '')
 $ErrorActionPreference = 'Continue'
 $work = 'C:\startpixel'
 New-Item -ItemType Directory -Force $work | Out-Null
@@ -54,6 +61,7 @@ $inner = Join-Path $work 'inner.ps1'
 `$WaitMs = $WaitMs
 `$SecondSampleMs = $SecondSampleMs
 `$Opener = '$Opener'
+`$WgcProbe = '$WgcProbe'
 "@ + "`n" + @'
 $RES = 'C:\startpixel\result.txt'
 $script:lines = New-Object System.Collections.Generic.List[string]
@@ -221,6 +229,20 @@ foreach ($s in $after) {
     $d = $t0[$s.h.ToInt64()]
     Say ("  T1 hwnd=0x{0:x} {1} pw_ok={2} nonblack={3}/{4} maxchannel={5} content_bbox={6} (t0 was {7}/{8})" -f `
         $s.h.ToInt64(), $s.proc, $r2.ok, $r2.nonblack, $r2.total, $r2.maxchannel, $r2.bbox, $d.nonblack, $d.total)
+}
+
+# THE FOURTH SOURCE, while the menu is still up. Per-window capture is exhausted for this class;
+# the question the architecture turns on is whether the surface's pixels are in a MONITOR capture.
+if ($WgcProbe -and (Test-Path -LiteralPath $WgcProbe)) {
+    foreach ($s in $after) {
+        Say ("  MON hwnd=0x{0:x} rect={1},{2} {3}x{4} -> wgcprobe mon" -f $s.h.ToInt64(), $s.x, $s.y, $s.w, $s.ht)
+        $o = & $WgcProbe mon $s.x $s.y $s.w $s.ht 2>&1
+        foreach ($ln in @($o)) {
+            if ($ln -match 'rect=|frameArrived|IsSupported|wgcprobe host') { Say ("      " + $ln) }
+        }
+    }
+} elseif ($WgcProbe) {
+    Say "  MON SKIPPED: $WgcProbe not found (push wgcprobe.exe next to this script)"
 }
 
 # CLOSE IT, so the subject does not sit open on the operator's screen.
