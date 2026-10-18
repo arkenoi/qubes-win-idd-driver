@@ -122,9 +122,43 @@ source "$(dirname "${BASH_SOURCE[0]}")/rtc-lib.sh"
 # abandoned. w_session's own deadline remains the real bound, which is why this one may be generous.
 w_alive(){ grep -qa QREADY <<< "$(QTEST_VM=$1 timeout -k 5 "${2:-40}" ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null)"; }
 
+# A READINESS PROBE MUST NOT ABANDON ITSELF, and for a long time this one did.
+#
+# `timeout` around a qrexec call leaves the request IN THE GUEST'S QUEUE with no caller: when the
+# agent finally starts, the wrapper picks it up, finds the dom0 end gone, and writes
+# "InitVchan: QGAVCHANFAIL ... request dropped" at ERROR. Nine of those in campaign 20261018-083319,
+# every one with caller domain 10858 - THIS management qube - in sub-100 ms bursts coinciding exactly
+# with our probes (findings/issues.md QGAVCHANUNDECLARED, open and recurred three times). The guest
+# is reporting our abandonment, correctly, and Jev refused to let the line be lowered for it
+# (conceals 0.67): the fix is to stop abandoning, not to stop reporting.
+#
+# ONE CALL FOR THE WHOLE WAIT. It is started once, in the background, and polled - so nothing is
+# re-queued per iteration and nothing is cut off while the agent is still coming up, while the
+# caller's per-minute screen and wedge checks keep running. Three exits, as a wait must have: the
+# marker arrives (0), the call ends without it (1, the guest answered something else), or the
+# caller's own deadline passes (2) - and only that last one abandons anything, deliberately, at the
+# point where the run is giving up and preserving the guest as evidence anyway.
+# The pid is $!, never a pattern match.
+w_alive_start(){ # $1=vm $2=outfile -> prints the pid of the single probe
+  : > "$2"
+  QTEST_VM=$1 ./tools/qtest run 'cmd /c echo QREADY' > "$2" 2>/dev/null &
+  echo $!
+}
+w_alive_poll(){ # $1=pid $2=outfile -> 0=marker seen 1=call ended without it 2=still running
+  grep -qa QREADY "$2" 2>/dev/null && return 0
+  kill -0 "$1" 2>/dev/null && return 2
+  return 1
+}
+
 # Wait for a usable session. 0=session 1=terminal 2=deadline
 w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
   local vm=$1 dl=$2 lbl=$3 dir=$4 log=$5 t0 now st shots=0 dark=0 wedgesus=0 cpu
+  # LOCAL, so a second wait in the same shell cannot inherit a finished probe's pid.
+  local _wa_pid= _wa_out= _wa_rc=
+  # The deadline arms below leave the single probe to FINISH on its own rather than killing it: a
+  # kill is an abandonment, which is the thing this wait exists to stop causing. Only the temp file
+  # goes, and a late write to a deleted file is harmless.
+  local _wa_cleanup='[ -n "${_wa_out:-}" ] && rm -f "$_wa_out"'
   t0=$(date +%s)
   while :; do
     now=$(( $(date +%s) - t0 ))
@@ -132,6 +166,7 @@ w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
       if [ "$wedgesus" = 1 ]; then
         # Not a bare timeout: the wedge signature was present and persisted to the deadline. Say so,
         # so a caller and a reader see a CLASSIFIED outcome instead of "something did not answer".
+      eval "$_wa_cleanup"
         $log "  $lbl: DEADLINE ${dl}s - and QWTWEDGESUSPECT held throughout. Treating as TERMINAL, guest LEFT AS IT STANDS."
         # This is the moment the guest stops being a machine and becomes evidence, so it is the
         # moment to write that down. The marker makes tools/hooks/golden-boot-gate.sh refuse a
@@ -142,17 +177,30 @@ w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
         fi
         return 1
       fi
+      eval "$_wa_cleanup"
       $log "  $lbl: DEADLINE ${dl}s with no session (screen=$(w_screen "$vm" "$lbl-dl" "$dir"))"
       return 2
     fi
-    # 90 s: above the ~55-56 s this rig measures from start to session (win10 and win11 both), so a
-    # healthy guest answers on ONE probe and abandons nothing; still short enough that the per-minute
-    # screen and wedge checks below keep running on a guest that never comes up.
-    w_alive "$vm" "${W_ALIVE_BOOT_BOUND:-90}" && { $log "  $lbl: session up at t+${now}s"; return 0; }
+    # ONE PROBE FOR THE WHOLE WAIT (w_alive_start/w_alive_poll). The old form bounded each call at
+    # 90 s - above the ~55-56 s this rig measures from start to session - on the reasoning that a
+    # healthy guest answers on one probe and abandons nothing. A guest that is SLOWER than the bound
+    # abandons one request per iteration, and that is what the guest reports as QGAVCHANFAIL.
+    if [ -z "${_wa_pid:-}" ]; then
+      _wa_out=$(mktemp); _wa_pid=$(w_alive_start "$vm" "$_wa_out")
+    fi
+    w_alive_poll "$_wa_pid" "$_wa_out"; _wa_rc=$?
+    if [ "$_wa_rc" = 0 ]; then
+      rm -f "$_wa_out"; $log "  $lbl: session up at t+${now}s"; return 0
+    fi
+    if [ "$_wa_rc" = 1 ]; then
+      # The call ENDED without the marker: the channel answered but the session is not up yet. A new
+      # call is legitimate here - the previous one is finished, so nothing is left queued.
+      rm -f "$_wa_out"; _wa_out=$(mktemp); _wa_pid=$(w_alive_start "$vm" "$_wa_out")
+    fi
     if [ $(( now / 60 )) -gt "$shots" ]; then
       shots=$(( now / 60 )); st=$(w_screen "$vm" "$lbl-t${now}" "$dir")
       $log "  $lbl: t+${now}s qvm=$(w_state "$vm") screen=$st"
-      [ "$st" = RECOVERY ] && { $log "  $lbl: TERMINAL - recovery screen, not waiting and not restarting ($dir/$lbl-t${now}.png)"; return 1; }
+      [ "$st" = RECOVERY ] && { eval "$_wa_cleanup"; $log "  $lbl: TERMINAL - recovery screen, not waiting and not restarting ($dir/$lbl-t${now}.png)"; return 1; }
       # A guest with NO USABLE SCREEN minute after minute is not booting either. Black is
       # legitimately transient during early boot, so one sample proves nothing - three consecutive
       # minutes with no session does.
