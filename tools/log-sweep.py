@@ -27,7 +27,8 @@ past --jev-max questions). jev.py exit 2 = the judge did not run = the sweep is 
         families from file names / content). Exit codes: 0 CLEAN, 1 FINDINGS (a metric breach or a
         Jev-classified defect), 3 DATA (a missing, empty, partial or unparseable log), 4 INCOMPLETE (the
         judge did not run, or items were left unjudged). 3 and 4 are never a pass.
-    tools/log-sweep.py baseline-init --out <baseline.json> [--known-defect 'REGEX=ISSUE=REASON']... <report.json>...
+    tools/log-sweep.py baseline-init --out <baseline.json> [--known-defect 'REGEX=ISSUE=REASON']...
+                                     [--merge-from <baseline.json>] <report.json>...
         builds / refreshes the tracked baseline from analyze reports: Jev's folded verdicts become the
         statuses (defect -> known-defect, expected -> expected, noise -> benign, low confidence -> unsettled),
         the per-boot maxima become the rise ceilings. The baseline holds normalized PATTERNS and a reason
@@ -3228,8 +3229,40 @@ def cmd_baseline_init(a):
         out["patterns"].append({"regex": rx.pattern, "status": "known-defect", "issue": iss, "reason": rsn})
     for rx, iss, rsn in fi_rules:
         out["patterns"].append({"regex": rx.pattern, "status": "expected", "context": "fault-injection", "issue": iss, "reason": rsn})
+    # CARRY FORWARD WHAT THESE REPORTS DID NOT SEE. A refresh is built from the reports it is given,
+    # so regenerating from one campaign leaves ONLY that campaign's signatures - and a win11-only
+    # run would drop every win10 entry, which the next win10 campaign would then meet as "new" and
+    # fail on, for a gap the refresh itself created. Measured 2026-10-18: the tracked baseline was
+    # eight days old and a three-cell win11 campaign reported 312 NEW SIGNATURES against it, while
+    # only three analyze reports survive on this rig - so a plain regeneration was the only route
+    # available and it would have silently narrowed the gate.
+    # A carried entry keeps its status and SAYS it was carried without being re-observed, so a
+    # baseline cannot accumulate stale approvals invisibly.
+    carried = 0
+    if getattr(a, "merge_from", None):
+        with open(a.merge_from, encoding="utf-8") as f:
+            prev = json.load(f)
+        mark = "carried from %s, not seen in these reports" % (prev.get("generated") or os.path.basename(a.merge_from))
+        for k, v in (prev.get("signatures") or {}).items():
+            if k in out["signatures"]:
+                continue
+            ent = dict(v)
+            r = str(ent.get("reason") or "")
+            ent["reason"] = ("%s [%s]" % (r, mark)) if r else mark
+            ent["carried"] = True
+            out["signatures"][k] = ent
+            counts[ent.get("status") or "unsettled"] += 1
+            carried += 1
+        have = {p.get("regex") for p in out["patterns"]}
+        for pat in (prev.get("patterns") or []):
+            if pat.get("regex") not in have:
+                out["patterns"].append(pat)
+        out["merged_from"] = {"file": os.path.basename(a.merge_from),
+                              "generated": prev.get("generated"), "carried": carried}
     with open(a.out, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=1, sort_keys=False)
+    if carried:
+        print("CARRIED %d signature(s) forward from %s (not seen in these reports)" % (carried, a.merge_from))
     print("BASELINE %s: %d signatures (%s), %d patterns, from %d report(s)" % (a.out, len(out["signatures"]), ", ".join("%s %d" % kv for kv in sorted(counts.items())), len(out["patterns"]), len(seen_reports)))
     return 0
 
@@ -3286,6 +3319,7 @@ def main(argv=None):
     bi.add_argument("--known-defect", action="append", help="REGEX=ISSUE=REASON: force known-defect on matching signature keys (repeatable)")
     bi.add_argument("--expected-in-fi", action="append", help="REGEX=ISSUE=REASON: expected ONLY in a fault-injection context (repeatable)")
     bi.add_argument("--issue-ref", action="append", help="REGEX=ISSUE: set the issue reference on matching keys, status unchanged (repeatable)")
+    bi.add_argument("--merge-from", help="an existing baseline.json: carry forward every signature these reports did not see, so a refresh built from one campaign cannot DROP another OS family's coverage")
     ba = sub.add_parser("baseline-audit"); ba.add_argument("baseline")
     a = ap.parse_args(argv)
     if a.cmd == "decode":
