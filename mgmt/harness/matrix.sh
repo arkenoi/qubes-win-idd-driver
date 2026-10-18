@@ -2229,7 +2229,17 @@ if [ -z "${RELEASE_COMMIT:-}" ]; then
   fi
 fi
 RELEASE_REF="${RELEASE_COMMIT:-HEAD}"
-RELEASE_SHA=$(git rev-parse "$RELEASE_REF" 2>/dev/null)
+# ^{commit} IS NOT DECORATION. `git rev-parse <40 hex>` returns ANY well-formed sha VERBATIM,
+# existing or not - it only resolves names - so a mistyped or invented commit sailed through this
+# line and Gate-0 then matched it against the MANIFEST on a shared PREFIX. Measured 2026-10-18: a
+# campaign was launched with 0040cfd81bff6f6f6f6f6f6f6f6f6f6f6f6f6f6f, a real short sha padded with
+# 6f, and Gate-0 reported "PASS: payload verified - built from 0040cfd81bff ... installer matches
+# repo" on a commit this repository does not contain. The peg that proves a package is the release
+# under test must itself be a commit that exists; ^{commit} is what asks.
+# --verify --quiet, NOT a bare rev-parse: on failure `git rev-parse X^{commit}` ECHOES ITS OWN
+# ARGUMENT to stdout and exits 128, so the `-n` test below passed and RELEASE_SHA held the literal
+# "<sha>^{commit}". Both halves of this line were wrong and the second was found only by driving it.
+RELEASE_SHA=$(git rev-parse --verify --quiet "$RELEASE_REF^{commit}")
 [ -n "$RELEASE_SHA" ] || { say "[ERROR] FATAL: cannot resolve RELEASE_COMMIT='$RELEASE_REF' in this repo"; exit 1; }
 if ./tools/assert-payload.sh "$RELEASE_SETUP" "$RELEASE_REF" >"$M/setup-gate0.out" 2>&1; then
   say "Gate-0 (setup tree): $(tail -1 "$M/setup-gate0.out")"
