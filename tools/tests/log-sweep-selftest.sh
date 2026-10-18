@@ -1855,14 +1855,14 @@ _ns(){ field "$T/$1.json" "[f['boots'] for f in r['files'] if 'network-setup' in
 _qd(){ field "$T/$1.json" "[f['boots'] for f in r['files'] if 'qubesdb-daemon' in f['name']][0]"; }
 if [ "$(_ns t53)" = "[1, 2]" ] && [ "$(_qd t53)" = "[1, 2]" ]; then
   ok "T53a a per-day log spanning two boots reports BOTH"
-else no "T53a the boot span is wrong (network-setup=$(_ns t53) qubesdb=$(_qd t53), want [1, 2] and [1, 2])" "$(tail -3 "$T/t53.out")"; fi
+else bad "T53a the boot span is wrong (network-setup=$(_ns t53) qubesdb=$(_qd t53), want [1, 2] and [1, 2])" "$(tail -3 "$T/t53.out")"; fi
 
 # (b) AND THE SINGULAR FIELDS REFUSE TO GUESS: a consumer wanting one boot for a file that has two
 # gets NULL, not the last one - which is the field that was misread.
 if [ "$(field "$T/t53.json" "[f['boot'] for f in r['files'] if 'network-setup' in f['name']][0]")" = "None" ] \
    && [ "$(field "$T/t53.json" "[f['pid'] for f in r['files'] if 'network-setup' in f['name']][0]")" = "None" ]; then
   ok "T53b a file with two boots and two pids publishes neither as its one value"
-else no "T53b the file still claims one boot/pid for a file that spans two" "$(tail -2 "$T/t53.out")"; fi
+else bad "T53b the file still claims one boot/pid for a file that spans two" "$(tail -2 "$T/t53.out")"; fi
 
 # (c) SEEN TO FAIL - the timestamp lookup. GUARD:lineboot restores `boot_for(l.ts)`, which compares a
 # guest timestamp against the boot table on guests whose clock is known to jump by HOURS (the agent's
@@ -1871,7 +1871,7 @@ else no "T53b the file still claims one boot/pid for a file that spans two" "$(t
 K=$(knob lineboot); rc=$(analyze "$K" "$T/turnover" "$T/baseline.json" "$T/jev-expected.py" t53c)
 if [ "$(_ns t53c)" != "[1, 2]" ]; then
   ok "T53c SEEN TO FAIL: the timestamp lookup loses the turnover (network-setup=$(_ns t53c))"
-else no "T53c the lineboot knob changed nothing - the guard is decoration" "network-setup=$(_ns t53c)"; fi
+else bad "T53c the lineboot knob changed nothing - the guard is decoration" "network-setup=$(_ns t53c)"; fi
 
 # (d) SEEN TO FAIL - pid reuse. GUARD:pidts drops the `c["ts"] <= l.ts` condition from the pid match,
 # so the FIRST init carrying a pid wins. Windows reuses pids and this capture really does log pid
@@ -1879,7 +1879,7 @@ else no "T53c the lineboot knob changed nothing - the guard is decoration" "netw
 K=$(knob pidts); rc=$(analyze "$K" "$T/turnover" "$T/baseline.json" "$T/jev-expected.py" t53d)
 if [ "$(_qd t53d)" != "[1, 2]" ]; then
   ok "T53d SEEN TO FAIL: one pid in two boots collapses when the first init wins (qubesdb=$(_qd t53d))"
-else no "T53d the pidts knob changed nothing - the guard is decoration" "qubesdb=$(_qd t53d)"; fi
+else bad "T53d the pidts knob changed nothing - the guard is decoration" "qubesdb=$(_qd t53d)"; fi
 
 
 # and a new case appended at the end (dom0_lost, 2026-10-16) moved the total by nothing.
