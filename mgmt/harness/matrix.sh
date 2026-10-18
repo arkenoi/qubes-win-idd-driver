@@ -2697,6 +2697,7 @@ if [ -x tools/sweep-gate.sh ]; then
     # They are still printed below: a declared error that stops being shown is how the original
     # incident happened. What changes is only whether they move the counter.
     ngr=$(grep -acE '^  UNACCOUNTED .*\[(ERROR|WARN)\] FAIL +' "$M/sweep-gate.out" 2>/dev/null || true); ngr=${ngr:-0}
+    nun_raw=$nun          # before the discount: what the GATE itself counted
     nun=$((nun - ngr)); [ "$nun" -lt 0 ] && nun=0
     [ "$ngr" -gt 0 ] && say "sweep-gate: $ngr line(s) are this campaign's own graded verdicts, already in the tally above - shown, not counted again"
     # A GATE THAT FAILS FOR A REASON THIS BRANCH CANNOT COUNT MUST NOT PASS SILENTLY, and that is
@@ -2704,7 +2705,17 @@ if [ -x tools/sweep-gate.sh ]; then
     # counted zero UNACCOUNTED and zero ROSE, and the campaign reported rc=0 with 42 passed, 0
     # failed. A guard the harness cannot hear is decoration. So: anything the gate fails on that is
     # not one of the two row kinds is reported with its own structured line quoted.
-    if [ "${_sg_rc:-0}" -ne 0 ] && [ $((nun + nro)) -eq 0 ]; then
+    # THE RAW COUNT, NOT THE DISCOUNTED ONE - and getting that wrong is what made this guard
+    # double-report on 20261018-172640. Two cells failed, the gate listed both as UNACCOUNTED, the
+    # discount correctly took them to nun=0 because they are already in the cell tally, and this
+    # guard then raised them AGAIN as "a reason this harness does not count". One failure, two
+    # entries, the wrong class on the second - the exact defect matrix-sweep-tally-selftest exists
+    # to prevent, reintroduced by the guard meant to stop silences.
+    #
+    # A gate failure is EXPLAINED when it listed any row at all, graded or not. It is unexplained
+    # only when it failed with nothing listed - a stale declaration, say - and that is the case this
+    # guard is for.
+    if [ "${_sg_rc:-0}" -ne 0 ] && [ $((${nun_raw:-0} + nro)) -eq 0 ]; then
       no "INVALID-SWEEP-UNCLASSED  the gate exited ${_sg_rc} with no unaccounted or risen row - it failed for a reason this harness does not count. Its verdict line: $(grep -a 'SWEEP-GATE-RESULT' "$M/sweep-gate.out" 2>/dev/null | tail -1)"
     fi
     if [ $((nun + nro)) -gt 0 ]; then

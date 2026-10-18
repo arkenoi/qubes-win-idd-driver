@@ -2091,15 +2091,53 @@ def build_structure(files, boots, declared=None):
     # taken in consecutive runs, because concurrent processes interleave their lines in one file. A
     # log with no pid in its prefix is an OLD one - written when the file really was per-process - so
     # it stays a single instance keyed on the file's own init pid.
+    # AN INSTANCE IS DELIMITED BY ITS OWN INIT RECORD, NOT BY ITS PID, and that is the whole
+    # mechanism - there is no tolerance and no window in it, so nothing can merge two instances by
+    # being close enough in time.
+    #
+    # WHY IT HAD TO CHANGE. Keying on the pid alone made a pid REUSED IN A LATER BOOT one instance,
+    # and `_init` then took the first of its inits - "first init wins". MEASURED, campaign
+    # 20261018-172640 clean cell: the accept battery reboots the guest for boot-path acceptance, and
+    # pid 4312 wrote TWO inits either side of it -
+    #     20:40:18.765  pid 4312  System uptime 37.125 s   -> boot 20:39:41.6
+    #     20:42:03.897  pid 4312  System uptime 35.187 s   -> boot 20:41:28.7
+    # two boots 107 s apart, each with its own exact uptime - and the table carried ONE record,
+    # pid=4312 boot=4 announces=2 helpers={WGCBROKER:2, NOTIFHOST:2, ETWPROXYSUP:2}. Every per-
+    # instance metric then double-counted: vchan_reconnects = 1 ("the session LOST its daemon") and
+    # helper_relaunches = 3, on a guest that did nothing wrong. Both breached at max 0 and failed
+    # the campaign.
+    #
+    # T53d ALREADY NAMES THIS FAILURE - "one pid in two boots collapses when the first init wins" -
+    # and it passes, because it covers a DIFFERENT consumer: the per-file boot publication, not this
+    # table. And the fastreboot fixture gives each boot a DIFFERENT pid, so the condition could not
+    # arise in it. The fixture was built around the bug rather than at it; it now carries a reused
+    # pid, which is the condition itself.
+    #
+    # THE perfileinst KNOB MOVED TO THE TUPLE, because identity is the tuple now. Left on the `key`
+    # line it collapsed nothing - each process still wrote its own init, so the generation split them
+    # anyway - and a knob that changes nothing is decoration by this project's own standard (T30
+    # caught it the moment the mechanism changed). On the tuple it reproduces the original defect in
+    # full: everything in one file as a single instance.
+    #
+    # NO *NEW* GUARD KNOB for the init generation (asked before writing one: Jev not_needed 0.98). The fixture states
+    # the condition - one pid, two inits, two boots - and the real capture already drove it both
+    # ways: the pre-fix code produced the breach in campaign 20261018-172640 and the post-fix code
+    # splits pid 4312 into two instances. A knob would be a third line in product code for a
+    # mechanism two measurements already pin.
     def _instance_groups(lf):
-        groups, order = {}, []
+        groups, order, gen = {}, [], {}
         for l in lf.lines:
             pid = (l.extra or {}).get("pid") or ""
-            key = int(pid) if pid else lf.pid   # GUARD:perfileinst DEFECT: key = lf.name
-            if key not in groups:
-                groups[key] = []
-                order.append(key)
-            groups[key].append(l)
+            key = int(pid) if pid else lf.pid
+            # Its own "Log started" opens a new instance for this pid. A line with no pid in its
+            # prefix belongs to an OLD per-process file, where the file IS the instance.
+            if pid and l.func == "LogInit" and str(l.msg).startswith("Log started"):
+                gen[key] = gen.get(key, 0) + 1
+            k = (key, gen.get(key, 1))   # GUARD:perfileinst DEFECT: k = (lf.name, 1)
+            if k not in groups:
+                groups[k] = []
+                order.append(k)
+            groups[k].append(l)
         return [(k, groups[k]) for k in order]
 
     instances = []
@@ -2107,11 +2145,20 @@ def build_structure(files, boots, declared=None):
     for lf in sorted(agents, key=lambda f: (f.lines[0].ts if f.lines else dt.datetime.min)):
         if not lf.lines:
             continue
-        for _pid, _lines in _instance_groups(lf):
-            _segments.append((lf, _pid, _lines))
-    for lf, _pid, _lines in sorted(_segments, key=lambda t: (t[2][0].ts or dt.datetime.min)):
-        # the init record this process wrote, when it is in this file (it names the session/version)
-        _init = next((i for i in lf.inits if i["pid"] == _pid), None)
+        for (_pid, _gen), _lines in _instance_groups(lf):
+            _segments.append((lf, _pid, _gen, _lines))
+    for lf, _pid, _gen, _lines in sorted(_segments, key=lambda t: (t[3][0].ts or dt.datetime.min)):
+        # THE Nth INIT THIS PID WROTE, not merely its first - the generation is what distinguishes a
+        # reused pid's second life from its first, and the init record is where its boot comes from.
+        _pinits = [i for i in lf.inits if i["pid"] == _pid]
+        # NEVER BORROW ANOTHER GENERATION'S INIT. The counts can diverge: "Log started" opens a
+        # record whose pid is filled by the "Running as user" line that follows, so a log truncated
+        # between the two leaves a record with pid None that this filter drops while the generation
+        # counter still counted it. Falling back to _pinits[0] there would hand this instance the
+        # FIRST init's boot - which is precisely the "first init wins" defect this change exists to
+        # remove, reintroduced for the one case nobody looks at. No init means UNKNOWN, and the
+        # fallback chain below already handles that.
+        _init = _pinits[_gen - 1] if 0 < _gen <= len(_pinits) else None
         # THE INSTANCE'S OWN ANCHOR DECIDES ITS BOOT - not its first LINE's, and not the FILE's.
         # Both of those are wrong for the shape the agent actually writes. `lf.boot` comes from
         # lf.boot_time, which every LogInit overwrites, so in a per-day file it is the LAST

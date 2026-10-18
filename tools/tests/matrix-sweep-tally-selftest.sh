@@ -95,5 +95,24 @@ PYD
 )
 ck "every per-cell caused-disposition is also declared to the gate" "0" "$drift"
 
+# AND THE GUARD MUST NOT DOUBLE-REPORT A FAILURE THE TALLY ALREADY HOLDS. Measured on campaign
+# 20261018-172640: two cells failed, the gate listed both as UNACCOUNTED, the discount took nun to 0
+# because they are already in the cell tally - and the unclassed guard then raised them a second
+# time. One failure, two entries, wrong class on the second: the very defect this file exists to
+# prevent, reintroduced by the guard meant to stop silences. The fix is that the guard keys on the
+# RAW row count, so a gate failure that listed anything is "explained".
+printf '[15:06:07] [ERROR] FAIL  WIN10-clean: a graded product check\n' > "$T/graded-only2.log"
+timeout 100 bash tools/sweep-gate.sh "$T/graded-only2.log" > "$T/go2.out" 2>&1; g2rc=$?
+g2raw=$(grep -ac '^  UNACCOUNTED' "$T/go2.out" 2>/dev/null || true); g2raw=${g2raw:-0}
+g2gr=$(grep -acE '^  UNACCOUNTED .*\[(ERROR|WARN)\] FAIL +' "$T/go2.out" 2>/dev/null || true); g2gr=${g2gr:-0}
+g2net=$((g2raw - g2gr)); [ "$g2net" -lt 0 ] && g2net=0
+ck "a graded-only log: the gate still fails"                 "1" "$([ "$g2rc" -ne 0 ] && echo 1 || echo 0)"
+ck "and the discount takes the countable rows to zero"       "0" "$g2net"
+# The guard's condition, as shipped: raw rows present => NOT unclassed, so nothing is raised twice.
+ck "the unclassed guard stays silent (raw rows explain it)"  "0" "$([ "$g2rc" -ne 0 ] && [ $((g2raw + 0)) -eq 0 ] && echo 1 || echo 0)"
+# SEEN TO FAIL: the discounted count would have fired it, which is what happened in that campaign.
+ck "SEEN TO FAIL: keyed on the DISCOUNTED count it fires"    "1" "$([ "$g2rc" -ne 0 ] && [ $((g2net + 0)) -eq 0 ] && echo 1 || echo 0)"
+ck "matrix.sh keys the guard on the raw count"               "1" "$(grep -c 'nun_raw:-0' "$M")"
+
 echo "matrix-sweep-tally-selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

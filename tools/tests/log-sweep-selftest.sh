@@ -534,6 +534,39 @@ ev_twobuild = ['EV 2026-10-07 10:02:40.000 [Microsoft-Windows-TaskScheduler/Oper
                'EV 2026-10-07 10:05:40.000 [Microsoft-Windows-TaskScheduler/Operational] id=203 level=3 Microsoft-Windows-TaskScheduler: Task Scheduler failed to launch action "powershell.exe" in instance "{aaaa1111-0000-0000-0000-000000000002}" of task "\\QwtClockSync" , in error code 2147942403.']
 write("twobuild.pull", stream([(TBO, "agent", tb_old), (TBN, "agent", tb_new), TB_BRIDGE], events(ev_twobuild)))
 
+# ---- pidreuse: ONE PID, TWO BOOTS, TWO INITS - the condition the fastreboot fixture could not hold
+# THE NUMBERS ARE THE MEASURED ONES. Campaign 20261018-172640, win11-clean: the accept battery
+# reboots the guest for boot-path acceptance, and the agent came up with THE SAME PID either side -
+#   20:40:18.765  pid 4312  System uptime 37.125 s   -> boot 20:39:41.6
+#   20:42:03.897  pid 4312  System uptime 35.187 s   -> boot 20:41:28.7
+# two boots 107 s apart, each with its own exact uptime. Keyed on the pid alone that was ONE
+# instance - announces=2, every helper twice - so vchan_reconnects=1 ("the session LOST its daemon")
+# and helper_relaunches=3 breached at max 0 on a guest that did nothing wrong.
+#
+# WHY THIS FIXTURE HAD TO EXIST. T53d already names the failure - "one pid in two boots collapses
+# when the first init wins" - and passes, because it covers the per-file boot publication rather
+# than the instance table. And fastreboot above gives each of its three boots a DIFFERENT pid
+# (3716/3912/3844), so the condition could not arise in it. The fixture was built around the bug.
+# Windows hands out pids in multiples of 4 from a low pool that resets each boot, so an agent
+# launching at the same stage of two boots can repeat its pid - not a coincidence, though a scan of
+# every capture held here found it once.
+PRA = "gui-agent-20261018.log"
+def pr_agent(t0, up, pid, tid, last):
+    return [wu(t0, "%d:%d" % (pid, tid), "I", "LogInit", "Log started, module name: gui-agent"),
+            wu(t0, "%d:%d" % (pid, tid), "I", "LogInit", "System uptime: %s seconds" % up),
+            wu(t0, "%d:%d" % (pid, tid), "I", "LogInit", "Running as user: SYSTEM, process ID: %d" % pid),
+            wu(t0, "%d:%d" % (pid, tid), "I", "LogInit", "Module version: 9.9.9.1"),
+            wu(t0, "%d:%d" % (pid, tid), "I", "LogInit", "Session: 1"),
+            wu(t0, "%d:%d" % (pid, tid), "I", "WatchForEvents", "Awaiting for a vchan client, write buffer size: 65536"),
+            wu(t0, "%d:%d" % (pid, tid), "I", "WatchForEvents", "A vchan client has connected"),
+            wu(t0, "%d:%d" % (pid, tid), "I", "WgcLaunch", "WGCBROKER launched via Task Scheduler, user session 1"),
+            wu(t0, "%d:%d" % (pid, tid), "I", "NotifRunInSession", "NOTIFHOST launched via Task Scheduler (user session 1, resident)"),
+            wu(last, "%d:%d" % (pid, tid), "I", "WatchForEvents", "exiting")]
+# THE SAME PID 4312 IN BOTH, which is the whole point of the fixture.
+pr_ag = (pr_agent("204018.765", "37.125", 4312, 4316, "204150.000")
+       + pr_agent("204203.897", "35.187", 4312, 4316, "204400.000"))
+write("pidreuse.pull", stream([(PRA, "agent", pr_ag)], events([])))
+
 # ---- fastreboot: TWO BOOTS 37 s APART, one agent each -------------------------------------------
 # THE NUMBERS ARE THE MEASURED ONES, not a model of them. win10-clean 2026-10-17, the installer's
 # own reboot chain: agent instances at 01:30:23.851/01:33:57.838/01:34:32.832 reporting System
@@ -617,7 +650,7 @@ analyze(){ # $1=analyzer $2=logsdir $3=baseline $4=judge $5=tag -> rc; report at
 field(){ python3 -c "import json,sys; r=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$1" "$2"; }
 
 # ---- decode every fixture with the real decoder --------------------------------------------------------------------
-for f in base newsig rise three stoperr empty twoboot clockflip rapidboot taskok vchanwd phaseflip skipnames skipchatty bootshut inv twoproc msiok msibad twobuild fastreboot reqstop svcrestart turnover; do
+for f in base newsig rise three stoperr empty twoboot clockflip rapidboot taskok vchanwd phaseflip skipnames skipchatty bootshut inv twoproc msiok msibad twobuild pidreuse fastreboot reqstop svcrestart turnover; do
   rc=$(decode "$SRC" "$T/$f.pull" "$T/$f")
   [ "$rc" = 0 ] || { echo "FATAL: the $f fixture did not decode (rc=$rc): $(tail -2 "$T/$f.decode.txt")"; exit 2; }
   # EVERY LINE IN THESE CORPORA IS WRITTEN BY THIS TEST, so the run declares the errors it caused - which is
@@ -1943,5 +1976,37 @@ else bad "T53d the pidts knob changed nothing - the guard is decoration" "qubesd
 
 
 # and a new case appended at the end (dom0_lost, 2026-10-16) moved the total by nothing.
+# ---- T56 ONE PID IN TWO BOOTS IS TWO INSTANCES, and no tolerance decides it -------------------
+# An instance is delimited by its OWN init record, so a reused pid cannot merge by being close
+# enough in time - there is no window in it to widen. See the pidreuse fixture for the measurement.
+pr(){ # $1=analyzer $2=tag -> "<agent_instances> <vchan_reconnects> <helper_relaunches>"
+  python3 "$1" analyze "$T/pidreuse" --baseline "$T/baseline.json" --out "$T/$2.json" \
+      --summary "$T/$2.txt" --label "$2" --workdir "$T/work-$2" --jev-cmd "$T/jev-expected.py" > "$T/$2.out" 2>&1
+  field "$T/$2.json" 'str(r["metrics"].get("agent_instances"))+" "+str(r["metrics"].get("vchan_reconnects"))+" "+str(r["metrics"].get("helper_relaunches"))'
+}
+read -r t56i t56v t56h <<<"$(pr "$SRC" t56)"
+[ "$t56i" = 2 ] && ok "T56 one pid with two inits is TWO instances (agent_instances=$t56i)" \
+                || bad "T56 agent_instances=$t56i, want 2 - the reused pid collapsed into one instance"
+[ "$t56v" = 0 ] && ok "T56 its second boot's announce is NOT a lost daemon (vchan_reconnects=$t56v)" \
+                || bad "T56 vchan_reconnects=$t56v, want 0 - a second boot's announce read as a reconnect"
+[ "$t56h" = 0 ] && ok "T56 its second boot's helpers are NOT relaunches (helper_relaunches=$t56h)" \
+                || bad "T56 helper_relaunches=$t56h, want 0 - a second boot's helpers read as relaunches"
+
+# SEEN TO FAIL by the pre-fix rule itself rather than a new knob (Jev: not_needed 0.98). Keying on
+# the pid alone is one sed away and reproduces the measured breach exactly.
+PIDKEY="$T/log-sweep-pidkey.py"
+sed -E 's|^( *)gen\[key\] = gen.get\(key, 0\) \+ 1$|\1gen[key] = 1|' "$SRC" > "$PIDKEY"
+_nd=$(diff "$SRC" "$PIDKEY" | grep -c '^>')
+if [ "$_nd" = 1 ] && python3 -m py_compile "$PIDKEY" >/dev/null 2>&1; then
+  read -r p56i p56v p56h <<<"$(pr "$PIDKEY" t56k)"
+  if [ "$p56i" = 1 ] && [ "$p56v" = 1 ]; then
+    ok "T56 SEEN TO FAIL: keyed on the pid alone it is ONE instance with a phantom reconnect (instances=$p56i reconnects=$p56v relaunches=$p56h)"
+  else
+    bad "T56 the pre-fix rule did not reproduce the defect (instances=$p56i reconnects=$p56v relaunches=$p56h)"
+  fi
+else
+  bad "T56 could not build the pre-fix variant - the sed changed $_nd line(s), want 1"
+fi
+
 echo "--- $pass passed, $fail failed; fixtures/outputs in $T"
 [ "$fail" = 0 ] && exit 0 || exit 1

@@ -237,6 +237,45 @@ if ($universe.Count -lt 20) {
 }
 $bad = $universe | Where-Object { $_.ConfigManagerErrorCode -ne 0 } |
        Select-Object Name, PNPDeviceID, ConfigManagerErrorCode
+# ONE SNAPSHOT IS A PROXY, NOT THE PROPERTY. The claim is "this device cannot start"; a single WMI
+# read says only "it had a non-zero code when I looked", and a device being re-enumerated by PnP at
+# that instant reports one too. MEASURED, campaign 20261018-172640 upgrade cell: the High Definition
+# Audio Device (virtio, VEN_1AF4 - nothing we install touches it) reported code 10
+# CM_PROB_FAILED_START and failed the battery, while BOTH its drivers were loaded (HDAudBus.sys and
+# HdAudio.sys are in that boot's module list) and the guest logged NO PnP or driver failure event at
+# all - no 219, 7000, 7001, 7026, 10110. One occurrence in 35 cell-runs; in the other 34 the only
+# device with any error code is the allowlisted Basic Display Adapter, because a device with no
+# error never appears in this list at all.
+#
+# So the offenders are RE-READ once after a settle, and only a device still erroring is unexpected.
+# This conceals nothing: a device that genuinely cannot start reports the same code a few seconds
+# later and still fails, and both readings are kept in the evidence so a reader sees which it was.
+$pnpRecovered = @()
+if (@($bad).Count -gt 0) {
+    Start-Sleep -Seconds 5
+    $recheck = @()
+    foreach ($d in @($bad)) {
+        $again = $null
+        try {
+            $again = Get-CimInstance -ClassName Win32_PnPEntity -Filter ("DeviceID='" + ($d.PNPDeviceID -replace "\\", "\\\\" -replace "'", "''") + "'") -ErrorAction Stop |
+                     Select-Object -First 1
+        } catch { $again = $null }
+        if ($null -eq $again) {
+            # Gone from the enumeration, or unreadable: keep it, since we cannot say it recovered.
+            $recheck += ($d | Select-Object Name, PNPDeviceID, ConfigManagerErrorCode,
+                                            @{n='recheck';e={'unreadable'}})
+        } elseif ([int]$again.ConfigManagerErrorCode -ne 0) {
+            $recheck += ($d | Select-Object Name, PNPDeviceID, ConfigManagerErrorCode,
+                                            @{n='recheck';e={[int]$again.ConfigManagerErrorCode}})
+        } else {
+            # Recovered on the re-read. Recorded in the evidence rather than dropped silently, so a
+            # reader can see a device WAS caught mid-enumeration instead of wondering why a code
+            # they remember seeing is absent from the report.
+            $pnpRecovered += ($d | Select-Object Name, PNPDeviceID, ConfigManagerErrorCode)
+        }
+    }
+    $bad = @($recheck)
+}
 $unexpected = @()
 foreach ($d in @($bad)) {
     $allowed = $false
@@ -254,7 +293,8 @@ foreach ($d in @($bad)) {
 }
 if ($universe.Count -ge 20) {
     Check 'pnp_no_unexpected_errors' ($unexpected.Count -eq 0) `
-        @{ all = @($bad); unexpected = $unexpected; allowlist = $AllowPnpErrors }
+        @{ all = @($bad); unexpected = $unexpected; allowlist = $AllowPnpErrors
+           recovered_on_recheck = @($pnpRecovered) }
 }
 
 # --- 6. agent log: ONE instance this boot, actively writing, zero BADMODE ----------
