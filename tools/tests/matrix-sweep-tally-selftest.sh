@@ -53,5 +53,28 @@ ck "matrix.sh discounts graded verdicts"            "1" "$(grep -c 'ngr=\$(grep 
 ck "matrix.sh raises INVALID-SWEEP conditionally"   "1" "$(grep -c 'if \[ \$((nun + nro)) -gt 0 \]; then' "$M")"
 ck "matrix.sh still prints every row"               "1" "$(grep -c "grep -aE '\^  (UNACCOUNTED|ROSE)'" "$M")"
 
+# A GATE FAILURE THE TALLY CANNOT COUNT MUST NOT PASS SILENTLY. Measured on campaign
+# 20261018-153728: the gate exited 1 over a stale declaration, this arithmetic counted zero
+# UNACCOUNTED and zero ROSE, and the campaign reported rc=0 with 42 passed, 0 failed. A guard the
+# harness cannot hear is decoration, and that one was mine, introduced the same day.
+printf '[15:06:07] [INFO] nothing declared here at all\n' > "$T/clean.log"
+timeout 100 bash tools/sweep-gate.sh --declare-caused 'NeverAppearsAnywhere' 'a stale always-claim' \
+    "$T/clean.log" > "$T/unclassed.out" 2>&1; urc=$?
+unun=$(grep -ac '^  UNACCOUNTED' "$T/unclassed.out" 2>/dev/null || true); unun=${unun:-0}
+unro=$(grep -ac '^  ROSE' "$T/unclassed.out" 2>/dev/null || true); unro=${unro:-0}
+ck "the gate FAILS on a stale always-declaration"        "1" "$([ "$urc" -ne 0 ] && echo 1 || echo 0)"
+ck "and it does so with NO row the old tally counts"     "0" "$((unun + unro))"
+# SEEN TO FAIL: the old arithmetic alone - rows only - raises nothing for that exit code.
+ck "old rule alone: this failure would be SILENT"        "0" "$([ $((unun + unro)) -gt 0 ] && echo 1 || echo 0)"
+# The shipped guard is what turns it into a verdict.
+ck "matrix.sh captures the gate's exit code"             "1" "$(grep -c '_sg_rc=\$?' "$M")"
+ck "matrix.sh raises on a failure it cannot class"       "1" "$(grep -c 'INVALID-SWEEP-UNCLASSED' "$M")"
+
+# AND THE RARE KIND MUST NOT FAIL A RUN. The same mechanism, declared rare: reported, exit 0.
+timeout 100 bash tools/sweep-gate.sh --declare-caused-rare 'NeverAppearsAnywhere' 'rare, may not occur' \
+    "$T/clean.log" > "$T/rare.out" 2>&1; rrc=$?
+ck "a RARE declaration that did not match does not fail" "0" "$([ "$rrc" -ne 0 ] && echo 1 || echo 0)"
+ck "and it is still REPORTED, not silent"                "1" "$(grep -ac 'declared-caused (rare) not seen this run' "$T/rare.out")"
+
 echo "matrix-sweep-tally-selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

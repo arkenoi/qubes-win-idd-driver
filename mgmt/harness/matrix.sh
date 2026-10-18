@@ -2656,14 +2656,26 @@ if [ -x tools/sweep-gate.sh ]; then
   # cause, so a QubesWindowsUpdateScan that fails for any other reason still blocks. Jev, shown the
   # sequence and this project's supervision rule that an unexpected death is a major error:
   # declare_caused 0.98 - a task killed by a shutdown WE ordered is not an unexpected death.
-  SWGATE_DECL=(--declare-caused 'QubesWindowsUpdateScan ended with a non-zero result.*console control'
+  # RARE: the campaign can cause this and usually does not - seen in 1 of 6 campaigns, because it
+  # needs the task to be mid-run at the moment a cell halts the guest. Reported when absent, not a
+  # failure. Jev: two_kinds 0.89.
+  SWGATE_DECL=(--declare-caused-rare 'QubesWindowsUpdateScan ended with a non-zero result.*console control'
     'CAUSED by this campaign: the harness halts the guest between cells, and a scheduled task that is mid-run when that happens is terminated with STATUS_CONTROL_C_EXIT (0xC000013A). The death reporter names the cause itself. The task ran 29 times in this campaign and succeeded every other time; a non-zero result from any OTHER cause is not covered by this regex and still blocks.'
-    --declare-caused 'InitVchan: QGAVCHANFAIL .*request dropped'
+    # RARE TOO, AND THE SUITE PROVED WHY. T9 runs this very block against a CLEAN campaign fixture
+    # and expects FAIL=0: with this declared strict, a campaign whose logs happen to carry no
+    # QGAVCHANFAIL fails because the declaration is "stale" - i.e. the harness would REQUIRE its own
+    # caused condition to occur. That is backwards, and it is the same mistake as the rule it came
+    # from. A declaration never demands the condition; the anti-silencer property is that the row is
+    # always printed, that it excuses ONLY what its regex names, and that an unmatched one is
+    # reported. The strict kind stays in the tool for a caller who genuinely wants must-match
+    # (sweep-gate T25c drives it), and nothing here uses it.
+    --declare-caused-rare 'InitVchan: QGAVCHANFAIL .*request dropped'
     'CAUSED by this campaign: the readiness probe (cmd /c echo QREADY) is queued by dom0 while the guest has no qrexec and delivered when it registers, with the caller gone - and the halt/boot cycle that strands it is one the install requires. Four measured attempts to remove it at the probe: x9 -> x8 -> x9 -> x15. Receipt: the dropped request names cmd.exe and this qube as caller; see the correlation in matrix.sh above and findings/issues.md QGAVCHANUNDECLARED.')
   # shellcheck disable=SC2086
   if bash tools/sweep-gate.sh "${SWGATE_DECL[@]}" $swlogs > "$M/sweep-gate.out" 2>&1; then
     say "sweep-gate: every declared error in the campaign's own logs is accounted for"
   else
+    _sg_rc=$?
     nun=$(grep -ac '^  UNACCOUNTED' "$M/sweep-gate.out" 2>/dev/null || true); nun=${nun:-0}
     nro=$(grep -ac '^  ROSE' "$M/sweep-gate.out" 2>/dev/null || true); nro=${nro:-0}
     # PRINTED, BUT NOT COUNTED TWICE. no() writes every failing check into this same log as
@@ -2676,6 +2688,14 @@ if [ -x tools/sweep-gate.sh ]; then
     ngr=$(grep -acE '^  UNACCOUNTED .*\[(ERROR|WARN)\] FAIL +' "$M/sweep-gate.out" 2>/dev/null || true); ngr=${ngr:-0}
     nun=$((nun - ngr)); [ "$nun" -lt 0 ] && nun=0
     [ "$ngr" -gt 0 ] && say "sweep-gate: $ngr line(s) are this campaign's own graded verdicts, already in the tally above - shown, not counted again"
+    # A GATE THAT FAILS FOR A REASON THIS BRANCH CANNOT COUNT MUST NOT PASS SILENTLY, and that is
+    # not hypothetical: on 20261018-153728 the gate exited 1 over a stale declaration, this branch
+    # counted zero UNACCOUNTED and zero ROSE, and the campaign reported rc=0 with 42 passed, 0
+    # failed. A guard the harness cannot hear is decoration. So: anything the gate fails on that is
+    # not one of the two row kinds is reported with its own structured line quoted.
+    if [ "${_sg_rc:-0}" -ne 0 ] && [ $((nun + nro)) -eq 0 ]; then
+      no "INVALID-SWEEP-UNCLASSED  the gate exited ${_sg_rc} with no unaccounted or risen row - it failed for a reason this harness does not count. Its verdict line: $(grep -a 'SWEEP-GATE-RESULT' "$M/sweep-gate.out" 2>/dev/null | tail -1)"
+    fi
     if [ $((nun + nro)) -gt 0 ]; then
       no "INVALID-SWEEP  ${nun:-0} unaccounted + ${nro:-0} risen declared error(s) in the campaign's own logs - read $M/sweep-gate.out, then fix the defect or record why it is not one"
     fi
