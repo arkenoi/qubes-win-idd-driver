@@ -180,11 +180,67 @@ _text() { # <file> -> its text as UTF-8 on stdout
 # THE WHOLE FILE, not its first 4 KB. A tool writes its result line at the END: measured, the
 # <cell>-logsweep.out files carry LOGSWEEP-RESULT at byte 38576 of 38959, so a head-bounded probe
 # could never see it and four analyser reports counted 1443 lines against coverage.
+# BUILD SCOPING: A GATE VERDICT IS A STATEMENT ABOUT THE BUILD UNDER TEST.
+# On an upgrade cell one log directory holds BOTH builds - the predecessor writes its last lines,
+# the installer swaps the binaries, the new build starts minutes later - and no timestamp separates
+# them. This gate aggregates by MESSAGE and discards the file, so the predecessor's warnings arrived
+# as the new release's. MEASURED on run 20261018-083319: of the 17 unaccounted messages, four were
+# emitted ONLY by 4.3.35.795 while the build under test was 4.3.36.1020, and two of those four our
+# own source already logs at Info (ApplyGuestShadows main.c:5980, PlatLogInfo notifyerr.c:315) - so
+# the gate was blocking on lines the shipped build cannot write.
+#
+# WHY SCOPING AND NOT A LEDGER ROW (Jev: build_scope 0.90, ledger_entry 0.01): a ledger row matches
+# on MESSAGE TEXT, so it would account for the line whatever build emitted it - if a later build
+# REGRESSED and reinstated the warning, the row would match and hide it. Scoping keys on the version
+# the log itself declares, so a regression carries the CURRENT version and surfaces immediately.
+#
+# A QWT log states both facts in its own head: "LogInit: Log started, module name: <m>" and
+# "LogInit: Module version: <v>". A file whose module shows only ONE version across the whole input
+# set is never excluded - nothing was superseded, so nothing is prior.
+declare -A _SG_NEWEST=()
+declare -A _SG_SEEN=()
+_sg_modver() { # $1=file -> "<module><TAB><version>", empty when the file declares neither
+    local h m v
+    h=$(_text "$1" | head -c 2000)
+    m=$(printf '%s' "$h" | grep -aom1 'module name: [A-Za-z0-9_.-]\+' | sed 's/^module name: //')
+    v=$(printf '%s' "$h" | grep -aom1 'Module version: [0-9][0-9.]*' | sed 's/^Module version: //')
+    [ -n "$m" ] && [ -n "$v" ] && printf '%s\t%s' "$m" "$v"
+    return 0
+}
+_sg_vers() { printf '%s' "${_SG_SEEN[$1]:-}" | tr ' ' '\n' | grep -a . | sort -u; }
+_sg_build_index() { # $@=files -> fills _SG_NEWEST / _SG_SEEN from the headers
+    local f mv m v
+    for f in "$@"; do
+        [ -f "$f" ] || continue
+        mv=$(_sg_modver "$f"); [ -n "$mv" ] || continue
+        m=${mv%%$'\t'*}; v=${mv##*$'\t'}
+        case " ${_SG_SEEN[$m]:-} " in *" $v "*) : ;; *) _SG_SEEN[$m]="${_SG_SEEN[$m]:-} $v" ;; esac
+        if [ -z "${_SG_NEWEST[$m]:-}" ]; then _SG_NEWEST[$m]="$v"
+        # dotted-numeric order, so 4.3.36.1020 beats 4.3.35.795 and 4.3.36.999
+        elif [ "$(printf '%s\n%s\n' "${_SG_NEWEST[$m]}" "$v" | sort -V | tail -1)" = "$v" ]; then _SG_NEWEST[$m]="$v"; fi
+    done
+}
+_is_prior_build() { # $1=file -> 0 when a NEWER version of ITS module appears in this input set
+    local mv m v
+    mv=$(_sg_modver "$1"); [ -n "$mv" ] || return 1
+    m=${mv%%$'\t'*}; v=${mv##*$'\t'}
+    [ "$(_sg_vers "$m" | wc -l)" -ge 2 ] || return 1   # one version: nothing superseded
+    [ "$v" != "${_SG_NEWEST[$m]}" ]
+}
+
 _is_own_report() { _text "$1" | grep -qa 'SWEEP-GATE-\(RESULT\|COVERAGE\|CENSUS\|SILENT\|LEDGER\|VERIFY\)\|LOGSWEEP-RESULT'; }
 
-declared() { local vfile="${SWEEP_GATE_VARIANTS:-}" skipped=0
+declared() { local vfile="${SWEEP_GATE_VARIANTS:-}" skipped=0 pfile="${SWEEP_GATE_PRIOR:-}"
+             # Scoped for EVERY caller, --write-ledger included: seeding the ledger from the
+             # predecessor's messages would write the mis-attribution in permanently, under the new
+             # build's name. Excluded files are NAMED in $pfile, never dropped quietly.
+             _sg_build_index "$@"
              for l in "$@"; do [ -f "$l" ] || { echo "sweep-gate: $l does not exist" >&2; return 2; }
                _is_own_report "$l" && { skipped=$((skipped+1)); continue; }
+               if _is_prior_build "$l"; then
+                   [ -n "$pfile" ] && printf '%s\t%s\n' "$(_sg_modver "$l")" "$l" >> "$pfile"
+                   continue
+               fi
                _text "$l" | grep -ahE "$LEVELS" || true; done | message \
              | VFILE="$vfile" DUMPFILE="${SWEEP_GATE_DUMP:-}" python3 -c '
 import collections, os, sys
@@ -493,8 +549,17 @@ done
 _dupes=$(( $# - ${#_args[@]} )); rm -f "$_seen"
 [ "$_dupes" -gt 0 ] && echo "SWEEP-GATE-INPUT $_dupes of $# path(s) named the same file twice - read once each (a doubled count can forge a ROSE)"
 set -- "${_args[@]}"
-NOW=$(mktemp); VAR=$(mktemp)
-SWEEP_GATE_VARIANTS="$VAR" declared "$@" > "$NOW" || { rm -f "$NOW" "$VAR"; exit 2; }
+NOW=$(mktemp); VAR=$(mktemp); PRIOR=$(mktemp)
+SWEEP_GATE_VARIANTS="$VAR" SWEEP_GATE_PRIOR="$PRIOR" declared "$@" > "$NOW" || { rm -f "$NOW" "$VAR" "$PRIOR"; exit 2; }
+# REPORTED, NEVER SILENT. An excluded file is named with the version it declares and the version
+# that superseded it, so a wrong exclusion is visible in the same output as the verdict.
+if [ -s "$PRIOR" ]; then
+    echo "SWEEP-GATE-PRIOR-BUILD $(grep -ac . "$PRIOR") log(s) excluded - a NEWER version of the same module is in this input set, so their lines are not the build under test's:"
+    while IFS=$'\t' read -r _m _v _p; do
+        printf '  %s %s (superseded by %s)  %s\n' "$_m" "$_v" "${_SG_NEWEST[$_m]:-?}" "$_p"
+    done < "$PRIOR"
+fi
+rm -f "$PRIOR"
 LD=$(mktemp); grep -vE '^\s*(#|$)' "$LEDGER" > "$LD" || true
 
 # NOTHING IS EVER HIDDEN. A ledger entry does NOT remove a message from the report; it only decides

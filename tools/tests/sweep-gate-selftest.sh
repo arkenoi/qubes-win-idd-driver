@@ -597,5 +597,48 @@ if [ "$(grep -ac '\[INFO\].*\[WARN\]' "$R")" = 0 ] && [ "$(grep -ac '\[INFO\] pl
   ok "T23d a message that already carries a level is not given a second one"
 else no "T23d a line declared two levels at once" "$(cat "$R")"; fi
 
+# T24 - BUILD SCOPING. ON AN UPGRADE CELL ONE LOG DIRECTORY HOLDS BOTH BUILDS. The predecessor
+# writes its last lines, the installer swaps the binaries, the new build starts minutes later, and
+# no timestamp separates them. This gate aggregates by MESSAGE and discards the file, so the
+# predecessor's warnings arrived as the new release's. MEASURED on run 20261018-083319: 17
+# unaccounted messages, of which seven went away once the 45 superseded logs were excluded - and two
+# of those our own source already logs at Info (ApplyGuestShadows main.c:5980, PlatLogInfo
+# notifyerr.c:315), so the gate was blocking on lines the shipped build cannot write.
+#
+# NO KNOB (Jev: not_needed 0.97 for the analyzer's equivalent arm, and the same reasoning holds -
+# the fixture drives both directions itself). BOTH DIRECTIONS IN ONE FIXTURE, which is the point: a
+# filter that excluded the new build's line too would pass a one-sided test and silence the gate.
+printf '# empty ledger for T24\n' > "$T/t24-led.txt"
+mkdir -p "$T/t24"
+printf '%s\n' \
+  "[20261018.121126.810-676-I] LogInit: Log started, module name: gui-agent" \
+  "[20261018.121126.810-676-I] LogInit: Module version: 4.3.35.795" \
+  "[20261018.121130.000-676-W] OldOnly: a warning only the superseded build emits" \
+  > "$T/t24/gui-agent-20261018-121126-3496.log"
+printf '%s\n' \
+  "[20261018.121701.653-8904-I] LogInit: Log started, module name: gui-agent" \
+  "[20261018.121701.653-8904-I] LogInit: Module version: 4.3.36.1020" \
+  "[20261018.121705.000-8904-W] NewToo: a warning the build under test emits" \
+  > "$T/t24/gui-agent-20261018.log"
+# a SINGLE-VERSION module in the same input set must be untouched: nothing superseded it
+printf '%s\n' \
+  "[20261018.121701.653-900-I] LogInit: Log started, module name: qubesdb-daemon" \
+  "[20261018.121701.653-900-I] LogInit: Module version: 4.3.1.0" \
+  "[20261018.121702.000-900-W] StockOnly: a warning from a module with one version" \
+  > "$T/t24/qubesdb-daemon-20261018.log"
+o=$(SWEEP_GATE_LEDGER="$T/t24-led.txt" bash tools/sweep-gate.sh "$T/t24"/*.log 2>&1)
+_old=$(printf '%s' "$o" | grep -ac 'a warning only the superseded build emits' || true)
+_new=$(printf '%s' "$o" | grep -ac 'a warning the build under test emits' || true)
+_stk=$(printf '%s' "$o" | grep -ac 'a warning from a module with one version' || true)
+if [ "$_old" = 0 ] && [ "$_new" -ge 1 ]; then
+  ok "T24a the superseded build's warning does not block; the build under test's DOES (old=$_old new=$_new)"
+else no "T24a build scoping is one-sided (old=$_old want 0, new=$_new want >=1)" "$(printf '%s' "$o" | grep -a 'UNACCOUNTED' | head -3)"; fi
+if [ "$_stk" -ge 1 ]; then
+  ok "T24b a module with ONE version is never excluded - nothing superseded it"
+else no "T24b the filter ate a single-version module's warning - every normal run would read clean" "$(printf '%s' "$o" | grep -a 'UNACCOUNTED\|PRIOR' | head -3)"; fi
+if printf '%s' "$o" | grep -qa 'SWEEP-GATE-PRIOR-BUILD 1 log' && printf '%s' "$o" | grep -qa '4.3.35.795 (superseded by 4.3.36.1020)'; then
+  ok "T24c the exclusion is REPORTED with both versions and the path, not silent"
+else no "T24c an excluded log is dropped without saying so" "$(printf '%s' "$o" | grep -a 'PRIOR-BUILD' | head -3)"; fi
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
