@@ -38,6 +38,22 @@ if [ "${1:-}" = "--verify" ]; then VERIFY=1; shift; fi
 if [ "${1:-}" = "--census" ]; then CENSUS=1; shift; fi
 if [ "${1:-}" = "--verify-ledger" ]; then VLED=1; shift; fi
 if [ "${1:-}" = "--silent-failures" ]; then SILENT=1; shift; fi
+# A CAUSED DECLARATION COMES FROM THE RUN THAT CAUSED THE CONDITION, and that is what separates it
+# from a ledger row. The per-cell sweep has had this for a while (log-sweep's --tolerate-error, which
+# matrix.sh already uses for exactly the line below) and it is why the cells sweep CLEAN while this
+# gate failed on the same lines. Jev: declare-as-caused 0.72 for that mechanism; no_concealment 0.67
+# for giving this gate the same input; and "stop chasing the probe, declare it" 0.94 after four
+# measured attempts to remove the cause (x9 baseline, x8, x9, then x15 with the attempt that was
+# reverted).
+#
+# IT CANNOT ROT INTO A SILENCER, because a declaration that matches NOTHING is a failure of its own -
+# the run claimed to cause something it did not, which means the claim is stale. That is the property
+# a ledger row lacks, and the reason inventing a ledger row kind for this scored only 0.46.
+DECL_RX=(); DECL_WHY=()
+while [ "${1:-}" = "--declare-caused" ]; do
+    [ $# -ge 3 ] || { echo "sweep-gate: --declare-caused needs REGEX and REASON" >&2; exit 2; }
+    DECL_RX+=("$2"); DECL_WHY+=("$3"); shift 3
+done
 [ $# -ge 1 ] || [ "$VERIFY" = 1 ] || [ "$VLED" = 1 ] || { echo "usage: $0 [--verify] [--verify-ledger] [--census] [--write-ledger <out>] <log> [...]" >&2; exit 2; }
 LEDGER="${SWEEP_GATE_LEDGER:-mgmt/harness/error-ledger.txt}"
 
@@ -591,6 +607,7 @@ done
 _dupes=$(( $# - ${#_args[@]} )); rm -f "$_seen"
 [ "$_dupes" -gt 0 ] && echo "SWEEP-GATE-INPUT $_dupes of $# path(s) named the same file twice - read once each (a doubled count can forge a ROSE)"
 set -- "${_args[@]}"
+declare -A DECL_HIT=(); caused=0
 NOW=$(mktemp); VAR=$(mktemp); PRIOR=$(mktemp); UPS=$(mktemp)
 SWEEP_GATE_VARIANTS="$VAR" SWEEP_GATE_PRIOR="$PRIOR" SWEEP_GATE_UPSTREAM_OUT="$UPS" declared "$@" > "$NOW" || { rm -f "$NOW" "$VAR" "$PRIOR" "$UPS"; exit 2; }
 # PRINTED, because it is diagnosis: the lines are here to help read a failure, they just do not
@@ -684,7 +701,19 @@ while IFS= read -r row; do
             rose_at=$(( base + (base + 3) / 4 ))
         fi
     else rose_at=0; fi
-    if [ -z "$base" ] || [ -z "$note" ]; then
+    # CAUSED, declared by this run: shown with its reason, not counted against acceptance.
+    _caused=""
+    if [ "${#DECL_RX[@]}" -gt 0 ]; then
+        for _i in "${!DECL_RX[@]}"; do
+            if printf '%s' "$msg" | grep -qaE -- "${DECL_RX[$_i]}"; then
+                _caused="${DECL_WHY[$_i]}"; DECL_HIT[$_i]=1; break
+            fi
+        done
+    fi
+    if [ -n "$_caused" ]; then
+        caused=$((caused+1))
+        printf '  CAUSED      x%-4s%s %s\n     -> %s\n' "$cnt" "$vtag" "$(printf '%s' "$msg" | cut -c1-104)" "$(printf '%s' "$_caused" | cut -c1-150)" >> "$ACCLIST"
+    elif [ -z "$base" ] || [ -z "$note" ]; then
         [ "$newn" = 0 ] && [ "$rose" = 0 ] && echo "SWEEP-GATE: declared error/warning not accounted for:"
         newn=$((newn+1))
         if [ -n "$base" ] && [ -z "$note" ]; then
@@ -699,8 +728,23 @@ while IFS= read -r row; do
         acc=$((acc+1)); printf '  ACCOUNTED   x%-4s%s %s\n     -> %s\n' "$cnt" "$vtag" "$(printf '%s' "$msg" | cut -c1-104)" "$(printf '%s' "$note" | cut -c1-110)" >> "$ACCLIST"
     fi
 done < "$NOW"
+# AN UNMATCHED DECLARATION IS A FAILURE OF ITS OWN. The run said it causes this and it did not, so
+# the claim is stale and must not sit there excusing a line it no longer explains.
+decl_unmatched=0
+if [ "${#DECL_RX[@]}" -gt 0 ]; then
+    for _i in "${!DECL_RX[@]}"; do
+        if [ -z "${DECL_HIT[$_i]:-}" ]; then
+            decl_unmatched=$((decl_unmatched+1))
+            echo "SWEEP-GATE: DECLARED-CAUSED NEVER MATCHED: ${DECL_RX[$_i]}"
+            echo "     the run claims to cause this and nothing in its logs does - the declaration is stale"
+        fi
+    done
+fi
+if [ "$caused" -gt 0 ]; then
+    echo "SWEEP-GATE: $caused message(s) DECLARED CAUSED by this run (shown, not acceptance criteria):"
+fi
 # printed ALWAYS, pass or fail, so a recurring known error stays visible instead of becoming silence
-if [ "$acc" -gt 0 ]; then
+if [ "$acc" -gt 0 ] || [ "$caused" -gt 0 ]; then
     echo "SWEEP-GATE: $acc declared error/warning message(s) accounted for by $LEDGER (shown, not hidden):"
     cat "$ACCLIST"
 fi
@@ -750,7 +794,7 @@ if [ "${blind:-0}" -gt 0 ]; then
     exit 1
 fi
 if [ "$newn" -gt 0 ] || [ "$rose" -gt 0 ]; then
-    echo "SWEEP-GATE-RESULT unaccounted=$newn risen=$((rose + up_rose)) accounted=$acc"
+    echo "SWEEP-GATE-RESULT unaccounted=$newn risen=$((rose + up_rose)) accounted=$acc caused=$caused stale_declarations=$decl_unmatched"
 [ -z "${SWEEP_GATE_DUMP:-}" ] && echo "  every distinct line behind these messages: re-run with SWEEP_GATE_DUMP=<path> - grouping is presentation, nothing is discarded"
     echo "  Each is a real error our code declared. It is a defect to fix, or an entry for $LEDGER"
     echo "  recording what it means. Reading it and moving on is not one of the options."
@@ -760,4 +804,8 @@ if [ "${up_rose:-0}" -gt 0 ]; then
     echo "SWEEP-GATE-RESULT unaccounted=0 risen=$up_rose accounted=$acc"
     exit 1
 fi
-echo "SWEEP-GATE-RESULT unaccounted=0 risen=0 accounted=$acc"
+if [ "${decl_unmatched:-0}" -gt 0 ]; then
+    echo "SWEEP-GATE-RESULT unaccounted=0 risen=0 accounted=$acc caused=$caused stale_declarations=$decl_unmatched"
+    exit 1
+fi
+echo "SWEEP-GATE-RESULT unaccounted=0 risen=0 accounted=$acc caused=$caused stale_declarations=0"

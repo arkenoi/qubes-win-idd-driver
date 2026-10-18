@@ -640,5 +640,37 @@ if printf '%s' "$o" | grep -qa 'SWEEP-GATE-PRIOR-BUILD 1 log' && printf '%s' "$o
   ok "T24c the exclusion is REPORTED with both versions and the path, not silent"
 else no "T24c an excluded log is dropped without saying so" "$(printf '%s' "$o" | grep -a 'PRIOR-BUILD' | head -3)"; fi
 
+# T25 - A CAUSED DECLARATION, AND THE PROPERTY THAT KEEPS IT FROM BECOMING A SILENCER.
+# The run that CAUSES a condition may declare it; a ledger row may not stand in for that (inventing
+# a ledger row kind for caused-and-accepted scored 0.46, below this project's floor, while the
+# per-cell sweep's existing --tolerate-error scored declare-as-caused 0.72). Added after four
+# measured attempts to remove one such cause at its source - x9 baseline, x8, x9, then x15 for the
+# attempt that was reverted - and Jev: "stop chasing the probe, declare it" 0.94.
+printf '# empty ledger for T25\n' > "$T/t25-led.txt"
+printf '%s\n' \
+  "[20261018.120000.001-100-E] InitVchan: QGAVCHANFAIL vchan to domain 10858 port 513 never opened: xenstore node unreadable (0x5); request dropped." \
+  "[20261018.120001.001-100-E] SomethingElse: a wholly undeclared error" \
+  > "$T/t25.log"
+DECL=(--declare-caused 'InitVchan: QGAVCHANFAIL .*request dropped' 'CAUSED by this run: its own readiness probe, queued while the guest had no qrexec.')
+
+# (a) the declared one is shown as CAUSED and does NOT decide acceptance
+o=$(SWEEP_GATE_LEDGER="$T/t25-led.txt" bash tools/sweep-gate.sh "${DECL[@]}" "$T/t25.log" 2>&1)
+if printf '%s' "$o" | grep -qa 'CAUSED .*QGAVCHANFAIL' && ! printf '%s' "$o" | grep -qa 'UNACCOUNTED.*QGAVCHANFAIL'; then
+  ok "T25a a declared-caused message is shown as CAUSED, not unaccounted"
+else no "T25a the declaration did not take" "$(printf '%s' "$o" | grep -a 'QGAVCHANFAIL\|CAUSED' | head -2)"; fi
+
+# (b) IT MUST NOT EXCUSE ANYTHING ELSE. The undeclared error in the same file still blocks.
+if printf '%s' "$o" | grep -qa 'UNACCOUNTED.*a wholly undeclared error'; then
+  ok "T25b a declaration excuses ONLY what it names - the other error still blocks"
+else no "T25b the declaration silenced an error it does not name" "$(printf '%s' "$o" | grep -a 'UNACCOUNTED' | head -2)"; fi
+
+# (c) THE ANTI-SILENCER PROPERTY, SEEN TO FAIL: a declaration matching nothing is itself a failure.
+printf '[20261018.120000.001-100-I] Quiet: nothing happened\n' > "$T/t25-clean.log"
+o2=$(SWEEP_GATE_LEDGER="$T/t25-led.txt" bash tools/sweep-gate.sh \
+       --declare-caused 'ThisNeverAppears: not in any log' 'a stale claim' "$T/t25-clean.log" 2>&1); r2=$?
+if [ "$r2" != 0 ] && printf '%s' "$o2" | grep -qa 'DECLARED-CAUSED NEVER MATCHED'; then
+  ok "T25c a declaration that matches NOTHING fails as stale (rc=$r2) - it cannot rot into a silencer"
+else no "T25c a stale declaration passed silently (rc=$r2)" "$(printf '%s' "$o2" | grep -a 'RESULT\|NEVER' | head -2)"; fi
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
