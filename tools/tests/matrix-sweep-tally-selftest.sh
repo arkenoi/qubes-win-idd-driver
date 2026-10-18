@@ -76,5 +76,24 @@ timeout 100 bash tools/sweep-gate.sh --declare-caused-rare 'NeverAppearsAnywhere
 ck "a RARE declaration that did not match does not fail" "0" "$([ "$rrc" -ne 0 ] && echo 1 || echo 0)"
 ck "and it is still REPORTED, not silent"                "1" "$(grep -ac 'declared-caused (rare) not seen this run' "$T/rare.out")"
 
+# THE TWO INSTRUMENTS MUST CARRY THE SAME CAUSED-DISPOSITIONS. log-sweep grades each cell and
+# sweep-gate grades the campaign, over the same logs; matrix.sh passes --tolerate-error to the first
+# and --declare-caused* to the second. For a while it passed only SOME of them to the second, so each
+# campaign failed on whichever disposition was missing - 20261018-153728 on a shutdown-killed task,
+# then 20261018-163605 on "wmain: open agent pipe failed with error 0x2" x2, which the per-cell sweep
+# had declared all along. One campaign, two graders, one set.
+drift=$(python3 - <<'PYD'
+import re
+s = open('mgmt/harness/matrix.sh', encoding='utf-8').read()
+tol = re.findall(r"--tolerate-error '([^']*)'", s)
+dec = " ".join(re.findall(r"--declare-caused(?:-rare)? '([^']*)'", s))
+# each per-cell regex must be represented to the gate; compare on its first alternative's head,
+# which is stable against the parenthesised grouping the per-cell form uses
+missing = [t for t in tol if t.strip('()').split('|')[0][:28] not in dec]
+print(len(missing))
+PYD
+)
+ck "every per-cell caused-disposition is also declared to the gate" "0" "$drift"
+
 echo "matrix-sweep-tally-selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

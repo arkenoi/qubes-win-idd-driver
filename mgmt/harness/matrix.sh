@@ -2669,6 +2669,17 @@ if [ -x tools/sweep-gate.sh ]; then
     # always printed, that it excuses ONLY what its regex names, and that an unmatched one is
     # reported. The strict kind stays in the tool for a caller who genuinely wants must-match
     # (sweep-gate T25c drives it), and nothing here uses it.
+    # THE SAME SET THE PER-CELL SWEEP ALREADY HAS, and the reason this stopped being whack-a-mole.
+    # log-sweep gets three --tolerate-error declarations above; this gate had two of them, so each
+    # campaign failed on whichever of the missing ones happened to occur: 20261018-163605 fell over
+    # "wmain: open agent pipe failed with error 0x2" x2, which the per-cell sweep has declared all
+    # along with its receipt (Jev on that reason: caused 0.91 conf 0.86). Two instruments grading
+    # one campaign must carry the same dispositions; tools/tests/matrix-sweep-tally-selftest.sh now
+    # asserts they stay in step.
+    --declare-caused-rare 'SetupNetwork: Failed to get qubes-ip|QioWriteBuffer: WriteFile failed with error 0xe8|send_command_to_daemon: write to daemon failed with error 0xe8|wmain: open agent pipe failed with error 0x2'
+    'CAUSED by this campaign: every cell subject is given an EMPTY netvm (CLAUDE.md - only a guest that TESTS PV networking gets one), so /qubes-ip legitimately does not exist and the qubesdb client reports a missing pipe or a closed write. Declared for the per-cell sweep since 2026-10-17 with the same receipt; a cell WITH a netvm would not produce these.'
+    --declare-caused-rare 'RecreateDuplication: .*BUT THE GEOMETRY CHANGED'
+    'CAUSED by this campaign: it drives resolution changes, and a mode change across a duplication recreate is how DXGI signals staleness by design (owner 2026-10-17). Declared for the per-cell sweep with the same receipt, pending the pixel receipt in GEOMETRYERRORUNSETTLEABLE.'
     --declare-caused-rare 'InitVchan: QGAVCHANFAIL .*request dropped'
     'CAUSED by this campaign: the readiness probe (cmd /c echo QREADY) is queued by dom0 while the guest has no qrexec and delivered when it registers, with the caller gone - and the halt/boot cycle that strands it is one the install requires. Four measured attempts to remove it at the probe: x9 -> x8 -> x9 -> x15. Receipt: the dropped request names cmd.exe and this qube as caller; see the correlation in matrix.sh above and findings/issues.md QGAVCHANUNDECLARED.')
   # shellcheck disable=SC2086
