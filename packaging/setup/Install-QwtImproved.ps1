@@ -5217,8 +5217,14 @@ public static class QdbPrime {
         # shouts when the restore FAILS; a deliberate skip that leaves the same condition must not be
         # the one silent path. The caller is told twice - a log line and a RESULT detail it can grade
         # - so "no windows" is never a surprise it has to infer from an absence.
+        # INTENDED AND ALREADY RECORDED WHERE IT COUNTS. This skip is what the owner asked for
+        # ("ok lets not restart the gui agent when reboot is pending in upgrade"), so it is not an
+        # error condition - and the caller is told in a field it can grade, one line below, which is
+        # the part that must not be silent. Jev: noise=0.70 expected=0.27 defect=0.00. It fired 12
+        # times in one campaign for 2 distinct wordings; a WARN per occurrence for intended
+        # behaviour is the noise the gate is supposed to be free of.
         Write-Log ('gui-agent NOT restarted: a reboot is pending (reboot_needed) and the agent would ' +
-                   'map no windows before it - this qube maps no windows until it is rebooted') 'WARN'
+                   'map no windows before it - this qube maps no windows until it is rebooted') 'INFO'
         $script:Result.detail.gui_restored = 'skipped: reboot pending'
     }
     elseif ($script:GuiQuiesced -and -not ($Auto -and $RebootAtEnd)) {
@@ -5475,7 +5481,10 @@ function Set-GuestTimeZoneFromHost {
         $probe = $null
         try { $probe = Read-QwtQubesDbValue '/name' } catch { }
         if ([string]::IsNullOrWhiteSpace($probe)) {
-            Write-Log '  clock: qubesdb is not readable yet (/name empty too) - the guest timezone is left alone, and the per-boot clock task sets it' 'WARN'
+            # A DEFERRAL THIS CODE THEN PERFORMS, not a failure: qubesdb is not up this early in
+            # setup, so the installer declines to guess a timezone and the per-boot clock task sets
+            # it. Jev over this site: expected=0.54 noise=0.37 defect=0.01.
+            Write-Log '  clock: qubesdb is not readable yet (/name empty too) - the guest timezone is left alone, and the per-boot clock task sets it' 'INFO'
         } else {
             Write-Log '  clock: dom0 publishes no /qubes-timezone - leaving the guest timezone alone' 'WARN'
         }
