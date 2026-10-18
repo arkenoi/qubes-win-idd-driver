@@ -5198,7 +5198,30 @@ public static class QdbPrime {
     # Restarting the watchdog here is safe: the display topology is already in its final state (the
     # IDD is active and the VGA adapter is disabled), which is exactly what the agent would come up
     # to after the reboot anyway.
-    if ($script:GuiQuiesced -and -not ($Auto -and $RebootAtEnd)) {
+    # ...AND NOT WHEN A REBOOT IS ALREADY PENDING. The guard above asks whether THIS stage will
+    # reboot; it does not ask whether a reboot is NEEDED. When the caller is the one rebooting - the
+    # matrix and quick-upgrade both are - the agent is started for the few seconds until it does.
+    # MEASURED, campaign 20261018-021620 win11-upgrade: the new agent ran 06:35:31-06:35:48, the
+    # guest rebooted at 06:36:11, and in those seventeen seconds it connected to dom0 and mapped
+    # ZERO windows - by the time it was up, Winlogon's secure desktop was active and AddAllWindows
+    # was suppressed. It initialised a broker, a UIA worker and a toast-hold section and exited on
+    # WM_ENDSESSION. That is the same "start, a framebuffer grant, a broker launch and a stop within
+    # seconds - pure churn at the most fragile moment" this file already refuses to let the MSI do.
+    # It also puts a SECOND agent instance in that boot, which is what makes the acceptance metric
+    # agent_instances_per_boot read 2 and the upgrade cell unpassable for any release.
+    # Upgrade-time diagnostics do not depend on this: a notification with no route is queued by
+    # NotifyDeferWrite and drained by the session bridge after the reboot (P1 NOTIFYLOSTINSESSIONGAP,
+    # 8fe8828a), which survives the reboot where a 17-second agent cannot.
+    if ($script:GuiQuiesced -and $script:Result.reboot_needed -and -not ($Auto -and $RebootAtEnd)) {
+        # SAY IT, because the guest really is windowless until somebody reboots. The branch below
+        # shouts when the restore FAILS; a deliberate skip that leaves the same condition must not be
+        # the one silent path. The caller is told twice - a log line and a RESULT detail it can grade
+        # - so "no windows" is never a surprise it has to infer from an absence.
+        Write-Log ('gui-agent NOT restarted: a reboot is pending (reboot_needed) and the agent would ' +
+                   'map no windows before it - this qube maps no windows until it is rebooted') 'WARN'
+        $script:Result.detail.gui_restored = 'skipped: reboot pending'
+    }
+    elseif ($script:GuiQuiesced -and -not ($Auto -and $RebootAtEnd)) {
         try {
             Start-Service -Name 'QubesGuiWatchdog' -ErrorAction Stop
             # VERIFY THE OUTCOME, not the cmdlet: Start-Service returning proves the WATCHDOG started,
