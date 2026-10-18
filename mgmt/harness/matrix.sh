@@ -1028,7 +1028,15 @@ accept_grade(){ # $1=vm $2=label - the post-install acceptance battery, REUSED n
   # loudly about every tolerated NA. On a netvm-carrying subject every check must be asserted.
   [ -z "$nv" ] && allowna=1
   say "  $lbl: accept-clean SKIP_PROVISION=1 ALLOW_NA=$allowna (evidence: $M/$lbl-accept)"
-  SKIP_PROVISION=1 ALLOW_NA=$allowna HEALTH_CHECK="$RELEASE_SETUP/health-check.ps1" ./tools/accept-clean.sh "$vm" no-loop-in-skip-mode "$M/$lbl-accept" \
+  # THE INSTRUMENT COMES FROM THE REPO, NOT THE PACKAGE. This file's own rule, above: "Instruments
+  # (reboot-dialog-watch.ps1, health-check.ps1, uninstall/count scripts) may still be pushed: they
+  # are the harness, not the product." Taking it from $RELEASE_SETUP version-locked a test
+  # instrument to the product, so fixing a CHECK meant rebuilding the release - 45 minutes of CI to
+  # change a predicate that never ships to a user. Measured consequence, 20261018-172640: the PnP
+  # check failed the battery on a single WMI snapshot and the fix could not be exercised without a
+  # new build. The PRODUCT still only ever arrives via the primer stick or the release ISO, and
+  # Gate-0 still verifies that payload against the commit it was built from.
+  SKIP_PROVISION=1 ALLOW_NA=$allowna HEALTH_CHECK="$PWD/guest/health-check.ps1" ./tools/accept-clean.sh "$vm" no-loop-in-skip-mode "$M/$lbl-accept" \
       >"$M/$lbl-accept.out" 2>&1
   local rc=$?
   say "  $lbl: accept-clean says: $(tail -1 "$M/$lbl-accept.out" | cut -c1-200)"
