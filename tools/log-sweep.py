@@ -685,6 +685,46 @@ def module_builds(files, build=None):
     return out
 
 
+def install_anchor(files, builds):
+    """When the BUILD UNDER TEST first ran, or None when this capture shows no turnover.
+
+    THE WINDOW IS TEMPORAL AND THE THING UNDER TEST IS A BUILD - module_builds() says so and fixes
+    it by asking each LINE which version wrote it. That answer needs a version, and two of our
+    sources do not carry one: `bridge.log` declares no init at all (parse_blog appends none, so
+    line_version returns None for every bridge line), and TaskScheduler records come from the
+    Windows Event Log, which has no module version by construction. On an upgrade cell their
+    predecessor-era entries are billed to the new release and nothing can tell them apart.
+
+    So separate them by WHEN THE NEW BUILD ARRIVED instead of by who wrote them. The anchor is the
+    earliest init of the NEWEST version across the modules that show a turnover - the first moment
+    any part of the build under test ran. Deliberately the EARLIEST such init, not the latest: it
+    excludes as little as possible, so a line this capture cannot attribute is kept whenever there
+    is any doubt.
+
+    MEASURED, campaign 20261018-063720 win11-upgrade: boot 1 at 10:14:59, the predecessor agent
+    4.3.35.795 running 10:15:52-10:17:30, reboot at 10:19:48, and the first 4.3.36.1019 init at
+    10:21:10. The two ETW tier-down lines (10:17:30) and the two task failures (10:17:46, 10:18:00)
+    all fall in boot 1, before the build under test existed on that guest.
+
+    None when no module shows two versions - a clean or reinstall cell is therefore untouched, which
+    is the property that keeps this from being a blanket time filter.
+    """
+    turned = {m for m, info in (builds or {}).items() if len(info.get("versions") or []) > 1}
+    if not turned:
+        return None
+    best = None
+    for lf in files:
+        mod = lf.module
+        if mod not in turned:
+            continue
+        newest = builds[mod]["newest"]
+        for i in lf.inits:
+            if i.get("version") == newest and i.get("ts") is not None:
+                if best is None or i["ts"] < best:
+                    best = i["ts"]
+    return best
+
+
 def line_version(lf, l):
     """The module version that wrote this line, or None when nothing declared one.
 
@@ -2283,15 +2323,32 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
         m["death_record_mismatch"] = None   # not evaluable: needs both the watchdog log and the event block
     m["unexpected_shutdowns"] = len([l for l in events if l.extra.get("log") == "System" and l.extra.get("id") in (6008, 41) and sel(l.ts)])
     m["bugchecks"] = len([l for l in events if l.extra.get("log") == "System" and l.extra.get("id") == 1001 and "BugCheck" in (l.extra.get("provider") or "") and sel(l.ts)])
-    m["task_failures"] = len([l for l in events if "TaskScheduler" in str(l.extra.get("log")) and l.extra.get("id") in (201, 203)
-                              and OUR_TASKS_RE.search(l.msg) and sel(l.ts)
-                              and task_record_is_failure(l.extra.get("id"), l.msg)])   # GUARD:taskrc DEFECT: and True])
     # EVERY LINE-LEVEL METRIC BELOW IS SCOPED TO THE BUILD UNDER TEST, not just to the time window.
     # module_builds() carries the measurement that forced this; `_prior` is the one place it applies.
     _builds = module_builds(files, build)
+    # ...AND WHEN A SOURCE CANNOT SAY WHO WROTE IT, separate the builds by WHEN. See install_anchor:
+    # bridge.log declares no version and TaskScheduler records carry none, so `is_prior_build` has
+    # nothing to test and their predecessor-era entries were billed to the new release. None on a
+    # capture with no turnover, so clean and reinstall cells are untouched.
+    _anchor = install_anchor(files, _builds)
+    # ONE PREDICATE, TWO CONSUMERS: the versionless arm of `_prior`, and the TaskScheduler count,
+    # which cannot go through `_prior` at all because Event Log records have no logfile to ask.
+    # NO FAULT-INJECTION KNOB HERE, deliberately (owner, 2026-10-18: "we do NOT want to regularly FI
+    # tests for breach metering. this is overcomplication. make sure metering works properly once,
+    # thats it"). It was verified once, on the real capture and in the fixture, both directions -
+    # the predecessor's entries excluded and the later ones KEPT - and that verification is the
+    # record, not a knob re-driven on every run.
+    def _pre_install(l):
+        return bool(_anchor and l.ts is not None and l.ts < _anchor)
     def _prior(lf, l):
-        return is_prior_build(lf, l, _builds)   # GUARD:priorbuild DEFECT: return False
+        return is_prior_build(lf, l, _builds) or (_pre_install(l) and not line_version(lf, l))   # GUARD:priorbuild DEFECT: return False
     m["prior_build_mix"] = {k: v["versions"] for k, v in sorted(_builds.items()) if len(v["versions"]) > 1}
+    # TaskScheduler records are Event Log entries with no module version, so only the anchor can
+    # place them. Same one line as before, so the GUARD:taskrc knob stays driveable.
+    m["task_failures"] = len([l for l in events if "TaskScheduler" in str(l.extra.get("log")) and l.extra.get("id") in (201, 203)
+                              and OUR_TASKS_RE.search(l.msg) and sel(l.ts) and not _pre_install(l)
+                              and task_record_is_failure(l.extra.get("id"), l.msg)])   # GUARD:taskrc DEFECT: and True])
+    m["install_anchor"] = _anchor.isoformat(sep=" ") if _anchor else None
     # THESE TWO USED TO SIT ABOVE THIS BLOCK, so the rule the comment above states - every
     # line-level metric is scoped to the BUILD UNDER TEST - never reached them. On an UPGRADE cell
     # that means grading the release on the binary it REPLACED, because the entry image's logs are

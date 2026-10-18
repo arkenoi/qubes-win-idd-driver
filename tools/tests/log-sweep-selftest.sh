@@ -520,7 +520,19 @@ tb_new = [wu("100400.000", "3992:4016", "I", "LogInit", "Log started, module nam
           wu("100400.001", "3992:4016", "I", "LogInit", "Session: 1"),
           wu("100401.000", "3992:4016", "I", "WatchForEvents", "A vchan client has connected"),
           wu("100500.000", "3992:4016", "I", "WatchForEvents", "exiting")]
-write("twobuild.pull", stream([(TBO, "agent", tb_old), (TBN, "agent", tb_new)], events()))
+# AND THE HALF NO VERSION CAN REACH. Two of our sources declare no module version at all - bridge.log
+# (blog: HH:MM:SS plus text, no pid, no uptime, no init) and TaskScheduler records, which come from
+# the Windows Event Log. On an upgrade cell their predecessor-era entries are billed to the new
+# build and `is_prior_build` has nothing to test, so the INSTALL ANCHOR separates them by WHEN the
+# new build first ran - here the 9.9.9.1 init at 10:04:00. One entry of each kind sits on EITHER
+# SIDE of it on purpose: the earlier must be excluded, and the later must still COUNT, or the anchor
+# would be a blanket time filter rather than a build separator.
+TB_BRIDGE = ("bridge.log", "blog",
+             ["10:02:30 [WARN] ETW IPC disconnected (recs=38 bad=0) - tier down, DB fallback, reconnecting",
+              "10:05:30 [WARN] ETW IPC proxy pipe absent (2) - tier down, DB fallback (reconnect pending)"])
+ev_twobuild = ['EV 2026-10-07 10:02:40.000 [Microsoft-Windows-TaskScheduler/Operational] id=203 level=3 Microsoft-Windows-TaskScheduler: Task Scheduler failed to launch action "powershell.exe" in instance "{aaaa1111-0000-0000-0000-000000000001}" of task "\\QwtClockSync" , in error code 2147942403.',
+               'EV 2026-10-07 10:05:40.000 [Microsoft-Windows-TaskScheduler/Operational] id=203 level=3 Microsoft-Windows-TaskScheduler: Task Scheduler failed to launch action "powershell.exe" in instance "{aaaa1111-0000-0000-0000-000000000002}" of task "\\QwtClockSync" , in error code 2147942403.']
+write("twobuild.pull", stream([(TBO, "agent", tb_old), (TBN, "agent", tb_new), TB_BRIDGE], events(ev_twobuild)))
 
 # ---- fastreboot: TWO BOOTS 37 s APART, one agent each -------------------------------------------
 # THE NUMBERS ARE THE MEASURED ONES, not a model of them. win10-clean 2026-10-17, the installer's
@@ -1337,6 +1349,30 @@ read -r t44e t44p t44m <<<"$(tb "$SRC" t44)"
                 || bad "T44 error_lines_prior_build=$t44p, want 1 - an excluded line must stay a figure"
 case "$t44m" in *9.9.9.0*9.9.9.1*) ok "T44 the version mix is named (prior_build_mix=$t44m)" ;;
                 *) bad "T44 prior_build_mix=$t44m, want both versions of gui-agent" ;; esac
+# ---- T54 THE INSTALL ANCHOR: the half no version can reach ------------------------------------
+# bridge.log declares no version and TaskScheduler records carry none, so is_prior_build has nothing
+# to test on them and the predecessor's entries were billed to the new build. The anchor separates
+# them by WHEN the build under test first ran (the 9.9.9.1 init at 10:04:00). The fixture puts one
+# fallback line and one task failure on EITHER SIDE of it, so this proves BOTH halves: the earlier
+# is excluded, the later is NOT. A filter that dropped both would pass a one-sided test.
+ta(){ # $1=analyzer $2=tag -> "<fallbacks_fired> <task_failures> <install_anchor>"
+  python3 "$1" analyze "$T/twobuild" --baseline "$T/baseline.json" --out "$T/$2.json" \
+      --summary "$T/$2.txt" --label "$2" --workdir "$T/work-$2" --jev-cmd "$T/jev-expected.py" > "$T/$2.out" 2>&1
+  field "$T/$2.json" 'str(r["metrics"].get("fallbacks_fired"))+" "+str(r["metrics"].get("task_failures"))+" "+str(r["metrics"].get("install_anchor"))'
+}
+read -r t54f t54t t54a <<<"$(ta "$SRC" t54)"
+[ "$t54f" = 1 ] && ok "T54 the predecessor's versionless fallback is excluded, the later one is KEPT (fallbacks_fired=$t54f)" \
+                || bad "T54 fallbacks_fired=$t54f, want 1 - one line each side of the anchor, only the earlier excluded"
+[ "$t54t" = 1 ] && ok "T54 the predecessor's TaskScheduler failure is excluded, the later one is KEPT (task_failures=$t54t)" \
+                || bad "T54 task_failures=$t54t, want 1 - Event Log records carry no version, only the anchor places them"
+case "$t54a" in *10:04:00*) ok "T54 the anchor is the build-under-test's first init, and is REPORTED ($t54a)" ;;
+                *) bad "T54 install_anchor=$t54a, want the 9.9.9.1 init at 10:04:00" ;; esac
+# NO KNOB FOR THIS ONE (owner, 2026-10-18: "we do NOT want to regularly FI tests for breach
+# metering ... make sure metering works properly once, thats it"). The three checks above are the
+# ordinary ones - a line each side of the anchor, and the anchor reported - and they are enough to
+# say the metering is right. Driving it to failure was done once, by hand, on the real capture and
+# on this fixture: without the anchor both predecessor entries come back as 2 and 2.
+
 KB=$(knob priorbuild); read -r t44ke _ _ <<<"$(tb "$KB" t44k)"
 [ "$t44ke" = 1 ] && ok "knob priorbuild: SEEN TO FAIL - without the build scope the old build's line is graded as the new build's (error_lines=$t44ke)" \
                  || bad "knob priorbuild: error_lines=$t44ke, want 1 - the case cannot be driven"
