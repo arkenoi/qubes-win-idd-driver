@@ -2541,10 +2541,36 @@ done
 # missing log is graded rather than assumed clean. It is INVALID rather than FAIL because an
 # unmeasured path is missing instrument data, not a demonstrated product defect - the same rule the
 # sweep below follows.
-if [ "${COLD_CALLER_DONE:-0}" = 0 ]; then
-  no "INVALID-COLDCALLER  the cold dom0-caller path was never measured this campaign - 'from cold qube as well' is a release-goal clause, and zero measurements of it is not a pass (see the per-cell *-coldcallers.out, and the guard in the grading loop above)"
+# ...AND THIS GUARD READ A NAME NOTHING WRITES, which is how it failed a campaign that had already
+# measured the clause twice. The latch is PER OS FAMILY - the loop above sets COLD_CALLER_DONE_win10
+# / COLD_CALLER_DONE_win11 (eval, line ~2493) - while this read asked for the unsuffixed
+# COLD_CALLER_DONE, which no line in this file ever assigns. So it was pinned to 0 for ever and
+# every campaign reported "never measured". MEASURED 2026-10-18, campaign 20261018-010748: the log
+# carries "PASS win11-clean: start-menu caller aligned FROM A COLD QUBE" and "PASS win11-clean:
+# updater caller aligned FROM A COLD QUBE", win11-clean-coldcallers.out ends "the start-menu caller
+# is aligned on win11-acc (cold, 78 entries, 84s)", and this guard still returned INVALID-COLDCALLER.
+# A release could not pass acceptance for a reason that had nothing to do with the release.
+#
+# IT NOW JUDGES THE ARTIFACT, NOT ITS OWN BOOKKEEPING. Reading a shell latch is what made a wrong
+# name invisible, and a latch set inside the grading loop is also hostage to that loop's subshell
+# scoping; the evidence file the operator is pointed at cannot be either. For every OS family this
+# campaign actually ran cells for, there must be a *-coldcallers.out carrying the aligned sentence.
+# An absence is still INVALID rather than FAIL - missing instrument data, not a product defect.
+_cold_missing=
+_cold_seen=
+for _f in $(for c in $CELLS; do case $c in win10*|WIN10*) echo win10 ;; win11*|WIN11*) echo win11 ;; esac; done | sort -u); do
+  _cold_hit=0
+  for _co in "$M"/*-coldcallers.out; do
+    [ -e "$_co" ] || continue
+    case "$(basename "$_co")" in "$_f"*) ;; *) continue ;; esac
+    grep -aq 'caller is aligned on .*(cold' "$_co" && _cold_hit=1
+  done
+  if [ "$_cold_hit" = 1 ]; then _cold_seen="$_cold_seen $_f"; else _cold_missing="$_cold_missing $_f"; fi
+done
+if [ -n "$_cold_missing" ]; then
+  no "INVALID-COLDCALLER  the cold dom0-caller path was never measured for:$_cold_missing - 'from cold qube as well' is a release-goal clause, and zero measurements of it is not a pass (see the per-cell *-coldcallers.out, and the guard in the grading loop above)"
 else
-  ok "the cold dom0-caller path was measured this campaign"
+  ok "the cold dom0-caller path was measured this campaign for every OS family it ran ($_cold_seen )"
 fi
 
 # HARDWIRED ERROR SWEEP OVER THE CAMPAIGN'S OWN LOGS, AND IT BLOCKS.
