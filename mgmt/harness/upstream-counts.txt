@@ -1,0 +1,9 @@
+# GENERATED: counts of vendored-emitter messages on a known-good campaign.
+# tools/sweep-gate.sh surfaces a RISE past the ledger's scaled threshold; the
+# routine count itself is diagnosis, not acceptance criteria.
+12	QioWriteBuffer: WriteFile failed with error 0xe8: <OSMSG>
+2	QpsDisconnectClientInternal: [N] reader thread didn't terminate in time, killing it
+17	QpsRead: [N] client is disconnected
+16	QpsReaderThread: [N] read failed
+191	pipe_thread_client: QpsRead from client N failed: N
+12	send_command_to_daemon: write to daemon failed with error 0xe8: <OSMSG>
