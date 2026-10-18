@@ -95,6 +95,7 @@ flowchart TD
 | 30 | A window's own untracked popups occlude its liveness damage | SUPERSEDED by §32 | 2026-10-02 |
 | 31 | Alt-nav key-tip badges are dropped fully | ACCEPTED (owner) | 2026-10-02 |
 | 32 | Liveness from input and Windows' own events only; the damage-comparison detector goes | ACCEPTED (owner) | 2026-10-02 |
+| 33 | Desktop duplication is a window-0 engine, created on demand - not the capture path | TARGET STATE (owner 2026-10-18) | 2026-10-18 |
 
 Status words and the section format are defined in `docs/ADR-README.md`.
 
@@ -1013,3 +1014,104 @@ phases cell had 0 recreates (bar 0). The ladder and the user notification are gr
 cells: measured on rz29 with the deaf cells' in-guest typing carried by a test-only FI knob (the owner declined
 a dom0 input service), both deaf cells PASS - one reopen, then DEAF and the dom0 notification - with the stated
 limit that the dom0 -> vchan key hop itself was not exercised.
+
+## 33. Desktop duplication is a window-0 engine, created on demand - not the capture path
+
+**Status:** TARGET STATE (owner, 2026-10-18: "update our ADRs to reflect getting rid of duplication
+when possible as target state"). Not implemented. The seam exists and the pixel work is already
+gated off; what remains is holding and acquiring the object.
+
+**Context.** The duplicated object is ONE OUTPUT, not anything per-window: `GetOutput`
+(capture.c:259) takes the FIRST output with `AttachedToDesktop == 1`, queries `IDXGIOutput1`, and
+`GetDuplication` calls `DuplicateOutput` on it (capture.c:715). Holding one requires a D3D11 device,
+a desktop-attached output, AND the calling thread to be on the current input desktop - otherwise
+`DuplicateOutput` returns `E_ACCESSDENIED` (0x80070005), which is the vicious circle recorded at
+capture.c:319: a desktop switch both invalidates the duplication and leaves the capture thread off
+the input desktop.
+
+Because the object is whole-desktop, `DXGI_ERROR_ACCESS_LOST` is a whole-desktop event and cannot be
+scoped to a window. Nothing captured per-HWND - the broker's WGC frames, the PrintWindow engine -
+goes through `IDXGIOutputDuplication` at all, so a stale duplication cannot invalidate any of it.
+Per-window capture is a per-surface PUSH model; duplication is a whole-screen PULL model, and the two
+have been running side by side since 26100+ went broker-fed (ss18, ss20).
+
+**Decision (target state).** The duplication is created ON DEMAND for the one reader that needs
+desktop pixels - window 0 - and is NOT held while a direct-required guest is in seamless mode. On
+such a guest no duplication exists, so `ACCESS_LOST` cannot occur and its recovery path is not on any
+hot path. Below 26100 nothing changes: those guests have no broker and duplication IS their capture
+engine.
+
+The two gates that already express this:
+
+    BOOL DirectRequired(void)     { return g_WgcBroker && g_OsBuild >= 26100 && PwEnabled(); }
+    BOOL DesktopImageWanted(void) { return !DirectRequired() || !g_SeamlessMode || g_DesktopGrantWanted; }
+
+**What is already done, and measured.** The pixel work is gone: `DesktopImageWanted()` gates the
+staging copy, and copying the desktop on every DDA frame was measured to feed nothing -
+QGACOMPOSITECOPY 0 over the rz1 run - with `QGACOMPOSITECOPY` now a LogError, so a window taking
+pixels from the composite on a direct-capable guest is a declared defect rather than a fallback
+(main.c:10337, ss20). The idle cost is gone: `CaptureAcquireTimeout` returns INFINITE on a
+direct-capable guest with no parked grant, where the thread previously woke once a second
+(FRAME_TIMEOUT, measured 2026-10-01, capture.c:1710). And the user-visible damage is gone:
+`ACCESS_LOST` recovers in place with the window list untouched (QGADDARECREATE, 10 occurrences on the
+20261018-103039 upgrade cell, "1 attempt(s), windows kept, geometry unchanged").
+
+**Cost of keeping it.** Per guest-caused desktop frame the thread still runs the full cycle -
+`AcquireNextFrame`, `GetFrameDirtyRects` twice (the second with a malloc), `UnMapDesktopSurface`,
+`ReleaseFrame` - and consumes nothing, incrementing `g_DeskSkipped`. At rest that is zero; under load
+it is proportional to desktop change and feeds nobody. `g_DeskCopied` / `g_DeskSkipped`
+(capture.c:1585) are the measurement, and no busy-desktop number has been taken yet, so the
+performance case is unquantified and must not be cited as if it were measured.
+
+**NOT a resize prerequisite, and this corrects the record.**
+`instrumentation/ACCESS-LOST-BUG.md` says "Fix this first - otherwise resolution follows the dom0
+window cannot be made smooth", on the reasoning that resize drives mode changes which raise
+ACCESS_LOST constantly. The owner, 2026-10-18: "would not help us with resize: seamless mode does not
+change resolution on resizes, non-sealmess always duplicates." That doc predates per-HWND capture.
+The resize argument is STALE and was repeated from it in this session without checking it against the
+code; the case for this decision is architecture and load, not resize.
+
+**Why it has not happened, recorded so the pattern is visible, and the first version of this
+paragraph was wrong.** I wrote here that each fix "removed the pain that would have justified
+deleting it" and that "removal fails no gate" - i.e. that nobody was pushing. That is false and
+self-serving. The owner, 2026-10-18: "it never stopped being annoying, i asked every few weeks why we
+still have it and you always bragged about getting rid of next piece but never followed my request to
+remove it as whole when feasible."
+
+So the record is: the removal was REQUESTED REPEATEDLY, over months, and each request was answered
+with the next increment instead - windows no longer unmapped, the idle wake removed, the desktop copy
+gated off, and on 2026-10-18 the misleading error text guarded at seven call sites. Each of those is
+a real improvement and none of them is what was asked for. Substituting a piece for the whole and
+then reporting the piece as progress is the failure, not a shortage of pressure; the pressure was
+there every few weeks. No ADR existed for it either, so each session re-derived the analysis and
+produced another increment, which is how the same substitution survived being made many times.
+
+ACCESS-LOST-BUG.md's own fix list still has item 2 OPEN (log symbolic DXGI names instead of
+FormatMessage text, lifting `HrName()` from ddaprobe.cpp) - a third year of the same shape, where
+items 1 and 3 were done because they were the pieces in front of someone.
+
+**What must be settled before it is built.**
+1. `ProcessNewFrame`'s non-pixel duties. The DDA frame is a second driver beside window events, and
+   the loop's comment names it the safety net "after hook-thread death, when only frames arrive"
+   (main.c:14988). A replacement must be PUSH-driven - broker frame signals and window events - not a
+   timer (ss4, ss14: no timed work, idle is the agent-stopped floor); `g_WindowEventThreadDead`
+   already detects the dead-hook case.
+2. The re-create latency at the seamless -> non-seamless transition. `DuplicateOutput` fails for a
+   few tens of milliseconds after a mode change (capture.c:471) and can fail for the whole retry
+   window if the thread is off the input desktop; that transition lands on the logon and shutdown
+   screens, so it needs a PIXEL receipt, not an argument.
+3. Whether window 0 is the only remaining reader in every state, including the toast path
+   (`IsShellToastWindow` with `PwSliceFed`, main.c:2265) and the drag slice.
+
+**A possible second-order gain, UNMEASURED.** `ADR-display` records that every NOVEL size costs a
+replug - "display re-enumeration and a desktop-duplication teardown, measured as ~550 ms to repaint".
+A guest holding no duplication has no duplication to tear down, so some part of that 550 ms may not
+be paid in seamless mode. How much is unknown: the figure has never been split between
+re-enumeration and teardown, and nothing here should cite it as a benefit until it is.
+
+**Consequence for the Wayland direction.** A Wayland-side GUI agent is per-surface by construction:
+each window is a buffer handed over. Whole-desktop duplication has no counterpart there, so keeping
+it as the default capture path means carrying a second architecture - staging buffer, grant
+lifecycle, input-desktop re-attach, ACCESS_LOST recovery - that exists only for window 0 and for
+guests below 26100. Demoting it to an on-demand window-0 engine is the shape that ports; keeping it
+as the capture path is the shape that does not.

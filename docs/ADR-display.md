@@ -177,7 +177,9 @@ forever (GWeck's ~1 cm pointer offset and dead band).
    whole "4.3.8 broke arbitrary resolutions" regression, deterministic per build hour.
 
 **Cost.** Every NOVEL size costs a replug: display re-enumeration and a desktop-duplication teardown, measured
-as ~550 ms to repaint (`replug=1`) against 0-97 ms for a size already in the set. Dragging a dom0 window sweeps
+as ~550 ms to repaint (`replug=1`) against 0-97 ms for a size already in the set. The teardown half of that is
+tied to holding a duplication at all - see `ADR-capture` §33, whose target state holds none in seamless mode;
+the 550 ms has never been split between re-enumeration and teardown, so how much would be saved is unknown. Dragging a dom0 window sweeps
 through arbitrary sizes, so it pays that on each settle. The device-connect chime a replug plays is silenced
 product-side (`guest/quiet-desktop.ps1`, 4.3.13, for every loaded and offline profile). Task #26 (resize
 latency/hot-plug) stays open: `IddCxMonitorUpdateModes` was tried and reverted (it removes the replug, but
