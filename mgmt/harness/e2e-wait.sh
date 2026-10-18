@@ -150,6 +150,22 @@ w_alive_poll(){ # $1=pid $2=outfile -> 0=marker seen 1=call ended without it 2=s
   return 1
 }
 
+# ONE PROBE, POLLED, FOR A WHOLE WAIT - the loop form of w_alive_start/w_alive_poll.
+# Every POLLING caller uses this; a caller whose single call IS the verdict keeps w_alive.
+# Returns 0 when the marker arrives, 1 at the deadline. Nothing is left queued behind us: a new
+# call starts only once the previous one has ENDED.
+w_alive_wait(){ # $1=vm $2=deadline seconds (default 600) $3=optional poll seconds (default 10)
+  local vm=$1 dl=${2:-600} iv=${3:-10} t0 out pid rc
+  t0=$(date +%s); out=$(mktemp); pid=$(w_alive_start "$vm" "$out")
+  while [ $(( $(date +%s) - t0 )) -lt "$dl" ]; do
+    w_alive_poll "$pid" "$out"; rc=$?
+    [ "$rc" = 0 ] && { rm -f "$out"; return 0; }
+    if [ "$rc" = 1 ]; then rm -f "$out"; out=$(mktemp); pid=$(w_alive_start "$vm" "$out"); fi
+    sleep "$iv"
+  done
+  rm -f "$out"; return 1
+}
+
 # Wait for a usable session. 0=session 1=terminal 2=deadline
 w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
   local vm=$1 dl=$2 lbl=$3 dir=$4 log=$5 t0 now st shots=0 dark=0 wedgesus=0 cpu
@@ -416,9 +432,16 @@ w_install(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn $6=guest-log-path
     if [ "$(w_state "$vm")" = Halted ]; then
       $log "  $lbl: guest HALTED at t+${now}s (install rebooted or shut it down)"; return 3
     fi
-    # Same boot bound as w_session: this wait spans the install's own reboots, so a 40 s probe
-    # would be abandoned mid-queue on every one of them (see w_alive).
-    if w_alive "$vm" "${W_ALIVE_BOOT_BOUND:-90}"; then
+    # ONE PROBE FOR THE WHOLE WAIT. This wait spans the installer's own reboots, and the old
+    # bounded form abandoned one request per turn across every one of them - which the guest
+    # reports as InitVchan: QGAVCHANFAIL. Measured: still x4 on the clean cell of campaign
+    # 20261018-103039 AFTER w_session alone was fixed, which is how this site was found.
+    if [ -z "${_iw_pid:-}" ]; then _iw_out=$(mktemp); _iw_pid=$(w_alive_start "$vm" "$_iw_out"); fi
+    w_alive_poll "$_iw_pid" "$_iw_out"; _iw_rc=$?
+    if [ "$_iw_rc" = 1 ]; then rm -f "$_iw_out"; _iw_out=$(mktemp); _iw_pid=$(w_alive_start "$vm" "$_iw_out"); fi
+    if [ "$_iw_rc" = 0 ]; then
+      rm -f "$_iw_out"; _iw_pid=""
+
       # WHO issues a reboot: event 1074 records the process and reason for an OS-initiated
       # shutdown; 1076/6008 cover the unexpected ones. On a guest that is about to become
       # unbootable this must be read WHILE IT LIVES - afterwards there is nothing to ask.
@@ -764,7 +787,8 @@ g_reboot_proven(){ # $1=vm $2=label
   qvm-start "$vm" >/dev/null 2>&1
   # The boot bound here too: this loop waits for a START, so a 40 s probe is abandoned mid-queue on
   # the way up and the guest logs a dropped request for each one (see w_alive).
-  for i in $(seq 1 60); do w_alive "$vm" "${W_ALIVE_BOOT_BOUND:-90}" && break; sleep 10; done
+  # 600 s, the same ten minutes the seq-60 loop allowed, in ONE probe instead of sixty.
+  w_alive_wait "$vm" 600 10 || true
   w_alive "$vm" "${W_ALIVE_BOOT_BOUND:-90}" || { echo "$label: no qrexec within 10 min of start - TERMINAL" >&2; return 1; }
   after=$(g_boot_id "$vm"); [ -n "$after" ] || { echo "$label: no boot id AFTER" >&2; return 1; }
   [ "$after" != "$before" ] || { echo "$label: boot id UNCHANGED ($after) - it did not reboot" >&2; return 1; }

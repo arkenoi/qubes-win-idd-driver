@@ -760,7 +760,15 @@ while :; do
   el=$(( $(date +%s) - t0 ))
   st=$(w_state "$SUBJECT")
   if [ "$st" = Halted ]; then log "  t+${el}s guest HALTED (rebooted itself)"; phase=HALTED; break; fi
-  if w_alive "$SUBJECT"; then
+  # ONE PROBE FOR THE WHOLE POLL. This is a `while :; do sleep 20` loop, so the bounded form
+  # abandoned one qrexec request every 20 s for the life of the wait, and the guest reports each
+  # abandonment as InitVchan: QGAVCHANFAIL. Same shape as the install wait in e2e-wait.sh: start
+  # once, poll, and re-start only once the previous call has ENDED.
+  if [ -z "${_qu_pid:-}" ]; then _qu_out=$(mktemp); _qu_pid=$(w_alive_start "$SUBJECT" "$_qu_out"); fi
+  w_alive_poll "$_qu_pid" "$_qu_out"; _qu_rc=$?
+  if [ "$_qu_rc" = 1 ]; then rm -f "$_qu_out"; _qu_out=$(mktemp); _qu_pid=$(w_alive_start "$SUBJECT" "$_qu_out"); fi
+  if [ "$_qu_rc" = 0 ]; then
+    rm -f "$_qu_out"; _qu_pid=""
     quiet=0; lastalive=$(date +%s)
     n=$(grun "cmd /c powershell -NoProfile -Command \"if(Test-Path '$GLOG'){(Get-Content '$GLOG').Count}else{0}\"" 90 | grep -aE '^[0-9]+$' | head -1)
     n=${n:-0}

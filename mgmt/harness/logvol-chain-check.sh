@@ -92,7 +92,7 @@ nbus=$(printf '%s' "$qargs" | command grep -c 'nec-usb-xhci' || true)
 # ---------------------------------------------------------------- boot and bind
 say "starting $VM"
 qvm-start "$VM" >>"$OUT/setup.out" 2>&1 || { say "[ERROR] could not start $VM"; exit 2; }
-alive=0; for _ in $(seq 1 40); do w_alive "$VM" && { alive=1; break; }; sleep 10; done
+alive=0; w_alive_wait "$VM" 400 10 && alive=1   # one probe, not forty abandoned ones
 [ "$alive" = 1 ] || { say "[ERROR] qrexec never answered"; exit 2; }
 good "boot 1: qrexec answers"
 
@@ -151,7 +151,7 @@ say "rebooting - this is the link that failed on all three campaign runs"
 qwt_shutdown "$VM" 600 >>"$OUT/setup.out" 2>&1
 [ "$(w_state "$VM")" = Halted ] || { broke "reboot: $VM did not halt"; say "RESULT: $ok_n held, $bad_n broke"; exit 1; }
 qvm-start "$VM" >>"$OUT/setup.out" 2>&1 || { broke "reboot: could not start again"; say "RESULT: $ok_n held, $bad_n broke"; exit 1; }
-alive=0; for _ in $(seq 1 40); do w_alive "$VM" && { alive=1; break; }; sleep 10; done
+alive=0; w_alive_wait "$VM" 400 10 && alive=1   # one probe, not forty abandoned ones
 [ "$alive" = 1 ] && good "boot 2: qrexec answers" || { broke "boot 2: qrexec never answered"; say "RESULT: $ok_n held, $bad_n broke"; exit 1; }
 
 p2=$(probe); printf '%s\n' "$p2" > "$OUT/probe-boot2.txt"

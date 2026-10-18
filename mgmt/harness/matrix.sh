@@ -1334,7 +1334,9 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
       if [ "${c:-9999}" -lt 15 ] 2>/dev/null; then quiet=$((quiet+1)); else quiet=0; fi
       [ $((q % 4)) -eq 0 ] && say "    t+$((q*15))s cpu=${c:-?} quiet=$quiet"
       [ "$quiet" -ge 3 ] && { say "  $lbl: CPU quiet - the install has finished working"; break; }
-      w_alive "$vm" && { say "  $lbl: qrexec came back on its own at t+$((q*15))s"; break; }
+      # ONE PROBE per recovery turn, bounded to the turn: the old form abandoned a request on
+      # every 15 s tick of a guest that was already deaf, which is the worst place to add queue.
+      w_alive_wait "$vm" 15 5 && { say "  $lbl: qrexec came back on its own at t+$((q*15))s"; break; }
       sleep 15
     done
     # THE REBOOT IS UNCONDITIONAL, because the installer's contract is unconditional: a stage-2
