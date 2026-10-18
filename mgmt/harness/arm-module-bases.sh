@@ -221,15 +221,47 @@ if [ -n "${check:-}" ] && [ "$check" -gt 0 ] 2>/dev/null; then
   # qrexec - which is exactly what is dead when a wedge happens. Specimen 2 (2026-09-22) was armed,
   # wedged, and its RIPs were STILL unresolvable for this reason: the data existed where nobody
   # could reach it. A host-side copy taken while the guest is healthy is the whole point.
-  QTEST_VM=$VM timeout -k 5 300 ./tools/qtest run \
-    'cmd /c type "Q:\Qubes Logs\module-bases.txt" 2>nul || type "C:\module-bases.txt" 2>nul' 2>/dev/null \
-    | tr -d '\r' > "$OUT/module-bases.txt"
-  host=$(grep -ac 'MODBASE' "$OUT/module-bases.txt" 2>/dev/null || echo 0)
+  # THE PULL RETRIES, FOR THE SAME REASON THE ARMING ABOVE DOES. The arming got a retry-once in
+  # 2026-09 because "a guest that has just finished replacing its own PV drivers is the least settled
+  # it ever is"; the PULL, eleven seconds behind it in the same window, got none - and that is the
+  # half that failed. MEASURED 2026-10-19, release 4.3.37 acceptance, WIN10-upgrade cell:
+  #   20:46:15  ARMED AND PROVEN: 230 module records  /  HOST COPY TAKEN: 230 records   (before the upgrade)
+  #   20:49:58  ARMED AND PROVEN: 169 module records written on this boot                (the re-arm after it)
+  #   20:49:59  FAIL: the table is on the guest but the HOST COPY IS EMPTY
+  # The guest-side table was there - the collected copy of that guest's own file holds 508 MODBASE
+  # records - and the pull one second later returned 221 bytes containing nothing but cmd's banner and
+  # the echoed command line. `2>nul` discarded the reason, so the cell failed with no diagnosis at all.
+  # The redirect now goes to a file that is KEPT, and a second attempt follows a short settle.
+  host=0
+  for _attempt in 1 2; do
+    QTEST_VM=$VM timeout -k 5 300 ./tools/qtest run \
+      'cmd /c type "Q:\Qubes Logs\module-bases.txt" || type "C:\module-bases.txt"' \
+      2> "$OUT/module-bases-pull$_attempt.err" \
+      | tr -d '\r' > "$OUT/module-bases.txt"
+    # NOT `grep -c || echo 0`: grep -c PRINTS 0 and EXITS 1 when it matches nothing, so the `||` fired
+    # too and $host became the two lines "0\n0" - which is how this cell really died, with
+    # `arm-module-bases.sh: line 228: [: 0\n0: integer expected` in the campaign log just before the
+    # FAIL. The count is taken with the exit status discarded instead.
+    host=$(grep -ac 'MODBASE' "$OUT/module-bases.txt" 2>/dev/null; true)
+    case "$host" in (''|*[!0-9]*) host=0 ;; esac
+    [ "$host" -gt 0 ] && break
+    [ "$_attempt" = 2 ] && break
+    say "[WARN] the host copy came back with no records - settling 10s and pulling once more"
+    say "  what came back (${_attempt}): $(head -c 160 "$OUT/module-bases.txt" | tr -d '\n' | tr -s ' ')"
+    say "  stderr: $(head -c 160 "$OUT/module-bases-pull$_attempt.err" | tr -d '\n' | tr -s ' ')"
+    sleep 10
+  done
   if [ "${host:-0}" -gt 0 ]; then
     say "HOST COPY TAKEN: $host records in $OUT/module-bases.txt - a wedge is resolvable even with qrexec dead"
   else
     say "FAIL: the table is on the guest but the HOST COPY IS EMPTY - a wedge would be unresolvable again."
     say "  Treat this guest as NOT armed; the copy, not the arming, is what survives the failure."
+    # SAY WHY, now that the reason is kept instead of sent to nul. Two attempts were made; both are shown.
+    for _a in 1 2; do
+      [ -s "$OUT/module-bases-pull$_a.err" ] && say "  pull $_a stderr: $(head -c 200 "$OUT/module-bases-pull$_a.err" | tr -d '\n' | tr -s ' ')"
+    done
+    say "  pull returned $(wc -c < "$OUT/module-bases.txt" 2>/dev/null || echo 0) byte(s), 0 MODBASE records:"
+    head -6 "$OUT/module-bases.txt" 2>/dev/null | sed 's/^/    /'
     exit 1
   fi
   say "  Resolve a captured RIP with: tools/resolve-guest-rip.py $OUT/module-bases.txt 0x<rip>"

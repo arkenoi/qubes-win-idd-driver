@@ -2690,6 +2690,13 @@ if [ -x tools/sweep-gate.sh ]; then
     'CAUSED by this campaign: it drives resolution changes, and a mode change across a duplication recreate is how DXGI signals staleness by design (owner 2026-10-17). Declared for the per-cell sweep with the same receipt, pending the pixel receipt in GEOMETRYERRORUNSETTLEABLE.'
     --declare-caused-rare 'InitVchan: QGAVCHANFAIL .*request dropped'
     'CAUSED by this campaign: the readiness probe (cmd /c echo QREADY) is queued by dom0 while the guest has no qrexec and delivered when it registers, with the caller gone - and the halt/boot cycle that strands it is one the install requires. Four measured attempts to remove it at the probe: x9 -> x8 -> x9 -> x15. Receipt: the dropped request names cmd.exe and this qube as caller; see the correlation in matrix.sh above and findings/issues.md QGAVCHANUNDECLARED.')
+  # THE CAMPAIGN'S SIZE, so the gate can compare a vendored-emitter count against a baseline taken
+  # from a campaign of a DIFFERENT size. Without it the comparison is absolute and a full 8-cell
+  # campaign can never pass a 3-cell baseline - which is what blocked the 4.3.37 cut (see the
+  # measurement in tools/sweep-gate.sh).
+  SWEEP_GATE_CELLS=$(printf '%s\n' $CELLS | grep -ac .)
+  export SWEEP_GATE_CELLS
+  say "sweep-gate: $SWEEP_GATE_CELLS cell(s) in this campaign (the denominator for vendored-count rises)"
   # shellcheck disable=SC2086
   if bash tools/sweep-gate.sh "${SWGATE_DECL[@]}" $swlogs > "$M/sweep-gate.out" 2>&1; then
     say "sweep-gate: every declared error in the campaign's own logs is accounted for"

@@ -28,7 +28,11 @@ code(){ sed -E 's@//.*$@@' "$1"; }
 CODE="$(code "$M")"
 
 # ---- 1. the clock does not run while the launch is impossible ----------------------------------
-echo "$CODE" | command grep -q 'GetShellWindow() && !g_WgcLaunched' \
+# ShellWindowNow(), NOT GetShellWindow(): the consult was renamed when the shell-seen latch landed
+# (2026-10-10) and this check kept grepping the old literal, so it has been FAILING on code that is
+# correct ever since - a stale-literal consumer of a rename. The predicate is the same one either
+# way: the hold is on "no shell AND nothing launched yet".
+echo "$CODE" | command grep -q 'ShellWindowNow() && !g_WgcLaunched' \
   && ok "held_without_a_shell: the down-clock is held while no shell exists, because the broker runs in the user's session" \
   || bad "held_without_a_shell: the deadline still runs before the broker can be launched at all"
 

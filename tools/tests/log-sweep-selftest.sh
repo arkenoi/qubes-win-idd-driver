@@ -511,14 +511,35 @@ write("bootshut.pull", stream([(WDB, "watchdog", wd_bs), (AGB, "agent", ag_bs)],
 # as not working and the release was briefly suspected of shipping stale binaries.
 TBO = "gui-agent-20261007-100031-1000.log"
 TBN = "gui-agent-20261007.log"
+#
+# AND TWO MORE CONDITIONS THE SAME SHAPE REACHES, added 2026-10-19 after they failed the 4.3.37
+# acceptance on the win11-upgrade cell. error_lines was build-scoped; dom0_loud_failures (P1) and
+# helper_relaunches (P2) were not, so the candidate was graded on the binary it REPLACED:
+#   instance pid 4824  4.3.35.795   WGCBROKER launched: 2   + "NOTIFYERR ... sent to dom0"
+#   instance pid 8132  4.3.37.1026  WGCBROKER launched: 1
+#   instance pid 7924  4.3.37.1026  WGCBROKER launched: 1
+# ONE OF EACH ON EITHER SIDE, exactly as T54 does: the prior build gets the doubled launch and a
+# dom0 notification, the build under test gets a single launch and a notification of its OWN. A
+# filter that dropped both sides would pass a one-sided test while blinding a P1.
 tb_old = agent(ver="9.9.9.0", mid=[wu("100200.000", 200, "E", "WinMain",
-                                      "WatchForEvents failed with error 0x0: The operation completed successfully.")])
+                                      "WatchForEvents failed with error 0x0: The operation completed successfully."),
+                                   # ONE added launch, not two: the agent() template already writes one, so this
+                                   # gives the predecessor TWO in one instance - the measured 4.3.35 shape, whose
+                                   # own log shows them 2.6 s apart - and therefore exactly ONE excess.
+                                   wu("100203.600", 200, "I", "WgcLaunch",
+                                      "WGCBROKER launched via Task Scheduler (user session 1)"),
+                                   wu("100204.000", 200, "W", "PlatLog",
+                                      "NOTIFYERR gui-agent.deslice-down sent to dom0 (#1 this boot; delivery is notifhost's to log)")])
 tb_new = [wu("100400.000", "3992:4016", "I", "LogInit", "Log started, module name: gui-agent"),
           wu("100400.000", "3992:4016", "I", "LogInit", "System uptime: 240.000 seconds"),
           wu("100400.001", "3992:4016", "I", "LogInit", "Running as user: SYSTEM, process ID: 3992"),
           wu("100400.001", "3992:4016", "I", "LogInit", "Module version: 9.9.9.1"),
           wu("100400.001", "3992:4016", "I", "LogInit", "Session: 1"),
           wu("100401.000", "3992:4016", "I", "WatchForEvents", "A vchan client has connected"),
+          wu("100402.000", "3992:4016", "I", "WgcLaunch",
+             "WGCBROKER launched via Task Scheduler, user session 1, restart-on-failure PT1M x3"),
+          wu("100403.000", "3992:4016", "W", "PlatLog",
+             "NOTIFYERR gui-agent.deslice-down sent to dom0 (#1 this boot; delivery is notifhost's to log)"),
           wu("100500.000", "3992:4016", "I", "WatchForEvents", "exiting")]
 # AND THE HALF NO VERSION CAN REACH. Two of our sources declare no module version at all - bridge.log
 # (blog: HH:MM:SS plus text, no pid, no uptime, no init) and TaskScheduler records, which come from
@@ -664,6 +685,14 @@ for f in base newsig rise three stoperr empty twoboot clockflip rapidboot taskok
     printf '{"source": "log-sweep-selftest.sh fixture %s", "declared_errors": [{"pattern": ".", "why": "synthetic fixture: this suite wrote every line in it"}]}\n' "$f" > "$T/$f/context.json"
   fi
 done
+# AND twobuild DECLARES ONLY THE ERROR LINE IT INJECTS, not every line. The catch-all above
+# ("pattern": ".") is what made dom0_loud_failures and notifications_lost UNREACHABLE in this suite:
+# _declared_line() matched every line, so both P1 metrics read 0 on every fixture whatever the code
+# did, and neither had a single offline assertion. That is how the missing build scope in dom0_loud()
+# survived to fail a release campaign (T57). The injected ERROR line stays declared, so T44/T54 are
+# measuring exactly what they did before.
+printf '{"source": "log-sweep-selftest.sh fixture twobuild", "declared_errors": [{"pattern": "WatchForEvents failed with error 0x0", "why": "synthetic fixture: this suite injects that one error line"}]}\n' > "$T/twobuild/context.json"
+
 cp -r "$T/base" "$T/missing" && rm "$T/missing/files/gui-agent-20261007-100031-1000.log"
 
 # ---- the fixture baseline: the REAL baseline-init over the clean fixture's report -----------------------------------
@@ -2007,6 +2036,40 @@ if [ "$_nd" = 1 ] && python3 -m py_compile "$PIDKEY" >/dev/null 2>&1; then
 else
   bad "T56 could not build the pre-fix variant - the sed changed $_nd line(s), want 1"
 fi
+
+# ---- T57 EVERY METRIC IS BUILD-SCOPED, not just the line-level ones -----------------------------
+# THE THIRD TIME THIS CLASS WAS FOUND IN compute_metrics. T44/T54 scoped errors_during_requested_stop
+# and stale_error_lines; T55 scoped the classification. dom0_loud_failures (P1, max 0) and
+# helper_relaunches (P2, max 0) were still computed over the whole capture, and both were written
+# ABOVE the block that establishes the scope - so the rule the comment there states could not reach
+# them. MEASURED on the 4.3.37 release acceptance, win11-upgrade cell: both breached, the P1 on a
+# notification the REPLACED build sent about ITS de-slice broker (the candidate carries the fix and
+# emitted nothing), the P2 on a doubled WGCBROKER launch in the REPLACED build's one instance while
+# both candidate instances launched it exactly once. Jev: conceals_real_error 0.15, scope_both 0.94.
+# The scope now sits at the TOP of compute_metrics, so there is no position left that evades it.
+tbm(){ # $1=analyzer $2=tag -> "<dom0_loud_failures> <helper_relaunches>"
+  python3 "$1" analyze "$T/twobuild" --baseline "$T/baseline.json" --out "$T/$2.json" \
+      --summary "$T/$2.txt" --label "$2" --workdir "$T/work-$2" --jev-cmd "$T/jev-expected.py" > "$T/$2.out" 2>&1
+  field "$T/$2.json" 'str(r["metrics"]["dom0_loud_failures"])+" "+str(r["metrics"]["helper_relaunches"])'
+}
+read -r t57l t57h <<<"$(tbm "$SRC" t57)"
+# ONE, NOT ZERO: the build under test sends its own notification in this fixture, and it must still
+# count. A zero here would mean the filter ate both sides and blinded the P1 on every run.
+[ "$t57l" = 1 ] && ok "T57 the REPLACED build's dom0 notification is not billed to the candidate, and the candidate's own one still counts (dom0_loud_failures=$t57l)" \
+                || bad "T57 dom0_loud_failures=$t57l, want 1 - one notification each side, only the predecessor's excluded"
+[ "$t57h" = 0 ] && ok "T57 the REPLACED build's doubled helper launch is not a relaunch of the candidate (helper_relaunches=$t57h)" \
+                || bad "T57 helper_relaunches=$t57h, want 0 - the candidate launched the broker once"
+KL=$(knob loudpriorbuild); read -r t57lk _ <<<"$(tbm "$KL" t57kl)"
+[ "$t57lk" = 2 ] && ok "knob loudpriorbuild: SEEN TO FAIL - unscoped, the predecessor's notification fails the candidate on a P1 (dom0_loud_failures=$t57lk)" \
+                 || bad "knob loudpriorbuild: dom0_loud_failures=$t57lk, want 2 - the case cannot be driven"
+KR=$(knob relpriorbuild); read -r _ t57hk <<<"$(tbm "$KR" t57kr)"
+[ "$t57hk" = 1 ] && ok "knob relpriorbuild: SEEN TO FAIL - unscoped, the predecessor's second launch reads as the candidate relaunching a helper (helper_relaunches=$t57hk)" \
+                 || bad "knob relpriorbuild: helper_relaunches=$t57hk, want 1 - the case cannot be driven"
+# AND THE SINGLE-VERSION FIXTURE MUST BE UNTOUCHED: a filter that over-reaches zeroes a P1 on every
+# ordinary cell, which reads exactly like a pass.
+t57c=$(field "$T/t2.json" 'r["metrics"]["dom0_loud_failures"]')
+[ -n "$t57c" ] && ok "T57 a one-build capture is unaffected by the scope (dom0_loud_failures=$t57c)" \
+               || bad "T57 could not read dom0_loud_failures from the one-build report"
 
 echo "--- $pass passed, $fail failed; fixtures/outputs in $T"
 [ "$fail" = 0 ] && exit 0 || exit 1

@@ -337,8 +337,18 @@ DOM0_OUTCOME_RE = re.compile(DOM0_SHOWN_RE.pattern + "|" + DOM0_LOST_RE.pattern)
 DOM0_SENT_RE = DOM0_OUTCOME_RE   # kept: existing callers name it this
 
 
-def dom0_loud(files):
+def dom0_loud(files, prior=None):
     """Lines that put one of our failures in front of the USER: LOUD, therefore P1.
+
+    `prior` IS THE BUILD SCOPE, and it is not optional for an upgrade cell. An upgrade cell's window
+    legitimately holds lines from TWO binaries - the build the upgrade REPLACED and the build under
+    test - and a notification the REPLACED build sent is not a failure of the candidate. MEASURED
+    2026-10-19, release 4.3.37 acceptance, win11-upgrade: this metric breached at 2, P1, and BOTH
+    rows were the one event 4.3.35.795 produced (its capture helper reported down 30 s after its own
+    start; ready 4 s later), which the candidate carries the fix for and did not emit. The signature
+    classification and error_lines_undeclared already filtered it - the report printed it under
+    "PRIOR BUILD ... the build under test did not emit these" - while this metric counted it and
+    failed the cell. Jev: conceals_real_error 0.15, scope_both 0.94.
 
     THE DICTIONARY IS A DELIBERATE EXCEPTION TO "NO VOCABULARY", AND A NARROW ONE. The rule this
     project fought for is that SEVERITY comes from the writer's declared level, never from guessing
@@ -389,12 +399,17 @@ def dom0_loud(files):
             # failure is INFO (the sender reporting its own success) and that was the original bug.
             # a send that LANDED is what this metric is named for; a loss is dom0_lost() below
             if DOM0_SHOWN_RE.search(msg) and not DOM0_LOST_RE.search(msg):
+                if prior and prior(lf, l):   # GUARD:loudpriorbuild DEFECT: if False:
+                    continue                 # the build the upgrade replaced; not the candidate's failure
                 loud.append((lf.name, lvl or "?", msg))
     return loud
 
 
-def dom0_lost(files):
+def dom0_lost(files, prior=None):
     """Notifications our code RAISED and could not deliver - the user was told NOTHING.
+
+    Build-scoped for the same reason as dom0_loud() above: a delivery the REPLACED build lost is
+    not the candidate's loss.
 
     The counterpart to dom0_loud(): same path dictionary, opposite outcome. P1 for the same reason
     and a different one - the owner's standing rule is "no doubles, nothing lost", and a message
@@ -411,6 +426,8 @@ def dom0_lost(files):
             if HANDOFF_ATTEMPT_RE.search(msg):   # GUARD:handoffnotloss DEFECT: if False:
                 continue
             if DOM0_LOST_RE.search(msg):
+                if prior and prior(lf, l):   # GUARD:lostpriorbuild DEFECT: if False:
+                    continue
                 lost.append((lf.name, getattr(l, "level", None) or "?", msg))
     return lost
 
@@ -2273,6 +2290,32 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
     windows = st["windows"]
     events = st["events"]
     sel = lambda ts: (ts is not None) and (since is None or ts >= since)
+    # THE BUILD SCOPE IS ESTABLISHED FIRST, BEFORE ANY METRIC, and that ordering is the fix for a
+    # defect this function has now grown THREE times: a metric written ABOVE the scope block is
+    # silently unscoped, and nothing says so. errors_during_requested_stop and stale_error_lines
+    # were the first two (see their comment below, campaign 20261018-063720); helper_relaunches was
+    # the third, found 2026-10-19 on the 4.3.37 acceptance - it breached at 1 on an upgrade cell
+    # where the single excess launch was the REPLACED build's, both candidate instances having
+    # launched the helper exactly once. There is no position left in this function from which the
+    # scope is unreachable, so the next metric cannot repeat it.
+    _builds, _anchor, _pre_install, _prior = build_scope(files, build)
+    _lf_by_name = {lf.name: lf for lf in files}
+    # AN INSTANCE'S OWN BUILD, from the version it recorded at its init: the test is_prior_build()
+    # applies to a LINE, asked of the instance that wrote it. A per-instance metric has no single
+    # line to put to `_prior`, which is precisely how helper_relaunches stayed unscoped while the
+    # line-level metrics beside it were fixed.
+    def _inst_prior(i):
+        lf = _lf_by_name.get(i.get("file"))
+        mod = getattr(lf, "module", None) if lf else None
+        if not mod or mod not in _builds:
+            return False
+        info = _builds[mod]
+        if len(info["versions"]) < 2:
+            return False      # one version: nothing was superseded
+        v = i.get("version")
+        if not v:
+            return False      # an unknown version never shrinks a count - the GUARD:winsince rule
+        return v != info["newest"]
     m["boots"] = len(boots)
     m["shutdowns"] = len(windows)
     m["agent_instances"] = len(inst)
@@ -2361,7 +2404,18 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
     m["fi_detection_missing"] = ctx["detection_missing"]   # GUARD:fidetect DEFECT: m["fi_detection_missing"] = 0
     m["fi_context_unproven"] = 1 if ctx["unproven"] else 0
     rel = 0
-    for i in inst:
+    # `insts`, NOT `inst` - the windowed list every thresholded per-instance metric must use (the
+    # convention stated at its definition above); and skip an instance the capture shows was the
+    # REPLACED build. MEASURED 2026-10-19, release 4.3.37 acceptance, win11-upgrade cell: this
+    # breached at 1, P2, Jev defect 0.55, and the sweep's own instance table already held the answer
+    #   pid 4824  4.3.35.795   WGCBROKER launched: 2     <- the build the upgrade REPLACED
+    #   pid 8132  4.3.37.1026  WGCBROKER launched: 1
+    #   pid 7924  4.3.37.1026  WGCBROKER launched: 1
+    # The candidate launched it exactly once in both of its instances. 4.3.35 had two launch sites
+    # (its own log shows them 2.6 s apart); this build has one, guarded by g_WgcLaunched.
+    for i in insts:
+        if _inst_prior(i):   # GUARD:relpriorbuild DEFECT: if False:
+            continue
         for h, n in i["helper_launches"].items():
             if h == "WGCBROKER launched":
                 excused = len([e for e in i.get("broker_events", []) if e["kind"] == "DIED" and e["fi"]])
@@ -2406,11 +2460,11 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
         m["death_record_mismatch"] = None   # not evaluable: needs both the watchdog log and the event block
     m["unexpected_shutdowns"] = len([l for l in events if l.extra.get("log") == "System" and l.extra.get("id") in (6008, 41) and sel(l.ts)])
     m["bugchecks"] = len([l for l in events if l.extra.get("log") == "System" and l.extra.get("id") == 1001 and "BugCheck" in (l.extra.get("provider") or "") and sel(l.ts)])
-    # EVERY LINE-LEVEL METRIC BELOW IS SCOPED TO THE BUILD UNDER TEST, not just to the time window.
+    # EVERY METRIC IN THIS FUNCTION IS SCOPED TO THE BUILD UNDER TEST, not just to the time window.
     # The predicate is build_scope()'s. It used to live here, and the comment here used to say
     # "`_prior` is the one place it applies" - which was false: the baseline comparison is a
-    # consumer too, and it was the one place that never asked. See build_scope().
-    _builds, _anchor, _pre_install, _prior = build_scope(files, build)
+    # consumer too, and it was the one place that never asked. See build_scope(). It is now
+    # established at the TOP of this function, because "below this block" was itself the defect.
     m["prior_build_mix"] = {k: v["versions"] for k, v in sorted(_builds.items()) if len(v["versions"]) > 1}
     # TaskScheduler records are Event Log entries with no module version, so only the anchor can
     # place them. Same one line as before, so the GUARD:taskrc knob stays driveable.
@@ -2439,7 +2493,6 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
     # AND the line's own version is known and is not the newest, so an unknown version never shrinks
     # a count. Both stay on ONE LINE each because the GUARD knob rewrites the single line carrying
     # its marker - a multi-line statement makes the knob undriveable, which the selftest catches.
-    _lf_by_name = {lf.name: lf for lf in files}
     m["errors_during_requested_stop"] = sum(len([l for l in i["errors_during_stop"] if not (_lf_by_name.get(i.get("file")) and _prior(_lf_by_name[i["file"]], l))]) for i in insts)   # GUARD:instwindow DEFECT: m["errors_during_requested_stop"] = sum(len(i["errors_during_stop"]) for i in inst)
     m["stale_error_lines"] = len([l for lf in files for l in lf.lines if l.level == "E" and STALE_ERR_RE.search(l.msg) and sel(l.ts) and not _prior(lf, l)])
     # A ZERO FROM "NOTHING WAS CONSIDERED" READS EXACTLY LIKE A ZERO FROM "NOTHING HAPPENED" (the
@@ -3114,12 +3167,14 @@ def cmd_analyze(a):
                 pass   # malformed declarations are already counted by declared_errors_unmatched
     def _declared_line(raw):
         return any(rx.search(raw) for rx in _decl_rx)
-    _loud = [x for x in dom0_loud(files) if not _declared_line(x[2])]
-    metrics["dom0_loud_failures"] = len(_loud)
-    metrics["notifications_lost"] = len([x for x in dom0_lost(files) if not _declared_line(x[2])])
     # THE SAME SCOPE THE METRICS USE. Recomputed rather than threaded through compute_metrics
     # so there is one factory and no second implementation; module_builds is O(lines).
+    # COMPUTED BEFORE THE TWO P1 METRICS BELOW, not after. It sat after them until 2026-10-19, which
+    # is the whole defect: the signatures were build-scoped and these were not.
     _sig_prior = build_scope(files, getattr(a, "build", None))[3]
+    _loud = [x for x in dom0_loud(files, _sig_prior) if not _declared_line(x[2])]
+    metrics["dom0_loud_failures"] = len(_loud)
+    metrics["notifications_lost"] = len([x for x in dom0_lost(files, _sig_prior) if not _declared_line(x[2])])
     sigs = collect_signatures(files, since, _sig_prior)
     cmp = compare(sigs, baseline, metrics)
     items = build_jev_items(cmp, st, metrics, files, since)

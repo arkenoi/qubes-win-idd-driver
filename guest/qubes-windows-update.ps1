@@ -529,17 +529,66 @@ function SetV($p,$n,$v,$t){ if(-not(Test-Path $p)){New-Item -Path $p -Force|Out-
 # routeless baseline; update traffic is the only traffic that ever gets a path out.
 # ---- WU-RELAY-BEGIN   (tools/tests/wu-relay-own-test.ps1 extracts this region by these markers)
 function Test-RelayListening {
-  # Does something ACCEPT a TCP connection on 127.0.0.1:8082 within 3 s? A relay PROCESS existing
-  # does not prove the port is being serviced (a hung/dead relay, or a squatter, yields
-  # 0x80072EFD ERROR_INTERNET_CANNOT_CONNECT). This catches the proven-once failure the old
-  # process-exists check missed.
+  param([int]$BoundMs = 15000)
+  # Does something ACCEPT a TCP connection on 127.0.0.1:8082? A relay PROCESS existing does not prove
+  # the port is being serviced (a hung/dead relay, or a squatter, yields 0x80072EFD
+  # ERROR_INTERNET_CANNOT_CONNECT). This catches the proven-once failure the old process-exists check
+  # missed.
+  #
+  # IT NOW POLLS, BECAUSE A SINGLE ATTEMPT NEVER WAITED. The old body made ONE BeginConnect and gave
+  # it WaitOne(3000), and its comment said "within 3 s" - but a connect to a loopback port with NO
+  # LISTENER is refused IMMEDIATELY (ECONNREFUSED); the 3 s was only a ceiling for a connect already
+  # in progress, so the check sampled readiness once, right after a flat 2 s sleep, and never spent
+  # the bound waiting for it. MEASURED 2026-10-19, release 4.3.37 acceptance, feature test
+  # template-update on the German TemplateVM win11de-tup - it failed all three rounds and failed the
+  # release:
+  #   01:35:52  relay started: pid 1536 ... owned by handle
+  #   01:35:56  relay pid 1536 is not accepting connections on 127.0.0.1:8082 within 3 s - ... starting another
+  #   01:35:56  relay pid 1536 stopped by this pass (exit code -1)
+  #   01:35:58  relay started: pid 4780 ... owned by handle
+  #   01:36:02  [ERROR] relay pid 4780 still not accepting connections on 127.0.0.1:8082 after respawn
+  #   01:36:02  relay pid 4780 stopped by this pass (exit code -1)
+  # Stop-OwnRelay prints "had already exited" for a process that is gone and "stopped by this pass"
+  # for one it had to kill - both say the latter, so the relay was ALIVE and had simply not reached
+  # its listen yet. The pass then ended without reporting to dom0 at all. Jev: never_waits 0.23 (i.e.
+  # it does not), poll_until_bound 1.00.
+  # NOT A TIMEOUT AS A FIX: the bound is what the check always claimed to measure, and it is now
+  # actually spent. The attempt count is published so the log can say how long readiness took.
+  $deadline = [DateTime]::UtcNow.AddMilliseconds($BoundMs)
+  $script:RelayListenAttempts = 0
+  while ($true) {
+    $script:RelayListenAttempts++
+    try {
+      $c = New-Object System.Net.Sockets.TcpClient
+      $iar = $c.BeginConnect('127.0.0.1', 8082, $null, $null)
+      $ok = $iar.AsyncWaitHandle.WaitOne(1000)
+      $res = ($ok -and $c.Connected)
+      $c.Close()
+      if ($res) { return $true }
+    } catch { }
+    if ([DateTime]::UtcNow -ge $deadline) { return $false }
+    Start-Sleep -Milliseconds 250
+  }
+}
+# WHAT THE RELAY ITSELF SAID, for the two failure paths below. The relay is started with
+# `--log $WorkDir` and writes qubes-updates-relay.log there, including "parent watchdog armed: pid N"
+# and then "listen 127.0.0.1:<port> target=..." immediately before its listener.Start() - so its own
+# log says how far it got. Neither failure path read it, and the harness did not collect it, so the
+# one artefact that explains the failure was discarded every time. Jev: diagnosis_gap 0.81.
+function Get-RelayDiagnosis {
+  $alive = 'liveness unreadable'
   try {
-    $c = New-Object System.Net.Sockets.TcpClient
-    $iar = $c.BeginConnect('127.0.0.1', 8082, $null, $null)
-    $ok = $iar.AsyncWaitHandle.WaitOne(3000)
-    $res = ($ok -and $c.Connected)
-    $c.Close(); return $res
-  } catch { return $false }
+    $p = $script:OwnRelay
+    if ($p) { $alive = $(if ($p.HasExited) { "exited on its own (code {0})" -f $p.ExitCode } else { 'still running' }) }
+  } catch { }
+  $tail = ''
+  try {
+    $lp = Join-Path $WorkDir 'qubes-updates-relay.log'
+    if (Test-Path -LiteralPath $lp) { $tail = ((Get-Content -LiteralPath $lp -Tail 6 -ErrorAction Stop) -join ' | ') }
+    else { $tail = "no relay log at $lp - the relay never got as far as writing one" }
+  } catch { $tail = "relay log unreadable: $($_.Exception.Message)" }
+  return ("relay pid {0} {1} after {2} connect attempt(s); its own log: {3}" -f `
+            $script:OwnRelayPid, $alive, $script:RelayListenAttempts, $tail)
 }
 # Who LISTENS on 127.0.0.1:8082 right now: the owning pid, 0 when nobody does, -1 when the table cannot be read (UNKNOWN IS NOT
 # ZERO). The owner is found by the PORT and identified by its PID - never by a process name (docs/ADR-updater.md 12.4). When the
@@ -610,13 +659,20 @@ function Ensure-Proxy {
   # this pass started, by its handle; the port is re-read before the respawn, because a listener that appeared meanwhile is not
   # ours either.
   if (-not (Test-RelayListening)) {
-    Log ("relay pid {0} is not accepting connections on 127.0.0.1:8082 within 3 s - stopping THAT relay (by its handle) and starting another" -f $script:OwnRelayPid)
+    # SAY WHY BEFORE KILLING IT: Stop-OwnRelay overwrites the only liveness evidence there is, because
+    # its own kill supplies the exit code. Read the relay's account first.
+    Log ("relay pid {0} is not accepting connections on 127.0.0.1:8082 within the readiness bound - {1}" -f $script:OwnRelayPid, (Get-RelayDiagnosis))
+    Log ("relay pid {0}: stopping THAT relay (by its handle) and starting another" -f $script:OwnRelayPid)
     Stop-OwnRelay   # GUARD:relayrespawnown
     Start-Sleep -Seconds 1
     $owner = Get-RelayPortOwner
     if ($owner -ne 0) { throw (Format-RelayRefusal $owner) }
     Start-Relay
-    if (-not (Test-RelayListening)) { throw ("relay pid {0} still not accepting connections on 127.0.0.1:8082 after respawn" -f $script:OwnRelayPid) }
+    if (-not (Test-RelayListening)) {
+      $why = Get-RelayDiagnosis
+      Log ("relay pid {0} did not serve the port after a respawn either - {1}" -f $script:OwnRelayPid, $why)
+      throw ("relay pid {0} still not accepting connections on 127.0.0.1:8082 after respawn - {1}" -f $script:OwnRelayPid, $why)
+    }
   }
   # THE LISTENER MUST BE OURS. Accepting a connection proves that something serves the port, not that it is the relay this pass
   # started: a listener that won the port between the check above and our start would be adopted by the connect test alone.

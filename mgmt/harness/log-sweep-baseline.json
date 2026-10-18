@@ -4012,6 +4012,18 @@
     "confidence": 1.0
    },
    "carried": true
+  },
+  "agent|W|SetVideoModeExact: RESSETTLE N<HEX> applied on attempt N after N ms - first refused <HEX>, the mode set was not live yet": {
+   "status": "known-defect",
+   "reason": "the agent-side WORKAROUND reporting itself: our QubesIDD reload ioctl returns before Windows will accept the mode, so a refused apply is retried for a bounded window and this line is the recovery. The DRIVER side is open - see the issue. Measured 2026-10-19, release 4.3.37 acceptance win11-upgrade: refused 0xffffffff 58 ms after `QIDD ioctl-reload ok`, same mode applied 1.6 s later unaided. NO max_per_boot on this row: compare() skips the rise test for known-defect entries, so a ceiling here could not fire; the acting ceiling is the ledger's leading count (campaign-wide, scaled rise threshold) - see mgmt/harness/error-ledger.txt.",
+   "family": "agent",
+   "level": "W",
+   "issue": "RESMODESETNOTLIVEONRELOAD",
+   "jev": {
+    "choice": "defect",
+    "confidence": 0.72,
+    "note": "settle_hides_a_failure on the pre-ledger version; the condition is a driver defect, not normal behaviour"
+   }
   }
  },
  "merged_from": {

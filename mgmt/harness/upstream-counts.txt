@@ -1,6 +1,10 @@
 # GENERATED: counts of vendored-emitter messages on a known-good campaign.
 # tools/sweep-gate.sh surfaces a RISE past the ledger's scaled threshold; the
 # routine count itself is diagnosis, not acceptance criteria.
+# cells: 3
+# PROVENANCE: campaign 20261018-183821 - win11-clean, win11-reinstall, win11-upgrade.
+# Counts are per-CAMPAIGN totals over those 3 cells; the gate scales them to the campaign
+# being graded. Regenerate with SWEEP_GATE_WRITE_UPSTREAM_COUNTS=1 on a known-good run.
 12	QioWriteBuffer: WriteFile failed with error 0xe8: <OSMSG>
 2	QpsDisconnectClientInternal: [N] reader thread didn't terminate in time, killing it
 17	QpsRead: [N] client is disconnected

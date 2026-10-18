@@ -672,5 +672,51 @@ if [ "$r2" != 0 ] && printf '%s' "$o2" | grep -qa 'DECLARED-CAUSED NEVER MATCHED
   ok "T25c a declaration that matches NOTHING fails as stale (rc=$r2) - it cannot rot into a silencer"
 else no "T25c a stale declaration passed silently (rc=$r2)" "$(printf '%s' "$o2" | grep -a 'RESULT\|NEVER' | head -2)"; fi
 
+# T26 - AN ABSOLUTE COUNT CANNOT SCOPE A WORKLOAD. The vendored-emitter baseline is one count per
+# message taken from ONE campaign. Comparing a different-sized campaign against it compares campaign
+# shapes, not the product. MEASURED 2026-10-19: the baseline came from a THREE-cell win11-only
+# campaign and release acceptance sweeps EIGHT, so all five vendored messages were flagged ROSE and
+# blocked the 4.3.37 cut - while per cell four of them had FALLEN and the fifth was 1.00x. The gate
+# now scales the baseline by cells before applying its tolerance. Jev: cells 1.00 as the denominator
+# (the measurement refuted qrexec invocations), scope normalise_by_work 0.97, rise_after_fix 0.21.
+printf '# GENERATED: fixture\n# cells: 3\n191\tpipe_thread_client: QpsRead from client N failed: N\n' > "$T/up3.txt"
+printf '# empty\n' > "$T/upl.txt"
+: > "$T/up.log"
+# THE GUEST-LOG LINE SHAPE, not the harness's `[WARN] text`: the upstream matcher takes the function
+# name from the head of the MESSAGE, and with a bracketed word prefix the name is "[WARN]
+# pipe_thread_client", which matches no vendored emitter. Driven both ways while writing this - the
+# harness shape reports `UNACCOUNTED x12 [WARN] pipe_thread_client: ...` and never reaches the
+# upstream path at all, so a fixture in that shape would have tested nothing.
+# 510 occurrences over 8 cells == 63.75 per cell, against a baseline of 63.67 per cell. Not a rise.
+for i in $(seq 510); do printf '[20261019.003337.808-4648-W] pipe_thread_client: QpsRead from client %d failed: 2\n' "$i" >> "$T/up.log"; done
+ug(){ # $1=cells ("" = pass none) -> prints the gate output
+  # `env`, not a ${1:+VAR=x} prefix: an EXPANSION in command position is not an assignment, so that
+  # form ran "SWEEP_GATE_CELLS=8" as a command and the test read an empty output as a pass.
+  if [ -n "$1" ]; then
+    env SWEEP_GATE_LEDGER="$T/upl.txt" SWEEP_GATE_UPSTREAM_COUNTS="$T/up3.txt" SWEEP_GATE_CELLS="$1" \
+      bash tools/sweep-gate.sh "$T/up.log" 2>&1
+  else
+    env -u SWEEP_GATE_CELLS SWEEP_GATE_LEDGER="$T/upl.txt" SWEEP_GATE_UPSTREAM_COUNTS="$T/up3.txt" \
+      bash tools/sweep-gate.sh "$T/up.log" 2>&1
+  fi
+}
+o26=$(ug 8)
+if printf '%s' "$o26" | grep -qa 'SWEEP-GATE-RESULT .*risen=0'; then
+  ok "T26 an 8-cell campaign is not a RISE against a 3-cell baseline at the same per-cell rate ($(printf '%s' "$o26" | grep -ao 'risen=[0-9]*' | head -1))"
+else no "T26 the scaled baseline still read a rise" "$(printf '%s' "$o26" | grep -a 'ROSE\|RESULT' | head -3)"; fi
+# SEEN TO FAIL, two ways. Without the cell count the comparison is absolute - the defect as shipped -
+# and the gate must BOTH flag the rise and SAY the comparison was unscoped, so a missing denominator
+# can never pass as a normalised one.
+o26b=$(ug "")
+if printf '%s' "$o26b" | grep -qa 'ROSE from x191' && printf '%s' "$o26b" | grep -qa 'compared ABSOLUTE'; then
+  ok "T26 SEEN TO FAIL: with no cell count the same campaign reads as a ROSE, and the line says it was compared absolute"
+else no "T26 the unscoped case was not driven" "$(printf '%s' "$o26b" | grep -a 'ROSE\|ABSOLUTE\|RESULT' | head -3)"; fi
+# AND A REAL RISE MUST STILL BLOCK: double the per-cell rate at the same campaign size.
+for i in $(seq 510); do printf '[20261019.003337.808-4648-W] pipe_thread_client: QpsRead from client %d failed: 2\n' "$i" >> "$T/up.log"; done
+o26c=$(ug 8)
+if printf '%s' "$o26c" | grep -qa 'ROSE from x509'; then
+  ok "T26 a genuine per-cell rise still blocks after scaling (1020 over 8 cells against 63.67/cell)"
+else no "T26 scaling swallowed a real rise - the check cannot fail on the product" "$(printf '%s' "$o26c" | grep -a 'ROSE\|RESULT' | head -3)"; fi
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

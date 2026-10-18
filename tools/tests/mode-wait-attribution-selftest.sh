@@ -60,7 +60,10 @@ flow=$(python3 - "$R" <<'PYF'
 import sys, io, re
 s = io.open(sys.argv[1], encoding='utf-8', errors='replace').read()
 i = s.index('if (!offered)')
-j = s.index('ULONG status = SetVideoModeInternal(width, height);', i)
+# NOT THE FULL CALL TEXT: the apply gained a settling-window argument (check 6 below), and
+# matching 'SetVideoModeInternal(width, height);' literally made this check die on a
+# ValueError and report the opposite of the truth. Match the call's head only.
+j = s.index('ULONG status = SetVideoModeInternal(width, height', i)
 seg = re.sub(r'(?m)^\s*//.*$', '', s[i:j])     # comments quote the old behaviour deliberately
 print('RETURNS' if re.search(r'\breturn\b', seg) else 'FALLS-THROUGH')
 PYF
@@ -113,6 +116,36 @@ b=$(command grep -oE '#define EXACT_MODE_WAIT_TIMEOUT_MS [0-9]+' "$R" | awk '{pr
 [ "${b:-0}" = 12000 ] \
   && ok "bound_unchanged: EXACT_MODE_WAIT_TIMEOUT_MS is still 12000 - the cause is unresolved, so the bound stays" \
   || bad "bound_unchanged: the bound moved to ${b:-?}; a bound is not a fix while the cause is unknown"
+
+# ---- 6. A REFUSED APPLY IS NOT A VERDICT WHILE THE MODE IS STILL GOING LIVE -------------------
+# The 2026-10-18 change skipped the CDS_TEST pre-flight on the secure desktop, where it can never
+# see the mode, to stop a 12 s stall on the sign-in screen. That skipped poll had been the only
+# thing giving the driver's mode-set reload time to land. MEASURED 2026-10-19, release 4.3.37
+# acceptance, win11-upgrade cell, agent pid 8132 - the FIRST campaign to carry the change:
+#   003947.450  I QIDD ioctl-reload ok
+#   003947.508  I RESWAIT pre-flight skipped: the input desktop is the secure desktop
+#   003947.508  I New resolution: 5120 x 1440
+#   003947.997  E ChangeDisplaySettings failed: 0xffffffff          <- 58 ms after the reload
+#   003947.997  W NEVEREXIT adopted 1920x1080 as the current screen size
+#   003949.585  I RESEXACT 5120x1440 replug=0                       <- the SAME mode, 1.6 s later
+# Two error lines and 1.6 s at the wrong resolution for a mode that was fine. Previous campaign:
+# 0 skips and 0 refusals; this one 1 skip and 1 refusal, in the same instance. Jev: retry_apply
+# 0.81 (restore_poll 0.00), demote_when_recovered 0.91.
+command grep -q 'IN ULONG settleMs' "$R" \
+  && ok "apply_can_settle: the apply takes a settling window, so a refusal can be retried instead of reported" \
+  || bad "apply_can_settle: SetVideoModeInternal has no settling window - the first refusal is still the verdict"
+command grep -q 'modeConfirmed ? 0u : EXACT_MODE_APPLY_SETTLE_MS' "$R" \
+  && ok "settle_only_when_unconfirmed: the window is given exactly when nothing confirmed the mode is offered" \
+  || bad "settle_only_when_unconfirmed: the settling window is not tied to the pre-flight's verdict"
+# THE LEVEL MUST FOLLOW THE OUTCOME: an error only once the window has expired, never on attempt 1.
+awk '/ULONG status = ChangeDisplaySettings\(&devMode, 0\);/,/SetLastError\(status\)/' "$R" \
+  | command grep -q 'RESSETTLE.*applied on attempt' \
+  && ok "settle_recovery_is_named: a refusal that clears inside the window is reported as the recovery it is" \
+  || bad "settle_recovery_is_named: a recovered apply says nothing - a fallback that fires must be visible"
+awk '/ULONG status = ChangeDisplaySettings\(&devMode, 0\);/,/SetLastError\(status\)/' "$R" \
+  | command grep -q 'still refused after' \
+  && ok "settle_expiry_is_loud: the window expiring with the mode still refused keeps its error" \
+  || bad "settle_expiry_is_loud: an expired settling window does not report - the real failure went quiet"
 
 echo
 echo "mode-wait-attribution-selftest: $pass passed, $fail failed"

@@ -628,6 +628,32 @@ SWEEP_GATE_VARIANTS="$VAR" SWEEP_GATE_PRIOR="$PRIOR" SWEEP_GATE_UPSTREAM_OUT="$U
 # criteria; a vendored count that JUMPS is, because the vendored code did not change - we did.
 # Same scaled threshold the ledger uses for a dispositioned message, so one file states the rule.
 UPCOUNTS="${SWEEP_GATE_UPSTREAM_COUNTS:-mgmt/harness/upstream-counts.txt}"
+# AN ABSOLUTE COUNT CANNOT SCOPE A WORKLOAD. The baseline is one count per message taken from ONE
+# campaign; campaigns differ in size, so comparing a count to it compares campaign shapes, not the
+# product. MEASURED 2026-10-19: the baseline was generated on 20261018-183821, a THREE-cell win11-only
+# campaign, and release acceptance sweeps EIGHT cells. All five vendored messages were flagged ROSE
+# and blocked the 4.3.37 cut. Per cell they had not risen at all:
+#   message                            base(3 cells)  per cell  expect(8)  actual  actual/expect
+#   QioWriteBuffer: WriteFile 0xe8          12          4.00      32.0       24       0.75x
+#   QpsRead: client is disconnected         17          5.67      45.3       33       0.73x
+#   QpsReaderThread: read failed            16          5.33      42.7       31       0.73x
+#   pipe_thread_client: QpsRead failed     191         63.67     509.3      510       1.00x
+#   send_command_to_daemon: write failed    12          4.00      32.0       24       0.75x
+# Four FELL per unit of work and the fifth is 1.00x - these are per-cell constants (the same cell type
+# gives the same count in both campaigns: win11-clean 72 and 72, win11-reinstall 85 and 85). So the
+# denominator is CELLS. Jev, given the per-cell figures: cells 1.00 (over qrexec invocations 0.00 and
+# swept lines 0.00 - I had proposed invocations first and the measurement refuted it: a clean cell
+# yields ONE qrexec wrapper log and an upgrade cell ~40, so that number measures COLLECTION, not work),
+# rise_after_fix 0.21, conceals_real_rise 0.39.
+# NEVER SILENTLY UNSCOPED: if either side's cell count is missing the comparison stays absolute and
+# the output says so, so a baseline written without one cannot pass as normalised.
+_up_cells_now="${SWEEP_GATE_CELLS:-}"
+_up_cells_base=""
+[ -f "$UPCOUNTS" ] && _up_cells_base=$(grep -am1 '^# cells:' "$UPCOUNTS" 2>/dev/null | sed 's/^# cells: *//')
+case "$_up_cells_now" in (''|*[!0-9]*) _up_cells_now="" ;; esac
+case "$_up_cells_base" in (''|*[!0-9]*) _up_cells_base="" ;; esac
+[ "${_up_cells_now:-0}" -gt 0 ] 2>/dev/null || _up_cells_now=""
+[ "${_up_cells_base:-0}" -gt 0 ] 2>/dev/null || _up_cells_base=""
 up_rose=0
 if [ -s "$UPS" ]; then
     echo "SWEEP-GATE-UPSTREAM $(grep -ac . "$UPS") message(s) from code we vendor read-only - diagnosis, NOT acceptance criteria (a RISE still blocks):"
@@ -636,14 +662,26 @@ if [ -s "$UPS" ]; then
         [ -f "$UPCOUNTS" ] && _base=$(grep -aF -- "	$_m" "$UPCOUNTS" 2>/dev/null | head -1 | cut -f1)
         _tag=""
         if [ -n "$_base" ] && [ "$_base" -ge 0 ] 2>/dev/null; then
-            if [ "$_base" -lt 10 ]; then
-                _at=$(( _base * 2 )); [ "$_at" -lt $(( _base + 3 )) ] && _at=$(( _base + 3 ))
+            # SCALE THE BASELINE TO THIS CAMPAIGN'S SIZE before applying the tolerance (see above).
+            _exp="$_base"; _scalenote=""
+            if [ -z "$_up_cells_now" ] || [ -z "$_up_cells_base" ]; then
+                # NAMED ON EVERY ROW, rise or not: an absolute comparison across campaign sizes is the
+                # defect this scaling exists for, so it can never pass unmarked.
+                _scalenote=" [compared ABSOLUTE: no cell count on $([ -z "$_up_cells_base" ] && echo 'the baseline' || echo 'this run') - a campaign of a different size can forge a ROSE]"
+            elif [ "$_up_cells_now" != "$_up_cells_base" ]; then
+                _exp=$(( (_base * _up_cells_now + _up_cells_base / 2) / _up_cells_base ))
+                _scalenote=" (x$_base over $_up_cells_base cell(s), scaled to $_up_cells_now)"
+            fi
+            if [ "$_exp" -lt 10 ]; then
+                _at=$(( _exp * 2 )); [ "$_at" -lt $(( _exp + 3 )) ] && _at=$(( _exp + 3 ))
             else
-                _at=$(( _base + (_base + 3) / 4 ))
+                _at=$(( _exp + (_exp + 3) / 4 ))
             fi
             if [ "$_c" -gt "$_at" ]; then
                 up_rose=$((up_rose+1))
-                _tag="  <== ROSE from x$_base (surfaces above x$_at): the vendored code did not change, our use of it did"
+                _tag="  <== ROSE from x$_exp$_scalenote (surfaces above x$_at): the vendored code did not change, our use of it did"
+            else
+                _tag="$_scalenote"
             fi
         else
             _tag="  (no recorded count yet - run --write-upstream-counts on a known-good campaign)"
@@ -654,6 +692,11 @@ if [ -s "$UPS" ]; then
         { echo "# GENERATED: counts of vendored-emitter messages on a known-good campaign."
           echo "# tools/sweep-gate.sh surfaces a RISE past the ledger's scaled threshold; the"
           echo "# routine count itself is diagnosis, not acceptance criteria."
+          # THE CAMPAIGN SIZE IS PART OF THE MEASUREMENT, not a footnote: without it these counts
+          # can only be compared with a campaign of the same shape, and the comparison silently
+          # becomes a test of campaign size. Written whenever the caller passes SWEEP_GATE_CELLS.
+          if [ -n "$_up_cells_now" ]; then echo "# cells: $_up_cells_now"
+          else echo "# cells: UNKNOWN - caller passed no SWEEP_GATE_CELLS; counts below are not comparable across campaign sizes"; fi
           while IFS=$'\t' read -r _c _src _m; do printf '%s\t%s\n' "$_c" "$_m"; done < "$UPS"
         } > "$UPCOUNTS"
         echo "SWEEP-GATE-UPSTREAM wrote $UPCOUNTS"

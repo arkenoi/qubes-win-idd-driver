@@ -307,6 +307,15 @@ for r in $(seq 1 "$ROUNDS"); do
   log "round $r: agent.log grew by $(wc -l < "$RD/agent.log") line(s)"
   guest_file 'C:\ProgramData\Qubes\update-status.json'  > "$RD/update-status.json"
   guest_file 'C:\ProgramData\Qubes\vmupdate-shim.log'   > "$RD/vmupdate-shim.log" 2>/dev/null
+  # THE RELAY'S OWN LOG. The pass starts qubes-updates-relay.exe with `--log C:\ProgramData\Qubes\wu`
+  # and every byte explaining a relay failure is in there - "parent watchdog armed: pid N", then
+  # "listen 127.0.0.1:<port> target=..." just before its listener.Start(). It was never collected,
+  # so when the relay failed to serve the port on 2026-10-19 (release 4.3.37, template-update, all
+  # three rounds) the evidence that would have said how far it got was left in the guest and the
+  # guest was torn down. Collected for every round now, pass or fail.
+  guest_file 'C:\ProgramData\Qubes\wu\qubes-updates-relay.log' > "$RD/relay.log" 2>/dev/null
+  guest_file 'C:\ProgramData\Qubes\wu\relay-handler.log'       > "$RD/relay-handler.log" 2>/dev/null
+  log "round $r: relay log $(wc -l < "$RD/relay.log" 2>/dev/null || echo 0) line(s), handler log $(wc -l < "$RD/relay-handler.log" 2>/dev/null || echo 0) line(s)"
   mgmt/harness/wu-evidence-facts.sh "$VM" "$RD/facts-after.txt" > "$RD/facts-after.out" 2>&1 \
     || log "round $r: facts after the pass INCOMPLETE - $(tail -1 "$RD/facts-after.out" | cut -c1-160)"
 
