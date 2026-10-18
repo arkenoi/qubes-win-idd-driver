@@ -139,9 +139,15 @@ w_alive(){ grep -qa QREADY <<< "$(QTEST_VM=$1 timeout -k 5 "${2:-40}" ./tools/qt
 # caller's own deadline passes (2) - and only that last one abandons anything, deliberately, at the
 # point where the run is giving up and preserving the guest as evidence anyway.
 # The pid is $!, never a pattern match.
-w_alive_start(){ # $1=vm $2=outfile -> prints the pid of the single probe
+w_alive_start(){ # $1=vm $2=outfile [$3=client bound s] -> prints the pid of the single probe
   : > "$2"
-  QTEST_VM=$1 ./tools/qtest run 'cmd /c echo QREADY' > "$2" 2>/dev/null &
+  # THE CLIENT BOUND IS BACK, AND DELIBERATELY - it pairs with the 20 s qrexec_timeout the callers
+  # set, which is prime-run's proven combination (qrexec_timeout 20 plus `timeout -k 5 30` probes).
+  # Attempt 1 removed the client timeout because it looked like the abandonment; the real variable
+  # was dom0's hold. With the hold at 20 s a client bound no longer strands anything for ten
+  # minutes, and WITHOUT one a client that never returns would park this wait for ever - the poll
+  # would read "still running" on every turn and never re-probe. Default 30 s, as prime-run's.
+  QTEST_VM=$1 timeout -k 5 "${3:-30}" ./tools/qtest run 'cmd /c echo QREADY' > "$2" 2>/dev/null &
   echo $!
 }
 w_alive_poll(){ # $1=pid $2=outfile -> 0=marker seen 1=call ended without it 2=still running
@@ -154,6 +160,50 @@ w_alive_poll(){ # $1=pid $2=outfile -> 0=marker seen 1=call ended without it 2=s
 # Every POLLING caller uses this; a caller whose single call IS the verdict keeps w_alive.
 # Returns 0 when the marker arrives, 1 at the deadline. Nothing is left queued behind us: a new
 # call starts only once the previous one has ENDED.
+# CANCEL AN OUTSTANDING PROBE BEFORE THE GUEST GOES DOWN - and the first version of this file got
+# this exactly backwards. It left the call running on every non-success exit, reasoning that killing
+# it WAS the abandonment. The opposite is true: a probe still outstanding when we halt the guest is
+# the one dom0 QUEUES and delivers on the NEXT boot with no caller, which the guest then reports as
+# "InitVchan: QGAVCHANFAIL ... request dropped".
+#
+# MEASURED, campaign 20261018-112936, clean cell:
+#   11:41:25  WIN11-clean-park-halt: halted and stayed halted   (our halt, probe outstanding)
+#   14:42:39  guest: QGAVCHANFAIL x2, ports 513/517, uptime 41 s
+#             command line: qrexec-wrapper.exe 10858|513|(null)|6|c:\Windows\System32\cmd.exe
+#   11:42:44  WIN11-clean-boot: session up at t+60s
+# That cmd.exe IS this probe, and 10858 is this management qube. Cancelling while the guest is still
+# up drops the request before it can be queued across a boot. By pid, from $!, never a pattern.
+# DOM0 HOLDS A QUEUED CALL FOR qrexec_timeout, AND THAT - NOT THE POLL CADENCE, NOT THE CLIENT'S
+# LIFETIME - IS WHAT STRANDS A PROBE. prime-run.sh:613 states it: "`timeout -k 5 45` kills the
+# CLIENT; dom0 keeps the queued call for qrexec_timeout, which prime-run sets to 600 for this
+# subject." So a probe outstanding when we halt the guest is held for up to ten minutes and
+# delivered on the NEXT boot with no caller, which the guest reports as
+# "InitVchan: QGAVCHANFAIL ... request dropped" (measured x9, campaign 20261018-112936).
+#
+# prime-run already brackets its own post-install wait this way, which is why those bursts land in
+# the matrix cells and not in prime-run's phase. These waits did not, and two earlier attempts at
+# this cause changed poll cadence instead - the wrong variable, twice.
+#
+# THE STANDING VALUE IS READ, NOT ASSUMED. prime-run sets 600; the recorded drain procedure restores
+# 6000. Hardcoding either would silently re-time somebody else's subject.
+w_qt_lower(){ # $1=vm -> prints the value to restore, empty when it could not be read
+  local cur
+  cur=$(qvm-prefs "$1" qrexec_timeout 2>/dev/null)
+  case "$cur" in ''|*[!0-9]*) echo ""; return 0 ;; esac
+  qvm-prefs "$1" qrexec_timeout 20 2>/dev/null || { echo ""; return 0; }
+  echo "$cur"
+}
+w_qt_restore(){ # $1=vm $2=saved value (no-op when empty)
+  [ -n "${2:-}" ] && qvm-prefs "$1" qrexec_timeout "$2" 2>/dev/null
+  return 0
+}
+
+w_alive_cancel(){ # $1=pid $2=outfile
+  [ -n "${1:-}" ] && kill "$1" 2>/dev/null
+  [ -n "${2:-}" ] && rm -f "$2"
+  return 0
+}
+
 w_alive_wait(){ # $1=vm $2=deadline seconds (default 600) $3=optional poll seconds (default 10)
   local vm=$1 dl=${2:-600} iv=${3:-10} t0 out pid rc
   t0=$(date +%s); out=$(mktemp); pid=$(w_alive_start "$vm" "$out")
@@ -163,7 +213,7 @@ w_alive_wait(){ # $1=vm $2=deadline seconds (default 600) $3=optional poll secon
     if [ "$rc" = 1 ]; then rm -f "$out"; out=$(mktemp); pid=$(w_alive_start "$vm" "$out"); fi
     sleep "$iv"
   done
-  rm -f "$out"; return 1
+  w_alive_cancel "$pid" "$out"; return 1
 }
 
 # Wait for a usable session. 0=session 1=terminal 2=deadline
@@ -174,7 +224,8 @@ w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
   # The deadline arms below leave the single probe to FINISH on its own rather than killing it: a
   # kill is an abandonment, which is the thing this wait exists to stop causing. Only the temp file
   # goes, and a late write to a deleted file is harmless.
-  local _wa_cleanup='[ -n "${_wa_out:-}" ] && rm -f "$_wa_out"'
+  local _qt_saved; _qt_saved=$(w_qt_lower "$vm")
+  local _wa_cleanup='w_alive_cancel "${_wa_pid:-}" "${_wa_out:-}"; w_qt_restore "$vm" "${_qt_saved:-}"'
   t0=$(date +%s)
   while :; do
     now=$(( $(date +%s) - t0 ))
@@ -206,7 +257,7 @@ w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
     fi
     w_alive_poll "$_wa_pid" "$_wa_out"; _wa_rc=$?
     if [ "$_wa_rc" = 0 ]; then
-      rm -f "$_wa_out"; $log "  $lbl: session up at t+${now}s"; return 0
+      rm -f "$_wa_out"; w_qt_restore "$vm" "${_qt_saved:-}"; $log "  $lbl: session up at t+${now}s"; return 0
     fi
     if [ "$_wa_rc" = 1 ]; then
       # The call ENDED without the marker: the channel answered but the session is not up yet. A new
@@ -424,23 +475,32 @@ w_appvm_shell(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
 # Reads the guest log by bounded polls: the Get-Content -Wait stream truncated silently at 28 of
 # 104 lines today, so line COUNTS from a fresh read are the trustworthy signal.
 w_install(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn $6=guest-log-path
-  local vm=$1 dl=$2 lbl=$3 dir=$4 log=$5 glog=$6 t0 now n last=-1 lastchange st
+  local vm=$1 dl=$2 lbl=$3 dir=$4 log=$5 glog=$6 t0 now n last=-1 lastchange st _iqt
+  # LOCAL, so a second install wait in the same shell cannot inherit a finished probe's pid or a
+  # half-restored qrexec_timeout.
+  local _iw_pid= _iw_out= _iw_rc=
   t0=$(date +%s); lastchange=$(date +%s)
   while :; do
     now=$(( $(date +%s) - t0 ))
-    [ "$now" -ge "$dl" ] && { $log "  $lbl: DEADLINE ${dl}s"; return 2; }
+    # Cancel before giving up: a probe left outstanding here is queued into the guest's next boot.
+    [ "$now" -ge "$dl" ] && { w_alive_cancel "${_iw_pid:-}" "${_iw_out:-}"; w_qt_restore "$vm" "${_iqt:-}"; $log "  $lbl: DEADLINE ${dl}s"; return 2; }
     if [ "$(w_state "$vm")" = Halted ]; then
+      # THE GUEST IS GOING DOWN: cancel first, or this probe is queued into its next boot.
+      w_alive_cancel "${_iw_pid:-}" "${_iw_out:-}"; _iw_pid=""
+      w_qt_restore "$vm" "${_iqt:-}"
       $log "  $lbl: guest HALTED at t+${now}s (install rebooted or shut it down)"; return 3
     fi
     # ONE PROBE FOR THE WHOLE WAIT. This wait spans the installer's own reboots, and the old
     # bounded form abandoned one request per turn across every one of them - which the guest
     # reports as InitVchan: QGAVCHANFAIL. Measured: still x4 on the clean cell of campaign
     # 20261018-103039 AFTER w_session alone was fixed, which is how this site was found.
+    if [ -z "${_iqt+set}" ]; then _iqt=$(w_qt_lower "$vm"); fi
     if [ -z "${_iw_pid:-}" ]; then _iw_out=$(mktemp); _iw_pid=$(w_alive_start "$vm" "$_iw_out"); fi
     w_alive_poll "$_iw_pid" "$_iw_out"; _iw_rc=$?
-    if [ "$_iw_rc" = 1 ]; then rm -f "$_iw_out"; _iw_out=$(mktemp); _iw_pid=$(w_alive_start "$vm" "$_iw_out"); fi
+    if [ "$_iw_rc" = 1 ]; then w_alive_cancel "$_iw_pid" "$_iw_out"; _iw_out=$(mktemp); _iw_pid=$(w_alive_start "$vm" "$_iw_out"); fi
     if [ "$_iw_rc" = 0 ]; then
       rm -f "$_iw_out"; _iw_pid=""
+      w_qt_restore "$vm" "${_iqt:-}"; unset _iqt
 
       # WHO issues a reboot: event 1074 records the process and reason for an OS-initiated
       # shutdown; 1076/6008 cover the unexpected ones. On a guest that is about to become
