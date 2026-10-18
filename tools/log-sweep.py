@@ -2261,8 +2261,6 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
     m["requested_stop_nonzero_exit"] = len([i for i in insts if i["stop"]
                                             and i["stop"]["code"] is not None
                                             and i["stop"]["code"].lower() not in QGA_EXPECTED_EXITS])   # GUARD:reqstopreason DEFECT: and i["stop"]["code"] not in (None, "0x0")])
-    m["errors_during_requested_stop"] = sum(len(i["errors_during_stop"]) for i in insts)   # GUARD:instwindow DEFECT: m["errors_during_requested_stop"] = sum(len(i["errors_during_stop"]) for i in inst)
-    m["stale_error_lines"] = len([l for lf in files for l in lf.lines if l.level == "E" and STALE_ERR_RE.search(l.msg) and sel(l.ts)])
     m["watchdog_fast_death_backoffs"] = len([l for l in st["fastdeath"] if sel(l.ts)])
     if now is not None:
         m["agent_ends_unrecorded"] = len([i for i in insts if i["end_kind"] == "unknown" and (now - i["end"]).total_seconds() > 120 and not i["exit_logged"]])
@@ -2294,6 +2292,30 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
     def _prior(lf, l):
         return is_prior_build(lf, l, _builds)   # GUARD:priorbuild DEFECT: return False
     m["prior_build_mix"] = {k: v["versions"] for k, v in sorted(_builds.items()) if len(v["versions"]) > 1}
+    # THESE TWO USED TO SIT ABOVE THIS BLOCK, so the rule the comment above states - every
+    # line-level metric is scoped to the BUILD UNDER TEST - never reached them. On an UPGRADE cell
+    # that means grading the release on the binary it REPLACED, because the entry image's logs are
+    # in the swept corpus. Measured, campaign 20261018-063720 win11-upgrade: both breached at Jev
+    # defect 1.00 and both came from ONE instance, pid 4404 at 4.3.35.795, while both 4.3.36.1019
+    # instances scored zero. Its two lines are that build's own logging on a normal exit -
+    # "WindowEventThreadProc: window event thread exiting - tracking falls back to periodic resync"
+    # and the stale "WatchForEvents failed with error 0x0" - and THIS build writes neither: it logs
+    # "window event thread exiting on request - the agent is leaving" at INFO (main.c:1239,
+    # QGA_WINEVT_EXPECTED) and classifies its exit through QgaExitIsExpected. Both wordings appear
+    # in the SAME capture, one per build.
+    #
+    # errors_during_requested_stop IS scoped too, correcting an argument made here first: that OUR
+    # installer drives the predecessor's shutdown, so an ERROR between "asked to exit" and "is gone"
+    # might be ours. The capture refutes it - neither line reflects HOW it was stopped, both are
+    # what that build logged on any exit, and both are already fixed.
+    #
+    # `_prior` is conservative: it excludes a line only when its module shows two or more versions
+    # AND the line's own version is known and is not the newest, so an unknown version never shrinks
+    # a count. Both stay on ONE LINE each because the GUARD knob rewrites the single line carrying
+    # its marker - a multi-line statement makes the knob undriveable, which the selftest catches.
+    _lf_by_name = {lf.name: lf for lf in files}
+    m["errors_during_requested_stop"] = sum(len([l for l in i["errors_during_stop"] if not (_lf_by_name.get(i.get("file")) and _prior(_lf_by_name[i["file"]], l))]) for i in insts)   # GUARD:instwindow DEFECT: m["errors_during_requested_stop"] = sum(len(i["errors_during_stop"]) for i in inst)
+    m["stale_error_lines"] = len([l for lf in files for l in lf.lines if l.level == "E" and STALE_ERR_RE.search(l.msg) and sel(l.ts) and not _prior(lf, l)])
     # A ZERO FROM "NOTHING WAS CONSIDERED" READS EXACTLY LIKE A ZERO FROM "NOTHING HAPPENED" (the
     # GUARD:winsince lesson, and three metrics lost to it). The filter can only produce that if a
     # superseded module's NEWEST build wrote nothing in the window at all - an upgrade right at the
