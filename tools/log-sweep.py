@@ -812,6 +812,42 @@ def is_prior_build(lf, l, builds):
     return v != info["newest"]
 
 
+def build_scope(files, build):
+    """The build-under-test scope: ONE predicate, and EVERY consumer goes through it.
+
+    module_builds() carries the measurement that forced this. When a source cannot say who wrote
+    it, separate the builds by WHEN - see install_anchor: bridge.log declares no version and
+    TaskScheduler records carry none, so `is_prior_build` has nothing to test and their
+    predecessor-era entries were billed to the new release. `anchor` is None on a capture with no
+    turnover, so clean and reinstall cells are untouched.
+
+    THIS IS A FACTORY BECAUSE THE CONSUMER LIST GREW. It was a closure inside compute_metrics with
+    a comment claiming it was "the one place it applies", and for that whole time collect_signatures
+    - which feeds NEW / ROSE / KNOWN-DEFECT PRESENT, the classes a human reads as a statement about
+    the build under test - never asked it. On the 20261018-063720 upgrade cell that printed
+    "KNOWN-DEFECT PRESENT: ReleaseFrame ... keyed mutex was abandoned" while the log that emitted it
+    declares `Module version: 4.3.35.795`, the binary the upgrade replaced, and the build under test
+    excludes exactly that HRESULT at capture.c:1669. A count can be scoped in one place; a
+    CLASSIFICATION cannot, so the predicate lives here and the consumers import it.
+
+    NO FAULT-INJECTION KNOB HERE, deliberately (owner, 2026-10-18: "we do NOT want to regularly FI
+    tests for breach metering. this is overcomplication. make sure metering works properly once,
+    thats it"). It was verified once, on the real capture and in the fixture, both directions - the
+    predecessor's entries excluded and the later ones KEPT - and that verification is the record,
+    not a knob re-driven on every run.
+
+    Returns (builds, anchor, pre_install, prior). `pre_install` is exposed because the TaskScheduler
+    count cannot go through `prior` at all: Event Log records have no logfile to ask.
+    """
+    builds = module_builds(files, build)
+    anchor = install_anchor(files, builds)
+    def pre_install(l):
+        return bool(anchor and l.ts is not None and l.ts < anchor)
+    def prior(lf, l):
+        return is_prior_build(lf, l, builds) or (pre_install(l) and not line_version(lf, l))   # GUARD:priorbuild DEFECT: return False
+    return builds, anchor, pre_install, prior
+
+
 def normalize(msg):
     s = msg
     for rx, rep in _NORM_RULES:
@@ -2324,24 +2360,10 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
     m["unexpected_shutdowns"] = len([l for l in events if l.extra.get("log") == "System" and l.extra.get("id") in (6008, 41) and sel(l.ts)])
     m["bugchecks"] = len([l for l in events if l.extra.get("log") == "System" and l.extra.get("id") == 1001 and "BugCheck" in (l.extra.get("provider") or "") and sel(l.ts)])
     # EVERY LINE-LEVEL METRIC BELOW IS SCOPED TO THE BUILD UNDER TEST, not just to the time window.
-    # module_builds() carries the measurement that forced this; `_prior` is the one place it applies.
-    _builds = module_builds(files, build)
-    # ...AND WHEN A SOURCE CANNOT SAY WHO WROTE IT, separate the builds by WHEN. See install_anchor:
-    # bridge.log declares no version and TaskScheduler records carry none, so `is_prior_build` has
-    # nothing to test and their predecessor-era entries were billed to the new release. None on a
-    # capture with no turnover, so clean and reinstall cells are untouched.
-    _anchor = install_anchor(files, _builds)
-    # ONE PREDICATE, TWO CONSUMERS: the versionless arm of `_prior`, and the TaskScheduler count,
-    # which cannot go through `_prior` at all because Event Log records have no logfile to ask.
-    # NO FAULT-INJECTION KNOB HERE, deliberately (owner, 2026-10-18: "we do NOT want to regularly FI
-    # tests for breach metering. this is overcomplication. make sure metering works properly once,
-    # thats it"). It was verified once, on the real capture and in the fixture, both directions -
-    # the predecessor's entries excluded and the later ones KEPT - and that verification is the
-    # record, not a knob re-driven on every run.
-    def _pre_install(l):
-        return bool(_anchor and l.ts is not None and l.ts < _anchor)
-    def _prior(lf, l):
-        return is_prior_build(lf, l, _builds) or (_pre_install(l) and not line_version(lf, l))   # GUARD:priorbuild DEFECT: return False
+    # The predicate is build_scope()'s. It used to live here, and the comment here used to say
+    # "`_prior` is the one place it applies" - which was false: the baseline comparison is a
+    # consumer too, and it was the one place that never asked. See build_scope().
+    _builds, _anchor, _pre_install, _prior = build_scope(files, build)
     m["prior_build_mix"] = {k: v["versions"] for k, v in sorted(_builds.items()) if len(v["versions"]) > 1}
     # TaskScheduler records are Event Log entries with no module version, so only the anchor can
     # place them. Same one line as before, so the GUARD:taskrc knob stays driveable.
@@ -2460,12 +2482,20 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
 
 
 # ----------------------------------------------------------------------------------------------- signatures
-def collect_signatures(files, since):
+def collect_signatures(files, since, prior=None):
+    """`prior` is build_scope()'s predicate. A signature keeps EVERY occurrence and counts them
+    both ways, exactly as the fault-injection split does below: suppressing the line would conceal
+    it, and the attribution - not the line - is what was wrong. compare() routes a signature whose
+    only occurrences are the predecessor's into its own class, because NEW / ROSE / KNOWN-DEFECT
+    PRESENT are all statements about the build under test and none of them can be made about a
+    build that did not emit the line.
+    """
     sigs = {}
     for lf in files:
         for l in lf.lines:
             if since is not None and l.ts is not None and l.ts < since:
                 continue
+            is_prior = bool(prior and prior(lf, l))
             # SIGNATURES COME FROM DECLARED ERRORS AND WARNINGS. These two lines used to keep a
             # D/V or I line if the VOCABULARY liked its words - the last place in this file where
             # message text decided anything about our own logs, and the owner's directive is that
@@ -2482,16 +2512,33 @@ def collect_signatures(files, since):
             s = sigs.get(k)
             if s is None:
                 s = sigs[k] = {"key": k, "family": lf.family, "level": l.level, "count": 0, "per_boot": Counter(), "files": set(),
-                               "examples": [], "first_ts": l.ts, "last_ts": l.ts, "ctx": None, "line": l, "count_fi": 0, "count_nonfi": 0, "nonfi_line": None}
+                               "examples": [], "first_ts": l.ts, "last_ts": l.ts, "ctx": None, "line": l, "count_fi": 0, "count_nonfi": 0, "nonfi_line": None,
+                               "count_prior": 0, "count_cur": 0, "cur_line": None, "count_nonfi_cur": 0, "nonfi_cur_line": None}
             s["count"] += 1
+            if is_prior:
+                s["count_prior"] += 1
+            else:
+                s["count_cur"] += 1
+                if s["cur_line"] is None:
+                    s["cur_line"] = l
             if l.fi:
                 s["count_fi"] += 1
             else:
                 s["count_nonfi"] += 1
                 if s["nonfi_line"] is None:
                     s["nonfi_line"] = l
-            # per boot; with no boot cluster at all (an installer-only or dom0-only directory) per file+run
-            s["per_boot"][l.boot or "%s#%s" % (lf.name, l.extra.get("run", 0))] += 1
+                # AND THE SAME COUNT SCOPED TO THE BUILD UNDER TEST. out_of_context asks "was this
+                # fault-injection-only signature seen WITHOUT a fault injection" - a question about
+                # the build under test, which the predecessor's occurrences cannot answer.
+                if not is_prior:
+                    s["count_nonfi_cur"] += 1
+                    if s["nonfi_cur_line"] is None:
+                        s["nonfi_cur_line"] = l
+            # per boot; with no boot cluster at all (an installer-only or dom0-only directory) per file+run.
+            # SCOPED TO THE BUILD UNDER TEST: max_per_boot drives the rise test, and a predecessor-heavy
+            # boot must not be able to trip ROSE on the build that replaced it.
+            if not is_prior:
+                s["per_boot"][l.boot or "%s#%s" % (lf.name, l.extra.get("run", 0))] += 1
             s["files"].add(lf.name)
             if len(s["examples"]) < 3:
                 s["examples"].append(l.raw[:300])
@@ -2519,14 +2566,26 @@ def lookup_baseline(baseline, key):
 def compare(sigs, baseline, metrics):
     thr = dict(DEFAULT_THRESHOLDS)
     thr.update(baseline.get("thresholds") or {})
-    new, rose, known, unsettled, expected, out_of_context = [], [], [], [], [], []
+    new, rose, known, unsettled, expected, out_of_context, prior_build = [], [], [], [], [], [], []
     closed_recurrence = 0
     for k, s in sorted(sigs.items()):
         entry, how = lookup_baseline(baseline, k)
         s["baseline"] = entry
         s["match"] = how
-        maxb = max(s["per_boot"].values()) if s["per_boot"] else s["count"]
+        maxb = max(s["per_boot"].values()) if s["per_boot"] else s["count_cur"]
         s["max_per_boot"] = maxb
+        # EVERY CLASS BELOW IS A STATEMENT ABOUT THE BUILD UNDER TEST. When the build under test did
+        # not emit this line at all, none of them is sayable: it is reported, in full, as the
+        # predecessor's. Not dropped - the row stays visible with its real author.
+        # NO KNOB OF ITS OWN, and that was asked before it was written (Jev: not_needed 0.97).
+        # GUARD:priorbuild, on the predicate every consumer calls, already drives this failure end
+        # to end: with prior() always false, count_prior is always 0, this arm never fires and the
+        # predecessor's line is graded `new` - accused of being a regression in the release. A
+        # second marker would be a second line a sed must replace in place, in a file where two
+        # knobs have already broken that way, to expose a failure the first one already exposes.
+        if s["count_cur"] == 0 and s["count_prior"] > 0:
+            prior_build.append(s)
+            continue
         if entry is None:
             is_new = True   # GUARD:new DEFECT: is_new = False
             if is_new:
@@ -2536,13 +2595,13 @@ def compare(sigs, baseline, metrics):
         if status == "known-defect":
             known.append(s)
             if "CLOSED" in str(entry.get("issue", "")):
-                closed_recurrence += s["count"]   # GUARD:closedrec DEFECT: pass
+                closed_recurrence += s["count_cur"]   # GUARD:closedrec DEFECT: pass
         elif status == "unsettled":
             unsettled.append(s)
         else:
             expected.append(s)
         # expected ONLY under fault injection: seen outside it, it is as good as new - and it feeds the P1 broker metrics
-        if entry.get("context") == "fault-injection" and s["count_nonfi"] > 0:
+        if entry.get("context") == "fault-injection" and s["count_nonfi_cur"] > 0:
             out_of_context.append(s)
         ceiling = entry.get("max_per_boot")
         if ceiling is not None and status != "known-defect":
@@ -2563,7 +2622,7 @@ def compare(sigs, baseline, metrics):
             breaches.append({"metric": name, "value": v, "max": t["max"], "severity": t.get("severity", "P2"), "why": t.get("why", "")})
     breaches.sort(key=lambda b: (SEVERITY_ORDER.get(b["severity"], 9), b["metric"]))
     return {"new": new, "rose": rose, "known": known, "unsettled": unsettled, "expected": expected, "out_of_context": out_of_context,
-            "breaches": breaches, "thresholds": thr}
+            "prior_build": prior_build, "breaches": breaches, "thresholds": thr}
 
 
 # ----------------------------------------------------------------------------------------------- Jev
@@ -2681,8 +2740,9 @@ def jev_state_text(items, meta, boots, st, metrics, label, since):
             elif it["kind"] == "context":
                 out.append("OUT OF CONTEXT: the baseline expects this signature ONLY under fault injection (%s); %d of its %d occurrences have NO evidence of an injection - no QGAFAULT-INIT banner in that agent instance, no M8 suspend record joining them by pid and time. Under the premises an unexcused broker hang/death is a real one." % (
                     (s["baseline"] or {}).get("reason", "")[:160], s["count_nonfi"], s["count"]))
-                if s.get("nonfi_line") is not None:
-                    out.append("  first unexcused occurrence: " + s["nonfi_line"].raw[:300])
+                _nf = s.get("nonfi_cur_line") or s.get("nonfi_line")
+                if _nf is not None:
+                    out.append("  first unexcused occurrence: " + _nf.raw[:300])
                 out.append("Question: is this a DEFECT (a real hang/death outside any injection), EXPECTED, NOISE, or undecidable?")
             else:
                 out.append("Question: is this NEW signature (never in the baseline) a DEFECT, EXPECTED behaviour, NOISE, or undecidable from this evidence?")
@@ -2775,7 +2835,8 @@ def sig_json(s, with_examples=True):
          # at all. (# GUARD:bootkeysort)
          "per_boot": {str(k): v for k, v in sorted(s["per_boot"].items(), key=lambda kv: str(kv[0]))}, "files": sorted(s["files"]),
          "first": fmt_ts(s["first_ts"]), "last": fmt_ts(s["last_ts"]), "baseline": s.get("baseline"), "match": s.get("match"),
-         "count_fi": s.get("count_fi", 0), "count_nonfi": s.get("count_nonfi", 0)}
+         "count_fi": s.get("count_fi", 0), "count_nonfi": s.get("count_nonfi", 0),
+         "count_prior": s.get("count_prior", 0), "count_cur": s.get("count_cur", 0)}
     if "rise_limit" in s:
         d["rise_limit"] = s["rise_limit"]
     if with_examples:
@@ -2861,6 +2922,12 @@ def write_summary(rep, path):
     for s in new:
         j = s.get("jev")
         L.append("  %s %-10s x%-4d %s  Jev: %s" % (s["level"], s["family"], s["count"], s["key"][:150], "%s %.2f" % (j["choice"], j["confidence"]) if j else "not judged"))
+    if rep.get("prior_build"):
+        L.append("PRIOR BUILD (%d) - every occurrence in this window was the build the upgrade REPLACED;" % len(rep["prior_build"]))
+        L.append("  the build under test did not emit these, which is not the same as not having them:")
+        for s in rep["prior_build"]:
+            L.append("  %s %-10s x%-4d %s  [would have been: %s]" % (s["level"], s["family"], s["count"], s["key"][:120],
+                                                                     (s["baseline"] or {}).get("status", "NEW")))
     L.append("ROSE (%d):" % len(rep["rose"]))
     for s in rep["rose"]:
         j = s.get("jev")
@@ -3003,7 +3070,10 @@ def cmd_analyze(a):
     _loud = [x for x in dom0_loud(files) if not _declared_line(x[2])]
     metrics["dom0_loud_failures"] = len(_loud)
     metrics["notifications_lost"] = len([x for x in dom0_lost(files) if not _declared_line(x[2])])
-    sigs = collect_signatures(files, since)
+    # THE SAME SCOPE THE METRICS USE. Recomputed rather than threaded through compute_metrics
+    # so there is one factory and no second implementation; module_builds is O(lines).
+    _sig_prior = build_scope(files, getattr(a, "build", None))[3]
+    sigs = collect_signatures(files, since, _sig_prior)
     cmp = compare(sigs, baseline, metrics)
     items = build_jev_items(cmp, st, metrics, files, since)
 
@@ -3112,6 +3182,7 @@ def cmd_analyze(a):
         "judged_sub_floor": judged_sub_floor, "loud_failures": [list(x) for x in _loud],
         "new": [sig_json(s) for s in cmp["new"]], "rose": [sig_json(s) for s in cmp["rose"]],
         "known_defects_present": [sig_json(s, False) for s in cmp["known"]], "unsettled_present": [sig_json(s, False) for s in cmp["unsettled"]],
+        "prior_build": [sig_json(s, False) for s in cmp["prior_build"]],
         "expected_present": len(cmp["expected"]),
         "signatures": {k: sig_json(s, False) for k, s in sorted(sigs.items())},
         "jev": {"calls": calls, "questions": len(items), "rc": jrc, "incomplete_reason": jreason, "wire_log": wire_log, "workdir": workdir},
@@ -3233,15 +3304,25 @@ def cmd_decode(a):
 def cmd_baseline_init(a):
     sigs = {}
     seen_reports = []
+    skipped_prior = []
     for rp in a.reports:
         with open(rp, encoding="utf-8") as f:
             rep = json.load(f)
         seen_reports.append(os.path.basename(rp))
         jev_by_key = {s["key"]: s.get("jev") for s in rep.get("new", []) + rep.get("rose", []) if s.get("jev")}
+        # A BASELINE IS A STATEMENT ABOUT THE BUILD UNDER TEST, so it is built from that build's
+        # lines only. The report's signature table carries every occurrence, the predecessor's
+        # included, and adopting those would write the mis-attribution into the baseline PERMANENTLY
+        # - as "expected", under the new build's name, outliving the capture that explains it.
+        # Reported, never silent: a skipped key is named below, because a baseline that quietly
+        # declines to learn a signature reads exactly like one that has already learnt it.
         for k, s in rep.get("signatures", {}).items():
+            if int(s.get("count_cur") or 0) == 0 and int(s.get("count_prior") or 0) > 0:
+                skipped_prior.append(k)
+                continue
             e = sigs.setdefault(k, {"family": s["family"], "level": s["level"], "max_per_boot": 0, "seen": 0, "jev": None, "prior": s.get("baseline")})
             e["max_per_boot"] = max(e["max_per_boot"], int(s.get("max_per_boot") or 0))
-            e["seen"] += int(s.get("count") or 0)
+            e["seen"] += int(s.get("count_cur") or s.get("count") or 0)
             j = jev_by_key.get(k)
             if j and (e["jev"] is None or (j.get("confidence") or 0) > (e["jev"].get("confidence") or 0)):
                 e["jev"] = j
@@ -3342,6 +3423,10 @@ def cmd_baseline_init(a):
         json.dump(out, f, indent=1, sort_keys=False)
     if carried:
         print("CARRIED %d signature(s) forward from %s (not seen in these reports)" % (carried, a.merge_from))
+    if skipped_prior:
+        print("NOT LEARNT: %d signature(s) appeared only in the build the upgrade replaced, so they say nothing about the build under test:" % len(skipped_prior))
+        for k in sorted(set(skipped_prior)):
+            print("  " + k[:150])
     print("BASELINE %s: %d signatures (%s), %d patterns, from %d report(s)" % (a.out, len(out["signatures"]), ", ".join("%s %d" % kv for kv in sorted(counts.items())), len(out["patterns"]), len(seen_reports)))
     return 0
 

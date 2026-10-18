@@ -1376,6 +1376,30 @@ case "$t54a" in *10:04:00*) ok "T54 the anchor is the build-under-test's first i
 KB=$(knob priorbuild); read -r t44ke _ _ <<<"$(tb "$KB" t44k)"
 [ "$t44ke" = 1 ] && ok "knob priorbuild: SEEN TO FAIL - without the build scope the old build's line is graded as the new build's (error_lines=$t44ke)" \
                  || bad "knob priorbuild: error_lines=$t44ke, want 1 - the case cannot be driven"
+
+# ---- T55 A COUNT CAN BE SCOPED IN ONE PLACE; A CLASSIFICATION CANNOT ---------------------------
+# T44/T54 scoped the line-level METRICS to the build under test. collect_signatures feeds the
+# baseline comparison - NEW, ROSE, KNOWN-DEFECT PRESENT, UNSETTLED PRESENT - and it was the one
+# consumer that never asked the predicate, so ONE capture stated both things at once: error_lines=0
+# because `_prior` excluded the line, and "KNOWN-DEFECT PRESENT" because the comparison did not.
+# MEASURED on the 20261018-063720 upgrade cell: 134 signatures carried the predecessor's lines, 3 of
+# them graded KNOWN-DEFECT PRESENT, including "ReleaseFrame ... keyed mutex was abandoned" whose log
+# declares `Module version: 4.3.35.795` while the build under test excludes exactly that HRESULT at
+# capture.c:1669. The row is NOT dropped - dropping it would conceal the line - it is reported under
+# its real author, which is the thing that was wrong.
+export T55KEY='agent|E|WinMain: WatchForEvents failed with error 0xH: The operation completed successfully.'
+cls(){ # $1=report json -> the bucket(s) $T55KEY appears in
+  field "$1" '" ".join(sorted(b for b in ("new","rose","known_defects_present","unsettled_present","prior_build") if any(s["key"]==__import__("os").environ["T55KEY"] for s in (r.get(b) or [])))) or "NONE"'
+}
+t55=$(cls "$T/t44.json")
+[ "$t55" = "prior_build" ] && ok "T55 the superseded build's error signature is classified as the PRIOR BUILD's, in no other bucket ($t55)" \
+                           || bad "T55 the signature is in [$t55], want prior_build alone - a class is a statement about the build under test"
+# SEEN TO FAIL THROUGH THE KNOB THAT ALREADY EXISTS - no second marker in product code (Jev:
+# not_needed 0.97). GUARD:priorbuild sits on the predicate every consumer calls, so driving it makes
+# count_prior 0 everywhere and the classification arm never fires. t44k.json is that knob's report.
+t55k=$(cls "$T/t44k.json")
+case "$t55k" in prior_build|NONE) bad "T55 knob priorbuild does not reach the classification - the row is still [$t55k], so the bucket is untested" ;;
+                *) ok "T55 SEEN TO FAIL via knob priorbuild: with the scope off the predecessor's line is graded as the build under test's [$t55k]" ;; esac
 # AND THE FILTER MUST NOT EAT A SINGLE-VERSION MODULE: the clean fixture has one build only, so its
 # error/warning counts must be untouched by all of the above (a filter that over-reaches here would
 # zero the gate metric on every normal run, which reads exactly like a pass).
