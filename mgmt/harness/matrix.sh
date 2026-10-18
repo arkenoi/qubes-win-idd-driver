@@ -2645,7 +2645,20 @@ if [ -x tools/sweep-gate.sh ]; then
   # The per-cell sweep has declared this for a while (log-sweep --tolerate-error above, Jev
   # declare-as-caused 0.72), which is why the cells sweep CLEAN while this gate failed on the same
   # lines. A declaration that stops matching FAILS as stale, so it cannot become a silencer.
-  SWGATE_DECL=(--declare-caused 'InitVchan: QGAVCHANFAIL .*request dropped'
+  # AND THE SHUTDOWN THIS CAMPAIGN ORDERS, which kills whatever was mid-run. Measured
+  # 20261018-143438: a dom0 call was in flight and the QubesWindowsUpdateScan task was running when
+  # the harness halted the guest, so the task's powershell was terminated with 0xC000013A
+  # (STATUS_CONTROL_C_EXIT) and the death reporter recorded it - correctly, naming the cause itself:
+  # "its program crashed with a console control (Ctrl-C, or the console closed)". That task ran 29
+  # times in the campaign and succeeded every other time.
+  #
+  # NARROW ON PURPOSE: the regex requires BOTH the task's non-zero result AND the console-control
+  # cause, so a QubesWindowsUpdateScan that fails for any other reason still blocks. Jev, shown the
+  # sequence and this project's supervision rule that an unexpected death is a major error:
+  # declare_caused 0.98 - a task killed by a shutdown WE ordered is not an unexpected death.
+  SWGATE_DECL=(--declare-caused 'QubesWindowsUpdateScan ended with a non-zero result.*console control'
+    'CAUSED by this campaign: the harness halts the guest between cells, and a scheduled task that is mid-run when that happens is terminated with STATUS_CONTROL_C_EXIT (0xC000013A). The death reporter names the cause itself. The task ran 29 times in this campaign and succeeded every other time; a non-zero result from any OTHER cause is not covered by this regex and still blocks.'
+    --declare-caused 'InitVchan: QGAVCHANFAIL .*request dropped'
     'CAUSED by this campaign: the readiness probe (cmd /c echo QREADY) is queued by dom0 while the guest has no qrexec and delivered when it registers, with the caller gone - and the halt/boot cycle that strands it is one the install requires. Four measured attempts to remove it at the probe: x9 -> x8 -> x9 -> x15. Receipt: the dropped request names cmd.exe and this qube as caller; see the correlation in matrix.sh above and findings/issues.md QGAVCHANUNDECLARED.')
   # shellcheck disable=SC2086
   if bash tools/sweep-gate.sh "${SWGATE_DECL[@]}" $swlogs > "$M/sweep-gate.out" 2>&1; then
