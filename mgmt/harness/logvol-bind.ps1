@@ -68,22 +68,42 @@ function Pin-LogVol([string]$cur) {
     # next boot would have moved it again. Set-Partition rewrites the assignment, which Windows
     # persists under MountedDevices keyed by the volume's own GUID, so it survives reboots and any
     # change in the device set. diskpart is the fallback for a guest whose Storage module is absent.
-    $want = 'Z'
-    if ($cur -eq ($want + ':')) { return $cur }
+    # A RANGE OF HIGH LETTERS, AND A REFUSAL - NOT "KEEP THE LOW ONE".
+    # This used to try Z: alone and, if Z: was occupied, RETURN THE CURRENT LETTER - which on a
+    # fresh boot is whatever the emulated stick grabbed early, D: or E: (run 8 shows both:
+    # `found=E:` on the clean cell, `found=D:` on the next). The bind then wrote that letter into
+    # LogDir, and those are exactly the letters a Xen PV volume claims once xenvbd attaches: the log
+    # stick is an EMULATED usb-storage device present from power-on, while Q: only appears when the
+    # PV disk driver attaches, and Windows hands out letters as volumes arrive. So the pre-PV window
+    # could leave LogDir naming a letter that later belongs to something else - and a module whose
+    # LogDir is unreachable at LogInit gets NO log file and says nothing (windows-utils LogStart:
+    # CreateFile fails and the process logs nowhere). Jev graded that hole 0.44 and the silent
+    # no-file consequence 0.78.
+    # High letters are never claimed by the PV volumes this product uses (C: system, Q: private), so
+    # the pin walks DOWN from Z: and refuses if it cannot get one. A refusal is loud and the cell
+    # fails on the instrument; recording a letter that may move is the failure that hides.
     $curLetter = $cur.TrimEnd(':')
+    foreach ($want in @('Z','Y','X','W')) {
+        if ($cur -eq ($want + ':')) { return $cur }
+        # NEVER TAKE A LETTER IN USE: a volume this script knows nothing about is not ours to move.
+        $taken = Get-CimInstance Win32_Volume -Filter ("DriveLetter='" + $want + ":'") -ErrorAction SilentlyContinue
+        if ($taken) { continue }
+        $pinned = Pin-LogVolTo $curLetter $want
+        if ($pinned) { return ($want + ':') }
+    }
+    Fail ('logvol_letter_unpinnable: none of Z:,Y:,X:,W: could be assigned to the log volume (it is at ' + $cur + '). REFUSING rather than recording a low letter in LogDir: the stick enumerates before the PV disk driver attaches, so a low letter can later belong to a PV volume, and a module whose LogDir is unreachable at LogInit logs NOWHERE and says nothing.')
+}
 
-    # NEVER TAKE A LETTER IN USE: keep the current one rather than displacing a volume this script
-    # knows nothing about.
-    $taken = Get-CimInstance Win32_Volume -Filter ("DriveLetter='" + $want + ":'") -ErrorAction SilentlyContinue
-    if ($taken) { return $cur }
+# The actual assignment, split out so the loop above reads as the policy it is.
+function Pin-LogVolTo([string]$curLetter, [string]$want) {
 
     try {
         $p = Get-Partition -DriveLetter $curLetter -ErrorAction Stop
         $p | Set-Partition -NewDriveLetter $want -ErrorAction Stop
     } catch {
         # No Storage module, or it refused: fall back to diskpart, which every Windows has.
-        $vol = Get-CimInstance Win32_Volume -Filter ("DriveLetter='" + $cur + "'") -ErrorAction SilentlyContinue
-        if (-not $vol) { return $cur }
+        $vol = Get-CimInstance Win32_Volume -Filter ("DriveLetter='" + $curLetter + ":'") -ErrorAction SilentlyContinue
+        if (-not $vol) { return $false }
         $script = Join-Path $env:TEMP 'logvol-pin.txt'
         @("select volume $curLetter", "assign letter=$want", 'exit') | Set-Content -LiteralPath $script -Encoding ASCII
         & diskpart /s $script 2>&1 | Out-Null
@@ -93,9 +113,7 @@ function Pin-LogVol([string]$cur) {
     # VERIFY, never assume: re-resolve by label and report what actually happened.
     Start-Sleep -Milliseconds 900
     $after = Find-LogVol
-    if ($after -eq ($want + ':')) { return $after }
-    if ($after) { return $after }
-    return $cur
+    return ($after -eq ($want + ':'))
 }
 
 function Get-RegValue([string]$name) {

@@ -2117,19 +2117,24 @@ read -r n58i n58p n58b n58m <<<"$(nh "$SRC" t58)"
 n58x=$(printf '%s' "$n58m" | tr ',' '\n' | cut -d: -f2 | sort -u | grep -ac .)
 [ "$n58x" = 2 ] && ok "T58 the two instances map to DIFFERENT boots ($n58m)" \
                 || bad "T58 instance->boot map is $n58m - both instances share a boot, which is the defect"
-# SEEN TO FAIL against the shipped analyzer BEFORE this fix: the uptime arm wrote into the previous
-# record, so the first instance carried the second's uptime and both landed in one boot.
-PREV="$T/log-sweep-prev.py"
-if git -C "$(git rev-parse --show-toplevel)" show HEAD:tools/log-sweep.py > "$PREV" 2>/dev/null && [ -s "$PREV" ]; then
-  if python3 -m py_compile "$PREV" >/dev/null 2>&1; then
-    read -r p58i p58p _ p58m <<<"$(nh "$PREV" t58prev)"
-    if [ "$p58p" != 1 ] || [ "$p58i" != 2 ]; then
-      ok "T58 SEEN TO FAIL on the previous analyzer: the lost line mis-bills the instances (instances=$p58i per_boot=$p58p map=$p58m)"
-    else
-      bad "T58 the previous analyzer gave the right answer too (instances=$p58i per_boot=$p58p) - this fixture does not drive the defect"
-    fi
-  else bad "T58 could not compile the previous analyzer to drive the defect"; fi
-else bad "T58 could not read HEAD:tools/log-sweep.py to drive the defect"; fi
+# SEEN TO FAIL BY REVERSING THE FIX IN A COPY, not by reading HEAD.
+# The first version of this control ran `git show HEAD:tools/log-sweep.py` as "the previous
+# analyzer" - and the moment the fix was committed, HEAD CONTAINED IT, so the control answered
+# correctly and T58 failed for ever on code that is right. A negative control anchored on a moving
+# ref rots the instant its own fix lands; that is the same class as a GUARD knob becoming
+# decoration. The reversal below is pinned to the LINE THE FIX ADDED, exactly as T56 pins the
+# pre-fix instance rule, and the suite refuses to grade if it does not change precisely one line.
+PREV="$T/log-sweep-prefix.py"
+sed -E 's|^( *)if not lf\.inits or lf\.inits\[-1\]\["uptime_s"\] is not None:$|\1if not lf.inits:|' "$SRC" > "$PREV"
+_n58d=$(diff "$SRC" "$PREV" | grep -c '^>')
+if [ "$_n58d" = 1 ] && python3 -m py_compile "$PREV" >/dev/null 2>&1; then
+  read -r p58i p58p _ p58m <<<"$(nh "$PREV" t58prev)"
+  if [ "$p58p" != 1 ] || [ "$p58i" != 2 ]; then
+    ok "T58 SEEN TO FAIL with the fix reversed: the lost line mis-bills the instances (instances=$p58i per_boot=$p58p map=$p58m)"
+  else
+    bad "T58 the reversed analyzer gave the right answer too (instances=$p58i per_boot=$p58p) - the reversal no longer reaches the defect" "sed changed $_n58d line(s)"
+  fi
+else bad "T58 could not build the pre-fix variant - the sed changed $_n58d line(s), want 1" "the fix's line may have been reworded; re-pin the sed"; fi
 
 echo "--- $pass passed, $fail failed; fixtures/outputs in $T"
 [ "$fail" = 0 ] && exit 0 || exit 1

@@ -387,13 +387,24 @@ command grep -q 'G4b same drive letter across the reboot' "$ROOT/mgmt/harness/lo
 # alive. The control is unambiguous: WIN10-clean's accept battery PASSED in the campaigns before
 # this instrument was wired into that cell (rel-38522636380, rel-38571770442) and failed in every
 # campaign after.
-# So: an acceptance run measures the SHIPPED log configuration, and LOGVOL_BIND=1 is for hunting a
-# wedge - which is the only thing the volume was ever built for.
-[ "$(command grep -c 'LOGVOL_BIND:-0' "$ROOT/mgmt/harness/matrix.sh")" -ge 1 ] \
-  && ok "posture: the redirect is OFF by default (LOGVOL_BIND=1 enables it for a wedge hunt)" \
-  || bad "posture: the redirect is not off by default - acceptance would measure a redirected LogDir"
-[ "$(command grep -c 'LOGVOL_BIND:-1' "$ROOT/mgmt/harness/matrix.sh")" -eq 0 ] \
-  && ok "posture: no on-by-default gate left in the matrix" || bad "posture: an on-by-default gate remains"
+# THE POSTURE REVERSED ON 2026-10-19, and the paragraph above is why it used to be OFF - history.
+# Run 8's failure was not perturbation. Its own lines: `[01:59:49] QWT logs bound to the log volume`
+# then `[02:02:35] INVALID-INSTRUMENT: no gui-agent log found in Z:\qwt-logs\win10-acc`, with
+# health.json `agent_pids=[3972] any_agent_log_held_open=false instance_log=NONE` - the agent ALIVE
+# and LogDir naming a directory nothing wrote to. That is the LogDir-overwrite defect: the installer
+# forced the root value back five seconds after the bind (established 0.96, measured on win11de-tup:
+# 28 wrapper logs on the stick 05:00:58-05:01:48, the seed at 05:02:00, Q: again from 05:02:05).
+# With that fixed, the pin refusing rather than recording a low letter, and the bind re-asserted
+# after the install, nothing is left that evidences perturbation (Jev perturbation_evidence_left
+# 0.13; substitutes_test_conditions 0.27 - only WHERE logs are written changes).
+# AND THE CAMPAIGN DEPENDS ON IT: win11-reinstall went silent after its install reboot in the 4.3.37
+# run and produced 2 files / 0 QWT lines, because the bind was off. Jev: enable 0.80, keep_off 0.01.
+# The guard is KEPT, pointing the other way, so a silent flip back is caught either direction.
+[ "$(command grep -c 'LOGVOL_BIND:-1' "$ROOT/mgmt/harness/matrix.sh")" -ge 1 ] \
+  && ok "posture: the redirect is ON by default (LOGVOL_BIND=0 opts out onto the stock log path)" \
+  || bad "posture: the redirect is not on by default - a wedged guest leaves nothing host-readable"
+[ "$(command grep -c 'LOGVOL_BIND:-0' "$ROOT/mgmt/harness/matrix.sh")" -eq 0 ] \
+  && ok "posture: no off-by-default gate left in the matrix" || bad "posture: an off-by-default gate remains"
 # The stick must still be attached with the redirect off, or a wedge loses the installer's markers.
 [ "$(sed -E 's/(^|[^`])#.*/\1/' "$ROOT/mgmt/harness/matrix.sh" | command grep -c 'logvol_attach')" -ge 1 ] \
   && ok "posture: the stick is still attached regardless of the redirect" \

@@ -62,11 +62,25 @@ if [ "${n:-0}" -eq 0 ]; then
 else no "product code now writes a per-module LogDir ($n site(s)) - the bind is racing again" \
         "$(command grep -rniE 'Qubes Tools\\\\[A-Za-z-]+.*LogDir' --include='*.ps1' packaging/ guest/ 2>/dev/null | head -2)"; fi
 
-# 4. the installer's deterministic root seed is STILL THERE - this fix must not have removed it
-if command grep -qa "@('LogDir', 'REG_SZ', 'Q:\\\\Qubes Logs')" packaging/setup/Install-QwtImproved.ps1; then
-  ok "the installer still seeds the ROOT LogDir deterministically (the MSI race stays closed)"
-else no "the installer's deterministic LogDir seed is gone - the MSI's two racing components decide again" \
-        "$(command grep -na 'LogDir' packaging/setup/Install-QwtImproved.ps1 | head -3)"; fi
+# 4. THE INSTALLER STILL DEFINES LogDir - it must, or the MSI's two racing components decide again -
+#    BUT IT MUST NO LONGER FORCE IT. Both halves are asserted, because each without the other is a
+#    defect: no definition reopens the MSI race; an unconditional force is what deleted the
+#    harness's bind five seconds after it was made.
+I=packaging/setup/Install-QwtImproved.ps1
+if command grep -qa "/v 'LogDir'" "$I" && command grep -qa "Q:.Qubes Logs" "$I"; then
+  ok "the installer still DEFINES LogDir (Q:\\Qubes Logs), so the MSI race stays closed"
+else no "the installer no longer defines LogDir at all - the MSI's two racing components decide again" \
+        "$(command grep -na 'LogDir' "$I" | head -3)"; fi
+# the /f seed array must NOT carry LogDir any more: that array is written unconditionally.
+if command grep -qaE "^\s*@\('LogDir'" "$I"; then
+  no "LogDir is back in the unconditional /f seed array - it will overwrite a deliberately-set value again" \
+     "$(command grep -naE "^\s*@\('LogDir'" "$I" | head -2)"
+else ok "LogDir is not in the unconditional /f seed array"; fi
+# and the definition must be guarded by "is it unset, or is it the value the MSI itself could pick"
+if command grep -qa 'logDirIsOurs' "$I" && command grep -qa 'IsNullOrWhiteSpace' "$I"; then
+  ok "the write is guarded on absent-or-MSI-chooseable, so a deliberate path (operator or staging) is left alone"
+else no "the LogDir write is not guarded - it either forces again or never migrates a legacy path" \
+        "$(command grep -na 'logDirIsOurs\|IsNullOrWhiteSpace' "$I" | head -3)"; fi
 
 # 5. the binder writes the module keys, records which, and undoes exactly those
 B=mgmt/harness/logvol-bind.ps1

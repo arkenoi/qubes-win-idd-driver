@@ -1494,21 +1494,62 @@ function Set-GuiAgentRegistryDefaults {
         # It matters more now that /idd is on by default: the IddCx driver implements NO
         # hardware cursor path at all (zero cursor code in Driver.cpp), so the guest cursor
         # can only ever arrive as pixels baked into the frame.
-        @('DisableCursor', 'REG_DWORD', '1'),
-        # LogDir MUST be pre-seeded: two MSI components race to write it ([INSTALL_DIR]log
-        # vs "Q:\Qubes Logs") under an identical condition, so without a deterministic seed
-        # the winner is arbitrary - and if Q:\ wins while Q: does not exist, every gui-agent
-        # log silently vanishes. So the seed is about DETERMINISM, not about which path.
-        # The private image is the correct destination (user data belongs on the private
-        # volume, not root - same reason MoveUsers exists), and PvDriversDisk + MoveUsers
-        # now guarantee Q: is present, so seed the stock value rather than a root-volume one.
-        @('LogDir', 'REG_SZ', 'Q:\Qubes Logs')
+        @('DisableCursor', 'REG_DWORD', '1')
+        # LogDir is seeded ONLY WHEN IT IS NOT ALREADY DEFINED - the block after this loop does
+        # that, which is why it is not in this /f list. The seed exists for DETERMINISM: two MSI
+        # components race to write LogDir ([INSTALL_DIR]log vs "Q:\Qubes Logs") under one
+        # identical condition (NOT LOG_DIR_SET), so without a value present first the winner
+        # is arbitrary - and if Q:\ wins while Q: does not exist, every gui-agent log silently
+        # vanishes. ANY value present closes that race, because LOG_DIR_SET is then true. So
+        # forcing was never what made it deterministic; HAVING a value is.
+        # The private image is the correct destination when we are the ones choosing (user data
+        # belongs on the private volume, not root - same reason MoveUsers exists), and
+        # PvDriversDisk + MoveUsers guarantee Q: is present.
     )
     foreach ($s in $seed) {
         & reg.exe add $regPath /v $s[0] /t $s[1] /d $s[2] /f /reg:64 | Out-Null
         if ($LASTEXITCODE -ne 0) { Fail "reg add failed for $($s[0])" }
     }
-    Write-Log 'seeded gui-agent registry defaults (SeamlessMode=1, DisableCursor=1, LogDir)'
+    # LogDir: DEFINE IT IF NOBODY HAS, AND NEVER OVERWRITE WHAT SOMEBODY DID.
+    # This used to be in the /f list above, and that is a second writer of one value, which is a
+    # race whoever wins. MEASURED 2026-10-19 on win11de-tup: the harness pointed LogDir at its log
+    # volume, 28 qrexec-wrapper logs landed there over 50 s, this function then forced the value
+    # back at 05:02:00 and from 05:02:05 every module logged to Q: again - the volume sat mounted
+    # and writable with nothing being sent to it, and the harness's evidence for a wedged guest was
+    # silently lost on every install cell for weeks.
+    # DETERMINISM IS UNCHANGED, which is the only thing the force was for: the MSI's two racing
+    # components are both conditioned on NOT LOG_DIR_SET, so a value BEING PRESENT is what silences
+    # them, not a value being ours. Absent -> we define it, exactly as before. Present -> it is
+    # already deterministic and it is not ours to change.
+    # AN UNINSTALL TAKES THIS KEY WITH IT (stage 2), so after one the value is absent and this seeds
+    # again - the previous behaviour, and the reason this is called twice.
+    # AND A VALUE THE MSI ITSELF COULD HAVE CHOSEN IS NOT "SOMEBODY'S CHOICE". Seeding only when
+    # ABSENT was graded a regression for real users at 0.79: on an upgrade the value a previous
+    # MSI race picked - [INSTALL_DIR]log, i.e. a path under the install directory on the ROOT
+    # volume - would be kept for ever, so a guest already logging to root would silently stop being
+    # migrated onto the private volume, which is the other thing the old force did. So the test is
+    # "did anyone DELIBERATELY set this", and the two values the MSI could have produced do not
+    # count: absent, or a root-volume path under our own install directory, both seed.
+    # Anything else - an operator's path, or a staging log volume - is left exactly as it is.
+    $logDirSet = $null
+    try { $logDirSet = (Get-ItemProperty -Path 'HKLM:\Software\Invisible Things Lab\Qubes Tools' -Name 'LogDir' -ErrorAction Stop).LogDir } catch { $logDirSet = $null }
+    $logDirIsOurs = $false
+    if (-not [string]::IsNullOrWhiteSpace([string]$logDirSet)) {
+        # the MSI's own alternative is [INSTALL_DIR]log; match it by shape, case-insensitively, and
+        # only under the QWT install directory - never a bare 'contains log'.
+        $qwtDir = 'C:\Program Files\Qubes Tools'
+        try { if ($InstallDir) { $qwtDir = [string]$InstallDir } } catch { }
+        $cand = ([string]$logDirSet).TrimEnd('\')
+        $mine = (Join-Path $qwtDir 'log').TrimEnd('\')
+        if ($cand -ieq $mine) { $logDirIsOurs = $true }
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$logDirSet) -or $logDirIsOurs) {
+        & reg.exe add $regPath /v 'LogDir' /t 'REG_SZ' /d 'Q:\Qubes Logs' /f /reg:64 | Out-Null
+        if ($LASTEXITCODE -ne 0) { Fail 'reg add failed for LogDir' }
+        Write-Log ('seeded gui-agent registry defaults (SeamlessMode=1, DisableCursor=1, LogDir=Q:\Qubes Logs - ' + $(if ($logDirIsOurs) { 'migrated from the MSI-chooseable path ' + $logDirSet } else { 'was unset' }) + ')')
+    } else {
+        Write-Log ('seeded gui-agent registry defaults (SeamlessMode=1, DisableCursor=1); LogDir left as already defined: ' + $logDirSet)
+    }
 }
 
 # ------------------------------------------------------- pre-existing QWT: detect/remove
