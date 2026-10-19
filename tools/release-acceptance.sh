@@ -91,6 +91,10 @@ say(){ case "$*" in
          *)                        _m="[INFO] $*" ;;
        esac
        echo "[$(date -u +%H:%M:%S)] $_m" | tee -a "$LOG"; }
+# THE ZONE, ONCE, FIRST - see matrix.sh's say(). This driver's log and the matrix's were measured
+# three hours apart for events seconds apart (CAMPAIGNLOGTZSPLIT); the line says which clock.
+_clk_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ); _clk_loc=$(date +%:z)
+say "clock: stamps here are UTC ($_clk_utc; host local is UTC$_clk_loc); guest log stamps and file names are guest-local - convert before comparing"
 die(){ say "FATAL: $*"; exit 1; }
 
 # REFUSE TO START UNDER A STRAY HARNESS PROCESS. An orphaned prime-run kept driving win10-acc after
@@ -280,8 +284,8 @@ if [ "$SKIP_FEATURES" -eq 0 ]; then
     # The footer stays "0 passed, 1 failed" for BOTH kinds of failure - that is what makes the gate
     # refuse the ISO - and the INSTRUMENT line beside it is what stops a reader attributing it to
     # the product.
-    { echo "[$(date +%T)]   cells: feature-$t"
-      [ $rc -eq 2 ] && echo "[$(date +%T)]   INSTRUMENT: feature-$t could not measure the product (rc=2); the run fails, the product is not implicated"
+    { echo "[$(date -u +%T)]   cells: feature-$t"
+      [ $rc -eq 2 ] && echo "[$(date -u +%T)]   INSTRUMENT: feature-$t could not measure the product (rc=2); the run fails, the product is not implicated"
       if [ $rc -eq 0 ]; then echo "=== MATRIX: 1 passed, 0 failed ==="; else echo "=== MATRIX: 0 passed, 1 failed ==="; fi
     } > "$CAMP/feature-$t.out"
   done

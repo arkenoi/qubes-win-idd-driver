@@ -35,7 +35,7 @@ set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
 VM="${1:?usage: $0 <vm>}"
-say(){ echo "[$(date +%H:%M:%S)] chain[$VM]: $*"; }
+say(){ echo "[$(date -u +%H:%M:%S)] chain[$VM]: $*"; }
 ok_n=0; bad_n=0
 good(){ ok_n=$((ok_n+1)); say "  OK   $*"; }
 broke(){ bad_n=$((bad_n+1)); say "  BROKE $*"; }

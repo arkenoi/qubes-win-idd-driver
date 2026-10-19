@@ -14,7 +14,6 @@ L2-missing-vmlock|prime-run.sh
 L2-missing-vmlock|snap-regress.sh
 L2-missing-vmlock|stability-e2e.sh
 L2-missing-vmlock|wedge-hunt.sh
-L3-nested-quote-powershell|accept-clean.sh:62
 L3-nested-quote-powershell|bench-agent.sh:22
 L4-check-cannot-fail|failproof-classpairs.sh:%s
 L4-check-cannot-fail|failproof-classpairs.sh:appvm-private-reformatted

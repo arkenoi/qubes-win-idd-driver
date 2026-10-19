@@ -14,7 +14,7 @@ set -u
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 VM="${1:?usage: $0 <vm> <loopN> [outdir]}"
 LOOP="${2:?usage: $0 <vm> <loopN> [outdir]}"
-OUT="${3:-evidence/accept-$VM-$(date +%Y%m%d-%H%M%S)}"
+OUT="${3:-evidence/accept-$VM-$(date -u +%Y%m%d-%H%M%S)}"
 mkdir -p "$OUT"
 # EVERY LINE DECLARES ITS LEVEL - same reason as the other harness loggers: sweep-gate judges only
 # tagged lines, so untagged narration makes it blind to the run it is supposed to judge.
@@ -23,9 +23,23 @@ log() { case "$*" in
           *) _m="[INFO] $*" ;;
         esac
         echo "$(date -u +%H:%M:%S) accept[$VM]: $_m" | tee -a "$OUT/accept.log"; }
+# THE ZONE, ONCE, FIRST - see matrix.sh's say(). matrix.sh quotes this logger's line inside its own
+# ("[02:04:41] ... accept-clean says: 23:04:41 accept[win10-acc]: ..."), which is where run 8 showed
+# two clocks three hours apart on one line.
+_clk_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ); _clk_loc=$(date +%:z)
+log "clock: stamps here are UTC ($_clk_utc; host local is UTC$_clk_loc); guest log stamps and file names are guest-local - convert before comparing"
 fail() { log "ACCEPT=FAIL reason=$*"; exit 1; }
 
 qq() { QTEST_VM="$VM" timeout "${QT:-60}" "$HERE/tools/qtest" "$@"; }
+# -EncodedCommand, NOT escaped quotes inside -Command. lint L3 flags that shape because it FAILS
+# SILENTLY: the inner \" survives bash, then cmd.exe and powershell disagree about who owns it, and
+# the command can come back empty with rc=0 - which this script would read as "the install has not
+# finished yet" and keep waiting until its 2400 s budget, reporting a timeout instead of a parse
+# error. The quoting is this script's legacy L3 baseline entry (tools/lint-baseline.txt); it is
+# line-anchored on purpose, so touching this file re-exposes it and the code gets fixed. Same
+# helper shape as mgmt/harness/wu-bar.sh:58.
+enc() { printf '%s' "$1" | iconv -f utf-8 -t utf-16le | base64 -w0; }
+psq() { qq run "powershell -NoProfile -NonInteractive -EncodedCommand $(enc "$1")"; }
 
 # SKIP_PROVISION=1 — grade a guest that is ALREADY installed, starting at the reboot (step 3).
 #
@@ -59,7 +73,7 @@ log "reprovisioning from $LOOP (this destroys $VM)"
 log "waiting for the release install to complete in-guest"
 t0=$(date +%s); done_install=0
 while [ $(( $(date +%s) - t0 )) -lt 2400 ]; do
-    r=$(qq run 'powershell -NoProfile -Command "(Select-String -Path C:\qwt-improved-install.log -Pattern \"=== RESULT ===\" | Select-Object -Last 1).Line; (Get-Process gui-agent -ErrorAction SilentlyContinue) -ne $null"' 2>/dev/null | tr -d '\r\0')
+    r=$(psq "(Select-String -Path C:\qwt-improved-install.log -Pattern '=== RESULT ===' | Select-Object -Last 1).Line; (Get-Process gui-agent -ErrorAction SilentlyContinue) -ne \$null" 2>/dev/null | tr -d '\r\0')
     echo "$r" | grep -q '"stage":"stage2-install".*"ok":true' && echo "$r" | grep -qi 'True$' && { done_install=1; break; }
     sleep 45
 done

@@ -74,7 +74,7 @@ if [ ! -x "$QTEST" ]; then
 	exit 2
 fi
 export QTEST_VM="$VM"          # qtest reads the target from the environment, not a flag
-OUT="${WEDGE_OUT:-$REPO/evidence/wedge-hunt-$(date +%Y%m%d-%H%M%S)}"
+OUT="${WEDGE_OUT:-$REPO/evidence/wedge-hunt-$(date -u +%Y%m%d-%H%M%S)}"
 mkdir -p "$OUT"
 
 # Seconds of silence before calling it a wedge.
@@ -92,7 +92,7 @@ mkdir -p "$OUT"
 DEAD_THRESHOLD="${DEAD_THRESHOLD:-600}"
 STOP="$OUT/.stop"
 
-log(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/hunt.log"; }
+log(){ echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$OUT/hunt.log"; }
 state(){ qvm-ls --raw-data --fields STATE "$VM" 2>/dev/null | tail -1; }
 # 60 s rather than 30, as headroom for a guest under 36-way churn. NOTE: the "~2 minutes of
 # healthy-guest silence" once cited here was an artefact of a broken qtest path, not a

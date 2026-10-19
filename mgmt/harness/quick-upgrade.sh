@@ -106,6 +106,10 @@ log(){ _lv="$*"; _lv="${_lv#"${_lv%%[![:space:]]*}"}"
          *) _m="[INFO] $*" ;;
        esac
        echo "$(date -u +%H:%M:%S) quick-upgrade[$SUBJECT]: $_m" | tee -a "$R"; }
+# THE ZONE, ONCE, FIRST - see matrix.sh's say(): a reader subtracting a guest-local file name from
+# this UTC stamp gets the guest's offset as a finding (AUTOPLAYTOASTTIMESTHESHELL, 2026-10-19).
+_clk_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ); _clk_loc=$(date +%:z)
+log "clock: stamps here are UTC ($_clk_utc; host local is UTC$_clk_loc); guest log stamps and file names are guest-local - convert before comparing"
 PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); log "PASS  $*"; }
 no(){ FAIL=$((FAIL+1)); log "[ERROR] FAIL  $*"; }

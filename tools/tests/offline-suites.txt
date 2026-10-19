@@ -69,6 +69,7 @@ gate-scope-selftest.sh
 grade-noise-selftest.sh
 grade-receipt-selftest.sh
 grader-census-selftest.sh
+harness-clock-selftest.sh
 launch-determination-selftest.sh
 log-sweep-selftest.sh
 logsweep-rotation-placeholder-selftest.sh
@@ -90,6 +91,7 @@ notifbridge-pid-selftest.sh
 offline-runner-selftest.sh
 qcon-session-selftest.sh
 qtest-push-selftest.sh
+relay-judge-timenorm-selftest.sh
 release-cut-gate-selftest.sh
 resolve-rip-selftest.sh
 result-flags-selftest.sh
@@ -97,11 +99,14 @@ retired-names-gate-selftest.sh
 rtc-utc-selftest.sh
 sweep-gate-selftest.sh
 toastactions-selftest.sh
+toasthold-grade-clock-selftest.sh
 uac-prompt-reachable-selftest.sh
 verdict-jev-selftest.sh
 verdict-lib-selftest.sh
 wait-bound-selftest.sh
 window-measure-selftest.sh
 wrapper-one-line-selftest.sh
+wu-judge-timenorm-selftest.sh
 wu-liveness-selftest.sh
 xen-core-small-selftest.sh
+logvol-modulekey-selftest.sh

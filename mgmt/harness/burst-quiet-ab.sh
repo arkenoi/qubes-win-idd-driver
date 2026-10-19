@@ -80,10 +80,10 @@ esac
 CYCLES=${CYCLES:-20}; SETTLE=${SETTLE:-60}; BOOT_DL=${BOOT_DL:-300}
 ROUNDS=${ROUNDS:-4}; PUSHES=${PUSHES:-6}; CALLS=${CALLS:-16}; SOAKERS=${SOAKERS:-6}; LC_PAUSE_MS=${LC_PAUSE_MS:-400}
 LC_SCRIPT=${LC_SCRIPT:-scratchpad/localchurn.ps1}
-OUT=${OUT:-$HOME/qwt-burst-quiet/$VM-$VARIANT-$(date +%Y%m%d-%H%M%S)}
+OUT=${OUT:-$HOME/qwt-burst-quiet/$VM-$VARIANT-$(date -u +%Y%m%d-%H%M%S)}
 mkdir -p "$OUT/push" "$OUT/shots" || exit 3
 LOG="$OUT/ab.log"; TSV="$OUT/cycles.tsv"
-log(){ echo "$(date +%H:%M:%S) bq[$VM]: $*" | tee -a "$LOG"; }
+log(){ echo "$(date -u +%H:%M:%S) bq[$VM]: $*" | tee -a "$LOG"; }
 source mgmt/harness/e2e-wait.sh
 source mgmt/harness/vmlock.sh
 vm_lock "$VM" || { log "REFUSED: another job holds $VM"; exit 3; }
@@ -354,7 +354,7 @@ fi
 run_boot(){
   local c=$1 arm=$2 next=$3 start t0 end now r due res bursts=- pre=$NEXT_SCAN
   log "--- $c arm=$arm subject=$VM (scan state going in: $pre) ---"
-  start=$(date +%H:%M:%S)
+  start=$(date -u +%H:%M:%S)
   if ! boot; then
     probe_alive; READ_RAN=; READ_CALLS=; READ_SVC=; READ_SET=; READ_LC=
     [ "$ALIVE" = alive ] && end_read "$next"

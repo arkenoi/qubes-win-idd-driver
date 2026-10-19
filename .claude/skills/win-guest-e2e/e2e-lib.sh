@@ -68,7 +68,7 @@ cap(){ local S=$1 lbl=$2 R=$3
     _snap "$S" "$lbl"; _q 20 ./tools/qtest run 'cmd /c "taskkill /im notepad.exe /f"' >/dev/null
   fi
   local d; d=$(ls "$S/e2e-$lbl-ex"/*.png 2>/dev/null|head -1|xargs -r file|grep -oE '[0-9]+ x [0-9]+'|head -1)
-  echo "[$(date +%H:%M:%S)] [shot] $lbl: $SNAP_STATE $SNAP_N png ${d}  (READ e2e-$lbl-ex/*.png)" >> "$R"; }
+  echo "[$(date -u +%H:%M:%S)] [shot] $lbl: $SNAP_STATE $SNAP_N png ${d}  (READ e2e-$lbl-ex/*.png)" >> "$R"; }
 
 # Classify what is on the guest's largest window: RECOVERY | BLACK | DESKTOP | UNKNOWN | NOSHOT.
 # Uses the PER-WINDOW capture, never a whole-desktop one.

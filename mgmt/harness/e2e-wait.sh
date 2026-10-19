@@ -453,7 +453,7 @@ w_install(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn $6=guest-log-path
         # KEEP THE DATE. Without it a 1074 from this run cannot be told apart from one the golden
         # image already carried, and "the monitor rebooted it" becomes unfalsifiable.
         if [ -s "$dir/$lbl-shutdown-events.txt.new" ]; then
-          { echo "# captured $(date '+%Y-%m-%d %H:%M:%S') at t+${now}s"; cat "$dir/$lbl-shutdown-events.txt.new"; } \
+          { echo "# captured $(date -u '+%Y-%m-%d %H:%M:%S') UTC at t+${now}s"; cat "$dir/$lbl-shutdown-events.txt.new"; } \
             > "$dir/$lbl-shutdown-events.txt"
         fi
         rm -f "$dir/$lbl-shutdown-events.txt.new"

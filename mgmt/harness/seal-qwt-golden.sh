@@ -18,7 +18,7 @@ REL="${2:?need the N-1 release setup tree}"
 BASE="$OS-base"; GOLD="$OS-qwt"
 [ -f "$REL/install.cmd" ] || { echo "FATAL: $REL has no install.cmd"; exit 2; }
 relver=$(grep -oE '"package_version"[^,]*' "$REL/MANIFEST.json" 2>/dev/null | grep -oE '4\.[0-9.]+' | head -1)
-log(){ echo "[$(date +%H:%M:%S)] seal-qwt-golden: $*"; }
+log(){ echo "[$(date -u +%H:%M:%S)] seal-qwt-golden: $*"; }
 
 # preconditions: base present+Halted, nothing else running
 [ "$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$BASE" '$1==v{print $2}')" = Halted ] \

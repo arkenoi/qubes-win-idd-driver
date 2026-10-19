@@ -201,7 +201,13 @@ R=$M/matrix.log; : > "$R"
 # stamped `date` (local), so one campaign produced two logs three hours apart with neither line
 # saying which: measured 2026-10-14, the driver wrote "[20:29:12] PASS release package verified"
 # and this wrote "[23:29:13] Gate-0 ... PASS" for events seconds apart (CAMPAIGNLOGTZSPLIT).
-# Guest-side stamps are UTC too, so UTC is the one scale every artefact of a campaign shares.
+# UTC is the one scale every HOST-side artefact of a campaign shares - every `date` stamp in
+# mgmt/harness, tools and the e2e library is `date -u` (tools/tests/harness-clock-selftest.sh T1).
+# GUEST-side stamps are NOT: a QWT log line and a log file name carry the guest's LOCAL time, and
+# the sweep records the offset once per pull (`tz=+03:00` on win11de-tup, `tz=+00:00` on win10-acc,
+# in the collector's BEGIN line). This comment said "guest-side stamps are UTC too" until
+# 2026-10-19, the day that assumption read a stick file 42 s older than its bind as three hours
+# newer. The say() below therefore writes the zone down as its FIRST line.
 # EVERY LINE DECLARES ITS LEVEL - same reason as quick-upgrade.sh's log(): a sweep that can only
 # judge the lines carrying a tag is blind to everything else, and it will not gate until its
 # coverage is credible. The emitter declares; a caller that already passed a level keeps it.
@@ -224,6 +230,17 @@ say(){ case "$*" in
          *) _m="[INFO] $*" ;;
        esac
        echo "[$(date -u +%H:%M:%S)] $_m" | tee -a "$R"; }
+# THE ZONE IS WRITTEN DOWN ONCE, HERE, because no stamp below carries it. Run 8's matrix.log held
+# three clocks: this logger's `date` (dom0 local, until ecf4d904), accept-clean's `date -u` quoted
+# INSIDE the same line - "[02:04:41]   WIN10-clean: accept-clean says: 23:04:41 accept[win10-acc]:
+# ACCEPT=FAIL" - and arm-module-bases' UTC "[23:02:30] ARMED AND PROVEN" under "[01:50:22] pool:".
+# The guest's own stamps are GUEST-LOCAL (the sweep's BEGIN line carries tz=; +03:00 on win11de-tup,
+# +00:00 on win10-acc), which is how a stick file 42 s OLDER than its bind read as "three hours
+# later" (findings/issues.md AUTOPLAYTOASTTIMESTHESHELL, corrected 2026-10-19). This line keeps the
+# `[HH:MM:SS] [INFO] ...` shape every reader of this log matches (sweep-gate.sh:143, :364), so
+# declaring the zone moves no anchored field; tools/tests/harness-clock-selftest.sh holds it.
+_clk_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ); _clk_loc=$(date +%:z)
+say "clock: stamps here are UTC ($_clk_utc; host local is UTC$_clk_loc); guest log stamps and file names are guest-local - convert before comparing"
 PASS=0; FAIL=0; INVALID=0
 ok(){ PASS=$((PASS+1)); say "PASS  $*"; }
 

@@ -38,9 +38,24 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # 56 -> 57 on 2026-10-17: cold-caller-family-selftest.sh, which pins the release goal's cold-qube
 # clause to EVERY OS family rather than to whichever cell ran first (it was evidenced on win10 only
 # in run 38994277148, with win11 - the target - unmeasured).
+# 57 -> 59 on 2026-10-19: relay-judge-timenorm-selftest.sh and wu-judge-timenorm-selftest.sh ADDED,
+# after both update judges were found correlating two log sources by TIME OF DAY - no date, no zone.
+# Measured: a relay line and a WU failure 24 h apart gave `gaps=0 violations=0` exit 0, and a WU
+# window over a two-date decode graded `ended=True verdict: PASS` on a day whose pass never ran a
+# search. Each suite carries the pre-fix comparison frozen beside the fixed one, so every case is
+# seen to fail.
 # The floor only ever moves in a commit, and this is that commit - a suite that loses its subject is
 # removed deliberately, not left to rot green.
-FLOOR=${OFFLINE_SUITES_FLOOR:-57}
+# 59 -> 60 on 2026-10-19: toasthold-grade-clock-selftest.sh ADDED, the same defect class in the
+# toast-hold grader: bridge.log carries a time of day and NO date, and the date was put on it by
+# comparing it against THIS qube's clock, three hours out of phase with the guest's on the very
+# evidence it grades. Measured: a record stamped 61 s BEFORE its own toast read PASS OK-BRIDGED.
+# 60 -> 61 on 2026-10-19: harness-clock-selftest.sh ADDED, the host-side half of the same class: one
+# campaign matrix.log carried three clocks (its own `date` local, accept-clean's `date -u` quoted on
+# the same line, arm-module-bases' UTC), and a guest-local stick file 42 s OLDER than its bind was
+# read as three hours newer. Every host stamp is now `date -u` and each campaign log declares its
+# zone first; the suite's negatives are frozen fixtures, so they cannot rot when the fix is committed.
+FLOOR=${OFFLINE_SUITES_FLOOR:-62}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"

@@ -38,11 +38,14 @@ or from the `skip id=N aumid=<toastfire aumid>` lines in fire order, the banner 
 QGAHELDDEFER class=Windows.UI.Core.CoreWindow / QGAHELDMAP toast=1 / `toast card in` lines, and "mapped" means a
 MAP of such a window within CONTROL_BANNER_WINDOW_S of the fire (the control's fires are spaced for that).
 
-ONE CLOCK. The bridge logs GetLocalTime (HH:MM:SS); toast-hold-fire.ps1 stamps Get-Date (local, ms). The agent
-log's timestamp ([YYYYMMDD.HHMMSS.mmm-pid-tid]) is tied to that clock by the harness's CLOCK PROBE: charmap's
-window, whose HWND the probe knows, must produce a QGAPROTO CREATE within the probe's own [t_start, t_seen]
-window; the offset between the two clocks is taken as the nearest multiple of 15 minutes (time zones), and the
-residual must be small. No CREATE -> ProtoTrace is off or the agent log is not the live one -> INSTRUMENT.
+ONE CLOCK, AND IT IS THE GUEST'S. The bridge logs GetLocalTime (HH:MM:SS, no date); toast-hold-fire.ps1 stamps
+Get-Date (local, ms). The agent log's timestamp ([YYYYMMDD.HHMMSS.mmm-pid-tid]) is tied to that clock by the
+harness's CLOCK PROBE: charmap's window, whose HWND the probe knows, must produce a QGAPROTO CREATE within the
+probe's own [t_start, t_seen] window; the offset between the two clocks is taken as the nearest multiple of 15
+minutes (time zones), and the residual must be small. No CREATE -> ProtoTrace is off or the agent log is not the
+live one -> INSTRUMENT. bridge.log's DATE comes from the capture's own instant on the guest's clock (meta.json
+pull_now, else --ref-now, else the clock probe's stamps, else the last fire) - never from this process's clock,
+which is in a different phase (see the comment over parse_bridge). No such instant -> CLOCK-REF INSTRUMENT.
 
 EXPECTATIONS are keyed by (hold build, scenario label) - see EXPECT. On the hold build every row is gating and must
 read OK-*. On the pre-hold CONTROL the gating rows are the ones the defect PREDICTS: S0/S1a/S4 = DOUBLE (the first
@@ -53,8 +56,10 @@ that is a FAIL of the harness, never a pass of the product.
 Modes:
   --record-fire --out DIR --labels L1[,L2] --mode seamless|nonseamless --attempt N   < toast-hold-fire output
   --decode-pull --out DIR PULLFILE          writes DIR/agent.log, DIR/bridge.log after verifying counts + sha256
-  --grade --out DIR                         appends LABEL|TEXT rows to DIR/verdicts.txt, writes DIR/grade.json,
-                                            prints the GRADED verdict line; exit 0 only when nothing failed
+  --grade --out DIR [--ref-now TS]          appends LABEL|TEXT rows to DIR/verdicts.txt, writes DIR/grade.json,
+                                            prints the GRADED verdict line; exit 0 only when nothing failed.
+                                            --ref-now '<yyyy-mm-dd HH:MM:SS[.fff]>' is the GUEST's clock at the
+                                            pull, for a dir whose own `THC now=` stamp was lost
   --selftest                                synthetic fixtures for every class (each detector seen to fire AND
                                             seen to stay silent) plus the identity-hash vectors
 """
@@ -216,8 +221,49 @@ KV_RE = re.compile(r"\b([A-Za-z_]+)=([0-9A-Za-z._:/\\-]+)")
 HEX_RE = r"0x([0-9a-fA-F]+)"
 
 
-def parse_ts(s: str) -> dt.datetime:
-    return dt.datetime.strptime(s.strip(), TS_FMT)
+# --------------------------------------------------------------------------------------- the clock (ONE instant each)
+# EVERY INSTANT HERE IS THE GUEST'S, AND THIS PROCESS'S CLOCK IS NOT A REFERENCE FOR ANY OF THEM.
+# The two are not in phase. MEASURED, the harness's own log line for the win11r-thold evidence - the
+# bracketed stamp is this qube's `date`, the THC stamp is the guest's own:
+#   [16:11:38] toast-hold[win11r-thold]: ... THC now=2026-10-06 19:11:39.705 tz=00:00:00
+# the guest THREE HOURS AHEAD of this qube, guest zone UTC and this qube on UTC+3. The same pairing is
+# recorded in tools/tests/clock-sync-selftest.sh ("the guest clock was 3 h ahead of the host with its
+# own zone set to UTC") and in tools/log-sweep.py ("on 2026-10-14 every cell's guest ran three hours
+# ahead at boot, 2249 lines were shifted back"); a run's health.json carries "boot_skew_s": -10720.
+# So guest timestamps are parsed into instants carrying the guest's UTC offset (the collector prints it
+# as `tz=<offset>`), and comparisons are between absolute instants. A naive host datetime finding its
+# way back into one of these comparisons raises TypeError instead of quietly answering.
+GUEST_ZONE_ASSUMED = dt.timezone.utc     # offset unknown: ONE placeholder zone for every guest source in the
+                                         # capture, so the comparisons between them are unchanged. Not a claim
+                                         # about the guest's zone - nothing prints or derives one from it.
+
+
+class NoBridgeReference(Exception):
+    """bridge.log has lines, and the capture offered no instant on the guest's clock to date them from."""
+
+
+def parse_utc_offset(s: Optional[str]) -> Optional[dt.timezone]:
+    """A .NET TimeSpan as the collector prints it (`tz=00:00:00`, `tz=03:00:00`, `tz=-05:00:00`) -> a fixed zone."""
+    m = re.match(r"^(-)?(?:(\d+)\.)?(\d{1,2}):(\d{2})(?::(\d{2}))?$", (s or "").strip())
+    if not m:
+        return None
+    d = dt.timedelta(days=int(m.group(2) or 0), hours=int(m.group(3)), minutes=int(m.group(4)),
+                     seconds=int(m.group(5) or 0)) * (-1 if m.group(1) else 1)
+    return dt.timezone(d) if abs(d) <= dt.timedelta(hours=18) else None
+
+
+def parse_ts(s: str, tz: Optional[dt.tzinfo] = None) -> dt.datetime:
+    """A guest stamp (`yyyy-MM-dd HH:mm:ss.fff`) -> an instant in the guest's zone. A trailing `tz=<offset>` is
+    NOT part of the stamp: the collector's `where` mode prints `THC now=<ts> tz=<offset>`, and that one token used
+    to make strptime raise - which the caller read as "no reference" and answered with this process's clock."""
+    s = re.sub(r"\s+tz=\S+$", "", (s or "").strip())
+    for fmt in (TS_FMT, "%Y-%m-%d %H:%M:%S"):
+        try:
+            t = dt.datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+        return t if tz is None else t.replace(tzinfo=tz)
+    raise ValueError(f"not a guest timestamp: {s!r}")
 
 
 class Ev:
@@ -230,7 +276,7 @@ class Ev:
         return (self.t, self.idx)
 
 
-def parse_agent(lines: List[str], offset: dt.timedelta) -> List[Ev]:
+def parse_agent(lines: List[str], offset: dt.timedelta, tz: Optional[dt.tzinfo] = None) -> List[Ev]:
     """Agent lines -> events on the GUEST LOCAL clock (agent timestamp minus the probe-derived offset)."""
     evs: List[Ev] = []
     for idx, line in enumerate(lines):
@@ -238,7 +284,7 @@ def parse_agent(lines: List[str], offset: dt.timedelta) -> List[Ev]:
         if not m:
             continue
         y, mo, d, hh, mm, ss, ms, msg = m.groups()
-        t = dt.datetime(int(y), int(mo), int(d), int(hh), int(mm), int(ss), int(ms) * 1000) - offset
+        t = dt.datetime(int(y), int(mo), int(d), int(hh), int(mm), int(ss), int(ms) * 1000, tzinfo=tz) - offset
         kind, hwnd, kv = None, None, {}
         mm_ = re.search(r"QGAPROTO,msg=(CREATE|MAP|DESTROY),hwnd=" + HEX_RE, msg)
         if mm_:
@@ -303,10 +349,23 @@ def parse_agent(lines: List[str], offset: dt.timedelta) -> List[Ev]:
     return evs
 
 
-def parse_bridge(lines: List[str], anchor_now: Optional[dt.datetime]) -> List[Ev]:
-    """bridge.log lines (HH:MM:SS, local) -> events with a date. The LAST line is dated from the pull's `now`
-    (its time of day is <= now's, else it was yesterday); earlier lines walk backwards, a day down at each
-    midnight wrap (time of day jumping up by more than 12 h going backwards)."""
+def parse_bridge(lines: List[str], ref_now: Optional[dt.datetime], tz: Optional[dt.tzinfo] = None) -> List[Ev]:
+    """bridge.log lines (`16:32:22 [INFO] ...` - a time of day on the GUEST's clock and NO date) -> events with a
+    date. The LAST line is dated to the instant NEAREST ref_now with that time of day; earlier lines walk
+    backwards, a day down at each midnight wrap (time of day jumping up by more than 12 h going backwards).
+
+    ref_now IS THE CAPTURE'S OWN INSTANT, ON THE GUEST'S CLOCK, AND IT IS REQUIRED.
+    It used to default to dt.datetime.now() - THIS process's local clock - with the guest's time of day compared
+    against the host's, under the rule "later than now, so it was yesterday". With the measured pairing (guest 3 h
+    ahead; see GUEST_ZONE_ASSUMED above) every bridge line is "later than now", so that branch fires for the WHOLE
+    log and dates it ONE DAY EARLY: no bridge record is then within RECORD_SLACK_S of any fire, every toast reads
+    UNLISTED, and a grader that correlated nothing reports an ungraded run instead of a broken instrument - the
+    TOASTHOLDPARSERBLIND shape (findings/issues.md: 12 of 21 rows ungraded, and the cause was in the parser).
+    In the other direction - this process's calendar day AHEAD of the guest's - the error is +1 day, and then the
+    `e.t >= t0 - RECORD_SLACK_S` test that BINDS a bridge record to its fire is vacuously true for every record in
+    the log: one stamped a minute BEFORE its toast was fired is credited to it, which grades as OK-BRIDGED, i.e.
+    PASS. Both directions are in tools/tests/toasthold-grade-clock-selftest.sh, each seen to fail without this.
+    """
     rows: List[Tuple[int, int, str]] = []       # (idx, seconds-of-day, msg)
     for idx, line in enumerate(lines):
         m = BRIDGE_RE.match(line.rstrip("\r"))
@@ -316,12 +375,16 @@ def parse_bridge(lines: List[str], anchor_now: Optional[dt.datetime]) -> List[Ev
         rows.append((idx, int(hh) * 3600 + int(mm) * 60 + int(ss), msg))
     if not rows:
         return []
-    if anchor_now is None:
-        anchor_now = dt.datetime.now()
-    now_sod = anchor_now.hour * 3600 + anchor_now.minute * 60 + anchor_now.second
-    day = anchor_now.date()
-    if rows[-1][1] > now_sod + 60:
-        day = day - dt.timedelta(days=1)
+    if ref_now is None:
+        raise NoBridgeReference("bridge.log carries a time of day and no date, and no instant on the guest's "
+                                "clock was given to date it from")
+    # The nearest instant, not "today unless it looks later than now": the reference may be stamped slightly
+    # BEFORE the last line (the clock probe's, a fire's) as well as after it (the pull's). Correct whenever the
+    # reference is within 12 h of the line, which every stamp this capture carries is - and with the pull's own
+    # stamp it is the same answer the +60 s rule gave, so a run whose sources share one phase does not move.
+    anchor = dt.datetime.combine(ref_now.date(), dt.time(0)).replace(tzinfo=ref_now.tzinfo) \
+        + dt.timedelta(seconds=rows[-1][1])
+    day = min((anchor + dt.timedelta(days=k) for k in (-1, 0, 1)), key=lambda t: abs(t - ref_now)).date()
     dates = [None] * len(rows)
     dates[-1] = day
     for i in range(len(rows) - 2, -1, -1):
@@ -330,7 +393,7 @@ def parse_bridge(lines: List[str], anchor_now: Optional[dt.datetime]) -> List[Ev
         dates[i] = day
     evs: List[Ev] = []
     for (idx, sod, msg), d in zip(rows, dates):
-        t = dt.datetime.combine(d, dt.time(0)) + dt.timedelta(seconds=sod)
+        t = dt.datetime.combine(d, dt.time(0)).replace(tzinfo=tz) + dt.timedelta(seconds=sod)
         kind, kv = None, {}
         if msg.startswith("HOLD id=") and " seq=" in msg:
             kind = "HOLDPUB"; kv = dict(KV_RE.findall(msg))
@@ -380,7 +443,7 @@ def parse_bridge(lines: List[str], anchor_now: Optional[dt.datetime]) -> List[Ev
 
 # --------------------------------------------------------------------------------------------- the grader
 class Grader:
-    def __init__(self, out: str):
+    def __init__(self, out: str, ref_now_arg: Optional[str] = None):
         self.out = out
         self.rows: List[Tuple[str, str]] = []
         self.meta = self._load_json("meta.json", {})
@@ -390,13 +453,22 @@ class Grader:
         self.agent_lines = self._load_lines("agent.log")
         self.bridge_lines = self._load_lines("bridge.log")
         self.sync_txt = self._load_text("sync.txt")
-        self.pull_now = None
-        pn = self.meta.get("pull_now")
-        if pn:
-            try:
-                self.pull_now = parse_ts(pn)
-            except ValueError:
-                self.pull_now = None
+        self.where_txt = self._load_text("where.txt")
+        # The guest's own UTC offset, where the capture records it (the collector's `THC now=<ts> tz=<offset>`).
+        self.guest_tz = parse_utc_offset(self.meta.get("guest_utc_offset"))
+        self.guest_tz_src = "meta.json guest_utc_offset" if self.guest_tz else ""
+        if self.guest_tz is None:
+            m = re.search(r"THC now=\S+ \S+ tz=(\S+)", self.where_txt or "")
+            if m:
+                self.guest_tz = parse_utc_offset(m.group(1))
+                self.guest_tz_src = "where.txt tz=" + m.group(1) if self.guest_tz else ""
+        if self.guest_tz is None:
+            self.guest_tz = GUEST_ZONE_ASSUMED
+        self.ref_now_arg = ref_now_arg
+        self.ref_now: Optional[dt.datetime] = None
+        self.ref_src = ""
+        self.ref_tag = "unresolved"
+        self.ref_bad: List[str] = []
         self.offset = dt.timedelta(0)
         self.agent: List[Ev] = []
         self.bridge: List[Ev] = []
@@ -442,7 +514,73 @@ class Grader:
     def row(self, label: str, text: str):
         self.rows.append((label, text))
 
-    # -- clock
+    # -- clock: the instant bridge.log's times of day are dated from (the guest's, from THIS capture)
+    def _ref_candidates(self) -> List[Tuple[dt.datetime, str, bool, str]]:
+        """(instant, source, authoritative, short tag) for every instant on the guest's clock this capture carries."""
+        out: List[Tuple[dt.datetime, str, bool, str]] = []
+        if self.ref_now_arg:
+            out.append((parse_ts(self.ref_now_arg, self.guest_tz), "--ref-now (named by the operator)", True, "ref-now"))
+        pn = self.meta.get("pull_now")
+        if pn:
+            try:
+                out.append((parse_ts(pn, self.guest_tz), "meta.json pull_now (the collector's `THC now=` at the pull)",
+                            True, "pull_now"))
+            except ValueError:
+                self.ref_bad.append(f"meta.json pull_now={pn!r} is not a guest timestamp")
+        for fld in ("t_closed", "t_close", "t_seen", "t_start"):
+            m = re.search(r"THC sync [^\n]*\b" + fld + r"=(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?)", self.sync_txt or "")
+            if m:
+                out.append((parse_ts(m.group(1), self.guest_tz), f"sync.txt {fld} (the clock probe)", False, "sync:" + fld))
+        fts: List[Tuple[dt.datetime, str]] = []
+        for f in self.fires:
+            for fld in ("t1", "t0"):
+                if f.get(fld):
+                    try:
+                        fts.append((parse_ts(f[fld], self.guest_tz), f"fires.jsonl {f.get('label', '?')} {fld}"))
+                    except ValueError:
+                        self.ref_bad.append(f"fires.jsonl {f.get('label', '?')} {fld}={f[fld]!r} is not a guest timestamp")
+        if fts:
+            t, src = max(fts, key=lambda x: x[0])
+            out.append((t, src, False, ("fire:" + src.split()[-2]) if len(src.split()) > 2 else "fire"))
+        return out
+
+    def clock_reference(self) -> bool:
+        """Settle self.ref_now. False = nothing in this capture can date bridge.log, so nothing is graded."""
+        cands = self._ref_candidates()
+        bad = ("; " + ", ".join(self.ref_bad)) if self.ref_bad else ""
+        zone = self.guest_tz_src or f"zone not recorded in the capture, one assumed for all of it ({self.guest_tz})"
+        if not cands:
+            self.ref_tag = "none"
+            self.row("CLOCK-REF", "INSTRUMENT bridge.log carries a time of day and no date, and this capture carries "
+                                  "no instant on the guest's clock to date it from (no meta.json pull_now, no sync.txt "
+                                  "probe stamp, no fire timestamp) - re-grade with --ref-now '<yyyy-mm-dd "
+                                  f"HH:MM:SS.fff>' from the run's own record. This process's clock is not a reference{bad}")
+            return False
+        auth = [c for c in cands if c[2]]
+        pick = auth[0] if auth else max(cands, key=lambda c: c[0])
+        capture = [c[0] for c in cands if not c[1].startswith("--ref-now")]
+        spread = (max(capture) - min(capture)) if capture else dt.timedelta(0)
+        if spread > dt.timedelta(hours=12):
+            self.ref_tag = "disagree"
+            self.row("CLOCK-REF", f"INSTRUMENT the capture's own guest instants span {spread} (a run is under an hour) - "
+                                  f"this directory mixes runs, or the guest's clock moved mid-run; a log with no date "
+                                  f"cannot be dated from it{bad}")
+            return False
+        self.ref_now, self.ref_src, self.ref_tag = pick[0], pick[1], pick[3]
+        stamp = pick[0].strftime(TS_FMT)[:-3]
+        if pick[2]:
+            self.row("CLOCK-REF", f"PASS bridge.log dated on the guest's clock from {pick[1]} = {stamp} "
+                                  f"(guest {zone}; {len(cands)} capture instant(s), spread {spread}){bad}")
+        else:
+            # A FALLBACK FIRING IS AN ANOMALY, AND IT IS SAID OUT LOUD. The pull's own stamp is the datum the
+            # design asks for; without it the rows below still grade (the probe's / the fire's stamp is the same
+            # guest clock), but the RUN is not closed - re-pull, or re-grade with --ref-now.
+            self.row("CLOCK-REF", f"INSTRUMENT the pull's own `THC now=` stamp is absent from meta.json - bridge.log "
+                                  f"dated from {pick[1]} = {stamp} instead (guest {zone}; spread {spread}). The rows "
+                                  f"below are graded on that; the RUN is NOT closed: re-pull, or re-grade with "
+                                  f"--ref-now{bad}")
+        return True
+
     def tie_clock(self) -> bool:
         """The CLOCK PROBE: charmap's CREATE in the agent log vs the probe's own local stamps."""
         m = re.search(r"THC sync t_start=(\S+ \S+) t_seen=(\S+ \S+) hwnd=0x([0-9a-fA-F]+)", self.sync_txt or "")
@@ -450,8 +588,9 @@ class Grader:
             self.row("CLOCK", "INSTRUMENT the clock probe produced no window (sync.txt has no t_seen/hwnd) - the agent "
                               "log's clock cannot be tied to the guest clock; nothing below is joinable")
             return False
-        t_start, t_seen, hwnd = parse_ts(m.group(1)), parse_ts(m.group(2)), m.group(3).lower()
-        raw = parse_agent(self.agent_lines or [], dt.timedelta(0))
+        t_start, t_seen = parse_ts(m.group(1), self.guest_tz), parse_ts(m.group(2), self.guest_tz)
+        hwnd = m.group(3).lower()
+        raw = parse_agent(self.agent_lines or [], dt.timedelta(0), self.guest_tz)
         creates = [e for e in raw if e.kind == "CREATE" and e.hwnd == hwnd]
         if not creates:
             self.row("CLOCK", f"INSTRUMENT no QGAPROTO CREATE for the probe window 0x{hwnd} in the agent log - "
@@ -529,8 +668,8 @@ class Grader:
         label, slug = f["label"], f.get("slug", "")
         if not f.get("fired"):
             return "INSTRUMENT", f"no FIRED line for {slug or label} (attempt {f.get('attempt')}) - the stimulus never confirmed; nothing to grade"
-        t0 = parse_ts(f["t0"])
-        t1 = parse_ts(f["t1"]) if f.get("t1") else t0 + dt.timedelta(seconds=2)
+        t0 = parse_ts(f["t0"], self.guest_tz)
+        t1 = parse_ts(f["t1"], self.guest_tz) if f.get("t1") else t0 + dt.timedelta(seconds=2)
         aumid = f.get("aumid", "")
         mode_ns = f.get("mode") == "nonseamless"
         th = title_hash_hex(slug)
@@ -720,7 +859,7 @@ class Grader:
         unmaps = [e for e in self.agent if e.kind == "UNMAP" and e.hwnd in B and a <= e.t <= b]
         creates = [e for e in self.agent if e.kind in ("CREATE", "HELDDEFER", "CARD") and e.hwnd in B and a <= e.t <= b]
         # another fire within the attribution window makes "whose MAP is this" undecidable
-        others = [g for g in self.fires if g is not f and g.get("fired") and abs((parse_ts(g["t0"]) - t0).total_seconds()) < CONTROL_BANNER_WINDOW_S]
+        others = [g for g in self.fires if g is not f and g.get("fired") and abs((parse_ts(g["t0"], self.guest_tz) - t0).total_seconds()) < CONTROL_BANNER_WINDOW_S]
         amb = " ambiguous-attribution" if others else ""
         mapped = bool(maps)
         delay_ms = int((maps[0].t - t0).total_seconds() * 1000) if maps else None
@@ -762,7 +901,7 @@ class Grader:
                                + ("; HOLD records live" if live else ("; NO `HOLD records live` (mixed install?)" if self.hold_build == 1 else "")))
         if self.hold_build == 1 and not live:
             self.row("HOLD-IPC", "FAIL hold build but the bridge never opened the records section (`HOLD records live` absent) - mixed install")
-        first_fire = min((parse_ts(f["t0"]) for f in self.fires if f.get("fired")), default=None)
+        first_fire = min((parse_ts(f["t0"], self.guest_tz) for f in self.fires if f.get("fired")), default=None)
         if first_fire:
             restarts = [e for e in self.bridge if e.kind in ("ARMED", "STOPPED") and e.t > first_fire]
             if restarts:
@@ -851,9 +990,12 @@ class Grader:
         if not self.fires:
             self.row("GRADED", "INSTRUMENT fires.jsonl is empty - no toast was recorded as fired; nothing graded")
             return self._finish()
+        if not self.clock_reference():
+            self.row("GRADED", "INSTRUMENT bridge.log cannot be dated - see CLOCK-REF; nothing graded")
+            return self._finish()
         clock_ok = self.tie_clock()
-        self.agent = parse_agent(self.agent_lines, self.offset)
-        self.bridge = parse_bridge(self.bridge_lines, self.pull_now)
+        self.agent = parse_agent(self.agent_lines, self.offset, self.guest_tz)
+        self.bridge = parse_bridge(self.bridge_lines, self.ref_now, self.guest_tz)
         self.run_level()
         summary = []
         for f in self.fires:
@@ -893,7 +1035,8 @@ class Grader:
             verdict = "PASS (the defect reproduced as predicted - the detectors are proven)"
         line = (f"GRADED run={self.meta.get('run_id', '?')} package_version={self.meta.get('package_version', '?')} "
                 f"driver_repo_commit={str(self.meta.get('driver_repo_commit', '?'))[:12]} hold_build={self.hold_build} role={role} "
-                f"subject={self.meta.get('subject', '?')}: {' '.join(summary or [])} fails={len(fails)} ungraded={len(ungraded)} -> {verdict}")
+                f"subject={self.meta.get('subject', '?')} clock_ref={self.ref_tag}: {' '.join(summary or [])} "
+                f"fails={len(fails)} ungraded={len(ungraded)} -> {verdict}")
         self.row("GRADED", line)
         os.makedirs(self.out, exist_ok=True)
         with open(self._p("verdicts.txt"), "a", encoding="utf-8") as f:
@@ -901,7 +1044,11 @@ class Grader:
                 f.write(f"{l}|{t}\n")
         with open(self._p("grade.json"), "w", encoding="utf-8") as f:
             json.dump({"rows": self.rows, "verdict": verdict, "fails": fails, "ungraded": ungraded,
-                       "clock_offset_s": self.offset.total_seconds(), "hold_build": self.hold_build}, f, indent=2)
+                       "clock_offset_s": self.offset.total_seconds(), "hold_build": self.hold_build,
+                       "clock_ref": (self.ref_now.strftime(TS_FMT)[:-3] if self.ref_now else None),
+                       "clock_ref_source": self.ref_src or None,
+                       "guest_utc_offset_s": self.guest_tz.utcoffset(None).total_seconds(),
+                       "guest_utc_offset_source": self.guest_tz_src or None}, f, indent=2)
         for l, t in self.rows:
             print(f"{l}|{t}")
         return 0 if verdict.startswith("PASS") else 1
@@ -956,11 +1103,18 @@ def decode_pull(out: str, pullfile: str) -> int:
     with open(pullfile, encoding="utf-8", errors="replace") as f:
         lines = [ln.rstrip("\r\n") for ln in f]
     now = None
+    guest_tz = None
     blocks: Dict[str, dict] = {}
     cur = None
     for ln in lines:
         if ln.startswith("THC now="):
             now = ln[len("THC now="):].strip()
+            # `THC now=<ts>` in pull mode, `THC now=<ts> tz=<offset>` in where mode (toast-hold-collect.ps1):
+            # keep them apart, because the suffixed shape used to make parse_ts raise and the grader then
+            # answered the question with THIS process's clock instead of saying it had no reference.
+            mtz = re.match(r"^(.*?)\s+tz=(\S+)$", now)
+            if mtz:
+                now, guest_tz = mtz.group(1), mtz.group(2)
         m = re.match(r"THC PULL name=(\w+) lines=(\d+) bytes=(\d+) sha256=([0-9a-f]{64}) b64lines=(\d+)", ln)
         if m:
             cur = m.group(1)
@@ -1002,8 +1156,16 @@ def decode_pull(out: str, pullfile: str) -> int:
         except (OSError, ValueError):
             meta = {}
         meta["pull_now"] = now
+        if guest_tz:
+            meta["guest_utc_offset"] = guest_tz
         with open(mp, "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2)
+        print(f"DECODE now: OK {now}" + (f" tz={guest_tz}" if guest_tz else ""))
+    else:
+        # bridge.log has no dates, so this stamp IS the date. Losing it does not break the transfer the
+        # counts and the hash verify, which is exactly why it has to be said here: without it the grader
+        # has to date the bridge from a secondary stamp and the run does not close (CLOCK-REF).
+        print("DECODE now: MISSING - the pull carried no `THC now=` stamp; bridge.log's date has no primary source")
     return rc
 
 
@@ -1013,14 +1175,17 @@ class Fx:
     clock is offset by +1 h to prove the probe-derived offset is applied."""
     AGENT_OFF = dt.timedelta(hours=1)
 
-    def __init__(self, hold_build: int):
+    def __init__(self, hold_build: int, base: Optional[dt.datetime] = None):
         self.d = tempfile.mkdtemp(prefix="thgrade-")
         self.hold = hold_build
         self.agent: List[Tuple[dt.datetime, str]] = []
         self.bridge: List[Tuple[dt.datetime, str]] = []
         self.fires: List[dict] = []
         self.waits: List[dict] = []
-        self.base = dt.datetime(2026, 10, 6, 12, 0, 0)
+        # The guest's wall clock at the fixture's t=0. A caller passes one to put the run at a chosen place on
+        # the guest's clock (tools/tests/toasthold-grade-clock-selftest.sh: a skew against the host, a midnight).
+        self.base = base or dt.datetime(2026, 10, 6, 12, 0, 0)
+        self.guest_tz_txt = "00:00:00"            # what where.txt records as the guest's offset
         # the probe window: charmap at 11:59:50
         self.sync_hwnd = "7a0e2"
         ts = self.t(-10.0)
@@ -1085,6 +1250,14 @@ class Fx:
                 f.write(json.dumps(r) + "\n")
         with open(os.path.join(self.d, "sync.txt"), "w", encoding="utf-8") as f:
             f.write(self.sync)
+        # where.txt AS THE HARNESS WRITES IT (toast-hold-test.sh: `printf '%s\n' "$where" > "$OUT/where.txt"`),
+        # carrying the guest's own UTC offset. The real line, win11r-thold 2026-10-06, was
+        #   THC now=2026-10-06 19:11:39.705 tz=00:00:00      while this qube's `date` read 16:11:38.
+        with open(os.path.join(self.d, "where.txt"), "w", encoding="utf-8") as f:
+            f.write(f"THC where=C:\\Users\\user\\Documents\\QubesIncoming\\win-idd-mgmt\n"
+                    f"THC logdir=Q:\\Qubes Logs agentlog=gui-agent-20261006-191122-1512.log agentlines=2512\n"
+                    f"THC bridgelog=Q:\\Qubes Logs\\bridge.log exists=1 bridgelines=470\n"
+                    f"THC now={self.fmt(self.t(-20))} tz={self.guest_tz_txt}\n")
         with open(os.path.join(self.d, "meta.json"), "w", encoding="utf-8") as f:
             json.dump({"hold_build": self.hold, "run_id": "selftest", "package_version": "4.3.35+agent.selftest",
                        "driver_repo_commit": "deadbeef", "subject": "fixture", "pull_now": self.fmt(self.t(600))}, f)
@@ -1370,6 +1543,65 @@ def selftest() -> int:
     g = _grade_quiet(fx.write())
     check("probe CREATE absent -> CLOCK INSTRUMENT and S1a ungraded", _row(g, "CLOCK").startswith("INSTRUMENT") and _row(g, "S1a").startswith("INSTRUMENT"), _row(g, "CLOCK")[:100])
 
+    # THE INSTANT bridge.log IS DATED FROM. The fixture's guest clock is 2026-10-06 and this process's is
+    # not, so a grader that reaches for dt.datetime.now() dates the whole bridge log to TODAY and every
+    # toast reads UNLISTED - no skewed zone needed to show it here. The same cases with a real 3 h phase
+    # difference, and the direction in which the same error reads as PASS, are in
+    # tools/tests/toasthold-grade-clock-selftest.sh, each seen to fail against the pre-fix file.
+    def _meta_edit(d, mutate):
+        with open(os.path.join(d, "meta.json"), encoding="utf-8") as f:
+            m = json.load(f)
+        mutate(m)
+        with open(os.path.join(d, "meta.json"), "w", encoding="utf-8") as f:
+            json.dump(m, f)
+        return d
+
+    def _cls(g, label):
+        parts = _row(g, label).split(" ", 2)
+        return parts[1] if len(parts) > 1 else "?"
+
+    fx = Fx(1); ok_bridged(fx); GUEST_DAY = fx.base.date(); g_ref = _grade_quiet(fx.write())
+    fx = Fx(1); ok_bridged(fx)
+    g_lost = _grade_quiet(_meta_edit(fx.write(), lambda m: m.pop("pull_now", None)))
+    check("pull stamp lost -> dated from the capture's other guest instants, class unchanged",
+          _cls(g_lost, "S1a") == _cls(g_ref, "S1a") == "OK-BRIDGED", f"{_cls(g_lost, 'S1a')} vs {_cls(g_ref, 'S1a')}")
+    # THE PROPERTY ITSELF, not a proxy for it: the DAY the dateless lines were given. A class can come
+    # out right for the wrong reason - this process's clock LATER than the capture makes the window that
+    # binds a record to its fire vacuously true, and then the row still reads OK-BRIDGED.
+    for nm, gg in (("present", g_ref), ("lost", g_lost)):
+        days = sorted({e.t.date() for e in gg.bridge})
+        check(f"pull stamp {nm} -> bridge.log dated on the guest's day ({GUEST_DAY}), not this process's",
+              days == [GUEST_DAY], f"{len(gg.bridge)} event(s) on {days}")
+    check("pull stamp lost -> CLOCK-REF INSTRUMENT (a fallback is said out loud; the run does not close)",
+          _row(g_lost, "CLOCK-REF").startswith("INSTRUMENT") and "absent" in _row(g_lost, "CLOCK-REF")
+          and _row(g_lost, "GRADED").endswith("-> UNGRADED"), _row(g_lost, "CLOCK-REF")[:110])
+    check("pull stamp present -> CLOCK-REF PASS naming it", _row(g_ref, "CLOCK-REF").startswith("PASS")
+          and "pull_now" in _row(g_ref, "CLOCK-REF") and _row(g_ref, "GRADED").endswith("-> PASS"),
+          _row(g_ref, "CLOCK-REF")[:110])
+    # `THC now=<ts> tz=<offset>` is what the collector's `where` mode prints; that suffix used to make
+    # strptime raise, and the swallowed exception read as "no reference" - i.e. the host clock, silently.
+    fx = Fx(1); ok_bridged(fx)
+    g_tz = _grade_quiet(_meta_edit(fx.write(), lambda m: m.__setitem__("pull_now", m["pull_now"] + " tz=03:00:00")))
+    check("pull stamp with a tz= suffix is a stamp, not a parse failure",
+          _row(g_tz, "CLOCK-REF").startswith("PASS") and _cls(g_tz, "S1a") == "OK-BRIDGED", _row(g_tz, "CLOCK-REF")[:110])
+    # No instant anywhere in the capture: a refusal, not a guess.
+    fx = Fx(1); ok_bridged(fx); d = _meta_edit(fx.write(), lambda m: m.pop("pull_now", None))
+    open(os.path.join(d, "sync.txt"), "w").close()
+    rows = [json.loads(l) for l in open(os.path.join(d, "fires.jsonl"), encoding="utf-8") if l.strip()]
+    for r in rows:
+        r["t0"] = r["t1"] = ""
+    with open(os.path.join(d, "fires.jsonl"), "w", encoding="utf-8") as f:
+        f.write("".join(json.dumps(r) + "\n" for r in rows))
+    g_none = _grade_quiet(d)
+    check("no guest instant at all -> CLOCK-REF INSTRUMENT and nothing graded",
+          "no instant on the guest's clock" in _row(g_none, "CLOCK-REF") and _row(g_none, "GRADED").startswith("INSTRUMENT"),
+          _row(g_none, "CLOCK-REF")[:130])
+    try:
+        parse_bridge(["16:32:22 [INFO] connected (server version 1.0)"], None)
+        check("parse_bridge without a reference raises", False, "it returned events instead")
+    except NoBridgeReference:
+        check("parse_bridge without a reference raises NoBridgeReference", True)
+
     # hold gate INERT on a hold build -> FAIL
     fx = Fx(1); ok_bridged(fx)
     fx.agent = [(t, m) for (t, m) in fx.agent if "QGATOASTHOLD gate" not in m]
@@ -1493,7 +1725,16 @@ def main() -> int:
     ap.add_argument("--mode", default="seamless")
     ap.add_argument("--attempt", type=int, default=1)
     ap.add_argument("--decode-pull", metavar="PULLFILE")
+    ap.add_argument("--ref-now", metavar="TS", default=None,
+                    help="the GUEST's clock at the pull ('yyyy-mm-dd HH:MM:SS[.fff]'), for a dir whose own "
+                         "`THC now=` stamp was lost. bridge.log has no dates; this process's clock is not a "
+                         "reference for them.")
     a = ap.parse_args()
+    if a.ref_now is not None:
+        try:
+            parse_ts(a.ref_now)
+        except ValueError as e:
+            print(f"--ref-now: {e}", file=sys.stderr); return 2
     if a.selftest:
         return selftest()
     if a.record_fire:
@@ -1507,7 +1748,7 @@ def main() -> int:
     if a.grade:
         if not a.out:
             print("--grade needs --out", file=sys.stderr); return 2
-        return Grader(a.out).grade()
+        return Grader(a.out, ref_now_arg=a.ref_now).grade()
     ap.print_help()
     return 2
 

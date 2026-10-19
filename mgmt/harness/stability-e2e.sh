@@ -26,7 +26,7 @@ source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the notepad each ch
 # a run produced - shots, logs, the run ledger - was deleted with the job that made it.
 T="${STAB_OUT:-$HOME/qwt-accept/stability}"; S=$T/stability; mkdir -p $S
 R=$S/run.log; : > "$R"
-say(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$R"; }
+say(){ echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$R"; }
 PASS=0; FAIL=0
 ok(){ say "PASS  $*"; PASS=$((PASS+1)); }
 no(){ say "FAIL  $*"; FAIL=$((FAIL+1)); }
