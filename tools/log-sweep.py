@@ -1018,9 +1018,26 @@ def parse_winutils(lf, raw_lines):
             if mm:
                 lf.uptime_s = float(mm.group(1))
                 lf.boot_time = ts - dt.timedelta(seconds=lf.uptime_s)
-                if lf.inits:
-                    lf.inits[-1]["uptime_s"] = lf.uptime_s
-                    lf.inits[-1]["boot_time"] = lf.boot_time
+                # A SECOND UPTIME IN ONE RECORD IS A NEW INSTANCE WHOSE "Log started" WAS LOST, and
+                # until 2026-10-19 it silently OVERWROTE the previous instance's uptime - which is
+                # the one field boot attribution depends on. MEASURED on the 4.3.37 acceptance,
+                # win10-clean: an unclean guest shutdown left ~7.8 KB of NUL bytes in the per-day
+                # agent log, swallowing pid 3748's "Log started". The lines then parsed as
+                #     record 0: pid 3652, uptime 12.421   <- 3748's uptime, 3652's real one lost
+                #     record 1: pid 3748, uptime None
+                # because the normal order is Log started -> System uptime -> process ID: the
+                # uptime arrived while record 0 was still current, and only the pid line opened a
+                # new record. Two of three instances were then billed to the NEXT boot, two landed
+                # in boot 4, and agent_instances_per_boot read 2 against a max of 1 - a P2 breach
+                # on a guest whose own log says every exit was orderly.
+                # THE UPTIME IS THE MARKER, which this file's own comment above already argues: it
+                # is the only init line that cannot be confused between instances. Opening here
+                # makes a lost "Log started" cost nothing but the module name.
+                if not lf.inits or lf.inits[-1]["uptime_s"] is not None:
+                    lf.inits.append({"ts": ts, "pid": None, "uptime_s": None, "boot_time": None,
+                                     "session": None, "version": None, "module": lf.module})
+                lf.inits[-1]["uptime_s"] = lf.uptime_s
+                lf.inits[-1]["boot_time"] = lf.boot_time
             mm = re.match(r"Session: (\d+)", msg)
             if mm:
                 lf.session = int(mm.group(1))
@@ -1402,6 +1419,25 @@ def load_logs(logsdir):
                     placeholders.append(("empty-expected", name, _why))
             if lf.partial:
                 problems.append(("partial", name, "over the collector's size cap: head + W/E/suspicious lines + tail only (%s lines in the file)" % lf.total_lines))
+            # A NUL RUN IS LOST DATA, AND LOST DATA IS REPORTED. An unclean guest shutdown can leave
+            # a log whose size was extended but whose bytes never reached the disk; the next boot
+            # appends after the hole. MEASURED on the 4.3.37 acceptance, win10-clean: ~7.8 KB of NULs
+            # in gui-agent-20261019.log swallowed an instance's "Log started" line. The parser no
+            # longer mis-attributes because of it (see the uptime arm), but the sweep was absorbing
+            # the hole in silence - and this project's rule is that missing data fails rather than
+            # reads as a clean run. The collector's `partial` flag does NOT cover it: the file is
+            # whole and under the cap, with a hole in the middle.
+            try:
+                with open(path, "rb") as _fh:
+                    _blob = _fh.read()
+                _nul = _blob.count(b"\x00")
+                if _nul >= 512:
+                    problems.append(("nul-hole", name,
+                        "%d NUL byte(s) inside the file - data the guest's filesystem never wrote "
+                        "(an unclean shutdown extends the size without the bytes); any log line in "
+                        "that hole is LOST, so this file is not a complete record" % _nul))
+            except OSError:
+                pass   # unreadable is already the 'missing'/'fileerr' channel's business
             files.append(lf)
         for fe in meta.get("fileerrs", []):
             problems.append(("fileerr", b64dec_path(fe.get("pathb64", "?")), fe.get("error", "?")))

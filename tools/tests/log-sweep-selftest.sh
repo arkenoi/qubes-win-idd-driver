@@ -555,6 +555,36 @@ ev_twobuild = ['EV 2026-10-07 10:02:40.000 [Microsoft-Windows-TaskScheduler/Oper
                'EV 2026-10-07 10:05:40.000 [Microsoft-Windows-TaskScheduler/Operational] id=203 level=3 Microsoft-Windows-TaskScheduler: Task Scheduler failed to launch action "powershell.exe" in instance "{aaaa1111-0000-0000-0000-000000000002}" of task "\\QwtClockSync" , in error code 2147942403.']
 write("twobuild.pull", stream([(TBO, "agent", tb_old), (TBN, "agent", tb_new), TB_BRIDGE], events(ev_twobuild)))
 
+# ---- nulhole: AN INSTANCE WHOSE "Log started" WAS LOST TO A NUL HOLE --------------------------
+# THE SHAPE IS THE MEASURED ONE, bytes and all. 4.3.37 release acceptance, win10-clean: an unclean
+# guest shutdown left 7976 NUL bytes inside the per-day agent log (and 15191 across five files on
+# that cell; ZERO on the other seven), swallowing pid 3748's "Log started" line. The block then
+# begins at "System uptime", and because the normal order is
+#     Log started -> System uptime -> Running as user ... process ID
+# that uptime landed on the PREVIOUS instance's record and only the pid line opened a new one:
+#     record 0: pid 3652, uptime 12.421   <- 3748's uptime; 3652's own 16.843 overwritten
+#     record 1: pid 3748, uptime None
+# Boot attribution reads the init's uptime, so two of three instances were billed to the NEXT boot,
+# two landed in boot 4, and agent_instances_per_boot breached at 2 against a max of 1 - on a guest
+# whose own log says every exit was orderly (QGAEXIT ... an expected exit, not a failure).
+# The three uptimes and pids below are that capture's.
+NH_A = [wu2("100031.200", 3652, 3656, "I", "LogInit", "Log started, module name: gui-agent"),
+        wu2("100031.200", 3652, 3656, "I", "LogInit", "System uptime: 16.843 seconds"),
+        wu2("100031.200", 3652, 3656, "I", "LogInit", "Running as user: SYSTEM, process ID: 3652"),
+        wu2("100031.200", 3652, 3656, "I", "LogInit", "Module version: 9.9.9.1"),
+        wu2("100031.200", 3652, 3656, "I", "LogInit", "Session: 1"),
+        wu2("100240.000", 3652, 3700, "I", "LifecycleWndProc", "QGAENDSESSION orderly exit complete - exit code QGA_EXIT_SESSION_END")]
+# The SECOND instance, with its "Log started" MISSING - that is the whole point of the fixture.
+NH_B = [wu2("101130.000", 3748, 3752, "I", "LogInit", "System uptime: 12.421 seconds"),
+        wu2("101130.000", 3748, 3752, "I", "LogInit", "Running as user: SYSTEM, process ID: 3748"),
+        wu2("101130.000", 3748, 3752, "I", "LogInit", "Module version: 9.9.9.1"),
+        wu2("101130.000", 3748, 3752, "I", "LogInit", "Session: 1"),
+        wu2("101200.000", 3748, 3752, "I", "WatchForEvents", "exiting")]
+# Two boots, one per instance, from the uptimes above: 10:01:31.2 - 16.843 and 10:11:30 - 12.421.
+ev_nulhole = ['EV 2026-10-07 10:01:14.357 [System] id=6005 level=4 EventLog: The Event log service was started.',
+              'EV 2026-10-07 10:11:17.579 [System] id=6005 level=4 EventLog: The Event log service was started.']
+write("nulhole.pull", stream([("gui-agent-20261007.log", "agent", NH_A + NH_B)], events(ev_nulhole)))
+
 # ---- pidreuse: ONE PID, TWO BOOTS, TWO INITS - the condition the fastreboot fixture could not hold
 # THE NUMBERS ARE THE MEASURED ONES. Campaign 20261018-172640, win11-clean: the accept battery
 # reboots the guest for boot-path acceptance, and the agent came up with THE SAME PID either side -
@@ -671,7 +701,7 @@ analyze(){ # $1=analyzer $2=logsdir $3=baseline $4=judge $5=tag -> rc; report at
 field(){ python3 -c "import json,sys; r=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$1" "$2"; }
 
 # ---- decode every fixture with the real decoder --------------------------------------------------------------------
-for f in base newsig rise three stoperr empty twoboot clockflip rapidboot taskok vchanwd phaseflip skipnames skipchatty bootshut inv twoproc msiok msibad twobuild pidreuse fastreboot reqstop svcrestart turnover; do
+for f in base newsig rise three stoperr empty twoboot clockflip rapidboot taskok vchanwd phaseflip skipnames skipchatty bootshut inv twoproc msiok msibad twobuild pidreuse fastreboot reqstop svcrestart turnover nulhole; do
   rc=$(decode "$SRC" "$T/$f.pull" "$T/$f")
   [ "$rc" = 0 ] || { echo "FATAL: the $f fixture did not decode (rc=$rc): $(tail -2 "$T/$f.decode.txt")"; exit 2; }
   # EVERY LINE IN THESE CORPORA IS WRITTEN BY THIS TEST, so the run declares the errors it caused - which is
@@ -2070,6 +2100,36 @@ KR=$(knob relpriorbuild); read -r _ t57hk <<<"$(tbm "$KR" t57kr)"
 t57c=$(field "$T/t2.json" 'r["metrics"]["dom0_loud_failures"]')
 [ -n "$t57c" ] && ok "T57 a one-build capture is unaffected by the scope (dom0_loud_failures=$t57c)" \
                || bad "T57 could not read dom0_loud_failures from the one-build report"
+
+# ---- T58 A LOST "Log started" MUST NOT SLIDE THE NEXT INSTANCE'S UPTIME ONTO THE PREVIOUS ONE --
+# See the nulhole fixture for the measurement. The uptime is the only init line that cannot be
+# confused between instances, so a SECOND uptime in one record opens a new record there.
+nh(){ # $1=analyzer $2=tag -> "<instances> <per_boot> <boots> <pid:boot,...>"
+  python3 "$1" analyze "$T/nulhole" --baseline "$T/baseline.json" --out "$T/$2.json" \
+      --summary "$T/$2.txt" --label "$2" --workdir "$T/work-$2" --jev-cmd "$T/jev-expected.py" > "$T/$2.out" 2>&1
+  field "$T/$2.json" 'str(r["metrics"]["agent_instances"])+" "+str(r["metrics"]["agent_instances_per_boot"])+" "+str(r["metrics"]["boots"])+" "+",".join("%s:%s"%(i["pid"],i["boot"]) for i in r["instances"])'
+}
+read -r n58i n58p n58b n58m <<<"$(nh "$SRC" t58)"
+[ "$n58i" = 2 ] && ok "T58 an init block with no 'Log started' is still its own instance (agent_instances=$n58i)" \
+                || bad "T58 agent_instances=$n58i, want 2 - the lost line cost an instance"
+[ "$n58p" = 1 ] && ok "T58 each instance is billed to ITS OWN boot, so the per-boot count stays 1 (=$n58p, boots=$n58b)" \
+                || bad "T58 agent_instances_per_boot=$n58p, want 1 - the uptime slid onto the previous record (map $n58m)"
+n58x=$(printf '%s' "$n58m" | tr ',' '\n' | cut -d: -f2 | sort -u | grep -ac .)
+[ "$n58x" = 2 ] && ok "T58 the two instances map to DIFFERENT boots ($n58m)" \
+                || bad "T58 instance->boot map is $n58m - both instances share a boot, which is the defect"
+# SEEN TO FAIL against the shipped analyzer BEFORE this fix: the uptime arm wrote into the previous
+# record, so the first instance carried the second's uptime and both landed in one boot.
+PREV="$T/log-sweep-prev.py"
+if git -C "$(git rev-parse --show-toplevel)" show HEAD:tools/log-sweep.py > "$PREV" 2>/dev/null && [ -s "$PREV" ]; then
+  if python3 -m py_compile "$PREV" >/dev/null 2>&1; then
+    read -r p58i p58p _ p58m <<<"$(nh "$PREV" t58prev)"
+    if [ "$p58p" != 1 ] || [ "$p58i" != 2 ]; then
+      ok "T58 SEEN TO FAIL on the previous analyzer: the lost line mis-bills the instances (instances=$p58i per_boot=$p58p map=$p58m)"
+    else
+      bad "T58 the previous analyzer gave the right answer too (instances=$p58i per_boot=$p58p) - this fixture does not drive the defect"
+    fi
+  else bad "T58 could not compile the previous analyzer to drive the defect"; fi
+else bad "T58 could not read HEAD:tools/log-sweep.py to drive the defect"; fi
 
 echo "--- $pass passed, $fail failed; fixtures/outputs in $T"
 [ "$fail" = 0 ] && exit 0 || exit 1
