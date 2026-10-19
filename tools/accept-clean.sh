@@ -71,11 +71,22 @@ fi   # SKIP_PROVISION
 # --- 3. reboot: acceptance is the BOOT path, not the just-installed session ---------
 log "reboot for boot-path acceptance"
 qq shutdown >/dev/null 2>&1
-t0=$(date +%s)
+# THE WAIT FOR Halted HAD TWO EXITS AND NO MARKER, so a guest that did not halt within the bound
+# fell out of the loop and was STARTED ANYWAY - starting a domain that is still writing is exactly
+# how a guest loses its unflushed tail. MEASURED on the 4.3.37 acceptance, win10-clean: 7976 NUL
+# bytes inside gui-agent-20261019.log and 15191 across five files on that cell, ZERO on the other
+# seven (findings/issues.md NULHOLEWASABSORBEDSILENTLY). The hole swallowed an instance's
+# "Log started" line, which then breached agent_instances_per_boot on a guest whose own log says
+# every exit was orderly. Whether this loop is what did it is NOT established - that is precisely
+# because it never said which exit it took. Now it does: Halted is the marker, the bound is named,
+# and a guest still running at the bound is a failure rather than something to start on top of.
+t0=$(date +%s); halted=0
 while [ $(( $(date +%s) - t0 )) -lt 300 ]; do
-    QTEST_VM="$VM" "$HERE/tools/qtest" state 2>/dev/null | tr -d '\0' | grep -q Halted && break
+    if QTEST_VM="$VM" "$HERE/tools/qtest" state 2>/dev/null | tr -d '\0' | grep -q Halted; then halted=1; break; fi
     sleep 10
 done
+[ "$halted" = 1 ] || fail "guest did not reach Halted within 300 s of the shutdown - NOT started on top of it (a domain still writing loses its unflushed log tail; see NULHOLEWASABSORBEDSILENTLY)"
+log "guest reached Halted after $(( $(date +%s) - t0 ))s - starting it for the boot path"
 QTEST_VM="$VM" "$HERE/tools/qtest" start >/dev/null 2>&1
 t0=$(date +%s)
 until out=$(qq run 'echo BOOT_OK' 2>&1) && grep -q BOOT_OK <<<"$out"; do
