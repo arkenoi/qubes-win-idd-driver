@@ -912,7 +912,28 @@ static class Relay
             else if (args[i] == "--user" && i + 1 < args.Length) user = args[++i];
             else if (args[i] == "--log" && i + 1 < args.Length) logDir = args[++i];
             else if (args[i] == "--parent-pid" && i + 1 < args.Length) { if (!int.TryParse(args[++i], out parentPid)) parentPid = 0; }
-            else { int p; if (int.TryParse(args[i], out p)) port = p; }
+            // A BARE INTEGER IS THE PORT ONLY IN THE FIRST POSITIONAL SLOT, AND ANYTHING ELSE IS A
+            // REFUSAL. The old catch-all was `if (int.TryParse(args[i], out p)) port = p;` for ANY
+            // unmatched token, which turned every unknown flag into a silent port change: the flag
+            // itself failed to parse and was dropped, then its VALUE parsed and became the port.
+            // MEASURED 2026-10-19, release 4.3.37 acceptance, feature test template-update on
+            // win11de-tup, from the relay's own log:
+            //     05:22:08.815 listen 127.0.0.1:3312 target=@default user=SYSTEM self=...
+            // 3312 was the updater pass's PID. The deploy had kept a September exe (QWTRELAYBUSY -
+            // something was still holding 8082, so the compile was skipped), and that binary
+            // predates --parent-pid, so `--parent-pid 3312` bound the relay to 3312 and never to
+            // 8082. WinHTTP pointed at 8082, nothing served it, and every update pass on that
+            // template had been failing that way since September while the deploy reported ok.
+            // This cannot fix a binary already on a guest - that is what the deploy's refusal is
+            // for - but it stops the NEXT flag doing the same thing, and it makes the failure loud
+            // instead of a working-looking relay on a port nobody asked for.
+            else if (i == 1 && int.TryParse(args[i], out port)) { /* --listen <port> */ }
+            else
+            {
+                Console.Error.WriteLine("qubes-updates-relay: unrecognised argument '" + args[i] +
+                    "' - refusing rather than guessing (an unknown flag's value must never become the listen port)");
+                return 2;
+            }
         }
         string self = Process.GetCurrentProcess().MainModule.FileName;
         string logPath = Path.Combine(logDir, "qubes-updates-relay.log");

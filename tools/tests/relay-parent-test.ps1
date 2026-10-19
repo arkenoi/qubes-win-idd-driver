@@ -146,6 +146,35 @@ Check 'wired: Start-Relay passes ''--parent-pid'',"$PID" to the relay' ($updater
 Check 'wired: RunListen parses --parent-pid and arms the watchdog only when it is given (parentPid > 0)' `
       ($relay -match 'args\[i\] == "--parent-pid"' -and $relay -match 'if \(parentPid > 0\)\s*\r?\n\s*StartParentWatchdog\(parentPid, ParentCheckMs, logPath, delegate \{ Environment\.Exit\(3\); \}\);')
 
+# ---- THE ARGUMENT CATCH-ALL MUST NOT TURN AN UNKNOWN FLAG'S VALUE INTO THE LISTEN PORT ----------
+# MEASURED 2026-10-19, release 4.3.37 acceptance, feature test template-update on win11de-tup, from
+# the relay's OWN log: `listen 127.0.0.1:3312 target=@default user=SYSTEM` - 3312 was the updater
+# pass's PID. The deploy had kept a September exe (QWTRELAYBUSY: something still held 8082, so the
+# compile was skipped) and that binary predates --parent-pid, so RunListen's old catch-all
+#     else { int p; if (int.TryParse(args[i], out p)) port = p; }
+# dropped the unknown flag and then took its VALUE as the port. WinHTTP pointed at 8082, nothing
+# served it, and every update pass on that template failed that way since September.
+# RunListen REFUSES BEFORE IT BINDS, so these cases are the real code path, not a shape match:
+# the parse loop runs before the listener is created, so an unknown argument returns 2 having
+# touched nothing. The port used below is deliberately NOT 8082 - this qube's updates proxy owns
+# that port permanently and must never be disturbed.
+$runListen = $T.GetMethod('RunListen', $bf)
+Check 'shape: RunListen(string[] args) is reachable for the argument cases below' ($null -ne $runListen)
+if ($null -ne $runListen) {
+    $rcBogus = $runListen.Invoke($null, @(, [string[]]@('--listen', '18082', '--bogus', '7')))
+    Check 'args: an unrecognised flag is REFUSED (rc=2), not silently dropped' ([int]$rcBogus -eq 2)
+    # The value is what used to become the port, so a flag FOLLOWED BY A NUMBER is the exact shape.
+    $rcPid = $runListen.Invoke($null, @(, [string[]]@('--listen', '18082', '--parent-pid-typo', '3312')))
+    Check 'args: a flag whose VALUE is a number is refused too - that value can never become the port' ([int]$rcPid -eq 2)
+    $rcTrail = $runListen.Invoke($null, @(, [string[]]@('--listen', '18082', '19999')))
+    Check 'args: a SECOND bare integer is refused - the port is only the first positional' ([int]$rcTrail -eq 2)
+}
+# And the catch-all is gated on the first positional slot, in the shipped source.
+Check 'shipped: the bare-integer arm is gated on the first positional slot (i == 1)' `
+      ($relay -match 'i == 1 && int\.TryParse\(args\[i\], out port\)')
+Check 'shipped: no ungated int.TryParse catch-all is left' `
+      ($relay -notmatch 'else \{ int p; if \(int\.TryParse\(args\[i\], out p\)\) port = p; \}')
+
 Write-Host ("--- {0} checks, {1} failed" -f $script:run, $script:fail)
 if ($script:fail) { exit 1 }
 exit 0

@@ -407,7 +407,6 @@ $relayFirst = Get-RelayPortOwner
 $relayOwner = $relayFirst
 $relayWaits = 0
 while ($relayOwner -gt 0 -and $relayWaits -lt 40) { Start-Sleep -Milliseconds 500; $relayWaits++; $relayOwner = Get-RelayPortOwner }   # GUARD:relaywait
-$skipRelayCompile = $false
 if ($relayFirst -gt 0 -and $relayOwner -eq 0) { Log "a relay (pid $relayFirst) was still listening on 127.0.0.1:8082 and exited on its own after $($relayWaits * 500) ms - not killed" }
 if ($relayOwner -ne 0) {   # GUARD:relaynokill
     $reason = 'cannot read who listens on 127.0.0.1:8082 (Get-NetTCPConnection failed), so a running relay cannot be ruled out'
@@ -417,8 +416,29 @@ if ($relayOwner -ne 0) {   # GUARD:relaynokill
         $reason = "QWTRELAYBUSY: pid $relayOwner ($who) is still listening on 127.0.0.1:8082 after 20 s while this deploy holds the updater mutex - it is not a running pass's relay (that exits with its pass) and it is NOT killed (nothing is killed by name, ADR-updater 12.4)"
     }
     if (Test-Path -LiteralPath $exe) {
-        $skipRelayCompile = $true
-        Log ($reason + ". The relay is NOT recompiled: the previous exe at $exe is kept, since a running copy would hold it open. Find out what that listener is, then rerun this deploy (install.cmd /updatesonly) to install the new relay.")
+        # A DEPLOY MUST NOT REPORT A RELAY IT CANNOT VOUCH FOR, and until today that principle was
+        # applied only when NO exe existed - so the one case that actually happens went through
+        # silently. KEEPING the exe is unchanged and still deliberate (nothing killed, nothing
+        # compiled, Jev 0.80); what changes is that the deploy stops calling it a success.
+        #
+        # WHY, measured and then measured again. Recorded 2026-10-17 (findings/updates.md
+        # QWTRELAYBUSY) and written up as "proposed, not implemented - the owner's call", which was
+        # my error: a relay that binds the wrong port can never work, so there was nothing to
+        # decide. It then failed the 4.3.37 release acceptance, feature test template-update, on
+        # win11de-tup, all three rounds:
+        #   05:04:00  QWTRELAYBUSY: pid 9648 (qubes-updates-relay at C:\Program Files\...) is still
+        #             listening on 127.0.0.1:8082 after 20 s
+        #   05:04:00  kept the previous relay exe ... (compile skipped - see above)
+        #   05:22:08  relay, its OWN log: listen 127.0.0.1:3312 ...     <- 3312 is the pass's PID
+        #   05:22:26  relay pid 1320 is not accepting connections on 127.0.0.1:8082
+        # The kept exe predates --parent-pid, so RunListen's catch-all takes that flag's VALUE as
+        # the listen port: the relay binds the updater's own pid and never 8082. SELF-PERPETUATING,
+        # because a relay with no parent watchdog outlives its pass and is what makes the next
+        # deploy skip the compile too - pid 9648 had been squatting 8082 on that template since
+        # September. Every Windows Update pass on it has been dead since, and the deploy said ok.
+        $msg = $reason + ". The relay is NOT recompiled and the previous exe at $exe is KEPT - a running copy holds it open, and nothing here is killed. But this deploy cannot vouch for that exe: a binary predating a flag this release's script passes takes the flag's VALUE as its listen port, so the relay binds the updater's PID and never 8082, and every update pass then fails through a proxy nothing serves. Refusing instead of reporting a relay it cannot vouch for. Find out what that listener is, stop it, then rerun this deploy to replace the exe."
+        Log $msg
+        throw $msg   # GUARD:vouchexe
     } else {
         $msg = $reason + ". No previous relay exe exists at $exe to keep, so this deploy cannot leave the guest with a relay it can vouch for: refusing - nothing compiled, nothing killed. Find out what that listener is and rerun."
         Log $msg
@@ -432,9 +452,10 @@ if ($relayOwner -ne 0) {   # GUARD:relaynokill
 # with no relay at all - worse than the failure it fixed.
 $exeNew = "$exe.new"
 $cscOut = $null
-if ($skipRelayCompile) {
-    Log "kept the previous relay exe $exe (compile skipped - see above)"
-} else {
+# NO SKIP BRANCH ANY MORE. It existed for the case where something still holds 8082 and a previous
+# exe is kept; that case now REFUSES above (GUARD:vouchexe), so reaching here means the deploy is
+# compiling. A branch that can no longer be taken is decoration, and this one hid the defect.
+{
     for ($cscTry = 1; $cscTry -le 3; $cscTry++) {
         Remove-Item $exeNew -Force -EA SilentlyContinue
         $cscOut = & $csc /nologo /optimize /target:exe /out:"$exeNew" "$src" 2>&1
