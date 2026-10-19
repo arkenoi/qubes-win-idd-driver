@@ -584,7 +584,7 @@ log "pulled: $(tr '\n' ';' < "$OUT/pull-decode.txt" | cut -c1-200)"
 
 python3 "$GRADER" --grade --out "$OUT" > "$OUT/grade.txt" 2>&1; grc=$?
 grep -a '^GRADED|' "$OUT/grade.txt" | sed 's/^GRADED|/GRADED: /' | tee -a "$R"
-grep -a -E '^(S[0-9][a-z0-9-]*|CLOCK|HOLD-GATE|HOLD-IPC|BRIDGE|BRIDGE-RESTART|BRIDGE-DOWN|IDENT-FAILOPEN|STRAY|AGENT-LOG|DETECTORS)\|' "$OUT/grade.txt" | sed 's/^/  /' | tee -a "$R" >/dev/null
+grep -a -E '^(S[0-9][a-z0-9-]*|CLOCK|CLOCK-REF|HOLD-GATE|HOLD-IPC|BRIDGE|BRIDGE-RESTART|BRIDGE-DOWN|IDENT-FAILOPEN|STRAY|AGENT-LOG|DETECTORS|NS-SIZE|REMAP-DUMP)\|' "$OUT/grade.txt" | sed 's/^/  /' | tee -a "$R" >/dev/null
 
 # cleanup of the guest's user-side residue (never fatal; the subject is disposable anyway)
 thf "tunreg$RUNID" "UNREG:start-shortcut UNREG:start-shortcut:$AUMID_W UNREG:com-activator" > "$OUT/toastfire-unregister.txt" 2>&1

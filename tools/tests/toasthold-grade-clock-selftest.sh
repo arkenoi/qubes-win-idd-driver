@@ -354,6 +354,71 @@ else
   bad "grader_selftest: $(tail -1 "$W/selftest.txt") - see $W/selftest.txt"
 fi
 
+# ---- 9. EVERY label the grader can emit must reach the report -----------------------------------
+# The grader emitted four CLOCK-REF rows, three of them INSTRUMENT ("this run has no usable clock
+# reference"), and toast-hold-test.sh's echo listed CLOCK but not CLOCK-REF. That pattern is
+# anchored and wants the `|` straight after the label, so CLOCK never matched CLOCK-REF| and every
+# such row was dropped - while the GRADED line left in the report says "see CLOCK-REF". The same
+# hole swallowed NS-SIZE (the owner's 2026-08-27 rule: a non-seamless desktop resized to cover the
+# host) and REMAP-DUMP (a banner shown with no image). Those are FAIL rows, so the VERDICT was
+# never wrong - only its reason was invisible. Found 2026-10-19.
+#
+# A FILTER MUST BE TESTED IN THE GREP MODE THE HARNESS USES IT IN. The first version of this check
+# read every filter as an ERE, and `^GRADED|` - a literal pipe to plain grep - is "GRADED or EMPTY"
+# to grep -E, so it matched every label and the check passed with CLOCK-REF still dropped. The
+# negative control caught that; without the control this would have shipped as a green check over
+# the very defect it names. The ZZZ-NOSUCH probe below is what keeps it honest: a label no filter
+# can name must NOT match, or the check is inert and says so instead of passing.
+HARNESS=mgmt/harness/toast-hold-test.sh
+filters(){
+  command grep -a "\"\$OUT/grade.txt\"" "$HARNESS" | while IFS= read -r line; do
+    case "$line" in *'grep -a -E'*) m=E ;; *) m=B ;; esac
+    pat=$(printf '%s\n' "$line" | command grep -ao "grep -a[^']*'[^']*'" | sed "s/.*'\(.*\)'/\1/" | head -1)
+    [ -n "$pat" ] && printf '%s\t%s\n' "$m" "$pat"
+  done
+}
+matches(){ # $1 = label; true if ANY harness filter would echo that label's row
+  while IFS="$(printf '\t')" read -r m pat; do
+    [ -n "$pat" ] || continue
+    if [ "$m" = E ]; then printf '%s|probe\n' "$1" | command grep -qaE "$pat" 2>/dev/null && return 0
+    else                  printf '%s|probe\n' "$1" | command grep -qa  "$pat" 2>/dev/null && return 0; fi
+  done <<EOFF
+$(filters)
+EOFF
+  return 1
+}
+# Two kinds of label reach row(): 37 calls pass a literal, and 5 pass the fire's own label
+# (`label = f["label"]`, keyed in EXPECT). Both are enumerated - testing only the literals would
+# leave the S-family resting on a reading of the char class rather than on a check.
+LABELS=$(command grep -oE 'self\.row\("[A-Z][A-Z0-9-]*"' "$GRADER" | sed 's/.*"\(.*\)"/\1/' | sort -u)
+FIRES=$(python3 - "$GRADER" <<'EOFPY'
+import re, sys
+src = open(sys.argv[1]).read()
+m = re.search(r'^EXPECT\s*[:=].*?\n(?=\w)', src, re.S | re.M)
+print('\n'.join(sorted(set(re.findall(r'"([A-Za-z][A-Za-z0-9_-]*)"\s*:', m.group(0) if m else '')))))
+EOFPY
+)
+LABELS="$LABELS $FIRES"
+npat=$(filters | command grep -ac .)
+if [ "$npat" -lt 2 ]; then
+  bad "every_grader_label_reaches_the_report: EXTRACTION BROKE - $npat filter(s) found in $HARNESS (not a harness verdict)"
+elif matches ZZZ-NOSUCH; then
+  bad "every_grader_label_reaches_the_report: CHECK IS INERT - a label no filter names still matched (not a harness verdict)"
+elif ! matches GRADED; then
+  bad "every_grader_label_reaches_the_report: EXTRACTION BROKE - GRADED, which $HARNESS echoes on its own line, did not match (not a harness verdict)"
+else
+  miss=''; tested=0
+  for lab in $LABELS; do
+    tested=$((tested+1))
+    matches "$lab" || miss="$miss $lab"
+  done
+  if [ -n "$miss" ]; then
+    bad "every_grader_label_reaches_the_report: $tested label(s) tested against $npat filter(s); dropped:$miss"
+  else
+    ok "every_grader_label_reaches_the_report: all $tested grader label(s) reach the report via $npat filter(s); ZZZ-NOSUCH correctly does not"
+  fi
+fi
+
 echo
 echo "toasthold-grade-clock-selftest: $pass passed, $fail failed; fixtures in $W"
 [ "$fail" = 0 ] || exit 1
