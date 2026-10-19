@@ -114,6 +114,22 @@ if ($Restore) {
         Set-ItemProperty -Path $RegKey -Name 'LogDir' -Value ([string]$saved)
         Remove-ItemProperty -Path $RegKey -Name 'LogDirPreLogvol' -ErrorAction SilentlyContinue
     }
+    # UNDO EXACTLY WHAT THE BIND WROTE, no more: the bind records the module list it touched in
+    # LogDirModulesPreLogvol, so the restore removes the LogDir value from those module keys and
+    # leaves any key, and any other value, that was already there. A module key is only REMOVED
+    # when it is left with no values at all, which means the bind is what created it.
+    $savedMods = Get-RegValue 'LogDirModulesPreLogvol'
+    if ($null -ne $savedMods) {
+        foreach ($m in ([string]$savedMods -split ';' | Where-Object { $_ })) {
+            $mk = Join-Path $RegKey $m
+            if (Test-Path -Path $mk) {
+                Remove-ItemProperty -Path $mk -Name 'LogDir' -ErrorAction SilentlyContinue
+                $left = @((Get-Item -Path $mk -ErrorAction SilentlyContinue).Property)
+                if ($left.Count -eq 0) { Remove-Item -Path $mk -Force -ErrorAction SilentlyContinue }
+            }
+        }
+        Remove-ItemProperty -Path $RegKey -Name 'LogDirModulesPreLogvol' -ErrorAction SilentlyContinue
+    }
     if ($null -ne $savedFlush) {
         if ([int]$savedFlush -lt 0) { Remove-ItemProperty -Path $RegKey -Name 'LogSafeFlush' -ErrorAction SilentlyContinue }
         else { Set-ItemProperty -Path $RegKey -Name 'LogSafeFlush' -Value ([int]$savedFlush) -Type DWord }
@@ -161,12 +177,68 @@ if (-not $NoCopy -and (Test-Path -LiteralPath $old)) {
     $copied = @(Get-ChildItem -LiteralPath $new -Recurse -File -ErrorAction SilentlyContinue).Count
 }
 
+# THE PER-MODULE KEY IS THE DETERMINISTIC OVERRIDE, AND THE ROOT VALUE IS A RACE WE LOSE.
+# MEASURED 2026-10-19 on win11de-tup, one guest, one boot, guest-local stamps:
+#   05:00:56  this script binds the ROOT LogDir to Z:\qwt-logs\win11de-tup (copied=83)
+#   05:00:58  28 qrexec-wrapper logs land ON THE STICK - the volume is mounted and writable
+#   05:01:48  last stick write
+#   05:02:00  the INSTALLER logs 'seeded gui-agent registry defaults (... LogDir)'
+#   05:02:05  wrapper logs land in Q:\Qubes Logs again, and never on the stick after that
+# A direct read taken 2026-10-19 confirmed it: LogDir = 'Q:\Qubes Logs', no per-module key, and
+# Z:\qwt-logs\win11de-tup holds no wrapper logs at all. Jev: logdir_was_rewritten established
+# 0.96, the volume itself exonerated 0.76, and the mechanism this harness used to blame - a
+# removable volume enumerating too late - refuted 0.96.
+#
+# WHY NOT "BIND AFTER THE INSTALLER'S LAST SEED": that is an ORDERING RACE, and the owner's rule is
+# no races and deterministic paths. `Set-GuiAgentRegistryDefaults` writes the ROOT LogDir with
+# `reg add /f` once per stage, twice per install, and it must keep doing so: the MSI has two
+# components racing to write LogDir under one condition, so a deterministic pre-seed is what stops
+# the winner being arbitrary, and it is also what migrates a legacy root-volume path onto Q:. That
+# product behaviour is CORRECT and is not touched here.
+#
+# WHAT IS DETERMINISTIC INSTEAD: windows-utils reads LogDir MODULE-KEY-FIRST, in code, not by
+# timing - log.c:358 `CfgReadString(logName, LOG_CONFIG_PATH_VALUE, ...)` with logName the module
+# name, and CfgOpenKey (config.c) opens `Qubes Tools\<module>` and only FALLS BACK to the root.
+# The installer writes ONLY the root (grep for a per-module LogDir write in packaging/ and guest/:
+# zero hits). So two disjoint keys with one writer each, and a precedence fixed in C. The installer
+# can re-seed the root as often as it likes and the modules still read the stick.
+# A NORMAL INSTALL IS UNAFFECTED, by construction: no module key exists on a user's guest, so the
+# root value governs exactly as it does today. This file is harness-only and never shipped.
+#
+# NOT COVERED, stated rather than implied: notifhost, etwproxy and the toast bridge do not use
+# windows-utils' config - they read the ROOT value through QwtLogDir() (tools/notifhost/qtb_shared.h)
+# - so their logs follow the root and return to Q: after the installer's seed. The modules that
+# matter for reading a WEDGED guest (gui-agent, gui-watchdog, qrexec-agent, qrexec-wrapper,
+# qubesdb-*) are windows-utils modules and are covered.
+function Set-ModuleLogDir([string]$mod, [string]$value) {
+    $k = Join-Path $RegKey $mod
+    if (-not (Test-Path -Path $k)) { New-Item -Path $k -Force | Out-Null }
+    Set-ItemProperty -Path $k -Name 'LogDir' -Value $value
+}
+# THE MODULE LIST COMES FROM WHAT HAS ACTUALLY LOGGED, plus a floor of the core modules so a
+# guest that has not written one yet is still covered. Derived from the OLD LogDir's own file
+# names, which is the only place that records which modules exist on this guest.
+$ModFloor = @('gui-agent','gui-watchdog','qrexec-agent','qrexec-wrapper','qubesdb-daemon','qubesdb-cmd','file-receiver','file-sender','network-setup','advertise-tools','bind-dirs')
+$mods = New-Object System.Collections.Generic.HashSet[string]
+foreach ($m in $ModFloor) { [void]$mods.Add($m) }
+if (Test-Path -LiteralPath $old) {
+    foreach ($f in @(Get-ChildItem -LiteralPath $old -File -Filter '*.log' -ErrorAction SilentlyContinue)) {
+        $n = $f.Name
+        if ($n -match '^(?<mod>.+?)-\d{8}(-\d{6}-\d+)?\.log$') { [void]$mods.Add($Matches['mod']) }
+    }
+}
+
 if ($Mode -eq 'registry') {
     if ($null -eq (Get-RegValue 'LogDirPreLogvol')) {
         Set-ItemProperty -Path $RegKey -Name 'LogDirPreLogvol' -Value $old
     }
     Set-ItemProperty -Path $RegKey -Name 'LogDir' -Value $new
-    Write-Output ("LOGVOL-BIND ok mode=registry id=" + $Id + " drive=" + $drive + " found=" + $found + " letter=" + $pinned + " old=" + (B64 $old) + " new=" + (B64 $new) + " copied=" + $copied + " safeflush=1")
+    # and the deterministic layer: every module that reads module-first
+    $modList = @($mods) | Sort-Object
+    foreach ($m in $modList) { Set-ModuleLogDir $m $new }
+    # record EXACTLY which module keys we touched, so -Restore removes those and nothing else
+    Set-ItemProperty -Path $RegKey -Name 'LogDirModulesPreLogvol' -Value ($modList -join ';')
+    Write-Output ("LOGVOL-BIND ok mode=registry id=" + $Id + " drive=" + $drive + " found=" + $found + " letter=" + $pinned + " old=" + (B64 $old) + " new=" + (B64 $new) + " copied=" + $copied + " safeflush=1" + " modules=" + $modList.Count)
     exit 0
 }
 
