@@ -345,7 +345,14 @@ for r in $(seq 1 "$ROUNDS"); do
     # scan whose previous completed pass is younger than 30 minutes, and it exits BEFORE logging - so
     # firing the task here tests the debounce, not the scan, and leaves no trace either way.
     # Measured 2026-09-20: the check waited 15 minutes for a scan that had correctly declined to run.
-    timeout -k 10 900 tools/qtest run 'powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Program Files\Qubes Tools\bin\qubes-windows-update.ps1" -Action scan -RelayExe "C:\Program Files\Qubes Tools\bin\qubes-updates-relay.exe"' >/dev/null 2>&1
+    timeout -k 10 900 tools/qtest run 'powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Program Files\Qubes Tools\bin\qubes-windows-update.ps1" -Action scan -RelayExe "C:\Program Files\Qubes Tools\bin\qubes-updates-relay.exe"' > "$OUT/round$r/oscillation-scan-launch.out" 2>&1; _osc_rc=$?
+    # KEEP THE LAUNCH'S OUTCOME. This ended >/dev/null 2>&1 - stdout, stderr AND the exit code
+    # thrown away - so when round 2 of run 3 reported "the scan never ran" on 2026-10-20 there was
+    # nothing to say WHY, and neither I nor Jev could decide between "it never started" and "it
+    # ran and was not seen" (evidence_can_decide 0.22). The 15 minute poll was measuring the
+    # consequence of a command whose outcome had been discarded by design. Same defect as
+    # arm-module-bases.sh's schtasks capture, found the same day.
+    [ "$_osc_rc" = 0 ] || log "[WARN] round $r: the scan launch exited $_osc_rc - see $OUT/round$r/oscillation-scan-launch.out"
     # RECORD WHAT WAS SAMPLED. On 2026-10-20 round 2 of run 3 timed out here after 15m11s -
     # "the scan never ran" - while rounds 1 and 3 saw their scan, and NOTHING in the evidence
     # covered the window: each round's captured update-status.json is the PASS's own status
