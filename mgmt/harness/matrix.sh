@@ -2624,6 +2624,30 @@ for c in $CELLS; do
   # the guest and nothing is detached, so a cell that hung with qrexec dead still yields its logs -
   # the entire reason the volume exists.
   if [ -n "$LOGVOL_IMG" ]; then
+    # PROVE THE PATH AGAIN, HERE, BEFORE THE PULL. The bind proves it at BIND time, and Jev named
+    # the hole that leaves: grading happens later, so anything that breaks the path in between -
+    # a reboot moving the letter, an AppVM's volatile root discarding the registry, another
+    # removable volume taking the pinned letter - is not caught before the cell is scored
+    # (gap_is_between_bind_and_grading 0.57). Both of those have actually happened: the letter
+    # theft is reproducible A/B/A on win10-acc, and the appvm registry reset is in the receipts of
+    # run 39225775322. A path that broke mid-cell leaves a TRUNCATED log, and a truncated log is
+    # what the sweep reads as CLEAN - the exact false comfort this instrument exists to prevent.
+    # So: prove, then pull. A guest that has gone (wedged, removed) cannot be asked and is NOT a
+    # proof failure - the pull still runs, because an unreachable guest is why the volume exists.
+    if qvm-check --running "$LOGVOL_VM" >/dev/null 2>&1; then
+      if ! logvol_prove_roundtrip "$LOGVOL_VM" "$LOGVOL_IMG" "$c-pregrade" >>"$M/$c-logvol-proof.out" 2>&1; then
+        say "[ERROR] FATAL: $c: the log path did NOT survive to grading - $(tail -1 "$M/$c-logvol-proof.out" 2>/dev/null | cut -c1-150)"
+        say "[ERROR] FATAL: it was proven at bind time, so it broke DURING this cell. Whatever this"
+        say "[ERROR] FATAL: cell's log holds is truncated at the break, and a truncated log is read"
+        say "[ERROR] FATAL: as CLEAN. The campaign STOPS rather than score that."
+        logvol_pull "$LOGVOL_IMG" "$M/logvol-$c" >>"$M/$c-logvol-pull.out" 2>&1 || true
+        say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED on a log path that broke mid-cell ==="
+        exit 2
+      fi
+      say "  $c: log path still PROVEN at grading"
+    else
+      say "  $c: $LOGVOL_VM is not running - the path cannot be re-proven, which is exactly the case the volume covers; pulling it"
+    fi
     if logvol_pull "$LOGVOL_IMG" "$M/logvol-$c" >>"$M/$c-logvol-pull.out" 2>&1; then
       say "  $c: log volume pulled -> $M/logvol-$c"
     else

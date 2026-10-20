@@ -491,6 +491,23 @@ if sed -n '/logvol_prove_roundtrip/,/^  else/p' "$_mx" | command grep -q 'exit 2
 else
   bad "proof: an unproven log path does not abort" "the remaining cells would be graded by the same broken instrument"
 fi
+# TWICE: at the bind, and AGAIN before the pull. Jev named the hole a bind-time-only proof leaves -
+# grading happens later, so a path that breaks in between is not caught before the cell is scored
+# (gap_is_between_bind_and_grading 0.57). Both ways it breaks have happened: the pinned letter
+# taken by another volume (reproduced A/B/A on win10-acc) and an AppVM's volatile root discarding
+# the registry (receipts of run 39225775322). A path that broke mid-cell leaves a TRUNCATED log,
+# and a truncated log is what the sweep reads as CLEAN.
+_nproof=$(command grep -c 'logvol_prove_roundtrip' "$_mx")
+if [ "$_nproof" -ge 2 ]; then
+  ok "proof: the path is proven at the bind AND again before the pull ($_nproof call sites)"
+else
+  bad "proof: only $_nproof call site - a bind-time-only proof misses anything that breaks before grading"
+fi
+if sed -n '/BEFORE THE PULL/,/logvol_pull/p' "$_mx" | command grep -q 'qvm-check --running'; then
+  ok "proof: a guest that has GONE is not a proof failure - the pull still runs, which is the wedge case"
+else
+  bad "proof: a wedged or removed guest would be treated as a proof failure" "that is the one case the volume exists for"
+fi
 
 echo
 echo "RESULT: $pass passed, $fail failed  (fixtures: $T)"
