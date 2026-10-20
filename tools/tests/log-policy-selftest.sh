@@ -300,6 +300,26 @@ for h in mgmt/harness/crop-before-map.sh; do
   fi
 done
 
+# A CAPTURE THAT DISCARDS stderr CANNOT TELL "IT FAILED" FROM "ITS OUTPUT WAS LOST". The schtasks
+# arming in arm-module-bases.sh ended 2>/dev/null, so a call that FAILED reported why to a
+# discarded stream and the harness printed "<no output>" - the same text it prints when the call
+# succeeded and the output went missing in flight. On run 39225775322 it printed exactly that at
+# 09:54:19 while the guest logged, in the same second, "vchan already closed with 2 byte(s) of
+# output data still to send". Which of the two happened is still unsettled, and a discarded stderr
+# is what makes it unanswerable.
+_amb=mgmt/harness/arm-module-bases.sh
+if command grep -qE 'schtasks /create .*2>/dev/null' "$_amb" || \
+   command grep -A2 'armed=\$\(' "$_amb" | command grep -q '2>/dev/null'; then
+  bad "stderr: the schtasks arming in $_amb discards stderr - a failure and a lost reply log identically"
+else
+  ok "stderr: the schtasks arming keeps stderr, so a failure names itself"
+fi
+if command grep -q 'no output on either stream' "$_amb"; then
+  ok "stderr: and the two cases are reported differently"
+else
+  bad "stderr: $_amb still reports one message for both cases"
+fi
+
 echo
 echo "log-policy-selftest: $pass passed, $fail failed"
 [ "$fail" = 0 ] || exit 1

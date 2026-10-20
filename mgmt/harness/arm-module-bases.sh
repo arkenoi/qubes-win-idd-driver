@@ -157,8 +157,24 @@ if [ "$(_landed)" = 0 ]; then
 fi
 
 armed=$(QTEST_VM=$VM timeout -k 5 240 ./tools/qtest run \
-  "schtasks /create /tn QwtModuleBases /ru SYSTEM /sc onstart /rl HIGHEST /f /tr \"powershell -NoProfile -ExecutionPolicy Bypass -File \\\"C:\\Qubes Tools\\diag\\record-module-bases.ps1\\\"\"" 2>/dev/null | tr -d '\r')
-say "schtasks: $(printf '%s' "${armed:-<no output>}" | tr -d '[]')"
+  "schtasks /create /tn QwtModuleBases /ru SYSTEM /sc onstart /rl HIGHEST /f /tr \"powershell -NoProfile -ExecutionPolicy Bypass -File \\\"C:\\Qubes Tools\\diag\\record-module-bases.ps1\\\"\"" 2>"$OUT/arm-schtasks.err" | tr -d '\r')
+# KEEP THE REASON. This capture ended `2>/dev/null`, so a schtasks that FAILED reported why to a
+# discarded stream and this line printed "<no output>" - the SAME text it prints when the call
+# succeeded and its output was lost in flight. Those are different events and the log could not
+# tell them apart. Measured on run 39225775322: this printed "schtasks: <no output>" at 09:54:19
+# while the guest logged, in the same second, `VchanSendMessage: vchan already closed with 2
+# byte(s) of output data still to send`. I could not reproduce the loss afterwards (20/20 short
+# calls returned their output, and this schtasks line run verbatim returned its SUCCESS message
+# with stderr empty), so which of the two happened in the campaign is still unsettled - and that
+# is exactly the question a discarded stderr makes unanswerable.
+_arm_err=$(tr -d '\r' < "$OUT/arm-schtasks.err" 2>/dev/null | tr '\n' ' ' | cut -c1-200)
+if [ -n "${armed:-}" ]; then
+  say "schtasks: $(printf '%s' "$armed" | tr -d '[]')"
+elif [ -n "$_arm_err" ]; then
+  say "schtasks: no stdout, and it said: $_arm_err"
+else
+  say "schtasks: <no output on either stream> - the call produced nothing, or its output was lost in flight (see $OUT/arm-schtasks.err)"
+fi
 
 # RUN IT NOW TOO, so this boot is recorded rather than only future ones - and so the arming is
 # PROVEN to work rather than assumed. A task that was created but silently cannot run is exactly the
