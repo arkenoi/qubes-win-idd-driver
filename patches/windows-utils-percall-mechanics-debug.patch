@@ -1,0 +1,20 @@
+diff --git a/src/pipe-server.c b/src/pipe-server.c
+index beb60e5..c7758c0 100644
+--- a/src/pipe-server.c
++++ b/src/pipe-server.c
+@@ -608,7 +608,14 @@ static void QpsDisconnectClientInternal(
+     // rest of the client's data will be destroyed by QpsReleaseClient when refcount drops to 0
+     QpsReleaseClient(Server, client);
+ 
+-    LogInfo("[%lld] disconnected (%lld total)", ClientId, Server->NumberClients);
++    // PER-CALL MECHANICS ARE DEBUG. The pipe server takes a client per qrexec call and a
++    // campaign makes hundreds: measured on acceptance run 39476792836, 2026-10-20, one brief
++    // cell logged 58 of this line, and the guest session read 2535 INFO against 52 WARN and 2
++    // ERROR. Owner 2026-10-20: "it is NOT normal to have thousands of lines of log during the
++    // brief normal run. it is ok for debug purposes but not on a product session." A client
++    // disconnecting in the ordinary course is mechanics, not an event; at LOG_LEVEL_DEBUG it
++    // comes back. A disconnect that is NOT ordinary is reported by its own error path.
++    LogDebug("[%lld] disconnected (%lld total)", ClientId, Server->NumberClients);
+ 
+     if (Server->DisconnectCallback)
+         Server->DisconnectCallback(Server, ClientId, Server->UserContext);

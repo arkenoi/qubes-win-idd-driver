@@ -331,6 +331,20 @@ jobs:
       # stdout, stderr and the agent log. THIS WORKFLOW IS WHAT THE RELEASE PACKAGE IS BUILT FROM,
       # and it carries its own copy of these steps - the fix first went only into build.yml, which
       # would have shipped a package without it while a different workflow applied it.
+      # PER-CALL MECHANICS ARE DEBUG. The pipe server takes a client per qrexec call; one brief cell
+      # of run 39476792836 logged 58 disconnect lines, inside a guest session that read 2535 INFO
+      # against 52 WARN and 2 ERROR. Owner 2026-10-20: "ok for debug purposes but not on a product
+      # session". Independent of the log.c patches - different file, any order.
+      - name: Apply the windows-utils per-call-mechanics-to-debug fix (always)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = $env:GITHUB_WORKSPACE
+          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-percall-mechanics-debug.patch"
+          if ($LASTEXITCODE -ne 0) { throw "windows-utils per-call-mechanics patch did not apply" }
+          $src = Get-Content "$ws\deps-src\windows-utils\src\pipe-server.c" -Raw
+          if ($src -match 'LogInfo\("\[%lld\] disconnected') { throw 'the disconnect line is still at INFO after patching' }
+          if ($src -notmatch 'LogDebug\("\[%lld\] disconnected') { throw 'the disconnect line was not demoted to LogDebug' }
       - name: Apply the windows-utils pipe-client NULL fix (always)
         shell: pwsh
         run: |

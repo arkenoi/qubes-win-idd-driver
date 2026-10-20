@@ -320,6 +320,34 @@ else
   bad "stderr: $_amb still reports one message for both cases"
 fi
 
+# PER-CALL MECHANICS MUST NOT BE AT INFO. qrexec-wrapper and qrexec-agent run once per qrexec call
+# and a campaign makes hundreds. Measured on acceptance run 39476792836, 2026-10-20: one brief cell
+# logged 149 data-protocol lines, 127 "Running ... as" lines, 113 Command lines and 62
+# own-account lines, inside a session that read 2535 INFO against 52 WARN and 2 ERROR. Owner
+# 2026-10-20: "it is NOT normal to have thousands of lines of log during the brief normal run. it
+# is ok for debug purposes but not on a product session." These describe the mechanics of a call,
+# not an event; at LOG_LEVEL_DEBUG they all come back.
+_percall_bad=0
+while IFS='|' read -r f pat; do
+  [ -n "$f" ] || continue
+  if command grep -qE "LogInfo\\(\"$pat" "$f" 2>/dev/null; then
+    bad "percall: $(basename "$f") still logs '$pat' at INFO" "once per qrexec call, hundreds per campaign"
+    _percall_bad=1
+  fi
+done <<'EOFP'
+core-agent/src/qrexec-wrapper/qrexec-wrapper.c|data protocol version
+core-agent/src/qrexec-wrapper/qrexec-wrapper.c|Running '%s' as
+core-agent/src/qrexec-agent/qrexec-agent.c|Command: %s
+core-agent/src/qrexec-agent/qrexec-agent.c|user '%s' is this service
+EOFP
+[ "$_percall_bad" = 0 ] && ok "percall: no per-call mechanics line is left at INFO in qrexec-wrapper or qrexec-agent"
+# and the upstream half, which is a patch rather than our source
+if [ -f patches/windows-utils-percall-mechanics-debug.patch ]; then
+  ok "percall: the upstream pipe-server disconnect line has a demotion patch"
+else
+  bad "percall: no patch for the upstream per-call disconnect line" "58 of them in one brief cell"
+fi
+
 echo
 echo "log-policy-selftest: $pass passed, $fail failed"
 [ "$fail" = 0 ] || exit 1

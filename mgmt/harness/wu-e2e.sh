@@ -341,6 +341,18 @@ for r in $(seq 1 "$ROUNDS"); do
   else
     log "round $r: oscillation check - running a SCAN-only pass, dom0 must not change"
     dom0_before_scan="$after"
+    # THE DURABLE FACT, TAKEN BEFORE. The detector below used to poll for a TRANSIENT state - an
+    # `action` containing 'scan' - every 30 s, and declare "the scan never ran" when it did not see
+    # one. On run 39225775322 round 2 that timed out over the full 900 s while rounds 1 and 3 saw
+    # theirs in 55 s and 48 s, and NOTHING could decide whether the scan had not run or a sampler
+    # had missed it (Jev: sampler_missed 0.15, never_ran 0.36, evidence_can_decide 0.22 - but
+    # detector_is_the_defect 0.88: sampling a transient is the wrong shape).
+    # update-status.json's `ts` is durable: the updater rewrites it when it runs and it is STILL
+    # THERE afterwards, so a ts that has ADVANCED past the one taken here proves the updater ran,
+    # whether or not any poll happened to catch it mid-scan.
+    _ts_before=$(guest_file 'C:\ProgramData\Qubes\update-status.json' | tr -d '\r' \
+                 | command grep -ao '"ts"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1)
+    log "round $r: status stamp before the scan: ${_ts_before:-<unreadable>}"
     # Run the scan WITHOUT -Scheduled. The scheduled-scan debounce legitimately skips any -Scheduled
     # scan whose previous completed pass is younger than 30 minutes, and it exits BEFORE logging - so
     # firing the task here tests the debounce, not the scan, and leaves no trace either way.
@@ -370,6 +382,18 @@ for r in $(seq 1 "$ROUNDS"); do
       sleep 30
       st_now=$(guest_file 'C:\ProgramData\Qubes\update-status.json' | tr -d '\r')
       printf '%s  %s\n' "$(date -u +%H:%M:%SZ)" "$(printf '%s' "${st_now:-<empty read>}" | tr '\n' ' ' | cut -c1-240)" >> "$_osc_log"
+      # EITHER SIGNAL ENDS THE WAIT, and the durable one is the reliable half:
+      #   * the TRANSIENT one - action contains 'scan' - is what this used to rely on alone, and it
+      #     can be missed because it need not persist between two 30 s samples;
+      #   * the DURABLE one - the status stamp has MOVED from the value taken before the launch -
+      #     is still true afterwards, so it cannot be missed by sampling.
+      # A stamp that moved proves the updater ran and wrote, which is the question being asked.
+      _ts_now=$(printf '%s' "$st_now" | command grep -ao '"ts"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1)
+      if [ -n "$_ts_now" ] && [ -n "$_ts_before" ] && [ "$_ts_now" != "$_ts_before" ]; then
+        scan_seen=1
+        log "round $r: the status stamp moved ($_ts_before -> $_ts_now) - the scan ran"
+        break
+      fi
       case "$st_now" in *'"action"'*'scan'*) scan_seen=1; break;; esac
     done
     printf 'result: scan_seen=%s after %ss\n' "$scan_seen" "$(( 900 - (_sc - $(date +%s)) ))" >> "$_osc_log"
