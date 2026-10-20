@@ -475,6 +475,23 @@ else
   bad "letterless: it letters a volume silently" "a receipt that hides a repair cannot explain the next failure"
 fi
 
+# THE BIND MUST PROVE ITSELF. Every instrument failure of the last two campaigns was the same
+# class - the evidence path was ASSUMED and the cells were scored before anyone found out. A bind
+# that returns ok is not evidence that evidence will arrive: on run 39225775322 the appvm bind
+# returned ok having written LogDir=Z:\qwt-logs\win10-app, and the collector then read
+# Z:\qwt-logs\win10-acc exists=0, because an AppVM's volatile root had discarded it.
+_mx="$ROOT/mgmt/harness/matrix.sh"
+if command grep -q 'logvol_prove_roundtrip' "$_mx"; then
+  ok "proof: matrix binds and then PROVES the path end to end"
+else
+  bad "proof: nothing proves the log path before a cell is graded - the failure is found after scoring, every time"
+fi
+if sed -n '/logvol_prove_roundtrip/,/^  else/p' "$_mx" | command grep -q 'exit 2'; then
+  ok "proof: and an unproven path ABORTS rather than grading on"
+else
+  bad "proof: an unproven log path does not abort" "the remaining cells would be graded by the same broken instrument"
+fi
+
 echo
 echo "RESULT: $pass passed, $fail failed  (fixtures: $T)"
 [ "$fail" -eq 0 ]

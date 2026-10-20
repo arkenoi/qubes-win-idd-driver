@@ -175,6 +175,20 @@ logvol_bind_now(){ # $1=vm $2=label
   [ -n "$LOGVOL_IMG" ] || return 0
   if logvol_bind_guest "$1" "$1" >>"$M/$2-logvol-bind.out" 2>&1; then
     say "  $2: QWT logs bound to the log volume"
+    # AND PROVE IT, because a bind that returned ok is not evidence that evidence will arrive.
+    # Every instrument failure of the last two campaigns was found AFTER cells were scored, and
+    # each was the same class: the path was ASSUMED. This writes a nonce from inside the guest
+    # into the LogDir the guest itself resolves, then reads it back off the IMAGE with mtools -
+    # no guest needed, which is the property that matters when one wedges. Both halves or nothing.
+    if ! logvol_prove_roundtrip "$1" "$LOGVOL_IMG" "$2" >>"$M/$2-logvol-proof.out" 2>&1; then
+      say "[ERROR] FATAL: $2: the log path did NOT survive a round trip - $(tail -1 "$M/$2-logvol-proof.out" 2>/dev/null | cut -c1-150)"
+      say "[ERROR] FATAL: the guest wrote where it says it writes, or this qube could not read it"
+      say "[ERROR] FATAL: back off the image. Either way this cell cannot produce evidence and a"
+      say "[ERROR] FATAL: wedge from here would be unreadable, so the campaign STOPS."
+      say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED on an unproven log path ==="
+      exit 2
+    fi
+    say "  $2: log path PROVEN end to end ($(command grep -ao 'nonce=[^ ]*' "$M/$2-logvol-proof.out" 2>/dev/null | tail -1))"
   else
     # HARD. A log device that failed is not a degraded run, it is a run with no instrument that
     # survives a wedge - and the wedge is what this volume exists for. Measured 2026-10-20, run
@@ -2327,11 +2341,17 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the
     # `Z:\qwt-logs\win10-acc` while the volume they were given carried `id win10-app`, their
     # collector reported `logdir.exists=0`, and both cells failed INVALID-SWEEP-BLIND with 0 QWT
     # lines - on a guest whose own evidence volume had attached correctly minutes earlier.
-    # ON THE FIRST BOOT, AND AFTER THE SHELL: the bind writes LogDir with the letter the volume
-    # actually has, so it must run on a settled, logged-on boot - the same reason the clean cell
-    # binds after prime-run rather than inside it. Boots 2 and 3 then write where boot 1 pointed.
-    if [ "$b" = 1 ] && [ "${LOGVOL_BIND:-1}" = 1 ] && [ -n "${LOGVOL_IMG:-}" ]; then
-      logvol_bind_now "$app" "$3-appvm"
+    # EVERY BOOT, NOT THE FIRST. An AppVM's ROOT volume is volatile - Qubes discards it at
+    # shutdown and re-derives it from the template - and HKLM\Software lives on it. So a LogDir
+    # written on boot 1 is GONE on boot 2, and the guest is back to whatever the TEMPLATE's
+    # registry says. Measured on run 39225775322, 2026-10-20: the bind set
+    # `id=win10-app new=Z:\qwt-logs\win10-app` at 13:27:25 and the collector read
+    # `Z:\qwt-logs\win10-acc exists=0` at 13:30:32 - the template's path, after boots 2 and 3 had
+    # reset the registry under it. Both appvm cells swept 0 QWT lines in BOTH campaigns for this.
+    # Binding on each boot costs one registry write and is what makes the LAST boot - the one
+    # grading reads - point at this AppVM's own volume.
+    if [ "${LOGVOL_BIND:-1}" = 1 ] && [ -n "${LOGVOL_IMG:-}" ]; then
+      logvol_bind_now "$app" "$3-appvm-b$b"
     fi
     # EVERY BOOT IS STILL GRADED. None of the four verdicts ended the cell before this split, and
     # none does now: the loop runs all three boots whatever one of them says, because the

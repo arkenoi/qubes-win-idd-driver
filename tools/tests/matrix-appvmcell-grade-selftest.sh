@@ -174,10 +174,15 @@ if printf '%s' "$_appvm_fn" | command grep -qE 'logvol_bind_now "\$app"'; then
 else
   no_ "the appvm cell binds its own volume" "no logvol_bind_now \"\$app\" in the cell body"
 fi
-if printf '%s' "$_appvm_fn" | command grep -qE '\[ "\$b" = 1 \].*logvol_bind_now|b" = 1 \]'; then
-  ok_ "...once, on the first boot, so boots 2 and 3 write where boot 1 pointed"
+# ON EVERY BOOT, NOT ONCE. An AppVM's root volume is volatile and HKLM\Software lives on it, so a
+# LogDir written on boot 1 is gone on boot 2 and the guest reverts to the TEMPLATE's path. Run
+# 39225775322: bound to win10-app at 13:27:25, collector read win10-acc exists=0 at 13:30:32.
+if printf '%s' "$_appvm_fn" | command grep -qE '\[ "\$b" = 1 \].*logvol_bind_now'; then
+  no_ "the appvm bind must run on EVERY boot" "it is guarded to boot 1, and an AppVM's volatile root discards it at the next start"
+elif printf '%s' "$_appvm_fn" | command grep -qE 'logvol_bind_now "\$app" "\$3-appvm-b\$b"'; then
+  ok_ "...on every boot, because an AppVM's volatile root discards the registry each start"
 else
-  no_ "the appvm bind is guarded to the first boot" "no first-boot guard around it"
+  no_ "the appvm bind is not per-boot" "expected logvol_bind_now with a per-boot label"
 fi
 
 # A LOG-DEVICE FAILURE ABORTS, IT DOES NOT DOWNGRADE. Until 2026-10-20 this path printed
