@@ -437,3 +437,65 @@ logvol_unbind_guest(){ # <vm> - put LogDir and LogSafeFlush back (registry mode)
     *) _lv_say "[ERROR] the binder did not restore: $(_lv_guest "$line")"; return 1 ;;
   esac
 }
+
+# ---------------------------------------------------------------------- the evidence path, PROVEN
+# WHY THIS EXISTS. Four acceptance campaigns in a row were graded on an evidence path that was not
+# working, and each time the harness found out AFTER the cells had been scored: the sweep read a
+# LogDir nothing wrote to; the clause blamed a shell variable; crop-before-map searched a hard-coded
+# Q:\Qubes Logs; the binder reported "no volume" for a volume that was attached and host-readable
+# but carried no drive LETTER (Win32_LogicalDisk lists only lettered volumes). Four instances of ONE
+# defect - the evidence path is ASSUMED, never proven - so fixing each instance only bought the next
+# one. On 2026-10-20 that cost the first wedge captured since the stall fix: the guest went SPIN
+# with no log volume bound, so nothing from inside it survived.
+#
+# The proof is end to end and it is the guest's OWN LogDir, resolved the way the product resolves
+# it (the per-module key first, then the root - log.c:358 / CfgOpenKey), never a path this harness
+# believes in. The guest writes a nonce there; this qube reads the IMAGE with mtools - no guest
+# needed, which is the whole point of the volume - and looks for that nonce. Only both halves
+# passing proves a cell can produce evidence. Either half failing says WHICH half, because "no
+# evidence" with no side named is what sent three investigations at the wrong component.
+logvol_prove_roundtrip(){ # <vm> <img> [tag] -> LOGVOL-PROOF ok|fail; 0 only when the nonce makes the round trip
+  local vm="${1:?[ERROR] logvol_prove_roundtrip <vm> <img> [tag]}" img="${2:?[ERROR] logvol_prove_roundtrip <vm> <img> [tag]}"
+  local tag="${3:-proof}" nonce ps out line dir seen tmp
+  nonce="LVPROOF-$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM"
+  tmp=$(mktemp -d) || { _lv_say "[ERROR] no temp dir"; return 2; }
+  ps="$tmp/logvol-proof.ps1"
+  cat > "$ps" <<'PSEOF'
+param([string]$Nonce = 'LVPROOF')
+$ErrorActionPreference = 'Continue'
+# the product's own resolution order: the per-module key, then the root. Never a path we chose.
+$dir = $null
+foreach ($k in @('HKLM:\Software\Invisible Things Lab\Qubes Tools\gui-agent','HKLM:\Software\Invisible Things Lab\Qubes Tools')) {
+  try { $v = (Get-ItemProperty -Path $k -Name LogDir -ErrorAction Stop).LogDir } catch { $v = $null }
+  if (-not [string]::IsNullOrWhiteSpace([string]$v)) { $dir = [string]$v; break }
+}
+if (-not $dir) { Write-Output 'LOGVOL-PROOF-GUEST fail reason=no_LogDir_in_registry'; exit 1 }
+if (-not (Test-Path -LiteralPath $dir)) { Write-Output ("LOGVOL-PROOF-GUEST fail reason=LogDir_does_not_exist dir=" + $dir); exit 1 }
+try {
+  $p = Join-Path $dir ($Nonce + '.proof')
+  Set-Content -LiteralPath $p -Value $Nonce -Encoding ASCII -ErrorAction Stop
+  # flush: a file in a cache the host cannot see yet is not evidence
+  try { $fs = [IO.File]::Open($p, 'Open', 'Read', 'None'); $fs.Close() } catch { }
+  Write-Output ("LOGVOL-PROOF-GUEST ok dir=" + $dir + " file=" + $p)
+} catch { Write-Output ("LOGVOL-PROOF-GUEST fail reason=write_failed dir=" + $dir); exit 1 }
+PSEOF
+  out=$(QTEST_VM="$vm" timeout -k 10 180 "$LOGVOL_QTEST" pushrun "$ps" -Nonce "$nonce" 2>&1 | tr -d '\r')
+  line=$(printf '%s\n' "$out" | command grep -aE '^LOGVOL-PROOF-GUEST ' | tail -1)
+  rm -rf "$tmp"
+  case "$line" in
+    "LOGVOL-PROOF-GUEST ok"*) dir=$(printf '%s' "$line" | sed -E 's/.* dir=(.*) file=.*/\1/') ;;
+    "LOGVOL-PROOF-GUEST fail"*)
+      echo "LOGVOL-PROOF fail half=guest ${line#LOGVOL-PROOF-GUEST fail }"; return 1 ;;
+    *)
+      # no line at all: the guest never answered, which is itself the finding and is NOT a volume fault
+      echo "LOGVOL-PROOF fail half=guest reason=no_answer_from_guest (transcript: $(printf '%s' "$out" | tr '\n' '|' | cut -c1-200))"; return 1 ;;
+  esac
+  # HOST HALF: read the IMAGE, not the guest. mdir works while the guest runs and while it is wedged.
+  seen=$(mdir -i "$img" -/ ::/ 2>/dev/null | command grep -ac "$nonce")
+  if [ "${seen:-0}" -gt 0 ]; then
+    echo "LOGVOL-PROOF ok dir=$dir nonce=$nonce seen_in_image=1"
+    return 0
+  fi
+  echo "LOGVOL-PROOF fail half=host reason=nonce_written_by_guest_not_in_image dir=$dir nonce=$nonce img=$img"
+  return 1
+}

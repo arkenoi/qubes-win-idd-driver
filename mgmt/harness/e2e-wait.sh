@@ -272,11 +272,31 @@ w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
             _wv=$(wedge_classify "$vm" "$_wdir" 2>/dev/null | tail -1)
             $log "  $lbl: dark ${dark}min, screen=$st, qvm=$(w_state "$vm") - asked the forensics service: ${_wv:-UNREADABLE}"
             case "${_wv%% *}" in
-              SPINNING)
-                $log "  $lbl: SPINNING - a vCPU is consuming a full core while the guest is unreachable."
-                $log "  $lbl: DO NOT KILL, REVERT OR CLONE OVER THIS GUEST: it is the only interrogable"
-                $log "  $lbl: form of the defect, and three specimens were already lost to cleanup."
-                $log "  $lbl: Evidence: $_wdir" ;;
+              SPIN|SPINNING)
+                # THE TOKEN IS 'SPIN', AND THIS ARM SAID 'SPINNING'. wedge-lib.sh prints
+                # `"SPIN %.2f"` / `"BLOCKED %.2f"` / `"UNREADABLE -"` and has never printed
+                # SPINNING, so `${_wv%% *}` was SPIN and fell through to the catch-all below: for
+                # every real spin wedge this arm was DEAD. Its own text said "three specimens were
+                # already lost to cleanup"; on 2026-10-20 a fourth went the same way - run
+                # 39225775322 WIN10-clean logged `forensics verdict 'SPIN 1.01'` from the catch-all,
+                # the campaign cloned over win10-acc 2 min later, and the memory image - the only
+                # thing that can attribute the stuck RIP to a module - was gone.
+                #
+                # AND A PRINTED WARNING IS NOT A GUARD. "DO NOT KILL, REVERT OR CLONE" is an
+                # instruction to whoever reads the log afterwards; the campaign does not read logs.
+                # So the core is TAKEN HERE, while the guest is still up, before anything can reuse
+                # it. tools/tests/wedge-verdict-selftest.sh asserts every token the classifier can
+                # emit is handled by this case, so the next token added cannot go unhandled.
+                $log "  $lbl: SPIN - a vCPU is consuming a full core while the guest is unreachable."
+                $log "  $lbl: Evidence: $_wdir"
+                _wcore="${WEDGE_CORE_DIR:-$HOME/wedge-cores}/core-$vm-$(date -u +%Y%m%dT%H%M%SZ).elf"
+                mkdir -p "${_wcore%/*}" 2>/dev/null
+                $log "  $lbl: taking the memory image NOW (the specimen is alive and will be reused) -> $_wcore"
+                if "${BASH_SOURCE[0]%/*}/fetch-wedge-core.sh" "$vm" "$_wcore" >"$_wdir/fetch-core.log" 2>&1; then
+                  $log "  $lbl: CORE TAKEN $_wcore ($(stat -c %s "$_wcore" 2>/dev/null || echo 0) bytes) - attribute it with tools/core-module-list.py"
+                else
+                  $log "  $lbl: [ERROR] CORE FETCH FAILED (see $_wdir/fetch-core.log) - this specimen cannot be attributed to a module"
+                fi ;;
               BLOCKED)
                 $log "  $lbl: BLOCKED - every vCPU is idle and the guest is unreachable. Not a spin;"
                 $log "  $lbl: it is waiting on something. Evidence: $_wdir" ;;

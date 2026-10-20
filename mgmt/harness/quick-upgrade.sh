@@ -404,8 +404,11 @@ if logvol_create "$LOGVOL_IMG" "$SUBJECT" >>"$OUT/logvol-setup.out" 2>&1 \
    && logvol_attach "$SUBJECT" "$LOGVOL_IMG" "$OUT/manifest.json" >>"$OUT/logvol-setup.out" 2>&1; then
   log "log volume attached: $LOGVOL_IMG (read it with logvol_pull even if the guest wedges)"
 else
-  log "[WARN] log volume could not be attached - a wedge here will lose the QWT logs: $(tail -1 "$OUT/logvol-setup.out" 2>/dev/null | cut -c1-140)"
-  LOGVOL_IMG=""
+  # HARD, and LOGVOL_IMG is NOT blanked - blanking it turns a device failure into the harness
+  # later reporting "no log volume was attached for this cell", which is how three investigations
+  # were aimed at the bind while the real fault was elsewhere. Enforced by lint L29.
+  log "[ERROR] log volume could NOT be attached - refusing to run a subject whose wedge would be unreadable: $(tail -1 "$OUT/logvol-setup.out" 2>/dev/null | cut -c1-140)"
+  exit 2
 fi
 log "booting $SUBJECT with the release ISO as CD (qvm-start --cdrom=$HOLDER:$LOOP)"
 timeout -k 10 150 qvm-start "$SUBJECT" --cdrom="$HOLDER:$LOOP" >"$OUT/cdboot.out" 2>&1 & disown
@@ -437,7 +440,9 @@ if [ -n "$LOGVOL_IMG" ]; then
   if logvol_bind_guest "$SUBJECT" "$SUBJECT" >>"$OUT/logvol-bind.out" 2>&1; then
     log "QWT logs bound to the log volume"
   else
-    log "[WARN] log-volume bind failed (see $OUT/logvol-bind.out) - logs stay on C: and a wedge loses them"
+    # HARD: a bind that failed means the modules keep writing to C:, which dies with the guest.
+    log "[ERROR] log-volume bind FAILED (see $OUT/logvol-bind.out) - the guest would log to C: and a wedge would lose it"
+    exit 2
   fi
 fi
 

@@ -457,6 +457,24 @@ else
   bad "letter: the appvm cell never binds, so LogDir keeps naming the TEMPLATE's directory"
 fi
 
+# AN UNLETTERED VOLUME IS STILL A VOLUME. Win32_LogicalDisk lists only volumes that HAVE a drive
+# letter, so the binder's Find-LogVol returned $null for a DIAG volume Windows had mounted without
+# one - and the caller reports that as `no_volume_labelled_DIAG_with_LOGVOL.TAG`, "no volume",
+# about a volume attached and host-readable the whole time. Run 39225775322 WIN10-clean,
+# 2026-10-20: attached 12:42:05, read from this qube 12:50:05, "no volume" at 12:50:16. A fresh
+# clean install is exactly where an unlettered removable volume is ordinary.
+_bps="$ROOT/mgmt/harness/logvol-bind.ps1"
+if command grep -q 'Get-Volume' "$_bps" && command grep -q 'not \$_.DriveLetter' "$_bps"; then
+  ok "letterless: the binder looks for volumes with NO drive letter, not only lettered ones"
+else
+  bad "letterless: Find-LogVol only enumerates Win32_LogicalDisk - a volume without a letter reads as absent"
+fi
+if command grep -q 'lettered_an_unlettered_volume' "$_bps"; then
+  ok "letterless: and it SAYS when it had to letter one, so the receipt shows what happened"
+else
+  bad "letterless: it letters a volume silently" "a receipt that hides a repair cannot explain the next failure"
+fi
+
 echo
 echo "RESULT: $pass passed, $fail failed  (fixtures: $T)"
 [ "$fail" -eq 0 ]

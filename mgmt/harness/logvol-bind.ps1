@@ -50,6 +50,31 @@ function Find-LogVol {
         $tag = Join-Path $d.DeviceID 'LOGVOL.TAG'
         if (Test-Path -LiteralPath $tag) { return $d.DeviceID }
     }
+    # NO LETTER IS NOT NO VOLUME. Win32_LogicalDisk lists only volumes that HAVE a drive letter, so
+    # a DIAG volume Windows mounted without one is invisible above and this function returned
+    # $null - which the caller reports as `no_volume_labelled_DIAG_with_LOGVOL.TAG`, i.e. "the
+    # volume is not there" about a volume that IS attached and readable from the host the whole
+    # time. Measured 2026-10-20, run 39225775322 WIN10-clean: prime-run attached the stick at
+    # 12:42:05 and read it from this qube at 12:50:05, and the binder said no volume at 12:50:16.
+    # A fresh clean install is exactly where an unlettered removable volume is ordinary.
+    # Get-Volume DOES see unlettered volumes. Give ours a letter - the tag can only be read through
+    # a path - and re-check. A volume that still has no tag after that is not ours and is left alone.
+    foreach ($uv in @(Get-Volume -ErrorAction SilentlyContinue |
+                      Where-Object { $_.FileSystemLabel -eq $Label -and -not $_.DriveLetter })) {
+        foreach ($want in @('Z','Y','X','W')) {
+            if (Get-CimInstance Win32_Volume -Filter ("DriveLetter='" + $want + ":'") -ErrorAction SilentlyContinue) { continue }
+            try {
+                $uv | Get-Partition -ErrorAction Stop | Set-Partition -NewDriveLetter $want -ErrorAction Stop
+            } catch { continue }
+            Start-Sleep -Milliseconds 300
+            $tag = Join-Path ($want + ':') 'LOGVOL.TAG'
+            if (Test-Path -LiteralPath $tag) {
+                Write-Output ("LOGVOL-BIND note=lettered_an_unlettered_volume label=" + $Label + " letter=" + $want + ":")
+                return ($want + ':')
+            }
+            break   # we gave it a letter and it is not ours; do not keep consuming letters
+        }
+    }
     return $null
 }
 

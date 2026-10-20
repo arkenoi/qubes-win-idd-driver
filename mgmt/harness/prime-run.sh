@@ -292,8 +292,14 @@ if logvol_create "$DIAGIMG" "$CHURN" >>"$OUT_SETUP" 2>&1 \
    && logvol_attach "$CHURN" "$DIAGIMG" "$HERE/evidence/logvol-manifest-$CHURN.json" >>"$OUT_SETUP" 2>&1; then
     log "evidence stick on $LOGVOL_FRONTEND ($DIAGIMG, label $LOGVOL_LABEL) - markers and logs, read with mtools, no guest needed"
 else
-    DIAGIMG=""
-    log "[WARN] evidence stick not attached - a stall leaves no markers and a wedge no logs: $(tail -1 "$OUT_SETUP" 2>/dev/null | cut -c1-140)"
+    # HARD. The stick is the only thing that survives a wedge - a guest that will not halt cannot
+    # be asked for its logs, and mtools reads the image with no guest at all. Priming a subject
+    # without it produces a guest that cannot be interrogated when it stalls, which is the one
+    # case this whole instrument exists for. Blanking DIAGIMG and carrying on is how WIN10-clean
+    # of run 39225775322 reached a SPIN wedge on 2026-10-20 with nothing readable inside it.
+    # Enforced by lint L29.
+    log "[ERROR] evidence stick NOT attached - refusing to prime a subject that cannot be read when it stalls: $(tail -1 "$OUT_SETUP" 2>/dev/null | cut -c1-140)"
+    exit 2
 fi
 
 OUT="$HERE/evidence/prime-$JOB-$CHURN-$(date -u +%Y%m%d-%H%M%S)"; mkdir -p "$OUT"

@@ -1634,6 +1634,65 @@ def l28_c_file_includes_its_own_header() -> None:
         finding("L28-c-file-skips-its-own-header", str(rel), msg)
 
 
+def l29_log_device_failure_must_be_hard() -> None:
+    """L29: A LOG DEVICE FAILURE IS FATAL. There is no soft one.
+
+    The log volume is the only thing that survives a WEDGE - a guest that will not halt cannot be
+    asked for its logs, and reading the image with mtools needs no guest at all. That is its whole
+    reason to exist. So a cell whose log device failed cannot produce evidence, and grading it
+    produces a verdict about nothing.
+
+    MEASURED, 2026-10-20, acceptance run 39225775322 WIN10-clean: the binder reported
+    `LOGVOL-BIND fail reason=no_volume_labelled_DIAG_with_LOGVOL.TAG`, the harness logged
+    `[WARN] log-volume bind failed ... logs stay on C:` and CARRIED ON. Eleven minutes later the
+    guest wedged with a SPIN shape - the first wedge captured since the stall fix - and there was
+    nothing from inside it, because the only instrument that would have survived had failed and the
+    run had been told that was acceptable. The campaign then destroyed the specimen.
+
+    A WARN here is the harness deciding on its own that evidence is optional. It is not.
+    """
+    # THE PREDICATE IS THE CALL, NOT THE MESSAGE. Two earlier versions of this rule keyed on the
+    # word "[WARN]" and then on failure wording, and BOTH were defeated by rewording - I silenced
+    # the first myself on 2026-10-20 by changing [WARN] to FAIL while the harness carried on
+    # unchanged, and the second fired on a doc comment, a python print, a corpus fixture and the
+    # deliberate LOGVOL_BIND=0 opt-out. A gate a rename defeats is not a gate, and one that cries
+    # on comments gets baselined away. So it keys on the log-device PRIMITIVES: if a call to one of
+    # them is tested in an `if`, the failure branch must stop.
+    PRIMS = ("logvol_bind_guest", "logvol_attach ", "logvol_create ")
+    STOPS = ("return 1", "return 2", "exit 1", "exit 2", "die ", "no \"", "no '")
+    for f in _all_our_scripts():
+        if f.suffix != ".sh":
+            continue
+        try:
+            lines = f.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        for i, ln in enumerate(lines, 1):
+            s = ln.strip()
+            if s.startswith("#") or not s.startswith("if "):
+                continue
+            if not any(pr in ln for pr in PRIMS):
+                continue
+            blk, depth = [], 0
+            for k in range(i - 1, min(i + 25, len(lines))):
+                blk.append(lines[k])
+                if lines[k].strip().startswith("fi") and depth == 0 and k > i - 1:
+                    break
+            block = "\n".join(blk)
+            if "else" not in block:
+                continue                      # no failure branch at all is a different rule's problem
+                
+            fail_branch = block.split("else", 1)[1]
+            if any(stp in fail_branch for stp in STOPS):
+                continue
+            finding("L29-log-device-failure-soft", f"{f.name}:{i}",
+                    "a log-device primitive is tested and its FAILURE branch does not stop "
+                    "(no return/exit/die/no): the cell is then graded with no instrument that "
+                    "survives a wedge. Measured 2026-10-20 run 39225775322 WIN10-clean - the bind "
+                    "failed, the harness carried on, the guest went SPIN, and nothing from inside "
+                    "it survived.")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ledger", type=Path, default=None, help="verdicts.tsv, enables L7")
@@ -1678,6 +1737,7 @@ def main() -> int:
     l25_product_must_not_branch_on_localised_text()
     l26_no_hardware_clock_convention_is_written()
     l27_detached_guest_launch_must_not_use_start()
+    l29_log_device_failure_must_be_hard()
     if a.ledger:
         l7_orphan_ledger_checks(a.ledger)
 

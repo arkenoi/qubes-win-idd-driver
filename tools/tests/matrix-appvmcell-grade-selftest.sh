@@ -63,6 +63,12 @@ w_screen(){ printf 'DESKTOP\n'; }
 start_vm(){ :; }
 reclone(){ return 0; }
 logvol_bind_now(){ :; }
+# The appvm cell attaches its own evidence volume before the first boot, and since 2026-10-20 a
+# failure there ABORTS the campaign rather than grading a guest whose wedge would be unreadable.
+# Stub the primitives so the cell can run here; LOGVOL_FAIL=1 drives the failure path.
+logvol_image(){ printf '%s\n' "$T/logs-$1.img"; }
+logvol_create(){ [ "${LOGVOL_FAIL:-0}" = 1 ] && return 1; : > "$1" 2>/dev/null; return 0; }
+logvol_attach(){ [ "${LOGVOL_FAIL:-0}" = 1 ] && return 1; return 0; }
 grade_appvm_window(){ return "${WIN_RC:-0}"; }
 # the qvm-* family: EXISTS lists what the rig has, so "absent" and "present" are one variable
 qvm-check(){ local v=${*: -1}; case " $EXISTS " in *" $v "*) return 0 ;; *) return 1 ;; esac; }
@@ -173,6 +179,26 @@ if printf '%s' "$_appvm_fn" | command grep -qE '\[ "\$b" = 1 \].*logvol_bind_now
 else
   no_ "the appvm bind is guarded to the first boot" "no first-boot guard around it"
 fi
+
+# A LOG-DEVICE FAILURE ABORTS, IT DOES NOT DOWNGRADE. Until 2026-10-20 this path printed
+# "[WARN] log volume not attached", blanked LOGVOL_IMG and graded the cell anyway - which is how
+# two consecutive campaigns graded both appvm cells blind, and how WIN10-clean reached a SPIN wedge
+# with nothing readable inside it. The cell must stop, and the campaign with it: every later cell
+# would be graded by the same broken instrument.
+reset_case; LOGVOL_FAIL=1
+# say() appends to $LINES, and the cell EXITS, so nothing after it runs and the subshell takes
+# $LINES with it. Redefine say to print, for this one call only.
+_abort_out=$( (say(){ printf "[SAY] %s\n" "$*"; }; call) 2>&1 ); _abort_rc=$?
+LOGVOL_FAIL=0
+if [ "$_abort_rc" -ne 0 ]; then
+  ok_ "a log-device failure ABORTS the cell (rc=$_abort_rc), it does not grade on"
+else
+  no_ "a log-device failure must abort" "rc=0 - the cell carried on with no instrument that survives a wedge"
+fi
+case "$_abort_out$LINES" in
+  *"NOT ATTACHED"*) ok_ "...and it says the volume was not attached, as the reason" ;;
+  *) no_ "the abort names the log device" "got: $(printf '%s' "$_abort_out$LINES" | tr '\n' '|' | cut -c1-160)" ;;
+esac
 
 printf 'matrix-appvmcell-grade-selftest: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

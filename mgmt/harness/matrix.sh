@@ -176,7 +176,17 @@ logvol_bind_now(){ # $1=vm $2=label
   if logvol_bind_guest "$1" "$1" >>"$M/$2-logvol-bind.out" 2>&1; then
     say "  $2: QWT logs bound to the log volume"
   else
-    say "  $2: [WARN] log-volume bind failed (see $M/$2-logvol-bind.out) - logs stay on C: and a wedge loses them"
+    # HARD. A log device that failed is not a degraded run, it is a run with no instrument that
+    # survives a wedge - and the wedge is what this volume exists for. Measured 2026-10-20, run
+    # 39225775322 WIN10-clean: this printed [WARN] and carried on; eleven minutes later the guest
+    # went SPIN and nothing from inside it survived. Enforced by lint L29.
+    say "[ERROR] FATAL: $2: log-volume bind FAILED (see $M/$2-logvol-bind.out)"
+    say "[ERROR] FATAL: the log volume is the ONLY instrument that survives a wedge - a guest that"
+    say "[ERROR] FATAL: will not halt cannot be asked for its logs, and mtools reads the image with"
+    say "[ERROR] FATAL: no guest at all. Grading ANY further cell now produces verdicts about"
+    say "[ERROR] FATAL: nothing, so the campaign STOPS HERE rather than spending hours on them."
+    say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED on a log-device failure ==="
+    exit 2
   fi
 }
 # P0-PRE (protocol H0): the wait primitives are sourced from the REPO, not from a session tmp
@@ -734,8 +744,12 @@ boot_with_release_iso(){ # $1=vm $2=label - boot a HALTED subject with the relea
        && logvol_attach "$vm" "$LOGVOL_IMG" "$M/logvol-manifest.json" >>"$M/$lbl-logvol-setup.out" 2>&1; then
       say "  $lbl: log volume attached ($LOGVOL_IMG)"
     else
-      say "  $lbl: [WARN] log volume not attached - a wedge here loses the QWT logs: $(tail -1 "$M/$lbl-logvol-setup.out" 2>/dev/null | cut -c1-140)"
-      LOGVOL_IMG=""
+      # HARD, and LOGVOL_IMG is NOT cleared: blanking it is how "no volume attached" came to be
+      # reported for cells whose volume was attached, and it turns a device failure into silence.
+      say "[ERROR] FATAL: $lbl: log volume NOT ATTACHED - $(tail -1 "$M/$lbl-logvol-setup.out" 2>/dev/null | cut -c1-140)"
+      say "[ERROR] FATAL: a wedge from here on is unreadable; the campaign STOPS rather than grade blind."
+      say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED on a log-device failure ==="
+      exit 2
     fi
   fi
   # A claim left by an EARLIER run on a loop that is now gone would make this start fail with
@@ -2264,8 +2278,12 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the
      && logvol_attach "$app" "$LOGVOL_IMG" "$M/logvol-manifest.json" >>"$M/$3-appvm-logvol-setup.out" 2>&1; then
     say "  $3-appvm: log volume attached ($LOGVOL_IMG)"
   else
-    say "  $3-appvm: [WARN] log volume not attached - this cell's guest logs cannot be swept: $(tail -1 "$M/$3-appvm-logvol-setup.out" 2>/dev/null | cut -c1-140)"
-    LOGVOL_IMG=""
+    # HARD: same reason as the churn path above. An appvm cell with no volume is a cell that
+    # cannot be swept, and it was graded blind in two consecutive campaigns.
+    say "[ERROR] FATAL: $3-appvm: log volume NOT ATTACHED - $(tail -1 "$M/$3-appvm-logvol-setup.out" 2>/dev/null | cut -c1-140)"
+    say "[ERROR] FATAL: this cell's guest logs cannot be swept; the campaign STOPS rather than grade blind."
+    say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED on a log-device failure ==="
+    exit 2
   fi
   say "  $app re-created FRESH from $tpl (private auto-seeded from the template's private at creation)"
   local b

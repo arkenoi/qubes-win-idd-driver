@@ -110,3 +110,4 @@ wu-judge-timenorm-selftest.sh
 wu-liveness-selftest.sh
 xen-core-small-selftest.sh
 logvol-modulekey-selftest.sh
+wedge-verdict-selftest.sh
