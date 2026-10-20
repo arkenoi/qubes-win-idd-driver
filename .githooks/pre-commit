@@ -44,6 +44,35 @@ if [ "$fail" -eq 1 ]; then
     exit 1
 fi
 
+# ---- AND THE HEAD MAY ONLY SHRINK (a ratchet, 2026-10-21). The rule above forbids dated section
+# HEADERS, and it held - so the log regrew in the shape it does not match: flat `- TAG [... verified
+# 2026-10-15] ...` bullets, appended one commit at a time, never retired when fixed. findings/issues.md
+# reached 800K / 239 entries, of which 138 were already FIXED, and at that size it stopped being
+# attachable: a Jev call carrying it died with max_tokens_exceeded, so the register could no longer be
+# submitted as evidence about itself. Keying on the wording was the defect; size IS the property, so
+# that is what is measured here.
+# No threshold to tune and no wording to dodge: above 100K a head may not grow, and every retirement
+# lowers the bar for good. To add an entry at that size, retire a fixed one - which is the discipline
+# that was missing. A fixed entry's full text belongs in findings/issues-closed.md, which is an
+# archive and is never attached anywhere.
+_cs() { awk '/^## CURRENT STATE/{s=1;next} /^## /{s=0} s' | wc -c; }
+fail=0
+while IFS= read -r f; do
+    case "$f" in findings/*.md) ;; *) continue ;; esac
+    new=$(git show ":$f" | _cs)
+    old=$(git show "HEAD:$f" 2>/dev/null | _cs) || old=0
+    [ -n "$old" ] || old=0
+    if [ "$new" -gt 102400 ] && [ "$new" -gt "$old" ]; then
+        echo "BLOCKED: $f CURRENT STATE grew ${old}B -> ${new}B, and above 100K it may only shrink."
+        echo "         Retire a FIXED entry into findings/issues-closed.md to make room."
+        fail=1
+    fi
+done < <(git diff --cached --name-only --diff-filter=AM)
+if [ "$fail" -eq 1 ]; then
+    echo "pre-commit REFUSED (findings head ratchet)."
+    exit 1
+fi
+
 # ---- A REPRODUCTION IS NEVER THE SOURCE OF TRUTH FOR A FIELD REPORT (owner, 2026-10-08:
 # "i would also note you are known from prominently faking test conditions. so, the reproduction is
 # never source of truth"). The rule, the incident that paid for it and the reasoning are in
