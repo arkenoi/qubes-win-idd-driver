@@ -1917,6 +1917,20 @@ cell_clean(){ # $1=pristine-base $2=subject $3=tag
   park_installed "$vm" "$tag-clean" || say "  $tag-clean: continuing without a park - snapshot cells will refuse loudly"
   start_vm "$vm"
   w_session "$vm" 900 "$tag-clean-boot" "$M" say || { no "$tag-clean: installed guest did not come back for grading"; return; }
+  # RE-ASSERT AFTER THE BOOT, BECAUSE THE PINNED LETTER IS NOT EXCLUSIVE. The bind above ran while
+  # prime-run's answer stick was still attached beside the DIAG volume; the pin decides where OUR
+  # volume goes, it does not reserve the letter, and another removable volume present at boot can
+  # own it first. Reproduced on win10-acc by A/B/A 2026-10-20 with no clean install: add one 64 MB
+  # stick to qemu-extra-args and `Z:` becomes DUMMYSTK while the DIAG volume moves to D: - LogDir
+  # still reads Z:\qwt-logs\<vm>, that directory DOES NOT EXIST, and every module falls back to
+  # Q:\Qubes Logs. That is exactly how four cells of run 39225775322 swept 0 QWT lines while their
+  # logs sat on the image. The bind resolves the volume by LABEL and is idempotent (copied=0 when
+  # nothing is new), so re-asserting it on the boot that grading reads costs nothing and repoints
+  # LogDir at the letter the volume actually has.
+  if [ "${LOGVOL_BIND:-1}" = 1 ] && [ -n "${LOGVOL_IMG:-}" ]; then
+    say "  $tag-clean: re-asserting the log bind after the boot (the pinned letter is not exclusive)"
+    logvol_bind_now "$vm" "$tag-clean-postboot"
+  fi
   # Grade the install. ENTRY_PRISTINE=1 proves the entry state from the installer's own first
   # PRECONDITION line (there is no run marker: the installer was launched by the primer job, not
   # by run_install) and demands the installer's own 'clean install path' marker. CELL_PRIMED=1

@@ -437,6 +437,26 @@ pr_x=$(sed -E 's/(^|[^`])#.*/\1/' "$ROOT/mgmt/harness/prime-run.sh" | tr ' ' '\n
   && ok "frontend: prime-run declares no xvdj drive of its own" \
   || bad "frontend: prime-run declares $pr_x xvdj drive(s) - they collide with the library's"
 
+# EVERY CELL THAT GRADES AFTER A BOOT MUST RE-ASSERT THE BIND. The pinned letter is not exclusive:
+# the pin decides where OUR volume goes, it does not reserve the letter, and another removable
+# volume present at boot can own it first. Reproduced on win10-acc by A/B/A 2026-10-20 - one extra
+# 64 MB stick in qemu-extra-args and Z: became DUMMYSTK while the DIAG volume moved to D:, LogDir
+# still naming Z:\qwt-logs\<vm>, that directory gone, every module writing to Q:\Qubes Logs.
+# That is how four cells of run 39225775322 swept 0 QWT lines with their logs on the image.
+# The clean cell binds BEFORE its park, so its grading boot is exactly where the letter can move.
+_mx="$ROOT/mgmt/harness/matrix.sh"
+if command grep -qE 'logvol_bind_now "\$vm" "\$tag-clean-postboot"' "$_mx"; then
+  ok "letter: the clean cell re-asserts the bind on the boot grading reads"
+else
+  bad "letter: the clean cell binds before its park and never again - a volume that moved letter leaves LogDir naming another volume"
+fi
+# the appvm cell is the other one that grades a guest it did not just install
+if command grep -qE 'logvol_bind_now "\$app"' "$_mx"; then
+  ok "letter: the appvm cell binds the volume it attached"
+else
+  bad "letter: the appvm cell never binds, so LogDir keeps naming the TEMPLATE's directory"
+fi
+
 echo
 echo "RESULT: $pass passed, $fail failed  (fixtures: $T)"
 [ "$fail" -eq 0 ]
