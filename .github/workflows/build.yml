@@ -418,6 +418,29 @@ jobs:
       # normal operation. warning means something is not quite normal, yet workable." A read that
       # fails or returns short is still an ERROR, two lines below, and the wedge breadcrumb is kept
       # by the agent's own "CaptureThread: main loop slow" WARNING.
+      # THE STARTUP BANNER IS DEBUG, NOT AN EVENT. qrexec-wrapper is spawned once per qrexec call;
+      # acceptance run 39225775322 logged 155 invocations in one brief cell, and LogInit's six
+      # LogInfo lines times 155 is ~1085 of that module's 1250 lines - 87% of it a process
+      # announcing its own birth. The guest session read 2535 INFO against 52 WARN and 2 ERROR.
+      # Owner 2026-10-20: "ok for debug purposes but not on a product session". At
+      # LOG_LEVEL_DEBUG every one of them comes back. MUST be applied AFTER one-log-per-module,
+      # which is the only other patch touching log.c.
+      - name: Apply the windows-utils LogInit-banner-to-debug fix (always)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = $env:GITHUB_WORKSPACE
+          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-loginit-banner-debug.patch"
+          if ($LASTEXITCODE -ne 0) { throw "windows-utils loginit-banner-debug patch did not apply" }
+          # A patch that silently no-ops would ship the flood with a new version number.
+          $src = Get-Content "$ws\deps-src\windows-utils\src\log.c" -Raw
+          foreach ($m in @('Log started, module name', 'System uptime: %.3f seconds', 'Session: %lu', 'Command line: %s')) {
+            if ($src -notmatch [regex]::Escape($m)) { throw "banner line vanished instead of being demoted: $m" }
+          }
+          if ($src -match 'LogInfo\("Log started')   { throw 'the banner is still at INFO after patching' }
+          if ($src -match 'LogInfo\("System uptime') { throw 'the uptime line is still at INFO after patching' }
+          if ($src -match 'LogInfo\("Session:')      { throw 'the session line is still at INFO after patching' }
+          if ($src -notmatch 'LogDebug\("Log started') { throw 'the banner was not demoted to LogDebug' }
       - name: Apply the windows-utils blocking-read level fix (always)
         shell: pwsh
         run: |

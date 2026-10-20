@@ -80,10 +80,26 @@ esac
 cl=$(sed -n '/if (pumpsFinished)/,/^    }/p' "$SRC")
 n_err=$(printf '%s' "$cl" | command grep -c 'LogError("an output pump is still running')
 n_dbg=$(printf '%s' "$cl" | command grep -c 'LogDebug("an output pump is still running')
-if [ "$n_err" = 1 ] && [ "$n_dbg" = 2 ]; then
-  ok "loud_where_it_matters: expected ends and the already-reported backstop at Debug, everything else at ERROR"
+# THREE Debug arms since 2026-10-20, not two. The third is EXIT_REASON_DATA_ERROR when the
+# closed-vchan path has ALREADY reported the loss with its byte count (g_LossReported): a send that
+# finds the vchan closed fails HandleDataMessage and latches DATA_ERROR, so one teardown produced
+# TWO error lines - "vchan already closed with N byte(s) ... still to send" and "an output pump is
+# still running at exit - a data error". That is the double reporting the owner named ("one
+# teardown should be one line"), and the DRAIN_EXPIRED arm is the same demotion for the same
+# reason. Measured on acceptance run 39225775322: both lines in the same second for one lost
+# 2-byte reply, and together they breached error_lines_undeclared on two cells.
+# The ERROR count stays 1: a loss nobody has reported is still loud.
+if [ "$n_err" = 1 ] && [ "$n_dbg" = 3 ]; then
+  ok "loud_where_it_matters: expected ends, the already-reported backstop and the already-reported LOSS at Debug, everything else at ERROR"
 else
-  bad "loud_where_it_matters: error=$n_err (want 1) debug=$n_dbg (want 2)"
+  bad "loud_where_it_matters: error=$n_err (want 1) debug=$n_dbg (want 3)"
+fi
+# The demotion must be CONDITIONAL on the loss having been reported - an unconditional one would
+# silence a real loss that nothing else named.
+if printf '%s' "$cl" | command grep -q 'EXIT_REASON_DATA_ERROR && g_LossReported'; then
+  ok "loud_where_it_matters: the DATA_ERROR demotion is conditional on the loss already being reported"
+else
+  bad "the DATA_ERROR demotion is unconditional" "a loss nothing else named would go to Debug and vanish"
 fi
 # The ERROR branch must be the LAST one and unconditional: that is what makes an exit path someone
 # adds later land in it rather than being classified as fine by default.

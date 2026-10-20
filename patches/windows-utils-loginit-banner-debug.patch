@@ -1,0 +1,57 @@
+diff --git a/src/log.c b/src/log.c
+index 6b9d581..19d568b 100644
+--- a/src/log.c
++++ b/src/log.c
+@@ -331,28 +331,36 @@ void LogInit(IN const WCHAR *logDir OPTIONAL, IN const WCHAR *logName)
+ 
+ fallback:
+     free(logPath);
+-    LogInfo("Log started, module name: %s", g_LogName);
++    // THE STARTUP BANNER IS DEBUG, NOT AN EVENT. qrexec-wrapper is spawned once per qrexec
++    // call: measured on acceptance run 39225775322, one brief cell logged 155 invocations, and
++    // these six lines times 155 is ~1085 of that module's 1250 lines - 87% of it a process
++    // announcing its own birth. Across the whole guest the session read 2535 INFO against 52
++    // WARN and 2 ERROR. A product session's log should carry what HAPPENED; who started, as
++    // whom, on which build is diagnostic. At LOG_LEVEL_DEBUG every line below comes back, which
++    // is where it is wanted. Owner 2026-10-20: "ok for debug purposes but not on a product
++    // session".
++    LogDebug("Log started, module name: %s", g_LogName);
+ 
+     // system uptime (useful for performance testing)
+     UINT64 uptime_ms = GetTickCount64();
+-    LogInfo("System uptime: %.3f seconds", uptime_ms / 1000.0f);
++    LogDebug("System uptime: %.3f seconds", uptime_ms / 1000.0f);
+ 
+     // reuse systemPath
+     len = ARRAYSIZE(systemPath); //UNLEN
+     if (!GetUserName(systemPath, &len))
+     {
+         win_perror("GetUserName");
+-        LogInfo("Running as user: <UNKNOWN>, process ID: %d", GetCurrentProcessId());
++        LogDebug("Running as user: <UNKNOWN>, process ID: %d", GetCurrentProcessId());
+     }
+     else
+     {
+-        LogInfo("Running as user: %s, process ID: %d", systemPath, GetCurrentProcessId());
++        LogDebug("Running as user: %s, process ID: %d", systemPath, GetCurrentProcessId());
+     }
+ 
+     // version
+     if (ERROR_SUCCESS == GetCurrentModuleVersion(&versionMajor, &versionMinor))
+     {
+-        LogInfo("Module version: %d.%d.%d.%d",
++        LogDebug("Module version: %d.%d.%d.%d",
+                 (versionMajor >> 0x10) & 0xffff,
+                 (versionMajor >> 0x00) & 0xffff,
+                 (versionMinor >> 0x10) & 0xffff,
+@@ -363,8 +371,8 @@ fallback:
+     OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token);
+     GetTokenInformation(token, TokenSessionId, &sessionId, sizeof(sessionId), &len);
+     CloseHandle(token);
+-    LogInfo("Session: %lu", sessionId);
+-    LogInfo("Command line: %s", GetOriginalCommandLine());
++    LogDebug("Session: %lu", sessionId);
++    LogDebug("Command line: %s", GetOriginalCommandLine());
+ }
+ 
+ // Use the log directory from registry config.
