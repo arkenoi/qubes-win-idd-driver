@@ -408,6 +408,34 @@ def l8_findings_current_state() -> None:
             finding("L8-findings-undated-claim", f"{p.name}: {s[:70]}",
                     "CURRENT STATE bullet carries neither [verified <date>] nor UNVERIFIED")
 
+    # L30: A CLOSED ENTRY MAY NOT SIT IN THE LIVE REGISTER. Owner, 2026-10-21: "ZERO closed issues
+    # are allowed in main file, and most of archeology needs to be purged, especially history of
+    # stupid ways we failed." findings/issues.md had reached 800K / 239 CURRENT STATE entries, 138
+    # of them already fixed and never retired, and at that size a Jev call carrying the register
+    # died with max_tokens_exceeded - the register could no longer be submitted as evidence about
+    # itself. Retiring them is not a tidy-up; it is what keeps the file usable.
+    # The marker is read from the entry HEAD - the leading bracket group - and NOT from the
+    # narrative, because the narrative routinely says "FIXED" about something adjacent. Matching the
+    # whole line is exactly how my own first pass classified HALTREFUSED660 [P1, OPEN] as closed.
+    # A head that states both (a fix landed for part of it, the rest is open) stays: the rule fires
+    # only on a head that says closed and never says open.
+    CLOSED_MARKS = ("FIXED", "CLOSED", "RESOLVED", "RETIRED", "REFUTED", "WITHDRAWN",
+                    "RETRACTED", "STALE", "DECISION TAKEN", "NOT OURS", "UPSTREAM DESIGN")
+    OPEN_MARKS = ("OPEN", "QUEUED", "PENDING", "OWNER'S CALL", "NOT YET WIRED", "OWED",
+                  "REQUESTED", "NOT FIXED", "UNVERIFIED", "RECURRED", "HELD BY THE OWNER")
+    live = fdir / "issues.md"
+    if live.exists():
+        txt = live.read_text(encoding="utf-8", errors="replace")
+        for line in txt.split("## History", 1)[0].splitlines():
+            s = line.strip()
+            if not s.startswith(("- ", "* ")):
+                continue
+            m = re.match(r"[-*] (.{0,140}?)\]", s)
+            head = (m.group(1) if m else s[:120]).upper()
+            if any(c in head for c in CLOSED_MARKS) and not any(o in head for o in OPEN_MARKS):
+                finding("L30-closed-entry-in-live-register", f"issues.md: {s[:70]}",
+                        "entry head says it is closed - retire it to findings/issues-closed.md")
+
     idx = ROOT / "FINDINGS.md"
     if idx.exists():
         body = idx.read_text(errors="replace")
