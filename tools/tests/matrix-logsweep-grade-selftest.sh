@@ -123,6 +123,41 @@ state_is "an EMPTY qwt-logs is said"              "qwt-logs is EMPTY"
 printf 'not a qwt line\n' > "$M/logvol-statecell/files/qwt-logs/something.log"
 state_is "files with no QWT shape are said"       "none in QWT's line shape"
 
+# THE CLAUSE MUST READ THE COLLECTOR'S MEASUREMENT, NOT A SHELL VARIABLE. On run 39225775322 four
+# cells reported "0 QWT line(s)" and this clause said "no log volume was attached for this cell".
+# For the two appvm cells that was FALSE - their volume had attached minutes earlier - and for the
+# two clean cells it was useless, their bind receipt reading LOGVOL-BIND ok, 21 copied, 15 modules.
+# LOGVOL_IMG is cleared by the PREVIOUS cell's pull, so it describes the shell, not the rig. The
+# reason was in meta.json: logdir.exists=0.
+mkdir -p "$M/statecell-guestlogs/logs"
+_meta(){ # <exists> - write the collector's meta.json the way the guest-side collector does
+  python3 -c 'import json,sys,base64
+p=base64.b64encode(b"Z:\\qwt-logs\\win10-acc").decode()
+json.dump({"logdir":{"pathb64":p,"exists":sys.argv[1]}}, open(sys.argv[2],"w"))' "$1" "$M/statecell-guestlogs/logs/meta.json"
+}
+
+_meta 0
+state_is "logdir exists=0 is named, with the path"  "did not exist in the guest at sweep time"
+state_is "...and it quotes the LogDir the guest was given" "Z:\\qwt-logs\\win10-acc"
+state_is "...and it says how many files the volume DOES hold" "the pulled volume holds"
+
+# the control: exists=1 must NOT produce that clause, or it would fire on every cell
+_meta 1
+state_is "logdir exists=1 falls through to the ladder" "none in QWT's line shape"
+
+# the regression itself: the variable is empty (the previous cell's pull cleared it) while the
+# volume plainly WAS pulled for this cell. The old clause called that "no volume attached".
+_meta 1
+LOGVOL_IMG=""
+got_regr=$(_matrix_logvol_state "statecell")
+case "$got_regr" in
+  *"no log volume was attached"*) fail=$((fail+1)); echo "FAIL a pulled volume is not reported as never attached: got '$got_regr'" ;;
+  *) pass=$((pass+1)); echo "ok   a pulled volume is not reported as never attached" ;;
+esac
+# and with neither a variable nor a pull dir, "never attached" is still the right answer
+rm -rf "$M/logvol-statecell" "$M/statecell-guestlogs"
+state_is "nothing attached and nothing pulled is still said plainly" "no log volume was attached"
+
 M="$SAVED_M"
 
 # --- WHICH GUEST A CELL'S SWEEP BELONGS TO ------------------------------------------------------

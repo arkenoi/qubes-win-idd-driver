@@ -322,7 +322,28 @@ no(){ FAIL=$((FAIL+1)); local _l="[ERROR] "; case "$*" in *INVALID*) INVALID=$((
 # was nothing to write to" is a verdict about nothing.
 _matrix_logvol_state(){ # <cell> -> one clause naming the instrument's state
   local d="$M/logvol-$1/files"
-  [ -n "${LOGVOL_IMG:-}" ] || { echo "no log volume was attached for this cell"; return; }
+  # READ THE FACT THE COLLECTOR ALREADY MEASURED BEFORE GUESSING FROM A VARIABLE. On the 4.3.37
+  # campaign (run 39225775322) four of eight cells reported "0 QWT line(s)" and this clause said
+  # "no log volume was attached for this cell" - which was FALSE for the two appvm cells, whose
+  # volume had attached minutes earlier (LOGVOL-ATTACHED id=win10-app), and useless for the two
+  # clean cells, whose bind receipt read LOGVOL-BIND ok with 21 files copied and 15 modules
+  # written. LOGVOL_IMG describes a shell variable that the PREVIOUS cell's pull clears, not the
+  # rig. The real reason was in the collector's own meta.json all along: logdir.exists=0 - LogDir
+  # named a directory the guest could not see at sweep time, so the collector fell back to
+  # Q:\Qubes Logs and read only install-era files. A wrong reason on a real failure cost an hour
+  # aimed at the bind, which was working.
+  local meta="$M/$1-guestlogs/logs/meta.json" lp lx
+  if [ -r "$meta" ]; then
+    lp=$(python3 -c 'import json,sys,base64; m=json.load(open(sys.argv[1])).get("logdir",{}); print(base64.b64decode(m.get("pathb64","")).decode("utf-8","replace"))' "$meta" 2>/dev/null)
+    lx=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("logdir",{}).get("exists",""))' "$meta" 2>/dev/null)
+    if [ "$lx" = 0 ] && [ -n "$lp" ]; then
+      local onvol=0
+      [ -d "$d/qwt-logs" ] && onvol=$(find "$d/qwt-logs" -type f 2>/dev/null | wc -l)
+      echo "LogDir '$lp' did not exist in the guest at sweep time (meta.json logdir.exists=0) so the collector fell back and read none of it - the pulled volume holds $onvol file(s)"
+      return
+    fi
+  fi
+  [ -n "${LOGVOL_IMG:-}" ] || [ -d "$d" ] || { echo "no log volume was attached for this cell"; return; }
   [ -d "$d" ]              || { echo "the log volume was never pulled, so nothing could be read"; return; }
   [ -d "$d/qwt-logs" ]     || { echo "the volume carries no qwt-logs dir - attached, never bound"; return; }
   local n; n=$(find "$d/qwt-logs" -type f 2>/dev/null | wc -l)
@@ -2711,7 +2732,17 @@ if [ -x tools/sweep-gate.sh ]; then
   #
   # BOUNDED, AND IT SAYS SO WHEN IT IS. A capped sweep that reads as clean is worse than no sweep,
   # so the cap is reported and raises the INVALID class exactly like an unaccounted error would.
-  SW_CAP="${MATRIX_SWEEP_FILE_CAP:-600}"
+  # THE BOUND MUST TRACK THE CAMPAIGN, NOT BE A CONSTANT. Run 39225775322 - a full eight-cell
+  # matrix - produced 610 files against a fixed 600 and raised INVALID-SWEEP-CAPPED on campaign
+  # SIZE alone. A cap a complete campaign exceeds by construction empties the class exactly when
+  # the campaign is most complete: the fuller the matrix, the more certain it is not swept.
+  # Measured on that run: 610 files over 8 cells, 77 per cell. Budget 150 per cell - headroom of
+  # about 2x - and keep the old 600 as a floor so a one-cell campaign is bounded as before. The
+  # cap is still REPORTED when exceeded; that part was right and is unchanged.
+  _sw_cells=$(printf '%s' "${CELLS:-}" | wc -w)
+  _sw_budget=$(( _sw_cells * 150 ))
+  [ "$_sw_budget" -lt 600 ] && _sw_budget=600
+  SW_CAP="${MATRIX_SWEEP_FILE_CAP:-$_sw_budget}"
   # NO DEPTH LIMIT - the cap below is the bound, not the depth. This read -maxdepth 3 and the guest
   # logs land at $M/logvol-<cell>/files/qwt-logs/<vm>/*.log, which is depth 5, so the limit excluded
   # exactly the files the previous commit added scope for and claimed were covered. Measured on a
