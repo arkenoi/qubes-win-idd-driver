@@ -101,6 +101,24 @@ if printf '%s' "$cl" | command grep -q 'EXIT_REASON_DATA_ERROR && g_LossReported
 else
   bad "the DATA_ERROR demotion is unconditional" "a loss nothing else named would go to Debug and vanish"
 fi
+# AN ERROR MUST NAME ITS OWN CAUSE. EXIT_REASON_DATA_ERROR's name is the string "a data error",
+# and the caller that latches it was DISCARDING the Win32 status HandleDataMessage had just
+# returned - so the line that breaches error_lines_undeclared said nothing about why. Measured on
+# acceptance run 39476792836, 2026-10-20: three cells breached on that line and the cause could not
+# be recovered from any artefact, because the code knew it and threw it away. The owner's rule on
+# that metric is that an error line our code wrote, whose cause this run did not declare, is a
+# defect to fix AT ITS CAUSE - so the cause is now written down.
+if printf '%s' "$cl" | command grep -q 'HandleDataMessage failed with 0x%x'; then
+  ok "data_error_names_itself: the exit line reports the Win32 status, not just the label"
+else
+  bad "data_error_names_itself: the line still says only '%s'" "the status is in hand at the failure and is discarded"
+fi
+if command grep -q 'if (g_DataErrorStatus == ERROR_SUCCESS)' "$SRC"; then
+  ok "data_error_names_itself: it keeps the FIRST status, not the last - a later failure is a consequence"
+else
+  bad "data_error_names_itself: the status is overwritten by later failures" "the first one is the cause"
+fi
+
 # The ERROR branch must be the LAST one and unconditional: that is what makes an exit path someone
 # adds later land in it rather than being classified as fine by default.
 last_branch=$(printf '%s' "$cl" | command grep -oE 'else if|else$|Log(Debug|Error)\("an output pump' | tail -2 | tr '\n' ' ')
