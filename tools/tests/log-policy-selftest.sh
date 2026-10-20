@@ -280,6 +280,26 @@ for h in toast-hold-test.sh crop-before-map.sh; do
   fi
 done
 
+# A HARNESS THAT READS THE PRODUCT'S LOGS MUST ASK WHERE THEY ARE. LogDir is configurable, the
+# campaign runs with LOGVOL_BIND=1 pointing it at the evidence volume, and 792a2b2e stopped the
+# installer forcing it back to Q: when a value is already set. crop-before-map hard-coded
+# "Q:\Qubes Logs\gui-agent-*.log" and returned INVALID rc=2 on run 39225775322 with a message
+# blaming the guest - "either no agent is running or it has written nothing" - for its own
+# assumption. The resolution order is the product's own (log.c:358 / CfgOpenKey): the per-module
+# key first, then the root, and only then the historical default.
+for h in mgmt/harness/crop-before-map.sh; do
+  if command grep -qE 'Get-ChildItem "Q:\\Qubes Logs\\gui-agent' "$h"; then
+    bad "logdir: $h hard-codes Q:\\Qubes Logs for the agent log - invisible to any run that moved LogDir"
+  else
+    ok "logdir: $h does not hard-code the agent log's directory"
+  fi
+  if command grep -q 'Invisible Things Lab\\Qubes Tools\\gui-agent' "$h"; then
+    ok "logdir: $h reads the per-module LogDir key before the root, as the product does"
+  else
+    bad "logdir: $h never reads the per-module LogDir key"
+  fi
+done
+
 echo
 echo "log-policy-selftest: $pass passed, $fail failed"
 [ "$fail" = 0 ] || exit 1

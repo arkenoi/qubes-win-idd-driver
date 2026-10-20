@@ -163,15 +163,38 @@ fi
 # guest/health-check.ps1's agent_log_healthy.
 CUR=$(ps_probe LG '$a=@(Get-Process gui-agent -ErrorAction SilentlyContinue)
 if ($a.Count -eq 0) { Write-Host "LG="; exit }
+$dirs=@()
+foreach ($k in @("HKLM:\Software\Invisible Things Lab\Qubes Tools\gui-agent","HKLM:\Software\Invisible Things Lab\Qubes Tools")) {
+  try { $v=(Get-ItemProperty -Path $k -Name LogDir -ErrorAction Stop).LogDir } catch { $v=$null }
+  if ($v -and ($dirs -notcontains $v)) { $dirs+=$v }
+}
+if ($dirs -notcontains "Q:\Qubes Logs") { $dirs+="Q:\Qubes Logs" }
 $hit=$null
-foreach ($f in @(Get-ChildItem "Q:\Qubes Logs\gui-agent-*.log" -ErrorAction SilentlyContinue)) {
-  foreach ($pr in $a) {
-    if (Select-String -LiteralPath $f.FullName -Pattern ("-" + $pr.Id + ":[0-9]+-[A-Z]\]") -Quiet -ErrorAction SilentlyContinue) { $hit=$f; break }
+foreach ($d in $dirs) {
+  foreach ($f in @(Get-ChildItem (Join-Path $d "gui-agent-*.log") -ErrorAction SilentlyContinue)) {
+    foreach ($pr in $a) {
+      if (Select-String -LiteralPath $f.FullName -Pattern ("-" + $pr.Id + ":[0-9]+-[A-Z]\]") -Quiet -ErrorAction SilentlyContinue) { $hit=$f; break }
+    }
+    if ($hit) { break }
   }
   if ($hit) { break }
 }
 if ($hit) { Write-Host ("LG=" + $hit.FullName) } else { Write-Host "LG=" }')
-[ -n "$CUR" ] || { no "no gui-agent log on the guest carries a RUNNING agent's pid - either no agent is running or it has written nothing, so there is nothing to grade. INVALID INSTRUMENT, not a product verdict"; exit 2; }
+if [ -z "$CUR" ]; then
+  # SAY WHERE IT LOOKED. The old text blamed the guest - "either no agent is running or it has
+  # written nothing" - for a lookup that named ONE literal directory, Q:\Qubes Logs. On run
+  # 39225775322 this returned INVALID rc=2 while the campaign ran with LOGVOL_BIND=1, i.e. with
+  # LogDir deliberately pointed elsewhere, and 792a2b2e had stopped the installer forcing it back.
+  _searched=$(ps_probe SEARCHED '$dirs=@()
+foreach ($k in @("HKLM:\Software\Invisible Things Lab\Qubes Tools\gui-agent","HKLM:\Software\Invisible Things Lab\Qubes Tools")) {
+  try { $v=(Get-ItemProperty -Path $k -Name LogDir -ErrorAction Stop).LogDir } catch { $v=$null }
+  if ($v -and ($dirs -notcontains $v)) { $dirs+=$v }
+}
+if ($dirs -notcontains "Q:\Qubes Logs") { $dirs+="Q:\Qubes Logs" }
+Write-Host ("SEARCHED=" + ($dirs -join ";"))')
+  no "no gui-agent log carries a RUNNING agent's pid in any directory LogDir names (searched: ${_searched:-<LogDir unreadable>}) - either no agent is running, it has written nothing, or LogDir names a drive another volume now owns. INVALID INSTRUMENT, not a product verdict"
+  exit 2
+fi
 say "current boot log: $CUR"
 
 # BASELINE THE ACCUMULATING LOG. These lines persist across runs; without an offset a previous
