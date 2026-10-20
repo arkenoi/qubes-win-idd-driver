@@ -346,12 +346,26 @@ for r in $(seq 1 "$ROUNDS"); do
     # firing the task here tests the debounce, not the scan, and leaves no trace either way.
     # Measured 2026-09-20: the check waited 15 minutes for a scan that had correctly declined to run.
     timeout -k 10 900 tools/qtest run 'powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Program Files\Qubes Tools\bin\qubes-windows-update.ps1" -Action scan -RelayExe "C:\Program Files\Qubes Tools\bin\qubes-updates-relay.exe"' >/dev/null 2>&1
+    # RECORD WHAT WAS SAMPLED. On 2026-10-20 round 2 of run 3 timed out here after 15m11s -
+    # "the scan never ran" - while rounds 1 and 3 saw their scan, and NOTHING in the evidence
+    # covered the window: each round's captured update-status.json is the PASS's own status
+    # (action=full phase=done), stamped before the oscillation scan even started. So the one
+    # question that matters - did the scan not run, or did a 30 s sampler miss a fast one - could
+    # not be answered from the artefacts, and template-update has now failed three campaigns for
+    # three different reasons. Every poll is written here with its time, so the next timeout is
+    # read rather than guessed.
+    _osc_log="$OUT/round$r/oscillation-poll.log"
+    mkdir -p "$OUT/round$r" 2>/dev/null
+    printf 'oscillation poll for round %s, started %s (budget 900s, 30s interval)\n' \
+      "$r" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$_osc_log"
     _sc=$(( $(date +%s) + 900 )); scan_seen=0
     while [ "$(date +%s)" -lt "$_sc" ]; do
       sleep 30
       st_now=$(guest_file 'C:\ProgramData\Qubes\update-status.json' | tr -d '\r')
+      printf '%s  %s\n' "$(date -u +%H:%M:%SZ)" "$(printf '%s' "${st_now:-<empty read>}" | tr '\n' ' ' | cut -c1-240)" >> "$_osc_log"
       case "$st_now" in *'"action"'*'scan'*) scan_seen=1; break;; esac
     done
+    printf 'result: scan_seen=%s after %ss\n' "$scan_seen" "$(( 900 - (_sc - $(date +%s)) ))" >> "$_osc_log"
     dom0_after_scan=$(dom0_avail)
     if [ "$scan_seen" = 0 ]; then
       log "[ERROR] round $r: FAIL - the scan never ran, so the oscillation check did not happen (missing data fails)"
