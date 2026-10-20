@@ -2289,6 +2289,18 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the
       1) no "$3-appvm boot $b: logon session but NO desktop shell - STALE PRIVATE VOLUME (an AppVM reused across a template re-base; the re-create in this cell exists to prevent exactly this - see the w_appvm_shell diagnosis in $R)"; return ;;
       2) no "$3-appvm boot $b: no desktop shell within 600s"; return ;;
     esac
+    # POINT THE APPVM AT ITS OWN VOLUME. The cell creates the volume and attaches it before the
+    # first boot, but never bound it - and an AppVM inherits the TEMPLATE's registry, so LogDir
+    # still named the TEMPLATE's directory. Measured on run 39225775322: both appvm cells swept
+    # `Z:\qwt-logs\win10-acc` while the volume they were given carried `id win10-app`, their
+    # collector reported `logdir.exists=0`, and both cells failed INVALID-SWEEP-BLIND with 0 QWT
+    # lines - on a guest whose own evidence volume had attached correctly minutes earlier.
+    # ON THE FIRST BOOT, AND AFTER THE SHELL: the bind writes LogDir with the letter the volume
+    # actually has, so it must run on a settled, logged-on boot - the same reason the clean cell
+    # binds after prime-run rather than inside it. Boots 2 and 3 then write where boot 1 pointed.
+    if [ "$b" = 1 ] && [ "${LOGVOL_BIND:-1}" = 1 ] && [ -n "${LOGVOL_IMG:-}" ]; then
+      logvol_bind_now "$app" "$3-appvm"
+    fi
     # EVERY BOOT IS STILL GRADED. None of the four verdicts ended the cell before this split, and
     # none does now: the loop runs all three boots whatever one of them says, because the
     # instrument verdict below needs to know how many of the three were affected. Mapping the

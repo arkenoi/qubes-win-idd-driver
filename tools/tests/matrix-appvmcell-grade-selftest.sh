@@ -154,5 +154,25 @@ reset_case; call; z="$OK/$NO/$(printf '%s' "$LINES" | md5sum | cut -c1-8)"
 if [ "$x" = "$y" ] && [ "$y" = "$z" ]; then ok_ "DETERMINISTIC: three identical runs give the identical verdict and log ($x)"
 else no_ "deterministic over three identical runs" "$x / $y / $z"; fi
 
+# THE CELL MUST POINT THE APPVM AT ITS OWN VOLUME. It creates and attaches one before the first
+# boot but, until 2026-10-20, never bound it - and an AppVM inherits the TEMPLATE's registry, so
+# LogDir named the template's directory. On run 39225775322 both appvm cells swept
+# Z:\qwt-logs\win10-acc while holding a volume with id win10-app, their collector reported
+# logdir.exists=0, and both failed INVALID-SWEEP-BLIND with 0 QWT lines.
+# The predicate is the call the cell actually makes on its OWN subject ($app), not the mention of
+# a function name: a bind of the churn subject would read the same to a careless grep.
+_appvm_fn=$(sed -n '/^cell_appvm(){/,/^}$/p' mgmt/harness/matrix.sh)
+[ -n "$_appvm_fn" ] || _appvm_fn=$(sed -n '/appvm) /,/^  }/p' mgmt/harness/matrix.sh)
+if printf '%s' "$_appvm_fn" | command grep -qE 'logvol_bind_now "\$app"'; then
+  ok_ "the appvm cell binds the log volume it attached, on its OWN subject"
+else
+  no_ "the appvm cell binds its own volume" "no logvol_bind_now \"\$app\" in the cell body"
+fi
+if printf '%s' "$_appvm_fn" | command grep -qE '\[ "\$b" = 1 \].*logvol_bind_now|b" = 1 \]'; then
+  ok_ "...once, on the first boot, so boots 2 and 3 write where boot 1 pointed"
+else
+  no_ "the appvm bind is guarded to the first boot" "no first-boot guard around it"
+fi
+
 printf 'matrix-appvmcell-grade-selftest: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
