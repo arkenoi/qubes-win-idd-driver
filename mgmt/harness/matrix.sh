@@ -86,91 +86,28 @@ LOGVOL_VM=""; LOGVOL_IMG=""
 # Every caller of this has just finished an install, so the clock feature needs clearing here too.
 logvol_bind_now(){ # $1=vm $2=label
   clock_feature_report "$1" "$2"
-  # ON BY DEFAULT since 2026-10-19 (LOGVOL_BIND=0 to opt out). This default has been wrong in both directions and
-  # its stated REASON has been wrong once more, so what was measured, what was judged and what is
-  # still open are kept apart below.
+  # ON BY DEFAULT since 2026-10-19; LOGVOL_BIND=0 runs on the stock log path deliberately.
   #
-  # THE MECHANISM THIS COMMENT ASSERTED UNTIL 2026-10-19 IS REFUTED. It read: "the bind points
-  # LogDir at a removable volume, which need not be mounted when a service starts; every QWT module
-  # reads LogDir once, at its own LogInit; a USB volume behind an emulated xHCI controller enumerates
-  # on its own schedule, so a module that starts first opens no log at all - and never retries."
-  # Jev, over the complete run-8 artifact pack (~/qwt-accept/rel-38629737763-campaign-STOPPED-
-  # logvolbind-run8/matrix, verdict in scratchpad/jev-logvolhyp2-out.json): h1_enumeration REFUTED
-  # 0.96. The pack, with the clocks resolved (that matrix.log stamped dom0 LOCAL, the guest declared
-  # tz=+00:00): WIN10-clean bound at `[01:59:49]` with the volume MOUNTED and the registry written -
-  #   LOGVOL-BIND ok mode=registry id=win10-acc drive=Z: found=E: letter=pinned
-  #     old=Q:\Qubes Logs new=Z:\qwt-logs\win10-acc copied=21
-  # - and was graded at `[02:02:35] [WARN] FAIL  WIN10-clean: console-window check could not judge -
-  # INVALID-INSTRUMENT: INSTRUMENT: no gui-agent log found in Z:\qwt-logs\win10-acc on win10-acc`,
-  # its health.json reading "agent_pids":[3972], "agent_logs_seen":1, "any_agent_log_held_open":
-  # false, "instance_log":"NONE", "log_dirs_searched":["Z:\\qwt-logs\\win10-acc",...] - the
-  # registry still naming Z: at grading. WIN10-reinstall then bound at `[02:06:54]` with the volume
-  # mounted AGAIN and the registry INTACT -
-  #   LOGVOL-BIND ok ... drive=Z: found=D: letter=pinned old=Z:\qwt-logs\win10-acc
-  #     new=Z:\qwt-logs\win10-acc copied=0
-  # LogDir was consistent and the volume was there both times; what failed is that nothing WROTE
-  # to it. This register already held the direct counter-measurement too: logvol-chain-check.sh on
-  # win10-acc, 2026-10-15 - after a REBOOT a log on Z: still HELD OPEN, 279 -> 549 lines
-  # (findings/issues.md LOGVOLLETTERMOVES) - a module opened its log on the volume at a LogInit
-  # after boot, which the paragraph above said cannot happen.
-  # The three explanations that paragraph led to were judged on the same pack: a cross-VM restore
-  # rolling LogDir back (h2) REFUTED 0.79; the pinned letter dangling when the USB device set
-  # changes (h3) REFUTED 0.87 - the pin SUCCEEDED on both binds above, found=E: then found=D:; the
-  # installer re-seeding LogDir to Q:\Qubes Logs with `reg add /f`, twice per install, undoing the
-  # bind (h4) UNRESOLVED - refuted 0.42 / well_supported 0.30 / plausible_unproven 0.26 - the leading
-  # candidate, not called ON THAT PACK. The one measurement that settles h4 is
-  #   reg query "HKLM\Software\Invisible Things Lab\Qubes Tools" /v LogDir
-  # on a bound guest AFTER an install - and it was TAKEN the same day, on win11de-tup, by d1e2e348
-  # (mgmt/harness/logvol-bind.ps1: "A direct read taken 2026-10-19 confirmed it: LogDir = 'Q:\Qubes
-  # Logs', no per-module key"). The artifacts this qube holds agree, guest-local = UTC+03:00: the bind
-  # `02:00:56` UTC (05:00:56 local); the stick's newest entry
-  # `qrexec-wrapper-20261019-050148-10012.log` at 05:01:48; the installer's final.log:222
-  # `2026-10-19 05:02:00 [INFO] seeded gui-agent registry defaults (SeamlessMode=1, DisableCursor=1,
-  # LogDir)` twelve seconds later; pulls at 02:03:52Z and 02:08:48Z with nothing newer on the stick.
-  # Jev on that sequence (scratchpad/jev-a-settled-out.json): a_logdir_shifted established 0.96,
-  # stick_exonerated 0.76. d1e2e348 binds through the PER-MODULE key, which that commit shows
-  # windows-utils reading before the root (log.c:358, config.c), so the installer's root seed no
-  # longer undoes the bind. The run-8-pack verdict above is that pack's reading and stands as such.
+  # WHY IT IS ON: the volume is the only instrument that survives a wedge - a guest that will not
+  # halt cannot be asked for its logs, and mtools reads the image with no guest at all. The 4.3.37
+  # campaign is the case for it: win11-reinstall went silent after its install reboot and the cell
+  # produced 2 files / 0 QWT lines, because the bind was off. Jev: enable 0.80, keep_off 0.01.
   #
-  # WHAT STAYS MEASURED (run 8, 2026-10-15): after the cell's park/restore NOTHING new reached the
-  # volume - the pull at read_utc=2026-10-14T23:04:41Z lists 25 files whose newest guest-written
-  # entries are 22:59 (the bind minute; guest tz=+00:00, so those FAT times ARE UTC) - while the
-  # agent was alive and held no log open; the IDD check found no line to read; the console-window
-  # check reported INVALID-INSTRUMENT. The same listing shows the trap this comment fell into: the
-  # host-written `LOGVOL TAG 2026-10-15 1:50` sits three hours "later" than `win10-acc 2026-10-14
-  # 22:59` for an event nine minutes EARLIER - mtools writes dom0 local, the guest wrote UTC.
-  # THE PIN WAS NOT THE ANSWER TO THIS. Pin-LogVol fixed the LETTER - the volume is at Z: and stays
-  # there across a reboot (logvol-chain-check.sh, 15 links, 0 broke). This comment once carried the
-  # measurement AND "ON BY DEFAULT now that the letter is PINNED" in one paragraph, a theory
-  # overriding a measurement; it then replaced that theory with the enumeration story, which
-  # misled three successive explanations in one night (2026-10-19).
-  # AND THE CONTROL IS UNAMBIGUOUS: WIN10-clean's accept battery PASSED in the campaigns before this
-  # instrument was wired into it (rel-38522636380 `[10:10:18] PASS  WIN10-clean: accept-clean
-  # battery PASS`, rel-38571770442 `[17:02:48] PASS  WIN10-clean: accept-clean battery PASS`) and
-  # failed in every campaign since (run 8: `[02:04:41] [ERROR] FAIL  WIN10-clean: accept-clean
-  # battery FAILED`). An acceptance run measures the SHIPPED configuration; redirecting the
-  # product's log directory onto a test stick substitutes test conditions, and on an unwedged guest
-  # qrexec pulls the logs anyway. LOGVOL_BIND=1 is for hunting a wedge, which is what the volume
-  # was built for. The stick itself stays ATTACHED either way - it carries the installer's own diag
-  # markers.
-  # THE DEFAULT IS NOW 1, AND THE PARAGRAPH ABOVE IS WHY IT USED TO BE 0 - read it as history.
-  # It rested on one correlation: WIN10-clean's battery passed before this instrument was wired in
-  # and failed in every campaign after. Run 8's own lines say what that failure WAS:
-  #   [01:59:49]  WIN10-clean: QWT logs bound to the log volume
-  #   [02:02:35]  FAIL ... INVALID-INSTRUMENT: no gui-agent log found in Z:\qwt-logs\win10-acc
-  #   health.json: agent_pids=[3972] any_agent_log_held_open=false instance_log=NONE
-  # The agent was ALIVE and LogDir named a directory nothing was writing to - the LogDir-overwrite
-  # defect (the installer forced the root value back five seconds after the bind; established 0.96),
-  # not the redirect harming the product. With that fixed, the pin refusing rather than recording a
-  # low letter, and the bind re-asserted after the install, the correlation is accounted for and
-  # nothing is left that evidences perturbation (Jev perturbation_evidence_left 0.13;
-  # substitutes_test_conditions 0.27 - only WHERE logs are written changes, not what is measured).
-  # AND WE DEPEND ON IT. The volume exists to read a WEDGED guest, and the 4.3.37 campaign is the
-  # case: win11-reinstall went silent after its install reboot ("guest did not answer qrexec after
-  # reboot", ACPI ignored, killed) and the cell produced 2 files / 0 QWT lines - nothing to diagnose
-  # it with, because the bind was off. Jev enable_for_release_run: enable 0.80, keep_off 0.01.
-  # Set LOGVOL_BIND=0 to run on the stock log path deliberately; a bind that cannot pin a high
-  # letter REFUSES loudly rather than recording one a PV volume can claim (logvol-bind.ps1).
+  # WHAT THE BIND DOES AND DOES NOT GOVERN, which is the whole of what a reader needs here:
+  #   * it writes LogDir through the PER-MODULE key, which windows-utils reads before the root
+  #     (log.c:358, config.c), so the installer's root seed no longer undoes it;
+  #   * it takes effect at a module's NEXT LogInit. Modules already running keep their current file.
+  #     So modules that start LATER than the bind (qrexec-wrapper per call, file-receiver per
+  #     transfer) land on the volume, and BOOT-TIME modules do not - which is why park_installed
+  #     CLEARS LogDir, so an AppVM's boot-time family falls to the product's own default instead of
+  #     an inherited path that names a letter not yet assigned. See logvol_clear_guest.
+  #   * a bind that cannot pin a high letter REFUSES rather than recording one a PV volume can
+  #     claim (logvol-bind.ps1).
+  #
+  # The eight-day hypothesis history this comment used to carry - four mechanisms proposed and three
+  # refuted on the run-8 artifact pack, with the clock-reading trap that misled them - is in git
+  # history and in findings/issues.md under LOGVOLBINDLATE and LOGVOLPROOFMEASURESTHEPROVER. It is
+  # not operative, and 104 lines of it above 25 lines of code is how the operative part got lost.
   [ "${LOGVOL_BIND:-1}" = 1 ] || { say "  $2: log volume NOT bound (LOGVOL_BIND=0) - the guest logs where it ships to"; return 0; }
   [ -n "$LOGVOL_IMG" ] || return 0
   if logvol_bind_guest "$1" "$1" >>"$M/$2-logvol-bind.out" 2>&1; then
@@ -191,9 +128,19 @@ logvol_bind_now(){ # $1=vm $2=label
     say "  $2: log path PROVEN end to end ($(command grep -ao 'nonce=[^ ]*' "$M/$2-logvol-proof.out" 2>/dev/null | tail -1))"
   else
     # HARD. A log device that failed is not a degraded run, it is a run with no instrument that
-    # survives a wedge - and the wedge is what this volume exists for. Measured 2026-10-20, run
+    # survives a wedge - and the wedge is what this volume exists for. Enforced by lint L29.
+    #
+    # THE MEASUREMENT THIS COMMENT USED TO CITE IS WITHDRAWN. It read: "Measured 2026-10-20, run
     # 39225775322 WIN10-clean: this printed [WARN] and carried on; eleven minutes later the guest
-    # went SPIN and nothing from inside it survived. Enforced by lint L29.
+    # went SPIN and nothing from inside it survived." CHECKED 2026-10-21 and it is not supported:
+    # that run's matrix.log contains ZERO 'SPIN' lines, the wedge evidence directory the only
+    # surviving reference names (wedge-win10-acc-130505) does not exist in the archive,
+    # ~/wedge-cores is empty, and no campaign log contains QWTWEDGESUSPECT. The sole trace is a line
+    # my own wedge-catcher quoted from a live log at 13:19:25Z - and that catcher is separately
+    # recorded as having fired on a STALE verdict and pulled an 8.6 GB core of a HEALTHY guest.
+    # The RULE stands on its own reasoning: a volume that failed leaves nothing to read if a guest
+    # later becomes unreachable. It does not need, and no longer claims, a wedge that cannot be
+    # evidenced. An unsupported measurement in a comment becomes the next reader's evidence.
     say "[ERROR] FATAL: $2: log-volume bind FAILED (see $M/$2-logvol-bind.out)"
     say "[ERROR] FATAL: the log volume is the ONLY instrument that survives a wedge - a guest that"
     say "[ERROR] FATAL: will not halt cannot be asked for its logs, and mtools reads the image with"
@@ -1037,6 +984,26 @@ park_installed(){ # $1=vm $2=label - halt and park the just-installed subject as
   # happened to be correct because every caller names its subject `vm`; it was never guaranteed.
   local vm=$1 lbl=$2
   local ck="ckpt-$vm-installed"
+  # THE PARK MUST NOT CARRY A LogDir, or every AppVM derived from it logs NOWHERE.
+  # The appvm cell never boots its template: the template's root arrives by cross-vm restore of THIS
+  # park, so whatever LogDir this guest holds at park time is what the AppVM inherits. MEASURED on
+  # all six appvm boots of run 39476792836: `old=Z:\qwt-logs\win10-acc found=D: letter=pinned` -
+  # the inherited churn path, and the volume lettered D: at boot with the pin applied afterwards. So
+  # the boot-time modules resolve a letter that does not exist yet, log.c:256 fails CreateDirectory,
+  # :289's fallback is stderr only, and both cells produced ZERO agent-family logs on every boot.
+  # Removing the value makes them use the product default C:\Qubes Logs (log.c:236-253 + log.h:59),
+  # which needs no letter and no inheritance and which the collector searches as of 9e314357.
+  # HARD, and immediately: a park that carries a LogDir sends two cells in eight into a sweep that
+  # can only grade nothing, three cells away from the cause.
+  if [ "$(w_state "$vm")" = Running ] && [ "${LOGVOL_BIND:-1}" = 1 ] && [ -n "${LOGVOL_IMG:-}" ]; then
+    if logvol_clear_guest "$vm" >>"$R" 2>&1; then
+      say "  $lbl: LogDir CLEARED before parking - AppVMs from this park use the product default"
+    else
+      no "$lbl: could not clear LogDir before parking. Every AppVM derived from this park would inherit a path its own volume does not carry, its boot-time modules would write NO log at all, and the appvm cells would be graded over a capture that cannot hold an agent error. See $R"
+      say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED: the park would carry a LogDir ==="
+      exit 2
+    fi
+  fi
   if [ "$(w_state "$vm")" != Halted ]; then
     # DRAIN FIRST, and give the halt a budget that OUTLASTS the restarter. The old form issued a
     # bare qvm-shutdown and waited 420 s while qrexec_timeout sat at 600 - so one queued call could

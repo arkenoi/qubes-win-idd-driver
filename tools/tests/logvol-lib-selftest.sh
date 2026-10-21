@@ -604,6 +604,70 @@ else
     ok "proof-agent: the bind-time proof does NOT require them (a bind applies at the module's next start)"
 fi
 
+# ===============================================================================================
+# THE PARK MUST CARRY NO LogDir, AND A VOLUME THAT IS NOT AVAILABLE MUST STOP THE CAMPAIGN AT ONCE.
+# Scripted, not described: these legs EXECUTE logvol_clear_guest and read matrix.sh's live code.
+CT="$(mktemp -d)"; mkdir -p "$CT/bin"
+cat > "$CT/bin/qtest-clear" <<'STUB'
+#!/bin/bash
+case "${CLEARSTUB:-ok}" in
+  ok)       echo 'LOGVOL-BIND cleared was=UTpcUXViZXMgTG9ncw== modules=gui-agent,gui-watchdog remaining=0' ;;
+  stillset) echo 'LOGVOL-BIND fail reason=logdir_still_set_after_clear keys=(root),gui-agent' ;;
+  silent)   : ;;                       # the guest answered nothing at all
+esac
+STUB
+chmod +x "$CT/bin/qtest-clear"
+run_clear(){ # $1=mode -> "rc|out"
+    local out rc
+    out=$( CLEARSTUB="$1" QTEST_BIN="$CT/bin/qtest-clear" bash -c '
+             source mgmt/harness/logvol-lib.sh
+             logvol_clear_guest somevm 2>&1' ); rc=$?
+    printf '%s|%s' "$rc" "$(printf '%s' "$out" | tr '\n' ' ')"
+}
+r=$(run_clear ok); rc=${r%%|*}; out=${r#*|}
+[ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'LOGVOL-BIND cleared' \
+  && ok "clear: a cleared LogDir returns 0 and reports what it removed" \
+  || bad "clear: a successful clear was not accepted" "rc=$rc $out"
+
+# SEEN TO FAIL, both ways the guest can refuse: the value still set, and no answer at all.
+r=$(run_clear stillset); rc=${r%%|*}; out=${r#*|}
+[ "$rc" != 0 ] && ok "clear: a LogDir STILL SET after the clear fails (rc=$rc) - the absence is asserted, not the attempt" \
+               || bad "clear: logdir_still_set_after_clear was accepted as success" "$out"
+r=$(run_clear silent); rc=${r%%|*}; out=${r#*|}
+[ "$rc" != 0 ] && ok "clear: a silent guest fails (rc=$rc) rather than reading as cleared" \
+               || bad "clear: no answer from the guest was treated as a clear" "$out"
+rm -rf "$CT"
+
+# THE WIRING, on the live call and not on a comment: the park must clear, and must ABORT if it cannot.
+_pk=$(sed -n '/^park_installed(){/,/^}/p' "$ROOT/mgmt/harness/matrix.sh")
+printf '%s' "$_pk" | command grep -qE '^[^#]*logvol_clear_guest "\$vm"' \
+  && ok "park: the park clears LogDir on a live line of park_installed" \
+  || bad "park: nothing clears LogDir before the park" "every AppVM from this park would log nowhere"
+printf '%s' "$_pk" | sed -n '/logvol_clear_guest/,/fi/p' | command grep -qE '^[^#]*exit 2' \
+  && ok "park: a failed clear ABORTS the campaign (exit 2), it does not carry on" \
+  || bad "park: a failed clear does not abort" "the appvm cells would be graded over a blind capture"
+
+# AND THE VOLUME MUST BE AVAILABLE, OR THE CAMPAIGN STOPS IMMEDIATELY - owner, 2026-10-21: "if it
+# does not attach and become available, it should be hard failure detected immediately and stopping
+# the campaign". Three live sites must each abort: the attach, the bind, and the round-trip proof.
+_bn=$(sed -n '/^logvol_bind_now(){/,/^}/p' "$ROOT/mgmt/harness/matrix.sh")
+for _probe in 'log-volume bind FAILED' 'did NOT survive a round trip'; do
+  if printf '%s' "$_bn" | command grep -q "$_probe"; then
+    if printf '%s' "$_bn" | sed -n "/$_probe/,/^  fi/p" | command grep -qE '^[^#]*exit 2'; then
+      ok "available: '$_probe' aborts the campaign (exit 2)"
+    else
+      bad "available: '$_probe' does not abort" "a run with no instrument that survives a wedge would continue"
+    fi
+  else
+    bad "available: no '$_probe' path in logvol_bind_now" "the failure would be silent"
+  fi
+done
+if command grep -qE '^[^#]*exit 2' <(sed -n '/log volume NOT ATTACHED/,/^  fi/p' "$ROOT/mgmt/harness/matrix.sh"); then
+  ok "available: an UNATTACHED volume aborts the campaign at the attach, not at grading"
+else
+  bad "available: an unattached volume does not abort at the attach" "detection would be deferred to grading"
+fi
+
 echo
 echo "RESULT: $pass passed, $fail failed  (fixtures: $T)"
 [ "$fail" -eq 0 ]

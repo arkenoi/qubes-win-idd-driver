@@ -454,6 +454,27 @@ logvol_unbind_guest(){ # <vm> - put LogDir and LogSafeFlush back (registry mode)
 # needed, which is the whole point of the volume - and looks for that nonce. Only both halves
 # passing proves a cell can produce evidence. Either half failing says WHICH half, because "no
 # evidence" with no side named is what sent three investigations at the wrong component.
+logvol_clear_guest(){ # <vm> - REMOVE LogDir so the product falls to its own default
+  # WHY REMOVE AND NOT REWRITE. An AppVM inherits its registry from the template, whose root is the
+  # churn subject's park, so it boots believing LogDir=<letter>:\qwt-logs\<churn>. MEASURED on all
+  # six appvm boots of run 39476792836: `found=D: letter=pinned` - Windows letters the volume D: at
+  # boot and the bind pins Z: AFTERWARDS, so at the moment the boot-time modules start, the
+  # inherited value names a letter that does not exist. log.c:256 CreateDirectory fails and :289's
+  # fallback is stderr only: NO FILE. Both cells produced zero agent-family logs on every boot.
+  # With no value at all, log.c:236-253 builds "<system drive>\Qubes Logs" and CREATES it - no
+  # letter, no inheritance - and the collector searches that path as of 9e314357.
+  # The per-boot bind still runs and still governs modules that start LATER (qrexec-wrapper per
+  # call, file-receiver per transfer), which is why those two are the only logs on an appvm stick
+  # today. Clearing costs nothing that exists: no agent-family log has ever been on one.
+  local vm="${1:?[ERROR] logvol_clear_guest <vm>}" out line
+  out=$(QTEST_VM="$vm" timeout -k 10 240 "$LOGVOL_QTEST" pushrun "$LOGVOL_BIND_PS1" -Clear 2>&1 | tr -d '\r')
+  line=$(printf '%s\n' "$out" | command grep -aE '^LOGVOL-BIND ' | tail -1)
+  case "$line" in
+    "LOGVOL-BIND cleared "*) echo "$line"; return 0 ;;
+    *) _lv_say "[ERROR] the binder did not clear LogDir: $(_lv_guest "${line:-no LOGVOL-BIND line: $(printf '%s' "$out" | tr '\n' '|' | cut -c1-160)}")"; return 1 ;;
+  esac
+}
+
 logvol_prove_roundtrip(){ # <vm> <img> [tag] [--require-agent-logs] -> LOGVOL-PROOF ok|fail
   # THE NONCE IS NOT THE PROPERTY. With --require-agent-logs the proof additionally requires that
   # the AGENT FAMILY has written into the directory the product resolves - which is the thing a
