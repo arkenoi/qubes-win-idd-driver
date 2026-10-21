@@ -23,7 +23,7 @@ fail() { n=$((n+1)); bad=1; say "FAIL  $1"; [ -n "${2:-}" ] && say "      $2"; }
 [ -f "$HOOK" ] || { say "FAIL  the hook is missing - nothing ran (missing data fails)"; exit 2; }
 
 # ---- a fixture repository with the tool, a map, a ledger and a v-tag ----------------------------------
-FX="$OUT/fx"; rm -rf "$FX"; mkdir -p "$FX"/{tools/hooks,mgmt,scratchpad,agent/gui-agent,packaging/setup}
+export FX="$OUT/fx"; rm -rf "$FX"; mkdir -p "$FX"/{tools/hooks,mgmt,scratchpad,agent/gui-agent,packaging/setup}
 cp "$ROOT/tools/gate-scope.py" "$ROOT/tools/ci-state.py" "$FX/tools/"
 # the CI arm needs workflows to enumerate and a gh to answer for them. build.yml has no path
 # filter (so it is DUE for every sha); test.yml is filtered, which exercises the inherit path.
@@ -50,13 +50,21 @@ cat > mgmt/gate-scope.json <<'JSON'
                 "scratchpad/**": { "suites": [], "reason": "gitignored working material" },
                 "tools/**": { "suites": [], "reason": "dev tooling" } } }
 JSON
+# THE LEDGER'S FULL ROW HAS TO BE HONESTLY FULL. It claimed full=true over ONE of the four
+# suites, which was fine while gate-scope's floor READ that flag - and the day the floor started
+# DERIVING fullness from `covered`, this fixture's floor tripped, gate-scope demanded the FULL
+# set for a one-file agent diff, and three checks here failed with "required 4, covered 2". The
+# fixture exercises coverage satisfaction, so its baseline row covers the full set; a short row
+# is exercised deliberately in its own check at the end.
 NOW="$(date -u -d '-1 day' +%Y-%m-%dT%H:%M:%SZ)"
 printf 'x\n' > agent/gui-agent/main.c
 git add -A >/dev/null && git commit -qm base
 python3 - "$NOW" "$(git log -1 --format=%H -- mgmt/gate-scope.json)" <<'PY'
 import json, sys
 json.dump({"releases": [{"version": "1.0", "date": sys.argv[1], "range": "", "required": [],
-                         "covered": ["package-verify"], "full": True, "result": "pass",
+                         "covered": ["package-verify", "win10-clean", "win11-clean",
+                                     "failproof-faultinject"],
+                         "full": True, "result": "pass",
                          "map_commit": sys.argv[2]}]}, open('mgmt/gate-ledger.json', 'w'), indent=1)
 PY
 git add -A >/dev/null && git commit -qm ledger && git tag v1.0
@@ -124,6 +132,35 @@ for c in 'git status' 'git push origin fix/branch' 'gh run watch 123' 'git tag -
 done
 [ $pass_all -eq 1 ] && ok "passive: reads, a branch push, a tag delete and running the acceptance are never blocked" ||
     fail "passive: something harmless was blocked"
+
+# ---- THE FLOOR IS DERIVED, NOT DECLARED ------------------------------------------------------------
+# mgmt/gate-ledger.json's only full=true row covered 13 of 18 suites with an empty map_commit, and
+# the floor READ the flag - so for two weeks the debt was recorded as paid and a mapped-only receipt
+# satisfied the gate. The floor now derives fullness from `covered`. With a row that CLAIMS full but
+# covers one suite of four, a receipt covering just the mapped suites must be REFUSED and the full
+# set required. INSERTED ABOVE THE SUMMARY ON PURPOSE: a leg added after it would never be counted.
+python3 - "$NOW" "$(git -C "$FX" log -1 --format=%H -- mgmt/gate-scope.json)" <<'PYSHORT'
+import json, sys, os
+json.dump({"releases": [{"version": "1.0", "date": sys.argv[1], "range": "", "required": [],
+                         "covered": ["package-verify"], "full": True, "result": "pass",
+                         "map_commit": sys.argv[2]}]},
+          open(os.path.join(os.environ["FX"], 'mgmt/gate-ledger.json'), 'w'), indent=1)
+PYSHORT
+printf '{"suites":["package-verify","win11-clean"]}\n' > "$FX/scratchpad/gate-coverage-$HEAD12.json"
+rc=$(hook "$CUT")
+if [ "$rc" -eq 2 ] && command grep -qa 'REFUSED' "$OUT/last.err" \
+   && command grep -qaE 'win10-clean|failproof-faultinject' "$OUT/last.err"; then
+    ok "floor-derived: a full=true row covering 1 of 4 forces the FULL set, and a mapped-only receipt is refused"
+else fail "floor-derived (rc=$rc)" "$(head -3 "$OUT/last.err")"; fi
+# restore the honest row so nothing after this inherits the short one
+python3 - "$NOW" "$(git -C "$FX" log -1 --format=%H -- mgmt/gate-scope.json)" <<'PYFULL'
+import json, sys, os
+json.dump({"releases": [{"version": "1.0", "date": sys.argv[1], "range": "", "required": [],
+                         "covered": ["package-verify", "win10-clean", "win11-clean",
+                                     "failproof-faultinject"],
+                         "full": True, "result": "pass", "map_commit": sys.argv[2]}]},
+          open(os.path.join(os.environ["FX"], 'mgmt/gate-ledger.json'), 'w'), indent=1)
+PYFULL
 
 say "--- $n check(s), $( [ $bad -eq 0 ] && echo 0 || echo 'at least 1') failed; fixtures in $OUT"
 exit $bad
