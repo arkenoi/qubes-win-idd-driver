@@ -99,7 +99,7 @@ fi
 # ---- the suites, each named exactly as gate-scope names it --------------------------------------
 # Only a suite that RAN and PASSED is recorded. A suite gate-scope does not require is skipped and
 # is never recorded either.
-PASSED=""; FAILED=""; SKIPPED=""
+PASSED=""; FAILED=""; SKIPPED=""; INTENDED=""
 
 # SETTLE THE RIG BETWEEN SUITES. Measured 2026-10-09, first non-dry run: toast-hold-test was
 # REFUSED because win11-acc was still Running from the suites before it ("REFUSED: these are not
@@ -171,7 +171,16 @@ else { Write-Output "RUNSHA none" }' | iconv -f UTF-8 -t UTF-16LE | base64 -w0)
   say "    $v runs the candidate agent ${got:0:16}"
   return 0
 }
-note() { if [ "$1" = 0 ]; then PASSED="$PASSED $2"; else FAILED="$FAILED $2"; fi; }
+# A DRY RUN HAS NO RESULT TO BUCKET. run_it's dry branch prints its intent and returns 0, so
+# `note $?` used to read that 0 as a pass: `--dry` put EVERY suite in PASSED and exited 0 -
+# measured over six suites whose command was bash /nonexistent/suite-that-cannot-exist.sh, all
+# six PASSED. acceptance-plan.py:202 makes that dry call the remainder cell's first probe, so
+# the probe could not fail. Dry results go to INTENDED and nowhere near PASSED.
+note() {
+  if [ "$DRY" = 1 ]; then INTENDED="$INTENDED $2"
+  elif [ "$1" = 0 ]; then PASSED="$PASSED $2"
+  else FAILED="$FAILED $2"; fi
+}
 
 # THE SWEEP'S WINDOW IS THIS RUN, NOT TWELVE HOURS OF HISTORY. This said '12 hours ago', which on a
 # rig whose guests are reinstalled all day means a window covering OTHER RUNS, OLDER BUILDS and the
@@ -400,6 +409,7 @@ else SKIPPED="$SKIPPED failproof-faultinject"; fi
 
 
 say "passed:$PASSED"
+say "intended:$INTENDED"
 say "failed:$FAILED"
 say "skipped:$SKIPPED"
 
@@ -407,7 +417,7 @@ say "skipped:$SKIPPED"
 # Only PASSED suites are added, and an existing receipt is never shrunk: this is a merge, so the
 # cells recorded by release-acceptance.sh survive.
 if [ "$DRY" = 1 ]; then
-  say "INTEND[dry] merge into $COVFILE:$PASSED"
+  say "INTEND[dry] merge into $COVFILE:$INTENDED"
 else
   python3 - "$COVFILE" "$RUN" "$HEAD12" "$PASSED" <<'PYMERGE'
 import json, os, sys
