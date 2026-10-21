@@ -2,6 +2,35 @@
 
 ## CURRENT STATE
 
+**THE 5-PHASE RELEASE PLAN AND WHERE IT STANDS, 2026-10-21 EVENING.** Written down here because it
+was carried only in a session goal, which is not a record: a plan nobody can read is a plan nobody
+can check.
+
+  P1 harness to green, with the LOGVOL_BIND flip         DONE. Bind on by default
+     (`matrix.sh:111` `LOGVOL_BIND:-1`), `logvol_clear_guest` wired into the park
+     (`matrix.sh:999`). Green BY SUITE, not by property - `logvol_prove_roundtrip` is still a
+     proxy (LOGVOLPROOFMEASURESTHEPROVER, open).
+  P2 tracks committed apart                               DONE.
+  P3 one offline gate run, bar: no new reds               DONE, both sides. Dev qube 77 suites,
+     RESULT PASS, 0 red. And GREEN IN CI for the first time (`test` 39590094503) - the estate had
+     been red on every CI run for weeks because two suites read a gitignored mirror a clean
+     checkout never carries, which is what `campaign-preflight` refuses a campaign on.
+  P4 one build                                            DONE. `build`, `test` and both packages
+     green on 9846c127; `campaign-preflight 39590096557` exits 0 PREFLIGHT CLEAR; product drift
+     since the package: none; `acceptance-plan` ready=True, FULL, 18 suites, every target named.
+  P5 one full acceptance -> record -> release notes ->    NOT STARTED, AND BLOCKED ON EVIDENCE.
+     cut 4.3.37 -> README                                 Jev withheld the launch at 0.32
+     (`clear_to_launch`), and the 68-component descending audit then named 26 acceptance blockers
+     with mechanisms - several of which would falsify or wreck that one run. Two are now closed
+     (assert-payload's pass over 0 files, prime-run's skippable evidence guard). The rest are
+     listed in this register. The floor also trips honestly: no ledger record covers the full
+     scope (best is 4.3.35 with 13 of 18, and its row claims full=true).
+
+The audit's own numbers, 68 components, one Jev call each: serves-its-purpose median 0.57,
+flawless-history 0.23 (62 of 68 below 0.50), structurally-sound 0.30, handles-failure-modes 0.23.
+85 defects with a stated mechanism: 9 blocks-acceptance, 52 falsifies-a-verdict, 24 loses-evidence.
+Report: `scratchpad/harness-audit-report.md`.
+
 **THE SEQUENCE TO THE NEXT FULL CAMPAIGN - OWNER, 2026-10-21, BINDING.** "after the workflow, land
 all fixes, run selectively, then re-evaluate. no full campaign until everything is fixed, scripted,
 approved and tested, each of this steps verified by jev, no condition trickery."
