@@ -758,7 +758,17 @@ _sg_life() { # $@=files -> "<non_empty_sources> <winutils_lines> <birth_lines> <
     # could read. Measured on a file named gui-agent-mojibake.log: exit 0, unaccounted=0.
     # So a non-empty source that yields NEITHER a windows-utils line NOR a harness line is counted
     # unreadable, and an unreadable source is INCONCLUSIVE.
-    local f t src=0 wl=0 bl=0 bad=0 n w h
+    # ONE BIRTH LINE PER MODULE THAT RAN, NOT ONE FOR THE WHOLE INPUT. bl was a TOTAL, so a capture
+    # in which one module declared itself and eleven did not satisfied this - and the eleven silent
+    # modules' silence is exactly what the requirement exists to make meaningless. windows-utils
+    # writes ONE FILE PER MODULE PER DAY (ADR-logging), so "per module" is "per file" here: a file
+    # carrying windows-utils records must carry its own module's birth.
+    # THE ONE LEGITIMATE EXCEPTION, STATED RATHER THAN DISCOVERED LATER: a module that started
+    # yesterday and is still running writes into a NEW day's file without a fresh LogInit, so that
+    # file can carry records with no birth line. A campaign cell boots the guest, so every module
+    # starts inside the cell and this cannot arise there; if it ever does, the refusal names the file
+    # and is an INCONCLUSIVE, which no ledger entry can silence.
+    local f t src=0 wl=0 bl=0 bad=0 n w h nobirth=""
     for f in "$@"; do
         [ -f "$f" ] && [ -s "$f" ] || continue
         src=$((src+1))
@@ -766,6 +776,7 @@ _sg_life() { # $@=files -> "<non_empty_sources> <winutils_lines> <birth_lines> <
         w=$(printf '%s' "$t" | command grep -acE '\[[0-9]{8}\.[0-9]{6}\.[0-9]{3}-[0-9]+(:[0-9]+)?-[IWEDV]\]' || true)
         wl=$((wl + ${w:-0}))
         n=$(printf '%s' "$t" | command grep -acE 'QWTBIRTH module=|Log started, module name:' || true); bl=$((bl + ${n:-0}))
+        [ "${w:-0}" -gt 0 ] && [ "${n:-0}" = 0 ] && nobirth="$nobirth $(basename "$f")"
         # the harness's own shape: a bracketed clock, or a declared level anywhere on the line
         h=$(printf '%s' "$t" | command grep -acE '^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\]|\[(INFO|WARN|ERROR|FATAL)\]' || true)
         bad=$((bad + ${h:-0}))   # reused below as the HARNESS-line total, not a per-file verdict
@@ -788,19 +799,61 @@ _sg_life() { # $@=files -> "<non_empty_sources> <winutils_lines> <birth_lines> <
         printable=$(( printable + $(tr -dc '[:print:][:space:]' < "$f" 2>/dev/null | wc -c) ))
     done
     [ "$total" -gt 0 ] && [ $(( printable * 2 )) -lt "$total" ] && unreadable=1
-    printf '%s %s %s %s' "$src" "$wl" "$bl" "$unreadable"
+    # the names come AFTER the four numbers, so `read -r a b c d rest` keeps working
+    printf '%s %s %s %s%s' "$src" "$wl" "$bl" "$unreadable" "$nobirth"
 }
 # The seen-to-fail leg of tools/tests/sweep-life-selftest.sh deletes the block between the two
 # markers below to prove that this predicate is what refuses an ungradeable capture. A line-count
 # range broke the moment the block grew, and the first marker comment NAMED the closing marker, so
 # the range closed on the comment and removed two lines. A marker must not appear in prose.
+# SG-PARTIAL-A  (to the B marker: driven by tools/tests/sweep-life-selftest.sh; neither marker
+# names the other)
+# A TRUNCATED LOG IS NOT A COMPLETE ONE. mgmt/harness/log-sweep-collect.ps1 caps the bytes it
+# pulls per file and, when it hits that cap, sends `partial=1` with the file's true line count -
+# head plus W/E/suspicious lines plus tail, and NOTHING ELSE. tools/log-sweep.py reads that flag
+# and turns it into a DATA problem; this gate never looked, so on the paths that sweep decoded
+# guest logs WITHOUT running analyze (mgmt/harness/matrix.sh:2957 is one) a truncated capture was
+# graded as a whole one, and the lines the cap dropped counted as absent. Found by the component
+# re-grade, 2026-10-21; Jev put fixing it before the campaign at 0.60.
+# WHERE THE FLAG LIVES: `log-sweep.py decode --out <dir>` writes the files under <dir>/files/ and
+# a <dir>/meta.json whose files[] entries carry partial. So for an input at <dir>/files/<name> the
+# flag is two directories up. An input with no such meta.json - a harness log, a hand-made
+# fixture - is not covered, which is why this is silent when it finds nothing.
+# AND IT IS DUPLICATION, SAID OUT LOUD: tools/log-sweep.py already reads this same flag at
+# decode time and turns it into a DATA problem, so 'a truncated capture is not gradeable' now
+# lives in two tools and can drift. Jev scored that objection 0.48 - it is real. The reason it
+# stays is that this gate is run on paths which never invoke analyze at all, so a check living
+# only there does not cover them. The drift's direction is a false RED (this refuses while
+# analyze passes), which is visible rather than silent. It is recorded as debt on the same
+# follow-up as collapsing sweep_gate_rc into this gate, which Jev deferred past the campaign
+# at 0.36: both are 'one decision, two deciders' and both should be fixed in that pass.
+_sg_partial() { # $@=files -> the basenames recorded partial=1, space-separated
+    local f d out
+    for f in "$@"; do
+        [ -f "$f" ] || continue
+        d=$(dirname "$(dirname "$f")")
+        [ -r "$d/meta.json" ] || continue
+        out=$(python3 tools/sweep-gate-partial.py "$d/meta.json" "$(basename "$f")" 2>/dev/null)   # the gate cd's to the repo root at the top
+        [ -n "$out" ] && printf ' %s' "$out"
+    done
+}
+_sg_trunc=$(_sg_partial "$@")
+if [ -n "${_sg_trunc// /}" ]; then
+    echo "SWEEP-GATE-RESULT INCONCLUSIVE truncated=$_sg_trunc"
+    echo "  The collector hit its size cap on these file(s) and sent partial=1: what was pulled is"
+    echo "  the head, the W/E/suspicious lines and the tail - not the file. An error between those"
+    echo "  windows is absent from this input, so 'nothing unaccounted' would be a statement about"
+    echo "  the truncation and not about the run. Re-pull with a higher cap before grading."
+    exit 2
+fi
+# SG-PARTIAL-B
 # SG-LIFE-BEGIN
-read -r _sg_src _sg_wl _sg_bl _sg_bad < <(_sg_life "$@")
+read -r _sg_src _sg_wl _sg_bl _sg_bad _sg_nobirth < <(_sg_life "$@")
 # NARROW ON PURPOSE: synthetic classifier input is exempt from the MODULE BIRTH requirement
 # only. A hand-made corpus line has no birth line by construction, but it is still a readable
 # non-empty source - so "nothing was swept" and "nothing readable" stay in force even for the
 # suites. Suppressing all three would have been broader than the reason for suppressing any.
-[ "${_SG_CORPUS_LINE:-0}" = 1 ] && _sg_wl=0
+[ "${_SG_CORPUS_LINE:-0}" = 1 ] && { _sg_wl=0; _sg_nobirth=""; }
 if [ "${_sg_src:-0}" = 0 ]; then
     echo "SWEEP-GATE-RESULT INCONCLUSIVE sources=0 - nothing was swept, so this gate has no verdict to give"
     echo "  $# path(s) were named and none of them is a readable non-empty file. A clean run has logs."
@@ -811,6 +864,15 @@ if [ "${_sg_bad:-0}" -gt 0 ]; then
     echo "  $_sg_src non-empty source(s) and NOT ONE recognisable log line between them - neither a"
     echo "  windows-utils record nor a harness line. A capture nobody can read cannot be clean:"
     echo "  check the collector's decode (a wrong-endian UTF-16 conversion produces exactly this)."
+    exit 2
+fi
+if [ -n "${_sg_nobirth:-}" ] && [ "${_sg_bl:-0}" -gt 0 ]; then
+    echo "SWEEP-GATE-RESULT INCONCLUSIVE sources=$_sg_src winutils_lines=$_sg_wl birth_lines=$_sg_bl nobirth=$_sg_nobirth"
+    echo "  Some modules declared themselves and these did NOT:$_sg_nobirth"
+    echo "  windows-utils writes one file per module, so a file with records but no birth line is a"
+    echo "  module whose LogInit was never seen - and that module's SILENCE cannot be read as clean."
+    echo "  One birth line somewhere in the capture says nothing about the others. Raise LogLevel for"
+    echo "  this cell, or ship a package carrying patches/windows-utils-single-birth-line.patch."
     exit 2
 fi
 if [ "${_sg_wl:-0}" -gt 0 ] && [ "${_sg_bl:-0}" = 0 ]; then

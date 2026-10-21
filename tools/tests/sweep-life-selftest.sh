@@ -138,6 +138,79 @@ out=$(timeout -k 10 120 bash tools/sweep-gate.sh "$T/declared.log" 2>&1); rc=$?
 [ "$rc" = 2 ] && ok "and WITHOUT the declaration the same line is INCONCLUSIVE - the default refuses" \
               || no "the undeclared case stopped being refused (rc=$rc)" "$(printf '%s' "$out" | head -1)"
 
+# ---- ONE BIRTH PER MODULE, NOT ONE FOR THE SET -------------------------------------------------
+# The requirement was a TOTAL, so a capture where ONE module declared itself and the rest did not
+# passed - and the silence of those others is exactly what the birth line exists to make readable.
+# windows-utils writes one file per module, so the rule is per file.
+printf '[20261021.120000.000-100:100-I] WinMain: QWTBIRTH module=gui-agent ver=4.3.36\n[20261021.120001.000-100:100-I] WinMain: up\n' > "$T/mod-a.log"
+printf '[20261021.120002.000-200:200-I] WaWatchThread: polling\n[20261021.120003.000-200:200-W] WaWatchThread: something\n' > "$T/mod-b.log"
+out=$(timeout -k 10 120 bash tools/sweep-gate.sh "$T/mod-a.log" "$T/mod-b.log" 2>&1); rc=$?
+if [ "$rc" = 2 ] && printf '%s' "$out" | command grep -qa 'nobirth=.*mod-b.log'; then
+  ok "a module with records and NO birth of its own is refused BY NAME, though another module declared"
+else
+  no "the undeclared module was accepted (rc=$rc)" "$(printf '%s' "$out" | head -2 | tr '\n' ' ')"
+fi
+# and the positive control: both modules declaring is graded, not refused
+printf '[20261021.120002.000-200:200-I] WaWatchThread: Log started, module name: qrexec-agent\n[20261021.120003.000-200:200-W] WaWatchThread: something\n' > "$T/mod-b2.log"
+out=$(timeout -k 10 120 bash tools/sweep-gate.sh "$T/mod-a.log" "$T/mod-b2.log" 2>&1); rc=$?
+[ "$rc" != 2 ] && ok "with BOTH modules declaring, the capture is graded (rc=$rc), not refused" \
+               || no "a fully-declared capture was refused" "$(printf '%s' "$out" | head -2 | tr '\n' ' ')"
+# SEEN TO FAIL: with the per-file list emptied, the undeclared module passes again on the total
+sed 's/\[ "${w:-0}" -gt 0 \] \&\& \[ "${n:-0}" = 0 \] \&\& nobirth=/[ 1 = 0 ] \&\& nobirth=/' tools/sweep-gate.sh > "$T/gate-totalonly.sh"
+if command grep -qa '\[ 1 = 0 \] && nobirth=' "$T/gate-totalonly.sh"; then
+  out=$(timeout -k 10 120 bash "$T/gate-totalonly.sh" "$T/mod-a.log" "$T/mod-b.log" 2>&1); rc=$?
+  [ "$rc" != 2 ] && ok "SEEN TO FAIL: on the total alone the undeclared module passes again (rc=$rc)" \
+                 || no "the total-only copy still refused (rc=$rc)" "the leg does not measure the per-file rule"
+else
+  no "could not build the total-only control" "the substitution did not apply"
+fi
+
+# ---- A TRUNCATED PULL IS NOT A COMPLETE LOG ----------------------------------------------------
+# log-sweep-collect.ps1 caps the bytes per file and sends partial=1 when it hits the cap: head +
+# W/E/suspicious + tail, nothing else. log-sweep.py turns that into a DATA problem; the gate never
+# looked, so matrix.sh:2957 - which sweeps decoded guest logs without running analyze - graded a
+# truncated capture as whole. The fixture is a decode-shaped dir: meta.json beside files/.
+mkdir -p "$T/cap/files"
+printf '[20261021.120000.000-100:100-I] WinMain: QWTBIRTH module=gui-agent ver=4.3.36\n[20261021.120001.000-100:100-I] WinMain: up\n' > "$T/cap/files/gui-agent-20261021.log"
+python3 - "$T/cap/meta.json" <<'TRUNCPY'
+import json,sys
+json.dump({"files":[{"local":"files/gui-agent-20261021.log","partial":"1","total_lines":"91234"}]},
+          open(sys.argv[1],"w"), indent=1)
+TRUNCPY
+out=$(timeout -k 10 120 bash tools/sweep-gate.sh "$T/cap/files/gui-agent-20261021.log" 2>&1); rc=$?
+if [ "$rc" = 2 ] && printf '%s' "$out" | command grep -qa 'truncated=.*gui-agent-20261021.log'; then
+  ok "a file the collector marked partial=1 is REFUSED by name, not graded as complete"
+else
+  no "a truncated capture was graded (rc=$rc)" "$(printf '%s' "$out" | head -2 | tr '\n' ' ')"
+fi
+# the same file with partial=0 must still be graded, or the check refuses every decoded capture
+python3 - "$T/cap/meta.json" <<'TRUNCPY'
+import json,sys
+json.dump({"files":[{"local":"files/gui-agent-20261021.log","partial":"0","total_lines":"2"}]},
+          open(sys.argv[1],"w"), indent=1)
+TRUNCPY
+out=$(timeout -k 10 120 bash tools/sweep-gate.sh "$T/cap/files/gui-agent-20261021.log" 2>&1); rc=$?
+[ "$rc" != 2 ] && ok "and with partial=0 the same capture is graded (rc=$rc) - not a blanket refusal" \
+               || no "partial=0 was refused too" "$(printf '%s' "$out" | head -2 | tr '\n' ' ')"
+# a log with NO meta.json beside it - a harness log - is unaffected
+out=$(timeout -k 10 120 bash tools/sweep-gate.sh "$T/clean.log" 2>&1); rc=$?
+[ "$rc" != 2 ] && ok "a log with no decode meta.json is unaffected by the truncation check (rc=$rc)" \
+               || no "a plain log became INCONCLUSIVE" "$(printf '%s' "$out" | head -2 | tr '\n' ' ')"
+# SEEN TO FAIL: with the refusal removed, the truncated capture is graded again
+python3 - "$T/cap/meta.json" <<'TRUNCPY'
+import json,sys
+json.dump({"files":[{"local":"files/gui-agent-20261021.log","partial":"1","total_lines":"91234"}]},
+          open(sys.argv[1],"w"), indent=1)
+TRUNCPY
+sed '/# SG-PARTIAL-A/,/# SG-PARTIAL-B/d' tools/sweep-gate.sh > "$T/gate-nopartial.sh"
+if command grep -qa 'SG-PARTIAL' "$T/gate-nopartial.sh"; then
+  no "the control still contains the partial block" "the marker range did not cut it"
+else
+  out=$(timeout -k 10 120 bash "$T/gate-nopartial.sh" "$T/cap/files/gui-agent-20261021.log" 2>&1); rc=$?
+  [ "$rc" != 2 ] && ok "SEEN TO FAIL: without the check the truncated capture is graded again (rc=$rc)" \
+                 || no "the stripped copy still refused (rc=$rc)" "the leg does not measure the check"
+fi
+
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
