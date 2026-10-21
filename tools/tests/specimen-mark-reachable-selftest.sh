@@ -55,6 +55,11 @@ run_session(){ # $1=source file $2=deadline -> prints "rc=<n> marked=<0|1>"
     eval "$(sed -n '/^specimen_file()/,/^}/p' "$ROOT/mgmt/harness/specimen-lib.sh")"
     eval "$(sed -n '/^_sp_say()/,/^}/p'       "$ROOT/mgmt/harness/specimen-lib.sh")"
     eval "$(sed -n '/^specimen_mark()/,/^}/p' "$ROOT/mgmt/harness/specimen-lib.sh")"
+    # w_session's COLLABORATOR, or the call to it is "command not found" and the marker never
+    # appears - which is indistinguishable from the pre-fix behaviour this suite exists to catch.
+    # The marking was inlined at both TERMINAL sites until 2026-10-21; it is a helper now because
+    # it has to report a failure to load or write instead of swallowing it.
+    eval "$(awk '/# WM-MARK-A/,/# WM-MARK-B/' "$src")"
     eval "$(sed -n '/^w_session()/,/^}/p'     "$src")"
     declare -F w_session    >/dev/null || { echo "rc=X marked=X"; exit 0; }
     declare -F specimen_mark >/dev/null || { echo "rc=Y marked=Y"; exit 0; }
@@ -120,6 +125,70 @@ if command grep -a 'NOT burning CPU' "$ROOT/mgmt/harness/e2e-wait.sh" \
 else
   ok "no live line claims 'NOT burning CPU' (the explanation in the comment is allowed)"
 fi
+
+# ---- A TERMINAL VERDICT THAT CANNOT RECORD ITS EVIDENCE MUST SAY SO ----------------------------
+# e2e-wait.sh marked a kept guest with
+#     if type specimen_mark >/dev/null 2>&1; then specimen_mark ... || true; fi
+# so a caller that never sourced specimen-lib.sh got NO marker on the one path where the guest is
+# deliberately left standing, and a marker that FAILED to write was swallowed by `|| true`. Either
+# way the next run sees an unmarked guest and tools/hooks/golden-boot-gate.sh does not refuse a
+# hand-typed start of it - the mistake made on 2026-10-14, minutes after that line fired.
+H=$(awk '/# WM-MARK-A/,/# WM-MARK-B/' "$ROOT/mgmt/harness/e2e-wait.sh")
+if [ -n "$H" ] && printf '%s' "$H" | command grep -qa '_wm_mark'; then
+  ok "the evidence helper was extracted from e2e-wait.sh"
+else
+  no "could not extract _wm_mark from e2e-wait.sh" "the legs below would test nothing"
+fi
+W=$(mktemp -d "${TMPDIR:-/tmp}/wmmark-XXXXXX")
+
+# (a) the library loadable and the write succeeding: a marker appears and the helper returns 0
+# specimen-lib is sourced first, which is the normal condition in every e2e-wait caller; the
+# helper's BASH_SOURCE-relative fallback cannot resolve a path from inside a `bash -c` string, so
+# relying on it here would test the harness rather than the helper.
+got=$(cd "$ROOT" && bash -c '
+  log=echo; SPECIMEN_DIR="$2/spec"
+  source mgmt/harness/specimen-lib.sh
+  eval "$1"
+  _wm_mark probe-vm "kept by the probe" "$2" && echo RC0 || echo RCFAIL
+' _ "$H" "$W" 2>&1)
+if printf '%s' "$got" | command grep -qa RC0 && [ -f "$W/spec/probe-vm.spent" ]; then
+  ok "it records the marker and returns 0 when the library loads"
+else no "no marker was written on the happy path" "$got"; fi
+
+# (b) the library NOT loadable: it must say so loudly and fail, not pass quietly
+got=$(cd "$W" && bash -c '
+  log=echo; SPECIMEN_DIR="$1/spec2"
+  eval "$2"
+  _wm_mark probe-vm2 "kept by the probe" "$1" && echo RC0 || echo RCFAIL
+' _ "$W" "$(printf '%s' "$H" | sed 's|/specimen-lib.sh|/NOPE-specimen-lib.sh|')" 2>&1)
+if printf '%s' "$got" | command grep -qa RCFAIL && printf '%s' "$got" | command grep -qa '\[ERROR\]'; then
+  ok "with the library unloadable it emits [ERROR] and fails, instead of skipping silently"
+else no "an unloadable library was silent (that is the pre-fix behaviour)" "$got"; fi
+
+# (c) the write FAILING: also [ERROR], not swallowed
+got=$(cd "$ROOT" && bash -c '
+  log=echo
+  specimen_mark(){ return 1; }
+  eval "$1"
+  _wm_mark probe-vm3 "kept by the probe" "/x" && echo RC0 || echo RCFAIL
+' _ "$H" 2>&1)
+if printf '%s' "$got" | command grep -qa RCFAIL && printf '%s' "$got" | command grep -qa 'specimen_mark FAILED'; then
+  ok "a FAILING specimen_mark is reported, not swallowed by || true"
+else no "a failing specimen_mark was swallowed" "$got"; fi
+
+# (d) the call sites must use the helper, or it is decoration
+n=$(command grep -ac '_wm_mark "$vm"' "$ROOT/mgmt/harness/e2e-wait.sh")
+[ "${n:-0}" -ge 2 ] && ok "both TERMINAL paths in e2e-wait.sh call the helper ($n sites)" \
+                    || no "only $n call site(s) use the helper" "a path still marks evidence the old way"
+# LIVE LINES ONLY. The first version of this check matched the COMMENT that quotes the old shape
+# ("if type specimen_mark; then specimen_mark ... || true; fi") and reported a swallowed call that
+# does not exist - the third comment-matching false positive of the day.
+if sed -E 's/(^|[[:space:]])#.*$//' "$ROOT/mgmt/harness/e2e-wait.sh" | command grep -qa 'specimen_mark .* || true'; then
+  no "a swallowed specimen_mark call survives in e2e-wait.sh" "$(sed -E 's/(^|[[:space:]])#.*$//' "$ROOT/mgmt/harness/e2e-wait.sh" | command grep -an 'specimen_mark .* || true' | head -1)"
+else
+  ok "no swallowed specimen_mark call is left in e2e-wait.sh (live lines, not comments)"
+fi
+rm -rf "$W"
 
 echo
 echo "RESULT: $PASS passed, $FAIL failed"

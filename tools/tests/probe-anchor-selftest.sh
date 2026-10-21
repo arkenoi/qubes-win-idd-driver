@@ -123,6 +123,50 @@ else
     printf '%s\n' "$unanchored" | sed 's/^/       /'
 fi
 
+# ---- A PROBE THAT DID NOT ANSWER IS NOT A LOG OF ZERO LINES ------------------------------------
+# w_install polls the guest for its log's line count and had `n=${n:-0}`: an unparseable or empty
+# answer - a transient qrexec hiccup, a busy guest, a timeout - produced the SAME value as a
+# genuinely empty or not-yet-created log, so "t+Ns 0 log lines" could not be told apart from a real
+# zero and a stalled install looked like a guest that had not started writing yet. The stall clock
+# is driven by whether the count CHANGES, and an unanswered probe is not a change.
+blk=$(sed -n '/A PROBE THAT DID NOT ANSWER IS NOT A LOG OF ZERO LINES/,/^      fi$/p' "$ROOT/mgmt/harness/e2e-wait.sh")
+if [ -n "$blk" ] && printf '%s' "$blk" | command grep -qa 'n=$last'; then
+  ok "the probe-failure branch was extracted from e2e-wait.sh"
+else
+  no "could not extract the probe-failure branch" "the legs below would test nothing"
+fi
+
+judge(){ # $1=probe answer ("" = no answer) $2=last known -> "n=<kept> said=<yes|no>"
+  bash -c '
+    lbl=cell; log=echo
+    n="$1"; last="$2"
+    eval "$3"
+    printf "n=%s said=%s\n" "$n" "$SAID"
+  ' _ "$1" "$2" "$(printf '%s' "$blk" | sed 's/\$log /SAID=yes; : /')" 2>&1
+}
+
+got=$(judge "" 17)
+case "$got" in
+  *"n=17"*) ok "an UNANSWERED probe keeps the last known count (17), it does not read as 0" ;;
+  *)        no "an unanswered probe did not hold the last count" "$got" ;;
+esac
+got=$(judge "" 0)
+case "$got" in
+  *"n=0"*) ok "with nothing known yet it stays 0 - no invented progress" ;;
+  *)       no "an unanswered probe at the start invented a count" "$got" ;;
+esac
+got=$(judge 42 17)
+case "$got" in
+  *"n=42"*) ok "a real answer is taken as the count" ;;
+  *)        no "a real answer was discarded" "$got" ;;
+esac
+# SEEN TO FAIL: the pre-fix default makes an unanswered probe indistinguishable from an empty log
+got=$(bash -c 'n="$1"; last="$2"; n=${n:-0}; printf "n=%s\n" "$n"' _ "" 17)
+case "$got" in
+  *"n=0"*) ok "SEEN TO FAIL: with n=\${n:-0} an unanswered probe reads as 0 lines, like an empty log" ;;
+  *)       no "the pre-fix shape did not reproduce" "$got" ;;
+esac
+
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

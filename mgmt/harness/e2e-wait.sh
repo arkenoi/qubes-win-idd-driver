@@ -32,6 +32,25 @@ STALL_SECS=${STALL_SECS:-300}
 # Returns 0 (moving/unknown) or 1 (FLAT). UNREADABLE COUNTS AS MOVING, deliberately: a stats read
 # that fails must never manufacture a stall, which is the same missing-data-fails-closed rule the
 # rest of this file follows.
+# WM-MARK-A  (the helper to the B marker is extracted and driven by
+# tools/tests/specimen-mark-reachable-selftest.sh; neither marker names the other)
+_wm_mark(){ # <vm> <why> <where> - record evidence, and NEVER fail silently
+  if ! type specimen_mark >/dev/null 2>&1; then
+    # shellcheck disable=SC1091
+    source "$(dirname "${BASH_SOURCE[0]}")/specimen-lib.sh" 2>/dev/null || true
+  fi
+  if ! type specimen_mark >/dev/null 2>&1; then
+    ${log:-echo} "  [ERROR] cannot record $1 as evidence: specimen-lib.sh is not loadable, so the next run will see an unmarked guest and the boot gate will not refuse a hand-typed start of it"
+    return 1
+  fi
+  if ! specimen_mark "$1" "$2" "$3" >/dev/null; then
+    ${log:-echo} "  [ERROR] specimen_mark FAILED for $1 - the guest is being left standing with no marker recording why"
+    return 1
+  fi
+  return 0
+}
+# WM-MARK-B
+
 w_cpu_time(){ printf '' | timeout 15 qrexec-client-vm "$1" admin.vm.Stats 2>/dev/null \
               | tr '\0' '\n' | awk '/^cpu_time$/{getline v; print v; exit}'; }
 w_cpu_moving(){ # $1=vm $2=sample seconds (default 20)
@@ -188,9 +207,14 @@ w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
         # moment to write that down. The marker makes tools/hooks/golden-boot-gate.sh refuse a
         # hand-typed start of this name - the mistake made on 2026-10-14, minutes after this very
         # line fired. Guarded by `type`, so sourcing this file alone still works.
-        if type specimen_mark >/dev/null 2>&1; then
-          specimen_mark "$vm" "$lbl: no session by ${dl}s, kept as evidence" "$dir" >/dev/null || true
-        fi
+        # A TERMINAL VERDICT THAT CANNOT RECORD ITS EVIDENCE SAYS SO. This was
+        #     if type specimen_mark; then specimen_mark ... || true; fi
+        # so a caller that never sourced specimen-lib.sh got NO marker on the one path where the
+        # guest is deliberately left standing, and a marker that FAILED to write was swallowed by
+        # `|| true`. Either way the next run sees an unmarked guest and the boot gate does not
+        # refuse a hand-typed start of it - which is the mistake made minutes after this line fired
+        # on 2026-10-14.
+        _wm_mark "$vm" "$lbl: no session by ${dl}s, kept as evidence" "$dir"
         return 1
       fi
       eval "$_wa_cleanup"
@@ -340,9 +364,7 @@ w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
           # thing it had not checked, over any value including wedge-lib's PEGGED band. It now
           # states the cpu reading and claims nothing about it.
           $log "  $lbl: TERMINAL - no usable screen for ${dark} min (cpu=${cpu:-NA}, qvm=$(w_state "$vm")). Guest LEFT AS IT STANDS."
-          if type specimen_mark >/dev/null 2>&1; then
-            specimen_mark "$vm" "$lbl: no usable screen for ${dark} min, kept as evidence" "$dir" >/dev/null || true
-          fi
+          _wm_mark "$vm" "$lbl: no usable screen for ${dark} min, kept as evidence" "$dir"
           return 1
         fi ;;
       *)
@@ -527,7 +549,17 @@ w_install(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn $6=guest-log-path
       n=$(QTEST_VM=$vm timeout -k 5 90 ./tools/qtest run \
             "cmd /c powershell -NoProfile -Command \"if(Test-Path '$glog'){(Get-Content '$glog').Count}else{0}\"" \
             2>/dev/null | tr -d '\r' | grep -aE '^[0-9]+$' | head -1)
-      n=${n:-0}
+      # A PROBE THAT DID NOT ANSWER IS NOT A LOG OF ZERO LINES. `n=${n:-0}` gave an unparseable or
+      # empty answer - a transient qrexec hiccup, a busy guest, a timeout - the SAME value a
+      # genuinely empty or not-yet-created log produces, so the line this prints ("t+Ns 0 log
+      # lines") could not be told apart from a real zero, and a stalled install looked identical to
+      # a guest that had not started writing yet. Keep the LAST KNOWN count and say the probe
+      # failed; the stall clock below is driven by whether the count CHANGES, and an unanswered
+      # probe is not a change.
+      if [ -z "$n" ]; then
+        $log "  $lbl: [WARN] the guest-log line-count probe did not answer (holding $last) - this is a probe failure, not an empty log"
+        n=$last
+      fi
       if [ "$n" -ne "$last" ]; then
         last=$n; lastchange=$(date +%s)
         # NEVER truncate what we already hold: > opens the file before the guest answers, so a
