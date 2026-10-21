@@ -88,7 +88,11 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # of qwt_shutdown that trusted its exit code without re-reading the state, so a guest still
 # Running after a successful-looking shutdown would have been SEALED - freezing whatever it was
 # doing into every clone taken from that golden.
-FLOOR=${OFFLINE_SUITES_FLOOR:-82}
+# 82 -> 83 on 2026-10-21: answer-labconfig-selftest.sh ADDED. build-answer-stick.sh guarded a
+# Windows 11 stick with `grep -q LabConfig`, so an answer file that only MENTIONS the word
+# passed and Setup failed 0x800700FF - 0x40030 four minutes in. The four bypass keys a Xen HVM
+# needs are asserted by name instead.
+FLOOR=${OFFLINE_SUITES_FLOOR:-83}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"

@@ -130,3 +130,4 @@ dom0-callers-count-selftest.sh
 ctl-stop-rc-selftest.sh
 accept-cancel-selftest.sh
 seal-halted-selftest.sh
+answer-labconfig-selftest.sh

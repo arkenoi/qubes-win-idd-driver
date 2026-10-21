@@ -100,10 +100,28 @@ echo "answer file: all placeholders substituted, XML well-formed"
 # (ACCEPTANCE-PROTOCOL.md already listed the trap; the recipe copied from an old log did not name the template).
 case "$IMG_NAME" in
     *"Windows 11"*)
-        grep -q 'LabConfig' "$WORK/Autounattend.xml" || {
-            echo "ERROR: '$IMG_NAME' stick without LabConfig bypasses - build it with UNATTEND=$HERE/autounattend-win11.xml" >&2
-            echo "       (or the -de variant); the generic template makes Setup fail 0x800700FF - 0x40030 minutes in" >&2
-            exit 1; } ;;
+        # THE KEYS, NOT THE WORD. This tested `grep -q LabConfig`, so an answer file that merely
+        # MENTIONS LabConfig - in a comment, or with the component present but empty - passed the
+        # guard and then failed Setup four minutes in with 0x800700FF - 0x40030, which is the exact
+        # failure the guard exists to pre-empt (harness audit, 2026-10-21). The four keys below are
+        # the ones a Xen HVM actually needs: it has no TPM and no secure boot, and the RAM and
+        # storage floors are not met by an acceptance subject. BypassCPUCheck is NOT required here -
+        # the dev host's CPU passes - so it is not demanded.
+        # ANSWER-LABCONFIG-A  (to the B marker: driven by tools/tests/answer-labconfig-selftest.sh;
+        # neither marker names the other)
+        _al_missing=""
+        for _al_k in BypassTPMCheck BypassSecureBootCheck BypassRAMCheck BypassStorageCheck; do
+            grep -qa "$_al_k" "$WORK/Autounattend.xml" || _al_missing="$_al_missing $_al_k"
+        done
+        if [ -n "$_al_missing" ]; then
+            echo "ERROR: '$IMG_NAME' stick is missing the LabConfig bypass key(s):$_al_missing" >&2
+            echo "       build it with UNATTEND=$HERE/autounattend-win11.xml (or the -de variant)." >&2
+            echo "       A file that only MENTIONS LabConfig passes no check: Setup fails" >&2
+            echo "       0x800700FF - 0x40030 about four minutes in, with no earlier sign." >&2
+            exit 1
+        fi
+        # ANSWER-LABCONFIG-B
+        ;;
 esac
 
 cp "$HERE/diskprep.cmd" "$WORK/" 2>/dev/null || true
