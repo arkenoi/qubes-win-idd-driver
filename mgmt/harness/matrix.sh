@@ -470,6 +470,29 @@ grade_cell_logsweep(){ # <cell> <vm> <matrix-dir>
   if [ "$rc" = 0 ] && [ "$q" -eq 0 ]; then
     no "$c: INVALID-SWEEP-BLIND  the sweep returned CLEAN with no QWT-format line to read ($have)"
   fi
+  # AND "SOME LINES" IS NOT THE PROPERTY - THE AGENT'S OWN LOG IS.
+  #
+  # The guard above asks q>0, and on run 39476792836 both appvm cells passed it with q=73 while
+  # carrying NO agent-family log content at all: 13 files, an `agent.log` with zero QWT-format
+  # lines, and none of gui-agent-*, gui-watchdog-*, qrexec-agent-*, qubesdb-daemon-*. The 73 lines
+  # were the installer and the wrapper. Both cells were reported "swept CLEAN" and the owner's
+  # error-line gate was graded over a capture that could not contain a single agent error.
+  # Measured across that run's eight captures, the discriminator is exact: the two appvm cells have
+  # 1 agent-family file with 0 QWT lines, the six others have 4-9 files with 4-8 carrying lines.
+  #
+  # The cause is LOGVOLBINDLATE and it is NOT fixed by this: the bind at the AppVM boot loop runs
+  # after w_appvm_shell, so the agent family has already resolved LogDir from the TEMPLATE's
+  # registry, and an AppVM's root volume is volatile so the next boot resets it again. Where the
+  # bind belongs is an owner decision (ahead of the session / restart the family / per-module keys).
+  # This gate does not pretend to fix it - it makes the blindness FAIL instead of reading CLEAN,
+  # which is the difference between a campaign that wasted 10 hours and one that says why.
+  a=$(find "$m/$c-guestlogs/logs" -type f \
+        \( -iname 'gui-agent*' -o -iname 'gui-watchdog*' -o -iname 'qrexec-agent*' \
+           -o -iname 'qubesdb*' -o -iname 'agent*.log' \) \
+        -exec grep -laE '^\[[0-9]{8}\.[0-9]{6}\.[0-9]{3}-[0-9]+' {} + 2>/dev/null | wc -l)
+  if [ "$rc" = 0 ] && [ "$q" -gt 0 ] && [ "$a" -eq 0 ]; then
+    no "$c: INVALID-SWEEP-NOAGENT  the sweep returned CLEAN over $q QWT line(s) from which NO agent-family log (gui-agent/gui-watchdog/qrexec-agent/qubesdb) carried a single line - the error-line gate was graded over a capture that cannot hold an agent error ($have)"
+  fi
   return 0
 }
 # qvm-start BLOCKS until qrexec connects (up to qrexec_timeout). On a guest that never boots
