@@ -242,7 +242,16 @@ mut = re.compile(
     # the screenshot path (local.WinScreenshot+<vm>, local.WinFullScreen, local.WinResize) is a
     # dom0 service. Those are how a running job is watched, and the rule above this one is that
     # monitoring is never blocked.
-    r'|\bqrexec-client-vm\s+(?!dom0\b)[A-Za-z0-9_.-]+', re.I)
+    # AND IT IS THE `qubes.*` SERVICES THAT AUTOSTART. An `admin.*` call naming a guest is served by
+    # dom0's admin API, not by the guest, so it starts nothing - admin.vm.Stats and
+    # admin.vm.CurrentState are exactly how e2e-wait.sh and qtest watch a run. A first version of
+    # this matched every service and broke C4 of serial-rig-gate-selftest ("passive admin.vm.Stats
+    # while a LIVE lock is held"), which is the suite asserting the monitoring rule. The admin verbs
+    # that DO act are listed explicitly instead.
+    r'|\bqrexec-client-vm\s+(?!dom0\b)[A-Za-z0-9_.-]+\s+qubes\.\S+'
+    r'|\bqrexec-client-vm\s+(?!dom0\b)[A-Za-z0-9_.-]+\s+admin\.vm\.'
+    r'(Start|Kill|Shutdown|Remove|Create|Clone|Pause|Unpause|volume\.|tag\.Set|feature\.Set|property\.Set)',
+    re.I)
 hit = mut.search(text)
 if not hit:
     sys.exit(0)

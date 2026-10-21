@@ -37,15 +37,24 @@ T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 hookcheck(){ python3 - "$ROOT/tools/hooks/serial-rig-gate.sh" <<'PY'
 import re, sys
 src = open(sys.argv[1], encoding="utf-8").read()
-m = re.search(r'mut = re\.compile\(\s*(.*?), re\.I\)', src, re.S)
+# EVAL THE SHIPPED EXPRESSION, do not re-parse it. The first version of this paired quotes with a
+# regex to collect the r'' strings, and the comment `# shutdown-lib.sh's wrapper ...` inside the
+# expression carries an APOSTROPHE: the pairing shifted and the last two alternatives were silently
+# dropped, so the suite reported a miss that the hook does not have. A heuristic that reads source
+# is one more thing that can be wrong; the real expression cannot disagree with itself.
+m = re.search(r'mut = re\.compile\((.*?)\n\s*re\.I\)', src, re.S)
 if not m:
     print("NOPATTERN"); sys.exit(0)
-parts = re.findall(r"r'((?:[^'\\]|\\.)*)'", m.group(1))
-mut = re.compile("".join(parts), re.I)
+try:
+    mut = eval("re.compile(" + m.group(1) + "\n re.I)", {"re": re})
+except Exception as e:
+    print("NOPATTERN"); sys.exit(0)
 CASES = [
     ("qrexec-client-vm win11-nfy qubes.GetAppmenus", 1, "bare qrexec to a GUEST (the measured waker)"),
     ("qrexec-client-vm win10-acc qubes.VMShell", 1, "a service that was already listed"),
-    ("qrexec-client-vm win10-acc admin.vm.Start", 1, "an admin call naming a guest"),
+    ("qrexec-client-vm win10-acc admin.vm.Start", 1, "an admin verb that DOES act"),
+    ("qrexec-client-vm win10-acc admin.vm.Stats", 0, "a passive admin read - how a run is watched"),
+    ("qrexec-client-vm win10-acc admin.vm.CurrentState", 0, "a passive state read"),
     ("qrexec-client-vm dom0 local.WinScreenshot+win11-nfy", 0, "the per-window capture path (dom0)"),
     ("qrexec-client-vm dom0 local.WinFullScreen", 0, "the desktop capture path (dom0)"),
     ("qrexec-client-vm dom0 local.WinResize+1024x768", 0, "the resize service (dom0)"),
