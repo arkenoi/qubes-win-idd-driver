@@ -189,15 +189,35 @@ log "recreating $CHURN from $BASE"
 #
 # Hard fail with the way out named, never a silent skip: a run that would destroy evidence must stop
 # and say so. `specimen_clear` is the deliberate release, which is what a real recreate uses.
-if type specimen_mark >/dev/null 2>&1 || source mgmt/harness/specimen-lib.sh 2>/dev/null; then
-    if [ -f "$(specimen_file "$CHURN" 2>/dev/null)" ]; then
-        log "[ERROR] TERMINAL: $CHURN is held as EVIDENCE and this step would kill and remove it."
-        log "  reason recorded: $(specimen_why "$CHURN" 2>/dev/null)"
-        log "  Take what you need first, then release it deliberately:"
-        log "    source mgmt/harness/specimen-lib.sh && specimen_clear $CHURN"
-        exit 1
-    fi
+# THE GUARD MUST NOT BE SKIPPABLE BY ITS OWN FAILURE. This read
+#     if type specimen_mark || source mgmt/harness/specimen-lib.sh 2>/dev/null; then
+# so if the relative source failed for any reason - a wrong working directory, the file moved, a
+# syntax error introduced in it - and specimen_mark was not already defined, the WHOLE block below
+# including its TERMINAL exit was skipped with no line in the log, and the run fell straight through
+# into killing and qvm-remove-ing a guest held as evidence. That is this harness's own most
+# destructive path and this check is the only thing in front of it. A guard that disappears when its
+# own library fails to load is not a guard. So: load it, and if it cannot be loaded, STOP.
+# PRIME-EVIDENCE-GUARD-A   (the range between this marker and the B one is extracted and executed
+# by tools/tests/specimen-not-a-leftover-selftest.sh; neither marker names the other, because a
+# marker mentioned in prose closes its own range)
+if ! type specimen_mark >/dev/null 2>&1; then
+    # shellcheck disable=SC1091
+    source "$(dirname "${BASH_SOURCE[0]}")/specimen-lib.sh" \
+      || { log "[ERROR] TERMINAL: cannot load specimen-lib.sh, so whether $CHURN is held as"; \
+           log "  evidence cannot be determined - and the next step kills and removes it."; \
+           exit 1; }
 fi
+for _fn in specimen_file specimen_why; do
+    type "$_fn" >/dev/null 2>&1 || { log "[ERROR] TERMINAL: specimen-lib.sh loaded but $_fn is missing"; exit 1; }
+done
+if [ -f "$(specimen_file "$CHURN")" ]; then
+    log "[ERROR] TERMINAL: $CHURN is held as EVIDENCE and this step would kill and remove it."
+    log "  reason recorded: $(specimen_why "$CHURN" 2>/dev/null)"
+    log "  Take what you need first, then release it deliberately:"
+    log "    source mgmt/harness/specimen-lib.sh && specimen_clear $CHURN"
+    exit 1
+fi
+# PRIME-EVIDENCE-GUARD-B
 # A leftover churn that is still Running cannot be removed; kill it first. This is the one place
 # a kill is permitted: its state is being discarded (volumes replaced by the clone below), so
 # nothing that will be graded can be corrupted by it. It is NOT a way to stop a run.

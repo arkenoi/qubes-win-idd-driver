@@ -53,6 +53,19 @@ while read -r h f; do
 	[ "$a" = "$h" ] || { echo "  MISMATCH $f"; bad=$((bad+1)); }
 done < <(tr -d '\r' < "$DIR/SHA256SUMS.txt")
 [ "$bad" -eq 0 ] || { echo "FAIL: $bad of $n payload files do not match SHA256SUMS.txt"; exit 1; }
+# ZERO FILES VERIFIED IS NOT AN INTEGRITY PASS. With an empty or unparseable SHA256SUMS.txt this
+# loop ran zero iterations, bad=0 and n=0, and the script fell through to
+# "PASS: payload verified - 0 files", which all three consumers (matrix.sh, quick-upgrade.sh,
+# verify-release-package.sh) read as a clean exit 0. A campaign then proceeded against a payload
+# whose content nothing had hashed, with a log line identical to a real pass.
+# The floor is 3 because the three files asserted present above are themselves in SHA256SUMS.txt;
+# a manifest listing fewer than that is malformed, not minimal.
+if [ "$n" -lt 3 ]; then
+	echo "FAIL: SHA256SUMS.txt yielded only $n file(s) - nothing was verified"
+	echo "      An empty or unparseable manifest is a packaging defect, and a payload whose"
+	echo "      content was never hashed must not read the same as one that was."
+	exit 1
+fi
 
 # 3. provenance
 GOT=$(python3 -c "

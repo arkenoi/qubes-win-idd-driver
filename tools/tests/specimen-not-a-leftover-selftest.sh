@@ -18,8 +18,15 @@ no(){ FAIL=$((FAIL+1)); echo "FAIL $1"; }
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 
 # The guard block, taken OUT of the shipped file so this cannot drift from it.
-guard=$(sed -n '/^# A SPECIMEN IS NOT A LEFTOVER\./,/^fi$/p' "$ROOT/mgmt/harness/prime-run.sh")
+# KEYED ON THE MARKERS, not on a comment banner and a line-counted `fi`. The banner moved when the
+# guard was made unskippable, and the first `fi` after it then closed the inner source-check, so
+# this extracted a TRUNCATED block and its three legs failed against working code.
+guard=$(awk '/# PRIME-EVIDENCE-GUARD-A/,/# PRIME-EVIDENCE-GUARD-B/' "$ROOT/mgmt/harness/prime-run.sh")
 [ -n "$guard" ] || { echo "FATAL: could not find the guard block in prime-run.sh"; exit 2; }
+for _need in specimen_file TERMINAL specimen_clear source; do
+  printf '%s' "$guard" | command grep -qa "$_need" \
+    || { echo "FATAL: the extracted guard is missing '$_need' - a truncated block would pass these legs"; exit 2; }
+done
 
 run_guard(){ # $1=marked|unmarked -> "rc|output"
   local d="$T/g.$RANDOM"; mkdir -p "$d"
@@ -85,6 +92,28 @@ if [ "$cons" = 0 ]; then
 else
   no "evidence-lock.sh now has $cons consumer(s) - two mechanisms guard the same property, pick one"
 fi
+
+# ---- THE ONE CASE THE LEGS ABOVE DO NOT COVER: the guard's own library failing to load ----------
+# The check read `if type specimen_mark || source mgmt/harness/specimen-lib.sh 2>/dev/null; then`,
+# so a failed relative source - wrong working directory, the file moved, a syntax error introduced
+# in it - skipped the whole block INCLUDING its TERMINAL exit, with nothing in the log, and the run
+# fell through into killing and qvm-remove-ing a guest held as evidence.
+G=$(mktemp -d "${TMPDIR:-/tmp}/specguard-XXXXXX")
+mkdir -p "$G/spec"; printf 'why=kept for the probe\n' > "$G/spec/guard-probe.spent"
+out=$(SPECIMEN_DIR="$G/spec" bash -c '
+  log(){ printf "%s\n" "$*"; }
+  CHURN=guard-probe
+  printf "%s\n" "$1" | sed "s|source \"\$(dirname \"\${BASH_SOURCE\[0\]}\")/specimen-lib.sh\"|source /nonexistent/specimen-lib.sh|" > "$2/blk.sh"
+  source "$2/blk.sh"
+  echo REACHED-THE-DESTRUCTIVE-STEP
+' _ "$guard" "$G" 2>&1); rc=$?
+if [ "$rc" != 0 ] && printf '%s' "$out" | command grep -qa TERMINAL \
+   && ! printf '%s' "$out" | command grep -qa REACHED-THE-DESTRUCTIVE-STEP; then
+  ok "an UNLOADABLE specimen library stops the run instead of skipping the check"
+else
+  no "an unloadable library let the run reach the destructive step (rc=$rc)" "$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-140)"
+fi
+rm -rf "$G"
 
 echo
 echo "RESULT: $PASS passed, $FAIL failed"

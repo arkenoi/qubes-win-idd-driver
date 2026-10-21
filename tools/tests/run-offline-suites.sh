@@ -65,7 +65,11 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # verdict over an empty log file AND over a capture that failed to decode - it had no predicate
 # asserting it had been handed anything gradeable. The suite drives all three refusals and a
 # seen-to-fail leg that deletes the predicate and requires the empty capture to read CLEAN again.
-FLOOR=${OFFLINE_SUITES_FLOOR:-76}
+# 76 -> 77 on 2026-10-21: assert-payload-floor-selftest.sh ADDED. The harness audit measured
+# tools/assert-payload.sh printing `PASS: payload verified - 0 files` over an empty SHA256SUMS.txt:
+# the integrity loop ran zero iterations and all three consumers branch only on the exit code, so
+# a campaign would install and grade a payload nothing had hashed.
+FLOOR=${OFFLINE_SUITES_FLOOR:-77}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"
