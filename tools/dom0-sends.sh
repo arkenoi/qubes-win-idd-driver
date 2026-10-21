@@ -12,8 +12,19 @@
 #
 # CONTRACT, so a harness can rely on it:
 #   rc 0  the record was read and appended (0 sends is a valid answer: nothing was sent)
-#   rc 1  the guest was reachable but the record could NOT be read - MISSING DATA FAILS, the caller
-#         must fail its cell rather than record a silent nothing
+#   rc 1  the guest was reachable but the record could NOT be read. MISSING DATA FAILS - but the
+#         FAILURE IS DELIVERED BY THE ERROR-LINE GATE, NOT BY THE CALLER ABORTING, and that is
+#         deliberate. Both callers (quick-upgrade.sh dom0_sends_park, e2e-wait.sh's park)
+#         declare the condition as `[WARN] DOM0SENDSUNREAD <vm>: no record of what dom0 was
+#         told on this boot (rc=N)` and return 0, because aborting a cell mid-run over a
+#         diagnostic record would discard the product evidence the cell exists to collect.
+#         That WARN is a MUST line in mgmt/harness/error-corpus.txt (tag DOM0SENDSPARKHANG),
+#         so tools/sweep-gate.sh surfaces it and the run is not clean - verified: feeding the
+#         line to the gate gives `unaccounted=1`, exit 1. If that corpus entry is ever
+#         demoted or reworded the chain breaks silently, so tools/tests/dom0-sends-selftest.sh
+#         asserts it is present and MUST.
+#         Until 2026-10-21 this line claimed the CALLER fails, which no caller did - a
+#         contract describing a mechanism nobody implemented.
 #   rc 2  usage / the guest could not be reached at all
 # --no-start: never boot the guest (rc 0 with SKIP when it is not Running) - for use inside a cell,
 # right after a boot is graded and while the guest is still up.

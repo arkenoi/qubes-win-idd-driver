@@ -102,5 +102,29 @@ else
   bad "no_start_skips_halted: rc=$rc out='$(printf '%s' "$out" | tail -1)'"
 fi
 
+# ---- THE rc-1 CHAIN: declared by the caller, failed by the gate ---------------------------------
+# dom0-sends.sh documents rc 1 as "missing data fails". Neither caller aborts: both log
+# `[WARN] DOM0SENDSUNREAD ...` and return 0, deliberately, because aborting a cell over a diagnostic
+# record would discard the product evidence the cell exists to collect. The failure is delivered by
+# the error-line gate instead, which only works while that WARN is a MUST line in the corpus. Until
+# 2026-10-21 the header claimed the CALLER fails - a contract for a mechanism nobody implemented.
+if command grep -qaE '^MUST[[:space:]]+DOM0SENDSPARKHANG' mgmt/harness/error-corpus.txt; then
+  ok "the DOM0SENDSUNREAD warn is a MUST line in the error corpus"
+else
+  bad "DOM0SENDSUNREAD is not a MUST corpus line - no caller fails and now the gate would not either"
+fi
+for f in mgmt/harness/quick-upgrade.sh mgmt/harness/e2e-wait.sh; do
+  if command grep -qa 'DOM0SENDSUNREAD' "$f"; then
+    ok "$(basename "$f") declares DOM0SENDSUNREAD on a non-zero rc"
+  else
+    bad "$(basename "$f") does not declare DOM0SENDSUNREAD - an unreadable record would pass in silence"
+  fi
+done
+if command grep -qa 'FAILURE IS DELIVERED BY THE ERROR-LINE GATE' tools/dom0-sends.sh; then
+  ok "the documented contract matches the implemented mechanism"
+else
+  bad "the header still claims the caller fails, which no caller does"
+fi
+
 echo "--- $pass passed, $fail failed"
 [ "$fail" = 0 ]
