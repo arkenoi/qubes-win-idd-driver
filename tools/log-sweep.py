@@ -2322,6 +2322,23 @@ def build_structure(files, boots, declared=None):
 def compute_metrics(files, boots, st, since, now=None, build=None):
     """now = the capture time (the collector's clock) - without it the two 'still running?' metrics are not evaluable."""
     m = {}
+    # COUNT AND KEEP THE LINES. A metric that reports a number and throws away the lines that made
+    # it cannot be diagnosed by anyone - and 12 of the 34 thresholded metrics reached the judge with
+    # `evidence: []`, 7 of them P1, including error_lines_undeclared, the one metric that has been
+    # blocking this release. `breach_evidence` ended in `if "lines" in b`, a key NO producer ever
+    # wrote: compare() emits exactly metric/value/max/severity/why. So the fallback was dead code
+    # and the judge was deciding on a metric NAME and a count.
+    # The lines ride along in `st`, which breach_evidence already receives, so no signature changes
+    # and there is no second place to forget.
+    _mlines = {}
+    st["metric_lines"] = _mlines
+    def _count(_name, _items):
+        _lst = list(_items)
+        _mlines[_name] = [getattr(_l, "raw", None) or str(_l) for _l in _lst][:40]
+        m[_name] = len(_lst)          # SET IT, do not merely return it: the first version of this
+        return m[_name]               # helper returned the count at call sites that discarded it,
+                                      # and ten metrics vanished from the report. T28/T37/T48/T54
+                                      # caught it immediately, which is what those assertions are for.
     inst = st["instances"]
     windows = st["windows"]
     events = st["events"]
@@ -2479,8 +2496,8 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
         m["agent_ends_unrecorded"] = len([i for i in insts if i["end_kind"] == "unknown" and (now - i["end"]).total_seconds() > 120 and not i["exit_logged"]])
     else:
         m["agent_ends_unrecorded"] = None   # not evaluable without the capture time (corpus mode)
-    m["service_failures"] = len([l for l in events if l.extra.get("log") == "System" and l.extra.get("id") in (7023, 7024, 7031, 7034, 7043) and OUR_SERVICES_RE.search(l.msg) and sel(l.ts)])
-    m["wer_crashes"] = len([l for l in events if l.extra.get("log") == "Application" and l.extra.get("id") in (1000, 1001, 1026) and OUR_EXES_RE.search(l.msg) and sel(l.ts)])
+    _count("service_failures", [l for l in events if l.extra.get("log") == "System" and l.extra.get("id") in (7023, 7024, 7031, 7034, 7043) and OUR_SERVICES_RE.search(l.msg) and sel(l.ts)])
+    _count("wer_crashes", [l for l in events if l.extra.get("log") == "Application" and l.extra.get("id") in (1000, 1001, 1026) and OUR_EXES_RE.search(l.msg) and sel(l.ts)])
     m["death_events"] = len([d for d in st["ev_deaths"] if sel(d["ts"])])
     have_wd = bool(st["watchdogs"]) and bool([lf for lf in files if lf.family == "events"])
     mismatch = 0
@@ -2494,8 +2511,8 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
         m["death_record_mismatch"] = mismatch
     else:
         m["death_record_mismatch"] = None   # not evaluable: needs both the watchdog log and the event block
-    m["unexpected_shutdowns"] = len([l for l in events if l.extra.get("log") == "System" and l.extra.get("id") in (6008, 41) and sel(l.ts)])
-    m["bugchecks"] = len([l for l in events if l.extra.get("log") == "System" and l.extra.get("id") == 1001 and "BugCheck" in (l.extra.get("provider") or "") and sel(l.ts)])
+    _count("unexpected_shutdowns", [l for l in events if l.extra.get("log") == "System" and l.extra.get("id") in (6008, 41) and sel(l.ts)])
+    _count("bugchecks", [l for l in events if l.extra.get("log") == "System" and l.extra.get("id") == 1001 and "BugCheck" in (l.extra.get("provider") or "") and sel(l.ts)])
     # EVERY METRIC IN THIS FUNCTION IS SCOPED TO THE BUILD UNDER TEST, not just to the time window.
     # The predicate is build_scope()'s. It used to live here, and the comment here used to say
     # "`_prior` is the one place it applies" - which was false: the baseline comparison is a
@@ -2504,7 +2521,7 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
     m["prior_build_mix"] = {k: v["versions"] for k, v in sorted(_builds.items()) if len(v["versions"]) > 1}
     # TaskScheduler records are Event Log entries with no module version, so only the anchor can
     # place them. Same one line as before, so the GUARD:taskrc knob stays driveable.
-    m["task_failures"] = len([l for l in events if "TaskScheduler" in str(l.extra.get("log")) and l.extra.get("id") in (201, 203)
+    _count("task_failures", [l for l in events if "TaskScheduler" in str(l.extra.get("log")) and l.extra.get("id") in (201, 203)
                               and OUR_TASKS_RE.search(l.msg) and sel(l.ts) and not _pre_install(l)
                               and task_record_is_failure(l.extra.get("id"), l.msg)])   # GUARD:taskrc DEFECT: and True])
     m["install_anchor"] = _anchor.isoformat(sep=" ") if _anchor else None
@@ -2530,7 +2547,7 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
     # a count. Both stay on ONE LINE each because the GUARD knob rewrites the single line carrying
     # its marker - a multi-line statement makes the knob undriveable, which the selftest catches.
     m["errors_during_requested_stop"] = sum(len([l for l in i["errors_during_stop"] if not (_lf_by_name.get(i.get("file")) and _prior(_lf_by_name[i["file"]], l))]) for i in insts)   # GUARD:instwindow DEFECT: m["errors_during_requested_stop"] = sum(len(i["errors_during_stop"]) for i in inst)
-    m["stale_error_lines"] = len([l for lf in files for l in lf.lines if l.level == "E" and STALE_ERR_RE.search(l.msg) and sel(l.ts) and not _prior(lf, l)])
+    _count("stale_error_lines", [l for lf in files for l in lf.lines if l.level == "E" and STALE_ERR_RE.search(l.msg) and sel(l.ts) and not _prior(lf, l)])
     # A ZERO FROM "NOTHING WAS CONSIDERED" READS EXACTLY LIKE A ZERO FROM "NOTHING HAPPENED" (the
     # GUARD:winsince lesson, and three metrics lost to it). The filter can only produce that if a
     # superseded module's NEWEST build wrote nothing in the window at all - an upgrade right at the
@@ -2539,7 +2556,7 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
         mod for mod, info in _builds.items() if len(info["versions"]) > 1
         and not any(lf.module == mod and sel(l.ts) and line_version(lf, l) == info["newest"]
                     for lf in files for l in lf.lines))
-    m["fallbacks_fired"] = len([l for lf in files for l in lf.lines if FALLBACK_FIRED_RE.search(l.msg) and "fallback refused" not in l.msg and sel(l.ts) and not _prior(lf, l)])
+    _count("fallbacks_fired", [l for lf in files for l in lf.lines if FALLBACK_FIRED_RE.search(l.msg) and "fallback refused" not in l.msg and sel(l.ts) and not _prior(lf, l)])
     _errs_all = [(lf, l) for lf in files for l in lf.lines if l.level == "E" and sel(l.ts)]
     errs = [l for lf, l in _errs_all if not _prior(lf, l)]
     # NOT hidden: the excluded lines are a reported figure, because a large count here means the
@@ -2580,7 +2597,7 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
             _tol.append(rx)
     def _is_declared(line):
         return any(rx.search(line.raw) for rx in _decl)
-    m["error_lines_undeclared"] = len([l for l in errs if not _is_declared(l)])
+    _count("error_lines_undeclared", [l for l in errs if not _is_declared(l)])
     # a declaration that matches nothing is itself a finding: the stimulus it names did not happen, so the
     # run proved less than it claims (the same rule as a check that has never been seen to fail) - unless it
     # was declared TOLERATED, which claims no stimulus and whose absence proves nothing was wrong
@@ -2805,8 +2822,19 @@ def breach_evidence(b, st, metrics):
             for e in i.get("broker_events", []):
                 if e["kind"] in ("HUNG", "DIED", "REAP", "BACK"):
                     out.append("  pid %s %s %s fi=%s%s: %s" % (i["pid"], e["kind"], fmt_ts(e["ts"]), e["fi"], (" (joined to M8 record pid %s)" % e["record"]["pid"]) if e.get("record") else "", e["line"].raw[:160]))
-    if "lines" in b:
+    # THE LINES THE METRIC WAS COUNTED FROM. This used to read `if "lines" in b`, testing a key no
+    # producer ever set, so every metric without an arm above reached the judge with evidence: [].
+    out.extend((st.get("metric_lines") or {}).get(name) or [])
+    if "lines" in b:            # kept: a caller MAY attach lines directly
         out.extend(b["lines"])
+    # A FALLBACK FIRING IS AN ANOMALY, SO IT SAYS SO. A breach with no evidence is not a quiet
+    # degradation - it is a judge deciding on a metric name and a number, which is how a P1 gets
+    # waved through. Naming it in the evidence makes the gap visible to the judge AND to the reader.
+    if not out:
+        out.append("NO EVIDENCE WAS ATTACHED FOR %s: this metric has no arm in breach_evidence and "
+                   "no line list was threaded for it, so the judgement below rests on the metric "
+                   "name and the count alone. That is a defect in the sweep, not a clean result."
+                   % name)
     return out[:40]
 
 
@@ -3210,7 +3238,14 @@ def cmd_analyze(a):
     _sig_prior = build_scope(files, getattr(a, "build", None))[3]
     _loud = [x for x in dom0_loud(files, _sig_prior) if not _declared_line(x[2])]
     metrics["dom0_loud_failures"] = len(_loud)
-    metrics["notifications_lost"] = len([x for x in dom0_lost(files, _sig_prior) if not _declared_line(x[2])])
+    _lost = [x for x in dom0_lost(files, _sig_prior) if not _declared_line(x[2])]
+    metrics["notifications_lost"] = len(_lost)
+    # THESE TWO ARE COUNTED HERE, NOT IN compute_metrics, so they need their lines threaded here or
+    # they reach the judge as a bare number like the other ten did. Both line lists are already in
+    # hand; the old code discarded them at len().
+    _ml = st.setdefault("metric_lines", {})
+    _ml["dom0_loud_failures"] = [x[2] for x in _loud][:40]
+    _ml["notifications_lost"] = [x[2] for x in _lost][:40]
     sigs = collect_signatures(files, since, _sig_prior)
     cmp = compare(sigs, baseline, metrics)
     items = build_jev_items(cmp, st, metrics, files, since)

@@ -115,3 +115,4 @@ loginit-banner-debug-selftest.sh
 wu-oscillation-verdict-selftest.sh
 probe-anchor-selftest.sh
 sweep-noagent-selftest.sh
+breach-evidence-selftest.sh
