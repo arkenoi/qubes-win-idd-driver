@@ -112,6 +112,56 @@ else
     echo "note the archived captures are not on this host - the replay assertion did not run"
 fi
 
+# ---- A CLEAN SWEEP OVER AN UNPROVEN LOG PATH IS NOT A CLEAN CELL --------------------------------
+# matrix.sh re-proves the log path immediately before grading, with --require-agent-logs, and that
+# failure is FATAL. But the proof is SKIPPED when the subject is no longer running, and that branch
+# covers two different things: a wedge, which is the case the volume exists for, and a guest that
+# simply halted. In the second case nothing establishes that the product was still writing where
+# the sweep later read, and a log truncated at the break reads exactly like a clean one. The cell is
+# now marked and the grading refuses to call it clean. The predicate is taken from the shipped file.
+pred=$(sed -n '/if \[ "\$rc" = 0 \] && \[ -f "\$m\/\$c-logvol-unproven.marker" \]; then/,/^  fi$/p' "$ROOT/mgmt/harness/matrix.sh")
+if [ -n "$pred" ] && printf '%s' "$pred" | command grep -qa 'INVALID-SWEEP-UNPROVEN'; then
+  ok "the unproven-path predicate was extracted from matrix.sh"
+else
+  no "could not extract the unproven-path predicate" "the two legs below would test nothing"
+fi
+
+judge_unproven(){ # $1=rc $2=marker present(1/0) -> prints what the grading says
+  rm -f "$T/m/win10-clean-logvol-unproven.marker"
+  [ "$2" = 1 ] && : > "$T/m/win10-clean-logvol-unproven.marker"
+  bash -c '
+    no(){ printf "NO %s\n" "$*"; }
+    rc="$1"; m="$2"; c=win10-clean
+    eval "$3"
+    echo DONE
+  ' _ "$1" "$T/m" "$pred"
+}
+
+got=$(judge_unproven 0 1)
+case "$got" in
+  *"NO win10-clean: INVALID-SWEEP-UNPROVEN"*) ok "a CLEAN sweep over an unproven path is graded INVALID-SWEEP-UNPROVEN" ;;
+  *) no "an unproven path was allowed to read clean" "$got" ;;
+esac
+
+got=$(judge_unproven 0 0)
+case "$got" in
+  *NO*) no "a cell whose path WAS proven was graded invalid anyway" "$got - the guard would fail every cell" ;;
+  *)    ok "a cell with no marker (path re-proven) is untouched - the guard is not blanket" ;;
+esac
+
+got=$(judge_unproven 1 1)
+case "$got" in
+  *NO*) no "an already-failing cell got a second, confusing verdict" "$got" ;;
+  *)    ok "a cell that already failed the sweep is not re-graded by this predicate" ;;
+esac
+
+# and the marker must actually be WRITTEN in the branch that skips the proof
+if command grep -qa ': > "$M/$c-logvol-unproven.marker"' "$ROOT/mgmt/harness/matrix.sh"; then
+  ok "the skip branch writes the marker, so the predicate has an input"
+else
+  no "nothing writes the unproven marker" "the predicate above would never fire - decoration"
+fi
+
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

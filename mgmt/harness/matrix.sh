@@ -440,6 +440,17 @@ grade_cell_logsweep(){ # <cell> <vm> <matrix-dir>
   if [ "$rc" = 0 ] && [ "$q" -gt 0 ] && [ "$a" -eq 0 ]; then
     no "$c: INVALID-SWEEP-NOAGENT  the sweep returned CLEAN over $q QWT line(s) from which NO agent-family log (gui-agent/gui-watchdog/qrexec-agent/qubesdb) carried a single line - the error-line gate was graded over a capture that cannot hold an agent error ($have)"
   fi
+  # A CLEAN SWEEP OVER AN UNPROVEN LOG PATH IS NOT A CLEAN CELL. The pre-grading proof is skipped
+  # when the guest is no longer running, and that branch covers a wedge (why the volume exists) AND
+  # a guest that simply halted. In the second case nothing establishes that the product was still
+  # writing where the sweep later read, so a log truncated at the break reads as CLEAN.
+  # `$m`, THE DIRECTORY THIS FUNCTION WAS GIVEN - not the global $M. The function takes the
+  # matrix dir as its third argument, so a predicate keyed on the global would be INERT in every
+  # fixture that drives this function with a temp dir, and would read the wrong cell's marker
+  # anywhere the caller passes something else.
+  if [ "$rc" = 0 ] && [ -f "$m/$c-logvol-unproven.marker" ]; then
+    no "$c: INVALID-SWEEP-UNPROVEN  the sweep returned CLEAN but the log path was never re-proven for this cell - $LOGVOL_VM was not running at grading, so nothing establishes the product was still writing where this capture was read. A log truncated at the break reads exactly like a clean one."
+  fi
   return 0
 }
 # qvm-start BLOCKS until qrexec connects (up to qrexec_timeout). On a guest that never boots
@@ -2645,6 +2656,13 @@ for c in $CELLS; do
       say "  $c: log path still PROVEN at grading"
     else
       say "  $c: $LOGVOL_VM is not running - the path cannot be re-proven, which is exactly the case the volume covers; pulling it"
+      # AND THE CELL IS MARKED UNPROVEN. "Not running" covers two different things: a WEDGE, which
+      # is the case this volume exists for, and a guest that merely halted - after which grading
+      # proceeds over whatever the volume holds with NO proof that the product was still writing
+      # there. A log truncated at the break is what the sweep reads as CLEAN, which is the false
+      # comfort the proof exists to prevent. The marker is per cell and the sweep grading below
+      # refuses to call such a cell clean (LOGVOLPROOFMEASURESTHEPROVER).
+      : > "$M/$c-logvol-unproven.marker"
     fi
     if logvol_pull "$LOGVOL_IMG" "$M/logvol-$c" >>"$M/$c-logvol-pull.out" 2>&1; then
       say "  $c: log volume pulled -> $M/logvol-$c"
