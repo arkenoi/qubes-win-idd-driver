@@ -180,9 +180,43 @@ fi
 if printf '%s' "$_appvm_fn" | command grep -qE '\[ "\$b" = 1 \].*logvol_bind_now'; then
   no_ "the appvm bind must run on EVERY boot" "it is guarded to boot 1, and an AppVM's volatile root discards it at the next start"
 elif printf '%s' "$_appvm_fn" | command grep -qE 'logvol_bind_now "\$app" "\$3-appvm-b\$b"'; then
-  ok_ "...on every boot, because an AppVM's volatile root discards the registry each start"
+  # THE MESSAGE NOW CLAIMS ONLY WHAT THE PREDICATE TESTS. It used to read "...on every boot,
+  # because an AppVM's volatile root discards the registry each start", which asserts the volatile
+  # root is DEALT WITH. The predicate is a grep for the call site: it proves the call is there with
+  # a per-boot label and nothing more. MEASURED 2026-10-21, and the per-boot bind does NOT solve
+  # it: the bind runs after w_appvm_shell, so the agent family has already resolved LogDir from the
+  # inherited registry, and the volatile root discards the new value before the next boot -
+  # including the last one, which grading reads. The property is asserted elsewhere, by execution:
+  # logvol-lib-selftest's proof-agent legs, and the --require-agent-logs requirement at the
+  # pre-grading call site. See LOGVOLPROOFMEASURESTHEPROVER and LOGVOLBINDLATE.
+  ok_ "the appvm bind is called on every boot with a per-boot label (a grep over the cell body - it does NOT prove the bind takes effect)"
 else
   no_ "the appvm bind is not per-boot" "expected logvol_bind_now with a per-boot label"
+fi
+
+# AND THE PROPERTY ITSELF MUST BE ASSERTED BY EXECUTION SOMEWHERE. Every assertion in this file is
+# a grep over matrix.sh's source: necessary, because a cell body cannot be run without a guest, but
+# it means this suite can only ever say "the call is there". For eight days that was mistaken for
+# evidence that the bind WORKS, across five fixes none of which was ever measured on an AppVM.
+# The behavioural assertion lives in logvol-lib-selftest.sh (the proof-agent legs, which execute
+# logvol_prove_roundtrip against the AppVM state), and the requirement that makes a blind cell fail
+# lives at matrix.sh's pre-grading call site. If either disappears, this suite's greps are the only
+# thing left and they cannot see the defect - so fail here when they are gone.
+if command grep -q 'proof-agent' "$ROOT/tools/tests/logvol-lib-selftest.sh" 2>/dev/null; then
+  ok_ "the behavioural proof of the log path exists (logvol-lib-selftest proof-agent legs)"
+else
+  no_ "nothing executes the log-path proof" "this suite only greps matrix.sh, so the defect would be invisible again"
+fi
+# THE PREDICATE IS THE CALL, NOT THE FILE. A whole-file grep for the flag name passed with the
+# flag REMOVED from the call, because the comment above the call explains the flag and the grep
+# matched that - measured 2026-10-21 by removing it and watching this very assertion stay green.
+# Third time in one session that a check of mine fired on its own documentation. So: the flag must
+# appear on a LIVE logvol_prove_roundtrip line, comments excluded.
+if command grep -nE 'logvol_prove_roundtrip[^#]*--require-agent-logs' "$ROOT/mgmt/harness/matrix.sh" 2>/dev/null \
+     | command grep -qvE '^[0-9]+:[[:space:]]*#'; then
+  ok_ "a cell whose agent wrote no log into the resolved LogDir FAILS before grading (asserted on the CALL)"
+else
+  no_ "the pre-grading proof does not require an agent log" "a blind appvm cell would be graded CLEAN again"
 fi
 
 # A LOG-DEVICE FAILURE ABORTS, IT DOES NOT DOWNGRADE. Until 2026-10-20 this path printed
