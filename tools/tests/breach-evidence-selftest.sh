@@ -126,6 +126,67 @@ PY2
   && ok "coverage: $armed armed + $threaded line-threaded, only $bare2 with neither ($names2) - was 12" \
   || no "coverage regressed: $bare2 metrics have neither an arm nor a line list ($names2)"
 
+# ---------------------------------------------------------------- the HUMAN summary, not just Jev
+# The judge was given the lines and the reader was not: the BREACHES section printed only
+# "[P2] metric = 7 (max 0)", which is why finding what error_lines_undeclared was counting meant
+# grepping captures by hand. write_summary is called with `rep` alone, so the lines have to be on
+# the breach itself - which also puts them in report.json, where an archived run can be re-read.
+sumout=$(python3 - "$ROOT/tools/log-sweep.py" <<'PYSUM'
+import importlib.util, sys, tempfile, os
+spec = importlib.util.spec_from_file_location("ls", sys.argv[1])
+ls = importlib.util.module_from_spec(spec); spec.loader.exec_module(ls)
+LINE = "[20261020.132705.123-4812:3344-E] Foo: the line that made the count"
+
+# AUTO-FILLING FIXTURE. write_summary reads a few dozen report keys and gains more over time; a
+# hand-listed fixture breaks on an unrelated addition and then gets deleted rather than fixed. This
+# supplies a benign default for anything not set here, so the suite keeps testing the ONE property
+# it is about: does a breach's lines reach the human summary.
+class Auto(dict):
+    def __missing__(self, k):
+        v = Auto()
+        self[k] = v
+        return v
+    def __bool__(self):
+        return True if len(self) else False
+
+def auto(d):
+    a = Auto()
+    for k, v in d.items():
+        a[k] = auto(v) if isinstance(v, dict) else v
+    return a
+
+rep = auto({"header": {"label": "t", "since": None, "files": 1, "lines": 1, "boots": 1,
+                       "shutdowns": 0, "agent_instances": 1, "clock_phase_note": None,
+                       "generated": "2026-10-21T00:00:00Z"},
+            "status": "FINDINGS", "rc": 1, "metrics": {"error_lines_undeclared": 1},
+            "context": {"fault_injection": False, "declared": False, "declared_source": "",
+                        "unproven": False, "sources": [], "records": []},
+            "jev": {"calls": [], "questions": 0, "rc": 0, "reason": None, "wire": None},
+            "data_problems": [], "new": [], "rose": [], "prior_build": [],
+            "out_of_context": [], "known_defects_present": [], "unsettled_present": [],
+            "breaches": [{"metric": "error_lines_undeclared", "value": 1, "max": 0,
+                          "severity": "P2", "why": "a clean error log is the gate",
+                          "evidence": [LINE]}]})
+fd, path = tempfile.mkstemp(); os.close(fd)
+try:
+    text = ls.write_summary(rep, path)
+    if text is None:
+        text = open(path, encoding="utf-8", errors="replace").read()
+    print("CARRIES" if LINE in text else "MISSING")
+finally:
+    os.unlink(path)
+PYSUM
+)
+[ "$sumout" = CARRIES ] && ok "the human summary prints the lines a breach was counted from" \
+                        || no "the summary still prints only the metric and the count ($sumout)"
+
+# and the attach step must be wired, or the evidence never reaches rep at all
+if command grep -aq '_b\["evidence"\] = _it.get("evidence")' "$ROOT/tools/log-sweep.py"; then
+  ok "each breach item's evidence is copied onto the breach (so report.json keeps it)"
+else
+  no "nothing copies a breach item's evidence onto the breach - the summary would print nothing"
+fi
+
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -3074,6 +3074,14 @@ def write_summary(rep, path):
     for b in br:
         j = b.get("jev")
         L.append("  [%s] %s = %s (max %s)  %s  Jev: %s" % (b.get("severity", "P2"), b["metric"], b["value"], b["max"], b["why"], "%s %.2f" % (j["choice"], j["confidence"]) if j else "not judged"))
+        # THE OFFENDING LINES, FOR THE READER. A count with no lines is not something anyone can act
+        # on; this section is the first thing read after a failed campaign. Capped, because a breach
+        # of 400 would otherwise bury the rest of the summary - and the cap says what it hid.
+        _ev = b.get("evidence") or []
+        for _l in _ev[:12]:
+            L.append("        %s" % str(_l)[:200])
+        if len(_ev) > 12:
+            L.append("        ... and %d more (full list in report.json breaches[].evidence)" % (len(_ev) - 12))
     ooc = rep["out_of_context"]
     if ooc:
         L.append("OUT OF CONTEXT (%d) - expected only under fault injection, seen without evidence of one:" % len(ooc))
@@ -3249,6 +3257,17 @@ def cmd_analyze(a):
     sigs = collect_signatures(files, since, _sig_prior)
     cmp = compare(sigs, baseline, metrics)
     items = build_jev_items(cmp, st, metrics, files, since)
+    # THE SAME LINES THE JUDGE GETS, ON THE BREACH ITSELF. The judge was given evidence and the
+    # human reader was not: the summary's BREACHES section printed only "[P2] metric = 7 (max 0)",
+    # which is why finding what error_lines_undeclared was counting meant grepping captures by hand.
+    # Attaching it here also puts it in report.json, so an archived run can be re-read later - which
+    # is how the appvm blindness was finally measured, off archived captures.
+    for _it in items:
+        if _it.get("kind") != "breach":
+            continue
+        for _b in cmp["breaches"]:
+            if _b["metric"] == _it["metric"]:
+                _b["evidence"] = _it.get("evidence") or []
 
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     workdir = a.workdir or os.path.join(repo, "scratchpad", "log-sweep", time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + re.sub(r"[^A-Za-z0-9_-]", "_", a.label or "run"))
