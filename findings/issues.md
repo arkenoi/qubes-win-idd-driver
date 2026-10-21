@@ -2,6 +2,41 @@
 
 ## CURRENT STATE
 
+**THE 4.3.37 CAMPAIGN RAN AND DID NOT COMPLETE, 2026-10-21 NIGHT.** Package 39649955816 at commit
+ee4b2ff5. `PACKAGE COMPLETE 4.3.37.1043` (14 gates, 87 files, provenance exact), PREFLIGHT CLEAR,
+estate 85/0/1458, rig idle. The matrix ABORTED IN CELL 1 OF 8 - `=== MATRIX: 14 passed, 1 failed -
+ABORTED on a log path that broke mid-cell ===`, rc=2 - and the three feature tests then ran:
+notify-errors-guest-test PASS, crop-before-map PASS, template-update FAIL. The six remainder suites
+did NOT run: they need --vm11 win11-acc, which the aborted matrix never created. Final:
+`release acceptance for 4.3.37+agent.39cbad1d32e0: INCOMPLETE/FAILED`, rc=1, teardown clean
+(vmlock=none, no orphans - 5a21c3e1 working).
+
+**THE ABORT WAS MY OWN DEFECT, NOT A PRODUCT OR HARNESS ONE.** The freshness requirement added that
+morning to logvol_prove_roundtrip compared each agent log's LastWriteTime against
+Win32_OperatingSystem.LastBootUpTime. Every guest on this rig boots ~3 h ahead and our puller
+corrects it (clock_boot_correction_s = 10800), and the standing note has recorded since 2026-10-09
+that LastBootUpTime reads -10734 s just after the flip and that mtimes run backwards across it. I
+wrote in the code comment that both reads being inside the guest meant no skew could enter; the skew
+is inside the guest. agentfresh came back 0 over a volume holding 260 lines from pid 3904, a NEW
+agent process that started LifecycleStart at 21:34:19 in the graded boot, with FAT directory entries
+reading 21:37 against a boot of 21:33:27. I called the abort a TRUE positive twice before the pid in
+collect-failure's package refuted me. FIXED 65313f9d: the anchor is now a pid that is RUNNING NOW,
+read from the log's own pid:tid prefix, no clock consulted; driven by logvol-lib-selftest 101/0 with
+the clock predicate over the same fixture as the control (pid 1, clock 0).
+
+**AND THE CAMPAIGN FOUND A REAL ONE: THE UPGRADE COULD NOT LAND ITS OWN RELAY.** template-update
+round 3 FAILED - `dom0 says updates are available but no pass in this log ever reported` - because
+every pass ended `phase: error, count: 0` on `relay ... not accepting connections on 127.0.0.1:8082`.
+Cause: a relay has squatted 8082 on win11de-tup SINCE SEPTEMBER. It predates --parent-pid, so the
+launcher's `--parent-pid <PID>` becomes its listen port through RunListen's catch-all; the campaign's
+relay logs carry listen 127.0.0.1:1384/:2312/:5572/:6588/:8228, every one a pid, and not one line
+with the `parent=` field only the fixed binary writes. The deploy refused rather than replace
+(GUARD:vouchexe) and the refusal was self-perpetuating: the stale relay holds the port AND the exe.
+FIXED 87e3a746: when the pid holding 8082 is a process whose path IS this deploy's own relay exe,
+and the mutex is held so no pass is running, that pid is ended BY -Id and the relay is replaced;
+any other listener still refuses. Jev: stop_the_orphan 0.81, refusing_forever 0.21. Four driven legs
+plus a stranger leg; both pre-existing knobs still break the suite.
+
 **P5 NOW WAITS ON ONE DECISION, 2026-10-21 NIGHT.** Jev was asked the launch question again on the
 state as it stood at 18:40: clear_to_launch_now **0.06** (it was 0.29 then 0.32 earlier in the day),
 decomposed into four contributors - invisible_rig_contact_holds_the_launch 0.80,
@@ -141,6 +176,18 @@ w_session, and what the gate does with a recorded tradeoff (LEDGERHASNOROWKINDFO
 If the owner wants a smaller scope he can say so; nothing here is hard to stop.
 
 
+- UNSCHEDULEDSUITES [harness, tools/tests/offline-suites.txt; **OPEN**] [verified 2026-10-21]
+  **~36 SUITES ARE OUTSIDE THE CURATED LIST AND NOTHING RUNS THEM.** Nine are excluded by policy
+  (mtools/pwsh/compiler, which a GitHub runner lacks) and were run by hand this night: eight green,
+  one red (wu-deploy-loud, environmental - the shipped region reaches the real `schtasks`, absent
+  under pwsh on Linux). The rest have no stated reason, and my MISSING-NO-REASON label is NOT
+  verified: offline-suites.txt's own header records that the exclusions came from a measured run on
+  2026-10-15 ("the 40 that exited 0 are listed"), so some were excluded BECAUSE THEY FAILED.
+  THE COST IS MEASURED, not hypothetical: tools/tests/wu-installer-relay-selftest.sh's knob-1 target
+  string had rotted since GUARD:vouchexe reworded the check it greps for, so that leg reported
+  target-failed=0 and could never pass - and nothing noticed, because the suite needs pwsh.
+  serial-rig-selftest.sh is in the same position with no apparent reason: it covers serial-rig.sh,
+  which was changed twice on 2026-10-21, and it is not in the list.
 - LOGVOLPROOFMEASURESTHEPROVER [instrument, mgmt/harness/logvol-lib.sh logvol_prove_roundtrip; **OPEN - and it is why LOGVOLBINDLATE survived eight days and five 'fixes'**] [verified 2026-10-21] **THE PROOF MEASURES THE PROVER, NOT THE AGENT.** logvol_prove_roundtrip writes a nonce into the LogDir THE GUEST RESOLVES AT PROOF TIME and reads it back off the image. That proves the round trip for the process running the proof. It does NOT prove the thing the campaign depends on: that the AGENT FAMILY resolved LogDir at ITS OWN START. On a churn subject the two coincide, because a standalone guest's root persists so the registry write and the Set-Partition letter pin both survive; on an AppVM they do not coincide at all. So '18 proofs, 0 blind cells' was a true statement about the wrong property, reported as the property, across several sessions. MEASURED 2026-10-21: 13 commits touched the bind path between 2026-10-13 and 2026-10-20 (d654b92b, 6bfca85b, d1e2e348, 792a2b2e, 39836c63 and eight more). The guests their measurements name are win10-acc x3, win11de-tup x3, win11-reinstall x1 - ZERO name win10-app, win11-app or an appvm cell. LOGVOLBINDLATE therefore never regressed: each fix was real and fixed its own cause on a guest whose root persists, and the AppVM mechanism (registry inherited from the template through the park, volatile root discarding both the registry AND the letter before the agent starts) was never the one under test. THE FIX THIS IMPLIES: the proof must assert that an AGENT-FAMILY log exists in the resolved LogDir on the guest being graded - the INVALID-SWEEP-NOAGENT property (827a8711) checked at BIND time rather than three cells later at grade time, so the cause is named where it happens. A proof whose predicate is not the property is how a defect survives five fixes.
 - WDKCHOCOCALLEDUNCONDITIONALLY [harness/CI, .github/workflows; **STILL OPEN - the guard landed and is correct, and it SAVES NOTHING on GitHub-hosted runners**] [verified 2026-10-21] The presence check added 2026-10-21 (dc159dc3) is the shape qwt-full.yml already used, and it is wired in build.yml, release-package.yml, pv-xencons.yml and pv-xenvif.yml with tools/tests/wdk-guard-selftest.sh sweeping every workflow. BUT MEASURED on build 39537916697 the same day: the `WDK already present ... skipping` line never printed and chocolatey ran - "Chocolatey v2.7.4 ... WindowsDriverKit11 has been installed" - so the kit is genuinely ABSENT on the runner image and the guard takes the install path every time. The entry's actual complaint (every build of four workflows depends on an external service, which hung 90 minutes on 2026-10-03) is therefore UNCHANGED in effect; only `timeout-minutes: 15` bounds it. What would remove the dependency is caching the kit or a self-hosted/pre-baked image, which is an infrastructure decision, not a workflow edit. I retired this entry prematurely on the strength of the guard existing rather than on the measurement.
 - AGENTENDSUNRECORDEDONINPLACEUPGRADE [P2, breached the gate on two cells; agent/gui-agent service-stop path; **OPEN**] [verified 2026-10-19] **THE AGENT'S LOG STOPS MID-FRAME DURING AN IN-PLACE UPGRADE, WITH NO STOP AND NO DEATH RECORD.** `agent_ends_unrecorded = 1 (max 0)` breached win10-upgrade and win11-upgrade - and only the upgrade cells. log-sweep.py:2479 counts an instance whose `end_kind` is unknown, whose last line is more than 120 s before the capture, and which logged no exit. The instance in win11-upgrade is `gui-agent-20261019-133926-4600.log`, pid 4600, started 13:39:26 guest-local and last writing at 13:40:15 - 49 seconds - while the per-day `gui-agent-20261019.log` runs on to 13:50:12. Its final lines are ordinary work, not a wind-down: `PwAttachWindowCarry ... attached (slice-fed)`, `ToastHoldDecide ... state=suppress ... […]
