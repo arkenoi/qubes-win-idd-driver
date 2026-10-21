@@ -75,9 +75,27 @@ qwt_shutdown() {
     # A bare qvm-shutdown is the REQUEST (ACPI). It returns immediately and kills nothing.
     timeout 120 qvm-shutdown "$vm" >/dev/null 2>&1
     end=$(( $(date +%s) + deadline ))
+    # ASK AGAIN. A single ACPI request that is lost, or that lands while the guest is still busy
+    # with first-boot work, used to mean the poll ran to its whole deadline and reported failure on
+    # a guest that would have stopped at once. MEASURED TWICE on win11de-qwt 2026-10-15, both right
+    # after a deliberate GOLDEN_UNSEAL boot that wrote to the registry: the request went at 14:39:06
+    # and the guest was still Running at 14:54:15 - 909 s - and a SECOND ask was answered in seconds.
+    # It cost two golden seals that day.
+    # A re-ask is the same idempotent ACPI request, not an escalation: nothing here ever kills a
+    # guest, because a kill contaminates a subject (findings: never reuse a killed subject). The
+    # interval is a constant, deliberately not a knob - a knob on a shared predicate drives every
+    # consumer whether they meant it or not.
+    local reask=120 nextask asks=1
+    nextask=$(( $(date +%s) + reask ))
     while [ "$(date +%s)" -lt "$end" ]; do
         st=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$vm" '$1==v{print $2}')
         [ "$st" = Halted ] && return 0
+        if [ "$(date +%s)" -ge "$nextask" ]; then
+            asks=$(( asks + 1 ))
+            echo "qwt_shutdown: $vm still $st after $(( reask * (asks - 1) ))s - asking again (ask #$asks)" >&2
+            timeout 120 qvm-shutdown "$vm" >/dev/null 2>&1
+            nextask=$(( $(date +%s) + reask ))
+        fi
         # and if it has gone from the list entirely while we waited, it is down, not unresponsive -
         # the same mistake as above, just arriving mid-poll.
         if [ -z "$st" ]; then
