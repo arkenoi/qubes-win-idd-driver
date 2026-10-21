@@ -22,7 +22,7 @@ remains is not implementable by me:
   My reading is that they do not gate P5. Narrowing the gate is the owner's call, not mine, so the
   plan stays as written until he says otherwise.
 
-**THE AUDIT'S blocks-acceptance TIER IS CLOSED, 2026-10-21.** Nine findings: FIVE real and fixed with a driven test (release-acceptance.sh had no teardown trap at all, which is ACCEPTCANCELORPHAN and the run-lib finding counted once; prime-run.sh's evidence guard failing open; seal-qwt-golden.sh sealing a guest it never re-checked was Halted; assert-payload.sh passing over 0 verified files; build-answer-stick.sh matching the WORD LabConfig instead of the bypass keys). FOUR do not hold and are dismissed with evidence in scratchpad/harness-audit-report.md: LOGVOL_CACHE is an unconditional assignment, logvol_detach has no production caller and its consequences are covered by claim_sweep_stale and matrix.sh's targeted qemu-args edit, latch_ok's nics:1 is correct because the verification boot polls for the documented re-arm, and the collect-failure suite's missing timeout applies only to a direct developer run and would contradict the no-timeouts rule. Four more were fixed from the falsifies-a-verdict tier the same day: accept-clean's unverified WU disable, the clean sweep over an unproven log path, ctl_stop's outcomes all exiting 0, dom0-callers' floor of 10, and e2e-wait's two. NINE fixes, FOUR dismissals, suite floor 74 -> 83.
+**THE AUDIT'S blocks-acceptance TIER IS CLOSED, 2026-10-21.** Nine findings: FIVE real and fixed with a driven test (release-acceptance.sh had no teardown trap at all, which is ACCEPTCANCELORPHAN and the run-lib finding counted once; prime-run.sh's evidence guard failing open; seal-qwt-golden.sh sealing a guest it never re-checked was Halted; assert-payload.sh passing over 0 verified files; build-answer-stick.sh matching the WORD LabConfig instead of the bypass keys). FOUR do not hold and are dismissed with evidence in scratchpad/harness-audit-report.md: LOGVOL_CACHE is an unconditional assignment, logvol_detach has no production caller and its consequences are covered by claim_sweep_stale and matrix.sh's targeted qemu-args edit, latch_ok's nics:1 is correct because the verification boot polls for the documented re-arm, and the collect-failure suite's missing timeout applies only to a direct developer run and would contradict the no-timeouts rule. Four more were fixed from the falsifies-a-verdict tier the same day: accept-clean's unverified WU disable, the clean sweep over an unproven log path, ctl_stop's outcomes all exiting 0, dom0-callers' floor of 10, and e2e-wait's two. NINE fixes, FOUR dismissals, suite floor 74 -> 84.
 
 **THE 5-PHASE RELEASE PLAN AND WHERE IT STANDS, 2026-10-21 EVENING.** Written down here because it
 was carried only in a session goal, which is not a record: a plan nobody can read is a plan nobody
@@ -33,8 +33,10 @@ can check.
      (`matrix.sh:999`). Green BY SUITE, not by property - `logvol_prove_roundtrip` is still a
      proxy (LOGVOLPROOFMEASURESTHEPROVER, open).
   P2 tracks committed apart                               DONE.
-  P3 one offline gate run, bar: no new reds               DONE, both sides. Dev qube 77 suites,
-     RESULT PASS, 0 red. And GREEN IN CI for the first time (`test` 39590094503) - the estate had
+  P3 one offline gate run, bar: no new reds               DONE, both sides. Dev qube 84 suites,
+     1409 assertions, RESULT PASS, 0 red, 0 reporting nothing (re-run 2026-10-21 18:05 after the
+     last sweep-gate correction; the earlier line said 77, which was the count before the day's
+     suites landed - the list and the floor are both 84 now). And GREEN IN CI for the first time (`test` 39590094503) - the estate had
      been red on every CI run for weeks because two suites read a gitignored mirror a clean
      checkout never carries, which is what `campaign-preflight` refuses a campaign on.
   P4 one build                                            DONE. `build`, `test` and both packages
