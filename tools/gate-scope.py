@@ -202,13 +202,53 @@ def required(rng: str, m: dict) -> dict:
             'suites': suites, 'why': want}
 
 
+def _was_full(r: dict, m: dict) -> bool:
+    """Did this record actually cover the full scope? DERIVED, never read off the row's own flag.
+
+    THE FLOOR WAS BEING HELD OFF BY A RECORD TODAY'S CODE WOULD REFUSE TO WRITE. Measured
+    2026-10-21 against the live mgmt/gate-ledger.json: 4.3.35 carries `full: true` with THIRTEEN of
+    the eighteen suites in its own `covered` list - failproof-faultinject, failproof-gates,
+    gate-preflight, log-sweep and p3a-etw-gate are absent - and its `map_commit` is the empty
+    string. It was written by the lexicographic `sorted(covered) >= sorted(full)` comparison that
+    ledger-add documents as fixed on 2026-10-16; the fix landed one release too late, and the row it
+    wrote is still the newest "full gate" on record.
+
+    floor() read `r['full']`, so the one mechanism that forces a full gate back was satisfied by a
+    false claim: the debt was recorded as paid. That is why the required scope of 18 reads as "never
+    reached" while nothing in the 18 is actually unreachable.
+
+    ledger-add still WRITES the flag - it is evidence of what the writer believed - and nothing
+    reads it. No history is rewritten.
+    """
+    full = set((m.get('full') or {}).get('suites') or [])
+    if not full:                     # an empty map cannot certify anything as full
+        return False
+    return full <= set(r.get('covered') or [])
+
+
 def floor(m: dict) -> tuple[bool, str]:
     led = load_ledger()
     rel = [r for r in led.get('releases', []) if isinstance(r, dict)]
-    fulls = [r for r in rel if r.get('full') and r.get('result') == 'pass']
+    fulls = [r for r in rel if _was_full(r, m) and r.get('result') == 'pass']
     if not fulls:
-        return True, 'no full gate has ever passed on record'
+        # Say WHAT the best record actually covered. "No full gate on record" with no figure is the
+        # kind of verdict that gets argued with instead of acted on.
+        full = set((m.get('full') or {}).get('suites') or [])
+        best = max(rel, key=lambda r: len(set(r.get('covered') or [])), default=None)
+        if best is None:
+            return True, 'no full gate has ever passed on record (the ledger has no releases)'
+        cov = set(best.get('covered') or [])
+        claim = ' (its row claims full=true)' if best.get('full') else ''
+        return True, ('no record covers the full scope: the best is %s with %d of %d%s - missing %s'
+                      % (best.get('version'), len(cov), len(full), claim,
+                         ', '.join(sorted(full - cov)) or 'nothing'))
     last = fulls[-1]
+    # A RECORD THAT CANNOT PROVE THE MAP UNCHANGED IS NOT A FLOOR. The map-change clause below is
+    # `last.get('map_commit') and ...`, so an empty map_commit made it unreachable - the same record
+    # that falsely claimed full also carried '', so neither clause could fire.
+    if not last.get('map_commit'):
+        return True, ('the last full gate (%s) predates map-change tracking (map_commit is empty), '
+                      'so the scope map cannot be proven unchanged since it' % last.get('version'))
     since = [r for r in rel if r.get('date', '') > last.get('date', '')]
     f = m['floor']
     if len(since) >= int(f.get('releases', 10)):

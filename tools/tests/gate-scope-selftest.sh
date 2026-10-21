@@ -55,12 +55,22 @@ cat > mgmt/gate-scope.json <<'JSON'
   },
   "submodules": { "agent": { "prefix": "agent/", "reason": "the pointer is that submodule's whole diff" } } }
 JSON
-mk_ledger() { # $1 = the last full gate's date, $2 = how many releases after it, $3 = pass|fail for those, $4 map_commit
-    python3 - "$1" "$2" "$3" "${4:-}" > mgmt/gate-ledger.json <<'PY'
+mk_ledger() { # $1 last-full date, $2 releases after it, $3 pass|fail, $4 map_commit, $5 suites to DROP from full (0=genuine)
+    python3 - "$1" "$2" "$3" "${4:-}" "${5:-0}" > mgmt/gate-ledger.json <<'PY'
 import json, sys
 from datetime import datetime, timedelta
 last, extra, res, mapc = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
-rel = [{"version": "1.0", "date": last, "range": "", "required": [], "covered": ["package-verify"],
+# THE FIRST RECORD MUST ACTUALLY COVER THE FULL SCOPE, not merely claim it. This fixture used to
+# seed covered=["package-verify"] with full=True, so every floor case below - and the negative
+# control - ran on an ASSERTED FLAG while this suite's own header says "the floor is read from the
+# ledger, never asserted". floor() now DERIVES fullness from covered, which is what made that
+# fixture visible. Read the scope from the map so the fixture cannot drift from it.
+full_suites = sorted((json.load(open('mgmt/gate-scope.json')).get('full') or {}).get('suites') or [])
+if not full_suites:
+    raise SystemExit('mk_ledger: mgmt/gate-scope.json has no full scope - the fixture would assert nothing')
+drop = int(sys.argv[5]) if len(sys.argv) > 5 and sys.argv[5] else 0
+covered_first = full_suites[:len(full_suites) - drop] if drop else full_suites
+rel = [{"version": "1.0", "date": last, "range": "", "required": [], "covered": covered_first,
         "full": True, "result": "pass", "map_commit": mapc}]
 d0 = datetime.fromisoformat(last.replace('Z', '+00:00'))
 for i in range(extra):
@@ -154,6 +164,39 @@ mk_ledger "$NOW" 1 pass "$mapc"; git add -A; git commit -qm ledger-ok; HOK=$(git
 f=$(run floor)
 if printf '%s' "$f" | grep -q 'floor not reached'; then ok "floor-control: a recent passing full gate does NOT trip the floor"
 else fail "floor-control: the floor trips when it should not" "$f"; fi
+
+# ---- THE DERIVED-FULLNESS CONTROL. The two arms above and below differ by ONE suite in `covered`,
+# nothing else - same date, same release count, same map_commit, same full=true flag. If both say
+# the same thing, floor() is reading the flag again and every floor case in this file is decorative.
+# This is the arm that had to be seen to fail: on the pre-change floor() BOTH say "floor not
+# reached", because the flag says full and nobody counts the suites.
+nfull=$(python3 -c "import json;print(len((json.load(open('mgmt/gate-scope.json')).get('full') or {}).get('suites') or []))")
+mk_ledger "$NOW" 1 pass "$mapc" 0; git add -A >/dev/null; git commit -qm ledger-derived-full >/dev/null
+f_full=$(run floor)
+mk_ledger "$NOW" 1 pass "$mapc" 1; git add -A >/dev/null; git commit -qm ledger-derived-short >/dev/null
+f_short=$(run floor)
+if printf '%s' "$f_full" | grep -q 'floor not reached'; then
+    ok "floor-derived: all $nfull suites covered -> the floor does NOT trip"
+else fail "floor-derived: a genuinely full record tripped the floor" "$f_full"; fi
+if printf '%s' "$f_short" | grep -q 'FLOOR TRIPS' && printf '%s' "$f_short" | grep -q 'of '"$nfull"; then
+    ok "floor-derived: ONE suite short of $nfull -> FLOOR TRIPS, and it says how many of how many"
+else fail "floor-derived: one suite short did not trip - fullness is being read from the flag, not derived" "$f_short"; fi
+if [ "$f_full" = "$f_short" ]; then
+    fail "floor-derived: the two arms are IDENTICAL - the predicate is a constant" "$f_full"
+else ok "floor-derived: the two arms differ, so the predicate responds to coverage"; fi
+
+# ---- AND THE EMPTY map_commit CLAUSE. The live 4.3.35 row carried map_commit='', which made the
+# map-change clause (`last.get('map_commit') and ...`) unreachable, so neither clause could fire.
+mk_ledger "$NOW" 1 pass "" 0; git add -A >/dev/null; git commit -qm ledger-nomap >/dev/null
+f_nomap=$(run floor)
+if printf '%s' "$f_nomap" | grep -q 'FLOOR TRIPS' && printf '%s' "$f_nomap" | grep -q 'map_commit is empty'; then
+    ok "floor-nomap: a full record with an empty map_commit trips - the map cannot be proven unchanged"
+else fail "floor-nomap: an empty map_commit was accepted as a floor" "$f_nomap"; fi
+# RESTORE THE SHARED FIXTURE. These floor arms mutate mgmt/gate-ledger.json, which every `check`
+# arm below reads; leaving it at map_commit='' left the floor in force and failed
+# "check: complete coverage" - a downstream test failing for an upstream test's leftovers.
+mk_ledger "$NOW" 1 pass "$mapc" 0; git add -A >/dev/null; git commit -qm ledger-restored >/dev/null
+HOK=$(git rev-parse HEAD)
 
 # ---- check: the refusal ----------------------------------------------------------------------------------------
 H7=$(commit_change agent/gui-agent/toasthold.h '// another toast change' toast2)
