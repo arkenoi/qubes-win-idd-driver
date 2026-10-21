@@ -40,10 +40,25 @@ jobs:
         timeout-minutes: 15
         shell: pwsh
         run: |
-          choco install windowsdriverkit11 --no-progress -y
+          # THE WDK MAY ALREADY BE ON THE RUNNER IMAGE, and installing it anyway makes every build
+          # of four workflows depend on an external service for nothing. On 2026-10-03 this step
+          # HUNG for 90 minutes in release-package run 37147382401; the timeout above bounds that,
+          # but the attempt was still made unconditionally. Checked first, so a runner that already
+          # carries the kit never goes near chocolatey.
+          # THE ASSERTION BELOW IS THE BACKSTOP AND IS UNCHANGED: if the kit is not actually there
+          # this step still throws, so the check cannot silently skip a missing WDK.
+          $kitVsix = "${env:ProgramFiles(x86)}\Windows Kits\10\Vsix"
+          $have = (Test-Path -LiteralPath $kitVsix) -and
+                  (Get-ChildItem $kitVsix -Recurse -Filter '*.vsix' -ErrorAction SilentlyContinue |
+                   Select-Object -First 1)
+          if ($have) {
+            Write-Host "WDK already present under $kitVsix - skipping the choco install"
+          } else {
+            choco install windowsdriverkit11 --no-progress -y
+          }
           $vsix = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Vsix" -Recurse -Filter '*.vsix' |
                   Select-Object -First 1
-          if (-not $vsix) { throw "WDK.vsix not found after choco install" }
+          if (-not $vsix) { throw "WDK.vsix not found under $kitVsix (choco install skipped: $([bool]$have))" }
           $inst = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022" -Recurse -Filter VSIXInstaller.exe |
                   Select-Object -First 1
           # VSIXInstaller can HANG on the hosted runner (2026-10-03/04: release-package runs 37147382401 and 37179019542 sat in it, the
