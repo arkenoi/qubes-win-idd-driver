@@ -152,10 +152,37 @@ else
     # contaminated one, which is the whole point of taking it.
     fail "could not read WU state - refusing to grade a cell whose update posture is unknown"
 fi
+# ACCEPT-WU-ASSERT-A  (the function between this marker and the B one is extracted and driven by
+# tools/tests/accept-clean-wu-selftest.sh; neither marker names the other, because a marker
+# mentioned in prose closes its own range)
+_wu_is_disabled() { # $1=state file -> 0 only when the updater is really off
+    local f="$1"
+    [ -s "$f" ] || return 1
+    command grep -qa '^NAU:1$' "$f" || return 1
+    command grep -qaE '^SVC:(Stopped|StopPending|)$' "$f" || return 1
+    return 0
+}
+# ACCEPT-WU-ASSERT-B
 if [ "$ACCEPT_MODE" = "quick" ]; then
     log "mode=quick: disabling the updater so this cell measures OUR package, not WU servicing"
     qq run "powershell -ep bypass -c \"New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Force | Out-Null; Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate -Value 1 -Type DWord; Stop-Service wuauserv -Force -EA SilentlyContinue; Set-Service wuauserv -StartupType Disabled -EA SilentlyContinue\"" \
         >/dev/null 2>&1 || true
+    # VERIFY BY EFFECT, because the disable above is `|| true` and nothing read the result. Found by
+    # the 2026-10-21 harness audit: matrix.sh never sets ACCEPT_MODE, so EVERY cell of every
+    # campaign runs this quick-mode branch - and if the disable failed, the cell was still graded
+    # and reported as a clean "OUR package only" measurement while Windows Update was live, with
+    # nothing in the record to catch it. The posture BEFORE was already fail-closed ("refusing to
+    # grade a cell whose update posture is unknown"); the posture AFTER was not read at all.
+    qq run "powershell -ep bypass -c \"'NAU:'+([string](Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate -EA SilentlyContinue).NoAutoUpdate); 'SVC:'+(Get-Service wuauserv -EA SilentlyContinue).Status\"" \
+        2>&1 | tr -d '\r' | grep -aE '^(NAU|SVC):' > "$OUT/wu-state-after.txt" || true
+    if _wu_is_disabled "$OUT/wu-state-after.txt"; then
+        while read -r l; do log "    $l"; done < "$OUT/wu-state-after.txt"
+        log "    updater confirmed off - this cell measures our package"
+    else
+        while read -r l; do log "    $l"; done < "$OUT/wu-state-after.txt" 2>/dev/null
+        fail "the updater did NOT turn off (see $OUT/wu-state-after.txt) - a cell graded now would
+      report a clean 'our package only' measurement with Windows Update still live"
+    fi
 else
     # FULL pass: Windows Update is deliberately left running. A self-updating StandaloneVM is
     # the real configuration, and its restart dialog is a legitimate dialog - NOT the premature

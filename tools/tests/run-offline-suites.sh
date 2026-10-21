@@ -69,7 +69,11 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # tools/assert-payload.sh printing `PASS: payload verified - 0 files` over an empty SHA256SUMS.txt:
 # the integrity loop ran zero iterations and all three consumers branch only on the exit code, so
 # a campaign would install and grade a payload nothing had hashed.
-FLOOR=${OFFLINE_SUITES_FLOOR:-77}
+# 77 -> 78 on 2026-10-21: accept-clean-wu-selftest.sh ADDED. accept-clean.sh disabled Windows
+# Update with `|| true` and never read the result, while matrix.sh never sets ACCEPT_MODE - so
+# EVERY cell took that branch and a failed disable left the cell graded as a clean "our package
+# only" measurement with WU live. The posture is now read back and a failed disable calls fail().
+FLOOR=${OFFLINE_SUITES_FLOOR:-78}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"
