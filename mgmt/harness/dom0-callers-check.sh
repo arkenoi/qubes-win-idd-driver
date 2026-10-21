@@ -211,7 +211,44 @@ ents=$(v entries); unp=$(v unparsed); dup=$(v duplabels); noname=$(v noname)
 if [ "$ents" -ge 10 ]; then
   good "$ents entries parse as dom0 parses them"
 else
-  bad "only $ents entries - a clean Windows reports ~37; this is the amputation shape"
+  bad "only $ents entries - this is the amputation shape (the rig measures 85 on win10, 78 on win11)"
+fi
+# THE FLOOR IS 12% OF THE REAL VALUE, AND NEITHER IT NOR THE CROSS-CELL TEST BELOW CAN SEE AN
+# AMPUTATION THE WHOLE FAMILY SHARES. Cells of a family are clones of one golden, so if the GOLDEN
+# is amputated every cell agrees on the same wrong number; and a family with one cell in the run has
+# nothing to compare against at all. A menu cut to anywhere in 10..36 entries passed both tests.
+# Scored 0.83 as a campaign-stopper by the tier re-check, 2026-10-21.
+# So there is an ABSOLUTE expectation now, measured rather than assumed: mgmt/harness/callers-
+# expected.json carries win10=85 and win11=78, each read from campaign rel-39175573529's own
+# *-callers.out files where every cell of the family AND the cold path agreed. Tolerance 8, recorded
+# in that file with its reason.
+# A FAMILY WITH NO ENTRY IS NOT A FAILURE. It says FLOOR-ONLY and carries on - the first cell of a
+# family is floor-only by construction and refusing it would fail every campaign's first cell (Jev
+# scored failing-on-floor-only 0.34, and keeping both instruments 0.67).
+_ce_file=mgmt/harness/callers-expected.json
+if [ -n "${CALLERS_FAMILY:-}" ] && [ -r "$_ce_file" ]; then
+  _ce=$(python3 - "$_ce_file" "$CALLERS_FAMILY" <<'PY' 2>/dev/null
+import json,sys
+try:
+    f=(json.load(open(sys.argv[1])).get("families") or {}).get(sys.argv[2]) or {}
+except Exception:
+    f={}
+print("%s %s" % (f.get("entries",""), f.get("tolerance","")))
+PY
+  )
+  _ce_n=${_ce%% *}; _ce_t=${_ce##* }
+  if [ -n "$_ce_n" ] && [ -n "$_ce_t" ]; then
+    _ce_min=$(( _ce_n - _ce_t ))
+    if [ "$ents" -ge "$_ce_min" ]; then
+      good "$ents entries is at or above the measured expectation for $CALLERS_FAMILY ($_ce_n-$_ce_t=$_ce_min)"
+    else
+      bad "$ents entries is BELOW the measured expectation for $CALLERS_FAMILY ($_ce_n-$_ce_t=$_ce_min). Every cell of a family can agree on an amputated count when the golden itself is amputated, which is why this test is absolute and not relative."
+    fi
+  else
+    good "FLOOR-ONLY: no expected count recorded for family '$CALLERS_FAMILY' in $_ce_file - the absolute test did not run"
+  fi
+else
+  good "FLOOR-ONLY: no family given or no expectation file - the absolute test did not run"
 fi
 _cc_dir="${CALLERS_COUNT_DIR:-}"
 _cc_fam="${CALLERS_FAMILY:-}"

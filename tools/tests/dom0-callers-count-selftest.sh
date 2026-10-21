@@ -2,11 +2,17 @@
 # THE START MENU MUST AGREE ACROSS CELLS OF ONE OS FAMILY.
 #
 # MEASURED 2026-10-21 by the harness audit: dom0-callers-check.sh's only entry-count test was
-# `[ "$ents" -ge 10 ]`, a floor, against a clean Windows that reports ~37. A release shipping a menu
-# amputated to anywhere from 10 to 36 entries - up to 27 real apps missing - read as "aligned".
-# Raising the floor to 37 swaps one invented number for another, because a guest's menu depends on
-# what is installed on it. Every cell of one family in a campaign is a clone of the SAME sealed
+# `[ "$ents" -ge 10 ]`, a floor. A release shipping a menu amputated to anywhere from 10 to 36
+# entries read as "aligned". Every cell of one family in a campaign is a clone of the SAME sealed
 # golden, so their menus must agree, and a disagreement needs no magic number at all.
+#
+# AND THE AUDIT'S "~37" WAS WRONG, which is why the cross-cell test alone was not enough. The rig's
+# own *-callers.out files from campaign rel-39175573529 report 85 entries on win10 (clean,
+# reinstall, upgrade AND the cold path) and 78 on win11 (clean, upgrade, cold) - every cell of a
+# family agreeing, and warm agreeing with cold. So the floor of 10 was 12% of the real value, and a
+# golden that is ITSELF amputated makes every clone agree on the same wrong number. There is an
+# absolute expectation now in mgmt/harness/callers-expected.json, measured from those files; the
+# fixtures below use the measured values rather than the prose one.
 #
 # The block is extracted from the shipped script between its two markers and driven over fixtures.
 set -uo pipefail
@@ -37,12 +43,12 @@ run(){ # $1=entries $2=family $3=cell -> the block's output
 }
 mkdir -p "$T/m"
 
-out=$(run 37 win10 win10-clean); rc=$?
-if [ "$rc" = 0 ] && printf '%s' "$out" | command grep -qa 'recorded 37 entries'; then
+out=$(run 85 win10 win10-clean); rc=$?
+if [ "$rc" = 0 ] && printf '%s' "$out" | command grep -qa 'recorded 85 entries'; then
   ok "the FIRST cell of a family records its count as the campaign baseline"
 else no "the first cell did not record (rc=$rc)" "$out"; fi
 
-out=$(run 37 win10 win10-reinstall); rc=$?
+out=$(run 85 win10 win10-reinstall); rc=$?
 if [ "$rc" = 0 ] && printf '%s' "$out" | command grep -qa 'agrees with the other win10'; then
   ok "a later cell with the SAME count agrees and passes"
 else no "an agreeing cell did not pass (rc=$rc)" "$out"; fi
@@ -52,8 +58,8 @@ if [ "$rc" != 0 ] && printf '%s' "$out" | command grep -qa 'DISAGREES across win
   ok "a cell whose menu dropped to 12 FAILS, naming both counts - the case the floor of 10 passed"
 else no "an amputated menu passed (rc=$rc)" "$out"; fi
 
-out=$(run 37 win11 win11-clean); rc=$?
-if [ "$rc" = 0 ] && printf '%s' "$out" | command grep -qa 'recorded 37 entries'; then
+out=$(run 78 win11 win11-clean); rc=$?
+if [ "$rc" = 0 ] && printf '%s' "$out" | command grep -qa 'recorded 78 entries'; then
   ok "win11 keeps its own baseline - families do not contaminate each other"
 else no "the win11 family shared win10's baseline (rc=$rc)" "$out"; fi
 
@@ -61,6 +67,48 @@ out=$(run 12 '' ''); rc=$?
 if [ "$rc" = 0 ] && printf '%s' "$out" | command grep -qa 'did not run'; then
   ok "with no campaign dir the comparison says it did not run, rather than passing silently"
 else no "a missing campaign dir behaved unexpectedly (rc=$rc)" "$out"; fi
+
+# ---- THE ABSOLUTE EXPECTATION: the case NO cross-cell comparison can see --------------------
+# If the GOLDEN is amputated, every clone agrees on the same wrong number, so the cross-cell test
+# passes and the floor of 10 passes. 0.83 campaign-stopper, tier re-check 2026-10-21.
+rm -f "$T/m"/callers-entries-*.txt       # a fresh campaign dir, so agreement is not what decides
+out=$(run 40 win11 win11-clean); rc=$?
+if [ "$rc" != 0 ] && printf '%s' "$out" | command grep -qa 'BELOW the measured expectation for win11'; then
+  ok "40 entries FAILS against the measured win11 expectation, with no other cell to compare to"
+else no "an amputated golden's count passed (rc=$rc)" "$out"; fi
+
+rm -f "$T/m"/callers-entries-*.txt
+out=$(run 70 win11 win11-clean); rc=$?
+[ "$rc" = 0 ] && ok "70 entries (78-8, the recorded tolerance) still passes - the bound is not a trap" \
+             || no "the tolerance boundary failed (rc=$rc)" "$out"
+
+rm -f "$T/m"/callers-entries-*.txt
+out=$(run 69 win11 win11-clean); rc=$?
+[ "$rc" != 0 ] && ok "and 69, one below the bound, fails - the predicate responds to the number" \
+               || no "one entry below the bound still passed (rc=$rc)" "$out"
+
+# A FAMILY WITH NO RECORDED EXPECTATION MUST NOT FAIL. The first cell of a family is floor-only by
+# construction; refusing it would fail every campaign's first cell (Jev 0.34 on that).
+rm -f "$T/m"/callers-entries-*.txt
+out=$(run 40 win11de win11de-clean); rc=$?
+if [ "$rc" = 0 ] && printf '%s' "$out" | command grep -qa 'FLOOR-ONLY'; then
+  ok "an un-seeded family says FLOOR-ONLY and carries on, rather than failing or passing silently"
+else no "an un-seeded family behaved unexpectedly (rc=$rc)" "$out"; fi
+
+# SEEN TO FAIL: with the absolute block removed, the agreeing-amputated count passes again.
+noabs=$(printf '%s' "$blk" | sed '/_ce_file=/,/^fi$/d')
+if printf '%s' "$noabs" | command grep -qa '_ce_file='; then
+  no "the control still contains the absolute block" "the sed range did not cut it"
+else
+  rm -f "$T/m"/callers-entries-*.txt
+  out=$(bash -c '
+    rc_all=0; bad(){ printf "BAD %s\n" "$*"; rc_all=1; }; good(){ printf "OK %s\n" "$*"; }
+    ents="$1"; CALLERS_COUNT_DIR="$2"; CALLERS_FAMILY="$3"; CALLERS_CELL="$4"
+    eval "$5"; exit $rc_all' _ 40 "$T/m" win11 win11-clean "$noabs" 2>&1); rc=$?
+  [ "$rc" = 0 ] \
+    && ok "SEEN TO FAIL: without the absolute test, 40 entries passes on the floor and agreement" \
+    || no "the control still refused 40 entries (rc=$rc)" "$out"
+fi
 
 # SEEN TO FAIL: with the comparison deleted, the amputated menu passes again on the floor alone
 nocmp=$(printf '%s' "$blk" | sed '/_cc_dir=/,$d')

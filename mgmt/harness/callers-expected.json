@@ -1,0 +1,12 @@
+{
+  "_what": "Expected Start-Menu entry counts per OS family, for mgmt/harness/dom0-callers-check.sh.",
+  "_why": "The check had a FLOOR of 10 and, since 2026-10-21, a cross-cell agreement test. Neither can see an amputation the whole family SHARES - which is what happens when the golden the cells are cloned from is itself amputated, or when a family has only one cell in the run and there is nothing to compare against. A menu cut to anywhere in 10..36 entries passed. Only an absolute expectation catches that. Jev on this instrument: 0.65, and 0.67 on keeping the explicit floor-only outcome alongside it.",
+  "_source": "MEASURED, not assumed: campaign rel-39175573529, mgmt/harness/matrix.sh's own *-callers.out files. win10 reported 85 in all of clean, reinstall, upgrade AND the cold-qube path; win11 reported 78 in clean, upgrade and the cold path. Every cell of a family agreed, and warm agreed with cold, which is why these are read as the true values rather than as one sample. The audit's prose said 'a clean Windows reports ~37'; the rig says otherwise.",
+  "_tolerance": "A recorded decision, not a magic number: Windows updates legitimately add or remove a few entries between releases, so an exact match would red a good release. 8 is wide enough for that and far narrower than the amputation band this exists to catch - win10 fails below 77, win11 below 70, where an amputation to 10..36 sits.",
+  "_absent": "A family with no entry here is NOT a failure. The check says FLOOR-ONLY in the record and carries on, because the first cell of a family is floor-only by construction and refusing it would fail every campaign's first cell (Jev scored failing-on-floor-only 0.34). Seed a family here from a reviewed campaign to close it.",
+  "_refresh": "When a golden legitimately changes its app set, re-read the counts from that campaign's *-callers.out files and update the family here IN A COMMIT, with the run id. Never widen the tolerance to make a red go away - that is the silencer failure this project has twice.",
+  "families": {
+    "win10": { "entries": 85, "tolerance": 8, "source_run": "rel-39175573529", "cells_agreeing": 4 },
+    "win11": { "entries": 78, "tolerance": 8, "source_run": "rel-39175573529", "cells_agreeing": 3 }
+  }
+}
