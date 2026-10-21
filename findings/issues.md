@@ -2,6 +2,26 @@
 
 ## CURRENT STATE
 
+**P5 NOW WAITS ON TWO DECISIONS, NOT ON WORK, 2026-10-21 EVENING.** Of the 26 blockers the audit
+named, 12 are fixed with a driven test and 6 were dismissed in writing (the evidence is in
+scratchpad/harness-audit-report.md; four of the six would have been changes to working code). What
+remains is not implementable by me:
+
+  DECISION 1 - SWEEPGATEVERDICTUNSTABLE, the last campaign-path blocker, is already recorded as
+  "a one-entry decision is owed and it is the owner's" (2026-10-18): a campaign's pass/fail turned
+  on ONE Jev verdict for ONE unchanged line, and that verdict ranges from defect 0.40 to expected
+  0.91. The line is either declared in mgmt/harness/error-ledger.txt with a reason, or it is a
+  defect to fix. Nobody can take that for the owner, and a gate decided by a coin flip is the
+  thing this whole day was spent removing.
+
+  DECISION 2 - whether the TEN forensics-only blockers gate the campaign. They are fetch-wedge-core,
+  wedge-lib, resolve-guest-rip, guest-config-snapshot, compare-run-to-reference, stall-reference,
+  prime-selftest, reprovision-usb's PRISTINE gate, restart-gui-agent's unconfirmed -WaitServing
+  case, and the collect-failure suite's own missing timeout. None of them can change a campaign
+  verdict: they are stall and wedge forensics, a selftest, and a heavy path the 8 cells do not take.
+  My reading is that they do not gate P5. Narrowing the gate is the owner's call, not mine, so the
+  plan stays as written until he says otherwise.
+
 **THE AUDIT'S blocks-acceptance TIER IS CLOSED, 2026-10-21.** Nine findings: FIVE real and fixed with a driven test (release-acceptance.sh had no teardown trap at all, which is ACCEPTCANCELORPHAN and the run-lib finding counted once; prime-run.sh's evidence guard failing open; seal-qwt-golden.sh sealing a guest it never re-checked was Halted; assert-payload.sh passing over 0 verified files; build-answer-stick.sh matching the WORD LabConfig instead of the bypass keys). FOUR do not hold and are dismissed with evidence in scratchpad/harness-audit-report.md: LOGVOL_CACHE is an unconditional assignment, logvol_detach has no production caller and its consequences are covered by claim_sweep_stale and matrix.sh's targeted qemu-args edit, latch_ok's nics:1 is correct because the verification boot polls for the documented re-arm, and the collect-failure suite's missing timeout applies only to a direct developer run and would contradict the no-timeouts rule. Four more were fixed from the falsifies-a-verdict tier the same day: accept-clean's unverified WU disable, the clean sweep over an unproven log path, ctl_stop's outcomes all exiting 0, dom0-callers' floor of 10, and e2e-wait's two. NINE fixes, FOUR dismissals, suite floor 74 -> 83.
 
 **THE 5-PHASE RELEASE PLAN AND WHERE IT STANDS, 2026-10-21 EVENING.** Written down here because it
