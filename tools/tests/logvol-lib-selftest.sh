@@ -509,6 +509,101 @@ else
   bad "proof: a wedged or removed guest would be treated as a proof failure" "that is the one case the volume exists for"
 fi
 
+# ===============================================================================================
+# THE PROOF MUST MEASURE THE AGENT, NOT THE PROVER - and this leg HOLDS the condition that makes
+# the difference instead of describing it.
+#
+# Owner, 2026-10-21: "PROACTIVELY REFUSING to include a critical condition to test environment
+# claiming false equivalence." That is what happened here. Every logvol fix between 2026-10-13 and
+# 2026-10-20 - thirteen commits - was verified on win10-acc or win11de-tup, guests whose ROOT
+# PERSISTS, so the registry write and the Set-Partition letter pin both survive a reboot. ZERO of
+# those measurements name win10-app, win11-app or an appvm cell, where the root is VOLATILE and
+# discards both before the agent family starts. The condition that produces the defect was absent
+# from every test environment, and the passes were reported as proof.
+#
+# The four "proof:" assertions above this block are `grep -q logvol_prove_roundtrip matrix.sh`,
+# `grep -q 'exit 2'`, a call-site COUNT and `grep -q 'qvm-check --running'`. All four check that a
+# function NAME appears in a file. None of them runs the proof. So the suite verified that the proof
+# is CALLED, never that it WORKS - while its own comments described the AppVM failure in detail.
+#
+# This leg EXECUTES the real logvol_prove_roundtrip against the AppVM state: the nonce round-trips
+# (the volume is fine and the prover resolves a writable LogDir) and there are ZERO agent-family
+# logs in it (the agent resolved a different directory at its own start). The old proof passes on
+# that state - that is the control - and the new one must fail.
+echo
+PT="$(mktemp -d)"; trap 'rm -rf "$PT"' EXIT
+mkdir -p "$PT/bin"
+# the guest channel: echo back the nonce it was handed, with the agentlogs count this leg is testing
+cat > "$PT/bin/qtest-stub" <<'STUB'
+#!/bin/bash
+nonce=""; prev=""
+for a in "$@"; do [ "$prev" = "-Nonce" ] && nonce="$a"; prev="$a"; done
+printf '%s' "$nonce" > "$LVPROOF_NONCE_FILE"
+printf 'LOGVOL-PROOF-GUEST ok dir=Z:\\qwt-logs\\win10-app agentlogs=%s file=Z:\\qwt-logs\\win10-app\\%s.proof\n' \
+       "${LVPROOF_AGENTLOGS:-0}" "$nonce"
+STUB
+# the host half reads the IMAGE with mdir; this stub reports the nonce as present, so the
+# round-trip half always succeeds and the ONLY variable in this leg is the agent-log count
+cat > "$PT/bin/mdir" <<'STUB'
+#!/bin/bash
+[ -r "$LVPROOF_NONCE_FILE" ] && cat "$LVPROOF_NONCE_FILE"
+echo " LOGVOL      <DIR>"
+STUB
+chmod +x "$PT/bin/qtest-stub" "$PT/bin/mdir"
+export LVPROOF_NONCE_FILE="$PT/nonce"
+
+run_proof() { # $1=agentlogs $2...=extra args -> "rc|output"
+    local n="$1"; shift
+    local out rc
+    # QTEST_BIN, not LOGVOL_QTEST: logvol-lib.sh:117 is LOGVOL_QTEST="${QTEST_BIN:-...}", and this
+    # suite exports QTEST_BIN globally at line 79, so sourcing the library overwrote the override.
+    # My first version of this leg set the wrong name and the suite's own guest stub answered -
+    # which is why the leg is EXECUTED rather than grepped: it caught my own mistake in one run.
+    out=$( LVPROOF_AGENTLOGS="$n" PATH="$PT/bin:$PATH" QTEST_BIN="$PT/bin/qtest-stub" \
+           bash -c '
+             source mgmt/harness/logvol-lib.sh
+             logvol_prove_roundtrip somevm "'"$PT"'/img.img" proofleg '"$*"' 2>&1' ); rc=$?
+    printf '%s|%s' "$rc" "$(printf '%s' "$out" | tr '\n' ' ')"
+}
+
+# 1. THE CONTROL: the AppVM state, judged the OLD way. It PASSES - which is the defect.
+r=$(run_proof 0); rc=${r%%|*}; out=${r#*|}
+if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'LOGVOL-PROOF ok'; then
+    ok "proof-agent CONTROL: zero agent logs + a round-tripping nonce PASSES the old way (the defect, reproduced)"
+else
+    bad "proof-agent CONTROL did not reproduce" "rc=$rc $out"
+fi
+
+# 2. THE PROPERTY: the same state, with the requirement, must FAIL and name the agent half.
+r=$(run_proof 0 --require-agent-logs); rc=${r%%|*}; out=${r#*|}
+if [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'half=agent'; then
+    ok "proof-agent: zero agent logs FAILS with --require-agent-logs, naming the agent half"
+else
+    bad "proof-agent: the AppVM state still passed" "rc=$rc $out"
+fi
+
+# 3. AND IT IS NOT A CONSTANT: the same call with agent logs present must pass, or the check is
+#    simply "always fail when the flag is given" and tells us nothing.
+r=$(run_proof 4 --require-agent-logs); rc=${r%%|*}; out=${r#*|}
+if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'agentlogs=4'; then
+    ok "proof-agent: four agent logs PASSES with the flag - the predicate responds to the count"
+else
+    bad "proof-agent: the flag fails even with agent logs present - it is a constant" "rc=$rc $out"
+fi
+
+# 4. THE WIRING, because a predicate nobody calls is decoration - and the PRE-GRADING site is the
+#    only correct one: at bind time zero agent logs is expected, a bind applies at the next start.
+if sed -n '/pregrade/p' "$ROOT/mgmt/harness/matrix.sh" | grep -q 'require-agent-logs'; then
+    ok "proof-agent: the PRE-GRADING call site requires agent logs"
+else
+    bad "proof-agent: the pre-grading proof does not require agent logs" "the campaign would grade a blind cell again"
+fi
+if sed -n '/logvol_bind_now(){/,/^}/p' "$ROOT/mgmt/harness/matrix.sh" | grep -q 'require-agent-logs'; then
+    bad "proof-agent: the BIND-time proof requires agent logs" "a bind applies at the next start, so this would fail every first bind"
+else
+    ok "proof-agent: the bind-time proof does NOT require them (a bind applies at the module's next start)"
+fi
+
 echo
 echo "RESULT: $pass passed, $fail failed  (fixtures: $T)"
 [ "$fail" -eq 0 ]

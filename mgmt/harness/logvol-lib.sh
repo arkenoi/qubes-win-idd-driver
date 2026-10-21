@@ -454,9 +454,15 @@ logvol_unbind_guest(){ # <vm> - put LogDir and LogSafeFlush back (registry mode)
 # needed, which is the whole point of the volume - and looks for that nonce. Only both halves
 # passing proves a cell can produce evidence. Either half failing says WHICH half, because "no
 # evidence" with no side named is what sent three investigations at the wrong component.
-logvol_prove_roundtrip(){ # <vm> <img> [tag] -> LOGVOL-PROOF ok|fail; 0 only when the nonce makes the round trip
-  local vm="${1:?[ERROR] logvol_prove_roundtrip <vm> <img> [tag]}" img="${2:?[ERROR] logvol_prove_roundtrip <vm> <img> [tag]}"
-  local tag="${3:-proof}" nonce ps out line dir seen tmp
+logvol_prove_roundtrip(){ # <vm> <img> [tag] [--require-agent-logs] -> LOGVOL-PROOF ok|fail
+  # THE NONCE IS NOT THE PROPERTY. With --require-agent-logs the proof additionally requires that
+  # the AGENT FAMILY has written into the directory the product resolves - which is the thing a
+  # campaign depends on and the thing the nonce cannot see. Pass it at the PRE-GRADING call site,
+  # not at the bind: a bind takes effect at a module's NEXT start, so zero agent logs immediately
+  # after a bind is correct and expected. Before the pull it is a blind cell.
+  local vm="${1:?[ERROR] logvol_prove_roundtrip <vm> <img> [tag] [--require-agent-logs]}" img="${2:?[ERROR] logvol_prove_roundtrip <vm> <img> [tag]}"
+  local tag="${3:-proof}" nonce ps out line dir seen tmp agentlogs require_agent=0
+  case " $* " in *" --require-agent-logs "*) require_agent=1 ;; esac
   nonce="LVPROOF-$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM"
   tmp=$(mktemp -d) || { _lv_say "[ERROR] no temp dir"; return 2; }
   ps="$tmp/logvol-proof.ps1"
@@ -476,14 +482,24 @@ try {
   Set-Content -LiteralPath $p -Value $Nonce -Encoding ASCII -ErrorAction Stop
   # flush: a file in a cache the host cannot see yet is not evidence
   try { $fs = [IO.File]::Open($p, 'Open', 'Read', 'None'); $fs.Close() } catch { }
-  Write-Output ("LOGVOL-PROOF-GUEST ok dir=" + $dir + " file=" + $p)
+  # AND COUNT WHAT THE AGENT FAMILY ACTUALLY WROTE HERE. The nonce proves only that THIS process
+  # can write to the directory THIS process resolved, a moment after the bind. The agent family
+  # resolved its own LogDir at ITS OWN START, which on an AppVM is BEFORE the bind and from a
+  # registry the volatile root has since discarded - so it can be logging nowhere while the nonce
+  # round-trips perfectly. That is why LOGVOLBINDLATE survived eight days and five fixes with
+  # "18 proofs, 0 blind cells" on the record: the proof measured the prover.
+  $agent = @(Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue |
+             Where-Object { $_.Name -match '(?i)^(gui-agent|gui-watchdog|qrexec-agent|qubesdb)' })
+  Write-Output ("LOGVOL-PROOF-GUEST ok dir=" + $dir + " agentlogs=" + $agent.Count + " file=" + $p)
 } catch { Write-Output ("LOGVOL-PROOF-GUEST fail reason=write_failed dir=" + $dir); exit 1 }
 PSEOF
   out=$(QTEST_VM="$vm" timeout -k 10 180 "$LOGVOL_QTEST" pushrun "$ps" -Nonce "$nonce" 2>&1 | tr -d '\r')
   line=$(printf '%s\n' "$out" | command grep -aE '^LOGVOL-PROOF-GUEST ' | tail -1)
   rm -rf "$tmp"
   case "$line" in
-    "LOGVOL-PROOF-GUEST ok"*) dir=$(printf '%s' "$line" | sed -E 's/.* dir=(.*) file=.*/\1/') ;;
+    "LOGVOL-PROOF-GUEST ok"*)
+      dir=$(printf '%s' "$line" | sed -E 's/.* dir=(.*) agentlogs=.*/\1/')
+      agentlogs=$(printf '%s' "$line" | sed -E 's/.* agentlogs=([0-9]+).*/\1/') ;;
     "LOGVOL-PROOF-GUEST fail"*)
       echo "LOGVOL-PROOF fail half=guest ${line#LOGVOL-PROOF-GUEST fail }"; return 1 ;;
     *)
@@ -493,7 +509,16 @@ PSEOF
   # HOST HALF: read the IMAGE, not the guest. mdir works while the guest runs and while it is wedged.
   seen=$(mdir -i "$img" -/ ::/ 2>/dev/null | command grep -ac "$nonce")
   if [ "${seen:-0}" -gt 0 ]; then
-    echo "LOGVOL-PROOF ok dir=$dir nonce=$nonce seen_in_image=1"
+    # THE NONCE MADE IT. That is the writable-path half. Now the half that matters.
+    if [ "$require_agent" = 1 ] && [ "${agentlogs:-0}" -eq 0 ]; then
+      echo "LOGVOL-PROOF fail half=agent reason=no_agent_family_log_in_the_resolved_LogDir dir=$dir agentlogs=0 nonce_roundtripped=1 img=$img"
+      echo "  the path is writable and the nonce came back, so the VOLUME is fine - what is missing is the" >&2
+      echo "  product's own log. The agent family resolved its LogDir at its start, which is BEFORE this" >&2
+      echo "  bind, and on an AppVM from a registry the volatile root has since discarded. Grading this" >&2
+      echo "  cell would read a capture that cannot contain an agent error (LOGVOLBINDLATE)." >&2
+      return 1
+    fi
+    echo "LOGVOL-PROOF ok dir=$dir nonce=$nonce seen_in_image=1 agentlogs=${agentlogs:-NA}"
     return 0
   fi
   echo "LOGVOL-PROOF fail half=host reason=nonce_written_by_guest_not_in_image dir=$dir nonce=$nonce img=$img"

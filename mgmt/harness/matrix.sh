@@ -2658,7 +2658,15 @@ for c in $CELLS; do
     # So: prove, then pull. A guest that has gone (wedged, removed) cannot be asked and is NOT a
     # proof failure - the pull still runs, because an unreachable guest is why the volume exists.
     if qvm-check --running "$LOGVOL_VM" >/dev/null 2>&1; then
-      if ! logvol_prove_roundtrip "$LOGVOL_VM" "$LOGVOL_IMG" "$c-pregrade" >>"$M/$c-logvol-proof.out" 2>&1; then
+      # --require-agent-logs HERE AND NOT AT THE BIND. The nonce proves only that the prover can
+      # write to the directory the prover resolved. The agent family resolved its LogDir at ITS OWN
+      # START - before the bind, and on an AppVM from a registry the volatile root has since
+      # discarded - so the nonce can round-trip perfectly while the product logs nowhere. That is
+      # exactly what happened: "18 proofs, 0 blind cells" on the record while both appvm cells were
+      # graded over captures containing no agent log at all (LOGVOLPROOFMEASURESTHEPROVER).
+      # At bind time zero agent logs is CORRECT - a bind takes effect at a module's next start.
+      # Here, immediately before the pull that feeds grading, zero is a blind cell.
+      if ! logvol_prove_roundtrip "$LOGVOL_VM" "$LOGVOL_IMG" "$c-pregrade" --require-agent-logs >>"$M/$c-logvol-proof.out" 2>&1; then
         say "[ERROR] FATAL: $c: the log path did NOT survive to grading - $(tail -1 "$M/$c-logvol-proof.out" 2>/dev/null | cut -c1-150)"
         say "[ERROR] FATAL: it was proven at bind time, so it broke DURING this cell. Whatever this"
         say "[ERROR] FATAL: cell's log holds is truncated at the break, and a truncated log is read"
