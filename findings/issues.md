@@ -2,6 +2,62 @@
 
 ## CURRENT STATE
 
+**P5 NOW WAITS ON ONE DECISION, 2026-10-21 NIGHT.** Jev was asked the launch question again on the
+state as it stood at 18:40: clear_to_launch_now **0.06** (it was 0.29 then 0.32 earlier in the day),
+decomposed into four contributors - invisible_rig_contact_holds_the_launch 0.80,
+owner_decisions_block_the_verdict 0.80, tier_closure_is_sound 0.19, and
+open_falsifies_tier_must_be_worked_first **0.29**. So the 45 open falsifies-a-verdict findings are
+NOT what holds the campaign, and the blocks-acceptance tier closure is weaker evidence than the
+closure prose reads. Of the two contributors at 0.80, the first is now closed by measurement
+(below); the second is DECISION 1, SWEEPGATEVERDICTUNSTABLE, which is the owner's and unmade.
+DECISION 2 (whether the ten forensics-only blockers gate the campaign) stands as recorded; my
+reading is still that they do not.
+
+**AN "OFFLINE" SUITE WAS CALLING THE RIG, AND NOTHING COULD SEE IT, 2026-10-21.** The owner saw
+admin calls to a qube named `somevm` in his dom0 journal and asked what they were.
+specimen-mark-reachable-selftest.sh drove w_session against that fake name and w_session samples cpu
+with `timeout 20 qrexec-client-vm "$vm" admin.vm.Stats` - 24 denied admin calls per run.
+dom0-callers-selftest.sh fired 26 more at `fixture-vm` through `qvm-ls --raw-data --fields STATE`
+and `qvm-prefs`. ~50 per estate run, every run. Both suites were GREEN on every assertion they
+make, because the calls are not a suite's output. A sweep of all 84 suites under a logging PATH shim
+found EXACTLY those two. Both fixed (d3c9af27) and the property now has a predicate: the runner
+shims 23 rig commands onto PATH ahead of every suite and reports any suite that reaches one as RED
+whatever its exit code was, driven by offline-rigshim-selftest.sh with one control per half of the
+guard (a3531fec). The shim's bound - a rig tool invoked by absolute path, or the python admin API -
+is measured over the shipped list rather than asserted away: zero suites.
+
+**FOUR OF THE DAY'S TWELVE FIXES WERE ONE LAYER SHORT, 2026-10-21.** Found by re-grading the 18
+changed components against the audit's own rubric, not by review. The verdict was added each time
+and the layer that consumes it was not checked: matrix.sh's COLD dom0-callers call site never got
+the cross-cell variables so the one case that check exists for stayed on the floor of 10 (and the
+suite I wrote for it grepped the whole file and passed on the warm site's copy);
+mgmt/payload-setup.cmd ignored firstboot-setup.ps1's new exit code and scheduled stage 2 regardless;
+shutdown-lib read an unreadable rig as a clean shutdown in two places, one of them WITHOUT ASKING;
+and the agent-log proof counted file NAMES, so a log from an earlier boot of the same cell satisfied
+it. All four fixed with driven tests and negative controls (390d4d1e). Jev on that diff:
+each_fix_reaches_the_layer_that_failed 0.79.
+THE RE-GRADE'S NUMBERS, mean over the 18: purpose 0.55->0.68, structure 0.35->0.40, failure-modes
+0.21->0.29, seven acceptance blockers cleared. The HISTORY column is noise and must not be quoted -
+it improved on 9 of 18 although the correcting commits are still in the log, which Jev predicted at
+0.89 before the run; a score that moves there measured the artifact's framing, not the component.
+
+**ESTATE, MEASURED ON 390d4d1e:** 85 suites, 1437 assertions, 85 green, 0 red, 0 reporting nothing,
+RESULT PASS, with nothing edited under the run. Two earlier runs the same evening are discarded
+rather than quoted, because edits landed mid-flight.
+
+**NINE SUITES ARE OUTSIDE CI AND NOTHING RUNS THEM, 2026-10-21.** They need mtools, pwsh or a
+compiler, which a GitHub runner has none of, so offline-suites.txt excludes them by policy - and
+that leaves them with no regular receipt at all. Run here: EIGHT GREEN (collect-failure 54,
+logvol-lib 98, private-disk-gate 27, pvnic-netsetup-verdict 13, pvnic-xbm-verify 10, vmexec-channel
+28, peek-abi-assert and wu-deploy-prevpass pass). ONE RED: wu-deploy-loud-selftest.sh, and the cause
+is environmental, not a product defect - its "fake scheduled-task reader" does not intercept, so the
+shipped region reaches the real `schtasks`, which does not exist under pwsh on Linux; every one of
+its eleven defect knobs then reports rc=2 instead of the rc=1 it demands, one cause with twelve
+symptoms. It was among the suites that did not exit 0 on the 2026-10-15 sweep, so this is a known
+red rather than a regression, and gate-remainder.sh's six suites do not include it - it is off the
+campaign path. TRACK C, next item: the fake has to be an executable on PATH, because pwsh resolves
+`& schtasks` through PATH and no function or variable is in that path.
+
 **P5 NOW WAITS ON TWO DECISIONS, NOT ON WORK, 2026-10-21 EVENING.** Of the 26 blockers the audit
 named, 12 are fixed with a driven test and 6 were dismissed in writing (the evidence is in
 scratchpad/harness-audit-report.md; four of the six would have been changes to working code). What
