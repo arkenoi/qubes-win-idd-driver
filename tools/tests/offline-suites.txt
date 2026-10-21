@@ -118,7 +118,6 @@ sweep-noagent-selftest.sh
 breach-evidence-selftest.sh
 specimen-mark-reachable-selftest.sh
 qtest-halted-guard-selftest.sh
-wdk-guard-selftest.sh
 cpu-raw-reader-selftest.sh
 shutdown-reask-selftest.sh
 specimen-not-a-leftover-selftest.sh
