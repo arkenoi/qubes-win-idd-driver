@@ -94,8 +94,26 @@ function Get-LswB64([string]$s) {
 function Get-LswStamp([datetime]$d) { return $d.ToString('yyyy-MM-ddTHH:mm:ss.fff') }
 
 function Get-LswLogDir {
+    # LOOK WHERE THE PRODUCT WOULD HAVE WRITTEN, in the product's own order.
+    #
+    # upstream/ro/qubes-windows-utils/src/log.c:236-253 with log.h:59: when LogInit gets no
+    # directory it builds "<system drive>\Qubes Logs" (LOG_DEFAULT_DIR is L"Qubes Logs", with the
+    # space) and CREATES it. That path was missing from this chain entirely, so a guest whose
+    # registry carries no LogDir at all wrote its logs to C:\Qubes Logs and this collector looked at
+    # Q:\Qubes Logs and C:\Program Files\Qubes Tools\log and reported exists=0 - a blind sweep over a
+    # guest that was logging perfectly well.
+    #
+    # It does NOT rescue the appvm case, and nothing here can: when the registry DOES name a path
+    # and CreateDirectory fails on it - the inherited Z:\qwt-logs\<churn> on a volume that is not
+    # mounted at agent start - log.c calls LogStart(NULL) and goes to its fallback label, which is
+    # stderr only. No file is written anywhere, so there is nothing for any collector to find. That
+    # one is fixed by making the LogDir valid before the agent starts, not here.
     $r = Get-ItemProperty 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -ErrorAction SilentlyContinue
     if ($r -and $r.LogDir) { return [string]$r.LogDir }
+    # Join-Path turns 'C:' into 'C:\Qubes Logs', which is exactly what log.c builds from
+    # GetSystemDirectory truncated at index 3 plus LOG_DEFAULT_DIR.
+    $productDefault = Join-Path $env:SystemDrive 'Qubes Logs'
+    if (Test-Path -LiteralPath $productDefault) { return $productDefault }
     if (Test-Path -LiteralPath 'Q:\Qubes Logs') { return 'Q:\Qubes Logs' }
     return 'C:\Program Files\Qubes Tools\log'
 }
