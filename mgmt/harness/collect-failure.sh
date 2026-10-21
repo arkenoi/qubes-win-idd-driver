@@ -174,7 +174,12 @@ if [ "$POWER" = Running ]; then
     # image of a healthy guest. The same command alone returns 0 every time; capture-then-match was
     # 200/200. The pipeline statuses seen were exactly {0, 141}.
     PROBE=$(q "$UNRESP" run 'cmd /c echo QREADY')
-    case "$PROBE" in *QREADY*) LIVENESS="alive" ;; *) LIVENESS="unresponsive" ;; esac   # GUARD:unresponsive DEFECT: LIVENESS="alive"
+    # ANCHOR THE MARKER. qubes.VMShell returns cmd's banner AND THE ECHOED COMMAND LINE, so
+    # `*QREADY*` matched the `echo QREADY` in the request it had just sent: a guest that answered
+    # nothing at all was graded alive, and this is the discriminator that decides QREXECDEAD
+    # vs "the subject would not halt". Only a line that IS the marker counts. Same fix as
+    # tools/qtest made for QTINCOK on 2026-10-09.
+    if command grep -qa '^QREADY' <<< "$PROBE"; then LIVENESS="alive"; else LIVENESS="unresponsive"; fi   # GUARD:unresponsive DEFECT: LIVENESS="alive"
     # BACKSTOP for a caller that forgot the flag. It does not silently do the right thing: it refuses
     # the expensive step AND records a gap, so the run is incomplete (rc=1) and the caller gets fixed.
     # Loud, diagnosed, never quietly recovered from.

@@ -120,7 +120,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/rtc-lib.sh"
 # So the bound is a PARAMETER. Callers polling a settled guest keep 40 s; a caller waiting for a
 # boot passes one that exceeds the boot, so its single outstanding probe answers instead of being
 # abandoned. w_session's own deadline remains the real bound, which is why this one may be generous.
-w_alive(){ grep -qa QREADY <<< "$(QTEST_VM=$1 timeout -k 5 "${2:-40}" ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null)"; }
+w_alive(){ command grep -qa '^QREADY' <<< "$(QTEST_VM=$1 timeout -k 5 "${2:-40}" ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null)"; }
 
 # A READINESS PROBE MUST NOT ABANDON ITSELF, and for a long time this one did.
 #
@@ -145,7 +145,7 @@ w_alive_start(){ # $1=vm $2=outfile -> prints the pid of the single probe
   echo $!
 }
 w_alive_poll(){ # $1=pid $2=outfile -> 0=marker seen 1=call ended without it 2=still running
-  grep -qa QREADY "$2" 2>/dev/null && return 0
+  command grep -qa '^QREADY' "$2" 2>/dev/null && return 0
   kill -0 "$1" 2>/dev/null && return 2
   return 1
 }

@@ -492,7 +492,7 @@ start_vm(){
       # CAPTURE, then match. Piped into `grep -q` the producer dies of SIGPIPE, timeout reports
       # 141, and pipefail makes 141 the status - a live guest graded dead. The continuation hid
       # this shape from lint L23 until 2026-10-14.
-      if grep -qa QREADY <<< "$(QTEST_VM="$vm" timeout -k 5 20 "$HERE/tools/qtest" run 'cmd /c echo QREADY' 2>/dev/null)"; then
+      if command grep -qa '^QREADY' <<< "$(QTEST_VM="$vm" timeout -k 5 20 "$HERE/tools/qtest" run 'cmd /c echo QREADY' 2>/dev/null)"; then
         printf '%s\t%s\t%s\n' "$vm" "$(( $(date +%s) - t0 ))" "answered" >> "$M/boot-to-qrexec.tsv"
         exit 0
       fi

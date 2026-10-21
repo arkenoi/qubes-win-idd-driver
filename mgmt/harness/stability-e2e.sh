@@ -44,7 +44,7 @@ stop_vm(){ local vm=$1 dl; timeout 120 qvm-shutdown "$vm" >/dev/null 2>&1; dl=$(
     sleep 5
   done; }
 qready(){ local n=${1:-40} i; for i in $(seq 1 "$n"); do
-    grep -qa QREADY <<< "$(timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null)" && return 0; sleep 10; done; return 1; }
+    command grep -qa '^QREADY' <<< "$(timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null)" && return 0; sleep 10; done; return 1; }
 # -EncodedCommand, not nested quotes: the nested form fails SILENTLY (rule 16), and here that
 # would make session_user return empty forever, so wait_session would time out and be read as
 # "the guest never logged a user in" - a guest-side conclusion drawn from a broken query.
