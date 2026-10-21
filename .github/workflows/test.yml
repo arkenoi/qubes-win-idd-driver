@@ -190,14 +190,18 @@ jobs:
       # upstream would change what these suites measure without a commit here saying so.
       - name: Vendored read-only upstream (pinned) - the suites that read it are not skippable
         env:
-          WINDOWS_UTILS_SHA: 22e03f5a
+          # THE FULL 40-CHAR SHA. `git fetch origin 22e03f5a` died with "couldn't find remote ref" -
+          # a fetch by object name needs the whole sha, and a short one is read as a ref name.
+          # The commit is on origin/main of the public mirror, so the shallow fetch below reaches it.
+          WINDOWS_UTILS_SHA: 22e03f5a55d707c83bf8e5b909785472a7424021
         run: |
           set -euo pipefail
           mkdir -p upstream/ro
-          git clone --quiet --no-checkout https://github.com/QubesOS/qubes-windows-utils.git \
-            upstream/ro/qubes-windows-utils
-          git -C upstream/ro/qubes-windows-utils fetch --quiet origin "$WINDOWS_UTILS_SHA"
+          git clone --quiet --no-checkout --filter=blob:none \
+            https://github.com/QubesOS/qubes-windows-utils.git upstream/ro/qubes-windows-utils
+          git -C upstream/ro/qubes-windows-utils fetch --quiet --depth 1 origin "$WINDOWS_UTILS_SHA"
           git -C upstream/ro/qubes-windows-utils checkout --quiet FETCH_HEAD
+          test "$(git -C upstream/ro/qubes-windows-utils rev-parse HEAD)" = "$WINDOWS_UTILS_SHA"
           test -f upstream/ro/qubes-windows-utils/src/log.c
           test -f upstream/ro/qubes-windows-utils/include/log.h
           echo "windows-utils at $(git -C upstream/ro/qubes-windows-utils rev-parse --short HEAD)"
