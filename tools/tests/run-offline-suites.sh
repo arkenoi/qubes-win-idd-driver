@@ -92,7 +92,11 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # Windows 11 stick with `grep -q LabConfig`, so an answer file that only MENTIONS the word
 # passed and Setup failed 0x800700FF - 0x40030 four minutes in. The four bypass keys a Xen HVM
 # needs are asserted by name instead.
-FLOOR=${OFFLINE_SUITES_FLOOR:-83}
+# 83 -> 84 on 2026-10-21: firstboot-effects-selftest.sh ADDED. guest/firstboot-setup.ps1 printed
+# "OK - REBOOT REQUIRED" unconditionally with ErrorActionPreference=Continue and no checks, so a
+# failed `bcdedit /set testsigning on` left a setup log identical to a good one - and nothing
+# else in the tracked harness asserts testsigning, while the IDD driver is test-signed.
+FLOOR=${OFFLINE_SUITES_FLOOR:-84}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"
