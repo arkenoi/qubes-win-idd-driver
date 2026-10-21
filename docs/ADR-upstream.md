@@ -14,18 +14,20 @@ readable as a diff instead of disappearing into a branch nobody else can see. Fo
 dependencies we hardly modify would mean rebasing four repositories at every upstream release to
 carry a handful of fixes.
 
-That reasoning has held for five of the six. It no longer holds for one: the Windows utility library,
-where our patch set has grown to nine patches and over five hundred changed lines, one of them a
-wholesale rewrite of how logging works. That is a fork's worth of change being carried as patches,
-and it has started to cost in ways a fork would not. This record states the decision as it stands and
-names that exception as open.
+That reasoning holds for four of the five dependencies, and for the two patches we aim at the Xen
+Project's network driver - code with thousands of users who are not us. It does not hold for the
+Windows utility library. Nothing outside the Windows tools consumes it: no Linux component, no dom0
+component, no package. Its only consumers are this project's own two forks, the installer, and the
+Windows halves of two other libraries - all of them parts of the same product. Nine of our eleven
+patches are aimed at it. So there is no upstream there to send a patch to, and the library is being
+assimilated into this project once the current work lands.
 
 | § | decision | status |
 |---|---|---|
 | 1 | two repositories are forked, as submodules | ACCEPTED |
 | 2 | four dependencies are cloned at a pinned version and patched | ACCEPTED |
 | 3 | the vendored read-only checkout is local working material, never a build input | ACCEPTED |
-| 4 | the windows-utils patch set has outgrown §2 | OPEN |
+| 4 | windows-utils is to be assimilated - it has no consumer outside QWT | ACCEPTED |
 
 ## The decisions in detail
 
@@ -61,8 +63,15 @@ act rather than something the build does.
 | `xeniface` | commit `9cd9a604` | none |
 
 A ref is pinned, never a branch: a moving upstream would change what we build and what our suites
-measure with no commit here saying so. `gui-common` requires `>= v4.3.1` — earlier tags do not
-compile under MSVC.
+measure with no commit here saying so.
+
+**THE TWO XENVIF PATCHES ARE THE ONLY ONES AIMED AT A REAL UPSTREAM.** `xenvif/frontend.c` belongs
+to the Xen Project, outside Qubes altogether (maintainer 2026-10-21: "xenvif is xen, it is even
+outside the qubes"), and every Windows guest on Xen uses it whether or not QWT is installed. A
+patch file is exactly the right form there: it is the deliverable, and the delta stays legible
+as a diff against code we do not own.
+
+`gui-common` requires `>= v4.3.1` — earlier tags do not compile under MSVC.
 
 **Why.** Each patch is one named defect of the kind that goes upstream as a pull request — pipe EOF
 classification, the service exit code, the blocking-read level, the interactive token. A patch file
@@ -96,32 +105,51 @@ holds, so the reads happen for real in CI; the third suite now reports INCONCLUS
 **Open.** The CI mirror's pin and the dev qube's checkout are the same commit today by hand. Nothing
 asserts they agree.
 
-## 4. The windows-utils patch set has outgrown §2
+## 4. windows-utils is to be ASSIMILATED - it has no consumer outside QWT
 
-**Status:** OPEN — stated, not decided. Needs the owner's call.
+**Status:** ACCEPTED (maintainer), 2026-10-21. Sequenced AFTER the work in flight lands.
 
-**Context, measured 2026-10-21.** `patches/windows-utils-*.patch` is nine patches, **+531 / −103**:
+**Context, measured 2026-10-21.** §4 was first written as "the patch set has outgrown the rule",
+with the cost given as +531/-103 across nine patches, one of them a 260-line rewrite of the logging
+core. That framing was understated, and the measurement that corrects it is this: **nothing outside
+QWT consumes `qubes-windows-utils`.** Every reference to it in the thirteen mirrored upstream repos:
 
 ```
-one-log-per-module      +260  -36      service-exit-code        +52   -3
-pipe-connect-rewrite     +96  -47      pipe-eof                 +35   -5
-pipe-client-null         +41   -1      loginit-banner-debug     +15   -7
-interactive-token        +12   -1      vchan-blocking-read      +12   -2
-percall-mechanics-debug   +8   -1
+qubes-core-vchan-xen/windows/README.md          the Windows half of vchan
+qubes-vmm-xen-windows-pvdrivers/README.md       the Windows PV drivers
+qubes-installer-qubes-os-windows-tools/*        the QWT installer itself
+qubes-builderv2/.../build-qwt.ps1 + 3 configs   the build recipe for QWT
 ```
 
-`one-log-per-module` alone rewrites how the library logs. The costs in §2 are no longer hypothetical:
-the patched source is in no checkout (§2 cost 3), which is exactly why three suites reach into a
-gitignored mirror and why the CI estate was red for weeks (§3). A rename inside that patch set has
-already broken five consumers in this repository.
+No Linux or dom0 component consumes it; no package declares a dependency on it. Its Windows-side
+consumers are `gui-agent-windows` and `core-agent-windows` - **both already our forks** - plus the
+installer and the Windows halves of vchan and qubesdb, all of which are QWT. For contrast,
+`gui-common` is a genuine shared upstream: `qubes-gui-daemon` (dom0: `xside.c`, `shmoverride.c`) and
+`qubes-gui-agent-linux` (`vmside.c`) both consume it, so a change there reaches someone else.
 
-**The case for forking it.** The shipped source would be in-tree, readable and testable without a
-mirror; the three suites would read the real thing; the patch-application steps and their failure
-mode would go away. Upstreaming becomes `git format-patch` against the fork, which is what we send
-anyway.
+And the alignment is total: **nine of our eleven patches target the one dependency with no other
+consumer.** The maintainer's reading, which the measurement supports: it is "single source in
+disguise".
 
-**The case against.** A sixth rebase target, and a fork hides the delta that nine named patches make
-obvious at a glance.
+**Decision.**
+1. `qubes-windows-utils` is **assimilated** into this project: its source becomes ours, carried in
+   tree, and the nine patches become ordinary history rather than a stack applied at build time.
+2. This happens **after the work in flight lands** - it is not a reason to hold anything up now.
+3. `xenvif` stays as patches (§2): it is Xen's, outside Qubes, with consumers who are not us.
+4. The four dependencies we do not modify stay pinned clones (§2). Assimilation is for what we
+   change, not for what we merely use.
 
-**Owed.** Nothing here is measured against a fork, because no fork exists. The measurement that would
-settle it is the cost of one rebase of `v4.2.2` → current upstream with our 531 lines on top.
+**Why.** The one honest argument for the patch form is that a patch file is the upstream
+deliverable. That argument does not survive the measurement: there is no upstream consumer to
+deliver to. What the form does cost is not hypothetical - all of it was measured on 2026-10-21:
+the +531/-103 delta exists in NO checkout, so three suites read a gitignored mirror to assert
+anything about the shipped source; CI was therefore red on every run for weeks, which is what
+`campaign-preflight` refuses a release campaign on; and it is a rebase target nobody rebases.
+
+**Cost.** A sixth tree to carry, and the nine named patches stop advertising the delta at a glance -
+that legibility has to be replaced by history and by the suites. Assimilation also removes the
+ability to say "this is upstream's code" about a defect in it, which is a cost worth naming: after
+this, `src/log.c` is ours and its defects are ours.
+
+**Open.** What the assimilated tree's relationship to upstream's own future commits should be -
+periodic merge, cherry-pick, or nothing - is not decided here.
