@@ -62,6 +62,35 @@ if ! qvm-check --quiet "$VM" 2>/dev/null; then
     echo "       testbed qubes carry the tag 'win-idd-testbed'; name the one you mean in QTEST_VM." >&2
     exit 2
 fi
+# A QREXEC CALL TO A HALTED GUEST STARTS IT, AND THAT IS HOW BACKGROUND JOBS WOKE THE RIG.
+#
+# Owner, 2026-10-21: "make sure background jobs cant wake guests ever again." On 2026-10-20 three
+# orphaned capture loops survived every stop (`nohup script &` then `$!` yields the WRAPPER shell,
+# not the child) and the owner found a guest he had just halted running again. The capture path
+# itself was innocent - `qtest shot` calls a dom0 service - but any guest-targeting verb here is a
+# qrexec call to the GUEST, and qrexec starts the target to serve it. MEASURED 2026-10-15:
+# `qrexec-client-vm win10-acc qubes.GetAppmenus` against a HALTED win10-acc returned rc=0 with
+# 28268 bytes, starting the guest, while another job was mid-priming.
+#
+# tools/hooks/serial-rig-gate.sh now matches any qrexec call to a non-dom0 target, but that hook
+# gates MY tool calls - it cannot see a script that is already running. This can: every harness
+# path that talks to a guest comes through here, so refusing a halted target here is what makes an
+# orphan unable to wake anything. The refusal is the whole point, so there is NO override knob
+# (owner 2026-10-18 on exactly that habit): a caller that wants the guest up says `qtest start`,
+# which is the verb that exists for it and is deliberately exempt below.
+#
+# `qvm-check --running` is true for Transient as well as Running, so a guest that is mid-boot is
+# still reachable and nothing here delays a boot. Only HALTED is refused.
+case "${1:-}" in
+  run|ps|push|pushrun|synctime|incoming)
+    if ! qvm-check --running "$VM" >/dev/null 2>&1; then
+        echo "qtest: '$1' talks to the guest and '$VM' is HALTED - refusing, because the call would start it." >&2
+        echo "       If you meant to boot it, say so:  QTEST_VM=$VM $0 start" >&2
+        echo "       If you did not, this is a job that outlived its run - stop it." >&2
+        exit 3
+    fi ;;
+esac
+
 vmshell() { printf '%s\n' "$1" | qrexec-client-vm "$VM" qubes.VMShell; }
 
 # THE INCOMING DIRECTORY IS DISCOVERED, NOT ASSUMED. It used to be hardcoded to

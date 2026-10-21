@@ -232,7 +232,17 @@ mut = re.compile(
     r'|\bqtest\s+(run|push|pushrun|start|kill|shutdown)\b'
     r'|\bqwt_shutdown\b'                      # shutdown-lib.sh's wrapper is a power cycle too
     r'|\bprime-run|\bquick-upgrade|\bmatrix\.sh|\bcheckpoint\.sh\s+(unpark|park)|\breprovision|\brelease-acceptance'
-    r'|qubes\.WindowsUpdate|qubes\.VMShell|qubes\.VMExec', re.I)
+    r'|qubes\.WindowsUpdate|qubes\.VMShell|qubes\.VMExec'
+    # ANY QREXEC CALL TO A GUEST IS A MUTATING VERB, because qrexec STARTS the target to serve it.
+    # Naming three services was a list of the ones someone remembered. MEASURED 2026-10-15:
+    # `qrexec-client-vm win10-acc qubes.GetAppmenus` against a HALTED win10-acc returned rc=0 with
+    # 28268 bytes - the call started the guest - while win10-tpl was mid-priming in another job.
+    # Two Windows guests were up and no gate noticed; that it did no harm was luck.
+    # dom0 is EXEMPT and must stay exempt: dom0 is always up, so a call to it starts nothing, and
+    # the screenshot path (local.WinScreenshot+<vm>, local.WinFullScreen, local.WinResize) is a
+    # dom0 service. Those are how a running job is watched, and the rule above this one is that
+    # monitoring is never blocked.
+    r'|\bqrexec-client-vm\s+(?!dom0\b)[A-Za-z0-9_.-]+', re.I)
 hit = mut.search(text)
 if not hit:
     sys.exit(0)
