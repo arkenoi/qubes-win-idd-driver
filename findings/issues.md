@@ -58,6 +58,28 @@ property - 21 ids, 22 mutations, every id seen red - which found three further d
 checks, one of them a check a COMMENT could satisfy. Campaign 2 was stopped deliberately to free the
 rig for the rebuild; teardown clean.
 
+**THE BRACE FIX IS CONFIRMED ON A GUEST, 2026-10-22.** Campaign 3, package 39678937221 at
+e97deb11, cell WIN10-clean, graded by the sweep rather than by a grep: `status CLEAN rc 0`,
+`error_lines 0`, `error_lines_undeclared 0` against a max of 0, `breaches []`. Campaign 2's same
+cell on the previous package read `status FINDINGS rc 1`, `error_lines_undeclared 145`, a P2 breach,
+141 of those lines being the one wrapper exit line. THE ZERO IS OVER A NON-EMPTY READ, which is the
+part a count alone cannot carry: the report's own file entry for
+`Z:\qwt-logs\win10-acc\qrexec-wrapper-20261022.log` is `family qrexec, scanned 13, parsed 13,
+ignored 0, unparsed 0, skipped 0, partial false`. Thirteen wrapper lines read, none skipped, nothing
+truncated, zero error lines.
+TWO THINGS I GOT WRONG ON THE WAY, both from concluding before the data was sound, and both worth
+keeping because the second is a trap this project has paid for before. (1) I read
+`WIN10-clean-logvol-bind.out` while it was still being written, saw its first two lines - a fail and
+the `[ERROR] the binder refused` that follows it - and reported the campaign as aborted on a
+log-volume failure. The file's THIRD line is `LOGVOL-BIND ok ... found=D: letter=pinned copied=21`:
+the bind failed once and succeeded on retry, and the campaign never stopped. I then built a theory
+about a 300 ms race in the binder's unlettered path on top of that misread, when the successful
+attempt names the LETTERED path. (2) I counted the exit line across the whole artefacts directory,
+got 0, and nearly reported it as the fix working - over a corpus that contains NO wrapper log lines
+at all. 110 files scanned, 8 naming `qrexec-wrapper`, and ZERO of those 8 carrying a `pid:tid` log
+prefix, because the raw guest logs are not copied into that directory. The grade lives in
+`<cell>-guestlogs/report.json`, which is where it should have been read from first.
+
 **P5 NOW WAITS ON ONE DECISION, 2026-10-21 NIGHT.** Jev was asked the launch question again on the
 state as it stood at 18:40: clear_to_launch_now **0.06** (it was 0.29 then 0.32 earlier in the day),
 decomposed into four contributors - invisible_rig_contact_holds_the_launch 0.80,
