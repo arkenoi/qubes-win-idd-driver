@@ -132,3 +132,4 @@ accept-cancel-selftest.sh
 seal-halted-selftest.sh
 answer-labconfig-selftest.sh
 firstboot-effects-selftest.sh
+offline-rigshim-selftest.sh

@@ -96,7 +96,15 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # "OK - REBOOT REQUIRED" unconditionally with ErrorActionPreference=Continue and no checks, so a
 # failed `bcdedit /set testsigning on` left a setup log identical to a good one - and nothing
 # else in the tracked harness asserts testsigning, while the IDD driver is test-signed.
-FLOOR=${OFFLINE_SUITES_FLOOR:-84}
+# 84 -> 85 on 2026-10-21: offline-rigshim-selftest.sh ADDED. Two suites in this very list were
+# firing ~50 DENIED admin calls per estate run at qubes that do not exist - specimen-mark-reachable
+# at `somevm` through `timeout 20 qrexec-client-vm`, dom0-callers at `fixture-vm` through
+# `qvm-ls --raw-data --fields STATE` - and every one was written to the owner's dom0 journal. Both
+# suites were green on every assertion they make, and nothing here could see it, because the calls
+# are not a suite's output. The runner now shims 23 rig commands onto PATH ahead of each suite and
+# reports any suite that reaches one as RED; this suite drives that guard, including the case a
+# shell function cannot stub.
+FLOOR=${OFFLINE_SUITES_FLOOR:-85}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"
@@ -120,13 +128,43 @@ if [ "$n" -lt "$FLOOR" ]; then
 fi
 echo "--- $n offline suite(s), serially (floor $FLOOR, TMPDIR $TMPDIR)"
 
-red=0; green=0; empty=0; total_assertions=0
+# OFFLINE MEANS IT DOES NOT TOUCH THE RIG, AND UNTIL NOW THAT WAS ONLY THE WORD IN THE FILENAME.
+# specimen-mark-reachable-selftest.sh drove w_session against a guest it called `somevm`; w_session
+# samples cpu with `timeout 20 qrexec-client-vm "$vm" admin.vm.Stats`, so every single run fired 24
+# admin calls at a qube that does not exist. Each one is DENIED, and a denied Admin API call is
+# written to the OWNER'S dom0 journal - he asked what they were, 2026-10-21. The suite was green
+# throughout: nothing it asserted could see the calls, because the calls are not its output.
+# So the property gets a predicate. Every suite runs with a shim dir FIRST on PATH; any rig command
+# it reaches is recorded and exits 1 - which is what a denial already gave it - and a suite that
+# reached one is RED whatever its exit code was. A suite that genuinely needs the rig is not an
+# offline suite and does not belong in this list.
+# It must be a stub on PATH and not a shell function: `timeout`, `env`, `xargs`, `nohup` and
+# `find -exec` all EXEC their argument, so a function is never in the path to be found. That was
+# my first fix and the call count did not move.
+# OFFLINE-RIGSHIM-A  (to the B marker: driven by tools/tests/offline-rigshim-selftest.sh;
+# neither marker names the other)
+RIGSHIM="$TMPDIR/.offline-rig-shim.$$"
+RIGCALLS="$TMPDIR/.offline-rig-calls.$$"
+mkdir -p "$RIGSHIM" || { echo "ERROR: cannot create the rig shim dir - refusing to run unguarded"; exit 2; }
+for _c in qrexec-client-vm qrexec-client \
+          qvm-ls qvm-tags qvm-run qvm-start qvm-shutdown qvm-kill qvm-pause qvm-unpause \
+          qvm-prefs qvm-features qvm-volume qvm-device qvm-remove qvm-clone qvm-create \
+          qvm-check qvm-copy-to-vm qvm-move-to-vm qvm-console-dispvm qvm-firewall qubes-prefs; do
+  printf '#!/bin/sh\nprintf "%%s %%s\\n" "%s" "$*" >> "${OFFLINE_RIG_CALLS:-/dev/null}"\nexit 1\n' \
+    "$_c" > "$RIGSHIM/$_c" || { echo "ERROR: cannot write the rig shim - refusing to run unguarded"; exit 2; }
+  chmod +x "$RIGSHIM/$_c"
+done
+trap 'rm -rf "$RIGSHIM" "$RIGCALLS"' EXIT
+# OFFLINE-RIGSHIM-B
+
+red=0; green=0; empty=0; total_assertions=0; touched=0
 for s in "${suites[@]}"; do
   f="$SUITEDIR/$s"
   if [ ! -x "$f" ] && [ ! -r "$f" ]; then
     printf 'MISSING  %-52s named in the list, not in the tree\n' "$s"; red=$((red+1)); continue
   fi
-  out=$(timeout 300 bash "$f" 2>&1); rc=$?
+  : > "$RIGCALLS"
+  out=$(OFFLINE_RIG_CALLS="$RIGCALLS" PATH="$RIGSHIM:$PATH" timeout 300 bash "$f" 2>&1); rc=$?
   # A run that reports NO assertion at all has been gutted, whatever its exit code - that is exactly
   # how a deduped RESULT line turned a suite into a no-op. Two spellings count, because both are in
   # use here: a tally ("N passed", "N check(s)") and a bare verdict line. The defect-knob suites
@@ -139,7 +177,12 @@ for s in "${suites[@]}"; do
     : "${passed:=0}"
   fi
   total_assertions=$((total_assertions + passed))
-  if [ "$rc" -ne 0 ]; then
+  if [ -s "$RIGCALLS" ]; then
+    # RED WHATEVER THE EXIT CODE WAS: the suite passed its own assertions and still reached the rig.
+    printf 'TOUCHED-RIG %-49s %s call(s) to the rig from an OFFLINE suite\n' "$s" "$(wc -l < "$RIGCALLS")"
+    sort -u "$RIGCALLS" | sed 's/^/           /' | head -4
+    red=$((red+1)); touched=$((touched+1))
+  elif [ "$rc" -ne 0 ]; then
     printf 'FAIL     %-52s rc=%s  %s\n' "$s" "$rc" "$(printf '%s' "$out" | tail -1 | cut -c1-80)"
     printf '%s\n' "$out" | command grep -aiE '^\s*(FAIL|BROKE|ERROR)' | sed 's/^/           /' | head -6
     red=$((red+1))

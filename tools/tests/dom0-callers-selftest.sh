@@ -24,6 +24,19 @@ pass=0; fail=0
 T=$(mktemp -d "${TMPDIR:-/tmp}/dom0callers-st.XXXXXX") || exit 2
 trap 'rm -rf "$T"' EXIT INT TERM
 
+# NO RIG CALLS FROM AN OFFLINE SUITE. DOM0CALLERS_STREAM replaces the check's qrexec call, but not
+# its `qvm-ls --raw-data --fields STATE "$VM"` or its `qvm-prefs "$VM" qrexec_timeout`, so every run
+# of this suite fired 26 admin calls at `fixture-vm` and `this-vm-does-not-exist-xyz`. Both names
+# are deliberately absent from the rig, so every call was DENIED - and a denied Admin API call is
+# written to the owner's dom0 journal, with `qvm-ls --fields` being the one spelling this project
+# has a standing prohibition on. Measured 2026-10-21 by the runner's rig shim.
+# The stubs return EXACTLY what the rig returns for a name that does not exist - nothing, rc 1 - so
+# no assertion below changes meaning: Part C still reads "not Running" and "not Halted" from an
+# empty state, which is the condition it is testing.
+mkdir -p "$T/bin"
+for _c in qvm-ls qvm-prefs; do printf '#!/bin/sh\nexit 1\n' > "$T/bin/$_c"; chmod +x "$T/bin/$_c"; done
+export PATH="$T/bin:$PATH"
+
 ok(){ pass=$((pass+1)); printf '  PASS  %s\n' "$1"; }
 bad(){ fail=$((fail+1)); printf '  FAIL  %s\n' "$1"; }
 

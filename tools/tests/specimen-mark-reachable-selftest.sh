@@ -49,6 +49,19 @@ run_session(){ # $1=source file $2=deadline -> prints "rc=<n> marked=<0|1>"
     w_cpu_moving(){ return 0; }
     w_cpu_time(){ echo 1234; }
     kill(){ return 0; }                          # w_alive_poll's liveness check / cleanup
+    # AN OFFLINE SUITE MAKES NO RIG CALL. w_session samples the guest's cpu with
+    # `timeout 20 qrexec-client-vm "$vm" admin.vm.Stats` (e2e-wait.sh), so every run fired 24
+    # denied admin calls at a qube named `somevm`, and a denied Admin API call lands in the
+    # OWNER'S dom0 journal (measured 2026-10-21; he asked what the calls were).
+    # IT HAS TO BE A STUB ON PATH, NOT A FUNCTION. My first fix here was
+    # `qrexec-client-vm(){ return 1; }` and the call count stayed at 24: `timeout` is an external
+    # that EXECs its argument, so no shell function is in the path to be found. Same for env,
+    # xargs, nohup and find -exec.
+    # Empty output with rc 1 is exactly what the denial already returned, so nothing else moves.
+    mkdir -p "$T/bin"
+    printf '#!/bin/sh\nexit 1\n' > "$T/bin/qrexec-client-vm"
+    chmod +x "$T/bin/qrexec-client-vm"
+    export PATH="$T/bin:$PATH"
     fetch_wedge_core(){ return 1; }
     log(){ :; }
     # ---- the real functions under test
