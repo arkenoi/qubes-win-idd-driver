@@ -127,3 +127,4 @@ sweep-life-selftest.sh
 assert-payload-floor-selftest.sh
 accept-clean-wu-selftest.sh
 dom0-callers-count-selftest.sh
+ctl-stop-rc-selftest.sh

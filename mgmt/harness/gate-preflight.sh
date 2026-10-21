@@ -236,7 +236,17 @@ set_bits_checked(){  # <value> <context> - the bit must round-trip onto a FRESHL
 # with the subshell and the restore step would find nothing to stop.
 CTL_FILE=$(mktemp -u /tmp/pf-ctl-XXXX); : > "$CTL_FILE"
 control_stop(){ local _ pid start; read -r _ pid start < "$CTL_FILE" 2>/dev/null
-  [ "${pid:-0}" != 0 ] && { echo "  control: $(T=60 ctl_stop "$pid" "${start:-0}")"; : > "$CTL_FILE"; }; return 0; }
+  if [ "${pid:-0}" != 0 ]; then
+    # A FAILED STOP IS DECLARED, not swallowed. ctl_stop now exits 3 (that pid is a different
+    # process now) or 4 (stop sent, still alive) instead of 0; this teardown deliberately still
+    # returns 0 - it is cleanup, not a verdict - but the outcome becomes a [WARN] line, which is
+    # what the error-line gate reads. A leftover control window changes what the next suite sees.
+    _o=$(T=60 ctl_stop "$pid" "${start:-0}"); _r=$?
+    if [ "$_r" = 0 ]; then echo "  control: $_o"
+    else echo "  control: [WARN] the control window did not close cleanly (rc=$_r): $_o"; fi
+    : > "$CTL_FILE"
+  fi
+  return 0; }
 control_up(){  # -> echoes the window list once the control appears, or after the deadline;
                #    rc 3 = the guest stopped answering (caller grades it, never out-waits it)
   control_stop >&2

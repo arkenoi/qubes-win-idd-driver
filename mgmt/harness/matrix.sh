@@ -2188,7 +2188,16 @@ d=open(sys.argv[1],'rb').read(33); w,h=struct.unpack('>II',d[16:24]); print(w,h)
   if [ "$W" -eq 0 ]; then
     gw=$(g_probe "$app" NPWIN 'Write-Host ("NPWIN=" + ((Get-Process notepad -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Measure-Object).Count))' 60)
   fi
-  say "  notepad: $(QTEST_VM=$app T=45 ctl_stop "${nppid:-0}" "${npstart:-0}")"
+  # AND THE CALLER BRANCHES ON IT. This printed the line and moved on, so a control window that did
+  # not close stayed on the desktop for the window-map grading later in this same cell.
+  _ctl_out=$(QTEST_VM=$app T=45 ctl_stop "${nppid:-0}" "${npstart:-0}"); _ctl_rc=$?
+  say "  notepad: $_ctl_out"
+  case "$_ctl_rc" in
+    0) ;;
+    3) no "$lbl: the control window's pid is a DIFFERENT process now ($_ctl_out) - ours was never stopped and may still be mapped, which the window grading below would count as the product's" ;;
+    4) no "$lbl: the control window did NOT close ($_ctl_out) - it stays on the desktop and the window grading below would count it" ;;
+    *) no "$lbl: INVALID-CTLSTOP  could not establish whether the control window closed ($_ctl_out) - the window grading below cannot be trusted for this cell" ;;
+  esac
   if [ "$big" = 1 ]; then no "$lbl-appvm boot $b: a FULLSCREEN-SIZED window was mapped"; return 1
   elif [ "$W" -gt 0 ]; then ok "$lbl-appvm boot $b: $W window(s) mapped, none fullscreen-sized"; return 0
   elif [ "${gw:-x}" -ge 1 ] 2>/dev/null; then

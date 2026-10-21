@@ -173,5 +173,22 @@ if ('$start' -ne '0' -and \"\$st\" -ne '$start') { Write-Output ('CTLSTOP not-ou
 Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
 [void]\$p.WaitForExit(5000)
 Write-Output ('CTLSTOP ' + \$(if (\$p.HasExited) { 'stopped' } else { 'STILL-RUNNING' }))" | grep -a '^CTLSTOP ' | head -1)
-  printf '%s\n' "${out:-CTLSTOP unknown no-answer}"
+  out="${out:-CTLSTOP unknown no-answer}"
+  printf '%s\n' "$out"
+  # EACH OUTCOME GETS ITS OWN EXIT CODE, because the line alone was the whole result and every
+  # caller just logged it. Found by the descending audit, 2026-10-21: the function's last command
+  # was the printf, so "not-ours" and "STILL-RUNNING" returned 0 - the same code as a confirmed
+  # stop - and matrix.sh's call site (`say "  notepad: $(... ctl_stop ...)"`) only printed the
+  # string. A control window that failed to close therefore stayed on the guest desktop to be
+  # counted by a later window-map grading step in the SAME cell, falsifying that cell's verdict.
+  # CTL-STOP-RC-A  (the mapping to the B marker is extracted and driven by
+  # tools/tests/ctl-stop-rc-selftest.sh; neither marker names the other)
+  case "$out" in
+    *'CTLSTOP stopped'*)       return 0 ;;   # it exited
+    *'CTLSTOP gone'*)          return 0 ;;   # already gone, which is what a stop wanted
+    *'CTLSTOP not-ours'*)      return 3 ;;   # that pid is a DIFFERENT process now - ours may live
+    *'CTLSTOP STILL-RUNNING'*) return 4 ;;   # stop sent, still alive after 5 s
+    *)                         return 2 ;;   # no answer / no pid: instrument failure, not a stop
+  esac
+  # CTL-STOP-RC-B
 }

@@ -77,7 +77,11 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # `entries >= 10` against a clean Windows that reports ~37, so a menu amputated to a third read
 # as aligned. The count now has to AGREE across cells of one OS family, which are clones of the
 # same sealed golden - a predicate with no invented number in it.
-FLOOR=${OFFLINE_SUITES_FLOOR:-79}
+# 79 -> 80 on 2026-10-21: ctl-stop-rc-selftest.sh ADDED. ctl_stop's last command was its printf,
+# so "not-ours" and "STILL-RUNNING" exited 0 - the same as a confirmed stop - and matrix.sh only
+# printed the string. A control window that failed to close stayed on the desktop to be counted
+# by the window-map grading later in the same cell.
+FLOOR=${OFFLINE_SUITES_FLOOR:-80}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"

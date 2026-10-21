@@ -83,7 +83,11 @@ if [ "$rc" = 0 ]; then
   mapped=$(tar tf "$OUT/rnd7.tar" 2>/dev/null | grep -c '\.png$'); mapped=${mapped:-0}
   log "  guest-side HWNDs=${hw:-?}  dom0 mapped=${mapped:-?}   (accept: 5 and 1)"
   echo "RND7 hwnds=${hw:-?} mapped=${mapped:-?}" >> "$OUT/rnd.txt"
-  log "  chromerepro: $(ctl_stop "${CR_PID:-0}" "${CR_START:-0}")"
+  # Declared, not swallowed - see gate-preflight.sh. A chromerepro still running changes what
+  # every later measurement in this run sees.
+  _o=$(ctl_stop "${CR_PID:-0}" "${CR_START:-0}"); _r=$?
+  if [ "$_r" = 0 ]; then log "  chromerepro: $_o"
+  else log "  chromerepro: [WARN] did not stop cleanly (rc=$_r): $_o"; fi
 fi
 
 # ---------------------------------------------------------------- RND-5
