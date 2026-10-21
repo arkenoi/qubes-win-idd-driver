@@ -23,6 +23,13 @@ fail() { n=$((n+1)); bad=1; say "FAIL  $1"; [ -n "${2:-}" ] && say "      $2"; }
 [ -f "$HOOK" ] || { say "FAIL  the hook is missing - nothing ran (missing data fails)"; exit 2; }
 
 # ---- a fixture repository with the tool, a map, a ledger and a v-tag ----------------------------------
+# TRIPWIRE ON THE REAL LEDGER. During this suite's development the tracked mgmt/gate-ledger.json in
+# the working tree was found overwritten with this fixture's row - the gate's own record, replaced by
+# a test's. It is not reproducible now that FX is exported and every fixture write is absolute, so
+# the writer is NOT identified; this asserts the property instead of trusting the explanation. A
+# suite that mutates tracked data must fail, not pass quietly.
+REAL_LEDGER="$ROOT/mgmt/gate-ledger.json"
+REAL_LEDGER_SUM=$(md5sum "$REAL_LEDGER" 2>/dev/null | cut -d' ' -f1)
 export FX="$OUT/fx"; rm -rf "$FX"; mkdir -p "$FX"/{tools/hooks,mgmt,scratchpad,agent/gui-agent,packaging/setup}
 cp "$ROOT/tools/gate-scope.py" "$ROOT/tools/ci-state.py" "$FX/tools/"
 # the CI arm needs workflows to enumerate and a gh to answer for them. build.yml has no path
@@ -161,6 +168,13 @@ json.dump({"releases": [{"version": "1.0", "date": sys.argv[1], "range": "", "re
                          "full": True, "result": "pass", "map_commit": sys.argv[2]}]},
           open(os.path.join(os.environ["FX"], 'mgmt/gate-ledger.json'), 'w'), indent=1)
 PYFULL
+
+now_sum=$(md5sum "$REAL_LEDGER" 2>/dev/null | cut -d' ' -f1)
+if [ "$now_sum" = "$REAL_LEDGER_SUM" ]; then
+    ok "the tracked mgmt/gate-ledger.json is untouched by this suite"
+else
+    fail "THIS SUITE MODIFIED THE TRACKED LEDGER" "$REAL_LEDGER changed ($REAL_LEDGER_SUM -> $now_sum); restore it with: git checkout -- mgmt/gate-ledger.json"
+fi
 
 say "--- $n check(s), $( [ $bad -eq 0 ] && echo 0 || echo 'at least 1') failed; fixtures in $OUT"
 exit $bad
