@@ -18,7 +18,7 @@
 # every cell. The parse check is the first assertion and runs whenever a pwsh is available.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PASS=0; FAIL=0
+PASS=0; FAIL=0; INCONCLUSIVE=0
 ok(){ PASS=$((PASS+1)); echo "ok   $1"; }
 no(){ FAIL=$((FAIL+1)); echo "FAIL $1"; }
 C="$ROOT/mgmt/harness/log-sweep-collect.ps1"
@@ -44,8 +44,16 @@ if command grep -aq 'QubesLogs' "$C"; then
 else
   ok "it is spelled \"Qubes Logs\" with the space, as log.h:59 defines it"
 fi
-# and the claim about log.c must still be true of the shipped source
-if command grep -aq 'define LOG_DEFAULT_DIR L"Qubes Logs"' "$ROOT/upstream/ro/qubes-windows-utils/include/log.h"; then
+# and the claim about log.c must still be true of the shipped source.
+# ABSENCE IS NOT A CHANGE. upstream/ro is gitignored, so a clean checkout has no log.h - and this
+# read reported "LOG_DEFAULT_DIR changed" there, which is a claim about upstream made from a missing
+# file. In CI that was one of four reds that pass on the dev qube. Missing input is INCONCLUSIVE and
+# says so; test.yml now materialises the pinned mirror, so the real read happens there too.
+LOGH="${COLLECTOR_LOGH:-$ROOT/upstream/ro/qubes-windows-utils/include/log.h}"   # override: this suite only
+if [ ! -f "$LOGH" ]; then
+  echo "INCONCLUSIVE: $LOGH absent (upstream/ro is gitignored) - the premise about log.h was NOT checked"
+  INCONCLUSIVE=$((${INCONCLUSIVE:-0} + 1))
+elif command grep -aq 'define LOG_DEFAULT_DIR L"Qubes Logs"' "$LOGH"; then
   ok "log.h:59 still defines LOG_DEFAULT_DIR as \"Qubes Logs\" (the premise holds)"
 else
   no "LOG_DEFAULT_DIR changed - this suite's premise no longer holds, re-read log.h"
@@ -93,5 +101,8 @@ else
 fi
 
 echo
-echo "RESULT: $PASS passed, $FAIL failed"
-[ "$FAIL" -eq 0 ]
+echo "RESULT: $PASS passed, $FAIL failed$( [ "$INCONCLUSIVE" -gt 0 ] && printf ', %s INCONCLUSIVE' "$INCONCLUSIVE" )"
+# AN INCONCLUSIVE READ IS NOT A PASS. It exits 2, which the offline runner counts RED - the same
+# contract loginit-banner-debug and logvol-modulekey already use for this input.
+[ "$FAIL" -eq 0 ] || exit 1
+[ "$INCONCLUSIVE" -eq 0 ] || exit 2

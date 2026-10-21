@@ -176,9 +176,31 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      # The windows-utils patch suites apply patches against the vendored read-only mirror, so the
-      # checkout has to carry it. Without this they would report "patch failed to apply" and look
-      # like product regressions - which is exactly what a stale worktree path did on the dev qube.
+          # TAGS, NOT JUST THE TIP. gate-remainder.sh resolves its range with
+          # `git describe --tags --match 'v4.3.*'` and REFUSES with exit 2 when there is none, so on
+          # the default shallow checkout gate-remainder-dry-selftest read "the dry run exited 2" and
+          # three of its legs failed in CI while passing on the dev qube.
+          fetch-depth: 0
+      # THE VENDORED MIRROR HAS TO BE MATERIALISED, and until now only a comment said so. upstream/ro
+      # is GITIGNORED (.gitignore:27), so a clean checkout has never carried it, and the two suites
+      # that read upstream/ro/qubes-windows-utils/src/log.c reported INCONCLUSIVE (rc=2) - which this
+      # runner counts RED. The estate was therefore red in CI on every run, while being green on the
+      # dev qube, and "CI is not green" is what campaign-preflight refuses a release campaign on.
+      # Pinned to the same commit the dev qube holds (mm_22e03f5a) rather than a branch: a moving
+      # upstream would change what these suites measure without a commit here saying so.
+      - name: Vendored read-only upstream (pinned) - the suites that read it are not skippable
+        env:
+          WINDOWS_UTILS_SHA: 22e03f5a
+        run: |
+          set -euo pipefail
+          mkdir -p upstream/ro
+          git clone --quiet --no-checkout https://github.com/QubesOS/qubes-windows-utils.git \
+            upstream/ro/qubes-windows-utils
+          git -C upstream/ro/qubes-windows-utils fetch --quiet origin "$WINDOWS_UTILS_SHA"
+          git -C upstream/ro/qubes-windows-utils checkout --quiet FETCH_HEAD
+          test -f upstream/ro/qubes-windows-utils/src/log.c
+          test -f upstream/ro/qubes-windows-utils/include/log.h
+          echo "windows-utils at $(git -C upstream/ro/qubes-windows-utils rev-parse --short HEAD)"
       - name: Offline selftest suites (serial, with a floor)
         run: tools/tests/run-offline-suites.sh
 
