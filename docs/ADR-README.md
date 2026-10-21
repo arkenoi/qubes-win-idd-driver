@@ -18,6 +18,7 @@ in `docs/DESIGN-*.md` and in the code headers. An ADR section goes stale only wh
 | `ADR-supervision.md` | how our processes and services are kept alive, and how their deaths are made loud | 4 |
 | `ADR-updater.md` | the dom0-owned Windows update path (Track C): invariants, verification, install routes, process ownership, the installer's deploy | 13 |
 | `ADR-uac.md` | elevation prompts a user in dom0 can answer: the prompt moved off the secure desktop, the stand-in window, a prompt Windows did not raise, what may elevate at all | 10 |
+| `ADR-upstream.md` | upstream dependencies: which repositories we fork, which we clone at a pinned ref and patch, and the read-only mirror | 4 |
 
 ### Cross-cutting rules, and where they are decided
 
