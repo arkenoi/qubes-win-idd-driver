@@ -175,6 +175,29 @@ log "stick on /dev/$STICKLOOP"
 
 # --- clone the base --------------------------------------------------------------------------
 log "recreating $CHURN from $BASE"
+# A SPECIMEN IS NOT A LEFTOVER. This is the most destructive path in the harness - it kills and then
+# qvm-removes the subject - and it consulted nothing before doing it. On 2026-10-20 a reliably
+# captured wedge was lost because a campaign recreated the guest two minutes after it was
+# classified; this is the shape of that loss.
+#
+# The guard uses specimen-lib, which is the LIVE mechanism: matrix.sh and e2e-wait.sh write the
+# marker and tools/hooks/golden-boot-gate.sh reads it. mgmt/harness/evidence-lock.sh looks like it
+# exists for exactly this, but MEASURED 2026-10-21: all five of its functions (ev_lock, ev_locked,
+# ev_release, ev_reap, ev_lock_survivors) have ZERO consumers and no file sources it. Wiring a
+# second, dead source of truth beside a working one would make two things to forget instead of one,
+# so that library's fate is the owner's call and is filed, not decided here.
+#
+# Hard fail with the way out named, never a silent skip: a run that would destroy evidence must stop
+# and say so. `specimen_clear` is the deliberate release, which is what a real recreate uses.
+if type specimen_mark >/dev/null 2>&1 || source mgmt/harness/specimen-lib.sh 2>/dev/null; then
+    if [ -f "$(specimen_file "$CHURN" 2>/dev/null)" ]; then
+        log "[ERROR] TERMINAL: $CHURN is held as EVIDENCE and this step would kill and remove it."
+        log "  reason recorded: $(specimen_why "$CHURN" 2>/dev/null)"
+        log "  Take what you need first, then release it deliberately:"
+        log "    source mgmt/harness/specimen-lib.sh && specimen_clear $CHURN"
+        exit 1
+    fi
+fi
 # A leftover churn that is still Running cannot be removed; kill it first. This is the one place
 # a kill is permitted: its state is being discarded (volumes replaced by the clone below), so
 # nothing that will be graded can be corrupted by it. It is NOT a way to stop a run.

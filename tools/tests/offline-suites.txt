@@ -121,3 +121,4 @@ qtest-halted-guard-selftest.sh
 wdk-guard-selftest.sh
 cpu-raw-reader-selftest.sh
 shutdown-reask-selftest.sh
+specimen-not-a-leftover-selftest.sh

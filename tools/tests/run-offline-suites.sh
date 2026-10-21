@@ -55,7 +55,7 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # the same line, arm-module-bases' UTC), and a guest-local stick file 42 s OLDER than its bind was
 # read as three hours newer. Every host stamp is now `date -u` and each campaign log declares its
 # zone first; the suite's negatives are frozen fixtures, so they cannot rot when the fix is committed.
-FLOOR=${OFFLINE_SUITES_FLOOR:-73}
+FLOOR=${OFFLINE_SUITES_FLOOR:-74}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"
