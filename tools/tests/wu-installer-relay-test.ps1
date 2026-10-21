@@ -74,8 +74,15 @@ Check 'extract: the region reads the port owner, waits and decides (Get-RelayPor
 
 # --- shipped: the compile is gated, the by-name kill is gone -------------------------------------------------
 $codeLines = @($lines | Where-Object { $_ -notmatch '^\s*#' } | ForEach-Object { ($_ -split '\s#')[0] })
-Check 'shipped: no by-name Get-Process and no Stop-Process is left in the installer''s code lines' `
-      (@($codeLines | Where-Object { $_ -match 'Get-Process(?!\s+-Id\b)' -or $_ -match 'Stop-Process|taskkill' }).Count -eq 0)
+# THE PROPERTY IS "NOTHING IS STOPPED BY NAME", NOT "the word Stop-Process never appears". The old
+# predicate banned the word outright, which was a proxy: it passed for the whole period the deploy
+# could not replace its own relay at all, and it would have blocked the fix that lets it. A stop
+# whose target is a PID THIS CODE READ FROM THE PORT is the sanctioned shape; a stop whose target is
+# a NAME is the 2026-10-03 defect, because a pattern matches the matcher.
+Check 'shipped: nothing is looked up or stopped BY NAME - any Stop-Process must name -Id' `
+      (@($codeLines | Where-Object { $_ -match 'Get-Process(?!\s+-Id\b)' -or $_ -match 'Stop-Process(?!\s+-Id\b)' -or $_ -match 'taskkill' }).Count -eq 0)
+Check 'shipped: and the only stop there is targets the pid read from the port' `
+      (@($codeLines | Where-Object { $_ -match 'Stop-Process\s+-Id\s+\$relayOwner\b' }).Count -eq 1)
 Check 'shipped: the silent-keep branch is gone - a kept exe REFUSES through GUARD:vouchexe' `
       (@($codeLines | Where-Object { $_ -match '\$skipRelayCompile' }).Count -eq 0 -and @($lines | Where-Object { $_ -match '^\s*throw \$msg\s+#\s*GUARD:vouchexe\s*$' }).Count -eq 1)
 
@@ -174,6 +181,35 @@ Check 'unknown (exe): an unreadable port table is not "free" - the deploy REFUSE
 Reset-World 0 -1 $false 'error'
 $script:Thrown = ''; try { . $regionFile } catch { $script:Thrown = "$($_.Exception.Message)" }
 Check 'unknown (no exe): the deploy refuses with the reason' ($script:Thrown -like 'cannot read who listens on 127.0.0.1:8082*No previous relay exe exists*' -and (Test-NothingKilled))
+
+# --- 6. ORPHAN AT OUR OWN PATH: the squatter IS this deploy's relay, so it is ended and replaced ----
+# THE DEFECT THIS KEEPS OUT, measured on win11de-tup 2026-10-21: a relay had squatted 8082 SINCE
+# SEPTEMBER, holding the port AND the exe open, so every deploy refused and the stale binary was
+# never replaced - self-perpetuating, and every Windows Update pass on that template dead since.
+# The stale binary predates --parent-pid, so the current launcher's `--parent-pid <PID>` became its
+# LISTEN PORT: the campaign's relay logs show listen 127.0.0.1:1384/:2312/:5572/:6588/:8228, every
+# one a pid, and not one line carrying the parent= field only the fixed binary writes.
+# Owner: "how upgrade process can DELIBERATELY refuse to land the updated component?"
+# Jev on the fork: stop_the_identified_orphan 0.81, refusing_forever 0.21, rename_around 0.16.
+Reset-World 4711 41 $true
+# the squatter's path IS the exe this deploy owns - that equality is the whole gate
+$script:exe = 'C:\Program Files\Qubes Tools\bin\qubes-updates-relay.exe'
+$script:Thrown = ''; try { . $regionFile } catch { $script:Thrown = "$($_.Exception.Message)" }
+Check 'orphan: a listener whose path IS our own relay exe is ENDED, not refused - the deploy proceeds to compile' `
+      ($script:Thrown -eq '')
+Check 'orphan: it was ended BY PID, never by name' `
+      ((Count-Calls 'Stop-Process 4711') -eq 0 -and (Count-Calls 'Get-Process -Id 4711') -ge 1 -and `
+       @($script:Calls | Where-Object { $_ -like 'Get-Process *' -and $_ -notlike 'Get-Process -Id *' }).Count -eq 0)
+Check 'orphan: the log names the pid, the path and the reason' `
+      (@($script:Logs | Where-Object { $_ -like '*is OUR OWN relay exe (pid 4711 at *) and no pass is running - ending that pid*' }).Count -eq 1)
+Check 'orphan: and it records that the port came free before compiling' `
+      (@($script:Logs | Where-Object { $_ -like 'port 127.0.0.1:8082 freed after * ms - continuing to compile*' }).Count -eq 1)
+
+# --- 7. A STRANGER ON 8082 IS STILL REFUSED, which is what keeps leg 6 from being a licence to kill -
+Reset-World 4712 -1 $true
+$script:Thrown = ''; try { . $regionFile } catch { $script:Thrown = "$($_.Exception.Message)" }
+Check 'stranger: a listener that is NOT our exe is still refused, nothing ended, the exe kept' `
+      ($script:Thrown -like 'QWTRELAYBUSY: pid 4712*cannot vouch for that exe*' -and (Test-NothingKilled))
 
 Write-Host ("--- {0} checks, {1} failed" -f $script:run, $script:fail)
 if ($script:fail) { exit 1 }

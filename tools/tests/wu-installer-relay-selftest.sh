@@ -47,7 +47,17 @@ leg(){ # $1 knob, $2 target check (literal prefix), $3 allowed-failures regex
 }
 # knob 1 kills by name on EVERY run (as the installer did), so every scenario's "nothing killed" check fails with it; knob 2 drops the
 # wait, so the survivor's lookup count collapses too
-leg 1 'survivor: a listener still on 8082 after the bound is NOT killed: compile skipped, previous exe kept' '^FAIL (survivor|survivor-noexe|unknown|exits-on-own: nothing was killed|free:)'
+# THE ORPHAN LEGS ARE INSIDE KNOB 1'S BLAST RADIUS, and that is correct rather than a nuisance:
+# knob 1 restores the by-name kill and bypasses the whole branch, so the code that ends OUR OWN
+# squatting relay and lets the deploy replace it is gone with it. A knob that removes the branch
+# must fail every check that depends on the branch; listing them here is what keeps "and only
+# within its cases" meaningful instead of being widened to anything that happens to break.
+# THE TARGET STRING IS THE CHECK'S CURRENT WORDING, and it had rotted: it still named
+# "compile skipped, previous exe kept" from before GUARD:vouchexe reworded that check to "the
+# previous exe is KEPT, and the deploy REFUSES rather than vouch for it". With no match the leg
+# reported target-failed=0 and could never pass - and nothing noticed, because this suite needs
+# pwsh and is therefore outside tools/tests/offline-suites.txt, where nothing runs it on a schedule.
+leg 1 'survivor: a listener still on 8082 after the bound is NOT killed, the previous exe is KEPT' '^FAIL (survivor|survivor-noexe|unknown|exits-on-own: nothing was killed|free:|orphan:|stranger:)'
 leg 2 'exits-on-own: the installer waits for 8082' '^FAIL (exits-on-own|survivor: the wait ran)'
 
 say "--- outputs in $OUT"

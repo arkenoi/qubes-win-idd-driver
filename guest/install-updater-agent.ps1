@@ -412,9 +412,48 @@ if ($relayOwner -ne 0) {   # GUARD:relaynokill
     $reason = 'cannot read who listens on 127.0.0.1:8082 (Get-NetTCPConnection failed), so a running relay cannot be ruled out'
     if ($relayOwner -gt 0) {
         $who = 'unknown'
-        try { $op = Get-Process -Id $relayOwner -ErrorAction SilentlyContinue; if ($op) { $who = $op.ProcessName; try { $who += ' at ' + $op.Path } catch { } } } catch { }
+        $ownerPath = $null
+        try { $op = Get-Process -Id $relayOwner -ErrorAction SilentlyContinue; if ($op) { $who = $op.ProcessName; try { $who += ' at ' + $op.Path; $ownerPath = $op.Path } catch { } } } catch { }
+        # ---- RELAY-ORPHAN-STOP-BEGIN  (driven by tools/tests/wu-installer-relay-test.ps1)
+        # AN UPGRADE THAT CANNOT REPLACE ITS OWN COMPONENT IS STUCK, NOT SAFE. Until now this refused
+        # whenever anything still held 8082 and a previous exe existed. That condition is
+        # SELF-PERPETUATING: the stale relay holds the port AND holds the exe open, so the deploy
+        # refuses; because it refuses, the stale relay is never replaced. On win11de-tup a relay has
+        # squatted 8082 SINCE SEPTEMBER and every Windows Update pass on that template has failed
+        # since, each deploy refusing into a log nobody read. Owner, 2026-10-21: "how upgrade process
+        # can DELIBERATELY refuse to land the updated component?"
+        # THIS IS NOT STOPPING BY NAME, which is what the standing rule forbids because a pattern
+        # matches the matcher. The pid comes from the PORT (Get-NetTCPConnection -LocalPort 8082) and
+        # is acted on ONLY when its executable path is THIS deploy's own relay exe. Anything else
+        # holding 8082 is not ours and still refuses, below, unchanged.
+        # AND IT CANNOT BE A LIVE PASS'S RELAY: this deploy holds the updater mutex, so no pass is
+        # running, and a pass's relay exits by its own --parent-pid watchdog within ~5 s. A listener
+        # still here after the 20 s wait, with the mutex held, is an orphan by construction.
+        # Jev on this fork: stop_the_identified_orphan 0.81, refusing_forever 0.21, rename_around 0.16.
+        if ($ownerPath -and $exe -and ($ownerPath -ieq $exe)) {
+            Log ("the listener on 127.0.0.1:8082 is OUR OWN relay exe (pid {0} at {1}) and no pass is running - ending that pid so this deploy can replace it" -f $relayOwner, $ownerPath)
+            # BY ID, NEVER BY NAME. -Name would match every process called qubes-updates-relay,
+            # whoever started it, which is the 2026-10-03 defect this file's own suite exists to
+            # keep out (Test-NothingKilled counts any by-name lookup as a failure).
+            try { Stop-Process -Id $relayOwner -Force -ErrorAction Stop } catch { Log ("could not end pid {0}: {1}" -f $relayOwner, $_.Exception.Message) }
+            $stopWaits = 0
+            while ((Get-RelayPortOwner) -ne 0 -and $stopWaits -lt 40) { Start-Sleep -Milliseconds 500; $stopWaits++ }   # GUARD:orphanstop
+            $relayOwner = Get-RelayPortOwner
+            if ($relayOwner -eq 0) {
+                Log ("port 127.0.0.1:8082 freed after {0} ms - continuing to compile and replace the relay" -f ($stopWaits * 500))
+            } else {
+                Log ("the orphan was ended but 127.0.0.1:8082 is STILL held (owner now {0}) - refusing below rather than compiling over an unknown state" -f $relayOwner)
+            }
+        }
+        # ---- RELAY-ORPHAN-STOP-END
         $reason = "QWTRELAYBUSY: pid $relayOwner ($who) is still listening on 127.0.0.1:8082 after 20 s while this deploy holds the updater mutex - it is not a running pass's relay (that exits with its pass) and it is NOT killed (nothing is killed by name, ADR-updater 12.4)"
     }
+}
+# THE REFUSAL IS A SEPARATE DECISION FROM THE WAIT, and it has to re-read the state. When the orphan
+# branch above ends our own squatter and the port comes free, $relayOwner is 0 - but that assignment
+# cannot re-open the `if` that was already entered, so the refusal below ran anyway and the deploy
+# threw over a port that was now free. Caught by the suite's own orphan leg on its first run.
+if ($relayOwner -ne 0) {
     if (Test-Path -LiteralPath $exe) {
         # A DEPLOY MUST NOT REPORT A RELAY IT CANNOT VOUCH FOR, and until today that principle was
         # applied only when NO exe existed - so the one case that actually happens went through
