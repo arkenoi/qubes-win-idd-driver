@@ -2016,14 +2016,19 @@ if [ "$(field "$T/t53.json" "[f['boot'] for f in r['files'] if 'network-setup' i
   ok "T53b a file with two boots and two pids publishes neither as its one value"
 else bad "T53b the file still claims one boot/pid for a file that spans two" "$(tail -2 "$T/t53.out")"; fi
 
-# (c) SEEN TO FAIL - the timestamp lookup. GUARD:lineboot restores `boot_for(l.ts)`, which compares a
-# guest timestamp against the boot table on guests whose clock is known to jump by HOURS (the agent's
-# own log jumps 055237 -> 025240 inside one file). On the real capture it collapsed network-setup's
-# two boots into one.
-K=$(knob lineboot); rc=$(analyze "$K" "$T/turnover" "$T/baseline.json" "$T/jev-expected.py" t53c)
-if [ "$(_ns t53c)" != "[1, 2]" ]; then
-  ok "T53c SEEN TO FAIL: the timestamp lookup loses the turnover (network-setup=$(_ns t53c))"
-else bad "T53c the lineboot knob changed nothing - the guard is decoration" "network-setup=$(_ns t53c)"; fi
+# (c) RETIRED 2026-10-21 - the premise is no longer reachable. This drove GUARD:lineboot by
+# requiring that the timestamp lookup loses the turnover. It stopped firing because TWO LATER FIXES
+# to boot_for prevent the collapse independently: the forward allowance became derived
+# (min(BOOT_TOL_S=45, half the gap to the next boot)) where it had been a flat 150 s, so the first
+# init can no longer reach the next boot across this fixture's 69 s gap; and the phase correction
+# tries both clock phases and prefers the boot a line FOLLOWS. Three shapes were built and none made
+# the defect bite: a late init inside the forward allowance (the dist<0 tie-break saves it), a 3 h
+# phase shift in either direction (the correction handles it), and a line with no timestamp (which
+# IS misattributed, but the file's init records carry stamps so its boots set still holds both).
+# Jev: premise_subsumed_by_later_fixes 0.64, retiring_it_loses_no_coverage 0.71.
+# THE DEBT IS REAL AND RECORDED, not papered over: GUARD:lineboot now has NO leg that drives it, so
+# replacing line_boot with the timestamp lookup would not be caught here. findings/issues.md carries
+# that as LINEBOOTUNDRIVEN. T53a still asserts the property positively against the same fixture.
 
 # (d) SEEN TO FAIL - pid reuse. GUARD:pidts drops the `c["ts"] <= l.ts` condition from the pid match,
 # so the FIRST init carrying a pid wins. Windows reuses pids and this capture really does log pid
