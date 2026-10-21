@@ -87,6 +87,29 @@ out=$(timeout -k 10 120 bash "$T/gate-nodetect.sh" "$T/empty.log" 2>&1); rc=$?
               || no "the regressed gate did not go back to CLEAN (rc=$rc)" "the check cannot be driven"
 
 
+# ---- THE SYNTHETIC-INPUT DECLARATION MUST NOT EXIST IN PRODUCTION -------------------------------
+# _SG_CORPUS_LINE means "this input is synthetic classifier material, not a guest capture". The gate
+# sets it on ITSELF for the one-line re-invocation inside --verify, and sweep-gate-selftest.sh sets
+# it because every fixture there is a hand-made line. If any harness ever set it, the proof-of-life
+# refusals would be off for a real campaign and the gate would be back to grading captures it cannot
+# read. The requirement is ON by default precisely so a caller that forgets fails CLOSED.
+setters=$(command grep -rln '_SG_CORPUS_LINE' --include='*.sh' --include='*.py' --include='*.ps1' . 2>/dev/null \
+          | command grep -av '^./scratchpad' \
+          | command grep -avE '^\./(tools/sweep-gate\.sh|tools/tests/sweep-gate-selftest\.sh|tools/tests/sweep-life-selftest\.sh)$' || true)
+if [ -z "$setters" ]; then
+  ok "no production file sets _SG_CORPUS_LINE - the declaration is confined to the gate and its suites"
+else
+  no "a production file sets _SG_CORPUS_LINE" "$(printf '%s' "$setters" | tr '\n' ' ') - the proof-of-life refusals would be off for a real campaign"
+fi
+# and it must really be what suppresses them, not something incidental
+: > "$T/declared.log"
+out=$(_SG_CORPUS_LINE=1 timeout -k 10 120 bash tools/sweep-gate.sh "$T/declared.log" 2>&1); rc=$?
+if [ "$rc" != 2 ]; then ok "with the declaration set, an empty input is no longer refused (rc=$rc)"
+else no "the declaration did not suppress the refusal" "$(printf '%s' "$out" | head -1)"; fi
+out=$(timeout -k 10 120 bash tools/sweep-gate.sh "$T/declared.log" 2>&1); rc=$?
+[ "$rc" = 2 ] && ok "and WITHOUT it the same input is still INCONCLUSIVE - the default is to refuse" \
+              || no "the undeclared case stopped being refused (rc=$rc)" "$(printf '%s' "$out" | head -1)"
+
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

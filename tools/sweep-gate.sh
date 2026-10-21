@@ -569,7 +569,14 @@ if [ "$VERIFY" = 1 ]; then
         # SIGPIPEs the producer, and the PIPELINE returns 141 - never grep's status. That made this
         # very check report recall 0/13 including lines it does in fact catch. Documented
         # 2026-08-31, hit again 2026-10-14 on a live guest, and again here. Capture, then match.
-        out=$(SWEEP_GATE_LEDGER="$el" "$0" "$tl" 2>/dev/null)
+        # _SG_CORPUS_LINE: this re-invocation grades ONE SYNTHETIC LINE to test the classifier,
+        # not a capture from a guest, so the proof-of-life predicates below must not apply to
+        # it. Without this they did: a winutils-shaped corpus line with no module birth line
+        # returned INCONCLUSIVE, whose output carries no "UNACCOUNTED", so three MUST lines
+        # read as MISSED and recall fell 21/21 -> 18/21. Measured by the offline estate going
+        # red the same evening. It is set by this script ON ITSELF and by nothing else -
+        # sweep-life-selftest.sh asserts no other file sets it.
+        out=$(_SG_CORPUS_LINE=1 SWEEP_GATE_LEDGER="$el" "$0" "$tl" 2>/dev/null)
         case "$out" in *"  UNACCOUNTED"*) surfaced=1 ;; *) surfaced=0 ;; esac
         if [ "$verdict" = MUST ]; then
             nmust=$((nmust+1))
@@ -771,6 +778,7 @@ _sg_life() { # $@=files -> "<non_empty_sources> <winutils_lines> <birth_lines> <
 # the range closed on the comment and removed two lines. A marker must not appear in prose.
 # SG-LIFE-BEGIN
 read -r _sg_src _sg_wl _sg_bl _sg_bad < <(_sg_life "$@")
+[ "${_SG_CORPUS_LINE:-0}" = 1 ] && { _sg_src=1; _sg_wl=0; _sg_bl=0; _sg_bad=0; }
 if [ "${_sg_src:-0}" = 0 ]; then
     echo "SWEEP-GATE-RESULT INCONCLUSIVE sources=0 - nothing was swept, so this gate has no verdict to give"
     echo "  $# path(s) were named and none of them is a readable non-empty file. A clean run has logs."

@@ -9,6 +9,17 @@
 #   T7  the corpus must still match what the emitters EMIT. Rewording a harness message without
 #       re-running the regenerator would leave the gate measured against text nothing prints.
 set -uo pipefail
+
+# THIS SUITE FEEDS SYNTHETIC LINES, NOT CAPTURES. tools/sweep-gate.sh refuses an input it cannot
+# grade - nothing swept, nothing readable, or windows-utils lines with no module birth line - because
+# it returned CLEAN over an empty log file and over a mojibake capture (2026-10-21). Every fixture
+# here is a hand-made line written to exercise the CLASSIFIER, so it has no module birth line by
+# construction, and without this declaration 16 legs read INCONCLUSIVE instead of their verdict.
+# Same variable and same meaning as the gate's own --verify self-invocation: "this input is
+# synthetic classifier material, not a guest capture". It is NOT a bypass for production - the
+# requirement stays ON by default, so a caller that forgets to declare fails CLOSED, and
+# tools/tests/sweep-life-selftest.sh asserts no production file sets it.
+export _SG_CORPUS_LINE=1
 cd "$(git rev-parse --show-toplevel)" || exit 2
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 pass=0; fail=0

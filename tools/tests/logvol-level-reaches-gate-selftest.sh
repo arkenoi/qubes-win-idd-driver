@@ -11,6 +11,13 @@
 # So this walks the whole chain on real tools: library writes -> call site captures into a .out ->
 # the campaign's file glob picks it up -> sweep-gate detects it.
 set -uo pipefail
+# SYNTHETIC INPUT, DECLARED. This suite writes hand-made log lines to prove the library's declared
+# ERROR/WARN levels reach tools/sweep-gate.sh. The gate now refuses an input it cannot grade -
+# windows-utils lines with no module birth line among them - so two legs read 0 detections instead
+# of 1 until the input is declared for what it is. Same variable and meaning as the gate's own
+# --verify self-invocation; the requirement stays ON by default so a real caller that forgets fails
+# closed, and tools/tests/sweep-life-selftest.sh asserts no production file sets it.
+export _SG_CORPUS_LINE=1
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 2
 
 T=$(mktemp -d "${TMPDIR:-/tmp}/logvol-level-reaches-gate.XXXXXX") || exit 2
