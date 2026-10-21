@@ -139,6 +139,17 @@ write("base.pull", stream([(WD, "watchdog", watchdog()), (AG, "agent", agent())]
 # the agent is gone 773 ms later with 0x20514702 = QGA_EXIT_REQUESTED (agent/include/
 # qga-exitcodes.h:22). The grader demanded 0x0 and breached on the product naming its own reason.
 write("reqstop.pull", stream([(WD, "watchdog", watchdog(stop_exit="0x20514702")), (AG, "agent", agent())], events()))
+# stalelvl: base + a WARNING line whose text T59's baseline declares at INFO. That is the real
+# shape of the A6LEAK failure: fc94490 lowered that line to Info, so the current product emits it at
+# I - but the log directory the sweep reads carries a PREDECESSOR build's lines too (the bind copies
+# the old directory across), and those are still at W. The key is family|LEVEL|text, so the
+# declaration matched nothing and the old build's line was judged fresh: 0.51, one hundredth over
+# the defect floor, failing all three cells of campaign 20261018-010748.
+# IT HAS TO BE THIS WAY ROUND: log-sweep.py:2662 excludes INFO from signatures entirely - "a line
+# the writer declared INFO is, by the writer's own statement, not a failure" - so a declaration at W
+# with the line emitted at I cannot be driven, because that line never becomes a signature.
+stale_mid = [wu("100605.000", 200, "W", "T59Stale", "did a thing by design")]
+write("stalelvl.pull", stream([(WD, "watchdog", watchdog()), (AG, "agent", agent(mid=stale_mid))], events()))
 # newsig: base + an ERROR line that is in no baseline
 new_mid = [wu("100600.000", 200, "E", "FixtureNovelty", "a brand new failure 0x1234 that nobody has seen before")]
 write("newsig.pull", stream([(WD, "watchdog", watchdog()), (AG, "agent", agent(mid=new_mid))], events()))
@@ -701,7 +712,7 @@ analyze(){ # $1=analyzer $2=logsdir $3=baseline $4=judge $5=tag -> rc; report at
 field(){ python3 -c "import json,sys; r=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$1" "$2"; }
 
 # ---- decode every fixture with the real decoder --------------------------------------------------------------------
-for f in base newsig rise three stoperr empty twoboot clockflip rapidboot taskok vchanwd phaseflip skipnames skipchatty bootshut inv twoproc msiok msibad twobuild pidreuse fastreboot reqstop svcrestart turnover nulhole; do
+for f in base newsig stalelvl rise three stoperr empty twoboot clockflip rapidboot taskok vchanwd phaseflip skipnames skipchatty bootshut inv twoproc msiok msibad twobuild pidreuse fastreboot reqstop svcrestart turnover nulhole; do
   rc=$(decode "$SRC" "$T/$f.pull" "$T/$f")
   [ "$rc" = 0 ] || { echo "FATAL: the $f fixture did not decode (rc=$rc): $(tail -2 "$T/$f.decode.txt")"; exit 2; }
   # EVERY LINE IN THESE CORPORA IS WRITTEN BY THIS TEST, so the run declares the errors it caused - which is
@@ -2140,6 +2151,57 @@ if [ "$_n58d" = 1 ] && python3 -m py_compile "$PREV" >/dev/null 2>&1; then
     bad "T58 the reversed analyzer gave the right answer too (instances=$p58i per_boot=$p58p) - the reversal no longer reaches the defect" "sed changed $_n58d line(s)"
   fi
 else bad "T58 could not build the pre-fix variant - the sed changed $_n58d line(s), want 1" "the fix's line may have been reworded; re-pin the sed"; fi
+
+# T59 A DECLARATION ORPHANED BY A LEVEL CHANGE IS NOT A NEW SIGNATURE.
+# Signature keys are family|LEVEL|text. fc94490 (2026-10-10) deliberately lowered the A6LEAK
+# by-design line from Warning to Info, with Jev over that site at defect 0.03 - and the baseline's
+# two entries for it were keyed at W. They stopped matching, the line arrived as NEW, it was
+# re-judged per campaign at 0.51 (one hundredth over the defect floor) and failed all three cells of
+# campaign 20261018-010748. It then sat in the register for three days as a decision the owner owed.
+# The fixture: a baseline that declares a line at W, and a log that emits the same text at I.
+_t59txt='T59Stale: did a thing by design'
+python3 - "$T/baseline.json" "$T/t59-baseline.json" "$_t59txt" <<'T59PY'
+import json,sys
+b=json.load(open(sys.argv[1]))
+b.setdefault("signatures",{})["agent|I|%s" % sys.argv[3]] = {
+    "status":"expected","reason":"declared at I, the level the product emits now; a predecessor build's copy of this line is still at W in the swept directory","max_per_boot":1,
+    "family":"agent","level":"I"}
+json.dump(b,open(sys.argv[2],"w"),indent=1)
+T59PY
+rc=$(analyze "$SRC" "$T/stalelvl" "$T/t59-baseline.json" "$T/jev-expected.py" t59)
+_t59n=$(field "$T/t59.json" "len(r.get('stale_level') or [])")
+if [ "${_t59n:-0}" -ge 1 ]; then
+  ok "T59 a line declared at I and emitted at W is reported as a STALE DECLARATION (n=$_t59n)"
+else
+  bad "T59 the orphaned declaration was not reported (n=$_t59n, rc=$rc)" "it would be judged as a new signature, which is how one unchanged line failed three cells"
+fi
+_t59d=$(field "$T/t59.json" "[ (d['seen_level'],d['declared_level'],d['declared_status']) for d in (r.get('stale_level') or []) ]")
+case "$_t59d" in *"'W'"*"'I'"*) ok "T59 and it names BOTH levels and the declared status ($_t59d)" ;;
+  *) bad "T59 the report does not name both levels: $_t59d" ;; esac
+if grep -qa 'STALE DECLARATIONS' "$T/t59.txt"; then
+  ok "T59 the summary says so where a human reads it, before the NEW SIGNATURES list"
+else
+  bad "T59 the summary does not mention it" "the finding would die with the process that found it"
+fi
+# SEEN TO FAIL: with the detector's loop removed, the same run reports nothing.
+_t59k="$T/t59-nodetect.py"
+python3 - "$SRC" "$_t59k" <<'T59PY'
+import re,sys
+s=open(sys.argv[1]).read()
+n=s.count("    for _s in new:\n")
+s=s.replace("    for _s in new:\n", "    for _s in []:\n", 1)
+open(sys.argv[2],"w").write(s)
+print(n)
+T59PY
+if grep -qa 'for _s in \[\]:' "$_t59k"; then
+  rc=$(analyze "$_t59k" "$T/stalelvl" "$T/t59-baseline.json" "$T/jev-expected.py" t59k)
+  _k=$(field "$T/t59k.json" "len(r.get('stale_level') or [])")
+  [ "${_k:-0}" = 0 ] \
+    && ok "T59 SEEN TO FAIL: with the detector's loop emptied the orphan is invisible again (n=$_k)" \
+    || bad "T59 the emptied detector still reported $_k" "the leg does not measure the detector"
+else
+  bad "T59 could not build the no-detector variant" "the substitution did not apply"
+fi
 
 echo "--- $pass passed, $fail failed; fixtures/outputs in $T"
 [ "$fail" = 0 ] && exit 0 || exit 1

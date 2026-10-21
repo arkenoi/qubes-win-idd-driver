@@ -2774,8 +2774,37 @@ def compare(sigs, baseline, metrics):
         if v > t["max"]:
             breaches.append({"metric": name, "value": v, "max": t["max"], "severity": t.get("severity", "P2"), "why": t.get("why", "")})
     breaches.sort(key=lambda b: (SEVERITY_ORDER.get(b["severity"], 9), b["metric"]))
+    # A DECLARATION ORPHANED BY A DELIBERATE LEVEL CHANGE, WHICH IS HOW THIS GATE BLEW UP.
+    # Signature keys are family|LEVEL|text. On 2026-10-10 fc94490 lowered the A6LEAK by-design line
+    # from Warning to Info on purpose, with Jev over that site at defect 0.03 - and the two baseline
+    # entries declaring it were keyed at W, so they stopped matching, the line arrived as NEW, and it
+    # was re-judged per campaign. It came back 0.51, one hundredth over JEV_DEFECT_FLOOR, and failed
+    # all three cells of campaign 20261018-010748. Nobody re-derived the baseline when the level
+    # moved, and nothing here could see that a declaration had been orphaned.
+    # SO IT IS DETECTED BY NAME: a line that arrives as new while a declaration exists for the SAME
+    # family and the SAME normalized text at a DIFFERENT level is not a new line - it is a stale
+    # declaration. It does not change this run's verdict (the right declaration is a pattern, which
+    # is level-agnostic by construction); it is reported so the baseline gets refreshed instead of
+    # the line being argued about for three days.
+    stale_level = []
+    _bsigs = baseline.get("signatures") or {}
+    _by_family_text = {}
+    for _bk in _bsigs:
+        _p = _bk.split("|", 2)
+        if len(_p) == 3:
+            _by_family_text.setdefault((_p[0], _p[2]), []).append(_bk)
+    for _s in new:
+        _p = (_s.get("key") or "").split("|", 2)
+        if len(_p) != 3:
+            continue
+        for _bk in _by_family_text.get((_p[0], _p[2]), []):
+            if _bk != _s["key"]:
+                stale_level.append({"seen": _s["key"], "seen_level": _p[1],
+                                    "declared": _bk, "declared_level": _bk.split("|", 2)[1],
+                                    "declared_status": (_bsigs.get(_bk) or {}).get("status"),
+                                    "count": _s.get("count")})
     return {"new": new, "rose": rose, "known": known, "unsettled": unsettled, "expected": expected, "out_of_context": out_of_context,
-            "prior_build": prior_build, "breaches": breaches, "thresholds": thr}
+            "prior_build": prior_build, "breaches": breaches, "thresholds": thr, "stale_level": stale_level}
 
 
 # ----------------------------------------------------------------------------------------------- Jev
@@ -3088,6 +3117,18 @@ def write_summary(rep, path):
         for s in ooc:
             j = s.get("jev")
             L.append("  %s %-10s x%-4d (unexcused %d) %s  Jev: %s" % (s["level"], s["family"], s["count"], s["count_nonfi"], s["key"][:120], "%s %.2f" % (j["choice"], j["confidence"]) if j else "not judged"))
+    # BEFORE THE NEW SIGNATURES, because some of them are not new. A line whose text is declared at
+    # a different level is an orphaned declaration, and reading it as a fresh signature is how one
+    # unchanged log line failed three cells of a campaign and then sat in the register for three
+    # days as a decision the owner owed (SWEEPGATEVERDICTUNSTABLE).
+    _sl = rep.get("stale_level") or []
+    if _sl:
+        L.append("STALE DECLARATIONS (%d) - declared at one level, emitted at another, so the declaration" % len(_sl))
+        L.append("  matched nothing and the line below was judged as if it were new. REFRESH THE BASELINE:")
+        for d in _sl:
+            L.append("  seen %s x%s  declared %s as '%s'" % (d.get("seen_level"), d.get("count"),
+                                                             d.get("declared_level"), d.get("declared_status")))
+            L.append("    %s" % (d.get("seen") or "")[:150])
     new = rep["new"]
     jc = Counter((s.get("jev") or {}).get("choice", "unjudged") for s in new)
     L.append("NEW SIGNATURES (%d; Jev: %s):" % (len(new), ", ".join("%s %d" % kv for kv in sorted(jc.items())) or "-"))
@@ -3372,6 +3413,9 @@ def cmd_analyze(a):
         "metrics": metrics, "thresholds": {k: v for k, v in cmp["thresholds"].items() if isinstance(v, dict)},
         "breaches": cmp["breaches"], "judged_defects": judged_defects,
         "judged_sub_floor": judged_sub_floor, "loud_failures": [list(x) for x in _loud],
+        # STALE DECLARATIONS TRAVEL WITH THE REPORT, or the finding dies with the process that found
+        # it - the whole point is that the baseline gets refreshed rather than re-argued.
+        "stale_level": cmp.get("stale_level") or [],
         "new": [sig_json(s) for s in cmp["new"]], "rose": [sig_json(s) for s in cmp["rose"]],
         "known_defects_present": [sig_json(s, False) for s in cmp["known"]], "unsettled_present": [sig_json(s, False) for s in cmp["unsettled"]],
         "prior_build": [sig_json(s, False) for s in cmp["prior_build"]],

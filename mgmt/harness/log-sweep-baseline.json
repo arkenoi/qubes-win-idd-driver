@@ -6,7 +6,7 @@
   "report.json",
   "report.json"
  ],
- "note": "normalized SIGNATURE patterns + a reason each; never captured log content. status: expected | benign | known-defect | unsettled. max_per_boot is the rise ceiling (rise = > max(ceiling*rise_factor, ceiling+rise_min_delta)). Newly-seen signatures whose Jev verdict was below the 0.5 floor are deliberately NOT recorded here: they must keep surfacing as new until a human judges them, or the refresh would turn unjudged lines into silent ones.",
+ "note": "normalized SIGNATURE patterns + a reason each; never captured log content. status: expected | benign | known-defect | unsettled. max_per_boot is the rise ceiling (rise = > max(ceiling*rise_factor, ceiling+rise_min_delta)). Newly-seen signatures whose Jev verdict was below the 0.5 floor are deliberately NOT recorded here: they must keep surfacing as new until a human judges them, or the refresh would turn unjudged lines into silent ones. | 2026-10-21: the two A6LEAK signature entries were REPLACED by one level-agnostic pattern. They were keyed at level W while the product has emitted Info since fc94490 (2026-10-10), and one of them carried a wording that exists nowhere in the source - so both matched nothing and the line was judged fresh every campaign.",
  "thresholds": {
   "agent_unrequested_deaths": {
    "max": 0,
@@ -182,6 +182,13 @@
   "rise_min_delta": 3
  },
  "patterns": [
+  {
+   "regex": "^agent\\|[IWE]\\|WatchForEvents: A6LEAK (daemon still alive and mapping, skipping all revokes|exit by design.*skipping all revokes)",
+   "status": "expected",
+   "issue": "a6leak-by-design",
+   "reason": "The designed outcome when the daemon still holds the mapping: revoking under it is the xenbus revoke-vs-unmap race this path exists to avoid (FINDINGS 2026-08-05 cont 9). Jev over the SITE, recorded in agent/gui-agent/main.c: noise 0.68, expected 0.16, defect 0.03. DECLARED AS A PATTERN, LEVEL-AGNOSTIC, ON PURPOSE: signature keys are family|LEVEL|text, so when fc94490 (2026-10-10) deliberately lowered this line to Info, the two level-W entries that had declared it stopped matching and the line was re-judged per campaign - 0.51, one hundredth over JEV_DEFECT_FLOOR, failing all three cells of campaign 20261018-010748 (SWEEPGATEVERDICTUNSTABLE). The level of this line is a recorded decision that has moved once and may move again; the declaration must not move with it.",
+   "max_per_boot": 1
+  },
   {
    "regex": "^watchdog\\|E\\|WatchdogThread: Process 'gui-agent\\.exe' \\(PID N\\) exited with code 0xH without this service asking it to",
    "status": "known-defect",
@@ -388,26 +395,6 @@
    "max_per_boot": 1,
    "family": "agent",
    "level": "W"
-  },
-  "agent|W|WatchForEvents: A6LEAK daemon still alive and mapping, skipping all revokes": {
-   "status": "known-defect",
-   "reason": "Jev: defect 0.51 on the corpus - unfiled; confirm and file or downgrade",
-   "max_per_boot": 1,
-   "family": "agent",
-   "level": "W",
-   "issue": "SWEEPGATEUNINVESTIGATED",
-   "jev": {
-    "choice": "defect",
-    "confidence": 0.51
-   }
-  },
-  "agent|W|WatchForEvents: A6LEAK exit by design: daemon still alive and mapping - skipping all revokes (xenbus revoke-vs-unmap race; see FINDINGS NNN cont N)": {
-   "status": "expected",
-   "reason": "Jev: expected 0.91 on the corpus",
-   "max_per_boot": 1,
-   "family": "agent",
-   "level": "W",
-   "issue": "SWEEPGATEUNINVESTIGATED"
   },
   "binddirs|None|[*] End time: TS": {
    "status": "expected",
