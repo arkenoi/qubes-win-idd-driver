@@ -658,6 +658,64 @@ else
     ok "copy: the bind uses robocopy with no /COPY: override, so the default DAT preserves timestamps"
 fi
 
+# 3g. THE FRESHNESS ANCHOR IS A PID, NOT A CLOCK - and this is the leg that would have saved a
+#     campaign. The first version compared each file's LastWriteTime against
+#     Win32_OperatingSystem.LastBootUpTime. THIS RIG CORRECTS THE GUEST CLOCK BY 10800 s ON EVERY
+#     BOOT after the first (timezone=localtime, the guest reads a dom0-local RTC as UTC and the
+#     puller corrects it), so files written before the correction read as older than their own boot
+#     and agentfresh came back 0 over a volume holding 260 fresh lines. That false 0 aborted the
+#     release campaign of 2026-10-21 in cell 1, and the collected evidence settled it: the volume's
+#     gui-agent log carried pid 3904 with LifecycleStart at 21:34:19 - a NEW process in the graded
+#     boot - while the install boot's agent was 3976.
+#     The block is EXTRACTED FROM THE SHIPPED FILE and executed under pwsh, with Get-Process
+#     shadowed so the leg is about the predicate and not about this qube's process table.
+PWX=${PWSH:-/home/user/.local/pwsh/pwsh}; [ -x "$PWX" ] || PWX=$(command -v pwsh || true)
+if [ -z "$PWX" ]; then
+    bad "fresh: no pwsh - the freshness predicate was not driven" "missing data fails"
+else
+    fresh_probe() { # $1=extra ps prelude (for the control) -> "agentlogs=N agentfresh=M agentopen=K"
+        local FT; FT=$(mktemp -d); mkdir -p "$FT/logs"
+        # one log written by a LIVE pid, one by a pid that is gone - the shape on the volume
+        printf '[20261021.213419.426-3904:3908-I] LifecycleStart: QGALIFECYCLE up\n[20261021.213700.000-3904:3908-I] WinMain: still here\n' > "$FT/logs/gui-agent-20261021.log"
+        printf '[20261021.212925.363-3976:3980-I] LifecycleStart: QGALIFECYCLE up\n[20261021.213209.836-3976:3980-I] WinMain: QGAEXIT\n' > "$FT/logs/gui-watchdog-20261021.log"
+        local blk; blk=$(awk '/# LVFRESH-A/,/# LVFRESH-B/' "$ROOT/mgmt/harness/logvol-lib.sh")
+        { printf '%s\n' "\$dir = '$FT/logs'"
+          printf '%s\n' '$agent = @(Get-ChildItem -LiteralPath $dir -File | Where-Object { $_.Name -match "(?i)^(gui-agent|gui-watchdog|qrexec-agent|qubesdb)" })'
+          printf '%s\n' 'function Get-Process { param([string]$Name) @([pscustomobject]@{ Name="gui-agent"; Id=3904 }) }'
+          printf '%s\n' "${1:-}"
+          printf '%s\n' "$blk"
+          printf '%s\n' 'Write-Output ("agentlogs=" + $agent.Count + " agentfresh=" + $fresh.Count + " agentopen=" + $open)'
+        } > "$FT/drive.ps1"
+        "$PWX" -NoProfile -File "$FT/drive.ps1" 2>/dev/null | tail -1
+        rm -rf "$FT"
+    }
+    out=$(fresh_probe)
+    case "$out" in
+      *"agentfresh=1"*) ok "fresh: the log whose tail carries a RUNNING pid counts; the dead pid's does not ($out)" ;;
+      *) bad "fresh: the pid anchor did not identify the live writer" "$out" ;;
+    esac
+
+    # SEEN TO FAIL, PROPERLY: run the OLD clock predicate over the SAME fixture. Its files were
+    # just written, so their mtimes are now; the boot stamp is now+3h, which is what this rig's
+    # 10800 s correction produces. The pid predicate says 1 on this fixture, the clock one says 0 -
+    # the same files, the same instant, two anchors.
+    # An earlier version of this leg asserted only that (Get-Date) < (Get-Date).AddHours(3), which
+    # is arithmetic and would have passed with the predicate deleted.
+    FT2=$(mktemp -d); mkdir -p "$FT2/logs"
+    printf '[20261021.213419.426-3904:3908-I] LifecycleStart: QGALIFECYCLE up\n' > "$FT2/logs/gui-agent-20261021.log"
+    clockout=$("$PWX" -NoProfile -Command "
+        \$agent = @(Get-ChildItem -LiteralPath '$FT2/logs' -File)
+        \$boot  = (Get-Date).AddHours(3)
+        \$fresh = @(\$agent | Where-Object { \$_.LastWriteTime -ge \$boot })
+        Write-Output ('clockfresh=' + \$fresh.Count + ' of ' + \$agent.Count)" 2>/dev/null)
+    rm -rf "$FT2"
+    case "$clockout" in
+      "clockfresh=0 of 1")
+        ok "fresh: SEEN TO FAIL - the clock anchor reads a just-written log as stale against a boot stamp 3 h ahead ($clockout)" ;;
+      *) bad "fresh: the clock control did not reproduce the false stale ($clockout)" "then this leg does not measure the anchor" ;;
+    esac
+fi
+
 # 4. THE WIRING, because a predicate nobody calls is decoration - and the PRE-GRADING site is the
 #    only correct one: at bind time zero agent logs is expected, a bind applies at the next start.
 if sed -n '/pregrade/p' "$ROOT/mgmt/harness/matrix.sh" | grep -q 'require-agent-logs'; then

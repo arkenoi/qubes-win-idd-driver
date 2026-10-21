@@ -527,13 +527,50 @@ try {
   # Timestamps, so a log written on an earlier boot arrives with its original LastWriteTime. That
   # default is load-bearing for this gate - tools/tests/logvol-lib-selftest.sh asserts the bind
   # never passes a /COPY: that drops T.
-  $boot = (Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue).LastBootUpTime
-  if (-not $boot) { $boot = [datetime]::MinValue }
-  $fresh = @($agent | Where-Object { $_.LastWriteTime -ge $boot })
+  # LVFRESH-A  (to the B marker: extracted and executed under pwsh by
+  # tools/tests/logvol-lib-selftest.sh; neither marker names the other)
+  # ANCHOR ON THE PID, NEVER ON A CLOCK. The first version of this compared each file's
+  # LastWriteTime against Win32_OperatingSystem.LastBootUpTime - two readings of a guest clock that
+  # THIS RIG CORRECTS BY 10800 SECONDS on every boot after the first (timezone=localtime, the guest
+  # reads a dom0-local RTC as UTC and the puller corrects it; logvol-lib's own header records
+  # clock_boot_correction_s = 10800). Files written before the correction carry pre-correction
+  # stamps while the recomputed boot time sits three hours later, so EVERY file reads as older than
+  # its own boot and agentfresh came back 0 on a volume that held 260 fresh lines.
+  # MEASURED 2026-10-21, the hard way: that false 0 aborted a release campaign in cell 1. The
+  # collected evidence settled it - the volume's gui-agent log carried pid 3904 with LifecycleStart
+  # at 21:34:19, a NEW process in the graded boot, while the install boot's agent was pid 3976.
+  # The standing rule names this exactly: anchor freshness on the pid the process wrote plus an open
+  # handle, never on a clock. The comment that replaced this said a host/guest skew could not enter
+  # because both reads were inside the guest; the skew is INSIDE the guest, across the correction.
+  # SO: a log is FRESH when its own tail carries a pid that is RUNNING NOW. No clock is consulted.
+  # THE BOUND: a pid could in principle be reused by another agent-family process across a boot.
+  # It must be reused by one of THESE names and appear in THIS file's tail, which is far narrower
+  # than a three-hour clock jump that fires every time.
+  $live = @{}
+  foreach ($pr in (Get-Process -ErrorAction SilentlyContinue)) {
+    if ($pr.Name -match '(?i)^(gui-agent|gui-watchdog|qrexec-agent|qubesdb)') { $live[[int]$pr.Id] = $true }
+  }
+  # FileShare.ReadWrite because the writers hold their logs open - the collector reads them the same
+  # way; Get-Content would throw on a locked file and make every file look stale.
+  $fresh = @($agent | Where-Object {
+    $hit = $false
+    try {
+      $fs = [IO.File]::Open($_.FullName, 'Open', 'Read', 'ReadWrite')
+      try {
+        if ($fs.Length -gt 8192) { [void]$fs.Seek(-8192, 'End') }
+        $sr = New-Object IO.StreamReader($fs)
+        foreach ($ln in $sr.ReadToEnd() -split "`n") {
+          if ($ln -match '-(\d+):\d+-[IWEDV]\]' -and $live[[int]$Matches[1]]) { $hit = $true; break }
+        }
+      } finally { $fs.Close() }
+    } catch { }
+    $hit
+  })
   $open = 0
   foreach ($f in $fresh) {
     try { $h = [IO.File]::Open($f.FullName, 'Open', 'Read', 'None'); $h.Close() } catch { $open++ }
   }
+  # LVFRESH-B
   Write-Output ("LOGVOL-PROOF-GUEST ok dir=" + $dir + " agentlogs=" + $agent.Count +
                 " agentfresh=" + $fresh.Count + " agentopen=" + $open + " file=" + $p)
 } catch { Write-Output ("LOGVOL-PROOF-GUEST fail reason=write_failed dir=" + $dir); exit 1 }
