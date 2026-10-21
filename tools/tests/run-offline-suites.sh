@@ -61,7 +61,11 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # probe, so the probe could not fail. The suite runs the shipped script dry and requires an empty
 # passed line, and its T10 drives the pre-fix definition through the same assertion and requires
 # it to go red.
-FLOOR=${OFFLINE_SUITES_FLOOR:-75}
+# 75 -> 76 on 2026-10-21: sweep-life-selftest.sh ADDED. tools/sweep-gate.sh returned a CLEAN
+# verdict over an empty log file AND over a capture that failed to decode - it had no predicate
+# asserting it had been handed anything gradeable. The suite drives all three refusals and a
+# seen-to-fail leg that deletes the predicate and requires the empty capture to read CLEAN again.
+FLOOR=${OFFLINE_SUITES_FLOOR:-76}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"

@@ -123,3 +123,4 @@ shutdown-reask-selftest.sh
 specimen-not-a-leftover-selftest.sh
 collector-logdir-default-selftest.sh
 gate-remainder-dry-selftest.sh
+sweep-life-selftest.sh

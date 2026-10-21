@@ -724,6 +724,75 @@ LD=$(mktemp); grep -vE '^\s*(#|$)' "$LEDGER" > "$LD" || true
 #   <count> <message>   # <why this is not a defect>
 # and a row with no `#` note is treated as UNACCOUNTED, so a message cannot be silenced by pasting
 # it into the ledger - somebody has to write down what it means.
+# ---- PROOF OF LIFE: THIS GATE MUST NOT GRADE WHAT IT WAS NOT GIVEN -----------------------------
+# MEASURED 2026-10-21: an empty log file produced
+#     SWEEP-GATE-RESULT unaccounted=0 risen=0 accounted=0 caused=0 stale_declarations=0   exit 0
+# - a CLEAN verdict over nothing. The classification half of this gate is closed and finite (13
+# registered emitters, 36 classified corpus lines, an unregistered line exits 1); what was missing
+# is any assertion that it was handed a capture at all. That one hole is the ancestor of the sweep
+# reading CLEAN over a capture with no agent log, of the collector not searching the product's own
+# default directory, and of the appvm cells being graded while logging nowhere - each patched
+# somewhere else, none of them here.
+#
+# A WINDOWS-UTILS MODULE DECLARES ITSELF WHEN IT STARTS, and that declaration is the proof. Birth
+# lines per campaign capture, measured over the last three: 2484, then 327, then ZERO. The zero is
+# yesterday's campaign, which graded a capture that could not have held an agent record. Either
+# spelling counts: QWTBIRTH (one line per module at INFO, patches/windows-utils-single-birth-line)
+# or the legacy "Log started, module name:" banner, which is proof whenever the level was raised.
+#
+# The predicate is NOT a knob. An input with windows-utils lines and no birth line is unjudgeable,
+# and INCONCLUSIVE (exit 2) is what the callers already treat as instrument-fail rather than a
+# product verdict.
+_sg_life() { # $@=files -> "<non_empty_sources> <winutils_lines> <birth_lines> <unreadable_sources>"
+    # UNPARSEABLE INPUT CAN NEVER BE CLEAN, and leaving that out let the hole back in through the
+    # back door: a guest log that failed to decode - mojibake from a wrong-endian conversion, which
+    # this project hit for real - matches no windows-utils prefix, so a content-only test concluded
+    # "not our logs", skipped the proof-of-life requirement and returned CLEAN over a capture nobody
+    # could read. Measured on a file named gui-agent-mojibake.log: exit 0, unaccounted=0.
+    # So a non-empty source that yields NEITHER a windows-utils line NOR a harness line is counted
+    # unreadable, and an unreadable source is INCONCLUSIVE.
+    local f t src=0 wl=0 bl=0 bad=0 n w h
+    for f in "$@"; do
+        [ -f "$f" ] && [ -s "$f" ] || continue
+        src=$((src+1))
+        t=$(_text "$f")
+        w=$(printf '%s' "$t" | command grep -acE '\[[0-9]{8}\.[0-9]{6}\.[0-9]{3}-[0-9]+(:[0-9]+)?-[IWEDV]\]' || true)
+        wl=$((wl + ${w:-0}))
+        n=$(printf '%s' "$t" | command grep -acE 'QWTBIRTH module=|Log started, module name:' || true); bl=$((bl + ${n:-0}))
+        # the harness's own shape: a bracketed clock, or a declared level anywhere on the line
+        h=$(printf '%s' "$t" | command grep -acE '^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\]|\[(INFO|WARN|ERROR|FATAL)\]' || true)
+        [ "${w:-0}" = 0 ] && [ "${h:-0}" = 0 ] && bad=$((bad+1))
+    done
+    printf '%s %s %s %s' "$src" "$wl" "$bl" "$bad"
+}
+# The seen-to-fail leg of tools/tests/sweep-life-selftest.sh deletes the block between the two
+# markers below to prove that this predicate is what refuses an ungradeable capture. A line-count
+# range broke the moment the block grew, and the first marker comment NAMED the closing marker, so
+# the range closed on the comment and removed two lines. A marker must not appear in prose.
+# SG-LIFE-BEGIN
+read -r _sg_src _sg_wl _sg_bl _sg_bad < <(_sg_life "$@")
+if [ "${_sg_src:-0}" = 0 ]; then
+    echo "SWEEP-GATE-RESULT INCONCLUSIVE sources=0 - nothing was swept, so this gate has no verdict to give"
+    echo "  $# path(s) were named and none of them is a readable non-empty file. A clean run has logs."
+    exit 2
+fi
+if [ "${_sg_bad:-0}" -gt 0 ]; then
+    echo "SWEEP-GATE-RESULT INCONCLUSIVE sources=$_sg_src unreadable=$_sg_bad"
+    echo "  $_sg_bad non-empty source(s) carried no recognisable log line at all - neither a"
+    echo "  windows-utils record nor a harness line. A capture nobody can read cannot be clean:"
+    echo "  check the collector's decode (a wrong-endian UTF-16 conversion produces exactly this)."
+    exit 2
+fi
+if [ "${_sg_wl:-0}" -gt 0 ] && [ "${_sg_bl:-0}" = 0 ]; then
+    echo "SWEEP-GATE-RESULT INCONCLUSIVE sources=$_sg_src winutils_lines=$_sg_wl birth_lines=0"
+    echo "  Windows-utils logs are present but NO module declared itself: no QWTBIRTH line and no"
+    echo "  'Log started, module name:' banner. A capture with no module birth cannot hold that"
+    echo "  module's errors either, so silence here means nothing. Raise LogLevel for this cell, or"
+    echo "  ship a package carrying patches/windows-utils-single-birth-line.patch."
+    exit 2
+fi
+# SG-LIFE-END
+
 newn=0; rose=0; acc=0
 ACCLIST=$(mktemp)
 while IFS= read -r row; do
