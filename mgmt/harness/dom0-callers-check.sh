@@ -196,11 +196,43 @@ ents=$(v entries); unp=$(v unparsed); dup=$(v duplabels); noname=$(v noname)
 
 # A menu of two entries is the shape of the amputation the owner caught ("you silently dropped most
 # of the apps and tell me that it is fine?"): 37 is what a clean Windows reports.
+#
+# THE FLOOR OF 10 IS A BACKSTOP, NOT THE PREDICATE, and on its own it was the whole check - so a
+# menu amputated to anywhere from 10 to 36 entries read as "aligned" (harness audit, 2026-10-21).
+# Raising the floor to 37 would only swap one invented number for another: a guest's menu depends on
+# what is installed on it.
+# THE REAL PREDICATE NEEDS NO NUMBER. Every cell of one OS family in a campaign is a clone of the
+# SAME sealed golden, so their menus must agree. A disagreement between two cells of one family is
+# either an amputation or a guest that is not the golden, and both are worth stopping for. The count
+# is recorded per family under $CALLERS_COUNT_DIR (the campaign's matrix dir), and the first cell of
+# a family records while the rest compare.
+# DOM0-CALLERS-COUNT-A  (the block to the B marker is extracted and driven by
+# tools/tests/dom0-callers-count-selftest.sh; neither marker names the other)
 if [ "$ents" -ge 10 ]; then
   good "$ents entries parse as dom0 parses them"
 else
   bad "only $ents entries - a clean Windows reports ~37; this is the amputation shape"
 fi
+_cc_dir="${CALLERS_COUNT_DIR:-}"
+_cc_fam="${CALLERS_FAMILY:-}"
+if [ -n "$_cc_dir" ] && [ -n "$_cc_fam" ] && [ -d "$_cc_dir" ]; then
+  _cc_f="$_cc_dir/callers-entries-$_cc_fam.txt"
+  if [ -s "$_cc_f" ]; then
+    _cc_prev=$(head -1 "$_cc_f" | cut -d' ' -f1)
+    _cc_who=$(head -1 "$_cc_f" | cut -d' ' -f2-)
+    if [ "$_cc_prev" = "$ents" ]; then
+      good "the menu agrees with the other $_cc_fam cell(s): $ents entries, same as $_cc_who"
+    else
+      bad "the menu DISAGREES across $_cc_fam cells: $ents here, $_cc_prev in $_cc_who. These cells are clones of one sealed golden, so their menus cannot legitimately differ - either entries were dropped or this subject is not that golden."
+    fi
+  else
+    printf '%s %s\n' "$ents" "${CALLERS_CELL:-this cell}" > "$_cc_f"
+    good "recorded $ents entries as the $_cc_fam baseline for this campaign ($_cc_f)"
+  fi
+else
+  good "no campaign count dir given - the cross-cell menu comparison did not run (floor only)"
+fi
+# DOM0-CALLERS-COUNT-B
 
 if [ "$unp" -eq 0 ]; then
   good "every line matched - nothing is silently dropped by receive.py"

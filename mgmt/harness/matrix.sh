@@ -1135,7 +1135,11 @@ grade_dom0_callers(){ # $1=vm $2=label - the goal's SECOND clause, measured wher
   fi
   # THE START-MENU CALLER: receive.py ignores what it cannot parse IN SILENCE, so the stream is
   # asserted line by line rather than sampled.
-  if ./mgmt/harness/dom0-callers-check.sh "$vm" say >>"$M/$lbl-callers.out" 2>&1; then
+  # THE CROSS-CELL MENU COMPARISON NEEDS THE CAMPAIGN'S OWN DIRECTORY AND THE OS FAMILY. Every
+  # cell of one family is a clone of the same sealed golden, so the first cell records its entry
+  # count and the rest must agree; a floor of 10 on its own passed a menu amputated to a third.
+  if CALLERS_COUNT_DIR="$M" CALLERS_FAMILY="$(case "$lbl" in win10*|WIN10*) echo win10 ;; win11*|WIN11*) echo win11 ;; *) echo other ;; esac)" \
+     CALLERS_CELL="$lbl" ./mgmt/harness/dom0-callers-check.sh "$vm" say >>"$M/$lbl-callers.out" 2>&1; then
     ok "$lbl: start-menu caller aligned (dom0 can parse every line it is sent)"
   else
     no "$lbl: the start-menu caller is NOT aligned - see $M/$lbl-callers.out"
