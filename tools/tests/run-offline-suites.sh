@@ -84,7 +84,11 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # 80 -> 81 on 2026-10-21: accept-cancel-selftest.sh ADDED. ACCEPTCANCELORPHAN root-caused:
 # release-acceptance.sh never sourced run-lib.sh and never called job_init, so a SIGTERM to the
 # leader exited the driver and left matrix.sh holding the rig - three cancels did exactly that.
-FLOOR=${OFFLINE_SUITES_FLOOR:-81}
+# 81 -> 82 on 2026-10-21: seal-halted-selftest.sh ADDED. seal-qwt-golden.sh was the only consumer
+# of qwt_shutdown that trusted its exit code without re-reading the state, so a guest still
+# Running after a successful-looking shutdown would have been SEALED - freezing whatever it was
+# doing into every clone taken from that golden.
+FLOOR=${OFFLINE_SUITES_FLOOR:-82}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"

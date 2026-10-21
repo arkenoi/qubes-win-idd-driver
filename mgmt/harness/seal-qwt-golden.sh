@@ -53,7 +53,23 @@ st=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$GOLD" 
 # NEVER kill here: whatever state a kill leaves behind gets SEALED into the golden and is
 # then inherited by every clone made from it. A golden that will not stop cleanly is a
 # finding, not a thing to seal.
+# SEAL-HALTED-A  (to the B marker: extracted and driven by tools/tests/seal-halted-selftest.sh;
+# neither marker names the other)
 [ "$st" = Halted ] || qwt_shutdown "$GOLD" 1800 || { echo "FAIL: $GOLD did not shut down cleanly in 1800s - refusing to seal a golden from a killed guest"; exit 1; }
+# AND THE STATE IS RE-READ, because rc 0 from qwt_shutdown is a report, not the state. Found by the
+# descending audit 2026-10-21: this was the only consumer of qwt_shutdown that trusted its exit code
+# without an independent Halted re-check, which matrix.sh never does (it re-reads at four sites).
+# Sealing a RUNNING guest is the worst possible version of this defect: whatever that guest's live
+# state happens to be gets frozen into the golden and inherited by every clone made from it, and the
+# comment three lines up says exactly that about a killed guest.
+_st2=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$GOLD" '$1==v{print $2}')
+if [ "$_st2" != Halted ]; then
+  echo "FAIL: $GOLD reports state '${_st2:-unreadable}' AFTER a shutdown that returned success -"
+  echo "      refusing to seal. A golden sealed while running freezes whatever it was doing into"
+  echo "      every clone taken from it. This is a finding about the guest, not a thing to retry."
+  exit 1
+fi
+# SEAL-HALTED-B
 
 # SEAL it as a proper golden (mgmt/goldens/<vm>.json) - prime-run REQUIRES `golden.sh verify` to
 # pass on its base, a fixture record is not enough.
