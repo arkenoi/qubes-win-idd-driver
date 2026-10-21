@@ -2,6 +2,8 @@
 
 ## CURRENT STATE
 
+**THE AUDIT'S blocks-acceptance TIER IS CLOSED, 2026-10-21.** Nine findings: FIVE real and fixed with a driven test (release-acceptance.sh had no teardown trap at all, which is ACCEPTCANCELORPHAN and the run-lib finding counted once; prime-run.sh's evidence guard failing open; seal-qwt-golden.sh sealing a guest it never re-checked was Halted; assert-payload.sh passing over 0 verified files; build-answer-stick.sh matching the WORD LabConfig instead of the bypass keys). FOUR do not hold and are dismissed with evidence in scratchpad/harness-audit-report.md: LOGVOL_CACHE is an unconditional assignment, logvol_detach has no production caller and its consequences are covered by claim_sweep_stale and matrix.sh's targeted qemu-args edit, latch_ok's nics:1 is correct because the verification boot polls for the documented re-arm, and the collect-failure suite's missing timeout applies only to a direct developer run and would contradict the no-timeouts rule. Four more were fixed from the falsifies-a-verdict tier the same day: accept-clean's unverified WU disable, the clean sweep over an unproven log path, ctl_stop's outcomes all exiting 0, dom0-callers' floor of 10, and e2e-wait's two. NINE fixes, FOUR dismissals, suite floor 74 -> 83.
+
 **THE 5-PHASE RELEASE PLAN AND WHERE IT STANDS, 2026-10-21 EVENING.** Written down here because it
 was carried only in a session goal, which is not a record: a plan nobody can read is a plan nobody
 can check.
