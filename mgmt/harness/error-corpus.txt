@@ -39,7 +39,8 @@ BENIGN	HARNESSGAPWITNESS	  qrexec-gap witness (log VOLUME, host-side, guest unto
 MUST	HARNESSLOGUNSWEPT	  [ERROR] t+135s no qrexec for 135s - and the log volume could not be read either (no volume attached, or mtools found nothing): THAT is the gap, not the silence | cpu=0 quiet=1
 MUST	DOM0SENDSPARKHANG	  [WARN] DOM0SENDSUNREAD win11de-fix: no record of what dom0 was told on this boot (rc=124)
 MUST	CELLFAILSUMMARY	[ERROR] summary: 3 passed, 2 failed, rc=124; evidence in /home/user/qwt-quick-upgrade/win11de-fix-1
-MUST	LOGVOLBINDWARN	  win11-up: [WARN] log-volume bind failed (see /home/user/m/win11-up-logvol-bind.out) - logs stay on C: and a wedge loses them
+MUST	LOGVOLBINDWARN	[ERROR] FATAL: win11-up: log-volume bind FAILED (see /home/user/m/win11-up-logvol-bind.out)
+MUST	WITNESSNOVERDICT	  win11-acc-b2: [WARN] render witness produced no verdict - see its evidence dir
 MUST	SEALEDVERSION	[WARN] mgmt/fixtures/win11de-qwt.json records no sealed_version - ordering unchecked; the entry-version probe below is the only guard
 MUST	VMEXECSHIMUNROUTED	[ERROR] [cat log] rc=1  <-- UNEXPECTED
 MUST	WUFIRSTCONTACTSILENT	[ERROR] [entrypoint] rc=1

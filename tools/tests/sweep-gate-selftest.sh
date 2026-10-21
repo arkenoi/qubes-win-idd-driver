@@ -25,7 +25,11 @@ no(){ fail=$((fail+1)); printf '  FAIL  %s\n     -> %s\n' "$1" "$2"; }
 # the gate does NOT flag it, and the witness line it now carries joined as BENIGN too. So the ground
 # truth GREW, 34 -> 35; one line changed which direction it is asserted in. A MUST floor that only
 # ever goes down on prose is how a gate gets easier, so: down by exactly one, up by two.
-FLOOR_MUST=20; FLOOR_BENIGN=15
+# 20 -> 21 MUST: WITNESSNOVERDICT joined to keep a MUST line whose level sits AFTER a prefix.
+# LOGVOLBINDWARN was the only one of that shape and it moved to position zero when the bind
+# became a hard stop, so without this the only mid-line cases left were the stamped guest lines
+# and a position-anchored gate could have passed. Ground truth grew; the floor follows it up.
+FLOOR_MUST=21; FLOOR_BENIGN=15
 nm=$(grep -ac '^MUST' mgmt/harness/error-corpus.txt || echo 0)
 nb=$(grep -ac '^BENIGN' mgmt/harness/error-corpus.txt || echo 0)
 if [ "${nm:-0}" -ge "$FLOOR_MUST" ] && [ "${nb:-0}" -ge "$FLOOR_BENIGN" ]; then
@@ -38,8 +42,11 @@ if [ $rc -eq 0 ] && printf '%s' "$out" | grep -qa 'recall=\([0-9]*\)/\1 '; then
   ok "T1 every filed defect's own line is surfaced ($(printf '%s' "$out" | grep -ao 'recall=[^ ]*'))"
 else no "T1 corpus recall is not 100%" "$(printf '%s' "$out" | head -3)"; fi
 
-# T2 - THE GATE MUST BE ABLE TO FAIL. Dropping the W class must lose the gui-agent crash loop and
-# the two log-volume warnings, which are W/WARNING lines.
+# T2 - THE GATE MUST BE ABLE TO FAIL. Dropping the W class must lose every MUST line whose level is
+# W/WARNING: six of the twenty, measured - recall falls to 14/20. The log-volume bind failure is no
+# longer among them: it is a FATAL [ERROR] line since the bind became a hard stop, so it stays
+# surfaced when W is dropped. A comment naming lines that have changed class is how a gate's
+# ability to fail gets credited to the wrong lines.
 out=$(SWEEP_GATE_DEFECT=1 bash tools/sweep-gate.sh --verify 2>&1); rc=$?
 if [ $rc -ne 0 ] && printf '%s' "$out" | grep -qa 'MISSED'; then
   ok "T2 a deliberately broken gate loses recall ($(printf '%s' "$out" | grep -ao 'recall=[^ ]*'))"
@@ -79,14 +86,23 @@ else no "T6 ledger entry behaved as a class silencer (rc=$rc rc2=$rc2)" "$out2";
 
 # T7 - DRIFT. The corpus must still be what the emitters emit: reword a harness message without
 # re-running the regenerator and the gate would be measured against text nothing prints any more.
+# --write WRITES THE TRACKED FILE, so this restores it however the check ends. Measured: without
+# the restore the suite left mgmt/harness/error-corpus.txt rewritten by the regenerator, the next
+# run of T0 read that smaller file and failed on "the corpus SHRANK" - a red caused by the suite
+# itself, and a tracked file silently modified in the working tree.
 cp mgmt/harness/error-corpus.txt "$T/corpus-before.txt"
+restore_corpus() { cp -f "$T/corpus-before.txt" mgmt/harness/error-corpus.txt; }
+trap restore_corpus EXIT
 bash tools/regen-error-corpus.sh --write >/dev/null 2>"$T/regen.err"; rgrc=$?
+cp mgmt/harness/error-corpus.txt "$T/corpus-after.txt"
+restore_corpus
+trap - EXIT
 if [ "${rgrc:-1}" -ne 0 ]; then
   no "T7 the regenerator could not rebuild every site" "$(head -2 "$T/regen.err")"
-elif diff -q "$T/corpus-before.txt" mgmt/harness/error-corpus.txt >/dev/null; then
+elif diff -q "$T/corpus-before.txt" "$T/corpus-after.txt" >/dev/null; then
   ok "T7 corpus matches what the emitters actually emit"
 else
-  no "T7 corpus has drifted - tools/regen-error-corpus.sh --write updated it" "$(diff "$T/corpus-before.txt" mgmt/harness/error-corpus.txt | head -4)"
+  no "T7 corpus has drifted - tools/regen-error-corpus.sh --write rebuilds it differently" "$(diff "$T/corpus-before.txt" "$T/corpus-after.txt" | head -4)"
 fi
 
 # T8 - A SEEDED TODO IS NOT A REASON. --write-ledger stamps every row it creates with a TODO note.

@@ -19,7 +19,14 @@ SITES = [
  ("HARNESSLOGUNSWEPT", "mgmt/harness/quick-upgrade.sh", "no qrexec for ${unreach}s - and the log volume"),
  ("DOM0SENDSPARKHANG", "mgmt/harness/quick-upgrade.sh", "DOM0SENDSUNREAD $1: no record of what dom0"),
  ("CELLFAILSUMMARY",   "mgmt/harness/quick-upgrade.sh", "summary: $PASS passed, $FAIL failed"),
- ("LOGVOLBINDWARN",    "mgmt/harness/matrix.sh",        "log-volume bind failed"),
+ ("LOGVOLBINDWARN",    "mgmt/harness/matrix.sh",        "log-volume bind FAILED"),
+ # A LEVEL AFTER A PREFIX, which this corpus must keep covering. LOGVOLBINDWARN used to be the
+ # only MUST line of that shape ("win11-up: [WARN] ..."); it became a FATAL line at position
+ # zero when the bind turned into a hard stop, which left every mid-line case to the stamped
+ # guest lines and would let a position-anchored gate pass. This emitter is live and prefixed.
+ # The log-volume PULL warning would have been the closer match, but its payload interpolates a
+ # command substitution carrying its own quotes and the expander cannot evaluate it.
+ ("WITNESSNOVERDICT",   "mgmt/harness/matrix.sh",       "render witness produced no verdict"),
  ("SEALEDVERSION",     "mgmt/harness/quick-upgrade.sh", "records no sealed_version"),
 ]
 # python emitters: (tag, file, anchor, prelude, expression)
@@ -38,12 +45,32 @@ PYSITES_OK = [
 # values chosen to look like a real run; they are stand-ins for runtime state, not part of the test
 PRELUDE = ('el=135; unreach=135; vm=win11-up; rc=124; PASS=3; FAIL=2; sends_rc=124; cpu=0; quiet=1; '
            'OUT=/home/user/qwt-quick-upgrade/win11de-fix-1; M=/home/user/m; GOLDEN=win11de-qwt; '
-           'lastknown="Install failed 0x80070643"; set -- win11de-fix win11-up; ')
+           'lastknown="Install failed 0x80070643"; c=win11-acc-b2; set -- win11de-fix win11-up; ')
 bad = 0
 for tag, path, anchor in SITES:
-    src = [l for l in open(path, encoding='utf-8') if anchor in l]
+    # A COMMENT IS NOT AN EMITTER. The anchor used to be matched anywhere in the file, so when
+    # matrix.sh's "[WARN] log-volume bind failed" became a FATAL "...bind FAILED", the stale anchor
+    # stopped matching the emitter and matched the two COMMENTS that quote the old wording instead.
+    # The regenerator then expanded a comment into a corpus entry with no level, filed it BENIGN,
+    # and the gate was left asserting that a bind failure must NOT be flagged. Comment lines are
+    # excluded, and a site whose anchor survives only in prose is a MISS, not a corpus entry.
+    def _anchor_is_code(l):
+        # The anchor must sit in CODE, not in a comment - and not only at the start of the line:
+        # a trailing `# ... log-volume bind FAILED` on a live line would pass a startswith() test.
+        # Walk to the anchor and refuse it if an unquoted # opened a comment before it.
+        i = l.index(anchor)
+        sq = dq = False
+        for ch in l[:i]:
+            if ch == "'" and not dq: sq = not sq
+            elif ch == '"' and not sq: dq = not dq
+            elif ch == '#' and not sq and not dq: return False
+        return True
+    all_hits = [l for l in open(path, encoding='utf-8') if anchor in l]
+    src = [l for l in all_hits if _anchor_is_code(l)]
     if not src:
-        print("REGEN-MISS %s: anchor gone from %s" % (tag, path), file=sys.stderr); bad = 1; continue
+        where = " (it survives only in %d comment line(s))" % len(all_hits) if all_hits else ""
+        print("REGEN-MISS %s: no live emitter for the anchor in %s%s" % (tag, path, where),
+              file=sys.stderr); bad = 1; continue
     line = src[0]
     # the payload is the double-quoted argument that CONTAINS the anchor
     m = [q for q in re.findall(r'"((?:[^"\\]|\\.)*)"', line) if anchor.split('$')[0][:24] in q]
