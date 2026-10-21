@@ -20,7 +20,12 @@
 #   pipefail-grepq
 #   stock-ab
 #   vmexec-channel-selftest.sh      needs pwsh: it round-trips the service-argument encoder
-#   wrapper-exit-reason-selftest.sh   no_new_wait: 2 Sleep() calls against 1 before the fix
+#   wrapper-exit-reason-selftest.sh   RESOLVED 2026-10-22 and now LISTED. It was excluded twice over:
+#       its no_new_wait leg counted Sleep() against a revision twenty commits back and was red for
+#       something another mandate added, and its one seen-to-fail leg needed the SUBMODULE's full
+#       git history, which no job here is known to carry. Being excluded is why nothing noticed
+#       either that red or that two of its checks passed on the shipped brace defect. The waits are
+#       now declared by site and the proof is per-check source mutation - no git, no network.
 # A suite is in this file because it was observed to pass, not because it looked portable.
 # AND THEN MEASURED AGAIN, IN THE ENVIRONMENT THAT ACTUALLY RUNS IT. The first version of this list
 # Everything else in tools/tests/ needs a Qubes rig, a loop device, PowerShell, mtools or a
@@ -133,3 +138,5 @@ seal-halted-selftest.sh
 answer-labconfig-selftest.sh
 firstboot-effects-selftest.sh
 offline-rigshim-selftest.sh
+wrapper-exit-reason-selftest.sh
+wrapper-exit-emit-selftest.sh
