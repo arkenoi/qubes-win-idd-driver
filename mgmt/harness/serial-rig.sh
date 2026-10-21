@@ -52,8 +52,42 @@ _sr_running_guests() {
     while read -r name state; do
         [ -n "$name" ] || continue
         [ "$name" = "$self" ] && continue
-        [ "$name" = "win-idd-mgmt" ] && continue
-        qvm-tags "$name" list 2>/dev/null | grep -qx 'win-idd-testbed' || continue
+        # dom0 AND win-idd-mgmt BY NAME, BEFORE ANY TAG LOOKUP. dom0 is always Running, so it
+        # reached the qvm-tags call below on EVERY assert - and there is no policy rule for
+        # admin.vm.tag.List against dom0, so each one was DENIED and written to the owner's dom0
+        # journal. That is the same leak he asked about on 2026-10-21, here in production code
+        # rather than in a suite. These two are the only qubes on this rig that are not ours
+        # (tools/hooks/admin-target-gate.sh states it, and it refuses the command outright), so
+        # skipping them by name costs nothing and asks nothing.
+        case "$name" in dom0|win-idd-mgmt) continue ;; esac
+        # A TAG LOOKUP THAT FAILED IS NOT A GUEST THAT IS NOT OURS. `qvm-tags ... | grep -qx` fed
+        # both outcomes into the same `|| continue`: a readable answer without the tag, and a
+        # lookup that did not answer at all (timeout, transient qubesd error, truncated reply). The
+        # second dropped a RUNNING guest out of the list these asserts are built from, so a
+        # VM-mutating job could proceed while a real guest was up - the exact two-concurrent-guests
+        # failure this file exists to prevent, scored 0.78 as a campaign-stopper by the tier
+        # re-check, 2026-10-21.
+        # Fail CLOSED, which is safe precisely because of the line above: every name that reaches
+        # here is one of ours, so an unreadable tag means "a subject whose tag we could not read",
+        # never "somebody else's qube". It is reported with its reason so the refusal is readable.
+        # A TIMEOUT AND A POLICY DENIAL ARE DIFFERENT ANSWERS, and only one of them is missing data.
+        # `timeout` reports 124 when it had to kill the call: nothing came back, so whether this
+        # guest is a subject is UNKNOWN and the only safe reading is "it might be" - fail closed.
+        # Any other non-zero is the admin client refusing: there is no policy rule for a qube that
+        # is not tagged win-idd-testbed, so a refusal is itself the answer "not a test guest", and
+        # treating it as unknown would block every job whenever any non-rig qube happens to be up.
+        # THE BOUND: a refusal and some other client-side error share a status here. A tagged guest
+        # is readable by policy, so a refusal on one is not a case this can produce - but a future
+        # client that exits 1 for an unrelated reason would be read as "not ours". Jev scored the
+        # blanket fail-closed version 0.63 on exactly that risk.
+        local tags trc
+        tags=$(timeout 20 qvm-tags "$name" list 2>/dev/null); trc=$?
+        if [ "$trc" = 124 ]; then
+            printf '%s(%s,tag-lookup-TIMED-OUT) ' "$name" "$state"
+            continue
+        fi
+        [ "$trc" != 0 ] && continue      # refused: no policy rule, so not a testbed subject
+        printf '%s\n' "$tags" | grep -qx 'win-idd-testbed' || continue
         printf '%s(%s) ' "$name" "$state"
     done < <(printf '%s\n' "$raw" \
              | awk '{ n=$1; s=""
@@ -91,9 +125,15 @@ assert_no_guest() {
 assert_sole_guest() {
     local vm="${1:?assert_sole_guest needs the vm this job owns}"
     local others
-    # Defect knob for tools/tests/serial-rig-selftest.sh ONLY: restores the pre-2026-10-13 state in
-    # which nothing in the script checked, so the self-test can prove this function is what refuses.
-    [ "${SERIAL_RIG_DEFECT:-}" = "1" ] && return 0   # GUARD:serial-rig
+    # THE DEFECT KNOB IS GONE. It was `[ "${SERIAL_RIG_DEFECT:-}" = "1" ] && return 0`, described as
+    # being for the self-test only - and a grep of the whole tree found it referenced NOWHERE but at
+    # its own definition. So the only thing it did was offer an unconditional bypass of the one gate
+    # that stops two concurrent guests: any job that inherited that variable, by export or by stray
+    # shell state, passed this assert whatever was running. Scored 0.67 as a campaign-stopper by the
+    # tier re-check, 2026-10-21.
+    # A NEGATIVE CONTROL DOES NOT NEED A PRODUCTION KNOB. The suite proves this function is what
+    # refuses by removing the assert from a COPY of the file - the same way the rig-shim, shutdown
+    # and firstboot suites do it - which cannot be reached from a real job's environment at all.
     local rc
     others=$(_sr_running_guests "$vm"); rc=$?   # not through a pipe - see assert_no_guest
     others=$(printf '%s' "$others" | tr '\n' ' ')

@@ -244,7 +244,24 @@ sweep_gate_rc(){
     [ -s "$out" ] || return 0
     local res blind un ro own
     res=$(grep -a '^SWEEP-GATE-RESULT' "$out" | tail -1)
-    [ -n "$res" ] || return 0            # the gate did not get far enough to have a verdict
+    # A GATE THAT PRODUCED OUTPUT BUT NO VERDICT DID NOT JUDGE THE RUN, AND THAT IS NOT A CLEAN
+    # SWEEP. This returned 0 - the same value as "ran clean, found nothing" - with the comment "the
+    # gate did not get far enough to have a verdict", and the only production caller
+    # (quick-upgrade.sh:198) reaches this function exclusively from the ELSE branch of
+    # `if bash tools/sweep-gate.sh; then ... else ...`, i.e. ALREADY KNOWING the gate exited
+    # non-zero. So a crash in the gate's python normalisation step, or a kill mid-run, logged "the
+    # only error-shaped lines are this run's own graded verdicts" and left rc untouched: a sweep
+    # that never ran, reported as equivalent to a clean one. Scored 0.75 as a campaign-stopper by
+    # the tier re-check, 2026-10-21, from a tier the audit had put below blocks-acceptance.
+    # Its own code (2), because "the gate did not judge" is a different fact from "the gate judged
+    # and found something" (1) and no caller should have to tell them apart by guessing.
+    # An EMPTY/ABSENT file keeps returning 0 above: that is the gate not having run at all, which
+    # the caller controls and the suite asserts separately (T20d).
+    if [ -z "$res" ]; then
+        echo "sweep_gate_rc: the gate wrote output but never printed SWEEP-GATE-RESULT - it did not" >&2
+        echo "  judge this run. That is missing data, not a clean sweep ($out)." >&2
+        return 2
+    fi
     blind=$(printf '%s\n' "$res" | sed -n 's/.*undeclared_ours=\([0-9][0-9]*\).*/\1/p')
     if [ -n "$blind" ] && [ "$blind" -gt 0 ]; then return 1; fi
     un=$(printf '%s\n' "$res" | sed -n 's/.*unaccounted=\([0-9][0-9]*\).*/\1/p'); un=${un:-0}

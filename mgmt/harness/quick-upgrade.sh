@@ -195,12 +195,19 @@ finish(){ # $1=rc $2=message  - every exit goes through here and says which exit
       # the gate's STRUCTURED line rather than the shape of its messages, treats the blind case -
       # a gate that judged only part of the run - as a finding too, and discounts this harness's own
       # graded verdicts so a failing run is not counted twice.
-      if sweep_gate_rc "$OUT/sweep-gate.out"; then
-        log "sweep-gate: the only error-shaped lines are this run's own graded verdicts"
-      else
-        log "[ERROR] SWEEP-GATE FINDINGS in this run's own log - see $OUT/sweep-gate.out"
-        [ "$rc" = 0 ] && { rc=3; _gate_override=1; }
-      fi
+      # TWO DIFFERENT FACTS, TWO DIFFERENT SENTENCES. rc 2 means the gate never printed a verdict,
+      # so it did not judge this run at all; rc 1 means it judged and found something. Both must
+      # move the cell's rc - the first especially, since it used to read as "clean" - but a reader
+      # who is told "FINDINGS" when the gate actually crashed goes looking for findings that do not
+      # exist.
+      sweep_gate_rc "$OUT/sweep-gate.out"; _sg_rc=$?
+      case "$_sg_rc" in
+        0) log "sweep-gate: the only error-shaped lines are this run's own graded verdicts" ;;
+        2) log "[ERROR] SWEEP-GATE DID NOT JUDGE this run - it exited without a verdict line; see $OUT/sweep-gate.out"
+           [ "$rc" = 0 ] && { rc=3; _gate_override=1; } ;;
+        *) log "[ERROR] SWEEP-GATE FINDINGS in this run's own log - see $OUT/sweep-gate.out"
+           [ "$rc" = 0 ] && { rc=3; _gate_override=1; } ;;
+      esac
     fi
   fi
   # EVERY exit of this harness goes through here, so this one line decides whether a sweep can see

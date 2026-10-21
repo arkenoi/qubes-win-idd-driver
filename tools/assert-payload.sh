@@ -81,11 +81,23 @@ fi
 
 # 4. the installer actually shipped is the one in the repo at that commit (CRLF-normalised: the
 #    packaging step converts line endings, so compare content, not bytes-on-disk).
-if (cd "$REPO" && git cat-file -e "$WANT:packaging/setup/Install-QwtImproved.ps1" 2>/dev/null); then
-	rs=$(cd "$REPO" && git show "$WANT:packaging/setup/Install-QwtImproved.ps1" | tr -d '\r' | sha256sum | cut -d' ' -f1)
-	ps=$(tr -d '\r' < "$DIR/Install-QwtImproved.ps1" | sha256sum | cut -d' ' -f1)
-	[ "$rs" = "$ps" ] || { echo "FAIL: staged Install-QwtImproved.ps1 differs from the repo at ${WANT:0:12}"; exit 1; }
+# A CHECK THAT DID NOT RUN IS NOT A CHECK THAT PASSED. This `if` had no else, and the PASS line
+# below - which says "installer matches repo" in so many words - printed either way. So a WANT_REF
+# resolving to a commit where that path does not exist (an older sha, a tag cut before the file was
+# added, a truncated fetch) skipped the comparison and produced the exact text of a real match,
+# which is all four call sites read: quick-upgrade.sh, matrix.sh twice, and
+# tools/verify-release-package.sh. Scored 0.69 as a campaign-stopper by the tier re-check,
+# 2026-10-21 - from the same file whose zero-files floor was fixed that morning, nine lines away.
+# Missing data fails, as it does in check 1 and check 3 above.
+if ! (cd "$REPO" && git cat-file -e "$WANT:packaging/setup/Install-QwtImproved.ps1" 2>/dev/null); then
+	echo "FAIL: packaging/setup/Install-QwtImproved.ps1 does not exist at ${WANT:0:12} ($WANT_REF),"
+	echo "      so the staged installer could not be compared against the repo. This is the check"
+	echo "      that would catch a hand-edited installer - it cannot be skipped into a PASS."
+	exit 1
 fi
+rs=$(cd "$REPO" && git show "$WANT:packaging/setup/Install-QwtImproved.ps1" | tr -d '\r' | sha256sum | cut -d' ' -f1)
+ps=$(tr -d '\r' < "$DIR/Install-QwtImproved.ps1" | sha256sum | cut -d' ' -f1)
+[ "$rs" = "$ps" ] || { echo "FAIL: staged Install-QwtImproved.ps1 differs from the repo at ${WANT:0:12}"; exit 1; }
 
 echo "PASS: payload verified — $n files, built from ${GOT:0:12} ($WANT_REF), installer matches repo"
 exit 0

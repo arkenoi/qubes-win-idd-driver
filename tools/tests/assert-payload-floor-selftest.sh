@@ -68,6 +68,35 @@ if [ "$rc" != 0 ] && printf '%s' "$out" | command grep -qa 'MISMATCH payload.dat
   ok "a tampered file is still caught by name"
 else no "a tampered payload gave rc=$rc" "$(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; fi
 
+# ---- 4b. A COMMIT WITHOUT THE INSTALLER MUST FAIL, NOT SKIP INTO A PASS ------------------------
+# The installer comparison sat in an `if` with no else and the PASS line printed either way, so a
+# WANT_REF resolving to a commit where packaging/setup/Install-QwtImproved.ps1 does not exist
+# produced the text of a real match. 0.69 campaign-stopper, tier re-check 2026-10-21.
+# THE FIXTURE IS A REAL COMMIT THAT PREDATES THE FILE, found rather than invented - so this leg
+# cannot pass because of a sha that resolves to nothing.
+PRE=$(git log --reverse --format=%H -- packaging/setup/Install-QwtImproved.ps1 | head -1)
+PRE=$(git rev-parse --verify --quiet "$PRE^" 2>/dev/null || true)
+if [ -z "$PRE" ]; then
+  ok "skipped: the installer exists in the repo's first commit, so no such commit exists to test"
+else
+  mkpayload "$T/preinst" full
+  # the manifest must claim that commit, or check 3 fails first and this leg proves nothing
+  printf '{"source":{"driver_repo_commit":"%s"}}\n' "$PRE" > "$T/preinst/MANIFEST.json"
+  : > "$T/preinst/SHA256SUMS.txt"
+  for f in MANIFEST.json Install-QwtImproved.ps1 payload.dat; do
+    printf '%s  %s\n' "$(sha256sum "$T/preinst/$f" | cut -d' ' -f1)" "$f" >> "$T/preinst/SHA256SUMS.txt"
+  done
+  out=$(bash "$A" "$T/preinst" "$PRE" 2>&1); rc=$?
+  if [ "$rc" != 0 ] && printf '%s' "$out" | command grep -qa 'does not exist at'; then
+    ok "a commit predating the installer FAILS, saying the comparison could not be made"
+  else
+    no "a commit without the installer gave rc=$rc" "$(printf '%s' "$out" | tail -2 | tr '\n' ' ')"
+  fi
+  printf '%s' "$out" | command grep -qa 'installer matches repo' \
+    && no "it still claimed the installer matches" "the check never ran" \
+    || ok "and it does not claim the installer matches"
+fi
+
 # ---- 5. SEEN TO FAIL: with the floor removed, the empty manifest passes again --------------------
 # The regressed copy must live INSIDE tools/, because the shipped script resolves the repo from
 # its own directory - run it from $T and it dies with "cannot resolve HEAD", which is the

@@ -440,6 +440,38 @@ else no "T20c a BLIND gate moves the verdict" "the gate reported no undeclared_o
 if sweep_gate_rc "$T/t20-missing.out"; then ok "T20d an absent gate output is not a finding"
 else no "T20d an absent gate output is not a finding" "non-zero on a missing file"; fi
 
+# (d2) A GATE THAT WROTE OUTPUT BUT NO VERDICT DID NOT JUDGE THE RUN. This is the 0.75 campaign-
+#      stopper the tier re-check found on 2026-10-21: sweep_gate_rc returned 0 - the same value as
+#      "ran clean" - and quick-upgrade.sh, which only reaches it after the gate ALREADY exited
+#      non-zero, logged "the only error-shaped lines are this run's own graded verdicts". A sweep
+#      that never ran was reported as equivalent to a clean one. The fixture is the real gate's
+#      output with its verdict line removed, which is what a crash or a kill mid-run leaves behind.
+grep -av '^SWEEP-GATE-RESULT' "$T/t20a.out" > "$T/t20d2.out"
+if grep -qa '^SWEEP-GATE-RESULT' "$T/t20d2.out"; then
+  no "T20d2 fixture has no verdict line" "the sed/grep did not strip it - the leg would prove nothing"
+elif [ ! -s "$T/t20d2.out" ]; then
+  no "T20d2 fixture is non-empty" "an empty file takes the absent-output path instead, which is a different case"
+else
+  sweep_gate_rc "$T/t20d2.out"; _rc=$?
+  [ "$_rc" = 2 ] \
+    && ok "T20d2 output with no verdict line is its own failure (rc=2), not a clean sweep" \
+    || no "T20d2 output with no verdict line gave rc=$_rc" "0 here is the fail-open: a crashed gate read as clean"
+fi
+
+# (d3) AND THE CALLER MUST SAY WHICH ONE HAPPENED. rc 2 is "the gate did not judge", rc 1 is "it
+#      judged and found something"; a reader told FINDINGS when the gate crashed hunts for findings
+#      that do not exist.
+if grep -qa 'SWEEP-GATE DID NOT JUDGE' mgmt/harness/quick-upgrade.sh; then
+  ok "T20d3 the caller reports a gate that did not judge in its own words"
+else
+  no "T20d3 the caller does not distinguish rc=2" "both cases print FINDINGS"
+fi
+if grep -qaE 'sweep_gate_rc "\$OUT/sweep-gate.out"; _sg_rc=\$\?' mgmt/harness/quick-upgrade.sh; then
+  ok "T20d4 and it captures the code instead of branching on if/else alone"
+else
+  no "T20d4 the caller does not capture sweep_gate_rc's code" "rc=2 cannot be distinguished without it"
+fi
+
 # (e) SEEN TO FAIL: the shipped shape printed the findings and left rc alone, so (a) exited 0.
 rc_old=0
 SWEEP_GATE_LEDGER="$T/t20-empty.txt" bash tools/sweep-gate.sh "$T/t20a.log" > "$T/t20e.out" 2>&1 || true
