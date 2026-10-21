@@ -54,10 +54,22 @@ exit 0
 EOF
 chmod +x "$T"/*-selftest.sh
 
+# HERMETIC PATH, BECAUSE THIS SUITE RUNS UNDER THE GUARD IT TESTS. Standalone it passed 19/19; in
+# the estate it failed 2 legs, because the runner puts its shim dir FIRST on PATH before invoking
+# each suite - so inside the estate every one of the 23 rig commands DOES exist, as the outer stub.
+# That broke both controls: the leg asserting the probe command is absent found the outer stub, and
+# control 2 (which removes the inner shim) still resolved the probe to the outer stub and recorded
+# the call. Passing standalone is not passing in the estate.
+# So the controls run against a PATH built from scratch. /usr/bin:/bin carries everything the runner
+# needs (bash, awk, sed, grep, timeout, wc, sort, mktemp) and carries the REAL qvm-* tools, which is
+# what makes control 2's choice of probe load-bearing: qrexec-client is dom0-side and absent there,
+# so removing the shim reaches nothing.
+SAFEPATH=/usr/bin:/bin
 run(){ # <list-contents> [runner-path] -> rc, output in $T/out
   local list="$1" runner="${2:-$R}"
   printf '%s\n' "$list" > "$T/list.txt"
-  env OFFLINE_SUITES_DEPTH=0 OFFLINE_SUITES_LIST="$T/list.txt" OFFLINE_SUITES_DIR="$T" \
+  env -u OFFLINE_RIG_CALLS PATH="$SAFEPATH" \
+      OFFLINE_SUITES_DEPTH=0 OFFLINE_SUITES_LIST="$T/list.txt" OFFLINE_SUITES_DIR="$T" \
       OFFLINE_SUITES_FLOOR=1 TMPDIR_OVERRIDE="$T/tmp" bash "$runner" >"$T/out" 2>&1; echo $?
 }
 
@@ -126,9 +138,14 @@ command grep -qaE '^ok +clean-selftest' "$T/out" \
 # IT USES A COMMAND THAT IS NOT INSTALLED ON THIS QUBE (qrexec-client is dom0-side; checked here,
 # not assumed), because the fixture must not reach a REAL rig tool when the shim is removed - that
 # would fire the exact denied admin call this whole change exists to stop.
-command -v qrexec-client >/dev/null 2>&1 \
-  && no "the control's probe command exists locally" "pick one that does not, or this leg can fire a real call" \
-  || ok "the control's probe command is absent locally, so removing the shim cannot reach the rig"
+# CHECKED UNDER THE SAME PATH THE CONTROL USES, not the ambient one: inside the estate the ambient
+# PATH starts with the outer guard's shim dir, where every rig command exists as a stub, and this
+# leg then failed on a stub rather than on a real tool.
+if env PATH="$SAFEPATH" sh -c 'command -v qrexec-client' >/dev/null 2>&1; then
+  no "the control's probe command exists under the control's PATH" "pick one that does not, or this leg can fire a real call"
+else
+  ok "the control's probe command is absent under the control's PATH, so removing the shim reaches nothing"
+fi
 cat > "$T/absent-selftest.sh" <<'EOF'
 #!/bin/bash
 qrexec-client -d somevm DEVNULL >/dev/null 2>&1
