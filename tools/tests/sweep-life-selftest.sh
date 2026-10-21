@@ -28,6 +28,16 @@ no(){ FAIL=$((FAIL+1)); echo "FAIL $1"; printf '       -> %s\n' "${2:-}"; }
 birth(){ printf '[%s.001-%s:%s-I] LogInit: Log started, module name: %s\n' "$1" "$2" "$(( $2 + 4 ))" "$3"; }
 warnline(){ printf '[%s.002-%s:%s-W] %s\n' "$1" "$2" "$(( $2 + 4 ))" "$3"; }
 
+# A CAPTURE OF ANOTHER PROGRAM'S OUTPUT IS GRADEABLE. Two earlier versions of the unreadable
+# predicate refused it - first per-file "no recognisable line", then whole-input "nothing parsed" -
+# and both were caught by sweep-gate-selftest's T19e and four siblings. This gate's own doctrine is
+# "a capture is not an emitter": msiexec's log, an installer console, the output of a command under
+# test are all legitimate input with no log-shaped lines in them.
+printf 'Microsoft Windows [Version 10.0.19045.2965]\nC:\\>install.cmd /auto\nInstalling...\n' > "$T/capture.log"
+out=$(timeout -k 10 120 bash tools/sweep-gate.sh "$T/capture.log" 2>&1); rc=$?
+if [ "$rc" = 0 ]; then ok "a plain-text capture of another program's output is GRADED, not refused"
+else no "a plain-text capture was refused (rc=$rc)" "$(printf '%s' "$out" | head -2)"; fi
+
 # ---- the gate: every ungradeable input, and every gradeable one ---------------------------------------------------
 : > "$T/empty.log"
 out=$(timeout -k 10 120 bash tools/sweep-gate.sh "$T/empty.log" 2>&1); rc=$?
@@ -95,7 +105,12 @@ out=$(timeout -k 10 120 bash "$T/gate-nodetect.sh" "$T/empty.log" 2>&1); rc=$?
 # read. The requirement is ON by default precisely so a caller that forgets fails CLOSED.
 setters=$(command grep -rln '_SG_CORPUS_LINE' --include='*.sh' --include='*.py' --include='*.ps1' . 2>/dev/null \
           | command grep -av '^./scratchpad' \
-          | command grep -avE '^\./(tools/sweep-gate\.sh|tools/tests/sweep-gate-selftest\.sh|tools/tests/sweep-life-selftest\.sh)$' || true)
+          | command grep -av '^./tools/tests/' \
+          | command grep -av '^./tools/sweep-gate.sh$' || true)
+# THE RULE IS BY LOCATION, not a list of filenames: any suite under tools/tests/ may declare its
+# input synthetic - that is what a classifier fixture is - and nothing outside tools/tests/ may,
+# apart from the gate setting it on itself for --verify. A filename allowlist went stale the moment
+# a third suite needed it.
 if [ -z "$setters" ]; then
   ok "no production file sets _SG_CORPUS_LINE - the declaration is confined to the gate and its suites"
 else
@@ -103,11 +118,24 @@ else
 fi
 # and it must really be what suppresses them, not something incidental
 : > "$T/declared.log"
+# THE EXEMPTION IS THE BIRTH-LINE RULE ONLY. An empty or unreadable input stays refused even when
+# declared synthetic, because a suite that hands the gate nothing has a broken fixture, not a
+# classifier case. Suppressing all three would have been broader than the reason for any.
+out=$(_SG_CORPUS_LINE=1 timeout -k 10 120 bash tools/sweep-gate.sh "$T/empty.log" 2>&1); rc=$?
+if [ "$rc" = 2 ] && printf '%s' "$out" | command grep -qa 'sources=0'; then
+  ok "an EMPTY input is still refused even when declared synthetic"
+else no "the declaration suppressed the empty-input refusal too (rc=$rc)" "$(printf '%s' "$out" | head -1)"; fi
+out=$(_SG_CORPUS_LINE=1 timeout -k 10 120 bash tools/sweep-gate.sh "$T/gui-agent-mojibake.log" 2>&1); rc=$?
+if [ "$rc" = 2 ] && printf '%s' "$out" | command grep -qa 'unreadable=1'; then
+  ok "an UNREADABLE input is still refused even when declared synthetic"
+else no "the declaration suppressed the unreadable refusal too (rc=$rc)" "$(printf '%s' "$out" | head -1)"; fi
+# and the birth-line rule IS what it exempts
+printf '[20261021.101500.001-1234-W] something our code declared\n' > "$T/declared.log"
 out=$(_SG_CORPUS_LINE=1 timeout -k 10 120 bash tools/sweep-gate.sh "$T/declared.log" 2>&1); rc=$?
-if [ "$rc" != 2 ]; then ok "with the declaration set, an empty input is no longer refused (rc=$rc)"
-else no "the declaration did not suppress the refusal" "$(printf '%s' "$out" | head -1)"; fi
+[ "$rc" != 2 ] && ok "a windows-utils line with no birth line IS graded when declared synthetic (rc=$rc)" \
+               || no "the declaration did not exempt the birth-line rule" "$(printf '%s' "$out" | head -1)"
 out=$(timeout -k 10 120 bash tools/sweep-gate.sh "$T/declared.log" 2>&1); rc=$?
-[ "$rc" = 2 ] && ok "and WITHOUT it the same input is still INCONCLUSIVE - the default is to refuse" \
+[ "$rc" = 2 ] && ok "and WITHOUT the declaration the same line is INCONCLUSIVE - the default refuses" \
               || no "the undeclared case stopped being refused (rc=$rc)" "$(printf '%s' "$out" | head -1)"
 
 echo

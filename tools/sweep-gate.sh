@@ -768,9 +768,27 @@ _sg_life() { # $@=files -> "<non_empty_sources> <winutils_lines> <birth_lines> <
         n=$(printf '%s' "$t" | command grep -acE 'QWTBIRTH module=|Log started, module name:' || true); bl=$((bl + ${n:-0}))
         # the harness's own shape: a bracketed clock, or a declared level anywhere on the line
         h=$(printf '%s' "$t" | command grep -acE '^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\]|\[(INFO|WARN|ERROR|FATAL)\]' || true)
-        [ "${w:-0}" = 0 ] && [ "${h:-0}" = 0 ] && bad=$((bad+1))
+        bad=$((bad + ${h:-0}))   # reused below as the HARNESS-line total, not a per-file verdict
     done
-    printf '%s %s %s %s' "$src" "$wl" "$bl" "$bad"
+    # UNREADABLE MEANS THE TEXT DID NOT DECODE, NOT "no log lines in it". Two wrong versions came
+    # before this one. Per-file "no recognisable line" refused a capture in which any single file
+    # carried none; whole-input "nothing parsed" refused a CAPTURE OF ANOTHER PROGRAM'S OUTPUT -
+    # `Microsoft Windows [Version ...]`, `C:\>install.cmd /auto` - which is legitimate input this
+    # gate's own doctrine insists on: "a capture is not an emitter", and holding one to the emitter
+    # rule once took a count from 2142 to 472. Both versions were caught by T19e and four siblings.
+    # The real condition is a DECODE FAILURE: a UTF-16 file read as bytes is mostly NULs, and a
+    # wrong-endian conversion is mostly multibyte garbage, while any real capture - including a
+    # German guest's NT-AUTORITAET lines - is overwhelmingly printable ASCII. So: if under half of
+    # the input's bytes are printable or whitespace, nobody can read it and it cannot be clean.
+    local unreadable=0 printable total
+    printable=0; total=0
+    for f in "$@"; do
+        [ -f "$f" ] && [ -s "$f" ] || continue
+        total=$(( total + $(wc -c < "$f") ))
+        printable=$(( printable + $(tr -dc '[:print:][:space:]' < "$f" 2>/dev/null | wc -c) ))
+    done
+    [ "$total" -gt 0 ] && [ $(( printable * 2 )) -lt "$total" ] && unreadable=1
+    printf '%s %s %s %s' "$src" "$wl" "$bl" "$unreadable"
 }
 # The seen-to-fail leg of tools/tests/sweep-life-selftest.sh deletes the block between the two
 # markers below to prove that this predicate is what refuses an ungradeable capture. A line-count
@@ -778,15 +796,19 @@ _sg_life() { # $@=files -> "<non_empty_sources> <winutils_lines> <birth_lines> <
 # the range closed on the comment and removed two lines. A marker must not appear in prose.
 # SG-LIFE-BEGIN
 read -r _sg_src _sg_wl _sg_bl _sg_bad < <(_sg_life "$@")
-[ "${_SG_CORPUS_LINE:-0}" = 1 ] && { _sg_src=1; _sg_wl=0; _sg_bl=0; _sg_bad=0; }
+# NARROW ON PURPOSE: synthetic classifier input is exempt from the MODULE BIRTH requirement
+# only. A hand-made corpus line has no birth line by construction, but it is still a readable
+# non-empty source - so "nothing was swept" and "nothing readable" stay in force even for the
+# suites. Suppressing all three would have been broader than the reason for suppressing any.
+[ "${_SG_CORPUS_LINE:-0}" = 1 ] && _sg_wl=0
 if [ "${_sg_src:-0}" = 0 ]; then
     echo "SWEEP-GATE-RESULT INCONCLUSIVE sources=0 - nothing was swept, so this gate has no verdict to give"
     echo "  $# path(s) were named and none of them is a readable non-empty file. A clean run has logs."
     exit 2
 fi
 if [ "${_sg_bad:-0}" -gt 0 ]; then
-    echo "SWEEP-GATE-RESULT INCONCLUSIVE sources=$_sg_src unreadable=$_sg_bad"
-    echo "  $_sg_bad non-empty source(s) carried no recognisable log line at all - neither a"
+    echo "SWEEP-GATE-RESULT INCONCLUSIVE sources=$_sg_src unreadable=1 (nothing in the input parsed)"
+    echo "  $_sg_src non-empty source(s) and NOT ONE recognisable log line between them - neither a"
     echo "  windows-utils record nor a harness line. A capture nobody can read cannot be clean:"
     echo "  check the collector's decode (a wrong-endian UTF-16 conversion produces exactly this)."
     exit 2
