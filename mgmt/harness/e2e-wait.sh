@@ -309,7 +309,26 @@ w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
           # deliberately NOT resetting $dark and NOT returning: the signature persists in the log
           # every minute, and the deadline below classifies the outcome.
         elif [ "$dark" -ge 3 ]; then
-          $log "  $lbl: TERMINAL - no usable screen for ${dark} min and NOT burning CPU (cpu=${cpu:-NA}), qvm=$(w_state "$vm")"
+          # THIS ARM IS THE ONE THAT ACTUALLY FIRES, AND IT USED TO LEAVE NO MARKER.
+          #
+          # specimen_mark is called in the DEADLINE branch above, reached at $dl - 420, 600 or 900 s
+          # at every production call site. This arm returns at dark>=3, i.e. about four minutes in,
+          # so the deadline branch is unreachable whenever $dl > 240 and the only specimen_mark call
+          # in this function never ran. That is how the first reliably captured wedge was lost on
+          # 2026-10-20: the guest was classified, nothing recorded it as evidence, and the campaign
+          # recreated it two minutes later.
+          #
+          # The marker is what makes tools/hooks/golden-boot-gate.sh refuse a start of this name, so
+          # writing it here is the difference between a specimen and a guest someone restarts.
+          #
+          # The message also claimed "NOT burning CPU" while testing no cpu term at all - a stale
+          # leftover of the predicate removed in d54b1091 on 2026-10-14 - so it asserted the one
+          # thing it had not checked, over any value including wedge-lib's PEGGED band. It now
+          # states the cpu reading and claims nothing about it.
+          $log "  $lbl: TERMINAL - no usable screen for ${dark} min (cpu=${cpu:-NA}, qvm=$(w_state "$vm")). Guest LEFT AS IT STANDS."
+          if type specimen_mark >/dev/null 2>&1; then
+            specimen_mark "$vm" "$lbl: no usable screen for ${dark} min, kept as evidence" "$dir" >/dev/null || true
+          fi
           return 1
         fi ;;
       *)

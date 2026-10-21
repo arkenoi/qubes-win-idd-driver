@@ -116,3 +116,4 @@ wu-oscillation-verdict-selftest.sh
 probe-anchor-selftest.sh
 sweep-noagent-selftest.sh
 breach-evidence-selftest.sh
+specimen-mark-reachable-selftest.sh
