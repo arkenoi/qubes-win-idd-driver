@@ -16,6 +16,25 @@
 # The run id must be a `release-package` workflow run: that is the only workflow that produces a
 # full installable setup tree. `build` produces an overlay and is NOT a release package.
 . "$(dirname "$0")/../mgmt/harness/shutdown-lib.sh"
+# ACCEPTCANCELORPHAN, root-caused 2026-10-21: this script NEVER sourced run-lib.sh and never called
+# job_init, so it had NO teardown trap at all - while its own comment above asserted that
+# "run-lib.sh already tears down its descendant tree on SIGTERM". A SIGTERM to this leader therefore
+# exited the driver and left matrix.sh running, holding the rig; observed on three separate cancels,
+# the surviving pid read from /proc each time. vmlock.sh's documented contract is to cancel a job by
+# TERMing the leader, which only works if the leader tears down.
+# job_init installs the TERM/INT/HUP/EXIT traps and takes no lock; _rl_teardown kills the descendant
+# tree by explicit pid (never a pattern, never a process-group sweep - both have cost this project a
+# live cell), and vm_unlock is a no-op unless this process is the recorded lock owner.
+# RA-TEARDOWN-A  (to the B marker: extracted and driven by tools/tests/accept-cancel-selftest.sh;
+# neither marker names the other)
+# $0-RELATIVE, not cwd-relative: this block sits ABOVE the `cd` to the repo root, so a bare
+# `source mgmt/harness/run-lib.sh` would resolve against whatever directory the caller happened to
+# be in - the same defect as prime-run.sh's evidence guard, fixed earlier today. A failure to load
+# is fatal: a driver with no teardown is what ACCEPTCANCELORPHAN is.
+. "$(dirname "$0")/../mgmt/harness/run-lib.sh" || {
+  echo "FATAL: cannot load run-lib.sh - without it a cancel leaves the campaign running" >&2; exit 2; }
+job_init "release-acceptance"
+# RA-TEARDOWN-B
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
@@ -100,7 +119,8 @@ die(){ say "FATAL: $*"; exit 1; }
 # REFUSE TO START UNDER A STRAY HARNESS PROCESS. An orphaned prime-run kept driving win10-acc after
 # its parents were killed on 2026-09-10 - restarting the guest under a new run, so state readings
 # fought a process that was believed gone, and the next cell refused with "these are not Halted".
-# run-lib.sh already tears down its descendant tree on SIGTERM; that orphan followed a kill -9, which
+# run-lib.sh tears down its descendant tree on SIGTERM - THIS SCRIPT NOW USES IT (see job_init below;
+# until 2026-10-21 it did not, which is ACCEPTCANCELORPHAN); that orphan followed a kill -9, which
 # skips traps by definition. So this does not paper over a library defect - it stops the CONSEQUENCE,
 # which is a second driver on the rig that nothing else would notice.
 _stray=$(pgrep -af "[m]gmt/harness/(matrix|prime-run|quick-upgrade)\.sh" 2>/dev/null | head -5)

@@ -10,6 +10,7 @@ failed." Status was decided by Jev per entry, not by keyword matching; my own ma
 classified entries whose head said OPEN as closed. Full text is in git history if ever needed.
 
 ## History
+- ACCEPTCANCELORPHAN - a cancel left the campaign running, three times. ROOT CAUSE: tools/release-acceptance.sh never sourced run-lib.sh and never called job_init, so the leader had NO teardown trap, while its own comment claimed run-lib already tore down its tree. Fixed 2026-10-21: run-lib loaded by a $0-relative path (the block is above the cd to the repo root) with a fatal failure-to-load, job_init installs the traps, and tools/tests/accept-cancel-selftest.sh drives the real teardown over a stand-in child - the pre-fix shape is required to orphan its child.
 
 - ACCEPTANCECANNOTPASSWITHUPGRADECELL [gate, tools/log-sweep.py DEFAULT_THRESHOLDS; **STALE - the premise is refuted by measurement**] THE win11-upgrade CELL CANNOT PASS THE LOG SWEEP FOR ANY RELEASE, AND HAS NOT IN [verified 2026-10-18]
 - ACCEPTANCEPASSED4336 [release gate; **PASSED 2026-10-18, campaign 20261018-183821, rc=0**] BOTH CLAUSES OF THE STANDING GOAL ARE MET, AND THE NUMBERS ARE THE RUN'S OWN [verified 2026-10-18]
