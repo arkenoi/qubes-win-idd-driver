@@ -98,6 +98,56 @@ else
   no "negative control could not be built from the shipped file"
 fi
 
+# ---- AN UNREADABLE RIG IS NOT AN ABSENT QUBE AND NOT A CLEAN SHUTDOWN -------------------------
+# Found by the component re-grade, 2026-10-21: both rig reads in this function piped qvm-ls with
+# 2>/dev/null and never read its status, so a denial, a timeout or a truncated answer produced an
+# empty list. The existence check then returned 0 - "does not exist - nothing to shut down" -
+# WITHOUT ASKING, and the poll's own empty-state branch returned 0 saying "it is gone, not
+# unresponsive". Callers that read only the exit code (mgmt/clone-guest.sh:36,
+# mgmt/clone-to-template.sh:208) take that as a clean halt.
+run_blind(){ # $1=source file $2=readable-calls-before-going-blind -> rc
+  local src="$1" nread="$2" d="$T/b.$RANDOM"
+  mkdir -p "$d"
+  ( cd "$d" || exit 2
+    _NOW=1000000
+    date(){ case "${1:-}" in +%s) echo "$_NOW" ;; *) command date "$@" ;; esac; }
+    sleep(){ _NOW=$(( _NOW + ${1:-1} )); }
+    printf '0' > "$d/calls"
+    qvm-ls(){
+      local n; n=$(cat "$d/calls"); printf '%s' "$(( n + 1 ))" > "$d/calls"
+      if [ "$n" -lt "$NREAD" ]; then echo "somevm|Running"; fi   # blind after NREAD answers
+    }
+    qvm-shutdown(){ return 0; }
+    timeout(){ shift; "$@"; }
+    _qwt_boottime(){ echo ""; }
+    export NREAD="$2"
+    eval "$(sed -n '/^qwt_shutdown()/,/^}/p' "$src")"
+    qwt_shutdown somevm 600 >/dev/null 2>&1; echo $?
+  )
+}
+
+rc=$(run_blind "$CUR" 0)
+[ "$rc" != 0 ] && ok "a rig that cannot be read at all does NOT report a clean shutdown (rc=$rc)" \
+               || no "an unreadable rig returned 0" "that is a clean-shutdown verdict on no information"
+[ "$rc" = 4 ] && ok "and it has its own exit code (4), so no caller can read it as a measurement" \
+              || no "the unreadable case does not have its own code (rc=$rc)"
+
+# readable once - so the qube is known to exist - then blind for the whole poll
+rc=$(run_blind "$CUR" 1)
+[ "$rc" != 0 ] && ok "going blind MID-POLL does not report 'it is gone' either (rc=$rc)" \
+               || no "a mid-poll blind rig returned 0" "the 'no longer listed' branch fired on missing data"
+
+# SEEN TO FAIL: the pre-fix text returns 0 for both
+git -C "$ROOT" show HEAD:mgmt/harness/shutdown-lib.sh > "$T/head-sl.sh" 2>/dev/null || cp "$CUR" "$T/head-sl.sh"
+if command grep -qa 'the rig could not be read' "$T/head-sl.sh"; then
+  ok "negative control: HEAD already carries the rig-read guard (nothing to reproduce)"
+else
+  rc0=$(run_blind "$T/head-sl.sh" 0); rc1=$(run_blind "$T/head-sl.sh" 1)
+  { [ "$rc0" = 0 ] && [ "$rc1" = 0 ]; } \
+    && ok "SEEN TO FAIL: the pre-fix text reports a clean shutdown for both blind cases (0 and 0)" \
+    || no "the pre-fix text did not reproduce the false pass (rc=$rc0/$rc1)" "then these legs measure something else"
+fi
+
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

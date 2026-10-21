@@ -70,13 +70,31 @@ out=$(bash -c '
 [ "$rc" = 0 ] && ok "SEEN TO FAIL: on the floor alone a 12-entry menu passes again" \
               || no "the floor-only copy still failed a 12-entry menu (rc=$rc)" "$out"
 
-# and the campaign must actually pass the two variables, or the block never runs
-if command grep -qa 'CALLERS_COUNT_DIR="$M"' mgmt/harness/matrix.sh \
-   && command grep -qa 'CALLERS_FAMILY=' mgmt/harness/matrix.sh; then
-  ok "matrix.sh passes the campaign dir and the OS family, so the comparison has inputs"
+# EVERY CALL SITE, NOT THE FILE. This assertion used to grep the whole of matrix.sh for the two
+# variable names and passed because the WARM site carries them - while the COLD site, the one the
+# check's header says nothing else covers, did not. The comparison was therefore inert on the cold
+# path for the whole day, with a green suite over it. Found by the re-grade, 2026-10-21.
+# Line continuations are joined first: the warm site spells its env assignments across two lines,
+# so a per-line grep would call that site variable-less and report the inverse error.
+joined=$(sed -e :a -e '/\\$/N; s/\\\n//; ta' mgmt/harness/matrix.sh)
+mapfile -t sites < <(printf '%s\n' "$joined" \
+                     | command grep -a 'dom0-callers-check\.sh' \
+                     | command grep -av '^[[:space:]]*#')
+if [ "${#sites[@]}" -ge 2 ]; then
+  ok "found ${#sites[@]} live dom0-callers-check call site(s) in matrix.sh (warm and cold)"
 else
-  no "matrix.sh does not pass CALLERS_COUNT_DIR/CALLERS_FAMILY" "the comparison would never run - decoration"
+  no "found only ${#sites[@]} call site(s)" "the cold path invocation is how this leg stops being vacuous"
 fi
+bare=0
+for s in "${sites[@]}"; do
+  case "$s" in
+    *CALLERS_COUNT_DIR*) case "$s" in *CALLERS_FAMILY*) continue ;; esac ;;
+  esac
+  bare=$((bare+1)); printf '       bare call site: %s\n' "$(printf '%s' "$s" | cut -c1-110)"
+done
+[ "$bare" = 0 ] \
+  && ok "every call site passes CALLERS_COUNT_DIR and CALLERS_FAMILY, so no path is graded on the floor alone" \
+  || no "$bare call site(s) pass neither" "a site without them falls to the floor of 10 - the amputation this check exists for"
 
 echo
 echo "RESULT: $PASS passed, $FAIL failed"

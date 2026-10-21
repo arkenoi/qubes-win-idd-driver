@@ -67,10 +67,30 @@ qwt_shutdown() {
     # then returned 1 - "the request had no effect" - about a qube there was nothing to request of.
     # Measured 2026-10-07: appmenu-guest-ab.sh spent 240 s in its pre-clean and another 300 s in
     # its teardown doing exactly this, before it had cloned anything.
-    if ! qvm-ls --raw-data --fields NAME 2>/dev/null | grep -qxF "$vm"; then
+    # AN UNREADABLE RIG IS NOT AN ABSENT QUBE, and this check read them as the same thing: the
+    # output was piped with 2>/dev/null and its status never read, so a denial, a timeout or a
+    # truncated answer gave an empty list, the grep failed, and this returned 0 - "nothing to shut
+    # down" - WITHOUT EVEN ASKING. Callers that rely on the exit code then take a clean shutdown as
+    # done. Same shape as serial-rig.sh's rig read, found the same day by the component re-grade
+    # (2026-10-21) one layer below the fix that went in that morning.
+    # THE DISCRIMINATOR is the same one: the list always carries at least dom0 and this qube, so
+    # RAW output with nothing in it means the call failed, while a readable list without $vm in it
+    # means the qube really is absent.
+    # SHUTDOWN-RIGREAD-A  (to the B marker: driven by tools/tests/shutdown-reask-selftest.sh;
+    # neither marker names the other)
+    local _rig
+    _rig=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null)
+    if [ -z "${_rig//[$' \t\n']/}" ]; then
+        echo "qwt_shutdown: the rig could not be read (qvm-ls returned nothing), so whether $vm" >&2
+        echo "  exists or is Halted is UNKNOWN. Missing data is not an absent qube and not a clean" >&2
+        echo "  shutdown - refusing to report either." >&2
+        return 4
+    fi
+    if ! printf '%s\n' "$_rig" | awk -F'|' '{print $1}' | grep -qxF "$vm"; then
         echo "qwt_shutdown: $vm does not exist - nothing to shut down" >&2
         return 0
     fi
+    # SHUTDOWN-RIGREAD-B
     b0=$(_qwt_boottime "$vm")            # before the request; empty = no qrexec, a fact in itself
     # A bare qvm-shutdown is the REQUEST (ACPI). It returns immediately and kills nothing.
     timeout 120 qvm-shutdown "$vm" >/dev/null 2>&1
@@ -85,10 +105,21 @@ qwt_shutdown() {
     # guest, because a kill contaminates a subject (findings: never reuse a killed subject). The
     # interval is a constant, deliberately not a knob - a knob on a shared predicate drives every
     # consumer whether they meant it or not.
-    local reask=120 nextask asks=1
+    local reask=120 nextask asks=1 _unreadable=0 _readable=0
     nextask=$(( $(date +%s) + reask ))
     while [ "$(date +%s)" -lt "$end" ]; do
-        st=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$vm" '$1==v{print $2}')
+        # SAME DISCRIMINATOR MID-POLL. Reading the state straight out of the pipe made an
+        # unreadable rig indistinguishable from a vanished qube, and the branch below then reported
+        # "it is gone, not unresponsive" and returned 0 on no information at all.
+        _rig=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null)
+        if [ -z "${_rig//[$' \t\n']/}" ]; then
+            echo "qwt_shutdown: the rig could not be read mid-wait - that is not 'gone'; still waiting" >&2
+            _unreadable=$(( _unreadable + 1 ))
+            sleep 10
+            continue
+        fi
+        _readable=1
+        st=$(printf '%s\n' "$_rig" | awk -F'|' -v v="$vm" '$1==v{print $2}')
         [ "$st" = Halted ] && return 0
         if [ "$(date +%s)" -ge "$nextask" ]; then
             asks=$(( asks + 1 ))
@@ -104,6 +135,15 @@ qwt_shutdown() {
         fi
         sleep 10
     done
+    # NEVER ONCE READABLE: the whole wait happened without a single usable answer from the rig, so
+    # nothing below - which reasons about boot times to tell "ignoring" from "wedged" - is about
+    # this guest. Its own code, so no caller can mistake it for a measured outcome.
+    if [ "$_readable" = 0 ]; then
+        echo "qwt_shutdown: the rig was NOT READABLE once in ${deadline}s ($_unreadable attempts)." >&2
+        echo "  Nothing was measured about $vm. This is not 'ignoring the request' and not a" >&2
+        echo "  clean shutdown - fix the rig read before classifying the guest." >&2
+        return 4
+    fi
     b1=$(_qwt_boottime "$vm")   # same guard: returns empty unless it is still Running
     if [ -n "$b0" ] && [ -n "$b1" ] && [ "$b0" != "$b1" ]; then
         echo "qwt_shutdown: $vm REBOOTED while we waited (boot time $b0 -> $b1). It is NOT ignoring" >&2

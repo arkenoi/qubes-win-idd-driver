@@ -511,7 +511,31 @@ try {
   # "18 proofs, 0 blind cells" on the record: the proof measured the prover.
   $agent = @(Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue |
              Where-Object { $_.Name -match '(?i)^(gui-agent|gui-watchdog|qrexec-agent|qubesdb)' })
-  Write-Output ("LOGVOL-PROOF-GUEST ok dir=" + $dir + " agentlogs=" + $agent.Count + " file=" + $p)
+  # A NAME IS NOT A WRITE. Counting files whose name matches the agent family says only that such a
+  # file EXISTS - and in a cell that reboots more than once, a log left by an EARLIER boot satisfies
+  # that while the boot being graded writes nowhere. That reproduces the very defect the count was
+  # added to catch, one layer deeper; found by the component re-grade, 2026-10-21, hours after the
+  # count went in.
+  # TWO ANCHORS, both read INSIDE the guest so a host/guest clock skew cannot enter: written since
+  # THIS boot, and - the stronger one - currently held OPEN by someone. Opening with share None
+  # fails exactly when another handle is on the file, which is what "the agent is writing here now"
+  # looks like from outside the agent.
+  # The gate is on FRESH, not on OPEN: a log that is appended and closed between writes would make
+  # an open-handle gate flap. agentopen is reported as the stronger evidence, not demanded.
+  # THE ONE WAY A STALE LOG COULD LOOK FRESH is the bind's own copy of the old directory onto the
+  # volume. It cannot: logvol-bind.ps1 copies with `robocopy /E`, whose default /COPY:DAT carries
+  # Timestamps, so a log written on an earlier boot arrives with its original LastWriteTime. That
+  # default is load-bearing for this gate - tools/tests/logvol-lib-selftest.sh asserts the bind
+  # never passes a /COPY: that drops T.
+  $boot = (Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue).LastBootUpTime
+  if (-not $boot) { $boot = [datetime]::MinValue }
+  $fresh = @($agent | Where-Object { $_.LastWriteTime -ge $boot })
+  $open = 0
+  foreach ($f in $fresh) {
+    try { $h = [IO.File]::Open($f.FullName, 'Open', 'Read', 'None'); $h.Close() } catch { $open++ }
+  }
+  Write-Output ("LOGVOL-PROOF-GUEST ok dir=" + $dir + " agentlogs=" + $agent.Count +
+                " agentfresh=" + $fresh.Count + " agentopen=" + $open + " file=" + $p)
 } catch { Write-Output ("LOGVOL-PROOF-GUEST fail reason=write_failed dir=" + $dir); exit 1 }
 PSEOF
   out=$(QTEST_VM="$vm" timeout -k 10 180 "$LOGVOL_QTEST" pushrun "$ps" -Nonce "$nonce" 2>&1 | tr -d '\r')
@@ -520,7 +544,14 @@ PSEOF
   case "$line" in
     "LOGVOL-PROOF-GUEST ok"*)
       dir=$(printf '%s' "$line" | sed -E 's/.* dir=(.*) agentlogs=.*/\1/')
-      agentlogs=$(printf '%s' "$line" | sed -E 's/.* agentlogs=([0-9]+).*/\1/') ;;
+      agentlogs=$(printf '%s' "$line" | sed -E 's/.* agentlogs=([0-9]+).*/\1/')
+      # A FIELD THAT DID NOT PARSE IS NOT A ZERO AND NOT A PASS. sed leaves the line untouched when
+      # it does not match, so an unparsed count would arrive here as the whole line and -eq would
+      # error out mid-grade; anything that is not digits becomes MISSING and fails below.
+      agentfresh=$(printf '%s' "$line" | sed -E 's/.* agentfresh=([0-9]+).*/\1/')
+      agentopen=$(printf '%s' "$line" | sed -E 's/.* agentopen=([0-9]+).*/\1/')
+      case "$agentfresh" in ''|*[!0-9]*) agentfresh=MISSING ;; esac
+      case "$agentopen" in ''|*[!0-9]*) agentopen=MISSING ;; esac ;;
     "LOGVOL-PROOF-GUEST fail"*)
       echo "LOGVOL-PROOF fail half=guest ${line#LOGVOL-PROOF-GUEST fail }"; return 1 ;;
     *)
@@ -531,15 +562,24 @@ PSEOF
   seen=$(mdir -i "$img" -/ ::/ 2>/dev/null | command grep -ac "$nonce")
   if [ "${seen:-0}" -gt 0 ]; then
     # THE NONCE MADE IT. That is the writable-path half. Now the half that matters.
-    if [ "$require_agent" = 1 ] && [ "${agentlogs:-0}" -eq 0 ]; then
-      echo "LOGVOL-PROOF fail half=agent reason=no_agent_family_log_in_the_resolved_LogDir dir=$dir agentlogs=0 nonce_roundtripped=1 img=$img"
+    if [ "$require_agent" = 1 ] && [ "$agentfresh" = MISSING ]; then
+      echo "LOGVOL-PROOF fail half=agent reason=agentfresh_not_reported_by_the_guest_probe dir=$dir agentlogs=${agentlogs:-NA} nonce_roundtripped=1 img=$img"
+      echo "  the guest answered without the freshness field, so whether the agent wrote anything THIS" >&2
+      echo "  boot is unknown. Missing data fails - that is the whole reason the field exists." >&2
+      return 1
+    fi
+    # FRESH, NOT PRESENT. The gate was on agentlogs, the count of files whose NAME matches the agent
+    # family, so a log left by an earlier boot of the same cell satisfied it while this boot wrote
+    # nowhere - the proof measuring the prover again, one layer down (re-grade, 2026-10-21).
+    if [ "$require_agent" = 1 ] && [ "${agentfresh:-0}" -eq 0 ]; then
+      echo "LOGVOL-PROOF fail half=agent reason=no_agent_family_log_written_since_this_boot dir=$dir agentlogs=${agentlogs:-NA} agentfresh=0 agentopen=${agentopen:-NA} nonce_roundtripped=1 img=$img"
       echo "  the path is writable and the nonce came back, so the VOLUME is fine - what is missing is the" >&2
       echo "  product's own log. The agent family resolved its LogDir at its start, which is BEFORE this" >&2
       echo "  bind, and on an AppVM from a registry the volatile root has since discarded. Grading this" >&2
       echo "  cell would read a capture that cannot contain an agent error (LOGVOLBINDLATE)." >&2
       return 1
     fi
-    echo "LOGVOL-PROOF ok dir=$dir nonce=$nonce seen_in_image=1 agentlogs=${agentlogs:-NA}"
+    echo "LOGVOL-PROOF ok dir=$dir nonce=$nonce seen_in_image=1 agentlogs=${agentlogs:-NA} agentfresh=${agentfresh:-NA} agentopen=${agentopen:-NA}"
     return 0
   fi
   echo "LOGVOL-PROOF fail half=host reason=nonce_written_by_guest_not_in_image dir=$dir nonce=$nonce img=$img"

@@ -539,8 +539,16 @@ cat > "$PT/bin/qtest-stub" <<'STUB'
 nonce=""; prev=""
 for a in "$@"; do [ "$prev" = "-Nonce" ] && nonce="$a"; prev="$a"; done
 printf '%s' "$nonce" > "$LVPROOF_NONCE_FILE"
-printf 'LOGVOL-PROOF-GUEST ok dir=Z:\\qwt-logs\\win10-app agentlogs=%s file=Z:\\qwt-logs\\win10-app\\%s.proof\n' \
-       "${LVPROOF_AGENTLOGS:-0}" "$nonce"
+# agentfresh defaults to the total, so every leg written before freshness existed keeps its
+# meaning; LVPROOF_AGENTFRESH is what the stale-log legs vary. LVPROOF_NOFRESH=1 answers in the
+# OLD shape, with no freshness field at all.
+if [ "${LVPROOF_NOFRESH:-0}" = 1 ]; then
+  printf 'LOGVOL-PROOF-GUEST ok dir=Z:\\qwt-logs\\win10-app agentlogs=%s file=Z:\\qwt-logs\\win10-app\\%s.proof\n' \
+         "${LVPROOF_AGENTLOGS:-0}" "$nonce"
+else
+  printf 'LOGVOL-PROOF-GUEST ok dir=Z:\\qwt-logs\\win10-app agentlogs=%s agentfresh=%s agentopen=%s file=Z:\\qwt-logs\\win10-app\\%s.proof\n' \
+         "${LVPROOF_AGENTLOGS:-0}" "${LVPROOF_AGENTFRESH:-${LVPROOF_AGENTLOGS:-0}}" "${LVPROOF_AGENTOPEN:-0}" "$nonce"
+fi
 STUB
 # the host half reads the IMAGE with mdir; this stub reports the nonce as present, so the
 # round-trip half always succeeds and the ONLY variable in this leg is the agent-log count
@@ -559,7 +567,8 @@ run_proof() { # $1=agentlogs $2...=extra args -> "rc|output"
     # suite exports QTEST_BIN globally at line 79, so sourcing the library overwrote the override.
     # My first version of this leg set the wrong name and the suite's own guest stub answered -
     # which is why the leg is EXECUTED rather than grepped: it caught my own mistake in one run.
-    out=$( LVPROOF_AGENTLOGS="$n" PATH="$PT/bin:$PATH" QTEST_BIN="$PT/bin/qtest-stub" \
+    out=$( LVPROOF_AGENTLOGS="$n" LVPROOF_AGENTFRESH="${LVPROOF_AGENTFRESH:-}" \
+           LVPROOF_NOFRESH="${LVPROOF_NOFRESH:-0}" PATH="$PT/bin:$PATH" QTEST_BIN="$PT/bin/qtest-stub" \
            bash -c '
              source mgmt/harness/logvol-lib.sh
              logvol_prove_roundtrip somevm "'"$PT"'/img.img" proofleg '"$*"' 2>&1' ); rc=$?
@@ -589,6 +598,64 @@ if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'agentlogs=4'; then
     ok "proof-agent: four agent logs PASSES with the flag - the predicate responds to the count"
 else
     bad "proof-agent: the flag fails even with agent logs present - it is a constant" "rc=$rc $out"
+fi
+
+# 3b. THE STALE LOG, which is the same defect one layer down. Found by the component re-grade,
+#     2026-10-21: the gate counted files whose NAME matches the agent family, so a gui-agent log
+#     left by an EARLIER boot of the same cell satisfied it while the boot being graded wrote
+#     nothing. agentlogs=3 with agentfresh=0 is exactly that state.
+r=$(LVPROOF_AGENTFRESH=0 run_proof 3 --require-agent-logs); rc=${r%%|*}; out=${r#*|}
+if [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'written_since_this_boot'; then
+    ok "proof-agent: three STALE agent logs and nothing written this boot FAILS, naming freshness"
+else
+    bad "proof-agent: stale logs from an earlier boot still passed" "rc=$rc $out"
+fi
+
+# 3c. AND FRESHNESS IS NOT A CONSTANT EITHER: logs present AND written this boot must pass.
+r=$(LVPROOF_AGENTFRESH=2 run_proof 3 --require-agent-logs); rc=${r%%|*}; out=${r#*|}
+if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'agentfresh=2'; then
+    ok "proof-agent: logs written THIS boot pass, and the ok line carries the count"
+else
+    bad "proof-agent: fresh logs were refused - the freshness gate is a constant" "rc=$rc $out"
+fi
+
+# 3d. A GUEST THAT DOES NOT REPORT FRESHNESS AT ALL must fail, not default to a pass. The field is
+#     parsed with sed, which leaves the line untouched when it does not match, so the unparsed case
+#     has to be caught by name rather than coerced to a number.
+r=$(LVPROOF_NOFRESH=1 run_proof 3 --require-agent-logs); rc=${r%%|*}; out=${r#*|}
+if [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'agentfresh_not_reported'; then
+    ok "proof-agent: an answer with no freshness field FAILS as missing data, not as zero or as ok"
+else
+    bad "proof-agent: a guest that never reported freshness was graded anyway" "rc=$rc $out"
+fi
+
+# 3e. SEEN TO FAIL: the gate as it stood this morning - on agentlogs alone - passes the stale state.
+oldgate=$(sed 's/\[ "\${agentfresh:-0}" -eq 0 \]/[ "${agentlogs:-0}" -eq 0 ]/' mgmt/harness/logvol-lib.sh)
+if printf '%s' "$oldgate" | grep -q '\[ "${agentlogs:-0}" -eq 0 \]'; then
+    r=$(printf '%s' "$oldgate" > "$PT/oldgate.sh"; LVPROOF_AGENTFRESH=0 LVPROOF_AGENTLOGS=3 \
+        PATH="$PT/bin:$PATH" QTEST_BIN="$PT/bin/qtest-stub" bash -c '
+          source "'"$PT"'/oldgate.sh"
+          logvol_prove_roundtrip somevm "'"$PT"'/img.img" proofleg --require-agent-logs 2>&1' >/dev/null 2>&1; echo $?)
+    [ "$r" = 0 ] \
+      && ok "SEEN TO FAIL: with the gate back on agentlogs the stale state passes again" \
+      || bad "the reverted gate still refused the stale state (rc=$r)" "then these legs measure something else"
+else
+    bad "could not revert the gate for the control" "the substitution did not apply"
+fi
+
+# 3f. THE COPY MUST NOT REFRESH TIMESTAMPS, or 3b's whole gate loses its meaning. The bind copies
+#     the old log directory onto the volume; robocopy's default /COPY:DAT carries Timestamps, so a
+#     log from an earlier boot arrives stale and still fails the freshness gate. A future /COPY:
+#     that drops T would silently make every carried-over log look like it was written this boot.
+cp_line=$(command grep -aE 'robocopy' "$ROOT/mgmt/harness/logvol-bind.ps1" | command grep -av '^\s*#')
+if [ -z "$cp_line" ]; then
+    bad "the bind no longer copies with robocopy" "3b's freshness gate rests on the copy preserving mtimes - re-check it"
+elif printf '%s' "$cp_line" | grep -qE '/COPY:'; then
+    printf '%s' "$cp_line" | grep -qE '/COPY:[^ ]*T' \
+      && ok "copy: the bind passes an explicit /COPY: and it still includes T (timestamps preserved)" \
+      || bad "copy: the bind passes a /COPY: WITHOUT T" "every carried-over log would read as written this boot"
+else
+    ok "copy: the bind uses robocopy with no /COPY: override, so the default DAT preserves timestamps"
 fi
 
 # 4. THE WIRING, because a predicate nobody calls is decoration - and the PRE-GRADING site is the

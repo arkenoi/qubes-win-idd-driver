@@ -1111,6 +1111,12 @@ unpark_installed(){ # $1=vm $2=label - restore the campaign's 'installed' snapsh
   fi
 }
 
+# ONE PLACE DECIDES THE FAMILY, because two places drifted. The warm caller site mapped anything
+# that is not win10/win11 to `other` and the cold one to `win_other`, so the two would have written
+# their counts into different family files and never compared - the "duplicated decision that can
+# drift" shape, latent only because all eight cells are win10*/win11*.
+callers_family(){ case "${1:-}" in win10*|WIN10*) echo win10 ;; win11*|WIN11*) echo win11 ;; *) echo other ;; esac; }
+
 grade_dom0_callers(){ # $1=vm $2=label - the goal's SECOND clause, measured where the guest is up.
   # "qrexec behavior is aligned with dom0 callers: updaters and start menu, from cold qube as well".
   # BOTH checks used to live in the end-of-campaign collection loop, guarded on the cell's guest
@@ -1138,7 +1144,7 @@ grade_dom0_callers(){ # $1=vm $2=label - the goal's SECOND clause, measured wher
   # THE CROSS-CELL MENU COMPARISON NEEDS THE CAMPAIGN'S OWN DIRECTORY AND THE OS FAMILY. Every
   # cell of one family is a clone of the same sealed golden, so the first cell records its entry
   # count and the rest must agree; a floor of 10 on its own passed a menu amputated to a third.
-  if CALLERS_COUNT_DIR="$M" CALLERS_FAMILY="$(case "$lbl" in win10*|WIN10*) echo win10 ;; win11*|WIN11*) echo win11 ;; *) echo other ;; esac)" \
+  if CALLERS_COUNT_DIR="$M" CALLERS_FAMILY="$(callers_family "$lbl")" \
      CALLERS_CELL="$lbl" ./mgmt/harness/dom0-callers-check.sh "$vm" say >>"$M/$lbl-callers.out" 2>&1; then
     ok "$lbl: start-menu caller aligned (dom0 can parse every line it is sent)"
   else
@@ -2745,7 +2751,16 @@ for c in $CELLS; do
         say "  $c: halting $_slv to measure the COLD caller path (the goal's 'from cold qube as well')"
         qwt_shutdown "$_slv" 600 >>"$M/$c-coldcallers.out" 2>&1 || true
         if [ "$(w_state "$_slv")" = Halted ]; then
-          if ./mgmt/harness/dom0-callers-check.sh --cold "$_slv" say >>"$M/$c-coldcallers.out" 2>&1; then
+          # THE COLD CALL GETS THE SAME CROSS-CELL INPUTS AS THE WARM ONE. It did not, so the one
+          # case the check's header says nothing else covers - "from cold qube as well" - was graded
+          # on the floor of 10 alone, and that floor is exactly what let a menu amputated to 10-36
+          # entries read as aligned (6a3c6033, the same day). The cold count is compared against the
+          # family's baseline on purpose: these cells are clones of ONE sealed golden, so a cold
+          # start enumerating fewer apps than a warm one is the defect the goal asks about, not a
+          # legitimate difference. CALLERS_CELL carries the -cold suffix so a disagreement says
+          # which side was cold.
+          if CALLERS_COUNT_DIR="$M" CALLERS_FAMILY="$(callers_family "$c")" \
+             CALLERS_CELL="$c-cold" ./mgmt/harness/dom0-callers-check.sh --cold "$_slv" say >>"$M/$c-coldcallers.out" 2>&1; then
             ok "$c: start-menu caller aligned FROM A COLD QUBE (the call started it and dom0 could parse the answer)"
           else
             no "$c: the start-menu caller is NOT aligned from a cold qube - see $M/$c-coldcallers.out"

@@ -25,6 +25,25 @@ if exist "%SRC%qubesidd-test.cer" copy /y "%SRC%qubesidd-test.cer" "%USERPROFILE
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%SRC%firstboot-setup.ps1" >> C:\qubes-win-idd-setup.log 2>&1
 
+rem READ THE VERDICT. firstboot-setup.ps1 exits 1 and prints FIRSTBOOT-FAILED when the effects it
+rem sets did not take - but this file ignored %ERRORLEVEL% and scheduled stage 2 regardless, so a
+rem guest with UAC still on, or testsigning still off, was carried into the QWT install and then
+rem into the test cells. The symptom lands much later and points nowhere near here: a driver install
+rem failing "Access is denied", or a test-signed IDD driver that will not load. Found by the
+rem component re-grade, 2026-10-21, hours after the exit code itself was added - the verdict existed
+rem and nothing read it.
+rem NOT scheduling stage 2 and NOT rebooting is deliberate: the campaign then fails on a guest that
+rem is still sitting at its desktop with the reason on screen, instead of on a guest that looks
+rem installed. Nothing on the dom0 side parses this log file, so the LOG alone would be another
+rem unread verdict; notepad puts the text where the harness's own screen capture reads it, the same
+rem trick mgmt/build-answer-stick.sh already uses for its install log.
+if errorlevel 1 (
+    echo FIRSTBOOT-FAILED: stage 1 effects did not take - NOT scheduling stage 2, NOT rebooting >> C:\qubes-win-idd-setup.log
+    copy /y C:\qubes-win-idd-setup.log C:\qubes-firstboot-FAILED.log
+    start "" notepad C:\qubes-firstboot-FAILED.log
+    exit /b 1
+)
+
 rem Stage 2 as a SYSTEM boot task: immune to UAC token filtering and autologon timing.
 schtasks /create /tn QWTStage2 /tr "cmd /c C:\payload\setup2.cmd" /sc onstart /ru SYSTEM /rl HIGHEST /f >> C:\qubes-win-idd-setup.log 2>&1
 
