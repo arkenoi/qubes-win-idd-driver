@@ -233,9 +233,23 @@ w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
         # DARK ALONE IS NOT TERMINAL. Measured 2026-08-28: a guest that looked dead behind a black
         # screen was consuming CPU steadily (cpu_time 92755 -> 119257 in 40 s, 8 GB resident) - it
         # was running headless with a half-installed QWT, not hung.
-        cpu=$(printf '' | timeout 20 qrexec-client-vm "$vm" admin.vm.Stats 2>/dev/null | tr -d '\0' \
-              | grep -aoE 'cpu_usage_raw[0-9]+' | grep -aoE '[0-9]+' | awk '{t+=$1} END{if(NR)print t; else print "NA"}')
-        $log "  $lbl: dark #$dark (screen=$st), cpu_usage_raw=${cpu:-NA}"
+        # PARSE THE STREAM PROPERLY, AND SAY WHICH NUMBER THIS IS.
+        #
+        # This used to do `tr -d '\0'` then `grep -aoE 'cpu_usage_raw[0-9]+'` and SUM the matches.
+        # mgmt/reprovision-usb.sh:179 documents that exact reader as wrong twice over, with the
+        # measurement: deleting the separators runs a value into the NEXT record (a real 3 read as
+        # "31"), and summing every record in the window inflates it again - on a genuinely idle
+        # guest, 2026-08-30, it reported 149 and 6225 where the truth was 3. Four other call sites
+        # (prime-run.sh, quick-upgrade.sh, matrix.sh, reprovision-usb.sh) already read it correctly;
+        # this one did not, so the wedge path's cpu figure was the garbage number.
+        #
+        # That is also the whole of CPUTWOREADERS: a live installing guest logged cpu=107..252 from
+        # one reader while a stalled guest logged cpu_usage_raw=14736 from this one, and the two
+        # looked directly comparable. They were not, because one of them was not a cpu figure.
+        # The unit is now in the log line, so no future reader has to guess it.
+        cpu=$(printf '' | timeout 20 qrexec-client-vm "$vm" admin.vm.Stats 2>/dev/null | tr '\0' '\n' \
+              | awk '/^cpu_usage_raw$/{getline v; if(v+0>m)m=v+0; n++} END{if(n==0)print "NA"; else print m}')
+        $log "  $lbl: dark #$dark (screen=$st), cpu_usage_raw=${cpu:-NA} (max per vCPU over the sample, same scale as prime-run/quick-upgrade/matrix)"
 
         # WHAT THIS CAN AND CANNOT DECIDE, stated because two earlier attempts got it wrong.
         # It CANNOT distinguish a wedge from a legitimately busy headless guest:
