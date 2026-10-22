@@ -625,3 +625,70 @@ line that something else parses.
 line comes from the update's metadata and is executed by Windows Update's own installer. That rule removes the
 largest surface by construction. What remains is the handful of native tools we do call, and the rule for them
 is the same one: outside data is an argument or a decision, never syntax.
+
+## 16. The updater is graded in TWO PHASES: deterministic gates first, the dom0-driven sequence second
+
+**Decision, 2026-10-22.** The updater's acceptance is split. A quick, deterministic, self-contained
+set of gates runs FIRST; the full dom0-driven sequence runs only if they pass. The gates have ONE
+implementation, `mgmt/harness/updater-gates-lib.sh`, used from two places:
+
+* `mgmt/harness/updater-component-test.sh` — standalone, minutes, for per-component grading;
+* `mgmt/harness/template-update-test.sh` — as a PREFLIGHT, immediately after `env-assert` and before
+  `wu-e2e.sh` spends its three dom0-driven rounds.
+
+Owner: *"we would need to split clean the acceptance matrix to do quick per-component grading"*, and
+*"so actually we need the resulting test to handle functions of both. simulating a dom0 driven
+update, with progress and exit codes is important part. but BEFORE the full sequence starts, we want
+quick check if main functionality passes without failure."*
+
+**Why.** `template-update-test.sh` asserted nothing about the relay — `grep -i relay` over it
+returned nothing. So when `fa5b416a` (2026-10-19) turned the relay compile into a discarded
+ScriptBlock, the resulting silence reached this gate as an update-OUTCOME symptom and was attributed
+to four causes in turn (a squatter on 8082, a self-perpetuating `GUARD:vouchexe` refusal, a stale
+staged payload, and a commit that could never have fired) before the cause was found. Each round of
+that costs about an hour and locks the operator out of dom0 for the dom0-driven passes. Two minutes
+of gates in front of it names the fault the first time.
+
+**The gates** (library header has the detail): U1 the deploy vouched its source, COMPILED the relay
+and vouched the placed exe; U2 the placed exe carries the shipped binary's UTF-16 `parent=` marker;
+U3 the relay listens on **8082** and declares `parent=<pid>` — a relay on its own pid as the port is
+not a pass, because *"it is the same as 'relay is not listening' for us"*; U4 the pass served it with
+a relay IT started and adopted nothing; U5 a COUNT reached dom0; U6 no pass died on "not accepting
+connections"; U7 the subject IS the reporter's recorded environment.
+
+**The base is GWeck's sealed German 25H2 TemplateVM** (`win11de-qwt`), and that is not
+interchangeable with an English image: the proxied updater serves TemplateVMs only — a StandaloneVM
+answers *"the qubes proxy updater is template-only and never runs here"* and does nothing (measured
+on `win11r-relayval`, 2026-10-22) — and every gate therefore reads OUR OWN log lines or a number,
+never a Windows string, because Windows speaks German there.
+
+**What stays with the OLD gate, deliberately.** Installing an update, reboot accounting, oscillation,
+and the exclusion audit. The component gate runs a scan and never installs: download and install are
+on-demand by design and the scan path is the one that reports availability to dom0. Jev, asked on
+the split: end state `per_component_matrix` 0.73, `scan_only_is_a_real_gap` 0.19,
+`old_gate_must_gain_relay_assertions` 0.33 — so the relay assertions are NOT duplicated into the old
+gate, and the component gate does not get campaign-abort authority (`new_gate_can_gate_a_campaign`
+0.34): it reports, the operator decides.
+
+**Jev is a SECONDARY evaluator here, never the main flow.** Owner: *"it is not a violation of
+mechanization rule, just improvement. the main flow should stay determenistic and self contained,
+but we SHOULD ask jev for supplementary data."* So: the gate verdict is decided by the deterministic
+gates and their discriminators, which need no network and are graded offline against real captures.
+On a failure the harness additionally asks Jev which candidate cause the evidence most supports and
+how strongly, because a probability is a classification and classifications belong to the classifier
+of record. That answer is printed as supplementary and cannot change the verdict.
+
+**Diagnosis is by DISCRIMINATOR, not by guess.** Every candidate cause is tied to a string the
+product itself emits on exactly that path (`QWTRELAYSTALESRC`, `QWTRELAYSTALEEXE`,
+`QWTRELAYUNREADABLE`, `QWTRELAYBUSY`, `kept the previous relay exe`, `relay compile failed`,
+`relay compiled but could not replace`, `SCAN FAILED`, `Not reporting 0 to dom0`, `REFUSED: ...`, an
+HRESULT), so each is reported CONFIRMED, EXCLUDED, or POSSIBLE — and POSSIBLE is stated rather than
+guessed. A path the product takes always leaves its own line, so the ABSENCE of every other path's
+line is itself evidence; that is what identifies dead code as dead rather than as a failure.
+
+**Verified, not asserted.** `tools/tests/updater-component-selftest.sh` (33 assertions, offline, in
+the estate) drives all seven gates against the REAL captures of 2026-10-22: the post-fix pair must
+PASS, the **pre-fix pair must FAIL**, each gate must fail ALONE when only its own evidence is
+removed, and missing evidence must read INSTRUMENT rather than pass.
+`tools/compare-acceptance-gates.sh` extracts the functional comparison of the two gates from the
+scripts themselves, so it cannot drift from them.

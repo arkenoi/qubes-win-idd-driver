@@ -104,6 +104,21 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # are not a suite's output. The runner now shims 23 rig commands onto PATH ahead of each suite and
 # reports any suite that reaches one as RED; this suite drives that guard, including the case a
 # shell function cannot stub.
+# 94 -> 95 on 2026-10-22: qrexec-gap-witness-selftest.sh ADDED. quick-upgrade.sh told a run that
+# "the log volume could not be read either (no volume attached, or mtools found nothing)" while the
+# same pull had just recovered 120 files and returned 0 - because the predicate read only the SINGLE
+# newest *.log and that file was one the MSI had just created and not yet written to. The false
+# [ERROR] then failed the run's own sweep gate, rc=3 over an install that passed 11 of 11 checks.
+# The fix walks newest-first until a line is found; this suite runs the SHIPPED predicate over the
+# tree that defeated the old one, keeps the [ERROR] branch reachable for a volume that really yields
+# nothing, and its control is the old one-file form, which must come back empty on that same tree.
+# 93 -> 94 on 2026-10-22: updater-component-selftest.sh ADDED. The relay defect was found by a HAND
+# sequence (owner: "it is mostly what you do now by hand but systemic, verified and repeatable"), and
+# the release gate that should have caught it - template-update-test.sh - contains NO relay assertion
+# at all: it grades the update ROUND outcome, so a relay that was never built surfaced as an update
+# symptom and was attributed elsewhere four times. mgmt/harness/updater-component-test.sh is the
+# per-component split over GWeck's German golden; this suite drives its seven gates offline against
+# the REAL captures of that day - the pre-fix pair must FAIL and each gate must fail alone.
 # 92 -> 93 on 2026-10-22: discarded-scriptblock-selftest.sh ADDED. The relay defect above was a bare
 # `{ ... }` statement - a ScriptBlock LITERAL, built and discarded, never executed - so the deploy
 # logged success while the exe on disk stayed the one built 2026-09-16. The source text was CORRECT,
@@ -144,7 +159,7 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # it compiles and runs the exit chain, which is what the brace defect needed - and
 # wrapper-exit-reason was already written but excluded for needing submodule git history, which is
 # how its red went unread for days.
-FLOOR=${OFFLINE_SUITES_FLOOR:-93}
+FLOOR=${OFFLINE_SUITES_FLOOR:-95}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"

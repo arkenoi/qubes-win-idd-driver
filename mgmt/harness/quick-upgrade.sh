@@ -843,9 +843,24 @@ while :; do
     lastknown=""
     if [ -n "${LOGVOL_IMG:-}" ]; then
       if logvol_pull "$LOGVOL_IMG" "$OUT/logvol-live" >>"$OUT/logvol-live.out" 2>&1; then
+        # ---- QREXECGAPWITNESS-BEGIN  (driven by tools/tests/qrexec-gap-witness-selftest.sh)
+        # NEWEST-FIRST UNTIL A LINE IS FOUND - not "the newest file, or nothing".
+        # MEASURED 2026-10-22 on win11de-uc: the volume read FINE (logvol_pull recovered 120 files
+        # and returned 0; it only fails at zero files), but the single newest *.log was one the MSI
+        # had just created and not yet written to, so `grep -a .` yielded nothing, $lastknown went
+        # empty, and the ERROR branch below announced "the log volume could not be read (no volume
+        # attached, or mtools found nothing)" about a volume that had just handed over 120 files.
+        # That false line then failed this run's own sweep gate - rc=3 over an install that had
+        # verified 11 of 11 checks. A freshly created, still-empty log is the NORMAL state while the
+        # MSI restarts our services, so the answer is the first non-empty line among the newest few.
+        # Bounded at 10 files so a poll never walks a volume with 150 logs on it.
         lastknown=$(find "$OUT/logvol-live/files" -type f -name '*.log' -printf '%T@ %p\n' 2>/dev/null \
-                    | sort -rn | head -1 | cut -d' ' -f2- \
-                    | xargs -r -d '\n' sh -c 'grep -a . "$0" 2>/dev/null | tail -1' 2>/dev/null | cut -c1-110 | tr -d '[]')
+                    | sort -rn | head -10 | cut -d' ' -f2- \
+                    | while IFS= read -r lf; do
+                        ln=$(grep -a . "$lf" 2>/dev/null | tail -1)
+                        [ -n "$ln" ] && { printf '%s' "$ln"; break; }
+                      done | cut -c1-110 | tr -d '[]')
+        # ---- QREXECGAPWITNESS-END
       fi
     fi
     if [ -n "$lastknown" ]; then

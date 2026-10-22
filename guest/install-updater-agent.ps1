@@ -583,19 +583,31 @@ if ($stale.Count) {
 # exe is kept; that case now REFUSES above (GUARD:vouchexe), so reaching here means the deploy is
 # compiling. A branch that can no longer be taken is decoration, and this one hid the defect.
 # ---- RELAYDEADBLOCK: THE BRACES THAT MADE ALL OF THIS DEAD CODE ARE GONE.
-# A bare `{ ... }` in PowerShell is a ScriptBlock LITERAL: it is constructed and discarded, and the
-# statements inside it NEVER RUN. When the `if (...)` that used to guard this block was removed, its
-# braces were left behind - so the compile, the move and the log line below became a scriptblock
-# nobody invoked, and every deploy since then printed "updater agent deployed" having touched
-# nothing.
-# MEASURED on win11de-tup, 2026-10-22, the guest the owner has been asking about every day:
-#   C:\Program Files\Qubes Tools\bin\qubes-updates-relay.exe  written=2026-09-16T16:33:26Z
-# - five weeks stale, carrying none of the shipped binary's markers, while NO install log on that
-# guest has ever contained a "compiled relay ->" line. The relay that then runs predates
-# --parent-pid, so the launcher's flag VALUE becomes its listen port and 8082 is never served, which
-# is why every update pass went silent. Proven, not inferred: `{ $ran = $true }` leaves $ran False.
-# Nothing else in this file could have fixed that, and nothing that keyed on who holds 8082 was ever
-# going to find it.
+# A bare `{ ... }` in PowerShell is a ScriptBlock LITERAL: it is constructed, its value goes to the
+# output stream, and the statements inside it NEVER RUN. fa5b416a (2026-10-19) deleted the
+# `if ($skipRelayCompile) { ... } else {` that used to guard this block and left its braces behind,
+# so the compile, the move and the log line below became a scriptblock nobody invoked - and the
+# deploy went on printing "updater agent deployed" having built nothing. The commit that did it is
+# titled "the relay bound the updater's PID instead of 8082, and the deploy called it a success":
+# the fix for the pid-port defect is what made the compile dead. OUR CHANGE WAS THE CAUSE.
+# PROVEN BY A/B on win11de-tup, 2026-10-22, both arms given the SAME fresh $SetupRoot minutes apart
+# so the brace pair was the only difference: the braced arm logged zero timestamped
+# "compiled relay ->" lines, PRINTED THIS BLOCK'S OWN SOURCE as a value, left the installed exe's
+# write time untouched, and still reported success; the unbraced arm logged the compile and rewrote
+# the exe (48128 -> 56320 bytes, UTF-16 `parent=` marker False -> True).
+# `{ $ran = $true }` leaves $ran False.
+# AND END TO END, same guest, from its own agent.log: the two passes BEFORE the rebuild each bound
+# the pass's own pid (10:19:37 -> 2540, 10:26:20 -> 5956) and died on
+# "still not accepting connections on 127.0.0.1:8082 after respawn" without reporting anything;
+# the pass after it logged "10:29:10 proxy up: 127.0.0.1:8082 is served by relay pid 8164, started
+# by this pass" and then "10:37:37 scan: 6 update(s) offered, 6 actionable, 6 reported to dom0".
+# Through the release medium (win11r-relayval, real install.cmd from the ISO, 11/11 checks) this
+# block logged all three of its lines at 11:27:10/13/14.
+# TWO MECHANISMS IN SEQUENCE, do not conflate them. win11de-tup's exe was written 2026-09-16, a
+# MONTH BEFORE these braces existed: that staleness came from the old skip branch above
+# ("kept the previous relay exe"), which preserved a stale exe whenever something appeared to hold
+# 8082 - self-perpetuating, because the stale relay held both the port and the file. Removing that
+# branch was right; leaving its braces turned a conditional skip into an unconditional one.
     for ($cscTry = 1; $cscTry -le 3; $cscTry++) {
         Remove-Item $exeNew -Force -EA SilentlyContinue
         $cscOut = & $csc /nologo /optimize /target:exe /out:"$exeNew" "$src" 2>&1

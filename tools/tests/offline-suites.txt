@@ -146,3 +146,5 @@ stick-scope-restore-selftest.sh
 upd-task-prestop-selftest.sh
 relay-vouch-selftest.sh
 discarded-scriptblock-selftest.sh
+updater-component-selftest.sh
+qrexec-gap-witness-selftest.sh

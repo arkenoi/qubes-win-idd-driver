@@ -96,6 +96,39 @@ pl=$(QTEST_VM="$VM" bash -c 'source mgmt/harness/wu-liveness.sh; wu_probe')
 case "$pl" in WUPROBE\|task=Ready\|*) say "liveness probe first read: $pl" ;;
   *) verdict INSTRUMENT "the liveness probe did not read an idle task (${pl:-<no answer>}) - a DEAD verdict would rest on a broken read" ;; esac
 
+# 1b. THE QUICK PREFLIGHT, BEFORE THE FULL SEQUENCE SPENDS AN HOUR.
+# Owner, 2026-10-22: "BEFORE the full sequence starts, we want quick check if main functionality
+# passes without failure." The gates are mgmt/harness/updater-gates-lib.sh - the same single
+# implementation mgmt/harness/updater-component-test.sh runs standalone, so the two can never drift.
+#
+# WHY HERE AND WHY AT ALL. This test asserted NOTHING about the relay: `grep -i relay` over it
+# returned nothing before this block. So when fa5b416a (2026-10-19) made the relay compile a
+# discarded ScriptBlock, the resulting silence arrived here as an update-OUTCOME symptom and was
+# attributed to four different causes in turn - a squatter on 8082, a self-perpetuating refusal, a
+# stale staged payload, and a commit that could never have fired - before the cause was found. Two
+# minutes of gates in front of three dom0-driven rounds would have named it the first time.
+# A preflight failure is a PRODUCT failure, not an instrument one: the package is installed, the
+# environment is asserted, and the updater's own logs say it did not build or serve its relay.
+say "preflight: the updater's quick gates (updater-gates-lib.sh) before the dom0-driven rounds"
+source mgmt/harness/updater-gates-lib.sh
+PF="$OUT/preflight"
+updater_gates_collect "$VM" "$PF" || verdict INSTRUMENT "the preflight could not collect the updater's evidence from $VM"
+updater_gates_grade "$PF" "$REPORTER"; pfrc=$?
+printf '%s' "$UG_LINES" | sed 's/^/  /' | tee -a "$LOG" >/dev/null
+printf '%s' "$UG_LINES" | sed 's/^/  /'
+updater_gates_diagnose "$PF"; printf '%s' "$UG_DIAG" | tee -a "$LOG"
+if [ "$pfrc" -ne 0 ]; then
+  # SUPPLEMENTARY ONLY. The verdict below is already decided by the deterministic gates; Jev is
+  # asked which cause the evidence most supports, because a probability is a classification and
+  # classifications belong to the classifier of record. It cannot change the outcome.
+  say "asking Jev for supplementary data on the root cause (does not change the verdict)"
+  updater_gates_jev "$PF" || true
+  printf 'JEV (secondary evaluator, supplementary):\n%s\n' "$UG_JEV" | tee -a "$LOG"
+  [ "$pfrc" = 2 ] && verdict INSTRUMENT "the updater preflight could not be graded ($UG_FAIL gate(s) unmeasurable) - no dom0 rounds were spent"
+  verdict FAIL "the updater preflight failed $UG_FAIL of 7 gates - the relay was not built or not serving, so the $ROUNDS dom0-driven round(s) were NOT spent; see $PF and the diagnosis above"
+fi
+say "preflight: all 7 gates passed - proceeding to the $ROUNDS dom0-driven round(s)"
+
 # 2. the passes
 E2E="$OUT/wu-e2e"
 mgmt/harness/wu-e2e.sh "$VM" "$ROUNDS" "$E2E" > "$OUT/wu-e2e.out" 2>&1; erc=$?

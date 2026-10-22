@@ -291,19 +291,39 @@ IN YESTERDAYS BUILD AND TOLD ME IT IS FUCKING READY"*, then the question that fo
 *"why didnt you VERIFY IT RUNS"*.
 
 **THE CAUSE.** `guest/install-updater-agent.ps1` had a bare `{ ... }` around its relay compile and
-move — left behind when the `if (...)` that once guarded it was deleted. In PowerShell a bare brace
-pair is a **ScriptBlock literal**: constructed, its value emitted to the output stream, and the
-statements inside it never executed. The deploy therefore logged `updater agent deployed`, the
-installer RESULT carried `"updater_agent":"deployed"`, and the relay on disk stayed the binary built
-**2026-09-16T16:33:26Z**. That binary predates `--parent-pid`, so the launcher's `--parent-pid <PID>`
-had its VALUE taken as the listen port; WinHTTP pointed at 8082, nothing served it, every update
-pass ended silent and dom0 was told nothing.
+move. In PowerShell a bare brace pair is a **ScriptBlock literal**: constructed, its value emitted to
+the output stream, and the statements inside it never executed. So the deploy logged `updater agent
+deployed` and the installer RESULT carried `"updater_agent":"deployed"` while nothing was built.
+
+**DATED, AND OUR OWN CHANGE DID IT.** The braces came from **`fa5b416a`, 2026-10-19 09:32 +0300**,
+which deleted `if ($skipRelayCompile) { ... } else {` and left its braces behind. That commit is
+titled *"updater: the relay bound the updater's PID instead of 8082, and the deploy called it a
+success"* — **the fix for the pid-port defect is what made the compile dead**, three days before the
+owner's question. Removing the dead skip branch was right; leaving its braces turned a conditional
+skip into an unconditional one.
+
+**TWO MECHANISMS IN SEQUENCE — DO NOT CONFLATE THEM.** This was first written up as though the
+braces explained everything, and they do not. win11de-tup's relay was written **2026-09-16**, a
+MONTH before the braces existed, and `win11r-qwt`'s own install log carries
+`2026-10-15 22:38:03 compiled relay ->` — so the block was still executing then. The September
+staleness came from the OLDER skip branch (`kept the previous relay exe`), which preserved a stale
+exe whenever something appeared to hold 8082 — self-perpetuating, because the stale relay held both
+the port and the file. From 2026-10-19 the braces made the compile dead outright, so even after
+`87e3a746` removed the refusal nothing was ever built. The stale binary predates `--parent-pid`, so
+the launcher's `--parent-pid <PID>` had its VALUE taken as the listen port; WinHTTP pointed at 8082,
+nothing served it, and the passes measured on win11de-tup that day ended silent - 10:19:37 and
+10:26:20, each dying on "still not accepting connections on 127.0.0.1:8082 after respawn" with
+nothing reported to dom0. How many passes across the estate were affected is NOT measured and is
+not claimed: the install logs available here are the harness's deduped per-run tails.
 
 **EVERY THEORY I REPORTED BEFORE THIS WAS WRONG**, and each was reported as the fix: a squatter
 holding 8082 (nothing held 8082 — the orphans were on pid-ports); a self-perpetuating
 `GUARD:vouchexe` refusal; a stale staged `$SetupRoot` copy; `87e3a746`, which stopped a squatter
-only when a pid HELD 8082 and so could never fire. All of them were consistent with the symptom.
-None was the cause.
+only when a pid HELD 8082 and so could never fire. All were consistent with the symptom; none was
+the cause. A corpus count of install logs was also offered here as corroboration and has been
+REMOVED: those files are the harness's deduped per-run tails, the numbers did not behave as the
+model predicted (1 of 144 carried the skip branch's own line), and a figure I cannot explain is not
+evidence.
 
 **WHY NOTHING CAUGHT IT.** The source text was entirely correct. Greps, offline suites and Jev all
 read text, and no amount of reading text can see that a syntactically perfect block is never
