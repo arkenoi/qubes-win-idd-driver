@@ -70,6 +70,7 @@ export QTEST_VM="${QTEST_VM:-__matrix_no_ambient_target__}"
 source .claude/skills/win-guest-e2e/e2e-lib.sh
 source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the notepad a cell starts is stopped by its recorded identity, never by name
 source mgmt/harness/logvol-lib.sh
+source mgmt/harness/wedge-gates-lib.sh  # wedge_volume_held_for: an AppVM whose private volume is the only copy of an antecedent must not be recreated over
 source mgmt/harness/specimen-lib.sh   # a cell that keeps its subject as evidence writes that down; the boot gate then refuses a hand-typed start
 source mgmt/harness/blockclaim-lib.sh # a --required claim on a released loop makes a subject UNCREATABLE; swept before every start, dropped at exit
 # THE SECONDARY LOG VOLUME (PLAN-acceptance-optimization section 3), for the WEDGE case: when a cell
@@ -2409,6 +2410,20 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the
     if [ "$(w_state "$app")" != Halted ]; then
       qvm-shutdown "$app" >/dev/null 2>&1
       w_halt "$app" 420 "$3-appvm-halt" say || { no "$3-appvm: $app would not halt for re-create"; return; }
+    fi
+    # THE VOLUME MAY BE THE ONLY COPY OF AN ANTECEDENT. An appvm cell has no evidence stick by the
+    # ruling above, so its logs live at the LogDir the guest resolves - Q:\Qubes Logs, on this
+    # AppVM's PRIVATE volume. When a classification could not read them (a silent guest: the
+    # collector reads over qrexec and a wedged guest has none), wedge_collect records a volume-hold
+    # naming this guest. A qvm-kill leaves that volume alone; THIS does not - the AppVM is recreated
+    # FRESH from the template and the private is re-seeded. So ask before destroying it.
+    if _vh=$(wedge_volume_held_for "$app" "$M" 2>/dev/null); then
+      say "[ERROR] FATAL: $3-appvm: $app's PRIVATE VOLUME is held as the only copy of an antecedent"
+      say "[ERROR] FATAL: (record: $_vh). Re-creating it re-seeds the private from the template and"
+      say "[ERROR] FATAL: destroys the only logs a silent guest left. Read it first - clone the"
+      say "[ERROR] FATAL: private volume into a reader and mount it - then clear the hold."
+      say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED rather than recreate over held evidence ==="
+      exit 2
     fi
     if ! qvm-remove -f "$app" >/dev/null 2>&1 || qvm-ls --raw-data --fields NAME 2>/dev/null | grep -qx "$app"; then
       no "$3-appvm: could not remove $app - REFUSING to reuse it (its private volume is stale; grading it would reproduce the no-shell defect)"

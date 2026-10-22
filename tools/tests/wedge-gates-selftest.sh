@@ -274,7 +274,7 @@ ck '...and with it, permitted' \
 # at 0.50 and this is what it was.
 for cse in "pulled|0|the antecedent is in hand" \
            "declared-none|0|the caller states this cell ran without a stick" \
-           "no-stick|0|no stick exists for this guest, so holding cannot produce one" \
+           "no-stick|1|no stick AND nothing recorded about where the logs are - see 7a-appvm" \
            "unreadable|1|a stick EXISTS and could not be read - holding buys a retry" \
            "absent|1|nothing recorded at all"; do
   st=${cse%%|*}; rest=${cse#*|}; want=${rest%%|*}; desc=${rest#*|}
@@ -325,6 +325,80 @@ ck 'the runner takes the dump ONLY for an undecided class, and re-runs stage 1 a
 ck '...and it also salvages the TAIL, which is the last thing the guest did' \
    "$(grep -q 'logvol_salvage' "$LIB" && echo 0 || echo 1)" \
    'mcopy stops at the recorded size; the final lines are past it'
+
+# ---- 7a-appvm. NO STICK IS NOT "NOTHING TO COLLECT" -------------------------------------------
+# An AppVM cell has no evidence stick BY RULING (matrix.sh logvol_stick_scope: "THE EVIDENCE STICK IS
+# AN INSTALL-TESTING INSTRUMENT, and this cell installs nothing"), so its logs come from the
+# collector at the LogDir the guest resolves - Q:\Qubes Logs, on the guest's PRIVATE volume. The
+# first version of this gate treated no-stick as nothing-to-collect and permitted the kill outright.
+# That is false for an AppVM: the antecedent exists, it is just reached differently, and on a wedge
+# the collector cannot reach it at all because it reads over qrexec. The private volume survives a
+# kill and does NOT survive the re-create that the same matrix function performs.
+mkstick(){ # <dir> <status> [reachable] [vm]
+  local sd="$1"; rm -rf "$sd"; mkdir -p "$sd"
+  printf 'WEDGE-SPIN\n' > "$sd/class.txt"
+  for f in why.txt listing.txt screen.txt harness.txt; do printf 'x\n' > "$sd/$f"; done
+  printf '%s\n' "$2" > "$sd/logvol-status"
+  [ -n "${3:-}" ] && { printf 'private-volume:win10-app:Q\n' > "$sd/antecedent-location"; printf '%s\n' "$3" > "$sd/antecedent-reachable"; }
+  [ "${3:-}" = volume-only ] && [ -n "${4:-}" ] && printf '%s\n' "$4" > "$sd/volume-hold"
+  printf '%s' "$sd"
+}
+dd=$(mkstick "$T/ns-bare" no-stick); WG_LINES=""; wedge_may_kill "$dd" "" >/dev/null 2>&1; krc=$?
+ck 'SEEN TO FAIL: no-stick with NOTHING recorded about where the logs are is REFUSED' \
+   "$([ "$krc" -ne 0 ] && echo 0 || echo 1)" "$WG_LINES"
+dd=$(mkstick "$T/ns-qrexec" no-stick qrexec); WG_LINES=""
+ck 'no-stick with qrexec ANSWERING is killable - the collector can read the LogDir' \
+   "$(wedge_may_kill "$dd" "" >/dev/null 2>&1 && echo 0 || echo 1)" "$WG_LINES"
+dd=$(mkstick "$T/ns-vol-nohold" no-stick volume-only); WG_LINES=""; wedge_may_kill "$dd" "" >/dev/null 2>&1; krc=$?
+ck 'SEEN TO FAIL: volume-only with NO volume-hold recorded is REFUSED' \
+   "$([ "$krc" -ne 0 ] && echo 0 || echo 1)" "a kill whose only evidence copy is unnamed is the old blindness"
+dd=$(mkstick "$T/ns-vol" no-stick volume-only win10-app); WG_LINES=""
+ck 'volume-only WITH the volume named is killable - a kill does not destroy the volume' \
+   "$(wedge_may_kill "$dd" "" >/dev/null 2>&1 && echo 0 || echo 1)" "$WG_LINES"
+ck '...and wedge_volume_hold names the guest whose private volume must survive' \
+   "$([ "$(wedge_volume_hold "$dd")" = win10-app ] && echo 0 || echo 1)" "got $(wedge_volume_hold "$dd" 2>/dev/null)"
+ck '...while a pulled-stick record holds no volume, so a recreate is free' \
+   "$(dd2=$(mkstick "$T/ns-none" declared-none); wedge_volume_hold "$dd2" >/dev/null 2>&1 && echo 1 || echo 0)" \
+   'nothing to hold means nothing is held'
+# THE COLLECTOR'S OWN BEHAVIOUR: a silent guest with no stick must produce the hold, not a shrug.
+d3="$T/ns-collect"; rm -rf "$d3"; mkdir -p "$d3"
+printf 'SILENT\n' > "$d3/qrexec"
+ck 'the collector records volume-only + a hold when qrexec is SILENT and there is no stick' \
+   "$(grep -q 'antecedent-reachable' "$LIB" && grep -q 'volume-hold' "$LIB" && echo 0 || echo 1)" \
+   'the one case where the antecedent cannot be read without the guest'
+ck '...and it says so LOUDLY, naming what must not be recreated' \
+   "$(grep -q 'NOT survive a remove or a re-create' "$LIB" && echo 0 || echo 1)" \
+   'the recreate is the hazard, not the kill'
+
+# ---- 7a2. THE HOLD IS ENFORCED, not merely recorded ------------------------------------------
+# Jev reviewed the recording half as "right but unenforced" (0.76): a hold changes nothing until the
+# path that destroys the volume consults it. That path is matrix.sh's appvm cell, which removes the
+# AppVM and re-creates it FRESH from the template, re-seeding the private volume.
+R="$T/records"; rm -rf "$R"; mkdir -p "$R/wedge-win10-app-120000" "$R/wedge-other-130000"
+printf 'win10-app\n' > "$R/wedge-win10-app-120000/volume-hold"
+ck 'a held volume is FOUND by the guest it names' \
+   "$(wedge_volume_held_for win10-app "$R" >/dev/null && echo 0 || echo 1)" 'the writer and the reader live in one file'
+ck '...and the record dir is named, so a reader knows where to look' \
+   "$(wedge_volume_held_for win10-app "$R" | grep -q 'wedge-win10-app-120000' && echo 0 || echo 1)" \
+   "$(wedge_volume_held_for win10-app "$R" 2>/dev/null)"
+ck 'a guest with NO hold is free to recreate' \
+   "$(wedge_volume_held_for win11-app "$R" >/dev/null 2>&1 && echo 1 || echo 0)" 'no hold means no block'
+ck 'a hold naming a DIFFERENT guest does not block this one' \
+   "$(printf 'win11-app\n' > "$R/wedge-other-130000/volume-hold"
+      wedge_volume_held_for win10-app "$R" | grep -q 'wedge-other' && echo 1 || echo 0)" \
+   'the hold is per guest, not per campaign'
+ck 'an absent records root is not a hold' \
+   "$(wedge_volume_held_for win10-app "$T/nope" >/dev/null 2>&1 && echo 1 || echo 0)" 'no records, no hold'
+# AND THE CONSUMER IS WIRED. A predicate nobody calls is what the first version was.
+MX="$ROOT/mgmt/harness/matrix.sh"
+ck 'matrix.sh SOURCES the library that owns the hold' \
+   "$(grep -q 'source mgmt/harness/wedge-gates-lib.sh' "$MX" && echo 0 || echo 1)" 'one implementation, every call site'
+ck 'matrix.sh consults the hold BEFORE it removes the AppVM' \
+   "$(grep -nv '^[[:space:]]*#' "$MX" | awk -F: '/wedge_volume_held_for/{if(!h)h=$1} /qvm-remove -f "\$app"/{if(!r)r=$1} END{exit !(h&&r&&h<r)}' && echo 0 || echo 1)" \
+   'the recreate is the hazard; the check must precede it'
+ck '...and it ABORTS the matrix rather than recreating over held evidence' \
+   "$(awk '/wedge_volume_held_for "\$app"/,/qvm-remove -f/' "$MX" | grep -q 'ABORTED rather than recreate over held evidence' && echo 0 || echo 1)" \
+   'a cell that destroys the only copy must stop the campaign, not warn'
 
 # ---- 7b. EVERY failing class is killable with the stick, and NONE without it ------------------
 for c in WEDGE-SPIN WEDGE-BLOCKED WEDGE-UNKNOWN-SHAPE WEDGE-CANDIDATE UNREADABLE-CPU \

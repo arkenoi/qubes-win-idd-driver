@@ -492,8 +492,17 @@ wedge_must_preserve(){
   [ -n "$d" ] || return 0          # a failure with no record yet: hold until there is one
   lvs=$(_wg_get "$d" logvol-status)
   case "$lvs" in
-    pulled)              [ -s "$d/logvol/pull.txt" ] && return 1 ;;  # we have what it was for
-    declared-none|no-stick) return 1 ;;   # holding cannot produce a stick that does not exist
+    pulled)        [ -s "$d/logvol/pull.txt" ] && return 1 ;;  # we have what it was for
+    declared-none) return 1 ;;
+    no-stick)
+      # Holding cannot produce a stick that was never attached. It CAN keep the guest while its
+      # private volume is read, so the hold ends when the record says where the antecedent is.
+      if [ -s "$d/antecedent-location" ]; then
+        case "$(_wg_get "$d" antecedent-reachable)" in
+          qrexec)      return 1 ;;
+          volume-only) [ -s "$d/volume-hold" ] && return 1 ;;
+        esac
+      fi ;;
   esac
   return 0
 }
@@ -596,8 +605,20 @@ wedge_may_kill(){
   local lvs; lvs=$(_wg_get "$d" logvol-status)
   local have=0
   case "$lvs" in
-    pulled)              [ -s "$d/logvol/pull.txt" ] && have=1 ;;
-    declared-none|no-stick) have=1 ;;   # holding cannot produce a stick that does not exist
+    pulled)        [ -s "$d/logvol/pull.txt" ] && have=1 ;;
+    declared-none) have=1 ;;            # the caller states this cell ran without one
+    no-stick)
+      # Killable only once the record says WHERE the antecedent is. "no stick" used to be treated as
+      # "nothing to collect", which is false for an AppVM cell: its logs are on the private volume.
+      # A kill does not destroy that volume, so the kill may proceed - but it may not proceed with
+      # nothing written down about where the only copy lives, because the step after this one
+      # re-creates the AppVM over it.
+      if [ -s "$d/antecedent-location" ]; then
+        case "$(_wg_get "$d" antecedent-reachable)" in
+          qrexec)      have=1 ;;                               # the collector can read it
+          volume-only) [ -s "$d/volume-hold" ] && have=1 ;;    # recorded: that volume must survive
+        esac
+      fi ;;
   esac
   local safe=0
   for c in $WG_KILL_SAFE; do [ "$class" = "$c" ] && safe=1; done
@@ -702,8 +723,38 @@ wedge_collect(){
       printf 'unreadable\n' > "$d/logvol-status"
     fi
   else
+    # NO STICK IS NOT "NOTHING TO COLLECT", and treating it as such was a defect in the first version
+    # of this gate. An AppVM cell has no evidence stick BY RULING, not by failure: matrix.sh's
+    # logvol_stick_scope returns 1 for the appvm class because "THE EVIDENCE STICK IS AN
+    # INSTALL-TESTING INSTRUMENT, and this cell installs nothing". Its logs come from the collector
+    # at the LogDir the guest resolves - normally Q:\Qubes Logs, which lives on the guest's PRIVATE
+    # volume (.claude/skills/rig-logging-sweep/SKILL.md).
+    #
+    # SO THE ANTECEDENT EXISTS; WHAT CHANGES IS HOW IT IS REACHED, and on a wedge that matters more
+    # than anywhere else. The collector reads that LogDir over QREXEC, and a wedged guest has no
+    # qrexec - which is the exact hole the stick exists to close ("the log volume is the ONLY
+    # instrument that survives a wedge - a guest that will not halt cannot be asked for its logs, and
+    # mtools reads the image with no guest at all", matrix.sh). For a no-stick guest the only
+    # surviving copy is on the private volume, which OUTLIVES a qvm-kill and does NOT outlive a
+    # qvm-remove or a re-create - and matrix.sh's appvm cell re-creates the AppVM FRESH from the
+    # template, "private auto-seeded from the template's private at creation", in the same function.
+    # So the kill is not the hazard here; the recreate is, and nothing recorded it.
     printf 'no-stick\n' > "$d/logvol-status"
     printf '%s\n' "${_img:-<no image path could be derived>}" > "$d/logvol-image"
+    printf 'private-volume:%s:%s\n' "$vm" 'Q:\Qubes Logs (the LogDir the guest resolves)' > "$d/antecedent-location"
+    if [ "$(_wg_get "$d" qrexec)" = ANSWERED ]; then
+      # The collector can still read it, so this guest is no different from any other.
+      printf 'qrexec\n' > "$d/antecedent-reachable"
+    else
+      # It cannot be read without the guest. Name the volume that must survive, so the next step is
+      # a decision someone took rather than a cell quietly recreating over the only evidence.
+      printf 'volume-only\n' > "$d/antecedent-reachable"
+      printf '%s\n' "$vm" > "$d/volume-hold"
+      _wg_say "ANTECEDENT IS ON ${vm}'s PRIVATE VOLUME ONLY: no stick for this cell class and qrexec is"
+      _wg_say "  silent, so the collector cannot read the LogDir. The volume survives a kill; it does"
+      _wg_say "  NOT survive a remove or a re-create from the template. Read it (clone the private"
+      _wg_say "  volume into a reader and mount it) BEFORE this guest is recreated."
+    fi
   fi
 
   # O1 the FULL listing: an empty one is an instrument failure, never "the vm is absent"
@@ -846,6 +897,39 @@ wedge_collect_dump(){
   fi
 
   return 0
+}
+
+# wedge_volume_hold <record-dir> - prints the guest whose PRIVATE VOLUME holds the only copy of the
+# antecedent, or nothing. A cell that re-creates an AppVM from its template destroys that volume
+# ("private auto-seeded from the template's private at creation"), so the recreate path asks this
+# first. Empty output means nothing is held and the recreate is free.
+wedge_volume_hold(){
+  local d="${1:?wedge_volume_hold <record-dir>}"
+  [ -s "$d/volume-hold" ] || return 1
+  _wg_get "$d" volume-hold
+}
+
+# wedge_volume_held_for <vm> <records-root> - is THIS guest's private volume held as the only copy
+# of an antecedent? Prints the record dir(s) that hold it; rc 0 when held, 1 when free.
+#
+# THE READER AND THE WRITER IN ONE FILE, deliberately. wedge_collect writes volume-hold; this is how
+# a caller about to DESTROY that volume finds out. Jev reviewed the first version of the no-stick
+# work as "right but unenforced" (0.76) for exactly the missing half: recording a hold changes
+# nothing until the path that recreates the guest consults it. The consumer is matrix.sh's appvm
+# cell, which removes the AppVM and re-creates it FRESH from its template - "private auto-seeded
+# from the template's private at creation" - which is the step that destroys the volume. A kill does
+# not; this does.
+wedge_volume_held_for(){
+  local vm="${1:?wedge_volume_held_for <vm> <records-root>}" root="${2:?}" f held=""
+  [ -d "$root" ] || return 1
+  # Any wedge record under this campaign naming this guest. find, not a glob: the records are
+  # wedge-<vm>-<HHMMSS> directories created per classification and there may be several.
+  for f in $(find "$root" -maxdepth 3 -name volume-hold -type f 2>/dev/null); do
+    [ "$(tr -d '\r\n' < "$f" 2>/dev/null)" = "$vm" ] || continue
+    held="$held $(dirname "$f")"
+  done
+  [ -n "$held" ] || return 1
+  printf '%s\n' "${held# }"
 }
 
 # =============================================================================================
