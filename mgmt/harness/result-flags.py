@@ -118,6 +118,16 @@ ERROR_FLAGS = [
     #    until 2026-10-04 (the drift test had been red on them; the gate grades with THIS table)
     ('vchan_prestop_failed',    is_true,                                  'pre-msiexec ERROR: QrexecAgent/QdbDaemon did not stop within 60 s - the Restart Manager tears them down in bulk (the measured stall trigger)'),
     ('vchan_prestop',           lambda v: 'TIMEOUT' in _s(v),             'pre-msiexec narrative <svc>=stopped:<s>|already-stopped|absent|TIMEOUT:<s>; TIMEOUT = that service did not stop'),
+    # Same shape as vchan_prestop above, for the update TASKS the stage ends before msiexec.
+    # Values per task: ended+disabled (both worked), absent (a clean install has none yet - normal),
+    # ended (the /disable failed, so another instance can start while the MSI holds our files), or
+    # disabled (the /end failed, so an instance ALREADY RUNNING survives into msiexec and the
+    # Restart Manager reaps it - which is the P1 this block exists to prevent: the user was told
+    # "The Windows Update scan task failed" about a scan our own install stopped).
+    # So a bare `ended` or `disabled` is error-class and the other two are not. The regex anchors on
+    # `=` so that `ended+disabled` does not match either half of itself.
+    ('upd_task_prestop',        lambda v: bool(re.search(r'=(?:ended|disabled)(?:\s|$)', _s(v))),
+                                                                          'pre-msiexec narrative <task>=ended+disabled|absent|ended|disabled; a bare ended or disabled = that task was only half handled and the MSI can still reap a running instance'),
     ('clock_skew_refusal',      is_true,                                  'clock sanity ERROR: a payload certificate is not yet valid by the guest clock - the install refused before touching a driver'),
     ('timezone_overridden',     nonempty,                                 'Set-GuestTimeZoneFromHost ERROR: this guest held a time zone that was neither our shipped default nor dom0s, and it was REPLACED - "<old> -> <new> (dom0 <iana>)". A timezone=localtime qube presents dom0 LOCAL time in its hardware clock, and that clock carries no zone of its own, so a guest keeping a different one computes a UTC wrong by the difference on EVERY boot and no RealTimeIsUniversal value corrects it. Reaching this means someone set a zone on this qube - an unsupported configuration for this release, since a guest zone of its own requires a UTC hardware clock (docs/ADR-clock.md). The user is told at ACTION severity too; this is the dom0-readable record. Never set when the guest already matches dom0 (that path returns early), so a reinstall does not trip it.'),
     ('gui_runtime_survivors',   nonempty,                                 'Stop-QwtRuntime WARN: gui-agent/gui-watchdog still running after the service stop and the exit request (name/pid; reported, never killed)'),
