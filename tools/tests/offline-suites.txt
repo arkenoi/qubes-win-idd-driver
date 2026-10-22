@@ -140,3 +140,4 @@ firstboot-effects-selftest.sh
 offline-rigshim-selftest.sh
 wrapper-exit-reason-selftest.sh
 wrapper-exit-emit-selftest.sh
+matrix-attempt-boundary-selftest.sh

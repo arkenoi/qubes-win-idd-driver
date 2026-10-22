@@ -167,6 +167,35 @@ source "$(dirname "${BASH_SOURCE[0]}")/e2e-wait.sh"
 # verification step that could never actually verify. Found 2026-09-08 while instrumenting boots.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 M="${MATRIX_OUT:-$HOME/qwt-matrix/$(date -u +%Y%m%d-%H%M%S)}"; mkdir -p "$M"
+# MATTEMPT-A  (to the B marker: extracted and executed by
+# tools/tests/matrix-attempt-boundary-selftest.sh; neither marker names the other)
+# A FILE CANNOT SCOPE A RUN. $M is derived from the release-package run id, so two campaign attempts
+# against the SAME package share every per-cell artefact path - and those are opened with `>>`
+# (e.g. the logvol bind at the call site below). MEASURED 2026-10-22:
+# WIN10-clean-logvol-bind.out ended the night holding a `fail` plus its `[ERROR] the binder
+# refused` from the attempt that FATALed at 21:50, AND an `ok ... found=D: letter=pinned` from the
+# attempt that succeeded at 22:22:50 - with no separator of any kind, and an mtime belonging to the
+# newest line. Every ordinary way of reading such a file - cat it, tail it, check whether it is
+# fresh - hands the failed attempt's verdict to the running one. It did exactly that three times in
+# one session: a live campaign was reported aborted, then a retry was invented to reconcile three
+# lines that belong to two runs.
+# So each attempt stamps the artefacts it INHERITS. A file is then either new this attempt, or it
+# carries a boundary below which every line is this attempt's. NOTHING IS DELETED - truncating
+# would destroy the previous attempt's evidence, and for an aborted attempt that is the only record
+# it has.
+_matrix_stamp_inherited_artefacts(){ # <dir> <attempt-id> -> stamps, prints what it stamped
+  local d="${1:?_matrix_stamp_inherited_artefacts <dir> <id>}" id="${2:?}" f n=0
+  [ -d "$d" ] || return 0
+  for f in "$d"/*.out "$d"/*.txt "$d"/*.log; do
+    [ -f "$f" ] || continue
+    printf '=== ATTEMPT BOUNDARY: every line below belongs to attempt %s ===\n' "$id" >> "$f" || continue
+    n=$((n+1))
+  done
+  printf 'inherited-artefacts-stamped=%d dir=%s attempt=%s\n' "$n" "$d" "$id"
+}
+MATRIX_ATTEMPT="${MATRIX_ATTEMPT:-$(date -u +%Y%m%dT%H%M%SZ)}"
+_matrix_stamp_inherited_artefacts "$M" "$MATRIX_ATTEMPT" >/dev/null
+# MATTEMPT-B
 R=$M/matrix.log; : > "$R"
 # UTC, LIKE THE RUNNER THAT DRIVES THIS. tools/release-acceptance.sh stamps `date -u` and this
 # stamped `date` (local), so one campaign produced two logs three hours apart with neither line

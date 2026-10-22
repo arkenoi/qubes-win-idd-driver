@@ -104,11 +104,19 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # are not a suite's output. The runner now shims 23 rig commands onto PATH ahead of each suite and
 # reports any suite that reaches one as RED; this suite drives that guard, including the case a
 # shell function cannot stub.
+# 87 -> 88 on 2026-10-22: matrix-attempt-boundary-selftest.sh ADDED. matrix.sh derives its work
+# dir from the release-package run id and opens per-cell artefacts with `>>`, so two attempts
+# against one package wrote into the same files with no separator - and the mtime belongs to the
+# newest line. WIN10-clean-logvol-bind.out held an aborted attempt's `fail` and a later
+# attempt's `ok` together; read three times that night, it produced a live campaign reported as
+# aborted and then an invented retry to reconcile the lines. Each attempt now stamps the
+# artefacts it inherits, nothing is deleted, and the suite asserts ATTRIBUTABILITY by attributing
+# lines the way a reader does, with the stamp removed as its control.
 # 87 since 2026-10-22: the two qrexec-wrapper exit suites joined the list. wrapper-exit-emit is new -
 # it compiles and runs the exit chain, which is what the brace defect needed - and
 # wrapper-exit-reason was already written but excluded for needing submodule git history, which is
 # how its red went unread for days.
-FLOOR=${OFFLINE_SUITES_FLOOR:-87}
+FLOOR=${OFFLINE_SUITES_FLOOR:-88}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"
