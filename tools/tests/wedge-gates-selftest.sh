@@ -235,7 +235,8 @@ ck 'ONCE THE STICK IS IN HAND the kill is permitted, even on a WEDGE-SPIN' \
 ck '...and the reason says the guest is expendable BECAUSE the stick was read' \
    "$(printf '%s' "$WG_LINES" | grep -q 'BECAUSE the stick was read' && echo 0 || echo 1)" "$WG_LINES"
 # THE INVERSION, ASSERTED BOTH WAYS. The register dump used to BLOCK a kill; it no longer does, and
-# the stick now does. Jev did not concede that dumps are sufficient (0.28), so they stay collected -
+# the stick now does. Dumps stay collected (sufficiency re-scored 0.53 once a misleading count of
+# mine was corrected; post_mortem_axis_exhausted 0.65) - they just do not hold a guest hostage, so
 # they just do not hold a guest hostage.
 rm -f "$d/vmcs.txt" "$d/vcpu-samples.txt"; WG_LINES=""
 ck 'a MISSING REGISTER DUMP no longer blocks the kill - it is best-effort now' \

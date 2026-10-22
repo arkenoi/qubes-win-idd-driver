@@ -562,12 +562,24 @@ wedge_record_complete(){
 # When the stick could NOT be read we hold, because that is the only case where the running guest is
 # still the sole place the antecedent exists, in its own unflushed buffers.
 #
-# WHAT JEV DID NOT CONCEDE, kept here rather than dropped: enough_dumps_already scored 0.28 - "we
-# have enough register dumps" is NOT supported by the inventory. 21 record bullets cite a core or
-# memory image while ZERO cores exist on disk, and 23 cite VMCS or interrupt-status fields although
-# the decoder could not read a single bundle until 2026-10-22. The concession that costs nothing:
-# the bundle stays in the best-effort tier, still collected, so the first real wedge can be decoded
-# once now that decoding works.
+# WHAT THE REVIEW ACTUALLY SAID, AFTER MY OWN COUNT WAS CORRECTED. The first pass scored
+# enough_dumps_already 0.28 - "we have enough register dumps" unsupported - and I had handed it a
+# line reading "guest cores on disk: 0" as though that measured whether cores had ever been
+# obtained. IT MEASURED WHAT WAS ON DISK THAT DAY. Cores were captured and mined: #5's core gave
+# "same mechanism 0.95", "the BLOCKED shape means something new 0.14" and "no new defect shown
+# 0.96"; the mechanism class was identified down to pause_flags=4 (VPF_blocked_in_xen, the vCPU
+# held until the stub-domain device model completes an I/O request, other vCPUs idle, ioreq channel
+# not pending either side); six core-reading tools were built and used; and the originals were then
+# dropped DELIBERATELY as spent - mgmt/harness/drop-core.sh exists for that disposal.
+#
+# Re-scored on the corrected inventory: enough_dumps_already 0.28 -> 0.53,
+# post_mortem_axis_exhausted 0.65, and on whether the fault was the count or the investigation,
+# inventory_was_misleading 0.70 against methodology_was_wrong 0.03. The open question was never a
+# post-mortem one: the record puts the rate jump in our TEST CONDITIONS 0.62 (product code 0.24)
+# with exposure at 1.00. Prioritisation re-scored antecedent-primary 0.78.
+#
+# The residual, which costs nothing: the bundle stays in the best-effort tier and is still
+# collected, so the first real wedge gets decoded once now that decoding works at all.
 #
 # DOMAIN-GONE stays listed because there is nothing to collect from a domain that is not there.
 WG_KILL_SAFE="DOMAIN-GONE"
