@@ -484,6 +484,7 @@ DEFAULT_THRESHOLDS = {
     "helper_relaunches": {"max": 0, "severity": "P2", "why": "a helper launched more than once in one agent instance (broker relaunches after an injected hang excluded)"},
     "requested_stop_nonzero_exit": {"max": 0, "severity": "P2", "why": "a requested stop must exit 0 (the 0xb7 case)"},
     "errors_during_requested_stop": {"max": 0, "severity": "P2", "why": "no ERROR line between the watchdog's 'asked to exit' and 'is gone'"},
+    "error_lines_unattributable": {"max": 0, "severity": "P2", "why": "ERROR lines this capture cannot bill to either build: a module wrote only superseded-version lines before the install turnover, so the candidate wrote no log for it at all. The evidence is incomplete, which is a different verdict from the candidate having logged them (measured 2026-10-22, win10-upgrade of run 39767068509)"},
     "stale_error_lines": {"max": 0, "severity": "P2", "why": "'failed with error 0x0: The operation completed successfully' is a stale error code"},
     "watchdog_fast_death_backoffs": {"max": 0, "severity": "P2", "why": "the agent died within 10 s of launch, or a launch failed"},
     "service_failures": {"max": 0, "severity": "P1", "why": "System 7023/7024/7031/7034/7043 for one of our services"},
@@ -497,7 +498,7 @@ DEFAULT_THRESHOLDS = {
     "rise_factor": 2.0,
     "rise_min_delta": 3,
 }
-INFORMATIONAL_METRICS = ["error_lines", "warning_lines", "warning_lines_ours", "warning_lines_stock",
+INFORMATIONAL_METRICS = ["error_lines", "modules_unattributable", "warning_lines", "warning_lines_ours", "warning_lines_stock",
                          "warning_lines_other", "agent_instances", "boots", "shutdowns", "agent_going_down_exits",
                          "deaths_by_exit_code", "broker_events_excused", "fi_records",
                          # what the build filter set aside, so an exclusion is never silent
@@ -702,6 +703,20 @@ def module_builds(files, build=None):
     return out
 
 
+def _build_series(v):
+    """The MAJOR.MINOR.PATCH of a version or a package_version, or None.
+
+    The two namings must be joined: a package_version is `4.3.37+agent.39cbad1d32e0` while a module
+    declares `4.3.37.1059` - same build, and neither string contains the other. The fourth component
+    is the build revision and moves per CI run, so the join is on the first three.
+    """
+    if not v:
+        return None
+    import re as _re
+    m = _re.match(r"\s*(\d+)\.(\d+)\.(\d+)", str(v))
+    return (m.group(1), m.group(2), m.group(3)) if m else None
+
+
 def install_anchor(files, builds):
     """When the BUILD UNDER TEST first ran, or None when this capture shows no turnover.
 
@@ -862,7 +877,63 @@ def build_scope(files, build):
         return bool(anchor and l.ts is not None and l.ts < anchor)
     def prior(lf, l):
         return is_prior_build(lf, l, builds) or (pre_install(l) and not line_version(lf, l))   # GUARD:priorbuild DEFECT: return False
-    return builds, anchor, pre_install, prior
+
+    # THE THIRD CASE, which fell through BOTH clauses above and was therefore billed to the build
+    # under test. MEASURED 2026-10-22 on the win10-upgrade cell of acceptance run 39767068509:
+    # gui-agent's only log in the pull declares `Module version: 4.3.35.795`, the build the upgrade
+    # REPLACED, and the candidate was 4.3.37.1059 whose source contains neither of the two strings
+    # that breached (`tracking falls back to periodic resync`, removed in 33d15de, and the stale
+    # `WatchForEvents failed with error 0x0`). The sweep still reported error_lines_prior_build=0
+    # and prior_build_mix={} - it excluded nothing - because:
+    #   * is_prior_build needs the MODULE to show two or more versions, and this module showed one
+    #     (the candidate never wrote a gui-agent log in this cell at all); and
+    #   * the pre_install clause deliberately covers only version-LESS lines, trusting
+    #     is_prior_build for versioned ones.
+    # So a pre-install line carrying a KNOWN but superseded version is decided by neither. It is the
+    # same class the docstring above already records twice (the 20261018-063720 cell, and win11-nfy
+    # on 2026-10-16 where two fixes were reported as not working and a release was briefly suspected
+    # of shipping stale binaries over one line) - and self-calibration cannot close it, because with
+    # one version and no external reference there is nothing to compare against.
+    #
+    # IT IS NOT EXCLUDED, IT IS NAMED. Jev scored the safe shape of this fix at 0.84 for "report the
+    # ambiguity, do not exclude" against 0.05 for excluding it - excluding lines is how a gate goes
+    # blind, and this project's rule is that a zero from "nothing was considered" must never read
+    # like a zero from "nothing happened". So these lines leave the metrics that ACCUSE the
+    # candidate and land in a metric of their own, which breaches on its own account: the cell still
+    # fails, for what is true (its evidence cannot be attributed) instead of for what is not (the
+    # candidate logged errors on its way out).
+    # THE DISCRIMINATOR CANNOT COME FROM INSIDE THE CAPTURE, which is why both clauses above are
+    # structurally inert here: is_prior_build needs the module to show two versions, and
+    # install_anchor returns None unless SOME module does - so a capture whose only log for a module
+    # is the predecessor's contains nothing that reveals a turnover at all. Self-calibration has no
+    # reference to calibrate against. module_builds' own docstring anticipated this ("`build` NAMES
+    # THE BUILD UNDER TEST when the caller knows it (the package MANIFEST does)... Jev scored the
+    # self-calibrating rule 0.61 with 0.39 on 'it has a failure mode that matters - this is it'), and
+    # --build has existed on the CLI the whole time. The campaign just never passed it.
+    #
+    # So: when the build under test IS named and a module declares versions that do not include it,
+    # the candidate wrote nothing for that module and none of its lines can be the candidate's.
+    bmaj = _build_series(build)
+    def unattributable(lf, l):
+        if prior(lf, l):
+            return False                      # already decided, and decided correctly
+        mod = (lf.module if lf is not None else None)
+        info = builds.get(mod) if mod else None
+        if bmaj and info and info.get("versions"):
+            # The module declared versions and NONE of them is the build under test.
+            if not any(_build_series(v) == bmaj for v in info["versions"]):
+                return bool(line_version(lf, l))
+        # The anchor-based shape, kept for a capture that DOES show a turnover: a pre-install line
+        # carrying a known but superseded version, which is_prior_build cannot reach because its
+        # module shows only one version.
+        if not pre_install(l):
+            return False
+        if not line_version(lf, l):
+            return False                      # the pre_install clause above owns version-less lines
+        if not info or len(info["versions"]) > 1:
+            return False                      # is_prior_build could decide it; this is not its case
+        return True
+    return builds, anchor, pre_install, prior, unattributable
 
 
 def normalize(msg):
@@ -2351,7 +2422,7 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
     # where the single excess launch was the REPLACED build's, both candidate instances having
     # launched the helper exactly once. There is no position left in this function from which the
     # scope is unreachable, so the next metric cannot repeat it.
-    _builds, _anchor, _pre_install, _prior = build_scope(files, build)
+    _builds, _anchor, _pre_install, _prior, _unattrib = build_scope(files, build)
     _lf_by_name = {lf.name: lf for lf in files}
     # AN INSTANCE'S OWN BUILD, from the version it recorded at its init: the test is_prior_build()
     # applies to a LINE, asked of the instance that wrote it. A per-instance metric has no single
@@ -2546,8 +2617,8 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
     # AND the line's own version is known and is not the newest, so an unknown version never shrinks
     # a count. Both stay on ONE LINE each because the GUARD knob rewrites the single line carrying
     # its marker - a multi-line statement makes the knob undriveable, which the selftest catches.
-    m["errors_during_requested_stop"] = sum(len([l for l in i["errors_during_stop"] if not (_lf_by_name.get(i.get("file")) and _prior(_lf_by_name[i["file"]], l))]) for i in insts)   # GUARD:instwindow DEFECT: m["errors_during_requested_stop"] = sum(len(i["errors_during_stop"]) for i in inst)
-    _count("stale_error_lines", [l for lf in files for l in lf.lines if l.level == "E" and STALE_ERR_RE.search(l.msg) and sel(l.ts) and not _prior(lf, l)])
+    m["errors_during_requested_stop"] = sum(len([l for l in i["errors_during_stop"] if not (_lf_by_name.get(i.get("file")) and (_prior(_lf_by_name[i["file"]], l) or _unattrib(_lf_by_name[i["file"]], l)))]) for i in insts)   # GUARD:instwindow DEFECT: m["errors_during_requested_stop"] = sum(len(i["errors_during_stop"]) for i in inst)
+    _count("stale_error_lines", [l for lf in files for l in lf.lines if l.level == "E" and STALE_ERR_RE.search(l.msg) and sel(l.ts) and not _prior(lf, l) and not _unattrib(lf, l)])
     # A ZERO FROM "NOTHING WAS CONSIDERED" READS EXACTLY LIKE A ZERO FROM "NOTHING HAPPENED" (the
     # GUARD:winsince lesson, and three metrics lost to it). The filter can only produce that if a
     # superseded module's NEWEST build wrote nothing in the window at all - an upgrade right at the
@@ -2556,12 +2627,29 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
         mod for mod, info in _builds.items() if len(info["versions"]) > 1
         and not any(lf.module == mod and sel(l.ts) and line_version(lf, l) == info["newest"]
                     for lf in files for l in lf.lines))
-    _count("fallbacks_fired", [l for lf in files for l in lf.lines if FALLBACK_FIRED_RE.search(l.msg) and "fallback refused" not in l.msg and sel(l.ts) and not _prior(lf, l)])
+    _count("fallbacks_fired", [l for lf in files for l in lf.lines if FALLBACK_FIRED_RE.search(l.msg) and "fallback refused" not in l.msg and sel(l.ts) and not _prior(lf, l) and not _unattrib(lf, l)])
     _errs_all = [(lf, l) for lf in files for l in lf.lines if l.level == "E" and sel(l.ts)]
-    errs = [l for lf, l in _errs_all if not _prior(lf, l)]
+    # UNATTRIBUTABLE lines leave this list the same way prior-build lines do, and for the same
+    # reason: they are not the candidate's. The difference is that they are not anyone's that this
+    # capture can name, so they are counted below and BREACH on their own account rather than being
+    # quietly dropped.
+    _errs_unattrib = [l for lf, l in _errs_all if not _prior(lf, l) and _unattrib(lf, l)]
+    errs = [l for lf, l in _errs_all if not _prior(lf, l) and not _unattrib(lf, l)]
     # NOT hidden: the excluded lines are a reported figure, because a large count here means the
     # cycle spent most of the window on the old build and the new build was barely exercised.
-    m["error_lines_prior_build"] = len(_errs_all) - len(errs)
+    m["error_lines_prior_build"] = len(_errs_all) - len(errs) - len(_errs_unattrib)
+    # A FIGURE, NOT A SILENCE. Non-zero here means this capture holds ERROR lines it cannot bill to
+    # either build: a module that wrote only superseded-version lines before the install turnover,
+    # i.e. the candidate wrote no log for that module at all. The cell fails on it (max 0 below),
+    # with the module and version named so the next reader does not have to find them.
+    # _count, NOT a hand assignment: it sets the metric AND threads the lines breach_evidence
+    # prints. The first version of this set m[...] directly and the sweep refused to judge it -
+    # "NO EVIDENCE WAS ATTACHED FOR error_lines_unattributable: this metric has no arm in
+    # breach_evidence and no line list was threaded for it" - which is the guard working.
+    _count("error_lines_unattributable", _errs_unattrib)
+    m["modules_unattributable"] = sorted({
+        "%s@%s" % (lf.module, line_version(lf, l))
+        for lf, l in _errs_all if not _prior(lf, l) and _unattrib(lf, l) and lf.module})
     m["error_lines"] = len(errs)
     # THE OWNER'S GATE CONDITION, 2026-10-07: "Make clean error log the gate condition. Any error is fuckup!"
     # Every error line in our own logs counts, EXCEPT one this run declared it caused (a fault injection, or a
@@ -2616,7 +2704,7 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
                                     "matched": sum(1 for l in errs if rx.search(l.raw))}
                                    for rx in _decl]
     _warns_all = [(lf, l) for lf in files for l in lf.lines if l.level == "W" and sel(l.ts)]
-    warns = [(lf, l) for lf, l in _warns_all if not _prior(lf, l)]
+    warns = [(lf, l) for lf, l in _warns_all if not _prior(lf, l) and not _unattrib(lf, l)]
     m["warning_lines_prior_build"] = len(_warns_all) - len(warns)
     m["warning_lines"] = len(warns)
     # SPLIT BY OWNER, so "no warnings on normal operation" is a number about OUR code rather than a
@@ -3284,7 +3372,7 @@ def cmd_analyze(a):
     # so there is one factory and no second implementation; module_builds is O(lines).
     # COMPUTED BEFORE THE TWO P1 METRICS BELOW, not after. It sat after them until 2026-10-19, which
     # is the whole defect: the signatures were build-scoped and these were not.
-    _sig_prior = build_scope(files, getattr(a, "build", None))[3]
+    _sig_prior = build_scope(files, getattr(a, "build", None))[3]   # index unchanged: unattributable is [4]
     _loud = [x for x in dom0_loud(files, _sig_prior) if not _declared_line(x[2])]
     metrics["dom0_loud_failures"] = len(_loud)
     _lost = [x for x in dom0_lost(files, _sig_prior) if not _declared_line(x[2])]

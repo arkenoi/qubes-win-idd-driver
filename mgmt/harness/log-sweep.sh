@@ -42,6 +42,7 @@
 # did not run - jev.py exit 2). 2 = usage. The last line is always LOGSWEEP-RESULT vm=... rc=... status=... report=...
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
+BUILD="${BUILD:-}"   # the package_version under test; empty leaves the analyzer self-calibrating
 
 VM="${1:-}"; SINCE="${2:-}"; OUT="${3:-}"
 if [ -z "$VM" ] || [ -z "$SINCE" ] || [ -z "$OUT" ]; then
@@ -52,6 +53,14 @@ DECL_PAT=(); DECL_WHY=(); DECL_TOL=(); FI_DECLARED=""; MARKERS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --fault-injection) FI_DECLARED=1 ;;
+    # THE BUILD UNDER TEST, forwarded to the analyzer. Without it the analyzer's build scope is
+    # SELF-CALIBRATING, and self-calibration cannot tell a module whose one declared version is the
+    # OLD one from a module that is current - so on an upgrade cell whose candidate wrote no log for
+    # a module, that module's predecessor lines are billed to the candidate. MEASURED 2026-10-22 on
+    # acceptance run 39767068509: win10-upgrade failed on five error lines written by 4.3.35.795
+    # whose own banner is in the log, while the candidate 4.3.37.1059 provably contains none of the
+    # strings. --build has existed on the analyzer the whole time; nothing passed it.
+    --build) BUILD="${2:?--build needs <package_version>}"; shift ;;
     # A RUN THAT CAUSES AN ERROR DECLARES IT, with the stimulus named. The gate condition is that any
     # UNDECLARED error line in our own logs is a defect (owner 2026-10-07: "Make clean error log the gate
     # condition. Any error is fuckup!"), so a cell that ends a helper on purpose says so here rather than
@@ -181,7 +190,7 @@ fi
 
 # 3. analyze (the analyzer calls Jev once per run; its rc is the verdict)
 python3 tools/log-sweep.py analyze "$OUT/logs" --baseline "$BASELINE" --out "$OUT/report.json" --summary "$OUT/summary.txt" \
-  --since "$SINCE" --host-utc "$HOST_UTC_AT_COLLECT" --label "$VM" > "$OUT/analyze.out" 2>&1
+  --since "$SINCE" --host-utc "$HOST_UTC_AT_COLLECT" --label "$VM" ${BUILD:+--build "$BUILD"} > "$OUT/analyze.out" 2>&1
 arc=$?
 cat "$OUT/summary.txt" 2>/dev/null | tee -a "$R"
 # A CRASH EXITS 1, AND SO DOES "findings" - SO THE REPORT MUST EXIST AND PARSE BEFORE ANY VERDICT IS BELIEVED
