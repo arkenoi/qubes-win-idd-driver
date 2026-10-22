@@ -41,7 +41,29 @@ GATE_SCOPE = os.path.join(HERE, "gate-scope.py")
 
 MATRIX_CELLS = ["win10-clean", "win10-reinstall", "win10-upgrade", "win10-appvm",
                 "win11-clean", "win11-reinstall", "win11-upgrade", "win11-appvm"]
-FEATURE_TESTS = ["notify-errors-guest-test", "crop-before-map", "template-update"]
+# READ FROM THE ONE LIST, NEVER COPIED. tools/release-acceptance.sh (which RUNS them) and
+# tools/acceptance-record-check.py (which REQUIRES them in the record) both read
+# tools/release-feature-tests.txt for exactly this reason - "ONE list, read by both, so the runner
+# and this check cannot drift apart". THE PLAN HAD ITS OWN COPY, and it drifted the moment a fourth
+# feature test was added on 2026-10-22: release-acceptance.sh ran updater-component and
+# acceptance-record-check.py required it, while THE SINGLE ENTRY POINT still planned three and
+# reported the same suite count as before. A plan that under-reports what a campaign will run is
+# worse than no plan: it is the thing the operator reads before committing hours of rig time.
+# RESOLVED AGAINST ROOT FIRST, THEN THIS SCRIPT'S DIRECTORY, and it DIES if neither has it - never
+# a built-in default, because a silent default is exactly the drift being removed. Both locations
+# are needed: tools/tests/acceptance-plan-selftest.sh copies this script alone into a scratch
+# tools/ dir to build its defect knobs, so a HERE-only lookup crashed two knob legs (measured
+# 2026-10-22), while GATE_SCOPE_ROOT points at the fixture tree that carries the real list.
+_FEATURE_CANDIDATES = [os.path.join(ROOT, "tools", "release-feature-tests.txt"),
+                       os.path.join(HERE, "release-feature-tests.txt")]
+_FEATURE_LIST = next((c for c in _FEATURE_CANDIDATES if os.path.exists(c)), None)
+if _FEATURE_LIST is None:
+    sys.exit("acceptance-plan: cannot find release-feature-tests.txt (looked in %s) - refusing to "
+             "plan a campaign whose feature tests it would have to guess" % " and ".join(_FEATURE_CANDIDATES))
+with open(_FEATURE_LIST) as _fh:
+    FEATURE_TESTS = [l.strip() for l in _fh if l.strip() and not l.startswith("#")]
+if not FEATURE_TESTS:
+    sys.exit(f"acceptance-plan: {_FEATURE_LIST} names no feature tests - refusing to plan a campaign that would silently skip them")
 REMAINDER = ["gate-preflight", "p3a-etw-gate", "toast-hold-test", "log-sweep", "failproof-gates", "failproof-faultinject"]
 FI_SUITES = ["failproof-gates", "failproof-faultinject"]
 GUEST_DRIVING = set(MATRIX_CELLS) | set(FEATURE_TESTS) | set(REMAINDER)

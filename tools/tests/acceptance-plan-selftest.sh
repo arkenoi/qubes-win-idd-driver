@@ -48,8 +48,13 @@ BASE=$(git rev-parse HEAD)
 printf '// a toast change\n' >> agent/gui-agent/toasthold.h; git add -A >/dev/null && git commit -qm toast
 H1=$(git rev-parse HEAD)
 
-# the copy lives in a tools/ dir of its own with gate-scope.py beside it, as the real one has
+# the copy lives in a tools/ dir of its own with gate-scope.py beside it, as the real one has -
+# and with release-feature-tests.txt, for the same reason: acceptance-plan.py READS that list
+# instead of carrying its own copy (2026-10-22, after the plan silently planned three feature tests
+# while release-acceptance.sh ran four), so the knob copies need it beside them or the tool dies
+# before writing a plan. A fixture that lacks an input the tool reads tests nothing.
 mkdir -p "$T/tools"; ln -sf "$ROOT/tools/gate-scope.py" "$T/tools/gate-scope.py"
+ln -sf "$ROOT/tools/release-feature-tests.txt" "$T/tools/release-feature-tests.txt"
 knob(){ local n="$1" out="$T/tools/plan-$1.py" hits
   hits=$(grep -c "# GUARD:$n DEFECT: " "$SRC")
   [ "$hits" = 1 ] || { echo "FATAL: GUARD:$n appears $hits times in $SRC (want exactly 1)" >&2; return 2; }
@@ -92,8 +97,15 @@ pf bare "[c['command'] for c in r['cells']]" | grep -q '<release-package-run-id>
 # ---- full: the floor --------------------------------------------------------------------------------------------------------
 mk_ledger "$OLD"; git add -A >/dev/null && git commit -qm old-ledger; H2=$(git rev-parse HEAD)
 rc=$(plan "$SRC" full --range "$H1..$H2" --package-run 111 --g10 a --g11 b --b10 c --b11 d --f11 e --vm10 f --vm11 g --os11 h)
-[ "$(pf full "r['gate']['full']")" = True ] && pf full "r['gate']['floor']" | grep -q 'day(s) ago' && [ "$(pf full "len(r['gate']['required'])")" = 18 ] \
-  && ok "full: the floor trips (an old last full gate) and all 18 suites are required" || bad "full: full=$(pf full "r['gate']['full']") floor=$(pf full "r['gate']['floor']") n=$(pf full "len(r['gate']['required'])")"
+# THE EXPECTED COUNT COMES FROM THE MAP, NOT A LITERAL. This read `= 18 ]`, so the day a 19th suite
+# was added to mgmt/gate-scope.json (updater-component, 2026-10-22) this leg failed on a correct
+# plan - and because this suite is NOT in tools/tests/offline-suites.txt, the estate stayed green
+# while it rotted. Deriving from the map under test is legitimate here: the map is the INPUT and the
+# plan's required set is the OUTPUT, so this still asserts a real property (the floor requires the
+# FULL set) rather than reading the plan's own bookkeeping back to itself.
+FULLN=$(python3 -c "import json,sys;print(len(json.load(open('$SRC/mgmt/gate-scope.json'))['full']['suites']))")
+[ "$(pf full "r['gate']['full']")" = True ] && pf full "r['gate']['floor']" | grep -q 'day(s) ago' && [ "$(pf full "len(r['gate']['required'])")" = "$FULLN" ] \
+  && ok "full: the floor trips (an old last full gate) and all $FULLN suites are required" || bad "full: full=$(pf full "r['gate']['full']") floor=$(pf full "r['gate']['floor']") n=$(pf full "len(r['gate']['required'])")"
 cmd=$(pf full "[c['command'] for c in r['cells'] if c['id']=='install-and-feature-cells'][0]")
 printf '%s' "$cmd" | grep -q -- '--cells "win10-clean win10-reinstall win10-upgrade win10-appvm win11-clean win11-reinstall win11-upgrade win11-appvm"' && ok "full: all eight install cells in one invocation" || bad "full: command: $cmd"
 [ "$(pf full "r['ready']")" = False ] && pf full "r['blocked']" | grep -q -- '--fi-run' && ok "full: NOT ready without --fi-run - the FI suites cannot run on an ordinary package" || bad "full: ready=$(pf full "r['ready']") blocked=$(pf full "r['blocked']")"

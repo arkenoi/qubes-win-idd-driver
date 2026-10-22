@@ -10,7 +10,7 @@
   "full": {
     "suites": ["package-verify", "win10-clean", "win10-reinstall", "win10-upgrade", "win10-appvm",
                "win11-clean", "win11-reinstall", "win11-upgrade", "win11-appvm",
-               "notify-errors-guest-test", "crop-before-map", "template-update",
+               "notify-errors-guest-test", "crop-before-map", "updater-component", "template-update",
                "failproof-gates", "failproof-faultinject", "gate-preflight", "p3a-etw-gate",
                "toast-hold-test", "log-sweep"],
     "reason": "Everything. Required by the floor, by an unmapped path, and by any pattern below that asks for it."
@@ -50,10 +50,10 @@
     "tools/notifhost/**": { "suites": ["win11-clean", "notify-errors-guest-test", "toast-hold-test"], "reason": "the notification bridge and the error route's sender" },
     "tools/etwproxy/**": { "suites": ["win11-clean", "p3a-etw-gate"], "reason": "the ETW proxy" },
 
-    "guest/qubes-windows-update.ps1": { "suites": ["template-update"], "reason": "the updater pass dom0 drives" },
-    "guest/wu-update.ps1": { "suites": ["template-update"], "reason": "the updater's task action" },
-    "guest/install-updater-agent.ps1": { "suites": ["template-update", "win11-clean"], "reason": "it deploys the updater into a guest" },
-    "guest/qubes-updates-relay.cs": { "suites": ["template-update"], "reason": "the relay the updater serves through" },
+    "guest/qubes-windows-update.ps1": { "suites": ["updater-component", "template-update"], "reason": "the updater pass dom0 drives; the quick gates assert it served 8082 with its own relay and reported a count to dom0" },
+    "guest/wu-update.ps1": { "suites": ["updater-component", "template-update"], "reason": "the updater's task action" },
+    "guest/install-updater-agent.ps1": { "suites": ["updater-component", "template-update", "win11-clean"], "reason": "it deploys the updater into a guest, and the quick gates assert the relay was actually BUILT there - fa5b416a turned that compile into a discarded ScriptBlock and no suite noticed" },
+    "guest/qubes-updates-relay.cs": { "suites": ["updater-component", "template-update"], "reason": "the relay the updater serves through; the quick gates assert the PLACED binary carries its marker and binds 8082 with parent=" },
     "guest/qwt-notify-error.ps1": { "suites": ["notify-errors-guest-test"], "reason": "the error route itself" },
     "guest/qwt-report-death.ps1": { "suites": ["notify-errors-guest-test"], "reason": "the one death reporter" },
     "guest/pvnic-selfprime.ps1": { "suites": ["win11-clean", "win11-appvm"], "reason": "the PV NIC priming latch, exercised by an AppVM with a netvm" },

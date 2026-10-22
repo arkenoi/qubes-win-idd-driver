@@ -42,7 +42,14 @@
 # tools/tests/updater-component-selftest.sh drives all seven gates against the REAL pre-fix and
 # post-fix captures of 2026-10-22 - the pre-fix pair must FAIL and each gate must fail alone.
 set -uo pipefail
-cd /home/user/qubes-win-idd-driver || exit 2
+# THE ROOT COMES FROM THIS SCRIPT'S OWN LOCATION, not from a hardcoded path. The rig harnesses
+# around it all `cd /home/user/qubes-win-idd-driver` because they only ever run on this qube - but
+# this one is ALSO driven offline by tools/tests/updater-component-selftest.sh, which runs in CI
+# where the repo is checked out somewhere else entirely. Measured 2026-10-22 at 9295417d: the cd
+# failed, the script exited 2 before reading a single gate, and the suite reported 7 passed / 5
+# failed in CI while passing 45/0 here - the legs expecting INSTRUMENT were satisfied by the exit
+# and the ones expecting a verdict were not. A test that only passes on one machine is not a test.
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 2
 source mgmt/harness/updater-gates-lib.sh
 
 FAMILY="${FAMILY:-win11de}"              # the golden is <FAMILY>-qwt: GWeck's sealed German 25H2 TemplateVM

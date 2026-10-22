@@ -1,5 +1,11 @@
 # The release feature tests: tools/release-acceptance.sh runs each one and records it as cell-group feature-<name>;
 # tools/acceptance-record-check.py requires every one of them in the acceptance record before cut-release may publish.
+# ORDER IS DELIBERATE. updater-component is FIRST: it is the quick per-component check (minutes,
+# guest-side) and the operator wants it to report before the heavy sequences start - "BEFORE the
+# full sequence starts, we want quick check if main functionality passes without failure".
+# crop-before-map must stay immediately after notify-errors-guest-test: it rides that test's
+# already-installed subject.
+updater-component
 notify-errors-guest-test
 crop-before-map
 template-update

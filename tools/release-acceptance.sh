@@ -309,6 +309,17 @@ if [ "$SKIP_FEATURES" -eq 0 ]; then
         # Rides the guest the notify test just left installed with the release.
         VM=win11-nfy LOG="$WORK/$t.log" ./mgmt/harness/crop-before-map.sh >>"$WORK/$t.out" 2>&1
         rc=$? ;;
+      updater-component)
+        # THE UPDATER'S QUICK GATES, over GWeck's sealed German 25H2 TemplateVM. Minutes, guest-side,
+        # no dom0 photography. It asserts what template-update never did - that the relay was BUILT,
+        # vouched, listening on 8082 with parent=, served by the pass, and that a COUNT reached dom0
+        # - so a relay that was never compiled is named here instead of surfacing an hour later as
+        # an update-outcome symptom (fa5b416a, 2026-10-19: a bare `{ }` made the compile dead code,
+        # and the silence was attributed to four other causes in turn). Same gates run again as
+        # template-update's own preflight; one implementation in mgmt/harness/updater-gates-lib.sh.
+        VM=win11de-uc PKG="$SETUP" FAMILY=win11de REPORTER=gweck LOG="$WORK/$t.log" OUT="$WORK/$t.d" \
+          ./mgmt/harness/updater-component-test.sh >>"$WORK/$t.out" 2>&1
+        rc=$? ;;
       template-update)
         # THE UPDATER ON THE ONE CLASS IT SERVES. The proxied updater runs on TemplateVMs only, and until 2026-10-02 no release had
         # ever run an update pass on one - every update run was on StandaloneVM subjects (phase=skipped-standalone), which is how

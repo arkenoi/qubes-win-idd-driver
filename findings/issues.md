@@ -185,6 +185,7 @@ If the owner wants a smaller scope he can say so; nothing here is hard to stop.
 
 
 - UNSCHEDULEDSUITES [harness, tools/tests/offline-suites.txt; **OPEN**] [verified 2026-10-21]
+  **MEASURED 2026-10-22: 180 selftests on disk, 105 in tools/tests/offline-suites.txt, 85 UNSCHEDULED** - so "95 green" covers 58% of the suites that exist. And an excluded suite rots: tools/tests/acceptance-plan-selftest.sh - the suite for THE SINGLE ENTRY POINT - fails 6 of 23 legs at HEAD, unnoticed, because nothing runs it. Those 6 are stale expectations about the required-suite count and the planned command text, not tool defects (the plan's live output was checked by hand: 19 suites, 4 feature tests, correct commands). I restored it to that 17/6 baseline after my own change briefly made it 15/8, and did NOT register it: registering a red suite turns the estate red. Fixing those 6 and registering it is the next piece of this item.
   **~36 SUITES ARE OUTSIDE THE CURATED LIST AND NOTHING RUNS THEM.** Nine are excluded by policy
   (mtools/pwsh/compiler, which a GitHub runner lacks) and were run by hand this night: eight green,
   one red (wu-deploy-loud, environmental - the shipped region reaches the real `schtasks`, absent
