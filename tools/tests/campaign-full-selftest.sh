@@ -28,6 +28,8 @@ ck(){ if [ "$2" = 0 ]; then pass=$((pass+1)); say "ok   $1"; else fail=$((fail+1
 
 PKGROLES=$(awk '/# ---- PKGROLES-BEGIN/{f=1;next}/# ---- PKGROLES-END/{f=0}f' "$SRC")
 CIDUE=$(awk '/# ---- CIDUE-BEGIN/{f=1;next}/# ---- CIDUE-END/{f=0}f' "$SRC")
+PKGDRIFT=$(awk '/# ---- PKGDRIFT-BEGIN/{f=1;next}/# ---- PKGDRIFT-END/{f=0}f' "$SRC")
+[ -n "$PKGDRIFT" ] || { say "FAIL  could not extract PKGDRIFT"; exit 2; }
 [ -n "$PKGROLES" ] || { say "FAIL  could not extract PKGROLES"; exit 2; }
 [ -n "$CIDUE" ] || { say "FAIL  could not extract CIDUE"; exit 2; }
 printf '%s' "$PKGROLES" | grep -q 'QGA_FAULT_INJECTION' || { say "FAIL  the extracted resolver does not read QGA_FAULT_INJECTION"; exit 2; }
@@ -180,6 +182,40 @@ EOF
 got=$(cidue "$T/ci-two.txt" | tr '\n' ' ')
 ck 'two branch-filtered required workflows are both dispatched' \
    "$(printf '%s' "$got" | grep -q 'build.yml' && printf '%s' "$got" | grep -q 'test.yml' && echo 0 || echo 1)" "got: '$got'"
+
+# ---- 3b. PRODUCT drift since the package was built must REFUSE ---------------------------------
+# A package from an earlier commit is still the thing under test when only the harness moved - that
+# is campaign-preflight's own rule ("no product drift since") and rebuilding twice to prove nothing
+# costs 20 minutes. But if a PRODUCT path moved, the package is NOT what HEAD is, and running a
+# campaign on it would receipt the wrong bytes. Driven over a real git repo, both ways.
+G="$T/repo"; rm -rf "$G"; mkdir -p "$G"; (cd "$G" && git init -q . && git config user.email t@t && git config user.name t
+  mkdir -p guest mgmt/harness && echo a > guest/x.ps1 && echo h > mgmt/harness/y.sh
+  git add -A >/dev/null && git commit -qm base) >/dev/null 2>&1
+BASE_SHA=$(cd "$G" && git rev-parse HEAD)
+drift_run(){ # drift_run <pkg-sha> <head-sha> -> "OK" or "DIE: ..."
+  (cd "$G" && PKG_SHA="$1" HEAD_SHA="$2" SHORT="${2:0:12}" OUT="$T" bash -c '
+     set -uo pipefail
+     log(){ :; }
+     die(){ echo "DIE: $*"; exit 2; }
+     '"$PKGDRIFT"'
+     echo OK') 2>&1; }
+
+(cd "$G" && echo more >> mgmt/harness/y.sh && git add -A >/dev/null && git commit -qm harness-only) >/dev/null 2>&1
+H_HARNESS=$(cd "$G" && git rev-parse HEAD)
+out=$(drift_run "$BASE_SHA" "$H_HARNESS")
+ck 'a HARNESS-only commit after the build does NOT invalidate the package' \
+   "$([ "$out" = "OK" ] && echo 0 || echo 1)" "got: $out"
+
+(cd "$G" && echo changed >> guest/x.ps1 && git add -A >/dev/null && git commit -qm product) >/dev/null 2>&1
+H_PRODUCT=$(cd "$G" && git rev-parse HEAD)
+out=$(drift_run "$BASE_SHA" "$H_PRODUCT")
+ck 'SEEN TO FAIL: a PRODUCT path changed since the build is a REFUSAL' \
+   "$(printf '%s' "$out" | grep -q '^DIE:' && echo 0 || echo 1)" "got: $out"
+ck '...and the refusal names the rebuild that fixes it' \
+   "$(printf '%s' "$out" | grep -q 'rebuild release-package' && echo 0 || echo 1)" "got: $out"
+out=$(drift_run "$H_PRODUCT" "$H_PRODUCT")
+ck 'a package built AT head needs no drift check at all' \
+   "$([ "$out" = "OK" ] && echo 0 || echo 1)" "got: $out"
 
 # ---- 4. the harness refuses to touch a rig in DRY mode -----------------------------------------
 ck 'DRY mode is honoured before any guest-touching step (no release-acceptance/gate-remainder above the DRY exit)' \

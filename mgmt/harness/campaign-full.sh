@@ -89,7 +89,26 @@ resolve_pkgs(){
 }
 # ---- PKGROLES-END
 resolve_pkgs
-log "packages: ordinary=$PKG fault-injection=$FI"
+# THE PACKAGE IS VERIFIED AGAINST ITS OWN COMMIT, taken from the RUN - not from HEAD and not from
+# the tree's own MANIFEST. Measured in this chain's first dry run: it printed
+# `verify-release-package.sh --commit <HEAD>` for a tree built from an earlier commit, which would
+# have failed a perfectly good package. HEAD and the package's commit differ legitimately whenever a
+# harness-only commit follows the build; campaign-preflight owns "no product drift since". Reading
+# the sha from the run rather than from MANIFEST.json keeps the check non-circular: the tree must
+# match something stated outside it.
+PKG_SHA=$(gh run view "$PKG" --json headSha --jq .headSha 2>/dev/null)
+[ -n "$PKG_SHA" ] || die "could not read the head sha of run $PKG - the package cannot be verified against an unknown commit"
+log "packages: ordinary=$PKG (built from ${PKG_SHA:0:12}) fault-injection=$FI"
+# ---- PKGDRIFT-BEGIN  (driven by tools/tests/campaign-full-selftest.sh)
+if [ "$PKG_SHA" != "$HEAD_SHA" ]; then
+  drift=$(git diff --name-only "$PKG_SHA..$HEAD_SHA" -- agent guest packaging driver tools/notifhost 2>/dev/null)
+  if [ -n "$drift" ]; then
+    log "PRODUCT PATHS changed since the package was built:"; printf '    %s\n' $drift | tee -a "$OUT/chain.log"
+    die "the package at ${PKG_SHA:0:12} does not carry HEAD's product changes - rebuild release-package (and the fault_injection variant) at $SHORT"
+  fi
+  log "  HEAD is ${SHORT} but no PRODUCT path changed since ${PKG_SHA:0:12} - the package is still the thing under test (campaign-preflight re-checks this)"
+fi
+# ---- PKGDRIFT-END
 
 # ---- 2. required CI, green for THIS sha ----------------------------------------------------------
 # ci-state.py names any required workflow that is due but branch-filtered, in those words. Dispatch
@@ -133,7 +152,7 @@ log "plan: ready=$ready, $nsuite suite(s) required"
 
 if [ -n "$DRY" ]; then
   log "DRY: the chain would now run, in order:"
-  log "  1. tools/verify-release-package.sh --tree <$PKG setup> --commit $HEAD_SHA"
+  log "  1. tools/verify-release-package.sh --tree <$PKG setup> --commit $PKG_SHA  (the PACKAGE's commit)"
   log "  2. PKG=$PKG mgmt/harness/campaign-full.sh's inner campaign-run.sh (preflight -> release-acceptance -> campaign-state)"
   log "  3. tools/gate-remainder.sh --run $PKG --vm10 $VM10 --vm11 $VM11 --os11 $OS11 --fi-run $FI"
   log "  4. tools/gate-scope.py check <receipt>"
@@ -148,7 +167,7 @@ if [ ! -s "$TREE/MANIFEST.json" ]; then
     || die "could not download the setup tree from run $PKG"
 fi
 log "step 1/4: package-verify"
-bash tools/verify-release-package.sh --tree "$TREE" --commit "$HEAD_SHA" > "$OUT/package-verify.out" 2>&1; vrc=$?
+bash tools/verify-release-package.sh --tree "$TREE" --commit "$PKG_SHA" > "$OUT/package-verify.out" 2>&1; vrc=$?
 log "  package-verify rc=$vrc: $(tail -1 "$OUT/package-verify.out" | cut -c1-140)"
 [ "$vrc" = 0 ] || { log "STOP: the package does not verify - nothing downstream would be meaningful"; exit "$vrc"; }
 
