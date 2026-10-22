@@ -2,27 +2,30 @@
 
 ## CURRENT STATE
 
-**THE 4.3.37 CAMPAIGN RAN AND DID NOT COMPLETE, 2026-10-21 NIGHT.** Package 39649955816 at commit
-ee4b2ff5. `PACKAGE COMPLETE 4.3.37.1043` (14 gates, 87 files, provenance exact), PREFLIGHT CLEAR,
-estate 85/0/1458, rig idle. The matrix ABORTED IN CELL 1 OF 8 - `=== MATRIX: 14 passed, 1 failed -
-ABORTED on a log path that broke mid-cell ===`, rc=2 - and the three feature tests then ran:
-notify-errors-guest-test PASS, crop-before-map PASS, template-update FAIL. The six remainder suites
-did NOT run: they need --vm11 win11-acc, which the aborted matrix never created. Final:
-`release acceptance for 4.3.37+agent.39cbad1d32e0: INCOMPLETE/FAILED`, rc=1, teardown clean
-(vmlock=none, no orphans - 5a21c3e1 working).
-
-**THE ABORT WAS MY OWN DEFECT, NOT A PRODUCT OR HARNESS ONE.** The freshness requirement added that
-morning to logvol_prove_roundtrip compared each agent log's LastWriteTime against
-Win32_OperatingSystem.LastBootUpTime. Every guest on this rig boots ~3 h ahead and our puller
-corrects it (clock_boot_correction_s = 10800), and the standing note has recorded since 2026-10-09
-that LastBootUpTime reads -10734 s just after the flip and that mtimes run backwards across it. I
-wrote in the code comment that both reads being inside the guest meant no skew could enter; the skew
-is inside the guest. agentfresh came back 0 over a volume holding 260 lines from pid 3904, a NEW
-agent process that started LifecycleStart at 21:34:19 in the graded boot, with FAT directory entries
-reading 21:37 against a boot of 21:33:27. I called the abort a TRUE positive twice before the pid in
-collect-failure's package refuted me. FIXED 65313f9d: the anchor is now a pid that is RUNNING NOW,
-read from the log's own pid:tid prefix, no clock consulted; driven by logvol-lib-selftest 101/0 with
-the clock predicate over the same fixture as the control (pid 1, clock 0).
+**4.3.37 ACCEPTANCE: 6 OF 8 CELLS GRADED, THE PRODUCT DEFECT FIXED AND CONFIRMED, 2026-10-22.**
+Package 39678937221 at e97deb11, run from the plan's invocation on the canonical entry images
+(G10=win10-iqi G11=win11-iqi). Per cell from each report.json - status / error_lines_undeclared /
+wrapper logs read / lines parsed: win10-clean CLEAN 0/1/13 · win10-reinstall CLEAN 0/1/29 ·
+win10-upgrade INCOMPLETE 4/46/456 · win11-clean CLEAN 0/1/11 · win11-reinstall FINDINGS 0/1/17 ·
+win11-upgrade FINDINGS 3/48/484. **1010 wrapper lines read and `an output pump is still running at
+exit` occurs ZERO times in any report**, against 145 undeclared lines on win10-clean before the fix,
+141 of them that one line. CAUSE, fixed in core-agent 0d1b565: the exit chain's final `else` had no
+braces, so its LogError was a sibling of the whole chain and ran on every pass. Deterministic, not a
+race. The suite that existed for it passed on the defect because it counted calls in the source;
+tools/tests/wrapper-exit-emit-selftest.sh now compiles the chain and runs it (owner: "FUCK YOUR
+GREPS"). Three earlier aborts were MINE or instrument-side, and their lessons are in rules.md and
+memory rather than here: a clock-anchored freshness predicate (fixed 65313f9d, pid-anchored), a
+campaign log that mixed two attempts (eb078cbb, f68f53e9), and an entry environment I reconstructed
+from a previous run's log instead of reading the committed one.
+WHAT THE TWO FAILING CELLS ARE: win11-reinstall on a NEW P1 - MSI Restart Manager shuts the WU scan
+task down because it holds files the install replaces, and our scan task reports that to dom0 as
+"The Windows Update scan task failed", so the user sees a failure our own install caused
+(INSTALLKILLSWUSCANANDTELLSTHEUSER). win11-upgrade on three breaches all known or diagnosed here.
+Two further FAILs are our own scoping defects, not cells: the sweep cap sized for three cells over a
+six-cell directory, and the sweep gate inconclusive on per-day logs that carry no birth line.
+WHAT REMAINS: win10-appvm and win11-appvm, and the blocker is NOT an unmade decision - see
+LOGVOLBINDLATE, where the fix landed twice (0bf0f324, 9e314357) and the pregrade gate's predicate is
+unsatisfiable on an AppVM by construction. Acceptance stays INCOMPLETE until those two grade.
 
 **AND THE CAMPAIGN FOUND A REAL ONE: THE UPGRADE COULD NOT LAND ITS OWN RELAY.** template-update
 round 3 FAILED - `dom0 says updates are available but no pass in this log ever reported` - because
@@ -36,90 +39,6 @@ with the `parent=` field only the fixed binary writes. The deploy refused rather
 and the mutex is held so no pass is running, that pid is ended BY -Id and the relay is replaced;
 any other listener still refuses. Jev: stop_the_orphan 0.81, refusing_forever 0.21. Four driven legs
 plus a stranger leg; both pre-existing knobs still break the suite.
-
-**CAMPAIGN 2 RAN FURTHER, AND WHAT STOPPED IT WAS TWO MISSING CHARACTERS IN THE PRODUCT, 2026-10-22.**
-Package 39668691789. The pid anchor held live where attempt 1's clock anchor had aborted cell 1:
-`agentlogs=4 agentfresh=4 agentopen=4` against `agentfresh=0`. Cells reached 3 of 8 and cells 1 and 2
-both graded FAIL on `error_lines_undeclared` - 145 lines against a max of 0, of which 141 were ONE
-qrexec-wrapper line: "an output pump is still running at exit - the child exited and its output was
-drained", plus 3 for "the peer closed the vchan". Those are the two reasons the exit chain routes to
-Debug as an ordinary end.
-CAUSE: the chain's final `else` had no braces, so it governed only the `if` beneath it and the
-LogError was a SIBLING of the whole chain - it ran on every pass, including the ordinary ends that
-had just logged Debug one line above. Deterministic, single-threaded, not a race: g_exitReason was
-correct in all 141 lines and only the LEVEL was wrong. FIXED core-agent 0d1b565.
-AND THE SUITE THAT EXISTED FOR THIS PASSED ON IT. wrapper-exit-reason-selftest.sh asserted the
-emission as a COUNT of LogError calls in the source and a branch ORDER from a grep - both still true
-with the brace gone, because a brace changes which lines execute. Owner: "FUCK YOUR GREPS".
-tools/tests/wrapper-exit-emit-selftest.sh (e97deb11) now extracts the chain, COMPILES it against
-stubs and RUNS it once per exit reason, with gcov proving the case list reaches every line and four
-controls including the shipped defect reproduced. The structural suite was rebuilt one id per
-property - 21 ids, 22 mutations, every id seen red - which found three further defects in its own
-checks, one of them a check a COMMENT could satisfy. Campaign 2 was stopped deliberately to free the
-rig for the rebuild; teardown clean.
-
-**SIX OF EIGHT CELLS ARE NOW GRADED AND THE BRACE FIX HOLDS ON EVERY ONE, 2026-10-22.** A second
-invocation ran the three cells that need no AppVM: `=== MATRIX: 42 passed, 4 failed ===`, the footer's
-4 being `product-FAIL=2 INVALID-*(ungraded)=2` under the three-class rule. Per-cell, from each
-report.json - status, error_lines_undeclared, qrexec-wrapper logs read, lines parsed:
-win10-clean CLEAN 0 / 1 / 13 · win10-reinstall CLEAN 0 / 1 / 29 · win10-upgrade INCOMPLETE 4 / 46 /
-456 · win11-clean CLEAN 0 / 1 / 11 · win11-reinstall FINDINGS 0 / 1 / 17 · win11-upgrade FINDINGS
-3 / 48 / 484. **1010 wrapper lines read across the six, and `an output pump is still running at
-exit` occurs ZERO times in any report** - against 141 in one cell before the fix. (An earlier note
-here said 676 lines for win10-upgrade; that was its LOGDIR INVENTORY figure, 68 files / 676 lines in
-the directory. 456 across 46 files is what the sweep PARSED, and it is the number the claim rests
-on.)
-THE TWO product FAILs: win11-reinstall on a NEW P1 - the install window kills the WU scan task and
-the user is told the scan failed, INSTALLKILLSWUSCANANDTELLSTHEUSER below - and win11-upgrade on
-three breaches that are all known or already diagnosed here (agent_ends_unrecorded = the
-upgrade-cells-only entry, 2 of its 3 undeclared lines the known 0x887a0026 keyed-mutex defect, the
-third the predecessor line of PERDAYLOGDECLARESNOVERSION, and fallbacks_fired = ETW tier-down).
-THE TWO INVALID: the sweep cap sized for three cells over a six-cell directory, and the sweep gate
-INCONCLUSIVE on per-day logs with no birth line. Both are scoping defects of ours, both recorded
-below, and NEITHER touches the per-cell verdicts above - each cell sweeps its own guest.
-STILL BLOCKED, and it is the only thing between this and a complete matrix: win10-appvm and
-win11-appvm, on LOGVOLBINDLATE, the owner's unmade decision.
-
-**CAMPAIGN 3 REACHED CELL 4 OF 8 AND STOPPED ON A DECISION THAT IS THE OWNER'S, 2026-10-22.**
-`MATRIX: 44 passed, 2 failed - ABORTED on a log path that broke mid-cell`, package 39678937221 at
-e97deb11, run from the plan's verbatim invocation on the canonical entry images (G10=win10-iqi,
-G11=win11-iqi). Cells 1 and 2 CLEAN. Cell 3 win10-upgrade ran and lost its VERDICT, not its data.
-Cell 4 win10-appvm FATAL on LOGVOLBINDLATE - the AppVM log path, already open above with the owner's
-tradeoff unmade (Jev on landing it unasked: 0.36). The feature tests then ran as designed.
-CELL 3'S THREE BREACHES ARE ALL TRACEABLE TO OPEN ENTRIES, none to this change:
-`agent_ends_unrecorded=1` (pid 4064) is AGENTENDSUNRECORDEDONINPLACEUPGRADE, which this register
-already records as breaching the upgrade cells and only those; `error_lines_undeclared=4` is 3x
-`0x887a0026 The keyed mutex was abandoned` - which the sweep itself lists under KNOWN-DEFECT PRESENT
-against the P2 capture-freeze entry - plus one `ProcessAutostarts: CfgReadMultiString(Autostart)
-failed with error 0x2`, which is our own installer having DELETED the value it then reads;
-`fallbacks_fired=2` is ETW IPC tier-down to the DB fallback.
-AND THE BRACE FIX HOLDS ON THE UPGRADE CELL TOO: cell 3's inventory reads `qrexec-wrapper 68
-file(s) 676 line(s)` and not one of its four undeclared lines is the wrapper's, where campaign 2 had
-141 of them in one cell.
-
-**THE BRACE FIX IS CONFIRMED ON A GUEST, 2026-10-22.** Campaign 3, package 39678937221 at
-e97deb11, cell WIN10-clean, graded by the sweep rather than by a grep: `status CLEAN rc 0`,
-`error_lines 0`, `error_lines_undeclared 0` against a max of 0, `breaches []`. Campaign 2's same
-cell on the previous package read `status FINDINGS rc 1`, `error_lines_undeclared 145`, a P2 breach,
-141 of those lines being the one wrapper exit line. THE ZERO IS OVER A NON-EMPTY READ, which is the
-part a count alone cannot carry: the report's own file entry for
-`Z:\qwt-logs\win10-acc\qrexec-wrapper-20261022.log` is `family qrexec, scanned 13, parsed 13,
-ignored 0, unparsed 0, skipped 0, partial false`. Thirteen wrapper lines read, none skipped, nothing
-truncated, zero error lines.
-THREE THINGS I GOT WRONG ON THE WAY, and the first two have ONE cause which is a real harness
-defect, recorded below as MATRIXARTEFACTSPANSRUNS. (1) I read `WIN10-clean-logvol-bind.out`, saw a
-fail and the `[ERROR] the binder refused` that follows it, and reported the campaign as aborted on a
-log-volume failure. (2) Seeing a third line, `LOGVOL-BIND ok ... found=D: letter=pinned copied=21`, I
-corrected myself to "the bind failed once and succeeded on RETRY" - also wrong, and I had already
-built a theory about a 300 ms race in the binder's unlettered path on top of the first misread.
-THERE IS NO RETRY: `matrix.sh:113` is a single `if logvol_bind_guest ...` and it APPENDS. Lines 1-2
-are the ABORTED run's bind from 21:50 and line 3 is this run's, which succeeded on its FIRST attempt
-at 22:22:50 - two runs' verdicts in one file because both invocations passed `--run 39678937221` and
-so shared the work dir. (3) I counted the exit line across the whole artefacts directory,
-got 0, and nearly reported it as the fix working - over a corpus that contains NO wrapper log lines
-at all. 110 files scanned, 8 naming `qrexec-wrapper`, and ZERO of those 8 carrying a `pid:tid` log
-prefix, because the raw guest logs are not copied into that directory. The grade lives in
-`<cell>-guestlogs/report.json`, which is where it should have been read from first.
 
 **P5 NOW WAITS ON ONE DECISION, 2026-10-21 NIGHT.** Jev was asked the launch question again on the
 state as it stood at 18:40: clear_to_launch_now **0.06** (it was 0.29 then 0.32 earlier in the day),
@@ -304,7 +223,7 @@ If the owner wants a smaller scope he can say so; nothing here is hard to stop.
 - FAILPROOFGATESP53BLOCKED [instrument, mgmt/harness/p5-run.sh P5-3; P1, CAUSE ESTABLISHED - P5-3 RESIZES BEHIND THE AGENT'S BACK] [verified 2026-10-16] **THE SERVING WAIT WORKS AND THE SUITE STILL ABORTS, SO serving=awaiting WAS A SYMPTOM …
 - WUQUIETDEFINITIONS [product, guest/qubes-windows-update.ps1; FEATURE REQUESTED, QUEUED - owner 2026-10-16 "queue it after other stuff, dont do now"] [verified 2026-10-16] **A KNOB SO DEFENDER DEFINITION UPDATES STOP RAISING dom0's …
 - HALTREFUSED660 [subject lifecycle, WIN10-clean; P1, OPEN - cause still not established, but it did NOT recur: MEASURED 2026-10-21 on run 39476792836 all EIGHT cells ran and were swept, with no deadline miss and no "would not halt" line, so the "two of eight cells cannot be assumed to run" framing does not hold] [verified 2026-10-14] **THE SUBJECT REFUSED ACPI SHUTDOWN FOR 660 s, THEN 420 s MORE, AND THE CAUSE IS NOT ESTABLISHED.** `WIN10-clean-park-halt: DEADLINE 660s, still Transient (never reached Halted at all)`, then in the next cell `win10-acc ignored ACPI shutdown for 420 s (screen=NOWINDOW) - killing as the last resort`. This is what failed the campaign: with no park checkpoint, WIN10-reinstall and WIN10-appvm could not run either. **WHAT IT IS NOT.** […]
-- LOGVOLBINDLATE [acceptance gate, mgmt/harness/matrix.sh + the park path; **OPEN - AND AS OF 2026-10-22 IT IS NOT AN UNMADE DECISION BUT THREE COMMITTED MECHANISMS DISAGREEING; see the 2026-10-22 block at the end of this entry**] [verified 2026-10-21] **THE APPVM WRITES NO AGENT LOG AT ALL, AND NO INSTRUMENT-SIDE FIX CAN RECOVER IT.** The appvm cell never boots the template: its root arrives by cross-vm restore of the CHURN subject's park, so the AppVM inherits the churn subject's LogDir. Its own volume has no such directory and no drive letter exists yet - the letter assignment lives on the volatile root too - so log.c:256 CreateDirectory fails and :258-264 calls LogStart(NULL) then goes to the fallback at :289, which is stderr ONLY. No file is written anywhere. Four candidate fixes were eliminated with evidence: reading the subdirectory the guest resolved (logvol_pull already does `mcopy -s ... ::/`, the whole image, so such logs would be in the archived captures and are not), REG_EXPAND_SZ for a per-qube path (config.c:124 is `if (type != REG_SZ)`), binding into the template (never booted), and a constant subdirectory (fixes the name, not the missing letter). A VOLUME GUID PATH WAS PROBED ON A GUEST 2026-10-21 04:36Z (win11-nfy): the product created the directory and wrote 7 real qrexec-wrapper logs with init banners at `\\?\Volume{f7378d3a-...}\qwt-guid-probe`, and PowerShell's -LiteralPath accepted the form - so the form WORKS and still does not help, because the inherited value would name the CHURN volume's GUID. THE SHAPE THAT FOLLOWS (Jev 0.74): clear LogDir on the churn subject just before its park is taken and restore it after, so the AppVM inherits none and log.c falls to its own default <drive>\Qubes Logs - no letter, no GUID, no per-VM name. Viable ONLY because the collector was taught to search that path on 2026-10-21 (9e314357). THE DECISION THAT IS THE OWNER'S: those two cells' logs then live on the volatile C:, readable while the guest runs - which is when the sweep reads them - but they do not survive a wedge, which is the property the evidence volume exists for. Jev on that tradeoff: 0.53, a genuine coin flip. Jev on landing it unasked: 0.36. Meanwhile INVALID-SWEEP-NOAGENT (827a8711) turns the old silent false CLEAN into a FAIL naming the cause, so the defect can no longer be graded as success. **RE-EXAMINED 2026-10-22, AND THE FRAMING ABOVE IS OUT OF DATE.** I had been reporting this as blocked on an unmade owner decision. The fix shape this entry describes HAS LANDED, twice: `0bf0f324` (2026-10-21, "logvol: clear LogDir before the park, so an AppVM's agent logs somewhere") and `9e314357` (2026-10-21, "collector: look where the product actually writes - <drive>\Qubes Logs was never searched", with a selftest). Campaign 3's cell printed the first one's line: `WIN10-clean: LogDir CLEARED before parking - AppVMs from this park use the product default`. **WHAT ACTUALLY FAILED is a gate that was not told.** The appvm cell proved its log path end to end on ALL THREE boots (b1 22:59:34, b2 23:01:04, b3 23:02:35) and then FATALed 23 s later at the pregrade proof, which runs `logvol_prove_roundtrip --require-agent-logs`: `LOGVOL-PROOF fail half=agent reason=no_agent_family_log_written_since_this_boot dir=Z:\qwt-logs\win10-app agentlogs=4 agentfresh=0 agentopen=0 nonce_roundtripped=1`. That check resolves LogDir from the REGISTRY - which the bind had just pointed at the volume - and requires agent logs THERE. The four it found are inherited: the volume `logs-win10-app.img` was created 22:58:26Z, and the two per-day agent logs on it carry first lines stamped 01:20:21 guest-local = 22:20Z, i.e. the CHURN subject's win10-clean cell, 38 minutes before that volume existed - they are there because logvol-bind.ps1 robocopies the existing log dir onto the volume at bind time. So `agentfresh=0` is the pid anchor (65313f9d) reporting correctly, not another false negative. The AppVM's OWN agent started before the bind with LogDir cleared, so it writes to `C:\Qubes Logs` - exactly where 9e314357 taught the COLLECTOR to look and exactly where the pregrade gate does not. **SO THE OWNER'S QUESTION IS NOW ONE LINE, not a research task:** is the 0bf0f324 arrangement accepted - appvm-cell agent logs on the volatile C:, readable while the guest runs, LOST on a wedge, which is the property the log volume exists for? If YES, the pregrade gate must look where the collector looks and the two appvm cells can grade. If NO, 0bf0f324 should come out and the appvm cells stay ungradeable until a different mechanism. **NOT DONE, deliberately:** I did not widen the gate. The gate's own comment says a truncated log reads as CLEAN and that is the false comfort it exists to prevent, so teaching it a second search path is a change to what a GATE ACCEPTS and is the owner's call, not a 05:00 edit - the more so because Jev scored landing this tradeoff unasked at 0.36. **NOT ESTABLISHED:** that the AppVM's agent did write to C:\Qubes Logs in that cell. No capture was collected - the FATAL precedes the collector - so the only honest statement is that the collector CAN search there, not that logs were found there.
+- LOGVOLBINDLATE [acceptance gate, mgmt/harness/matrix.sh + the park path; **OPEN - AND AS OF 2026-10-22 IT IS NOT AN UNMADE DECISION BUT THREE COMMITTED MECHANISMS DISAGREEING; see the 2026-10-22 block at the end of this entry**] [verified 2026-10-21] **THE APPVM WRITES NO AGENT LOG AT ALL, AND NO INSTRUMENT-SIDE FIX CAN RECOVER IT.** The appvm cell never boots the template: its root arrives by cross-vm restore of the CHURN subject's park, so the AppVM inherits the churn subject's LogDir. Its own volume has no such directory and no drive letter exists yet - the letter assignment lives on the volatile root too - so log.c:256 CreateDirectory fails and :258-264 calls LogStart(NULL) then goes to the fallback at :289, which is stderr ONLY. No file is written anywhere. Four candidate fixes were eliminated with evidence: reading the subdirectory the guest resolved (logvol_pull already does `mcopy -s ... ::/`, the whole image, so such logs would be in the archived captures and are not), REG_EXPAND_SZ for a per-qube path (config.c:124 is `if (type != REG_SZ)`), binding into the template (never booted), and a constant subdirectory (fixes the name, not the missing letter). A VOLUME GUID PATH WAS PROBED ON A GUEST 2026-10-21 04:36Z (win11-nfy): the product created the directory and wrote 7 real qrexec-wrapper logs with init banners at `\\?\Volume{f7378d3a-...}\qwt-guid-probe`, and PowerShell's -LiteralPath accepted the form - so the form WORKS and still does not help, because the inherited value would name the CHURN volume's GUID. THE SHAPE THAT FOLLOWS (Jev 0.74): clear LogDir on the churn subject just before its park is taken and restore it after, so the AppVM inherits none and log.c falls to its own default <drive>\Qubes Logs - no letter, no GUID, no per-VM name. Viable ONLY because the collector was taught to search that path on 2026-10-21 (9e314357). THE DECISION THAT IS THE OWNER'S: those two cells' logs then live on the volatile C:, readable while the guest runs - which is when the sweep reads them - but they do not survive a wedge, which is the property the evidence volume exists for. Jev on that tradeoff: 0.53, a genuine coin flip. Jev on landing it unasked: 0.36. Meanwhile INVALID-SWEEP-NOAGENT (827a8711) turns the old silent false CLEAN into a FAIL naming the cause, so the defect can no longer be graded as success. **RE-EXAMINED 2026-10-22, AND THE FRAMING ABOVE IS OUT OF DATE.** I had been reporting this as blocked on an unmade owner decision. The fix shape this entry describes HAS LANDED, twice: `0bf0f324` (2026-10-21, "logvol: clear LogDir before the park, so an AppVM's agent logs somewhere") and `9e314357` (2026-10-21, "collector: look where the product actually writes - <drive>\Qubes Logs was never searched", with a selftest). Campaign 3's cell printed the first one's line: `WIN10-clean: LogDir CLEARED before parking - AppVMs from this park use the product default`. **WHAT ACTUALLY FAILED is a gate that was not told.** The appvm cell proved its log path end to end on ALL THREE boots (b1 22:59:34, b2 23:01:04, b3 23:02:35) and then FATALed 23 s later at the pregrade proof, which runs `logvol_prove_roundtrip --require-agent-logs`: `LOGVOL-PROOF fail half=agent reason=no_agent_family_log_written_since_this_boot dir=Z:\qwt-logs\win10-app agentlogs=4 agentfresh=0 agentopen=0 nonce_roundtripped=1`. That check resolves LogDir from the REGISTRY - which the bind had just pointed at the volume - and requires agent logs THERE. The four it found are inherited: the volume `logs-win10-app.img` was created 22:58:26Z, and the two per-day agent logs on it carry first lines stamped 01:20:21 guest-local = 22:20Z, i.e. the CHURN subject's win10-clean cell, 38 minutes before that volume existed - they are there because logvol-bind.ps1 robocopies the existing log dir onto the volume at bind time. So `agentfresh=0` is the pid anchor (65313f9d) reporting correctly, not another false negative. The AppVM's OWN agent started before the bind with LogDir cleared, so it writes to `C:\Qubes Logs` - exactly where 9e314357 taught the COLLECTOR to look and exactly where the pregrade gate does not. **SO THE OWNER'S QUESTION IS NOW ONE LINE, not a research task:** is the 0bf0f324 arrangement accepted - appvm-cell agent logs on the volatile C:, readable while the guest runs, LOST on a wedge, which is the property the log volume exists for? If YES, the pregrade gate must look where the collector looks and the two appvm cells can grade. If NO, 0bf0f324 should come out and the appvm cells stay ungradeable until a different mechanism. **NOT DONE, deliberately:** I did not widen the gate. The gate's own comment says a truncated log reads as CLEAN and that is the false comfort it exists to prevent, so teaching it a second search path is a change to what a GATE ACCEPTS and is the owner's call, not a 05:00 edit - the more so because Jev scored landing this tradeoff unasked at 0.36. **NOT ESTABLISHED:** that the AppVM's agent did write to C:\Qubes Logs in that cell. No capture was collected - the FATAL precedes the collector - so the only honest statement is that the collector CAN search there, not that logs were found there. **AND THE 'VOLATILE C:' PREMISE OF THIS ENTRY IS WRONG - MEASURED from the three bind receipts.** WIN10-appvm-b{1,2,3}-logvol-bind.out all carry the same decoded pair, `old='Q:\Qubes Logs'` -> `new='Z:\qwt-logs\win10-app'`, with copied=22, 23, 24. TWO things follow and both change this entry's question. **(1) THE GATE'S PREDICATE IS UNSATISFIABLE ON AN APPVM BY CONSTRUCTION.** The bind points LogDir at the volume on every one of the three boots and every boot the agent family starts from `Q:\Qubes Logs` again - the registry write does not survive the reboot, which is this entry's own mechanism. So no boot count and no re-wording of `--require-agent-logs` can put a log 'written since this boot' on the volume: the check can never pass an appvm cell. That is stronger than 'a gate was not told'. **(2) THE LOGS ARE ON THE PRIVATE VOLUME.** `Q:` is the Qubes Private Image - a guest-side probe the same night listed it as `Q | Qubes Private Image | NTFS | Fixed` - and copied= climbing 22 -> 23 -> 24 across three boots is direct evidence that `Q:\Qubes Logs` persists and ACCUMULATES across them; the standing note is that a kill keeps it. So the tradeoff recorded above - logs on a volatile C: that do not survive a wedge - is not what happens, and the owner's decision was framed on it. **THE RESIDUAL DIFFERENCE, narrowly:** the DIAG stick is FAT with LogSafeFlush=1, flushed per write; `Q:` is NTFS without it, so a wedge may lose buffered tail the stick would have kept. Flush discipline, not persistence - much smaller than the question as posed. **FIX SHAPE, conceding nothing:** assert the property where the product writes (`Q:\Qubes Logs`, which the collector already searches) or re-run the bind's copy immediately before the pull. Both touch what a gate ACCEPTS, so neither is mine to land. NOT ESTABLISHED: `Q:`'s flush behaviour under a real wedge - inferred from the absence of LogSafeFlush on that path, not measured on a wedged specimen.
 - SUITESREDATRELEASE [product; P2, OPEN] [verified 2026-10-15] **FOUR OFFLINE SUITES ARE RED AT THE RELEASE SHA, EACH SAYING A FIX IS ABSENT FROM THE SOURCE.** Measured at 0c6d54b8 / agent 5c483cd9 (and confirmed independent of this session's two agent commits by re-running against an archive of the packaged sha): `log-policy-selftest.sh` - 2 routine per-window LogInfo lines: `main.c:8800 BROKERLATEREG`, `main.c:12130 BROKERHOLD`. Per-window INFO is the idle-noise policy this suite exists to hold. `bridge-exit-reason-selftest.sh` - `not_a_death`: every exit 0 is still reported as "a clean exit nobody asked for". `broker-down-anchor-selftest.sh` - `held_without_a_shell`: the deadline still runs before the broker can be launched at all. `wrapper-exit-reason-selftest.sh` - `no_new_wait` **RESOLVED 2026-10-22, and it was never a product red**: the check counted `Sleep()` against revision 1df5a7b1, twenty-odd commits back, and reported the result in the words of a verdict on one diff. It went red when 9ad4dfc2 added QwWaitForInteractiveLogon's poll under a different mandate and stayed red, accusing every later change of that one. A span cannot scope a diff. The two wait sites are now declared with the reason each is allowed and the check fails on an addition or a removal. So THREE suites are red at the release sha, not four. […]
 - QGAVCHANUNDECLARED [gate vs product; P2, RECURRED A THIRD TIME 2026-10-17 ON A SHA THAT CARRIED THE FIX - the bound reduces the COUNT, it does not remove the CAUSE] [verified 2026-10-17] **THE 90 s BOUND DID NOT REMOVE THIS, AND … [RETIREMENT PROPOSED 2026-10-21 AND REFUSED BY JEV 0.39: an auditor argued this is already handled - mgmt/harness/matrix.sh:2926 (--declare-caused-rare 'InitVchan: QGAVCHANFAIL .*request dropped' with its receipt) and :42 - and Jev did not accept that the evidence shows it fixed. It stays OPEN; do not re-argue the same case without new evidence.]
 - PIPEFAILGREPQISUGREP [instrument; P2, OPEN] [verified 2026-10-15] **A SUITE THAT PROVES A LINT RULE'S PREMISE MEASURES THIS QUBE'S grep, NOT THE INVARIANT.** `tools/tests/pipefail-grepq-selftest.sh` asserts that a pipe into `grep -q` returns **141** under `pipefail`. On a GitHub runner it returned **1**: `FAIL grep -q on a big file returns 141, not 0: expected '141', got '1'`. This qube's `grep` is ugrep (my Bash tool's grep is `ugrep -I`), which exits on SIGPIPE; GNU grep does not, under these conditions. The lint rule the suite backs (L23) is still right to flag `probe | grep -q` - a 141 DID grade a live guest dead 86/200 - but the suite proves it only where ugrep is installed. […]
