@@ -125,5 +125,51 @@ EOF
     done
 fi
 
+# ---- the handoff must not CLAIM a delivery it did not verify ----------------------------------
+# MEASURED on acceptance run 39858373864, cell win10-upgrade: the relaunched instance exited 3 -
+# notifhost's own "NOTIFY one-shot: unreadable/empty <file> - notification LOST" - while the parent
+# logged "NOTIFY handoff: ran in session 1 as user". Task Scheduler recorded return code
+# 2147942403 = HRESULT_FROM_WIN32(3), which is NOT ERROR_PATH_NOT_FOUND however much it reads like
+# it. A user-facing error notification was lost AND reported as delivered; the only surviving trace
+# was the TaskScheduler 201 record the acceptance sweep flagged.
+NH="$ROOT/tools/notifhost/notifhost.cpp"
+# THE ACK IS THE READER'S DELETE, which already exists: ReadNotifyFile deletes the file once it has
+# opened it and returns false WITHOUT deleting when it cannot. Locale-independent - parsing
+# schtasks' "Last Result" would not be, and this project ships a German golden.
+if grep -q 'ReadNotifyFile' "$NH" && sed -n "/bool ReadNotifyFile/,/^}/p" "$NH" | grep -q 'DeleteFileW'; then
+  say "PASS  handoff ack: ReadNotifyFile still deletes the file it read (the parent's ack depends on it)"
+else say "FAIL  handoff ack: ReadNotifyFile no longer deletes the notify file - the parent's delivery check is now inert"; bad=1; fi
+
+if grep -q 'const bool delivered = (GetFileAttributesW(file.c_str()) == INVALID_FILE_ATTRIBUTES)' "$NH"; then
+  say "PASS  handoff: delivery is decided by whether the reader took the file"
+else say "FAIL  handoff: no delivery check - the parent cannot tell a delivered message from a lost one"; bad=1; fi
+
+# SEEN TO FAIL: the success line must be REACHABLE ONLY when delivered. Before the fix it sat
+# unconditionally after the reap, which is how the loss went unnoticed.
+if sed -n '/The task must be reaped/,/^}/p' "$NH" | grep -q 'if (!delivered)'; then
+  say "PASS  handoff: a failed handoff takes the loud branch before any success line"
+else say "FAIL  handoff: the success line is not gated on delivery"; bad=1; fi
+
+if sed -n '/if (!delivered)/,/^    }/p' "$NH" | grep -q 'BLogE'; then
+  say "PASS  handoff: a lost message is LOUD (BLogE), not a warning"
+else say "FAIL  handoff: a lost notification must be an ERROR - project rule, anything of ours that fails silently is the defect"; bad=1; fi
+
+# AND IT MUST BE SELF-DIAGNOSING: the next occurrence has to say why, not leave it to be re-derived.
+for f in 'file=%s' 'ran-as=%s' 'session=%lu'; do
+  if sed -n '/if (!delivered)/,/^    }/p' "$NH" | grep -qF "$f"; then
+    say "PASS  handoff: the loss line reports $f"
+  else say "FAIL  handoff: the loss line does not report $f - the next reader cannot tell why"; bad=1; fi
+done
+
+# A STALE GetLastError MUST NOT BE REPORTED in a branch where the call succeeded. Caught in review
+# of this very fix: the first version printed err=%lu from a GetFileAttributesW that had just
+# SUCCEEDED, which is a stale value from an unrelated call - the same class of misleading line this
+# whole change exists to remove.
+# NON-COMMENT LINES ONLY: the code that explains why GetLastError is wrong NAMES it, and a leg that
+# greps the whole block finds the explanation and calls it the defect. Third time tonight.
+if sed -n '/if (!delivered)/,/^    }/p' "$NH" | grep -v '^[[:space:]]*//' | grep -q 'GetLastError'; then
+  say "FAIL  handoff: the loss line calls GetLastError where the file exists - that value is stale"; bad=1
+else say "PASS  handoff: no stale GetLastError in the loss line"; fi
+
 say "--- outputs in $OUT"
 exit $bad

@@ -1948,15 +1948,29 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
   # something that cannot plausibly be otherwise is noise that crowds out the lines a reader needs.
   # WHAT DID NOT CHANGE: every FAILING branch is still no() and still fails the cell. Silent when
   # true, loud when false - the confirmations stop printing, the regression guard does not move.
-  if echo "$start" | grep -qai 'DISABLED'; then
-    say "  $lbl: xenbus_monitor is DISABLED by the shipped INF"
+  # AN UNREADABLE STATE IS NOT A BAD STATE, and this check used to say otherwise. On WIN11-reinstall
+  # of run 39767068509 the guest wedged at 20:09:47 and these two reads ran at 20:13:58 against a
+  # corpse, so $start and $state were EMPTY - and the else arms announced "start type is NOT
+  # disabled ()" and "is RUNNING ()", the second of those about a domain with zero cpu-time on every
+  # vCPU. Both are facts nobody measured. The four sibling cells in the same campaign each read
+  # `START_TYPE : 4 DISABLED | STATE : 1 STOPPED` and passed, so the shipped INF was never in doubt;
+  # the guest was. It also sent me re-deriving a line findings/install.md already retracts.
+  # Jev: fail_as_unreadable_not_as_bad 1.00, pass_when_unreadable 0.00, keep_failing_as_now 0.00;
+  # misreport_is_the_defect 0.93. So the cell still FAILS on an unreadable read - missing data fails
+  # - but it fails AS missing data, which is a different verdict from a guest misbehaving.
+  if [ -z "${start//[[:space:]]/}" ] || [ -z "${state//[[:space:]]/}" ]; then
+    no "$lbl: xenbus_monitor state could not be READ (start='$start' state='$state') - this says nothing about the INF or the service, only that the guest did not answer. Treat it as an instrument/liveness finding and look for a guest that stopped answering."
   else
-    no "$lbl: xenbus_monitor start type is NOT disabled ($start) - the INF patch did not reach this guest"
-  fi
-  if echo "$state" | grep -qai 'STOPPED'; then
-    say "  $lbl: xenbus_monitor is not running"
-  else
-    no "$lbl: xenbus_monitor is RUNNING ($state) - it can still restart the guest"
+    if echo "$start" | grep -qai 'DISABLED'; then
+      say "  $lbl: xenbus_monitor is DISABLED by the shipped INF"
+    else
+      no "$lbl: xenbus_monitor start type is NOT disabled ($start) - the INF patch did not reach this guest"
+    fi
+    if echo "$state" | grep -qai 'STOPPED'; then
+      say "  $lbl: xenbus_monitor is not running"
+    else
+      no "$lbl: xenbus_monitor is RUNNING ($state) - it can still restart the guest"
+    fi
   fi
 
   # WE NO LONGER SHIP A XENBUS. Owner, 2026-09-14: "we do not touch xenbus anymore" / "no xenbus

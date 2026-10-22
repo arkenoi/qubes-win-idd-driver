@@ -3479,10 +3479,46 @@ static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring con
     // The task must be reaped, or every notification leaves one behind for ever. Give the relaunched
     // instance time to connect and send before removing its task.
     Sleep(6000);
+
+    // DID THE MESSAGE ACTUALLY REACH ANYONE? Until 2026-10-23 this function did not ask, and the
+    // success line below was UNCONDITIONAL: it reported "ran in session N as <user>" whenever
+    // schtasks /run returned, which says only that the scheduler accepted the request. MEASURED on
+    // acceptance run 39858373864, cell win10-upgrade: the relaunched instance exited 3 - its own
+    // "NOTIFY one-shot: unreadable/empty <file> - notification LOST" - while THIS function logged
+    // success. Task Scheduler recorded it as return code 2147942403, which is HRESULT_FROM_WIN32(3)
+    // and NOT ERROR_PATH_NOT_FOUND however much it looks like it. A user-facing error notification
+    // was lost and reported as delivered, and the only surviving trace was a TaskScheduler 201
+    // record that the acceptance log sweep caught.
+    //
+    // THE ACK NEEDS NO NEW PROTOCOL, because the contract already exists: ReadNotifyFile() deletes
+    // the file as soon as it has opened it, and returns false WITHOUT deleting when it cannot open
+    // it. So a handoff file that is STILL THERE after the wait means the reader never got it. That
+    // is locale-independent, which parsing schtasks' "Last Result" would not be - this project ships
+    // a German golden and localised output has bitten it before.
+    const bool delivered = (GetFileAttributesW(file.c_str()) == INVALID_FILE_ATTRIBUTES);
+
     swprintf(cmd, RTL_NUMBER_OF(cmd), L"schtasks.exe /delete /tn %s /f", task.c_str());
     STARTUPINFOW si3 = { sizeof(si3) }; PROCESS_INFORMATION pi3 = {};
     if (CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si3, &pi3))
     { WaitForSingleObject(pi3.hProcess, 15000); CloseHandle(pi3.hThread); CloseHandle(pi3.hProcess); }
+
+    if (!delivered)
+    {
+        // LOUD, and self-diagnosing: the next occurrence must say WHY rather than leave the reader
+        // to re-derive it. The open question this does not answer is why the reader could not open a
+        // file this process had just written - an ACL on a SYSTEM-created file read by the
+        // interactive user, or the 8.3 short path not resolving in that session are both live
+        // candidates, so the fields that would separate them are printed here.
+        // The file EXISTS in this branch - that is what !delivered means - so its attributes are
+        // valid and GetLastError() here would be a stale value from an unrelated call. Report what
+        // is actually known: the attributes, and the exact strings the child was handed.
+        const DWORD attr = GetFileAttributesW(file.c_str());
+        BLogE(L"NOTIFY handoff: the relaunched instance never read the handoff - this message reaches "
+              L"nobody. file=%s attr=0x%lx short=%s ran-as=%s session=%lu self=%s",
+              file.c_str(), attr, shortFile, who.c_str(), active, shortSelf);
+        DeleteFileW(file.c_str());   // the reader did not take it; do not leave it to accumulate
+        return false;
+    }
 
     BLog(L"NOTIFY handoff: ran in session %lu as %s (this process is session %lu)",
          active, who.c_str(), mySession);
