@@ -78,6 +78,10 @@ source mgmt/harness/blockclaim-lib.sh # a --required claim on a released loop ma
 # wedged cell still lost exactly the logs that show vchan pressure. LOGVOL_VM/LOGVOL_IMG are set
 # when a subject boots and consumed by the pull after each cell.
 LOGVOL_VM=""; LOGVOL_IMG=""
+# AND WHETHER A BIND IS IN FORCE. The stick is attached unconditionally (boot_with_release_iso,
+# `if true`) while the bind is gated on LOGVOL_BIND, so LOGVOL_IMG cannot answer "does this guest's
+# registry name the stick". The restore is gated on this, not on the image.
+LOGVOL_BOUND=0
 # Bind QWT's logs to the volume once a SESSION exists. The binder runs INSIDE the guest via
 # `qtest pushrun`, which needs a logged-on session, so it cannot be done when the volume is attached
 # (that happens before the guest is even created). Without this the volume is attached and stays
@@ -110,6 +114,10 @@ logvol_bind_now(){ # $1=vm $2=label
   # not operative, and 104 lines of it above 25 lines of code is how the operative part got lost.
   [ "${LOGVOL_BIND:-1}" = 1 ] || { say "  $2: log volume NOT bound (LOGVOL_BIND=0) - the guest logs where it ships to"; return 0; }
   [ -n "$LOGVOL_IMG" ] || return 0
+  # LATCHED BEFORE THE CALL, not after it. A bind can write LogDir and then return no 'ok' receipt,
+  # and that exit (below) leaves the registry naming the stick. Latching on success would skip the
+  # restore on exactly the path that needs it.
+  LOGVOL_BOUND=1
   if logvol_bind_guest "$1" "$1" >>"$M/$2-logvol-bind.out" 2>&1; then
     say "  $2: QWT logs bound to the log volume"
     # AND PROVE IT, because a bind that returned ok is not evidence that evidence will arrive.
@@ -149,6 +157,80 @@ logvol_bind_now(){ # $1=vm $2=label
     say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED on a log-device failure ==="
     exit 2
   fi
+}
+
+# WHICH CELL CLASSES GET AN EVIDENCE STICK. Owner's ruling, 2026-10-22: "log stick exists for
+# install testing. on appvms and feature tests it has zero sense."
+#
+# WHAT THE STICK IS FOR, and why that excludes an AppVM. The stick is a FILE on this qube, read
+# with mtools while the guest runs - so it is the only log path that survives a WEDGE, because a
+# wedged guest never halts and its private volume stays held by the running domain. That value is
+# entirely about an INSTALL: the install is where a guest wedges.
+# On an AppVM the bind writes LogDir into HKLM, which lives on the ROOT volume Qubes discards at
+# every shutdown and re-derives from the template. All three appvm boots of run 39476792836
+# reported old='Q:\Qubes Logs' new='Z:\qwt-logs\win10-app' - the write never survived a reboot, so
+# the agent's real LogDir is Q:\Qubes Logs on the PRIVATE volume, which does persist. The stick
+# therefore cannot hold an agent log on an appvm cell, and logvol_prove_roundtrip
+# --require-agent-logs cannot pass there: that is what FATALed win10-appvm and stopped the 4.3.37
+# matrix at 4 of 8 cells.
+# NOT NARROWED FURTHER. mgmt/harness/quick-upgrade.sh keeps its own bind untouched: a wedge DURING
+# an install is the one case the stick is readable for, and quick-upgrade is the short cycle
+# (Jev: wedge_coverage_not_lost 0.32 on narrowing).
+logvol_stick_scope(){ # $1=cell class -> 0 if this class gets an evidence stick
+  case "$1" in
+    appvm) return 1 ;;
+    *)     return 0 ;;
+  esac
+}
+
+# PUT THE GUEST'S LogDir BACK, so the registry stops naming the stick once the cell's pull is done.
+# Owner, 2026-10-22: "and restore registry entry post-install to make sure it does not point to
+# stick?" logvol_unbind_guest has existed since 2026-10-13 with ONE caller, inside logvol_detach,
+# which no production code calls - so the LogDirPreLogvol the bind saves has never been consumed.
+#
+# AFTER THE PROOF AND AFTER THE PULL, never before. logvol_prove_roundtrip resolves LogDir inside
+# the guest and reads the nonce back off the IMAGE; restore first and the nonce lands on Q: on the
+# private volume, the host half fails, and the campaign aborts on a path that was fine.
+#
+# WHAT A RESTORE WRITES: the literal 'Q:\Qubes Logs', even when the pre-bind registry held no
+# LogDir - the bind synthesises that value as $old and saves it (logvol-bind.ps1:255-256, :328-329).
+# The value is WRITTEN, not removed. Where an ABSENT value is wanted - the park, which every AppVM
+# inherits - the caller is logvol_clear_guest, and park_installed keeps using it.
+logvol_restore_now(){ # $1=label - returns 1 when the guest may still name the stick
+  [ "${LOGVOL_BOUND:-0}" = 1 ] || return 0
+  [ -n "${LOGVOL_VM:-}" ] || return 0
+  local out="$M/$1-logvol-restore.out" line cur
+  # A pushrun needs a live, logged-on guest. A WEDGE is the case this stick exists for, so an
+  # unreachable guest is a WARN and a marker - never an abort.
+  if ! qvm-check --running "$LOGVOL_VM" >/dev/null 2>&1; then
+    say "  $1: [WARN] $LOGVOL_VM is not running - LogDir still names the stick; the park-time clear is the backstop"
+    : > "$M/$1-logvol-unrestored.marker"
+    return 1
+  fi
+  line=$(logvol_unbind_guest "$LOGVOL_VM" 2>>"$out")
+  printf '%s\n' "$line" >>"$out"
+  LOGVOL_BOUND=0           # idempotent: the EXIT trap must not re-run this
+  case "$line" in
+    # A previous QWT's uninstall takes the whole `Qubes Tools` key with it (why the bind is
+    # re-asserted after an install). With the key gone nothing names the stick either.
+    *"reason=no_qubes_tools_key"*)
+      say "  $1: the Qubes Tools key is gone - nothing names the stick either"; return 0 ;;
+    "LOGVOL-BIND restored "*) ;;
+    *)
+      say "  $1: [WARN] LogDir was NOT restored - $(printf '%s' "${line:-no receipt came back}" | cut -c1-120)"
+      : > "$M/$1-logvol-unrestored.marker"; return 1 ;;
+  esac
+  # DO NOT TRUST THE WORD 'restored'. -Restore skips its writes when the saved values are absent and
+  # still prints 'restored' and exits 0, so logvol_unbind_guest returns 0 over a registry that still
+  # names the stick. The receipt's logdir= is read AFTER the write; decode it and judge that.
+  cur=$(printf '%s' "$line" | sed -n "s#.*logdir=\\([A-Za-z0-9+/=]*\\).*#\\1#p" | base64 -d 2>/dev/null)
+  case "$cur" in
+    *qwt-logs*)
+      say "  $1: [WARN] the restore reported success and LogDir STILL reads '$cur' - nothing was saved to put back"
+      : > "$M/$1-logvol-unrestored.marker"; return 1 ;;
+  esac
+  say "  $1: LogDir restored to '${cur:-<absent - the product default applies>}'"
+  return 0
 }
 # P0-PRE (protocol H0): the wait primitives are sourced from the REPO, not from a session tmp
 # directory. They used to live under /home/user/.claude/jobs/<id>/tmp, which is session-scoped and
@@ -343,6 +425,12 @@ _matrix_logvol_state(){ # <cell> -> one clause naming the instrument's state
       return
     fi
   fi
+  # AN APPVM CELL HAS NO STICK BY THE OWNER'S RULING, not by an instrument failure (logvol_stick_scope).
+  # State that, or a deliberate absence reads as a missing instrument and sends the next reader at
+  # the bind - which is the hour this clause already cost once.
+  case "$1" in
+    *appvm) [ -d "$d" ] || { echo "no log volume is attached for an appvm cell by design - the stick is an install-testing instrument; this cell's guest logs come from the collector at the LogDir the guest itself resolves"; return; } ;;
+  esac
   [ -n "${LOGVOL_IMG:-}" ] || [ -d "$d" ] || { echo "no log volume was attached for this cell"; return; }
   [ -d "$d" ]              || { echo "the log volume was never pulled, so nothing could be read"; return; }
   [ -d "$d/qwt-logs" ]     || { echo "the volume carries no qwt-logs dir - attached, never bound"; return; }
@@ -525,18 +613,37 @@ MATRIX_LOOP_CREATED=""
 # released /dev/loop14 at 20:47:45, and stayed unstartable. So the claims go before the loop does.
 MATRIX_CDROM_CLAIMED=""
 _matrix_release_loop(){
-  [ -n "${MATRIX_LOOP_CREATED:-}" ] || return 0
+  # THE EXISTING TRAP IS EXTENDED, NOT JOINED. Bash keeps ONE EXIT trap, so a second `trap ... EXIT`
+  # would silently discard the loop and claim release below.
+  # THE CLAIMS AND THE LOOP GO FIRST, AND THE RESTORE LAST. The restore was added here as the
+  # FIRST statement and that inverted the ordering this function's own comment above was written
+  # for: logvol_restore_now is a guest pushrun bounded at `timeout -k 10 240` (logvol-lib.sh), so on
+  # a bind-in-force abort it can hold this trap ~250 s before the `--required` cdrom claims are
+  # dropped - and a subject that keeps its claim after the loop is released CANNOT BE CREATED
+  # (measured 2026-10-14, win10-acc and /dev/loop14, recorded above). Nothing downstream of the
+  # claims needs the registry back first, so the slow guest call is last.
   local v
-  for v in $MATRIX_CDROM_CLAIMED; do
-    claim_drop_loop "$v" "$MATRIX_LOOP_CREATED" >/dev/null 2>&1 \
-      && say "  $v: release-ISO claim on /dev/$MATRIX_LOOP_CREATED dropped" \
-      || say "  $v: [WARN] could not drop the claim on /dev/$MATRIX_LOOP_CREATED - it may not start next time"
-  done
-  if udisksctl loop-delete -b "/dev/$MATRIX_LOOP_CREATED" >/dev/null 2>&1; then
-    say "  released /dev/$MATRIX_LOOP_CREATED"
-  else
-    say "  NOTE: /dev/$MATRIX_LOOP_CREATED still in use - left attached (a later run will reuse it)"
+  if [ -n "${MATRIX_LOOP_CREATED:-}" ]; then
+    for v in $MATRIX_CDROM_CLAIMED; do
+      claim_drop_loop "$v" "$MATRIX_LOOP_CREATED" >/dev/null 2>&1 \
+        && say "  $v: release-ISO claim on /dev/$MATRIX_LOOP_CREATED dropped" \
+        || say "  $v: [WARN] could not drop the claim on /dev/$MATRIX_LOOP_CREATED - it may not start next time"
+    done
+    if udisksctl loop-delete -b "/dev/$MATRIX_LOOP_CREATED" >/dev/null 2>&1; then
+      say "  released /dev/$MATRIX_LOOP_CREATED"
+    else
+      say "  NOTE: /dev/$MATRIX_LOOP_CREATED still in use - left attached (a later run will reuse it)"
+    fi
   fi
+  # AND THE REGISTRY LAST. Five bind-in-force exits leave the script without passing the per-cell
+  # join point: the two logvol_bind_now FATALs, assert_sole_guest inside start_vm, park_installed's
+  # clear failure, and the pre-grading proof FATAL. logvol_restore_now is idempotent (it clears
+  # LOGVOL_BOUND), so this is a no-op after the join point has already restored, and at the normal
+  # end. It runs AFTER the claims and the loop above because it is a guest pushrun bounded at
+  # `timeout -k 10 240`: in front of them it could hold this trap ~250 s while a `--required` cdrom
+  # claim outlived its loop, and a subject in that state CANNOT BE CREATED (measured 2026-10-14,
+  # win10-acc and /dev/loop14).
+  logvol_restore_now "${c:-campaign}-exit" || true
 }
 trap _matrix_release_loop EXIT
 
@@ -2328,26 +2435,31 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the
   else
     qvm-prefs "$app" netvm '' >/dev/null 2>&1
   fi
-  # THE EVIDENCE STICK, WHICH THIS CELL NEVER HAD. Every other cell gets a DIAG log volume on the
-  # prime-run path above; this one derives an AppVM from a template instead and never reached that
-  # code, so LOGVOL_IMG stayed unset and grade_cell_logsweep reported "no log volume was attached
-  # for this cell". MEASURED in run 38787325142: win10-appvm pulled ONE file - a zero-byte
-  # sweep.log, 0 QWT lines - and its sweep FAILED for missing data, which it should. One cell in
-  # eight had produced no guest evidence in any run.
-  # BEFORE THE FIRST BOOT: a --required assignment is satisfied at domain creation, so a volume
-  # attached after the start is invisible to the guest.
-  LOGVOL_VM="$app"; LOGVOL_IMG=$(logvol_image "$app")
-  if logvol_create "$LOGVOL_IMG" "$app" >>"$M/$3-appvm-logvol-setup.out" 2>&1 \
-     && logvol_attach "$app" "$LOGVOL_IMG" "$M/logvol-manifest.json" >>"$M/$3-appvm-logvol-setup.out" 2>&1; then
-    say "  $3-appvm: log volume attached ($LOGVOL_IMG)"
+  # STICKSCOPE-A
+  # THE EVIDENCE STICK IS AN INSTALL-TESTING INSTRUMENT, and this cell installs nothing. See
+  # logvol_stick_scope for the ruling and the measurement. LOGVOL_IMG stays empty, and every other
+  # stick site in this cell self-disables on its own existing `[ -n "$LOGVOL_IMG" ]` guard - the
+  # per-boot bind below and the driver's prove-pull block, including the --require-agent-logs proof
+  # that an appvm cell cannot pass. One decision, no cell-class condition anywhere else.
+  # BEFORE THE FIRST BOOT, when it does apply: a --required assignment is satisfied at domain
+  # creation, so a volume attached after the start is invisible to the guest.
+  if logvol_stick_scope appvm; then
+    LOGVOL_VM="$app"; LOGVOL_IMG=$(logvol_image "$app")
+    if logvol_create "$LOGVOL_IMG" "$app" >>"$M/$3-appvm-logvol-setup.out" 2>&1 \
+       && logvol_attach "$app" "$LOGVOL_IMG" "$M/logvol-manifest.json" >>"$M/$3-appvm-logvol-setup.out" 2>&1; then
+      say "  $3-appvm: log volume attached ($LOGVOL_IMG)"
+    else
+      # HARD: same reason as the churn path above. An appvm cell with no volume is a cell that
+      # cannot be swept, and it was graded blind in two consecutive campaigns.
+      say "[ERROR] FATAL: $3-appvm: log volume NOT ATTACHED - $(tail -1 "$M/$3-appvm-logvol-setup.out" 2>/dev/null | cut -c1-140)"
+      say "[ERROR] FATAL: this cell's guest logs cannot be swept; the campaign STOPS rather than grade blind."
+      say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED on a log-device failure ==="
+      exit 2
+    fi
   else
-    # HARD: same reason as the churn path above. An appvm cell with no volume is a cell that
-    # cannot be swept, and it was graded blind in two consecutive campaigns.
-    say "[ERROR] FATAL: $3-appvm: log volume NOT ATTACHED - $(tail -1 "$M/$3-appvm-logvol-setup.out" 2>/dev/null | cut -c1-140)"
-    say "[ERROR] FATAL: this cell's guest logs cannot be swept; the campaign STOPS rather than grade blind."
-    say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED on a log-device failure ==="
-    exit 2
+    say "  $3-appvm: no evidence stick for this cell class - its logs come from the collector, at the LogDir the guest resolves"
   fi
+  # STICKSCOPE-B
   say "  $app re-created FRESH from $tpl (private auto-seeded from the template's private at creation)"
   local b
   # A dom0 DESKTOP SWITCH MUST NOT FAIL A CELL. Measured 2026-10-10 and CONFIRMED BY THE OWNER, who was
@@ -2717,7 +2829,17 @@ for c in $CELLS; do
     else
       say "  $c: [WARN] could not pull the log volume $LOGVOL_IMG: $(tail -1 "$M/$c-logvol-pull.out" 2>/dev/null | cut -c1-140)"
     fi
-    LOGVOL_IMG=""; LOGVOL_VM=""
+    # STICKSCOPE-A
+    # AND HAND THE REGISTRY BACK. This is the join point of every exit of every install cell -
+    # matrix.sh is `set -uo pipefail` with NO -e, so a failing step inside a cell is a `return` out
+    # of the cell function and lands here, success and failure alike. It runs AFTER the proof and
+    # AFTER the pull: both read the stick, and a restore before them manufactures an abort.
+    # The park-time clear in park_installed STAYS - it is wider (every subkey) and it removes the
+    # value rather than writing one, which is what an AppVM must inherit. Restore returns the live
+    # subject; clear sanitises what the park carries.
+    logvol_restore_now "$c" || true
+    # STICKSCOPE-B
+    LOGVOL_IMG=""; LOGVOL_VM=""; LOGVOL_BOUND=0
   fi
 
   # PRESERVE THE GUEST'S OWN LOGS FOR EVERY CELL, not just the two that bind a volume.

@@ -37,6 +37,10 @@ trap 'rc=$?; if [ "$rc" -eq 0 ]; then rm -rf "$T"; else printf "kept %s (rc=%s)\
 
 eval "$(sed -n '/^cell_appvm(){/,/^}$/p' "$ROOT/mgmt/harness/matrix.sh")"
 declare -f cell_appvm >/dev/null || { echo "FAIL could not extract cell_appvm"; exit 1; }
+# THE SCOPE PREDICATE IS EXTRACTED, NOT STUBBED. It decides whether this cell touches the stick at
+# all; a stub here would make every leg below a statement about the stub.
+eval "$(sed -n '/^logvol_stick_scope(){/,/^}$/p' "$ROOT/mgmt/harness/matrix.sh")"
+declare -f logvol_stick_scope >/dev/null || { echo "FAIL could not extract logvol_stick_scope"; exit 1; }
 
 pass=0; fail=0
 ok_(){  printf '  PASS  %s\n' "$1"; pass=$((pass+1)); }
@@ -62,13 +66,15 @@ w_appvm_shell(){ return "${SHELL_RC:-0}"; }
 w_screen(){ printf 'DESKTOP\n'; }
 start_vm(){ :; }
 reclone(){ return 0; }
-logvol_bind_now(){ :; }
-# The appvm cell attaches its own evidence volume before the first boot, and since 2026-10-20 a
-# failure there ABORTS the campaign rather than grading a guest whose wedge would be unreadable.
-# Stub the primitives so the cell can run here; LOGVOL_FAIL=1 drives the failure path.
-logvol_image(){ printf '%s\n' "$T/logs-$1.img"; }
-logvol_create(){ [ "${LOGVOL_FAIL:-0}" = 1 ] && return 1; : > "$1" 2>/dev/null; return 0; }
-logvol_attach(){ [ "${LOGVOL_FAIL:-0}" = 1 ] && return 1; return 0; }
+# THE STICK PRIMITIVES ARE RECORDERS, not no-ops. Owner's ruling 2026-10-22 - "log stick exists for
+# install testing. on appvms and feature tests it has zero sense" - means the property under test is
+# that this cell calls NONE of them, which a no-op stub cannot see. $STICK collects the calls.
+logvol_bind_now(){ STICK="$STICK bind:${2:-}"; }
+# logvol_image is called inside $(...) - a subshell - so a variable recorder would be discarded and
+# the leg would read green with the call still there. A file survives the subshell.
+logvol_image(){ : > "$T/stick-image-called"; printf '%s\n' "$T/logs-$1.img"; }
+logvol_create(){ STICK="$STICK create"; [ "${LOGVOL_FAIL:-0}" = 1 ] && return 1; : > "$1" 2>/dev/null; return 0; }
+logvol_attach(){ STICK="$STICK attach"; [ "${LOGVOL_FAIL:-0}" = 1 ] && return 1; return 0; }
 grade_appvm_window(){ return "${WIN_RC:-0}"; }
 # the qvm-* family: EXISTS lists what the rig has, so "absent" and "present" are one variable
 qvm-check(){ local v=${*: -1}; case " $EXISTS " in *" $v "*) return 0 ;; *) return 1 ;; esac; }
@@ -87,7 +93,7 @@ qvm-prefs(){ printf '\n'; }
 qvm-shutdown(){ :; }
 qvm-kill(){ :; }
 
-reset_case(){ OK=0; NO=0; LINES=""
+reset_case(){ OK=0; NO=0; LINES=""; STICK=""; rm -f "$T/stick-image-called"
   EXISTS="win10-tpl"; PARKS="ckpt-win10-acc-installed"
   # CKPT_RC is read by the ONE external stub (checkpoint.sh, called by relative path), so it has to
   # be exported; the rest are read by shell functions and must not be.
@@ -160,44 +166,82 @@ reset_case; call; z="$OK/$NO/$(printf '%s' "$LINES" | md5sum | cut -c1-8)"
 if [ "$x" = "$y" ] && [ "$y" = "$z" ]; then ok_ "DETERMINISTIC: three identical runs give the identical verdict and log ($x)"
 else no_ "deterministic over three identical runs" "$x / $y / $z"; fi
 
-# THE CELL MUST POINT THE APPVM AT ITS OWN VOLUME. It creates and attaches one before the first
-# boot but, until 2026-10-20, never bound it - and an AppVM inherits the TEMPLATE's registry, so
-# LogDir named the template's directory. On run 39225775322 both appvm cells swept
-# Z:\qwt-logs\win10-acc while holding a volume with id win10-app, their collector reported
-# logdir.exists=0, and both failed INVALID-SWEEP-BLIND with 0 QWT lines.
-# The predicate is the call the cell actually makes on its OWN subject ($app), not the mention of
-# a function name: a bind of the churn subject would read the same to a careless grep.
-_appvm_fn=$(sed -n '/^cell_appvm(){/,/^}$/p' mgmt/harness/matrix.sh)
-[ -n "$_appvm_fn" ] || _appvm_fn=$(sed -n '/appvm) /,/^  }/p' mgmt/harness/matrix.sh)
-if printf '%s' "$_appvm_fn" | command grep -qE 'logvol_bind_now "\$app"'; then
-  ok_ "the appvm cell binds the log volume it attached, on its OWN subject"
+# ---- 9. THE STICK IS NOT THIS CELL'S INSTRUMENT (owner's ruling, 2026-10-22) -----------------
+# WAS, until today: this cell created, attached and per-boot bound an evidence stick, and three
+# assertions here were greps for those call sites. The owner's ruling retires them: "log stick
+# exists for install testing. on appvms and feature tests it has zero sense."
+# The measurement behind it: an AppVM's ROOT volume is volatile, HKLM\Software lives on it, and
+# Qubes re-derives it from the template at every start - so the bind's LogDir never survives a
+# reboot (all three appvm boots of run 39476792836: old='Q:\Qubes Logs'), the agent's real LogDir
+# is Q:\Qubes Logs on the PRIVATE volume, and logvol_prove_roundtrip --require-agent-logs can
+# therefore never pass here. It FATALed win10-appvm and stopped the 4.3.37 matrix at 4 of 8.
+# THESE LEGS EXECUTE THE CELL. The retired ones were greps over its body, which cannot tell a call
+# that is present from a call that runs.
+reset_case; call
+if [ -z "$STICK" ] && [ ! -e "$T/stick-image-called" ]; then
+  ok_ "the appvm cell calls NO stick primitive at all - no image, no create, no attach, no bind"
 else
-  no_ "the appvm cell binds its own volume" "no logvol_bind_now \"\$app\" in the cell body"
+  no_ "the appvm cell touches the stick" "recorded:$STICK$([ -e "$T/stick-image-called" ] && printf ' image')"
 fi
-# ON EVERY BOOT, NOT ONCE. An AppVM's root volume is volatile and HKLM\Software lives on it, so a
-# LogDir written on boot 1 is gone on boot 2 and the guest reverts to the TEMPLATE's path. Run
-# 39225775322: bound to win10-app at 13:27:25, collector read win10-acc exists=0 at 13:30:32.
-if printf '%s' "$_appvm_fn" | command grep -qE '\[ "\$b" = 1 \].*logvol_bind_now'; then
-  no_ "the appvm bind must run on EVERY boot" "it is guarded to boot 1, and an AppVM's volatile root discards it at the next start"
-elif printf '%s' "$_appvm_fn" | command grep -qE 'logvol_bind_now "\$app" "\$3-appvm-b\$b"'; then
-  # THE MESSAGE NOW CLAIMS ONLY WHAT THE PREDICATE TESTS. It used to read "...on every boot,
-  # because an AppVM's volatile root discards the registry each start", which asserts the volatile
-  # root is DEALT WITH. The predicate is a grep for the call site: it proves the call is there with
-  # a per-boot label and nothing more. MEASURED 2026-10-21, and the per-boot bind does NOT solve
-  # it: the bind runs after w_appvm_shell, so the agent family has already resolved LogDir from the
-  # inherited registry, and the volatile root discards the new value before the next boot -
-  # including the last one, which grading reads. The property is asserted elsewhere, by execution:
-  # logvol-lib-selftest's proof-agent legs, and the --require-agent-logs requirement at the
-  # pre-grading call site. See LOGVOLPROOFMEASURESTHEPROVER and LOGVOLBINDLATE.
-  ok_ "the appvm bind is called on every boot with a per-boot label (a grep over the cell body - it does NOT prove the bind takes effect)"
+# AND NOTHING DOWNSTREAM IS ROUTED INTO THE PRE-GRADING PROOF. LOGVOL_IMG is the only thing that
+# takes a cell into the driver's --require-agent-logs block, and this cell must leave it empty.
+reset_case; LOGVOL_IMG="sentinel-from-the-previous-cell"; call
+if [ "${LOGVOL_IMG:-}" = "sentinel-from-the-previous-cell" ]; then
+  ok_ "the cell never assigns LOGVOL_IMG, so the driver's prove-pull block (and its proof) is not entered for it"
 else
-  no_ "the appvm bind is not per-boot" "expected logvol_bind_now with a per-boot label"
+  no_ "the cell set LOGVOL_IMG" "it would be routed into the --require-agent-logs proof it cannot pass: ${LOGVOL_IMG:-}"
+fi
+unset LOGVOL_IMG
+# AND IT STILL RUNS ALL THREE BOOTS AND GRADES THEM. A skip that quietly shortened the cell would
+# be a behaviour change nobody asked for.
+reset_case; WIN_RC=0; call
+if [ "$NO" = 0 ] && [ "$(printf '%s' "$LINES" | command grep -c 'AppVM cold boot')" = 3 ]; then
+  ok_ "with no stick the cell still runs and grades all three cold boots, and grades nothing against the release"
+else
+  no_ "three boots with no stick" "NO=$NO lines=$LINES"
+fi
+# SEEN TO FAIL: PUT THE SCOPE BACK THE WAY IT WAS. With the class exemption removed the cell
+# creates, attaches and binds again - which is the defect this change removes, reproduced.
+reset_case
+_real_scope=$(declare -f logvol_stick_scope)
+logvol_stick_scope(){ return 0; }
+call
+_defect="$STICK"
+eval "$_real_scope"
+[ -e "$T/stick-image-called" ] && _defect="image$_defect"
+case "$_defect" in
+  image*create*attach*bind*) ok_ "SEEN TO FAIL: with the class exemption removed the cell names, creates, attaches and binds the stick again ($_defect)" ;;
+  *) no_ "the exemption is what suppresses the stick" "with it removed the cell recorded:${_defect:-nothing} - so these legs prove nothing" ;;
+esac
+# ...AND THE PER-BOOT BIND IS STILL THE SHAPE IT WAS, once a stick exists. An AppVM's volatile root
+# discards LogDir at every shutdown, so a bind on boot 1 only is gone by the boot grading reads
+# (run 39225775322: bound to win10-app at 13:27:25, collector read win10-acc exists=0 at 13:30:32).
+# This says the call site is per-boot. It does NOT say the bind takes effect - it does not.
+case "$_defect" in
+  *"bind:c1-appvm-b1"*"bind:c1-appvm-b2"*"bind:c1-appvm-b3"*)
+    ok_ "the per-boot bind call site is intact under a stick-bearing scope (three per-boot labels)" ;;
+  *) no_ "the per-boot bind call site" "expected three per-boot labels, got:${_defect:-nothing}" ;;
+esac
+# ...AND A LOG-DEVICE FAILURE STILL ABORTS where a stick IS attached. The appvm cell no longer
+# reaches this path, so it is driven under the stick-bearing scope: the rule - a failed log device
+# aborts, it does not downgrade - is what two consecutive blind campaigns bought, and lint L29
+# polices it. Removing the cell's stick must not quietly retire the rule with it.
+reset_case; LOGVOL_FAIL=1
+logvol_stick_scope(){ return 0; }
+_abort_out=$( (say(){ printf "[SAY] %s\n" "$*"; }; call) 2>&1 ); _abort_rc=$?
+eval "$_real_scope"
+LOGVOL_FAIL=0
+if [ "$_abort_rc" -ne 0 ] && case "$_abort_out" in *"NOT ATTACHED"*) true ;; *) false ;; esac; then
+  ok_ "a log-device failure still ABORTS (rc=$_abort_rc) and names the volume as the reason, wherever a stick is attached"
+else
+  no_ "a log-device failure must abort and say why" "rc=$_abort_rc out=$(printf '%s' "$_abort_out" | tr '\n' '|' | cut -c1-160)"
 fi
 
-# AND THE PROPERTY ITSELF MUST BE ASSERTED BY EXECUTION SOMEWHERE. Every assertion in this file is
-# a grep over matrix.sh's source: necessary, because a cell body cannot be run without a guest, but
-# it means this suite can only ever say "the call is there". For eight days that was mistaken for
-# evidence that the bind WORKS, across five fixes none of which was ever measured on an AppVM.
+
+# AND THE LOG PATH'S OWN PROPERTY MUST BE ASSERTED BY EXECUTION SOMEWHERE ELSE. This suite executes
+# the cell, so it can say which calls RAN - but it still cannot say whether a bind takes effect in a
+# guest. For eight days a grep here was mistaken for evidence that the bind WORKS, across five fixes
+# none of which was ever measured on an AppVM.
 # The behavioural assertion lives in logvol-lib-selftest.sh (the proof-agent legs, which execute
 # logvol_prove_roundtrip against the AppVM state), and the requirement that makes a blind cell fail
 # lives at matrix.sh's pre-grading call site. If either disappears, this suite's greps are the only
@@ -218,26 +262,6 @@ if command grep -nE 'logvol_prove_roundtrip[^#]*--require-agent-logs' "$ROOT/mgm
 else
   no_ "the pre-grading proof does not require an agent log" "a blind appvm cell would be graded CLEAN again"
 fi
-
-# A LOG-DEVICE FAILURE ABORTS, IT DOES NOT DOWNGRADE. Until 2026-10-20 this path printed
-# "[WARN] log volume not attached", blanked LOGVOL_IMG and graded the cell anyway - which is how
-# two consecutive campaigns graded both appvm cells blind, and how WIN10-clean reached a SPIN wedge
-# with nothing readable inside it. The cell must stop, and the campaign with it: every later cell
-# would be graded by the same broken instrument.
-reset_case; LOGVOL_FAIL=1
-# say() appends to $LINES, and the cell EXITS, so nothing after it runs and the subshell takes
-# $LINES with it. Redefine say to print, for this one call only.
-_abort_out=$( (say(){ printf "[SAY] %s\n" "$*"; }; call) 2>&1 ); _abort_rc=$?
-LOGVOL_FAIL=0
-if [ "$_abort_rc" -ne 0 ]; then
-  ok_ "a log-device failure ABORTS the cell (rc=$_abort_rc), it does not grade on"
-else
-  no_ "a log-device failure must abort" "rc=0 - the cell carried on with no instrument that survives a wedge"
-fi
-case "$_abort_out$LINES" in
-  *"NOT ATTACHED"*) ok_ "...and it says the volume was not attached, as the reason" ;;
-  *) no_ "the abort names the log device" "got: $(printf '%s' "$_abort_out$LINES" | tr '\n' '|' | cut -c1-160)" ;;
-esac
 
 printf 'matrix-appvmcell-grade-selftest: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
