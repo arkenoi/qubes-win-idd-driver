@@ -31,6 +31,15 @@
 # Exit: 2 usage or a refusal before any guest was touched · the preflight's own code (11/12/13/14)
 #       · else the first non-zero of the steps that ran, and the verdict is printed whatever happens.
 set -uo pipefail
+# TEARDOWN FIRST, $0-RELATIVE, ABOVE THE cd. Without job_init this script had NO trap at all - the
+# exact ACCEPTCANCELORPHAN defect tools/release-acceptance.sh root-caused on 2026-10-21 and fixed,
+# and I shipped it again one level up. MEASURED 2026-10-22: TERMing this leader killed it and left
+# release-acceptance.sh, updater-component-test.sh and quick-upgrade.sh running on a live guest, so
+# the abort had to be finished by walking /proc from the recorded pid. _rl_teardown kills the
+# descendant tree by explicit pid - never a pattern, never a process-group sweep.
+. "$(dirname "${BASH_SOURCE[0]}")/run-lib.sh" || {
+  echo "FATAL: cannot load run-lib.sh - without it a cancel leaves the campaign running" >&2; exit 2; }
+job_init "campaign-full"
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 2
 
 DRY="${DRY:-}"
@@ -177,6 +186,42 @@ PKG="$PKG" mgmt/harness/campaign-run.sh 2>&1 | tee -a "$OUT/campaign-run.out"
 crc=${PIPESTATUS[0]}
 log "  campaign-run rc=$crc"
 case "$crc" in 11|12|13|14) log "STOP: the preflight refused with $crc - no guest was touched"; exit "$crc" ;; esac
+# ---- MATRIXABORT-BEGIN  (driven by tools/tests/campaign-full-selftest.sh)
+# AN ABORTED OR INCOMPLETE MATRIX STOPS THE CHAIN. MEASURED 2026-10-22: the matrix printed
+# "=== MATRIX: 75 passed, 6 failed - ABORTED on a log path that broke mid-cell ===" at 13:38, having
+# wedged a guest in WIN11-upgrade - and this chain walked straight into the feature tests on a rig
+# whose subject had just been hard-killed, then would have spent gate-remainder on it. The operator
+# had to stop it. Two mechanical reasons to halt, neither a judgement:
+#   * the matrix said ABORTED - whatever follows is running on a rig it did not finish with;
+#   * a cell in acceptance-record-check.py's REQUIRED set produced no report.json, so the record is
+#     already unsatisfiable and gate-remainder cannot rescue it.
+if grep -aqE '=== MATRIX: .* ABORTED' "$OUT/campaign-run.out" 2>/dev/null; then
+  log "STOP: the matrix ABORTED - $(grep -aoE '=== MATRIX:[^=]*' "$OUT/campaign-run.out" | tail -1)"
+  log "      the remainder suites and the receipt check are NOT run on an unfinished matrix"
+  python3 tools/campaign-state.py 2>&1 | tail -20 | tee -a "$OUT/chain.log"
+  exit "${crc:-1}"
+fi
+missing=$(python3 - <<'PYMISS' 2>/dev/null
+import glob, json, os, re, sys
+here = os.path.join(os.getcwd(), "tools")
+feats = [l.strip() for l in open(os.path.join(here, "release-feature-tests.txt")) if l.strip() and not l.startswith("#")]
+required = {"win11-clean","win10-clean","win11-upgrade","win11-reinstall","win11-appvm","win10-appvm"}
+camps = sorted(glob.glob(os.path.expanduser("~/qwt-accept/*/campaign")), key=os.path.getmtime)
+got = set()
+if camps:
+    for d in glob.glob(os.path.join(camps[-1], "matrix", "*-guestlogs")):
+        if os.path.exists(os.path.join(d, "report.json")):
+            got.add(os.path.basename(d)[:-len("-guestlogs")])
+print(" ".join(sorted(required - got)))
+PYMISS
+)
+if [ -n "$missing" ]; then
+  log "STOP: these REQUIRED cells produced no report: $missing"
+  log "      the acceptance record cannot be satisfied, so gate-remainder would spend rig time on an unusable receipt"
+  python3 tools/campaign-state.py 2>&1 | tail -20 | tee -a "$OUT/chain.log"
+  exit "${crc:-1}"
+fi
+# ---- MATRIXABORT-END
 
 # ---- 6. the six suites release-acceptance does not cover ------------------------------------------
 log "step 3/4: gate-remainder (--fi-run $FI)"

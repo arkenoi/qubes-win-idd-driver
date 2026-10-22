@@ -29,6 +29,8 @@ ck(){ if [ "$2" = 0 ]; then pass=$((pass+1)); say "ok   $1"; else fail=$((fail+1
 PKGROLES=$(awk '/# ---- PKGROLES-BEGIN/{f=1;next}/# ---- PKGROLES-END/{f=0}f' "$SRC")
 CIDUE=$(awk '/# ---- CIDUE-BEGIN/{f=1;next}/# ---- CIDUE-END/{f=0}f' "$SRC")
 PKGDRIFT=$(awk '/# ---- PKGDRIFT-BEGIN/{f=1;next}/# ---- PKGDRIFT-END/{f=0}f' "$SRC")
+MATRIXABORT=$(awk '/# ---- MATRIXABORT-BEGIN/{f=1;next}/# ---- MATRIXABORT-END/{f=0}f' "$SRC")
+[ -n "$MATRIXABORT" ] || { say "FAIL  could not extract MATRIXABORT"; exit 2; }
 [ -n "$PKGDRIFT" ] || { say "FAIL  could not extract PKGDRIFT"; exit 2; }
 [ -n "$PKGROLES" ] || { say "FAIL  could not extract PKGROLES"; exit 2; }
 [ -n "$CIDUE" ] || { say "FAIL  could not extract CIDUE"; exit 2; }
@@ -216,6 +218,56 @@ ck '...and the refusal names the rebuild that fixes it' \
 out=$(drift_run "$H_PRODUCT" "$H_PRODUCT")
 ck 'a package built AT head needs no drift check at all' \
    "$([ "$out" = "OK" ] && echo 0 || echo 1)" "got: $out"
+
+# ---- 3c. AN ABORTED OR INCOMPLETE MATRIX MUST STOP THE CHAIN -----------------------------------
+# MEASURED 2026-10-22: the matrix printed its ABORTED tally at 13:38 after wedging a guest in
+# WIN11-upgrade, and the chain walked into the feature tests on a rig whose subject had just been
+# hard-killed. The operator had to stop it. The fixture below is that REAL tally line.
+mk_camp(){ # mk_camp <fixture-home> <cell>...   creates report.json for each named cell
+  local h="$1"; shift; local c
+  rm -rf "$h"; mkdir -p "$h/qwt-accept/rel-x/campaign/matrix"
+  for c in "$@"; do mkdir -p "$h/qwt-accept/rel-x/campaign/matrix/$c-guestlogs"
+    printf '{"status":"CLEAN","rc":0}\n' > "$h/qwt-accept/rel-x/campaign/matrix/$c-guestlogs/report.json"; done
+}
+ALL6="win11-clean win10-clean win11-upgrade win11-reinstall win11-appvm win10-appvm"
+run_abort(){ # run_abort <campaign-run.out contents> <fixture-home> -> "STOP: ..." or "CONTINUED"
+  local o="$T/ab"; rm -rf "$o"; mkdir -p "$o"
+  printf '%s\n' "$1" > "$o/campaign-run.out"
+  ( cd "$ROOT" && HOME="$2" OUT="$o" crc=1 bash -c '
+      set -uo pipefail
+      log(){ echo "$*"; }
+      '"$MATRIXABORT"'
+      echo CONTINUED' ) 2>&1 | grep -aE '^STOP:|^CONTINUED|REQUIRED cells' | head -2
+}
+mk_camp "$T/home-ok" $ALL6
+out=$(run_abort "[13:38:10] [INFO] === MATRIX: 75 passed, 6 failed - ABORTED on a log path that broke mid-cell ===" "$T/home-ok")
+ck 'SEEN TO FAIL: the REAL aborted-matrix tally STOPS the chain' \
+   "$(printf '%s' "$out" | grep -q '^STOP:' && echo 0 || echo 1)" "got: $out"
+ck '...and it says the remainder and the receipt check are not run' \
+   "$(printf '%s' "$out" | grep -qi 'ABORTED' && echo 0 || echo 1)" "got: $out"
+
+out=$(run_abort "[13:38:10] [INFO] === MATRIX: 81 passed, 0 failed ===" "$T/home-ok")
+ck 'a matrix that finished with every REQUIRED cell reported lets the chain continue' \
+   "$(printf '%s' "$out" | grep -q '^CONTINUED' && echo 0 || echo 1)" "got: $out"
+
+mk_camp "$T/home-gap" win11-clean win10-clean win11-upgrade win11-reinstall win10-appvm
+out=$(run_abort "[13:38:10] [INFO] === MATRIX: 70 passed, 0 failed ===" "$T/home-gap")
+ck 'a REQUIRED cell with no report STOPS the chain even when the matrix did not say ABORTED' \
+   "$(printf '%s' "$out" | grep -q '^STOP:' && echo 0 || echo 1)" "got: $out"
+ck '...and it NAMES the missing cell (win11-appvm, the one that never ran today)' \
+   "$(printf '%s' "$out" | grep -q 'win11-appvm' && echo 0 || echo 1)" "got: $out"
+
+# ---- 3d. the chain must own a teardown trap ----------------------------------------------------
+# TERMing this leader used to kill it and leave release-acceptance, the feature test and
+# quick-upgrade running on a live guest - the ACCEPTCANCELORPHAN defect, shipped one level up.
+ck 'the chain installs job_init BEFORE it cds, so a cancel tears its tree down' \
+   "$(grep -q 'job_init "campaign-full"' "$SRC" && grep -qE '^\. "\$\(dirname "\$\{BASH_SOURCE\[0\]\}"\)/run-lib.sh"' "$SRC" && echo 0 || echo 1)" \
+   'run-lib.sh must be sourced $0-relatively above the cd, then job_init called'
+# The predicate must match the CALL, not a mention: the first draft matched "campaign-run.sh" in
+# this script's own header comment, which sits ABOVE job_init, so it failed on correct code.
+ck '...and job_init comes before the first guest-touching step' \
+   "$(awk '/^job_init "campaign-full"/{j=NR} /^[^#]*mgmt\/harness\/campaign-run\.sh/{if(!c)c=NR} END{exit !(j&&c&&j<c)}' "$SRC" && echo 0 || echo 1)" \
+   'the trap must be armed before anything can be left orphaned'
 
 # ---- 4. the harness refuses to touch a rig in DRY mode -----------------------------------------
 ck 'DRY mode is honoured before any guest-touching step (no release-acceptance/gate-remainder above the DRY exit)' \
