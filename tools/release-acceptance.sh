@@ -276,6 +276,22 @@ say "matrix rc=$MRC (detail: $CAMP/full.out, artefacts: $CAMP/matrix)"
 # scope split and the reason this keys on the tally rather than on MRC alone.
 . "$(dirname "$0")/../mgmt/harness/wedge-gates-lib.sh" || {
   say "FAIL  cannot load wedge-gates-lib.sh - the fatal gate is the thing that stops a wedged run"; exit 2; }
+# A HELD SPECIMEN STOPS THE CAMPAIGN BEFORE ANYTHING ELSE IS ATTEMPTED. Checked here as well as
+# in settle_rig, because the rig is occupied from that moment and nothing downstream can run.
+if [ -s "$CAMP/specimen-held" ]; then
+  _sv=$(tr -d '\r\n' < "$CAMP/specimen-held")
+  say "[ERROR] STOP: $_sv is HELD (class=$(tr -d '\r\n' < "$CAMP/specimen-class" 2>/dev/null)) - its antecedent was not captured"
+  say "         The hold ENDS deliberately, not by timeout: read the stick, then release it with"
+  say "           source mgmt/harness/wedge-gates-lib.sh; wedge_release $_sv $(tr -d '\r\n' < "$CAMP/specimen-record" 2>/dev/null) '<why it is safe to end>'"
+  say "         Until then this guest holds the rig, which is the intended trade: the specimen is the"
+  say "         only copy of the state, and the campaign can be re-run."
+  say "[ERROR] it holds the rig deliberately: a destroyed specimen cannot be retried, so the campaign"
+  say "[ERROR] stops here rather than letting every later cell be refused with 'these are not Halted'."
+  say "[ERROR] record: $(tr -d '\r\n' < "$CAMP/specimen-record" 2>/dev/null)"
+  say "[ERROR] to resume the rig once it has been examined: qvm-remove -f $_sv (it is contaminated and"
+  say "[ERROR] must be redeployed from its golden in any case)."
+  exit 1
+fi
 if grep -qaE '=== MATRIX: .* ABORTED' "$CAMP/full.out" 2>/dev/null; then
   say "[ERROR] STOP: $(grep -aoE '=== MATRIX:[^=]*' "$CAMP/full.out" | tail -1)"
   say "[ERROR] the matrix did not finish, so the feature tests, the remainder suites and the receipt"
@@ -313,29 +329,71 @@ if [ "$SKIP_FEATURES" -eq 0 ]; then
       # halted cleanly, while win11-upgrade's guest in the same campaign never answered again.
       # So: classify first (host-side, deterministic), record, and only then kill - and if the
       # record is incomplete, leave the guest UP as the specimen rather than destroy it.
-      if ! qwt_shutdown "$vm" 600; then
+      # THE ACPI RETURN CODE IS THE STRONGEST INDICATOR WE HAVE, and this line used to throw it
+      # away. `if ! qwt_shutdown` collapses four measured meanings - halted / no effect on the same
+      # session / the guest rebooted / could not tell - into one boolean, on every guest, on the
+      # exact path where a wedge is decided. Owner 2026-10-22: "can we RELIABLY detect 'ACPI is not
+      # responding'? it is the main one". So: sample the host-side session identity first, keep the
+      # rc, and hand both to the one mapping in wedge-gates-lib.sh.
+      _x0=$(_wg_xid "$vm")
+      qwt_shutdown "$vm" 600; _src=$?
+      if [ "$_src" -ne 0 ]; then
         _wgd="$CAMP/matrix/wedge-$vm-$(date -u +%H%M%S)"
-        say "[WARN]   $vm did not halt in 600s - classifying before anything kills it -> $_wgd"
+        say "[WARN]   $vm did not halt in 600s (qwt_shutdown rc=$_src) - classifying before anything kills it -> $_wgd"
         if wedge_collect "$vm" "$_wgd" >>"$LOG" 2>&1; then
           wedge_stage1 "$_wgd"
+          # THE EXPENSIVE DUMP, ONLY WHEN IT WOULD MEAN SOMETHING. Two 300s-bounded hypervisor
+          # captures per guest would otherwise be paid in this loop for every guest that did not
+          # halt, to produce data that is now best-effort and labels the shape only. So: take it
+          # when the cheap half says this is a wedge candidate, then re-run the pure stage 1 over
+          # the richer record to pick the shape up.
+          if [ "$(wedge_disposition "$WG_CLASS")" = undecided ]; then
+            say "[WARN]   $vm is a wedge candidate - taking the hypervisor dump for the shape"
+            wedge_collect_dump "$vm" "$_wgd" >>"$LOG" 2>&1 || true
+            wedge_stage1 "$_wgd"
+          fi
+          # The ask ALREADY HAPPENED above, so stage 2 records that observation rather than asking
+          # again - one ACPI ask per guest, and the one the rig was going to make anyway.
+          # 600 is the deadline THIS path asked with, above - not WG_ACPI_BOUND. The record cites
+          # what was measured (Jev 2026-10-22: the two bounds disagreeing was the one unhandled
+          # confound in the whole predicate).
+          wedge_acpi_record "$_wgd" "$_src" "$_x0" "$vm" 600 >>"$LOG" 2>&1
+          if [ "$(wedge_disposition "$WG_CLASS")" = undecided ]; then
+            wedge_stage2 "$_wgd"
+            say "[WARN]   $vm ACPI=$(tr -d '\r\n' < "$_wgd/acpi-result" 2>/dev/null) -> $WG_CLASS"
+          fi
           printf '%s\n' "$WG_CLASS" > "$_wgd/class.txt"; printf '%s\n' "$WG_WHY" > "$_wgd/why.txt"
           say "[WARN]   $vm classified $WG_CLASS - $WG_WHY"
-          case "$(wedge_disposition "$WG_CLASS")" in
-            *wedge*|undecided)
-              say "[ERROR]  $vm is a wedge specimen ($WG_CLASS): LEAVING IT UP for examination, not killing it"
-              MRC=1; continue ;;
-          esac
+          # SECONDARY EVALUATOR, REFERENCE ONLY. The class above is the verdict and is already
+          # recorded; this asks Jev which KNOWN MECHANISM the record supports, and what single
+          # capture would separate the rest. It cannot change the class, and a missing network
+          # leaves a note rather than a gap.
+          wedge_gates_jev "$_wgd" "$WG_CLASS" >>"$LOG" 2>&1 || true
+          printf 'JEV (secondary evaluator, supplementary - the class above is the verdict):\n%s\n' "$WG_JEV" >> "$_wgd/jev.txt"
+          say "[INFO]   Jev (reference only): $(printf '%s' "$WG_JEV" | tr '\n' ' ' | cut -c1-200)"
         else
           say "[WARN]   could not collect a record for $vm - killing it anyway would destroy the only state there is"
         fi
-        if wedge_may_kill "$_wgd" >>"$LOG" 2>&1; then
-          say "[WARN]   record complete; killing $vm (the next clone from its volume may be dirty)"
-          timeout 60 qvm-kill "$vm" >/dev/null 2>&1
-        else
-          say "[ERROR]  REFUSING to kill $vm: the record is incomplete. It stays up as the specimen."
+        # ONE SHOT, AND THE CAMPAIGN STOPS. A preserved specimen OCCUPIES THE RIG: every later cell
+        # and every feature test would be refused with "these are not Halted", one after another,
+        # which is a confusing cascade rather than a verdict - the same shape of defect as letting
+        # the feature tests run after an aborted matrix. So the runner records WHICH guest is held
+        # and stops deliberately at the next check, instead of continuing into refusals.
+        if ! wedge_may_kill "$_wgd" "${WG_CLASS:-}" >>"$LOG" 2>&1; then
+          say "[ERROR]  HOLDING $vm (class=${WG_CLASS:-unclassified}) - the ANTECEDENT was not captured"
+          say "           A guest is held for exactly one reason now: another chance to read the stick,"
+          say "           which answers what it did right before. The register dump does not hold it."
           printf '%s' "$WG_LINES" | sed 's/^/           /' | tee -a "$LOG" >/dev/null
+          printf '%s\n' "$vm" > "$CAMP/specimen-held"
+          printf '%s\n' "${WG_CLASS:-unclassified}" > "$CAMP/specimen-class"
+          printf '%s\n' "$_wgd" > "$CAMP/specimen-record"
           MRC=1
+          continue
         fi
+        # Reached ONLY through wedge_may_kill above, which is a positive allowlist: the class is
+        # one there is nothing left to preserve about (it answered ACPI, or it is already gone).
+        say "[WARN]   kill permitted for $vm (class=${WG_CLASS:-unclassified}); the next clone from its volume may be dirty"
+        timeout 60 qvm-kill "$vm" >/dev/null 2>&1
       fi
     done
     for i in $(seq 1 40); do

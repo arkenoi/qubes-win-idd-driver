@@ -42,7 +42,12 @@ def as_dir(path):
     if os.path.isdir(path):
         return path, None
     tmp = tempfile.mkdtemp(prefix="wedge-vmcs-")
-    if subprocess.run(["tar", "xzf", path, "-C", tmp]).returncode != 0:
+    # `xzf` DEMANDS gzip, and dom0's local.WinWedgeForensics emits a PLAIN tar - so this decoder
+    # could never read a bundle from the service it exists to decode. Measured 2026-10-22 against a
+    # 931 KB capture from a live guest: "gzip: stdin: not in gzip format", no output, and the
+    # classifier above it recorded an absent VMCS. That is very likely why four bundles sat unread
+    # and nine wedges were recorded with g/e/q only. `xf` auto-detects compression, so it reads both.
+    if subprocess.run(["tar", "xf", path, "-C", tmp]).returncode != 0:
         die("cannot extract %s" % path)
     entries = [os.path.join(tmp, e) for e in os.listdir(tmp)]
     inner = [e for e in entries if os.path.isdir(e)]
