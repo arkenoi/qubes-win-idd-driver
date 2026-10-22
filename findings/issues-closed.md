@@ -282,3 +282,68 @@ classified entries whose head said OPEN as closed. Full text is in git history i
 - DEGOLDENHALTSLOW [harness, mgmt/harness/shutdown-lib.sh; FIXED 2026-10-21 - qwt_shutdown re-issues the ACPI request every 120 s while it polls, instead of asking once and waiting out the whole deadline. The entry measured a second ask being answered in seconds after a 909 s wait, twice, costing two seals. A re-ask is the same idempotent request, never a kill. tools/tests/shutdown-reask-selftest.sh 5/5: 5 asks across a 600 s deadline, exactly ONE when the guest halts promptly, the deadline still bounds the wait, nothing kills, and the control rebuilt from the pre-fix loop asks once] [verified 2026-10-21]
 - EVLOCKNOTONTHEDESTRUCTIVEPATH [harness, mgmt/harness/prime-run.sh; FIXED 2026-10-21 - the pre-clean that kills and qvm-removes the churn subject now refuses when the guest carries a specimen marker, printing the recorded reason and naming specimen_clear as the deliberate release. It uses specimen-lib, the LIVE mechanism (matrix.sh and e2e-wait.sh write it, golden-boot-gate.sh reads it); MEASURED 2026-10-21 that all five evidence-lock.sh functions have ZERO live consumers and nothing sources that file, so it is dead code and its fate is the OWNER'S CALL rather than a second source of truth wired here. The entry's 2026-09-09 field case - cell 4 re-priming win11-acc and destroying the guest that had just failed win11-clean - is exactly what the guard now refuses. tools/tests/specimen-not-a-leftover-selftest.sh 6/6] [verified 2026-10-21]
 - SWEEPGATEVERDICTUNSTABLE [gate, tools/log-sweep.py + mgmt/harness/log-sweep-baseline.json; FIXED 2026-10-21 - IT WAS NEVER AN OWNER DECISION. Root cause: signature keys are family|LEVEL|text (log-sweep.py:891), fc94490 (2026-10-10) deliberately lowered the A6LEAK by-design line to Info with Jev over that site at defect 0.03, and the baseline was generated 2026-10-07 - so the declaration was ORPHANED by the level change and a predecessor build's copy of the line, still at W in the swept directory (the bind copies the old log dir across), arrived as a NEW signature and was re-judged per campaign: 0.51, one hundredth over JEV_DEFECT_FLOOR, failing all three cells of 20261018-010748. The 'judge disagrees with itself 0.40 vs 0.91' reading was wrong: those were two different baseline entries with two different message texts, one of which exists nowhere in the source. FIX: the two stale signature entries are replaced by ONE level-agnostic pattern (issue a6leak-by-design), so a line whose level is a recorded decision cannot orphan its own declaration; and compare() now DETECTS an orphan by name - a line arriving as new while a declaration exists for the same family and text at a different level is reported as a STALE DECLARATION in the report and in the summary, before the new-signature list. Driven: log-sweep-selftest T59, 182/0, with the detector's loop emptied as the control.]
+
+## CLOSED 2026-10-22 — THE RELAY WAS NEVER REBUILT: A BARE `{ }` MADE THE COMPILE DEAD CODE
+
+Owner, every day for weeks, and finally: *"fix the relay properly this time. i am fucking surprised
+it was NOT fixed despite me asking EVERY FUCKING DAY"*, then *"YOU WERE SUPPOSED TO INCLUDE THIS FIX
+IN YESTERDAYS BUILD AND TOLD ME IT IS FUCKING READY"*, then the question that found it:
+*"why didnt you VERIFY IT RUNS"*.
+
+**THE CAUSE.** `guest/install-updater-agent.ps1` had a bare `{ ... }` around its relay compile and
+move — left behind when the `if (...)` that once guarded it was deleted. In PowerShell a bare brace
+pair is a **ScriptBlock literal**: constructed, its value emitted to the output stream, and the
+statements inside it never executed. The deploy therefore logged `updater agent deployed`, the
+installer RESULT carried `"updater_agent":"deployed"`, and the relay on disk stayed the binary built
+**2026-09-16T16:33:26Z**. That binary predates `--parent-pid`, so the launcher's `--parent-pid <PID>`
+had its VALUE taken as the listen port; WinHTTP pointed at 8082, nothing served it, every update
+pass ended silent and dom0 was told nothing.
+
+**EVERY THEORY I REPORTED BEFORE THIS WAS WRONG**, and each was reported as the fix: a squatter
+holding 8082 (nothing held 8082 — the orphans were on pid-ports); a self-perpetuating
+`GUARD:vouchexe` refusal; a stale staged `$SetupRoot` copy; `87e3a746`, which stopped a squatter
+only when a pid HELD 8082 and so could never fire. All of them were consistent with the symptom.
+None was the cause.
+
+**WHY NOTHING CAUGHT IT.** The source text was entirely correct. Greps, offline suites and Jev all
+read text, and no amount of reading text can see that a syntactically perfect block is never
+entered. `87e3a746` was reported READY on offline legs and Jev scores alone, with no receipt that
+the new relay had ever run. One line proves the semantics: `{ $ran = $true }` leaves `$ran` False.
+
+**THE A/B THAT ESTABLISHED IT**, win11de-tup, 2026-10-22, both arms pushed the SAME fresh
+`$SetupRoot` from the repo minutes apart, so the ONLY difference was the brace pair:
+
+| | timestamped `compiled relay ->` | block's SOURCE echoed as a value | exe write time | reported |
+|---|---|---|---|---|
+| arm A — HEAD, braces present | **0** | **1** | unchanged `2026-09-16T16:33:26Z` | `updater agent deployed` |
+| arm B — braces removed | **1** (`10:27:04`) | 0 | `2026-10-22T07:27:04Z` | deployed |
+
+The exe went 48128 → 56320 bytes and its UTF-16 `parent=` marker False → True. The next pass logged
+`10:29:08.084 listen 127.0.0.1:8082 target=@default user=SYSTEM self=...qubes-updates-relay.exe
+parent=936` plus `parent watchdog armed: pid 936`, with 8082 in Listen held by our exe
+(`listen_owner_is_our_exe=True`) and accepting a connection — against the five pid-ports the same
+cumulative log carries from before the fix (8228, 6688, 8892, 2540, 5956), none with a `parent=`
+field. Receipts: `scratchpad/relay-receipt/`.
+
+**WHAT SHIPPED WITH THE FIX.** Removing the braces is the fix; the rest exists so this class cannot
+return silently:
+- `RELAYSOURCEVOUCH` — the source being compiled must carry three markers, each **code and never a
+  human-facing message** (the flag name the launcher passes, the positional-port rule itself, the
+  log field). A vouch keyed on an error string's wording refuses a good deploy the day someone
+  rewords it, and that failure would land on a guest.
+- `RELAYEXEVOUCH` — the PLACED exe must contain the UTF-16 bytes of `parent=`; ASCII does not
+  satisfy it. The read is retried four times and an unreadable file throws `QWTRELAYUNREADABLE`, a
+  DIFFERENT error from `QWTRELAYSTALEEXE`, because a vouch that cannot tell "wrong binary" from
+  "could not read it yet" fails good installs (Defender holds a freshly written exe).
+- `RELAYBYIMAGE` — stale relays are found by **image path**, whatever port they hold, and ended by
+  PID, never by name. A relay on a different image is LOGGED rather than silently skipped, and a
+  failed process query reports that it could not confirm instead of "0 left" (UNKNOWN IS NOT ZERO —
+  the same shape of lie as the deploy that reported success over work it never did).
+- `tools/tests/discarded-scriptblock-selftest.sh` — an **AST** check over 303 shipped `.ps1` files.
+  Its control is the real shipped shape, because the first draft tested for a standalone
+  `ScriptBlockExpressionAst`, reported every file clean, and could not detect the shape that had
+  just been removed (a bare block is a `PipelineAst` wrapping a `CommandExpressionAst`) — the same
+  error one level up.
+
+Jev on the final state: `receipt_proves_execution` 0.96, `serves_the_intended_port` 0.95,
+`dead_block_was_the_cause` 0.79 (0.39 before the A/B existed).

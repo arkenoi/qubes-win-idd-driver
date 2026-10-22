@@ -27,18 +27,23 @@ WHAT REMAINS: win10-appvm and win11-appvm, and the blocker is NOT an unmade deci
 LOGVOLBINDLATE, where the fix landed twice (0bf0f324, 9e314357) and the pregrade gate's predicate is
 unsatisfiable on an AppVM by construction. Acceptance stays INCOMPLETE until those two grade.
 
-**AND THE CAMPAIGN FOUND A REAL ONE: THE UPGRADE COULD NOT LAND ITS OWN RELAY.** template-update
-round 3 FAILED - `dom0 says updates are available but no pass in this log ever reported` - because
-every pass ended `phase: error, count: 0` on `relay ... not accepting connections on 127.0.0.1:8082`.
-Cause: a relay has squatted 8082 on win11de-tup SINCE SEPTEMBER. It predates --parent-pid, so the
-launcher's `--parent-pid <PID>` becomes its listen port through RunListen's catch-all; the campaign's
-relay logs carry listen 127.0.0.1:1384/:2312/:5572/:6588/:8228, every one a pid, and not one line
-with the `parent=` field only the fixed binary writes. The deploy refused rather than replace
-(GUARD:vouchexe) and the refusal was self-perpetuating: the stale relay holds the port AND the exe.
-**87e3a746 IS INCOMPLETE AND I REPORTED IT AS THE FIX; MEASURED 2026-10-22 on campaign 3's template-update.** It stops the squatter only when a pid HOLDS 8082 and its path matches the deploy's exe - and the real orphan does not hold 8082. Today's relay.log on win11de-tup shows the pid-as-port shape live: `02:39:27.821 listen 127.0.0.1:600 ... self=C:\Program Files\Qubes Tools\bin\qubes-updates-relay.exe`, and six more across three rounds (600, 2880, 4184, 5548, 6688, 8228) - each the pass's own PID. So NOTHING holds 8082, the condition never matches, the stale exe is never replaced, and install.log still ends `updater agent deployed` with the installer RESULT carrying `"updater_agent":"deployed"`. THE BINARY IS PROVABLY NOT THE SHIPPED ONE: the package's qubes-updates-relay.cs appends ` parent=<pid>` or ` parent=none (no watchdog)` to its listen line UNCONDITIONALLY (:941), and `parent=` appears ZERO times in all three rounds' relay logs. The 8082 listens in those same logs are dated 19:41 on 2026-10-15 - the golden's history in a cumulative file, not this run. All three rounds were JUDGE FAIL, every pass SILENT: `ended on relay pid 2340 still not accepting connections on 127.0.0.1:8082 after respawn - and never reported to dom0`. THE PREDICATE IS THE DEFECT: `holds 8082` is a proxy for `a relay of ours is running that is not the exe we just built`. The relay source's own comment says it - "This cannot fix a binary already on a guest - that is what the deploy's refusal is for" - and the refusal is keyed on the same proxy, so neither fires. The fix must identify the stale relay by its BINARY, whatever port it holds, and a deploy that did not replace the exe must not log `deployed`. Earlier claim, left here so it is not re-made: 87e3a746: when the pid holding 8082 is a process whose path IS this deploy's own relay exe,
-and the mutex is held so no pass is running, that pid is ended BY -Id and the relay is replaced;
-any other listener still refuses. Jev: stop_the_orphan 0.81, refusing_forever 0.21. Four driven legs
-plus a stranger leg; both pre-existing knobs still break the suite.
+**AND THE CAMPAIGN FOUND A REAL ONE, NOW FIXED AND VERIFIED BY EXECUTION: THE UPGRADE COULD NOT
+LAND ITS OWN RELAY.** The cause was NOT the port, the squatter or the staged payload - every theory
+I reported, including the one I called the fix (87e3a746). The compile/move block in
+guest/install-updater-agent.ps1 was a bare `{ ... }`: a ScriptBlock LITERAL, built and discarded,
+never executed. So the relay on disk stayed the one built 2026-09-16, which predates --parent-pid,
+so the launcher's flag VALUE became the listen port, nothing served 8082, and every pass went
+silent - while the deploy logged `updater agent deployed`. **A/B ON win11de-tup 2026-10-22, SAME
+FRESH SetupRoot, ONLY THE BRACES DIFFERENT:** arm A (braces) printed the block's own SOURCE as a
+value, logged zero timestamped `compiled relay ->` lines, left the exe at `written=2026-09-16T16:33:26Z`,
+and still reported success; arm B (braces removed) logged `10:27:04 compiled relay ->`, rewrote the
+exe to `2026-10-22T07:27:04Z` (48128 -> 56320 bytes, UTF-16 `parent=` marker False -> True), and the
+next pass logged `10:29:08.084 listen 127.0.0.1:8082 ... parent=936` with 8082 held by our exe and
+accepting - against five earlier pid-ports in the same log (8228, 6688, 8892, 2540, 5956). No grep,
+offline leg or Jev score could see this: the source text was CORRECT and the block simply never ran.
+Receipts scratchpad/relay-receipt/. Guards added: the deploy vouches the SOURCE it compiles and the
+PLACED exe, ends stale relays BY IMAGE, and tools/tests/discarded-scriptblock-selftest.sh fails on
+the shape across 303 shipped .ps1 files. Detail in findings/issues-closed.md.
 
 **P5 NOW WAITS ON ONE DECISION, 2026-10-21 NIGHT.** Jev was asked the launch question again on the
 state as it stood at 18:40: clear_to_launch_now **0.06** (it was 0.29 then 0.32 earlier in the day),

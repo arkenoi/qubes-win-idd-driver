@@ -70,6 +70,41 @@ $src = Join-Path $SetupRoot 'qubes-updates-relay.cs'
 $exe = Join-Path $BinDir 'qubes-updates-relay.exe'
 if (-not (Test-Path $csc)) { throw "in-box csc not found at $csc" }
 if (-not (Test-Path $src)) { throw "relay source not found at $src" }
+# ---- RELAYSOURCEVOUCH-BEGIN  (driven by tools/tests/relay-vouch-test.ps1)
+# THE SOURCE WE COMPILE MUST CARRY THE CAPABILITY, AND UNTIL NOW NOTHING CHECKED IT.
+# MEASURED on win11de-tup, 2026-10-22, three template-update rounds: this deploy logged
+# "updater agent deployed" and every relay launched afterwards bound the PASS'S OWN PID as its
+# listen port (600, 2880, 4184, 5548, 6688, 8228) with NO `parent=` field - the field the shipped
+# source writes unconditionally on its listen line. So WinHTTP pointed at 8082, nothing served it,
+# every pass ended SILENT, and dom0 was never told. The exe placed by this deploy was therefore not
+# built from the shipped source: $SetupRoot on a guest is a COPY (C:\qwt-improved-setup), and a
+# stale copy left by an earlier install compiles an old binary while every step here reports
+# success. The move below already throws when the exe is locked, so the failure was never the move.
+# Three markers, each a positive string in the shipped .cs: the flag is PARSED, a bare integer is the
+# port ONLY in the first positional slot, and the listen line carries parent=. A source missing any
+# of them is a stale payload and this deploy must not compile it.
+# EACH MARKER IS CODE, NEVER A HUMAN-FACING MESSAGE. A vouch keyed on the wording of an error string
+# refuses a perfectly good deploy the day someone rewords it, and that failure would land on a
+# guest. These three are the flag name the launcher passes, the positional-port rule itself, and the
+# log field - all contract. A reword or reformat still breaks them, so it is caught where it is
+# cheap: tools/tests/relay-vouch-test.ps1 asserts the SHIPPED source passes this vouch, in CI,
+# before any guest sees it.
+$vouch = @{
+    '--parent-pid'          = 'the relay must PARSE --parent-pid, or the launcher''s flag value becomes its listen port'
+    'i == 1 && int.TryParse' = 'a bare integer may be the port ONLY in the first positional slot; without that rule an unknown flag''s VALUE silently becomes the listen port (measured 2026-10-19: --parent-pid 3312 bound port 3312)'
+    'parent='               = 'the listen line must declare parent=, which is the only receipt that the shipped binary is running'
+}
+$srcText = Get-Content -LiteralPath $src -Raw
+foreach ($k in $vouch.Keys) {
+    if ($srcText -notlike "*$k*") {
+        throw ("QWTRELAYSTALESRC: $src does not carry '$k' - $($vouch[$k]). " +
+               "That is a STALE staged payload, not this release's relay source; compiling it would " +
+               "reinstate the pid-as-port relay and every update pass would go silent. Re-stage the " +
+               "setup tree from the release package and run install.cmd /updatesonly again.")
+    }
+}
+Log "relay source vouched at $src (parses --parent-pid, refuses unknown flags, declares parent=)"
+# ---- RELAYSOURCEVOUCH-END
 # Serialise with the updater itself. On an UPGRADE the previous install's QubesWindowsUpdateScan
 # (boot+2 min) overlaps the resumed stage 2 (boot+1 min): the scan sets the machine-wide proxy and
 # starts the relay, then this deploy's relay replacement (until 2026-10-03 a kill by name) and task
@@ -491,10 +526,76 @@ if ($relayOwner -ne 0) {
 # with no relay at all - worse than the failure it fixed.
 $exeNew = "$exe.new"
 $cscOut = $null
+# ---- RELAYBYIMAGE-BEGIN  (driven by tools/tests/relay-vouch-test.ps1)
+# A STALE RELAY IS IDENTIFIED BY ITS BINARY, NOT BY THE PORT IT HOLDS. Everything above finds a
+# relay through Get-NetTCPConnection -LocalPort 8082, and its comment says so: "found by the PORT,
+# identified by its PID, never by a name". That is exactly what the real orphan defeats. MEASURED on
+# win11de-tup across three template-update rounds, 2026-10-22: the stale relay binds the PASS'S OWN
+# PID as its port (600, 2880, 4184, 5548, 6688, 8228), so NOTHING holds 8082, the port-keyed branch
+# never fires, and a process launched from the very path we are about to replace keeps running.
+# Replacing the file does not stop it, so it can go on serving a port nobody asked for.
+# So: Win32_Process by ExecutablePath - our exe, whatever port it is on - and each one ended BY ITS
+# OWN PID. Never by name: a pattern matches the matcher, which has cost this project its own shell.
+# The mutex is held here, so no PASS is running and anything still on our image is an orphan.
+# A MISS IS NEVER SILENT. The comparison is a plain path equality - deliberately. The normalising
+# alternative ([IO.Path]::GetFullPath) behaves differently off Windows: under Linux pwsh it prepends
+# the working directory to a 'C:\...' path and does not collapse '..' at all, so the offline suite
+# could not exercise it and it would be untested code guarding an untested case. Instead every relay
+# process whose image is NOT the file being replaced is LOGGED, so a match that fails for a
+# path-spelling reason says so in the log rather than reporting nothing found.
+$allRelay = @()
+try {
+    $allRelay = @(Get-CimInstance Win32_Process -Filter "Name='qubes-updates-relay.exe'" -EA Stop)
+} catch { Log "could not enumerate relay processes by image ($($_.Exception.Message)) - continuing; the exe vouch below is the backstop" }
+$stale = @($allRelay | Where-Object { "$($_.ExecutablePath)" -and ("$($_.ExecutablePath)" -ieq $exe) })
+foreach ($other in @($allRelay | Where-Object { "$($_.ExecutablePath)" -and ("$($_.ExecutablePath)" -ine $exe) })) {
+    Log ("a relay is running from a DIFFERENT image (pid {0} at {1}) - left alone; this deploy only ends relays running from {2}" -f $other.ProcessId, $other.ExecutablePath, $exe)
+}
+foreach ($sp in $stale) {
+    $spid = [int]$sp.ProcessId
+    Log ("a relay is running from the exe this deploy replaces (pid {0} at {1}) - ending that pid, whatever port it holds" -f $spid, $sp.ExecutablePath)
+    try { Stop-Process -Id $spid -Force -EA Stop } catch { Log ("could not end pid {0}: {1}" -f $spid, $_.Exception.Message) }
+}
+if ($stale.Count) {
+    # UNKNOWN IS NOT ZERO. This loop used to swallow a failed query into an empty array, break on
+    # it, and log "relay processes on our image after the stop: 0" - reporting SUCCESS for a query
+    # that never ran, which is the same shape of lie as the deploy that logged "deployed" over a
+    # relay it never built. Get-RelayOwner in qubes-windows-update.ps1 returns -1 rather than 0 for
+    # this exact reason ("UNKNOWN IS NOT ZERO" in its own comment), so this follows that convention.
+    $leftCount = -1
+    for ($w = 0; $w -lt 20; $w++) {
+        try {
+            $leftCount = @(Get-CimInstance Win32_Process -Filter "Name='qubes-updates-relay.exe'" -EA Stop |
+                           Where-Object { "$($_.ExecutablePath)" -ieq $exe }).Count
+        } catch { $leftCount = -1 }
+        if ($leftCount -eq 0) { break }
+        Start-Sleep -Milliseconds 500
+    }
+    if ($leftCount -lt 0) {
+        Log ("could not confirm the stale relays are gone (the process query failed) - NOT claiming " +
+             "zero; if one still holds $exe the move below throws and this deploy fails loudly")
+    } else {
+        Log ("relay processes on our image after the stop: {0}" -f $leftCount)
+    }
+}
+# ---- RELAYBYIMAGE-END
 # NO SKIP BRANCH ANY MORE. It existed for the case where something still holds 8082 and a previous
 # exe is kept; that case now REFUSES above (GUARD:vouchexe), so reaching here means the deploy is
 # compiling. A branch that can no longer be taken is decoration, and this one hid the defect.
-{
+# ---- RELAYDEADBLOCK: THE BRACES THAT MADE ALL OF THIS DEAD CODE ARE GONE.
+# A bare `{ ... }` in PowerShell is a ScriptBlock LITERAL: it is constructed and discarded, and the
+# statements inside it NEVER RUN. When the `if (...)` that used to guard this block was removed, its
+# braces were left behind - so the compile, the move and the log line below became a scriptblock
+# nobody invoked, and every deploy since then printed "updater agent deployed" having touched
+# nothing.
+# MEASURED on win11de-tup, 2026-10-22, the guest the owner has been asking about every day:
+#   C:\Program Files\Qubes Tools\bin\qubes-updates-relay.exe  written=2026-09-16T16:33:26Z
+# - five weeks stale, carrying none of the shipped binary's markers, while NO install log on that
+# guest has ever contained a "compiled relay ->" line. The relay that then runs predates
+# --parent-pid, so the launcher's flag VALUE becomes its listen port and 8082 is never served, which
+# is why every update pass went silent. Proven, not inferred: `{ $ran = $true }` leaves $ran False.
+# Nothing else in this file could have fixed that, and nothing that keyed on who holds 8082 was ever
+# going to find it.
     for ($cscTry = 1; $cscTry -le 3; $cscTry++) {
         Remove-Item $exeNew -Force -EA SilentlyContinue
         $cscOut = & $csc /nologo /optimize /target:exe /out:"$exeNew" "$src" 2>&1
@@ -512,7 +613,46 @@ $cscOut = $null
     }
     if (-not $moved) { throw "relay compiled but could not replace $exe (still locked)" }
     Log "compiled relay -> $exe"
-}
+    # ---- RELAYEXEVOUCH-BEGIN  (driven by tools/tests/relay-vouch-test.ps1)
+    # AND THE PLACED BINARY MUST CARRY IT TOO. The source vouch above catches a stale payload; this
+    # catches everything else between the source and the file that will actually be launched - a
+    # compile that silently used a different input, a move that landed somewhere else, a binary
+    # restored by anything after us. .NET string literals sit in the PE as UTF-16, so the marker is
+    # searched as UTF-16 bytes: no execution, no port bound, nothing to leave behind. This is the
+    # check whose absence let "updater agent deployed" be logged over a relay that could never
+    # serve 8082 (win11de-tup, 2026-10-22, three rounds, zero `parent=` lines).
+    $want = [Text.Encoding]::Unicode.GetBytes('parent=')
+    # THE READ IS RETRIED, BECAUSE A REFUSAL MUST MEAN "WRONG BINARY" AND NOTHING ELSE. Defender
+    # scans a freshly written exe and holds it briefly, so a single ReadAllBytes seconds after
+    # Move-Item can raise a sharing violation - and an unhandled IO error here would fail a
+    # perfectly good install. A vouch that cannot tell "not our binary" from "could not read it
+    # yet" refuses good deploys, which is worse than the gap it closes.
+    $bytes = $null
+    $readErr = ''
+    for ($rt = 1; $rt -le 4; $rt++) {
+        try { $bytes = [IO.File]::ReadAllBytes($exe); $readErr = ''; break }
+        catch { $readErr = "$($_.Exception.Message)"; Start-Sleep -Milliseconds 500 }
+    }
+    if ($null -eq $bytes) {
+        throw ("QWTRELAYUNREADABLE: the relay was compiled and placed at $exe but could not be read " +
+               "back to vouch it after 4 attempts ($readErr). This is NOT a stale-binary refusal - " +
+               "the file is there and may be fine; something is holding it. Re-run install.cmd " +
+               "/updatesonly; if it repeats, find what holds $exe.")
+    }
+    $found = $false
+    for ($i = 0; $i -le $bytes.Length - $want.Length; $i++) {
+        $hit = $true
+        for ($j = 0; $j -lt $want.Length; $j++) { if ($bytes[$i + $j] -ne $want[$j]) { $hit = $false; break } }
+        if ($hit) { $found = $true; break }
+    }
+    if (-not $found) {
+        throw ("QWTRELAYSTALEEXE: the relay now at $exe does not contain the shipped binary's " +
+               "'parent=' marker, so it was not built from the vouched source. A relay without " +
+               "--parent-pid takes the launcher's flag value as its listen port and never serves " +
+               "8082, which makes every update pass silent and tells dom0 nothing.")
+    }
+    Log "relay exe vouched at $exe (carries the shipped binary's parent= marker)"
+    # ---- RELAYEXEVOUCH-END
 
 # 2. place the agent script
 $agent = Join-Path $BinDir 'qubes-windows-update.ps1'

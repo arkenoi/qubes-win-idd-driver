@@ -104,6 +104,17 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # are not a suite's output. The runner now shims 23 rig commands onto PATH ahead of each suite and
 # reports any suite that reaches one as RED; this suite drives that guard, including the case a
 # shell function cannot stub.
+# 92 -> 93 on 2026-10-22: discarded-scriptblock-selftest.sh ADDED. The relay defect above was a bare
+# `{ ... }` statement - a ScriptBlock LITERAL, built and discarded, never executed - so the deploy
+# logged success while the exe on disk stayed the one built 2026-09-16. The source text was CORRECT,
+# which is exactly why every offline leg and every Jev score passed it. This is an AST check over the
+# shipped PowerShell (303 files) whose control is the real shipped shape: an earlier draft reported
+# every file clean while unable to detect it at all.
+# 91 -> 92 on 2026-10-22: relay-vouch-selftest.sh ADDED. The updater deploy reported success over a
+# relay built from a STALE staged source: three template-update rounds bound the pass's own pid as the
+# listen port and nothing served 8082, so every pass went silent - and 87e3a746 had been reported as
+# the fix on offline legs alone. The deploy now vouches the SOURCE it compiles, vouches the PLACED exe
+# by its UTF-16 marker, and ends stale relays BY IMAGE PATH rather than by the port they hold.
 # 90 -> 91 on 2026-10-22: upd-task-prestop-selftest.sh ADDED. The MSI's Restart Manager reaped our
 # own running update scan and the death reporter told the USER the scan had failed (P1,
 # dom0_loud_failures=2). The installer now ENDS those tasks before msiexec, so the result is
@@ -133,7 +144,7 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # it compiles and runs the exit chain, which is what the brace defect needed - and
 # wrapper-exit-reason was already written but excluded for needing submodule git history, which is
 # how its red went unread for days.
-FLOOR=${OFFLINE_SUITES_FLOOR:-91}
+FLOOR=${OFFLINE_SUITES_FLOOR:-93}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"
