@@ -338,10 +338,26 @@ function Fail {
     #  - the -Auto run counter: this cycle is over, a deliberate retry starts fresh;
     #  - the old gui binaries the sweep moved aside: if msiexec never completed, the OLD product is
     #    still registered but its gui-agent.exe/gui-watchdog.exe were gone - a guest with qrexec and
-    #    no GUI at all, and nothing said so. Put them back and restart the watchdog.
+    #    no GUI at all, and nothing said so. Put them back and restart the watchdog;
+    #  - the update tasks this stage disabled before msiexec (UPDTASKPRESTOP): the updater deploy
+    #    re-enables them at the end of a SUCCESSFUL stage, so only the failure path needs this. A
+    #    guest left with updates switched off reports nothing to dom0 and looks healthy doing it,
+    #    which is the same class of silent damage as the GUI-less guest above.
     try { Clear-BootResume } catch { }
     try { Reset-AutoRunCounter } catch { }
     try { Restore-SweptBinaries } catch { }
+    if ($script:UpdTasksDisabled) {   # GUARD:failupdtasks
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        foreach ($t in $script:UpdTasksDisabled) {
+            try {
+                $null = & schtasks /change /tn $t /enable 2>&1
+                if ($LASTEXITCODE -eq 0) { Write-Log "update task re-enabled on the failure path: $t" }
+                else { Write-Log "could not re-enable $t - do it by hand (schtasks /change /tn $t /enable)" 'WARN' }
+            } catch { }
+        }
+        $ErrorActionPreference = $prev
+    }
     # A FAIL AFTER msiexec STARTS QWT'S SERVICES FIRST, BEFORE THE RESULT IS WRITTEN (Jev review 2026-10-04, 0.67): the MSI no
     # longer starts them (QWTNG_SERIALSTART), and the RESULT is what the harness grades - so the start, or its failure, must be IN
     # it. The POST-MSI-ORDER finally covers a throw; this covers Fail, whose exit would otherwise write the RESULT first.
@@ -3367,6 +3383,46 @@ function Invoke-Stage2 {
         }
     }
     $script:Result.detail.vchan_prestop = (($prestop.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' ')
+    # ---- UPDTASKPRESTOP-BEGIN  (tools/tests/upd-task-prestop-test.ps1 extracts this region by marker)
+    # OUR INSTALLER, OUR TASKS - SO WE END THEM OURSELVES. The block above quiesces our SERVICES
+    # before msiexec for exactly this reason ("the Restart Manager will tear it down in bulk"), and
+    # our scheduled tasks were left out of it. MEASURED, campaign 3 cell win11-reinstall 2026-10-22:
+    # the MSI's Restart Manager opened a session at 04:01:35.590 and reported every file-holding
+    # application shut down at 04:01:36.256; \QubesWindowsUpdateScan's powershell died at
+    # 04:01:35.747 inside that window with 0xC000013A STATUS_CONTROL_C_EXIT, the death reporter
+    # correctly called that an unexplained stop, and THE USER WAS TOLD "The Windows Update scan task
+    # failed" about a scan our own install had just stopped. dom0_loud_failures=2 against a max of 0.
+    # A task WE end reports 267014 / 0x41306 instead, which qwt-report-death.ps1 already ignores as
+    # "a stop that was asked for, not a death" - so this needs no change in the reporter, and it is
+    # the declaration the inference would have had to reconstruct.
+    # /end BEFORE /disable, because /disable does NOT stop an instance already running - and a
+    # running instance is precisely this case. /disable then keeps one from starting while the MSI
+    # holds our files. Both are re-enabled by the updater deploy at the end of this stage, and by
+    # the Fail path, so a failed install never leaves updates switched off.
+    # schtasks, not the ScheduledTasks cmdlets: the same reason install-updater-agent.ps1 gives -
+    # the cmdlet set is not present on every guest this runs on, and /change is spelled the same
+    # everywhere. An absent task is not a failure here (a clean install has none yet).
+    $script:UpdTaskPrestop = [ordered]@{}
+    $script:UpdTasksDisabled = @()
+    foreach ($t in @('QubesWindowsUpdateScan', 'QubesWindowsUpdateRun', 'QubesWindowsUpdateDownload')) {
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $null = & schtasks /end /tn $t 2>&1
+            $ended = ($LASTEXITCODE -eq 0)
+            $null = & schtasks /change /tn $t /disable 2>&1
+            $disabled = ($LASTEXITCODE -eq 0)
+        } finally { $ErrorActionPreference = $prev }
+        if ($disabled) { $script:UpdTasksDisabled += $t }
+        $script:UpdTaskPrestop[$t] = if ($ended -and $disabled) { 'ended+disabled' }
+                                     elseif ($disabled)        { 'disabled' }
+                                     elseif ($ended)           { 'ended' }
+                                     else                      { 'absent' }
+    }
+    $script:Result.detail.upd_task_prestop = (($script:UpdTaskPrestop.GetEnumerator() |
+        ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' ')
+    Write-Log "pre-msiexec: update tasks $($script:Result.detail.upd_task_prestop)"
+    # ---- UPDTASKPRESTOP-END
     $msiTries = 0
     while ($true) {
         $msiTries++

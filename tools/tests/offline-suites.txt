@@ -142,3 +142,5 @@ wrapper-exit-reason-selftest.sh
 wrapper-exit-emit-selftest.sh
 matrix-attempt-boundary-selftest.sh
 accept-attempt-boundary-selftest.sh
+stick-scope-restore-selftest.sh
+upd-task-prestop-selftest.sh

@@ -104,6 +104,17 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # are not a suite's output. The runner now shims 23 rig commands onto PATH ahead of each suite and
 # reports any suite that reaches one as RED; this suite drives that guard, including the case a
 # shell function cannot stub.
+# 90 -> 91 on 2026-10-22: upd-task-prestop-selftest.sh ADDED. The MSI's Restart Manager reaped our
+# own running update scan and the death reporter told the USER the scan had failed (P1,
+# dom0_loud_failures=2). The installer now ENDS those tasks before msiexec, so the result is
+# 267014/0x41306 which the reporter already ignores - a declaration instead of an inference, and no
+# reporter change. The suite runs the shipped region with schtasks as a recorder.
+# 89 -> 90 on 2026-10-22: stick-scope-restore-selftest.sh ADDED, for the owner's two rulings - the
+# evidence stick is for INSTALL testing, so appvm cells bind nothing, and the registry is handed
+# back after an install so no park, clone or derived AppVM inherits a path to a removable volume.
+# It extracts the class decision, the restore and four cells from the shipped matrix.sh and RUNS
+# them with the stick primitives as recorders; the controls mutate the real file and were seen to
+# turn it red.
 # 88 -> 89 on 2026-10-22: accept-attempt-boundary-selftest.sh ADDED - the OTHER half of the same
 # defect, which the 88 fix did not cover and which I had called done. release-acceptance.sh appends
 # the matrix's stdout to $CAMP/full.out, one level above the dir matrix.sh stamps, so that file held
@@ -122,7 +133,7 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # it compiles and runs the exit chain, which is what the brace defect needed - and
 # wrapper-exit-reason was already written but excluded for needing submodule git history, which is
 # how its red went unread for days.
-FLOOR=${OFFLINE_SUITES_FLOOR:-89}
+FLOOR=${OFFLINE_SUITES_FLOOR:-91}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"
