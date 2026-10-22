@@ -216,6 +216,45 @@ fi
 say "--- matrix campaign: $CELLS"
 CAMP="$WORK/campaign"
 mkdir -p "$CAMP"
+# RAATTEMPT-A  (to the B marker: extracted and executed by
+# tools/tests/accept-attempt-boundary-selftest.sh; neither marker names the other)
+# THE OTHER HALF OF A DEFECT WHOSE FIRST HALF I SHIPPED AND CALLED DONE. matrix.sh stamps the
+# artefacts an attempt inherits under $CAMP/matrix; the files THIS script appends to are one level
+# up and were left out. MEASURED 2026-10-22: $CAMP/full.out ended the night carrying BOTH
+# `=== MATRIX: 1 passed, 1 failed - ABORTED on a log-device failure ===` from the attempt that died
+# at 21:50 AND `=== MATRIX: 44 passed, 2 failed - ABORTED on a log path that broke mid-cell ===`
+# from the 22:12 one, with nothing between them - and full.out is the file `matrix rc=` points a
+# reader at, so it is the one opened FIRST.
+# full.out is ROTATED, not stamped, and the comment below says why: record-acceptance.sh globs
+# $CAMP/*.out and requires ONE '=== MATRIX ... ===' footer per file, treating a footerless file as a
+# group that did not finish. Two footers in one file breaks that contract, and a separator line
+# inside it would not repair it. Rotating gives this attempt a file with exactly one footer while
+# KEEPING the previous attempt's - for an aborted attempt that output is its only record - and the
+# rotated name does not end in .out, so it leaves the glob the builder depends on.
+# The append-only logs beside it just take a boundary: they are read, not parsed.
+_ra_rotate_inherited(){ # <attempt-id> <file> -> moves it aside so this attempt starts clean
+  local id="${1:?_ra_rotate_inherited <id> <file>}" f="${2:?}"
+  [ -f "$f" ] || return 0
+  mv -f "$f" "$f.attempt-$id" && printf 'rotated %s -> %s.attempt-%s\n' "$f" "$f" "$id"
+}
+_ra_stamp_inherited(){ # <attempt-id> <path>... -> boundary into each existing path
+  local id="${1:?_ra_stamp_inherited <id> <path>...}"; shift
+  local f n=0
+  for f in "$@"; do
+    [ -f "$f" ] || continue
+    printf '=== ATTEMPT BOUNDARY: every line below belongs to attempt %s ===\n' "$id" >> "$f" || continue
+    n=$((n+1))
+  done
+  printf 'inherited-files-stamped=%d attempt=%s\n' "$n" "$id"
+}
+ACCEPT_ATTEMPT="${ACCEPT_ATTEMPT:-$(date -u +%Y%m%dT%H%M%SZ)}"
+_ra_rotate_inherited "$ACCEPT_ATTEMPT" "$CAMP/full.out" >/dev/null
+# shellcheck disable=SC2086
+_ra_stamp_inherited "$ACCEPT_ATTEMPT" "$LOG" "$CAMP/runner.log" $WORK/*.out >/dev/null
+# ONE attempt id across both layers, so a reader joining a campaign log to a cell artefact is
+# matching the same string rather than two clocks.
+export MATRIX_ATTEMPT="$ACCEPT_ATTEMPT"
+# RAATTEMPT-B
 # The campaign's stdout MUST land in a <tag>.out inside $CAMP: record-acceptance.sh globs *.out and
 # requires the '=== MATRIX: n passed, n failed ===' footer in each, treating a footerless file as a
 # group that did not finish. Writing this to runner.log instead would make the run unrecordable.

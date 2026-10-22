@@ -104,6 +104,12 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # are not a suite's output. The runner now shims 23 rig commands onto PATH ahead of each suite and
 # reports any suite that reaches one as RED; this suite drives that guard, including the case a
 # shell function cannot stub.
+# 88 -> 89 on 2026-10-22: accept-attempt-boundary-selftest.sh ADDED - the OTHER half of the same
+# defect, which the 88 fix did not cover and which I had called done. release-acceptance.sh appends
+# the matrix's stdout to $CAMP/full.out, one level above the dir matrix.sh stamps, so that file held
+# two attempts' footers - and it is the file `matrix rc=` points a reader at. It is ROTATED rather
+# than stamped because record-acceptance.sh requires ONE footer per *.out and a separator inside
+# the file would not restore that; the kept copy is renamed out of the glob.
 # 87 -> 88 on 2026-10-22: matrix-attempt-boundary-selftest.sh ADDED. matrix.sh derives its work
 # dir from the release-package run id and opens per-cell artefacts with `>>`, so two attempts
 # against one package wrote into the same files with no separator - and the mtime belongs to the
@@ -116,7 +122,7 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # it compiles and runs the exit chain, which is what the brace defect needed - and
 # wrapper-exit-reason was already written but excluded for needing submodule git history, which is
 # how its red went unread for days.
-FLOOR=${OFFLINE_SUITES_FLOOR:-88}
+FLOOR=${OFFLINE_SUITES_FLOOR:-89}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"
