@@ -3365,7 +3365,19 @@ static bool ReadNotifyFile(std::wstring const& path, std::wstring& summary, std:
     DWORD rd = 0;
     BOOL ok = ReadFile(h, buf.data(), (DWORD)buf.size() - 2, &rd, nullptr);
     CloseHandle(h);
-    DeleteFileW(path.c_str());
+
+    // THE DELETE IS THE ACK, SO IT MUST NOT HAPPEN UNTIL THE CONTENT IS KNOWN GOOD. It used to sit
+    // right here, before every validity test below, so the file was removed even when the read was
+    // empty or the content did not parse - and the handoff caller treats a vanished file as proof of
+    // delivery. MEASURED on acceptance run 39868919766, win10-upgrade (and 39858373864 before it):
+    // the child exited 3 ("unreadable/empty <file> - notification LOST") while the parent logged
+    // "NOTIFY handoff: ran in session 1 as user", because by then the file was already gone. The
+    // parent's delivery check was sound only for the case where this function could not OPEN the
+    // file; this is the case it could open and not use, which I reasoned past when adding it.
+    // Deleting only on success makes absence mean delivered, which is what the caller assumes.
+    // Nothing accumulates: the caller deletes the file itself on its own failure branch.
+    auto take = [&]() { DeleteFileW(path.c_str()); return true; };
+
     if (!ok || rd == 0) return false;
     std::wstring all;
     if (rd >= 2 && buf[0] == 0xFF && buf[1] == 0xFE)
@@ -3379,11 +3391,17 @@ static bool ReadNotifyFile(std::wstring const& path, std::wstring& summary, std:
     }
     while (!all.empty() && (all.back() == L'\0')) all.pop_back();
     size_t nl = all.find_first_of(L"\r\n");
-    if (nl == std::wstring::npos) { summary = all; body.clear(); return !summary.empty(); }
+    if (nl == std::wstring::npos)
+    {
+        summary = all; body.clear();
+        if (summary.empty()) return false;
+        return take();
+    }
     summary = all.substr(0, nl);
     size_t b = all.find_first_not_of(L"\r\n", nl);
     body = (b == std::wstring::npos) ? L"" : all.substr(b);
-    return !summary.empty();
+    if (summary.empty()) return false;
+    return take();
 }
 
 // Hand a one-shot notification to the INTERACTIVE session and return true if that was arranged.

@@ -140,6 +140,29 @@ if grep -q 'ReadNotifyFile' "$NH" && sed -n "/bool ReadNotifyFile/,/^}/p" "$NH" 
   say "PASS  handoff ack: ReadNotifyFile still deletes the file it read (the parent's ack depends on it)"
 else say "FAIL  handoff ack: ReadNotifyFile no longer deletes the notify file - the parent's delivery check is now inert"; bad=1; fi
 
+# AND THE DELETE MUST BE THE ACK, i.e. reached ONLY on success. It used to sit before every validity
+# test, so an empty or unparsable file was deleted too - and the caller reads a vanished file as
+# proof of delivery. MEASURED twice (runs 39858373864 and 39868919766, win10-upgrade): the child
+# exited 3 "unreadable/empty - notification LOST" while the parent logged success. The first version
+# of the caller's delivery check covered only "could not OPEN"; this is "opened and could not use".
+RNF=$(sed -n "/bool ReadNotifyFile/,/^}/p" "$NH")
+if printf '%s\n' "$RNF" | grep -v '^[[:space:]]*//' | grep -qE 'DeleteFileW\(path'; then
+  # the only permitted DeleteFileW is inside the success-only helper
+  if printf '%s\n' "$RNF" | grep -v '^[[:space:]]*//' | grep -qE 'auto take = .*DeleteFileW\(path'; then
+    say "PASS  handoff ack: the delete is reached only on success (absence therefore means delivered)"
+  else say "FAIL  handoff ack: DeleteFileW is not confined to the success path - an unusable file would still ack"; bad=1; fi
+else say "FAIL  handoff ack: no DeleteFileW(path) in ReadNotifyFile at all"; bad=1; fi
+
+# SEEN TO FAIL: the early unconditional delete must be gone. If it comes back, every failure acks.
+if printf '%s\n' "$RNF" | grep -v '^[[:space:]]*//' | grep -A2 'CloseHandle(h)' | grep -qE '^[+-]?[[:space:]]*DeleteFileW'; then
+  say "FAIL  handoff ack: DeleteFileW is back immediately after CloseHandle - before the validity tests"; bad=1
+else say "PASS  handoff ack: no unconditional delete between the read and the validity tests"; fi
+
+# Every early failure return must leave the file for the caller to see and report.
+if printf '%s\n' "$RNF" | grep -v '^[[:space:]]*//' | grep -cE 'return false;' | awk '{exit !($1>=3)}'; then
+  say "PASS  handoff ack: the failure returns leave the file in place"
+else say "FAIL  handoff ack: expected at least three failure returns that do NOT delete"; bad=1; fi
+
 if grep -q 'const bool delivered = (GetFileAttributesW(file.c_str()) == INVALID_FILE_ATTRIBUTES)' "$NH"; then
   say "PASS  handoff: delivery is decided by whether the reader took the file"
 else say "FAIL  handoff: no delivery check - the parent cannot tell a delivered message from a lost one"; bad=1; fi
