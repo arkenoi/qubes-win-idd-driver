@@ -104,6 +104,16 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # are not a suite's output. The runner now shims 23 rig commands onto PATH ahead of each suite and
 # reports any suite that reaches one as RED; this suite drives that guard, including the case a
 # shell function cannot stub.
+# 96 -> 97 on 2026-10-22: wedge-gates-selftest.sh ADDED. A guest wedged on the post-install second
+# boot of a campaign cell; matrix.sh FATALed and aborted itself, release-acceptance.sh ran the
+# feature tests anyway, the subject was killed at 600s with NOTHING captured, and no record was
+# produced - although collect-failure.sh, wedge-lib.sh, fetch-wedge-core.sh, wedge-hunt.sh and
+# verdict-jev.py all existed and none was invoked. The same day a guest that merely LOOKED wedged
+# answered qrexec rc=0 and halted cleanly. mgmt/harness/wedge-gates-lib.sh is one classifier for
+# both - owner's definition: present, no pixels at all, and ACPI ignored, as distinct from "has a
+# qrexec queue and restarts rapidly". This suite drives all 15 classes offline, the two REAL
+# specimens among them, proves stage 1 is a pure function, refuses a kill until the record is
+# complete, and ASSERTS THE WIRING - because unwired machinery is the defect, not the fix.
 # 95 -> 96 on 2026-10-22: campaign-full-selftest.sh ADDED. acceptance-plan.py plans THREE cells and
 # campaign-run.sh mechanised only the middle one, so the other two were run BY HAND - and both hand
 # steps went wrong in a way that read as success: two release-package runs at the same commit have
@@ -168,7 +178,7 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # it compiles and runs the exit chain, which is what the brace defect needed - and
 # wrapper-exit-reason was already written but excluded for needing submodule git history, which is
 # how its red went unread for days.
-FLOOR=${OFFLINE_SUITES_FLOOR:-96}
+FLOOR=${OFFLINE_SUITES_FLOOR:-97}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"

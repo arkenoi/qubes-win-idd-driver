@@ -265,6 +265,29 @@ MATRIX_WORK="$WORK" RELEASE_SETUP="$SETUP" RELEASE_ISO="$ISO" RELEASE_COMMIT="$H
 MRC=${PIPESTATUS[0]}
 say "matrix rc=$MRC (detail: $CAMP/full.out, artefacts: $CAMP/matrix)"
 
+# ---- 4b. ABORT ON A FATAL, which this script did not do ----------------------------------------
+# MEASURED 2026-10-22: mgmt/harness/matrix.sh FATALed and printed
+#   "=== MATRIX: 75 passed, 6 failed - ABORTED on a log path that broke mid-cell ==="
+# after a guest wedged in WIN11-upgrade, and the next statement here was the feature tests. They
+# ran on a rig whose subject had just been hard-killed, win11-appvm never ran at all, and the
+# operator had to stop the run by hand. MRC was read and then never consulted.
+# An ABORTED matrix is FATAL and stops everything above it. A merely FAILING cell is NOT: product
+# failures still let the feature tests produce their independent evidence, which is the deliberate
+# scope split and the reason this keys on the tally rather than on MRC alone.
+. "$(dirname "$0")/../mgmt/harness/wedge-gates-lib.sh" || {
+  say "FAIL  cannot load wedge-gates-lib.sh - the fatal gate is the thing that stops a wedged run"; exit 2; }
+if grep -qaE '=== MATRIX: .* ABORTED' "$CAMP/full.out" 2>/dev/null; then
+  say "[ERROR] STOP: $(grep -aoE '=== MATRIX:[^=]*' "$CAMP/full.out" | tail -1)"
+  say "[ERROR] the matrix did not finish, so the feature tests, the remainder suites and the receipt"
+  say "[ERROR] are NOT run: they would execute against a rig the matrix did not finish with."
+  for _wgc in "$CAMP"/matrix/wedge-*/class.txt; do
+    [ -s "$_wgc" ] || continue
+    say "[ERROR]   wedge record present: $(dirname "$_wgc") class=$(tr -d '\r\n' < "$_wgc")"
+  done
+  python3 tools/campaign-state.py 2>&1 | tail -20 | tee -a "$LOG" >/dev/null
+  exit 1
+fi
+
 # ---- 5. the feature tests this release is about ------------------------------------------------
 # These are NOT a substitute for the campaign; they are the per-feature evidence a campaign cell
 # does not cover. Each drives its own throwaway subject over quick-upgrade.
@@ -283,7 +306,37 @@ if [ "$SKIP_FEATURES" -eq 0 ]; then
     say "settling the rig before $1"
     for vm in $(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' '$1 ~ /^win1/ && $2!="Halted"{print $1}'); do
       say "  shutting down $vm (left running)"
-      qwt_shutdown "$vm" 600 || { say "[WARN]   $vm did not halt in 600s - killing it; the next clone from its volume may be dirty"; timeout 60 qvm-kill "$vm" >/dev/null 2>&1; }
+      # A KILL IS THE LAST THING THAT EVER SEES THE LIVE STATE, so it is gated on a record.
+      # MEASURED 2026-10-22: this line killed win11-acc at 600s having captured NOTHING - no screen,
+      # no vcpu samples, no VMCS - and the resulting specimen has no resolvable RIP. It also could
+      # not tell a wedge from a look-alike: win11-acc's qrexec answered rc=0 minutes later and it
+      # halted cleanly, while win11-upgrade's guest in the same campaign never answered again.
+      # So: classify first (host-side, deterministic), record, and only then kill - and if the
+      # record is incomplete, leave the guest UP as the specimen rather than destroy it.
+      if ! qwt_shutdown "$vm" 600; then
+        _wgd="$CAMP/matrix/wedge-$vm-$(date -u +%H%M%S)"
+        say "[WARN]   $vm did not halt in 600s - classifying before anything kills it -> $_wgd"
+        if wedge_collect "$vm" "$_wgd" >>"$LOG" 2>&1; then
+          wedge_stage1 "$_wgd"
+          printf '%s\n' "$WG_CLASS" > "$_wgd/class.txt"; printf '%s\n' "$WG_WHY" > "$_wgd/why.txt"
+          say "[WARN]   $vm classified $WG_CLASS - $WG_WHY"
+          case "$(wedge_disposition "$WG_CLASS")" in
+            *wedge*|undecided)
+              say "[ERROR]  $vm is a wedge specimen ($WG_CLASS): LEAVING IT UP for examination, not killing it"
+              MRC=1; continue ;;
+          esac
+        else
+          say "[WARN]   could not collect a record for $vm - killing it anyway would destroy the only state there is"
+        fi
+        if wedge_may_kill "$_wgd" >>"$LOG" 2>&1; then
+          say "[WARN]   record complete; killing $vm (the next clone from its volume may be dirty)"
+          timeout 60 qvm-kill "$vm" >/dev/null 2>&1
+        else
+          say "[ERROR]  REFUSING to kill $vm: the record is incomplete. It stays up as the specimen."
+          printf '%s' "$WG_LINES" | sed 's/^/           /' | tee -a "$LOG" >/dev/null
+          MRC=1
+        fi
+      fi
     done
     for i in $(seq 1 40); do
       busy=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' '$1 ~ /^win1/ && $2!="Halted"{print $1}' | tr '\n' ' ')
