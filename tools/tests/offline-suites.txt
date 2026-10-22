@@ -148,3 +148,4 @@ relay-vouch-selftest.sh
 discarded-scriptblock-selftest.sh
 updater-component-selftest.sh
 qrexec-gap-witness-selftest.sh
+campaign-full-selftest.sh

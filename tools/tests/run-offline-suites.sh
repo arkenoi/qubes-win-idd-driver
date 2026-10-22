@@ -104,6 +104,15 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # are not a suite's output. The runner now shims 23 rig commands onto PATH ahead of each suite and
 # reports any suite that reaches one as RED; this suite drives that guard, including the case a
 # shell function cannot stub.
+# 95 -> 96 on 2026-10-22: campaign-full-selftest.sh ADDED. acceptance-plan.py plans THREE cells and
+# campaign-run.sh mechanised only the middle one, so the other two were run BY HAND - and both hand
+# steps went wrong in a way that read as success: two release-package runs at the same commit have
+# IDENTICAL display titles, so the roles were taken from dispatch order (and a grep for QGAFAULT in
+# the shipped binary returned 0 on both, which reads as "the flag did nothing"); and the required
+# workflows that run on push-to-main only had to be dispatched by hand, twice. mgmt/harness/
+# campaign-full.sh now owns the whole chain, and this suite drives the only two things it decides
+# for itself, with an order-trusting resolver as the seen-to-fail control and the REAL ci-state
+# refusal text as the fixture.
 # 94 -> 95 on 2026-10-22: qrexec-gap-witness-selftest.sh ADDED. quick-upgrade.sh told a run that
 # "the log volume could not be read either (no volume attached, or mtools found nothing)" while the
 # same pull had just recovered 120 files and returned 0 - because the predicate read only the SINGLE
@@ -159,7 +168,7 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # it compiles and runs the exit chain, which is what the brace defect needed - and
 # wrapper-exit-reason was already written but excluded for needing submodule git history, which is
 # how its red went unread for days.
-FLOOR=${OFFLINE_SUITES_FLOOR:-95}
+FLOOR=${OFFLINE_SUITES_FLOOR:-96}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"
