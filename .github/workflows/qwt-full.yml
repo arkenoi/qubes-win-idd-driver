@@ -308,6 +308,32 @@ jobs:
           if ($src -match 'LogInfo\("System uptime') { throw 'the uptime line is still at INFO after patching' }
           if ($src -match 'LogInfo\("Session:')      { throw 'the session line is still at INFO after patching' }
           if ($src -notmatch 'LogDebug\("Log started') { throw 'the banner was not demoted to LogDebug' }
+      # ONE BIRTH LINE AT INFO, BECAUSE A LOG THAT CANNOT NAME ITS BUILD CANNOT BE GRADED. The
+      # demotion above also removed the only line that bills a log line to a build, and
+      # tools/log-sweep.py reads three facts out of that banner: the module, the boot (System
+      # uptime) and the version. MEASURED, acceptance run 39868919766: every graded cell reported
+      # boots=0 agent_instances=0 over 3781-7653 lines, FOUR returned status=CLEAN having attributed
+      # nothing, and win10-upgrade failed on five ERROR lines from its 4.3.35.795 entry fixture, the
+      # only banner-bearing log in the capture. tools/sweep-gate.sh:747 already named this patch and
+      # :778 already greps for its marker. MUST be applied AFTER loginit-banner-debug - it is
+      # generated against the demoted source.
+      - name: Apply the windows-utils single-birth-line fix (always)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = $env:GITHUB_WORKSPACE
+          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-single-birth-line.patch"
+          if ($LASTEXITCODE -ne 0) { throw "windows-utils single-birth-line patch did not apply" }
+          # A patch that silently no-ops would ship a package no sweep can attribute - which is the
+          # exact failure this fixes, so it is checked here rather than discovered in a campaign.
+          $src = Get-Content "$ws\deps-src\windows-utils\src\log.c" -Raw
+          if ($src -notmatch 'LogInfo\("QWTBIRTH module=') { throw 'no birth line at INFO after patching' }
+          foreach ($k in @('module=%s', 'ver=%d.%d.%d.%d', 'pid=%lu', 'session=%lu', 'uptime=%.3f')) {
+            if ($src -notmatch [regex]::Escape($k)) { throw "the birth line omits $k - log-sweep cannot rebuild the init record" }
+          }
+          $n = ([regex]::Matches($src, 'LogInfo\("QWTBIRTH')).Count
+          if ($n -ne 1) { throw "expected exactly one QWTBIRTH INFO line, found $n" }
+          if ($src -match 'LogInfo\("Log started') { throw 'the birth line restored the banner to INFO' }
       - name: Apply the windows-utils blocking-read level fix (always)
         shell: pwsh
         run: |

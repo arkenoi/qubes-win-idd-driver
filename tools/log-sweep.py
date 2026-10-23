@@ -1050,6 +1050,99 @@ def parse_winutils(lf, raw_lines):
         ln = Line(lf.family, lf.name, i, ts, lvl, func or "", msg, raw, {"tid": tid, "pid": pid})
         lf.lines.append(ln)
         prev = ln
+        # ONE LINE CARRIES THE WHOLE INIT RECORD, because the six-line banner below it is no
+        # longer written on a product session. patches/windows-utils-loginit-banner-debug
+        # (ea61ba28, owner 2026-10-20: "it is NOT normal to have thousands of lines of log during
+        # the brief normal run") demoted every LogInit line to LogDebug - and this parser reads
+        # THREE facts out of that banner: the module name, the boot (from System uptime) and the
+        # version that bills each line to a build. At the product level it now reads none of them.
+        # MEASURED, acceptance run 39868919766: all five graded cells reported boots=0
+        # agent_instances=0 over 3781-7653 lines, four of them returned CLEAN having attributed
+        # nothing, and win10-upgrade FAILED on five ERROR lines belonging to its 4.3.35.795 entry
+        # fixture - the only banner-bearing log in the capture, because that image predates the
+        # demotion. The four campaigns before it read boots=3..6 agent_instances=3..5 in the same
+        # cells.
+        #
+        # patches/windows-utils-single-birth-line emits those facts as ONE INFO line per process
+        # start. tools/sweep-gate.sh:747 already named that marker and :778 already greps for it;
+        # the producer did not exist, which is why the gate's own measurement of birth lines per
+        # capture went "2484, then 327, then ZERO".
+        #
+        # MATCHED ON THE MESSAGE, NOT ON `func`. The producer sits in LogInit so __FUNCTION__ makes
+        # it `LogInit`, but sweep-life-selftest's fixtures spell it under WinMain, and a birth
+        # record is identified by what it says rather than by which function said it.
+        if msg.startswith("QWTBIRTH "):
+            kv = dict(re.findall(r"(\w+)=(\S+)", msg))
+            lf.module = kv.get("module") or lf.module
+            # 0.0.0.0 IS "I COULD NOT READ MY VERSION", NOT A VERSION. The producer prints the
+            # four zeroes when GetCurrentModuleVersion failed, which is honest in the log and wrong
+            # to believe here: our own qwtng-netsetup has no version resource at all. Accepting it
+            # would give such a module a `versions` list whose only entry does not match the build
+            # under test, and unattributable()'s first branch bills EVERY versioned line of such a
+            # module to nobody - turning an unversioned module's ERROR line into a P2 breach that
+            # no build can own. Before this patch those lines had no version and were not charged,
+            # and that is the behaviour to keep. Jev scored this 0.31 as the worst defect in the
+            # first cut of the diff.
+            # A RECORD CARRIES THE VERSION ITS OWN BIRTH LINE DECLARED, NEVER THE FILE'S LAST ONE.
+            # `lf.version` is file-scoped and survives across instances, so reading the record's
+            # version out of it would stamp the PREVIOUS instance's build onto this one whenever a
+            # birth line arrives without a readable `ver` - a truncated or interrupted write is
+            # exactly the case this parser already handles elsewhere (an unclean shutdown left 7.8
+            # KB of NULs mid-file on win10-clean). Mis-billing an instance to the wrong build is
+            # the failure the whole attribution path exists to prevent. Jev scored this 0.50 as the
+            # worst remaining defect in the second cut.
+            ver = kv.get("ver")
+            own_ver = ver if (ver and ver != "0.0.0.0") else None
+            if own_ver:
+                lf.version = own_ver
+            # ONE PROCESS IS ONE RECORD, EVEN WHEN BOTH SPELLINGS ARE IN THE FILE. At
+            # LOG_LEVEL_DEBUG the demoted six-line banner comes back, so a support capture holds
+            # the legacy block AND this line for the SAME process start - and appending here would
+            # open a second record for it, doubling agent_instances and breaching
+            # agent_instances_per_boot (max 1) on a guest that did nothing wrong. The producer sits
+            # at the END of LogInit, after "Running as user ... process ID: N" has already opened a
+            # record and set its pid, so the pid is the join: same pid as the open record means
+            # FILL it, not append. Jev scored this 0.45 as the worst defect in the first cut.
+            bpid = None
+            try:
+                bpid = int(kv["pid"])
+            except (KeyError, ValueError):
+                pass
+            # THE JOIN IS PID **AND** PROXIMITY, because a pid is reused. A per-day file spans a
+            # whole day and Windows hands the same pid out again, so pid alone would merge a later
+            # instance into an earlier one that happens to share it and UNDER-count instances. The
+            # producer sits at the very end of LogInit, microseconds after "Running as user ...
+            # process ID: N" opened the record - measured 0.1 s apart in the debug fixture below -
+            # so two seconds is a generous bound that no pid reuse hours later can satisfy.
+            rec = None
+            if bpid is not None and lf.inits and lf.inits[-1].get("pid") == bpid:
+                prev_ts = lf.inits[-1].get("ts")
+                if prev_ts is not None and ts is not None \
+                        and abs((ts - prev_ts).total_seconds()) <= 2.0:
+                    rec = lf.inits[-1]
+            if rec is None:
+                rec = {"ts": ts, "pid": bpid, "uptime_s": None, "boot_time": None,
+                       "session": None, "version": None, "module": lf.module}
+                lf.inits.append(rec)
+            rec["module"] = rec.get("module") or lf.module
+            if own_ver:
+                rec["version"] = own_ver
+            if bpid is not None:
+                rec["pid"] = bpid
+                lf.pid = bpid
+            # EACH REMAINING FIELD IS OPTIONAL AND INDEPENDENT. A birth line whose uptime is
+            # unreadable must still leave a record carrying the module and the version - the
+            # failure this block exists to stop is a record that is never opened at all.
+            try:
+                rec["session"] = int(kv["session"]); lf.session = rec["session"]
+            except (KeyError, ValueError):
+                pass
+            try:
+                rec["uptime_s"] = float(kv["uptime"])
+                rec["boot_time"] = ts - dt.timedelta(seconds=rec["uptime_s"])
+                lf.uptime_s = rec["uptime_s"]; lf.boot_time = rec["boot_time"]
+            except (KeyError, ValueError):
+                pass
         if func == "LogInit":
             # THE RECORD IS OPENED BY THE FIRST LINE OF THE INIT, NOT BY THE PID LINE.
             #

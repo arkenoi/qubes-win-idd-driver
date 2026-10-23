@@ -1,0 +1,43 @@
+diff --git a/src/log.c b/src/log.c
+index 19d568b..626e6ef 100644
+--- a/src/log.c
++++ b/src/log.c
+@@ -373,6 +373,38 @@ fallback:
+     CloseHandle(token);
+     LogDebug("Session: %lu", sessionId);
+     LogDebug("Command line: %s", GetOriginalCommandLine());
++
++    // ONE BIRTH LINE AT INFO, BECAUSE A LOG THAT CANNOT SAY WHICH BUILD WROTE IT CANNOT BE GRADED.
++    //
++    // The six lines above are DEBUG and belong there - owner 2026-10-20, "it is NOT normal to have
++    // thousands of lines of log during the brief normal run", measured at ~1085 of qrexec-wrapper's
++    // 1250 lines in one brief cell. That demotion also took away the only thing that bills a log
++    // line to a BUILD. tools/log-sweep.py reads three facts out of that banner - the module name,
++    // the boot (from System uptime) and the version - and with the banner at DEBUG it reads none of
++    // them. MEASURED, acceptance run 39868919766: every cell reported boots=0 agent_instances=0
++    // over thousands of lines, four cells returned status=CLEAN having attributed nothing at all,
++    // and win10-upgrade FAILED on five ERROR lines belonging to its 4.3.35.795 entry fixture - the
++    // only banner-bearing log in the capture, because that image predates the demotion. The four
++    // campaigns before it read boots=3..6 agent_instances=3..5 in the same cells.
++    //
++    // So state the facts ONCE per process instead of six times: 155 qrexec-wrapper invocations in a
++    // cell write 155 lines here where the INFO banner wrote 930. This is the marker
++    // tools/sweep-gate.sh:747 already names as patches/windows-utils-single-birth-line and greps for
++    // at :778, and that tools/tests/sweep-life-selftest.sh already builds fixtures from - the
++    // producer was simply never written, so the gate's own count of birth lines per capture went
++    // "2484, then 327, then ZERO".
++    //
++    // versionMajor/versionMinor stay 0 when GetCurrentModuleVersion failed, so an unversioned image
++    // declares ver=0.0.0.0 rather than claiming a version it could not read.
++    LogInfo("QWTBIRTH module=%s ver=%d.%d.%d.%d pid=%lu session=%lu uptime=%.3f",
++            g_LogName,
++            (versionMajor >> 0x10) & 0xffff,
++            (versionMajor >> 0x00) & 0xffff,
++            (versionMinor >> 0x10) & 0xffff,
++            (versionMinor >> 0x00) & 0xffff,
++            (unsigned long)GetCurrentProcessId(),
++            (unsigned long)sessionId,
++            uptime_ms / 1000.0f);
+ }
+ 
+ // Use the log directory from registry config.
