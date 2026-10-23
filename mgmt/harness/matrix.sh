@@ -563,6 +563,39 @@ grade_cell_logsweep(){ # <cell> <vm> <matrix-dir>
   if [ "$rc" = 0 ] && [ "$q" -gt 0 ] && [ "$a" -eq 0 ]; then
     no "$c: INVALID-SWEEP-NOAGENT  the sweep returned CLEAN over $q QWT line(s) from which NO agent-family log (gui-agent/gui-watchdog/qrexec-agent/qubesdb) carried a single line - the error-line gate was graded over a capture that cannot hold an agent error ($have)"
   fi
+  # AND "THE AGENT'S LOG IS HERE" IS NOT THE PROPERTY EITHER - "IT SAYS WHICH BUILD WROTE IT" IS.
+  #
+  # The guard above asks a>0, and on run 39868919766 all four CLEAN cells passed it while the sweep
+  # could attribute nothing at all: gui-agent-20261023.log carried 148 lines and every cell reported
+  # boots=0 agent_instances=0 over 3781-7653 lines. ea61ba28 demoted the LogInit banner - the only
+  # thing naming a log's build - to LogDebug, and the replacement marker had no producer. Four cells
+  # were reported swept CLEAN having graded nothing. Jev: vacuous_clean 0.12,
+  # no_birth_verdict=fail_as_instrument_inconclusive 0.89.
+  #
+  # This greps the CAPTURE, like both rungs above. agent_instances=0 is precisely the property, and
+  # taking it from the report the sweep just wrote would make this guard an echo of the instrument it
+  # exists to check.
+  b=$(find "$m/$c-guestlogs/logs" -type f \
+        \( -iname 'gui-agent*' -o -iname 'gui-watchdog*' -o -iname 'qrexec-agent*' \
+           -o -iname 'qubesdb*' -o -iname 'agent*.log' \) \
+        -exec grep -laE 'QWTBIRTH module=|Log started, module name:' {} + 2>/dev/null | wc -l)
+  if [ "$rc" = 0 ] && [ "$q" -gt 0 ] && [ "$a" -gt 0 ] && [ "$b" -eq 0 ]; then
+    no "$c: INVALID-SWEEP-NOBIRTH  the sweep returned CLEAN over $q QWT line(s) in which NO module declared itself - no QWTBIRTH line and no 'Log started, module name:' banner anywhere in the agent family - so nothing in the capture says which BUILD wrote it and every line was graded unattributed ($have)"
+  fi
+  # NOT DONE HERE, DELIBERATELY: a tier that refuses a capture whose birth records all belong to the
+  # ENTRY FIXTURE rather than to the candidate. That is the win10-upgrade/win11-upgrade shape - the
+  # only birth-bearing log in each is the predecessor's, the candidate agent wrote nothing while
+  # accept-clean passed with pixels, and both cells then failed on the predecessor's five ERROR
+  # lines (registered OPEN as AGENTENDSUNRECORDEDONINPLACEUPGRADE). Jev wants that verdict:
+  # fail_as_no_record_of_the_build_under_test 0.90 against keep_failing_on_the_five_error_lines 0.02.
+  #
+  # It is left out because the only predicate available for it is an ASSUMPTION - that the package
+  # version and the module file version agree in their first three fields (4.3.37+agent.7f26b15b15d6
+  # against module 4.3.37.1100). If they are ever numbered differently that tier fails every cell in
+  # the campaign, and Jev scored the risk 0.35 while judging the diff not ready to launch hours of
+  # serial rig time on (ready_to_run 0.35). Those cells FAIL either way today, so the tier would
+  # change the wording of a verdict and not the verdict - low value against a campaign-wide risk.
+  # The rung above is what the regression needed and it rests on no assumption at all.
   # A CLEAN SWEEP OVER AN UNPROVEN LOG PATH IS NOT A CLEAN CELL. The pre-grading proof is skipped
   # when the guest is no longer running, and that branch covers a wedge (why the volume exists) AND
   # a guest that simply halted. In the second case nothing establishes that the product was still

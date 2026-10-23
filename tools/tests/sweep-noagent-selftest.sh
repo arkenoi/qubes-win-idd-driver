@@ -37,6 +37,22 @@ agent_count(){ # $1 = a <cell>-guestlogs dir
       echo \$a"
 }
 
+  # The BIRTH predicate, extracted the same way and for the same reason as agent_count above: a
+  # capture can hold an agent-family log FULL of lines and still say nothing about which build wrote
+  # them. MEASURED on run 39868919766 - all four CLEAN cells had gui-agent-20261023.log with 148
+  # lines and reported boots=0 agent_instances=0, because ea61ba28 demoted the LogInit banner and
+  # nothing emitted the QWTBIRTH replacement. agent_count() returns >0 on exactly those captures, so
+  # the rung below cannot see this.
+  birth_count(){ # $1 = a <cell>-guestlogs dir
+    local src
+    src=$(sed -n '/^  b=\$(find "\$m\/\$c-guestlogs\/logs" -type f/,/| wc -l)$/p' "$ROOT/mgmt/harness/matrix.sh")
+    [ -n "$src" ] || { echo "NOPREDICATE"; return; }
+    bash -c "
+        m=\"$(dirname "$1")\"; c=\"$(basename "$1" | sed 's/-guestlogs$//')\"
+        ${src}
+        echo \$b"
+  }
+
 mkcap(){ # $1=dir $2=mode(blind|good)
   mkdir -p "$1/logs"
   # present in BOTH, and carrying the lines that made q=73 on the blind cells
@@ -163,5 +179,42 @@ else
 fi
 
 echo
+
+# ---- THE RUNG ABOVE: a log full of lines that names no build -------------------------------------
+B="$T/birth"; mkdir -p "$B"
+
+# 1. the legacy banner counts as a birth record - an entry fixture built before ea61ba28 writes it
+mkdir -p "$B/legacy-guestlogs/logs/files"
+printf "$LINE\n" gui-agent > "$B/legacy-guestlogs/logs/files/gui-agent-20261023-023932-804.log"
+printf '[20261023.023940.459-4652-E] ReleaseFrame: failed\n' >> "$B/legacy-guestlogs/logs/files/gui-agent-20261023-023932-804.log"
+g=$(birth_count "$B/legacy-guestlogs")
+[ "$g" != NOPREDICATE ] || no "the birth predicate could not be extracted from matrix.sh"
+[ "${g:-0}" -gt 0 ] && ok "a legacy 'Log started, module name:' banner is a birth record ($g)" \
+                    || no "the legacy banner was not counted as a birth record (got '$g')"
+
+# 2. the new marker counts too - this is what a post-fix guest writes
+mkdir -p "$B/qwtbirth-guestlogs/logs/files"
+printf '[20261023.021749.400-3820:3824-I] LogInit: QWTBIRTH module=gui-agent ver=4.3.37.1100 pid=3820 session=1 uptime=31.500\n[20261023.021750.000-3820:3824-I] TrackWindows: up\n' \
+  > "$B/qwtbirth-guestlogs/logs/files/gui-agent-20261023.log"
+g=$(birth_count "$B/qwtbirth-guestlogs")
+[ "${g:-0}" -gt 0 ] && ok "a QWTBIRTH line is a birth record ($g)" \
+                    || no "QWTBIRTH was not counted as a birth record (got '$g')"
+
+# 3. THE MEASURED SHAPE OF RUN 39868919766, and the whole reason this rung exists: an agent-family
+#    log carrying real content and declaring no build. agent_count() is >0 here, so INVALID-SWEEP-
+#    NOAGENT passes it - and four cells were reported CLEAN over captures of exactly this shape.
+mkdir -p "$B/nobirth-guestlogs/logs/files"
+{
+  printf '[20261023.021749.488-3820:3824-I] LifecycleStart: QGALIFECYCLE channel open\n'
+  printf '[20261023.021749.647-3820:3824-I] PerfInit: QGADRAGQUANT on\n'
+  printf '[20261023.021800.000-3820:3824-I] TrackWindows: 3 windows\n'
+} > "$B/nobirth-guestlogs/logs/files/gui-agent-20261023.log"
+a=$(agent_count "$B/nobirth-guestlogs")
+g=$(birth_count "$B/nobirth-guestlogs")
+[ "${a:-0}" -gt 0 ] && ok "the rung below PASSES this capture ($a agent-family file(s) with lines)" \
+                    || no "fixture wrong: the agent-family predicate should see this capture (got '$a')"
+[ "${g:-0}" = 0 ] && ok "a capture whose agent log names no build has ZERO birth records" \
+                  || no "a birth record was found in a capture that declares none (got '$g')"
+
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

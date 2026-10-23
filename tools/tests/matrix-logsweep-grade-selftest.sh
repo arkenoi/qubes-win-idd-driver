@@ -48,7 +48,15 @@ run_case(){ local rc="$1" nf="$2" nq="$3"
   local i=0
   while [ "$i" -lt "$nf" ]; do printf 'filler\n' > "$T/$c-guestlogs/logs/files/f$i.log"; i=$((i+1)); done
   if [ "$nq" -gt 0 ]; then
-    : > "$T/$c-guestlogs/logs/files/agent.log"
+    # A HEALTHY CAPTURE DECLARES WHICH BUILD WROTE IT, so the fixture does too. These cases exercise
+    # the grader's handling of log-sweep.sh's rc; they are not about build attribution. But matrix.sh
+    # now refuses a CLEAN sweep over a capture in which no module declared itself
+    # (INVALID-SWEEP-NOBIRTH - run 39868919766 returned CLEAN on six such captures), and a fixture
+    # that models a healthy cell with agent content and no birth record models something that cannot
+    # happen. Without this line "rc=0 with guest lines raises nothing" raised 1, correctly. The
+    # absence case is asserted where it belongs, in sweep-noagent-selftest.
+    printf '[20261014.150600.000-1234:1234-I] LogInit: QWTBIRTH module=agent ver=4.3.37.1100 pid=1234 session=1 uptime=20.000\n' \
+      > "$T/$c-guestlogs/logs/files/agent.log"
     local j=0
     while [ "$j" -lt "$nq" ]; do printf '[20261014.150607.12%d-1234-E] a declared guest error\n' "$j" >> "$T/$c-guestlogs/logs/files/agent.log"; j=$((j+1)); done
   fi
@@ -65,8 +73,12 @@ for rc in 0 1 2 3 4; do
 done
 
 # rc=0 with real content: nothing raised.
+# THE QWT LINE COUNTS BELOW INCLUDE THE BIRTH RECORD the content generator now writes (nq+1), because
+# a capture that declares no build is no longer a healthy one - see the comment in run_case. The
+# property these two legs hold is that the grader STATES what it found on disk; the numbers moved by
+# exactly the one line the fixture gained.
 run_case 0 3 2;  ck "rc=0 with guest lines raises nothing"        "0" "$FAIL"
-                 ck "rc=0 reports the files it found"             "1" "$(printf '%s' "$LINES" | grep -c 'swept CLEAN (4 file(s), 2 QWT line(s))')"
+                 ck "rc=0 reports the files it found"             "1" "$(printf '%s' "$LINES" | grep -c 'swept CLEAN (4 file(s), 3 QWT line(s))')"
 # rc=0 with NOTHING to read: the dangerous false green, raised exactly once.
 run_case 0 2 0;  ck "rc=0 with no QWT line raises BLIND once"     "1" "$FAIL"
                  ck "and it is classed INVALID"                   "1" "$INVALID"
@@ -82,7 +94,7 @@ run_case 3 0 0;  ck "rc=3 with nothing collected raises ONE"      "1" "$FAIL"
 run_case 4 3 2;  ck "rc=4 raises exactly one entry"               "1" "$FAIL"
 run_case 2 5 1;  ck "an undocumented rc raises exactly one entry" "1" "$FAIL"
                  ck "and does not claim collection failed"        "0" "$(printf '%s' "$LINES" | grep -ci 'collection failed')"
-                 ck "and still states what is on disk"            "1" "$(printf '%s' "$LINES" | grep -c '6 file(s), 1 QWT line(s)')"
+                 ck "and still states what is on disk"            "1" "$(printf '%s' "$LINES" | grep -c '6 file(s), 2 QWT line(s)')"
 
 # EVERY COUNT MUST MATCH THE DISK, for every arm - the property the shipped message violated.
 bad=0
