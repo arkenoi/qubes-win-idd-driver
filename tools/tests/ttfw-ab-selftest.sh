@@ -61,14 +61,17 @@ shape "the running binary's hash is compared to the pushed one, and a mismatch a
 tag_preflight(){ grep -qF "qvm-tags" "$1" && awk '/win-idd-testbed/{t=NR} /vm_lock/{l=NR} END{exit !(t && l && t < l)}' "$1"; }
 shape "the tag is asserted in PREFLIGHT, before the lock and any boot (an untagged target captures nothing)" \
       tag_preflight 'win-idd-testbed'
-# "no visible windows" IS a non-zero exit with an empty tar - byte-for-byte what a refused or broken
-# capture looks like - so rc cannot discriminate "not up yet" from "this instrument is dead". The
-# only honest exclusion is to PROVE the path once, while a window is known to exist.
-capture_proven(){ grep -qF 'capture path PROVEN' "$1" &&
-    awk '/qt shot "\$OUT\/preflight-shot.tar"/{p=NR} /^run_side\(\)/{r=NR} END{exit !(p && r && p < r)}' "$1" &&
-    awk '/the per-window capture path produced NO window/{a=NR} /exit 2/{e=NR} END{exit !(a && e)}' "$1"; }
-shape "the capture path is PROVEN once on a guest with a desktop, and the run refuses if it is not" \
-      capture_proven 'capture path PROVEN'
+# THE INSTRUMENT IS THE AGENT'S OWN LOG, not a capture. The capture-based metric was abandoned for
+# a measured reason: on a seamless guest with no application open there are NO windows for dom0 to
+# show, so an idle desktop has no first window to time. These legs hold the replacement - four
+# stamps from one log, and a sample that cannot read all four is a MISS, never a number.
+stamps_from_log(){ grep -qF 'guest/probe-ttfw.ps1' "$1" &&
+    awk '/TTFW \$1=/{g=NR} /if \[ -n "\$birth" \] && \[ -n "\$shell" \] && \[ -n "\$launch" \] && \[ -n "\$ready" \]/{c=NR} END{exit !(g && c && g < c)}' "$1"; }
+shape "the four stamps come from the agent's own log and ALL FOUR are required before a number is printed" \
+      stamps_from_log 'if [ -n "$birth" ] && [ -n "$shell" ] && [ -n "$launch" ] && [ -n "$ready" ]; then'
+three_exits(){ awk '/miss shutdown_refused/{a=NR} /miss start_failed/{b=NR} /miss no_ready_within_/{c=NR} END{exit !(a && b && c)}' "$1"; }
+shape "the sample has three named exits (shutdown refused, start failed, deadline) - never a silent one" \
+      three_exits 'miss no_ready_within_'
 
 # ---- no desktop photography --------------------------------------------------------------------
 # qtest fullshot photographs the whole dom0 desktop. In a POLLING loop that would be dozens of

@@ -13,11 +13,22 @@
 #   mgmt/harness/ttfw-ab.sh --a <agent-WITHOUT-the-fix.exe> --b <agent-WITH-the-fix.exe> \
 #                           [--subject <vm>] [--rounds N] [--deadline S] [--poll S]
 #
-# THE METRIC, stated so it cannot drift into a proxy: wall time from `qvm-start` returning to the
-# FIRST window of this guest appearing in a per-window capture. Both ends are read off the HOST
-# clock - a guest clock shifts by hours on these subjects and must never anchor a measurement.
-# "First window" is any window, including the shell's own chrome: in a seamless desktop that is the
-# moment the user first sees anything, which is what was asked for.
+# THE METRIC, and it was CORRECTED after a measured dead end. The first cut timed `qvm-start` to the
+# first window in a per-window capture. That cannot work on these subjects and the reason is not a
+# bug: on a seamless guest with no application open there are NO windows for dom0 to show, by
+# design. MEASURED on win11r-ttfw with explorer running, the shell up, the broker ready and
+# QGADIRECTSUPPRESS=0: exactly one top-level window exists (explorer's desktop) and the per-window
+# capture is correctly 0 bytes. An idle desktop has no first window to time.
+#
+# What the fix actually removes is the interval in which the guest CANNOT serve a window: the de-slice
+# broker gates per-window content, and its one launch used to be paced by the QGADESLICEDOWN
+# complaint deadline, so the broker came up 27-29 s after the agent's Init. So this times, per boot:
+#     shell-seen -> WgcLaunch        the wait this fix removes
+#     shell-seen -> WGCBROKER ready  when per-window content can first be served
+# Both ends come from lines the agent itself wrote, in ONE log, so the delta is sound even though
+# this guest's clock is offset from the host's - a guest clock must never anchor a measurement, but
+# a difference within one log is not an anchor. ms resolution, and no polling load on the thing
+# being measured.
 #
 # RULES THIS ENFORCES, each because it has been broken here before:
 #  - ONE guest, ONE install, ONE display stack. The only thing that differs between sides is
@@ -107,67 +118,41 @@ A="$OUT/agent-a.exe"; B="$OUT/agent-b.exe"
 # sanctioned restart (stop the owning service, swap, start, prove the turnover), which is why the
 # swap refuses to improvise without it. MEASURED: without it every sample reported
 # HASH_RUNNING=<none> and this harness correctly refused to time any of them.
-if ! qt push "$ROOT/guest/swap-agent.ps1" "$ROOT/guest/restart-gui-agent.ps1" >>"$OUT/push-swap.out" 2>&1; then
+if ! qt push "$ROOT/guest/swap-agent.ps1" "$ROOT/guest/restart-gui-agent.ps1" "$ROOT/guest/probe-ttfw.ps1" >>"$OUT/push-swap.out" 2>&1; then
   log "FAIL  could not push the swap scripts - every sample would fail on a missing script"
   vm_unlock "$SUBJ" 2>/dev/null || true
   exit 2
 fi
 log "staged: agent-a.exe ($AH), agent-b.exe ($BH), swap-agent.ps1 pushed"
 
-# ---- prove the capture path ONCE, now, while the guest is up and has a desktop ------------------
-# "NO VISIBLE WINDOWS" IS REPORTED AS A NON-ZERO EXIT WITH AN EMPTY TAR, which is byte-for-byte what
-# a refused or broken capture looks like (mgmt/CLAUDE.md preflight even uses that error to prove the
-# path works). So the exit status CANNOT discriminate "not up yet" from "this instrument is dead" -
-# measured the hard way: an earlier cut of this harness read rc=1 as an instrument failure and
-# abandoned every sample at ~60 s with capture_failed_rc1, on a guest that simply had no window yet.
-# The honest way to exclude the dead-instrument case is to PROVE THE PATH ONCE, here, when a window
-# is known to exist - the guest is running with a desktop. After that, an empty capture during a
-# poll means one thing: no window is mapped yet.
-cap_pngs(){ tar -tf "$1" 2>/dev/null | grep -acE '\.(png|ppm)$' || true; }
-# THE PROOF IS "A WINDOW APPEARS WITHIN THE DEADLINE ON A GUEST THAT IS UP", not "a window exists this
-# instant". An earlier cut demanded one immediately and refused the run on a guest that had simply
-# been rebooted moments before - which is the same impatience that would make a sample read as a
-# miss. So: make sure the guest is up, then run the SAME loop a sample runs. If no window appears
-# even once, no sample below could be interpreted and the run refuses instead of reporting numbers.
-qvm-check --running "$SUBJ" >/dev/null 2>&1 || qvm-start "$SUBJ" >>"$OUT/preflight-start.out" 2>&1 || true
-for _i in 1 2 3 4 5 6; do w_alive "$SUBJ" 40 && break; done
-pn=0; _t0=$(date +%s)
-while [ $(( $(date +%s) - _t0 )) -lt "$DEADLINE" ]; do
-  qt shot "$OUT/preflight-shot.tar" >>"$OUT/preflight-shot.out" 2>&1 || true
-  pn=$(cap_pngs "$OUT/preflight-shot.tar")
-  [ "${pn:-0}" -gt 0 ] && break
-  sleep "$POLL"
-done
-if [ "${pn:-0}" -lt 1 ]; then
-  log "FAIL  the per-window capture path produced NO window within ${DEADLINE}s on a guest that is up."
-  log "      Every poll below would be uninterpretable - an empty capture could mean 'no window yet'"
-  log "      or 'this instrument is dead', and the service reports both as a non-zero exit with an"
-  log "      empty tar. Refusing rather than reporting timings that measure the instrument."
-  vm_unlock "$SUBJ" 2>/dev/null || true
-  exit 2
-fi
-log "capture path PROVEN: $pn window(s) after $(( $(date +%s) - _t0 ))s, so an empty capture later means 'not yet'"
-
-# ---- the measurement: qvm-start -> the first per-window capture that holds a window -------------
-ttfw_sample(){ # $1 tag -> prints "<ms> <windows>" or "miss <reason>"
-  local tag="$1" t0 now el rc n tar lastrc=""
-  tar="$OUT/$tag-shot.tar"
+# ---- the instrument is the agent's own log, so there is nothing to prove about captures --------
+# (The earlier capture-path proof is gone with the capture-based metric. What replaces it is
+# per-sample: a sample that cannot read all four stamps is a MISS, named, never a number.)
+# ---- the measurement: the agent's own stamps for THIS boot --------------------------------------
+ttfw_sample(){ # $1 tag -> prints "<shell_to_launch_ms> <shell_to_ready_ms> <suppress>" or "miss <why>"
+  local tag="$1" out birth shell launch ready sup noti el t0
   qwt_shutdown "$SUBJ" 600 >>"$OUT/$tag.shutdown" 2>&1 || { echo "miss shutdown_refused"; return; }
-  t0=$(date +%s%3N)
   qvm-start "$SUBJ" >>"$OUT/$tag.start" 2>&1 || { echo "miss start_failed"; return; }
+  t0=$(date +%s)
+  # three exits, and it says which it took: stamps read, deadline, or a probe that never answered.
   while :; do
-    now=$(date +%s%3N); el=$(( (now - t0) / 1000 ))
-    [ "$el" -lt "$DEADLINE" ] || { echo "miss no_window_within_${DEADLINE}s_lastrc${lastrc:-none}"; return; }
-    # AN EMPTY CAPTURE IS "NOT YET", because the path was PROVEN above. The service reports "no
-    # visible windows" as a non-zero exit with an empty tar, so rc cannot tell that apart from a
-    # dead instrument - which is why the proof happens once, up front, instead of being re-derived
-    # from every poll. The last rc is kept so a miss still names what the instrument was doing.
-    qt shot "$tar" >>"$OUT/$tag.shot" 2>&1; rc=$?
-    n=$(cap_pngs "$tar")
-    if [ "${n:-0}" -gt 0 ]; then
-      now=$(date +%s%3N); echo "$(( now - t0 )) ${n}"; return
+    el=$(( $(date +%s) - t0 ))
+    [ "$el" -lt "$DEADLINE" ] || { echo "miss no_ready_within_${DEADLINE}s"; return; }
+    if w_alive "$SUBJ" 40; then
+      out=$(QTEST_VM="$SUBJ" ./tools/qtest pushrun "$ROOT/guest/probe-ttfw.ps1" 2>&1 | tr -d '\r')
+      printf '%s\n' "$out" >> "$OUT/$tag.probe"
+      g(){ printf '%s\n' "$out" | grep -a "^TTFW $1=" | tail -1 | cut -d= -f2-; }
+      birth=$(g birth); shell=$(g shell); launch=$(g launch); ready=$(g ready); sup=$(g suppress); noti=$(g notissued)
+      if [ -n "$birth" ] && [ -n "$shell" ] && [ -n "$launch" ] && [ -n "$ready" ]; then
+        python3 - "$shell" "$launch" "$ready" "${sup:-0}" <<'PY'
+import sys, datetime
+def t(x): return datetime.datetime.strptime(x, "%Y%m%d%H%M%S%f")
+sh, la, rd = (t(sys.argv[i]) for i in (1, 2, 3))
+print("%d %d %s" % ((la - sh).total_seconds() * 1000, (rd - sh).total_seconds() * 1000, sys.argv[4]))
+PY
+        return
+      fi
     fi
-    lastrc="$rc"
     sleep "$POLL"
   done
 }
@@ -189,8 +174,9 @@ run_side(){ # $1 side(A|B) $2 exe $3 want-hash $4 round
   case "$res" in
     miss*) log "   MISS $tag: $res"
            printf '%s\t%s\t%s\t%s\n' "$round" "$side" "MISS" "${res#miss }" >> "$OUT/samples.tsv" ;;
-    *)     log "   $tag: first window after $(( ${res%% *} / 1000 )).$(( (${res%% *} % 1000) / 100 ))s (${res##* } window(s))"
-           printf '%s\t%s\t%s\t%s\n' "$round" "$side" "${res%% *}" "${res##* }" >> "$OUT/samples.tsv" ;;
+    *)     set -- $res
+           log "   $tag: shell->launch ${1} ms, shell->ready ${2} ms, QGADIRECTSUPPRESS ${3}"
+           printf '%s\t%s\t%s\t%s\n' "$round" "$side" "${1}" "${2}:${3}" >> "$OUT/samples.tsv" ;;
   esac
 }
 
@@ -244,15 +230,15 @@ rows = [l.rstrip("\n").split("\t") for l in open(sys.argv[1])][1:]
 def nums(side): return sorted(int(r[2]) for r in rows if r[1] == side and r[2].isdigit())
 bad = [(r[1], r[2], r[3]) for r in rows if not r[2].isdigit()]
 a, b = nums("A"), nums("B")
-print("TTFW-AB  A(no fix) n=%d %s" % (len(a), [round(x/1000, 1) for x in a]))
-print("TTFW-AB  B(fix)    n=%d %s" % (len(b), [round(x/1000, 1) for x in b]))
+print("TTFW-AB  shell->launch seconds, A(no fix) n=%d %s" % (len(a), [round(x/1000, 2) for x in a]))
+print("TTFW-AB  shell->launch seconds, B(fix)    n=%d %s" % (len(b), [round(x/1000, 2) for x in b]))
 for s, m, why in bad:
     print("TTFW-AB  UNUSABLE side=%s %s %s" % (s, m, why))
 if not a or not b:
     print("TTFW-AB  VERDICT=INCONCLUSIVE - a side with no usable sample cannot be compared")
     sys.exit(1)
 ma, mb = statistics.median(a), statistics.median(b)
-print("TTFW-AB  median A=%.1fs B=%.1fs  delta=%.1fs" % (ma/1000, mb/1000, (ma-mb)/1000))
+print("TTFW-AB  median shell->launch A=%.2fs B=%.2fs  delta=%.2fs" % (ma/1000, mb/1000, (ma-mb)/1000))
 # DISJOINT RANGES OR NOTHING: with a handful of per-boot samples, overlapping ranges do not
 # support a claim, and this project has been burned by between-session variance exceeding the
 # within-session spread (docs/BENCHMARKS.md).
