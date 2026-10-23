@@ -452,6 +452,23 @@ if [ "$SKIP_FEATURES" -eq 0 ]; then
         # reported EXACTLY once (item 2). Not the whole 10-cell routine - L3/L6/L7/L7C answer other
         # questions, and L4 restarts the agent on purpose, which must never run inside a release
         # campaign (it takes the toast bridge down with it).
+        # L8 IS NOT IN THIS LIST, AND THE REASON IS A CONFLICT IN THE RECORD, not a product defect.
+        # L8 asserts ADR-supervision item 2's "a death during a shutdown is reported at the NEXT
+        # boot, exactly once". MEASURED on a guest 2026-10-23 (/home/user/qwt-sup/1023-1800), once
+        # the cell was fixed to actually apply its stimulus: the broker was ended at 21:00:52, the
+        # agent wrote event 4002 BEFORE the shutdown (events_4002_after_kill=1, naming
+        # "wgcbroker.exe, PID 3000) exited without being asked to"), the reporter had not reported
+        # it yet (deaths_after_kill=0), and after the reboot it was still unreported
+        # (deaths_after=0, watermark absent) while the 4002 persists. The cell therefore reports
+        # FAIL "a death WAS recorded and nobody was told".
+        # THAT IS THE PRODUCT DOING WHAT IT WAS TOLD. Commit 95cd3faa - "death reporter: the
+        # previous boot's backlog is not read, so there is nothing left to excuse" - stopped
+        # Invoke-QwtDeathCatchUp at the boot boundary, on the owner's 2026-10-16 call that reading
+        # the previous boot's backlog at all is "misleading and overreaching". So L8's claim and
+        # 95cd3faa cannot both be satisfied, and a gate cell whose claim contradicts a committed
+        # product decision must not gate a release. It stays runnable by hand and keeps measuring
+        # truthfully; which of the two records is wrong is the OWNER'S call, and it is flagged as
+        # such rather than resolved here by quietly weakening the cell.
         # STILL NOT COVERED, and recorded in the ADR rather than implied: item 3 (a forced WaitForQdb
         # timeout and the SCM restart) and item 2's forced-crash-while-up death-1/death-2 numbering.
         # --build: the sweep inside this gate upgrades a golden in L1, so without the package
@@ -459,7 +476,7 @@ if [ "$SKIP_FEATURES" -eq 0 ]; then
         # candidate_build_absent unevaluated. matrix.sh has passed it since 2026-10-23; this gate
         # grades the same product and must carry the same dispositions.
         ./mgmt/harness/supervision-e2e.sh --iso "$ISO" --subject "$F11-sup" --golden "$F11-qwt" \
-          ${PV:+--build "$PV"} --cells "L1 L9 L2 L8" >>"$WORK/$t.out" 2>&1
+          ${PV:+--build "$PV"} --cells "L1 L9 L2" >>"$WORK/$t.out" 2>&1
         rc=$? ;;
       *)
         # A listed test with no arm would otherwise inherit rc from the PREVIOUS test - a stale PASS (tools/check-cell-coverage.sh

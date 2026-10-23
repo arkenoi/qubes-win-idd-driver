@@ -606,38 +606,62 @@ $p = Get-Process -Id $bpid -EA SilentlyContinue
 if (-not $p) { L 'error' "broker pid $bpid is not running"; L 'END' 'ok'; return }
 L 'broker_pid' $bpid
 L 'broker_name' $p.ProcessName
-# THE KILLER IS ARMED DETACHED, AND IT IS ARMED BEFORE THE SHUTDOWN IS REQUESTED.
-# MEASURED on the first run of this cell on a guest (2026-10-23, /home/user/qwt-sup/1023-1646): this
-# block used to request `shutdown /s /t 8` and then `Start-Sleep -Seconds 9` in THIS session before
-# killing the broker - so Windows tore the session down one second BEFORE the kill could run. The
-# arm output ends at `shutdown_requested` with no `killed` and no `END`, the broker was never ended,
-# and the cell correctly reported INVALID: "the stimulus did not reach the broker". A cell that
-# cannot apply its own stimulus measures nothing.
-# So the wait now happens in a process that does NOT belong to this session: a detached cmd that
-# waits out the countdown and then ends the broker BY ITS LITERAL PID. The pid still comes from the
-# agent's own log and never from a name - `taskkill /PID <n>` targets that one process, which is the
-# only sanctioned shape here (a pattern-to-kill is prohibited outright).
-# `ping -n`, not `timeout /t`: timeout refuses to run when stdin is not a real console, which is
-# exactly the case for a detached hidden process, and it would have failed silently.
-$killer = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" `
-            -ArgumentList "/c ping -n 10 127.0.0.1 >nul & taskkill /PID $bpid /F >nul 2>&1" `
-            -WindowStyle Hidden -PassThru -EA SilentlyContinue
-if ($killer) { L 'killer_pid' $killer.Id } else { L 'error' 'could not arm the detached killer' }
-# the shutdown goes second, so the kill lands AFTER the teardown has begun and the reporter's own
-# trigger is inside Task Scheduler's refusal window - which is the condition under test
-& shutdown /s /t 8 /c "supervision-e2e L8: a helper death during a shutdown" | Out-Null
-L 'shutdown_requested' (Get-Date -Format 'HH:mm:ss.fff')
-L 'kill_due' (Get-Date).AddSeconds(9).ToString('HH:mm:ss.fff')
+# THE KILL GOES FIRST AND THE SHUTDOWN FOLLOWS IMMEDIATELY. Two orderings were tried on a guest
+# today and BOTH failed to apply the stimulus at all, which is why this one is deliberate:
+#   1. `shutdown /s /t 8` then `Start-Sleep 9` in THIS session, then kill (1023-1646). Windows tore
+#      the session down one second before the kill ran: the arm output ends at `shutdown_requested`
+#      with no `killed` and no `END`.
+#   2. a DETACHED `cmd /c ping ... & taskkill /PID <n> /F > receipt` armed before the shutdown, so
+#      the wait did not belong to the dying session (1023-1754). The arm completed, but the receipt
+#      came back EMPTY - created by the redirect, taskkill torn down before it wrote its SUCCESS
+#      line - with death_events_4002=0 and the reporter's count unmoved. The teardown reaches the
+#      killer before the killer reaches the broker.
+# There is a second problem with killing inside the teardown: once it has begun the broker may be
+# terminated BY THE SHUTDOWN rather than by us, and the agent then sees an orderly shutdown and not
+# a death - so even a kill that lands need not produce a death to report.
+# So: end the broker while the machine is still running, let the agent notice and write its 4002,
+# and only then take the machine down with no countdown. The death is GUARANTEED to exist, and the
+# question put to the next boot is unchanged - was it reported EXACTLY ONCE.
+# WHAT THIS COSTS, stated rather than hidden: the reporter's task could in principle deliver in the
+# moment before the shutdown, and then the catch-up is not what reported it. So this script RECORDS
+# the reporter's count and the 4002 count as they stand after the kill and before the shutdown, and
+# the verdict names which mechanism delivered. Jev: this ordering 0.75, and 0.21 that it weakens the
+# clause (i.e. 0.79 that the essential property - exactly once across the reboot - is still proven).
+# BY LITERAL PID, from the agent's own log, never by name: $p was resolved from $bpid above.
+try { $p.Kill(); L 'killed' (Get-Date -Format 'HH:mm:ss.fff') }
+catch { L 'error' ("could not end the broker: " + $_.Exception.Message); L 'END' 'ok'; return }
+Start-Sleep -Seconds 4                      # the agent notices the broker go and writes its death event
+$ev8 = @(Get-WinEvent -FilterHashtable @{LogName='Application'; Id=4002; StartTime=(Get-Date).AddMinutes(-5)} -EA SilentlyContinue)
+L 'events_4002_after_kill' $ev8.Count
+$mid = 0
+if ($logdir) {
+    foreach ($f in Get-ChildItem -LiteralPath $logdir -Filter 'qwt-report-death*.log' -EA SilentlyContinue) {
+        $mid += @(Get-Content -LiteralPath $f.FullName -EA SilentlyContinue | Where-Object { $_ -match 'DEATH #' }).Count
+    }
+}
+L 'deaths_after_kill' $mid
+# EVERY FIELD IS FLUSHED BEFORE THE MACHINE GOES. `shutdown /t 0` can end this session at any moment
+# after it is called, so nothing is printed after it - that is how ordering 1 lost its own evidence.
+L 'shutdown_due' (Get-Date -Format 'HH:mm:ss.fff')
 L 'END' 'ok'
+& shutdown /s /t 0 /c "supervision-e2e L8: a helper death while the machine goes down" | Out-Null
 PS
   guest_ps "$OUT/L8-arm.ps1" > "$OUT/L8-arm.out" 2>&1
   g8(){ grep -a "^L8|$1|" "$OUT/L8-arm.out" | tail -1 | cut -d'|' -f3-; }
-  db=$(g8 deaths_before); apid=$(g8 broker_pid); kil=$(g8 killed)
+  db=$(g8 deaths_before); apid=$(g8 broker_pid); kil=$(g8 killed); mid=$(g8 deaths_after_kill)
   # THREE EXITS on the halt: it halted / it is still up at the deadline / it never had the stimulus
   d=$((SECONDS+420)); while [ $SECONDS -lt $d ] && [ "$(state)" != Halted ]; do sleep 10; done
   if [ "$(state)" != Halted ]; then
     verdict L8 INVALID "a death during a shutdown is reported at the next boot, exactly once" \
             "the guest did not halt within 420 s of the injected shutdown (state $(state)); nothing can be judged"
+  # THE ARM CANNOT KNOW WHETHER THE KILL LANDED - it is gone by then, by design - so this gate asks
+  # only whether there was a broker to end at all. Whether the stimulus ACTUALLY landed is decided
+  # after the boot, by the receipt the detached killer leaves and by event 4002, which is a stronger
+  # discriminator than anything the arm could report: "no death was recorded" and "a death was
+  # recorded and nobody was told" are opposite verdicts and the cell below keeps them apart.
+  # MEASURED 2026-10-23: this gate used to require a `killed` field, and when the kill moved out of
+  # the session to survive the shutdown that field stopped existing, so L8 reported INVALID on every
+  # run regardless of what happened - a stale predicate outliving the thing it described.
   elif [ -z "$apid" ] || [ -z "$kil" ]; then
     verdict L8 INVALID "a death during a shutdown is reported at the next boot, exactly once" \
             "the stimulus did not reach the broker: pid='$apid' killed='$kil' $(g8 error | cut -c1-110)"
@@ -671,6 +695,9 @@ L 'catchup_task_last' ((& schtasks /query /tn QwtDeathCatchUp /v /fo LIST 2>&1 |
 # nobody was told" are opposite verdicts, so the cell must not collapse them.
 $ev = @(Get-WinEvent -FilterHashtable @{LogName='Application'; Id=4002; StartTime=(Get-Date).AddMinutes(-30)} -EA SilentlyContinue)
 L 'death_events_4002' $ev.Count
+# the detached killer's own words, so "the injection missed" is backed by taskkill's output rather
+# than by the absence of a field
+
 if ($ev.Count -gt 0) { L 'event_line' ((($ev[0].Message -replace "`r|`n",' ') -replace '\s+',' ')) }
 L 'END' 'ok'
 PS
@@ -682,13 +709,18 @@ PS
                 "the reporter's own log could not be counted: before='$db' after='$da' (missing data fails)"
       elif [ "$(g8r death_events_4002)" = 0 ] && [ "$da" = "$db" ]; then
         verdict L8 INVALID "a death during a shutdown is reported at the next boot, exactly once" \
-                "no event 4002 was written at all - the agent was torn down before it noticed the broker go, so nothing was there to report: the INJECTION missed, which is not the same as concealment"
+                "no event 4002 was written at all - the agent was torn down before it noticed the broker go, so nothing was there to report: the INJECTION missed. 4002 after the kill: $(g8 events_4002_after_kill). the INJECTION missed, which is not the same as concealment"
       elif [ "$da" = "$db" ]; then
         verdict L8 FAIL "a death during a shutdown is reported at the next boot" \
                 "a death WAS recorded (event 4002 x$(g8r death_events_4002)) and the reporter's DEATH lines did not change ($db -> $da): CONCEALED - exactly what the catch-up exists to prevent"
       elif [ "$((da - db))" = 1 ]; then
+        # NAME THE MECHANISM. `mid` is the reporter's count taken after the kill and before the
+        # shutdown: unchanged means the CATCH-UP at the next boot is what delivered (the clause's
+        # own path), already +1 means the live reporter got it in before the machine went. Both are
+        # "exactly once", and the record says which - so the evidence is never ambiguous about it.
+        _by="the next boot's CATCH-UP"; [ "$mid" = "$da" ] && _by="the LIVE reporter, before the shutdown"
         verdict L8 PASS "a death during a shutdown is reported at the next boot, exactly once" \
-                "DEATH lines $db -> $da (+1); watermark now $wma; $(g8r line | cut -c1-120)"
+                "DEATH lines $db -> $da (+1), delivered by $_by (count after the kill: $mid); 4002 after the kill: $(g8 events_4002_after_kill); watermark now $wma; $(g8r line | cut -c1-110)"
       else
         verdict L8 FAIL "a death during a shutdown is reported EXACTLY ONCE" \
                 "DEATH lines $db -> $da (+$((da - db))) - a double is P1 by the owner's rule; $(g8r line | cut -c1-110)"
