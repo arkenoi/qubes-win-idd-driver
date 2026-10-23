@@ -585,10 +585,27 @@ L 'logdir' $logdir
 $before = 0
 if ($logdir) {
     foreach ($f in Get-ChildItem -LiteralPath $logdir -Filter 'qwt-*death*.log' -EA SilentlyContinue) {
-        $before += @(Get-Content -LiteralPath $f.FullName -EA SilentlyContinue | Where-Object { $_ -match 'DEATH #' }).Count
+        $before += @(Get-Content -LiteralPath $f.FullName -EA SilentlyContinue | Where-Object { $_ -match 'DEATH #\d+ NEW' }).Count
     }
 }
 L 'deaths_before' $before
+# A FILE CANNOT SCOPE A RUN. The reporter's log is per-day and accumulates across every injection,
+# so a CUMULATIVE row count cannot answer "how many rows did THIS death produce" - measured
+# 2026-10-24, where a correct single report read as 2 because an earlier run's row was in the same
+# file. The counts are taken here, before the kill, and the verdict uses the DELTA.
+$rowsBefore = 0; $desliceBefore = 0
+if ($logdir) {
+    foreach ($f in Get-ChildItem -LiteralPath $logdir -Filter 'qwt-*death*.log' -EA SilentlyContinue) {
+        $rowsBefore += @(Get-Content -LiteralPath $f.FullName -EA SilentlyContinue |
+                         Where-Object { $_ -match 'notified to dom0 as' }).Count
+    }
+    foreach ($f in Get-ChildItem -LiteralPath $logdir -Filter 'gui-agent-*.log' -EA SilentlyContinue) {
+        $desliceBefore += @(Get-Content -LiteralPath $f.FullName -EA SilentlyContinue |
+                            Where-Object { $_ -match 'NOTIFYERR gui-agent\.deslice-down sent to dom0' }).Count
+    }
+}
+L 'dom0_death_rows_before' $rowsBefore
+L 'dom0_deslice_rows_before' $desliceBefore
 L 'watermark_before' $(if (Test-Path $wm) { ((Get-Content $wm -Raw -EA SilentlyContinue) -replace "`r|`n",'') } else { 'absent' })
 # THE SUBJECT OF THE INJECTION IS THE DE-SLICE BROKER, NOT THE AGENT, and the pid comes from the AGENT'S OWN
 # LOG - never from a name. Three reasons the agent is the wrong target here: ending it while the watchdog
@@ -638,7 +655,7 @@ L 'events_4002_after_kill' $ev8.Count
 $mid = 0
 if ($logdir) {
     foreach ($f in Get-ChildItem -LiteralPath $logdir -Filter 'qwt-*death*.log' -EA SilentlyContinue) {
-        $mid += @(Get-Content -LiteralPath $f.FullName -EA SilentlyContinue | Where-Object { $_ -match 'DEATH #' }).Count
+        $mid += @(Get-Content -LiteralPath $f.FullName -EA SilentlyContinue | Where-Object { $_ -match 'DEATH #\d+ NEW' }).Count
     }
 }
 L 'deaths_after_kill' $mid
@@ -748,7 +765,7 @@ PS
         _da=$(grep -a '^L8R|deaths_after|' "$OUT/L8-read.out" | tail -1 | cut -d'|' -f3-)
         _dr=$(grep -a '^L8R|dom0_death_rows|' "$OUT/L8-read.out" | tail -1 | cut -d'|' -f3-)
         if [ -n "$_da" ] && [ "${_da:-0}" -gt "${db:-0}" ]; then _l8why=reported; break; fi
-        if [ -n "$_dr" ] && [ "${_dr:-0}" -gt 0 ]; then _l8why=reported; break; fi
+        if [ -n "$_dr" ] && [ "${_dr:-0}" -gt "$(g8 dom0_death_rows_before)" ]; then _l8why=reported; break; fi
         if grep -qa 'L8R|catchup_ran_this_boot|1' "$OUT/L8-read.out"; then _l8why=ran-and-silent; break; fi
         sleep 20
       done
@@ -764,20 +781,30 @@ PS
       elif [ "$da" = "$db" ]; then
         verdict L8 FAIL "a death during a shutdown is reported at the next boot" \
                 "a death WAS recorded (event 4002 x$(g8r death_events_4002)) and the reporter's DEATH lines did not change ($db -> $da): CONCEALED - exactly what the catch-up exists to prevent"
-      elif [ "$((da - db))" = 1 ] && { dr=$(g8r dom0_deslice_rows); [ -n "$dr" ] && [ "$dr" != 0 ]; }; then
+      elif { dr=$(( $(g8r dom0_deslice_rows) - $(g8 dom0_deslice_rows_before) )); [ "$dr" -gt 0 ]; }; then
         # ONE SITUATION, ONE DOM0 ROW (owner's standing rule; a double is P1). The death was
         # reported exactly once, but the agent ALSO sent its de-slice complaint for the same event -
         # which is the two toasts the owner saw on 2026-10-23.
         verdict L8 FAIL "a death during a shutdown is reported at the next boot, exactly once AND ONLY ONCE" \
                 "DEATH lines $db -> $da (+1) but dom0 also received $dr de-slice row(s) for the same broker: $(g8r dom0_death_rows) death row(s) + $dr complaint row(s) = a DOUBLE for one event"
-      elif [ "$((da - db))" = 1 ]; then
+      elif { ddr=$(( $(g8r dom0_death_rows) - $(g8 dom0_death_rows_before) )); [ "$ddr" -gt 1 ]; }; then
+        # MORE THAN ONE ROW FOR ONE DEATH. Judged on the ROWS THAT REACHED DOM0, which is the
+        # property - "no doubles, nothing lost" is about what the user sees, not about how many
+        # lines our log holds. MEASURED 2026-10-24: this cell used to count every line matching
+        # `DEATH #`, and the reporter writes TWO per death (`DEATH #1 NEW ...` opening the record,
+        # then `DEATH #1 notified to dom0 as ...`), so ONE correctly-reported death read as "+2 - a
+        # double is P1" while dom0_death_rows was 1 and dom0_deslice_rows 0. The product was right
+        # and the counter was not.
+        verdict L8 FAIL "a death during a shutdown is reported EXACTLY ONCE" \
+                "dom0 received $ddr death row(s) for ONE injected death - a double is P1 by the owner's rule; $(g8r line | cut -c1-110)"
+      elif { ddr=$(( $(g8r dom0_death_rows) - $(g8 dom0_death_rows_before) )); [ "$ddr" = 1 ]; }; then
         # NAME THE MECHANISM. `mid` is the reporter's count taken after the kill and before the
         # shutdown: unchanged means the CATCH-UP at the next boot is what delivered (the clause's
         # own path), already +1 means the live reporter got it in before the machine went. Both are
         # "exactly once", and the record says which - so the evidence is never ambiguous about it.
         _by="the next boot's CATCH-UP"; [ "$mid" = "$da" ] && _by="the LIVE reporter, before the shutdown"
         verdict L8 PASS "a death during a shutdown is reported at the next boot, exactly once" \
-                "DEATH lines $db -> $da (+1), delivered by $_by (count after the kill: $mid); 4002 after the kill: $(g8 events_4002_after_kill); watermark now $wma; $(g8r line | cut -c1-110)"
+                "dom0 received EXACTLY 1 death row and 0 de-slice rows; DEATH records $db -> $da, delivered by $_by (count after the kill: $mid); 4002 after the kill: $(g8 events_4002_after_kill); $(g8r line | cut -c1-100)"
       else
         verdict L8 FAIL "a death during a shutdown is reported EXACTLY ONCE" \
                 "DEATH lines $db -> $da (+$((da - db))) - a double is P1 by the owner's rule; $(g8r line | cut -c1-110)"
