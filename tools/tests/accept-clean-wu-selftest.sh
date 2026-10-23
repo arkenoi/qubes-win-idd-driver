@@ -72,6 +72,24 @@ if command grep -qaE 'fail "the updater did NOT turn off' "$A"; then
   ok "and a failed disable calls fail(), not log()"
 else no "a failed disable does not call fail()" "a warn would leave the cell graded as clean"; fi
 
+# ---- AN UNANSWERED CALL IS NOT "THE UPDATER IS ON" ---------------------------------------------
+# MEASURED on win10-reinstall of acceptance run 40006931995: the BEFORE posture read NAU:1 at
+# 19:37:35, the disable ran, and the readback came back EMPTY two seconds later - so the cell failed
+# with "the updater did NOT turn off" about a guest whose policy was already 1. A reinstall has the
+# MSI restarting qrexec-agent, so a call issued right after the disable can land where the transport
+# does not answer. The judge still reads an empty file as ON (asserted above - missing data fails);
+# what must exist is a RETRY before that reading is believed, and a DISTINCT reason when it never
+# answers, so the record does not accuse the updater of something it did not do.
+command grep -qa '_wu_after_tries' "$A" \
+  && ok "the posture readback is retried before an empty result is believed" \
+  || no "the readback is still a single shot" "a reinstall's qrexec restart then reads as a live updater"
+command grep -qaE 'fail "the update posture could not be READ BACK' "$A" \
+  && ok "and an unanswerable readback fails with its OWN reason, not the updater's" \
+  || no "an unanswerable readback is still reported as the updater not turning off"
+command grep -qa 'wu-state-after.txt" || true' "$A" \
+  && no "the readback still swallows its own failure with || true" "that is what made the empty file look like an answer" \
+  || ok "the readback no longer discards its exit status with || true"
+
 # ---- SEEN TO FAIL: with the predicate inverted, a live updater reads as OFF ----------------------
 inv=$(printf '%s' "$pred" | sed "s/command grep -qaE '\^SVC:(Stopped|StopPending|)\$' \"\$f\" || return 1//")
 got=$(bash -c '

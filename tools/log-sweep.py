@@ -108,7 +108,23 @@ SUSPICIOUS_RE = re.compile(
 # sweeper irregardless of message text".
 KV_PAIR_RE = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z_][A-Za-z0-9_]*=[^\s]+")
 STALE_ERR_RE = re.compile(r"failed with error 0x0\b")
-MSI_SUSPECT_RE = re.compile(r"(Return value 3|Installation (failed|success or error status: [1-9])|Note: 1:|\bError \d+|-- Error|Failed to|rolled back|Rollback)")
+# `Note: 1:` AND BARE `Rollback` WERE DROPPED FROM THIS SELECTOR, 2026-10-23, and the reason is that
+# the 2026-10-08 fix for them was only half of one. That day's measurement (see parse_msi) found that
+# `Rollback` alone matched the rollback actions EVERY healthy install SCHEDULES up front - 168 of a
+# successful upgrade's 171 error lines - and the fix was to split the level so they became W instead
+# of E. That was enough while only ERRORS were gated. On 2026-10-23 signatures_unclassified began
+# gating ERROR *and WARNING* at P1, which made the leftover SELECTION load-bearing again: on
+# acceptance run 40006931995 win10-clean failed with 13 unclassified signatures, TEN of them these.
+#   `Note: 1:`   is the engine's routine probe result - every kept line was `Note: 1: 2 2: <path>
+#                3: -2147287038`, i.e. file-not-found while deciding what to install
+#                (inprogressinstallinfo.ipi, Wix4CertificateHash, three SendTo\*.lnk shortcuts).
+#   `Rollback`   matched `RollbackInfo(...)` scheduling and any PROPERTY NAME containing the word -
+#                here WiX's own `Wix4RollbackAddMachineCertificate_X64`, in CustomActionSchedule and
+#                two PROPERTY CHANGE lines. Nothing was rolling back; the install succeeded.
+# A REAL FAILURE IS UNTOUCHED: a rollback that RAN says `rolled back`, a failed action says
+# `Return value 3`, the engine says `MainEngineThread is returning <nonzero>` - all still selected
+# AND still E. Jev: narrowing sound 0.90, a real rollback still caught 0.88.
+MSI_SUSPECT_RE = re.compile(r"(Return value 3|Installation (failed|success or error status: [1-9])|\bError \d+|-- Error|Failed to|rolled back)")
 
 # Lines that are not log lines and not a defect either: the cmd.exe banner a `type` pull carries, blanks,
 # the previous instruments' prefixes, an installer JSON trailer (parsed separately).

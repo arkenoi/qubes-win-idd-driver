@@ -972,15 +972,25 @@ if [ "$nik" = 1 ]; then
   ok "T30 knob 'perfileinst': the check is SEEN TO FAIL - keying on the file reads $nik instance for two processes"
 else bad "T30 knob 'perfileinst' did not collapse the instances (agent_instances=$nik, want 1)"; fi
 
-# T31 THE MSI CLASSIFIER, BOTH WAYS. A routine install's rollback SCHEDULING is not an error, and a
-# real failure still is. Measured on a verified-successful 4.3.36 upgrade: 171 error lines, of which
-# 168 were the routine scheduling - so the gate was reporting a clean install as 171 errors.
+# T31 THE MSI CLASSIFIER, BOTH WAYS. A routine install's rollback SCHEDULING is neither an error nor
+# a warning, and a real failure is still an error. Measured on a verified-successful 4.3.36 upgrade:
+# 171 error lines, of which 168 were the routine scheduling - so the gate was reporting a clean
+# install as 171 errors.
+# THIS LEG USED TO REQUIRE `wok >= 7`, AND THAT WAS THE HALF-FIX. The 2026-10-08 change only split
+# the LEVEL, so the routine lines stayed SELECTED and became warnings; pinning >= 7 pinned that.
+# It cost a cell on 2026-10-23: signatures_unclassified began gating ERROR *and WARNING* at P1, and
+# win10-clean of acceptance run 40006931995 failed with 13 unclassified signatures, TEN of them this
+# bookkeeping (`Note: 1: 2 2: <path>`, `RollbackInfo(...)`, and CustomActionSchedule/PROPERTY CHANGE
+# lines naming WiX's own Wix4RollbackAddMachineCertificate_X64). MSI_SUSPECT_RE no longer SELECTS
+# them, so a clean install contributes neither errors nor warnings - which is what the expectation
+# below now says. Re-graded on that real capture: unclassified 13 -> 0, warning_lines 324 -> 93,
+# error_lines UNCHANGED at 1. Jev: narrowing sound 0.90, a real rollback still caught 0.88.
 rc=$(analyze "$SRC" "$T/msiok" "$T/baseline.json" "$T/jev-expected.py" t31)
 eok=$(field "$T/t31.json" "r['metrics']['error_lines']")
 wok=$(field "$T/t31.json" "r['metrics']['warning_lines']")
-if [ "$eok" = 0 ] && [ "$wok" -ge 7 ]; then
-  ok "T31 a successful install's rollback scheduling is NOT an error (errors=$eok, warnings=$wok)"
-else bad "T31 a successful install produced $eok error line(s) (want 0) and $wok warning(s)"; fi
+if [ "$eok" = 0 ] && [ "$wok" = 0 ]; then
+  ok "T31 a successful install's rollback scheduling is neither an error nor a warning (errors=$eok, warnings=$wok)"
+else bad "T31 a successful install produced $eok error line(s) and $wok warning(s) (want 0 and 0)"; fi
 # SEEN TO FAIL: a real failure must still be errors
 rc=$(analyze "$SRC" "$T/msibad" "$T/baseline.json" "$T/jev-expected.py" t31b)
 ebad=$(field "$T/t31b.json" "r['metrics']['error_lines']")

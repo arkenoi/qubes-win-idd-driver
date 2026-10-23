@@ -173,8 +173,29 @@ if [ "$ACCEPT_MODE" = "quick" ]; then
     # and reported as a clean "OUR package only" measurement while Windows Update was live, with
     # nothing in the record to catch it. The posture BEFORE was already fail-closed ("refusing to
     # grade a cell whose update posture is unknown"); the posture AFTER was not read at all.
-    qq run "powershell -ep bypass -c \"'NAU:'+([string](Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate -EA SilentlyContinue).NoAutoUpdate); 'SVC:'+(Get-Service wuauserv -EA SilentlyContinue).Status\"" \
-        2>&1 | tr -d '\r' | grep -aE '^(NAU|SVC):' > "$OUT/wu-state-after.txt" || true
+    # A TRANSPORT THAT DID NOT ANSWER IS NOT "THE UPDATER IS ON". MEASURED on win10-reinstall of
+    # acceptance run 40006931995: the BEFORE posture read fine at 19:37:35 (NAU:1), the disable ran, and
+    # this readback came back EMPTY two seconds later - so the cell FAILED with "the updater did NOT
+    # turn off" about a guest whose policy was already 1. win10-clean passed the same battery in the
+    # same campaign, so the command is not statically broken: a REINSTALL has the MSI restarting
+    # qrexec-agent, and a call issued two seconds after the disable lands in the window where the
+    # transport does not answer. `|| true` then swallowed that and an empty file was judged as ON.
+    # STILL FAIL-CLOSED: "missing data fails", and _wu_is_disabled keeps reading an empty file as ON
+    # (its selftest asserts exactly that). What changes is that an unanswered call is RETRIED before it
+    # is believed, and if it never answers the reason says THAT instead of accusing the updater.
+    _wu_after_tries=0
+    while : ; do
+        _wu_after_tries=$((_wu_after_tries+1))
+        qq run "powershell -ep bypass -c \"'NAU:'+([string](Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate -EA SilentlyContinue).NoAutoUpdate); 'SVC:'+(Get-Service wuauserv -EA SilentlyContinue).Status\"" \
+        2>&1 | tr -d '\r' | grep -aE '^(NAU|SVC):' > "$OUT/wu-state-after.txt"
+        [ -s "$OUT/wu-state-after.txt" ] && break
+        [ "$_wu_after_tries" -ge 3 ] && break
+        log "    the posture readback did not answer (attempt $_wu_after_tries) - the installer may be restarting qrexec; retrying"
+        sleep 10
+    done
+    if [ ! -s "$OUT/wu-state-after.txt" ]; then
+        fail "the update posture could not be READ BACK after the disable ($_wu_after_tries attempts; $OUT/wu-state-after.txt is empty) - an unanswered call is not evidence that the updater is off, and it is not evidence that it is on"
+    fi
     if _wu_is_disabled "$OUT/wu-state-after.txt"; then
         while read -r l; do log "    $l"; done < "$OUT/wu-state-after.txt"
         log "    updater confirmed off - this cell measures our package"
