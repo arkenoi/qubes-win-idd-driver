@@ -164,12 +164,21 @@ ttfw_sample(){ # $1 tag -> "<ttfw_ms> <shell_launch_ms> <shell_ready_ms> <colour
         [ -f "$p" ] || continue
         v=$(python3 tools/winshot.py --png "$p" --classify 2>/dev/null | grep -aoE 'VERDICT=[A-Z]+' | cut -d= -f2)
         if [ "$v" = DESKTOP ]; then
+          # classify() calls varied content "DESKTOP"; it is a VERDICT WORD, not a statement that a
+          # desktop was captured. `qtest shot` is the per-window service and the tar holds one entry
+          # per window - no desktop capture is taken anywhere here. Recorded as "rendering" below so
+          # a report cannot read as "we photographed the desktop".
           verdict=DESKTOP
           # the colour count is recorded as the evidence that "DESKTOP" was not a lucky gradient
           cols=$(python3 -c "
 from PIL import Image; import sys
 im = Image.open(sys.argv[1]).convert('RGB')
-print(len(im.getcolors(maxcolors=1<<24) or []))" "$p" 2>/dev/null || echo 0)
+# size AND colours. The colour count is a CONSTANT for a given app - an empty notepad reads 151 in
+# every sample, in both arms - so it excludes a black or uniform frame and NOTHING ELSE. The size
+# and the window count are what say an application window was captured rather than a sliver.
+print('%dx%d/%d' % (im.size[0], im.size[1], len(im.getcolors(maxcolors=1<<24) or [])))" "$p" 2>/dev/null || echo 0x0/0)
+          nwin=$(tar -tf "$OUT/$tag-shot.tar" 2>/dev/null | grep -acE '\.(png|ppm)$' || echo 0)
+          cols="${cols} win=${nwin}"
           now=$(date +%s%3N); break
         fi
       done
@@ -216,7 +225,7 @@ run_side(){ # $1 side(A|B) $2 exe $3 want-hash $4 round
     miss*) log "   MISS $tag: $res"
            printf '%s\t%s\t%s\t%s\n' "$round" "$side" "MISS" "${res#miss }" >> "$OUT/samples.tsv" ;;
     *)     set -- $res
-           log "   $tag: FIRST WINDOW (classified DESKTOP, ${4} colours) after ${1} ms; shell->launch ${2} ms, shell->ready ${3} ms"
+           log "   $tag: FIRST WINDOW rendering (per-window capture, ${4}) after ${1} ms; shell->launch ${2} ms, shell->ready ${3} ms"
            printf '%s\t%s\t%s\t%s\n' "$round" "$side" "${1}" "launch${2}:ready${3}:cols${4}" >> "$OUT/samples.tsv" ;;
   esac
 }
