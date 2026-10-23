@@ -304,15 +304,41 @@ relaunch therefore stays for both, and their deaths are reported through 4002/40
 
 ### Still owed on a guest (the release gate, win11 cell)
 
+**WHICH OF THESE ANYTHING ACTUALLY RUNS, measured 2026-10-23 and written down because the list read
+as a plan with a runner and three of its five items have none.** `mgmt/harness/supervision-e2e.sh` is
+the only guest-side supervision routine; it is referenced by nothing but its own selftest and
+`findings/misc.md`, it is absent from `tools/release-feature-tests.txt` (which names
+updater-component, notify-errors-guest-test, crop-before-map, template-update) and `matrix.sh` never
+mentions supervision - so NONE of this has ever run inside a release campaign, and items 1, 3 and 5
+have no runner anywhere, scheduled or not. Checked by content, not by name: that harness contains no
+occurrence of `death-1`, `DEATH #1`, `7023`, `7031`, `1460`, `wevtutil`, `QwtDeathReporter`,
+`QwtEventSource`, `WaitForQdb` or `4001`.
+
 1. `Register-QwtEventSource` and `Register-QwtDeathReporter` report `registered` in the RESULT, and
    `schtasks /query /tn QwtDeathReporter /xml` shows the subscription.
+   **RUNNER: none.** `tools/tests/supervision-install-selftest.sh` checks the registration offline,
+   against the installer source - not that a guest came up registered.
 2. A forced gui-agent.exe crash yields Application 1000 (+1001) and our 4001, exactly ONE notification
    `gui-agent.death-1` in dom0, one `DEATH #1 NEW` line in `qwt-deaths.log`, and `AGAIN` lines for the
    1001/4001 records. A second forced crash yields `death-2`.
+   **RUNNER: partial - supervision-e2e L8**, which measures EXACTLY ONCE (never zero, never twice) for
+   a death injected DURING a shutdown, the case Jev named as the one unmeasured thing that would most
+   change the release verdict (0.89). A forced crash WHILE THE GUEST IS UP, and the death-1/death-2
+   numbering across two crashes, are not measured by it.
 3. A forced `WaitForQdb` timeout (QrexecAgent) yields System 7023 with error 1460 and 7031 with the restart,
    and the SCM restart happens.
+   **RUNNER: none.** `tools/tests/health-recovery-selftest.sh` asserts the recovery is ARMED; nothing
+   fires the failure and watches the SCM restart it.
 4. A clean boot and a clean shutdown produce ZERO notifications and no `DEATH` line (the negative control).
+   **RUNNER: supervision-e2e L2**, over N shutdown/boot cycles: one agent per boot, zero deaths at a
+   shutdown, zero relaunches, no ERROR line during a requested stop.
 5. `wevtutil gl Microsoft-Windows-TaskScheduler/Operational` reads `enabled: true` after the install.
+   **RUNNER: none.**
+
+NEXT, and it is the gate's own order: run `supervision-e2e.sh` once against the package under test,
+then list the cells that DO cover items 2 and 4 (L2, L8) in `tools/release-feature-tests.txt` so a
+campaign cannot pass without them, and write cells for 1, 3 and 5 - each is a single guest read or a
+single injected failure, which is why their absence is a gap and not a design problem.
 
 ---
 
