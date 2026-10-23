@@ -128,33 +128,74 @@ log "staged: agent-a.exe ($AH), agent-b.exe ($BH), swap-agent.ps1 pushed"
 # ---- the instrument is the agent's own log, so there is nothing to prove about captures --------
 # (The earlier capture-path proof is gone with the capture-based metric. What replaces it is
 # per-sample: a sample that cannot read all four stamps is a MISS, named, never a number.)
-# ---- the measurement: the agent's own stamps for THIS boot --------------------------------------
-ttfw_sample(){ # $1 tag -> prints "<shell_to_launch_ms> <shell_to_ready_ms> <suppress>" or "miss <why>"
-  local tag="$1" out birth shell launch ready sup noti el t0
+# ---- the measurement: boot -> a DEMONSTRATED window, with the agent's stamps as the breakdown ---
+# THE END STATE IS ASSERTED, which an earlier cut did not do and which makes the difference between a
+# measurement and a number. Owner, 2026-10-23: "pixels not demonstrated is not smoke pass. a
+# measurement that does not prove end state is sane is futile, we may claim zero seconds
+# immediately." Exactly right: a clean log with no window ever shown is consistent with any timing at
+# all. So every sample must finish with a window whose pixels are classified DESKTOP - tools/winshot.py
+# classify(), i.e. "varied content: something is actually rendering" - and a sample that cannot reach
+# that is a MISS, never a number.
+#
+# An ordinary application window is launched on purpose: on a seamless guest an idle desktop maps NO
+# windows (measured - one top-level window exists, explorer's desktop, and the capture is correctly
+# empty), so there is no first window to time until something opens one. The app is ended BY PID.
+ttfw_sample(){ # $1 tag -> "<ttfw_ms> <shell_launch_ms> <shell_ready_ms> <colours>" or "miss <why>"
+  local tag="$1" t0 now el out wpid n p verdict cols ok birth shell launch ready
   qwt_shutdown "$SUBJ" 600 >>"$OUT/$tag.shutdown" 2>&1 || { echo "miss shutdown_refused"; return; }
   qvm-start "$SUBJ" >>"$OUT/$tag.start" 2>&1 || { echo "miss start_failed"; return; }
-  t0=$(date +%s)
-  # three exits, and it says which it took: stamps read, deadline, or a probe that never answered.
+  t0=$(date +%s%3N)
+  # three exits, each named: no qrexec, no app, no demonstrated window.
+  ok=0
+  for _i in $(seq 1 12); do w_alive "$SUBJ" 40 && { ok=1; break; }; done
+  [ "$ok" = 1 ] || { echo "miss no_qrexec_after_boot"; return; }
+  out=$(QTEST_VM="$SUBJ" ./tools/qtest pushrun "$ROOT/guest/launch-window-probe.ps1" 2>&1 | tr -d '\r')
+  printf '%s\n' "$out" >> "$OUT/$tag.launch"
+  wpid=$(printf '%s\n' "$out" | grep -aoE 'WINPROBE exe=[^ ]+ pid=[0-9]+' | grep -aoE 'pid=[0-9]+' | cut -d= -f2 | tail -1)
+  [ -n "$wpid" ] || { echo "miss no_app_started"; return; }
+  verdict=""; cols=0
   while :; do
-    el=$(( $(date +%s) - t0 ))
-    [ "$el" -lt "$DEADLINE" ] || { echo "miss no_ready_within_${DEADLINE}s"; return; }
-    if w_alive "$SUBJ" 40; then
-      out=$(QTEST_VM="$SUBJ" ./tools/qtest pushrun "$ROOT/guest/probe-ttfw.ps1" 2>&1 | tr -d '\r')
-      printf '%s\n' "$out" >> "$OUT/$tag.probe"
-      g(){ printf '%s\n' "$out" | grep -a "^TTFW $1=" | tail -1 | cut -d= -f2-; }
-      birth=$(g birth); shell=$(g shell); launch=$(g launch); ready=$(g ready); sup=$(g suppress); noti=$(g notissued)
-      if [ -n "$birth" ] && [ -n "$shell" ] && [ -n "$launch" ] && [ -n "$ready" ]; then
-        python3 - "$shell" "$launch" "$ready" "${sup:-0}" <<'PY'
-import sys, datetime
-def t(x): return datetime.datetime.strptime(x, "%Y%m%d%H%M%S%f")
-sh, la, rd = (t(sys.argv[i]) for i in (1, 2, 3))
-print("%d %d %s" % ((la - sh).total_seconds() * 1000, (rd - sh).total_seconds() * 1000, sys.argv[4]))
-PY
-        return
-      fi
+    now=$(date +%s%3N); el=$(( (now - t0) / 1000 ))
+    [ "$el" -lt "$DEADLINE" ] || break
+    if qt shot "$OUT/$tag-shot.tar" >>"$OUT/$tag.shot" 2>&1 && [ -s "$OUT/$tag-shot.tar" ]; then
+      rm -rf "$OUT/$tag-win"; mkdir -p "$OUT/$tag-win"
+      tar -xf "$OUT/$tag-shot.tar" -C "$OUT/$tag-win" 2>/dev/null || true
+      for p in "$OUT/$tag-win"/*.png; do
+        [ -f "$p" ] || continue
+        v=$(python3 tools/winshot.py --png "$p" --classify 2>/dev/null | grep -aoE 'VERDICT=[A-Z]+' | cut -d= -f2)
+        if [ "$v" = DESKTOP ]; then
+          verdict=DESKTOP
+          # the colour count is recorded as the evidence that "DESKTOP" was not a lucky gradient
+          cols=$(python3 -c "
+from PIL import Image; import sys
+im = Image.open(sys.argv[1]).convert('RGB')
+print(len(im.getcolors(maxcolors=1<<24) or []))" "$p" 2>/dev/null || echo 0)
+          now=$(date +%s%3N); break
+        fi
+      done
+      [ -n "$verdict" ] && break
     fi
     sleep "$POLL"
   done
+  # end it by PID, never by name (ADR-supervision 5)
+  QTEST_VM="$SUBJ" ./tools/qtest run "powershell -NoProfile -Command \"Stop-Process -Id $wpid -Force -EA SilentlyContinue\"" >>"$OUT/$tag.endapp" 2>&1 || true
+  [ "$verdict" = DESKTOP ] || { echo "miss no_demonstrated_window_within_${DEADLINE}s"; return; }
+  local ttfw=$(( now - t0 ))
+  # the breakdown, from four stamps the agent itself wrote in ONE log
+  out=$(QTEST_VM="$SUBJ" ./tools/qtest pushrun "$ROOT/guest/probe-ttfw.ps1" 2>&1 | tr -d '\r')
+  printf '%s\n' "$out" >> "$OUT/$tag.probe"
+  g(){ printf '%s\n' "$out" | grep -a "^TTFW $1=" | tail -1 | cut -d= -f2-; }
+  birth=$(g birth); shell=$(g shell); launch=$(g launch); ready=$(g ready)
+  if [ -n "$shell" ] && [ -n "$launch" ] && [ -n "$ready" ]; then
+    python3 - "$ttfw" "$shell" "$launch" "$ready" "$cols" <<'PY'
+import sys, datetime
+def t(x): return datetime.datetime.strptime(x, "%Y%m%d%H%M%S%f")
+sh, la, rd = (t(sys.argv[i]) for i in (2, 3, 4))
+print("%s %d %d %s" % (sys.argv[1], (la-sh).total_seconds()*1000, (rd-sh).total_seconds()*1000, sys.argv[5]))
+PY
+  else
+    echo "$ttfw -1 -1 $cols"
+  fi
 }
 
 run_side(){ # $1 side(A|B) $2 exe $3 want-hash $4 round
@@ -175,8 +216,8 @@ run_side(){ # $1 side(A|B) $2 exe $3 want-hash $4 round
     miss*) log "   MISS $tag: $res"
            printf '%s\t%s\t%s\t%s\n' "$round" "$side" "MISS" "${res#miss }" >> "$OUT/samples.tsv" ;;
     *)     set -- $res
-           log "   $tag: shell->launch ${1} ms, shell->ready ${2} ms, QGADIRECTSUPPRESS ${3}"
-           printf '%s\t%s\t%s\t%s\n' "$round" "$side" "${1}" "${2}:${3}" >> "$OUT/samples.tsv" ;;
+           log "   $tag: FIRST WINDOW (classified DESKTOP, ${4} colours) after ${1} ms; shell->launch ${2} ms, shell->ready ${3} ms"
+           printf '%s\t%s\t%s\t%s\n' "$round" "$side" "${1}" "launch${2}:ready${3}:cols${4}" >> "$OUT/samples.tsv" ;;
   esac
 }
 
@@ -230,15 +271,15 @@ rows = [l.rstrip("\n").split("\t") for l in open(sys.argv[1])][1:]
 def nums(side): return sorted(int(r[2]) for r in rows if r[1] == side and r[2].isdigit())
 bad = [(r[1], r[2], r[3]) for r in rows if not r[2].isdigit()]
 a, b = nums("A"), nums("B")
-print("TTFW-AB  shell->launch seconds, A(no fix) n=%d %s" % (len(a), [round(x/1000, 2) for x in a]))
-print("TTFW-AB  shell->launch seconds, B(fix)    n=%d %s" % (len(b), [round(x/1000, 2) for x in b]))
+print("TTFW-AB  boot->demonstrated-window seconds, A(no fix) n=%d %s" % (len(a), [round(x/1000, 1) for x in a]))
+print("TTFW-AB  boot->demonstrated-window seconds, B(fix)    n=%d %s" % (len(b), [round(x/1000, 1) for x in b]))
 for s, m, why in bad:
     print("TTFW-AB  UNUSABLE side=%s %s %s" % (s, m, why))
 if not a or not b:
     print("TTFW-AB  VERDICT=INCONCLUSIVE - a side with no usable sample cannot be compared")
     sys.exit(1)
 ma, mb = statistics.median(a), statistics.median(b)
-print("TTFW-AB  median shell->launch A=%.2fs B=%.2fs  delta=%.2fs" % (ma/1000, mb/1000, (ma-mb)/1000))
+print("TTFW-AB  median boot->window A=%.1fs B=%.1fs  delta=%.1fs" % (ma/1000, mb/1000, (ma-mb)/1000))
 # DISJOINT RANGES OR NOTHING: with a handful of per-boot samples, overlapping ranges do not
 # support a claim, and this project has been burned by between-session variance exceeding the
 # within-session spread (docs/BENCHMARKS.md).

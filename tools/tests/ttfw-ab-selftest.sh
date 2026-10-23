@@ -65,13 +65,33 @@ shape "the tag is asserted in PREFLIGHT, before the lock and any boot (an untagg
 # a measured reason: on a seamless guest with no application open there are NO windows for dom0 to
 # show, so an idle desktop has no first window to time. These legs hold the replacement - four
 # stamps from one log, and a sample that cannot read all four is a MISS, never a number.
+# The BREAKDOWN comes from the agent's own stamps, in one log, so a shifted guest clock cannot
+# distort a delta. It is a breakdown, not the measurement: the measurement is the demonstrated
+# window, so an unreadable breakdown prints -1 rather than discarding a sample that DID show pixels.
 stamps_from_log(){ grep -qF 'guest/probe-ttfw.ps1' "$1" &&
-    awk '/TTFW \$1=/{g=NR} /if \[ -n "\$birth" \] && \[ -n "\$shell" \] && \[ -n "\$launch" \] && \[ -n "\$ready" \]/{c=NR} END{exit !(g && c && g < c)}' "$1"; }
-shape "the four stamps come from the agent's own log and ALL FOUR are required before a number is printed" \
-      stamps_from_log 'if [ -n "$birth" ] && [ -n "$shell" ] && [ -n "$launch" ] && [ -n "$ready" ]; then'
-three_exits(){ awk '/miss shutdown_refused/{a=NR} /miss start_failed/{b=NR} /miss no_ready_within_/{c=NR} END{exit !(a && b && c)}' "$1"; }
-shape "the sample has three named exits (shutdown refused, start failed, deadline) - never a silent one" \
-      three_exits 'miss no_ready_within_'
+    awk '/if \[ -n "\$shell" \] && \[ -n "\$launch" \] && \[ -n "\$ready" \]/{c=NR} /echo "\$ttfw -1 -1 \$cols"/{f=NR} END{exit !(c && f && c < f)}' "$1"; }
+shape "the breakdown comes from the agent's own stamps, and an unreadable breakdown degrades to -1 instead of discarding a sample that showed pixels" \
+      stamps_from_log 'if [ -n "$shell" ] && [ -n "$launch" ] && [ -n "$ready" ]; then'
+exits_named(){ awk '/miss shutdown_refused/{a=NR} /miss start_failed/{b=NR} /miss no_qrexec_after_boot/{c=NR} /miss no_app_started/{d=NR} /miss no_demonstrated_window_within_/{e=NR} END{exit !(a && b && c && d && e)}' "$1"; }
+shape "every way a sample can fail is NAMED (shutdown, start, qrexec, app, no demonstrated window) - never a silent miss" \
+      exits_named 'miss no_demonstrated_window_within_'
+
+# ---- THE END STATE IS ASSERTED, or the number means nothing ------------------------------------
+# Owner, 2026-10-23: "pixels not demonstrated is not smoke pass. a measurement that does not prove
+# end state is sane is futile, we may claim zero seconds immediately." A clean log with no window
+# ever shown is consistent with ANY timing, so every sample must finish with a window whose pixels
+# classify DESKTOP ("varied content: something is actually rendering", tools/winshot.py classify).
+ends_in_pixels(){ grep -qF 'winshot.py --png' "$1" &&
+    awk '/v=\$\(python3 tools\/winshot.py --png/{c=NR} /if \[ "\$v" = DESKTOP \]/{d=NR} /\[ "\$verdict" = DESKTOP \] \|\|/{r=NR} /miss no_demonstrated_window_within_/{m=NR} END{exit !(c && d && r && m && c < d && d < r)}' "$1"; }
+shape "every sample must END in a window classified DESKTOP, and one that cannot is a named MISS" \
+      ends_in_pixels '[ "$verdict" = DESKTOP ] ||'
+# A window has to be OPENED to exist - an idle seamless desktop maps none - and the app it opens is
+# ended BY PID. Killing by name races whatever else owns that image (ADR-supervision 5).
+opens_and_ends_by_pid(){ grep -qF 'guest/launch-window-probe.ps1' "$1" &&
+    grep -qF 'Stop-Process -Id $wpid' "$1" &&
+    ! grep -qaE 'Stop-Process -Name|taskkill /im' "$1"; }
+shape "a window is opened on purpose and the app is ended BY PID, never by name" \
+      opens_and_ends_by_pid 'Stop-Process -Id $wpid'
 
 # ---- no desktop photography --------------------------------------------------------------------
 # qtest fullshot photographs the whole dom0 desktop. In a POLLING loop that would be dozens of
@@ -84,7 +104,14 @@ else ok "it never mentions fullshot"; fi
 grep -qa 'qvm-shutdown --wait' "$H" && no "it uses qvm-shutdown --wait, which KILLS at its timeout (lint L9)" \
                                     || ok "it does not use qvm-shutdown --wait"
 grep -qa 'qwt_shutdown' "$H" && ok "it shuts the guest down through qwt_shutdown" || no "no qwt_shutdown call"
-grep -qaE '\b(pkill|taskkill|Stop-Process)\b' "$H" && no "it kills by name" || ok "nothing is killed by name"
+# BY PID IS CORRECT; BY NAME IS NOT. The earlier form of this leg matched Stop-Process at all and
+# so failed the harness for ending, by pid, the one app it started itself. What is prohibited is
+# selecting a process by its image name - that races whatever else owns it (ADR-supervision 5).
+if grep -qaE 'pkill|taskkill[^|]*/im|Stop-Process[^|]*-Name' "$H"; then
+    no "it selects a process by NAME to kill"
+else
+    ok "nothing is killed by name (Stop-Process -Id, by the pid it was given, is the sanctioned form)"
+fi
 
 # ---- the swap script must actually be on the guest -------------------------------------------
 # run_side invokes swap-agent.ps1 from QubesIncoming; nothing else puts it there, so without this

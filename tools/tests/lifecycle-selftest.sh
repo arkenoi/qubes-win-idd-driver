@@ -308,49 +308,20 @@ main_deslice_launch_hold() {
     awk '/if \(!g_WgcLaunched\)$/{h=NR} /const ULONGLONG anchor = g_WgcLastLaunch \? g_WgcLastLaunch : now;/{a=NR} END{exit !(h && a && h<a)}' "$1"; }
 shape "main.c: the de-slice down-clock is HELD only for the grace window (the report cannot fire in flight), then reported anchored at the SHELL after a PENDING window clear of the measured launch latency so the hold is neither a silence nor a second in-flight report, and anchored at the LAUNCH once it is issued" main_deslice_launch_hold "$MAIN" 'const ULONGLONG anchor = g_WgcLastLaunch ? g_WgcLastLaunch : now;'
 
-# THE ONE LAUNCH IS GATED ON AN EVENT, NEVER ON A DELAY.
-# DEFECT, MEASURED 2026-10-23 on two subjects: the de-slice broker started 29.0 s and 27.0 s after
-# Init. BrokerSupervise runs only on a main-loop wake, and while the broker was down and unlaunched
-# BrokerNextDue armed exactly ONE wake - g_BrokerNextWarn, the QGADESLICEDOWN deadline. So when the
-# launch guard was not satisfiable on the pass that noticed, nothing woke the loop until the
-# COMPLAINT came due: the complaint timer was the launch's start signal. That is why the latency sat
-# at 27-29 s against a 30 s deadline, why the toast landed within 2 s of the launch both times, and
-# why the guest had no menus and no toasts for half a minute. Corroborated in the capture by the
-# notification host starting 0.47 s after the broker - one wake running both supervisors.
-# THE FIX IS A PUSH, and these legs exist so it cannot quietly become a timer again: the two inputs
-# that can turn the guard true both signal - WM_WTSSESSION_CHANGE on the agent's listener window and
-# the shell-seen latch - and BrokerNextDue arms NOTHING for the launch.
-main_launch_event_gated() {
-    # the loop waits on the handle, and only while a first launch is still pending
-    # -F on both: `watchedEvents[eventCount++]` is a character class to grep, so a plain -q silently
-    # never matches and the leg would fail on correct code (it did, first run).
-    grep -qF 'if (g_HelperEligibleEvent && (!g_WgcLaunched || !g_NotifLaunched) && eventCount < MAXIMUM_WAIT_OBJECTS)' "$1" &&
-    grep -qF 'watchedEvents[eventCount++] = g_HelperEligibleEvent;' "$1" &&
-    # the signal function sets it, and the shell latch calls it
-    awk '/^void HelperLaunchEligibilityChanged/{f=1} f&&/SetEvent\(h\);/{a=NR} f&&/^}/{exit} END{exit !a}' "$1" &&
-    awk '/QGASHELLSEEN shell window is up/{a=NR} a&&/HelperLaunchEligibilityChanged\(L"shell window appeared"\)/{b=NR} END{exit !(a && b && a<b)}' "$1" &&
-    # NO TIMER for the launch: BrokerNextDue arms only the report cadence
-    ! grep -qF 'WGC_LAUNCH_PENDING_POLL_MS' "$1" &&
-    ! awk '/^static ULONGLONG BrokerNextDue\(void\)/{f=1} f&&/due = soon/{print; found=1} f&&/^}/{exit} END{exit !found}' "$1" &&
-    # and the state the loop reads is declared above the function that reads it
-    awk '/^static BOOL g_WgcLaunched/{d=NR} /^static ULONGLONG BrokerNextDue\(void\)/{u=NR} END{exit !(d && u && d<u)}' "$1" &&
-    # THE HANDLE MUST EXIST BEFORE THE THREAD THAT SIGNALS IT. Both signalling paths - the work-area
-    # listener's WM_WTSSESSION_CHANGE and the shell-seen latch - run on the window-event thread, and
-    # the signal function is a no-op while the handle is NULL, so a notification arriving before the
-    # handle exists is DROPPED and the launch falls back to the report cadence. It was created in
-    # WatchForEvents first, i.e. after the thread; Jev scored that window race-exists 0.36.
-    awk '/g_HelperEligibleEvent = CreateEvent/{a=NR} /status = StartWindowEventThread\(\)/{b=NR} END{exit !(a && b && a<b)}' "$1"; }
-shape "main.c: the one launch is gated on g_HelperEligibleEvent - the loop waits on it while a first launch is pending, the shell latch signals it, and BrokerNextDue arms NO timer for the launch" main_launch_event_gated "$MAIN" 'watchedEvents[eventCount++] = g_HelperEligibleEvent;'
-
-# THE SESSION ARRIVAL IS THE OTHER HALF OF THE PUSH, and it has to be registered, handled and
-# released on the agent's only message window.
-main_session_push() {
-    grep -qF 'WTSRegisterSessionNotification(h, NOTIFY_FOR_THIS_SESSION)' "$1" &&
-    grep -qF 'WTSUnRegisterSessionNotification(g_WaListener);' "$1" &&
-    awk '/case WM_WTSSESSION_CHANGE:/{f=1} f&&/wp == WTS_CONSOLE_CONNECT/{a=NR} f&&/HelperLaunchEligibilityChanged\(L"WTS session change"\)/{b=NR} f&&/break;/{exit} END{exit !(a && b && a<b)}' "$1" &&
-    # a failed registration costs the push, so it is LOUD, not silent
-    awk '/WTSRegisterSessionNotification\(h, NOTIFY_FOR_THIS_SESSION\)/{f=1} f&&/LogError\("no session-change push/{a=NR} f&&/^    }/{exit} END{exit !a}' "$1"; }
-shape "workarea.c: WTS_CONSOLE_CONNECT is registered on the listener window, handled by signalling the launch eligibility, released on destroy, and a failed registration is LOUD" main_session_push "$WA" 'WTSRegisterSessionNotification(h, NOTIFY_FOR_THIS_SESSION)'
+# THE EVENT-GATED LAUNCH WAS REVERTED AS A MEASURED REGRESSION - do not re-add it from the shape.
+# agent f9ef238 replaced the wake that paced the de-slice broker's one launch with an event
+# (g_HelperEligibleEvent, signalled by the shell-seen latch and WM_WTSSESSION_CHANGE). It was
+# reverted in agent 3196c0b because mgmt/harness/ttfw-ab.sh measured it 13 SECONDS WORSE to first
+# window, ranges disjoint:
+#     boot -> demonstrated window   without it 10.7, 12.0, 13.3 s   with it 20.9, 24.9, 27.4 s
+#     shell -> broker ready         without it 0.26, 1.88, 0.99 s   with it 6.86, 3.97 s
+# The wake the complaint timer happened to provide was also what drove the pass that validates the
+# broker ready; replacing it with an event made that LATER. The legs that asserted the event shape
+# are gone with it - this suite asserts what the product does, not what a reverted design did.
+# IF IT IS TRIED AGAIN: measure with an A/B whose every sample ENDS in a window classified DESKTOP.
+# The first attempt's A/B read only the agent's own stamps, reported OVERLAPPING, and proved nothing
+# about the end state - which is how a 13 s regression looked like "no effect".
+# Context: docs/AUDIT-timer-vs-event.md (finding 1, retracted).
 
 # THE FOURTH ARM of the 30 s classifier (docs/ADR-uac.md 5): LogonUI up before this agent saw a shell is named as that,
 # never as a lock, and the WARNING carries shell-seen beside console-user.

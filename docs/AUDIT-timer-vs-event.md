@@ -29,8 +29,8 @@ Then each hit was classified against the rule, NOT by whether it looked like a p
 
 | # | site | shape | user-visible cost | status |
 |---|---|---|---|---|
-| 1 | `BrokerNextDue` (main.c) | while the de-slice broker was down and unlaunched it armed **only** `g_BrokerNextWarn`, the QGADESLICEDOWN deadline. The one launch happens on a wake, so **the complaint timer was the launch's start signal** | **UNPROVEN** - the A/B found none (see the retraction below) | shape removed, agent `f9ef238` |
-| 2 | `BridgeNextDue` (main.c:4973) | before the notification host's first launch it returns **0** - arms nothing at all. Its first launch rode whatever wake happened, which was finding #1's complaint timer | **UNPROVEN**, same as #1 | shape removed by the same event (armed while `!g_WgcLaunched \|\| !g_NotifLaunched`) |
+| 1 | `BrokerNextDue` (main.c) | while the de-slice broker was down and unlaunched it armed **only** `g_BrokerNextWarn`, the QGADESLICEDOWN deadline. The one launch happens on a wake, so **the complaint timer was the launch's start signal** | **UNPROVEN** - the A/B found none (see the retraction below) | **REVERTED, agent `3196c0b`** - measured 13 s WORSE to first window |
+| 2 | `BridgeNextDue` (main.c:4973) | before the notification host's first launch it returns **0** - arms nothing at all. Its first launch rode whatever wake happened, which was finding #1's complaint timer | **UNPROVEN**, same as #1 | **REVERTED with #1** (armed while `!g_WgcLaunched \|\| !g_NotifLaunched`) |
 | 3 | `EtwProxyPoke` (etwproxy.c:1037) | `ETWPROXY_POKE_MS` = 5000 self-throttle, and `etwproxy.c:676` says it plainly: *"no console user session yet - Poke retries on the existing loop pass"*. Same console-session precondition as #1/#2, discovered by polling AND dependent on someone else waking the loop | no (ETW signals, not window mapping) | **OPEN** - see below |
 | 4 | `g_NotifNextPoll` (main.c:4564) | 5 s retry, armed only while `g_NotifRestorePending` | no | **not this antipattern** - it retries OUR OWN write (restoring banner suppressions) and clears when it succeeds. A retry of an action, not discovery of a state change |
 | 5 | `WA_DRIFT_CHECK_MS` (workarea.c:20) | 2 s work-area re-assert, with a documented backoff after `WA_LOST_FIGHT_TRIES` | no | **not this antipattern** - a deliberate re-assert of a value Windows overwrites, which is the legitimate use. The file argues it itself |
@@ -80,6 +80,26 @@ evidence of a user-visible speed-up. The fixed build's own boot does sweep CLEAN
 Two earlier attempts are kept here because they are the same error twice: the first widened the
 complaint window, the second used a 1 s re-check. Both tuned the timer instead of removing it, and
 neither was measured against the pre-fix binary - which is what would have caught all of this.
+
+**AND THE FIX WAS REVERTED, 2026-10-23, as a measured regression.** Once every A/B sample was
+required to END in a window whose pixels classify DESKTOP - rather than in a log line - the result
+was immediate and disjoint:
+
+    boot -> demonstrated window   without f9ef238  10.7, 12.0, 13.3 s
+                                  with it          20.9, 24.9, 27.4 s
+    median 12.0s vs 24.9s, delta -13.0s, VERDICT=REGRESSED
+    shell -> broker ready         without 0.26, 1.88, 0.99 s   with 6.86, 3.97 s
+
+The wake that the complaint timer happened to provide was ALSO what drove the supervise pass that
+validates the broker as ready. Replacing it with an event made that pass happen later, so the
+broker became ready seconds later and the first window with it. Reverted in agent `3196c0b`;
+185794f's de-slice hold is kept pending its own A/B, because it fixes a real client-visible defect.
+
+**The lesson is the measurement, not the mechanism.** The first A/B read only the agent's own stamps
+and reported OVERLAPPING - no effect. It never proved the guest reached a sane end state, and the
+owner named exactly that: *"a measurement that does not prove end state is sane is futile, we may
+claim zero seconds immediately."* A 13 s regression looked like "no effect" until the end state was
+asserted.
 
 **Still unexplained:** why those two instances took 27-29 s from Init to the launch. Answering it
 needs a build that emits the shell-seen marker, i.e. a fresh reproduction, not these captures.
