@@ -857,11 +857,28 @@ $script:QwtNotifyBootStamp = 4242; $script:QwtNotifyBootCached = $null
 [void](Write-QwtDeathWatermark -Marks @{ $CHA = 600 })
 $script:QwtNotifyBootStamp = 7777; $script:QwtNotifyBootCached = $null
 Write-QwtDeathLog 'ERROR' 'DEATH #1 NEW Application/4002#601: a previous boot already wrote this one up'
+Write-QwtDeathLog 'INFO'  'DEATH #1 notified to dom0 as wgcbroker.death-1'
 $cu5 = Invoke-QwtDeathCatchUp
 Check 'catch-up dedupe: a record already written up in our log is NOT reported again' `
       ($cu5.reported -eq 0) "reported=$($cu5.reported)"
 Check 'catch-up dedupe: and it says why' ((Get-DeathLog) -match 'was already written up in this log')
 Check 'catch-up dedupe: nothing was sent to the user a second time' ($script:launched.Count -eq 0) "sent=$($script:launched.Count)"
+Remove-Item -LiteralPath $wmp2 -Force -ErrorAction SilentlyContinue
+# ---- WRITTEN UP IS NOT TOLD ---------------------------------------------------------------------
+# MEASURED 2026-10-24 on win11r-sup: the live reporter wrote `DEATH #1 NEW Application/4002#293`
+# 7 s after the kill and the shutdown ended it before it could notify, so the log held the opening
+# line with NO `notified to dom0` line and dom0_death_rows stayed 0. A dedupe keyed on the opening
+# line alone skipped it, and the death reached the user from NEITHER path.
+Reset-World
+Remove-Item -LiteralPath $wmp2 -Force -ErrorAction SilentlyContinue
+$script:QwtNotifyBootStamp = 4242; $script:QwtNotifyBootCached = $null
+[void](Write-QwtDeathWatermark -Marks @{ $CHA = 600 })
+$script:QwtNotifyBootStamp = 7777; $script:QwtNotifyBootCached = $null
+Write-QwtDeathLog 'ERROR' 'DEATH #1 NEW Application/4002#601: opened, and then the machine went down'
+$cu6 = Invoke-QwtDeathCatchUp
+Check 'catch-up dedupe: a record OPENED but never notified IS still reported' `
+      ($cu6.reported -ge 1) "reported=$($cu6.reported)"
+Check 'catch-up dedupe: and the user is told this time' ($script:launched.Count -ge 1) "sent=$($script:launched.Count)"
 Remove-Item -LiteralPath $wmp2 -Force -ErrorAction SilentlyContinue
 
 Microsoft.PowerShell.Utility\Write-Host "$($script:run) checks, $($script:fail) failed"

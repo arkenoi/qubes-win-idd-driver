@@ -1447,9 +1447,27 @@ function Test-QwtDeathLoggedRecord {
         foreach ($dir in $dirs) {
           if (-not $dir -or -not (Test-Path -LiteralPath $dir)) { continue }
           foreach ($f in Get-ChildItem -LiteralPath $dir -Filter 'qwt-*death*.log' -ErrorAction SilentlyContinue) {
-            $hit = @(Get-Content -LiteralPath $f.FullName -ErrorAction SilentlyContinue |
-                     Where-Object { $_ -match ([regex]::Escape($Channel) + '/\d+#' + $RecordId + '\b') })
-            if ($hit.Count -gt 0) { return $true }
+            $lines = @(Get-Content -LiteralPath $f.FullName -ErrorAction SilentlyContinue)
+            # WRITTEN UP IS NOT TOLD. The opening line - `DEATH #1 NEW Application/4002#293: ...` -
+            # proves only that the record was created. MEASURED 2026-10-24: the live reporter wrote
+            # exactly that 7 s after the kill and the shutdown ended it before it could notify, so
+            # the log held the NEW line with NO `notified to dom0` line, dom0_death_rows stayed 0,
+            # and this predicate - keyed on the NEW line alone - told the catch-up to skip it. The
+            # death then reached the user from neither path, which is the very outcome the exemption
+            # exists to prevent.
+            # THE DEATH NUMBER IS THE JOIN: `DEATH #<n> NEW <channel>/<id>#<rid>` and
+            # `DEATH #<n> notified to dom0 as <tag>` share it, and the notified line carries no
+            # record id of its own. So: find the number from the opening line, then require a
+            # notified line for THAT number. No notified line means not told, and the record is
+            # reported now.
+            $num = $null
+            foreach ($ln in $lines) {
+                $m = [regex]::Match($ln, 'DEATH #(\d+) NEW ' + [regex]::Escape($Channel) + '/\d+#' + $RecordId + '\b')
+                if ($m.Success) { $num = $m.Groups[1].Value }
+            }
+            if (-not $num) { continue }
+            $told = @($lines | Where-Object { $_ -match ('DEATH #' + $num + ' notified to dom0') })
+            if ($told.Count -gt 0) { return $true }
           }
         }
     } catch { }

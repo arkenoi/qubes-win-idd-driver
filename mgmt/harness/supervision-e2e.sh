@@ -787,6 +787,14 @@ PS
         # which is the two toasts the owner saw on 2026-10-23.
         verdict L8 FAIL "a death during a shutdown is reported at the next boot, exactly once AND ONLY ONCE" \
                 "DEATH lines $db -> $da (+1) but dom0 also received $dr de-slice row(s) for the same broker: $(g8r dom0_death_rows) death row(s) + $dr complaint row(s) = a DOUBLE for one event"
+      elif { ddr=$(( $(g8r dom0_death_rows) - $(g8 dom0_death_rows_before) )); [ "$ddr" = 0 ]; } && [ "$((da - db))" -ge 1 ]; then
+        # OPENED AND NEVER TOLD. The reporter created the record - `DEATH #n NEW <chan>/<id>#<rid>` -
+        # and no `notified to dom0` line followed, so the user heard nothing. MEASURED 2026-10-24:
+        # the live reporter opened it 7 s after the kill and the shutdown ended it before it could
+        # notify, and the catch-up then skipped it because a dedupe keyed on the OPENING line read
+        # "written up" as "told". This arm exists so that outcome is never reported as a double.
+        verdict L8 FAIL "a death during a shutdown is reported at the next boot" \
+                "a DEATH record was OPENED ($db -> $da) and NO dom0 row followed it (rows $(g8 dom0_death_rows_before) -> $(g8r dom0_death_rows)): the user was told NOTHING; $(g8r line | cut -c1-110)"
       elif { ddr=$(( $(g8r dom0_death_rows) - $(g8 dom0_death_rows_before) )); [ "$ddr" -gt 1 ]; }; then
         # MORE THAN ONE ROW FOR ONE DEATH. Judged on the ROWS THAT REACHED DOM0, which is the
         # property - "no doubles, nothing lost" is about what the user sees, not about how many
