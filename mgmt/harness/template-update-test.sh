@@ -89,9 +89,25 @@ timeout 300 qvm-start "$VM" >/dev/null 2>&1; [ "$(state "$VM")" = Running ] || v
 mgmt/harness/reporter-env-build.sh "$VM" "$REPORTER" > "$OUT/reporter-env-build.txt" 2>&1 \
   || verdict INSTRUMENT "could not build $REPORTER's environment on $VM - see $OUT/reporter-env-build.txt"
 say "reporter-env-build: $(tail -1 "$OUT/reporter-env-build.txt")"
-mgmt/harness/env-assert.sh "$VM" "$REPORTER" > "$OUT/env-assert.txt" 2>&1 \
-  || verdict INSTRUMENT "env-assert $VM $REPORTER failed - not the reporter's environment ($OUT/env-assert.txt)"
-say "env-assert: $(tail -1 "$OUT/env-assert.txt")"
+# WRITTEN WHERE THE GATES READ IT, which is the whole of this defect. updater-gates-lib.sh's U7
+# reads "$d/env-assert.out" and this test grades $d = "$OUT/preflight" (PF, below), while this line
+# used to write "$OUT/env-assert.txt": a different extension AND a different directory.
+# MEASURED on acceptance run 39880114972: U1-U6 all passed and U7 came back
+#   FAIL U7 the subject is the reporter's recorded environment (gweck)
+#        -> no env-assert.out in .../template-update.d/preflight - the environment and locale were
+#           never asserted
+# three lines below a log entry reading "env-assert: ENVASSERT OK: win11de-tup matches every
+# asserted fact of GWeck's environment". The feature test returned INSTRUMENT rc=2, no dom0 rounds
+# were spent, and the acceptance run failed on a subject whose environment HAD been asserted and had
+# passed. Jev, handed that bundle, returned root_cause=never_asserted at conf 1.00 - correctly, on
+# the evidence it was given, because the file was not where anything would look for it.
+# updater-component-test.sh has always written "$OUT/env-assert.out" and handed the gates that same
+# "$OUT", which is why its U7 passes; this is now the same one-path shape rather than a copy.
+PF="$OUT/preflight"
+mkdir -p "$PF" || verdict INSTRUMENT "could not create the preflight evidence dir $PF"
+mgmt/harness/env-assert.sh "$VM" "$REPORTER" > "$PF/env-assert.out" 2>&1 \
+  || verdict INSTRUMENT "env-assert $VM $REPORTER failed - not the reporter's environment ($PF/env-assert.out)"
+say "env-assert: $(tail -1 "$PF/env-assert.out")"
 pl=$(QTEST_VM="$VM" bash -c 'source mgmt/harness/wu-liveness.sh; wu_probe')
 case "$pl" in WUPROBE\|task=Ready\|*) say "liveness probe first read: $pl" ;;
   *) verdict INSTRUMENT "the liveness probe did not read an idle task (${pl:-<no answer>}) - a DEAD verdict would rest on a broken read" ;; esac
@@ -111,7 +127,7 @@ case "$pl" in WUPROBE\|task=Ready\|*) say "liveness probe first read: $pl" ;;
 # environment is asserted, and the updater's own logs say it did not build or serve its relay.
 say "preflight: the updater's quick gates (updater-gates-lib.sh) before the dom0-driven rounds"
 source mgmt/harness/updater-gates-lib.sh
-PF="$OUT/preflight"
+# PF is set at the env-assert step above, because that is where the first thing written into it is.
 updater_gates_collect "$VM" "$PF" || verdict INSTRUMENT "the preflight could not collect the updater's evidence from $VM"
 updater_gates_grade "$PF" "$REPORTER"; pfrc=$?
 printf '%s' "$UG_LINES" | sed 's/^/  /' | tee -a "$LOG" >/dev/null

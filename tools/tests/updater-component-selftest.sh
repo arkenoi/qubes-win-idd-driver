@@ -248,6 +248,64 @@ ck 'EVAL_ONLY never contacts the rig: no qvm-*/qtest call outside the live secti
   "$(awk '/^if \[ -n "\$\{EVAL_ONLY:-\}" \]; then$/,/^fi$/' "$TEST" | grep -qE 'qvm-|qtest|vm_lock' && echo 1 || echo 0)" \
   'the EVAL_ONLY branch must return before the live section'
 
+
+# ---- EVERY HARNESS THAT GRADES THE GATES MUST WRITE env-assert.out WHERE THEY READ IT -----------
+#
+# U7's TOKEN was fixed on 2026-10-22 and is pinned above with the line env-assert.sh really emits.
+# What was never checked is the PLUMBING, and that is what failed next. MEASURED on acceptance run
+# 39880114972: template-update ran env-assert, logged "env-assert: ENVASSERT OK: win11de-tup matches
+# every asserted fact of GWeck's environment", and U7 came back
+#   FAIL U7 the subject is the reporter's recorded environment (gweck)
+#        -> no env-assert.out in .../template-update.d/preflight - the environment and locale were
+#           never asserted
+# because the harness wrote "$OUT/env-assert.txt" while the gates read "$d/env-assert.out" with
+# $d = "$OUT/preflight": a different extension AND a different directory. The feature test returned
+# INSTRUMENT rc=2, no dom0 rounds were spent, and the acceptance run failed on a subject whose
+# environment had been asserted and had passed. Jev, handed that bundle, said
+# root_cause=never_asserted at conf 1.00 - correctly, because the file was not there to find.
+#
+# So the property is not "U7 matches the right token" but "the assertion reaches the directory U7
+# reads". Checked per harness, from the dir each one actually hands to updater_gates_grade.
+u7_bad=""
+u7_n=0
+for h in mgmt/harness/template-update-test.sh mgmt/harness/updater-component-test.sh; do
+  [ -f "$ROOT/$h" ] || { u7_bad="$u7_bad $h(absent)"; continue; }
+  # the directory variable this harness grades, e.g. "$PF" or "$OUT"
+  gd=$(command grep -oE 'updater_gates_grade "\$[A-Za-z_][A-Za-z_0-9]*"' "$ROOT/$h" | head -1 \
+       | sed -E 's/.*"\$([A-Za-z_][A-Za-z_0-9]*)".*/\1/')
+  [ -n "$gd" ] && u7_n=$((u7_n+1)) || { u7_bad="$u7_bad $h(no-grade-call)"; continue; }
+  # ...and whether anything in it puts env-assert.out into that same directory. COMMENTS AND
+  # ERROR MESSAGES ARE STRIPPED FIRST: the comment explaining this placement names the very path
+  # the check looks for, and so does the verdict string on the failure branch, so an unfiltered
+  # grep would find its own explanation and pass on a harness that places nothing. The control
+  # below caught exactly that in the first version of this leg.
+  command grep -v '^[[:space:]]*#' "$ROOT/$h" | command grep -v 'verdict ' \
+    | command grep -qE "\\\$$gd/env-assert\.out" || u7_bad="$u7_bad $h(grades \$$gd, no env-assert.out there)"
+done
+if [ "$u7_n" -lt 2 ]; then
+  ck "the env-assert plumbing check found both grading harnesses" 1 "found $u7_n - the extraction stopped matching, it would pass on anything"
+elif [ -z "$u7_bad" ]; then
+  ck "every harness that grades the gates writes env-assert.out into the dir it grades ($u7_n harness(es))" 0 ""
+else
+  ck "a grading harness does not place env-assert.out where U7 reads it" 1 "$u7_bad"
+fi
+# SEEN TO FAIL, and the control is the SHIPPED DEFECT ITSELF: send env-assert's output back to
+# "$OUT/env-assert.txt" - the exact line that was there on run 39880114972 - and the check must
+# notice that nothing writes env-assert.out into the directory this harness grades.
+u7_v="$T/tu-noplace.sh"
+sed 's|"$PF/env-assert.out"|"$OUT/env-assert.txt"|g' \
+  "$ROOT/mgmt/harness/template-update-test.sh" > "$u7_v"
+if command grep -v '^[[:space:]]*#' "$u7_v" | command grep -v 'verdict ' | command grep -qE '\$PF/env-assert\.out'; then
+  ck "could not build the no-placement variant" 1 "the substitution did not apply"
+else
+  gd=$(command grep -oE 'updater_gates_grade "\$[A-Za-z_][A-Za-z_0-9]*"' "$u7_v" | head -1 | sed -E 's/.*"\$([A-Za-z_][A-Za-z_0-9]*)".*/\1/')
+  if command grep -v '^[[:space:]]*#' "$u7_v" | command grep -v 'verdict ' | command grep -qE "\\\$$gd/env-assert\.out"; then
+    ck "SEEN TO FAIL: the no-placement variant was not caught" 1 "the check does not measure the placement"
+  else
+    ck "SEEN TO FAIL: with the placement removed the check sees no env-assert.out in \$$gd" 0 ""
+  fi
+fi
+
 say ''
 say "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ] || exit 1
