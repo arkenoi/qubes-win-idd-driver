@@ -1749,6 +1749,17 @@ def load_logs(logsdir):
             lf.partial = str(fe.get("partial", "0")) == "1"
             lf.total_lines = int(fe.get("total_lines", fe.get("lines", 0)) or 0)
             lf.written = parse_iso(fe["written"]) if fe.get("written") else None
+            if fe.get("superseded_by"):
+                # A SECOND COPY OF ONE FILE IS NOT A MISSING FILE. decode drops a pulled copy only
+                # when it is a strict BYTE PREFIX of another copy of the same basename - the same
+                # file read twice because the collector sweeps the union of every candidate LogDir -
+                # so the kept copy contains every line this one had. Without this branch the drop
+                # read as "listed by the collector but absent from the decode output" and turned a
+                # CORRECT dedupe into a DATA verdict: measured on /home/user/qwt-sup/1023-1646,
+                # 17 such drops produced 17 `missing` problems. The drops are not silent - decode
+                # prints each one with both guest paths and records them in meta["decode_dedup"],
+                # and the figure below reports the count.
+                continue
             if not path or not os.path.exists(path):
                 problems.append(("missing", name, "listed by the collector but absent from the decode output"))   # GUARD:missing DEFECT: pass
                 continue
@@ -3886,6 +3897,11 @@ def cmd_analyze(a):
                    # collected logs), so this must not reach into it - reading it unguarded crashed
                    # `analyze <dir>` outright, and no test covered that mode.
                    "inventory": (meta or {}).get("inventory"), "invmodules": (meta or {}).get("invmodules") or [],
+                   # AN EXCLUSION IS NEVER SILENT. Every copy decode dropped as a strict byte prefix
+                   # of another copy of the same file, with both guest paths, so a reader can see
+                   # that the union collector pulled one file twice and which copy was kept.
+                   "files_deduped": len((meta or {}).get("decode_dedup") or []),
+                   "dedup": (meta or {}).get("decode_dedup") or [],
                    "agent_instances": len(st["instances"]), "collector": meta.get("begin") if meta else None},
         "data_problems": problems,
         "data_placeholders": placeholders,
@@ -4020,6 +4036,7 @@ def cmd_decode(a):
         return text, None
 
     used = set()
+    by_base = {}
     for fe in meta["files"]:
         name = fe.get("id")
         path = b64dec_path(fe.get("pathb64", ""))
@@ -4034,8 +4051,73 @@ def cmd_decode(a):
         with open(os.path.join(a.out, "files", local), "w", encoding="utf-8") as f:
             f.write(text + ("\n" if text and not text.endswith("\n") else ""))
         fe["local"] = os.path.join("files", local)
+        by_base.setdefault(base, []).append({"fe": fe, "id": name, "path": path, "local": local, "text": text})
         meta["decode"].append({"id": name, "path": path, "ok": True, "lines": blocks[name]["lines"], "bytes": blocks[name]["bytes"]})
         print("DECODE %s (%s): OK lines=%s bytes=%s sha256=%s partial=%s" % (name, base, blocks[name]["lines"], blocks[name]["bytes"], blocks[name]["sha"][:12], fe.get("partial", "0")))
+
+    # ONE LOGICAL FILE PULLED TWICE IS NOT TWO FILES, AND COUNTING IT TWICE FABRICATES EVIDENCE.
+    # The collector sweeps the UNION of every directory a module could have resolved its LogDir to
+    # (Get-LswLogDirCandidates, added 2026-10-23 because a bound log volume left the real directory
+    # unswept). When the SAME file is present in two of those directories the pull carries it twice,
+    # and the loop above kept both under `<base>.<id>` - so every line in it was counted twice.
+    #
+    # MEASURED, the first supervision-gate run on a guest (2026-10-23, /home/user/qwt-sup/1023-1646):
+    # 21 of the capture's 88 files had a second copy. gui-agent-20261023-194816-5484.log was pulled
+    # from Z:\qwt-logs\win11r-sup and from Q:\Qubes Logs, decoding to 17754 and 19861 bytes of
+    # text, so ONE process start (pid 5484) opened TWO instance records: agent_instances read 6 for
+    # 5 real instances and `agent_instances_per_boot` read 2 against a max of 1 - a P2 breach, and
+    # cell L2 FAIL, on a guest whose agent had in fact started exactly once in every boot. (That
+    # same run had two REAL findings, which the dedupe leaves exactly as they were.)
+    #
+    # THE TEST IS A BYTE PREFIX, NOT A HASH, because the two copies are the same file read at two
+    # moments and are therefore almost never identical: the second read is longer. If the shorter is
+    # a strict prefix of the longer, the longer CONTAINS it and dropping the shorter loses nothing.
+    # Of those 21, gui-agent / gui-watchdog / qubesdb-daemon were prefixes; bridge.log and
+    # etw-proxy.log DIVERGED - genuinely different files with one name in two directories - and both
+    # of those are KEPT, because dropping either would lose lines. An exclusion is never silent here:
+    # every drop is printed and recorded in meta.json.
+    meta["decode_dedup"] = []
+    for base, copies in sorted(by_base.items()):
+        if len(copies) < 2:
+            continue
+        longest = max(copies, key=lambda c: len(c["text"]))
+        for c in copies:
+            if c is longest or not c["text"] or not longest["text"].startswith(c["text"]):
+                continue
+            try:
+                os.remove(os.path.join(a.out, "files", c["local"]))
+            except OSError as e:
+                print("DECODE DEDUP %s: could not remove %s (%s)" % (base, c["local"], e)); rc = 1
+                continue
+            c["fe"].pop("local", None)
+            c["fe"]["superseded_by"] = longest["id"]
+            meta["decode_dedup"].append({"dropped": c["local"], "dropped_id": c["id"], "dropped_path": c["path"],
+                                         "dropped_bytes": len(c["text"]), "kept": longest["local"],
+                                         "kept_id": longest["id"], "kept_path": longest["path"],
+                                         "kept_bytes": len(longest["text"])})
+            print("DECODE DEDUP %s: dropped %s (%d bytes, %s) - a strict prefix of %s (%d bytes, %s)"
+                  % (base, c["local"], len(c["text"]), c["path"], longest["local"], len(longest["text"]), longest["path"]))
+        # THE SURVIVOR TAKES THE PLAIN NAME. Which copy got `<base>` and which got `<base>.<id>`
+        # depends only on the order the collector happened to list the directories, so without this
+        # the kept file keeps a `.fNN` suffix whenever the SHORTER copy was pulled first - which is
+        # what happened on the measured capture (Z: short, listed first; Q: long, kept as `.f20`).
+        # A name that encodes pull order is a name the next reader cannot predict.
+        if "local" in longest["fe"] and longest["local"] != base:
+            if not any(c is not longest and "local" in c["fe"] and c["local"] == base for c in copies):
+                try:
+                    os.replace(os.path.join(a.out, "files", longest["local"]), os.path.join(a.out, "files", base))
+                    longest["fe"]["local"] = os.path.join("files", base)
+                    for e in meta["decode_dedup"]:
+                        if e.get("kept") == longest["local"]:
+                            e["kept"] = base
+                    longest["local"] = base
+                except OSError as e:
+                    print("DECODE DEDUP %s: kept copy could not take the plain name (%s)" % (base, e))
+    for base, copies in sorted(by_base.items()):
+        kept = [c for c in copies if "local" in c["fe"]]
+        if len(kept) > 1:
+            print("DECODE DEDUP %s: %d copies KEPT - their contents diverge, so each carries lines the others do not (%s)"
+                  % (base, len(kept), ", ".join("%s=%db" % (c["local"], len(c["text"])) for c in kept)))
     if meta["events"] is not None:
         text, err = verify("events", blocks.get("events"))
         if err:

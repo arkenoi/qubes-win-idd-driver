@@ -76,6 +76,12 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # required. THE COMPILER-POLICY EXCLUSION DOES NOT APPLY TO IT: the offline job is ubuntu-latest, so
 # gcc is present; it checks out with `submodules: true`, so agent/ is there; and it materialises the
 # pinned upstream/ro/qubes-windows-utils that this suite's -fsyntax-only checks read.
+# 101 -> 102 on 2026-10-23: decode-dedup-selftest.sh ADDED - one logical file pulled TWICE is not two
+#   files. The union collector (Get-LswLogDirCandidates) pulls a file present in two candidate
+#   LogDirs twice, and decode kept both, so every line counted twice: measured on the first
+#   supervision-gate guest run, 21 of 88 files duplicated, agent_instances 6 for 5 real instances
+#   and agent_instances_per_boot 2 against max 1 - a P2 breach and cell L2 FAIL on a healthy guest.
+#   13 checks, two mutations seen to fail.
 # 100 -> 101 on 2026-10-23: build-attribution-selftest.sh ADDED - the BIRTH CUTOFF. It proves that
 #   the entry fixture's lines are excluded even when its module declares one version, that our own
 #   installer's ERRORs (0.0.0.0, pre-anchor) are NOT excluded, that a stock component's version
@@ -211,7 +217,7 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # consumer accepts the shipped QWTBIRTH form, skipping comments (all six now explain the demotion in
 # prose a whole-file check would pass on), and drives the restart parser against a line a 4.3.37
 # guest actually wrote, with the branch removed to prove it reads 0 without it.
-FLOOR=${OFFLINE_SUITES_FLOOR:-101}
+FLOOR=${OFFLINE_SUITES_FLOOR:-102}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"
