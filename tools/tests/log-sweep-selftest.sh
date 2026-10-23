@@ -807,8 +807,13 @@ python3 "$SRC" analyze "$T/newsig" --baseline "$T/baseline.json" --out "$T/t10n.
 # T11 a Jev 'defect' verdict = FINDINGS (knob: defect)
 rc=$(analyze "$SRC" "$T/newsig" "$T/baseline.json" "$T/jev-defect.py" t11); jd=$(field "$T/t11.json" "r['judged_defects']")
 [ "$rc" = 1 ] && [ "$jd" != "[]" ] && ok "T11 Jev-classified defect = FINDINGS (rc=1, judged=$jd)" || bad "T11 rc=$rc judged=$jd"
-K=$(knob defect); rc=$(analyze "$K" "$T/newsig" "$T/baseline.json" "$T/jev-defect.py" t11k)
-[ "$rc" = 0 ] && ok "T11 knob 'defect': the check is SEEN TO FAIL (rc=0)" || bad "T11 knob 'defect' did not break the check (rc=$rc)"
+K=$(knob defect); rc=$(analyze "$K" "$T/newsig" "$T/baseline.json" "$T/jev-defect.py" t11k); jdk=$(field "$T/t11k.json" "r['judged_defects']")
+# THE CONTROL IS ON THIS METRIC, NOT ON THE RUN'S rc. The newsig fixture carries an undeclared
+# ERROR/WARNING line, so signatures_unclassified (max 0, P1) now fails this run whatever the
+# judged-defect check does - that is the three-class default acting, and it masks a whole-run rc as
+# a control. The knob's own effect is that no defect is judged, so that is what is asserted.
+[ "$jdk" = "[]" ] && ok "T11 knob 'defect': the check is SEEN TO FAIL (judged_defects=[] with the knob)" \
+                  || bad "T11 knob 'defect' did not break the check (judged=$jdk rc=$rc)"
 
 # ---- fault-injection context (coordinator correction 2026-10-07) --------------------------------------------------
 for f in fibanner nofi m8 m8miss heartbeat; do

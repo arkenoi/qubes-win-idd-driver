@@ -494,7 +494,7 @@ DEFAULT_THRESHOLDS = {
     "unexpected_shutdowns": {"max": 0, "severity": "P1", "why": "System 6008 / Kernel-Power 41: the previous shutdown was not clean"},
     "bugchecks": {"max": 0, "severity": "P1", "why": "System 1001 BugCheck"},
     "task_failures": {"max": 0, "severity": "P2", "why": "a TaskScheduler record for one of our tasks that is a FAILURE: a 203 launch failure the scheduler did not refuse for shutdown, or a 201 whose return code is non-zero and not a shutdown code. A 201 with return code 0 is a task doing its job and is not counted - counting it made this threshold unreachable on every healthy boot"},
-    "signatures_unclassified": {"max": 0, "severity": "P1", "why": "a log line matching no declared class - the three classes are should-be-present, should-not-be-present and normal-operation, and everything else is an ALERT. Counts `new` plus `unsettled`; a decision that is owed is not a class. Growing the dictionary instead of acting on these is what this gate exists to stop (owner 2026-10-23: regexes are fine, but if none matches it should be acted on)"},
+    "signatures_unclassified": {"max": 0, "severity": "P1", "why": "an ERROR or WARNING line matching no declared class - the three classes are should-be-present, should-not-be-present and normal-operation, and everything else is an ALERT. Counts `new` plus `unsettled`; a decision that is owed is not a class. Growing the dictionary instead of acting on these is what this gate exists to stop (owner 2026-10-23: regexes are fine, but if none matches it should be acted on)"},
     "fallbacks_fired": {"max": 0, "severity": "P1", "why": "project rule: a fallback firing is an anomaly, logged loudly and diagnosed - and it is LOUD TO THE CLIENT, so it is P1 by the owner's standing rule (anything loud to the client that should not happen in normal operation is P1). It was P2 here; the de-slice broker-down report that rides a dom0 toast was filed P2 on that basis, which was wrong"},
     "rise_factor": 2.0,
     "rise_min_delta": 3,
@@ -3049,7 +3049,29 @@ def compare(sigs, baseline, metrics):
     # at max 0 would fail every cell on day one for lines that were never required. Giving that class
     # a real gate needs a `required` declaration that says WHERE each line must appear, which is its
     # own change; see REQUIREDLINESHAVENOABSENCEGATE in findings/issues.md.
-    metrics["signatures_unclassified"] = len(new) + len(unsettled)
+    # A RUN WITH NO BASELINE IS A DECLARATION PASS, NOT A GRADED ONE, and that is the ONE exemption.
+    # `baseline-init` builds the dictionary FROM a clean run: tools/tests/log-sweep-selftest.sh:740
+    # analyzes its clean fixture with no baseline and requires rc=0 before seeding. With no
+    # declarations in existence nothing can be classified, so gating the default there would make the
+    # dictionary unbootstrappable - it would not catch anything, it would only forbid declaring.
+    # This is NOT the softening the three-class design exists to prevent: the exemption is "there are
+    # no declarations at all", which cannot grade a cell either. Every path that GRADES passes a
+    # baseline - matrix.sh and log-sweep.sh both do, and a leg asserts it - so a capture graded
+    # against declarations has no exemption. The idiom is the one this file already uses for a metric
+    # that cannot be evaluated: None, which the threshold loop skips.
+    # ERRORS AND WARNINGS ONLY (owner 2026-10-23: "lets apply this to errors and warning only").
+    # An undeclared INFO line is noise to be declared at leisure; an undeclared ERROR or WARNING is
+    # the product saying something is wrong in words nobody has classified, and that is what must be
+    # acted on. The de-slice broker-down report is in scope: it is emitted at ERROR in the current
+    # build, and the toast that rides it reached the client.
+    _unclassified_ew = [_s for _s in (new + unsettled) if (_s.get("level") or "") in ("E", "W")]
+    metrics["signatures_unclassified"] = len(_unclassified_ew) if (baseline or {}).get("signatures") else None
+    # NAME THEM, or the gate says "4" and nobody knows which four. This file refuses to judge a
+    # metric with no evidence arm - "NO EVIDENCE WAS ATTACHED FOR ...: this metric has no arm in
+    # breach_evidence and no line list was threaded for it" - and that guard fired on the first
+    # cut of this gate, which is the guard doing its job.
+    metrics["signatures_unclassified_keys"] = ["%s  x%s" % (_s.get("key"), _s.get("count"))
+                                               for _s in _unclassified_ew]
     breaches = []
     for name, t in thr.items():
         if not isinstance(t, dict) or "max" not in t:
@@ -3114,6 +3136,12 @@ def breach_evidence(b, st, metrics):
                 out.append("pid %s requested stop: %s -> %s" % (i["pid"], (i["stop"]["asked_line"] or "")[:200], (i["stop"]["gone_line"] or "no 'is gone' line")[:200]))
                 for l in i["errors_during_stop"]:
                     out.append("  ERROR during the stop: " + l.raw[:220])
+    elif name == "signatures_unclassified":
+        # The three classes are declared in the baseline; these matched none of them and are ERROR or
+        # WARNING, so they are ALERTs. Printed in full, because the next reader has to decide which
+        # class each belongs in - that decision is the whole point of the gate.
+        for _k in (metrics.get("signatures_unclassified_keys") or []):
+            out.append("undeclared E/W signature: " + str(_k)[:300])
     elif name in ("agent_unrequested_deaths", "watchdog_fast_death_backoffs", "death_events", "death_record_mismatch"):
         for d in st["deaths"]:
             out.append("death: " + d["line"].raw[:220])
