@@ -117,6 +117,11 @@ j = src.index("def breach_evidence"); k = src.index("\ndef build_jev_items")
 arms = set()
 for m in re.finditer(r"name in \(([^)]*)\)", src[j:k], re.S):
     arms.update(re.findall(r'"([a-z0-9_]+)"', m.group(1)))
+# AN ARM WRITTEN WITH == IS STILL AN ARM. The file's idiom is `name in (...)` and all 22 arms used it
+# until 2026-10-23, when signatures_unclassified was added as `name == "..."` - a real arm that this
+# extractor could not see, so the suite reported a coverage regression for a metric that HAD evidence.
+# The property is "the metric has a breach_evidence arm"; matching only one spelling made it a proxy.
+arms.update(re.findall(r'name == "([a-z0-9_]+)"', src[j:k]))
 thread = set(re.findall(r'_count\("([a-z0-9_]+)"', src)) | set(re.findall(r'_ml\["([a-z0-9_]+)"\]', src))
 bare = [x for x in thr if x not in arms and x not in thread]
 print(len(arms & set(thr)), len(thread & set(thr)), len(bare), ",".join(bare) or "-")

@@ -3159,7 +3159,7 @@ def breach_evidence(b, st, metrics):
                 out.append("pid %s requested stop: %s -> %s" % (i["pid"], (i["stop"]["asked_line"] or "")[:200], (i["stop"]["gone_line"] or "no 'is gone' line")[:200]))
                 for l in i["errors_during_stop"]:
                     out.append("  ERROR during the stop: " + l.raw[:220])
-    elif name == "signatures_unclassified":
+    elif name in ("signatures_unclassified",):
         # The three classes are declared in the baseline; these matched none of them and are ERROR or
         # WARNING, so they are ALERTs. Printed in full, because the next reader has to decide which
         # class each belongs in - that decision is the whole point of the gate.
