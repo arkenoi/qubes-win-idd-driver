@@ -757,6 +757,37 @@ def install_anchor(files, builds):
     return best
 
 
+def _declared_version(v):
+    """The version a module DECLARED, or None when it declared that it could not read one.
+
+    0.0.0.0 IS "I COULD NOT READ MY VERSION", NOT A VERSION. windows-utils prints four zeroes when
+    GetCurrentModuleVersion fails, which is honest in the log and wrong to believe here: our own
+    qwtng-netsetup has no version resource at all.
+
+    MEASURED, win11-upgrade of 2026-10-23 (/home/user/qwt-matrix/20261023-061821) - the first
+    upgrade cell ever graded on the candidate's own logs. `qwtng-netsetup` came back
+    `versions=['0.0.0.0']` from its legacy `Module version:` banner, 0.0.0.0 does not match the
+    build under test, and so unattributable()'s first branch billed EVERY versioned line of that
+    module to nobody: `error_lines_unattributable = 12 (max 0)` on twelve lines the cell itself
+    declares as tolerated, and the cell failed on it with error_lines_undeclared reading 0.
+    The twelve are six `QioWriteBuffer: WriteFile failed with error 0xe8: The pipe is being closed.`
+    and six `send_command_to_daemon: ... 0xe8`, all from qwtng-netsetup-20261023-092232-3724.log.
+
+    THIS RULE ALREADY EXISTED ON ONE OF THE TWO PATHS. The QWTBIRTH handler has guarded it since
+    a577ab05, with a selftest leg, and its comment predicted this exact failure - "turning an
+    unversioned module's ERROR line into a P2 breach that no build can own". The legacy
+    `Module version:` path was left unguarded, and an entry fixture that predates the birth line
+    writes exactly that banner. Hence ONE function, used by both.
+
+    NOT an exclusion of the line: the module simply declares no version, so `versions` stays empty,
+    unattributable()'s branch does not fire, and the line is attributed by the ordinary rules like
+    any other unversioned line. Nothing is hidden - the alternative shape, dropping DECLARED lines
+    out of the attribution count, was put to Jev and warned against at 0.75: a declaration says
+    nothing about whether the capture is complete, which is what that metric measures.
+    """
+    return v if (v and v != "0.0.0.0") else None
+
+
 def line_version(lf, l):
     """The module version that wrote this line, or None when nothing declared one.
 
@@ -1091,8 +1122,7 @@ def parse_winutils(lf, raw_lines):
             # KB of NULs mid-file on win10-clean). Mis-billing an instance to the wrong build is
             # the failure the whole attribution path exists to prevent. Jev scored this 0.50 as the
             # worst remaining defect in the second cut.
-            ver = kv.get("ver")
-            own_ver = ver if (ver and ver != "0.0.0.0") else None
+            own_ver = _declared_version(kv.get("ver"))
             if own_ver:
                 lf.version = own_ver
             # ONE PROCESS IS ONE RECORD, EVEN WHEN BOTH SPELLINGS ARE IN THE FILE. At
@@ -1209,9 +1239,14 @@ def parse_winutils(lf, raw_lines):
                     lf.inits[-1]["session"] = lf.session
             mm = re.match(r"Module version: (\S+)", msg)
             if mm:
-                lf.version = mm.group(1)
-                if lf.inits:
-                    lf.inits[-1]["version"] = lf.version
+                # _declared_version, NOT the raw text: 0.0.0.0 means the module could not read its
+                # own version, and believing it fabricates a build that nothing can match. See that
+                # function for the measurement - it failed win11-upgrade on 12 declared lines.
+                _dv = _declared_version(mm.group(1))
+                if _dv:
+                    lf.version = _dv
+                    if lf.inits:
+                        lf.inits[-1]["version"] = _dv
     if lf.pid is None:
         # ONLY the old per-process name shape carries a pid: "<module>-<yyyymmdd>-<hhmmss>-<pid>.log".
         # The current shape is "<module>-<yyyymmdd>.log", and `-(\d+)\.log$` read that DATE as a

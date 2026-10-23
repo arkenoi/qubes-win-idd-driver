@@ -191,6 +191,45 @@ EOF
 ) || got="parse-failed"
 [ "$got" = "1|None|None" ]   && ok "ver=0.0.0.0 opens the instance but declares no version to bill lines to"   || bad "0.0.0.0 was taken as a version (got '$got')"          "expected 1|None|None - an unversioned module's ERROR line becomes an unownable breach"
 
+# AND THE LEGACY BANNER MUST OBEY THE SAME 0.0.0.0 RULE. The QWTBIRTH leg above has guarded this
+# since the birth line landed; the legacy `Module version:` path did not, and an entry fixture that
+# predates the birth line writes exactly that banner. MEASURED on win11-upgrade of 2026-10-23, the
+# first upgrade cell ever graded on the candidate's own logs: qwtng-netsetup came back
+# versions=['0.0.0.0'], which matches no build under test, so unattributable() billed every
+# versioned line of that module to nobody - error_lines_unattributable = 12 (max 0) on twelve lines
+# the cell itself declares as tolerated, with error_lines_undeclared reading 0. Both paths now share
+# _declared_version() so they cannot drift apart again.
+# SEEN TO FAIL: against the pre-fix parser this reads 1|0.0.0.0|0.0.0.0.
+Z2=$T/zero-legacy; mkdir -p "$Z2"
+printf '[20261023.092232.000-3724:3728-I] LogInit: Log started, module name: qwtng-netsetup\n[20261023.092232.100-3724:3728-I] LogInit: Module version: 0.0.0.0\n[20261023.092233.006-3724:3728-E] send_command_to_daemon: write to daemon failed with error 0xe8: The pipe is being closed.\n' \
+  > "$Z2/qwtng-netsetup-20261023-092232-3724.log"
+got=$(python3 - "$Z2" <<'EOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("ls", "tools/log-sweep.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+_, files, _, _ = m.load_logs(sys.argv[1])
+lf = [f for f in files if f.name.startswith("qwtng-netsetup")][0]
+print("%d|%s|%s" % (len(lf.inits or []), lf.version, m.line_version(lf, lf.lines[-1])))
+EOF
+) || got="parse-failed"
+[ "$got" = "1|None|None" ]   && ok "the LEGACY banner's 0.0.0.0 declares no version either - one rule, both paths"   || bad "the legacy path took 0.0.0.0 as a version (got '$got')"          "expected 1|None|None - this is what failed win11-upgrade on 12 declared lines"
+
+# AND THE CONSEQUENCE, not just the parse: with no fabricated version, such a module's ERROR line is
+# no longer billed to nobody. This is the property; the parse above is the mechanism.
+got=$(python3 - "$Z2" <<'EOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("ls", "tools/log-sweep.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+_, files, _, _ = m.load_logs(sys.argv[1])
+sc = m.build_scope(files, "4.3.37+agent.7f26b15b15d6")
+prior, unattrib = sc[-2], sc[-1]
+lf = [f for f in files if f.name.startswith("qwtng-netsetup")][0]
+errs = [l for l in lf.lines if l.level == "E"]
+print(sum(1 for l in errs if unattrib(lf, l) and not prior(lf, l)))
+EOF
+) || got="parse-failed"
+[ "$got" = "0" ]   && ok "an unversioned module's ERROR line is no longer unattributable (0 of them)"   || bad "an unversioned module's ERROR line is still billed to nobody (got '$got')"          "that is the P2 breach no build can own"
+
 # A RECORD MUST NOT INHERIT THE PREVIOUS INSTANCE'S BUILD. Two instances in one per-day file, the
 # second's birth line truncated so it carries no readable ver (an unclean shutdown leaving NULs
 # mid-file is a measured shape here). SEEN TO FAIL: reading the record's version from the
