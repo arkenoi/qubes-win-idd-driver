@@ -304,8 +304,21 @@ shape "main.c: the shell-seen latch is set only through ShellWindowNow (the one 
 #      de-slice row was the second toast. It is suppressed when a death owns the outage - but the
 #      flag and the ERROR line stay unconditional, so no instrument goes blind (Jev 1.00).
 main_deslice_report_discipline() {
-    # the hold while nothing could have been launched at all
-    grep -q 'if (!ShellWindowNow() && !g_WgcLaunched)' "$1" &&
+    # THE HOLD IS ON !g_WgcLaunched ALONE, not on `!ShellWindowNow() && !g_WgcLaunched`. The second
+    # form let a guest whose shell appeared BEFORE the launch arm the clock with `now`, so the broker
+    # never got its full deadline. MEASURED 2026-10-24 on win11r-sup running the build that already
+    # carried the anchor fix: shell seen 23:56:06, launch issued 23:56:11, and QGADESLICEDOWN fired
+    # at 23:56:36 claiming "not running for 30 s" - 25 s after the launch - with a dom0 row and
+    # dom0_loud_failures=1. The next boot's broker was ready 1 s after its launch. agent 185794f had
+    # fixed exactly this and my revert 21aec24 reintroduced it; Jev: restore the pre-launch hold
+    # 0.97, and 0.79 that this facet was the revert's. So the hold, the PENDING window and the
+    # launch-guard anomaly are all required here.
+    grep -q 'if (!g_WgcLaunched)' "$1" &&
+    ! grep -q 'if (!ShellWindowNow() && !g_WgcLaunched)' "$1" &&
+    grep -q '#define DESLICE_LAUNCH_PENDING_MS 90000' "$1" &&
+    grep -q 'const BOOL pendingTooLong = shellUp && g_ShellSeenTick && (now - g_ShellSeenTick) >= DESLICE_LAUNCH_PENDING_MS;' "$1" &&
+    grep -q 'g_BrokerNextWarn = g_ShellSeenTick + DESLICE_LAUNCH_PENDING_MS;' "$1" &&
+    grep -q 'LogWarning("QGABROKERLAUNCHNOTISSUED shell up %I64u s and the de-slice broker launch has not been "' "$1" &&
     # 1: the anchor is the pure function's, fed the ready tick - never a bare g_WgcLastLaunch
     grep -q 'QgaDesliceAnchor(g_WgcLaunched ? 1 : 0, g_WgcLastLaunch, g_BrokerReadyAt, now)' "$1" &&
     ! grep -q 'const ULONGLONG anchor = (g_WgcLaunched && g_WgcLastLaunch) ? g_WgcLastLaunch : now;' "$1" &&
