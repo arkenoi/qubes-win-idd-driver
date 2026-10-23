@@ -93,6 +93,22 @@ vm_lock "$SUBJ" || { log "FAIL  could not take the rig lock for $SUBJ"; exit 2; 
 IN='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
 qt(){ QTEST_VM="$SUBJ" ./tools/qtest "$@"; }
 
+# THE SWAP SCRIPT HAS TO BE ON THE GUEST, and nothing else puts it there - run_side invokes it from
+# QubesIncoming, so without this every sample would fail on a missing file. Pushed ONCE.
+# DISTINCT BASENAMES for the two sides: both artifacts are called gui-agent.exe, and while
+# `qtest push` deletes the target first (so a repeat works) and asserts the byte count, giving each
+# side its own name means the file the swap reads can never be the other side's - the hash check
+# would catch that, but the evidence should not need a hash check to be readable.
+cp "$A" "$OUT/agent-a.exe" || { log "FAIL  could not stage the A binary"; exit 2; }
+cp "$B" "$OUT/agent-b.exe" || { log "FAIL  could not stage the B binary"; exit 2; }
+A="$OUT/agent-a.exe"; B="$OUT/agent-b.exe"
+if ! qt push "$ROOT/guest/swap-agent.ps1" >>"$OUT/push-swap.out" 2>&1; then
+  log "FAIL  could not push guest/swap-agent.ps1 - every sample would fail on a missing swap script"
+  vm_unlock "$SUBJ" 2>/dev/null || true
+  exit 2
+fi
+log "staged: agent-a.exe ($AH), agent-b.exe ($BH), swap-agent.ps1 pushed"
+
 # ---- the measurement: qvm-start -> the first per-window capture that holds a window -------------
 ttfw_sample(){ # $1 tag -> prints "<ms> <windows>" or "miss <reason>"
   local tag="$1" t0 now el rc n tar

@@ -78,6 +78,17 @@ grep -qa 'qvm-shutdown --wait' "$H" && no "it uses qvm-shutdown --wait, which KI
 grep -qa 'qwt_shutdown' "$H" && ok "it shuts the guest down through qwt_shutdown" || no "no qwt_shutdown call"
 grep -qaE '\b(pkill|taskkill|Stop-Process)\b' "$H" && no "it kills by name" || ok "nothing is killed by name"
 
+# ---- the swap script must actually be on the guest -------------------------------------------
+# run_side invokes swap-agent.ps1 from QubesIncoming; nothing else puts it there, so without this
+# push every sample fails on a missing file. Caught before the first run, not by it.
+pushes_swap(){ grep -qF 'qt push "$ROOT/guest/swap-agent.ps1"' "$1" &&
+    awk '/qt push "\$ROOT\/guest\/swap-agent.ps1"/{p=NR} /^run_side\(\)/{r=NR} END{exit !(p && r && p < r)}' "$1"; }
+shape "guest/swap-agent.ps1 is pushed ONCE, before any sample invokes it" \
+      pushes_swap 'qt push "$ROOT/guest/swap-agent.ps1"'
+distinct_names(){ grep -qF 'cp "$A" "$OUT/agent-a.exe"' "$1" && grep -qF 'cp "$B" "$OUT/agent-b.exe"' "$1"; }
+shape "the two sides are staged under distinct basenames (both artifacts are called gui-agent.exe)" \
+      distinct_names 'cp "$A" "$OUT/agent-a.exe"'
+
 # ---- interleaving, the lock, and the smoke gate -------------------------------------------------
 alternates(){ awk '/r % 2/{a=NR} END{exit !a}' "$1"; }
 shape "the starting side alternates per round, so guest drift cannot land on one side" alternates 'r % 2'
