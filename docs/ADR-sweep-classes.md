@@ -62,6 +62,36 @@ was repeatedly re-derived as "add another pattern".
 - `fallbacks_fired` is **P1**, not P2 — a fallback firing is client-visible by this project's own
   rule that it be logged loudly and diagnosed.
 
+## The 39 `unsettled` entries are now a release precondition, and their old evidence is unusable
+
+`signatures_unclassified` counts `new` PLUS `unsettled`, deliberately - "a human decision is owed"
+is not one of the three classes. So every `unsettled` entry that APPEARS in a capture fails that
+cell at P1. An entry that does not appear costs nothing, so the real question is which ones fire.
+
+MEASURED 2026-10-23 against acceptance run 39880114972 (the baseline holds 339 entries: 202
+expected, 83 benign, 39 unsettled, 15 known-defect; 33 of the unsettled are at E or W level):
+
+* **5 of the 33 appeared at all** - `WindowEventThreadProc: window event thread exiting`,
+  `CaptureThread: main loop slow`, `Init: Failed to read 'StagingGrant'`,
+  `VchanReceiveBuffer: no data, blocking read`, and the bridge's `LIST trig=retry`.
+* **all 5 appeared ONLY in the two upgrade cells**, and those are exactly the cells where the
+  collector read `Q:\Qubes Logs` instead of the bound volume
+  (SWEEPGRADESTHEDEFAULTDIRNOTTHEBOUNDVOLUME). That cell's own metrics say what was in the
+  directory it graded: `modules_unattributable=['gui-agent@4.3.35.795', 'qrexec-agent@4.3.35.795',
+  'qrexec-wrapper@4.3.35.795']`, `prior_build_mix={}`, `install_anchor=None`,
+  `warning_lines_ours=0`, `warning_lines_other=1050`. Only the ENTRY FIXTURE's build was present,
+  and with a single version present `_inst_prior` has nothing to scope against, so those lines
+  could not even be attributed as the predecessor's - they became "unattributable".
+
+**So those five are the predecessor's lines, read from a directory the candidate never wrote to,
+and they cannot be used to classify anything.** Re-validating the baseline against them would be
+re-validating the wrong build - the same error as grading a cell on a directory the product is not
+using, one level up.
+
+The re-validation is therefore owed against the FIRST campaign whose collector reads the bound
+volume (the union fix, `1d057059`). Until then the honest statement is that it is unknown which
+`unsettled` entries a candidate build actually produces.
+
 ## Not yet implemented — the SHOULD-BE-PRESENT gate
 
 There is no absence gate, and the baseline's `expected` status cannot serve as one: it means
