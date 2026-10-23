@@ -197,8 +197,13 @@ PS
   elif [ "$n1" != True ]; then
     verdict L9 FAIL "the subscription names our death ids" \
             "the task XML does not mention 4001 - the subscription cannot be ours (runs_as=$ua)"
-  elif ! printf '%s' "$ua" | grep -qiE 'system'; then
-    verdict L9 FAIL "the ONE reporter runs as SYSTEM" "UserId='$ua' - the notify route needs SYSTEM"
+  elif ! printf '%s' "$ua" | grep -qiE '(^|[^0-9])S-1-5-18($|[^0-9])|system'; then
+    # S-1-5-18 IS THE WELL-KNOWN SYSTEM SID, and it is what schtasks /xml actually writes. MEASURED
+    # 2026-10-23: the first cut of this leg matched only the word "system" and FAILED a correctly
+    # installed reporter whose UserId read S-1-5-18 - a predicate that checked a SPELLING instead of
+    # the identity. Both forms are accepted because the XML carries the SID while some installs and
+    # localisations write a name.
+    verdict L9 FAIL "the ONE reporter runs as SYSTEM" "UserId='$ua' - neither the SYSTEM SID (S-1-5-18) nor a SYSTEM name; the notify route needs SYSTEM"
   elif ! printf '%s' "$ol" | grep -qiE '^true$'; then
     verdict L9 FAIL "the TaskScheduler operational log is enabled" \
             "wevtutil gl reports enabled: '${ol:-<nothing>}' - client Windows ships it disabled and 201/203 are never written, so a helper task's death is unreported"
@@ -529,8 +534,17 @@ log "the log sweep over everything this run touched"
 # (measured 2026-10-07: instances_per_boot=2, nine ETW tier-downs, an ERROR during a requested stop - all of
 # it this harness's own doing). L8 ENDS THE BROKER on purpose, and broker_deaths is a P1 threshold in the
 # sweep - so a window containing L8 would report this harness's own injection as the product's worst class.
-(cd "$SWEEP" && timeout 1200 bash mgmt/harness/log-sweep.sh "$SUBJ" "$SINCE" "$OUT/sweep" \
-  --declare-error 'qrexec-wrapper.*(XcStoreRead: IOCTL_XENIFACE_STORE_READ failed: 0x5|libx?envchan_client_init)' 'this routine polls for a session with `qtest run` under a timeout while the guest boots; when that timeout fires the CLIENT goes away and its vchan ring-ref leaves xenstore, so the wrapper already running finds nothing. The lines are this run''s own stimulus. The PRODUCT half - a departed peer reading as four ERRORs of ours - is filed as a P2 and is NOT excused by this') > "$OUT/sweep.out" 2>&1
+# A DECLARATION FOR A STIMULUS THAT WILL NOT BE APPLIED MUST NOT BE MADE. The pattern below is
+# excused because THIS routine polls for a session while a guest boots - which only happens in L1,
+# L2 and L8. MEASURED 2026-10-23 running --cells "L9" alone: the declaration went unmatched and
+# declared_errors_unmatched breached at P2, whose own `why` is "the stimulus the run claims to have
+# applied did not happen" - correct, and about the cell selection rather than the product. So the
+# declaration is now made only when a cell that produces the stimulus is actually selected.
+DECL=()
+if has L1 || has L2 || has L8; then
+  DECL=(--declare-error 'qrexec-wrapper.*(XcStoreRead: IOCTL_XENIFACE_STORE_READ failed: 0x5|libx?envchan_client_init)' 'this routine polls for a session with `qtest run` under a timeout while the guest boots; when that timeout fires the CLIENT goes away and its vchan ring-ref leaves xenstore, so the wrapper already running finds nothing. The lines are this run''s own stimulus. The PRODUCT half - a departed peer reading as four ERRORs of ours - is filed as a P2 and is NOT excused by this')
+fi
+(cd "$SWEEP" && timeout 1200 bash mgmt/harness/log-sweep.sh "$SUBJ" "$SINCE" "$OUT/sweep" "${DECL[@]}") > "$OUT/sweep.out" 2>&1
 sweepline=$(grep -a 'LOGSWEEP-RESULT' "$OUT/sweep.out" | tail -1)
 log "$sweepline"
 case "$sweepline" in
