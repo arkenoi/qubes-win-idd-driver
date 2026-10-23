@@ -1499,6 +1499,59 @@ function Invoke-QwtDeathCatchUp {
                 break               # do NOT advance past a record we could not read
             }
         }
+        # OUR OWN DEATH RECORDS CROSS THE BOOT BOUNDARY. Everything above keeps the 2026-10-16
+        # refusal exactly as it was; this is a narrow second pass for Application 4001-4004 only.
+        #
+        # WHY THEY ARE DIFFERENT. What that decision removed was a GUESS: the pass had to infer,
+        # from its own existence, that a record it could not have witnessed was a shutdown reap
+        # rather than a death, and that inference put "The PV NIC setup task failed" in front of
+        # users for tasks Windows had merely stopped. A 4001-4004 needs no inference - our own agent
+        # or watchdog wrote it, naming the executable, its pid and how long it ran, and saying it
+        # exited WITHOUT BEING ASKED TO. The TaskScheduler 201/203 records, where the guess actually
+        # lived, stay refused, and so does every other Application record.
+        #
+        # MEASURED 2026-10-23 on win11r-sup (4.3.37+agent.354a79af8f01), the case this exists for:
+        # the de-slice broker was ended at 23:29:09.275 and the machine shut down 4.5 s later. The
+        # agent recorded the death (4002, "wgcbroker.exe, PID 7784 ... exited without being asked
+        # to"), the reporter's trigger could not run because Task Scheduler refuses actions during a
+        # shutdown, and at the next boot this pass re-seeded and reported nothing:
+        #     dom0_death_rows = 0 - THE DEATH REACHED DOM0 NEVER.
+        # An earlier injection the same evening happened to have the live reporter win the race, so
+        # delivery depended on a race it usually loses. Owner, on this: "it should had been on
+        # stick. And seen on the next boot" / "The supervisor discipline was here to HANDLE that,
+        # not to break it." Jev: exempt-our-death-ids 0.92.
+        #
+        # THE BOUND IS THE STORED EventRecordID, not a clock (this guest's clock is corrected
+        # mid-boot, so cross-boot timestamps are unsound here) and not the per-boot token. An id is
+        # what the channel itself counts. IT CAN STILL BE WRONG IN ONE WAY: a cleared or rolled-over
+        # channel starts again from a lower id, and then the stored mark is meaningless. So the pass
+        # refuses to claim a backlog when the channel's newest id is BELOW the mark it remembers -
+        # Jev rated the unguarded id only 0.38 as a cross-reboot bound, and this is that guard.
+        if ($seed -and $ch -eq 'Application' -and $marks.ContainsKey($ch)) {
+            $prev = [long]$marks[$ch]
+            if ($newest -ge 0 -and $newest -lt $prev) {
+                Write-QwtDeathLog 'WARN' "catch-up: $ch newest record $newest is BELOW the remembered mark $prev - the channel was cleared or rolled over, so no backlog is claimed"
+            } elseif ($prev -ge 0) {
+                try {
+                    $ours = @(Get-WinEvent -LogName $ch -ErrorAction Stop -FilterXPath (
+                        "*[System[EventRecordID>$prev and (EventID=4001 or EventID=4002 or EventID=4003 or EventID=4004)]]"))
+                } catch { $ours = @() }
+                foreach ($e in ($ours | Sort-Object RecordId)) {
+                    $rid = [long]$e.RecordId
+                    if (Test-QwtDeathAlreadyNotified -Channel $ch -RecordId $rid -Marks $marks) { continue }
+                    $r.scanned++
+                    try {
+                        $verdict = Invoke-QwtDeathReport -XmlText $e.ToXml()
+                        if ($verdict -notin @('not-ours', 'ignored', 'not-a-death')) {
+                            Write-QwtDeathLog 'INFO' "catch-up: $ch record $rid is OUR death record from before this boot (its trigger could not run - a shutdown refuses them) - reported now ($verdict)"
+                            $r.reported++
+                        }
+                    } catch {
+                        Write-QwtDeathLog 'WARN' "catch-up: $ch record $rid (ours, pre-boot) could not be read ($($_.Exception.Message))"
+                    }
+                }
+            }
+        }
         if ($newest -ge 0) { $next[$ch] = $newest }
         $r.channels[$ch] = @{ from = $from; to = $newest }
     }

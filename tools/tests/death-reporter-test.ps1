@@ -793,6 +793,59 @@ $cu2 = Invoke-QwtDeathCatchUp
 Check 'catch-up: a watermark from THIS boot is read - the pass is not inert' ($cu2.scanned -eq 2) "scanned=$($cu2.scanned)"
 Remove-Item -LiteralPath $wmp2 -Force -ErrorAction SilentlyContinue
 
+# ---- OUR OWN DEATH RECORDS CROSS THE BOOT BOUNDARY ---------------------------------------------
+# THE CASE THIS EXISTS FOR, measured 2026-10-23 on win11r-sup (4.3.37+agent.354a79af8f01): the
+# de-slice broker was ended at 23:29:09.275 and the machine shut down 4.5 s later. The agent wrote
+# the 4002 ("wgcbroker.exe, PID 7784 ... exited without being asked to - after 0:01:10"), Task
+# Scheduler refused the reporter's trigger because the system was going down, and at the next boot
+# the pass re-seeded and reported nothing: dom0_death_rows = 0, the death reached dom0 NEVER. An
+# earlier injection the same evening had the live reporter win that race, so delivery depended on a
+# race it usually loses. Owner: "it should had been on stick. And seen on the next boot."
+# The refusal still stands for every OTHER channel and record - the legs above are that control.
+Reset-World
+$CHA = 'Application'
+$script:cuApp = @(
+    [pscustomobject]@{ RecordId = 601; Xml = (New-Super 4002 'wgcbroker.exe' '7784' 'unknown' '70985' $T0) }
+) | ForEach-Object {
+    $o = $_
+    $o | Add-Member -MemberType ScriptMethod -Name ToXml -Value { return $this.Xml } -PassThru
+}
+function Get-WinEvent { param([hashtable]$FilterHashtable, [string]$LogName, [string]$FilterXPath, [int]$MaxEvents, $ErrorAction)
+    if ($LogName -ne $CHA) {
+        throw (New-Object System.Management.Automation.ErrorRecord((New-Object Exception 'No events were found'), 'NoMatchingEventsFound', 'ObjectNotFound', $null))
+    }
+    if ($MaxEvents -eq 1) { return @($script:cuApp[-1]) }               # the "record the end only" read
+    if ($FilterXPath -and $FilterXPath -match 'EventID=4002') { return $script:cuApp }
+    throw (New-Object System.Management.Automation.ErrorRecord((New-Object Exception 'No events were found'), 'NoMatchingEventsFound', 'ObjectNotFound', $null))
+}
+Remove-Item -LiteralPath $wmp2 -Force -ErrorAction SilentlyContinue
+$script:QwtNotifyBootStamp = 4242; $script:QwtNotifyBootCached = $null
+[void](Write-QwtDeathWatermark -Marks @{ $CHA = 600 })                 # the previous boot's own mark
+$script:QwtNotifyBootStamp = 7777; $script:QwtNotifyBootCached = $null # and then the guest rebooted
+$cu3 = Invoke-QwtDeathCatchUp
+Check 'catch-up: OUR 4002 from before this boot IS reported - the pre-shutdown death is not lost' `
+      ($cu3.reported -ge 1) "reported=$($cu3.reported)"
+Check 'catch-up: and it says it was ours and why its trigger could not run' `
+      ((Get-DeathLog) -match 'is OUR death record from before this boot')
+Check 'catch-up: the user is actually told' ($script:launched.Count -ge 1) "sent=$($script:launched.Count)"
+
+# THE ROLL GUARD. An EventRecordID is only a sound cross-boot bound while the channel keeps
+# counting: a cleared or rolled-over Application log starts again from a lower id and the remembered
+# mark then means nothing. Jev rated the unguarded id 0.38 as a cross-reboot bound, so a newest id
+# BELOW the mark must claim no backlog at all.
+Reset-World
+Remove-Item -LiteralPath $wmp2 -Force -ErrorAction SilentlyContinue
+$script:QwtNotifyBootStamp = 4242; $script:QwtNotifyBootCached = $null
+[void](Write-QwtDeathWatermark -Marks @{ $CHA = 9999 })                 # a mark ABOVE the newest record
+$script:QwtNotifyBootStamp = 7777; $script:QwtNotifyBootCached = $null
+$cu4 = Invoke-QwtDeathCatchUp
+Check 'catch-up roll guard: a channel whose newest id is BELOW the mark claims no backlog' `
+      ($cu4.reported -eq 0) "reported=$($cu4.reported)"
+Check 'catch-up roll guard: and it says the channel was cleared or rolled over' `
+      ((Get-DeathLog) -match 'was cleared or rolled over')
+Check 'catch-up roll guard: nothing was sent to the user' ($script:launched.Count -eq 0) "sent=$($script:launched.Count)"
+Remove-Item -LiteralPath $wmp2 -Force -ErrorAction SilentlyContinue
+
 Microsoft.PowerShell.Utility\Write-Host "$($script:run) checks, $($script:fail) failed"
 Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
 if ($script:fail -gt 0) { exit 1 }
