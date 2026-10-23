@@ -171,7 +171,9 @@ if [ -x "$PWSH" ]; then
     "$PWSH" -NoProfile -File "$ROOT/tools/ps-parse-check.ps1" "$OUT/$tag.ps1" > "$OUT/$tag.parse" 2>&1
     grep -q '0 with syntax errors' "$OUT/$tag.parse" || { bad "probes: $tag does not parse: $(tail -2 "$OUT/$tag.parse" | tr '\n' ' ' | cut -c1-160)"; bad_ps=1; }
   done
-  [ "$bad_ps" = 0 ] && [ "$n" -ge 7 ] && ok "probes: all $n guest-side probes parse as PowerShell"
+  # FLOOR 7 -> 8 on 2026-10-23: L9 (the install's supervision receipts) added a probe. The floor is the
+  # point - without it a probe that stops being extracted reads as "all N parse" with a smaller N.
+  [ "$bad_ps" = 0 ] && [ "$n" -ge 8 ] && ok "probes: all $n guest-side probes parse as PowerShell"
   [ "$n" -ge 7 ] || bad "probes: only $n probes were found to check (the routine has $(grep -c 'cat > "$OUT/[A-Za-z0-9-]*\.ps1"' "$S")) - extraction missed some"
 else
   echo "skip  probes: no pwsh at $PWSH"

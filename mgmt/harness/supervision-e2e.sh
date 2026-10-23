@@ -9,6 +9,14 @@
 #
 # THE CELLS (each independent; --cells selects):
 #   L1 deploy     the package under test installs and the guest comes back with a session
+#   L9 receipts   THE INSTALL'S SUPERVISION RECEIPTS, read-only, and the two items of
+#                 docs/ADR-supervision.md's "still owed on a guest" list that had NO runner at all
+#                 (audited 2026-10-23): our Application-log event source is registered with a message
+#                 file that exists (ADR 2 - without it every 4001..4004 record renders as
+#                 "description not found"), the ONE reporter QwtDeathReporter exists with an
+#                 <EventTrigger> subscription naming our ids and running as SYSTEM (ADR 3), and
+#                 Microsoft-Windows-TaskScheduler/Operational is ENABLED - client Windows ships it
+#                 disabled and 201/203 are never written otherwise, so the installer turns it on
 #   L2 lifecycle  N shutdown/boot cycles: ONE agent per boot, zero deaths at a shutdown, zero relaunches, no ERROR
 #                 line during a requested stop, every vchan announcement withdrawn  (findings/issues.md, 2026-10-07)
 #   L3 broker     a broker SUSPENDED inside its work is NOT reaped while it still makes declared progress, and one
@@ -37,7 +45,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; ROOT="$(cd "$ROOT/.." && pwd)"
 cd "$ROOT" || exit 2
 
-ISO=""; SUBJ="win11r-sup"; GOLDEN="win11r-qwt"; CELLS="L1 L2 L3 L5 L6 L7 L7C L8 L4"; CYCLES=2; CLICK=0
+ISO=""; SUBJ="win11r-sup"; GOLDEN="win11r-qwt"; CELLS="L1 L9 L2 L3 L5 L6 L7 L7C L8 L4"; CYCLES=2; CLICK=0
 HOLD="${HOLD_REPO:-$PWD}"                         # kept for an override; the helpers are in THIS repo now
 SWEEP="${SWEEP_REPO:-$PWD}"                       # the log sweep, likewise - no cross-worktree dependency
 TFEXE="${TFEXE:-}"                                # toastfire.exe for L6 (from the branch's build artifact)
@@ -138,6 +146,66 @@ if has L1; then
 fi
 if [ "$(state)" != Running ]; then qvm-start "$SUBJ" >/dev/null 2>&1; fi
 w=$(wait_session 300); [ "$w" = up ] || { verdict L0 INVALID "a session before the cells" "wait_session=$w"; log "no session ($w) - nothing below can run"; CELLS=""; }
+
+# ---- L9 the install's supervision receipts (ADR-supervision 1 and 5: no runner before 2026-10-23) ----------------
+if has L9; then
+  log "L9: supervision receipts - our event source, the ONE reporter's subscription, the TaskScheduler operational log"
+  cat > "$OUT/L9-probe.ps1" <<'PS'
+$ErrorActionPreference = 'Continue'
+function L($k,$v){ "L9|$k|$v" }
+# ADR 2: our event source. The installer registers it (Register-QwtEventSource); the message file is
+# the .NET EventLogMessages.dll, present on every Win10/11, because every id in it renders %1.
+$src = 'HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Application\Qubes Windows Tools'
+L 'source_key' ((Test-Path $src) -as [string])
+if (Test-Path $src) {
+  $p = Get-ItemProperty $src -EA SilentlyContinue
+  $mf = [string]$p.EventMessageFile
+  L 'source_msgfile' $mf
+  L 'source_msgfile_exists' ((Test-Path ([Environment]::ExpandEnvironmentVariables($mf))) -as [string])
+}
+# ADR 3: ONE reporter, event-triggered, SYSTEM, subscribed to our death ids.
+$xml = (& schtasks.exe /query /tn QwtDeathReporter /xml 2>&1 | Out-String)
+L 'task_present' (([bool]($xml -match '<Task')) -as [string])
+L 'task_has_eventtrigger' (([bool]($xml -match '<EventTrigger')) -as [string])
+L 'task_has_subscription' (([bool]($xml -match 'Subscription')) -as [string])
+L 'task_runs_as' ([regex]::Match($xml, '<UserId>([^<]*)</UserId>').Groups[1].Value)
+L 'task_names_4001' (([bool]($xml -match '4001')) -as [string])
+# ADR 3, install step: the TaskScheduler operational log must be ENABLED or 201/203 never appear.
+$gl = (& wevtutil.exe gl Microsoft-Windows-TaskScheduler/Operational 2>&1 | Out-String)
+L 'tasksched_oplog' ([regex]::Match($gl, 'enabled:\s*(\w+)').Groups[1].Value)
+PS
+  guest_ps "$OUT/L9-probe.ps1" > "$OUT/L9.out" 2>&1
+  g9(){ grep -a "^L9|$1|" "$OUT/L9.out" | tail -1 | cut -d'|' -f3-; }
+  sk=$(g9 source_key); mf=$(g9 source_msgfile_exists); tp=$(g9 task_present)
+  et=$(g9 task_has_eventtrigger); ua=$(g9 task_runs_as); n1=$(g9 task_names_4001); ol=$(g9 tasksched_oplog)
+  claim="the install's supervision receipts: event source, the ONE reporter's subscription, the TaskScheduler operational log"
+  # MISSING DATA FAILS (this harness's rule): no reading at all is INVALID, never a pass.
+  if [ -z "$sk" ] && [ -z "$tp" ] && [ -z "$ol" ]; then
+    verdict L9 INVALID "$claim" "the probe produced no reading: $(tail -2 "$OUT/L9.out" | tr '\n' ' ' | cut -c1-180)"
+  elif [ "$sk" != True ]; then
+    verdict L9 FAIL "our event source is registered" \
+            "the Application-log source key is absent - every 4001..4004 death record would render as 'description not found'"
+  elif [ "$mf" != True ]; then
+    verdict L9 FAIL "our event source has a message file that exists" \
+            "EventMessageFile='$(g9 source_msgfile)' does not exist on this guest"
+  elif [ "$tp" != True ]; then
+    verdict L9 FAIL "the ONE reporter is installed" \
+            "schtasks /query /tn QwtDeathReporter returned no task XML - nothing turns a death record into a dom0 notification"
+  elif [ "$et" != True ]; then
+    verdict L9 FAIL "the ONE reporter is EVENT-triggered" \
+            "QwtDeathReporter carries no <EventTrigger>: it exists but nothing fires it on a death record"
+  elif [ "$n1" != True ]; then
+    verdict L9 FAIL "the subscription names our death ids" \
+            "the task XML does not mention 4001 - the subscription cannot be ours (runs_as=$ua)"
+  elif ! printf '%s' "$ua" | grep -qiE 'system'; then
+    verdict L9 FAIL "the ONE reporter runs as SYSTEM" "UserId='$ua' - the notify route needs SYSTEM"
+  elif ! printf '%s' "$ol" | grep -qiE '^true$'; then
+    verdict L9 FAIL "the TaskScheduler operational log is enabled" \
+            "wevtutil gl reports enabled: '${ol:-<nothing>}' - client Windows ships it disabled and 201/203 are never written, so a helper task's death is unreported"
+  else
+    verdict L9 PASS "$claim" "source=$sk msgfile=$mf task=$tp eventtrigger=$et runs_as=$ua names_4001=$n1 oplog=$ol"
+  fi
+fi
 
 # ---- L2 lifecycle: the shutdown claims ----------------------------------------------------------------------------
 if has L2; then

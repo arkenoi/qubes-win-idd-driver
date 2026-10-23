@@ -9,3 +9,4 @@ updater-component
 notify-errors-guest-test
 crop-before-map
 template-update
+supervision-gate

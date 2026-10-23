@@ -439,6 +439,24 @@ if [ "$SKIP_FEATURES" -eq 0 ]; then
         VM=win11de-tup PKG="$SETUP" FAMILY=win11de REPORTER=gweck LOG="$WORK/$t.log" OUT="$WORK/$t.d" \
           ./mgmt/harness/template-update-test.sh >>"$WORK/$t.out" 2>&1
         rc=$? ;;
+      supervision-gate)
+        # THE ADR'S OWN RELEASE GATE, which until 2026-10-23 nothing ran.
+        # docs/ADR-supervision.md has a section headed "Still owed on a guest (the release gate, win11
+        # cell)" listing five items. mgmt/harness/supervision-e2e.sh existed, had a 17/0 offline
+        # selftest, and was in NO list - not here, not in matrix.sh - so none of those five had ever
+        # been measured in a campaign, and three of them had no runner anywhere (audited by content:
+        # that harness mentioned no death-1, DEATH #1, 7023, 7031, 1460, wevtutil, QwtDeathReporter,
+        # QwtEventSource, WaitForQdb or 4001). L9 was added for items 1 and 5.
+        # ONLY THE COVERING CELLS RUN HERE: L1 deploy, L9 the install's supervision receipts (items 1
+        # and 5), L2 the clean boot/shutdown negative control (item 4), L8 a death during a shutdown
+        # reported EXACTLY once (item 2). Not the whole 10-cell routine - L3/L6/L7/L7C answer other
+        # questions, and L4 restarts the agent on purpose, which must never run inside a release
+        # campaign (it takes the toast bridge down with it).
+        # STILL NOT COVERED, and recorded in the ADR rather than implied: item 3 (a forced WaitForQdb
+        # timeout and the SCM restart) and item 2's forced-crash-while-up death-1/death-2 numbering.
+        ./mgmt/harness/supervision-e2e.sh --iso "$ISO" --subject "$F11-sup" --golden "$F11-qwt" \
+          --cells "L1 L9 L2 L8" >>"$WORK/$t.out" 2>&1
+        rc=$? ;;
       *)
         # A listed test with no arm would otherwise inherit rc from the PREVIOUS test - a stale PASS (tools/check-cell-coverage.sh
         # also refuses such a list at commit time).
