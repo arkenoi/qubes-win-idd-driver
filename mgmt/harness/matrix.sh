@@ -83,6 +83,10 @@ LOGVOL_VM=""; LOGVOL_IMG=""
 # `if true`) while the bind is gated on LOGVOL_BIND, so LOGVOL_IMG cannot answer "does this guest's
 # registry name the stick". The restore is gated on this, not on the image.
 LOGVOL_BOUND=0
+# Set when a cell binds and CLEARED by the restore at the foot of that cell's loop body. Declared
+# here beside LOGVOL_BOUND so it can never be read unbound, and reset by the bind itself so a value
+# can never carry from one cell into the next (Jev flagged that leak at 0.27).
+_LV_RESTORE_PENDING=0
 # Bind QWT's logs to the volume once a SESSION exists. The binder runs INSIDE the guest via
 # `qtest pushrun`, which needs a logged-on session, so it cannot be done when the volume is attached
 # (that happens before the guest is even created). Without this the volume is attached and stays
@@ -118,7 +122,7 @@ logvol_bind_now(){ # $1=vm $2=label
   # LATCHED BEFORE THE CALL, not after it. A bind can write LogDir and then return no 'ok' receipt,
   # and that exit (below) leaves the registry naming the stick. Latching on success would skip the
   # restore on exactly the path that needs it.
-  LOGVOL_BOUND=1
+  LOGVOL_BOUND=1; _LV_RESTORE_PENDING=0
   if logvol_bind_guest "$1" "$1" >>"$M/$2-logvol-bind.out" 2>&1; then
     say "  $2: QWT logs bound to the log volume"
     # AND PROVE IT, because a bind that returned ok is not evidence that evidence will arrive.
@@ -2927,17 +2931,20 @@ for c in $CELLS; do
     else
       say "  $c: [WARN] could not pull the log volume $LOGVOL_IMG: $(tail -1 "$M/$c-logvol-pull.out" 2>/dev/null | cut -c1-140)"
     fi
-    # STICKSCOPE-A
-    # AND HAND THE REGISTRY BACK. This is the join point of every exit of every install cell -
-    # matrix.sh is `set -uo pipefail` with NO -e, so a failing step inside a cell is a `return` out
-    # of the cell function and lands here, success and failure alike. It runs AFTER the proof and
-    # AFTER the pull: both read the stick, and a restore before them manufactures an abort.
-    # The park-time clear in park_installed STAYS - it is wider (every subkey) and it removes the
-    # value rather than writing one, which is what an AppVM must inherit. Restore returns the live
-    # subject; clear sanitises what the park carries.
-    logvol_restore_now "$c" || true
-    # STICKSCOPE-B
-    LOGVOL_IMG=""; LOGVOL_VM=""; LOGVOL_BOUND=0
+    # THE RESTORE IS DEFERRED TO THE END OF THIS LOOP BODY, because the guest-log sweep below is a
+    # THIRD READER OF THE STICK and it reads the stick through the REGISTRY. mgmt/harness/log-sweep.sh
+    # runs mgmt/harness/log-sweep-collect.ps1 IN THE GUEST, and its Get-LswLogDir resolves
+    # HKLM\...\Qubes Tools LogDir at COLLECTION TIME - so a restore before it sends the sweep to the
+    # product default while the product has been logging to the volume all cell.
+    # MEASURED on an instrumented re-run of win11-upgrade: restore at 05:17:43, collector at 05:18:01
+    # reporting `LSW LOGDIR pathb64=UTpcUXViZXMgTG9ncw==` (Q:\Qubes Logs), FAIL at 05:18:18. The
+    # candidate's own log was already in the 05:17:36 volume pull - 31163 bytes, first line
+    # `LogInit: QWTBIRTH module=gui-agent ver=4.3.37.1062` - and was never graded. Both upgrade cells
+    # of run 39880114972 failed error_lines_unattributable this way, with the product blameless.
+    # So the rule this site already states - the restore comes after every reader of the stick - now
+    # covers the sweep too. ANYTHING ADDED LATER THAT READS THE GUEST'S LOGS GOES BEFORE THE RESTORE
+    # AT THE FOOT OF THIS LOOP, not here.
+    _LV_RESTORE_PENDING=1
   fi
 
   # PRESERVE THE GUEST'S OWN LOGS FOR EVERY CELL, not just the two that bind a volume.
@@ -3041,6 +3048,25 @@ for c in $CELLS; do
   else
     say "  $c: [WARN] no guest left to collect from; the volume pull left $(find "$M/logvol-$c" -type f 2>/dev/null | wc -l) file(s) for this cell"
   fi
+
+  # STICKSCOPE-A
+  # AND HAND THE REGISTRY BACK, AS THE LAST THING THIS CELL DOES. This is the join point of every
+  # exit of every install cell - matrix.sh is `set -uo pipefail` with NO -e, so a failing step inside
+  # a cell is a `return` out of the cell function and lands in this loop body, success and failure
+  # alike, and runs straight through to here: the stretch above holds no continue, break, exit or
+  # return. It runs AFTER the proof, AFTER the pull and AFTER THE GUEST-LOG SWEEP - all three read
+  # the stick, and a restore before any of them manufactures an abort or a blind sweep.
+  # The park-time clear in park_installed STAYS - it is wider (every subkey) and it removes the
+  # value rather than writing one, which is what an AppVM must inherit. Restore returns the live
+  # subject; clear sanitises what the park carries.
+  # IT MUST NOT BE SKIPPED: a guest left carrying LogDir=Z:\qwt-logs\<cell> into a boot where that
+  # volume is not mounted makes log.c fail CreateDirectory, call LogStart(NULL) and log to stderr
+  # only - the blindness already recorded as LOGVOLBINDLATE. Hence a plain flag and no branch.
+  if [ "${_LV_RESTORE_PENDING:-0}" = 1 ]; then
+    logvol_restore_now "$c" || true
+    LOGVOL_IMG=""; LOGVOL_VM=""; LOGVOL_BOUND=0; _LV_RESTORE_PENDING=0
+  fi
+  # STICKSCOPE-B
 done
 
 # THE COLD CALLER PATH MUST HAVE BEEN MEASURED, AND ZERO MEASUREMENTS IS NOT A PASS.

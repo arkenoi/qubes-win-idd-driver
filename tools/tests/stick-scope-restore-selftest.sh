@@ -51,9 +51,40 @@ done
 # install cell continues here, so this is where the restore has to be and the order it runs in is
 # the thing under test (proof, then pull, then restore).
 JOIN=$(sed -n '/# PULL AFTER EVERY CELL/,/^  fi$/p' "$MX")
+# THE RESTORE MOVED TO THE FOOT OF THE CELL LOOP, so the join the simulation runs is the pull block
+# PLUS that foot. It had to move: mgmt/harness/log-sweep.sh runs its collector IN THE GUEST and
+# Get-LswLogDir resolves the registry LogDir at COLLECTION TIME, so a restore before the sweep sent
+# the sweep to the product default while the product had logged to the volume all cell - measured on
+# win11-upgrade, restore 05:17:43, collector 05:18:01 reading Q:\Qubes Logs, FAIL 05:18:18, with the
+# candidate's own log sitting ungraded in the 05:17:36 volume pull. Concatenating the two regions
+# keeps this simulation faithful to the real order (pull, then restore) without needing to drive the
+# sweep, which this suite cannot stub.
+# The LAST marked region is the restore's; the first is the appvm class decision.
+RESTORE_FOOT=$(awk '/# STICKSCOPE-A/{b=""} /# STICKSCOPE-A/,/# STICKSCOPE-B/{b=b $0 "\n"} /# STICKSCOPE-B/{last=b} END{printf "%s", last}' "$MX")
+printf '%s\n' "$RESTORE_FOOT" | grep -q 'logvol_restore_now' \
+  && ok_ "the last marked region is the restore's new home at the loop foot" \
+  || no_ "no restore in the last marked region" "the legs below would be about the harness"
+JOIN="$JOIN
+$RESTORE_FOOT"
 printf '%s\n' "$JOIN" | grep -q 'logvol_restore_now' \
   && ok_ "the extracted join point carries the restore call" \
   || no_ "the join point has no restore" "the legs below would be about the harness"
+
+# AND THE SWEEP MUST COME BEFORE IT IN THE SHIPPED FILE. This is the defect itself, pinned
+# structurally rather than by simulation: the guest-log sweep is the third reader of the stick and
+# the restore has to follow it. Line numbers off the shipped matrix, comments excluded so the prose
+# explaining this cannot satisfy it.
+# THE LAST marked region is the join's restore; an EARLIER logvol_restore_now in the file is the
+# EXIT trap's, which is a different call site with a different job (it fires when a bind-in-force
+# exit never reached the join at all) and must not be what this leg measures. `head -1` picked the
+# trap and the leg failed on correct code - so anchor on the marked region instead.
+_sw=$(grep -nE '^[[:space:]]*grade_cell_logsweep "' "$MX" | head -1 | cut -d: -f1)
+_rs=$(grep -nE '^[[:space:]]*# STICKSCOPE-A$' "$MX" | tail -1 | cut -d: -f1)
+if [ -n "$_sw" ] && [ -n "$_rs" ] && [ "$_sw" -lt "$_rs" ]; then
+  ok_ "the guest-log sweep (line $_sw) runs BEFORE the restore (line $_rs) - the sweep reads the stick through the registry"
+else
+  no_ "the restore must follow the guest-log sweep" "sweep at '${_sw:-?}', restore at '${_rs:-?}' - a restore first sends the collector to the product default"
+fi
 printf '%s\n' "$SCOPE_SITE" | grep -q 'logvol_stick_scope appvm' \
   && ok_ "the appvm cell's stick block is gated on the class decision" \
   || no_ "the appvm gate" "no logvol_stick_scope at the marked call site"
