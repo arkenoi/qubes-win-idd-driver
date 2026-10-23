@@ -2725,6 +2725,16 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
         # REPLACED build had an instance end unrecorded, which is worth seeing (Jev named "the
         # predecessor's death matters" as a risk of scoping, 0.36) and is not the candidate's to answer
         # for. NOT gated, so T60 skips it: it has no `max` to misreport.
+        # AND THAT IS A STATED GAP, not an oversight. Jev named it the worst remaining problem at 0.54:
+        # with no threshold, a REGRESSION in how the installer stops the old agent would be invisible
+        # here. It is left ungated deliberately - it legitimately reads 1 on every upgrade cell today, so
+        # max 0 would fail them all, and a global max 1 would let a clean cell regress 0 -> 1 unseen. The
+        # rise machinery is per-SIGNATURE ceilings (max_per_boot), not per-metric, so it cannot cover
+        # this either. What the predecessor's unrecorded end means for the product - whether our agent
+        # should log an exit when the service is stopped under it - stays with the owner in
+        # AGENTENDSUNRECORDEDONINPLACEUPGRADE rather than being answered by a number invented here. The
+        # death paths themselves are still gated: agent_unrequested_deaths, agent_deaths_at_shutdown and
+        # service_failures all carry max 0.
         m["agent_ends_unrecorded_prior_build"] = len([i for i in insts if _inst_prior(i) and i["end_kind"] == "unknown" and (now - i["end"]).total_seconds() > 120 and not i["exit_logged"]])
     else:
         m["agent_ends_unrecorded"] = None   # not evaluable without the capture time (corpus mode)
