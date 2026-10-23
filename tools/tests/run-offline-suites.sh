@@ -189,7 +189,14 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # it compiles and runs the exit chain, which is what the brace defect needed - and
 # wrapper-exit-reason was already written but excluded for needing submodule git history, which is
 # how its red went unread for days.
-FLOOR=${OFFLINE_SUITES_FLOOR:-98}
+# 98 -> 99 on 2026-10-23: ttfw-ab-selftest.sh ADDED with the harness it checks. ttfw-ab.sh produces
+# the headline number for a user-visible latency (time to first window), so it is an instrument, and
+# the shapes whose absence would make its number MEANINGLESS rather than slightly wrong are the ones
+# asserted: the running binary's hash verified before any timing, the tag asserted in preflight and
+# the capture service's exit status read on every poll (an empty per-window tar has three causes, two
+# of which look exactly like "no window yet"), interleaving with an alternating start side, a smoke
+# sweep over a single-build window gating the exit code, and IMPROVED claimed only on disjoint ranges.
+FLOOR=${OFFLINE_SUITES_FLOOR:-99}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"

@@ -151,3 +151,4 @@ qrexec-gap-witness-selftest.sh
 campaign-full-selftest.sh
 wedge-gates-selftest.sh
 deathevent-selftest.sh
+ttfw-ab-selftest.sh
