@@ -367,3 +367,23 @@ return silently:
 
 Jev on the final state: `receipt_proves_execution` 0.96, `serves_the_intended_port` 0.95,
 `dead_block_was_the_cause` 0.79 (0.39 before the A/B existed).
+
+## RETIRED 2026-10-23 - the shipped-log-level measurement was taken
+
+- CLOSED 2026-10-23: **the birth line IS present at the shipped log level.** The measurement this
+  entry demanded was taken on acceptance run 39880114972. `patches/windows-utils-single-birth-line.patch`
+  emits one `LogInfo` line per process start and is wired into `.github/workflows/build.yml` and
+  `qwt-full.yml`, so the LogDebug demotion in `loginit-banner-debug.patch` no longer costs the
+  declaration. MEASURED in that run's captures, at level `I` with the product shipping LogLevel 3:
+      [20261023.095817.602-7108:7112-I] LogInit: QWTBIRTH module=gui-agent ver=4.3.37.1062 pid=7108 session=1 uptime=97.765
+  `tools/sweep-gate.sh` counted `birth_lines=896` across 618 sources (it was 207 before the patch),
+  from gui-agent, gui-watchdog, qrexec-agent, qubesdb-daemon, file-receiver, get-image-rgba and
+  qrexec-wrapper. log-sweep.py's clock-free boot anchor therefore has its input: boot epochs in that
+  campaign were derived from each module's own `uptime=` and agreed with the cell log to the second
+  (win10-clean boot 3 derived 10:40:51 against the cell's `07:40:51` UTC + the guest's UTC+3).
+  The entry also recorded that a single-INFO-birth-line patch had been "written and WITHDRAWN" on
+  Jev 0.15/0.06/0.47 - that withdrawal was reversed when the campaign-wide attribution blindness was
+  measured directly (four CLEAN cells reporting boots=0 agent_instances=0 over gui-agent logs holding
+  148 lines), which is the evidence those Jev readings did not have.
+  THE ORIGINAL ENTRY, verbatim:
+  - P3 [gate, sweep; MEASUREMENT OWED] [verified 2026-10-21] **WHETHER A MODULE DECLARES ITSELF AT THE SHIPPED LOG LEVEL IS UNMEASURED, AND A PRODUCT PATCH WAS WRITTEN ON THE ASSUMPTION THAT IT DOES NOT.** `patches/windows-utils-loginit-banner-debug.patch` moves the four birth lines from LogInfo to LogDebug; the product ships LogLevel 3 (log.h:64-67, INFO=3 DEBUG=4) and matrix.sh never raises it. If that demotion reaches the binaries, then at the shipped level nothing declares that a module ran and log-sweep.py loses its clock-free boot anchor (ts - System uptime), on which boot and instance attribution rest. NO CAPTURE SETTLES IT: rel-39537916697 holds four harness-side logs and ZERO guest logs (it never reached a sweep); rel-39476792836 shows the banner at INFO with zero Debug lines across 60 guest logs, but its modules report `Module version: 4.3.35.795` on 103 lines and `4.2.2.0` on 6 - builds older than the ea61ba28 package under test, which is the `_is_prior_build` case. A single-INFO-birth-line patch was written and WITHDRAWN on this: Jev product_patch_was_needed_for_the_measured_defects 0.15, patch_premise_is_established 0.06, keep_it_anyway 0.47. THE MEASUREMENT: one guest running a package built after ea61ba28, then `grep -oE 'LogInit: (Log started|System uptime)' | grep -oE '\-[IWEDV]\]'` over its own logs. Until it is taken, do not patch the shared logging library for this.

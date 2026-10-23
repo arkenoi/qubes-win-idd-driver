@@ -279,10 +279,33 @@ shape "main.c: the lock report is QgaLockVerdict's LOCKED arm only, fed shell-se
 main_shell_latch() {
     awk '/^static HWND ShellWindowNow\(void\)/{f=1} f&&/const HWND shell = GetShellWindow\(\);/{a=NR} f&&/InterlockedExchange\(&g_ShellSeen, 1\)/{b=NR} f&&/^}/{exit} END{exit !(a && b && a<b)}' "$1" &&
     [ "$(grep -v '^[[:space:]]*//' "$1" | grep -c 'GetShellWindow()')" -eq 1 ] &&
-    grep -q 'if (!ShellWindowNow() && !g_WgcLaunched)' "$1" && grep -q 'sid != 0xFFFFFFFF && ShellWindowNow())' "$1" &&
+    grep -q 'const BOOL shellUp = ShellWindowNow() != NULL;' "$1" && grep -q 'sid != 0xFFFFFFFF && ShellWindowNow())' "$1" &&
     grep -q 'if (!ShellWindowNow()) return FALSE;' "$1" && [ "$(grep -c '|| !ShellWindowNow()) return;' "$1")" -eq 2 ] &&
     grep -q 'data->Handle == ShellWindowNow())' "$1" && grep -q '!ShellWindowNow() || g_OnSecureDesktop ||' "$1"; }
 shape "main.c: the shell-seen latch is set only through ShellWindowNow (the one GetShellWindow() call in code), which every phase gate asks" main_shell_latch "$MAIN" 'const HWND shell = GetShellWindow();'
+
+# THE DE-SLICE DOWN-CLOCK IS HELD UNTIL THE LAUNCH IS ISSUED, so the report cannot fire in flight.
+# DEFECT, MEASURED 2026-10-23 on two subjects and CLIENT-VISIBLE both times: the hold required BOTH
+# conditions (`!ShellWindowNow() && !g_WgcLaunched`), so a guest whose shell appeared early armed the
+# clock with `now` at the first poll - 064605.351 - while the launch did not go out until 064633.799.
+# The deadline expired at 064635.351 and `WGCBROKER ready (pid 8632 validated)` landed 49 ms later.
+# "Has not been running for 30 s" can only mean 30 s since we asked it to run. The arm branch already
+# anchored on g_WgcLastLaunch, but only once the launch HAD happened, and nothing re-anchored it.
+# WIDENING A HOLD CAN CREATE A SILENCE, so the leg also requires the hold to SAY why it is holding:
+# a shell up longer than the report's own deadline with no launch issued is the launch guard's
+# anomaly, said once at W, not a broker reported as down.
+main_deslice_launch_hold() {
+    grep -q 'if (!g_WgcLaunched)' "$1" &&
+    ! grep -q 'if (!ShellWindowNow() && !g_WgcLaunched)' "$1" &&
+    grep -q 'const ULONGLONG anchor = g_WgcLastLaunch ? g_WgcLastLaunch : now;' "$1" &&
+    grep -q 'LogWarning("QGABROKERLAUNCHNOTISSUED shell up %I64u s and the de-slice broker launch has not been "' "$1" &&
+    grep -q 'g_ShellSeenTick = GetTickCount64();' "$1" &&
+    grep -q 'const BOOL pendingTooLong = shellUp && g_ShellSeenTick && (now - g_ShellSeenTick) >= DESLICE_LAUNCH_PENDING_MS;' "$1" &&
+    grep -q '#define DESLICE_LAUNCH_PENDING_MS 90000' "$1" &&
+    grep -q 'g_BrokerNextWarn = g_ShellSeenTick + DESLICE_LAUNCH_PENDING_MS;' "$1" &&
+    grep -q 'g_BrokerDownSince = g_ShellSeenTick;' "$1" &&
+    awk '/if \(!g_WgcLaunched\)$/{h=NR} /const ULONGLONG anchor = g_WgcLastLaunch \? g_WgcLastLaunch : now;/{a=NR} END{exit !(h && a && h<a)}' "$1"; }
+shape "main.c: the de-slice down-clock is HELD only for the grace window (the report cannot fire in flight), then reported anchored at the SHELL after a PENDING window clear of the measured launch latency so the hold is neither a silence nor a second in-flight report, and anchored at the LAUNCH once it is issued" main_deslice_launch_hold "$MAIN" 'const ULONGLONG anchor = g_WgcLastLaunch ? g_WgcLastLaunch : now;'
 
 # THE FOURTH ARM of the 30 s classifier (docs/ADR-uac.md 5): LogonUI up before this agent saw a shell is named as that,
 # never as a lock, and the WARNING carries shell-seen beside console-user.
