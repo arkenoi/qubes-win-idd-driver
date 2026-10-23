@@ -65,6 +65,17 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # verdict over an empty log file AND over a capture that failed to decode - it had no predicate
 # asserting it had been handed anything gradeable. The suite drives all three refusals and a
 # seen-to-fail leg that deletes the predicate and requires the empty capture to read CLEAN again.
+# 97 -> 98 on 2026-10-23: deathevent-selftest.sh ADDED, and being unlisted is exactly why it rotted.
+# It was in NEITHER list. Run by hand today it reported `clean: rc=1 ok=56 fail=4`: four text legs in
+# agent/gui-agent/deathevent_test.c still asserted the wording from BEFORE agent fc94490 ("Say it in
+# plain English, once"), which reworded the composer - deathevent.h prints "- after %s" where the legs
+# expected "- after running %s", plus two reworded phrases and the teardown sentence. So the ONLY
+# check of the death notification's TEXT - which ADR-supervision 3 requires to carry what died, its
+# code and how long it ran - was red and unread. The legs are now aimed at the shipped wording, the
+# suite is 60/0, and all four defect knobs (WARNING, SHAREDID, NOCODE, HANGASEXIT) still fail as
+# required. THE COMPILER-POLICY EXCLUSION DOES NOT APPLY TO IT: the offline job is ubuntu-latest, so
+# gcc is present; it checks out with `submodules: true`, so agent/ is there; and it materialises the
+# pinned upstream/ro/qubes-windows-utils that this suite's -fsyntax-only checks read.
 # 76 -> 77 on 2026-10-21: assert-payload-floor-selftest.sh ADDED. The harness audit measured
 # tools/assert-payload.sh printing `PASS: payload verified - 0 files` over an empty SHA256SUMS.txt:
 # the integrity loop ran zero iterations and all three consumers branch only on the exit code, so
@@ -178,7 +189,7 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # it compiles and runs the exit chain, which is what the brace defect needed - and
 # wrapper-exit-reason was already written but excluded for needing submodule git history, which is
 # how its red went unread for days.
-FLOOR=${OFFLINE_SUITES_FLOOR:-97}
+FLOOR=${OFFLINE_SUITES_FLOOR:-98}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"
