@@ -2519,6 +2519,15 @@ def build_structure(files, boots, declared=None):
             "agents": agents, "watchdogs": watchdogs, "context": ctx}
 
 
+# THE RUN'S OWN ERROR DECLARATIONS, parsed in compute_metrics and needed in compare().
+# A line this run DECLARED is classified - that declaration is one of the three classes, with a
+# stated reason and an author - so it must not also be counted as matching no class. Carried in a
+# module global rather than through `metrics`, because `metrics` is serialised into the report and
+# compiled patterns are not JSON. compute_metrics always runs before compare (the analyze path
+# calls them in that order), and a stale value cannot leak between runs: this is a single-shot CLI.
+_RUN_DECL_RE = []
+
+
 def compute_metrics(files, boots, st, since, now=None, build=None):
     """now = the capture time (the collector's clock) - without it the two 'still running?' metrics are not evaluable."""
     m = {}
@@ -2853,6 +2862,7 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
             _bad += 1   # a malformed declaration can match nothing, so it counts as one that never appeared
             continue
         _decl.append(rx)
+        globals()["_RUN_DECL_RE"] = _decl
         if isinstance(d, dict) and d.get("tolerate"):
             _tol.append(rx)
     def _is_declared(line):
@@ -3064,7 +3074,20 @@ def compare(sigs, baseline, metrics):
     # the product saying something is wrong in words nobody has classified, and that is what must be
     # acted on. The de-slice broker-down report is in scope: it is emitted at ERROR in the current
     # build, and the toast that rides it reached the client.
-    _unclassified_ew = [_s for _s in (new + unsettled) if (_s.get("level") or "") in ("E", "W")]
+    # A LINE THIS RUN DECLARED IS CLASSIFIED - tested against the RAW line, not the normalised key.
+    # MEASURED: matrix.sh declares `InitVchan: QGAVCHANFAIL .*request dropped` for every netvm-free
+    # cell, and the first cut of this gate flagged that very line as matching no class, which would
+    # have failed every cell on a line the run had already accounted for with a stated reason. The
+    # test has to be on the raw text because signature keys are normalised (digits to N, hex to H),
+    # so a declaration naming `error 0xe8` can never match the key `error 0xH`. `cur_line` is a real
+    # raw line of that signature from the build under test, which is exactly what a declaration was
+    # written against.
+    def _run_declared(_s):
+        _l = _s.get("cur_line") or _s.get("line")
+        _raw = getattr(_l, "raw", "") or ""
+        return any(_rx.search(_raw) for _rx in globals().get("_RUN_DECL_RE") or [])
+    _unclassified_ew = [_s for _s in (new + unsettled)
+                        if (_s.get("level") or "") in ("E", "W") and not _run_declared(_s)]
     metrics["signatures_unclassified"] = len(_unclassified_ew) if (baseline or {}).get("signatures") else None
     # NAME THEM, or the gate says "4" and nobody knows which four. This file refuses to judge a
     # metric with no evidence arm - "NO EVIDENCE WAS ATTACHED FOR ...: this metric has no arm in
