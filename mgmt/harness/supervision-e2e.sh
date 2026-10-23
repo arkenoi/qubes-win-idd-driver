@@ -46,12 +46,18 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"; ROOT="$(cd "$ROOT/.." && pwd)"
 cd "$ROOT" || exit 2
 
 ISO=""; SUBJ="win11r-sup"; GOLDEN="win11r-qwt"; CELLS="L1 L9 L2 L3 L5 L6 L7 L7C L8 L4"; CYCLES=2; CLICK=0
+BUILD="${BUILD:-}"                                # package_version of the build under test, for the sweep's attribution
 HOLD="${HOLD_REPO:-$PWD}"                         # kept for an override; the helpers are in THIS repo now
 SWEEP="${SWEEP_REPO:-$PWD}"                       # the log sweep, likewise - no cross-worktree dependency
 TFEXE="${TFEXE:-}"                                # toastfire.exe for L6 (from the branch's build artifact)
 while [ $# -gt 0 ]; do
   case "$1" in
     --iso) ISO="${2:-}"; shift 2 ;;
+    # PASS THE BUILD. Without it the analyzer has to guess which build wrote a line, and on a cell
+    # that upgrades a golden - which L1 always does - it guesses wrong in the one direction that
+    # matters, billing the GOLDEN's errors to the candidate. It also leaves candidate_build_absent
+    # unevaluated (None), so a pull holding nothing the candidate wrote cannot be detected.
+    --build) BUILD="${2:-}"; shift 2 ;;
     --subject) SUBJ="${2:-}"; shift 2 ;;
     --golden) GOLDEN="${2:-}"; shift 2 ;;
     --cells) CELLS="${2:-}"; shift 2 ;;
@@ -226,8 +232,9 @@ if has L2; then
   done
   if [ "$ok" = 1 ]; then
     # graded from the guest's own logs by the sweep, over this window only
-    (cd "$SWEEP" && timeout 1200 bash mgmt/harness/log-sweep.sh "$SUBJ" "$SINCE" "$OUT/L2-sweep" \
-  --declare-error 'qrexec-wrapper.*(XcStoreRead: IOCTL_XENIFACE_STORE_READ failed: 0x5|libx?envchan_client_init)' 'this routine polls for a session with `qtest run` under a timeout while the guest boots; when that timeout fires the CLIENT goes away and its vchan ring-ref leaves xenstore, so the wrapper already running finds nothing. The lines are this run''s own stimulus. The PRODUCT half - a departed peer reading as four ERRORs of ours - is filed as a P2 and is NOT excused by this') > "$OUT/L2-sweep.out" 2>&1
+    (cd "$SWEEP" && timeout 1200 bash mgmt/harness/log-sweep.sh "$SUBJ" "$SINCE" "$OUT/L2-sweep" ${BUILD:+--build "$BUILD"} \
+  --tolerate-error 'qrexec-wrapper.*(XcStoreRead: IOCTL_XENIFACE_STORE_READ failed: 0x5|libx?envchan_client_init)' 'this routine polls for a session with `qtest run` under a timeout while the guest boots; when that timeout fires the CLIENT goes away and its vchan ring-ref leaves xenstore, so the wrapper already running finds nothing. The lines are this run''s own stimulus, so they are TOLERATED - whether the poll times out at all depends on how fast this boot was, which is why a CAUSED declaration of it breached declared_errors_unmatched=1 on the first guest run even with the cell gate below. matrix.sh:485 records the same call for the same reason. The PRODUCT half - a departed peer reading as four ERRORs of ours - is filed as a P2 and is NOT excused by this' \
+       --tolerate-error '(SetupNetwork: Failed to get qubes-ip|QioWriteBuffer: WriteFile failed with error 0xe8|send_command_to_daemon: write to daemon failed with error 0xe8|wmain: open agent pipe failed with error 0x2)' 'this subject has an EMPTY netvm (CLAUDE.md: only a guest that TESTS PV networking gets one), so /qubes-ip legitimately does not exist and netsetup''s writes to the daemon pipe fail as a consequence. matrix.sh:497 carries this identical declaration for every cell of the campaign (Jev 1.00) - TWO INSTRUMENTS GRADING ONE PRODUCT MUST CARRY THE SAME DISPOSITIONS, and without it this gate failed on error_lines_undeclared=12 for the installer lines every upgrade writes') > "$OUT/L2-sweep.out" 2>&1
     rep="$OUT/L2-sweep/report.json"
     if [ -f "$rep" ]; then
       read -r inst deaths relaunch stop stale < <(python3 -c "
@@ -542,9 +549,10 @@ log "the log sweep over everything this run touched"
 # declaration is now made only when a cell that produces the stimulus is actually selected.
 DECL=()
 if has L1 || has L2 || has L8; then
-  DECL=(--declare-error 'qrexec-wrapper.*(XcStoreRead: IOCTL_XENIFACE_STORE_READ failed: 0x5|libx?envchan_client_init)' 'this routine polls for a session with `qtest run` under a timeout while the guest boots; when that timeout fires the CLIENT goes away and its vchan ring-ref leaves xenstore, so the wrapper already running finds nothing. The lines are this run''s own stimulus. The PRODUCT half - a departed peer reading as four ERRORs of ours - is filed as a P2 and is NOT excused by this')
+  DECL=(--tolerate-error 'qrexec-wrapper.*(XcStoreRead: IOCTL_XENIFACE_STORE_READ failed: 0x5|libx?envchan_client_init)' 'this routine polls for a session with `qtest run` under a timeout while the guest boots; when that timeout fires the CLIENT goes away and its vchan ring-ref leaves xenstore, so the wrapper already running finds nothing. The lines are this run''s own stimulus, so they are TOLERATED - whether the poll times out at all depends on how fast this boot was, which is why a CAUSED declaration of it breached declared_errors_unmatched=1 on the first guest run even with the cell gate below. matrix.sh:485 records the same call for the same reason. The PRODUCT half - a departed peer reading as four ERRORs of ours - is filed as a P2 and is NOT excused by this' \
+       --tolerate-error '(SetupNetwork: Failed to get qubes-ip|QioWriteBuffer: WriteFile failed with error 0xe8|send_command_to_daemon: write to daemon failed with error 0xe8|wmain: open agent pipe failed with error 0x2)' 'this subject has an EMPTY netvm (CLAUDE.md: only a guest that TESTS PV networking gets one), so /qubes-ip legitimately does not exist and netsetup''s writes to the daemon pipe fail as a consequence. matrix.sh:497 carries this identical declaration for every cell of the campaign (Jev 1.00) - TWO INSTRUMENTS GRADING ONE PRODUCT MUST CARRY THE SAME DISPOSITIONS, and without it this gate failed on error_lines_undeclared=12 for the installer lines every upgrade writes')
 fi
-(cd "$SWEEP" && timeout 1200 bash mgmt/harness/log-sweep.sh "$SUBJ" "$SINCE" "$OUT/sweep" "${DECL[@]}") > "$OUT/sweep.out" 2>&1
+(cd "$SWEEP" && timeout 1200 bash mgmt/harness/log-sweep.sh "$SUBJ" "$SINCE" "$OUT/sweep" ${BUILD:+--build "$BUILD"} "${DECL[@]}") > "$OUT/sweep.out" 2>&1
 sweepline=$(grep -a 'LOGSWEEP-RESULT' "$OUT/sweep.out" | tail -1)
 log "$sweepline"
 case "$sweepline" in
@@ -598,11 +606,28 @@ $p = Get-Process -Id $bpid -EA SilentlyContinue
 if (-not $p) { L 'error' "broker pid $bpid is not running"; L 'END' 'ok'; return }
 L 'broker_pid' $bpid
 L 'broker_name' $p.ProcessName
-# the shutdown goes first, so the reporter's own trigger lands inside Task Scheduler's refusal window
+# THE KILLER IS ARMED DETACHED, AND IT IS ARMED BEFORE THE SHUTDOWN IS REQUESTED.
+# MEASURED on the first run of this cell on a guest (2026-10-23, /home/user/qwt-sup/1023-1646): this
+# block used to request `shutdown /s /t 8` and then `Start-Sleep -Seconds 9` in THIS session before
+# killing the broker - so Windows tore the session down one second BEFORE the kill could run. The
+# arm output ends at `shutdown_requested` with no `killed` and no `END`, the broker was never ended,
+# and the cell correctly reported INVALID: "the stimulus did not reach the broker". A cell that
+# cannot apply its own stimulus measures nothing.
+# So the wait now happens in a process that does NOT belong to this session: a detached cmd that
+# waits out the countdown and then ends the broker BY ITS LITERAL PID. The pid still comes from the
+# agent's own log and never from a name - `taskkill /PID <n>` targets that one process, which is the
+# only sanctioned shape here (a pattern-to-kill is prohibited outright).
+# `ping -n`, not `timeout /t`: timeout refuses to run when stdin is not a real console, which is
+# exactly the case for a detached hidden process, and it would have failed silently.
+$killer = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" `
+            -ArgumentList "/c ping -n 10 127.0.0.1 >nul & taskkill /PID $bpid /F >nul 2>&1" `
+            -WindowStyle Hidden -PassThru -EA SilentlyContinue
+if ($killer) { L 'killer_pid' $killer.Id } else { L 'error' 'could not arm the detached killer' }
+# the shutdown goes second, so the kill lands AFTER the teardown has begun and the reporter's own
+# trigger is inside Task Scheduler's refusal window - which is the condition under test
 & shutdown /s /t 8 /c "supervision-e2e L8: a helper death during a shutdown" | Out-Null
 L 'shutdown_requested' (Get-Date -Format 'HH:mm:ss.fff')
-Start-Sleep -Seconds 9                      # the teardown has begun by now; the task service refuses new actions
-try { $p.Kill(); L 'killed' (Get-Date -Format 'HH:mm:ss.fff') } catch { L 'error' ("could not end the broker: " + $_.Exception.Message) }
+L 'kill_due' (Get-Date).AddSeconds(9).ToString('HH:mm:ss.fff')
 L 'END' 'ok'
 PS
   guest_ps "$OUT/L8-arm.ps1" > "$OUT/L8-arm.out" 2>&1

@@ -454,8 +454,12 @@ if [ "$SKIP_FEATURES" -eq 0 ]; then
         # campaign (it takes the toast bridge down with it).
         # STILL NOT COVERED, and recorded in the ADR rather than implied: item 3 (a forced WaitForQdb
         # timeout and the SCM restart) and item 2's forced-crash-while-up death-1/death-2 numbering.
+        # --build: the sweep inside this gate upgrades a golden in L1, so without the package
+        # version the analyzer bills the GOLDEN's errors to the candidate and leaves
+        # candidate_build_absent unevaluated. matrix.sh has passed it since 2026-10-23; this gate
+        # grades the same product and must carry the same dispositions.
         ./mgmt/harness/supervision-e2e.sh --iso "$ISO" --subject "$F11-sup" --golden "$F11-qwt" \
-          --cells "L1 L9 L2 L8" >>"$WORK/$t.out" 2>&1
+          ${PV:+--build "$PV"} --cells "L1 L9 L2 L8" >>"$WORK/$t.out" 2>&1
         rc=$? ;;
       *)
         # A listed test with no arm would otherwise inherit rc from the PREVIOUS test - a stale PASS (tools/check-cell-coverage.sh

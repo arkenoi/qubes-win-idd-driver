@@ -3869,6 +3869,17 @@
    "max_per_boot": 1,
    "reason": "Jev: expected 0.55 on the corpus",
    "status": "expected"
+  },
+  "qubesdb|W|QpsDisconnectClientInternal: [N] reader thread didn't terminate in time, killing it": {
+   "family": "qubesdb",
+   "level": "W",
+   "max_per_boot": 1,
+   "status": "benign",
+   "jev": {
+    "choice": "normal-operation",
+    "confidence": 0.59
+   },
+   "reason": "the stock qubesdb daemon's CLIENT TEARDOWN path, whose four siblings this baseline already settles (QpsRead: client is disconnected = expected; QpsReaderThread: read failed = benign; pipe_thread_client: QpsRead from client N failed = benign; handle_client_data failed, disconnecting = expected). MEASURED 2026-10-23: the daemon logs `[N] disconnecting, WriterExiting 0, ReaderExiting 1` at INFO and then warns about the read that failed BECAUSE of that disconnect (109 = ERROR_BROKEN_PIPE) - one warning per client teardown, 52 of them across 56 connects in one capture. This line is that same wait giving up and killing the reader thread; it appeared ONCE across 5 boots and an MSI upgrade. qubesdb is in STOCK_FAMILIES and the standing rule is not to chase stock QWT bugs. WHAT IS OURS IS THE VOLUME, not the line: every client site closes in a `finally` (no leak) but we open a fresh connection PER READ - gui-agent pid 800 made NINE in 1.3 s at init, and qrexec-wrapper opens one per qrexec call (58 starts in that capture). That is filed separately as a product finding and is NOT excused by this classification."
   }
  },
  "source_reports": [
