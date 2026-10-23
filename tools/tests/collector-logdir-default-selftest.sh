@@ -100,6 +100,72 @@ else
     || no "functional: an absent default was claimed anyway"
 fi
 
+# ---- THE UNION: one `return` was the blindness ---------------------------------------------------
+# Get-LswLogDir returns the FIRST hit. A module resolves its LogDir ONCE at its own LogInit, and the
+# harness MOVES that value underneath it (bind / clear / restore), so the directory the registry
+# names at collection time can be one no module in the capture ever wrote to. MEASURED on run
+# 39880114972: win11-upgrade graded Q:\Qubes Logs while 27 QWTBIRTH lines sat on the bound volume
+# (SWEEPGRADESTHEDEFAULTDIRNOTTHEBOUNDVOLUME), and win10-clean's unpark boot - which ran with LogDir
+# CLEARED - has no record in the capture at all (PARKBOOTAGENTINVISIBLETOTHESWEEP).
+# SOURCE ASSERTIONS SKIP COMMENTS: this file's own prose names the function, and a check that
+# matched its own explanation would pass over a collector that never calls it.
+CODE=$(command grep -av '^[[:space:]]*#' "$C")
+if printf '%s' "$CODE" | command grep -qa 'foreach ($d in (Get-LswLogDirCandidates))'; then
+  ok "the file set ITERATES the candidate directories (not just the first hit)"
+else
+  no "nothing iterates Get-LswLogDirCandidates - the union is prose only"
+fi
+if printf '%s' "$CODE" | command grep -a -A12 'foreach ($d in (Get-LswLogDirCandidates))' | command grep -qa '$cands.Add($f)'; then
+  ok "files found in a non-primary candidate are ADDED to the collected set"
+else
+  no "the candidate loop does not add to \$cands - it would report and collect nothing"
+fi
+# the primary receipt must not move: the analyzer (log-sweep.py: body.startswith("LOGDIR ")) and
+# three selftests parse it, and a renamed or reordered field blinds every one of them.
+if printf '%s' "$CODE" | command grep -qa 'LOGDIR pathb64=.*exists='; then
+  ok "the primary LSW LOGDIR receipt is still emitted with its original shape"
+else
+  no "the LSW LOGDIR receipt changed shape - every consumer of it is now blind"
+fi
+
+if [ -n "$PW" ]; then
+  uout=$("$PW" -NoProfile -Command '
+    $c = "'"$C"'"
+    $src = Get-Content -Raw $c
+    $m = [regex]::Match($src, "(?s)function Get-LswLogDirCandidates \{.*?\n\}")
+    if (-not $m.Success) { "EXTRACT fail"; exit 0 }
+    Invoke-Expression $m.Value
+    $T = Join-Path ([IO.Path]::GetTempPath()) ("lswu" + [guid]::NewGuid().ToString("N").Substring(0,8))
+    $env:SystemDrive = $T
+    # no Windows registry here, so the registry-derived entries are simply absent: what must still
+    # hold is that the STATIC candidates are all returned, deduplicated, and that it does not stop
+    # at one.
+    $cand = @(Get-LswLogDirCandidates)
+    "COUNT " + $cand.Count
+    if ($cand -contains (Join-Path $T "Qubes Logs")) { "DEFAULT yes" } else { "DEFAULT no" }
+    if ($cand -contains "Q:\Qubes Logs") { "QDRIVE yes" } else { "QDRIVE no" }
+    $dups = ($cand | Group-Object | Where-Object { $_.Count -gt 1 }).Count
+    "DUPS " + $dups
+    Remove-Item -Recurse -Force $T -ErrorAction SilentlyContinue
+  ' 2>&1)
+  printf '%s' "$uout" | command grep -qa '^EXTRACT fail' \
+    && no "Get-LswLogDirCandidates could not be extracted - the collector has no candidate set" \
+    || true
+  n=$(printf '%s' "$uout" | command sed -n 's/^COUNT //p' | head -1)
+  [ "${n:-0}" -ge 3 ] \
+    && ok "functional: the candidate set returns $n directories, not one" \
+    || no "functional: the candidate set returned ${n:-none} - a single return is the defect"
+  printf '%s' "$uout" | command grep -qa '^DEFAULT yes' \
+    && ok "functional: log.c's own default is among the candidates" \
+    || no "functional: the product default is NOT a candidate ($(printf '%s' "$uout" | command grep -a '^DEFAULT'))"
+  printf '%s' "$uout" | command grep -qa '^QDRIVE yes' \
+    && ok "functional: the Q: log directory is among the candidates" \
+    || no "functional: Q:\Qubes Logs is not a candidate"
+  [ "$(printf '%s' "$uout" | command sed -n 's/^DUPS //p' | head -1)" = 0 ] \
+    && ok "functional: the candidate set is deduplicated (one bind can name a dir twice)" \
+    || no "functional: the candidate set holds duplicates - files would be collected twice"
+fi
+
 echo
 echo "RESULT: $PASS passed, $FAIL failed$( [ "$INCONCLUSIVE" -gt 0 ] && printf ', %s INCONCLUSIVE' "$INCONCLUSIVE" )"
 # AN INCONCLUSIVE READ IS NOT A PASS. It exits 2, which the offline runner counts RED - the same

@@ -34,6 +34,7 @@
 # travel base64-encoded (pathb64=).
 #   LSW BEGIN v=1 now=<local yyyy-MM-ddTHH:mm:ss.fff> nowutc=<...Z> tz=<+hh:mm> host=<b64> user=<b64> session=<n> since=<utc> sincelocal=<local>
 #   LSW LOGDIR pathb64=<b64> exists=<0|1>
+#   LSW LOGDIREXTRA pathb64=<b64> exists=<0|1> files=<n>   (one per OTHER candidate LogDir)
 #   LSW FILE id=f<n> pathb64=<b64> family=<hint> bytes=<n> lines=<n> written=<local> created=<local> partial=<0|1> total_lines=<n>
 #   LSW PULL name=f<n> lines=<count> bytes=<utf8 bytes> sha256=<hex> b64lines=<m>
 #   LSW B|<76 base64 chars>  (m lines)
@@ -118,6 +119,56 @@ function Get-LswLogDir {
     return 'C:\Program Files\Qubes Tools\log'
 }
 
+function Get-LswLogDirCandidates {
+    # EVERY DIRECTORY A windows-utils MODULE COULD HAVE RESOLVED - not only the one the registry
+    # names at COLLECTION TIME. Get-LswLogDir returns the FIRST hit, and that single `return` is
+    # the whole blindness: a module resolves its LogDir ONCE, at its own LogInit, and the harness
+    # moves that value underneath it (logvol_bind_guest sets it, logvol_clear_guest removes it,
+    # logvol_restore_now puts it back) - so by the time this collector runs, the registry can name
+    # a directory that no module in the capture ever wrote to, and the ones they DID write to are
+    # invisible. MEASURED twice on run 39880114972:
+    #   * win11-upgrade: the restore reverted LogDir to Q:\Qubes Logs 18 s before collection, the
+    #     collector listed Q: and reported the candidate build wrote nothing, while 27 QWTBIRTH
+    #     lines sat on the bound volume (SWEEPGRADESTHEDEFAULTDIRNOTTHEBOUNDVOLUME, P1).
+    #   * win10-clean boot 3: the unpark boot ran with LogDir CLEARED, so its boot-time modules
+    #     resolved log.c's own default, and the collector - reading the re-asserted Z: - has no
+    #     record of that boot at all (PARKBOOTAGENTINVISIBLETOTHESWEEP).
+    # Owner's standing instruction on this file: "keep logs in single place, sweep them together".
+    # One location is still the real fix; until every writer is there, SWEEP THE UNION.
+    $root = 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools'
+    $raw = New-Object 'System.Collections.Generic.List[string]'
+    $r = Get-ItemProperty $root -ErrorAction SilentlyContinue
+    if ($r) {
+        $raw.Add([string]$r.LogDir)
+        # LogDirPreLogvol is where the modules logged BEFORE a bind - the binder saves it for the
+        # restore, which makes it a first-class witness of a capture's earlier boots.
+        $raw.Add([string]$r.LogDirPreLogvol)
+    }
+    # a bind may set LogDir PER MODULE (and -Clear removes those too), so each module key is a
+    # directory some module resolved.
+    foreach ($k in (Get-ChildItem $root -ErrorAction SilentlyContinue)) {
+        $raw.Add([string](Get-ItemProperty -Path $k.PSPath -Name LogDir -ErrorAction SilentlyContinue).LogDir)
+    }
+    # log.c:236-253 builds "<system drive>\Qubes Logs" and CREATES it (CreateDirectory at :256)
+    # whenever LogInit gets no directory - the branch a cleared LogDir takes.
+    $raw.Add((Join-Path $env:SystemDrive 'Qubes Logs'))
+    $raw.Add('Q:\Qubes Logs')
+    $raw.Add('C:\Program Files\Qubes Tools\log')
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $out = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($p in $raw) {
+        if ([string]::IsNullOrWhiteSpace($p)) { continue }
+        $t = ([string]$p).TrimEnd('\')
+        if ($seen.Add($t)) { $out.Add($t) }
+    }
+    # .ToArray(), NOT `return ,$out`: the comma idiom used elsewhere in this file wraps a List so the
+    # pipeline does NOT enumerate it, which is right for Read-LswLines and wrong here - the caller
+    # does `foreach ($d in (Get-LswLogDirCandidates))`, so a non-enumerating return binds $d to the
+    # List itself and Test-Path is handed an object instead of a path. Caught by the functional leg
+    # in tools/tests/collector-logdir-default-selftest.sh, which read Count=1 for three candidates.
+    return $out.ToArray()
+}
+
 # FileShare.ReadWrite: the writers hold their logs open. detectEncodingFromByteOrderMarks: the msiexec logs are UTF-16.
 function Read-LswLines([string]$path) {
     $out = New-Object 'System.Collections.Generic.List[string]'
@@ -176,14 +227,48 @@ $logDir = Get-LswLogDir
 $dirExists = Test-Path -LiteralPath $logDir
 Write-Output ("${Mark}LOGDIR pathb64=$(Get-LswB64 $logDir) exists=$(if ($dirExists) { 1 } else { 0 })")
 $cands = New-Object 'System.Collections.Generic.List[object]'
+# one file can be reachable under two of the candidate directories at once - a junction bind leaves
+# <LogDir> and the volume path naming the same files - so every add is deduplicated by full path.
+$seenFiles = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
 if ($dirExists) {
     $all = @(Get-ChildItem -LiteralPath $logDir -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -match '^\.(log|txt|json|old)$' })
     $newestWd = @($all | Where-Object { $_.Name -match '^(?i)gui-watchdog-' } | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1)
     $newestAg = @($all | Where-Object { $_.Name -match '^(?i)gui-agent-' } | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1)
     foreach ($f in $all) {
         $always = ($newestWd.Count -gt 0 -and $f.FullName -eq $newestWd[0].FullName) -or ($newestAg.Count -gt 0 -and $f.FullName -eq $newestAg[0].FullName)
-        if ($f.LastWriteTimeUtc -ge $sinceU -or $always) { $cands.Add($f) }
+        if (($f.LastWriteTimeUtc -ge $sinceU -or $always) -and $seenFiles.Add($f.FullName)) { $cands.Add($f) }
     }
+}
+# ---- THE OTHER DIRECTORIES A MODULE COULD HAVE RESOLVED ------------------------------------------
+# The receipt above is UNCHANGED and still names the primary directory, because the analyzer and
+# three selftests parse `LSW LOGDIR`. Each additional directory gets its own LOGDIREXTRA line, a new
+# kind the current analyzer ignores (its dispatch is a startswith chain and "LOGDIREXTRA " does not
+# match "LOGDIR "), so an older analyzer reading a newer capture loses nothing it had.
+# THE --since FILTER IS THE ONLY ONE APPLIED HERE, deliberately: the `$always` exemption above
+# exists so a capture never loses the agent's own current log, and extending it to a directory the
+# product is NOT using would pull a STALE agent log - a predecessor build's, or a previous
+# campaign's - and present it as this run's. That is the attribution hazard QWTBIRTH was added to
+# close, and it is not worth reopening for a directory nothing is writing to.
+# THE RESIDUAL HAZARD, judged and recorded rather than waved off: sweeping more directories can pull
+# logs the product is not currently writing - a predecessor build's, or an earlier campaign's - which
+# the gate would then grade as this run's work. Jev on this diff (receipt
+# scratchpad/jev-union-out.json): stale_attribution_hazard = manageable-but-worth-noting 0.84
+# (material 0.13, negligible 0.03), i.e. real but bounded by what is already here - the --since
+# filter above, per-build attribution from QWTBIRTH, and _inst_prior scoping on every gated
+# per-instance metric. verdict = land 0.83. If a capture ever shows a cell graded on a directory
+# nothing wrote to in its window, this comment is where to start.
+foreach ($d in (Get-LswLogDirCandidates)) {
+    if ($d -ieq ([string]$logDir).TrimEnd('\')) { continue }
+    if (-not (Test-Path -LiteralPath $d)) {
+        Write-Output ("${Mark}LOGDIREXTRA pathb64=$(Get-LswB64 $d) exists=0 files=0")
+        continue
+    }
+    $n = 0
+    foreach ($f in @(Get-ChildItem -LiteralPath $d -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -match '^\.(log|txt|json|old)$' })) {
+        if ($f.LastWriteTimeUtc -lt $sinceU) { continue }
+        if ($seenFiles.Add($f.FullName)) { $cands.Add($f); $n++ }
+    }
+    Write-Output ("${Mark}LOGDIREXTRA pathb64=$(Get-LswB64 $d) exists=1 files=$n")
 }
 # C:\Users\Public\qwt-fi-*.txt: the knob files a fault-injection broker build reads (wgcbroker.cpp FiDeafHwnd) - their presence is
 # in-capture evidence of an injection; the analyzer keeps them as 'marker' files, never as a log.
