@@ -494,6 +494,7 @@ DEFAULT_THRESHOLDS = {
     "unexpected_shutdowns": {"max": 0, "severity": "P1", "why": "System 6008 / Kernel-Power 41: the previous shutdown was not clean"},
     "bugchecks": {"max": 0, "severity": "P1", "why": "System 1001 BugCheck"},
     "task_failures": {"max": 0, "severity": "P2", "why": "a TaskScheduler record for one of our tasks that is a FAILURE: a 203 launch failure the scheduler did not refuse for shutdown, or a 201 whose return code is non-zero and not a shutdown code. A 201 with return code 0 is a task doing its job and is not counted - counting it made this threshold unreachable on every healthy boot"},
+    "signatures_unclassified": {"max": 0, "severity": "P1", "why": "a log line matching no declared class - the three classes are should-be-present, should-not-be-present and normal-operation, and everything else is an ALERT. Counts `new` plus `unsettled`; a decision that is owed is not a class. Growing the dictionary instead of acting on these is what this gate exists to stop (owner 2026-10-23: regexes are fine, but if none matches it should be acted on)"},
     "fallbacks_fired": {"max": 0, "severity": "P1", "why": "project rule: a fallback firing is an anomaly, logged loudly and diagnosed - and it is LOUD TO THE CLIENT, so it is P1 by the owner's standing rule (anything loud to the client that should not happen in normal operation is P1). It was P2 here; the de-slice broker-down report that rides a dom0 toast was filed P2 on that basis, which was wrong"},
     "rise_factor": 2.0,
     "rise_min_delta": 3,
@@ -3023,6 +3024,32 @@ def compare(sigs, baseline, metrics):
                 s["rise_limit"] = limit
                 rose.append(s)
     metrics["closed_defect_recurrence"] = closed_recurrence
+    # IF NO REGEX MATCHES, THAT IS ACTED ON. THIS IS THE DEFAULT THE DESIGN IS BUILT ON.
+    #
+    # Owner, 2026-10-23: "THERE ARE 3 CLASSES OF LEGIT MESSAGES AND WE DEALT WITH IT FROM THE VERY
+    # BEGINNING: SHOULD BE PRESENT, SHOULD NOT BE PRESENT AND NORMAL OPERATION, AND EVERYTHING ELSE
+    # IS ALERT" and "REGEXES ARE FINE, BUT IF NONE MATCHES IT SHOULD BE ACTED ON, AND YOU SPENT
+    # WEEKS ON THIS MATCHING".
+    #
+    # The regexes were never the problem. The DEFAULT was: a line matching no declared class landed
+    # in `new` or `unsettled`, got printed, got a Jev opinion, and failed nothing. There was no gated
+    # metric for it at all. MEASURED on acceptance run 39868919766, win10-upgrade:
+    #     NEW SIGNATURES (240; Jev: expected 40, insufficient-evidence 142, noise 87)
+    # 240 unmatched lines, 142 of which the classifier of record could not settle, and the cell was
+    # graded CLEAN. The answer to that for weeks was to grow the dictionary - it now carries 336
+    # signatures - which is the handpicking the three-class design exists to end.
+    #
+    # `unsettled` counts here too, and deliberately: its own baseline note reads "a human decision is
+    # owed". A decision that is owed is not one of the three classes, so it is an ALERT until someone
+    # makes it. That is the difference between a holding pen and a gate.
+    #
+    # NOT INCLUDED, and this is a real gap rather than an omission: the SHOULD-BE-PRESENT class has
+    # no gate, because the baseline's `expected` status does not mean it. `expected` means "allowed
+    # if seen" - 202 of the 336 carry it, and no cell produces all of them - so gating their absence
+    # at max 0 would fail every cell on day one for lines that were never required. Giving that class
+    # a real gate needs a `required` declaration that says WHERE each line must appear, which is its
+    # own change; see REQUIREDLINESHAVENOABSENCEGATE in findings/issues.md.
+    metrics["signatures_unclassified"] = len(new) + len(unsettled)
     breaches = []
     for name, t in thr.items():
         if not isinstance(t, dict) or "max" not in t:
