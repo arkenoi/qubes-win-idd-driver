@@ -165,6 +165,43 @@ else
   no "could not build the total-only control" "the substitution did not apply"
 fi
 
+# ---- A POWERSHELL SCRIPT CANNOT DECLARE A BIRTH ------------------------------------------------
+# Our PS helpers log in the SAME bracketed shape windows-utils uses, so the per-file birth rule above
+# asked them for a LogInit no PowerShell script can emit. MEASURED on acceptance run 39880114972:
+# with birth_lines=896 the only files left in `nobirth` were VMExec.ps1, get-appmenus.ps1,
+# set-time.ps1 and sync-clock-from-dom0.ps1, and the matrix counted that INCONCLUSIVE as a campaign
+# failure (INVALID-SWEEP-UNCLASSED). The same verdict appeared on the PREVIOUS campaign with
+# birth_lines=207 and a nobirth list that covered our own modules too, so the PS logs are the
+# pre-existing remainder - not something the birth line broke.
+printf '[20261021.120004.000-300:300-I] Main: starting\n[20261021.120005.000-300:300-W] Main: a warning\n' > "$T/VMExec.ps1-20261021.log"
+out=$(timeout -k 10 120 bash tools/sweep-gate.sh "$T/mod-a.log" "$T/VMExec.ps1-20261021.log" 2>&1); rc=$?
+if [ "$rc" != 2 ] && ! printf '%s' "$out" | command grep -qa 'nobirth=.*VMExec'; then
+  ok "a PowerShell script's log is not held to the birth rule (rc=$rc)"
+else
+  no "a .ps1 log was refused for not declaring a birth (rc=$rc)" "$(printf '%s' "$out" | head -2 | tr '\n' ' ')"
+fi
+# AND IT IS NAMED BY THE WRITER, NOT A HOLE: a MODULE-named file with the same content is still
+# refused. windows-utils composes `<module>-<date>.log` and a module name never contains `.ps1-`.
+printf '[20261021.120004.000-300:300-I] Main: starting\n[20261021.120005.000-300:300-W] Main: a warning\n' > "$T/gui-watchdog-20261021.log"
+out=$(timeout -k 10 120 bash tools/sweep-gate.sh "$T/mod-a.log" "$T/gui-watchdog-20261021.log" 2>&1); rc=$?
+if [ "$rc" = 2 ] && printf '%s' "$out" | command grep -qa 'nobirth=.*gui-watchdog'; then
+  ok "the same content under a MODULE name is still refused by name - the rule is intact"
+else
+  no "a module-named file with no birth was accepted (rc=$rc)" "the exemption is a hole, not a carve-out"
+fi
+# SEEN TO FAIL: without the carve-out the .ps1 log is refused, which is the campaign's own verdict
+sed 's/\*\.ps1-\*\.log) : ;;/*.NEVERMATCHES) : ;;/' tools/sweep-gate.sh > "$T/gate-nops1.sh"
+if command grep -qa 'NEVERMATCHES' "$T/gate-nops1.sh"; then
+  out=$(timeout -k 10 120 bash "$T/gate-nops1.sh" "$T/mod-a.log" "$T/VMExec.ps1-20261021.log" 2>&1); rc=$?
+  if [ "$rc" = 2 ] && printf '%s' "$out" | command grep -qa 'nobirth=.*VMExec'; then
+    ok "SEEN TO FAIL: without the carve-out the .ps1 log is refused by name (rc=$rc)"
+  else
+    no "the no-carve-out control did not refuse it (rc=$rc)" "the leg does not measure the carve-out"
+  fi
+else
+  no "could not build the no-carve-out control" "the substitution did not apply"
+fi
+
 # ---- A TRUNCATED PULL IS NOT A COMPLETE LOG ----------------------------------------------------
 # log-sweep-collect.ps1 caps the bytes per file and sends partial=1 when it hits the cap: head +
 # W/E/suspicious + tail, nothing else. log-sweep.py turns that into a DATA problem; the gate never

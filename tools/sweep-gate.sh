@@ -776,7 +776,21 @@ _sg_life() { # $@=files -> "<non_empty_sources> <winutils_lines> <birth_lines> <
         w=$(printf '%s' "$t" | command grep -acE '\[[0-9]{8}\.[0-9]{6}\.[0-9]{3}-[0-9]+(:[0-9]+)?-[IWEDV]\]' || true)
         wl=$((wl + ${w:-0}))
         n=$(printf '%s' "$t" | command grep -acE 'QWTBIRTH module=|Log started, module name:' || true); bl=$((bl + ${n:-0}))
-        [ "${w:-0}" -gt 0 ] && [ "${n:-0}" = 0 ] && nobirth="$nobirth $(basename "$f")"
+        # A POWERSHELL SCRIPT CANNOT DECLARE A BIRTH, so it is not held to the requirement. Our PS
+        # helpers log in the SAME bracketed shape windows-utils uses, so `w` counts their lines - and
+        # then the per-file birth rule asks them for a LogInit that no PowerShell script can ever
+        # emit. MEASURED on run 39880114972: with birth_lines=896 the ONLY files left in `nobirth`
+        # were VMExec.ps1, get-appmenus.ps1, set-time.ps1 and sync-clock-from-dom0.ps1, and the
+        # matrix counted that INCONCLUSIVE as a campaign failure (INVALID-SWEEP-UNCLASSED). The same
+        # verdict appeared on the previous campaign with birth_lines=207 and a nobirth list that
+        # covered our own modules too, so this is the pre-existing remainder, not a new break.
+        # The discriminator is the WRITER: guest/*.ps1 log as `<script>.ps1-<date>.log`, and
+        # windows-utils composes `<module>-<date>.log` from a module name that never contains
+        # `.ps1-`, so this can never exempt a module that ought to declare itself.
+        case "$(basename "$f")" in
+          *.ps1-*.log) : ;;
+          *) [ "${w:-0}" -gt 0 ] && [ "${n:-0}" = 0 ] && nobirth="$nobirth $(basename "$f")" ;;
+        esac
         # the harness's own shape: a bracketed clock, or a declared level anywhere on the line
         h=$(printf '%s' "$t" | command grep -acE '^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\]|\[(INFO|WARN|ERROR|FATAL)\]' || true)
         bad=$((bad + ${h:-0}))   # reused below as the HARNESS-line total, not a per-file verdict
