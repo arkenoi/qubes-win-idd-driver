@@ -143,8 +143,21 @@ log "staged: agent-a.exe ($AH), agent-b.exe ($BH), swap-agent.ps1 pushed"
 ttfw_sample(){ # $1 tag -> "<ttfw_ms> <shell_launch_ms> <shell_ready_ms> <colours>" or "miss <why>"
   local tag="$1" t0 now el out wpid n p verdict cols ok birth shell launch ready
   qwt_shutdown "$SUBJ" 600 >>"$OUT/$tag.shutdown" 2>&1 || { echo "miss shutdown_refused"; return; }
-  qvm-start "$SUBJ" >>"$OUT/$tag.start" 2>&1 || { echo "miss start_failed"; return; }
+  # T0 IS BEFORE qvm-start, NOT AFTER IT. `qvm-start` BLOCKS well into the guest's boot, so taking
+  # t0 after it silently excluded the largest part of the path and made the number mean "from
+  # whenever qvm-start chose to return". MEASURED 2026-10-23 and internally inconsistent because of
+  # it: samples read 9.4-16.7 s from t0 to a rendered window while the agent's OWN uptime at Init
+  # was 33.5-78.2 s on the same boots - the agent had not even started when t0 was taken.
+  # The A/B comparison survived that (same definition on both arms, broker binary constant) but the
+  # absolute numbers and the "boot->window" label did not.
+  # WHERE THE TIME ACTUALLY IS, from those same captures:
+  #     boot -> agent Init      33.5 - 78.2 s   <- everything
+  #     agent Init -> shell      0.45 - 0.72 s
+  #     shell -> broker launch   0.14 - 0.34 s
+  #     shell -> broker ready    0.99 - 2.21 s
+  # The agent and broker together are ~2-3 s of it.
   t0=$(date +%s%3N)
+  qvm-start "$SUBJ" >>"$OUT/$tag.start" 2>&1 || { echo "miss start_failed"; return; }
   # three exits, each named: no qrexec, no app, no demonstrated window.
   ok=0
   for _i in $(seq 1 12); do w_alive "$SUBJ" 40 && { ok=1; break; }; done

@@ -76,6 +76,14 @@ exits_named(){ awk '/miss shutdown_refused/{a=NR} /miss start_failed/{b=NR} /mis
 shape "every way a sample can fail is NAMED (shutdown, start, qrexec, app, no demonstrated window) - never a silent miss" \
       exits_named 'miss no_demonstrated_window_within_'
 
+# ---- t0 MUST PRECEDE qvm-start ----------------------------------------------------------------
+# `qvm-start` blocks well into the guest's boot, so taking t0 after it excludes the largest part of
+# the path. MEASURED 2026-10-23: samples read 9.4-16.7 s from t0 to a rendered window while the
+# agent's OWN uptime at Init was 33.5-78.2 s on the same boots - the agent had not started when t0
+# was taken, which makes the absolute numbers meaningless even though the A/B comparison survived.
+t0_before_start(){ awk '/t0=\$\(date \+%s%3N\)/{t=NR} /qvm-start "\$SUBJ"/{s=NR} END{exit !(t && s && t < s)}' "$1"; }
+shape "t0 is taken BEFORE qvm-start, which blocks into the boot" t0_before_start 't0=$(date +%s%3N)'
+
 # ---- THE END STATE IS ASSERTED, or the number means nothing ------------------------------------
 # Owner, 2026-10-23: "pixels not demonstrated is not smoke pass. a measurement that does not prove
 # end state is sane is futile, we may claim zero seconds immediately." A clean log with no window
