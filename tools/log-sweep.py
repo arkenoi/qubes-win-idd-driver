@@ -494,7 +494,7 @@ DEFAULT_THRESHOLDS = {
     "unexpected_shutdowns": {"max": 0, "severity": "P1", "why": "System 6008 / Kernel-Power 41: the previous shutdown was not clean"},
     "bugchecks": {"max": 0, "severity": "P1", "why": "System 1001 BugCheck"},
     "task_failures": {"max": 0, "severity": "P2", "why": "a TaskScheduler record for one of our tasks that is a FAILURE: a 203 launch failure the scheduler did not refuse for shutdown, or a 201 whose return code is non-zero and not a shutdown code. A 201 with return code 0 is a task doing its job and is not counted - counting it made this threshold unreachable on every healthy boot"},
-    "fallbacks_fired": {"max": 0, "severity": "P2", "why": "project rule: a fallback firing is an anomaly, logged loudly and diagnosed"},
+    "fallbacks_fired": {"max": 0, "severity": "P1", "why": "project rule: a fallback firing is an anomaly, logged loudly and diagnosed - and it is LOUD TO THE CLIENT, so it is P1 by the owner's standing rule (anything loud to the client that should not happen in normal operation is P1). It was P2 here; the de-slice broker-down report that rides a dom0 toast was filed P2 on that basis, which was wrong"},
     "rise_factor": 2.0,
     "rise_min_delta": 3,
 }
