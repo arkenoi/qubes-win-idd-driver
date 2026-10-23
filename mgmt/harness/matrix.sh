@@ -1708,6 +1708,37 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
     2) no "$lbl: no session within 900s even after the post-install reboot (last screen: $(w_screen "$vm" "$lbl-final" "$M"))"; return 1 ;;
   esac
   ok "$lbl: guest came back with a session"
+  # WHERE DO OUR MODULES THINK THEY LOG, RIGHT NOW, ON THIS GUEST? A READ-ONLY DIAGNOSTIC.
+  #
+  # OURMODULESLOGNOWHEREAFTERUPGRADEREBOOT: on run 39880114972 BOTH upgrade cells ended with no line
+  # from gui-agent, gui-watchdog, qrexec-agent or qrexec-wrapper after this reboot - only QubesPvNic,
+  # QubesNetSetup and file-receiver - while the modules demonstrably RAN (qrexec calls throughout,
+  # accept-clean PASS on pixels and chrome). Four candidate causes are already dead: the same short
+  # cycle over this cell's own golden with the same package AND this same reboot logs normally
+  # (27 birth lines, gui-agent 4.3.37.1062 at 07:43:21.454, every per-module LogDir on the bound
+  # volume); the bind here is the same shape (LOGVOL-BIND ok drive=Z: letter=pinned modules=12,
+  # re-asserted post-install letter=same); and the volume is writable after this reboot because the
+  # log path is re-proved at grading. So the answer is in this cell and nowhere else, and the one
+  # read that would have settled it was never taken HERE.
+  #
+  # It is a read: registry values and directory listings, no state touched, and its failure cannot
+  # fail the cell - a diagnostic that can break a campaign is worse than no diagnostic.
+  # $M AND $vm ONLY - the variables this function actually has. The first version of this wrote to
+  # "$m/$c-..." , copied from the GRADING function where m and c are locals; here they do not exist,
+  # so `set -u` killed the cell at line 1730 with "m: unbound variable" and the run died at the
+  # install step. A diagnostic that can break a campaign is worse than no diagnostic, so this one is
+  # now bounded on every side: it needs an existing $M, it runs in a subshell, and the whole thing
+  # ends in `|| true` so no failure of it can reach the cell's verdict.
+  if [ -n "${MATRIX_LOGDIR_DIAG:-}" ] && [ -f "${MATRIX_LOGDIR_DIAG}" ] && [ -d "${M:-}" ]; then
+    (
+      _ld="$M/$vm-logdir-after-reboot.txt"
+      if QTEST_VM="$vm" ./tools/qtest pushrun "$MATRIX_LOGDIR_DIAG" >"$_ld" 2>&1; then
+        say "  $lbl: post-reboot LogDir diagnostic -> $_ld"
+      else
+        say "  $lbl: post-reboot LogDir diagnostic did not return (see $_ld)"
+      fi
+    ) || true
+  fi
 
   # ARM THE MODULE-BASE RECORDER, the moment this guest can answer.
   #
