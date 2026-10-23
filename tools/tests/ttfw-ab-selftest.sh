@@ -61,9 +61,14 @@ shape "the running binary's hash is compared to the pushed one, and a mismatch a
 tag_preflight(){ grep -qF "qvm-tags" "$1" && awk '/win-idd-testbed/{t=NR} /vm_lock/{l=NR} END{exit !(t && l && t < l)}' "$1"; }
 shape "the tag is asserted in PREFLIGHT, before the lock and any boot (an untagged target captures nothing)" \
       tag_preflight 'win-idd-testbed'
-capture_rc_read(){ awk '/if qt shot "\$tar"/{a=NR} /miss capture_failed_rc/{b=NR} END{exit !(a && b && a < b)}' "$1"; }
-shape "the capture service's exit status is read, so a refusal is never read as 'not up yet'" \
-      capture_rc_read 'miss capture_failed_rc'
+# "no visible windows" IS a non-zero exit with an empty tar - byte-for-byte what a refused or broken
+# capture looks like - so rc cannot discriminate "not up yet" from "this instrument is dead". The
+# only honest exclusion is to PROVE the path once, while a window is known to exist.
+capture_proven(){ grep -qF 'capture path PROVEN' "$1" &&
+    awk '/qt shot "\$OUT\/preflight-shot.tar"/{p=NR} /^run_side\(\)/{r=NR} END{exit !(p && r && p < r)}' "$1" &&
+    awk '/the per-window capture path produced NO window/{a=NR} /exit 2/{e=NR} END{exit !(a && e)}' "$1"; }
+shape "the capture path is PROVEN once on a guest with a desktop, and the run refuses if it is not" \
+      capture_proven 'capture path PROVEN'
 
 # ---- no desktop photography --------------------------------------------------------------------
 # qtest fullshot photographs the whole dom0 desktop. In a POLLING loop that would be dozens of
@@ -81,10 +86,10 @@ grep -qaE '\b(pkill|taskkill|Stop-Process)\b' "$H" && no "it kills by name" || o
 # ---- the swap script must actually be on the guest -------------------------------------------
 # run_side invokes swap-agent.ps1 from QubesIncoming; nothing else puts it there, so without this
 # push every sample fails on a missing file. Caught before the first run, not by it.
-pushes_swap(){ grep -qF 'qt push "$ROOT/guest/swap-agent.ps1"' "$1" &&
+pushes_swap(){ grep -qF 'qt push "$ROOT/guest/swap-agent.ps1" "$ROOT/guest/restart-gui-agent.ps1"' "$1" &&
     awk '/qt push "\$ROOT\/guest\/swap-agent.ps1"/{p=NR} /^run_side\(\)/{r=NR} END{exit !(p && r && p < r)}' "$1"; }
-shape "guest/swap-agent.ps1 is pushed ONCE, before any sample invokes it" \
-      pushes_swap 'qt push "$ROOT/guest/swap-agent.ps1"'
+shape "BOTH swap scripts are pushed ONCE before any sample (swap-agent.ps1 refuses without restart-gui-agent.ps1 beside it)" \
+      pushes_swap 'qt push "$ROOT/guest/swap-agent.ps1" "$ROOT/guest/restart-gui-agent.ps1"'
 distinct_names(){ grep -qF 'cp "$A" "$OUT/agent-a.exe"' "$1" && grep -qF 'cp "$B" "$OUT/agent-b.exe"' "$1"; }
 shape "the two sides are staged under distinct basenames (both artifacts are called gui-agent.exe)" \
       distinct_names 'cp "$A" "$OUT/agent-a.exe"'

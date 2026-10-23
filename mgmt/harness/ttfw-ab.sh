@@ -102,35 +102,72 @@ qt(){ QTEST_VM="$SUBJ" ./tools/qtest "$@"; }
 cp "$A" "$OUT/agent-a.exe" || { log "FAIL  could not stage the A binary"; exit 2; }
 cp "$B" "$OUT/agent-b.exe" || { log "FAIL  could not stage the B binary"; exit 2; }
 A="$OUT/agent-a.exe"; B="$OUT/agent-b.exe"
-if ! qt push "$ROOT/guest/swap-agent.ps1" >>"$OUT/push-swap.out" 2>&1; then
-  log "FAIL  could not push guest/swap-agent.ps1 - every sample would fail on a missing swap script"
+# BOTH SCRIPTS. swap-agent.ps1:75 requires restart-gui-agent.ps1 BESIDE it and exits 1 with
+# "FAIL: restart-gui-agent.ps1 not pushed next to this script" otherwise - that helper is the
+# sanctioned restart (stop the owning service, swap, start, prove the turnover), which is why the
+# swap refuses to improvise without it. MEASURED: without it every sample reported
+# HASH_RUNNING=<none> and this harness correctly refused to time any of them.
+if ! qt push "$ROOT/guest/swap-agent.ps1" "$ROOT/guest/restart-gui-agent.ps1" >>"$OUT/push-swap.out" 2>&1; then
+  log "FAIL  could not push the swap scripts - every sample would fail on a missing script"
   vm_unlock "$SUBJ" 2>/dev/null || true
   exit 2
 fi
 log "staged: agent-a.exe ($AH), agent-b.exe ($BH), swap-agent.ps1 pushed"
 
+# ---- prove the capture path ONCE, now, while the guest is up and has a desktop ------------------
+# "NO VISIBLE WINDOWS" IS REPORTED AS A NON-ZERO EXIT WITH AN EMPTY TAR, which is byte-for-byte what
+# a refused or broken capture looks like (mgmt/CLAUDE.md preflight even uses that error to prove the
+# path works). So the exit status CANNOT discriminate "not up yet" from "this instrument is dead" -
+# measured the hard way: an earlier cut of this harness read rc=1 as an instrument failure and
+# abandoned every sample at ~60 s with capture_failed_rc1, on a guest that simply had no window yet.
+# The honest way to exclude the dead-instrument case is to PROVE THE PATH ONCE, here, when a window
+# is known to exist - the guest is running with a desktop. After that, an empty capture during a
+# poll means one thing: no window is mapped yet.
+cap_pngs(){ tar -tf "$1" 2>/dev/null | grep -acE '\.(png|ppm)$' || true; }
+# THE PROOF IS "A WINDOW APPEARS WITHIN THE DEADLINE ON A GUEST THAT IS UP", not "a window exists this
+# instant". An earlier cut demanded one immediately and refused the run on a guest that had simply
+# been rebooted moments before - which is the same impatience that would make a sample read as a
+# miss. So: make sure the guest is up, then run the SAME loop a sample runs. If no window appears
+# even once, no sample below could be interpreted and the run refuses instead of reporting numbers.
+qvm-check --running "$SUBJ" >/dev/null 2>&1 || qvm-start "$SUBJ" >>"$OUT/preflight-start.out" 2>&1 || true
+for _i in 1 2 3 4 5 6; do w_alive "$SUBJ" 40 && break; done
+pn=0; _t0=$(date +%s)
+while [ $(( $(date +%s) - _t0 )) -lt "$DEADLINE" ]; do
+  qt shot "$OUT/preflight-shot.tar" >>"$OUT/preflight-shot.out" 2>&1 || true
+  pn=$(cap_pngs "$OUT/preflight-shot.tar")
+  [ "${pn:-0}" -gt 0 ] && break
+  sleep "$POLL"
+done
+if [ "${pn:-0}" -lt 1 ]; then
+  log "FAIL  the per-window capture path produced NO window within ${DEADLINE}s on a guest that is up."
+  log "      Every poll below would be uninterpretable - an empty capture could mean 'no window yet'"
+  log "      or 'this instrument is dead', and the service reports both as a non-zero exit with an"
+  log "      empty tar. Refusing rather than reporting timings that measure the instrument."
+  vm_unlock "$SUBJ" 2>/dev/null || true
+  exit 2
+fi
+log "capture path PROVEN: $pn window(s) after $(( $(date +%s) - _t0 ))s, so an empty capture later means 'not yet'"
+
 # ---- the measurement: qvm-start -> the first per-window capture that holds a window -------------
 ttfw_sample(){ # $1 tag -> prints "<ms> <windows>" or "miss <reason>"
-  local tag="$1" t0 now el rc n tar
+  local tag="$1" t0 now el rc n tar lastrc=""
   tar="$OUT/$tag-shot.tar"
   qwt_shutdown "$SUBJ" 600 >>"$OUT/$tag.shutdown" 2>&1 || { echo "miss shutdown_refused"; return; }
   t0=$(date +%s%3N)
   qvm-start "$SUBJ" >>"$OUT/$tag.start" 2>&1 || { echo "miss start_failed"; return; }
   while :; do
     now=$(date +%s%3N); el=$(( (now - t0) / 1000 ))
-    [ "$el" -lt "$DEADLINE" ] || { echo "miss no_window_within_${DEADLINE}s"; return; }
-    # THE SERVICE'S EXIT STATUS IS READ. Non-zero means the capture could not be taken (a denial, a
-    # missing tag, a dom0-side failure) and is NOT evidence about windows - say so and stop, rather
-    # than keep polling and eventually report a number that measures the instrument.
-    if qt shot "$tar" >>"$OUT/$tag.shot" 2>&1; then
-      n=$(tar -tf "$tar" 2>/dev/null | grep -acE '\.(png|ppm)$' || true)
-      if [ "${n:-0}" -gt 0 ]; then
-        now=$(date +%s%3N); echo "$(( now - t0 )) ${n}"; return
-      fi
-    else
-      rc=$?
-      echo "miss capture_failed_rc${rc}_at_${el}s"; return
+    [ "$el" -lt "$DEADLINE" ] || { echo "miss no_window_within_${DEADLINE}s_lastrc${lastrc:-none}"; return; }
+    # AN EMPTY CAPTURE IS "NOT YET", because the path was PROVEN above. The service reports "no
+    # visible windows" as a non-zero exit with an empty tar, so rc cannot tell that apart from a
+    # dead instrument - which is why the proof happens once, up front, instead of being re-derived
+    # from every poll. The last rc is kept so a miss still names what the instrument was doing.
+    qt shot "$tar" >>"$OUT/$tag.shot" 2>&1; rc=$?
+    n=$(cap_pngs "$tar")
+    if [ "${n:-0}" -gt 0 ]; then
+      now=$(date +%s%3N); echo "$(( now - t0 )) ${n}"; return
     fi
+    lastrc="$rc"
     sleep "$POLL"
   done
 }
