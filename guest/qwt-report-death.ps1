@@ -1426,6 +1426,36 @@ function Test-QwtDeathAlreadyNotified {
     return (@($Marks[$key]) -contains $RecordId)
 }
 
+function Test-QwtDeathLoggedRecord {
+    # Has THIS channel+record already been written up as a death in our own log? The notified-set in
+    # the watermark cannot answer that across a shutdown: the live path notifies and then the machine
+    # goes down before Write-QwtDeathWatermark persists the id, so the next boot has no record of it.
+    # MEASURED 2026-10-24 on win11r-sup: the catch-up exemption re-reported a death the live reporter
+    # had already sent - DEATH lines went 2 -> 4 for ONE injected death, dom0_loud_failures=2 - and a
+    # double is P1 by standing rule.
+    # THE LOG IS THE DURABLE MARKER, and it is written FIRST: `DEATH #1 NEW Application/4002#339: ...`
+    # is appended before `DEATH #1 notified to dom0 as ...`, so a record that reached the user has its
+    # id in the log whatever the shutdown did to the watermark. Read-only, best effort: a log we
+    # cannot read returns $false, which re-reports rather than drops - the safe direction for a death.
+    param([Parameter(Mandatory)][string]$Channel, [Parameter(Mandatory)][long]$RecordId)
+    try {
+        # THE SAME DIRECTORIES Write-QwtDeathLog APPENDS TO - Get-QwtDeathLogDir - not $global:qwtLogPath,
+        # which is the shared PS sink's own file and need not be where the death log lives. Reading the
+        # wrong variable made this predicate answer $false everywhere, including in its own test.
+        $dirs = @(Get-QwtDeathLogDir)
+        if (-not $dirs -or $dirs.Count -eq 0) { return $false }
+        foreach ($dir in $dirs) {
+          if (-not $dir -or -not (Test-Path -LiteralPath $dir)) { continue }
+          foreach ($f in Get-ChildItem -LiteralPath $dir -Filter 'qwt-*death*.log' -ErrorAction SilentlyContinue) {
+            $hit = @(Get-Content -LiteralPath $f.FullName -ErrorAction SilentlyContinue |
+                     Where-Object { $_ -match ([regex]::Escape($Channel) + '/\d+#' + $RecordId + '\b') })
+            if ($hit.Count -gt 0) { return $true }
+          }
+        }
+    } catch { }
+    return $false
+}
+
 function Invoke-QwtDeathCatchUp {
     # Returns @{ reported = n; scanned = n; channels = @{...} }. Never throws: a catch-up that fails must not keep the
     # boot's other work from running, and it says so at ERROR.
@@ -1539,6 +1569,11 @@ function Invoke-QwtDeathCatchUp {
                 foreach ($e in ($ours | Sort-Object RecordId)) {
                     $rid = [long]$e.RecordId
                     if (Test-QwtDeathAlreadyNotified -Channel $ch -RecordId $rid -Marks $marks) { continue }
+                    # AND the log, because a shutdown can stop the notified-set from ever being written
+                    if (Test-QwtDeathLoggedRecord -Channel $ch -RecordId $rid) {
+                        Write-QwtDeathLog 'INFO' "catch-up: $ch record $rid was already written up in this log - not reported again"
+                        continue
+                    }
                     $r.scanned++
                     try {
                         $verdict = Invoke-QwtDeathReport -XmlText $e.ToXml()

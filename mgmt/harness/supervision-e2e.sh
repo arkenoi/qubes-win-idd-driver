@@ -697,6 +697,19 @@ L 'catchup_task_last' ((& schtasks /query /tn QwtDeathCatchUp /v /fo LIST 2>&1 |
 # nobody was told" are opposite verdicts, so the cell must not collapse them.
 $ev = @(Get-WinEvent -FilterHashtable @{LogName='Application'; Id=4002; StartTime=(Get-Date).AddMinutes(-30)} -EA SilentlyContinue)
 L 'death_events_4002' $ev.Count
+# DID THE CATCH-UP RUN IN *THIS* BOOT? Its Last Run Time against this boot's start is the marker the
+# dom0-side wait needs: without it the cell cannot tell "the reporter was never asked" from "the
+# reporter was asked and said nothing", which are opposite verdicts.
+$bootUp = (Get-Date) - [TimeSpan]::FromMilliseconds([Environment]::TickCount64)
+$lastRun = $null
+try {
+    $xml = [xml](& schtasks /query /tn QwtDeathCatchUp /xml ONE 2>$null)
+    $info = (& schtasks /query /tn QwtDeathCatchUp /v /fo LIST 2>$null | Out-String)
+    $m = [regex]::Match($info, 'Last Run Time:\s*(.+)')
+    if ($m.Success) { $lastRun = [datetime]::Parse($m.Groups[1].Value.Trim()) }
+} catch { }
+L 'catchup_last_run' $(if ($lastRun) { $lastRun.ToString('yyyy-MM-dd HH:mm:ss') } else { 'unknown' })
+L 'catchup_ran_this_boot' $(if ($lastRun -and $lastRun -gt $bootUp) { 1 } else { 0 })
 # THE DOM0 ROWS THEMSELVES, which is what the user actually sees. One broker death must produce
 # exactly ONE row. Measured 2026-10-23: it produced TWO - wgcbroker.death-1 from the death reporter
 # AND gui-agent.deslice-down from the agent's complaint path, two seconds apart - and the owner saw
@@ -720,7 +733,26 @@ L 'dom0_deslice_rows' $desliceRows
 if ($ev.Count -gt 0) { L 'event_line' ((($ev[0].Message -replace "`r|`n",' ') -replace '\s+',' ')) }
 L 'END' 'ok'
 PS
-      guest_ps "$OUT/L8-read.ps1" > "$OUT/L8-read.out" 2>&1
+      # A WAIT NEEDS A REAL MARKER AND THREE EXITS. The catch-up is a BOOT-TRIGGERED task, so it
+      # does not run at the instant the session comes up - and reading the counts immediately judged
+      # the product before its reporter had been given a chance. MEASURED 2026-10-24 on win11r-sup:
+      # the read came back deaths_after=0 with `catchup_task_last ... Last Run Time 12:38:07 AM`,
+      # which is the boot the KILL happened in, and `Next Run Time: N/A` - i.e. at read time the new
+      # boot's pass had not run at all, so L8 reported "a death WAS recorded and nobody was told"
+      # about a reporter that had not yet been asked. Three exits: the death is reported, or the
+      # catch-up has demonstrably RUN in this boot and still reported nothing (which is the real
+      # failure), or the bound expires and the cell says the wait itself was inconclusive.
+      _l8d=$((SECONDS+240)); _l8why=bound
+      while [ $SECONDS -lt $_l8d ]; do
+        guest_ps "$OUT/L8-read.ps1" > "$OUT/L8-read.out" 2>&1
+        _da=$(grep -a '^L8R|deaths_after|' "$OUT/L8-read.out" | tail -1 | cut -d'|' -f3-)
+        _dr=$(grep -a '^L8R|dom0_death_rows|' "$OUT/L8-read.out" | tail -1 | cut -d'|' -f3-)
+        if [ -n "$_da" ] && [ "${_da:-0}" -gt "${db:-0}" ]; then _l8why=reported; break; fi
+        if [ -n "$_dr" ] && [ "${_dr:-0}" -gt 0 ]; then _l8why=reported; break; fi
+        if grep -qa 'L8R|catchup_ran_this_boot|1' "$OUT/L8-read.out"; then _l8why=ran-and-silent; break; fi
+        sleep 20
+      done
+      log "  L8: waited for the catch-up (${_l8why}); deaths_after=$(grep -a '^L8R|deaths_after|' "$OUT/L8-read.out" | tail -1 | cut -d'"'"'|'"'"' -f3-)"
       g8r(){ grep -a "^L8R|$1|" "$OUT/L8-read.out" | tail -1 | cut -d'|' -f3-; }
       da=$(g8r deaths_after); wma=$(g8r watermark_after)
       if [ -z "$da" ] || [ -z "$db" ]; then

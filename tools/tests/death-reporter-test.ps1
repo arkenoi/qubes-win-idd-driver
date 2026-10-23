@@ -844,6 +844,24 @@ Check 'catch-up roll guard: a channel whose newest id is BELOW the mark claims n
 Check 'catch-up roll guard: and it says the channel was cleared or rolled over' `
       ((Get-DeathLog) -match 'was cleared or rolled over')
 Check 'catch-up roll guard: nothing was sent to the user' ($script:launched.Count -eq 0) "sent=$($script:launched.Count)"
+
+# ---- AND IT MUST NOT REPORT WHAT THE LIVE PATH ALREADY SENT -----------------------------------
+# MEASURED 2026-10-24 on win11r-sup: the exemption above re-reported a death the live reporter had
+# already notified during the shutdown - DEATH lines 2 -> 4 for ONE injected death, with
+# dom0_loud_failures=2 - because the notified-set lives in the watermark and the shutdown stopped it
+# from ever being written. A double is P1 by standing rule. The durable marker is our own log line,
+# which is appended BEFORE the notification: `DEATH #1 NEW Application/4002#601: ...`
+Reset-World
+Remove-Item -LiteralPath $wmp2 -Force -ErrorAction SilentlyContinue
+$script:QwtNotifyBootStamp = 4242; $script:QwtNotifyBootCached = $null
+[void](Write-QwtDeathWatermark -Marks @{ $CHA = 600 })
+$script:QwtNotifyBootStamp = 7777; $script:QwtNotifyBootCached = $null
+Write-QwtDeathLog 'ERROR' 'DEATH #1 NEW Application/4002#601: a previous boot already wrote this one up'
+$cu5 = Invoke-QwtDeathCatchUp
+Check 'catch-up dedupe: a record already written up in our log is NOT reported again' `
+      ($cu5.reported -eq 0) "reported=$($cu5.reported)"
+Check 'catch-up dedupe: and it says why' ((Get-DeathLog) -match 'was already written up in this log')
+Check 'catch-up dedupe: nothing was sent to the user a second time' ($script:launched.Count -eq 0) "sent=$($script:launched.Count)"
 Remove-Item -LiteralPath $wmp2 -Force -ErrorAction SilentlyContinue
 
 Microsoft.PowerShell.Utility\Write-Host "$($script:run) checks, $($script:fail) failed"
