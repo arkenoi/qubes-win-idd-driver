@@ -2203,5 +2203,55 @@ else
   bad "T59 could not build the no-detector variant" "the substitution did not apply"
 fi
 
+# T60 EVERY GATED PER-INSTANCE METRIC IS BUILD-SCOPED, asserted structurally because the defect
+# class is "the next one gets added unscoped and nothing says so".
+#
+# compute_metrics has grown this defect FOUR times. Its own comment used to promise it could not
+# recur - "There is no position left in this function from which the scope is unreachable, so the
+# next metric cannot repeat it" - and that promise is part of why nobody looked: REACHABLE IS NOT
+# USED. errors_during_requested_stop and stale_error_lines were the first two, helper_relaunches
+# the third, and on 2026-10-23 an audit found agent_ends_unrecorded, requested_stop_nonzero_exit
+# and vchan_announce_without_connect all still unscoped. agent_ends_unrecorded was failing
+# win11-upgrade at 1 (max 0) on pid 5256 declaring 4.3.35.795 - the ENTRY FIXTURE's agent, stopped
+# by the MSI during the in-place upgrade - while both candidate instances were fine. Scoping it took
+# that real capture from BREACHES (1; P1 0) to BREACHES (0; P1 0).
+#
+# A per-instance metric is one whose comprehension iterates insts/inst; GATED means it has a `max`
+# in the thresholds. Line-level metrics are out of scope here: they carry _prior/_unattrib instead,
+# a different predicate for a different question.
+t60_scan(){ # $1=analyzer -> prints the gated per-instance metrics that LACK _inst_prior, and a count
+  local f="$1" ln m bad="" n=0
+  while IFS= read -r ln; do
+    m=$(printf '%s\n' "$ln" | sed -n 's/.*m\["\([a-z_][a-z_]*\)"\].*/\1/p')
+    [ -n "$m" ] || continue
+    command grep -q "\"$m\": {\"max\":" "$f" || continue
+    n=$((n+1))
+    printf '%s\n' "$ln" | command grep -q '_inst_prior' || bad="$bad $m"
+  done <<T60IN
+$(command grep -E 'm\["[a-z_]+"\] *= *len\(\[i for i in (inst|insts)' "$f")
+T60IN
+  printf '%s|%s' "$n" "$bad"
+}
+t60=$(t60_scan "$SRC"); t60_n=${t60%%|*}; t60_bad=${t60#*|}
+if [ "${t60_n:-0}" -lt 3 ]; then
+  bad "T60 found only ${t60_n:-0} gated per-instance metric(s)" "the extraction stopped matching - it would pass on anything"
+elif [ -z "$t60_bad" ]; then
+  ok "T60 all $t60_n gated per-instance metrics are build-scoped (_inst_prior)"
+else
+  bad "T60 gated per-instance metric(s) not build-scoped:$t60_bad" "an instance of the REPLACED build is charged to the candidate - this has happened four times"
+fi
+# SEEN TO FAIL: strip the predicate from one of them and the leg must name that one.
+t60_v="$T/ls-unscoped.py"
+sed 's/if not _inst_prior(i) and i\["stop"\]/if i["stop"]/' "$SRC" > "$t60_v"
+if command grep -qE 'm\["requested_stop_nonzero_exit"\] *= *len\(\[i for i in insts if i\["stop"\]' "$t60_v"; then
+  t60v=$(t60_scan "$t60_v"); t60v_bad=${t60v#*|}
+  case "$t60v_bad" in
+    *requested_stop_nonzero_exit*) ok "T60 SEEN TO FAIL: with the predicate stripped the leg names requested_stop_nonzero_exit" ;;
+    *) bad "T60 the unscoped variant was not caught (bad='$t60v_bad')" "the leg does not measure the predicate" ;;
+  esac
+else
+  bad "T60 could not build the unscoped variant" "the substitution did not apply"
+fi
+
 echo "--- $pass passed, $fail failed; fixtures/outputs in $T"
 [ "$fail" = 0 ] && exit 0 || exit 1

@@ -2548,8 +2548,15 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
     # were the first two (see their comment below, campaign 20261018-063720); helper_relaunches was
     # the third, found 2026-10-19 on the 4.3.37 acceptance - it breached at 1 on an upgrade cell
     # where the single excess launch was the REPLACED build's, both candidate instances having
-    # launched the helper exactly once. There is no position left in this function from which the
-    # scope is unreachable, so the next metric cannot repeat it.
+    # launched the helper exactly once.
+    # THAT COMMENT USED TO END "There is no position left in this function from which the scope is
+    # unreachable, so the next metric cannot repeat it." IT DID REPEAT, three more times, and the
+    # claim is part of why nobody looked: REACHABLE IS NOT USED. On 2026-10-23 an audit of every
+    # GATED per-instance metric found agent_ends_unrecorded, requested_stop_nonzero_exit and
+    # vchan_announce_without_connect all unscoped - helper_relaunches was the only one ever fixed -
+    # and agent_ends_unrecorded was failing win11-upgrade on the ENTRY FIXTURE's agent. All four are
+    # scoped now, and the property is the predicate at each call site, not a promise in this
+    # paragraph; log-sweep-selftest asserts every gated per-instance metric carries it.
     _builds, _anchor, _pre_install, _prior, _unattrib = build_scope(files, build)
     _lf_by_name = {lf.name: lf for lf in files}
     # AN INSTANCE'S OWN BUILD, from the version it recorded at its init: the test is_prior_build()
@@ -2637,7 +2644,8 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
         # states the benign case explicitly; reading it is the same correction as excusing a 203 the
         # scheduler refused for shutdown. An instance that just STOPS with an unconnected
         # announcement and never says it withdrew still counts, which is the case worth catching.
-        m["vchan_announce_without_connect"] = len([i for i in insts if i["announces"] >= 1 and i["connects"] == 0
+        # not _inst_prior: an announce without a connect belongs to the instance that announced.
+        m["vchan_announce_without_connect"] = len([i for i in insts if not _inst_prior(i) and i["announces"] >= 1 and i["connects"] == 0
                                                    and not i.get("withdrew_announce")   # GUARD:vchanwithdrawn DEFECT: and True
                                                    and (now - i["end"]).total_seconds() > 30])
     else:
@@ -2687,12 +2695,37 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
     # accepts REQUESTED / SESSION_END / RECONNECT / NO_GUI_DOMAIN. The grader uses the same set,
     # kept beside the header it mirrors, and still breaches on anything else - a Win32 error in that
     # field is exactly what this was written to catch.
-    m["requested_stop_nonzero_exit"] = len([i for i in insts if i["stop"]
+    # not _inst_prior: a stop code belongs to the build whose instance was asked to stop.
+    m["requested_stop_nonzero_exit"] = len([i for i in insts if not _inst_prior(i) and i["stop"]
                                             and i["stop"]["code"] is not None
                                             and i["stop"]["code"].lower() not in QGA_EXPECTED_EXITS])   # GUARD:reqstopreason DEFECT: and i["stop"]["code"] not in (None, "0x0")])
     m["watchdog_fast_death_backoffs"] = len([l for l in st["fastdeath"] if sel(l.ts)])
     if now is not None:
-        m["agent_ends_unrecorded"] = len([i for i in insts if i["end_kind"] == "unknown" and (now - i["end"]).total_seconds() > 120 and not i["exit_logged"]])
+        # BUILD-SCOPED, LIKE EVERY OTHER GATED PER-INSTANCE METRIC. MEASURED on win11-upgrade 2026-10-23
+        # (/home/user/qwt-matrix/20261023-064905), the first upgrade cell graded on the candidate's own
+        # logs: this read 1 (max 0) and the one instance it counted was pid 5256 declaring 4.3.35.795 -
+        # the ENTRY FIXTURE's agent, whose last three lines are ordinary work (`GetRealWindowRect: ...
+        # rejecting`, 09:51:03) and which then stops because the MSI stopped the service during the
+        # in-place upgrade. The candidate's two instances declare 4.3.37.1062 and neither breaches. So
+        # the cell was charged for how the installer stops the build it is REPLACING - the same
+        # misattribution matrix.sh's `--build` comment describes for lines: "on an upgrade cell it
+        # guesses wrong in the one direction that matters, billing the REPLACED build's errors to the
+        # candidate". It is also why the register recorded this as breaching "win10-upgrade and
+        # win11-upgrade - AND ONLY THE UPGRADE CELLS" (AGENTENDSUNRECORDEDONINPLACEUPGRADE, filed against
+        # the agent's service-stop path): only an upgrade cell has a predecessor agent for the installer
+        # to stop. Jev: scope_the_metric_to_the_build_under_test 0.97 at 0.96, is_it_hiding 0.21.
+        # INLINE, LIKE ITS SIBLINGS, so the structural leg can see it. T60 in
+        # tools/tests/log-sweep-selftest.sh finds every GATED per-instance metric by its
+        # `m[...] = len([i for i in insts ...])` shape and requires _inst_prior on that line; written as a
+        # two-step assignment this metric became invisible to it and the leg reported only 2 of 3, which
+        # is the leg refusing to pass on an extraction that stopped matching. The metric is the thing
+        # that must be checkable, so it is spelled the way the check reads.
+        m["agent_ends_unrecorded"] = len([i for i in insts if not _inst_prior(i) and i["end_kind"] == "unknown" and (now - i["end"]).total_seconds() > 120 and not i["exit_logged"]])
+        # A FIGURE, NOT A SILENCE - the rule the error counts already follow. Non-zero means the
+        # REPLACED build had an instance end unrecorded, which is worth seeing (Jev named "the
+        # predecessor's death matters" as a risk of scoping, 0.36) and is not the candidate's to answer
+        # for. NOT gated, so T60 skips it: it has no `max` to misreport.
+        m["agent_ends_unrecorded_prior_build"] = len([i for i in insts if _inst_prior(i) and i["end_kind"] == "unknown" and (now - i["end"]).total_seconds() > 120 and not i["exit_logged"]])
     else:
         m["agent_ends_unrecorded"] = None   # not evaluable without the capture time (corpus mode)
     _count("service_failures", [l for l in events if l.extra.get("log") == "System" and l.extra.get("id") in (7023, 7024, 7031, 7034, 7043) and OUR_SERVICES_RE.search(l.msg) and sel(l.ts)])
