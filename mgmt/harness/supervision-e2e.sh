@@ -573,6 +573,8 @@ esac
 # notification for one death. Never zero (concealment), never two (a double).
 if has L8; then
   log "L8: end the agent DURING a shutdown; the catch-up must report it at the next boot, exactly once"
+  # the injection window starts NOW, so the sweep below reads the kill, the reports and the reboot
+  L8_SINCE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   cat > "$OUT/L8-arm.ps1" <<'PS'
 $ErrorActionPreference = 'Continue'
 function L($k,$v){ "L8|$k|$v" }
@@ -582,7 +584,7 @@ $logdir = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Too
 L 'logdir' $logdir
 $before = 0
 if ($logdir) {
-    foreach ($f in Get-ChildItem -LiteralPath $logdir -Filter 'qwt-report-death*.log' -EA SilentlyContinue) {
+    foreach ($f in Get-ChildItem -LiteralPath $logdir -Filter 'qwt-*death*.log' -EA SilentlyContinue) {
         $before += @(Get-Content -LiteralPath $f.FullName -EA SilentlyContinue | Where-Object { $_ -match 'DEATH #' }).Count
     }
 }
@@ -635,7 +637,7 @@ $ev8 = @(Get-WinEvent -FilterHashtable @{LogName='Application'; Id=4002; StartTi
 L 'events_4002_after_kill' $ev8.Count
 $mid = 0
 if ($logdir) {
-    foreach ($f in Get-ChildItem -LiteralPath $logdir -Filter 'qwt-report-death*.log' -EA SilentlyContinue) {
+    foreach ($f in Get-ChildItem -LiteralPath $logdir -Filter 'qwt-*death*.log' -EA SilentlyContinue) {
         $mid += @(Get-Content -LiteralPath $f.FullName -EA SilentlyContinue | Where-Object { $_ -match 'DEATH #' }).Count
     }
 }
@@ -679,7 +681,7 @@ $wm = Join-Path $state 'qwt-death-watermark.json'
 $logdir = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -EA SilentlyContinue).LogDir
 $lines = @()
 if ($logdir) {
-    foreach ($f in Get-ChildItem -LiteralPath $logdir -Filter 'qwt-report-death*.log' -EA SilentlyContinue) {
+    foreach ($f in Get-ChildItem -LiteralPath $logdir -Filter 'qwt-*death*.log' -EA SilentlyContinue) {
         $lines += @(Get-Content -LiteralPath $f.FullName -EA SilentlyContinue)
     }
 }
@@ -695,6 +697,23 @@ L 'catchup_task_last' ((& schtasks /query /tn QwtDeathCatchUp /v /fo LIST 2>&1 |
 # nobody was told" are opposite verdicts, so the cell must not collapse them.
 $ev = @(Get-WinEvent -FilterHashtable @{LogName='Application'; Id=4002; StartTime=(Get-Date).AddMinutes(-30)} -EA SilentlyContinue)
 L 'death_events_4002' $ev.Count
+# THE DOM0 ROWS THEMSELVES, which is what the user actually sees. One broker death must produce
+# exactly ONE row. Measured 2026-10-23: it produced TWO - wgcbroker.death-1 from the death reporter
+# AND gui-agent.deslice-down from the agent's complaint path, two seconds apart - and the owner saw
+# both. Counted from the writers' own logs, not inferred.
+$deathRows = 0; $desliceRows = 0
+if ($logdir) {
+    foreach ($f in Get-ChildItem -LiteralPath $logdir -Filter 'qwt-*death*.log' -EA SilentlyContinue) {
+        $deathRows += @(Get-Content -LiteralPath $f.FullName -EA SilentlyContinue |
+                        Where-Object { $_ -match 'notified to dom0 as' }).Count
+    }
+    foreach ($f in Get-ChildItem -LiteralPath $logdir -Filter 'gui-agent-*.log' -EA SilentlyContinue) {
+        $desliceRows += @(Get-Content -LiteralPath $f.FullName -EA SilentlyContinue |
+                          Where-Object { $_ -match 'NOTIFYERR gui-agent\.deslice-down sent to dom0' }).Count
+    }
+}
+L 'dom0_death_rows' $deathRows
+L 'dom0_deslice_rows' $desliceRows
 # the detached killer's own words, so "the injection missed" is backed by taskkill's output rather
 # than by the absence of a field
 
@@ -713,6 +732,12 @@ PS
       elif [ "$da" = "$db" ]; then
         verdict L8 FAIL "a death during a shutdown is reported at the next boot" \
                 "a death WAS recorded (event 4002 x$(g8r death_events_4002)) and the reporter's DEATH lines did not change ($db -> $da): CONCEALED - exactly what the catch-up exists to prevent"
+      elif [ "$((da - db))" = 1 ] && { dr=$(g8r dom0_deslice_rows); [ -n "$dr" ] && [ "$dr" != 0 ]; }; then
+        # ONE SITUATION, ONE DOM0 ROW (owner's standing rule; a double is P1). The death was
+        # reported exactly once, but the agent ALSO sent its de-slice complaint for the same event -
+        # which is the two toasts the owner saw on 2026-10-23.
+        verdict L8 FAIL "a death during a shutdown is reported at the next boot, exactly once AND ONLY ONCE" \
+                "DEATH lines $db -> $da (+1) but dom0 also received $dr de-slice row(s) for the same broker: $(g8r dom0_death_rows) death row(s) + $dr complaint row(s) = a DOUBLE for one event"
       elif [ "$((da - db))" = 1 ]; then
         # NAME THE MECHANISM. `mid` is the reporter's count taken after the kill and before the
         # shutdown: unchanged means the CATCH-UP at the next boot is what delivered (the clause's
@@ -726,6 +751,40 @@ PS
                 "DEATH lines $db -> $da (+$((da - db))) - a double is P1 by the owner's rule; $(g8r line | cut -c1-110)"
       fi
     fi
+  fi
+fi
+
+# ---- the injection window MUST be swept ------------------------------------------------------------------------------
+# THE SW CELL ABOVE RUNS BEFORE L8, DELIBERATELY (L8 ends the broker and broker_deaths is a P1
+# threshold), and the consequence is that nothing graded the window the injection happens in. Owner,
+# 2026-10-23: "if the sweep was not run, it is same as no sweep". It is how a client-visible double
+# toast and an ERROR on a graceful shutdown sat in a window the gate never read.
+# IT IS NOT A PASS/FAIL CELL, and saying so is the point: the injected broker death IS a real death,
+# so broker_deaths and death_events breach here BY CONSTRUCTION - only an FI BUILD excuses them
+# (log-sweep.py:2822 tests e["fi"], which comes from the build, never from a declaration). So this
+# sweep is EVIDENCE with a named expectation, and the properties that must hold are asserted by L8
+# itself from the writers' own logs (dom0_death_rows / dom0_deslice_rows above).
+if has L8; then
+  log "the sweep over the INJECTION window (evidence; the injected death breaches by construction)"
+  (cd "$SWEEP" && timeout 1200 bash mgmt/harness/log-sweep.sh "$SUBJ" "$L8_SINCE" "$OUT/L8-sweep" \
+     ${BUILD:+--build "$BUILD"} "${DECL[@]}") > "$OUT/L8-sweep.out" 2>&1
+  l8rep="$OUT/L8-sweep/report.json"
+  if [ -f "$l8rep" ]; then
+    read -r bd de dl su < <(python3 -c "
+import json,sys; m=json.load(open(sys.argv[1]))['metrics']
+print(m.get('broker_deaths'), m.get('death_events'), m.get('dom0_loud_failures'), m.get('signatures_unclassified'))" "$l8rep")
+    log "  L8 window: broker_deaths=$bd death_events=$de dom0_loud_failures=$dl signatures_unclassified=$su (report $l8rep)"
+    # The injection accounts for ONE broker death and ONE 4002. Anything beyond that in this window
+    # is not ours and is named here rather than left in a report nobody reads.
+    if [ "${bd:-0}" -gt 1 ] || [ "${de:-0}" -gt 1 ]; then
+      verdict L8W FAIL "the injection window holds ONLY the injected death" \
+              "broker_deaths=$bd death_events=$de for ONE injected kill - the surplus is not this harness's ($l8rep)"
+    else
+      verdict L8W PASS "the injection window holds ONLY the injected death" \
+              "broker_deaths=$bd death_events=$de dom0_loud_failures=$dl unclassified=$su ($l8rep)"
+    fi
+  else
+    verdict L8W INVALID "the injection window holds ONLY the injected death" "no report at $l8rep - the window went UNSWEPT, which is the same as no sweep"
   fi
 fi
 

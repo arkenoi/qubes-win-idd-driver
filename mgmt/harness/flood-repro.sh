@@ -139,7 +139,7 @@ L 'notifyerr_tokens' (@(Get-ChildItem -LiteralPath $st -EA SilentlyContinue | Wh
 foreach ($f in @(Get-ChildItem -LiteralPath $st -EA SilentlyContinue | Where-Object { -not $_.PSIsContainer })) { L 'notifyerr' "$($f.Name) $($f.LastWriteTime.ToString('HH:mm:ss'))" }
 $logdir = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -EA SilentlyContinue).LogDir
 $deaths = 0
-if ($logdir) { foreach ($f in Get-ChildItem -LiteralPath $logdir -Filter 'qwt-report-death*.log' -EA SilentlyContinue) {
+if ($logdir) { foreach ($f in Get-ChildItem -LiteralPath $logdir -Filter 'qwt-*death*.log' -EA SilentlyContinue) {
   $deaths += @(Get-Content -LiteralPath $f.FullName -EA SilentlyContinue | Where-Object { $_ -cmatch 'DEATH #' }).Count } }
 L 'death_notifications' $deaths
 L 'END' 'ok'

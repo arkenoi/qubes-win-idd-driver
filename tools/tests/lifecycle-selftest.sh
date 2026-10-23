@@ -108,7 +108,7 @@ if build clean ""; then
 else say "FAIL  clean build: $(head -3 "$OUT/clean.build.err")"; bad=1; fi
 
 # ---- every defect knob must make the suite FAIL --------------------------------------------------------
-for d in SYSKILLNOW TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT DISARMHIDESCRASH ZERODUE SHELLBYNAME HOLDALWAYSLOUD FAULTFROMREG LATEREGALWAYSLOUD SLOWALWAYSLOUD HOLDREASONALLNORMAL STARTCLOSEUNSAID STARTNEVERSTUCK STARTRETURNNULL GIANTSHELLFRAME COMPANIONSHOWN SEARCHALWAYSHIDDEN SEARCHASTOAST XCNOTIFYKEPT MENUKEYALWAYSFORWARD; do
+for d in SYSKILLNOW TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT DISARMHIDESCRASH ZERODUE SHELLBYNAME HOLDALWAYSLOUD FAULTFROMREG LATEREGALWAYSLOUD SLOWALWAYSLOUD HOLDREASONALLNORMAL STARTCLOSEUNSAID STARTNEVERSTUCK STARTRETURNNULL GIANTSHELLFRAME COMPANIONSHOWN SEARCHALWAYSHIDDEN SEARCHASTOAST XCNOTIFYKEPT MENUKEYALWAYSFORWARD STALEANCHOR DOUBLETOAST SHUTDOWNERROR; do
     if build "defect-$d" "-DQGA_LIFECYCLE_DEFECT_$d"; then
         "$OUT/defect-$d" >"$OUT/defect-$d.out" 2>&1; rc=$?
         f=$(grep -c '^FAIL' "$OUT/defect-$d.out")
@@ -280,33 +280,42 @@ shape "main.c: the lock report is QgaLockVerdict's LOCKED arm only, fed shell-se
 main_shell_latch() {
     awk '/^static HWND ShellWindowNow\(void\)/{f=1} f&&/const HWND shell = GetShellWindow\(\);/{a=NR} f&&/InterlockedExchange\(&g_ShellSeen, 1\)/{b=NR} f&&/^}/{exit} END{exit !(a && b && a<b)}' "$1" &&
     [ "$(grep -v '^[[:space:]]*//' "$1" | grep -c 'GetShellWindow()')" -eq 1 ] &&
-    grep -q 'const BOOL shellUp = ShellWindowNow() != NULL;' "$1" && grep -q 'sid != 0xFFFFFFFF && ShellWindowNow())' "$1" &&
+    grep -q 'sid != 0xFFFFFFFF && ShellWindowNow())' "$1" &&
     grep -q 'if (!ShellWindowNow()) return FALSE;' "$1" && [ "$(grep -c '|| !ShellWindowNow()) return;' "$1")" -eq 2 ] &&
     grep -q 'data->Handle == ShellWindowNow())' "$1" && grep -q '!ShellWindowNow() || g_OnSecureDesktop ||' "$1"; }
 shape "main.c: the shell-seen latch is set only through ShellWindowNow (the one GetShellWindow() call in code), which every phase gate asks" main_shell_latch "$MAIN" 'const HWND shell = GetShellWindow();'
 
-# THE DE-SLICE DOWN-CLOCK IS HELD UNTIL THE LAUNCH IS ISSUED, so the report cannot fire in flight.
-# DEFECT, MEASURED 2026-10-23 on two subjects and CLIENT-VISIBLE both times: the hold required BOTH
-# conditions (`!ShellWindowNow() && !g_WgcLaunched`), so a guest whose shell appeared early armed the
-# clock with `now` at the first poll - 064605.351 - while the launch did not go out until 064633.799.
-# The deadline expired at 064635.351 and `WGCBROKER ready (pid 8632 validated)` landed 49 ms later.
-# "Has not been running for 30 s" can only mean 30 s since we asked it to run. The arm branch already
-# anchored on g_WgcLastLaunch, but only once the launch HAD happened, and nothing re-anchored it.
-# WIDENING A HOLD CAN CREATE A SILENCE, so the leg also requires the hold to SAY why it is holding:
-# a shell up longer than the report's own deadline with no launch issued is the launch guard's
-# anomaly, said once at W, not a broker reported as down.
-main_deslice_launch_hold() {
-    grep -q 'if (!g_WgcLaunched)' "$1" &&
-    ! grep -q 'if (!ShellWindowNow() && !g_WgcLaunched)' "$1" &&
-    grep -q 'const ULONGLONG anchor = g_WgcLastLaunch ? g_WgcLastLaunch : now;' "$1" &&
-    grep -q 'LogWarning("QGABROKERLAUNCHNOTISSUED shell up %I64u s and the de-slice broker launch has not been "' "$1" &&
-    grep -q 'g_ShellSeenTick = GetTickCount64();' "$1" &&
-    grep -q 'const BOOL pendingTooLong = shellUp && g_ShellSeenTick && (now - g_ShellSeenTick) >= DESLICE_LAUNCH_PENDING_MS;' "$1" &&
-    grep -q '#define DESLICE_LAUNCH_PENDING_MS 90000' "$1" &&
-    grep -q 'g_BrokerNextWarn = g_ShellSeenTick + DESLICE_LAUNCH_PENDING_MS;' "$1" &&
-    grep -q 'g_BrokerDownSince = g_ShellSeenTick;' "$1" &&
-    awk '/if \(!g_WgcLaunched\)$/{h=NR} /const ULONGLONG anchor = g_WgcLastLaunch \? g_WgcLastLaunch : now;/{a=NR} END{exit !(h && a && h<a)}' "$1"; }
-shape "main.c: the de-slice down-clock is HELD only for the grace window (the report cannot fire in flight), then reported anchored at the SHELL after a PENDING window clear of the measured launch latency so the hold is neither a silence nor a second in-flight report, and anchored at the LAUNCH once it is issued" main_deslice_launch_hold "$MAIN" 'const ULONGLONG anchor = g_WgcLastLaunch ? g_WgcLastLaunch : now;'
+# THE DE-SLICE REPORT'S DISCIPLINE, pinned after three defects measured on a guest on 2026-10-23
+# (win11r-sup, 4.3.37.1066) when the owner saw TWO dom0 toasts for ONE injected broker death.
+# THE LEGS THIS REPLACES asserted the shape of agent 185794f - a PENDING window anchored at
+# g_ShellSeenTick - which was reverted in 21aec24. They kept FAILING from that revert until now,
+# because a source-shape leg outlives the code it describes and nobody re-ran this suite after the
+# revert. This suite asserts what the product DOES; a leg for a reverted design is deleted with it.
+#
+#   1. THE ANCHOR. The clock re-armed at g_WgcLastLaunch, which does not slide, so after a healthy
+#      run its +30 s deadline was already past: ready 20:57:39, killed 21:00:52, and the complaint
+#      fired 29 ms after the detection claiming "not running for 210 s" of which 193 s it was
+#      serving. It now goes through QgaDesliceAnchor, which keeps the launch anchor only while the
+#      broker has NEVER been ready (g_BrokerReadyAt == 0) and otherwise starts the outage at now.
+#   2. GRACEFUL SHUTDOWN IS NOT A FAULT (owner: "graceful shutdown should NOT emit error"). An
+#      ERROR, the DesliceBrokerDown flag and a dom0 row all went out 9 s before `preshutdown`. The
+#      teardown branch must come BEFORE the report so all three are skipped, not just the toast.
+#   3. ONE SITUATION, ONE DOM0 ROW. The death reporter had already sent wgcbroker.death-1; the
+#      de-slice row was the second toast. It is suppressed when a death owns the outage - but the
+#      flag and the ERROR line stay unconditional, so no instrument goes blind (Jev 1.00).
+main_deslice_report_discipline() {
+    # the hold while nothing could have been launched at all
+    grep -q 'if (!ShellWindowNow() && !g_WgcLaunched)' "$1" &&
+    # 1: the anchor is the pure function's, fed the ready tick - never a bare g_WgcLastLaunch
+    grep -q 'QgaDesliceAnchor(g_WgcLaunched ? 1 : 0, g_WgcLastLaunch, g_BrokerReadyAt, now)' "$1" &&
+    ! grep -q 'const ULONGLONG anchor = (g_WgcLaunched && g_WgcLastLaunch) ? g_WgcLastLaunch : now;' "$1" &&
+    # 2: the teardown excuse exists AND is tested before the report can fire
+    grep -q 'QgaDesliceTeardownExcused(HelpersDisarmed() ? 1 : 0, LifecycleSessionEnding() ? 1 : 0)' "$1" &&
+    awk '/QgaDesliceTeardownExcused\(/{t=NR} /QgaDesliceWarnDue\(g_BrokerDownSince/{w=NR} END{exit !(t && w && t<w)}' "$1" &&
+    # 3: the dom0 row is suppressed by a death in flight, and the flag+ERROR still precede it
+    grep -q 'if (QgaDesliceOwnedByDeath(g_BrokerDiedAt))' "$1" &&
+    awk '/CfgWriteDword\(NULL, REG_CONFIG_DESLICE_DOWN_VALUE, binPresent/{f=NR} /QGADESLICEDOWN de-slice broker EXPECTED but not running/{e=NR} /if \(QgaDesliceOwnedByDeath\(g_BrokerDiedAt\)\)/{d=NR} END{exit !(f && e && d && f<d && e<d)}' "$1"; }
+shape "main.c: the de-slice report is anchored through QgaDesliceAnchor, excused during a teardown BEFORE it can fire, and its dom0 row yields to a death report while the flag and the ERROR line stay" main_deslice_report_discipline "$MAIN" 'QgaDesliceAnchor(g_WgcLaunched ? 1 : 0, g_WgcLastLaunch, g_BrokerReadyAt, now)'
 
 # THE EVENT-GATED LAUNCH WAS REVERTED AS A MEASURED REGRESSION - do not re-add it from the shape.
 # agent f9ef238 replaced the wake that paced the de-slice broker's one launch with an event
