@@ -485,6 +485,8 @@ DEFAULT_THRESHOLDS = {
     "requested_stop_nonzero_exit": {"max": 0, "severity": "P2", "why": "a requested stop must exit 0 (the 0xb7 case)"},
     "errors_during_requested_stop": {"max": 0, "severity": "P2", "why": "no ERROR line between the watchdog's 'asked to exit' and 'is gone'"},
     "error_lines_unattributable": {"max": 0, "severity": "P2", "why": "ERROR lines this capture cannot bill to either build: a module wrote only superseded-version lines before the install turnover, so the candidate wrote no log for it at all. The evidence is incomplete, which is a different verdict from the candidate having logged them (measured 2026-10-22, win10-upgrade of run 39767068509)"},
+    "warning_lines_unattributable": {"max": 0, "severity": "P2", "why": "WARNING lines this capture cannot bill to either build - the warning half of error_lines_unattributable, which was gated on 2026-10-22 while this half stayed folded into an informational sum. Same verdict: the evidence is incomplete, which is not the same as the candidate having logged them"},
+    "candidate_build_absent": {"max": 0, "severity": "P1", "why": "the build under test was NAMED (--build) and no module in this capture declared it: the capture holds not one line the candidate wrote, so every attribution mechanism is inert and no verdict about the candidate can rest on this pull. install_anchor returns None whenever no module shows a turnover - measured on win11-upgrade of campaign 20261023-050323 - and nothing reported that the filter was inert, because install_anchor is neither gated nor informational"},
     "stale_error_lines": {"max": 0, "severity": "P2", "why": "'failed with error 0x0: The operation completed successfully' is a stale error code"},
     "watchdog_fast_death_backoffs": {"max": 0, "severity": "P2", "why": "the agent died within 10 s of launch, or a launch failed"},
     "service_failures": {"max": 0, "severity": "P1", "why": "System 7023/7024/7031/7034/7043 for one of our services"},
@@ -507,6 +509,8 @@ INFORMATIONAL_METRICS = ["error_lines", "modules_unattributable", "warning_lines
                          # what was declared, with its kind and whether it matched - the audit trail
                          # for the tolerated kind, whose absence deliberately cannot breach
                          "declared_errors_tolerated", "declared_errors_detail",
+                         # what the capture DID declare, printed beside candidate_build_absent
+                         "candidate_build_absent_detail",
                          # instances forgiven as an orderly service restart, so the forgiveness is
                          # a figure and not an absence
                          "agent_service_restarts"]
@@ -789,6 +793,98 @@ def _declared_version(v):
     return v if (v and v != "0.0.0.0") else None
 
 
+def declared_unreadable(lf, l):
+    """True when this line's own module DECLARED a version it could not read (0.0.0.0).
+
+    THE DISCRIMINATOR THAT KEEPS OUR INSTALLER OUT OF THE PREDECESSOR'S COLUMN. `_declared_version`
+    maps 0.0.0.0 to None at parse time - correctly, because believing it fabricates a build nothing
+    can match - and that made such a line indistinguishable from a line with no init record at all.
+    The pre-install clause in build_scope() exists for the second kind only: sources that
+    STRUCTURALLY cannot carry a version (bridge.log, Windows Event Log / TaskScheduler records).
+
+    MEASURED 2026-10-23 on /home/user/qwt-matrix/20261023-061821/win11-upgrade-guestlogs:
+    `qwtng-netsetup`, OUR INSTALLER, wrote 18 lines of which 12 are ERROR, ALL of them before the
+    install anchor. It has no version resource, so it prints four zeroes, so it looks version-LESS,
+    so the pre-install clause claims it. Run against the code as committed TODAY the prior-build
+    predicate is true for all 12. That run's own report.json - written before the
+    `_declared_version` fix - instead counted them as `error_lines_unattributable = 12` with
+    `error_lines_prior_build = 3`. The route changed; the outcome did not. Either way those 12
+    leave `error_lines`, the metric that accuses the candidate, and that is a zero from "nothing
+    was considered" reading like a zero from "nothing happened".
+
+    Resolution order mirrors line_version(): the line's own pid, then the init in force at it, then
+    the file. Jev scored this discriminator sound at 0.85 ("declared it cannot read its version" vs
+    "no init at all" is the right split), against reintroduces-misattribution 0.07.
+    """
+    if lf is None:
+        return False
+    pid = str((l.extra or {}).get("pid") or "")
+    if pid:
+        for i in lf.inits:
+            if i.get("pid") is not None and str(i["pid"]) == pid:
+                return bool(i.get("version_unreadable"))
+    gov = None
+    if l.ts is not None:
+        for i in lf.inits:
+            if i.get("ts") is not None and i["ts"] <= l.ts:
+                gov = i
+            else:
+                break
+    if gov is not None:
+        return bool(gov.get("version_unreadable"))
+    return bool(getattr(lf, "version_unreadable", False))
+
+
+def _candidate_series(builds, build):
+    """The MAJOR.MINOR.PATCH of the build under test: from --build when given, else self-calibrated
+    as the newest series among the modules that DO show a turnover."""
+    s = _build_series(build)
+    if s:
+        return s
+    cands = {_build_series(i.get("newest")) for i in (builds or {}).values()
+             if len(i.get("versions") or []) > 1 and _build_series(i.get("newest"))}
+    return max(cands) if cands else None
+
+
+def superseded_series(builds, build=None):
+    """The set of MAJOR.MINOR.PATCH series this capture SHOWS were superseded.
+
+    THE FIX FOR is_prior_build's ">= 2 versions IN THIS MODULE" REQUIREMENT. That requirement is
+    per-module, and a module whose ONLY log in the capture is the PREDECESSOR's declares one version
+    - so nothing was "superseded" as far as that module could tell, and none of its lines could be
+    excluded: they were billed to the candidate when --build was not passed (which, per
+    module_builds' own comment, is what every campaign did until 2026-10-23) and to nobody when it
+    was. MEASURED, win10-upgrade of run 39767068509: gui-agent's only log declared 4.3.35.795 and
+    two breaching strings absent from the candidate's source were reported against the release.
+    The owner's account of the cost is his own and is not a measurement of this function: "we
+    literally fucked around for 3 weeks managing the fallout and false alarms from these upgrades"
+    (2026-10-23), of which an entry fixture carrying since-fixed defects is one contributor.
+
+    THE CAPTURE KNOWS MORE THAN THE MODULE DOES. Other modules in the same pull went 4.3.35.795 ->
+    4.3.37.1062, so the capture itself establishes that the 4.3.35 series is predecessor-era. A line
+    carrying a series in that set is the predecessor's wherever it appears.
+
+    SERIES, NOT THE FOURTH COMPONENT, because the build revision moves per CI run; and derived ONLY
+    from modules that demonstrate a turnover, with the candidate's own series removed. That is what
+    keeps independently-versioned components whole: in the measured capture file-receiver declares
+    4.2.2.0 and qubesdb-daemon 4.3.1.0 - both ship INSIDE the 4.3.37 package and neither series is
+    in this set, so both keep being attributed by the ordinary rules. An ABSOLUTE comparison against
+    the package version would have condemned every line they wrote, which is hiding in the other
+    direction; Jev scored this shape sound at 0.97 against condemns-stock 0.01.
+    """
+    cand = _candidate_series(builds, build)
+    out = set()
+    for info in (builds or {}).values():
+        vers = info.get("versions") or []
+        if len(vers) < 2:
+            continue
+        for v in vers:
+            s = _build_series(v)
+            if s and s != cand:
+                out.add(s)
+    return out
+
+
 def line_version(lf, l):
     """The module version that wrote this line, or None when nothing declared one.
 
@@ -862,17 +958,26 @@ def line_boot(lf, l, boots):
     return min(boots, key=lambda b: abs((b["time"] - bt).total_seconds()))["id"]
 
 
-def is_prior_build(lf, l, builds):
-    """True when this line was written by a build the capture itself shows was superseded."""
+def is_prior_build(lf, l, builds, superseded=None):
+    """True when this line was written by a build the capture itself shows was superseded.
+
+    `superseded` is superseded_series()'s capture-wide set. Without it this function could only ask
+    the LINE'S OWN MODULE whether a turnover happened, and a module whose only log in the pull is
+    the predecessor's answers no - see superseded_series() for the measured case.
+    It defaults to None so the old two-version behaviour is what a caller that does not pass it
+    gets. See superseded_series() for the measured case (win10-upgrade of run 39767068509).
+    """
     mod = lf.module
     if not mod or mod not in builds:
         return False
     info = builds[mod]
-    if len(info["versions"]) < 2:
-        return False      # one version: nothing was superseded, so nothing is excluded
     v = line_version(lf, l)
     if not v:
         return False      # AN UNKNOWN VERSION NEVER SHRINKS A COUNT - the GUARD:winsince rule
+    if len(info["versions"]) < 2:
+        # This module shows one version, so it cannot tell a turnover happened. The CAPTURE can:
+        # if that series is one ANOTHER module shows as superseded, this line is the predecessor's.
+        return bool(superseded and _build_series(v) in superseded)
     return v != info["newest"]
 
 
@@ -905,10 +1010,16 @@ def build_scope(files, build):
     """
     builds = module_builds(files, build)
     anchor = install_anchor(files, builds)
+    # THE CAPTURE-WIDE SUPERSEDED SET, computed once: it is what lets a module with a single
+    # declared version be attributed at all. See superseded_series().
+    sup = superseded_series(builds, build)
     def pre_install(l):
         return bool(anchor and l.ts is not None and l.ts < anchor)
+    # `not declared_unreadable(...)`: the pre-install clause is for sources that STRUCTURALLY carry
+    # no version, never for a module that declared 0.0.0.0. Without it this clause billed 12 of our
+    # own installer's ERROR lines to the predecessor - measured, see declared_unreadable().
     def prior(lf, l):
-        return is_prior_build(lf, l, builds) or (pre_install(l) and not line_version(lf, l))   # GUARD:priorbuild DEFECT: return False
+        return is_prior_build(lf, l, builds, sup) or (pre_install(l) and not line_version(lf, l) and not declared_unreadable(lf, l))   # GUARD:priorbuild DEFECT: return False
 
     # THE THIRD CASE, which fell through BOTH clauses above and was therefore billed to the build
     # under test. MEASURED 2026-10-22 on the win10-upgrade cell of acceptance run 39767068509:
@@ -950,6 +1061,21 @@ def build_scope(files, build):
         if prior(lf, l):
             return False                      # already decided, and decided correctly
         mod = (lf.module if lf is not None else None)
+        # A STOCK COMPONENT'S VERSION IS NOT OUR PACKAGE'S VERSION, so "none of its declared
+        # versions is the build under test" is true of it on EVERY healthy capture and says nothing
+        # about missing evidence. MEASURED over all 195 captures on this rig (2026-10-23,
+        # scratchpad/backtest-birth-cutoff.py): qubesdb-daemon@4.3.1.0 was 10323 of the 12430
+        # unattributable WARNING lines with the build named, and 1733 of 1733 - every single one -
+        # with it unnamed. It ships inside the 4.3.37 package and declares 4.3.1.0 because it
+        # versions on its own line, exactly as file-receiver declares 4.2.2.0.
+        # THIS MATTERS BEYOND TIDINESS: error_lines_unattributable has been GATED at max 0 since
+        # 2026-10-22, so a single stock ERROR line fails a cell for an evidence gap that does not
+        # exist - and gating the warning half, which this same change does, would have breached on
+        # 80 of these on the one upgrade cell measured in full (20261023-061821 win11-upgrade).
+        # No module outside STOCK_FAMILIES is spared by this test anywhere in the corpus: no
+        # winutils or file-receiver line appears among the unattributable lines at all.
+        if lf is not None and lf.family in STOCK_FAMILIES:
+            return False
         info = builds.get(mod) if mod else None
         if bmaj and info and info.get("versions"):
             # The module declared versions and NONE of them is the build under test.
@@ -1017,6 +1143,9 @@ class LogFile:
                                  # inside one capture (see module_builds)
         self.session = None
         self.version = None
+        # DECLARED-BUT-UNREADABLE IS NOT THE SAME AS UNDECLARED, and conflating them hid twelve of
+        # our own installer's ERROR lines. See declared_unreadable().
+        self.version_unreadable = False
         self.uptime_s = None
         self.boot_time = None
         self.boot = None
@@ -1126,6 +1255,10 @@ def parse_winutils(lf, raw_lines):
             own_ver = _declared_version(kv.get("ver"))
             if own_ver:
                 lf.version = own_ver
+            elif kv.get("ver"):
+                # It DECLARED a version and could not read it (0.0.0.0). Keep that fact: it is what
+                # separates our own installer from a line whose writer this capture cannot name.
+                lf.version_unreadable = True
             # ONE PROCESS IS ONE RECORD, EVEN WHEN BOTH SPELLINGS ARE IN THE FILE. At
             # LOG_LEVEL_DEBUG the demoted six-line banner comes back, so a support capture holds
             # the legacy block AND this line for the SAME process start - and appending here would
@@ -1134,6 +1267,8 @@ def parse_winutils(lf, raw_lines):
             # at the END of LogInit, after "Running as user ... process ID: N" has already opened a
             # record and set its pid, so the pid is the join: same pid as the open record means
             # FILL it, not append. Jev scored this 0.45 as the worst defect in the first cut.
+            if not own_ver and kv.get("ver"):
+                lf.version_unreadable = True
             bpid = None
             try:
                 bpid = int(kv["pid"])
@@ -1248,6 +1383,12 @@ def parse_winutils(lf, raw_lines):
                     lf.version = _dv
                     if lf.inits:
                         lf.inits[-1]["version"] = _dv
+                else:
+                    # Same as the QWTBIRTH path: 0.0.0.0 is a DECLARATION that the module could not
+                    # read its version, and it must not read as "no init record at all".
+                    lf.version_unreadable = True
+                    if lf.inits:
+                        lf.inits[-1]["version_unreadable"] = True
     if lf.pid is None:
         # ONLY the old per-process name shape carries a pid: "<module>-<yyyymmdd>-<hhmmss>-<pid>.log".
         # The current shape is "<module>-<yyyymmdd>.log", and `-(\d+)\.log$` read that DATE as a
@@ -2777,6 +2918,33 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
                               and OUR_TASKS_RE.search(l.msg) and sel(l.ts) and not _pre_install(l)
                               and task_record_is_failure(l.extra.get("id"), l.msg)])   # GUARD:taskrc DEFECT: and True])
     m["install_anchor"] = _anchor.isoformat(sep=" ") if _anchor else None
+    # ATTRIBUTION THAT COULD NOT RUN MUST FAIL, NOT GRADE GREEN. install_anchor is neither a gated
+    # metric nor an informational one, so when it came back None - which it did on win11-upgrade and
+    # win11-clean of two campaigns - the whole build filter was inert and NOTHING said so. This is
+    # the figure that says so, and it is the property itself rather than a proxy for it: the build
+    # under test was NAMED and no module in this capture declared it, so the capture holds not one
+    # line the candidate wrote and no verdict about the candidate can rest on it.
+    # install_anchor returns None whenever NO module shows a turnover - measured on win11-upgrade of
+    # campaign 20261023-050323 (turnover modules 0, anchor None), where the whole build filter was
+    # therefore inert and nothing in the report said so.
+    # None, not 0, when --build was not passed: a metric that cannot be evaluated must not report a
+    # pass. Jev scored this shape correct-and-necessary at 0.96.
+    _cand_series = _build_series(build)
+    if _cand_series:
+        _cand_inits = [(lf.module, i.get("version")) for lf in files for i in lf.inits
+                       if i.get("version") and _build_series(i["version"]) == _cand_series]
+        m["candidate_build_absent"] = 0 if _cand_inits else 1
+        # A REPORTED FIELD, not a hand-threaded line list: breach_evidence has an explicit arm for
+        # this metric (a threaded list alone does not satisfy breach-evidence-selftest's static
+        # coverage count, which caught exactly this).
+        m["candidate_build_absent_detail"] = [
+            "build under test = %s (series %s)" % (build, ".".join(_cand_series)),
+            "modules declaring it: %s" % (", ".join("%s@%s" % t for t in sorted(set(_cand_inits))) or "NONE"),
+            "versions this capture declares: %s" % (", ".join(
+                "%s=%s" % (k, "/".join(v["versions"])) for k, v in sorted(_builds.items())) or "none"),
+        ]
+    else:
+        m["candidate_build_absent"] = None
     # THESE TWO USED TO SIT ABOVE THIS BLOCK, so the rule the comment above states - every
     # line-level metric is scoped to the BUILD UNDER TEST - never reached them. On an UPGRADE cell
     # that means grading the release on the binary it REPLACED, because the entry image's logs are
@@ -2886,8 +3054,14 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
                                     "matched": sum(1 for l in errs if rx.search(l.raw))}
                                    for rx in _decl]
     _warns_all = [(lf, l) for lf in files for l in lf.lines if l.level == "W" and sel(l.ts)]
+    _warns_unattrib = [l for lf, l in _warns_all if not _prior(lf, l) and _unattrib(lf, l)]
     warns = [(lf, l) for lf, l in _warns_all if not _prior(lf, l) and not _unattrib(lf, l)]
-    m["warning_lines_prior_build"] = len(_warns_all) - len(warns)
+    # THE WARNING HALF OF THE SAME EVIDENCE GAP, which until now could not breach at all: this
+    # figure was `all - kept`, so it LUMPED the predecessor's warnings together with the ones no
+    # build in the capture can own, and the sum was informational. The error half has been gated
+    # since 2026-10-22; a capture whose unattributable lines happen to be warnings graded green.
+    m["warning_lines_prior_build"] = len(_warns_all) - len(warns) - len(_warns_unattrib)
+    _count("warning_lines_unattributable", _warns_unattrib)
     m["warning_lines"] = len(warns)
     # SPLIT BY OWNER, so "no warnings on normal operation" is a number about OUR code rather than a
     # number dominated by a stock binary we deliberately do not build. Informational for now: the
@@ -3159,6 +3333,11 @@ def breach_evidence(b, st, metrics):
                 out.append("pid %s requested stop: %s -> %s" % (i["pid"], (i["stop"]["asked_line"] or "")[:200], (i["stop"]["gone_line"] or "no 'is gone' line")[:200]))
                 for l in i["errors_during_stop"]:
                     out.append("  ERROR during the stop: " + l.raw[:220])
+    elif name in ("candidate_build_absent",):
+        # The evidence is not a line list - the point is WHICH versions the capture does declare,
+        # since that is what tells the reader whether the pull is incomplete or the install failed.
+        for s_ in (metrics.get("candidate_build_absent_detail") or []):
+            out.append(str(s_)[:300])
     elif name in ("signatures_unclassified",):
         # The three classes are declared in the baseline; these matched none of them and are ERROR or
         # WARNING, so they are ALERTs. Printed in full, because the next reader has to decide which

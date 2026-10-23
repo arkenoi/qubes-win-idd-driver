@@ -76,6 +76,12 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # required. THE COMPILER-POLICY EXCLUSION DOES NOT APPLY TO IT: the offline job is ubuntu-latest, so
 # gcc is present; it checks out with `submodules: true`, so agent/ is there; and it materialises the
 # pinned upstream/ro/qubes-windows-utils that this suite's -fsyntax-only checks read.
+# 100 -> 101 on 2026-10-23: build-attribution-selftest.sh ADDED - the BIRTH CUTOFF. It proves that
+#   the entry fixture's lines are excluded even when its module declares one version, that our own
+#   installer's ERRORs (0.0.0.0, pre-anchor) are NOT excluded, that a stock component's version
+#   does not make its lines unattributable, and that a capture holding nothing the candidate wrote
+#   FAILS. Four mutations, each seen to fail. Measured cause: 396 ERROR lines across the 195
+#   captures on this rig were hidden as prior-build, 12 of them our installer's per upgrade cell.
 # 76 -> 77 on 2026-10-21: assert-payload-floor-selftest.sh ADDED. The harness audit measured
 # tools/assert-payload.sh printing `PASS: payload verified - 0 files` over an empty SHA256SUMS.txt:
 # the integrity loop ran zero iterations and all three consumers branch only on the exit code, so
@@ -205,7 +211,7 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # consumer accepts the shipped QWTBIRTH form, skipping comments (all six now explain the demotion in
 # prose a whole-file check would pass on), and drives the restart parser against a line a 4.3.37
 # guest actually wrote, with the branch removed to prove it reads 0 without it.
-FLOOR=${OFFLINE_SUITES_FLOOR:-100}
+FLOOR=${OFFLINE_SUITES_FLOOR:-101}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"
