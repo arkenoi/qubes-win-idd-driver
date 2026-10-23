@@ -113,7 +113,7 @@ $d=(Get-ItemProperty "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\").LogDir
 $f=Get-ChildItem $d -Filter gui-agent-*.log -EA SilentlyContinue | Sort LastWriteTime -Desc | Select -First 1
 # THIS INSTANCE ONLY: one file per module per day; the last "process ID:" is where it began.
 if ($f) { $all=@(Get-Content $f.FullName); $i=0
-  for ($k=0; $k -lt $all.Count; $k++) { if ($all[$k] -match "process ID: \d+") { $i=$k } }
+  for ($k=0; $k -lt $all.Count; $k++) { if ($all[$k] -match "(process ID: \d+|QWTBIRTH\s.*\bpid=\d+)") { $i=$k } }
   $mine=@(); if ($all.Count -gt $i) { $mine=$all[$i..($all.Count-1)] }
   Write-Output ("QGAUAC " + @($mine | Select-String -SimpleMatch "QGAUAC").Count) } else { Write-Output "QGAUAC none" }')
 psd=$(echo "$UA" | grep -ao 'PROMPTSD [a-z0-9]*' | awk '{print $2}')
@@ -140,7 +140,7 @@ $f=Get-ChildItem $d -Filter gui-agent-*.log -EA SilentlyContinue | Sort LastWrit
 # THIS INSTANCE ONLY: one file per module per day, and an ENTERED/LEFT imbalance from an earlier
 # instance would read as this run's stuck secure desktop. The last "process ID:" is where it began.
 $all=Get-Content $f.FullName; $i=0
-for ($k=0; $k -lt $all.Count; $k++) { if ($all[$k] -match "process ID: \d+") { $i=$k } }
+for ($k=0; $k -lt $all.Count; $k++) { if ($all[$k] -match "(process ID: \d+|QWTBIRTH\s.*\bpid=\d+)") { $i=$k } }
 $a=@(); if ($all.Count -gt $i) { $a=$all[$i..($all.Count-1)] }
 Write-Output ("ENTERED " + @($a | Select-String -SimpleMatch "secure-desktop ENTERED").Count)
 Write-Output ("LEFT " + @($a | Select-String -SimpleMatch "secure-desktop LEFT").Count)

@@ -72,7 +72,7 @@ agent_mapped(){  # <hwnd like 0x3601e6> -> count of MAP messages for it
 $f=Get-ChildItem $d -Filter gui-agent-*.log | Sort LastWriteTime -Desc | Select -First 1
 # THIS INSTANCE ONLY: one file per module per day, so a whole-file count carries earlier maps.
 $all=@(Get-Content $f.FullName); $i=0
-for ($k=0; $k -lt $all.Count; $k++) { if ($all[$k] -match "process ID: \d+") { $i=$k } }
+for ($k=0; $k -lt $all.Count; $k++) { if ($all[$k] -match "(process ID: \d+|QWTBIRTH\s.*\bpid=\d+)") { $i=$k } }
 $mine=@(); if ($all.Count -gt $i) { $mine=$all[$i..($all.Count-1)] }
 Write-Output ("AGENTMAP " + @($mine | Select-String -SimpleMatch "msg=MAP,hwnd=0x'"$h"'").Count)' \
     | grep -aoE 'AGENTMAP [0-9]+' | awk '{print $2}' | head -1

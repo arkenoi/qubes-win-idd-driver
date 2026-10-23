@@ -147,7 +147,7 @@ if ($f.Count -eq 0) { Write-Output "VCHANCONN 0"; Write-Output "NEWLOG none"; ex
 Write-Output ("NEWLOG " + $f[0].Name)
 $L = @(Get-Content -LiteralPath $f[0].FullName -ErrorAction SilentlyContinue)
 $init = 0; $i = 0
-foreach ($ln in $L) { $i++; if ($ln -match ("-" + $p + ":[0-9]+-[A-Z]\]") -and $ln -match "process ID: $p") { $init = $i } }
+foreach ($ln in $L) { $i++; if ($ln -match ("-" + $p + ":[0-9]+-[A-Z]\]") -and ($ln -match "process ID: $p" -or $ln -match ("\bpid=" + $p + "\b"))) { $init = $i } }
 if ($init -eq 0) { Write-Output "VCHANCONN 0"; Write-Output "INITLINE 0"; exit }
 Write-Output ("INITLINE " + $init)
 $conn = 0

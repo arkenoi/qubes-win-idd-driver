@@ -396,7 +396,8 @@ foreach ($f in $allAgentLogs) {
                                 -ErrorAction SilentlyContinue)
         if ($hits.Count -eq 0) {
             $pidInPrefix = $false
-            $hits = @(Select-String -LiteralPath $f.FullName -Pattern ("LogInit:.*process ID: {0}(\D|$)" -f $p) `
+            # BOTH FORMS - the legacy banner line is DEMOTED and does not ship: windows-utils' six-line LogInit banner went to LogDebug and the product ships LogLevel 3, so "process ID: N" is absent on 4.3.37. Its INFO replacement is QWTBIRTH, carrying the same pid as pid=N.
+            $hits = @(Select-String -LiteralPath $f.FullName -Pattern ("LogInit:.*(process ID: {0}|QWTBIRTH\s.*\bpid={0})(\D|$)" -f $p) `
                                     -ErrorAction SilentlyContinue)
         }
         if ($hits.Count -gt 0) {

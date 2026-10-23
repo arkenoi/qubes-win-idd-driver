@@ -152,3 +152,4 @@ campaign-full-selftest.sh
 wedge-gates-selftest.sh
 deathevent-selftest.sh
 ttfw-ab-selftest.sh
+init-record-consumers-selftest.sh

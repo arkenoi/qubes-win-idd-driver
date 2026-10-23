@@ -196,7 +196,16 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # the capture service's exit status read on every poll (an empty per-window tar has three causes, two
 # of which look exactly like "no window yet"), interleaving with an alternating start side, a smoke
 # sweep over a single-build window gating the exit code, and IMPROVED claimed only on disjoint ranges.
-FLOOR=${OFFLINE_SUITES_FLOOR:-99}
+# 99 -> 100 on 2026-10-23: init-record-consumers-selftest.sh ADDED. The LogInit banner's demotion to
+# LogDebug removed `process ID: N` from every shipped log, and SIX readers key on it to answer "which
+# lines are THIS instance's" - the sanctioned agent restart (which then cannot prove a turnover, so
+# the kill-by-name it exists to prevent is all that is left), two harnesses that SCOPE a count with it
+# and therefore counted the whole file instead, and an acceptance gate that emits INITLINE 0 and
+# exits. One severity edit, six readers, every failure silent or inverted. The suite asserts each
+# consumer accepts the shipped QWTBIRTH form, skipping comments (all six now explain the demotion in
+# prose a whole-file check would pass on), and drives the restart parser against a line a 4.3.37
+# guest actually wrote, with the branch removed to prove it reads 0 without it.
+FLOOR=${OFFLINE_SUITES_FLOOR:-100}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"

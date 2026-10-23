@@ -69,7 +69,8 @@ if ($ra.ok -and $ra.new_log) {
     $lines = @(Get-Content -LiteralPath $lp -ErrorAction SilentlyContinue)
     $initIdx = -1
     for ($i = $lines.Count - 1; $i -ge 0; $i--) {
-        if ($lines[$i] -match 'LogInit:.*process ID:\s*(\d+)' -and [int]$Matches[1] -eq [int]$ra.new_pid) { $initIdx = $i; break }
+        # BOTH FORMS (non-capturing alternation so $Matches[1] stays the pid) - the legacy banner line is DEMOTED and does not ship: windows-utils' six-line LogInit banner went to LogDebug and the product ships LogLevel 3, so "process ID: N" is absent on 4.3.37. Its INFO replacement is QWTBIRTH, carrying the same pid as pid=N.
+        if ($lines[$i] -match 'LogInit:.*(?:process ID:\s*|QWTBIRTH\s.*\bpid=)(\d+)' -and [int]$Matches[1] -eq [int]$ra.new_pid) { $initIdx = $i; break }
     }
     if ($initIdx -lt 0) { $why = 'no init line for the new pid in the new log' }
     else {

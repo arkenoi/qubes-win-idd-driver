@@ -18,8 +18,10 @@
 #
 # THE PROOF (missing data FAILS, .claude/skills/experimenter rule 3). A file NAME is not an agent,
 # and the log is one file per module per day - the name carries no pid and a restart produces no new
-# file - so identity comes only from CONTENT: the "LogInit: ... process ID: N" line each instance
-# writes (the bracket prefix holds the THREAD id, so that is the only in-content pid). All three are
+# file - so identity comes only from CONTENT: the init record each instance writes - "LogInit: QWTBIRTH
+# ... pid=N" on 4.3.37 and later, or the legacy "LogInit: ... process ID: N" on builds before the
+# banner was demoted to LogDebug (the bracket prefix holds the THREAD id, so those are the only
+# in-content pids). All three are
 # required, each with its own INVALID reason:
 #   1. the LAST init record in the file: its pid, and its line timestamp at or after the service
 #      start (no-new-init otherwise - an older record is the previous instance's, same file);
@@ -90,7 +92,16 @@ function Get-GuiAgentLastInit([string]$Path) {
     $n = 0
     foreach ($ln in $lines) {
         $n++
-        if ($ln -match 'process ID: (\d+)') {
+        # BOTH FORMS, because the legacy one no longer ships. windows-utils' six-line LogInit banner -
+        # which carried "Running as user: ..., process ID: N" - was demoted to LogDebug, and the
+        # product ships LogLevel 3 (INFO), so at the shipped level that line DOES NOT EXIST. Its
+        # replacement is the single INFO line QWTBIRTH, which carries the same pid as `pid=N`.
+        # MEASURED 2026-10-23 on win11r-ttfw running 4.3.37.1063: gui-agent-20261023.log held ZERO
+        # 'process ID:' lines and two QWTBIRTH lines, so this helper returned pid 0 and every caller
+        # got `RESTART INVALID-INSTRUMENT no-init-record` - the sanctioned agent restart could not
+        # prove a turnover on the build it ships. The only files still carrying the old form were
+        # written by 4.3.35.795 and 4.2.2.0, i.e. the entry fixture and the golden.
+        if ($ln -match 'QWTBIRTH\s.*\bpid=(\d+)' -or $ln -match 'process ID: (\d+)') {
             $r.pid = [int]$Matches[1]
             $r.line = $n
             $r.at = $null
@@ -180,7 +191,7 @@ function Resolve-GuiAgentTurnover {
     $init = Get-GuiAgentLastInit $nl.FullName
     $r.init_pid = $init.pid; $r.init_at = $init.at; $r.init_line = $init.line
     if ($r.init_pid -le 0) {
-        $r.stage = 'no-init-record'; $r.detail = "$($nl.Name) carries no 'process ID:' init record"; return $r
+        $r.stage = 'no-init-record'; $r.detail = "$($nl.Name) carries no init record (neither QWTBIRTH pid= nor the legacy 'process ID:')"; return $r
     }
     # Before our start, or the pid already running: the previous instance's, which is the normal
     # state of this shared file until the new one inits.
