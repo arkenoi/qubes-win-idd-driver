@@ -244,7 +244,18 @@ smoke_rc=0
 if run_side B "$B" "$BH" "smoke"; then
   if w_alive "$SUBJ" 60 || { sleep 30; w_alive "$SUBJ" 60; }; then
     SINCE_SMOKE=$(date -u -d '-3 minutes' +%Y-%m-%dT%H:%M:%SZ)
-    (cd "$ROOT" && timeout 1200 bash mgmt/harness/log-sweep.sh "$SUBJ" "$SINCE_SMOKE" "$OUT/smoke-sweep") \
+    # TWO INSTRUMENTS GRADING ONE CAMPAIGN MUST CARRY THE SAME DISPOSITIONS - matrix.sh:3216 states
+    # that rule about itself, and this harness broke it. MEASURED 2026-10-23: the smoke sweep here
+    # raised signatures_unclassified=1 at P1 on
+    #     qrexec|E|wmain: open agent pipe failed with error 0x2
+    # and I filed it as a product defect. It is declared at matrix.sh:497 for EVERY cell, with the
+    # stated reason that this rig gives each subject an EMPTY netvm (CLAUDE.md: only a guest that
+    # TESTS PV networking gets one), so /qubes-ip does not exist and those modules fail that way -
+    # Jev on that reason: caused 0.91, conf 0.86. A gate that does not carry the campaign's
+    # dispositions invents P1s, and an invented P1 is as bad as a missed one.
+    (cd "$ROOT" && timeout 1200 bash mgmt/harness/log-sweep.sh "$SUBJ" "$SINCE_SMOKE" "$OUT/smoke-sweep" \
+      --tolerate-error '(SetupNetwork: Failed to get qubes-ip|QioWriteBuffer: WriteFile failed with error 0xe8|send_command_to_daemon: write to daemon failed with error 0xe8|wmain: open agent pipe failed with error 0x2)' \
+      'this rig gives every subject an EMPTY netvm (CLAUDE.md: only a guest that TESTS PV networking gets one), so /qubes-ip legitimately does not exist and those modules fail that way. Same disposition matrix.sh:497 carries for every cell; Jev on that reason caused 0.91 conf 0.86.') \
       > "$OUT/smoke-sweep.out" 2>&1
     sweepline=$(grep -a 'LOGSWEEP-RESULT' "$OUT/smoke-sweep.out" | tail -1)
     log "   $sweepline"
