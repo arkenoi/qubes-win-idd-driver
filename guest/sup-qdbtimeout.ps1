@@ -278,6 +278,41 @@ try {
     $has1460 = $false
     foreach ($d in $seen.detail) { if ($d -match '1460|timeout period expired') { $has1460 = $true } }
     T 'scm_7023_names_1460' $has1460
+
+    # ---- AND WHAT THE AGENT ITSELF SAID, because "no 7023" has two causes ------------------------
+    # A missing 7023 used to be reported as "either the service did not fail or the SCM did not
+    # record it" - two guesses, no evidence, which is the shape this project treats as a defect in
+    # the cell. The agent's own log separates them, and on 1024-1831 it did: instance pid 7840 logged
+    # its QWTBIRTH at 21:49:35.217 and then NOTHING until 21:56:37.183, one second after the resume,
+    # with no timeout line anywhere - so the service never failed, because the bound was never
+    # evaluated. qdb_open itself does not return while the daemon is alive but not answering
+    # (measured: 87063 ms, back 67 ms after the resume), and the loop only tested its budget BETWEEN
+    # calls. Filed as QDBWAITBOUNDISINERTWHILETHEDAEMONISSILENT and fixed by bounding the call.
+    # FROM THE REGISTRY, never a literal path: on a subject with the secondary log volume bound the
+    # live LogDir is Z:\qwt-logs\<vm> and Q:\Qubes Logs holds only the PREDECESSOR's install-era
+    # files (measured 2026-10-24: Q: carried `Module version: 4.3.35.795` under the old log prefix
+    # while Z: carried `QWTBIRTH ... ver=4.3.37.1078`).
+    $logdir = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -EA SilentlyContinue).LogDir
+    if (-not $logdir) { $logdir = 'Q:\Qubes Logs' }
+    T 'agentlog_dir' $logdir
+    $qrxLogs = @(Get-ChildItem -LiteralPath $logdir -File -Filter 'qrexec-agent*.log' -EA SilentlyContinue |
+                 Sort-Object LastWriteTimeUtc)
+    T 'agentlog_files' (($qrxLogs | ForEach-Object { $_.Name }) -join ',')
+    $timeoutLine = $null; $abandonLine = $null; $births = @()
+    foreach ($g in $qrxLogs) {
+        $txt = Get-Content -LiteralPath $g.FullName -EA SilentlyContinue
+        foreach ($l in @($txt)) {
+            if ($l -match 'timed out after \d+ ms: connect to qdb server') { $timeoutLine = $l }
+            if ($l -match 'abandoning a qdb_open') { $abandonLine = $l }
+            if ($l -match 'QWTBIRTH module=qrexec-agent .* pid=(\d+)') { $births += $l }
+        }
+    }
+    # The instance the injection restarted is the LAST one born, and the gap to whatever it wrote
+    # next is the measurement: a long silence with no timeout line IS the inert bound.
+    $lastBirth = $(if ($births.Count) { $births[$births.Count - 1] } else { $null })
+    T 'agent_last_birth' $(if ($lastBirth) { $lastBirth } else { 'NONE - the agent logged no birth at all' })
+    T 'agent_qdb_timeout_line' $(if ($timeoutLine) { $timeoutLine } else { 'ABSENT - WaitForQdb never reported a timeout' })
+    T 'agent_qdb_abandon_line' $(if ($abandonLine) { $abandonLine } else { 'ABSENT - no bounded-call abandon (a pre-fix binary has no such line)' })
 }
 finally {
     # ---- restore, always -------------------------------------------------------------------------

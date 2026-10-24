@@ -339,7 +339,22 @@ if has L3; then
 # it. Nothing is killed by name - the pid comes from the agent's own log line.
 $ErrorActionPreference = 'Continue'
 function L($k,$v){ "L3|$k|$v" }
-$logdir = 'Q:\Qubes Logs'
+# THE LOGDIR COMES FROM THE REGISTRY, NEVER A LITERAL - this line read 'Q:\Qubes Logs' until
+# 2026-10-24, and on a subject with the secondary log volume bound that is the PREDECESSOR's
+# directory. MEASURED on win11r-sup: HKLM LogDir = Z:\qwt-logs\win11r-sup, which holds the
+# candidate's per-day logs (`QWTBIRTH module=gui-agent ver=4.3.37.1078`), while Q:\Qubes Logs holds
+# only what was written during the install, by the build being upgraded FROM
+# (`LogInit: Module version: 4.3.35.795`, old single-field log prefix, per-instance filenames).
+# WHAT IT COST: run 1024-1136 graded this cell INVALID with `pid 9164 is not running`. 9164 came
+# from `BrokerSupervise: WGCBROKER ready (pid 9164 validated)` at 14:38:30 in
+# gui-agent-20261024-143801-5548.log - the predecessor's install-era file in Q: - while the live
+# instances in Z:'s gui-agent-20261024.log had pids 8984, 700 and 1420 and the broker was alive the
+# whole time. The cell read a dead pid out of a superseded build's log and reported the instrument
+# as broken. Every other cell in this harness already resolves LogDir from the registry; this was
+# the one literal left.
+$logdir = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -EA SilentlyContinue).LogDir
+if (-not $logdir) { $logdir = 'Q:\Qubes Logs' }
+L 'logdir' $logdir
 $agent = Get-ChildItem -LiteralPath $logdir -Filter 'gui-agent-*.log' -EA SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1
 if (-not $agent) { L 'error' 'no agent log'; return }
 $txt = Get-Content -LiteralPath $agent.FullName -EA SilentlyContinue
@@ -1196,8 +1211,23 @@ if has L10; then
       verdict L10 INVALID "the injected transcript never completed" \
               "wait exit: $_why - the guest may have been mid-window; QubesDB=$_qend QrexecAgent=$_qare"
     elif [ "$_delta" -lt 1 ]; then
-      verdict L10 FAIL "a forced WaitForQdb timeout produced NO System 7023" \
-              "7023 ${_b7023:-0} -> ${_w7023:-0} (delta $_delta), 7031=${_w7031:-0} - either the service did not fail or the SCM did not record it, and the installer's restart actions rest on that record"
+      # WHICH OF THE TWO CAUSES, NAMED FROM THE AGENT'S OWN LOG. This verdict used to end "either the
+      # service did not fail or the SCM did not record it" - two guesses and no evidence, on a run
+      # where the log said exactly which. The script now reports the timeout line, the (post-fix)
+      # abandon line and the last instance's birth, so the text can distinguish:
+      #   no timeout line  -> the service never failed; the bound was not evaluated, because
+      #                       qdb_open does not return while the daemon is alive but silent
+      #                       (QDBWAITBOUNDISINERTWHILETHEDAEMONISSILENT, measured 87063 ms);
+      #   a timeout line   -> the service DID fail and the SCM did not record it, which is the
+      #                       claim ADR-supervision item 3 actually rests on.
+      _tol=$(g10 agent_qdb_timeout_line); _abl=$(g10 agent_qdb_abandon_line); _lb=$(g10 agent_last_birth)
+      if [ "${_tol#ABSENT}" != "$_tol" ]; then
+        verdict L10 FAIL "the 360 s WaitForQdb bound did not fire at all: a qdb_open that never returns is never interrupted" \
+                "7023 ${_b7023:-0} -> ${_w7023:-0} (delta $_delta), 7031=${_w7031:-0}, and the agent logged NO timeout line ($_tol); abandon line: $_abl; last instance: $(printf '%s' "$_lb" | cut -c1-110). The service never failed, so the SCM had nothing to record and the installer's restart actions could not fire - QDBWAITBOUNDISINERTWHILETHEDAEMONISSILENT"
+      else
+        verdict L10 FAIL "WaitForQdb DID time out and the SCM did not record it" \
+                "7023 ${_b7023:-0} -> ${_w7023:-0} (delta $_delta), 7031=${_w7031:-0}, but the agent logged the timeout: $(printf '%s' "$_tol" | cut -c1-140). The installer's restart actions rest on that record, so this is the exit-code path (svc-exitcode-test asserts the offline half)"
+      fi
     elif [ "$_has1460" != "True" ]; then
       verdict L10 FAIL "the 7023 does not name ERROR_TIMEOUT (1460), so this is a different failure" \
               "7023 delta=$_delta but no 1460 in its text - WaitForQdb returns 1460 and svc-exitcode-test asserts SvcMainLoop carries it to the SCM; some other cause ended the service"

@@ -157,3 +157,4 @@ build-attribution-selftest.sh
 decode-dedup-selftest.sh
 attributor-unique-selftest.sh
 wrong-interpreter-gate-selftest.sh
+qdbwait-bound-selftest.sh

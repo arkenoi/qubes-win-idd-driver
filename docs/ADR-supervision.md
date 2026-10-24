@@ -358,14 +358,71 @@ campaign". All four are false as of 2026-10-24: `supervision-gate` is the fifth 
    numbering across two crashes, are not measured by it.
 3. A forced `WaitForQdb` timeout (QrexecAgent) yields System 7023 with error 1460 and 7031 with the restart,
    and the SCM restart happens.
-   **RUNNER: supervision-e2e L10**, added 2026-10-24: QubesDB is stopped with its SCM recovery
-   disarmed first (it carries the same restart/5000 actions and would otherwise be back in five
-   seconds), QrexecAgent then burns QDB_WAIT_TIMEOUT_MS and the SCM must record 7023 NAMING 1460.
-   Its CONTROL arm runs first and must see NO 7023; it runs last of all cells and shuts the subject
-   down after itself, because it takes the guest's own qrexec down for those six minutes. Jev on the
-   stimulus: live-stop-qubesdb 0.91 against a product FI knob 0.00 and a no-injection receipt 0.02.
-   `tools/tests/health-recovery-selftest.sh` still asserts only that the recovery is ARMED.
-   RUN ONCE, INVALID on the service-name bug above; not yet proven.
+   **RUNNER: supervision-e2e L10.** THE STIMULUS IS A SUSPEND OF THE DAEMON'S PROCESS, not a stop,
+   and a measurement forced that: `Install-QwtImproved.ps1:815-819` quotes `sc qc QrexecAgent`
+   showing `DEPENDENCIES : QdbDaemon`, so `sc stop QdbDaemon` is REFUSED while QrexecAgent runs
+   (measured 1024-1731, `qubesdb_state_stopped|RUNNING` with the disarm provably applied), and even
+   with QrexecAgent stopped first the SCM refuses to START it while its dependency is stopped - so
+   WaitForQdb would never execute. Jev: suspend-the-daemon-process 1.00. The dependents come down
+   first too (QubesGuiWatchdog -> QrexecAgent -> QdbDaemon, measured 1051/1056 on 1024-1804). Its
+   CONTROL arm runs first and must see NO 7023; it runs last of all cells and shuts the subject down
+   after itself. `tools/tests/health-recovery-selftest.sh` still asserts only that the recovery is
+   ARMED.
+
+   **AND IT FOUND A PRODUCT DEFECT RATHER THAN PROVING THE CLAIM - this item's claim is FALSE as
+   written on the shipping binary.** Run 1024-1831: the daemon was held suspended 421 s against a
+   360 s bound and the SCM recorded NOTHING (`scm_7023_window 0`). The agent's own log says why -
+   instance pid 7840 logged `QWTBIRTH ... pid=7840` at 21:49:35.217 and then nothing at all until
+   21:56:37.183, one second after the resume, with no `timed out after 360000 ms` line anywhere.
+   `WaitForQdb` tested its budget only BETWEEN calls:
+
+       while (qdb == NULL && (tick - start) < QDB_WAIT_TIMEOUT_MS) { qdb = qdb_open(NULL); ... }
+
+   so a `qdb_open` that does not return is never interrupted. MEASURED directly, one call per leg in
+   a child process stamping its own file: daemon RUNNING 184 ms (338/148/67 ms on repeats) · daemon
+   ABSENT (service Stopped, process gone) **NULL in 156 ms** · daemon ALIVE BUT NOT ANSWERING **no
+   return within 90 s, 87063 ms, back 67 ms after the resume**. The old bound therefore worked in
+   exactly the case it was written for - the boot-order case named above QDB_WAIT_TIMEOUT_MS, where
+   the daemon's client pipe does not exist yet - and was inert in the other. Where it blocks is in
+   the stock client: `QpsConnect` opens the pipe with a SYNCHRONOUS handle, does
+   `WaitNamedPipe(..., NMPWAIT_WAIT_FOREVER)` on ERROR_PIPE_BUSY in a retry loop, then two plain
+   `ReadFile` calls for the server->client pipe name, with no timeout anywhere.
+
+   WHY A DAEMON CAN BE ALIVE AND SILENT, from its source and not from a guess: ONE exclusive SRW lock
+   serialises the whole daemon - taken by the vchan loop around `handle_vchan_data`
+   (db-daemon.c:169,244) and by every client thread around `handle_client_data` (:302) and a
+   disconnect (:294) - and `pipe_thread_client`'s failure branch calls `QpsDisconnectClient` INSIDE
+   that lock, which waits `Server->WriteTimeout` + 100 + 100 ms, where qubesdb passes **1000**
+   (db-daemon.c:366). The 1.001 s between `I ... disconnecting` and `W ... writer thread didn't
+   terminate in time` in the capture is that wait, and the per-call connection churn that produces
+   those teardowns is ours (findings/issues.md QUBESDBCONNECTPERREAD). Ruled out by reading rather
+   than assumed: `QpsWrite` does not block (it queues under a short critical section and returns
+   ERROR_BUFFER_OVERFLOW when full) and the vchan write path is non-blocking with its own queue. A
+   MULTI-MINUTE silence would need an xeniface/vchan call that does not complete inside the locked
+   `handle_vchan_data`, or a guest-wide scheduling stall, and that is NOT established for this daemon
+   in any capture.
+
+   THE LINUX COUNTERPART HAS NONE OF THE THREE PARTS, so all three are port artefacts: (a) no Linux
+   WaitForQdb exists - `qubes-qrexec-agent.service` lists only `After=xendriverdomain.service
+   systemd-user-sessions.service`, because `qubes-db.service` is `Type=notify` in sysinit.target and
+   systemd has seen the daemon report READY before any multi-user.target service starts, whereas the
+   SCM gives start order and not readiness; (b) the lock is inside `#ifdef _WIN32`
+   (qubesdb_internal.h:84, initialised db-daemon.c:943) - Linux `mainloop` is a single-threaded
+   select/poll loop with non-blocking client sockets and a per-client `write_queue`, so a client that
+   stops reading stalls nobody; (c) Linux `connect_to_daemon` is a bare `connect()` on a unix
+   SOCK_STREAM (RW then RO) with no handshake read at all.
+
+   FIX: core-agent b475127 - one thread owns the retry loop and its own deadline, the waiter bounds
+   the call for exactly QDB_WAIT_TIMEOUT_MS, and only a genuinely stuck call is abandoned. A first
+   cut also cancelled the stuck I/O so every path reclaimed its allocation; asked whether that was
+   overengineered Jev said yes (0.64) and rated the cancel at exactly chance (0.50), so the simpler
+   shape stands (0.43 vs 0.24). PROVEN OFFLINE by `tools/tests/qdbwait-bound-selftest.sh`, which
+   extracts the shipped function on every run and drives it over a pthreads Win32 shim: ANSWERS -> 0
+   with the handle closed, ABSENT -> 1460 after retrying and within the budget, SILENT -> 1460 with
+   "running but not answering" logged, STOPPED -> 1223, stop-while-stuck -> 1223 in 300 ms, and the
+   PRE-FIX function HANGS on SILENT and is killed at 25 s. STILL OWED: one build and a re-run of
+   L10, which must now produce the 7023 naming 1460 it could not produce before. Receipts:
+   scratchpad/l10-postmortem/, scratchpad/jev-qdb{bound,simple,review*}-out.json.
 4. A clean boot and a clean shutdown produce ZERO notifications and no `DEATH` line (the negative control).
    **RUNNER: supervision-e2e L2**, over N shutdown/boot cycles: one agent per boot, zero deaths at a
    shutdown, zero relaunches, no ERROR line during a requested stop - AND, as of 2026-10-24, zero
