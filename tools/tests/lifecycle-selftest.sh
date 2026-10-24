@@ -327,6 +327,13 @@ main_deslice_report_discipline() {
     awk '/QgaDesliceTeardownExcused\(/{t=NR} /QgaDesliceWarnDue\(g_BrokerDownSince/{w=NR} END{exit !(t && w && t<w)}' "$1" &&
     # 3: the dom0 row is suppressed by a death in flight, and the flag+ERROR still precede it
     grep -q 'if (QgaDesliceOwnedByDeath(g_BrokerDiedAt))' "$1" &&
+    # 4: A NEW LAUNCH RESTARTS THE GRACE. Measured 2026-10-24 on win11-reinstall: an agent that had
+    # ADOPTED the previous session's broker armed the clock at `now` when that broker went away
+    # (correct), a new launch went out 6 s later, and the complaint fired 24 s after it - the new
+    # broker was ready 4 s after the deadline. Only the DEADLINE moves; g_BrokerDownSince must not,
+    # or the reported duration stops being true.
+    awk '/g_WgcLastLaunch = now;/{l=NR} /g_BrokerNextWarn = now \+ DESLICE_FIRST_WARN_MS;/{d=NR} END{exit !(l && d && d>l && d-l<30)}' "$1" &&
+    ! awk '/g_WgcLastLaunch = now;/{l=NR} /g_BrokerDownSince = now;/{z=NR} END{exit !(l && z && z>l && z-l<30)}' "$1" &&
     awk '/CfgWriteDword\(NULL, REG_CONFIG_DESLICE_DOWN_VALUE, binPresent/{f=NR} /QGADESLICEDOWN de-slice broker EXPECTED but not running/{e=NR} /if \(QgaDesliceOwnedByDeath\(g_BrokerDiedAt\)\)/{d=NR} END{exit !(f && e && d && f<d && e<d)}' "$1"; }
 shape "main.c: the de-slice report is anchored through QgaDesliceAnchor, excused during a teardown BEFORE it can fire, and its dom0 row yields to a death report while the flag and the ERROR line stay" main_deslice_report_discipline "$MAIN" 'QgaDesliceAnchor(g_WgcLaunched ? 1 : 0, g_WgcLastLaunch, g_BrokerReadyAt, now)'
 
