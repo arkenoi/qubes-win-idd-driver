@@ -93,24 +93,44 @@ function Scm-Events($sinceUtc) {
     return $out
 }
 
+# THE SCM KEY NAME, RESOLVED FROM THE DISPLAY NAME THE INSTALLER OWNS. `sc.exe query` takes the KEY
+# name, and 'QubesDB' is not it: MEASURED on win11r-sup 2026-10-24, where this cell reported
+# `QubesDB=ABSENT QrexecAgent=RUNNING` and went INVALID - correctly, since its precondition was not
+# met, but it measured nothing. Install-QwtImproved.ps1:1363 lists our services by DISPLAY name
+# ('QubesDB daemon', 'Qubes RPC agent', 'Qubes GUI agent watchdog', 'Qubes PV NIC address applier'),
+# so the display name is the stable handle and the key name is derived from it here.
+# WHICH NAME WAS USED IS REPORTED, so the next ABSENT is diagnosable instead of being a dead end.
+function Resolve-SvcName($display, $fallback) {
+    foreach ($d in @($display, "*$display*", "*QubesDB*")) {
+        $s = @(Get-Service -DisplayName $d -EA SilentlyContinue)
+        if ($s.Count -ge 1) { return $s[0].Name }
+    }
+    $s = Get-Service -Name $fallback -EA SilentlyContinue
+    if ($s) { return $s.Name }
+    return $fallback
+}
+$QDB = Resolve-SvcName 'QubesDB daemon' 'QubesDB'
+$QRX = 'QrexecAgent'
+
 $qdbBefore = $null
 $restoreNeeded = $false
 try {
+    T 'qubesdb_service_name' $QDB
     T 'arm' $(if ($Control) { 'CONTROL (QubesDB is NOT stopped)' } else { 'INJECT' })
     T 'started' $script:started.ToUniversalTime().ToString('s')
 
     # ---- baseline, on the same signals the verdict uses -----------------------------------------
     $t0 = (Get-Date).AddSeconds(-5)
     T 'qrexecagent_state_before' (Svc-State 'QrexecAgent')
-    T 'qubesdb_state_before'     (Svc-State 'QubesDB')
+    T 'qubesdb_state_before'     (Svc-State $QDB)
     T 'qrexecagent_failure_cfg'  (Failure-Config 'QrexecAgent')
-    $qdbBefore = Failure-Config 'QubesDB'
+    $qdbBefore = Failure-Config $QDB
     T 'qubesdb_failure_cfg_before' $qdbBefore
     $base = Scm-Events $t0
     T 'scm_7023_base' $base['7023']
     T 'scm_7031_base' $base['7031']
 
-    if ((Svc-State 'QrexecAgent') -eq 'ABSENT' -or (Svc-State 'QubesDB') -eq 'ABSENT') {
+    if ((Svc-State 'QrexecAgent') -eq 'ABSENT' -or (Svc-State $QDB) -eq 'ABSENT') {
         T 'terminal' 'a service this cell drives is ABSENT - nothing to measure'
         T 'verdict' 'TERMINAL'
         return
@@ -123,17 +143,17 @@ try {
         # two-quote token - Windows PowerShell 5.1 drops a bare "" when calling a native exe and
         # sc.exe then answers 1639 - which is why the installer's own disarm never worked until
         # 2026-10-07.
-        & sc.exe failure QubesDB reset= 0 actions= '""' 2>&1 | Out-Null
-        & sc.exe failureflag QubesDB 0 2>&1 | Out-Null
+        & sc.exe failure $QDB reset= 0 actions= '""' 2>&1 | Out-Null
+        & sc.exe failureflag $QDB 0 2>&1 | Out-Null
         $restoreNeeded = $true
         # THE VERDICT IS THE READBACK, not the exit code: a command that wrote nothing exits 0 too.
-        T 'qubesdb_failure_cfg_disarmed' (Failure-Config 'QubesDB')
+        T 'qubesdb_failure_cfg_disarmed' (Failure-Config $QDB)
 
-        & sc.exe stop QubesDB 2>&1 | Out-Null
+        & sc.exe stop $QDB 2>&1 | Out-Null
         $deadline = (Get-Date).AddSeconds(60)
-        while ((Get-Date) -lt $deadline -and (Svc-State 'QubesDB') -ne 'STOPPED') { Start-Sleep -Seconds 2 }
-        T 'qubesdb_state_stopped' (Svc-State 'QubesDB')
-        if ((Svc-State 'QubesDB') -ne 'STOPPED') {
+        while ((Get-Date) -lt $deadline -and (Svc-State $QDB) -ne 'STOPPED') { Start-Sleep -Seconds 2 }
+        T 'qubesdb_state_stopped' (Svc-State $QDB)
+        if ((Svc-State $QDB) -ne 'STOPPED') {
             T 'terminal' 'QubesDB did not stop, so the timeout cannot be produced'
             T 'verdict' 'TERMINAL'
             return
@@ -141,8 +161,8 @@ try {
         # AND IT MUST STAY STOPPED. The disarm is the precondition of the whole cell, asserted on the
         # same signal the product consults (whether qdb_open can connect), not on sc.exe's exit code.
         Start-Sleep -Seconds 20
-        T 'qubesdb_state_after_20s' (Svc-State 'QubesDB')
-        if ((Svc-State 'QubesDB') -ne 'STOPPED') {
+        T 'qubesdb_state_after_20s' (Svc-State $QDB)
+        if ((Svc-State $QDB) -ne 'STOPPED') {
             T 'terminal' 'the SCM restarted QubesDB despite the disarm - the precondition does not hold'
             T 'verdict' 'TERMINAL'
             return
@@ -171,7 +191,7 @@ try {
         $now = Get-Date
         $cur = Scm-Events $tStart
         if ($cur['7023'] -gt 0) { $why = 'the SCM reported 7023'; $seen = $cur; break }
-        if (-not $Control -and (Svc-State 'QubesDB') -ne 'STOPPED') {
+        if (-not $Control -and (Svc-State $QDB) -ne 'STOPPED') {
             $why = 'TERMINAL: QubesDB came back up, so WaitForQdb can no longer time out'; $seen = $cur; break
         }
         if ($Control -and (Svc-State 'QrexecAgent') -eq 'RUNNING' -and $now -gt $script:started.AddSeconds(90)) {
@@ -201,21 +221,21 @@ try {
 finally {
     # ---- restore, always -------------------------------------------------------------------------
     if ($restoreNeeded) {
-        & sc.exe start QubesDB 2>&1 | Out-Null
+        & sc.exe start $QDB 2>&1 | Out-Null
         $deadline = (Get-Date).AddSeconds(120)
-        while ((Get-Date) -lt $deadline -and (Svc-State 'QubesDB') -ne 'RUNNING') { Start-Sleep -Seconds 3 }
-        T 'qubesdb_state_restored' (Svc-State 'QubesDB')
+        while ((Get-Date) -lt $deadline -and (Svc-State $QDB) -ne 'RUNNING') { Start-Sleep -Seconds 3 }
+        T 'qubesdb_state_restored' (Svc-State $QDB)
         # RE-ARM TO EXACTLY WHAT WAS READ FIRST. The installer's arming string is the fallback, not
         # the default: restoring "no actions" because a second read saw the disarmed state is the
         # mistake its GUARD:recovsuspend comment records.
         $m = [regex]::Match([string]$qdbBefore, 'reset=(\d+) actions=(\S+)')
         if ($m.Success -and $m.Groups[2].Value -ne 'none') {
-            & sc.exe failure QubesDB reset= $m.Groups[1].Value actions= $m.Groups[2].Value 2>&1 | Out-Null
+            & sc.exe failure $QDB reset= $m.Groups[1].Value actions= $m.Groups[2].Value 2>&1 | Out-Null
         } else {
-            & sc.exe failure QubesDB reset= 86400 actions= restart/5000/restart/15000/restart/60000 2>&1 | Out-Null
+            & sc.exe failure $QDB reset= 86400 actions= restart/5000/restart/15000/restart/60000 2>&1 | Out-Null
         }
-        & sc.exe failureflag QubesDB 1 2>&1 | Out-Null
-        T 'qubesdb_failure_cfg_restored' (Failure-Config 'QubesDB')
+        & sc.exe failureflag $QDB 1 2>&1 | Out-Null
+        T 'qubesdb_failure_cfg_restored' (Failure-Config $QDB)
     }
     # QrexecAgent back, whichever arm ran: the SCM may already have restarted it, and starting a
     # running service is harmless.
@@ -223,7 +243,7 @@ finally {
     $deadline = (Get-Date).AddSeconds(180)
     while ((Get-Date) -lt $deadline -and (Svc-State 'QrexecAgent') -ne 'RUNNING') { Start-Sleep -Seconds 3 }
     T 'qrexecagent_state_restored' (Svc-State 'QrexecAgent')
-    T 'qubesdb_state_end' (Svc-State 'QubesDB')
+    T 'qubesdb_state_end' (Svc-State $QDB)
     # THE LAST LINE IS THE MARKER THE HARNESS WAITS FOR. Without it a transcript that stops early is
     # indistinguishable from one still being written, and the harness would grade a partial run.
     T 'done' (Get-Date).ToUniversalTime().ToString('s')
