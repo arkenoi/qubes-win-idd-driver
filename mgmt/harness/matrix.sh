@@ -254,6 +254,11 @@ source "$(dirname "${BASH_SOURCE[0]}")/e2e-wait.sh"
 # verification step that could never actually verify. Found 2026-09-08 while instrumenting boots.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 M="${MATRIX_OUT:-$HOME/qwt-matrix/$(date -u +%Y%m%d-%H%M%S)}"; mkdir -p "$M"
+# THE CAMPAIGN'S OWN IDENTITY, for the things that must not be written by anything but a campaign.
+# It is NOT $M: tools/tests/matrix-pool-floor-selftest.sh uses $M for the PATH TO THIS FILE, so a
+# guard on $M passed inside the suite and wrote a record keyed "matrix.sh" from stubbed values. A
+# variable that means two things in two places is not an identity.
+POOL_SPACE_RUN="${POOL_SPACE_RUN:-$(basename "$M")}"
 # MATTEMPT-A  (to the B marker: extracted and executed by
 # tools/tests/matrix-attempt-boundary-selftest.sh; neither marker names the other)
 # A FILE CANNOT SCOPE A RUN. $M is derived from the release-package run id, so two campaign attempts
@@ -378,7 +383,63 @@ pool_gate(){   # $1 = what is about to run, for the message
     fi
     [ "$free" -lt "$POOL_WARN_GB" ] && say "[WARN] POOL  ${free} GB free on vm-pool (warn below ${POOL_WARN_GB}) - enough to start, tight to finish"
     say "pool: ${free} GB free on vm-pool (floor ${POOL_FLOOR_GB})"
+    pool_space_record "$free"
     return 0
+}
+
+# ---- WHAT A CAMPAIGN ACTUALLY CONSUMES, RECORDED SO THE FLOOR CAN STOP BEING A GUESS ------------
+# The numbers above are thresholds, not observations: 60 and 90 were chosen, and campaign 40134888669
+# started with 73 GB and was told "enough to start, tight to finish" by the second of them. Asked
+# where a campaign-level space gate should get its bound, Jev answered measured-peak-first 0.91 -
+# refuse to assert a number nobody measured. So this records the peak DRAW of each campaign, and
+# mgmt/harness/campaign-preflight.sh refuses below that peak once one exists. Until then the
+# preflight says the campaign-level requirement is UNVERIFIED, which is the honest state.
+# The record is the MAXIMUM draw seen, never an average, and it only ever grows within a run.
+POOL_SPACE_RECORD="${POOL_SPACE_RECORD:-mgmt/campaign-space.json}"
+pool_space_record(){   # $1 = free GB just read
+    local free="${1:-}"
+    [ -n "$free" ] || return 0
+    # A STUBBED READING IS NOT A MEASUREMENT. POOL_FREE_GB_STUB exists so the floor gate can be
+    # driven to its refusal without filling a disk, and tools/tests/matrix-pool-floor-selftest.sh
+    # drives it with values like 500 and 75 - which this function happily wrote into the TRACKED
+    # record on its first run, producing `peak_used_gb: 425` and a preflight that would have refused
+    # every campaign from then on. A suite that mutates rig state is worse than the defect it tests.
+    [ -z "${POOL_FREE_GB_STUB:-}" ] || return 0
+    # AND NO CAMPAIGN IDENTITY MEANS NO RECORD. $M is this attempt's artefact dir - the identity the
+    # "a FILE cannot scope a RUN" work settled on - and it is set only by a real campaign; the pool
+    # suite evals a SLICE of this file that never defines it. Guarding on the stub alone was not
+    # enough: the suite drives one leg with an EMPTY stub (the unreadable-pool refusal), which falls
+    # through, and the first run of this recorder wrote 75/425 into the tracked record from test
+    # values. Default to writing NOTHING; a real run opts in by having an identity.
+    [ -n "${POOL_SPACE_RUN:-}" ] || return 0
+    python3 - "$POOL_SPACE_RECORD" "$free" "$POOL_SPACE_RUN" <<'PYS' 2>/dev/null || true
+import json, os, sys
+path, free, run = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+d = {}
+if os.path.exists(path):
+    try:
+        d = json.load(open(path))
+    except Exception:
+        d = {}
+cur = d.get("run")
+if cur != run:
+    # A NEW CAMPAIGN RESETS ONLY ITS OWN START AND MINIMUM. The first cut replaced the whole record,
+    # which wiped peak_used_gb and measured_runs - so a luckier run SHRANK the rig's requirement,
+    # the exact opposite of what the comment above this function promises. Driven and caught:
+    # runA drew 18 GB, then runB drew 5 and the peak came back as 5.
+    d = {"run": run, "start_free_gb": free, "min_free_gb": free,
+         "peak_used_gb": int(d.get("peak_used_gb", 0)),
+         "measured_runs": list(d.get("measured_runs", []))}
+d["min_free_gb"] = min(int(d.get("min_free_gb", free)), free)
+d["start_free_gb"] = max(int(d.get("start_free_gb", free)), free)
+draw = int(d["start_free_gb"]) - int(d["min_free_gb"])
+# THE PEAK ONLY EVER GROWS, across campaigns: a later run that happened to draw less does not make
+# the rig's requirement smaller, and a floor that shrinks on a lucky run is how a gate stops gating.
+d["peak_used_gb"] = max(int(d.get("peak_used_gb", 0)), draw)
+d["measured_runs"] = sorted(set(d.get("measured_runs", []) + [run]))
+json.dump(d, open(path, "w"), indent=1, sort_keys=True)
+open(path, "a").write("\n")
+PYS
 }
 pool_gate "this campaign" || { say "=== MATRIX: 0 passed, 1 failed ==="; exit 2; }
 
@@ -1085,12 +1146,22 @@ clear_prime_leftovers(){ # $1=vm - prime-run's own exit text: "The stick is stil
   local qcur qnew
   qcur=$(qvm-features "$vm" qemu-extra-args 2>/dev/null || true)
   qnew=$(logvol_qemu_args_keep_only_ours "$qcur")
+  # THROUGH THE GUARDED WRITER, which refuses while the domain is up. This call site is reached with
+  # the subject RUNNING, and that is exactly the case that cost campaign 40134888669 its first cell:
+  # the args were rewritten at 22:12:18 against a live win10-acc, which changed nothing the guest
+  # could see while telling every later reader the device set had changed. The refusal is the point -
+  # the priming sticks now stay in the recorded value until a domain boundary, and the log volume's
+  # drive letter is pinned by volume GUID (logvol-bind.ps1 Set-Partition), which is what made the
+  # letter-churn argument for rewriting here obsolete. Owner 2026-10-25: "no rewriting arguments on
+  # the fly."
   if [ -n "$qnew" ]; then
-    qvm-features "$vm" qemu-extra-args -- "$qnew" >/dev/null 2>&1 \
-      && say "  $vm: priming sticks dropped from qemu-extra-args; the log volume's device KEPT" \
-      || say "  [WARN] could not rewrite qemu-extra-args on $vm - the priming sticks stay until next prime"
+    if logvol_qemu_write "$vm" "$qnew"; then
+      say "  $vm: priming sticks dropped from qemu-extra-args; the log volume's device KEPT"
+    else
+      say "  $vm: qemu-extra-args left ALONE (the guarded writer refused on a live domain) - the priming sticks stay in the recorded value until the next domain boundary; the log volume's letter is pinned by GUID"
+    fi
   else
-    qvm-features --unset "$vm" qemu-extra-args 2>/dev/null
+    logvol_qemu_write "$vm" --unset || say "  $vm: qemu-extra-args left alone (guarded writer refused)"
   fi
   # And the clock convention the install just set, RECORDED not changed (see clock_feature_report).
   clock_feature_report "$vm" "$vm"

@@ -168,6 +168,42 @@ v1=$(ii_shape "$T/noguard.sh"); v2=$(ii_shape "$T/nomapped.sh"); v3=$(ii_shape "
   && ok "desktop_switch_not_graded SEEN TO FAIL: without the verdict '$v1'; without the mapped record '$v2'; graded per boot '$v3'" \
   || bad "desktop_switch_not_graded: a defect copy passed (noguard='$v1' nomapped='$v2' perboot='$v3') - the check proves nothing"
 
+# ---- the space RECORDER: what it must never write, and what it must ----------------------------
+# Jev set the campaign space gate at measured-peak-first 0.91 - the preflight refuses below a
+# MEASURED peak and says UNVERIFIED until one exists - so matrix.sh records the draw of every
+# campaign. It took three attempts to make that recorder safe, and each failure was a suite writing
+# a TRACKED rig record from stubbed values: first `peak_used_gb: 425` (from this suite's 500/75
+# legs), which would have made the preflight refuse every campaign thereafter; then a guard on the
+# stub, which one leg bypasses by driving an EMPTY stub; then a guard on $M, which THIS SUITE uses
+# as the path to matrix.sh, so it wrote a record keyed "matrix.sh". Hence these legs.
+_rec_src(){ sed -n '/^POOL_SPACE_RECORD=/,/^}$/p' "$M"; }
+_rec_run(){ # <identity> <stub> <record> <free...>
+  local id="$1" stub="$2" rec="$3"; shift 3
+  ( POOL_SPACE_RUN="$id" POOL_FREE_GB_STUB="$stub" POOL_SPACE_RECORD="$rec" \
+    bash -c "source <(cd '$ROOT' && sed -n '/^POOL_SPACE_RECORD=/,/^}\$/p' '$M'); for f in $*; do pool_space_record \$f; done" ) 2>/dev/null
+}
+_R="$T/space.json" 2>/dev/null || _R="${TMPDIR:-/tmp}/space-$$.json"
+rm -f "$_R"
+_rec_run "" "" "$_R" 64
+[ ! -f "$_R" ] && ok "the recorder writes NOTHING without a campaign identity - a suite cannot create the record" \
+               || bad "the recorder wrote a record with no campaign identity: $(cat "$_R" 2>/dev/null | tr -d '\n')"
+rm -f "$_R"
+_rec_run "camp-1" "75" "$_R" 75
+[ ! -f "$_R" ] && ok "a STUBBED reading is never recorded - 500/75 test values cannot become the rig's requirement" \
+               || bad "the recorder wrote a stubbed reading: $(cat "$_R" 2>/dev/null | tr -d '\n')"
+rm -f "$_R"
+_rec_run "camp-1" "" "$_R" 100 82 91
+_peak=$(python3 -c "import json;print(json.load(open('$_R'))['peak_used_gb'])" 2>/dev/null)
+[ "$_peak" = 18 ] && ok "a real campaign's DRAW is recorded: 100 -> 82 -> 91 gives peak_used_gb=18" \
+                  || bad "peak_used_gb=$_peak, expected 18"
+_rec_run "camp-2" "" "$_R" 200 195
+_peak=$(python3 -c "import json;print(json.load(open('$_R'))['peak_used_gb'])" 2>/dev/null)
+_runs=$(python3 -c "import json;print(len(json.load(open('$_R'))['measured_runs']))" 2>/dev/null)
+{ [ "$_peak" = 18 ] && [ "$_runs" = 2 ]; } \
+  && ok "a LUCKIER campaign does not shrink the floor: camp-2 drew 5 and the peak stays 18, both runs recorded" \
+  || bad "peak=$_peak runs=$_runs - a later run that drew less must not lower the rig's requirement"
+rm -f "$_R"
+
 echo
 echo "matrix-pool-floor-selftest: $pass passed, $fail failed"
 [ "$fail" = 0 ] || exit 1

@@ -263,11 +263,49 @@ logvol_qemu_args_keep_only_ours(){ # <existing> -> the value with the PRIMING st
   printf '%s' "$out" | sed -E 's/  +/ /g; s/^ //; s/ $//'
 }
 
+# ---- THE ONE WRITER, AND IT REFUSES ON A LIVE DOMAIN -------------------------------------------
+# `qemu-extra-args` is read at DOMAIN CREATION and nowhere else. Writing it while a domain is up
+# therefore changes NOTHING the running guest can see, while making every later reader believe the
+# device set it describes is the one in force - and that is not a theory.
+#
+# MEASURED, campaign 40134888669: matrix.sh rewrote these args at 22:12:18 to drop the priming
+# sticks, "the log volume's device KEPT", against a RUNNING win10-acc. Eight seconds later the bind
+# refused with `no_volume_labelled_DIAG_with_LOGVOL.TAG`, and the guest - asked directly - reported
+# the 256 MB image as `XENSRC PVDISK bus=SCSI ... parts=0` with no USB disk device at all: the image
+# is a partitionless superfloppy FAT, which Windows mounts on REMOVABLE media and not on a fixed
+# SCSI disk. The args said one thing and the live domain was another. The campaign aborted on its
+# first cell, 11 minutes in. Owner 2026-10-25: "no rewriting arguments on the fly."
+#
+# So every write goes through here, and it REFUSES unless the domain is Halted or absent. A caller
+# that wants a different device set for the graded boots asks for it at a domain boundary, which is
+# the only place the request means anything.
+# LOGVOL_QEMU_WRITE_LIVE=1 is the single deliberate exemption, for a caller that has proved it wants
+# the value changed for the NEXT creation and says so; it is logged at every use.
+logvol_qemu_write(){ # <vm> <value|--unset> - the ONLY place qemu-extra-args is written
+  local vm="${1:?[ERROR] logvol_qemu_write <vm> <value|--unset>}" val="${2?[ERROR] logvol_qemu_write <vm> <value|--unset>}" st
+  st=$(qvm-ls --raw-data --fields STATE "$vm" 2>/dev/null | tr -d '\n')
+  if [ -n "$st" ] && [ "$st" != Halted ]; then
+    if [ "${LOGVOL_QEMU_WRITE_LIVE:-0}" = 1 ]; then
+      _lv_say "[WARN] writing qemu-extra-args on $vm while it is $st (LOGVOL_QEMU_WRITE_LIVE=1) - it takes effect at the NEXT domain creation, not now"
+    else
+      _lv_say "[ERROR] REFUSED: qemu-extra-args on $vm while it is $st - the value is read at DOMAIN CREATION, so this would change nothing the running guest sees while telling every later reader it did (campaign 40134888669 aborted on exactly that). Do it at a domain boundary, or set LOGVOL_QEMU_WRITE_LIVE=1 deliberately."
+      return 3
+    fi
+  fi
+  if [ "$val" = --unset ]; then
+    qvm-features --unset "$vm" qemu-extra-args >/dev/null 2>&1 \
+      || { _lv_say "[ERROR] could not unset qemu-extra-args on $vm"; return 1; }
+  else
+    qvm-features "$vm" qemu-extra-args -- "$val" >/dev/null 2>&1 \
+      || { _lv_say "[ERROR] could not set qemu-extra-args on $vm"; return 1; }
+  fi
+}
+
 logvol_qemu_apply(){ # <vm> - set the composed value on the qube; prints the previous value on stdout
   local vm="${1:?[ERROR] logvol_qemu_apply <vm>}" cur new
   cur=$(qvm-features "$vm" qemu-extra-args 2>/dev/null || true)
   new=$(logvol_qemu_args_compose "$cur")
-  qvm-features "$vm" qemu-extra-args -- "$new" >/dev/null || { _lv_say "[ERROR] could not set qemu-extra-args on $vm"; return 1; }
+  logvol_qemu_write "$vm" "$new" || return 1
   printf '%s' "$cur"
 }
 
@@ -276,10 +314,8 @@ logvol_qemu_remove(){ # <vm>
   cur=$(qvm-features "$vm" qemu-extra-args 2>/dev/null || true)
   [ -n "$cur" ] || return 0
   new=$(logvol_qemu_args_strip "$cur")
-  if [ -z "$new" ]; then qvm-features --unset "$vm" qemu-extra-args >/dev/null 2>&1 \
-    || { _lv_say "[ERROR] could not unset qemu-extra-args on $vm - the guest keeps the old device line"; return 1; }
-  else qvm-features "$vm" qemu-extra-args -- "$new" >/dev/null \
-    || { _lv_say "[ERROR] could not set qemu-extra-args on $vm - the guest will not see the log volume"; return 1; }; fi
+  if [ -z "$new" ]; then logvol_qemu_write "$vm" --unset || return 1
+  else logvol_qemu_write "$vm" "$new" || return 1; fi
 }
 
 # ------------------------------------------------------------------------------------------- manifest

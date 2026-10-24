@@ -85,6 +85,109 @@ for v in $SUBJECTS; do
 done
 log "no subject guest is running"
 
+# ---- 2b. THE RIG CAN ACTUALLY HOST IT ----------------------------------------------------------
+# WHY THIS SECTION EXISTS, and it is the whole reason the owner asked for it. Campaign 40134888669
+# ABORTED 11 minutes in, on its FIRST cell, with `log-volume bind FAILED
+# reason=no_volume_labelled_DIAG_with_LOGVOL.TAG`. Nothing above would have caught it: the goldens
+# verified, the fixtures traced, no subject was running, the package was right and CI was green. The
+# preparation was what was wrong, and preparation had no gate at all. Owner 2026-10-25: "all
+# preparation and preflight gates should be mecahnized too. goldens and loopbacks availability should
+# be mechanically ensured as well" and "also free disk space required for campaign".
+# Exit 15 is "the rig cannot host this campaign" - distinct from 11 (busy) and 12 (entry images),
+# because the operator's next action is different: free space, restore a tool, clear a claim.
+MTOOLS_BINS="${MTOOLS_BINS:-mcopy mdir minfo mformat}"
+POOL_NAME="${POOL_NAME:-vm-pool}"
+POOL_FLOOR_GB="${POOL_FLOOR_GB:-60}"
+SPACE_RECORD="${SPACE_RECORD:-mgmt/campaign-space.json}"
+LOGVOL_DIR="${LOGVOL_DIR:-$HOME/win-iso/logvol}"   # the same default logvol-lib carries
+BLOCKCLAIM_LIB="${BLOCKCLAIM_LIB:-mgmt/harness/blockclaim-lib.sh}"
+# The pool read is its own external BECAUSE THE SUITE HAS TO DRIVE THE REFUSAL: a check that cannot
+# be made to fail is decoration, and qubesadmin cannot be stubbed from a test. Prints GB free, or
+# nothing when it cannot tell - and "cannot tell" is a refusal, never an assumption.
+POOL_FREE_CMD="${POOL_FREE_CMD:-}"
+
+# (a) THE TOOLS THAT READ THE EVIDENCE. mtools lives in ~/bin and is LOST ON EVERY MGMT REBOOT
+# (findings: rpm2cpio recovery) - and without it the log volume cannot be read at all, which is the
+# one instrument that survives a wedge. A campaign that discovers this in hour three has wasted it.
+for _b in $MTOOLS_BINS; do
+    command -v "$_b" >/dev/null 2>&1 || die 15 "$_b is not on PATH - mtools is lost on every mgmt reboot and the log volume is unreadable without it (restore with rpm2cpio into ~/bin)"
+done
+command -v udisksctl >/dev/null 2>&1 || die 15 "udisksctl is not on PATH - images cannot be put on loop devices without it"
+log "evidence tools present: $MTOOLS_BINS udisksctl"
+
+# (b) THE LOG VOLUME DIRECTORY AND EVERY EXISTING IMAGE. An image that exists must be a volume this
+# harness made: label DIAG + LOGVOL.TAG, read with mtools and no guest. A corrupt or foreign image is
+# refused here rather than by a bind nine minutes into a cell.
+[ -d "$LOGVOL_DIR" ] || die 15 "no log-volume directory at $LOGVOL_DIR"
+[ -w "$LOGVOL_DIR" ] || die 15 "log-volume directory $LOGVOL_DIR is not writable"
+_imgs=0; _bad=""
+for _v in $SUBJECTS; do
+    _img="$LOGVOL_DIR/logs-$_v.img"
+    [ -s "$_img" ] || continue          # absent is fine: logvol_create makes it for the cell
+    _imgs=$((_imgs+1))
+    if ! MTOOLS_SKIP_CHECK=1 mdir -i "$_img" :: 2>/dev/null | grep -qi 'LOGVOL'; then
+        _bad="$_bad $_v"
+    fi
+done
+[ -z "$_bad" ] || die 15 "these existing log volumes carry no LOGVOL.TAG and are not volumes this harness made:$_bad (delete them or re-create with logvol_create)"
+log "log volumes: $LOGVOL_DIR writable, $_imgs existing image(s), each carrying LOGVOL.TAG"
+
+# (c) NO STALE BLOCK CLAIM. A persistent `assign --required` naming a transient loop number makes a
+# guest unstartable with nothing but `internal error: libxenlight failed to create new domain`, and
+# the predicate is the BACKING FILE, not the presence of a loop node (blockclaim-lib's own lesson).
+# The sweep is the committed code; this only refuses when it cannot leave the guest startable.
+if [ -r "$BLOCKCLAIM_LIB" ]; then
+    # shellcheck disable=SC1091
+    . "$BLOCKCLAIM_LIB"
+    _stuck=""
+    for _v in $SUBJECTS; do
+        "$QVM_CHECK" "$_v" >/dev/null 2>&1 || continue      # a subject that does not exist yet has no claims
+        claim_sweep_stale "$_v" >/dev/null 2>&1 || _stuck="$_stuck $_v"
+    done
+    [ -z "$_stuck" ] || die 15 "stale block claims remain on:$_stuck - these guests cannot be created until they are dropped (mgmt/harness/blockclaim-lib.sh claim_drop_loop)"
+    log "no stale block claim on any subject"
+else
+    die 15 "$BLOCKCLAIM_LIB is missing - stale loop claims cannot be checked, and one makes a guest unstartable"
+fi
+
+# (d) FREE SPACE, AND THE FLOOR IS MEASURED OR IT IS NOT CLAIMED. Jev: measured-peak-first 0.91 -
+# refusing to assert a number nobody measured. Campaign 40134888669 started with 73 GB and the
+# harness only WARNED ("warn below 90 - enough to start, tight to finish"); that 90 was a threshold,
+# not an observation. So: always refuse below the committed per-cell floor (matrix.sh refuses there
+# anyway, and finding it out at minute 0 is the point), and refuse below a measured campaign PEAK
+# only once one exists in $SPACE_RECORD. Until then the campaign-level requirement is UNVERIFIED and
+# says so, rather than inventing a bound.
+if [ -n "$POOL_FREE_CMD" ]; then
+    _free=$($POOL_FREE_CMD 2>/dev/null | tr -dc '0-9')
+else
+    _free=$(python3 - "$POOL_NAME" <<'PYPOOL' 2>/dev/null
+import sys
+try:
+    import qubesadmin
+    p = qubesadmin.Qubes().pools[sys.argv[1]]
+    d = p.usage_details
+    print(int((int(d['data_size']) - int(d['data_usage'])) / (1024**3)))
+except Exception:
+    print("")
+PYPOOL
+)
+fi
+[ -n "$_free" ] || die 15 "the free space on pool '$POOL_NAME' could not be read - a campaign is not started blind on space"
+[ "$_free" -ge "$POOL_FLOOR_GB" ] || die 15 "only ${_free} GB free on $POOL_NAME, the per-cell floor is ${POOL_FLOOR_GB} GB - matrix.sh would refuse the first cell"
+_peak=""
+[ -s "$SPACE_RECORD" ] && _peak=$(python3 -c "import json,sys
+try:
+    d=json.load(open(sys.argv[1]))
+    v=d.get('peak_used_gb')
+    print(int(v) if v is not None else '')
+except Exception: print('')" "$SPACE_RECORD" 2>/dev/null)
+if [ -n "$_peak" ]; then
+    [ "$_free" -ge "$_peak" ] || die 15 "only ${_free} GB free on $POOL_NAME and a measured campaign peak is ${_peak} GB ($SPACE_RECORD) - this campaign would run out"
+    log "space: ${_free} GB free on $POOL_NAME, above the MEASURED campaign peak of ${_peak} GB"
+else
+    log "space: ${_free} GB free on $POOL_NAME, above the per-cell floor of ${POOL_FLOOR_GB} GB - the campaign-level requirement is UNVERIFIED (no peak recorded in $SPACE_RECORD yet; the matrix records one as it runs)"
+fi
+
 # ---- 3. ONE PRODUCT, and the fix is IN the package ---------------------------------------------
 con=$("$GH_BIN" run view "$PKG" --json conclusion -q .conclusion 2>/dev/null)
 [ "$con" = success ] || die 13 "release-package $PKG concluded '${con:-<unreadable>}'"

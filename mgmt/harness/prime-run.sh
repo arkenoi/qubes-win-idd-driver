@@ -281,7 +281,12 @@ rm -f "mgmt/fixtures/$CHURN.aborted"
 # drives on one frontend and qemu refused the domain outright: "libxenlight failed to create new
 # domain", measured 2026-10-15 the first time the collapsed single stick was used. The old
 # `diagdrv` fragment existed because prime-run attached its own DIAG volume; it does not any more.
-qvm-features "$CHURN" qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99' \
+# THROUGH THE GUARDED WRITER (logvol-lib), which refuses on a live domain. Here it always passes -
+# this subject was just removed and recreated, so it is Halted - and that is the point: the one
+# writer means a future change that moved this call after a start would be REFUSED instead of
+# silently describing a device set the running domain does not have. Owner 2026-10-25: "no rewriting
+# arguments on the fly."
+logvol_qemu_write "$CHURN" '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99' \
   || { log "[ERROR] TERMINAL: could not set qemu-extra-args"; exit 1; }
 # NOT --required, MEASURED 2026-09-21. A `--required` assignment cannot be satisfied at domain
 # creation on this rig at present: with one the domain is not created at all (6/6, across two

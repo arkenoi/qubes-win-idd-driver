@@ -568,6 +568,45 @@ def l9_no_shutdown_wait() -> None:
                         "use qwt_shutdown from mgmt/harness/shutdown-lib.sh")
 
 
+def l31_qemu_args_one_writer() -> None:
+    """L31: `qemu-extra-args` is written in ONE place, and that place refuses a live domain.
+
+    The value is read at DOMAIN CREATION and nowhere else. Writing it while a domain is up changes
+    nothing the running guest can see, while making every later reader believe the device set it
+    describes is in force.
+
+    MEASURED, campaign 40134888669: matrix.sh rewrote these args at 22:12:18 to drop the priming
+    sticks ("the log volume's device KEPT") against a RUNNING win10-acc. Eight seconds later the log
+    volume bind refused with `no_volume_labelled_DIAG_with_LOGVOL.TAG`, and the guest - asked
+    directly - reported the 256 MB image as `XENSRC PVDISK bus=SCSI ... parts=0` with no USB disk
+    device at all. The campaign aborted on its first cell, 11 minutes in, having spent 10 of them
+    installing. Owner 2026-10-25: "no rewriting arguments on the fly."
+
+    So: route every write through `logvol_qemu_write` (mgmt/harness/logvol-lib.sh), which refuses
+    unless the domain is Halted or absent, and carries LOGVOL_QEMU_WRITE_LIVE=1 as the single
+    deliberate, logged exemption. A mention in a comment or an echoed instruction is not a call."""
+    rx = re.compile(r"qvm-features\b[^|;&]*\bqemu-extra-args\b[^|;&]*(--unset|--\s)")
+    # SCOPE, and the gap is stated rather than hidden: HARNESS is mgmt/harness/*.sh + tools/*.sh,
+    # which is the campaign path - the one that aborted. mgmt/prime-selftest.sh and
+    # mgmt/reprovision-usb.sh still write these args directly; both are heavy provisioning paths
+    # outside a campaign (reprovision needs a Jev call to run at all), so they are NOT covered here
+    # yet and routing them through the one writer is owed work, not a thing this rule pretends about.
+    for f in HARNESS:
+        if f.name == "logvol-lib.sh":
+            continue                      # the one writer; its own qvm-features call is the write
+        for i, ln in enumerate(f.read_text(errors="replace").splitlines(), 1):
+            st = ln.lstrip()
+            if not st or st.startswith("#"):
+                continue
+            if "echo" in st or "printf" in st or "say " in st:
+                continue                  # an instruction PRINTED for an operator is not a write
+            if rx.search(ln):
+                finding("L31-qemu-args-not-one-writer", f"{f.name}:{i}",
+                        "writes qemu-extra-args directly; use logvol_qemu_write (logvol-lib.sh), "
+                        "which refuses on a live domain - the value only means anything at domain "
+                        "creation (campaign 40134888669 aborted on a rewrite against a live guest)")
+
+
 def l12_provisioning_recipe() -> None:
     """L12: the provisioning recipe is mgmt/harness/provision-recipe.sh, and these are the shapes
     that broke it.
@@ -1752,6 +1791,7 @@ def main() -> int:
     l10_no_default_target_guest()
     l11_absent_guest_command()
     l12_provisioning_recipe()
+    l31_qemu_args_one_writer()
     l15_ps_function_named_like_alias()
     l16_ps_script_scope_case_collision()
     l17_process_by_name()
