@@ -98,6 +98,14 @@ log "no subject guest is running"
 MTOOLS_BINS="${MTOOLS_BINS:-mcopy mdir minfo mformat}"
 POOL_NAME="${POOL_NAME:-vm-pool}"
 POOL_FLOOR_GB="${POOL_FLOOR_GB:-60}"
+# THE RIG'S SAFE THRESHOLD, and it is a REFUSAL here, not a warning. 60 is matrix.sh's per-CELL
+# floor - enough to start one cell - and matrix.sh additionally warned below 90 while starting
+# anyway, which is how campaign 40134888669 began with 73 GB and was told "tight to finish". Owner
+# 2026-10-25: "our safe threshold is 90% thin pool and it is unmet". So a campaign does not start
+# below it. (Jev preferred measured-peak-first and rated raise-to-90 at 0.01 - on the evidence it
+# had, which was a threshold nobody had measured. This is the rig's owner stating the policy for his
+# own pool, which is not the same question, and the measured-peak gate below still applies on top.)
+POOL_SAFE_GB="${POOL_SAFE_GB:-90}"
 SPACE_RECORD="${SPACE_RECORD:-mgmt/campaign-space.json}"
 LOGVOL_DIR="${LOGVOL_DIR:-$HOME/win-iso/logvol}"   # the same default logvol-lib carries
 BLOCKCLAIM_LIB="${BLOCKCLAIM_LIB:-mgmt/harness/blockclaim-lib.sh}"
@@ -174,6 +182,7 @@ PYPOOL
 fi
 [ -n "$_free" ] || die 15 "the free space on pool '$POOL_NAME' could not be read - a campaign is not started blind on space"
 [ "$_free" -ge "$POOL_FLOOR_GB" ] || die 15 "only ${_free} GB free on $POOL_NAME, the per-cell floor is ${POOL_FLOOR_GB} GB - matrix.sh would refuse the first cell"
+[ "$_free" -ge "$POOL_SAFE_GB" ] || die 15 "only ${_free} GB free on $POOL_NAME and the rig's SAFE THRESHOLD is ${POOL_SAFE_GB} GB - reclaim first (mgmt/harness/rig-cleanup.sh lists every leftover subject and removes them with --go); a pool that fills mid-campaign invalidates every cell, not just the one that filled it"
 _peak=""
 [ -s "$SPACE_RECORD" ] && _peak=$(python3 -c "import json,sys
 try:

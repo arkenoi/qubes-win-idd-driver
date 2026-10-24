@@ -239,6 +239,10 @@ rc=$(POOL_FREE_CMD_OVERRIDE="echo" run)
 if [ "$rc" = 15 ] && grep -qa 'could not be read' "$T/out"; then ok "an UNREADABLE pool REFUSES (15) - a campaign is not started blind on space"
 else no "an unreadable pool REFUSES (15)" "rc=$rc $(tail -1 "$T/out")"; fi
 
+rc=$(POOL_FREE="75" run)
+if [ "$rc" = 15 ] && grep -qa "SAFE THRESHOLD is 90 GB" "$T/out"; then ok "free space above the per-cell floor but below the rig's SAFE THRESHOLD still REFUSES (15) - 73 GB was 'tight to finish' and the campaign aborted"
+else no "space below the safe threshold REFUSES (15)" "rc=$rc $(tail -1 "$T/out")"; fi
+
 rc=$(POOL_FREE="12" run)
 if [ "$rc" = 15 ] && grep -qa 'the per-cell floor is' "$T/out"; then ok "free space BELOW the per-cell floor REFUSES (15) at minute 0, not in cell 1"
 else no "space below the per-cell floor REFUSES (15)" "rc=$rc $(tail -1 "$T/out")"; fi
@@ -264,7 +268,7 @@ else no "an unmeasured campaign requirement says UNVERIFIED" "rc=$rc $(tail -1 "
 # THE FLOOR IS A FLOOR, not an exact count: arms get added (the preparation gates added twelve), and
 # an assertion on an exact number turns every addition into a failure. What it guards is that the
 # arms RAN - a suite that refuses everything, or nothing, trips it.
-ARMS_FLOOR="${ARMS_FLOOR:-24}"
+ARMS_FLOOR="${ARMS_FLOOR:-25}"
 if [ "$fail" -eq 0 ] && [ "$pass" -ge "$ARMS_FLOOR" ]; then
   ok "all arms driven: $pass of at least $ARMS_FLOOR - one CLEAR case and the refusals, entry images through preparation"
 else
