@@ -28,16 +28,19 @@
 # section's value $secAbi; tools/tests/peek-abi-assert-selftest.sh fails if they ever collide again.
 param([int]$Samples = 2, [int]$IntervalSec = 6, [switch]$All)
 
-$WANT_ABI = 27
+$WANT_ABI = 28
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
-$STRIDE = 3472    # sizeof(WGCBRK_SLOT) at ABI 27, TAKEN FROM THE COMPILER, not from arithmetic by hand:
-                  # ReqCardValid is a LONG appended at 3468, which FILLS the padding ABI 26 already had, so
-                  # the size does NOT grow - it stays 3472. This line said 3480 from ABI 27 until 2026-10-18
+$STRIDE = 3480    # sizeof(WGCBRK_SLOT) at ABI 28, TAKEN FROM THE COMPILER, not from arithmetic by hand -
+                  # tools/tests/wgcbroker-layout-selftest.sh derives it from the header with gcc and is what
+                  # produced this number. CropWinValid is a LONG appended at 3472; ABI 27's ReqCardValid had
+                  # already consumed the padding ABI 26 left, so THIS one grows the struct, 3472 -> 3480.
+                  # At ABI 27 it was 3472: ReqCardValid, a LONG appended at 3468, FILLED that padding, so
+                  # the size did NOT grow then. This line said 3480 from ABI 27 until 2026-10-18
                   # and that is an 8-byte-per-index error: slot0 reads correctly and EVERY LATER SLOT is
                   # garbage, which is how it was found (slot1 reporting hwnd=0x2d600000282, publishes=13586208,
                   # bytes=1 while the agent's own log named a live hwnd for that slot). Verified offsets:
                   # ReqCardX 3444, ReqCardY 3448, CropUsedX 3452, CropUsedY 3456, CropWinX 3460, CropWinY 3464,
-                  # ReqCardValid 3468, sizeof 3472. Re-derive with a 3-line C file that includes this header
+                  # ReqCardValid 3468, CropWinValid 3472, sizeof 3480. Re-derive with a 3-line C file that includes this header
                   # behind a windows.h shim typedefing LONG/LONGLONG/UINT64 at Windows widths and prints
                   # sizeof + offsetof; never by counting fields. 3456 at ABI 25 (ReqCardX/ReqCardY appended at 3444/3448; the
                   # struct's 8-byte alignment rounds 3452 up to 3456). 3448 at ABI 23 (ReqRoute, a LONG, appended at 3440; the struct's
@@ -123,8 +126,14 @@ for ($n = 0; $n -lt $Samples; $n++) {
       $n,$i,$rt,$rn,$rq,$rqn,(RdI ($b+272)),(RdI ($b+276)),(RdL ($b+280)))
     # ABI 26: the crop the broker USED and the window origin it derived it from, so "the crop was
     # wrong" and "the crop was right and the pixels were not there" stop being indistinguishable.
-    Write-Output ("S{0} slot{1} CROP used={2},{3} winorigin={4},{5} reqcard={6},{7} valid={10} reqcrop={8},{9}" -f `
-      $n,$i,(RdI ($b+3452)),(RdI ($b+3456)),(RdI ($b+3460)),(RdI ($b+3464)),(RdI ($b+3444)),(RdI ($b+3448)),(RdI ($b+16)),(RdI ($b+20)))
+    # `valid={10}` USED TO REFERENCE AN ARGUMENT THAT WAS NEVER PASSED - ten arguments are indices 0..9 -
+    # so this line threw `RuntimeException: Error formatting a string: Index (zero based) must be ... less
+    # than the size of the argument list` EVERY time the CROP output ran, and the one diagnostic written to
+    # tell a wrong crop from missing pixels printed nothing at all. Proven under pwsh 7.4, 2026-10-24.
+    # Both validity flags are printed now, because an origin or a card that nobody wrote reads as (0,0)
+    # and that ambiguity is what ABI 27 and ABI 28 exist to remove.
+    Write-Output ("S{0} slot{1} CROP used={2},{3} winorigin={4},{5} winvalid={6} reqcard={7},{8} cardvalid={9} reqcrop={10},{11}" -f `
+      $n,$i,(RdI ($b+3452)),(RdI ($b+3456)),(RdI ($b+3460)),(RdI ($b+3464)),(RdI ($b+3472)),(RdI ($b+3444)),(RdI ($b+3448)),(RdI ($b+3468)),(RdI ($b+16)),(RdI ($b+20)))
     # ABI 9. arrivalRaw climbing while FRAMES arrived stays flat = the guard is throwing frames away,
     # which the quiet detector then reads as a dead feed. Flat arrivalRaw = the event really stopped.
     Write-Output ("S{0} slot{1} ARRIVALS raw={2} rejected={3}" -f `

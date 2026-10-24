@@ -597,9 +597,20 @@ static bool PublishCard(int i, ID3D11Texture2D* full, int texW, int texH, const 
     // the card-sized window (origin 2239,654) and CropWin read 0. A warning on a healthy window is
     // the boot noise the owner refuses, so the origin is published unconditionally and the compare
     // becomes exact in both directions.
+    // AND IT IS A FLAG, NOT AN UNCONDITIONAL WRITE (ABI 28). The paragraph above says the origin is
+    // "published unconditionally" - it is not: it is conditional on haveRect, and when
+    // GetWindowRect FAILS these fields keep what they held, which on a fresh slot is zero. The
+    // reader cannot tell that from a window really at 0,0, which is the exact ambiguity the
+    // paragraph set out to remove. MEASURED on acceptance run 40037710497: for a toast whose
+    // GetWindowRect was refusing (the agent logged `no usable GetWindowRect - rejecting` three
+    // times for that handle) the agent warned `card outside the capture - cropped 0,0 not
+    // 4740,1251` on a window whose card really was at 4740,1251 - the only breach in each of three
+    // win11 cells. So the validity is published beside the value, the way ReqCardValid is for the
+    // card, and the agent's compare requires it.
     RECT wr{};
     const bool haveRect = ch.hwnd && IsWindow(ch.hwnd) && GetWindowRect(ch.hwnd, &wr);
     if (haveRect) { s->CropWinX = wr.left; s->CropWinY = wr.top; }
+    s->CropWinValid = haveRect ? 1 : 0;
     if (s->ReqCardValid && haveRect) {
         const int lx = s->ReqCardX - wr.left, ly = s->ReqCardY - wr.top;
         if (lx >= 0 && ly >= 0 && lx + w <= texW && ly + h <= texH) {
