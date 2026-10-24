@@ -33,7 +33,19 @@ FIXTURES_DIR="${FIXTURES_DIR:-mgmt/fixtures}"
 # fix was under test; a campaign that tests a package missing the P1 fix would report a clean run for
 # a build that cannot have fixed it, which is the shape of a receipt for work nobody did. Add a pair
 # when a campaign is the receipt for a new fix.
-FIX_MARKERS="${FIX_MARKERS:-guest/qwt-report-death.ps1:GUARD:bootbacklog tools/notifhost/notifhost.cpp:NotifyDeferDrain}"
+# 2026-10-24: the two new pairs are the fixes the NEXT campaign is the receipt for, added under this
+# paragraph's own rule. AND THE PATH MATTERS: this check reads `git show $PKGSHA:<file>` out of THIS
+# repo, and `agent/` is a SUBMODULE - a gitlink, not a tree - so no marker inside agent/ can ever
+# resolve here. The first attempt named agent/gui-agent/wgcbroker_ipc.h and the suite caught it as
+# "does not carry CropWinValid" against a commit that does. Most product fixes live in that
+# submodule, so until this check can follow a gitlink, a fix there has to be named through a
+# parent-repo file that moves with it - here the broker, which writes the same flag.
+# CropWinValid is the ABI 28 flag whose absence made the de-slice crop warning
+# fire on three win11 cells of run 40037710497 (findings/issues.md DESLICECROPFALLSBACKONWIN11 is OPEN
+# until a campaign measures it on a build that HAS it - so a package without it cannot be that
+# receipt). cut_predecessor is the ingestion-time sweep exclusion: without it the campaign's own
+# verdict is computed over the predecessor's lines, which is what voided run 40037710497's.
+FIX_MARKERS="${FIX_MARKERS:-guest/qwt-report-death.ps1:GUARD:bootbacklog tools/notifhost/notifhost.cpp:NotifyDeferDrain tools/wgcbroker/wgcbroker.cpp:CropWinValid tools/log-sweep.py:cut_predecessor}"
 ENTRY_GOLDENS="${ENTRY_GOLDENS:-win10-base win11r-base win11r-qwt}"
 ENTRY_FIXTURES="${ENTRY_FIXTURES:-win10-iqi:win10-base win11-iqi:win11r-base}"
 SUBJECTS="${SUBJECTS:-win11r-lt win10-clean win11-clean win10-appvm win11-appvm win10-acc win11-acc}"

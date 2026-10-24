@@ -695,8 +695,15 @@ else no "T24a build scoping is one-sided (old=$_old want 0, new=$_new want >=1)"
 if [ "$_stk" -ge 1 ]; then
   ok "T24b a module with ONE version is never excluded - nothing superseded it"
 else no "T24b the filter ate a single-version module's warning - every normal run would read clean" "$(printf '%s' "$o" | grep -a 'UNACCOUNTED\|PRIOR' | head -3)"; fi
-if printf '%s' "$o" | grep -qa 'SWEEP-GATE-PRIOR-BUILD 1 log' && printf '%s' "$o" | grep -qa '4.3.35.795 (superseded by 4.3.36.1020)'; then
-  ok "T24c the exclusion is REPORTED with both versions and the path, not silent"
+# THE PROPERTY, NOT THE WORD ORDER. This asserted the literal 'SWEEP-GATE-PRIOR-BUILD 1 log' and
+# went red when the line gained the words "SWEEP EXCLUSION" between the marker and the count (owner
+# 2026-10-24: "partition, keep it clearly marked as sweep exclusion"). What matters is that the
+# marker is there, that it names HOW MANY, that it names BOTH versions and the path, and that it
+# says the word a reader greps for - not the order those appear in.
+if printf '%s' "$o" | grep -qaE 'SWEEP-GATE-PRIOR-BUILD.*\b1 log' \
+   && printf '%s' "$o" | grep -qai 'exclusion' \
+   && printf '%s' "$o" | grep -qa '4.3.35.795 (superseded by 4.3.36.1020)'; then
+  ok "T24c the exclusion is REPORTED, marked as an exclusion, with both versions and the path"
 else no "T24c an excluded log is dropped without saying so" "$(printf '%s' "$o" | grep -a 'PRIOR-BUILD' | head -3)"; fi
 
 # T25 - A CAUSED DECLARATION, AND THE PROPERTY THAT KEEPS IT FROM BECOMING A SILENCER.

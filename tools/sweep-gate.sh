@@ -809,7 +809,7 @@ rm -f "$UPS"
 # REPORTED, NEVER SILENT. An excluded file is named with the version it declares and the version
 # that superseded it, so a wrong exclusion is visible in the same output as the verdict.
 if [ -s "$PRIOR" ]; then
-    echo "SWEEP-GATE-PRIOR-BUILD $(grep -ac . "$PRIOR") log(s) excluded - the capture itself shows their build was superseded, so their lines are not the build under test's:"
+    echo "SWEEP-GATE-PRIOR-BUILD SWEEP EXCLUSION: $(grep -ac . "$PRIOR") log(s) taken out of the graded set - the capture itself shows their build was SUPERSEDED, so their lines are not the build under test's. Named, never dropped quietly:"
     # The newest version comes from the attributor's own row (column 3), not from a table this file
     # keeps: ranking versions in bash was half of the implementation that had to go.
     while IFS=$'\t' read -r _m _v _n _p; do

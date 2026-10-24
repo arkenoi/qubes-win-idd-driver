@@ -530,6 +530,12 @@ INFORMATIONAL_METRICS = ["error_lines", "modules_unattributable", "warning_lines
                          "deaths_by_exit_code", "broker_events_excused", "fi_records",
                          # what the build filter set aside, so an exclusion is never silent
                          "error_lines_prior_build", "warning_lines_prior_build", "prior_build_mix",
+                         # THE SWEEP EXCLUSION ITSELF, as a figure and a per-module list: the lines
+                         # cut_predecessor() took out of the graded view at ingestion. Informational
+                         # because it is a property of the CAPTURE (an upgrade cell has two builds
+                         # in it by construction), never of the build under test - but it is always
+                         # printed, including the zero, because the counts below it all depend on it
+                         "sweep_excluded_lines", "sweep_excluded_detail",
                          # what was declared, with its kind and whether it matched - the audit trail
                          # for the tolerated kind, whose absence deliberately cannot breach
                          "declared_errors_tolerated", "declared_errors_detail",
@@ -1246,13 +1252,19 @@ def normalize(msg):
 
 # ----------------------------------------------------------------------------------------------- the model
 class Line:
-    __slots__ = ("family", "file", "idx", "ts", "level", "func", "msg", "raw", "boot", "extra", "fi")
+    __slots__ = ("family", "file", "idx", "ts", "level", "func", "msg", "raw", "boot", "extra", "fi",
+                 "swept_out")
 
     def __init__(self, family, file, idx, ts, level, func, msg, raw, extra=None):
         self.family, self.file, self.idx, self.ts, self.level, self.func, self.msg, self.raw = family, file, idx, ts, level, func, msg, raw
         self.boot = None
         self.extra = extra or {}
         self.fi = False          # in a fault-injection context (set by build_structure from evidence)
+        # WHY THIS LINE IS NOT IN THE GRADED VIEW, or None when it is. Set by cut_predecessor() and
+        # carried ON THE LINE, so that anywhere a swept-out line is rendered, dumped or counted it
+        # says so itself rather than depending on which collection it was read from. Owner,
+        # 2026-10-24: "partition, keep it clearly marked as sweep exclusion".
+        self.swept_out = None
 
     def key(self):
         if self.family == "events":
@@ -2152,6 +2164,10 @@ def cut_predecessor(files, build=None):
                                   % ", ".join(wrong)}
     for lf, keep, cut in plan:
         lf.lines = keep
+        for l in cut:
+            # MARKED, not merely MOVED. The collection it sits in says where it went; this says why,
+            # and travels with the line into any dump, render or count.
+            l.swept_out = "sweep-exclusion:predecessor-build"
         lf.prior_lines = (getattr(lf, "prior_lines", None) or []) + cut
     return scope, {"moved": dict(moved), "cut": True,
                    "lines_moved": sum(moved.values()), "lines_kept": kept_candidate}
@@ -3931,6 +3947,21 @@ def write_summary(rep, path):
         L.append("DATA (%d) - the sweep is not complete; missing data FAILS:" % len(rep["data_problems"]))
         for p in rep["data_problems"]:
             L.append("  %-10s %s: %s" % p)
+    # THE SWEEP EXCLUSION, STATED BEFORE EVERYTHING IT SCOPES. Every count, breach and signature
+    # class below is about the build under test only, because these lines were taken out of the
+    # graded view at ingestion - so a reader is told what was removed and why BEFORE reading a
+    # single number that depends on it. A line here is never silence: the figure is always printed,
+    # including the zero, and the no-exclusion case prints the reason it did not apply.
+    _sx = (rep.get("metrics") or {}).get("sweep_excluded_lines")
+    _sxd = (rep.get("metrics") or {}).get("sweep_excluded_detail") or []
+    if _sx is not None:
+        L.append("SWEEP EXCLUSION: %d line(s) taken out of the graded view - written by a build this "
+                 "capture shows was SUPERSEDED, so they are not the build under test's. Kept, not "
+                 "deleted: they still count in *_prior_build below." % _sx)
+        for _d in _sxd[:12]:
+            L.append("  %s" % str(_d)[:200])
+        if len(_sxd) > 12:
+            L.append("  ... and %d more (full list in report.json metrics.sweep_excluded_detail)" % (len(_sxd) - 12))
     br = rep["breaches"]
     L.append("BREACHES (%d; P1 %d):" % (len(br), len([b for b in br if b.get("severity") == "P1"])))
     for b in br:
@@ -4073,10 +4104,11 @@ def cmd_analyze(a):
     # NAMED, NEVER SILENT: what the cut moved, per module and version, is a reported field. An
     # exclusion that stops being nameable cannot be seen to be wrong, and a wrong exclusion here is
     # the failure mode Jev scored highest (hides-the-candidate 0.89).
-    metrics["prior_lines_cut"] = _cut.get("lines_moved", 0)
-    metrics["prior_lines_cut_detail"] = (
-        ["%s x%d" % (k, v) for k, v in sorted(_cut.get("moved", {}).items())]
-        if _cut.get("cut") else ["NOT CUT: %s" % _cut.get("why", "?")])
+    metrics["sweep_excluded_lines"] = _cut.get("lines_moved", 0)
+    metrics["sweep_excluded_detail"] = (
+        ["SWEEP EXCLUSION (predecessor build): %s x%d" % (k, v)
+         for k, v in sorted(_cut.get("moved", {}).items())]
+        if _cut.get("cut") else ["NO SWEEP EXCLUSION APPLIED: %s" % _cut.get("why", "?")])
     # THE CORRECTION THIS ANALYSER APPLIES IS ITSELF A MEASUREMENT, AND IT HAS TO BE GRADED.
     # normalize_clock_phase() exists so the --since window means what it says, and it worked - but
     # it also ABSORBED the defect: on 2026-10-14 every cell's guest ran three hours ahead at boot,
