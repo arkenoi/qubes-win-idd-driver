@@ -35,6 +35,11 @@ setup_first_attempt() { # a finished-and-aborted first attempt, as the real one 
   printf 'runner line from attempt one\n' > "$CAMP/runner.log"
   printf 'driver line from attempt one\n' > "$LOG"
   printf 'feature raw output from attempt one\n' > "$WORK/template-update.out"
+  # A FEATURE TEST'S OWN ARTEFACT TREE, which is what rel-40037710497 inherited whole: the suite
+  # appends to wu-e2e/run.log, so attempt two's reads saw attempt one's `fails=1` DONE line and
+  # reported FAIL for a run whose rounds had all passed.
+  mkdir -p "$WORK/template-update.d/wu-e2e"
+  printf 'DONE: rounds=3 fails=1 unjudged_exclusions=0\n' > "$WORK/template-update.d/wu-e2e/run.log"
 }
 # count the *.out files in $CAMP that carry a matrix footer - the builder's own predicate
 footer_outs() { local n=0 f; for f in "$CAMP"/*.out; do [ -f "$f" ] || continue
@@ -82,6 +87,33 @@ else
   no "the feature raw output has no boundary" "it is appended to across attempts"
 fi
 rm -rf "$T"
+
+# ---- a feature test starts from an EMPTY tree, and the previous attempt's is kept -------------
+setup_first_attempt
+run_second_attempt "$code"
+if [ -e "$WORK/template-update.d/wu-e2e/run.log" ]; then
+  no "the feature tree was inherited" "attempt two reads attempt one's wu-e2e/run.log - the rel-40037710497 FAIL"
+elif ! ls -d "$WORK"/template-update.d.attempt-* >/dev/null 2>&1; then
+  no "the feature tree was DISCARDED" "rotation must KEEP the previous attempt - it is that attempt's only record"
+else
+  ok "a feature test starts from an empty tree and the previous attempt's is kept beside it"
+fi
+rm -rf "$T"
+
+# ---- SEEN TO FAIL: with the dir rotate removed, the tree is inherited again --------------------
+nodir=$(printf '%s' "$code" | sed 's/^\( *\)mv -f "\$d".*$/\1return 0/')
+if [ "$nodir" = "$code" ]; then
+  no "SEEN TO FAIL: could not build the dir control" "the dir rotate line was not found to remove"
+else
+  setup_first_attempt
+  run_second_attempt "$nodir"
+  if [ -e "$WORK/template-update.d/wu-e2e/run.log" ]; then
+    ok "SEEN TO FAIL: without the dir rotate attempt two inherits wu-e2e/run.log - the shipped defect, reproduced"
+  else
+    no "the dir control did not reproduce the defect" "the tree was gone anyway"
+  fi
+  rm -rf "$T"
+fi
 
 # ---- SEEN TO FAIL: without the rotate, the two attempts share one file ---------------------------
 norotate=$(printf '%s' "$code" | sed 's/^\( *\)mv -f "\$f".*$/\1return 0/')

@@ -247,8 +247,30 @@ _ra_stamp_inherited(){ # <attempt-id> <path>... -> boundary into each existing p
   done
   printf 'inherited-files-stamped=%d attempt=%s\n' "$n" "$id"
 }
+# AND THE FEATURE TESTS' OWN ARTEFACT TREES, which is the THIRD instance of this defect. The two
+# above cover the files THIS script writes; a feature test's $WORK/<tag>.d is written by the suite
+# and was never rotated or stamped, so an attempt inherited the previous one's artefacts whole.
+# MEASURED on rel-40037710497: template-update.d/wu-e2e/run.log held TWO attempts - the first ended
+# `DONE: rounds=3 fails=1`, the retry `rounds=3 fails=0` - and template-update-test.sh reads `DONE:`
+# with `tail -1` (the retry's) while scanning wu-e2e's failure patterns over the WHOLE file, so it
+# quoted a 02:55:50 line from the superseded attempt and returned
+#   VERDICT FAIL: a round failed for a reason other than the judge
+# for a run whose every round had passed. That FAIL is in the 09:25:14 record of this very script,
+# and it would have blocked the cut on a green feature test.
+# ROTATED, not stamped, and for the same reason full.out is: these trees are PARSED by their suites
+# (DONE lines, JUDGE verdicts, round counters), and a separator inside a parsed file does not help a
+# consumer that greps the whole of it. Rotating gives this attempt an empty tree while KEEPING the
+# previous attempt's as its only record. Fixing it HERE fixes every feature test at once - no suite
+# needs its own marker, and `rm -f "$CAMP"/feature-*.out` below already applies this principle to
+# the result files.
+_ra_rotate_inherited_dir(){ # <attempt-id> <dir> -> moves it aside so this attempt starts empty
+  local id="${1:?_ra_rotate_inherited_dir <id> <dir>}" d="${2:?}"
+  [ -d "$d" ] || return 0
+  mv -f "$d" "$d.attempt-$id" && printf 'rotated %s -> %s.attempt-%s\n' "$d" "$d" "$id"
+}
 ACCEPT_ATTEMPT="${ACCEPT_ATTEMPT:-$(date -u +%Y%m%dT%H%M%SZ)}"
 _ra_rotate_inherited "$ACCEPT_ATTEMPT" "$CAMP/full.out" >/dev/null
+for _d in "$WORK"/*.d; do _ra_rotate_inherited_dir "$ACCEPT_ATTEMPT" "$_d" >/dev/null; done
 # shellcheck disable=SC2086
 _ra_stamp_inherited "$ACCEPT_ATTEMPT" "$LOG" "$CAMP/runner.log" $WORK/*.out >/dev/null
 # ONE attempt id across both layers, so a reader joining a campaign log to a cell artefact is

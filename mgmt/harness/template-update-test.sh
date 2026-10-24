@@ -151,6 +151,15 @@ mgmt/harness/wu-e2e.sh "$VM" "$ROUNDS" "$E2E" > "$OUT/wu-e2e.out" 2>&1; erc=$?
 fi
 RL="$E2E/run.log"
 [ -s "$RL" ] || verdict INSTRUMENT "wu-e2e left no run.log (rc=$erc)"
+# A FILE CANNOT SCOPE A RUN. run.log is appended, and on rel-40037710497 this suite inherited a
+# previous attempt's artefacts: one file held two attempts, `fails=1` then `fails=0`, and the reads
+# below disagreed - `DONE:` was taken with `tail -1` (the retry's) while the failure patterns were
+# scanned over the WHOLE file, so a GREEN retry was reported FAIL quoting the superseded attempt's
+# 02:55:50 line. The ROOT fix is in tools/release-acceptance.sh, which must not hand an attempt the
+# previous one's $WORK/<tag>.d tree. This assertion is the backstop for a standalone re-run into the
+# same OUT: a misread is turned into a loud INSTRUMENT verdict rather than a silent false FAIL.
+_done=$(grep -ac 'DONE: rounds=' "$RL")
+[ "$_done" -le 1 ] || verdict INSTRUMENT "$RL holds $_done wu-e2e attempts, so a verdict read over it would mix them (a green retry was reported FAIL this way on rel-40037710497) - give this suite a clean OUT or let release-acceptance.sh rotate it"
 say "wu-e2e rc=$erc: $(grep -a 'DONE:' "$RL" | tail -1 | cut -c1-200)"
 grep -a -q 'DONE:' "$RL" || verdict INSTRUMENT "wu-e2e did not finish (rc=$erc) - no verdict"
 # wu-e2e's own failure lines, verbatim (mgmt/harness/wu-e2e.sh): a stall, a dead pass, the oscillation and reboot-accounting
