@@ -114,19 +114,57 @@ function Failure-Config($name) {
     } catch { return "error: $($_.Exception.Message)" }
 }
 
-# 7023/7031 FOR QREXEC ONLY, counted since a timestamp. Matching the MESSAGE rather than a display
-# name this script would have to hard-code: the SCM writes the service's display name into the text
-# and a name asserted from memory is how a check ends up measuring nothing.
+# 7023/7031 FOR QREXEC ONLY, counted since a timestamp. The SCM writes the service's DISPLAY NAME
+# into the message, so the name to match is ASKED OF THE SCM, never written here.
+#
+# THIS LINE READ `if ($msg -notmatch 'qrexec') { continue }` UNTIL 2026-10-24, and the comment that
+# then stood above it said a display name "asserted from memory is how a check ends up measuring
+# nothing" - which is precisely what the line below it did. QrexecAgent's display name is
+# **'Qubes RPC agent'**: it contains no "qrexec", so every one of its events was discarded. MEASURED
+# on win11r-sup run 1024-2016: the cell reported `scm_7023_window 0` and graded the PRODUCT as
+# failing to record a WaitForQdb timeout, while the System log held, one second after the timeout,
+#     23:38:51 7023 The Qubes RPC agent service terminated with the following error:
+#                   This operation returned because the timeout period expired.
+#     23:38:52 7031 The Qubes RPC agent service terminated unexpectedly ... corrective action will
+#                   be taken in 5000 milliseconds: Restart the service.
+# "the timeout period expired" IS ERROR_TIMEOUT 1460 and the $has1460 test below would have matched
+# it. A fabricated product failure, produced entirely by this filter.
 function Scm-Events($sinceUtc) {
-    $out = @{ '7023' = 0; '7031' = 0; detail = @() }
+    # `counted` holds ONLY the agent's own matched lines. The 1460 test reads THAT, never `detail`:
+    # detail also carries other services' events now, and the suspended daemon's 7023 text could
+    # otherwise satisfy a check about the agent.
+    $out = @{ '7023' = 0; '7031' = 0; detail = @(); counted = @() }
+    # QREXEC'S DISPLAY NAME ONLY, from the SCM itself. The counts are the claim, and the claim is
+    # about QrexecAgent: the suspended qubesdb daemon gets its OWN 7023/7031 when the SCM gives up on
+    # it (measured in the same window, 23:39:53, "Insufficient information exists to identify the
+    # cause of failure"), and counting those here would let the daemon's death satisfy a check about
+    # the agent. Every other service's events in the window are RECORDED below instead, so the
+    # daemon's are visible rather than mixed in or hidden.
+    $pattern = $null
+    $svc = Get-Service -Name $QRX -EA SilentlyContinue
+    if ($svc -and $svc.DisplayName) { $pattern = [regex]::Escape($svc.DisplayName) }
+    # If the SCM could not be asked, say so and count NOTHING: a zero that means "could not look" is
+    # indistinguishable from a clean run, and the harness grades a missing count as INVALID.
+    if (-not $pattern) {
+        $out.detail += "SCM could not name $QRX - no count is claimed"
+        return $out
+    }
+    $out.detail += "match: $pattern"
     try {
         $ev = Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = 7023, 7031; StartTime = $sinceUtc } -EA SilentlyContinue
         foreach ($e in $ev) {
             $msg = ''
             try { $msg = $e.Message } catch { }
-            if ($msg -notmatch 'qrexec') { continue }
+            $line = ("{0} id={1} {2}" -f $e.TimeCreated.ToString('s'), $e.Id, ($msg -replace '\s+', ' ').Trim())
+            if ($msg -notmatch $pattern) {
+                # Another service's 7023/7031 in the same window - recorded, never counted. The
+                # suspended daemon's own death lands here.
+                $out.detail += ("other: " + $line)
+                continue
+            }
             $out["$($e.Id)"] = $out["$($e.Id)"] + 1
-            $out.detail += ("{0} id={1} {2}" -f $e.TimeCreated.ToString('s'), $e.Id, ($msg -replace '\s+', ' ').Trim())
+            $out.detail += $line
+            $out.counted += $line
         }
     } catch { $out.detail += "Get-WinEvent failed: $($_.Exception.Message)" }
     return $out
@@ -276,7 +314,7 @@ try {
     # offline). A 7023 carrying any other code would mean the service died of something else and
     # this cell measured the wrong failure.
     $has1460 = $false
-    foreach ($d in $seen.detail) { if ($d -match '1460|timeout period expired') { $has1460 = $true } }
+    foreach ($d in $seen.counted) { if ($d -match '1460|timeout period expired') { $has1460 = $true } }
     T 'scm_7023_names_1460' $has1460
 
     # ---- AND WHAT THE AGENT ITSELF SAID, because "no 7023" has two causes ------------------------

@@ -324,16 +324,39 @@ campaign". All four are false as of 2026-10-24: `supervision-gate` is the fifth 
   suffix 1, round2 +1 row suffix 2, agent relaunched as pid 5336 between them.
 - item 4: the guest-side half was always measured (L2); its NOTIFICATION half is asserted as of
   2026-10-24 - L2 requires the reporter's dom0 row delta to be 0 across the clean cycles, which is
-  the same number L8 and L11 require to be 1. NOT YET RUN.
+  the same number L8 and L11 require to be 1. **RUN AND PASSED** 2026-10-24, run 1024-1731:
+  `instances/boot=1 deaths=0 relaunches=0 stop_errors=0 stale=0; dom0 rows 0 -> 0 (delta 0) across
+  2 clean cycle(s)`.
 - item 2's pairing - a graceful shutdown after a DELIVERED death must add nothing, which is where the
-  catch-up's watermark could re-report - is asserted at the end of L11 as of 2026-10-24. NOT YET RUN.
-- item 3: L10 exists and has run ONCE, INVALID: `sc query` takes the SCM key name and 'QubesDB' is
-  not it (`Install-QwtImproved.ps1:1363` lists our services by DISPLAY name). Resolved from the
-  display name now. NOT YET PROVEN.
+  catch-up's watermark could re-report - is asserted at the end of L11. **RUN AND PASSED**
+  2026-10-24, run 1024-1831: two deaths delivered one row each, then `a clean shutdown+boot added
+  NOTHING (rows 2 -> 2)`.
+- item 3: **PROVEN** 2026-10-25, run 1024-2053 - the full 7023-naming-1460 + 7031 + restart chain,
+  evidence under item 3 below. It took SEVEN runs, and the record of them is the point:
+    1024-1639  INVALID  the stimulus could not be held (`sc query` takes the SCM KEY name and
+                        'QubesDB' is not it - Install-QwtImproved.ps1:1363 lists ours by DISPLAY name)
+    1024-1731  INVALID  the stimulus could not be held (`sc stop QdbDaemon` refused, 1051: QrexecAgent
+                        depends on it)
+    1024-1804  FAIL     no 7023 - the stop was refused again (1051 on QrexecAgent itself, from
+                        QubesGuiWatchdog above it) so the service never restarted into the wait. A
+                        FABRICATED product failure; the INVALID guard for an unapplied stimulus was
+                        added because of this one.
+    1024-1831  FAIL     no 7023 - and this one was REAL: the 360 s bound was tested only BETWEEN
+                        qdb_open calls (QDBWAITBOUNDISINERTWHILETHEDAEMONISSILENT, fixed b475127)
+    1024-2016  FAIL     the fix was IN and the bound fired - the cell counted only events whose text
+                        held the literal `qrexec`, and the display name is `Qubes RPC agent`
+    1024-2048  FAIL     the same verdict out of the PREVIOUS run's transcript: the path is fixed and
+                        nothing deleted it, so a 39-second run graded 1024-2016's file
+    1024-2053  PASS
+  Three of those six failures were defects of this cell, not of the product. All are fixed below.
 
-**STILL UNCOVERED, and both are inside item 2:**
-- the `AGAIN` lines for the 1001/4001 records. Nothing asserts them - checked by content across
-  supervision-e2e.sh, sup-crash-numbering.ps1 and deathevent-selftest.sh.
+**STILL UNCOVERED, and it is inside item 2:**
+- the `AGAIN` lines for the 1001/4001 records. **NOW COVERED** as of 2026-10-24: sup-crash-numbering.ps1
+  counts `DEATH #(\d+) AGAIN` and returns its death NUMBERS (so an AGAIN belonging to another death
+  cannot be read as this one's), and L11 asserts the delta. RUN AND PASSED, run 1024-1831:
+  `round2 +1 row +1 NEW (suffix 2, 4001 x1, AGAIN +2, numbers 1)` - the second record of death #1
+  advanced the watermark and notified NOTHING, which is the positive evidence that the dedupe ran
+  rather than there having been only one record to begin with.
 - Application **1000 (+1001)**. Those are WINDOWS ERROR REPORTING events for a FAULTING process, and
   every stimulus we have is a termination: `Process.Kill()` is not a fault, so L11 RECORDS them and
   does not require them. Producing a real fault needs the injector build
@@ -369,9 +392,42 @@ campaign". All four are false as of 2026-10-24: `supervision-gate` is the fifth 
    after itself. `tools/tests/health-recovery-selftest.sh` still asserts only that the recovery is
    ARMED.
 
-   **AND IT FOUND A PRODUCT DEFECT RATHER THAN PROVING THE CLAIM - this item's claim is FALSE as
-   written on the shipping binary.** Run 1024-1831: the daemon was held suspended 421 s against a
-   360 s bound and the SCM recorded NOTHING (`scm_7023_window 0`). The agent's own log says why -
+   **PROVEN ON A GUEST 2026-10-25, run 1024-2053, after the defect it first exposed was fixed:**
+
+       L10  PASS  7023 0 -> 1 naming 1460, 7031=1; QrexecAgent=RUNNING QubesDB=RUNNING
+       started                20:54:36          (this run's transcript, not a previous one's)
+       qubesdb_suspended      23:54:41.855
+       agent_qdb_timeout_line [20261025.000042.157-6256:6572-E] WaitForQdb: timed out after 360000 ms
+       scm_event  match: Qubes\ RPC\ agent
+       scm_event  00:00:43 id=7023 The Qubes RPC agent service terminated with the following error:
+                           This operation returned because the timeout period expired.
+       scm_event  00:00:43 id=7031 The Qubes RPC agent service terminated unexpectedly ... corrective
+                           action will be taken in 5000 milliseconds: Restart the service.
+       scm_7023_names_1460    True
+
+   The bound fires at exactly 360 s after the suspend, the SCM records it NAMING ERROR_TIMEOUT, the
+   restart action the installer armed fires, and the guest comes back with both services RUNNING. All
+   four clauses of this item, on the shipping package 4.3.37.1087.
+
+   **IT TOOK SEVEN RUNS, AND THREE OF THE SIX FAILURES WERE DEFECTS OF THIS CELL.** Run 1024-1831 reported
+   `scm_7023_window 0` and that was a REAL product defect - the 360 s bound was tested only between
+   `qdb_open` calls, so a call that never returned was never interrupted (filed as
+   QDBWAITBOUNDISINERTWHILETHEDAEMONISSILENT, fixed in core-agent b475127, see below). Run 1024-2048
+   then reported the SAME FAILURE from a build that carried the fix, twice over:
+   * the cell counted only events whose MESSAGE contained the literal `qrexec`, and QrexecAgent's
+     display name is **`Qubes RPC agent`**. Every one of its events was discarded. The comment above
+     that line had warned that a display name "asserted from memory is how a check ends up measuring
+     nothing", and the line below it did exactly that. The log had held the 7023 naming 1460 all
+     along. Fixed: the display name is now asked of the SCM, other services' events are RECORDED but
+     never COUNTED, and the 1460 test reads only the counted lines.
+   * the transcript path is fixed (`C:\Windows\Temp\L10i.txt`) and nothing deleted it, so the wait
+     found the PREVIOUS run's file - which already carried `done` - and graded it in 39 SECONDS
+     against a six-minute burn, reporting `started|20:32:44` from the run before. Fixed: the
+     transcript is deleted and the delete asserted, and the graded transcript's own `started` stamp
+     must fall inside this cell's window or the verdict is INVALID.
+   Both fixes are proven by the PASS above; neither could be seen by any offline suite.
+
+   The history, for the record: run 1024-1831 is where the product defect was found. The agent's own log says why -
    instance pid 7840 logged `QWTBIRTH ... pid=7840` at 21:49:35.217 and then nothing at all until
    21:56:37.183, one second after the resume, with no `timed out after 360000 ms` line anywhere.
    `WaitForQdb` tested its budget only BETWEEN calls:

@@ -1150,6 +1150,31 @@ if has L10; then
       *)       _flag="";         _tr='C:\Windows\Temp\L10i.txt'; _lbl=L10  ;;
     esac
     log "$_lbl: $_arm - $([ "$_arm" = CONTROL ] && echo 'the same sequence WITHOUT suspending the qubesdb daemon' || echo 'suspend the qubesdb daemon process and let WaitForQdb burn its 6 minutes')"
+    # DELETE THE PREVIOUS RUN'S TRANSCRIPT, and record that the delete was asked for. The path is
+    # FIXED, so without this the wait below finds last run's file - which already carries `done` -
+    # and grades it in seconds. MEASURED on win11r-sup 1024-2048: that run was launched purely to
+    # re-test a corrected filter, took 39 SECONDS against a six-minute burn, and reported
+    # `started|2026-10-24T20:32:44 done|20:39:56` - the 1024-2016 transcript, verbatim, FAIL and all.
+    # The fix never ran and the verdict was the old run's. Experimenter rule 14: accumulating state
+    # is baselined or deleted, or a check fires on the previous run's failure.
+    _runstamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    QT_T=60 q run "cmd /c del /f /q $_tr" >/dev/null 2>&1 || true
+    # AND IT IS ASSERTED, not assumed: a delete that silently failed must not read as a fresh run.
+    # THE PAYLOAD, NOT THE ECHO. A VMShell stream carries cmd's banner AND the echoed command line,
+    # and that command line contains both answers - so `grep -qa STALE-STILL-THERE` over the whole
+    # stream matched the ECHO and warned on every run, including the one where the delete had plainly
+    # worked (measured 1024-2053: the WARN fired while the receipt line read CLEARED). Drop the
+    # banner and the prompt-prefixed echo, then read the last answer that remains.
+    QT_T=60 q run "cmd /c if exist $_tr (echo STALE-STILL-THERE) else (echo CLEARED)" > "$OUT/$_lbl-clear.out" 2>&1 || true
+    _cleared=$(tr -d '\r' < "$OUT/$_lbl-clear.out" 2>/dev/null \
+               | command grep -avE '^(Microsoft Windows|\(c\)|[A-Za-z]:\\)' \
+               | command grep -aoE 'STALE-STILL-THERE|CLEARED' | tail -1)
+    case "$_cleared" in
+      CLEARED) : ;;
+      STALE-STILL-THERE)
+        log "  [WARN] $_lbl: $_tr survived the delete - the started-stamp guard below is what stops it being graded" ;;
+      *)  log "  [WARN] $_lbl: could not read whether $_tr was cleared (got '${_cleared:-<nothing>}')" ;;
+    esac
     # DETACHED, via -EncodedCommand. The injected arm takes the channel down, so a command that
     # waits for the script would die with it - the same shape wu-e2e had to adopt for the
     # oscillation scan ("the channel was killing it", 5926ffdf). -EncodedCommand rather than quoting
@@ -1176,6 +1201,16 @@ if has L10; then
     [ -n "$_why" ] || _why="the 900 s deadline expired"
     log "  $_lbl wait exit: $_why"
     g10(){ grep -a "^L10|$1|" "$OUT/$_lbl-read.out" 2>/dev/null | tail -1 | cut -d"|" -f3- | tr -d "\r"; }
+    # THE TRANSCRIPT MUST BE THIS RUN'S. Both stamps are UTC `%Y-%m-%dT%H:%M:%S` (the script writes
+    # `started` through ToUniversalTime().ToString('s')), so a lexicographic compare is exact. The
+    # delete above is the fix; this is what makes a FAILED delete visible instead of fatal - without
+    # it, 1024-2048 graded 1024-2016's transcript and reported its FAIL as a fresh measurement.
+    _tstart=$(g10 started)
+    if [ -n "$_tstart" ] && [ -n "$_runstamp" ] && [ "${_tstart}Z" \< "$_runstamp" ]; then
+      verdict "$_lbl" INVALID "the transcript belongs to THIS run" \
+              "the graded transcript started ${_tstart}Z, BEFORE this cell launched at $_runstamp - it is a previous run's file and nothing about this run was measured"
+      continue
+    fi
     _b7023=$(g10 scm_7023_base); _w7023=$(g10 scm_7023_window); _w7031=$(g10 scm_7031_window)
     _has1460=$(g10 scm_7023_names_1460); _term=$(g10 terminal); _qend=$(g10 qubesdb_state_end)
     _qare=$(g10 qrexecagent_state_restored); _cfg=$(g10 qubesdb_state_after_resume)
