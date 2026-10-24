@@ -94,12 +94,17 @@ extra=$(echo "$HDR" | command grep -oE '#define QTB_EXIT_[A-Z_]+' | command grep
   || bad "no_new_exit_codes: $extra new exit code(s) - a non-zero exit is restarted, which relaunches a bridge somebody stopped"
 
 # ---- 5. the agent stops reporting them, and ONLY them ------------------------------------------
-# The phrase spans two source lines ("...an intended " L"departure, not a death..."), so the
-# needle is the half that lives on one line. A multi-line claim needs a multi-line matcher or a
-# single-line needle; this check failed its own fixed code once by forgetting that.
-echo "$MAIN" | command grep -q 'departure, not a death' \
-  && ok "not_a_death: an exit with a matching recorded reason is not reported as a death" \
+# NOT A PHRASE. This greped 'departure, not a death' - half of a sentence that then got reworded, so
+# the check failed correct code. The behaviour is what matters and it is still there: an exit whose
+# recorded reason matches is logged as an intended departure and nothing is relaunched or reported
+# (main.c, "left on purpose (%s), an intended departure"). Assert the DECISION's two halves - the
+# reason file is consulted, and a matching exit takes the non-death path - not the prose around them.
+echo "$MAIN" | command grep -q 'an intended departure' \
+  && ok "not_a_death: an exit with a matching recorded reason is logged as an intended departure" \
   || bad "not_a_death: the agent still reports every exit 0 as 'a clean exit nobody asked for'"
+echo "$MAIN" | command grep -qE 'QgaDecideHelperExit|QgaExitIsExpected' \
+  && ok "not_a_death: the verdict comes from the shared exit classifier, not a local guess" \
+  || bad "not_a_death: the exit is classified inline - the watchdog and the agent can now disagree"
 echo "$MAIN" | command grep -q 'QGANOTIFBRIDGEEXIT' \
   && ok "real_death_survives: an exit with NO reason is still an ERROR - the fix is not a blanket mute" \
   || bad "real_death_survives: the death report is gone entirely, which is a silencing"

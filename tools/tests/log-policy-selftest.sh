@@ -192,9 +192,24 @@ if [ -z "$DSM" ]; then bad "start_dismiss_targeted: DismissHiddenStartSurface co
   else
     ok "start_dismiss_targeted: no global inject in the dismissal"
   fi
-  printf '%s' "$DSM" | command grep -q 'PostMessage(start, WM_KEYDOWN, VK_ESCAPE' \
-    && ok "start_dismiss_posts_to_the_window: the key goes to the Start surface's own queue" \
-    || bad "start_dismiss_posts_to_the_window: the dismissal does not post to that window"
+  # NO KEYSTROKE AT ALL IS THE DECISION NOW, so demanding the posted Escape was demanding a mechanism
+  # this project measured and removed. main.c's own note at the dismissal: a posted WM_KEYDOWN Escape
+  # "does NOT close Start; a real Escape keystroke does (measured)", and the repaired-target version
+  # was refuted on the guest twice the same day with the menu still open 1000 and 1063 ms later. The
+  # close path is Windows' own light-dismiss, reached by returning activation. What must hold is the
+  # property this check was really for: the dismissal injects NOTHING globally (our Escape could land
+  # in Open-Shell's menu - measured 3 of 57 Win presses on 4.3.35, Jev race_is_real 0.96).
+  printf '%s' "$DSM" | command grep -qE 'SendInput|keybd_event|PostMessage\([^)]*VK_ESCAPE' \
+    && bad "start_dismiss_injects_nothing: the dismissal injects or posts a keystroke again - the Open-Shell race returns" \
+    || ok "start_dismiss_injects_nothing: the dismissal sends no keystroke of its own, global or posted"
+  # AND IT OWNS NO MECHANISM OF ITS OWN: this body is a thin delegation (193 chars, one call), which is
+  # why the close path cannot be asserted from inside it - ApplyForeground lives in the delegate, and
+  # tools/tests/lifecycle-selftest.sh asserts it there ("the dismissal activates through the shared
+  # ApplyForeground, with no attach logic of its own"). Scoping that assertion to this body was my own
+  # error, caught by this suite: a check must be asserted where the property lives.
+  printf '%s' "$DSM" | command grep -qE '\bStartOpeningExamine\s*\(' \
+    && ok "start_dismiss_delegates: the dismissal carries no close mechanism of its own, it delegates" \
+    || bad "start_dismiss_delegates: the dismissal has grown its own close mechanism again"
   # AND NO FALLBACK. A fallback to a global inject would reintroduce the whole defect.
   printf '%s' "$DSM" | command grep -qE 'else[^}]*SendInput' \
     && bad "start_dismiss_no_global_fallback: it falls back to a global inject when posting fails" \

@@ -28,18 +28,36 @@ code(){ sed -E 's@//.*$@@' "$1"; }
 CODE="$(code "$M")"
 
 # ---- 1. the clock does not run while the launch is impossible ----------------------------------
-# ShellWindowNow(), NOT GetShellWindow(): the consult was renamed when the shell-seen latch landed
-# (2026-10-10) and this check kept grepping the old literal, so it has been FAILING on code that is
-# correct ever since - a stale-literal consumer of a rename. The predicate is the same one either
-# way: the hold is on "no shell AND nothing launched yet".
+# THIS CHECK HAS BEEN A STALE-LITERAL CONSUMER OF ITS OWN SUBJECT TWICE. First on the
+# GetShellWindow -> ShellWindowNow rename (2026-10-10). Then, worse, it went on demanding
+# `ShellWindowNow() && !g_WgcLaunched` after 185794f REMOVED that conjunction - because requiring
+# BOTH was the defect: on a guest whose shell appeared early the clock armed 28 s before any launch
+# was issued and the report fired 49 ms before the broker validated. A check that greps a spelling
+# fails correct code on every rename and then DEMANDS THE BUG BACK once the bug is fixed.
+# The hold is on `!g_WgcLaunched` alone: before the launch there is nothing to be down, however long
+# the shell has been up (docs/ADR-supervision.md 7).
+echo "$CODE" | command grep -q 'if (!g_WgcLaunched)' \
+  && ok "held_until_asked: the down-clock is held until a launch has been issued" \
+  || bad "held_until_asked: the deadline can run before the broker was ever asked to start"
 echo "$CODE" | command grep -q 'ShellWindowNow() && !g_WgcLaunched' \
-  && ok "held_without_a_shell: the down-clock is held while no shell exists, because the broker runs in the user's session" \
-  || bad "held_without_a_shell: the deadline still runs before the broker can be launched at all"
+  && bad "held_until_asked: the hold is conjoined with the shell again - the 185794f defect, which fires 28 s early" \
+  || ok "held_until_asked: and it is NOT conjoined with the shell, which is what fired the report in flight"
 
 # ---- 2. and once it CAN be launched, the deadline measures from the launch ----------------------
-echo "$CODE" | command grep -q 'g_WgcLaunched && g_WgcLastLaunch) ? g_WgcLastLaunch : now' \
-  && ok "anchored_at_launch: the 30 s is measured from the launch, which is what the message claims" \
-  || bad "anchored_at_launch: the deadline is still anchored on the first supervision pass"
+# Through the pure predicate, whose BEHAVIOUR is proven compiled with its own defect knob
+# (QgaDesliceAnchor / QGA_LIFECYCLE_DEFECT_STALEANCHOR, tools/tests/lifecycle-selftest.sh). What is
+# asserted here is the WIRING: the armed clock takes its origin from that predicate, fed the launch
+# tick - not from the supervision pass that happened to notice.
+echo "$CODE" | command grep -q 'QgaDesliceAnchor(g_WgcLaunched ? 1 : 0, g_WgcLastLaunch, g_BrokerReadyAt, now)' \
+  && ok "anchored_at_launch: the armed clock's origin comes from QgaDesliceAnchor, fed the launch tick" \
+  || bad "anchored_at_launch: the deadline is anchored on something other than the launch"
+
+# ---- 2b. AND A STAND-DOWN IS ULTIMATE (ADR-supervision 7) --------------------------------------
+# The complaint must not exist at all for a broker that was told to stop. Owner, 2026-10-24: "of
+# course graceful shutdown should be ultimate until something starts it".
+echo "$CODE" | command grep -q 'QgaDesliceSupervisionHeld(g_BrokerStoodDown' \
+  && ok "stand_down_is_ultimate: supervision is held while the broker was told to go down" \
+  || bad "stand_down_is_ultimate: a deliberate stand-down still arms the clock and complains"
 
 # ---- 3. THE ANCHOR MUST NOT SLIDE, or the report could never fire ------------------------------
 # BrokerState's own comment records that an older version measured from g_WgcLastLaunch while
