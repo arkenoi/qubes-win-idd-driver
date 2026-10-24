@@ -217,7 +217,7 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # consumer accepts the shipped QWTBIRTH form, skipping comments (all six now explain the demotion in
 # prose a whole-file check would pass on), and drives the restart parser against a line a 4.3.37
 # guest actually wrote, with the branch removed to prove it reads 0 without it.
-FLOOR=${OFFLINE_SUITES_FLOOR:-106}
+FLOOR=${OFFLINE_SUITES_FLOOR:-107}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"

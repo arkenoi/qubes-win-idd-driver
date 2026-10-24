@@ -159,3 +159,4 @@ attributor-unique-selftest.sh
 wrong-interpreter-gate-selftest.sh
 qdbwait-bound-selftest.sh
 rig-cleanup-selftest.sh
+logvol-smoke-selftest.sh
