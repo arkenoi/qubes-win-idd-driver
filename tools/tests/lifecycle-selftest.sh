@@ -394,6 +394,40 @@ raise SystemExit(0)
 PYF
 }
 shape "main.c: the persisted DesliceBrokerDown flag is OWNED at first-ready - written 0 unconditionally, so a clean boot cannot inherit a previous boot's outage" main_flag_owned_on_ready "$MAIN" 'REG_CONFIG_DESLICE_DOWN_VALUE, 0, NULL);'
+# ONE QUBESDB SESSION PER PROCESS, AND IT MUST BE CLOSED ON EVERY PATH. There is no graceful close
+# in the protocol (QDB_CMD_{READ,WRITE,RM,LIST,MULTIREAD,WATCH,UNWATCH}, no goodbye), so each close
+# costs the daemon one `W pipe_thread_client: QpsRead from client N failed: 109` - measured 1:1 with
+# teardowns, 58 warnings for 58 disconnects, and `connected (1 total)` on every connect proving
+# nothing held a handle. gui-agent opened FIVE per start; Init now shares one across its three
+# readers and PerfInit one across its two. The risk that buys is a leak, so that is what is asserted:
+# the session is opened once, and between that open and its final close no `return` or `goto` exists
+# except inside an arm that closes first. main.c's comment at the old close point cites this check.
+main_qdb_one_session() {
+    python3 - "$1" <<'PYF'
+import sys, io, re
+s = io.open(sys.argv[1], encoding='utf-8', errors='replace').read()
+s = re.sub(r'(?m)//.*$', '', s)                      # comments are not code
+if len(re.findall(r'qdb_open\(NULL\)', s)) != 1: raise SystemExit(1)   # exactly one session
+o = s.index('qdb_open(NULL)')
+closes = [m.start() for m in re.finditer(r'qdb_close\(gateQdb\)', s)]
+if not closes: raise SystemExit(1)
+last = closes[-1]
+# every return/goto between the open and the LAST close must be on a line that closes first
+for m in re.finditer(r'(?m)^.*\b(return|goto)\b.*$', s[o:last]):
+    line = m.group(0)
+    if 'qdb_close(gateQdb)' in line:
+        continue                      # the gate-read failure arms close, then return
+    if 'qdb_open' in line:
+        continue                      # the open FAILED: there is no session to close on that path
+    raise SystemExit(1)
+# and the last close must precede the next return, not follow it
+tail = s[last:last+400]
+if not re.search(r'qdb_close\(gateQdb\);\s*(?:\n\s*)*if\s*\([^)]*\)\s*(?:\n\s*)*return', tail):
+    raise SystemExit(1)
+raise SystemExit(0)
+PYF
+}
+shape "main.c: ONE qubesdb session for Init, closed on every path - no return or goto between the open and the last close that does not close first" main_qdb_one_session "$MAIN" 'qdb_close(gateQdb);'
 # HOW LONG A HOLD LASTS MUST BE OBSERVABLE. Owner, 2026-10-24: "window holds that stay longer than
 # expected are very, very real product defect if they are authentic" - and nothing measured them. The
 # only line carrying a duration is QGAHOLDSTARVED at a 10 s bound, emitted 0 times on this rig, and
