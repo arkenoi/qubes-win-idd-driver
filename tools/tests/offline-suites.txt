@@ -155,3 +155,4 @@ ttfw-ab-selftest.sh
 init-record-consumers-selftest.sh
 build-attribution-selftest.sh
 decode-dedup-selftest.sh
+attributor-unique-selftest.sh

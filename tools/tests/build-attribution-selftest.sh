@@ -86,7 +86,8 @@ def pick(mod, level, needle):
             return lf, l
     raise SystemExit("FIXTURE BROKEN: no %s %s line matching %r in %s" % (mod, level, needle, lf.name))
 
-builds, anchor, pre_install, prior, unattrib = m.build_scope(files, BUILD)
+_sc = m.build_scope(files, BUILD)   # a BuildScope: read by NAME, never by position
+builds, anchor, pre_install, prior, unattrib = _sc.builds, _sc.anchor, _sc.pre_install, _sc.prior, _sc.unattributable
 sup = m.superseded_series(builds, BUILD)
 print("ANCHOR %s" % anchor)
 print("SUPERSEDED %s" % sorted(".".join(s) for s in sup))
@@ -103,7 +104,7 @@ print("P2PRE %s" % pre_install(l2))                        # it IS before the cu
 print("P2 %s" % prior(lf2, l2))                            # and must NOT be the predecessor's
 _real = m.declared_unreadable
 m.declared_unreadable = lambda a, b: False                 # MUTATION: lose the discriminator
-_b, _a, _p, prior_mut, _u = m.build_scope(files, BUILD)
+prior_mut = m.build_scope(files, BUILD).prior
 print("P2MUT %s" % prior_mut(lf2, l2))
 m.declared_unreadable = _real
 
@@ -112,7 +113,7 @@ lf3, l3 = pick("qubesdb-daemon", "W", "QpsRead")
 print("P3 %s" % unattrib(lf3, l3))
 _stock = m.STOCK_FAMILIES
 m.STOCK_FAMILIES = set()                                   # MUTATION: stop sparing stock modules
-_b, _a, _p, _pr, unattrib_mut = m.build_scope(files, BUILD)
+unattrib_mut = m.build_scope(files, BUILD).unattributable
 print("P3MUT %s" % unattrib_mut(lf3, l3))
 m.STOCK_FAMILIES = _stock
 

@@ -3229,7 +3229,13 @@ if [ -x tools/sweep-gate.sh ]; then
   export SWEEP_GATE_CELLS
   say "sweep-gate: $SWEEP_GATE_CELLS cell(s) in this campaign (the denominator for vendored-count rises)"
   # shellcheck disable=SC2086
-  if bash tools/sweep-gate.sh "${SWGATE_DECL[@]}" $swlogs > "$M/sweep-gate.out" 2>&1; then
+  # --build: A CAMPAIGN VERDICT IS A STATEMENT ABOUT THE BUILD UNDER TEST, and until 2026-10-24 this
+  # call passed only file lists. $PV comes from the package MANIFEST at :2716 and has been handed to
+  # the PER-CELL sweep at :496 the whole time; the campaign-level gate was the one reader that could
+  # not know which build it was grading. With it, a corpus in which the candidate declared itself
+  # NOWHERE is refused (INVALID-NOBUILD) instead of having its messages billed to that build - which
+  # is how run 40037710497's 26 unaccounted messages were produced.
+  if bash tools/sweep-gate.sh ${PV:+--build "$PV"} "${SWGATE_DECL[@]}" $swlogs > "$M/sweep-gate.out" 2>&1; then
     say "sweep-gate: every declared error in the campaign's own logs is accounted for"
   else
     _sg_rc=$?

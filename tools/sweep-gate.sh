@@ -58,10 +58,25 @@ if [ "${1:-}" = "--silent-failures" ]; then SILENT=1; shift; fi
 # A rare declaration is REPORTED when unmatched, never silent, so one that has not matched for a long
 # time is visible to a reader. Jev: two_kinds 0.89 (always_fail 0.11).
 DECL_RX=(); DECL_WHY=(); DECL_RARE=()
-while [ "${1:-}" = "--declare-caused" ] || [ "${1:-}" = "--declare-caused-rare" ]; do
-    [ $# -ge 3 ] || { echo "sweep-gate: $1 needs REGEX and REASON" >&2; exit 2; }
-    case "$1" in --declare-caused-rare) DECL_RARE+=(1) ;; *) DECL_RARE+=(0) ;; esac
-    DECL_RX+=("$2"); DECL_WHY+=("$3"); shift 3
+# --build: THE BUILD UNDER TEST, and a GATE VERDICT IS A STATEMENT ABOUT ONE BUILD. Without it this
+# gate can only self-calibrate ("the newest version present is the candidate"), which is right for
+# an upgrade and wrong for a downgrade - and, worse, cannot tell "the candidate wrote nothing here"
+# from "the candidate wrote nothing wrong here". Its only caller, mgmt/harness/matrix.sh, has
+# computed $PV from the package MANIFEST since long before this option existed and passed it to the
+# PER-CELL sweep only; the campaign-level gate was handed file lists alone.
+# Parsed in the same loop as the declarations so a caller's argument ORDER cannot matter.
+BUILD=""
+while :; do
+    case "${1:-}" in
+        --declare-caused|--declare-caused-rare)
+            [ $# -ge 3 ] || { echo "sweep-gate: $1 needs REGEX and REASON" >&2; exit 2; }
+            case "$1" in --declare-caused-rare) DECL_RARE+=(1) ;; *) DECL_RARE+=(0) ;; esac
+            DECL_RX+=("$2"); DECL_WHY+=("$3"); shift 3 ;;
+        --build)
+            [ $# -ge 2 ] || { echo "sweep-gate: --build needs <package_version>" >&2; exit 2; }
+            BUILD="$2"; shift 2 ;;
+        *) break ;;
+    esac
 done
 [ $# -ge 1 ] || [ "$VERIFY" = 1 ] || [ "$VLED" = 1 ] || { echo "usage: $0 [--verify] [--verify-ledger] [--census] [--write-ledger <out>] <log> [...]" >&2; exit 2; }
 LEDGER="${SWEEP_GATE_LEDGER:-mgmt/harness/error-ledger.txt}"
@@ -219,38 +234,87 @@ _text() { # <file> -> its text as UTF-8 on stdout
 # REGRESSED and reinstated the warning, the row would match and hide it. Scoping keys on the version
 # the log itself declares, so a regression carries the CURRENT version and surfaces immediately.
 #
-# A QWT log states both facts in its own head: "LogInit: Log started, module name: <m>" and
-# "LogInit: Module version: <v>". A file whose module shows only ONE version across the whole input
-# set is never excluded - nothing was superseded, so nothing is prior.
-declare -A _SG_NEWEST=()
-declare -A _SG_SEEN=()
-_sg_modver() { # $1=file -> "<module><TAB><version>", empty when the file declares neither
-    local h m v
-    h=$(_text "$1" | head -c 2000)
-    m=$(printf '%s' "$h" | grep -aom1 'module name: [A-Za-z0-9_.-]\+' | sed 's/^module name: //')
-    v=$(printf '%s' "$h" | grep -aom1 'Module version: [0-9][0-9.]*' | sed 's/^Module version: //')
-    [ -n "$m" ] && [ -n "$v" ] && printf '%s\t%s' "$m" "$v"
+# THIS GATE DOES NOT READ VERSIONS ANY MORE; IT ASKS THE ONE ATTRIBUTOR.
+#
+# IT HAD ITS OWN PARSER AND ITS OWN RULE, AND BOTH WERE A BUILD BEHIND. The parser grepped
+# "LogInit: Log started, module name: <m>" and "LogInit: Module version: <v>" - the two lines
+# patches/windows-utils-loginit-banner-debug DEMOTED TO DEBUG (owner 2026-10-20, "it is NOT normal
+# to have thousands of lines of log during the brief normal run"), replaced by ONE InfoLevel line,
+# `LogInit: QWTBIRTH module=<m> ver=<a.b.c.d> pid=... session=... uptime=...`, from
+# patches/windows-utils-single-birth-line. This file already knew that: :747 names the patch and
+# :778 greps BOTH spellings for its birth-line census. The extractor here knew only the dead one.
+#
+# MEASURED 2026-10-24 on a real two-build capture, scratchpad/dedup-test/logs/files, with the old
+# extractor run verbatim (receipt: scratchpad/sgmodver-blindness.sh, output under
+# scratchpad/attributor-receipt/): the candidate's own gui-agent-20261023.log carries
+# `QWTBIRTH module=gui-agent ver=4.3.37.1066` and ZERO legacy banner lines, so the extractor
+# returned EMPTY on it - 27 of 71 files blind - while the 4.3.35.795 entry fixture, an image
+# predating the demotion, read fine. The index therefore came out as seven modules with ONE version
+# each, every one of them the PREDECESSOR'S, on a capture that provably holds both builds, and the
+# `>= 2 versions` rule below could exclude NOTHING. That is why a campaign gate reported 26
+# unaccounted messages it could not attribute, why "nothing declares 4.3.37.x anywhere" was recorded
+# as a property of the corpus, and why adding a capture-wide superseded set here moved
+# `unaccounted` 26 -> 26: the candidate was invisible to this file, not absent from the logs. The
+# same attributor now reads 41 of those 71 files as the predecessor's.
+#
+# SO THE RULE AND THE PARSE BOTH LIVE IN ONE PLACE (tools/log-sweep.py version_is_prior /
+# cmd_attribute). Owner, 2026-10-24: "you claimed to fix predecessor lines from being erroneously
+# ingested AT LEAST FOUR TIMES ... AND YOU DO IT OVER AND OVER" - there were three implementations
+# sharing no code, so each fix reached one consumer and the next surfaced.
+# tools/tests/attributor-unique-selftest.sh asserts there is exactly one.
+#
+# ONE PYTHON PROCESS PER RUN, not one per file: 847 inputs on a full campaign.
+declare -A _SG_VERDICT=()     # path -> prior|candidate|unattributable|mixed|unknown
+declare -A _SG_PRIORLN=()     # path -> comma-separated line numbers, or * for the whole file
+declare -A _SG_MODVER=()      # path -> "<module><TAB><version(s)><TAB><module's newest>"
+SG_CAND_ABSENT="-"            # 0/1 once --build is given, "-" when it is not
+SG_ATTR_TRAILER=""            # the attributor's own ATTRIBUTE-RESULT line, kept for the report
+_sg_build_index() { # $@=files -> fills the three maps above from the one attributor
+    local out rc path mod vers verdict prior _una newest
+    out=$(mktemp) || return 2
+    python3 tools/log-sweep.py attribute ${BUILD:+--build "$BUILD"} -- "$@" > "$out" 2>"$out.err"
+    rc=$?
+    # rc 1 is "the named build declared itself nowhere", which is a VERDICT, not a failure to read -
+    # the caller below refuses to grade on it. rc 2 means nothing could be parsed at all.
+    if [ "$rc" = 2 ]; then
+        echo "sweep-gate: the attributor could not read this input set:" >&2
+        sed 's/^/  /' "$out.err" >&2
+        rm -f "$out" "$out.err"; return 2
+    fi
+    while IFS=$'\t' read -r path mod vers verdict prior _una newest; do
+        case "$path" in ATTRIBUTE-RESULT*) continue ;; esac
+        [ -n "$path" ] || continue
+        _SG_VERDICT["$path"]="$verdict"
+        _SG_PRIORLN["$path"]="$prior"
+        _SG_MODVER["$path"]="$mod	$vers	$newest"
+    done < "$out"
+    SG_ATTR_TRAILER=$(grep -a '^ATTRIBUTE-RESULT' "$out" | tail -1)
+    SG_CAND_ABSENT=$(printf '%s' "$SG_ATTR_TRAILER" | sed -n 's/.*candidate_build_absent=\([^ ]*\).*/\1/p')
+    SG_CAND_ABSENT="${SG_CAND_ABSENT:--}"
+    rm -f "$out" "$out.err"
     return 0
 }
-_sg_vers() { printf '%s' "${_SG_SEEN[$1]:-}" | tr ' ' '\n' | grep -a . | sort -u; }
-_sg_build_index() { # $@=files -> fills _SG_NEWEST / _SG_SEEN from the headers
-    local f mv m v
-    for f in "$@"; do
-        [ -f "$f" ] || continue
-        mv=$(_sg_modver "$f"); [ -n "$mv" ] || continue
-        m=${mv%%$'\t'*}; v=${mv##*$'\t'}
-        case " ${_SG_SEEN[$m]:-} " in *" $v "*) : ;; *) _SG_SEEN[$m]="${_SG_SEEN[$m]:-} $v" ;; esac
-        if [ -z "${_SG_NEWEST[$m]:-}" ]; then _SG_NEWEST[$m]="$v"
-        # dotted-numeric order, so 4.3.36.1020 beats 4.3.35.795 and 4.3.36.999
-        elif [ "$(printf '%s\n%s\n' "${_SG_NEWEST[$m]}" "$v" | sort -V | tail -1)" = "$v" ]; then _SG_NEWEST[$m]="$v"; fi
-    done
+_is_prior_build() { # $1=file -> 0 when the attributor says this file is wholly the predecessor's
+    [ "${_SG_VERDICT[$1]:-}" = "prior" ]
 }
-_is_prior_build() { # $1=file -> 0 when a NEWER version of ITS module appears in this input set
-    local mv m v
-    mv=$(_sg_modver "$1"); [ -n "$mv" ] || return 1
-    m=${mv%%$'\t'*}; v=${mv##*$'\t'}
-    [ "$(_sg_vers "$m" | wc -l)" -ge 2 ] || return 1   # one version: nothing superseded
-    [ "$v" != "${_SG_NEWEST[$m]}" ]
+_prior_lines_of() { # $1=file -> the line numbers inside a MIXED file that the predecessor wrote
+    case "${_SG_VERDICT[$1]:-}" in
+        mixed) printf '%s' "${_SG_PRIORLN[$1]:--}" ;;
+        *)     printf '-' ;;
+    esac
+}
+# THE ONE TEXT PRODUCER FOR THE GRADED POPULATION, so there is a single extraction pipeline below
+# rather than one per case. A FILE THAT HOLDS BOTH BUILDS LOSES ONLY THE PREDECESSOR'S LINES: a
+# per-FILE verdict was all the old extractor could manage, and it is wrong whenever one log spans
+# the turnover - the ordinary case now that a module writes ONE per-day file
+# (patches/windows-utils-one-log-per-module) instead of one per process, so an upgrade appends both
+# builds to the same file. Dropping it whole would hide the candidate's own errors; keeping it whole
+# bills the predecessor's errors to the candidate, which is the defect being cured.
+_sg_text_scoped() { # $1=file -> its text, minus the lines the attributor says are the predecessor's
+    local mx; mx=$(_prior_lines_of "$1")
+    if [ "$mx" = "-" ]; then _text "$1"
+    else _text "$1" | awk -v drop="$mx" 'BEGIN{n=split(drop,a,",");for(i=1;i<=n;i++)d[a[i]]=1} !(FNR in d)'
+    fi
 }
 
 _is_own_report() { _text "$1" | grep -qa 'SWEEP-GATE-\(RESULT\|COVERAGE\|CENSUS\|SILENT\|LEDGER\|VERIFY\)\|LOGSWEEP-RESULT'; }
@@ -260,12 +324,19 @@ declared() { local vfile="${SWEEP_GATE_VARIANTS:-}" skipped=0 pfile="${SWEEP_GAT
              # Scoped for EVERY caller, --write-ledger included: seeding the ledger from the
              # predecessor's messages would write the mis-attribution in permanently, under the new
              # build's name. Excluded files are NAMED in $pfile, never dropped quietly.
-             _sg_build_index "$@"
+             _sg_build_index "$@" || return 2
              for l in "$@"; do [ -f "$l" ] || { echo "sweep-gate: $l does not exist" >&2; return 2; }
                _is_own_report "$l" && { skipped=$((skipped+1)); continue; }
                if _is_prior_build "$l"; then
-                   [ -n "$pfile" ] && printf '%s\t%s\n' "$(_sg_modver "$l")" "$l" >> "$pfile"
+                   [ -n "$pfile" ] && printf '%s\t%s\n' "${_SG_MODVER[$l]:-?	?	?}" "$l" >> "$pfile"
                    continue
+               fi
+               # A FILE THAT HOLDS BOTH BUILDS LOSES ONLY THE PREDECESSOR'S LINES - see
+               # _sg_text_scoped. It is NAMED in $pfile like a whole exclusion, with the count.
+               _mx=$(_prior_lines_of "$l")
+               if [ "$_mx" != "-" ] && [ -n "$pfile" ]; then
+                   printf '%s\t%s (MIXED: %s predecessor line(s) dropped, the rest kept)\n' \
+                        "${_SG_MODVER[$l]:-?	?	?}" "$l" "$(printf '%s' "$_mx" | tr ',' '\n' | grep -ac .)" >> "$pfile"
                fi
                # THE GATE MUST NOT EAT ITS OWN TAIL. matrix.log carries the harness's QUOTATION of
                # this gate's verdict ("FAIL INVALID-SWEEP N unaccounted...") and its class footer
@@ -284,7 +355,7 @@ declared() { local vfile="${SWEEP_GATE_VARIANTS:-}" skipped=0 pfile="${SWEEP_GAT
                # Likewise only this gate's own
                # result sentence is excluded - INVALID-SWEEP-DATA/-CAPPED/-UNJUDGED report missing
                # data and stay.
-               _text "$l" | grep -ahE "$LEVELS" \
+               _sg_text_scoped "$l" | grep -ahE "$LEVELS" \
                  | grep -avE 'INVALID-SWEEP +[0-9]+ unaccounted \+ [0-9]+ risen|classes: product-FAIL=0 INVALID-\*\(cell did not run, ungraded\)=0' || true; done | message \
              | VFILE="$vfile" DUMPFILE="${SWEEP_GATE_DUMP:-}" UPSTREAMFILE="$ulist" UPSTREAMOUT="$ufile" python3 -c '
 import collections, os, sys
@@ -626,6 +697,31 @@ set -- "${_args[@]}"
 declare -A DECL_HIT=(); caused=0
 NOW=$(mktemp); VAR=$(mktemp); PRIOR=$(mktemp); UPS=$(mktemp)
 SWEEP_GATE_VARIANTS="$VAR" SWEEP_GATE_PRIOR="$PRIOR" SWEEP_GATE_UPSTREAM_OUT="$UPS" declared "$@" > "$NOW" || { rm -f "$NOW" "$VAR" "$PRIOR" "$UPS"; exit 2; }
+# A CORPUS THAT DOES NOT CONTAIN THE BUILD UNDER TEST CANNOT CARRY A VERDICT ABOUT IT, so this
+# refuses to grade instead of reporting counts. Jev on the fork: refuse 0.60.
+#
+# WHAT IT WOULD HAVE CAUGHT. Run 40037710497 was graded over 847 inputs and reported
+# `unaccounted=26 risen=8`; the gate's extractor could not read the candidate's banner at all (see
+# _sg_build_index), so every one of those 26 messages was billed to a build that had not been shown
+# to be in the corpus. A whole day went into deciding which of the 26 to ledger and which to fix.
+# It is a HARD refusal and not a metric, because the output of a gate that cannot attribute is not
+# "a number to interpret" - it is a run that has to happen again.
+#
+# ONLY WITH --build. Without it there is no claim to check, and inventing one would turn every
+# ad-hoc invocation over a single log into a failure.
+if [ "${SG_CAND_ABSENT:-"-"}" = 1 ]; then
+    echo "SWEEP-GATE-RESULT INVALID-NOBUILD the build under test ($BUILD) declared itself in NONE of the $# input log(s)"
+    echo "  Every module that names a version in this input names a DIFFERENT build, so no line here"
+    echo "  can be attributed to $BUILD and no verdict about it can be read off this corpus."
+    echo "  What to check, in this order:"
+    echo "    1. did the cells actually install the candidate? (matrix.sh asserts the agent hash; gate-remainder's assert_candidate)"
+    echo "    2. did the collector take the logs the candidate wrote, or only the entry fixture's?"
+    echo "    3. is --build right? it is the package MANIFEST's package_version, joined on MAJOR.MINOR.PATCH."
+    echo "  The attributor's own view of this input set:"
+    printf '    %s\n' "${SG_ATTR_TRAILER:-(no trailer)}"
+    rm -f "$NOW" "$VAR" "$PRIOR" "$UPS"
+    exit 1
+fi
 # PRINTED, because it is diagnosis: the lines are here to help read a failure, they just do not
 # decide one. Each row names the vendored file that emits it.
 # A RISE IN AN UPSTREAM MESSAGE IS OURS, AND IT IS THE ONE CASE THE EXCLUSION MUST NOT EAT.
@@ -713,9 +809,11 @@ rm -f "$UPS"
 # REPORTED, NEVER SILENT. An excluded file is named with the version it declares and the version
 # that superseded it, so a wrong exclusion is visible in the same output as the verdict.
 if [ -s "$PRIOR" ]; then
-    echo "SWEEP-GATE-PRIOR-BUILD $(grep -ac . "$PRIOR") log(s) excluded - a NEWER version of the same module is in this input set, so their lines are not the build under test's:"
-    while IFS=$'\t' read -r _m _v _p; do
-        printf '  %s %s (superseded by %s)  %s\n' "$_m" "$_v" "${_SG_NEWEST[$_m]:-?}" "$_p"
+    echo "SWEEP-GATE-PRIOR-BUILD $(grep -ac . "$PRIOR") log(s) excluded - the capture itself shows their build was superseded, so their lines are not the build under test's:"
+    # The newest version comes from the attributor's own row (column 3), not from a table this file
+    # keeps: ranking versions in bash was half of the implementation that had to go.
+    while IFS=$'\t' read -r _m _v _n _p; do
+        printf '  %s %s (superseded by %s)  %s\n' "$_m" "$_v" "${_n:-?}" "$_p"
     done < "$PRIOR"
 fi
 rm -f "$PRIOR"

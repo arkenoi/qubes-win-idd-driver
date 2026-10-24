@@ -27,6 +27,14 @@ past --jev-max questions). jev.py exit 2 = the judge did not run = the sweep is 
         families from file names / content). Exit codes: 0 CLEAN, 1 FINDINGS (a metric breach or a
         Jev-classified defect), 3 DATA (a missing, empty, partial or unparseable log), 4 INCOMPLETE (the
         judge did not run, or items were left unjudged). 3 and 4 are never a pass.
+    tools/log-sweep.py attribute <log|dir>... [--build <package_version>] [--mark <log>]
+        WHICH BUILD WROTE THIS? The one attributor (version_is_prior), for every caller that needs the
+        answer without running a whole analysis: tools/sweep-gate.sh, and a human about to read a mixed
+        capture. One TSV row per file - path, module, versions, verdict, and the 1-based line numbers of
+        the predecessor's and the unattributable lines inside it - then an ATTRIBUTE-RESULT trailer.
+        `--mark <log>` prints that file with every line labelled PRIOR/UNATTR/CAND instead.
+        Exit 1 = --build was named and NO module in this input declared it, so the input cannot carry a
+        verdict about that build and the caller must refuse to grade rather than report counts.
     tools/log-sweep.py baseline-init --out <baseline.json> [--known-defect 'REGEX=ISSUE=REASON']...
                                      [--merge-from <baseline.json>] <report.json>...
         builds / refreshes the tracked baseline from analyze reports: Jev's folded verdicts become the
@@ -57,7 +65,7 @@ import re
 import subprocess
 import sys
 import time
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, namedtuple
 
 VERSION = 1
 MARK = "LSW "
@@ -716,10 +724,23 @@ def module_builds(files, build=None):
             mod, ver = i.get("module") or lf.module, i.get("version")
             if mod and ver:
                 seen.setdefault(mod, set()).add(ver)
+    # THE NAMED BUILD WINS ON ITS SERIES, NOT ON AN EXACT STRING - and the exact-string form made
+    # this paragraph's promise unreachable on every campaign. `build` is the package MANIFEST's
+    # package_version (mgmt/harness/matrix.sh:2716 -> `4.3.37+agent.39cbad1d32e0`); a module
+    # declares `4.3.37.1100`. Neither string contains the other, which is why _build_series() exists
+    # and why every other site in this file joins on MAJOR.MINOR.PATCH. So `build in vers` was False
+    # for every module on every run, `newest` silently fell back to "highest version seen", and the
+    # downgrade case the docstring above calls out as the self-calibrating rule's failure mode was
+    # NOT actually covered by passing --build. Found by the 2026-10-24 fan-out, which traced the
+    # consequence rather than reading the intent.
+    # WITHIN the named series the highest revision still wins, because the series is the join and
+    # the fourth component moves per CI run.
+    bs = _build_series(build)
     out = {}
     for mod, vers in seen.items():
         ranked = sorted(vers, key=lambda v: (_version_tuple(v) is not None, _version_tuple(v) or (), v))
-        newest = build if (build and build in vers) else ranked[-1]
+        named = [v for v in ranked if bs and _build_series(v) == bs] if bs else []
+        newest = named[-1] if named else ranked[-1]
         out[mod] = {"versions": sorted(vers), "newest": newest}
     return out
 
@@ -974,27 +995,73 @@ def line_boot(lf, l, boots):
     return min(boots, key=lambda b: abs((b["time"] - bt).total_seconds()))["id"]
 
 
-def is_prior_build(lf, l, builds, superseded=None):
-    """True when this line was written by a build the capture itself shows was superseded.
+def module_turned_over(info):
+    """True when this module's OWN logs in this capture show a build turnover.
 
-    `superseded` is superseded_series()'s capture-wide set. Without it this function could only ask
-    the LINE'S OWN MODULE whether a turnover happened, and a module whose only log in the pull is
-    the predecessor's answers no - see superseded_series() for the measured case.
-    It defaults to None so the old two-version behaviour is what a caller that does not pass it
-    gets. See superseded_series() for the measured case (win10-upgrade of run 39767068509).
+    The question every consumer of the attribution rule has to ask first, and it was written out by
+    hand at four sites - inside version_is_prior (where it belongs), inside build_scope's
+    unattributable(), and twice inside compute_metrics for prior_build_mix and
+    modules_superseded_silent. Hand-written copies of the rule's own test are how this rule came to
+    have three implementations; tools/tests/attributor-unique-selftest.sh scans the tree for
+    functions carrying the rule's shape, and two unrelated metrics putting both halves of it inline
+    in one 400-line function is exactly what it flagged.
+
+    A MODULE THAT SHOWS ONE VERSION CANNOT TELL A TURNOVER HAPPENED. That is not the same as "no
+    turnover happened" - the CAPTURE may know better, which is what superseded_series() is for.
     """
-    mod = lf.module
-    if not mod or mod not in builds:
+    return len((info or {}).get("versions") or []) > 1
+
+
+def version_is_prior(mod, v, builds, superseded=None):
+    """THE ONE ATTRIBUTOR: is a record carrying module `mod` at version `v` the predecessor's?
+
+    ONE IMPLEMENTATION, EVERY GRANULARITY - a line, an agent instance, a whole file. It is a
+    function of (module, version) and nothing else, which is why one rule can serve all three:
+    the granularities differ only in where the version comes from (line_version() for a line, the
+    init record for an instance, the file's own banner for a file).
+
+    WHY IT IS ONE FUNCTION NOW (owner, 2026-10-24: "you claimed to fix predecessor lines from
+    being erroneously ingested AT LEAST FOUR TIMES ... AND YOU DO IT OVER AND OVER"). There were
+    THREE implementations sharing no code - is_prior_build here, `_inst_prior` inside
+    compute_metrics, and `_is_prior_build` in tools/sweep-gate.sh - so each of the four fixes
+    reached one consumer and the next surfaced ("self-procreating bugs of bugfixes"). The recorded
+    rule that applies is this project's own: a rename breaks every consumer, and a fan-out finds
+    them. tools/tests/attributor-unique-selftest.sh asserts that exactly one implementation of this
+    rule exists in the tree, and that each consumer routes through THIS function - so a fourth copy
+    cannot be added quietly.
+
+    THE RULE. `superseded` is superseded_series()'s capture-wide set. Without it this function can
+    only ask the RECORD'S OWN MODULE whether a turnover happened, and a module whose only log in the
+    pull is the predecessor's answers no - see superseded_series() for the measured case
+    (win10-upgrade of run 39767068509). It defaults to None so a caller that does not pass it gets
+    the old two-version behaviour.
+    """
+    if not mod or mod not in (builds or {}):
         return False
-    info = builds[mod]
-    v = line_version(lf, l)
     if not v:
         return False      # AN UNKNOWN VERSION NEVER SHRINKS A COUNT - the GUARD:winsince rule
+    info = builds[mod]
     if len(info["versions"]) < 2:
         # This module shows one version, so it cannot tell a turnover happened. The CAPTURE can:
-        # if that series is one ANOTHER module shows as superseded, this line is the predecessor's.
+        # if that series is one ANOTHER module shows as superseded, this record is the predecessor's.
         return bool(superseded and _build_series(v) in superseded)
     return v != info["newest"]
+
+
+def is_prior_build(lf, l, builds, superseded=None):
+    """True when this LINE was written by a build the capture itself shows was superseded.
+
+    The line-level entry to version_is_prior(): the version comes from line_version(), which
+    resolves it by the line's own pid and then by the init in force at it.
+    """
+    return version_is_prior(lf.module, line_version(lf, l), builds, superseded)
+
+
+# NAMED, NOT POSITIONAL, because the consumer list grows and a positional reader cannot be told
+# apart from a correct one. log-sweep.py:3830 carried the comment "index unchanged: unattributable
+# is [4]" - a note that a previous addition had nearly broken it silently. Fields are appended, so
+# an existing index keeps its meaning; new consumers use the name.
+BuildScope = namedtuple("BuildScope", "builds anchor pre_install prior unattributable inst_prior superseded candidate_declared_by")
 
 
 def build_scope(files, build):
@@ -1021,8 +1088,10 @@ def build_scope(files, build):
     predecessor's entries excluded and the later ones KEPT - and that verification is the record,
     not a knob re-driven on every run.
 
-    Returns (builds, anchor, pre_install, prior). `pre_install` is exposed because the TaskScheduler
-    count cannot go through `prior` at all: Event Log records have no logfile to ask.
+    Returns a BuildScope: builds, anchor, pre_install, prior, unattributable, inst_prior.
+    `pre_install` is exposed because the TaskScheduler count cannot go through `prior` at all:
+    Event Log records have no logfile to ask. `prior` and `inst_prior` are the line-level and
+    instance-level entries to the ONE attributor, version_is_prior().
     """
     builds = module_builds(files, build)
     anchor = install_anchor(files, builds)
@@ -1104,10 +1173,35 @@ def build_scope(files, build):
             return False
         if not line_version(lf, l):
             return False                      # the pre_install clause above owns version-less lines
-        if not info or len(info["versions"]) > 1:
+        if not info or module_turned_over(info):
             return False                      # is_prior_build could decide it; this is not its case
         return True
-    return builds, anchor, pre_install, prior, unattributable
+
+    # THE INSTANCE-LEVEL ENTRY, AND IT BELONGS HERE RATHER THAN IN compute_metrics. It lived there
+    # as a 15-line private copy called `_inst_prior` carrying the OLD rule (`if
+    # len(info["versions"]) < 2: return False`) while the line-level rule one screen away had the
+    # capture-wide fallback - which is how "attribution FIXED 2026-10-23" was false on the day it
+    # was written, for five consumers: agent_ends_unrecorded, requested_stop_nonzero_exit,
+    # vchan_announce_without_connect, agent_ends_unrecorded_prior_build and GUARD:relpriorbuild.
+    # An instance has ONE declared version, from the init record it was built out of, so the only
+    # thing it needs beyond version_is_prior() is its module - which comes from its file.
+    _mod_by_file = {lf.name: lf.module for lf in files}
+    def inst_prior(i):
+        return version_is_prior(_mod_by_file.get(i.get("file")), i.get("version"), builds, sup)
+
+    # DID THE BUILD UNDER TEST DECLARE ITSELF IN THIS CAPTURE AT ALL? One answer, carried, because
+    # the question had grown two independent list comprehensions - compute_metrics' and
+    # cmd_attribute's - and the shell gate needs the same one. [(module, version)] when --build was
+    # given, so a caller can print WHICH modules declared it; None when it was not, which must not
+    # read as 0.
+    cand_series = _build_series(build)
+    declared_by = ([(lf.module, i.get("version")) for lf in files for i in lf.inits
+                    if i.get("version") and _build_series(i["version"]) == cand_series]
+                   if cand_series else None)
+    # `superseded` IS CARRIED, NOT RECOMPUTED. A reporting caller that recomputed it would pass its
+    # own `build` (or None) and could print a different set from the one the predicates used - two
+    # answers to one question, which is the whole defect this function is being cured of.
+    return BuildScope(builds, anchor, pre_install, prior, unattributable, inst_prior, sup, declared_by)
 
 
 def normalize(msg):
@@ -1283,8 +1377,6 @@ def parse_winutils(lf, raw_lines):
             # at the END of LogInit, after "Running as user ... process ID: N" has already opened a
             # record and set its pid, so the pid is the join: same pid as the open record means
             # FILL it, not append. Jev scored this 0.45 as the worst defect in the first cut.
-            if not own_ver and kv.get("ver"):
-                lf.version_unreadable = True
             bpid = None
             try:
                 bpid = int(kv["pid"])
@@ -1309,6 +1401,19 @@ def parse_winutils(lf, raw_lines):
             rec["module"] = rec.get("module") or lf.module
             if own_ver:
                 rec["version"] = own_ver
+            elif kv.get("ver"):
+                # ON THE RECORD, NOT ONLY ON THE FILE - and this half was missing, which made the
+                # 0.0.0.0 discriminator inert on every build that ships the birth line.
+                # declared_unreadable() resolves by the LINE'S PID FIRST and RETURNS at the matched
+                # init record, so a record without this key answers False and the file-level flag
+                # set above is never consulted. The legacy path has written both since a577ab05
+                # (`lf.inits[-1]["version_unreadable"] = True`); this path wrote only the file's.
+                # The consequence is the one _declared_version's docstring measures: our own
+                # qwtng-netsetup has no version resource, prints four zeroes, and its 12 declared
+                # ERROR lines then read as version-LESS - so the pre-install clause claims them for
+                # the predecessor, or unattributable() bills them to nobody and breaches at max 0.
+                # Found by the 2026-10-24 fan-out of this rule's readers, not by review.
+                rec["version_unreadable"] = True
             if bpid is not None:
                 rec["pid"] = bpid
                 lf.pid = bpid
@@ -1723,19 +1828,28 @@ def rotation_placeholder(name, guest_bytes):
     return "rotation target, not yet rotated into (%s is %d B, under the %d B rotation threshold)" % (live, n, ROTATE_BYTES)
 
 
-def load_logs(logsdir):
-    """Returns (meta, [LogFile], problems, placeholders). meta is the decode's meta.json or None (corpus mode)."""
+def load_logs(logsdir, paths=None):
+    """Returns (meta, [LogFile], problems, placeholders). meta is the decode's meta.json or None (corpus mode).
+
+    `paths` is an EXPLICIT FILE LIST instead of a directory, which is what the campaign-level gate
+    has: tools/sweep-gate.sh is handed logs that span every cell of a campaign and no single
+    directory contains them. Parsing goes through this one loader either way, so there is exactly
+    one implementation of "which module and version wrote this file" - see version_is_prior() for
+    what a second one cost.
+    """
     problems = []
     placeholders = []   # empty files the rotation rule explains; reported, never silently skipped
     meta = None
-    mp = os.path.join(logsdir, "meta.json")
-    if os.path.exists(mp):
+    mp = os.path.join(logsdir or ".", "meta.json")
+    if paths is not None:
+        pass          # an explicit list: no decode manifest to read, and no directory to walk
+    elif os.path.exists(mp):
         with open(mp, encoding="utf-8") as f:
             meta = json.load(f)
     files = []
     now = None
     # harness-captured markers (log-sweep.sh --marker FILE copies them here; a corpus directory may hold them anywhere)
-    mdir = os.path.join(logsdir, "markers")
+    mdir = os.path.join(logsdir or ".", "markers") if paths is None else ""
     if os.path.isdir(mdir):
         for n in sorted(os.listdir(mdir)):
             p = os.path.join(mdir, n)
@@ -1842,6 +1956,16 @@ def load_logs(logsdir):
             problems.append(("missing", "events.txt", "the collector announced an event block but none was decoded"))
         if not meta.get("end"):
             problems.append(("truncated", "stream", "the collector's END line is missing - the pull was cut short"))
+    elif paths is not None:
+        # AN EXPLICIT LIST IS TAKEN AS GIVEN. No name filter and no size rule: the caller chose
+        # these files, and a gate that silently dropped one of them would report a verdict over a
+        # population the caller cannot see. A path that does not exist is a `missing` problem, which
+        # is how the caller finds out rather than being told everything was fine.
+        for p in paths:
+            if not os.path.isfile(p):
+                problems.append(("missing", os.path.basename(p), "not a readable file: %s" % p))
+                continue
+            files.append(LogFile(p, os.path.basename(p), family_of(os.path.basename(p))))
     else:
         for root, _dirs, names in os.walk(logsdir):
             if os.path.basename(root) == "markers":
@@ -2546,14 +2670,37 @@ def build_structure(files, boots, declared=None):
     # splits pid 4312 into two instances. A knob would be a third line in product code for a
     # mechanism two measurements already pin.
     def _instance_groups(lf):
-        groups, order, gen = {}, [], {}
+        groups, order, gen, opened = {}, [], {}, {}
         for l in lf.lines:
             pid = (l.extra or {}).get("pid") or ""
             key = int(pid) if pid else lf.pid
-            # Its own "Log started" opens a new instance for this pid. A line with no pid in its
+            # Its own BIRTH LINE opens a new instance for this pid. A line with no pid in its
             # prefix belongs to an OLD per-process file, where the file IS the instance.
-            if pid and l.func == "LogInit" and str(l.msg).startswith("Log started"):
-                gen[key] = gen.get(key, 0) + 1
+            #
+            # BOTH SPELLINGS, AND THAT WAS MISSING. This read only "Log started", the line
+            # patches/windows-utils-loginit-banner-debug DEMOTED TO LogDebug; a shipped build writes
+            # `LogInit: QWTBIRTH module=... ver=...` at Info instead. So on every current build the
+            # generation never advanced, and a per-day log that spans an upgrade - one file, the pid
+            # reused, which is the ordinary shape under one-log-per-module - collapsed into ONE
+            # instance STAMPED WITH THE PREDECESSOR'S VERSION.
+            # MEASURED 2026-10-24 on exactly that fixture: 5 lines, two births (4.3.35.795 then
+            # 4.3.37.1100, pid 800 both times) -> `instances=1 version=4.3.35.795`, so inst_prior
+            # answered True for it and the CANDIDATE's own ERROR line left every gated per-instance
+            # metric. That is hiding, in the one direction this whole path exists to prevent, and it
+            # is the third reader of this banner found blind on 2026-10-24 (the others: the campaign
+            # gate's extractor, and declared_unreadable's 0.0.0.0 discriminator).
+            #
+            # THE 2 s PROXIMITY JOIN, because at LOG_LEVEL_DEBUG a capture carries the legacy block
+            # AND the birth line for the SAME process start - the parser's own init records join
+            # them that way for the same reason (see the QWTBIRTH handler). Without it a debug
+            # capture would split one process into two instances and breach
+            # agent_instances_per_boot on a guest that did nothing wrong.
+            if pid and l.func == "LogInit" \
+                    and (str(l.msg).startswith("Log started") or str(l.msg).startswith("QWTBIRTH ")):
+                _prev = opened.get(key)
+                if _prev is None or l.ts is None or abs((l.ts - _prev).total_seconds()) > 2.0:
+                    gen[key] = gen.get(key, 0) + 1
+                    opened[key] = l.ts
             k = (key, gen.get(key, 1))   # GUARD:perfileinst DEFECT: k = (lf.name, 1)
             if k not in groups:
                 groups[k] = []
@@ -2735,24 +2882,22 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
     # and agent_ends_unrecorded was failing win11-upgrade on the ENTRY FIXTURE's agent. All four are
     # scoped now, and the property is the predicate at each call site, not a promise in this
     # paragraph; log-sweep-selftest asserts every gated per-instance metric carries it.
-    _builds, _anchor, _pre_install, _prior, _unattrib = build_scope(files, build)
+    _scope = build_scope(files, build)
+    _builds, _anchor, _pre_install, _prior, _unattrib = (
+        _scope.builds, _scope.anchor, _scope.pre_install, _scope.prior, _scope.unattributable)
+    # AN INSTANCE'S OWN BUILD, from the version it recorded at its init: the test applies to a
+    # RECORD, and a per-instance metric has no single line to put to `_prior` - which is precisely
+    # how helper_relaunches stayed unscoped while the line-level metrics beside it were fixed.
+    # IT IS build_scope()'S NOW, not a copy made here. The copy that used to sit on this line
+    # carried the pre-2026-10-23 rule for five consumers while the fixed rule was in the same file;
+    # see version_is_prior() for the owner's count of how often that was re-fixed one site at a
+    # time. The name is kept so every call site below reads unchanged.
+    _inst_prior = _scope.inst_prior
+    # STILL NEEDED BY errors_during_requested_stop, which puts a LINE of an instance's file to the
+    # line-level predicates and therefore needs the LogFile, not the instance. Deleting it with the
+    # old `_inst_prior` copy broke that metric with a NameError - caught by log-sweep-selftest T5,
+    # which is the leg that drives it.
     _lf_by_name = {lf.name: lf for lf in files}
-    # AN INSTANCE'S OWN BUILD, from the version it recorded at its init: the test is_prior_build()
-    # applies to a LINE, asked of the instance that wrote it. A per-instance metric has no single
-    # line to put to `_prior`, which is precisely how helper_relaunches stayed unscoped while the
-    # line-level metrics beside it were fixed.
-    def _inst_prior(i):
-        lf = _lf_by_name.get(i.get("file"))
-        mod = getattr(lf, "module", None) if lf else None
-        if not mod or mod not in _builds:
-            return False
-        info = _builds[mod]
-        if len(info["versions"]) < 2:
-            return False      # one version: nothing was superseded
-        v = i.get("version")
-        if not v:
-            return False      # an unknown version never shrinks a count - the GUARD:winsince rule
-        return v != info["newest"]
     m["boots"] = len(boots)
     m["shutdowns"] = len(windows)
     m["agent_instances"] = len(inst)
@@ -2938,7 +3083,7 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
     # "`_prior` is the one place it applies" - which was false: the baseline comparison is a
     # consumer too, and it was the one place that never asked. See build_scope(). It is now
     # established at the TOP of this function, because "below this block" was itself the defect.
-    m["prior_build_mix"] = {k: v["versions"] for k, v in sorted(_builds.items()) if len(v["versions"]) > 1}
+    m["prior_build_mix"] = {k: v["versions"] for k, v in sorted(_builds.items()) if module_turned_over(v)}
     # TaskScheduler records are Event Log entries with no module version, so only the anchor can
     # place them. Same one line as before, so the GUARD:taskrc knob stays driveable.
     _count("task_failures", [l for l in events if "TaskScheduler" in str(l.extra.get("log")) and l.extra.get("id") in (201, 203)
@@ -2957,9 +3102,11 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
     # None, not 0, when --build was not passed: a metric that cannot be evaluated must not report a
     # pass. Jev scored this shape correct-and-necessary at 0.96.
     _cand_series = _build_series(build)
+    # THE SCOPE'S ANSWER, not a second comprehension over the same inits. Two copies of this
+    # question existed (here and in cmd_attribute) and they could disagree on a capture where one
+    # of them was edited; the shell gate reads the same one through `attribute`.
+    _cand_inits = _scope.candidate_declared_by
     if _cand_series:
-        _cand_inits = [(lf.module, i.get("version")) for lf in files for i in lf.inits
-                       if i.get("version") and _build_series(i["version"]) == _cand_series]
         m["candidate_build_absent"] = 0 if _cand_inits else 1
         # A REPORTED FIELD, not a hand-threaded line list: breach_evidence has an explicit arm for
         # this metric (a threaded list alone does not satisfy breach-evidence-selftest's static
@@ -3000,7 +3147,7 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
     # superseded module's NEWEST build wrote nothing in the window at all - an upgrade right at the
     # window's end. Named here so the condition is a figure rather than an assumption.
     m["modules_superseded_silent"] = sorted(
-        mod for mod, info in _builds.items() if len(info["versions"]) > 1
+        mod for mod, info in _builds.items() if module_turned_over(info)
         and not any(lf.module == mod and sel(l.ts) and line_version(lf, l) == info["newest"]
                     for lf in files for l in lf.lines))
     _count("fallbacks_fired", [l for lf in files for l in lf.lines if FALLBACK_FIRED_RE.search(l.msg) and "fallback refused" not in l.msg and sel(l.ts) and not _prior(lf, l) and not _unattrib(lf, l)])
@@ -3827,7 +3974,7 @@ def cmd_analyze(a):
     # so there is one factory and no second implementation; module_builds is O(lines).
     # COMPUTED BEFORE THE TWO P1 METRICS BELOW, not after. It sat after them until 2026-10-19, which
     # is the whole defect: the signatures were build-scoped and these were not.
-    _sig_prior = build_scope(files, getattr(a, "build", None))[3]   # index unchanged: unattributable is [4]
+    _sig_prior = build_scope(files, getattr(a, "build", None)).prior   # by NAME: see BuildScope
     _loud = [x for x in dom0_loud(files, _sig_prior) if not _declared_line(x[2])]
     metrics["dom0_loud_failures"] = len(_loud)
     _lost = [x for x in dom0_lost(files, _sig_prior) if not _declared_line(x[2])]
@@ -4281,6 +4428,139 @@ def cmd_baseline_init(a):
     return 0
 
 
+# ----------------------------------------------------------------------------------------------- attribute
+def cmd_attribute(a):
+    """WHICH BUILD WROTE THIS? - the ONE attributor, exposed so nothing has to re-implement it.
+
+    THE TWO CALLERS AND WHY THEY EXIST.
+    (1) tools/sweep-gate.sh, the CAMPAIGN-level gate. It used to parse the banner itself, with
+        `_sg_modver` grepping `module name:` and `Module version:` - the two lines
+        patches/windows-utils-loginit-banner-debug DEMOTED TO DEBUG, replaced by one INFO line
+        `LogInit: QWTBIRTH module=<m> ver=<a.b.c.d> ...` from
+        patches/windows-utils-single-birth-line. MEASURED 2026-10-24 on a real capture
+        (scratchpad/dedup-test/logs/files): the candidate's `gui-agent-20261023.log` carries
+        `QWTBIRTH module=gui-agent ver=4.3.37.1066` and ZERO legacy banner lines, so `_sg_modver`
+        returned EMPTY on it, while the 4.3.35.795 entry fixture - an image predating the demotion -
+        was read fine. Over that capture the gate's whole index came out as seven modules with ONE
+        version each, every one of them the predecessor's, on a capture that provably holds both
+        builds. That is why a campaign gate "could not attribute anything" and why adding a
+        capture-wide superseded set to it moved `unaccounted` 26 -> 26: the candidate was invisible
+        to it, not absent from the corpus. Two spellings of one fact is two implementations; this
+        subcommand is the one.
+    (2) A HUMAN READING A LOG (owner 2026-10-24: "make sure it wont happen when you decide to peek
+        into logs youself"). Reading a mixed capture by eye is the same mis-attribution with no
+        instrument at all, and `--mark` is the answer: it prints the file with every line labelled,
+        so a predecessor's error cannot be read as the candidate's.
+
+    OUTPUT, one TSV row per input file, then one ATTRIBUTE-RESULT trailer:
+        path <TAB> module <TAB> versions <TAB> verdict <TAB> prior_lines <TAB> unattributable_lines
+        <TAB> module_newest
+    verdict is prior | candidate | unattributable | mixed | unknown. `prior_lines` and
+    `unattributable_lines` are 1-based line numbers in the DECODED text (what sweep-gate's `_text`
+    prints), so a consumer can drop exactly those lines of a file that holds both builds.
+    EXIT: 0 attributed, 1 the named build declared itself NOWHERE in this input (the caller must
+    refuse to grade - the corpus cannot carry a verdict about a build that is not in it), 2 nothing
+    could be read.
+    """
+    # AN OPTION THAT LANDED IN THE FILE LIST IS A LOST OPTION, NOT A MISSING FILE. Callers pass
+    # `-- <files>` so a log named like a flag cannot be eaten; everything after `--` is positional,
+    # so an option written AFTER it is silently swallowed - measured here: `attribute <dir> --
+    # <files> --mark <f>` ignored --mark and printed the plain table, with `--mark` reported as one
+    # more unreadable path among 26. A `--build` lost that way would be worse: the gate would
+    # self-calibrate and never say so.
+    stray = [p for p in a.inputs if p.startswith("--")]
+    if stray:
+        print("attribute: %s came after `--`, so it was read as a FILE, not an option. Put options "
+              "before `--`." % ", ".join(stray), file=sys.stderr)
+        return 2
+    paths = []
+    for p in a.inputs:
+        if os.path.isdir(p):
+            for root, _d, names in os.walk(p):
+                paths.extend(os.path.join(root, n) for n in sorted(names))
+        else:
+            paths.append(p)
+    if not paths:
+        print("ATTRIBUTE-RESULT files=0 readable=0 - no input", file=sys.stderr)
+        return 2
+    _meta, files, problems, _ph = load_logs("", paths=paths)
+    if not files:
+        for kind, what, why in problems[:10]:
+            print("attribute: %s %s: %s" % (kind, what, why), file=sys.stderr)
+        print("ATTRIBUTE-RESULT files=%d readable=0 - nothing parsed" % len(paths), file=sys.stderr)
+        return 2
+    scope = build_scope(files, a.build)
+    # THE BUILD UNDER TEST DECLARED ITSELF, or it did not - build_scope()'s answer, the same one
+    # compute_metrics reports as candidate_build_absent. None when --build was not given: there is
+    # no claim to check, and "-" must not read like a 0 that passed.
+    cand_declared = None if scope.candidate_declared_by is None else bool(scope.candidate_declared_by)
+    counts = Counter()
+    rows = []
+    for lf in files:
+        vers = sorted({i.get("version") for i in lf.inits if i.get("version")})
+        pri, una = [], []
+        known = 0
+        for l in lf.lines:
+            if not line_version(lf, l):
+                continue
+            known += 1
+            if scope.prior(lf, l):
+                pri.append(l.idx + 1)
+            elif scope.unattributable(lf, l):
+                una.append(l.idx + 1)
+        if not known:
+            verdict = "unknown"
+        elif len(pri) == known:
+            verdict = "prior"
+        elif len(una) == known:
+            verdict = "unattributable"
+        elif pri or una:
+            verdict = "mixed"
+        else:
+            verdict = "candidate"
+        counts[verdict] += 1
+        # `*` FOR A WHOLE FILE, a list only for a mixed one. A homogeneous file is dropped or kept
+        # entire, and printing all 167 line numbers of each of 41 files would make the gate's input
+        # larger than the logs it is grading.
+        rows.append((lf.path or lf.name, lf.module or "", ",".join(vers), verdict,
+                     "*" if verdict == "prior" else (",".join(str(n) for n in pri) or "-"),
+                     "*" if verdict == "unattributable" else (",".join(str(n) for n in una) or "-"),
+                     # THE MODULE'S NEWEST VERSION IN THIS INPUT, so a consumer can say "superseded
+                     # by X" without ordering versions itself. tools/sweep-gate.sh did that ordering
+                     # in bash (`sort -V | tail -1`) beside its own copy of the rule; a shell that
+                     # has to rank versions is a shell with an implementation of this in it.
+                     (scope.builds.get(lf.module) or {}).get("newest") or ""))
+    if a.mark:
+        want = os.path.abspath(a.mark)
+        for lf in files:
+            if os.path.abspath(lf.path or "") != want:
+                continue
+            tag = {}
+            for l in lf.lines:
+                tag[l.idx] = ("PRIOR " if scope.prior(lf, l) else
+                              "UNATTR" if scope.unattributable(lf, l) else
+                              "CAND  " if line_version(lf, l) else "?     ")
+            raw = read_lines(lf.path)
+            if raw and raw[-1] == "":
+                raw = raw[:-1]
+            for i, line in enumerate(raw):
+                print("%s %6d | %s" % (tag.get(i, "?     "), i + 1, line))
+            break
+        else:
+            print("attribute: --mark %s is not one of the inputs" % a.mark, file=sys.stderr)
+            return 2
+    else:
+        for r in rows:
+            print("\t".join(r))
+    print("ATTRIBUTE-RESULT files=%d readable=%d prior=%d candidate=%d unattributable=%d mixed=%d "
+          "unknown=%d build=%s candidate_build_absent=%s superseded=%s"
+          % (len(paths), len(files), counts["prior"], counts["candidate"], counts["unattributable"],
+             counts["mixed"], counts["unknown"], a.build or "-",
+             "-" if cand_declared is None else ("0" if cand_declared else "1"),
+             ";".join(sorted(".".join(s) for s in scope.superseded)) or "-"))
+    return 1 if cand_declared is False else 0
+
+
 # ----------------------------------------------------------------------------------------------- baseline-audit
 def cmd_baseline_audit(a):
     """The tracked baseline must carry the issue references REQUIRED_REFS names; a baseline that lost one is refused."""
@@ -4335,11 +4615,19 @@ def main(argv=None):
     bi.add_argument("--issue-ref", action="append", help="REGEX=ISSUE: set the issue reference on matching keys, status unchanged (repeatable)")
     bi.add_argument("--merge-from", help="an existing baseline.json: carry forward every signature these reports did not see, so a refresh built from one campaign cannot DROP another OS family's coverage")
     ba = sub.add_parser("baseline-audit"); ba.add_argument("baseline")
+    at = sub.add_parser("attribute", help="which build wrote each of these logs (the ONE attributor)")
+    at.add_argument("inputs", nargs="+", help="log files and/or directories of them")
+    at.add_argument("--build", help="the build under test (a package_version or a module version); "
+                                    "without it the newest series showing a turnover is assumed")
+    at.add_argument("--mark", help="print THIS input file with every line labelled PRIOR/UNATTR/CAND, "
+                                   "for reading a mixed capture by hand")
     a = ap.parse_args(argv)
     if a.cmd == "decode":
         return cmd_decode(a)
     if a.cmd == "analyze":
         return cmd_analyze(a)
+    if a.cmd == "attribute":
+        return cmd_attribute(a)
     if a.cmd == "baseline-audit":
         return cmd_baseline_audit(a)
     return cmd_baseline_init(a)

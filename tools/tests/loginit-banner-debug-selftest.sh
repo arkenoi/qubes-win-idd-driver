@@ -222,7 +222,7 @@ spec = importlib.util.spec_from_file_location("ls", "tools/log-sweep.py")
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 _, files, _, _ = m.load_logs(sys.argv[1])
 sc = m.build_scope(files, "4.3.37+agent.7f26b15b15d6")
-prior, unattrib = sc[-2], sc[-1]
+prior, unattrib = sc.prior, sc.unattributable   # BY NAME: build_scope returns a BuildScope, and sc[-1] silently became a different field when inst_prior was appended
 lf = [f for f in files if f.name.startswith("qwtng-netsetup")][0]
 errs = [l for l in lf.lines if l.level == "E"]
 print(sum(1 for l in errs if unattrib(lf, l) and not prior(lf, l)))
