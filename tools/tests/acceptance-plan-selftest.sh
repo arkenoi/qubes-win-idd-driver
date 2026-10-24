@@ -135,5 +135,37 @@ K=$(knob gatescope2) || exit 2; rc=$(plan "$K" k-bad --range "not-a-range")
 [ "$rc" != 2 ] && ok "knob 'gatescope2': gate-scope's failure is swallowed (rc=$rc) - the check is SEEN TO FAIL" || bad "knob gatescope2: rc still 2"
 
 echo
+# ---- the release commit comes from the PACKAGE, not from HEAD ----------------------------------
+# verify-release-package.sh --commit is compared against MANIFEST.source.driver_repo_commit, so a
+# plan that names HEAD makes cell 1 fail on provenance the moment HEAD moves - and HEAD moves for a
+# harness commit, a suite or a findings edit, none of which change a shipped byte. Measured
+# 2026-10-25: four package rebuilds in one night and only ONE was real (exactly one commit in
+# 7e3d1f47..df506bae touched a product path). The provenance is given by campaign-preflight's
+# ancestor and drift gates, not by a string equal to HEAD. Owner: "why not just from cell 1?"
+# gh is stubbed, so this needs no network and no real run id.
+_apt=$(mktemp -d "${TMPDIR:-/tmp}/aplan-pkgsha-XXXXXX")
+mkdir -p "$_apt/bin"
+cat > "$_apt/bin/gh" <<'EOF'
+#!/bin/bash
+# answers `run view <id> --json headSha -q .headSha` with a sha that is NOT HEAD
+echo 1111111111111111111111111111111111111111
+EOF
+chmod +x "$_apt/bin/gh"
+if ( cd "$ROOT" && PATH="$_apt/bin:$PATH" python3 tools/acceptance-plan.py --range HEAD~1..HEAD --package-run 999      --vm10 v10 --vm11 v11 --os11 o11 --g10 g10 --g11 g11 --b10 b10 --b11 b11 --f11 f11      --out "$_apt/plan.json" >/dev/null 2>&1 ); then
+  _c=$(python3 -c "
+import json,sys
+p=json.load(open('$_apt/plan.json'))
+for c in p.get('cells',[]):
+    if c.get('order')==1: print(c['command'])
+" 2>/dev/null)
+  case "$_c" in
+    *1111111111111111111111111111111111111111*) ok "cell 1 names the PACKAGE's build commit, not HEAD" ;;
+    *) bad "cell 1 names the package's build commit" "got: $(printf '%s' "$_c" | tail -c 120)" ;;
+  esac
+else
+  bad "the plan runs with a stubbed gh" "it exited non-zero"
+fi
+rm -rf "$_apt"
+
 echo "RESULT: $pass passed, $fail failed  (fixtures: $T)"
 [ "$fail" -eq 0 ]

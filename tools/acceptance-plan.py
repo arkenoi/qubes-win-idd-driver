@@ -32,7 +32,7 @@ map) - never "nothing required". Self-test: tools/tests/acceptance-plan-selftest
 GATE_SCOPE_ROOT, scoped vs full-floor, the knobs).
 """
 from __future__ import annotations
-import argparse, json, os, subprocess, sys, time
+import argparse, json, os, re, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -120,6 +120,21 @@ def ledger_summary() -> dict | None:
             "releases_since_last_full": len(since) if last else len(rel)}
 
 
+def _run_head_sha(run_id: str) -> str:
+    """The commit a release-package run was built from, asked of the run itself.
+
+    Empty when it cannot be read - and the caller then falls back to HEAD rather than inventing a
+    sha, because a plan that names the wrong commit is worse than one that names a stale one: the
+    preflight's ancestor and drift gates still have to pass either way."""
+    try:
+        out = subprocess.run(["gh", "run", "view", str(run_id), "--json", "headSha", "-q", ".headSha"],
+                             capture_output=True, text=True, timeout=120)
+        sha = (out.stdout or "").strip()
+        return sha if re.fullmatch(r"[0-9a-f]{40}", sha or "") else ""
+    except Exception:
+        return ""
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--range", help="base..head (default: the newest v-tag that is an ancestor of HEAD, to HEAD)")
@@ -138,6 +153,23 @@ def main(argv=None) -> int:
     head = git("rev-parse", "HEAD")
     if not head:
         return die("not a git repository: %s" % ROOT)
+
+    # THE COMMIT BEING RELEASED IS THE PACKAGE'S OWN BUILD COMMIT, NOT HEAD.
+    # verify-release-package.sh --commit is compared against MANIFEST.source.driver_repo_commit, so
+    # handing it HEAD makes cell 1 fail on provenance the moment HEAD moves - and HEAD moves for a
+    # harness commit, a suite, a lint rule, a findings edit, none of which change a shipped byte.
+    # MEASURED 2026-10-25: four rebuilds in one night, and only ONE of them was real. Across
+    # 7e3d1f47..df506bae exactly one commit touched a product path (8142c0ac,
+    # guest/sup-qdbtimeout.ps1); the other three touched NONE, so three 15-minute package rebuilds
+    # bought nothing but a matching string. Owner: "why not just from cell 1?"
+    # The provenance this used to pretend to give is already given, twice over and properly, by
+    # mgmt/harness/campaign-preflight.sh: the package's commit must be an ANCESTOR of HEAD, and NO
+    # product path may have changed since it. Those two are the real guarantee; a string equal to
+    # HEAD was never part of it.
+    pkg_sha = ""
+    if a.package_run:
+        pkg_sha = _run_head_sha(a.package_run)
+    release_sha = pkg_sha or head
     rng = a.range
     if not rng:
         base = git("describe", "--tags", "--abbrev=0", "--match", "v[0-9]*", "HEAD^") or git("rev-list", "--max-parents=0", "HEAD")
@@ -192,9 +224,9 @@ def main(argv=None) -> int:
     if "package-verify" in required:
         missing = [t for t, v in (("--package-run or --setup", setup),) if not v]
         cell("package-verify", ["package-verify"], "tools/verify-release-package.sh",
-             "bash tools/verify-release-package.sh --tree %s --commit %s" % (setup or "<setup>", head), EXITS_PACKAGE_VERIFY,
+             "bash tools/verify-release-package.sh --tree %s --commit %s" % (setup or "<setup>", release_sha), EXITS_PACKAGE_VERIFY,
              ["test -s %s/MANIFEST.json" % (setup or "<setup>"), "test -s %s/install.cmd" % (setup or "<setup>"),
-              "python3 tools/ci-state.py %s" % head[:12]], missing)
+              "python3 tools/ci-state.py %s" % release_sha[:12]], missing)
 
     # 2. the install cells and the feature tests: ONE release-acceptance.sh invocation over exactly the required cells
     mcells = [c for c in MATRIX_CELLS if c in required]
