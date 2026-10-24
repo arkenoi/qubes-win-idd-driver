@@ -108,7 +108,7 @@ if build clean ""; then
 else say "FAIL  clean build: $(head -3 "$OUT/clean.build.err")"; bad=1; fi
 
 # ---- every defect knob must make the suite FAIL --------------------------------------------------------
-for d in SYSKILLNOW TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT DISARMHIDESCRASH ZERODUE SHELLBYNAME HOLDALWAYSLOUD FAULTFROMREG LATEREGALWAYSLOUD SLOWALWAYSLOUD HOLDREASONALLNORMAL STARTCLOSEUNSAID STARTNEVERSTUCK STARTRETURNNULL GIANTSHELLFRAME COMPANIONSHOWN SEARCHALWAYSHIDDEN SEARCHASTOAST XCNOTIFYKEPT MENUKEYALWAYSFORWARD STALEANCHOR DOUBLETOAST SHUTDOWNERROR STANDDOWNEXPIRES; do
+for d in SYSKILLNOW TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT DISARMHIDESCRASH ZERODUE SHELLBYNAME HOLDALWAYSLOUD FAULTFROMREG LATEREGALWAYSLOUD SLOWALWAYSLOUD HOLDREASONALLNORMAL STARTCLOSEUNSAID STARTNEVERSTUCK STARTRETURNNULL GIANTSHELLFRAME COMPANIONSHOWN SEARCHALWAYSHIDDEN SEARCHASTOAST XCNOTIFYKEPT MENUKEYALWAYSFORWARD STALEANCHOR DOUBLETOAST SHUTDOWNERROR STANDDOWNEXPIRES STARVENEVERDUE; do
     if build "defect-$d" "-DQGA_LIFECYCLE_DEFECT_$d"; then
         "$OUT/defect-$d" >"$OUT/defect-$d.out" 2>&1; rc=$?
         f=$(grep -c '^FAIL' "$OUT/defect-$d.out")
@@ -354,6 +354,28 @@ main_standdown_latch() {
     awk '/g_WgcLastLaunch = now;/{l=NR} /g_BrokerStoodDown = FALSE;/{if(l && NR>l && NR-l<8) ok=1} END{exit !ok}' "$1" &&
     awk '/g_BrokerStoodDown = FALSE;/{c[++n]=NR} /BrokerReportDeaf\(\);/{d=NR} END{for(i=1;i<=n;i++) if(d && c[i]<d && d-c[i]<8) ok=1; exit !ok}' "$1"; }
 shape "main.c: a graceful stand-down LATCHES - the hold precedes every arming branch, is set at the non-death exit with the flag cleared, and clears only on a launch or the broker seen alive" main_standdown_latch "$MAIN" 'if (QgaDesliceSupervisionHeld(g_BrokerStoodDown ? 1 : 0, g_BrokerDownSince, now))'
+# HOW LONG A HOLD LASTS MUST BE OBSERVABLE. Owner, 2026-10-24: "window holds that stay longer than
+# expected are very, very real product defect if they are authentic" - and nothing measured them. The
+# only line carrying a duration is QGAHOLDSTARVED at a 10 s bound, emitted 0 times on this rig, and
+# the per-window detail that would have shown it is at Debug, which the default LogLevel does NOT
+# emit (0 D lines against 986 I in a real cell). So: accumulate at the RESOLVE site, report as one
+# rate-limited aggregate, and never gate anything on the buckets.
+main_hold_distribution() {
+    # 1: accumulated where the run of holds ENDS, which is the only place the duration exists
+    awk '/if \(PwConsumeBrokerFrame\(entry, &pwRect, &holdWhy\)\)/{c=NR} /InterlockedIncrement64\(&g_HoldRuns\)/{r=NR} /entry->PwHoldSince = 0;/{z=NR} END{exit !(c && r && z && r>c && r<z && z-c<30)}' "$1" &&
+    # 2: the aggregate is rate-limited and silent when there is nothing to say
+    awk '/if \(g_HoldRuns\)/{g=NR} /QGAHOLDSUM/{s=NR} END{exit !(g && s && s>g && s-g<4)}' "$1" &&
+    awk '/s_ledgerLastReport >= 60000/{t=NR} /QGAHOLDSUM/{s=NR} END{exit !(t && s && s>t)}' "$1" &&
+    # 3: the max is carried, because one long hold is a defect even when the mean is fine
+    command grep -q 'maxMs=%lld' "$1" &&
+    # 4: NOTHING IS GATED ON THE BUCKETS - they describe a distribution, they are not a new
+    # threshold. The buckets are WRITTEN under `if (heldMs > N)`, which is the measurement itself, so
+    # the property is that they are never READ in a decision: not an if/while subject, and never
+    # compared. The declarations (`static LONG64 g_HoldOverN = 0;`) are excluded - matching them is
+    # what made my first version of this check fail its own correct code.
+    ! command grep -nE '^[^/]*(if|while)[[:space:]]*\([^)]*g_HoldOver|g_HoldOver[A-Za-z0-9]+[[:space:]]*[<>]' "$1" \
+      | command grep -v 'static LONG64 g_HoldOver' | command grep -q . ; }
+shape "main.c: a hold's DURATION is accumulated at the resolve site and reported as one rate-limited aggregate carrying the max, with nothing gated on the buckets" main_hold_distribution "$MAIN" 'InterlockedIncrement64(&g_HoldRuns)'
 
 # THE EVENT-GATED LAUNCH WAS REVERTED AS A MEASURED REGRESSION - do not re-add it from the shape.
 # agent f9ef238 replaced the wake that paced the de-slice broker's one launch with an event
