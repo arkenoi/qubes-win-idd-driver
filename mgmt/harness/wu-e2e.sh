@@ -357,7 +357,30 @@ for r in $(seq 1 "$ROUNDS"); do
     # scan whose previous completed pass is younger than 30 minutes, and it exits BEFORE logging - so
     # firing the task here tests the debounce, not the scan, and leaves no trace either way.
     # Measured 2026-09-20: the check waited 15 minutes for a scan that had correctly declined to run.
-    timeout -k 10 900 tools/qtest run 'powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Program Files\Qubes Tools\bin\qubes-windows-update.ps1" -Action scan -RelayExe "C:\Program Files\Qubes Tools\bin\qubes-updates-relay.exe"' > "$OUT/round$r/oscillation-scan-launch.out" 2>&1; _osc_rc=$?
+    # THE SCAN IS LAUNCHED DETACHED, because holding a 900 s qrexec channel open over it made the
+    # channel the scan's lifeline. MEASURED on acceptance run 40037710497, rounds 1 and 2: the scan
+    # STARTED (its own output shows "relay started: pid 7212", "proxy up: 127.0.0.1:8082",
+    # "Sync-Revocation: 3/3 CTLs refreshed") and then the client logged
+    #     qrexec_process_io: vchan connection closed early (fds: -1 -1 -1, status: -1)
+    # ~16 s in, exiting 58 and then 255. When the qrexec client goes away the guest-side process
+    # goes with it, so the scan died, the durable stamp never advanced, and the oscillation check
+    # correctly reported "the scan never ran (missing data fails)" - failing template-update and
+    # with it the whole acceptance record. Round 3 survived, which is what makes it a transport
+    # flake rather than a scan that refuses.
+    # Start-Process detaches the scan from this channel, so the launch returns at once and the
+    # EXISTING poll below - which watches update-status.json's `ts` ADVANCE, a durable marker that
+    # outlives any channel - is what decides whether it ran. Nothing is excused: a scan that truly
+    # does not run still fails on the stamp not moving.
+    # -EncodedCommand, NOT escaped quotes inside -Command: lint-harness L3 refuses the latter
+    # because it FAILS SILENTLY, and this command must carry two paths containing spaces. The
+    # base64 below is UTF-16LE of exactly this, which is what the guest runs:
+    #   Start-Process -FilePath powershell -WindowStyle Hidden -ArgumentList
+    #     '-NoProfile -ExecutionPolicy Bypass -File "C:\Program Files\...\qubes-windows-update.ps1"
+    #      -Action scan -RelayExe "C:\Program Files\...\qubes-updates-relay.exe"'; 'LAUNCHED'
+    # ONE argument STRING with the paths double-quoted: -ArgumentList @(...) joins its elements
+    # with spaces and does not quote one that contains them, so the child would otherwise see
+    # `-File C:\Program` plus a stray argument.
+    timeout -k 10 120 tools/qtest run 'powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgAC0ARgBpAGwAZQBQAGEAdABoACAAcABvAHcAZQByAHMAaABlAGwAbAAgAC0AVwBpAG4AZABvAHcAUwB0AHkAbABlACAASABpAGQAZABlAG4AIAAtAEEAcgBnAHUAbQBlAG4AdABMAGkAcwB0ACAAJwAtAE4AbwBQAHIAbwBmAGkAbABlACAALQBFAHgAZQBjAHUAdABpAG8AbgBQAG8AbABpAGMAeQAgAEIAeQBwAGEAcwBzACAALQBGAGkAbABlACAAIgBDADoAXABQAHIAbwBnAHIAYQBtACAARgBpAGwAZQBzAFwAUQB1AGIAZQBzACAAVABvAG8AbABzAFwAYgBpAG4AXABxAHUAYgBlAHMALQB3AGkAbgBkAG8AdwBzAC0AdQBwAGQAYQB0AGUALgBwAHMAMQAiACAALQBBAGMAdABpAG8AbgAgAHMAYwBhAG4AIAAtAFIAZQBsAGEAeQBFAHgAZQAgACIAQwA6AFwAUAByAG8AZwByAGEAbQAgAEYAaQBsAGUAcwBcAFEAdQBiAGUAcwAgAFQAbwBvAGwAcwBcAGIAaQBuAFwAcQB1AGIAZQBzAC0AdQBwAGQAYQB0AGUAcwAtAHIAZQBsAGEAeQAuAGUAeABlACIAJwA7ACAAJwBMAEEAVQBOAEMASABFAEQAJwA=' > "$OUT/round$r/oscillation-scan-launch.out" 2>&1; _osc_rc=$?
     # KEEP THE LAUNCH'S OUTCOME. This ended >/dev/null 2>&1 - stdout, stderr AND the exit code
     # thrown away - so when round 2 of run 3 reported "the scan never ran" on 2026-10-20 there was
     # nothing to say WHY, and neither I nor Jev could decide between "it never started" and "it
