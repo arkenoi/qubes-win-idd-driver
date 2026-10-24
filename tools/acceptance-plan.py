@@ -172,6 +172,21 @@ def main(argv=None) -> int:
                       "on_non_pass": "mgmt/harness/collect-failure.sh <vm> <outdir> \"<reason>\" --since <start> [--logvol <image>|none] --harness-cmd \"<this command>\"; "
                                      "then tools/verdict-jev.py --sweep <report.json>... --snapshot <outdir>/activity-snapshot.json --errors <harness FAIL lines>"})
         blocked.extend("%s: needs %s" % (cid, t) for t in missing)
+        # A COMMAND WHOSE PROGRAM CANNOT EXECUTE IS A BLOCKED CELL, not a cell that fails three
+        # hours in. MEASURED 2026-10-24 by the plan's own cheapest-probe step: this plan emitted
+        # `tools/gate-remainder.sh --run ...` while that file was mode 644 IN THE REPO - every other
+        # tool the plan invokes is 755 - so the third cell could only ever have answered
+        # "Permission denied" (rc 126). It had been run before only because a human typed `bash`
+        # in front of it, which the plan deliberately does not.
+        # The FIRST TOKEN is the program: a `VAR=x prog` prefix is skipped, and a `bash foo.sh`
+        # form is checked as `bash`, which is correct - that form does not need foo.sh executable.
+        _toks = [t for t in cmd.split() if "=" not in t.split("/")[0] or t.startswith("/")]
+        _prog = _toks[0] if _toks else ""
+        if _prog and "/" in _prog:
+            _abs = _prog if os.path.isabs(_prog) else os.path.join(ROOT, _prog)
+            if os.path.exists(_abs) and not os.access(_abs, os.X_OK):
+                blocked.append("%s: %s is not executable (mode %o) - the plan's command would exit 126"
+                               % (cid, _prog, os.stat(_abs).st_mode & 0o777))
 
     # 1. the package's identity, before any guest is touched
     if "package-verify" in required:
