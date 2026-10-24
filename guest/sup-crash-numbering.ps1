@@ -65,6 +65,23 @@ function Death-New {
     }
     return $n
 }
+function Death-Again {
+    # THE `AGAIN` TAG, which is ADR-supervision item 2's last unmeasured clause. The reporter opens a
+    # death as `DEATH #n NEW` and sends ONE notification; every FURTHER record of that same death -
+    # the watchdog's record joining the agent's, which guest/qwt-report-death.ps1 calls "a CROSS-
+    # EXECUTABLE JOIN" - is logged `DEATH #n AGAIN`, advances the watermark and sends NOTHING. So
+    # AGAIN is the positive evidence that the dedupe ran, as opposed to there having been only one
+    # record to begin with. Counted, and its death NUMBERS returned, so an AGAIN belonging to some
+    # other death cannot be read as this one's.
+    $n = 0; $nums = @()
+    foreach ($f in Get-ChildItem -LiteralPath $logdir -Filter 'qwt-*death*.log' -EA SilentlyContinue) {
+        foreach ($m in ([regex]::Matches((Get-Content -LiteralPath $f.FullName -Raw -EA SilentlyContinue),
+                                         'DEATH #(\d+) AGAIN'))) {
+            $n++; $nums += [int]$m.Groups[1].Value
+        }
+    }
+    return @{ count = $n; nums = ($nums | Sort-Object -Unique) }
+}
 function Agent-Suffixes {
     # THE NUMBERING, as the product spells it: `<component>.death-<n>`. Returned for gui-agent only,
     # because L8 has already produced wgcbroker rows in this same log and a global count cannot tell
@@ -101,6 +118,8 @@ function Agent-Pid {
 for ($round = 1; $round -le 2; $round++) {
     T "round${round}_rows_before"  (Death-Rows)
     T "round${round}_new_before"   (Death-New)
+    $agBefore = Death-Again
+    T "round${round}_again_before" $agBefore.count
     T "round${round}_suffixes_before" ((Agent-Suffixes) -join ',')
     $before = Death-Rows
     $sufBefore = @(Agent-Suffixes)
@@ -127,6 +146,9 @@ for ($round = 1; $round -le 2; $round++) {
     T "round${round}_wait_exit" $why
     T "round${round}_rows_after" (Death-Rows)
     T "round${round}_new_after"  (Death-New)
+    $agAfter = Death-Again
+    T "round${round}_again_after" $agAfter.count
+    T "round${round}_again_nums"  (($agAfter.nums -join ',') + '')
     $sufAfter = @(Agent-Suffixes)
     T "round${round}_suffixes_after" ($sufAfter -join ',')
     T "round${round}_suffix_added" (($sufAfter | Where-Object { $sufBefore -notcontains $_ }) -join ',')

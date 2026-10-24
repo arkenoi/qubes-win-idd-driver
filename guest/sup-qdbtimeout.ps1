@@ -15,6 +15,18 @@
 # execute and no 1460 could ever be produced. Jev on the replacement:
 # suspend-the-daemon-process 1.00, against stop-with-dependents-first 0.00 and block-the-pipe 0.00.
 #
+# AND THE DEPENDENTS COME DOWN FIRST, because the chain has a service ABOVE the subject too.
+# Install-QwtImproved.ps1:938 states it: "QrexecAgent declares ServiceDependency QdbDaemon,
+# QubesGuiWatchdog declares QrexecAgent. QdbDaemon itself depends on xenagent". MEASURED on
+# win11r-sup 1024-1804, with sc.exe's own words kept this time:
+#     qrexecagent_stop_said|[SC] ControlService FAILED 1051: A stop control has been sent to a
+#                            service that other running services are dependent on.
+#     qrexecagent_start_said|[SC] StartService FAILED 1056: An instance of the service is already running.
+# So `sc stop QrexecAgent` is refused by QubesGuiWatchdog exactly as `sc stop QdbDaemon` is refused
+# by QrexecAgent, the service never restarted, and no WaitForQdb ran. Stop-Service -Force takes the
+# dependents down with it, which is the only way to stop a service in this chain; they are started
+# again on the way out.
+#
 # SUSPENDING THE DAEMON'S PROCESS leaves the service RUNNING from the SCM's view, so the dependency
 # is satisfied and QrexecAgent is allowed to start, while no qdb_open can be answered. The primitive
 # is the one L3 already uses on the broker: NtSuspendProcess/NtResumeProcess on a HANDLE from the
@@ -178,6 +190,22 @@ try {
         return
     }
 
+    # ---- stop the subject (and whatever depends on it) BEFORE suspending -------------------------
+    # ORDER MATTERS TWICE: a stop is refused while a dependent runs, and stopping QrexecAgent AFTER
+    # the daemon is suspended could hang in its own shutdown path, which talks to qubesdb.
+    $deps = @()
+    try { $deps = @((Get-Service -Name $QRX -EA SilentlyContinue).DependentServices | ForEach-Object { $_.Name }) } catch { }
+    T 'qrexecagent_dependents' (($deps -join ',') + '')
+    T 'qrexecagent_stop_said' ((Stop-Service -Name $QRX -Force -PassThru -EA SilentlyContinue | ForEach-Object { $_.Name + '=' + $_.Status }) -join ' ')
+    $deadline = (Get-Date).AddSeconds(90)
+    while ((Get-Date) -lt $deadline -and (Svc-State $QRX) -ne 'STOPPED') { Start-Sleep -Seconds 2 }
+    T 'qrexecagent_state_stopped' (Svc-State $QRX)
+    if ((Svc-State $QRX) -ne 'STOPPED') {
+        T 'terminal' "$QRX did not stop even with its dependents forced down, so it cannot be restarted into the wait"
+        T 'verdict' 'TERMINAL'
+        return
+    }
+
     # ---- the single variable ---------------------------------------------------------------------
     $qdbProc = $null
     if (-not $Control) {
@@ -198,8 +226,6 @@ try {
         [void][W.T]::NtSuspendProcess($qdbProc.Handle)
         $restoreNeeded = $true
         T 'qubesdb_suspended' (Get-Date -Format 'HH:mm:ss.fff')
-        # THE SERVICE MUST STILL READ RUNNING, because that is the whole point: the SCM dependency
-        # has to stay satisfied or QrexecAgent will not be allowed to start at all.
         T 'qubesdb_state_while_suspended' (Svc-State $QDB)
         if ((Svc-State $QDB) -ne 'RUNNING') {
             T 'terminal' "the service left RUNNING while suspended, so the dependency is no longer satisfied"
@@ -208,14 +234,7 @@ try {
         }
     }
 
-    # ---- restart QrexecAgent into the wait -------------------------------------------------------
-    # KEEP sc.exe's OWN WORDS. A refusal here is the whole story - 1068 ERROR_SERVICE_DEPENDENCY_FAIL
-    # is exactly what a stopped dependency produces, and the first cut of this cell discarded the
-    # output and could only report "did not stop" without saying why.
-    T 'qrexecagent_stop_said' ((& sc.exe stop $QRX 2>&1 | Out-String) -replace '\s+', ' ').Trim()
-    $deadline = (Get-Date).AddSeconds(90)
-    while ((Get-Date) -lt $deadline -and (Svc-State $QRX) -ne 'STOPPED') { Start-Sleep -Seconds 2 }
-    T 'qrexecagent_state_stopped' (Svc-State $QRX)
+    # ---- start QrexecAgent into the wait ---------------------------------------------------------
     $tStart = (Get-Date).AddSeconds(-5)
     T 'qrexecagent_start_said' ((& sc.exe start $QRX 2>&1 | Out-String) -replace '\s+', ' ').Trim()
     T 'qrexecagent_start_issued' (Get-Date).ToUniversalTime().ToString('s')
@@ -274,6 +293,11 @@ finally {
     # QrexecAgent back, whichever arm ran: the SCM may already have restarted it, and starting a
     # running service is harmless.
     T 'qrexecagent_restore_said' ((& sc.exe start $QRX 2>&1 | Out-String) -replace '\s+', ' ').Trim()
+    # THE DEPENDENTS TOO: Stop-Service -Force took them down, and a guest left without its GUI agent
+    # watchdog is a guest this cell degraded.
+    foreach ($d in $deps) {
+        if ($d) { T ('dependent_' + $d + '_start_said') ((& sc.exe start $d 2>&1 | Out-String) -replace '\s+', ' ').Trim() }
+    }
     $deadline = (Get-Date).AddSeconds(180)
     while ((Get-Date) -lt $deadline -and (Svc-State $QRX) -ne 'RUNNING') { Start-Sleep -Seconds 3 }
     T 'qrexecagent_state_restored' (Svc-State $QRX)

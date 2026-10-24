@@ -1041,6 +1041,9 @@ if has L11; then
   _s1=$(g11 round1_suffix_added); _s2=$(g11 round2_suffix_added)
   _k1=$(g11 round1_killed); _k2=$(g11 round2_killed); _rel=$(g11 relaunched_pid)
   _e1=$(g11 round1_events_4001); _e2=$(g11 round2_events_4001)
+  _n1=$(( $(g11 round1_new_after) - $(g11 round1_new_before) )); _n2=$(( $(g11 round2_new_after) - $(g11 round2_new_before) ))
+  _a1=$(( $(g11 round1_again_after) - $(g11 round1_again_before) )); _a2=$(( $(g11 round2_again_after) - $(g11 round2_again_before) ))
+  _anums=$(g11 round2_again_nums)
   _term=$(g11 terminal)$(g11 round1_terminal)$(g11 round2_terminal)
   _d1=$(( ${_r1a:-0} - ${_r1b:-0} )); _d2=$(( ${_r2a:-0} - ${_r2b:-0} ))
   if [ -n "$_term" ]; then
@@ -1049,6 +1052,19 @@ if has L11; then
   elif [ -z "$_k1" ] || [ -z "$_k2" ]; then
     verdict L11 INVALID "one of the two kills did not land, so a missing report is not the product's" \
             "killed1='$_k1' killed2='$_k2' relaunched='$_rel'; this cell NEVER reads a zero delta as a pass when its own stimulus is unproven"
+  elif [ "${_n1:-0}" != 1 ] || [ "${_n2:-0}" != 1 ]; then
+    # ONE `DEATH #n NEW` LINE PER DEATH - item 2's fourth clause. This was RECORDED and not asserted
+    # until 2026-10-24: the transcript carried round{N}_new_before/after and the verdict ignored
+    # them, which is the same defect as L2 printing guest-side numbers while another instrument's
+    # threshold carried the claim. A number that is recorded and not checked is not a check.
+    verdict L11 FAIL "a death with the guest UP does not open EXACTLY ONE DEATH record" \
+            "round1 NEW delta=${_n1:-?}, round2 NEW delta=${_n2:-?} - want 1 each; the dom0 rows were $_d1 and $_d2"
+  elif [ "${_e1:-0}" -lt 1 ] || [ "${_e2:-0}" -lt 1 ]; then
+    # OUR 4001 - item 2's second clause, likewise recorded-but-unasserted until now. It is the
+    # watchdog's own death event, so without it a missing report could be the reporter's fault or
+    # the watchdog's and this cell could not say which.
+    verdict L11 FAIL "the watchdog did not record its 4001 for a death it must have seen" \
+            "round1 4001=${_e1:-?}, round2 4001=${_e2:-?} - want at least 1 each"
   elif [ "$_d1" != 1 ] || [ "$_d2" != 1 ]; then
     # ZERO IS CONCEALMENT AND TWO IS A DOUBLE, and the owner's rule names both: exactly one
     # notification for one death, never zero, never two.
@@ -1090,7 +1106,7 @@ if has L11; then
                 "rows $_l11rows -> $_l11rows2 across one graceful shutdown+boot with two already-reported deaths in the log - the catch-up's watermark is what must stop this, and a double is a P1 by the owner's rule"
       else
         verdict L11 PASS "ONE notification per death, and ZERO for the graceful shutdown that follows them" \
-                "round1 +1 row (suffix $_s1, 4001 x$_e1), round2 +1 row (suffix $_s2, 4001 x$_e2), agent relaunched as pid $_rel between them; then a clean shutdown+boot added NOTHING (rows $_l11rows -> $_l11rows2). WER 1000/1001 recorded not required - a Kill is a termination, not a fault"
+                "round1 +1 row +1 NEW (suffix $_s1, 4001 x$_e1, AGAIN +$_a1), round2 +1 row +1 NEW (suffix $_s2, 4001 x$_e2, AGAIN +$_a2, numbers $_anums), agent relaunched as pid $_rel between them; then a clean shutdown+boot added NOTHING (rows $_l11rows -> $_l11rows2). AGAIN is the positive evidence that a SECOND record of one death notifies nothing; a zero there means the stimulus produced one record, which is reported rather than demanded. WER 1000/1001 recorded not required - a Kill is a termination, not a fault, and the injector carries no crash knob (Jev: add-a-crash-knob 0.08)"
       fi
     fi
   fi
@@ -1163,9 +1179,19 @@ if has L10; then
       fi
       continue
     fi
+    _stopped=$(g10 qrexecagent_state_stopped)
     if [ -n "$_term" ]; then
       verdict L10 INVALID "the stimulus could not be held, so nothing about the SCM was measured" \
               "$_term - QubesDB=$_qend QrexecAgent=$_qare; no verdict is claimed either way"
+    elif [ -n "$_stopped" ] && [ "$_stopped" != STOPPED ]; then
+      # AN UNAPPLIED STIMULUS IS AN INSTRUMENT FACT, NEVER A PRODUCT FAIL, and this cell got that
+      # wrong on win11r-sup 1024-1804: the stop was refused (1051, a dependent service running), the
+      # service therefore never restarted, WaitForQdb never ran - and the cell reported
+      # "a forced WaitForQdb timeout produced NO System 7023" as a FAIL. That is a fabricated product
+      # defect produced entirely by the instrument, which is the one thing this harness must never
+      # do (acceptance skill, section 6: a suite that could not measure is INSTRUMENT).
+      verdict L10 INVALID "the subject service never stopped, so it was never restarted into the wait" \
+              "qrexecagent_state_stopped=$_stopped; stop said: $(g10 qrexecagent_stop_said | cut -c1-120) - nothing about the SCM was measured"
     elif [ -z "$(g10 done)" ]; then
       verdict L10 INVALID "the injected transcript never completed" \
               "wait exit: $_why - the guest may have been mid-window; QubesDB=$_qend QrexecAgent=$_qare"
