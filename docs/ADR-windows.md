@@ -278,9 +278,19 @@ rendered fine out of the desktop map while nothing said so.
 
 **Decision.** `DirectRequired()` - broker gate && build >= 26100 && `PwEnabled` - is the single verdict, an
 ELIGIBILITY test, not an availability test. On an eligible guest with the broker down a window HOLDS its last
-content, `BROKERHOLD ... (direct required: composite fallback refused)` is logged at WARNING, `QGADESLICEDOWN`
+content, `BROKERHOLD ... (direct required: composite fallback refused)` is logged, `QGADESLICEDOWN`
 and the `DesliceBrokerDown` registry flag say why, and the window stays MAPPED - black if it never had content -
-because an invisible window is the worse failure. The sanctioned quiet paths are the deliberate `WgcBroker=0`
+because an invisible window is the worse failure.
+
+**CORRECTED 2026-10-24: that line is INFO, not WARNING, and this text was stale.** The level was decided
+twice in `main.c` and this ADR was not updated either time, which made three records appear to disagree
+about one line (ADR-windows WARNING / `tools/grade-noise.py` INFO / `log-policy-selftest` DEBUG) when only
+this sentence was wrong. The measurement that settled it: **589 of the 594 parseable W lines across all 93
+captures on this rig** were this condition - a live broker with the window registered and holding - i.e. a
+WARNING here was the project's single largest source of log noise for correct behaviour. The fault is still
+reported, and louder than before: a hold that outlasts `QGA_HOLD_STARVE_MS` is `QGAHOLDSTARVED` at **ERROR**,
+naming the stale pixels, and that is the bound this INFO line escalates through. `QGADESLICEDOWN` and the
+registry flag are unchanged, so nothing about the de-slice verdict rests on this level. The sanctioned quiet paths are the deliberate `WgcBroker=0`
 opt-out, and builds below the floor.
 
 **Evidence** (three arms, same toast, package agent bd9f410 on win11 26100): 4.3.17 with NO broker present

@@ -50,7 +50,28 @@ bad(){ fail=$((fail+1)); echo "FAIL  $*"; }
 #                                                              once per window (PwSliceBlackLogged)
 #   QGAPWECHO                                                - rate-limited in code (n<=4 || n%256)
 #   QGAPROTO                                                 - gated behind g_ProtoTrace anyway
-ALLOW='QGABROKERDIED|QGABROKERHUNG|QGABROKERREAP|QGABROKERBACK|BROKERDIMS|QGAZERORECT|QGATOASTGAP|ZORDERINVALID|QGAHELPERSDISARM|QGAHELPERSREARM|QGAHELPERTASK|QGADIRECTSUPPRESS|QGACAPSTRIP|QGAFSFLASH|QGASTARTDISMISS|QGAUAC|QGALOGPOLICY|QGARAISE|QGADESKSTUCK|QGAPROTO|QGATOASTHOLD|QGATOASTIDENT|QGATOASTPREEMPT|QGAPLACEKEEP|QGADRAGSLICE|QGADRAGFREEZE|QGADDAMOVE|popup damage|QGADRAGSIM|QGAERRBOX|QGASLICEBLACK|QGAPWECHO'
+#   (these three are matched by their full LINE SHAPE, not by the bare tag, so a NEW routine
+#    per-window line carrying the same tag is still an offender - the control below plants one)
+#   BROKERHOLD                                               - NOT routine and twice decided so in
+#                                                              main.c: 589 of the 594 parseable W
+#                                                              lines across 93 captures were this
+#                                                              condition, and tools/grade-noise.py
+#                                                              conditions 4-5 REQUIRE it at INFO -
+#                                                              the receipt uses its presence as the
+#                                                              proof that the pre-broker condition
+#                                                              was exercised, and 'ABSENT' is a FAIL
+#                                                              there. A hold that outlasts
+#                                                              QGA_HOLD_STARVE_MS is QGAHOLDSTARVED
+#                                                              at ERROR, so the bound is the escalation
+#   BROKERLATEREG                                            - the registration that ENDS a hold: a
+#                                                              transition, and grade-noise condition 5
+#                                                              requires it at INFO for the same reason
+#   BROKERRECROP                                             - a crop-only disagreement that KEPT the
+#                                                              capture session instead of rebuilding
+#                                                              it; fires per oscillation, not per
+#                                                              window, and is the evidence the rebuild
+#                                                              was avoided (same class as QGADDAMOVE)
+ALLOW='BROKERHOLD hwnd 0x%x holding last content|BROKERLATEREG hwnd 0x%x registered with the broker|BROKERRECROP hwnd 0x%x crop %d,%d - session kept|QGABROKERDIED|QGABROKERHUNG|QGABROKERREAP|QGABROKERBACK|BROKERDIMS|QGAZERORECT|QGATOASTGAP|ZORDERINVALID|QGAHELPERSDISARM|QGAHELPERSREARM|QGAHELPERTASK|QGADIRECTSUPPRESS|QGACAPSTRIP|QGAFSFLASH|QGASTARTDISMISS|QGAUAC|QGALOGPOLICY|QGARAISE|QGADESKSTUCK|QGAPROTO|QGATOASTHOLD|QGATOASTIDENT|QGATOASTPREEMPT|QGAPLACEKEEP|QGADRAGSLICE|QGADRAGFREEZE|QGADDAMOVE|popup damage|QGADRAGSIM|QGAERRBOX|QGASLICEBLACK|QGAPWECHO'
 
 python3 - "$SRC" "$ALLOW" <<'PY' > /tmp/logpolicy.$$ 2>&1
 import re, sys, pathlib
@@ -82,6 +103,36 @@ else
   bad "no_routine_per_window_info: $n per-window LogInfo line(s) are routine and at INFO:"
   printf '%s\n' "$r" | tail -n +2
 fi
+
+# ---- NEGATIVE CONTROL: the three declared SHAPES must not amnesty their TAGS -------------------
+# Jev scored this check's liveness 0.46 when the allowance was the bare tags, and was right: the
+# control that existed planted a DIFFERENT tag, so it proved the check could fail in general and not
+# that it could still fail for these three. A new routine per-window line carrying the same tag is
+# the case that matters, so it is planted here, in a COPY.
+_lpc=$(mktemp -d "${TMPDIR:-/tmp}/logpolicy-control-XXXXXX")
+cp "$SRC"/*.c "$_lpc/" 2>/dev/null
+printf '\nstatic void LpControlRoutine(void){ LogInfo("BROKERHOLD hwnd 0x%%x mapped routinely", 1); }\n' >> "$_lpc/main.c"
+_lpn=$(python3 - "$_lpc" "$ALLOW" <<'PYC'
+import re, sys, pathlib
+src, allow = pathlib.Path(sys.argv[1]), re.compile(sys.argv[2])
+GATE = re.compile(r'\b(g_ProtoTrace|ProtoDragOn\(\)|g_ProtoTraceWobble|g_ProtoTraceDrag)\b')
+WINDOWY = re.compile(r'hwnd[ =]0x%x|hwnd=0x%x|window 0x%x')
+n = 0
+for f in sorted(src.glob('*.c')):
+    lines = f.read_text(encoding='utf-8', errors='replace').splitlines()
+    for i, ln in enumerate(lines):
+        if 'LogInfo(' not in ln or not WINDOWY.search(ln): continue
+        if allow.search(ln): continue
+        w = [x for x in lines[max(0, i - 8):i] if x.strip() and not x.strip().startswith('//')]
+        if any(GATE.search(x) for x in w): continue
+        n += 1
+print(n)
+PYC
+)
+rm -rf "$_lpc"
+[ "${_lpn:-0}" -ge 1 ] \
+  && ok "allow_is_a_shape_not_an_amnesty: a NEW routine per-window line carrying the BROKERHOLD tag is still an offender" \
+  || bad "allow_is_a_shape_not_an_amnesty: the allowance covers the whole tag - this check can no longer fail for it"
 
 # ---- the five that were demoted must stay demoted ----------------------------------------------
 miss=""
