@@ -93,6 +93,19 @@ _LV_RESTORE_PENDING=0
 # EMPTY, and the pull after the cell yields nothing - an instrument that reports success and
 # collects no data, which is worse than no instrument.
 # Every caller of this has just finished an install, so the clock feature needs clearing here too.
+# THE GUEST'S OWN DISK INVENTORY, for the moment a log-volume bind fails.
+# `no_volume_labelled_DIAG_with_LOGVOL.TAG` is all the binder can say and it covers three different
+# rig states: the device was never enumerated; it was enumerated with NO partition (a partitionless
+# superfloppy FAT on a FIXED disk, which Windows will not mount - campaign 40134888669); or it has a
+# volume the probe could not letter. Telling them apart took three separate guest probes AFTER the
+# abort. Experimenter rule 2: if this fails, what will I be holding?
+logvol_bind_guestview(){ # $1=vm $2=label
+  QTEST_VM="$1" timeout 180 ./tools/qtest run 'powershell -NoProfile -Command "Get-Disk | Format-Table -Auto Number,FriendlyName,BusType,Size,PartitionStyle,IsOffline | Out-String -Width 200; Get-CimInstance Win32_DiskDrive | Format-Table -Auto Model,InterfaceType,Size,Partitions | Out-String -Width 200; Get-Volume | Format-Table -Auto DriveLetter,FileSystemLabel,FileSystem,DriveType,Size | Out-String -Width 200"' \
+      > "$M/$2-logvol-bind-guestview.out" 2>&1 \
+    && say "[ERROR] FATAL: the guest's disk/volume inventory at the moment of failure: $M/$2-logvol-bind-guestview.out" \
+    || say "[ERROR] FATAL: could not read the guest's disk inventory either (see $M/$2-logvol-bind-guestview.out) - the guest may be gone"
+}
+
 logvol_bind_now(){ # $1=vm $2=label
   clock_feature_report "$1" "$2"
   # ON BY DEFAULT since 2026-10-19; LOGVOL_BIND=0 runs on the stock log path deliberately.
@@ -155,17 +168,14 @@ logvol_bind_now(){ # $1=vm $2=label
     # later becomes unreachable. It does not need, and no longer claims, a wedge that cannot be
     # evidenced. An unsupported measurement in a comment becomes the next reader's evidence.
     say "[ERROR] FATAL: $2: log-volume bind FAILED (see $M/$2-logvol-bind.out)"
-    # WHAT THE GUEST ACTUALLY SEES, CAPTURED WHILE IT IS STILL UP. The binder can only say "no
-    # volume labelled DIAG with LOGVOL.TAG", and that one sentence covers three different rig
-    # states: the device was never enumerated, it was enumerated with no partition (a partitionless
-    # superfloppy FAT on a FIXED disk, which Windows will not mount - campaign 40134888669), or it
-    # has a volume the probe could not letter. Telling them apart took three separate guest probes
-    # AFTER the abort; this holds the answer at the moment of failure instead. Experimenter rule 2:
-    # if this fails, what will I be holding?
-    QTEST_VM="$1" timeout 180 ./tools/qtest run 'powershell -NoProfile -Command "Get-Disk | Format-Table -Auto Number,FriendlyName,BusType,Size,PartitionStyle,IsOffline | Out-String -Width 200; Get-CimInstance Win32_DiskDrive | Format-Table -Auto Model,InterfaceType,Size,Partitions | Out-String -Width 200; Get-Volume | Format-Table -Auto DriveLetter,FileSystemLabel,FileSystem,DriveType,Size | Out-String -Width 200"' \
-        > "$M/$2-logvol-bind-guestview.out" 2>&1 \
-        && say "[ERROR] FATAL: the guest's disk/volume inventory at the moment of failure: $M/$2-logvol-bind-guestview.out" \
-        || say "[ERROR] FATAL: could not read the guest's disk inventory either (see $M/$2-logvol-bind-guestview.out) - the guest may be gone"
+    # WHAT THE GUEST ACTUALLY SEES, CAPTURED WHILE IT IS STILL UP - through a NAMED FUNCTION so an
+    # offline suite can stub it. tools/tests/stick-scope-restore-selftest.sh evals this whole
+    # function to test the restore behaviour, and the first cut of this capture put a literal
+    # `timeout 180 ./tools/qtest run` here: the runner's rig shim caught it as
+    # `TOUCHED-RIG ... qvm-check --quiet sub` and CI went red, because a shell-function stub cannot
+    # intercept a binary that `timeout` EXECs (this project's own 2026-10-21 lesson). A function
+    # call CAN be stubbed, which is how every other rig touch in that suite is handled.
+    logvol_bind_guestview "$1" "$2"
     say "[ERROR] FATAL: the log volume is the ONLY instrument that survives a wedge - a guest that"
     say "[ERROR] FATAL: will not halt cannot be asked for its logs, and mtools reads the image with"
     say "[ERROR] FATAL: no guest at all. Grading ANY further cell now produces verdicts about"

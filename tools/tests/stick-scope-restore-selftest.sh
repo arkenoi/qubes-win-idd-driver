@@ -143,6 +143,12 @@ logvol_clear_guest(){ rec clear; regset ''; savedset ''
 logvol_prove_roundtrip(){ rec proof; return 0; }
 logvol_pull(){ rec pull; return 0; }
 qvm-check(){ [ "$RUNNING" = 1 ]; }
+# THE BIND-FAILURE GUEST INVENTORY IS STUBBED, because it is a rig call and this is an offline
+# suite. matrix.sh's FATAL bind path captures Get-Disk/Get-Volume from the guest; its first cut
+# inlined `timeout 180 ./tools/qtest run` and the runner's rig shim correctly reported
+# `TOUCHED-RIG ... qvm-check --quiet sub` - a function stub cannot intercept a binary that `timeout`
+# EXECs. It is a named function now, which a suite can replace; this records what it would have done.
+logvol_bind_guestview(){ echo "STUB logvol_bind_guestview $1 $2" >> "${GUESTVIEW_LOG:-/dev/null}"; }
 
 # the cell's non-stick surroundings
 w_state(){ printf 'Halted\n'; }
