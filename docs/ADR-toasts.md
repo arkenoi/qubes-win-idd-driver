@@ -188,6 +188,19 @@ of it. `service.legacy-toasts` does not affect it.
 nobody opens is that. Bounding it keeps a failing guest from becoming a notification storm. Keeping the log
 line means the evidence survives even when qrexec, which this route rides, is down.
 
+**WHICH FAULTS MAY USE IT is decided by `docs/ADR-supervision.md`, not here** (added 2026-10-24, after this
+route carried two false notifications about a capture helper). That ADR's §7 makes a deliberate stand-down
+ultimate - a helper absent because we asked it to stop raises nothing on this route at all - and its §8 bounds
+what a supervisor may do before it reports. Its §3 also holds that a DEATH is reported once, by the one death
+reporter; this route carries the agent's own faults, so the de-slice complaint yields to a death report in
+flight (`QgaDesliceOwnedByDeath`) rather than making a second row for one situation.
+
+**STILL OPEN.** `QERR_SEV_ACTION` is on 10 of our 11 rows, with 1 `DEGRADED` and none informational, so this
+route currently phrases almost everything as a user action and most rows name our own components. Owner,
+2026-10-24: *"why does user care about all this fucking inner mechanics at all"*. The triage into real user
+actions and operator facts (log + a dom0-queryable health state) is owed; it is recorded in ADR-supervision §8
+and tracked in `findings/issues.md`.
+
 ## 7. Every gate is read once, at agent start
 
 **Status:** ACCEPTED.

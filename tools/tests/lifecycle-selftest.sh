@@ -108,7 +108,7 @@ if build clean ""; then
 else say "FAIL  clean build: $(head -3 "$OUT/clean.build.err")"; bad=1; fi
 
 # ---- every defect knob must make the suite FAIL --------------------------------------------------------
-for d in SYSKILLNOW TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT DISARMHIDESCRASH ZERODUE SHELLBYNAME HOLDALWAYSLOUD FAULTFROMREG LATEREGALWAYSLOUD SLOWALWAYSLOUD HOLDREASONALLNORMAL STARTCLOSEUNSAID STARTNEVERSTUCK STARTRETURNNULL GIANTSHELLFRAME COMPANIONSHOWN SEARCHALWAYSHIDDEN SEARCHASTOAST XCNOTIFYKEPT MENUKEYALWAYSFORWARD STALEANCHOR DOUBLETOAST SHUTDOWNERROR; do
+for d in SYSKILLNOW TERMINATEDDEATH RELAUNCHDEATH RECONNECTDEATH REQUESTEDDEATH REQUESTEDERROR HELPERSYSKILLDEATH HELPERSTOPTEARDOWN PRESHELLLOCK SHELLPROCSILENT DISARMHIDESCRASH ZERODUE SHELLBYNAME HOLDALWAYSLOUD FAULTFROMREG LATEREGALWAYSLOUD SLOWALWAYSLOUD HOLDREASONALLNORMAL STARTCLOSEUNSAID STARTNEVERSTUCK STARTRETURNNULL GIANTSHELLFRAME COMPANIONSHOWN SEARCHALWAYSHIDDEN SEARCHASTOAST XCNOTIFYKEPT MENUKEYALWAYSFORWARD STALEANCHOR DOUBLETOAST SHUTDOWNERROR STANDDOWNEXPIRES; do
     if build "defect-$d" "-DQGA_LIFECYCLE_DEFECT_$d"; then
         "$OUT/defect-$d" >"$OUT/defect-$d.out" 2>&1; rc=$?
         f=$(grep -c '^FAIL' "$OUT/defect-$d.out")
@@ -336,6 +336,24 @@ main_deslice_report_discipline() {
     ! awk '/g_WgcLastLaunch = now;/{l=NR} /g_BrokerDownSince = now;/{z=NR} END{exit !(l && z && z>l && z-l<30)}' "$1" &&
     awk '/CfgWriteDword\(NULL, REG_CONFIG_DESLICE_DOWN_VALUE, binPresent/{f=NR} /QGADESLICEDOWN de-slice broker EXPECTED but not running/{e=NR} /if \(QgaDesliceOwnedByDeath\(g_BrokerDiedAt\)\)/{d=NR} END{exit !(f && e && d && f<d && e<d)}' "$1"; }
 shape "main.c: the de-slice report is anchored through QgaDesliceAnchor, excused during a teardown BEFORE it can fire, and its dom0 row yields to a death report while the flag and the ERROR line stay" main_deslice_report_discipline "$MAIN" 'QgaDesliceAnchor(g_WgcLaunched ? 1 : 0, g_WgcLastLaunch, g_BrokerReadyAt, now)'
+# TOLD TO GO DOWN, SO IT STAYS DOWN. The latch's EVENTS are here, not in the pure predicate, so the
+# wiring is what needs asserting: (1) the hold runs BEFORE every arming branch, or the clock is armed
+# anyway and the hold is cosmetic; (2) it is set at the non-death exit of the was-ready branch, which
+# is the only place that knows the absence was asked for; (3) the DesliceBrokerDown flag is cleared
+# with it, because a flag left at 1 over a deliberate stop makes health-check read a healthy guest as
+# broken for ever; (4) it is cleared by BOTH events - the broker seen alive (Task Scheduler's own
+# recovery, ADR-supervision 4) and a launch being issued - since a latch left set over a running
+# broker would silence a LATER real outage.
+main_standdown_latch() {
+    # 1: the hold precedes the was-ready branch AND the `else if (!g_BrokerDownSince)` arming branch
+    awk '/if \(QgaDesliceSupervisionHeld\(g_BrokerStoodDown/{h=NR} /if \(_InterlockedExchange\(&g_BrokerReady, 0\) != 0\)/{r=NR} /else if \(!g_BrokerDownSince\)/{a=NR} END{exit !(h && r && a && h<r && h<a)}' "$1" &&
+    # 2 + 3: set at the non-death exit, with the flag cleared in the same block
+    awk '/g_BrokerStoodDown = TRUE;/{t=NR} /CfgWriteDword\(NULL, REG_CONFIG_DESLICE_DOWN_VALUE, 0, NULL\)/{f=NR; if(t && f>t && f-t<8) ok=1} END{exit !ok}' "$1" &&
+    # 4: cleared on BOTH events - alive (before the alive branch returns) and at the launch
+    awk '/g_BrokerStoodDown = FALSE;/{n++} END{exit !(n>=2)}' "$1" &&
+    awk '/g_WgcLastLaunch = now;/{l=NR} /g_BrokerStoodDown = FALSE;/{if(l && NR>l && NR-l<8) ok=1} END{exit !ok}' "$1" &&
+    awk '/g_BrokerStoodDown = FALSE;/{c[++n]=NR} /BrokerReportDeaf\(\);/{d=NR} END{for(i=1;i<=n;i++) if(d && c[i]<d && d-c[i]<8) ok=1; exit !ok}' "$1"; }
+shape "main.c: a graceful stand-down LATCHES - the hold precedes every arming branch, is set at the non-death exit with the flag cleared, and clears only on a launch or the broker seen alive" main_standdown_latch "$MAIN" 'if (QgaDesliceSupervisionHeld(g_BrokerStoodDown ? 1 : 0, g_BrokerDownSince, now))'
 
 # THE EVENT-GATED LAUNCH WAS REVERTED AS A MEASURED REGRESSION - do not re-add it from the shape.
 # agent f9ef238 replaced the wake that paced the de-slice broker's one launch with an event

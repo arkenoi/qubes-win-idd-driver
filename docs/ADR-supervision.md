@@ -49,6 +49,10 @@ flowchart TD
 | 3 | ONE reporter, and the notification is ours | ACCEPTED (owner) | 2026-10-03 |
 | 4 | Restarts use system recovery; a supervisor service only where nothing else can do the job | ACCEPTED (owner; Jev 0.99) | 2026-10-03 |
 | 5 | Nothing of ours relaunches anything: an exit code is a contract, the relauncher is disarmed before its target is ended, and a loud error the user must see reaches them even when dom0 cannot be told | ACCEPTED (owner) | 2026-10-07 |
+| 7 | A deliberate stand-down is ultimate: no clock, no deadline, no report, until something starts it | ACCEPTED (owner) | 2026-10-24 |
+| 8 | A supervisor may POLL to detect, but only on a handle it owns, and it may not restart | ACCEPTED (owner) | 2026-10-24 |
+
+(Section 6 is a recorded FINDING, not a decision, and keeps its number.)
 
 Status words and the section format are defined in `docs/ADR-README.md`.
 
@@ -426,3 +430,85 @@ supervisor no exit classification, which is the watchdog's main remaining job.
 **Cost, which is why this is not folded into the boot-boundary commit.** The child must receive the handle
 VALUES (command line, or `STARTUPINFO.lpReserved2`) instead of deriving names, so both binaries change and
 `agent/watchdog/lifecycle_test.c` changes with them. One commit is one mandate; this is its own.
+
+---
+
+## 7. A deliberate stand-down is ultimate: no clock, no deadline, no report, until something starts it
+
+**Status:** ACCEPTED (owner), 2026-10-24.
+
+**Context.** The owner: *"the proper fix is when the broker is told to go down, it stays down, no timer, no
+supervisor until next rearm"* and *"of course graceful shutdown should be ultimate until something starts
+it"*.
+
+`BrokerSupervise` already recognised a deliberate stand-down - `QgaDecideHelperExit` returns
+`QGA_HELPER_EXPECTED_DISARMED`, the caller logs "not a death" and returns - but it returned only from THAT
+pass. On the next wake `g_BrokerReady` was already 0, so the whole was-ready branch was skipped, control
+reached `else if (!g_BrokerDownSince)`, the clock armed, and the complaint began against a helper nobody
+wanted running. `QgaDesliceTeardownExcused` did not cover it: that holds while the session is ending or
+helpers are disarmed, and a helper stopped on purpose while the session continues is neither.
+
+**Decision.**
+
+1. A stand-down is a **LATCH**, not a per-pass decision. While it is held there is no down-clock, no
+   deadline, no re-warn and no dom0 row - supervision is not running for that helper at all.
+2. It is set at the single non-death exit of the was-ready branch, for **either** non-death verdict. That
+   block is the only place that knows the absence was asked for; everything downstream treats an absent
+   helper as a fault.
+3. It clears on an **EVENT**, never on time: a new launch being issued (the owner's "next rearm"), or the
+   helper being seen alive again - because §4's system recovery can bring it back without us asking, and a
+   latch left set over a running helper would silence a LATER real outage.
+4. **Time cannot end it.** `QgaDesliceSupervisionHeld` accepts the clock values and deliberately does not
+   read them, so a deadline cannot be reintroduced without deleting the lines that say why.
+5. The config flag the health check and acceptance read (`DesliceBrokerDown`) is cleared with the latch. A
+   flag left at 1 over a deliberate stop makes a healthy guest read as broken for ever.
+
+**Why.** An alert for a condition that was requested is never actionable, and it is not a smaller fault than
+a missed one - it is the fault that reached this project's owner twice. A latch is also the only shape that
+survives the supervisor being wrong about *when*: every timing fix before this one moved a deadline, and each
+one left the complaint able to fire for an absence nobody minded.
+
+**Evidence.** `agent/include/qga-lifecycle.h` (`QgaDesliceSupervisionHeld`, defect knob
+`QGA_LIFECYCLE_DEFECT_STANDDOWNEXPIRES`), the latch's four sites in `agent/gui-agent/main.c`, six checks in
+`agent/watchdog/lifecycle_test.c` and a wiring assertion in `tools/tests/lifecycle-selftest.sh`
+(68 passed, 0 failed; the knob fails two checks, and the wiring shape fails with its guarded line removed).
+
+**Consequence for the text dom0 is given.** `deslice-down-present`'s next-step line said *"Nothing of ours
+restarts it; it comes back when the GUI agent next starts"*, which contradicts §4 and `main.c`'s own comment
+at the recovery path. "Nothing of ours relaunches it" is true of the AGENT (§5) and was wrongly written as
+true of the product. It now says what its sibling `deslice-down-died` always said.
+
+---
+
+## 8. A supervisor may POLL to detect, but only on a handle it owns, and it may not restart
+
+**Status:** ACCEPTED (owner), 2026-10-24.
+
+**Context.** §2 says detection uses the system's own records and §4's rules say *"No ad hoc watchdog scripts,
+no polling loops, no kill loops"*. `BrokerSupervise` runs on every agent frame wake and is, literally, a
+polling loop - so read strictly, §2 and §4 forbade a component this project ships, and that contradiction is
+what let a timing apparatus grow inside it unchallenged until it sent two false notifications.
+
+**Decision.** The ban in §4 is on polling as a **recovery** mechanism and on scanning for processes by name.
+It does not forbid a parent waiting on a handle to a child it launched itself:
+
+1. A supervisor may test a process handle it **owns** (`WaitForSingleObject(h, 0)`), because that handle is
+   the system's own record of that process's lifetime and cannot be confused with another process.
+2. It may **not** search for a helper by image name, by window, or by scanning the task list - that is the
+   "ad hoc watchdog" §4 refuses, and it is how a supervisor ends up acting on a stranger's process.
+3. It may **not restart anything** (§5 is unchanged), and it may not re-enforce a state by killing (§4).
+4. Any **deadline** it keeps is a reporting deadline only, it is subject to §7's latch, and its duration must
+   be measured from an event that makes the complaint true - not from the supervisor's own first look.
+
+**Why.** A handle wait is cheap, exact and already inside a loop the agent runs anyway; forbidding it would
+buy nothing and the alternative (a name scan) is the thing actually worth banning. Writing the distinction
+down is the point: the previous text was read as forbidding the component, so nobody checked the component
+against it.
+
+**STILL OPEN, and it is a decision, not a patch.** `grep -oE 'QERR_SEV_[A-Z]+' agent/gui-agent/notifytexts.h`
+is 10 `ACTION`, 1 `DEGRADED`, 0 informational - nearly every row we send dom0 is phrased as something for the
+user to do, and most name our own components. The owner, 2026-10-24: *"why does user care about all this
+fucking inner mechanics at all"*. The triage - which rows carry a real user action and stay notifications,
+and which are operator facts that belong in the log plus a dom0-queryable health state - is owed, and
+`docs/ADR-toasts.md` §6 is where the error route's side of it is recorded. Tracked as
+`DOM0ROWSAREALLACTIONSEVERITY`/`ROWASSERTSACONSEQUENCEITNEVERMEASURED` in `findings/issues.md`.
