@@ -397,3 +397,55 @@ Jev on the final state: `receipt_proves_execution` 0.96, `serves_the_intended_po
 - RETIRED 2026-10-24 from the live register, on the instruction in its own head ("verify, then move to issues-closed.md"). VERIFICATION IS PARTIAL AND THAT IS WHY IT IS SAID HERE: the broker binary is not in this repo - only `agent/gui-agent/wgcbroker_ipc.h` is - so the routing condition itself could not be re-read. What was confirmed is that the mechanism's stage survives in the shipped IPC contract (`source-printwindow`, agent/gui-agent/main.c:3851). The pixel outcome it records was measured 2026-09-25 on build 4.3.33+agent.518e75b4033e; Jev not-open 0.49. If Settings regresses in dom0, this entry is where the fix is described.
 - P3 [reprioritized 2026-10-02: was P1; Jev not-open 0.49 - likely resolved by a newer entry or the current build; verify, then move to issues-closed.md] [superseded detail] **FIXED (PIXELS) 2026-09-25 - SETTINGS RENDERS IN DOM0 FOR THE FIRST TIME, with one half of the fix still unearned.** Build `4.3.33+agent.518e75b4033e` on win11-up (sealed-golden clone, installer 9/9). dom0's per-window capture now shows the complete Settings System page - left nav, right panel, and a live search dropdown open, which proves it is UPDATING and not one frozen frame. The change: the broker routes a window to PrintWindow when it has a **cross-process child covering the client area* [verified 2026-09-25] […]
 - DESLICEFLAGSTALEACROSSBOOTS [startup, agent/gui-agent/main.c; **FIXED 2026-10-24, agent f2dd0f6**] [verified 2026-10-24] **THE PERSISTED DE-SLICE HEALTH FLAG WAS OWNED BY NOBODY ON A CLEAN BOOT, SO A ONCE-BROKEN GUEST READ AS BROKEN FOR EVER.** `DesliceBrokerDown` lives in HKLM, is written 1 on the de-slice hard-fail path (2 when wgcbroker.exe is missing), and is what the health check and every acceptance campaign read. Init's own comment states the contract - "so acceptance never reads a stale value from a prior config; when it IS expected, BrokerSupervise owns the flag (0 on ready, 1/2 on the hard-fail path)" - and Init delivers its half, zeroing the flag when the broker is NOT expected (win10, or WgcBroker=0). BrokerSupervise did NOT deliver "0 on ready": both of its clears were gated on THIS boot's clock (`if (g_BrokerDownSince)` in the alive branch, `if (g_BrokerDownSince || g_BrokerNextWarn)` on the stand-down), so on an ELIGIBLE guest - win11 with the broker gate on, i.e. the main target - whose broker came up cleanly and never armed the clock, NOTHING wrote the flag and it kept whatever a previous boot left. The one case the comment promised to protect against was the only case it did not cover. FIXED where the contract says it belongs: the first-ready transition writes 0 unconditionally, once per broker start, inside `if (!g_BrokerReady)`. lifecycle-selftest 71/0 with a shape check that locates that block, requires the write inside it, and requires it NOT to be wrapped in a clock test. **FOUND BY PREDICTION**: owner 2026-10-24, "i expect at least one logical defect in startup and shutdown process too" - found by mapping BrokerSupervise's control flow rather than by agreeing there probably was one. The same dump retired a weaker suspicion: the stand-down latch's clear at the launch site is reachable only when the agent ADOPTED a broker rather than launching it (`!g_WgcLaunched` gates that block to once per agent life) - narrow but real, not dead code.
+
+
+## RETIRED 2026-10-24 - the predecessor-attribution entries, whose campaign halves are measured and closed
+Moved out of the live register under the 100K head ratchet. The residuals stay OPEN there: the
+below-INFO log level case, and re-sealing the upgrade entry fixture.
+
+- PERDAYLOGDECLARESNOVERSION [gate attribution; **NARROWED 2026-10-24 - the preflight blocker is CLEARED, and both halves of the original measurement were read through a blind extractor**] [verified 2026-10-24] **WHAT IT SAID: THE CANONICAL PER-DAY LOG CARRIES NO INIT RECORD, SO A MODULE NEVER HAS TWO VERSIONS TO ORDER.** Measured on campaign 3 win10-upgrade: `qrexec-agent-20261022.log` declares `version=None` while its per-PROCESS sibling declares 4.3.35.795 and carries the cell's one agent E-line - a line core-agent a4a6001 already demoted to INFO, so the gate charged the candidate for an error only its PREDECESSOR emits.
+  **THE SECOND CONSUMER IS FIXED, AND MY READING OF ITS EVIDENCE WAS WRONG (2026-10-24, 98a981e8 +
+8d91fe2e).** I recorded that run 40037710497's 847 inputs contained no `4.3.37.x` declaration
+anywhere and concluded the corpus was unattributable in principle - "nothing in the 26 may be
+ledgered or fixed on its evidence". The corpus was fine. `tools/sweep-gate.sh` extracted a log's
+build with its own grep for `module name:` + `Module version:`, the two lines
+patches/windows-utils-loginit-banner-debug DEMOTES TO LogDebug; a shipped build writes
+`LogInit: QWTBIRTH module=<m> ver=<a.b.c.d>` at Info instead. So it was blind to every log the
+CANDIDATE wrote and read only the entry fixture's, whose image predates the demotion - which is
+exactly "every module that declares a version declares the predecessor's". Same reason the
+capture-wide superseded set measured `26 -> 26`: the candidate never entered the index. MEASURED
+with the old extractor run verbatim on scratchpad/dedup-test/logs/files (71 files, both builds): 27
+blind, index = 7 modules x ONE version, gate `unaccounted=11` FAIL and zero exclusions; after, 41
+files excluded (all declaring 4.3.35.795, none the candidate's) and `unaccounted=0`. Backtest over
+127 captures / 982 files: 201 -> 283 files excluded, 82 files of predecessor noise, ZERO regressions.
+The gate now takes `--build` (matrix.sh passes `$PV`) and REFUSES a corpus the named build is absent
+from (INVALID-NOBUILD). THE PER-DAY HALF OF THIS ENTRY IS SEPARATELY WRONG TOO: that log DOES carry
+an init - `gui-agent-20261023.log` declares `QWTBIRTH ... ver=4.3.37.1066` - so "carries no init
+record" was measured through the same blind extractor. What remains open here is only the case where
+a per-day log genuinely has no birth line, which happens when the guest log level is below INFO
+(upstream/ro/qubes-windows-utils/src/log.c:571 returns before the banner); `candidate_build_absent`
+(P1, max 0) is the only thing that reports it.
+- UPGRADESOURCECARRIESSINCEFIXEDDEFECTS [**P1 rig custody + gate**; **OPEN** - ONE THIRD of the attribution surface is fixed, and the cause is not] [verified 2026-10-24] **THE SEALED UPGRADE ENTRY FIXTURE IS 4.3.35.795 AND STILL WRITES DEFECTS THE CANDIDATE FIXED**, two of them advertised as fixed (RELEASE-NOTES-4.3.37 on the keyed-mutex line; core-agent 0d1b565 on the output pump, "ZERO times in any report"). Gone from the CANDIDATE, still in the SOURCE every upgrade starts from. Full measured line list: commit 7b509e0f.
+  **THE ATTRIBUTION SURFACE IS NOW ONE FUNCTION (2026-10-24, 98a981e8 + 8d91fe2e); THE FIXTURE IS
+STILL 4.3.35.795.** The owner's count stands as the reason this was done properly: "you claimed to
+fix predecessor lines from being erroneously ingested AT LEAST FOUR TIMES ... AND YOU DO IT OVER AND
+OVER", then "cut if off on ingestion, otherwise it is going to take forever and be unreliable".
+`version_is_prior()` is the only implementation; the line, instance and file granularities route to
+it, and the predecessor's lines are now PARTITIONED OUT OF THE GRADED VIEW AT INGESTION
+(`cut_predecessor`, after the structure so the boot census and inits keep both builds, before the
+metrics so every line-level metric and every signature class is scoped once). The fan-out that found
+the sites is a committed suite: tools/tests/attributor-unique-selftest.sh, 27 legs, asserting by AST
+that the rule exists once, catching an injected copy in BOTH spellings, and proving routing by
+mutation rather than by reading call sites. It found five more blind or duplicated sites the register
+had not: `declared_unreadable`'s 0.0.0.0 flag written only on the legacy path (so inert on every
+shipped build), the instance generation counter splitting on `Log started` alone (one per-day log
+spanning an upgrade collapsed into ONE instance stamped with the PREDECESSOR's version, taking the
+candidate's own ERROR out of every gated per-instance metric), `--build` compared as an exact string
+against a package_version it can never equal (so a downgrade graded the replaced build and excluded
+the candidate), `line_version` taking the FIRST init with a line's pid (same shape, same hiding
+direction, the correction sitting in the next function down), and four hand-written copies of the
+turnover test. WHAT IS STILL OPEN IS THE FIXTURE ITSELF: re-seal the upgrade entry image from the
+PREVIOUS RELEASE instead of 4.3.35.795. The gate now attributes the noise correctly instead of being
+fooled by it, but the noise is still written, and an entry image that predates the banner demotion
+is also the only reason the blindness looked like a property of the corpus.
+  **ALSO STILL OPEN**: (1) RE-SEAL the entry fixture from the PREVIOUS RELEASE instead of 4.3.35.795 - the gate now attributes some of the noise correctly instead of being fooled by it, but the noise is still written; (2) treat an empty `prior_build_mix` in an upgrade cell as incomplete evidence.
