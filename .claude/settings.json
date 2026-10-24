@@ -103,6 +103,15 @@
             "command": "bash \"$CLAUDE_PROJECT_DIR/tools/hooks/kill-by-pattern-gate.sh\""
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/tools/hooks/wrong-interpreter-gate.sh\""
+          }
+        ]
       }
     ],
     "Stop": [
