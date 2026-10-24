@@ -28,7 +28,8 @@
 #                 cannot run while the system goes down - ERROR_SHUTDOWN_IN_PROGRESS)
 #   L8 catchup-e2e a death injected DURING a shutdown is reported at the next boot EXACTLY once - never zero
 #                 (concealment), never twice (a double). The measurement L5 does not make
-#   L10 qdbtimeout a forced WaitForQdb timeout (QubesDB stopped with its SCM recovery disarmed) is
+#   L10 qdbtimeout a forced WaitForQdb timeout (the qubesdb daemon's PROCESS suspended, so the SCM
+#                 dependency stays satisfied and QrexecAgent is allowed to start) is
 #                 recorded by the SCM as System 7023 naming ERROR_TIMEOUT 1460, with 7031 and the
 #                 restart, and the guest comes back. ADR-supervision item 3, which had RUNNER: none.
 #                 Its CONTROL arm runs FIRST and must see NO 7023. It runs LAST of all cells and
@@ -1117,7 +1118,7 @@ if has L10; then
       CONTROL) _flag="-Control"; _tr='C:\Windows\Temp\L10c.txt'; _lbl=L10C ;;
       *)       _flag="";         _tr='C:\Windows\Temp\L10i.txt'; _lbl=L10  ;;
     esac
-    log "$_lbl: $_arm - $([ "$_arm" = CONTROL ] && echo 'the same sequence WITHOUT stopping QubesDB' || echo 'stop QubesDB and let WaitForQdb burn its 6 minutes')"
+    log "$_lbl: $_arm - $([ "$_arm" = CONTROL ] && echo 'the same sequence WITHOUT suspending the qubesdb daemon' || echo 'suspend the qubesdb daemon process and let WaitForQdb burn its 6 minutes')"
     # DETACHED, via -EncodedCommand. The injected arm takes the channel down, so a command that
     # waits for the script would die with it - the same shape wu-e2e had to adopt for the
     # oscillation scan ("the channel was killing it", 5926ffdf). -EncodedCommand rather than quoting
@@ -1146,7 +1147,7 @@ if has L10; then
     g10(){ grep -a "^L10|$1|" "$OUT/$_lbl-read.out" 2>/dev/null | tail -1 | cut -d"|" -f3- | tr -d "\r"; }
     _b7023=$(g10 scm_7023_base); _w7023=$(g10 scm_7023_window); _w7031=$(g10 scm_7031_window)
     _has1460=$(g10 scm_7023_names_1460); _term=$(g10 terminal); _qend=$(g10 qubesdb_state_end)
-    _qare=$(g10 qrexecagent_state_restored); _cfg=$(g10 qubesdb_failure_cfg_restored)
+    _qare=$(g10 qrexecagent_state_restored); _cfg=$(g10 qubesdb_state_after_resume)
     _delta=$(( ${_w7023:-0} - ${_b7023:-0} ))
     if [ "$_arm" = CONTROL ]; then
       if [ -n "$_term" ]; then
@@ -1176,10 +1177,10 @@ if has L10; then
               "7023 delta=$_delta but no 1460 in its text - WaitForQdb returns 1460 and svc-exitcode-test asserts SvcMainLoop carries it to the SCM; some other cause ended the service"
     elif [ "$_qare" != "RUNNING" ] || [ "$_qend" != "RUNNING" ]; then
       verdict L10 FAIL "the cell did not leave the guest healthy" \
-              "QrexecAgent=$_qare QubesDB=$_qend recovery=$_cfg - a cell that leaves the subject degraded is a defect of the cell"
+              "QrexecAgent=$_qare QubesDB=$_qend after-resume=$_cfg - a cell that leaves the subject degraded is a defect of the cell"
     else
       verdict L10 PASS "a forced WaitForQdb timeout is recorded by the SCM with 1460 and the guest comes back" \
-              "7023 ${_b7023:-0} -> ${_w7023:-0} naming 1460, 7031=${_w7031:-0}; QrexecAgent=$_qare QubesDB=$_qend recovery restored=$_cfg"
+              "7023 ${_b7023:-0} -> ${_w7023:-0} naming 1460, 7031=${_w7031:-0}; QrexecAgent=$_qare QubesDB=$_qend after-resume=$_cfg. The stimulus is a SUSPEND of the daemon process, which drives the same code path as a daemon that cannot answer qdb_open but is NOT the production mid-sync state (Jev matches_production 0.13)"
     fi
   done
   # NOTHING INHERITS THIS SUBJECT. It asks and polls - never qvm-shutdown --wait, which kills at its

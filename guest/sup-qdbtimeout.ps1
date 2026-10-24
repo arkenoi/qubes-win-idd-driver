@@ -6,7 +6,30 @@
 # Run as SYSTEM, DETACHED, because the stimulus takes this guest's own control channel down:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File <this> -Out <transcript> [-Control]
 #
-# HYPOTHESIS: with QubesDB stopped and its SCM recovery disarmed, QrexecAgent's WaitForQdb burns its
+# THE STIMULUS IS A SUSPEND, NOT A STOP, AND A MEASUREMENT FORCED THAT. The first cut stopped the
+# QdbDaemon service. It cannot work: packaging/setup/Install-QwtImproved.ps1:815-819 quotes
+# `sc qc QrexecAgent` showing `DEPENDENCIES : QdbDaemon`, so (a) `sc stop QdbDaemon` is REFUSED
+# while QrexecAgent runs - measured on win11r-sup 1024-1731, `qubesdb_state_stopped|RUNNING` with
+# the disarm provably applied (`reset=0 actions=none`) - and (b) even with QrexecAgent stopped
+# first, the SCM refuses to START it while its dependency is stopped, so WaitForQdb would never
+# execute and no 1460 could ever be produced. Jev on the replacement:
+# suspend-the-daemon-process 1.00, against stop-with-dependents-first 0.00 and block-the-pipe 0.00.
+#
+# SUSPENDING THE DAEMON'S PROCESS leaves the service RUNNING from the SCM's view, so the dependency
+# is satisfied and QrexecAgent is allowed to start, while no qdb_open can be answered. The primitive
+# is the one L3 already uses on the broker: NtSuspendProcess/NtResumeProcess on a HANDLE from the
+# pid, never a name. No SCM configuration is touched at all now - no recovery disarm, nothing to
+# restore - which removes the configuration-drift hazard the first cut carried.
+#
+# AND IT IS NOT THE PRODUCTION CONDITION, which this cell says out loud rather than implying. Jev:
+# matches_production 0.13. In the field the daemon is RUNNING and mid-sync - it may answer the pipe
+# and fail later (guest/qubes-windows-update.ps1:2430 calls it "a service-startup ORDERING race");
+# suspended, it does not answer the connect at all. Both leave qdb_open failing for the whole
+# window, which is exactly what WaitForQdb measures and what the SCM then records, so this drives
+# the same CODE PATH - but it is a different internal state and no claim is made that it is the same
+# failure.
+#
+# HYPOTHESIS: with the QdbDaemon process SUSPENDED, QrexecAgent's WaitForQdb burns its
 #   full QDB_WAIT_TIMEOUT_MS (core-agent/src/qrexec-agent/qrexec-agent.c:104 - (5*60+60)*1000, SIX
 #   MINUTES), returns ERROR_TIMEOUT, and SvcMainLoop reports STOPPED carrying 1460; the SCM writes
 #   System 7023 naming that error and takes the restart action the installer armed
@@ -18,19 +41,23 @@
 #   counts: the reporter's log and the System log both accumulate across runs, and a cumulative
 #   count cannot answer "what did THIS injection produce" (measured on this project 2026-10-24,
 #   where one correct report read as 2 because an earlier run's row sat in the same file).
-# VARIABLE: QubesDB stopped. Exactly one thing, and -Control runs the whole sequence WITHOUT it.
+# VARIABLE: the QdbDaemon process suspended. Exactly one thing, and -Control runs the whole
+#   sequence WITHOUT it.
 # INSTRUMENT: this transcript, appended line by line and flushed, so a run that loses the channel
 #   still leaves its evidence on disk. Validated both ways: the -Control arm exercises every line of
 #   it on a healthy guest (data on a known-good subject), and its 7023 delta MUST be 0 - so a
 #   nonzero delta in the control is this instrument failing, not the product.
 # BUDGET: ~8 min for the injected arm (6 of them the product's own wait by design). Deadline 11 min.
-#   Terminal states, each reported by name rather than waited out: QubesDB back up (the disarm did
-#   not hold, so the timeout can never happen), QrexecAgent absent, the transcript's own deadline.
+#   Terminal states, each reported by name rather than waited out: the daemon not suspendable or no
+#   longer suspended, QrexecAgent absent, the transcript's own deadline.
+# IF THIS SCRIPT IS HARD-KILLED MID-WINDOW the daemon stays suspended and the guest's control
+#   channel stays down until a reboot recreates the process - which the cell does immediately after
+#   itself. The resume is in a finally for every other path.
 #
-# EVERYTHING IS RESTORED IN A finally, because a run that dies mid-window would otherwise leave this
-# subject with QubesDB's recovery disarmed and nothing saying so - a silent configuration drift onto
-# whatever cell runs next. Both services are AUTO-START, so a reboot is the backstop if even that
-# fails.
+# THE RESUME IS IN A finally, because a run that dies mid-window would otherwise leave this guest
+# with its qubesdb suspended and therefore without a control channel. Nothing else needs restoring:
+# this stimulus touches no SCM configuration at all. The process is recreated by a reboot, which the
+# cell performs immediately after itself, so that is the backstop.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$Out,
@@ -112,6 +139,21 @@ function Resolve-SvcName($display, $fallback) {
 $QDB = Resolve-SvcName 'QubesDB daemon' 'QubesDB'
 $QRX = 'QrexecAgent'
 
+# THE SAME PRIMITIVE L3 USES ON THE BROKER: the debug API on a HANDLE from the pid, never a name.
+Add-Type -Namespace W -Name T -MemberDefinition '
+[DllImport("ntdll.dll")] public static extern int NtSuspendProcess(IntPtr h);
+[DllImport("ntdll.dll")] public static extern int NtResumeProcess(IntPtr h);' -EA SilentlyContinue
+
+function Svc-Pid($name) {
+    # The SERVICE's own process id, from the SCM rather than from a name match: two processes can
+    # share an image and only one of them is the service.
+    try {
+        $c = Get-CimInstance Win32_Service -Filter ("Name='" + $name + "'") -EA SilentlyContinue
+        if ($c -and $c.ProcessId -gt 0) { return [int]$c.ProcessId }
+    } catch { }
+    return 0
+}
+
 $qdbBefore = $null
 $restoreNeeded = $false
 try {
@@ -121,63 +163,63 @@ try {
 
     # ---- baseline, on the same signals the verdict uses -----------------------------------------
     $t0 = (Get-Date).AddSeconds(-5)
-    T 'qrexecagent_state_before' (Svc-State 'QrexecAgent')
+    T 'qrexecagent_state_before' (Svc-State $QRX)
     T 'qubesdb_state_before'     (Svc-State $QDB)
-    T 'qrexecagent_failure_cfg'  (Failure-Config 'QrexecAgent')
+    T 'qrexecagent_failure_cfg'  (Failure-Config $QRX)
     $qdbBefore = Failure-Config $QDB
     T 'qubesdb_failure_cfg_before' $qdbBefore
     $base = Scm-Events $t0
     T 'scm_7023_base' $base['7023']
     T 'scm_7031_base' $base['7031']
 
-    if ((Svc-State 'QrexecAgent') -eq 'ABSENT' -or (Svc-State $QDB) -eq 'ABSENT') {
+    if ((Svc-State $QRX) -eq 'ABSENT' -or (Svc-State $QDB) -eq 'ABSENT') {
         T 'terminal' 'a service this cell drives is ABSENT - nothing to measure'
         T 'verdict' 'TERMINAL'
         return
     }
 
     # ---- the single variable ---------------------------------------------------------------------
+    $qdbProc = $null
     if (-not $Control) {
-        # DISARM FIRST OR THE STIMULUS CANNOT HOLD: QubesDB carries the same restart/5000 actions, so
-        # the SCM would put it back five seconds in and WaitForQdb would succeed. '""' is a LITERAL
-        # two-quote token - Windows PowerShell 5.1 drops a bare "" when calling a native exe and
-        # sc.exe then answers 1639 - which is why the installer's own disarm never worked until
-        # 2026-10-07.
-        & sc.exe failure $QDB reset= 0 actions= '""' 2>&1 | Out-Null
-        & sc.exe failureflag $QDB 0 2>&1 | Out-Null
-        $restoreNeeded = $true
-        # THE VERDICT IS THE READBACK, not the exit code: a command that wrote nothing exits 0 too.
-        T 'qubesdb_failure_cfg_disarmed' (Failure-Config $QDB)
-
-        & sc.exe stop $QDB 2>&1 | Out-Null
-        $deadline = (Get-Date).AddSeconds(60)
-        while ((Get-Date) -lt $deadline -and (Svc-State $QDB) -ne 'STOPPED') { Start-Sleep -Seconds 2 }
-        T 'qubesdb_state_stopped' (Svc-State $QDB)
-        if ((Svc-State $QDB) -ne 'STOPPED') {
-            T 'terminal' 'QubesDB did not stop, so the timeout cannot be produced'
+        $qpid = Svc-Pid $QDB
+        T 'qubesdb_pid' $qpid
+        if (-not $qpid) {
+            T 'terminal' "the SCM reports no process id for $QDB, so it cannot be suspended"
             T 'verdict' 'TERMINAL'
             return
         }
-        # AND IT MUST STAY STOPPED. The disarm is the precondition of the whole cell, asserted on the
-        # same signal the product consults (whether qdb_open can connect), not on sc.exe's exit code.
-        Start-Sleep -Seconds 20
-        T 'qubesdb_state_after_20s' (Svc-State $QDB)
-        if ((Svc-State $QDB) -ne 'STOPPED') {
-            T 'terminal' 'the SCM restarted QubesDB despite the disarm - the precondition does not hold'
+        $qdbProc = Get-Process -Id $qpid -EA SilentlyContinue
+        if (-not $qdbProc) {
+            T 'terminal' "pid $qpid is not running, so there is nothing to suspend"
+            T 'verdict' 'TERMINAL'
+            return
+        }
+        T 'qubesdb_process' $qdbProc.ProcessName
+        [void][W.T]::NtSuspendProcess($qdbProc.Handle)
+        $restoreNeeded = $true
+        T 'qubesdb_suspended' (Get-Date -Format 'HH:mm:ss.fff')
+        # THE SERVICE MUST STILL READ RUNNING, because that is the whole point: the SCM dependency
+        # has to stay satisfied or QrexecAgent will not be allowed to start at all.
+        T 'qubesdb_state_while_suspended' (Svc-State $QDB)
+        if ((Svc-State $QDB) -ne 'RUNNING') {
+            T 'terminal' "the service left RUNNING while suspended, so the dependency is no longer satisfied"
             T 'verdict' 'TERMINAL'
             return
         }
     }
 
     # ---- restart QrexecAgent into the wait -------------------------------------------------------
-    & sc.exe stop QrexecAgent 2>&1 | Out-Null
+    # KEEP sc.exe's OWN WORDS. A refusal here is the whole story - 1068 ERROR_SERVICE_DEPENDENCY_FAIL
+    # is exactly what a stopped dependency produces, and the first cut of this cell discarded the
+    # output and could only report "did not stop" without saying why.
+    T 'qrexecagent_stop_said' ((& sc.exe stop $QRX 2>&1 | Out-String) -replace '\s+', ' ').Trim()
     $deadline = (Get-Date).AddSeconds(90)
-    while ((Get-Date) -lt $deadline -and (Svc-State 'QrexecAgent') -ne 'STOPPED') { Start-Sleep -Seconds 2 }
-    T 'qrexecagent_state_stopped' (Svc-State 'QrexecAgent')
+    while ((Get-Date) -lt $deadline -and (Svc-State $QRX) -ne 'STOPPED') { Start-Sleep -Seconds 2 }
+    T 'qrexecagent_state_stopped' (Svc-State $QRX)
     $tStart = (Get-Date).AddSeconds(-5)
-    & sc.exe start QrexecAgent 2>&1 | Out-Null
+    T 'qrexecagent_start_said' ((& sc.exe start $QRX 2>&1 | Out-String) -replace '\s+', ' ').Trim()
     T 'qrexecagent_start_issued' (Get-Date).ToUniversalTime().ToString('s')
-    T 'qrexecagent_state_after_start' (Svc-State 'QrexecAgent')
+    T 'qrexecagent_state_after_start' (Svc-State $QRX)
 
     # ---- THE WAIT, WITH ITS THREE EXITS ----------------------------------------------------------
     # the thing happened (a 7023 naming qrexec appears), a TERMINAL state (QubesDB came back, so the
@@ -191,10 +233,10 @@ try {
         $now = Get-Date
         $cur = Scm-Events $tStart
         if ($cur['7023'] -gt 0) { $why = 'the SCM reported 7023'; $seen = $cur; break }
-        if (-not $Control -and (Svc-State $QDB) -ne 'STOPPED') {
-            $why = 'TERMINAL: QubesDB came back up, so WaitForQdb can no longer time out'; $seen = $cur; break
+        if (-not $Control -and $qdbProc -and $qdbProc.HasExited) {
+            $why = 'TERMINAL: the qubesdb process exited, so the suspend no longer holds'; $seen = $cur; break
         }
-        if ($Control -and (Svc-State 'QrexecAgent') -eq 'RUNNING' -and $now -gt $script:started.AddSeconds(90)) {
+        if ($Control -and (Svc-State $QRX) -eq 'RUNNING' -and $now -gt $script:started.AddSeconds(90)) {
             $why = 'control: QrexecAgent is RUNNING and no 7023 appeared'; $seen = $cur; break
         }
         if ($now -gt $wDeadline) { $why = "the deadline ($DeadlineSec s) expired"; $seen = $cur; break }
@@ -220,29 +262,21 @@ try {
 }
 finally {
     # ---- restore, always -------------------------------------------------------------------------
-    if ($restoreNeeded) {
-        & sc.exe start $QDB 2>&1 | Out-Null
-        $deadline = (Get-Date).AddSeconds(120)
-        while ((Get-Date) -lt $deadline -and (Svc-State $QDB) -ne 'RUNNING') { Start-Sleep -Seconds 3 }
-        T 'qubesdb_state_restored' (Svc-State $QDB)
-        # RE-ARM TO EXACTLY WHAT WAS READ FIRST. The installer's arming string is the fallback, not
-        # the default: restoring "no actions" because a second read saw the disarmed state is the
-        # mistake its GUARD:recovsuspend comment records.
-        $m = [regex]::Match([string]$qdbBefore, 'reset=(\d+) actions=(\S+)')
-        if ($m.Success -and $m.Groups[2].Value -ne 'none') {
-            & sc.exe failure $QDB reset= $m.Groups[1].Value actions= $m.Groups[2].Value 2>&1 | Out-Null
-        } else {
-            & sc.exe failure $QDB reset= 86400 actions= restart/5000/restart/15000/restart/60000 2>&1 | Out-Null
-        }
-        & sc.exe failureflag $QDB 1 2>&1 | Out-Null
-        T 'qubesdb_failure_cfg_restored' (Failure-Config $QDB)
+    if ($restoreNeeded -and $qdbProc) {
+        [void][W.T]::NtResumeProcess($qdbProc.Handle)
+        T 'qubesdb_resumed' (Get-Date -Format 'HH:mm:ss.fff')
+        # ASSERTED, NOT ASSUMED: a resume that did not take leaves this guest without a control
+        # channel, so the daemon is read back and a client connect is attempted through it.
+        Start-Sleep -Seconds 3
+        T 'qubesdb_state_after_resume' (Svc-State $QDB)
+        T 'qubesdb_process_alive' ($null -ne (Get-Process -Id $qdbProc.Id -EA SilentlyContinue))
     }
     # QrexecAgent back, whichever arm ran: the SCM may already have restarted it, and starting a
     # running service is harmless.
-    & sc.exe start QrexecAgent 2>&1 | Out-Null
+    T 'qrexecagent_restore_said' ((& sc.exe start $QRX 2>&1 | Out-String) -replace '\s+', ' ').Trim()
     $deadline = (Get-Date).AddSeconds(180)
-    while ((Get-Date) -lt $deadline -and (Svc-State 'QrexecAgent') -ne 'RUNNING') { Start-Sleep -Seconds 3 }
-    T 'qrexecagent_state_restored' (Svc-State 'QrexecAgent')
+    while ((Get-Date) -lt $deadline -and (Svc-State $QRX) -ne 'RUNNING') { Start-Sleep -Seconds 3 }
+    T 'qrexecagent_state_restored' (Svc-State $QRX)
     T 'qubesdb_state_end' (Svc-State $QDB)
     # THE LAST LINE IS THE MARKER THE HARNESS WAITS FOR. Without it a transcript that stops early is
     # indistinguishable from one still being written, and the harness would grade a partial run.
