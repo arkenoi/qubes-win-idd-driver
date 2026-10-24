@@ -406,7 +406,7 @@ def dom0_loud(files, prior=None):
     """
     loud = []
     for lf in files:
-        for l in getattr(lf, "lines", []) or []:
+        for l in (lf.all_lines() if hasattr(lf, "all_lines") else getattr(lf, "lines", []) or []):   # FULL VIEW: the prior-build skip below IS this metric's receipt, and GUARD:loudpriorbuild drives it
             msg = getattr(l, "msg", "") or ""
             if "gate: enabled=" in msg or "source=default" in msg:
                 continue        # configures the route; sends nothing
@@ -443,7 +443,7 @@ def dom0_lost(files, prior=None):
     """
     lost = []
     for lf in files:
-        for l in getattr(lf, "lines", []):
+        for l in (lf.all_lines() if hasattr(lf, "all_lines") else getattr(lf, "lines", [])):   # FULL VIEW: see dom0_loud
             msg = getattr(l, "msg", "") or ""
             if not DOM0_SEND_RE.search(msg):
                 continue
@@ -465,7 +465,7 @@ def dom0_sends(files):
     """
     allsends, loud = [], []   # `loud` stays empty: the split is Jev's, not a pattern's
     for lf in files:
-        for l in getattr(lf, "lines", []) or []:
+        for l in (lf.all_lines() if hasattr(lf, "all_lines") else getattr(lf, "lines", []) or []):   # FULL VIEW: see dom0_loud
             msg = getattr(l, "msg", "") or ""
             if "gate: enabled=" in msg or "source=default" in msg:
                 continue
@@ -739,8 +739,17 @@ def module_builds(files, build=None):
     out = {}
     for mod, vers in seen.items():
         ranked = sorted(vers, key=lambda v: (_version_tuple(v) is not None, _version_tuple(v) or (), v))
-        named = [v for v in ranked if bs and _build_series(v) == bs] if bs else []
-        newest = named[-1] if named else ranked[-1]
+        # EXACT FIRST, THEN THE SERIES. The exact form is what a caller uses to name one build
+        # inside a series - log-sweep-selftest T45 drives the DOWNGRADE with --build 9.9.9.0 over a
+        # capture declaring 9.9.9.0 and 9.9.9.1, and "the highest revision in the named series"
+        # would hand that case back to "highest version seen", which is the failure --build exists
+        # for. The series fallback is for the campaign's package_version, which never equals a
+        # declared module version.
+        if build and build in vers:
+            newest = build
+        else:
+            named = [v for v in ranked if bs and _build_series(v) == bs] if bs else []
+            newest = named[-1] if named else ranked[-1]
         out[mod] = {"versions": sorted(vers), "newest": newest}
     return out
 
@@ -783,7 +792,7 @@ def install_anchor(files, builds):
     None when no module shows two versions - a clean or reinstall cell is therefore untouched, which
     is the property that keeps this from being a blanket time filter.
     """
-    turned = {m for m, info in (builds or {}).items() if len(info.get("versions") or []) > 1}
+    turned = {m for m, info in (builds or {}).items() if module_turned_over(info)}
     if not turned:
         return None
     best = None
@@ -879,7 +888,7 @@ def _candidate_series(builds, build):
     if s:
         return s
     cands = {_build_series(i.get("newest")) for i in (builds or {}).values()
-             if len(i.get("versions") or []) > 1 and _build_series(i.get("newest"))}
+             if module_turned_over(i) and _build_series(i.get("newest"))}
     return max(cands) if cands else None
 
 
@@ -913,7 +922,7 @@ def superseded_series(builds, build=None):
     out = set()
     for info in (builds or {}).values():
         vers = info.get("versions") or []
-        if len(vers) < 2:
+        if not module_turned_over(info):
             continue
         for v in vers:
             s = _build_series(v)
@@ -928,15 +937,38 @@ def line_version(lf, l):
     By PID first - since 2026-10-07 one file holds several processes and every line carries its pid -
     and only then by the init in force at the line's timestamp (inits are appended in file order,
     which is chronological).
+
+    A PID IS NOT UNIQUE WITHIN A FILE, AND MATCHING THE FIRST OCCURRENCE IS THE HIDING DIRECTION.
+    line_boot() one function below carries this same correction with its own measurement
+    ("qubesdb-daemon logs pid 7604 TWICE... Windows hands the same pid out again") and this function
+    was left on the first match. MEASURED 2026-10-24 on the shape that matters most - ONE per-day
+    gui-agent log spanning an upgrade, pid 800 reused by the new build (the ordinary shape under
+    one-log-per-module): all four lines resolved to the PREDECESSOR's init, so the candidate's own
+    ERROR line carried version 4.3.35.795, was called the predecessor's, and the ingestion cut moved
+    the WHOLE FILE aside - graded view empty, every consumer seeing a capture the candidate kept
+    clean. The cut's own anti-hiding guard could not see it either: the guard compares the version a
+    line was STAMPED with, and the stamp was the thing that was wrong.
+    So: the pid narrows the candidates and the line's POSITION picks which occurrence of that pid it
+    is - the last init with this pid at or before the line - with the earliest occurrence as the
+    fallback for a line that precedes every init of its pid (a log whose head was rotated away).
     """
     pid = str((l.extra or {}).get("pid") or "")
     if pid:
+        own = None
         for i in lf.inits:
-            if i.get("pid") is not None and str(i["pid"]) == pid:
-                return i.get("version")
+            if i.get("pid") is not None and str(i["pid"]) == pid \
+                    and i.get("ts") is not None and l.ts is not None and i["ts"] <= l.ts:
+                own = i      # keep walking: the LAST such init with this pid governs
+        if own is None:
+            for i in lf.inits:
+                if i.get("pid") is not None and str(i["pid"]) == pid:
+                    own = i
+                    break
+        if own is not None:
+            return own.get("version")
     gov = None
     for i in lf.inits:
-        if i.get("ts") is not None and i["ts"] <= l.ts:
+        if i.get("ts") is not None and l.ts is not None and i["ts"] <= l.ts:
             gov = i
         else:
             break
@@ -1041,7 +1073,7 @@ def version_is_prior(mod, v, builds, superseded=None):
     if not v:
         return False      # AN UNKNOWN VERSION NEVER SHRINKS A COUNT - the GUARD:winsince rule
     info = builds[mod]
-    if len(info["versions"]) < 2:
+    if not module_turned_over(info):
         # This module shows one version, so it cannot tell a turnover happened. The CAPTURE can:
         # if that series is one ANOTHER module shows as superseded, this record is the predecessor's.
         return bool(superseded and _build_series(v) in superseded)
@@ -1234,7 +1266,12 @@ class Line:
 class LogFile:
     def __init__(self, path, name, family):
         self.path, self.name, self.family = path, name, family
-        self.lines = []          # Line objects (every parsed line, all levels)
+        self.lines = []          # Line objects the BUILD UNDER TEST wrote (the graded view)
+        # THE PREDECESSOR'S LINES, moved here at ingestion by cut_predecessor() so that nothing
+        # which grades can reach them by accident. Only the metrics whose job is to report the
+        # exclusion read this list; see cut_predecessor() for why they are kept rather than dropped.
+        self.prior_lines = []
+
         self.scanned = 0         # raw lines read
         self.ignored = 0         # banner / blank / known non-log lines
         self.unparsed = 0        # lines the family parser did not understand
@@ -1259,6 +1296,17 @@ class LogFile:
         self.uptime_s = None
         self.boot_time = None
         self.boot = None
+
+    def all_lines(self):
+        """BOTH HALVES OF THE PARTITION: the graded view plus the predecessor's lines.
+
+        For the readers whose CONTENT is the exclusion - the prior-build counters, the signature
+        classes, the dom0-notification metrics - because a receipt computed over the graded view
+        alone can only ever say "nothing was excluded", and a guard that drives it then cannot fail.
+        Everything that GRADES reads `lines`, which cut_predecessor() has already scoped. One
+        accessor, so `lines + prior_lines` does not become a new idiom repeated at six sites.
+        """
+        return self.lines + self.prior_lines if self.prior_lines else self.lines
 
 
 def family_of(name, hint=None, first_lines=None):
@@ -2023,6 +2071,92 @@ def load_logs(logsdir, paths=None):
     return meta, files, problems, placeholders
 
 
+def cut_predecessor(files, build=None):
+    """CUT THE PREDECESSOR OFF AT INGESTION: partition every file so the default view - `lf.lines`,
+    which every consumer iterates - holds only the build under test's lines.
+
+    THE OWNER'S CALL, 2026-10-24: "cut if off on ingestion, otherwise it is going to take forever and
+    be unreliable. and you will rediscover it someday and start your regular panic". He said it after
+    watching me fix, one at a time, the sites a fan-out of this rule had just found: ELEVEN places
+    decide "is this record the predecessor's?" or re-derive a piece of it, which is eleven places to
+    forget, and three of the defects found that day were in sites nobody had looked at since they
+    were written. Jev on the fork: partition-at-ingestion 0.99, predicate-per-consumer 0.01.
+
+    PARTITION, NEVER DELETE (delete-at-ingestion scored 0.00). The lines move to `lf.prior_lines`,
+    and the metrics whose whole job is to make the exclusion visible read them from there:
+    error_lines_prior_build, warning_lines_prior_build, agent_ends_unrecorded_prior_build,
+    prior_build_mix, modules_superseded_silent. Deleting them would take the receipt with them, and
+    a count that can only ever be 0 is this project's recorded way of turning "nothing was
+    considered" into something that reads like "nothing happened".
+
+    THE INIT RECORDS AND THE BOOT CENSUS KEEP BOTH BUILDS (Jev 0.81). A predecessor boot is still a
+    boot of the guest, and the TURNOVER is the only thing that establishes attribution at all -
+    superseded_series(), install_anchor() and module_builds() are all computed from the inits. Cut
+    them and the cut would saw off the branch it stands on.
+
+    UNATTRIBUTABLE LINES STAY IN THE DEFAULT VIEW. "Nobody can say who wrote this" is not "the
+    predecessor wrote this": they are gated at max 0 on purpose, so moving them aside would stop the
+    gate failing on them, which is the opposite of the point.
+
+    THE RISK THIS GUARDS, because Jev named it the biggest one at 0.89: a mis-attribution HERE
+    removes the CANDIDATE's own lines and every consumer downstream then sees a clean capture. Two
+    measured instances of exactly that mis-attribution were found on 2026-10-24, in reviewed code
+    (declared_unreadable's flag, and the instance generation counter). So this returns a receipt -
+    what was moved, per module and version - and refuses to move anything at all when the build
+    under test is named and did not declare itself, because on that capture nothing can be
+    attributed in either direction.
+    """
+    scope = build_scope(files, build)
+    moved = Counter()
+    kept_candidate = 0
+    # NOTHING IS MOVED ON A CAPTURE THAT CANNOT NAME THE CANDIDATE. With --build given and no module
+    # declaring it, every versioned line looks "not the newest" and a cut here would quietly empty
+    # the capture. The gate refuses such a corpus (INVALID-NOBUILD); the analyzer reports it as
+    # candidate_build_absent, which is gated at max 0.
+    if scope.candidate_declared_by is not None and not scope.candidate_declared_by:
+        return scope, {"moved": {}, "cut": False,
+                       "why": "the build under test declared itself in no module of this capture"}
+    cand_series = _build_series(build)
+    plan = []
+    for lf in files:
+        if not lf.lines:
+            continue
+        keep, cut = [], []
+        for l in lf.lines:
+            if scope.prior(lf, l):
+                cut.append(l)
+                moved["%s@%s" % (lf.module or "?", line_version(lf, l) or "?")] += 1
+            else:
+                keep.append(l)
+        if cut:
+            plan.append((lf, keep, cut))
+        kept_candidate += len(keep)
+    # THE GUARD FOR THE ONE RISK THAT MATTERS HERE. Jev, asked what a cut at ingestion could get
+    # wrong on this project's own recorded failures: hides-the-candidate 0.89, ahead of
+    # zero-reads-as-clean 0.10 and loses-the-receipt 0.01. A line the CANDIDATE wrote must never be
+    # moved aside - if one is, every consumer downstream sees a capture the candidate kept clean.
+    #
+    # AND IT IS NOT HYPOTHETICAL. Both mis-attributions found on 2026-10-24 had exactly this
+    # direction: module_builds picked the wrong `newest` because --build never matched as an exact
+    # string, so the CANDIDATE's error was the one excluded; and a per-day log spanning an upgrade
+    # collapsed into one instance stamped with the predecessor's version, taking the candidate's
+    # error with it. Both were in reviewed code. So the cut checks its own work against the only
+    # fact it cannot get wrong - the series the caller named - and refuses ENTIRELY rather than
+    # proceed on a bad plan, because a partial cut is the state nobody could reason about.
+    if cand_series:
+        wrong = sorted({k for k in moved if _build_series(k.rsplit("@", 1)[-1]) == cand_series})
+        if wrong:
+            return scope, {"moved": {}, "cut": False, "lines_moved": 0,
+                           "why": "REFUSED: the cut would have moved lines the build under test "
+                                  "wrote (%s) - the attribution is wrong, not the lines"
+                                  % ", ".join(wrong)}
+    for lf, keep, cut in plan:
+        lf.lines = keep
+        lf.prior_lines = (getattr(lf, "prior_lines", None) or []) + cut
+    return scope, {"moved": dict(moved), "cut": True,
+                   "lines_moved": sum(moved.values()), "lines_kept": kept_candidate}
+
+
 # ----------------------------------------------------------------------------------------------- structure
 def normalize_clock_phase(files, anchor, offset):
     """Shift lines stamped in the guest's PRE-CORRECTION phase back into real time.
@@ -2306,6 +2440,7 @@ def cluster_boots(files, phase_off=None):
     #     this function's own clustering rule, so reaching further contradicts it;
     #   * never more than half the gap to the next boot - a line is never pulled past the midpoint
     #     between two boots, whatever the spacing happens to be.
+
     def _fwd_allow(i):
         allow = float(BOOT_TOL_S)
         if i + 1 < len(boots):
@@ -3151,7 +3286,11 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
         and not any(lf.module == mod and sel(l.ts) and line_version(lf, l) == info["newest"]
                     for lf in files for l in lf.lines))
     _count("fallbacks_fired", [l for lf in files for l in lf.lines if FALLBACK_FIRED_RE.search(l.msg) and "fallback refused" not in l.msg and sel(l.ts) and not _prior(lf, l) and not _unattrib(lf, l)])
-    _errs_all = [(lf, l) for lf in files for l in lf.lines if l.level == "E" and sel(l.ts)]
+    # BOTH HALVES OF THE PARTITION, because this list is the DENOMINATOR: `error_lines_prior_build`
+    # below is `all - kept - unattributable`, and cut_predecessor() has already moved the
+    # predecessor's lines out of `lf.lines`. Reading only the graded view would make that count 0 -
+    # the metric whose entire job is to show what the exclusion removed, reporting nothing removed.
+    _errs_all = [(lf, l) for lf in files for l in lf.all_lines() if l.level == "E" and sel(l.ts)]
     # UNATTRIBUTABLE lines leave this list the same way prior-build lines do, and for the same
     # reason: they are not the candidate's. The difference is that they are not anyone's that this
     # capture can name, so they are counted below and BREACH on their own account rather than being
@@ -3227,7 +3366,7 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
                                     "kind": "tolerated" if rx in _tol else "caused",
                                     "matched": sum(1 for l in errs if rx.search(l.raw))}
                                    for rx in _decl]
-    _warns_all = [(lf, l) for lf in files for l in lf.lines if l.level == "W" and sel(l.ts)]
+    _warns_all = [(lf, l) for lf in files for l in lf.all_lines() if l.level == "W" and sel(l.ts)]   # both halves: see _errs_all
     _warns_unattrib = [l for lf, l in _warns_all if not _prior(lf, l) and _unattrib(lf, l)]
     warns = [(lf, l) for lf, l in _warns_all if not _prior(lf, l) and not _unattrib(lf, l)]
     # THE WARNING HALF OF THE SAME EVIDENCE GAP, which until now could not breach at all: this
@@ -3263,7 +3402,11 @@ def collect_signatures(files, since, prior=None):
     """
     sigs = {}
     for lf in files:
-        for l in lf.lines:
+        # THE FULL VIEW, because the prior_build CLASS is this function's receipt: a signature whose
+        # only occurrences are the predecessor's gets routed into that class by compare(), and after
+        # cut_predecessor() the graded view no longer holds those occurrences at all - so reading it
+        # would silently empty the class rather than report what the predecessor contributed.
+        for l in lf.all_lines():
             if since is not None and l.ts is not None and l.ts < since:
                 continue
             is_prior = bool(prior and prior(lf, l))
@@ -3915,8 +4058,25 @@ def cmd_analyze(a):
                        "fixing" % (_shifted, _phase_offset, fmt_ts(_anchor)))
     boots = cluster_boots(files, 0 if _shifted else _phase_offset)
     st = build_structure(files, boots, load_context(a.logsdir))
+    # THE CUT, AND IT GOES HERE: AFTER the structure, BEFORE the metrics.
+    #
+    # After, because the boot census and the instance list describe the GUEST, not the build - a
+    # predecessor boot is still a boot, and the TURNOVER is the only thing that establishes
+    # attribution at all (Jev: keep the inits and the boots, 0.81). Before, because everything that
+    # GRADES reads `lf.lines`: every line-level metric in compute_metrics, every signature
+    # collect_signatures classifies, and from there the baseline that gets written. One cut scopes
+    # all of them, instead of one predicate per consumer at eleven sites and counting - which is
+    # how this rule came to be re-fixed four times. See cut_predecessor().
+    _cut_scope, _cut = cut_predecessor(files, getattr(a, "build", None))
     now = parse_iso((meta.get("begin") or {}).get("now")) if meta and (meta.get("begin") or {}).get("now") else None
     metrics = compute_metrics(files, boots, st, since, now, getattr(a, "build", None))
+    # NAMED, NEVER SILENT: what the cut moved, per module and version, is a reported field. An
+    # exclusion that stops being nameable cannot be seen to be wrong, and a wrong exclusion here is
+    # the failure mode Jev scored highest (hides-the-candidate 0.89).
+    metrics["prior_lines_cut"] = _cut.get("lines_moved", 0)
+    metrics["prior_lines_cut_detail"] = (
+        ["%s x%d" % (k, v) for k, v in sorted(_cut.get("moved", {}).items())]
+        if _cut.get("cut") else ["NOT CUT: %s" % _cut.get("why", "?")])
     # THE CORRECTION THIS ANALYSER APPLIES IS ITSELF A MEASUREMENT, AND IT HAS TO BE GRADED.
     # normalize_clock_phase() exists so the --since window means what it says, and it worked - but
     # it also ABSORBED the defect: on 2026-10-14 every cell's guest ran three hours ahead at boot,

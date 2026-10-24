@@ -65,50 +65,94 @@ ATTR_FILE="tools/log-sweep.py"
 # 4240-line copy of log-sweep.py in it on 2026-10-23 - and a working copy nobody ships is not a
 # second implementation in the product.
 cat > "$T/scan.py" <<'PY'
-import ast, subprocess, sys
+import ast, sys
 
-def rule_shape(fn):
-    """Does this function body carry the prior-build RULE's own shape?"""
-    newest = False      # compares against a ["newest"] subscript
-    vcount = False      # tests len(<something>["versions"]) against a literal
+# TWO SHAPES, COUNTED SEPARATELY, because the rule has two halves and they live in two functions:
+#   turnover  - "does this module's own logs show a build turnover?"  -> module_turned_over()
+#   newest    - "is this version the module's newest?"                -> the decision
+# The first cut of this scanner required BOTH in one function, which made it miss four private
+# copies of the turnover half - install_anchor, _candidate_series, superseded_series and
+# version_is_prior each wrote it out by hand. It also only saw the SUBSCRIPT spelling, so
+# `info.get("versions")` and `i.get("newest")` were invisible: a copy could be added by writing
+# `.get` instead of `[...]`. A guard with a spelling-shaped hole is the defect it exists to stop.
+KEYS = ("versions", "newest")
+
+def _key_of(node):
+    """The dict key this expression reads, for `x["k"]` and `x.get("k")` alike."""
+    if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
+        return node.slice.value if node.slice.value in KEYS else None
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+            and node.func.attr == "get" and node.args \
+            and isinstance(node.args[0], ast.Constant):
+        return node.args[0].value if node.args[0].value in KEYS else None
+    return None
+
+def shapes(fn):
+    turnover = newest = False
     for n in ast.walk(fn):
-        if isinstance(n, ast.Subscript) and isinstance(n.slice, ast.Constant) and n.slice.value == "newest":
+        if _key_of(n) == "newest":
             newest = True
+        # len(<anything mentioning "versions">) compared to a literal
         if isinstance(n, ast.Compare) and isinstance(n.left, ast.Call) \
                 and isinstance(n.left.func, ast.Name) and n.left.func.id == "len":
             for a in n.left.args:
                 for s in ast.walk(a):
-                    if isinstance(s, ast.Subscript) and isinstance(s.slice, ast.Constant) \
-                            and s.slice.value == "versions":
-                        vcount = True
-    return newest and vcount
+                    if _key_of(s) == "versions":
+                        turnover = True
+    return turnover, newest
 
-files = sys.argv[1:]
-hits = []
-for p in files:
+out = []
+for p in sys.argv[1:]:
     try:
         tree = ast.parse(open(p, encoding="utf-8").read())
     except (SyntaxError, OSError):
         continue
     for n in ast.walk(tree):
-        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and rule_shape(n):
-            hits.append("%s:%d:%s" % (p, n.lineno, n.name))
-for h in sorted(hits):
+        if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        t, w = shapes(n)
+        if t:
+            out.append("turnover\t%s:%d:%s" % (p, n.lineno, n.name))
+        if w:
+            out.append("newest\t%s:%d:%s" % (p, n.lineno, n.name))
+for h in sorted(out):
     print(h)
 PY
+scan_names(){ python3 "$T/scan.py" "${PYFILES[@]}" | awk -F'\t' -v k="$1" '$1==k{n=$2; sub(/.*:/,"",n); print n}' | sort -u | tr '\n' ' '; }
 mapfile -t PYFILES < <(git ls-files '*.py' 2>/dev/null)
 [ "${#PYFILES[@]}" -ge 5 ] \
   && ok "A0 the scan has a population: ${#PYFILES[@]} tracked .py file(s)" \
   || no "A0 only ${#PYFILES[@]} tracked .py file(s) found - the scan would pass on nothing" \
         "an empty population is a green that measured nothing"
 
-mapfile -t HITS < <(python3 "$T/scan.py" "${PYFILES[@]}")
-if [ "${#HITS[@]}" = 1 ] && [[ "${HITS[0]}" == *":$ATTR_FN" ]]; then
-    ok "A1 exactly one implementation of the rule: ${HITS[0]}"
-else
-    no "A1 ${#HITS[@]} implementation(s) of the prior-build rule: ${HITS[*]}" \
-       "each extra copy is a consumer the next fix will miss - that is how this was re-fixed four times"
-fi
+a_turn=$(scan_names turnover)
+a_new=$(scan_names newest)
+# A1: THE TURNOVER TEST, exactly once. Four functions wrote it out by hand until 2026-10-24, and the
+# one in superseded_series is the reason a capture-wide fallback was gated on the very per-module
+# test it exists to replace - the measured `26 -> 26, no effect`.
+[ "$a_turn" = "module_turned_over " ] \
+  && ok "A1 the turnover test exists in exactly one function: $a_turn" \
+  || no "A1 the turnover test is in: $a_turn (want module_turned_over alone)" \
+        "every extra copy is a consumer the next fix will miss - that is how this was re-fixed four times"
+# A1b: WHO MAY READ A MODULE'S `newest` AT ALL - a bounded inventory, asserted as an EQUALITY, so a
+# NEW reader is red and so is a silent removal. It is deliberately NOT a uniqueness claim: reading
+# the newest version to PRINT it is not deciding attribution, and the first cut of this leg demanded
+# "exactly two" and went red on four honest readers. What carries the DECISION's uniqueness is the
+# mutation in legs C1/C2/C3 - break version_is_prior and every granularity must change, which a
+# second implementation in use would survive.
+#   version_is_prior   THE DECISION. The one attributor.
+#   install_anchor     which init is the FIRST of the new build - the time cutoff for sources that
+#                      structurally carry no version (bridge.log, TaskScheduler records).
+#   _candidate_series  the self-calibrating candidate series, when no --build was given.
+#   compute_metrics    modules_superseded_silent: "the newest build wrote nothing in the window",
+#                      the metric that reports a zero produced by nothing being considered.
+#   cmd_analyze        the downgrade warning: --build is not the newest these modules declared.
+#   cmd_attribute      prints the module's newest in its output, so no consumer has to rank versions.
+A1B_WANT="_candidate_series cmd_analyze cmd_attribute compute_metrics install_anchor version_is_prior "
+[ "$a_new" = "$A1B_WANT" ] \
+  && ok "A1b the readers of a module's newest are exactly the six named here: $a_new" \
+  || no "A1b the newest readers are: $a_new" \
+        "want: $A1B_WANT - a new one is a new answer to 'which version is current'; if it is legitimate, name it here with why"
 
 # SEEN TO FAIL: a second copy, in a file that is part of the scanned population.
 mkdir -p "$T/inject"
@@ -122,17 +166,32 @@ def _sneaky_prior(mod, v, builds):
         return False
     return v != info["newest"]
 PY
+# A SECOND INJECTED COPY, written in the OTHER SPELLING - `.get("versions")` / `.get("newest")`
+# instead of subscripts. That is the hole the first cut of this scanner had: it matched only the
+# subscript form, so four hand-written copies of the turnover half sat in the tree unseen and a
+# fifth could be added just by typing `.get`. The control proves the hole is closed.
+cat >> "$T/inject/log-sweep.py" <<'PY'
+
+
+def _sneaky_prior_get(mod, v, builds):
+    info = builds.get(mod) or {}
+    if len(info.get("versions") or []) < 2:
+        return False
+    return v != info.get("newest")
+PY
 mapfile -t BASE < <(python3 "$T/scan.py" "$ATTR_FILE")
 mapfile -t HITS2 < <(python3 "$T/scan.py" "$T/inject/log-sweep.py")
-# RELATIVE TO THE BASELINE, not to 1: the control's job is to show the scan DETECTS an added copy,
-# and an absolute number here would also fail whenever leg A1 fails - one defect, two red legs, and
-# the control's own meaning lost. (It read `= 2` on the first run, which reported the control broken
-# when what was actually true was that A1 had found a real fourth site.)
-if [ "${#HITS2[@]}" = "$(( ${#BASE[@]} + 1 ))" ]; then
-    ok "A1 SEEN TO FAIL: an injected second copy is caught (${#BASE[@]} -> ${#HITS2[@]} hits)"
+# RELATIVE TO THE BASELINE, never absolute: the control's job is to show the scan DETECTS an added
+# copy, and an absolute number would also fail whenever leg A1 fails - one defect, two red legs, and
+# the control's own meaning lost. (It read `= 2` on the first run, reporting the control broken when
+# what was actually true was that A1 had found a real fourth site.)
+# TWO copies injected, each carrying BOTH halves, so each adds two rows: +4.
+if [ "${#HITS2[@]}" = "$(( ${#BASE[@]} + 4 ))" ]; then
+    ok "A1 SEEN TO FAIL: injected copies in BOTH spellings are caught (${#BASE[@]} -> ${#HITS2[@]} rows)"
 else
-    no "A1 control: the injected copy was NOT caught (${#BASE[@]} -> ${#HITS2[@]} hits)" \
-       "the scan cannot see a fourth implementation, so leg A1 proves nothing"
+    no "A1 control: an injected copy was NOT caught (${#BASE[@]} -> ${#HITS2[@]} rows, want +4)" \
+       "the scan cannot see a fifth implementation, so legs A1/A1b prove nothing"
+    python3 "$T/scan.py" "$T/inject/log-sweep.py" | sed 's/^/       /'
 fi
 
 # AND A CONTROL IN THE OTHER DIRECTION: the scan must not fire on a function that merely MENTIONS
@@ -157,17 +216,38 @@ mapfile -t HITS3 < <(python3 "$T/scan.py" "$T/inject/prose.py")
 # declared version out of a log AND ORDERS versions against each other has an implementation of this
 # rule in it. tools/cut-release.sh and mgmt/harness/quick-upgrade.sh both order versions (git tags,
 # and the version installed on a guest) and neither reads a log banner, so neither is a hit.
-b_hits=""
+# THE POPULATION IS THE SHIPPED SCRIPTS, NOT THE SUITES - and that is a scope with a reason, not an
+# exemption by name. A suite DRIVES this rule and therefore quotes both the banner and the old
+# ordering on purpose: this very file restores `sort -V` into a temp copy of sweep-gate.sh three
+# lines below as its own control, and its fixtures carry QWTBIRTH lines. On the first run B1 reported
+# ITSELF. A test implementing the rule cannot change a campaign verdict; a shipped script can. Any
+# .py test is still covered, because leg A1's scan takes every tracked .py including tools/tests/.
+b_hits=""; b_pop=0
 while IFS= read -r f; do
+    case "$f" in tools/tests/*) continue ;; esac
     [ -f "$f" ] || continue
+    b_pop=$((b_pop+1))
     # the banner, in either spelling - what the parse would read
     command grep -qE "Module version:|module name:|QWTBIRTH[^|]*ver=" "$f" || continue
     # an ordering or inequality over versions - what the decision would do
     command grep -qE "sort -V|sort -rV" "$f" || continue
     b_hits="$b_hits $f"
 done < <(git ls-files '*.sh' '*.ps1' '*.cmd' 2>/dev/null)
+# A SCOPE THAT EMPTIES THE POPULATION PASSES VACUOUSLY, and the file this property is ABOUT must be
+# in it - otherwise the leg would stay green with sweep-gate.sh excluded by a typo.
+# NOT `git ls-files | grep -q`: under `set -o pipefail` the producer keeps writing after grep -q
+# exits, takes SIGPIPE, and the PIPELINE returns 141 - so the test reads as "not found" whatever
+# grep decided. That is this project's own recorded trap (findings/issues.md PIPEFAILGREPQISUGREP),
+# and it made this very leg report the population empty while sweep-gate.sh was plainly in it.
+b_has=$(git ls-files '*.sh' > "$T/shfiles.txt"; command grep -cx 'tools/sweep-gate.sh' "$T/shfiles.txt" || true)
+if [ "$b_pop" -lt 20 ] || [ "${b_has:-0}" -lt 1 ]; then
+    no "B1 the population is $b_pop script(s) and/or tools/sweep-gate.sh is not in it" \
+       "the scoping emptied the leg - it would then pass whatever the shipped scripts do"
+else
+    ok "B1 the population is $b_pop shipped script(s), tools/sweep-gate.sh among them"
+fi
 [ -z "$b_hits" ] \
-  && ok "B1 no shell/powershell script both reads a module banner and orders versions" \
+  && ok "B1 no shipped script both reads a module banner and orders versions" \
   || no "B1 a shell implementation of the rule:$b_hits" \
         "two spellings of one fact is two implementations - this is the one that went blind"
 
@@ -386,6 +466,122 @@ if printf '%s' "$e_none" | command grep -q 'INVALID-NOBUILD'; then
        "there is no claim to check, so refusing invents one"
 else
     ok "E3 without --build nothing is refused (rc=$n_rc)"
+fi
+
+# =================================================================================================
+# F. THE CUT AT INGESTION: the predecessor's lines leave the graded view ONCE, and the cut cannot
+#    take the candidate's with them.
+#
+# Owner, 2026-10-24: "cut if off on ingestion, otherwise it is going to take forever and be
+# unreliable. and you will rediscover it someday and start your regular panic". Jev:
+# partition-at-ingestion 0.99 against predicate-per-consumer 0.01 and delete-at-ingestion 0.00;
+# keep the inits and the boot census 0.81; and the risk to guard is hides-the-candidate 0.89.
+cat > "$T/cutprobe.py" <<'PY'
+import importlib.util, sys
+src, logs, build = sys.argv[1], sys.argv[2], (sys.argv[3] or None)
+spec = importlib.util.spec_from_file_location("ls", src)
+m = importlib.util.module_from_spec(spec)
+try: spec.loader.exec_module(m)
+except SystemExit: pass
+_, files, _, _ = m.load_logs(logs)
+scope, cut = m.cut_predecessor(files, build)
+lf = [f for f in files if f.module == "gui-agent"][0]
+# THE FUNCTION NAME IS IN l.func: the parser strips the "Function: " prefix out of the message,
+# which is why build-attribution-selftest's own fixtures note it. Reading l.msg here compared the
+# message text and the leg failed on its own expectation rather than on the product.
+graded = [l.func for l in lf.lines if l.level == "E"]
+aside  = [l.func for l in lf.prior_lines if l.level == "E"]
+print("CUT %s" % cut.get("cut"))
+print("GRADED %s" % ("|".join(graded) or "-"))
+print("ASIDE %s" % ("|".join(aside) or "-"))
+print("MOVED %s" % (",".join("%s=%s" % kv for kv in sorted(cut.get("moved", {}).items())) or "-"))
+print("INITS %d" % sum(len(f.inits) for f in files))     # the turnover must survive the cut
+print("WHY %s" % cut.get("why", "-"))
+PY
+# The fixture: ONE per-day file spanning the upgrade, pid reused - the ordinary shape under
+# one-log-per-module, and the shape that collapsed into a single predecessor-stamped instance.
+FC="$T/cut"; mkdir -p "$FC"
+cat > "$FC/gui-agent-20261024.log" <<'LOG'
+[20261024.100000.100-800:804-I] LogInit: QWTBIRTH module=gui-agent ver=4.3.35.795 pid=800 session=1 uptime=50.000
+[20261024.100001.100-800:804-E] StaleOne: an error from the build being replaced
+[20261024.100500.100-800:804-I] LogInit: QWTBIRTH module=gui-agent ver=4.3.37.1100 pid=800 session=1 uptime=350.000
+[20261024.100501.100-800:804-E] FreshOne: an error from the candidate
+LOG
+cat > "$FC/qrexec-agent-20261024.log" <<'LOG'
+[20261024.095958.340-2764:2768-I] LogInit: QWTBIRTH module=qrexec-agent ver=4.3.35.795 pid=2764 session=0 uptime=48.900
+[20261024.100600.780-5468:5472-I] LogInit: QWTBIRTH module=qrexec-agent ver=4.3.37.1100 pid=5468 session=0 uptime=410.100
+LOG
+f_out=$(python3 "$T/cutprobe.py" "$ATTR_FILE" "$FC" 4.3.37.1100)
+f_cut=$(printf '%s' "$f_out"   | sed -n 's/^CUT //p')
+f_grad=$(printf '%s' "$f_out"  | sed -n 's/^GRADED //p')
+f_aside=$(printf '%s' "$f_out" | sed -n 's/^ASIDE //p')
+f_moved=$(printf '%s' "$f_out" | sed -n 's/^MOVED //p')
+f_inits=$(printf '%s' "$f_out" | sed -n 's/^INITS //p')
+[ "$f_grad" = "FreshOne" ] \
+  && ok "F1 after the cut the graded view holds the CANDIDATE's error only ($f_grad)" \
+  || no "F1 the graded view is '$f_grad', want FreshOne alone" \
+        "either the predecessor's line still grades, or the candidate's was taken with it"
+[ "$f_aside" = "StaleOne" ] \
+  && ok "F2 the predecessor's error is PARTITIONED, not deleted (prior_lines: $f_aside)" \
+  || no "F2 prior_lines holds '$f_aside', want StaleOne" \
+        "deleting it takes the receipt with it - the prior-build counters can then only report 0"
+# THE PROPERTY, not a transcript: the receipt must NAME the predecessor's module@version it moved
+# and must name NO version of the candidate's series. The first draft of this leg asserted the exact
+# string `gui-agent@4.3.35.795=1` and went red on a correct receipt, because the predecessor's own
+# QWTBIRTH line is also a line the predecessor wrote and is moved with its error - while the init
+# RECORD stays, which is what F4 covers.
+if printf '%s' "$f_moved" | command grep -q 'gui-agent@4\.3\.35\.795=[1-9]' \
+   && ! printf '%s' "$f_moved" | command grep -q '4\.3\.37'; then
+    ok "F3 the cut names what it moved, per module and version, and no candidate version ($f_moved)"
+else
+    no "F3 the receipt reads '$f_moved'" \
+       "an exclusion that cannot be named cannot be seen to be wrong - and a candidate version in it is the hiding case"
+fi
+[ "${f_inits:-0}" -ge 4 ] \
+  && ok "F4 the init records survive the cut ($f_inits) - the turnover is what attributes anything" \
+  || no "F4 only ${f_inits:-0} init record(s) survive the cut" \
+        "cut the inits and the attributor saws off the branch it stands on (Jev: keep them, 0.81)"
+
+# F5 THE ANTI-HIDING GUARD, driven by MUTATION: an attributor that calls everything the
+# predecessor's must not be allowed to empty the capture. This is the 0.89 risk, and both
+# mis-attributions found on 2026-10-24 had exactly this direction.
+python3 - "$ATTR_FILE" "$T/mut-true.py" "$ATTR_FN" <<'PY'
+import ast, sys
+src, dst, fn = sys.argv[1], sys.argv[2], sys.argv[3]
+lines = open(src, encoding="utf-8").read().split("\n")
+t = [n for n in ast.walk(ast.parse("\n".join(lines)))
+     if isinstance(n, ast.FunctionDef) and n.name == fn]
+if len(t) != 1:
+    sys.exit("expected one def %s, found %d" % (fn, len(t)))
+t = t[0]
+b0 = t.body[0]
+start = (b0.end_lineno if isinstance(b0, ast.Expr) and isinstance(b0.value, ast.Constant) else b0.lineno - 1)
+open(dst, "w", encoding="utf-8").write("\n".join(
+    lines[:start] + ["    return bool(v)   # MUTATION: everything with a version is 'the predecessor's'"] + lines[t.end_lineno:]))
+PY
+g_out=$(python3 "$T/cutprobe.py" "$T/mut-true.py" "$FC" 4.3.37.1100 2>&1)
+g_cut=$(printf '%s' "$g_out"  | sed -n 's/^CUT //p')
+g_grad=$(printf '%s' "$g_out" | sed -n 's/^GRADED //p')
+g_why=$(printf '%s' "$g_out"  | sed -n 's/^WHY //p')
+if [ "$g_cut" = "False" ] && printf '%s' "$g_why" | command grep -q 'REFUSED'; then
+    ok "F5 a cut that would move the CANDIDATE's lines is REFUSED entirely ($g_why)"
+elif [ "$g_grad" = "FreshOne" ]; then
+    no "F5 the mutation did not reach the cut (graded still '$g_grad')" \
+       "then this leg proves nothing about the guard"
+else
+    no "F5 the mutated attributor emptied the graded view (graded='$g_grad', cut=$g_cut)" \
+       "this is hides-the-candidate: every consumer then sees a capture the candidate kept clean"
+fi
+# F6 and the refusal case: a named build that declared itself nowhere must leave the capture ALONE,
+# not cut every versioned line out of it.
+h_out=$(python3 "$T/cutprobe.py" "$ATTR_FILE" "$FC" 4.9.99.1)
+h_cut=$(printf '%s' "$h_out"  | sed -n 's/^CUT //p')
+h_grad=$(printf '%s' "$h_out" | sed -n 's/^GRADED //p')
+if [ "$h_cut" = "False" ] && [ "$h_grad" = "StaleOne|FreshOne" ]; then
+    ok "F6 with the named build absent, nothing is cut and both lines still grade ($h_grad)"
+else
+    no "F6 absent build: cut=$h_cut graded='$h_grad', want False and both lines" \
+       "a capture that cannot name the candidate must fail as unattributable, not be emptied"
 fi
 
 echo "--- $PASS passed, $FAIL failed; fixtures in $T"
