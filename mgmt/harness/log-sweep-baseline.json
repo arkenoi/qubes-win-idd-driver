@@ -3925,6 +3925,30 @@
     "confidence": 0.74
    },
    "reason": "A REAL FALLBACK, FILED AND TRACKED - not normal operation. The broker's live-rect derivation refused because the card is outside the captured texture, and it kept the racy inset: `QGACROPFALLBACK hwnd=0x901ce card outside the capture - cropped 0,0 not 4740,1251`. The emitter's own comment (agent/gui-agent/main.c:5735) says that is \"how this surface published 31 frames of one colour while every counter said the capture was healthy. Loud, because the alternative is a wrong rectangle that looks like a dead capture.\" MEASURED on acceptance run 40037710497: once per registration on win11-clean (x2), win11-reinstall (x2) and win11-appvm (x1) - the ONLY breach in each of those three cells, with error_lines_undeclared=0, dom0_loud_failures=0 and death_events=0, while the whole win10 track and win11-upgrade passed. NOT MEASURED AS MATERIALISED: no pixel check in that campaign reported a one-colour surface and the de-slice checks in those cells passed, so what is established is the fallback firing, not a bad frame - Jev named that gap itself (insufficient-evidence 0.24 beside known-defect 0.74). KNOWN-DEFECT, NOT EXPECTED: this entry keeps the line visible and attached to its issue so the gate reports it as a known defect PRESENT instead of an unclassified alert; it does not say the behaviour is acceptable, and it must be removed when the crop is fixed. Jev rated 0.28 that it should block a release cut."
+  },
+  "agent|W|ToastHoldDecide: QGATOASTHOLDLATE hwnd=0xH mapped FAIL-OPEN after N ms: reason=verdict-pending ident=H s=H t=H m=H id=N lastRead=ok bridgeUp=N records=N; shown TWICE if the bridge forwarded it": {
+   "family": "agent",
+   "level": "W",
+   "max_per_boot": 2,
+   "status": "known-defect",
+   "issue": "findings/issues.md P1 TOASTBANNERTWINHASNOIDENTITY",
+   "jev": {
+    "choice": "known-defect",
+    "confidence": 0.54
+   },
+   "reason": "THE IDENTITY-LESS TWIN SURFACE, one per bridged toast, in EVERY campaign. The toast hold withholds a banner for up to TH_HOLD_BOUND_MS (3 s) while the bridge classifies it; this line is that bound expiring and the banner being mapped fail-open. MEASURED across 13 recent campaigns: the count of `reason=no-identity` holds EQUALS the count of `state=suppress` forwards in every one of them (6/6, 2/2, 1/1, 6/6, 1/1, 6/6, 4/4, 4/4, 5/5, 5/5, 2/2) - so each bridged toast comes with a SECOND surface whose Title/TitleText block never reads, logged with all-zero identity hashes (toastident.h reserves 0 for absent). With no identity there is nothing to correlate, so the record lookup yields no-record, or a record matches and no verdict arrives, and the hold fail-opens. THE CLASSIFIER IS NOT AT FAULT: ClassifyToastXmlBytes is called at three sites in notifhost.cpp and the paired toast suppresses correctly every run (held_ms=140 in the measured capture). LOG-ONLY, NEVER TOASTED: toasthold.c makes zero QerrReportText calls and this line is in no notifytexts row, so nothing reaches dom0 for it - which is why it is a classification debt and not the P1. The P1 in this area is a toast that DOES reach the user when nothing is wrong (dom0_loud_failures). It began failing acceptance only because signatures_unclassified started gating warnings on 2026-10-23; the behaviour is weeks older. REMOVE THIS ENTRY when the twin surface is identified or excluded from the hold."
+  },
+  "agent|W|ToastHoldDecide: QGATOASTHOLDLATE hwnd=0xH mapped FAIL-OPEN after N ms: reason=no-record ident=H s=H t=H m=H id=N lastRead=ok bridgeUp=N records=N; shown TWICE if the bridge forwarded it": {
+   "family": "agent",
+   "level": "W",
+   "max_per_boot": 2,
+   "status": "known-defect",
+   "issue": "findings/issues.md P1 TOASTBANNERTWINHASNOIDENTITY",
+   "jev": {
+    "choice": "known-defect",
+    "confidence": 0.54
+   },
+   "reason": "THE IDENTITY-LESS TWIN SURFACE, one per bridged toast, in EVERY campaign. The toast hold withholds a banner for up to TH_HOLD_BOUND_MS (3 s) while the bridge classifies it; this line is that bound expiring and the banner being mapped fail-open. MEASURED across 13 recent campaigns: the count of `reason=no-identity` holds EQUALS the count of `state=suppress` forwards in every one of them (6/6, 2/2, 1/1, 6/6, 1/1, 6/6, 4/4, 4/4, 5/5, 5/5, 2/2) - so each bridged toast comes with a SECOND surface whose Title/TitleText block never reads, logged with all-zero identity hashes (toastident.h reserves 0 for absent). With no identity there is nothing to correlate, so the record lookup yields no-record, or a record matches and no verdict arrives, and the hold fail-opens. THE CLASSIFIER IS NOT AT FAULT: ClassifyToastXmlBytes is called at three sites in notifhost.cpp and the paired toast suppresses correctly every run (held_ms=140 in the measured capture). LOG-ONLY, NEVER TOASTED: toasthold.c makes zero QerrReportText calls and this line is in no notifytexts row, so nothing reaches dom0 for it - which is why it is a classification debt and not the P1. The P1 in this area is a toast that DOES reach the user when nothing is wrong (dom0_loud_failures). It began failing acceptance only because signatures_unclassified started gating warnings on 2026-10-23; the behaviour is weeks older. REMOVE THIS ENTRY when the twin surface is identified or excluded from the hold."
   }
  },
  "source_reports": [
