@@ -308,15 +308,38 @@ relaunch therefore stays for both, and their deaths are reported through 4002/40
 
 ### Still owed on a guest (the release gate, win11 cell)
 
-**WHICH OF THESE ANYTHING ACTUALLY RUNS, measured 2026-10-23 and written down because the list read
-as a plan with a runner and three of its five items have none.** `mgmt/harness/supervision-e2e.sh` is
-the only guest-side supervision routine; it is referenced by nothing but its own selftest and
-`findings/misc.md`, it is absent from `tools/release-feature-tests.txt` (which names
-updater-component, notify-errors-guest-test, crop-before-map, template-update) and `matrix.sh` never
-mentions supervision - so NONE of this has ever run inside a release campaign, and items 1, 3 and 5
-have no runner anywhere, scheduled or not. Checked by content, not by name: that harness contains no
-occurrence of `death-1`, `DEATH #1`, `7023`, `7031`, `1460`, `wevtutil`, `QwtDeathReporter`,
-`QwtEventSource`, `WaitForQdb` or `4001`.
+**WHICH OF THESE ANYTHING ACTUALLY RUNS. The 2026-10-23 reading is kept below because it is why the
+runners exist; every claim in it about coverage is now superseded.** It read: "items 1, 3 and 5 have
+no runner anywhere", `supervision-e2e.sh` "is referenced by nothing but its own selftest", it "is
+absent from `tools/release-feature-tests.txt`" and "NONE of this has ever run inside a release
+campaign". All four are false as of 2026-10-24: `supervision-gate` is the fifth entry in
+`tools/release-feature-tests.txt`, `tools/release-acceptance.sh` runs it, L9 covers items 1 and 5
+(measured on a guest), and L10 covers item 3.
+
+**STATE, 2026-10-24, from runs on win11r-sup:**
+- items 1 and 5: MEASURED (L9) - `source=True msgfile=True task=True eventtrigger=True
+  runs_as=S-1-5-18 names_4001=True oplog=true`.
+- item 2, death DURING a shutdown: MEASURED (L8) - exactly one dom0 row across the reboot.
+- item 2, death with the guest UP and the numbering: MEASURED (L11, run 1024-1639) - round1 +1 row
+  suffix 1, round2 +1 row suffix 2, agent relaunched as pid 5336 between them.
+- item 4: the guest-side half was always measured (L2); its NOTIFICATION half is asserted as of
+  2026-10-24 - L2 requires the reporter's dom0 row delta to be 0 across the clean cycles, which is
+  the same number L8 and L11 require to be 1. NOT YET RUN.
+- item 2's pairing - a graceful shutdown after a DELIVERED death must add nothing, which is where the
+  catch-up's watermark could re-report - is asserted at the end of L11 as of 2026-10-24. NOT YET RUN.
+- item 3: L10 exists and has run ONCE, INVALID: `sc query` takes the SCM key name and 'QubesDB' is
+  not it (`Install-QwtImproved.ps1:1363` lists our services by DISPLAY name). Resolved from the
+  display name now. NOT YET PROVEN.
+
+**STILL UNCOVERED, and both are inside item 2:**
+- the `AGAIN` lines for the 1001/4001 records. Nothing asserts them - checked by content across
+  supervision-e2e.sh, sup-crash-numbering.ps1 and deathevent-selftest.sh.
+- Application **1000 (+1001)**. Those are WINDOWS ERROR REPORTING events for a FAULTING process, and
+  every stimulus we have is a termination: `Process.Kill()` is not a fault, so L11 RECORDS them and
+  does not require them. Producing a real fault needs the injector build
+  (`QGA-FAULT-INJECTION:on`), which the release-package workflow already builds on dispatch and
+  which `gate-remainder.sh --fi-run` already installs for the failproof suites. That is the route,
+  and it is not wired to this item yet.
 
 1. `Register-QwtEventSource` and `Register-QwtDeathReporter` report `registered` in the RESULT, and
    `schtasks /query /tn QwtDeathReporter /xml` shows the subscription.
@@ -335,11 +358,21 @@ occurrence of `death-1`, `DEATH #1`, `7023`, `7031`, `1460`, `wevtutil`, `QwtDea
    numbering across two crashes, are not measured by it.
 3. A forced `WaitForQdb` timeout (QrexecAgent) yields System 7023 with error 1460 and 7031 with the restart,
    and the SCM restart happens.
-   **RUNNER: none.** `tools/tests/health-recovery-selftest.sh` asserts the recovery is ARMED; nothing
-   fires the failure and watches the SCM restart it.
+   **RUNNER: supervision-e2e L10**, added 2026-10-24: QubesDB is stopped with its SCM recovery
+   disarmed first (it carries the same restart/5000 actions and would otherwise be back in five
+   seconds), QrexecAgent then burns QDB_WAIT_TIMEOUT_MS and the SCM must record 7023 NAMING 1460.
+   Its CONTROL arm runs first and must see NO 7023; it runs last of all cells and shuts the subject
+   down after itself, because it takes the guest's own qrexec down for those six minutes. Jev on the
+   stimulus: live-stop-qubesdb 0.91 against a product FI knob 0.00 and a no-injection receipt 0.02.
+   `tools/tests/health-recovery-selftest.sh` still asserts only that the recovery is ARMED.
+   RUN ONCE, INVALID on the service-name bug above; not yet proven.
 4. A clean boot and a clean shutdown produce ZERO notifications and no `DEATH` line (the negative control).
    **RUNNER: supervision-e2e L2**, over N shutdown/boot cycles: one agent per boot, zero deaths at a
-   shutdown, zero relaunches, no ERROR line during a requested stop.
+   shutdown, zero relaunches, no ERROR line during a requested stop - AND, as of 2026-10-24, zero
+   dom0 NOTIFICATION rows. Until then every metric in this cell was guest-side and what enforced
+   "no notification" was a different instrument (the sweep's dom0_loud_failures and
+   notifications_lost, both gated max 0 P1), so a reader of this cell's verdict was taking the
+   notification claim on another tool's threshold. An unreadable row count is INVALID, never 0.
 5. `wevtutil gl Microsoft-Windows-TaskScheduler/Operational` reads `enabled: true` after the install.
    **RUNNER: supervision-e2e L9.** MEASURED 2026-10-23 on a live guest: `oplog=true`. Client Windows
    ships that log DISABLED and 201/203 are never written otherwise, so a helper task's death would go
