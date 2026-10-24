@@ -28,6 +28,18 @@
 #                 cannot run while the system goes down - ERROR_SHUTDOWN_IN_PROGRESS)
 #   L8 catchup-e2e a death injected DURING a shutdown is reported at the next boot EXACTLY once - never zero
 #                 (concealment), never twice (a double). The measurement L5 does not make
+#   L10 qdbtimeout a forced WaitForQdb timeout (QubesDB stopped with its SCM recovery disarmed) is
+#                 recorded by the SCM as System 7023 naming ERROR_TIMEOUT 1460, with 7031 and the
+#                 restart, and the guest comes back. ADR-supervision item 3, which had RUNNER: none.
+#                 Its CONTROL arm runs FIRST and must see NO 7023. It runs LAST of all cells and
+#                 shuts the subject down after itself, because it takes the guest's own qrexec down
+#                 for the six minutes QDB_WAIT_TIMEOUT_MS specifies
+#   L11 crash-up  a death with the guest UP, TWICE: exactly one dom0 notification each, and the second
+#                 numbered HIGHER for the same component. ADR-supervision item 2's other half - L8
+#                 covers the death during a SHUTDOWN and the ADR records what it does not: "A forced
+#                 crash WHILE THE GUEST IS UP, and the death-1/death-2 numbering across two crashes".
+#                 The increment is the property, not the literal 1 and 2: L8 has already put
+#                 wgcbroker deaths in the same per-day log, so the counter is not at zero here
 #   L6 toast      an actionable toast reaches dom0 WITH its actions, an informational one without and without
 #                 waiting for the action work; --click waits for the owner to press a button (no dom0 shell here)
 #   L7 pvnic      the PV NIC shutdown re-arm LANDS its two registry writes (the measurement Jev named at 0.85) and
@@ -45,7 +57,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; ROOT="$(cd "$ROOT/.." && pwd)"
 cd "$ROOT" || exit 2
 
-ISO=""; SUBJ="win11r-sup"; GOLDEN="win11r-qwt"; CELLS="L1 L9 L2 L3 L5 L6 L7 L7C L8 L4"; CYCLES=2; CLICK=0
+ISO=""; SUBJ="win11r-sup"; GOLDEN="win11r-qwt"; CELLS="L1 L9 L2 L3 L5 L6 L7 L7C L8 L11 L4 L10"; CYCLES=2; CLICK=0
 BUILD="${BUILD:-}"                                # package_version of the build under test, for the sweep's attribution
 HOLD="${HOLD_REPO:-$PWD}"                         # kept for an override; the helpers are in THIS repo now
 SWEEP="${SWEEP_REPO:-$PWD}"                       # the log sweep, likewise - no cross-worktree dependency
@@ -96,6 +108,22 @@ wait_session(){ local d=$((SECONDS+${1:-300}));
     sleep 10
   done; echo "deadline"; return 1; }
 guest_ps(){ q pushrun "$1" 2>&1 | tr -d '\r'; }   # a guest-side probe script, output verbatim
+# THE INCOMING PATH, ONCE, FOR EVERY CELL. It used to be defined inside L6's block, so any cell that
+# ran without L6 hit it unset under `set -u` - which is how a library sourced without what it demands
+# has killed a run here three times. ASKED OF THE GUEST, never hard-coded: the path is under the
+# guest's own account, and the planted `C:\Users\user\...` value silently addressed a profile that
+# does not exist on a guest whose account is not `user` (the German golden's gerd-test), so files
+# landed in the real profile while every command looked in the wrong one. The hard-coded value stays
+# only as the fallback for a guest that cannot answer yet.
+# DISCOVERED LAZILY, after the guest can answer. An eager read at script start would run against a
+# guest L1 has not deployed yet, get nothing, and plant the fallback - which is the wrong-profile
+# hazard this exists to avoid, in the one case it matters.
+incoming(){
+  [ -n "${INCOMING:-}" ] && { printf '%s' "$INCOMING"; return 0; }
+  INCOMING=$(q incoming 2>/dev/null | tr -d '\r' | grep -a '^[A-Za-z]:' | head -1)
+  [ -n "$INCOMING" ] || INCOMING='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
+  printf '%s' "$INCOMING"
+}
 
 # THE L7 PROBE IS WRITTEN ONCE, HERE. L7C pushes the same script to the control, and when the cells were
 # selected without L7 the file simply did not exist - the push sent 0 of 3 KB and the control's PowerShell
@@ -941,6 +969,145 @@ PS
     verdict L4R FAIL "L4 leaves the guest with a running agent AND its toast bridge" \
             "gui-agent='$ag' notifhost='$nh' after the restore restart ('$(g4r restart | cut -c1-80)') - a cell that leaves the guest degraded is a defect of the cell"
   fi
+fi
+
+# ---- L11 ADR-supervision item 2's OTHER HALF: a death with the guest UP, and the numbering --------
+# L8 measures a death injected DURING a shutdown. The ADR records what it does not: "A forced crash
+# WHILE THE GUEST IS UP, and the death-1/death-2 numbering across two crashes, are not measured by
+# it." This is that half. The guest stays up, so the channel survives and the script runs through
+# `guest_ps` - no detach, no reboot.
+# THE NUMBERING IS ASSERTED AS AN INCREMENT, not as the literal 1 and 2 the ADR's prose names: L8 has
+# already put wgcbroker deaths in the same per-day reporter log, so the counter is not at zero when
+# this cell starts. What the product must do is give the SECOND death a distinct, higher number for
+# the same component - that is the property; "it happens to be 1" is a property of a fresh guest.
+if has L11; then
+  log "L11: end gui-agent while the guest is UP, twice - exactly one report each, and the second numbered higher"
+  q push guest/sup-crash-numbering.ps1 >/dev/null 2>&1
+  _inc=$(incoming)
+  QT_T=900 q run "powershell -NoProfile -ExecutionPolicy Bypass -File \"$_inc\\sup-crash-numbering.ps1\" -Out C:\\Windows\\Temp\\L11.txt" \
+      > "$OUT/L11.out" 2>&1 || true
+  q run 'cmd /c type C:\Windows\Temp\L11.txt' > "$OUT/L11-read.out" 2>&1 || true
+  g11(){ grep -a "^L11|$1|" "$OUT/L11-read.out" "$OUT/L11.out" 2>/dev/null | tail -1 | cut -d'|' -f3- | tr -d '\r'; }
+  _r1b=$(g11 round1_rows_before); _r1a=$(g11 round1_rows_after)
+  _r2b=$(g11 round2_rows_before); _r2a=$(g11 round2_rows_after)
+  _s1=$(g11 round1_suffix_added); _s2=$(g11 round2_suffix_added)
+  _k1=$(g11 round1_killed); _k2=$(g11 round2_killed); _rel=$(g11 relaunched_pid)
+  _e1=$(g11 round1_events_4001); _e2=$(g11 round2_events_4001)
+  _term=$(g11 terminal)$(g11 round1_terminal)$(g11 round2_terminal)
+  _d1=$(( ${_r1a:-0} - ${_r1b:-0} )); _d2=$(( ${_r2a:-0} - ${_r2b:-0} ))
+  if [ -n "$_term" ]; then
+    verdict L11 INVALID "the stimulus could not be applied, so nothing about the product was measured" \
+            "$_term - no verdict is claimed either way"
+  elif [ -z "$_k1" ] || [ -z "$_k2" ]; then
+    verdict L11 INVALID "one of the two kills did not land, so a missing report is not the product's" \
+            "killed1='$_k1' killed2='$_k2' relaunched='$_rel'; this cell NEVER reads a zero delta as a pass when its own stimulus is unproven"
+  elif [ "$_d1" != 1 ] || [ "$_d2" != 1 ]; then
+    # ZERO IS CONCEALMENT AND TWO IS A DOUBLE, and the owner's rule names both: exactly one
+    # notification for one death, never zero, never two.
+    verdict L11 FAIL "a death with the guest UP is not reported exactly once" \
+            "round1 delta=$_d1 (rows $_r1b -> $_r1a, 4001 x$_e1), round2 delta=$_d2 (rows $_r2b -> $_r2a, 4001 x$_e2) - want 1 each; zero is concealment, two is a P1 double"
+  elif [ -z "$_s1" ] || [ -z "$_s2" ] || [ "$_s1" = "$_s2" ]; then
+    verdict L11 FAIL "the second death reuses the first one's number, so two deaths are indistinguishable in dom0" \
+            "gui-agent.death suffix added by round1='$_s1', by round2='$_s2' - they must differ, and the ADR's death-1/death-2 is exactly this property"
+  elif [ "${_s2:-0}" -le "${_s1:-0}" ]; then
+    verdict L11 FAIL "the second death is numbered BELOW the first" \
+            "round1 added suffix $_s1, round2 added $_s2 - the numbering must increase or the order of two deaths cannot be read"
+  else
+    verdict L11 PASS "a death with the guest UP is reported EXACTLY ONCE, and the second is numbered higher" \
+            "round1 +1 row (suffix $_s1, 4001 x$_e1), round2 +1 row (suffix $_s2, 4001 x$_e2), agent relaunched as pid $_rel between them; WER 1000/1001 recorded not required - a Kill is a termination, not a fault"
+  fi
+fi
+
+# ---- L10 ADR-supervision item 3, which had RUNNER: none ------------------------------------------
+# "A forced WaitForQdb timeout (QrexecAgent) yields System 7023 with error 1460 and 7031 with the
+# restart, and the SCM restart happens." Nothing fired that failure before; health-recovery-selftest
+# only asserts the recovery is ARMED. Jev on the stimulus: live-stop-qubesdb 0.91, against a product
+# FI knob at 0.00 and a no-injection receipt at 0.02; detached 0.84; own subject 0.68; and
+# blocks_campaign 0.57, so this is a campaign precondition rather than an extra.
+# IT RUNS LAST AND THE SUBJECT IS SHUT DOWN AFTER IT. That is how the "own subject" answer is
+# honoured without a second 13-minute deploy: the injection disarms QubesDB's SCM recovery and takes
+# the guest's own qrexec down for the six minutes QDB_WAIT_TIMEOUT_MS specifies, so the hazard is a
+# LATER cell inheriting a half-restored guest - and nothing runs after this one. Both services are
+# auto-start, so the shutdown is also the backstop if the script's own finally never ran.
+# THE CONTROL ARM GOES FIRST (experimenter rule 4, and rule 3a): it exercises every line of the
+# instrument on a healthy guest and its 7023 delta MUST be zero. A nonzero delta there is the
+# instrument failing, not the product, and it would otherwise be read as the injection working.
+if has L10; then
+  _inc10=$(incoming)
+  q push guest/sup-qdbtimeout.ps1 >/dev/null 2>&1
+  for _arm in CONTROL INJECT; do
+    case "$_arm" in
+      CONTROL) _flag="-Control"; _tr='C:\Windows\Temp\L10c.txt'; _lbl=L10C ;;
+      *)       _flag="";         _tr='C:\Windows\Temp\L10i.txt'; _lbl=L10  ;;
+    esac
+    log "$_lbl: $_arm - $([ "$_arm" = CONTROL ] && echo 'the same sequence WITHOUT stopping QubesDB' || echo 'stop QubesDB and let WaitForQdb burn its 6 minutes')"
+    # DETACHED, via -EncodedCommand. The injected arm takes the channel down, so a command that
+    # waits for the script would die with it - the same shape wu-e2e had to adopt for the
+    # oscillation scan ("the channel was killing it", 5926ffdf). -EncodedCommand rather than quoting
+    # inside -Command because lint L3 refuses the latter for failing SILENTLY, and this carries a
+    # path with spaces. The base64 is built here, not hard-coded, because $_inc10 is DISCOVERED.
+    _cmd="Start-Process -FilePath powershell -WindowStyle Hidden -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \"$_inc10\\sup-qdbtimeout.ps1\" -Out $_tr $_flag'; 'LAUNCHED'"
+    _b64=$(printf '%s' "$_cmd" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)
+    QT_T=120 q run "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $_b64" > "$OUT/$_lbl-launch.out" 2>&1
+    _lrc=$?
+    # KEEP THE LAUNCH'S OUTCOME. Discarding it is how wu-e2e could not tell "it never started" from
+    # "it ran and was not seen" when the answer mattered (evidence_can_decide 0.22).
+    grep -qa LAUNCHED "$OUT/$_lbl-launch.out" || log "  [WARN] $_lbl: the launch did not print LAUNCHED (rc=$_lrc) - see $OUT/$_lbl-launch.out"
+    # THREE EXITS on the wait, and it says which: the transcript's own `done` marker appeared / the
+    # guest is Halted (terminal - nothing will finish) / the deadline. The channel is EXPECTED to be
+    # unavailable for part of the injected arm, so a failed read is not an exit: only `done`,
+    # Halted, or time are.
+    _why=""; _d=$((SECONDS+900))
+    while [ $SECONDS -lt $_d ]; do
+      [ "$(state)" = Halted ] && { _why="the guest halted"; break; }
+      QT_T=60 q run "cmd /c type $_tr" > "$OUT/$_lbl-read.out" 2>&1 || true
+      grep -qa "^L10|done|" "$OUT/$_lbl-read.out" && { _why="the transcript is complete"; break; }
+      sleep 20
+    done
+    [ -n "$_why" ] || _why="the 900 s deadline expired"
+    log "  $_lbl wait exit: $_why"
+    g10(){ grep -a "^L10|$1|" "$OUT/$_lbl-read.out" 2>/dev/null | tail -1 | cut -d"|" -f3- | tr -d "\r"; }
+    _b7023=$(g10 scm_7023_base); _w7023=$(g10 scm_7023_window); _w7031=$(g10 scm_7031_window)
+    _has1460=$(g10 scm_7023_names_1460); _term=$(g10 terminal); _qend=$(g10 qubesdb_state_end)
+    _qare=$(g10 qrexecagent_state_restored); _cfg=$(g10 qubesdb_failure_cfg_restored)
+    _delta=$(( ${_w7023:-0} - ${_b7023:-0} ))
+    if [ "$_arm" = CONTROL ]; then
+      if [ -n "$_term" ]; then
+        verdict L10C INVALID "the control could not run, so the instrument is unvalidated" "$_term"
+      elif [ "${_w7023:-0}" -gt 0 ]; then
+        verdict L10C FAIL "the control saw a 7023 without the injection, so a 7023 in the injected arm proves nothing" \
+                "7023 in the control window: ${_w7023} (base ${_b7023:-0}) - this instrument cannot attribute its own stimulus"
+      elif [ -z "$(g10 done)" ]; then
+        verdict L10C INVALID "the control transcript never completed" "wait exit: $_why - no claim either way"
+      else
+        verdict L10C PASS "the instrument runs clean on a healthy guest and reports NO 7023" \
+                "7023=${_w7023:-0} 7031=${_w7031:-0}; QrexecAgent restored=$_qare, QubesDB=$_qend"
+      fi
+      continue
+    fi
+    if [ -n "$_term" ]; then
+      verdict L10 INVALID "the stimulus could not be held, so nothing about the SCM was measured" \
+              "$_term - QubesDB=$_qend QrexecAgent=$_qare; no verdict is claimed either way"
+    elif [ -z "$(g10 done)" ]; then
+      verdict L10 INVALID "the injected transcript never completed" \
+              "wait exit: $_why - the guest may have been mid-window; QubesDB=$_qend QrexecAgent=$_qare"
+    elif [ "$_delta" -lt 1 ]; then
+      verdict L10 FAIL "a forced WaitForQdb timeout produced NO System 7023" \
+              "7023 ${_b7023:-0} -> ${_w7023:-0} (delta $_delta), 7031=${_w7031:-0} - either the service did not fail or the SCM did not record it, and the installer's restart actions rest on that record"
+    elif [ "$_has1460" != "True" ]; then
+      verdict L10 FAIL "the 7023 does not name ERROR_TIMEOUT (1460), so this is a different failure" \
+              "7023 delta=$_delta but no 1460 in its text - WaitForQdb returns 1460 and svc-exitcode-test asserts SvcMainLoop carries it to the SCM; some other cause ended the service"
+    elif [ "$_qare" != "RUNNING" ] || [ "$_qend" != "RUNNING" ]; then
+      verdict L10 FAIL "the cell did not leave the guest healthy" \
+              "QrexecAgent=$_qare QubesDB=$_qend recovery=$_cfg - a cell that leaves the subject degraded is a defect of the cell"
+    else
+      verdict L10 PASS "a forced WaitForQdb timeout is recorded by the SCM with 1460 and the guest comes back" \
+              "7023 ${_b7023:-0} -> ${_w7023:-0} naming 1460, 7031=${_w7031:-0}; QrexecAgent=$_qare QubesDB=$_qend recovery restored=$_cfg"
+    fi
+  done
+  # NOTHING INHERITS THIS SUBJECT. It asks and polls - never qvm-shutdown --wait, which kills at its
+  # timeout and contaminates every later use of the guest (lint L9).
+  qwt_shutdown "$SUBJ" 900 || log "  [WARN] L10: the subject did not shut down cleanly after the injection"
 fi
 
 echo
