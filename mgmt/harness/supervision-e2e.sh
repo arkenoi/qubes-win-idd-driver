@@ -34,8 +34,11 @@
 #                 Its CONTROL arm runs FIRST and must see NO 7023. It runs LAST of all cells and
 #                 shuts the subject down after itself, because it takes the guest's own qrexec down
 #                 for the six minutes QDB_WAIT_TIMEOUT_MS specifies
-#   L11 crash-up  a death with the guest UP, TWICE: exactly one dom0 notification each, and the second
-#                 numbered HIGHER for the same component. ADR-supervision item 2's other half - L8
+#   L11 crash-up  a death with the guest UP, TWICE: exactly one dom0 notification each, the second
+#                 numbered HIGHER for the same component, and then a GRACEFUL shutdown+boot that adds
+#                 NOTHING - the pairing the owner asked for, "one notification per death, zero per
+#                 graceful shutdown", on one guest with two real deaths already in the log. A reboot
+#                 after a delivered death is exactly where the catch-up's watermark could re-report. ADR-supervision item 2's other half - L8
 #                 covers the death during a SHUTDOWN and the ADR records what it does not: "A forced
 #                 crash WHILE THE GUEST IS UP, and the death-1/death-2 numbering across two crashes".
 #                 The increment is the property, not the literal 1 and 2: L8 has already put
@@ -246,10 +249,40 @@ PS
   fi
 fi
 
+# THE REPORTER'S OWN COUNT OF WHAT IT SENT TO dom0. One reader, used by the positive cells (L8, L11
+# assert +1) and by L2's negative control (0), because a notification count is only meaningful as a
+# DELTA: the reporter's log is per-day and accumulates across every cell in the routine.
+dom0_rows(){
+  # -EncodedCommand, NOT escaped quotes inside -Command: lint-harness L3 refuses the latter because
+  # it FAILS SILENTLY, and it refused the first cut of this function. The script is fixed text, so
+  # the base64 is built here each call - cheap, and it keeps the PowerShell readable as PowerShell.
+  local _ps _b64
+  _ps='$d=(Get-ItemProperty -Path "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools" -EA SilentlyContinue).LogDir
+if (-not $d) { "ROWS=?"; exit }
+$n = 0
+foreach ($f in Get-ChildItem -LiteralPath $d -Filter "qwt-*death*.log" -EA SilentlyContinue) {
+  $n += @(Get-Content -LiteralPath $f.FullName -EA SilentlyContinue | Where-Object { $_ -match "notified to dom0 as" }).Count
+}
+"ROWS=$n"'
+  _b64=$(printf '%s' "$_ps" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)
+  q run "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $_b64" 2>/dev/null \
+    | tr -d '\r' | sed -n 's/^ROWS=\([0-9]*\)$/\1/p' | tail -1
+}
+
 # ---- L2 lifecycle: the shutdown claims ----------------------------------------------------------------------------
+# AND THE NEGATIVE CONTROL FOR THE NOTIFICATION PATH, which this cell did not have. Owner,
+# 2026-10-24: "one notification per death, zero per graceful shutdown?" - the first half is asserted
+# by L8 and L11 (+1 row each), and the second was NOT asserted by this cell at all: its verdict read
+# `instances/boot=1 deaths=0 relaunches=0 stop_errors=0 stale=0`, every one of them a GUEST-side
+# metric. What enforced "no notification" was a DIFFERENT instrument - the sweep's dom0_loud_failures
+# and death_events, both gated at max 0 P1 - so a reader of this cell's verdict was taking the
+# notification claim on the strength of a threshold in another tool's report. The row delta is
+# asserted here now, the same number L8 and L11 require to be exactly 1.
 if has L2; then
   log "L2: $CYCLES clean shutdown/boot cycles"
   ok=1
+  _l2rows_before=$(dom0_rows)
+  log "  dom0 rows before the clean cycles: ${_l2rows_before:-unreadable}"
   for i in $(seq 1 "$CYCLES"); do
     sleep 30                                   # let the agent reach steady state before the shutdown under test
     qwt_shutdown "$SUBJ" 600 > "$OUT/L2-shutdown-$i.out" 2>&1
@@ -269,9 +302,23 @@ if has L2; then
 import json,sys; m=json.load(open(sys.argv[1]))['metrics']
 print(m.get('agent_instances_per_boot'), m.get('agent_deaths_at_shutdown'), m.get('agent_relaunches_at_shutdown'),
       m.get('errors_during_requested_stop'), m.get('stale_error_lines'))" "$rep")
-      if [ "$inst" = 1 ] && [ "$deaths" = 0 ] && [ "$relaunch" = 0 ] && [ "$stop" = 0 ] && [ "$stale" = 0 ]; then
-        verdict L2 PASS "one agent per boot, no death or relaunch at a shutdown, no ERROR during a requested stop" \
-                "instances/boot=$inst deaths=$deaths relaunches=$relaunch stop_errors=$stop stale=$stale"
+      _l2rows_after=$(dom0_rows)
+      # UNREADABLE IS NOT ZERO. If either read failed the delta cannot be computed, and this cell
+      # says so instead of claiming the silence it was looking for.
+      if [ -z "${_l2rows_before:-}" ] || [ -z "${_l2rows_after:-}" ]; then
+        _l2d="unreadable"
+      else
+        _l2d=$(( _l2rows_after - _l2rows_before ))
+      fi
+      if [ "$_l2d" = "unreadable" ]; then
+        verdict L2 INVALID "the dom0 row count could not be read, so 'zero notifications' is unmeasured" \
+                "rows before='${_l2rows_before:-}' after='${_l2rows_after:-}'; the guest-side metrics were instances/boot=$inst deaths=$deaths relaunches=$relaunch stop_errors=$stop stale=$stale"
+      elif [ "$_l2d" != 0 ]; then
+        verdict L2 FAIL "a GRACEFUL shutdown sent dom0 a notification" \
+                "the reporter's rows went $_l2rows_before -> $_l2rows_after (+$_l2d) across $CYCLES clean cycle(s) - zero is the claim, and one per death is only meaningful if a clean cycle is silent"
+      elif [ "$inst" = 1 ] && [ "$deaths" = 0 ] && [ "$relaunch" = 0 ] && [ "$stop" = 0 ] && [ "$stale" = 0 ]; then
+        verdict L2 PASS "one agent per boot, no death or relaunch at a shutdown, no ERROR during a requested stop, and ZERO dom0 notifications" \
+                "instances/boot=$inst deaths=$deaths relaunches=$relaunch stop_errors=$stop stale=$stale; dom0 rows $_l2rows_before -> $_l2rows_after (delta 0) across $CYCLES clean cycle(s)"
       else
         verdict L2 FAIL "one agent per boot, no death or relaunch at a shutdown, no ERROR during a requested stop" \
                 "instances/boot=$inst deaths=$deaths relaunches=$relaunch stop_errors=$stop stale=$stale"
@@ -1013,8 +1060,38 @@ if has L11; then
     verdict L11 FAIL "the second death is numbered BELOW the first" \
             "round1 added suffix $_s1, round2 added $_s2 - the numbering must increase or the order of two deaths cannot be read"
   else
-    verdict L11 PASS "a death with the guest UP is reported EXACTLY ONCE, and the second is numbered higher" \
-            "round1 +1 row (suffix $_s1, 4001 x$_e1), round2 +1 row (suffix $_s2, 4001 x$_e2), agent relaunched as pid $_rel between them; WER 1000/1001 recorded not required - a Kill is a termination, not a fault"
+    # AND THEN THE PAIRING, on the same guest with two real deaths already in the log: a GRACEFUL
+    # shutdown and boot must add NOTHING. Owner, 2026-10-24: "one notification per death, zero per
+    # graceful shutdown?" - L2 answers the second half on a guest that has seen no deaths, which is
+    # the easy case. The hard one is HERE: the catch-up pass runs at every boot with a watermark, so
+    # a reboot after a reported death is exactly where a re-report would appear, and nothing covered
+    # it. L8 proves exactly-once for a death injected DURING a shutdown; this proves no SECOND
+    # report for a death already delivered.
+    _l11rows=$(dom0_rows)
+    sleep 20                                   # let the agent reach steady state before the shutdown
+    qwt_shutdown "$SUBJ" 600 > "$OUT/L11-shutdown.out" 2>&1
+    _l11state=$(state)
+    if [ "$_l11state" != Halted ]; then
+      verdict L11 INVALID "the guest halts on request after the injections (never killed)" \
+              "state=$_l11state: $(tail -1 "$OUT/L11-shutdown.out" | cut -c1-110) - the two deaths WERE each reported once (suffixes $_s1, $_s2); the no-re-report half is unmeasured"
+    else
+      qvm-start "$SUBJ" >/dev/null 2>&1
+      _w11=$(wait_session 300)
+      _l11rows2=$(dom0_rows)
+      if [ "$_w11" != up ]; then
+        verdict L11 INVALID "a session after the post-injection boot" \
+                "wait_session=$_w11 - the two deaths WERE each reported once; the no-re-report half is unmeasured"
+      elif [ -z "${_l11rows:-}" ] || [ -z "${_l11rows2:-}" ]; then
+        verdict L11 INVALID "the dom0 row count could not be read across the post-injection cycle" \
+                "rows before='${_l11rows:-}' after='${_l11rows2:-}' - unreadable is not zero"
+      elif [ "$_l11rows2" != "$_l11rows" ]; then
+        verdict L11 FAIL "a clean reboot RE-REPORTED a death that had already been delivered" \
+                "rows $_l11rows -> $_l11rows2 across one graceful shutdown+boot with two already-reported deaths in the log - the catch-up's watermark is what must stop this, and a double is a P1 by the owner's rule"
+      else
+        verdict L11 PASS "ONE notification per death, and ZERO for the graceful shutdown that follows them" \
+                "round1 +1 row (suffix $_s1, 4001 x$_e1), round2 +1 row (suffix $_s2, 4001 x$_e2), agent relaunched as pid $_rel between them; then a clean shutdown+boot added NOTHING (rows $_l11rows -> $_l11rows2). WER 1000/1001 recorded not required - a Kill is a termination, not a fault"
+      fi
+    fi
   fi
 fi
 
