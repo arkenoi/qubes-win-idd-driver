@@ -37,12 +37,57 @@ foreach (\$d in \$dirs) {
     Get-ChildItem -Recurse -LiteralPath \$p -Filter *.ps1 -ErrorAction SilentlyContinue | ForEach-Object {
         \$n++
         \$errs = \$null
-        [void][System.Management.Automation.Language.Parser]::ParseFile(\$_.FullName, [ref]\$null, [ref]\$errs)
+        \$ast = [System.Management.Automation.Language.Parser]::ParseFile(\$_.FullName, [ref]\$null, [ref]\$errs)
         if (\$errs -and \$errs.Count) {
             \$bad++
             Write-Output ('FAIL ' + \$_.FullName.Replace('$REPO/',''))
             \$errs | Select-Object -First 3 | ForEach-Object {
                 Write-Output ('     line ' + \$_.Extent.StartLineNumber + ': ' + \$_.Message)
+            }
+        }
+        # ---- TWO DEFECTS THAT PARSE CLEANLY AND THROW, OR SILENTLY LOSE A VALUE, AT RUNTIME ------
+        # Added 2026-10-24 after both were found by hand on the same day, in the same file family:
+        #  1. an -f format index with no argument behind it. guest/wgcbroker-peek.ps1's CROP line
+        #     referenced index 10 while passing ten arguments, so every run threw
+        #     'Error formatting a string: Index (zero based) must be ... less than the size of the
+        #     argument list' - and the ONE diagnostic that tells a wrong crop from missing pixels,
+        #     which ABI 26 was added to provide, printed NOTHING from the day valid= was added.
+        #  2. a bare TYPE LITERAL as a command argument: an int cast written to the LEFT of the
+        #     parentheses is passed as the argument itself and the value is gone - measured under
+        #     pwsh 7.4.
+        # NEITHER IS A SYNTAX ERROR, so the pass above cannot see them; both are structural, so the
+        # PARSER answers them exactly - which is why this reads the AST and not a regex over text.
+        # NOTE FOR THE NEXT EDITOR: this whole block is inside a BASH double-quoted string, so a
+        # backtick or a dollar-paren in a COMMENT is executed by bash before pwsh sees it. The first
+        # cut of this comment quoted the defect with backticks and bash answered
+        # '-f: command not found'.
+        if (\$ast) {
+            # IT IS A STRING CONSTANT, NOT A TypeExpressionAst, and that is why the first cut of
+            # this check reported nothing on a file that carried the defect. In ARGUMENT position
+            # PowerShell parses a bare word as a string, so an int cast written to the left of the
+            # parentheses arrives as StringConstantExpressionAst with the text of the cast -
+            # introspected under pwsh 7.4 to be sure rather than assumed.
+            # MATCHED AGAINST KNOWN TYPE NAMES, so a bracketed log tag written as a bare word - this
+            # repo writes plenty of them - cannot be mistaken for a lost cast.
+            \$tnames = 'int|int32|int64|long|uint32|uint64|short|byte|char|bool|boolean|string|double|single|float|decimal|datetime|timespan|guid|regex|version|array|hashtable|scriptblock|pscustomobject|psobject|xml|type|void|switch'
+            foreach (\$c in \$ast.FindAll({ \$args[0] -is [System.Management.Automation.Language.CommandAst] }, \$true)) {
+                foreach (\$e in \$c.CommandElements) {
+                    if (\$e -is [System.Management.Automation.Language.StringConstantExpressionAst] -and
+                        \$e.Extent.Text -match ('^\[(' + \$tnames + ')(\[\])?\]\$')) {
+                        \$bad++
+                        Write-Output ('FAIL ' + \$_.FullName.Replace('$REPO/','') + ' line ' + \$e.Extent.StartLineNumber + ': a bare type literal ' + \$e.Extent.Text + ' is passed AS AN ARGUMENT - the cast belongs inside the parentheses, or the value is lost')
+                    }
+                }
+            }
+            foreach (\$b in \$ast.FindAll({ \$args[0] -is [System.Management.Automation.Language.BinaryExpressionAst] -and \$args[0].Operator -eq 'Format' }, \$true)) {
+                \$idx = [regex]::Matches(\$b.Left.Extent.Text, '\{(\d+)') | ForEach-Object { [int]\$_.Groups[1].Value }
+                # -f takes ONE argument or an array literal; anything else (a variable holding an
+                # array, a splat) cannot be counted here and is left alone rather than guessed at.
+                \$cnt = if (\$b.Right -is [System.Management.Automation.Language.ArrayLiteralAst]) { \$b.Right.Elements.Count } else { -1 }
+                if (\$idx -and \$cnt -ge 0 -and ((\$idx | Measure-Object -Maximum).Maximum -ge \$cnt)) {
+                    \$bad++
+                    Write-Output ('FAIL ' + \$_.FullName.Replace('$REPO/','') + ' line ' + \$b.Extent.StartLineNumber + ': -f references {' + ((\$idx | Measure-Object -Maximum).Maximum) + '} but only ' + \$cnt + ' argument(s) are passed - this THROWS at runtime')
+                }
             }
         }
     }

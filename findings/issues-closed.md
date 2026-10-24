@@ -449,3 +449,22 @@ PREVIOUS RELEASE instead of 4.3.35.795. The gate now attributes the noise correc
 fooled by it, but the noise is still written, and an entry image that predates the banner demotion
 is also the only reason the blindness looked like a property of the corpus.
   **ALSO STILL OPEN**: (1) RE-SEAL the entry fixture from the PREVIOUS RELEASE instead of 4.3.35.795 - the gate now attributes some of the noise correctly instead of being fooled by it, but the noise is still written; (2) treat an empty `prior_build_mix` in an upgrade cell as incomplete evidence.
+
+
+## RETIRED 2026-10-24 - PSFORMATINDEXUNCHECKED: both shapes now have a gate and a driven suite
+FIXED THE SAME DAY IT WAS FILED. tools/ps-parse-gate.sh carries both checks, read off PowerShell's own
+AST rather than a regex: an -f format string whose highest index is not less than its argument count,
+and a bare type literal passed as a command argument. tools/tests/ps-runtime-shapes-selftest.sh drives
+each one on a file written to carry it, drives the near-misses that must NOT fire (a bracketed log tag,
+a correct -f, an -f whose arguments cannot be counted, a real cast), asserts the gate exits non-zero,
+and asserts the shipped population is large enough that a green is not a sweep over nothing: 5 legs,
+all 410 shipped .ps1 files clean.
+AND THE FIRST CUT OF THE TYPE-LITERAL CHECK REPORTED NOTHING ON A FILE THAT CARRIED THE DEFECT: it
+tested for a TypeExpressionAst, while in ARGUMENT position PowerShell parses a bare word as a STRING,
+so the cast arrives as StringConstantExpressionAst carrying the cast's text. Found by driving it, not
+by reading it - which is the whole reason the suite exists rather than a line in a commit message.
+It is a DEV-QUBE suite: it shells out to pwsh, which no GitHub runner has, so it is NOT in
+offline-suites.txt and is reached by tools/tests/run-all.sh's glob. That exclusion is the standing
+UNSCHEDULEDSUITES problem and not a new one.
+
+- PSFORMATINDEXUNCHECKED [instrument, every shipped .ps1; P2, OPEN - it already cost a diagnostic] [verified 2026-10-24] **TWO POWERSHELL DEFECTS THAT PARSE CLEANLY AND FAIL AT RUNTIME, AND NO GATE HERE SEES EITHER.** (1) A `-f` index with no argument behind it: `guest/wgcbroker-peek.ps1`'s CROP line read `valid={10}` while passing ten arguments, so every run threw `RuntimeException: Error formatting a string: Index (zero based) must be ... less than the size of the argument list` - proven under pwsh 7.4 - and the ONE diagnostic that tells a wrong crop from missing pixels, the thing ABI 26 was added for, printed nothing from the day `valid=` was added. (2) A bare TYPE LITERAL as an argument: `T 'waited_s' [int]((Get-Date) - $start).TotalSeconds` passes `[int]` itself (measured: `v=[[int]]`) and the value is lost; the cast belongs inside the parentheses. Both fixed (4fbde2c2, and before guest/sup-qdbtimeout.ps1 ever ran); a tree-wide grep found no other instance of (2). NEITHER IS VISIBLE TO WHAT EXISTS: the files parse, so tools/ps-parse-gate.sh passes; the variable names are fine, so peek-abi-assert's static leg passes; the throw is inside one Write-Output. FIX: one static pass over every shipped .ps1 driven by PowerShell's own parser - highest `-f` index < argument count (BinaryExpressionAst/Format, the RHS ArrayLiteralAst's elements), and no command argument that is a bare TypeExpressionAst - with a seen-to-fail control for each. tools/ps-parse-gate.sh already walks every .ps1 and is where it belongs.
