@@ -535,7 +535,8 @@ INFORMATIONAL_METRICS = ["error_lines", "modules_unattributable", "warning_lines
                          # because it is a property of the CAPTURE (an upgrade cell has two builds
                          # in it by construction), never of the build under test - but it is always
                          # printed, including the zero, because the counts below it all depend on it
-                         "sweep_excluded_lines", "sweep_excluded_before_window", "sweep_excluded_detail",
+                         "sweep_excluded_lines", "sweep_excluded_pre_anchor",
+                         "sweep_excluded_before_window", "sweep_excluded_detail",
                          # what was declared, with its kind and whether it matched - the audit trail
                          # for the tolerated kind, whose absence deliberately cannot breach
                          "declared_errors_tolerated", "declared_errors_detail",
@@ -2120,6 +2121,7 @@ def cut_predecessor(files, build=None, since=None, window_trusted=True):
     """
     scope = build_scope(files, build)
     moved = Counter()
+    anchored = Counter()      # excluded by the INSTALL ANCHOR, not by a build attribution
     stale = Counter()
     kept_candidate = 0
     # NOTHING IS MOVED ON A CAPTURE THAT CANNOT NAME THE CANDIDATE. With --build given and no module
@@ -2138,7 +2140,19 @@ def cut_predecessor(files, build=None, since=None, window_trusted=True):
         for l in lf.lines:
             if scope.prior(lf, l):
                 cut.append(l)
-                moved["%s@%s" % (lf.module or "?", line_version(lf, l) or "?")] += 1
+                # TWO CAUSES BEHIND prior(), AND THEY MUST NOT SHARE A LABEL. It is
+                # `is_prior_build OR (pre-install AND version-less AND not declared-unreadable)`, so
+                # a line can leave the graded view either because its BUILD is superseded or because
+                # it was written BEFORE THE INSTALL ANCHOR by a source that carries no version at
+                # all (bridge.log, TaskScheduler records). MEASURED 2026-10-24 on win11r-sup: the
+                # receipt read `SWEEP EXCLUSION (predecessor build): ?@? x624` - 624 lines reported
+                # under a build attribution that was never made, which is the opposite of the
+                # "clearly marked" the exclusion is supposed to be. The version-less ones get their
+                # own label and their own count.
+                if version_is_prior(lf.module, line_version(lf, l), scope.builds, scope.superseded):
+                    moved["%s@%s" % (lf.module or "?", line_version(lf, l) or "?")] += 1
+                else:
+                    anchored["%s" % (lf.module or "?")] += 1
             elif since is not None and window_trusted and l.ts is not None and l.ts < since:
                 # BEFORE THIS RUN'S WINDOW - A PREVIOUS CAMPAIGN'S LINE, AND A BUILD SCOPE CANNOT
                 # REACH IT. Owner, 2026-10-24: "make sure PREVIOUS campaign logs pre-split are not
@@ -2204,6 +2218,7 @@ def cut_predecessor(files, build=None, since=None, window_trusted=True):
                 l.swept_out = "sweep-exclusion:predecessor-build"
         lf.prior_lines = (getattr(lf, "prior_lines", None) or []) + cut
     return scope, {"moved": dict(moved), "cut": True, "stale": dict(stale),
+                   "anchored": dict(anchored), "lines_anchored": sum(anchored.values()),
                    "lines_moved": sum(moved.values()), "lines_stale": sum(stale.values()),
                    "lines_kept": kept_candidate, "window_trusted": bool(since) and window_trusted,
                    "window_why": ("" if window_trusted else
@@ -4160,6 +4175,7 @@ def cmd_analyze(a):
     # exclusion that stops being nameable cannot be seen to be wrong, and a wrong exclusion here is
     # the failure mode Jev scored highest (hides-the-candidate 0.89).
     metrics["sweep_excluded_lines"] = _cut.get("lines_moved", 0)
+    metrics["sweep_excluded_pre_anchor"] = _cut.get("lines_anchored", 0)
     # None, NEVER 0, when the window could not be applied: a zero here would read as "no previous
     # run's lines were present" when what happened is "nobody looked".
     metrics["sweep_excluded_before_window"] = (_cut.get("lines_stale", 0)
@@ -4167,6 +4183,8 @@ def cmd_analyze(a):
     metrics["sweep_excluded_detail"] = (
         ["SWEEP EXCLUSION (predecessor build): %s x%d" % (k, v)
          for k, v in sorted(_cut.get("moved", {}).items())]
+        + ["SWEEP EXCLUSION (written before the install anchor, no version to attribute): %s x%d" % (k, v)
+           for k, v in sorted(_cut.get("anchored", {}).items())]
         + ["SWEEP EXCLUSION (before this run's window): %s x%d" % (k, v)
            for k, v in sorted(_cut.get("stale", {}).items())]
         + ([ "WINDOW NOT APPLIED: %s" % _cut["window_why"] ] if _cut.get("window_why") else [])
