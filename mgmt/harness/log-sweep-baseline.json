@@ -85,6 +85,12 @@
    "regex": "QGABROKERBACK de-slice broker",
    "rewording_note": "anchored on the tag after the 2026-10-10 rewording made 'QGABROKERBACK de-slice broker RECOVERED' unmatchable (the entry is REQUIRED_REFS; without it an INJECTED reap/recovery grades as a new signature)",
    "status": "expected"
+  },
+  {
+   "issue": "hold-duration-aggregate",
+   "reason": "NEW 2026-10-24 (agent 88cb787), declared BEFORE its first campaign so the sweep is not failed by an instrument I added. NORMAL OPERATION: the periodic aggregate of how long window holds lasted - runs/maxMs/totalMs and the >250 ms, >1 s, >3 s buckets - emitted at most once a minute and only when a hold resolved, the QGALEDGERSUM pattern. It exists because NOTHING measured a hold's duration below QGA_HOLD_STARVE_MS (10 s), which has been emitted 0 times on this rig, so a 150 ms hold and a 9.5 s hold were indistinguishable (owner 2026-10-24: \"window holds that stay longer than expected are very, very real product defect if they are authentic\"). It is a measurement, not a fault: nothing is gated on the buckets. A LOUD hold is still QGAHOLDSTARVED at ERROR. findings/issues.md HOLDDURATIONWASUNMEASURABLE - and the FIRST campaign carrying it must have its maxMs READ, because that is the number the entry is waiting for.",
+   "regex": "^agent\\|I\\|[A-Za-z]+: QGAHOLDSUM\\b",
+   "status": "expected"
   }
  ],
  "signatures": {

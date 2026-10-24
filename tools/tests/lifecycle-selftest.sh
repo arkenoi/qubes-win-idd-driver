@@ -347,6 +347,15 @@ shape "main.c: the de-slice report is anchored through QgaDesliceAnchor, excused
 main_standdown_latch() {
     # 1: the hold precedes the was-ready branch AND the `else if (!g_BrokerDownSince)` arming branch
     awk '/if \(QgaDesliceSupervisionHeld\(g_BrokerStoodDown/{h=NR} /if \(_InterlockedExchange\(&g_BrokerReady, 0\) != 0\)/{r=NR} /else if \(!g_BrokerDownSince\)/{a=NR} END{exit !(h && r && a && h<r && h<a)}' "$1" &&
+    # 1b: AND IT FOLLOWS THE ADOPTION, which is what stops the latch silencing a real outage. The
+    # agent launches the broker once per life, so after a stand-down the thing that brings one back is
+    # ADR-supervision 4's system recovery - Task Scheduler - and the agent re-acquires it by opening
+    # the pid the broker publishes. That block is gated on `!g_WgcBrokerProc`, which is exactly the
+    # post-stand-down state, so it runs, `alive` becomes true and the latch clears. If the hold ever
+    # returned BEFORE it, a restarted broker could never be re-adopted while held, the latch would
+    # never clear, and a LATER genuine outage would be silenced for the life of the agent. Jev scored
+    # the clearing "complete" 0.97 from my DESCRIPTION; this asserts it against the code.
+    awk '/g_WgcBrokerProc = WgcOpenBrokerProcess\(\(DWORD\)pid, sid\);/{o=NR} /^    if \(alive\)/{v=NR} /if \(QgaDesliceSupervisionHeld\(g_BrokerStoodDown/{h=NR} END{exit !(o && v && h && o<v && v<h)}' "$1" &&
     # 2 + 3: set at the non-death exit, with the flag cleared in the same block
     awk '/g_BrokerStoodDown = TRUE;/{t=NR} /CfgWriteDword\(NULL, REG_CONFIG_DESLICE_DOWN_VALUE, 0, NULL\)/{f=NR; if(t && f>t && f-t<8) ok=1} END{exit !ok}' "$1" &&
     # 4: cleared on BOTH events - alive (before the alive branch returns) and at the launch
