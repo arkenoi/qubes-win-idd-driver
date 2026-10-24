@@ -363,6 +363,37 @@ main_standdown_latch() {
     awk '/g_WgcLastLaunch = now;/{l=NR} /g_BrokerStoodDown = FALSE;/{if(l && NR>l && NR-l<8) ok=1} END{exit !ok}' "$1" &&
     awk '/g_BrokerStoodDown = FALSE;/{c[++n]=NR} /BrokerReportDeaf\(\);/{d=NR} END{for(i=1;i<=n;i++) if(d && c[i]<d && d-c[i]<8) ok=1; exit !ok}' "$1"; }
 shape "main.c: a graceful stand-down LATCHES - the hold precedes every arming branch, is set at the non-death exit with the flag cleared, and clears only on a launch or the broker seen alive" main_standdown_latch "$MAIN" 'if (QgaDesliceSupervisionHeld(g_BrokerStoodDown ? 1 : 0, g_BrokerDownSince, now))'
+# THE PERSISTED HEALTH FLAG MUST BE OWNED, NOT LEFT. DesliceBrokerDown is written 1/2 on the hard-fail
+# path and lives in HKLM, so it survives reboots. Init's own comment promises "acceptance never reads a
+# stale value from a prior config" and delegates the expected case to "BrokerSupervise (0 on ready,
+# 1/2 on the hard-fail path)" - but every clear was gated on THIS boot's clock, so an eligible guest
+# whose broker came up cleanly wrote it nowhere and inherited a previous boot's 1. The property: the
+# first-ready transition writes 0 UNCONDITIONALLY, inside the `if (!g_BrokerReady)` block, not under a
+# g_BrokerDownSince test.
+main_flag_owned_on_ready() {
+    python3 - "$1" <<'PYF'
+import sys, io, re
+s = re.sub(r'(?m)//.*$', '', io.open(sys.argv[1], encoding='utf-8', errors='replace').read())
+m = re.search(r'if\s*\(\s*!g_BrokerReady\s*\)\s*\{', s)
+if not m: raise SystemExit(1)
+d, i = 0, m.end() - 1
+for j in range(i, len(s)):
+    if s[j] == '{': d += 1
+    elif s[j] == '}':
+        d -= 1
+        if d == 0: break
+blk = s[i:j]
+# the write is present in the first-ready block...
+if 'REG_CONFIG_DESLICE_DOWN_VALUE, 0' not in blk: raise SystemExit(1)
+# ...and NOT wrapped in a clock test inside it
+for w in re.finditer(r'CfgWriteDword\([^;]*REG_CONFIG_DESLICE_DOWN_VALUE,\s*0', blk):
+    before = blk[max(0, w.start() - 220):w.start()]
+    if re.search(r'if\s*\(\s*g_BrokerDownSince', before) and before.rstrip().endswith(('{', ')')):
+        raise SystemExit(1)
+raise SystemExit(0)
+PYF
+}
+shape "main.c: the persisted DesliceBrokerDown flag is OWNED at first-ready - written 0 unconditionally, so a clean boot cannot inherit a previous boot's outage" main_flag_owned_on_ready "$MAIN" 'REG_CONFIG_DESLICE_DOWN_VALUE, 0, NULL);'
 # HOW LONG A HOLD LASTS MUST BE OBSERVABLE. Owner, 2026-10-24: "window holds that stay longer than
 # expected are very, very real product defect if they are authentic" - and nothing measured them. The
 # only line carrying a duration is QGAHOLDSTARVED at a 10 s bound, emitted 0 times on this rig, and
