@@ -62,13 +62,30 @@ shape "waits: the session wait has three exits and says which it took (up / halt
 # The predicate must depend on the GUARD LINE, or the knob proves nothing. What matters here is that the broker is
 # resolved by the pid the AGENT logged - never by image name - so that is what is checked: the pid parsed out of the
 # agent's line, and the process opened by -Id with it.
-no_by_name(){ ! grep -qE '(Stop-Process|taskkill|pkill|killall)' "$1" &&
+# COMMENTS ARE NOT CODE, and this check failed correct code for exactly that reason. The by-name clause
+# greped the WHOLE file, and the L8 injection's comments describe the mechanism they document - "a
+# DETACHED `cmd /c ping ... & taskkill /PID <n> /F > receipt` armed before the shutdown" - so the
+# prose naming the thing the check forbids made the check fail. Three occurrences, all comments, zero
+# in code. Fourth time in this repo that a source assertion read its own documentation as a
+# violation. Strip comments first; the other two clauses live in code and are unaffected.
+sup_code(){ sed -E 's/^[[:space:]]*#.*$//' "$1"; }
+no_by_name(){ ! sup_code "$1" | grep -qE '(Stop-Process|taskkill|pkill|killall)' &&
               grep -qF 'pid (\d+)' "$1" &&
               # the UNIQUE by-handle action: the suspend takes $p.Handle, never a name. (Get-Process -Id appears
               # twice in the routine, so keying on it made the knob removable without breaking the check.)
               grep -qF 'NtSuspendProcess($p.Handle)' "$1"; }
 shape "byname: the broker is resolved by the pid the agent logged, never by image name" \
       no_by_name '[void][W.T]::NtSuspendProcess($p.Handle)'
+# AND THE BY-NAME CLAUSE ITSELF MUST STILL BITE. shape() drives this predicate by removing the
+# NtSuspendProcess line, which exercises the THIRD clause only - so a by-name call planted in CODE is
+# planted here, in a copy, to prove the clause that was just narrowed can still fail.
+_bnc="$OUT/byname-control.sh"
+{ cat "$S"; printf '\nqwt_control_violation(){ Stop-Process -Name wgcbroker -Force; }\n'; } > "$_bnc"
+if no_by_name "$_bnc"; then
+  echo "FAIL  byname control: a by-name kill planted in CODE is NOT caught - the clause is inert"; bad=1
+else
+  echo "PASS  byname control: a by-name kill planted in CODE is still caught (comments are skipped, code is not)"
+fi
 
 missing_is_not_pass(){ # every INVALID branch must exist for the cells that read guest output
   for c in L3 L4 L6 L7 L7C; do grep -q "verdict $c INVALID" "$1" || return 1; done; return 0; }
