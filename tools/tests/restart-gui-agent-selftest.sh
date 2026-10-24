@@ -25,15 +25,31 @@ TMP=$(mktemp -d); trap 'rm -rf "$TMP"; pkill -P $$ sleep 2>/dev/null' EXIT
 # One pwsh session runs every case: it starts the stand-in processes, writes the fixture logs around them
 # (ORDER is the point: a log created before its process started is the pid-reuse signature), calls the
 # pure functions and prints "CASE <name> <stage|value>" lines this script asserts on.
+# THE FIXTURE'S TIMESTAMPS ARE RELATIVE TO NOW, NOT A FIXED DATE, and that is what this suite got
+# wrong. 4ea52456 (2026-10-23) taught the helper that the last init record must be dated at or after
+# the service start - an older record is the previous instance of the same file - and these fixtures
+# carried a hard-coded 20261007, so from the day after that fix every positive case answered
+# no-new-init and the suite went red on correct product behaviour. MEASURED 2026-10-24: 9 passed,
+# 3 failed, all three no-new-init or no CASE line. A FIXTURE MUST HOLD THE CONDITION the code under
+# test asks about, and a date typed into one ages out of that condition in silence - so MkLog
+# computes its stamps below.
+# AND THIS COMMENT LIVES AT BASH LEVEL ON PURPOSE: everything after the -Command quote is inside a
+# bash double-quoted string, so a comment containing a double quote closes it and bash answers
+# "syntax error near unexpected token (" from the middle of the PowerShell. That is how the first
+# cut of this note broke the suite outright.
 "$PWSH" -NoProfile -NonInteractive -Command "
 \$ErrorActionPreference = 'Continue'
 . ./guest/restart-gui-agent.ps1
 \$dir = '$TMP'
 function MkLog([string]\$name, [int]\$headerPid, [string]\$marker) {
     \$p = Join-Path \$dir \$name
-    \$lines = @('[20261007.120000.000-1234-I] LogInit: Running as user: NT AUTHORITY\SYSTEM, process ID: ' + \$headerPid,
-               '[20261007.120000.001-1234-I] LogInit: Module version: 4.3.35.0')
-    if (\$marker) { \$lines += ('[20261007.120001.000-1234-I] ' + \$marker) }
+    \$t0 = Get-Date        # NOW, not earlier: the rule is service start <= process StartTime <= this init line, and the fixture starts its process 1.2 s BEFORE calling MkLog, so a stamp in the past makes the process younger than its own line (pid-reused-start)
+    \$st = \$t0.ToString('yyyyMMdd.HHmmss') + '.000'
+    \$s1 = \$t0.AddMilliseconds(1).ToString('yyyyMMdd.HHmmss') + '.001'
+    \$s2 = \$t0.AddSeconds(1).ToString('yyyyMMdd.HHmmss') + '.000'
+    \$lines = @('[' + \$st + '-1234-I] LogInit: Running as user: NT AUTHORITY\SYSTEM, process ID: ' + \$headerPid,
+               '[' + \$s1 + '-1234-I] LogInit: Module version: 4.3.35.0')
+    if (\$marker) { \$lines += ('[' + \$s2 + '-1234-I] ' + \$marker) }
     Set-Content -LiteralPath \$p -Value \$lines -Encoding ASCII
     return (Get-Item -LiteralPath \$p)
 }
@@ -44,8 +60,12 @@ Start-Sleep -Milliseconds 300
 \$exe = (Get-Process -Id \$agent.Id).Path
 \$before = (Get-Date).AddSeconds(-5)
 
-# header pid parsing on the real line shape
-Write-Output ('CASE header-pid ' + (Get-GuiAgentLogHeaderPid (MkLog 'gui-agent-20261007-120000-4242.log' 4242 '').FullName))
+# the init record's pid, parsed from the real line shape. It was Get-GuiAgentLogHeaderPid until
+# bad757b7 moved logging to one file per module per DAY: the head of such a file gives the pid of
+# whichever instance created it that morning, so the reader became Get-GuiAgentLastInit and returns
+# .pid/.at/.line. The case kept calling the old name and PowerShell answered "is not recognized",
+# which this suite reported as 'no CASE line' - a rename breaking its only consumer.
+Write-Output ('CASE header-pid ' + (Get-GuiAgentLastInit (MkLog 'gui-agent-20261007-120000-4242.log' 4242 '').FullName).pid)
 
 # POSITIVE CONTROL: name pid = header pid = a live process running the expected exe, started before the
 # log was created, serving marker present
