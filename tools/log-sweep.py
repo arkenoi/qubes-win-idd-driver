@@ -535,7 +535,7 @@ INFORMATIONAL_METRICS = ["error_lines", "modules_unattributable", "warning_lines
                          # because it is a property of the CAPTURE (an upgrade cell has two builds
                          # in it by construction), never of the build under test - but it is always
                          # printed, including the zero, because the counts below it all depend on it
-                         "sweep_excluded_lines", "sweep_excluded_detail",
+                         "sweep_excluded_lines", "sweep_excluded_before_window", "sweep_excluded_detail",
                          # what was declared, with its kind and whether it matched - the audit trail
                          # for the tolerated kind, whose absence deliberately cannot breach
                          "declared_errors_tolerated", "declared_errors_detail",
@@ -2083,7 +2083,7 @@ def load_logs(logsdir, paths=None):
     return meta, files, problems, placeholders
 
 
-def cut_predecessor(files, build=None):
+def cut_predecessor(files, build=None, since=None, window_trusted=True):
     """CUT THE PREDECESSOR OFF AT INGESTION: partition every file so the default view - `lf.lines`,
     which every consumer iterates - holds only the build under test's lines.
 
@@ -2120,6 +2120,7 @@ def cut_predecessor(files, build=None):
     """
     scope = build_scope(files, build)
     moved = Counter()
+    stale = Counter()
     kept_candidate = 0
     # NOTHING IS MOVED ON A CAPTURE THAT CANNOT NAME THE CANDIDATE. With --build given and no module
     # declaring it, every versioned line looks "not the newest" and a cut here would quietly empty
@@ -2133,15 +2134,46 @@ def cut_predecessor(files, build=None):
     for lf in files:
         if not lf.lines:
             continue
-        keep, cut = [], []
+        keep, cut, old_run = [], [], []
         for l in lf.lines:
             if scope.prior(lf, l):
                 cut.append(l)
                 moved["%s@%s" % (lf.module or "?", line_version(lf, l) or "?")] += 1
+            elif since is not None and window_trusted and l.ts is not None and l.ts < since:
+                # BEFORE THIS RUN'S WINDOW - A PREVIOUS CAMPAIGN'S LINE, AND A BUILD SCOPE CANNOT
+                # REACH IT. Owner, 2026-10-24: "make sure PREVIOUS campaign logs pre-split are not
+                # contaminating observations". A per-day log is APPENDED to, so two campaigns on one
+                # guest on one day share a file, and both runs' lines carry the SAME candidate
+                # build - so `prior` keeps them all and the only thing standing between a previous
+                # run's error and this run's verdict is every metric remembering `sel(l.ts)`.
+                # MEASURED on acceptance run 40037710497: all EIGHT cells carry lines predating
+                # their own window - 1, 49, 53, 166, 24, 19, 116 and 75 of them, 503 in total.
+                # `sel` does exclude them from the line-level metrics today, so this is a safety net
+                # rather than a repair; it makes "not this run's" structural instead of a discipline
+                # 20-odd call sites have to keep, which is exactly how helper_relaunches,
+                # errors_during_requested_stop and stale_error_lines each went unscoped.
+                # It is a SEPARATE mark from the build exclusion because it is a separate fact: this
+                # line's build is fine, its RUN is not.
+                #
+                # AND IT IS CONDITIONAL ON THE CLOCK, because the comparison is against GUEST-LOCAL
+                # timestamps from a guest this rig knows to shift by hours - the agent's own log
+                # jumps 055237 -> 025240 inside one file. cmd_analyze already raises a `clockskew`
+                # DATA problem in exactly that case and its wording is the ruling: "no --since window
+                # can be trusted, so every count may include lines from outside it". So when the
+                # clock is NOT trustworthy this clause does nothing and says so: a previous run's
+                # error then surfaces as a finding, which is the direction that over-reports. The
+                # other direction - dropping THIS run's lines on a shifted clock - is hiding, and Jev
+                # refused the unconditional version for it (hides-this-run 0.37, clock_risk 0.31,
+                # land 0.47). It is also this project's recorded rule: never anchor freshness on a
+                # guest clock.
+                old_run.append(l)
+                stale["%s@%s" % (lf.module or "?", (l.ts.date().isoformat() if l.ts else "?"))] += 1
             else:
                 keep.append(l)
-        if cut:
-            plan.append((lf, keep, cut))
+        if cut or old_run:
+            plan.append((lf, keep, cut + old_run))
+            for l in old_run:
+                l.swept_out = "sweep-exclusion:before-this-run"
         kept_candidate += len(keep)
     # THE GUARD FOR THE ONE RISK THAT MATTERS HERE. Jev, asked what a cut at ingestion could get
     # wrong on this project's own recorded failures: hides-the-candidate 0.89, ahead of
@@ -2166,11 +2198,19 @@ def cut_predecessor(files, build=None):
         lf.lines = keep
         for l in cut:
             # MARKED, not merely MOVED. The collection it sits in says where it went; this says why,
-            # and travels with the line into any dump, render or count.
-            l.swept_out = "sweep-exclusion:predecessor-build"
+            # and travels with the line into any dump, render or count. A line already marked as
+            # pre-window keeps that mark: its build was never the question.
+            if l.swept_out is None:
+                l.swept_out = "sweep-exclusion:predecessor-build"
         lf.prior_lines = (getattr(lf, "prior_lines", None) or []) + cut
-    return scope, {"moved": dict(moved), "cut": True,
-                   "lines_moved": sum(moved.values()), "lines_kept": kept_candidate}
+    return scope, {"moved": dict(moved), "cut": True, "stale": dict(stale),
+                   "lines_moved": sum(moved.values()), "lines_stale": sum(stale.values()),
+                   "lines_kept": kept_candidate, "window_trusted": bool(since) and window_trusted,
+                   "window_why": ("" if window_trusted else
+                                  "this capture's guest clock is not MEASURED-AND-SANE (it needs both "
+                                  "--host-utc and the collector's nowutc, and no clockskew problem), so "
+                                  "no --since window can be trusted - NOTHING was excluded on it and a "
+                                  "previous run's lines may still be in the graded view")}
 
 
 # ----------------------------------------------------------------------------------------------- structure
@@ -3955,9 +3995,14 @@ def write_summary(rep, path):
     _sx = (rep.get("metrics") or {}).get("sweep_excluded_lines")
     _sxd = (rep.get("metrics") or {}).get("sweep_excluded_detail") or []
     if _sx is not None:
-        L.append("SWEEP EXCLUSION: %d line(s) taken out of the graded view - written by a build this "
-                 "capture shows was SUPERSEDED, so they are not the build under test's. Kept, not "
-                 "deleted: they still count in *_prior_build below." % _sx)
+        _sxw = (rep.get("metrics") or {}).get("sweep_excluded_before_window")
+        L.append("SWEEP EXCLUSION: %d line(s) written by a build this capture shows was SUPERSEDED, "
+                 "and %s line(s) from BEFORE this run's window - a per-day log is appended to, so a "
+                 "previous campaign's lines sit in the same file under the same build. Both are out "
+                 "of the graded view; kept, not deleted, and still counted in *_prior_build below."
+                 % (_sx, ("%d" % _sxw) if _sxw is not None else
+                    "NO (the window was not applied - see the detail below; a previous run's lines "
+                    "may still be graded)"))
         for _d in _sxd[:12]:
             L.append("  %s" % str(_d)[:200])
         if len(_sxd) > 12:
@@ -4098,16 +4143,33 @@ def cmd_analyze(a):
     # collect_signatures classifies, and from there the baseline that gets written. One cut scopes
     # all of them, instead of one predicate per consumer at eleven sites and counting - which is
     # how this rule came to be re-fixed four times. See cut_predecessor().
-    _cut_scope, _cut = cut_predecessor(files, getattr(a, "build", None))
+    # A MEASURED CLOCK, NOT MERELY THE ABSENCE OF A COMPLAINT. Two conditions, and the second is the
+    # one that was missing: no ("clockskew", ...) problem was raised above AND the comparison that
+    # raises it was actually possible - `--host-utc` plus the collector's own `nowutc`, the two
+    # clocks recorded at the same moment. Without them there is no second clock, the skew is
+    # UNMEASURED, and treating unmeasured as good is how a shifted guest would have let the window
+    # drop THIS run's lines. Jev refused the first cut for that path and was still at clock_risk
+    # 0.48 with only the problem-absence test; an unmeasured clock now means the window is not
+    # applied at all, which over-reports instead.
+    _clock_measured = bool(a.host_utc) and bool((meta or {}).get("begin", {}).get("nowutc"))
+    _clock_ok = _clock_measured and not any(p[0] == "clockskew" for p in problems)
+    _cut_scope, _cut = cut_predecessor(files, getattr(a, "build", None), since, _clock_ok)
     now = parse_iso((meta.get("begin") or {}).get("now")) if meta and (meta.get("begin") or {}).get("now") else None
     metrics = compute_metrics(files, boots, st, since, now, getattr(a, "build", None))
     # NAMED, NEVER SILENT: what the cut moved, per module and version, is a reported field. An
     # exclusion that stops being nameable cannot be seen to be wrong, and a wrong exclusion here is
     # the failure mode Jev scored highest (hides-the-candidate 0.89).
     metrics["sweep_excluded_lines"] = _cut.get("lines_moved", 0)
+    # None, NEVER 0, when the window could not be applied: a zero here would read as "no previous
+    # run's lines were present" when what happened is "nobody looked".
+    metrics["sweep_excluded_before_window"] = (_cut.get("lines_stale", 0)
+                                               if _cut.get("window_trusted") else None)
     metrics["sweep_excluded_detail"] = (
         ["SWEEP EXCLUSION (predecessor build): %s x%d" % (k, v)
          for k, v in sorted(_cut.get("moved", {}).items())]
+        + ["SWEEP EXCLUSION (before this run's window): %s x%d" % (k, v)
+           for k, v in sorted(_cut.get("stale", {}).items())]
+        + ([ "WINDOW NOT APPLIED: %s" % _cut["window_why"] ] if _cut.get("window_why") else [])
         if _cut.get("cut") else ["NO SWEEP EXCLUSION APPLIED: %s" % _cut.get("why", "?")])
     # THE CORRECTION THIS ANALYSER APPLIES IS ITSELF A MEASUREMENT, AND IT HAS TO BE GRADED.
     # normalize_clock_phase() exists so the --since window means what it says, and it worked - but
@@ -4646,7 +4708,7 @@ def cmd_attribute(a):
 
     OUTPUT, one TSV row per input file, then one ATTRIBUTE-RESULT trailer:
         path <TAB> module <TAB> versions <TAB> verdict <TAB> prior_lines <TAB> unattributable_lines
-        <TAB> module_newest
+        <TAB> module_newest <TAB> before_window_lines
     verdict is prior | candidate | unattributable | mixed | unknown. `prior_lines` and
     `unattributable_lines` are 1-based line numbers in the DECODED text (what sweep-gate's `_text`
     prints), so a consumer can drop exactly those lines of a file that holds both builds.
@@ -4682,6 +4744,7 @@ def cmd_attribute(a):
         print("ATTRIBUTE-RESULT files=%d readable=0 - nothing parsed" % len(paths), file=sys.stderr)
         return 2
     scope = build_scope(files, a.build)
+    since = parse_iso(a.since) if getattr(a, "since", None) else None
     # THE BUILD UNDER TEST DECLARED ITSELF, or it did not - build_scope()'s answer, the same one
     # compute_metrics reports as candidate_build_absent. None when --build was not given: there is
     # no claim to check, and "-" must not read like a 0 that passed.
@@ -4690,9 +4753,15 @@ def cmd_attribute(a):
     rows = []
     for lf in files:
         vers = sorted({i.get("version") for i in lf.inits if i.get("version")})
-        pri, una = [], []
+        pri, una, old_run = [], [], []
         known = 0
         for l in lf.lines:
+            # THE WINDOW IS ASKED OF EVERY LINE, versioned or not: "a previous campaign wrote this"
+            # does not depend on anyone declaring a build, which is precisely why the build scope
+            # cannot answer it. Reported separately from `prior` because it is a separate fact.
+            if since is not None and l.ts is not None and l.ts < since:
+                old_run.append(l.idx + 1)
+                continue
             if not line_version(lf, l):
                 continue
             known += 1
@@ -4721,7 +4790,8 @@ def cmd_attribute(a):
                      # by X" without ordering versions itself. tools/sweep-gate.sh did that ordering
                      # in bash (`sort -V | tail -1`) beside its own copy of the rule; a shell that
                      # has to rank versions is a shell with an implementation of this in it.
-                     (scope.builds.get(lf.module) or {}).get("newest") or ""))
+                     (scope.builds.get(lf.module) or {}).get("newest") or "",
+                     ",".join(str(n) for n in old_run) or "-"))
     if a.mark:
         want = os.path.abspath(a.mark)
         for lf in files:
@@ -4811,6 +4881,9 @@ def main(argv=None):
     at.add_argument("inputs", nargs="+", help="log files and/or directories of them")
     at.add_argument("--build", help="the build under test (a package_version or a module version); "
                                     "without it the newest series showing a turnover is assumed")
+    at.add_argument("--since", help="this run's window start: lines older than it are a PREVIOUS run's "
+                                    "and are reported in their own column, because a per-day log is "
+                                    "appended to and a build scope cannot tell two runs apart")
     at.add_argument("--mark", help="print THIS input file with every line labelled PRIOR/UNATTR/CAND, "
                                    "for reading a mixed capture by hand")
     a = ap.parse_args(argv)

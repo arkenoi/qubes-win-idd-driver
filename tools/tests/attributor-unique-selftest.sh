@@ -479,12 +479,18 @@ fi
 cat > "$T/cutprobe.py" <<'PY'
 import importlib.util, sys
 src, logs, build = sys.argv[1], sys.argv[2], (sys.argv[3] or None)
+since = m_since = None
+if len(sys.argv) > 4 and sys.argv[4]:
+    since = sys.argv[4]
 spec = importlib.util.spec_from_file_location("ls", src)
 m = importlib.util.module_from_spec(spec)
 try: spec.loader.exec_module(m)
 except SystemExit: pass
+if since:
+    m_since = m.parse_iso(since)
 _, files, _, _ = m.load_logs(logs)
-scope, cut = m.cut_predecessor(files, build)
+trusted = not (len(sys.argv) > 5 and sys.argv[5] == 'skewed')
+scope, cut = m.cut_predecessor(files, build, m_since, trusted)
 lf = [f for f in files if f.module == "gui-agent"][0]
 # THE FUNCTION NAME IS IN l.func: the parser strips the "Function: " prefix out of the message,
 # which is why build-attribution-selftest's own fixtures note it. Reading l.msg here compared the
@@ -495,6 +501,9 @@ print("CUT %s" % cut.get("cut"))
 print("GRADED %s" % ("|".join(graded) or "-"))
 print("ASIDE %s" % ("|".join(aside) or "-"))
 print("MOVED %s" % (",".join("%s=%s" % kv for kv in sorted(cut.get("moved", {}).items())) or "-"))
+print("STALE %d" % cut.get("lines_stale", 0))
+print("WINTRUST %s" % cut.get("window_trusted"))
+print("MARKS %s" % ("|".join(sorted({(l.swept_out or "NONE") for lf in files for l in lf.prior_lines})) or "-"))
 print("INITS %d" % sum(len(f.inits) for f in files))     # the turnover must survive the cut
 print("WHY %s" % cut.get("why", "-"))
 PY
@@ -582,6 +591,123 @@ if [ "$h_cut" = "False" ] && [ "$h_grad" = "StaleOne|FreshOne" ]; then
 else
     no "F6 absent build: cut=$h_cut graded='$h_grad', want False and both lines" \
        "a capture that cannot name the candidate must fail as unattributable, not be emptied"
+fi
+
+# F7 A PREVIOUS CAMPAIGN'S LINES ARE NOT THIS RUN'S OBSERVATIONS, and a build scope cannot reach
+# them: a per-day log is APPENDED to, so two campaigns on one guest on one day share a file and both
+# runs' lines carry the SAME candidate build. Owner, 2026-10-24: "make sure PREVIOUS campaign logs
+# pre-split are not contaminating observations". MEASURED on acceptance run 40037710497: all EIGHT
+# cells carry lines predating their own window (1, 49, 53, 166, 24, 19, 116, 75 - 503 in total), so
+# this is a real population, not a hypothetical one.
+# The fixture's first birth is at 10:00:00 and its error at 10:00:01; a window opening at 10:02 makes
+# BOTH of those a previous run's, and the candidate's 10:05 error the only observation of this one.
+# THE FIXTURE MUST HOLD THE CONDITION, AND THE FIRST ONE AVOIDED IT. Pointing this leg at $FC gave
+# stale=0 and the leg was right to fail: that capture's pre-window lines are the PREDECESSOR's, so
+# the build rule claims them first and the window rule never sees one. The contamination the owner
+# named is a DIFFERENT shape - the SAME candidate build in two runs, which is what a per-day log
+# holds when a guest is used twice in a day - so it needs its own capture: one build, two
+# instances, and a window that opens between them.
+FR="$T/prevrun"; mkdir -p "$FR"
+cat > "$FR/gui-agent-20261024.log" <<'LOG'
+[20261024.095000.100-700:704-I] LogInit: QWTBIRTH module=gui-agent ver=4.3.37.1100 pid=700 session=1 uptime=40.000
+[20261024.095001.100-700:704-E] OldRunError: an error from the PREVIOUS campaign, same build
+[20261024.100500.100-900:904-I] LogInit: QWTBIRTH module=gui-agent ver=4.3.37.1100 pid=900 session=1 uptime=95.000
+[20261024.100501.100-900:904-E] FreshOne: an error from THIS run
+LOG
+g7_out=$(python3 "$T/cutprobe.py" "$ATTR_FILE" "$FR" 4.3.37.1100 2026-10-24T10:02:00)
+g7_grad=$(printf '%s' "$g7_out"  | sed -n 's/^GRADED //p')
+g7_stale=$(printf '%s' "$g7_out" | sed -n 's/^STALE //p')
+g7_marks=$(printf '%s' "$g7_out" | sed -n 's/^MARKS //p')
+[ "${g7_stale:-0}" -ge 1 ] \
+  && ok "F7 lines from before this run's window are excluded on their own account ($g7_stale)" \
+  || no "F7 nothing was excluded as a previous run's (stale=$g7_stale)" \
+        "then only each metric remembering sel(l.ts) stands between a previous campaign's error and this verdict"
+[ "$g7_grad" = "FreshOne" ] \
+  && ok "F7 the graded view holds only THIS run's candidate line ($g7_grad)" \
+  || no "F7 the graded view is '$g7_grad', want FreshOne alone" \
+        "a previous run's line is being graded, or this run's was taken with it"
+# F8 AND THE TWO EXCLUSIONS ARE DISTINGUISHABLE, because they are different facts: one line's BUILD
+# is wrong for this verdict, the other's RUN is. A single mark would make "the predecessor wrote it"
+# and "a previous campaign wrote it" one number nobody can act on.
+# BOTH MARKS NEED A CAPTURE THAT EARNS BOTH, so this asks the MIXED-build fixture with a window
+# that falls after its predecessor segment: the 4.3.35 lines are excluded by BUILD and the
+# candidate's own pre-window line by RUN.
+cat >> "$FC/gui-agent-20261024.log" <<'LOG'
+[20261024.100505.100-950:954-I] LogInit: QWTBIRTH module=gui-agent ver=4.3.37.1100 pid=950 session=1 uptime=360.000
+[20261024.100506.100-950:954-E] MiddleOne: this run's own candidate error, before the window below
+LOG
+g8_out=$(python3 "$T/cutprobe.py" "$ATTR_FILE" "$FC" 4.3.37.1100 2026-10-24T10:05:30)
+g8_marks=$(printf '%s' "$g8_out" | sed -n 's/^MARKS //p')
+case "$g8_marks" in
+  *predecessor-build*before-this-run*|*before-this-run*predecessor-build*)
+    ok "F8 both exclusions carry their OWN mark on the line ($g8_marks)" ;;
+  *) no "F8 the marks are '$g8_marks' - want both predecessor-build and before-this-run" \
+        "a swept-out line must say WHICH exclusion took it, or the receipt cannot be acted on" ;;
+esac
+# SEEN TO FAIL: with no window, nothing is excluded as a previous run's - which is also the
+# behaviour every ad-hoc sweep gets, so it is worth stating.
+g8_stale=$(printf '%s' "$f_out" | sed -n 's/^STALE //p')
+[ "${g8_stale:-0}" = 0 ] \
+  && ok "F8 SEEN TO FAIL: with no --since nothing is excluded as a previous run's (stale=$g8_stale)" \
+  || no "F8 control: lines were excluded as stale with no window given (stale=$g8_stale)" \
+        "then the leg above passes on something other than the window"
+
+# F9 A SHIFTED GUEST CLOCK MUST NOT LET THE WINDOW DROP THIS RUN'S OWN LINES. The comparison is
+# against GUEST-LOCAL timestamps and this rig's guests shift by hours; cmd_analyze already raises a
+# `clockskew` DATA problem for it and that problem's own wording is the ruling - "no --since window
+# can be trusted". Jev refused the unconditional version on this path (hides-this-run 0.37,
+# clock_risk 0.31, land 0.47), and the recorded rule is: never anchor freshness on a guest clock.
+# So with the clock untrusted the window does NOTHING, and a previous run's line surfaces as a
+# finding - over-reporting, which is the safe direction.
+g9_out=$(python3 "$T/cutprobe.py" "$ATTR_FILE" "$FR" 4.3.37.1100 2026-10-24T10:02:00 skewed)
+g9_stale=$(printf '%s' "$g9_out" | sed -n 's/^STALE //p')
+g9_grad=$(printf '%s' "$g9_out"  | sed -n 's/^GRADED //p')
+g9_tr=$(printf '%s' "$g9_out"    | sed -n 's/^WINTRUST //p')
+if [ "${g9_stale:-1}" = 0 ] && [ "$g9_tr" = "False" ]; then
+    ok "F9 with the clock untrusted the window excludes NOTHING and says so (trusted=$g9_tr)"
+else
+    no "F9 the window still excluded $g9_stale line(s) with the clock untrusted (trusted=$g9_tr)" \
+       "a shifted clock would then drop THIS run's lines, which is hiding"
+fi
+case "$g9_grad" in
+  *OldRunError*ThisRunError*|*OldRunError*|*ThisRunError*OldRunError*)
+    ok "F9 and both runs' lines stay graded, so a previous run's error over-reports instead of hiding ($g9_grad)" ;;
+  *) no "F9 the graded view is '$g9_grad' - want both lines kept when the window cannot be trusted" \
+        "the untrusted path must over-report, never drop" ;;
+esac
+
+# G1 THE CAMPAIGN GATE DROPS A PREVIOUS RUN'S DECLARED ERROR, AND ONLY WITH A WINDOW. The gate
+# aggregates by MESSAGE across a whole campaign directory, so a previous run's declared ERROR in an
+# appended per-day log counted against this run - and no build scope could reach it, because both
+# runs carry the same candidate build. The fixture is one guest log with a declared E on either side
+# of the window, both from the same build.
+GW="$T/gatewin"; mkdir -p "$GW"
+cat > "$GW/gui-agent-20261024.log" <<'LOG'
+[20261024.095000.100-700:704-I] LogInit: QWTBIRTH module=gui-agent ver=4.3.37.1100 pid=700 session=1 uptime=40.000
+[20261024.095001.100-700:704-E] OldRunError: the previous campaign declared this one
+[20261024.100500.100-900:904-I] LogInit: QWTBIRTH module=gui-agent ver=4.3.37.1100 pid=900 session=1 uptime=95.000
+[20261024.100501.100-900:904-E] ThisRunError: this run declared this one
+LOG
+: > "$T/gw-ledger.txt"
+g1_win=$(SWEEP_GATE_LEDGER="$T/gw-ledger.txt" bash tools/sweep-gate.sh --build 4.3.37.1100 \
+            --since 2026-10-24T10:02:00 "$GW"/*.log 2>&1)
+g1_none=$(SWEEP_GATE_LEDGER="$T/gw-ledger.txt" bash tools/sweep-gate.sh --build 4.3.37.1100 \
+            "$GW"/*.log 2>&1)
+_has(){ printf '%s' "$1" | command grep -qa "$2"; }
+if _has "$g1_win" 'ThisRunError' && ! _has "$g1_win" 'OldRunError'; then
+    ok "G1 with --since the gate surfaces THIS run's declared error and not the previous run's"
+else
+    no "G1 the windowed gate surfaced: $(printf '%s' "$g1_win" | command grep -a 'UNACCOUNTED' | head -2 | tr '\n' ' ')" \
+       "a previous campaign's declared error is counted against this run's verdict"
+fi
+# SEEN TO FAIL: without a window the gate cannot tell the two runs apart, and must surface BOTH.
+# That is also what every caller got until 2026-10-24, which is why this is stated rather than
+# assumed.
+if _has "$g1_none" 'OldRunError' && _has "$g1_none" 'ThisRunError'; then
+    ok "G1 SEEN TO FAIL: with no --since BOTH runs' errors surface - the window is what separates them"
+else
+    no "G1 control: without --since the gate did not surface both ($(printf '%s' "$g1_none" | command grep -ac 'UNACCOUNTED') unaccounted)" \
+       "then leg G1 above passes on something other than the window"
 fi
 
 echo "--- $PASS passed, $FAIL failed; fixtures in $T"

@@ -65,7 +65,7 @@ DECL_RX=(); DECL_WHY=(); DECL_RARE=()
 # computed $PV from the package MANIFEST since long before this option existed and passed it to the
 # PER-CELL sweep only; the campaign-level gate was handed file lists alone.
 # Parsed in the same loop as the declarations so a caller's argument ORDER cannot matter.
-BUILD=""
+BUILD=""; SINCE=""
 while :; do
     case "${1:-}" in
         --declare-caused|--declare-caused-rare)
@@ -75,6 +75,16 @@ while :; do
         --build)
             [ $# -ge 2 ] || { echo "sweep-gate: --build needs <package_version>" >&2; exit 2; }
             BUILD="$2"; shift 2 ;;
+        --since)
+            # THIS RUN'S WINDOW. A per-day guest log is APPENDED to, so a previous campaign's lines
+            # sit in the same file carrying the SAME candidate build - no build scope can tell them
+            # apart. MEASURED on acceptance run 40037710497: all eight cells carry lines predating
+            # their own window, 503 in total. Without this the gate counts a previous run's declared
+            # errors against this one. The timestamps are NOT parsed here: the attributor already
+            # reads every log format this gate accepts, and a second timestamp parser in bash is the
+            # duplication this whole change removed.
+            [ $# -ge 2 ] || { echo "sweep-gate: --since needs <utc iso>" >&2; exit 2; }
+            SINCE="$2"; shift 2 ;;
         *) break ;;
     esac
 done
@@ -266,13 +276,14 @@ _text() { # <file> -> its text as UTF-8 on stdout
 # ONE PYTHON PROCESS PER RUN, not one per file: 847 inputs on a full campaign.
 declare -A _SG_VERDICT=()     # path -> prior|candidate|unattributable|mixed|unknown
 declare -A _SG_PRIORLN=()     # path -> comma-separated line numbers, or * for the whole file
+declare -A _SG_STALELN=()     # path -> line numbers written BEFORE this run's window (--since)
 declare -A _SG_MODVER=()      # path -> "<module><TAB><version(s)><TAB><module's newest>"
 SG_CAND_ABSENT="-"            # 0/1 once --build is given, "-" when it is not
 SG_ATTR_TRAILER=""            # the attributor's own ATTRIBUTE-RESULT line, kept for the report
 _sg_build_index() { # $@=files -> fills the three maps above from the one attributor
     local out rc path mod vers verdict prior _una newest
     out=$(mktemp) || return 2
-    python3 tools/log-sweep.py attribute ${BUILD:+--build "$BUILD"} -- "$@" > "$out" 2>"$out.err"
+    python3 tools/log-sweep.py attribute ${BUILD:+--build "$BUILD"} ${SINCE:+--since "$SINCE"} -- "$@" > "$out" 2>"$out.err"
     rc=$?
     # rc 1 is "the named build declared itself nowhere", which is a VERDICT, not a failure to read -
     # the caller below refuses to grade on it. rc 2 means nothing could be parsed at all.
@@ -281,13 +292,28 @@ _sg_build_index() { # $@=files -> fills the three maps above from the one attrib
         sed 's/^/  /' "$out.err" >&2
         rm -f "$out" "$out.err"; return 2
     fi
-    while IFS=$'\t' read -r path mod vers verdict prior _una newest; do
+    while IFS=$'\t' read -r path mod vers verdict prior _una newest stale; do
         case "$path" in ATTRIBUTE-RESULT*) continue ;; esac
         [ -n "$path" ] || continue
         _SG_VERDICT["$path"]="$verdict"
         _SG_PRIORLN["$path"]="$prior"
+        _SG_STALELN["$path"]="${stale:--}"
         _SG_MODVER["$path"]="$mod	$vers	$newest"
     done < "$out"
+    # THE WINDOW EXCLUSION IS REPORTED, because this gate cannot check the clock it rests on. The
+    # analyzer can - it raises a `clockskew` DATA problem and refuses to apply the window when the
+    # guest's clock is too far from the host's - and this gate has no second clock to compare. So
+    # what the window dropped is printed as a figure: a --since that is wrong, or a guest whose clock
+    # shifted, shows up HERE as an implausible count rather than as a quietly clean verdict. Nothing
+    # is excluded silently; the per-cell sweep is where the clock itself is judged.
+    SG_STALE_N=0; SG_STALE_F=0
+    for _p in "${!_SG_STALELN[@]}"; do
+        case "${_SG_STALELN[$_p]}" in
+            -|"") : ;;
+            *) SG_STALE_F=$((SG_STALE_F+1))
+               SG_STALE_N=$((SG_STALE_N + $(printf '%s' "${_SG_STALELN[$_p]}" | tr ',' '\n' | grep -ac .))) ;;
+        esac
+    done
     SG_ATTR_TRAILER=$(grep -a '^ATTRIBUTE-RESULT' "$out" | tail -1)
     SG_CAND_ABSENT=$(printf '%s' "$SG_ATTR_TRAILER" | sed -n 's/.*candidate_build_absent=\([^ ]*\).*/\1/p')
     SG_CAND_ABSENT="${SG_CAND_ABSENT:--}"
@@ -310,10 +336,18 @@ _prior_lines_of() { # $1=file -> the line numbers inside a MIXED file that the p
 # (patches/windows-utils-one-log-per-module) instead of one per process, so an upgrade appends both
 # builds to the same file. Dropping it whole would hide the candidate's own errors; keeping it whole
 # bills the predecessor's errors to the candidate, which is the defect being cured.
-_sg_text_scoped() { # $1=file -> its text, minus the lines the attributor says are the predecessor's
-    local mx; mx=$(_prior_lines_of "$1")
-    if [ "$mx" = "-" ]; then _text "$1"
-    else _text "$1" | awk -v drop="$mx" 'BEGIN{n=split(drop,a,",");for(i=1;i<=n;i++)d[a[i]]=1} !(FNR in d)'
+_sg_text_scoped() { # $1=file -> its text, minus every line the attributor excluded
+    # TWO EXCLUSIONS, ONE PRODUCER: the predecessor's lines inside a MIXED file, and the lines any
+    # file carries from BEFORE this run's window. They are separate facts with separate causes and
+    # both leave the graded set; combining them here keeps ONE extraction pipeline below, which is
+    # what stopped this gate having two.
+    local mx st drop
+    mx=$(_prior_lines_of "$1"); st="${_SG_STALELN[$1]:--}"
+    drop=""
+    [ "$mx" != "-" ] && drop="$mx"
+    [ "$st" != "-" ] && drop="${drop:+$drop,}$st"
+    if [ -z "$drop" ]; then _text "$1"
+    else _text "$1" | awk -v drop="$drop" 'BEGIN{n=split(drop,a,",");for(i=1;i<=n;i++)d[a[i]]=1} !(FNR in d)'
     fi
 }
 
@@ -806,6 +840,15 @@ if [ -s "$UPS" ]; then
     fi
 fi
 rm -f "$UPS"
+# REPORTED, NEVER SILENT - the window exclusion included. A previous campaign's lines sit in the
+# same appended per-day log under the SAME candidate build, so no build scope can reach them; what
+# the window dropped is therefore its own figure, and an implausible one is the signal that the
+# window (or the guest's clock) is wrong.
+if [ "${SG_STALE_N:-0}" -gt 0 ]; then
+    echo "SWEEP-GATE-PRIOR-RUN SWEEP EXCLUSION: $SG_STALE_N line(s) in $SG_STALE_F file(s) were written BEFORE this run's window (--since $SINCE), so they are a PREVIOUS run's and not this campaign's observations. This gate has no second clock: the per-cell sweep is what judges the guest's clock and refuses the window when it cannot be trusted."
+elif [ -n "${SINCE:-}" ]; then
+    echo "SWEEP-GATE-PRIOR-RUN SWEEP EXCLUSION: none - no input line predates this run's window (--since $SINCE)"
+fi
 # REPORTED, NEVER SILENT. An excluded file is named with the version it declares and the version
 # that superseded it, so a wrong exclusion is visible in the same output as the verdict.
 if [ -s "$PRIOR" ]; then
