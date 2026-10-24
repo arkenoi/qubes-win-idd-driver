@@ -244,26 +244,55 @@ for name in ('Fault', 'Ok'):
     out.append(s[i:k+1])
 io.open(sys.argv[2], 'w', encoding='utf-8').write('\n'.join(out) + '\n')
 PY4
-drive_verdict(){ # $1 = the call to make before Ok; echoes the exit code
+# THE RECEIPTS, NOT THE EXIT CODE. This drove `Fault` then `Ok` and required exit 1, which is the
+# contract as it was before 2026-10-09. Ok() now deliberately exits 0 with $faulted set, and its own
+# comment records why: "the config was applied and verified ... and this exited 1 because an unrelated
+# earlier step had set $faulted - so dom0 was told 'The PV NIC setup task failed' about a task whose
+# work was in place". The exit code is a claim about the WHOLE task; the fault is reported as itself.
+# So the property to hold is that the fault is still reported through its OWN channels - the marker
+# file, the log line, and an Application 1001 at ERROR, which is the record ADR-supervision 2
+# designates as how a death is detected. The stubs now RECORD their calls instead of swallowing them.
+drive_verdict(){ # $1 = the call to make before Ok; echoes "<rc> <marker:0|1> <event:0|1> <log:0|1>"
+  local rcpt="$OUT/receipts.txt"; : > "$rcpt"
   { echo '$script:faulted = $null'
+    echo "\$rcpt = '$rcpt'"
     echo '$mark = Join-Path ([IO.Path]::GetTempPath()) ("pvnic-mark-" + [Guid]::NewGuid().ToString("N"))'
-    echo 'function L([string]$m) { }'
+    echo 'function L([string]$m) { Add-Content -LiteralPath $rcpt -Value "LOG $m" }'
+    echo 'function LE([string]$m) { Add-Content -LiteralPath $rcpt -Value "LOGE $m" }'
     echo 'function New-EventLog { param([Parameter(ValueFromRemainingArguments=$true)]$r) }'
-    echo 'function Write-EventLog { param([Parameter(ValueFromRemainingArguments=$true)]$r) }'
+    echo 'function Write-EventLog { param([Parameter(ValueFromRemainingArguments=$true)]$r) Add-Content -LiteralPath $rcpt -Value ("EVENT " + ($r -join " ")) }'
     cat "$OUT/verdict.ps1"
     echo "$1"
+    echo '$script:markWritten = (Test-Path $mark)'
+    echo 'Add-Content -LiteralPath $rcpt -Value ("MARK " + $script:markWritten)'
     echo "Ok 'applied'"
   } > "$OUT/drive.ps1"
   "$PWSH" -NoProfile -File "$OUT/drive.ps1" >/dev/null 2>&1
-  echo $?
+  local rc=$?
+  local mk=0 ev=0 lg=0
+  command grep -q '^MARK True' "$rcpt" 2>/dev/null && mk=1
+  command grep -qE '^EVENT .*(1001|Error)' "$rcpt" 2>/dev/null && ev=1
+  command grep -qE '^LOGE? .*FAILED' "$rcpt" 2>/dev/null && lg=1
+  echo "$rc $mk $ev $lg"
 }
-rc_clean=$(drive_verdict '')
-rc_fault=$(drive_verdict "Fault 'a step really failed'")
-rc_log=$(drive_verdict "L 'a condition that cost nothing'")
+read -r rc_clean mkc evc lgc <<<"$(drive_verdict '')"
+read -r rc_fault mkf evf lgf <<<"$(drive_verdict "Fault 'a step really failed'")"
+read -r rc_log   mkl evl lgl <<<"$(drive_verdict "L 'a condition that cost nothing'")"
 [ "$rc_clean" = 0 ] && ok "clean_run_exits_zero: nothing faulted, Ok exits 0 (rc=$rc_clean)" \
                     || bad "clean_run_exits_zero: rc=$rc_clean"
-[ "$rc_fault" = 1 ] && ok "unrepaired_fault_still_exits_one: a real failure is STILL reported to dom0 (rc=$rc_fault)" \
-                    || bad "unrepaired_fault_still_exits_one: rc=$rc_fault - a real failure would now be CONCEALED"
+# the task's own work is in place, so it exits 0 - and the fault is reported as ITSELF
+[ "$rc_fault" = 0 ] && ok "fault_does_not_fail_the_whole_task: Ok exits 0 because this task's work is in place (2026-10-09)" \
+                    || bad "fault_does_not_fail_the_whole_task: rc=$rc_fault - an unrelated earlier fault would again tell dom0 THIS task failed"
+[ "$evf" = 1 ] && ok "fault_is_reported_as_itself: it writes its own Application ERROR record (ADR-supervision 2's channel)" \
+               || bad "fault_is_reported_as_itself: no event record - with exit 0 too, the failure WOULD be concealed"
+[ "$mkf" = 1 ] && ok "fault_leaves_its_marker: the marker is written, so the next run and the operator can see it" \
+               || bad "fault_leaves_its_marker: no marker"
+[ "$lgf" = 1 ] && ok "fault_says_FAILED_in_the_log: the log line survives the exit code decision" \
+               || bad "fault_says_FAILED_in_the_log: nothing in the log"
+# and a clean run must NOT manufacture any of the three
+[ "$evc" = 0 ] && [ "$mkc" = 0 ] \
+  && ok "clean_run_leaves_no_receipts: no event, no marker - the receipts mean something" \
+  || bad "clean_run_leaves_no_receipts: event=$evc marker=$mkc on a run that did not fault"
 [ "$rc_log" = 0 ] && ok "log_line_does_not_fail_the_task: a logged no-effect condition leaves the verdict alone (rc=$rc_log)" \
                   || bad "log_line_does_not_fail_the_task: rc=$rc_log"
 
