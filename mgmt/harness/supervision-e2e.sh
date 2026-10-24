@@ -764,7 +764,11 @@ PS
         guest_ps "$OUT/L8-read.ps1" > "$OUT/L8-read.out" 2>&1
         _da=$(grep -a '^L8R|deaths_after|' "$OUT/L8-read.out" | tail -1 | cut -d'|' -f3-)
         _dr=$(grep -a '^L8R|dom0_death_rows|' "$OUT/L8-read.out" | tail -1 | cut -d'|' -f3-)
-        if [ -n "$_da" ] && [ "${_da:-0}" -gt "${db:-0}" ]; then _l8why=reported; break; fi
+        # NOT the DEATH-record count: opening a record is not telling the user, and breaking on it
+        # exits the wait while the notification is still to come. MEASURED 2026-10-24 in the campaign's
+        # own supervision-gate run: this condition fired on records 0 -> 1, the wait stopped, and the
+        # cell then correctly reported "a record was OPENED and NO dom0 row followed it" - about a
+        # catch-up that had not been given the time to notify. Only a ROW counts as reported.
         if [ -n "$_dr" ] && [ "${_dr:-0}" -gt "$(g8 dom0_death_rows_before)" ]; then _l8why=reported; break; fi
         if grep -qa 'L8R|catchup_ran_this_boot|1' "$OUT/L8-read.out"; then _l8why=ran-and-silent; break; fi
         sleep 20
