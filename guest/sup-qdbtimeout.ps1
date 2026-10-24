@@ -182,7 +182,11 @@ try {
         Start-Sleep -Seconds 10
     }
     T 'wait_exit' $why
-    T 'waited_s' [int]((Get-Date) - $script:started).TotalSeconds
+    # THE CAST GOES INSIDE THE PARENTHESES. `T 'waited_s' [int](...)` passes the TYPE LITERAL as the
+    # argument and the value is lost - it parses cleanly, so no parse gate sees it. Measured under
+    # pwsh 7.4: v=[[int]]. Same family as the `-f` index with no argument behind it, filed as
+    # PSFORMATINDEXUNCHECKED.
+    T 'waited_s' ([int]((Get-Date) - $script:started).TotalSeconds)
     T 'scm_7023_window' $seen['7023']
     T 'scm_7031_window' $seen['7031']
     foreach ($d in $seen.detail) { T 'scm_event' $d }
