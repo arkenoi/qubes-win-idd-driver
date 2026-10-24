@@ -63,7 +63,12 @@ fi
 # exercised with a value chosen to sit inside it (75), never with today's number. A check pinned to
 # whatever the rig happens to hold stops testing the thing the moment the rig changes.
 out=$(run_gate 75); rc=$?
-if [ "$rc" = 0 ] && printf '%s' "$out" | command grep -q 'POOL WARNING'; then
+# THE NEEDLE, NOT THE WARNING, WAS MISSING. This greped 'POOL WARNING' while the gate emits
+# "[WARN] POOL  75 GB free on vm-pool (warn below 90) - enough to start, tight to finish": the
+# every-line-declares-its-level work moved the word to a prefix, and a position-anchored consumer
+# went blind - the same shape as the four consumers a FRONT-inserted prefix blinded before. Matched
+# on the stable part of the sentence instead of on a word whose place in the line can move.
+if [ "$rc" = 0 ] && printf '%s' "$out" | command grep -q 'warn below .* - enough to start, tight to finish'; then
   ok "warns_in_the_band: 75 GB free starts, and says it is tight"
 else
   bad "warns_in_the_band: rc=$rc - a campaign that will get tight starts silently"
@@ -98,11 +103,19 @@ echo "$gate_src" | command grep -q "pools\['vm-pool'\]" \
 placed=$(python3 - "$M" <<'PYF'
 import io, sys
 s = io.open(sys.argv[1], encoding='utf-8', errors='replace').read()
-i = s.rindex('for c in $CELLS; do')
-seg = s[i:i+1400]
-g, c = seg.find('pool_gate "cell $c"'), seg.find('case $c in')
-if not (0 < g < c): print('NOT-IN-LOOP'); raise SystemExit
-body = seg[g:c]
+# ANCHOR ON THE GATE, NOT ON "THE LAST LOOP". matrix.sh has THREE `for c in $CELLS; do` loops
+# (lines 2823, 2843, 3102); the gated one is the SECOND, so rindex picked a loop 253 lines PAST the
+# gate, found nothing, and reported the per-cell gating missing while it was present and correct.
+# A fixed 1400-byte window was the other half of the same mistake: it measures distance in bytes
+# from an anchor that was already wrong, so adding a comment above the call could break it too.
+# Find the gate, then prove it is INSIDE a cell loop by looking BACKWARDS for the nearest header.
+g = s.find('pool_gate "cell $c"')
+if g < 0: print('NOT-IN-LOOP'); raise SystemExit
+i = s.rfind('for c in $CELLS; do', 0, g)
+if i < 0: print('NOT-IN-LOOP'); raise SystemExit
+c = s.find('case $c in', g)
+if c < 0: print('NOT-IN-LOOP'); raise SystemExit
+body = s[g:c]
 print('OK' if ('break' in body and 'INVALID' in body) else ('NO-BREAK' if 'break' not in body else 'NOT-INVALID'))
 PYF
 )
@@ -126,7 +139,12 @@ ii_shape() {  # $1 = a copy of matrix.sh -> "ok" or the reason
   command grep -q 'GUARD:iirepeat' "$f" || { echo "no cell-scope instrument verdict"; return; }
   command grep -q 'local ii_boots=0 mapped_any=0' "$f" || { echo "the cell does not count its boots"; return; }
   command grep -q 'ii_boots=$((ii_boots+1))' "$f" || { echo "an empty-capture boot is not counted, it is graded on the spot"; return; }
-  command grep -q 'mapped_any=1; ok ' "$f" || { echo "a boot that DID map a window is not recorded, so nothing can exonerate the others"; return; }
+  # THE PROPERTY, NOT THE SPELLING. This greped 'mapped_any=1; ok ' - a statement pair that no longer
+  # exists: the mapped verdict is recorded by a case arm on the verdict code, `0) mapped_any=1 ;;`,
+  # and the ok() call moved. The property is that the mapped-a-window verdict SETS the flag and the
+  # exoneration arm READS it; both hold (matrix.sh:2626 and :2632). The suite's own mutation for this
+  # clause matched the same dead text, so the control was inert as well - both are fixed together.
+  command grep -qE '^[[:space:]]*0\)[[:space:]]*mapped_any=1' "$f" || { echo "a boot that DID map a window is not recorded, so nothing can exonerate the others"; return; }
   # the per-boot path must not call no() for the invalid-instrument case any more
   command grep -q 'no "$3-appvm boot $b: INVALID-INSTRUMENT' "$f" && { echo "the per-boot FAIL is still there: one empty capture still marks the cell"; return; }
   command grep -q 'ii_boots" -gt 0 ] && \[ "$mapped_any" = 1' "$f" || { echo "no arm for 'another boot mapped one' - the switch is still graded"; return; }
@@ -138,8 +156,13 @@ v=$(ii_shape "$M")
                || bad "desktop_switch_not_graded: $v"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 sed 's/# GUARD:iirepeat//' "$M" > "$T/noguard.sh"
-sed 's/mapped_any=1; ok /ok /' "$M" > "$T/nomapped.sh"
-sed 's/      ii_boots=$((ii_boots+1))/      no "$3-appvm boot $b: INVALID-INSTRUMENT - graded on the spot"/' "$M" > "$T/perboot.sh"
+sed -E 's/^([[:space:]]*)0\)[[:space:]]*mapped_any=1[[:space:]]*;;/\1 0) ;;/' "$M" > "$T/nomapped.sh"
+# THE MUTATION MUST MATCH THE CODE AS IT IS. This targeted a bare `      ii_boots=$((ii_boots+1))`
+# assignment; the counter moved into a case arm - `2) ii_boots=$((ii_boots+1)) ;;` - so the sed
+# matched nothing, the "defect" copy was identical to the real file, and this control reported `ok`
+# for a mutation it never applied. Same cause as the mapped_any clause above: both were plain
+# statements and both became case arms.
+sed -E 's/^([[:space:]]*)2\)[[:space:]]*ii_boots=\$\(\(ii_boots\+1\)\)[[:space:]]*;;/\1 2) no "$3-appvm boot $b: INVALID-INSTRUMENT - graded on the spot" ;;/' "$M" > "$T/perboot.sh"
 v1=$(ii_shape "$T/noguard.sh"); v2=$(ii_shape "$T/nomapped.sh"); v3=$(ii_shape "$T/perboot.sh")
 [ "$v1" != ok ] && [ "$v2" != ok ] && [ "$v3" != ok ] \
   && ok "desktop_switch_not_graded SEEN TO FAIL: without the verdict '$v1'; without the mapped record '$v2'; graded per boot '$v3'" \

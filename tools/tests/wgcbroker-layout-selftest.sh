@@ -11,8 +11,8 @@
 # and compares them to what the script uses.
 set -u
 cd "$(dirname "$0")/../.." || exit 2
-H=agent/gui-agent/wgcbroker_ipc.h
-P=guest/wgcbroker-peek.ps1
+H="${WGCBRK_HDR:-agent/gui-agent/wgcbroker_ipc.h}"
+P="${WGCBRK_PEEK:-guest/wgcbroker-peek.ps1}"
 [ -f "$H" ] && [ -f "$P" ] || { echo "SELFTEST-ERROR: missing $H or $P"; exit 2; }
 command -v gcc >/dev/null || { echo "SELFTEST-ERROR: no gcc to derive the layout"; exit 2; }
 
@@ -46,8 +46,20 @@ print('printf("HDRSIZE %zu\\n", sizeof(HDR)); printf("SLOTSIZE %zu\\n", sizeof(S
 # this check report the new fields as "not any field in WGCBRK_SLOT" - which is a false FAIL that
 # looks exactly like a real misparse. ABI 8 hit it immediately. Parsing the struct means the check
 # learns a new field the moment the header gains one.
-fields = re.findall(r'\b(?:LONG|UINT64|LONGLONG|BYTE)\s+(\w+)\s*(?:\[[^\]]*\])?\s*;',
-                    body('WGCBRK_SLOT'))
+# ONE DECLARATION CAN DECLARE SEVERAL FIELDS, and this regex required the name to be followed by `;`
+# so it saw NEITHER name on a comma-separated line. The header declares six fields that way -
+# `volatile LONG ReqCardX, ReqCardY;`, `CropUsedX, CropUsedY;`, `CropWinX, CropWinY;` - so their
+# offsets were missing from the derived list and guest/wgcbroker-peek.ps1's CORRECT reads at +3444,
+# +3448, +3452, +3456, +3460 and +3464 were all reported as "not any field in WGCBRK_SLOT". The peek
+# script was right; this check was wrong, and it failed the whole suite. ReqRoute (3440) and
+# ReqCardValid (3468) are one-per-line, which is why only those two showed up and the gap looked
+# like a real misparse. The comment below claims the list "learns a new field the moment the header
+# gains one" - it did not, if the field shared a line with another.
+fields = []
+for _decl in re.finditer(r'\b(?:LONG|UINT64|LONGLONG|BYTE)\s+([^;{}]+);', body('WGCBRK_SLOT')):
+    for _d in _decl.group(1).split(','):
+        _n = re.match(r'\s*(\w+)\s*(?:\[[^\]]*\])?\s*$', _d)
+        if _n: fields.append(_n.group(1))
 for f in fields:
     print(f'printf("SLOT.{f} %zu\\n", offsetof(SLOT,{f}));')
 print('return 0;}')
@@ -79,6 +91,16 @@ chk "ABI version" "$abi" "${pABI:-<unset>}"
 # Every numeric offset the script reads must be a REAL field offset (or a base expression).
 valid=$(awk '$1 ~ /^SLOT\./ {print $2}' "$T/off.txt" | sort -un | tr '\n' ' ')
 used=$(grep -oE '\$b\+[0-9]+' "$P" | grep -oE '[0-9]+$' | sort -un)
+# SEEN TO FAIL, INLINE - never by re-invoking this suite, because self-test recursion has fork-bombed
+# this qube. Take a real offset and add one: a byte that cannot be a field start in a struct of
+# 4-byte-aligned LONGs must NOT be in the derived list. Without this, the comma-separated-declarator
+# fix above could have been widened until every offset validated, and the check would have passed on
+# anything - the shape it was already failing in the other direction.
+_first=$(printf '%s\n' $valid | awk 'NF{print; exit}')
+case " $valid " in
+  *" $((_first + 1)) "*) echo "  FAIL control: offset $((_first + 1)) validates, so no offset can be rejected - this check is inert"; fail=1 ;;
+  *) echo "  OK   control: a one-byte-off offset is still rejected" ;;
+esac
 for o in $used; do
   case " $valid " in
     *" $o "*) ;;
