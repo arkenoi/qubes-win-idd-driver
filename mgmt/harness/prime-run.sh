@@ -161,6 +161,27 @@ ensure_loop(){ # $1=image, $2=ro|rw -> prints loopN
     printf '%s' "${dev#/dev/}"
 }
 
+# --- the guest's clock, carried in on the stick ------------------------------------------------
+# WHY, MEASURED 2026-10-25 (campaign 40225365779, cell WIN10-clean): the installer refused stage 1
+# and nothing installed - `REFUSING to install pv-drivers\xencons-signer.cer - THIS GUEST'S CLOCK IS
+# BEHIND. guest UTC now 18:39:33Z / signer valid from 19:10:04Z`. True UTC was 19:39:33Z, so the
+# guest was exactly 3600 s behind: a golden sealed in summer carries ActiveTimeBias -180, and with
+# timezone=localtime Windows converts the RTC with that STORED bias at boot and only then refreshes
+# it, without moving the clock it just set (ETWCLOCKDST). Every entry image on this rig was sealed
+# 2026-10-15, i.e. in summer. The refusal is CORRECT - the install would otherwise HANG on
+# 0x800B0101 - so the clock is what has to be fixed, and it has to be fixed BEFORE the installer
+# runs, on a guest that has no qrexec, no netvm and therefore no other time source.
+# WRITTEN HERE, immediately before the stick is built, so the stamp is as fresh as it can be. The
+# invariant that matters is only this: a package is BUILT (which is when its signers are minted)
+# before it can be downloaded and staged, so this stamp is never older than the signer NotBefore of
+# the payload it accompanies. Measured on the failing run: signers 19:10:04Z, staged 19:37:29Z.
+# The stick is rebuilt on EVERY run (below, unconditionally), so the stamp can never go stale.
+cp mgmt/prime-jobs/_common/fix-guest-clock.ps1 "$JOBDIR/" || {
+  log "[ERROR] TERMINAL: could not stage fix-guest-clock.ps1 into $JOBDIR"; exit 1; }
+date -u +%Y-%m-%dT%H:%M:%SZ > "$JOBDIR/hoststamp.txt" || {
+  log "[ERROR] TERMINAL: could not write $JOBDIR/hoststamp.txt"; exit 1; }
+log "clock stamp for the guest: $(cat "$JOBDIR/hoststamp.txt") (host true UTC, staged on the stick)"
+
 # --- build the job stick ---------------------------------------------------------------------
 # The loop device caches the backing file's capacity, so the image size must not change or the
 # guest sees a stale geometry.
@@ -511,6 +532,41 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
     sleep 20
     el=$(( $(date +%s) - t0 ))
     st=$(state "$CHURN")
+    # THE THIRD EXIT: THE INSTALLER HAS ALREADY FAILED AND SAID SO. Added 2026-10-25 after this loop
+    # spent FORTY-EIGHT MINUTES polling a guest that could never answer. Campaign 40225365779 cell
+    # WIN10-clean: onboot wrote `installer rc=1` to the DIAG volume at t+125s; this loop read that
+    # very file into diag-markers-at-rescue.log at t+597s, kept polling to t+2886s, and would have
+    # run to the full 3600 s DEADLINE. qrexec was never coming - what failed is what installs it.
+    # A wait needs THREE exits (experimenter rule 6): the thing happened, a TERMINAL state, and the
+    # deadline. This loop had only two, so every install failure cost a whole deadline and then got
+    # classified as a stall. The qrexec_ever latch fixed what the deadline SAYS; it did not stop the
+    # loop reaching the deadline. This does.
+    # HOST-SIDE ONLY, so it is placed ABOVE the quiet-boot guard deliberately: mcopy reads the FAT
+    # image in this qube and asks the guest for nothing, so it is safe inside a quiet window.
+    # NOT A STALE MARKER: logvol_create mkfs.fat's this image fresh on every run (archiving the old
+    # contents first), so an rc here was written by THIS run.
+    # rc=10 IS THE DOCUMENTED STAGE-1 EXIT and rc=0 is success - both must keep waiting, because
+    # stage 2 still has to run after the reboot. Anything else is terminal.
+    if [ -n "${DIAGIMG:-}" ]; then                                           # GUARD:instfail
+        _pr_rc=$(mcopy -n -i "$DIAGIMG" ::/prime-progress.log - 2>/dev/null \
+                 | tr -d '\r' | sed -n 's/.*installer rc=\([0-9][0-9]*\).*/\1/p' | tail -1)
+        case "${_pr_rc:-}" in
+            ''|0|10) : ;;
+            *)  log "[ERROR] TERMINAL: the installer reported rc=$_pr_rc on the DIAG volume at t+${el}s - qrexec is not coming, because what failed is what installs it"
+                mcopy -n -i "$DIAGIMG" ::/prime-progress.log "$OUT/diag-markers.log" 2>/dev/null \
+                    && log "  markers -> $OUT/diag-markers.log"
+                if mcopy -n -i "$DIAGIMG" ::/prime-installer.log "$OUT/prime-installer.log" 2>/dev/null; then
+                    log "  installer log -> $OUT/prime-installer.log"
+                    # THE REASON, NOT JUST THE CODE. This is the whole point of the DIAG copy: the
+                    # installer states its own cause and nothing was reading it back.
+                    grep -aE '\[(ERROR|FATAL)\]' "$OUT/prime-installer.log" 2>/dev/null | tail -12 \
+                        | while IFS= read -r _l; do log "    $_l"; done
+                else
+                    log "  [WARN] no prime-installer.log on the DIAG volume - the rc is all this run left"
+                fi
+                exit 1 ;;
+        esac
+    fi
     # QUIET BOOT (QUIET_BOOT_SECS > 0; owner-approved serialize-and-pace, ADR-boot 1; Jev 0.93 after the 2026-10-04 PACED validation):
     # in each boot's first QUIET_BOOT_SECS seconds this script makes NO guest call at all - not even the qrexec detection probe, the
     # rescue evaluation or the cpu stats read. The validation install froze with a qrexec-wrapper held after a grant unmap although
