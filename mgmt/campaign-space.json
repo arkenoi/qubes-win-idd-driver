@@ -1,10 +1,11 @@
 {
  "measured_runs": [
   "20261025T005006Z",
+  "20261025T025859Z",
   "matrix"
  ],
- "min_free_gb": 102,
- "peak_used_gb": 3,
- "run": "20261025T005006Z",
- "start_free_gb": 105
+ "min_free_gb": 97,
+ "peak_used_gb": 5,
+ "run": "20261025T025859Z",
+ "start_free_gb": 102
 }
