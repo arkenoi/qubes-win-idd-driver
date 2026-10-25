@@ -897,6 +897,39 @@ function Get-SecurityPlatformState {
 }
 # ---- WU-SECPLATFORM-READ-END
 
+# ---- WU-DEFINITION-CLASS-BEGIN   (tools/tests/wu-definition-class-test.ps1 runs this region)
+# DEFINITION UPDATES ARE IDENTIFIED STRUCTURALLY, NEVER BY TITLE. The field runs a German edition and
+# ADR section 6 forbids title text as an identity - "Definition Update for Microsoft Defender
+# Antivirus" is "Definitionsupdate fuer Microsoft Defender Antivirus" there, and a substring match
+# would silently stop excluding anything the day a locale or a product name changed.
+#
+# WU classifies every offer, and "Definition Updates" is a FIXED classification GUID,
+# e0789628-ce08-4437-be74-2495b842f43b, exposed in Categories as a category whose Type is
+# 'UpdateClassification'. It is the same field WU itself groups by, it is locale-independent, and it
+# is structured data straight off the COM object.
+#
+# IT SEPARATES THE TWO DEFENDER THINGS, which neither a KB nor a title can: the daily signature
+# definitions carry this classification, while the Defender PLATFORM / antimalware engine updates are
+# classified as ordinary Updates. The engine updates are real servicing work and must keep counting.
+#
+# UNREADABLE CATEGORIES MEAN "NOT A DEFINITION", deliberately: the failure direction is that an offer
+# still counts. An exclusion that swallows an update it could not classify would hide real servicing
+# work, which is the defect this project keeps paying for.
+$script:WU_DEFINITION_CLASS = 'e0789628-ce08-4437-be74-2495b842f43b'
+function Test-WuDefinitionUpdate($u){
+  try {
+    foreach($c in $u.Categories){
+      $ty=''; try { $ty=[string]$c.Type } catch {}
+      if($ty -ne 'UpdateClassification'){ continue }
+      $id=''; try { $id=[string]$c.CategoryID } catch {}
+      $id = ($id -replace '[{}]','').Trim().ToLowerInvariant()
+      if($id -eq $script:WU_DEFINITION_CLASS){ return $true }
+    }
+  } catch {}
+  return $false
+}
+# ---- WU-DEFINITION-CLASS-END
+
 function Get-Available {
   $s=New-Object -ComObject Microsoft.Update.Session
   $se=$s.CreateUpdateSearcher(); $se.ServerSelection=2; $se.Online=$true
@@ -922,7 +955,7 @@ function Get-Available {
     try { $uid=[string]$u.Identity.UpdateID; $rev=[int]$u.Identity.RevisionNumber } catch {}
     if($kb -ne '(no KB)' -and -not $script:LiveUpdates.ContainsKey($kb)){ $script:LiveUpdates[$kb] = $u }
     if($uid){ $script:LiveUpdates[$uid] = $u }
-    $out += [ordered]@{ kb=$kb; title="$($u.Title)"; size_mb=[math]::Round($u.MaxDownloadSize/1MB,1); downloaded=[bool]$u.IsDownloaded; content_class=$cls.class; direct_urls=@($cls.urls); uid=$uid; rev=$rev }
+    $out += [ordered]@{ kb=$kb; title="$($u.Title)"; size_mb=[math]::Round($u.MaxDownloadSize/1MB,1); downloaded=[bool]$u.IsDownloaded; content_class=$cls.class; direct_urls=@($cls.urls); uid=$uid; rev=$rev; is_definition=(Test-WuDefinitionUpdate $u) }
   }
   return ,$out
 }
@@ -2569,7 +2602,29 @@ try {
     Log "SCAN PARTIAL: found $($avail.Count) update(s) but the relay gave up on $giveUps fetch(es) - the list may be incomplete; treat the count as a lower bound, not the whole truth." 'WARN'
   }
 
-  $script:St.available=$avail; $script:St.count=$avail.Count; Save
+  # ---- WU-DEFINITION-EXCLUDE-BEGIN
+  # DEFINITION UPDATES DO NOT RAISE dom0's updates-available. Microsoft republishes Defender
+  # signatures several times a day, so a guest that has just been fully updated goes back to
+  # "updates available" within minutes and stays that way forever - dom0 was telling the truth and
+  # the truth was useless. The flag now means "servicing work is pending", which is a thing an
+  # operator can act on.
+  #
+  # St.available KEEPS EVERY OFFER. The install path looks offers up in it BY KB (the platform and
+  # security-platform rows, and St.satisfied), so filtering it would change what gets installed -
+  # and definitions going stale is a security regression, not a tidier flag. Only the COUNT dom0
+  # reads is narrowed, and the excluded offers are counted and logged so a reader can see what was
+  # left out rather than inferring it from a smaller number.
+  $defs = @($avail | Where-Object { $_.is_definition })
+  $rep  = @($avail | Where-Object { -not $_.is_definition })
+  $script:St.available=$avail
+  $script:St.definitions_excluded=$defs.Count
+  $script:St.count=$rep.Count
+  Save
+  if ($defs.Count -gt 0) {
+    Log ("definition updates excluded from the count dom0 reads: {0} of {1} offer(s) [{2}] - they still install on any pass that runs" -f `
+         $defs.Count, $avail.Count, (($defs | ForEach-Object { $_.kb }) -join ','))
+  }
+  # ---- WU-DEFINITION-EXCLUDE-END
   # Post-end-of-support / ESU diagnosis: INFORMATIONAL, computed on every pass from the fresh scan so a
   # bare `scan` surfaces it too. Explains WHY the newest security cumulative is not installable here.
   if ("$OsBuild" -eq '19045') {

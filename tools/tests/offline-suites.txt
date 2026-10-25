@@ -201,6 +201,7 @@ wrapper-exit-emit-selftest.sh
 wrapper-exit-reason-selftest.sh
 wrapper-one-line-selftest.sh
 wrong-interpreter-gate-selftest.sh
+wu-definition-class-selftest.sh
 wu-judge-levelprefix-selftest.sh
 wu-judge-timenorm-selftest.sh
 wu-liveness-selftest.sh

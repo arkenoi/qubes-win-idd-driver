@@ -86,15 +86,33 @@ by the time a scan runs there genuinely is a new one. A Windows qube with Defend
 available" again shortly after you update it, indefinitely, and that is correct rather than a bug — the definitions are real
 updates, they are simply published faster than anyone installs them.
 
-**What the product does about it today: nothing, by omission.** The guest scans with
-`IsInstalled=0 and IsHidden=0` and no category filter, so Defender Security Intelligence
+**In 4.3.37 — the release above — the product does nothing about it, by omission.** The guest scans
+with `IsInstalled=0 and IsHidden=0` and no category filter, so Defender Security Intelligence
 definitions are offered, counted and reported to dom0 exactly like a cumulative update, and they
-raise `updates-available` like one. **There is no knob to suppress that.** One has been asked for
-and queued, but it has never been written down beyond its title, so there is no agreed behaviour to
-describe here yet — not a filter we decided against, just work not done. If the reappearing flag
-bothers you, the only lever today is Defender itself.
+raise `updates-available` like one. Nothing suppresses, filters or defers them. If the reappearing
+flag bothers you on this release, the only lever is Defender itself.
 
-What the agent does carry is each offer's **identity** — `UpdateID` plus `RevisionNumber`, taken
+> **Fixed in the next release.** Definition updates no longer raise dom0's `updates-available`. The
+> flag now means *servicing work is pending*, which is a thing an operator can act on. Three
+> properties of that change are worth stating, because each is a way it could have been done wrong:
+>
+> * **Definitions are identified structurally, never by title.** WU classifies every offer, and
+>   "Definition Updates" is a fixed classification GUID carried in `Categories`. A title match would
+>   have been locale-dependent — the field reporter runs a German edition, where the same offer reads
+>   *"Definitionsupdate für Microsoft Defender Antivirus"* — and would have stopped excluding
+>   anything the day a product name changed.
+> * **The Defender platform update still counts.** The antimalware engine/platform updates are
+>   classified as ordinary servicing, not definitions, and they remain real work an operator should
+>   see. Neither a KB number nor a title can separate those two; the classification can.
+> * **An offer we cannot classify still counts.** If the categories are unreadable, the update is
+>   reported. An exclusion that swallowed what it failed to classify would hide real servicing.
+>
+> Definitions are still *installed* — only the count dom0 reads is narrowed, and the excluded offers
+> are counted and named in the guest log rather than silently vanishing. Because installs here are
+> dom0-driven, the practical consequence is that definitions now install on whatever pass runs
+> instead of prompting one.
+
+What the agent already carries is each offer's **identity** — `UpdateID` plus `RevisionNumber`, taken
 straight off the COM object rather than parsed out of a localised title — which is what makes "the
 offer the last pass already resolved" distinguishable from "a genuinely new one" at all. Our own
 acceptance check does not yet use it: it compares whether dom0 and the guest agree that *any*

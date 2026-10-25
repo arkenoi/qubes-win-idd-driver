@@ -14,6 +14,12 @@ $src = Get-Content -LiteralPath $Script -Raw
 $m = [regex]::Match($src, '(?ms)^function Get-Available \{.*?^\}')
 if (-not $m.Success) { Write-Output 'INSTRUMENT: function Get-Available not found'; exit 2 }
 $fn = $m.Value
+# Get-Available calls Test-WuDefinitionUpdate, so the SHIPPED helper is extracted too rather than
+# stubbed: a stub here would pass while the real classifier was broken, which is the whole failure
+# mode this family of tests exists to prevent.
+$md = [regex]::Match($src, '(?ms)^# ---- WU-DEFINITION-CLASS-BEGIN.*?^# ---- WU-DEFINITION-CLASS-END')
+if (-not $md.Success) { Write-Output 'INSTRUMENT: WU-DEFINITION-CLASS region not found'; exit 2 }
+. ([scriptblock]::Create($md.Value))
 foreach ($g in 'GUARD:outarray', 'GUARD:onesearch') { if ($fn -notmatch [regex]::Escape($g)) { Write-Output "INSTRUMENT: $g not found in Get-Available"; exit 2 } }
 if ($Defect -eq 'noarray') { $fn = [regex]::Replace($fn, '(?m)^.*# GUARD:outarray\s*$', '  # DEFECT: init removed') }
 elseif ($Defect -eq 'twosearch') { $fn = [regex]::Replace($fn, '(?m)^(.*# GUARD:onesearch.*)$', "`$1`n  `$r=`$se.Search(`"IsInstalled=0 and IsHidden=0`")") }
@@ -21,9 +27,12 @@ elseif ($Defect) { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (noarray 
 
 $script:searches = 0
 $script:fakeUpdates = @()
-function New-FakeUpdate([string]$kb, [string]$uid) {
+function New-FakeUpdate([string]$kb, [string]$uid, [string]$cat = '') {
+    # Categories: ordinary servicing by default. 'cat' lets a case offer a definition classification
+    # instead - the GUID is WU's own, not a name, so this fake carries exactly what the guest reads.
     [pscustomobject]@{ KBArticleIDs = @($kb); Title = "Update $kb"; MaxDownloadSize = 1048576; IsDownloaded = $false
-                       Identity = [pscustomobject]@{ UpdateID = $uid; RevisionNumber = 200 }; BundledUpdates = @(); DownloadContents = @() }
+                       Identity = [pscustomobject]@{ UpdateID = $uid; RevisionNumber = 200 }; BundledUpdates = @(); DownloadContents = @()
+                       Categories = @([pscustomobject]@{ Type = 'UpdateClassification'; CategoryID = $(if($cat){$cat}else{'0fa1201d-4330-4fa8-8ae9-b877473b6441'}) }) }
 }
 function New-FakeSession {
     $searcher = [pscustomobject]@{ ServerSelection = 0; Online = $false }
