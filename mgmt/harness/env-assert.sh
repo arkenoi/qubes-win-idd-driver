@@ -122,11 +122,14 @@ for key, ent in spec['environment'].items():
     got = facts.get(key)
     if not assert_it:
         rows.append((key, want, '(not asserted)', 'INFO')); continue
-    if got is None or got == '':
-        if key == 'netvm' and got == '':
-            pass  # an empty netvm is a legitimate measured value
-        else:
-            rows.append((key, want, '<not measured>', 'MISSING')); missing += 1; continue
+    # ABSENT, NOT EMPTY. `got is None` is "the fact was never measured" (exit 2, fix the probe);
+    # `got == ''` is a measured value - on a qube an unset feature IS the fact that the service is
+    # off - and belongs in the comparison below (exit 3, do not run the reproduction here). This
+    # read `got is None or got == ''` with one by-name exception for netvm until 2026-10-25, so
+    # `service_enablewinkey=` exited 2 and sent the reader to repair an instrument that had worked.
+    # netvm needs no exception now: want '' against got '' is ok by the generic comparison.
+    if got is None:
+        rows.append((key, want, '<not measured>', 'MISSING')); missing += 1; continue
     # DEFECT KNOB - the original bug: a comparison that cannot fail.  # GUARD:envassert-compare
     ok = True if defect == '1' else (got.strip().lower() == want.strip().lower())
     rows.append((key, want, got, 'ok' if ok else 'MISMATCH'))
