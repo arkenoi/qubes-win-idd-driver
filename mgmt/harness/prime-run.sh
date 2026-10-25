@@ -286,8 +286,13 @@ rm -f "mgmt/fixtures/$CHURN.aborted"
 # writer means a future change that moved this call after a start would be REFUSED instead of
 # silently describing a device set the running domain does not have. Owner 2026-10-25: "no rewriting
 # arguments on the fly."
-logvol_qemu_write "$CHURN" '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99' \
-  || { log "[ERROR] TERMINAL: could not set qemu-extra-args"; exit 1; }
+# THE PRIMING PHASE, from the one declaration in logvol-lib. This used to be the fragment written
+# out literally here, while matrix.sh carried a pattern to strip it and logvol-smoke composed its
+# own - three copies of one fact, which is how they drifted and how a judged boot came to reference
+# an unassigned loop. logvol_devices_apply composes the WHOLE value and refuses off a boundary; the
+# subject was just removed and recreated, so it is Halted and this passes.
+logvol_devices_apply "$CHURN" priming \
+  || { log "[ERROR] TERMINAL: could not apply the priming device set"; exit 1; }
 # NOT --required, MEASURED 2026-09-21. A `--required` assignment cannot be satisfied at domain
 # creation on this rig at present: with one the domain is not created at all (6/6, across two
 # subjects, a loop the guest had never seen, a different frontend slot, a different devtype, and a

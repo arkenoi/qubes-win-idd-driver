@@ -1302,6 +1302,20 @@ park_installed(){ # $1=vm $2=label - halt and park the just-installed subject as
       *) no "$lbl: subject would not halt for parking"; return 1 ;;
     esac
   fi
+  # ---- THE DOMAIN BOUNDARY: the GRADED device set goes on here, and only here ------------------
+  # The subject is Halted at this point and every boot after it is judged, so this is where the
+  # priming stick leaves the device set. It used to be stripped mid-cell, against a RUNNING guest,
+  # which did nothing the guest could see; when the writer started refusing that (correctly - the
+  # value is read at DOMAIN CREATION) the priming fragment survived while its loop had already been
+  # unassigned, and the first judged boot of campaign 1024-2333 never created a domain at all:
+  # `t+60s qvm=Halted`, with the bind and the nonce round trip having PASSED minutes earlier.
+  # One owner, named phases, applied at a boundary: logvol_devices_apply. Jev: phase-function 0.98,
+  # after-park-halt 0.80. Owner: "you organically cannot keep matrix and smoke test configurations
+  # in sync" - so neither composes one any more.
+  if ! logvol_devices_apply "$vm" graded; then
+    no "$lbl: the graded device set could not be applied at the park boundary - a judged boot would reference the priming stick's loop, which is unassigned, and the domain would not be created"
+    return 1
+  fi
   if qvm-ls --raw-data --fields NAME 2>/dev/null | grep -qx "$ck"; then
     say "  $lbl: replacing the previous campaign's park $ck"
     qvm-remove -f "$ck" >/dev/null 2>&1 || { no "$lbl: stale park $ck exists and cannot be removed"; return 1; }

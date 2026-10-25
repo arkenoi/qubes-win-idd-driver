@@ -116,6 +116,11 @@ LOGVOL_ARCHIVE_DIR="${LOGVOL_ARCHIVE_DIR:-$LOGVOL_DIR/archive}"
 LOGVOL_BIND_PS1="${LOGVOL_BIND_PS1:-$LOGVOL_LIB_DIR/logvol-bind.ps1}"
 LOGVOL_QTEST="${QTEST_BIN:-$LOGVOL_ROOT/tools/qtest}"
 LOGVOL_DRIVE_ID="logdrv"                             # our -drive id; the usb-storage device rides on it
+# THE PRIMING STICK'S SLOT AND ID, declared HERE so the phase sets below are the only place that
+# knows them. prime-run used to carry this text literally and matrix.sh carried a pattern to strip
+# it; two copies of one fact is what let them drift.
+LOGVOL_ANSWER_FRONTEND="${LOGVOL_ANSWER_FRONTEND:-xvdi}"
+LOGVOL_ANSWER_DRIVE_ID="${LOGVOL_ANSWER_DRIVE_ID:-ansdrv}"
 LOGVOL_OWN_BUS="logusb"                              # the controller we add when the guest has none
 LOGVOL_CACHE="writethrough"                          # L2 of the durability chain - never writeback here
 
@@ -299,6 +304,65 @@ logvol_qemu_write(){ # <vm> <value|--unset> - the ONLY place qemu-extra-args is 
     qvm-features "$vm" qemu-extra-args -- "$val" >/dev/null 2>&1 \
       || { _lv_say "[ERROR] could not set qemu-extra-args on $vm"; return 1; }
   fi
+}
+
+# ============================================================================================
+# THE DEVICE SET HAS ONE OWNER AND NAMED PHASES
+# ============================================================================================
+# Owner 2026-10-25, after a campaign cell's first judged boot never happened: "that because you
+# organically cannot keep matrix and smoke test configurations in sync". That is the level above the
+# bug, and it is correct. THREE places composed this device set independently - prime-run wrote the
+# answer stick's fragment literally and let logvol_attach compose ours onto it, matrix.sh STRIPPED
+# the priming fragments mid-cell, and logvol-smoke.sh composed its own - while nothing declared what
+# the set IS for a given phase. The lifecycle (priming during the install, graded for the boots that
+# are judged, swapped at a domain boundary) lived only as a convention spread across those files.
+#
+# WHAT IT COST, measured on campaign 1024-2333 cell WIN10-clean: the bind SUCCEEDED and the evidence
+# round trip PROVED (nonce LVPROOF-20261024T234505Z), the install parked - and then the first judged
+# boot reported `t+60s qvm=Halted`. The domain was never created. Eight lines earlier the guarded
+# writer had refused to drop the priming fragments because the subject was Running, so
+# qemu-extra-args still named `file=/dev/xvdi` for a loop the matrix had just UNASSIGNED. The value
+# is read at DOMAIN CREATION, so qemu was asked to open a device that no longer existed. A policy
+# change in one file broke a lifecycle kept in another.
+#
+# SO: ONE declaration per phase, composed WHOLE - never edited as a string - and applied only at a
+# domain boundary. Jev: phase-function 0.98, swap after-park-halt 0.80.
+# The string transforms below (compose/strip/keep_only_ours) stay: they have 101 assertions behind
+# them and other callers, and this is built from the same fragment text rather than a second copy.
+logvol_dev_controller(){ printf -- '-device nec-usb-xhci,id=%s' "$LOGVOL_OWN_BUS"; }
+logvol_dev_log(){        # the evidence stick: writable, write-through, present in EVERY boot
+  printf -- '-drive file=/dev/%s,format=host_device,if=none,id=%s,cache=%s -device usb-storage,bus=%s.0,drive=%s,removable=on' \
+    "$LOGVOL_FRONTEND" "$LOGVOL_DRIVE_ID" "$LOGVOL_CACHE" "$LOGVOL_OWN_BUS" "$LOGVOL_DRIVE_ID"
+}
+logvol_dev_answer(){     # the priming stick: READONLY, bootindex 99, and it must NOT survive into a
+                         # judged boot - it is a removable volume competing for the drive letter the
+                         # private volume takes, which decided a cell's verdict on 2026-09-08
+  printf -- '-drive file=/dev/%s,format=host_device,if=none,readonly=on,id=%s -device usb-storage,bus=%s.0,drive=%s,removable=on,bootindex=99' \
+    "$LOGVOL_ANSWER_FRONTEND" "$LOGVOL_ANSWER_DRIVE_ID" "$LOGVOL_OWN_BUS" "$LOGVOL_ANSWER_DRIVE_ID"
+}
+
+logvol_devices_for(){ # <phase> -> the WHOLE qemu-extra-args value for that phase, or rc 2
+  case "${1:?[ERROR] logvol_devices_for <priming|graded|answer|none>}" in
+    priming) printf '%s %s %s' "$(logvol_dev_controller)" "$(logvol_dev_answer)" "$(logvol_dev_log)" ;;
+    graded)  printf '%s %s'    "$(logvol_dev_controller)" "$(logvol_dev_log)" ;;
+    # ANSWER is priming WITHOUT an evidence volume: a provisioning boot that carries no log volume at
+    # all. mgmt/prime-selftest.sh and mgmt/reprovision-usb.sh (no PRISTINE marker) each wrote exactly
+    # this string literally, which is how there came to be four copies of one device set on this rig.
+    answer)  printf '%s %s'    "$(logvol_dev_controller)" "$(logvol_dev_answer)" ;;
+    none)    printf '' ;;
+    *) _lv_say "[ERROR] unknown device phase '$1' - priming|graded|answer|none"; return 2 ;;
+  esac
+}
+
+logvol_devices_apply(){ # <vm> <phase> - the ONLY way a harness sets the device set
+  local vm="${1:?[ERROR] logvol_devices_apply <vm> <phase>}" ph="${2:?[ERROR] logvol_devices_apply <vm> <phase>}" val
+  val=$(logvol_devices_for "$ph") || return 2
+  if [ -z "$val" ]; then
+    logvol_qemu_write "$vm" --unset || return 1
+  else
+    logvol_qemu_write "$vm" "$val" || return 1
+  fi
+  _lv_say "device set '$ph' applied to $vm"
 }
 
 logvol_qemu_apply(){ # <vm> - set the composed value on the qube; prints the previous value on stdout

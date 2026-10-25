@@ -64,6 +64,11 @@ logvol_loop_release(){ return 0; }
 logvol_bind_guest(){ if [ "${LV_BIND_OK:-1}" = 1 ]; then echo "LOGVOL-BIND ok drive=Z:"; return 0; fi
                      echo "LOGVOL-BIND fail reason=no_volume_labelled_DIAG_with_LOGVOL.TAG"; return 1; }
 logvol_prove_roundtrip(){ [ "${LV_RT_OK:-1}" = 1 ] && return 0; echo "nonce never arrived"; return 1; }
+# THE PHASE APPLIER. The smoke test applies the GRADED device set from logvol-lib's single
+# declaration - the whole point of it existing, since a cell composing its own set would be proving
+# a configuration no campaign runs. Drivable so its refusal is a leg too.
+logvol_devices_apply(){ [ "${LV_PHASE_OK:-1}" = 1 ] && { echo "device set '$2' applied to $1"; return 0; }
+                        echo "REFUSED: device set '$2' on $1"; return 2; }
 EOF
 printf 'qwt_shutdown(){ return 0; }\n' > "$T/shutdown-lib.sh"
 printf 'vm_lock(){ [ "${LOCK_HELD:-0}" = 1 ] && return 1; return 0; }\nvm_unlock(){ return 0; }\n' > "$T/vmlock.sh"
@@ -79,6 +84,7 @@ run(){ # -> rc; output in $T/out, verdicts in $T/o/verdict.tsv
   GOLDEN_BAD="${GOLDEN_BAD:-0}" CLONE_BAD="${CLONE_BAD:-0}" GUEST_UP="${GUEST_UP:-1}" \
   LV_BIND_OK="${LV_BIND_OK:-1}" LV_RT_OK="${LV_RT_OK:-1}" LOCK_HELD="${LOCK_HELD:-0}" \
   LV_CREATE_FAIL="${LV_CREATE_FAIL:-0}" LV_ATTACH_FAIL="${LV_ATTACH_FAIL:-0}" \
+  LV_PHASE_OK="${LV_PHASE_OK:-1}" \
     bash mgmt/harness/logvol-smoke.sh --deadline 1 "$@" > "$T/out" 2>&1
   echo $?
 }
@@ -136,6 +142,11 @@ rc=$(LV_ATTACH_FAIL=1 run)
 if [ "$rc" = 2 ] && command grep -qa 'the volume attaches' "$T/o/verdict.tsv"; then
   ok "an attach that fails is INVALID-RIG, not a FAIL about the guest"
 else no "a failed attach is INVALID-RIG" "rc=$rc $(vtsv)"; fi
+
+rc=$(LV_PHASE_OK=0 run)
+if [ "$rc" = 2 ] && command grep -qa 'the graded device set applies' "$T/o/verdict.tsv"; then
+  ok "a graded device set that cannot be applied is INVALID-RIG - the cell never boots a guest whose device set is unknown"
+else no "a refused device set is INVALID-RIG" "rc=$rc $(vtsv)"; fi
 
 rc=$(LOCK_HELD=1 run)
 if [ "$rc" = 2 ] && command grep -qa 'rig lock' "$T/o/verdict.tsv"; then

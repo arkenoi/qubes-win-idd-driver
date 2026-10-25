@@ -794,5 +794,67 @@ else
 fi
 
 echo
+
+# ---- THE DEVICE SET HAS ONE OWNER AND NAMED PHASES ---------------------------------------------
+# Owner 2026-10-25: "that because you organically cannot keep matrix and smoke test configurations
+# in sync". Before this, prime-run wrote the answer stick's fragment literally, matrix.sh carried a
+# pattern to strip it, and logvol-smoke composed its own - and when the writer began refusing a live
+# rewrite, the priming fragment survived onto a judged boot whose loop was already unassigned: the
+# domain was never created (`t+60s qvm=Halted`) minutes after the bind and the nonce round trip had
+# PASSED. These legs are that lifecycle, asserted.
+# The library is sourced in a SUBSHELL, as every other check here does it, and the values come back
+# on stdout - this suite never has logvol-lib in its own shell.
+_dev(){ ( cd "$ROOT" && . mgmt/harness/logvol-lib.sh >/dev/null 2>&1 && "$@" ) 2>/dev/null; }
+_p=$(_dev logvol_devices_for priming)
+_g=$(_dev logvol_devices_for graded)
+_n=$(_dev logvol_devices_for none)
+_ansid=$(_dev bash -c 'printf %s "$LOGVOL_ANSWER_DRIVE_ID"' 2>/dev/null || true)
+[ -n "$_ansid" ] || _ansid=ansdrv
+_logid=$(_dev bash -c 'printf %s "$LOGVOL_DRIVE_ID"' 2>/dev/null || true)
+[ -n "$_logid" ] || _logid=logdrv
+
+case "$_g" in
+  *"id=$_ansid"*) if [ "absent" = "PRESENT" ]; then ok "graded carries NO priming stick"; else bad "graded carries NO priming stick" "got PRESENT"; fi ;;
+  *)              if [ "absent" = "absent" ]; then ok "graded carries NO priming stick"; else bad "graded carries NO priming stick" "got absent"; fi ;;
+esac
+case "$_g" in *"id=$_logid"*) if [ "present" = "present" ]; then ok "graded carries the log volume"; else bad "graded carries the log volume" "got present"; fi ;;
+  *) if [ "present" = "absent" ]; then ok "graded carries the log volume"; else bad "graded carries the log volume" "got absent"; fi ;; esac
+case "$_g" in *nec-usb-xhci*) if [ "present" = "present" ]; then ok "graded carries the controller its device rides on"; else bad "graded carries the controller its device rides on" "got present"; fi ;;
+  *) if [ "present" = "absent" ]; then ok "graded carries the controller its device rides on"; else bad "graded carries the controller its device rides on" "got absent"; fi ;; esac
+case "$_g" in *cache=writethrough*) if [ "yes" = "yes" ]; then ok "the log volume keeps cache=writethrough when graded"; else bad "the log volume keeps cache=writethrough when graded" "got yes"; fi ;;
+  *) if [ "yes" = "no" ]; then ok "the log volume keeps cache=writethrough when graded"; else bad "the log volume keeps cache=writethrough when graded" "got no"; fi ;; esac
+case "$_p" in *"id=$_ansid"*) if [ "present" = "present" ]; then ok "priming carries the priming stick"; else bad "priming carries the priming stick" "got present"; fi ;;
+  *) if [ "present" = "absent" ]; then ok "priming carries the priming stick"; else bad "priming carries the priming stick" "got absent"; fi ;; esac
+case "$_p" in *"id=$_logid"*) if [ "present" = "present" ]; then ok "priming carries the log volume TOO - the install writes to it"; else bad "priming carries the log volume TOO - the install writes to it" "got present"; fi ;;
+  *) if [ "present" = "absent" ]; then ok "priming carries the log volume TOO"; else bad "priming carries the log volume TOO" "got absent"; fi ;; esac
+case "$_p" in *readonly=on*bootindex=99*) if [ "yes" = "yes" ]; then ok "the priming stick stays READONLY with bootindex 99"; else bad "the priming stick stays READONLY with bootindex 99" "got yes"; fi ;;
+  *) if [ "yes" = "no" ]; then ok "the priming stick stays READONLY with bootindex 99"; else bad "the priming stick stays READONLY with bootindex 99" "got no"; fi ;; esac
+if [ "" = "$_n" ]; then ok "none composes an empty value"; else bad "none composes an empty value" "got $_n"; fi
+_dev logvol_devices_for bogus >/dev/null 2>&1; if [ "2" = "$?" ]; then ok "an unknown phase REFUSES (rc 2)"; else bad "an unknown phase REFUSES (rc 2)" "got $?"; fi
+# ONE DECLARATION, NOT TWO: the log fragment in the phase sets is the same text compose() adds, so a
+# change to the slot or the cache lands in both. Compared, not eyeballed.
+_frag=$(_dev logvol_dev_log)
+case "$_g" in *"$_frag"*) if [ "same" = "same" ]; then ok "the phase set uses the SAME log fragment as logvol_dev_log"; else bad "the phase set uses the SAME log fragment as logvol_dev_log" "got same"; fi ;;
+  *) if [ "same" = "differs" ]; then ok "the phase set uses the same log fragment"; else bad "the phase set uses the same log fragment" "got differs"; fi ;; esac
+# THE `answer` PHASE: a provisioning boot with the stick and NO evidence volume. It exists because
+# mgmt/prime-selftest.sh and mgmt/reprovision-usb.sh each held a literal copy of exactly this string
+# - four copies of one device set on this rig, which is what Jev named at 0.99 as the remaining way
+# to boot a guest with the wrong one. Both halves asserted: the stick present, the log volume ABSENT
+# (a provisioning guest has no loop assigned at xvdj, and naming one fails domain creation outright).
+_a=$(_dev logvol_devices_for answer)
+case "$_a" in *"id=$_ansid"*) if [ "present" = "present" ]; then ok "answer carries the priming stick"; else bad "answer carries the priming stick" "got present"; fi ;;
+  *) if [ "present" = "absent" ]; then ok "answer carries the priming stick"; else bad "answer carries the priming stick" "got absent"; fi ;; esac
+case "$_a" in *"id=$_logid"*) if [ "absent" = "PRESENT" ]; then ok "answer carries NO log volume"; else bad "answer carries NO log volume - a provisioning boot has no loop at xvdj, and naming one fails domain creation" "got PRESENT"; fi ;;
+  *) if [ "absent" = "absent" ]; then ok "answer carries NO log volume - a provisioning boot has no loop assigned at xvdj"; else bad "answer carries NO log volume" "got absent"; fi ;; esac
+case "$_a" in *nec-usb-xhci*) if [ "present" = "present" ]; then ok "answer carries the controller the stick rides on"; else bad "answer carries the controller" "got present"; fi ;;
+  *) if [ "present" = "absent" ]; then ok "answer carries the controller the stick rides on"; else bad "answer carries the controller" "got absent"; fi ;; esac
+# AND IT IS THE SAME STICK FRAGMENT priming uses - not a fourth spelling of it.
+_ansfrag=$(_dev logvol_dev_answer)
+case "$_a" in *"$_ansfrag"*) if [ "same" = "same" ]; then ok "answer uses the SAME stick fragment as priming"; else bad "answer uses the same stick fragment as priming" "got same"; fi ;;
+  *) if [ "same" = "differs" ]; then ok "answer uses the same stick fragment"; else bad "answer uses the same stick fragment as priming" "got differs"; fi ;; esac
+_comp=$(_dev logvol_qemu_args_compose "")
+case "$_comp" in *"$_frag"*) if [ "same" = "same" ]; then ok "and compose() emits that very fragment - one declaration, two callers"; else bad "and compose() emits that very fragment - one declaration, two callers" "got same"; fi ;;
+  *) if [ "same" = "differs" ]; then ok "compose() emits that very fragment"; else bad "compose() emits that very fragment" "got differs"; fi ;; esac
+
 echo "RESULT: $pass passed, $fail failed  (fixtures: $T)"
 [ "$fail" -eq 0 ]

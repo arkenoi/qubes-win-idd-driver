@@ -109,7 +109,13 @@ if [ "$ATTACH" = 1 ]; then
     && logvol_attach "$SUBJ" "$IMG" "$OUT/logvol-manifest.json" >>"$OUT/attach.out" 2>&1 \
     || { verdict INVALID-RIG "the volume attaches" "logvol_create/attach failed: $(tail -2 "$OUT/attach.out" | tr '\n' ' ' | cut -c1-140)"; exit 2; }
   SMOKE_LOOP=$(logvol_loop_of "$IMG")
-  say "attached $IMG (loop ${SMOKE_LOOP:-?}) before first boot"
+  # THE GRADED PHASE, from the SAME declaration the matrix uses. This is the whole point of the
+  # owner's "you organically cannot keep matrix and smoke test configurations in sync": if this cell
+  # composed its own device set it would be proving a configuration no campaign runs. The subject is
+  # Halted here (it has never been started), so the boundary rule is satisfied.
+  logvol_devices_apply "$SUBJ" graded \
+    || { verdict INVALID-RIG "the graded device set applies" "logvol_devices_apply refused - see $OUT/attach.out"; exit 2; }
+  say "attached $IMG (loop ${SMOKE_LOOP:-?}) and applied the GRADED device set before first boot"
 else
   say "--no-attach: NOTHING attached - the bind below MUST refuse"
 fi
