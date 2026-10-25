@@ -67,7 +67,15 @@ run_ri(){ # env: MARK_SEQ (space-separated _mark_seen answers), CPU_MOVING, WINS
                 printf '%s\n' "$(printf '%s' "$MARK_SEQ" | cut -d' ' -f"$i")"; }
   w_cpu_moving(){ [ "${CPU_MOVING:-1}" = 1 ]; }
   w_install(){ return "${WINSTALL_RC:-0}"; }
-  qrun(){ :; }
+  # THE CLOCK READ IS A DEPENDENCY NOW, so the stub has to answer it. run_install opens with a
+  # clock preamble (qtest synctime, then re-read the guest's UTC and refuse beyond 120 s) because a
+  # guest booted an hour behind refuses the payload's driver catalogs with 0x800B0101 and takes the
+  # whole cell. A bare `qrun(){ :; }` returned nothing, _gutc came back empty, and all eleven arms
+  # below died as INVALID-INSTRUMENT before reaching the grading they exist to check - the same
+  # shape as the $INC and $HERE extractions in this file's header: a real dependency of the
+  # extracted function that the stub tree has to provide. Answers the clock query with THIS host's
+  # UTC so the skew is 0; every other qrun call stays silent as before.
+  qrun(){ case "$*" in *UtcNow*) date -u +%Y-%m-%dT%H:%M:%SZ ;; *) : ;; esac; }
   fetch_msi_verbose(){ :; }
   sleep(){ :; }
   GLOG='C:\qwt-improved-install.log'

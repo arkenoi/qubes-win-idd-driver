@@ -1585,7 +1585,12 @@ run_install(){ # $1=vm $2=label $3=install-source (drive/dir carrying install.cm
   # guest AFTER the sync and a still-broken clock is INVALID-INSTRUMENT - the rig could not measure,
   # which is a different finding from a product that refused.
   local _hnow _gutc _skew
-  QTEST_VM=$vm "$HERE/tools/qtest" synctime >/dev/null 2>&1 \
+  # ./tools/qtest, NOT "$HERE/tools/qtest": every other call in this function spells it relative
+  # (lines below push, run and probe that way), matrix.sh cd's to the repo root, and
+  # matrix-runinstall-grade-selftest.sh extracts THIS FUNCTION ALONE and runs it against a stub
+  # tree - so $HERE is unset there and the suite died with "HERE: unbound variable", which is the
+  # same defect its own header records for $INC. A relative path hits the stub; $HERE cannot.
+  QTEST_VM=$vm ./tools/qtest synctime >/dev/null 2>&1 \
     || say "  $lbl: [WARN] qtest synctime returned non-zero - verifying the clock regardless"
   _hnow=$(date -u +%s)
   _gutc=$(QTEST_VM=$vm qrun "powershell -NoProfile -Command \"[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')\"" 2>/dev/null \
