@@ -99,6 +99,18 @@ Check 'wrong-category-type' (Test-WuDefinitionUpdate (New-Offer 'KB2267602' 'x' 
       'the GUID is only a classification when it IS the UpdateClassification category'
 Check 'multiple-categories' (Test-WuDefinitionUpdate (New-Offer 'KB2267602' 'x' @((New-Category 'abc' 'Company'), (New-Category $DEFN)))) $true `
       'found among several categories'
+# --- the extractor, which is what the predicate is now built on, and what the ROW discloses -------
+# The constant cannot be checked offline; the DISCLOSURE can. These two say the field dom0 collects
+# carries normalised classification ids and nothing else, because that field is what will settle
+# WUDEFINITIONGUIDUNCONFIRMED on the next real pass - an empty or raw-braced field would settle
+# nothing.
+$g = @(Get-WuClassifications (New-Offer 'KB1' 'x' @((New-Category 'abc' 'Company'), (New-Category ('{' + $DEFN.ToUpperInvariant() + '}')), (New-Category $UPDS))))
+if (($g -join ',') -eq "$DEFN,$UPDS") { Write-Output '  ok   classifications: UpdateClassification ids only, normalised, in order' }
+else { Write-Output "  FAIL classifications: got '$($g -join ',')', want '$DEFN,$UPDS'"; $fails++ }
+$g2 = @(Get-WuClassifications (New-Offer 'KB1' 'x' (ThrowingCats)))
+if ($g2.Count -eq 0) { Write-Output '  ok   classifications: categories that throw yield an EMPTY list, not a death' }
+else { Write-Output "  FAIL classifications: throwing categories yielded $($g2.Count) id(s)"; $fails++ }
+
 # --- the fail-safe direction ----------------------------------------------------------------------
 Check 'no-categories' (Test-WuDefinitionUpdate (New-Offer 'KB999' 'x' $null)) $false `
       'an offer with NO categories counts - an exclusion must not swallow what it cannot classify'
@@ -112,10 +124,10 @@ function Save {}
 function Log { param([string]$m, [string]$lvl = 'INFO') $script:logged += @($m) }
 $script:logged = @()
 $avail = @(
-  [ordered]@{ kb='KB5062553'; is_definition=$false },
-  [ordered]@{ kb='KB2267602'; is_definition=$true  },
-  [ordered]@{ kb='KB4052623'; is_definition=$false },
-  [ordered]@{ kb='KB2310138'; is_definition=$true  }
+  [ordered]@{ kb='KB5062553'; classifications=@($UPDS); is_definition=$false },
+  [ordered]@{ kb='KB2267602'; classifications=@($DEFN); is_definition=$true  },
+  [ordered]@{ kb='KB4052623'; classifications=@($UPDS); is_definition=$false },
+  [ordered]@{ kb='KB2310138'; classifications=@($DEFN); is_definition=$true  }
 )
 . ([scriptblock]::Create($exc))
 
@@ -128,10 +140,15 @@ else { Write-Output "  FAIL disclosure: definitions_excluded=$($script:St.defini
 if (($script:logged -join ' ') -match 'KB2267602' -and ($script:logged -join ' ') -match 'KB2310138') {
     Write-Output '  ok   log: names which offers were excluded'
 } else { Write-Output "  FAIL log: did not name the excluded offers: $($script:logged -join ' | ')"; $fails++ }
+# THE LOG IS THE RECEIPT FOR THE GUID. A log that names only the KB leaves the constant
+# unfalsifiable from a real pass, which is the whole defect being closed here.
+if (($script:logged -join ' ') -match ("KB2267602\[" + [regex]::Escape($DEFN) + "\]")) {
+    Write-Output '  ok   log: names the CLASSIFICATION it excluded on, not only the KB'
+} else { Write-Output "  FAIL log: does not name the classification: $($script:logged -join ' | ')"; $fails++ }
 
 # An all-definitions scan must report ZERO, which is the whole point.
 $script:St = [ordered]@{ available=$null; count=$null; definitions_excluded=$null }
-$avail = @([ordered]@{ kb='KB2267602'; is_definition=$true })
+$avail = @([ordered]@{ kb='KB2267602'; classifications=@($DEFN); is_definition=$true })
 . ([scriptblock]::Create($exc))
 if ($script:St.count -eq 0) { Write-Output '  ok   definitions-only: a scan finding only definitions reports 0 to dom0' }
 else { Write-Output "  FAIL definitions-only: reported $($script:St.count), want 0"; $fails++ }

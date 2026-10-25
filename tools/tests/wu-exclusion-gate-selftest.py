@@ -49,7 +49,27 @@ CASES = [
      'decisive measurement: cbs-servicing'),
 ]
 
+# THE PREDICATE, not only the gate. The gate decides what to do with items the audit SELECTED;
+# excluded() is what selects them, and a definition offer was invisible to it - the newest
+# exclusion path was the one path this audit never judged. Each row is the shape the guest
+# actually writes, so a row that stopped carrying is_definition goes red here.
 bad = 0
+PRED = [
+    ('a definition offer is an exclusion', {'kb': 'KB2267602', 'severity': 'important',
+     'classifications': ['e0789628-ce08-4437-be74-2495b842f43b'], 'is_definition': True}, True),
+    ('a Defender PLATFORM offer is not', {'kb': 'KB4052623', 'severity': 'important',
+     'classifications': ['0fa1201d-4330-4fa8-8ae9-b877473b6441'], 'is_definition': False}, False),
+    ('an ordinary cumulative is not', {'kb': 'KB5062553', 'severity': 'important',
+     'classifications': ['0fa1201d-4330-4fa8-8ae9-b877473b6441'], 'is_definition': False}, False),
+    ('a row with no is_definition at all is not', {'kb': 'KB1', 'severity': 'important'}, False),
+]
+for name, row, want in PRED:
+    got = m.excluded(row)
+    ok = (got == want)
+    print(('OK   ' if ok else 'FAIL ') + 'predicate: ' + name + f'  (excluded={got}, want {want})')
+    if not ok:
+        bad += 1
+
 for name, verdicts, want_rc, want_txt in CASES:
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):

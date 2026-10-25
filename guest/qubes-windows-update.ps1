@@ -915,17 +915,36 @@ function Get-SecurityPlatformState {
 # UNREADABLE CATEGORIES MEAN "NOT A DEFINITION", deliberately: the failure direction is that an offer
 # still counts. An exclusion that swallows an update it could not classify would hide real servicing
 # work, which is the defect this project keeps paying for.
+#
+# THE GUID IS DISCLOSED, NOT ASSERTED. The target value above has never been read off a live
+# IUpdate: the probe that proved this MECHANISM (German 25H2, as SYSTEM) ran against an offline
+# metadata cache that had no definition pending, so it returned Security Updates and Drivers and
+# could not answer the one question. Rather than leave the constant unfalsifiable, the extractor
+# returns the classifications it SAW, every offer row carries them, and the exclusion names them in
+# the log - so the next real pass that is offered KB2267602 settles it as DATA, in evidence dom0
+# already collects, instead of by anyone re-reading this comment. See WUDEFINITIONGUIDUNCONFIRMED.
 $script:WU_DEFINITION_CLASS = 'e0789628-ce08-4437-be74-2495b842f43b'
-function Test-WuDefinitionUpdate($u){
+function Get-WuClassifications($u){
+  $ids=@()
   try {
     foreach($c in $u.Categories){
       $ty=''; try { $ty=[string]$c.Type } catch {}
       if($ty -ne 'UpdateClassification'){ continue }
       $id=''; try { $id=[string]$c.CategoryID } catch {}
       $id = ($id -replace '[{}]','').Trim().ToLowerInvariant()
-      if($id -eq $script:WU_DEFINITION_CLASS){ return $true }
+      if($id){ $ids += $id }
     }
   } catch {}
+  # PLAIN return, and @() at EVERY call site. `return ,$ids` nests it - the comma operator wraps
+  # the array in a one-element array, so @(Get-WuClassifications $u) saw a single System.Object[]
+  # and an offer whose categories threw disclosed one bogus classification instead of none. Caught
+  # by the two checks added for exactly this field, before it ever reached a guest.
+  return $ids
+}
+function Test-WuDefinitionUpdate($u){
+  foreach($id in @(Get-WuClassifications $u)){
+    if($id -eq $script:WU_DEFINITION_CLASS){ return $true }
+  }
   return $false
 }
 # ---- WU-DEFINITION-CLASS-END
@@ -955,7 +974,7 @@ function Get-Available {
     try { $uid=[string]$u.Identity.UpdateID; $rev=[int]$u.Identity.RevisionNumber } catch {}
     if($kb -ne '(no KB)' -and -not $script:LiveUpdates.ContainsKey($kb)){ $script:LiveUpdates[$kb] = $u }
     if($uid){ $script:LiveUpdates[$uid] = $u }
-    $out += [ordered]@{ kb=$kb; title="$($u.Title)"; size_mb=[math]::Round($u.MaxDownloadSize/1MB,1); downloaded=[bool]$u.IsDownloaded; content_class=$cls.class; direct_urls=@($cls.urls); uid=$uid; rev=$rev; is_definition=(Test-WuDefinitionUpdate $u) }
+    $out += [ordered]@{ kb=$kb; title="$($u.Title)"; size_mb=[math]::Round($u.MaxDownloadSize/1MB,1); downloaded=[bool]$u.IsDownloaded; content_class=$cls.class; direct_urls=@($cls.urls); uid=$uid; rev=$rev; classifications=@(Get-WuClassifications $u); is_definition=(Test-WuDefinitionUpdate $u) }
   }
   return ,$out
 }
@@ -2622,7 +2641,7 @@ try {
   Save
   if ($defs.Count -gt 0) {
     Log ("definition updates excluded from the count dom0 reads: {0} of {1} offer(s) [{2}] - they still install on any pass that runs" -f `
-         $defs.Count, $avail.Count, (($defs | ForEach-Object { $_.kb }) -join ','))
+         $defs.Count, $avail.Count, (($defs | ForEach-Object { $_.kb + '[' + (@($_.classifications) -join ' ') + ']' }) -join ','))
   }
   # ---- WU-DEFINITION-EXCLUDE-END
   # Post-end-of-support / ESU diagnosis: INFORMATIONAL, computed on every pass from the fresh scan so a

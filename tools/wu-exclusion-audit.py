@@ -49,8 +49,17 @@ def rows(run_dir: Path):
 
 def excluded(r: dict) -> bool:
     """An item dom0 does NOT hear about as actionable. Structural, not a guess: severity=info
-    anywhere in the row, state not-actionable, or an installer whose effect was NOT verified."""
+    anywhere in the row, state not-actionable, an installer whose effect was NOT verified, or a
+    DEFINITION offer, which is held out of the count dom0 reads.
+
+    is_definition WAS NOT HERE when that exclusion shipped, and the hole was the whole point of
+    this file: a definition offer kept its severity, stayed in `available`, and was simply absent
+    from the count - so this audit, built to judge every exclusion per item, did not see it as an
+    exclusion at all and never judged it. The newest exclusion path was the one unaudited path.
+    The verdict it needs already exists here (`perpetual-by-nature`)."""
     if r.get('severity') == 'info' or r.get('state') == 'not-actionable':
+        return True
+    if r.get('is_definition'):
         return True
     files = r.get('files')
     if isinstance(files, list):
@@ -146,6 +155,21 @@ def main() -> int:
             'installed on this path) or a concealed failure (it could and should have installed,',
             'and something went wrong that the row is papering over).',
             '',
+        ]
+        if it['rows'][0].get('is_definition'):
+            cls = it['rows'][0].get('classifications') or []
+            state += [
+                'WHY THIS ITEM IS NOT IN THE COUNT: the guest classified it as a DEFINITION update',
+                'and holds it out of the number dom0 reads. IT STILL INSTALLS on any pass that runs -',
+                'only the count changed. The classification it read off the Windows Update object:',
+                '  ' + (', '.join(cls) if cls else '(NONE - the row carries no classification, so the'
+                       ' exclusion cannot be checked against WU\'s own field)'),
+                'The GUID the product treats as "Definition Updates" is',
+                '  e0789628-ce08-4437-be74-2495b842f43b',
+                'If the row\'s classification does not contain that GUID, this item was excluded for',
+                'some OTHER reason and this explanation is wrong. Say so.',
+                '']
+        state += [
             'RULE THE PROJECT ALREADY COMMITTED TO (docs/ADR-updater.md section 3): an installer',
             'that returns rc=0 without its measured effect is NOT a success, and a probe that ran',
             'and saw nothing is a NEGATIVE result, not a missing one.',
