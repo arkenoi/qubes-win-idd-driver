@@ -1,0 +1,9 @@
+{
+ "measured_runs": [
+  "matrix"
+ ],
+ "min_free_gb": 105,
+ "peak_used_gb": 0,
+ "run": "matrix",
+ "start_free_gb": 105
+}

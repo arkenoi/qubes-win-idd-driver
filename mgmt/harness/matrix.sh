@@ -275,11 +275,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/e2e-wait.sh"
 # verification step that could never actually verify. Found 2026-09-08 while instrumenting boots.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 M="${MATRIX_OUT:-$HOME/qwt-matrix/$(date -u +%Y%m%d-%H%M%S)}"; mkdir -p "$M"
-# THE CAMPAIGN'S OWN IDENTITY, for the things that must not be written by anything but a campaign.
-# It is NOT $M: tools/tests/matrix-pool-floor-selftest.sh uses $M for the PATH TO THIS FILE, so a
-# guard on $M passed inside the suite and wrote a record keyed "matrix.sh" from stubbed values. A
-# variable that means two things in two places is not an identity.
-POOL_SPACE_RUN="${POOL_SPACE_RUN:-$(basename "$M")}"
 # MATTEMPT-A  (to the B marker: extracted and executed by
 # tools/tests/matrix-attempt-boundary-selftest.sh; neither marker names the other)
 # A FILE CANNOT SCOPE A RUN. $M is derived from the release-package run id, so two campaign attempts
@@ -309,6 +304,23 @@ _matrix_stamp_inherited_artefacts(){ # <dir> <attempt-id> -> stamps, prints what
 MATRIX_ATTEMPT="${MATRIX_ATTEMPT:-$(date -u +%Y%m%dT%H%M%SZ)}"
 _matrix_stamp_inherited_artefacts "$M" "$MATRIX_ATTEMPT" >/dev/null
 # MATTEMPT-B
+# THE CAMPAIGN'S OWN IDENTITY, for the things that must not be written by anything but a campaign.
+# It is NOT $M: tools/tests/matrix-pool-floor-selftest.sh uses $M for the PATH TO THIS FILE, so a
+# guard on $M passed inside the suite and wrote a record keyed "matrix.sh" from stubbed values. A
+# variable that means two things in two places is not an identity.
+# NOR IS IT ANY PART OF $M's PATH. tools/release-acceptance.sh:285 passes MATRIX_OUT="$CAMP/matrix"
+# where CAMP="$WORK/campaign", so `basename "$M"` is the literal string `matrix` for EVERY campaign
+# this rig will ever run - MEASURED in mgmt/campaign-space.json after attempt 1024-2333, which
+# recorded `"run": "matrix"`. A second campaign then finds cur == run, skips the reset that re-bases
+# start_free_gb/min_free_gb on THIS run, and computes its draw against another campaign's numbers:
+# max(start) minus min(free) ACROSS campaigns, a draw nobody made. The peak only ever grows, so the
+# wrong number does not self-correct - it becomes a floor the preflight refuses real campaigns
+# against. The first fix was `<parent>-<leaf>`, which reads `campaign-matrix` for every campaign for
+# the same reason one level up; Jev scored it 0.67 and the path was what it doubted.
+# SO: THE ATTEMPT ID, which exists for exactly this join and is unique by construction - inherited
+# from release-acceptance's ACCEPT_ATTEMPT ("ONE attempt id across both layers") or defaulted above
+# to a UTC stamp by this file. Hence its position here, BELOW that default rather than above it.
+POOL_SPACE_RUN="${POOL_SPACE_RUN:-$MATRIX_ATTEMPT}"
 R=$M/matrix.log; : > "$R"
 # UTC, LIKE THE RUNNER THAT DRIVES THIS. tools/release-acceptance.sh stamps `date -u` and this
 # stamped `date` (local), so one campaign produced two logs three hours apart with neither line

@@ -260,6 +260,17 @@ rc=$(run)
 if [ "$rc" = 0 ] && grep -qa 'requirement is UNVERIFIED' "$T/out"; then ok "with NO peak recorded it says the campaign requirement is UNVERIFIED rather than inventing a bound (Jev measured-peak-first 0.91)"
 else no "an unmeasured campaign requirement says UNVERIFIED" "rc=$rc $(tail -1 "$T/out")"; fi
 
+# AND A RECORDED ZERO IS THE SAME AS NO RECORD. Attempt 1024-2333 aborted before any cell drew
+# space, leaving start_free_gb == min_free_gb and peak_used_gb 0. Read as a number, that gate passes
+# trivially and LOGS "above the MEASURED campaign peak of 0 GB" - an aborted run turned into a
+# reassurance nobody measured. Both directions are asserted: zero must not be quoted as measured,
+# and must still say UNVERIFIED.
+printf '{"peak_used_gb": 0, "run": "x", "start_free_gb": 105, "min_free_gb": 105}\n' > "$T/space-zero.json"
+rc=$(SPACE_RECORD_OVERRIDE="$T/space-zero.json" POOL_FREE="100" run)
+if [ "$rc" = 0 ] && grep -qa 'requirement is UNVERIFIED' "$T/out" && ! grep -qa 'MEASURED campaign peak' "$T/out"; then
+  ok "a recorded peak of ZERO is UNVERIFIED, not a measured bound - an aborted attempt drew nothing and proves nothing"
+else no "a zero peak is UNVERIFIED" "rc=$rc $(grep -a 'space:' "$T/out" | tail -1)"; fi
+
 
 # ---- the tally, LAST, and the exit code is the contract -----------------------------------------
 # This block used to sit above the preparation legs, so the printed total excluded them and the

@@ -283,6 +283,7 @@ export MATRIX_ATTEMPT="$ACCEPT_ATTEMPT"
 # matrix.sh takes its own output dir from MATRIX_OUT, not OUT.
 MATRIX_WORK="$WORK" RELEASE_SETUP="$SETUP" RELEASE_ISO="$ISO" RELEASE_COMMIT="$HEAD" \
   CELLS="$CELLS" G10="$G10" G11="$G11" B10="$B10" B11="$B11" MATRIX_OUT="$CAMP/matrix" \
+  POOL_SPACE_RUN="$ACCEPT_ATTEMPT" \
   ./mgmt/harness/matrix.sh 2>&1 | tee -a "$CAMP/full.out" >>"$CAMP/runner.log"
 MRC=${PIPESTATUS[0]}
 say "matrix rc=$MRC (detail: $CAMP/full.out, artefacts: $CAMP/matrix)"

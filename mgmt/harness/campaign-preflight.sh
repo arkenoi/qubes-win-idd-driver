@@ -190,6 +190,12 @@ try:
     v=d.get('peak_used_gb')
     print(int(v) if v is not None else '')
 except Exception: print('')" "$SPACE_RECORD" 2>/dev/null)
+# A PEAK OF ZERO IS NOT A MEASUREMENT. An attempt that aborts before any cell draws space leaves
+# start_free_gb == min_free_gb and therefore peak_used_gb 0 - which is exactly what attempt
+# 1024-2333 left behind. Read as a number that gate passes trivially AND logs "above the MEASURED
+# campaign peak of 0 GB", turning an aborted run into a reassurance nobody measured. Zero means the
+# record exists but carries no draw, so it is UNVERIFIED, same as no record at all.
+[ -z "$_peak" ] || [ "$_peak" -gt 0 ] || _peak=""
 if [ -n "$_peak" ]; then
     [ "$_free" -ge "$_peak" ] || die 15 "only ${_free} GB free on $POOL_NAME and a measured campaign peak is ${_peak} GB ($SPACE_RECORD) - this campaign would run out"
     log "space: ${_free} GB free on $POOL_NAME, above the MEASURED campaign peak of ${_peak} GB"

@@ -204,6 +204,51 @@ _runs=$(python3 -c "import json;print(len(json.load(open('$_R'))['measured_runs'
   || bad "peak=$_peak runs=$_runs - a later run that drew less must not lower the rig's requirement"
 rm -f "$_R"
 
+# ---- THE CAMPAIGN IDENTITY ITSELF, taken from matrix.sh's own lines ----------------------------
+# Every leg above drives the recorder with an identity this suite invents, so none of them can see
+# the identity matrix.sh actually derives. tools/release-acceptance.sh:285 passes
+# MATRIX_OUT="$CAMP/matrix" where CAMP="$WORK/campaign", so NO part of that path differs between
+# campaigns: `basename "$M"` is `matrix` every time (recorded as `"run": "matrix"` by attempt
+# 1024-2333) and `<parent>-<leaf>` is `campaign-matrix` every time. The expressions are EXTRACTED
+# here rather than retyped, because a retyped copy keeps passing after the real one changes.
+_MATRIX_SH="$M"   # in this suite $M is the PATH TO matrix.sh; inside matrix.sh it is the output dir
+_id_of(){ # <matrix-out> [inherited-attempt] -> the identity matrix.sh would use
+  ( unset POOL_SPACE_RUN; M="$1"; MATRIX_ATTEMPT="${2:-}"
+    [ -n "$MATRIX_ATTEMPT" ] || unset MATRIX_ATTEMPT
+    eval "$(sed -n '/^MATRIX_ATTEMPT="\${MATRIX_ATTEMPT/p;/^POOL_SPACE_RUN=/p' "$_MATRIX_SH")"
+    echo "$POOL_SPACE_RUN" ) 2>/dev/null
+}
+_CAMPOUT=/home/user/qwt-accept/w/campaign/matrix     # the real shape, both campaigns identical
+_idA=$(_id_of "$_CAMPOUT" 20261024T233300Z)
+_idB=$(_id_of "$_CAMPOUT" 20261025T010000Z)
+if [ -n "$_idA" ] && [ "$_idA" != "$_idB" ]; then
+  ok "two campaigns with the SAME MATRIX_OUT get DIFFERENT identities ($_idA vs $_idB) - the attempt id, not the path"
+else bad "the identity does not distinguish two campaigns: A='$_idA' B='$_idB' - with MATRIX_OUT identical for every campaign, that is the 1024-2333 defect"; fi
+case "$_idA" in
+  matrix|campaign-matrix) bad "the identity is a PATH form ('$_idA') - both collide for every campaign on this rig" ;;
+  20261024T233300Z) ok "...and it IS the inherited attempt id, the one string release-acceptance and matrix.sh already share" ;;
+  *) bad "unexpected identity '$_idA'" ;;
+esac
+# A STANDALONE matrix run has no campaign above it and must still be unique: matrix.sh defaults the
+# attempt id to a UTC stamp, so the fallback is a timestamp rather than a path.
+_idS=$(_id_of /home/user/qwt-matrix/20261025-010203)
+case "$_idS" in
+  ""|matrix|*campaign*) bad "a standalone run got no usable identity: '$_idS'" ;;
+  *) ok "a standalone matrix run still gets a unique identity ($_idS) from its own attempt default" ;;
+esac
+
+# WHY IT MATTERS, driven: with the identity SHARED the recorder never re-bases, so campaign 2's draw
+# is computed against campaign 1's start - 200 free minus 82 free = 118 GB that no campaign drew,
+# and the peak only grows, so the preflight would refuse real campaigns against it forever.
+rm -f "$_R"
+_rec_run "shared" "" "$_R" 100 82
+_rec_run "shared" "" "$_R" 200 195
+_peak=$(python3 -c "import json;print(json.load(open('$_R'))['peak_used_gb'])" 2>/dev/null)
+[ "$_peak" = 118 ] \
+  && ok "SEEN TO FAIL: one identity for two campaigns invents a 118 GB peak from two runs' numbers - that is what '\"run\": \"matrix\"' would have done on the second campaign" \
+  || bad "the shared-identity contamination did not reproduce (peak=$_peak, expected 118) - then this leg is not measuring why the identity must differ"
+rm -f "$_R"
+
 echo
 echo "matrix-pool-floor-selftest: $pass passed, $fail failed"
 [ "$fail" = 0 ] || exit 1
