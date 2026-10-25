@@ -32,7 +32,31 @@
 #
 # Usage:
 #     tools/cut-release.sh --run <release-package-run-id> [--draft]
-#     tools/cut-release.sh --run <id> --i-am-rebuilding-history   (see FORCE, bottom)
+#     tools/cut-release.sh --run <id> --acceptance-override "<reason>"   (see OVERRIDE)
+#
+# ======================================================================================
+# OVERRIDE
+# ======================================================================================
+# --acceptance-override "<reason>" publishes a package whose acceptance record is NOT CLEAN.
+# Added 2026-10-25 on the owner's explicit instruction ("cut the override release on yesterdays
+# binary package. we will supercede it with current campaign, but i want to publish it now"),
+# because until then the only documented escape was `--i-am-rebuilding-history`, which this header
+# described and the argument parser had never implemented - it died on "unknown argument".
+#
+# What it relaxes: ONE predicate, the campaign verdict. What it does NOT relax - every one of these
+# still fails closed under the override, because each guards a property of the BYTES rather than a
+# judgement about them:
+#     the run is a green release-package run; the manifest binds to it three ways; the tag lands on
+#     the build commit; verify-release-package reports PACKAGE COMPLETE; the gui-agent carries no
+#     fault injector; an acceptance record for THIS ISO sha EXISTS; the published assets are
+#     re-downloaded and byte-compared.
+# A MISSING record is still fatal. The override ships a release whose failures are KNOWN and named;
+# it cannot be used to ship one nothing was ever measured on, because then there is nothing to name.
+#
+# It is not quiet. The reason is required and non-empty, the refused verdict and the checker's own
+# output are printed, and both are prepended to the PUBLISHED release notes - so a reader who finds
+# this release later learns from the release itself that it was cut on a failed record, and what
+# failed, without having to find this script.
 # ======================================================================================
 set -uo pipefail
 
@@ -41,11 +65,28 @@ say() { echo "[cut] $*"; }
 
 RUN=""
 DRAFT=""
+OVERRIDE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --run)   RUN="${2:-}"; shift 2 ;;
     --draft) DRAFT="--draft"; shift ;;
-    -h|--help) sed -n '2,36p' "$0"; exit 0 ;;
+    --acceptance-override)
+      OVERRIDE="${2:-}"
+      # A reason that is absent, empty or a shrug is not a reason. The whole value of this flag is
+      # that the release says WHY, so an unusable reason fails here rather than reaching the notes.
+      [ -n "$OVERRIDE" ] || die "--acceptance-override requires a reason in the next argument.
+  It is printed and published: say what failed and why shipping anyway is the right call."
+      [ "${#OVERRIDE}" -ge 24 ] || die "--acceptance-override reason is ${#OVERRIDE} characters.
+  It goes into the published release notes - name the failure and the decision, not a word."
+      shift 2 ;;
+    # The old header advertised --i-am-rebuilding-history and the parser never had it, so it died
+    # on "unknown argument" (found 2026-10-25 while looking for exactly this escape hatch). Name it
+    # rather than let the next reader of an old doc hit the same wall.
+    --i-am-rebuilding-history)
+      die "--i-am-rebuilding-history was documented but never implemented, and is now gone.
+  The acceptance verdict is the only thing that was ever overridable:
+      tools/cut-release.sh --run <id> --acceptance-override \"<reason>\"" ;;
+    -h|--help) awk 'NR>1 && /^set -uo pipefail/{exit} NR>1' "$0"; exit 0 ;;
     *)
       # The old interface was `cut-release.sh <artifacts-dir>`. Refuse it loudly rather than
       # guessing, and say why - a stale directory is the exact defect this rewrite removes.
@@ -54,7 +95,7 @@ while [ $# -gt 0 ]; do
   distinguish it from the correct one. Pass the release-package run that BUILT the package:
       tools/cut-release.sh --run <run-id>
   Find it with:  gh run list --workflow release-package --limit 5"
-      die "unknown argument: $1 (expected --run <run-id> [--draft])" ;;
+      die "unknown argument: $1 (expected --run <run-id> [--draft] [--acceptance-override \"<reason>\"])" ;;
   esac
 done
 [ -n "$RUN" ] || die "no --run <release-package-run-id> given. gh run list --workflow release-package --limit 5"
@@ -138,7 +179,26 @@ fi
 [ "${PKGVER%%+*}" = "$VER" ] || die "artifact package_version (${PKGVER%%+*}) != agent/version ($VER)"
 [ -z "$RELVER" ] || [ "$RELVER" = "$VER" ] || die "MANIFEST release_version ($RELVER) != agent/version ($VER)"
 
-AGENTSHA="$(git -C agent rev-parse --short=7 HEAD)"
+# THE AGENT SHA COMES FROM THE PACKAGE, NEVER FROM THE WORKING TREE.
+# This read `git -C agent rev-parse HEAD` until 2026-10-25, which is correct only when the cut
+# happens at the very tree state that built the package. Measured that day: the tree was at agent
+# e921819 while the package being cut was built from 93a1b27, so the tag would have published
+# YESTERDAY's bytes under TODAY's agent sha - the v4.3.21 mislabel (tag 37383a58 / package
+# 3245867d) arriving in the tag NAME instead of the tag target, and silently claiming the tag name
+# the newer build needs. Two independent sources, which must agree: the submodule gitlink recorded
+# at the build commit, and the +agent.<sha> suffix the builder baked into package_version.
+AGENTSHA="$(git rev-parse --short=7 "${BUILDSHA}:agent" 2>/dev/null)" \
+  || die "cannot read the agent gitlink at ${BUILDSHA:0:12} - the tag name is unprovable without it.
+  git submodule update --init agent, or fetch the commit, then retry."
+PKGAGENT="${PKGVER#*+agent.}"
+[ "$PKGAGENT" != "$PKGVER" ] \
+  || die "package_version '$PKGVER' carries no +agent.<sha> suffix - cannot corroborate the agent sha"
+case "$PKGAGENT" in
+  "$AGENTSHA"*) : ;;
+  *) die "agent sha disagreement: the gitlink at ${BUILDSHA:0:12} says $AGENTSHA, the package label
+  says $PKGAGENT. One of them does not describe these bytes - do not publish either name." ;;
+esac
+say "agent sha: $AGENTSHA (gitlink at the build commit, corroborated by package_version)"
 TAG="v${VER}-agent${AGENTSHA}"
 git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1 && die "tag ${TAG} already exists"
 
@@ -213,15 +273,68 @@ REC="scratchpad/acceptance-records/${ISOSHA}.json"
   Full acceptance must have RUN, on THESE bytes, before this package can be published.
   Run the campaign against $ISO, then:
       tools/record-acceptance.sh --iso $ISO --campaign <campaign-out-dir>
-  There is deliberately no flag to skip this."
+  There is deliberately no flag to skip this, and --acceptance-override does NOT cover it: that
+  flag ships a release whose failures are NAMED, and an absent record names nothing."
 # The check itself lives in tools/acceptance-record-check.py (testable offline: tools/tests/acceptance-record-selftest.sh); it requires
 # every campaign cell AND the feature tests - a record that lacks any of them is PARTIAL (2026-10-02: rz30 recorded CLEAN with both
 # feature tests never run).
-python3 tools/acceptance-record-check.py "$REC" "$ISOSHA" "$VER" || exit 1
+RECOUT="$WORK/acceptance-check.log"
+if python3 tools/acceptance-record-check.py "$REC" "$ISOSHA" "$VER" >"$RECOUT" 2>&1; then
+  cat "$RECOUT"
+  OVERRIDE=""   # a clean record needs no override; never let the flag imply one was needed
+else
+  cat "$RECOUT" >&2
+  [ -n "$OVERRIDE" ] || die "acceptance record ${ISOSHA:0:16} does not pass (above).
+  Fix the failures and re-run acceptance, or, if the decision is to publish anyway:
+      tools/cut-release.sh --run $RUN --acceptance-override \"<why this ships regardless>\""
+  RECVERDICT="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("verdict","<none>"))' "$REC" 2>/dev/null || echo '<unreadable>')"
+  cat >&2 <<OVR
+
+  ============================= ACCEPTANCE OVERRIDE =============================
+  The acceptance record for these bytes is $RECVERDICT, not CLEAN, and this release
+  is being published anyway, deliberately.
+      reason: $OVERRIDE
+      record: $REC
+  Every other gate remains enforced. The refusal above and this reason are being
+  prepended to the published release notes.
+  ===============================================================================
+
+OVR
+fi
 
 # ---------------------------------------------------------------- notes
 NOTES_FILE="docs/RELEASE-NOTES-${VER}.md"
 [ -f "$NOTES_FILE" ] || die "no $NOTES_FILE - a release whose notes are a generated one-liner tells the reader nothing about what changed or what was verified"
+
+# Under an override the PUBLISHED notes lead with the override, carrying the checker's own refusal
+# text. The committed notes file is NOT edited: a release-specific fact about one cut does not
+# belong in the tree, and touching the tree here would also move HEAD under a running campaign.
+PUBNOTES="$NOTES_FILE"
+if [ -n "$OVERRIDE" ]; then
+  PUBNOTES="$WORK/RELEASE-NOTES-published.md"
+  {
+    echo "> ## Published on a FAILED acceptance record"
+    echo ">"
+    echo "> This release was cut deliberately with \`--acceptance-override\`. The acceptance"
+    echo "> record for these exact bytes (ISO sha \`${ISOSHA}\`) reads **${RECVERDICT}**, not CLEAN."
+    echo ">"
+    echo "> **Reason given at the cut:** ${OVERRIDE}"
+    echo ">"
+    echo "> The acceptance checker refused it as follows:"
+    echo ">"
+    sed -e 's/^/>     /' "$RECOUT"
+    echo ">"
+    echo "> Everything else was enforced as normal: the package is from green release-package run"
+    echo "> ${RUN}, built at \`${BUILDSHA}\`, it passes \`verify-release-package\` as PACKAGE"
+    echo "> COMPLETE, it carries no fault injector, and the published assets were re-downloaded and"
+    echo "> byte-compared after upload."
+    echo ""
+    echo "---"
+    echo ""
+    cat "$NOTES_FILE"
+  } > "$PUBNOTES" || die "cannot write $PUBNOTES"
+  say "published notes lead with the override banner ($PUBNOTES)"
+fi
 
 mapfile -t ASSETS < <(find "$WORK/assets" -maxdepth 1 -type f \( -name '*.iso' -o -name '*.rpm' -o -name '*.tar.gz' -o -name '*.exe' -o -name 'SHA256SUMS.txt' \) | sort)
 [ "${#ASSETS[@]}" -gt 0 ] || die "no publishable assets in $WORK/assets"
@@ -232,7 +345,7 @@ for a in "${ASSETS[@]}"; do say "  $(basename "$a")  $(sha256sum "$a" | cut -c1-
 gh release create "$TAG" $DRAFT \
   --target "$BUILDSHA" \
   --title "QWT-NG ${VER} (agent ${AGENTSHA})" \
-  --notes-file "$NOTES_FILE" \
+  --notes-file "$PUBNOTES" \
   "${ASSETS[@]}" || die "gh release create failed"
 
 # ---------------------------------------------------------------- gate: what is PUBLISHED is what was verified
@@ -253,3 +366,4 @@ done
 [ "$bad" -eq 0 ] || die "PUBLISHED ASSETS DO NOT MATCH what was verified - delete the release ($TAG) and investigate"
 say "published assets byte-match the verified ones"
 say "Published ${TAG}  (tag -> ${BUILDSHA:0:12}, acceptance ${ISOSHA:0:16}, verify log $VOUT)"
+[ -z "$OVERRIDE" ] || say "Published UNDER ACCEPTANCE OVERRIDE (record ${RECVERDICT}): $OVERRIDE"
