@@ -17,6 +17,9 @@
 #                            The German case and the platform case must then FAIL.
 #   -Defect swallowunknown   makes an unclassifiable offer excluded instead of counted.
 #                            The unreadable-categories case must then FAIL.
+#   -Defect quietwatch       deletes the watcher that reports a signature offer whose classification
+#                            is NOT the one the exclusion keys on. The three checks that read that
+#                            report must FAIL; the two that assert silence must still pass.
 param([string]$Script = '', [string]$Defect = '')
 $ErrorActionPreference = 'Stop'
 if (-not $Script) { $Script = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'guest/qubes-windows-update.ps1' }
@@ -37,7 +40,12 @@ if ($Defect -eq 'titlematch') {
       "function Test-WuDefinitionUpdate(`$u){`n  `$t=''; try { `$t=[string]`$u.Title } catch {}`n  return (`$t -like '*Definition Update*')`n}")
 } elseif ($Defect -eq 'swallowunknown') {
     $cls = [regex]::Replace($cls, '(?m)^  return \$false$', '  return $true')
-} elseif ($Defect) { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (titlematch | swallowunknown)"; exit 2 }
+} elseif ($Defect -eq 'quietwatch') {
+    # The watcher deleted: a changed classification GUID goes back to failing in SILENCE, which is
+    # the state before it existed. The three checks that read the report must then fail, and the two
+    # that assert SILENCE must still pass - a knob that reddens everything proves nothing.
+    $exc = [regex]::Replace($exc, '(?ms)^  # ---- WU-DEFINITION-CLASS-WATCH-BEGIN.*?^  # ---- WU-DEFINITION-CLASS-WATCH-END', '')
+} elseif ($Defect) { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (titlematch | swallowunknown | quietwatch)"; exit 2 }
 
 . ([scriptblock]::Create($cls))
 
@@ -145,6 +153,48 @@ if (($script:logged -join ' ') -match 'KB2267602' -and ($script:logged -join ' '
 if (($script:logged -join ' ') -match ("KB2267602\[" + [regex]::Escape($DEFN) + "\]")) {
     Write-Output '  ok   log: names the CLASSIFICATION it excluded on, not only the KB'
 } else { Write-Output "  FAIL log: does not name the classification: $($script:logged -join ' | ')"; $fails++ }
+
+# --- the watcher: a signature offer that is NOT classified as a definition ------------------------
+# THE SILENT-FAILURE DIRECTION. The exclusion fails safe - a wrong GUID matches nothing and
+# everything keeps counting - but it fails SILENTLY, so the day Microsoft reclassifies signatures
+# the oscillation returns with nothing in the log saying why. These checks are that tripwire. They
+# are driven through the SHIPPED region, and the emitted line is printed so the judge's fixture can
+# be the real text rather than my idea of it.
+function Run-Watch($rows) {
+    $script:St = [ordered]@{ available=$null; count=$null; definitions_excluded=$null; definition_class_anomalies=$null }
+    $script:logged = @()
+    $avail = $rows
+    . ([scriptblock]::Create($exc))
+    return ($script:logged -join ' | ')
+}
+$NEWGUID = 'aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb'
+$l = Run-Watch @([ordered]@{ kb='KB2267602'; classifications=@($NEWGUID); is_definition=$false })
+if ($l -match 'QWTUPDDEFCLASSNEW' -and $l -match [regex]::Escape($NEWGUID) -and $l -match 'KB2267602' -and $l -match '^\[WARN\]|\[WARN\]') {
+    Write-Output '  ok   newguid: a signature offer with an UNKNOWN classification is reported, declared [WARN], naming the KB and the GUID'
+} else { Write-Output "  FAIL newguid: not reported: $l"; $fails++ }
+# @($null).Count IS 1 in PowerShell, so a count alone passes when NOTHING was recorded - this
+# check did exactly that until -Defect quietwatch, which records nothing, failed to redden it. The
+# content is the property: the status dom0 collects must name the offer.
+$an = @($script:St.definition_class_anomalies | Where-Object { $_ })
+if ($an.Count -eq 1 -and $an[0] -match 'KB2267602' -and $an[0] -match [regex]::Escape($NEWGUID)) {
+    Write-Output '  ok   anomaly-count: the anomaly is recorded in the status dom0 collects, naming the offer and the GUID'
+} else { Write-Output "  FAIL anomaly-count: status recorded [$($an -join ',')], want one entry naming KB2267602 and the GUID"; $fails++ }
+Write-Output ("  INFO the line the product emits, verbatim: " + $l)
+
+$l = Run-Watch @([ordered]@{ kb='KB2267602'; classifications=@($DEFN); is_definition=$true })
+if ($l -notmatch 'QWTUPDDEFCLASSNEW') { Write-Output '  ok   knownguid-quiet: the normal case is SILENT - a watcher that fires every day is ignored' }
+else { Write-Output "  FAIL knownguid-quiet: fired on the normal case: $l"; $fails++ }
+
+# The platform update also has Defender in its title and is correctly not a definition. A watcher
+# that fired on it would cry wolf every month, which is why the watch set is the signature KBs.
+$l = Run-Watch @([ordered]@{ kb='KB4052623'; classifications=@($UPDS); is_definition=$false })
+if ($l -notmatch 'QWTUPDDEFCLASSNEW') { Write-Output '  ok   platform-quiet: the Defender PLATFORM update does not trip the watcher' }
+else { Write-Output "  FAIL platform-quiet: fired on the platform update: $l"; $fails++ }
+
+$l = Run-Watch @([ordered]@{ kb='KB2267602'; classifications=@(); is_definition=$false })
+if ($l -match 'QWTUPDDEFCLASSNEW' -and $l -match 'NO readable UpdateClassification') {
+    Write-Output '  ok   unreadable-class: an unclassifiable signature offer is reported as its OWN cause, not as a changed GUID'
+} else { Write-Output "  FAIL unreadable-class: not distinguished: $l"; $fails++ }
 
 # An all-definitions scan must report ZERO, which is the whole point.
 $script:St = [ordered]@{ available=$null; count=$null; definitions_excluded=$null }

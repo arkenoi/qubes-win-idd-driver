@@ -81,8 +81,16 @@ ERROR = re.compile(r"^(?:\[ERROR\]|ERROR:)\s*(.+)$")
 # GUARD:levelprefix - the 2026-10-14 blindness, reachable with WUPASS_DEFECT=levelprefix so the
 # check above is proven load-bearing against the real capture that it let through.
 ERROR_FRONT_ANCHORED_ONLY = re.compile(r"^ERROR:\s*(.+)$")
+# ONE [WARN] IS A FAILURE, AND IT IS THIS ONE. QWTUPDDEFCLASSNEW means a Defender SIGNATURE offer
+# came back without the classification the definition exclusion keys on - so the exclusion silently
+# stopped applying, dom0's flag goes back to oscillating, and the only thing that says why is this
+# line. A declared level that nothing acts on is just a tidier log, so it is judged here: the pass
+# did not "fail" in the sense of throwing, but the product behaviour dom0 depends on is broken and
+# a run must go red rather than pass with a warning nobody reads.
+DEFCLASSNEW = re.compile(r"QWTUPDDEFCLASSNEW\s+(.+)$")
 # DELIBERATELY NOT ERRORS, so the next reader does not re-derive it: the writer also declares
-# "[WARN]" (one site - the status file could not be written) and "ANOMALY:" (two - a relay that did
+# "[WARN]" at two further sites (the status file could not be written; and the signature watcher
+# above, which IS judged) and "ANOMALY:" (two - a relay that did
 # not exit when this pass stopped it). Neither says the PASS failed, and this tool judges passes.
 # Counted 2026-10-17 over 170 captured agent logs: "[WARN]" 0, "ANOMALY:" 0, QWTUPDLOGLOST 0 - so
 # treating them as errors would be machinery for a shape never once observed. Worth knowing if that
@@ -270,6 +278,25 @@ def main():
         fails.append("LOSSY LOG: the updater's own log reports %d line(s) it could not write "
                      "(QWTUPDLOGLOST). This file is incomplete, so no absence in it is evidence - "
                      "and this judge decides by what the passes did and did not say" % lost)
+    # THE SIGNATURE WATCHER FIRED. Whole-file, like LOSSY LOG: the line belongs to whichever pass
+    # emitted it, but the consequence is about the product, not about that one pass.
+    defclass = []
+    try:
+        for _ln in open(a.agent_log, encoding="utf-8", errors="replace"):
+            _m = DEFCLASSNEW.search(_ln)
+            if _m:
+                defclass.append(_m.group(1).strip())
+    except OSError:
+        pass
+    for _d in defclass[:5]:
+        fails.append("DEFINITION CLASSIFICATION CHANGED (QWTUPDDEFCLASSNEW): %s - the Defender "
+                     "exclusion is not applying, so dom0's updates-available will oscillate again. "
+                     "This needs the GUID checked against what Windows Update now returns, not a "
+                     "re-run" % _d[:240])
+    if len(defclass) > 5:
+        fails.append("DEFINITION CLASSIFICATION CHANGED: %d further QWTUPDDEFCLASSNEW line(s) not "
+                     "listed" % (len(defclass) - 5))
+
     for p in silent:
         fails.append("SILENT pass at %s: ended on %s and never reported to dom0 - dom0 still holds the previous number"
                      % (p["t"], "; ".join(p["errors"])[:80]))

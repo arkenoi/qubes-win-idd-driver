@@ -25,7 +25,7 @@ bad(){ fail=$((fail+1)); echo "FAIL  $*"; }
 # LOGLOSS_DEFECT=silent puts the old swallowing body back; every check below must then FAIL.
 out=$("$PW" -NoProfile -Command "
 \$src = Get-Content -Raw '$SRC'
-\$m = [regex]::Match(\$src, '(?s)function Log\(\\\$m\)\{.*?\n\}')
+\$m = [regex]::Match(\$src, '(?s)function Log\(\\\$m[^)]*\)\{.*?\n\}')
 if (-not \$m.Success) { 'INSTRUMENT: Log not found'; exit 2 }
 \$body = \$m.Value
 if ('${LOGLOSS_DEFECT:-}' -eq 'silent') {

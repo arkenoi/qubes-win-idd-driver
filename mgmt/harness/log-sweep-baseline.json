@@ -1096,13 +1096,13 @@
    "reason": "Jev: expected 0.89 on the corpus",
    "status": "expected"
   },
-  "blog|None|CANNOT classify VM from qubesdb - refusing to proxy; nothing done. Investigate qubesdb.": {
+  "blog|W|CANNOT classify VM from qubesdb - refusing to proxy; nothing done. Investigate qubesdb.": {
    "family": "blog",
    "jev": {
     "choice": "expected",
     "confidence": 0.83
    },
-   "level": null,
+   "level": "W",
    "max_per_boot": 1,
    "reason": "Jev: expected 0.83 on the corpus",
    "status": "expected"

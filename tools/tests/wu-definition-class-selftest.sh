@@ -21,5 +21,9 @@ expect() { local kout krc kf; kout=$("$PWSH" -NoProfile -File "$T" -Defect "$1" 
 # why the German case is the one that decides whether the classifier is structural.
 expect titlematch      "braced-uppercase,multiple-categories,signature-de,"
 expect swallowunknown  "cumulative,defender-platform,driver,no-categories,throwing-categories,wrong-category-type,"
+# quietwatch must redden ONLY the three checks that read the watcher's report. knownguid-quiet and
+# platform-quiet assert SILENCE and must survive it - a knob that reddens every case has not shown
+# which property is load-bearing.
+expect quietwatch      "anomaly-count,newguid,unreadable-class,"
 [ $bad = 0 ] && { echo "PASS  clean passes; every knob fails exactly its cases"; exit 0; }
 exit 1

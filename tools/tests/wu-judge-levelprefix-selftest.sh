@@ -31,7 +31,7 @@ ok(){ pass=$((pass+1)); echo "PASS  $*"; }
 bad(){ fail=$((fail+1)); echo "FAIL  $*"; }
 
 # judge <fixture> -> prints "rc=<n> errored=<n> silent=<n> contradictory=<n>" plus the FAIL text
-judge(){ local o; o=$(python3 "$J" --agent-log "$1" --no-judge 2>&1); local r=$?
+judge(){ local o; o=$(python3 "${WU_JUDGE:-$J}" --agent-log "$1" --no-judge 2>&1); local r=$?
          printf 'rc=%s %s\n%s\n' "$r" \
            "$(printf '%s' "$o" | grep -o 'errored=[0-9]* ' | tr -d ' ')" \
            "$(printf '%s' "$o" | grep -E 'facts:|FAIL|FLAG|verdict:')"; }
@@ -170,6 +170,42 @@ for cls in standalone-online appvm; do
         ok "decline/$cls: declines by class, not by sentence"
     else bad "decline/$cls: a by-design decline was called a death - $(printf '%s' "$r" | head -1)"; fi
 done
+
+# ---- THE SIGNATURE WATCHER. A declared level that nothing acts on is just a tidier log, so the
+# judge must FAIL a pass whose log carries QWTUPDDEFCLASSNEW: the Defender exclusion has silently
+# stopped applying and dom0's flag will oscillate again. The line is VERBATIM what the product
+# emits - taken from tools/tests/wu-definition-class-test.ps1 running the shipped region, not
+# written out by hand here.
+WATCHLINE='[WARN] QWTUPDDEFCLASSNEW KB2267602 is a signature offer but Windows Update classifies it as [aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb], not e0789628-ce08-4437-be74-2495b842f43b - the definition exclusion is NOT applying to it, dom0 will keep seeing it, and the classification GUID has changed or there is more than one.'
+{ head -3 "$D/healthy.log"; printf '12:39:00 %s\n' "$WATCHLINE"; tail -3 "$D/healthy.log"; } > "$D/defclass.log"
+r=$(judge "$D/defclass.log")
+if printf '%s' "$r" | grep -q 'rc=3' && printf '%s' "$r" | grep -q 'DEFINITION CLASSIFICATION CHANGED'; then
+    ok "defclass: a pass that reported cleanly still FAILS when the signature watcher fired"
+else bad "defclass: the watcher fired and the pass passed - $(printf '%s' "$r" | head -1)"; fi
+
+# ...and the arm is load-bearing. Proven by MUTATING THE JUDGE (which WU_JUDGE already allows),
+# not by adding another GUARD knob to the product tool: with the arm deleted, that same fixture
+# must grade clean. A knob was not needed, so none was added.
+MUT="$D/judge-mutant.py"
+python3 - "$J" "$MUT" <<'EOPY'
+import sys
+src = open(sys.argv[1], encoding='utf-8').read()
+A = "    for _d in defclass[:5]:"
+B = "    for p in silent:"
+i, j = src.find(A), src.find(B)
+if i < 0 or j < 0 or j <= i:
+    sys.stderr.write("MUTANT: the defclass arm was not found - fixture and judge disagree\n"); sys.exit(2)
+open(sys.argv[2], 'w', encoding='utf-8').write(src[:i] + src[j:])
+EOPY
+if [ -s "$MUT" ]; then
+    # PYTHONPATH, because the judge imports jev from its own directory and the mutant lives in a
+    # temp dir - without it the mutant dies on ModuleNotFoundError and rc=1 would read as "the
+    # mutant still fails the fixture", i.e. a broken instrument reported as a passing property.
+    r=$(PYTHONPATH="$(dirname "$J")" WU_JUDGE="$MUT" judge "$D/defclass.log")
+    if printf '%s' "$r" | grep -q 'rc=0'; then
+        ok "defclass: with the arm deleted the SAME fixture passes - the arm is what fails it"
+    else bad "defclass: the mutant still failed the fixture, so something else fails it - $(printf '%s' "$r" | head -1)"; fi
+else bad "defclass: could not build the judge mutant - the arm is unproven"; fi
 
 # The real captures, when the evidence tree is still on this qube. Not required - the fixtures
 # above are these lines - but when present they are the thing itself.

@@ -471,7 +471,18 @@ function Test-RowKey($row, [string]$key) {
 # ---- WU-ROWKEY-END
 # Write-Host alone is lost under the scheduled task, which is why every download failure so far
 # had to be reconstructed from DISM's log instead of ours. Tee to a file.
-function Log($m){
+function Log($m, $lvl){
+  # THE LEVEL WAS SILENTLY THROWN AWAY. This took one parameter while EIGHT call sites passed a
+  # level positionally - `Log "..." 'WARN'` - and PowerShell puts the extra argument in $args and
+  # drops it. MEASURED, not reasoned: `function Log($m){...}; Log "x" "WARN"` prints the message
+  # and `args: [WARN]`.
+  # IT BLINDED THE JUDGE. tools/wu-pass-judge.py reads the writer's declared level and nothing
+  # else - `^(?:\[ERROR\]|ERROR:)` - so `Log "Windows Update fallback failed" 'ERROR'` and
+  # `Log "Sync-Revocation: FAILED ..." 'ERROR'` wrote lines that cannot match, and two real
+  # failures could never be counted as errors. tools/log-sweep.py recorded all eight as undeclared
+  # for the same reason. This is the 2026-10-14 blindness from the other end: that time the writer
+  # changed its prefix and the reader stopped matching; here the writer never emitted one at all.
+  if ($lvl) { $m = "[$lvl] $m" }
   $line = (Get-Date -Format 'HH:mm:ss')+' '+$m
   Write-Host $line
   # A DROPPED LOG LINE IS A LOST ERROR, AND THIS USED TO DROP THEM IN SILENCE. The old body was
@@ -924,6 +935,11 @@ function Get-SecurityPlatformState {
 # the log - so the next real pass that is offered KB2267602 settles it as DATA, in evidence dom0
 # already collects, instead of by anyone re-reading this comment. See WUDEFINITIONGUIDUNCONFIRMED.
 $script:WU_DEFINITION_CLASS = 'e0789628-ce08-4437-be74-2495b842f43b'
+# THE SIGNATURE OFFERS, BY KB. Used only to WATCH the classification, never to classify: KB is an
+# identifier off the COM object (KBArticleIDs), not title text, so ADR section 6 stands. The
+# platform/engine update is deliberately NOT here - KB4052623 is ordinary servicing and must keep
+# counting, and a watcher that fired on it would cry wolf every month until it was ignored.
+$script:WU_SIGNATURE_KBS = @('KB2267602', 'KB2310138')
 function Get-WuClassifications($u){
   $ids=@()
   try {
@@ -2643,6 +2659,41 @@ try {
     Log ("definition updates excluded from the count dom0 reads: {0} of {1} offer(s) [{2}] - they still install on any pass that runs" -f `
          $defs.Count, $avail.Count, (($defs | ForEach-Object { $_.kb + '[' + (@($_.classifications) -join ' ') + ']' }) -join ','))
   }
+
+  # ---- WU-DEFINITION-CLASS-WATCH-BEGIN
+  # A WRONG OR CHANGED GUID FAILS IN SILENCE. That is the one weakness of the fail-safe direction:
+  # if Microsoft ever classifies signatures under a different GUID, or adds a second one, nothing
+  # matches, nothing is excluded, the oscillation simply comes back, and NOTHING IN THE LOG SAYS
+  # WHY - the next reader would be debugging dom0's flag with no idea the classifier had stopped
+  # matching. The constant is also still unconfirmed against a live object
+  # (WUDEFINITIONGUIDUNCONFIRMED), so this watcher is what turns "wrong GUID" from an invisible
+  # no-op into a named line.
+  #
+  # IT DOES NOT CHANGE A DECISION. It only reports: a signature offer that is not classified as a
+  # definition still counts, exactly as before.
+  #
+  # THE [WARN] IS IN THE MESSAGE, not passed as Log's level, and that is deliberate even though
+  # Log now honours a level (it silently dropped one until the commit that added this watcher).
+  # This exact line is asserted verbatim in two places - the offline suite reads it out of the
+  # shipped region, and tools/wu-pass-judge.py's fixture is that printed text - so its declaration
+  # must not depend on a second mechanism continuing to behave. A line whose level came from
+  # elsewhere is a line that can lose its level somewhere else, which is the defect this same
+  # commit fixes.
+  $anom = @()
+  foreach ($r in $avail) {
+    if ($script:WU_SIGNATURE_KBS -notcontains $r.kb) { continue }
+    if ($r.is_definition) { continue }
+    $seen = @($r.classifications)
+    $anom += ($r.kb + '[' + ($seen -join ' ') + ']')
+    if ($seen.Count -eq 0) {
+      Log ("[WARN] QWTUPDDEFCLASSNEW {0} is a signature offer carrying NO readable UpdateClassification, so it is COUNTED and not excluded - its categories were absent or threw." -f $r.kb)
+    } else {
+      Log ("[WARN] QWTUPDDEFCLASSNEW {0} is a signature offer but Windows Update classifies it as [{1}], not {2} - the definition exclusion is NOT applying to it, dom0 will keep seeing it, and the classification GUID has changed or there is more than one." -f $r.kb, ($seen -join ' '), $script:WU_DEFINITION_CLASS)
+    }
+  }
+  $script:St.definition_class_anomalies = @($anom)
+  if ($anom.Count -gt 0) { Save }
+  # ---- WU-DEFINITION-CLASS-WATCH-END
   # ---- WU-DEFINITION-EXCLUDE-END
   # Post-end-of-support / ESU diagnosis: INFORMATIONAL, computed on every pass from the fresh scan so a
   # bare `scan` surfaces it too. Explains WHY the newest security cumulative is not installable here.
