@@ -15,7 +15,7 @@
 #                           code - i.e. the knob makes this test FAIL, by design.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PWSH="${PWSH:-/home/user/bin/pwsh7/pwsh}"
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 OUT="${RELAYPARENT_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/relay-parent-selftest-XXXXXX")}"
 SUITE="$ROOT/tools/tests/relay-parent-test.ps1"
 mkdir -p "$OUT"

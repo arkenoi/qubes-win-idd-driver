@@ -175,7 +175,7 @@ shape "exit: the routine exits non-zero when any cell failed or was invalid" \
       exits_nonzero '[ "$nf" = 0 ] && [ "$ni" = 0 ] && exit 0 || exit 1'
 
 # ---- the guest-side probes must parse as PowerShell ---------------------------------------------------------------
-PWSH="${PWSH:-/home/user/pwsh/pwsh}"
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 if [ -x "$PWSH" ]; then
   # extract each heredoc'd probe and parse-check it the way the repo checks every shipped script
   n=0; bad_ps=0

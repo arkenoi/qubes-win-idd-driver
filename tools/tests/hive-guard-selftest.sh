@@ -16,7 +16,7 @@
 # Exit 0 only if every leg came out as required.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PWSH="${PWSH:-/home/user/bin/pwsh7/pwsh}"
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 # RAM-BACKED /tmp, AND THIS LEAKED A DIRECTORY PER RUN. /tmp here is a 1 GB tmpfs on a 4 GB
 # machine, and tools/release-acceptance.sh refuses to start with under 200 MB free - a floor it
 # has because a full /tmp OOM-killed two campaigns, one of them after it had already passed.

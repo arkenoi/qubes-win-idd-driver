@@ -25,8 +25,7 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 AGENT="${AGENT_DIR:-$ROOT/agent}"
-PWSH="${PWSH:-/home/user/pwsh/pwsh}"
-[ -x "$PWSH" ] || PWSH=/home/user/bin/pwsh7/pwsh
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 OUT="${NOTIFYRENDER_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/notify-render-selftest-XXXXXX")}"
 mkdir -p "$OUT"
 bad=0

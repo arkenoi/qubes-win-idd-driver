@@ -67,10 +67,7 @@ else
 fi
 
 # ---- 2. THE COLLECTOR, EXECUTED: the real filter over real files --------------------------------
-PW=""
-for p in /home/user/pwsh74/pwsh /home/user/bin/pwsh7/pwsh /home/user/pwsh/pwsh "$(command -v pwsh 2>/dev/null)"; do
-  [ -n "$p" ] && [ -x "$p" ] && { PW="$p"; break; }
-done
+PW="$("$(dirname "$0")/pwsh-path.sh" || true)"
 if [ -z "$PW" ]; then
   echo "note no pwsh on this host - the collector was not executed; the source assertions above still ran"
 else

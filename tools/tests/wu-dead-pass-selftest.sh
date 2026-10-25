@@ -14,8 +14,7 @@
 #                          and exit with the suite's own code - i.e. the knob makes this test FAIL, by design.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PWSH="${PWSH:-/home/user/bin/pwsh7/pwsh}"
-[ -x "$PWSH" ] || PWSH=/home/user/pwsh/pwsh
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 OUT="${WUDEADPASS_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/wudeadpass-selftest-XXXXXX")}"
 SUITE="$ROOT/tools/tests/wu-dead-pass-test.ps1"
 mkdir -p "$OUT"

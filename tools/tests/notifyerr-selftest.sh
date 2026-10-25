@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # notifyerr-selftest.sh - the offline proof matrix for the secondary error-delivery route.
 #
-# Runs on this dev qube (gcc + the linux pwsh at /home/user/pwsh/pwsh), no rig, no guest:
+# Runs wherever gcc and a pwsh are (tools/tests/pwsh-path.sh finds it), no rig, no guest:
 #   C   agent/gui-agent/notifyerr.c + notifyerr_test.c: clean build must PASS, and each
 #       NOTIFYERR_DEFECT_* build must FAIL (a guard never seen to fail is decoration). NOBOX and
 #       BOXSTORM (2026-10-07) are THE ERROR WINDOW's guards: shown when dom0 is not told, never
@@ -14,7 +14,7 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 AGENT="${AGENT_DIR:-$ROOT/agent}"
-PWSH="${PWSH:-/home/user/pwsh/pwsh}"
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 # RAM-BACKED /tmp, AND THIS LEAKED A DIRECTORY PER RUN. /tmp here is a 1 GB tmpfs on a 4 GB
 # machine, and tools/release-acceptance.sh refuses to start with under 200 MB free - a floor it
 # has because a full /tmp OOM-killed two campaigns, one of them after it had already passed.

@@ -60,10 +60,7 @@ else
 fi
 
 # ---- functional, when a pwsh exists ------------------------------------------------------------
-PW=""
-for p in /home/user/pwsh74/pwsh /home/user/bin/pwsh7/pwsh /home/user/pwsh/pwsh "$(command -v pwsh 2>/dev/null)"; do
-  [ -n "$p" ] && [ -x "$p" ] && { PW="$p"; break; }
-done
+PW="$("$(dirname "$0")/pwsh-path.sh" || true)"
 if [ -z "$PW" ]; then
   echo "note no pwsh on this host - the parse check and the functional test did not run"
 else

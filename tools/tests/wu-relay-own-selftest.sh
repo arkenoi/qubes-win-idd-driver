@@ -15,8 +15,7 @@
 #                          test FAIL, by design.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PWSH="${PWSH:-/home/user/bin/pwsh7/pwsh}"
-[ -x "$PWSH" ] || PWSH=/home/user/pwsh/pwsh
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 OUT="${WURELAYOWN_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/wurelayown-selftest-XXXXXX")}"
 SUITE="$ROOT/tools/tests/wu-relay-own-test.ps1"
 mkdir -p "$OUT"

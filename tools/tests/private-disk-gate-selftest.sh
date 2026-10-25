@@ -22,8 +22,8 @@
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
-PWSH=${PWSH:-/home/user/bin/pwsh7/pwsh}
-[ -x "$PWSH" ] || PWSH=$(command -v pwsh) || { echo "FATAL: no pwsh"; exit 2; }
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
+[ -x "$PWSH" ] || { echo "FATAL: no pwsh"; exit 2; }
 SRC=packaging/setup/Install-QwtImproved.ps1
 T=$(mktemp -d "${TMPDIR:-/tmp}/gatetest.XXXXXX"); trap 'rm -rf "$T"' EXIT
 

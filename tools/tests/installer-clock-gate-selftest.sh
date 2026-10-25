@@ -13,7 +13,7 @@
 set -u
 cd "$(dirname "$0")/../.." || exit 2
 SRC=packaging/setup/Install-QwtImproved.ps1
-PWSH="${PWSH:-/home/user/pwsh74/pwsh}"
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 [ -f "$SRC" ] || { echo "SELFTEST-ERROR: $SRC missing"; exit 2; }
 [ -x "$PWSH" ] || { echo "SELFTEST-ERROR: no pwsh at $PWSH (set PWSH=)"; exit 2; }
 python3 -c 'import cryptography' 2>/dev/null || { echo "SELFTEST-ERROR: python cryptography needed to mint test certificates"; exit 2; }

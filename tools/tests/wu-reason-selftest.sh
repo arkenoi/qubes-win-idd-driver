@@ -7,7 +7,7 @@
 #   WUR_DEFECT=x    run only that knob (rawerror | assertwithoutprobe | claimtimer | rebootloop | noremedy)
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PWSH="${PWSH:-/home/user/bin/pwsh7/pwsh}"
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 SUITE="$ROOT/tools/tests/wu-reason-test.ps1"
 say() { printf '%s\n' "$*"; }
 [ -x "$PWSH" ] || { say "FAIL  pwsh not found at $PWSH - nothing ran"; exit 2; }

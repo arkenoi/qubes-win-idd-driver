@@ -151,6 +151,7 @@ pipe-eof-selftest.sh
 probe-anchor-selftest.sh
 pwcarry-selftest.sh
 pwclass-truth-table.sh
+pwsh-path-selftest.sh
 qcon-session-selftest.sh
 qdbwait-bound-selftest.sh
 qrexec-gap-witness-selftest.sh

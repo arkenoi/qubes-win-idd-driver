@@ -1,7 +1,7 @@
 #!/bin/bash
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PWSH="${PWSH:-/home/user/bin/pwsh7/pwsh}"
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 S="$ROOT/tools/tests/wu-save-atomic-test.ps1"
 [ -x "$PWSH" ] || { echo "FAIL  pwsh not found"; exit 2; }
 out=$("$PWSH" -NoProfile -File "$S" 2>&1); rc=$?

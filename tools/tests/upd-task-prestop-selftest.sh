@@ -19,9 +19,7 @@ SUITE="$ROOT/tools/tests/upd-task-prestop-test.ps1"
 # pwsh FROM THE PATH FIRST, dev-qube paths as fallbacks - the same resolution
 # tools/tests/death-reporter-selftest.sh uses, so this behaves identically on a CI runner (where
 # the workflow already uses `shell: pwsh`) and on this qube.
-PWSH="${PWSH:-$(command -v pwsh 2>/dev/null || true)}"
-[ -n "$PWSH" ] && [ -x "$PWSH" ] || PWSH=/home/user/pwsh/pwsh
-[ -x "$PWSH" ] || PWSH=/home/user/bin/pwsh7/pwsh
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 say() { printf '%s\n' "$*"; }
 [ -x "$PWSH" ] || { say "FAIL  pwsh not found at $PWSH - nothing ran"; exit 2; }
 [ -f "$SUITE" ] || { say "FAIL  $SUITE is missing - nothing ran"; exit 2; }

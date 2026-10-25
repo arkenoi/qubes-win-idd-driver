@@ -17,7 +17,7 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SRC="${PVNIC_SRC:-$ROOT/guest/pvnic-selfprime.ps1}"
-PWSH="${PWSH:-/home/user/pwsh/pwsh}"
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 OUT="${PVNIC_SELFTEST_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/pvnic-rearm-XXXXXX")}"
 mkdir -p "$OUT"
 pass=0; fail=0

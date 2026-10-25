@@ -18,8 +18,7 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PWSH="${PWSH:-/home/user/pwsh74/pwsh}"
-command -v "$PWSH" >/dev/null 2>&1 || PWSH="$(command -v pwsh 2>/dev/null)"
+PWSH="$("$(dirname "${BASH_SOURCE[0]}")/tests/pwsh-path.sh" || true)"
 if [ -z "${PWSH:-}" ] || ! command -v "$PWSH" >/dev/null 2>&1; then
 	echo "ps-parse-gate: no pwsh found (set PWSH=/path/to/pwsh)" >&2
 	exit 3   # distinct from a parse failure: we did not check, so do not read this as a pass

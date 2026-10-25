@@ -9,7 +9,7 @@
 #                task failed" - exit 1 from a read-only operation, measured 2026-10-07)
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PWSH="${PWSH:-/home/user/bin/pwsh7/pwsh}"
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 SUITE="$ROOT/tools/tests/wu-prevpass-gate-test.ps1"
 OUT="$(mktemp -d "${TMPDIR:-/tmp}/wuprevpass-selftest-XXXXXX")"
 [ -x "$PWSH" ] || { echo "FAIL  pwsh not found at $PWSH - nothing ran"; exit 2; }

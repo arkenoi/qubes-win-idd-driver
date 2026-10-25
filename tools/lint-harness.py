@@ -533,6 +533,71 @@ def l32_every_test_file_has_a_producer() -> None:
                 "into prose is the thing that rots")
 
 
+def l33_pwsh_is_located_in_one_place() -> None:
+    """L33: nothing but tools/tests/pwsh-path.sh may know where pwsh is.
+
+    MEASURED, CI run 40192417696 and 40156224497 before it: `test` was RED for a day on
+
+        FAIL  clock-sync-selftest.sh  rc=1   settime_behaviour: the model did not run - no verdict
+
+    because the suite ran its model under `"${PWSH:-/home/user/pwsh/pwsh}"` - a path that exists on
+    one machine - while the ubuntu runner has pwsh ON PATH throughout. Sixty-odd lines across
+    fifty-eight files each resolved pwsh for themselves, in ten spellings, against six locations
+    (/home/user/pwsh, /home/user/pwsh74, /home/user/bin/pwsh7, /home/user/.local/pwsh, $HOME/pwsh,
+    $HOME/pwsh74). Nothing kept them in sync; the owner's words, 2026-10-25, are that the
+    configurations cannot be kept in sync organically.
+
+    The second cost was an instrument one: thirteen sites wrote `PWSH="${PWSH:-A}"` and then
+    `[ -x "$PWSH" ] || PWSH=B`, so PWSH=/nonexistent - the fixture for "pwsh is absent" - silently
+    measured B. Eleven of twenty-eight "runs without pwsh" passes were uninterpretable because of
+    it when the CI suite list was chosen.
+
+    So the location is a single file, and a PATH probe outside it is the same defect wearing a
+    portable coat: it ignores an explicit PWSH. A COMMENT may still discuss any of this - a source
+    assertion that reads comments fails on correct code, and this project has paid for that
+    three times (see l32's note)."""
+    # The six locations, plus the probe. Kept in step with pwsh-path.sh's own candidate list, which
+    # pwsh-path-selftest.sh asserts names every one of them.
+    loc = re.compile(r"(?:/home/user/(?:pwsh|pwsh74|bin/pwsh7|\.local/pwsh)|\$HOME/(?:pwsh|pwsh74))/pwsh")
+    probe = re.compile(r"command -v [\"']?pwsh")
+    # lint-harness.py is in this set because it has to SPELL the locations in order to
+    # forbid them, and it never runs pwsh. Loosening the pattern until it stopped matching
+    # its own source would weaken the rule to hide a self-match.
+    # gate-as-runner.sh probes PATH on purpose: it is the harness that MASKS every install and
+    # then ASSERTS what is reachable, so the probe is the assertion, not a second lookup.
+    owner = {"pwsh-path.sh", "pwsh-path-selftest.sh", "lint-harness.py", "gate-as-runner.sh"}
+    scope: list[Path] = []
+    for d in ("tools", "mgmt", "guest", "packaging", ".githooks"):
+        if (ROOT / d).is_dir():
+            for pat in ("*.sh", "*.py", "*.ps1", "*"):
+                scope += [q for q in (ROOT / d).rglob(pat) if q.is_file()]
+    seen: set[Path] = set()
+    for f in sorted(scope):
+        if f in seen or f.name in owner:
+            continue
+        seen.add(f)
+        if f.suffix not in (".sh", ".py", ".ps1", ""):
+            continue
+        try:
+            lines = f.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        for i, ln in enumerate(lines, 1):
+            st = ln.lstrip()
+            if not st or st.startswith("#"):
+                continue
+            hit = "a hardcoded pwsh location" if loc.search(ln) else (
+                  "its own PATH probe for pwsh" if probe.search(ln) else "")
+            if not hit:
+                continue
+            finding("L33-pwsh-second-lookup", f"{f.relative_to(ROOT)}:{i}",
+                    f"{hit} - pwsh is located in exactly one place, tools/tests/pwsh-path.sh. "
+                    "Call it (`V=\"$(\"$(dirname \"$0\")/pwsh-path.sh\" || true)\"`) and keep this "
+                    "file's own handling of absence. A second lookup drifts: that is how `test` "
+                    "was red in CI for a day on a path that exists on one machine, and how "
+                    "PWSH=/nonexistent came to measure an installed pwsh instead of an absent one")
+
+
 NOT_LINTED = [
     ("findings rule 4", "a commit appending history must also touch CURRENT STATE - needs the "
                         "git diff, so it lives in the pre-commit hook, not here"),
@@ -1906,6 +1971,7 @@ def main() -> int:
     l27_detached_guest_launch_must_not_use_start()
     l29_log_device_failure_must_be_hard()
     l32_every_test_file_has_a_producer()
+    l33_pwsh_is_located_in_one_place()
     if a.ledger:
         l7_orphan_ledger_checks(a.ledger)
 

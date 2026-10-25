@@ -34,9 +34,9 @@ else
 fi
 
 # --- 2. behavioural, under real PowerShell ---
-# pwsh on this qube is an unpacked tarball, not on PATH (see tools/ps-parse-gate.sh).
-PS=$(command -v pwsh || true)
-for cand in "$HOME/pwsh74/pwsh" "$HOME/pwsh/pwsh"; do [ -n "$PS" ] && break; [ -x "$cand" ] && PS="$cand"; done
+# pwsh on this qube is an unpacked tarball and not on PATH; a runner has it on PATH and none of
+# the tarballs. tools/tests/pwsh-path.sh knows both and is the only thing that does.
+PS="$("$(dirname "$0")/pwsh-path.sh" || true)"
 if [ -z "$PS" ]; then
   echo "  SKIP no pwsh on this host - the static check above still applies"
 else

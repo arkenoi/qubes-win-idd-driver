@@ -21,7 +21,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SRC="$ROOT/core-agent/src/qubes-rpc-services/get-appmenus.ps1"
 PATHS="$ROOT/tools/tests/appmenus-win11de-25h2.paths"
-PWSH="${PWSH:-/home/user/pwsh/pwsh}"
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 OUT="${APPMENUS_SELFTEST_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/appmenus-XXXXXX")}"
 mkdir -p "$OUT"
 pass=0; fail=0

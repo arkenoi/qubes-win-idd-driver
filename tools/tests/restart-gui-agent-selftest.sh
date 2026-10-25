@@ -14,7 +14,7 @@
 #   tools/tests/restart-gui-agent-selftest.sh
 set -uo pipefail
 cd "$(dirname "$0")/../.."
-PWSH="${PWSH:-/home/user/pwsh/pwsh}"
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 [ -x "$PWSH" ] || { echo "SKIP: no pwsh at $PWSH"; exit 0; }
 pass=0; fail=0
 ok(){ echo "  PASS  $*"; pass=$((pass+1)); }

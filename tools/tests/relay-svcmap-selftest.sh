@@ -14,7 +14,7 @@
 #                           i.e. the knob makes this test FAIL, by design.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PWSH="${PWSH:-/home/user/bin/pwsh7/pwsh}"
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 OUT="${RELAYSVCMAP_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/relay-svcmap-selftest-XXXXXX")}"
 SUITE="$ROOT/tools/tests/relay-svcmap-test.ps1"
 mkdir -p "$OUT"

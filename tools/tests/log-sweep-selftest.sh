@@ -1160,7 +1160,7 @@ if [ "$sm" -ge 1 ] && printf '%s' "$bs" | grep -q 'declared_errors_unmatched'; t
 else bad "T28 stale declaration: unmatched=$sm breaches=$bs"; fi
 
 # the collector must parse (the Linux pwsh is the same parser Windows PowerShell uses) when pwsh is present
-PWSH="${PWSH:-/home/user/pwsh/pwsh}"
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 if [ -x "$PWSH" ]; then
   if "$PWSH" -NoProfile -File "$ROOT/tools/ps-parse-check.ps1" "$ROOT/mgmt/harness/log-sweep-collect.ps1" > "$T/parse.txt" 2>&1; then ok "T12 collector parses ($(tail -1 "$T/parse.txt" | cut -c1-100))"; else bad "T12 collector parse: $(tail -3 "$T/parse.txt" | tr '\n' ' ')"; fi
 else

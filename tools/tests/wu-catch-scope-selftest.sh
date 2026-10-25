@@ -11,7 +11,7 @@
 # Exit 0 only if all hold.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PWSH="${PWSH:-/home/user/bin/pwsh7/pwsh}"
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 [ -x "$PWSH" ] || { echo "FAIL  pwsh not found at $PWSH - nothing ran"; exit 2; }
 S="$ROOT/guest/qubes-windows-update.ps1"
 T="$ROOT/tools/tests/wu-catch-scope-test.ps1"

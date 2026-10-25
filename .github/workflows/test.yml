@@ -205,6 +205,18 @@ jobs:
           test -f upstream/ro/qubes-windows-utils/src/log.c
           test -f upstream/ro/qubes-windows-utils/include/log.h
           echo "windows-utils at $(git -C upstream/ro/qubes-windows-utils rev-parse --short HEAD)"
+      # lxml, FOR THE SAME REASON AS THE VENDORED MIRROR ABOVE: a suite that cannot reach what it
+      # measures reports rc=2 - "nothing ran (missing data fails)" - and this runner counts that
+      # RED. death-reporter-xpath-selftest.py evaluates the shipped Event Log XPath queries with a
+      # real XPath engine instead of a model of them, so lxml is what it measures WITH. Measured:
+      # CI run 40192417696, "FAIL death-reporter-xpath-selftest.py rc=2 lxml is not installed".
+      # The fix is the dependency, never dropping the suite from the list - an excluded suite rots,
+      # and the exclusion is the cause.
+      - name: lxml - the XPath suite evaluates real queries, not a model of them
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --disable-pip-version-check lxml
+          python3 -c 'from lxml import etree; print("lxml", etree.__version__)'
       - name: Offline selftest suites (serial, with a floor)
         run: tools/tests/run-offline-suites.sh
 

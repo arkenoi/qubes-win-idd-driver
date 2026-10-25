@@ -15,10 +15,7 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 2
 PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); echo "ok   $1"; }
 no(){ FAIL=$((FAIL+1)); echo "FAIL $1"; printf '       -> %s\n' "${2:-}"; }
-PW=""
-for p in /home/user/pwsh74/pwsh /home/user/pwsh/pwsh "$(command -v pwsh 2>/dev/null)"; do
-  [ -n "$p" ] && [ -x "$p" ] && { PW="$p"; break; }
-done
+PW="$("$(dirname "$0")/pwsh-path.sh" || true)"
 
 F=guest/firstboot-setup.ps1
 blk=$(awk '/# FIRSTBOOT-VERDICT-A/,/# FIRSTBOOT-VERDICT-B/' "$F")

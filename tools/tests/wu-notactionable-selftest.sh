@@ -18,7 +18,7 @@
 #                            makes this test FAIL, by design. (noticeonly | kbonly | trustzero | shapeskip | infoonly | scanhide | satignore | satdrop | stageddone | notitle)
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PWSH="${PWSH:-/home/user/bin/pwsh7/pwsh}"
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 SUITE="$ROOT/tools/tests/wu-notactionable-test.ps1"
 say() { printf '%s\n' "$*"; }
 

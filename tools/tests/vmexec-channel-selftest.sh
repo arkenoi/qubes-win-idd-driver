@@ -43,7 +43,7 @@ ck "every byte emitted is decoder-legal" "" "$(printf '%s' "${enc#qubes.VMExec+}
 # ---- 2. ROUND TRIP through the shipped PowerShell decoder --------------------------------------
 if [ -z "$DECODER" ]; then
   bad "round trip: no shipped VMExec-Decode.ps1 found to decode against"
-elif ! PWSH="${PWSH:-/home/user/pwsh74/pwsh}"; ! command -v "$PWSH" >/dev/null 2>&1 && ! PWSH="$(command -v pwsh 2>/dev/null)"; [ -z "${PWSH:-}" ]; then
+elif PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"; [ -z "$PWSH" ]; then
   bad "round trip: no pwsh found (set PWSH=/path/to/pwsh) - the encoder is unproven against the real decoder"
 else
   ok "round trip: decoding with the shipped $DECODER"

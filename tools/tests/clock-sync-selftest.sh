@@ -232,7 +232,8 @@ fi
 # BEHAVIOURAL, not lexical: compute what each form actually produces in a +2 zone and require the
 # old one to be wrong by 7200 s and the new one to be exact. This is the check that would have
 # caught it, and it is driven with the defect present.
-beh=$(TZ='Europe/Berlin' "${PWSH:-/home/user/pwsh/pwsh}" -NoProfile -Command '
+PWSHBEH="$("$(dirname "$0")/pwsh-path.sh" || true)"
+beh=$(TZ='Europe/Berlin' "${PWSHBEH:-/nonexistent/pwsh}" -NoProfile -Command '
 $utc = [datetime]::SpecifyKind([datetime]::Parse("2026-10-08T15:05:09Z").ToUniversalTime(), [DateTimeKind]::Utc)
 # Set-Date takes the components as LOCAL. Model both candidate arguments that way.
 $oldLocalComponents = $utc                 # the defect: UTC components treated as local

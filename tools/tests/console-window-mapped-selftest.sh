@@ -21,7 +21,7 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
 CHK="$HERE/mgmt/harness/console-window-check.sh"
-PW="${PWSH:-/home/user/bin/pwsh7/pwsh}"
+PW="$("$(dirname "$0")/pwsh-path.sh" || true)"
 [ -f "$CHK" ] || { echo "FAIL  $CHK missing - nothing ran (missing data fails)"; exit 2; }
 [ -x "$PW" ] || { echo "FAIL  no pwsh at $PW - nothing ran"; exit 2; }
 case "${CWCMAP_DEFECT:-}" in ""|1) ;; *) echo "FAIL  unknown CWCMAP_DEFECT='$CWCMAP_DEFECT' (1)"; exit 2 ;; esac

@@ -29,13 +29,7 @@ REPO="$(cd "$HERE/../.." && pwd)"
 STAMP="$REPO/tools/stamp-version.ps1"
 INFSTAMP="$HERE/stamp-inf-driverver.ps1"
 
-PWSH="${PWSH:-}"
-if [ -z "$PWSH" ]; then
-	for cand in /home/user/pwsh/pwsh /home/user/pwsh74/pwsh; do
-		if [ -x "$cand" ]; then PWSH="$cand"; break; fi
-	done
-fi
-if [ -z "$PWSH" ]; then PWSH="$(command -v pwsh 2>/dev/null || true)"; fi
+PWSH="$("$REPO/tools/tests/pwsh-path.sh" || true)"
 if [ -z "$PWSH" ] || [ ! -x "$PWSH" ]; then
 	echo "version-stamp selftest: no pwsh found (set PWSH=/path/to/pwsh) - NOT CHECKED" >&2
 	exit 3

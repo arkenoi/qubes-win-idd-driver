@@ -20,8 +20,7 @@
 #                             noqrexecflag failrelease catchrelease poweroffrefused emitcheck.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PWSH="${PWSH:-/home/user/pwsh/pwsh}"
-[ -x "$PWSH" ] || PWSH=/home/user/bin/pwsh7/pwsh
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 OUT="${SVCSERIAL_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/svcserial-selftest-XXXXXX")}"
 SUITE="$ROOT/tools/tests/svc-serial-start-test.ps1"
 mkdir -p "$OUT"

@@ -15,7 +15,7 @@
 #                        own code - i.e. the knob makes this test FAIL, by design.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PWSH="${PWSH:-/home/user/bin/pwsh7/pwsh}"
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 OUT="${WURENDER_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/wurender-selftest-XXXXXX")}"
 SUITE="$ROOT/tools/tests/wu-update-render-test.ps1"
 mkdir -p "$OUT"

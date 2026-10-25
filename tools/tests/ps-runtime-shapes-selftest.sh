@@ -27,10 +27,7 @@ PASS=0; FAIL=0
 ok(){ echo "ok   $*"; PASS=$((PASS+1)); }
 no(){ echo "FAIL $*"; FAIL=$((FAIL+1)); [ -n "${2:-}" ] && echo "     why it matters: $2"; }
 
-PS=""
-for c in "$(command -v pwsh || true)" "$HOME/pwsh74/pwsh" "$HOME/pwsh/pwsh"; do
-    [ -n "$PS" ] && break; [ -x "$c" ] && PS="$c"
-done
+PS="$("$(dirname "$0")/pwsh-path.sh" || true)"
 if [ -z "$PS" ]; then
     # NOT A PASS. The gate shells out to pwsh, so with no pwsh nothing was checked and saying so is
     # the only honest exit - this project's rule is that missing data fails.

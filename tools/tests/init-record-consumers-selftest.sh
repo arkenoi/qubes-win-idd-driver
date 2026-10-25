@@ -59,10 +59,7 @@ done
 # NOT a line of my own invention - this is verbatim from win11r-ttfw's gui-agent-20261023.log
 # (4.3.37.1063), which is what makes this a check on the product's format rather than on my model of
 # it. A fixture that avoids the condition proves nothing.
-PW=""
-for p in /home/user/pwsh/pwsh /home/user/pwsh74/pwsh "$(command -v pwsh 2>/dev/null)"; do
-    [ -n "$p" ] && [ -x "$p" ] && { PW="$p"; break; }
-done
+PW="$("$(dirname "$0")/pwsh-path.sh" || true)"
 if [ -z "$PW" ]; then
     echo "note no pwsh here - the functional leg did not run"
 else

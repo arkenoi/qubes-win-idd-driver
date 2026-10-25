@@ -15,7 +15,7 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
 SRC="${WU_SRC:-$HERE/guest/qubes-windows-update.ps1}"
-PW="${PWSH:-/home/user/pwsh/pwsh}"
+PW="$("$(dirname "$0")/pwsh-path.sh" || true)"
 [ -f "$SRC" ] || { echo "FAIL  $SRC missing - nothing ran (missing data fails)"; exit 2; }
 [ -x "$PW" ] || { echo "FAIL  no pwsh at $PW - nothing ran"; exit 2; }
 pass=0; fail=0

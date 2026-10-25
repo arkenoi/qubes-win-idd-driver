@@ -29,8 +29,8 @@
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
-PWSH=${PWSH:-/home/user/bin/pwsh7/pwsh}
-[ -x "$PWSH" ] || PWSH=$(command -v pwsh) || { echo "FATAL: no pwsh"; exit 2; }
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
+[ -x "$PWSH" ] || { echo "FATAL: no pwsh"; exit 2; }
 SRC=guest/pvnic-selfprime.ps1
 T=$(mktemp -d "${TMPDIR:-/tmp}/netsetuptest.XXXXXX"); trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/bin" "$T/work"

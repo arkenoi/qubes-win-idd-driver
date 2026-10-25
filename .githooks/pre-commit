@@ -152,10 +152,7 @@ fi
 # gate that quietly does nothing is worse than no gate. See memory: pwsh-runs-on-this-qube.
 # .sh too: the harness ships whole PowerShell programs to guests from quoted heredocs, and ps-parse-check checks those bodies.
 if git diff --cached --name-only --diff-filter=ACM | grep -qE '\.(ps1|sh)$'; then
-  PWSH=""
-  for c in "$HOME/pwsh/pwsh" "$(command -v pwsh 2>/dev/null)"; do
-    [ -n "$c" ] && [ -x "$c" ] && { PWSH="$c"; break; }
-  done
+  PWSH="$("$(git rev-parse --show-toplevel)/tools/tests/pwsh-path.sh" || true)"
   if [ -z "$PWSH" ]; then
     echo "NOTE: staged .ps1 files were NOT parse-checked - no pwsh found."
     echo "      Install it (no sudo needed):"

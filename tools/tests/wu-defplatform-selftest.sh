@@ -6,7 +6,7 @@
 # case. Exit 0 only if all four hold.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PWSH="${PWSH:-/home/user/bin/pwsh7/pwsh}"
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 [ -x "$PWSH" ] || { echo "FAIL  pwsh not found at $PWSH - nothing ran"; exit 2; }
 T="$ROOT/tools/tests/wu-defplatform-test.ps1"
 out=$("$PWSH" -NoProfile -File "$T" 2>&1); rc=$?

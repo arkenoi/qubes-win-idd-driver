@@ -17,8 +17,7 @@
 #                  sequence of a per-machine install; the post-check must throw
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PWSH="${PWSH:-/home/user/pwsh/pwsh}"
-[ -x "$PWSH" ] || PWSH=/home/user/bin/pwsh7/pwsh
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 SCRIPT="$ROOT/packaging/patch-installer-serialize-services.ps1"
 T=$(mktemp -d "${TMPDIR:-/tmp}/wixpatch-selftest-XXXXXX"); trap 'rm -rf "$T"' EXIT
 say() { printf '%s\n' "$*"; }

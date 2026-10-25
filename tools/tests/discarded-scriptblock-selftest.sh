@@ -19,9 +19,7 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SUITE="$ROOT/tools/tests/discarded-scriptblock-test.ps1"
-PWSH="${PWSH:-$(command -v pwsh 2>/dev/null || true)}"
-[ -n "$PWSH" ] && [ -x "$PWSH" ] || PWSH=/home/user/pwsh/pwsh
-[ -x "$PWSH" ] || PWSH=/home/user/bin/pwsh7/pwsh
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 say() { printf '%s\n' "$*"; }
 [ -x "$PWSH" ] || { say "FAIL  pwsh not found at $PWSH - nothing ran"; exit 2; }
 [ -f "$SUITE" ] || { say "FAIL  $SUITE is missing - nothing ran"; exit 2; }

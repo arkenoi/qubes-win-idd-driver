@@ -233,7 +233,7 @@ grep -q 'loop-delete -b /dev/loop77' "$CALLS" && ok "detach (guest Halted): the 
 
 # ---- the guest binder: parses, and sets the two root values -------------------------------------------------------
 PS1F="$ROOT/mgmt/harness/logvol-bind.ps1"
-PWSH=""; for cnd in "$HOME/pwsh/pwsh" "$(command -v pwsh 2>/dev/null)"; do [ -n "$cnd" ] && [ -x "$cnd" ] && { PWSH="$cnd"; break; }; done
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 if [ -n "$PWSH" ]; then
   if "$PWSH" -NoProfile -Command "\$t=\$null; \$e=\$null; [System.Management.Automation.Language.Parser]::ParseFile('$PS1F', [ref]\$t, [ref]\$e) | Out-Null; if (\$e.Count) { \$e | ForEach-Object { Write-Output \$_.Message }; exit 1 }; exit 0" >"$T/parse.out" 2>&1; then
     ok "bind: logvol-bind.ps1 parses with the real PowerShell parser"
@@ -669,7 +669,7 @@ fi
 #     boot - while the install boot's agent was 3976.
 #     The block is EXTRACTED FROM THE SHIPPED FILE and executed under pwsh, with Get-Process
 #     shadowed so the leg is about the predicate and not about this qube's process table.
-PWX=${PWSH:-/home/user/.local/pwsh/pwsh}; [ -x "$PWX" ] || PWX=$(command -v pwsh || true)
+PWX="$("$(dirname "$0")/pwsh-path.sh" || true)"
 if [ -z "$PWX" ]; then
     bad "fresh: no pwsh - the freshness predicate was not driven" "missing data fails"
 else

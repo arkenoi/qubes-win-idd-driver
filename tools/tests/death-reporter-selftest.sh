@@ -36,9 +36,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # could not run anywhere else - which is why it was never in tools/tests/offline-suites.txt and why the
 # battery that gates every commit did not cover the death reporter at all. GitHub's ubuntu runners ship
 # pwsh on the PATH, so the PATH is tried first and the dev-qube paths remain as fallbacks.
-PWSH="${PWSH:-$(command -v pwsh 2>/dev/null || true)}"
-[ -n "$PWSH" ] && [ -x "$PWSH" ] || PWSH=/home/user/pwsh/pwsh
-[ -x "$PWSH" ] || PWSH=/home/user/bin/pwsh7/pwsh
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 OUT="${DEATHREPORTER_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/death-reporter-selftest-XXXXXX")}"
 SUITE="$ROOT/tools/tests/death-reporter-test.ps1"
 REPORTER="$ROOT/guest/qwt-report-death.ps1"

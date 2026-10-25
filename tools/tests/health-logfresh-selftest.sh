@@ -11,7 +11,7 @@
 # Exit 0 only if both legs hold.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PWSH="${PWSH:-/home/user/bin/pwsh7/pwsh}"
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 [ -x "$PWSH" ] || { echo "FAIL  pwsh not found at $PWSH - nothing ran (missing data fails)"; exit 2; }
 S="$ROOT/guest/health-check.ps1"
 T="$ROOT/tools/tests/health-logfresh-test.ps1"

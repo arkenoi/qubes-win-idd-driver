@@ -8,9 +8,7 @@
 # with its test hooks, and the real mgmt/harness/result-flags.py.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
-PWSH="${PWSH:-/home/user/.local/pwsh/pwsh}"
-[ -x "$PWSH" ] || PWSH=/home/user/pwsh/pwsh
-[ -x "$PWSH" ] || PWSH="$(command -v pwsh || true)"
+PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 [ -n "$PWSH" ] || { echo "FAIL  no pwsh - nothing ran (missing data fails)"; exit 2; }
 bad=0
 out=$("$PWSH" -NoProfile -File "$HERE/wu-deploy-loud-test.ps1" 2>&1); rc=$?
