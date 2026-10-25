@@ -3067,7 +3067,11 @@ for c in $CELLS; do
 
   # PRESERVE THE GUEST'S OWN LOGS FOR EVERY CELL, not just the two that bind a volume.
   #
-  # The volume is bound on the reinstall and upgrade cells only (logvol_bind_now, two call sites),
+  # The volume is bound by logvol_bind_now at EIGHT call sites, not two: clean, clean-postboot,
+  # reinstall, upgrade, seeded, stock, post-install and AppVM. This comment said "the reinstall
+  # and upgrade cells only (two call sites)" and was already wrong at five when it was written;
+  # it is what a reader consults to scope the log volume's blast radius, and the wedge-rate
+  # question turns on exactly that number. Corrected 2026-10-25 - derive the list if it moves.
   # so the clean and appvm cells contributed NOTHING guest-side: measured on the 2026-10-14 campaign,
   # the clean cell's evidence dir held 48 lines across four files and ZERO in QWT or installer
   # format. The end-of-campaign sweep then reads harness bash lines for half the matrix, and a

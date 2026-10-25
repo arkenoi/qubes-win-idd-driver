@@ -482,6 +482,21 @@ RESCUE_NOSHOW=${RESCUE_NOSHOW:-4}
 # rest of the budget would just shred the evidence of why.
 MAX_RESTARTS=${MAX_RESTARTS:-8}
 t0=$(date +%s); restarts=0; ready=0; rescued=0; quiet=0; noshow=0; cpu=-; t_start=$t0
+# DID THE AGENT EVER ANSWER IN THIS RUN? The deadline classifier below called a guest
+# "EXECUTING-BUT-UNREACHABLE" on the strength of a moving cpu_time plus "qrexec dead for the whole
+# deadline" - a conjunction that is ALSO satisfied, vacuously, by a guest whose QWT never installed
+# and that therefore never had a channel to lose. Nothing in the script distinguished the two, so
+# the one distinction the branch exists to make is the one it could not make. Measured 2026-10-25,
+# WIN10-clean of acceptance 40210151847: 111 polls, every one "(no qrexec yet)", none "qrexec up";
+# the guest painted screen=VERDICT=DESKTOP 3 s before the deadline, started its onboot job at
+# 17:39:45Z (4 s BEFORE the deadline fired) and wrote `installer rc=1` to the DIAG volume at
+# 17:41:07Z - 28 s AFTER being declared a P1 SPIN wedge, while its core was being imaged. Its four
+# vCPUs were all at STI;HLT;RET with no hypercall at or near RIP. It was never wedged; the install
+# failed and the guest was idle. Jev had already priced this exact wording on 2026-09-18:
+# moving_establishes_spin 0.05, classifier_wording_is_sound 0.11 - i.e. 0.89 that it WOULD mislabel.
+# lastscr carries the most recent screen verdict so PIXELS (a strong conjunct) can outvote cpu_time
+# (the weak one) at the deadline instead of being printed beside it and ignored.
+qrexec_ever=0; lastscr=-
 while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
     sleep 20
     el=$(( $(date +%s) - t0 ))
@@ -570,6 +585,12 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
     # file were fixed on 2026-10-14; this one hid behind a line continuation, where lint L23's
     # per-line scan could not see it. It is the probe that decides a clean install succeeded.
     if command grep -qa '^QREADY' <<< "$(QTEST_VM=$CHURN timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null)"; then
+        # LATCH FIRST: the agent has answered at least once in this run. Set before the quiet window
+        # and before any `continue`, because the two paths that leave this block without ready=1 (the
+        # guest going deaf in the quiet window, and the post-settle reboot that never comes back) are
+        # exactly the GENUINE losses of reachability - the only ones for which "unreachable" means
+        # anything. Latching after them would make this flag say "ready" and discriminate nothing.
+        qrexec_ever=1
         # QUIET AFTER THE FIRST ANSWER (QUIET_AFTER_FIRST=1; owner-approved 2026-10-04, findings/wedge.md "REVERSE CODE QUALITY").
         # The stall is QEMU in the stub domain no longer completing the guest's requests, and it strikes in a fresh domain's first
         # minutes under concentrated activity. This script's first answer in stage 2 lands seconds after msiexec started QWT's
@@ -633,7 +654,7 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
     # evidence, and the PNG is kept next to this log.
     scr=
     if [ $(( el / 60 )) -gt "${scrn:-0}" ]; then
-        scrn=$(( el / 60 )); sv=$(screen_probe "t${el}"); scr=" screen=$sv"
+        scrn=$(( el / 60 )); sv=$(screen_probe "t${el}"); scr=" screen=$sv"; lastscr=$sv
         # A no-window verdict feeds the screen-based rescue trigger (see RESCUE_NOSHOW). The
         # probe runs after the rescue check, so it acts on the next poll - a bounded ~60 s lag.
         noshow=$(rescue_noshow_step "$noshow" "$sv")
@@ -753,24 +774,55 @@ if [ "$ready" != 1 ]; then
     # 2026-09-14 - three calls, twice busy where a stall verdict was FALSE, once frozen (0/20 s)
     # where it was TRUE. Without this line the next reader has to re-derive it, and this project
     # has repeatedly written up a busy guest as a wedge for want of exactly this measurement.
-    # CLASSIFY the failure; do NOT excuse it. qrexec has been dead for the whole DEADLINE here, so
-    # a moving cpu_time is not evidence of health - it is the issues.md P1 fingerprint ("AT LEAST
-    # ONE vCPU BURNING 88-101% OF A CORE sustained ... the 8/8 invariant across all eight captured
-    # events"). The first version of this block printed "NOT a stalled guest" for exactly that
-    # state, which would have handed the next reader a confident wrong diagnosis of the very defect
-    # this rig exists to catch. Corrected in review 2026-09-14 before it ran against a real wedge.
+    # CLASSIFY the failure; do NOT excuse it - but classify it on the STRONG conjuncts, which this
+    # block used to print and then ignore in favour of the weakest one it had.
+    #
+    # The weak one is cpu_time. Jev judged it on 2026-09-18 and the wire log holds the numbers:
+    # moving_establishes_spin 0.05 (the delta ALONE establishing the spin fingerprint) and
+    # classifier_wording_is_sound 0.11 (that this very sentence would NOT mislabel a busy-but-
+    # reachable guest). The state it judged on measured a HEALTHY qrexec-answering guest of this
+    # class at 327%/321%/262% of a core against the "spinning" one's 175% - the control burned
+    # HARDER than the specimen. A number whose healthy and wedged ranges overlap that way cannot
+    # decide WHETHER, only ever WHICH. The wording was left unchanged for five weeks and on
+    # 2026-10-25 it did precisely what Jev priced at 0.89: see the qrexec_ever note at the top.
+    #
+    # So the first question is no longer "is it burning CPU" but "was there ever a channel to lose".
     _pr_cs=$(_pr_cpu_state "$CHURN")
-    case "${_pr_cs%% *}" in
-      FLAT)
-        log "  cpu_time is FLAT over the sample: the domain is NOT EXECUTING - a FROZEN stall." ;;
-      MOVING)
-        log "  cpu_time ADVANCED ${_pr_cs#* } over the sample while qrexec stayed dead for the whole"
-        log "  deadline. That is EXECUTING-BUT-UNREACHABLE = the P1 SPIN fingerprint, NOT a healthy"
-        log "  guest and NOT merely a short deadline. Do not re-run it away." ;;
-      *)
-        log "  cpu_time UNREADABLE: executing-or-not is UNMEASURED. This is not a claim either way -"
-        log "  do not record it as a busy guest or as a frozen one." ;;
+    if [ "$qrexec_ever" != 1 ]; then
+        # VACUOUS-UNREACHABLE. qrexec never answered once in this run, so "unreachable" is not a
+        # finding about reachability - there was no agent. This is a PRIME/INSTALL failure and the
+        # evidence that names it is the installer's own exit, on the DIAG volume, not a memory image.
+        log "  the agent NEVER answered in this run (0 of the polls above saw qrexec). 'Unreachable'"
+        log "  is therefore VACUOUS here - there was no channel to lose, so this is an INSTALL/PRIME"
+        log "  failure until something shows otherwise, NOT a wedge. Read the installer's exit first:"
+        log "    $OUT/diag-markers.log  (prime-progress.log from the DIAG volume: onboot START + installer rc)"
+        log "  cpu_time over the sample: $_pr_cs - recorded, and NOT a wedge verdict either way."
+    else
+        # A GENUINE LOSS of reachability: the agent answered, then stopped. Only now do the wedge
+        # classes apply, and even now cpu_time labels the SHAPE, never the fact.
+        log "  the agent ANSWERED earlier in this run and then stopped - reachability was genuinely LOST."
+        case "${_pr_cs%% *}" in
+          FLAT)
+            log "  cpu_time is FLAT over the sample: consistent with the BLOCKED shape (every vCPU idle"
+            log "  around one held in Xen). FLAT/MOVING names WHICH shape, not WHETHER it is wedged." ;;
+          MOVING)
+            log "  cpu_time ADVANCED ${_pr_cs#* } over the sample: consistent with the SPIN shape. Note the"
+            log "  bound: a healthy guest of this class measured HIGHER (327% of a core vs 175%), so this"
+            log "  number corroborates a loss already established above - it does not establish one." ;;
+          *)
+            log "  cpu_time UNREADABLE: the shape is UNMEASURED. The loss of reachability still stands." ;;
+        esac
+    fi
+    # THE STRONG CONJUNCTS, said out loud, because on 2026-10-25 every one of them read healthy
+    # while the weak one carried the verdict. Pixels: the guest had painted a DESKTOP 3 s before the
+    # deadline. ACPI: it had honoured a restart. Both were in the log, beside the SPIN sentence.
+    log "  strong conjuncts at the deadline: agent_ever=$qrexec_ever last_screen=${lastscr:--} restarts=$restarts"
+    case "$lastscr" in
+      DESKTOP|RECOVERY)
+        log "  PIXELS PRESENT (last screen verdict $lastscr). A guest that is painting is not frozen;"
+        log "  if a wedge is claimed for this run it must be reconciled with that capture." ;;
     esac
+    [ "$restarts" -gt 0 ] && log "  the guest HONOURED $restarts ACPI restart(s) in this run - its power path was alive."
     # CAPTURE THE SPECIMEN NOW, AUTOMATICALLY. Leaving the guest running is not enough: on
     # 2026-09-23 a wedge was caught inside an acceptance campaign, and the campaign's NEXT cell
     # would have recloned the guest and destroyed it - the specimen survived only because a human

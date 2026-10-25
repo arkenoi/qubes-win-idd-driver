@@ -26,6 +26,13 @@ rem  own installer takes its two-stage (E1) path here: stage 1 enables testsigni
 rem  stage 2 installs. That is the intended behaviour, not a problem to work around.
 rem ===============================================================================================
 set LOG=C:\qubes-prime\ours-nopvdisk.log
+
+rem DIAG is found by LABEL, not by letter: letters are not stable across the installer's reboot.
+set "DIAGDRV="
+for %%d in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
+    if not defined DIAGDRV if exist "%%d:\" for /f "tokens=*" %%v in ('cmd /c vol %%d: 2^>nul ^| findstr /i "DIAG"') do set "DIAGDRV=%%d"
+)
+
 echo === ours-nopvdisk prime job %DATE% %TIME% >> %LOG%
 
 rem Stage to C: first. The stick's drive letter is not stable across the installer's own reboots,
@@ -47,5 +54,23 @@ rem `/auto /autologon:qubes`; this job was the odd one out.
 rem /reboot: same reason as the `ours` job - on a fresh PV install qrexec cannot answer until the
 rem next boot, so stage 2 must reboot itself or the guest is stranded until prime-run's rescue.
 call C:\qwtsetup\install.cmd /nodisk /auto /reboot /autologon:qubes >> %LOG% 2>&1
-echo installer rc=%ERRORLEVEL% >> %LOG%
-exit /b %ERRORLEVEL%
+rem RC IS CAPTURED HERE, NOT READ AT THE EXIT. The copies below are commands and `copy` SETS
+rem ERRORLEVEL, so `exit /b %ERRORLEVEL%` after them would report the COPY's result and hand
+rem prime-run a 0 for every failed install - the exact class this file's own C12 comment warns
+rem about ("outside a block, %ERRORLEVEL% expands per line at execution").
+set RC=%ERRORLEVEL%
+echo installer rc=%RC% >> %LOG%
+rem THE REASON MUST LEAVE THE GUEST (2026-10-25). %LOG% is on C:, reachable only over qrexec - and
+rem when the installer fails there IS no qrexec, so the one file that says WHY cannot be read. That
+rem is not hypothetical: acceptance 40210151847 aborted at cell 1 holding `installer rc=1` on the
+rem DIAG marker and nothing else. The specimen could not be asked afterwards either - qubes-prime.cmd
+rem deletes its own task BEFORE running the job, so the primer never fires twice - and two full
+rem string passes over an 8 GB memory image found no trace of the log in the file cache. The marker
+rem recorded the rc and withheld the reason, which is the one thing it existed to prevent.
+rem DIAG is FAT and the HOST reads it with mtools, needing nothing from the guest.
+rem STAGE 2 IS NOT COVERED: it runs later from the resume task and appends to %LOG% after this
+rem script has exited. This captures stage 1, which is where the rc above is raised.
+if defined DIAGDRV copy /y "%LOG%" "%DIAGDRV%:\prime-installer.log" >nul 2>&1
+if defined DIAGDRV copy /y "C:\qubes-win-idd-setup.log" "%DIAGDRV%:\primer.log" >nul 2>&1
+
+exit /b %RC%

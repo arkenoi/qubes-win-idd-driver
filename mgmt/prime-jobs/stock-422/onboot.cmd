@@ -10,6 +10,13 @@ rem  Stock needs testsigning ACTIVE IN THE CURRENT BOOT, so this is two passes e
 rem  reboot. The primer has already unregistered itself, so pass 2 is re-armed here explicitly.
 rem ===============================================================================================
 set LOG=C:\qubes-prime\stock-install.log
+
+rem DIAG is found by LABEL, not by letter: letters are not stable across the installer's reboot.
+set "DIAGDRV="
+for %%d in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
+    if not defined DIAGDRV if exist "%%d:\" for /f "tokens=*" %%v in ('cmd /c vol %%d: 2^>nul ^| findstr /i "DIAG"') do set "DIAGDRV=%%d"
+)
+
 echo === stock 4.2.2 prime job %DATE% %TIME% >> %LOG%
 
 reg query "HKLM\SYSTEM\CurrentControlSet\Control" /v SystemStartOptions | find /i "TESTSIGNING" >nul
@@ -46,6 +53,19 @@ echo running %STOCKEXE% >> %LOG%
 start /wait "" "%STOCKEXE%" /passive /norestart /log C:\qubes-prime\stock-burn.log >> %LOG% 2>&1
 set RC=%ERRORLEVEL%
 echo stock installer rc=%RC% >> %LOG%
+
+rem THE REASON MUST LEAVE THE GUEST (2026-10-25). %LOG% is on C:, reachable only over qrexec - and
+rem when the installer fails there IS no qrexec, so the one file that says WHY cannot be read. That
+rem is not hypothetical: acceptance 40210151847 aborted at cell 1 holding `installer rc=1` on the
+rem DIAG marker and nothing else. The specimen could not be asked afterwards either - qubes-prime.cmd
+rem deletes its own task BEFORE running the job, so the primer never fires twice - and two full
+rem string passes over an 8 GB memory image found no trace of the log in the file cache. The marker
+rem recorded the rc and withheld the reason, which is the one thing it existed to prevent.
+rem DIAG is FAT and the HOST reads it with mtools, needing nothing from the guest.
+rem STAGE 2 IS NOT COVERED: it runs later from the resume task and appends to %LOG% after this
+rem script has exited. This captures stage 1, which is where the rc above is raised.
+if defined DIAGDRV copy /y "%LOG%" "%DIAGDRV%:\prime-installer.log" >nul 2>&1
+if defined DIAGDRV copy /y "C:\qubes-win-idd-setup.log" "%DIAGDRV%:\primer.log" >nul 2>&1
 
 if "%RC%"=="0"    goto ok
 if "%RC%"=="3010" goto ok

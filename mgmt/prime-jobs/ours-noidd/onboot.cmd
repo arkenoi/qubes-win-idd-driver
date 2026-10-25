@@ -109,6 +109,24 @@ rem device model TEARING DOWN its dirty-VRAM tracking, which is what disabling t
 rem adapter causes. /noidd leaves the BDA in place and never triggers that teardown, so if
 rem the stall is caused by it, this arm should not stall and the default arm should.
 call C:\qwtsetup\install.cmd /auto /reboot /noidd /autologon:qubes >> %LOG% 2>&1
-echo installer rc=%ERRORLEVEL% >> %LOG%
-if defined DIAGDRV echo [%DATE% %TIME%] installer rc=%ERRORLEVEL% >> %DIAGDRV%:\prime-progress.log
-exit /b %ERRORLEVEL%
+rem RC IS CAPTURED HERE, NOT READ AT THE EXIT. The copies below are commands and `copy` SETS
+rem ERRORLEVEL, so `exit /b %ERRORLEVEL%` after them would report the COPY's result and hand
+rem prime-run a 0 for every failed install - the exact class this file's own C12 comment warns
+rem about ("outside a block, %ERRORLEVEL% expands per line at execution").
+set RC=%ERRORLEVEL%
+echo installer rc=%RC% >> %LOG%
+if defined DIAGDRV echo [%DATE% %TIME%] installer rc=%RC% >> %DIAGDRV%:\prime-progress.log
+rem THE REASON MUST LEAVE THE GUEST (2026-10-25). %LOG% is on C:, reachable only over qrexec - and
+rem when the installer fails there IS no qrexec, so the one file that says WHY cannot be read. That
+rem is not hypothetical: acceptance 40210151847 aborted at cell 1 holding `installer rc=1` on the
+rem DIAG marker and nothing else. The specimen could not be asked afterwards either - qubes-prime.cmd
+rem deletes its own task BEFORE running the job, so the primer never fires twice - and two full
+rem string passes over an 8 GB memory image found no trace of the log in the file cache. The marker
+rem recorded the rc and withheld the reason, which is the one thing it existed to prevent.
+rem DIAG is FAT and the HOST reads it with mtools, needing nothing from the guest.
+rem STAGE 2 IS NOT COVERED: it runs later from the resume task and appends to %LOG% after this
+rem script has exited. This captures stage 1, which is where the rc above is raised.
+if defined DIAGDRV copy /y "%LOG%" "%DIAGDRV%:\prime-installer.log" >nul 2>&1
+if defined DIAGDRV copy /y "C:\qubes-win-idd-setup.log" "%DIAGDRV%:\primer.log" >nul 2>&1
+
+exit /b %RC%
