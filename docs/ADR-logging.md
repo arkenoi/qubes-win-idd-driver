@@ -11,6 +11,14 @@ to **0.01** once the facts below were in the brief.
 Shipped as `patches/windows-utils-one-log-per-module.patch`, applied unconditionally by both
 workflows with marker assertions, guarded by `tools/tests/one-log-per-module-selftest.sh` (18 checks).
 
+**Decision (2026-10-25): the acceptance log volume's DEVICE SET has one owner and four named
+phases** — `priming` / `graded` / `answer` / `none` — composed whole by
+`mgmt/harness/logvol-lib.sh`, applied only at a domain boundary through a writer that refuses a live
+domain, and enforced by `lint-harness.py` L31 across `mgmt/harness/*.sh`, `tools/*.sh` and
+`mgmt/*.sh`. Two campaigns aborted on hand-composed copies of that value; the detail is below under
+"The device set has ONE owner". The bind itself is now smoke-tested ahead of every campaign, both
+arms, with no off switch — MEASURED on the rig 2026-10-25, PASS in 3m01 and a refusal in 2m09.
+
 ### What was wrong, measured
 
 German Windows 11 25H2 guest, one install + three boots:
@@ -135,6 +143,61 @@ paragraph, "ON BY DEFAULT now that the letter is resolved by label and PINNED". 
 was a real fix for a real defect; it simply had nothing to do with whether the volume is mounted
 before the agent's `LogInit`. "Mounted at a stable letter" and "mounted in time" are different
 claims, and a theory about the first was allowed to overrule a measurement about the second.
+
+### The device set has ONE owner and named phases, applied at a domain boundary
+
+`qemu-extra-args` is a SINGLE feature value and it is read at DOMAIN CREATION, nowhere else. Writing
+it while a domain is up changes nothing the running guest can see while making every later reader
+believe the device set it describes is in force.
+
+Four places composed that value independently: `prime-run.sh` wrote the answer stick's fragment
+literally and let `logvol_attach` compose ours onto it, `matrix.sh` carried a pattern to STRIP the
+priming fragments mid-cell, `logvol-smoke.sh` composed its own, and `provision-recipe.sh` held a
+fifth copy with no caller at all. `mgmt/prime-selftest.sh` and `mgmt/reprovision-usb.sh` each held a
+literal copy too. Nothing declared what the set IS for a given phase; the lifecycle existed only as
+a convention spread across those files.
+
+**What it cost, measured twice.** Campaign 40134888669: `matrix.sh` rewrote the args at 22:12:18 to
+drop the priming sticks against a RUNNING `win10-acc`; eight seconds later the bind refused with
+`no_volume_labelled_DIAG_with_LOGVOL.TAG` and the guest, asked directly, reported the 256 MB image
+as `XENSRC PVDISK bus=SCSI ... parts=0` with no USB disk device at all. The campaign aborted on its
+first cell, 11 minutes in, having spent 10 of them installing. Campaign 1024-2333, after the writer
+was made to refuse a live domain: the bind SUCCEEDED, the nonce round trip PROVED
+(`LVPROOF-20261024T234505Z`), the install parked — and the first judged boot reported `t+60s
+qvm=Halted`. The domain was never created, because the refusal left `file=/dev/xvdi` in the recorded
+value for a loop the matrix had just UNASSIGNED. A policy change in one file broke a lifecycle kept
+in another.
+
+Owner's diagnosis, which is the level above both bugs: *"that because you organically cannot keep
+matrix and smoke test configurations in sync."*
+
+So one declaration, four named phases, composed WHOLE and never edited as a string:
+
+| phase | devices | used by |
+|---|---|---|
+| `priming` | controller + answer stick (readonly, `bootindex=99`) + evidence volume | `prime-run.sh`, `reprovision-usb.sh` with its marker volume |
+| `graded` | controller + evidence volume | `matrix.sh` at the park/halt boundary, `logvol-smoke.sh` before first boot |
+| `answer` | controller + answer stick | `prime-selftest.sh`, `reprovision-usb.sh` without one |
+| `none` | nothing | `seal-qwt-golden.sh`, `rebuild-rig.sh`, `provision_disarm` — each BELOW its halt |
+
+`logvol_devices_apply <vm> <phase>` is the only way a harness sets it, it goes through the one
+writer, and that writer refuses a live domain. `lint-harness.py` L31 refuses any other writer across
+`mgmt/harness/*.sh`, `tools/*.sh` and `mgmt/*.sh`, in both argument orders, with a READ of the
+feature left silent. Jev: phase-function 0.98, swap after-park-halt 0.80, lifecycle placement 0.99.
+
+**A blanket `--unset` is not a teardown primitive, it is the `none` phase.** It deletes our drive,
+our `usb-storage` device AND the `nec-usb-xhci` controller they ride on. Three teardown paths did it
+directly, and two of them did it ABOVE their own shutdown — where the one writer's refusal would be
+swallowed and a golden SEALED carrying a provisioning rig, inherited by every clone taken from it.
+
+**And the bind is smoke-tested before a campaign spends a cell.** `mgmt/harness/logvol-smoke.sh`
+clones the QWT golden, applies `graded` before first boot, binds, and reads a nonce back off the
+image with mtools and no guest; `--no-attach` runs the identical sequence with nothing attached and
+the bind MUST refuse. Both arms run ahead of the matrix, refutation first, with no off switch.
+MEASURED on the rig 2026-10-25: `graded` applied → `boot wait exit: up` → `bind ok mode=registry
+drive=Z: found=D: letter=pinned copied=72 safeflush=1 modules=12` → nonce read back, PASS in 3m01;
+`--no-attach` REFUSED with 40134888669's own signature, PASS in 2m09. That cell binds deliberately,
+which is not a contradiction of `LOGVOL_BIND=0` above: the bind is its subject, not its method.
 
 ### Not done
 
