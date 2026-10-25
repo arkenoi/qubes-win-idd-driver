@@ -98,8 +98,20 @@ ck "an unmarked guest has no reason"     "1" "$(specimen_why win10-acc >/dev/nul
 # logvol-lib.sh carries in its own header: "the library landed and NO harness called it".
 # The mark belongs at the LEFT-AS-IT-STANDS decision itself, which lives in the shared wait
 # primitive, so every harness that reaches it marks - not only matrix.sh.
-ck "the preserve decision marks"         "1" \
-   "$(awk '/LEFT AS IT STANDS/,/return 1/' mgmt/harness/e2e-wait.sh | grep -c 'specimen_mark "\$vm"')"
+# EVERY path that leaves a guest standing must record WHY - asserted as a property, not as a count
+# and not as a spelling. Two things broke the previous form of this leg, which read
+#   grep -c 'specimen_mark "$vm"'   expecting exactly 1:
+# the direct call became the _wm_mark wrapper (it sources specimen-lib.sh if the caller did not, and
+# reports a mark that FAILED rather than swallowing it under `|| true` - the hole that lost the first
+# reliably captured wedge on 2026-10-20), and a SECOND preserve path landed, the dark-screen TERMINAL
+# arm, which is the one that actually fires. Both are correct; the leg was red on correct code.
+# Comment lines are excluded because this very block quotes the old spelling in prose.
+_pres=$(awk '/LEFT AS IT STANDS/,/return 1/' mgmt/harness/e2e-wait.sh | command grep -vE '^[[:space:]]*#')
+_pres_blocks=$(printf '%s\n' "$_pres" | command grep -c 'LEFT AS IT STANDS')
+_pres_marks=$(printf '%s\n' "$_pres" | command grep -cE '(_wm_mark|specimen_mark) "\$vm"')
+ck "every LEFT-AS-IT-STANDS path records evidence" "yes" \
+   "$([ "$_pres_blocks" -gt 0 ] && [ "$_pres_blocks" = "$_pres_marks" ] \
+      && echo yes || echo "no: $_pres_blocks preserve path(s), $_pres_marks mark call(s)")"
 ck "matrix.sh clears when it recreates"  "2" "$(grep -c 'specimen_clear "\$' mgmt/harness/matrix.sh)"
 ck "and it sources the library"          "1" "$(grep -c '^source mgmt/harness/specimen-lib.sh' mgmt/harness/matrix.sh)"
 
