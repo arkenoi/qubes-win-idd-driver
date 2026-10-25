@@ -49,7 +49,39 @@ FIX_MARKERS="${FIX_MARKERS:-guest/qwt-report-death.ps1:GUARD:bootbacklog tools/n
 ENTRY_GOLDENS="${ENTRY_GOLDENS:-win10-base win11r-base win11r-qwt}"
 ENTRY_FIXTURES="${ENTRY_FIXTURES:-win10-iqi:win10-base win11-iqi:win11r-base}"
 SUBJECTS="${SUBJECTS:-win11r-lt win10-clean win11-clean win10-appvm win11-appvm win10-acc win11-acc}"
-PRODUCT_PATHS="${PRODUCT_PATHS:-agent guest packaging driver tools/notifhost}"
+# THE DRIFT SET IS DERIVED, NOT TYPED. It was the hand-written five-entry list
+# "agent guest packaging driver tools/notifhost" until 2026-10-25, and release-package.yml's own
+# `paths:` trigger carried NINETEEN. Measured against the artifact of package 40232828458, not
+# against the workflow: it ships bin/wgcbroker.exe and tools/qubesdb-read.exe, whose sources are
+# tools/wgcbroker/ and tools/qubesdb-read/ - and NEITHER was in the list, so this check could log
+# "no product drift since" with a stale shipped binary. This same file already named
+# tools/wgcbroker/wgcbroker.cpp in FIX_MARKERS twelve lines up, so the two lists disagreed with
+# each other inside one file.
+# The authoritative set is "the paths whose change obliges a new package", which is exactly what
+# release-package.yml's trigger declares and is already maintained there. Deriving it means the
+# next path added to the build cannot silently fall outside the gate.
+# IF DERIVATION FAILS, THIS DIES. An empty or partial list makes the drift check INERT while still
+# printing "no product drift since" - a worse outcome than refusing, and the class that has cost
+# this project repeatedly (a predicate fed a constant at its call site is inert).
+_RPYML=".github/workflows/release-package.yml"
+if [ -z "${PRODUCT_PATHS:-}" ]; then
+    PRODUCT_PATHS=$(python3 - "$_RPYML" <<'PY'
+import re, sys
+try:
+    src = open(sys.argv[1]).read()
+except OSError as e:
+    sys.exit("cannot read %s: %s" % (sys.argv[1], e))
+m = re.search(r"\n\s*paths:\s*\n((?:[ \t]*(?:#.*|-\s*'[^']+')[ \t]*\n)+)", src)
+if not m:
+    sys.exit("no 'paths:' block in %s" % sys.argv[1])
+ps = [p[:-3] if p.endswith("/**") else p for p in re.findall(r"-\s*'([^']+)'", m.group(1))]
+if len(ps) < 5:
+    sys.exit("only %d path(s) parsed from %s - refusing a drift set that small" % (len(ps), sys.argv[1]))
+print(" ".join(sorted(set(ps))))
+PY
+    ) || die 13 "could not derive PRODUCT_PATHS from $_RPYML - the reason is the python line on stderr just above. The drift check would be INERT, so this campaign stops here instead"
+    [ -n "$PRODUCT_PATHS" ] || die 13 "derived an EMPTY PRODUCT_PATHS from $_RPYML - refusing to run a campaign whose drift check cannot fail"
+fi
 # NOT FINISHED IS NOT RED (ci-state says CI 2). A package that built while another workflow was still
 # compiling used to kill the run; an unfinished gate is worth waiting for, a red one never is.
 CI_WAIT_SECONDS="${CI_WAIT_SECONDS:-3600}"
