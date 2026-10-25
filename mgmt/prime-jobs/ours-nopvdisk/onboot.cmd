@@ -45,6 +45,24 @@ if not exist C:\qwtsetup\install.cmd (
     exit /b 2
 )
 
+rem --- CLOCK FIRST (2026-10-25) -----------------------------------------------------------------
+rem A base sealed in SUMMER boots EXACTLY ONE HOUR BEHIND: with timezone=localtime Windows converts
+rem the RTC using the ActiveTimeBias ALREADY STORED in its registry and only then refreshes that
+rem bias, without moving the clock it just set (ETWCLOCKDST in findings/issues.md). Measured on
+rem campaign 40225365779 cell WIN10-clean: guest UTC 18:39:33Z against signer NotBefore 19:10:04Z,
+rem 31 min in the guest's future, so the installer REFUSED and nothing installed. The refusal is
+rem CORRECT - the driver install would otherwise HANG on 0x800B0101 rather than fail - so the clock
+rem has to be fixed BEFORE the installer runs. This guest has no qrexec and no netvm, so the host
+rem stamp staged on this stick is the only time source that exists here.
+rem NEVER FATAL: the helper logs loudly and returns 0; the installer still owns the verdict.
+set "CLOCKDIAG="
+if defined DIAGDRV set "CLOCKDIAG=-DiagLog %DIAGDRV%:\prime-progress.log"
+if exist "%~dp0fix-guest-clock.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0fix-guest-clock.ps1" -Stamp "%~dp0hoststamp.txt" %CLOCKDIAG% >> %LOG% 2>&1
+) else (
+    echo [%DATE% %TIME%] CLOCKSTAMP helper ABSENT on the stick - the clock is UNCHECKED >> %LOG%
+)
+
 rem /autologon:qubes added 2026-08-30. Without an autologon switch the installer PROMPTS for the
 rem password, and this job runs as SYSTEM in session 0 where nothing can answer; the documented
 rem fallback is an EMPTY password, which is wrong for these images (the account's password is

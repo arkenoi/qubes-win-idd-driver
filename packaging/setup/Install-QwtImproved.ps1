@@ -210,6 +210,23 @@ $script:UpdaterDeployFailure = $null
 # A Fail between the two restores them - see Restore-SweptBinaries.
 $script:SweptAside = @()
 $script:MsiInstallCompleted = $false
+# The update tasks a stage disabled before msiexec, re-enabled by Fail on the failure path.
+# INITIALISED HERE FOR THE SAME REASON AS $script:TzOverridden BELOW, AND ITS ABSENCE DESTROYED A
+# DIAGNOSIS. Set-StrictMode -Version 1.0 (line 175) makes reading an unwritten variable a
+# TERMINATING error, and the only assignment is at the top of the update-task step - which a
+# pre-flight refusal never reaches. So Fail's own `if ($script:UpdTasksDisabled)` THREW inside the
+# failure path, and the installer reported its crash instead of the refusal that caused it.
+# MEASURED 2026-10-25, campaign 40225365779 cell WIN10-clean: a clean, correct, fully explained
+# clock refusal ("REFUSING to install pv-drivers\xencons-signer.cer ... 31 min in this guest's
+# future") was overwritten by
+#     [FATAL] The variable '$script:UpdTasksDisabled' cannot be retrieved because it has not been set.
+#     at Fail, line 349 / at Assert-Stage1Preflight, line 5804
+# and === RESULT === went out as {"stage":"unknown","error":"The variable ..."}. The true reason
+# survived ONLY as clock_skew_refusal:true inside detail{}, which nothing reads. That is why
+# "installer rc=1 left no trace" was recorded as an open question for three weeks: the error path
+# was destroying its own message. An empty array is the correct initial value - the failure path
+# then simply has nothing to re-enable, which is exactly true before the step has run.
+$script:UpdTasksDisabled = @()
 # Set when the late zone step REPLACES a zone the guest was already holding - read at the end of
 # stage 2 to notify dom0. Initialised here because Set-StrictMode makes an unwritten variable throw.
 $script:TzOverridden = $false
