@@ -20,6 +20,6 @@ expect() { local kout krc kf; kout=$("$PWSH" -NoProfile -File "$T" -Defect "$1" 
 # titlematch leaves signature-en passing on purpose: an English title DOES match, which is exactly
 # why the German case is the one that decides whether the classifier is structural.
 expect titlematch      "braced-uppercase,multiple-categories,signature-de,"
-expect swallowunknown  "cumulative,defender-platform,no-categories,throwing-categories,wrong-category-type,"
+expect swallowunknown  "cumulative,defender-platform,driver,no-categories,throwing-categories,wrong-category-type,"
 [ $bad = 0 ] && { echo "PASS  clean passes; every knob fails exactly its cases"; exit 0; }
 exit 1

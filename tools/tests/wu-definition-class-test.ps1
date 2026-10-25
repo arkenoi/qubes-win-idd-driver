@@ -41,11 +41,18 @@ if ($Defect -eq 'titlematch') {
 
 . ([scriptblock]::Create($cls))
 
-# WU's own classification GUIDs. Definitions is the one under test; Updates/Security Updates stand in
-# for ordinary servicing, which must keep counting.
+# WU's own classification GUIDs. The two non-definition ones are MEASURED, not invented: read off a
+# real Microsoft.Update.Session on win11de-def (German 25H2, de-DE, as SYSTEM) on 2026-10-25, which
+# reported exactly these two classifications for its three pending offers -
+#   UpdateClassification :: 0fa1201d-4330-4fa8-8ae9-b877473b6441 = Security Updates
+#   UpdateClassification :: ebfc1fc5-71a4-4f7b-9aca-3b9a503104a0 = Drivers
+# An earlier version of this file guessed '...6442' for Security Updates, which is not a GUID that
+# guest ever returned. $DEFN is still UNCONFIRMED against a real object: that guest had no Defender
+# definition pending in its offline metadata cache, and confirming it needs an ONLINE scan that
+# offers one (KB2267602). See WUDEFINITIONGUIDUNCONFIRMED in findings/issues.md.
 $DEFN = 'e0789628-ce08-4437-be74-2495b842f43b'
 $UPDS = '0fa1201d-4330-4fa8-8ae9-b877473b6441'
-$SECU = '0fa1201d-4330-4fa8-8ae9-b877473b6442'
+$SECU = 'ebfc1fc5-71a4-4f7b-9aca-3b9a503104a0'
 
 function New-Offer([string]$kb, [string]$title, $cats) {
     $o = [pscustomobject]@{ KBArticleIDs=@($kb); Title=$title }
@@ -79,8 +86,10 @@ Check 'signature-de' (Test-WuDefinitionUpdate (New-Offer 'KB2267602' 'Definition
 # and its title contains the word Defender exactly as the signature offer does.
 Check 'defender-platform' (Test-WuDefinitionUpdate (New-Offer 'KB4052623' 'Update for Microsoft Defender Antivirus antimalware platform - KB4052623' @(New-Category $UPDS))) $false `
       'the Defender PLATFORM update is ordinary servicing and still counts'
-Check 'cumulative' (Test-WuDefinitionUpdate (New-Offer 'KB5062553' '2026-10 Cumulative Update for Windows 11' @(New-Category $SECU))) $false `
-      'a cumulative counts'
+Check 'cumulative' (Test-WuDefinitionUpdate (New-Offer 'KB5062553' '2026-10 Cumulative Update for Windows 11' @(New-Category $UPDS))) $false `
+      'a Security Updates offer counts'
+Check 'driver' (Test-WuDefinitionUpdate (New-Offer 'KB999001' 'Intel - Display' @(New-Category $SECU))) $false `
+      'a Drivers offer counts - the other classification this guest actually returns'
 # Normalisation: WU hands GUIDs back in more than one shape.
 Check 'braced-uppercase' (Test-WuDefinitionUpdate (New-Offer 'KB2267602' 'x' @(New-Category ('{' + $DEFN.ToUpperInvariant() + '}')))) $true `
       'a braced, upper-case GUID is the same classification'
