@@ -21,6 +21,15 @@ on:
       - 'tools/**'
       - 'rpc/**'
       - 'core-agent/**'
+      # mgmt/ WAS MISSING, and 85 of the 196 suites run by tools/tests/run-offline-suites.sh assert
+      # against mgmt/ - campaign-preflight-selftest, matrix-runinstall-grade-selftest and the rest
+      # of the harness suites among them. So a commit touching only mgmt/harness ran NONE of the
+      # tests that cover it. MEASURED 2026-10-25: commit 669576d6 changed mgmt/harness/matrix.sh,
+      # test.yml did not fire at all, ci-state INHERITED the previous sha's pass and reported "CI
+      # GREEN for 669576d6e546" - and the change had in fact broken
+      # matrix-runinstall-grade-selftest with an unbound $HERE. It surfaced one commit later only
+      # because that commit happened to touch tools/, which IS in this list.
+      - 'mgmt/**'
       - '.github/workflows/test.yml'
   pull_request:
   workflow_dispatch:
