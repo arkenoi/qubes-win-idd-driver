@@ -43,7 +43,15 @@ if [ -z "${QTEST_BIN:-}" ]; then . mgmt/harness/vmlock.sh; vm_lock "$VM" >/dev/n
 QT="${QTEST_BIN:-./tools/qtest}"
 OUT="${DOM0_SENDS_OUT:-scratchpad/dom0-sends-$VM-$TAG}"; mkdir -p "$OUT"
 LEDGER="${DOM0_SENDS_LEDGER:-scratchpad/dom0-notifications.jsonl}"
-P=scratchpad/dom0-sends-capture.ps1
+# THE CAPTURE SCRIPT IS TRACKED, and it has to be: this read `scratchpad/dom0-sends-capture.ps1`,
+# a GITIGNORED path, so the tool worked on exactly one machine. Measured 2026-10-25 by running the
+# gate in a fresh worktree - dom0-sends-selftest.sh went 5 passed / 13 failed with
+# "ERROR: scratchpad/dom0-sends-capture.ps1 missing - nothing to push", every leg bailing before it
+# exercised anything, while the same suite was green in the working tree where the file happens to
+# exist. A CI runner is a fresh checkout, so registering that suite would have put a red suite in
+# the gate - 0e597399's defect over again. Overridable like OUT and LEDGER above, so the
+# missing-file arm stays reachable.
+P="${DOM0_SENDS_CAPTURE:-guest/dom0-sends-capture.ps1}"
 [ -s "$P" ] || { echo "ERROR: $P missing - nothing to push"; exit 2; }
 
 st=$(QTEST_VM="$VM" timeout 25 $QT state 2>&1 | command grep -ao 'power_state=[A-Za-z]*')
