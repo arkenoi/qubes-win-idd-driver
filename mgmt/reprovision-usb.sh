@@ -9,6 +9,7 @@
 # Build the stick first: mgmt/build-answer-stick.sh (keep SIZE_MB constant so the loop
 # device's cached capacity stays valid - it is rewritten in place, no root needed).
 . "$(dirname "$0")/harness/shutdown-lib.sh"
+. "$(dirname "$0")/harness/logvol-lib.sh"   # the device set's one owner (logvol_devices_apply)
 set -u
 VM="${1:?usage: $0 <vm> <iso-loop> <stick-loop>}"
 ISOLOOP="${2:?}"
@@ -106,12 +107,17 @@ if [ "${PRISTINE:-0}" = 1 ]; then
     [ -n "$MARKLOOP" ] || { log "FAIL: no loop for the completion-marker volume $MARKIMG"; exit 1; }
     log "completion marker volume: $MARKIMG on /dev/$MARKLOOP -> xvdj"
 fi
+# THE DEVICE SET COMES FROM ITS ONE OWNER. These two branches each held a literal copy of the
+# string - `priming` here is the answer stick plus a writable DIAG volume on xvdj, which is exactly
+# what the marker volume is, and `answer` is the stick alone. Owner 2026-10-25: "no rewriting
+# arguments on the fly"; four independent copies of one device set is how campaign 1024-2333's
+# first judged boot came to ask qemu for a loop device that had been unassigned.
 if [ -n "$MARKLOOP" ]; then
-    qvm-features "$VM" qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99 -drive file=/dev/xvdj,format=host_device,if=none,id=markdrv -device usb-storage,bus=ansusb.0,drive=markdrv,removable=on' || exit 1
+    logvol_devices_apply "$VM" priming || exit 1
     qvm-device block assign --required -o frontend-dev=xvdj -o devtype=disk -o read-only=false "$VM" "$HOLDER:$MARKLOOP" >/dev/null 2>&1 \
         || { log "FAIL: could not assign the completion-marker volume"; exit 1; }
 else
-    qvm-features "$VM" qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99' || exit 1
+    logvol_devices_apply "$VM" answer || exit 1
 fi
 qvm-device block assign --required -o frontend-dev=xvdi -o devtype=disk "$VM" "$HOLDER:$STICKLOOP" || exit 1
 # Positive proof the assignment stuck: this qube may not LIST block devices, but a second

@@ -480,5 +480,45 @@ D="$TMP/l27ok"; mk "$D"
 printf '#!/bin/bash\nqrun(){ :; }\narm(){ qrun "powershell -NoProfile -Command \\"Start-Process -FilePath %s -ArgumentList %s\\""; }\n' "'powershell.exe'" "'-File','C:\\w.ps1'" > "$D/mgmt/harness/detachok.sh"
 expect_silent L27-detached-guest-launch-uses-start "$D" "Start-Process, which inherits no handles"
 
+# ------------------------------------------------------- L31 one writer for qemu-extra-args
+# The rule shipped with NO leg here, which makes it exactly the decoration the whole file exists to
+# catch - it reported clean the day it was written and nobody had seen it go red. The value is read
+# at DOMAIN CREATION only: campaign 40134888669 rewrote it against a RUNNING win10-acc and the log
+# volume was invisible to the guest eight seconds later; campaign 1024-2333's first judged boot then
+# never created a domain at all, because the recorded value still named an unassigned loop.
+D="$TMP/l31"; mk "$D"
+printf '#!/bin/bash\nqvm-features "$VM" qemu-extra-args -- %s\n' "'-device nec-usb-xhci,id=b'" > "$D/mgmt/harness/bad.sh"
+expect_fires L31-qemu-args-not-one-writer "$D" "a harness composing qemu-extra-args itself"
+# THE SCOPE, SEEN TO MATTER. mgmt/*.sh was outside the first cut and the rule SAID so; Jev then
+# scored `a-caller-writing-qemu-extra-args-directly` 0.99 as the biggest remaining way to boot a
+# guest with the wrong device set - that gap by name. A provisioning script is covered now.
+D="$TMP/l31mgmt"; mk "$D"; mkdir -p "$D/mgmt"
+printf '#!/bin/bash\nqvm-features "$VM" qemu-extra-args -- %s\n' "'-device nec-usb-xhci,id=b'" > "$D/mgmt/reprovision-usb.sh"
+expect_fires L31-qemu-args-not-one-writer "$D" "a PROVISIONING script in mgmt/ composing the args - outside the rule's first scope"
+# THE OTHER ARGUMENT ORDER - the blanket wipe. `--unset` BEFORE the feature name walked past the
+# first regex in three teardown paths (seal-qwt-golden.sh, rebuild-rig.sh, provision_disarm), and an
+# unset deletes the controller the evidence volume rides on, not just our drive. Jev scored exactly
+# this route a-blanket-unset-deleting-the-log-volume-device 0.94.
+D="$TMP/l31unset"; mk "$D"
+printf '#!/bin/bash\nqvm-features --unset "$VM" qemu-extra-args\n' > "$D/mgmt/harness/wipe.sh"
+expect_fires L31-qemu-args-not-one-writer "$D" "a blanket --unset of qemu-extra-args, the argument order the first regex missed"
+# A READ is not a write and must stay silent - matrix.sh and logvol-chain-check.sh both read it.
+D="$TMP/l31read"; mk "$D"
+printf '#!/bin/bash\ncur=$(qvm-features "$VM" qemu-extra-args 2>/dev/null || true)\n' > "$D/mgmt/harness/read.sh"
+expect_silent L31-qemu-args-not-one-writer "$D" "READING qemu-extra-args, which every caller that composes has to do"
+# The phase owner is the sanctioned route and must not fire.
+D="$TMP/l31ok"; mk "$D"
+printf '#!/bin/bash\n. mgmt/harness/logvol-lib.sh\nlogvol_devices_apply "$VM" graded || exit 1\n' > "$D/mgmt/harness/ok.sh"
+expect_silent L31-qemu-args-not-one-writer "$D" "logvol_devices_apply, the one writer's phase API"
+# A COMMENT and an OPERATOR INSTRUCTION are not writes - mgmt/build-answer-stick.sh echoes this very
+# command for a human to run, and a lint that fired there would be turned off rather than obeyed.
+D="$TMP/l31txt"; mk "$D"
+printf '#!/bin/bash\n# qvm-features <vm> qemu-extra-args -- %s\necho "  qvm-features <vm> qemu-extra-args -- %s"\n' "'-device x'" "'-device x'" > "$D/mgmt/harness/txt.sh"
+expect_silent L31-qemu-args-not-one-writer "$D" "the command named in a comment and echoed for an operator"
+# And the one writer itself is exempt: its qvm-features call IS the write.
+D="$TMP/l31lib"; mk "$D"
+printf '#!/bin/bash\nqvm-features "$vm" qemu-extra-args -- "$val"\n' > "$D/mgmt/harness/logvol-lib.sh"
+expect_silent L31-qemu-args-not-one-writer "$D" "logvol-lib.sh, which is the one writer"
+
 echo "  ---- $pass passed, $fail failed"
 exit $(( fail > 0 ? 1 : 0 ))

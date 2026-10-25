@@ -60,13 +60,17 @@ set -u
 
 # The emulated USB stick a PRISTINE Windows can read: it has no PV drivers, which is the entire
 # reason an emulated medium exists here. xvdi = the answer stick; xvdj = the writable DIAG volume.
-provision_stick_args() { # [stick-dev] [diag-dev] -> the qemu-extra-args string
-    local s="${1:-xvdi}" d="${2:-}"
-    local a="-drive file=/dev/$s,format=host_device,if=none,readonly=on,id=ansdrv"
-    a="$a -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99"
-    [ -n "$d" ] && a="$a -drive file=/dev/$d,format=host_device,if=none,id=diagdrv -device usb-storage,bus=ansusb.0,drive=diagdrv,removable=on"
-    printf '%s' "$a"
-}
+# THE DEVICE SET IS NOT DECLARED HERE. `provision_stick_args()` used to compose it in this file -
+# answer stick, controller, optional DIAG volume - with NOT ONE CALLER anywhere in the repo, while
+# four other places composed the same set by hand. A dead second declaration is the worst kind: it
+# reads as the authority and drifts silently (its ids were ansusb/diagdrv against the live
+# logusb/logdrv, and it had no cache=writethrough). It is now one declaration with named phases:
+#
+#     . mgmt/harness/logvol-lib.sh
+#     logvol_devices_apply <vm> priming|graded|answer|none    # at a domain boundary, never live
+#
+# priming = stick + evidence volume, graded = evidence volume only (what a judged boot gets),
+# answer = stick only, none = unset. lint-harness.py L31 refuses any other writer.
 
 provision_assign_stick() { # <vm> <holder> <loopN> [frontend-dev]
     local vm="$1" holder="$2" loop="$3" fe="${4:-xvdi}"
@@ -114,8 +118,10 @@ provision_disarm() { # <vm> - no stale claim survives a run
 import qubesadmin
 vm=qubesadmin.Qubes().domains['$vm']
 for a in list(vm.devices['block'].get_assigned_devices()): vm.devices['block'].unassign(a)" 2>/dev/null
-    qvm-features --unset "$vm" qemu-extra-args 2>/dev/null
-    echo "provision: $vm disarmed (assignments cleared, qemu-extra-args unset)"
+    declare -F logvol_devices_apply >/dev/null 2>&1 \
+        || . "$(dirname "${BASH_SOURCE[0]}")/logvol-lib.sh"
+    logvol_devices_apply "$vm" none 2>/dev/null
+    echo "provision: $vm disarmed (assignments cleared, device set set to the none phase)"
 }
 
 # --print: the recipe for a human, straight from this file's own header, so the two can never drift.

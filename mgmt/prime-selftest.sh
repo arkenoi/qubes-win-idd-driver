@@ -57,7 +57,9 @@ EOF
 log "cloned"
 
 log "attaching the job stick as an emulated USB device"
-qvm-features "$CHURN" qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99' || exit 1
+# From the device set's one owner, not a fourth copy of the string (mgmt/harness/logvol-lib.sh).
+. "$(dirname "${BASH_SOURCE[0]}")/harness/logvol-lib.sh"
+logvol_devices_apply "$CHURN" answer || exit 1
 qvm-device block assign --required -o frontend-dev=xvdi -o devtype=disk "$CHURN" "$HOLDER:$STICKLOOP" || exit 1
 
 SHOTDIR="$HERE/evidence/prime-selftest-$CHURN-$(date -u +%Y%m%d-%H%M%S)"; mkdir -p "$SHOTDIR"

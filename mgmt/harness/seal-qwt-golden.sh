@@ -47,7 +47,7 @@ else
   log "WARNING: no loop backing answer-usb.img found - primer stick assignment not cleared for $GOLD"
 fi
 qvm-device block detach "$GOLD" "win-idd-mgmt:${stickloop:-loop0}" >/dev/null 2>&1 || true   # best-effort
-qvm-features --unset "$GOLD" qemu-extra-args 2>/dev/null || true
+. "$(dirname "${BASH_SOURCE[0]}")/logvol-lib.sh"   # the device set's one owner
 # make sure it is Halted (prime leaves it running or halted depending on the job)
 st=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$GOLD" '$1==v{print $2}')
 # NEVER kill here: whatever state a kill leaves behind gets SEALED into the golden and is
@@ -70,6 +70,15 @@ if [ "$_st2" != Halted ]; then
   exit 1
 fi
 # SEAL-HALTED-B
+
+# A GOLDEN IS SEALED WITH NO DEVICE SET AT ALL - that is the `none` phase, from the one owner, and
+# it belongs HERE: below the Halted proof above, not above it. The value is read at DOMAIN CREATION,
+# so the one writer refuses a live domain - and this script's own predecessor line ran before the
+# shutdown, where that refusal would have left the provisioning device set sealed INTO the golden
+# and inherited by every clone taken from it. A failure to clear it is fatal for the same reason.
+logvol_devices_apply "$GOLD" none \
+  || { echo "FAIL: could not clear $GOLD's device set - refusing to seal a golden that carries a"
+       echo "      provisioning rig; every clone taken from it would inherit one."; exit 1; }
 
 # SEAL it as a proper golden (mgmt/goldens/<vm>.json) - prime-run REQUIRES `golden.sh verify` to
 # pass on its base, a fixture record is not enough.

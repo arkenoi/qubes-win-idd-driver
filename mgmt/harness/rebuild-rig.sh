@@ -43,6 +43,7 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 2
 . mgmt/harness/vmlock.sh          # vm_lock also asserts sole-guest
 . mgmt/harness/serial-rig.sh
 . mgmt/harness/shutdown-lib.sh    # qwt_shutdown: a bounded stop that reports what it did
+. "$(dirname "${BASH_SOURCE[0]}")/logvol-lib.sh"   # the device set's one owner
 
 RUN_ID="rebuild-$(date -u +%Y%m%d-%H%M%S)"
 OUT="$PWD/evidence/$RUN_ID"; mkdir -p "$OUT"
@@ -268,8 +269,13 @@ build_fixture(){
     # prime-run says so itself: the stick stays --required-assigned and qemu-extra-args stays set.
     # A cell subject cloned from a fixture that still carries them inherits a provisioning rig.
     qvm-device block unassign "$vm" win-idd-mgmt:"$(ensure_loop /home/user/win-iso/answer-usb.img rw)" >>"$LOG" 2>&1
-    qvm-features --unset "$vm" qemu-extra-args >>"$LOG" 2>&1
     qwt_shutdown "$vm" 600
+    # THE `none` PHASE, AND AFTER THE SHUTDOWN. prime-run may leave this guest running and the one
+    # writer refuses a live domain (the value is read at DOMAIN CREATION), so clearing it above the
+    # shutdown - where the blanket unset used to sit - would be refused and the fixture would be
+    # cloned carrying a provisioning rig, which is the thing these two lines exist to prevent.
+    logvol_devices_apply "$vm" none >>"$LOG" 2>&1 \
+        || fail "iqi:$vm" "could not clear the device set - a fixture must not carry a provisioning rig" "$vm"
     assert_fixture "$vm" || fail "iqi:$vm" "final condition not met" "$vm"
     record "iqi:$vm" ok "base=$base"
     say "$vm built and halted"

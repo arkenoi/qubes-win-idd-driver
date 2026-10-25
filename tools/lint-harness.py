@@ -585,13 +585,23 @@ def l31_qemu_args_one_writer() -> None:
     So: route every write through `logvol_qemu_write` (mgmt/harness/logvol-lib.sh), which refuses
     unless the domain is Halted or absent, and carries LOGVOL_QEMU_WRITE_LIVE=1 as the single
     deliberate, logged exemption. A mention in a comment or an echoed instruction is not a call."""
-    rx = re.compile(r"qvm-features\b[^|;&]*\bqemu-extra-args\b[^|;&]*(--unset|--\s)")
-    # SCOPE, and the gap is stated rather than hidden: HARNESS is mgmt/harness/*.sh + tools/*.sh,
-    # which is the campaign path - the one that aborted. mgmt/prime-selftest.sh and
-    # mgmt/reprovision-usb.sh still write these args directly; both are heavy provisioning paths
-    # outside a campaign (reprovision needs a Jev call to run at all), so they are NOT covered here
-    # yet and routing them through the one writer is owed work, not a thing this rule pretends about.
-    for f in HARNESS:
+    # BOTH ARGUMENT ORDERS. The first regex required the `--`/`--unset` to come AFTER the feature
+    # name, so `qvm-features --unset <vm> qemu-extra-args` - the blanket wipe, which deletes the
+    # controller the evidence volume rides on - sailed past it in three teardown paths. Jev, asked
+    # where a guest could still get the wrong device set, answered
+    # a-blanket-unset-deleting-the-log-volume-device at 0.94. A read (`qvm-features <vm>
+    # qemu-extra-args` with no value) is NOT a write and must stay silent.
+    rx = re.compile(r"qvm-features\b(?=[^|;&]*\bqemu-extra-args\b)[^|;&]*(--unset\b|--\s)")
+    # SCOPE: HARNESS (mgmt/harness/*.sh + tools/*.sh) PLUS mgmt/*.sh. The first cut covered only
+    # HARNESS and said so - "mgmt/prime-selftest.sh and mgmt/reprovision-usb.sh still write these
+    # args directly ... routing them through the one writer is owed work". Jev was then asked where
+    # a guest could still be booted with the wrong device set and answered
+    # `a-caller-writing-qemu-extra-args-directly` at 0.99, which is that gap by name. Those two are
+    # now routed through logvol_devices_apply and the scope includes them, so the rule covers every
+    # live writer rather than documenting a hole. The directory is explicit, not HARNESS widened:
+    # mgmt/*.sh holds provisioning scripts the other 30 rules were never written against.
+    scope = list(HARNESS) + [p for p in sorted((ROOT / "mgmt").glob("*.sh"))]
+    for f in scope:
         if f.name == "logvol-lib.sh":
             continue                      # the one writer; its own qvm-features call is the write
         for i, ln in enumerate(f.read_text(errors="replace").splitlines(), 1):
