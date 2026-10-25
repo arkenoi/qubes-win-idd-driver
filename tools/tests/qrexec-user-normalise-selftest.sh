@@ -105,8 +105,12 @@ guarded = "requested &&" in nu and '_wcsicmp(requested, L"SYSTEM")' in nu and '_
     and "return NULL;" in nu and "return requested;" in nu
 print(("OK" if guarded else "BAD") + " case_insensitive_null_guarded: the match is _wcsicmp on both names behind a NULL guard, NULL for the own token, the name itself otherwise")
 
-logged = 'LogInfo("user \'%s\' is' in nu and "token" in nu
-print(("OK" if logged else "BAD") + " logs_requested_and_consequence: the normaliser's INFO line names the requested account and the token used instead")
+# EITHER LEVEL. This read the literal LogInfo( and went red when the product demoted the line
+# to LogDebug on 2026-10-20 for log volume (qrexec-agent.c:858-862, the owner's reason in the
+# comment). The level is the owner's call; the property is that the line names the account that
+# was requested AND the consequence, so the predicate asks for that and not for a level.
+logged = any(('%s("user \'%%s\' is' % w) in nu for w in ("LogDebug", "LogInfo")) and "token" in nu
+print(("OK" if logged else "BAD") + " logs_requested_and_consequence: the normaliser logs a line naming the requested account and the token used instead (either level)")
 
 # every StartChild call expression in the file (not the definition, not the comment that names it)
 calls = [i + 1 for i, l in enumerate(src.splitlines()) if re.match(r'^\s*(status = )?StartChild\(', l)]

@@ -444,6 +444,95 @@ def l8_findings_current_state() -> None:
                     "a dated section was appended to the INDEX: it belongs in findings/<topic>.md")
 
 
+# --------------------------------------------------------------------------- L32
+# A TEST FILE MUST HAVE A PRODUCER, OR SAY WHY IT HAS NONE. Measured 2026-10-25: 73 test files had
+# no producer that runs them, and the ones anyone bothered to run were red - clock-sync had been
+# failing since the puller swapped a wall-clock deadline for a Stopwatch, qrexec-user-normalise
+# since a log line was demoted from LogInfo to LogDebug, and ledger-invariant-audit.py, which
+# polices the pixel-ledger invariant, was red while that invariant failed a release campaign. An
+# unrun suite is not coverage; it is a file that looks like coverage.
+#
+# SCOPE: every *.sh and *.py directly under tools/tests, deliberately NOT the *-selftest.sh
+# spelling. The census that first counted these missed five files exactly because it globbed a
+# naming convention, and a check scoped to a convention cannot see the file that breaks it.
+def l32_every_test_file_has_a_producer() -> None:
+    tdir = ROOT / "tools" / "tests"
+    if not tdir.is_dir():
+        return
+    listed = tdir / "offline-suites.txt"
+    registered: set[str] = set()
+    if listed.exists():
+        registered = {ln.strip() for ln in listed.read_text(errors="replace").splitlines()
+                      if ln.strip() and not ln.lstrip().startswith("#")}
+    # The declaration file: "<name>   <reason>". The reason is REQUIRED - a bare name would make
+    # this an allowlist, and an allowlist with no reasons is how an exclusion rots.
+    decl = tdir / "not-in-the-gate.txt"
+    declared: dict[str, str] = {}
+    if decl.exists():
+        for ln in decl.read_text(errors="replace").splitlines():
+            s = ln.strip()
+            if not s or s.startswith("#"):
+                continue
+            parts = s.split(None, 1)
+            name = parts[0]
+            reason = (parts[1].strip() if len(parts) > 1 else "")
+            declared[name] = reason
+            if not reason:
+                finding("L32-producer-missing", f"{decl.name}: {name}",
+                        "declared out of the gate with NO REASON - an exclusion with no reason is "
+                        "how an excluded suite rots; give the one line or register the file")
+    # A declaration that names nothing cannot be audited, so it is a finding too.
+    for name in sorted(declared):
+        if not (tdir / name).exists():
+            finding("L32-producer-missing", f"{decl.name}: {name}",
+                    "declared out of the gate but no such file - the declaration has rotted; "
+                    "remove the line")
+    # A PRODUCER IS SOMETHING THAT RUNS. A CI workflow, a gate or another script naming the file
+    # is a producer; a mention in docs/ or in a .txt is NOT - prose runs nothing. Measured
+    # 2026-10-25: 7 files were counted as covered by an earlier census of mine purely because a
+    # document mentioned them, which is the same error as scoping the census to one filename
+    # pattern - both let a file that nothing runs look like coverage.
+    producers: list[Path] = []
+    for pat in ("*.yml", "*.yaml"):
+        producers += sorted((ROOT / ".github" / "workflows").glob(pat))
+    # RECURSIVE under tools/, because the git hooks in tools/hooks/ run suites too and a
+    # non-recursive glob flagged 8 files they do run. tools/tests itself is NOT a producer: a
+    # sibling suite naming another does not run it, and if one genuinely does, that is a
+    # one-line reason in not-in-the-gate.txt, where the chain is visible.
+    for pat in ("*.sh", "*.py"):
+        producers += [q for q in sorted((ROOT / "tools").rglob(pat)) if "tests" not in q.parts]
+    producers += sorted((ROOT / "mgmt").rglob("*.sh"))
+    producers += sorted((ROOT / ".githooks").rglob("*")) if (ROOT / ".githooks").is_dir() else []
+    # WHOLE-LINE COMMENTS ARE DROPPED BEFORE THE MATCH, and the reason is the same one that makes
+    # a doc not a producer: prose runs nothing, and a comment inside tools/foo.sh is prose. Keyed
+    # on the first non-space character only - cutting from any `#` would truncate real calls
+    # (${v#prefix}, a colour code, a URL fragment) and lose the producer instead of the mention.
+    # A trailing-comment mention survives this; that is the deliberate residue, and it is far
+    # rarer than the commented-out call or the "see also x-selftest.sh" line this removes.
+    blob = ""
+    for q in producers:
+        try:
+            blob += "\n".join(ln for ln in q.read_text(errors="replace").splitlines()
+                               if not ln.lstrip().startswith("#")) + "\n"
+        except OSError:
+            pass
+    # WORD-BOUNDARIED, not a substring: `foo.sh` must not be found inside `xfoo.sh` or
+    # `foo.sh.bak`. A census that over-matches reads as coverage, and every error in this rule's
+    # history has been the flattering one.
+    def _named(name: str) -> bool:
+        return re.search(r"(?<![\w.-])" + re.escape(name) + r"(?![\w-])", blob) is not None
+
+    for p in sorted(list(tdir.glob("*.sh")) + list(tdir.glob("*.py"))):
+        if p.name in registered or p.name in declared or _named(p.name):
+            continue
+        finding("L32-producer-missing", f"tools/tests/{p.name}",
+                "nothing runs this file: no CI workflow, gate or script names it, it is not in "
+                "offline-suites.txt, and it is not declared in not-in-the-gate.txt with a reason. "
+                "An unrun test rots red unnoticed - that is how a backlog of them accumulated here "
+                "(SUITESNOBODYRUNS). The live count is whatever this rule prints; a figure copied "
+                "into prose is the thing that rots")
+
+
 NOT_LINTED = [
     ("findings rule 4", "a commit appending history must also touch CURRENT STATE - needs the "
                         "git diff, so it lives in the pre-commit hook, not here"),
@@ -1816,6 +1905,7 @@ def main() -> int:
     l26_no_hardware_clock_convention_is_written()
     l27_detached_guest_launch_must_not_use_start()
     l29_log_device_failure_must_be_hard()
+    l32_every_test_file_has_a_producer()
     if a.ledger:
         l7_orphan_ledger_checks(a.ledger)
 

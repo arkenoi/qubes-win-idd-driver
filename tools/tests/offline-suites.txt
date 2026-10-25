@@ -14,9 +14,16 @@
 #       qube's grep (ugrep); a GNU grep returns 1, so the suite measures the local implementation
 #       rather than the invariant. Worth resolving in the suite, not by excluding it from the gate
 #   bridge-exit-reason-selftest.sh    not_a_death: every exit 0 reported as 'a clean exit nobody asked for'
+#       RESOLVED 2026-10-25 and now LISTED: the fix it asserted is in the source and it is green (18 checks).
 #   broker-down-anchor-selftest.sh    held_without_a_shell: the deadline runs before the broker can launch
+#       RESOLVED 2026-10-25 and now LISTED: green (9 checks). It was red at the release sha only.
 #   log-policy-selftest.sh            2 routine per-window LogInfo lines (main.c BROKERLATEREG, BROKERHOLD)
+#       RESOLVED 2026-10-25 and now LISTED: those two lines are DEBUG now and it is green (32 checks).
 #   one-log-per-module / pipe-client-null / pipe-connect-order / pipe-eof
+#       ALL FOUR RESOLVED 2026-10-25 and now LISTED. The reason below EXPIRED: test.yml now has a
+#       step "Vendored read-only upstream (pinned) - the suites that read it are not skippable"
+#       which clones windows-utils at a pinned sha and asserts src/log.c and include/log.h are
+#       there, because the estate was red in CI on every run for want of it. Green: 22/24/42/9.
 #   pipefail-grepq
 #   stock-ab
 #   vmexec-channel-selftest.sh      needs pwsh: it round-trips the service-argument encoder
@@ -53,113 +60,147 @@
 # this qube's pwsh path. "Measured" has to mean measured where it runs - the dev qube has a vendored
 # was validated on the dev qube and went red on its first CI run: 36 green, 7 red. Six of those
 # when run in the same command as logvol-lib-selftest.sh and "12 passed, 0 failed" alone, twice -
+accept-attempt-boundary-selftest.sh
+accept-cancel-selftest.sh
+accept-clean-wu-selftest.sh
+accept-logvol-smoke-selftest.sh
 acceptance-record-selftest.sh
+admin-target-gate-selftest.sh
+answer-labconfig-selftest.sh
 ask-operator-night-selftest.sh
+assert-payload-floor-selftest.sh
+attributor-unique-selftest.sh
+breach-evidence-selftest.sh
+bridge-exit-reason-selftest.sh
+broker-down-anchor-selftest.sh
+brokerctl-selftest.sh
+build-attribution-selftest.sh
+campaign-full-selftest.sh
 campaign-preflight-selftest.sh
 campaign-state-selftest.sh
 cell-coverage-selftest.sh
 ci-state-selftest.sh
+claim-receipt-gate-selftest.sh
+clock-sync-selftest.sh
 cold-caller-family-selftest.sh
+collector-logdir-default-selftest.sh
 committed-procedure-gate-selftest.sh
 console-window-check-selftest.sh
 coverage-receipt-selftest.sh
+cpu-raw-reader-selftest.sh
+cputime-failopen-selftest.sh
+ctl-stop-rc-selftest.sh
 death-reporter-selftest.sh
+death-reporter-xpath-selftest.py
+deathevent-selftest.sh
+decode-dedup-selftest.sh
 desktop-stuck-lock-selftest.sh
 dirty-union-selftest.sh
+discarded-scriptblock-selftest.sh
+dom0-callers-count-selftest.sh
 dom0-callers-selftest.sh
+dom0-sends-selftest.sh
+env-assert-selftest.sh
 exit-decision-coverage-selftest.sh
+failproof-misc.sh
+firstboot-effects-selftest.sh
 gate-candidate-selftest.sh
 gate-producer-selftest.sh
+gate-remainder-dry-selftest.sh
 gate-scope-selftest.sh
 grade-noise-selftest.sh
 grade-receipt-selftest.sh
 grader-census-selftest.sh
 harness-clock-selftest.sh
+init-record-consumers-selftest.sh
+jev-first-gate-selftest.sh
+killpattern-gate-selftest.sh
 launch-determination-selftest.sh
+lifecycle-selftest.sh
+log-policy-selftest.sh
 log-sweep-selftest.sh
+loginit-banner-debug-selftest.sh
 logsweep-rotation-placeholder-selftest.sh
 logvol-guesttext-selftest.sh
 logvol-level-reaches-gate-selftest.sh
+logvol-modulekey-selftest.sh
+logvol-smoke-selftest.sh
 loudness-channel-selftest.sh
 matrix-appvmcell-grade-selftest.sh
 matrix-appvmwindow-grade-selftest.sh
+matrix-attempt-boundary-selftest.sh
 matrix-coldcaller-grade-selftest.sh
 matrix-dom0callers-grade-selftest.sh
 matrix-entrycells-grade-selftest.sh
 matrix-logsweep-grade-selftest.sh
+matrix-pool-floor-selftest.sh
 matrix-runinstall-grade-selftest.sh
 matrix-runmarker-selftest.sh
 matrix-sweep-tally-selftest.sh
 matrix-verifyinstalled-grade-selftest.sh
 mode-wait-attribution-selftest.sh
 notifbridge-pid-selftest.sh
+offline-rigshim-selftest.sh
 offline-runner-selftest.sh
+one-log-per-module-selftest.sh
+peek-abi-assert-selftest.sh
+pipe-client-null-selftest.sh
+pipe-connect-order-selftest.sh
+pipe-eof-selftest.sh
+probe-anchor-selftest.sh
+pwcarry-selftest.sh
+pwclass-truth-table.sh
 qcon-session-selftest.sh
+qdbwait-bound-selftest.sh
+qrexec-gap-witness-selftest.sh
+qrexec-user-normalise-selftest.sh
+qtest-halted-guard-selftest.sh
 qtest-push-selftest.sh
 relay-judge-timenorm-selftest.sh
+relay-vouch-selftest.sh
 release-cut-gate-selftest.sh
+reporter-env-gate-selftest.sh
 resolve-rip-selftest.sh
 result-flags-selftest.sh
 retired-names-gate-selftest.sh
+rig-cleanup-selftest.sh
+rpm-spec-selftest.sh
 rtc-utc-selftest.sh
+runlib-qrexec-grace-selftest.sh
+seal-halted-selftest.sh
+serial-rig-selftest.sh
+shutdown-reask-selftest.sh
+specimen-boot-gate-selftest.sh
+specimen-mark-reachable-selftest.sh
+specimen-not-a-leftover-selftest.sh
+start-dismiss-grade-selftest.sh
+stick-scope-restore-selftest.sh
+supervision-e2e-selftest.sh
+svc-exitcode-selftest.sh
 sweep-gate-selftest.sh
+sweep-life-selftest.sh
+sweep-noagent-selftest.sh
+sweep-window-selftest.sh
 toastactions-selftest.sh
 toasthold-grade-clock-selftest.sh
+toasthold-selftest.sh
+ttfw-ab-selftest.sh
 uac-prompt-reachable-selftest.sh
+upd-task-prestop-selftest.sh
+updater-component-selftest.sh
 verdict-jev-selftest.sh
 verdict-lib-selftest.sh
 wait-bound-selftest.sh
+wedge-gates-selftest.sh
+wedge-verdict-selftest.sh
+wgcbroker-layout-selftest.sh
 window-measure-selftest.sh
+wrapper-exit-emit-selftest.sh
+wrapper-exit-reason-selftest.sh
 wrapper-one-line-selftest.sh
+wrong-interpreter-gate-selftest.sh
+wu-judge-levelprefix-selftest.sh
 wu-judge-timenorm-selftest.sh
 wu-liveness-selftest.sh
-xen-core-small-selftest.sh
-logvol-modulekey-selftest.sh
-wedge-verdict-selftest.sh
-loginit-banner-debug-selftest.sh
 wu-oscillation-verdict-selftest.sh
-probe-anchor-selftest.sh
-sweep-noagent-selftest.sh
-breach-evidence-selftest.sh
-specimen-mark-reachable-selftest.sh
-qtest-halted-guard-selftest.sh
-cpu-raw-reader-selftest.sh
-shutdown-reask-selftest.sh
-specimen-not-a-leftover-selftest.sh
-collector-logdir-default-selftest.sh
-gate-remainder-dry-selftest.sh
-sweep-life-selftest.sh
-assert-payload-floor-selftest.sh
-accept-clean-wu-selftest.sh
-dom0-callers-count-selftest.sh
-ctl-stop-rc-selftest.sh
-accept-cancel-selftest.sh
-seal-halted-selftest.sh
-answer-labconfig-selftest.sh
-firstboot-effects-selftest.sh
-offline-rigshim-selftest.sh
-wrapper-exit-reason-selftest.sh
-wrapper-exit-emit-selftest.sh
-matrix-attempt-boundary-selftest.sh
-accept-attempt-boundary-selftest.sh
-stick-scope-restore-selftest.sh
-upd-task-prestop-selftest.sh
-relay-vouch-selftest.sh
-discarded-scriptblock-selftest.sh
-updater-component-selftest.sh
-qrexec-gap-witness-selftest.sh
-campaign-full-selftest.sh
-wedge-gates-selftest.sh
-deathevent-selftest.sh
-ttfw-ab-selftest.sh
-init-record-consumers-selftest.sh
-build-attribution-selftest.sh
-decode-dedup-selftest.sh
-attributor-unique-selftest.sh
-wrong-interpreter-gate-selftest.sh
-qdbwait-bound-selftest.sh
-rig-cleanup-selftest.sh
-logvol-smoke-selftest.sh
-accept-logvol-smoke-selftest.sh
-sweep-window-selftest.sh
-clock-sync-selftest.sh
+xen-core-small-selftest.sh

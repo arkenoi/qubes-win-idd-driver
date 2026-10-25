@@ -54,8 +54,23 @@ static int g_createCalls;
 static HANDLE g_fakeWrapper = (HANDLE)0x77;
 static int g_registered, g_regDomain, g_regPort;
 static HANDLE g_regHandle;
-static WCHAR g_lastInfo[1024];          /* the last INFO line, formatted */
-static int g_infoCalls, g_warnCalls, g_errCalls;
+static WCHAR g_lastLine[1024];          /* the last line the normaliser wrote, formatted */
+/* SCOPED TO THE SITE, AND LEVEL-AGNOSTIC. Two predicates were wrong here before this one, both
+ * because they measured the LEVEL:
+ *   - LOG_LEVEL_INFO only: when the product demoted this line to LogDebug on 2026-10-20 (log
+ *     volume, the owner's call - the reason is in the comment at the site) four checks went red
+ *     on a mapping that was entirely correct, and nobody saw it because this suite had no producer;
+ *   - INFO or DEBUG: StartChild logs its OWN LogDebug on the same path, so a pseudo-account case
+ *     that asserts one line saw two, and a real-account case that asserts none saw one. Measured,
+ *     not reasoned: 12 passed, 3 failed.
+ * What this suite owns is that NormalizeUserName writes exactly ONE line naming the requested
+ * account and the consequence. That is a statement about a SITE, so the capture keys on
+ * functionName and ignores the level entirely - which keeps it correct at whatever level the
+ * owner picks next. g_warnCalls/g_errCalls stay level-scoped and whole-path on purpose: "nothing
+ * anywhere reached WARNING or ERROR" is a different assertion, and there the level IS the
+ * property - an expected mapping is not an anomaly. */
+#define NORMALISER_FN "NormalizeUserName"
+static int g_lineCalls, g_warnCalls, g_errCalls;
 
 DWORD CreateNormalProcessAsCurrentUser(IN WCHAR *commandLine, OUT HANDLE *process)
 {
@@ -72,12 +87,12 @@ static void register_vchan_connection(HANDLE handle, int domain, int port)
 void _LogFormat(IN int level, IN BOOL raw, IN const char *functionName, IN const WCHAR *format, ...)
 {
     va_list ap;
-    (void)raw; (void)functionName;
-    if (level == LOG_LEVEL_INFO)
+    (void)raw; (void)level;
+    if (functionName && !strcmp(functionName, NORMALISER_FN))
     {
-        g_infoCalls++;
+        g_lineCalls++;
         va_start(ap, format);
-        StringCchVPrintfW(g_lastInfo, RTL_NUMBER_OF(g_lastInfo), format, ap);
+        StringCchVPrintfW(g_lastLine, RTL_NUMBER_OF(g_lastLine), format, ap);
         va_end(ap);
     }
     if (level == LOG_LEVEL_WARNING) g_warnCalls++;
@@ -97,7 +112,7 @@ static void check(const char *name, int ok)
 static void reset(void)
 {
     g_command[0] = 0; g_createCalls = 0; g_registered = 0; g_regDomain = g_regPort = 0; g_regHandle = NULL;
-    g_lastInfo[0] = 0; g_infoCalls = g_warnCalls = g_errCalls = 0;
+    g_lastLine[0] = 0; g_lineCalls = g_warnCalls = g_errCalls = 0;
 }
 /* qrexec-wrapper.exe <domain>|<port>|<user>|<flags>|<command_line>: the five fields GetArgument would return */
 static WCHAR g_field[5][1024];
@@ -141,22 +156,22 @@ int main(void)
     /* 1. THE DEFECT: the relay's request, exactly as win10-acc logged it (flags 7 = server|piped|interactive) */
     rc = run(L"SYSTEM", TRUE, TRUE, TRUE);
     check("pseudo: SYSTEM -> the wrapper's own-token spelling (null)", user_is(L"(null)"));
-    check("pseudo: SYSTEM: one INFO line names the account that was requested", g_infoCalls == 1 && wcsstr(g_lastInfo, L"'SYSTEM'") != NULL);
-    check("pseudo: SYSTEM: the INFO line says the service's own token is used instead", wcsstr(g_lastInfo, L"own account") != NULL && wcsstr(g_lastInfo, L"token") != NULL);
-    printf("     wrapper line: %ls\n     info line:    %ls\n", g_command, g_lastInfo[0] ? g_lastInfo : L"(none)");
+    check("pseudo: SYSTEM: one log line names the account that was requested", g_lineCalls == 1 && wcsstr(g_lastLine, L"'SYSTEM'") != NULL);
+    check("pseudo: SYSTEM: that line says the service's own token is used instead", wcsstr(g_lastLine, L"own account") != NULL && wcsstr(g_lastLine, L"token") != NULL);
+    printf("     wrapper line: %ls\n     log line:     %ls\n", g_command, g_lastLine[0] ? g_lastLine : L"(none)");
     check("SYSTEM: the rest of the wrapper line is untouched (domain, port, flags 7, command)", frame_intact(L"7"));
     check("SYSTEM: the wrapper was started once and registered on the data vchan", rc == ERROR_SUCCESS && g_createCalls == 1 && g_registered == 1 && g_regHandle == g_fakeWrapper && g_regDomain == 0 && g_regPort == 514);
     check("SYSTEM: an expected mapping is not an anomaly - nothing at WARNING or ERROR", g_warnCalls == 0 && g_errCalls == 0);
 
     /* 2. the account name is case-insensitive on Windows, so a dom0 service definition saying "system" names the same account */
     run(L"system", TRUE, TRUE, TRUE);
-    check("pseudo: system (lower case) -> (null)", user_is(L"(null)") && g_infoCalls == 1);
+    check("pseudo: system (lower case) -> (null)", user_is(L"(null)") && g_lineCalls == 1);
     run(L"System", TRUE, TRUE, TRUE);
     check("pseudo: System (mixed case) -> (null)", user_is(L"(null)"));
 
     /* 3. dom0's Linux-side name for the same account */
     run(L"root", FALSE, TRUE, TRUE);
-    check("pseudo: root -> (null)", user_is(L"(null)") && g_infoCalls == 1 && wcsstr(g_lastInfo, L"'root'") != NULL);
+    check("pseudo: root -> (null)", user_is(L"(null)") && g_lineCalls == 1 && wcsstr(g_lastLine, L"'root'") != NULL);
     run(L"ROOT", FALSE, TRUE, TRUE);
     check("pseudo: ROOT -> (null)", user_is(L"(null)"));
 
@@ -164,7 +179,7 @@ int main(void)
           so qrexec-wrapper's LogonUser / logged-on-token match and its degrade-to-SYSTEM warning stay reachable */
     run(L"user", TRUE, TRUE, TRUE);
     check("real: user -> user, verbatim", user_is(L"user") && frame_intact(L"7"));
-    check("real: user: no INFO line, nothing at WARNING or ERROR", g_infoCalls == 0 && g_warnCalls == 0 && g_errCalls == 0);
+    check("real: user: no log line, nothing at WARNING or ERROR", g_lineCalls == 0 && g_warnCalls == 0 && g_errCalls == 0);
     run(L"Max Mustermann", TRUE, TRUE, TRUE);
     check("real: a name with a space -> verbatim", user_is(L"Max Mustermann"));
     run(L"Administrator", FALSE, FALSE, FALSE);
@@ -172,26 +187,26 @@ int main(void)
 
     /* 5. only the whole name: a prefix or a superstring is some other account */
     run(L"SYSTEMX", TRUE, TRUE, TRUE);
-    check("real: SYSTEMX -> verbatim (no prefix match)", user_is(L"SYSTEMX") && g_infoCalls == 0);
+    check("real: SYSTEMX -> verbatim (no prefix match)", user_is(L"SYSTEMX") && g_lineCalls == 0);
     run(L"rootkit", TRUE, TRUE, TRUE);
-    check("real: rootkit -> verbatim (no prefix match)", user_is(L"rootkit") && g_infoCalls == 0);
+    check("real: rootkit -> verbatim (no prefix match)", user_is(L"rootkit") && g_lineCalls == 0);
     run(L" SYSTEM", TRUE, TRUE, TRUE);
-    check("real: ' SYSTEM' with a leading space -> verbatim (no trimming invented)", user_is(L" SYSTEM") && g_infoCalls == 0);
+    check("real: ' SYSTEM' with a leading space -> verbatim (no trimming invented)", user_is(L" SYSTEM") && g_lineCalls == 0);
 
     /* 6. AN EMPTY NAME IS NOT MADE TO MEAN SYSTEM (Jev empty_field_is_safe 0.17): it goes through as the empty
           field it was; GetArgument returns "" for it and the wrapper takes the run-as path, as today */
     run(L"", TRUE, TRUE, TRUE);
-    check("edge: empty name -> empty field, unchanged", user_is(L"") && g_infoCalls == 0 && frame_intact(L"7"));
+    check("edge: empty name -> empty field, unchanged", user_is(L"") && g_lineCalls == 0 && frame_intact(L"7"));
 
     /* 7. a caller that already has no account (ParseUtf8Command failed, the dummy child) is unchanged */
     rc = run(NULL, FALSE, TRUE, TRUE);
     check("edge: NULL -> (null), as before", rc == ERROR_SUCCESS && user_is(L"(null)") && frame_intact(L"6"));
-    check("edge: NULL: no INFO line (nothing was requested)", g_infoCalls == 0 && g_warnCalls == 0 && g_errCalls == 0);
+    check("edge: NULL: no log line (nothing was requested)", g_lineCalls == 0 && g_warnCalls == 0 && g_errCalls == 0);
 
     /* 8. pre-existing, neither added nor removed by this change: a client can already spell the own-token
           path as the literal "(null)" and the wrapper honours it (wmain: wcscmp(userName, L"(null)")) */
     run(L"(null)", TRUE, TRUE, TRUE);
-    check("edge: the literal '(null)' from a client -> (null), verbatim, no INFO line", user_is(L"(null)") && g_infoCalls == 0);
+    check("edge: the literal '(null)' from a client -> (null), verbatim, no log line", user_is(L"(null)") && g_lineCalls == 0);
 
     printf("%d checks, %d failed\n", g_run, g_fail);
     return g_fail ? 1 : 0;

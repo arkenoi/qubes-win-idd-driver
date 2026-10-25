@@ -520,5 +520,63 @@ D="$TMP/l31lib"; mk "$D"
 printf '#!/bin/bash\nqvm-features "$vm" qemu-extra-args -- "$val"\n' > "$D/mgmt/harness/logvol-lib.sh"
 expect_silent L31-qemu-args-not-one-writer "$D" "logvol-lib.sh, which is the one writer"
 
+# ---------------------------------------------------------------- L32 producer for every test file
+D="$TMP/l32"; mk "$D"; mkdir -p "$D/tools/tests"
+printf 'registered-selftest.sh\n' > "$D/tools/tests/offline-suites.txt"
+printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/registered-selftest.sh"
+printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/nobody-runs-me-selftest.sh"
+expect_fires L32-producer-missing "$D" "a selftest in neither list"
+
+# the SPELLING must not be what saves a file - this is the census error the rule exists to stop
+D="$TMP/l32b"; mk "$D"; mkdir -p "$D/tools/tests"
+printf 'registered-selftest.sh\n' > "$D/tools/tests/offline-suites.txt"
+printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/registered-selftest.sh"
+printf '#!/usr/bin/env python3\n' > "$D/tools/tests/some-audit.py"
+expect_fires L32-producer-missing "$D" "a .py test file in neither list (not the *-selftest.sh spelling)"
+
+# a declaration with no reason is an allowlist entry, and those rot
+D="$TMP/l32c"; mk "$D"; mkdir -p "$D/tools/tests"
+: > "$D/tools/tests/offline-suites.txt"
+printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/rig-only-selftest.sh"
+printf 'rig-only-selftest.sh\n' > "$D/tools/tests/not-in-the-gate.txt"
+expect_fires L32-producer-missing "$D" "declared out of the gate with no reason"
+
+# a declaration naming a file that is gone has rotted
+D="$TMP/l32d"; mk "$D"; mkdir -p "$D/tools/tests"
+: > "$D/tools/tests/offline-suites.txt"
+printf 'deleted-selftest.sh   needs the rig: drives a real guest\n' > "$D/tools/tests/not-in-the-gate.txt"
+expect_fires L32-producer-missing "$D" "declaration naming a file that no longer exists"
+
+# a git hook in tools/hooks/ runs suites, so it IS a producer - a non-recursive glob flagged 8
+# files the hooks do run
+D="$TMP/l32f"; mk "$D"; mkdir -p "$D/tools/tests" "$D/tools/hooks"
+: > "$D/tools/tests/offline-suites.txt"
+printf '#!/bin/bash
+: ok
+' > "$D/tools/tests/hook-runs-me-selftest.sh"
+printf '#!/bin/bash
+bash tools/tests/hook-runs-me-selftest.sh
+' > "$D/tools/hooks/pre-commit.sh"
+expect_silent L32-producer-missing "$D" "a git hook in tools/hooks names it"
+
+# a SIBLING suite naming another does not run it - that chain has to be declared, so it is visible
+D="$TMP/l32g"; mk "$D"; mkdir -p "$D/tools/tests"
+: > "$D/tools/tests/offline-suites.txt"
+printf '#!/bin/bash
+: ok
+' > "$D/tools/tests/sib-a-selftest.sh"
+printf '#!/bin/bash
+bash tools/tests/sib-a-selftest.sh
+' > "$D/tools/tests/sib-b-selftest.sh"
+expect_fires L32-producer-missing "$D" "named only by a sibling suite in tools/tests"
+
+# and the correct shape must be silent, or the lint is noise
+D="$TMP/l32e"; mk "$D"; mkdir -p "$D/tools/tests"
+printf 'registered-selftest.sh\n' > "$D/tools/tests/offline-suites.txt"
+printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/registered-selftest.sh"
+printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/rig-only-selftest.sh"
+printf 'rig-only-selftest.sh   needs the rig: drives a real Windows guest\n' > "$D/tools/tests/not-in-the-gate.txt"
+expect_silent L32-producer-missing "$D" "one file registered, one declared with a reason"
+
 echo "  ---- $pass passed, $fail failed"
 exit $(( fail > 0 ? 1 : 0 ))

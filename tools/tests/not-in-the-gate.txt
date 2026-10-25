@@ -1,0 +1,71 @@
+# Test files under tools/tests/ that are deliberately NOT in the gate, each with the reason.
+# tools/lint-harness.py L32 refuses a commit when a test file is neither in offline-suites.txt
+# nor declared here with a reason. A declaration naming a file that is gone is itself a finding.
+#
+# EVERY REASON BELOW IS A MEASUREMENT, taken 2026-10-25, not an argument. The pwsh ones were
+# measured with all three pwsh installs bind-mounted away inside `unshare -r -m` and the absence
+# asserted before the run - PWSH=/nonexistent is not enough, it defeats only a suite's first path.
+# DO NOT SORT THIS FILE AS A WHOLE, and never detach a reason from its name. The
+# offline-suites.txt header was sorted once and every multi-line reason lost its entry
+# (SUITESLISTREASONSSCRAMBLED). This is not hypothetical housekeeping: on 2026-10-25 a
+# one-line `sorted()` over THIS file alphabetised the header and put the sentence you are
+# reading into the middle of it. Only the NAME LINES below may be ordered, and only because
+# each is self-contained - one name, one reason, one line. The header block keeps its order.
+#
+appmenus-selftest.sh                 NO PWSH 2026-10-25: exits 2 with "no pwsh at /nonexistent/pwsh - the decisions cannot be exercised, so nothing" under the strict instrument. It refuses instead of passing hollow, which is why it cannot be registered and must not be "fixed" by widening - a GitHub runner installs none.
+blockclaim-selftest.sh               RED 2026-10-25: "losetup no longer lists it: expected 0, got 1". Also must never run in parallel - loop numbers are global (BLOCKCLAIMSELFTESTRACES).
+console-window-mapped-selftest.sh    RED 2026-10-25: its own guard leg fails, "oversized payload not refused". Suite-vs-product unjudged (SUITESNOBODYRUNS).
+errbox-selftest.sh                   RED 2026-10-25: a source-shape claim about ShouldAcceptWindow's rule order in main.c. Suite-vs-product unjudged (SUITESNOBODYRUNS).
+failproof-check-chrome.sh            RED 2026-10-25 through the runner: rc=1 === POSITIVE: no captured window PNG on disk to test against - positive side NOT
+failproof-install-log.sh             Needs rig-local campaign artefacts under $HOME/qwt-accept, which a clean checkout has none of - measured 2026-10-25 (rc=2, "no source log").
+g0-negative-control.sh               RED 2026-10-25 through the runner: rc=1 G0 FAIL: only 3 catalogs, expected >= 7
+golden-guard-selftest.sh             TOUCHED-RIG 2026-10-25: the runner's shim counted 1 call to the rig, "qvm-ls --raw-data --fields STATE win10-base". An offline gate must not query the rig; a CI runner has no qubes and the call would answer for a pool that is not there.
+health-logfresh-selftest.sh          Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found at /nonexistent/pwsh - nothing ran (missing data fails). A GitHub runner installs none.
+health-recovery-selftest.sh          Needs PowerShell: measured 2026-10-25 with all three pwsh installs bind-mounted away inside `unshare -r -m` - FAIL pwsh not found at /home/user/bin/pwsh7/pwsh - nothing ran. A GitHub runner installs none.
+hive-guard-selftest.sh               Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - pwsh not found at /nonexistent/pwsh - the PowerShell half DID NOT RUN. A GitHub runner installs none.
+installer-clock-gate-selftest.sh     Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - SELFTEST-ERROR: no pwsh at /nonexistent/pwsh (set PWSH=). A GitHub runner installs none.
+ledger-invariant-audit.py           RED 2026-10-25 through its own two defects (LEDGERAUDITREDANDUNRUN); it enters the gate in the commit that fixes the ledger.
+logvol-lib-selftest.sh               TOUCHED-RIG 2026-10-25: the runner's shim counted 5 calls to the rig, including "qvm-ls --raw-data --fields STATE win11-base", and it loop-mounts FAT images besides. Both are real rig resources, so this one belongs to the rig suites, not the offline gate.
+make-wedge-bundle.py                 Not a check: it BUILDS a wedge bundle for other tools to read. Nothing to pass or fail.
+notify-render-selftest.sh            Needs PowerShell: measured 2026-10-25 with all three pwsh installs bind-mounted away inside `unshare -r -m` - pwsh not found at /home/user/bin/pwsh7/pwsh - the PowerShell half DID NOT RUN. A GitHub runner installs none.
+notifyerr-selftest.sh                NO PWSH 2026-10-25: "pwsh not found at /nonexistent/pwsh - the PowerShell half DID NOT RUN". The suite itself calls that a FAIL rather than skipping, so registering it would make the gate red on every CI run. This is also the suite whose earlier PASS under PWSH=/nonexistent was uninterpretable, measured at ok=746 with its PowerShell half running from a hardcoded path.
+pipefail-grepq-selftest.sh           Asserts a pipe into `grep -q` returns 141 under pipefail - this qube's ugrep; a GNU grep returns 1, so it passes HERE because the environment is wrong (PIPEFAILGREPQISUGREP). Resolve in the suite, not by excluding it forever.
+private-disk-gate-guest-test.sh      Rig suite by its own header: needs a live guest, so a clean checkout cannot run it.
+private-disk-gate-selftest.sh        Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FATAL: no pwsh. A GitHub runner installs none.
+procown-sites-selftest.sh            RED 2026-10-25: "netsetup: the service process lingers" - one stray failure that also pollutes all seven of its defect legs.
+ps-runtime-shapes-selftest.sh        Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - SELFTEST-ERROR: no pwsh, so neither check could be driven - this is not a pass. A GitHub runner installs none.
+pvnic-netsetup-verdict-selftest.sh   Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FATAL: no pwsh. A GitHub runner installs none.
+pvnic-rearm-selftest.sh              Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL no pwsh at /nonexistent/pwsh - the decision cannot be exercised, so nothin. A GitHub runner installs none.
+pvnic-xbm-verify-selftest.sh         Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FATAL: no pwsh. A GitHub runner installs none.
+qcon-fake-console.py                 Helper, not a check: it impersonates a PV console for other suites to drive.
+relay-close-selftest.sh              Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found at /nonexistent/pwsh - nothing ran. A GitHub runner installs none.
+relay-parent-selftest.sh             Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found at /nonexistent/pwsh - nothing ran. A GitHub runner installs none.
+relay-svcmap-selftest.sh             Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found at /nonexistent/pwsh - nothing ran. A GitHub runner installs none.
+restart-gui-agent-selftest.sh        Prints "SKIP: no pwsh" and EXITS 0, so in CI it would pass on nothing - measured 2026-10-25 under a pwsh-free namespace, where it came back UNKNOWN-FORMAT. Needs a real no-pwsh verdict before it can be gated.
+run-all.sh                           A runner, not a suite - it invokes others. Registering it would double-run every suite it names.
+stock-ab-selftest.sh                 Drives the stock-vs-ours harness and needs rig paths; nothing maskable locally reveals that, so the committed exclusion stands until someone measures it.
+supervision-install-selftest.sh      Needs PowerShell: measured 2026-10-25 with all three pwsh installs bind-mounted away inside `unshare -r -m` - FAIL pwsh not found at /home/user/bin/pwsh7/pwsh - nothing ran. A GitHub runner installs none.
+svc-serial-start-selftest.sh         Needs PowerShell: measured 2026-10-25 with all three pwsh installs bind-mounted away inside `unshare -r -m` - FAIL pwsh not found at /home/user/bin/pwsh7/pwsh - nothing ran. A GitHub runner installs none.
+unpark-precheck-selftest.sh          RED 2026-10-25: "C1b park present: cell refused" (SUITESNOBODYRUNS).
+vmexec-channel-selftest.sh           NO PWSH 2026-10-25: 26 of its checks pass with pwsh absent and one cannot - "round trip: no pwsh found (set PWSH=/path/to/pwsh) - the encoder is unproven against the real decoder". The round trip against the REAL decoder is the point of that leg, so it is not split out.
+wix-serialstart-patch-selftest.sh    Needs PowerShell: measured 2026-10-25 with all three pwsh installs bind-mounted away inside `unshare -r -m` - FAIL pwsh not found at /home/user/bin/pwsh7/pwsh - nothing ran. A GitHub runner installs none.
+wu-agentcache-selftest.sh            Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found at /nonexistent/pwsh - nothing ran. A GitHub runner installs none.
+wu-autologon-guard-selftest.sh       Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found at /nonexistent/pwsh - nothing ran. A GitHub runner installs none.
+wu-available-selftest.sh             Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found at /nonexistent/pwsh - nothing ran. A GitHub runner installs none.
+wu-catch-scope-selftest.sh           Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found at /nonexistent/pwsh - nothing ran. A GitHub runner installs none.
+wu-cumulative-order-selftest.sh      RED 2026-10-25: 2 checks fail on the clean build (SUITESNOBODYRUNS).
+wu-dead-pass-selftest.sh             Needs PowerShell: measured 2026-10-25 with all three pwsh installs bind-mounted away inside `unshare -r -m` - FAIL pwsh not found at /home/user/pwsh/pwsh - nothing ran. A GitHub runner installs none.
+wu-defplatform-selftest.sh           Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found at /nonexistent/pwsh - nothing ran. A GitHub runner installs none.
+wu-deploy-loud-selftest.sh           RED 2026-10-25: needs Windows `schtasks` ("The term 'schtasks' is not recognized"), and its own defect leg is decoration - "defect deploynotify: the suite did not fail (rc=2)".
+wu-deploy-prevpass-selftest.sh       Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL no pwsh - nothing ran (missing data fails). A GitHub runner installs none.
+wu-effectsettle-selftest.sh          RED 2026-10-25: 1 check fails on the clean build (SUITESNOBODYRUNS).
+wu-installer-relay-selftest.sh       Needs PowerShell: measured 2026-10-25 with all three pwsh installs bind-mounted away inside `unshare -r -m` - FAIL pwsh not found at /home/user/pwsh/pwsh - nothing ran. A GitHub runner installs none.
+wu-log-loss-selftest.sh              Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL no pwsh at /nonexistent/pwsh - nothing ran. A GitHub runner installs none.
+wu-notactionable-selftest.sh         Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found at /nonexistent/pwsh - nothing ran. A GitHub runner installs none.
+wu-prevpass-gate-selftest.sh         Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found at /nonexistent/pwsh - nothing ran. A GitHub runner installs none.
+wu-reason-selftest.sh                Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found at /nonexistent/pwsh - nothing ran. A GitHub runner installs none.
+wu-reboot-report-selftest.sh         Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found at /nonexistent/pwsh - nothing ran. A GitHub runner installs none.
+wu-relay-own-selftest.sh             RED 2026-10-25: "deaf: the respawn is logged against pid 5001 by its handle".
+wu-save-atomic-selftest.sh           Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found. A GitHub runner installs none.
+wu-secplatform-selftest.sh           Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found at /nonexistent/pwsh - nothing ran. A GitHub runner installs none.
+wu-update-render-selftest.sh         Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found at /nonexistent/pwsh - nothing ran. A GitHub runner installs none.

@@ -244,7 +244,24 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # consumer accepts the shipped QWTBIRTH form, skipping comments (all six now explain the demotion in
 # prose a whole-file check would pass on), and drives the restart parser against a line a 4.3.37
 # guest actually wrote, with the branch removed to prove it reads 0 without it.
-FLOOR=${OFFLINE_SUITES_FLOOR:-110}
+# 110 -> 144 on 2026-10-25: THE SUITES NOTHING RAN, minus the ones CI CANNOT RUN. 194 suites
+#   exist under tools/tests/ and the ones named by nothing that executes - not this list, not a
+#   workflow, not a gate, not a hook - were counted, found red, fixed and registered. A mention in
+#   a doc runs nothing, and neither does a mention in a COMMENT: the first version of the producer
+#   rule matched a suite's name anywhere in a producer's text and so counted a commented-out call
+#   as a producer, which hid 18 more. Four of those were genuinely red, two of them from real
+#   defects (an absent fact read as a measured-empty one; a leg asserting a spelling the product had
+#   improved past) - the rest of this paragraph is why that matters: both had been red for days.
+#   REGISTERED HERE are the suites that stay green with the resources a GitHub runner lacks actually
+#   REMOVED: an empty directory bind-mounted over all three pwsh installs inside `unshare -r -m`,
+#   the absence asserted before the run, HOME redirected, and each suite judged by this runner.
+#   That instrument got sharper twice and every tightening removed names - a text predicate flags
+#   43 of the 110 suites CI already runs green, and PWSH=/nonexistent only defeats a suite's
+#   FIRST path, which let a PowerShell half run and still read as a pass. What is NOT registered is
+#   NOT forgotten: tools/tests/not-in-the-gate.txt carries each file's measured reason and
+#   findings/issues.md (SUITESNOBODYRUNS) the class. No sub-tally is repeated here - the live
+#   number is whatever the producer lint prints, and a hand-copied count is what rots.
+FLOOR=${OFFLINE_SUITES_FLOOR:-144}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"
@@ -304,16 +321,40 @@ for s in "${suites[@]}"; do
     printf 'MISSING  %-52s named in the list, not in the tree\n' "$s"; red=$((red+1)); continue
   fi
   : > "$RIGCALLS"
-  out=$(OFFLINE_RIG_CALLS="$RIGCALLS" PATH="$RIGSHIM:$PATH" timeout 300 bash "$f" 2>&1); rc=$?
+  # ITS OWN INTERPRETER. `bash x.py` is a defect this repo has already paid for (e058b621: it froze
+  # the owner's desktop twice), and two gate-ready suites are .py.
+  # THE EXTENSION DECIDES, because that is the committed rule: tools/hooks/wrong-interpreter-gate.sh
+  # refuses `bash x.py` / `python3 x.sh` on (interpreter, extension) pairs and consults no shebang
+  # anywhere. A second, different rule in the runner would be a second answer to the same question.
+  # The shebang is read ONLY for a name with no extension to go on, and bash is the last resort.
+  # So a .sh file whose shebang named python3 WOULD run under bash here - the gate would refuse that
+  # file to a human, and if one is ever added, it belongs in the case below, not in this comment.
+  case "$s" in
+    *.py) _interp=(python3) ;;
+    *.sh) _interp=(bash) ;;
+    *)    case "$(head -c 80 "$f" 2>/dev/null)" in
+            '#!'*python*) _interp=(python3) ;;
+            *)            _interp=(bash) ;;
+          esac ;;
+  esac
+  out=$(OFFLINE_RIG_CALLS="$RIGCALLS" PATH="$RIGSHIM:$PATH" timeout 300 "${_interp[@]}" "$f" 2>&1); rc=$?
   # A run that reports NO assertion at all has been gutted, whatever its exit code - that is exactly
-  # how a deduped RESULT line turned a suite into a no-op. Two spellings count, because both are in
-  # use here: a tally ("N passed", "N check(s)") and a bare verdict line. The defect-knob suites
-  # print their planted failures as FAIL lines and end with one PASS, so counting only tallies
-  # called four green suites empty.
+  # how a deduped RESULT line turned a suite into a no-op. A tally ("N passed", "N check(s)") is
+  # preferred; failing that, assertion LINES are counted, and the set of spellings below is measured,
+  # not assumed. This comment used to say "Two spellings count, because both are in use here"; on
+  # 2026-10-25 six were in use, and the four it did not know reported zero and were called
+  # decoration:
+  #   OK   <text>                  peek-abi-assert, wgcbroker-layout, installer-clock-gate
+  #                                (the old regex was case-SENSITIVE: `ok` matched, `OK` did not)
+  #   PASS: <text>                 pwclass-truth-table (`PASS[[:space:]]` misses the colon)
+  #   -> RED AS REQUIRED (<name>)  failproof-install-log, 17 negative cases
+  #   -> PROOF EARNED: <name>      failproof-misc, 4 checks
+  # ADD A SPELLING HERE DELIBERATELY, never by widening until a suite goes green: an over-broad
+  # pattern counts prose and a gutted suite then reads as covered.
   passed=$(printf '%s' "$out" | command grep -oaE '[0-9]+ (passed|check\(s\))' | command grep -oaE '^[0-9]+' | tail -1)
   : "${passed:=0}"
   if [ "$passed" -eq 0 ]; then
-    passed=$(printf '%s' "$out" | command grep -caE '^[[:space:]]*(PASS|ok)[[:space:]]|^RESULT: PASS')
+    passed=$(printf '%s' "$out" | command grep -caE '^[[:space:]]*(PASS|ok|OK)([[:space:]]|:)|^[[:space:]]*->[[:space:]]*(RED AS REQUIRED|PROOF EARNED)|^RESULT: PASS')
     : "${passed:=0}"
   fi
   total_assertions=$((total_assertions + passed))
@@ -326,8 +367,16 @@ for s in "${suites[@]}"; do
     printf 'FAIL     %-52s rc=%s  %s\n' "$s" "$rc" "$(printf '%s' "$out" | tail -1 | cut -c1-80)"
     printf '%s\n' "$out" | command grep -aiE '^\s*(FAIL|BROKE|ERROR)' | sed 's/^/           /' | head -6
     red=$((red+1))
+  elif [ "$passed" -eq 0 ] && [ -n "$out" ]; then
+    # NOT "reported no assertions" - that is a claim about the SUITE, and all this runner knows is
+    # what IT could parse. A gutted suite and a suite whose spelling is unknown must not share a
+    # label: four green suites were called decoration that way. Red either way, named differently.
+    printf 'UNKNOWN-FORMAT %-45s exited 0; the counter recognised no assertion spelling\n' "$s"
+    printf '%s\n' "$out" | tail -3 | sed 's/^/           /'
+    printf '           add the spelling to the counter in this file, or fix the suite - do not widen blindly\n'
+    red=$((red+1))
   elif [ "$passed" -eq 0 ]; then
-    printf 'EMPTY    %-52s exited 0 and reported no assertions\n' "$s"
+    printf 'EMPTY    %-52s exited 0 and printed NOTHING AT ALL\n' "$s"
     empty=$((empty+1))
   else
     printf 'ok       %-52s %s assertion(s)\n' "$s" "$passed"
