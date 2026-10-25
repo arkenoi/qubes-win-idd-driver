@@ -116,6 +116,7 @@ init-record-consumers-selftest.sh
 jev-first-gate-selftest.sh
 killpattern-gate-selftest.sh
 launch-determination-selftest.sh
+ledger-invariant-audit.py
 lifecycle-selftest.sh
 log-policy-selftest.sh
 log-sweep-selftest.sh
