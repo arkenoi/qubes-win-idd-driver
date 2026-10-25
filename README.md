@@ -21,34 +21,62 @@ Anywhere this README says "stock", it means unmodified upstream QWT 4.2.2 as shi
 
 ## Download
 
-Release **[v4.3.36-agent7603457](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.36-agent7603457)** — agent `7603457`, package `4.3.36`, built from commit `8fe8828a`. See
-[`docs/RELEASE-NOTES-4.3.36.md`](docs/RELEASE-NOTES-4.3.36.md) for what changed and what was
-verified. **The change you will notice: a restarted qube stops telling you about things that are already over.** When
-something of ours died the reporter notified you, and after a reboot it also read the *previous* boot's backlog and notified you
-about those deaths — so restarting a Windows qube produced a burst of notifications about failures that had already happened,
-were no longer true, and that you could do nothing about; the same record could even arrive twice, one reboot apart. The reporter
-now mints a token that lives only for the running boot, reports only what happened in it, and does not read the previous boot's
-backlog at all. It is the largest single change in the release.
+Release **[v4.3.37-agent93a1b27](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.37-agent93a1b27)** — agent `93a1b27`, package `4.3.37`, built from commit `df506bae`. See
+[`docs/RELEASE-NOTES-4.3.37.md`](docs/RELEASE-NOTES-4.3.37.md) for what changed and what was
+verified.
 
-The guest clock is the other substantial one. 4.3.35 only *diagnosed* it — it logged "RealTimeIsUniversal is unset, so Windows
-reads the hardware clock as LOCAL" and set nothing. 4.3.36 reads dom0's `/qubes-timezone` and sets the guest's zone to match, and
-a new per-boot script MEASURES what the hardware clock actually holds and sets the convention from that measurement instead of
-predicting it; a timezone you set deliberately is reported to dom0 as an override rather than changed silently. A notification
-raised when it has no way out to dom0 is now kept on disk and sent by the first process that has a route, instead of being
-discarded.
+> **Read this before you install it.** 4.3.37 was published on a **FAILED acceptance record**, as a
+> deliberate interim release to be superseded. Seven of eight matrix cells and all five feature
+> groups were clean on these exact bytes; one cell, `win10-reinstall`, reported a single breach with
+> **zero P1** — a warning from our own pixel-copy ledger that it could not attribute one of four
+> copies to a known site, which is a gap in our instrumentation rather than a window rendering
+> wrongly. Separately, the change-scoped gate requires the full 19 suites for this range and that has
+> never been demonstrated. Both are set out in
+> [`docs/RELEASE-NOTES-4.3.37.md`](docs/RELEASE-NOTES-4.3.37.md#what-was-verified-and-what-was-not).
+> No earlier release is offered here as the safe alternative: 4.3.36 was itself cut on the reduced
+> `core` suite set with five of eighteen suites returning no verdict, so it was not cut on a met gate
+> either, and saying otherwise would be an endorsement it has not earned.
 
-**What was verified, and what was not.** The matrix — clean install, same-version reinstall, in-place upgrade, and
-template→AppVM derivation with cold boots, on **both Windows 10 and Windows 11** — ran against this exact package with **no P1
-breach**, and dom0's two callers (the updater and the Start menu) answered correctly on six cells, including from a **cold
-qube**. The updater completed a real Windows Update pass on the field reporter's German 25H2 template: dom0's
-updates-available went from one to none, five hotfixes installed, exactly one reboot. A dom0 notification was photographed on
-the desktop.
+**The change you will notice: the Start menu is an ordinary framed window.** You can move it, it has
+a title bar you can drag, and it behaves like Settings or any other guest window instead of
+appearing in a fixed place and vanishing if you look at it wrong. Its expanding cards — the lists
+that slide out when you click into a section — are drawn as their own windows and dismiss when they
+should, neither early nor late.
 
-Not verified, and said plainly: five of the eighteen suites this diff requires could not produce a verdict — for instrument
-reasons rather than product ones — so this release is cut on the smaller `core` set by a deliberate decision recorded in
-[`docs/ADR-acceptance.md`](docs/ADR-acceptance.md) section 6, not because the full gate was met. The notification-deferral and
-death-deduplication fixes above are in the build, but the conditions they guard never occurred during acceptance, so neither is
-a field measurement.
+Underneath it, something that had never worked was found: the broker's per-window crop was **dead
+code**. Nothing in the agent ever wrote the field the broker reads to decide where a shell surface's
+pixels begin, so the broker had been falling back to a whole-surface crop the entire time — which is
+why the menu used to render partly black or show the desktop through itself.
+
+Two silent failures also stopped being silent. Leaving seamless mode is supposed to restore the
+window shadows dom0 draws for you; if that restore failed, nothing retried it and nothing said so —
+the agent discarded the result, latched "done", and wrote a line claiming it *would* retry, while
+the retry that exists is gated on the other direction and so never ran. Guest windows could stay
+shadowless for a whole session with no record of why. And applying an exact resolution on the
+sign-in screen used to poll a pre-flight query 74 times across a full 12-second deadline before
+applying the mode anyway, because that query cannot see modes on the secure desktop; the pre-flight
+is now skipped there and the apply is immediate.
+
+**What was verified, and what was not.** The matrix — clean install, same-version reinstall, in-place
+upgrade and template→AppVM derivation, on **both Windows 10 and Windows 11**, eight cells — ran
+against this exact package. **Seven swept clean; `win10-reinstall` did not.** All five feature
+groups passed: crop-before-map, notify-errors-guest-test, supervision-gate, template-update,
+updater-component. The build the capture itself declares is `4.3.37+agent.93a1b271d1bb`, so these
+measurements are of these bytes and not of a neighbouring build.
+
+The one failure, named: a single breach with **zero P1**, `signatures_unclassified = 1`, on the line
+`PwLedgerAccount: QGALEDGERGAP hwnd=0x1021c class=1 copies=4 attributed=3 unattributed=1, a pixel
+copy site is not instrumented`. Our own ledger could not attribute one of four pixel copies to a
+known site. The gate counts it because a warning matching no declared class is a debt we owe, not
+because anything rendered wrongly — the same cell measured zero dom0-visible failures, zero
+bugchecks, zero crashes, zero unrequested agent deaths and zero lost notifications.
+
+Not verified, and said plainly: the change-scoped gate
+([`docs/ADR-acceptance.md`](docs/ADR-acceptance.md)) requires the **full 19 suites** for the range
+this release spans — four paths in the diff are unmapped, and no record on file covers the full
+scope, the best being 4.3.35 with 13 of 19. This release is therefore **not** cut on a met gate. It
+was published with an explicit `--acceptance-override`, recorded in the release body itself, as an
+interim build to be superseded.
 
 **On "updates available" reappearing right after an update — this is Windows Defender, and dom0 is telling you the truth.**
 On a freshly updated guest, dom0's updates-available can go back to "available" within a minute of clearing. We chased this as a
@@ -56,21 +84,35 @@ possible defect and it is not one: the guest's own scan record names what it fou
 Intelligence update, flagged actionable with a download URL. Microsoft republishes Defender definitions several times a day, so
 by the time a scan runs there genuinely is a new one. A Windows qube with Defender enabled will therefore show "updates
 available" again shortly after you update it, indefinitely, and that is correct rather than a bug — the definitions are real
-updates, they are simply published faster than anyone installs them. What it did break was our own acceptance check, which
-asserted dom0's view must not change across a scan; that check now compares dom0's flag against the guest's own count instead,
-so it fails only when dom0 claims work the guest does not have.
+updates, they are simply published faster than anyone installs them.
+
+**What the product does about it today: nothing, by omission.** The guest scans with
+`IsInstalled=0 and IsHidden=0` and no category filter, so Defender Security Intelligence
+definitions are offered, counted and reported to dom0 exactly like a cumulative update, and they
+raise `updates-available` like one. **There is no knob to suppress that.** One has been asked for
+and queued, but it has never been written down beyond its title, so there is no agreed behaviour to
+describe here yet — not a filter we decided against, just work not done. If the reappearing flag
+bothers you, the only lever today is Defender itself.
+
+What the agent does carry is each offer's **identity** — `UpdateID` plus `RevisionNumber`, taken
+straight off the COM object rather than parsed out of a localised title — which is what makes "the
+offer the last pass already resolved" distinguishable from "a genuinely new one" at all. Our own
+acceptance check does not yet use it: it compares whether dom0 and the guest agree that *any*
+update is pending, which catches the two sides disagreeing but makes no judgement about an update
+coming back. So a definition republished mid-campaign and an update we claimed to have resolved
+reappearing are, to the gate, the same event. That is a gap in our testing, not in the build.
 
 | file | use it for |
 |---|---|
-| [`qubes-windows-tools-ng-4.3.36-1.agent7603457c1da8.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.36-agent7603457/qubes-windows-tools-ng-4.3.36-1.agent7603457c1da8.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and runs nothing in dom0 |
-| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.36-agent7603457/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
-| [`qubes-tools-4.3.36.exe`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.36-agent7603457/qubes-tools-4.3.36.exe) | the installer on its own, if you already have a way to get a file into the guest |
-| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.36-agent7603457/SHA256SUMS.txt) | checksums for all of them |
+| [`qubes-windows-tools-ng-4.3.37-1.agent93a1b271d1bb.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.37-agent93a1b27/qubes-windows-tools-ng-4.3.37-1.agent93a1b271d1bb.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and runs nothing in dom0 |
+| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.37-agent93a1b27/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
+| [`qubes-tools-4.3.37.exe`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.37-agent93a1b27/qubes-tools-4.3.37.exe) | the installer on its own, if you already have a way to get a file into the guest |
+| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.37-agent93a1b27/SHA256SUMS.txt) | checksums for all of them |
 
 The dom0 RPM is unsigned, so `qubes-dom0-update` will refuse it; install it directly:
 
 ```
-sudo rpm -i qubes-windows-tools-ng-4.3.36-1.agent7603457c1da8.noarch.rpm
+sudo rpm -i qubes-windows-tools-ng-4.3.37-1.agent93a1b271d1bb.noarch.rpm
 ```
 
 With the RPM in place, dom0 can attach the media itself — `qvm-start <vm> --install-windows-tools`
@@ -79,29 +121,32 @@ hands the guest exactly this ISO as a CD.
 Upgrading a guest that already runs stock QWT or an older build of this package is a
 plain in-place upgrade — run the installer, it detects the older version and lets the
 MSI replace it in one transaction. Validated end to end for an upgrade **from an older
-build of this package** — 4.3.36's acceptance ran the in-place upgrade cell on both
-Windows 10 and Windows 11, with no P1 breach. An upgrade from **stock QWT 4.2.2** uses the same unchanged
+build of this package** — 4.3.37's acceptance ran the in-place upgrade cell on both
+Windows 10 and Windows 11, and both swept clean. An upgrade from **stock QWT 4.2.2** uses the same unchanged
 MSI machinery but has not been exercised on our testbed since August 2026, because the
 test images themselves carry a newer build.
 
 **Hand-created qube?** Run `qvm-features <qube> vmexec 1` and `qvm-prefs <qube> qrexec_timeout 1800`
 in dom0 (on the template; AppVMs inherit), or the Qubes Update tool fails against it.
 
-**What changed in 4.3.36 — stale notifications are gone, the guest's clock follows dom0, and a death is reported once.**
-After a reboot the death reporter used to read the previous boot's backlog and notify you about deaths that were already over; it
-now reports only what happened in the running boot, decided by a token the kernel drops at shutdown. Windows reads an unset `RealTimeIsUniversal` as "the hardware clock is local time", and 4.3.35 only said so in a log line: it set
-no timezone and no convention. 4.3.36's installer reads dom0's `/qubes-timezone` and matches the guest's zone to it, and a new
-per-boot script measures what the RTC holds against what dom0 reports and sets the convention from the measurement - not from a
-prediction about the next boot, which is what an earlier draft of this did and what was removed. A timezone you set yourself is
-reported to dom0 as an override instead of being overwritten. A notification raised while there is no route to dom0 - at
-shutdown, most often - used to be discarded with no record of which one; it is now written to disk and sent by the first process
-that has a route, exactly once. The same guest death is no longer reported twice across a reboot, and the reporter asks Windows
-whether it is shutting down instead of inferring it. Full story, including what was *not* verified, in
-[`docs/RELEASE-NOTES-4.3.36.md`](docs/RELEASE-NOTES-4.3.36.md); earlier releases:
-[4.3.35](docs/RELEASE-NOTES-4.3.35.md), [4.3.34](docs/RELEASE-NOTES-4.3.34.md), [4.3.33](docs/RELEASE-NOTES-4.3.33.md), [4.3.32](docs/RELEASE-NOTES-4.3.32.md).
+**What changed in 4.3.37 — the Start menu is a window you can move, and three things that failed silently now say so.**
+The Start menu is an ordinary framed window with a title bar you can drag, and its expanding cards are drawn as their own
+windows that dismiss when they should. The reason it used to render partly black or show the desktop through itself was found:
+the broker's per-window crop was dead code, because nothing in the agent ever wrote the field the broker reads to locate a
+shell surface's pixels, so it had been falling back to a whole-surface crop the entire time. A failed restore of window
+shadows on leaving seamless mode used to be discarded, latched "done", and logged as if a retry would follow — the retry was
+gated on the other direction and never ran, so guest windows could stay shadowless for a whole session with nothing saying
+why; it is now reported as an error naming what you would see. Three spawn paths that returned without logging anything now
+say which failed and why, instead of the caller blaming "no usable interactive session yet" for a session that was
+demonstrably usable. Applying an exact resolution on the sign-in screen no longer burns a 12-second deadline on a pre-flight
+query that cannot see modes on the secure desktop. And `DXGI_ERROR_ACCESS_LOST` — which Windows renders as "The keyed mutex
+was abandoned", a message about an object that is not involved — is routed through one reporter across all seven calls, so
+nobody chases that phantom again. Full story, including what was *not* verified, in
+[`docs/RELEASE-NOTES-4.3.37.md`](docs/RELEASE-NOTES-4.3.37.md); earlier releases:
+[4.3.36](docs/RELEASE-NOTES-4.3.36.md), [4.3.35](docs/RELEASE-NOTES-4.3.35.md), [4.3.34](docs/RELEASE-NOTES-4.3.34.md), [4.3.33](docs/RELEASE-NOTES-4.3.33.md), [4.3.32](docs/RELEASE-NOTES-4.3.32.md).
 
 **Provenance.** Every asset above is built by GitHub Actions from this repository at the tagged
-commit; the agent is `f613dc3` on
+commit; the agent is `93a1b27` on
 [arkenoi/qubes-gui-agent-windows](https://github.com/arkenoi/qubes-gui-agent-windows). The
 Windows build is not timestamp-reproducible, so binary hashes differ across rebuilds of identical
 source; `MANIFEST.json` inside each asset records the exact source commits the build came from.

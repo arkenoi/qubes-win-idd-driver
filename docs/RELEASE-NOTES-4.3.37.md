@@ -57,8 +57,42 @@ reads.
 
 ## What was verified, and what was not
 
-*(filled from the 4.3.37 acceptance campaign before the release is cut — this release is not cut on
-4.3.36's campaign, and nothing in this section is carried over from it.)*
+**This release was published on a FAILED acceptance record, deliberately, and the gate was not met.**
+That is stated first because everything below is read in its light. It was cut with
+`--acceptance-override` on the maintainer's explicit instruction, as an interim publication to be
+superseded by the campaign that was running at the time.
+
+What ran, against this exact ISO (`32b950df…a0a9f`), on the build the capture itself declares —
+`4.3.37+agent.93a1b271d1bb`, modules `gui-agent@4.3.37.1096`, `gui-watchdog@4.3.37.1096`,
+`qrexec-agent@4.3.37.1096`, `qrexec-wrapper@4.3.37.1096`:
+
+* **Eight matrix cells** — clean install, same-version reinstall, in-place upgrade and
+  template→AppVM derivation, on **both Windows 10 and Windows 11**. Seven swept CLEAN. One,
+  `win10-reinstall`, came back FINDINGS.
+* **Five feature cell-groups, all passed**: crop-before-map, notify-errors-guest-test,
+  supervision-gate, template-update, updater-component.
+
+**The one failure, named exactly.** `win10-reinstall` reported a single breach with **zero P1**:
+`signatures_unclassified = 1 (max 0)`. The line is a WARNING of our own,
+`agent|W|PwLedgerAccount: QGALEDGERGAP hwnd=0x1021c class=1 copies=4 attributed=3 unattributed=1,
+a pixel copy site is not instrumented`. It is the agent's own copy-accounting ledger reporting that
+it could not attribute one of four pixel copies to a known site — a gap in *our* instrumentation,
+not a statement that a window rendered wrongly, and the gate counts it because an error or warning
+matching no declared class is a debt we owe. Nothing user-facing went with it: the same cell
+measured `dom0_loud_failures=0`, `bugchecks=0`, `wer_crashes=0`, `agent_unrequested_deaths=0`,
+`notifications_lost=0`, `error_lines_undeclared=0`, `fallbacks_fired=0`, `broker_hangs=0`.
+
+**What was NOT met, said plainly.** The change-scoped gate
+([`docs/ADR-acceptance.md`](docs/ADR-acceptance.md)) requires the **full 19 suites** for the range
+this release spans, for two independent reasons: four paths in the diff are unmapped, and no past
+record covers the full scope — the best on file is 4.3.35 with 13 of 19. So this release is **not**
+cut on a met gate, and it is not cut on 4.3.36's campaign either. The missing suites are
+`failproof-faultinject`, `failproof-gates`, `gate-preflight`, `log-sweep`, `p3a-etw-gate` and
+`updater-component` relative to that best record.
+
+**Therefore**: treat this build as what its own record says it is. The user-visible changes above are
+in it, and seven of eight matrix cells and all five feature groups were clean on these exact bytes;
+the ledger-accounting gap is open, and the full gate has not been demonstrated on this package.
 
 ## Known issues
 
