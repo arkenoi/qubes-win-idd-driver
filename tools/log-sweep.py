@@ -3996,9 +3996,54 @@ def write_summary(rep, path):
     # actually account for.
     drp = rep["header"].get("dropped")
     if drp:
+        _nm = _dropped_names(drp)
+        _shown = _nm[:8]
+        # SAY WHAT IS NOT SHOWN. n is truthful; the names are a sample twice over (the collector
+        # records at most 40, this line prints 8), and printing 8 beside "excluded 165" with no
+        # note reads as the full set - it misled the author of this very code on 2026-10-25.
+        _tail = ""
+        if drp.get("n") not in (None, "", "0"):
+            _tail = "  -- " + ", ".join(_shown)
+            _more = len(_nm) - len(_shown)
+            if _more > 0:
+                _tail += ", and %d more recorded" % _more
+            if drp.get("capped") not in (None, "", "0"):
+                _tail += " (+%s not recorded: the collector samples 40)" % drp.get("capped")
         L.append("WINDOW FILTER: examined %s file(s), kept %s, excluded %s as older than the window%s" % (
-            drp.get("seen", "?"), drp.get("kept", "?"), drp.get("n", "?"),
-            ("  -- " + ", ".join(_dropped_names(drp)[:8])) if drp.get("n") not in (None, "", "0") else ""))
+            drp.get("seen", "?"), drp.get("kept", "?"), drp.get("n", "?"), _tail))
+        # ONE NUMBER THAT NO CAP CAN SHORTEN. The newest dropped stamp settles whether anything
+        # written during this run was excluded, however many files there were - and the filter's
+        # own predicate is LastWriteTimeUtc < since, so it MUST be older. If it is not, a file from
+        # this run was dropped or the two stamps are not on the same clock, and that is reported
+        # instead of a reassuring exclusion count.
+        # newestdropped, NOT newest: `newest` in this file is a MODULE'S newest build, and
+        # attributor-unique-selftest.sh keeps a bounded inventory of every function that
+        # reads it. A second meaning for that field name put write_summary in that
+        # inventory as a seventh attributor - measured, the gate went red 2026-10-25.
+        _newest = drp.get("newestdropped")
+        if drp.get("n") not in (None, "", "0") and not _newest:
+            # MISSING DATA, NOT A CLEAN BILL. A collector predating newestdropped= cannot answer "was
+            # anything from THIS run excluded?", and saying nothing makes it read identical to a
+            # capture that proved the exclusions were all old - the very silent truncation this
+            # accounting exists to end.
+            L.append("WINDOW FILTER: this capture's collector reports no newest-excluded stamp, so "
+                     "whether any of the %s excluded file(s) was written during this run CANNOT be "
+                     "answered from it - re-collect with a current collector to settle it"
+                     % drp.get("n"))
+        if _newest and _newest != "none":
+            # REPORT ONLY. The problem itself is raised in cmd_analyze beside windowunusable, where
+            # the collector's own `since` and the problems list are in scope; this function has
+            # neither, and writing it here raised NameError on every capture carrying a newest=.
+            _since = rep["header"].get("collector_since") or rep["header"].get("since")
+            _n = parse_iso(_newest.rstrip("Z"))
+            _s = parse_iso((_since or "").rstrip("Z")) if _since else None
+            if _n is not None and _s is not None and _n >= _s:
+                L.append("WINDOW FILTER: newest excluded stamp %s is AT OR AFTER the window start %s "
+                         "- the filter's own predicate forbids that; see the data problem"
+                         % (_newest, _since))
+            else:
+                L.append("WINDOW FILTER: newest excluded stamp %s, window starts %s - nothing "
+                         "written during this run was excluded" % (_newest, _since or "?"))
     else:
         L.append("WINDOW FILTER: this stream predates the drop accounting, so what the --since window "
                  "excluded is NOT KNOWN (missing data, not zero)")
@@ -4181,6 +4226,29 @@ def cmd_analyze(a):
                 % (meta["begin"]["nowutc"], (_gsince - _gnow).total_seconds(), meta["begin"]["since"],
                    (" (collector reports %s file(s) dropped by this filter, %s kept)" % (_dn, _d.get("kept"))
                     if _dn not in (None, "") else ""))))
+    # THE NEWEST EXCLUDED STAMP MUST BE OLDER THAN THE WINDOW START - that is the --since filter's
+    # own predicate. If it is not, a file written DURING this run was dropped, or the two stamps are
+    # not on the same clock; either way the exclusion count cannot be read as "only old files".
+    # This is the one number no name-list cap can shorten, which is why it and not the sample of
+    # names is what settles "was anything from this run excluded?" (campaign 40142194040's
+    # WIN10-upgrade cell reported 165 exclusions and 40 names, and 40 of 165 cannot answer it).
+    _dr = (meta or {}).get("dropped") or {}
+    # newestdropped, NOT newest - see write_summary. This site is worse than the other one:
+    # cmd_analyze is ALREADY a legitimate reader of a module's newest (the downgrade warning),
+    # so a second meaning for the field name here is invisible to the inventory that A1b keeps
+    # rather than merely wrong in it.
+    _dnewest = _dr.get("newestdropped")
+    _dsince = ((meta or {}).get("begin") or {}).get("since")
+    if _dnewest and _dnewest != "none" and _dsince:
+        _pn = parse_iso(_dnewest.rstrip("Z"))
+        _ps = parse_iso((_dsince or "").rstrip("Z"))
+        if _pn is not None and _ps is not None and _pn >= _ps:
+            problems.append(("dropnewestinwindow", a.logsdir,
+                "the NEWEST file the --since filter excluded (%s) is at or after the start of the "
+                "window it was given (%s), which the filter's own predicate forbids - a file written "
+                "during this run was dropped, or the two stamps are not on the same clock. The "
+                "exclusion count (%s file(s)) cannot be read as 'only old files'."
+                % (_dnewest, _dsince, _dr.get("n"))))
     if not files:
         problems.append(("missing", a.logsdir, "no log files at all"))
     # BEFORE ANY WINDOW IS APPLIED OR ANY BOOT CLUSTERED: put every line in ONE clock phase so the
@@ -4379,7 +4447,10 @@ def cmd_analyze(a):
                     "records": [{"file": r["file"], "name": r["name"], "pid": r["pid"], "t_suspend": fmt_ts(r["t_suspend"]), "t_resume": fmt_ts(r["t_resume"]),
                                  "alive_after": r["alive"], "joined": r["joined"], "checks": r["checks"]} for r in c["records"]]},
         "out_of_context": [sig_json(s) for s in cmp["out_of_context"]],
-        "header": {"label": a.label, "since": fmt_ts(since) if since else None, "generated": utcnow_iso(), "logsdir": os.path.abspath(a.logsdir),
+        "header": {"label": a.label, "since": fmt_ts(since) if since else None,
+                   # the window the FILTER ran against, which is the collector's, not ours
+                   "collector_since": ((meta or {}).get("begin") or {}).get("since"),
+                   "generated": utcnow_iso(), "logsdir": os.path.abspath(a.logsdir),
                    "baseline": a.baseline, "files": len(files), "lines": sum(lf.scanned for lf in files), "boots": len(boots), "shutdowns": len(st["windows"]),
                    "clock_offset_s": _phase_offset, "clock_phase_shifted_lines": _shifted, "clock_phase_note": _phase_note,
                    # CORPUS MODE HAS NO META (load_logs returns None for a plain directory of

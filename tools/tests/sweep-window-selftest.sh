@@ -148,10 +148,15 @@ fi
 
 # ---- 3. THE ANALYZER: a stream whose clock cannot see into its own window ------------------------
 # builds pull.txt with a chosen nowutc/since pair, optionally with the DROPPED marker
-mkstream(){ # <dir> <nowutc> <since> <dropped-n|->
-  python3 - "$1" "$2" "$3" "$4" <<'PY'
+mkstream(){ # <dir> <nowutc> <since> <dropped-n|-> [newest-iso|none|-] [capped]
+  python3 - "$1" "$2" "$3" "$4" "${5:--}" "${6:-0}" <<'PY'
 import base64, hashlib, os, sys
 out, nowutc, since, dropn = sys.argv[1:5]
+# newestdropped/capped are OPTIONAL so the "old collector" case stays expressible: a '-' means
+# the marker carries no newestdropped= field at all, which is exactly what a pre-2026-10-25
+# capture looks like.
+newest = sys.argv[5] if len(sys.argv) > 5 else "-"
+capped = sys.argv[6] if len(sys.argv) > 6 else "0"
 os.makedirs(out, exist_ok=True)
 text = ("[20261025.031000.000-1-I] LogInit: Log started, module name: gui-agent\n"
         "[20261025.031000.000-1-I] LogInit: Running as user: SYSTEM, process ID: 1\n"
@@ -165,7 +170,9 @@ L = ["LSW BEGIN v=1 now=2026-10-25T03:10:42.858 nowutc=%s tz=+03:00 host=%s user
      "LSW LOGDIR pathb64=%s exists=1" % base64.b64encode(r"Q:\Qubes Logs".encode()).decode()]
 if dropn != "-":
     nms = ",".join(base64.b64encode(n.encode()).decode() for n in ("etw-proxy.log", "bridge.log"))
-    L.append("LSW DROPPED reason=window seen=%d kept=1 n=%s namesb64=%s" % (1 + int(dropn), dropn, nms))
+    extra = "" if newest == "-" else " newestdropped=%s capped=%s" % (newest, capped)
+    L.append("LSW DROPPED reason=window seen=%d kept=1 n=%s%s namesb64=%s"
+             % (1 + int(dropn), dropn, extra, nms))
 L.append("LSW FILE id=f1 pathb64=%s family=agent bytes=%d lines=%d written=2026-10-25T03:10:00.000 "
          "created=2026-10-25T03:10:00.000 partial=0 total_lines=%d"
          % (base64.b64encode(r"Q:\Qubes Logs\gui-agent-20261025-031000-1.log".encode()).decode(), len(raw), nl, nl))
@@ -176,9 +183,9 @@ L.append("LSW END files=1 pulled=1 errors=0 event_errors=0")
 open(os.path.join(out, "pull.txt"), "w", encoding="utf-8").write("\n".join(L) + "\n")
 PY
 }
-analyze(){ # <tag> <nowutc> <since> <dropped-n|-> -> rc; kinds in $T/<tag>.kinds, summary $T/<tag>.txt
+analyze(){ # <tag> <nowutc> <since> <dropped-n|-> [newest|-] [capped] -> rc; kinds/summary as before
   local tag="$1"
-  mkstream "$T/$tag" "$2" "$3" "$4"
+  mkstream "$T/$tag" "$2" "$3" "$4" "${5:--}" "${6:-0}"
   python3 "$A" decode "$T/$tag/pull.txt" --out "$T/$tag/logs" >"$T/$tag.decode" 2>&1
   python3 "$A" analyze "$T/$tag/logs" --baseline "$BASE" --out "$T/$tag.json" --summary "$T/$tag.txt" \
     --label "$tag" --since "${3%Z}" --no-jev >"$T/$tag.out" 2>&1
@@ -249,6 +256,39 @@ else
 fi
 
 echo
+# ---------------------------------------------------------------------------------------------
+# THE NEWEST EXCLUDED STAMP. A name list can always be truncated, so it is the wrong instrument
+# for "was anything from THIS run dropped?"; one stamp that no cap can shorten is the right one.
+# Driven BOTH ways, plus the old-collector case, because a check only seen to pass is decoration.
+rc=$(analyze newestold "2026-10-25T04:00:00.000Z" "2026-10-25T03:00:00Z" 165 "2026-10-25T02:59:59Z" 125)
+if ! command grep -qa dropnewestinwindow "$T/newestold.kinds" \
+   && command grep -qa 'nothing written during this run was excluded' "$T/newestold.txt"; then
+  ok "165 exclusions whose NEWEST is older than the window raise no problem, and the report says why"
+else
+  no "a wholly-old exclusion set was treated as suspicious" "rc=$rc kinds='$(cat "$T/newestold.kinds")'"
+fi
+if command grep -qa 'not recorded: the collector samples 40' "$T/newestold.txt"; then
+  ok "...and the name list is disclosed as a SAMPLE (capped=125), not read as the whole set"
+else
+  no "the truncated name list was presented as complete" "$(command grep -a 'WINDOW FILTER' "$T/newestold.txt" | head -1)"
+fi
+
+rc=$(analyze newestin "2026-10-25T04:00:00.000Z" "2026-10-25T03:00:00Z" 4 "2026-10-25T03:30:00Z" 0)
+if command grep -qa dropnewestinwindow "$T/newestin.kinds"; then
+  ok "a newest-excluded stamp INSIDE the window is a problem - the filter's own predicate forbids it"
+else
+  no "a file written during the run was dropped and nothing said so" "rc=$rc kinds='$(cat "$T/newestin.kinds")'"
+fi
+
+rc=$(analyze newestmissing "2026-10-25T04:00:00.000Z" "2026-10-25T03:00:00Z" 165)
+if ! command grep -qa dropnewestinwindow "$T/newestmissing.kinds" \
+   && command grep -qa 'CANNOT be answered from it' "$T/newestmissing.txt"; then
+  ok "an OLD collector's capture says it cannot answer, instead of reading as a clean one"
+else
+  no "a pre-newest capture was absorbed as proof that nothing in-window was dropped" \
+     "rc=$rc $(command grep -a 'WINDOW FILTER' "$T/newestmissing.txt" | head -1)"
+fi
+
 printf 'sweep-window-selftest: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0

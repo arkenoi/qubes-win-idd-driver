@@ -41,7 +41,10 @@
 #   LSW PULLEND name=f<n> b64lines=<m>
 #   LSW FILEERR pathb64=<b64> error=<b64>            a log that exists but could not be read - the analyzer FAILS on it
 #   LSW FILESKIPPED n=<k>                            more files than -MaxFiles: the oldest were not pulled (INCOMPLETE)
-#   LSW DROPPED reason=window seen=<n> kept=<n> n=<k> namesb64=<b64,...>   what the --since filter excluded, ALWAYS emitted
+#   LSW DROPPED reason=window seen=<n> kept=<n> n=<k> newestdropped=<iso|none> capped=<m> namesb64=<b64,...>
+#       what the --since filter excluded, ALWAYS emitted. newestdropped= is the newest stamp among the
+#       dropped files and is what settles "was anything from this run excluded?" - the name
+#       list is a SAMPLE of at most 40, and capped= counts the names NOT recorded.
 #   LSW EVENTS channels=<n> required_missing=<list|->
 #   LSW PULL name=events ... (the EV block)
 #   LSW END files=<n> pulled=<n> errors=<n> event_errors=<n>
@@ -238,6 +241,11 @@ $seenFiles = New-Object 'System.Collections.Generic.HashSet[string]' ([StringCom
 # A window excluding old files is NORMAL and this is not a verdict; it is the number the analyzer
 # needs to say how much damage an unusable window did.
 $dropWindow = 0
+# The newest stamp among the dropped files. This - not the name list - is what answers "was
+# anything from THIS run excluded?", because no cap can shorten one number. MaxValue as the
+# empty value would read as a drop from the future, so the emptiness is explicit instead.
+$dropNewest = $null
+$dropCapped = 0
 $dropNames = New-Object 'System.Collections.Generic.List[string]'
 $seenCands = 0
 if ($dirExists) {
@@ -250,7 +258,8 @@ if ($dirExists) {
         if ($f.LastWriteTimeUtc -lt $sinceU -and -not $always) {
             # counted as a WINDOW drop only - a dedup hit below is a different thing and is not one.
             $dropWindow++
-            if ($dropNames.Count -lt 40) { $dropNames.Add($f.Name) }
+            if ($null -eq $dropNewest -or $f.LastWriteTimeUtc -gt $dropNewest) { $dropNewest = $f.LastWriteTimeUtc }
+            if ($dropNames.Count -lt 40) { $dropNames.Add($f.Name) } else { $dropCapped++ }
             continue
         }
         if ($seenFiles.Add($f.FullName)) { $cands.Add($f) }
@@ -296,7 +305,11 @@ foreach ($d in (Get-LswLogDirCandidates)) {
 # an analyzer that cannot tell them apart would read an old capture as a clean one. Names are base64
 # per name, the FILESKIPPED convention, because a log name is guest data and must not break the line.
 $_dropEnc = @($dropNames | ForEach-Object { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($_)) }) -join ','
-Write-Output ("${Mark}DROPPED reason=window seen=$seenCands kept=$($cands.Count) n=$dropWindow namesb64=$_dropEnc")
+# newestdropped= settles whether anything in-window was dropped; capped= says the name list is a
+# SAMPLE. Without capped= a reader takes 40 names beside n=165 for the whole set, which is how
+# this very marker misled its own author on 2026-10-25.
+$_dropNewest = if ($null -ne $dropNewest) { $dropNewest.ToString("yyyy-MM-ddTHH:mm:ssZ") } else { "none" }
+Write-Output ("${Mark}DROPPED reason=window seen=$seenCands kept=$($cands.Count) n=$dropWindow newestdropped=$_dropNewest capped=$dropCapped namesb64=$_dropEnc")
 # C:\Users\Public\qwt-fi-*.txt: the knob files a fault-injection broker build reads (wgcbroker.cpp FiDeafHwnd) - their presence is
 # in-capture evidence of an injection; the analyzer keeps them as 'marker' files, never as a log.
 $fiKnobs = @(Get-ChildItem -LiteralPath 'C:\Users\Public' -Filter 'qwt-fi-*.txt' -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
