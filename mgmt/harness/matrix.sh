@@ -144,11 +144,36 @@ logvol_bind_now(){ # $1=vm $2=label
     # into the LogDir the guest itself resolves, then reads it back off the IMAGE with mtools -
     # no guest needed, which is the property that matters when one wedges. Both halves or nothing.
     if ! logvol_prove_roundtrip "$1" "$LOGVOL_IMG" "$2" >>"$M/$2-logvol-proof.out" 2>&1; then
-      say "[ERROR] FATAL: $2: the log path did NOT survive a round trip - $(tail -1 "$M/$2-logvol-proof.out" 2>/dev/null | cut -c1-150)"
-      say "[ERROR] FATAL: the guest wrote where it says it writes, or this qube could not read it"
-      say "[ERROR] FATAL: back off the image. Either way this cell cannot produce evidence and a"
-      say "[ERROR] FATAL: wedge from here would be unreadable, so the campaign STOPS."
-      say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED on an unproven log path ==="
+      # SAY WHICH OF THE THREE STATES THIS IS. The single non-zero above covers (a) no agent at all,
+      # (b) an agent with no logged-on session - `qtest pushrun` needs one - and (c) an agent that
+      # answered and then stopped, which is the genuine loss the volume exists to survive. The
+      # library's own `*)` arm says so in a comment ("the guest never answered ... is NOT a volume
+      # fault") and then returns the same code, so this caller could not tell them apart and
+      # reported the wrong cause. MEASURED, acceptance 40210151847 on 2026-10-25: WIN10-clean's
+      # install returned `installer rc=1` and no agent ever existed (111 polls, all "(no qrexec
+      # yet)", zero "qrexec up"); the proof could not run, and the campaign ended "ABORTED on a log
+      # path that broke mid-cell" - a log path that was never tested, because there was nothing to
+      # ask. The release was blocked on a false cause.
+      # THE STOP IS NOT RELAXED. Jev judged the conflation a defect at 0.93 but split almost evenly
+      # on continue-vs-stop (fail_cell_stop_but_say_why 0.52 against fail_cell_continue_campaign
+      # 0.45, confidence 0.36 - below the floor), so the conservative reading stands and BOTH arms
+      # still exit 2: a package-level install failure would repeat on every later cell anyway. What
+      # changes is only the cause this campaign reports, which is what a reader acts on.
+      _lv_reason=$(tail -1 "$M/$2-logvol-proof.out" 2>/dev/null | cut -c1-150)
+      if command grep -qa 'reason=no_answer_from_guest' "$M/$2-logvol-proof.out" 2>/dev/null; then
+        say "[ERROR] FATAL: $2: the guest NEVER ANSWERED the log-path probe, so the log path was"
+        say "[ERROR] FATAL: NOT tested and is NOT implicated. This is the cell's own failure to"
+        say "[ERROR] FATAL: reach a usable guest - no agent installed, or no logged-on session yet."
+        say "[ERROR] FATAL: Read the install first: the prime log's qrexec polls and, on a prime"
+        say "[ERROR] FATAL: cell, the DIAG volume's prime-progress.log installer rc. $_lv_reason"
+        say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED: no usable guest to prove the log path ==="
+      else
+        say "[ERROR] FATAL: $2: the log path did NOT survive a round trip - $_lv_reason"
+        say "[ERROR] FATAL: the guest wrote where it says it writes, or this qube could not read it"
+        say "[ERROR] FATAL: back off the image. Either way this cell cannot produce evidence and a"
+        say "[ERROR] FATAL: wedge from here would be unreadable, so the campaign STOPS."
+        say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED on an unproven log path ==="
+      fi
       exit 2
     fi
     say "  $2: log path PROVEN end to end ($(command grep -ao 'nonce=[^ ]*' "$M/$2-logvol-proof.out" 2>/dev/null | tail -1))"
@@ -3025,12 +3050,35 @@ for c in $CELLS; do
       # At bind time zero agent logs is CORRECT - a bind takes effect at a module's next start.
       # Here, immediately before the pull that feeds grading, zero is a blind cell.
       if ! logvol_prove_roundtrip "$LOGVOL_VM" "$LOGVOL_IMG" "$c-pregrade" --require-agent-logs >>"$M/$c-logvol-proof.out" 2>&1; then
-        say "[ERROR] FATAL: $c: the log path did NOT survive to grading - $(tail -1 "$M/$c-logvol-proof.out" 2>/dev/null | cut -c1-150)"
-        say "[ERROR] FATAL: it was proven at bind time, so it broke DURING this cell. Whatever this"
-        say "[ERROR] FATAL: cell's log holds is truncated at the break, and a truncated log is read"
-        say "[ERROR] FATAL: as CLEAN. The campaign STOPS rather than score that."
+        # "IT WAS PROVEN AT BIND TIME, SO IT BROKE DURING THIS CELL" IS NOT TRUE OF EVERY FAILURE
+        # HERE, AND ON 2026-10-25 IT WAS FALSE. This is the abort that ended acceptance
+        # 40210151847: `LOGVOL-PROOF fail half=guest reason=no_answer_from_guest`, reported as "a log
+        # path that broke mid-cell". The log path had not broken and, on a PRIME cell, had not been
+        # proven here either - prime-run attaches and binds the volume for its own subject, so the
+        # bind-time proof at the top of this file never ran for win10-clean. What had actually
+        # happened is that the cell's install returned `installer rc=1` and NO AGENT EVER EXISTED
+        # (111 polls, every one "(no qrexec yet)", zero "qrexec up"), so there was nothing to ask.
+        # The campaign reported a false cause and the release was blocked on it.
+        # THE STOP IS NOT RELAXED: Jev judged the conflation a defect at 0.93 and split almost evenly
+        # on continue-vs-stop (0.52 stop / 0.45 continue at confidence 0.36, below the floor), so
+        # both arms still exit 2. Only the cause this campaign reports changes.
+        _lv_reason=$(tail -1 "$M/$c-logvol-proof.out" 2>/dev/null | cut -c1-150)
         logvol_pull "$LOGVOL_IMG" "$M/logvol-$c" >>"$M/$c-logvol-pull.out" 2>&1 || true
-        say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED on a log path that broke mid-cell ==="
+        if command grep -qa 'reason=no_answer_from_guest' "$M/$c-logvol-proof.out" 2>/dev/null; then
+          say "[ERROR] FATAL: $c: the guest NEVER ANSWERED the pre-grading log-path probe, so the"
+          say "[ERROR] FATAL: log path is NOT implicated and nothing is known to have broken. This"
+          say "[ERROR] FATAL: cell has no usable guest: no agent installed, or no logged-on session"
+          say "[ERROR] FATAL: ( qtest pushrun needs one ), or an agent that stopped. Read the"
+          say "[ERROR] FATAL: install first - the prime log's qrexec polls, and on a prime cell the"
+          say "[ERROR] FATAL: DIAG volume's prime-progress.log installer rc. $_lv_reason"
+          say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED: no usable guest at grading ==="
+        else
+          say "[ERROR] FATAL: $c: the log path did NOT survive to grading - $_lv_reason"
+          say "[ERROR] FATAL: the guest answered, so the path itself broke during this cell. Whatever"
+          say "[ERROR] FATAL: this cell's log holds is truncated at the break, and a truncated log is"
+          say "[ERROR] FATAL: read as CLEAN. The campaign STOPS rather than score that."
+          say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED on a log path that broke mid-cell ==="
+        fi
         exit 2
       fi
       say "  $c: log path still PROVEN at grading"
