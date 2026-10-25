@@ -3449,7 +3449,18 @@ if [ -x tools/sweep-gate.sh ]; then
   else
     _sg_rc=$?
     nun=$(grep -ac '^  UNACCOUNTED' "$M/sweep-gate.out" 2>/dev/null || true); nun=${nun:-0}
-    nro=$(grep -ac '^  ROSE' "$M/sweep-gate.out" 2>/dev/null || true); nro=${nro:-0}
+    # TWO ROW SHAPES EXIST AND THIS COUNTED ONE. sweep-gate.sh prints a LEDGER rise anchored,
+    # "  ROSE        x12 (ledger x4, surfaces above x8) ..." (:1094), but an UPSTREAM rise as
+    # "  x12   QioWriteBuffer: ...  <== ROSE from x4 ... " (:819) - the word ROSE is MID-LINE.
+    # '^  ROSE' matched only the first. MEASURED 2026-10-25, cell WIN10-upgrade: the gate exited 1
+    # printing "SWEEP-GATE-RESULT unaccounted=0 risen=5 accounted=1" (its :1179 branch, which can
+    # ONLY fire on up_rose) while this branch counted nro=0. Three consequences, all in one run:
+    # the UNCLASSED guard below said "the gate exited 1 with no unaccounted or risen row" in the
+    # same sentence as quoting "risen=5"; the INVALID-SWEEP branch could not raise the five rows as
+    # a sweep finding at all, so a real rise was reported as an unclassifiable INSTRUMENT failure;
+    # and the display grep at the end of this block, anchored the same way, printed none of them -
+    # so the operator saw a cell FAIL whose evidence was nowhere on screen.
+    nro=$(grep -acE '^  ROSE|<== ROSE from' "$M/sweep-gate.out" 2>/dev/null || true); nro=${nro:-0}
     # PRINTED, BUT NOT COUNTED TWICE. no() writes every failing check into this same log as
     # "[ERROR] FAIL  <what>" and increments the tally in the same breath, so the gate re-reads our
     # own graded verdicts and each one would add a SECOND entry - classed INVALID, which asserts
@@ -3482,7 +3493,9 @@ if [ -x tools/sweep-gate.sh ]; then
     if [ $((nun + nro)) -gt 0 ]; then
       no "INVALID-SWEEP  ${nun:-0} unaccounted + ${nro:-0} risen declared error(s) in the campaign's own logs - read $M/sweep-gate.out, then fix the defect or record why it is not one"
     fi
-    grep -aE '^  (UNACCOUNTED|ROSE)' "$M/sweep-gate.out" | head -10 | while IFS= read -r l; do say "  $l"; done
+    # Same two shapes as the count above - an upstream rise carries ROSE mid-line, so anchoring
+    # here hid exactly the rows the cell had just failed on.
+    grep -aE '^  (UNACCOUNTED|ROSE)|<== ROSE from' "$M/sweep-gate.out" | head -10 | while IFS= read -r l; do say "  $l"; done
   fi
 fi
 

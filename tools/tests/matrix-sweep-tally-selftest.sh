@@ -51,7 +51,12 @@ ck "a graded-only log adds no INVALID entry"         "0" "$onet"
 # And the shipped file must carry the guard, not just this test.
 ck "matrix.sh discounts graded verdicts"            "1" "$(grep -c 'ngr=\$(grep -acE' "$M")"
 ck "matrix.sh raises INVALID-SWEEP conditionally"   "1" "$(grep -c 'if \[ \$((nun + nro)) -gt 0 \]; then' "$M")"
-ck "matrix.sh still prints every row"               "1" "$(grep -c "grep -aE '\^  (UNACCOUNTED|ROSE)'" "$M")"
+# THE PATTERN BROADENED 2026-10-25 and this assertion pinned the old spelling. An UPSTREAM rise is
+# printed by sweep-gate.sh:819 with ROSE MID-LINE ("x12 ... <== ROSE from x4"), so the anchored
+# '^  (UNACCOUNTED|ROSE)' displayed none of them - measured on cell WIN10-upgrade, where the gate
+# failed with risen=5 and the operator was shown zero of the five rows. "Prints every row" is the
+# intent; this now checks the spelling that actually does.
+ck "matrix.sh still prints every row"               "1" "$(grep -c "grep -aE '\^  (UNACCOUNTED|ROSE)|<== ROSE from'" "$M")"
 
 # A GATE FAILURE THE TALLY CANNOT COUNT MUST NOT PASS SILENTLY. Measured on campaign
 # 20261018-153728: the gate exited 1 over a stale declaration, this arithmetic counted zero
