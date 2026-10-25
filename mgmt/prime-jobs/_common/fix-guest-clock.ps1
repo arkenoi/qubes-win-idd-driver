@@ -85,7 +85,36 @@ $utc = [datetime]::SpecifyKind($utc, [DateTimeKind]::Utc)
 # writing the stamp and the guest starting, which is the smallest residual available without a
 # channel. Residual skew is NOT this script's problem to close: once QWT installs, qrexec exists
 # and `qtest synctime` sets the clock properly. This exists to clear the signer gate, nothing more.
-$uptimeMs = [Environment]::TickCount64
+#
+# TickCount64 IS NOT AVAILABLE ON THE RUNTIME THIS ACTUALLY RUNS ON, AND IT FAILED SILENTLY.
+# MEASURED 2026-10-25 on win10-clk, the very run that proved this script works: the correction
+# logged "carried forward by 0 s of uptime" on a guest that had been up ~90 s. [Environment]::
+# TickCount64 is .NET Core 3.0+; onboot.cmd invokes `powershell`, i.e. WINDOWS PowerShell 5.1 on
+# .NET Framework, where the property does not exist - and PowerShell returns $null for a missing
+# static WITHOUT error, so AddMilliseconds($null) advanced the stamp by nothing. The compensation
+# was inert and said so only in a number nobody had to read. I validated the file with pwsh 7
+# (.NET Core), where TickCount64 works and returns a value - the wrong runtime for this code.
+# TickCount (32-bit, milliseconds) exists on .NET Framework. It wraps to NEGATIVE after ~24.9 days
+# of uptime - OBSERVED, not theorised: this build qube read [Environment]::TickCount as
+# -1830450113 while the check was being written. That cannot happen on a guest minutes into its
+# first boot, but the guard treats any non-positive value as UNREADABLE rather than as zero, so a
+# wrapped counter can never be applied as a negative offset.
+# ALL FOUR ARMS WERE DRIVEN ON VALUES BEFORE COMMIT, not on whichever host happened to run it:
+# (null,90000) -> +90 s [the Windows PowerShell 5.1 shape that was broken]; (90000,90000) -> +90 s;
+# (null,-1830450113) -> loud warn, stamp raw; (null,null) -> loud warn, stamp raw.
+# THE ABSENCE IS NOW ENFORCED, NOT REQUESTED: if uptime cannot be read at all the script SAYS the
+# stamp is being applied raw, instead of quietly applying a zero.
+$uptimeMs = 0
+foreach ($prop in 'TickCount64', 'TickCount') {
+    try {
+        $v = [Environment]::$prop
+        if ($null -ne $v -and [int64]$v -gt 0) { $uptimeMs = [int64]$v; break }
+    } catch { }
+}
+if ($uptimeMs -le 0) {
+    Say ("uptime is UNREADABLE on this runtime (PSVersion {0}) - applying the stamp RAW, so the clock will stay short by this guest's boot time" -f `
+         $PSVersionTable.PSVersion) 'WARN'
+}
 $target   = $utc.AddMilliseconds($uptimeMs)
 $before   = (Get-Date).ToUniversalTime()
 $skew     = [math]::Round(($target - $before).TotalSeconds, 1)
