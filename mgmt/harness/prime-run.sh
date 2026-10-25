@@ -247,9 +247,19 @@ qvm-features "$CHURN" os Windows
 # true-UTC clock and then has the clock change under it one boot later. That transition is the
 # ENTIRE source of clock_boot_correction_s = 10800: one boot reading a UTC clock through dom0's
 # zone (3 h behind), the next reading a dom0-local clock through a convention latched from the
-# first (3 h ahead). Setting it here removes the window instead of converging out of it - the clock
+# first (3 h ahead). Setting it here removes THAT window instead of converging out of it - the clock
 # holds dom0 local on every boot, Windows reads it as local on every boot (its default; we declare
-# nothing), and the guest's zone is dom0's on every boot. Nothing to settle.
+# nothing), and the guest's zone is dom0's on every boot.
+# "NOTHING TO SETTLE" IS WHAT THIS SAID UNTIL 2026-10-25, AND A DST TRANSITION FALSIFIES IT. Windows
+# converts the localtime RTC with the ActiveTimeBias ALREADY STORED in its registry, then refreshes
+# that bias for today WITHOUT moving the clock it just set. So a base sealed in summer (bias -180)
+# booted after the autumn transition reads dom0's winter local time (UTC+2) as if it were UTC+3:
+# internal UTC lands one hour BEHIND real UTC and the displayed local clock reads UTC+1. It then
+# stays behind, because a guest an hour short of its own 04:00 transition never reaches it. ONE
+# successful set-time puller run breaks the loop - and the puller needs qrexec, so a subject whose
+# install failed (win10-rc1, installer rc=10, qwt-logs EMPTY) runs the whole prime at UTC+1 and
+# every stamp it writes is an hour short of this log's UTC. See ETWCLOCKDST in findings/issues.md;
+# the two-sided catch is log-sweep's `windowunusable`, which is unconditional for exactly this sign.
 # This is also what a user's qube ends up with, so it is the configuration to test, not a shortcut.
 qvm-features "$CHURN" timezone localtime >/dev/null 2>&1 || true
 
