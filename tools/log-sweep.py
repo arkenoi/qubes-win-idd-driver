@@ -633,6 +633,19 @@ def b64dec_path(v):
         return v
 
 
+def _dropped_names(d):
+    """The names in a namesb64=<b64,...> field, the FILESKIPPED convention. Never raises: an
+    undecodable name is NAMED as undecodable rather than dropped, because a silently shortened
+    list of what a filter excluded is the defect this whole accounting exists to close."""
+    out = []
+    for part in [x for x in ((d or {}).get("namesb64") or "").split(",") if x]:
+        try:
+            out.append(base64.b64decode(part).decode("utf-8", "replace"))
+        except Exception:
+            out.append("(undecodable)")
+    return out
+
+
 # ----------------------------------------------------------------------------------------------- normalize
 _NORM_RULES = [
     (re.compile(r"S-1-5-21(-\d+)+"), "SID"),
@@ -3976,6 +3989,19 @@ def write_summary(rep, path):
     else:
         L.append("LOGDIR INVENTORY: absent - this stream predates the inventory, so the file and line "
                  "volume for this run is NOT KNOWN (missing data, not zero)")
+    # WHAT THE WINDOW EXCLUDED, from the filter's own count. The inventory above and the files=N in
+    # the header count DIFFERENT populations (non-recursive *.log vs recursive .log/.txt/.json/.old,
+    # windowed), so their difference was never a number anyone should have subtracted - and in
+    # campaign 1025-0050 it was subtracted by hand anyway. This line is the one the filter can
+    # actually account for.
+    drp = rep["header"].get("dropped")
+    if drp:
+        L.append("WINDOW FILTER: examined %s file(s), kept %s, excluded %s as older than the window%s" % (
+            drp.get("seen", "?"), drp.get("kept", "?"), drp.get("n", "?"),
+            ("  -- " + ", ".join(_dropped_names(drp)[:8])) if drp.get("n") not in (None, "", "0") else ""))
+    else:
+        L.append("WINDOW FILTER: this stream predates the drop accounting, so what the --since window "
+                 "excluded is NOT KNOWN (missing data, not zero)")
     c = rep["context"]
     L.append("CONTEXT: fault_injection=%s declared=%s%s records=%d%s" % (
         str(c["fault_injection"]).lower(), str(c["declared"]).lower(), (" (%s)" % c["declared_source"]) if c["declared"] else "", len(c["records"]),
@@ -4127,6 +4153,34 @@ def cmd_analyze(a):
                     "the guest's clock is %+.0f s from the host's at collection time (guest said %s, tz %s; "
                     "host said %s) - no --since window can be trusted, so every count may include lines from "
                     "outside it" % (skew, meta["begin"]["nowutc"], (meta["begin"] or {}).get("tz"), a.host_utc)))
+    # THE WINDOW AGAINST THE CLOCK THAT APPLIES IT - and NEITHER number comes from this side.
+    # The check above needs --host-utc, a second clock recorded by the wrapper; this one needs
+    # nothing but the collector's own BEGIN line, which carries both `nowutc` (the guest's UTC at
+    # collection) and `since` (the window it was handed). The guest filters on LastWriteTimeUtc
+    # >= since using THAT clock, so if its own `now` is EARLIER than `since` the window begins in
+    # the guest's future and no file it has ever written can satisfy the filter. Not a skew to
+    # tolerate: a window that cannot match anything.
+    # MEASURED, campaign 1025-0050 (the EU DST transition): four cells collected with
+    # since=00:54:47Z while the guests' own clocks read 00:10 to 00:34 - 20 to 44 minutes BEHIND
+    # the start of the window - and each sweep reported a quiet, complete-looking corpus built from
+    # the handful of files the gui-agent/gui-watchdog `$always` exemption carried through. The
+    # existing clockskew check let the worst of them (win10-clean, -3604 s) past, because it was
+    # satisfied by the phase correction; this one is unconditional and would have fired at minute 0
+    # of the first cell.
+    if meta and (meta.get("begin") or {}).get("nowutc") and (meta["begin"] or {}).get("since"):
+        _gnow = parse_iso((meta["begin"]["nowutc"] or "").rstrip("Z"))
+        _gsince = parse_iso((meta["begin"]["since"] or "").rstrip("Z"))
+        if _gnow is not None and _gsince is not None and _gnow < _gsince:
+            _d = (meta or {}).get("dropped") or {}
+            _dn = _d.get("n")
+            problems.append(("windowunusable", a.logsdir,
+                "the collector's own clock (%s) is %.0f s BEFORE the start of the --since window it was "
+                "handed (%s), so every file the guest has written looks older than the window to the guest "
+                "and the filter can only match files it was told to keep regardless%s - this sweep measured "
+                "a window the guest could not see into, and a quiet result from it means nothing"
+                % (meta["begin"]["nowutc"], (_gsince - _gnow).total_seconds(), meta["begin"]["since"],
+                   (" (collector reports %s file(s) dropped by this filter, %s kept)" % (_dn, _d.get("kept"))
+                    if _dn not in (None, "") else ""))))
     if not files:
         problems.append(("missing", a.logsdir, "no log files at all"))
     # BEFORE ANY WINDOW IS APPLIED OR ANY BOOT CLUSTERED: put every line in ONE clock phase so the
@@ -4332,6 +4386,7 @@ def cmd_analyze(a):
                    # collected logs), so this must not reach into it - reading it unguarded crashed
                    # `analyze <dir>` outright, and no test covered that mode.
                    "inventory": (meta or {}).get("inventory"), "invmodules": (meta or {}).get("invmodules") or [],
+                   "dropped": (meta or {}).get("dropped"),
                    # AN EXCLUSION IS NEVER SILENT. Every copy decode dropped as a strict byte prefix
                    # of another copy of the same file, with both guest paths, so a reader can see
                    # that the union collector pulled one file twice and which copy was kept.
@@ -4421,6 +4476,10 @@ def cmd_decode(a):
             meta["fileerrs"].append(kv_parse(body[8:]))
         elif body.startswith("FILESKIPPED "):
             meta["skipped"] = kv_parse(body[12:])
+        elif body.startswith("DROPPED "):
+            # What the --since filter excluded, as the filter itself counted it. ABSENT means an
+            # older collector that could not say; n=0 means it said nothing was dropped.
+            meta["dropped"] = kv_parse(body[8:])
         elif body.startswith("INVENTORY "):
             # What the guest's log directory actually holds, independent of the collection cap.
             meta["inventory"] = kv_parse(body[10:])

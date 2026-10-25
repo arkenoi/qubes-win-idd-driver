@@ -162,11 +162,30 @@ nterm=$(cs_code | command grep -cE "rc -eq (1|2|5|14|1722)\b")
   && ok "only_receipted_codes: no code is classified without a receipt in the client's source" \
   || bad "only_receipted_codes: $nterm branch(es) classify a code the source does not account for"
 
-# D. AND THE FALLTHROUGH MUST ACTUALLY RETRY: a sleep inside the loop, and the loop bounded.
-if cs_code | command grep -q 'Start-Sleep -Seconds $IntervalSeconds' && cs_code | command grep -q 'while ((Get-Date) -lt $deadline)'; then
-  ok "fallthrough_retries_bounded: an unrecognised rc waits and retries, inside a deadline"
+# D. AND THE FALLTHROUGH MUST ACTUALLY RETRY: a sleep inside the loop, and the loop bounded BY A
+#    CLOCK THE RETRY CANNOT MOVE. This leg required `while ((Get-Date) -lt $deadline)` and had been
+#    RED since the puller deliberately replaced that bound with a monotonic Stopwatch: the pull is
+#    fire-and-forget, so a separate set-time.ps1 can correct the clock WHILE this loop runs, and a
+#    wall-clock deadline then breaks in both directions - a guest corrected backward by three hours
+#    loops for three hours past its limit, one corrected forward exits instantly. Stopwatch is
+#    QueryPerformanceCounter and a clock set cannot touch it, so the property is a MONOTONIC bound
+#    and the old spelling is now the defect rather than the requirement.
+#    IT WENT UNSEEN BECAUSE THIS SUITE HAD NO PRODUCER: it was in no runner list, and nothing but a
+#    hand invocation had ever run it since it was written on 2026-10-08. Fixed the same day it was
+#    found - offline-suites.txt, floor 110.
+if cs_code | command grep -q 'Start-Sleep -Seconds $IntervalSeconds' \
+   && cs_code | command grep -q 'Stopwatch\]::StartNew()' \
+   && cs_code | command grep -q 'while ($sw.Elapsed.TotalSeconds -lt $DeadlineSeconds)'; then
+  ok "fallthrough_retries_bounded: an unrecognised rc waits and retries, inside a MONOTONIC deadline"
 else
-  bad "fallthrough_retries_bounded: the fallthrough does not wait, or the loop is unbounded"
+  bad "fallthrough_retries_bounded: the fallthrough does not wait, or its bound is not monotonic (a wall-clock deadline cannot bound a loop that straddles the clock correction it causes)"
+fi
+# AND THE WALL-CLOCK BOUND MUST NOT COME BACK. Driven as the defect: if the loop is ever rewritten
+# against (Get-Date) this fails, which is the only thing that keeps the reasoning above enforced.
+if cs_code | command grep -q 'while ((Get-Date) -lt'; then
+  bad "fallthrough_bound_not_wallclock: the loop is bounded by the wall clock again - the clock it is waiting for can move that bound"
+else
+  ok "fallthrough_bound_not_wallclock: no wall-clock loop bound, so a mid-loop correction cannot extend or collapse the wait"
 fi
 
 # E. The one text match left selects on OUR OWN literal, so it cannot change with the guest's

@@ -84,6 +84,25 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 #   a stubbed smoke test and asserts the refutation arm runs FIRST, that EITHER arm failing stops
 #   the campaign before the matrix, that rc 2 is reported as the RIG and not the bind, and that the
 #   artefacts stay out of record-acceptance's *.out glob. 10 checks.
+# 108 -> 109 on 2026-10-25: sweep-window-selftest.sh ADDED - a --since WINDOW THE GUEST CANNOT SEE
+#   INTO, and what the filter excluded. Campaign 1025-0050, the night of the EU DST transition: four
+#   cells were collected with since=00:54:47Z while the guests' own clocks read 00:10 to 00:34, so
+#   the collector's LastWriteTimeUtc >= $sinceU filter could not match a single file any of those
+#   guests had ever written, and each sweep then graded the handful the gui-agent/gui-watchdog
+#   $always exemption carries through and reported a quiet corpus. The existing clockskew check
+#   needs --host-utc and let the worst cell (-3604 s) past; this one compares the collector's own
+#   nowutc against the since it was handed, both already in its BEGIN line, and needs no second
+#   clock. The suite also covers the filter's new drop accounting (LSW DROPPED), which replaces a
+#   subtraction of INVENTORY against the FILE lines that counted two different populations. 16
+#   checks; run against HEAD~ with SWEEP_COLLECT/SWEEP_ANALYZER, 9 of them fail.
+# 109 -> 110 on 2026-10-25: clock-sync-selftest.sh ADDED - it had NO PRODUCER. Written on
+#   2026-10-08 for the owner's "fix the clock issue once and forever so you NEVER COME WITH IT
+#   AGAIN", it was in no runner list and nothing but a hand invocation ever ran it, so it had been
+#   carrying a RED leg unseen: fallthrough_retries_bounded required `while ((Get-Date) -lt
+#   $deadline)` after the puller deliberately replaced that bound with a monotonic Stopwatch (a
+#   wall-clock bound cannot bound a loop that straddles the clock correction it causes). The leg now
+#   asserts the monotonic bound and a second leg fails if the wall-clock one returns. Verified red
+#   at HEAD before the fix, from inside tools/tests so ROOT resolves. 33 checks.
 # 101 -> 102 on 2026-10-23: decode-dedup-selftest.sh ADDED - one logical file pulled TWICE is not two
 #   files. The union collector (Get-LswLogDirCandidates) pulls a file present in two candidate
 #   LogDirs twice, and decode kept both, so every line counted twice: measured on the first
@@ -225,7 +244,7 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # consumer accepts the shipped QWTBIRTH form, skipping comments (all six now explain the demotion in
 # prose a whole-file check would pass on), and drives the restart parser against a line a 4.3.37
 # guest actually wrote, with the branch removed to prove it reads 0 without it.
-FLOOR=${OFFLINE_SUITES_FLOOR:-108}
+FLOOR=${OFFLINE_SUITES_FLOOR:-110}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"

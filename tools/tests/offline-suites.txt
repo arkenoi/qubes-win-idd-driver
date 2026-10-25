@@ -161,3 +161,5 @@ qdbwait-bound-selftest.sh
 rig-cleanup-selftest.sh
 logvol-smoke-selftest.sh
 accept-logvol-smoke-selftest.sh
+sweep-window-selftest.sh
+clock-sync-selftest.sh

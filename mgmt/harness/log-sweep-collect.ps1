@@ -41,6 +41,7 @@
 #   LSW PULLEND name=f<n> b64lines=<m>
 #   LSW FILEERR pathb64=<b64> error=<b64>            a log that exists but could not be read - the analyzer FAILS on it
 #   LSW FILESKIPPED n=<k>                            more files than -MaxFiles: the oldest were not pulled (INCOMPLETE)
+#   LSW DROPPED reason=window seen=<n> kept=<n> n=<k> namesb64=<b64,...>   what the --since filter excluded, ALWAYS emitted
 #   LSW EVENTS channels=<n> required_missing=<list|->
 #   LSW PULL name=events ... (the EV block)
 #   LSW END files=<n> pulled=<n> errors=<n> event_errors=<n>
@@ -230,13 +231,29 @@ $cands = New-Object 'System.Collections.Generic.List[object]'
 # one file can be reachable under two of the candidate directories at once - a junction bind leaves
 # <LogDir> and the volume path naming the same files - so every add is deduplicated by full path.
 $seenFiles = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+# WHAT THE WINDOW EXCLUDED IS REPORTED, NEVER DROPPED IN SILENCE. Campaign 1025-0050: this filter
+# examined 17 files and carried 12, and no line of the stream said so - the difference had to be
+# found by counting INVENTORY against the FILE lines by hand, and the inventory counts a DIFFERENT
+# population (non-recursive *.log) so even that subtraction was not arithmetic anyone should trust.
+# A window excluding old files is NORMAL and this is not a verdict; it is the number the analyzer
+# needs to say how much damage an unusable window did.
+$dropWindow = 0
+$dropNames = New-Object 'System.Collections.Generic.List[string]'
+$seenCands = 0
 if ($dirExists) {
     $all = @(Get-ChildItem -LiteralPath $logDir -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -match '^\.(log|txt|json|old)$' })
     $newestWd = @($all | Where-Object { $_.Name -match '^(?i)gui-watchdog-' } | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1)
     $newestAg = @($all | Where-Object { $_.Name -match '^(?i)gui-agent-' } | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1)
     foreach ($f in $all) {
+        $seenCands++
         $always = ($newestWd.Count -gt 0 -and $f.FullName -eq $newestWd[0].FullName) -or ($newestAg.Count -gt 0 -and $f.FullName -eq $newestAg[0].FullName)
-        if (($f.LastWriteTimeUtc -ge $sinceU -or $always) -and $seenFiles.Add($f.FullName)) { $cands.Add($f) }
+        if ($f.LastWriteTimeUtc -lt $sinceU -and -not $always) {
+            # counted as a WINDOW drop only - a dedup hit below is a different thing and is not one.
+            $dropWindow++
+            if ($dropNames.Count -lt 40) { $dropNames.Add($f.Name) }
+            continue
+        }
+        if ($seenFiles.Add($f.FullName)) { $cands.Add($f) }
     }
 }
 # ---- THE OTHER DIRECTORIES A MODULE COULD HAVE RESOLVED ------------------------------------------
@@ -265,11 +282,21 @@ foreach ($d in (Get-LswLogDirCandidates)) {
     }
     $n = 0
     foreach ($f in @(Get-ChildItem -LiteralPath $d -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -match '^\.(log|txt|json|old)$' })) {
-        if ($f.LastWriteTimeUtc -lt $sinceU) { continue }
+        $seenCands++
+        if ($f.LastWriteTimeUtc -lt $sinceU) {
+            $dropWindow++
+            if ($dropNames.Count -lt 40) { $dropNames.Add($f.Name) }
+            continue
+        }
         if ($seenFiles.Add($f.FullName)) { $cands.Add($f); $n++ }
     }
     Write-Output ("${Mark}LOGDIREXTRA pathb64=$(Get-LswB64 $d) exists=1 files=$n")
 }
+# ALWAYS EMITTED, n=0 included: "0 dropped" and "this collector cannot say" are different facts, and
+# an analyzer that cannot tell them apart would read an old capture as a clean one. Names are base64
+# per name, the FILESKIPPED convention, because a log name is guest data and must not break the line.
+$_dropEnc = @($dropNames | ForEach-Object { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($_)) }) -join ','
+Write-Output ("${Mark}DROPPED reason=window seen=$seenCands kept=$($cands.Count) n=$dropWindow namesb64=$_dropEnc")
 # C:\Users\Public\qwt-fi-*.txt: the knob files a fault-injection broker build reads (wgcbroker.cpp FiDeafHwnd) - their presence is
 # in-capture evidence of an injection; the analyzer keeps them as 'marker' files, never as a log.
 $fiKnobs = @(Get-ChildItem -LiteralPath 'C:\Users\Public' -Filter 'qwt-fi-*.txt' -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })

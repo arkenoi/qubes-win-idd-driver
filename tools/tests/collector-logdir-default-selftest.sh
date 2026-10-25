@@ -115,7 +115,11 @@ if printf '%s' "$CODE" | command grep -qa 'foreach ($d in (Get-LswLogDirCandidat
 else
   no "nothing iterates Get-LswLogDirCandidates - the union is prose only"
 fi
-if printf '%s' "$CODE" | command grep -a -A12 'foreach ($d in (Get-LswLogDirCandidates))' | command grep -qa '$cands.Add($f)'; then
+# THE WINDOW MUST COVER THE LOOP BODY, not a guess at its length. -A12 was enough when the body was
+# four lines; the window drop accounting (LSW DROPPED, 2026-10-25) made it 15, and this leg went red
+# on a collector that adds to $cands perfectly well - a position-anchored check broken by an
+# insertion above its target, not a defect in the code it was aimed at.
+if printf '%s' "$CODE" | command grep -a -A24 'foreach ($d in (Get-LswLogDirCandidates))' | command grep -qa '$cands.Add($f)'; then
   ok "files found in a non-primary candidate are ADDED to the collected set"
 else
   no "the candidate loop does not add to \$cands - it would report and collect nothing"
