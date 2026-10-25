@@ -76,6 +76,14 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # required. THE COMPILER-POLICY EXCLUSION DOES NOT APPLY TO IT: the offline job is ubuntu-latest, so
 # gcc is present; it checks out with `submodules: true`, so agent/ is there; and it materialises the
 # pinned upstream/ro/qubes-windows-utils that this suite's -fsyntax-only checks read.
+# 107 -> 108 on 2026-10-25: accept-logvol-smoke-selftest.sh ADDED - the campaign now smoke-tests the
+#   LOG VOLUME BIND before its eight cells, and this drives that wiring. Campaign 40134888669
+#   aborted 11 minutes into its first cell on a volume the guest could not see, having spent 10 of
+#   them installing, and every preparation gate written afterwards checks around that bind rather
+#   than the bind. The suite executes the code between release-acceptance's RASMOKE markers against
+#   a stubbed smoke test and asserts the refutation arm runs FIRST, that EITHER arm failing stops
+#   the campaign before the matrix, that rc 2 is reported as the RIG and not the bind, and that the
+#   artefacts stay out of record-acceptance's *.out glob. 10 checks.
 # 101 -> 102 on 2026-10-23: decode-dedup-selftest.sh ADDED - one logical file pulled TWICE is not two
 #   files. The union collector (Get-LswLogDirCandidates) pulls a file present in two candidate
 #   LogDirs twice, and decode kept both, so every line counted twice: measured on the first
@@ -217,7 +225,7 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # consumer accepts the shipped QWTBIRTH form, skipping comments (all six now explain the demotion in
 # prose a whole-file check would pass on), and drives the restart parser against a line a 4.3.37
 # guest actually wrote, with the branch removed to prove it reads 0 without it.
-FLOOR=${OFFLINE_SUITES_FLOOR:-107}
+FLOOR=${OFFLINE_SUITES_FLOOR:-108}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"

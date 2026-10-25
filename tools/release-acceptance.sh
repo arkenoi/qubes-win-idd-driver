@@ -277,6 +277,41 @@ _ra_stamp_inherited "$ACCEPT_ATTEMPT" "$LOG" "$CAMP/runner.log" $WORK/*.out >/de
 # matching the same string rather than two clocks.
 export MATRIX_ATTEMPT="$ACCEPT_ATTEMPT"
 # RAATTEMPT-B
+
+# ---- 3c. THE BIND IS SMOKE-TESTED BEFORE THE EIGHT CELLS THAT COST HOURS ------------------------
+# Campaign 40134888669 aborted 11 minutes in, on its first cell, because the guest could not see the
+# log volume - after spending 10 of those minutes installing. The preparation gates written
+# afterwards (campaign-preflight.sh 2b) check everything AROUND that bind and not one of them checks
+# the bind. Owner: "and why we did not smoke test the bind". So it runs here, on a clone of the QWT
+# golden, and it costs ~6 minutes against a campaign of hours.
+#
+# BOTH ARMS, EVERY RUN, and the refutation arm goes FIRST. With nothing attached the bind MUST
+# refuse; if it answers ok there, then its receipt is not about the volume and a PASS of the other
+# arm means nothing - a gate whose instrument is not checked each time is the decoration this
+# project keeps paying for. 3 minutes buys that, and it is also the cheaper arm to fail on.
+# A non-PASS STOPS THE CAMPAIGN HERE: the artefacts go to $CAMP/logvol-smoke-*/ and deliberately NOT
+# to a *.out (record-acceptance.sh globs those and requires a MATRIX footer in each).
+# RASMOKE-A  (to the B marker: extracted and EXECUTED by
+# tools/tests/accept-logvol-smoke-selftest.sh; neither marker names the other)
+# AND THERE IS NO KNOB. Asked whether a LOGVOL_SMOKE=0 escape was acceptable, Jev answered 0.50 -
+# no endorsement either way - and this project's rule is to ask before adding a guard knob at all.
+# Six minutes against a campaign of hours does not need an off switch, and the one thing an off
+# switch guarantees is that the run which most needed the gate is the run that skipped it.
+for _arm in --no-attach ""; do
+  _tag=$([ -n "$_arm" ] && echo refutation || echo bind)
+  say "logvol smoke ($_tag arm): can a guest SEE the log volume, and does evidence reach the image?"
+  # shellcheck disable=SC2086
+  LOGVOL_SMOKE_OUT="$CAMP/logvol-smoke-$_tag" \
+    ./mgmt/harness/logvol-smoke.sh $_arm >>"$CAMP/logvol-smoke.log" 2>&1
+  _src=$?
+  case "$_src" in
+    0) say "logvol smoke ($_tag arm) PASS - $(tail -2 "$CAMP/logvol-smoke-$_tag/verdict.tsv" 2>/dev/null | tr '\t\n' '  ')" ;;
+    2) die "logvol smoke ($_tag arm) could not measure (INVALID-RIG, rc=2): $(tail -1 "$CAMP/logvol-smoke.log"). The rig, not the bind - and a campaign is not started on a rig that cannot clone and boot a golden." ;;
+    *) die "logvol smoke ($_tag arm) FAILED (rc=$_src): $(tail -1 "$CAMP/logvol-smoke.log"). This is campaign 40134888669 caught in minutes instead of after an install - fix the volume path before spending the cells." ;;
+  esac
+done
+# RASMOKE-B
+
 # The campaign's stdout MUST land in a <tag>.out inside $CAMP: record-acceptance.sh globs *.out and
 # requires the '=== MATRIX: n passed, n failed ===' footer in each, treating a footerless file as a
 # group that did not finish. Writing this to runner.log instead would make the run unrecordable.
