@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# UNRELIABLE - DROPPED FROM PREFLIGHT 2026-10-25, owner's directive: never write a test for a
+# test, and never fault-inject a harness fix as part of the harness. This file mutates another
+# TEST or HARNESS file and runs the mutants, so a defect in it corrupts both arms. It is not in
+# tools/tests/offline-suites.txt, nothing runs it, and it is NOT to be fixed or re-registered
+# without the owner saying so. See TESTFORATESTRECURSION in findings/issues.md.
 # wrapper-exit-reason-selftest.sh - the qrexec-wrapper exit-reason classification, OFFLINE.
 # No guest, no CI, no Windows compiler: this is a structural check on the source.
 #

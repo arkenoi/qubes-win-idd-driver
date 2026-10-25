@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# UNRELIABLE - DROPPED FROM PREFLIGHT 2026-10-25, owner's directive: never write a test for a
+# test, and never fault-inject a harness fix as part of the harness. This file mutates another
+# TEST or HARNESS file and runs the mutants, so a defect in it corrupts both arms. It is not in
+# tools/tests/offline-suites.txt, nothing runs it, and it is NOT to be fixed or re-registered
+# without the owner saying so. See TESTFORATESTRECURSION in findings/issues.md.
 # log-sweep-selftest.sh - offline proof matrix for the PROACTIVE LOG SWEEP (tools/log-sweep.py; the rig wrapper is
 # mgmt/harness/log-sweep.sh, the guest collector mgmt/harness/log-sweep-collect.ps1).
 #

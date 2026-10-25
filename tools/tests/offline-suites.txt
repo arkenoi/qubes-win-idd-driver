@@ -33,6 +33,12 @@
 #       git history, which no job here is known to carry. Being excluded is why nothing noticed
 #       either that red or that two of its checks passed on the shipped brace defect. The waits are
 #       now declared by site and the proof is per-check source mutation - no git, no network.
+# NOT LISTED, owner's directive 2026-10-25: "you should NEVER write a test for a test" and
+# "NEVER FI HARNESS FIXES AS PART OF HARNESS. it is fucking recursion." Five suites that mutate
+# another TEST or HARNESS file and run the mutants are dropped from preflight and recorded as
+# UNRELIABLE - not to be fixed, not to be re-registered. They are named ONE place only, with their
+# reasons, in tools/tests/not-in-the-gate.txt, which is what tools/lint-harness.py L32 reads; a
+# second copy of the list here would be a second thing to rot. See TESTFORATESTRECURSION.
 # A suite is in this file because it was observed to pass, not because it looked portable.
 # AND THEN MEASURED AGAIN, IN THE ENVIRONMENT THAT ACTUALLY RUNS IT. The first version of this list
 # Everything else in tools/tests/ needs a Qubes rig, a loop device, PowerShell, mtools or a
@@ -119,7 +125,6 @@ launch-determination-selftest.sh
 ledger-invariant-audit.py
 lifecycle-selftest.sh
 log-policy-selftest.sh
-log-sweep-selftest.sh
 loginit-banner-debug-selftest.sh
 logsweep-rotation-placeholder-selftest.sh
 logvol-guesttext-selftest.sh
@@ -151,7 +156,6 @@ pipe-eof-selftest.sh
 probe-anchor-selftest.sh
 pwcarry-selftest.sh
 pwclass-truth-table.sh
-pwsh-path-selftest.sh
 qcon-session-selftest.sh
 qdbwait-bound-selftest.sh
 qrexec-gap-witness-selftest.sh
@@ -198,7 +202,6 @@ wedge-verdict-selftest.sh
 wgcbroker-layout-selftest.sh
 window-measure-selftest.sh
 wrapper-exit-emit-selftest.sh
-wrapper-exit-reason-selftest.sh
 wrapper-one-line-selftest.sh
 wrong-interpreter-gate-selftest.sh
 wu-definition-class-selftest.sh
