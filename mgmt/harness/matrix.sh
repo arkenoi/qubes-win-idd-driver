@@ -1566,6 +1566,40 @@ if (Test-Path 'C:/qwt-install.log') {
 
 run_install(){ # $1=vm $2=label $3=install-source (drive/dir carrying install.cmd) $4=extra-args
   local vm=$1 lbl=$2 src=$3 extra=${4:-}
+  # THE GUEST CLOCK, BEFORE THE INSTALLER READS IT. THIS FILE HAD NO synctime CALLER AT ALL.
+  # MEASURED 2026-10-25, campaign 40232828458 cell WIN10-upgrade: `installer RESULT ok:false
+  # (REFUSING to install: this guest's clock cannot validate the payload's driver catalogs ...
+  # 0x800B0101) with error flags: clock_skew_refusal=true`, and it took SIX more checks down with
+  # it (agent != release binary, INVALID-PRECONDITION 'none', autologon not armed, accept-clean
+  # battery, caller alignment) before the cell aborted the whole matrix. One cause, seven failures.
+  # WHY THIS PATH AND NOT THE STICK: the clean cells enter through prime-run, where onboot.cmd now
+  # runs fix-guest-clock.ps1 off the priming stick. These cells enter over QREXEC on a fixture that
+  # already carries QWT, so onboot never runs - and every entry fixture here was sealed in SUMMER
+  # (win10-iqi/win11-iqi, 2026-10-15), so it boots an hour behind (ETWCLOCKDST). The fixtures do NOT
+  # self-correct: that was the open question and this campaign answered it.
+  # NOT A SECOND ROUTE: quick-upgrade.sh:478 is the proven caller and its own comment says `qtest
+  # synctime has existed since 2026-08-11 with "call this after every VM start" and had NO callers
+  # ... the harness should not be handing it a broken clock in the first place`. It was right, and
+  # the acceptance matrix never got the caller.
+  # VERIFIED, NOT REQUESTED: a WARN nobody reads is how this survived. The skew is re-read from the
+  # guest AFTER the sync and a still-broken clock is INVALID-INSTRUMENT - the rig could not measure,
+  # which is a different finding from a product that refused.
+  local _hnow _gutc _skew
+  QTEST_VM=$vm "$HERE/tools/qtest" synctime >/dev/null 2>&1 \
+    || say "  $lbl: [WARN] qtest synctime returned non-zero - verifying the clock regardless"
+  _hnow=$(date -u +%s)
+  _gutc=$(QTEST_VM=$vm qrun "powershell -NoProfile -Command \"[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')\"" 2>/dev/null \
+          | tr -d '\r' | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z' | head -1)
+  if [ -z "$_gutc" ]; then
+    no "$lbl: INVALID-INSTRUMENT - could not read the guest clock before install; a guest an hour behind refuses the payload's driver catalogs (0x800B0101) and takes the whole cell with it"
+    return 1
+  fi
+  _skew=$(( $(date -u -d "$_gutc" +%s) - _hnow ))
+  if [ "${_skew#-}" -gt 120 ]; then
+    no "$lbl: INVALID-INSTRUMENT - the guest clock is ${_skew}s from this host AFTER qtest synctime (guest says $_gutc); the installer would refuse its driver catalogs as not-yet-valid"
+    return 1
+  fi
+  say "  $lbl: guest clock verified ${_skew}s from this host before install"
   # Clear BOTH logs. The MSI verbose log lives at a fixed path and survives from earlier installs,
   # so without this the capture can show a two-week-old install and read as this run's evidence.
   # VERIFY THE CLEAR (H1). A failed delete leaves the GOLDEN's own install log in place - every
