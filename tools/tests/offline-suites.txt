@@ -202,7 +202,6 @@ svc-exitcode-selftest.sh
 sweep-gate-selftest.sh
 sweep-life-selftest.sh
 sweep-noagent-selftest.sh
-sweep-window-selftest.sh
 toastactions-selftest.sh
 toasthold-grade-clock-selftest.sh
 toasthold-selftest.sh

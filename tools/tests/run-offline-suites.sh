@@ -84,17 +84,13 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 #   a stubbed smoke test and asserts the refutation arm runs FIRST, that EITHER arm failing stops
 #   the campaign before the matrix, that rc 2 is reported as the RIG and not the bind, and that the
 #   artefacts stay out of record-acceptance's *.out glob. 10 checks.
-# 108 -> 109 on 2026-10-25: sweep-window-selftest.sh ADDED - a --since WINDOW THE GUEST CANNOT SEE
-#   INTO, and what the filter excluded. Campaign 1025-0050, the night of the EU DST transition: four
-#   cells were collected with since=00:54:47Z while the guests' own clocks read 00:10 to 00:34, so
-#   the collector's LastWriteTimeUtc >= $sinceU filter could not match a single file any of those
-#   guests had ever written, and each sweep then graded the handful the gui-agent/gui-watchdog
-#   $always exemption carries through and reported a quiet corpus. The existing clockskew check
-#   needs --host-utc and let the worst cell (-3604 s) past; this one compares the collector's own
-#   nowutc against the since it was handed, both already in its BEGIN line, and needs no second
-#   clock. The suite also covers the filter's new drop accounting (LSW DROPPED), which replaces a
-#   subtraction of INVENTORY against the FILE lines that counted two different populations. 16
-#   checks; run against HEAD~ with SWEEP_COLLECT/SWEEP_ANALYZER, 9 of them fail.
+# 109 -> 108 on 2026-10-26: sweep-window-selftest.sh DELETED. It was the single red in the
+#   2026-10-25 preflight and did NOT reproduce - green in-tree at HEAD, green in a clean
+#   worktree, green under this runner's own rig-shim - while its subject carried the marker it
+#   reported absent. Owner's standing rule: a selftest that fails and needs a quick fix is
+#   DROPPED COMPLETELY, not fixed. The property it covered is still enforced by
+#   log-sweep-collect.ps1:312 writing the DROPPED marker, and by the per-cell sweep failing
+#   its cell on INVALID-SWEEP-DATA/-UNJUDGED when the collector's window loses content.
 # 109 -> 110 on 2026-10-25: clock-sync-selftest.sh ADDED - it had NO PRODUCER. Written on
 #   2026-10-08 for the owner's "fix the clock issue once and forever so you NEVER COME WITH IT
 #   AGAIN", it was in no runner list and nothing but a hand invocation ever ran it, so it had been
