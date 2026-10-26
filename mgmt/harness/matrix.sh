@@ -3465,7 +3465,58 @@ if [ -x tools/sweep-gate.sh ]; then
     --declare-caused-rare 'RecreateDuplication: .*BUT THE GEOMETRY CHANGED'
     'CAUSED by this campaign: it drives resolution changes, and a mode change across a duplication recreate is how DXGI signals staleness by design (owner 2026-10-17). Declared for the per-cell sweep with the same receipt, pending the pixel receipt in GEOMETRYERRORUNSETTLEABLE.'
     --declare-caused-rare 'InitVchan: QGAVCHANFAIL .*request dropped'
-    'CAUSED by this campaign: the readiness probe (cmd /c echo QREADY) is queued by dom0 while the guest has no qrexec and delivered when it registers, with the caller gone - and the halt/boot cycle that strands it is one the install requires. Four measured attempts to remove it at the probe: x9 -> x8 -> x9 -> x15. Receipt: the dropped request names cmd.exe and this qube as caller; see the correlation in matrix.sh above and findings/issues.md QGAVCHANUNDECLARED.')
+    'CAUSED by this campaign: the readiness probe (cmd /c echo QREADY) is queued by dom0 while the guest has no qrexec and delivered when it registers, with the caller gone - and the halt/boot cycle that strands it is one the install requires. Four measured attempts to remove it at the probe: x9 -> x8 -> x9 -> x15. Receipt: the dropped request names cmd.exe and this qube as caller; see the correlation in matrix.sh above and findings/issues.md QGAVCHANUNDECLARED.'
+    # WE REMOVE THE VALUE OURSELVES, AT :1319 ABOVE, AND THE PRODUCT IS RIGHT TO SAY SO LOUDLY.
+    # The regex names only these two boot-time clock scripts, so the same fallback from ANY other
+    # script still blocks - which matters, because for every other script the value's absence is
+    # not something this harness arranged.
+    # THE CHAIN, every link code or a timestamped line, none inferred (CLOCKSCRIPTLOGSMISSLOGDIR):
+    #   logvol-bind.ps1:188 `Remove-ItemProperty -Path $RegKey -Name 'LogDir'` - the -Clear branch
+    #   removes the LogDir VALUE at the root and per module, asserts its absence at :194, and names
+    #   LogLevel nowhere. matrix.sh:1319 calls it before every park, and a failure to clear ABORTS
+    #   the campaign, so the clear is not optional.
+    #   rel-40243956400-r2 win10-clean, UTC from full.out against guest-local (+2) from the logs:
+    #     07:09:58 LogDir CLEARED before parking   07:10:47 halted   07:11:22 session up
+    #     09:11:33 set-time.ps1 falls back         09:11:37 sync-clock-from-dom0.ps1 falls back
+    #     07:11:46 QWT logs bound to the log volume again
+    #   The SAME script on the SAME cell wrote to the CONFIGURED dir at 09:07:34, 09:12:46 and
+    #   09:14:06 with no warning - so the state is this window, not the script, user or bitness.
+    # AND THE KEY WAS READABLE THROUGHOUT: across the whole capture tree, 12 LogDir fallbacks sit
+    # beside ZERO LogLevel fallbacks, both read from the same key by the same Get-ItemPropertyValue
+    # in the same LogStart call. That refutes WOW64 and permissions for a third time, independently
+    # of the two arms the register had already measured.
+    # ON THE APPVM CELLS IT IS PERMANENT AND BY DESIGN: :1319's own comment is that the park must
+    # not carry a LogDir or every AppVM derived from it logs NOWHERE, so those two cells have no
+    # LogDir for their whole life and no product change can remove the line.
+    # Jev on this disposition, state in the evidence dir (logdir-state.txt/logdir-ans*.json):
+    # declare_caused 0.95 (product_defect 0.02, harness_defect 0.01), missing_measurement none 0.92
+    # after the code link was added, chain_established 0.65. RECORDED AS A FINDING, NOT A PASS:
+    # scope_ok came back 0.55, BELOW the 0.6 floor - a declaration is gate code and the owner's
+    # directive that day was "stop fixing the gates", so this entry is reported to him explicitly
+    # rather than treated as sanctioned.
+    # WHAT IS STILL OWED AND IS NOT EXCUSED BY THIS ROW: in that ~24 s window those two logs land on
+    # C: and so are NOT on the secondary volume that survives a wedge, and log.ps1 prints "LogDir is
+    # unreadable" for a condition it tests as `-not $logDir`, which is equally true of an ABSENT
+    # value - the wording is what sent two investigations at WOW64 and permissions. Both stay open
+    # in findings/issues.md; the message is in core-agent, so fixing it needs a new package.
+    # THE HARNESS RE-ARMS AT t+0 FROM A GUEST THAT HAS JUST REPLACED ITS OWN PV STACK, which
+    # arm-module-bases.sh:221 documents as the least-settled moment a guest ever has, measured
+    # 2026-09-22 in WIN11-reinstall. The retry is the committed response to that transient.
+    # IT CANNOT HIDE THE FAILURE: if both attempts write nothing the script says "FAIL: the
+    # recorder wrote NOTHING on this boot" and exits non-zero, and on success it says "the retry
+    # rescued the arming: N records" - so the declared line is the transient, never the outcome.
+    # ONLY THE LINE THAT WAS ACTUALLY OBSERVED. This regex first also covered the sibling pull WARN
+    # ("the host copy came back with no records - settling 10s and pulling once more"), on the
+    # reasoning that arm-module-bases.sh documents it identically and puts the same hard FAIL behind
+    # it. But that line did NOT occur in rel-40243956400-r2, and a declaration written for a
+    # condition nobody has seen excuses something unmeasured - Jev, shown the diff, scored
+    # scope_creep extra_behaviour 0.61 and hides_a_defect 0.62, and this is what it was pointing at.
+    # So it is out: when that WARN is first seen, it gets declared then, with its own receipt.
+    # Jev on this disposition: declare_caused 0.89 (product_defect 0.02).
+    --declare-caused-rare 'first run wrote nothing - settling [0-9]+s and retrying once'
+    'CAUSED by this campaign: it re-arms the module-base recorder immediately after the install or upgrade replaces the guest PV stack, at t+0 from the session returning, which arm-module-bases.sh:221 records as measured (2026-09-22, WIN11-reinstall) to be the least settled a guest ever is. The retry-once is the committed response and it reports its outcome either way - "the retry rescued the arming: N records" on success, and on total failure a FAIL line plus a non-zero exit that this regex does not cover and cannot excuse.'
+    --declare-caused-rare 'qwt log: LogDir is unreadable .*(set-time|sync-clock-from-dom0)\.ps1-'
+    'CAUSED by this campaign: matrix.sh:1319 calls logvol_clear_guest before every park, and logvol-bind.ps1:188 REMOVES the LogDir value (asserting its absence at :194) so that AppVMs derived from the park use the product default - without which every AppVM boot-time module logs nowhere. The guest then boots and its boot-time clock scripts run ~11 s after session-up, while the bind is re-asserted ~24 s after it, so those two scripts read an ABSENT value and log.ps1 falls back to <SystemDrive>\Qubes Logs and says so loudly, which is what CLAUDE.md requires of a fallback. Receipt: win10-clean, clear 07:09:58Z, boot 07:11:22Z, fallbacks guest-local 09:11:33/09:11:37, rebind 07:11:46Z; the same script wrote to the configured dir at 09:07:34, 09:12:46 and 09:14:06 without warning; and 12 LogDir fallbacks sit beside ZERO LogLevel fallbacks from the same key and the same read. On the two appvm cells the absence is permanent by design. Any OTHER script falling back is not covered by this regex and still blocks.')
   # THE CAMPAIGN'S SIZE, so the gate can compare a vendored-emitter count against a baseline taken
   # from a campaign of a DIFFERENT size. Without it the comparison is absolute and a full 8-cell
   # campaign can never pass a 3-cell baseline - which is what blocked the 4.3.37 cut (see the
