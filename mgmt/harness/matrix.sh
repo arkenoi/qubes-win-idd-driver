@@ -3364,10 +3364,46 @@ if [ -x tools/sweep-gate.sh ]; then
   # exactly the files the previous commit added scope for and claimed were covered. Measured on a
   # real evidence tree: of the logs carrying a declared error, ALL of them were below the limit -
   # depth 3 reached 20 of 83 logs and 0 of the 10 that had errors in them.
+  # AND THEN THAT DEPTH FIX ADDED A SECOND COPY OF EVERY GUEST LOG, WHICH THE GATE COUNTED TWICE.
+  # $M holds TWO pulls of each guest log - $M/<cell>-guestlogs/logs/files/ (the collector's) and
+  # $M/logvol-<cell>/files/qwt-logs/<vm>/ (logvol_pull, off the image) - and at -maxdepth 3 NEITHER
+  # was reached, so removing the limit brought in both. sweep-gate.sh:722 dedupes by RESOLVED PATH
+  # (readlink -f), and two pulls are two different real files, so both were read. Its own comment at
+  # :717 names the stake: "a file read twice can resurface a dispositioned message as a regression
+  # that never happened" - which is precisely what it then did.
+  # MEASURED on rel-40243956400-r2, the campaign this blocked (2026-10-26):
+  #   signature                               guestlogs  logvol  gate said  surfaces above
+  #   QpsRead: [N] client is disconnected            34      28         62              57
+  #   QpsReaderThread: [N] read failed               36      32         60              54
+  #   VchanWaitForSendSpace: vchan buffer full       65      65        130              54
+  # The gate's figure is the SUM of the two pulls. Running the gate BOTH WAYS over that same tree:
+  #   as-is      720 inputs  ->  unaccounted=15 risen=3 accounted=3
+  #   excluded   415 inputs  ->  unaccounted=15 risen=1 accounted=3
+  # So the doubling inflated ONLY `risen`, and only the count-threshold comparison - unaccounted and
+  # accounted are per-DISTINCT-SIGNATURE and a duplicated line never moved them. Two of the three
+  # rises did not exist: on one pull QpsRead is 34 against 57 and QpsReaderThread 36 against 54.
+  # THE BASELINE IS SINGLE-PULL, so the doubling does NOT cancel in the comparison. The `actual` 33
+  # and 31 quoted at sweep-gate.sh:772-779 come from campaign rel-39162172792, and that tree has
+  # logvol_files=0 - its logvol-<cell> dirs exist but hold no files/qwt-logs/<vm>/*.log at all.
+  # KEEPING THE GUESTLOGS PULL, NOT THE IMAGE PULL, AND IT IS DECIDABLE RATHER THAN A PREFERENCE:
+  # the ledger and every vendored baseline were recorded on the guestlogs population, so this keeps
+  # today's counts comparable to them with no baseline change; and guestlogs exists for EVERY cell
+  # including the two appvm cells, which have no logvol tree, so the rule needs no fallback branch.
+  # IT HIDES NOTHING, MEASURED RATHER THAN ARGUED: across all six cells that have both pulls, the
+  # number of error/warning signatures present in the logvol pull and ABSENT from the guestlogs pull
+  # is ZERO (the guestlogs pull is a superset - 7 and 4 signatures the other way on the two upgrade
+  # cells). Jev: fix_sound 0.93, and its hides_anything 0.77 is what that count refutes.
+  # UNTOUCHED: the per-cell log sweep and collect-failure still read the logvol image pull, which is
+  # the copy that survives a wedge. This changes only what the CAMPAIGN-LEVEL gate counts.
+  # SEPARATE AND REGISTERED, NOT FIXED HERE: for qubesdb-daemon the two pulls are not the same
+  # content (rel-39476792836 QpsRead guestlogs=28 vs logvol=71; rel-40142194040 17 vs 42), so the
+  # collector's pull undercounts that module. Switching populations and changing the counting rule
+  # in one change would leave neither measurable - see findings/issues.md SWEEPCOUNTSEVERYGUESTLOGTWICE.
   mapfile -t _swl < <(find "$M" -type f \( -name '*.out' -o -name '*.log' -o -name '*.cur' \
                         -o -name '*.tail' \) -size -8M -size +0 \
                         ! -name '*-logsweep.out' ! -path '*-guestlogs/analyze.out' \
-                        ! -path '*-guestlogs/sweep.log' 2>/dev/null | sort)
+                        ! -path '*-guestlogs/sweep.log' \
+                        ! -path '*/logvol-*/files/qwt-logs/*' 2>/dev/null | sort)
   sw_total=${#_swl[@]}
   swlogs="$R"; n=0
   for o in "${_swl[@]}"; do [ "$n" -ge "$SW_CAP" ] && break; swlogs="$swlogs $o"; n=$((n+1)); done
