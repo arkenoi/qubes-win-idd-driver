@@ -142,6 +142,7 @@ launch-determination-selftest.sh
 ledger-invariant-audit.py
 lifecycle-selftest.sh
 log-policy-selftest.sh
+loginit-banner-debug-check.sh
 logsweep-rotation-placeholder-selftest.sh
 logvol-guesttext-selftest.sh
 logvol-level-reaches-gate-selftest.sh
