@@ -267,7 +267,15 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # A declared-out suite that passes is the exclusion rotting the other way: the gate is not running a
 # check that works. unpark-precheck was NOT registered with it - 5 runs on an unchanged tree gave
 # rc=0,1,1,0,1; its reason in not-in-the-gate.txt carries the measurement.
-FLOOR=${OFFLINE_SUITES_FLOOR:-145}
+# 145 -> 146 on 2026-10-26: console-window-mapped-selftest.sh REGISTERED. It was declared out as RED
+# ("its own guard leg fails") and in fact all its assertions passed while this runner graded it
+# TOUCHED-RIG for ONE call: the oversize-guard leg ran the shipped assert_sole_guest, whose
+# _sr_rig_raw calls `qrexec-client-vm dom0 admin.vm.List`. Under the shim that call exits 1, the
+# precondition refused, and the guard was never reached - so the leg was BOTH touching the rig and
+# vacuous. The rig read is now stubbed in the suite (the serial-rig-selftest stubs), 5 assertions,
+# zero rig calls, and the guard was driven: with the size guard deleted from a padded copy the
+# probe never says "past cmd.exe", so the leg goes red.
+FLOOR=${OFFLINE_SUITES_FLOOR:-146}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"

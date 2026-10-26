@@ -14,7 +14,6 @@
 #
 appmenus-selftest.sh                 NO PWSH 2026-10-25: exits 2 with "no pwsh at /nonexistent/pwsh - the decisions cannot be exercised, so nothing" under the strict instrument. It refuses instead of passing hollow, which is why it cannot be registered and must not be "fixed" by widening - a GitHub runner installs none.
 blockclaim-selftest.sh               RED 2026-10-25: "losetup no longer lists it: expected 0, got 1". Also must never run in parallel - loop numbers are global (BLOCKCLAIMSELFTESTRACES).
-console-window-mapped-selftest.sh    RED 2026-10-25: its own guard leg fails, "oversized payload not refused". Suite-vs-product unjudged (SUITESNOBODYRUNS).
 failproof-check-chrome.sh            RED 2026-10-25 through the runner: rc=1 === POSITIVE: no captured window PNG on disk to test against - positive side NOT
 failproof-install-log.sh             Needs rig-local campaign artefacts under $HOME/qwt-accept, which a clean checkout has none of - measured 2026-10-25 (rc=2, "no source log").
 g0-negative-control.sh               RED 2026-10-25 through the runner: rc=1 G0 FAIL: only 3 catalogs, expected >= 7

@@ -92,6 +92,7 @@ cold-caller-family-selftest.sh
 collector-logdir-default-selftest.sh
 committed-procedure-gate-selftest.sh
 console-window-check-selftest.sh
+console-window-mapped-selftest.sh
 coverage-receipt-selftest.sh
 cpu-raw-reader-selftest.sh
 cputime-failopen-selftest.sh
