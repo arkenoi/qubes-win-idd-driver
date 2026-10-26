@@ -27,7 +27,34 @@
              // disconnect the client if the read failed because of other errors (broken pipe etc), it's harmless if we're already disconnecting
              QpsReleaseClient(server, client);
              QpsDisconnectClientInternal(server, param->ClientId, FALSE, TRUE);
-@@ -727,8 +743,19 @@
+@@ -705,6 +721,7 @@
+     )
+ {
+     UINT64 size;
++    UINT64 pending = 0;
+     BOOL ret;
+     PPIPE_CLIENT client = QpsGetClient(Server, ClientId);
+ 
+@@ -719,6 +736,18 @@
+         size = DataSize;
+         EnterCriticalSection(&client->Lock);
+         ret = CmqGetData(client->ReadBuffer, Data, &size, CMQ_NO_UNDERFLOW);
++        // HOW MUCH IS ACTUALLY BUFFERED, read under the SAME lock that guarded the get above, and
++        // that is the whole point. This used to be read after LeaveCriticalSection, racing the
++        // reader thread that appends to this very buffer - so the two observations described
++        // different instants and could not both be true.
++        // MEASURED 2026-10-26, acceptance run 40297264818 cell win10-upgrade, qrexec-agent
++        // 4.3.37.1123: "QpsRead: [3] peer gone mid-message: 426 of 0 bytes" on the magic read,
++        // which is QpsRead(&magic, sizeof(UINT32)) - FOUR bytes (qrexec-agent.c:1478). CmqGetData
++        // with CMQ_NO_UNDERFLOW can only fail if fewer than 4 bytes are buffered, so "426 pending"
++        // and "a 4-byte read underflowed" cannot both describe one instant. The unlocked read saw
++        // the reader thread's append land afterwards and reported it as evidence of a truncated
++        // message. An ERROR that convicts the product has to be coherent first.
++        pending = CmqGetUsedSize(client->ReadBuffer);
+         LeaveCriticalSection(&client->Lock);
+ 
+         if (!ret)
+@@ -727,8 +756,22 @@
              // that means we'll never have enough data: abort.
              if (client->Disconnecting)
              {
@@ -38,17 +65,20 @@
 +                // case. That one is now an ERROR naming both counts, so this path gets LOUDER for
 +                // the case that matters. The ERROR_BROKEN_PIPE return is unchanged either way, so
 +                // no caller's control flow moves.
-+                UINT64 pending = CmqGetUsedSize(client->ReadBuffer);
                  QpsReleaseClient(Server, client);
 -                LogWarning("[%lld] client is disconnected", ClientId);
 +                if (pending == 0)
 +                    LogDebug("[%lld] peer gone, nothing pending", ClientId);
 +                else
-+                    LogError("[%lld] peer gone mid-message: %llu of %llu bytes", ClientId, pending, size);
++                    // DataSize, NOT `size`: CmqGetData sets *dataSize = 0 on EVERY failure path before
++                    // returning FALSE (buffer.c, the underflow and empty-buffer branches), so `size`
++                    // is always 0 here and "of 0 bytes" was a destroyed argument, never a measurement.
++                    // DataSize is the IN parameter and is never written.
++                    LogError("[%lld] peer gone mid-message: %llu of %lu bytes", ClientId, pending, DataSize);
                  return ERROR_BROKEN_PIPE;
              }
  
-@@ -756,9 +783,12 @@
+@@ -756,9 +799,12 @@
  
      if (client->Disconnecting)
      {
