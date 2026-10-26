@@ -238,19 +238,19 @@ else
 fi
 
 
-# AND THE LOG PATH'S OWN PROPERTY MUST BE ASSERTED BY EXECUTION SOMEWHERE ELSE. This suite executes
-# the cell, so it can say which calls RAN - but it still cannot say whether a bind takes effect in a
-# guest. For eight days a grep here was mistaken for evidence that the bind WORKS, across five fixes
-# none of which was ever measured on an AppVM.
-# The behavioural assertion lives in logvol-lib-selftest.sh (the proof-agent legs, which execute
-# logvol_prove_roundtrip against the AppVM state), and the requirement that makes a blind cell fail
-# lives at matrix.sh's pre-grading call site. If either disappears, this suite's greps are the only
-# thing left and they cannot see the defect - so fail here when they are gone.
-if command grep -q 'proof-agent' "$ROOT/tools/tests/logvol-lib-selftest.sh" 2>/dev/null; then
-  ok_ "the behavioural proof of the log path exists (logvol-lib-selftest proof-agent legs)"
-else
-  no_ "nothing executes the log-path proof" "this suite only greps matrix.sh, so the defect would be invisible again"
-fi
+# THE LOG PATH'S BEHAVIOURAL PROOF IS NOT A GREP OF ANOTHER SELFTEST, and the leg that was here is
+# DELETED. It required the string 'proof-agent' to appear in tools/tests/logvol-lib-selftest.sh - a
+# file 92ef3414 removed as one of "the five tests-for-tests". So it asserted the contents of a suite
+# that no longer exists and had been red ever since, unseen only because run-offline-suites.sh was
+# itself inert (its floor stood at 148 against a list of 146, so it exited 2 and ran nothing).
+# A test that greps another test is the shape the owner banned outright, and chasing the rename would
+# have re-created it.
+# WHAT ACTUALLY ENFORCES THE PROPERTY, and it is stronger than the grep ever was: logvol_prove_roundtrip
+# is called by the CAMPAIGN - mgmt/harness/matrix.sh and mgmt/harness/logvol-smoke.sh - so every
+# acceptance run executes it against a real guest and fails on it. Measured in run 40297264818 at
+# 11:54:58Z: "logvol smoke (bind arm) PASS - the guest sees the volume, the bind succeeds, and a nonce
+# written inside reaches the IMAGE read back with mtools and no guest", with the refutation arm at
+# 11:52:09Z proving the bind REFUSES with no volume attached. Both arms, every campaign.
 # THE PREDICATE IS THE CALL, NOT THE FILE. A whole-file grep for the flag name passed with the
 # flag REMOVED from the call, because the comment above the call explains the flag and the grep
 # matched that - measured 2026-10-21 by removing it and watching this very assertion stay green.

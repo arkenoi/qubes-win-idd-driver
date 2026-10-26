@@ -127,34 +127,18 @@ o2=$(SWEEP_GATE_LEDGER="$T/td-real.txt" bash tools/sweep-gate.sh "$T/td.log" 2>&
 if [ $r1 -ne 0 ] && [ $r2 -eq 0 ]; then ok "T8 a TODO does not account for an error; a written reason does"
 else no "T8 ledger note handling wrong (todo rc=$r1 expect non-zero, real rc=$r2 expect 0)" "$o1"; fi
 
-# T9 - THE WIRING, not just the tool. Coverage depends on matrix.sh actually CALLING the gate over
-# the right files and raising a class that blocks. The block is read OUT of matrix.sh and executed
-# against two fixtures, so this test cannot drift from the harness it checks. The guest log sits in
-# a SUBDIRECTORY because logvol_pull puts it there and a flat glob missed it - the first version of
-# the wiring would have passed a campaign whose guest log carried a gui-agent crash loop.
-blk=$(python3 - <<'PYX'
-s = open('mgmt/harness/matrix.sh', encoding='utf-8').read()
-a = s.index('if [ -x tools/sweep-gate.sh ]; then'); b = s.index('# PRECONDITION EVIDENCE')
-print(s[a:b].rstrip())
-PYX
-)
-run_block(){ # $1 = campaign dir
-  bash -c "FAIL=0; INVALID=0; R='$1/run.log'; M='$1'
-say(){ echo \"\$*\"; }
-no(){ FAIL=\$((FAIL+1)); case \"\$*\" in *INVALID*) INVALID=\$((INVALID+1)) ;; esac; echo \"NO \$*\"; }
-$blk
-echo \"RESULT FAIL=\$FAIL INVALID=\$INVALID\"" 2>&1
-}
-mkdir -p "$T/dirty/logvol-win11-up/files/qwt-logs/win11-up" "$T/clean"
-printf '12:00:00 matrix: campaign start\n' > "$T/dirty/run.log"
-printf '12:00:00 matrix: campaign start\n' > "$T/clean/run.log"
-printf '[20261014.120004.001-1234-W] gui-agent.exe died within 10000 ms of starting, 2 time(s) in a row\n'   > "$T/dirty/logvol-win11-up/files/qwt-logs/win11-up/gui-agent-20261014.log"
-od=$(run_block "$T/dirty"); oc=$(run_block "$T/clean")
-if printf '%s' "$od" | grep -qa 'RESULT FAIL=1 INVALID=1' && printf '%s' "$oc" | grep -qa 'RESULT FAIL=0 INVALID=0'; then
-  ok "T9 the campaign wiring blocks on a GUEST log at depth 5, where logvol_pull puts it"
-else
-  no "T9 campaign wiring wrong" "dirty: $(printf '%s' "$od" | tail -1) | clean: $(printf '%s' "$oc" | tail -1)"
-fi
+# T9 IS DELETED, AND ITS SUBJECT WAS DELETED FIRST. It lifted the sweep-gate block OUT of matrix.sh,
+# ran it against a dirty and a clean fixture, and required the dirty one to produce FAIL=1 INVALID=1 -
+# i.e. it asserted that the CAMPAIGN-LEVEL gate vetoes a release. That veto is gone on the owner's
+# direct instruction this same day ("i asked for shortest path to cut. if there is a bullshit
+# invention that blocks you, revert the fuck of it"): the two no() calls in that block are now say(),
+# so the campaign reports the gate's verdict and does not fail on it. The leg was therefore reporting
+# the intended state as a defect, and the fixtures measured 'dirty: RESULT FAIL=0 INVALID=0'.
+# WHAT STILL ENFORCES GUEST-LOG GRADING, which is what this leg was really about: the PER-CELL gates
+# in matrix.sh are untouched and still call no() - INVALID-SWEEP-DATA, -UNJUDGED, -RC, -BLIND,
+# -NOAGENT, -NOBIRTH, -UNPROVEN and INVALID-SWEEP-CAPPED - and they are what failed win11-reinstall
+# and win10-upgrade in run 40297264818 on their guest logs. The campaign-level tally was the
+# invention; the per-cell sweep is the instrument, and it graded both cells.
 
 # T10 - A DISPOSITIONED MESSAGE MUST RE-SURFACE WHEN IT RISES, and the threshold must scale. The
 # reason written in a ledger can be WRONG, and a rising count is the only signal that contradicts it
