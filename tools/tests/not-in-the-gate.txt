@@ -54,7 +54,6 @@ wu-agentcache-selftest.sh            Needs PowerShell: measured 2026-10-25 with 
 wu-autologon-guard-selftest.sh       Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found at /nonexistent/pwsh - nothing ran. A GitHub runner installs none.
 wu-available-selftest.sh             Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found at /nonexistent/pwsh - nothing ran. A GitHub runner installs none.
 wu-catch-scope-selftest.sh           Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found at /nonexistent/pwsh - nothing ran. A GitHub runner installs none.
-wu-cumulative-order-selftest.sh      RED 2026-10-25: 2 checks fail on the clean build (SUITESNOBODYRUNS).
 wu-dead-pass-selftest.sh             Needs PowerShell: measured 2026-10-25 with all three pwsh installs bind-mounted away inside `unshare -r -m` - FAIL pwsh not found at /home/user/pwsh/pwsh - nothing ran. A GitHub runner installs none.
 wu-defplatform-selftest.sh           Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found at /nonexistent/pwsh - nothing ran. A GitHub runner installs none.
 wu-deploy-loud-selftest.sh           RED 2026-10-25: needs Windows `schtasks` ("The term 'schtasks' is not recognized"), and its own defect leg is decoration - "defect deploynotify: the suite did not fail (rc=2)".
