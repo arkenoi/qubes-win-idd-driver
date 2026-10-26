@@ -96,6 +96,49 @@ import yaml
 d=yaml.safe_load(open('.github/workflows/test.yml'))
 j=d['jobs']['offline-suites']
 print(any((s.get('with') or {}).get('submodules') for s in j['steps']))" 2>/dev/null)"
+# THE PROBE JOB MUST SHARE THE GATE JOB'S PREP, or it is measuring somewhere else. The probes
+# that decide whether a held-out suite may JOIN this gate live in their own job (they must: PART E
+# above pins the gate job to exactly one runner call). Their comment says the prep is copied from
+# offline-suites on purpose; this is that claim as a check rather than a sentence.
+#
+# THE ABSENT-JOB CASE IS DECIDED, NOT EXCUSED. The probe job is temporary - it goes when the probes
+# have been acted on - and a first version of this leg simply reported ok when it was missing. Jev
+# named that the worst defect (absent_job_branch 0.63) because it cannot tell "acted on and
+# removed" from "deleted to silence this leg". So the absence is only acceptable when the probes
+# are gone TOO: no job, and no step named PROBE anywhere in the workflow, is the intended end
+# state; no job while PROBE steps live elsewhere is a probe outside the parity check, and fails.
+probe_prep=$(python3 -c "
+import yaml
+d=yaml.safe_load(open('.github/workflows/test.yml'))
+g=d['jobs'].get('offline-suites') or {}
+p=d['jobs'].get('out-of-gate-probe')
+probe_steps=sum(1 for j in d['jobs'].values()
+                for s in (j.get('steps') or [])
+                if (s.get('name') or '').startswith('PROBE'))
+if p is None:
+    print('NO-PROBE-JOB-AND-NO-PROBES' if probe_steps == 0
+          else 'PROBES-OUTSIDE-THE-JOB:%d' % probe_steps)
+    raise SystemExit
+def prep(j):
+    out=[]
+    for s in j.get('steps',[]):
+        if 'run-offline-suites.sh' in (s.get('run') or ''):
+            break
+        out.append((s.get('name') or s.get('uses'), (s.get('run') or '').strip(),
+                    tuple(sorted((s.get('with') or {}).items()))))
+    return out
+print('SAME' if prep(g)==prep(p) else 'DIFFERENT')" 2>/dev/null)
+case "$probe_prep" in
+  SAME)
+    ok "the probe job's prep is identical to the gate job's" ;;
+  NO-PROBE-JOB-AND-NO-PROBES)
+    ok "no probe job and no PROBE step anywhere - the probes were acted on and removed, which is the end state" ;;
+  PROBES-OUTSIDE-THE-JOB:*)
+    bad "${probe_prep#*:} PROBE step(s) live outside the parity-checked job: a probe that decides whether a suite may join the gate must run where the gate runs, so it belongs in out-of-gate-probe or nowhere" ;;
+  *)
+    bad "the probe job's prep has drifted from the gate job's ($probe_prep): a probe that decides whether a suite may join the gate must run where the gate runs" ;;
+esac
+
 # The shipped floor must match the shipped list, or the floor is decoration.
 listed=$(sed 's/#.*//' tools/tests/offline-suites.txt | awk 'NF' | wc -l)
 floor=$(command grep -oE 'OFFLINE_SUITES_FLOOR:-[0-9]+' "$R" | command grep -oE '[0-9]+$')

@@ -229,6 +229,71 @@ jobs:
       - name: Offline selftest suites (serial, with a floor)
         run: tools/tests/run-offline-suites.sh
 
+
+  out-of-gate-probe:
+    # PROBES, NOT A GATE, AND IN THEIR OWN JOB FOR A MEASURED REASON. These two steps lived in
+    # offline-suites until 2026-10-26, when CI went red on my own commit: PART E of
+    # tools/tests/offline-runner-selftest.sh asserts that exactly ONE step in the offline-suites
+    # job calls run-offline-suites.sh ("the offline-suites job calls this runner: expected '1',
+    # got '2'", run 40267538148). That check is RIGHT - it pins the gate's wiring - and spelling
+    # the call differently to slip past it would be making a check pass by weakening it. So the
+    # probes moved out instead.
+    #
+    # A SECOND GAIN, not a consolation: in that job a failing gate SKIPPED both probes, which is
+    # exactly when their answer is wanted. Here they run whatever the gate does.
+    #
+    # The prep below is copied from offline-suites on purpose, because a probe that decides
+    # whether a suite may JOIN that gate has to run in the same environment it would join -
+    # same runner image, same submodules, same vendored mirror, same lxml. If that job's prep
+    # changes and this one does not, the probe is measuring somewhere else.
+    needs: offline-suites
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          # TAGS, NOT JUST THE TIP. gate-remainder.sh resolves its range with
+          # `git describe --tags --match 'v4.3.*'` and REFUSES with exit 2 when there is none, so on
+          # the default shallow checkout gate-remainder-dry-selftest read "the dry run exited 2" and
+          # three of its legs failed in CI while passing on the dev qube.
+          fetch-depth: 0
+      # THE VENDORED MIRROR HAS TO BE MATERIALISED, and until now only a comment said so. upstream/ro
+      # is GITIGNORED (.gitignore:27), so a clean checkout has never carried it, and the two suites
+      # that read upstream/ro/qubes-windows-utils/src/log.c reported INCONCLUSIVE (rc=2) - which this
+      # runner counts RED. The estate was therefore red in CI on every run, while being green on the
+      # dev qube, and "CI is not green" is what campaign-preflight refuses a release campaign on.
+      # Pinned to the same commit the dev qube holds (mm_22e03f5a) rather than a branch: a moving
+      # upstream would change what these suites measure without a commit here saying so.
+      - name: Vendored read-only upstream (pinned) - the suites that read it are not skippable
+        env:
+          # THE FULL 40-CHAR SHA. `git fetch origin 22e03f5a` died with "couldn't find remote ref" -
+          # a fetch by object name needs the whole sha, and a short one is read as a ref name.
+          # The commit is on origin/main of the public mirror, so the shallow fetch below reaches it.
+          WINDOWS_UTILS_SHA: 22e03f5a55d707c83bf8e5b909785472a7424021
+        run: |
+          set -euo pipefail
+          mkdir -p upstream/ro
+          git clone --quiet --no-checkout --filter=blob:none \
+            https://github.com/QubesOS/qubes-windows-utils.git upstream/ro/qubes-windows-utils
+          git -C upstream/ro/qubes-windows-utils fetch --quiet --depth 1 origin "$WINDOWS_UTILS_SHA"
+          git -C upstream/ro/qubes-windows-utils checkout --quiet FETCH_HEAD
+          test "$(git -C upstream/ro/qubes-windows-utils rev-parse HEAD)" = "$WINDOWS_UTILS_SHA"
+          test -f upstream/ro/qubes-windows-utils/src/log.c
+          test -f upstream/ro/qubes-windows-utils/include/log.h
+          echo "windows-utils at $(git -C upstream/ro/qubes-windows-utils rev-parse --short HEAD)"
+      # lxml, FOR THE SAME REASON AS THE VENDORED MIRROR ABOVE: a suite that cannot reach what it
+      # measures reports rc=2 - "nothing ran (missing data fails)" - and this runner counts that
+      # RED. death-reporter-xpath-selftest.py evaluates the shipped Event Log XPath queries with a
+      # real XPath engine instead of a model of them, so lxml is what it measures WITH. Measured:
+      # CI run 40192417696, "FAIL death-reporter-xpath-selftest.py rc=2 lxml is not installed".
+      # The fix is the dependency, never dropping the suite from the list - an excluded suite rots,
+      # and the exclusion is the cause.
+      - name: lxml - the XPath suite evaluates real queries, not a model of them
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --disable-pip-version-check lxml
+          python3 -c 'from lxml import etree; print("lxml", etree.__version__)'
       # PROBE, NOT A GATE - run EVERY suite that is declared out of the gate, here, on the
       # machine the declarations are about. 35 of those declarations say the suite needs
       # PowerShell, one in so many words: "a GitHub runner installs none". That premise is
