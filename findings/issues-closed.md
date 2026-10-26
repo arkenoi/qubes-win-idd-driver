@@ -502,3 +502,23 @@ Its surviving open item is LOGVOLBINDABTOWED in findings/issues.md. Full text, v
 - SWEEPWINDOWREDNOTREPRODUCIBLE [DROPPED 2026-10-26 - the suite is DELETED, not fixed] tools/tests/sweep-window-selftest.sh was the single red in the 2026-10-25 offline preflight (143 green, 1 red over 144 suites; FAIL 'no DROPPED marker in the collector'). It did not reproduce three ways - green in-tree at HEAD, green in a clean worktree at HEAD, green under the runner's own rig-shim via OFFLINE_SUITES_LIST - and its subject, mgmt/harness/log-sweep-collect.ps1, carries the marker at line 312 and was touched by no commit that session. The failing leg was a source grep whose only false-absence mode is an EMPTY read, with /home at 98% while it wrote 64 MB images into TMPDIR. Owner's standing rule: a selftest that fails and needs a quick fix is DELETED, not fixed - so it is deleted and the floor lowered in the same commit (229 -> 228 suites). What still enforces the property: log-sweep-collect.ps1:312 writes the DROPPED marker, and the per-cell sweep fails its cell on an INVALID-SWEEP-DATA/-UNJUDGED result if the collector's window loses content.
 - WUOSCILLATIONVERDICTNEVERRUNS [CLOSED 2026-10-26] tools/wu-oscillation-verdict.py is called from mgmt/harness/wu-e2e.sh on every round whose scan was seen, its rc decides the round, and its verdict semantics were corrected against six recorded campaigns in the same commit - the orphan tool now grades cells.
 - WUCUMULATIVEORDERSELFTESTFAILS [CLOSED 2026-10-26] the suite is DELETED, not repaired: `tools/tests/wu-cumulative-order-selftest.sh` failed every leg from 2026-10-17 on two checks outside any leg's expected set (`rp-unreadable-proceeds`, `unreadable-not-staged`), so it could not tell a knob from its own standing failure. Nothing ran it - it was absent from tools/tests/offline-suites.txt and parked in not-in-the-gate.txt as "RED 2026-10-25 ... (SUITESNOBODYRUNS)" - which is why it rotted for nine days. Re-run before deleting to confirm: rc=1, 17 FAIL lines, the same two checks polluting every leg. No floor to lower (it was in no runner). WHAT STILL ENFORCES THE ORDER: the live `template-update` feature test, which is in tools/release-feature-tests.txt and drives mgmt/harness/wu-e2e.sh end to end against a guest - behaviour, not source shape. Owner's rule: a selftest that fails and needs a quick fix is dropped completely.
+
+## RETIRED FROM THE LIVE HEAD 2026-10-26 (fixed and verified; the head is at its 100K ratchet)
+
+**AND THE CAMPAIGN FOUND A REAL ONE, NOW FIXED AND VERIFIED BY EXECUTION: THE UPGRADE COULD NOT
+LAND ITS OWN RELAY.** The cause was NOT the port, the squatter or the staged payload - every theory
+I reported, including the one I called the fix (87e3a746). The compile/move block in
+guest/install-updater-agent.ps1 was a bare `{ ... }`: a ScriptBlock LITERAL, built and discarded,
+never executed. So the relay on disk stayed the one built 2026-09-16, which predates --parent-pid,
+so the launcher's flag VALUE became the listen port, nothing served 8082, and every pass went
+silent - while the deploy logged `updater agent deployed`. **A/B ON win11de-tup 2026-10-22, SAME
+FRESH SetupRoot, ONLY THE BRACES DIFFERENT:** arm A (braces) printed the block's own SOURCE as a
+value, logged zero timestamped `compiled relay ->` lines, left the exe at `written=2026-09-16T16:33:26Z`,
+and still reported success; arm B (braces removed) logged `10:27:04 compiled relay ->`, rewrote the
+exe to `2026-10-22T07:27:04Z` (48128 -> 56320 bytes, UTF-16 `parent=` marker False -> True), and the
+next pass logged `10:29:08.084 listen 127.0.0.1:8082 ... parent=936` with 8082 held by our exe and
+accepting - against five earlier pid-ports in the same log (8228, 6688, 8892, 2540, 5956). No grep,
+offline leg or Jev score could see this: the source text was CORRECT and the block simply never ran.
+Receipts scratchpad/relay-receipt/. Guards added: the deploy vouches the SOURCE it compiles and the
+PLACED exe, ends stale relays BY IMAGE, and tools/tests/discarded-scriptblock-selftest.sh fails on
+the shape across 303 shipped .ps1 files. Detail in findings/issues-closed.md.

@@ -49,24 +49,6 @@ WHAT REMAINS: win10-appvm and win11-appvm, and the blocker is NOT an unmade deci
 LOGVOLBINDLATE, where the fix landed twice (0bf0f324, 9e314357) and the pregrade gate's predicate is
 unsatisfiable on an AppVM by construction. Acceptance stays INCOMPLETE until those two grade.
 
-**AND THE CAMPAIGN FOUND A REAL ONE, NOW FIXED AND VERIFIED BY EXECUTION: THE UPGRADE COULD NOT
-LAND ITS OWN RELAY.** The cause was NOT the port, the squatter or the staged payload - every theory
-I reported, including the one I called the fix (87e3a746). The compile/move block in
-guest/install-updater-agent.ps1 was a bare `{ ... }`: a ScriptBlock LITERAL, built and discarded,
-never executed. So the relay on disk stayed the one built 2026-09-16, which predates --parent-pid,
-so the launcher's flag VALUE became the listen port, nothing served 8082, and every pass went
-silent - while the deploy logged `updater agent deployed`. **A/B ON win11de-tup 2026-10-22, SAME
-FRESH SetupRoot, ONLY THE BRACES DIFFERENT:** arm A (braces) printed the block's own SOURCE as a
-value, logged zero timestamped `compiled relay ->` lines, left the exe at `written=2026-09-16T16:33:26Z`,
-and still reported success; arm B (braces removed) logged `10:27:04 compiled relay ->`, rewrote the
-exe to `2026-10-22T07:27:04Z` (48128 -> 56320 bytes, UTF-16 `parent=` marker False -> True), and the
-next pass logged `10:29:08.084 listen 127.0.0.1:8082 ... parent=936` with 8082 held by our exe and
-accepting - against five earlier pid-ports in the same log (8228, 6688, 8892, 2540, 5956). No grep,
-offline leg or Jev score could see this: the source text was CORRECT and the block simply never ran.
-Receipts scratchpad/relay-receipt/. Guards added: the deploy vouches the SOURCE it compiles and the
-PLACED exe, ends stale relays BY IMAGE, and tools/tests/discarded-scriptblock-selftest.sh fails on
-the shape across 303 shipped .ps1 files. Detail in findings/issues-closed.md.
-
 **P5 NOW WAITS ON ONE DECISION, 2026-10-21 NIGHT.** Jev was asked the launch question again on the
 state as it stood at 18:40: clear_to_launch_now **0.06** (it was 0.29 then 0.32 earlier in the day),
 decomposed into four contributors - invisible_rig_contact_holds_the_launch 0.80,
@@ -109,6 +91,13 @@ it improved on 9 of 18 although the correcting commits are still in the log, whi
 **ESTATE, MEASURED ON 390d4d1e:** 85 suites, 1437 assertions, 85 green, 0 red, 0 reporting nothing,
 RESULT PASS, with nothing edited under the run. Two earlier runs the same evening are discarded
 rather than quoted, because edits landed mid-flight.
+
+**TESTYMLMISSESSUBMODULEBUMP - a commit that changes ONLY the core-agent submodule pointer does not fire test.yml, and ci-state then INHERITS the previous sha's pass. [P2, OPEN] [verified 2026-10-26]** `.github/workflows/test.yml` filters on `core-agent/**`, but a submodule bump changes the gitlink at path `core-agent`, which that glob does not match. Measured on 52182579, whose entire product change is inside core-agent:
+    $ python3 tools/ci-state.py
+    ci-state 52182579
+      inh  test.yml  completed success 40364735915 (required) path-filtered; inherited from d35b65e8
+      CI 0 every required workflow is green for 52182579
+The one required workflow covering core-agent reported green for a core-agent change it never ran on. SAME CLASS as the defect test.yml's own header already records for mgmt/ (2026-10-25, 669576d6: ci-state inherited the previous sha's pass and the change had in fact broken matrix-runinstall-grade-selftest). Dispatched by hand here as run 40401733138, which PASSED - so 52182579 is genuinely covered, by a manual run, not by the gate. Scope: campaign-full dispatches a required-but-branch-filtered workflow (campaign-full.sh:137), so a full campaign is not exposed; a bare push followed by a ci-state read is. The one-line shape of the fix (add `core-agent` beside `core-agent/**`) is deliberately NOT applied here: gates are not the work and an unrequested gate change is its own risk.
 
 **NINE SUITES ARE OUTSIDE CI AND NOTHING RUNS THEM, 2026-10-21.** They need mtools, pwsh or a
 compiler, which a GitHub runner has none of, so offline-suites.txt excludes them by policy - and
