@@ -1,0 +1,122 @@
+--- a/src/pipe-server.c
++++ b/src/pipe-server.c
+@@ -57,6 +57,10 @@
+     LONGLONG NextClientId;
+     LIST_ENTRY Clients;
+     BOOL AcceptConnections;
++    // Set by QpsDestroy, which does NOT free this object - see there. Read by QpsGetClientRaw,
++    // which every function that takes a client id goes through, so a call that arrives after the
++    // destroy is answered with "no such client" instead of searching a list that is gone.
++    BOOL Destroyed;
+     CRITICAL_SECTION Lock;
+ 
+     PVOID UserContext;
+@@ -168,6 +172,7 @@
+ 
+     // disconnect all clients, need to be not holding the global lock
+     LogDebug("Removing %ll clients", clientCount);
++    LONGLONG clientsAtDestroy = clientCount;
+     while (clientCount > 0)
+     {
+         --clientCount;
+@@ -175,12 +180,57 @@
+         QpsDisconnectClientInternal(Server, clientIds[clientCount], FALSE, FALSE);
+     }
+ 
+-    DeleteCriticalSection(&Server->Lock);
+-    ZeroMemory(Server, sizeof(PIPE_SERVER));
+-    free(Server);
++    // THE SERVER OBJECT IS DELIBERATELY RETAINED, AND ITS LOCK LEFT VALID. A caller can still
++    // legally reach this pointer after QpsDestroy returns, because the per-client threads that use
++    // it are not this library's and nothing joins them.
++    //
++    // MEASURED on a Win10 Qubes guest, 2026-10-26, acceptance cell WIN10-reinstall of campaign
++    // rel-40243956400-r2 (qubesdb-daemon ver 4.3.1.0, pid 3488), four lines from one clock:
++    //   092152.485 [3788-I] mainloop: service stopped, exiting          <- the daemon enters cleanup
++    //   092153.517 [3788-I] QpsDisconnectClientInternal: [9] (000001C9A2CCEDB0) disconnecting,
++    //                       WriterExiting 0, ReaderExiting 0            <- THIS function, main thread
++    //   092153.533 [4624-W] pipe_thread_client: QpsRead from client 9 failed: 109
++    //   092153.535 [4624-E] ErrUEF: Unhandled exception c0000005 at 00007FF8CCD3FAAD, flags: 0
++    // The daemon's own cleanup path (qubes-core-qubesdb daemon/db-daemon.c) waits for the ACCEPT
++    // thread only, then calls QpsDestroy and nulls its pointer; its per-client threads are created
++    // with CreateThread + an immediate CloseHandle and are never joined. Such a thread returns from
++    // QpsRead with ERROR_BROKEN_PIPE - the 109 above, which this file's own disconnecting branch
++    // returns - and its next statement is QpsDisconnectClient(d->pipe_server, id), whose first act
++    // is EnterCriticalSection(&Server->Lock). Eighteen milliseconds separated the two threads, and
++    // the three lines below are what made that window fatal rather than harmless.
++    //
++    // SO THE FIX IS HERE AND NOT IN THE CALLER: qubesdb-daemon.exe is deliberately not built by the
++    // QWT fork (wave 3, boot-critical) while windows-utils.dll is, and the stock exe RUNS THIS
++    // FILE out of that DLL. Proven from the same capture by a line that is ABSENT: pristine
++    // QpsDisconnectClientInternal logs both "disconnecting, WriterExiting .." and "disconnected
++    // (%lld total)" at LogInfo, and windows-utils-percall-mechanics-debug.patch demotes the second
++    // to LogDebug. qubesdb-daemon's logs hold 61 of the first and ZERO of the second, with no
++    // DEBUG-level line anywhere in the file - so the code that wrote them is the patched copy, not
++    // the stock one. (The QWTBIRTH banner and the one-file-per-module name prove only that log.c is
++    // ours.) A patch to the caller would change nothing on a guest; this one ships.
++    //
++    // THE COST IS ONE RETAINED ALLOCATION PER DESTROYED SERVER, sizeof(struct _PIPE_SERVER), on a
++    // path that runs when a server is torn down - twice per process at most in the shipped callers,
++    // both in teardown paths of main. That is the whole price of a pointer that stays safe to call.
++    // Nothing else leaks: every client's buffers, locks and handles were freed by the disconnect
++    // loop above, and clientIds is freed below as before.
++    //
++    // (The ZeroMemory this replaces took sizeof(PIPE_SERVER) - the size of the POINTER, 8 bytes -
++    // not sizeof(struct _PIPE_SERVER). It cleared the head of PipeName and nothing else, which is
++    // its own small sign that this teardown had never been exercised under a live client.)
++    // NO LOCK IS TAKEN TO SET THIS FLAG, deliberately. Two TerminateThread calls can orphan
++    // &Server->Lock while this function runs - the one in QpsDisconnectClientInternal above
++    // ("reader thread didn't terminate in time, killing it"), whose own comment already says it
++    // "may leak memory or do other nasty things", and the caller's own TerminateThread on the
++    // accept thread after its 1000 ms wait. A lock taken here would then wait for ever, and a
++    // destroy that hangs at service stop is worse than the crash this patch removes. An
++    // InterlockedExchange publishes the flag with a full barrier and cannot block; readers take it
++    // with a single load and need nothing more.
++    InterlockedExchange((LONG *)&Server->Destroyed, TRUE);
++
+     free(clientIds);
+ 
+-    LogVerbose("done");
++    LogInfo("QPSDESTROYED server object retained and marked destroyed after %lld client(s) were disconnected; a late caller is answered, not crashed", clientsAtDestroy);
+ }
+ 
+ static LONGLONG QpsAllocateClientId(
+@@ -201,6 +251,19 @@
+     PLIST_ENTRY entry;
+     PPIPE_CLIENT returnClient = NULL;
+ 
++    // A CALL CAN ARRIVE AFTER THE SERVER WAS DESTROYED, and until 2026-10-26 it was answered with
++    // an access violation - see QpsDestroy for the measurement. Every public function that takes a
++    // client id reaches the client list through this one lookup and every one of them already
++    // handles a NULL result (ERROR_NOT_CONNECTED, or the "not connected" warning in
++    // QpsDisconnectClientInternal), so this is the single place the condition has to be stated.
++    // NULL is checked too: the shipped caller nulls its server pointer right after the destroy, so
++    // a late call carries either the retained object or NULL, and both arrive here.
++    if (!Server || Server->Destroyed)
++    {
++        LogDebug("[%lld] no client list to search: the server is %s", ClientId, Server ? "destroyed" : "NULL");
++        return NULL;
++    }
++
+     EnterCriticalSection(&Server->Lock);
+     entry = Server->Clients.Flink;
+     while (entry != &Server->Clients)
+@@ -623,6 +686,18 @@
+     HANDLE writePipe, readPipe;
+     DWORD status;
+     WCHAR pipeName[256];
++
++    // THE ONE PUBLIC ENTRY THAT DOES NOT GO THROUGH THE CLIENT LOOKUP, so it carries the guard
++    // itself. Everything else that takes a server and a client id reaches the list through
++    // QpsGetClientRaw and is covered there; this function reads Server->PipeName and the callbacks
++    // directly, so a late or NULL handle would fault here and nowhere else. Named rather than left
++    // out, because "every entry point is covered" is the property the fix rests on and a single
++    // uncovered one makes that sentence false.
++    if (!Server || Server->Destroyed)
++    {
++        LogWarning("called with a %s server; nothing to accept on", Server ? "destroyed" : "NULL");
++        return ERROR_INVALID_HANDLE;
++    }
+     ULONG pid;
+     LONGLONG clientId;
+     DWORD cbPipeName;

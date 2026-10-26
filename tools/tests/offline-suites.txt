@@ -170,6 +170,7 @@ peek-abi-assert-selftest.sh
 pipe-client-null-selftest.sh
 pipe-connect-order-selftest.sh
 pipe-eof-selftest.sh
+pipe-server-lifetime-selftest.sh
 probe-anchor-selftest.sh
 pwcarry-selftest.sh
 pwclass-truth-table.sh
@@ -209,6 +210,7 @@ toasthold-grade-clock-selftest.sh
 toasthold-selftest.sh
 ttfw-ab-selftest.sh
 uac-prompt-reachable-selftest.sh
+uef-one-line-selftest.sh
 upd-task-prestop-selftest.sh
 updater-component-selftest.sh
 verdict-jev-selftest.sh

@@ -547,6 +547,67 @@ jobs:
           # And the old shape must be gone: a bare return from the middle of the construction.
           if ($src -match '(?m)if \(client->ReadBuffer == NULL\)\r?\n\s*\{\r?\n\s*LeaveCriticalSection\(&Server->Lock\);\r?\n\s*return') { throw 'QpsConnectClient still returns from the middle of a half-built client' }
           Write-Host "::notice title=windows-utils::connect-order rewrite applied"
+      # A SERVER OBJECT MUST SURVIVE ITS OWN DESTROY, because the threads still calling it belong to
+      # the CALLER and nothing joins them. QpsDestroy ended with DeleteCriticalSection + ZeroMemory
+      # + free(Server), so the next call entered a deleted lock in freed memory.
+      # MEASURED 2026-10-26 (QDBSTOPUAF), Win10 acceptance cell WIN10-reinstall of campaign
+      # rel-40243956400-r2, qubesdb-daemon pid 3488, four lines from one clock:
+      #   092152.485 [3788-I] mainloop: service stopped, exiting
+      #   092153.517 [3788-I] QpsDisconnectClientInternal: [9] disconnecting, ReaderExiting 0
+      #   092153.533 [4624-W] pipe_thread_client: QpsRead from client 9 failed: 109
+      #   092153.535 [4624-E] ErrUEF: Unhandled exception c0000005 at 00007FF8CCD3FAAD, flags: 0
+      # The cell FAILED its sweep on that one line. qubesdb-daemon.exe is not built here (wave 3)
+      # but it RUNS this DLL, so the fix lands here and ships. Offline:
+      # tools/tests/pipe-server-lifetime-selftest.sh.
+      - name: Apply the windows-utils pipe-server lifetime fix (always)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = $env:GITHUB_WORKSPACE
+          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-pipe-server-lifetime.patch"
+          if ($LASTEXITCODE -ne 0) { throw "windows-utils pipe-server lifetime patch did not apply" }
+          $src = Get-Content "$ws\deps-src\windows-utils\src\pipe-server.c" -Raw
+          if ($src -notmatch 'THE SERVER OBJECT IS DELIBERATELY RETAINED') { throw 'retain marker missing after patch' }
+          if ($src -notmatch 'QPSDESTROYED server object retained') { throw 'destroy receipt missing after patch' }
+          if ($src -notmatch 'BOOL Destroyed;') { throw 'the Destroyed field is missing after patch' }
+          if ($src -notmatch 'if \(!Server \|\| Server->Destroyed\)') { throw 'the funnel guard is missing after patch' }
+          # THE DEFECT ITSELF, scoped to the function that had it: QpsDestroy must no longer
+          # invalidate memory a caller can still legally reach.
+          $destroy = [regex]::Match([regex]::Replace($src, '(?m)//.*$', ''), '(?s)void QpsDestroy\(.*?\r?\n\}').Value
+          if (-not $destroy) { throw 'could not find QpsDestroy to check it' }
+          foreach ($s in @('free(Server)', 'DeleteCriticalSection(&Server->Lock)', 'ZeroMemory(Server')) {
+            if ($destroy.Contains($s)) { throw "QpsDestroy still does $s after patch" }
+          }
+          if (-not $destroy.Contains('InterlockedExchange((LONG *)&Server->Destroyed, TRUE)')) { throw 'QpsDestroy does not publish the Destroyed flag' }
+          # AND IT MUST NOT TAKE THE LOCK TO DO IT: an orphaned &Server->Lock (two TerminateThread
+          # paths can orphan it) would turn this fix into a hang at service stop.
+          $tail = [regex]::Match($destroy, '(?s)QpsDisconnectClientInternal\(Server, clientIds.*').Value
+          if ($tail.Contains('EnterCriticalSection(&Server->Lock)')) { throw 'the tail of QpsDestroy takes the server lock' }
+          Write-Host "::notice title=windows-utils::pipe-server lifetime fix applied"
+      # AN UNHANDLED-EXCEPTION FILTER GETS ONE WRITE. It logged the exception, then one line per
+      # exception parameter - and for an access violation those parameters hold the only two facts
+      # that identify it (read/write, and the address touched). On 2026-10-26 the qubesdb-daemon log
+      # ENDS on the head line: the process did not survive to write the parameters, so the fact
+      # needed to name the bad pointer was emitted and still lost. Everything now goes in one line,
+      # head kept byte-identical because the sweep's signature quotes that prefix.
+      # Offline: tools/tests/uef-one-line-selftest.sh.
+      - name: Apply the windows-utils UEF one-line fix (always)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = $env:GITHUB_WORKSPACE
+          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-uef-one-line.patch"
+          if ($LASTEXITCODE -ne 0) { throw "windows-utils UEF one-line patch did not apply" }
+          $src = Get-Content "$ws\deps-src\windows-utils\src\error.c" -Raw
+          # COMMENTS STRIPPED for anything asked about the CODE: the comment refusing
+          # GetModuleHandleEx names it, and the comment explaining the old shape quotes it.
+          $code = [regex]::Replace($src, '(?m)//.*$', '')
+          if ($src -notmatch 'ONE WRITE, EVERY FACT') { throw 'UEF one-line marker missing after patch' }
+          if ($code -notmatch '#include <strsafe\.h>') { throw 'strsafe include missing - StringCchPrintfW would not compile' }
+          if ($code -match 'LogError\("Parameter %d: %p"') { throw 'the UEF still logs parameters on their own lines' }
+          if ($code -notmatch 'Unhandled exception %08x at %p, flags: %x%s') { throw 'the one-line emit is missing, or its head changed' }
+          if ($code -match 'GetModuleHandleEx') { throw 'the UEF now takes the loader lock - read the comment that refuses it' }
+          Write-Host "::notice title=windows-utils::UEF one-line fix applied"
       # A DEPARTED PEER STOPS BEING AN ERROR OF OURS, at the first of the four lines it wrote.
       # libvchan's client init PROBES the peer's xenstore entry - "test if the store entry exists;
       # if not - wait a second time" - and discards the status on the next line. But XcStoreRead
