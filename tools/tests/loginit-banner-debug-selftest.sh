@@ -88,19 +88,51 @@ c=$(cd "$T" && git apply --verbose "$OLDPWD/patches/windows-utils-single-birth-l
 
 code=$(command grep -v '^[[:space:]]*//' "$src")
 
-if printf '%s' "$code" | command grep -qF 'LogInfo("QWTBIRTH module='; then
-  ok "the birth line is emitted at INFO, so a product session carries it"
-else
-  bad "no LogInfo(\"QWTBIRTH module=\" in the patched source" "the sweep has no build to bill a line to"
-fi
+# NO PIPE INTO `grep -q` ON A BIG VARIABLE. $code is 24 KB of source text, and `grep -q` exits the
+# instant it matches, which closes the pipe under the writer; with `set -o pipefail` in force at the
+# top of this file the pipeline then reports the WRITER's SIGPIPE, 141, and the `if` takes the else
+# branch on a file that does contain the string. Measured on this qube: the same pipeline with a
+# 400 KB producer returns 141 eight times out of eight, and with this 24 KB one it returns 0 ten
+# times out of ten - i.e. the outcome depends on whether the producer's write fits the pipe buffer,
+# which is not a property of the source under test. `case` answers the same question with no
+# process, no pipe and no pipefail interaction. The repo's own L23 names this shape for guest
+# probes; it is the same hazard here, without a guest. (The one remaining pipe below feeds grep a
+# 120-byte literal, so it is left alone.)
+case "$code" in
+  *'LogInfo("QWTBIRTH module='*)
+    ok "the birth line is emitted at INFO, so a product session carries it" ;;
+  *)
+    bad "no LogInfo(\"QWTBIRTH module=\" in the patched source" "the sweep has no build to bill a line to" ;;
+esac
 
-# every fact the parser needs, in ONE line
+# EVERY FACT THE PARSER NEEDS, IN ONE LINE - and now checked IN that line. This loop used to grep
+# the whole patched file for each token, while its own heading says "in ONE line": a token sitting
+# in some unrelated statement satisfied it, and a token missing from the birth line but present
+# elsewhere satisfied it too. The predicate has to BE the property.
+# It also could not say anything when it failed. CI run 40281268355 reported "the birth line omits
+# ver=%d.%d.%d.%d" - 28 passed, 1 failed - on a tree where all three patches apply cleanly here and
+# the line does contain that token, and the message carried no evidence to tell a patch that landed
+# differently from an upstream file that differs. So the failure now prints the statement it read
+# and the three apply receipts.
+# NOT a sed range. `sed -n '/LogInfo("QWTBIRTH module=/,/);/p'` does not test the end pattern on the
+# line that opened the range, so a one-line statement (the whole call ending in `);`) runs on to the
+# NEXT `);` - or to EOF if there is none - and the tokens of unrelated code land in $birth. That is
+# the exact false pass this loop is being fixed for. Cut the substring instead: flatten, take the
+# text after the opening, then strip from the FIRST `);` on. Jev on the range: can_miss_or_overmatch
+# 0.92.
+flat=$(printf '%s' "$code" | tr '\n' ' ' | tr -s ' ')
+case "$flat" in
+  *'LogInfo("QWTBIRTH module='*)
+    birth=${flat#*'LogInfo("QWTBIRTH module='}
+    birth="LogInfo(\"QWTBIRTH module=${birth%%');'*}" ;;
+  *) birth="" ;;
+esac
+receipt="apply rc a=$arc b=$brc c=$crc; upstream $(command sha256sum "$UP" | cut -c1-12); birth=<${birth:-ABSENT}>"
 for k in 'module=%s' 'ver=%d.%d.%d.%d' 'pid=%lu' 'session=%lu' 'uptime=%.3f'; do
-  if printf '%s' "$code" | command grep -qF "$k"; then
-    ok "the birth line states $k"
-  else
-    bad "the birth line omits $k" "log-sweep.py cannot rebuild the init record without it"
-  fi
+  case "$birth" in
+    *"$k"*) ok "the birth line states $k" ;;
+    *)      bad "the birth line omits $k" "log-sweep.py cannot rebuild the init record without it - $receipt" ;;
+  esac
 done
 
 # ONE line, not six: the owner's objection was volume, and this must not reinstate it
