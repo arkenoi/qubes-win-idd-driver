@@ -261,7 +261,13 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 #   NOT forgotten: tools/tests/not-in-the-gate.txt carries each file's measured reason and
 #   findings/issues.md (SUITESNOBODYRUNS) the class. No sub-tally is repeated here - the live
 #   number is whatever the producer lint prints, and a hand-copied count is what rots.
-FLOOR=${OFFLINE_SUITES_FLOOR:-144}
+# 144 -> 145 on 2026-10-26: errbox-selftest.sh REGISTERED - declared out as RED on 2026-10-25, green now
+# (8 checks through this runner) once its ordering leg stopped anchoring on a RENAMED rule,
+# GetShellWindow() -> ShellWindowNow(), which had turned a lost landmark into a claim about the product.
+# A declared-out suite that passes is the exclusion rotting the other way: the gate is not running a
+# check that works. unpark-precheck was NOT registered with it - 5 runs on an unchanged tree gave
+# rc=0,1,1,0,1; its reason in not-in-the-gate.txt carries the measurement.
+FLOOR=${OFFLINE_SUITES_FLOOR:-145}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"

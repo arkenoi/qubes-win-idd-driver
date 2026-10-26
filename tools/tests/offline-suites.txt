@@ -107,6 +107,7 @@ dom0-callers-count-selftest.sh
 dom0-callers-selftest.sh
 dom0-sends-selftest.sh
 env-assert-selftest.sh
+errbox-selftest.sh
 exit-decision-coverage-selftest.sh
 failproof-misc.sh
 firstboot-effects-selftest.sh
