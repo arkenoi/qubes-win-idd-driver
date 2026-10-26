@@ -228,6 +228,25 @@ jobs:
           python3 -c 'from lxml import etree; print("lxml", etree.__version__)'
       - name: Offline selftest suites (serial, with a floor)
         run: tools/tests/run-offline-suites.sh
+      # PROBE, NOT A GATE. blockclaim-selftest.sh is the one suite kept out of the list for a
+      # DEPENDENCY rather than a defect: it drives a real loop device through the root-free route
+      # (`udisksctl loop-setup`, because sudo on the dev qube is interactive-only by design), and
+      # whether that route works on a GitHub runner - udisks2 absent by default, and a runner
+      # session that may not be polkit-active - cannot be measured from the dev qube. Its 1-in-5
+      # race was fixed on 2026-10-26 and 13/13 pass there; this step is the missing MEASUREMENT.
+      # continue-on-error because it decides a registration, it does not guard anything yet: the
+      # suite is NOT in offline-suites.txt, so a red probe must not fail this workflow. Read its
+      # result, then either register the suite (floor +1, in a commit) or record here that the
+      # route is unavailable on this runner. Delete this step once that decision is made.
+      - name: PROBE udisks2 - decides whether blockclaim-selftest can join the gate
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq udisks2 || echo "PROBE: udisks2 would not install"
+          systemctl is-active udisks2 || echo "PROBE: udisks2.service is not active"
+          udisksctl status || echo "PROBE: udisksctl status failed"
+          bash tools/tests/blockclaim-selftest.sh; echo "PROBE: blockclaim-selftest rc=$?"
 
   bind-dirs-offline:
     # The bind-dirs core (core-agent/src/bind-dirs/bind-dirs.c, docs/BIND-DIRS.md) is portable C
