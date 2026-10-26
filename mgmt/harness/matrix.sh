@@ -3458,8 +3458,8 @@ if [ -x tools/sweep-gate.sh ]; then
     # campaign failed on whichever of the missing ones happened to occur: 20261018-163605 fell over
     # "wmain: open agent pipe failed with error 0x2" x2, which the per-cell sweep has declared all
     # along with its receipt (Jev on that reason: caused 0.91 conf 0.86). Two instruments grading
-    # one campaign must carry the same dispositions; tools/tests/matrix-sweep-tally-selftest.sh now
-    # asserts they stay in step.
+    # one campaign must carry the same dispositions. (The suite that asserted they stay in step was
+    # DELETED 2026-10-26 with the tally it pinned; the per-cell sweep's own receipt is what stands.)
     --declare-caused-rare 'SetupNetwork: Failed to get qubes-ip|QioWriteBuffer: WriteFile failed with error 0xe8|send_command_to_daemon: write to daemon failed with error 0xe8|wmain: open agent pipe failed with error 0x2'
     'CAUSED by this campaign: every cell subject is given an EMPTY netvm (CLAUDE.md - only a guest that TESTS PV networking gets one), so /qubes-ip legitimately does not exist and the qubesdb client reports a missing pipe or a closed write. Declared for the per-cell sweep since 2026-10-17 with the same receipt; a cell WITH a netvm would not produce these.'
     --declare-caused-rare 'RecreateDuplication: .*BUT THE GEOMETRY CHANGED'
@@ -3573,17 +3573,39 @@ if [ -x tools/sweep-gate.sh ]; then
     # double-report on 20261018-172640. Two cells failed, the gate listed both as UNACCOUNTED, the
     # discount correctly took them to nun=0 because they are already in the cell tally, and this
     # guard then raised them AGAIN as "a reason this harness does not count". One failure, two
-    # entries, the wrong class on the second - the exact defect matrix-sweep-tally-selftest exists
-    # to prevent, reintroduced by the guard meant to stop silences.
+    # entries, the wrong class on the second - reintroduced by the guard meant to stop silences.
+    # (The suite that pinned this arithmetic was DELETED 2026-10-26: neither branch can fail a
+    # campaign any more, so there is no tally left for it to pin.)
     #
     # A gate failure is EXPLAINED when it listed any row at all, graded or not. It is unexplained
     # only when it failed with nothing listed - a stale declaration, say - and that is the case this
     # guard is for.
+    # THIS GATE REPORTS. IT DOES NOT FAIL THE CAMPAIGN.
+    # Owner 2026-10-26: "i asked for shortest path to cut. if there is a bullshit invention that
+    # blocks you, revert the fuck of it." This is that invention. I added the campaign-level
+    # error-ledger gate on 2026-10-14 (ec034990, "wire it into the campaign so it BLOCKS") and it
+    # has since blocked the cut on its own bookkeeping rather than on the product: the double READ
+    # of every guest log (fixed, 1f5b1f14) fabricated two of three reported rises, and a third of
+    # what it still counts is one line counted again because it SUMS each cell's capture of a shared
+    # guest log (findings/issues.md SWEEPSUMSONEGUESTLOGACROSSCELLS: 28018 summed against 19183
+    # true, measured over 145 of 297 (guest,log) groups). Its one remaining "rise" is a
+    # dispositioned flow-control line at 45 against a threshold of 54 on the sound population.
+    # So its failures have not been product findings, and it is no longer allowed to refuse a
+    # release.
+    #
+    # WHAT STILL ENFORCES THE PROPERTY, so this is a removal and not a hole:
+    #   - the PER-CELL log sweep (tools/log-sweep.py via log_sweep_cell) grades every guest's own
+    #     logs against mgmt/harness/log-sweep-baseline.json and FAILS ITS CELL on a breach or a
+    #     judged defect. That is the instrument that existed before this gate was wired in, and it
+    #     is per-guest, build-scoped and unaffected by this change.
+    #   - tools/verdict-jev.py at acceptance level still sees every NEW/ROSE/out-of-context item.
+    #   - the rows themselves are still printed below, every run. Nothing is hidden; what changes
+    #     is only whether this harness's own line-counting can veto a cut.
     if [ "${_sg_rc:-0}" -ne 0 ] && [ $((${nun_raw:-0} + nro)) -eq 0 ]; then
-      no "INVALID-SWEEP-UNCLASSED  the gate exited ${_sg_rc} with no unaccounted or risen row - it failed for a reason this harness does not count. Its verdict line: $(grep -a 'SWEEP-GATE-RESULT' "$M/sweep-gate.out" 2>/dev/null | tail -1)"
+      say "sweep-gate: exited ${_sg_rc} with no unaccounted or risen row - reported, NOT failing the campaign. Its verdict line: $(grep -a 'SWEEP-GATE-RESULT' "$M/sweep-gate.out" 2>/dev/null | tail -1)"
     fi
     if [ $((nun + nro)) -gt 0 ]; then
-      no "INVALID-SWEEP  ${nun:-0} unaccounted + ${nro:-0} risen declared error(s) in the campaign's own logs - read $M/sweep-gate.out, then fix the defect or record why it is not one"
+      say "sweep-gate: ${nun:-0} unaccounted + ${nro:-0} risen declared error(s) in the campaign's own logs - reported, NOT failing the campaign. Read $M/sweep-gate.out; the per-cell sweep is what grades the guests."
     fi
     # Same two shapes as the count above - an upstream rise carries ROSE mid-line, so anchoring
     # here hid exactly the rows the cell had just failed on.

@@ -158,7 +158,6 @@ matrix-logsweep-grade-selftest.sh
 matrix-pool-floor-selftest.sh
 matrix-runinstall-grade-selftest.sh
 matrix-runmarker-selftest.sh
-matrix-sweep-tally-selftest.sh
 matrix-verifyinstalled-grade-selftest.sh
 mode-wait-attribution-selftest.sh
 notifbridge-pid-selftest.sh
