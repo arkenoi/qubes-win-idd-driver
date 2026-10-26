@@ -28,6 +28,30 @@ trap cleanup EXIT INT TERM
 # The predicate, against a REAL loop: bound -> has a backing file; deleted -> node may remain.
 bound(){ [ -e "/sys/block/$1/loop/backing_file" ] && echo 1 || echo 0; }
 
+# TEARDOWN IS ASYNCHRONOUS, and reading it once is a race. Measured 2026-10-26 over 5 runs of this
+# suite on an unchanged tree: one read the backing file as still present immediately after
+# `udisksctl loop-delete` returned (rc=0,1,0,0,0 - BLOCKCLAIMSELFTESTRACES). The property is "AFTER
+# the delete it is gone", so it is WAITED for, with a bound, and the wait says which exit it took.
+# Echoes "<final reading> <how long>", so the label can carry the settle time.
+wait_bound(){ # <base> <wanted reading>
+    local i=0 v
+    while [ "$i" -lt 100 ]; do
+        v=$(bound "$1")
+        [ "$v" = "$2" ] && { echo "$v $((i*50))ms"; return 0; }
+        sleep 0.05; i=$((i+1))
+    done
+    echo "$v DEADLINE-5s"
+}
+wait_unlisted(){ # <base>
+    local i=0 n
+    while [ "$i" -lt 100 ]; do
+        n=$(losetup -l 2>/dev/null | grep -c "^/dev/$1 ")
+        [ "$n" = 0 ] && { echo "$n $((i*50))ms"; return 0; }
+        sleep 0.05; i=$((i+1))
+    done
+    echo "$n DEADLINE-5s"
+}
+
 dd if=/dev/zero of="$T/img" bs=1M count=4 >/dev/null 2>&1 || { echo "FATAL: cannot make an image"; exit 2; }
 DEV=$(udisksctl loop-setup -f "$T/img" 2>/dev/null | grep -aoE '/dev/loop[0-9]+' | head -1)
 [ -n "$DEV" ] || { echo "FATAL: udisksctl loop-setup gave no device (root-free route, see mgmt/CLAUDE.md)"; exit 2; }
@@ -36,9 +60,16 @@ BASE=${DEV#/dev/}
 ck "a bound loop has a backing file"            "1" "$(bound "$BASE")"
 ck "and losetup lists it"                       "1" "$(losetup -l 2>/dev/null | grep -c "^$DEV ")"
 
+# THE WAITER MUST BE ABLE TO SAY "STILL THERE", or waiting for 0 below would prove nothing: while
+# the loop is still bound it has to spend its whole bound and report 1.
+still=$(wait_bound "$BASE" "0")
+ck "the waiter reports a STILL-BOUND loop and takes its deadline (${still#* })" "1" "${still% *}"
+
 udisksctl loop-delete -b "$DEV" >/dev/null 2>&1; DEV=""
-ck "a deleted loop has NO backing file"         "0" "$(bound "$BASE")"
-ck "and losetup no longer lists it"             "0" "$(losetup -l 2>/dev/null | grep -c "^/dev/$BASE ")"
+gone=$(wait_bound "$BASE" "0")
+ck "a deleted loop has NO backing file (${gone#* })"         "0" "${gone% *}"
+unl=$(wait_unlisted "$BASE")
+ck "and losetup no longer lists it (${unl#* })"              "0" "${unl% *}"
 # THE TRAP ITSELF: the node often survives the delete, which is why node existence must not be the
 # test. If this prints 0 the node happened to go too - the predicate above is still the right one.
 echo "     (node /dev/$BASE still present after delete: $([ -e "/dev/$BASE" ] && echo yes || echo no))"
