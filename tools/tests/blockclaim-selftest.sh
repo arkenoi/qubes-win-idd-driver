@@ -22,7 +22,17 @@ ck(){ if [ "$2" = "$3" ]; then pass=$((pass+1)); echo "ok   $1"; else fail=$((fa
 source mgmt/harness/blockclaim-lib.sh
 
 T=$(mktemp -d "${TMPDIR:-/tmp}/blockclaim.XXXXXX") || exit 2
-cleanup(){ [ -n "${DEV:-}" ] && udisksctl loop-delete -b "$DEV" >/dev/null 2>&1; rm -rf "$T"; }
+# ROUTE is whichever one set the device up, so teardown matches setup (see TWO ROUTES below).
+ROUTE=""
+cleanup(){
+    if [ -n "${DEV:-}" ]; then
+        case "$ROUTE" in
+            sudo) sudo -n losetup -d "$DEV" >/dev/null 2>&1 ;;
+            *)    udisksctl loop-delete -b "$DEV" >/dev/null 2>&1 ;;
+        esac
+    fi
+    rm -rf "$T"
+}
 trap cleanup EXIT INT TERM
 
 # The predicate, against a REAL loop: bound -> has a backing file; deleted -> node may remain.
@@ -53,8 +63,23 @@ wait_unlisted(){ # <base>
 }
 
 dd if=/dev/zero of="$T/img" bs=1M count=4 >/dev/null 2>&1 || { echo "FATAL: cannot make an image"; exit 2; }
+# TWO ROUTES TO A LOOP DEVICE, tried in this order, and the one that works is recorded in ROUTE.
+#   1. udisksctl - the ROOT-FREE route, and the only one available on the dev qube, where sudo is
+#      interactive-only by design (mgmt/CLAUDE.md), so a non-interactive `sudo -n` cannot work.
+#   2. sudo -n losetup - for a CI runner. MEASURED on ubuntu-latest, CI run 40262136871: udisks2
+#      installs and its service is ACTIVE, `udisksctl status` lists the disk, and loop-setup STILL
+#      yields no device (the runner session is not polkit-authorised for it). So route 1 alone kept
+#      this suite out of the gate for a DEPENDENCY, not a defect, and a runner has passwordless sudo.
+# Neither available is "nothing ran" - missing data fails, it never reads as a pass.
 DEV=$(udisksctl loop-setup -f "$T/img" 2>/dev/null | grep -aoE '/dev/loop[0-9]+' | head -1)
-[ -n "$DEV" ] || { echo "FATAL: udisksctl loop-setup gave no device (root-free route, see mgmt/CLAUDE.md)"; exit 2; }
+if [ -n "$DEV" ]; then
+    ROUTE=udisks
+else
+    DEV=$(sudo -n losetup --find --show "$T/img" 2>/dev/null | grep -aoE '/dev/loop[0-9]+' | head -1)
+    [ -n "$DEV" ] && ROUTE=sudo
+fi
+[ -n "$DEV" ] || { echo "FATAL: no loop device - udisksctl loop-setup gave none (root-free route, see mgmt/CLAUDE.md) and sudo -n losetup is unavailable; nothing ran"; exit 2; }
+echo "     (loop route: $ROUTE, device $DEV)"
 BASE=${DEV#/dev/}
 
 ck "a bound loop has a backing file"            "1" "$(bound "$BASE")"
@@ -65,7 +90,11 @@ ck "and losetup lists it"                       "1" "$(losetup -l 2>/dev/null | 
 still=$(wait_bound "$BASE" "0")
 ck "the waiter reports a STILL-BOUND loop and takes its deadline (${still#* })" "1" "${still% *}"
 
-udisksctl loop-delete -b "$DEV" >/dev/null 2>&1; DEV=""
+case "$ROUTE" in
+    sudo) sudo -n losetup -d "$DEV" >/dev/null 2>&1 ;;
+    *)    udisksctl loop-delete -b "$DEV" >/dev/null 2>&1 ;;
+esac
+DEV=""
 gone=$(wait_bound "$BASE" "0")
 ck "a deleted loop has NO backing file (${gone#* })"         "0" "${gone% *}"
 unl=$(wait_unlisted "$BASE")
