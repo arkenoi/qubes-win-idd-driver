@@ -36,7 +36,11 @@
 #   bridge-exit-reason-selftest.sh    not_a_death: every exit 0 reported as 'a clean exit nobody asked for'
 #       RESOLVED 2026-10-25 and now LISTED: the fix it asserted is in the source and it is green (18 checks).
 #   broker-down-anchor-selftest.sh    held_without_a_shell: the deadline runs before the broker can launch
-#       RESOLVED 2026-10-25 and now LISTED: green (9 checks). It was red at the release sha only.
+#       RESOLVED 2026-10-25 and now LISTED: green (8 checks). It was red at the release sha only.
+#       Was 9 until 2026-10-26: the `anchor_is_the_one_launch` leg is DELETED, not repaired - its
+#       400-character proximity window broke when 84819d0 moved the launch stamp BELOW WgcLaunch(),
+#       which is the de-slice fix itself. The guard still holds the assignment (main.c:4229 -> 4322,
+#       brace depth +1); `anchor_does_not_slide` states the once-ness directly. See the suite.
 #   log-policy-selftest.sh            2 routine per-window LogInfo lines (main.c BROKERLATEREG, BROKERHOLD)
 #       RESOLVED 2026-10-25 and now LISTED: those two lines are DEBUG now and it is green (32 checks).
 # Everything else in tools/tests/ needs a Qubes rig, a loop device, PowerShell, mtools or a

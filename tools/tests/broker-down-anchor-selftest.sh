@@ -70,18 +70,23 @@ n=$(echo "$CODE" | command grep -v 'static .*g_WgcLastLaunch' | command grep -c 
 [ "$n" = 1 ] \
   && ok "anchor_does_not_slide: g_WgcLastLaunch is assigned exactly once (one launch per agent life)" \
   || bad "anchor_does_not_slide: g_WgcLastLaunch is assigned $n times - a sliding anchor means this report can never fire"
-guarded=$(python3 - "$M" <<'PYF'
-import sys, io, re
-s = re.sub(r'(?m)//.*$', '', io.open(sys.argv[1], encoding='utf-8', errors='replace').read())
-m = [x for x in re.finditer(r'g_WgcLastLaunch\s*=\s*', s) if 'static' not in s[max(0,x.start()-60):x.start()]]
-if not m: print('ABSENT'); raise SystemExit
-i = m[0].start()
-print('GUARDED' if 'if (!g_WgcLaunched' in s[max(0, i-400):i] else 'UNGUARDED')
-PYF
-)
-[ "$guarded" = GUARDED ] \
-  && ok "anchor_is_the_one_launch: it is set inside the one-launch guard, not on every retry" \
-  || bad "anchor_is_the_one_launch: $guarded"
+# DELETED 2026-10-26: the `anchor_is_the_one_launch` leg. Its predicate was a PROXIMITY PROXY - it
+# searched the 400 characters BEFORE the assignment for `if (!g_WgcLaunched` - and 84819d0 moved the
+# stamp from above WgcLaunch() to below it, which is the actual de-slice fix: a tick taken before the
+# blocking HelperTaskRegister work is fresh but EARLY, so it could not exclude a cost not yet paid.
+# The guard did not go away; the assignment moved 8787 characters past it (main.c:4229 guard head ->
+# main.c:4322 assignment, brace depth +1, i.e. still inside the block). Measured, not assumed. The
+# leg would have needed its window widened to keep saying the same thing, so by the owner's rule it
+# is DELETED rather than quick-fixed.
+# WHAT STILL ENFORCES THE PROPERTY, which is "the anchor cannot slide":
+#   - `anchor_does_not_slide` above: the assignment count is exactly 1. The hazard this section's
+#     comment names is a value REFRESHED every ~8 s by BrokerSupervise; that is a second assignment
+#     and the count catches it. Being inside the guard was only ever a structural way of implying
+#     once-ness, which the count states directly.
+#   - `anchored_at_launch` above: the armed clock's origin comes from QgaDesliceAnchor fed the launch
+#     tick, so an anchor taken from anywhere else fails there.
+#   - the metering branch measured the consequence end to end: pass_now=96687 post=97156, a 469 ms
+#     gap where the pre-fix binary printed pass_now == fresh to the millisecond.
 
 # ---- 4. A BROKER THAT NEVER COMES UP IS STILL REPORTED -----------------------------------------
 # The fix must not become a mute: once launched, a broker that never becomes ready must still be
