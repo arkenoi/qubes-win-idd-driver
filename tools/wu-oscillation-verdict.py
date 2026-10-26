@@ -12,8 +12,9 @@ update was published AFTER the campaign start and not fail there?" By count, no.
 every offer carries an UpdateID and a RevisionNumber, which qubes-windows-update.ps1 already
 captures off the live COM object ("no title parsing, no locale dependence", ADR section 6).
 
-An offer whose UpdateID was NOT present before is newly published. An offer whose UpdateID WAS
-present - and which the pass reported as resolved - coming back is the oscillation.
+An offer whose UpdateID was NOT present before is newly published - UNLESS the pass reported that
+very identity resolved, and that is the oscillation: we dealt with it, it went away, and here it is
+again. An offer that never went away is stuck, not oscillating; see verdict() for the measurement.
 
 KB2267602 is exactly why the count fails: Microsoft republishes Defender Security Intelligence
 several times a day, each time under a NEW UpdateID. By count that reads as the same thing
@@ -51,18 +52,34 @@ def load(path):
 
 
 def verdict(before, after, resolved):
-    """resolved = UpdateIDs the pass reported it dealt with."""
+    """resolved = UpdateIDs the pass reported it dealt with.
+
+    A RETURN IS ABSENT-THEN-PRESENT. "Still offered" is NOT a return, and this used to say it was:
+    the branch fired on `uid in before and uid in res`, which is stuckness, not oscillation.
+
+    MEASURED 2026-10-26 across SIX recorded campaigns (rel-37995862932, rel-38011618932,
+    rel-38045074076, rel-40037710497, rel-40142194040, tu-rerun-6bd8aea8 - five of them
+    template-update round 3): the pass installs KB2267602/KB4052623, writes result ok=True
+    state=installed, records the identity in `satisfied`, reports remaining=0, and the SAME
+    UpdateID at the SAME revision is still in `available` with count=1. A definition install does
+    not clear the offer until Windows Update's next catalog sync. That is the ordinary shape on
+    every guest that receives definitions, so failing it would have failed template-update - a
+    required feature test - in all six. The old selftest asserted the opposite from a synthetic
+    fixture; six recorded campaigns refute the fixture, and the measurement wins.
+
+    So the oscillation is: we resolved it, it WENT AWAY, and the scan brought it back. That is also
+    exactly the case the count leg cannot see - one offer returning while another stops being
+    offered leaves dom0's number where it was.
+    """
     res = {u.strip().lower() for u in resolved if u and u.strip()}
     returned, republished, new = [], [], []
     for uid, a in sorted(after.items()):
         if uid not in before:
-            new.append(uid)
+            (returned if uid in res else new).append(uid)
             continue
         b = before[uid]
         if a["rev"] is not None and b["rev"] is not None and a["rev"] > b["rev"]:
             republished.append(uid)
-        elif uid in res:
-            returned.append(uid)          # we said we resolved it, and here it is again
     return returned, republished, new
 
 

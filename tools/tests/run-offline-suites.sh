@@ -271,7 +271,23 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # vacuous. The rig read is now stubbed in the suite (the serial-rig-selftest stubs), 5 assertions,
 # zero rig calls, and the guard was driven: with the size guard deleted from a padded copy the
 # probe never says "past cmd.exe", so the leg goes red.
-FLOOR=${OFFLINE_SUITES_FLOOR:-148}
+# 146 -> 145 on 2026-10-26: wu-oscillation-verdict-selftest.sh DELETED. Two of its eight assertions
+# encoded a belief that measurement refuted - that an offer we resolved and which is STILL offered
+# is an oscillation. Six recorded campaigns (five of them template-update round 3) show a definition
+# install leaving its own identity in `available` at the same revision with remaining=0, because
+# Windows Update does not clear the offer until its next catalog sync. The fixture was synthetic and
+# the campaigns are real, so verdict() now fires on absent-then-present and the fixture is gone
+# rather than edited (CLAUDE.md: a selftest that fails and needs a quick fix is DELETED).
+# What still enforces it: wu-e2e.sh fails the round on rc=1, and the three controls in that commit
+# message drive the leg red on a genuine return, green on identical sets with nothing resolved, and
+# non-zero on a missing pre-pass status.
+#
+# AND THE FLOOR WAS ALREADY WRONG, WHICH MADE THIS WHOLE GATE INERT. It stood at 148 against a list
+# of 146: matrix-sweep-tally-selftest.sh and sweep-window-selftest.sh were deleted earlier the same
+# day and this floor was not moved with them, so every run exited 2 on "the list shrank" and NO
+# suite ran at all. Measured at HEAD before this change: rc=2, zero suites executed. That is the
+# failure mode the floor exists to catch, caught by the floor itself and against the runner.
+FLOOR=${OFFLINE_SUITES_FLOOR:-145}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"

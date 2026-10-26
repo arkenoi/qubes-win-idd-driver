@@ -209,6 +209,13 @@ for r in $(seq 1 "$ROUNDS"); do
   # golden's history. Judging the whole file each round re-judges the past and lets an old pass
   # decide this round's verdict. Snapshot it BEFORE, and judge only what this round appended.
   guest_file 'C:\ProgramData\Qubes\wu\agent.log' > "$RD/agent-before.log"
+  # ...and `satisfied` in update-status.json is cumulative for the SAME reason, deliberately:
+  # guest/qubes-windows-update.ps1 GUARD:offeridentity carries the previous pass's list forward
+  # ($script:St.satisfied = @($priorSat)) so a scan stops re-raising dom0 for a package it proved
+  # installed thirty seconds earlier. It is an accumulator over the image's whole life, golden
+  # included. The oscillation verdict below needs "what THIS pass resolved", which is the DELTA -
+  # feeding it the accumulator reports every identity the golden ever resolved as an oscillation.
+  guest_file 'C:\ProgramData\Qubes\update-status.json' > "$RD/update-status-before.json"
 
   log "round $r: driving a pass the Qube Manager way (replay-dom0-update.py --with-entrypoint)"
   # A FIRST PASS ON AN UN-UPDATED TEMPLATE IS NOT AN HOUR'S WORK. Measured 2026-09-21 on
@@ -421,6 +428,96 @@ for r in $(seq 1 "$ROUNDS"); do
     done
     printf 'result: scan_seen=%s after %ss\n' "$scan_seen" "$(( 900 - (_sc - $(date +%s)) ))" >> "$_osc_log"
     dom0_after_scan=$(dom0_avail)
+    # ---- THE IDENTITY VERDICT, AND IT DECIDES -----------------------------------------------
+    # tools/wu-oscillation-verdict.py was added by 763d8dc3 with NO CALLER: written, selftested and
+    # registered in offline-suites.txt, wired to nothing, so it had never decided a single campaign
+    # cell (findings/issues.md WUOSCILLATIONVERDICTNEVERRUNS, P1). This is that call.
+    #
+    # IT RUNS BEFORE AND INDEPENDENTLY OF THE FLAG COMPARISON BELOW, which is the point: an offer we
+    # reported RESOLVED coming back while a different one stops being offered leaves dom0's count
+    # EXACTLY where it was, so a check gated on the flag moving is blind to it by construction. The
+    # tool's own words: "Both move the number from N to N+1." Only identity separates the real
+    # oscillation from Microsoft republishing a definition mid-campaign, which is why KB2267602 made
+    # the count-based leg fail intermittently for ever on any guest that receives definitions.
+    #
+    # THE DATA IS ALREADY THERE AND IS NOT DERIVED FROM A TITLE. guest/qubes-windows-update.ps1:993
+    # writes every offer with uid and rev taken straight off the COM object's Identity.UpdateID and
+    # Identity.RevisionNumber - "no title parsing, no locale dependence" (ADR section 6). BEFORE is
+    # the PASS's own status, AFTER is the scan's, RESOLVED is what THIS PASS said it satisfied.
+    # Offers = available + not_actionable: both are still being OFFERED, and an offer we cannot
+    # action is still one that must not come back after we reported it done.
+    #
+    # RESOLVED IS A DELTA, NOT THE LIST. `satisfied` is an accumulator (see the pre-pass capture
+    # above), and the tool's rule is "we said we resolved it, and here it is again" - so feeding it
+    # the accumulator reports every identity the GOLDEN ever resolved and still sees offered.
+    # MEASURED on the recorded campaign rel-40037710497 round 3: the guest's own status carries
+    # satisfied=["177debf7-03e2-4280-a97a-53ade44e2cce:200"] AND available=[{uid 177debf7-..., rev
+    # 200, KB2267602}] in the SAME file, count=1 - because the script deliberately does not subtract
+    # satisfied from available ("dom0 must always hear the true number of available updates"; a
+    # previous attempt to subtract it is what produced GWeck's forum #175 report). The count leg
+    # passed that round. The accumulator would have failed the updater cell on it.
+    # So: resolved = satisfied(after this pass) MINUS satisfied(before it). On a round that resolves
+    # nothing the set is empty and the OSCILLATION branch cannot fire - correctly: nothing was
+    # claimed, so nothing can come back.
+    if [ "$scan_seen" = 1 ]; then
+      printf '%s' "$st_now" > "$RD/update-status-after-scan.json"
+      python3 - "$RD/update-status.json" "$RD/update-status-after-scan.json" \
+               "$RD/osc-before.json" "$RD/osc-after.json" "$RD/osc-resolved.txt" \
+               "$RD/update-status-before.json" <<'PY'
+import json, sys
+def offers(d):
+    out = []
+    for k in ("available", "not_actionable"):
+        for u in (d.get(k) or []):
+            if u.get("uid"):
+                out.append({"uid": u["uid"], "rev": u.get("rev"), "kb": u.get("kb") or ""})
+    return out
+def rd(p):
+    with open(p, encoding="utf-8-sig") as fh:
+        return json.load(fh)
+bp, ap, bo, ao, ro, pp = sys.argv[1:7]
+b, a = rd(bp), rd(ap)
+json.dump({"offers": offers(b)}, open(bo, "w"))
+json.dump({"offers": offers(a)}, open(ao, "w"))
+# satisfied is a list of IDENTITY STRINGS, "<uid>[:<rev>]" - NOT objects. Measured on
+# rel-40037710497 round 3: satisfied[0] == "177debf7-03e2-4280-a97a-53ade44e2cce:200", and the
+# same spelling the script's own -Only switch documents at qubes-windows-update.ps1:37. Treating
+# it as an object made this projection raise, which would have FAILED the updater cell on a
+# healthy guest. Objects are accepted too, so a future shape change does not silently yield none.
+def sat(d):
+    out = []
+    for u in (d.get("satisfied") or []):
+        uid = (u.get("uid") or u.get("id") or "") if isinstance(u, dict) else str(u)
+        uid = uid.split(":", 1)[0].strip().lower()
+        if uid:
+            out.append(uid)
+    return out
+# The pre-pass file is the ONLY thing that makes this a delta. A missing or unreadable one is not
+# "the golden resolved nothing" - that reading turns the accumulator back into the resolved set and
+# fails the cell on the golden's history. It is missing data, so it raises and the caller fails.
+prior = set(sat(rd(pp)))
+# the PASS's own status is where its resolved set lands; the scan that follows only reads.
+res = [u for u in sat(b) if u not in prior]
+open(ro, "w").write(",".join(res))
+PY
+      if [ $? != 0 ]; then
+        log "[ERROR] round $r: FAIL - the per-offer identities could not be projected from the guest's own status, so the oscillation verdict cannot run (missing data fails, as everywhere here)"
+        fails=1
+      else
+        _osc_res=$(cat "$RD/osc-resolved.txt" 2>/dev/null)
+        python3 tools/wu-oscillation-verdict.py --before "$RD/osc-before.json" \
+                --after "$RD/osc-after.json" --resolved "$_osc_res" > "$RD/osc-verdict.out" 2>&1
+        _osc_vrc=$?
+        log "round $r: $(head -1 "$RD/osc-verdict.out")"
+        if [ "$_osc_vrc" = 1 ]; then
+          log "[ERROR] round $r: FAIL - OSCILLATION BY IDENTITY: an offer this pass reported RESOLVED is being offered again after the scan. dom0 went '${dom0_before_scan:-<empty>}' -> '${dom0_after_scan:-<empty>}', which a count cannot tell apart from a new publication"
+          fails=1
+        elif [ "$_osc_vrc" != 0 ]; then
+          log "[ERROR] round $r: FAIL - the oscillation verdict could not read its input (rc=$_osc_vrc): $(head -2 "$RD/osc-verdict.out" | tail -1)"
+          fails=1
+        fi
+      fi
+    fi
     if [ "$scan_seen" = 0 ]; then
       log "[ERROR] round $r: FAIL - the scan never ran, so the oscillation check did not happen (missing data fails)"
       fails=1

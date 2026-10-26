@@ -224,5 +224,4 @@ wu-definition-class-selftest.sh
 wu-judge-levelprefix-selftest.sh
 wu-judge-timenorm-selftest.sh
 wu-liveness-selftest.sh
-wu-oscillation-verdict-selftest.sh
 xen-core-small-selftest.sh
