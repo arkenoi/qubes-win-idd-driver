@@ -3561,6 +3561,35 @@ def lookup_baseline(baseline, key):
     return None, None
 
 
+_SIG_FUNCPREFIX = re.compile(r"^([A-Za-z_][A-Za-z0-9_]{2,}(?:[-/][A-Za-z][A-Za-z0-9]+)?):\s")
+_SIG_TAG = re.compile(r"\b(QGA[A-Z0-9]{3,}|[A-Z][A-Z0-9]{5,})\b")
+# `(class Foo)` AND `(class Foo, NxN)`, plus `field=value`. The comma form is not cosmetic: see
+# the measurement in the stale_text block below - requiring the closing paren dropped the class
+# from QGADIRECTSUPPRESS and QGADIRECTWAIT and collapsed twelve declarations into two identities.
+_SIG_FIELD = re.compile(r"(?:\(class\s+([A-Za-z0-9_.#]+)[,)]|\b([a-z_]{3,})=([A-Za-z0-9_.]+))")
+
+
+def sig_identity(key):
+    """The part of a signature key a REWORD does not touch: (family, level, Function, TAG, fields).
+
+    None when the message carries no `Function: ` prefix - the log macro prepends that via
+    __FUNCTION__, so a message without one did not come from one of our emitters and there is no
+    function to key on. The TAG may be None; callers that join on identity REQUIRE it, because it
+    is the only element that separates two different emitters in the same function at the same
+    level with the same interpolated class.
+    """
+    parts = (key or "").split("|", 2)
+    if len(parts) != 3:
+        return None
+    m = _SIG_FUNCPREFIX.match(parts[2])
+    if not m:
+        return None
+    body = _SIG_FUNCPREFIX.sub("", parts[2], count=1)
+    t = _SIG_TAG.search(body)
+    fields = tuple(sorted((a or ("%s=%s" % (b, c))) for a, b, c in _SIG_FIELD.findall(body)))
+    return (parts[0], parts[1], m.group(1), t.group(1) if t else None, fields)
+
+
 def compare(sigs, baseline, metrics):
     thr = dict(DEFAULT_THRESHOLDS)
     thr.update(baseline.get("thresholds") or {})
@@ -3709,8 +3738,130 @@ def compare(sigs, baseline, metrics):
                                     "declared": _bk, "declared_level": _bk.split("|", 2)[1],
                                     "declared_status": (_bsigs.get(_bk) or {}).get("status"),
                                     "count": _s.get("count")})
+    # THE OTHER HALF OF THE SAME ROT, AND THE HALF THAT FAILED A CELL. The detector above joins on
+    # (family, IDENTICAL text) at a DIFFERENT level, so it sees a level demotion and nothing else.
+    # A REWORD is the orthogonal shape - SAME level, DIFFERENT text - and it reported 0 for cell
+    # WIN10-reinstall of campaign 40243956400 (2026-10-26), whose only unclassified line was
+    #   agent|W|UpdateWindowData: QGACROPLATE hwnd 0xH (class Windows.UI.Core.CoreWindow) mapped
+    #   uncropped after N ms, shadow strip visible until cropped                              x1
+    # against a declaration reading `... mapped UNCROPPED: the shadow-crop did not resolve within
+    # N ms ...` at status=unsettled max_per_boot=1. Same family, level, function, tag and
+    # interpolated class; agent fc94490 (2026-10-10) reworded it and the old wording survives only
+    # as the comment at agent/gui-agent/main.c:10074. The x1 it was seen at was exactly the
+    # max_per_boot it was declared with, so had the declaration matched, THE CELL WOULD HAVE
+    # PASSED. fc94490 is also the commit behind the A6LEAK incident the detector above was written
+    # for; the reword it did in the same breath was never swept.
+    #
+    # So a new line is joined to a declaration on the part of the message a reword does not touch:
+    #     family | level | Function | TAG | the interpolated field values
+    # Every element is load-bearing, and each is there because of a measurement, not taste:
+    #   * the TAG cannot be dropped - QGACROPLATE and QGADIRECTDARK are both agent|W|
+    #     UpdateWindowData with class Windows.UI.Core.CoreWindow, and collide without it;
+    #   * the field capture must accept `(class Foo, NxN)`, not only `(class Foo)` - see
+    #     sig_identity; that one paren took the colliding identities from 5 to 3;
+    #   * a declaration qualifies only if its tag is QGA-prefixed OR it carries at least one
+    #     interpolated field. That predicate is a property of the DECLARATION ITSELF, which is the
+    #     whole point: the first version asked instead whether the FAMILY carried a QGA tag
+    #     anywhere, and Jev named that the change's worst remaining defect (
+    #     qualification_rule_fragile 0.82) because coverage then depends on OTHER declarations and
+    #     ends silently when the last of them is repaired away. The predicate exists to keep `msi`
+    #     out: msi holds 23 tagged declarations whose "tag" is an uppercase English or SQL word
+    #     (WINDOWS, SELECT, UNKNOWN) inside MSI's own `Note:` text, which MSI emits endlessly, and
+    #     those three were the only colliding identities left. Using findings/issues.md as an exact
+    #     tag vocabulary was tried and REFUTED: its tags are not line-anchored.
+    # Measured on the current baseline: 50 identities, 0 collisions, family `agent` only, no msi.
+    # The cost is stated rather than hidden - a declaration with a non-QGA tag AND no interpolated
+    # field is NOT covered, which drops RESSETTLE (6 identities fewer than the fragile version).
+    #
+    # REPORT-ONLY, exactly like the detector above: it changes no verdict and no metric. Whether an
+    # orphaned declaration should be RESTORED is a judgment on the line, not on the rot - the
+    # baseline deliberately does not record sub-floor signatures so they "must keep surfacing as
+    # new until a human judges them", and the QGACROPLATE entry above is sub-floor (Jev 0.49). That
+    # decision is the owner's and is filed as SIGNATUREKEYISTHEPROSE. This block only makes the rot
+    # visible at minute 0 instead of argued about for three days, which is why the other one exists.
+    #
+    # FALSE POSITIVES, MEASURED: 0 across the 24 gradeable reports of the 178 on this machine (16
+    # with signatures_unclassified == 0, 8 with it above 0), with one true positive and both
+    # validation arms passing; 154 reports predate the gate and cannot grade it either way. Jev:
+    # runtime_identity_join 0.94, land_report_only 0.74, and missing_measurement
+    # fp_on_full_campaign 0.99 - the full-campaign rate is OWED, and is filed with the entry above.
+    def _joinable(_i):
+        """Ours to key on: a QGA-prefixed tag, or any tag plus an interpolated field value."""
+        return bool(_i) and _i[3] is not None and (_i[3].startswith("QGA") or bool(_i[4]))
+
+    # ROT MEANS THE DECLARATION MATCHED NOTHING, and that single fact removes the whole
+    # false-positive class the second arm would otherwise create. If a function legitimately gains
+    # a SECOND log line, its original declaration is still matched by its original line - so the
+    # new line is a new line, not a reword, and nothing is reported. A declaration is only a
+    # candidate for having been reworded if it matched no signature in this capture at all.
+    # `lookup_baseline` returns "exact" only when the declaration's key IS the signature's key, so
+    # the matched set is exactly those keys. Pattern matches do not consume a declaration and are
+    # correctly absent. A declaration matched only by a PRIOR-BUILD line counts as matched here,
+    # which is the conservative direction: it suppresses a report rather than inventing one.
+    _matched_decls = set(_k for _k, _s in sigs.items() if _s.get("match") == "exact")
+    stale_text = []
+    _by_identity = {}
+    _by_func = {}
+    for _bk in _bsigs:
+        _bi = sig_identity(_bk)
+        if not _bi:
+            continue
+        if _joinable(_bi):
+            _by_identity.setdefault(_bi, []).append(_bk)
+        _by_func.setdefault((_bi[0], _bi[1], _bi[2]), []).append(_bk)
+    # THE SECOND ARM, AND IT IS DELIBERATELY WEAKER. The predicate above needs a tag, and that
+    # leaves OUR OWN tagless declarations uncovered: measured per family, agent is 50 of 77, while
+    # watchdog (9), qubesdb (6) and qrexec (2) are ours, carry a `Function: ` prefix and are covered
+    # ZERO. Jev named exactly that - coverage_too_narrow 0.71. For a line with no tag and no
+    # interpolated field the only prose-independent thing left is the function, and (family, level,
+    # Function) is NOT an identity because one function emits many lines. But where a function has
+    # exactly ONE declaration at that level in the whole baseline, a new line from it has only one
+    # declaration it could be the reword of. That uniqueness requirement also excludes `msi` by
+    # construction rather than by a rule: its `Note:` prefix appears 61 times, so none is unique.
+    # It adds 25 declarations (agent 16, watchdog 3, qrexec 2, qubesdb 2, installer 2) and recovers
+    # three of the eight at-or-above-floor orphans measured - RESSETTLE, EnsureQubesIddSolo's
+    # `IDD solo`, and CaptureStop's `capture thread left in its acquire`.
+    # ITS RISK RUNS THE OTHER WAY from the tag arm: a function that legitimately gains a SECOND log
+    # line has it joined to the first and reported as rot. On the 24 gradeable reports this arm
+    # never fired at all, so its false-positive rate is UNMEASURED, not zero - which is why every
+    # row carries `how` and the summary prints which arm found it, so a reader never mistakes a
+    # same-function guess for a tag match.
+    for _sn in new:   # GUARD:staletext DEFECT: for _sn in []:
+        _ni = sig_identity(_sn.get("key") or "")
+        if not _ni:
+            continue
+        _hits, _how = [], "tag"
+        if _joinable(_ni):
+            _hits = [_b for _b in _by_identity.get(_ni, [])
+                     if _b != _sn.get("key") and _b not in _matched_decls]
+        if not _hits and _ni[3] is None and not _ni[4]:
+            _fk = [_b for _b in (_by_func.get((_ni[0], _ni[1], _ni[2])) or [])
+                   if _b not in _matched_decls]
+            if len(_fk) == 1 and _fk[0] != _sn.get("key") \
+                    and len(_by_func.get((_ni[0], _ni[1], _ni[2])) or []) == 1:
+                _hits, _how = list(_fk), "unique-function"
+        for _bk in _hits:
+            _bent = _bsigs.get(_bk) or {}
+            stale_text.append({"seen": _sn["key"], "declared": _bk, "tag": _ni[3], "how": _how,
+                               "function": _ni[2], "level": _ni[1], "fields": list(_ni[4]),
+                               "declared_status": _bent.get("status"),
+                               "declared_max_per_boot": _bent.get("max_per_boot"),
+                               "count": _sn.get("count"), "max_per_boot": _sn.get("max_per_boot")})
+    # COVERAGE IS REPORTED EVERY RUN, because zero coverage reads exactly like zero rot and that is
+    # how a detector becomes decoration without anyone noticing. The predicate above is now a
+    # property of each declaration, so it cannot be ended by an edit elsewhere - but a baseline
+    # whose declarations all lose their tags or fields would still silence this, and nothing else
+    # would say so. A silent fallback is an anomaly, not a pass.
+    _uf = [_fk for _fk, _ks in _by_func.items() if len(_ks) == 1
+           and not _joinable(sig_identity(_ks[0]))]
+    stale_text_index = {"families": sorted(set(_i[0] for _i in _by_identity)),
+                        "identities": len(_by_identity),
+                        "collisions": sum(1 for _ks in _by_identity.values() if len(_ks) > 1),
+                        "unique_function_keys": len(_uf),
+                        "declarations": len(_bsigs)}
     return {"new": new, "rose": rose, "known": known, "unsettled": unsettled, "expected": expected, "out_of_context": out_of_context,
-            "prior_build": prior_build, "breaches": breaches, "thresholds": thr, "stale_level": stale_level}
+            "prior_build": prior_build, "breaches": breaches, "thresholds": thr, "stale_level": stale_level,
+            "stale_text": stale_text, "stale_text_index": stale_text_index}
 
 
 # ----------------------------------------------------------------------------------------------- Jev
@@ -4124,6 +4275,34 @@ def write_summary(rep, path):
             L.append("  seen %s x%s  declared %s as '%s'" % (d.get("seen_level"), d.get("count"),
                                                              d.get("declared_level"), d.get("declared_status")))
             L.append("    %s" % (d.get("seen") or "")[:150])
+    # The REWORD half, in the same place and for the same reason: a line listed below as new may
+    # not be new at all. This one names the declaration it should have matched AND what that
+    # declaration allows, because the first question a reader asks is whether the line would have
+    # been within bounds - for the cell this was built from, it was (x1 against max_per_boot 1).
+    _st = rep.get("stale_text") or []
+    if _st:
+        L.append("STALE DECLARATIONS BY REWORD (%d) - same family, level, function, tag and fields;" % len(_st))
+        L.append("  only the PROSE differs, so the declaration matched nothing and the line below was")
+        L.append("  judged as if it were new. REFRESH THE BASELINE (or re-anchor it as a pattern):")
+        for d in _st:
+            # SAY WHICH ARM FOUND IT. `tag` is a match on family/level/function/tag/fields;
+            # `unique-function` is a weaker guess - same function, and only one declaration exists
+            # for it - whose false-positive rate is unmeasured, because a function that legitimately
+            # gains a second line reports here too. A reader must not read the two the same way.
+            L.append("  [%s] %s/%s %s x%s (max/boot %s)  declared '%s', allows max/boot %s" % (
+                d.get("how") or "tag", d.get("function"), d.get("tag") or "-", d.get("level"),
+                d.get("count"), d.get("max_per_boot"), d.get("declared_status"),
+                d.get("declared_max_per_boot")))
+            L.append("    seen     %s" % (d.get("seen") or "")[:150])
+            L.append("    declared %s" % (d.get("declared") or "")[:150])
+    _sti = rep.get("stale_text_index") or {}
+    if _sti and not _sti.get("identities") and not _sti.get("unique_function_keys"):
+        L.append("REWORD DETECTOR COVERS NOTHING - %d declaration(s), qualifying families %s, 0"
+                 % (_sti.get("declarations") or 0, _sti.get("families") or []))
+        L.append("  identities and 0 unique-function keys. A reworded declaration CANNOT be detected")
+        L.append("  in this run. This is not a clean result: a declaration is keyable with a QGA tag,")
+        L.append("  a tag plus an interpolated field, or a function declared exactly once - a baseline")
+        L.append("  carrying none of those leaves this blind.")
     new = rep["new"]
     jc = Counter((s.get("jev") or {}).get("choice", "unjudged") for s in new)
     L.append("NEW SIGNATURES (%d; Jev: %s):" % (len(new), ", ".join("%s %d" % kv for kv in sorted(jc.items())) or "-"))
@@ -4509,6 +4688,8 @@ def cmd_analyze(a):
         # STALE DECLARATIONS TRAVEL WITH THE REPORT, or the finding dies with the process that found
         # it - the whole point is that the baseline gets refreshed rather than re-argued.
         "stale_level": cmp.get("stale_level") or [],
+        "stale_text": cmp.get("stale_text") or [],
+        "stale_text_index": cmp.get("stale_text_index") or {},
         "new": [sig_json(s) for s in cmp["new"]], "rose": [sig_json(s) for s in cmp["rose"]],
         "known_defects_present": [sig_json(s, False) for s in cmp["known"]], "unsettled_present": [sig_json(s, False) for s in cmp["unsettled"]],
         "prior_build": [sig_json(s, False) for s in cmp["prior_build"]],

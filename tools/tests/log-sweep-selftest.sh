@@ -155,6 +155,20 @@ write("reqstop.pull", stream([(WD, "watchdog", watchdog(stop_exit="0x20514702"))
 # with the line emitted at I cannot be driven, because that line never becomes a signature.
 stale_mid = [wu("100605.000", 200, "W", "T59Stale", "did a thing by design")]
 write("stalelvl.pull", stream([(WD, "watchdog", watchdog()), (AG, "agent", agent(mid=stale_mid))], events()))
+# stalewrd: the OTHER half of the same rot, and the half that failed a cell. T59's fixture changes
+# the LEVEL and keeps the text; this one keeps the level and changes the TEXT. agent fc94490 also
+# reworded "mapped UNCROPPED: the shadow-crop did not resolve within N ms" to "mapped uncropped
+# after N ms, shadow strip visible until cropped", which orphaned the QGACROPLATE declaration and
+# failed cell WIN10-reinstall of campaign 40243956400 on signatures_unclassified=1 - at x1 against
+# a declared max_per_boot of 1, so the cell would otherwise have PASSED. Same shape here: a tag, a
+# `(class X)` field, and prose that differs from what T59b's baseline declares.
+# The second line is TAGLESS and FIELDLESS on purpose: it is the shape of our watchdog/qubesdb/
+# qrexec declarations, which the tag arm cannot key at all, and it drives the weaker
+# unique-function arm instead.
+reword_mid = [wu("100606.000", 200, "W", "UpdateWindowData",
+                 "T59BTAG hwnd 0x1a2b (class T59BClass) mapped uncropped after 40 ms, shadow strip visible"),
+              wu("100607.000", 200, "W", "T59CSolo", "did the old thing one way")]
+write("stalewrd.pull", stream([(WD, "watchdog", watchdog()), (AG, "agent", agent(mid=reword_mid))], events()))
 # newsig: base + an ERROR line that is in no baseline
 new_mid = [wu("100600.000", 200, "E", "FixtureNovelty", "a brand new failure 0x1234 that nobody has seen before")]
 write("newsig.pull", stream([(WD, "watchdog", watchdog()), (AG, "agent", agent(mid=new_mid))], events()))
@@ -717,7 +731,7 @@ analyze(){ # $1=analyzer $2=logsdir $3=baseline $4=judge $5=tag -> rc; report at
 field(){ python3 -c "import json,sys; r=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$1" "$2"; }
 
 # ---- decode every fixture with the real decoder --------------------------------------------------------------------
-for f in base newsig stalelvl rise three stoperr empty twoboot clockflip rapidboot taskok vchanwd phaseflip skipnames skipchatty bootshut inv twoproc msiok msibad twobuild pidreuse fastreboot reqstop svcrestart turnover nulhole; do
+for f in base newsig stalelvl stalewrd rise three stoperr empty twoboot clockflip rapidboot taskok vchanwd phaseflip skipnames skipchatty bootshut inv twoproc msiok msibad twobuild pidreuse fastreboot reqstop svcrestart turnover nulhole; do
   rc=$(decode "$SRC" "$T/$f.pull" "$T/$f")
   [ "$rc" = 0 ] || { echo "FATAL: the $f fixture did not decode (rc=$rc): $(tail -2 "$T/$f.decode.txt")"; exit 2; }
   # EVERY LINE IN THESE CORPORA IS WRITTEN BY THIS TEST, so the run declares the errors it caused - which is
@@ -2221,6 +2235,176 @@ if grep -qa 'for _s in \[\]:' "$_t59k"; then
     || bad "T59 the emptied detector still reported $_k" "the leg does not measure the detector"
 else
   bad "T59 could not build the no-detector variant" "the substitution did not apply"
+fi
+
+# T59b A DECLARATION ORPHANED BY A REWORD IS NOT A NEW SIGNATURE EITHER.
+# T59 covers the level change. This covers the reword, which is the half that actually failed a
+# cell: WIN10-reinstall of campaign 40243956400 reported signatures_unclassified=1 and
+# stale_level=0, because the detector T59 guards joins on IDENTICAL text at a DIFFERENT level and
+# this rot is different text at the SAME level. The orphaned line was x1 against a declared
+# max_per_boot of 1, so the cell would have passed had the declaration matched.
+# The fixture declares the OLD prose. It is keyable because its tag comes with an interpolated
+# `(class X)` field - the detector keys a declaration whose tag is QGA-prefixed OR which carries at
+# least one interpolated field, and T59BTAG is deliberately NOT QGA-prefixed so this fixture
+# exercises the field arm. The third leg below strips the field and shows the rot goes invisible,
+# which is what stops that predicate being decoration.
+_t59bold='UpdateWindowData: T59BTAG hwnd 0xH (class T59BClass) mapped UNCROPPED: the crop did not resolve within N ms'
+python3 - "$T/baseline.json" "$T/t59b-baseline.json" "$_t59bold" <<'T59BPY'
+import json,sys
+b=json.load(open(sys.argv[1]))
+s=b.setdefault("signatures",{})
+s["agent|W|%s" % sys.argv[3]] = {
+    "status":"expected","reason":"the PRE-REWORD wording; the product now says it differently","max_per_boot":1,
+    "family":"agent","level":"W"}
+# The tagless, fieldless case: only the FUNCTION is stable, and it is declared exactly once, which
+# is the whole basis of the weaker arm. The fifth leg below makes it non-unique and shows it go dark.
+s["agent|W|T59CSolo: did the old thing ANOTHER way entirely"] = {
+    "status":"expected","reason":"the PRE-REWORD wording of a tagless line","max_per_boot":1,
+    "family":"agent","level":"W"}
+json.dump(b,open(sys.argv[2],"w"),indent=1)
+T59BPY
+rc=$(analyze "$SRC" "$T/stalewrd" "$T/t59b-baseline.json" "$T/jev-expected.py" t59b)
+_t59bn=$(field "$T/t59b.json" "len(r.get('stale_text') or [])")
+if [ "${_t59bn:-0}" -ge 1 ]; then
+  ok "T59b a reworded line is reported as a STALE DECLARATION BY REWORD (n=$_t59bn)"
+else
+  bad "T59b the reworded declaration was not reported (n=$_t59bn, rc=$rc)" "it is judged a new signature, which is how WIN10-reinstall failed on a line within its own bound"
+fi
+_t59bd=$(field "$T/t59b.json" "[ (d['tag'],d['function'],d['declared_status'],d['declared_max_per_boot'],d['count']) for d in (r.get('stale_text') or []) ]")
+case "$_t59bd" in *"'T59BTAG'"*"'UpdateWindowData'"*)
+    ok "T59b and it names the tag, the function, and what the declaration ALLOWS ($_t59bd)" ;;
+  *) bad "T59b the report does not name the tag/function/bound: $_t59bd" "the reader cannot tell whether the line was within its declared bound" ;; esac
+if grep -qa 'STALE DECLARATIONS BY REWORD' "$T/t59b.txt"; then
+  ok "T59b the summary says so where a human reads it, before the NEW SIGNATURES list"
+else
+  bad "T59b the summary does not mention it" "the finding would die with the process that found it"
+fi
+# It must NOT also fire the level detector - the two rots have opposite fixes and must stay apart.
+_t59bl=$(field "$T/t59b.json" "len(r.get('stale_level') or [])")
+[ "${_t59bl:-0}" = 0 ] \
+  && ok "T59b and the LEVEL detector stays silent on a reword (stale_level=$_t59bl)" \
+  || bad "T59b the level detector also fired ($_t59bl)" "a reword would be reported as a level change, whose fix is different"
+# BOTH ARMS, AND EACH SAYING WHICH IT IS. The tag arm found the QGACROPLATE-shaped line; the
+# weaker unique-function arm found the tagless one. They must not be reported identically: the
+# weaker arm's false-positive rate is UNMEASURED (it never fired across the 24 gradeable campaign
+# reports), because a function that legitimately gains a second line reports there too.
+_t59bh=$(field "$T/t59b.json" "sorted(set(d.get('how') for d in (r.get('stale_text') or [])))")
+case "$_t59bh" in *"'tag'"*"'unique-function'"*)
+    ok "T59b both arms fired and each row says WHICH ($_t59bh)" ;;
+  *) bad "T59b the arms are not both present/labelled: $_t59bh" "a same-function guess would read as a tag match" ;; esac
+if grep -qa '\[unique-function\] T59CSolo' "$T/t59b.txt"; then
+  ok "T59b and the summary labels the weaker arm inline, where a human reads it"
+else
+  bad "T59b the summary does not label the weaker arm" "$(grep -a 'T59CSolo' "$T/t59b.txt" | head -2)"
+fi
+# SEEN TO FAIL for the weaker arm specifically: give that function a SECOND declaration and it is
+# no longer uniquely identified, so the arm must go dark while the tag arm keeps working.
+python3 - "$T/t59b-baseline.json" "$T/t59b-dupfunc-baseline.json" <<'T59BPY'
+import json,sys
+b=json.load(open(sys.argv[1]))
+s=b["signatures"]
+solo=[k for k in s if "T59CSolo" in k]
+assert len(solo)==1, "want exactly one T59CSolo declaration, found %d" % len(solo)
+s["agent|W|T59CSolo: a second declared line from the same function at the same level"] = dict(s[solo[0]])
+json.dump(b,open(sys.argv[2],"w"),indent=1)
+T59BPY
+rc=$(analyze "$SRC" "$T/stalewrd" "$T/t59b-dupfunc-baseline.json" "$T/jev-expected.py" t59bd)
+_d=$(field "$T/t59bd.json" "sorted(set(d.get('how') for d in (r.get('stale_text') or [])))")
+case "$_d" in *"unique-function"*)
+    bad "T59b the weaker arm still fired on a non-unique function ($_d)" "it would join a new line to an unrelated declaration" ;;
+  *"tag"*) ok "T59b SEEN TO FAIL: with that function declared twice the weaker arm goes dark, tag arm intact ($_d)" ;;
+  *) bad "T59b both arms went dark ($_d)" "the duplicate declaration broke the tag arm too" ;; esac
+# THE FALSE-POSITIVE CLASS THE SECOND ARM WOULD OTHERWISE CREATE, driven directly. A function that
+# legitimately gains a SECOND log line is NOT rot: its original declaration is still matched by its
+# original line. Jev put false_positive_risk at 0.70 on the widened detector, so the discriminator
+# is "rot means the declaration matched NOTHING" - and here the declaration DOES match, so the new
+# line must be reported as new and nothing must be called stale.
+python3 - "$T/t59b-baseline.json" "$T/t59b-matched-baseline.json" <<'T59BPY'
+import json,sys
+b=json.load(open(sys.argv[1]))
+s=b["signatures"]
+solo=[k for k in s if "T59CSolo" in k]
+assert len(solo)==1, "want exactly one T59CSolo declaration, found %d" % len(solo)
+# Declare the wording the fixture ACTUALLY emits, so the declaration matches - while the function
+# still has exactly one declaration, which is what the uniqueness arm keys on.
+s["agent|W|T59CSolo: did the old thing one way"] = s.pop(solo[0])
+json.dump(b,open(sys.argv[2],"w"),indent=1)
+T59BPY
+rc=$(analyze "$SRC" "$T/stalewrd" "$T/t59b-matched-baseline.json" "$T/jev-expected.py" t59bm)
+_m=$(field "$T/t59bm.json" "[d['function'] for d in (r.get('stale_text') or [])]")
+case "$_m" in *T59CSolo*)
+    bad "T59b a MATCHED declaration was still called stale ($_m)" "every added log line in a one-declaration function would be reported as rot" ;;
+  *) ok "T59b a declaration that MATCHED is never called stale, so a genuinely new line is not rot (rows: $_m)" ;; esac
+# SEEN TO FAIL 1: the GUARD knob. With the detector's loop emptied, the same run reports nothing.
+_t59bk="$T/t59b-nodetect.py"
+python3 - "$SRC" "$_t59bk" <<'T59BPY'
+import sys
+s=open(sys.argv[1]).read()
+old="    for _sn in new:   # GUARD:staletext DEFECT: for _sn in []:\n"
+assert s.count(old)==1, "GUARD:staletext line not unique (%d) - re-pin this leg" % s.count(old)
+open(sys.argv[2],"w").write(s.replace(old,"    for _sn in []:\n",1))
+T59BPY
+if grep -qa 'for _sn in \[\]:' "$_t59bk"; then
+  rc=$(analyze "$_t59bk" "$T/stalewrd" "$T/t59b-baseline.json" "$T/jev-expected.py" t59bk)
+  _k=$(field "$T/t59bk.json" "len(r.get('stale_text') or [])")
+  [ "${_k:-0}" = 0 ] \
+    && ok "T59b SEEN TO FAIL: with the detector's loop emptied the reword is invisible again (n=$_k)" \
+    || bad "T59b the emptied detector still reported $_k" "the leg does not measure the detector"
+else
+  bad "T59b could not build the no-detector variant" "the GUARD:staletext substitution did not apply"
+fi
+# SEEN TO FAIL 2: the keyability predicate. Strip the interpolated `(class X)` from the declared
+# entry and - its tag not being QGA-prefixed - nothing in the baseline is keyable any more, so the
+# same rot goes unreported. That is what makes the predicate load-bearing rather than a comment.
+python3 - "$T/t59b-baseline.json" "$T/t59b-noqga-baseline.json" <<'T59BPY'
+import json,sys
+b=json.load(open(sys.argv[1]))
+s=b["signatures"]
+hit=[k for k in s if "T59BTAG" in k]
+assert len(hit)==1, "want exactly one T59BTAG declaration, found %d" % len(hit)
+new=hit[0].replace(" (class T59BClass)","")
+assert new!=hit[0], "the field strip changed nothing; re-pin it to the fixture's wording"
+s[new]=s.pop(hit[0])
+json.dump(b,open(sys.argv[2],"w"),indent=1)
+T59BPY
+if [ -s "$T/t59b-noqga-baseline.json" ]; then
+  # The assertion is on THAT line, not on the whole report: the shared fixture baseline carries
+  # other agent declarations whose functions are unique, so demanding global silence would be
+  # asserting something this mutation cannot produce - which is how the first cut of this leg
+  # failed. T59BTAG's tag is not QGA-prefixed, so with its field stripped nothing keys it.
+  rc=$(analyze "$SRC" "$T/stalewrd" "$T/t59b-noqga-baseline.json" "$T/jev-expected.py" t59bq)
+  _q=$(field "$T/t59bq.json" "[d['function'] for d in (r.get('stale_text') or []) if d.get('how')=='tag']")
+  case "$_q" in *UpdateWindowData*)
+      bad "T59b the unkeyable declaration was still joined by the tag arm ($_q)" "the keyability predicate is decoration - any uppercase word anywhere would act as a tag" ;;
+    *) ok "T59b SEEN TO FAIL: with the interpolated field stripped, its non-QGA tag keys nothing and the tag arm does not join it (tag-arm functions: $_q)" ;; esac
+else
+  bad "T59b could not build the unkeyable baseline" "the field strip did not apply"
+fi
+# ZERO COVERAGE MUST ANNOUNCE ITSELF, because it looks exactly like zero rot - that is how a
+# detector becomes decoration without anyone noticing. This needs a baseline that keys NOTHING, so
+# it is built explicitly rather than mutated: one declaration with no `Function: ` prefix at all.
+python3 - "$T/t59b-baseline.json" "$T/t59b-blind-baseline.json" <<'T59BPY'
+import json,sys
+b=json.load(open(sys.argv[1]))
+b["signatures"]={"plain|W|a declaration with no Function prefix, so nothing can be keyed on it":
+                 {"status":"expected","reason":"keys nothing: no Function: prefix, no tag, no field",
+                  "max_per_boot":1,"family":"plain","level":"W"}}
+b.pop("patterns",None)
+json.dump(b,open(sys.argv[2],"w"),indent=1)
+T59BPY
+rc=$(analyze "$SRC" "$T/stalewrd" "$T/t59b-blind-baseline.json" "$T/jev-expected.py" t59bz)
+_zi=$(field "$T/t59bz.json" "((r.get('stale_text_index') or {}).get('identities'), (r.get('stale_text_index') or {}).get('unique_function_keys'), len(r.get('stale_text') or []))")
+if [ "$_zi" = "(0, 0, 0)" ] && grep -qa 'REWORD DETECTOR COVERS NOTHING' "$T/t59bz.txt"; then
+  ok "T59b and a run that can key NOTHING announces it (identities,unique,rows=$_zi), so the silence is not read as clean"
+else
+  bad "T59b zero coverage was silent or non-zero ($_zi)" "a detector covering nothing reports exactly like a detector finding nothing"
+fi
+# The covered run must NOT carry that announcement, or it is noise rather than a signal.
+if grep -qa 'REWORD DETECTOR COVERS NOTHING' "$T/t59b.txt"; then
+  bad "T59b the covered run also announced zero coverage" "the announcement does not discriminate"
+else
+  _ci=$(field "$T/t59b.json" "((r.get('stale_text_index') or {}).get('identities'), (r.get('stale_text_index') or {}).get('unique_function_keys'))")
+  ok "T59b and a covered run does not announce it (identities,unique=$_ci)"
 fi
 
 # T60 EVERY GATED PER-INSTANCE METRIC IS BUILD-SCOPED, asserted structurally because the defect
