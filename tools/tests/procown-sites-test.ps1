@@ -455,13 +455,20 @@ Check 'activate: the shipped Request-GuiAgentExit (real copy) with no reachable 
 # ================================================================= netsetup: pvnic-selfprime's QwtngNetSetup stop ====
 New-World -Services @(@{ name = 'QwtngNetSetup'; pid = 500 }) -Procs @(@{ pid = 500; name = 'qwtng-netsetup' })
 $out = @(Invoke-NetSetup)
-Check 'netsetup: the service process exits on stop - nothing terminated, no WARNING, sc stop issued' `
-      ($script:W.kills.Count -eq 0 -and (Alive).Count -eq 0 -and @($out | Where-Object { $_ -match 'WARNING' }).Count -eq 0 -and @($script:W.sc | Where-Object { $_ -eq 'stop QwtngNetSetup' }).Count -eq 1) "out=$($out -join ' | ') sc=$($script:W.sc -join ' | ')"
+# THE LABEL IS READ IN ONE PLACE. e4162c79 converted ~65 bare "WARNING:"/"ERROR:" labels in the
+# shipped scripts to the bracketed [WARN]/[ERROR] the sweep reader requires (lint L24), including
+# this very line in guest/pvnic-selfprime.ps1:662. Both checks below had been left anchored on the
+# OLD spelling: the positive one failed on correct code, and the negative one went BLIND - matching
+# 'WARNING' it could no longer see a spurious [WARN] at all. One predicate, both checks, either
+# declared spelling.
+$script:WarnLabel = '^(\[WARN\]|WARNING:)\s*'
+Check 'netsetup: the service process exits on stop - nothing terminated, no warning, sc stop issued' `
+      ($script:W.kills.Count -eq 0 -and (Alive).Count -eq 0 -and @($out | Where-Object { $_ -match $script:WarnLabel }).Count -eq 0 -and @($script:W.sc | Where-Object { $_ -eq 'stop QwtngNetSetup' }).Count -eq 1) "out=$($out -join ' | ') sc=$($script:W.sc -join ' | ')"
 
 New-World -Services @(@{ name = 'QwtngNetSetup'; pid = 500; procExitsOnStop = $false }) -Procs @(@{ pid = 500; name = 'qwtng-netsetup' }, @{ pid = 501; name = 'qwtng-netsetup' })
 $out = @(Invoke-NetSetup)
 Check 'netsetup: the service process lingers - terminated by ITS pid (handle:500) with a WARNING naming it' `
-      (($script:W.kills -join ',') -eq 'handle:500' -and -not $script:W.proc[500].alive -and @($out | Where-Object { $_ -match '^WARNING: qwtng-netsetup.exe \(pid 500' }).Count -eq 1) "kills=$($script:W.kills -join ',') out=$($out -join ' | ')"
+      (($script:W.kills -join ',') -eq 'handle:500' -and -not $script:W.proc[500].alive -and @($out | Where-Object { $_ -match ($script:WarnLabel + 'qwtng-netsetup\.exe \(pid 500') }).Count -eq 1) "kills=$($script:W.kills -join ',') out=$($out -join ' | ')"
 Check 'netsetup: a same-named stray (pid 501) that is not the SCM pid is left ALIVE' ($script:W.proc[501].alive -and @($script:W.kills | Where-Object { $_ -match '501' }).Count -eq 0) "kills=$($script:W.kills -join ',')"
 
 New-World -Procs @(@{ pid = 502; name = 'qwtng-netsetup' })
