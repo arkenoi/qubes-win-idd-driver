@@ -570,6 +570,42 @@ bash tools/tests/sib-a-selftest.sh
 ' > "$D/tools/tests/sib-b-selftest.sh"
 expect_fires L32-producer-missing "$D" "named only by a sibling suite in tools/tests"
 
+# A COMMENTED-OUT CALL RUNS NOTHING. This is the predicate the census got wrong on 2026-10-25: the
+# first implementation matched the suite's name anywhere in a producer's text, comments included,
+# while its own comment said prose runs nothing - and a comment inside tools/foo.sh is prose too.
+# Dropping whole-line comments raised the orphan count by 18.
+D="$TMP/l32h"; mk "$D"; mkdir -p "$D/tools/tests"
+: > "$D/tools/tests/offline-suites.txt"
+printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/commented-selftest.sh"
+printf '#!/bin/bash\n# bash tools/tests/commented-selftest.sh\n: nothing\n' > "$D/tools/run-suites.sh"
+expect_fires L32-producer-missing "$D" "named only by a COMMENTED-OUT call in a real producer"
+
+# ...and the SAME tree with that one line uncommented must be silent. Without this pair the leg
+# above could pass because tools/run-suites.sh is never scanned at all, which would prove nothing.
+D="$TMP/l32h2"; mk "$D"; mkdir -p "$D/tools/tests"
+: > "$D/tools/tests/offline-suites.txt"
+printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/commented-selftest.sh"
+printf '#!/bin/bash\nbash tools/tests/commented-selftest.sh\n' > "$D/tools/run-suites.sh"
+expect_silent L32-producer-missing "$D" "the same producer with the call UNcommented - the pair that makes the leg above mean something"
+
+# THE DECLARED RESIDUE, pinned deliberately: the rule keys on the first non-space character only,
+# because cutting from any '#' would truncate real calls (${v#prefix}, a colour code, a URL
+# fragment) and lose the producer instead of the mention. So a TRAILING-comment mention survives.
+# If that is ever tightened, this leg is the thing that has to be changed on purpose.
+D="$TMP/l32i"; mk "$D"; mkdir -p "$D/tools/tests"
+: > "$D/tools/tests/offline-suites.txt"
+printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/trailing-selftest.sh"
+printf '#!/bin/bash\n: ok   # see tools/tests/trailing-selftest.sh\n' > "$D/tools/run-suites.sh"
+expect_silent L32-producer-missing "$D" "a TRAILING-comment mention, the residue the rule declares"
+
+# WORD BOUNDARY, not substring: every error in this rule's history has been the flattering one, and
+# a near-miss name reading as coverage is the flattering one here.
+D="$TMP/l32j"; mk "$D"; mkdir -p "$D/tools/tests"
+: > "$D/tools/tests/offline-suites.txt"
+printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/near-selftest.sh"
+printf '#!/bin/bash\nbash tools/tests/xnear-selftest.sh\n' > "$D/tools/run-suites.sh"
+expect_fires L32-producer-missing "$D" "a producer naming xnear-selftest.sh while near-selftest.sh is the file"
+
 # and the correct shape must be silent, or the lint is noise
 D="$TMP/l32e"; mk "$D"; mkdir -p "$D/tools/tests"
 printf 'registered-selftest.sh\n' > "$D/tools/tests/offline-suites.txt"
