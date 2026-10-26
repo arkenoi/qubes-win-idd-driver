@@ -35,12 +35,25 @@
 # silently dropped: a suite left out of CI because it fails is the thing this file exists to stop.
 #   bridge-exit-reason-selftest.sh    not_a_death: every exit 0 reported as 'a clean exit nobody asked for'
 #       RESOLVED 2026-10-25 and now LISTED: the fix it asserted is in the source and it is green (18 checks).
-#   broker-down-anchor-selftest.sh    held_without_a_shell: the deadline runs before the broker can launch
-#       RESOLVED 2026-10-25 and now LISTED: green (8 checks). It was red at the release sha only.
-#       Was 9 until 2026-10-26: the `anchor_is_the_one_launch` leg is DELETED, not repaired - its
-#       400-character proximity window broke when 84819d0 moved the launch stamp BELOW WgcLaunch(),
-#       which is the de-slice fix itself. The guard still holds the assignment (main.c:4229 -> 4322,
-#       brace depth +1); `anchor_does_not_slide` states the once-ness directly. See the suite.
+#   broker-down-anchor-selftest.sh    DELETED 2026-10-26 by the owner's call: "drop
+#       broker-down-anchor-selftest.sh, it is shit anyway". Its nine legs were all `grep` over
+#       main.c TEXT, and twice in one day the text moved under them while the behaviour was correct:
+#       `anchor_is_the_one_launch` searched the 400 characters before the g_WgcLastLaunch assignment
+#       for the guard, and 84819d0 moved that stamp BELOW WgcLaunch() - which IS the de-slice fix,
+#       since a tick taken before the blocking HelperTaskRegister work is fresh but EARLY. The guard
+#       still held the assignment (main.c:4229 -> 4322, brace depth +1, 8787 chars apart).
+#       WHAT ENFORCES THE DE-SLICE LOGIC INSTEAD, and it is stronger than the greps were: the pure
+#       functions in agent/include/qga-lifecycle.h are exercised as COMPILED unit tests in
+#       agent/watchdog/lifecycle_test.c - QgaDesliceAnchor x5, QgaDesliceWarnDue x8,
+#       QgaDesliceSupervisionHeld x6, QgaDesliceTeardownExcused x3, QgaDesliceOwnedByDeath x2, each
+#       with a QGA_LIFECYCLE_DEFECT_* knob so the leg is seen to fail with its defect present - and
+#       lifecycle-selftest.sh (listed below) builds and runs them.
+#       WHAT IS GENUINELY LOST, stated rather than glossed: nothing now pins main.c's CALL SITES -
+#       that the anchor call is fed (g_WgcLaunched, g_WgcLastLaunch, g_BrokerReadyAt, now), that the
+#       hold is not re-conjoined with the shell (the 185794f defect, which fired 28 s early), that
+#       the QGADESLICEDOWN report and its QerrTextFind dom0 route still exist, and that the
+#       QGADESKSTUCK secure-desktop yield is intact. A regression in any of those is caught by a
+#       campaign cell's log sweep, not at commit time.
 #   log-policy-selftest.sh            2 routine per-window LogInfo lines (main.c BROKERLATEREG, BROKERHOLD)
 #       RESOLVED 2026-10-25 and now LISTED: those two lines are DEBUG now and it is green (32 checks).
 # Everything else in tools/tests/ needs a Qubes rig, a loop device, PowerShell, mtools or a
@@ -96,7 +109,6 @@ assert-payload-floor-selftest.sh
 attributor-unique-selftest.sh
 breach-evidence-selftest.sh
 bridge-exit-reason-selftest.sh
-broker-down-anchor-selftest.sh
 brokerctl-selftest.sh
 build-attribution-selftest.sh
 campaign-full-selftest.sh

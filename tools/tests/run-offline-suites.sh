@@ -287,7 +287,9 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # day and this floor was not moved with them, so every run exited 2 on "the list shrank" and NO
 # suite ran at all. Measured at HEAD before this change: rc=2, zero suites executed. That is the
 # failure mode the floor exists to catch, caught by the floor itself and against the runner.
-FLOOR=${OFFLINE_SUITES_FLOOR:-145}
+# 145 -> 144 on 2026-10-26: broker-down-anchor-selftest.sh is DELETED on the owner's call. The floor
+# moves in the SAME commit as the deletion, which is the lesson the paragraph above was written for.
+FLOOR=${OFFLINE_SUITES_FLOOR:-144}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"
