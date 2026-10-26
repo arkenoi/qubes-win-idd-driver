@@ -183,9 +183,37 @@ finish(){ # $1=rc $2=message  - every exit goes through here and says which exit
   # error - one failure, two findings, the second of them false. Nothing is lost by the order: the
   # verdict line is still in the file for every later reader, it is simply not swept by the pass
   # that exists to find errors the harness did NOT already grade.
-  if [ -s "$R" ] && [ -x tools/sweep-gate.sh ]; then
-    if bash tools/sweep-gate.sh "$R" >>"$OUT/sweep-gate.out" 2>&1; then
-      log "sweep-gate: no undeclared error-shaped line in this run's log"
+  # THE GUEST'S OWN LOGS ARE IN SCOPE, and they are where the PRODUCT's errors are. This swept
+  # "$R" alone - the harness's own bash output - so the short cycle, which is the sanctioned path
+  # for every fix on this project, could not see a defect the product wrote down.
+  # MEASURED 2026-10-26 on win11r-dsm: this harness reported "11 passed, 0 failed" and
+  # "sweep-gate: no undeclared error-shaped line in this run's log" on a run whose gui-agent log
+  # carried `E QGADESLICEDOWN ... DesliceBrokerDown=1` and a dom0 ACTION notification. The only
+  # reason that defect was found is that the pulled log volume was read BY HAND afterwards.
+  # Running the gate over that same tree: 107 inputs, rc=1, unaccounted=3 risen=0 accounted=2 -
+  # the two de-slice lines plus one `CaptureThread: main loop slow`. So it catches it, and the
+  # noise floor it adds is three items, not a wall.
+  # matrix.sh has done this at the campaign level since the first version of its block, whose
+  # comment already named this harness: "No release-grading harness calls log-sweep.sh either
+  # (measured: 0 references in matrix.sh, quick-upgrade.sh and wu-e2e.sh)". The campaign half was
+  # fixed; this half was left, and the short cycle is the one that runs on every fix.
+  # ONE PULL, NOT TWO, which is decided rather than preferred. This harness pulls the volume twice
+  # - $OUT/logvol-live during the install wait, and $OUT/logvol in finish() - and sweep-gate dedupes
+  # by RESOLVED path, so two pulls are two real files and every guest line would be counted twice.
+  # Measured on campaign rel-40243956400-r2, that doubling inflated `risen` with rises that did not
+  # exist (findings/issues.md SWEEPCOUNTSEVERYGUESTLOGTWICE). The finish() pull is the one kept: it
+  # is the last one taken, so it is the only one that holds the end of the run.
+  _swg=()
+  [ -s "$R" ] && _swg+=("$R")
+  if [ -d "$OUT/logvol" ]; then
+    mapfile -t -O "${#_swg[@]}" _swg < <(find "$OUT/logvol" -type f \
+      \( -name '*.log' -o -name '*.out' -o -name '*.cur' -o -name '*.tail' \) \
+      -size -8M -size +0 2>/dev/null)
+  fi
+  if [ "${#_swg[@]}" -gt 0 ] && [ -x tools/sweep-gate.sh ]; then
+    log "sweep-gate: ${#_swg[@]} input(s) - this run's log plus the guest's own logs from $OUT/logvol"
+    if bash tools/sweep-gate.sh "${_swg[@]}" >>"$OUT/sweep-gate.out" 2>&1; then
+      log "sweep-gate: no undeclared error-shaped line in this run's log or the guest's"
     else
       grep -a '^  ' "$OUT/sweep-gate.out" | tail -8 | while IFS= read -r l; do log "  $l"; done
       # IT GATES NOW. It used to print the findings and say, in a comment, "REPORTS, DOES NOT GATE
@@ -205,7 +233,7 @@ finish(){ # $1=rc $2=message  - every exit goes through here and says which exit
         0) log "sweep-gate: the only error-shaped lines are this run's own graded verdicts" ;;
         2) log "[ERROR] SWEEP-GATE DID NOT JUDGE this run - it exited without a verdict line; see $OUT/sweep-gate.out"
            [ "$rc" = 0 ] && { rc=3; _gate_override=1; } ;;
-        *) log "[ERROR] SWEEP-GATE FINDINGS in this run's own log - see $OUT/sweep-gate.out"
+        *) log "[ERROR] SWEEP-GATE FINDINGS in this run's log or the guest's own logs - see $OUT/sweep-gate.out"
            [ "$rc" = 0 ] && { rc=3; _gate_override=1; } ;;
       esac
     fi
