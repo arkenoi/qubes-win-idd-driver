@@ -228,22 +228,26 @@ jobs:
           python3 -c 'from lxml import etree; print("lxml", etree.__version__)'
       - name: Offline selftest suites (serial, with a floor)
         run: tools/tests/run-offline-suites.sh
-      # PROBE, NOT A GATE - second round. blockclaim-selftest.sh is the one suite kept out of the
-      # list for a DEPENDENCY rather than a defect: it drives a real loop device. MEASURED by the
-      # first round of this probe, CI run 40262136871: udisks2 installs here and its service is
-      # ACTIVE, `udisksctl status` lists the disk, and `udisksctl loop-setup` STILL yields no
-      # device - this session is not polkit-authorised for it. So the root-free route cannot work
-      # on a runner, and the suite now tries `sudo -n losetup` as a second route, which a runner
-      # has and the dev qube deliberately does not (sudo there is interactive-only by design).
-      # This round measures THAT route. Still continue-on-error for the same reason: the suite is
-      # NOT in offline-suites.txt, so this step guards nothing and must not fail the workflow.
-      # If it reports rc=0 the suite joins the list (floor +1, in a commit) and this step goes.
-      - name: PROBE loop device - decides whether blockclaim-selftest can join the gate
+      # PROBE, NOT A GATE - third and last round. blockclaim-selftest.sh is the one suite kept
+      # out of the list for a DEPENDENCY rather than a defect. Round 1 (run 40262136871) refuted
+      # the root-free route: udisks2 is ACTIVE here but `udisksctl loop-setup` is not
+      # polkit-authorised for this session. Round 2 (run 40263603428) measured the `sudo -n
+      # losetup` route and ANSWERED: the route works (util-linux 2.39.3, /dev/loop0), the bounded
+      # waiters pass, and exactly ONE check failed - "an absent qube sweeps clean", because
+      # claim_sweep_stale's inline python imports qubesadmin, which a runner has not got. That
+      # check now runs against a stub module whose own log is asserted, so this round measures
+      # whether the suite is green HERE - which is this file's policy: a suite joins the list
+      # when it is observed to pass in the environment that runs it, not where it was written.
+      # Still continue-on-error: the suite is NOT in offline-suites.txt yet, so this step guards
+      # nothing and must not fail the workflow. Green here and it joins (floor +1) and this goes.
+      # Read the suite's own tally, not an exit code: a step runs under `bash -e`, so a trailing
+      # `echo rc=$?` after a failing suite never executes - round 2's never printed.
+      - name: PROBE blockclaim-selftest - the stubbed leg, the last thing keeping it out
         continue-on-error: true
         run: |
           set -uo pipefail
           sudo -n losetup --version || echo "PROBE: sudo -n losetup is unavailable here"
-          bash tools/tests/blockclaim-selftest.sh; echo "PROBE: blockclaim-selftest rc=$?"
+          bash tools/tests/blockclaim-selftest.sh
 
   bind-dirs-offline:
     # The bind-dirs core (core-agent/src/bind-dirs/bind-dirs.c, docs/BIND-DIRS.md) is portable C

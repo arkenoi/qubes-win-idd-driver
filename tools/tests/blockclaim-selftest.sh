@@ -109,8 +109,46 @@ ck "no os.path.exists on the device node"       "0" "$(grep -c "os.path.exists(f
 ck "claims are dropped via the API object"      "2" "$(grep -c 'coll.unassign(a)' mgmt/harness/blockclaim-lib.sh)"
 ck "never via the CLI unassign"                 "0" "$(grep -vE '^[[:space:]]*#' mgmt/harness/blockclaim-lib.sh | grep -c 'qvm-device block unassign')"
 
-# A missing qube is not an error: a sweep runs before a subject may even exist.
-ck "an absent qube sweeps clean"                "0" "$(claim_sweep_stale __no_such_qube__ >/dev/null 2>&1; echo $?)"
+# A MISSING QUBE IS NOT AN ERROR: a sweep runs before a subject may even exist. Driven through a
+# STUB MODULE on PYTHONPATH, for two measured reasons. A GitHub runner has no qubesadmin, so the
+# inline python's `import qubesadmin` fails and the rc is 1 for a reason that is not the property -
+# that single check is what kept this suite out of the gate (run 40263603428: "an absent qube
+# sweeps clean: expected '0', got '1'", everything else green). And on THIS qube the live call
+# `q.domains['__no_such_qube__']` fires a real admin.vm.List, which a suite needing no rig should
+# not do. The header above is still right that no PATH shim can drive the end-to-end DROP, which
+# needs real assignments; the missing-qube branch is a different thing and this drives it.
+# NOT VACUOUS: the real qubesadmin would also raise KeyError here and give rc 0, so the rc alone
+# proves nothing about which module answered. The stub logs what it was asked and that log is
+# asserted - a line only the stub can write.
+STUB="$T/stub"; mkdir -p "$STUB"
+cat > "$STUB/qubesadmin.py" <<'PYSTUB'
+import os
+
+LOG = os.environ["BC_STUB_LOG"]
+
+
+def _log(what):
+    with open(LOG, "a") as fh:
+        fh.write(what + "\n")
+
+
+class _Domains(dict):
+    """Empty on purpose: any lookup is a missing qube, which is the condition under test."""
+
+    def __missing__(self, key):
+        _log("domains[%s] -> KeyError" % key)
+        raise KeyError(key)
+
+
+class Qubes:
+    def __init__(self):
+        _log("Qubes()")
+        self.domains = _Domains()
+PYSTUB
+sweep_rc=$(BC_STUB_LOG="$T/stub.log" PYTHONPATH="$STUB" claim_sweep_stale __no_such_qube__ >/dev/null 2>&1; echo $?)
+ck "an absent qube sweeps clean"                "0" "$sweep_rc"
+ck "and the stub answered, not the rig"         "domains[__no_such_qube__] -> KeyError" \
+   "$(tail -1 "$T/stub.log" 2>/dev/null)"
 
 # The wiring: swept before the start that would fail, dropped before the loop is released.
 ck "matrix sweeps before the ISO start"         "1" \
