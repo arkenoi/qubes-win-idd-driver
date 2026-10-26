@@ -556,8 +556,9 @@ def l33_pwsh_is_located_in_one_place() -> None:
     portable coat: it ignores an explicit PWSH. A COMMENT may still discuss any of this - a source
     assertion that reads comments fails on correct code, and this project has paid for that
     three times (see l32's note)."""
-    # The six locations, plus the probe. Kept in step with pwsh-path.sh's own candidate list, which
-    # pwsh-path-selftest.sh asserts names every one of them.
+    # The six locations, plus the probe. Kept in step with pwsh-path.sh's own candidate list -
+    # BY HAND since 2026-10-26: pwsh-path-selftest.sh asserted that correspondence and was deleted
+    # as a test-for-a-test, so nothing checks it now.
     loc = re.compile(r"(?:/home/user/(?:pwsh|pwsh74|bin/pwsh7|\.local/pwsh)|\$HOME/(?:pwsh|pwsh74))/pwsh")
     probe = re.compile(r"command -v [\"']?pwsh")
     # lint-harness.py is in this set because it has to SPELL the locations in order to
@@ -565,7 +566,7 @@ def l33_pwsh_is_located_in_one_place() -> None:
     # its own source would weaken the rule to hide a self-match.
     # gate-as-runner.sh probes PATH on purpose: it is the harness that MASKS every install and
     # then ASSERTS what is reachable, so the probe is the assertion, not a second lookup.
-    owner = {"pwsh-path.sh", "pwsh-path-selftest.sh", "lint-harness.py", "gate-as-runner.sh"}
+    owner = {"pwsh-path.sh", "lint-harness.py", "gate-as-runner.sh"}   # pwsh-path-selftest.sh DELETED 2026-10-26 (test-for-a-test)
     scope: list[Path] = []
     for d in ("tools", "mgmt", "guest", "packaging", ".githooks"):
         if (ROOT / d).is_dir():

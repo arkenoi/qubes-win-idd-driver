@@ -59,12 +59,11 @@
 #       git history, which no job here is known to carry. Being excluded is why nothing noticed
 #       either that red or that two of its checks passed on the shipped brace defect. The waits are
 #       now declared by site and the proof is per-check source mutation - no git, no network.
-# NOT LISTED, owner's directive 2026-10-25: "you should NEVER write a test for a test" and
-# "NEVER FI HARNESS FIXES AS PART OF HARNESS. it is fucking recursion." Five suites that mutate
-# another TEST or HARNESS file and run the mutants are dropped from preflight and recorded as
-# UNRELIABLE - not to be fixed, not to be re-registered. They are named ONE place only, with their
-# reasons, in tools/tests/not-in-the-gate.txt, which is what tools/lint-harness.py L32 reads; a
-# second copy of the list here would be a second thing to rot. See TESTFORATESTRECURSION.
+# DELETED, not unlisted, 2026-10-26: the five suites that mutated another TEST or HARNESS file and
+# ran the mutants are gone from the tree on the owner's call - "Permanent harness FIs that are
+# 'tests for tests' are no-no", after the 2026-10-25 directive dropped them from preflight. The
+# header of tools/tests/not-in-the-gate.txt records which five and why; nothing here names them,
+# because a second copy of a list is a second thing to rot.
 #   one-log-per-module / pipe-client-null / pipe-connect-order / pipe-eof
 #       ALL FOUR RESOLVED 2026-10-25 and now LISTED. The reason below EXPIRED: test.yml now has a
 #       step "Vendored read-only upstream (pinned) - the suites that read it are not skippable"
