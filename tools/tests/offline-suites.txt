@@ -1,32 +1,58 @@
+# The offline selftest suites that a plain Linux runner can execute.
 #
-#                                   point of it - proving the wire format against the code that
-#                                   reads it, not against my reading of it. 28 checks, run on
-#                                   silently absent, which this file's own policy forbids.
-#                                   the dev qube. It was in NEITHER list until 2026-10-17, i.e.
-#                                   through the SHIPPED VMExec-Decode.ps1 itself, which is the
-#       "Vendored read-only upstream checkouts") and so never exists in CI. No coverage is lost:
-#       apply patches against upstream/ro/qubes-windows-utils, which is GITIGNORED (.gitignore:
-#       asserts that a pipe into `grep -q` returns 141 under pipefail. That is the behaviour of THIS
-#       build.yml clones windows-utils fresh from upstream at WINDOWS_UTILS_REF and applies the same
-#       drives the stock-vs-ours harness and needs rig paths.
-#       forever - registered.
-#       patches there. They remain dev-qube suites.
-#       qube's grep (ugrep); a GNU grep returns 1, so the suite measures the local implementation
-#       rather than the invariant. Worth resolving in the suite, not by excluding it from the gate
+# DO NOT SORT THIS FILE, AND NEVER SORT THIS HEADER. Each entry below is one self-contained
+# name line, so the NAMES may be ordered; the header is PROSE with indented continuation
+# lines, and sorting it detaches every continuation from the paragraph it belongs to. That
+# already happened once: 3d9a8712 (2026-10-15, "gates: make ten never-fired sweep gates
+# fire") sorted it, and for eleven days lines 2-15 read as unrelated fragments - the reason
+# four suites were excluded could no longer be read from the file that excluded them
+# (SUITESLISTREASONSSCRAMBLED). The order below was restored on 2026-10-26 from 3d9a8712^,
+# line for line, with nothing added and nothing dropped, and L34 now refuses a continuation
+# line that has no entry above it; the same warning guards tools/tests/not-in-the-gate.txt,
+# which is where a suite's REASON lives now and what tools/lint-harness.py L32 reads.
+# ONE PARAGRAPH'S POSITION IS NOT RECOVERABLE: the 2026-10-25 "never write a test for a test"
+# note below was added after the sort, so the only blob that ever held it was already sorted.
+# It sits inside the clean-checkout list because that is where its own commit put it.
+#
+#
+# WHY A CURATED LIST. tools/tests/ holds 117 *-selftest.sh files and `.github/workflows/`
+# mentioned them only inside COMMENTS ("Proven offline by tools/tests/svc-exitcode-selftest.sh"
+# and five more of that shape). So `test` going green said nothing about any of them, and every
+# receipt in the register held only as long as someone kept running them by hand. That is
+# SELFTESTSUNRUNINCI.
+# HOW THIS LIST WAS BUILT - measured, not guessed. Each candidate was first excluded statically
+# if its code (comments stripped) calls qvm-*, qubesadmin, qrexec-client-vm, udisksctl, losetup,
+# pwsh/powershell, mtools or a compiler, because a GitHub runner has none of those. The 46 that
+# remained were then RUN, serially, on 2026-10-15; the 40 that exited 0 are listed, plus
+# offline-runner-selftest.sh, written afterwards to prove this list's own runner (17 checks).
+# A suite is in this file because it was observed to pass, not because it looked portable.
+# SERIALLY, AND THAT IS NOT A STYLE CHOICE: blockclaim-selftest.sh reported "10 passed, 2 failed"
+# when run in the same command as logvol-lib-selftest.sh and "12 passed, 0 failed" alone, twice -
+# both bind and delete loop devices and loop numbers are global (BLOCKCLAIMSELFTESTRACES). A
+# parallel runner would reintroduce that false red.
+# NOT LISTED, and why - these four are RED at the release sha (0c6d54b8 / agent 5c483cd9), each
+# asserting that a fix is absent from the source. They are registered as SUITESREDATRELEASE, not
+# silently dropped: a suite left out of CI because it fails is the thing this file exists to stop.
 #   bridge-exit-reason-selftest.sh    not_a_death: every exit 0 reported as 'a clean exit nobody asked for'
 #       RESOLVED 2026-10-25 and now LISTED: the fix it asserted is in the source and it is green (18 checks).
 #   broker-down-anchor-selftest.sh    held_without_a_shell: the deadline runs before the broker can launch
 #       RESOLVED 2026-10-25 and now LISTED: green (9 checks). It was red at the release sha only.
 #   log-policy-selftest.sh            2 routine per-window LogInfo lines (main.c BROKERLATEREG, BROKERHOLD)
 #       RESOLVED 2026-10-25 and now LISTED: those two lines are DEBUG now and it is green (32 checks).
-#   one-log-per-module / pipe-client-null / pipe-connect-order / pipe-eof
-#       ALL FOUR RESOLVED 2026-10-25 and now LISTED. The reason below EXPIRED: test.yml now has a
-#       step "Vendored read-only upstream (pinned) - the suites that read it are not skippable"
-#       which clones windows-utils at a pinned sha and asserts src/log.c and include/log.h are
-#       there, because the estate was red in CI on every run for want of it. Green: 22/24/42/9.
-#   pipefail-grepq
-#   stock-ab
+# Everything else in tools/tests/ needs a Qubes rig, a loop device, PowerShell, mtools or a
+# compiler and is run on the dev qube.#
+# AND THEN MEASURED AGAIN, IN THE ENVIRONMENT THAT ACTUALLY RUNS IT. The first version of this list
+# was validated on the dev qube and went red on its first CI run: 36 green, 7 red. Six of those
+# cannot run on a clean checkout at all, and the seventh was a bug in a suite of mine that pinned
+# this qube's pwsh path. "Measured" has to mean measured where it runs - the dev qube has a vendored
+# mirror, a different grep and a rig; a GitHub runner has none of them.
+# NOT LISTED because a clean checkout cannot run them, with the reason:
 #   vmexec-channel-selftest.sh      needs pwsh: it round-trips the service-argument encoder
+#                                   through the SHIPPED VMExec-Decode.ps1 itself, which is the
+#                                   point of it - proving the wire format against the code that
+#                                   reads it, not against my reading of it. 28 checks, run on
+#                                   the dev qube. It was in NEITHER list until 2026-10-17, i.e.
+#                                   silently absent, which this file's own policy forbids.
 #   wrapper-exit-reason-selftest.sh   RESOLVED 2026-10-22 and now LISTED. It was excluded twice over:
 #       its no_new_wait leg counted Sleep() against a revision twenty commits back and was red for
 #       something another mandate added, and its one seen-to-fail leg needed the SUBMODULE's full
@@ -39,33 +65,22 @@
 # UNRELIABLE - not to be fixed, not to be re-registered. They are named ONE place only, with their
 # reasons, in tools/tests/not-in-the-gate.txt, which is what tools/lint-harness.py L32 reads; a
 # second copy of the list here would be a second thing to rot. See TESTFORATESTRECURSION.
-# A suite is in this file because it was observed to pass, not because it looked portable.
-# AND THEN MEASURED AGAIN, IN THE ENVIRONMENT THAT ACTUALLY RUNS IT. The first version of this list
-# Everything else in tools/tests/ needs a Qubes rig, a loop device, PowerShell, mtools or a
-# HOW THIS LIST WAS BUILT - measured, not guessed. Each candidate was first excluded statically
-# NOT LISTED because a clean checkout cannot run them, with the reason:
-# NOT LISTED, and why - these four are RED at the release sha (0c6d54b8 / agent 5c483cd9), each
-# SELFTESTSUNRUNINCI.
-# SERIALLY, AND THAT IS NOT A STYLE CHOICE: blockclaim-selftest.sh reported "10 passed, 2 failed"
-# The offline selftest suites that a plain Linux runner can execute.
-# WHY A CURATED LIST. tools/tests/ holds 117 *-selftest.sh files and `.github/workflows/`
-# and five more of that shape). So `test` going green said nothing about any of them, and every
-# asserting that a fix is absent from the source. They are registered as SUITESREDATRELEASE, not
-# both bind and delete loop devices and loop numbers are global (BLOCKCLAIMSELFTESTRACES). A
-# cannot run on a clean checkout at all, and the seventh was a bug in a suite of mine that pinned
-# compiler and is run on the dev qube.#
-# if its code (comments stripped) calls qvm-*, qubesadmin, qrexec-client-vm, udisksctl, losetup,
-# mentioned them only inside COMMENTS ("Proven offline by tools/tests/svc-exitcode-selftest.sh"
-# mirror, a different grep and a rig; a GitHub runner has none of them.
-# offline-runner-selftest.sh, written afterwards to prove this list's own runner (17 checks).
-# parallel runner would reintroduce that false red.
-# pwsh/powershell, mtools or a compiler, because a GitHub runner has none of those. The 46 that
-# receipt in the register held only as long as someone kept running them by hand. That is
-# remained were then RUN, serially, on 2026-10-15; the 40 that exited 0 are listed, plus
-# silently dropped: a suite left out of CI because it fails is the thing this file exists to stop.
-# this qube's pwsh path. "Measured" has to mean measured where it runs - the dev qube has a vendored
-# was validated on the dev qube and went red on its first CI run: 36 green, 7 red. Six of those
-# when run in the same command as logvol-lib-selftest.sh and "12 passed, 0 failed" alone, twice -
+#   one-log-per-module / pipe-client-null / pipe-connect-order / pipe-eof
+#       ALL FOUR RESOLVED 2026-10-25 and now LISTED. The reason below EXPIRED: test.yml now has a
+#       step "Vendored read-only upstream (pinned) - the suites that read it are not skippable"
+#       which clones windows-utils at a pinned sha and asserts src/log.c and include/log.h are
+#       there, because the estate was red in CI on every run for want of it. Green: 22/24/42/9.
+#       apply patches against upstream/ro/qubes-windows-utils, which is GITIGNORED (.gitignore:
+#       "Vendored read-only upstream checkouts") and so never exists in CI. No coverage is lost:
+#       build.yml clones windows-utils fresh from upstream at WINDOWS_UTILS_REF and applies the same
+#       patches there. They remain dev-qube suites.
+#   pipefail-grepq
+#       asserts that a pipe into `grep -q` returns 141 under pipefail. That is the behaviour of THIS
+#       qube's grep (ugrep); a GNU grep returns 1, so the suite measures the local implementation
+#       rather than the invariant. Worth resolving in the suite, not by excluding it from the gate
+#       forever - registered.
+#   stock-ab
+#       drives the stock-vs-ours harness and needs rig paths.
 accept-attempt-boundary-selftest.sh
 accept-cancel-selftest.sh
 accept-clean-wu-selftest.sh

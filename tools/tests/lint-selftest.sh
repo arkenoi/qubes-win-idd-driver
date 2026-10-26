@@ -606,6 +606,38 @@ printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/near-selftest.sh"
 printf '#!/bin/bash\nbash tools/tests/xnear-selftest.sh\n' > "$D/tools/run-suites.sh"
 expect_fires L32-producer-missing "$D" "a producer naming xnear-selftest.sh while near-selftest.sh is the file"
 
+# ---------------------------------------------------------------- L34 header shape
+# THE DAMAGE IN MINIATURE. 3d9a8712 sorted offline-suites.txt's header and detached every indented
+# exclusion reason from the suite it explains; four suites then carried no readable reason for
+# eleven days. The file said "DO NOT SORT THIS FILE" throughout, which is why this is a rule.
+D="$TMP/l34a"; mk "$D"; mkdir -p "$D/tools/tests"
+{ printf '# NOT LISTED, with the reason:\n'
+  printf '#   some-selftest.sh    needs the rig\n'
+  printf '# A later top-level paragraph, added after the sort.\n'
+  printf '#       and here is the continuation that belongs to some-selftest.sh\n'
+  printf 'registered-selftest.sh\n'; } > "$D/tools/tests/offline-suites.txt"
+printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/registered-selftest.sh"
+expect_fires L34-header-continuation-orphaned "$D" "a continuation line separated from its entry by a top-level paragraph"
+
+# the same content with the continuation under its entry must be silent
+D="$TMP/l34b"; mk "$D"; mkdir -p "$D/tools/tests"
+{ printf '# NOT LISTED, with the reason:\n'
+  printf '#   some-selftest.sh    needs the rig\n'
+  printf '#       and here is the continuation that belongs to some-selftest.sh\n'
+  printf '# A later top-level paragraph, added after the sort.\n'
+  printf 'registered-selftest.sh\n'; } > "$D/tools/tests/offline-suites.txt"
+printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/registered-selftest.sh"
+expect_silent L34-header-continuation-orphaned "$D" "the same lines with the continuation under its entry"
+
+# NAMES ARE A SET. Below the header the suite names may be in any order - sorting them is correct
+# and must not read as damage, or the rule would forbid the one thing the sort got right.
+D="$TMP/l34c"; mk "$D"; mkdir -p "$D/tools/tests"
+{ printf '#   some-selftest.sh    needs the rig\n'
+  printf '#       its reason, under it\n'
+  printf 'a-selftest.sh\nb-selftest.sh\nz-selftest.sh\n'; } > "$D/tools/tests/offline-suites.txt"
+for n in a b z; do printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/$n-selftest.sh"; done
+expect_silent L34-header-continuation-orphaned "$D" "sorted NAMES below a well-formed header"
+
 # and the correct shape must be silent, or the lint is noise
 D="$TMP/l32e"; mk "$D"; mkdir -p "$D/tools/tests"
 printf 'registered-selftest.sh\n' > "$D/tools/tests/offline-suites.txt"

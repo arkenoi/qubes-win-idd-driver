@@ -598,6 +598,40 @@ def l33_pwsh_is_located_in_one_place() -> None:
                     "PWSH=/nonexistent came to measure an installed pwsh instead of an absent one")
 
 
+# --------------------------------------------------------------------------- L34
+# A SUITE LIST'S HEADER MAY NOT BE SORTED. 3d9a8712 (2026-10-15, "gates: make ten never-fired sweep
+# gates fire") sorted tools/tests/offline-suites.txt whole. The NAMES are a set and may be ordered;
+# the comment header is a list of excluded suites, each followed by an indented multi-line reason,
+# and sorting detached every reason from its suite. It stayed that way for eleven days: four suites
+# were excluded by a bare name with no readable reason, which is the exact shape of an exclusion
+# that rots. The file said "DO NOT SORT THIS FILE" the whole time, so the warning is not the
+# instrument - this is.
+#
+# THE PREDICATE IS THE PROPERTY: a continuation line must sit under an entry. It is not a
+# sortedness test, which over prose is a heuristic (a paragraph can be alphabetical by accident);
+# this is decidable from two adjacent lines. Any sort of the header necessarily moves a
+# continuation away from its entry, because entries and their continuations differ in indent.
+def l34_suite_list_header_keeps_its_shape() -> None:
+    for rel in ("tools/tests/offline-suites.txt", "tools/tests/not-in-the-gate.txt"):
+        p = ROOT / rel
+        if not p.exists():
+            continue
+        prev = None
+        for n, line in enumerate(p.read_text(errors="replace").splitlines(), 1):
+            if not line.startswith("#"):
+                prev = None          # the names below the header are a set; order is free there
+                continue
+            body = line[1:]
+            ind = len(body) - len(body.lstrip(" ")) if body.strip() else 1
+            if ind >= 5 and prev is not None and prev < 3:
+                finding("L34-header-continuation-orphaned",
+                        f"{rel}:{n}: {line.strip()[:60]}",
+                        "a continuation line follows top-level prose, so the entry it explains is "
+                        "no longer above it - the header has been sorted or spliced (the 2026-10-15 "
+                        "sort left four suites with no readable reason for eleven days)")
+            prev = ind
+
+
 NOT_LINTED = [
     ("findings rule 4", "a commit appending history must also touch CURRENT STATE - needs the "
                         "git diff, so it lives in the pre-commit hook, not here"),
@@ -1972,6 +2006,7 @@ def main() -> int:
     l29_log_device_failure_must_be_hard()
     l32_every_test_file_has_a_producer()
     l33_pwsh_is_located_in_one_place()
+    l34_suite_list_header_keeps_its_shape()
     if a.ledger:
         l7_orphan_ledger_checks(a.ledger)
 
