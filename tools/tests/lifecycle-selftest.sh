@@ -285,84 +285,33 @@ main_shell_latch() {
     grep -q 'data->Handle == ShellWindowNow())' "$1" && grep -q '!ShellWindowNow() || g_OnSecureDesktop ||' "$1"; }
 shape "main.c: the shell-seen latch is set only through ShellWindowNow (the one GetShellWindow() call in code), which every phase gate asks" main_shell_latch "$MAIN" 'const HWND shell = GetShellWindow();'
 
-# THE DE-SLICE REPORT'S DISCIPLINE, pinned after three defects measured on a guest on 2026-10-23
-# (win11r-sup, 4.3.37.1066) when the owner saw TWO dom0 toasts for ONE injected broker death.
-# THE LEGS THIS REPLACES asserted the shape of agent 185794f - a PENDING window anchored at
-# g_ShellSeenTick - which was reverted in 21aec24. They kept FAILING from that revert until now,
-# because a source-shape leg outlives the code it describes and nobody re-ran this suite after the
-# revert. This suite asserts what the product DOES; a leg for a reverted design is deleted with it.
+# THE TWO DE-SLICE SOURCE-SHAPE LEGS ARE DELETED (2026-10-26), not repaired - and for the THIRD
+# time in this one file, which is the finding. Both pinned the literal text `g_WgcLastLaunch = now;`
+# and `g_BrokerNextWarn = now + DESLICE_FIRST_WARN_MS;`. Those two assignments were the DEFECT: the
+# de-slice grace was counted from a tick sampled at the top of the supervise pass, before
+# HelperTaskRegister's blocking schtasks work, measured at 7.524 s on win11r-dsm - so the agent told
+# dom0 a broker was down 30 s when it had been asked to run for 22. Both now take a fresh
+# GetTickCount64(), and both legs went red on the fix that was correct. One of their awks
+# (`! awk /g_WgcLastLaunch = now;/ ...`) had already inverted to a vacuous PASS, so it was enforcing
+# nothing even while the suite was green.
 #
-#   1. THE ANCHOR. The clock re-armed at g_WgcLastLaunch, which does not slide, so after a healthy
-#      run its +30 s deadline was already past: ready 20:57:39, killed 21:00:52, and the complaint
-#      fired 29 ms after the detection claiming "not running for 210 s" of which 193 s it was
-#      serving. It now goes through QgaDesliceAnchor, which keeps the launch anchor only while the
-#      broker has NEVER been ready (g_BrokerReadyAt == 0) and otherwise starts the outage at now.
-#   2. GRACEFUL SHUTDOWN IS NOT A FAULT (owner: "graceful shutdown should NOT emit error"). An
-#      ERROR, the DesliceBrokerDown flag and a dom0 row all went out 9 s before `preshutdown`. The
-#      teardown branch must come BEFORE the report so all three are skipped, not just the toast.
-#   3. ONE SITUATION, ONE DOM0 ROW. The death reporter had already sent wgcbroker.death-1; the
-#      de-slice row was the second toast. It is suppressed when a death owns the outage - but the
-#      flag and the ERROR line stay unconditional, so no instrument goes blind (Jev 1.00).
-main_deslice_report_discipline() {
-    # THE HOLD IS ON !g_WgcLaunched ALONE, not on `!ShellWindowNow() && !g_WgcLaunched`. The second
-    # form let a guest whose shell appeared BEFORE the launch arm the clock with `now`, so the broker
-    # never got its full deadline. MEASURED 2026-10-24 on win11r-sup running the build that already
-    # carried the anchor fix: shell seen 23:56:06, launch issued 23:56:11, and QGADESLICEDOWN fired
-    # at 23:56:36 claiming "not running for 30 s" - 25 s after the launch - with a dom0 row and
-    # dom0_loud_failures=1. The next boot's broker was ready 1 s after its launch. agent 185794f had
-    # fixed exactly this and my revert 21aec24 reintroduced it; Jev: restore the pre-launch hold
-    # 0.97, and 0.79 that this facet was the revert's. So the hold, the PENDING window and the
-    # launch-guard anomaly are all required here.
-    grep -q 'if (!g_WgcLaunched)' "$1" &&
-    ! grep -q 'if (!ShellWindowNow() && !g_WgcLaunched)' "$1" &&
-    grep -q '#define DESLICE_LAUNCH_PENDING_MS 90000' "$1" &&
-    grep -q 'const BOOL pendingTooLong = shellUp && g_ShellSeenTick && (now - g_ShellSeenTick) >= DESLICE_LAUNCH_PENDING_MS;' "$1" &&
-    grep -q 'g_BrokerNextWarn = g_ShellSeenTick + DESLICE_LAUNCH_PENDING_MS;' "$1" &&
-    grep -q 'LogWarning("QGABROKERLAUNCHNOTISSUED shell up %I64u s and the de-slice broker launch has not been "' "$1" &&
-    # 1: the anchor is the pure function's, fed the ready tick - never a bare g_WgcLastLaunch
-    grep -q 'QgaDesliceAnchor(g_WgcLaunched ? 1 : 0, g_WgcLastLaunch, g_BrokerReadyAt, now)' "$1" &&
-    ! grep -q 'const ULONGLONG anchor = (g_WgcLaunched && g_WgcLastLaunch) ? g_WgcLastLaunch : now;' "$1" &&
-    # 2: the teardown excuse exists AND is tested before the report can fire
-    grep -q 'QgaDesliceTeardownExcused(HelpersDisarmed() ? 1 : 0, LifecycleSessionEnding() ? 1 : 0)' "$1" &&
-    awk '/QgaDesliceTeardownExcused\(/{t=NR} /QgaDesliceWarnDue\(g_BrokerDownSince/{w=NR} END{exit !(t && w && t<w)}' "$1" &&
-    # 3: the dom0 row is suppressed by a death in flight, and the flag+ERROR still precede it
-    grep -q 'if (QgaDesliceOwnedByDeath(g_BrokerDiedAt))' "$1" &&
-    # 4: A NEW LAUNCH RESTARTS THE GRACE. Measured 2026-10-24 on win11-reinstall: an agent that had
-    # ADOPTED the previous session's broker armed the clock at `now` when that broker went away
-    # (correct), a new launch went out 6 s later, and the complaint fired 24 s after it - the new
-    # broker was ready 4 s after the deadline. Only the DEADLINE moves; g_BrokerDownSince must not,
-    # or the reported duration stops being true.
-    awk '/g_WgcLastLaunch = now;/{l=NR} /g_BrokerNextWarn = now \+ DESLICE_FIRST_WARN_MS;/{d=NR} END{exit !(l && d && d>l && d-l<30)}' "$1" &&
-    ! awk '/g_WgcLastLaunch = now;/{l=NR} /g_BrokerDownSince = now;/{z=NR} END{exit !(l && z && z>l && z-l<30)}' "$1" &&
-    awk '/CfgWriteDword\(NULL, REG_CONFIG_DESLICE_DOWN_VALUE, binPresent/{f=NR} /QGADESLICEDOWN de-slice broker EXPECTED but not running/{e=NR} /if \(QgaDesliceOwnedByDeath\(g_BrokerDiedAt\)\)/{d=NR} END{exit !(f && e && d && f<d && e<d)}' "$1"; }
-shape "main.c: the de-slice report is anchored through QgaDesliceAnchor, excused during a teardown BEFORE it can fire, and its dom0 row yields to a death report while the flag and the ERROR line stay" main_deslice_report_discipline "$MAIN" 'QgaDesliceAnchor(g_WgcLaunched ? 1 : 0, g_WgcLastLaunch, g_BrokerReadyAt, now)'
-# TOLD TO GO DOWN, SO IT STAYS DOWN. The latch's EVENTS are here, not in the pure predicate, so the
-# wiring is what needs asserting: (1) the hold runs BEFORE every arming branch, or the clock is armed
-# anyway and the hold is cosmetic; (2) it is set at the non-death exit of the was-ready branch, which
-# is the only place that knows the absence was asked for; (3) the DesliceBrokerDown flag is cleared
-# with it, because a flag left at 1 over a deliberate stop makes health-check read a healthy guest as
-# broken for ever; (4) it is cleared by BOTH events - the broker seen alive (Task Scheduler's own
-# recovery, ADR-supervision 4) and a launch being issued - since a latch left set over a running
-# broker would silence a LATER real outage.
-main_standdown_latch() {
-    # 1: the hold precedes the was-ready branch AND the `else if (!g_BrokerDownSince)` arming branch
-    awk '/if \(QgaDesliceSupervisionHeld\(g_BrokerStoodDown/{h=NR} /if \(_InterlockedExchange\(&g_BrokerReady, 0\) != 0\)/{r=NR} /else if \(!g_BrokerDownSince\)/{a=NR} END{exit !(h && r && a && h<r && h<a)}' "$1" &&
-    # 1b: AND IT FOLLOWS THE ADOPTION, which is what stops the latch silencing a real outage. The
-    # agent launches the broker once per life, so after a stand-down the thing that brings one back is
-    # ADR-supervision 4's system recovery - Task Scheduler - and the agent re-acquires it by opening
-    # the pid the broker publishes. That block is gated on `!g_WgcBrokerProc`, which is exactly the
-    # post-stand-down state, so it runs, `alive` becomes true and the latch clears. If the hold ever
-    # returned BEFORE it, a restarted broker could never be re-adopted while held, the latch would
-    # never clear, and a LATER genuine outage would be silenced for the life of the agent. Jev scored
-    # the clearing "complete" 0.97 from my DESCRIPTION; this asserts it against the code.
-    awk '/g_WgcBrokerProc = WgcOpenBrokerProcess\(\(DWORD\)pid, sid\);/{o=NR} /^    if \(alive\)/{v=NR} /if \(QgaDesliceSupervisionHeld\(g_BrokerStoodDown/{h=NR} END{exit !(o && v && h && o<v && v<h)}' "$1" &&
-    # 2 + 3: set at the non-death exit, with the flag cleared in the same block
-    awk '/g_BrokerStoodDown = TRUE;/{t=NR} /CfgWriteDword\(NULL, REG_CONFIG_DESLICE_DOWN_VALUE, 0, NULL\)/{f=NR; if(t && f>t && f-t<8) ok=1} END{exit !ok}' "$1" &&
-    # 4: cleared on BOTH events - alive (before the alive branch returns) and at the launch
-    awk '/g_BrokerStoodDown = FALSE;/{n++} END{exit !(n>=2)}' "$1" &&
-    awk '/g_WgcLastLaunch = now;/{l=NR} /g_BrokerStoodDown = FALSE;/{if(l && NR>l && NR-l<8) ok=1} END{exit !ok}' "$1" &&
-    awk '/g_BrokerStoodDown = FALSE;/{c[++n]=NR} /BrokerReportDeaf\(\);/{d=NR} END{for(i=1;i<=n;i++) if(d && c[i]<d && d-c[i]<8) ok=1; exit !ok}' "$1"; }
-shape "main.c: a graceful stand-down LATCHES - the hold precedes every arming branch, is set at the non-death exit with the flag cleared, and clears only on a launch or the broker seen alive" main_standdown_latch "$MAIN" 'if (QgaDesliceSupervisionHeld(g_BrokerStoodDown ? 1 : 0, g_BrokerDownSince, now))'
+# The comment deleted with them said it first: "a source-shape leg outlives the code it describes and
+# nobody re-ran this suite after the revert". A leg that pins an ASSIGNMENT's spelling cannot survive
+# that assignment being the bug, and rewriting it to the new spelling would only re-arm the same trap
+# for the next fix. Owner 2026-10-26: a selftest that fails and needs a quick fix is dropped.
+#
+# WHAT STILL ENFORCES THE PROPERTIES, stated plainly rather than assumed:
+#   - the teardown excuse ordering and the one-dom0-row rule: nothing in this suite any more. They
+#     are enforced where the behaviour is visible - the guest log, read on every run - and the
+#     supervisor now STANDS DOWN at a teardown (BrokerSupervise's `!g_BrokerStoodDown &&
+#     HelpersDisarmed()` latch) instead of relying on a read-time excuse, which is a state change a
+#     log line reports rather than a source string a grep hopes for.
+#   - the stand-down latch itself: QgaDesliceSupervisionHeld in qga-lifecycle.h, which is a pure
+#     predicate with its own defect knob (QGA_LIFECYCLE_DEFECT_STANDDOWNEXPIRES) and offline rows -
+#     that is the part worth asserting, and it is asserted on behaviour, not on text.
+#   - "a new launch restarts the grace": nothing automated. It is a measured property, and the
+#     measurement is the guest log of a smoke run. Said out loud so no one reads this suite's green
+#     as covering it.
 # THE PERSISTED HEALTH FLAG MUST BE OWNED, NOT LEFT. DesliceBrokerDown is written 1/2 on the hard-fail
 # path and lives in HKLM, so it survives reboots. Init's own comment promises "acceptance never reads a
 # stale value from a prior config" and delegates the expected case to "BrokerSupervise (0 on ready,
