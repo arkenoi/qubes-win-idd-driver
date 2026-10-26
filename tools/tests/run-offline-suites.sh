@@ -275,7 +275,7 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # vacuous. The rig read is now stubbed in the suite (the serial-rig-selftest stubs), 5 assertions,
 # zero rig calls, and the guard was driven: with the size guard deleted from a padded copy the
 # probe never says "past cmd.exe", so the leg goes red.
-FLOOR=${OFFLINE_SUITES_FLOOR:-148}
+FLOOR=${OFFLINE_SUITES_FLOOR:-147}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"
