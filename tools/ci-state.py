@@ -27,6 +27,7 @@ GH_BIN is overridable so both arms are provable offline; tools/tests/ci-state-se
 import fnmatch
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -137,6 +138,19 @@ def would_run(wf, changed, branch=None):
 
 def main(argv):
     sha = argv[1] if len(argv) > 1 else sh(["git", "rev-parse", "HEAD"]).strip()
+    # A FLAG IS NOT A SHA, AND THIS USED TO ANSWER AS IF IT WERE. argv[1] is POSITIONAL, so
+    # `ci-state.py --sha <value>` graded the literal string "--sha": every workflow came back
+    # "no run for this sha", build and test came back "DUE for this sha and absent", and the
+    # verdict was rc=1 while all four runs at the real sha had SUCCEEDED. MEASURED twice on
+    # 2026-10-25, once each way - the other time the same mistake produced rc=0 and I logged
+    # "CI GREEN for 669576d6e546" and started a campaign on a sha whose test suite was broken.
+    # No committed caller passes a flag (campaign-full.sh:125 passes "$SHORT" positionally), so
+    # this breaks nothing that works today; it refuses the invocation that answers confidently
+    # about a sha that cannot exist. A wrong answer delivered confidently is worse than a refusal.
+    if not re.fullmatch(r"[0-9a-fA-F]{7,40}", sha):
+        print("CI 2 '%s' is not a commit sha. The sha is POSITIONAL: tools/ci-state.py <sha> "
+              "(there is no --sha flag)" % sha)
+        return 2
     # THE BRANCH MATTERS AS MUCH AS THE PATHS. A workflow with `branches: [main]` cannot run on a
     # topic branch, so without this the tool called a required gate "path-filtered" and handed back
     # an ancestor's green. CI_STATE_BRANCH overrides for a sha that is not on the current branch.

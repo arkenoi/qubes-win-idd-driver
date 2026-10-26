@@ -117,6 +117,34 @@ set_all completed success; echo "BROKEN" > "$T/build.yml.state"
 rc=$(run); [ "$rc" = 2 ] && ok "unreadable_is_rc2: gh answering nonsense is 'no verdict', not 'green'" \
   || bad "unreadable_is_rc2: rc=$rc - $(tail -1 "$T/out")"
 
+# ---- 8. A FLAG IS NOT A SHA -------------------------------------------------------------------
+# MEASURED 2026-10-25, twice, both ways: the sha is POSITIONAL, so `ci-state.py --sha <value>`
+# graded the literal string "--sha". Every workflow came back "no run for this sha" and the
+# verdict was rc=1 while all four runs at the real sha had SUCCEEDED; earlier the same mistake
+# read rc=0 and a campaign started on a sha whose test suite was broken. The guard must REFUSE
+# (rc=2, the instrument could not answer) and must NOT fire on a sha it can use - a short sha is
+# the arm that would break every committed caller if the pattern were too strict.
+set_all completed success
+rc=$(GH_BIN="$T/gh" CI_STATE_CHANGED="tools/x.py" \
+     python3 tools/ci-state.py --sha "$SHA" >"$T/out" 2>&1; echo $?)
+if [ "$rc" = 2 ] && grep -q "is not a commit sha" "$T/out" && grep -q "POSITIONAL" "$T/out"; then
+  ok "flag_is_not_a_sha_rc2: --sha refuses instead of grading the literal flag"
+else
+  bad "flag_is_not_a_sha_rc2: rc=$rc - $(tail -1 "$T/out")"
+fi
+# THE PREDICATE IS THE PROPERTY, NOT A PROXY. My first version of this arm asserted rc=0 and
+# failed BOTH with and without the guard: the stub gh is keyed to the FULL $SHA, so a 7-char sha
+# has no state to grade and comes back rc=1 on the stub's data, which says nothing about the
+# guard. What must hold is that the guard does not REJECT a short sha - i.e. it reaches the
+# grader at all and never prints its refusal.
+rc=$(GH_BIN="$T/gh" CI_STATE_CHANGED="tools/x.py" \
+     python3 tools/ci-state.py "${SHA:0:7}" >"$T/out" 2>&1; echo $?)
+if ! grep -q "is not a commit sha" "$T/out"; then
+  ok "short_sha_not_rejected: the guard lets a 7-char sha through to the grader"
+else
+  bad "short_sha_not_rejected: the guard rejected a valid short sha - $(tail -1 "$T/out")"
+fi
+
 # ---- A BLOCKED REQUIRED GATE IS NOT GREEN ------------------------------------------------------
 # MEASURED 2026-10-16 on sweep-gate-severity: test.yml and build.yml are `branches: [main]`, the
 # diff touched guest/ and tools/ - exactly the paths test.yml guards - and both REQUIRED gates were
