@@ -228,6 +228,47 @@ jobs:
           python3 -c 'from lxml import etree; print("lxml", etree.__version__)'
       - name: Offline selftest suites (serial, with a floor)
         run: tools/tests/run-offline-suites.sh
+
+      # PROBE, NOT A GATE - run EVERY suite that is declared out of the gate, here, on the
+      # machine the declarations are about. 35 of those declarations say the suite needs
+      # PowerShell, one in so many words: "a GitHub runner installs none". That premise is
+      # already refuted by a receipt in this same job: upd-task-prestop-selftest.sh IS registered
+      # and hard-exits 2 when pwsh-path.sh finds no pwsh ("FAIL pwsh not found at $PWSH - nothing
+      # ran"), and run 40263603428 reports it `ok` in the step above, on ubuntu-latest. A suite
+      # that exits 2 without pwsh cannot be ok without pwsh.
+      # THE LIST IS THE DECLARATION FILE'S FIRST COLUMN, every runnable name in it - not the
+      # subset whose wording mentions pwsh. Selecting by wording would mean a reworded
+      # declaration silently changes what gets measured, and the broader run is also strictly
+      # more informative: each suite either passes here, and joins the gate in a commit, or fails
+      # and gets its REAL reason. Suites that call the rig will report TOUCHED-RIG through the
+      # runner's own shim, which is an answer too.
+      # Measured HERE and not on the dev qube on purpose: that qube has pwsh (a tarball, off
+      # PATH), so a green run there cannot speak to this premise at all.
+      # When this has been read and acted on, the step goes.
+      - name: PROBE every out-of-gate suite - the declarations' premises, on the runner
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          # ASK THE ONE PLACE THAT KNOWS (L33). `command -v pwsh` is a second lookup and it
+          # answers wrongly on the dev qube, where pwsh is a tarball off PATH - which is how a
+          # premise about pwsh came to be wrong in the first place.
+          P=$(tools/tests/pwsh-path.sh || true)
+          if [ -x "$P" ]; then echo "PROBE: pwsh at $P"; "$P" --version
+          else echo "PROBE: pwsh-path.sh found no pwsh here ($P)"; fi
+          declared=0; runnable=0
+          : > /tmp/out-of-gate.txt
+          while read -r name _; do
+            case "$name" in ''|'#'*) continue ;; esac
+            declared=$((declared+1))
+            if [ -f "tools/tests/$name" ]; then
+              runnable=$((runnable+1)); echo "$name" >> /tmp/out-of-gate.txt
+            else
+              echo "PROBE: declared but not a file under tools/tests: $name"
+            fi
+          done < tools/tests/not-in-the-gate.txt
+          echo "PROBE: $declared declarations, $runnable runnable suites"
+          OFFLINE_SUITES_LIST=/tmp/out-of-gate.txt OFFLINE_SUITES_FLOOR=1 \
+              tools/tests/run-offline-suites.sh
       # PROBE, NOT A GATE - third and last round. blockclaim-selftest.sh is the one suite kept
       # out of the list for a DEPENDENCY rather than a defect. Round 1 (run 40262136871) refuted
       # the root-free route: udisks2 is ACTIVE here but `udisksctl loop-setup` is not
