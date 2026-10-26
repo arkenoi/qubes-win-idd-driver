@@ -2457,5 +2457,38 @@ else
   bad "T60 could not build the unscoped variant" "the substitution did not apply"
 fi
 
+# T61 A CRASH GETS ITS OWN P1 COUNT, AND A DECLARATION DOES NOT EXCUSE IT.
+# QDBSTOPUAF (2026-10-26): qubesdb-daemon took c0000005 at its own service stop and the sweep saw it
+# only as error_lines_undeclared=1 + signatures_unclassified=1 - two P2 counts over ONE line, and
+# `--declare-error` would have excused the first (Jev: declaration_legitimate 0.06). crash_lines is
+# the metric that cannot be talked out of. This leg uses the CLEAN fixture, whose context.json
+# declares `"pattern": "."` - every line in it - so the declaration path is live while the leg runs,
+# which is the half that matters.
+cp -r "$T/base" "$T/crash" || { echo "FATAL: could not copy the base fixture"; exit 2; }
+t61_f=$(ls "$T/crash/files"/gui-agent-*.log | head -1)
+printf '[20261007.100131.000-1000:1004-E] ErrUEF: Unhandled exception c0000005 at 00007FF8CCD3FAAD, flags: 0\n' >> "$t61_f"
+rc=$(analyze "$SRC" "$T/crash" "$T/baseline.json" "$T/jev-expected.py" t61)
+t61_v=$(field "$T/t61.json" "r['metrics']['crash_lines']")
+t61_b=$(field "$T/t61.json" "[x['metric'] for x in r['breaches']]")
+t61_s=$(field "$T/t61.json" "[x['severity'] for x in r['breaches'] if x['metric']=='crash_lines']")
+t61_c=$(field "$T/base0.json" "r['metrics'].get('crash_lines')")
+if [ "$t61_v" = 1 ] && [ "$t61_c" = 0 ]; then
+  ok "T61 crash_lines counts the crash and only the crash (crash fixture 1, clean fixture $t61_c)"
+else
+  bad "T61 crash_lines = $t61_v on the crash fixture and $t61_c on the clean one" "the metric does not separate a crash from a quiet run"
+fi
+case "$t61_b" in
+  *crash_lines*) ok "T61 the crash BREACHES although every line in the fixture is declared" ;;
+  *) bad "T61 crash_lines is not among the breaches ($t61_b)" "a declaration excused a crash - the one thing this metric exists to prevent" ;;
+esac
+[ "$t61_s" = "['P1']" ] && ok "T61 the crash breach is P1" || bad "T61 the crash breach severity is $t61_s" "a process of ours dying is not a P2"
+# SEEN TO FAIL: the same corpus with the crash line removed again must not breach on it.
+cp -r "$T/base" "$T/crashneg" && rc=$(analyze "$SRC" "$T/crashneg" "$T/baseline.json" "$T/jev-expected.py" t61n)
+t61n_b=$(field "$T/t61n.json" "[x['metric'] for x in r['breaches']]")
+case "$t61n_b" in
+  *crash_lines*) bad "T61 the crash-free corpus ALSO breaches crash_lines ($t61n_b)" "the metric fires on something other than the crash line" ;;
+  *) ok "T61 SEEN TO FAIL: without the crash line there is no crash_lines breach" ;;
+esac
+
 echo "--- $pass passed, $fail failed; fixtures/outputs in $T"
 [ "$fail" = 0 ] && exit 0 || exit 1

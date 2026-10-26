@@ -116,6 +116,15 @@ SUSPICIOUS_RE = re.compile(
 # sweeper irregardless of message text".
 KV_PAIR_RE = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z_][A-Za-z0-9_]*=[^\s]+")
 STALE_ERR_RE = re.compile(r"failed with error 0x0\b")
+# A CRASH IS NOT A FAILED WRITE, AND UNTIL 2026-10-26 THEY SHARED ONE GATE. qubesdb-daemon took
+# c0000005 at its own service stop in cell WIN10-reinstall of campaign rel-40243956400-r2
+# (QDBSTOPUAF, fixed in 3d532770) and the sweep caught it ONLY as error_lines_undeclared 1 plus
+# signatures_unclassified 1 - the same line counted twice by two P2 metrics, either of which a
+# `--declare-error` would have excused. A process dying inside our own code is the most severe thing
+# this analyser can see in a log, so it gets its own P1 count and no declaration path. The pattern is
+# the unhandled-exception filter's own head, which error.c keeps byte-identical for exactly this kind
+# of consumer (patches/windows-utils-uef-one-line.patch).
+CRASH_RE = re.compile(r"\bUnhandled exception [0-9a-fA-F]{8}\b")
 # `Note: 1:` AND BARE `Rollback` WERE DROPPED FROM THIS SELECTOR, 2026-10-23, and the reason is that
 # the 2026-10-08 fix for them was only half of one. That day's measurement (see parse_msi) found that
 # `Rollback` alone matched the rollback actions EVERY healthy install SCHEDULES up front - 168 of a
@@ -511,6 +520,7 @@ DEFAULT_THRESHOLDS = {
     "error_lines_unattributable": {"max": 0, "severity": "P2", "why": "ERROR lines this capture cannot bill to either build: a module wrote only superseded-version lines before the install turnover, so the candidate wrote no log for it at all. The evidence is incomplete, which is a different verdict from the candidate having logged them (measured 2026-10-22, win10-upgrade of run 39767068509)"},
     "warning_lines_unattributable": {"max": 0, "severity": "P2", "why": "WARNING lines this capture cannot bill to either build - the warning half of error_lines_unattributable, which was gated on 2026-10-22 while this half stayed folded into an informational sum. Same verdict: the evidence is incomplete, which is not the same as the candidate having logged them"},
     "candidate_build_absent": {"max": 0, "severity": "P1", "why": "the build under test was NAMED (--build) and no module in this capture declared it: the capture holds not one line the candidate wrote, so every attribution mechanism is inert and no verdict about the candidate can rest on this pull. install_anchor returns None whenever no module shows a turnover - measured on win11-upgrade of campaign 20261023-050323 - and nothing reported that the filter was inert, because install_anchor is neither gated nor informational"},
+    "crash_lines": {"max": 0, "severity": "P1", "why": "our own unhandled-exception filter ran: a process of ours died of an unhandled exception, which is not a failed write and must not share a gate with one. Measured 2026-10-26: QDBSTOPUAF reached the gate only as error_lines_undeclared + signatures_unclassified, two P2 counts over the SAME line, and `--declare-error` would have excused both (Jev: declaration_legitimate 0.06). No declaration excuses this metric"},
     "stale_error_lines": {"max": 0, "severity": "P2", "why": "'failed with error 0x0: The operation completed successfully' is a stale error code"},
     "watchdog_fast_death_backoffs": {"max": 0, "severity": "P2", "why": "the agent died within 10 s of launch, or a launch failed"},
     "service_failures": {"max": 0, "severity": "P1", "why": "System 7023/7024/7031/7034/7043 for one of our services"},
@@ -530,6 +540,7 @@ INFORMATIONAL_METRICS = ["error_lines", "modules_unattributable", "warning_lines
                          "deaths_by_exit_code", "broker_events_excused", "fi_records",
                          # what the build filter set aside, so an exclusion is never silent
                          "error_lines_prior_build", "warning_lines_prior_build", "prior_build_mix",
+                         "crash_lines_prior_build",
                          # THE SWEEP EXCLUSION ITSELF, as a figure and a per-module list: the lines
                          # cut_predecessor() took out of the graded view at ingestion. Informational
                          # because it is a property of the CAPTURE (an upgrade cell has two builds
@@ -3360,6 +3371,18 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
     # a count. Both stay on ONE LINE each because the GUARD knob rewrites the single line carrying
     # its marker - a multi-line statement makes the knob undriveable, which the selftest catches.
     m["errors_during_requested_stop"] = sum(len([l for l in i["errors_during_stop"] if not (_lf_by_name.get(i.get("file")) and (_prior(_lf_by_name[i["file"]], l) or _unattrib(_lf_by_name[i["file"]], l)))]) for i in insts)   # GUARD:instwindow DEFECT: m["errors_during_requested_stop"] = sum(len(i["errors_during_stop"]) for i in inst)
+    # NO LEVEL FILTER: the filter's own write is LogError today, and a crash recorded at any level is
+    # still a crash. The window and attribution filters DO apply, so a crash is billed to the build
+    # that logged it exactly as every other count is - never to the candidate by default.
+    _count("crash_lines", [l for lf in files for l in lf.lines if CRASH_RE.search(l.msg) and sel(l.ts) and not _prior(lf, l) and not _unattrib(lf, l)])
+    # AND THE HALF THE BUILD FILTER TOOK OUT, as a figure. Jev on the filter set: right 0.68 with
+    # too_strict 0.26, and the 0.26 is this - `_prior` is what keeps an upgrade cell from billing the
+    # entry build's crash to the candidate, but a crash nobody can see is the worse failure. An
+    # unattributable crash already breaches through error_lines_unattributable (max 0); a
+    # SUPERSEDED-build crash would otherwise leave no trace at all, so it is counted here and
+    # reported. Informational, not gated: gating it would fail a candidate for a crash it did not
+    # write (the attribution rule this whole analyser is built on).
+    m["crash_lines_prior_build"] = len([l for lf in files for l in lf.lines if CRASH_RE.search(l.msg) and sel(l.ts)]) - m["crash_lines"]
     _count("stale_error_lines", [l for lf in files for l in lf.lines if l.level == "E" and STALE_ERR_RE.search(l.msg) and sel(l.ts) and not _prior(lf, l) and not _unattrib(lf, l)])
     # A ZERO FROM "NOTHING WAS CONSIDERED" READS EXACTLY LIKE A ZERO FROM "NOTHING HAPPENED" (the
     # GUARD:winsince lesson, and three metrics lost to it). The filter can only produce that if a
