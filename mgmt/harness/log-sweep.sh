@@ -101,6 +101,7 @@ export QTEST_VM="$VM"
 source mgmt/harness/vmlock.sh; vm_lock "$VM"
 source mgmt/harness/run-lib.sh; job_init log-sweep
 source .claude/skills/win-guest-e2e/e2e-lib.sh      # _q: bounded call, rc in QRC, stderr in QERR
+source mgmt/harness/primitives.sh                   # clock_correct: the one synctime door
 
 BASELINE="${LOGSWEEP_BASELINE:-mgmt/harness/log-sweep-baseline.json}"
 [ -f "$BASELINE" ] || result 3 DATA "FAIL  baseline $BASELINE is missing - nothing to compare against"
@@ -121,8 +122,11 @@ st=$(_q 25 ./tools/qtest state | grep -aoE 'power_state=[A-Za-z]+' | head -1)
 # kept as presync_skew_s (logs/context.json -> report.json context.guest_clock -> the summary's CLOCK line). Only
 # then is this qube's clock pushed in, so the collector's `nowutc` - what the analyzer's clockskew check reads -
 # agrees with --host-utc, and that check fails only when the sync did not take. A clock that cannot be read is
-# missing data, and missing data fails. The raw guest answers are kept (clock-presync.txt, clock-sync.txt): guest
-# output is data, parsed by shape, never trusted.
+# missing data, and missing data fails. The raw guest answer is kept for the PRE-sync read
+# (clock-presync.txt): guest output is data, parsed by shape, never trusted. clock-sync.txt holds
+# clock_correct's own CLOCKCORRECT line instead of a raw qtest answer, because the sync now goes
+# through the sealed primitive and the primitive discards synctime's stdout - the instant in that
+# line is the one it verified against this host, which is the fact this file needs.
 ISO_RE='^2[0-9]{3}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z'
 t0=$(date -u +%s.%N)
 _q 60 ./tools/qtest ps "(Get-Date).ToUniversalTime().ToString('o')" > "$OUT/clock-presync.txt"   # GUARD:presyncread
@@ -134,9 +138,18 @@ hmid=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.3f", (a+b)/2}')      # the hos
 PRESYNC_HOST_UTC=$(date -u -d "@$hmid" +%Y-%m-%dT%H:%M:%SZ)
 PRESYNC_SKEW_S=$(awk -v g="$gsec" -v h="$hmid" 'BEGIN{printf "%+.0f", g-h}')
 log "clock: guest $PRESYNC_GUEST_UTC, host $PRESYNC_HOST_UTC, pre-sync skew $PRESYNC_SKEW_S s"
-_q 120 ./tools/qtest synctime > "$OUT/clock-sync.txt"   # GUARD:synctime
-POSTSYNC_GUEST_UTC=$(grep -aoE "$ISO_RE" "$OUT/clock-sync.txt" | head -1)
-log "clock: synced, guest now ${POSTSYNC_GUEST_UTC:-no answer (qtest rc=$QRC)}"
+# THROUGH THE ONE DOOR. clock_correct (mgmt/harness/primitives.sh) is the single synctime +
+# skew-check entry point. Until 2026-10-27 this file called `qtest synctime` itself and read the
+# postsync instant out of that call's own output - a SECOND implementation of the sealed primitive,
+# which is what plan step 9 removes. The PRE-sync read above stays here: it is a finding about the
+# boot, taken before any correction, and the primitive deliberately does not produce it.
+clock_correct "$VM" "${LOGSWEEP_MAX_SKEW_S:-120}" > "$OUT/clock-sync.txt" 2>&1 \
+  || log "[WARN] clock_correct did not verify $VM's clock - see $OUT/clock-sync.txt"   # GUARD:synctime
+# ITS LINE IS "CLOCKCORRECT vm=... guest=<utc> skew=...", so the instant is NOT at line start and
+# $ISO_RE - which is anchored ^ - cannot see it. Read the named field, not the bare shape.
+POSTSYNC_GUEST_UTC=$(grep -aoE 'guest=2[0-9]{3}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z' \
+  "$OUT/clock-sync.txt" | head -1 | cut -d= -f2)
+log "clock: synced through clock_correct, guest now ${POSTSYNC_GUEST_UTC:-no answer}"
 
 # 2. pull (two attempts: a transfer that does not verify is retried once, then FAILS)
 verified=""
