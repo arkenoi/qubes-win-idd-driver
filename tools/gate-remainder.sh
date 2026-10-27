@@ -100,6 +100,7 @@ fi
 # Only a suite that RAN and PASSED is recorded. A suite gate-scope does not require is skipped and
 # is never recorded either.
 PASSED=""; FAILED=""; SKIPPED=""; INTENDED=""
+REPAIRED=""   # subjects make_candidate has already re-upgraded in THIS run (repair once, then refuse)
 
 # SETTLE THE RIG BETWEEN SUITES. Measured 2026-10-09, first non-dry run: toast-hold-test was
 # REFUSED because win11-acc was still Running from the suites before it ("REFUSED: these are not
@@ -170,6 +171,68 @@ else { Write-Output "RUNSHA none" }' | iconv -f UTF-8 -t UTF-16LE | base64 -w0)
   fi
   say "    $v runs the candidate agent ${got:0:16}"
   return 0
+}
+# THE SUBJECT THIS SCRIPT CONSUMES, THIS SCRIPT RE-MAKES. The LAST step below installs the injector
+# build over $VM11 - deliberately, which is why everything that grades the RELEASE runs before it -
+# so after any complete run the subject no longer runs the candidate. The next invocation then
+# refused on this gate's OWN leftovers. MEASURED 2026-10-27, run e323a7000a9d: gate-preflight AND
+# log-sweep both died with "win11-acc runs gui-agent 5df949d5388e535b but the candidate is
+# 911bdd8f2e046516" - 5df949d5 being the injector build this gate had installed at 05:42 of the
+# preceding run - and failproof-faultinject aborted with "the subject is dirty". Four of that run's
+# six failures were that one fact, and none of them was about the product.
+# THE DEFECT WAS NOT A FORGOTTEN STEP, IT WAS A SCRIPT THAT DID NOT SELF-CONTAIN ITS CRITERIA: it
+# knew it had overwritten the subject and it knew the next run needs a candidate, and reconciled
+# neither - it printed a refusal and left the preparation to whoever ran it. So a mismatch is
+# REPAIRED here instead of refused, once per subject per run, with the SAME committed short cycle
+# the injector step uses (quick-upgrade over the golden - .claude/skills/rig-cycle; no procedure is
+# invented here). Only a repair that fails, or a subject that is still not the candidate after one,
+# refuses - and that refusal is now about the guest, not about this script's own last step.
+make_candidate() {    # make_candidate <vm> - rc 0 = the guest runs the candidate agent NOW
+  local v="$1"
+  assert_candidate "$v" && return 0
+  if [ "$DRY" = 1 ]; then
+    echo "INTEND[dry] make_candidate: quick-upgrade $v to the package under test over $OS11" | tee -a "$LOG"
+    return 0
+  fi
+  case " $REPAIRED " in
+    *" $v "*)
+      say "    REFUSING: $v was brought to the candidate once already in this run and still is not it"
+      return 2 ;;
+  esac
+  # REPAIR ONLY WHAT THIS GATE ITSELF BROKE. A mismatch has two causes and they are not the same
+  # fact: the subject carries the INJECTOR build this script installed (ours, and the next run's
+  # problem is our own last step), or it carries some OTHER build - which is the fe4337174ba8 case
+  # the header above is about, a caller handing over the wrong guest, and that must still refuse
+  # loudly instead of being silently overwritten. The discriminator is the injector's own banner:
+  # only a fault-injection build can write `QGAFAULT-INIT build=QGA-FAULT-INJECTION:on`
+  # (agent/gui-agent/faultinject.c; mgmt/harness/failproof-faultinject.sh verifies the build from
+  # that same line, and mgmt/harness/error-ledger.txt accounts for it on the same grounds).
+  # CAPTURED, NOT PIPED INTO grep -q (lint L23, and my own note from 2026-10-14): grep's early exit
+  # SIGPIPEs the qrexec client mid-connect, the guest logs QGAVCHANFAIL request dropped, and under
+  # pipefail the status is 141 - which here would read as "not the injector build" and refuse a
+  # subject this gate could have repaired.
+  local fimark
+  fimark=$(QTEST_VM="$v" timeout 240 "${QTEST_BIN:-tools/qtest}" run \
+             'cmd /c findstr /s /c:"QGAFAULT-INIT build=QGA-FAULT-INJECTION:on" "Q:\Qubes Logs\gui-agent*.log"' \
+             2>/dev/null | tr -d '\r')
+  if ! printf '%s' "$fimark" | command grep -aoF 'QGA-FAULT-INJECTION:on' >/dev/null; then
+    say "    REFUSING: $v runs neither the candidate nor this gate's injector build, so it is not a"
+    say "              subject this gate consumed - it is the wrong guest, and overwriting it would"
+    say "              hide exactly what the fe4337174ba8 run revealed. Name the right --vm11, or"
+    say "              upgrade it: mgmt/harness/quick-upgrade.sh $SETUP $v $OS11"
+    return 2
+  fi
+  say "    $v carries the INJECTOR build this gate installed on its last run - that is ours to undo"
+  REPAIRED="$REPAIRED $v"
+  say "    $v does not run the candidate - upgrading it to the package under test (quick-upgrade over $OS11)"
+  if ! QU_OUT="$WORK/make-candidate-$v" bash mgmt/harness/quick-upgrade.sh "$SETUP" "$v" "$OS11" \
+         >>"$WORK/make-candidate-$v.out" 2>&1; then
+    say "    REFUSING: could not upgrade $v to the package under test - see $WORK/make-candidate-$v.out"
+    return 2
+  fi
+  say "    $v upgraded to the package under test"
+  ready "$v" || return 2
+  assert_candidate "$v"
 }
 # A DRY RUN HAS NO RESULT TO BUCKET. run_it's dry branch prints its intent and returns 0, so
 # `note $?` used to read that 0 as a pass: `--dry` put EVERY suite in PASSED and exited 0 -
@@ -253,7 +316,7 @@ ready() {             # ready <vm>
 
 if need gate-preflight; then
   settle "$VM11"; ready "$VM11"
-  if ! assert_candidate "$VM11"; then
+  if ! make_candidate "$VM11"; then
     say "FAIL  gate-preflight (subject is not the candidate)"; FAILED="$FAILED gate-preflight"
   else
   # <vm> <hex-bits>: the preflight bit-mask the suite documents; 0 exercises the no-fault path.
@@ -338,7 +401,7 @@ else SKIPPED="$SKIPPED toast-hold-test"; fi
 
 if need log-sweep; then
   settle "$VM11"; ready "$VM11"
-  if ! assert_candidate "$VM11"; then
+  if ! make_candidate "$VM11"; then
     say "FAIL  log-sweep (subject is not the candidate)"; FAILED="$FAILED log-sweep"
   else
   # LAST, deliberately: it reads what every suite above wrote into the guest's logs.
@@ -406,6 +469,10 @@ FIMARK
         if QU_OUT="$WORK/fi-install" bash mgmt/harness/quick-upgrade.sh "$FISETUP" "$VM11" "$OS11" \
              >>"$WORK/fi-install.out" 2>&1; then
           say "    injector build installed"; fi_installed=1
+          # SAID OUT LOUD because it is the state the next run inherits: from here on $VM11 is
+          # NOT the release build, and make_candidate above is what puts it back.
+          say "    NOTE: $VM11 now carries the INJECTOR build, not the release - the next run of"
+          say "          this gate re-makes it (make_candidate), it is not a guest to grade a release on"
         else
           say "    FAIL could not install the injector tree - see $WORK/fi-install.out"
         fi
