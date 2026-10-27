@@ -35,32 +35,31 @@ script can, and does.
 - Vendor install media available to the existing reprovision path (`mgmt/reprovision-usb.sh` or the documented equivalent that produces a Halted pristine base).
 - For a QWT golden: an N-1 release setup tree (install.cmd + MANIFEST.json at root) available on disk. If missing, obtain it from CI artifacts of the previous release; do not build a new one for this purpose.
 
-## Sequence
+## The command
 
-**1. Pristine bases, if they are the thing that is missing.**
-`golden_recreate.sh` does *not* create a base from vendor media — it requires `--base` to already
-exist and be Halted. Producing one is reprovisioning, a different operation with its own committed
-script. Use the existing reprovision path to produce a Halted `win10-base` / `win11r-base`, confirm
-each is Halted and tagged `win-idd-testbed` (paste `qvm-ls` output), and do not boot them after
-creation except as the reprovision script itself requires.
-
-**2. Everything else is one command, once per golden.**
+One command, once per golden. There is no step 1 to do by hand.
 
 ```
-mgmt/harness/golden_recreate.sh --golden <name> --base <pristine-base> [--setup <N-1-setup-tree>]
+mgmt/harness/golden_recreate.sh --golden <name> --base <pristine-base> \
+    [--setup <N-1-setup-tree>] [--reprovision <iso-loop> <stick-loop>]
 ```
 
 - With `--setup`, the QWT golden is built from the base via `seal-qwt-golden.sh`, then sealed and verified.
 - Without `--setup`, it reseals `<base>` itself, and `<golden>` must equal `<base>`.
-- It refuses, rather than proceeding, when: no Jev receipt carries `recreate_goldens`; the base is absent or not Halted; the golden already verifies against its seal; or a reseal would abandon revisions already gone without `GOLDEN_RESEAL_REASON`.
+- With `--reprovision`, the pristine base is **built here** via `mgmt/reprovision-usb.sh` with `PRISTINE=1` when it is absent or not Halted — after the golden-verify gate, so an intact golden never costs a reprovision. That script asserts sole guest, tags the vm `win-idd-testbed` and leaves it Halted.
+- It refuses, rather than proceeding, when: no Jev receipt carries `recreate_goldens`; the base is absent or not Halted and no `--reprovision` was given; the golden already verifies against its seal; or a reseal would abandon revisions already gone without `GOLDEN_RESEAL_REASON`.
 - It never starts a golden. `tools/hooks/golden-boot-gate.sh` refuses a start regardless.
-- Exit: 0 sealed and VERIFIED (or already was); 1 a precondition refused; 2 usage; 3 the build or the verify failed.
+- Exit: 0 sealed and VERIFIED (or already was); 1 a precondition refused; 2 usage; 3 the build, the reprovision or the verify failed.
 
-Do not run `mgmt/golden.sh seal`, `mgmt/golden.sh verify` or `seal-qwt-golden.sh` by hand for this
-purpose. The script drives all three in order and attaches the refusals; driving them separately is
-the second recreate path step 9 removes.
+Do not run `mgmt/golden.sh seal`, `mgmt/golden.sh verify`, `seal-qwt-golden.sh` or
+`reprovision-usb.sh` by hand for this purpose. The script drives them in order with the refusals
+attached; driving them separately is the second recreate path step 9 removes.
 
-**3.** Only after the golden verifies may short-cycle work resume.
+Only after the golden verifies may short-cycle work resume.
+
+**What is deliberately NOT scripted:** obtaining the vendor ISO and the N-1 release setup tree, and
+putting them on loop devices. That is the one non-deterministic step, and it is excluded on
+purpose — see Preconditions. Everything downstream of it is the command above.
 
 ## Gate exception
 When no golden exists, there is no short-cycle alternative. A Jev call whose state contains the

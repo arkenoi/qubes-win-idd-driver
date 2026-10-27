@@ -5,7 +5,14 @@
 #
 #   mgmt/harness/golden_recreate.sh --golden <name> --base <pristine-base> [options]
 #     --golden <name>     the golden to produce/reseal (e.g. win11r-qwt, or a base to reseal)
-#     --base <name>       the PRISTINE base it is built from (must be present and Halted)
+#     --base <name>       the PRISTINE base it is built from (present and Halted, or built here
+#                         when --reprovision is given)
+#     --reprovision <iso-loop> <stick-loop>
+#                         build the base first, via mgmt/reprovision-usb.sh with PRISTINE=1. Only
+#                         runs when the base is absent or not Halted, and only AFTER the golden
+#                         verify gate, so an intact golden never costs a reprovision. The loops
+#                         are the caller's: obtaining the ISO is the one non-deterministic step
+#                         and is deliberately not done here.
 #     --setup <dir>       an N-1 RELEASE setup tree (install.cmd + MANIFEST.json at root). With it,
 #                         the QWT golden is built by seal-qwt-golden.sh; without it, this reseals
 #                         <base> itself and <golden> must equal <base>.
@@ -36,7 +43,7 @@ HERE="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$HERE" || exit 2
 # shellcheck source=/dev/null
 . "$HERE/mgmt/harness/primitives.sh"
 
-GOLDEN="" BASE="" SETUP="" NOTE="" OUT="scratchpad/golden-recreate"
+GOLDEN="" BASE="" SETUP="" NOTE="" OUT="scratchpad/golden-recreate" ISOLOOP="" STICKLOOP=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --golden) GOLDEN="${2:?}"; shift 2 ;;
@@ -44,10 +51,16 @@ while [ $# -gt 0 ]; do
     --setup)  SETUP="${2:?}";  shift 2 ;;
     --note)   NOTE="${2:?}";   shift 2 ;;
     --out)    OUT="${2:?}";    shift 2 ;;
-    *) echo "usage: $0 --golden <name> --base <pristine-base> [--setup <dir>] [--note <text>] [--out <dir>]"; exit 2 ;;
+    # THE BASE STEP IS A FLAG, NOT A PARAGRAPH. Until 2026-10-27 this script required --base to
+    # already exist, and producing it was step 1 of a PROSE procedure - the one part of the
+    # sequence a human still drove by hand. reprovision-usb.sh is fully parameterised and
+    # deterministic given the two loop devices, so the only genuinely non-deterministic part is
+    # getting the ISO onto disk, which this does not do and never did.
+    --reprovision) ISOLOOP="${2:?--reprovision <iso-loop> <stick-loop>}"; STICKLOOP="${3:?--reprovision needs BOTH loops}"; shift 3 ;;
+    *) echo "usage: $0 --golden <name> --base <pristine-base> [--setup <dir>] [--reprovision <iso-loop> <stick-loop>] [--note <text>] [--out <dir>]"; exit 2 ;;
   esac
 done
-[ -n "$GOLDEN" ] && [ -n "$BASE" ] || { echo "usage: $0 --golden <name> --base <pristine-base> [--setup <dir>]"; exit 2; }
+[ -n "$GOLDEN" ] && [ -n "$BASE" ] || { echo "usage: $0 --golden <name> --base <pristine-base> [--setup <dir>] [--reprovision <iso-loop> <stick-loop>]"; exit 2; }
 [ -n "$SETUP" ] || [ "$GOLDEN" = "$BASE" ] \
   || { echo "REFUSE: --golden $GOLDEN != --base $BASE and no --setup tree was given, so there is nothing to install between them"; exit 2; }
 
@@ -71,10 +84,18 @@ say "receipt: $RCPT ($(wc -c < "$RCPT") bytes, marker present)"
 # TAGS is never requested from here.
 vstate(){ qvm-ls --raw-data --fields NAME,STATE "$1" 2>/dev/null | awk -F'|' -v v="$1" '$1==v{print $2}'; }
 
+NEED_REPROV=0
 bstate="$(vstate "$BASE")"
-[ -n "$bstate" ] || die "base $BASE does not exist - there is no pristine source to build from"
-[ "$bstate" = Halted ] || die "base $BASE is $bstate, not Halted - a running base is not pristine"
-say "base $BASE is present and Halted"
+if [ -z "$bstate" ] || [ "$bstate" != Halted ]; then
+  # WITHOUT --reprovision this is exactly the old refusal. With it, the base is BUILT below -
+  # after the golden-verify gate, so an intact golden never costs a reprovision.
+  [ -n "$ISOLOOP" ] \
+    || die "base $BASE ${bstate:+is $bstate, not Halted}${bstate:-does not exist} - there is no pristine source to build from. Pass --reprovision <iso-loop> <stick-loop> to build it here"
+  NEED_REPROV=1
+  say "base $BASE ${bstate:-is absent} - it will be reprovisioned from /dev/$ISOLOOP + /dev/$STICKLOOP"
+else
+  say "base $BASE is present and Halted"
+fi
 
 gstate="$(vstate "$GOLDEN")"
 if [ -n "$gstate" ] && [ "$gstate" != Halted ]; then
@@ -116,6 +137,26 @@ start_ticker(){ shot_ticker "$1" & TICKER=$!; say "shot ticker pid=$TICKER every
 # The pid is RECORDED and killed by that pid. Never a pattern scan into kill.
 stop_ticker(){ [ -n "$TICKER" ] && kill "$TICKER" 2>/dev/null; TICKER=""; }
 trap stop_ticker EXIT
+
+# --- the pristine base, when it is the thing that is missing -------------------------------------
+# THIS USED TO BE STEP 1 OF A PROSE PROCEDURE - the last part of a recreate a human drove by hand,
+# which is what plan step 9 removes. PRISTINE=1 is what makes it an ST0 (QWT-free) image:
+# reprovision-usb.sh then treats a settled DESKTOP as success rather than qrexec, which such an
+# image never gets. That script asserts sole guest, takes its own flock, tags the vm
+# win-idd-testbed and leaves it Halted. It does NOT fetch media: the two loop devices are the
+# caller's, and obtaining an ISO is the one genuinely non-deterministic step, excluded on purpose.
+if [ "$NEED_REPROV" = 1 ]; then
+  say "reprovisioning the pristine base $BASE from /dev/$ISOLOOP + /dev/$STICKLOOP"
+  start_ticker "$BASE"
+  if ! PRISTINE=1 mgmt/reprovision-usb.sh "$BASE" "$ISOLOOP" "$STICKLOOP" 2>&1 | tee -a "$LOG"; then
+    stop_ticker; die "reprovision-usb.sh failed for $BASE - see $LOG" 3
+  fi
+  stop_ticker
+  bstate="$(vstate "$BASE")"
+  [ "$bstate" = Halted ] \
+    || die "after reprovision, base $BASE is '${bstate:-absent}' and not Halted - a base that is not Halted is not pristine" 3
+  say "base $BASE reprovisioned and Halted"
+fi
 
 # --- build ---------------------------------------------------------------------------------------
 : "${NOTE:=recreated $(date -u +%F) by golden_recreate.sh from $BASE}"
