@@ -48,10 +48,21 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# SOURCED HERE, NOT BELOW: OUT is scoped to attempt_id, so the primitives must be loaded before
+# the assignment rather than after it.
+PRIMITIVES_LIB="${PRIMITIVES_LIB:-mgmt/harness/primitives.sh}"
+# shellcheck disable=SC1091
+. "$PRIMITIVES_LIB"
 GOLDEN_SH="${GOLDEN_SH:-mgmt/golden.sh}"
 CLONE_SH="${CLONE_SH:-mgmt/clone-guest.sh}"
-OUT="${LOGVOL_SMOKE_OUT:-$HOME/qwt-logvol-smoke/$(date -u +%m%d-%H%M%S)}"
-mkdir -p "$OUT" || exit 2
+OUT="${LOGVOL_SMOKE_OUT:-$HOME/qwt-logvol-smoke/$(attempt_id)}"
+# THE GATE, NOT DECORATION. The outdir above is scoped to attempt_id rather than a fresh clock
+# read, so a continuation of the same run lands in the SAME directory and is REUSED, while one
+# left by a previous run carries a different ATTEMPT-<id> marker and is REFUSED in one line.
+# Owner: "we may reuse from what is continuation of a campaign. we should NEVER contaminate
+# with previous one." Under the old $(date -u) default the dir was always brand new, so a gate
+# there could never fire - it would have been decoration.
+attempt_dir "$OUT" || exit 2
 say(){ printf '%s %s\n' "$(date -u '+%H:%M:%S')" "$*" | tee -a "$OUT/smoke.log"; }
 verdict(){ printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$OUT/verdict.tsv"; say "$1  $2 -- $3"; }
 
@@ -63,9 +74,6 @@ verdict(){ printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$OUT/verdict.tsv"; say "$1  
 # moved into tools/tests/product-suites.txt, recorded here as "# PROMOTED: <suite>") or deleted.
 # tools/tests/run-offline-suites.sh refuses to run while it is neither.
 SMOKE_SINCE_UTC="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-PRIMITIVES_LIB="${PRIMITIVES_LIB:-mgmt/harness/primitives.sh}"
-# shellcheck disable=SC1091
-. "$PRIMITIVES_LIB"
 LOGVOL_LIB="${LOGVOL_LIB:-mgmt/harness/logvol-lib.sh}"
 SHUTDOWN_LIB="${SHUTDOWN_LIB:-mgmt/harness/shutdown-lib.sh}"
 VMLOCK_LIB="${VMLOCK_LIB:-mgmt/harness/vmlock.sh}"

@@ -85,7 +85,17 @@ AGENT_PATH='C:\Program Files\Qubes Tools\bin\gui-agent.exe'
 # environment a registered field report must be re-tested on with no upgrade path at all.
 case "$OS" in win[0-9]*) ;; *) echo "[ERROR] FATAL: os must look like win<version> (got '$OS'); the golden \"$OS-qwt\" must exist and pass its seal check"; exit 3 ;; esac
 
-OUT="${QU_OUT:-$HOME/qwt-quick-upgrade}/$SUBJECT-$(date -u +%Y%m%d-%H%M%S)"; mkdir -p "$OUT"
+# SOURCED HERE, NOT AT THE LOGVOL BLOCK BELOW: OUT is scoped to attempt_id and gated, so the
+# primitives must be loaded before the assignment rather than fifty lines after it.
+source mgmt/harness/primitives.sh   # the six sealed primitives: clock_correct, fresh_cell_log, toolstack_accept, ...
+OUT="${QU_OUT:-$HOME/qwt-quick-upgrade}/$SUBJECT-$(attempt_id)"
+# THE GATE, NOT DECORATION. The outdir above is scoped to attempt_id rather than a fresh clock
+# read, so a continuation of the same run lands in the SAME directory and is REUSED, while one
+# left by a previous run carries a different ATTEMPT-<id> marker and is REFUSED in one line.
+# Owner: "we may reuse from what is continuation of a campaign. we should NEVER contaminate
+# with previous one." Under the old $(date -u) default the dir was always brand new, so a gate
+# there could never fire - it would have been decoration.
+attempt_dir "$OUT" || exit 2
 R="$OUT/quick-upgrade.log"; : > "$R"
 # EVERY LINE DECLARES ITS LEVEL. MEASURED 2026-10-16: sweep-gate reported
 # `lines=65 with_declared_level=6 without=59 third_party=0` on this log - it could judge 9% of its
@@ -133,7 +143,6 @@ source mgmt/harness/e2e-wait.sh
 # the guest hangs, qrexec is dead and nothing can be asked of it, QWT's own per-module logs are on a
 # volume this qube reads with mtools - guest running, wedged or halted, nothing detached. Until this
 # wiring the library existed and NO harness called it, so a wedged cell still lost its logs.
-source mgmt/harness/primitives.sh   # the six sealed primitives: clock_correct, fresh_cell_log, toolstack_accept, ...
 source mgmt/harness/logvol-lib.sh
 LOGVOL_IMG=""
 

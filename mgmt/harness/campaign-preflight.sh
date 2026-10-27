@@ -33,13 +33,16 @@ if [ "${1:-}" = --probe-primitives ]; then
     . mgmt/harness/vmlock.sh 2>/dev/null || true
     command -v vm_lock >/dev/null 2>&1 && vm_lock "$PROBE_VM"
     _pf_rc=0
-    _pf_out="${PROBE_OUT:-scratchpad/primitive-probe}"
+    # SCOPED TO THE ATTEMPT. This defaulted to a FIXED path, so every probe run wrote over the
+    # last and no reader could tell which run an artefact belonged to - the Step 10 defect, live,
+    # in the one script whose job is to prove the primitives work.
+    _pf_out="${PROBE_OUT:-scratchpad/primitive-probe/$(attempt_id)}"
     echo "--- probing the sealed primitives against $PROBE_VM (out: $_pf_out)"
     # Single-VM query by name: a bare qvm-ls fires denied admin calls into the owner's dom0 journal.
     _pf_state=$(qvm-ls --raw-data --fields NAME,STATE "$PROBE_VM" 2>/dev/null \
                 | awk -F'|' -v n="$PROBE_VM" '$1==n{print $2}')
     [ -n "$_pf_state" ] || { echo "REFUSE: $PROBE_VM does not exist" >&2; exit 11; }
-    mkdir -p "$_pf_out"
+    attempt_dir "$_pf_out" || return 1
     if [ "$_pf_state" != Running ]; then
         # A halted subject is BOOTED: clock_correct and package_identity read the guest, so a
         # primitive exercised only against a halted domain has not been exercised at all. Start and

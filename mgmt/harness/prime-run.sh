@@ -388,7 +388,14 @@ else
     exit 2
 fi
 
-OUT="$HERE/evidence/prime-$JOB-$CHURN-$(date -u +%Y%m%d-%H%M%S)"; mkdir -p "$OUT"
+OUT="$HERE/evidence/prime-$JOB-$CHURN-$(attempt_id)"
+# THE GATE, NOT DECORATION. The outdir above is scoped to attempt_id rather than a fresh clock
+# read, so a continuation of the same run lands in the SAME directory and is REUSED, while one
+# left by a previous run carries a different ATTEMPT-<id> marker and is REFUSED in one line.
+# Owner: "we may reuse from what is continuation of a campaign. we should NEVER contaminate
+# with previous one." Under the old $(date -u) default the dir was always brand new, so a gate
+# there could never fire - it would have been decoration.
+attempt_dir "$OUT" || exit 2
 log "evidence -> $OUT"
 
 # --- THE SECONDARY LOG VOLUME ------------------------------------------------------------------
