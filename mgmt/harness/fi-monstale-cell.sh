@@ -144,6 +144,6 @@ fi
 # writes an error line, so the sweep needs its own clean boot - with the knob removed by the trap.
 say "--- clean boot + sweep"
 restore >/dev/null 2>&1
-bash mgmt/harness/clean-boot-sweep.sh "$VM" "scratchpad/sweep-$VM-after-fi-monstale"; srv=$?
+bash mgmt/harness/clean-boot-sweep.sh "$VM" "scratchpad/sweep-$VM-after-fi-monstale-$(attempt_id)"; srv=$?
 say "clean-boot-sweep rc=$srv"
 exit $rc

@@ -202,6 +202,6 @@ say "      notice was produced - measured on a guest, with the condition present
 # in a deliberately reaped task, so the sweep takes its own clean boot - clean-boot-sweep.sh does
 # that and delegates to log-sweep.
 say "--- clean boot + sweep"
-bash mgmt/harness/clean-boot-sweep.sh "$VM" "scratchpad/sweep-$VM-after-updater-cell"; srv=$?
+bash mgmt/harness/clean-boot-sweep.sh "$VM" "scratchpad/sweep-$VM-after-updater-cell-$(attempt_id)"; srv=$?
 say "clean-boot-sweep rc=$srv"
 exit 0

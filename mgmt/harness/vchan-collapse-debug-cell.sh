@@ -73,5 +73,7 @@ say "evidence: scratchpad/faildbg.txt"
 # runs at LogLevel 4 with induced failures, so the sweep needs its own clean boot - which is what
 # clean-boot-sweep.sh does, with the guest's logs archived first.
 say "--- clean boot + sweep"
-bash mgmt/harness/clean-boot-sweep.sh "$VM" "scratchpad/sweep-$VM-after-debug-cell"; srv=$?
+declare -F attempt_id >/dev/null 2>&1 \
+  || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh"   # attempt_id for the sweep outdir
+bash mgmt/harness/clean-boot-sweep.sh "$VM" "scratchpad/sweep-$VM-after-debug-cell-$(attempt_id)"; srv=$?
 say "clean-boot-sweep rc=$srv"

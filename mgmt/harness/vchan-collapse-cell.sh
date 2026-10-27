@@ -113,6 +113,8 @@ printf '%s\n' "$SETUP" > scratchpad/last-setup.txt   # named for the cell that g
 # creates failures, so the sweep needs its own boot with the logs archived first - which is exactly
 # what clean-boot-sweep.sh does, reading the installed tree from the file just written.
 say "--- clean boot + sweep, so this cell reports on the error log it leaves behind"
-bash mgmt/harness/clean-boot-sweep.sh "$VM" "scratchpad/sweep-$VM-after-collapse-cell"; srv=$?
+declare -F attempt_id >/dev/null 2>&1 \
+  || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh"   # attempt_id for the sweep outdir
+bash mgmt/harness/clean-boot-sweep.sh "$VM" "scratchpad/sweep-$VM-after-collapse-cell-$(attempt_id)"; srv=$?
 say "clean-boot-sweep rc=$srv"
 say "evidence: $DL/proof.txt  (installed tree recorded in scratchpad/last-setup.txt)"
