@@ -55,11 +55,30 @@ supervise.
 desktop switch gives you — a UAC prompt, a lock, the sign-in screen — at the moment capture starts.
 It now joins the switch-transient set the other such errors were already in.
 
-## Smaller
+## The agent stopped warning about its own instrumentation on a healthy guest
 
-* The pixel-copy ledger counted copy *attempts* against source counters that count *successes*, so
-  every refused copy read as an uninstrumented site. 4.3.37's single acceptance breach was this.
-* `dom0-sends-capture.ps1` read a gitignored helper, so it worked on exactly one machine.
+The agent keeps a per-window ledger of where a window's pixels came from, and checks the invariant
+`copies <= attributed`. The two sides were not counting the same event: the copy counter increments
+on *entry* to a copy primitive — it has to, because it is what answers "did the pass run at all" —
+while the six attribution counters increment only when pixels actually move. So each of the nine
+paths that enter a primitive and then refuse on its own precondition read as an uninstrumented copy
+site, and the agent logged
+
+    QGALEDGERGAP ... copies=4 attributed=3 unattributed=1, a pixel copy site is not instrumented
+
+on a guest where every site was in fact instrumented. That warning was the single product breach of
+4.3.37's acceptance.
+
+A refusal is now counted as the third thing that happens: one helper stands in for the bare
+`return FALSE` at all nine sites, the broker primitive's result is captured so a refused frame is
+counted as a refusal rather than a frame, and the invariant becomes `copies <= attributed + refused`
+with `refused=` printed on both lines so the difference is readable instead of inferred. Nothing
+about which pixels reach you changes — this was a false alarm, and it is gone.
+
+**Measured on these bytes:** across the 413 log files of this campaign, `QGALEDGERGAP` does not
+appear once, while the ledger's own emit and summary lines appear normally (`QGALEDGER` ×4,
+`QGALEDGERSUM` ×77). Absence was the measurement this fix owed, because the warning is a
+`LogWarning` and so needs no debug build to settle.
 
 ## Nothing else changed
 
