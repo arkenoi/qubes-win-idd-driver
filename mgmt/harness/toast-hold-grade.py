@@ -32,7 +32,9 @@ THE JOIN. toastfire's title is the per-toast identity: the grader computes the S
 compute (TiNormalize + TiHashUnits, toastident.h - ported below and checked in --selftest against vectors produced
 by compiling toastident.h with gcc) and finds the bridge's `HOLD id=N ... t=<hash>` record; the agent's
 QGATOASTHOLD lines carry `id=N` (and `t=<hash>` on the hold-start / content-changed / fail-open lines), which
-names the banner HWND; QGAPROTO MAP / `Unmapping window` lines for that HWND give its mapped state over time.
+names the banner HWND; QGAPROTO MAP / DESTROY and the hold's own `unmapped a MAPPED banner` line for that HWND
+give its mapped state over time (NOT `Unmapping window`, which is LogDebug and absent at the shipped level - see
+is_unmap(); an ordinary unmap that destroys nothing is invisible at level 3, and a banner always destroys).
 On a package WITHOUT the hold (the control) there are no HOLD lines: the id comes from `SENT ... title='<slug>'`
 or from the `skip id=N aumid=<toastfire aumid>` lines in fire order, the banner window from the agent's
 QGAHELDDEFER class=Windows.UI.Core.CoreWindow / QGAHELDMAP toast=1 / `toast card in` lines, and "mapped" means a
@@ -274,6 +276,26 @@ class Ev:
 
     def key(self):
         return (self.t, self.idx)
+
+
+def is_unmap(e: "Ev") -> bool:
+    """Did this line take a MAPPED banner off dom0's screen?
+
+    THE UNMAP THE SHIPPED LOG LEVEL CARRIES IS NOT `Unmapping window`. send.c:819 writes that one at
+    LogDebug, and has since 2026-10-08 (owner: "ok for debug but not for regular operation"); the
+    product ships LogLevel 3, so a guest capture holds ZERO of them. The line the unmap DOES write at
+    INFO is main.c:10058, immediately after SendWindowUnmap, for exactly this case - the hold taking
+    back a banner it had already mapped (a pre-emption, or new content held for its own verdict).
+
+    MEASURED, run 40407378739 on win11r-thold 2026-10-27: the hold unmapped the mapped banner at
+    04:57:49.339 (both the QGATOASTPREEMPT line and main.c's) and `grep -c 'Unmapping window'` over the
+    whole capture is 0. So mapped_timeline never left MAP, and id=13 - forwarded, and never mapped -
+    graded DOUBLE=flash on mapped_at_exam=1, 4.47 s AFTER the window came down. The grader's own
+    self-test did not catch it because its `preempt_ok` fixture hand-wrote the DEBUG line beside the
+    pre-emption, i.e. a capture the product cannot produce.
+
+    The DEBUG line stays accepted, for a capture taken at level 4."""
+    return e.kind == "UNMAP" or (e.kind == "TH" and e.kv.get("state") == "unmapped-mapped")
 
 
 def parse_agent(lines: List[str], offset: dt.timedelta, tz: Optional[dt.tzinfo] = None) -> List[Ev]:
@@ -616,7 +638,8 @@ class Grader:
 
     # -- helpers over events
     def mapped_timeline(self, hwnd: str) -> List[Ev]:
-        return sorted([e for e in self.agent if e.hwnd == hwnd and e.kind in ("MAP", "UNMAP", "DESTROY")], key=Ev.key)
+        return sorted([e for e in self.agent if e.hwnd == hwnd
+                       and (e.kind in ("MAP", "DESTROY") or is_unmap(e))], key=Ev.key)
 
     def mapped_at(self, hwnd: str, when: dt.datetime, idx: Optional[int] = None) -> bool:
         state = False
@@ -820,7 +843,7 @@ class Grader:
         late = [e for e in in_win if e.kind == "LATE"]
         mapped_at_exam = self.mapped_at(h, k_exam[0], k_exam[1])   # idx -1: the state just before the content arrived
         maps = [e for e in in_win if e.kind == "MAP"]
-        unmaps = [e for e in in_win if e.kind == "UNMAP"]
+        unmaps = [e for e in in_win if is_unmap(e)]
         preempts = [e for e in in_win if e.kind == "PREEMPT" and e.kv.get("what") == "unmapped"]
         mapped = mapped_at_exam or bool(maps)
         delay_ms = 0 if mapped_at_exam else (int((maps[0].t - t_exam).total_seconds() * 1000) if maps else None)
@@ -1370,7 +1393,8 @@ def selftest() -> int:
         nid, c = fx.hold_pub(1, s, "bridge")
         fx.a(5.0, f"QGATOASTHOLD hwnd=0x{H} content changed in place: new ident={c} s=1 t={title_hash_hex(s)} m=2 - held again")
         fx.a(5.05, f"QGATOASTHOLD hwnd=0x{H} state=suppress ident={c} id={nid} verdict=bridge held_ms=50 (forwarded to dom0)")
-        fx.a(5.3, f"Unmapping window 0x{H}")
+        # main.c:10058, not `Unmapping window` (LogDebug, absent at the shipped level - see is_unmap)
+        fx.a(5.3, f"UpdateWindowData: QGATOASTHOLD hwnd=0x{H} unmapped a MAPPED banner: the hold governs it again")
         fx.b(2, f"FWD_RTT guest_id={nid} seq=2 ms=11 ok=1")
         fx.b(2, f"HOLD id={nid} verdict=forwarded")
     g, r, cls = hold_case("S3ii-2", "DOUBLE", double_flash)
@@ -1383,7 +1407,10 @@ def selftest() -> int:
         fx.a(-1.9, f"QGAPROTO,msg=MAP,hwnd=0x{H},ovr=1,transient=0x0,style=0x0,ex=0x0,vis=1,w=396,h=152")
         nid, c = fx.hold_pub(1, s, "bridge")
         fx.a(1.2, f"QGATOASTPREEMPT hwnd=0x{H} unmapped: a bridge-bound or still-pending toast (id={nid}) is queued behind the displayed banner")
-        fx.a(1.2, f"Unmapping window 0x{H}")
+        # WHAT THE PRODUCT WRITES AT LogLevel 3. This fixture used to hand-write `Unmapping window 0x..`
+        # (send.c, LogDebug since 2026-10-08) and so passed on a capture no shipped guest can produce -
+        # which is why DOUBLE on a working pre-emption survived to the rig. See is_unmap().
+        fx.a(1.2, f"UpdateWindowData: QGATOASTHOLD hwnd=0x{H} unmapped a MAPPED banner: the hold governs it again")
         fx.a(5.0, f"QGATOASTHOLD hwnd=0x{H} content changed in place: new ident={c} s=1 t={title_hash_hex(s)} m=2 - held again")
         fx.a(5.05, f"QGATOASTHOLD hwnd=0x{H} state=suppress ident={c} id={nid} verdict=bridge held_ms=50 (forwarded to dom0)")
         fx.b(2, f"FWD_RTT guest_id={nid} seq=2 ms=11 ok=1")

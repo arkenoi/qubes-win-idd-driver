@@ -349,12 +349,21 @@ if need log-sweep; then
   # the dom0 desktop and ends on a photograph of one. Zero were the product reporting its own
   # failure. The summaries are literals in mgmt/harness/notify-errors-guest-test.sh (its gate check,
   # its ACTION/once-per-boot probes, the render witness trigger, and check 8's deferral probe).
-  # A DECLARATION IS NOT AN EXCUSE: log-sweep's declared_errors_unmatched fails a declaration that
-  # matches nothing, so if those suites stop firing these the declaration itself becomes a finding -
-  # and anything NOT matching still counts, which is what keeps a real product toast P1.
+  # A DECLARATION IS NOT AN EXCUSE: anything NOT matching still counts, which is what keeps a real
+  # product toast P1.
+  # TOLERATED, NOT CAUSED, AND THAT IS THE WHOLE CORRECTION. The discriminator is GUARANTEE, not who
+  # caused the line (mgmt/harness/log-sweep.sh, Jev 0.90): a caused declaration claims a stimulus was
+  # applied, so matching nothing is a breach. THIS GATE DOES NOT RUN notify-errors-guest-test - its
+  # suites are the six at the top of this file - so it applies no such stimulus and cannot guarantee
+  # one line of it. Whether $VM11 carries any depends on what ran on that subject before, which is a
+  # property of the caller's fixture, not of this run. MEASURED, run 40407378739 on win11-acc
+  # 2026-10-27: declared_errors_unmatched=1 with `matched: 0` failed log-sweep on the declaration
+  # alone, on a subject whose product wrote error_lines=0 - the same mistake matrix.sh records at its
+  # own three declarations ("as --declare-error it failed win10-appvm, a cell whose product wrote
+  # ZERO error lines"). The caused form belongs to whoever FIRES these, beside the suite that does.
   run_it log-sweep bash mgmt/harness/log-sweep.sh "$VM11" "$SINCE" "$WORK/log-sweep" \
-    --declare-error 'summary=(gate default check|acceptance probe|Render witness|deferproof-)' \
-                    'notifications the acceptance suites fire on purpose (notify-errors-guest-test and its deferral probe) - not the product reporting a failure'
+    --tolerate-error 'summary=(gate default check|acceptance probe|Render witness|deferproof-)' \
+                     'notifications the acceptance suites fire on purpose (notify-errors-guest-test and its deferral probe) - not the product reporting a failure. TOLERATED: this gate does not run that suite, so their absence proves nothing about the product'
   note $? log-sweep
   fi
 else SKIPPED="$SKIPPED log-sweep"; fi
