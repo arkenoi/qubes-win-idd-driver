@@ -91,6 +91,14 @@ contracts contradict each other**:
 Only the two R3 steps name a guest, so only they take `run.py`'s vmlock; folding the seal and
 verify steps into one invocation would put them inside a lock that today does not cover them.
 
+`st0-r3`'s visual confirmation is **not** inherently a human step. It is a pixel read, and a pixel
+read is automatable here — `tools/relay-pixel-match.py`, `tools/rnd-score.py` and `tools/winshot.py`
+already grade captures — just at lower confidence than an operator's eye. It is **unmechanised,
+not unmechanisable**: `protocol/not-mechanisable.json` holds 22 records and none of them names
+this step (the only pixel-adjacent one is D10, an open owner privacy ruling on whole-desktop
+fullshots). Treat the exit-3 contract as "a capture must be graded before this counts", not as
+"a person must look".
+
 Shown those contracts verbatim, Jev answered that a single invocation **cannot** carry them
 (1.00) and that these steps are a **different operation** from a recreate (0.91): a campaign
 building *fresh-named* goldens under per-step grading, not the recovery of a lost or drifted one.
