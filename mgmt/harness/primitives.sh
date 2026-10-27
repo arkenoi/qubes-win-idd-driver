@@ -122,6 +122,22 @@ fresh_cell_log(){
   if complete_once "$cell"; then printf '%s\n' "$cell"; return 0; fi
   attempt_open "$cell/cell.txt"
   printf 'vm %s\nsince %s\nlogvol %s\nreason %s\n' "$vm" "$since" "$img" "$reason" >> "$cell/cell.txt"
+  # THE PACKAGE TRAVELS; THE DIRECTORY MARKER DOES NOT. attempt_dir writes ATTEMPT-<id> at
+  # $cell, but collect-failure tars $cell/PACKAGE (`-C "$OUT" -T "$OUT/.members"`, :281) and
+  # excludes manifest.json from the member list, so the one artefact set that ever leaves this
+  # rig arrived naming no attempt at all. Stamping inside the package makes it a member of that
+  # tarball. collect-failure only mkdir -p's its outdir (:77) and never clears it, so a stamp
+  # written first survives the collection.
+  #
+  # This is what plan step 10's "ATTEMPT <id> <utc> as the first line of every artefact" buys
+  # that the directory gate does not. Inside a gated, attempt-scoped directory the gate already
+  # enforces single ownership by refusal; an in-file line only adds something once the file
+  # leaves. Measured: of the 30 text artefacts the cell and campaign entries write, NONE leaves
+  # its directory - the only two moves in the harness are matrix.sh:2048 (a cp within $M) and
+  # this tarball. So the bullet is satisfied here, at the boundary, rather than by thirty
+  # in-file edits that would have corrupted forensics.tar on the way past.
+  mkdir -p "$cell/package" || return 2
+  attempt_open "$cell/package/ATTEMPT"
   "$_P_COLLECT" "$vm" "$cell/package" "$reason" \
       --since "$since" --logvol "$img" "$@" >> "$cell/collect.out" 2>&1 || rc=$?
   printf 'collect rc=%s\n' "$rc" >> "$cell/cell.txt"
