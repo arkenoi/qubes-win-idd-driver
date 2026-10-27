@@ -73,3 +73,18 @@ Any other heavy command still requires the normal "exact command + rejected shor
 ## After success
 Record the N-1 version that was sealed (already written by `seal-qwt-golden.sh` into
 `mgmt/fixtures/<os>-qwt.json`). Do not start the goldens. Clone only.
+
+## The one other path
+
+`protocol/steps/golden.json`, scheduled by `protocol/run.py`, drives `reprovision-usb.sh`,
+`golden.sh seal` and `golden.sh verify` itself for the R3 / ST0 / ST2G steps of an acceptance
+campaign. That is a second recreate path and plan step 9 asks for one — **do not collapse it onto
+`golden_recreate.sh`.** Jev scored a direct collapse `breaks-custody` 0.95 against `safe-collapse`
+0.00: `run.py` owns guest custody and scheduling, it builds under fresh names so a failed build
+cannot destroy the standing golden (ACCEPTANCE-PROTOCOL §0.7), and this script's "already
+verifies" refusal could never fire against a fresh name while its vmlock and receipt demand would
+fight `run.py`'s custody.
+
+The division: **`protocol/` builds goldens inside an acceptance campaign; `golden_recreate.sh`
+recreates one that is lost or drifted, outside any campaign.** Changing that is an owner decision,
+not a tidy-up.

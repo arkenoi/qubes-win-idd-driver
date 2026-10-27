@@ -36,6 +36,17 @@
 # IT NEVER STARTS THE GOLDEN. A golden is CLONED. The build runs on a fresh clone, by the committed
 # harness, and tools/hooks/golden-boot-gate.sh refuses a start regardless of what this script wants.
 #
+# THE ONE OTHER PATH, AND WHY IT STAYS. protocol/steps/golden.json drives reprovision-usb.sh,
+# golden.sh seal and golden.sh verify itself (R3/ST0/ST2G), scheduled by protocol/run.py. That is a
+# SECOND recreate path and plan step 9 asks for one - but do not collapse it onto this script. Jev
+# scored a direct collapse breaks-custody 0.95 / safe-collapse 0.00: run.py owns guest custody and
+# scheduling, it builds under FRESH names so a failed build cannot destroy the standing golden
+# (ACCEPTANCE-PROTOCOL 0.7), and this script's "already VERIFIES, nothing to recreate" refusal
+# could never fire against a fresh name anyway, while its vmlock and receipt demand would fight
+# run.py's own custody. The division is: protocol/ builds goldens INSIDE an acceptance campaign;
+# this script recreates one that is LOST or DRIFTED, outside any campaign. Changing that is an
+# owner decision, not a tidy-up.
+#
 # Exit: 0 the golden is sealed and VERIFIED (or already was); 1 a precondition refused;
 #       2 usage; 3 the build or the verify failed - the output says which.
 set -uo pipefail
