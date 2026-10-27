@@ -1,8 +1,27 @@
 # PROCEDURE — recreate goldens (when none exist)
 
-Load this only when `win10-base`, `win11-base`, `win10-qwt` and `win11-qwt` are all missing or their seals fail `mgmt/golden.sh verify`.
+Load this only when the goldens are missing or their seals fail `mgmt/golden.sh verify`. The
+current set, which is what `mgmt/goldens/` holds a seal record for:
 
-This is the committed sequence. Do not invent steps. Do not substitute other harnesses. Do not invent evidence.
+| golden | what it is |
+|---|---|
+| `win10-base` | pristine base, `Win10_22H2_EnglishInternational_x64v1.iso`, PRIMER=1, no QWT |
+| `win11r-base` | pristine base, `Win11_26300_English_x64.iso`, PRIMER=1, no QWT |
+| `win11r-qwt` | retail Win11 QWT golden, built from the clock-corrected `win11r-base` |
+| `win11de-qwt` | German 25H2 QWT golden |
+
+This list named `win11-base`, `win11-qwt` and `win10-qwt` until 2026-10-27. All three are gone —
+`win11-base`'s seal was deleted in `d5781e55` because the image was gone, `win11-qwt` in `b1fb0cea`
+when the eval-based golden was replaced by retail `win11r-qwt`, and `win10-qwt` never had a seal
+record at all. Read literally, the old list made an intact pool fail this file's own trigger and
+sent the heavy recreate procedure at goldens that are fine. CLAUDE.md corrected the same stale list
+in itself on 2026-10-21 and this file was missed.
+
+**There is no hand path.** `mgmt/harness/golden_recreate.sh` is the only way a golden is recreated
+or resealed (plan step 9, `docs/PLAN-harness-refactor.md`: "No other log walks, clock sets, or
+golden prose procedures"). This file is the authority for *why* — the preconditions, the evidence
+rules and the gate exception the script enforces. A prose procedure cannot refuse to run; the
+script can, and does.
 
 ## Evidence rules (binding)
 - Never claim a snapshot, revision, or pre-damage state exists unless you have just run the command that shows it and pasted the output.
@@ -14,46 +33,44 @@ This is the committed sequence. Do not invent steps. Do not substitute other har
 ## Preconditions
 - No Windows guests running.
 - Vendor install media available to the existing reprovision path (`mgmt/reprovision-usb.sh` or the documented equivalent that produces a Halted pristine base).
-- An N-1 release setup tree (install.cmd + MANIFEST.json at root) available on disk. If missing, obtain it from CI artifacts of the previous release; do not build a new one for this purpose.
+- For a QWT golden: an N-1 release setup tree (install.cmd + MANIFEST.json at root) available on disk. If missing, obtain it from CI artifacts of the previous release; do not build a new one for this purpose.
 
-## Sequence (execute in order, serially)
+## Sequence
 
-1. Recreate the pristine bases.
-   Use the existing reprovision path to produce Halted `win10-base` and `win11-base`.
-   Confirm each is Halted and tagged `win-idd-testbed` (paste `qvm-ls` output).
-   Do not boot them after creation except as the reprovision script itself requires.
-   If the reprovision takes >5 min, screenshot at least every 15 min.
+**1. Pristine bases, if they are the thing that is missing.**
+`golden_recreate.sh` does *not* create a base from vendor media — it requires `--base` to already
+exist and be Halted. Producing one is reprovisioning, a different operation with its own committed
+script. Use the existing reprovision path to produce a Halted `win10-base` / `win11r-base`, confirm
+each is Halted and tagged `win-idd-testbed` (paste `qvm-ls` output), and do not boot them after
+creation except as the reprovision script itself requires.
 
-2. Seal the bases if the reprovision path did not already do so.
-   ```
-   mgmt/golden.sh seal win10-base "pristine base recreated <date>"
-   mgmt/golden.sh seal win11-base "pristine base recreated <date>"
-   mgmt/golden.sh verify win10-base
-   mgmt/golden.sh verify win11-base
-   ```
-   Both verifies must exit 0. Paste the full output. Do not claim success without it.
+**2. Everything else is one command, once per golden.**
 
-3. Build and seal the QWT goldens from those bases.
-   ```
-   mgmt/harness/seal-qwt-golden.sh win10 <path-to-N-1-setup-tree>
-   mgmt/harness/seal-qwt-golden.sh win11 <path-to-N-1-setup-tree>
-   ```
-   Each script calls prime-run from the base, cleans the install stick, and seals.
-   Screenshot during the prime-run if it exceeds 5 min.
+```
+mgmt/harness/golden_recreate.sh --golden <name> --base <pristine-base> [--setup <N-1-setup-tree>]
+```
 
-4. Verify the QWT goldens.
-   ```
-   mgmt/golden.sh verify win10-qwt
-   mgmt/golden.sh verify win11-qwt
-   ```
-   Both must exit 0. Paste the full output.
+- With `--setup`, the QWT golden is built from the base via `seal-qwt-golden.sh`, then sealed and verified.
+- Without `--setup`, it reseals `<base>` itself, and `<golden>` must equal `<base>`.
+- It refuses, rather than proceeding, when: no Jev receipt carries `recreate_goldens`; the base is absent or not Halted; the golden already verifies against its seal; or a reseal would abandon revisions already gone without `GOLDEN_RESEAL_REASON`.
+- It never starts a golden. `tools/hooks/golden-boot-gate.sh` refuses a start regardless.
+- Exit: 0 sealed and VERIFIED (or already was); 1 a precondition refused; 2 usage; 3 the build or the verify failed.
 
-5. Only after step 4 succeeds may short-cycle work (`quick-upgrade.sh`) resume.
+Do not run `mgmt/golden.sh seal`, `mgmt/golden.sh verify` or `seal-qwt-golden.sh` by hand for this
+purpose. The script drives all three in order and attaches the refusals; driving them separately is
+the second recreate path step 9 removes.
+
+**3.** Only after the golden verifies may short-cycle work resume.
 
 ## Gate exception
-When no golden exists, there is no short-cycle alternative. A Jev call whose state contains the marker `recreate_goldens` and quotes the commands above (or the path to this file) satisfies `tools/hooks/committed-procedure-gate.sh` for the heavy steps in this sequence (`reprovision-usb.sh`, `prime-run.sh`, `seal-qwt-golden`).
+When no golden exists, there is no short-cycle alternative. A Jev call whose state contains the
+marker `recreate_goldens` and quotes the command above (or the path to this file) satisfies
+`tools/hooks/committed-procedure-gate.sh` for the heavy steps in this sequence
+(`reprovision-usb.sh`, `prime-run.sh`, `seal-qwt-golden`). `golden_recreate.sh` checks for that
+receipt itself and refuses without it.
 
 Any other heavy command still requires the normal "exact command + rejected short-cycle" justification.
 
 ## After success
-Record the N-1 version that was sealed (already written by seal-qwt-golden.sh into `mgmt/fixtures/<os>-qwt.json`). Do not start the goldens. Clone only.
+Record the N-1 version that was sealed (already written by `seal-qwt-golden.sh` into
+`mgmt/fixtures/<os>-qwt.json`). Do not start the goldens. Clone only.
