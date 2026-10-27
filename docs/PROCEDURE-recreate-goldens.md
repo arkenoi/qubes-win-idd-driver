@@ -74,17 +74,30 @@ Any other heavy command still requires the normal "exact command + rejected shor
 Record the N-1 version that was sealed (already written by `seal-qwt-golden.sh` into
 `mgmt/fixtures/<os>-qwt.json`). Do not start the goldens. Clone only.
 
-## The one other path
+## What `protocol/steps/golden.json` is, and why it is not a second copy of this
 
 `protocol/steps/golden.json`, scheduled by `protocol/run.py`, drives `reprovision-usb.sh`,
-`golden.sh seal` and `golden.sh verify` itself for the R3 / ST0 / ST2G steps of an acceptance
-campaign. That is a second recreate path and plan step 9 asks for one — **do not collapse it onto
-`golden_recreate.sh`.** Jev scored a direct collapse `breaks-custody` 0.95 against `safe-collapse`
-0.00: `run.py` owns guest custody and scheduling, it builds under fresh names so a failed build
-cannot destroy the standing golden (ACCEPTANCE-PROTOCOL §0.7), and this script's "already
-verifies" refusal could never fire against a fresh name while its vmlock and receipt demand would
-fight `run.py`'s custody.
+`golden.sh seal` and `golden.sh verify` for the R3 / ST0 / ST2G steps of an acceptance campaign.
+It *looks* like the sequence above. It is not one — it is **nine independently graded steps whose
+contracts contradict each other**:
 
-The division: **`protocol/` builds goldens inside an acceptance campaign; `golden_recreate.sh`
-recreates one that is lost or drifted, outside any campaign.** Changing that is an owner decision,
-not a tidy-up.
+| step | contract |
+|---|---|
+| `st0-r3` | expects **exit 3** + `"NEEDS VISUAL CONFIRMATION - READ .../latest.png"` — on the pristine QWT-free path a non-zero exit with a pixel instruction *is* success, because that image never gets qrexec |
+| `st2g-r3` | expects **exit 0** + `"qrexec alive after <n>s"` — the opposite contract, same file |
+| `st0-freshname`, `st2g-freshname` | run `verify` on the **target** and expect **exit 2 `UNSEALED`**, asserting the name is *not* sealed so R3 cannot destroy a sealed golden — the inverse of `golden_recreate.sh`'s "already verifies → nothing to do" |
+| all nine | carry their own `HALT_CAMPAIGN` verdict and operator diagnostic that `run.py` grades |
+
+Only the two R3 steps name a guest, so only they take `run.py`'s vmlock; folding the seal and
+verify steps into one invocation would put them inside a lock that today does not cover them.
+
+Shown those contracts verbatim, Jev answered that a single invocation **cannot** carry them
+(1.00) and that these steps are a **different operation** from a recreate (0.91): a campaign
+building *fresh-named* goldens under per-step grading, not the recovery of a lost or drifted one.
+An earlier call given only a prose summary said the opposite and was revised at 0.88 once the
+contracts were shown.
+
+**The division: `protocol/` builds goldens inside an acceptance campaign; `golden_recreate.sh`
+recreates one that is lost or drifted, outside any campaign.** Do not collapse them — the collapse
+destroys real assertions, and a step invoking this script from a guest-bearing step would meet its
+own parent's live vmlock (`run.py:437-443` uses the same `qwt-vmlock-<g>` file).

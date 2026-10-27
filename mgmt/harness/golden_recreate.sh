@@ -36,16 +36,28 @@
 # IT NEVER STARTS THE GOLDEN. A golden is CLONED. The build runs on a fresh clone, by the committed
 # harness, and tools/hooks/golden-boot-gate.sh refuses a start regardless of what this script wants.
 #
-# THE ONE OTHER PATH, AND WHY IT STAYS. protocol/steps/golden.json drives reprovision-usb.sh,
-# golden.sh seal and golden.sh verify itself (R3/ST0/ST2G), scheduled by protocol/run.py. That is a
-# SECOND recreate path and plan step 9 asks for one - but do not collapse it onto this script. Jev
-# scored a direct collapse breaks-custody 0.95 / safe-collapse 0.00: run.py owns guest custody and
-# scheduling, it builds under FRESH names so a failed build cannot destroy the standing golden
-# (ACCEPTANCE-PROTOCOL 0.7), and this script's "already VERIFIES, nothing to recreate" refusal
-# could never fire against a fresh name anyway, while its vmlock and receipt demand would fight
-# run.py's own custody. The division is: protocol/ builds goldens INSIDE an acceptance campaign;
-# this script recreates one that is LOST or DRIFTED, outside any campaign. Changing that is an
-# owner decision, not a tidy-up.
+# WHAT protocol/steps/golden.json IS, AND WHY IT IS NOT A SECOND COPY OF THIS. It drives
+# reprovision-usb.sh, golden.sh seal and golden.sh verify for R3/ST0/ST2G, scheduled by
+# protocol/run.py. It LOOKS like this script's sequence. It is not one: it is NINE independently
+# graded steps whose contracts contradict each other and this file.
+#   * st0-r3 expects EXIT 3 plus "NEEDS VISUAL CONFIRMATION - READ .../latest.png". On the
+#     pristine QWT-free path a non-zero exit with a pixel instruction IS the success contract,
+#     because such an image never gets qrexec. --reprovision here treats non-zero as a failure.
+#   * st2g-r3 expects exit 0 and "qrexec alive after <n>s" - the opposite contract, same file.
+#   * st0-freshname / st2g-freshname run `golden.sh verify` on the TARGET and expect EXIT 2
+#     "UNSEALED", asserting the name is NOT sealed so R3 cannot destroy a sealed golden. This
+#     script asserts the inverse (already verifies -> exit 0, nothing to recreate).
+#   * each step carries its own HALT_CAMPAIGN verdict and operator diagnostic that run.py grades.
+#   * only the two R3 steps name a guest, so only they take run.py's vmlock; folding the seal and
+#     verify steps into one invocation would put them inside a lock that today does not cover them.
+# Jev, shown those contracts verbatim: a single invocation cannot carry them (1.00), and these
+# steps are a DIFFERENT OPERATION from a recreate (0.91) - a campaign building FRESH-named goldens
+# under per-step grading, not the recovery of a lost or drifted one. An earlier call that had only
+# a prose summary of the contracts said the opposite; it was revised at 0.88 once they were shown.
+# So: protocol/ builds goldens INSIDE an acceptance campaign; this script recreates one that is
+# LOST or DRIFTED, outside any campaign. Do not collapse them - the collapse destroys real
+# assertions, and a step invoking this script from a guest-bearing step would also meet its own
+# parent's live vmlock (run.py:437-443 uses the same qwt-vmlock-<g> file).
 #
 # Exit: 0 the golden is sealed and VERIFIED (or already was); 1 a precondition refused;
 #       2 usage; 3 the build or the verify failed - the output says which.

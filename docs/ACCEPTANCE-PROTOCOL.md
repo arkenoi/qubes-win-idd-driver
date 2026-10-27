@@ -261,6 +261,14 @@ then used (H0). Worked example: §1's NET-2 walk-through (`win10-app`, ~25 min, 
 
 ### 0.4 Runbook: golden custody (`mgmt/golden.sh`)
 
+> **Executable forms, so this section is read and not followed.** Inside a campaign, the graded
+> steps are `protocol/steps/golden.json` (R3/ST0/ST2G), scheduled by `protocol/run.py`. Outside a
+> campaign, recreating a lost or drifted golden is `mgmt/harness/golden_recreate.sh` — one
+> command, including the pristine base via `--reprovision`. The `mgmt/golden.sh` lines below
+> document what those drive; do not run them as a sequence by hand (plan step 9,
+> `docs/PLAN-harness-refactor.md`; the division is explained in
+> `docs/PROCEDURE-recreate-goldens.md`).
+
 A golden is **sealed**, then only ever **cloned** — never started, never logged into, never "just
 checked"; diagnostics belong on a churn qube (`win10-u10`, `win11-24h2`). One careless boot
 contaminates every later clone silently: on 2026-08-29/30 the Win10 golden served as a scratch
@@ -485,6 +493,12 @@ way to have a control channel, so "fresh" gets faked by uninstalling, which P1.0
 **Do not solve it by cloning. Build the golden in one pass with a PAYLOAD stick.** One R3 per OS
 installs Windows *and* the release at first logon, yielding a golden that already has qrexec — which
 every later cell can clone and drive normally. Once per OS, not once per cell.
+
+> **Not a hand sequence.** In a campaign these four are the graded steps `st2g-freshname`,
+> `st2g-r3`, `st2g-seal`, `st2g-verify-seal` in `protocol/steps/golden.json`, each with its own
+> expect contract and HALT verdict. Outside one, use `mgmt/harness/golden_recreate.sh`. The
+> listing below says what they do; running it by hand is the second recreate path plan step 9
+> removes.
 
     # 1. Payload stick (release staged under \payload\release). Win11 needs its own template.
     LOCALE=en-GB RELEASE_SETUP=$MATRIX_WORK/dl/qwt-improved-setup \
