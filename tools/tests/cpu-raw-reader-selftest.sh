@@ -1,22 +1,7 @@
 #!/bin/bash
-# ONE COUNTER, ONE READER. admin.vm.Stats emits repeating NULL-separated records:
-#
-#     <vm> \0 vm-stats \0 memory_kb \0 8388656 \0 cpu_time \0 ... \0 cpu_usage_raw \0 3 \0
-#
-# mgmt/reprovision-usb.sh:179 documents the wrong way to read it, with the measurement:
-# `tr -d '\0'` then `grep -oE 'cpu_usage_raw[0-9]+'` is "wrong twice over - deleting the separators
-# runs the value into the NEXT record (a real value of 3 was read as 31), and it then SUMMED every
-# record in the whole 20 s stream. Measured 2026-08-30 on a genuinely idle guest: the probe reported
-# 149 and 6225 where the true value was 3."
-#
-# e2e-wait.sh's wedge path used that exact reader until 2026-10-21, while prime-run.sh,
-# quick-upgrade.sh, matrix.sh and reprovision-usb.sh all read it correctly. So a live installing
-# guest logged cpu=107..252 from one reader and a stalled guest logged cpu_usage_raw=14736 from the
-# other, and the two numbers looked directly comparable in a log that printed both (CPUTWOREADERS).
-# They were not comparable, because one of them was not a cpu figure.
-#
-# This suite feeds a synthetic stream of the documented shape to BOTH readers and shows the
-# difference, then sweeps the harness so the bad pattern cannot come back.
+# ONE COUNTER, ONE READER: the MAX across NUL-separated records, never a sum, and no live bad reader.
+# run: tools/tests/cpu-raw-reader-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PASS=0; FAIL=0

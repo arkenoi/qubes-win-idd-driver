@@ -1,20 +1,7 @@
 #!/bin/bash
-# wrong-interpreter-gate-selftest.sh - a script is run by ITS OWN interpreter.
-#
-# THE INCIDENT THIS IS BUILT FROM, 2026-10-24, twice in one session. I typed
-#   bash tools/lint-harness.py
-# Bash executed that Python file as shell, and its line `import argparse, os, re, sys` is a valid
-# command here: `import` is IMAGEMAGICK'S screen capture, which with non-option arguments starts an
-# INTERACTIVE grab. It took the X pointer/server grab and waited for a mouse click. The owner's
-# xfce4-terminal froze, no GUI process could start for twelve minutes, and the tool call exceeded
-# its 120 s timeout and was backgrounded - so the process holding the grab was out of sight. The
-# owner asked twice ("why gui is stuck on this qube again"), and my first answer blamed swap, which
-# cannot stop a process from STARTING. The same file had run correctly as
-# `python3 tools/lint-harness.py` minutes earlier: both spellings were in front of me.
-#
-# Every blocking case runs TWICE: once with the gate in place (must block) and once with
-# WRONG_INTERPRETER_GATE_DEFECT=1, which restores the state where nothing enforced (must NOT
-# block). A case that blocks in both runs is being refused by something else, and this says so.
+# A script is run by ITS OWN interpreter - `bash x.py` is BLOCKED, and the knob proves it was us.
+# run: tools/tests/wrong-interpreter-gate-selftest.sh
+# pass: exit 0
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 GATE=tools/hooks/wrong-interpreter-gate.sh

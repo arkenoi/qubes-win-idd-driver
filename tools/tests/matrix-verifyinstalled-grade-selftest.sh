@@ -1,26 +1,7 @@
 #!/bin/bash
-# matrix-verifyinstalled-grade-selftest.sh - the campaign's BIGGEST grader had no suite.
-#
-# WHAT IT GRADES. verify_installed() decides whether an install cell passed: 37 ok()/no() call sites,
-# the largest single contributor to a campaign verdict. tools/grader-census.py counted it as
-# untested, alongside 10 others making 99 of 156 verdict decisions between them.
-#
-# WHY IT MATTERS HERE, measured rather than argued. Its own comments record what an untested grader
-# of this size costs:
-#   * "campaign 20260830-062519 produced 36 green lines for a path that never ran" - a silent D2
-#     reinstall reported as a clean install, until the installer's own clean-install marker was
-#     asserted positively;
-#   * the 2026-09-16 systemic finding: it "graded upgrade_mode, the agent hash and autologon and
-#     NEVER looked at `ok`", so an installer trailer carrying idd_failed / pv_xenvif='failed' /
-#     gui_restored='FAILED' under ok:true graded the cell GREEN;
-#   * a stage-1 trailer with no installed_gui_agent_sha256 field made it report "installed agent is
-#     NOT the release binary" for a guest whose binary matched byte for byte (measured 2026-09-08).
-# Every one of those is a verdict defect, and none of them was reachable without a four-hour run.
-#
-# HOW IT IS DRIVEN. The SHIPPED function is extracted from matrix.sh and run against PLANTED LOGS,
-# with only the guest-touching helpers stubbed (w_session/w_alive/w_halt/start_vm/qvm-*/qtest/sleep).
-# mgmt/harness/result-flags.py is NOT stubbed - the real flag judge runs on the planted trailers,
-# because that checker is the thing the 2026-09-16 finding turned on.
+# the campaign's BIGGEST grader: an install cell passes only on asserted markers and judged flags.
+# run: tools/tests/matrix-verifyinstalled-grade-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 2
 HERE="$PWD"

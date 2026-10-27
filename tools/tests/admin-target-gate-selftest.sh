@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# admin-target-gate-selftest.sh - the gate that stops us writing 'denied' lines into the owner's
-# dom0 log. Each case is the SHAPE OF A REAL COMMAND, two of them copied from the journal the owner
-# pasted on 2026-10-07; and the last case re-introduces the original state (nothing enforces) and
-# must then NOT block, because a gate never seen to fail is decoration.
+# Nothing we run writes a denied line into the owner's dom0 journal, and legitimate calls still run.
+# run: tools/tests/admin-target-gate-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 G="$ROOT/tools/hooks/admin-target-gate.sh"

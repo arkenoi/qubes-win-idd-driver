@@ -1,15 +1,7 @@
 #!/bin/bash
-# A DRY RUN MUST NOT PRODUCE A PASS.
-#
-# MEASURED 2026-10-21, before the fix: `tools/gate-remainder.sh --dry` put all four reachable
-# suites in PASSED and exited 0, because run_it's dry branch prints its intent and returns 0 and
-# `note $?` read that 0 as a result. acceptance-plan.py:202 makes that dry call the remainder
-# cell's FIRST PROBE - so the probe could not fail, whatever the rig's state, and the dry merge
-# line named those suites as if they had been seen to pass.
-#
-# The strongest leg here runs the SHIPPED script, not a model of it. T6 drives the pre-fix
-# definition through the same assertion as T4 and requires it to fail - a test that cannot tell
-# the two apart is not testing the fix.
+# A DRY RUN MUST NOT PRODUCE A PASS: it names the suites it would run, and passes none of them.
+# run: tools/tests/gate-remainder-dry-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 SCRIPT=tools/gate-remainder.sh

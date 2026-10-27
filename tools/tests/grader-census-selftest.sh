@@ -1,17 +1,7 @@
 #!/bin/bash
-# grader-census-selftest.sh - the coverage census must not flatter itself.
-#
-# WHY THIS EXISTS. tools/grader-census.py overstated coverage TWICE in one afternoon, each time
-# moving its own headline in the reassuring direction:
-#   1. it counted a suite's STUB of a grader as coverage of it. Suites for the cell graders stub
-#      locate_release_disc, ensure_churn_target and boot_with_release_iso to keep the cell under
-#      test from running them, and all three were scored covered - the count read 29 of 156 when the
-#      truth was 36.
-#   2. with that fixed, cell_appvm dropped off the uncovered list because a new suite's header
-#      comment merely DISCUSSED it, and its 18 decisions left the untested count silently: the
-#      headline went 36 -> 12 on prose alone.
-# A census that rewards stubbing and writing is worse than no census, because it reads as progress.
-# So each rule is driven here against a throwaway tree, with the real tool.
+# The coverage census must not flatter itself: a STUB is not coverage, and neither is a comment.
+# run: tools/tests/grader-census-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 2
 ROOT="$PWD"

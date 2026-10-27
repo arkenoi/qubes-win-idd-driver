@@ -1,21 +1,7 @@
 #!/bin/bash
-# AN OFFLINE SUITE THAT TOUCHES THE RIG MUST BE RED, WHATEVER ITS OWN ASSERTIONS SAY.
-#
-# MEASURED 2026-10-21. tools/tests/specimen-mark-reachable-selftest.sh drove w_session against a
-# guest it named `somevm`; w_session samples cpu with
-#     timeout 20 qrexec-client-vm "$vm" admin.vm.Stats
-# so every run fired 24 admin calls at a qube that does not exist. tools/tests/dom0-callers-selftest.sh
-# fired 26 more at `fixture-vm` through `qvm-ls --raw-data --fields STATE` and `qvm-prefs`. Every one
-# was DENIED, and a denied Admin API call is written to the OWNER'S dom0 journal - he saw them and
-# asked what they were. Both suites were GREEN on every assertion they make, and no suite in the
-# 84-suite estate could have caught it, because the calls are not any suite's output.
-#
-# So "offline" stops being the word in the filename and becomes a predicate: run-offline-suites.sh
-# puts a shim dir FIRST on PATH, records every rig command a suite reaches, and reports that suite
-# RED even if it exited 0.
-#
-# This suite drives the SHIPPED runner over a fixture list, and its negative control removes the
-# shim block from a copy to prove the guard is what refuses.
+# AN OFFLINE SUITE THAT TOUCHES THE RIG MUST BE RED, WHATEVER ITS OWN ASSERTIONS SAY
+# run: tools/tests/offline-rigshim-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 2
 R=tools/tests/run-offline-suites.sh
@@ -192,7 +178,7 @@ blind=$(while read -r s; do
           f="tools/tests/$s"; [ -f "$f" ] || continue
           command grep -qaE '/usr/bin/(qvm|qrexec)|import qubesadmin|from qubesadmin|qubesadmin\.' "$f" \
             && printf '%s ' "$s"
-        done < tools/tests/offline-suites.txt)
+        done < <(cat tools/tests/product-suites.txt tools/tests/harness-suites.txt))
 [ -z "${blind// /}" ] \
   && ok "no suite in the shipped list reaches the rig by a route the shim cannot see" \
   || no "suites reach the rig past the shim: $blind" "an absolute path or the python API is not on PATH"

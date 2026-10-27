@@ -1,12 +1,7 @@
 #!/bin/bash
 # A PAYLOAD WHOSE CONTENT WAS NEVER HASHED MUST NOT READ LIKE ONE THAT WAS.
-#
-# MEASURED 2026-10-21 by the harness audit: with an empty or unparseable SHA256SUMS.txt,
-# tools/assert-payload.sh's integrity loop ran ZERO iterations - bad=0, n=0 - and the script fell
-# through to `PASS: payload verified - 0 files`. All three consumers (mgmt/harness/matrix.sh,
-# mgmt/harness/quick-upgrade.sh, tools/verify-release-package.sh) branch only on the exit code, so a
-# campaign would install and grade a payload nothing had verified, with a log line identical to a
-# real pass. This drives the shipped script, not a copy of it.
+# run: tools/tests/assert-payload-floor-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 2
 A=tools/assert-payload.sh

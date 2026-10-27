@@ -1,18 +1,7 @@
 #!/usr/bin/env bash
-# wrapper-one-line-selftest.sh - ONE TRUNCATED TRANSFER IS ONE ERROR LINE.
-#
-# Owner, 2026-10-16: "fix the double reporting, one teardown should be one line, go fix them one by
-# one." MEASURED win11-reinstall, campaign run 38971675274: wrapper pid 7960 wrote THREE error lines
-# for a single truncation, three of the five undeclared error lines that cell carried:
-#   E EventLoop: i/o threads did not finish within 120000 ms ... this transfer is TRUNCATED
-#   E VchanSendMessage: vchan already closed with 4 byte(s) of exit code (msg 0x193) still to send
-#   E EventLoop: sending exit code failed
-# The FIRST line already says what the other two then report - "the peer will close the vchan on the
-# exit code below" - so they are its predicted consequence, and EXIT_REASON_DRAIN_EXPIRED's own
-# declaration says "already reported as a TRUNCATED transfer". This holds the code to that.
-#
-# The drain line itself stays an ERROR: a truncated transfer is a real finding and the one that
-# carries the context (the bound, and that output was lost).
+# ONE TRUNCATED TRANSFER IS ONE ERROR LINE.
+# run: tools/tests/wrapper-one-line-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(cd "$(dirname "$0")/../.." && pwd)" || exit 2
 SRC=core-agent/src/qrexec-wrapper/qrexec-wrapper.c

@@ -1,23 +1,7 @@
 #!/usr/bin/env bash
-# updater-component-selftest.sh - the UPDATER COMPONENT TEST's verdict logic, graded offline.
-#
-# WHY. mgmt/harness/updater-component-test.sh exists because the sequence that found the relay
-# defect on 2026-10-22 was run BY HAND (owner: "it is mostly what you do now by hand but systemic,
-# verified and repeatable"). A hand sequence cannot be seen to fail, and two of my hand steps that
-# morning were wrong in ways that read as a pass. So every gate in that script is driven here, in
-# both polarities, against the REAL captures of that day - no hand-written stand-ins:
-#
-#   POST-FIX  win11de-tup after the rebuilt relay was deployed: relay.log carries
-#             "10:29:08.084 listen 127.0.0.1:8082 ... parent=936"; agent.log carries
-#             "10:29:10 proxy up: ... started by this pass" and "10:37:37 scan: 6 update(s) offered,
-#             6 actionable, 6 reported to dom0"; the exe carries the UTF-16 marker.
-#   PRE-FIX   the same guest ten minutes earlier: relay.log carries listens on 2540 and 5956 - the
-#             pass's OWN pids - agent.log carries two "[ERROR] ... not accepting connections on
-#             127.0.0.1:8082 after respawn" and no scan line at all, and the exe is the 2026-09-16
-#             binary with marker=False. Every pass reported success to the installer regardless.
-#
-# The pre-fix fixture is the point: the component test must FAIL on it. A gate that has only ever
-# seen healthy data is not a gate.
+# The updater component test PASSES the post-fix capture and FAILS the real pre-fix one.
+# run: tools/tests/updater-component-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 TEST="$ROOT/mgmt/harness/updater-component-test.sh"

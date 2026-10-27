@@ -1,7 +1,7 @@
 #!/bin/bash
-# retired-names-gate-selftest.sh - proves tools/hooks/retired-names-gate.sh blocks what it must,
-# allows what it must, and that with the defect re-introduced (RETIRED_GATE_DEFECT=1) the blocking
-# case is NOT blocked - so a PASS here is a check that has been seen to fail.
+# tools/hooks/retired-names-gate.sh blocks the retired names, allows the rest, and is load-bearing
+# run: tools/tests/retired-names-gate-selftest.sh
+# pass: exit 0
 set -u
 cd "$(git rev-parse --show-toplevel)" || exit 2
 H=tools/hooks/retired-names-gate.sh

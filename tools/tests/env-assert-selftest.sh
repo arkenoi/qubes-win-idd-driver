@@ -1,14 +1,7 @@
 #!/bin/bash
-# env-assert-selftest.sh - prove mgmt/harness/env-assert.sh, offline, against the GWeck spec with
-# synthetic measurements: the matching environment passes, each single deviation that bit this
-# project on 2026-09-16 FAILS (24H2 build, English install language, a 'user' account, a
-# StandaloneVM, default_user still 'user'), and an unmeasurable fact FAILS rather than passing.
-#
-# Per this project's rule a check counts only once it has been seen to FAIL on the defect:
-#   ENVASSERT_DEFECT=1    - the comparison cannot fail (the original bug: a "matched" verdict on a
-#                           24H2 English guest) -> the mismatch cases pass -> THIS TEST MUST FAIL (exit 1)
-#   ENVASSERT_DEFECT=glue - no newline termination before the appended qube facts (the 2026-09-16
-#                           live defect: qube_class glued to the cmd prompt) -> THIS TEST MUST FAIL (exit 1)
+# env-assert.sh passes a matching GWeck environment; every single deviation or unreadable fact FAILS
+# run: tools/tests/env-assert-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 S=mgmt/harness/env-assert.sh

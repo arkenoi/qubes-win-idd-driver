@@ -1,29 +1,7 @@
 #!/usr/bin/env bash
-# relay-judge-timenorm-selftest.sh - tools/relay-log-judge.py must correlate the relay log and the
-# decoded Windows Update log on ABSOLUTE INSTANTS, and must refuse loudly when it cannot.
-#
-# WHY. Until 2026-10-19 the judge parsed both logs into a bare `timedelta` - a time of day with no
-# date and no zone - and the GAP check asked `abs((tt - t).total_seconds()) <= window`. The relay
-# log has no date to lose: guest/qubes-updates-relay.cs logs
-#     File.AppendAllText(path, DateTime.Now.ToString("HH:mm:ss.fff") + " " + msg + "\r\n");
-# append-only, never rotated, so one pulled file holds days. Two failures came out of that, and both
-# were measured on this qube before the fix:
-#   * a relay line that served a download 1.9 s before the failure, across midnight, read as
-#     86398 s away: `gaps=1 violations=1`, rc=3 - a fabricated "the relay logged nothing for this
-#     download", which is the exact shape of the 2026-09-17 P1 this judge exists to find.
-#   * THE SILENT ONE: a relay line at 05:13:45 and a WU failure 24 h later at 05:13:46 gave
-#     `relay lines=2 judged=0 wu_failures=1 gaps=0 violations=0`, rc=0 - a clean PASS over a
-#     correlation of nothing. A blind gate.
-# A real capture shows how wide the file is: in
-# qwt-accept/rel-39175573529/template-update.d/wu-e2e/round1/relay.log the stamps run
-# `19:41:56.550` -> `19:03:14.305` -> `05:02:04.265` -> `05:14:06.195`, 3048 lines, several days.
-#
-# EVERY CASE CARRIES ITS OWN PRE-FIX CONTROL. The frozen `old_delta` below is the pre-fix
-# comparison, transcribed from the two lines it replaced (relay-log-judge.py:58 and :99 as of
-# 7238cd09), and each case asserts the OLD answer is wrong AND the new one right. A fixture that
-# stops discriminating fails this suite instead of passing it quietly.
-#
-# Offline: no rig, no guest, no network (--no-judge everywhere, so no Jev call and no key).
+# relay-log-judge correlates both logs on ABSOLUTE INSTANTS and refuses loudly when it cannot.
+# run: tools/tests/relay-judge-timenorm-selftest.sh
+# pass: exit 0
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
 J="${RELAY_JUDGE:-$HERE/tools/relay-log-judge.py}"

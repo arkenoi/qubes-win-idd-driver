@@ -1,33 +1,7 @@
 #!/usr/bin/env bash
-# uac-prompt-reachable-selftest.sh - A PROMPT NOBODY CAN REACH IS NOT A PROMPT.
-#
-# The decisions are docs/ADR-uac.md; this holds the code to them. Owner, 2026-10-08: "if UAC emits
-# a dialog, it should be presented as dialog, a normal dialog window, not some hidden bullshit" and
-# "we were supposed to fix this months ago, if it regressed we need tests". It had not regressed -
-# findings/issues.md has carried "a pending UAC elevation is invisible in seamless; UAC visibility
-# is declared future work" as an open P2 since 2026-08-28 (Jev never-closed 1.00) - and there was no
-# test for ANY of the UAC handling, which is the gap this file closes.
-#
-# WHAT IT GUARDS, and why each one is a defect somebody could reintroduce in an afternoon:
-#   1. the prompt is REACHED by its own process, not by the taskbar (ADR-uac section 7). The taskbar
-#      remedy is `if (g_TaskbarWindow)` and before the shell is up that handle is NULL, so the hide
-#      of the stand-in had no remedy at all during startup;
-#   2. the stand-in window STAYS hidden (section 6, Jev 0.92): it carries no prompt and often no
-#      pixels, so mapping it gives dom0 an empty box. "Fixing" visibility by mapping it is the
-#      wrong fix and this refuses it;
-#   3. the consent window goes through the ORDINARY gate. Bypassing ShouldAcceptWindow to force a
-#      prompt out would also force out a fullscreen dimming backdrop, which IS the field-reported
-#      unclosable black window (root-caused 2026-08-27);
-#   4. NOTHING IS ACTIVATED OR ANSWERED (section 8). An agent that can answer its own elevation
-#      prompts makes the prompt worthless;
-#   5. PromptOnSecureDesktop=0 is still asserted on the normal start path (section 1). Everything
-#      above assumes the prompt is on the Default desktop at all.
-#
-# NOT CLAIMED HERE: that the fix works on a guest. It has not been compiled (no Windows SDK on this
-# host) and no guest in our possession has ever been observed with a consent window. Jev, asked
-# whether calling this FIXED would be sound on today's evidence: 0.03. The live cell - a real
-# non-foreground elevation at startup, graded on what dom0 is shown - is owed and named in
-# ADR-uac section 7.
+# A PROMPT NOBODY CAN REACH IS NOT A PROMPT - and the agent never activates or answers one
+# run: tools/tests/uac-prompt-reachable-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SRC="${UACSRC:-$ROOT/agent/gui-agent}"

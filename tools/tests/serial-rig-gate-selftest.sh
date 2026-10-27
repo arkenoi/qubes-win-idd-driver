@@ -1,8 +1,7 @@
 #!/bin/bash
-# serial-rig-gate-selftest.sh - proves tools/hooks/serial-rig-gate.sh blocks a second mutating
-# launch while a LIVE lock is held, allows passive monitoring and stale locks, and that with the
-# defect re-introduced (SERIAL_GATE_DEFECT=1) the blocking case is NOT blocked - a PASS here is a
-# check that has been seen to fail. Uses a private LOCKDIR so it never touches real rig locks.
+# A second rig-mutating launch under a LIVE lock is BLOCKED; passive reads and stale locks pass.
+# run: tools/tests/serial-rig-gate-selftest.sh
+# pass: exit 0
 set -u
 cd "$(git rev-parse --show-toplevel)" || exit 2
 H=tools/hooks/serial-rig-gate.sh

@@ -1,16 +1,7 @@
 #!/usr/bin/env bash
-# release-cut-gate-selftest.sh - offline proof matrix for tools/hooks/release-cut-gate.sh
-# (docs/ADR-acceptance.md section 4). The hook refuses a release CUT whose gate coverage does not
-# include what the diff requires. Every case is driven against a FIXTURE repository, and each check is
-# also seen to FAIL with the defect present (RELEASE_CUT_GATE_DEFECT=1 - nothing refuses, the state
-# before this gate existed).
-#
-#   cut-no-receipt    a tag/release with no coverage receipt for this HEAD is BLOCKED, and the message
-#                     says how to see what is required
-#   cut-short         a receipt that misses a required suite is BLOCKED, naming it
-#   cut-satisfied     a receipt that covers everything required ALLOWS the cut
-#   passive           reads, builds, branch pushes and a tag DELETE are never touched
-#   defect            with the knob set, every blocking case is allowed - so the checks can fail
+# A release CUT whose coverage misses what the diff requires is BLOCKED; passive git is untouched.
+# run: tools/tests/release-cut-gate-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 HOOK="$ROOT/tools/hooks/release-cut-gate.sh"

@@ -1,25 +1,7 @@
 #!/bin/bash
-# qcon-session-selftest.sh - prove tools/qcon uses EXACTLY ONE attach per guest per session.
-#
-# WHY THIS EXISTS. Owner, 2026-09-17: "the proper way to use console is attach once and pray it
-# won't break!" The old tools/qcon attached per invocation (a --raw probe, then a login attach,
-# then one per command); the console admits one attacher, and on every stalled guest for a month
-# the transcript read "login prompt, then nothing after the username, then nothing on every later
-# attach" - written up ten times as guest death. Specimen 10 was lost by seven attaches in thirty
-# minutes. This test runs the REBUILT tool against a fake console that behaves the measured way
-# (tools/tests/qcon-fake-console.py: the first connection is served, every later one hears
-# nothing, ever) and requires: open once -> run x3 -> close, every output complete and delimited;
-# open twice REFUSED; run without open REFUSED (no implicit attach); a silent command reported as
-# such with the session still usable; close removes the state; the attach ledger shows ONE attach.
-#
-# THE CHECK MUST BE SEEN TO FAIL. QCON_DEFECT=perattach re-introduces the old attach-per-command
-# behaviour inside the shipped tool; run under it this test MUST fail on exactly "second command
-# returns nothing" - the shape that lost specimen 10. The clean run spawns that defect run itself
-# (case 9) and requires the failure to be that one, so a green clean run has watched the defect
-# get caught. Only the attach primitive is swapped for the fake; everything else is shipped code.
-#
-#   tools/tests/qcon-session-selftest.sh             # clean run, exit 0 expected
-#   QCON_DEFECT=perattach tools/tests/qcon-session-selftest.sh   # must FAIL on the named check
+# tools/qcon uses EXACTLY ONE attach per guest per session - no implicit attach, ever
+# run: tools/tests/qcon-session-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 

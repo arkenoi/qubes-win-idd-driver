@@ -1,18 +1,7 @@
 #!/bin/bash
-# specimen-boot-gate-selftest.sh - a spent specimen cannot be started by hand, and the block says
-# where its logs actually are.
-#
-# WHY THIS EXISTS. 2026-10-14: a campaign cell failed, deliberately left win10-acc as it stands as
-# the only interrogable form of the failure, and minutes later I ran `qvm-start win10-acc` by hand
-# to read its logs. The owner, watching: "starting WHAT THE FUCK to read the logs, we agreed to
-# move the logs off to stick". The logs never needed the guest - logvol_pull reads the secondary log
-# volume as an image file in THIS qube - and the start could not have worked anyway, because the ISO
-# cell had left a `--required` claim on a loop device that was later released.
-#
-# Every blocking case runs TWICE: once with the gate in place (must block) and once with
-# GOLDEN_BOOT_GATE_DEFECT=1, which restores the state where nothing enforced (must NOT block). A
-# case that blocks in both runs is being refused by something else, and this says so instead of
-# counting a free pass.
+# A spent specimen cannot be started by hand, and the block says where its logs actually are.
+# run: tools/tests/specimen-boot-gate-selftest.sh
+# pass: exit 0
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 GATE=tools/hooks/golden-boot-gate.sh

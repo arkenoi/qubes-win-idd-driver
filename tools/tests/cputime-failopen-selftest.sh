@@ -1,26 +1,7 @@
 #!/bin/bash
-# cputime-failopen-selftest.sh - prove the stall discriminator FAILS OPEN.
-#
-# WHY THIS EXISTS. `cpu_time` (admin.vm.Stats) is cumulative: flat across a sample means the domain
-# is not executing. That is the only validated way this rig can tell a stalled guest from a slow
-# one, and on 2026-09-14 it settled three cases correctly (twice busy where a stall verdict would
-# have been FALSE, once frozen where it was TRUE). It is now gated in front of every timeout->death
-# site: e2e-wait.sh's two w_wait_install branches, prime-run.sh's DEADLINE, quick-upgrade.sh's
-# marker write.
-#
-# That makes ONE failure mode catastrophic: if an UNREADABLE stats read counted as "flat", every
-# qrexec hiccup would manufacture a stall, and the harness would kill healthy guests for it - the
-# exact false-wedge report this project has written up repeatedly. The contract is therefore:
-#
-#     UNREADABLE COUNTS AS MOVING. A failed stats read must never manufacture a stall.
-#
-# The two helpers spell that contract with OPPOSITE polarity (w_cpu_moving returns 0=moving,
-# _pr_cpu_flat returns 1=not-flat), which is precisely the kind of pair that gets one side inverted
-# in an edit. So this asserts both, and - per this project's rule that a check is unproven until it
-# has been seen to fail - it re-introduces the inversion as a DEFECT build and requires the test to
-# catch it. A green run with no defect-catch is reported as UNPROVEN, not as a pass.
-#
-# Offline: cpu_time reads are stubbed, so this touches no guest and runs in seconds.
+# UNREADABLE COUNTS AS MOVING - a failed stats read must never manufacture a stall
+# run: tools/tests/cputime-failopen-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 

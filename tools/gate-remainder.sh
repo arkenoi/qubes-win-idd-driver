@@ -25,6 +25,7 @@
 . "$(dirname "$0")/../mgmt/harness/shutdown-lib.sh" 2>/dev/null || true
 # settle() shuts guests down between suites, so it needs the per-guest lock (lint L2).
 . "$(dirname "$0")/../mgmt/harness/vmlock.sh" 2>/dev/null || true
+. "$(dirname "$0")/../mgmt/harness/primitives.sh" 2>/dev/null || true   # clock_correct and the other five
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
@@ -296,8 +297,8 @@ ready() {             # ready <vm>
         # "clockskew ... the guest's clock is +10837 s from the host's at collection time" - so the
         # sweep produced NO verdict and the receipt stayed empty. qtest synctime pushes this qube's
         # clock in to ~0.3 s and is documented as the call to make after every VM start.
-        QTEST_VM="$v" timeout 120 tools/qtest synctime >>"$LOG" 2>&1 \
-          || say "    WARN could not push the clock into $v - a sweep may refuse on skew"
+        clock_correct "$v" 120 >>"$LOG" 2>&1 \
+          || say "    WARN the clock in $v is not verified - a sweep may refuse on skew"
         return 0
       fi
     fi

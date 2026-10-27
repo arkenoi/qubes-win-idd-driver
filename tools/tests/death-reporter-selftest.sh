@@ -1,35 +1,7 @@
 #!/usr/bin/env bash
-# death-reporter-selftest.sh - offline proof matrix for guest/qwt-report-death.ps1, the ONE death reporter
-# (docs/ADR-supervision.md 3). Runs on this dev qube with the linux pwsh; no rig, no guest, no event log.
-#
-#   clean    tools/tests/death-reporter-test.ps1 against the shipped reporter MUST pass
-#   knobs    a copy of the reporter with ONE `# GUARD:<name>` line replaced by its defect MUST make the suite FAIL on
-#            the check that guard protects (a guard never seen to fail is decoration):
-#      ours        any executable is ours             -> a notepad.exe crash would be reported as a death of ours
-#      deathid     one id for every death             -> the route's once-per-(component,id)-per-boot rule hides the second death
-#      anchorpid   identity by executable only        -> a second death of the same exe inside the window is "the first"
-#      logfirst    the ERROR line only when notified  -> past the cap, a death leaves no record in our log
-#      onerec      a death absorbs any number of records of one type -> a service exiting without a crash record, over and
-#                  over, is ONE notification (found in review 2026-10-03)
-#      werjoin     a WER 1001 may open a death -> a foreign autologon.exe (its 1000 refused by path) is reported as ours
-#      helperjoin  a helper task's 201 may open a death -> the agent ending its own helper is reported as a death
-#      pidreuse    one pid is one death whatever it records -> a reused pid hides a second crash
-#      managedonly a 1026 counts for any executable in the table -> a foreign .NET program named like ours is reported
-#      installdir  the registry's install dir is ignored -> every crash of ours on a non-default install is refused
-#      wdjoin      the watchdog's own failure exit (7024, QGA_SVC_EXIT_AGENT_DIED) opens a death of its own -> two notifications
-#                  per agent death (2026-10-07, docs/ADR-supervision.md 5)
-#      sysendtext  a child Windows ended with its session (exit 0x40010004) gets the family's text -> dom0 is told it "exited
-#                  unexpectedly" and that Task Scheduler restarts it, into a session that is going away (the measured 2026-10-10
-#                  shutdown notifications; outside a shutdown the record is still escalated, with its own header and line 1)
-#      sysendisdeath a child Windows ended with its session DURING A SHUTDOWN is escalated -> the measured 2026-10-10 defect: five
-#      scmshutdown   a service the SHUTDOWN stopped is escalated as a failing service - the class had no shutdown test
-#      launchshutdown a launch Windows refused because it is shutting down is escalated as a task that could not start
-#                  dom0 notifications on win10-acc, every one an ordinary shutdown (owner: "suppress only on shutdown")
-#      build       (in the ROUTE, guest/qwt-notify-error.ps1, swapped in with -HelperPath) the technical line names no build ->
-#                  the owner cannot tell a toast of the fixed build from a control run's (2026-10-10)
-#      shortbuild  the over-length short form drops the build -> exactly the long notice is the one that cannot be placed
-#   DEATHREPORTER_DEFECT=<knob>  run only that knob and exit with the suite's own code (non-zero is the required outcome)
-#   DEATHREPORTER_OUT=<dir>      outputs (default: a mktemp dir)
+# guest/qwt-report-death.ps1 is the ONE death reporter, and every guard fails on its own defect
+# run: tools/tests/death-reporter-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # pwsh, FROM THE PATH IF IT IS THERE. The two dev-qube paths were the only candidates, so this suite

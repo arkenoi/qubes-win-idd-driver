@@ -1,13 +1,7 @@
 #!/usr/bin/env bash
-# dom0-sends-selftest.sh - the notification ledger, driven in BOTH directions, offline.
-#
-# Owner, 2026-10-10: "IF I SEE SOMETHING IN DOM0, YOU ARE SUPPOSED TO SEE THE SAME IN LOGS, WITH ONE
-# HUNDRED PERCENT CERTAINTY AND ZERO GUESSWORK, ALWAYS." The hole was structural: the send record lived
-# only on the guest's private volume, so it died with every disposable AppVM and this side had NOTHING.
-#
-# A check that has never been seen to FAIL is not evidence, so this drives the failure arm first: a
-# guest whose record cannot be read must make the tool exit 1 and the caller fail its cell - never
-# record a silent "no sends", which is indistinguishable from "dom0 was told nothing".
+# EVERY SEND TO DOM0 LANDS IN THE LEDGER; an unreadable record fails instead of reading as none.
+# run: tools/tests/dom0-sends-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT" || exit 2

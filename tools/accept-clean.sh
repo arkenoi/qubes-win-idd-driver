@@ -59,12 +59,23 @@ if [ "${SKIP_PROVISION:-0}" = 1 ]; then
 else
 
 # --- 1. clean-slate reinstall (reprovision has its own flock + qrexec wait) ---------
-log "reprovisioning from $LOOP (this destroys $VM)"
-# PIPESTATUS, not $?: with `cmd | tee`, $? is TEE's status, so a failing reprovision was
-# reported as success and the harness went on to poll a guest that had never started
-# (measured 2026-08-07 - the run continued for minutes after reprovision exited 1).
-"$HERE/scratchpad/reprovision.sh" "$VM" "$LOOP" 2>&1 | tee -a "$OUT/accept.log"
-[ "${PIPESTATUS[0]}" -eq 0 ] || fail "reprovision failed (see $OUT/accept.log)"
+# THIS ARM NO LONGER PROVISIONS, AND REFUSES INSTEAD OF LAUNCHING THE SCRIPT IT USED TO.
+# It called scratchpad/reprovision.sh - uncommitted, so invisible to every gate - and that script
+# implements the SECOND-CD variant which mgmt/reprovision-usb.sh's own header records as unable to
+# work: WinPE carries no Xen PV drivers, so an assigned cdrom device is invisible to Setup
+# (FINDINGS 2026-08-07). Repointing it at a committed copy of the same script would have committed
+# a route measured not to work, so the launch is removed rather than moved.
+# The committed clean-install routes are mgmt/harness/prime-run.sh (the primer, which is how the
+# C1/C2 cells enter - a pristine base has no qrexec and cannot be reached any other way) and
+# mgmt/reprovision-usb.sh <vm> <vendor-iso-loop> <answer-stick-loop> (the emulated answer stick,
+# the route measured as working). Both take arguments this script is not given.
+# The only caller is matrix.sh, which passes SKIP_PROVISION=1; nothing reaches this branch today.
+log "[ERROR] REFUSING: this script no longer provisions. Steps 3-6 grade an already-installed"
+log "[ERROR]   guest - re-run with SKIP_PROVISION=1, which is how matrix.sh calls it."
+log "[ERROR]   To build the guest first, use a committed route and then come back:"
+log "[ERROR]     mgmt/harness/prime-run.sh                 (pristine base -> installed, no qrexec needed)"
+log "[ERROR]     mgmt/reprovision-usb.sh $VM <iso-loop> <stick-loop>  (clean slate from the vendor ISO)"
+fail "no committed provisioning route takes <vm> <loop> alone; see the lines above"
 
 # --- 2. wait for OUR installer to finish (it reboots ONCE; twice if it had to remove
 #        a previous QWT first) -------------------------------------------------------

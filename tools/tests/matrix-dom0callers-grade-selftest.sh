@@ -1,21 +1,7 @@
 #!/bin/bash
-# matrix-dom0callers-grade-selftest.sh - the grader for the goal's SECOND clause had no suite.
-#
-# WHAT IT GRADES. grade_dom0_callers() is where the campaign measures "qrexec behavior is aligned
-# with dom0 callers: updaters and start menu" - the updater channel (dom0 takes stdout as the agent's
-# log and parses bare floats on stderr for the Update GUI's progress bar) and the start-menu stream
-# (receive.py ignores what it cannot parse IN SILENCE).
-#
-# WHY THIS EXISTS. Its sibling grade_cell_logsweep() was deliberately made a function "so it can be
-# exercised" and has had a suite for days. This one - the grader of the clause the release goal names
-# - had NONE, so whether the campaign can measure its own goal was itself unmeasured. A four-hour run
-# whose clause-2 grader mis-grades produces a worthless verdict, and that is discoverable offline in
-# seconds. matrix.sh's own notes record the channel going unmeasured for eight runs
-# (CALLERCHECKATENDONLY), which is what a grader nobody tests looks like from the outside.
-#
-# HOW IT IS DRIVEN. The SHIPPED function is extracted from matrix.sh and run with the two checker
-# scripts stubbed on a temporary PATH-like override, plus w_state/w_alive/ok/no. A transcription
-# here would pass while the file rotted.
+# The dom0-caller grader fails each broken channel on its own and never skips a guest that is down.
+# run: tools/tests/matrix-dom0callers-grade-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 2
 

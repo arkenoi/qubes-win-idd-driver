@@ -33,6 +33,12 @@ require_scripts(){
 require_scripts guest/disarm-update-scan.ps1 guest/startproof.ps1 guest/enumwin.ps1 guest/cpu-bench.ps1 guest/open-start.ps1
 VM="${1:?usage: $0 <vm> [outdir]}"
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/P4-$VM}"
+# A contaminated subject is refused BEFORE any work: this script's default output dir carries no
+# run-id, so a second attempt would otherwise append to the first attempt's artefacts and be read
+# back as one run. Pass a fresh outdir to run again.
+declare -F attempt_dir >/dev/null 2>&1 || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh"
+attempt_dir "$OUT" || exit 1
+
 mkdir -p "$OUT"
 q(){ QTEST_VM=$VM timeout -k 8 "${T:-120}" ./tools/qtest "$@" 2>/dev/null; }
 log(){ echo "$(date -u +%H:%M:%S) p4[$VM]: $*" | tee -a "$OUT/p4.log"; }

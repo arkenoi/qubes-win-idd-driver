@@ -1,12 +1,7 @@
 #!/usr/bin/env bash
-# rig-cleanup-selftest.sh - a cleanup that can delete the wrong thing is worse than no cleanup.
-#
-# mgmt/harness/rig-cleanup.sh removes leftover subjects to reclaim the thin pool. Everything it
-# touches is irreversible, so every protection it claims is driven here against stubs: no real qube
-# is read and none is removed. The protected set is DERIVED (seal records, the preflight's own
-# ENTRY_FIXTURES default, the matrix's cell_appvm templates, every TemplateVM, dom0 and the
-# management qube) and each of those derivations is checked separately - a protection that comes
-# from the wrong place is the one that fails on the day the list changes.
+# A cleanup that can delete the wrong thing is worse than no cleanup - each protection is derived.
+# run: tools/tests/rig-cleanup-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT" || exit 2

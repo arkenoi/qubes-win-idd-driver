@@ -37,6 +37,8 @@
 # qrexec) the answer is UNKNOWN and the classification is delegated to Jev via
 # tools/guest-state-judge.py, because naming a case is a classifier and classifiers belong to Jev
 # (owner, 2026-09-21: "when you need to GUESS, ask fucking Jev").
+declare -F toolstack_accept >/dev/null 2>&1 \
+  || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh" 2>/dev/null || true   # toolstack_accept: the one recorded shutdown request
 _qwt_boottime() {
     # NEVER PROBE A GUEST THAT IS NOT ALREADY RUNNING. A qrexec call to a halted or Transient qube
     # makes the toolstack START it, so this probe - added to a function whose entire job is to
@@ -93,7 +95,7 @@ qwt_shutdown() {
     # SHUTDOWN-RIGREAD-B
     b0=$(_qwt_boottime "$vm")            # before the request; empty = no qrexec, a fact in itself
     # A bare qvm-shutdown is the REQUEST (ACPI). It returns immediately and kills nothing.
-    timeout 120 qvm-shutdown "$vm" >/dev/null 2>&1
+    toolstack_accept "$vm" >/dev/null 2>&1
     end=$(( $(date +%s) + deadline ))
     # ASK AGAIN. A single ACPI request that is lost, or that lands while the guest is still busy
     # with first-boot work, used to mean the poll ran to its whole deadline and reported failure on
@@ -124,7 +126,7 @@ qwt_shutdown() {
         if [ "$(date +%s)" -ge "$nextask" ]; then
             asks=$(( asks + 1 ))
             echo "qwt_shutdown: $vm still $st after $(( reask * (asks - 1) ))s - asking again (ask #$asks)" >&2
-            timeout 120 qvm-shutdown "$vm" >/dev/null 2>&1
+            toolstack_accept "$vm" >/dev/null 2>&1
             nextask=$(( $(date +%s) + reask ))
         fi
         # and if it has gone from the list entirely while we waited, it is down, not unresponsive -

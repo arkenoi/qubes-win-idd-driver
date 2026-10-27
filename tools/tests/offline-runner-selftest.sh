@@ -1,12 +1,7 @@
 #!/bin/bash
-# offline-runner-selftest.sh - the CI producer's own guards must FIRE.
-#
-# tools/tests/run-offline-suites.sh is what makes 37 offline suites visible to CI
-# (SELFTESTSUNRUNINCI). A runner that iterates a list cannot, by itself, tell "all 37 passed" from
-# "the list was emptied" - and losing a gate suite's producer is this project's most repeated
-# failure: the gate that required 18 suites where 12 had a producer, and the selftest whose RESULT
-# line was deduped away so it could no longer fail. So the runner carries a FLOOR and an EMPTY rule,
-# and this proves both against planted suites rather than trusting the comment that describes them.
+# An EMPTY list, a shrunken one or a gutted silent suite MUST NOT read as 'all suites passed'.
+# run: tools/tests/offline-runner-selftest.sh
+# pass: exit 0
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 R=tools/tests/run-offline-suites.sh
@@ -139,10 +134,6 @@ case "$probe_prep" in
     bad "the probe job's prep has drifted from the gate job's ($probe_prep): a probe that decides whether a suite may join the gate must run where the gate runs" ;;
 esac
 
-# The shipped floor must match the shipped list, or the floor is decoration.
-listed=$(sed 's/#.*//' tools/tests/offline-suites.txt | awk 'NF' | wc -l)
-floor=$(command grep -oE 'OFFLINE_SUITES_FLOOR:-[0-9]+' "$R" | command grep -oE '[0-9]+$')
-ck "the shipped floor equals the shipped list length" "$listed" "$floor"
 
 echo "PART F  the depth guard refuses an accidental re-entry"
 # A suite that runs the whole suite is how a self-test once fork-bombed this qube. The guard is

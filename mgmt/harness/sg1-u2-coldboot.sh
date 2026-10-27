@@ -34,6 +34,12 @@ VM="${1:?usage: $0 <vm> [outdir]}"
 source mgmt/harness/vmlock.sh; vm_lock "$VM"   # one harness per guest; see vmlock.sh
 source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the notepad this run starts is stopped by its recorded identity, never by name
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/SG1U2-$VM}"
+# A contaminated subject is refused BEFORE any work: this script's default output dir carries no
+# run-id, so a second attempt would otherwise append to the first attempt's artefacts and be read
+# back as one run. Pass a fresh outdir to run again.
+declare -F attempt_dir >/dev/null 2>&1 || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh"
+attempt_dir "$OUT" || exit 1
+
 mkdir -p "$OUT"
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 q(){ QTEST_VM=$VM timeout -k 8 "${T:-150}" ./tools/qtest "$@" 2>/dev/null; }

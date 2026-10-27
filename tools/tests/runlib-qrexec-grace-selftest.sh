@@ -1,20 +1,7 @@
 #!/bin/bash
-# Does kill_tree let an in-flight qrexec client finish connecting before it reaps the tree?
-#
-# WHY THIS TEST EXISTS. Killing the tree while a qrexec-client-vm is still mid-connect makes the
-# client vanish before the guest-side wrapper reads the vchan's xenstore node, so the wrapper
-# reports a departed peer. Three such lines fired at uptime 261 s on win11-acc while five gate
-# suites failed fast, and log-sweep counted them as error_lines_undeclared=1 - the gate's own
-# "clean error log" condition, breached by the measuring harness rather than by the product.
-#
-# BOTH ARMS, and the defect arm is the shipped behaviour before the fix:
-#   A  a live qrexec-client-vm descendant  -> kill_tree WAITS (up to RL_QREXEC_GRACE)
-#   B  the same, exiting on its own        -> kill_tree waits only as long as it lives
-#   C  an ordinary descendant              -> no wait at all (a teardown is not slowed in general)
-#   D  DEFECT=nowait                       -> arm A no longer waits, which is what used to ship
-#
-# /proc/<pid>/comm is truncated to 15 characters, so a process named qrexec-client-vm appears as
-# "qrexec-client-v" - the match has to allow for that, and this test is what proves it does.
+# kill_tree waits for an in-flight qrexec client to finish connecting before it reaps the tree.
+# run: tools/tests/runlib-qrexec-grace-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 TMP=$(mktemp -d)

@@ -1,20 +1,7 @@
 #!/usr/bin/env bash
-# clock-sync-selftest.sh - THE CLOCK PULL MUST BE WIRED, NOT MERELY PRESENT.
-#
-# Owner, 2026-10-08: "can you fucking fix the clock issue once and forever so you NEVER COME WITH
-# IT AGAIN?"  Measured on win11r-logvol the same day: the guest clock was 3 h ahead of the host
-# with its own zone set to UTC, so every --since window in the log sweep silently admitted three
-# hours of older lines and a clean boot read as two errors.
-#
-# WHAT GOES WRONG IF NOBODY CHECKS. Three separate ways this fix can exist and do nothing, two of
-# which it DID have when first written:
-#   1. the puller is staged nowhere, so no guest ever gets it (the 4.3.18 inert-clean-install class);
-#   2. the task is registered against the SETUP PAYLOAD path, which is deleted after the install -
-#      so it "registers fine" and then fails at every boot on a path that is gone. This is what my
-#      first version did: it resolved the puller beside install-clock-sync.ps1, i.e. in the payload;
-#   3. nothing calls install-clock-sync.ps1 at all, which is how it was committed-ready until Jev
-#      graded clock_fix_durable = will-recur 0.52 and named exactly this.
-# Each check below is driven against a copy carrying its own defect, so none of them is decoration.
+# THE CLOCK PULL MUST BE WIRED, NOT MERELY PRESENT.
+# run: tools/tests/clock-sync-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 INST="$ROOT/guest/install-clock-sync.ps1"

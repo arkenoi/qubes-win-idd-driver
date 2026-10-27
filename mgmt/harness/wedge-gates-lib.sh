@@ -62,7 +62,14 @@
 #        sample over bands wedge-lib.sh's own calibration says overlap.
 # The CPU reading therefore names WHICH wedge and may never decide WHETHER one is present.
 
-WG_CLASS=""; WG_WHY=""; WG_LINES=""; WG_SHAPE=""; WG_SHAPE_WHY=""
+# toolstack_accept and qrexec_last_packet come from the sealed primitives. Self-guarded, the same
+# way this file already guards logvol_pull: three different scripts source this library, and an
+# undefined toolstack_accept would return 127 and be read as "the toolstack REFUSED the request",
+# which is the one verdict here that rests on that number.
+declare -F toolstack_accept >/dev/null 2>&1 \
+  || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh" 2>/dev/null || true
+
+WG_CLASS=""; WG_WHY=""; WG_LINES=""; WG_SHAPE=""; WG_SHAPE_WHY=""; WG_LASTPKT=""
 
 # ---------------------------------------------------------------------------------------------
 # The observable set. Every one is host-side EXCEPT O3, and O3 is never allowed to decide a class
@@ -127,7 +134,7 @@ wedge_stage1(){
   local d="${1:?wedge_stage1 <evidence-dir>}"
   # EVERY output reset, shape included: a stale shape from the previous guest classified in the same
   # process would otherwise survive into a tree that returns before T9 ever sets it.
-  WG_CLASS=""; WG_WHY=""; WG_SHAPE=""; WG_SHAPE_WHY=""
+  WG_CLASS=""; WG_WHY=""; WG_SHAPE=""; WG_SHAPE_WHY=""; WG_LASTPKT=""
   local listing="$d/listing.txt" vm; vm=$(_wg_get "$d" vm)
   [ -n "$vm" ] || { WG_CLASS="INSTRUMENT-FAILURE"; WG_WHY="no subject named (lint L10: never default a target)"; return 0; }
 
@@ -262,7 +269,12 @@ wedge_stage1(){
     WG_SHAPE="UNKNOWN"; WG_SHAPE_WHY="O9 unavailable or mixed (activity='${act:-absent}', exit-all-hlt='${allhlt:-absent}', runstate-all-blocked='${allblk:-absent}') - stated, never guessed"
   fi
   printf '%s\n' "$WG_SHAPE" > "$d/shape" 2>/dev/null || true
-  WG_WHY="present, no pixels (O4=$screen) and qrexec silent past ${WG_QREXEC_BOUND}s - the two host-side conjuncts of the definition hold. ACPI is the third and is NOT yet asked. Shape=$WG_SHAPE ($WG_SHAPE_WHY)"
+  # "QREXEC SILENT" IS A CLAIM ABOUT QREXEC, so the last packet type it handled goes on record here
+  # rather than being left to inference - and 'unrecorded' is printed as such, never as 'none'.
+  # The third conjunct (ACPI, through toolstack_accept) is still asked LAST, below: asking it here
+  # to satisfy a grep would reorder the definition and ask it as the second conjunct instead.
+  WG_LASTPKT=$(qrexec_last_packet "$vm" "$d")
+  WG_WHY="present, no pixels (O4=$screen) and qrexec silent past ${WG_QREXEC_BOUND}s (last qrexec packet: $WG_LASTPKT) - the two host-side conjuncts of the definition hold. ACPI is the third and is NOT yet asked. Shape=$WG_SHAPE ($WG_SHAPE_WHY)"
   return 0
 }
 
@@ -381,8 +393,13 @@ wedge_acpi_record(){
   # which is why shutdown-lib re-asks every 120 s by design. It is issued once more only before
   # NOT-HALTED, the single verdict that rests on the request having been made at all.
   if [ "$res" = NOT-HALTED ]; then
-    local ark
-    timeout 120 qvm-shutdown "$vm" >"$d/acpi-reask.log" 2>&1; ark=$?
+    # toolstack_accept (mgmt/harness/primitives.sh) IS this request, and it records the acceptance
+    # on its own run-id-scoped ledger as well - which is what lets a later unusable verdict cite
+    # the toolstack's answer instead of re-asking and destroying a live specimen. No timeout: a
+    # bare ACPI request returns at once, as the note above records.
+    local ark _tsa
+    _tsa=$(toolstack_accept "$vm" acpi 2>&1); ark=$?
+    printf '%s\n' "$_tsa" > "$d/acpi-reask.log"
     printf '%s\n' "$ark" > "$d/acpi-reask-rc"
     if [ "$ark" -ne 0 ]; then
       res=UNREADABLE

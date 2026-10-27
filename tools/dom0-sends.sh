@@ -42,6 +42,13 @@ for a in "${@:3}"; do [ "$a" = "--no-start" ] && NOSTART=1; done
 if [ -z "${QTEST_BIN:-}" ]; then . mgmt/harness/vmlock.sh; vm_lock "$VM" >/dev/null || { echo "  ERROR: could not lock $VM"; exit 2; }; fi
 QT="${QTEST_BIN:-./tools/qtest}"
 OUT="${DOM0_SENDS_OUT:-scratchpad/dom0-sends-$VM-$TAG}"; mkdir -p "$OUT"
+# NO attempt_dir GATE HERE, DELIBERATELY. This script's ledger is CUMULATIVE by contract -
+# tools/tests/dom0-sends-selftest.sh asserts `append_only`, that a second run into the same dir
+# still carries the earlier run's records. A contaminated-subject gate refuses that second run,
+# so the records stop accruing and the suite reads it as a lost record. Measured 2026-10-27:
+# adding the gate took that suite to 17 passed / 1 failed. The ledger is not a per-attempt
+# artefact and must not be scoped like one.
+
 LEDGER="${DOM0_SENDS_LEDGER:-scratchpad/dom0-notifications.jsonl}"
 # THE CAPTURE SCRIPT IS TRACKED, and it has to be: this read `scratchpad/dom0-sends-capture.ps1`,
 # a GITIGNORED path, so the tool worked on exactly one machine. Measured 2026-10-25 by running the

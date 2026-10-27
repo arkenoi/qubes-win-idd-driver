@@ -1,22 +1,7 @@
 #!/bin/bash
 # THE ARM THAT ACTUALLY FIRES MUST MARK THE SPECIMEN.
-#
-# w_session has two ways out when a guest never gives a session:
-#
-#   * the DEADLINE branch, reached at $dl, which calls specimen_mark; and
-#   * `elif [ "$dark" -ge 3 ]`, which returns about four minutes in.
-#
-# Every production call site passes $dl of 420, 600 or 900 (measured: 1x420, 1x600, 8x900). All are
-# above 240, so the dark arm ALWAYS wins and the only specimen_mark call in the function never ran.
-# That is how the first reliably captured wedge was lost on 2026-10-20: the guest was classified,
-# nothing recorded it as evidence, and the campaign recreated it two minutes later. The marker is
-# what makes tools/hooks/golden-boot-gate.sh refuse a start of that name.
-#
-# The assertion is a FILE SIDE EFFECT, not stdout: the call sends its stdout to /dev/null, so a
-# receipt scraped from stdout could never appear and would pass for ever.
-#
-# w_session is eval'd out of the shipped file - the same way cputime-failopen-selftest.sh takes
-# w_cpu_time - so this cannot drift from the harness. The clock and sleep are virtual.
+# run: tools/tests/specimen-mark-reachable-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PASS=0; FAIL=0

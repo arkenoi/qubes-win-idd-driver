@@ -1,14 +1,7 @@
 #!/bin/bash
-# pwclass-truth-table.sh - prove the router refactor did not change routing.
-#
-# WHY. Stage 1 of the de-slice programme is instrument-only except for ONE change: PwWindowEligible
-# no longer computes its BOOL directly but derives it from a new PwWindowClassify, so the
-# provenance ledger records the router's own reason instead of a second copy of the predicate. That
-# refactor is the only place stage 1 can change behaviour by accident, and Jev named it the thing
-# to prove next (write-the-truth-table-test 0.87) once the ledger's own defects were fixed.
-#
-# It extracts PwWindowClassify VERBATIM from the shipped source rather than restating it, so the
-# thing tested is the thing that ships, and drives every combination of the five inputs it reads.
+# The router refactor did not change routing: PwWindowClassify over every combination of its inputs.
+# run: tools/tests/pwclass-truth-table.sh
+# pass: exit 0
 set -u
 cd "$(dirname "$0")/../.." || exit 2
 SRC=agent/gui-agent/perwindow.c

@@ -1,18 +1,7 @@
 #!/bin/bash
-# cold-caller-family-selftest.sh - the goal's cold-qube clause must be evidenced on EVERY OS family.
-#
-# THE DEFECT THIS PINS. "qrexec behavior is aligned with dom0 callers: updaters and start menu, from
-# cold qube as well" is a clause of the release goal, and matrix.sh measured the cold path behind ONE
-# campaign-wide latch (COLD_CALLER_DONE) whose rationale was "the path does not vary by cell". The
-# first eligible cell consumed it, the cell order puts win10 first, and so run 38994277148 evidenced
-# the clause on WIN10 and on no win11 cell at all - the three win11 cells carry the warm checks only.
-# Win11 is this project's stated target, and the defect the goal exists to close was named as
-# DETACHED_PROCESS plus a grandchild on Win11, where the agent, the wrapper and the boot timing all
-# differ from Win10. Jev: once per OS family 0.87 (leave as is 0.00); the premise should not be
-# assumed across families 0.91.
-#
-# The latch is EXTRACTED FROM matrix.sh and driven here, so this cannot pass against a copy of the
-# logic that has drifted from the harness.
+# The goal's cold-qube clause must be evidenced on EVERY OS family, win11 included.
+# run: tools/tests/cold-caller-family-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 2
 M=mgmt/harness/matrix.sh

@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
-# wu-definition-class-selftest.sh - the scan's definition classifier and the exclusion that keeps
-# Defender signatures out of dom0's updates-available (both regions of guest/qubes-windows-update.ps1),
-# against fake offers. The clean leg must pass; -Defect titlematch (the structural test replaced by an
-# English title substring match - the defect most likely to have been shipped instead) must fail the
-# German-title case among others, and -Defect swallowunknown (an unclassifiable offer excluded instead
-# of counted) must fail every must-still-count case. Exit 0 only if all three hold.
+# The definition classifier is STRUCTURAL, and Defender signatures stay out of updates-available.
+# run: tools/tests/wu-definition-class-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"

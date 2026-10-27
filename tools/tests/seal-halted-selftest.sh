@@ -1,15 +1,7 @@
 #!/bin/bash
 # A GOLDEN IS NEVER SEALED WHILE IT IS RUNNING.
-#
-# MEASURED 2026-10-21 by the descending audit: mgmt/harness/seal-qwt-golden.sh was the only consumer
-# of qwt_shutdown that trusted its exit code without an independent Halted re-check. matrix.sh never
-# does that - it re-reads the state at four separate sites. Sealing a RUNNING guest is the worst
-# version of the defect: whatever that guest was doing gets frozen into the golden and inherited by
-# every clone taken from it, which is exactly what the comment three lines above the call says about
-# a killed guest.
-#
-# The block is extracted from the shipped script between its two markers and driven with a stubbed
-# state reader, because the real path needs a rig.
+# run: tools/tests/seal-halted-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT" || exit 2

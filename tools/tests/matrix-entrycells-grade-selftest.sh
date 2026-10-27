@@ -1,25 +1,7 @@
 #!/bin/bash
-# matrix-entrycells-grade-selftest.sh - the three entry cells must establish their OWN precondition.
-#
-# WHAT IT GRADES. cell_stock(), cell_upgrade() and cell_seeded() each enter from a fixture image and
-# then assert that the image really is what the cell claims: stock 4.2.2 installed, a previous QWT
-# installed, or a QWT with the xenbus monitor armed and RUNNING. 19 ok()/no() decisions between them,
-# and tools/grader-census.py counted all three as untested.
-#
-# WHY IT MATTERS, from their own notes. "Presence-by-reg-key is the exact false negative that voided
-# matrix-4318's upgrade cell" - the ITL Version key is absent on OUR builds, so reading presence from
-# it reported "no QWT" for a guest that had one. The fix was to take presence from the MSI product
-# registrations (qwt_products) and use the Version key only as a STOCKNESS discriminator. These
-# checks pin that split: an unreadable count is INVALID-INSTRUMENT, a zero count is
-# INVALID-PRECONDITION, and an empty Version key means "not stock" and never "no QWT".
-#
-# A CELL THAT CANNOT ESTABLISH ITS DECLARED PRECONDITION IS INVALID, NOT A PRODUCT VERDICT (H4.2),
-# and the distinction is the point: a product FAIL blames the release, an INVALID blames the fixture.
-#
-# HOW IT IS DRIVEN. The SHIPPED functions are extracted from matrix.sh and run with every
-# guest-touching helper stubbed. The downstream battery (run_install / verify_installed /
-# accept_grade) is stubbed to a no-op on purpose: this suite is about the ENTRY assertions, and
-# letting the battery run would grade things other suites already cover.
+# the three entry cells must establish their OWN precondition; a cell that cannot is INVALID, not FAIL
+# run: tools/tests/matrix-entrycells-grade-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 2
 ROOT="$PWD"

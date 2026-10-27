@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
-# ttfw-ab-selftest.sh - offline checks on mgmt/harness/ttfw-ab.sh. No guest, no rig.
-#
-# A ROUTINE THAT PRODUCES A NUMBER THE OWNER WILL ACT ON IS ITSELF AN INSTRUMENT, and this one
-# produces the headline for a user-visible latency. The shapes checked here are the ones whose
-# absence would make its number meaningless rather than wrong-by-a-little, and every shape check is
-# driven to FAIL with its guarded line removed - a check never seen to fail is decoration.
+# ttfw-ab is an INSTRUMENT: the swap is proved, samples end in DESKTOP pixels, only disjoint claims.
+# run: tools/tests/ttfw-ab-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 H="$ROOT/mgmt/harness/ttfw-ab.sh"

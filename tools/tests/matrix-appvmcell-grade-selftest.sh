@@ -1,34 +1,7 @@
 #!/bin/bash
-# matrix-appvmcell-grade-selftest.sh - the appvm cell's PRECONDITIONS and per-boot verdicts.
-#
-# WHAT IT GRADES. cell_appvm() restores an 'installed' park into a template, derives an AppVM from it
-# and cold-boots it three times. Its window verdict was split out into grade_appvm_window() (suite:
-# matrix-appvmwindow-grade-selftest.sh); what remains here is the entry refusals, the per-boot
-# session/shell verdicts, and the all-boots instrument verdict.
-#
-# WHAT IT PINS, each a measured incident recorded in matrix.sh itself:
-#   * an ABSENT template is an infrastructure fact knowable in one call, not a guest that refused to
-#     halt. w_state returns an EMPTY string for a VM that does not exist, and "" != Halted, so an
-#     absent template used to be waited on for 420 s and then failed as "template would not halt" -
-#     "FOUR of that campaign's ELEVEN failures were this one message" (run 9).
-#   * a missing 'installed' park is a HARD refusal: without it there is no deterministic
-#     release-carrying state to derive from, and "AS-IS" would mean "whatever the template last held".
-#   * an AppVM is RE-CREATED, never reused. Its private volume seeds from the template AT CREATION
-#     ONLY, so re-basing a template under an existing AppVM leaves a stale private - no profile, no
-#     shell (owner correction 2026-09-04). A reused one must read as STALE PRIVATE VOLUME, never as a
-#     product defect.
-#   * an empty dom0 capture on EVERY boot is the capture never working; on SOME boots alongside one
-#     that mapped a window it is a dom0 desktop switch, which the owner confirmed on 2026-10-10 and
-#     which is NOT graded.
-#
-# WHY IT IS SHAPED LIKE THIS. Two earlier attempts at this suite were FLAKY - 14/1, 15/0, 10/5 and
-# then 19/1, 16/4, 19/1 - and both times the nondeterminism was in the HARNESS, not the function:
-# a case file read by external stub programs, assignment prefixes on a function call that did not
-# reach those programs, a cleanup trap inherited by a background subshell, and a stub defined inside
-# one helper shadowing the real function for another (bash function definitions are global). Driven
-# the plain way - stubs as ordinary shell functions reading ordinary variables, no PATH tricks, no
-# subshells, no case files - cell_appvm is perfectly deterministic. A flaky suite was never evidence
-# about the product; it was evidence about me.
+# the appvm cell's entry refusals and its per-boot session/shell and instrument verdicts hold.
+# run: tools/tests/matrix-appvmcell-grade-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 2
 ROOT="$PWD"
@@ -66,6 +39,10 @@ w_appvm_shell(){ return "${SHELL_RC:-0}"; }
 w_screen(){ printf 'DESKTOP\n'; }
 start_vm(){ :; }
 reclone(){ return 0; }
+# The sealed primitives cell_appvm now goes through. UNUSABLE_RC drives the step-15 gate's two arms:
+# 0 = the evidence is on record and the unusable verdict is entitled, non-zero = it is withheld.
+toolstack_accept(){ return 0; }
+unusable_verdict(){ printf 'UNUSABLEEVIDENCE vm=%s last_qrexec=stub TOOLSTACKACCEPT accepted=1\n' "$1"; return "${UNUSABLE_RC:-0}"; }
 # THE STICK PRIMITIVES ARE RECORDERS, not no-ops. Owner's ruling 2026-10-22 - "log stick exists for
 # install testing. on appvms and feature tests it has zero sense" - means the property under test is
 # that this cell calls NONE of them, which a no-op stub cannot see. $STICK collects the calls.
@@ -246,7 +223,7 @@ fi
 # A test that greps another test is the shape the owner banned outright, and chasing the rename would
 # have re-created it.
 # WHAT ACTUALLY ENFORCES THE PROPERTY, and it is stronger than the grep ever was: logvol_prove_roundtrip
-# is called by the CAMPAIGN - mgmt/harness/matrix.sh and mgmt/harness/logvol-smoke.sh - so every
+# is called by the CAMPAIGN - mgmt/harness/matrix.sh and tools/smoke/logvol-smoke.sh - so every
 # acceptance run executes it against a real guest and fails on it. Measured in run 40297264818 at
 # 11:54:58Z: "logvol smoke (bind arm) PASS - the guest sees the volume, the bind succeeds, and a nonce
 # written inside reaches the IMAGE read back with mtools and no guest", with the refutation arm at

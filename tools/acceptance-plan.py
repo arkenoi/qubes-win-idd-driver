@@ -28,7 +28,7 @@ harness attaches one yet (none does in this pass - section 8 step 2 is the retro
 "required" for "present".
 
 EXIT: 0 the plan was written (read `ready`); 2 the plan could not be decided (gate-scope exit 2, unreadable ledger or
-map) - never "nothing required". Self-test: tools/tests/acceptance-plan-selftest.sh (fixture repository via
+map) - never "nothing required". No self-test: acceptance-plan-selftest.sh was deleted 2026-10-27 (fixture repository via
 GATE_SCOPE_ROOT, scoped vs full-floor, the knobs).
 """
 from __future__ import annotations

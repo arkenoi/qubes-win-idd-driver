@@ -1,21 +1,7 @@
 #!/usr/bin/env bash
-# deathevent-selftest.sh - offline proof matrix for the supervisors' death record (docs/ADR-supervision.md section 2):
-# agent/include/deathevent.h, the ONE Event Log entry the QubesGuiWatchdog service and the gui-agent write when a child
-# they started exits without being asked to, and the shipped call sites that write it.
-#
-# Runs on this dev qube with gcc alone (no rig, no guest, no Windows toolchain) against tools/tests/win32stub (the Win32
-# surface the files use, types + arities only) plus the REAL windows-utils headers:
-#   clean build of gui-agent/deathevent_test.c   MUST pass (the record's source, type, id, six strings, bounds, failure paths)
-#   DEATHEVENT_DEFECT_* builds                   MUST fail - a guard never seen to fail is decoration:
-#       WARNING   written as a warning            SHAREDID  one id for every child            NOCODE  the exit code dropped
-#       HANGASEXIT a hang written as "exited, exit code unknown" (rz39 defect 2)
-#   UNCOMPILED SHAPE CHECK of the shipped callers: watchdog/watchdog.c parses with gcc -fsyntax-only against the stubs and the
-#   real log.h/config.h/qubes-io.h (the main.c and etwproxy.c sites pull ETW/LSA/DirectX headers no stub covers, so they are
-#   held to a static shape: the include, exactly one DeathEventReport per child id, no LogWarning left on the death lines).
-#   CI compiles the real thing; this proves the C is well-formed and the contract is pinned, nothing about linking.
-#
-#   AGENT_DIR=<path>           the agent checkout (default: the agent submodule); WINDOWS_UTILS_INC=<path> the real headers
-#   DEATHEVENT_OUT=<dir>       where the builds and outputs go (default: a mktemp dir)
+# A child that exits unasked gets ONE death record; no GUI domain is a start condition, not a death.
+# run: tools/tests/deathevent-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 AGENT="${AGENT_DIR:-$ROOT/agent}"

@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# jev-first-gate-selftest.sh - the gate must check WHICH decision was asked, not the clock.
-#
-# It allowed any launch with a Jev call in the last 60 min. Unrelated calls kept the window warm, so
-# a workflow whose own fork was never asked went through: ~1.1M subagent tokens over three passes,
-# 2026-10-17, answered afterwards in one call that invalidated the result.
+# the launch gate checks WHICH decision was asked, not the clock: a warm window licenses nothing
+# run: tools/tests/jev-first-gate-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 G="$ROOT/tools/hooks/jev-first-gate.sh"

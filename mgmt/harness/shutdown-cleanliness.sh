@@ -20,6 +20,8 @@
 #   acpi     : `qvm-shutdown` from the host - the control, a different route to the same S5
 #
 # Usage:  VM=win-idd-test ROUNDS=2 mgmt/harness/shutdown-cleanliness.sh
+declare -F toolstack_accept >/dev/null 2>&1 \
+  || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh" 2>/dev/null || true   # toolstack_accept: the one recorded shutdown request
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
@@ -74,7 +76,7 @@ for r in $(seq 1 "$ROUNDS"); do
       # EXACTLY the installer's line. Fire and forget: the guest dies mid-call.
       gq 'cmd /c shutdown.exe /s /f /t 2' 30 >/dev/null 2>&1 || true
     else
-      qvm-shutdown "$VM" >/dev/null 2>&1
+      toolstack_accept "$VM" >/dev/null 2>&1
     fi
 
     if ! wait_halt; then

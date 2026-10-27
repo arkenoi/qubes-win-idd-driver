@@ -50,6 +50,12 @@ SHORT="${HEAD_SHA:0:12}"
 # harness), so they are named HERE, in one place, exactly as campaign-run.sh names the entry images.
 : "${VM10:=win10-acc}" "${VM11:=win11-acc}" "${OS11:=win11r}"
 OUT="${OUT:-$HOME/qwt-accept/campaign-full-$SHORT}"
+# A contaminated subject is refused BEFORE any work: this script's default output dir carries no
+# run-id, so a second attempt would otherwise append to the first attempt's artefacts and be read
+# back as one run. Pass a fresh outdir to run again.
+declare -F attempt_dir >/dev/null 2>&1 || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh"
+attempt_dir "$OUT" || exit 1
+
 mkdir -p "$OUT" || exit 2
 log(){ printf '%s campaign-full[%s] %s\n' "$(date -u '+%H:%M:%S')" "$SHORT" "$*" | tee -a "$OUT/chain.log"; }
 die(){ log "REFUSED: $*"; exit 2; }

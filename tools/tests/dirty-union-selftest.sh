@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# dirty-union-selftest.sh - tools/wgcbroker/dirty_union.h (the broker's union of two frames' dirty regions, rest-zero S1) compiled on
-# Linux from the SHIPPED header: the clean build must pass (every pixel of the union copied exactly once, none outside), and
-# -DUNION_DEFECT (the two lists walked one after the other - the sum PublishCard copied until 2026-10-03) must fail. Exit 0 only if both.
+# dirty_union.h copies every pixel of the union exactly once, none outside; the sum build FAILS.
+# run: tools/tests/dirty-union-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT

@@ -30,6 +30,7 @@ KEY='HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent'
 QTEST_BIN="${QTEST_BIN:-./tools/qtest}"   # overridable ONLY so the degraded-guest paths are provable off-rig
 source mgmt/harness/lifecycle-lib.sh   # ctl_start / ctl_stop: the control window, by handle - no process is killed by name
 source mgmt/harness/shutdown-lib.sh   # qwt_shutdown: the bit is applied across a reboot, see set_bits
+source mgmt/harness/primitives.sh     # the six sealed primitives: clock_correct, fresh_cell_log, toolstack_accept, ...
 q(){ QTEST_VM=$VM timeout -k 8 "${T:-200}" "$QTEST_BIN" "$@" 2>/dev/null; }
 psrun(){ local b; b=$(python3 -c "
 import base64,sys; print(base64.b64encode(sys.stdin.read().encode('utf-16-le')).decode(), end='')" <<< "$1")
@@ -121,7 +122,7 @@ boot_ready(){  # bounded: qrexec answers AND a file push lands (the receiver nee
         # whose guest clock is skewed from the host's: rc=3 "clockskew ... +10837 s", which is how
         # the gate's sweep produced no verdict at all. qtest synctime pushes this qube's clock in,
         # accurate to ~0.3 s, and is documented as the thing to call after every VM start.
-        QTEST_VM=$VM timeout 120 "$QTEST_BIN" synctime >/dev/null 2>&1 || true
+        clock_correct "$VM" 120 >/dev/null 2>&1 || true
         return 0
       fi
     fi

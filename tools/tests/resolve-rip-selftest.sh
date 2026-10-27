@@ -1,25 +1,7 @@
 #!/bin/bash
-# resolve-rip-selftest.sh - prove the RIP resolver works BEFORE the one shot that needs it.
-#
-# WHY THIS EXISTS. The pipeline WORKS: on 2026-09-11 it resolved specimen 4's two spin sites
-# (SITE P -> ntoskrnl.exe + 0x2bfd00, SITE Q -> xenbus.sys + 0x1cd5c), which is what the xenbus
-# identification rests on. An earlier version of this header claimed it had "never been shown to
-# resolve an address"; that was wrong and is retracted here.
-#
-# What ONE happy-path success does not exercise is every path where the tool must REFUSE - and
-# those are what turn a specimen into a WRONG answer rather than no answer. The 09-11 resolution
-# depended on scoping to the right boot BY HAND ("scoped to the LAST PRE-REBOOT boot"); nothing
-# had ever checked that the tool refuses when that scoping is wrong. When dom0 `debug-keys d/v`
-# catches the next spinning vCPU there is ONE capture, so the refusals are exercised here,
-# offline, against synthetic tables in the recorder's exact on-disk format.
-#
-# It checks the three REFUSALS the tool's own docstring promises, because those are what stand
-# between "named the code" and "a plausible-looking lie":
-#   * never resolve against a different boot's table (the KASLR trap itself);
-#   * never attribute an address that falls below every recorded base;
-#   * never print a confident module name with an absurd offset.
-# Each is also re-introduced as a DEFECT (RIPSEL_DEFECT=...) and the test must CATCH it - a check
-# that has never failed is not evidence.
+# the RIP resolver REFUSES a wrong-boot table, an address below every base, and an absurd offset
+# run: tools/tests/resolve-rip-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 

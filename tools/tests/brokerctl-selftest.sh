@@ -1,25 +1,7 @@
 #!/usr/bin/env bash
-# brokerctl-selftest.sh - offline proof matrix for the de-slice broker's CONTROL PATH fix
-# (findings/issues.md P1, 2026-10-07; Jev: cause control-behind-work 0.92, fix decouple-control 0.97).
-#
-# THE DEFECT, measured 2026-10-01: the broker's Reconcile() acknowledges each slot at the END of that slot's own
-# iteration, so a new window's registration on slot 3 waited behind slot 0's WGC channel open. The agent's deadline -
-# which already requires both "unacknowledged" and "no progress", and a single long call satisfies both because the
-# progress counter moves only between stages - read a working broker as hung and TERMINATED it: 1218 ms with every
-# window withheld, and on an eligible guest there is no composite fallback.
-#
-# THE FIX, both halves:
-#   broker   a FIRST registration is acknowledged in a pre-pass before any per-slot work, so no slot's work delays
-#            another slot's acknowledgement - and ONLY a first registration, because the same acknowledgement tells
-#            the agent an arena region is reusable (R4);
-#   agent    a stage the broker has DECLARED gets its own budget (WgcbrkStageBudgetMs), so a legitimately slow open is
-#            not a hang, and a broker that keeps changing stage is never reaped.
-#
-#   budget   the shared budget table and its accessors compile and answer per stage (a C test, gcc here)
-#   ackfirst the broker's pre-pass runs BEFORE the work loop and refuses the three unsafe cases
-#   stage    the agent's overdue test consults the stage budget, and so does the wake-up deadline
-#   syntax   the changed broker source parses (UNCOMPILED here - CI builds it with MSVC/WinRT)
-# Each check is also seen to FAIL with its guarded line removed.
+# The broker acks a FIRST registration before any slot's work; the agent's hang test is stage-aware.
+# run: tools/tests/brokerctl-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BRK="$ROOT/tools/wgcbroker/wgcbroker.cpp"

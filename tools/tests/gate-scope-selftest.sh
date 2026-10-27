@@ -1,24 +1,7 @@
 #!/usr/bin/env bash
-# gate-scope-selftest.sh - offline proof matrix for tools/gate-scope.py and mgmt/gate-scope.json (docs/ADR-acceptance.md).
-#
-# The scheme it proves: a release's gate is scoped to what the diff touches, with an always-run core, a floor that
-# forces everything anyway, and a refusal when the gate's coverage does not include what is required. The owner
-# replaced "full acceptance before every release" with it on 2026-10-07, so the thing that must never happen is a
-# diff silently requiring LESS than it should - which is why every case below is driven against a FIXTURE repository
-# (its own git history, its own map and ledger, via GATE_SCOPE_ROOT), and why each check is also seen to FAIL with
-# its defect present. A check never seen to fail is decoration.
-#
-#   scoped        a diff that touches only the agent requires the agent's suites and NOT the install variants
-#   installer     a diff that touches the installer requires every install variant
-#   unmapped      a diff that touches a path no pattern names requires the FULL set, and names the file
-#   closure       a shared helper two harnesses source expands through the reverse-dependency closure
-#   submodule     a submodule POINTER change expands to that submodule's own scope
-#   floor-*       each of the four floor conditions trips on its own
-#   check         coverage missing one required suite is REFUSED, naming it; complete coverage is satisfied
-#   missing       an empty or unreadable coverage file FAILS rather than reading as "nothing required"
-#   ledger        the floor is read from the ledger, never asserted
-#
-#   GATE_SELFTEST_OUT=<dir>   where the fixtures and outputs go (default: a mktemp dir)
+# a diff must never silently require LESS than its scope demands; short coverage is REFUSED
+# run: tools/tests/gate-scope-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 TOOL="$ROOT/tools/gate-scope.py"

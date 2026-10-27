@@ -1,19 +1,7 @@
 #!/bin/bash
-# THE CAMPAIGN LOG MUST SCOPE ONE ATTEMPT - and this EXECUTES the code that makes it so.
-#
-# THE DEFECT, measured 2026-10-22. tools/release-acceptance.sh appends the matrix's stdout to
-# $CAMP/full.out with `tee -a`, and $WORK is derived from the release-package run id, so two attempts
-# against one package write into the same file. It ended that night holding BOTH
-#   === MATRIX: 1 passed, 1 failed - ABORTED on a log-device failure ===      (the 21:50 attempt)
-#   === MATRIX: 44 passed, 2 failed - ABORTED on a log path that broke mid-cell ===   (the 22:12 one)
-# with nothing between them. That file is what `matrix rc=` points a reader at, so it is the one
-# opened first - and matrix.sh's own fix (the MATTEMPT markers) covers only $CAMP/matrix.
-#
-# WHY full.out IS ROTATED AND NOT STAMPED. record-acceptance.sh globs $CAMP/*.out and requires ONE
-# '=== MATRIX ... ===' footer per file, treating a footerless file as a group that did not finish.
-# Two footers in one file breaks that contract and a separator inside it would not repair it. So the
-# property asserted here is: after a new attempt starts, $CAMP holds exactly ONE *.out carrying a
-# footer, the previous attempt's output still EXISTS, and the kept copy is OUT of the *.out glob.
+# THE CAMPAIGN LOG MUST SCOPE ONE ATTEMPT: one footer per *.out, the previous attempt kept aside.
+# run: tools/tests/accept-attempt-boundary-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 2
 SRC=tools/release-acceptance.sh

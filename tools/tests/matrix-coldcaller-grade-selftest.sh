@@ -1,23 +1,7 @@
 #!/bin/bash
-# matrix-coldcaller-grade-selftest.sh - a campaign that never measured the cold caller path must not pass.
-#
-# WHAT WAS WRONG. "qrexec behavior is aligned with dom0 callers: updaters and start menu, FROM COLD
-# QUBE AS WELL" is a clause of the release goal, and matrix.sh measures the cold half once per OS
-# FAMILY. The first version printed "[WARN] ... the cold caller path went unmeasured for this cell"
-# and carried on; the latch was SET and never READ, so zero measurements of a release-goal clause
-# passed in silence - and matrix.sh's own notes record it happening twice.
-#
-# THEN THE GRADE ITSELF MOVED and this suite did not. The latch became per family
-# (COLD_CALLER_DONE_win10 / _win11) and the post-loop grade stopped reading a variable at all: it
-# asks the per-cell `*-coldcallers.out` files, per family, whether a COLD alignment was recorded.
-# This suite still extracted `if [ "${COLD_CALLER_DONE:-0}" = 0 ]; then`, found nothing, and exited
-# 2 - a suite reporting an environment failure where the code had improved. It now drives the
-# shipped grade over FIXTURE EVIDENCE DIRECTORIES, which is the input the grade actually reads.
-#
-# HOW IT IS DRIVEN. The block is EXTRACTED FROM THE REAL matrix.sh by its marker and executed with
-# no()/ok() stubbed and $M pointed at a fixture dir, so this tests the shipped code rather than a
-# copy of it. Delete the block, stop grading the absence, or go back to one latch for both
-# families, and these checks fail.
+# a campaign with no COLD caller alignment recorded for an OS family must not pass
+# run: tools/tests/matrix-coldcaller-grade-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT" || exit 2

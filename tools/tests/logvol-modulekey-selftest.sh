@@ -1,24 +1,7 @@
 #!/usr/bin/env bash
-# logvol-modulekey-selftest.sh - THE PREMISE THE RACE-FREE BIND RESTS ON, asserted.
-#
-# The harness binds the log volume by writing LogDir into the PER-MODULE keys, not the root,
-# because the root is a value the product's installer deliberately forces with `reg add /f` once
-# per stage. That is correct product behaviour and must not change: the MSI has two components
-# racing to write LogDir under one condition, so a deterministic pre-seed is what stops the winner
-# being arbitrary, and it is also what migrates a legacy root-volume path onto Q:.
-#
-# MEASURED 2026-10-19 on win11de-tup - the bind worked and was then undone:
-#   05:00:56 bind -> Z:\qwt-logs\win11de-tup (copied=83)   05:00:58-05:01:48 28 wrapper logs on the stick
-#   05:02:00 installer: "seeded gui-agent registry defaults (... LogDir)"
-#   05:02:05 wrapper logs back in Q:\Qubes Logs, and never on the stick again
-# A direct read then showed LogDir='Q:\Qubes Logs', no per-module key, and no wrapper log under
-# Z:\qwt-logs\win11de-tup. Jev: logdir_was_rewritten established 0.96, the volume exonerated 0.76,
-# and the mechanism the harness used to blame (a removable volume enumerating too late) refuted 0.96.
-#
-# SO THE BIND MUST NOT DEPEND ON WRITE ORDER (owner: "no fucking races in the product.
-# determenistic paths only"). It depends instead on a precedence fixed in C: windows-utils reads
-# LogDir module-key-first and only falls back to the root. THIS SUITE ASSERTS THAT PREMISE, so if
-# upstream ever changes it the bind fails loudly here instead of silently losing the logs again.
+# THE LOG BIND RESTS ON MODULE-KEY-FIRST PRECEDENCE, and only the product writes the root LogDir.
+# run: tools/tests/logvol-modulekey-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 pass=0; fail=0

@@ -69,6 +69,7 @@ cd /home/user/qubes-win-idd-driver
 export QTEST_VM="${QTEST_VM:-__matrix_no_ambient_target__}"
 source .claude/skills/win-guest-e2e/e2e-lib.sh
 source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the notepad a cell starts is stopped by its recorded identity, never by name
+source mgmt/harness/primitives.sh   # the six sealed primitives: clock_correct, fresh_cell_log, toolstack_accept, ...
 source mgmt/harness/logvol-lib.sh
 source mgmt/harness/wedge-gates-lib.sh  # wedge_volume_held_for: an AppVM whose private volume is the only copy of an antecedent must not be recreated over
 source mgmt/harness/specimen-lib.sh   # a cell that keeps its subject as evidence writes that down; the boot gate then refuses a hand-typed start
@@ -161,12 +162,25 @@ logvol_bind_now(){ # $1=vm $2=label
       # changes is only the cause this campaign reports, which is what a reader acts on.
       _lv_reason=$(tail -1 "$M/$2-logvol-proof.out" 2>/dev/null | cut -c1-150)
       if command grep -qa 'reason=no_answer_from_guest' "$M/$2-logvol-proof.out" 2>/dev/null; then
-        say "[ERROR] FATAL: $2: the guest NEVER ANSWERED the log-path probe, so the log path was"
-        say "[ERROR] FATAL: NOT tested and is NOT implicated. This is the cell's own failure to"
-        say "[ERROR] FATAL: reach a usable guest - no agent installed, or no logged-on session yet."
-        say "[ERROR] FATAL: Read the install first: the prime log's qrexec polls and, on a prime"
-        say "[ERROR] FATAL: cell, the DIAG volume's prime-progress.log installer rc. $_lv_reason"
-        say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED: no usable guest to prove the log path ==="
+        # "NO USABLE GUEST" IS NOT SAYABLE ON SILENCE ALONE. unusable_verdict collects the package
+        # first, asks ACPI last, and refuses unless the last qrexec packet type AND the toolstack's
+        # answer are both on record. A probe that got no answer does not say which of the three
+        # states this is, and that conflation is what reported the wrong cause on 2026-10-25.
+        if _ue=$(unusable_verdict "$1" "$M/unusable-$2" \
+                   "${CAMPAIGN_SINCE:-$(date -u -d '3 hours ago' +%Y-%m-%dT%H:%M:%SZ)}" \
+                   "${LOGVOL_IMG:-none}" "$2: the guest never answered the log-path probe"); then
+          say "[ERROR] FATAL: $2: the guest NEVER ANSWERED the log-path probe, so the log path was"
+          say "[ERROR] FATAL: NOT tested and is NOT implicated. This is the cell's own failure to"
+          say "[ERROR] FATAL: reach a usable guest - no agent installed, or no logged-on session yet."
+          say "[ERROR] FATAL: $_ue"
+          say "[ERROR] FATAL: Read the install first: the prime log's qrexec polls and, on a prime"
+          say "[ERROR] FATAL: cell, the DIAG volume's prime-progress.log installer rc. $_lv_reason"
+          say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED: no usable guest to prove the log path ==="
+        else
+          say "[ERROR] FATAL: $2: the log-path probe got no answer, but the evidence for calling the"
+          say "[ERROR] FATAL: guest UNUSABLE is incomplete, so that verdict is NOT emitted. $_lv_reason"
+          say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED: log-path probe unanswered, evidence incomplete ==="
+        fi
       else
         say "[ERROR] FATAL: $2: the log path did NOT survive a round trip - $_lv_reason"
         say "[ERROR] FATAL: the guest wrote where it says it writes, or this qube could not read it"
@@ -866,7 +880,7 @@ reclone(){ # $1=golden $2=target
   #    cleanup"
   # which is how a cell that had already reproduced the bug failed with "could not reclone".
   if [ "$(w_state "$t")" != Halted ]; then
-    qvm-shutdown "$t" >/dev/null 2>&1
+    toolstack_accept "$t" >/dev/null 2>&1
     if ! w_halt "$t" 420 "shutdown-$t" say; then
       say "  $t ignored ACPI shutdown for 420 s (screen=$(w_screen "$t" "stuck-$t" "$M")) - killing as the last resort"
       qvm-kill "$t" >/dev/null 2>&1
@@ -903,7 +917,7 @@ EOF
     # dirty state in seconds (measured 2026-08-28: revert root+private -> clone OK immediately).
     say "  dirty volume - reverting root+private to their last snapshot (clone attempt $att)"
     if [ "$(w_state "$t")" != Halted ]; then
-      qvm-shutdown "$t" >/dev/null 2>&1
+      toolstack_accept "$t" >/dev/null 2>&1
       w_halt "$t" 120 "revert-halt-$t" say >/dev/null 2>&1 || { qvm-kill "$t" >/dev/null 2>&1; sleep 10; }
     fi
     local v rev
@@ -1584,27 +1598,17 @@ run_install(){ # $1=vm $2=label $3=install-source (drive/dir carrying install.cm
   # VERIFIED, NOT REQUESTED: a WARN nobody reads is how this survived. The skew is re-read from the
   # guest AFTER the sync and a still-broken clock is INVALID-INSTRUMENT - the rig could not measure,
   # which is a different finding from a product that refused.
-  local _hnow _gutc _skew
-  # ./tools/qtest, NOT "$HERE/tools/qtest": every other call in this function spells it relative
-  # (lines below push, run and probe that way), matrix.sh cd's to the repo root, and
-  # matrix-runinstall-grade-selftest.sh extracts THIS FUNCTION ALONE and runs it against a stub
-  # tree - so $HERE is unset there and the suite died with "HERE: unbound variable", which is the
-  # same defect its own header records for $INC. A relative path hits the stub; $HERE cannot.
-  QTEST_VM=$vm ./tools/qtest synctime >/dev/null 2>&1 \
-    || say "  $lbl: [WARN] qtest synctime returned non-zero - verifying the clock regardless"
-  _hnow=$(date -u +%s)
-  _gutc=$(QTEST_VM=$vm qrun "powershell -NoProfile -Command \"[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')\"" 2>/dev/null \
-          | tr -d '\r' | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z' | head -1)
-  if [ -z "$_gutc" ]; then
-    no "$lbl: INVALID-INSTRUMENT - could not read the guest clock before install; a guest an hour behind refuses the payload's driver catalogs (0x800B0101) and takes the whole cell with it"
+  # THROUGH THE ONE DOOR. clock_correct (mgmt/harness/primitives.sh) is the single synctime +
+  # skew-check entry point, and this block was its only implementation until the primitive was
+  # sealed. matrix-runinstall-grade-selftest.sh extracts THIS FUNCTION ALONE against a stub tree,
+  # so it stubs clock_correct - primitives.sh resolves its own repo root and would reach the real
+  # qtest from there, which is the same class of defect this function's $INC note records.
+  local _cc
+  if ! _cc=$(clock_correct "$vm" 120 2>&1); then
+    no "$lbl: INVALID-INSTRUMENT - $(printf '%s' "$_cc" | tr '\n' ' ')"
     return 1
   fi
-  _skew=$(( $(date -u -d "$_gutc" +%s) - _hnow ))
-  if [ "${_skew#-}" -gt 120 ]; then
-    no "$lbl: INVALID-INSTRUMENT - the guest clock is ${_skew}s from this host AFTER qtest synctime (guest says $_gutc); the installer would refuse its driver catalogs as not-yet-valid"
-    return 1
-  fi
-  say "  $lbl: guest clock verified ${_skew}s from this host before install"
+  say "  $lbl: $(printf '%s' "$_cc" | tr '\n' ' ')"
   # Clear BOTH logs. The MSI verbose log lives at a fixed path and survives from earlier installs,
   # so without this the capture can show a two-week-old install and read as this run's evidence.
   # VERIFY THE CLEAR (H1). A failed delete leaves the GOLDEN's own install log in place - every
@@ -1885,7 +1889,7 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
   # once (back-gap stayed 2 s and "contract requires of its caller" appeared 0 times in the log),
   # which is exactly why the gap is measured rather than assumed.
   say "  $lbl: rebooting the guest, as the installer's contract requires of its caller"
-  qvm-shutdown "$vm" >/dev/null 2>&1
+  toolstack_accept "$vm" >/dev/null 2>&1
   w_halt "$vm" 420 "$lbl-postinstall-halt" say || { qvm-kill "$vm" >/dev/null 2>&1; sleep 10; }
   start_vm "$vm"
   w_session "$vm" 900 "$lbl-back" "$M" say
@@ -2640,7 +2644,7 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the
     return
   fi
   if [ "$(w_state "$tpl")" != Halted ]; then
-    qvm-shutdown "$tpl" >/dev/null 2>&1
+    toolstack_accept "$tpl" >/dev/null 2>&1
     w_halt "$tpl" 420 "$3-appvm-tplhalt" say || { no "$3-appvm: template would not halt"; return; }
   fi
   # SNAPSHOT ENTRY (owner: "we do snapshots for optimizations"). The AppVM boots the template's
@@ -2677,7 +2681,7 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the
     applabel=$(qvm-prefs "$app" label 2>/dev/null)
     appnetvm=$(qvm-prefs "$app" netvm 2>/dev/null)
     if [ "$(w_state "$app")" != Halted ]; then
-      qvm-shutdown "$app" >/dev/null 2>&1
+      toolstack_accept "$app" >/dev/null 2>&1
       w_halt "$app" 420 "$3-appvm-halt" say || { no "$3-appvm: $app would not halt for re-create"; return; }
     fi
     # THE VOLUME MAY BE THE ONLY COPY OF AN ANTECEDENT. An appvm cell has no evidence stick by the
@@ -2759,13 +2763,22 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the
   for b in 1 2 3; do
     say "  --- $3 AppVM cold boot $b/3 ---"
     if [ "$(w_state "$app")" != Halted ]; then
-      qvm-shutdown "$app" >/dev/null 2>&1; w_halt "$app" 420 "$3-appvm-b${b}-halt" say >/dev/null 2>&1
+      toolstack_accept "$app" >/dev/null 2>&1; w_halt "$app" 420 "$3-appvm-b${b}-halt" say >/dev/null 2>&1
     fi
     start_vm "$app"
     w_session "$app" 900 "$3-appvm-b$b" "$M" say
     case $? in
       0) : ;;
-      1) no "$3-appvm boot $b: terminal state, guest unusable"; return ;;
+      1) # A terminal state is not by itself a licence to call the guest unusable: the last qrexec
+         # packet type and the toolstack's answer go on record first, or the verdict names the gap.
+         if _ue=$(unusable_verdict "$app" "$M/unusable-$3-appvm-b$b" \
+                    "${CAMPAIGN_SINCE:-$(date -u -d '3 hours ago' +%Y-%m-%dT%H:%M:%SZ)}" \
+                    "${LOGVOL_IMG:-none}" "$3-appvm boot $b: w_session reported a terminal state"); then
+           no "$3-appvm boot $b: terminal state, guest unusable - $_ue"
+         else
+           no "$3-appvm boot $b: terminal state, but the evidence for calling the guest UNUSABLE is incomplete, so that verdict is not emitted"
+         fi
+         return ;;
       2) no "$3-appvm boot $b: no session within 900s"; return ;;
     esac
     # MECHANIZED stale-private guard (e2e-wait.sh w_appvm_shell): w_session proves only the
@@ -3104,13 +3117,24 @@ for c in $CELLS; do
         _lv_reason=$(tail -1 "$M/$c-logvol-proof.out" 2>/dev/null | cut -c1-150)
         logvol_pull "$LOGVOL_IMG" "$M/logvol-$c" >>"$M/$c-logvol-pull.out" 2>&1 || true
         if command grep -qa 'reason=no_answer_from_guest' "$M/$c-logvol-proof.out" 2>/dev/null; then
-          say "[ERROR] FATAL: $c: the guest NEVER ANSWERED the pre-grading log-path probe, so the"
-          say "[ERROR] FATAL: log path is NOT implicated and nothing is known to have broken. This"
-          say "[ERROR] FATAL: cell has no usable guest: no agent installed, or no logged-on session"
-          say "[ERROR] FATAL: ( qtest pushrun needs one ), or an agent that stopped. Read the"
-          say "[ERROR] FATAL: install first - the prime log's qrexec polls, and on a prime cell the"
-          say "[ERROR] FATAL: DIAG volume's prime-progress.log installer rc. $_lv_reason"
-          say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED: no usable guest at grading ==="
+          # The same gate as the bind-time abort: the package is collected, ACPI is asked last, and
+          # the unusable verdict is withheld unless both values are on record.
+          if _ue=$(unusable_verdict "$LOGVOL_VM" "$M/unusable-$c" \
+                     "${CAMPAIGN_SINCE:-$(date -u -d '3 hours ago' +%Y-%m-%dT%H:%M:%SZ)}" \
+                     "${LOGVOL_IMG:-none}" "$c: no answer from the pre-grading log-path probe"); then
+            say "[ERROR] FATAL: $c: the guest NEVER ANSWERED the pre-grading log-path probe, so the"
+            say "[ERROR] FATAL: log path is NOT implicated and nothing is known to have broken. This"
+            say "[ERROR] FATAL: cell has no usable guest: no agent installed, or no logged-on session"
+            say "[ERROR] FATAL: ( qtest pushrun needs one ), or an agent that stopped. Read the"
+            say "[ERROR] FATAL: $_ue"
+            say "[ERROR] FATAL: install first - the prime log's qrexec polls, and on a prime cell the"
+            say "[ERROR] FATAL: DIAG volume's prime-progress.log installer rc. $_lv_reason"
+            say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED: no usable guest at grading ==="
+          else
+            say "[ERROR] FATAL: $c: the pre-grading probe got no answer, but the evidence for calling"
+            say "[ERROR] FATAL: the guest UNUSABLE is incomplete, so that verdict is NOT emitted. $_lv_reason"
+            say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED: pre-grading probe unanswered, evidence incomplete ==="
+          fi
         else
           say "[ERROR] FATAL: $c: the log path did NOT survive to grading - $_lv_reason"
           say "[ERROR] FATAL: the guest answered, so the path itself broke during this cell. Whatever"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # logvol-smoke.sh - can a guest actually SEE the log volume, and does evidence reach the image?
 #
-#   mgmt/harness/logvol-smoke.sh [--golden win11r-qwt] [--subject logvol-smoke] [--keep]
+#   tools/smoke/logvol-smoke.sh [--golden win11r-qwt] [--subject logvol-smoke] [--keep]
 #
 # WHY THIS EXISTS, and it is the gap the owner named. Campaign 40134888669 ABORTED 11 minutes in, on
 # its first cell, because `logvol_bind_guest` refused with
@@ -58,6 +58,14 @@ verdict(){ printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$OUT/verdict.tsv"; say "$1  
 # THE LIBRARIES ARE OVERRIDABLE TOO, for the same reason as QTEST: every arm of this cell is a
 # different answer from logvol_bind_guest / logvol_prove_roundtrip, and a suite that cannot make
 # them answer cannot drive a single refusal. Nothing stubs this script itself.
+# SMOKE-SINCE: 2026-10-27
+# Promote-or-delete: fourteen days from that date this is either a product suite (its assertion
+# moved into tools/tests/product-suites.txt, recorded here as "# PROMOTED: <suite>") or deleted.
+# tools/tests/run-offline-suites.sh refuses to run while it is neither.
+SMOKE_SINCE_UTC="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+PRIMITIVES_LIB="${PRIMITIVES_LIB:-mgmt/harness/primitives.sh}"
+# shellcheck disable=SC1091
+. "$PRIMITIVES_LIB"
 LOGVOL_LIB="${LOGVOL_LIB:-mgmt/harness/logvol-lib.sh}"
 SHUTDOWN_LIB="${SHUTDOWN_LIB:-mgmt/harness/shutdown-lib.sh}"
 VMLOCK_LIB="${VMLOCK_LIB:-mgmt/harness/vmlock.sh}"
@@ -80,6 +88,15 @@ state(){ qvm-ls --raw-data --fields STATE "$SUBJ" 2>/dev/null | tr -d '\n'; }
 
 cleanup(){
   local rc=$?
+  # THE FAILURE PACKAGE, BEFORE THE TEARDOWN DESTROYS THE SUBJECT. Collected through the sealed
+  # primitive, because this script does no log walking of its own - and only on a non-PASS, since a
+  # green smoke run has nothing to explain. It runs ahead of the shutdown below for the obvious
+  # reason: a specimen that has already been removed cannot be read.
+  if [ "$rc" -ne 0 ] && [ -n "$(state)" ]; then
+    fresh_cell_log "$SUBJ" "$OUT" "$SMOKE_SINCE_UTC" "${IMG:-none}" "logvol smoke exited rc=$rc" \
+      >>"$OUT/collect.out" 2>&1 \
+      || say "teardown: the failure package came back with gaps - see $OUT/collect.out"
+  fi
   if [ "$KEEP" = 1 ]; then say "--keep: leaving $SUBJ in place for inspection"; return $rc; fi
   if [ -n "$(state)" ]; then
     qwt_shutdown "$SUBJ" 300 >>"$OUT/teardown.out" 2>&1 \

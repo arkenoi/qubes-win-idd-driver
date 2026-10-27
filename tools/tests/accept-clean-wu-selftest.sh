@@ -1,16 +1,7 @@
 #!/bin/bash
 # A CELL THAT FAILED TO DISABLE WINDOWS UPDATE MUST NOT BE GRADED AS A CLEAN ONE.
-#
-# MEASURED 2026-10-21 by the harness audit. tools/accept-clean.sh records the guest's update
-# posture BEFORE a cell and fails closed when it cannot read it ("refusing to grade a cell whose
-# update posture is unknown"). It then disables the updater in quick mode with
-#     qq run "... Set-ItemProperty NoAutoUpdate 1 ... Stop-Service wuauserv ..." >/dev/null 2>&1 || true
-# and never read the result. mgmt/harness/matrix.sh never sets ACCEPT_MODE, so EVERY cell of every
-# campaign takes that branch: if the disable failed, the cell was still graded and reported as a
-# clean "our package only" measurement with Windows Update live, and nothing in the record said so.
-#
-# The predicate is extracted from the shipped script between its two markers and driven over state
-# files, because the disable itself needs a guest and this check does not.
+# run: tools/tests/accept-clean-wu-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 2
 A=tools/accept-clean.sh

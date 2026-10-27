@@ -124,7 +124,7 @@ job_on_abort(){
   printf '{"vm":"%s","aborted_utc":"%s","via":"%s","note":"killed mid-upgrade - CONTAMINATED, never grade or reuse; re-run quick-upgrade to recreate from the golden"}\n' \
       "$SUBJECT" "$(date -u +%FT%TZ)" "$1" > "mgmt/fixtures/$SUBJECT.aborted"
   log "ABORTED ($1): $SUBJECT is CONTAMINATED - marker mgmt/fixtures/$SUBJECT.aborted written; best-effort shutdown"
-  qvm-shutdown "$SUBJECT" >/dev/null 2>&1
+  toolstack_accept "$SUBJECT" >/dev/null 2>&1
 }
 # Wait primitives with failure modes (w_state/w_alive/w_session/w_halt/w_screen) - REUSED, not
 # rewritten. They call ./tools/qtest relative to the repo root, which is the cwd here.
@@ -133,6 +133,7 @@ source mgmt/harness/e2e-wait.sh
 # the guest hangs, qrexec is dead and nothing can be asked of it, QWT's own per-module logs are on a
 # volume this qube reads with mtools - guest running, wedged or halted, nothing detached. Until this
 # wiring the library existed and NO harness called it, so a wedged cell still lost its logs.
+source mgmt/harness/primitives.sh   # the six sealed primitives: clock_correct, fresh_cell_log, toolstack_accept, ...
 source mgmt/harness/logvol-lib.sh
 LOGVOL_IMG=""
 
@@ -503,10 +504,10 @@ fi
 # comment and had NO callers. This is the caller. The installer now also refuses a package its
 # clock says is not yet valid, so a skew here fails fast and named instead of hanging - but the
 # harness should not be handing it a broken clock in the first place.
-if QTEST_VM="$SUBJECT" "$HERE/tools/qtest" synctime >/dev/null 2>&1; then
-  log "guest clock synced to this qube before install (see findings/issues.md: 0x800B0101 skew)"
+if _cc=$(clock_correct "$SUBJECT" 120 2>&1); then
+  log "guest clock verified before install: $(printf '%s' "$_cc" | tr '\n' ' ')"
 else
-  log "[WARN] could not sync the guest clock - a driver catalog may be refused as not-yet-valid" 
+  log "[WARN] $(printf '%s' "$_cc" | tr '\n' ' ') - a driver catalog may be refused as not-yet-valid"
 fi
 
 # ENTRY PRECONDITIONS, asserted on the SAME signals the verify uses (experimenter 5b), so that
@@ -1034,7 +1035,7 @@ coldboot(){ # $1=n
     # volume and this side had none of it, which is how the owner ended up reading toasts aloud
     # (2026-10-10). Never boots a guest; an unreadable record is said under its own tag.
     dom0_sends_park "$SUBJECT" "boot$n"
-    qvm-shutdown "$SUBJECT" >/dev/null 2>&1
+    toolstack_accept "$SUBJECT" >/dev/null 2>&1
     if ! w_halt "$SUBJECT" 420 "boot$n-halt" log; then
       log "  guest ignored ACPI shutdown for 420 s (screen=$(w_screen "$SUBJECT" "boot$n-stuck" "$OUT")) - killing as the last resort"
       qvm-kill "$SUBJECT" >/dev/null 2>&1

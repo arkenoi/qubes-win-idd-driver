@@ -1,31 +1,7 @@
 #!/bin/bash
 # EXACTLY ONE LOG LINE PER EXIT, AND IT IS COMPILED AND RUN - NOT GREPPED.
-#
-# THE DEFECT THIS EXISTS FOR, measured in the 4.3.37 acceptance campaign on 2026-10-21, cell
-# win10-clean: the wrapper emitted 141 ERROR lines reading "an output pump is still running at exit
-# - the child exited and its output was drained" plus 3 for "the peer closed the vchan". Those are
-# the two reasons the chain routes to Debug as an ordinary end. 141 of the cell's 145 undeclared
-# error lines, against a max of 0, so the cell failed.
-# THE CAUSE WAS TWO CHARACTERS: the final `else` had no braces, so it governed only the `if` under
-# it and the LogError was a SIBLING of the whole chain - it ran on every pass, including the
-# ordinary ends that had just logged Debug, and including the pumpsFinished path.
-#
-# WHY THE EXISTING SUITE DID NOT SEE IT. tools/tests/wrapper-exit-reason-selftest.sh counted how
-# many times `LogError("an output pump` appears in the source text and required 1, and read the
-# branch order out of a `grep -oE 'else if|else$|Log...' | tail -2`. The file does contain exactly
-# one such call and the last branch IS a bare else; a missing brace changes which lines EXECUTE, not
-# how many are written or in what order. Both predicates passed on the shipped defect. They were
-# proxies for the property. Owner, on being shown it: "FUCK YOUR GREPS".
-#
-# SO THIS ONE EXECUTES. It extracts the chain between its markers, compiles it as C89 against stubs
-# that record every emitted line, and runs it once per (reason, pumps, loss-reported, status) case.
-# The property asserted is the one that matters: ONE line per exit, at the right LEVEL.
-#
-# AND IT PROVES ITS OWN COVERAGE. The first version of this file drove only `reason` and `pumps`, so
-# the EXIT_REASON_DATA_ERROR-with-g_LossReported arm was never executed and a defect in it would
-# have passed here exactly the way the brace did next door. Rather than assert coverage in a
-# comment, the suite compiles the same chain a second time with --coverage, runs the identical case
-# list, and FAILS if gcov reports any line of the extracted chain as never executed.
+# run: tools/tests/wrapper-exit-emit-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 2
 SRC=core-agent/src/qrexec-wrapper/qrexec-wrapper.c

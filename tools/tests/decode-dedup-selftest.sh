@@ -1,28 +1,7 @@
 #!/usr/bin/env bash
-# decode-dedup-selftest.sh - ONE LOGICAL FILE PULLED TWICE IS NOT TWO FILES. No guest, no rig.
-#
-# WHY THIS EXISTS. The collector sweeps the UNION of every directory a module could have resolved
-# its LogDir to (Get-LswLogDirCandidates, added 2026-10-23 because a bound log volume left the real
-# directory unswept and both upgrade cells failed on evidence that was never pulled). That fix was
-# verified by showing it FOUND the extra directory. It was not verified for what happens when a file
-# is present in TWO of those directories - and then the pull carries it twice, decode kept both
-# under `<base>.<id>`, and every line in it was counted twice.
-#
-# MEASURED on the first supervision-gate run on a guest (2026-10-23, /home/user/qwt-sup/1023-1646):
-# 21 of 88 files had a second copy. gui-agent-20261023-194816-5484.log came from
-# `Z:\qwt-logs\win11r-sup` and `Q:\Qubes Logs`, decoding to 17754 and 19861 bytes of text, so ONE
-# process start (pid 5484) opened TWO instance records:
-#     agent_instances 6 for 5 real instances; agent_instances_per_boot 2 against a max of 1
-#     -> P2 BREACH and cell L2 FAIL, while that agent had started exactly once in every boot
-#     warning_lines 182, of which 42 were the same lines twice
-# After the dedupe, same capture and the SAME analyzer arguments: instances 5, per_boot 1, warnings
-# 140, and both of those breaches gone, leaving only the two REAL findings.
-#
-# THE TEST IS A BYTE PREFIX, NOT A HASH, because two reads of a growing file are almost never
-# identical - the later one is longer. A prefix means the kept copy CONTAINS every line the dropped
-# one had. Of the 21, gui-agent/gui-watchdog/qubesdb-daemon/qrexec-* were prefixes; bridge.log and
-# etw-proxy.log DIVERGED - genuinely different files sharing one basename across two directories -
-# and those must be KEPT, because dropping either loses lines. Both cases are asserted here.
+# ONE LOGICAL FILE PULLED TWICE IS NOT TWO FILES - but divergent copies of a basename are both KEPT
+# run: tools/tests/decode-dedup-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="$(mktemp -d /tmp/dedup-selftest-XXXXXX)"

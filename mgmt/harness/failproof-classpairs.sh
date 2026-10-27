@@ -26,6 +26,12 @@
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver
 OUT="${1:-$HOME/qwt-accept/20260830-acceptance-4.3.16/FAILPROOF-classpairs}"
+# A contaminated subject is refused BEFORE any work: this script's default output dir carries no
+# run-id, so a second attempt would otherwise append to the first attempt's artefacts and be read
+# back as one run. Pass a fresh outdir to run again.
+declare -F attempt_dir >/dev/null 2>&1 || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh"
+attempt_dir "$OUT" || exit 1
+
 mkdir -p "$OUT"
 V="$OUT/verdicts.tsv"; EV=$(basename "$OUT"); rc=0
 log(){ echo "$(date -u +%H:%M:%S) classpair: $*" | tee -a "$OUT/classpair.log"; }

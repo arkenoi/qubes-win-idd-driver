@@ -1,31 +1,7 @@
 #!/bin/bash
-# matrix-appvmwindow-grade-selftest.sh - the appvm cell's WINDOW verdict, driven for real.
-#
-# WHY THE SPLIT CAME FIRST. An earlier version of this suite tried to drive cell_appvm whole, and the
-# cell's boot loop ran on into dom0 captures and lifecycle-lib helpers: stubbing them shifted the
-# cell's own verdicts (12/3 where it had been 15/0), not stubbing them left unbound state under
-# set -u, and three consecutive runs gave 14/1, 15/0 and 10/5. A flaky check cannot be reasoned about
-# and is worse than none, so that suite was deleted and the tail was extracted into
-# grade_appvm_window() - the same move made for grade_cell_logsweep and grade_dom0_callers, both of
-# which have had suites since.
-#
-# THIS FILE DRIVES THE WINDOW HALF, which the split made testable. THE CELL HALF IS STILL NOT
-# COVERED: with grade_appvm_window stubbed to a return code, cell_appvm still flapped across three
-# runs (19/1, 16/4, 19/1), so no suite for it is registered and grader-census.py still counts its
-# decisions as untested. That is the honest state; a flaky suite would have hidden it.
-#
-# WHAT IT PINS, every one a measured incident recorded in matrix.sh itself:
-#   * an ABSENT template is an infrastructure fact knowable in one call, not a guest that refused to
-#     halt - "FOUR of that campaign's ELEVEN failures were this one message" (run 9);
-#   * a missing 'installed' park is a HARD refusal, never a downgrade to "whatever the template last
-#     happened to hold";
-#   * an AppVM is RE-CREATED, never reused: its private seeds from the template at creation only, so
-#     a reused one has no profile and no shell (owner correction 2026-09-04), reported as STALE
-#     PRIVATE VOLUME rather than as a product defect;
-#   * AN EMPTY dom0 CAPTURE IS NOT "NO WINDOW" - campaign 34594988407 graded WIN11-appvm boot 2 a
-#     product FAIL on six empty tars while qrexec answered and the guest shut down cleanly 58 s
-#     later; the owner was switching dom0 desktops. Guest window present + capture empty is
-#     INVALID-INSTRUMENT, ungraded, and only the cell's own all-boots verdict may escalate it.
+# The appvm WINDOW verdict: an EMPTY dom0 capture is INVALID-INSTRUMENT, not 'no window'.
+# run: tools/tests/matrix-appvmwindow-grade-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 2
 ROOT="$PWD"

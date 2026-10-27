@@ -1,33 +1,7 @@
 #!/usr/bin/env bash
-# wu-judge-timenorm-selftest.sh - tools/wu-log-judge.py must select its window as an ABSOLUTE
-# INTERVAL, build episodes forward in real time, and refuse loudly when a bound has no date.
-#
-# WHY. Until 2026-10-19 the window and the log's stamps were both bare `timedelta`s:
-#     def hms(s): h, m, sec = s.split(":"); return timedelta(hours=int(h), ...)
-#     if t < t0 or t > t1: continue
-# so the window took rows at that o'clock on EVERY date the log carries - and one decode carries
-# several. Every real decoded WU log on this qube spans two or more days:
-#     scratchpad/gweck25h2/slowscan/wulog-diag.txt   2026.09.16 + 2026.09.17
-#     ../qwt-accept/gweck-failboot/wulog.txt         2026.09.16 + 2026.10.02  (sixteen days apart)
-#     scratchpad/fbprobe/run-*/wulog-post/wulog.txt  2026.09.16 + 2026.09.21
-# Measured pre-fix on a window where two of those dates overlap:
-#     facts: rows=3 resets=0 transient=0 http_errors=0 last_row=21:05:12.332000 searches=1 ended=True episodes=1
-#     verdict: PASS
-# The pass under test had NO search at all; the `ended=True` that cleared it was the PREVIOUS day's
-# completed search. `ended` is the make-or-break FAIL in this judge, so that is a blind gate.
-# The mirror image was the midnight window: `hms("23:59:00") > hms("00:01:30")`, so nothing matched
-# `t0 <= t <= t1` and the judge printed `INSTRUMENT: no WU log rows in window 23:59:00-00:01:30`
-# over five rows that were in it - the P1 transient line among them. Campaigns here cross midnight
-# routinely (the 4.3.37 acceptance ran 20:21 -> 02:24).
-# And episodes: `(r2["t"] - r["t"]).total_seconds() * 1000 > span_ms` is never true of a NEGATIVE
-# delta, so a line 2 h 10 min after the head was glued onto its episode and sent to Jev as
-# "consecutive lines on one thread" - measured pre-fix, `lines in episode 0 = 2`.
-#
-# EVERY CASE CARRIES ITS OWN PRE-FIX CONTROL (the frozen `old_*` python below, transcribed from
-# wu-log-judge.py:46-57 and :67 as of 7238cd09), so a fixture that stops discriminating fails this
-# suite rather than passing it quietly.
-#
-# Offline: no rig, no guest, no network (--no-judge everywhere, so no Jev call and no key).
+# wu-log-judge's window is an ABSOLUTE INTERVAL, episodes run forward, a dateless bound refuses.
+# run: tools/tests/wu-judge-timenorm-selftest.sh
+# pass: exit 0
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
 J="${WU_JUDGE:-$HERE/tools/wu-log-judge.py}"

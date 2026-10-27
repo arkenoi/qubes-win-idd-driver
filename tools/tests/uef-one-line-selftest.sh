@@ -1,30 +1,7 @@
 #!/bin/bash
-# uef-one-line-selftest.sh - patches/windows-utils-uef-one-line.patch, checked OFFLINE.
-# No guest, no CI.
-#
-# THE DEFECT. The unhandled-exception filter logged the exception on one line and then one line per
-# exception parameter:
-#
-#     LogError("Unhandled exception %08x at %p, flags: %x", code, ExceptionAddress, flags);
-#     for (i = 0; i < NumberParameters; i++)
-#         LogError("Parameter %d: %p", i, ExceptionInformation[i]);
-#
-# For an access violation the parameters hold the only two facts that identify it -
-# ExceptionInformation[0] is read/write/execute and [1] is the ADDRESS that was touched. The head
-# line records where the faulting INSTRUCTION was, which is not the same question.
-#
-# MEASURED, not inferred (2026-10-26, acceptance cell WIN10-reinstall of campaign
-# rel-40243956400-r2): qubesdb-daemon-20261026.log.f38 is 4574 bytes and its last byte is the
-# newline of
-#   [20261026.092153.535-3488:4624-E] ErrUEF: Unhandled exception c0000005 at 00007FF8CCD3FAAD, flags: 0
-# The two "Parameter N:" lines the filter asks for next are nowhere in the capture - the process did
-# not survive to write them. So the fact needed to say WHICH pointer was bad was emitted by the code
-# and lost anyway, and the crash (QDBSTOPUAF) had to be diagnosed from the source instead. Jev, on
-# that diagnosis: missing_measurement = faulting-address 0.81.
-#
-# A filter that needs a SECOND call to be useful reports nothing about the crashes that kill hardest.
-# One write now carries everything, with the head of the line kept byte-identical because that
-# prefix is what the acceptance sweep's signature and this project's own records quote.
+# The exception filter writes the ACCESS VIOLATION's address in ONE line, and FAILS unpatched.
+# run: tools/tests/uef-one-line-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PATCHFILE="$ROOT/patches/windows-utils-uef-one-line.patch"

@@ -1,20 +1,7 @@
 #!/bin/bash
-# SELF-TEST for mgmt/harness/verdict-lib.sh AND for p3a-etw-gate.sh's GATE block - every class
-# boundary SEEN TO FIRE before either is trusted (H5 applied to the aggregator, same doctrine as
-# tools/tests/lint-selftest.sh and protocol/selftest.sh). Offline: touches no guest.
-#
-# Why each case exists (the two incidents the lib was written against):
-#   * 2026-08-30: a ledger with a FAIL summarised as complete -> BROKEN must win over everything.
-#   * 2026-09-05: `grep -cE 'FAIL|INSTRUMENT'` folded ungraded rows into the blocking count ->
-#     an INSTRUMENT-only ledger must be EXECUTED-WITH-GAPS (rc 1: not green, not broken), a
-#     PASS-DATUM must be a pass, and p3a's GATE must say PICK-ETW (not BLOCKED) over ungraded or
-#     PASS-DATUM drills, UNDECIDED over an ungraded MECHANISM row, BLOCKED only on a FAIL.
-#
-# Section 2 does NOT copy the gate logic: it extracts the live block from p3a-etw-gate.sh
-# (between its '# THREE-CLASS AGGREGATION' marker and the final exit) and runs it against
-# fixture ledgers, so the test cannot drift from the code it certifies.
-#
-#   tools/tests/verdict-lib-selftest.sh
+# every class boundary in verdict-lib.sh and p3a's GATE block is SEEN TO FIRE before it is trusted
+# run: tools/tests/verdict-lib-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 2
 LIB=mgmt/harness/verdict-lib.sh

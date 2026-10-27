@@ -1,29 +1,7 @@
 #!/bin/bash
-# rtc-utc-selftest.sh - NOTHING SETS A HARDWARE-CLOCK CONVENTION, AND THE QUBE FEATURE IS SET AT
-# CREATE TIME. That pair is the whole clock design, and this file asserts exactly those two things.
-#
-# WHAT THIS FILE HAS ASSERTED, IN ORDER, AND WHY EVERY EARLIER VERSION WAS WRONG:
-#   1. that `w_rtc_utc` exists and is CALLED - a harness function writing RealTimeIsUniversal=1 into
-#      every subject after every install;
-#   2. that the answer files write 1 and a script bakes it into a golden;
-#   3. that the installer writes the constant 1;
-#   4. that the installer writes a value DERIVED from whether QWT was installed;
-#   5. that the installer writes it only on the failure branch of its payload-clock gate, and a
-#      per-boot task converges it from a witness.
-# Five shapes, every one of them machinery for a problem that did not need to exist.
-#
-# THERE IS NO CONVENTION TO SET. Windows reads a hardware clock as LOCAL time - always, unless
-# RealTimeIsUniversal says otherwise - and a Qubes qube with `timezone=localtime` presents DOM0'S
-# LOCAL time on that clock. Those already agree. The only thing a guest needs is dom0's zone, which
-# the installer reads from /qubes-timezone. Stock QWT sets no zone and no convention at all: its
-# entire time handling is update-time.bat, one line that asks dom0 for the date.
-#
-# THE ONE THING THAT HAD TO CHANGE is WHEN the feature is set. dom0 sets it by itself, but only once
-# the GUEST reports os+qrexec - which cannot happen before the first install - so a qube created
-# without it runs Setup and the whole install on a TRUE-UTC clock and then has the clock change under
-# it a boot later. That transition was the entire defect: one boot 3 h behind, the next 3 h ahead,
-# clock_boot_correction_s = 10800 against a max of 60. Setting the feature at CREATE time removes the
-# window instead of converging out of it.
+# NOTHING SETS A HARDWARE-CLOCK CONVENTION, AND THE QUBE FEATURE IS SET AT CREATE TIME
+# run: tools/tests/rtc-utc-selftest.sh
+# pass: exit 0
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 pass=0; fail=0

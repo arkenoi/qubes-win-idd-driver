@@ -18,6 +18,96 @@
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 2
 
+# --probe-primitives <vm>: EXERCISE THE SEALED PRIMITIVES AGAINST A REAL TAGGED GUEST, and report
+# what each one measured. Jev called this a missing measurement at 0.67 on the step-9 review: the six
+# primitives were proven to parse and to resolve their callers, and not one had been run against a
+# guest. A primitive that has never answered about a real guest is a reason not to start a campaign,
+# which is what this file is for.
+# WHAT IT MUTATES: it BOOTS the subject if it is halted, and clock_correct then syncs that guest's
+# clock - which is the primitive's own job, and what every cell entry path does. Nothing is shut
+# down, killed, detached or reinstalled, and the subject is left running for the caller to use.
+if [ "${1:-}" = --probe-primitives ]; then
+    PROBE_VM="${2:?usage: $0 --probe-primitives <vm>}"
+    # shellcheck source=/dev/null
+    . mgmt/harness/primitives.sh
+    . mgmt/harness/vmlock.sh 2>/dev/null || true
+    command -v vm_lock >/dev/null 2>&1 && vm_lock "$PROBE_VM"
+    _pf_rc=0
+    _pf_out="${PROBE_OUT:-scratchpad/primitive-probe}"
+    echo "--- probing the sealed primitives against $PROBE_VM (out: $_pf_out)"
+    # Single-VM query by name: a bare qvm-ls fires denied admin calls into the owner's dom0 journal.
+    _pf_state=$(qvm-ls --raw-data --fields NAME,STATE "$PROBE_VM" 2>/dev/null \
+                | awk -F'|' -v n="$PROBE_VM" '$1==n{print $2}')
+    [ -n "$_pf_state" ] || { echo "REFUSE: $PROBE_VM does not exist" >&2; exit 11; }
+    mkdir -p "$_pf_out"
+    if [ "$_pf_state" != Running ]; then
+        # A halted subject is BOOTED: clock_correct and package_identity read the guest, so a
+        # primitive exercised only against a halted domain has not been exercised at all. Start and
+        # wait are the committed pair from quick-upgrade.sh, not a hand-rolled loop.
+        echo "  $PROBE_VM is $_pf_state - booting it so the probe runs against a live guest"
+        # shellcheck source=/dev/null
+        . mgmt/harness/e2e-wait.sh
+        _pf_log(){ echo "  $*"; }
+        timeout -k 10 150 qvm-start "$PROBE_VM" >"$_pf_out/start.out" 2>&1 & disown
+        sleep 8
+        w_session "$PROBE_VM" 900 "probe" "$_pf_out" _pf_log || {
+            echo "REFUSE: $PROBE_VM reached no session in 900 s - the probe measures nothing. See $_pf_out" >&2
+            exit 11; }
+    fi
+
+    if _cc=$(clock_correct "$PROBE_VM" 120 2>&1); then
+        printf '  clock_correct   MEASURED  %s\n' "$(printf '%s' "$_cc" | tr '\n' ' ')"
+    else
+        printf '  clock_correct   FAILED    %s\n' "$(printf '%s' "$_cc" | tr '\n' ' ')"; _pf_rc=1
+    fi
+
+    # fresh_cell_log is the one every other collection path now goes through, so it is the one that
+    # most needs to have answered about a real guest once.
+    _pf_since=$(date -u -d '30 minutes ago' '+%Y-%m-%dT%H:%M:%SZ')
+    if _cell=$(fresh_cell_log "$PROBE_VM" "$_pf_out" "$_pf_since" none "primitive probe"); then
+        printf '  fresh_cell_log  COMPLETE  %s\n' "$_cell"
+    else
+        printf '  fresh_cell_log  rc=%s (gaps are named in the manifest) %s\n' "$?" "${_cell:-no directory}"
+        [ -n "${_cell:-}" ] || _pf_rc=1
+    fi
+    if [ -n "${_cell:-}" ]; then
+        printf '  package         %s\n' "$(sed -n '1p' "$_cell/cell.txt" 2>/dev/null)"
+        printf '  manifest        %s\n' "$([ -s "$_cell/package/manifest.json" ] && echo present || echo ABSENT)"
+
+        # The step-15 order, against a live guest: the package is already collected ABOVE, so the
+        # ACPI request comes LAST and the gate reads what both recorded. A guest whose logs hold no
+        # qrexec-wrapper record yields 'none', which step 15 allows; 'unrecorded' is the refusal.
+        printf '  qrexec_last_packet        %s\n' "$(qrexec_last_packet "$PROBE_VM" "$_cell")"
+        if _ue=$(unusable_evidence "$PROBE_VM" "$_cell" 2>&1); then
+            printf '  unusable_evidence  OPEN   %s\n' "$_ue"
+        else
+            printf '  unusable_evidence  REFUSED (no verdict may be emitted) %s\n' "$_ue"
+        fi
+        # Asking ACPI also hands the subject back halted instead of left running by a probe.
+        # package_identity, the sixth primitive and the only one never exercised. A setup root is
+        # OPTIONAL because the match branch needs a tree whose reference binary IS the guest's
+        # build; the MISMATCH branch - the one step 9 asks to be seen failing - needs only a
+        # reference that differs, which is what a deliberately-wrong tree provides.
+        if [ -n "${3:-}" ]; then
+            if _pi=$(package_identity "$PROBE_VM" "$3" 2>&1); then
+                printf '  package_identity   MATCH   %s\n' "$_pi"
+            else
+                printf '  package_identity   rc=%s (1=mismatch, 2=unchecked)\n' "$?"
+                printf '%s\n' "$_pi" | sed 's/^/      /'
+            fi
+        else
+            echo "  package_identity   SKIPPED - no setup root given (pass one as the 3rd argument)"
+        fi
+
+        printf '  toolstack_accept          %s\n' "$(toolstack_accept "$PROBE_VM" acpi 2>&1)"
+        if _ue=$(unusable_evidence "$PROBE_VM" "$_cell" 2>&1); then
+            printf '  unusable_evidence  OPEN   %s\n' "$_ue"
+        else
+            printf '  unusable_evidence  still REFUSED %s\n' "$_ue"
+        fi
+    fi
+    exit "$_pf_rc"
+fi
 PKG="${1:-}"
 [ -n "$PKG" ] || { echo "usage: $0 <release-package-run-id>" >&2; exit 2; }
 

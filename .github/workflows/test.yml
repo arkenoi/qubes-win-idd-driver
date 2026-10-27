@@ -231,6 +231,7 @@ jobs:
 
 
   out-of-gate-probe:
+    # REMOVE-BY: 2026-11-10 if blockclaim-selftest.sh and the pwsh suites have been decided
     # PROBES, NOT A GATE, AND IN THEIR OWN JOB FOR A MEASURED REASON. These two steps lived in
     # offline-suites until 2026-10-26, when CI went red on my own commit: PART E of
     # tools/tests/offline-runner-selftest.sh asserts that exactly ONE step in the offline-suites

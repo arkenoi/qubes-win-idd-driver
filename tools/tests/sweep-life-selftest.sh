@@ -1,23 +1,7 @@
 #!/bin/bash
-# THE GATE MUST NOT GRADE WHAT IT WAS NOT GIVEN.
-#
-# MEASURED 2026-10-21, both of these, before the predicates below existed:
-#   an empty log file            -> SWEEP-GATE-RESULT unaccounted=0 risen=0 accounted=0   exit 0
-#   a capture that failed to decode (mojibake named gui-agent-mojibake.log) -> same, exit 0
-# A CLEAN verdict over nothing, and a CLEAN verdict over input nobody could read. The gate's
-# classification half was already closed and finite - 13 registered emitters, 36 classified corpus
-# lines, an unregistered line exits 1 - and that is why this hole survived so long: everything it
-# DID say was true. It is the ancestor of the sweep reading CLEAN over a capture with no agent log,
-# of the collector not searching the product's own default directory, and of the appvm cells being
-# graded while logging nowhere, each patched somewhere else and never here.
-#
-# A LARGER CHANGE WAS WITHDRAWN RATHER THAN SHIPPED. A product patch adding one INFO birth line per
-# module to the shared windows-utils logging library was written, then withdrawn: its premise - that
-# at the shipped log level no module declares that it ran - rests on no measurement. The capture
-# cited as proof held four harness-side logs and zero guest logs, so it graded nothing; the one
-# capture with guest logs shows the banner at INFO, but from modules reporting 4.3.35.795 and
-# 4.2.2.0, i.e. builds older than the package under test. Jev: product_patch_was_needed 0.15,
-# premise_established 0.06. What remains here needs no product change at all.
+# THE GATE MUST NOT GRADE WHAT IT WAS NOT GIVEN: empty, missing or unreadable input is INCONCLUSIVE.
+# run: tools/tests/sweep-life-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 2
 T=$(mktemp -d "${TMPDIR:-/tmp}/sweeplife-XXXXXX"); trap 'rm -rf "$T"' EXIT

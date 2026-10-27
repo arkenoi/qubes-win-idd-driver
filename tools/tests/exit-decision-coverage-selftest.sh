@@ -1,22 +1,7 @@
 #!/usr/bin/env bash
-# exit-decision-coverage-selftest.sh - every agent-exit DECISION must have its own log branch.
-#
-# WHY. The 2026-10-07 split added QGA_DECIDE_SESSION_END_REAPED - "the system ended it after an
-# acknowledged notice and AFTER its orderly exit completed: INFO, no launch into that session" - with
-# its table row and its verdict row (IsError FALSE, no relaunch, no death record, no service
-# failure). The `case` in watchdog.c's switch was never added, so the decision fell through
-# `default:`, which is grouped with QGA_DECIDE_DEATH, and a COMPLETED exit was logged as
-# "QGAWDDEATH ... the agent DIED", with text claiming the service was ending for the SCM's recovery
-# when FailService is FALSE and it was not.
-#
-# Measured on win11r-logvol 2026-10-08: the agent logged "QGAENDSESSION orderly exit complete" at
-# 20261008.002013.438 and the watchdog logged QGAWDDEATH in the same second - one of the ten error
-# lines the new binary wrote. Every action had been right; only the sentence was wrong. The header of
-# qga-lifecycle.h says that split exists because "our own log carried one error per shutdown", so the
-# half-applied fix left the very symptom it was written for.
-#
-# A decision added to the table without a log branch is silent by construction, so this is a
-# STRUCTURAL check rather than a text one: the two lists must match.
+# Every agent-exit DECISION has its own case and verdict row - none falls through into QGAWDDEATH.
+# run: tools/tests/exit-decision-coverage-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 HDR="$ROOT/agent/include/qga-lifecycle.h"

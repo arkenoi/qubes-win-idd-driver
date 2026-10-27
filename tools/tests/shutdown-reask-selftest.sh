@@ -1,20 +1,7 @@
 #!/bin/bash
-# ASKING ONCE IS NOT WAITING FOR AN ANSWER.
-#
-# `qwt_shutdown` issued `timeout 120 qvm-shutdown <vm>` - a bare ACPI request that, as its own
-# comment says, "returns immediately and kills nothing" - and then polled to its whole deadline
-# without ever re-issuing it. A request that is lost, or that lands while the guest is still busy
-# with first-boot work, therefore read as a guest refusing to stop.
-#
-# MEASURED TWICE on win11de-qwt 2026-10-15, both times right after a deliberate GOLDEN_UNSEAL boot
-# that wrote to the registry: the request went at 14:39:06 and the guest was still Running at
-# 14:54:15 - 909 seconds - and a SECOND ask was answered in seconds. It cost two golden seals.
-#
-# A re-ask is the SAME idempotent request, never an escalation: nothing in this path may kill a
-# guest, because a killed subject is contaminated and has to be redeployed.
-#
-# qwt_shutdown is eval'd out of the shipped file with a virtual clock, so this cannot drift from the
-# harness and needs no guest.
+# ASKING ONCE IS NOT WAITING FOR AN ANSWER - qwt_shutdown RE-ASKS, and never escalates to a kill
+# run: tools/tests/shutdown-reask-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PASS=0; FAIL=0
@@ -39,6 +26,9 @@ run_shutdown(){
       esac
     }
     qvm-shutdown(){ echo ask >> "$d/asks"; return 0; }
+    # qwt_shutdown asks through the sealed primitive now, and only the function text is extracted
+    # here - so the primitive is stubbed to ISSUE the request, which is what these legs count.
+    toolstack_accept(){ qvm-shutdown "$1"; }
     timeout(){ shift; "$@"; }                     # drop the bound, run the command
     _qwt_boottime(){ echo ""; }
     export HALTAT="$2"
@@ -118,6 +108,7 @@ run_blind(){ # $1=source file $2=readable-calls-before-going-blind -> rc
       if [ "$n" -lt "$NREAD" ]; then echo "somevm|Running"; fi   # blind after NREAD answers
     }
     qvm-shutdown(){ return 0; }
+    toolstack_accept(){ qvm-shutdown "$1"; }
     timeout(){ shift; "$@"; }
     _qwt_boottime(){ echo ""; }
     export NREAD="$2"

@@ -1,23 +1,7 @@
 #!/usr/bin/env bash
-# campaign-full-selftest.sh - the two things mgmt/harness/campaign-full.sh decides for itself.
-#
-# campaign-full.sh composes tools that already have their own suites, so there are exactly two
-# pieces of logic it owns, and both are ones I got wrong BY HAND on 2026-10-22:
-#
-#   PKGROLES - which of two release-package runs at the same commit is the ordinary package and
-#              which is the fault_injection one. Their display titles are IDENTICAL, so I reached
-#              for dispatch order; and my first discriminator (grep QGAFAULT in the shipped
-#              gui-agent.exe) returned 0 on BOTH, which reads as "the flag did nothing". The only
-#              thing that settles it is each build's own log line QGA_FAULT_INJECTION=0/1. The
-#              decisive leg below puts the FI run FIRST in the listing, so a resolver that trusted
-#              order would swap the roles and feed an ordinary package to failproof-faultinject.
-#   CIDUE    - which required workflows are merely branch-filtered (and so should be dispatched for
-#              this sha) versus actually RED (which must refuse). tools/ci-state.py says this in
-#              words; the fixture here is its REAL output, captured from the run that refused at
-#              c6484db3, not a sentence of my own invention.
-#
-# Both regions are extracted from the harness between its markers - never copied - so this suite
-# cannot pass against a version of the logic that no longer ships.
+# campaign-full: roles come from each build's own log; RED CI, drift or an aborted matrix REFUSE.
+# run: tools/tests/campaign-full-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SRC="$ROOT/mgmt/harness/campaign-full.sh"

@@ -1,17 +1,7 @@
 #!/usr/bin/env bash
-# grade-noise-selftest.sh - drive every arm of tools/grade-noise.py, each one SEEN TO FAIL.
-#
-# WHY. The owner's acceptance criterion is "absense of notification noise" (2026-10-11). The previous
-# receipt was graded BY EYE: BROKERHOLD had become INFO, the eye stopped there, and BROKERLATEREG was
-# still W on all three boots - the fix had not taken and the receipt read as a pass. The grader exists
-# so that cannot happen again, which only holds if each of its arms has been seen to fire.
-#
-# TWO KINDS OF INPUT, kept apart on purpose:
-#   REAL      scratchpad/receipt-control-prevbuild.txt - the actual guest excerpt from the build
-#             before the fix. It is what proves the BROKERLATEREG arm catches the real defect.
-#   SYNTHETIC the fixtures below. They test the GRADER'S MECHANICS - that an arm fires on the shape
-#             of line it is looking for - and are never evidence about a guest. A fixture written
-#             here can only ever show the instrument works; the product receipt comes from the rig.
+# Every arm of the noise grader FIRES, and an excerpt that never met the condition is not quiet.
+# run: tools/tests/grade-noise-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT" || exit 2
 T=$(mktemp -d "${TMPDIR:-/tmp}/grade-noise-selftest.XXXXXX"); trap 'rm -rf "$T"' EXIT

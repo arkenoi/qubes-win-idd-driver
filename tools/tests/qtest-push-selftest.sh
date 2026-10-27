@@ -1,17 +1,7 @@
 #!/bin/bash
-# qtest-push-selftest.sh - a pushed file must ARRIVE before anything runs it.
-#
-# WHY THIS EXISTS. `qtest pushrun` deleted the destination (ignoring failure), copied (ignoring
-# qvm-copy-to-vm's exit status) and then ran the script with no check that it was there. MEASURED on
-# win11r-lt twice - 2026-10-15 21:21 and 2026-10-16 22:37 - the transcript reads `sent 0/11 KB` and
-# then `The argument '...\logvol-bind.ps1' to the -File parameter does not exist`. Both times the
-# log-volume bind failed, so QWT's logs stayed on C: and the DIAG image - the store the HOST reads
-# with mtools when the guest is WEDGED, i.e. exactly when the pull path cannot help - held 155
-# bytes. The harness named the consequence itself during that run: "no qrexec for 41s - and the log
-# volume could not be read either: THAT is the gap, not the silence."
-#
-# The guest is stubbed at the two programs qtest shells out to - qrexec-client-vm (which vmshell
-# pipes into) and qvm-copy-to-vm - so the REAL qtest code path runs here. Nothing stubs qtest.
+# a pushed file must ARRIVE before anything runs it
+# run: tools/tests/qtest-push-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT" || exit 2

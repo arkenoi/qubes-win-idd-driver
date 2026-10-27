@@ -1,16 +1,7 @@
 #!/bin/bash
-# ask-operator-night-selftest.sh - a scope question must not be asked in the small hours.
-#
-# THE RULE (owner, 2026-10-15): "correct jev gate: before asking principal, check time. if it is in
-# range 1am-6am, better keep yourself busy overnight rather than ask 'should i do that lengthy
-# task'". Said after I stopped at 03:05 to ask whether to spend a multi-hour campaign on a clock
-# fix. A question asked at 03:00 is not answered at 03:00: it parks the rig until morning and spends
-# none of the hours that are cheapest to spend. The lengthy task was the reason to START.
-#
-# WHAT IS UNDER TEST: the night window in tools/hooks/ask-operator-gate.sh, and specifically that it
-# is distinguishable from the gate's OTHER refusal (the Jev-call requirement). Both exit 2, so a
-# test that checked only the exit code would pass with the clock rule deleted - that is the mistake
-# this file is written to avoid, and PART C proves the distinction holds.
+# a scope question must not be asked in the small hours, and the clock is the thing refusing
+# run: tools/tests/ask-operator-night-selftest.sh
+# pass: exit 0
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 G=tools/hooks/ask-operator-gate.sh

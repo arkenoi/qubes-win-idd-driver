@@ -38,6 +38,12 @@ require_scripts mgmt/harness/rnd8-resolution.sh
 VM="${1:?usage: $0 <vm> [outdir]}"
 source mgmt/harness/vmlock.sh; vm_lock "$VM"   # one harness per guest; see vmlock.sh
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/FAILPROOF-fi-$VM}"
+# A contaminated subject is refused BEFORE any work: this script's default output dir carries no
+# run-id, so a second attempt would otherwise append to the first attempt's artefacts and be read
+# back as one run. Pass a fresh outdir to run again.
+declare -F attempt_dir >/dev/null 2>&1 || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh"
+attempt_dir "$OUT" || exit 1
+
 mkdir -p "$OUT"
 q(){ QTEST_VM=$VM timeout -k 8 "${T:-300}" ./tools/qtest "$@" 2>/dev/null; }
 r(){ q run "$1" | tr -d '\r' | grep -avE '^(Microsoft Windows \[Version|\(c\) Microsoft|C:\\)'; }

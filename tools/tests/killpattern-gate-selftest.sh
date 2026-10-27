@@ -1,18 +1,7 @@
 #!/bin/bash
-# killpattern-gate-selftest.sh - a process is never signalled because it MATCHED something.
-#
-# THE INCIDENT THIS IS BUILT FROM, 2026-10-15. Stopping an acceptance campaign I ran, in one command:
-#   for p in /proc/[0-9]*; do ... case "$c" in *release-accept*|*harness/matri*) echo "$pid|..." ;;
-#   esac; done | while IFS='|' read -r pid c; do kill -TERM "$pid"; done
-# The two campaign pids died as intended AND SO DID TWO OF MY OWN TOOL SHELLS, because a tool
-# shell's /proc/<pid>/cmdline contains the whole command being run - pattern included - so the
-# matcher matched itself. Third occurrence in this project; the owner's rule on the first two was
-# capitalised: "PKILL IS HARD PROHIBITED FOREVER". Minutes earlier, on the same task, I had done it
-# correctly: print the candidates, read them, signal two literal pids.
-#
-# Every blocking case runs TWICE: once with the gate in place (must block) and once with
-# KILL_BY_PATTERN_GATE_DEFECT=1, which restores the state where nothing enforced (must NOT block).
-# A case that blocks in both runs is being refused by something else, and this says so.
+# A process is never signalled because it MATCHED something - the gate blocks every pattern kill.
+# run: tools/tests/killpattern-gate-selftest.sh
+# pass: exit 0
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 GATE=tools/hooks/kill-by-pattern-gate.sh

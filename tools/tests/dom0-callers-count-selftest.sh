@@ -1,20 +1,7 @@
 #!/bin/bash
-# THE START MENU MUST AGREE ACROSS CELLS OF ONE OS FAMILY.
-#
-# MEASURED 2026-10-21 by the harness audit: dom0-callers-check.sh's only entry-count test was
-# `[ "$ents" -ge 10 ]`, a floor. A release shipping a menu amputated to anywhere from 10 to 36
-# entries read as "aligned". Every cell of one family in a campaign is a clone of the SAME sealed
-# golden, so their menus must agree, and a disagreement needs no magic number at all.
-#
-# AND THE AUDIT'S "~37" WAS WRONG, which is why the cross-cell test alone was not enough. The rig's
-# own *-callers.out files from campaign rel-39175573529 report 85 entries on win10 (clean,
-# reinstall, upgrade AND the cold path) and 78 on win11 (clean, upgrade, cold) - every cell of a
-# family agreeing, and warm agreeing with cold. So the floor of 10 was 12% of the real value, and a
-# golden that is ITSELF amputated makes every clone agree on the same wrong number. There is an
-# absolute expectation now in mgmt/harness/callers-expected.json, measured from those files; the
-# fixtures below use the measured values rather than the prose one.
-#
-# The block is extracted from the shipped script between its two markers and driven over fixtures.
+# THE START MENU MUST AGREE ACROSS CELLS OF ONE OS FAMILY, and meet the absolute expectation.
+# run: tools/tests/dom0-callers-count-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 2
 A=mgmt/harness/dom0-callers-check.sh

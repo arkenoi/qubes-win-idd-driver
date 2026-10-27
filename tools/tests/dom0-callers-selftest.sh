@@ -1,21 +1,7 @@
 #!/bin/bash
-# dom0-callers-selftest.sh - the start-menu gate must go RED on each way the stream can be wrong.
-#
-# WHAT IS UNDER TEST: mgmt/harness/dom0-callers-check.sh, which calls qubes.GetAppmenus the way
-# dom0's qubesappmenus receive.py does and asserts the stream line by line. receive.py IGNORES
-# WHAT IT CANNOT PARSE IN SILENCE - no error, the entry just never appears in the menu - so every
-# one of these defects is invisible in production and has to be caught here.
-#
-# WHERE THE FIXTURE COMES FROM. The line format is `<id>.desktop:<Key>=<Value>` with keys
-# Name/Exec/Comment/Icon, verified against a REAL capture of the service running on a win11de guest
-# in dom0 context (79 entries, 284 lines, all ASCII). That capture stays in scratchpad/ and is NOT
-# tracked: it carries the capturing guest's account name in 13 Exec paths and this repo is public.
-# The entry list below is generated from tools/tests/appmenus-win11de-25h2.paths - the measured
-# Start Menu of that same guest, already tracked - so the fixture is built from captured data at
-# both ends rather than from my model of what the service emits.
-#
-# DOM0CALLERS_STREAM feeds the check a file instead of a guest. Part D asserts the campaign never
-# sets it, because a gate that can be handed a fixture must not be able to be handed one silently.
+# the start-menu gate must go RED on each way the stream can be wrong
+# run: tools/tests/dom0-callers-selftest.sh
+# pass: exit 0
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 CHK=mgmt/harness/dom0-callers-check.sh

@@ -1,14 +1,7 @@
 #!/usr/bin/env bash
-# xen-core-small-selftest.sh - offline proof for tools/xen-core-rip.py --small: the SMALL STATE of an `xl dump-core` image (every vCPU's
-# register context, the raw .xen_prstatus, the shared-info page) is decoded right and refused when the image is wrong.
-#
-# WHY: 2026-10-02 a SPIN core was read for RIP and CR3 only and deleted for space; the stuck vCPU's RAX - which hypercall it was in - was
-# never recorded. --small writes every register next to the core the moment it lands (mgmt/harness/fetch-wedge-core.sh).
-#
-# No rig, no guest: a synthetic ELF core with PLANTED values (x86_64 vcpu_guest_context layout, 0x1430 bytes per vCPU), in both section
-# table placements (after the ELF header, as Xen writes it, and at the end).
-#   no env                  every check must pass AND XENCORE_SMALL_DEFECT=1 (rax read 8 bytes off) must make the value checks FAIL.
-#   XENCORE_SMALL_DEFECT=1  run the checks with the defect and exit with their result - i.e. this test FAILS, by design.
+# --small decodes every vCPU's register context from an xl dump-core, and REFUSES a wrong image
+# run: tools/tests/xen-core-small-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT" || exit 2

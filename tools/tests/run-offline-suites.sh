@@ -1,5 +1,7 @@
 #!/bin/bash
-# run-offline-suites.sh - run every suite in offline-suites.txt, serially, and fail on any red.
+# run-offline-suites.sh - run every suite in product-suites.txt and harness-suites.txt, serially,
+# and fail on any red. A suite named in both lists, or in neither and not declared out in
+# not-in-the-gate.txt, is refused before anything runs.
 #
 #   tools/tests/run-offline-suites.sh
 #
@@ -22,274 +24,18 @@ cd "$(dirname "$0")/../.." || exit 2
 # OFFLINE_SUITES_LIST/_DIR point this at a fixture list, for tools/tests/offline-runner-selftest.sh.
 # A runner whose own floor and EMPTY rule have never been seen to FIRE is the thing it exists to
 # stop, so they are proven against planted suites rather than asserted in this comment.
-LIST=${OFFLINE_SUITES_LIST:-tools/tests/offline-suites.txt}
+PRODUCT_LIST=${OFFLINE_SUITES_PRODUCT_LIST:-tools/tests/product-suites.txt}
+HARNESS_LIST=${OFFLINE_SUITES_HARNESS_LIST:-tools/tests/harness-suites.txt}
+# OFFLINE_SUITES_LIST overrides BOTH with one fixture list (offline-runner-selftest.sh).
+LIST=${OFFLINE_SUITES_LIST:-}
 SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
-# 36 since 2026-10-15: clock-convention-selftest.sh was DELETED with the decision block it tested.
-# 56 since 2026-10-17: notifbridge-pid-selftest.sh ADDED, after the agent reported a
-# predecessor's bridge exiting as its own bridge crashing.
-# 55 since 2026-10-17: desktop-stuck-lock-selftest.sh ADDED, after an ACTION notification told
-# the user to sign in to a guest that signed itself in 8 s later.
-# 54 since 2026-10-17: wrapper-one-line-selftest.sh ADDED, holding one truncated transfer to
-# ONE error line after a single event reported three times on a campaign cell.
-# 53 since 2026-10-17: window-measure-selftest.sh ADDED, holding GetRealWindowRect to the
-# discriminator between a vanished window and a monitor-topology fault.
-# 52 since 2026-10-17: wait-bound-selftest.sh ADDED, after a probe bounded below the boot it waited
-# for abandoned a request on every boot and the guest logged a dropped request for each one.
-# 56 -> 57 on 2026-10-17: cold-caller-family-selftest.sh, which pins the release goal's cold-qube
-# clause to EVERY OS family rather than to whichever cell ran first (it was evidenced on win10 only
-# in run 38994277148, with win11 - the target - unmeasured).
-# 57 -> 59 on 2026-10-19: relay-judge-timenorm-selftest.sh and wu-judge-timenorm-selftest.sh ADDED,
-# after both update judges were found correlating two log sources by TIME OF DAY - no date, no zone.
-# Measured: a relay line and a WU failure 24 h apart gave `gaps=0 violations=0` exit 0, and a WU
-# window over a two-date decode graded `ended=True verdict: PASS` on a day whose pass never ran a
-# search. Each suite carries the pre-fix comparison frozen beside the fixed one, so every case is
-# seen to fail.
-# The floor only ever moves in a commit, and this is that commit - a suite that loses its subject is
-# removed deliberately, not left to rot green.
-# 59 -> 60 on 2026-10-19: toasthold-grade-clock-selftest.sh ADDED, the same defect class in the
-# toast-hold grader: bridge.log carries a time of day and NO date, and the date was put on it by
-# comparing it against THIS qube's clock, three hours out of phase with the guest's on the very
-# evidence it grades. Measured: a record stamped 61 s BEFORE its own toast read PASS OK-BRIDGED.
-# 60 -> 61 on 2026-10-19: harness-clock-selftest.sh ADDED, the host-side half of the same class: one
-# campaign matrix.log carried three clocks (its own `date` local, accept-clean's `date -u` quoted on
-# the same line, arm-module-bases' UTC), and a guest-local stick file 42 s OLDER than its bind was
-# read as three hours newer. Every host stamp is now `date -u` and each campaign log declares its
-# zone first; the suite's negatives are frozen fixtures, so they cannot rot when the fix is committed.
-# 74 -> 75 on 2026-10-21: gate-remainder-dry-selftest.sh ADDED. `gate-remainder.sh --dry` put
-# EVERY reachable suite in PASSED and exited 0 - run_it's dry branch returns 0 and `note $?` read
-# that as a result - and acceptance-plan.py:202 makes that dry call the remainder cell's first
-# probe, so the probe could not fail. The suite runs the shipped script dry and requires an empty
-# passed line, and its T10 drives the pre-fix definition through the same assertion and requires
-# it to go red.
-# 75 -> 76 on 2026-10-21: sweep-life-selftest.sh ADDED. tools/sweep-gate.sh returned a CLEAN
-# verdict over an empty log file AND over a capture that failed to decode - it had no predicate
-# asserting it had been handed anything gradeable. The suite drives all three refusals and a
-# seen-to-fail leg that deletes the predicate and requires the empty capture to read CLEAN again.
-# 97 -> 98 on 2026-10-23: deathevent-selftest.sh ADDED, and being unlisted is exactly why it rotted.
-# It was in NEITHER list. Run by hand today it reported `clean: rc=1 ok=56 fail=4`: four text legs in
-# agent/gui-agent/deathevent_test.c still asserted the wording from BEFORE agent fc94490 ("Say it in
-# plain English, once"), which reworded the composer - deathevent.h prints "- after %s" where the legs
-# expected "- after running %s", plus two reworded phrases and the teardown sentence. So the ONLY
-# check of the death notification's TEXT - which ADR-supervision 3 requires to carry what died, its
-# code and how long it ran - was red and unread. The legs are now aimed at the shipped wording, the
-# suite is 60/0, and all four defect knobs (WARNING, SHAREDID, NOCODE, HANGASEXIT) still fail as
-# required. THE COMPILER-POLICY EXCLUSION DOES NOT APPLY TO IT: the offline job is ubuntu-latest, so
-# gcc is present; it checks out with `submodules: true`, so agent/ is there; and it materialises the
-# pinned upstream/ro/qubes-windows-utils that this suite's -fsyntax-only checks read.
-# 107 -> 108 on 2026-10-25: accept-logvol-smoke-selftest.sh ADDED - the campaign now smoke-tests the
-#   LOG VOLUME BIND before its eight cells, and this drives that wiring. Campaign 40134888669
-#   aborted 11 minutes into its first cell on a volume the guest could not see, having spent 10 of
-#   them installing, and every preparation gate written afterwards checks around that bind rather
-#   than the bind. The suite executes the code between release-acceptance's RASMOKE markers against
-#   a stubbed smoke test and asserts the refutation arm runs FIRST, that EITHER arm failing stops
-#   the campaign before the matrix, that rc 2 is reported as the RIG and not the bind, and that the
-#   artefacts stay out of record-acceptance's *.out glob. 10 checks.
-# 109 -> 108 on 2026-10-26: sweep-window-selftest.sh DELETED. It was the single red in the
-#   2026-10-25 preflight and did NOT reproduce - green in-tree at HEAD, green in a clean
-#   worktree, green under this runner's own rig-shim - while its subject carried the marker it
-#   reported absent. Owner's standing rule: a selftest that fails and needs a quick fix is
-#   DROPPED COMPLETELY, not fixed. The property it covered is still enforced by
-#   log-sweep-collect.ps1:312 writing the DROPPED marker, and by the per-cell sweep failing
-#   its cell on INVALID-SWEEP-DATA/-UNJUDGED when the collector's window loses content.
-# 109 -> 110 on 2026-10-25: clock-sync-selftest.sh ADDED - it had NO PRODUCER. Written on
-#   2026-10-08 for the owner's "fix the clock issue once and forever so you NEVER COME WITH IT
-#   AGAIN", it was in no runner list and nothing but a hand invocation ever ran it, so it had been
-#   carrying a RED leg unseen: fallthrough_retries_bounded required `while ((Get-Date) -lt
-#   $deadline)` after the puller deliberately replaced that bound with a monotonic Stopwatch (a
-#   wall-clock bound cannot bound a loop that straddles the clock correction it causes). The leg now
-#   asserts the monotonic bound and a second leg fails if the wall-clock one returns. Verified red
-#   at HEAD before the fix, from inside tools/tests so ROOT resolves. 33 checks.
-# 101 -> 102 on 2026-10-23: decode-dedup-selftest.sh ADDED - one logical file pulled TWICE is not two
-#   files. The union collector (Get-LswLogDirCandidates) pulls a file present in two candidate
-#   LogDirs twice, and decode kept both, so every line counted twice: measured on the first
-#   supervision-gate guest run, 21 of 88 files duplicated, agent_instances 6 for 5 real instances
-#   and agent_instances_per_boot 2 against max 1 - a P2 breach and cell L2 FAIL on a healthy guest.
-#   13 checks, two mutations seen to fail.
-# 100 -> 101 on 2026-10-23: build-attribution-selftest.sh ADDED - the BIRTH CUTOFF. It proves that
-#   the entry fixture's lines are excluded even when its module declares one version, that our own
-#   installer's ERRORs (0.0.0.0, pre-anchor) are NOT excluded, that a stock component's version
-#   does not make its lines unattributable, and that a capture holding nothing the candidate wrote
-#   FAILS. Four mutations, each seen to fail. Measured cause: 396 ERROR lines across the 195
-#   captures on this rig were hidden as prior-build, 12 of them our installer's per upgrade cell.
-# 76 -> 77 on 2026-10-21: assert-payload-floor-selftest.sh ADDED. The harness audit measured
-# tools/assert-payload.sh printing `PASS: payload verified - 0 files` over an empty SHA256SUMS.txt:
-# the integrity loop ran zero iterations and all three consumers branch only on the exit code, so
-# a campaign would install and grade a payload nothing had hashed.
-# 77 -> 78 on 2026-10-21: accept-clean-wu-selftest.sh ADDED. accept-clean.sh disabled Windows
-# Update with `|| true` and never read the result, while matrix.sh never sets ACCEPT_MODE - so
-# EVERY cell took that branch and a failed disable left the cell graded as a clean "our package
-# only" measurement with WU live. The posture is now read back and a failed disable calls fail().
-# 78 -> 79 on 2026-10-21: dom0-callers-count-selftest.sh ADDED. The Start-menu check tested
-# `entries >= 10` against a clean Windows that reports ~37, so a menu amputated to a third read
-# as aligned. The count now has to AGREE across cells of one OS family, which are clones of the
-# same sealed golden - a predicate with no invented number in it.
-# 79 -> 80 on 2026-10-21: ctl-stop-rc-selftest.sh ADDED. ctl_stop's last command was its printf,
-# so "not-ours" and "STILL-RUNNING" exited 0 - the same as a confirmed stop - and matrix.sh only
-# printed the string. A control window that failed to close stayed on the desktop to be counted
-# by the window-map grading later in the same cell.
-# 80 -> 81 on 2026-10-21: accept-cancel-selftest.sh ADDED. ACCEPTCANCELORPHAN root-caused:
-# release-acceptance.sh never sourced run-lib.sh and never called job_init, so a SIGTERM to the
-# leader exited the driver and left matrix.sh holding the rig - three cancels did exactly that.
-# 81 -> 82 on 2026-10-21: seal-halted-selftest.sh ADDED. seal-qwt-golden.sh was the only consumer
-# of qwt_shutdown that trusted its exit code without re-reading the state, so a guest still
-# Running after a successful-looking shutdown would have been SEALED - freezing whatever it was
-# doing into every clone taken from that golden.
-# 82 -> 83 on 2026-10-21: answer-labconfig-selftest.sh ADDED. build-answer-stick.sh guarded a
-# Windows 11 stick with `grep -q LabConfig`, so an answer file that only MENTIONS the word
-# passed and Setup failed 0x800700FF - 0x40030 four minutes in. The four bypass keys a Xen HVM
-# needs are asserted by name instead.
-# 83 -> 84 on 2026-10-21: firstboot-effects-selftest.sh ADDED. guest/firstboot-setup.ps1 printed
-# "OK - REBOOT REQUIRED" unconditionally with ErrorActionPreference=Continue and no checks, so a
-# failed `bcdedit /set testsigning on` left a setup log identical to a good one - and nothing
-# else in the tracked harness asserts testsigning, while the IDD driver is test-signed.
-# 84 -> 85 on 2026-10-21: offline-rigshim-selftest.sh ADDED. Two suites in this very list were
-# firing ~50 DENIED admin calls per estate run at qubes that do not exist - specimen-mark-reachable
-# at `somevm` through `timeout 20 qrexec-client-vm`, dom0-callers at `fixture-vm` through
-# `qvm-ls --raw-data --fields STATE` - and every one was written to the owner's dom0 journal. Both
-# suites were green on every assertion they make, and nothing here could see it, because the calls
-# are not a suite's output. The runner now shims 23 rig commands onto PATH ahead of each suite and
-# reports any suite that reaches one as RED; this suite drives that guard, including the case a
-# shell function cannot stub.
-# 96 -> 97 on 2026-10-22: wedge-gates-selftest.sh ADDED. A guest wedged on the post-install second
-# boot of a campaign cell; matrix.sh FATALed and aborted itself, release-acceptance.sh ran the
-# feature tests anyway, the subject was killed at 600s with NOTHING captured, and no record was
-# produced - although collect-failure.sh, wedge-lib.sh, fetch-wedge-core.sh, wedge-hunt.sh and
-# verdict-jev.py all existed and none was invoked. The same day a guest that merely LOOKED wedged
-# answered qrexec rc=0 and halted cleanly. mgmt/harness/wedge-gates-lib.sh is one classifier for
-# both - owner's definition: present, no pixels at all, and ACPI ignored, as distinct from "has a
-# qrexec queue and restarts rapidly". This suite drives all 15 classes offline, the two REAL
-# specimens among them, proves stage 1 is a pure function, refuses a kill until the record is
-# complete, and ASSERTS THE WIRING - because unwired machinery is the defect, not the fix.
-# 95 -> 96 on 2026-10-22: campaign-full-selftest.sh ADDED. acceptance-plan.py plans THREE cells and
-# campaign-run.sh mechanised only the middle one, so the other two were run BY HAND - and both hand
-# steps went wrong in a way that read as success: two release-package runs at the same commit have
-# IDENTICAL display titles, so the roles were taken from dispatch order (and a grep for QGAFAULT in
-# the shipped binary returned 0 on both, which reads as "the flag did nothing"); and the required
-# workflows that run on push-to-main only had to be dispatched by hand, twice. mgmt/harness/
-# campaign-full.sh now owns the whole chain, and this suite drives the only two things it decides
-# for itself, with an order-trusting resolver as the seen-to-fail control and the REAL ci-state
-# refusal text as the fixture.
-# 94 -> 95 on 2026-10-22: qrexec-gap-witness-selftest.sh ADDED. quick-upgrade.sh told a run that
-# "the log volume could not be read either (no volume attached, or mtools found nothing)" while the
-# same pull had just recovered 120 files and returned 0 - because the predicate read only the SINGLE
-# newest *.log and that file was one the MSI had just created and not yet written to. The false
-# [ERROR] then failed the run's own sweep gate, rc=3 over an install that passed 11 of 11 checks.
-# The fix walks newest-first until a line is found; this suite runs the SHIPPED predicate over the
-# tree that defeated the old one, keeps the [ERROR] branch reachable for a volume that really yields
-# nothing, and its control is the old one-file form, which must come back empty on that same tree.
-# 93 -> 94 on 2026-10-22: updater-component-selftest.sh ADDED. The relay defect was found by a HAND
-# sequence (owner: "it is mostly what you do now by hand but systemic, verified and repeatable"), and
-# the release gate that should have caught it - template-update-test.sh - contains NO relay assertion
-# at all: it grades the update ROUND outcome, so a relay that was never built surfaced as an update
-# symptom and was attributed elsewhere four times. mgmt/harness/updater-component-test.sh is the
-# per-component split over GWeck's German golden; this suite drives its seven gates offline against
-# the REAL captures of that day - the pre-fix pair must FAIL and each gate must fail alone.
-# 92 -> 93 on 2026-10-22: discarded-scriptblock-selftest.sh ADDED. The relay defect above was a bare
-# `{ ... }` statement - a ScriptBlock LITERAL, built and discarded, never executed - so the deploy
-# logged success while the exe on disk stayed the one built 2026-09-16. The source text was CORRECT,
-# which is exactly why every offline leg and every Jev score passed it. This is an AST check over the
-# shipped PowerShell (303 files) whose control is the real shipped shape: an earlier draft reported
-# every file clean while unable to detect it at all.
-# 91 -> 92 on 2026-10-22: relay-vouch-selftest.sh ADDED. The updater deploy reported success over a
-# relay built from a STALE staged source: three template-update rounds bound the pass's own pid as the
-# listen port and nothing served 8082, so every pass went silent - and 87e3a746 had been reported as
-# the fix on offline legs alone. The deploy now vouches the SOURCE it compiles, vouches the PLACED exe
-# by its UTF-16 marker, and ends stale relays BY IMAGE PATH rather than by the port they hold.
-# 90 -> 91 on 2026-10-22: upd-task-prestop-selftest.sh ADDED. The MSI's Restart Manager reaped our
-# own running update scan and the death reporter told the USER the scan had failed (P1,
-# dom0_loud_failures=2). The installer now ENDS those tasks before msiexec, so the result is
-# 267014/0x41306 which the reporter already ignores - a declaration instead of an inference, and no
-# reporter change. The suite runs the shipped region with schtasks as a recorder.
-# 89 -> 90 on 2026-10-22: stick-scope-restore-selftest.sh ADDED, for the owner's two rulings - the
-# evidence stick is for INSTALL testing, so appvm cells bind nothing, and the registry is handed
-# back after an install so no park, clone or derived AppVM inherits a path to a removable volume.
-# It extracts the class decision, the restore and four cells from the shipped matrix.sh and RUNS
-# them with the stick primitives as recorders; the controls mutate the real file and were seen to
-# turn it red.
-# 88 -> 89 on 2026-10-22: accept-attempt-boundary-selftest.sh ADDED - the OTHER half of the same
-# defect, which the 88 fix did not cover and which I had called done. release-acceptance.sh appends
-# the matrix's stdout to $CAMP/full.out, one level above the dir matrix.sh stamps, so that file held
-# two attempts' footers - and it is the file `matrix rc=` points a reader at. It is ROTATED rather
-# than stamped because record-acceptance.sh requires ONE footer per *.out and a separator inside
-# the file would not restore that; the kept copy is renamed out of the glob.
-# 87 -> 88 on 2026-10-22: matrix-attempt-boundary-selftest.sh ADDED. matrix.sh derives its work
-# dir from the release-package run id and opens per-cell artefacts with `>>`, so two attempts
-# against one package wrote into the same files with no separator - and the mtime belongs to the
-# newest line. WIN10-clean-logvol-bind.out held an aborted attempt's `fail` and a later
-# attempt's `ok` together; read three times that night, it produced a live campaign reported as
-# aborted and then an invented retry to reconcile the lines. Each attempt now stamps the
-# artefacts it inherits, nothing is deleted, and the suite asserts ATTRIBUTABILITY by attributing
-# lines the way a reader does, with the stamp removed as its control.
-# 87 since 2026-10-22: the two qrexec-wrapper exit suites joined the list. wrapper-exit-emit is new -
-# it compiles and runs the exit chain, which is what the brace defect needed - and
-# wrapper-exit-reason was already written but excluded for needing submodule git history, which is
-# how its red went unread for days.
-# 98 -> 99 on 2026-10-23: ttfw-ab-selftest.sh ADDED with the harness it checks. ttfw-ab.sh produces
-# the headline number for a user-visible latency (time to first window), so it is an instrument, and
-# the shapes whose absence would make its number MEANINGLESS rather than slightly wrong are the ones
-# asserted: the running binary's hash verified before any timing, the tag asserted in preflight and
-# the capture service's exit status read on every poll (an empty per-window tar has three causes, two
-# of which look exactly like "no window yet"), interleaving with an alternating start side, a smoke
-# sweep over a single-build window gating the exit code, and IMPROVED claimed only on disjoint ranges.
-# 99 -> 100 on 2026-10-23: init-record-consumers-selftest.sh ADDED. The LogInit banner's demotion to
-# LogDebug removed `process ID: N` from every shipped log, and SIX readers key on it to answer "which
-# lines are THIS instance's" - the sanctioned agent restart (which then cannot prove a turnover, so
-# the kill-by-name it exists to prevent is all that is left), two harnesses that SCOPE a count with it
-# and therefore counted the whole file instead, and an acceptance gate that emits INITLINE 0 and
-# exits. One severity edit, six readers, every failure silent or inverted. The suite asserts each
-# consumer accepts the shipped QWTBIRTH form, skipping comments (all six now explain the demotion in
-# prose a whole-file check would pass on), and drives the restart parser against a line a 4.3.37
-# guest actually wrote, with the branch removed to prove it reads 0 without it.
-# 110 -> 144 on 2026-10-25: THE SUITES NOTHING RAN, minus the ones CI CANNOT RUN. 194 suites
-#   exist under tools/tests/ and the ones named by nothing that executes - not this list, not a
-#   workflow, not a gate, not a hook - were counted, found red, fixed and registered. A mention in
-#   a doc runs nothing, and neither does a mention in a COMMENT: the first version of the producer
-#   rule matched a suite's name anywhere in a producer's text and so counted a commented-out call
-#   as a producer, which hid 18 more. Four of those were genuinely red, two of them from real
-#   defects (an absent fact read as a measured-empty one; a leg asserting a spelling the product had
-#   improved past) - the rest of this paragraph is why that matters: both had been red for days.
-#   REGISTERED HERE are the suites that stay green with the resources a GitHub runner lacks actually
-#   REMOVED: an empty directory bind-mounted over all three pwsh installs inside `unshare -r -m`,
-#   the absence asserted before the run, HOME redirected, and each suite judged by this runner.
-#   That instrument got sharper twice and every tightening removed names - a text predicate flags
-#   43 of the 110 suites CI already runs green, and PWSH=/nonexistent only defeats a suite's
-#   FIRST path, which let a PowerShell half run and still read as a pass. What is NOT registered is
-#   NOT forgotten: tools/tests/not-in-the-gate.txt carries each file's measured reason and
-#   findings/issues.md (SUITESNOBODYRUNS) the class. No sub-tally is repeated here - the live
-#   number is whatever the producer lint prints, and a hand-copied count is what rots.
-# 144 -> 145 on 2026-10-26: errbox-selftest.sh REGISTERED - declared out as RED on 2026-10-25, green now
-# (8 checks through this runner) once its ordering leg stopped anchoring on a RENAMED rule,
-# GetShellWindow() -> ShellWindowNow(), which had turned a lost landmark into a claim about the product.
-# A declared-out suite that passes is the exclusion rotting the other way: the gate is not running a
-# check that works. unpark-precheck was NOT registered with it - 5 runs on an unchanged tree gave
-# rc=0,1,1,0,1; its reason in not-in-the-gate.txt carries the measurement.
-# 145 -> 146 on 2026-10-26: console-window-mapped-selftest.sh REGISTERED. It was declared out as RED
-# ("its own guard leg fails") and in fact all its assertions passed while this runner graded it
-# TOUCHED-RIG for ONE call: the oversize-guard leg ran the shipped assert_sole_guest, whose
-# _sr_rig_raw calls `qrexec-client-vm dom0 admin.vm.List`. Under the shim that call exits 1, the
-# precondition refused, and the guard was never reached - so the leg was BOTH touching the rig and
-# vacuous. The rig read is now stubbed in the suite (the serial-rig-selftest stubs), 5 assertions,
-# zero rig calls, and the guard was driven: with the size guard deleted from a padded copy the
-# probe never says "past cmd.exe", so the leg goes red.
-# 146 -> 145 on 2026-10-26: wu-oscillation-verdict-selftest.sh DELETED. Two of its eight assertions
-# encoded a belief that measurement refuted - that an offer we resolved and which is STILL offered
-# is an oscillation. Six recorded campaigns (five of them template-update round 3) show a definition
-# install leaving its own identity in `available` at the same revision with remaining=0, because
-# Windows Update does not clear the offer until its next catalog sync. The fixture was synthetic and
-# the campaigns are real, so verdict() now fires on absent-then-present and the fixture is gone
-# rather than edited (CLAUDE.md: a selftest that fails and needs a quick fix is DELETED).
-# What still enforces it: wu-e2e.sh fails the round on rc=1, and the three controls in that commit
-# message drive the leg red on a genuine return, green on identical sets with nothing resolved, and
-# non-zero on a missing pre-pass status.
-#
-# AND THE FLOOR WAS ALREADY WRONG, WHICH MADE THIS WHOLE GATE INERT. It stood at 148 against a list
-# of 146: matrix-sweep-tally-selftest.sh and sweep-window-selftest.sh were deleted earlier the same
-# day and this floor was not moved with them, so every run exited 2 on "the list shrank" and NO
-# suite ran at all. Measured at HEAD before this change: rc=2, zero suites executed. That is the
-# failure mode the floor exists to catch, caught by the floor itself and against the runner.
-# 145 -> 144 on 2026-10-26: broker-down-anchor-selftest.sh is DELETED on the owner's call. The floor
-# moves in the SAME commit as the deletion, which is the lesson the paragraph above was written for.
-FLOOR=${OFFLINE_SUITES_FLOOR:-144}
+# THE FLOOR IS THE PRODUCT LIST'S LENGTH, and the two must agree. The literal below is the
+# committed intent; the count is the fact. A harness-only change cannot move the literal, and a
+# product suite that joins or leaves must move it in the SAME commit or this refuses to run.
+# It replaces a 250-line per-move history: that history recorded a policy where any addition moved
+# the floor, and it still stood at 148 against a list of 146 for a day - every run exited 2 and NO
+# suite ran at all, which is the exact inertness the floor exists to catch.
+FLOOR=${OFFLINE_SUITES_FLOOR:-43}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"
@@ -304,10 +50,96 @@ if [ "${OFFLINE_SUITES_DEPTH:-0}" -ge 1 ]; then
 fi
 export OFFLINE_SUITES_DEPTH=$(( ${OFFLINE_SUITES_DEPTH:-0} + 1 ))
 
-[ -r "$LIST" ] || { echo "ERROR: $LIST is missing - the curated list IS the gate"; exit 2; }
-mapfile -t suites < <(sed 's/#.*//' "$LIST" | awk 'NF')
+_names(){ sed 's/#.*//' "$1" | awk 'NF'; }
+if [ -n "$LIST" ]; then
+  [ -r "$LIST" ] || { echo "ERROR: $LIST is missing - the curated list IS the gate"; exit 2; }
+  mapfile -t suites < <(_names "$LIST")
+else
+  LIST="$PRODUCT_LIST + $HARNESS_LIST"
+  for f in "$PRODUCT_LIST" "$HARNESS_LIST"; do
+    [ -r "$f" ] || { echo "ERROR: $f is missing - the two curated lists ARE the gate"; exit 2; }
+  done
+  # IN BOTH: a name in both lists is counted twice toward the floor and its class is undecided.
+  both=$(comm -12 <(_names "$PRODUCT_LIST" | sort -u) <(_names "$HARNESS_LIST" | sort -u))
+  if [ -n "$both" ]; then
+    echo "ERROR: in BOTH lists - a suite has one class: $(echo "$both" | tr '\n' ' ')"
+    exit 2
+  fi
+  # IN NEITHER: every suite file is product, harness, or declared out with a reason. The universe
+  # is every *.sh/*.py directly under the suite dir - NOT the *-selftest.sh spelling, because a
+  # census scoped to a naming convention cannot see the file that breaks it (lint L32's lesson).
+  neither=$(comm -23 \
+    <(cd "$SUITEDIR" && ls *.sh *.py 2>/dev/null | sort -u) \
+    <(cat <(_names "$PRODUCT_LIST") <(_names "$HARNESS_LIST") \
+          <(awk '!/^[[:space:]]*#/ && NF {print $1}' "$SUITEDIR/not-in-the-gate.txt" 2>/dev/null) \
+          | sort -u))
+  if [ -n "$neither" ]; then
+    echo "ERROR: in NEITHER list and not declared out: $(echo "$neither" | tr '\n' ' ')"
+    exit 2
+  fi
+  # THE FLOOR IS THE PRODUCT COUNT. Equality, not >=: a rise with no product addition and a
+  # product addition with no rise are the same defect from opposite sides.
+  nprod=$(_names "$PRODUCT_LIST" | wc -l)
+  if [ "$nprod" -ne "$FLOOR" ]; then
+    echo "ERROR: $PRODUCT_LIST names $nprod product suite(s), floor literal is $FLOOR - the floor moves only with this list, in the same commit"
+    exit 2
+  fi
+  # A TEMPORARY JOB THAT OUTLIVES ITS CONDITION IS A PERMANENT ONE. Any CI job whose key says
+  # probe or temporary carries "# REMOVE-BY: YYYY-MM-DD if <condition>"; past that date the job
+  # must be gone, and this refuses to run until it is.
+  expired=$(python3 - <<'EOP'
+import os,re,datetime,sys
+today=datetime.date.today(); bad=[]
+d=".github/workflows"
+for f in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+    if not f.endswith((".yml",".yaml")): continue
+    L=open(os.path.join(d,f),errors="replace").read().splitlines()
+    jobs=[(i,m.group(1)) for i,l in enumerate(L) for m in [re.match(r"^  ([A-Za-z0-9_-]+):\s*$",l)] if m]
+    for k,(i,name) in enumerate(jobs):
+        if not re.search(r"probe|temporary|temp", name, re.I): continue
+        end=jobs[k+1][0] if k+1<len(jobs) else len(L)
+        m=re.search(r"#\s*REMOVE-BY:\s*(\d{4}-\d{2}-\d{2})\s+if\s+\S", "\n".join(L[i:end]))
+        if not m: bad.append("%s job '%s' has no '# REMOVE-BY: YYYY-MM-DD if <condition>'"%(f,name)); continue
+        due=datetime.date.fromisoformat(m.group(1))
+        if due < today: bad.append("%s job '%s' was REMOVE-BY %s and is still here"%(f,name,m.group(1)))
+print("\n".join(bad))
+EOP
+)
+  if [ -n "$expired" ]; then
+    echo "ERROR: temporary CI job(s) past their condition:"; echo "$expired" | sed 's/^/  /'
+    exit 2
+  fi
+
+  # A SMOKE SCRIPT IS A TEMPORARY INSTRUMENT, and the thing this refuses is one that quietly became
+  # permanent. Each tools/smoke/ script collects through fresh_cell_log (the sealed primitive, not
+  # its own log walk) and declares "# SMOKE-SINCE: YYYY-MM-DD". Fourteen days on it is either
+  # PROMOTED - its assertion moved into product-suites.txt, recorded here as "# PROMOTED: <suite>" -
+  # or deleted. Neither happening is how a scratch probe turns into a second unowned harness.
+  smoke=$(python3 - <<'EOP'
+import os,re,datetime
+today=datetime.date.today(); bad=[]; d="tools/smoke"
+for f in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+    if not f.endswith((".sh",".py")): continue
+    p=os.path.join(d,f); t=open(p,errors="replace").read()
+    if "fresh_cell_log" not in t:
+        bad.append("%s never calls fresh_cell_log - a smoke script collects through the sealed primitive"%p)
+    m=re.search(r"#\s*SMOKE-SINCE:\s*(\d{4}-\d{2}-\d{2})",t)
+    if not m:
+        bad.append("%s has no '# SMOKE-SINCE: YYYY-MM-DD' - promote-or-delete needs a start date"%p); continue
+    since=datetime.date.fromisoformat(m.group(1)); age=(today-since).days
+    if age > 14 and not re.search(r"#\s*PROMOTED:\s*\S",t):
+        bad.append("%s is %d days old, neither promoted nor deleted (SMOKE-SINCE %s)"%(p,age,m.group(1)))
+print("\n".join(bad))
+EOP
+)
+  if [ -n "$smoke" ]; then
+    echo "ERROR: tools/smoke/ promote-or-delete:"; echo "$smoke" | sed 's/^/  /'
+    exit 2
+  fi
+  mapfile -t suites < <(cat <(_names "$PRODUCT_LIST") <(_names "$HARNESS_LIST"))
+fi
 n=${#suites[@]}
-if [ "$n" -lt "$FLOOR" ]; then
+if [ -n "${OFFLINE_SUITES_LIST:-}" ] && [ "$n" -lt "$FLOOR" ]; then
   echo "ERROR: $LIST names $n suite(s), floor is $FLOOR - the list shrank; move the floor in a commit or restore the suites"
   exit 2
 fi

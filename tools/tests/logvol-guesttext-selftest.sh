@@ -1,11 +1,7 @@
 #!/bin/bash
-# logvol-guesttext-selftest.sh - guest text cannot forge or mask a declared severity.
-#
-# WHY. logvol-lib.sh's logger now writes [ERROR]/[WARN] into the message so tools/sweep-gate.sh,
-# which reads ONLY declared severity, can see its failures. Some of those messages quote what the
-# GUEST said - and the guest is untrusted. A reply carrying its own "[ERROR]" token, or a newline,
-# could announce a severity we never declared, or split one record so the second half arrives with
-# no level on it at all. Guest text is data: flattened, de-bracketed, bounded.
+# guest text cannot forge or mask a declared severity.
+# run: tools/tests/logvol-guesttext-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 2
 

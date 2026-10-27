@@ -1,15 +1,7 @@
 #!/usr/bin/env bash
-# logvol-smoke-selftest.sh - the bind smoke test's own verdicts, every one seen to fire.
-#
-# mgmt/harness/logvol-smoke.sh exists because campaign 40134888669 aborted 11 minutes in on a log
-# volume the guest could not see, and the preparation gates written afterwards check everything
-# AROUND that bind and not the bind itself (owner: "and why we did not smoke test the bind"). A
-# smoke test nobody has watched refuse is the same mistake one layer up, so every arm is driven here
-# against stub libraries: no guest, no loop device, no rig call.
-#
-# THE ARM THAT MATTERS MOST is --no-attach. With nothing attached the bind MUST refuse; if it
-# "succeeds" there then its receipt is not about the volume at all and every PASS of the smoke test
-# is void. That is asserted in both directions.
+# every verdict of the bind smoke test fires, and with nothing attached the bind MUST refuse
+# run: tools/tests/logvol-smoke-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT" || exit 2
@@ -28,6 +20,11 @@ cat > "$T/bin/qvm-ls" <<'EOF'
 #!/bin/bash
 cat "${SUBJ_STATE_FILE:-/dev/null}"
 EOF
+# The failure package: on a non-PASS arm the script collects through fresh_cell_log, which runs
+# collect-failure.sh - and that reaches dom0. An OFFLINE suite must not, so it is stubbed through
+# the primitive's COLLECT_BIN override rather than left to fire real admin calls.
+printf '#!/bin/bash\nexit 0\n' > "$T/collect.sh"
+chmod +x "$T/collect.sh"
 for c in qvm-start qvm-remove qvm-kill qvm-device qvm-features qvm-tags udisksctl; do
   printf '#!/bin/bash\nexit 0\n' > "$T/bin/$c"
 done
@@ -80,12 +77,13 @@ run(){ # -> rc; output in $T/out, verdicts in $T/o/verdict.tsv
   SUBJ_STATE_FILE="${SUBJ_STATE_FILE_OVERRIDE:-$T/state}" \
   LOGVOL_SMOKE_OUT="$T/o" QTEST="$T/qtest" GOLDEN_SH="$T/golden.sh" CLONE_SH="$T/clone.sh" \
   LOGVOL_LIB="$T/logvol-lib.sh" SHUTDOWN_LIB="$T/shutdown-lib.sh" VMLOCK_LIB="$T/vmlock.sh" \
+  COLLECT_BIN="$T/collect.sh" \
   LV_IMG="$T/stub.img" \
   GOLDEN_BAD="${GOLDEN_BAD:-0}" CLONE_BAD="${CLONE_BAD:-0}" GUEST_UP="${GUEST_UP:-1}" \
   LV_BIND_OK="${LV_BIND_OK:-1}" LV_RT_OK="${LV_RT_OK:-1}" LOCK_HELD="${LOCK_HELD:-0}" \
   LV_CREATE_FAIL="${LV_CREATE_FAIL:-0}" LV_ATTACH_FAIL="${LV_ATTACH_FAIL:-0}" \
   LV_PHASE_OK="${LV_PHASE_OK:-1}" \
-    bash mgmt/harness/logvol-smoke.sh --deadline 1 "$@" > "$T/out" 2>&1
+    bash tools/smoke/logvol-smoke.sh --deadline 1 "$@" > "$T/out" 2>&1
   echo $?
 }
 vtsv(){ cat "$T/o/verdict.tsv" 2>/dev/null | tr '\t' ' '; }

@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
-# grade-receipt-selftest.sh - the four combinations of tools/grade-receipt.sh, offline.
-#
-# WHY THE SWEEP IS IN THERE AT ALL. grade-noise.py greps five patterns someone chose. The owner's
-# standing rule is the opposite - "RUN THE SWEEP; never grep one emitter" - after four wrong-tag
-# false negatives in one morning (2026-10-10), where the sweep then found 13 breaches the greps had
-# missed. So a receipt is graded by both, and this proves that a sweep failure cannot be passed over:
-# a sweep that dies, and a sweep that grades itself INCOMPLETE, both fail the receipt.
+# tools/grade-receipt.sh passes a receipt only when BOTH the named conditions and the SWEEP are clean
+# run: tools/tests/grade-receipt-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT" || exit 2
 T=$(mktemp -d "${TMPDIR:-/tmp}/grade-receipt-selftest.XXXXXX"); trap 'rm -rf "$T"' EXIT

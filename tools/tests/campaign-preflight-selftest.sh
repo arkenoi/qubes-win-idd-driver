@@ -1,14 +1,7 @@
 #!/bin/bash
-# campaign-preflight-selftest.sh - EVERY REFUSAL OF THE CAMPAIGN PREFLIGHT, SEEN TO FIRE.
-#
-# WHY THIS EXISTS. The checks in mgmt/harness/campaign-preflight.sh lived in an untracked scratchpad
-# chain script, so the one thing standing between a mistake and FOUR HOURS of exclusive rig time -
-# plus the operator's screen, which the visual cells take over - was a scratch file whose refusals
-# had never been seen to fire. A gate nobody has watched refuse is decoration.
-#
-# HOW IT IS DRIVEN. The programs the preflight shells out to are stubbed on PATH or through the
-# script's own overrides (gh, qvm-check, the golden tool, the CI reader), so the REAL preflight code
-# runs against controlled answers. Nothing stubs the preflight itself.
+# EVERY REFUSAL OF THE CAMPAIGN PREFLIGHT FIRES - a gate nobody has watched refuse is decoration.
+# run: tools/tests/campaign-preflight-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT" || exit 2

@@ -37,6 +37,12 @@ VM="${1:?usage: $0 <vm> [outdir]}"
 source mgmt/harness/vmlock.sh; vm_lock "$VM"   # one harness per guest; see vmlock.sh
 source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the control and the probe are stopped by the identity this run recorded, never by name
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/P5-$VM}"
+# A contaminated subject is refused BEFORE any work: this script's default output dir carries no
+# run-id, so a second attempt would otherwise append to the first attempt's artefacts and be read
+# back as one run. Pass a fresh outdir to run again.
+declare -F attempt_dir >/dev/null 2>&1 || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh"
+attempt_dir "$OUT" || exit 1
+
 mkdir -p "$OUT"
 TMP=$(mktemp -d)
 # ONE EXIT TRAP (lint L21). `# (no trap here: _p5_exit above calls restore once it is defined - lint L21)` further down used to REPLACE this one, because bash

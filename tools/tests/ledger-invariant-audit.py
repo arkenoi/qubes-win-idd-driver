@@ -1,19 +1,7 @@
 #!/usr/bin/env python3
-"""Audit the stage-1 ledger's own invariant. The invariant does not audit itself, and that cost a
-real hole: PwLedgerSynth was incremented at a primitive that does not touch PwLedgerCopies, so a
-synth copy could never surface as UNATTRIBUTED - the check meant to catch uninstrumented copy sites
-had a copy site it could not see. It was found by writing a brief, not by a check. This is the
-check.
-
-THE RULE, which the ledger's comments state and nothing enforced: every SOURCE counter increment
-must be accompanied by an increment of the discriminator PwLedgerCopies - either in the same
-statement, or because the copy it counts goes through PwSliceCopyAndDamageSrc, which increments the
-discriminator itself.
-
-Usage:  ledger-invariant-audit.py [--prove]
-        --prove re-runs with the synth pairing stripped from a COPY of the source and requires this
-        audit to fail, because a check never seen to fail is decoration.
-"""
+# Every source counter is paired with the discriminator, every refusal counted, the arithmetic clean.
+# run: python3 tools/tests/ledger-invariant-audit.py
+# pass: exit 0
 import re, sys, pathlib, tempfile, shutil, subprocess
 
 SRC = pathlib.Path(__file__).resolve().parents[2] / "agent/gui-agent/main.c"

@@ -1,14 +1,7 @@
 #!/bin/bash
-# matrix-runmarker-selftest.sh - the run-marker read must take the GUEST's answer, not the echo.
-#
-# THE DEFECT THIS PINS. `qtest run` returns the cmd banner and the prompt line WITH THE COMMAND ON
-# IT, and that command text contains both PRESENT and ABSENT. matrix.sh read it with
-# `grep -ao 'PRESENT\|ABSENT' | head -1`, which takes whichever token appears first IN THE ECHOED
-# COMMAND - always PRESENT - so the check could not fail while the guest answered, and returned
-# empty when it did not. quick-upgrade.sh had already fixed this; matrix.sh had not.
-#
-# The fixture is the real output shape, taken from the 2026-10-14 campaign log (win10-acc,
-# 10.0.19045.2965), not a shape I imagined.
+# The run-marker read must take the GUEST's answer, not the echo.
+# run: tools/tests/matrix-runmarker-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 2
 

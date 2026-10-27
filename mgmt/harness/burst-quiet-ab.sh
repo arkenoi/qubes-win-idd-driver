@@ -63,6 +63,8 @@
 #   VARIANT=two: VM2=<second subject> PARK2=<its park> ARM_A=<label> ARM_B=<label>
 #   env: CYCLES (per arm, 20)  WINDOW (240 scan / 180 harness / 420 soak)  SETTLE (60)  BOOT_DL (300)  SOAKERS (6)
 #        ROUNDS (4)  PUSHES (6)  CALLS (16)  VALIDATE=1  OUT=<evidence dir>
+declare -F toolstack_accept >/dev/null 2>&1 \
+  || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh" 2>/dev/null || true   # toolstack_accept: the one recorded shutdown request
 set -u
 cd "$(dirname "$0")/../.." || exit 3
 VM=${VM:?set VM - the subject; there is no default target}
@@ -278,7 +280,7 @@ probe_alive(){ ALIVE=dead; alive_twice && ALIVE=alive; CPU=$(w_cpu_state "$VM" 1
 
 # ACPI shutdown -> the class. Needs ALIVE. Sets HALT, CLS.
 shut_and_classify(){ # $1=label
-  timeout 60 qvm-shutdown "$VM" >/dev/null 2>&1
+  toolstack_accept "$VM" >/dev/null 2>&1
   HALT=ignored; w_halt "$VM" 180 "$1-halt" log >/dev/null && HALT=halted
   if [ "$HALT" = ignored ]; then
     # Not yet a verdict (Jev probe review: a fixed deadline stands in for the condition). A slow
@@ -311,7 +313,7 @@ boot(){ # -> 0 = qrexec up (SESS_T = seconds from the start call), 1 = not up by
     # Something started it (a queued call can) - shut it down cleanly first; only a subject that
     # will not halt is rebuilt.
     log "  WARNING: $VM is $st before the boot - ACPI shutdown first"
-    timeout 60 qvm-shutdown "$VM" >/dev/null 2>&1
+    toolstack_accept "$VM" >/dev/null 2>&1
     w_halt "$VM" 300 "preboot-halt" log >/dev/null || restore_subject
   fi
   local tb rc; tb=$(date +%s)
@@ -343,7 +345,7 @@ if [ "${VALIDATE:-0}" = 1 ]; then
   probe_alive; shut_and_classify v2
   log "  domain paused across the ACPI request -> $CLS (expected STALL) alive=$ALIVE halt=$HALT"
   qvm-unpause "$VM" >/dev/null 2>&1
-  timeout 60 qvm-shutdown "$VM" >/dev/null 2>&1; w_halt "$VM" 240 "v2-unpaused" log >/dev/null || restore_subject
+  toolstack_accept "$VM" >/dev/null 2>&1; w_halt "$VM" 240 "v2-unpaused" log >/dev/null || restore_subject
   [ "$CLS" = STALL ] || { log "VALIDATE FAIL: the STALL branch returned $CLS"; exit 1; }
   log "VALIDATE PASS: a healthy boot read OK and a paused one read STALL; the end-of-window read has data"
   exit 0

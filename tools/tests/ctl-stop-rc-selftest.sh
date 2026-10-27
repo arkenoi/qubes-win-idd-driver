@@ -1,16 +1,7 @@
 #!/bin/bash
 # A CONTROL WINDOW THAT DID NOT CLOSE MUST NOT BE SILENT.
-#
-# MEASURED 2026-10-21 by the harness audit: ctl_stop's last command was its printf, so every
-# outcome except a malformed pid returned 0 - "not-ours" (that pid belongs to a different process
-# now, so OURS was never stopped) and "STILL-RUNNING" (stop sent, alive after 5 s) came back with
-# the same exit code as a confirmed stop. matrix.sh's call site was
-#     say "  notepad: $(QTEST_VM=$app T=45 ctl_stop "${nppid:-0}" "${npstart:-0}")"
-# which prints the string and never branches, so a control window that failed to close stayed on
-# the guest desktop to be counted by the window-map grading step later in the SAME cell.
-#
-# The mapping is extracted from the shipped library between its two markers and driven over every
-# outcome string the guest side can produce.
+# run: tools/tests/ctl-stop-rc-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 2
 L=mgmt/harness/lifecycle-lib.sh

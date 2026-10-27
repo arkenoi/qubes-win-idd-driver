@@ -1,6 +1,7 @@
 #!/bin/bash
-# FAIL-PROOFS for four assertions whose negative already exists or can be made without touching a
-# guest. H5 keys the registry by CHECK, so each of these closes every ledger row that cites it.
+# four checks' negatives are real: each predicate PASSES clean artefacts and REFUSES its defect
+# run: tools/tests/failproof-misc.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT

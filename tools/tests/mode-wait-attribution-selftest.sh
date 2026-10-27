@@ -1,29 +1,7 @@
 #!/usr/bin/env bash
-# mode-wait-attribution-selftest.sh - A DEADLINE IS NOT A STATEMENT ABOUT THE FUTURE, AND OUR OWN
-# LATE MODE IS NOT SOMEBODY ELSE'S OPEN DEFECT.
-#
-# MEASURED, win11r-logvol 2026-10-08, one guest, one boot, one clock (the control cycle's own log):
-#   10:00:12.141  SetVideoMode: RESREQ 5120x1440 src=lastapplied
-#   10:00:12.311  SetVideoModeExact: QIDD ioctl-reload ok
-#   10:00:24.509  SetVideoModeExact: RESKEEP 5120x1440-unavailable keeping 0x0 reason=mode-never-appeared   [W]
-#   10:00:25.927  RecreateDuplication: A6REGRANT resolution changed during recovery (1920x1080 -> 5120x1440)
-#   10:00:25.927  RecreateDuplication: duplication recreated in place ... BUT THE GEOMETRY CHANGED          [E]
-# Three defects in four lines, and all three are fixable without knowing why the wait expired:
-#   1. the wait declared the mode would NEVER appear, and it was live 1.4 s later;
-#   2. it printed "keeping 0x0" - at agent start there is no current mode to keep;
-#   3. the geometry change it caused was logged at ERROR with text attributing it to the OPEN P2
-#      (win11-24H2 resolution-change capture freeze), sending a maintainer after a capture freeze
-#      for an event we caused ourselves. On an IDD guest the host resolution is applied at EVERY
-#      agent start (src=lastapplied), so this fired per agent instance.
-#
-# WHAT IS *NOT* CLAIMED HERE. Why the wait expired is UNRESOLVED - Jev, given the counter-evidence
-# (the code's own measurement of a probe that worked in 281 ms, n=1, and a 5120x1440 topology change
-# on a cold guest being plausibly slower than a 12 s bound): root_cause insufficient-evidence 0.70,
-# chain_established 0.24. Three candidates remain live: a device-less probe asking the primary
-# display, a bound shorter than the driver took, and a DEVMODE too under-specified to pass CDS_TEST.
-# Jev on the one thing that IS settled: misattribution_is_a_real_harm 0.86.
-# So this guards the message and the attribution, and the bound is NOT raised - raising a bound is
-# never a fix here.
+# A DEADLINE IS NOT A PROPHECY, and our own late mode is not attributed to somebody else's defect.
+# run: tools/tests/mode-wait-attribution-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SRC="${MODEWAIT_SRC:-$ROOT/agent/gui-agent}"

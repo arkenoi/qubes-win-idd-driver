@@ -1,22 +1,7 @@
 #!/usr/bin/env bash
-# desktop-stuck-lock-selftest.sh - A CONSOLE USER WITHOUT A SHELL IS A LOGON, NOT A LOCK.
-#
-# `desktop-stuck` is a QERR_SEV_ACTION notification: it tells the user to go and sign in. It must go
-# out only on positive evidence of the fault it names, never on elapsed time alone - that is the
-# contract written above the gate in main.c.
-#
-# MEASURED win11-reinstall, campaign run 38971675274, agent pid 4184:
-#   02:14:13.452  Default -> Winlogon, secure-desktop ENTERED
-#   02:14:44.077  QGADESKSTUCK ... for 30 s ... (autologon=armed for 'user' console-user=1 shell-seen=0)
-#   02:14:45.915  desktop-stuck sent to dom0
-#   02:14:52.057  Winlogon -> Default   <- autologon completed, 8 s after the notification
-# autologon was ARMED and the 600 s backstop was nowhere near, so the arm that fired was
-# `consoleUser && !s_LockReported`, whose reasoning is "a human locked it". Nobody had: autologon
-# creates the console session BEFORE the shell starts, so an ordinary autologon boot satisfies it.
-#
-# The fast-path lock report already requires a shell, from the owner's 2026-10-10 instruction
-# ("NEVER assume there is as based on inaccurate measurements"). This holds the slow path to the
-# same rule, and holds the backstop in place for armed-autologon-that-never-completes.
+# A CONSOLE USER WITHOUT A SHELL IS A LOGON, NOT A LOCK - desktop-stuck needs a shell seen.
+# run: tools/tests/desktop-stuck-lock-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(cd "$(dirname "$0")/../.." && pwd)" || exit 2
 SRC=agent/gui-agent/main.c

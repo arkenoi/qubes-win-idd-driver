@@ -1,18 +1,7 @@
 #!/bin/bash
 # A BREACH THAT REACHES THE JUDGE WITH NO LINES IS A JUDGEMENT ON A METRIC NAME.
-#
-# `breach_evidence` ended in `if "lines" in b: out.extend(b["lines"])` - testing a key NO producer
-# ever set. compare() emits exactly metric/value/max/severity/why, so that fallback was dead code,
-# and every metric without an explicit `name in (...)` arm reached Jev with evidence: [].
-#
-# Measured on 2026-10-21: 12 of the 34 thresholded metrics, SEVEN of them P1 - bugchecks,
-# wer_crashes, unexpected_shutdowns, service_failures, notifications_lost, dom0_loud_failures,
-# clock_boot_correction_s - and among the P2s error_lines_undeclared, the one metric that has been
-# blocking this release. Its lines were right there and thrown away at `len()`.
-#
-# Ten now carry their lines. The two that remain are scalars for which a line list is not the right
-# evidence, and they carry an explicit marker instead of silence - because a fallback firing is an
-# anomaly and must say so, not degrade quietly.
+# run: tools/tests/breach-evidence-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PASS=0; FAIL=0

@@ -20,6 +20,12 @@ set -uo pipefail
 cd /home/user/qubes-win-idd-driver || exit 2
 VM="${1:?usage: $0 <vm> <outdir> [installed-setup-tree] - name the subject; there is no default target}"
 OUT="${2:-scratchpad/sweep-$VM-current}"
+# A contaminated subject is refused BEFORE any work: this script's default output dir carries no
+# run-id, so a second attempt would otherwise append to the first attempt's artefacts and be read
+# back as one run. Pass a fresh outdir to run again.
+declare -F attempt_dir >/dev/null 2>&1 || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh"
+attempt_dir "$OUT" || exit 1
+
 say(){ printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 . mgmt/harness/vmlock.sh
 vm_lock "$VM" || { say "REFUSED: vmlock busy"; exit 3; }
@@ -69,6 +75,15 @@ say "log-sweep rc=$src"
 [ -d "$OUT/logs" ] || { say "FAIL no logs/ in the capture - nothing measured"; tail -8 "$OUT.log"; exit 2; }
 say "--- THIS BOOT's error lines, by family (log-sweep's own boot clustering)"
 python3 tools/errfam.py --report "$OUT/report.json" || { say "FAIL could not scope the capture to a boot"; exit 2; }
-say "--- and the whole capture against the two baselines, for context (mixes every boot of the day)"
-python3 tools/errfam.py "$OUT/logs" scratchpad/sweep-win11-acc/logs scratchpad/sweep-win10-acc/logs
+# BASELINES ARE A PARAMETER, NOT TWO PATHS IN THIS FILE. They were hardcoded to two scratchpad
+# dirs that exist only on this qube, so on any other checkout this printed nothing and said so to
+# nobody. Absent baselines now skip the comparison out loud instead.
+CBS_BASELINES="${CBS_BASELINES:-scratchpad/sweep-win11-acc/logs scratchpad/sweep-win10-acc/logs}"
+_bl=""; for d in $CBS_BASELINES; do [ -d "$d" ] && _bl="$_bl $d"; done
+if [ -n "$_bl" ]; then
+  say "--- and the whole capture against the baselines, for context (mixes every boot of the day)"
+  python3 tools/errfam.py "$OUT/logs" $_bl
+else
+  say "--- no baseline present (CBS_BASELINES='$CBS_BASELINES') - the cross-boot comparison is SKIPPED"
+fi
 say "evidence: $OUT  (sweep log $OUT.log)"

@@ -1,10 +1,7 @@
 #!/bin/bash
-# reporter-env-gate-selftest.sh - prove tools/hooks/reporter-env-gate.sh blocks what it must and
-# passes what it must, offline, on synthetic hook input.
-#
-# Per this project's rule a check counts only once it has been seen to FAIL on the defect:
-#   REPORTER_GATE_DEFECT=1  - the hook enforces nothing (= the state before 2026-09-16)
-#                             -> the must-block cases pass through -> THIS TEST MUST FAIL (exit 1)
+# reporter-env-gate.sh blocks every launch it must block and passes every one it must not.
+# run: tools/tests/reporter-env-gate-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 HOOK=tools/hooks/reporter-env-gate.sh

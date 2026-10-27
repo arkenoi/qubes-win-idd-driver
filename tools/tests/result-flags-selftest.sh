@@ -1,22 +1,7 @@
 #!/bin/bash
-# result-flags-selftest.sh - prove mgmt/harness/result-flags.py BEFORE a harness grades a cell on it.
-#
-# WHY. quick-upgrade.sh and matrix.sh now grade a cell FAIL when the installer's RESULT trailer
-# carries an error-class detail flag (audit 2026-09-16, the systemic finding: ok:true was graded
-# green while detail.idd_failed / pv_xenvif='failed rc=N' / gui_restored='FAILED: ...' sat unread).
-# A checker that misses a flag re-creates that silent green; a checker that fires on a HEALTHY value
-# is a false RED on every campaign, and a campaign costs the owner ~75 min of desktop photography.
-# So both directions are exercised here, offline, on synthetic trailers: every error form the
-# installer can write must FAIL, and every healthy form on record (35 real green trailers,
-# 2026-09-05..14, incl. etwproxy_account='skipped:account-create-refused') must PASS.
-#
-# EXTRACTION IS BY MARKER, NOT BY sed-to-closing-brace. The table sits between FLAGS-BEGIN and
-# FLAGS-END in the checker; this script refuses to run if either marker is missing.
-#
-# Per this project's rule, a check counts only once it has been seen to FAIL on a build with the
-# defect deliberately re-introduced:
-#   RESULTFLAGS_DEFECT=1  - blank the flag table (= the original bug: nothing reads detail.*)
-#                           -> every error-flag case passes through -> THIS TEST MUST FAIL (exit 1)
+# An error-class detail flag in the RESULT trailer FAILS the cell; a healthy trailer still passes.
+# run: tools/tests/result-flags-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 

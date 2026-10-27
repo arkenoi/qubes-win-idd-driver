@@ -1,25 +1,7 @@
 #!/bin/bash
-# pipe-connect-order-selftest.sh - patches/windows-utils-pipe-connect-rewrite.patch, OFFLINE.
-#
-# THE DEFECT, which is an ORDER and not a missing check. QpsConnectClient inserted the client into
-# Server->Clients as its LAST statement, while both worker threads had been running since several
-# statements earlier. Each thread's first act is to look ITSELF up in that list by id, so a thread
-# could run before its own client was findable and get NULL - and both thread entries dereferenced
-# that. MEASURED 2026-10-14 (QREXECAGENTAV): qrexec-agent.exe took c0000005 reading address 0x18,
-# which is WritePipe's offset in PIPE_CLIENT, and the Qubes RPC agent service stopped (System/7031).
-# Every error return in that body also abandoned the half-built client, its buffers, its critical
-# section, its thread parameters and any created thread handle (CONNECTERRORLEAK).
-#
-# WHY A REWRITE AND NOT MORE GUARDS. An earlier draft added six `goto fail` sites and an unwind to
-# the existing order, and every review round moved a different claim without settling the shape -
-# the owner: "stop iterative fixing, it is hopeless. rewrite properly". The order is now:
-#   build everything that can fail -> create both threads CREATE_SUSPENDED -> publish under the
-#   server lock -> resume.
-# A thread cannot run before its client is published, so the race cannot be constructed, and the
-# single failure path is reached only while nothing is published and no thread has executed.
-#
-# These checks assert the ORDER and the completeness of that one path, and every one of them is
-# also run against UNPATCHED source, where it must FAIL.
+# a pipe thread cannot run before its client is PUBLISHED, and the one failure path leaks nothing
+# run: tools/tests/pipe-connect-order-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PATCHFILE="$ROOT/patches/windows-utils-pipe-connect-rewrite.patch"

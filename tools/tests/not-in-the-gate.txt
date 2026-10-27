@@ -4,8 +4,9 @@
 # log-sweep-selftest.sh, wrapper-exit-reason-selftest.sh, collect-failure-selftest.sh,
 # logvol-lib-selftest.sh. TESTFORATESTRECURSION is retired to findings/issues-closed.md.
 # Test files under tools/tests/ that are deliberately NOT in the gate, each with the reason.
-# tools/lint-harness.py L32 refuses a commit when a test file is neither in offline-suites.txt
-# nor declared here with a reason. A declaration naming a file that is gone is itself a finding.
+# tools/lint-harness.py L32 refuses a commit when a test file is in neither product-suites.txt nor
+# harness-suites.txt nor declared here with a reason, and run-offline-suites.sh refuses the same
+# case up front. A declaration naming a file that is gone is itself a finding.
 #
 # EVERY REASON BELOW IS A MEASUREMENT, taken 2026-10-25, not an argument. The pwsh ones were
 # measured with all three pwsh installs bind-mounted away inside `unshare -r -m` and the absence
@@ -69,3 +70,11 @@ wu-relay-own-selftest.sh             RED 2026-10-25: "deaf: the respawn is logge
 wu-save-atomic-selftest.sh           Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found. A GitHub runner installs none.
 wu-secplatform-selftest.sh           Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found at /nonexistent/pwsh - nothing ran. A GitHub runner installs none.
 wu-update-render-selftest.sh         Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found at /nonexistent/pwsh - nothing ran. A GitHub runner installs none.
+gate-explain.py       not a suite: a diagnostic run by hand from serial-rig-gate.sh's refusal text to show how a line segmented
+pwsh-path.sh          not a suite: L33's single pwsh locator, sourced by 30 suites; its own selftest was deleted 2026-10-26
+run-offline-suites.sh not a suite: this is the runner itself, driven by offline-runner-selftest.sh
+bridge-exit-reason-selftest.sh       source-text exit-reason check; redundant with the wrapper/death-reporter tests
+harness-clock-selftest.sh            overlaps the sealed clock_correct primitive
+log-policy-selftest.sh               source-text log-level check; covered by the sweep signatures
+loginit-banner-debug-check.sh        source-token check; the CI patch apply is the gate; previously flaky
+probe-anchor-selftest.sh             source-text anchor check; overlaps the lifecycle/deslice unit test

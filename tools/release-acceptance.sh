@@ -302,7 +302,7 @@ for _arm in --no-attach ""; do
   say "logvol smoke ($_tag arm): can a guest SEE the log volume, and does evidence reach the image?"
   # shellcheck disable=SC2086
   LOGVOL_SMOKE_OUT="$CAMP/logvol-smoke-$_tag" \
-    ./mgmt/harness/logvol-smoke.sh $_arm >>"$CAMP/logvol-smoke.log" 2>&1
+    ./tools/smoke/logvol-smoke.sh $_arm >>"$CAMP/logvol-smoke.log" 2>&1
   _src=$?
   case "$_src" in
     0) say "logvol smoke ($_tag arm) PASS - $(tail -2 "$CAMP/logvol-smoke-$_tag/verdict.tsv" 2>/dev/null | tr '\t\n' '  ')" ;;

@@ -1,15 +1,7 @@
 #!/bin/bash
-# A CANCEL MUST NOT LEAVE THE CAMPAIGN RUNNING.
-#
-# ACCEPTCANCELORPHAN, open since 2026-10-14 and root-caused 2026-10-21: tools/release-acceptance.sh
-# NEVER sourced run-lib.sh and never called job_init, so it had no teardown trap at all - while its
-# own comment asserted that "run-lib.sh already tears down its descendant tree on SIGTERM". A
-# SIGTERM to the leader exited the driver and left matrix.sh running, holding the rig. Observed on
-# three separate cancels, the surviving pid read from /proc each time. vmlock.sh's documented
-# contract is to cancel by TERMing the leader, which only works if the leader tears down.
-#
-# This drives the real run-lib teardown over a stand-in child, because the campaign itself needs a
-# rig. No pattern is ever matched against a process: every pid here is one this suite recorded.
+# A CANCEL MUST NOT LEAVE THE CAMPAIGN RUNNING: TERM to the leader reaps the campaign's children.
+# run: tools/tests/accept-cancel-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT" || exit 2

@@ -1,26 +1,7 @@
 #!/usr/bin/env bash
-# one-log-per-module-selftest.sh - patches/windows-utils-one-log-per-module.patch and the two
-# consumers it forces to change, checked OFFLINE. No guest, no CI.
-#
-# WHAT IT GUARDS. windows-utils named every log file after the PROCESS that opened it, so one qrexec
-# call made one log file: 386 files on a measured guest, 368 of them qrexec-wrapper-*.log, which
-# starved the sweep's 60-file budget so it skipped qwt-deaths.log - the record the gate reads.
-#
-# THE FIX IS THREE THINGS THAT ONLY WORK TOGETHER:
-#   1. one file per module per day - the date stays because PurgeOldLogs deletes by ftCreationTime,
-#      so a dateless name would eventually have the retention sweep delete the LIVE log;
-#   2. an append-only handle shared for writing - FILE_APPEND_DATA without FILE_WRITE_DATA is what
-#      makes a write atomic against the other writers;
-#   3. ONE WriteFile per line - three calls would let two processes interleave inside a line, which
-#      is why an earlier append patch scored append_is_safe 0.37: it kept the three calls.
-# Jev: sink 0.79 (conf 0.72), append_atomic_single_write 0.84, earlier_answer_superseded 0.72. The
-# number that did NOT favour it is in docs/ADR-logging.md (meets_owner_constraints chose the event
-# log, 0.61 at conf 0.48, because a bespoke logger survives this).
-#
-# Three defects were found in review and are guarded here: a BOM race, the pid being lost with the
-# file name, and safe flush becoming a silent no-op on an append-only handle. Checks 9-11 cover the
-# knock-ons: a shared file means no new file on restart and a previous instance's lines in it, so
-# anything trusting a log's NAME or any matching line is now wrong.
+# ONE log file per module per day, an append-only shared handle, and ONE WriteFile per line
+# run: tools/tests/one-log-per-module-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PATCHFILE="$ROOT/patches/windows-utils-one-log-per-module.patch"

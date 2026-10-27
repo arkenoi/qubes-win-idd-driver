@@ -1,20 +1,7 @@
 #!/usr/bin/env bash
-# window-measure-selftest.sh - A WINDOW THAT VANISHED IS NOT A MONITOR FAULT.
-#
-# GetRealWindowRect needs monitor info to undo DPI scaling. A stale monitor handle is a
-# display-change race, so it re-asks once; two refusals in a row are treated as the real topology
-# fault and logged at ERROR with the window not measured, because dom0 then keeps stale geometry.
-#
-# BUT A DEAD HWND FAILS BOTH ASKS TOO. MonitorFromWindow on a window that has gone hands back a
-# handle GetMonitorInfo refuses, so a window closing mid-pass produces exactly that signature - and
-# the consequence the error asserts cannot apply to a window dom0 was never told about.
-# MEASURED on win10-clean, campaign run 38971675274 (sha 8e0252e8): the ONE error line a clean
-# install of that build produced was `0x40066: GetMonitorInfo failed twice (0x5b5, 0x5b5), not
-# measured`, and 0x40066 appears EXACTLY ONCE in the whole agent log - only in that line. Never
-# attached, never mapped, never destroyed, never mentioned again.
-#
-# This holds the code to the discriminator: ASK IsWindow. Its FALSE is conclusive, which is the only
-# direction needed; a window still present with two refused lookups stays an ERROR per occurrence.
+# A WINDOW THAT VANISHED IS NOT A MONITOR FAULT - the twice-refused path ASKS IsWindow first
+# run: tools/tests/window-measure-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(cd "$(dirname "$0")/../.." && pwd)" || exit 2
 SRC=agent/gui-agent/main.c

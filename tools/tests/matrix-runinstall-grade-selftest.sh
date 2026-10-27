@@ -1,24 +1,7 @@
 #!/bin/bash
-# matrix-runinstall-grade-selftest.sh - run_install()'s refusals and outcome verdicts, driven.
-#
-# WHAT IT GRADES. run_install() writes a unique run marker into the guest's installer log, refuses to
-# run if it cannot, guards against inherited-environment fault injection, and then names WHICH way
-# the install ended. 7 ok()/no() decisions, counted as untested by tools/grader-census.py.
-#
-# WHY IT MATTERS, from its own notes - three measured incidents, all verdict defects:
-#   * 2026-10-14, the acceptance campaign's WIN10-reinstall cell took "no answer" THREE SECONDS after
-#     a successful guest read, refused to run the install, and graded itself INVALID-INSTRUMENT twice
-#     over an install that had never been attempted. "A timeout is a failure only once cpu_time is
-#     FLAT" - so a silent guest that is still EXECUTING must be retried, not failed.
-#   * 2026-08-28: SEED_DELAY is an environment variable, so an inherited value injected a fault into
-#     a cell that never declared itself seeded, and voided the whole WIN10 matrix.
-#   * the outcome codes are five DIFFERENT facts (RESULT / recovery screen / deadline / halted /
-#     stalled) and only two of them are failures; a harness that misnames the failure is how wrong
-#     conclusions get written down.
-#
-# HOW IT IS DRIVEN. The SHIPPED function is extracted from matrix.sh and run with the guest probes
-# stubbed (_mark_seen, w_cpu_moving, w_install, qrun, qtest, fetch_msi_verbose) and `sleep` made a
-# no-op so the retry loop and the background probes cost nothing.
+# run_install() names WHICH way an install ended, and a silent guest still EXECUTING is retried
+# run: tools/tests/matrix-runinstall-grade-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 2
 ROOT="$PWD"
@@ -42,6 +25,9 @@ declare -f run_install >/dev/null || { echo "FAIL could not extract run_install 
 # pass while the real value drifted.
 eval "$(grep -aE "^INC='" "$MSH")"
 [ -n "${INC:-}" ] || { echo "FAIL could not read INC from $MSH"; exit 1; }
+# clock_correct is the sealed primitive run_install now calls. Stub it: primitives.sh resolves its
+# OWN repo root, so the real one would reach the real tools/qtest instead of this stub tree's.
+clock_correct(){ printf 'CLOCKCORRECT vm=%s guest=stub skew=0s bound=%ss\n' "$1" "${2:-120}"; return "${CLOCK_RC:-0}"; }
 
 pass=0; fail=0
 ok_(){  printf '  PASS  %s\n' "$1"; pass=$((pass+1)); }

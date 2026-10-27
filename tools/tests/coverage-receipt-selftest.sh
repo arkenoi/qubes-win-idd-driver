@@ -1,19 +1,7 @@
 #!/usr/bin/env bash
-# coverage-receipt-selftest.sh - offline proof matrix for tools/coverage-receipt.py (PLAN-acceptance-optimization
-# section 6: the coverage receipt tells product-fail from instrument-fail, and instrument-fail is UNCOVERED).
-#
-# A fixture campaign directory in matrix.sh's output shape drives every class; the receipt is then fed to the REAL
-# tools/gate-scope.py check against a fixture map to prove the gate refuses an instrument-failed suite. The check is
-# also seen to FAIL on a copy with ONE `# GUARD:<knob>` line replaced by its defect (instrumentcovered: the old
-# behaviour, where an INVALID-* cell counted as covered).
-#
-#   classes    PASS only -> pass; a product FAIL line -> product-fail (covered, result fail); FAIL lines that are all
-#              INVALID-* -> instrument-fail (NOT covered); no lines -> not-run; a group without the footer -> noted
-#   features   rc 0 pass, 2 instrument-fail, 1 product-fail; package-verify by rc
-#   gate       the receipt with an instrument-failed required suite is REFUSED by gate-scope.py check
-#   refusals   no campaign dir -> rc 2, no receipt; a malformed --feature -> rc 2
-#
-#   RECEIPT_SELFTEST_OUT=<dir>  keep fixtures and outputs (default: a mktemp dir, removed on exit)
+# The coverage receipt tells product-fail from instrument-fail, and an instrument-fail is UNCOVERED.
+# run: tools/tests/coverage-receipt-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SRC="${COVERAGE_RECEIPT_SRC:-$ROOT/tools/coverage-receipt.py}"

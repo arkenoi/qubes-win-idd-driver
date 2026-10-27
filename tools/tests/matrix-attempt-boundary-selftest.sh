@@ -1,21 +1,7 @@
 #!/bin/bash
-# A FILE CANNOT SCOPE A RUN - and this EXECUTES the thing that makes it scopeable.
-#
-# THE DEFECT THIS EXISTS FOR, measured 2026-10-22. matrix.sh derives its work dir from the
-# release-package run id, so two campaign attempts against the same package share every per-cell
-# artefact path, and those paths are opened with `>>`. WIN10-clean-logvol-bind.out ended one night
-# holding THREE lines: a `fail` and its `[ERROR] the binder refused` from the attempt that FATALed
-# at 21:50, then an `ok ... found=D: letter=pinned` from the attempt that SUCCEEDED at 22:22:50.
-# No separator. The file's mtime belonged to the newest line, so `cat`, `tail` and every
-# is-it-fresh check handed the failed attempt's verdict to the running one. That single property
-# produced three wrong reports in one session - a live campaign called aborted, and then a retry
-# invented to reconcile three lines that belong to two runs.
-#
-# THE PROPERTY ASSERTED HERE IS ATTRIBUTABILITY, not the presence of a string: given a work dir
-# that two attempts wrote to, every line can be assigned to the attempt that wrote it. The suite
-# extracts the stamping code from matrix.sh between its markers, runs it, and then ATTRIBUTES lines
-# the way a reader would. The control removes the stamp and requires attribution to become
-# impossible.
+# A FILE CANNOT SCOPE A RUN: every line in a shared work dir belongs to a nameable attempt.
+# run: tools/tests/matrix-attempt-boundary-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 2
 SRC=mgmt/harness/matrix.sh

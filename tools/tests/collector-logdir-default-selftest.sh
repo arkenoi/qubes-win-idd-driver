@@ -1,21 +1,7 @@
 #!/bin/bash
-# THE COLLECTOR MUST LOOK WHERE THE PRODUCT WOULD HAVE WRITTEN.
-#
-# upstream/ro/qubes-windows-utils/src/log.c:236-253 with log.h:59: when LogInit is given no
-# directory it builds "<system drive>\Qubes Logs" - LOG_DEFAULT_DIR is L"Qubes Logs", with the space
-# - and CREATES it. That path was absent from Get-LswLogDir entirely, which checked the registry,
-# then Q:\Qubes Logs, then C:\Program Files\Qubes Tools\log. So a guest whose registry carries no
-# LogDir at all wrote its logs to C:\Qubes Logs and the collector reported exists=0: a blind sweep
-# over a guest that was logging perfectly well.
-#
-# WHAT THIS DOES NOT FIX, stated because the appvm blindness looks like the same bug and is not:
-# when the registry DOES name a path and CreateDirectory fails on it - the inherited
-# Z:\qwt-logs\<churn> on a volume not mounted at agent start - log.c calls LogStart(NULL) and jumps
-# to its fallback label, which is stderr only. No file is written anywhere, so no collector change
-# can recover those logs. That one needs the LogDir to be valid before the agent starts.
-#
-# The collector is PowerShell and runs on the guest for every sweep, so a syntax error here blinds
-# every cell. The parse check is the first assertion and runs whenever a pwsh is available.
+# THE COLLECTOR MUST LOOK WHERE THE PRODUCT WOULD HAVE WRITTEN - every candidate dir, not the first.
+# run: tools/tests/collector-logdir-default-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PASS=0; FAIL=0; INCONCLUSIVE=0

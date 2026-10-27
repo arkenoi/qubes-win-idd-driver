@@ -35,6 +35,12 @@ require_scripts mgmt/harness/p5-run.sh
 VM="${1:?usage: $0 <vm> [outdir]}"
 source mgmt/harness/vmlock.sh; vm_lock "$VM"   # one harness per guest; see vmlock.sh
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/FAILPROOF-gates-$VM}"
+# A contaminated subject is refused BEFORE any work: this script's default output dir carries no
+# run-id, so a second attempt would otherwise append to the first attempt's artefacts and be read
+# back as one run. Pass a fresh outdir to run again.
+declare -F attempt_dir >/dev/null 2>&1 || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh"
+attempt_dir "$OUT" || exit 1
+
 mkdir -p "$OUT"
 QTEST_BIN="${QTEST_BIN:-./tools/qtest}"       # overridable ONLY so the degraded-guest paths are provable off-rig
 P5_RUNNER="${P5_RUNNER:-mgmt/harness/p5-run.sh}"

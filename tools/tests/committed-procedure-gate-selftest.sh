@@ -1,19 +1,7 @@
 #!/bin/bash
-# committed-procedure-gate-selftest.sh - the heavy-path gate had NO suite at all.
-#
-# WHAT IT GUARDS. tools/hooks/committed-procedure-gate.sh is a PreToolUse hook: it refuses a heavy
-# rig mutation unless a recent Jev call quotes the committed procedure and the exact command. It is
-# the thing that makes "never invent a procedure" enforced rather than prose.
-#
-# WHY THIS EXISTS. It listed matrix.sh and none of the wrappers that CALL matrix.sh, and a hook reads
-# the command it is asked to allow - not the processes that command later spawns. MEASURED
-# 2026-10-16: a full 8-cell acceptance campaign (four hours of exclusive rig time, and the operator's
-# screen for the visual cells) was launched through release-acceptance.sh inside a wrapper, and this
-# gate never fired. The heaviest action on the rig went without the Jev call its own inner step
-# requires, because one level of indirection defeated the pattern.
-#
-# The hook is driven exactly as Claude Code drives it: real JSON on stdin, real exit codes, with the
-# wire log pointed at a fixture. Nothing stubs the hook.
+# the heavy-path hook BLOCKS every campaign entry point without a permit, and never the short cycle
+# run: tools/tests/committed-procedure-gate-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT" || exit 2

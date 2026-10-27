@@ -1,15 +1,7 @@
 #!/usr/bin/env bash
-# matrix-pool-floor-selftest.sh - A CAMPAIGN THAT DIES AT CELL 11 TEACHES NOTHING.
-#
-# Owner, 2026-10-08: "watch the thin pool space meanwhile." mgmt/harness/matrix.sh had NO space
-# check of any kind. That is the worst shape for this failure: the pool fills partway through, a cell
-# dies for a reason that looks like the product, and the whole campaign's results are untrustworthy
-# rather than merely short - and this rig was measured at 85% full with 131 GB free the day the full
-# 18-suite gate came due.
-#
-# This drives the gate with a STUBBED pool reading, in both directions, so it is seen to refuse and
-# seen to allow without filling a disk. The stub is the only way to exercise a disk-space refusal
-# offline; it exists in the harness for this test and is never set in a real run.
+# A CAMPAIGN THAT DIES AT CELL 11 TEACHES NOTHING: every cell is pool-gated, a refusal stops the run.
+# run: tools/tests/matrix-pool-floor-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 M="$ROOT/mgmt/harness/matrix.sh"

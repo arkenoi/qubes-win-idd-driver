@@ -1,14 +1,7 @@
 #!/bin/bash
-# Drives quick-upgrade.sh's OWN launch-determination predicate, offline, both ways.
-#
-# WHY. On 2026-09-26 the install launch call timed out because the guest wedged during it, and the
-# harness logged "NOTHING about whether the installer ran is inferable from here". A whole cycle
-# produced no information. The fix makes that inferable - lines in the installer log AFTER this
-# run's marker - and this test exists because the project rule is that a check counts as evidence
-# only once it has been SEEN TO FAIL with the defect present (--prove does that).
-#
-# The predicate is EXTRACTED FROM THE SHIPPED SCRIPT, never copied here: a test against a copy
-# passes forever while the real one rots.
+# quick-upgrade's launch-determination predicate reads only THIS run's log, after its own marker.
+# run: tools/tests/launch-determination-selftest.sh
+# pass: exit 0
 set -u
 cd "$(git rev-parse --show-toplevel)" || exit 2
 SRC=mgmt/harness/quick-upgrade.sh

@@ -1,18 +1,7 @@
 #!/usr/bin/env bash
-# console-window-check-selftest.sh - the console-window check's DECISION, exercised offline.
-#
-# WHY. On 2026-10-08 the check failed WIN11-upgrade and the template-update quick-upgrade on the
-# HARNESS's own installer console: the over-existing cells run <CD>\install.cmd in the guest's
-# session, install.cmd is a batch file, and on Windows 11 25H2 cmd.exe is hosted by Windows Terminal
-# (CASCADIA_HOSTING_WINDOW_CLASS). Jev: whose_defect = harness 0.94, product 0.00;
-# agent_should_filter_consoles 0.15; how_to_fix = the check excludes the cell's own installer,
-# IDENTIFIED rather than assumed, 0.59. So --allow-installer-console was added, and it must be
-# NARROW: exactly one tolerated, always reported, and everything the check caught before must still
-# fail - the four-week helper console it was written for most of all.
-#
-# The check talks to a guest through <repo>/tools/qtest and derives its own repo root from its own
-# path, so this builds a throwaway tree with a FAKE qtest that prints canned agent-log answers. No
-# guest is touched.
+# The console check tolerates EXACTLY ONE declared installer console; every other one still FAILS.
+# run: tools/tests/console-window-check-selftest.sh
+# pass: exit 0
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
 CHECK="$HERE/mgmt/harness/console-window-check.sh"

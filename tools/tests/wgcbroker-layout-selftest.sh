@@ -1,14 +1,7 @@
 #!/bin/bash
-# wgcbroker-layout-selftest.sh - the broker peek script's offsets must match the real struct.
-#
-# WHY: guest/wgcbroker-peek.ps1 reads the broker's shared section by hardcoded byte offsets. If
-# WGCBRK_SLOT changes and the offsets do not, the script prints PLAUSIBLE NONSENSE - correct-looking
-# numbers from the wrong fields - and a rig cycle is spent believing it. The script asserts the ABI
-# version at runtime, which catches a version bump; this catches the worse case, a layout change
-# WITHOUT a version bump, and it catches it at commit time instead of on the rig.
-#
-# It derives the offsets from the header itself with the C compiler (no hand arithmetic anywhere)
-# and compares them to what the script uses.
+# guest/wgcbroker-peek.ps1's offsets match the header's struct, or it prints PLAUSIBLE NONSENSE.
+# run: tools/tests/wgcbroker-layout-selftest.sh
+# pass: exit 0
 set -u
 cd "$(dirname "$0")/../.." || exit 2
 H="${WGCBRK_HDR:-agent/gui-agent/wgcbroker_ipc.h}"

@@ -1,23 +1,7 @@
 #!/usr/bin/env bash
-# build-attribution-selftest.sh - the BIRTH CUTOFF: a line is billed to the build that WROTE it, and
-# a capture that cannot establish who wrote what must FAIL rather than grade green. No guest, no rig.
-#
-# WHY THIS EXISTS. On an upgrade cell the capture holds two builds' logs, and attributing the ENTRY
-# FIXTURE's lines to the candidate has produced real, recorded misreadings: a release was briefly
-# suspected of shipping stale binaries, two fixes were reported as not working, and a campaign cell
-# failed on strings the candidate's source does not contain (log-sweep.py records each with its
-# run id). The owner's account of the cost is his own, not a measurement of this code: "we literally
-# fucked around for 3 weeks managing the fallout and false alarms from these upgrades". He also
-# named the design, 2026-10-23:
-# "you were supposed to put in birth cutoff lines. so everything before is NOT attributed to product.
-# AND?" - the AND being that the cutoff existed, was applied to ONE metric, returned None on the
-# cells that needed it, and its absence was reported by nothing.
-#
-# FOUR PROPERTIES, each with its mutation. Every fixture line below is VERBATIM from
-# /home/user/qwt-matrix/20261023-061821/win11-upgrade-guestlogs (campaign 20261023-061821,
-# win11-upgrade, 4.3.35.795 -> 4.3.37.1062), because a fixture I invent cannot prove what the
-# product's own format does. The captures are not tracked, so the LINES are copied here; the
-# conditions they carry are the real ones.
+# the BIRTH CUTOFF: a line is billed to the build that WROTE it; an unattributable capture must FAIL
+# run: tools/tests/build-attribution-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="$(mktemp -d /tmp/buildattr-selftest-XXXXXX)"

@@ -524,3 +524,35 @@ offline leg or Jev score could see this: the source text was CORRECT and the blo
 Receipts scratchpad/relay-receipt/. Guards added: the deploy vouches the SOURCE it compiles and the
 PLACED exe, ends stale relays BY IMAGE, and tools/tests/discarded-scriptblock-selftest.sh fails on
 the shape across 303 shipped .ps1 files. Detail in findings/issues-closed.md.
+
+**PLANSELFTESTROTTEDUNRUN** (2026-10-27) - tools/tests/acceptance-plan-selftest.sh was in NEITHER
+suite list and nothing ran it; measured at HEAD it was 18 passed, 6 failed, every failure a fixture
+asserting the 19-cell required set from before p3a-etw-gate, toast-hold-test and log-sweep joined the
+plan. DELETED, not fixed (CLAUDE.md). What still enforces the plan's shape: acceptance-plan.py emits
+`blocked` entries the acceptance loop reads at step 1, so a wrong plan blocks a cell instead of
+passing one, and tools/tests/gate-remainder-dry-selftest.sh still drives the remainder cell's probe.
+
+## Suite-header measurements harvested before the Step 6 header cut (2026-10-27)
+
+Step 6 cut every offline suite header to three lines. Before the cut, each header citation that was
+in NEITHER findings/ nor the suite's own body was measured: 24 of ≥10 chars, 16 of them ordinary
+words in capitals. These eight were the real ones and are recorded here so the cut loses nothing.
+
+- `acceptance-record-selftest.sh` - release-package run **36997345095**, 2026-10-02, subject rz30: the
+  campaign passed 96/96 while BOTH feature tests died in seconds on a retired name. That is why the
+  acceptance record derives its verdict from the `*.out` footers instead of the campaign's own word.
+- `ci-state-selftest.sh` - 2026-10-11: a receipt was taken against "build **38119590694** green". That
+  run was release-package; build.yml had been red for 14 runs. Hence the suite's first failure arm.
+- `desktop-stuck-lock-selftest.sh` - campaign run **38971675274**, win11-reinstall, agent pid 4184: the
+  measurement behind "a console user without a shell is a logon, not a lock".
+- `dom0-callers-count-selftest.sh` - campaign **rel-39175573529**: the per-family `*-callers.out` files
+  report 85 entries on win10 clean, which is the baseline the cross-cell agreement check rests on.
+- `toasthold-grade-clock-selftest.sh` - the bridge.log fixture came from
+  `qwt-accept/remainder-5ab316e42d34/work/log-sweep/logs/files/bridge.log` - a real capture, not a model.
+- `pipe-connect-order-selftest.sh` - **CONNECTERRORLEAK**: on a failed connect the pipe server leaked the
+  client's critical section, its thread parameters and any created thread handle. Fixed by the
+  connect-order rewrite; this is the only record of the tag.
+- `gate-candidate-selftest.sh` - at HEAD **fe4337174ba8** the subject guest was still carrying agent
+  4.3.32.612 while the candidate package was **4.3.36+agent.eb24cb5115ba**, and nothing checked: the
+  gate spent a whole run grading the wrong binary, including DXGI_ERROR_ACCESS_LOST lines whose guard
+  is present in eb24cb5115ba and so could not have produced them.

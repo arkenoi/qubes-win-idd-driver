@@ -1,20 +1,7 @@
 #!/usr/bin/env bash
-# notifbridge-pid-selftest.sh - DO NOT CALL A CRASH YOU DID NOT OBSERVE.
-#
-# The agent waits for notifhost.exe to publish its pid in a heartbeat, and checks the heartbeat's
-# tick against its OWN launch - which is right. But a PREDECESSOR's bridge can still be alive and
-# heart-beating when a new agent starts, so a fresh tick can carry the OLD bridge's pid; and a fresh
-# agent process holds no knowledge of its predecessor's pid, so it cannot tell them apart.
-#
-# MEASURED win11-clean, campaign run 38994277148, agent pid 4508:
-#   06:05:14.139  NOTIFHOST launched via Task Scheduler
-#   06:05:16.752  W NOTIFBRIDGE published pid 4996 is gone, the bridge crashed right after starting
-#   06:05:21.181  I NOTIFBRIDGE ready (pid 8340 published 10375 ms after the launch)
-# pid 4996 was published at 06:03:08 by the PREVIOUS agent instance (4236). Nothing crashed. Jev
-# rated that signature defect 0.61 - above the floor - so it failed an acceptance cell on a phantom.
-#
-# What the agent CAN say is whether IT saw the pid ready. A real crash of a bridge it did see ready
-# is reported by the exit path, with the exit code.
+# DO NOT CALL A CRASH YOU DID NOT OBSERVE: only a bridge pid THIS agent saw ready can have crashed.
+# run: tools/tests/notifbridge-pid-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(cd "$(dirname "$0")/../.." && pwd)" || exit 2
 SRC=agent/gui-agent/main.c

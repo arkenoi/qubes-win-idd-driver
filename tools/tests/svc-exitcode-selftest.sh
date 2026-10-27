@@ -1,21 +1,7 @@
 #!/usr/bin/env bash
-# svc-exitcode-selftest.sh - offline proof matrix for patches/windows-utils-service-exit-code.patch (docs/ADR-supervision.md
-# 2): windows-utils' SvcMainLoop - the service wrapper of BOTH QrexecAgent (core-agent qrexec-agent.c) and QdbDaemon
-# (core-qubesdb db-daemon.c) - must end the service with the worker thread's error, so the SCM logs event 7023 and the
-# recovery actions the installer arms (Set-QubesServiceRecovery, failureflag) actually fire. Before the patch SvcSetState
-# ignored its exit-code argument and every stop was exit 0 - the standing finding behind health-check.ps1 section 2b.
-#
-# Runs on this dev qube with gcc + the read-only windows-utils mirror (no rig, no guest, no Windows toolchain):
-#   apply     the patch applies to the EXACT ref CI clones (WINDOWS_UTILS_REF in .github/workflows/build.yml), checked with
-#             git apply --check on that ref's tree, and the markers the workflow step asserts are present afterwards
-#   clean     tools/tests/svc-exitcode-test.c against the PATCHED service.c MUST pass
-#   defect    the same suite against the UNPATCHED service.c (the defect present) MUST fail - a guard never seen to fail
-#             is decoration
-#   syntax    the patched service.c parses with gcc -fsyntax-only against the stubs + the REAL headers (UNCOMPILED: CI
-#             builds windows-utils.dll from it)
-#
-#   WINDOWS_UTILS_SRC=<path>   the mirror checkout (default: $ROOT/upstream/ro/qubes-windows-utils; missing = FAIL, never a skip)
-#   SVCEXIT_OUT=<dir>          where the builds and outputs go (default: a mktemp dir)
+# SvcMainLoop ends the service with the WORKER'S error, so the SCM logs 7023 and recovery fires.
+# run: tools/tests/svc-exitcode-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 MIRROR="${WINDOWS_UTILS_SRC:-$ROOT/upstream/ro/qubes-windows-utils}"

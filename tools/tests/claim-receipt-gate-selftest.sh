@@ -1,8 +1,7 @@
 #!/bin/bash
-# SELF-TEST for tools/hooks/claim-receipt-gate.sh - every case is staged with a fabricated
-# transcript and a fabricated wire log; nothing real is read. A PASS here is a check that has
-# been SEEN TO FAIL: T9 re-introduces the original state (CLAIM_GATE_DEFECT=1) and T1 must then
-# stop being blocked.
+# A CLAIM WITH NO RECEIPT IS BLOCKED; tool output, a quoted owner line and ordinary prose are not.
+# run: tools/tests/claim-receipt-gate-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 H=tools/hooks/claim-receipt-gate.sh

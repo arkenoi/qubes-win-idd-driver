@@ -1,15 +1,7 @@
 #!/usr/bin/env bash
-# rpm-spec-selftest.sh - the dom0 package's spec must PARSE, checked offline with the real parser.
-#
-# WHY. packaging/rpm/qubes-windows-tools-ng.spec was unbuildable from 122914e6 ("the RPM ships no
-# scripts and runs nothing") until 2026-10-08: removing the dom0 scripts also deleted %description,
-# %prep, %build, %install and %files, and left the %post banner's heredoc body at spec top level
-# with no %post header above it. rpmbuild said `error: line 36: Unknown tag: cat <<'EOF'`, the rpm
-# job failed every release run, and nothing caught it here because nothing parsed the spec outside
-# CI - where it is the LAST job, after the ISO is already built and uploaded.
-#
-# This is the whole dom0 install path: the package puts the ISO at
-# /usr/lib/qubes/qubes-windows-tools.iso, which is where qvm-create-windows-qube looks.
+# The dom0 spec PARSES, keeps every section, lists the ISO, and Conflicts with the official package.
+# run: tools/tests/rpm-spec-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SPEC="$ROOT/packaging/rpm/qubes-windows-tools-ng.spec"

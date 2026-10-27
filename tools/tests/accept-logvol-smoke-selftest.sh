@@ -1,15 +1,7 @@
 #!/bin/bash
-# THE BIND IS SMOKE-TESTED BEFORE THE CELLS - and this EXECUTES the code that makes it so.
-#
-# Campaign 40134888669 aborted 11 minutes into its FIRST cell because the guest could not see the
-# log volume, having spent 10 of them installing. mgmt/harness/logvol-smoke.sh answers that question
-# in 3 minutes on a clone of the QWT golden, and tools/release-acceptance.sh now runs it before the
-# matrix. A gate that is wired but never seen to STOP a campaign is decoration, so every arm of that
-# wiring is driven here against a stubbed smoke test: no guest, no clone, no rig call.
-#
-# THE ORDER IS PART OF THE PROPERTY. The refutation arm (--no-attach, where the bind MUST refuse)
-# runs FIRST: if the binder answers ok with nothing attached then its receipt is not about the
-# volume and the other arm's PASS means nothing. Asserted, not assumed.
+# THE BIND IS SMOKE-TESTED BEFORE THE CELLS: refutation arm FIRST, and a failing bind STOPS the run.
+# run: tools/tests/accept-logvol-smoke-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 2
 SRC=tools/release-acceptance.sh
@@ -28,9 +20,9 @@ trap 'rc=$?; [ "$rc" -eq 0 ] && rm -rf "$T" || printf "kept %s\n" "$T" >&2' EXIT
 
 run(){ # <smoke-rc-for-each-arm...> -> rc; $T/arms = the arms in the order they ran; $T/out
   local rcs="$1" skip="${2:-1}"
-  rm -rf "$T/c" "$T/arms" "$T/out"; mkdir -p "$T/c/mgmt/harness"
+  rm -rf "$T/c" "$T/arms" "$T/out"; mkdir -p "$T/c/tools/smoke"
   # the stub smoke test: records the arm it was called with, answers from the rc list in order
-  cat > "$T/c/mgmt/harness/logvol-smoke.sh" <<EOF
+  cat > "$T/c/tools/smoke/logvol-smoke.sh" <<EOF
 #!/bin/bash
 n=\$(cat "$T/n" 2>/dev/null || echo 0); n=\$((n+1)); echo "\$n" > "$T/n"
 printf '%s\\n' "\${1:-ATTACH}" >> "$T/arms"
@@ -38,7 +30,7 @@ mkdir -p "\${LOGVOL_SMOKE_OUT:?the cell must name its own artefact dir}"
 printf 'PASS\\tsomething\\tthe stub spoke\\n' > "\$LOGVOL_SMOKE_OUT/verdict.tsv"
 exit \$(printf '%s' "$rcs" | cut -d, -f"\$n")
 EOF
-  chmod +x "$T/c/mgmt/harness/logvol-smoke.sh"
+  chmod +x "$T/c/tools/smoke/logvol-smoke.sh"
   : > "$T/n"
   ( cd "$T/c" && set +u
     CAMP="$T/c/campaign"; mkdir -p "$CAMP"

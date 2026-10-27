@@ -1,24 +1,7 @@
 #!/usr/bin/env bash
-# wedge-gates-selftest.sh - every class of mgmt/harness/wedge-gates-lib.sh, driven offline.
-#
-# WHY. On 2026-10-22 two guests presented the SAME surface symptom and were in opposite states:
-# win11-upgrade's guest went silent after its post-install boot, ignored four ACPI asks, had an
-# unreadable boot time and was killed at 600s; win11-acc refused qvm-shutdown while its harness
-# still held it, yet qrexec ANSWERED rc=0 and it halted cleanly once released. Anything keyed on
-# "qrexec absent" or "shutdown refused" calls both wedged and kills a healthy guest. Five disjoint
-# predicates existed across the harness and none of them decided "wedged"; the one sound classifier
-# (wedge_classify, host-side, no guest cooperation) was never called on the path that mattered.
-#
-# THE FIXTURES ARE THE TWO REAL SPECIMENS, and one of them is the reason the tree was rebuilt:
-# "as-captured" holds exactly what the campaign actually recorded for the wedged guest - and that
-# contains NO VMCS section, because nothing captured one. The FIRST tree answered UNREADABLE-CPU on
-# it, i.e. not a wedge, i.e. killable: the weakest instrument deleting a finding that the two strong
-# conjuncts had already established. Owner, 2026-10-22: "CPU is weak indicator. we have strong
-# ones." So that fixture is now a WEDGE-CANDIDATE whose SHAPE is unknown, and the "with-record"
-# fixture - the VMCS the new record takes BEFORE any kill - buys the spin site, not the verdict.
-# The decisive conjunct is the ACPI ask, driven as a return-code table in section 11.
-# The VMCS values in "with-record" are a CONSTRUCTED case exercising the tree - not a measurement
-# of that guest, which was killed without ever being sampled.
+# wedge-gates-lib.sh decides every wedge class, and a guest whose qrexec ANSWERED is never wedged
+# run: tools/tests/wedge-gates-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 LIB="$ROOT/mgmt/harness/wedge-gates-lib.sh"

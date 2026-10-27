@@ -1,18 +1,7 @@
 #!/usr/bin/env bash
-# upd-task-prestop-selftest.sh - the installer ends OUR update tasks before msiexec, OFFLINE.
-#
-# WHY IT EXISTS. Campaign 3 cell win11-reinstall, 2026-10-22: the MSI's Restart Manager reaped
-# \QubesWindowsUpdateScan's running powershell (0xC000013A inside a 666 ms session), the death
-# reporter read that as an unexplained stop, and the USER was told "The Windows Update scan task
-# failed" about a scan our own install had stopped. dom0_loud_failures=2 against a max of 0, P1.
-# Owner: "it is our installer and our receiver. we may tell it to die politely in any way we
-# please." A task WE end reports 267014/0x41306, which guest/qwt-report-death.ps1 already ignores -
-# so the fix is a declaration in the installer and NO change in the reporter.
-#
-# The suite EXTRACTS the UPDTASKPRESTOP region from the shipped installer and RUNS it with schtasks
-# replaced by a recorder, so /end-before-/disable is observed rather than grepped. It also checks
-# the premise against the shipped reporter: if 267014 stopped being benign there, ending the task
-# politely would only trade one notification for another, and this suite goes red.
+# the installer ENDS our update tasks before msiexec, so no death toast blames our own install.
+# run: tools/tests/upd-task-prestop-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SUITE="$ROOT/tools/tests/upd-task-prestop-test.ps1"

@@ -1,29 +1,7 @@
 #!/usr/bin/env bash
-# init-record-consumers-selftest.sh - every consumer of an agent's INIT RECORD must accept the form
-# the product actually ships. No guest, no rig.
-#
-# WHY THIS EXISTS. The log is one file per module per day, so an instance's identity comes only from
-# its init record - and six places read it to answer "which lines are THIS instance's". The six-line
-# LogInit banner that carried `Running as user: ..., process ID: N` was demoted to LogDebug, and the
-# product ships LogLevel 3 (INFO), so THAT LINE NO LONGER EXISTS in a shipped log. Its replacement
-# is the single INFO line QWTBIRTH, carrying the same pid as `pid=N`.
-#
-# MEASURED 2026-10-23 on win11r-ttfw running 4.3.37.1063 (quick-upgrade evidence): its
-# gui-agent-20261023.log held ZERO `process ID:` lines and two QWTBIRTH lines. The only files in that
-# capture still carrying the old form were written by 4.3.35.795 (the entry fixture) and 4.2.2.0 (the
-# golden) - i.e. no shipped module writes it any more.
-#
-# WHAT THAT COST, and why a source check is worth it here: the failures were all silent or inverted.
-#   * guest/restart-gui-agent.ps1 returned pid 0, so the SANCTIONED agent restart could not prove a
-#     turnover and every caller got `RESTART INVALID-INSTRUMENT no-init-record`. That is the helper
-#     that exists so nothing is killed by name, so the alternative it protects against was the only
-#     thing left working.
-#   * mgmt/harness/promoted-checks.sh and mgmt/harness/p5-run.sh use it to SCOPE a count to this
-#     instance. With no match the index stays 0 and they count the WHOLE FILE - earlier instances'
-#     QGAUAC, secure-desktop ENTERED and MAP lines attributed to this run. Not inert: inverted.
-#   * mgmt/harness/gate-preflight.sh emits `INITLINE 0` / `VCHANCONN 0` and exits - an acceptance
-#     gate reporting zero because it could not find the line it keys on.
-# This is the shape recorded as "a level change blinds every parser": one severity edit, six readers.
+# Every consumer of an agent's INIT RECORD accepts the QWTBIRTH form the product actually ships.
+# run: tools/tests/init-record-consumers-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="$(mktemp -d /tmp/initrec-selftest-XXXXXX)"

@@ -1,23 +1,7 @@
 #!/usr/bin/env bash
-# console-window-mapped-selftest.sh - the console-window check must count MAPPED windows.
-#
-# WHY. mgmt/harness/console-window-check.sh looked for AddWindow lines of the console classes while
-# every message about it - its own header, the harness FAIL text, the ledger entry - says "mapped".
-# AddWindow is the agent ACCEPTING a window into tracking; SendWindowMap is what puts it on the
-# dom0 screen, and a window can be accepted and then never mapped.
-#
-# MEASURED 2026-10-17 on win11de-sm, and it cost a clean cycle: a Windows Terminal hosting window
-# was accepted at t=72562 with brokerslot=-1 while the broker was still coming up, held with "no
-# painted frame yet", and NEVER mapped. Its replacement arrived 3.3 s later, got slot 0, took a
-# first WGC frame and WAS mapped. One terminal, one mapped window - and the check reported
-# "FOUND 2 console/Terminal windows mapped", failing an upgrade whose other 10 checks passed.
-# Reading that as a product regression was the obvious next mistake; the count was the defect.
-#
-# The fixture lines below are VERBATIM from that capture, so this test is about what the guest
-# actually wrote rather than about a shape I imagined.
-#
-# It drives the check's OWN PowerShell, extracted from the script by its assignment, rather than a
-# reimplementation - a test that re-states the logic it is checking proves nothing.
+# the console-window check must count MAPPED windows, not windows merely accepted into tracking.
+# run: tools/tests/console-window-mapped-selftest.sh
+# pass: exit 0
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
 CHK="$HERE/mgmt/harness/console-window-check.sh"

@@ -30,6 +30,8 @@
 # recorded as DEAD by the harness's own probe (mgmt/harness/wu-liveness.sh), never waited out - see the round loop.
 #
 # Exit 0 every round PASSED, 3 a round FAILED, STALLED or DEAD, 2 instrument error.
+declare -F toolstack_accept >/dev/null 2>&1 \
+  || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh" 2>/dev/null || true   # toolstack_accept: the one recorded shutdown request
 set -u
 
 VM="${1:?[ERROR] usage: $0 <vm> [rounds] [outdir]}"
@@ -621,7 +623,7 @@ PY
     # qrexec still answering - not a stall, an impatient harness with a kill attached.
     # Request the shutdown, then WATCH. A guest that will not halt is reported, never killed.
     log "round $r: requested shutdown; waiting for the guest to power off on its own (no kill)"
-    timeout 120 qvm-shutdown "$VM" >/dev/null 2>&1
+    toolstack_accept "$VM" >/dev/null 2>&1
     _sd=$(( $(date +%s) + 1800 ))
     while [ "$(date +%s)" -lt "$_sd" ] && [ "$(qstate)" != Halted ]; do sleep 20; done
     if [ "$(qstate)" != Halted ]; then

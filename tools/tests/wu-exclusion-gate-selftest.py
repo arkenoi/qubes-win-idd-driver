@@ -1,13 +1,7 @@
 #!/usr/bin/env python3
-"""Drive tools/wu-exclusion-audit.py's gate with the defect present.
-
-The gate decides whether a wu-e2e run may be called green when items were excluded from the count
-dom0 hears. A gate that has never been seen to FAIL is not evidence (CLAUDE.md), so every case
-below asserts a specific outcome, and the PASS cases are written so that flipping one field alone
-turns them into failures - that is what makes the pass meaningful.
-
-No network, no Jev, no rig: the gate is fed the answer shapes jev.py writes with --out.
-"""
+# A concealed or unproven exclusion cannot make a wu-e2e run green, and a definition offer IS one.
+# run: python3 tools/tests/wu-exclusion-gate-selftest.py
+# pass: exit 0
 import io, sys, contextlib
 from pathlib import Path
 

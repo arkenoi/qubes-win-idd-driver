@@ -1,14 +1,7 @@
 #!/bin/bash
 # A WINDOWS 11 ANSWER FILE MUST CARRY THE BYPASS KEYS, NOT THE WORD "LabConfig".
-#
-# MEASURED 2026-10-21 by the descending audit: build-answer-stick.sh guarded a Windows 11 stick with
-# `grep -q 'LabConfig'`, so an answer file that merely MENTIONS LabConfig - in a comment, or with the
-# component present but empty - passed. Setup then fails 0x800700FF - 0x40030 about four minutes in
-# with no earlier sign, which is exactly what the guard exists to pre-empt: a retail 26300 stick
-# built from the generic template did that on 2026-10-01.
-#
-# All three shipped templates carry the five keys; the guard demands the four a Xen HVM needs (no
-# TPM, no secure boot, and an acceptance subject meets neither the RAM nor the storage floor).
+# run: tools/tests/answer-labconfig-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT" || exit 2

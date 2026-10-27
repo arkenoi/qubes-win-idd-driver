@@ -1,30 +1,7 @@
 #!/usr/bin/env bash
-# toastactions-selftest.sh - offline proof matrix for the actionable-buttons route (docs/ADR-toasts.md 11).
-#
-# Runs on this dev qube with g++ alone (no rig, no guest): tools/notifhost/toastactions_test.cpp over
-# toastactions.h (+ toastclassify.h). The clean build MUST pass; every defect build MUST fail - a guard never
-# seen to fail is decoration (CLAUDE.md). CI runs the same suite with msbuild (.github/workflows/build.yml,
-# "Toast actions suite").
-#
-# The defects are the near-miss designs this route could plausibly have shipped as:
-#   TOASTACT_DEFECT_BACKGROUND_CARRIED  background activations carried (out of scope by decision)
-#   TOASTACT_DEFECT_PARTIAL_FORWARD     a toast with an uncarriable button forwards the carriable subset (half-way)
-#   TOASTACT_DEFECT_PACKAGED_COM        a packaged sender's foreground activation treated as a COM activator's
-#   TOASTACT_DEFECT_BADKEY              generated keys the proxy refuses (the whole notification would be rejected)
-#   TOASTACT_DEFECT_NONOTICE            a failed click whose banner is gone is never reported (silent loss)
-#   TOASTACT_DEFECT_UNBOUNDED_TABLE     the per-notification table never evicts
-#   TOASTACT_DEFECT_KEY_BY_SEQ          the table is looked up by our sequence, not the proxy's id (wrong id space)
-#   TOASTACT_DEFECT_NOCLICKBOUND        a click whose child never exits is never resolved (no outcome, cap taken)
-#   TOASTACT_DEFECT_NOKILL              the bound reports the failure but leaves the hung child process alive
-#   TOASTACT_DEFECT_DOUBLE_OUTCOME      a click already reported gets a second outcome
-#   TOASTACT_DEFECT_AWAIT_FOR_INFO      an informational toast's route waits for the activator lookup (the 2026-10-07
-#                                       guest-test regression)
-#   TOASTACT_DEFECT_UNKNOWN_REFUSES     an informational toast with the lookup pending is refused instead of forwarded
-#   TOASTACT_DEFECT_UNKNOWN_AS_KNOWN    a pending lookup is treated as a registered activator
-#   TOASTACT_DEFECT_SCAN_PER_SENDER     a sender missing from the shortcut map re-scans the Start menu (the latency regression)
-#   TOASTACT_DEFECT_SCAN_NORMAL_PRIORITY the one scan runs at normal priority, competing with the classifier
-#   TOASTACT_DEFECT_ALLOWLIST_BLIND     the allowlist shortcut forwards a toast without its plan whatever the classifier said
-#   TOASTACT_DEFECT_NOLOOKUPBOUND       the activator lookup is waited for without a bound
+# The actionable-buttons route: the clean build passes and every near-miss defect build FAILS.
+# run: tools/tests/toastactions-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # RAM-BACKED /tmp, AND THIS LEAKED A DIRECTORY PER RUN. /tmp here is a 1 GB tmpfs on a 4 GB

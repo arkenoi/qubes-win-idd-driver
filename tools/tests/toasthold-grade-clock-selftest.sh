@@ -1,39 +1,7 @@
 #!/usr/bin/env bash
-# toasthold-grade-clock-selftest.sh - bridge.log HAS NO DATES, AND THIS QUBE'S CLOCK IS NOT ONE.
-#
-# mgmt/harness/toast-hold-grade.py joins three sources on seconds: the fire records (the guest's
-# Get-Date, with a date), the agent log ([YYYYMMDD.HHMMSS.mmm...], with a date) and bridge.log,
-# which carries a TIME OF DAY AND NOTHING ELSE - the real shape, from
-# qwt-accept/remainder-5ab316e42d34/work/log-sweep/logs/files/bridge.log:
-#   16:32:22 [INFO] HOLD records live (32 slots) - the agent holds each toast's banner until ...
-#   16:38:02 [INFO] FWD_RTT guest_id=0 seq=1 ms=11 ok=1
-# So a DATE has to be put on those lines, and it used to be put there by dt.datetime.now() - THIS
-# process's clock - under the rule "a time of day later than now must have been yesterday".
-#
-# THE TWO CLOCKS ARE NOT IN PHASE, AND THAT IS MEASURED HERE, NOT ASSUMED. The harness's own log
-# for the win11r-thold evidence, bracketed stamp = this qube's `date`, THC stamp = the guest's:
-#   [16:11:38] toast-hold[win11r-thold]: ... THC now=2026-10-06 19:11:39.705 tz=00:00:00
-#   [20:42:48] toast-hold[win11r-thold]: ... THC now=2026-10-06 23:42:50.226 tz=00:00:00
-# three hours AHEAD, guest zone UTC and this qube on UTC+3 - the same pairing clock-sync-selftest.sh
-# records for win11r-logvol ("the guest clock was 3 h ahead of the host with its own zone set to
-# UTC") and tools/log-sweep.py records for 2026-10-14 ("every cell's guest ran three hours ahead at
-# boot, 2249 lines were shifted back"); run health.json carries "boot_skew_s": -10720.
-#
-# WHAT THAT DOES TO THE GRADE, in both directions, each case below:
-#   guest AHEAD  every bridge line is "later than now", so the whole log is dated ONE DAY EARLY: no
-#                bridge record is within RECORD_SLACK_S of any fire, every toast reads UNLISTED and
-#                the run reports "ungraded" instead of "the instrument is broken" - a grader that
-#                correlated nothing (the TOASTHOLDPARSERBLIND shape, 12 of 21 rows, findings/issues.md).
-#   host's DAY   the error is +1 day, and then `e.t >= t0 - RECORD_SLACK_S` - the test that BINDS a
-#   AHEAD       bridge record to the toast it belongs to - is vacuously true for every record in the
-#                log: one stamped a minute BEFORE the toast was fired is credited to it and the row
-#                reads PASS. A pass on a correlation that did not happen.
-#
-# Each case drives the REAL grader over an evidence directory in the real shapes, with this qube's
-# clock put in the pairing's phase by TZ (no mocking: dt.datetime.now() reads TZ like any other
-# local clock) and the capture's own `THC now=` stamp present or lost, as the case says.
-# THGRADE_PY points this at another copy of the grader, which is how the four cases below were seen
-# to FAIL against the pre-fix file instead of being asserted to.
+# bridge.log HAS NO DATES, AND THIS QUBE'S CLOCK IS NOT ONE.
+# run: tools/tests/toasthold-grade-clock-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(cd "$(dirname "$0")/../.." && pwd)" || exit 2
 GRADER="${THGRADE_PY:-mgmt/harness/toast-hold-grade.py}"

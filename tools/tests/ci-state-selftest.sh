@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
-# ci-state-selftest.sh - drive tools/ci-state.py offline, each arm SEEN TO FAIL.
-#
-# THE INCIDENT, 2026-10-11: a receipt was taken against "build 38119590694 green". That run was
-# release-package; build.yml had been red for 14 runs. The failure arm here is therefore the FIRST
-# one driven: a sha whose release-package is green and whose build.yml is red must exit 1, because
-# that is the exact state that was walked past.
+# ONE GREEN WORKFLOW IS NOT A GREEN SHA - missing, running or unreadable CI data is never green
+# run: tools/tests/ci-state-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT" || exit 2
 T=$(mktemp -d "${TMPDIR:-/tmp}/ci-state-selftest.XXXXXX"); trap 'rm -rf "$T"' EXIT

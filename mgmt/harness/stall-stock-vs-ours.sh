@@ -25,6 +25,8 @@
 # WHY NOT A BISECT OF OUR RELEASES FIRST: the occurrences span at least three of our packages AND
 # a guest that was three hours into NORMAL SERVICE with nothing installing, so "which of our
 # releases" is the wrong first question. Establish whether the rig stalls without us at all.
+declare -F toolstack_accept >/dev/null 2>&1 \
+  || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh" 2>/dev/null || true   # toolstack_accept: the one recorded shutdown request
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 OURS="${1:?usage: stall-stock-vs-ours.sh <ours-setup-tree> [runs-per-arm]}"
@@ -43,7 +45,7 @@ declare -A stalls=([stock]=0 [ours]=0) ran=([stock]=0 [ours]=0)
 core_taken=([stock]=0 [ours]=0)
 
 release_guest(){ # ACPI, then kill - the subject is discarded either way and never reused
-  qvm-shutdown "$VM" >/dev/null 2>&1
+  toolstack_accept "$VM" >/dev/null 2>&1
   for _ in $(seq 1 12); do
     [ "$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$VM" '$1==v{print $2}')" = Halted ] && return 0
     sleep 10

@@ -1,22 +1,7 @@
 #!/usr/bin/env bash
-# start-dismiss-grade-selftest.sh - the Start-dismissal grader must read the capture, and must
-# REFUSE when its own anchors have gone stale.
-#
-# WHY. The dedicated Start test's grader lived untracked in scratchpad/ and anchored success on the
-# literal "closed it with Escape", added in 9186c17 and REMOVED in 0429a93. From that commit on it
-# could not recognise a successful dismissal at all: the test reported no Start verdict while the
-# capture it had just taken carried two WARNINGs saying the menu opened and our dismissal failed -
-# a P1, sitting in a file nobody's grader could read. The instrument for a P1 was broken AND
-# unreviewable.
-#
-# So this pins three things: the grader reads every generation of the wording (a capture from an
-# older build is still evidence); it reports INSTRUMENT rather than a verdict when a current stem
-# has vanished from the emitter; and an opening with NO terminal line is not graded as a success,
-# because before ac45cd9 that was the shape of every success AND of every dismissal that never ran.
-#
-# The gen3 fixture lines are DERIVED from the stems the grader asserts exist in the emitter - not
-# written out by hand here - so a wording change in main.c fails this test instead of sliding past
-# it. The gen2 fixture is a REAL capture when one is present on this qube.
+# The Start-dismissal grader reads every wording generation and REFUSES when its anchors go stale.
+# run: tools/tests/start-dismiss-grade-selftest.sh
+# pass: exit 0
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
 G="${START_GRADER:-$HERE/tools/start-dismiss-grade.py}"

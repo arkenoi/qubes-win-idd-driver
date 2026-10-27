@@ -26,6 +26,8 @@
 #
 # EVAL_ONLY=<wu-e2e out dir> ROUNDS=<n>: judge an EXISTING wu-e2e run by the rules above and touch nothing (no rig) - the offline
 # check of this verdict logic: the rz32 run (remedy round, then PASS) must PASS; the rz31 run (bare HRESULT, then a dead round) must FAIL.
+declare -F toolstack_accept >/dev/null 2>&1 \
+  || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh" 2>/dev/null || true   # toolstack_accept: the one recorded shutdown request
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver || exit 2
 if [ -n "${EVAL_ONLY:-}" ]; then VM="${VM:-eval-only}"; PKG="${PKG:-none}"; fi
@@ -48,7 +50,7 @@ say(){ _lv="$*"; _lv="${_lv#"${_lv%%[![:space:]]*}"}"
 state(){ qvm-ls --raw-data --fields state "$1" 2>/dev/null; }
 halt(){ local i; [ "$(state "$VM")" = Halted ] && return 0
   qvm-check "$VM" >/dev/null 2>&1 || return 0   # never created (a preflight refusal): nothing to halt - rz35 waited 15 min here
-  timeout 120 qvm-shutdown "$VM" >/dev/null 2>&1
+  toolstack_accept "$VM" >/dev/null 2>&1
   for i in $(seq 1 90); do [ "$(state "$VM")" = Halted ] && return 0; sleep 10; done
   say "$VM did not halt in 15 min - left as it is, for examination"; return 1; }
 verdict(){ say "$([ "$1" = PASS ] || printf '[ERROR] ')VERDICT $1: $2"; [ -n "${EVAL_ONLY:-}" ] || halt || true; case "$1" in PASS) exit 0 ;; FAIL) exit 1 ;; *) exit 2 ;; esac; }

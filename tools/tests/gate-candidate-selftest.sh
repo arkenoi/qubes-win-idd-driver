@@ -1,17 +1,7 @@
 #!/bin/bash
-# Does gate-remainder's assert_candidate refuse a subject that is not running the candidate?
-#
-# WHY THIS TEST EXISTS. gate-preflight and log-sweep grade $VM11 AS IT IS - neither installs
-# anything. At HEAD fe4337174ba8 that guest was still carrying agent 4.3.32.612 while the candidate
-# package was 4.3.36+agent.eb24cb5115ba, and nothing checked: the gate spent a whole run grading a
-# binary that was never the candidate, and reported a FIXED defect as present (the two keyed-mutex
-# DXGI_ERROR_ACCESS_LOST error lines, whose guard is present in eb24cb5115ba and so could not have
-# come from it - the sweep's archived logs name Module version 4.3.32.612 for every instance).
-#
-# The ACCEPT path cannot be driven on the rig without a guest that happens to run the reference
-# binary, and pulling the guest's exe out to hash it locally corrupts it (the VMShell stream carries
-# cmd's banner). So the guest call goes through QTEST_BIN, overridden here by a stand-in that also
-# EMITS THAT BANNER - because tolerating it is part of what is being tested.
+# gate-remainder's assert_candidate REFUSES a guest that is not running the candidate binary.
+# run: tools/tests/gate-candidate-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 

@@ -1,15 +1,7 @@
 #!/usr/bin/env bash
-# acceptance-record-selftest.sh - offline proof that a release can no longer be cut on a record whose feature tests did not run.
-#
-# WHY: 2026-10-02, rz30 (release-package run 36997345095): the campaign passed 96/96, both feature tests died in seconds on a retired
-# golden, and tools/record-acceptance.sh still recorded the ISO CLEAN - it reads only campaign/*.out, and cut-release required only the
-# six matrix cells. Now each feature test leaves a footer'd cell-group in the campaign dir (tools/release-acceptance.sh) and
-# tools/acceptance-record-check.py (cut-release's check, moved out to be testable) requires feature-<test> among the recorded cells.
-#
-# No rig, no gh: synthetic campaign dirs -> the real record-acceptance.sh (ACCEPT_RECORD_DIR points it at a temp dir) -> the real check.
-#   no env                 every case must come out as stated AND ACCEPT_CHECK_DEFECT=1 (the old six-cell set) must make the
-#                          "feature tests skipped" case FAIL to be refused.
-#   ACCEPT_CHECK_DEFECT=1  run the cases with the defect and exit with their result - i.e. this test FAILS, by design.
+# A RELEASE CANNOT BE CUT ON A RECORD WHOSE FEATURE TESTS NEVER RAN.
+# run: tools/tests/acceptance-record-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT" || exit 2

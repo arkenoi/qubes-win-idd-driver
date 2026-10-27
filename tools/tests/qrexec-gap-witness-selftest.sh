@@ -1,24 +1,7 @@
 #!/usr/bin/env bash
-# qrexec-gap-witness-selftest.sh - "the log volume could not be read" must mean it could not be read.
-#
-# THE DEFECT, measured 2026-10-22 on win11de-uc. During the MSI's own silent window quick-upgrade.sh
-# asks: is qrexec quiet because the guest is gone, or is it just the install? It answers by pulling
-# the log VOLUME host-side and reading the newest guest log line. If it gets one, the silence is
-# "covered" and the line it logs is deliberately NOT error-shaped. If it gets nothing, it logs
-# [ERROR] "the log volume could not be read either (no volume attached, or mtools found nothing)".
-#
-# That morning the volume read PERFECTLY - logvol_pull recovered 120 files and returned 0, it only
-# fails at zero files - but the predicate took ONLY the single newest *.log, and that file was one
-# the MSI had just created and not yet written to. `grep -a .` returned nothing, so the harness
-# declared a volume unreadable while holding 120 files from it, and that false [ERROR] then failed
-# the run's own sweep gate: rc=3 over an install that had passed 11 of 11 checks. A freshly created,
-# still-empty log is the NORMAL state while the MSI restarts our services.
-#
-# Owner: "keep it strict, close the gap properly". So the predicate walks newest-first until a line
-# is found, and the [ERROR] branch is reserved for a volume that really yielded nothing. This suite
-# runs the SHIPPED predicate - extracted from quick-upgrade.sh between its markers, never a copy -
-# over trees built to be exactly the cases that matter, and the CONTROL is the old one-file form:
-# it must fail on the tree that defeated it.
+# "the log volume could not be read" must mean it could not be read.
+# run: tools/tests/qrexec-gap-witness-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SRC="$ROOT/mgmt/harness/quick-upgrade.sh"

@@ -1,15 +1,7 @@
 #!/bin/bash
 # FIRSTBOOT MUST NOT REPORT OK FOR STEPS THAT DID NOT TAKE.
-#
-# MEASURED 2026-10-21 by the descending audit: guest/firstboot-setup.ps1 ran with
-# $ErrorActionPreference='Continue', checked nothing, and printed "OK - REBOOT REQUIRED"
-# unconditionally. A failed `bcdedit /set testsigning on` or a failed policy write therefore
-# produced a setup log identical to a good one. Nothing else in the tracked harness asserts
-# testsigning at runtime, and the IDD driver is test-signed: with it off the driver does not load
-# and the display cells fail later with a symptom pointing nowhere near here.
-#
-# The verdict function is extracted from the shipped script and EXECUTED in pwsh with synthetic
-# readbacks - the registry and bcdedit need a guest, the decision does not.
+# run: tools/tests/firstboot-effects-selftest.sh
+# pass: exit 0 (exit 2 = INCONCLUSIVE: this host has no pwsh, so nothing was executed)
 set -uo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 2
 PASS=0; FAIL=0

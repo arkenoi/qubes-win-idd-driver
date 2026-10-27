@@ -1,18 +1,7 @@
 #!/usr/bin/env bash
-# supervision-e2e-selftest.sh - offline checks on mgmt/harness/supervision-e2e.sh. No guest, no rig.
-#
-# A ROUTINE THAT GRADES THE PRODUCT IS ITSELF AN INSTRUMENT. This one was written after three ad-hoc runs measured a
-# broken harness instead of the product, so the shapes that made those runs worthless are the shapes checked here -
-# and every check is driven to FAIL with its line removed, because a check never seen to fail is decoration.
-#
-#   usage      it refuses to run without --iso, and refuses an --iso that does not exist (missing data fails)
-#   cells      every documented cell has an `if has <cell>` block, and every block is documented
-#   shutdown   it uses qwt_shutdown, never `qvm-shutdown --wait` (which KILLS at its timeout - lint L9)
-#   waits      its session wait has THREE exits and says which one it took
-#   byname     nothing is killed or adopted by process name
-#   verdicts   every cell records a verdict, and a missing measurement is INVALID or FAIL - never PASS
-#   control    L7C compares against a clone of the GOLDEN and never boots the golden itself
-#   exit       the script exits non-zero when any cell failed or was invalid
+# A ROUTINE THAT GRADES THE PRODUCT IS ITSELF AN INSTRUMENT: supervision-e2e's own shapes hold.
+# run: tools/tests/supervision-e2e-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 S="$ROOT/mgmt/harness/supervision-e2e.sh"

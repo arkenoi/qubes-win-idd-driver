@@ -1,41 +1,7 @@
 #!/usr/bin/env bash
-# attributor-unique-selftest.sh - THERE IS EXACTLY ONE "is this record the predecessor's?" IN THIS
-# TREE, EVERY CONSUMER ROUTES THROUGH IT, AND IT READS THE BANNER THE PRODUCT ACTUALLY SHIPS.
-# No guest, no rig.
-#
-# WHY THIS EXISTS. Owner, 2026-10-24: "you claimed to fix predecessor lines from being erroneously
-# ingested AT LEAST FOUR TIMES ... AND YOU DO IT OVER AND OVER", and "until you fix the sweeper, no
-# product fixes make sense because you are going to be distracted by predecessor noise on each
-# turn". Four fixes, four consumers, because THREE implementations of the rule existed sharing no
-# code - tools/log-sweep.py is_prior_build (fixed 2026-10-23), a private `_inst_prior` copy in
-# compute_metrics (left on the old rule), and tools/sweep-gate.sh _is_prior_build (old rule, with
-# its own banner parser and no --build). Each fix reached one of them; the owner's phrase for the
-# result is "self-procreating bugs of bugfixes". THE FAN-OUT IS THIS SUITE'S CONTENT: the thing that
-# stops a fifth instance is not a better patch, it is a check that a fourth copy cannot be added.
-#
-# AND THE WORST OF THE THREE WAS NOT THE RULE, IT WAS THE PARSE. sweep-gate's extractor read
-# "LogInit: Log started, module name:" + "LogInit: Module version:" - the two lines
-# patches/windows-utils-loginit-banner-debug DEMOTES TO LogDebug, replaced by one LogInfo line
-# `LogInit: QWTBIRTH module=<m> ver=<a.b.c.d> ...` from patches/windows-utils-single-birth-line. So
-# on every capture written by a shipped build it returned EMPTY, the gate's index held only the
-# PREDECESSOR (whose entry-fixture image predates the demotion), and its prior-build rule could
-# exclude nothing. MEASURED on scratchpad/dedup-test/logs/files: 27 of 71 files blind, the gate
-# FAILED with unaccounted=11 of which all 11 were the predecessor's, and after the fix it excludes
-# 41 files and reports unaccounted=0. Backtest over 127 captures / 982 files: 201 -> 283 files
-# excluded, 82 files of predecessor noise removed, ZERO regressions
-# (scratchpad/attributor-receipt/backtest.txt).
-#
-# FIVE PROPERTIES, each with a control that has been SEEN TO FAIL:
-#   A  exactly one implementation of the RULE exists (AST, so comments and docstrings cannot
-#      satisfy it) - control: a second copy injected into a temp tree must be caught
-#   B  no shell/powershell script decides it from a banner of its own - control: the old
-#      _sg_modver restored into a temp copy of sweep-gate.sh must be caught
-#   C  every granularity ROUTES through the one function - control: mutate it and all three must
-#      change (line, instance, file); a granularity that does not change has its own copy
-#   D  both banner spellings are read, and the fixture's shape is taken from the PATCHES rather
-#      than from this file's memory of them
-#   E  a named build that declared itself nowhere makes the campaign gate REFUSE - control: a
-#      named build that IS present must not refuse
+# ONE predecessor-record rule exists, every consumer routes through it, reading the SHIPPED banner
+# run: tools/tests/attributor-unique-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT" || exit 2

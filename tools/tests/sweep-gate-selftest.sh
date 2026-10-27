@@ -1,13 +1,7 @@
 #!/bin/bash
-# sweep-gate-selftest.sh - does the error gate actually gate?
-#
-# Every case here was seen to FAIL before it was seen to pass. The two that matter most:
-#   T2  the gate must LOSE recall when deliberately broken. A check that cannot fail is decoration,
-#       and this tool's first --verify mode compared its own regex against itself and printed
-#       EXHAUSTIVE while missing `WARNING log-volume bind failed` - the very incident it was built
-#       for, which carries no bracketed level.
-#   T7  the corpus must still match what the emitters EMIT. Rewording a harness message without
-#       re-running the regenerator would leave the gate measured against text nothing prints.
+# The error gate GATES: full corpus recall, no silent shrink, and it LOSES recall when broken.
+# run: tools/tests/sweep-gate-selftest.sh
+# pass: exit 0
 set -uo pipefail
 
 # THIS SUITE FEEDS SYNTHETIC LINES, NOT CAPTURES. tools/sweep-gate.sh refuses an input it cannot

@@ -1,27 +1,7 @@
 #!/usr/bin/env bash
-# qdbwait-bound-selftest.sh - WaitForQdb's timeout must cover the CALL, not just the gaps.
-#
-# THE DEFECT (findings/issues.md QDBWAITBOUNDISINERTWHILETHEDAEMONISSILENT, measured on win11r-sup
-# 2026-10-24): the 360 s bound was tested only between calls, so a qdb_open that never returned was
-# never interrupted. With the daemon alive-but-not-answering one call blocked 87063 ms and came back
-# 67 ms after the resume; with the daemon ABSENT it returned NULL in 156 ms. Supervision cell L10
-# held the daemon suspended 421 s against the 360 s bound and the SCM recorded nothing at all,
-# because nothing had failed - so none of the installer's restart actions could fire.
-#
-# WHAT RUNS HERE, on this dev qube, with gcc and no guest:
-#   clean    the function AS SHIPPED, extracted from core-agent, against three qdb_open stubs
-#            (answers / absent / never returns) plus a stop request. All four must come out right.
-#   defect   the SAME harness against the PRE-FIX function, reconstructed from git. The
-#            never-returns case must HANG there - that is the defect - and a hang is detected by a
-#            hard timeout and reported as the defect being PRESENT. A guard never seen to fail is
-#            decoration.
-#   syntax   the shipped file's new code parses with gcc -Wall -Wextra against the win32 stub
-#            (UNCOMPILED for Windows here; CI builds the real binary).
-#
-# The function is EXTRACTED FROM THE SHIPPED SOURCE on every run, never copied into this directory:
-# a copy would pass forever after the real one changed.
-#
-#   QDBWAIT_OUT=<dir>   where the builds go (default: a mktemp dir)
+# WaitForQdb's timeout must cover the CALL, not just the gaps between calls.
+# run: tools/tests/qdbwait-bound-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SRC="$ROOT/core-agent/src/qrexec-agent/qrexec-agent.c"

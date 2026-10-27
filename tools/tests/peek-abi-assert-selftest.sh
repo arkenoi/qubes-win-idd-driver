@@ -1,19 +1,7 @@
 #!/bin/bash
 # The peek script's ABI assertion must actually be able to REFUSE.
-#
-# WHY: from the day it was written until 2026-09-27 it could not. It read
-#     $ABI = 16 ; $abi = RdI 4 ; if ($abi -ne $ABI) { refuse }
-# and PowerShell variable names are CASE-INSENSITIVE, so the read overwrote the constant and the test
-# compared the section's version with itself. The script then parsed an ABI-15 section as ABI 16 in
-# production: slot0 correct, every later slot drifted by the stride difference, hwnd=0x2, hwnd=0xa,
-# req=17410688x0 - and a whole census was graded on it and reported a product failure.
-#
-# Two checks, both cheap:
-#  1. STATIC: no two variables in the script may differ only by case. That is the defect class itself,
-#     and it is invisible to every other test because the script still runs.
-#  2. BEHAVIOURAL: run the real comparison under real PowerShell, with a section version that differs
-#     from the script's, and require the refusal branch to be taken. Then run it with the SHADOWED
-#     spelling and require the check to catch that it does NOT refuse.
+# run: tools/tests/peek-abi-assert-selftest.sh
+# pass: exit 0
 set -u
 cd "$(dirname "$0")/../.." || exit 2
 P=guest/wgcbroker-peek.ps1

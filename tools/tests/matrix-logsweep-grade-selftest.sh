@@ -1,17 +1,7 @@
 #!/bin/bash
-# matrix-logsweep-grade-selftest.sh - one condition, one tally entry; every number off the disk.
-#
-# WHY. matrix.sh grades each cell's guest-log sweep by its exit code. The first version read that
-# code as a BOOLEAN and said "collection FAILED ... the campaign sweep has no guest logs for this
-# cell" for any non-zero rc. The first cell it ran on returned rc=3 - its documented code for
-# "collected, but something was empty or unparseable" - over ONE empty rotation placeholder, while
-# 37 files and 2631 QWT-format lines sat in the output directory. The message asserted the opposite
-# of what had happened, about the very cell that had never preserved anything before.
-#
-# These checks drive the real function (extracted from the shipped file, not a copy) through every
-# documented exit code with a stub sweep, and assert two properties the eye cannot verify:
-#   * a single condition adds EXACTLY ONE entry to the campaign tally, never two;
-#   * every count in every message is the count of files actually on disk.
+# One condition, one tally entry; every number in the cell's sweep verdict off the disk.
+# run: tools/tests/matrix-logsweep-grade-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 2
 

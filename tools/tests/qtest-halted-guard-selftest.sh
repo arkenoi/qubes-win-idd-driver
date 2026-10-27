@@ -1,29 +1,7 @@
 #!/bin/bash
-# A BACKGROUND JOB MUST NOT BE ABLE TO WAKE A GUEST.
-#
-# Owner, 2026-10-21: "make sure background jobs cant wake guests ever again."
-#
-# On 2026-10-20 three orphaned capture loops survived every stop - `nohup script &` then `$!` gives
-# the WRAPPER shell, not the child - and the owner found a guest he had just halted running again.
-# A qrexec call to a HALTED qube STARTS it to serve the call. MEASURED 2026-10-15:
-# `qrexec-client-vm win10-acc qubes.GetAppmenus` against a halted win10-acc returned rc=0 with
-# 28268 bytes, starting the guest, while another job was mid-priming - two Windows guests up and no
-# gate noticed.
-#
-# TWO HALVES, BOTH ASSERTED HERE:
-#
-#   1. tools/hooks/serial-rig-gate.sh must treat ANY qrexec call to a non-dom0 target as mutating.
-#      It used to name three services - a list of the ones someone remembered - so GetAppmenus and
-#      every other service walked through. dom0 must stay EXEMPT: dom0 is always up so a call to it
-#      starts nothing, and the screenshot/resize services are how a running job is watched.
-#
-#   2. tools/qtest must refuse a guest-targeting verb when the target is HALTED. The hook gates
-#      tool calls; it cannot see a script that is already running. qtest can, because every harness
-#      path that talks to a guest comes through it. There is deliberately NO override knob.
-#
-# Verified live on 2026-10-21 against a halted win11-nfy: `qtest run` exited 3 and the guest stayed
-# halted, while `qtest state` still answered power_state=Halted. This suite reproduces both
-# directions with a stubbed qvm-check so it needs no guest.
+# A BACKGROUND JOB MUST NOT BE ABLE TO WAKE A GUEST: qtest refuses a HALTED target, with no override.
+# run: tools/tests/qtest-halted-guard-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PASS=0; FAIL=0

@@ -1,22 +1,7 @@
 #!/bin/bash
-# gate-producer-selftest.sh - make the never-fired gates FIRE.
-#
-# WHY THIS EXISTS. tools/log-sweep.py gates 33 metrics. On 2026-10-15 an audit found 14 of them not
-# mentioned by any offline test at all, so no fixture anywhere could make them non-zero - and all 14
-# are live code, computed every run and compared to a threshold. That is the DOM0LOUDNEVERFIRES
-# shape: a counter nobody has seen fire, reporting 0, where 0 reads as a pass. dom0_loud_failures
-# had been P1 with max 0 and structurally unable to see an INFO send for as long as it existed, and
-# the suite covering it was green throughout because it asserted the wrong thing on purpose.
-#
-# A detector nobody has seen fire is not evidence. So each check below plants a line or an event
-# that SHOULD trip one gate, and requires the metric to rise ABOVE its threshold. A gate that cannot
-# be made to fire here is the finding, not a test bug - it means the metric cannot see its own
-# subject, and it must be reported as such rather than quietly dropped.
-#
-# SCOPE. Ten of the fourteen are driven here - every event-driven and line-driven one, which is the
-# whole death-and-crash family. The remaining four need multi-instance agent structure to exist
-# (vchan_setups_per_shutdown, agent_ends_unrecorded, helper_relaunches,
-# watchdog_fast_death_backoffs); they are NOT covered yet and stay listed in SWEEPGATESNOPRODUCER.
+# Each log-sweep gate here is MADE TO FIRE above its threshold - a 0 nobody saw fire is not a pass.
+# run: tools/tests/gate-producer-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT" || exit 2

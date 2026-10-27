@@ -1,36 +1,7 @@
 #!/bin/bash
-# pipe-server-lifetime-selftest.sh - patches/windows-utils-pipe-server-lifetime.patch, OFFLINE.
-# No guest, no CI.
-#
-# THE DEFECT. QpsDestroy ended with
-#
-#     DeleteCriticalSection(&Server->Lock);
-#     ZeroMemory(Server, sizeof(PIPE_SERVER));
-#     free(Server);
-#
-# while callers can still legally reach that pointer, because the per-client threads that use it
-# belong to the CALLER and nothing joins them. The next call enters a deleted critical section in
-# freed memory.
-#
-# MEASURED, not inferred (QDBSTOPUAF, Win10 acceptance cell WIN10-reinstall of campaign
-# rel-40243956400-r2, 2026-10-26, qubesdb-daemon ver 4.3.1.0 pid 3488 - four lines, one clock):
-#   092152.485 [3788-I] mainloop: service stopped, exiting
-#   092153.517 [3788-I] QpsDisconnectClientInternal: [9] (000001C9A2CCEDB0) disconnecting, WriterExiting 0, ReaderExiting 0
-#   092153.533 [4624-W] pipe_thread_client: QpsRead from client 9 failed: 109
-#   092153.535 [4624-E] ErrUEF: Unhandled exception c0000005 at 00007FF8CCD3FAAD, flags: 0
-# qubes-core-qubesdb daemon/db-daemon.c waits for the ACCEPT thread only, then calls QpsDestroy and
-# nulls its pointer; its per-client threads are created with CreateThread + an immediate CloseHandle.
-# Such a thread returns from QpsRead with ERROR_BROKEN_PIPE (the 109) and its next statement is
-# QpsDisconnectClient(d->pipe_server, id). The cell FAILED the acceptance sweep on that one line
-# (error_lines_undeclared 1, signatures_unclassified 1, P1 0).
-#
-# WHY THE FIX IS IN THIS DLL AND NOT IN THE CALLER: qubesdb-daemon.exe is deliberately not built by
-# this fork (wave 3, boot-critical) while windows-utils.dll is, and the stock exe runs this file out
-# of that DLL - proven by a line that is ABSENT from the capture, see the "runs our copy" check below.
-#
-# The shape follows tools/tests/pipe-client-null-selftest.sh, including the half that makes this
-# evidence rather than decoration: every marker is ALSO checked against UNPATCHED source and MUST
-# be absent there.
+# QpsDestroy cannot free a pipe server a caller's threads can still reach - the UAF patch holds.
+# run: tools/tests/pipe-server-lifetime-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PATCHFILE="$ROOT/patches/windows-utils-pipe-server-lifetime.patch"

@@ -25,6 +25,12 @@ JSON="mgmt/reporters/${REPORTER}.json"
 [ -f "$JSON" ] || { echo "FAIL  no reporter file $JSON - nothing to build towards"; exit 2; }
 OPENSHELL_EXE="${OPENSHELL_EXE:-scratchpad/openshell/OpenShellSetup_4_4_198.exe}"
 OUT="${OUT:-scratchpad/reporter-env-$VM}"
+# A contaminated subject is refused BEFORE any work: this script's default output dir carries no
+# run-id, so a second attempt would otherwise append to the first attempt's artefacts and be read
+# back as one run. Pass a fresh outdir to run again.
+declare -F attempt_dir >/dev/null 2>&1 || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh"
+attempt_dir "$OUT" || exit 1
+
 mkdir -p "$OUT" || exit 2
 export QTEST_VM="$VM"
 # DECLARE THE LEVEL. Without one this emitter's lines are unjudgeable and tools/sweep-gate.sh

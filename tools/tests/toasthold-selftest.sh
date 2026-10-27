@@ -1,36 +1,7 @@
 #!/usr/bin/env bash
-# toasthold-selftest.sh - offline proof matrix for the toast-banner hold (docs/ADR-toasts.md 10).
-#
-# Runs on this dev qube with gcc/g++ alone (no rig, no guest):
-#   agent suite  (agent/gui-agent/toasthold_test.c, C)            clean MUST pass; every defect build MUST fail
-#   bridge suite (tools/notifhost/toasthold_bridge_test.cpp, C++) clean MUST pass; every defect build MUST fail
-# A guard never seen to fail is decoration (CLAUDE.md). CI runs the same two suites with msbuild
-# (.github/workflows/build.yml: "Toast-hold unit suite", "Toast-hold bridge suite").
-#
-# The defects are the near-miss designs this fix could plausibly have shipped as:
-#   TOASTIDENT_DEFECT_NOFOLD           no whitespace folding: the bridge's "a\nb" and the banner's "a b" differ
-#                                      (every multi-line toast doubles)
-#   TOASTIDENT_DEFECT_ORDERONLY        match by arrival order alone (a bannerless notification desyncs it)
-#   TOASTIDENT_DEFECT_VERDICTOVERRIDE  the classifier overrides a route the listing settled
-#   TOASTHOLD_DEFECT_NOBOUND           a hold never fails open (a lost toast instead of a late one)
-#   TOASTHOLD_DEFECT_FAILCLOSED        doubt suppresses instead of showing
-#   TOASTHOLD_DEFECT_NOPREEMPT         a queued bridge-bound toast no longer pre-empts the mapped banner
-#   TOASTHOLD_DEFECT_PREEMPT_IDENTGATE pre-emption ends while an identity read is in flight (the in-place swap maps
-#                                      the window while the bridged toast paints - review blocker #1)
-#   TOASTHOLD_DEFECT_SUPPRESS_FINAL    a suppressed banner ignores its record turning window / the bridge dying
-#                                      before dom0's ack (a LOSS - review blocker #2)
-#   TOASTHOLD_DEFECT_NORECLAIM         a banner whose identity merely completed loses its consumed record (review #5)
-#   TOASTHOLD_DEFECT_NOIDENT_IGNORES_BRIDGE the no-identity hold waits out 3 s with the bridge down (review #13)
-#   TOASTHOLD_DEFECT_NOFORWARDBOUND    a suppression awaiting dom0's ack never reopens (second review #4)
-#   TOASTHOLD_DEFECT_NOCARD_UNPACED    an unpaced second card-less read classes a banner mid-grow as a flyout (N2)
-#   TOASTHOLD_DEFECT_SIZE60            the absolute 60 % size ceiling that never held a 573 px banner at 768 px (N3)
-#   TOASTHOLD_DEFECT_DEADRECORDS       a dead bridge's records stay authoritative and keep pre-empting (N6)
-#   TOASTHOLD_DEFECT_NOBACKOFF         a refused identity request is retried without back-off (N7)
-#   TOASTIDENT_DEFECT_TIE_SLOTORDER    equal arrival ticks broken by ring slot, not sequence - reorders across a wrap (#12)
-#   TOASTHOLD_DEFECT_RECLAIM_ANY       the own consumed record re-claimable for any new content, not only a completion (N5)
-#   TOASTIDENT_DEFECT_MARK_BY_SLOT     the agent's shown mark is a flag in the slot, not the sequence it marks: a store
-#                                      racing the bridge's republish of the slot reads as the NEW toast's banner shown
-#                                      (ADR-toasts 11: its failed dom0 action goes unreported)
+# The toast-banner hold: the clean build passes and EVERY near-miss defect build FAILS.
+# run: tools/tests/toasthold-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # RAM-BACKED /tmp, AND THIS LEAKED A DIRECTORY PER RUN. /tmp here is a 1 GB tmpfs on a 4 GB

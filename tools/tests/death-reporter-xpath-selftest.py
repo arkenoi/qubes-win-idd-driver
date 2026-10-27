@@ -1,30 +1,7 @@
 #!/usr/bin/env python3
-"""death-reporter-xpath-selftest.py - the ONE reporter's subscription, evaluated as DATA (docs/ADR-supervision.md 3).
-
-The installer (packaging/setup/Install-QwtImproved.ps1, region DEATH-REPORTER) registers the QwtDeathReporter task
-with an XPath subscription over the Application, System and TaskScheduler/Operational logs, filtered to OUR
-executables, services and tasks. This test rebuilds every Select exactly as the installer joins it (the quoted lists
-and the 'or' joins are read from the shipped region, not re-typed here), evaluates each one with lxml against sample
-events - ours and not ours, each id - and requires the match matrix below. It also holds the installer's three lists
-together with the reporter's tables (guest/qwt-report-death.ps1) and with what packaging/make-setup.ps1 stages.
-
-HONEST LIMIT. lxml is XPath 1.0; Windows' Event Log evaluator is a documented SUBSET of it (no contains(), no
-namespaces - the event XML is matched without its xmlns, which is why the samples carry none). Every form used here
-(Provider[@Name=...], EventID=..., or/and, Data='x' over positional Data, Data[@Name='x']='y', !=0,
-Data[@Name='x']!='y') is inside that subset - the operator list of "Consuming Events (Windows Event Log)", XPath 1.0
-limitations, is "OR, AND, =, !=, <=, <, >=, >, and parentheses"; and the live receipt is the four shutdown refusals
-of 2026-10-08/10 on win10-acc, each launched by a 201 that only the "!=0 and (TaskName=...)" Select could have
-matched. The release gate on a guest is what proves the task fires (a forced gui-agent crash -> Application 1000 ->
-the task runs -> the deaths log). Run with no arguments: the clean matrix, then every knob below re-run in a
-subprocess and required to FAIL (a guard never seen to fail is decoration). XPATH_DEFECT=<knob> runs one knob:
-    noexefilter   the 1000/1001 selects lose their executable filter   -> notepad.exe's crash is subscribed to
-    anyresult     the 201 select loses ResultCode!=0                   -> a helper's clean exit (0) is subscribed to
-    noerrorexit   the SCM select loses 7023/7024                        -> QrexecAgent's error exit is NOT subscribed to
-    selftrigger   the task list gains \\QwtDeathReporter                -> the reporter would trigger itself
-    onelist       the executables are one list again (both halves = all) -> a Select over 16 terms, which schtasks rejects
-    anyours       the select of our source loses its 4001-4004 list     -> a 4013 teardown record launches the task
-    reapedresult  the 201 select loses ResultCode!='2147943691'         -> our own task reaped by a shutdown launches it
-"""
+# The ONE death reporter's XPath subscription catches OUR deaths and subscribes to nothing else.
+# run: python3 tools/tests/death-reporter-xpath-selftest.py
+# pass: exit 0
 import os, re, subprocess, sys
 from pathlib import Path
 

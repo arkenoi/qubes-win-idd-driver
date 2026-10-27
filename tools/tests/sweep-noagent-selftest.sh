@@ -1,19 +1,7 @@
 #!/bin/bash
-# A CLEAN VERDICT OVER A CAPTURE WITH NO AGENT-FAMILY LOG IS NOT EVIDENCE.
-#
-# matrix.sh already refused a CLEAN sweep that read ZERO QWT-format lines (INVALID-SWEEP-BLIND,
-# predicate q==0). On run 39476792836 both appvm cells walked through that guard with q=73 and
-# still contained no agent-family log content: 13 files, an `agent.log` with zero QWT-format lines,
-# and none of gui-agent-*, gui-watchdog-*, qrexec-agent-*, qubesdb-daemon-*. The 73 lines were the
-# installer and the wrapper. Both cells were reported "swept CLEAN", and the owner's error-line
-# gate was graded over a capture that could not hold a single agent error.
-#
-# "Some lines arrived" was a proxy. "The agent's own log is here" is the property.
-#
-# The fixtures below hold the MEASURED shape of both cases - file names taken from that run's real
-# captures, contents synthesized, because a capture never goes on a tracked path. When the archive
-# is present this suite also replays the eight real captures, where the discriminator is exact:
-# the two appvm cells 0, the six others 4-8.
+# A CLEAN VERDICT OVER A CAPTURE WITH NO AGENT-FAMILY LOG IS NOT EVIDENCE
+# run: tools/tests/sweep-noagent-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PASS=0; FAIL=0

@@ -1,26 +1,7 @@
 #!/usr/bin/env bash
-# verdict-jev-selftest.sh - offline proof matrix for tools/verdict-jev.py (PLAN-acceptance-optimization section 5:
-# every error is evaluated; Claude only when Jev returns novel or insufficient-evidence on at least one item).
-#
-# No network: a stub judge stands in for tools/jev.py and answers by name - every item 'known-class' at a chosen
-# confidence, or 'novel', or it exits 2 (the instrument did not run). The inputs are a log-sweep report in the real
-# analyzer's shape and an activity snapshot in the collector's shape. Every check is also seen to FAIL on a copy of
-# the tool with ONE `# GUARD:<knob>` line replaced by the defect beside it.
-#
-#   complete   the rubric carries EVERY item: the breach, both NEW signatures, the known-defect E signature the
-#              baseline already catalogues, both harness error lines, plus the one overall question (knob: prefilter)
-#   state      the state text carries the snapshot's last qrexec pair, harness command and module tails, and the catalogue
-#   known      all known-class at 0.9 and overall noul 0.1 -> rc 0
-#   novel      one novel item -> rc 1 and verdict.json names it
-#   floor      known-class at 0.3 is below the floor -> rc 1 (knob: conffloor)
-#   overall    all known-class but the judge's overall noul 0.9 -> rc 1 (knob: overallor)
-#   exit2      the judge exits 2 -> rc 2, never a pass (knob: jev2)
-#   declared   a declaration that matches an item keeps it out of the rubric and records it; one that matches
-#              nothing -> rc 3 (knob: declunmatched)
-#   data       a sweep report with status DATA -> rc 2 (knob: dataispass)
-#   inputs     an unreadable snapshot -> rc 2; no inputs at all -> rc 2
-#
-#   VERDICT_SELFTEST_OUT=<dir>  keep fixtures and outputs (default: a mktemp dir, removed on exit)
+# Every error reaches the judge, and a novel item, a below-floor score or rc=2 is never a pass.
+# run: tools/tests/verdict-jev-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SRC="$ROOT/tools/verdict-jev.py"

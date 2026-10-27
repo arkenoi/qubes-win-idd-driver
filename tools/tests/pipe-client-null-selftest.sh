@@ -1,30 +1,7 @@
 #!/bin/bash
-# pipe-client-null-selftest.sh - patches/windows-utils-pipe-client-null.patch, checked OFFLINE.
-# No guest, no CI.
-#
-# THE DEFECT. windows-utils' QpsConnectClient starts a reader thread and a writer thread and
-# returns. Each thread's FIRST statement was a dereference of QpsGetClient's result:
-#
-#     PPIPE_CLIENT client = QpsGetClient(server, param->ClientId);
-#     HANDLE pipe = client->WritePipe;          // <- NULL when the id is not in the client list
-#
-# Every other function in pipe-server.c answers that race with ERROR_NOT_CONNECTED. These two
-# answered it with an access violation, and an unhandled AV in a service kills the service.
-#
-# MEASURED, not inferred (QREXECAGENTAV, Win10 acceptance cell 2026-10-14, qrexec-agent-20261014.log):
-#   150653.055 [3960-I] QpsConnectClient: [2] (000001D9CB4B6A30) connected (1 total)
-#   150653.117 [6752-W] QpsDisconnectClientInternal: [2] not connected
-#   150653.171 [6768-E] ErrUEF: Unhandled exception c0000005 at 00007FFFF52E54A8, flags: 0
-#   150653.220 [2396-E] PipeClientThread: QpsRead(magic) failed with error 0x8ca
-#   ... Parameter 0: 0 (a READ), Parameter 1: 0x18 (the address)
-# 0x18 is WritePipe's offset in PIPE_CLIENT (LIST_ENTRY 16 + LONGLONG Id 8), so the faulting line is
-# the writer thread's. The watchdog recorded the consequence: "DEATH #1 NEW System/7031: The Qubes
-# RPC agent service stopped unexpectedly". 0x8ca is ERROR_NOT_CONNECTED - the HANDLED form of the
-# same race, reaching a client call in the same 50 ms.
-#
-# Four checks in the shape tools/tests/pipe-eof-selftest.sh established, plus the half that makes
-# this evidence rather than decoration: every marker check is ALSO run against UNPATCHED source and
-# MUST fail there.
+# The NULL-client patch guards both thread entries and the sibling site; every producer applies it.
+# run: tools/tests/pipe-client-null-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PATCHFILE="$ROOT/patches/windows-utils-pipe-client-null.patch"

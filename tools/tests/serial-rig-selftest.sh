@@ -1,11 +1,7 @@
 #!/bin/bash
-# serial-rig-selftest.sh - prove assert_sole_guest refuses a second guest, and that IT is what refuses.
-#
-# Offline: the rig is never touched. `qrexec-client-vm` and `qvm-tags` are stubbed on PATH so the
-# guest list is whatever the case says it is. Every refusing case runs TWICE - once guarded, once
-# with SERIAL_RIG_DEFECT=1, which restores the pre-2026-10-13 behaviour where nothing checked. A case
-# that refuses in BOTH runs is reported as a free pass, not counted: a check never seen to fail is
-# not evidence.
+# assert_sole_guest REFUSES a second guest, and IT is what refuses - dom0 is never asked.
+# run: tools/tests/serial-rig-selftest.sh
+# pass: exit 0
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 pass=0; fail=0

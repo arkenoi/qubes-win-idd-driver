@@ -18,6 +18,8 @@
 #   4. the agent leaves the secure desktop at boot and does not sit stuck
 #   5. no watchdog death-storm across a clean shutdown
 #   6. an AppVM built from the template survives 3 cold boots with all of the above
+declare -F toolstack_accept >/dev/null 2>&1 \
+  || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh" 2>/dev/null || true   # toolstack_accept: the one recorded shutdown request
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver
 source .claude/skills/win-guest-e2e/e2e-lib.sh
@@ -35,7 +37,7 @@ vstate(){ qvm-ls --raw-data --fields state "$1" 2>/dev/null; }
 # servicing is how it ends up in Automatic Repair - which is what happened to win10-tpl on
 # 2026-08-28, from my own kills, not from anything the product did. Give a clean shutdown a real
 # chance (8 min covers a guest applying updates), and say loudly when a kill is resorted to.
-stop_vm(){ local vm=$1 dl; timeout 120 qvm-shutdown "$vm" >/dev/null 2>&1; dl=$(( SECONDS + 480 ))
+stop_vm(){ local vm=$1 dl; toolstack_accept "$vm" >/dev/null 2>&1; dl=$(( SECONDS + 480 ))
   until [ "$(vstate "$vm")" = Halted ]; do
     if [ "$SECONDS" -ge "$dl" ]; then
       say "  WARNING: $vm did not shut down in 480s - forcing it. Expect Automatic Repair on the next boot."

@@ -1,15 +1,7 @@
 #!/bin/bash
-# logvol-level-reaches-gate-selftest.sh - a declared level must reach the reader, end to end.
-#
-# WHY. logvol-lib.sh declares [ERROR]/[WARN] at its failure sites so tools/sweep-gate.sh, which
-# reads ONLY declared severity, can see them. But _lv_say writes to STDERR, and two of its three
-# call sites in the campaign harness sent that stderr to /dev/null - so every level declared in
-# logvol_create, logvol_attach and logvol_pull was inert, and a cell learned "log volume not
-# attached" while the reason was thrown away. Declaring a severity and discarding the stream are
-# the same bug as a predicate fed a constant: the code reads correct and decides nothing.
-#
-# So this walks the whole chain on real tools: library writes -> call site captures into a .out ->
-# the campaign's file glob picks it up -> sweep-gate detects it.
+# A declared [ERROR]/[WARN] level must reach the gate end to end, not die with a discarded stderr.
+# run: tools/tests/logvol-level-reaches-gate-selftest.sh
+# pass: exit 0
 set -uo pipefail
 # SYNTHETIC INPUT, DECLARED. This suite writes hand-made log lines to prove the library's declared
 # ERROR/WARN levels reach tools/sweep-gate.sh. The gate now refuses an input it cannot grade -

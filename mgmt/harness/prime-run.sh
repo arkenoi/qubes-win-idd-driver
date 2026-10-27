@@ -24,6 +24,8 @@
 # Exits: 0 = guest is up and answering qrexec; 1 = TERMINAL (refused preconditions, clone/stick/boot
 # failure, guest died); 2 = DEADLINE. Every exit says which one it took, so "it did not finish" can
 # never be read as "it worked".
+declare -F toolstack_accept >/dev/null 2>&1 \
+  || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh" 2>/dev/null || true   # toolstack_accept: the one recorded shutdown request
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$HERE" || exit 1
 
@@ -98,7 +100,7 @@ job_on_abort(){
   printf '{"vm":"%s","aborted_utc":"%s","via":"%s","note":"killed mid-prime - CONTAMINATED, never grade or reuse; re-run prime-run to recreate from the base"}\n' \
       "$CHURN" "$(date -u +%FT%TZ)" "$1" > "mgmt/fixtures/$CHURN.aborted"
   log "ABORTED mid-prime ($1): $CHURN is CONTAMINATED - marker mgmt/fixtures/$CHURN.aborted written; best-effort shutdown of the churn guest"
-  qvm-shutdown "$CHURN" >/dev/null 2>&1
+  toolstack_accept "$CHURN" >/dev/null 2>&1
 }
 
 [ -f "$JOBDIR/onboot.cmd" ] || { log "[ERROR] TERMINAL: no job at $JOBDIR/onboot.cmd"; exit 1; }
@@ -617,7 +619,7 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
                 log "    PV console gave nothing (rc=$qrc, $(tail -c 200 "$OUT/rescue-console.err" | tr '\n' ' ')) - expected when xencons is not yet bound"
             fi
             log "    Rebooting ONCE as backup. This run will be stamped rescued=1 - it is NOT a clean pass."
-            qvm-shutdown "$CHURN" >/dev/null 2>&1
+            toolstack_accept "$CHURN" >/dev/null 2>&1
         fi
     fi
     if [ "$st" = Halted ]; then

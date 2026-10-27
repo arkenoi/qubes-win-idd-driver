@@ -1,17 +1,7 @@
 #!/usr/bin/env bash
-# wait-bound-selftest.sh - a wait that spans a BOOT must not bound its probe below the boot.
-#
-# WHY. mgmt/harness/e2e-wait.sh's w_alive bounded every probe at 40 s. MEASURED win11-clean
-# 2026-10-17: the session comes up at t+56 s, so every probe of a booting guest was killed at 40 s
-# while its request was still QUEUED. Queued qrexec is delivered when the agent starts, so the
-# abandoned requests arrived together - three wrappers inside 33 ms, consecutive ports, each finding
-# its caller gone - and the guest wrote `InitVchan: QGAVCHANFAIL ... request dropped` once per
-# abandoned probe, against a gate whose condition is a clean error log. Jev: the per-probe bound
-# below the awaited event is itself the defect, 0.82.
-#
-# This is a TEXT check and says only what it can: that the boot-waiting callers pass a bound above
-# the measured boot, and that the deliberately-short drain probe still does not. Whether a guest
-# answers inside it is a rig measurement, not something a selftest can prove.
+# A wait that spans a BOOT must not bound its probe below the boot.
+# run: tools/tests/wait-bound-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(cd "$(dirname "$0")/../.." && pwd)" || exit 2
 W=mgmt/harness/e2e-wait.sh

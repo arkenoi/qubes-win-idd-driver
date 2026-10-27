@@ -29,6 +29,12 @@ set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 VM="${1:?usage: $0 <vm> - name the subject; there is no default target}"
 OUT="${2:-scratchpad/fi-monstale-$VM}"
+# A contaminated subject is refused BEFORE any work: this script's default output dir carries no
+# run-id, so a second attempt would otherwise append to the first attempt's artefacts and be read
+# back as one run. Pass a fresh outdir to run again.
+declare -F attempt_dir >/dev/null 2>&1 || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh"
+attempt_dir "$OUT" || exit 1
+
 say(){ printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 mkdir -p "$OUT" || exit 2
 

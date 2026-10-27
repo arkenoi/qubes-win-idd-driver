@@ -1,30 +1,7 @@
 #!/usr/bin/env bash
-# pipe-eof-selftest.sh - patches/windows-utils-pipe-eof.patch, checked OFFLINE. No guest, no CI.
-#
-# WHAT IT GUARDS. windows-utils' pipe server logged the normal END OF A CLIENT SESSION as
-# "[N] read failed" at WARNING, with GetLastError DISCARDED (its win_perror was commented out), so
-# an ordinary disconnect and a real fault printed the same line. This protocol has no goodbye
-# message - EOF IS the disconnect (qdb_close just closes the handles; qrexec-client-vm's last act
-# before exiting is CloseHandle(writePipe)) - so EVERY SUCCESSFUL SESSION ended there. Measured on
-# a German 25H2 guest after one install and three boots: 199 of those lines from qrexec-agent and
-# about 60 from the qubesdb daemon, 259 of the 766 error/warning lines in the whole log, every one
-# of them a success. The Linux side returns the same event silently (qubes-core-qubesdb db-cmds.c,
-# "/* EOF */ if (ret == 0) return 0;"), so this is a port artefact and not the design.
-#
-# THE FIX MAKES THE REAL CASES LOUDER, which is what keeps it from being a suppression:
-#   our own CancelIo               -> Debug  (we asked for it)
-#   peer closed the pipe           -> Debug  (the protocol's only goodbye)
-#   ANYTHING ELSE                  -> win_perror2 at ERROR *with the Win32 code* - the old warning
-#                                     did not even print the code
-#   peer gone with nothing pending -> Debug
-#   peer gone MID-MESSAGE          -> ERROR naming both byte counts - previously indistinguishable
-#                                     from a clean session end
-# Jev on the RCA: root_cause_established 0.92, fix_is_real 0.88, citations all verified.
-#
-# Four checks, in the shape tools/tests/svc-exitcode-selftest.sh established for a windows-utils
-# patch: the patch applies to the exact ref CI clones, the patched source carries every marker the
-# build step asserts, the OLD defect is gone, and - the half that makes this evidence rather than
-# decoration - the same marker checks are run against UNPATCHED source and MUST FAIL.
+# The pipe-EOF patch applies to the ref CI clones, carries every marker, and FAILS unpatched.
+# run: tools/tests/pipe-eof-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PATCHFILE="$ROOT/patches/windows-utils-pipe-eof.patch"

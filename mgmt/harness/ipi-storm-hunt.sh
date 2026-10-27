@@ -19,6 +19,8 @@
 #   VCPUS=<n>  set the guest's processor count first (the fix candidate under test)
 #
 # A WEDGE HERE IS THE POINT, not a failure of the run: the guest is left RUNNING and captured.
+declare -F toolstack_accept >/dev/null 2>&1 \
+  || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh" 2>/dev/null || true   # toolstack_accept: the one recorded shutdown request
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 VM="${VM:?set VM to the guest to stress}"
@@ -41,7 +43,7 @@ cputime(){ w_cpu_time "$VM"; }
 alive(){ grep -qa PONG <<< "$(timeout -k 5 45 ./tools/qtest run 'cmd /c echo PONG' 2>/dev/null)"; }
 
 if [ -n "${VCPUS:-}" ]; then
-  [ "$(state)" = Halted ] || { qvm-shutdown "$VM" >/dev/null 2>&1; for _ in $(seq 1 18); do [ "$(state)" = Halted ] && break; sleep 10; done; }
+  [ "$(state)" = Halted ] || { toolstack_accept "$VM" >/dev/null 2>&1; for _ in $(seq 1 18); do [ "$(state)" = Halted ] && break; sleep 10; done; }
   qvm-prefs "$VM" vcpus "$VCPUS" && say "vcpus set to $VCPUS (the fix candidate under test)"
 fi
 [ "$(state)" = Running ] || { say "starting $VM"; qvm-start "$VM" >/dev/null 2>&1; }

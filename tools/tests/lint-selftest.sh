@@ -1,13 +1,7 @@
 #!/bin/bash
-# SELF-TEST for tools/lint-harness.py — every lint must be SEEN TO FIRE.
-#
-# H5 applied to the linter. A lint that has never gone red is exactly the unproven check the
-# linter exists to find; shipping one would be the same disease one level up. So: build a fixture
-# tree containing a deliberate violation of each rule, run the lints against it, and require the
-# matching lint to appear. Then build a CLEAN fixture and require silence, so a lint that fires
-# unconditionally is caught too.
-#
-#   tools/tests/lint-selftest.sh
+# every lint in tools/lint-harness.py must be SEEN TO FIRE, and stay silent on the correct shape
+# run: tools/tests/lint-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(dirname "$0")/../.."   # the checkout this selftest lives in (a worktree included), not a fixed path
 LINT=tools/lint-harness.py
@@ -522,35 +516,35 @@ expect_silent L31-qemu-args-not-one-writer "$D" "logvol-lib.sh, which is the one
 
 # ---------------------------------------------------------------- L32 producer for every test file
 D="$TMP/l32"; mk "$D"; mkdir -p "$D/tools/tests"
-printf 'registered-selftest.sh\n' > "$D/tools/tests/offline-suites.txt"
+printf 'registered-selftest.sh\n' > "$D/tools/tests/product-suites.txt"
 printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/registered-selftest.sh"
 printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/nobody-runs-me-selftest.sh"
 expect_fires L32-producer-missing "$D" "a selftest in neither list"
 
 # the SPELLING must not be what saves a file - this is the census error the rule exists to stop
 D="$TMP/l32b"; mk "$D"; mkdir -p "$D/tools/tests"
-printf 'registered-selftest.sh\n' > "$D/tools/tests/offline-suites.txt"
+printf 'registered-selftest.sh\n' > "$D/tools/tests/product-suites.txt"
 printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/registered-selftest.sh"
 printf '#!/usr/bin/env python3\n' > "$D/tools/tests/some-audit.py"
 expect_fires L32-producer-missing "$D" "a .py test file in neither list (not the *-selftest.sh spelling)"
 
 # a declaration with no reason is an allowlist entry, and those rot
 D="$TMP/l32c"; mk "$D"; mkdir -p "$D/tools/tests"
-: > "$D/tools/tests/offline-suites.txt"
+: > "$D/tools/tests/product-suites.txt"
 printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/rig-only-selftest.sh"
 printf 'rig-only-selftest.sh\n' > "$D/tools/tests/not-in-the-gate.txt"
 expect_fires L32-producer-missing "$D" "declared out of the gate with no reason"
 
 # a declaration naming a file that is gone has rotted
 D="$TMP/l32d"; mk "$D"; mkdir -p "$D/tools/tests"
-: > "$D/tools/tests/offline-suites.txt"
+: > "$D/tools/tests/product-suites.txt"
 printf 'deleted-selftest.sh   needs the rig: drives a real guest\n' > "$D/tools/tests/not-in-the-gate.txt"
 expect_fires L32-producer-missing "$D" "declaration naming a file that no longer exists"
 
 # a git hook in tools/hooks/ runs suites, so it IS a producer - a non-recursive glob flagged 8
 # files the hooks do run
 D="$TMP/l32f"; mk "$D"; mkdir -p "$D/tools/tests" "$D/tools/hooks"
-: > "$D/tools/tests/offline-suites.txt"
+: > "$D/tools/tests/product-suites.txt"
 printf '#!/bin/bash
 : ok
 ' > "$D/tools/tests/hook-runs-me-selftest.sh"
@@ -561,7 +555,7 @@ expect_silent L32-producer-missing "$D" "a git hook in tools/hooks names it"
 
 # a SIBLING suite naming another does not run it - that chain has to be declared, so it is visible
 D="$TMP/l32g"; mk "$D"; mkdir -p "$D/tools/tests"
-: > "$D/tools/tests/offline-suites.txt"
+: > "$D/tools/tests/product-suites.txt"
 printf '#!/bin/bash
 : ok
 ' > "$D/tools/tests/sib-a-selftest.sh"
@@ -575,7 +569,7 @@ expect_fires L32-producer-missing "$D" "named only by a sibling suite in tools/t
 # while its own comment said prose runs nothing - and a comment inside tools/foo.sh is prose too.
 # Dropping whole-line comments raised the orphan count by 18.
 D="$TMP/l32h"; mk "$D"; mkdir -p "$D/tools/tests"
-: > "$D/tools/tests/offline-suites.txt"
+: > "$D/tools/tests/product-suites.txt"
 printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/commented-selftest.sh"
 printf '#!/bin/bash\n# bash tools/tests/commented-selftest.sh\n: nothing\n' > "$D/tools/run-suites.sh"
 expect_fires L32-producer-missing "$D" "named only by a COMMENTED-OUT call in a real producer"
@@ -583,7 +577,7 @@ expect_fires L32-producer-missing "$D" "named only by a COMMENTED-OUT call in a 
 # ...and the SAME tree with that one line uncommented must be silent. Without this pair the leg
 # above could pass because tools/run-suites.sh is never scanned at all, which would prove nothing.
 D="$TMP/l32h2"; mk "$D"; mkdir -p "$D/tools/tests"
-: > "$D/tools/tests/offline-suites.txt"
+: > "$D/tools/tests/product-suites.txt"
 printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/commented-selftest.sh"
 printf '#!/bin/bash\nbash tools/tests/commented-selftest.sh\n' > "$D/tools/run-suites.sh"
 expect_silent L32-producer-missing "$D" "the same producer with the call UNcommented - the pair that makes the leg above mean something"
@@ -593,7 +587,7 @@ expect_silent L32-producer-missing "$D" "the same producer with the call UNcomme
 # fragment) and lose the producer instead of the mention. So a TRAILING-comment mention survives.
 # If that is ever tightened, this leg is the thing that has to be changed on purpose.
 D="$TMP/l32i"; mk "$D"; mkdir -p "$D/tools/tests"
-: > "$D/tools/tests/offline-suites.txt"
+: > "$D/tools/tests/product-suites.txt"
 printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/trailing-selftest.sh"
 printf '#!/bin/bash\n: ok   # see tools/tests/trailing-selftest.sh\n' > "$D/tools/run-suites.sh"
 expect_silent L32-producer-missing "$D" "a TRAILING-comment mention, the residue the rule declares"
@@ -601,7 +595,7 @@ expect_silent L32-producer-missing "$D" "a TRAILING-comment mention, the residue
 # WORD BOUNDARY, not substring: every error in this rule's history has been the flattering one, and
 # a near-miss name reading as coverage is the flattering one here.
 D="$TMP/l32j"; mk "$D"; mkdir -p "$D/tools/tests"
-: > "$D/tools/tests/offline-suites.txt"
+: > "$D/tools/tests/product-suites.txt"
 printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/near-selftest.sh"
 printf '#!/bin/bash\nbash tools/tests/xnear-selftest.sh\n' > "$D/tools/run-suites.sh"
 expect_fires L32-producer-missing "$D" "a producer naming xnear-selftest.sh while near-selftest.sh is the file"
@@ -615,7 +609,7 @@ D="$TMP/l34a"; mk "$D"; mkdir -p "$D/tools/tests"
   printf '#   some-selftest.sh    needs the rig\n'
   printf '# A later top-level paragraph, added after the sort.\n'
   printf '#       and here is the continuation that belongs to some-selftest.sh\n'
-  printf 'registered-selftest.sh\n'; } > "$D/tools/tests/offline-suites.txt"
+  printf 'registered-selftest.sh\n'; } > "$D/tools/tests/product-suites.txt"
 printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/registered-selftest.sh"
 expect_fires L34-header-continuation-orphaned "$D" "a continuation line separated from its entry by a top-level paragraph"
 
@@ -625,7 +619,7 @@ D="$TMP/l34b"; mk "$D"; mkdir -p "$D/tools/tests"
   printf '#   some-selftest.sh    needs the rig\n'
   printf '#       and here is the continuation that belongs to some-selftest.sh\n'
   printf '# A later top-level paragraph, added after the sort.\n'
-  printf 'registered-selftest.sh\n'; } > "$D/tools/tests/offline-suites.txt"
+  printf 'registered-selftest.sh\n'; } > "$D/tools/tests/product-suites.txt"
 printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/registered-selftest.sh"
 expect_silent L34-header-continuation-orphaned "$D" "the same lines with the continuation under its entry"
 
@@ -634,13 +628,13 @@ expect_silent L34-header-continuation-orphaned "$D" "the same lines with the con
 D="$TMP/l34c"; mk "$D"; mkdir -p "$D/tools/tests"
 { printf '#   some-selftest.sh    needs the rig\n'
   printf '#       its reason, under it\n'
-  printf 'a-selftest.sh\nb-selftest.sh\nz-selftest.sh\n'; } > "$D/tools/tests/offline-suites.txt"
+  printf 'a-selftest.sh\nb-selftest.sh\nz-selftest.sh\n'; } > "$D/tools/tests/product-suites.txt"
 for n in a b z; do printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/$n-selftest.sh"; done
 expect_silent L34-header-continuation-orphaned "$D" "sorted NAMES below a well-formed header"
 
 # and the correct shape must be silent, or the lint is noise
 D="$TMP/l32e"; mk "$D"; mkdir -p "$D/tools/tests"
-printf 'registered-selftest.sh\n' > "$D/tools/tests/offline-suites.txt"
+printf 'registered-selftest.sh\n' > "$D/tools/tests/product-suites.txt"
 printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/registered-selftest.sh"
 printf '#!/bin/bash\n: ok\n' > "$D/tools/tests/rig-only-selftest.sh"
 printf 'rig-only-selftest.sh   needs the rig: drives a real Windows guest\n' > "$D/tools/tests/not-in-the-gate.txt"

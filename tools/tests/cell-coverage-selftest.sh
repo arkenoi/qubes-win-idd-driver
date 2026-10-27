@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# cell-coverage-selftest.sh - tools/check-cell-coverage.sh must PASS on the repo as it is and FAIL on each drift it exists to catch:
-#   1. a matrix cell the gate requires dropped from the runner's CELLS_DEFAULT;
-#   2. a feature test the gate requires (tools/release-feature-tests.txt) with no arm in the runner's case;
-#   3. the runner no longer reading the shared feature list.
-# Each defect is applied to a throwaway copy of the three files in a temp git repo - the real files are never touched.
+# check-cell-coverage.sh passes the repo as it is and FAILS on each of the three drifts it catches.
+# run: tools/tests/cell-coverage-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 T=$(mktemp -d "${TMPDIR:-/tmp}/ccc-selftest.XXXXXX") || exit 2

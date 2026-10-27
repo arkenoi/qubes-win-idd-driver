@@ -144,7 +144,14 @@ def l2_vmlock_required() -> None:
         # two qtest calls - from a harness that already holds the guest's lock. It exists as its own
         # file precisely so prime-run.sh can source it without sourcing e2e-wait.sh; while it lived
         # in the latter, the call resolved to nothing (RTCCALLUNRESOLVED).
-        if f.name in ("shutdown-lib.sh", "wu-liveness.sh", "logvol-lib.sh", "rtc-lib.sh"):
+        # primitives.sh joined on 2026-10-27, for rtc-lib.sh's reason exactly: it is the sourced
+        # library the 15-step refactor sealed the six primitives into, and clock_correct,
+        # package_identity and fresh_cell_log all drive the guest its CALLER already locked
+        # (matrix.sh, quick-upgrade.sh, campaign-preflight.sh). vmlock exposes no held-predicate,
+        # so a library cannot assert the lock without reading vmlock's internals, and taking the
+        # lock itself would contend with the harness that owns the subject.
+        if f.name in ("shutdown-lib.sh", "wu-liveness.sh", "logvol-lib.sh", "rtc-lib.sh",
+                      "primitives.sh"):
             continue
         finding("L2-missing-vmlock", f.name,
                 "drives a guest via tools/qtest but never calls vm_lock")
@@ -459,11 +466,12 @@ def l32_every_test_file_has_a_producer() -> None:
     tdir = ROOT / "tools" / "tests"
     if not tdir.is_dir():
         return
-    listed = tdir / "offline-suites.txt"
     registered: set[str] = set()
-    if listed.exists():
-        registered = {ln.strip() for ln in listed.read_text(errors="replace").splitlines()
-                      if ln.strip() and not ln.lstrip().startswith("#")}
+    for base in ("product-suites.txt", "harness-suites.txt"):
+        listed = tdir / base
+        if listed.exists():
+            registered |= {ln.strip() for ln in listed.read_text(errors="replace").splitlines()
+                           if ln.strip() and not ln.lstrip().startswith("#")}
     # The declaration file: "<name>   <reason>". The reason is REQUIRED - a bare name would make
     # this an allowlist, and an allowlist with no reasons is how an exclusion rots.
     decl = tdir / "not-in-the-gate.txt"
@@ -527,7 +535,7 @@ def l32_every_test_file_has_a_producer() -> None:
             continue
         finding("L32-producer-missing", f"tools/tests/{p.name}",
                 "nothing runs this file: no CI workflow, gate or script names it, it is not in "
-                "offline-suites.txt, and it is not declared in not-in-the-gate.txt with a reason. "
+                "product-suites.txt or harness-suites.txt, and it is not declared in not-in-the-gate.txt. "
                 "An unrun test rots red unnoticed - that is how a backlog of them accumulated here "
                 "(SUITESNOBODYRUNS). The live count is whatever this rule prints; a figure copied "
                 "into prose is the thing that rots")
@@ -613,7 +621,8 @@ def l33_pwsh_is_located_in_one_place() -> None:
 # this is decidable from two adjacent lines. Any sort of the header necessarily moves a
 # continuation away from its entry, because entries and their continuations differ in indent.
 def l34_suite_list_header_keeps_its_shape() -> None:
-    for rel in ("tools/tests/offline-suites.txt", "tools/tests/not-in-the-gate.txt"):
+    for rel in ("tools/tests/product-suites.txt", "tools/tests/harness-suites.txt",
+                "tools/tests/not-in-the-gate.txt"):
         p = ROOT / rel
         if not p.exists():
             continue

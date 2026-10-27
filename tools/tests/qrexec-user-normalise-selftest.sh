@@ -1,26 +1,7 @@
 #!/usr/bin/env bash
-# qrexec-user-normalise-selftest.sh - RELAYLOGONSYSTEM (findings/issues.md), OFFLINE: no guest, no CI, no
-# Windows compiler. qrexec-agent's StartChild must map a request for the service's own account ("SYSTEM",
-# dom0's "root", any case) to qrexec-wrapper's own-token spelling "(null)" on EVERY path, in ONE place.
-#
-# WHAT IT GUARDS. Measured 2026-10-10 on win10-acc: the guest-originated qrexec-client-vm path handed the
-# literal "SYSTEM" to qrexec-wrapper, which called LogonUser("SYSTEM") and got 0x52e, so the dom0 toast relay
-# never started and every notification raised in that state was lost. The dom0-originated exec path had its
-# own copy of the mapping since 2014 (ParseUtf8Command), so the same string meant two things depending on
-# which side asked. Jev (scratchpad/jev-relayfix-answers.json): where_to_normalise = startchild-shared 0.96.
-#
-# Runs on this dev qube with gcc + the read-only windows-utils mirror:
-#   shape    one producer of the wrapper command line; StartChild resolves the account through
-#            NormalizeUserName; the two SYSTEM/root literals exist in that one function and nowhere else
-#            (the dom0-only copy is gone); the match is case-insensitive and NULL-guarded; three call sites
-#   probe    glibc's wide printf prints "(null)" for a NULL argument, as MSVC's does - what the stub models
-#   clean    tools/tests/qrexec-user-normalise-test.c against the WORKING-TREE StartChild MUST pass
-#   prefix   the same suite against the PRE-FIX revision's StartChild MUST fail, and only on the cases the
-#            defect breaks ("pseudo:" cases) - a guard never seen to fail is decoration
-#   knob     the fixed source with the normaliser call cut out MUST fail the same way
-#
-#   WINDOWS_UTILS_SRC=<path>   the mirror checkout (default: $ROOT/upstream/ro/qubes-windows-utils; missing = FAIL)
-#   QUN_OUT=<dir>              where the builds and outputs go (default: a mktemp dir)
+# qrexec-agent maps SYSTEM/root to the wrapper's own-token spelling on EVERY path, in ONE place.
+# run: tools/tests/qrexec-user-normalise-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SRC="$ROOT/core-agent/src/qrexec-agent/qrexec-agent.c"

@@ -1,18 +1,7 @@
 #!/usr/bin/env bash
-# pwcarry-selftest.sh - offline proof matrix for the rebuild content carry-over (the black-blink fix).
-#
-# Runs on this dev qube with gcc alone (no rig, no guest):
-#   clean build            MUST pass
-#   PWCARRY_DEFECT_* build MUST fail - a guard never seen to fail is decoration.
-#
-# The defects are the near-miss versions this fix could plausibly have shipped as:
-#   ZEROOFFSET   copy from the old buffer's (0,0) instead of the screen-space overlap - the
-#                obvious implementation, which lands a crop-snapped toast shifted by its shadow
-#                inset (a jittering flash instead of a black one)
-#   NOINTERSECT  copy min(w) x min(h) from (0,0) with no intersection at all
-#   SAMEBUFFER   drop the src==dst guard, so a slab handed straight back shreds its own pixels
-#   NOFILL       leave the newly-exposed area of a GROWTH zeroed - which is the owner's "second
-#                one in the same window gets black for a moment"
+# The rebuild content carry-over: the clean build passes and EVERY near-miss defect build FAILS.
+# run: tools/tests/pwcarry-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # RAM-BACKED /tmp, AND THIS LEAKED A DIRECTORY PER RUN. /tmp here is a 1 GB tmpfs on a 4 GB

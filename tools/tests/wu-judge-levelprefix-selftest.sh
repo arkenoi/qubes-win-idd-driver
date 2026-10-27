@@ -1,25 +1,7 @@
 #!/usr/bin/env bash
-# wu-judge-levelprefix-selftest.sh - the WU pass judge must read EVERY level form the writer emits.
-#
-# WHY. tools/wu-pass-judge.py decided "did this pass tell dom0 the truth" from
-#     ERROR = re.compile(r"^ERROR:\s*(.+)$")
-# anchored at the FRONT of the message. On 2026-10-14 e4162c79 ("read the severity the writer
-# declared") changed the writer to put its level exactly there: guest/qubes-windows-update.ps1 now
-# emits `Log "[ERROR] $($script:St.error)"`. "[ERROR] " does not match "^ERROR:", so every error
-# line went invisible at once - and `errors` is what drives silent, contradictory AND whether Jev is
-# consulted at all. One unmatched prefix turned the whole judge off, in silence.
-#
-# IT HAPPENED FOR REAL, in a release gate. Release 4.3.36's template-update cell ran 7 Windows
-# Update rounds on win11de-tup that all died in Ensure-Proxy without reporting to dom0, and the
-# judge graded them "errored=0 silent=0 verdict: PASS" three times; the cell reported
-# "DONE: rounds=3 fails=0". A guest whose updater was dead passed the gate for three days.
-#
-# The fixtures below are VERBATIM captured lines - the 4.3.36 round-1 capture and the German 25H2
-# evidence capture - not constructed ones. A grader only ever run on its author's fixtures grades
-# the author.
-#
-# Legs: no env = clean, every check must PASS. WUPASS_DEFECT=levelprefix restores the 2026-10-14
-# blindness and the bracketed-form checks must then FAIL and only those.
+# the WU pass judge must read EVERY level form the writer emits.
+# run: tools/tests/wu-judge-levelprefix-selftest.sh
+# pass: exit 0
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
 J="${WU_JUDGE:-$HERE/tools/wu-pass-judge.py}"

@@ -1,23 +1,7 @@
 #!/usr/bin/env python3
-"""Drive tools/wu-exclusion-evidence.py on a synthetic wu-e2e run, clean and with each defect knob.
-
-The builder feeds the release gate's exclusion audit (tools/wu-exclusion-audit.py --evidence): what it counts and matches here is what
-Jev judges there. Its deterministic parts are checked against a fixture shaped like the rz35 template-update run (2026-10-03):
-  - every round that offered an item is listed and labelled EXCLUDED / counted by the audit's own predicate (KB2267602: counted in
-    rounds 1 and 3, excluded in round 2);
-  - for each EXCLUDED round, that round's offered version is compared with the artefact the harness measured after the pass, and the
-    before/after movement is stated (MATCH / BEHIND; KB5007651 against the Windows Security PLATFORM - the version folder CoreLocation
-    names, or 'inbox' - never against the SecHealthUI app, which was at the offered build over an uninstalled platform on the rz35
-    subject, 2026-10-03);
-  - an item with no known artefact is looked up in Get-HotFix by EXACT id (KB5099999 is a substring of KB50999990);
-  - an excluded round whose facts are incomplete (no end marker; Defender not yet loaded; no platform fact) refuses with exit 2 -
-    missing data fails; a round that excluded nothing needs no facts.
-  - a guest-written value that is not the shape of its fact (free text in a version field) is dropped, so it reads as missing and never
-    reaches the judge's prompt - the guest is untrusted.
-A check never seen to fail is decoration (CLAUDE.md): WUEV_DEFECT=nolabel (no round marked excluded), WUEV_DEFECT=substr (substring
-hotfix lookup) and WUEV_DEFECT=noshape (guest values passed through unchecked) must each fail exactly the checks they target. Exit 0 only if the clean leg passes and every knob fails its target.
-No rig, no Jev, no network.
-"""
+# every offered round is listed and labelled, and an EXCLUDED round with incomplete facts REFUSES
+# run: python3 tools/tests/wu-exclusion-evidence-selftest.py
+# pass: exit 0
 import json, os, subprocess, sys, tempfile
 from pathlib import Path
 

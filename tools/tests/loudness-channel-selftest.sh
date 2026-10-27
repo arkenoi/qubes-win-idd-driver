@@ -1,21 +1,7 @@
 #!/bin/bash
-# loudness-channel-selftest.sh - a failure the USER CAN SEE is P1, so the sweep must read that channel.
-#
-# WHY. On 2026-10-14 the sweep graded five breaches for one acceptance cell and labelled every one
-# P2, from a table of structural metrics. The owner saw the failure on his screen: "it IS fucking p1
-# because it is a loud failure. and you do not even know it is loud, WHY". The answer to WHY was
-# that nothing in this tool read the channel on which a condition reaches the user - it derived
-# severity from counts and thresholds, which cannot know what was displayed.
-#
-# Put to Jev with that rule as the premise, the channel was named at 0.99 confidence:
-# dom0_notifications - what dom0 was ASKED TO DISPLAY. Nothing else establishes the user saw
-# anything. The same call judged the agent-relaunch breach loud_likely_unproven (0.80): the path
-# that would show it is installed, so the channel has to be collected before severity can be settled.
-#
-# AND THE JUDGEMENT IS JEV'S, NOT A REGEX'S. My first attempt split the candidates with a second
-# pattern and called "NOTIFHOST launched via Task Scheduler ... args:" a user-visible failure,
-# because its arguments mention a notify-errors path. Classifiers belong to Jev on this project;
-# the regex here is only a cheap prefilter.
+# A failure the USER CAN SEE is P1, so the sweep reads the dom0-notification channel.
+# run: tools/tests/loudness-channel-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 2
 

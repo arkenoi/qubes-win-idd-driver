@@ -15,6 +15,8 @@
 # Poll cadence is deliberately >= 15 s: per-second qrexec churn is what wedged a guest before
 # (IPI shootdown, see FINDINGS), so these must not become tight loops.
 
+declare -F toolstack_accept >/dev/null 2>&1 \
+  || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh" 2>/dev/null || true   # toolstack_accept: the one recorded shutdown request
 STALL_SECS=${STALL_SECS:-300}
 
 # IS THE GUEST EXECUTING? cpu_time is CUMULATIVE, so a domain that runs anything at all increases
@@ -811,7 +813,7 @@ w_drain_and_shutdown(){ # $1=vm $2=logfn
   fi
 
   qvm-prefs "$vm" qrexec_timeout 15 >/dev/null 2>&1
-  qvm-shutdown "$vm" >/dev/null 2>&1
+  toolstack_accept "$vm" >/dev/null 2>&1
   sleep 2
   qvm-prefs "$vm" qrexec_timeout "$prev" >/dev/null 2>&1
 }

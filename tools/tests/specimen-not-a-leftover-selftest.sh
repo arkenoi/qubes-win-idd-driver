@@ -1,15 +1,7 @@
 #!/bin/bash
 # THE MOST DESTRUCTIVE PATH IN THE HARNESS MUST ASK WHETHER THE GUEST IS EVIDENCE.
-#
-# prime-run.sh's pre-clean kills the churn subject and then qvm-removes it. It consulted nothing
-# before doing so. On 2026-10-20 a reliably captured wedge specimen was lost because a campaign
-# recreated the guest two minutes after it had been classified - this is the shape of that loss, and
-# the marker that exists to prevent it (specimen-lib, read by tools/hooks/golden-boot-gate.sh) was
-# never read here.
-#
-# mgmt/harness/evidence-lock.sh looks purpose-built for this. MEASURED 2026-10-21: all five of its
-# functions have ZERO consumers and no file sources it - it is dead code. This suite asserts the
-# guard uses the LIVE mechanism, and reports the dead one rather than quietly wiring it.
+# run: tools/tests/specimen-not-a-leftover-selftest.sh
+# pass: exit 0
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PASS=0; FAIL=0

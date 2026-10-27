@@ -1,15 +1,7 @@
 #!/bin/bash
 # EVERY VERDICT THE CLASSIFIER CAN EMIT MUST BE HANDLED WHERE IT IS CONSUMED.
-#
-# wedge-lib.sh prints `SPIN <f>`, `BLOCKED <f>` or `UNREADABLE -`. e2e-wait.sh branched on
-# `SPINNING)` - a token that has never been emitted - so for every real spin wedge the arm that
-# says "DO NOT KILL, REVERT OR CLONE OVER THIS GUEST" was dead and the verdict fell to the
-# catch-all. That arm's own text recorded three specimens lost to cleanup; on 2026-10-20 a fourth
-# was lost the same way, run 39225775322 WIN10-clean: `forensics verdict 'SPIN 1.01'` printed by
-# the catch-all, the campaign cloned over the guest two minutes later, memory image gone.
-#
-# The predicate is the property: the tokens are extracted from the EMITTER and each is required to
-# match an arm of the CONSUMER's case, so a token added or renamed on either side fails here.
+# run: tools/tests/wedge-verdict-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 2
 pass=0; fail=0

@@ -1,14 +1,7 @@
 #!/usr/bin/env bash
-# wu-liveness-selftest.sh - offline proof for mgmt/harness/wu-liveness.sh's dead-pass verdict (findings/issues.md P1 "A KILLED
-# UPDATE PASS COSTS dom0 TWO SILENT HOURS": the harness must see a dead pass by itself, not through the product's handler).
-#
-# No rig, no guest: scripted WUPROBE lines on a scripted clock (WU_LIVE_NOW) through the shipped wu_pass_dead.
-#   no env              every scenario must come out as stated, AND the defect knob must make the killed-pass scenario FAIL
-#                       (a verdict never seen to fail is decoration). Exit 0 only if both hold.
-#   WU_LIVE_DEFECT=1    run the scenarios with both verdicts disabled (wu_pass_dead never fires, wu_pass_unfinished never says
-#                       "unfinished") and exit with their result - i.e. this test FAILS, by design.
-# The probe itself (the PowerShell half) cannot run here - it needs the guest's Task Scheduler - and is validated on the rig:
-# every probe line is kept in the run's evidence.
+# wu_pass_dead sees a KILLED update pass by itself, and never calls a slow or finished pass dead.
+# run: tools/tests/wu-liveness-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT" || exit 2

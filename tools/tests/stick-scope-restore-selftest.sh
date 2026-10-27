@@ -1,27 +1,7 @@
 #!/bin/bash
-# stick-scope-restore-selftest.sh - WHO GETS THE EVIDENCE STICK, and WHO HANDS THE REGISTRY BACK.
-#
-# THE OWNER'S TWO RULINGS, 2026-10-22:
-#   "log stick exists for install testing. on appvms and feature tests it has zero sense."
-#   "and restore registry entry post-install to make sure it does not point to stick?"
-#
-# WHAT THAT MEANS HERE, and what this suite executes:
-#   * an appvm cell touches NO stick primitive and is therefore never routed into the driver's
-#     --require-agent-logs proof, which an appvm cell cannot pass (the bind writes LogDir into HKLM,
-#     which lives on an AppVM's VOLATILE root; all three boots of run 39476792836 read back
-#     old='Q:\Qubes Logs', so the write never survived a reboot). That proof FATALed win10-appvm and
-#     stopped the 4.3.37 matrix at 4 of 8 cells.
-#   * an install cell binds as before AND, after its pull, puts LogDir back - on EVERY exit of the
-#     cell, success or failure, because matrix.sh is `set -uo pipefail` with no -e and every in-cell
-#     abort is a `return` that lands at the same per-cell join point.
-#   * quick-upgrade.sh is UNCHANGED and still binds: a wedge DURING an install is the one case the
-#     stick is readable for, and quick-upgrade is this project's short cycle.
-#
-# WHY IT IS BUILT THIS WAY. Nothing here greps matrix.sh for a call. The decision and the restore
-# call are EXTRACTED from the shipped file between paired markers and RUN, with the stick primitives
-# replaced by recorders and HKLM modelled as a two-value store - so a leg can tell a call that is
-# present from a call that runs, and can judge the registry's final value rather than a call count.
-# Every leg has a control that reintroduces the defect and turns this suite red.
+# WHO GETS THE EVIDENCE STICK, and WHO HANDS THE REGISTRY BACK on every exit of an install cell
+# run: tools/tests/stick-scope-restore-selftest.sh
+# pass: exit 0
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 2
 ROOT="$PWD"

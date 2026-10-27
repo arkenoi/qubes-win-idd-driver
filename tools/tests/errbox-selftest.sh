@@ -1,19 +1,7 @@
 #!/usr/bin/env bash
-# errbox-selftest.sh - offline proof matrix for THE ERROR WINDOW (docs/ADR-supervision.md section 6): when dom0 cannot
-# be told of a loud error, the route shows it as a system message box on the console session (agent/gui-agent/errbox.h,
-# WTSSendMessage); the agent accepts that box explicitly (main.c ErrBoxIsSystemBox, QGAERRBOX) and a restarted agent
-# announces it FIRST (agent/gui-agent/errbox-order.h). The route's own half - when the window is shown, under the same
-# dedupe and cap as the dom0 notification - is tools/tests/notifyerr-selftest.sh (knobs NOBOX and BOXSTORM in C, errbox
-# and errboxdedupe in PowerShell).
-#
-# Runs on this dev qube with gcc alone (no rig, no guest):
-#   clean build of gui-agent/errbox_order_test.c   MUST pass (the box first, bottom-first among boxes, the rest bottom-first)
-#   ERRBOX_DEFECT_NOFIRST                           MUST fail (plain bottom-first: the box is announced wherever it sits)
-#   UNCOMPILED SHAPE CHECKS of main.c and notifhost.cpp, each also run against a copy with the guarded line removed and
-#   required to FAIL then: the predicate is explicit (class, title prefix, owning image) and logs QGAERRBOX; it is
-#   consulted in ShouldAcceptWindow before any dropping rule; AddAllWindows announces through ErrBoxAnnounceOrder; the
-#   title prefix is ONE constant; notifhost's own report shows the box when gated or when its transport fails.
-#   AGENT_DIR=<path>   the agent checkout (default: the agent submodule)   ERRBOX_OUT=<dir>   outputs (default: mktemp)
+# THE ERROR WINDOW: a loud error dom0 cannot be told of shows on the console, announced FIRST.
+# run: tools/tests/errbox-selftest.sh
+# pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 AGENT="${AGENT_DIR:-$ROOT/agent}"
