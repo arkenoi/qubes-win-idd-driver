@@ -341,6 +341,24 @@ _matrix_stamp_inherited_artefacts(){ # <dir> <attempt-id> -> stamps, prints what
   printf 'inherited-artefacts-stamped=%d dir=%s attempt=%s\n' "$n" "$d" "$id"
 }
 MATRIX_ATTEMPT="${MATRIX_ATTEMPT:-$(attempt_id)}"
+# ONE ATTEMPT ACROSS THIS PROCESS TREE TOO, for a matrix run started directly rather than by
+# release-acceptance (which exports the same pair). attempt_id memoises per main-shell pid, so
+# without this a child would mint its own id and every attempt-keyed gate below would read this
+# run's own continuation as a foreign attempt.
+export RUN_ID="$MATRIX_ATTEMPT"
+# A PREVIOUS CAMPAIGN'S $M IS REFUSED; THIS CAMPAIGN'S IS REUSED. release-acceptance.sh passes
+# MATRIX_OUT="$CAMP/matrix", so $M is deliberately re-entered - and with RUN_ID exported above
+# that re-entry carries the SAME attempt id and passes straight through. Only a dir left by a
+# DIFFERENT campaign is refused, which is the owner's rule exactly: reuse a continuation, never
+# contaminate with a previous one. To continue a dead campaign deliberately, pass its
+# ACCEPT_ATTEMPT/MATRIX_ATTEMPT; that makes the continuation explicit instead of accidental.
+#
+# The boundary stamp below is NOT this protection and never was. Measured: the only readers of
+# "=== ATTEMPT BOUNDARY" in the whole repo are the two selftests that prove it is written - no
+# grader, judge, sweep or record builder scopes its parsing to it, so every machine consumer
+# reads straight across it. The stamp attributes lines for a HUMAN; attempt_dir is what stops a
+# previous campaign being read as this one (open P1 MATRIXARTEFACTSPANSRUNS is that symptom).
+attempt_dir "$M" || exit 2
 _matrix_stamp_inherited_artefacts "$M" "$MATRIX_ATTEMPT" >/dev/null
 # MATTEMPT-B
 # THE CAMPAIGN'S OWN IDENTITY, for the things that must not be written by anything but a campaign.

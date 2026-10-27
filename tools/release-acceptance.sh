@@ -284,6 +284,15 @@ _ra_stamp_inherited "$ACCEPT_ATTEMPT" "$LOG" "$CAMP/runner.log" $WORK/*.out >/de
 # ONE attempt id across both layers, so a reader joining a campaign log to a cell artefact is
 # matching the same string rather than two clocks.
 export MATRIX_ATTEMPT="$ACCEPT_ATTEMPT"
+# AND THE SAME ID AS RUN_ID, WHICH IS WHAT CROSSES A PROCESS BOUNDARY. attempt_id memoises in
+# ${TMPDIR}/qwt-attempt-$$.id keyed on the MAIN SHELL pid, so a child script computes its OWN
+# id: measured, a leader and its child one second apart returned ...43 and ...54. Every gate
+# built on attempt_id (attempt_dir, attempt_check, complete_once, fresh_cell_log's cell-<id>)
+# would therefore read a campaign's own continuation as a FOREIGN attempt and refuse it - the
+# inverse of the rule. attempt_id returns an inherited RUN_ID first, so exporting it here makes
+# the whole child tree one attempt: a continuation REUSES, a previous campaign is REFUSED.
+# MATRIX_ATTEMPT stays as the explicit transport it has always been; this generalises it.
+export RUN_ID="$ACCEPT_ATTEMPT"
 # RAATTEMPT-B
 
 # ---- 3c. THE BIND IS SMOKE-TESTED BEFORE THE EIGHT CELLS THAT COST HOURS ------------------------
