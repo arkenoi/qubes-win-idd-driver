@@ -2,3 +2,15 @@
 # is the artefact worth keeping; the payload is re-staged per release.
 */setup/
 */qubes-tools-*.exe
+
+# PER-RUN ARTEFACTS prime-run.sh STAGES INTO A JOB DIR, which is a tracked tree in a public repo.
+# JOBDIR="mgmt/prime-jobs/$JOB", and the run writes three kinds of file into it: a copy of
+# _common/fix-guest-clock.ps1 (:181), the host's true-UTC stamp hoststamp.txt (:183), and one empty
+# <name>.flag per --flag (:148). All three are rewritten by every prime and describe a guest that no
+# longer exists. Two of them sat in `git status` of this repo until 2026-10-27, one `git add -A`
+# from being published - which is the hazard the "never git add -A" rule exists to contain.
+# The job's onboot.cmd stays tracked; it is the artefact worth keeping.
+*/fix-guest-clock.ps1
+!_common/fix-guest-clock.ps1
+*/hoststamp.txt
+*/*.flag
