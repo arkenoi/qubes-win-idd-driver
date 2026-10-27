@@ -34,6 +34,12 @@ RUN=""; FIRUN=""; DRY=0
 # B10): a default target is wrong in almost every run, and a harness that guesses one churns a
 # guest the caller did not mean. Name them with --vm10/--vm11/--os11 or be refused below.
 VM10=""; VM11=""; OS11=""
+# --only <suite>: run ONE of the six and merge only that one. The receipt stays honest because the
+# merge below never writes a suite it did not see pass, so a narrowed run produces a narrowed
+# record, not a fuller one. It exists because this gate reserves the rig for every REQUIRED suite -
+# four of them on a typical range - and "re-exercise the one suite I just changed" was otherwise
+# only reachable by hand-driving the cell outside its orchestrator.
+ONLY=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --run)    RUN="${2:-}"; shift 2 ;;
@@ -41,6 +47,7 @@ while [ $# -gt 0 ]; do
     --vm10)   VM10="${2:-}"; shift 2 ;;
     --vm11)   VM11="${2:-}"; shift 2 ;;
     --os11)   OS11="${2:-}"; shift 2 ;;
+    --only)   ONLY="${2:-}"; shift 2 ;;
     --dry)    DRY=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -83,6 +90,16 @@ REQ=$(python3 tools/gate-scope.py required "$BASE..$HEAD" 2>/dev/null \
         | sed -n 's/^    \([a-z0-9][a-z0-9-]*\) .*/\1/p' | sort -u)
 [ -n "$REQ" ] || { say "ERROR: gate-scope named no suites - refusing to guess"; exit 2; }
 say "gate-scope requires: $(echo $REQ | tr '\n' ' ')"
+if [ -n "$ONLY" ]; then
+  if echo "$REQ" | tr ' ' '\n' | grep -qx "$ONLY"; then
+    say "--only $ONLY: running that suite alone; every other required suite is left UNRUN and this"
+    say "          receipt therefore cannot satisfy the full gate floor"
+  else
+    echo "ERROR: --only $ONLY is not in the required scope for $BASE..$HEAD, so running it could not" >&2
+    echo "       contribute to this receipt. Required: $(echo $REQ | tr '\n' ' ')" >&2
+    exit 2
+  fi
+fi
 
 # ---- the artifacts the suites consume ----------------------------------------------------------
 if [ "$DRY" = 1 ]; then
@@ -128,7 +145,12 @@ settle() {            # settle <vm-to-leave-alone>
     fi
   done
 }
-need() { echo "$REQ" | tr ' ' '\n' | grep -qx "$1"; }
+need() {
+  # --only still has to be REQUIRED: running a suite the scope does not ask for cannot contribute to
+  # this receipt, and silently accepting the name would read as "it ran and counted".
+  if [ -n "$ONLY" ]; then [ "$1" = "$ONLY" ] || return 1; fi
+  echo "$REQ" | tr ' ' '\n' | grep -qx "$1"
+}
 
 # THE ARTEFACT UNDER TEST MUST BE THE ONE INSTALLED (the evidence rule: running binary hash vs the
 # manifest). MEASURED 2026-10-09, and it invalidated a whole gate run: gate-preflight and log-sweep
@@ -507,9 +529,15 @@ say "skipped:$SKIPPED"
 if [ "$DRY" = 1 ]; then
   say "INTEND[dry] merge into $COVFILE:$INTENDED"
 else
-  python3 - "$COVFILE" "$RUN" "$HEAD12" "$PASSED" <<'PYMERGE'
+  # ONLY is passed in so a receipt ASSEMBLED PIECEMEAL says so. The merge has always UNIONED with
+  # whatever the file held, so a head can reach the floor across several invocations; --only does not
+  # change that but makes it cheap, and a reader of the receipt could not otherwise tell a single
+  # coherent campaign from four one-suite runs settled differently. Measured 2026-10-27: without this
+  # the receipt records only the suite names.
+  python3 - "$COVFILE" "$RUN" "$HEAD12" "$PASSED" "$ONLY" <<'PYMERGE'
 import json, os, sys
 out, run, head, passed = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4].split()
+only = sys.argv[5] if len(sys.argv) > 5 else ""
 rec = {}
 if os.path.exists(out):
     try:
@@ -520,7 +548,13 @@ suites = sorted(set(rec.get("suites") or []) | set(passed))
 rec["suites"] = suites
 rec.setdefault("package_run", run)
 rec.setdefault("built_from", head)
+if only:
+    narrowed = sorted(set(rec.get("narrowed_runs") or []) | {s for s in passed if s == only})
+    if narrowed:
+        rec["narrowed_runs"] = narrowed
 rec["note"] = ("merged by tools/gate-remainder.sh; names only suites seen to pass. "
+               + (("suites in narrowed_runs came from --only invocations, not one campaign. ")
+                  if rec.get("narrowed_runs") else "")
                + (rec.get("note") or ""))[:400]
 json.dump(rec, open(out, "w"), indent=1)
 print("receipt now names %d suite(s): %s" % (len(suites), " ".join(suites)))
