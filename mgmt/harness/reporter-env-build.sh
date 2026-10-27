@@ -27,7 +27,18 @@ OPENSHELL_EXE="${OPENSHELL_EXE:-scratchpad/openshell/OpenShellSetup_4_4_198.exe}
 OUT="${OUT:-scratchpad/reporter-env-$VM}"
 mkdir -p "$OUT" || exit 2
 export QTEST_VM="$VM"
-say(){ printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
+# DECLARE THE LEVEL. Without one this emitter's lines are unjudgeable and tools/sweep-gate.sh
+# reports `undeclared_ours` and exits 1 - it judged part of the run, so its silence means nothing.
+# This cost the 56bfc6b8 campaign its template-update step after every round PASSED. Same shape as
+# wu-e2e.sh log(), whose own header records the identical regression for its own 32 lines, including
+# the leading-whitespace strip: the house style for a sub-step is `say "  [WARN] ..."`, and testing
+# the token at position zero would stamp those INFO *and* WARN, declaring two levels.
+say(){ _lv="$*"; _lv="${_lv#"${_lv%%[![:space:]]*}"}"
+       case "$_lv" in
+         "[ERROR]"*|"[WARN]"*|"[WARNING]"*|"[INFO]"*|"[DEBUG]"*) _m="$*" ;;
+         *) _m="[INFO] $*" ;;
+       esac
+       printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$_m"; }
 
 # Which facts does this reporter ASSERT, and which of them can this script build?
 want(){ python3 - "$JSON" "$1" <<'PY'

@@ -290,7 +290,18 @@ if need p3a-etw-gate; then
     fi
   fi
   settle "${OS11}-p3a"
-  TOASTFIRE="$TF" run_it p3a-etw-gate bash mgmt/harness/p3a-etw-gate.sh "$SETUP" "${OS11}-p3a" "${OS11}-qwt"
+  # THE BASE IS A -base GOLDEN, NOT -qwt. This suite primes a FRESH guest and then asserts rule 1,
+  # "the artefact under test is what is actually installed" - and a -qwt golden ALREADY carries QWT,
+  # so prime-run's `ours` job installs nothing, qrexec answers, prime-run says "the job is genuinely
+  # finished" and the subject runs the GOLDEN's build. MEASURED 2026-10-27 on 56bfc6b8: win11r-p3a
+  # came up with notifhost.exe ee7dea7e against the package's 153d421f, the guest's captured
+  # qwt-improved-install.log was dated 2026-10-15 reporting package_version 4.3.35, and the hash was
+  # STILL ee7dea7e an hour later on a fresh boot - so it was not a race, nothing was installed.
+  # The suite's own header says base default win10-base, and .claude/skills/rig-cycle puts the
+  # clean-install path on prime-run FROM A BASE. gate-scope has never recorded this suite as
+  # covered (the best receipt, 4.3.35, is also missing it), which is what a suite that cannot
+  # reach its own precondition looks like from the outside.
+  TOASTFIRE="$TF" run_it p3a-etw-gate bash mgmt/harness/p3a-etw-gate.sh "$SETUP" "${OS11}-p3a" "${OS11}-base"
   note $? p3a-etw-gate
 else SKIPPED="$SKIPPED p3a-etw-gate"; fi
 

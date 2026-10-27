@@ -37,7 +37,14 @@ ROUNDS="${ROUNDS:-3}"
 LOG="${LOG:-/home/user/qwt-accept/template-update-test-$VM.log}"
 OUT="${OUT:-${LOG%.log}.d}"
 mkdir -p "$OUT"
-say(){ echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$LOG"; }
+# DECLARE THE LEVEL - see reporter-env-build.sh say() and wu-e2e.sh log() for why an undeclared
+# line makes tools/sweep-gate.sh exit 1 having judged only a fraction of the run.
+say(){ _lv="$*"; _lv="${_lv#"${_lv%%[![:space:]]*}"}"
+       case "$_lv" in
+         "[ERROR]"*|"[WARN]"*|"[WARNING]"*|"[INFO]"*|"[DEBUG]"*) _m="$*" ;;
+         *) _m="[INFO] $*" ;;
+       esac
+       echo "[$(date -u +%H:%M:%S)] $_m" | tee -a "$LOG"; }
 state(){ qvm-ls --raw-data --fields state "$1" 2>/dev/null; }
 halt(){ local i; [ "$(state "$VM")" = Halted ] && return 0
   qvm-check "$VM" >/dev/null 2>&1 || return 0   # never created (a preflight refusal): nothing to halt - rz35 waited 15 min here

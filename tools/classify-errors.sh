@@ -62,7 +62,20 @@ runs = [r for r in runs if len(r.split()) >= 2 and len(r) >= 12]
 # longest run spans the %s ("QGAVCHANFAIL vchan to domain") and matches nothing, while the
 # emitter sits at qrexec-wrapper.c:1440 and "xenstore node unreadable" finds it at once. Taking
 # only the longest reported that emitter as not present in this repository at all.
-print("\n".join(sorted(set(runs), key=len, reverse=True)))
+# AND A TAG IS A KEY, IN MESSAGE ORDER. The word-runs above split on everything that is not a
+# letter or a space, which SHREDS this project's own log anchors: QGAFAULT-INIT becomes
+# "QGAFAULT" + "INIT", two single words under the >=2-words/>=12-chars floor, so nothing survived
+# and agent/gui-agent/faultinject.c:234 was reported as "vendored code this repository does not
+# contain" - about a line this repo emits. These ALL-CAPS tags are deliberate grep anchors.
+# Message ORDER, not longest-first: a message's LEADING tag is its anchor while later caps tokens
+# are usually VALUES, and by length "QGA-FAULT-INJECTION" (from build=QGA-FAULT-INJECTION:on) beat
+# the anchor and matched the marker constant at :27 - a confident verdict about a comment.
+# Added LAST, so a real word-run still wins, and still matched LITERALLY in the tree, so this is
+# not the function-name fallback the comments refuse: a tag absent from the tree still says EXTERNAL.
+seen = []
+for t in re.findall(r'[A-Z][A-Z0-9]{3,}(?:-[A-Z0-9]+)*', m):
+    if len(t) >= 8 and t not in seen: seen.append(t)
+print("\n".join(sorted(set(runs), key=len, reverse=True) + seen))
 PYK
 )
   # FIND THE EMITTER BY ITS MESSAGE, NOT BY ITS FUNCTION NAME. This took the FIRST file that merely
@@ -97,7 +110,14 @@ PYK
         [ -n "$src" ] && break
       done
       if [ -n "$src" ]; then
-        ln=$(grep -nF -- "$_k" "$src" 2>/dev/null | head -1 | cut -d: -f1)
+        # THE EMITTING LINE, NOT THE FIRST MENTION. `head -1` took the first literal occurrence,
+        # which for a tag key is often a COMMENT, and Jev then answers about prose - the
+        # "judgement that looks real" the comments above refuse. Prefer an occurrence that is a
+        # LOGGING CALL; fall back to the first mention only when none is. SKIP/EXTERNAL untouched.
+        ln=$(grep -nF -- "$_k" "$src" 2>/dev/null |
+               grep -E 'Log(Error|Warning|Info|Debug|Verbose)\(|printf|echo |say |log ' |
+               head -1 | cut -d: -f1)
+        [ -n "$ln" ] || ln=$(grep -nF -- "$_k" "$src" 2>/dev/null | head -1 | cut -d: -f1)
         key="$_k"; break
       fi
     done <<< "$key"
