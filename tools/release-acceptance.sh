@@ -268,7 +268,15 @@ _ra_rotate_inherited_dir(){ # <attempt-id> <dir> -> moves it aside so this attem
   [ -d "$d" ] || return 0
   mv -f "$d" "$d.attempt-$id" && printf 'rotated %s -> %s.attempt-%s\n' "$d" "$d" "$id"
 }
-ACCEPT_ATTEMPT="${ACCEPT_ATTEMPT:-$(date -u +%Y%m%dT%H%M%SZ)}"
+# THE ATTEMPT ID IS attempt_id, NOT A THIRD CLOCK READ. This was the last of three independent
+# `date -u` derivations; matrix.sh dropped its own earlier today, and since this script exports
+# MATRIX_ATTEMPT below, a date-only string here OVERRODE matrix's attempt_id and put two
+# differently-shaped ids in one campaign. attempt_id memoises per main-shell pid, so both layers
+# now read the same string. shutdown-lib.sh loads primitives.sh with `|| true`, so a silent load
+# failure would leave this empty and stamp every artefact with no id at all - refuse instead.
+declare -F attempt_id >/dev/null 2>&1 \
+  || { echo "FATAL: primitives.sh did not load - no attempt id, so artefacts cannot be scoped" >&2; exit 2; }
+ACCEPT_ATTEMPT="${ACCEPT_ATTEMPT:-$(attempt_id)}"
 _ra_rotate_inherited "$ACCEPT_ATTEMPT" "$CAMP/full.out" >/dev/null
 for _d in "$WORK"/*.d; do _ra_rotate_inherited_dir "$ACCEPT_ATTEMPT" "$_d" >/dev/null; done
 # shellcheck disable=SC2086

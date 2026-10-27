@@ -34,7 +34,10 @@ footer_outs() { local n=0 f; for f in "$CAMP"/*.out; do [ -f "$f" ] || continue
   command grep -qa '^=== MATRIX: ' "$f" && n=$((n+1)); done; printf '%s\n' "$n"; }
 
 run_second_attempt() { # <extracted code>
-  ( set +u; eval "$1" ) >/dev/null 2>&1
+  # THE EXTRACTED REGION NOW DEFAULTS ACCEPT_ATTEMPT TO THE SEALED attempt_id and refuses if it
+  # is undefined, so the subshell sources primitives.sh. Not a stub: it is the real primitive,
+  # which is the point of one id across both layers.
+  ( set +u; . mgmt/harness/primitives.sh; eval "$1" ) >/dev/null 2>&1
   # the second attempt then writes its own matrix output, as tee -a does
   printf 'cells: win11-clean\n=== MATRIX: 3 passed, 0 failed ===\n' >> "$CAMP/full.out"
 }
