@@ -47,7 +47,8 @@
 #     (fire+purge, twins, pipe squatter — one variable each, run last, recovery re-proven).
 #   INSTRUMENT: a0-lib.sh verbatim (blog_len/blog_since offsets, path_state/hb_fresh, fire_*,
 #     showbanner, dismiss_toasts) + NEW: gflen/gfsince (path-generic guest-file offsets, for
-#     etw-proxy.log + the install log), amark/asince (the a0-p3-toast-split agent-log idiom),
+#     etw-proxy.log + the install log), p3a_amark/p3a_asince (a0-p3-toast-split.sh's amark/asince
+#     idiom, carrying a p3a_ prefix because the bodies diverged - see TOASTHELPERDIVERGENCE),
 #     enc_run (-EncodedCommand marker probes — the self-match-safe idiom), tf/tf_fire
 #     (toastfire, FIRED-confirmed like fire_raw), a heartbeat mtime sampler. Each probe is
 #     self-tested both directions in T0i before any verdict leans on it; each negative assert
@@ -151,10 +152,10 @@ declare -A TFAUMID=( [start-shortcut]='QubesToastfire.StartShortcut'
 PLOG=""   # resolved in T1 (LogDir + \etw-proxy.log)
 
 # ---------- extra instruments (same self-test discipline as a0-lib) --------------------------
-_ps_enc(){ printf '%s' "$1" | iconv -f UTF-8 -t UTF-16LE | base64 -w0; }
+p3a_ps_enc(){ printf '%s' "$1" | iconv -f UTF-8 -t UTF-16LE | base64 -w0; }
 # -EncodedCommand runner: the command line the console echoes is an opaque blob, so output
 # markers can never self-match (the a0-lib path_state/blog_len lesson).
-enc_run(){ qrun "powershell -NoProfile -EncodedCommand $(_ps_enc "$1")"; }
+enc_run(){ qrun "powershell -NoProfile -EncodedCommand $(p3a_ps_enc "$1")"; }
 # The proxy's pid from ITS OWNER'S record: the agent's "ETWPROXYSUP launched etwproxy.exe pid=N"
 # line (etwproxy.c), the last one in the current agent log, verified alive BY PID (tasklist /fi
 # "pid eq N" - Get-Process is unreliable on this guest, memory [[guest-desktop-on-display2]]).
@@ -188,24 +189,25 @@ gfsince(){ # $1=guest path $2=old line count. -EncodedCommand, NOT the blog_sinc
 plog_len(){ gflen "$PLOG"; }
 plog_since(){ gfsince "$PLOG" "$1"; }
 
-# gui-agent log offset + since (verbatim the a0-p3-toast-split.sh amark/asince idiom).
-amark(){
+# gui-agent log offset + since. Started as a copy of a0-p3-toast-split.sh's amark/asince and is no
+# longer one, which is why these carry a p3a_ prefix and that file's do not.
+p3a_amark(){
   local ps
   ps="\$d=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Invisible Things Lab\\Qubes Tools' -EA SilentlyContinue).LogDir; \$f=(Get-ChildItem \$d -Filter 'gui-agent-*.log' -EA SilentlyContinue | Sort-Object LastWriteTime -Desc | Select-Object -First 1); if (\$f) { (@(Get-Content \$f.FullName)).Count } else { 0 }"
   enc_run "$ps" | tr -d '\r' | grep -aoxE '[0-9]+' | head -1
 }
-asince(){ # $1=mark $2=pattern (simple match)
+p3a_asince(){ # $1=mark $2=pattern (simple match)
   local ps
   ps="\$d=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Invisible Things Lab\\Qubes Tools' -EA SilentlyContinue).LogDir; \$f=(Get-ChildItem \$d -Filter 'gui-agent-*.log' -EA SilentlyContinue | Sort-Object LastWriteTime -Desc | Select-Object -First 1); if (\$f) { \$all=@(Get-Content \$f.FullName); if (\$all.Count -gt $1) { \$all[$1..(\$all.Count-1)] | Select-String -Pattern '$2' -SimpleMatch | ForEach-Object { \$_.Line } } }"
   enc_run "$ps" | tr -d '\r'
 }
-# asince's stdout unavoidably rides the qtest-run CMD banner ("Microsoft Windows [Version..."
-# + the base64 -EncodedCommand echo), so any verdict TRAILER that embeds `asince | tail` picks
-# up banner tails (cosmetic FAIL-trailer pollution, rig 2026-09-05). asince_hits re-filters
-# locally to the pattern's own hits — use it wherever asince output lands in a verdict string
+# p3a_asince's stdout unavoidably rides the qtest-run CMD banner ("Microsoft Windows [Version..."
+# + the base64 -EncodedCommand echo), so any verdict TRAILER that embeds `p3a_asince | tail` picks
+# up banner tails (cosmetic FAIL-trailer pollution, rig 2026-09-05). p3a_asince_hits re-filters
+# locally to the pattern's own hits — use it wherever p3a_asince output lands in a verdict string
 # or an evidence file named after the pattern. Patterns must be regex-safe literals (all ours
 # are: plain words, digits, '='; the guest side already matched them with -SimpleMatch).
-asince_hits(){ asince "$1" "$2" | grep -a -- "$2"; }
+p3a_asince_hits(){ p3a_asince "$1" "$2" | grep -a -- "$2"; }
 
 # toastfire, run IN THE INTERACTIVE USER SESSION via run-as-user (toasts need one; per-user
 # registration only). The exe is NOT in the installed package (make-setup stages only
@@ -231,13 +233,13 @@ tf_fire(){ # FIRED-confirmed (the fire_raw discipline); logs INSTRUMENT loudly o
   return 1
 }
 
-coldboot(){ # $1=phase tag (verbatim the a0-p3-toast-split idiom)
+p3a_coldboot(){ # $1=phase tag (started as a0-p3-toast-split.sh's coldboot; diverged, hence p3a_)
   timeout -k 8 60 ./tools/qtest shutdown >/dev/null 2>&1
   w_halt "$VM" 300 "$1-halt" log || { QTEST_VM=$VM timeout -k 8 30 ./tools/qtest kill >/dev/null 2>&1; sleep 5; }
   timeout -k 8 60 ./tools/qtest start >/dev/null 2>&1
   w_usersession "$VM" 900 "$1-session" "$OUT" log
 }
-bridge_up(){ # heartbeat + connected past blog offset $1; return 0 = up (caller logs success),
+p3a_bridge_up(){ # heartbeat + connected past blog offset $1; return 0 = up (caller logs success),
   # nonzero = deadline (logged here). Wall caps 180s/120s: expected heartbeat ~30s after
   # session-up, connect seconds later; each probe is a ~55s-capped qrun, so the old
   # seq*sleep-only bounds (150s/60s nominal) could stretch to ~30/15 min (audit 2026-09-06).
@@ -247,14 +249,14 @@ bridge_up(){ # heartbeat + connected past blog offset $1; return 0 = up (caller 
     [ $(( SECONDS - t0 )) -ge 180 ] && break
     sleep 5
   done
-  [ -n "$ok" ] || { log "bridge_up: heartbeat wait exit=deadline t=$((SECONDS-t0))s (i=$i/30)"; return 1; }
+  [ -n "$ok" ] || { log "p3a_bridge_up: heartbeat wait exit=deadline t=$((SECONDS-t0))s (i=$i/30)"; return 1; }
   local t1=$SECONDS
   for i in $(seq 1 15); do
     blog_since "$1" | grep -qa "connected (server version" && return 0
     [ $(( SECONDS - t1 )) -ge 120 ] && break
     sleep 4
   done
-  log "bridge_up: connected wait exit=deadline t=$((SECONDS-t1))s (i=$i/15; heartbeat was present)"
+  log "p3a_bridge_up: connected wait exit=deadline t=$((SECONDS-t1))s (i=$i/15; heartbeat was present)"
   return 1
 }
 # ETW tier up: proxy LIVE in etw-proxy.log past $1 + bridge 'ETW IPC connected' past blog $2.
@@ -399,22 +401,22 @@ gval=$(qvm-features "$VM" service.notify-bridge 2>/dev/null)
 [ "$gval" = "1" ] || { verdict T0 "FAIL service.notify-bridge readback='$gval' (wanted 1)"; exit 1; }
 # allowlist the PS AUMID for T7's A0 regression slice (same config a0-toast-bridge.sh P3 proves)
 qrun "reg add \"HKLM\\SOFTWARE\\Invisible Things Lab\\Qubes Tools\\gui-agent\" /v NotifyBridgeAllow /t REG_MULTI_SZ /d \"$PSAUMID\" /f" >/dev/null
-coldboot t0 || { log "FATAL no session after gate-on cold boot"; exit 1; }
+p3a_coldboot t0 || { log "FATAL no session after gate-on cold boot"; exit 1; }
 verdict T0 "primed, build identity proven, gate on, cold-booted"
 
 # ---- T0i instrument floor (every probe seen to distinguish BOTH WAYS before any verdict) ----
 pst_yes=$(path_state 'C:\Windows\System32\cmd.exe'); pst_no=$(path_state 'C:\ProgramData\__p3a_nope__')
 [ "$pst_yes" = PRESENT ] && [ "$pst_no" = ABSENT ] \
   || { verdict T0i "INSTRUMENT path_state present='$pst_yes' absent='$pst_no' - aborting"; exit 1; }
-am=$(amark); [ -n "$am" ] || { verdict T0i "INSTRUMENT amark empty (agent LogDir probe broken) - aborting"; exit 1; }
-ahit=$(asince 0 'seamless'); amiss=$(asince 0 '__p3a_never__')
-# RIG-RECONCILED 2026-09-05: asince's stdout carries the qtest-run CMD banner ("Microsoft
+am=$(p3a_amark); [ -n "$am" ] || { verdict T0i "INSTRUMENT p3a_amark empty (agent LogDir probe broken) - aborting"; exit 1; }
+ahit=$(p3a_asince 0 'seamless'); amiss=$(p3a_asince 0 '__p3a_never__')
+# RIG-RECONCILED 2026-09-05: p3a_asince's stdout carries the qtest-run CMD banner ("Microsoft
 # Windows [Version ...]" + the base64 -EncodedCommand echo), so an emptiness test on the miss
-# direction is NEVER empty and aborted every run. asince is USED everywhere with a positive grep
+# direction is NEVER empty and aborted every run. p3a_asince is USED everywhere with a positive grep
 # for a specific pattern, so validate it that way: the hit pattern MUST appear (real 'seamless'
 # agent lines) and the (base64-hidden) miss pattern MUST NOT. Proven both directions live.
 if ! printf '%s' "$ahit" | grep -qa 'seamless' || printf '%s' "$amiss" | grep -qa '__p3a_never__'; then
-  verdict T0i "INSTRUMENT asince hit-has-seamless=$(printf '%s' "$ahit" | grep -qa 'seamless' && echo y || echo n) miss-has-never=$(printf '%s' "$amiss" | grep -qa '__p3a_never__' && echo y || echo n) - aborting"; exit 1
+  verdict T0i "INSTRUMENT p3a_asince hit-has-seamless=$(printf '%s' "$ahit" | grep -qa 'seamless' && echo y || echo n) miss-has-never=$(printf '%s' "$amiss" | grep -qa '__p3a_never__' && echo y || echo n) - aborting"; exit 1
 fi
 # gflen both ways: an existing file counts, a missing one reads 0 (and hard failure is nonzero)
 gy=$(gflen 'C:\Windows\win.ini') || gy=ERR; gn=$(gflen 'C:\ProgramData\__p3a_nofile__') || gn=ERR
@@ -427,7 +429,7 @@ gy=$(gflen 'C:\Windows\win.ini') || gy=ERR; gn=$(gflen 'C:\ProgramData\__p3a_nof
 # delivered counts (same call a0-toast-bridge.sh P1c makes - reused, not reinvented).
 fwd_selftest \
   || { verdict T0i "INSTRUMENT fwd_count/fwd_attempts self-test failed (see the MISMATCH line above) - T7's forward asserts would grade blind, aborting"; exit 1; }
-log "T0i: probes OK (path_state both ways, amark=$am, asince hit/miss, gflen $gy/$gn, fwd_selftest clean)"
+log "T0i: probes OK (path_state both ways, p3a_amark=$am, p3a_asince hit/miss, gflen $gy/$gn, fwd_selftest clean)"
 # guest scratch dir for redirected outputs (secedit export, sampler, T4 redirects) - created
 # HERE so no later phase depends on run-as-user having incidentally created its parent first
 qrun 'cmd /c mkdir C:\ProgramData\Qubes 2>nul & echo P3AMKDIR' >/dev/null 2>&1
@@ -487,12 +489,12 @@ ACCTSID=$(printf '%s' "$trailer" | grep -aoE 'sid=S-1-5-21-[0-9-]+' | cut -d= -f
   || log "T1 WARN: no sid= in trailer - secedit asserts will be graded INSTRUMENT"
 
 # T1b agent census: etwproxy.c logs the invariant verbatim on every launch.
-cen=$(asince 0 'ETWPROXYSUP consumer token census')
+cen=$(p3a_asince 0 'ETWPROXYSUP consumer token census')
 printf '%s\n' "$cen" > "$OUT/t1-census.txt"
-# RIG-RECONCILED 2026-09-05: asince carries the CMD banner so [ -z "$cen" ] is never true;
+# RIG-RECONCILED 2026-09-05: p3a_asince carries the CMD banner so [ -z "$cen" ] is never true;
 # detect an absent census line by the pattern itself, not by emptiness.
 if ! printf '%s' "$cen" | grep -qa 'ETWPROXYSUP consumer token census'; then
-  verdict T1b "FAIL no 'ETWPROXYSUP consumer token census' line this boot - the agent never attempted the launch (gate/arming broken; check 'ETWPROXYSUP armed' + 'ETWPROXYSUP parked' lines: $(asince_hits 0 'ETWPROXYSUP' | tail -2 | tr '\n' ';'))"
+  verdict T1b "FAIL no 'ETWPROXYSUP consumer token census' line this boot - the agent never attempted the launch (gate/arming broken; check 'ETWPROXYSUP armed' + 'ETWPROXYSUP parked' lines: $(p3a_asince_hits 0 'ETWPROXYSUP' | tail -2 | tr '\n' ';'))"
 elif printf '%s' "$cen" | grep -qa 'plu=0 admin=0 se_system_profile=0'; then
   verdict T1b "PASS census invariant holds: $(printf '%s' "$cen" | tail -1 | grep -aoE 'groups=[0-9]+ privs=[0-9]+ plu=0 admin=0 se_system_profile=0')"
 else
@@ -624,7 +626,7 @@ enc_run 'tasklist /v /fo csv /fi "imagename eq etwproxy.exe"' | tr -d '\r' > "$O
 prow=$(awk -F'","' '/[Ee]twproxy\.exe/ {print}' "$OUT/t1-tasklist.csv" | head -1)
 psess=$(printf '%s' "$prow" | awk -F'","' '{print $4}')
 if [ -z "$prow" ]; then
-  verdict T1j "FAIL no etwproxy.exe running (proxy not launched; agent lines: $(asince_hits 0 'ETWPROXYSUP' | tail -2 | tr '\n' ';'))"
+  verdict T1j "FAIL no etwproxy.exe running (proxy not launched; agent lines: $(p3a_asince_hits 0 'ETWPROXYSUP' | tail -2 | tr '\n' ';'))"
 elif printf '%s' "$prow" | grep -qai "$ACCT"; then
   if [ "$psess" = "0" ]; then
     verdict T1j "PASS proxy runs as $ACCT in session 0 ($(printf '%s' "$prow" | head -c 160))"
@@ -645,7 +647,7 @@ fi
 log "T2: DECISIVE - proxy arms (L1 launch fix) + grant carries OpenTrace+ProcessTrace + signal frames flow"
 
 # agent-side control-call RCs, verbatim (§10.16.3b datum lines)
-prc=$(asince 0 'PROXY RC ')
+prc=$(p3a_asince 0 'PROXY RC ')
 printf '%s\n' "$prc" > "$OUT/t2-proxyrc.txt"
 t2rcfail=""
 printf '%s' "$prc" | grep -qa 'api=StartTrace provider=- rc=0' || t2rcfail="$t2rcfail StartTrace!=0"
@@ -664,10 +666,10 @@ printf '%s' "$prc" | grep -qa 'api=EventAccessControl op=AddDACL principal=consu
 #       old agent/binary pairing is running - a deploy mix, not this build);
 #   (c) etw-proxy.log EXISTS with content - the 0xC0000142 signature was this log NEVER
 #       appearing (user32 init died before the proxy's first line).
-pexits=$(asince_hits 0 'proxy exited rc=')
+pexits=$(p3a_asince_hits 0 'proxy exited rc=')
 printf '%s\n' "$pexits" > "$OUT/t2-proxy-exits.txt"
 ndll=$(printf '%s' "$pexits" | grep -ca 'rc=3221225794' || true)
-wsready=$(asince_hits 0 'dedicated winsta ready' | tail -1)
+wsready=$(p3a_asince_hits 0 'dedicated winsta ready' | tail -1)
 pl2=""; _wpl=$SECONDS
 for i in $(seq 1 12); do
   # wall cap 90s (expected: the proxy's first log line lands within seconds of its launch,
@@ -693,7 +695,7 @@ fi
 # precede the FIRST forwarded signal — the untrusted decode never ran privileged.
 if ! etw_tier_up 0 0; then
   plog_since 0 | tail -8 > "$OUT/t2-plog-tail.txt" 2>/dev/null
-  verdict T2 "FAIL ETW tier never came up (no ETWPROXY LIVE + ETW IPC connected): plog tail=$(tr '\n' ';' < "$OUT/t2-plog-tail.txt" | head -c 300) agent=$(asince_hits 0 'ETWPROXYSUP parked' | tail -1 | head -c 200)"
+  verdict T2 "FAIL ETW tier never came up (no ETWPROXY LIVE + ETW IPC connected): plog tail=$(tr '\n' ';' < "$OUT/t2-plog-tail.txt" | head -c 300) agent=$(p3a_asince_hits 0 'ETWPROXYSUP parked' | tail -1 | head -c 200)"
   T2GO=no
 else
   log "T2: tier up (ETWPROXY LIVE + ETW IPC connected)"
@@ -762,7 +764,7 @@ else
     verdict T2 "INSTRUMENT all 3 method fires were instrument misses (never FIRED / logs unreadable) - the grant is UNGRADED, not disproven; fix the fire path before re-running"
   else
     T2GO=no
-    verdict T2 "FAIL DECISIVE: ZERO ETW signal frames from 3 methods ($t2imiss instrument miss(es)) - the grant does not carry ProcessTrace ($(grep -a 'FAIL OpenTrace' "$OUT/t2-plog-full.txt" | tail -1 | head -c 160); agent: $(asince_hits 0 'proxy exit 5' | tail -1 | head -c 160))"
+    verdict T2 "FAIL DECISIVE: ZERO ETW signal frames from 3 methods ($t2imiss instrument miss(es)) - the grant does not carry ProcessTrace ($(grep -a 'FAIL OpenTrace' "$OUT/t2-plog-full.txt" | tail -1 | head -c 160); agent: $(p3a_asince_hits 0 'proxy exit 5' | tail -1 | head -c 160))"
   fi
 fi
 
@@ -1026,7 +1028,7 @@ if ! grep -qai "$ACCT" "$OUT/t5-plu-after-add.txt"; then
   verdict T5 "INSTRUMENT PLU membership add did not land - drift never injected, detector ungraded (NOT a product verdict)"
 else
   log "T5: drift injected AND seen by the T1d probe (its fail direction is now proven)"
-  AM5=$(amark); [ -n "$AM5" ] || AM5=0   # amark's pipeline exits 0 even when empty - test output
+  AM5=$(p3a_amark); [ -n "$AM5" ] || AM5=0   # p3a_amark's pipeline exits 0 even when empty - test output
   # end the running proxy BY THE PID ITS OWNER RECORDED (proxy_owned_pid: the agent's own
   # "launched etwproxy.exe pid=" line - never the user-session notifhost bridge, never a name
   # scan); the agent's exit-wait relaunches it, and THAT launch's census meets the drifted
@@ -1041,9 +1043,9 @@ else
     qrun "taskkill /f /pid $ppid" >/dev/null 2>&1   # the supervised child, by its owner's pid: the relaunch is what T5 measures
     t5seen=""; _wt5=$SECONDS
     for i in $(seq 1 24); do   # nominal 120s: 5s backoff floor + census; TODO(RIG)#7
-      # wall cap 150s (the documented 120s window + margin; asince is a ~55s-capped enc_run
+      # wall cap 150s (the documented 120s window + margin; p3a_asince is a ~55s-capped enc_run
       # per turn, so seq*sleep alone could stretch this to ~25 min - audit 2026-09-06)
-      a5=$(asince "$AM5" 'ETWPROXYSUP')
+      a5=$(p3a_asince "$AM5" 'ETWPROXYSUP')
       printf '%s' "$a5" | grep -qa 'PROVISIONING DRIFT' && printf '%s' "$a5" | grep -qa 'parked for this boot' && { t5seen=1; break; }
       [ $(( SECONDS - _wt5 )) -ge 150 ] && break
       sleep 5
@@ -1114,15 +1116,15 @@ enc_run '& net localgroup "Performance Log Users" qubes-etwproxy /delete *> $nul
 grep -qai "$ACCT" "$OUT/t5-plu-after-del.txt" \
   && { verdict T5r "FAIL PLU membership removal did not land - guest left drifted, aborting before T6 measures garbage"; exit 1; }
 log "T5r: PLU removed; cold boot to un-park"
-coldboot t5r || { verdict T5r "FAIL no session after restore cold boot"; exit 1; }
-bridge_up 0 || { verdict T5r "FAIL bridge never up after restore boot"; exit 1; }
+p3a_coldboot t5r || { verdict T5r "FAIL no session after restore cold boot"; exit 1; }
+p3a_bridge_up 0 || { verdict T5r "FAIL bridge never up after restore boot"; exit 1; }
 if etw_tier_up 0 0; then
-  cen5=$(asince_hits 0 'ETWPROXYSUP consumer token census' | tail -1)
+  cen5=$(p3a_asince_hits 0 'ETWPROXYSUP consumer token census' | tail -1)
   printf '%s' "$cen5" | grep -qa 'plu=0 admin=0 se_system_profile=0' \
     && verdict T5r "PASS restored: census clean again, tier up (defect switchable both ways)" \
     || verdict T5r "FAIL tier up but census not clean after restore: $(printf '%s' "$cen5" | head -c 160)"
 else
-  verdict T5r "FAIL ETW tier did not return after drift removal + cold boot ($(asince_hits 0 'ETWPROXYSUP parked' | tail -1 | head -c 200))"
+  verdict T5r "FAIL ETW tier did not return after drift removal + cold boot ($(p3a_asince_hits 0 'ETWPROXYSUP parked' | tail -1 | head -c 200))"
 fi
 
 # ---------- T6 LATENCY: src=etw-sig vs the T5 src=db control + heartbeat cadence -------------
@@ -1132,7 +1134,7 @@ hbps='$o="C:\ProgramData\Qubes\p3a-hbsample.txt"; Remove-Item $o -Force -EA Sile
 # Start-Process, not `start`: start passes every inheritable handle whatever the redirection, so a
   # detached launch holds this call's vchan pipes and the wrapper's pumps never see EOF (lint L27,
   # measured d3fe180 and again on campaign run 38994277148). ShellExecute inherits none.
-  qrun "powershell -NoProfile -Command \"Start-Process -WindowStyle Hidden -FilePath 'powershell.exe' -ArgumentList '-NoProfile','-EncodedCommand','$(_ps_enc "$hbps")'\"" >/dev/null 2>&1
+  qrun "powershell -NoProfile -Command \"Start-Process -WindowStyle Hidden -FilePath 'powershell.exe' -ArgumentList '-NoProfile','-EncodedCommand','$(p3a_ps_enc "$hbps")'\"" >/dev/null 2>&1
 sleep 2
 if ! L6=$(blog_len); then
   # A 0-default would pull T5's src=db rows and T2/T3's src=etw-sig rows into this window and
@@ -1491,7 +1493,7 @@ enc_run 'Remove-Item C:\ProgramData\Qubes\p3a-squat.txt -Force -EA SilentlyConti
 # line lands after them.
 enc_run 'tasklist /nh /fo csv /fi "imagename eq etwproxy.exe"' | tr -d '\r' > "$OUT/t8c-tasklist.csv"
 spid=$(awk -F'","' '/[Ee]twproxy\.exe/ {gsub(/"/,"",$2); print $2}' "$OUT/t8c-tasklist.csv" | head -1)
-AM8=$(amark); [ -n "$AM8" ] || AM8=0
+AM8=$(p3a_amark); [ -n "$AM8" ] || AM8=0
 L8c=$(blog_len) || L8c=""
 P8c=$(plog_len) || P8c=""   # pre-squat proxy-log offset: a relaunch is only FRESH past this
 if [ -z "$spid" ]; then
@@ -1499,12 +1501,12 @@ if [ -z "$spid" ]; then
 else
   log "T8c: launching self-killing busy-grab squatter (live proxy pid=$spid)"
   # Start-Process, not `start` - see the note at the heartbeat launch above (lint L27).
-  qrun "powershell -NoProfile -Command \"Start-Process -WindowStyle Hidden -FilePath 'powershell.exe' -ArgumentList '-NoProfile','-EncodedCommand','$(_ps_enc "$sq")'\"" >/dev/null 2>&1
+  qrun "powershell -NoProfile -Command \"Start-Process -WindowStyle Hidden -FilePath 'powershell.exe' -ArgumentList '-NoProfile','-EncodedCommand','$(p3a_ps_enc "$sq")'\"" >/dev/null 2>&1
   t8cexit=""; _w8x=$SECONDS
   for i in $(seq 1 24); do   # exit 8 lands within the first relaunch backoffs (floor 5s)
-    # wall cap 150s (the documented 120s window + margin; asince is a ~55s-capped enc_run
+    # wall cap 150s (the documented 120s window + margin; p3a_asince is a ~55s-capped enc_run
     # per turn - audit 2026-09-06)
-    asince_hits "$AM8" 'proxy exited rc=8 after' | grep -qa 'rc=8 after' && { t8cexit=1; break; }
+    p3a_asince_hits "$AM8" 'proxy exited rc=8 after' | grep -qa 'rc=8 after' && { t8cexit=1; break; }
     [ $(( SECONDS - _w8x )) -ge 150 ] && break
     sleep 5
   done
@@ -1525,16 +1527,16 @@ else
       # product is SEEN to have acted. TODO(RIG)#14: the killed proxy's quiet exit line spelling
       # (etwproxy.c ETWPROXY_EXIT_KILLED) is assumed to match 'proxy exited'; if it does not, this
       # arm degrades to INSTRUMENT (the safe direction) - reconcile and tighten.
-      killed8=$(asince_hits "$AM8" 'proxy exited' | grep -ca 'proxy exited' || true)
+      killed8=$(p3a_asince_hits "$AM8" 'proxy exited' | grep -ca 'proxy exited' || true)
       if [ "${killed8:-0}" -ge 1 ] && [ -n "$P8c" ] && [ -n "$L8c" ] && etw_tier_up "$P8c" "$L8c"; then
         verdict T8c "PASS-DATUM squatter could not take the pipe: it killed the live proxy (pid $spid; $killed8 'proxy exited' line(s) past the pre-squat mark) and busy-looped for the name, yet the supervisor's relaunch re-grabbed it first (fresh ETWPROXY LIVE + ETW IPC connected past the pre-squat offsets) - a MEASURED recovery-speed property, not a defect. The exit-8 (squatted-name) path stays covered by review and by T5's parked/relaunch cycle; a squatter that pre-empts the name BEFORE the kill would be needed to reach it (TODO(RIG)#14)"
       else
-        verdict T8c "INSTRUMENT squatter ran (SQUAT-NEVER) but the proxy shows no kill+fresh-relaunch (exits past mark=${killed8:-0}, pre-squat offsets plog=${P8c:-?} blog=${L8c:-?}) - the kill never landed, drill ungraded ($(asince_hits "$AM8" 'proxy exited' | tail -1 | head -c 160))"
+        verdict T8c "INSTRUMENT squatter ran (SQUAT-NEVER) but the proxy shows no kill+fresh-relaunch (exits past mark=${killed8:-0}, pre-squat offsets plog=${P8c:-?} blog=${L8c:-?}) - the kill never landed, drill ungraded ($(p3a_asince_hits "$AM8" 'proxy exited' | tail -1 | head -c 160))"
       fi
     elif [ "$sqstate" != SQUAT-HELD ] && [ "$sqstate" != SQUAT-RELEASED ]; then
-      verdict T8c "INSTRUMENT squatter never ran or never wrote its state (state=${sqstate:-none}) - drill ungraded ($(asince_hits "$AM8" 'proxy exited' | tail -1 | head -c 160))"
+      verdict T8c "INSTRUMENT squatter never ran or never wrote its state (state=${sqstate:-none}) - drill ungraded ($(p3a_asince_hits "$AM8" 'proxy exited' | tail -1 | head -c 160))"
     else
-      verdict T8c "FAIL squatter held the name but no 'proxy exited rc=8' within the 150s wall budget ($(asince_hits "$AM8" 'ETWPROXYSUP' | tail -2 | tr '\n' ';' | head -c 240))"
+      verdict T8c "FAIL squatter held the name but no 'proxy exited rc=8' within the 150s wall budget ($(p3a_asince_hits "$AM8" 'ETWPROXYSUP' | tail -2 | tr '\n' ';' | head -c 240))"
     fi
   else
     log "T8c: proxy exited rc=8 against the squatted pipe (squatter state=${sqstate:-?})"
@@ -1585,7 +1587,7 @@ else
       if [ -n "$rec" ]; then
         verdict T8r "PASS tier recovered after the squatter released (fresh ETWPROXY LIVE + ETW IPC connected) - subject left sane"
       else
-        verdict T8r "FAIL tier did not recover within ~6 min of the squat - subject left tier-down; check the backoff ($(asince_hits "$AM8" 'relaunch in' | tail -1 | head -c 160))"
+        verdict T8r "FAIL tier did not recover within ~6 min of the squat - subject left tier-down; check the backoff ($(p3a_asince_hits "$AM8" 'relaunch in' | tail -1 | head -c 160))"
       fi
     fi
   fi
@@ -1595,8 +1597,8 @@ fi
 cap "$OUT" final "$R" || true
 blog_since 0 > "$OUT/bridge-full.log" 2>/dev/null || true
 plog_since 0 > "$OUT/etw-proxy-full.log" 2>/dev/null || true
-asince_hits 0 'ETWPROXYSUP' > "$OUT/agent-etwproxysup.log" 2>/dev/null || true
-asince_hits 0 'PROXY RC' > "$OUT/agent-proxyrc.log" 2>/dev/null || true
+p3a_asince_hits 0 'ETWPROXYSUP' > "$OUT/agent-etwproxysup.log" 2>/dev/null || true
+p3a_asince_hits 0 'PROXY RC' > "$OUT/agent-proxyrc.log" 2>/dev/null || true
 tf '--unregister --method start-shortcut' wrapu1 >/dev/null 2>&1
 tf '--unregister --method com-activator'  wrapu2 >/dev/null 2>&1
 

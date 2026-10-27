@@ -298,8 +298,8 @@ thc(){ # $1=timeout $2...=collector args -> the THC lines only
 agent_grep(){ thc 90 -Mode agentgrep -Skip "$1" -PatternB64 "$(b64 "$2")" | sed -n 's/^THC L|//p'; }
 bridge_grep(){ thc 90 -Mode bridgegrep -BridgeSkip "$1" -PatternB64 "$(b64 "$2")" | sed -n 's/^THC L|//p'; }
 counts(){ thc 60 -Mode count | sed -n 's/^THC count //p' | head -1; }   # agentlog= agentlines= bridgelines= now=
-amark(){ counts | sed -n 's/.*agentlines=\([0-9]*\).*/\1/p'; }
-bmark(){ counts | sed -n 's/.*bridgelines=\([0-9]*\).*/\1/p'; }
+th_amark(){ counts | sed -n 's/.*agentlines=\([0-9]*\).*/\1/p'; }
+th_bmark(){ counts | sed -n 's/.*bridgelines=\([0-9]*\).*/\1/p'; }
 HOLD_IPC_FAIL_RE='HOLD verdict event .* not opened|HOLD a bare --hold needs|HOLD section .* (not opened|not mapped|carries no valid header)'
 
 # the bridge on this boot: heartbeat fresh, connected, armed with the allowlist, and (hold build) records live
@@ -464,7 +464,7 @@ PY
 scenario(){
   local labels=$1 mode=$2 dism=$3 tpl=$4 n bm src crc a
   n=$(awk -F, '{print NF}' <<<"$labels")
-  bm=$(bmark); [ -n "$bm" ] || { verdict "$labels" "INSTRUMENT could not read the bridge.log line count before firing"; return; }
+  bm=$(th_bmark); [ -n "$bm" ] || { verdict "$labels" "INSTRUMENT could not read the bridge.log line count before firing"; return; }
   log "--- $labels ($mode): firing $n toast(s)"
   if ! fire_steps "$labels" "$mode" "$tpl"; then
     verdict "${labels%%,*}-STIM" "INSTRUMENT the stimulus for $labels did not fully fire (see $OUT/fires/) - rows graded on whatever fired"
@@ -482,7 +482,7 @@ FC="--fire+--method+com-activator+--class"
 FS="--fire+--method+bare+--aumid+$AUMID_SYS+--class"
 
 # ---- 7. the scenarios ---------------------------------------------------------------------------------------------
-AMARK0=$(amark); BMARK1=$(bmark)
+AMARK0=$(th_amark); BMARK1=$(th_bmark)
 log "scenarios start: agent log $ALOG at line $AMARK0, bridge.log at line $BMARK1"
 # S0  the warm-up = the first toast of a classifier-routed app after the bridge started (graded like S1a)
 scenario "S0"    seamless "$AUMID_W"            "FIRE:$FW+informational+--title+@SLUG1@+--tag+@TAG1@"
@@ -507,7 +507,7 @@ scenario "S4"    seamless "$AUMID_C"            "FIRE:$FC+informational+--title+
 #     lines, never assumed. Last, so its risks cannot contaminate S0-S4.
 switch_mode(){ # <FULLSCREEN|SEAMLESS> <want seamless 0|1> -> 0 observed / 1 terminal / 2 deadline
   local word=$1 want=$2 am t0=$SECONDS rc
-  am=$(amark)
+  am=$(th_amark)
   printf '%s' "$word" | timeout 60 qrexec-client-vm "$VM" qubes.SetGuiMode >"$OUT/setguimode-$word.out" 2>&1; rc=$?
   log "  qubes.SetGuiMode $word sent (rc=$rc; the mode change below is the evidence)"
   while :; do

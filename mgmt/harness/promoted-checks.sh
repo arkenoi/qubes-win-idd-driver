@@ -144,7 +144,11 @@ log "=== secure-desktop-left-cleanly ==="
 SD=$(psrun '$d=(Get-ItemProperty "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\").LogDir
 $f=Get-ChildItem $d -Filter gui-agent-*.log -EA SilentlyContinue | Sort LastWriteTime -Desc | Select -First 1
 # THIS INSTANCE ONLY: one file per module per day, and an ENTERED/LEFT imbalance from an earlier
-# instance would read as this run's stuck secure desktop. The last "process ID:" is where it began.
+# instance would read as a stuck secure desktop in THIS run. The last "process ID:" is where it
+# began. NO APOSTROPHE ANYWHERE IN A psrun PAYLOAD: the payload is one bash single-quoted string, so
+# an apostrophe inside it - even inside a comment like this one - closes that string, and every
+# PowerShell line after it is parsed as bash. b5e5b6a1 on 2026-10-07 wrote one here, and the whole
+# script failed bash -n from then until 2026-10-27, so it could not be run at all.
 $all=Get-Content $f.FullName; $i=0
 for ($k=0; $k -lt $all.Count; $k++) { if ($all[$k] -match "(process ID: \d+|QWTBIRTH\s.*\bpid=\d+)") { $i=$k } }
 $a=@(); if ($all.Count -gt $i) { $a=$all[$i..($all.Count-1)] }

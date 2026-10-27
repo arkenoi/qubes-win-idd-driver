@@ -1028,7 +1028,7 @@ dom0_sends_park(){ # $1=vm $2=label - the notification record, pulled while the 
   return 0
 }
 
-coldboot(){ # $1=n
+qu_coldboot(){ # $1=n
   local n=$1
   if [ "$(w_state "$SUBJECT")" != Halted ]; then
     # PULL WHAT dom0 WAS TOLD before the guest goes down - the record lives on the guest's private
@@ -1054,8 +1054,8 @@ coldboot(){ # $1=n
   esac
   log "cold boot #$n: session up"
 }
-coldboot 1
-coldboot 2
+qu_coldboot 1
+qu_coldboot 2
 
 # =============================================================================================
 # 6. VERIFY - on the guest, after the second boot. Missing data fails.

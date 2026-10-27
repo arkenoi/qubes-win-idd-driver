@@ -108,6 +108,42 @@ if [ "${1:-}" = --probe-primitives ]; then
     fi
     exit "$_pf_rc"
 fi
+
+# --run-promoted <vm> [outdir]: RUN THE PROMOTED CHECKS AGAINST A LIVE GUEST.
+# mgmt/harness/promoted-checks.sh needs a booted guest with a session and NOTHING COULD LAUNCH IT:
+# it was a standalone entry point with no caller, which is why a syntax error sat in it from
+# 2026-10-07 to 2026-10-27 (an apostrophe inside a psrun payload - bash would not even load the
+# file) and nothing noticed. A committed launcher is the durable half of that fix; the reworded
+# comment is only the half that makes it parse.
+# WHAT IT MUTATES: boots the subject if it is halted, then hands it to promoted-checks.sh, which
+# takes the same per-guest lock and passes straight through (vmlock is re-entrant within one job via
+# QWT_VMLOCK_HELD). The subject is left RUNNING - nothing here halts, kills or detaches it.
+if [ "${1:-}" = --run-promoted ]; then
+    RP_VM="${2:?usage: $0 --run-promoted <vm> [outdir]}"
+    RP_OUT="${3:-scratchpad/promoted-$RP_VM-$(date -u +%Y%m%dT%H%M%SZ)}"
+    # shellcheck source=/dev/null
+    . mgmt/harness/vmlock.sh 2>/dev/null || true
+    command -v vm_lock >/dev/null 2>&1 && vm_lock "$RP_VM"
+    # Single-VM query by name: a bare qvm-ls fires denied admin calls into the owner's dom0 journal.
+    RP_STATE=$(qvm-ls --raw-data --fields NAME,STATE "$RP_VM" 2>/dev/null \
+               | awk -F'|' -v n="$RP_VM" '$1==n{print $2}')
+    [ -n "$RP_STATE" ] || { echo "REFUSE: $RP_VM does not exist" >&2; exit 11; }
+    mkdir -p "$RP_OUT"
+    echo "--- promoted checks against $RP_VM (out: $RP_OUT)"
+    if [ "$RP_STATE" != Running ]; then
+        echo "  $RP_VM is $RP_STATE - booting it; every check below reads the live guest"
+        # shellcheck source=/dev/null
+        . mgmt/harness/e2e-wait.sh
+        _rp_log(){ echo "  $*"; }
+        timeout -k 10 150 qvm-start "$RP_VM" >"$RP_OUT/start.out" 2>&1 & disown
+        sleep 8
+        w_session "$RP_VM" 900 "promoted" "$RP_OUT" _rp_log || {
+            echo "REFUSE: $RP_VM reached no session in 900 s - the checks would measure nothing. See $RP_OUT" >&2
+            exit 11; }
+    fi
+    # exec keeps this pid, so the vmlock sentinel (tail --pid=<leader>) stays valid across it.
+    exec bash mgmt/harness/promoted-checks.sh "$RP_VM" "$RP_OUT"
+fi
 PKG="${1:-}"
 [ -n "$PKG" ] || { echo "usage: $0 <release-package-run-id>" >&2; exit 2; }
 

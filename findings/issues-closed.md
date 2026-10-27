@@ -556,3 +556,36 @@ words in capitals. These eight were the real ones and are recorded here so the c
   4.3.32.612 while the candidate package was **4.3.36+agent.eb24cb5115ba**, and nothing checked: the
   gate spent a whole run grading the wrong binary, including DXGI_ERROR_ACCESS_LOST lines whose guard
   is present in eb24cb5115ba and so could not have produced them.
+- `mgmt/harness/p3a-etw-gate.sh` helpers - **TOASTHELPERDIVERGENCE**, closed 2026-10-27 by RENAME, not
+  by the merge step 11 asked for. Five helpers (`_ps_enc`, `amark`, `asince`, `bridge_up`, `coldboot`)
+  were defined in both this file and `a0-p3-toast-split.sh` and no pair shared a body; this file's own
+  comments called them "verbatim the a0-p3-toast-split idiom", so this is the copy that diverged and it
+  is the one that moved. Now `p3a_ps_enc`, `p3a_amark`, `p3a_asince`, `p3a_asince_hits`,
+  `p3a_bridge_up`, `p3a_coldboot` - 57 occurrences, every reference file-local, no suite asserts on the
+  names, and `verdict-lib-selftest.sh`'s extracted GATE block (1604-1648) references none of them.
+  The two collisions OUTSIDE the two files this tag named were closed in the same commit, because
+  leaving them meant closing the tag with its stated property unmet: `coldboot` -> `qu_coldboot` in
+  `quick-upgrade.sh` (3 occurrences) and `amark`/`bmark` -> `th_amark`/`th_bmark` in
+  `toast-hold-test.sh` (3 each, renamed as a pair so the two marks still read as one idiom). Measured
+  after: each of the five names now has exactly ONE definition anywhere in `mgmt/harness/`, and it is
+  the original in `a0-p3-toast-split.sh`, which is unchanged. Jev had this at closes-it 0.50 against
+  still-open 0.41 - below the floor and undecidable - while the residue stood; the residue is what
+  made it undecidable, so it was removed rather than argued.
+- `mgmt/harness/promoted-checks.sh` - **THE SCRIPT COULD NOT RUN AT ALL FOR TWENTY DAYS.** b5e5b6a1
+  (2026-10-07) wrote the comment "this run's stuck secure desktop" inside a `psrun '...'` payload. That
+  payload is one bash single-quoted string, so the apostrophe closed it and every PowerShell line after
+  it was parsed as bash: `bash -n` failed at the `for ($k=0; ...)` on line 149 and bash therefore
+  refused to execute the file. Found 2026-10-27 while closing the 15-step refactor, which had reported
+  it as failing "identically at HEAD" without asking what the failure MEANT. Fixed by rewording the
+  comment; the script now reaches its own usage gate (rc=1) instead of rc=2 syntax error. All 329 shell
+  scripts under mgmt/harness/, tools/, tools/smoke/ and tools/tests/ now pass `bash -n`; this was the
+  only one that did not.
+- `broker-down-anchor-selftest.sh` - DELETED in **d35b65e8** (owner: "drop
+  broker-down-anchor-selftest.sh, it is shit anyway"), floor 145 -> 144 in the same commit. All nine
+  legs were `grep` over main.c TEXT and the text moved under them twice in one day while the
+  behaviour was correct. What enforces the de-slice logic instead is stronger: the pure functions in
+  `agent/include/qga-lifecycle.h` as COMPILED unit tests in `agent/watchdog/lifecycle_test.c`, each
+  behind a `QGA_LIFECYCLE_DEFECT_*` knob. This is the one-line note step 4 of the 15-step plan
+  requires for a deleted suite, written 2026-10-27 - the deletion predated the plan, and step 3 then
+  listed this file among six to quarantine, so it is the one of the six that cannot be in
+  not-in-the-gate.txt: it does not exist.
