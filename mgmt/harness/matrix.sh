@@ -340,7 +340,7 @@ _matrix_stamp_inherited_artefacts(){ # <dir> <attempt-id> -> stamps, prints what
   done
   printf 'inherited-artefacts-stamped=%d dir=%s attempt=%s\n' "$n" "$d" "$id"
 }
-MATRIX_ATTEMPT="${MATRIX_ATTEMPT:-$(date -u +%Y%m%dT%H%M%SZ)}"
+MATRIX_ATTEMPT="${MATRIX_ATTEMPT:-$(attempt_id)}"
 _matrix_stamp_inherited_artefacts "$M" "$MATRIX_ATTEMPT" >/dev/null
 # MATTEMPT-B
 # THE CAMPAIGN'S OWN IDENTITY, for the things that must not be written by anything but a campaign.
@@ -358,7 +358,8 @@ _matrix_stamp_inherited_artefacts "$M" "$MATRIX_ATTEMPT" >/dev/null
 # the same reason one level up; Jev scored it 0.67 and the path was what it doubted.
 # SO: THE ATTEMPT ID, which exists for exactly this join and is unique by construction - inherited
 # from release-acceptance's ACCEPT_ATTEMPT ("ONE attempt id across both layers") or defaulted above
-# to a UTC stamp by this file. Hence its position here, BELOW that default rather than above it.
+# to the SEALED attempt_id (primitives.sh), not to a second date call of this file's own. Hence its
+# position here, BELOW that default rather than above it.
 POOL_SPACE_RUN="${POOL_SPACE_RUN:-$MATRIX_ATTEMPT}"
 R=$M/matrix.log; : > "$R"
 # UTC, LIKE THE RUNNER THAT DRIVES THIS. tools/release-acceptance.sh stamps `date -u` and this

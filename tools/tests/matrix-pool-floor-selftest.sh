@@ -207,6 +207,11 @@ _MATRIX_SH="$M"   # in this suite $M is the PATH TO matrix.sh; inside matrix.sh 
 _id_of(){ # <matrix-out> [inherited-attempt] -> the identity matrix.sh would use
   ( unset POOL_SPACE_RUN; M="$1"; MATRIX_ATTEMPT="${2:-}"
     [ -n "$MATRIX_ATTEMPT" ] || unset MATRIX_ATTEMPT
+    # THE DEFAULT IS NOW THE SEALED PRIMITIVE, so the subshell needs it. Until 2026-10-27 matrix.sh
+    # defaulted the attempt id with a second `date -u` call of its own; collapsing that onto
+    # attempt_id is the step-9 duplicate this refactor removes. The extraction below still takes
+    # matrix.sh's REAL lines - a retyped copy would keep passing after the real one changed.
+    . "$(dirname "$_MATRIX_SH")/primitives.sh"
     eval "$(sed -n '/^MATRIX_ATTEMPT="\${MATRIX_ATTEMPT/p;/^POOL_SPACE_RUN=/p' "$_MATRIX_SH")"
     echo "$POOL_SPACE_RUN" ) 2>/dev/null
 }
@@ -222,7 +227,7 @@ case "$_idA" in
   *) bad "unexpected identity '$_idA'" ;;
 esac
 # A STANDALONE matrix run has no campaign above it and must still be unique: matrix.sh defaults the
-# attempt id to a UTC stamp, so the fallback is a timestamp rather than a path.
+# attempt id to the sealed attempt_id, so the fallback is that one id rather than a path.
 _idS=$(_id_of /home/user/qwt-matrix/20261025-010203)
 case "$_idS" in
   ""|matrix|*campaign*) bad "a standalone run got no usable identity: '$_idS'" ;;

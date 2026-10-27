@@ -40,7 +40,12 @@ run_two_attempts() { # <extracted code> -> populates $T/art/cell.out as two atte
   # attempt TWO starts: it inherits that file, stamps it, then writes its own success.
   # The extracted region carries matrix.sh's OWN invocation as well as the definition, so M points
   # at an empty dir to make that call a no-op; the call under test is the explicit one below.
-  ( set +u; M="$T/empty"; eval "$body"; _matrix_stamp_inherited_artefacts "$T/art" "ATTEMPT2" >/dev/null 2>&1 )
+  # THE EXTRACTED REGION DEFAULTS MATRIX_ATTEMPT TO THE SEALED attempt_id, so the subshell sources
+  # primitives.sh. Without it that default expanded to nothing, the stamper's `id="${2:?}"` refused,
+  # and the stamp this suite exists to check was never written - silently, since the call's stderr
+  # is discarded. Not a stub: it is the real primitive, which is the point of one id.
+  ( set +u; . "$(dirname "$SRC")/primitives.sh"; M="$T/empty"; eval "$body"
+    _matrix_stamp_inherited_artefacts "$T/art" "ATTEMPT2" >/dev/null 2>&1 )
   printf 'LOGVOL-BIND ok mode=registry drive=Z: found=D: letter=pinned\n' >> "$T/art/cell.out"
 }
 
