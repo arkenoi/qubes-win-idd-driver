@@ -49,7 +49,6 @@ TS=$(date -u +%Y%m%d-%H%M%S)
 OUT="${A0_OUT:-scratchpad/a0-toast-bridge-$TS}"; mkdir -p "$OUT"
 R="$OUT/results.log"; : > "$R"
 log(){ echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$R"; }
-verdict(){ log "VERDICT $1: $2"; echo "$1|$2" >> "$OUT/verdicts.txt"; }
 
 export QTEST_VM="$VM"
 source mgmt/harness/vmlock.sh; vm_lock "$VM"   # one harness per guest; see vmlock.sh

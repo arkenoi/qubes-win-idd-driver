@@ -108,7 +108,6 @@ OUT="$TH_ROOT/$VM-$RID-$(date -u +%Y%m%d-%H%M%S)"; mkdir -p "$OUT/fires" "$OUT/w
 R="$OUT/results.log"; : > "$R"
 RUNID=$(printf '%06x' $(( (RANDOM << 15 | RANDOM) & 0xffffff )))
 log(){ echo "[$(date -u +%H:%M:%S)] toast-hold[$VM]: $*" | tee -a "$R"; }
-verdict(){ log "VERDICT $1: $2"; echo "$1|$2" >> "$OUT/verdicts.txt"; }
 GRADER="mgmt/harness/toast-hold-grade.py"
 
 # AUMIDs the stimulus uses (tools/toastfire/README.md: registration methods and their default AUMIDs).

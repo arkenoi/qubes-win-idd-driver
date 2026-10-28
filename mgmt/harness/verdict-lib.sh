@@ -92,6 +92,15 @@ verdict_label_class(){ # $1 = ledger file, $2 = LABEL -> class of its LAST row, 
 
 _vs_log(){ if declare -F log >/dev/null 2>&1; then log "$*"; else echo "$*"; fi; }
 
+# verdict <label> <text> - THE EMITTER, and now the only copy of it. Four a0-toast harnesses
+# (a0-p3-toast-split, toast-hold-test, a0-toast-bridge, p3a-etw-gate) each carried this line
+# byte-identically while ALREADY sourcing this file - plan step 11, "collapse ... a0-toast helpers
+# to the single primitives". It writes the ledger row that verdict_aggregate and verdict_done_line
+# below read, so the emitter and its readers now live in one file instead of five.
+# _vs_log rather than log: identical where the caller defines log, which all four do, and it no
+# longer depends on the caller having defined it. $OUT is the caller's attempt-scoped evidence dir.
+verdict(){ _vs_log "VERDICT $1: $2"; echo "$1|$2" >> "${OUT:?verdict needs OUT}/verdicts.txt"; }
+
 verdict_aggregate(){ # $1 = ledger file, $2 = optional extended regex of LABELs to skip
   local f="$1" skip="${2:-}" line label text cls
   VS_TOTAL=0; VS_PASS=0; VS_DATUM=0; VS_FAIL=0; VS_INVALID=0; VS_ATTENDED=0; VS_OTHER=0
