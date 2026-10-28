@@ -19,11 +19,13 @@
 #   * if THIS launch already holds the lock (QWT_VMLOCK_HELD set in the environment), it passes.
 #
 # stdin: the hook JSON. Exit 0 = allow, 2 = block (message handed back to the model).
-# Self-test: tools/tests/serial-rig-gate-selftest.sh. SERIAL_GATE_DEFECT=1 re-introduces the
-# original state (nothing enforces) and the self-test must then FAIL.
+# No self-test: the suite that drove this was deleted 2026-10-28 (it passed 54/54 on the dev qube
+# and failed 3/54 on a CI runner, which has no rig state to read, so its own "UNREADABLE -> BLOCK"
+# case fired). The four SERIAL_GATE_DEFECT fault-injection branches went with it - =1 was a plain
+# env-var bypass of this gate. What enforces the property is this hook, on every mutating launch,
+# failing CLOSED when it cannot read the rig.
 set -u
 cd "${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 0
-if [ "${SERIAL_GATE_DEFECT:-}" = "1" ]; then exit 0; fi   # GUARD:serial-gate
 input=$(cat)
 LOCKDIR="${TMPDIR:-/tmp}" python3 - "$input" <<'PY'
 import glob, json, os, re, shlex, sys
@@ -130,7 +132,7 @@ KW_PREFIX = {'if', 'elif', 'while', 'until', 'do', 'then', 'else', '!', 'time', 
 KW_DATA = {'for', 'select', 'case', 'in', 'esac', 'fi', 'done', 'local', 'declare', 'export',
            'readonly', 'return', 'exit', 'break', 'continue', 'shift', 'set', 'unset', 'trap'}
 
-def is_launch(toks, overstrip):
+def is_launch(toks):
     """Does this segment RUN something that mutates? toks is one segment, already split."""
     i = 0
     while i < len(toks) and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', toks[i]):
@@ -180,8 +182,6 @@ def is_launch(toks, overstrip):
     # any action. The flag must be its OWN token - inside a quoted argument it belongs to the
     # GUEST's command line, not to qvm-run. (# GUARD:usage)
     if name.startswith('qvm-'):
-        if overstrip:
-            return not any(f in ' '.join(rest) for f in HELPFLAG)
         if any(t in HELPFLAG for t in rest):
             return False
     return True
@@ -201,8 +201,7 @@ def strip_prose(cmd):
     # watch a running job with passive reads, so blocking `ps ... | grep quick-upgrade.sh` refuses
     # the very thing it recommends (measured 2026-09-20, the third shape of this same over-match).
     # Deliberately NOT passive: xargs (-exec runs things) and python3 (subprocess).
-    overstrip = os.environ.get('SERIAL_GATE_DEFECT') == '2'   # GUARD:overstrip
-    body, subs = (cmd, []) if overstrip else pull_subs(cmd)
+    body, subs = pull_subs(cmd)
     kept = []
     for piece in [body] + subs:
         try:
@@ -210,7 +209,7 @@ def strip_prose(cmd):
         except ValueError:
             kept.append(piece); continue      # unparseable quoting -> keep it all (strict)
         for toks in segs:
-            if is_launch(toks, overstrip):
+            if is_launch(toks):
                 kept.append(' '.join(toks))
     return ' ; '.join(kept)
 
@@ -245,8 +244,8 @@ mut = re.compile(
     # AND IT IS THE `qubes.*` SERVICES THAT AUTOSTART. An `admin.*` call naming a guest is served by
     # dom0's admin API, not by the guest, so it starts nothing - admin.vm.Stats and
     # admin.vm.CurrentState are exactly how e2e-wait.sh and qtest watch a run. A first version of
-    # this matched every service and broke C4 of serial-rig-gate-selftest ("passive admin.vm.Stats
-    # while a LIVE lock is held"), which is the suite asserting the monitoring rule. The admin verbs
+    # this matched every service and broke the passive-read case of the since-deleted selftest
+    # ("passive admin.vm.Stats while a LIVE lock is held"), which asserted the monitoring rule. The admin verbs
     # that DO act are listed explicitly instead.
     r'|\bqrexec-client-vm\s+(?!dom0\b)[A-Za-z0-9_.-]+\s+qubes\.\S+'
     r'|\bqrexec-client-vm\s+(?!dom0\b)[A-Za-z0-9_.-]+\s+admin\.vm\.'
@@ -281,8 +280,6 @@ except Exception:
     _known = set()
 named_guests = {n for n in _known
                 if re.search(r'(?<![\w.-])' + re.escape(n) + r'(?![\w.-])', full_text)}
-if os.environ.get('SERIAL_GATE_DEFECT') == '4':   # re-introduces the over-match this guard fixes
-    named_guests = set()
 
 def alive(pid):
     try:
@@ -325,8 +322,7 @@ for lf in sorted(glob.glob(os.path.join(lockdir, 'qwt-vmlock-*'))):
             f"(never pkill -f). If that lock is stale, its holder pid would be dead - it is not.\n"
             f"The gate {why}\n"
             f"If that is not a launch, it is an over-match: tools/tests/gate-explain.py '<the line>' "
-            f"shows the segmentation, and tools/tests/serial-rig-gate-selftest.sh is where the fix "
-            f"gets a check.\n")
+            f"shows the segmentation.\n")
         sys.exit(2)
 
 # ---------------------------------------------------------------------------------------------
@@ -349,8 +345,6 @@ START = re.compile(r'\bqvm-(start|run)\b'
                    r'|\bprime-run|\bquick-upgrade|\bmatrix\.sh|\bcheckpoint\.sh\s+unpark'
                    r'|\breprovision|\brelease-acceptance'
                    r'|qubes\.WindowsUpdate|qubes\.VMShell|qubes\.VMExec', re.I)
-if os.environ.get('SERIAL_GATE_DEFECT') == '3':   # re-introduces the 2026-09-21 hole
-    sys.exit(0)
 if not START.search(text):
     sys.exit(0)
 

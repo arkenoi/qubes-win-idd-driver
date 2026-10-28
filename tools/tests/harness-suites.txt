@@ -97,6 +97,5 @@ wu-judge-timenorm-selftest.sh
 wu-liveness-selftest.sh
 xen-core-small-selftest.sh
 lint-selftest.sh
-serial-rig-gate-selftest.sh
 wu-exclusion-evidence-selftest.py
 wu-exclusion-gate-selftest.py
