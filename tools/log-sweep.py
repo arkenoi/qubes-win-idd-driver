@@ -160,7 +160,7 @@ def task_record_is_failure(eid, msg):
 
     MEASURED 2026-10-09 on win11-acc. task_failures counted every 201 and 203 for one of our tasks,
     and 201 is "Task Scheduler SUCCESSFULLY COMPLETED task X ... with return code N". Our tasks are
-    supposed to run and complete at every boot - QwtClockSync, QubesPvNic, QwtModuleBases,
+    supposed to run and complete at every boot - QubesPvNic, QwtModuleBases,
     QubesPvNicRearm, QwtDeathReporter - so every healthy boot contributed records to a metric whose
     threshold is max 0, and the gate could never read 0 however clean the guest was. In that
     capture's window there were five such records: four with RETURN CODE 0, and one QwtDeathReporter
@@ -4472,7 +4472,28 @@ def cmd_analyze(a):
                        "per-boot count mean what they say; the guest's clock, not this sweep, is what needs "
                        "fixing" % (_shifted, _phase_offset, fmt_ts(_anchor)))
     boots = cluster_boots(files, 0 if _shifted else _phase_offset)
-    st = build_structure(files, boots, load_context(a.logsdir))
+    _ctx = load_context(a.logsdir)
+    st = build_structure(files, boots, _ctx)
+    # THE PRE-SYNC SKEW IS NOW GRADED, NOT ONLY PRINTED. log-sweep.sh has always measured the
+    # guest's clock against the host's BEFORE anything corrects it (step 1b, presync_skew_s) and
+    # carried it into the summary's CLOCK line - and nothing ever failed on it, however large.
+    # That was tolerable only while the product pulled the clock at boot: the correction produced a
+    # backward jump, and clock_boot_correction_s graded THAT. The boot pull is gone (2026-10-28,
+    # docs/ADR-clock.md), so no jump is produced and the jump-based detectors have no input - a
+    # guest an hour out for a whole boot would read clean. This reads the two clocks directly and
+    # needs no correction to have happened, which is why it is the one that survives the removal.
+    # The tolerance is the SAME LOGSWEEP_MAX_SKEW_S the wrapper already hands clock_correct.
+    # A DISTINCT KEY ON PURPOSE: `clockskew` means the harness's own sync did not take, and
+    # _clock_ok below keys on exactly that string to decide the predecessor cut. This is a
+    # different finding - the guest BOOTED out of sync - and must not move that cut.
+    _gc = (_ctx or {}).get("guest_clock") or {}
+    _psk, _maxsk = _gc.get("presync_skew_s"), _gc.get("max_skew_s")
+    if isinstance(_psk, (int, float)) and isinstance(_maxsk, (int, float)) and abs(_psk) > _maxsk:
+        problems.append(("bootclockskew", a.logsdir,
+            "the guest booted %+d s out from dom0, over the %d s maximum, measured before anything "
+            "corrected it (guest %s, host %s) - dom0's hourly qvm-sync-clock push is what closes "
+            "this now, so a guest still out at collect time either missed it or cannot take it"
+            % (_psk, _maxsk, _gc.get("presync_guest_utc"), _gc.get("presync_host_utc"))))
     # THE CUT, AND IT GOES HERE: AFTER the structure, BEFORE the metrics.
     #
     # After, because the boot census and the instance list describe the GUEST, not the build - a

@@ -8,7 +8,6 @@ pass=0; fail=0
 ck(){ if [ "$2" = "$3" ]; then pass=$((pass+1)); echo "  ok   $1"; else fail=$((fail+1)); echo "  FAIL $1: expected '$2', got '$3'"; fi; }
 
 I=packaging/setup/Install-QwtImproved.ps1
-C=guest/sync-clock-from-dom0.ps1
 # Comments stripped before counting: these files NAME the writes that were removed, so matching raw
 # text finds the explanation and calls it a write - a mistake made twice in one day here.
 nocomment(){ tr -d '\r' < "$1" | sed 's/^ *#.*//'; }
@@ -17,7 +16,6 @@ W='New-ItemProperty[^|]*RealTimeIsUniversal|Set-ItemProperty[^|]*RealTimeIsUnive
 
 echo "---- A. nothing anywhere sets a hardware-clock convention ----"
 ck "the installer writes none"                  "0" "$(nocomment "$I" | command grep -cE "$W")"
-ck "the per-boot clock task writes none"        "0" "$(nocomment "$C" | command grep -cE "$W")"
 ck "no harness file writes one"                 "0" "$(sed 's/#.*//' mgmt/harness/*.sh | command grep -cE "$W")"
 for x in mgmt/autounattend*.xml; do
   ck "no convention in $(basename "$x")"        "0" "$(xmlbody "$x" | command grep -c 'RealTimeIsUniversal')"
@@ -46,7 +44,6 @@ ck "the installer reads /qubes-timezone"        "yes" \
 ck "it sets the zone with tzutil"               "1" "$(nocomment "$I" | command grep -c 'tzutil /s')"
 ck "no answer file pins UTC"                    "0" \
    "$(command grep -ao '<TimeZone>UTC</TimeZone>' mgmt/autounattend*.xml | command grep -c . || true)"
-ck "the per-boot task only pulls the clock"     "0" "$(nocomment "$C" | command grep -cE 'tzutil|TimeZoneInformation')"
 
 echo "---- D. seen to fail: put a writer back ----"
 # NEVER A PASS THE CHECK HAS NOT BEEN SEEN TO FAIL. Five versions of this file asserted five

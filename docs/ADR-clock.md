@@ -77,8 +77,34 @@ creation?"*
 
 ## What the product still does about the clock
 
-* **Pulls the time at every boot** - `guest/sync-clock-from-dom0.ps1`, stock's behaviour with our
-  retry/deadline handling. It decides nothing.
+* **Does NOT pull the time at boot. Removed 2026-10-28, and actively unregistered on upgrade.**
+  A SYSTEM task (`QwtClockSync`, `BootTrigger PT15S`) used to run `guest/sync-clock-from-dom0.ps1`,
+  looping a `qrexec-client-vm` call to `qubes.GetDate` piped into `powershell.exe -File
+  set-time.ps1`. Per successful boot: FOUR processes, two of them complete PowerShell runtimes,
+  and one vchan, all inside boot+15 s. It was never stock's behaviour - stock's `update-time.bat`
+  is called by nothing but `qubes.SuspendPostAll`; the boot task was ours.
+
+  It is gone because this ADR's own fix removed its reason. The three-hour defect it was built for
+  (2026-10-08) was a convention problem, and `timezone=localtime` at create time settled that:
+  `clock_boot_correction_s = 0` on 2026-10-15 where the same cell read 10800 that morning. What
+  was left is drift, and this ADR already said so - *"The time pull is drift correction, not a
+  convention fix."* The only measured drift on record is **2.9 s** (19709's `set-time.ps1` log:
+  `was -2.9 s out, now 0 s`), against a `clock_boot_correction_s` maximum of 60.
+
+  Drift is corrected without us. dom0 ships
+  `/etc/cron.d/qubes-sync-clock` - `0 * * * * root /usr/bin/qvm-sync-clock` - an HOURLY push of
+  `qubes.SetDateTime` to every running qube, served by the same `set-time.ps1` the pull used. The
+  residual exposure is boot-to-next-hourly-tick, worst case ~60 min, on an RTC that already holds
+  dom0 local time. Jev, asked about the objective rather than about iterating the script:
+  `pull_is_needed_at_all` = not_needed **0.85**, `cheapest_sufficient_shape` = drop_the_task
+  **0.89**, `three_hour_premise_is_gone` **0.94**, `setter_powershell_is_wasteful` **0.88**.
+
+  **The installer unregisters it** (`Install-QwtImproved.ps1`), because the task's action path was
+  deliberately copied into the Qubes Tools tree to outlive setup - a guest upgraded from an older
+  build would otherwise keep running it for ever.
+
+  WHAT IS UNTOUCHED: `set-time.ps1` (the `qubes.SetDateTime` service dom0 pushes to) and
+  `update-time.bat` (the suspend/resume path). Both still work; only the boot task is gone.
 * **Sets the guest's zone from `/qubes-timezone`**, late in the install where qubesdb is readable.
   Stock leaves the zone to whoever runs Setup; we install unattended, so nobody picks one. dom0
   publishes an IANA name (verified: `qubesdb-read /qubes-timezone` -> `Europe/Sofia`) and `tzutil`

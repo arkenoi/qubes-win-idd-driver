@@ -4736,35 +4736,47 @@ function Invoke-Stage2 {
         $script:Result.detail.reboot_audit = 'not in payload'
     }
 
-    # --- clock sync: pull the time from dom0 at every boot -------------------------------
-    # The PUSH half (dom0 -> qubes.SetDateTime) always existed. The PULL half did not:
-    # update-time.bat has been in the tree the whole time and is called by nothing but
-    # qubes.SuspendPostAll, so a guest whose clock was wrong stayed wrong until dom0 happened
-    # to push. Measured 2026-10-08 on win11r-logvol: 3 h ahead of the host with the zone set to
-    # UTC, which silently widened every --since log window by three hours.
-    $clk = Join-Path $Root 'install-clock-sync.ps1'
-    if (Test-Path -LiteralPath $clk) {
-        Write-Log 'installing the boot-time clock pull (SYSTEM task, BootTrigger)'
-        try {
-            $co = & $clk 2>&1
-            foreach ($l in @($co | Select-Object -Last 4)) { Write-Log "  $l" }
-            $tr = @($co) | Where-Object { $_ -match '"ok"\s*:\s*(true|false)' } | Select-Object -Last 1
-            if ($tr -match '"ok"\s*:\s*true') {
-                $script:Result.detail.clock_sync = 'registered'
-            } elseif ($tr) {
-                $script:Result.detail.clock_sync = "refused: $(($tr | Out-String).Trim())"
-                Write-Log 'the clock pull did NOT register - this guest can keep a wrong clock' 'WARN'
-            } else {
-                $script:Result.detail.clock_sync = 'ran, no result trailer'
-                Write-Log 'install-clock-sync.ps1 printed no result trailer' 'WARN'
-            }
-        } catch {
-            Write-Log "clock sync install failed: $($_.Exception.Message) (non-fatal)" 'WARN'
-            $script:Result.detail.clock_sync = "error: $($_.Exception.Message)"
+    # --- clock sync: REMOVED, and actively unregistered on upgrade -----------------------
+    # WHAT THIS USED TO DO, and why it is gone. A SYSTEM scheduled task (QwtClockSync,
+    # BootTrigger PT15S) ran guest\sync-clock-from-dom0.ps1, which looped a qrexec-client-vm
+    # call to qubes.GetDate piped into powershell.exe -File set-time.ps1. Per successful boot
+    # that is FOUR processes - two of them complete PowerShell runtimes - and one vchan, all
+    # created inside boot+15 s.
+    #
+    # It was built on 2026-10-08 for a guest measured THREE HOURS off with its zone set to UTC.
+    # docs/ADR-clock.md records what actually fixed that, and it was not this: every path that
+    # creates a Windows guest now sets timezone=localtime BEFORE its first boot, so the RTC holds
+    # dom0's local time from the first instant of Setup. Measured 2026-10-15 on a clean cell,
+    # clock_boot_correction_s = 0 against a max of 60, where the same cell read 10800 that
+    # morning. The ADR's own words for what remained: "The time pull is drift correction, not a
+    # convention fix."
+    #
+    # The drift it corrects is 2.9 s - the only measured correction on record (19709's own
+    # set-time log: "was -2.9 s out, now 0 s"). And dom0 already corrects drift without us:
+    # /etc/cron.d/qubes-sync-clock runs qvm-sync-clock HOURLY, pushing qubes.SetDateTime to every
+    # running qube, served by the very same set-time.ps1. The PUSH half shipped before our pull
+    # and is untouched here; so is update-time.bat on the suspend/resume path.
+    #
+    # Jev, on the objective ("the clock is in sync") rather than on iterating this script:
+    # pull_is_needed_at_all = not_needed 0.85, cheapest_sufficient_shape = drop_the_task 0.89,
+    # three_hour_premise_is_gone 0.94, setter_powershell_is_wasteful 0.88.
+    #
+    # UNREGISTER, do not merely stop shipping. A guest upgraded from a build that registered the
+    # task keeps running it for ever otherwise - the action path points into the Qubes Tools tree
+    # and outlives setup, which was the point of installing it there.
+    $null = & schtasks.exe /Query /TN 'QwtClockSync' *>&1
+    if ($LASTEXITCODE -eq 0) {
+        try { & schtasks.exe /Delete /TN 'QwtClockSync' /F *>&1 | Out-Null } catch { }
+        $null = & schtasks.exe /Query /TN 'QwtClockSync' *>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Log 'removed the obsolete boot-time clock pull (QwtClockSync) left by an earlier build'
+            $script:Result.detail.clock_sync = 'unregistered'
+        } else {
+            Write-Log 'QwtClockSync is still registered after /Delete - remove it by hand (schtasks /Delete /TN QwtClockSync /F)' 'WARN'
+            $script:Result.detail.clock_sync = 'still registered'
         }
     } else {
-        Write-Log 'install-clock-sync.ps1 not in payload - the clock is never pulled at boot' 'WARN'
-        $script:Result.detail.clock_sync = 'not in payload'
+        $script:Result.detail.clock_sync = 'absent'
     }
 
     # --- autologon: VERIFY what stage 1 armed -------------------------------------------

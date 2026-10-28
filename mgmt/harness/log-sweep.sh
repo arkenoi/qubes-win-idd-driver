@@ -173,18 +173,22 @@ log "pulled: $(grep -ac ': OK' "$OUT/decode.txt") blocks verified; $(grep -a '^D
 
 # 2b. the clock as measured in 1b, the context the caller declares, and the injection records it captured (evidence
 # lives in the files, never in names). Written on every run: the clock fields always exist.
-python3 - "$OUT/logs/context.json" "${FI_DECLARED:-0}" "${0##*/}" "$PRESYNC_GUEST_UTC" "$PRESYNC_HOST_UTC" "$PRESYNC_SKEW_S" "$POSTSYNC_GUEST_UTC" "${#DECL_PAT[@]}" "${DECL_PAT[@]}" "${DECL_WHY[@]}" "${DECL_TOL[@]}" <<'PY'
+python3 - "$OUT/logs/context.json" "${FI_DECLARED:-0}" "${0##*/}" "$PRESYNC_GUEST_UTC" "$PRESYNC_HOST_UTC" "$PRESYNC_SKEW_S" "$POSTSYNC_GUEST_UTC" "${LOGSWEEP_MAX_SKEW_S:-120}" "${#DECL_PAT[@]}" "${DECL_PAT[@]}" "${DECL_WHY[@]}" "${DECL_TOL[@]}" <<'PY'
 import json, sys
 out, fi, caller = sys.argv[1], sys.argv[2] == '1', sys.argv[3]
 g_utc, h_utc, skew, post = sys.argv[4:8]
-n = int(sys.argv[8])
-pats, whys = sys.argv[9:9 + n], sys.argv[9 + n:9 + 2 * n]
-tols = sys.argv[9 + 2 * n:9 + 3 * n]
+# max_skew_s: the SAME tolerance this script already hands clock_correct, carried so the analyzer
+# can GRADE the pre-sync number instead of only printing it. Not a new knob - LOGSWEEP_MAX_SKEW_S.
+max_skew = sys.argv[8]
+n = int(sys.argv[9])
+pats, whys = sys.argv[10:10 + n], sys.argv[10 + n:10 + 2 * n]
+tols = sys.argv[10 + 2 * n:10 + 3 * n]
 ctx = {"source": "log-sweep.sh (caller: %s)" % caller,
        # measured BEFORE the sync (step 1b); the analyzer carries it into report.json context.guest_clock and
        # prints it as the summary's CLOCK line
        "guest_clock": {"presync_guest_utc": g_utc, "presync_host_utc": h_utc, "presync_skew_s": int(skew),
-                       "postsync_guest_utc": post or None}}
+                       "postsync_guest_utc": post or None,
+                       "max_skew_s": int(max_skew)}}
 if fi:
     ctx["fault_injection_declared"] = True
 if n:

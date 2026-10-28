@@ -236,10 +236,9 @@ else echo "  FAIL rtc: the installer writes RealTimeIsUniversal - nothing should
 if tr -d '\r' < "$I" | awk '/function Assert-Stage1Preflight/,/^}$/' | command grep -q 'qvm-features <vm> timezone localtime'; then
   echo "  OK   rtc: the clock refusal names the qube feature as the fix"
 else echo "  FAIL rtc: the refusal does not name 'qvm-features <vm> timezone localtime'"; fail=1; fi
-C=guest/sync-clock-from-dom0.ps1
-if [ "$(tr -d '\r' < "$C" | sed 's/^ *#.*//' | command grep -cE "$W")" = 0 ]; then
-  echo "  OK   rtc(boot): the per-boot task sets no convention either - it only pulls the clock"
-else echo "  FAIL rtc(boot): the per-boot task writes a convention"; fail=1; fi
+# The per-boot clock task is GONE (QwtClockSync / sync-clock-from-dom0.ps1, removed 2026-10-28 -
+# see docs/ADR-clock.md). The check that it wrote no RTC convention went with its subject; the
+# property itself is still enforced for every remaining file by tools/lint-harness.py L26.
 
 # THE ANSWER FILES PIN A REAL ZONE. The clock holds dom0 LOCAL time from the first instant of Setup
 # (the feature is set at create time), so the zone that makes the arithmetic right is dom0's, not

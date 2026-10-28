@@ -176,8 +176,6 @@ Copy-Item (Need (Join-Path $RepoRoot 'guest\install-reboot-audit.ps1') 'reboot-c
 # the puller does NOT live in core-agent/src/qubes-rpc-services: that sweep is mirrored into the
 # built MSI as well, and a file with no wxs component fails the ours-wins guard there (measured,
 # run 37743438873).
-Copy-Item (Need (Join-Path $RepoRoot 'guest\install-clock-sync.ps1') 'boot-time clock-pull installer') $OutDir -Force
-Copy-Item (Need (Join-Path $RepoRoot 'guest\sync-clock-from-dom0.ps1') 'boot-time clock puller') $OutDir -Force
 # qrexec rpc handler scripts + service definitions. The MSI is assembled from the STOCK QWT
 # image plus our gui-agent binaries (stage-qwt-repo.ps1) - core-agent contributes only a
 # signing cert - so NOTHING edited under core-agent/src/qubes-rpc-services/ ever reaches the
