@@ -102,7 +102,9 @@ xl dmesg | tail -200 > "$OUT/xl-dmesg-domains.txt" 2>&1
 #    `d` is dump_registers: it dumps each PHYSICAL CPU's state, and prints a guest's registers
 #    only for a vCPU that is CURRENTLY RUNNING on that pCPU. A spinning vCPU is therefore caught
 #    (it is running); a vCPU that is blocked or descheduled - the waiting side of a lock spin -
-#    is NOT dumped by any key. So "no RIP for dNvM" here means "not running at that instant",
+#    is not dumped by THIS key. It used to say "not dumped by any key", which is false and cost a
+#    diagnosis on 2026-10-28: `r` (dump_runq) reaches exactly that vCPU, and is now collected in
+#    3c below. So "no RIP for dNvM" here means "not running at that instant",
 #    never "not spinning". `v` (vmcs_dump) prints VMX state incl. the last exit reason for EVERY
 #    HVM domain x vCPU, which on a dom0 with many qubes can wrap the ring by itself. Nine wedges
 #    were recorded with g/e/q only, so each one's spin site stayed a guess; with the per-boot
@@ -119,6 +121,25 @@ xl dmesg > "$OUT/xl-dmesg-vcpu-regs-2.txt" 2>&1
 xl dmesg -c >/dev/null 2>&1
 xl debug-keys v 2>/dev/null; sleep 2
 xl dmesg > "$OUT/xl-dmesg-vmx.txt" 2>&1
+
+# 3c. THE RUN QUEUES - the one state `d` structurally cannot reach, and the comment above said no
+#    key could. That is wrong and it cost a diagnosis. `d` dumps a guest's registers only for a
+#    vCPU CURRENTLY RUNNING on a pCPU, so a vCPU that is descheduled is invisible to it - and on
+#    2026-10-28 the whole finding WAS a descheduled vCPU: win10-acc's vcpu0 sat in `xl vcpu-list`
+#    state `---` (neither running, blocked nor paused), affinity all/all, Time frozen at 19.6 s,
+#    through a deliberate pause/unpause. Nothing in g/e/q/d/v says why a runnable vCPU is never
+#    picked, so the specimen had to be escalated with that question open.
+#    `r` is dump_runq: per runqueue, and under credit2 per vCPU, it prints the queue contents and
+#    the credit that decides who runs next. That is the direct answer to "listed runnable, never
+#    scheduled". Same ring discipline as every block above: clear first, dump, then read.
+xl dmesg -c >/dev/null 2>&1
+xl debug-keys r 2>/dev/null; sleep 2
+xl dmesg > "$OUT/xl-dmesg-runq.txt" 2>&1
+# Extract this domain's lines so they get READ rather than archived: credit2 writes vCPUs as
+# `d<domid>v<vcpu>`, and the surrounding runqueue headers carry the context.
+echo "run-queue lines mentioning d$DOMID (empty = this domain is on NO runqueue, which is itself" \
+     "the finding):" > "$OUT/runq-summary.txt"
+grep -aE "d${DOMID}v[0-9]+" "$OUT/xl-dmesg-runq.txt" >> "$OUT/runq-summary.txt" 2>/dev/null
 
 # --- The Xen-side half, EXTRACTED so it gets read rather than archived (added 2026-09-25).
 #     `xl debug-keys v` prints, per vCPU, the VMCS guest-interrupt-status field: RVI in the low
