@@ -199,8 +199,10 @@ def disasm(data, vma):
             os.remove(p); os.rmdir(d)
         except OSError:
             pass
-    lines = [l for l in out.stdout.splitlines() if re.match(r"^\s+[0-9a-f]+:", l)]
-    return lines or ["<objdump produced nothing>"]
+    # an instruction line is "<addr>:\t<bytes>\t<mnemonic>"; objdump right-aligns the address,
+    # so a 16-digit kernel RIP fills the field and leaves no leading space
+    lines = [l for l in out.stdout.splitlines() if re.match(r"^\s*[0-9a-f]+:\t", l)]
+    return lines or ["<objdump disassembled nothing at 0x%x (%d bytes in)>" % (vma, len(data))]
 
 
 VMCALLS = (b"\x0f\x01\xc1", b"\x0f\x01\xd9")   # Intel VMCALL, AMD VMMCALL
@@ -292,7 +294,7 @@ def main():
         return small(c, a.small)
     print("vcpus=%d  pages=%d  (pfn entries %d)" % (c.nvcpu, c.sections[".xen_pages"]["size"] // PAGE, len(c.pfns)))
     print()
-    rows = []
+    rows, nodisasm = [], []
     for i in range(c.nvcpu):
         v = c.vcpu(i)
         pa, how = c.v2p(v["cr3"], v["rip"])
@@ -309,9 +311,12 @@ def main():
         blob = c.read_phys(spa, a.around + a.bytes) if spa is not None else c.read_phys(pa, a.bytes)
         vma = start if spa is not None else v["rip"]
         lines = disasm(blob, vma)
+        if lines and lines[0].startswith("<"):
+            row["disasm_failed"] = lines[0]
+            nodisasm.append(i)
         row["disasm"] = lines
         for l in lines:
-            mark = "  <== RIP" if re.match(r"^\s+%x:" % v["rip"], l) else ""
+            mark = "  <== RIP" if re.match(r"^\s*%x:\t" % v["rip"], l) else ""
             print("   ", l.rstrip(), mark)
         rows.append(row)
         print()
@@ -337,6 +342,12 @@ def main():
 
     if a.json:
         json.dump(rows, open(a.json, "w"), indent=1, default=str)
+    # every vCPU is still printed and the json still written - an image is read once, so one
+    # unreadable vCPU must not cost the others - but the exit code tells the truth about it
+    if nodisasm:
+        print("INSTRUMENT: no disassembly for vcpu(s) %s" %
+              ",".join(str(i) for i in nodisasm), file=sys.stderr)
+        return 2
     return 0
 
 
