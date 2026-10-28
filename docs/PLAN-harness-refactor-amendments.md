@@ -27,3 +27,28 @@ attempt-scoped, `attempt_dir`-gated directory that now contains them.
 
 **Driven:** `ATTEMPT 20261028T0000Z-TEST 2026-10-27T23:29:35Z` appears inside the package and in
 `tar -tzf package.tar.gz`.
+
+## Step 3 / checklist item 2 — the sixth name is DELETED, not declared
+
+**Step 3, verbatim:** `Acceptance: the six names appear only in not-in-the-gate.txt.`
+**Checklist item:** `six redundant source-text checks only in not-in-the-gate.txt`.
+
+**What is true at HEAD:** five of the six are declared in `tools/tests/not-in-the-gate.txt`
+(`bridge-exit-reason-selftest.sh`, `harness-clock-selftest.sh`, `log-policy-selftest.sh`,
+`loginit-banner-debug-check.sh`, `probe-anchor-selftest.sh`, lines 76-80). The sixth,
+`broker-down-anchor-selftest.sh`, appears in no list at all because it no longer exists:
+`d35b65e8 broker-down-anchor-selftest.sh is deleted, floor 145 -> 144 in the same commit`.
+
+**Why this is not a deviation.**
+1. Deletion is the owner's standing rule for this exact case, and it is stronger than quarantine:
+   "A selftest that fails and needs a quick fix is DELETED, not fixed ... Drop it, lower the floor
+   in the same commit." `d35b65e8` did both halves in one commit, which is the rule's own shape.
+2. Declaring it would itself be a defect. `not-in-the-gate.txt`'s header states the invariant:
+   "A declaration naming a file that is gone is itself a finding." So satisfying the checklist
+   literally would plant the finding the file exists to prevent.
+3. `tools/lint-harness.py` L32 refuses a commit when a test file **in the tree** is in none of the
+   three lists. A deleted file is outside that rule's domain, so nothing is weakened by its absence.
+
+**Measured, not argued:** `broker-down-anchor-selftest.sh` is absent from the tree and appears zero
+times in `product-suites.txt`, `harness-suites.txt` and `not-in-the-gate.txt`, and `grep -rn
+broker-down-anchor tools/tests/*.txt` returns nothing.
