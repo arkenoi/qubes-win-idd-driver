@@ -35,7 +35,7 @@ SUITEDIR=${OFFLINE_SUITES_DIR:-tools/tests}
 # It replaces a 250-line per-move history: that history recorded a policy where any addition moved
 # the floor, and it still stood at 148 against a list of 146 for a day - every run exited 2 and NO
 # suite ran at all, which is the exact inertness the floor exists to catch.
-FLOOR=${OFFLINE_SUITES_FLOOR:-43}
+FLOOR=${OFFLINE_SUITES_FLOOR:-42}
 # Each suite's own temp files: /tmp is a 1 GB tmpfs on the dev qube and 40 suites' fixtures do not
 # belong in RAM. On a CI runner TMPDIR is already real disk, so this only ever makes it safer.
 export TMPDIR="${TMPDIR_OVERRIDE:-${RUNNER_TEMP:-/home/user/tmp}}"

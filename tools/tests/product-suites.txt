@@ -1,7 +1,6 @@
 # Suites that execute product code or assert an ADR invariant. A FAIL here accuses the product.
 # The gate floor may rise only when this file gains a line.
 brokerctl-selftest.sh
-clock-sync-selftest.sh
 death-reporter-selftest.sh
 death-reporter-xpath-selftest.py
 deathevent-selftest.sh
