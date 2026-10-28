@@ -25,5 +25,11 @@ Exit 2 = instrument did not run. Never paper over it.
 4. Wire log is the receipt. No matching entry = false claim.
 5. For procedure questions: state must contain the exact command and the committed alternative. Generic rephrasing fails the committed-procedure gate.
 
+## Designing the workflow around a call
+
+Who runs after Jev, how to size a fork, how to brief Fable with a decided premise, and the floor
+and schema traps: the **`jev-workflow`** skill. Read it before spawning any Fable agent or
+Workflow - `tools/hooks/jev-first-gate.sh` will refuse the launch without a named `--out` receipt.
+
 ## Default rubric shape
 root_cause (choice) + chain_established (noul) + missing_measurement (choice).
