@@ -29,6 +29,7 @@ source mgmt/harness/vmlock.sh; vm_lock "$VM"
 KEY='HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent'
 QTEST_BIN="${QTEST_BIN:-./tools/qtest}"   # overridable ONLY so the degraded-guest paths are provable off-rig
 source mgmt/harness/lifecycle-lib.sh   # ctl_start / ctl_stop: the control window, by handle - no process is killed by name
+source mgmt/harness/window-grade-lib.sh # wg_png_dims/wg_png_wxh/wg_png_id: the ONE reader of a capture's dimensions
 source mgmt/harness/shutdown-lib.sh   # qwt_shutdown: the bit is applied across a reboot, see set_bits
 source mgmt/harness/primitives.sh     # the six sealed primitives: clock_correct, fresh_cell_log, toolstack_accept, ...
 q(){ QTEST_VM=$VM timeout -k 8 "${T:-200}" "$QTEST_BIN" "$@" 2>/dev/null; }
@@ -77,8 +78,7 @@ windows(){  # -> "<count>|<WxH>,..."
   local d=""
   if [ "$n" -gt 0 ]; then
     local x; x=$(mktemp -d); tar xf "$t" -C "$x" 2>/dev/null
-    d=$(for f in "$x"/*.png; do [ -e "$f" ] && python3 -c "
-import struct,sys; b=open(sys.argv[1],'rb').read(); w,h=struct.unpack('>II',b[16:24]); print(f'{w}x{h}')" "$f"; done | paste -sd,)
+    d=$(for f in "$x"/*.png; do [ -e "$f" ] && wg_png_wxh "$f"; done | paste -sd,)
     rm -rf "$x"
   fi
   rm -f "$t"; echo "$n|$d"

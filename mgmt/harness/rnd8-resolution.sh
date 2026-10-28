@@ -29,6 +29,7 @@ require_scripts guest/set-resolution.ps1 guest/run-as-user.ps1
 VM="${1:?usage: $0 <vm> [outdir]}"
 source mgmt/harness/vmlock.sh; vm_lock "$VM"   # one harness per guest; see vmlock.sh
 source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the notepad this run starts is stopped by its recorded identity, never by name
+source mgmt/harness/window-grade-lib.sh # wg_png_dims/wg_png_wxh/wg_png_id: the ONE reader of a capture's dimensions
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/RND8-$VM}"
 # A contaminated subject is refused BEFORE any work: this script's default output dir carries no
 # run-id, so a second attempt would otherwise append to the first attempt's artefacts and be read
@@ -83,10 +84,7 @@ shot_hash(){
   tar xf "$t" -C "$TMP/sx" 2>/dev/null
   local big=""; big=$(ls -S "$TMP/sx"/*.png 2>/dev/null | head -1)
   [ -n "$big" ] || { echo "NOWIN"; return; }
-  python3 -c "
-import struct,hashlib,sys
-b=open(sys.argv[1],'rb').read(); w,h=struct.unpack('>II',b[16:24])
-print(f'{w}x{h}:{hashlib.sha256(b).hexdigest()[:16]}')" "$big"
+  wg_png_id "$big"
 }
 
 # type into Notepad from the USER session so the pixels genuinely change

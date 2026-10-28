@@ -150,8 +150,12 @@ def l2_vmlock_required() -> None:
         # (matrix.sh, quick-upgrade.sh, campaign-preflight.sh). vmlock exposes no held-predicate,
         # so a library cannot assert the lock without reading vmlock's internals, and taking the
         # lock itself would contend with the harness that owns the subject.
+        # window-grade-lib.sh joined on 2026-10-28, same reason: it is the ONE window check
+        # ("did a guest window reach dom0 as pixels?"), sourced by matrix.sh, quick-upgrade.sh and
+        # stability-e2e.sh, each of which already holds the subject's lock. It opens notepad and
+        # takes a capture through tools/qtest on the caller's guest; its header states the contract.
         if f.name in ("shutdown-lib.sh", "wu-liveness.sh", "logvol-lib.sh", "rtc-lib.sh",
-                      "primitives.sh"):
+                      "primitives.sh", "window-grade-lib.sh"):
             continue
         finding("L2-missing-vmlock", f.name,
                 "drives a guest via tools/qtest but never calls vm_lock")

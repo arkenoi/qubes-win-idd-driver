@@ -61,6 +61,7 @@ import base64,sys; print(base64.b64encode(sys.stdin.read().encode('utf-16-le')).
   r "cmd /c powershell -NoProfile -EncodedCommand $b"; }
 log(){ echo "$(date -u +%H:%M:%S) rnd[$VM]: $*" | tee -a "$OUT/rnd.log"; }
 source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the owner notepad this run starts is stopped by its recorded identity, never by name
+source mgmt/harness/window-grade-lib.sh # wg_png_dims/wg_png_wxh/wg_png_id: the ONE reader of a capture's dimensions
 geom(){ QTEST_VM=$VM timeout -k 8 200 ./tools/qtest-geom 2>/dev/null; }
 
 parse_geom(){
@@ -104,10 +105,7 @@ owner_png(){   # -> path to the largest mapped window's PNG, or empty
 owner_hash(){
   local p; p=$(owner_png "${1:-o}") || { echo NOCAP; return; }
   [ -n "$p" ] || { echo NOWIN; return; }
-  python3 -c "
-import hashlib,struct,sys
-b=open(sys.argv[1],'rb').read(); w,h=struct.unpack('>II',b[16:24])
-print(f'{w}x{h}:{hashlib.sha256(b).hexdigest()[:16]}')" "$p"
+  wg_png_id "$p"
 }
 # hash of ONE RECT of a capture, in owner-relative coordinates - the coordinates the agent's own
 # SYNTHPAINT line reports (msg=SYNTHPAINT,...,rx=,ry=,w=,h=). Clamped to the image, and it refuses

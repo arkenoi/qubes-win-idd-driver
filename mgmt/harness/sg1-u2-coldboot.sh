@@ -33,6 +33,7 @@ require_scripts guest/set-resolution.ps1 guest/wu-boot-acceptance-check.ps1 gues
 VM="${1:?usage: $0 <vm> [outdir]}"
 source mgmt/harness/vmlock.sh; vm_lock "$VM"   # one harness per guest; see vmlock.sh
 source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the notepad this run starts is stopped by its recorded identity, never by name
+source mgmt/harness/window-grade-lib.sh # wg_png_dims/wg_png_wxh/wg_png_id: the ONE reader of a capture's dimensions
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/SG1U2-$VM}"
 # A contaminated subject is refused BEFORE any work: this script's default output dir carries no
 # run-id, so a second attempt would otherwise append to the first attempt's artefacts and be read
@@ -107,9 +108,7 @@ for i in $(seq 1 70); do
     rm -rf "$TMP/x"; mkdir -p "$TMP/x"; tar xf "$t" -C "$TMP/x" 2>/dev/null
     for f in "$TMP/x"/*.png; do
       [ -e "$f" ] || continue
-      d=$(python3 -c "
-import struct,sys
-b=open(sys.argv[1],'rb').read(); w,h=struct.unpack('>II',b[16:24]); print(f'{w} {h}')" "$f" 2>/dev/null)
+      d=$(wg_png_dims "$f")
       set -- $d; w=${1:-0}; h=${2:-0}
       [ "$w" -ge "$THRW" ] && [ "$h" -ge "$THRH" ] && { BIG=$((BIG+1)); MAXDIM="${w}x${h}"; cp "$f" "$OUT/FULLSCREEN-DURING-BOOT-$i.png"; }
     done

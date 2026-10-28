@@ -15,6 +15,11 @@ for fn in grade_appvm_window; do
   eval "$(sed -n "/^$fn(){/,/^}\$/p" "$MSH")"
   declare -f "$fn" >/dev/null || { echo "FAIL could not extract $fn from $MSH"; exit 1; }
 done
+# The body this suite drives moved to window-grade-lib.sh on 2026-10-28 (matrix.sh, quick-upgrade.sh
+# and stability-e2e.sh all call it now), so the extracted wrapper needs the library behind it. The
+# cases are unchanged and now exercise the shared implementation rather than matrix's private copy.
+source mgmt/harness/window-grade-lib.sh || { echo "FAIL could not source window-grade-lib.sh"; exit 1; }
+declare -f grade_mapped_window >/dev/null || { echo "FAIL window-grade-lib.sh defines no grade_mapped_window"; exit 1; }
 
 pass=0; fail=0
 ok_(){  printf '  PASS  %s\n' "$1"; pass=$((pass+1)); }
@@ -80,7 +85,7 @@ run_win(){ newcase "$@"
   OK=0; NO=0; LINES=""; common_stubs
   ctl_start(){ printf 'h 123 456\n'; }
   ctl_stop(){ printf 'stopped\n'; }
-  g_probe(){ printf '%s\n' "$(v GUEST_WINDOWS)"; }
+  _wg_npwin(){ printf '%s\n' "$(v GUEST_WINDOWS)"; }
   local _cwd="$PWD"
   cd "$T/tree" || { no_ "could not enter the stub tree"; return; }
   PATH="$T/bin:$PATH" grade_appvm_window winapp c1 1

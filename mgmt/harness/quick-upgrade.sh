@@ -139,6 +139,8 @@ job_on_abort(){
 # Wait primitives with failure modes (w_state/w_alive/w_session/w_halt/w_screen) - REUSED, not
 # rewritten. They call ./tools/qtest relative to the repo root, which is the cwd here.
 source mgmt/harness/e2e-wait.sh
+source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the notepad check (f) opens is closed by its recorded identity
+source mgmt/harness/window-grade-lib.sh # grade_mapped_window: the same window check the campaign runs
 # THE SECONDARY LOG VOLUME (PLAN-acceptance-optimization section 3). Its purpose is the WEDGE: when
 # the guest hangs, qrexec is dead and nothing can be asked of it, QWT's own per-module logs are on a
 # volume this qube reads with mtools - guest running, wedged or halted, nothing detached. Until this
@@ -1154,10 +1156,28 @@ case $cwrc in
   *) no "console-window check could not judge - INVALID-INSTRUMENT: $cw" ;;
 esac
 
-# Evidence: the guest's windows as dom0 sees them (the pixels are the judge for anything beyond
-# this script's claims), the MSI log tail, the sliced install log - all already in $OUT.
-QTEST_VM=$SUBJECT timeout -k 5 90 ./tools/qtest shot "$OUT/screen.tar" >/dev/null 2>&1 \
-  && tar -xf "$OUT/screen.tar" -C "$OUT" 2>/dev/null
+# (f) THE MISSION: A GUEST WINDOW REACHES dom0 AS PIXELS (2026-10-28). Until today this script took
+# ONE ungraded `qtest shot` here and threw the result away - and it never opened a window, so on a
+# seamless guest the capture was an EMPTY DESKTOP by construction (burst-quiet-ab.sh:42: nothing
+# open maps no window at all) and no verdict could ever have come from it. Owner, after the run
+# that passed 10/11 with no pixels: "but the smoke test never opened a window". This is the same
+# check the campaign runs - window-grade-lib.sh, shared with matrix.sh's grade_appvm_window.
+# An instrument failure FAILS here (missing data fails): the point of this check is that a silent
+# nothing stops being a pass.
+grade_mapped_window "$SUBJECT" "$OUT/window"; wrc=$?
+log "  notepad: $WG_CTLSTOP_OUT"
+case "$WG_CTLSTOP_RC" in
+  0) ;;
+  3) no "the control window's pid is a DIFFERENT process now ($WG_CTLSTOP_OUT) - ours was never stopped and may still be mapped" ;;
+  4) no "the control window did NOT close ($WG_CTLSTOP_OUT) - it stays on the guest desktop" ;;
+  *) no "INVALID-CTLSTOP  could not establish whether the control window closed ($WG_CTLSTOP_OUT)" ;;
+esac
+case "$wrc" in
+  0) ok "a guest window reached dom0 as PIXELS: $WG_W window(s) mapped, none fullscreen-sized" ;;
+  1) no "a FULLSCREEN-SIZED window was mapped" ;;
+  2) no "INVALID-INSTRUMENT: the guest shows $WG_GUEST notepad window(s) but the dom0 capture returned none on six tries" ;;
+  *) no "notepad opened but dom0 got NO window (guest-side notepad windows: ${WG_GUEST:-unreadable})" ;;
+esac
 grun 'cmd /c powershell -NoProfile -Command "if(Test-Path C:\qwt-install.log){Get-Content C:\qwt-install.log -Tail 60}"' 90 > "$OUT/msi-final.log" 2>/dev/null
 
 # POST-RUN LIVENESS (2026-09-27). This script graded a run PASS 9/9 while the guest stalled seconds

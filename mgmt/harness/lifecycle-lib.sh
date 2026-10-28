@@ -181,8 +181,14 @@ Write-Output ('CTLSTOP ' + \$(if (\$p.HasExited) { 'stopped' } else { 'STILL-RUN
   # stop - and matrix.sh's call site (`say "  notepad: $(... ctl_stop ...)"`) only printed the
   # string. A control window that failed to close therefore stayed on the guest desktop to be
   # counted by a later window-map grading step in the SAME cell, falsifying that cell's verdict.
-  # CTL-STOP-RC-A  (the mapping to the B marker is extracted and driven by
-  # tools/tests/ctl-stop-rc-selftest.sh; neither marker names the other)
+  # WHAT ENFORCES THIS NOW (2026-10-28). ctl-stop-rc-selftest.sh asserted the mapping AND that
+  # matrix.sh branched on it; it was deleted when the window check moved into window-grade-lib.sh,
+  # because it was anchored on the literal `_ctl_rc=$?` and went red on a caller that still
+  # branches - and it only ever inspected matrix.sh, one of thirteen ctl_stop call sites. For the
+  # window check the property is now structural: grade_mapped_window ALWAYS sets WG_CTLSTOP_RC and
+  # its three callers (matrix.sh, quick-upgrade.sh, stability-e2e.sh) each branch on it. The other
+  # call sites below are NOT covered by anything - p5-run.sh, rnd-shell-surfaces.sh, sg6-failproof.sh,
+  # promoted-checks.sh, rnd8-resolution.sh and sg1-u2-coldboot.sh still only PRINT this result.
   case "$out" in
     *'CTLSTOP stopped'*)       return 0 ;;   # it exited
     *'CTLSTOP gone'*)          return 0 ;;   # already gone, which is what a stop wanted

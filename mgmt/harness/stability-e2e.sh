@@ -24,6 +24,7 @@ set -uo pipefail
 cd /home/user/qubes-win-idd-driver
 source .claude/skills/win-guest-e2e/e2e-lib.sh
 source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the notepad each check starts is stopped by its recorded identity, never by name
+source mgmt/harness/window-grade-lib.sh # grade_mapped_window: the ONE window check, shared with matrix.sh and quick-upgrade.sh
 # Evidence goes somewhere DURABLE. This used to be a per-job scratch directory, so every artefact
 # a run produced - shots, logs, the run ledger - was deleted with the job that made it.
 T="${STAB_OUT:-$HOME/qwt-accept/stability}"; S=$T/stability; mkdir -p $S
@@ -59,44 +60,37 @@ wait_session(){ local n=$1 i u; for i in $(seq 1 "$n"); do u=$(session_user); [ 
 INC='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
 HOSTW=5120; HOSTH=1440   # dom0 screen; the fullscreen check is relative to this
 
-png_dims(){ python3 -c "
-import struct,sys
-d=open(sys.argv[1],'rb').read(33)
-w,h=struct.unpack('>II',d[16:24]); print(w,h)" "$1" 2>/dev/null; }
-
 # shot -> count windows, and fail if ANY of them covers the host screen.
 # ALWAYS OPEN AN APP FIRST. In seamless mode a guest with nothing running has no windows at all,
 # so an empty tar is the CORRECT answer and proves nothing either way - the first run of this
 # e2e shot every boot with an empty desktop and reported "capture failed" for all of them, which
 # left the one check that matters (no host-sized window) with nothing to look at.
-check_windows(){ # $1=label  -> sets WCOUNT
-  local lbl=$1 f w h big=0
-  # T is this file's OUTPUT DIR, so the lib's per-call timeout is given explicitly
-  local nppid npstart; read -r _ nppid npstart <<< "$(T=45 ctl_start notepad)"
-  # POLL, do not sleep a fixed amount. On an AppVM's first cold boot notepad can take longer than
-  # any constant, and a single early shot then reports "capture failed" for a guest that is simply
-  # still starting - one such false failure in the 2026-08-28 run.
-  local try
-  WCOUNT=0
-  for try in 1 2 3 4 5 6; do
-    sleep 7
-    rm -f $S/$lbl.tar; timeout -k 8 120 ./tools/qtest shot $S/$lbl.tar >/dev/null 2>&1
-    [ -s $S/$lbl.tar ] && [ "$(tar tf $S/$lbl.tar 2>/dev/null | grep -c '\.png$')" -gt 0 ] && break
-  done
-  [ -s $S/$lbl.tar ] || { say "  $lbl: no shot after 6 attempts (~42 s)"; return 1; }
-  rm -rf $S/$lbl-png && mkdir -p $S/$lbl-png && tar xf $S/$lbl.tar -C $S/$lbl-png 2>/dev/null
-  for f in $S/$lbl-png/*.png; do
-    [ -e "$f" ] || continue
-    WCOUNT=$((WCOUNT+1))
-    read -r w h < <(png_dims "$f")
-    [ -z "${w:-}" ] && continue
-    say "  $lbl: $(basename $f) ${w}x${h}"
-    if [ "$w" -ge $(( HOSTW * 99 / 100 )) ] && [ "$h" -ge $(( HOSTH * 99 / 100 )) ]; then big=1; fi
-  done
-  say "  notepad: $(T=45 ctl_stop "${nppid:-0}" "${npstart:-0}")"
-  [ "$big" = 0 ] || return 2
-  [ "$WCOUNT" -gt 0 ] || return 3   # notepad was opened: zero windows now means a real failure
-  return 0
+#
+# THE BODY MOVED to mgmt/harness/window-grade-lib.sh (2026-10-28). This was a THIRD copy of the same
+# algorithm - matrix.sh had one, this file had one, and the short cycle had none - and the copies had
+# drifted: this one never asked the GUEST whether notepad had a window, so an empty dom0 capture
+# returned "notepad was opened but dom0 got NO window" (a product FAIL) for what is measurably a dom0
+# desktop switch (campaign 34594988407, 2026-09-11), and it printed ctl_stop's result without
+# branching on it, the defect matrix.sh fixed on 2026-10-21 (lifecycle-lib.sh CTL-STOP-RC-A). Both
+# fixes arrive here with the shared check. rc 4 is new: INVALID-INSTRUMENT, previously a false FAIL.
+check_windows(){ # $1=label  -> sets WCOUNT; rc 0 ok / 2 fullscreen / 3 no window / 4 INVALID-INSTRUMENT
+  local lbl=$1 rc
+  WG_FULL_W=$HOSTW; WG_FULL_H=$HOSTH
+  grade_mapped_window "$QTEST_VM" "$S/$lbl"; rc=$?
+  WCOUNT=$WG_W
+  say "  notepad: $WG_CTLSTOP_OUT"
+  case "$WG_CTLSTOP_RC" in
+    0) ;;
+    3) no "$lbl: the control window's pid is a DIFFERENT process now ($WG_CTLSTOP_OUT) - ours was never stopped and may still be mapped" ;;
+    4) no "$lbl: the control window did NOT close ($WG_CTLSTOP_OUT) - it stays on the desktop for any later window check" ;;
+    *) no "$lbl: INVALID-CTLSTOP  could not establish whether the control window closed ($WG_CTLSTOP_OUT)" ;;
+  esac
+  case "$rc" in
+    0) return 0 ;;
+    1) return 2 ;;   # fullscreen-sized
+    2) return 4 ;;   # guest HAS a top-level window, dom0 returned none
+    *) return 3 ;;   # notepad opened, no window anywhere
+  esac
 }
 
 boot_checks(){ # $1=vm label for messages
@@ -107,6 +101,7 @@ boot_checks(){ # $1=vm label for messages
     0) ok "$lbl: $WCOUNT window(s) mapped with notepad open, none fullscreen-sized" ;;
     2) no "$lbl: A FULLSCREEN-SIZED WINDOW WAS MAPPED - the rule that must never break" ;;
     3) no "$lbl: notepad was opened but dom0 got NO window - the guest is not presenting windows" ;;
+    4) no "$lbl: INVALID-INSTRUMENT - the guest shows $WG_GUEST notepad window(s) but the dom0 capture returned none on six tries (a dom0 desktop switch or capture fault)" ;;
     *) no "$lbl: screenshot failed - window check could not run" ;;
   esac
   # agent state: left the secure desktop, not stuck

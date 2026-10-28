@@ -26,7 +26,6 @@ console-window-mapped-selftest.sh
 coverage-receipt-selftest.sh
 cpu-raw-reader-selftest.sh
 cputime-failopen-selftest.sh
-ctl-stop-rc-selftest.sh
 decode-dedup-selftest.sh
 dom0-callers-count-selftest.sh
 dom0-callers-selftest.sh

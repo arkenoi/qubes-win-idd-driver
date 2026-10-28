@@ -69,6 +69,7 @@ cd /home/user/qubes-win-idd-driver
 export QTEST_VM="${QTEST_VM:-__matrix_no_ambient_target__}"
 source .claude/skills/win-guest-e2e/e2e-lib.sh
 source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the notepad a cell starts is stopped by its recorded identity, never by name
+source mgmt/harness/window-grade-lib.sh # grade_mapped_window: shared with quick-upgrade.sh so the short cycle runs the same check
 source mgmt/harness/primitives.sh   # the six sealed primitives: clock_correct, fresh_cell_log, toolstack_accept, ...
 source mgmt/harness/logvol-lib.sh
 source mgmt/harness/wedge-gates-lib.sh  # wedge_volume_held_for: an AppVM whose private volume is the only copy of an antecedent must not be recreated over
@@ -2600,41 +2601,13 @@ cell_stock(){ # $1=stock-4.2.2 fixture $2=subject $3=tag - CAPABILITY ONLY, neve
 #   3  notepad opened and dom0 got no window     (graded here)
 # The messages are unchanged, so a campaign log reads exactly as before.
 grade_appvm_window(){ # $1=appvm $2=tag $3=boot-number
+  # The body moved to mgmt/harness/window-grade-lib.sh so the SHORT CYCLE can run the same check
+  # (quick-upgrade.sh never opened a window at all). The messages below are unchanged.
   local app=$1 lbl=$2 b=$3
-  # Pixels, not logs: open notepad and require a mapped, non-fullscreen window.
-  local nppid npstart; read -r _ nppid npstart <<< "$(QTEST_VM=$app T=45 ctl_start notepad)"   # by handle (lifecycle-lib.sh)
-  local try W=0 big=0 f w h
-  for try in 1 2 3 4 5 6; do
-    sleep 7
-    rm -f $M/$lbl-appvm-b$b.tar
-    QTEST_VM=$app timeout -k 8 120 ./tools/qtest shot $M/$lbl-appvm-b$b.tar >/dev/null 2>&1
-    [ -s $M/$lbl-appvm-b$b.tar ] && [ "$(tar tf $M/$lbl-appvm-b$b.tar 2>/dev/null | grep -c '\.png$')" -gt 0 ] && break
-  done
-  rm -rf $M/$lbl-appvm-b$b-png; mkdir -p $M/$lbl-appvm-b$b-png
-  tar xf $M/$lbl-appvm-b$b.tar -C $M/$lbl-appvm-b$b-png 2>/dev/null
-  for f in $M/$lbl-appvm-b$b-png/*.png; do
-    [ -e "$f" ] || continue
-    W=$((W+1)); read -r w h < <(python3 -c "
-import struct,sys
-d=open(sys.argv[1],'rb').read(33); w,h=struct.unpack('>II',d[16:24]); print(w,h)" "$f" 2>/dev/null)
-    [ -z "${w:-}" ] && continue
-    say "    $(basename $f) ${w}x${h}"
-    [ "$w" -ge $(( 5120 * 99 / 100 )) ] && [ "$h" -ge $(( 1440 * 99 / 100 )) ] && big=1
-  done
-  # AN EMPTY dom0 CAPTURE IS NOT "NO WINDOW" (memory rule, and measured 2026-09-11: campaign
-  # 34594988407 graded WIN11-appvm boot 2 a product FAIL on six empty tars while qrexec answered
-  # and the guest took an orderly ACPI shutdown 58 s later - the owner was switching dom0
-  # desktops, and the screenshot service returns only windows on the CURRENT one). So before
-  # grading, ask the GUEST whether notepad has a top-level window. Guest window present + dom0
-  # capture empty = INVALID-INSTRUMENT (ungraded), never a product verdict. Probed BEFORE the
-  # taskkill, or there is nothing left to ask about.
-  local gw=""
-  if [ "$W" -eq 0 ]; then
-    gw=$(g_probe "$app" NPWIN 'Write-Host ("NPWIN=" + ((Get-Process notepad -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Measure-Object).Count))' 60)
-  fi
+  grade_mapped_window "$app" "$M/$lbl-appvm-b$b"; local _wrc=$?
+  _ctl_out=$WG_CTLSTOP_OUT; _ctl_rc=$WG_CTLSTOP_RC
   # AND THE CALLER BRANCHES ON IT. This printed the line and moved on, so a control window that did
   # not close stayed on the desktop for the window-map grading later in this same cell.
-  _ctl_out=$(QTEST_VM=$app T=45 ctl_stop "${nppid:-0}" "${npstart:-0}"); _ctl_rc=$?
   say "  notepad: $_ctl_out"
   case "$_ctl_rc" in
     0) ;;
@@ -2642,12 +2615,13 @@ d=open(sys.argv[1],'rb').read(33); w,h=struct.unpack('>II',d[16:24]); print(w,h)
     4) no "$lbl: the control window did NOT close ($_ctl_out) - it stays on the desktop and the window grading below would count it" ;;
     *) no "$lbl: INVALID-CTLSTOP  could not establish whether the control window closed ($_ctl_out) - the window grading below cannot be trusted for this cell" ;;
   esac
-  if [ "$big" = 1 ]; then no "$lbl-appvm boot $b: a FULLSCREEN-SIZED window was mapped"; return 1
-  elif [ "$W" -gt 0 ]; then ok "$lbl-appvm boot $b: $W window(s) mapped, none fullscreen-sized"; return 0
-  elif [ "${gw:-x}" -ge 1 ] 2>/dev/null; then
-    say "  $lbl-appvm boot $b: INVALID-INSTRUMENT - the guest shows $gw notepad window(s) but the dom0 capture returned none on six tries (a dom0 desktop switch or capture fault; graded after the cell's other boots)"
-    return 2
-  else no "$lbl-appvm boot $b: notepad opened but dom0 got NO window (guest-side notepad windows: ${gw:-unreadable})"; return 3; fi
+  case "$_wrc" in
+    1) no "$lbl-appvm boot $b: a FULLSCREEN-SIZED window was mapped"; return 1 ;;
+    0) ok "$lbl-appvm boot $b: $WG_W window(s) mapped, none fullscreen-sized"; return 0 ;;
+    2) say "  $lbl-appvm boot $b: INVALID-INSTRUMENT - the guest shows $WG_GUEST notepad window(s) but the dom0 capture returned none on six tries (a dom0 desktop switch or capture fault; graded after the cell's other boots)"
+       return 2 ;;
+    *) no "$lbl-appvm boot $b: notepad opened but dom0 got NO window (guest-side notepad windows: ${WG_GUEST:-unreadable})"; return 3 ;;
+  esac
 }
 
 cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the 'installed' park)

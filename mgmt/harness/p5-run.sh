@@ -36,6 +36,7 @@ require_scripts guest/disarm-update-scan.ps1 guest/fsgate-probe.ps1 guest/set-re
 VM="${1:?usage: $0 <vm> [outdir]}"
 source mgmt/harness/vmlock.sh; vm_lock "$VM"   # one harness per guest; see vmlock.sh
 source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the control and the probe are stopped by the identity this run recorded, never by name
+source mgmt/harness/window-grade-lib.sh # wg_png_dims/wg_png_wxh/wg_png_id: the ONE reader of a capture's dimensions
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/P5-$VM}"
 # A contaminated subject is refused BEFORE any work: this script's default output dir carries no
 # run-id, so a second attempt would otherwise append to the first attempt's artefacts and be read
@@ -228,9 +229,7 @@ mapped_list(){  # $1 = tag -> "<count>|<WxH>,<WxH>,..." of what dom0 maps right 
   local dims=""
   if [ "$n" -gt 0 ]; then
     rm -rf "$OUT/.x"; mkdir -p "$OUT/.x"; tar xf "$t" -C "$OUT/.x" 2>/dev/null
-    dims=$(for f in "$OUT/.x"/*.png; do [ -e "$f" ] && python3 -c "
-import struct,sys
-d=open(sys.argv[1],'rb').read(); w,h=struct.unpack('>II',d[16:24]); print(f'{w}x{h}')" "$f"; done | paste -sd,)
+    dims=$(for f in "$OUT/.x"/*.png; do [ -e "$f" ] && wg_png_wxh "$f"; done | paste -sd,)
   fi
   echo "$n|$dims"
 }
