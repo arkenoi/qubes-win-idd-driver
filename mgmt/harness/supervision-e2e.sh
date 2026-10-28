@@ -85,7 +85,17 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$ISO" ] && [ -f "$ISO" ] || { echo "FAIL  --iso <file> is required and must exist (got '$ISO')" >&2; exit 2; }
 
-OUT="${SUP_OUT:-/home/user/qwt-sup/$(date -u +%m%d-%H%M)}"; mkdir -p "$OUT"
+# SCOPED TO THE ATTEMPT AND GATED. release-acceptance.sh:551 invokes this feature test WITHOUT
+# SUP_OUT, so it fell back to a minute-stamped directory outside the campaign tree: two
+# campaigns in the same minute collided, and in different minutes each left an orphan tree no
+# reader could attribute. Its stdout goes to $WORK/$t.out, which the leader rotates per
+# attempt, but this evidence dir was covered by nothing. The other two feature tests are
+# handed OUT="$WORK/$t.d" and inherit that rotation; this one owns its directory, so it
+# carries the gate itself. Owner: reuse a continuation, never contaminate with a previous one.
+declare -F attempt_dir >/dev/null 2>&1 \
+  || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh"
+OUT="${SUP_OUT:-/home/user/qwt-sup/$(attempt_id)}"
+attempt_dir "$OUT" || exit 2
 R="$OUT/results.log"; : > "$R"
 log(){ echo "$(date -u +%T)Z sup[$SUBJ]: $*" | tee -a "$R"; }
 VERDICTS="$OUT/verdicts.tsv"; : > "$VERDICTS"
