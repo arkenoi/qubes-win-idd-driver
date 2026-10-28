@@ -47,10 +47,17 @@ for i in $(seq 1 "$N"); do
   case "$rc" in
     0) verdict=OK ;;
     2) if grep -aq 'DEADLINE:' "$log"; then
+         # THE PREDICATES ARE PRIME-RUN'S OWN OUTPUT STRINGS, checked against the emitter.
+         # The first version of this guessed them: 'FROZEN stall' is in no prime-run line at all,
+         # and 'EXECUTING-BUT-UNREACHABLE' appears only in a source COMMENT (prime-run.sh:526), so
+         # both shape probes were dead and every stall would have read cls=-.
          verdict=STALL
-         grep -aq 'FROZEN stall' "$log" && cls=FLAT
-         grep -aq 'EXECUTING-BUT-UNREACHABLE' "$log" && cls=MOVING
-         grep -aq 'cpu_time UNREADABLE' "$log" && { cls=UNREADABLE; verdict=OTHER; }
+         grep -aq 'cpu_time is FLAT over the sample' "$log" && cls=FLAT
+         grep -aq 'cpu_time ADVANCED' "$log" && cls=MOVING
+         # UNREADABLE IS STILL A STALL. This used to demote it to OTHER, against the emitter's own
+         # sentence twelve characters later: "cpu_time UNREADABLE: the shape is UNMEASURED. The loss
+         # of reachability still stands." The shape being unmeasured is not the stall being unproven.
+         grep -aq 'cpu_time UNREADABLE' "$log" && cls=UNREADABLE
        else verdict=OTHER; fi ;;
     *) verdict=OTHER ;;
   esac
