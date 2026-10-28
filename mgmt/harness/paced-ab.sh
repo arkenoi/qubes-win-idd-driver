@@ -25,13 +25,17 @@ OUT="scratchpad/paced-ab-$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$OUT"
 say(){ echo "$(date -u +%H:%M:%SZ) paced-ab: $*" | tee -a "$OUT/run.log"; }
 pkgid(){ grep -aoE '"package_version"[^,]*' "$1/MANIFEST.json" 2>/dev/null | head -1; }
 printf 'run\tarm\tstart_utc\tsecs\texit\tverdict\tclass\tevidence\n' > "$OUT/runs.tsv"
-say "arms: CONTROL=$CTRL ($(pkgid "$CTRL")) QUIET_BOOT_SECS=0 | PACED=$PACED ($(pkgid "$PACED")) QUIET_BOOT_SECS=420; $N per arm, interleaved"
+say "arms: CONTROL=$CTRL ($(pkgid "$CTRL")) QUIET_BOOT_SECS=0 | PACED=$PACED ($(pkgid "$PACED")) QUIET_BOOT_SECS=${AB_ARM2_QUIET:-420}; $N per arm, interleaved"
 say "base $BASE, subject $SUBJ; the pre-registration is $OUT/../$(basename "$0" .sh)-PREREG.txt (written before the first run)"
 
 c_stall=0; p_stall=0; c_ok=0; p_ok=0; c_other=0; p_other=0
 for i in $(seq 1 "$N"); do
   for arm in CONTROL PACED; do
-    tree="$CTRL"; q=0; [ "$arm" = PACED ] && { tree="$PACED"; q=420; }
+    # ARM 2's quiet window is a KNOB, default unchanged. The 2026-10-04 experiment varied the
+    # package AND the quiet window together, deliberately. An A/B whose arms differ only by the
+    # PAYLOAD needs the window held equal, or the payload effect is confounded by it - so set
+    # AB_ARM2_QUIET=0 for those. Nothing else in this driver is arm-specific.
+    tree="$CTRL"; q=0; [ "$arm" = PACED ] && { tree="$PACED"; q="${AB_ARM2_QUIET:-420}"; }
     log="$OUT/run-$i-$arm.log"; t0=$(date +%s); st=$(date -u +%H:%M:%SZ)
     say "run $i/$N $arm: prime-run $BASE -> $SUBJ (QUIET_BOOT_SECS=$q)"
     QUIET_BOOT_SECS=$q QUIET_AFTER_FIRST=0 \
