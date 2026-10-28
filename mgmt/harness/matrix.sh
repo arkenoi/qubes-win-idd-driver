@@ -80,6 +80,15 @@ source mgmt/harness/blockclaim-lib.sh # a --required claim on a released loop ma
 # wedged cell still lost exactly the logs that show vchan pressure. LOGVOL_VM/LOGVOL_IMG are set
 # when a subject boots and consumed by the pull after each cell.
 LOGVOL_VM=""; LOGVOL_IMG=""
+# Guest families whose subject is CONFIRMED UNUSABLE. A wedge takes the guest it happened on and
+# nothing else: the win11 cells run on a different subject with a different log path, so aborting
+# them too cost four cells for free in rel-40470106070 (ABORTED at cell 2, 18 passed / 5 failed).
+# This is NOT the question matrix.sh records as settled below (0.52 stop / 0.45 continue at
+# confidence 0.36): that one is whether to keep GRADING a cell whose log path broke, and it still
+# exits 2. This is whether an unrelated subject's cells may run, which is not a scoring question.
+DEAD_FAMILIES=""
+cell_family(){ case $1 in win10*|WIN10*) echo win10 ;; win11*|WIN11*) echo win11 ;; *) echo other ;; esac; }
+family_is_dead(){ case " $DEAD_FAMILIES " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 # AND WHETHER A BIND IS IN FORCE. The stick is attached unconditionally (boot_with_release_iso,
 # `if true`) while the bind is gated on LOGVOL_BIND, so LOGVOL_IMG cannot answer "does this guest's
 # registry name the stick". The restore is gated on this, not on the image.
@@ -3060,6 +3069,13 @@ for c in $CELLS; do
   # trustworthy, while filling MID-cell leaves a half-provisioned guest and a result nobody can read.
   # A refusal here is INVALID-POOL for the cell that did not run, and the loop stops - it does not
   # skip ahead, because the cells after it would be no better off.
+  # Its subject is already confirmed unusable, so this cell cannot run and must not be scored.
+  if family_is_dead "$(cell_family "$c")"; then
+    say "INVALID-$c  not run: $(cell_family "$c")'s subject was confirmed UNUSABLE by an earlier cell."
+    say "            The campaign is INCOMPLETE and its coverage receipt must not claim this cell."
+    FAIL=$((FAIL+1)); INVALID=$((INVALID+1))
+    continue
+  fi
   if ! pool_gate "cell $c"; then
     say "INVALID-$c  not run: the thin pool is below the floor. Cells completed before this one stand;"
     say "            the campaign is INCOMPLETE and its coverage receipt must not claim this cell."
@@ -3148,7 +3164,27 @@ for c in $CELLS; do
             say "[ERROR] FATAL: $_ue"
             say "[ERROR] FATAL: install first - the prime log's qrexec polls, and on a prime cell the"
             say "[ERROR] FATAL: DIAG volume's prime-progress.log installer rc. $_lv_reason"
-            say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED: no usable guest at grading ==="
+            # THIS GUEST IS GONE; THE OTHER SUBJECT IS NOT. Its cells have their own guest and their
+            # own log path, and nothing measured here touches them. The specimen is left standing as
+            # evidence either way - unusable_verdict above has already collected the package.
+            _dead=$(cell_family "$c")
+            DEAD_FAMILIES="$DEAD_FAMILIES $_dead"
+            FAIL=$((FAIL+1)); INVALID=$((INVALID+1))
+            say "[ERROR] $c: $_dead's subject is UNUSABLE - every remaining $_dead cell is INVALID and"
+            say "[ERROR] the campaign is INCOMPLETE. Cells on another subject still run."
+            if [ "${_LV_RESTORE_PENDING:-0}" = 1 ]; then
+              logvol_restore_now "$c" || true
+              LOGVOL_IMG=""; LOGVOL_VM=""; LOGVOL_BOUND=0; _LV_RESTORE_PENDING=0
+            fi
+            # Is there any cell left whose subject is still alive? Counted in the shell, not through
+            # a pipe into grep -q: that returns 141 under pipefail when grep exits on the first match.
+            _alive=0
+            for _oc in $CELLS; do family_is_dead "$(cell_family "$_oc")" || _alive=1; done
+            if [ "$_alive" = 0 ]; then
+              say "=== MATRIX: ${PASS:-0} passed, ${FAIL:-0} failed - ABORTED: no usable guest at grading ==="
+              exit 2
+            fi
+            continue
           else
             say "[ERROR] FATAL: $c: the pre-grading probe got no answer, but the evidence for calling"
             say "[ERROR] FATAL: the guest UNUSABLE is incomplete, so that verdict is NOT emitted. $_lv_reason"
@@ -3690,6 +3726,19 @@ say ""
 # stays byte-exact, so the campaign's severity is declared HERE, on the line that carries the same
 # two numbers. Without it a campaign could end with failing cells and no line any sweep could judge
 # - which is how a 96-of-96 "clean" campaign carried a log-volume bind failure nobody read.
+# A SUBJECT DIED, SO THE CAMPAIGN DID NOT FINISH - AND THE GATE READS A STRING, NOT AN EXIT CODE.
+# tools/release-acceptance.sh:370 stops on `grep -qaE '=== MATRIX: .* ABORTED'` in full.out. Letting
+# the other subject's cells run removes that string from the old abort path, which would have let an
+# incomplete campaign proceed to the feature tests, the remainder suites and THE RECEIPT. So the
+# string is emitted here instead: the surviving subject's cells still RUN and are still recorded -
+# that is the whole gain - and acceptance still refuses to issue a receipt over them.
+# This line is NOT the machine-readable footer. That contract is the anchored
+# '^=== MATRIX: N passed, M failed ===$' echoed below, byte-exact, and it is untouched.
+if [ -n "${DEAD_FAMILIES// /}" ]; then
+  say "[ERROR] === MATRIX: $PASS passed, $FAIL failed - ABORTED: subject UNUSABLE ($DEAD_FAMILIES); its cells did not run ==="
+  say "[ERROR] cells on a surviving subject DID run and are recorded above; the campaign is still"
+  say "[ERROR] INCOMPLETE and no receipt may be issued over it."
+fi
 _mx_sev=""; [ "$((FAIL-INVALID))" -gt 0 ] && _mx_sev="[ERROR] " || { [ "$INVALID" -gt 0 ] && _mx_sev="[WARN] "; }
 say "${_mx_sev}classes: product-FAIL=$((FAIL-INVALID)) INVALID-*(cell did not run, ungraded)=$INVALID - the footer's 'failed' is both (contract kept; see mgmt/harness/verdict-lib.sh for the three-class rule)"
 echo "=== MATRIX: $PASS passed, $FAIL failed ===" | tee -a "$R"
