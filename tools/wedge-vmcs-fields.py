@@ -86,6 +86,25 @@ def parse(path):
     return out
 
 
+def parse_pause_flags(path):
+    """-> {vcpu: flags} from wedge-vmcs.py's "PAUSE-FLAGS: vcpu0=4 vcpu1=1" line, {} if absent.
+
+    A FIELD, not the tool's HELD-IN-XEN conclusion - same division as everything else here. Xen's
+    VPF_* bits: 1 = VPF_blocked (idle HLT), 4 = VPF_blocked_in_xen (held inside Xen until the
+    stub-domain device model completes an I/O request). `xl vcpu-list` cannot render the second
+    one and shows it as `---`, which reads as "runnable"; it is not.
+    """
+    try:
+        with open(path, "r", errors="replace") as fh:
+            txt = fh.read()
+    except OSError:
+        return {}
+    m = re.search(r"^PAUSE-FLAGS:\s*(vcpu\d+=\d+(?:\s+vcpu\d+=\d+)*)\s*$", txt, re.M)
+    if not m:
+        return {}
+    return {int(a): int(b) for a, b in re.findall(r"vcpu(\d+)=(\d+)", m.group(1))}
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("-")]
     if not args:
@@ -151,6 +170,19 @@ def main():
         if s1[n]["reason"] == 40 and s2[n]["reason"] == 40:
             pause = n
             break
+    # pause_flags, from the LAST sample that carried it. Reported as a field; the classifier in
+    # wedge-gates-lib.sh decides what shape it means. Empty means the `q` block was not in the
+    # bundle - ABSENT, never 0.
+    pf = parse_pause_flags(args[1]) if len(args) > 1 else {}
+    if not pf:
+        pf = parse_pause_flags(args[0])
+    held = ""
+    for n_ in sorted(pf):
+        if pf[n_] & 4:
+            held = n_
+            break
+    print("pause-flags=%s" % " ".join("%d:%d" % (k, pf[k]) for k in sorted(pf)))
+    print("held-in-xen-vcpu=%s" % held)
     print("exit-all-hlt=%d" % all_hlt)
     print("runstate-all-blocked=%d" % all_blocked)
     print("exit-pause-loop-vcpu=%s" % pause)

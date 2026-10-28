@@ -236,9 +236,33 @@ wedge_stage1(){
   # the next - an interrupt in flight, which is what working delivery looks like (win11de-uc,
   # 2026-10-22). One sample cannot separate those; the both-samples form can.
   rvistuck=$(_wg_get "$d" vmcs-rvi-stuck)
-  local allhlt allblk pause
+  local allhlt allblk pause heldvcpu spinning=""
   allhlt=$(_wg_get "$d" vmcs-exit-all-hlt); allblk=$(_wg_get "$d" vmcs-runstate-all-blocked)
   pause=$(_wg_get "$d" vmcs-pause-loop-vcpu)
+  #   O10 pause_flags, from `xl debug-keys q` via tools/wedge-vmcs{,-fields}.py. STRUCTURAL and
+  #       STRONGEST: it is Xen's own per-vCPU state word, not a rate and not an inference.
+  #       4 = VPF_blocked_in_xen - the vCPU is held INSIDE Xen until the stub-domain device model
+  #       completes an I/O request, which IS the mechanism class findings/wedge.md identified on
+  #       2026-10-04 and which the Jev criterion below has named `held_in_xen` ever since.
+  #       Added 2026-10-28. Every bundle had carried the field since the collector was written and
+  #       NOTHING parsed it, so the shape tree could not reach the one shape this project has
+  #       actually identified: its BLOCKED branches need VMX ActivityState HLT on every vCPU (the
+  #       comment above calls that near-dead code here) or exit 12 on EVERY vCPU - and the held
+  #       shape has the held vCPU exiting on VMCALL, so allhlt is false by construction. On the
+  #       2026-10-28 win10-acc specimen the fields were activity='' rip-static=0 exit-all-hlt=0
+  #       with a single usable sample, i.e. every other observable empty and the tree at UNKNOWN,
+  #       while pause-flags read `0:4 1:1 2:1 3:1`. With two samples the held vCPU instead presents
+  #       as Active with a static RIP - which is what the SPIN branch below keys on - so without
+  #       this field a vCPU accruing ZERO cpu-time was one fraction reading away from being
+  #       labelled a spin.
+  heldvcpu=$(_wg_get "$d" held-in-xen-vcpu)
+  # WHAT COUNTS AS A SPIN BEING PRESENT, named once so the held branch and the why-strings agree.
+  # The recorded criterion is "a vCPU held in Xen ... WITH NO SECOND CPU SPINNING ON IT": with a
+  # spin present this is the 2026-10-26 shape, the spin keeps the label, and the held vCPU is
+  # carried into the why rather than overriding it.
+  [ -n "$pause" ] && spinning="a PAUSE-loop exit on vcpu$pause"
+  [ "$frac" = SPIN ] && spinning="${spinning:+$spinning; }O2 fraction SPIN"
+  [ "$act" = ACTIVE ] && [ "$rip2" = 1 ] && spinning="${spinning:+$spinning; }O9 Active with a static RIP"
   WG_CLASS="WEDGE-CANDIDATE"
   if [ "$act" = HLT ] && [ "$frac" = SPIN ]; then
     # CONTRADICTION FIRST, in both directions. This guard was lost when the shape tree was
@@ -249,6 +273,8 @@ wedge_stage1(){
   elif [ "$act" = HLT ]; then
     # The SDM-correct reading, kept although it has never been observed on this hardware.
     WG_SHAPE="BLOCKED"; WG_SHAPE_WHY="O9 ActivityState is HLT on every vCPU in both samples"
+  elif [ -n "$heldvcpu" ] && [ -z "$spinning" ]; then
+    WG_SHAPE="BLOCKED"; WG_SHAPE_WHY="vcpu$heldvcpu has pause_flags=4 (VPF_blocked_in_xen) and nothing is spinning: held inside Xen until the stub-domain device model completes an I/O request - the mechanism class recorded 2026-10-04. \`xl vcpu-list\` renders this vCPU \`---\`, which is NOT runnable"
   elif [ "$allhlt" = 1 ] && [ "$allblk" = 1 ]; then
     # WHAT A HALTED GUEST ACTUALLY SHOWS, measured: ActivityState stayed 0x00 on all four vCPUs of a
     # live guest while three of them had taken exit 12 (HLT) and sat in runstate -b- (win11de-uc,
@@ -257,16 +283,25 @@ wedge_stage1(){
     WG_SHAPE="BLOCKED"; WG_SHAPE_WHY="every vCPU took exit 12 (HLT) in both samples and every runstate reads blocked - which is how a halted guest presents, ActivityState staying 0x00"
   elif [ "$act" = ACTIVE ] && [ "$rip2" = 1 ]; then
     if [ -n "$pause" ]; then
-      WG_SHAPE="SPIN"; WG_SHAPE_WHY="vcpu$pause took a PAUSE-loop exit (40) in BOTH samples with its RIP unchanged - a spin, structurally${rvistuck:+, and RVI=$rvistuck is latched across both samples on one vCPU: a vector that is not being taken}"
+      WG_SHAPE="SPIN"; WG_SHAPE_WHY="vcpu$pause took a PAUSE-loop exit (40) in BOTH samples with its RIP unchanged - a spin, structurally${rvistuck:+, and RVI=$rvistuck is latched across both samples on one vCPU: a vector that is not being taken}${heldvcpu:+; and vcpu$heldvcpu is additionally held in Xen (pause_flags=4) - the 2026-10-26 shape, a spin alongside a held vCPU}"
     elif [ "$frac" = BLOCKED ]; then
       WG_SHAPE="UNKNOWN"; WG_SHAPE_WHY="O9 says Active with a static RIP but O2 says BLOCKED - the instruments contradict, so the shape is not named (candidacy is unaffected: the shape is a label)"
     else
-      WG_SHAPE="SPIN"; WG_SHAPE_WHY="O9 shows a vCPU Active in both samples with RIP unchanged${frac:+, and O2 corroborates $frac}${rvistuck:+; and RVI=$rvistuck is latched on one vCPU across BOTH samples - a vector that is not being taken}"
+      WG_SHAPE="SPIN"; WG_SHAPE_WHY="O9 shows a vCPU Active in both samples with RIP unchanged${frac:+, and O2 corroborates $frac}${rvistuck:+; and RVI=$rvistuck is latched on one vCPU across BOTH samples - a vector that is not being taken}${heldvcpu:+; and vcpu$heldvcpu is additionally held in Xen (pause_flags=4) - the 2026-10-26 shape, a spin alongside a held vCPU}"
     fi
   elif [ "$act" = ACTIVE ]; then
     WG_SHAPE="UNKNOWN"; WG_SHAPE_WHY="O9: Active but the RIP advanced between samples - executing, so neither spinning nor idle"
   else
-    WG_SHAPE="UNKNOWN"; WG_SHAPE_WHY="O9 unavailable or mixed (activity='${act:-absent}', exit-all-hlt='${allhlt:-absent}', runstate-all-blocked='${allblk:-absent}') - stated, never guessed"
+    # TWO DIFFERENT UNKNOWNS, and they must not share a sentence. heldvcpu is a vCPU INDEX, so
+    # the common one is `0` - printing it as a status word made "vcpu0 is held" read as "none is
+    # held", which is the exact confusion this whole observable exists to end. Reaching here with
+    # heldvcpu set means a spin was ALSO indicated (the held branch takes the no-spin case), so
+    # that is a genuine two-sided reading and both sides get said.
+    if [ -n "$heldvcpu" ]; then
+      WG_SHAPE="UNKNOWN"; WG_SHAPE_WHY="O10 says vcpu$heldvcpu is held in Xen (pause_flags=4) while $spinning indicates a spin - both are stated and neither is rounded away, so the shape is not named"
+    else
+      WG_SHAPE="UNKNOWN"; WG_SHAPE_WHY="O9 unavailable or mixed (activity='${act:-absent}', exit-all-hlt='${allhlt:-absent}', runstate-all-blocked='${allblk:-absent}') and O10 found no vCPU with pause_flags=4 - stated, never guessed"
+    fi
   fi
   printf '%s\n' "$WG_SHAPE" > "$d/shape" 2>/dev/null || true
   # "QREXEC SILENT" IS A CLAIM ABOUT QREXEC, so the last packet type it handled goes on record here
@@ -909,6 +944,8 @@ wedge_collect_dump(){
         exit-all-hlt)         printf '%s\n' "${v:-0}" > "$d/vmcs-exit-all-hlt" ;;
         runstate-all-blocked) printf '%s\n' "${v:-0}" > "$d/vmcs-runstate-all-blocked" ;;
         exit-pause-loop-vcpu) [ -n "$v" ] && printf '%s\n' "$v" > "$d/vmcs-pause-loop-vcpu" ;;
+        pause-flags)          [ -n "$v" ] && printf '%s\n' "$v" > "$d/vmcs-pause-flags" ;;
+        held-in-xen-vcpu)     [ -n "$v" ] && printf '%s\n' "$v" > "$d/held-in-xen-vcpu" ;;
       esac
     done < "$d/vmcs-fields.txt"
   fi
@@ -1002,7 +1039,7 @@ wedge_gates_jev(){
          "our_driver":"our own driver or agent code is the spinning site",
          "test_conditions":"no new product defect: our test conditions concentrate the guest demands on the device model during a fresh domain first minutes, which is where the rate lives (exposure 0.62 vs product code 0.24)"' ;;
     WEDGE-BLOCKED|WEDGE-BLOCKED-CANDIDATE)
-      ctx="A guest classified $class: present, drawing no pixels, ignoring a re-asked ACPI request, with EVERY vCPU HLT across both VMCS samples - nothing is burning CPU."
+      ctx="A guest classified $class: present, drawing no pixels, ignoring a re-asked ACPI request, and nothing burning CPU - either every vCPU HLT across both VMCS samples, or a vCPU with pause_flags=4 (VPF_blocked_in_xen) and no vCPU spinning."
       crit='"held_in_xen":"a vCPU held in Xen right after a grant or memory hypercall (pause_flags=4, VPF_blocked_in_xen) with no second CPU spinning on it - the recorded BLOCKED shape",
          "evtchn_never_delivered":"every vCPU idled waiting for an event channel notification that was never delivered",
          "qemu_gone":"the device model in the stub domain stopped serving, so the guest waits forever on an emulated access",

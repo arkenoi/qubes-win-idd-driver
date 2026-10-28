@@ -17,9 +17,13 @@ decoded per-vCPU state for the wedged domain only, and names the SHAPE, so the n
 in one command instead of being archived.
 
 SHAPES it distinguishes:
-  SPIN  - vCPUs burning CPU, PAUSE-loop exits, and/or a pending RVI that is not being taken
-  IDLE  - every vCPU halted (exit reason 12) with nothing pending: a lost-wakeup shape
-  MIXED - neither, which is a finding in itself and must not be rounded to either
+  SPIN         - vCPUs burning CPU, PAUSE-loop exits, and/or a pending RVI that is not being taken
+  HELD-IN-XEN  - a vCPU with pause_flags=4 (VPF_blocked_in_xen) and nothing spinning: held until
+                 the stub-domain device model completes an I/O request. This is the mechanism
+                 class recorded 2026-10-04, and until 2026-10-28 this tool printed MIXED for it
+                 because it never read pause_flags - a field every bundle already carried.
+  IDLE         - every vCPU halted (exit reason 12) with nothing pending: a lost-wakeup shape
+  MIXED        - none of the above, which is a finding in itself and must not be rounded
 
 It reads only files the capture already contains and invents nothing; a field the capture does not
 hold is printed as absent, never guessed.
@@ -29,7 +33,7 @@ import argparse, os, re, subprocess, sys, tempfile
 # Intel SDM appendix C, only the exit reasons this instrument actually reasons about.
 EXIT_REASON = {0: "exception/NMI", 1: "external interrupt", 7: "interrupt window",
                10: "CPUID", 12: "HLT", 28: "control-register access", 30: "I/O instruction",
-               31: "RDMSR", 32: "WRMSR", 40: "PAUSE-loop exiting", 48: "EPT violation",
+               18: "VMCALL", 31: "RDMSR", 32: "WRMSR", 40: "PAUSE-loop exiting", 48: "EPT violation",
                49: "EPT misconfiguration", 55: "XSETBV"}
 
 
@@ -70,6 +74,57 @@ def domain_block(vmx, domid):
         if keep:
             out.append(line)
     return "\n".join(out) if out else None
+
+
+def pause_flags(d, domid):
+    """Per-vCPU pause_flags for one domain, from `xl debug-keys q`, or {} if absent.
+
+    THE FIELD THAT NAMES THE MECHANISM, and until 2026-10-28 nothing read it. Xen's VPF_* flags:
+    1 = VPF_blocked (an ordinary idle HLT), 4 = VPF_blocked_in_xen (the vCPU is held INSIDE Xen
+    until the stub-domain device model completes an I/O request). `xl vcpu-list` renders a vCPU
+    with pause_flags=4 as `---`, because its flag column covers only running / VPF_blocked /
+    paused - so the list makes the recorded wedge shape look like "runnable and never scheduled",
+    which is how the 2026-10-28 win10-acc specimen was misread for several rounds with the
+    answer sitting unread in its own bundle. `q` is collected by dom0/11-wedge-forensics.sh on
+    every capture.
+
+    The dump may be truncated (`xl dmesg | tail -200`), so a partial block yields partial data
+    rather than nothing, and an absent block yields {}.
+    """
+    txt = read(d, "xl-dmesg-domains.txt")
+    if not txt:
+        return {}
+    out, keep, cur = {}, False, None
+    want_vcpus = False
+    for line in txt.splitlines():
+        line = line.replace("(XEN)", "").strip()
+        # ANY line naming a domain id switches context. Not an enumerated list of header
+        # spellings: `dump_domains` prints several ("General information for domain N",
+        # "Rangesets belonging to domain N", "NODE affinity for domain N", ...) and an
+        # unlisted one would let the NEXT domain's vCPUs be read as this domain's. Verified
+        # against the real dump: no line INSIDE a vCPU block names a domain, so this cannot
+        # terminate a block early.
+        m = re.search(r"\bdomain (\d+)", line)
+        if m:
+            keep = (int(m.group(1)) == domid)
+            want_vcpus = keep and line.startswith("VCPU information")
+            cur = None
+            continue
+        # Only the "VCPU information and callbacks" section carries pause_flags. A truncated
+        # dump (`xl dmesg | tail -200`) may cut that header off while leaving VCPU lines
+        # behind; those are then attributed to no domain and dropped, which is the safe way
+        # to be wrong.
+        if not (keep and want_vcpus):
+            continue
+        m = re.match(r"VCPU(\d+):", line)
+        if m:
+            cur = int(m.group(1))
+            continue
+        m = re.search(r"pause_flags=(\d+)", line)
+        if m and cur is not None:
+            out[cur] = int(m.group(1))
+            cur = None
+    return out
 
 
 def parse_vcpus(block):
@@ -167,9 +222,34 @@ def main():
         if reason == 40 or (t and len(t) == 2 and t[1][1] - t[0][1] > 5.0):
             spin += 1
 
+    # PAUSE-FLAGS, printed as a FIELD on its own line. Deliberately NOT a new column: the table's
+    # columns are parsed by position in tools/wedge-vmcs-fields.py, and widening it would shift
+    # every consumer anchored on them.
+    pf = pause_flags(d, domid)
+    if pf:
+        print("\nPAUSE-FLAGS: " + " ".join("vcpu%d=%d" % (n, pf[n]) for n in sorted(pf)))
+        held = [n for n in sorted(pf) if pf[n] & 4]
+        if held:
+            print("  vcpu%s has VPF_blocked_in_xen (pause_flags & 4): held INSIDE Xen until the"
+                  % ",".join(str(n) for n in held))
+            print("  stub-domain device model completes an I/O request. `xl vcpu-list` shows this")
+            print("  as `---`, which is NOT 'runnable' - its flag column cannot render this state.")
+    else:
+        print("\nPAUSE-FLAGS: ABSENT - no `xl debug-keys q` block for this domain in the bundle")
+        print("  (xl-dmesg-domains.txt missing, or the dmesg ring wrapped past it). Absent, not 0.")
+
     print()
     pending = [v for v in vcpus if v.get("istatus", 0) & 0xFF]
-    if idle == len(vcpus) and not pending:
+    held_vcpus = [n for n in sorted(pf) if pf[n] & 4]
+    if held_vcpus and not spin:
+        # The criterion wedge-gates-lib.sh already names: "a vCPU held in Xen right after a grant
+        # or memory hypercall (pause_flags=4) WITH NO SECOND CPU SPINNING ON IT". With a spin
+        # present this is the 2026-10-26 shape instead, so the spin keeps the label and the held
+        # vCPU is reported above as the additional fact it is.
+        print("SHAPE: HELD-IN-XEN - vcpu%s blocked in Xen awaiting the device model, nothing"
+              % ",".join(str(n) for n in held_vcpus))
+        print("       spinning. The recorded BLOCKED shape (findings/wedge.md, 2026-10-04).")
+    elif idle == len(vcpus) and not pending:
         print("SHAPE: IDLE - every vCPU halted with nothing pending anywhere. A lost-wakeup shape,")
         print("       NOT the PacketBarrier spin. Do not merge the two.")
     elif spin:
