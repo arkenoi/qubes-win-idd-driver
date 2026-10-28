@@ -15,6 +15,10 @@ WIRE="${JEV_WIRE_LOG:-$ROOT/scratchpad/jev-wire.jsonl}"
 # level of indirection defeated it. Driven by tools/tests/committed-procedure-gate-selftest.sh.
 HEAVY='prime-run\.sh|reprovision-usb\.sh|matrix\.sh|seal-qwt-golden|build-media\.sh|clone-to-template'
 HEAVY="$HEAVY|release-acceptance\.sh|campaign-run\.sh|gate-remainder\.sh"
+# repro-run.sh added 2026-10-28 WITH the wrapper, not after it. It loops prime-run.sh, so it is
+# exactly the one-level indirection the comment above measured on 2026-10-16: the gate reads the
+# command it is asked to allow, and an unlisted wrapper makes a heavy path invisible to it.
+HEAVY="$HEAVY|repro-run\.sh"
 
 input=$(cat)
 cmd=$(printf '%s' "$input" | python3 -c '
