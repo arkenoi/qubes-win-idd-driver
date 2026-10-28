@@ -124,6 +124,14 @@ creation?"*
   with planted-writer and planted-clear cases seen to fail.
 * `clock_boot_correction_s` (P1, max 60) - the detector, in the sweep, where it belongs: a backward
   jump in the guest's own logs. Left strictly as it is.
+* `bootclockskew` (`tools/log-sweep.py`) - the residual the removal leaves: the sweep already
+  MEASURES the pre-sync guest-vs-host skew (`mgmt/harness/log-sweep.sh` -> `context.guest_clock.
+  presync_skew_s`), and it is now GRADED against `max_skew_s` (`LOGSWEEP_MAX_SKEW_S`, default 120).
+  A distinct key on purpose: `clockskew` keys the predecessor cut at `_clock_ok`.
+  **WHERE IT DOES NOT RUN, measured 2026-10-28:** only harnesses that call `log-sweep.sh` carry
+  this context, and `quick-upgrade.sh` - the short cycle, the one that runs on every fix - uses its
+  own sweep-gate instead and emits no `guest_clock`. On that path the gate's silence is not
+  evidence of a synced clock; it is the gate not running. `matrix.sh` (the campaign) does call it.
 
 ## Not done
 

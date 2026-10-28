@@ -4764,11 +4764,16 @@ function Invoke-Stage2 {
     # UNREGISTER, do not merely stop shipping. A guest upgraded from a build that registered the
     # task keeps running it for ever otherwise - the action path points into the Qubes Tools tree
     # and outlives setup, which was the point of installing it there.
-    $null = & schtasks.exe /Query /TN 'QwtClockSync' *>&1
-    if ($LASTEXITCODE -eq 0) {
-        try { & schtasks.exe /Delete /TN 'QwtClockSync' /F *>&1 | Out-Null } catch { }
-        $null = & schtasks.exe /Query /TN 'QwtClockSync' *>&1
-        if ($LASTEXITCODE -ne 0) {
+    # Judge the EXIT CODE, never the stream: an absent task makes schtasks write to stderr, and under
+    # ErrorActionPreference='Stop' merging that into the pipeline IS the terminating error (measured
+    # 2026-10-28 on win11r-up: stage2 died "The system cannot find the file specified." at this line).
+    $clockTaskPresent = $false
+    try { & schtasks.exe /Query /TN 'QwtClockSync' *>$null; $clockTaskPresent = ($LASTEXITCODE -eq 0) } catch { $clockTaskPresent = $false }
+    if ($clockTaskPresent) {
+        try { & schtasks.exe /Delete /TN 'QwtClockSync' /F *>$null } catch { }
+        $clockTaskStill = $false
+        try { & schtasks.exe /Query /TN 'QwtClockSync' *>$null; $clockTaskStill = ($LASTEXITCODE -eq 0) } catch { $clockTaskStill = $false }
+        if (-not $clockTaskStill) {
             Write-Log 'removed the obsolete boot-time clock pull (QwtClockSync) left by an earlier build'
             $script:Result.detail.clock_sync = 'unregistered'
         } else {
