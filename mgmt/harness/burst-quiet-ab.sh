@@ -27,6 +27,11 @@
 #           ONE call at qrexec-up launches scratchpad-built localchurn.ps1 detached (SOAKERS loops each creating
 #           and reaping a trivial cmd.exe every LC_PAUSE_MS for the window) and the window then stays qrexec-quiet.
 #           Splits "process lifecycle churn" from "qrexec/vchan churn" (Jev 2026-09-28: next step 0.96).
+#   heavy   HEAVY = BOTH roles at once in one boot - the guest-initiated clock-sync-shaped churn
+#           (clocksyncchurn.ps1, vchan SERVER role) launched at qrexec-up and left running, with the
+#           dom0-initiated burst rounds (vchan CLIENT role) over the same window - vs QUIET. Raises
+#           CONCURRENCY, not rate: PUSHES=16 CALLS=48 gives 64 operations in flight per round against
+#           the defaults' 22, past the 38 concurrent bridges of the 2026-08-20 trigger.
 #   two     the SAME SOAK on TWO subjects, alternating (VM = arm A, VM2 = arm B) - e.g. stock QWT vs our
 #           release on the same Windows base; each subject restores from its own park.
 #   harness BURST = ROUNDS rounds of PUSHES concurrent file copies + CALLS concurrent short calls
@@ -61,7 +66,7 @@
 #
 #   VM=<subject> PARK=<ckpt-qube> [VARIANT=scan|harness|soak|local|two] mgmt/harness/burst-quiet-ab.sh
 #   VARIANT=two: VM2=<second subject> PARK2=<its park> ARM_A=<label> ARM_B=<label>
-#   env: CYCLES (per arm, 20)  WINDOW (240 scan / 180 harness / 420 soak)  SETTLE (60)  BOOT_DL (300)  SOAKERS (6)
+#   env: CYCLES (per arm, 20)  WINDOW (240 scan / 180 harness / 420 soak / 300 heavy)  SETTLE (60)  BOOT_DL (300)  SOAKERS (6)
 #        ROUNDS (4)  PUSHES (6)  CALLS (16)  VALIDATE=1  OUT=<evidence dir>
 declare -F toolstack_accept >/dev/null 2>&1 \
   || . "$(dirname "${BASH_SOURCE[0]}")/primitives.sh" 2>/dev/null || true   # toolstack_accept: the one recorded shutdown request
@@ -75,9 +80,15 @@ case "$VARIANT" in
   harness) ARMS=(BURST QUIET);    WINDOW=${WINDOW:-180} ;;
   soak)    ARMS=(SOAK QUIET);     WINDOW=${WINDOW:-420} ;;
   local)   ARMS=(SOAK LOCAL);     WINDOW=${WINDOW:-420} ;;
+  heavy)   ARMS=(HEAVY QUIET);    WINDOW=${WINDOW:-300}
+           # BOTH vchan roles saturated in the SAME boot, which no arm here has ever done.
+           # The guest-initiated default is the CLOCK-SYNC shape, not localchurn.ps1: localchurn
+           # is the process-only CONTROL and crosses no vchan at all, so it is the wrong dose for
+           # an arm whose point is the server role.
+           LC_SCRIPT=${LC_SCRIPT:-scratchpad/clocksyncchurn.ps1} ;;
   two)     ARMS=("${ARM_A:-A}" "${ARM_B:-B}"); WINDOW=${WINDOW:-420}
            : "${VM2:?VARIANT=two needs VM2}" "${PARK2:?VARIANT=two needs PARK2}" ;;
-  *) echo "VARIANT must be scan, harness, soak, local or two" >&2; exit 3 ;;
+  *) echo "VARIANT must be scan, harness, soak, local, two or heavy" >&2; exit 3 ;;
 esac
 CYCLES=${CYCLES:-20}; SETTLE=${SETTLE:-60}; BOOT_DL=${BOOT_DL:-300}
 ROUNDS=${ROUNDS:-4}; PUSHES=${PUSHES:-6}; CALLS=${CALLS:-16}; SOAKERS=${SOAKERS:-6}; LC_PAUSE_MS=${LC_PAUSE_MS:-400}
@@ -364,7 +375,28 @@ run_boot(){
   else
     log "  qrexec up at +${SESS_T}s (qvm-start returned; no call into the guest yet)"
     t0=$(date +%s)
-    if [ "$arm" = BURST ]; then
+    if [ "$arm" = HEAVY ]; then
+      # HEAVY: the guest-initiated churn is launched FIRST and left running, then the dom0-initiated
+      # burst rounds run over the same window, so the two vchan ROLES overlap instead of alternating.
+      # WHY THIS ARM EXISTS (owner, 2026-10-28: "try heavier load in single reboot"): the synthetic
+      # instrument stopped reproducing - SOAK 0/4 and LOCAL 0/3 today with both arms verifiably dosed,
+      # where the same SOAK dose gave 4/10 and 10/15 on 2026-09-28. Those doses were high RATE and low
+      # CONCURRENCY (6 serial loops, ~2 calls/s). The lever raised here is CONCURRENCY, because the one
+      # register-bearing specimen sits in a vchan SETUP - XENMEM_decrease_reservation for a 64 KiB ring,
+      # 33 pages a call - which is a per-setup cost that only concurrency stacks, and the recorded
+      # 2026-08-20 trigger was 38 CONCURRENT grant-mapping bridges. Jev: procedure_delta
+      # heavy-both-roles 0.88 (conf 0.84), concurrency_is_the_lever 0.85.
+      # IT IS A PROVOCATION ARM, NOT AN ATTRIBUTION. Saturating both roles together cannot say which
+      # one did it; it is aimed at getting ONE live specimen on current code. QUIET is the control.
+      bursts="local:$(local_launch)"
+      log "  heavy: guest-initiated churn $bursts"
+      case "$bursts" in *LAUNCH-FAILED*) arm=HEAVY-NOLAUNCH ;; esac
+      for r in $(seq 1 "$ROUNDS"); do
+        due=$(( t0 + (r - 1) * WINDOW / ROUNDS )); now=$(date +%s); [ "$now" -lt "$due" ] && sleep $(( due - now ))
+        res=$(burst_round "$c" "$r"); bursts="$bursts r$r:$res"
+        log "  heavy burst round $r: $res"
+      done
+    elif [ "$arm" = BURST ]; then
       bursts=""
       for r in $(seq 1 "$ROUNDS"); do
         due=$(( t0 + (r - 1) * WINDOW / ROUNDS )); now=$(date +%s); [ "$now" -lt "$due" ] && sleep $(( due - now ))
