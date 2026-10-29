@@ -2,13 +2,13 @@
 
 An ADR records a DECISION: what we do, why, what it costs, and what evidence shows that it works. It is not a
 status report. What a guest measured on a given day belongs in `findings/*.md`; how a mechanism works belongs
-in `docs/DESIGN-*.md` and in the code headers. An ADR section goes stale only when the decision changes.
+in `docs/design/DESIGN-*.md` and in the code headers. An ADR section goes stale only when the decision changes.
 
 ## The records
 
 | file | scope | sections |
 |---|---|---|
-| `ADR-graphics.md` | current graphics path: why IDD, difference from legacy QWT, capture on 25H2+, legacy support | - |
+| `ADR-graphics.md` | current graphics path: IDD sole output, capture paths, crop/classification/synthesis, legacy support | G1–G20 + postponed |
 | `ADR-windows.md` | which guest surfaces become dom0 windows: the screens never shown, the fullscreen window that needs dom0's consent, the secure desktop, the non-seamless desktop window, chrome fragments, popups, autologon | 10 |
 | `ADR-capture.md` | where a guest window's pixels come from: the PrintWindow engine, the WGC broker, liveness at rest | 33 |
 | `ADR-gui.md` | window geometry between the guest and dom0's gui-daemon: placement after a restart, resizes | 2 |
@@ -20,6 +20,14 @@ in `docs/DESIGN-*.md` and in the code headers. An ADR section goes stale only wh
 | `ADR-updater.md` | the dom0-owned Windows update path (Track C): invariants, verification, install routes, process ownership, the installer's deploy | 13 |
 | `ADR-uac.md` | elevation prompts a user in dom0 can answer: the prompt moved off the secure desktop, the stand-in window, a prompt Windows did not raise, what may elevate at all | 10 |
 | `ADR-upstream.md` | upstream dependencies: which repositories we fork, which we clone at a pinned ref and patch, and the read-only mirror | 4 |
+
+### Design docs (mechanisms, not decisions)
+
+| file | what it explains |
+|---|---|
+| `docs/design/DESIGN-graphics.md` | why the IDD driver is the chosen path, how it differs from legacy QWT, 25H2+ capture paths, legacy support |
+| `docs/design/DESIGN-window-surfaces.md` | window crop (toastcrop/MapDeferred), classification, window/menu synthesis |
+| `docs/design/DESIGN-capture-paths.md` | Windows capture mechanisms that exist, which ones the agent uses, when, and why |
 
 ### Cross-cutting rules, and where they are decided
 
