@@ -8,6 +8,7 @@ in `docs/DESIGN-*.md` and in the code headers. An ADR section goes stale only wh
 
 | file | scope | sections |
 |---|---|---|
+| `ADR-graphics.md` | current graphics path: why IDD, difference from legacy QWT, capture on 25H2+, legacy support | - |
 | `ADR-windows.md` | which guest surfaces become dom0 windows: the screens never shown, the fullscreen window that needs dom0's consent, the secure desktop, the non-seamless desktop window, chrome fragments, popups, autologon | 10 |
 | `ADR-capture.md` | where a guest window's pixels come from: the PrintWindow engine, the WGC broker, liveness at rest | 33 |
 | `ADR-gui.md` | window geometry between the guest and dom0's gui-daemon: placement after a restart, resizes | 2 |
