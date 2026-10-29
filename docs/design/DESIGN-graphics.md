@@ -26,14 +26,20 @@ The IDD can be switched off. Switching it off is also the recovery path for a bl
 The agent latches the WGC broker at start.
 
 - Ordinary windows, UWP frames, toasts, Terminal, layered windows: WGC session in the user-session broker. Windows pushes a frame only when the window changes. At rest nothing runs.
-- Override-redirect menus and popups: broker PrintWindow slot, rendered only on damage or input.
+- Override-redirect menus and popups: broker PrintWindow slot, rendered only on damage or input. First frame is retried at 0/50/100/200/400 ms.
 - Desktop duplication is not a window source.
 
-Liveness is checked only on input. A session that delivers nothing after one recreate is declared deaf.
+Liveness is checked only on input. A session that delivers nothing after one recreate is declared deaf, once per application per boot, at most 8 notices.
 
 ## Support for legacy systems (below 26100)
 
-The broker is ineligible. Capture falls back to the PrintWindow engine: unoccluded windows are established once and copied from the desktop; partly covered windows are painted whole on each change of their own visible pixels. No timed PrintWindow.
+The broker is ineligible. Capture falls back to the PrintWindow engine: unoccluded windows are established once and copied from the desktop; partly covered windows are painted whole on each change of their own visible pixels. A window's change is a change of its own uncovered pixels. The engine treats its own PrintWindow as a possible cause of damage. No timed PrintWindow.
+
+## Secure desktop and non-seamless
+
+In seamless mode the secure desktop is never mapped. A freeze is logged `QGADESKSTUCK` after 30 s. In non-seamless the secure desktop is shown inside the one bounded window. UAC prompts are drawn on the normal desktop (`PromptOnSecureDesktop=0`).
+
+Non-seamless window 0 is shrunk to 1280x800 on entry and is refused at host size unless the size came from dom0. The host size is published in the IDD mode set only while seamless is active, so a guest cannot select its way to fullscreen.
 
 ## Where to read more
 

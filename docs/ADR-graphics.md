@@ -18,5 +18,13 @@ Precise decisions only. Explanations for the reader live in `docs/design/DESIGN-
 | G10 | A toast is cropped to its visible card before it is mapped. | ACCEPTED |
 | G11 | A guest notification is forwarded to dom0 by default. Misrouting fails open. The banner is suppressed by not mapping it. | ACCEPTED |
 | G12 | A re-created window keeps its guest position. A dom0 resize lands once and settles. | ACCEPTED |
+| G13 | The secure desktop is never mapped in seamless mode. In non-seamless it is shown inside the one bounded window. UAC prompts are drawn on the normal desktop. | ACCEPTED |
+| G14 | Non-seamless window 0 is shrunk to 1280x800 on entry and refused at host size unless the size came from dom0. The host size is published in the mode set only while seamless is active. | ACCEPTED |
+| G15 | No composite fallback on a direct-capable guest. Fail hard and visibly. | ACCEPTED |
+| G16 | Autologon is enforced. A guest without a session is unreachable. | ACCEPTED |
+| G17 | A window's change is a change of its own visible pixels. The engine treats its own PrintWindow as a possible cause of damage. | ACCEPTED |
+| G18 | Guest stacking follows dom0 only through focus. | ACCEPTED |
+| G19 | A deaf window is declared once per application per boot, at most 8 notices. | ACCEPTED |
+| G20 | Menu first-frame retries are 0/50/100/200/400 ms. Crop resolves before map (CROP_BEFORE_SHOW_TIMEOUT_MS = 400). | ACCEPTED |
 
 Detailed evidence and open items for each decision remain in the topic ADRs (`ADR-display.md`, `ADR-capture.md`, `ADR-windows.md`, `ADR-toasts.md`, `ADR-gui.md`). This file is the index of the live decisions.
