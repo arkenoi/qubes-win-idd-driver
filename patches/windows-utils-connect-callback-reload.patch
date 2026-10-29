@@ -1,0 +1,48 @@
+--- a/src/pipe-server.c
++++ b/src/pipe-server.c
+@@ -635,14 +635,27 @@
+         return ERROR_NO_SYSTEM_RESOURCES;
+     }
+ 
+-    if (Server->ConnectCallback)
++    // SINGLE LOAD, THEN CALL THE LOCAL COPY - the field must not be re-read between the guard
++    // and the call. Both the test and the call run OUTSIDE Server->Lock, which
++    // LeaveCriticalSection released above, and the InterlockedIncrement between them forces the
++    // compiler to reload the field. MEASURED in the shipped windows-utils.dll of package
++    // 4.3.39+agent.1f7216b11d1e, at 0x180005c30:
++    //     cmp  QWORD PTR [rsi+0x270],rbx   ; rbx is 0 (xor ebx,ebx at 0x180005b45) - the NULL test
++    //     je   skip
++    //     lock inc DWORD PTR [rdi+0x78]    ; the InterlockedIncrement below
++    //     mov  rax,QWORD PTR [rsi+0x270]   ; RELOAD of the same field
++    //     call rax                         ; called without re-testing
++    // A thread clearing ConnectCallback (QpsDestroy) between the test and the reload turns this
++    // into `call 0` - exactly c0000005 "execute of 0000000000000000", p0=8 p1=0.
++    const QPS_CLIENT_CONNECTED connectCallback = Server->ConnectCallback;
++    if (connectCallback)
+     {
+         // Increase the refcount if the connect callback is registered (pretty much always).
+         // Our host (application that registered the callback) will need to call
+         // QpsDisconnectClient after it's done interacting with the client
+         // (this will decrease the refcount and allow for client data cleanup).
+         InterlockedIncrement(&client->RefCount);
+-        Server->ConnectCallback(Server, client->Id, Server->UserContext);
++        connectCallback(Server, client->Id, Server->UserContext);
+     }
+ 
+     return ERROR_SUCCESS;
+@@ -785,8 +798,13 @@
+     // comes back. A disconnect that is NOT ordinary is reported by its own error path.
+     LogDebug("[%lld] disconnected (%lld total)", ClientId, Server->NumberClients);
+ 
+-    if (Server->DisconnectCallback)
+-        Server->DisconnectCallback(Server, ClientId, Server->UserContext);
++    // Same single-load rule as the connect site above. THIS one is currently safe in the shipped
++    // binary only by ACCIDENT: nothing sits between the test and the call, so the optimiser kept
++    // one load. A correctness property that holds because the optimiser happened to do the right
++    // thing is not a property - inserting any statement here would silently reintroduce `call 0`.
++    const QPS_CLIENT_DISCONNECTED disconnectCallback = Server->DisconnectCallback;
++    if (disconnectCallback)
++        disconnectCallback(Server, ClientId, Server->UserContext);
+ }
+ 
+ // Returns only on error. At that point the server state is undefined, call QpsDestroy().

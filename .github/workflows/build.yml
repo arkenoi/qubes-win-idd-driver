@@ -608,6 +608,30 @@ jobs:
           if ($code -notmatch 'Unhandled exception %08x at %p, flags: %x%s') { throw 'the one-line emit is missing, or its head changed' }
           if ($code -match 'GetModuleHandleEx') { throw 'the UEF now takes the loader lock - read the comment that refuses it' }
           Write-Host "::notice title=windows-utils::UEF one-line fix applied"
+      # CALL THROUGH A RELOADED CALLBACK FIELD. pipe-server.c tested Server->ConnectCallback and
+      # then, because an InterlockedIncrement sits between the test and the use, RE-READ the field
+      # and called it - both outside Server->Lock, which LeaveCriticalSection released above.
+      # MEASURED in the shipped windows-utils.dll of 4.3.39+agent.1f7216b11d1e at 0x180005c30:
+      #   cmp [rsi+0x270],rbx / je / lock inc [rdi+0x78] / mov rax,[rsi+0x270] / call rax
+      # rbx is 0 (xor ebx,ebx at 0x180005b45), so that compare IS the NULL test - and QpsDestroy
+      # clearing the field between the test and the reload turns the call into `call 0`, which is
+      # c0000005 "execute of 0000000000000000", p0=8 p1=0. The disconnect site was safe only
+      # because the optimiser happened to keep one load. Both now load once into a const local.
+      # Jev: fix_is_right=hoist 0.79, disconnect_too 0.61.
+      - name: Apply the windows-utils connect-callback single-load fix (always)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = $env:GITHUB_WORKSPACE
+          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-connect-callback-reload.patch"
+          if ($LASTEXITCODE -ne 0) { throw "windows-utils connect-callback single-load patch did not apply" }
+          $src = Get-Content "$ws\deps-src\windows-utils\src\pipe-server.c" -Raw
+          $code = [regex]::Replace($src, '(?m)//.*$', '')
+          if ($code -match 'Server->ConnectCallback\(') { throw 'the connect callback is still called through the struct field' }
+          if ($code -match 'Server->DisconnectCallback\(') { throw 'the disconnect callback is still called through the struct field' }
+          if ($code -notmatch 'const QPS_CLIENT_CONNECTED connectCallback') { throw 'the connect single-load local is missing' }
+          if ($code -notmatch 'const QPS_CLIENT_DISCONNECTED disconnectCallback') { throw 'the disconnect single-load local is missing' }
+          Write-Host "::notice title=windows-utils::connect-callback single-load fix applied"
       # A DEPARTED PEER STOPS BEING AN ERROR OF OURS, at the first of the four lines it wrote.
       # libvchan's client init PROBES the peer's xenstore entry - "test if the store entry exists;
       # if not - wait a second time" - and discards the status on the next line. But XcStoreRead
