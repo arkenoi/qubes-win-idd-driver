@@ -1,6 +1,6 @@
 # ADR - graphics decisions
 
-Precise decisions only. Explanations for the reader live in `docs/DESIGN-graphics.md` and `docs/DESIGN-window-surfaces.md`.
+Precise decisions only. Explanations for the reader live in `docs/design/DESIGN-graphics.md` and `docs/design/DESIGN-window-surfaces.md`.
 
 ## Decisions
 
