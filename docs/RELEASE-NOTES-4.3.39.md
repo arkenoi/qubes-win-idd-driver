@@ -1,0 +1,191 @@
+# QWT-NG 4.3.39 — a Windows qube could lose its whole desktop, and we were the ones closing it
+
+## A qube that keeps answering qrexec and shows nothing
+
+The worst failure in this range is not a crash. The guest stays up, `qvm-run` works, the log keeps
+being written — and there is no desktop, for the rest of that boot. It happened on three acceptance
+campaigns (`rel-40817518835` win11de-uc, `rel-39678937221`, `rel-39880114972`) before it was traced.
+
+What dies is **dom0's `gui-daemon`**, and nothing restarts it. That absence is deliberate and is not
+being changed: the daemon parses bytes a guest controls, so `exit(1)` is fail-closed, and a
+misbehaving guest gets exactly one attempt at a parser bug. A respawn, a dom0 watchdog or a
+guest-side reconnect would all be security-model changes. So every path by which **our** bytes can
+make the daemon exit is our defect, to be removed rather than survived. This release removes two of
+them and the thing that walked the agent into the window.
+
+**The lethal gap.** `gui-daemon` looks window 0 up in `remote2local` exactly like any other window id
+(`xside.c:3942-3957`); that table starts empty and only `handle_create` ever inserts into it. So a
+screen-scoped message arriving with no outstanding `CREATE(0)` is answered with `exit(1)` — no
+dialog, no prompt. The agent enters that window on **every capture reinitialisation**, because
+stopping frame processing sends `UNMAP(0)` + `DESTROY(0)`. Two call sites had grown ad-hoc guards;
+screen `MSG_MAP`, screen `MSG_WINDOW_HINTS` and desktop `MSG_WMNAME` had none and reached the wire
+unguarded. The send-side choke point waved window 0 through unconditionally, on the written premise
+that "the daemon requires no CREATE for those". That premise is false. The check now lives at that
+one choke point, so every screen-scoped sender inherits it, the flag is cleared on `DESTROY(0)`
+symmetrically with the announce flag, and a gate that fires is a rate-limited warning rather than
+silence.
+
+**What walked us into the window.** The ETW proxy's helper launch ran synchronously on the agent's
+main loop. Under a Winlogon secure desktop that launch was measured at **14.2 s, 15.2 s and 16.5 s**
+on three separate runs, against 0.14–0.27 s on a normal desktop. The capture watchdog measures that
+same loop and armed at 15 s — so the launch tripped the watchdog, and the reinit that follows is
+exactly the destructive window above. The launch now runs on its own thread; the launch body is
+byte-for-byte unchanged and still holds the same lock for its whole duration, so every invariant
+inside it is preserved. Only *who waits* changed: the poke tries the lock and returns rather than
+blocking, shutdown joins the worker outside the lock before teardown, and a previous worker is
+reaped before another is spawned.
+
+**And the watchdog itself was measuring the wrong thing.** It timed elapsed duration, which cannot
+distinguish *blocked* from *slow* — on a host up to ~5× slower than this rig, our own measurement
+puts a normal slow pass at 1–3 s, i.e. 5–15 s scaled, *on* the 15 s threshold. A destructive arm
+would have fired on healthy operation. It now watches a main-loop progress tick instead, bumped on
+every return from the loop's wait including a plain timeout, and declares a wedge only when that
+tick has not moved for a whole budget. The capture thread has already set the event that loop waits
+on, so a live loop is expected to tick on every pass regardless of how long that pass takes. The
+argument that this holds on an arbitrarily slow host is from the structure of the wait, not from a
+run on one — we have not tested a slow machine — but unlike the duration it replaces, nothing in it
+is calibrated or tuned. A second arm, eight budgets of total wait, covers the one pathology a
+progress term is blind to: a loop that ticks but never takes a frame. That ceiling is derived from
+the budget rather than measured. Raising the old number was rejected as the alternative: it delays
+detection of a real block on every host and is still a guess about how slow "slow" is.
+
+**Honest scope:** the gap is closed and the trigger is removed, both proven reachable in source and
+one of them measured on three runs. The race itself was never caught in the act, so
+`GUIDESKTOPLOST` stays open in our register against a run that reproduces it.
+
+## A failed capture initialisation reported success
+
+One acceptance cell failed on one log line: `CaptureInitialize failed with error 0x0: The operation
+completed successfully.` The text is the symptom; the defect is that the status really was zero, so
+the caller's `if (ERROR_SUCCESS == status) return ERROR_SUCCESS;` reported capture initialised with
+the capture pointer still NULL. A failed init was indistinguishable from a good one to everything
+downstream — which is why it surfaced as a log line rather than a crash.
+
+Three separate ways the status was being lost, all now fixed: the failure label ran teardown
+*before* the caller read `GetLastError()`, and releasing COM objects and closing handles resets it;
+six failure paths recorded no status at all; and the two richest sources in the function had their
+`HRESULT`s tested and then discarded. The status is now captured at each failure site and restored
+after teardown, a path that fails without recording why gets `ERROR_FUNCTION_FAILED`, and the caller
+holds the same invariant from its side — a NULL return can never again carry `ERROR_SUCCESS`. One
+intended consequence: the transient-desktop retry branch classifies on `GetLastError()` and was
+reading a value teardown had already clobbered, so it now sees the real DXGI code.
+
+## Two dom0 notifications for one broker death
+
+A broker death was reported to dom0 twice, citing the same Windows event record, three seconds
+apart. A double notification is a P1 by standing rule.
+
+Both duplicate-suppression predicates were wired into the catch-up path only; the live
+event-triggered path called neither, and its own ledger is keyed on a per-boot token and the death
+identity, never on the record id — so a record the catch-up had already sent was still "new" to it.
+A guard installed per caller is a guard one caller forgets, and this is the second time it fired:
+the same double in the opposite order was recorded five days earlier and the fix was wired into one
+of the two callers. Both predicates now run inside the shared reporter, before the death is
+registered, so a duplicate consumes neither a death number nor one of the per-boot cap slots. The
+check fails **open** and says so at warning level: a death the user is never told about is the worse
+outcome.
+
+## The de-slice supervisor stopped reporting deaths that had already been repaired
+
+The broker's restart policy is Task Scheduler's minimum, one minute × 3; the supervisor's down-clock
+was due 30 seconds after the death. The restart therefore landed outside the window every time, and
+the supervisor reported a dead broker that had in fact come back — measured, a relaunch validated 91
+seconds after a death reported 29 ms after detection. The deadline was not the wrong number, it was
+started at the wrong moment: an exit-code death — the only kind the scheduler restarts — now gets
+the scheduler's own budget as its first deadline, and the hold ends early the moment the restart
+validates, publishes a pid, or the helpers stand down. A hang, a clean exit and a fourth death keep
+the unchanged 30 seconds. The restart constants are now numbers with the task XML built from them,
+so the budget and the XML cannot drift apart.
+
+This delays **no** dom0 notification: the de-slice row is already suppressed while a death is
+outstanding. The death itself still reports at once.
+
+## The boot clock pull is gone
+
+Every successful boot started four processes — two of them complete PowerShell runtimes — and one
+vchan inside boot+15 s, to pull the time from dom0. The only correction that path ever recorded was
+**2.9 seconds**. The three-hour defect it was built for in October was a convention problem, fixed
+by setting the timezone at qube-creation time, and drift is already corrected without us: dom0 runs
+`qvm-sync-clock` hourly against every running qube, served by the same guest-side script. The boot
+task is removed and the installer now unregisters it, because its action path had deliberately been
+copied into the Qubes Tools tree to outlive setup. `set-time.ps1` and `update-time.bat` are
+untouched, so the hourly push still works exactly as before.
+
+Removing the thing that jumps would have blinded the jump-based detectors, so the detector gap was
+closed in the same change: the log sweep has always measured both clocks directly, before anything
+corrects them, and merely printed the number. It is now graded, against the threshold already in
+use, under its own problem key so it cannot be confused with the harness's own sync failing.
+
+## The installer's log no longer depends on a channel the install holds closed
+
+`Write-Log` appended to `C:\qwt-improved-install.log` and nothing else, and that file is pulled over
+qrexec — which our own boot design deliberately holds closed for exactly the device work the log
+describes. The result, on 2026-10-29, was a pull that returned an empty file and an engineer reading
+that emptiness as "the install never ran". Every line, and both result writers, are now mirrored to
+the Qubes Tools log directory, resolved once and cached because `msiexec` rewrites that key
+mid-upgrade. Each line is written through rather than buffered, because the guests this exists for
+are killed rather than shut down and a buffered tail is a lost tail. On an ordinary install this
+simply means the setup log lands beside every other module's log instead of alone at the root of
+`C:`.
+
+The same change fixed an installer-side crash of its own: a `schtasks` probe added with the
+clock-sync removal merged stderr into the success stream, which under `ErrorActionPreference='Stop'`
+threw before the probe could read its own exit code, and killed stage 2 on any guest where the task
+was absent. Three unguarded `schtasks` calls — the only three in the file — now decide on the exit
+code alone, as the file's own rule says they must.
+
+## Nothing else changed
+
+**No driver change in this range.** No change to what the agent is permitted to do; the security
+model is identical to 4.3.38, and the window-0 work narrows what we can do to dom0 rather than
+widening it.
+
+One addition is inert by default: a registry knob (`ExpStagePvDriversOnly`) that makes setup stage
+the PV network and console drivers without installing them, leaving the bind to the cold boots. It
+exists to take a measurement about boot-time device binding, is read once at stage-2 entry, and
+nothing changes without it. Both arms have been run; the measurement it was built for is not yet
+answered, for reasons recorded in `docs/ADR-boot.md`.
+
+## What was verified, and what was not
+
+**This section is incomplete and must be replaced before this release is cut.** As written it
+reports only what is true before the acceptance campaign, and a release published with this text
+still standing would be making no claim at all about its own testing. The campaign writes a record
+keyed on the ISO's own hash, and `tools/cut-release.sh` refuses to publish without one — that gate
+is separate from this file and cannot be satisfied by it, so the risk here is a published page that
+says less than the evidence does, not an untested release.
+
+What is true on these bytes today: CI is green on the build commit, and the release-package
+preflight reports `PREFLIGHT CLEAR` — every fix under test is present in the package, and there has
+been no product drift since it was built.
+
+What is **not** yet true: the acceptance matrix has not run against this package. Until it has,
+none of the fixes above has a campaign measurement behind it, and the de-slice, desktop-loss and
+capture-watchdog changes in particular are argued from source and from earlier runs rather than
+demonstrated on this build.
+
+## Known issues shipped knowingly
+
+- **A toast pre-emption can leave a banner un-mapped** (`TOASTPREEMPTLOSESBANNER`, P1): while a
+  newer notification is queued, a displayed window-path banner is taken off screen before the swap
+  can paint, and for a `forwarded` resolution it is not put back. Unchanged from 4.3.38 — the
+  replacement for rule 5 of the toast-hold design is specified, not built.
+- **`GUIDESKTOPLOST` remains open** (P1): the lethal window is gated and the measured trigger is
+  removed, but the race was never caught in the act, so the entry closes on a reproducing run and
+  not on this diff.
+- **The wgcbroker can hang without being relaunched** (`WGCBROKERHANGSANDISNOTRELAUNCHED`, P1):
+  the broker stops answering, the agent ends it, and nothing relaunches it before the next agent
+  start — so menus and toasts run brokerless for the rest of that boot. The restart policy the
+  de-slice change above now respects covers an *exit*; it does not cover a live process that has
+  stopped making progress.
+- **A guest can stop responding at a level below the guest** (`WEDGERECUR`, P1): characterised from
+  two crash specimens, the stall sits beneath Windows rather than in it. Not triggered by anything
+  in this release and not fixed by it.
+- **The Windows Update scan task can fail and log nothing** (`WUSCANTASKFAILSANDLOGSNOTHING`, P1
+  updater).
+- **The installer can fail to terminate, leaving an empty unresponsive window**
+  (`INSTALLERLEAVESADEADWINDOW`, P1 user-facing): reported from the field on both Windows 10 and
+  Windows 11 25H2 — a full-screen empty window and two taskbar entries that cannot be activated. A
+  reboot clears it. This is **not** the desktop loss above: those reports carry no vchan wedge at
+  all. We do not yet have the installer log from an affected machine, which is the next step; the
+  log mirroring in this release is what makes that log retrievable.
