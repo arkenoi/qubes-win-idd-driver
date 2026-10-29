@@ -185,7 +185,22 @@ demonstrated on this build.
   updater).
 - **The installer can fail to terminate, leaving an empty unresponsive window**
   (`INSTALLERLEAVESADEADWINDOW`, P1 user-facing): reported from the field on both Windows 10 and
-  Windows 11 25H2 — a full-screen empty window and two taskbar entries that cannot be activated. A
-  reboot clears it. This is **not** the desktop loss above: those reports carry no vchan wedge at
-  all. We do not yet have the installer log from an affected machine, which is the next step; the
-  log mirroring in this release is what makes that log retrievable.
+  Windows 11 25H2 — a full-screen empty window and two taskbar entries that cannot be activated,
+  still unresponsive after ten minutes. A reboot clears it.
+
+  Two things it is **not**. It is not the desktop loss above: those reports carry no vchan wedge,
+  and every vchan wait in them is answered in about a second. And it is not the clock/catalog hang
+  we already guard against — a guest behind real UTC reads our driver catalogs as not-yet-valid and
+  Windows hangs instead of failing, which is why the installer refuses up front; the affected
+  machine's own logs show corrections of 5–11 *seconds*, so its clock was never the cause.
+
+  `install.cmd` self-elevates by relaunching an elevated copy of itself, so the two taskbar entries
+  are the installer's own two consoles, and "cannot be activated" is what Windows does to any window
+  whose thread has stopped pumping — the installer blocks on `Start-Process msiexec -Wait`. The open
+  question is what msiexec is behind, and we have never had the log that would say, because until
+  this release the installer wrote only to `C:\qwt-improved-install.log`, which no log bundle
+  collects.
+
+  **If you hit this, that log is now worth sending.** It mirrors to `Q:\Qubes Logs\qwt-improved-install.log`
+  alongside every other module's log, and each line is written through rather than buffered — so a
+  hung or killed install still leaves a log, and it ends on the step it hung in.
