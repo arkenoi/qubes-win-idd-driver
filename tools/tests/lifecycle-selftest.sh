@@ -166,8 +166,12 @@ shape "main.c: the window-event thread's exit on the agent's request is INFO, a 
 main_exit_log() { ! grep -q 'win_perror("WatchForEvents")' "$1" && grep -q 'if (QgaExitIsExpected(exitCode))' "$1" && grep -q 'LogError("QGAEXIT exiting with 0x%x: %s"' "$1"; }
 shape "main.c: WinMain logs an expected exit at INFO with its reason and a failure at ERROR with its code (no stale GetLastError)" main_exit_log "$MAIN" 'if (QgaExitIsExpected(exitCode))'
 # the etwproxy: one launch, no backoff relaunch, disarmed exits are expected
-etw_no_relaunch() { ! grep -q 'EtwProxyBackoffLocked\|EtwProxyRelaunchCb\|CreateTimerQueueTimer' "$1" && grep -q 'if (g_State != EPS_IDLE || g_Shutdown || g_Disarmed)' "$1" && grep -q 'while the session is ending - expected, not a death' "$1"; }
-shape "etwproxy.c: no backoff relaunch timer; no launch while disarmed; an exit while the session ends is expected" etw_no_relaunch "$AGENT/gui-agent/etwproxy.c" 'if (g_State != EPS_IDLE || g_Shutdown || g_Disarmed)'
+# The disarm/shutdown clause ONLY. This pinned the whole guard including its state list, so when
+# the launch moved off the main loop and gained EPS_LAUNCHING the check broke on a clause it does
+# not test - and test.yml path-filtered itself out of that bump, so it sat green until an unrelated
+# commit made it run (register: TESTYMLMISSESSUBMODULEBUMP).
+etw_no_relaunch() { ! grep -q 'EtwProxyBackoffLocked\|EtwProxyRelaunchCb\|CreateTimerQueueTimer' "$1" && grep -q '|| g_Shutdown || g_Disarmed)' "$1" && grep -q 'while the session is ending - expected, not a death' "$1"; }
+shape "etwproxy.c: no backoff relaunch timer; no launch while disarmed; an exit while the session ends is expected" etw_no_relaunch "$AGENT/gui-agent/etwproxy.c" '|| g_Shutdown || g_Disarmed)'
 
 # A TEARDOWN IS NOT A STOP-FILE MISS (2026-10-10). Each helper shutdown grades its bounded wait through
 # QgaHelperStopOutcome with LifecycleSessionEnding(); the teardown arm is INFO, the miss stays ERROR, and both lines

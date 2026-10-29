@@ -505,6 +505,22 @@ if [ -n "${LOGVOL_IMG:-}" ] && logvol_pull "$LOGVOL_IMG" "$OUT/logvol-pre" >>"$O
 fi
 log "installer log mirror: $MIRROR_NAME, $MIRROR_PRE pre-existing byte(s) on the volume are NOT this run's"
 
+# EXPERIMENT ARM, default OFF. EXP_STAGE_PV_ONLY=1 makes the installer stage xenvif and xencons
+# into the driver store without /install, leaving the bind to the cold boots below. It answers one
+# question and no other: does a guest whose stage skipped those installs come up with them bound.
+# The IddCx node is root-enumerated and is deliberately NOT part of this arm - no boot creates a
+# node with no hardware to discover, so including it would only confound the result.
+# A knob that cannot be set must FAIL the run: a mislabelled arm is worse than no arm.
+if [ "${EXP_STAGE_PV_ONLY:-0}" = 1 ]; then
+  _k=$(QTEST_VM=$SUBJECT timeout -k 5 90 ./tools/qtest run \
+        "powershell -NoProfile -Command \"New-ItemProperty -Path 'HKLM:\\SOFTWARE\\Invisible Things Lab\\Qubes Tools' -Name ExpStagePvDriversOnly -Value 1 -PropertyType DWord -Force | Out-Null; 'KNOBSET'\"" \
+        2>/dev/null | tr -d '\r')
+  case "$_k" in
+    *KNOBSET*) log "EXPERIMENT ARM: ExpStagePvDriversOnly=1 - xenvif/xencons STAGED ONLY, the cold boots must bind them" ;;
+    *)         log "[ERROR] EXP_STAGE_PV_ONLY=1 was asked for but the knob could not be set - refusing to run an arm that would be recorded as the wrong one"; exit 2 ;;
+  esac
+fi
+
 # CLOCK, BEFORE ANYTHING IS INSTALLED. Windows with RealTimeIsUniversal unset reads the hardware
 # clock as LOCAL time, so guest_UTC = RTC_content - guest_TZ_offset. What the RTC holds depends on
 # the qube's `timezone` feature, and the branches have opposite signs (both measured 2026-09-25):
@@ -1101,6 +1117,24 @@ qu_coldboot(){ # $1=n
 }
 qu_coldboot 1
 qu_coldboot 2
+
+# THE EXPERIMENT'S ONE MEASUREMENT, taken after the boots that were supposed to do the binding.
+# Printed whichever arm ran, so the control run records the same fields and the two are comparable.
+_pvps="Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { \$_.InstanceId -match 'VEN_5853|XENVIF|XENCONS|VIF|CONS' } | ForEach-Object { 'PVDEV ' + \$_.Status + ' ' + \$_.Class + ' ' + \$_.InstanceId }"
+_pv=$(QTEST_VM=$SUBJECT timeout -k 5 120 ./tools/qtest run "powershell -NoProfile -Command \"$_pvps\"" 2>/dev/null | tr -d '\r' | grep -a '^PVDEV ' || true)
+log "PV device state after both cold boots (arm: EXP_STAGE_PV_ONLY=${EXP_STAGE_PV_ONLY:-0}):"
+if [ -n "$_pv" ]; then
+  printf '%s\n' "$_pv" > "$OUT/pv-devices-after-boots.txt"
+  while IFS= read -r _r; do log "    $_r"; done <<EOFPV
+$_pv
+EOFPV
+elif [ "${EXP_STAGE_PV_ONLY:-0}" = 1 ]; then
+  # Only an error in the arm that exists to take this reading. On a control run a silent readout
+  # is an inconclusive instrument, not a failed install, and must not redden every cycle.
+  log "  [ERROR] no PV device rows came back - this run measures NOTHING about the arm it was started for"
+else
+  log "  no PV device rows came back - readout inconclusive (not a verdict on the install)"
+fi
 
 # =============================================================================================
 # 6. VERIFY - on the guest, after the second boot. Missing data fails.

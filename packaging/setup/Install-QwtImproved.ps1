@@ -264,6 +264,26 @@ $script:QrexecAgentReleased = $false
 $script:MirrorLog      = $null
 $script:MirrorResolved = $false
 
+# EXPERIMENT KNOB, default ABSENT = today's behaviour, nothing reads it unless it is set.
+# DWORD ExpStagePvDriversOnly=1 at the root key stages xenvif and xencons into the driver store
+# with /add-driver and WITHOUT /install, leaving the bind to the next boot. Both are bus-enumerated
+# children of xenbus, so the boot path binds them; the IddCx node is root-enumerated and is NOT
+# covered by this knob, because no boot creates a node that has no hardware to discover.
+# It exists to take one measurement: does a guest whose stage skipped the installs come up with
+# xenvif and xencons working after one boot.
+$script:StagePvOnly = $null
+
+function Get-PvStageOnly {
+    if ($null -ne $script:StagePvOnly) { return $script:StagePvOnly }
+    $v = $false
+    try {
+        $v = [bool]((Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -Name 'ExpStagePvDriversOnly' -ErrorAction Stop).ExpStagePvDriversOnly)
+    } catch { $v = $false }
+    $script:StagePvOnly = $v
+    if ($v) { Write-Log 'ExpStagePvDriversOnly=1: xenvif and xencons will be STAGED ONLY (/add-driver, no /install); the next boot binds them' 'WARN' }
+    return $v
+}
+
 function Resolve-MirrorLog {
     # Resolved ONCE, on the first line written, then cached: msiexec rewrites this key as it
     # upgrades, and the mirror must not follow it somewhere else halfway through the run.
@@ -2876,6 +2896,12 @@ function Invoke-Stage2 {
 
     $script:Result.stage = 'stage2-install'
 
+    # READ THE EXPERIMENT KNOB BEFORE msiexec, not at its use site. msiexec rewrites the root key
+    # as it upgrades - the same reason the log mirror resolves its path once and caches it - so a
+    # value read after it may be gone. Get-PvStageOnly caches, so the later calls see this answer.
+    [void](Get-PvStageOnly)
+    $script:Result.detail.exp_stage_pv_only = $script:StagePvOnly
+
     # The -Auto resume task is retired at a TERMINAL state - the success tail, Fail, or the main
     # catch - not here. Retiring it as stage 2's first act meant any interruption of stage 2 (a dom0
     # shutdown, the harness rescue, a mid-install restart by a xenbus_monitor survivor, or a hard
@@ -3951,9 +3977,17 @@ function Invoke-Stage2 {
             $script:Result.detail.clock_skew_refusal = $true
             Write-Log 'skipping ALL PV driver installs - the clock must be fixed first' 'ERROR'
         } else {
-        Write-Log 'installing xenvif (PV network interface fix)'
+        # The default arm keeps the call written out literally: two suites anchor on this exact
+        # source text (svc-serial-start-test.ps1's deviceAnchors, installer-clock-gate-selftest).
+        $pvStageOnly = Get-PvStageOnly
         $global:LASTEXITCODE = $null   # stale-exit-code trap, see Set-BootResume
-        try { $out = & pnputil.exe /add-driver $pvInf /install 2>&1 } catch { $out = "$_" }
+        if ($pvStageOnly) {
+            Write-Log 'staging xenvif into the driver store (no /install - the next boot binds it)'
+            try { $out = & pnputil.exe /add-driver $pvInf 2>&1 } catch { $out = "$_" }
+        } else {
+            Write-Log 'installing xenvif (PV network interface fix)'
+            try { $out = & pnputil.exe /add-driver $pvInf /install 2>&1 } catch { $out = "$_" }
+        }
         $out | ForEach-Object { Write-Log "  pnputil(xenvif): $_" }
         # 259 = no more items (nothing to do); 3010 = success, reboot required - stage 2
         # always reboots. Anything else is a real failure, but NOT fatal to the install:
@@ -4006,16 +4040,23 @@ function Invoke-Stage2 {
             # audit-the-change-first 0.98).
             $script:Result.detail.pv_xencons = 'refused: guest clock skew'
         } else {
-        Write-Log 'installing xencons (PV console - diagnostic channel)'
+        $consStageOnly = Get-PvStageOnly
         $global:LASTEXITCODE = $null   # stale-exit-code trap, see Set-BootResume
-        try { $out = & pnputil.exe /add-driver $consInf /install 2>&1 } catch { $out = "$_" }
+        if ($consStageOnly) {
+            Write-Log 'staging xencons into the driver store (no /install - the next boot binds it)'
+            try { $out = & pnputil.exe /add-driver $consInf 2>&1 } catch { $out = "$_" }
+        } else {
+            Write-Log 'installing xencons (PV console - diagnostic channel)'
+            try { $out = & pnputil.exe /add-driver $consInf /install 2>&1 } catch { $out = "$_" }
+        }
         $out | ForEach-Object { Write-Log "  pnputil(xencons): $_" }
         if ($LASTEXITCODE -notin 0, 259, 3010) {
             Write-Log "xencons install returned $LASTEXITCODE - DEV_CONS stays at code 28, no out-of-band channel" 'WARN'
             $script:Result.detail.pv_xencons = "failed rc=$LASTEXITCODE"
         } else {
-            Write-Log 'xencons installed - DEV_CONS should bind after the reboot'
-            $script:Result.detail.pv_xencons = 'installed'
+            Write-Log ("xencons {0} - DEV_CONS should bind after the reboot" -f $(if ($consStageOnly) { 'staged (no /install)' } else { 'installed' }))
+            $script:Result.detail.pv_xencons = $(if ($consStageOnly) { 'staged-only' } else { 'installed' })
+            $script:Result.detail.exp_stage_pv_only = $consStageOnly
         }
         }
     } else {
