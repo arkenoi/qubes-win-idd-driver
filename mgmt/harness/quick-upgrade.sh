@@ -1138,8 +1138,17 @@ qu_coldboot 2
 # The adapter name is NOT the discriminator and is printed as context only. A Realtek reading can be
 # produced by the per-boot unplug latch (xen.sys consumes Services\XEN\Unplug\NICS delete-on-read
 # and vetoes without a VIF subkey; first appearance fails problem 14) with the correct xenvif bound.
-_pvps="\$ErrorActionPreference='SilentlyContinue'; foreach (\$d in (Get-PnpDevice | Where-Object { \$_.InstanceId -match 'XENVIF|XENCONS|VEN_5853' })) { \$v = (Get-PnpDeviceProperty -InstanceId \$d.InstanceId -KeyName 'DEVPKEY_Device_DriverVersion').Data; \$pc = (Get-PnpDeviceProperty -InstanceId \$d.InstanceId -KeyName 'DEVPKEY_Device_ProblemCode').Data; 'PVDEV {0} prob={1} ver={2} {3} {4}' -f \$d.Status, \$pc, \$v, \$d.Class, \$d.InstanceId }; foreach (\$a in (Get-NetAdapter)) { 'PVNET {0} | {1}' -f \$a.Status, \$a.InterfaceDescription }"
-_pv=$(QTEST_VM=$SUBJECT timeout -k 5 120 ./tools/qtest run "powershell -NoProfile -Command \"$_pvps\"" 2>/dev/null | tr -d '\r' | grep -aE '^(PVDEV|PVNET) ' || true)
+_pvps="\$ErrorActionPreference='SilentlyContinue'; \$all = @(Get-PnpDevice); 'PVTOTAL {0}' -f \$all.Count; \$drv = @{}; foreach (\$sd in (Get-CimInstance Win32_PnPSignedDriver)) { if (\$sd.DeviceID) { \$drv[\$sd.DeviceID.ToUpper()] = \$sd.DriverVersion } }; foreach (\$d in (\$all | Where-Object { \$_.InstanceId -match 'XENBUS|XENVIF|XENCONS|XENIFACE|VEN_5853|DEV_VIF|DEV_CONS|DEV_IFACE' })) { \$v = (Get-PnpDeviceProperty -InstanceId \$d.InstanceId -KeyName 'DEVPKEY_Device_DriverVersion').Data; if (-not \$v) { \$v = \$drv[\$d.InstanceId.ToUpper()] }; if (-not \$v) { \$v = '-' }; \$pc = (Get-PnpDeviceProperty -InstanceId \$d.InstanceId -KeyName 'DEVPKEY_Device_ProblemCode').Data; if (\$null -eq \$pc) { \$pc = '-' }; 'PVDEV {0} prob={1} ver={2} {3} {4}' -f \$d.Status, \$pc, \$v, \$d.Class, \$d.InstanceId }; \$na = @(Get-NetAdapter); 'PVNETTOTAL {0}' -f \$na.Count; foreach (\$a in \$na) { 'PVNET {0} | {1}' -f \$a.Status, \$a.InterfaceDescription }"
+_pv=$(QTEST_VM=$SUBJECT timeout -k 5 120 ./tools/qtest run "powershell -NoProfile -Command \"$_pvps\"" 2>/dev/null | tr -d '\r' | grep -aE '^(PVDEV|PVNET|PVTOTAL|PVNETTOTAL) ' || true)
+# WHICH ARM ACTUALLY RAN, from the installer's own RESULT and not from what we asked for.
+_want=${EXP_STAGE_PV_ONLY:-0}
+_got=$(grep -ao '"exp_stage_pv_only"[: ]*[a-z]*' "$OUT/install-mirror.log" 2>/dev/null | tail -1 | grep -o '[a-z]*$')
+case "${_want}:${_got}" in
+  1:true|0:false) log "arm confirmed by the installer's RESULT: exp_stage_pv_only=$_got" ;;
+  *:'')           log "[WARN] the RESULT did not carry exp_stage_pv_only - the arm is UNCONFIRMED (asked for $_want)" ;;
+  *)              log "[ERROR] ARM MISMATCH: asked for EXP_STAGE_PV_ONLY=$_want, the installer recorded exp_stage_pv_only=$_got - this run is NOT the arm it is labelled, do not read the rows below as that arm" ;;
+esac
+
 log "PV device state after both cold boots (arm: EXP_STAGE_PV_ONLY=${EXP_STAGE_PV_ONLY:-0}):"
 if [ -n "$_pv" ]; then
   printf '%s\n' "$_pv" > "$OUT/pv-devices-after-boots.txt"
@@ -1147,17 +1156,19 @@ if [ -n "$_pv" ]; then
 $_pv
 EOFPV
   # State the two readings separately, strongest first, so a later reader cannot merge them.
-  if printf '%s\n' "$_pv" | grep -qai '^PVDEV OK .*XENCONS'; then
+  # CONS and VIF, not XENCONS and XENVIF: the children enumerate as XENBUS DEV_CONS / DEV_VIF, and
+  # matching the package name instead is what made the control report its own xenvif ABSENT.
+  if printf '%s\n' "$_pv" | grep -qai '^PVDEV OK .*\(XENCONS\|DEV_CONS\)'; then
     log "  XENCONS BOUND (the clean probe: the MSI does not ship xencons, so only the store could have)"
-  elif printf '%s\n' "$_pv" | grep -qai 'XENCONS'; then
+  elif printf '%s\n' "$_pv" | grep -qai '\(XENCONS\|DEV_CONS\)'; then
     log "  XENCONS PRESENT BUT NOT OK - read the prob= field on its row"
   else
     log "  XENCONS ABSENT after both boots"
   fi
-  if printf '%s\n' "$_pv" | grep -qai '^PVDEV .*ver=9\.1\.0\.998.*XENVIF'; then
+  if printf '%s\n' "$_pv" | grep -qai '^PVDEV OK .*ver=9\.1\.0\.998.*\(XENVIF\|DEV_VIF\)'; then
     log "  XENVIF on OUR build 9.1.0.998 (weak probe: an upgrade of a node msiexec had already bound)"
-  elif printf '%s\n' "$_pv" | grep -qai '^PVDEV .*XENVIF'; then
-    log "  XENVIF present on a version that is NOT 9.1.0.998 - the MSI's 9.1.0.0 is still the bound one"
+  elif printf '%s\n' "$_pv" | grep -qai '^PVDEV .*\(XENVIF\|DEV_VIF\)'; then
+    log "  XENVIF present, but NOT OK on 9.1.0.998 - read ver= and prob= on its row"
   else
     log "  XENVIF ABSENT after both boots"
   fi
