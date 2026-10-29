@@ -19,6 +19,14 @@ HEAVY="$HEAVY|release-acceptance\.sh|campaign-run\.sh|gate-remainder\.sh"
 # exactly the one-level indirection the comment above measured on 2026-10-16: the gate reads the
 # command it is asked to allow, and an unlisted wrapper makes a heavy path invisible to it.
 HEAVY="$HEAVY|repro-run\.sh"
+# campaign-full.sh IS THE HEAVIEST PATH ON THIS RIG AND WAS NOT LISTED. Every script it calls was
+# - release-acceptance.sh, gate-remainder.sh, matrix.sh via them - but the gate reads the command it
+# is asked to allow, so naming the parts and not the whole is precisely the one-level-of-indirection
+# hole measured on 2026-10-16, rebuilt by a wrapper written after that fix. It runs the eight cells,
+# the feature tests AND the six remainder suites against two packages: hours of exclusive rig time
+# and the operator's screen, on the single command most likely to be typed from memory at the end of
+# a long session. Found 2026-10-29 while reading the chain before running it.
+HEAVY="$HEAVY|campaign-full\.sh"
 
 # THE BLUNTNESS IS LOAD-BEARING, AND A READ-ONLY EXEMPTION IS NOT AS EASY AS IT LOOKS.
 # This regex matches the command TEXT, so a command that merely NAMES a heavy script - a grep for
