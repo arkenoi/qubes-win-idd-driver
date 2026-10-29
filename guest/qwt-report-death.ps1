@@ -1247,6 +1247,46 @@ function Invoke-QwtDeathReport {
         Write-QwtDeathLog 'INFO' "$($ev.origin) not ours: $($ev.reason)"
         return 'not-ours'
     }
+    # ALREADY REPORTED? ASKED HERE, WHERE BOTH PATHS PASS (2026-10-29). These two predicates were
+    # called from the catch-up ONLY, so they stopped the order they were written for - live first,
+    # catch-up second, measured 2026-10-24 - and left the mirror order wide open. It fired five
+    # days later in rel-40817518835 supervision-gate L8: the catch-up reported Application record
+    # 293 at 08:58:49 and the live event-triggered pass reported the SAME record at 08:58:54,
+    # dom0_death_rows=2 for one real death (L8W: broker_deaths=1 death_events=1). A double is P1 by
+    # standing rule. The live path asks Register-QwtDeath, whose ledger is keyed on a volatile
+    # per-boot token and the death identity - never on (channel, recordId) - so a record the
+    # catch-up sent seconds earlier is still "new" to it.
+    # ASKED BEFORE Register-QwtDeath, not after: registering a duplicate would consume a death
+    # number and spend one of the 8-per-boot cap on a death the user was already told about.
+    # ORDER IS THE CHEAP KEYED CHECK FIRST, the log scan only as the backstop for the case the
+    # keyed one cannot cover (a shutdown that kills the process between the send and the persist).
+    # That is the order the catch-up already used at :1589/:1591 and it is kept exactly.
+    # Both fail OPEN - unreadable means report again - because a death the user is never told
+    # about is the failure the catch-up exists to prevent (Jev re_report_direction 0.18).
+    # recordId comes off the XML as TEXT (Get-QwtDeathNodeText), and both predicates take [long],
+    # so an empty or non-numeric id must not reach them - it would throw inside the coercion, from
+    # a guard whose whole contract is that it never costs a death its notification.
+    $dupChecked = $false
+    try {
+        if ($ev.channel -and $ev.recordId) {
+            $rid = [long]$ev.recordId
+            $seen = $null
+            try { $seen = Read-QwtDeathWatermark } catch { $seen = $null }
+            $dupChecked = $true
+            if ((Test-QwtDeathAlreadyNotified -Channel $ev.channel -RecordId $rid -Marks $seen) -or
+                (Test-QwtDeathLoggedRecord    -Channel $ev.channel -RecordId $rid)) {
+                Write-QwtDeathLog 'INFO' "$($ev.origin) $($ev.channel) record $rid was already reported - not notified again"
+                return 'already-reported'
+            }
+        }
+    } catch {
+        # Fail OPEN, and say so: the death goes on to be reported. Silence here would turn a broken
+        # guard into a dropped death, which is the one outcome this whole path exists to prevent.
+        Write-QwtDeathLog 'WARN' "$($ev.origin) already-reported check failed ($($_.Exception.Message)) - reporting anyway"
+    }
+    if (-not $dupChecked) {
+        Write-QwtDeathLog 'WARN' "$($ev.origin) has no usable channel/record id - the already-reported check could not run"
+    }
     $boot = $null
     if (Get-Command Get-QwtNotifyBootStamp -ErrorAction SilentlyContinue) { $boot = Get-QwtNotifyBootStamp }
     if ($null -eq $boot) {
@@ -1537,7 +1577,7 @@ function Invoke-QwtDeathCatchUp {
                 # dedupes per boot, so the catch-up hands it every new record and counts what it accepted. The
                 # subscription's XPath is not available here - this is a scan, and the classifier is the same one.
                 $verdict = Invoke-QwtDeathReport -XmlText $e.ToXml()
-                if ($verdict -notin @('not-ours', 'ignored', 'not-a-death')) {
+                if ($verdict -notin @('not-ours', 'ignored', 'not-a-death', 'already-reported')) {
                     Write-QwtDeathLog 'INFO' "catch-up: $ch record $rid was never reported (its trigger could not run) - reported now ($verdict)"
                     $r.reported++
                 }
@@ -1595,7 +1635,7 @@ function Invoke-QwtDeathCatchUp {
                     $r.scanned++
                     try {
                         $verdict = Invoke-QwtDeathReport -XmlText $e.ToXml()
-                        if ($verdict -notin @('not-ours', 'ignored', 'not-a-death')) {
+                        if ($verdict -notin @('not-ours', 'ignored', 'not-a-death', 'already-reported')) {
                             Write-QwtDeathLog 'INFO' "catch-up: $ch record $rid is OUR death record from before this boot (its trigger could not run - a shutdown refuses them) - reported now ($verdict)"
                             $r.reported++
                         }
