@@ -245,11 +245,61 @@ $script:QrexecAgentHeld = $false
 $script:QrexecAgentHeldAt = $null
 $script:QrexecAgentReleased = $false
 
+# THE SECOND LOG SINK (owner 2026-10-29). The primary log above is read by the harness OVER QREXEC
+# (mgmt/harness/quick-upgrade.sh:834) - but ADR-boot 2 deliberately holds QrexecAgent closed for
+# exactly the device work this log describes, so on the run that matters the pull returns a file
+# holding nothing but the run marker (measured 2026-10-29, win11de-stall-20261029T113519Z-3316365,
+# and read as "the install never ran" - an inference drawn from an instrument our own design had
+# switched off).
+# So every line ALSO goes to a second file under the configured QWT log directory (LogDir at the
+# root key). On a harness cell the binder has pointed that at the secondary log volume, which the
+# host reads with mtools while the guest is wedged, dead or killed - no qrexec and no cooperation
+# from the guest at all (mgmt/harness/logvol-lib.sh, layers L1-L3). On a production install the
+# value is the ordinary Qubes Tools log directory, so the step log lands beside every other
+# module's log instead of alone at the root of C:.
+# WRITE-THROUGH, PER LINE, deliberately: the guests this exists for are KILLED, not shut down, so a
+# buffered tail is a lost tail. FileOptions.WriteThrough is what LogSafeFlush=1 gives the native
+# modules (FILE_FLAG_WRITE_THROUGH) - fastfat completes the data and the directory entry at the
+# device before the write returns. Add-Content does not do this.
+$script:MirrorLog      = $null
+$script:MirrorResolved = $false
+
+function Resolve-MirrorLog {
+    # Resolved ONCE, on the first line written, then cached: msiexec rewrites this key as it
+    # upgrades, and the mirror must not follow it somewhere else halfway through the run.
+    $script:MirrorResolved = $true
+    try {
+        $dir = (Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -Name 'LogDir' -ErrorAction Stop).LogDir
+        if (-not $dir) { return }
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
+        $script:MirrorLog = Join-Path $dir 'qwt-improved-install.log'
+    } catch { $script:MirrorLog = $null; return }
+    # The volume outlives the run and this opens in Append mode, so without a banner two runs are
+    # one undelimited file. Safe to call: MirrorResolved is already $true, so this does not recurse.
+    Write-MirrorLine ('=== INSTALL-LOG MIRROR === pid={0} primary={1} opened={2}' -f $PID, $script:LogFile, (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+}
+
+function Write-MirrorLine {
+    param([string]$Line)
+    if (-not $script:MirrorResolved) { Resolve-MirrorLog }
+    if (-not $script:MirrorLog) { return }
+    # Never throws, and never disables itself after a failure: one busy write must not cost the rest
+    # of the run's log, which is the only reason this sink exists.
+    try {
+        $fs = New-Object System.IO.FileStream($script:MirrorLog, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite, 4096, [System.IO.FileOptions]::WriteThrough)
+        try {
+            $b = [Text.Encoding]::UTF8.GetBytes($Line + "`r`n")
+            $fs.Write($b, 0, $b.Length)
+        } finally { $fs.Dispose() }
+    } catch { }
+}
+
 function Write-Log {
     param([string]$Message, [string]$Level = 'INFO')
     $line = '{0} [{1}] {2}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Level, $Message
     Write-Host $line
     try { Add-Content -LiteralPath $script:LogFile -Value $line -Encoding UTF8 } catch { }
+    Write-MirrorLine $line
 }
 
 # ---- UPDATER-DEPLOY-RECORD-BEGIN  (tools/tests/wu-deploy-loud-test.ps1 extracts this function by marker)
@@ -339,6 +389,7 @@ function Emit-Result {
     Write-Host '=== RESULT ==='
     Write-Host $json
     try { Add-Content -LiteralPath $script:LogFile -Value "=== RESULT === $json" -Encoding UTF8 } catch { }
+    Write-MirrorLine "=== RESULT === $json"
     exit $ExitCode
 }
 # ---- EMIT-RESULT-END
@@ -2320,6 +2371,7 @@ function Emit-ResultThenPowerOff {
     Write-Host '=== RESULT ==='
     Write-Host $json
     try { Add-Content -LiteralPath $script:LogFile -Value "=== RESULT === $json" -Encoding UTF8 } catch { }
+    Write-MirrorLine "=== RESULT === $json"
     # This helper is reached ONLY on the -Auto (unattended) path - every caller is inside
     # `if ($Auto)`. Nobody is watching a countdown, so a 15 s dialog was pure dead wait between
     # stages. The RESULT is already flushed to the log above, so go down near-immediately; a 2 s

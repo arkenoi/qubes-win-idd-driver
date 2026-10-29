@@ -381,6 +381,7 @@ function Start-Sleep { param([int]$Seconds = 0, [int]$Milliseconds = 0) $script:
 function Get-Date { param([string]$Format) if ($Format) { return $script:W.now.ToString('HH:mm:ss') }; return $script:W.now }
 function Write-Log { param([string]$Message, [string]$Level = 'INFO') $script:W.log.Add("[$Level] $Message") }
 function Write-Host { param([Parameter(Position = 0, ValueFromRemainingArguments = $true)]$Object) }   # the regions' Write-Host is noise here
+function Write-MirrorLine { param([string]$Line) }   # the installer's second log sink: it targets the log VOLUME, which this test has no business touching - declared so the extracted region resolves, asserted nowhere
 function Fail { param([string]$Message) $script:W.fails.Add($Message); throw "FAIL: $Message" }
 function Warn-DisplayBlackout { }
 function Request-GuiAgentExit { param([int]$WaitMs = 5000) return @() }

@@ -502,6 +502,10 @@ w_appvm_shell(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
 # 104 lines today, so line COUNTS from a fresh read are the trustworthy signal.
 w_install(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn $6=guest-log-path
   local vm=$1 dl=$2 lbl=$3 dir=$4 log=$5 glog=$6 t0 now n last=-1 lastchange st
+  # THE LATCH (prime-run's, propagated here 2026-10-29). "Unreachable" only means something if
+  # there was ever a channel to lose; without it the unreachable branch below cannot make the one
+  # distinction it exists for.
+  local qrexec_ever=0
   t0=$(date +%s); lastchange=$(date +%s)
   while :; do
     now=$(( $(date +%s) - t0 ))
@@ -518,6 +522,9 @@ w_install(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn $6=guest-log-path
     if [ "$_iw_rc" = 1 ]; then rm -f "$_iw_out"; _iw_out=$(mktemp); _iw_pid=$(w_alive_start "$vm" "$_iw_out"); fi
     if [ "$_iw_rc" = 0 ]; then
       rm -f "$_iw_out"; _iw_pid=""
+      # LATCH FIRST, before anything below can return or continue: the paths that leave without
+      # setting it are exactly the GENUINE losses of reachability, the only ones "unreachable" names.
+      qrexec_ever=1
 
       # WHO issues a reboot: event 1074 records the process and reason for an OS-initiated
       # shutdown; 1076/6008 cover the unexpected ones. On a guest that is about to become
@@ -660,13 +667,33 @@ w_install(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn $6=guest-log-path
         # "executing" genuinely means working. HERE it does not answer, and dead qrexec + burning
         # CPU IS the register's fingerprint. So both outcomes are a STALL; cpu_time only says which
         # kind, which is the thing the next reader needs.
+        #
+        # THE LABELS ARE GONE (2026-10-29, owner's call; same rewrite as quick-upgrade.sh's own
+        # unreachable branch). "STALLED (SPINNING) - dead qrexec + burning CPU is the issues.md P1
+        # fingerprint" was printed over a guest whose qrexec was down BY OUR OWN DESIGN: ADR-boot 2
+        # (ACCEPTED owner+Jev 2026-10-04) deliberately HOLDS QrexecAgent closed through the device
+        # work, so on our own installer "unreachable" is the DESIGNED state for that window. And
+        # the specimen measured 198% of a core where the register (PRIMERUNCALLSANYMOVEMENTASPIN)
+        # puts a HEALTHY guest of this class at 262-327% - BELOW normal, not "burning". Both halves
+        # of the label were wrong, and the label sent a day's investigation down the wrong path.
+        # Jev priced that wording at moving_establishes_spin 0.05 / classifier_wording_is_sound 0.11.
+        #
+        # cpu_time is still SAMPLED and still PRINTED, as shape, never as the verdict - and it
+        # still does not suppress anything: the stall fires at STALL_SECS exactly as before, and
+        # the return codes are unchanged. What is new is the conjunct that can actually
+        # discriminate here: whether there was ever an agent to lose.
         st=$(w_screen "$vm" "$lbl-stall" "$dir")
         cs=$(w_cpu_state "$vm")
-        case "${cs%% *}" in
-          FLAT)   $log "  $lbl: STALLED (FROZEN) - unreachable ${STALL_SECS}s AND cpu_time FLAT over the sample: the domain is NOT EXECUTING. screen=$st" ;;
-          MOVING) $log "  $lbl: STALLED (SPINNING) - unreachable ${STALL_SECS}s while cpu_time ADVANCED ${cs#* } over the sample. Dead qrexec + burning CPU is the issues.md P1 fingerprint (8/8 specimens burn 88-101% of a core). screen=$st" ;;
-          *)      $log "  $lbl: STALLED - unreachable ${STALL_SECS}s; cpu_time UNREADABLE, so executing-or-not is UNMEASURED (not a claim either way). screen=$st" ;;
-        esac
+        $log "  $lbl: ${STALL_SECS}s with no qrexec answer. Strong conjuncts: agent_ever=$qrexec_ever screen=$st"
+        $log "  $lbl: cpu_time over the sample: $cs - recorded as SHAPE only; healthy guests of this class measure HIGHER, so it cannot decide whether this is a wedge"
+        if [ "$qrexec_ever" != 1 ]; then
+          # VACUOUS-UNREACHABLE (prime-run's shape): the agent never answered once in this wait, so
+          # there was no channel to lose. That is an install/launch failure, and the evidence that
+          # names it is the installer's own exit, not a wedge classification.
+          $log "  $lbl: the agent NEVER answered in this wait, so 'unreachable' is VACUOUS - there was no channel to lose. This is an INSTALL/LAUNCH failure until something shows otherwise, NOT a wedge."
+        else
+          $log "  $lbl: REACHABILITY LOST - the agent answered earlier in this wait and then stopped, and the guest is still Running (a guest that powers off returns 3 far above)."
+        fi
         [ "$st" = RECOVERY ] && return 1
         return 4
       fi

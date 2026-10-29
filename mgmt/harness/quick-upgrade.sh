@@ -493,6 +493,22 @@ if [ -n "$LOGVOL_IMG" ]; then
   fi
 fi
 
+# WHERE THIS RUN'S INSTALLER LOG STARTS ON THE VOLUME. The installer mirrors every Write-Log line,
+# and its RESULT, write-through to <LogDir>\qwt-improved-install.log, and the binder above has just
+# pointed LogDir here - so from this point the host can read the install's progress with mtools
+# while the guest answers nothing, which is precisely what ADR-boot 2 arranges for the device work.
+# The file is APPEND-ONLY and the binder copies the guest's existing log directory onto the volume
+# first, so it may already hold an older install's lines INCLUDING an older "=== RESULT ===".
+# Scoping that by content would mean trusting the guest clock, and this rig's guest clock is an
+# hour out. So scope by BYTES: whatever is in the file now is not ours, only what comes after is.
+MIRROR_NAME='qwt-improved-install.log'
+MIRROR_PRE=0
+if [ -n "${LOGVOL_IMG:-}" ] && logvol_pull "$LOGVOL_IMG" "$OUT/logvol-pre" >>"$OUT/logvol-pre.out" 2>&1; then
+  MIRROR_PRE=$(find "$OUT/logvol-pre/files" -type f -name "$MIRROR_NAME" -printf '%s\n' 2>/dev/null | sort -rn | head -1)
+  MIRROR_PRE=${MIRROR_PRE:-0}
+fi
+log "installer log mirror: $MIRROR_NAME, $MIRROR_PRE pre-existing byte(s) on the volume are NOT this run's"
+
 # CLOCK, BEFORE ANYTHING IS INSTALLED. Windows with RealTimeIsUniversal unset reads the hardware
 # clock as LOCAL time, so guest_UTC = RTC_content - guest_TZ_offset. What the RTC holds depends on
 # the qube's `timezone` feature, and the branches have opposite signs (both measured 2026-09-25):
@@ -811,6 +827,13 @@ done
 # positive-evidence exit is the real completion path and QUIET never fired. CPU is now logged
 # only; a guest that stays unreachable for STALL_SECS is a STALL with the guest LEFT RUNNING.
 phase=""; t0=$(date +%s); last=-1; lastchange=$t0; lastalive=$t0; quiet=0; shots=0
+# THE LATCH (prime-run's, propagated here 2026-10-29 - it was written once and never inherited).
+# "Unreachable" only means something if there was ever a channel to lose; without this, the two
+# cases the unreachable branch exists to tell apart are the one distinction it cannot make.
+qrexec_ever=0
+# This run's bytes in the installer's mirrored log on the volume, and when they last grew. REPORTED
+# at the stall, never a suppressor of it.
+MIRROR_SEEN=0; MIRROR_GREW=$t0
 while :; do
   sleep 20
   el=$(( $(date +%s) - t0 ))
@@ -825,6 +848,9 @@ while :; do
   if [ "$_qu_rc" = 1 ]; then rm -f "$_qu_out"; _qu_out=$(mktemp); _qu_pid=$(w_alive_start "$SUBJECT" "$_qu_out"); fi
   if [ "$_qu_rc" = 0 ]; then
     rm -f "$_qu_out"; _qu_pid=""
+    # LATCH FIRST, before anything below can `break` or `continue`: the paths that leave without
+    # setting it are exactly the GENUINE losses of reachability, the only ones "unreachable" names.
+    qrexec_ever=1
     quiet=0; lastalive=$(date +%s)
     n=$(grun "cmd /c powershell -NoProfile -Command \"if(Test-Path '$GLOG'){(Get-Content '$GLOG').Count}else{0}\"" 90 | grep -aE '^[0-9]+$' | head -1)
     n=${n:-0}
@@ -901,6 +927,27 @@ while :; do
                         [ -n "$ln" ] && { printf '%s' "$ln"; break; }
                       done | cut -c1-110 | tr -d '[]')
         # ---- QREXECGAPWITNESS-END
+        # ---- MIRRORWITNESS-BEGIN
+        # THIS RUN'S INSTALLER LOG, WITHOUT ASKING THE GUEST ANYTHING (2026-10-29). The witness
+        # above reports the newest line on the volume from any module; this pins the INSTALLER's
+        # own log, which until now was pulled over qrexec (the GLOG fetch in the reachable branch)
+        # - and ADR-boot 2 holds QrexecAgent closed through exactly the device work the installer
+        # is doing here, so on the runs that matter that fetch returns a file holding only the run
+        # marker. That emptiness was read as "the install never ran" on 2026-10-29. The installer
+        # now mirrors every line, and its RESULT, write-through to <LogDir>, and the binder put
+        # LogDir on this volume.
+        # BYTES PAST MIRROR_PRE ONLY (Jev run_scoping byte_offset 0.93). The file is append-only
+        # and the binder robocopies the guest's existing log directory onto the volume first, so it
+        # can carry an OLDER install's lines including an older RESULT. Scoped by BYTE OFFSET, not
+        # by timestamp: this rig's guest clock is an hour out, measured on this very run.
+        # It does NOT end the wait - see the verdict block below for why that was refused.
+        _mf=$(find "$OUT/logvol-live/files" -type f -name "$MIRROR_NAME" -printf '%s %p\n' 2>/dev/null | sort -rn | head -1)
+        if [ -n "$_mf" ]; then
+          _mine=$(( ${_mf%% *} - MIRROR_PRE )); [ "$_mine" -lt 0 ] && _mine=0
+          if [ "$_mine" -gt "$MIRROR_SEEN" ]; then MIRROR_SEEN=$_mine; MIRROR_GREW=$(date +%s); fi
+          tail -c "+$(( MIRROR_PRE + 1 ))" "${_mf#* }" > "$OUT/install-mirror.log" 2>/dev/null || : > "$OUT/install-mirror.log"
+        fi
+        # ---- MIRRORWITNESS-END
       fi
     fi
     if [ -n "$lastknown" ]; then
@@ -933,28 +980,56 @@ while :; do
       sc=$(w_screen "$SUBJECT" "unreachable-stall" "$OUT")
       # RECOVERY first: that screen is terminal however much CPU the guest burns behind it.
       [ "$sc" = RECOVERY ] && { log "  RECOVERY screen after ${unreach}s unreachable"; phase=RECOVERY; break; }
-      # cpu_time CLASSIFIES this stall; it must never SUPPRESS it. The first version of this block
-      # reset the clock whenever cpu_time moved, which is INVERTED against the defect it was meant
-      # to help with: issues.md P1 records "AT LEAST ONE vCPU BURNING 88-101% OF A CORE sustained"
-      # as the 8/8 invariant across every captured wedge. A spinning vCPU moves domain cpu_time, so
-      # every known specimen would have been logged "not a stall" and run to DEADLINE (1500 s)
-      # instead of being called at STALL_SECS (300 s). Caught in review before it met a real wedge.
+      # WHAT THIS BRANCH MAY AND MAY NOT CONCLUDE (rewritten 2026-10-29, owner's call).
+      # It printed STALLED (SPINNING) - "dead qrexec + burning CPU is the issues.md P1 fingerprint"
+      # - over a guest whose qrexec was down BY OUR OWN DESIGN. ADR-boot 2 (ACCEPTED owner+Jev
+      # 2026-10-04) deliberately HOLDS QrexecAgent closed through the whole of the device work, so
+      # "qrexec unanswering" is the DESIGNED state here and not a symptom of anything; and the
+      # guest measured 198% of a core where the register (PRIMERUNCALLSANYMOVEMENTASPIN) puts a
+      # HEALTHY guest of this class at 262-327% - BELOW normal, not "burning". Both halves of the
+      # label were wrong, and the label cost a day (owner: «not "stalled", not "spinning", all this
+      # is misleading bullshit ... calling it "stalled" or "spinning" sends you down the wrong path»).
+      # The designed power-off is NOT graded here at all: a guest that powers off leaves this loop
+      # as HALTED at the top of the iteration, before the alive probe.
       #
-      # The reachable branch above may gate, because there the guest ANSWERS qrexec so "executing"
-      # means working. HERE it answers nothing, and dead qrexec + burning CPU IS the fingerprint.
-      # (cpu_usage_raw, read above, cannot help either way: it comes back EMPTY on this rig, which
-      # is why it is a logging aid only.)
+      # cpu_time CANNOT CARRY THIS VERDICT and is out of the headline. Its healthy and wedged
+      # ranges OVERLAP, so it can say WHICH shape, never WHETHER - the bound prime-run states at
+      # its own deadline, and Jev priced the old wording at moving_establishes_spin 0.05 /
+      # classifier_wording_is_sound 0.11. Still sampled, still recorded, as shape only.
+      #
+      # AND NOTHING BELOW SUPPRESSES THE STALL. The installer's own log is now readable here
+      # (MIRRORWITNESS above), and the obvious next move - "it is still writing, so reset the
+      # clock" - is the move this block already learned not to make: the first version reset the
+      # clock whenever cpu_time moved, which would have run every known specimen to the 1500 s
+      # DEADLINE instead of calling it at STALL_SECS. Jev priced the same reset on log growth at
+      # 0.32 (floor 0.70): a guest can emit lines from a retry or watchdog loop while the thing
+      # under test is wedged, and the measurement that would settle it - how long a healthy hold
+      # can go with no write at all - has not been taken. So the mirror REPORTS here and decides
+      # nothing; the stall still fires at STALL_SECS, and what the mirror adds is the evidence to
+      # read first.
       cs=$(w_cpu_state "$SUBJECT" 20)
-      case "${cs%% *}" in
-        FLAT)   log "  STALLED (FROZEN) - qrexec unanswering ${unreach}s AND cpu_time FLAT over the sample: the domain is NOT EXECUTING (cpu=${cpu} quiet=$quiet), screen=$sc" ;;
-        MOVING) log "  STALLED (SPINNING) - qrexec unanswering ${unreach}s while cpu_time ADVANCED ${cs#* } over the sample: dead qrexec + burning CPU is the issues.md P1 fingerprint (cpu=${cpu} quiet=$quiet), screen=$sc" ;;
-        *)      log "  STALLED - qrexec unanswering ${unreach}s; cpu_time UNREADABLE, so executing-or-not is UNMEASURED (cpu=${cpu} quiet=$quiet), screen=$sc" ;;
-      esac
-      # CAPTURE IT NOW, while the guest is still up and before anything reclones it. On
-      # 2026-09-23 a wedge caught inside an acceptance campaign survived only because a human
-      # stopped the campaign within minutes; an unattended run has no such human. Only on the
-      # SPIN fingerprint - a frozen domain has nothing to image, and an image is ~8.6 GB.
-      if [ "${cs%% *}" = MOVING ]; then
+      _mgrow=$(( $(date +%s) - MIRROR_GREW ))
+      log "  ${unreach}s with no qrexec answer. Strong conjuncts: agent_ever=$qrexec_ever screen=$sc installer_bytes_this_run=$MIRROR_SEEN last_wrote=${_mgrow}s ago"
+      log "  cpu_time over the sample: $cs - recorded as SHAPE only; healthy guests of this class measure HIGHER, so it cannot decide whether this is a wedge"
+      if [ -s "$OUT/install-mirror.log" ]; then
+        log "  the installer's own last line for THIS run (log VOLUME, host-side, guest untouched): $(grep -a . "$OUT/install-mirror.log" | tail -1 | cut -c1-140 | tr -d '[]')"
+        if grep -qa '^=== RESULT === {' "$OUT/install-mirror.log"; then
+          # IT ALREADY REPORTED. Not an exit - the volume witness does not end the wait (Jev 0.49)
+          # - but it changes which failure this is, and that belongs in the log beside the verdict.
+          log "  AND IT ALREADY REPORTED: $(grep -a '^=== RESULT === {' "$OUT/install-mirror.log" | tail -1 | cut -c1-200 | tr -d '[]')"
+          log "  so the install CONCLUDED and the agent still did not come back: read that RESULT's svc_qrexec_* fields first. This is not an install that failed to run."
+        fi
+      fi
+      if [ "$qrexec_ever" != 1 ]; then
+        # VACUOUS-UNREACHABLE, the shape prime-run names at its own deadline: the agent never
+        # answered once in this run, so there was no channel to lose. That is a launch/install
+        # failure, and the evidence that names it is the installer's exit, not a memory image.
+        log "  the agent NEVER answered in this run, so 'unreachable' is VACUOUS - there was no channel to lose. Treating this as a LAUNCH/INSTALL failure, not a wedge; no specimen captured. Read $OUT/install-mirror.log and $OUT/logvol-live first"
+      else
+        # THE REAL FAILURE STATE, and the only one that earns a capture (Jev on_real_failure_state
+        # 0.92): the agent answered earlier in this run and then stopped, and the guest is STILL
+        # RUNNING - a power-off left this loop as HALTED long before here.
+        log "  REACHABILITY LOST: the agent answered earlier in this run and then stopped, and the guest is still Running. That is the failure state, and it is the only one this branch captures."
         log "  capturing the specimen automatically (dom0 forensics, then a memory image)"
         timeout 300 qrexec-client-vm dom0 "local.WinWedgeForensics+$SUBJECT" </dev/null \
           > "$OUT/forensics.tar" 2>"$OUT/forensics.err" \
