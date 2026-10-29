@@ -274,6 +274,40 @@ The arm is run against a CONTROL run of the same build and the same readout, not
 expectation (Jev `control_arm_same_build` 0.93) - a staged-only reading is uninterpretable without
 the normal one beside it.
 
+**BOTH ARMS RAN ON 2026-10-29, AND THE EXPERIMENT DOES NOT ANSWER THE MEASUREMENT.** Control
+`f7c3088a` and staged-only `ab195595`, same inherited package, identical preconditions
+(`xenvif ABSENT, xennet ABSENT, xenbus/xenvbd/xeniface 9.1.0.0`), both `ok:true`, both clean
+(control rc=0; the arm's rc=3 is vendored-upstream sweep noise, 12 passed / 0 failed). The arm was
+confirmed from the installer's own RESULT, `exp_stage_pv_only=true`, and the installer did stage
+rather than install (`staging xenvif into the driver store (no /install ...)`). It still settles
+nothing, for two independent reasons that are properties of the SUBJECT, not of the idea:
+
+- **The xencons probe was not clean after all.** Not because of msiexec - that reasoning was right,
+  the MSI does not contain xencons - but because the subject is `win11de-up`, recreated from
+  `win11de-qwt`, a golden that ALREADY CARRIES QWT. The entry snapshot, taken before the install
+  launched, already holds `OK System XENBUS\VEN_XP0001&DEV_CONS\_`. The device never had to be
+  created, so its presence afterwards shows nothing. The harness printed "XENCONS BOUND (the clean
+  probe...)" and that verdict was FALSE; it has been rewritten to grade by version and to state the
+  subject's limits in the log.
+- **The xenvif probe was vacuous.** `win11de-up` is a TemplateVM with `netvm=''`, as the binding
+  networking rule requires, so dom0 creates no vif backend and no `DEV_VIF` child is ever
+  enumerated in EITHER arm. `PVNETTOTAL 0`. "XENVIF ABSENT" is the subject, not the deferral.
+
+**The one real datum.** In the staged-only arm, after two cold boots, `DEV_CONS` is still on
+`ver=9.1.0.535` while the package under test ships `9.1.0.1175` (the sweep gate independently names
+the guest's prior build as `4.3.29.535`, superseded by `4.3.39.1175`). So a boot did NOT replace an
+already-bound driver with a newly STAGED one. That bears on deferral for an upgrade, and says
+nothing about a device that does not yet exist. The control's own version was not captured, because
+the filter defect that run exposed also hid the `DEV_CONS` row, so even this differential is
+one-sided.
+
+**What a deciding run needs.** A from-scratch install on a BASE golden (`win11r-base` / `win10-base`),
+where the devices genuinely do not exist beforehand, and - for the xenvif half - a subject that is
+permitted a netvm, i.e. an AppVM or StandaloneVM rather than a template. That is the heavier
+clean-install path, so it needs a Jev permit naming the exact command and the rejected short-cycle
+alternative. It cannot be reached from the short cycle at all: the short cycle upgrades over a QWT
+golden by construction, and that is precisely what makes the measurement impossible.
+
 Until that measurement exists this section is not built, and §2 is unchanged.
 
 ---

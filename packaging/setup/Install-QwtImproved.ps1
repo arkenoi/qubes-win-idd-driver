@@ -3996,8 +3996,8 @@ function Invoke-Stage2 {
             Write-Log "xenvif install returned $LASTEXITCODE - PV networking may stay on the emulated NIC" 'WARN'
             $script:Result.detail.pv_xenvif = "failed rc=$LASTEXITCODE"
         } else {
-            Write-Log 'xenvif installed - the emulated NIC should be unplugged after the reboot'
-            $script:Result.detail.pv_xenvif = 'installed'
+            Write-Log ("xenvif {0} - the emulated NIC should be unplugged after the reboot" -f $(if ($pvStageOnly) { 'staged (no /install)' } else { 'installed' }))
+            $script:Result.detail.pv_xenvif = $(if ($pvStageOnly) { 'staged-only' } else { 'installed' })
         }
         }
     } else {

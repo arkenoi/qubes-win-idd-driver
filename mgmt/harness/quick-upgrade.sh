@@ -1156,22 +1156,33 @@ if [ -n "$_pv" ]; then
 $_pv
 EOFPV
   # State the two readings separately, strongest first, so a later reader cannot merge them.
-  # CONS and VIF, not XENCONS and XENVIF: the children enumerate as XENBUS DEV_CONS / DEV_VIF, and
-  # matching the package name instead is what made the control report its own xenvif ABSENT.
-  if printf '%s\n' "$_pv" | grep -qai '^PVDEV OK .*\(XENCONS\|DEV_CONS\)'; then
-    log "  XENCONS BOUND (the clean probe: the MSI does not ship xencons, so only the store could have)"
-  elif printf '%s\n' "$_pv" | grep -qai '\(XENCONS\|DEV_CONS\)'; then
-    log "  XENCONS PRESENT BUT NOT OK - read the prob= field on its row"
-  else
-    log "  XENCONS ABSENT after both boots"
-  fi
-  if printf '%s\n' "$_pv" | grep -qai '^PVDEV OK .*ver=9\.1\.0\.998.*\(XENVIF\|DEV_VIF\)'; then
-    log "  XENVIF on OUR build 9.1.0.998 (weak probe: an upgrade of a node msiexec had already bound)"
-  elif printf '%s\n' "$_pv" | grep -qai '^PVDEV .*\(XENVIF\|DEV_VIF\)'; then
-    log "  XENVIF present, but NOT OK on 9.1.0.998 - read ver= and prob= on its row"
-  else
-    log "  XENVIF ABSENT after both boots"
-  fi
+  # WHICH DRIVER IS BOUND, never merely whether a device is there. The expected version comes from
+  # THIS run's own RESULT (idd_bound = <maj>.<min>.<pt>.<build>; the PV drivers ship as 9.1.0.<build>).
+  _bld=$(grep -ao '"idd_bound"[: ]*"[0-9.]*"' "$OUT/install-mirror.log" 2>/dev/null | tail -1 | grep -o '[0-9.]*"$' | tr -d '"')
+  _want_ver=""; case "$_bld" in *.*.*.*) _want_ver="9.1.0.${_bld##*.}" ;; esac
+  if [ -n "$_want_ver" ]; then log "  the package under test ships PV drivers as $_want_ver (from idd_bound=$_bld)"
+  else log "  [WARN] could not derive the package's PV driver version from idd_bound - the rows below cannot be graded"; fi
+
+  for _d in CONS VIF; do
+    _row=$(printf '%s\n' "$_pv" | grep -ai "^PVDEV .*DEV_${_d}" | head -1)
+    _gotv=$(printf '%s' "$_row" | grep -o 'ver=[0-9.]*' | cut -d= -f2)
+    if [ -z "$_row" ]; then
+      log "  XEN${_d} ABSENT after both boots"
+    elif [ -z "$_want_ver" ] || [ -z "$_gotv" ]; then
+      log "  XEN${_d} present, version UNGRADED (got '${_gotv:-none}') - $_row"
+    elif [ "$_gotv" = "$_want_ver" ]; then
+      log "  XEN${_d} BOUND ON THIS PACKAGE'S DRIVER ($_gotv)"
+    else
+      log "  XEN${_d} still on $_gotv, NOT this package's $_want_ver - the staged driver did not bind"
+    fi
+  done
+
+  # AND SAY WHAT THIS SUBJECT CAN AND CANNOT SETTLE. A subject upgraded from a QWT golden arrives
+  # with these devices already bound, so no reading here answers "does a boot bring up a device
+  # whose install never ran" - only "did a boot REPLACE an already-bound driver from the store".
+  # The first question needs a from-scratch install on a BASE golden.
+  log "  SCOPE: this subject is an upgrade over a QWT golden - the devices pre-exist the run, so these"
+  log "         rows can only show whether a STAGED driver replaced one, never whether a boot created one."
 elif [ "${EXP_STAGE_PV_ONLY:-0}" = 1 ]; then
   # Only an error in the arm that exists to take this reading. On a control run a silent readout
   # is an inconclusive instrument, not a failed install, and must not redden every cycle.
