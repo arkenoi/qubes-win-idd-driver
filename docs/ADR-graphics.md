@@ -27,4 +27,15 @@ Precise decisions only. Explanations for the reader live in `docs/design/DESIGN-
 | G19 | A deaf window is declared once per application per boot, at most 8 notices. | ACCEPTED |
 | G20 | Menu first-frame retries are 0/50/100/200/400 ms. Crop resolves before map (CROP_BEFORE_SHOW_TIMEOUT_MS = 400). | ACCEPTED |
 
-Detailed evidence and open items for each decision remain in the topic ADRs (`ADR-display.md`, `ADR-capture.md`, `ADR-windows.md`, `ADR-toasts.md`, `ADR-gui.md`). This file is the index of the live decisions.
+## Postponed
+
+| id | decision | status |
+|---|---|---|
+| P1 | Covered-window refresh below 26100: WGC is unavailable; the sweep remains until a per-window change event exists or the owner decides otherwise. | POSTPONED |
+| P2 | Echo-guard cost on the PrintWindow path is unmeasured. The guard stays; widening or retiring it is deferred until the cost is known. | POSTPONED |
+| P3 | Non-seamless frame-supply root cause (capture thread departure on later entries) is open. QGACAPDEAD notices it; the cause is not fixed. | POSTPONED |
+| P4 | Alt-nav key-tip badges are dropped fully. No further work planned. | POSTPONED |
+
+## Not a product path
+
+Fault-injection bits (`FI_GATE_MODE1`, `FI_GATE_MODE2`, `SoloFaultInject`, `ModeSnapFaultInject`, and the rest) are harness instruments. They exist so a suite can see a gate fail on one binary. They are not product behaviour and are not listed as decisions. Their definition and use live in the harness (`tools/tests/`, `agent/gui-agent/faultinject.c`).
