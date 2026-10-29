@@ -20,6 +20,18 @@ HEAVY="$HEAVY|release-acceptance\.sh|campaign-run\.sh|gate-remainder\.sh"
 # command it is asked to allow, and an unlisted wrapper makes a heavy path invisible to it.
 HEAVY="$HEAVY|repro-run\.sh"
 
+# THE BLUNTNESS IS LOAD-BEARING, AND A READ-ONLY EXEMPTION IS NOT AS EASY AS IT LOOKS.
+# This regex matches the command TEXT, so a command that merely NAMES a heavy script - a grep for
+# the filename, a patch script with it in a string literal - is refused too. That was invisible
+# while permits never expired. The obvious narrowing is to exempt commands whose every segment is
+# a read-only inspector, and it was designed and then DROPPED on 2026-10-29: there is no small
+# safe subset of these tools. sed executes with the `e` flag, awk with system() and `print | cmd`,
+# find with -exec, and even sort with --compress-program=CMD - all without a single $( . A
+# whitelist containing any of them exempts arbitrary execution; one that excludes them is too
+# narrow to remove the friction it exists for. Banning command substitution does not help, because
+# none of those four needs it. If you try this again, that is the problem to solve first.
+# The friction is small in practice: both false refusals measured that day came from working on
+# this hook itself. Prefer paying it to weakening the gate.
 input=$(cat)
 cmd=$(printf '%s' "$input" | python3 -c '
 import json,sys
