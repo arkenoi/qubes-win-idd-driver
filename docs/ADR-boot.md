@@ -46,6 +46,7 @@ flowchart TD
 |---|---|---|---|
 | 1 | Work that reaches QEMU or Xen in a fresh domain's first minutes is serialized and paced | ACCEPTED (owner, Jev); the harness half WITHDRAWN (owner) | 2026-10-04 |
 | 2 | The qrexec service opens only after stage 2's device work | ACCEPTED (owner, Jev); amended for 4.3.35: the updater deploy runs after the release | 2026-10-04, 2026-10-06 |
+| 3 | Stage 2 switches devices LIVE on a guest that is about to power off | PROPOSED (Jev); NOT BUILT - one measurement decides it | 2026-10-29 |
 
 Status words and the section format are defined in `docs/ADR-README.md`.
 
@@ -193,3 +194,62 @@ release gate as it runs, with no harness quiet window.
 - QEMU's own hang, which is not ours to patch (dom0 is not patched; owner);
 - the pre-msiexec part of an upgrade (the previous QWT's agent answers until `vchan_prestop` stops it) and the
   seconds between the release and the end of the stage, neither of which the hold covers.
+
+## 3. Stage 2 switches devices LIVE on a guest that is about to power off
+
+**Status:** PROPOSED (Jev), 2026-10-29. NOT BUILT - §2 stands unchanged until the measurement below is taken.
+
+**Context.** The owner put the question on 2026-10-29, after a run that was graded a wedge and was not one:
+*"we are trying to do LIVE switch for drivers and stuff without reboot, which never expected to work, and fail
+it miserably. the actual question to be asked is 'why we even tried and how come it worked today while it was
+never guaranteed to work'"*, and *"maybe we just do not need to switch anything live, we just need a clean
+shutdown because we do it after a few seconds anyway."*
+
+What stage 2 does between msiexec returning and the power-off, with QrexecAgent held closed by §2:
+`pnputil /add-driver /install` for xenvif, for xencons and for the IddCx driver, then `devcon install` to
+create a root-enumerated software devnode (and `devcon remove` for a pre-existing broken one), the emulated-VGA
+disable, the overlays, the PV NIC priming latch, the netvm task, the shipping state, the UAC policy.
+
+Two facts make the owner's question sharp rather than rhetorical:
+
+- **Windows is asked for permission to continue and says no, and we continue.** `Install-QwtImproved.ps1` reads
+  `if ($LASTEXITCODE -notin 0, 3010, 259) { throw }` - 3010 is `ERROR_SUCCESS_REBOOT_REQUIRED` - and runs more
+  live PnP after it. `devcon remove` rc=1 means "removed, but a reboot is required first"; the stage continues
+  there too. The harness already greps the MSI log for DIFx's *"the uninstall phase of this upgrade required a
+  reboot"* and logs that the install phase *"continued anyway"*. The failed run of 2026-10-29 recorded
+  `msiexec_rc 3010`.
+- **On `-Auto -RebootAtEnd` the guest powers off within seconds regardless** (§2 rule 5). So on that path the
+  live work's only product is a device state that two cold boots are about to rebuild anyway, bought at the cost
+  of doing PnP inside the exact window §2 was written about - the one where four recorded freezes (#3, #5, #6,
+  E18) landed, and which §2's own *Open* list says the hold does not fully cover.
+
+**What is NOT established, and is the reason this section is PROPOSED rather than ACCEPTED.** Live switching
+usually works: 33-60 s from msiexec's return to INSTALL COMPLETE over 25 archived runs (2026-09-05 to
+2026-10-03); gate #6 on 4.3.34 held the agent 24.2 s through the device work with 8 of 8 install cells PASS and
+record CLEAN; a healthy upgrade this week recorded `svc_qrexec_held_secs` 33.1. And the 2026-10-29 failure has
+**not** been attributed to any live PnP step - what is verified is only that the guest's self power-off and the
+dom0 ACPI shutdown never completed. The window is named; the step is not.
+
+**The options, as Jev priced them** (floor 0.70):
+
+| option | score |
+|---|---|
+| defer every live PnP on `-Auto -RebootAtEnd`: stage the drivers, write the config and the RESULT, power off, let the next boot bring the devices up | 0.27 |
+| keep the live PnP, but make the first "reboot required" answer END the stage's device work | 0.05 |
+| keep the live device work on every path; the defect is in ordering or in one step | 0.01 |
+| **insufficient_evidence** | **0.67** (conf 0.56) |
+
+"Should a reboot-required answer stop the stage?" scored 0.55, also under floor. "Why did it work when it was
+never guaranteed to?" did not resolve either: *the window is short and lightly loaded, not safe* 0.42 against
+*insufficient_evidence* 0.47. That is the honest answer to the owner's question today - the successes are not
+evidence that the operation is safe, and they are not evidence that it is unsafe.
+
+**The one measurement that decides it** (Jev `next_boot_brings_devices_up` 0.96, conf 0.95): whether a guest
+whose stage 2 did **no** live PnP comes up with xenvif, xencons and the IddCx display working after one boot.
+Everything else is secondary - the reboot-required rate scored 0.03 and the PV NIC latch question 0.01, the
+latter because the boot-time mechanism already exists in the product (`QubesPvNic` on a boot trigger,
+`QubesPvNicRearm` on event 1074), so deferral has somewhere to go.
+
+Until that measurement exists this section is not built, and §2 is unchanged.
+
+---
