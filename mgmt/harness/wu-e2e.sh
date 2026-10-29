@@ -341,6 +341,62 @@ for r in $(seq 1 "$ROUNDS"); do
     log "[ERROR] round $r: JUDGE FAIL"; sed 's/^/    /' "$RD/judge.out" | head -12 | tee -a "$OUT/run.log"; fails=1
   fi
 
+  # THE PENDING REBOOT IS COMPLETED FIRST. This block used to run AFTER the oscillation check,
+  # which meant the check polled for 900 s straight through a restart THIS ROUND'S OWN pass had
+  # scheduled. MEASURED 2026-10-29 on win11de-tup, acceptance rel-40774674227: the dom0-driven
+  # pass installed updates and ran `shutdown /r /t 60` at 05:22:12 (event 1074, comment "Qubes:
+  # completing Windows update servicing" - our own string, from wu-update.ps1 shipped as the
+  # qubes-rpc-services entry point); the poll started at 05:22:45; the guest went down at
+  # 05:28:49 and came back at 05:38:38, and the poll expired at 05:37:49 - 49 seconds short.
+  # It then reported "the scan never ran" and failed the cell, and with it the whole acceptance
+  # record. Rounds 1 and 3 passed only because their restart fell outside the window: the cell
+  # was a race. Nothing is excused by the reorder - the scan still has to run and the stamp
+  # still has to move - it is just asked for at a moment the guest is up to answer it.
+  reboot_needed=$(python3 - "$RD/update-status.json" <<'PY' 2>/dev/null
+import json,sys
+# The guest writes update-status.json with a UTF-8 BOM; plain utf-8 raises and reboot_needed
+# then read 'unknown' every round (measured 2026-09-20).
+try: print(str(json.load(open(sys.argv[1], encoding='utf-8-sig')).get('reboot_needed', False)).lower())
+except Exception: print('unknown')
+PY
+)
+  log "round $r: reboot_needed=$reboot_needed"
+  if [ "$reboot_needed" = true ]; then
+    note_request "update-status.json says reboot_needed=true after round $r"
+    # A REBOOT IS A COMPLETED CYCLE, not an issued command. Counting it at the shutdown was the
+    # same accounting dishonesty this rule exists to stop, in my own implementation of the rule:
+    # a shutdown that FAILED still incremented the counter, and a guest left powered off had only
+    # half a cycle. Measured 2026-09-20: the ledger said "1 performed" while the guest was Running.
+    log "round $r: shutting the guest down so the next round starts from the applied state"
+    # NEVER `qvm-shutdown --wait`. Its --timeout is "timeout after which domains are KILLED"
+    # (default 60 s), so --wait is a hard-kill on a timer - and a guest applying a staged
+    # cumulative on shutdown legitimately takes many minutes. That is how this harness came to
+    # hold a latent guest-killer aimed at the exact moment a guest is least safe to kill: mid
+    # servicing apply. Measured 2026-09-20: it returned at 61 s with the guest still Running and
+    # qrexec still answering - not a stall, an impatient harness with a kill attached.
+    # Request the shutdown, then WATCH. A guest that will not halt is reported, never killed.
+    log "round $r: requested shutdown; waiting for the guest to power off on its own (no kill)"
+    toolstack_accept "$VM" >/dev/null 2>&1
+    _sd=$(( $(date +%s) + 1800 ))
+    while [ "$(date +%s)" -lt "$_sd" ] && [ "$(qstate)" != Halted ]; do sleep 20; done
+    if [ "$(qstate)" != Halted ]; then
+      if stalled; then log "[ERROR] round $r: STALLED during shutdown"; else log "[ERROR] round $r: FAIL - the guest did not power off, so the requested reboot did NOT happen"; fi
+      fails=1; break
+    fi
+    log "round $r: guest is down; bringing it back to complete the requested cycle"
+    timeout 300 qvm-start "$VM" >/dev/null 2>&1
+    if wait_qrexec 900; then
+      note_performed
+    else
+      log "[ERROR] round $r: FAIL - the guest did not come back, so the requested reboot is INCOMPLETE"
+      fails=1; break
+    fi
+  elif [ "$reboot_needed" = unknown ]; then
+    # Unreadable status is missing data, and missing data fails - it must never be treated as
+    # "no reboot needed", because that silently turns a requested cycle into none.
+    log "[ERROR] round $r: FAIL - update-status.json unreadable, so reboot_needed is UNKNOWN (missing data fails)"
+    fails=1
+  fi
   # OSCILLATION CHECK. An install pass settling dom0 is not enough: the very next SCAN must not
   # re-inflate the count. Measured 2026-09-20 - a pass drove dom0 to EMPTY and the following boot
   # scan reported 3 again, so the admin was told there was work when there was none. This is the
@@ -349,7 +405,13 @@ for r in $(seq 1 "$ROUNDS"); do
     log "round $r: oscillation check skipped - no pass ran, so there is no report for a scan to contradict"
   else
     log "round $r: oscillation check - running a SCAN-only pass, dom0 must not change"
-    dom0_before_scan="$after"
+    # THE BASELINE IS RE-READ HERE, NOT INHERITED FROM BEFORE THE REBOOT. $after was measured
+    # before the pending reboot this round now performs above, and applying updates legitimately
+    # moves the count - so comparing a post-reboot scan against it would report a difference the
+    # REBOOT caused and call it oscillation. When no reboot happened this is the same value read
+    # a moment later, so it is always the right one to compare against.
+    dom0_before_scan=$(dom0_avail)
+    log "round $r: oscillation baseline (after any reboot, before the scan): '${dom0_before_scan:-<empty>}'"
     # THE DURABLE FACT, TAKEN BEFORE. The detector below used to poll for a TRANSIENT state - an
     # `action` containing 'scan' - every 30 s, and declare "the scan never ran" when it did not see
     # one. On run 39225775322 round 2 that timed out over the full 900 s while rounds 1 and 3 saw
@@ -409,11 +471,16 @@ for r in $(seq 1 "$ROUNDS"); do
     mkdir -p "$OUT/round$r" 2>/dev/null
     printf 'oscillation poll for round %s, started %s (budget 900s, 30s interval)\n' \
       "$r" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$_osc_log"
-    _sc=$(( $(date +%s) + 900 )); scan_seen=0
+    _sc=$(( $(date +%s) + 900 )); scan_seen=0; _osc_empty_run=0; _osc_empty_tot=0
     while [ "$(date +%s)" -lt "$_sc" ]; do
       sleep 30
       st_now=$(guest_file 'C:\ProgramData\Qubes\update-status.json' | tr -d '\r')
       printf '%s  %s\n' "$(date -u +%H:%M:%SZ)" "$(printf '%s' "${st_now:-<empty read>}" | tr '\n' ' ' | cut -c1-240)" >> "$_osc_log"
+      # AN UNREADABLE GUEST IS A DIFFERENT STATE FROM A SCAN THAT DID NOT RUN, and until
+      # 2026-10-29 both ended at the same message. Counted here so the verdict can name which.
+      if [ -z "${st_now:-}" ]; then
+        _osc_empty_run=$((_osc_empty_run+1)); _osc_empty_tot=$((_osc_empty_tot+1))
+      else _osc_empty_run=0; fi
       # EITHER SIGNAL ENDS THE WAIT, and the durable one is the reliable half:
       #   * the TRANSIENT one - action contains 'scan' - is what this used to rely on alone, and it
       #     can be missed because it need not persist between two 30 s samples;
@@ -428,7 +495,7 @@ for r in $(seq 1 "$ROUNDS"); do
       fi
       case "$st_now" in *'"action"'*'scan'*) scan_seen=1; break;; esac
     done
-    printf 'result: scan_seen=%s after %ss\n' "$scan_seen" "$(( 900 - (_sc - $(date +%s)) ))" >> "$_osc_log"
+    printf 'result: scan_seen=%s after %ss (empty reads: %s total, %s trailing)\n' "$scan_seen" "$(( 900 - (_sc - $(date +%s)) ))" "$_osc_empty_tot" "$_osc_empty_run" >> "$_osc_log"
     dom0_after_scan=$(dom0_avail)
     # ---- THE IDENTITY VERDICT, AND IT DECIDES -----------------------------------------------
     # tools/wu-oscillation-verdict.py was added by 763d8dc3 with NO CALLER: written, selftested and
@@ -521,7 +588,14 @@ PY
       fi
     fi
     if [ "$scan_seen" = 0 ]; then
-      log "[ERROR] round $r: FAIL - the scan never ran, so the oscillation check did not happen (missing data fails)"
+      # MEASURED 2026-10-29: this said "the scan never ran" while the poll log showed eleven good
+      # reads and then nine consecutive empty ones as the guest rebooted - so the message sent the
+      # reader hunting a scan defect that did not exist. Both still fail; only the cause differs.
+      if [ "$_osc_empty_run" -ge 3 ]; then
+        log "[ERROR] round $r: FAIL - the GUEST STOPPED ANSWERING during the oscillation wait ($_osc_empty_tot empty read(s), the last $_osc_empty_run consecutive), so whether the scan ran cannot be decided (missing data fails) - see $_osc_log"
+      else
+        log "[ERROR] round $r: FAIL - the scan never ran, so the oscillation check did not happen (missing data fails)"
+      fi
       fails=1
     elif [ "${dom0_before_scan:-}" != "${dom0_after_scan:-}" ]; then
       # THE GUEST'S OWN POST-SCAN VIEW IS THE DISCRIMINATOR, IT WAS ALREADY IN HAND, AND IT WAS
@@ -599,51 +673,6 @@ PY
     fi
   fi
 
-  reboot_needed=$(python3 - "$RD/update-status.json" <<'PY' 2>/dev/null
-import json,sys
-# The guest writes update-status.json with a UTF-8 BOM; plain utf-8 raises and reboot_needed
-# then read 'unknown' every round (measured 2026-09-20).
-try: print(str(json.load(open(sys.argv[1], encoding='utf-8-sig')).get('reboot_needed', False)).lower())
-except Exception: print('unknown')
-PY
-)
-  log "round $r: reboot_needed=$reboot_needed"
-  if [ "$reboot_needed" = true ]; then
-    note_request "update-status.json says reboot_needed=true after round $r"
-    # A REBOOT IS A COMPLETED CYCLE, not an issued command. Counting it at the shutdown was the
-    # same accounting dishonesty this rule exists to stop, in my own implementation of the rule:
-    # a shutdown that FAILED still incremented the counter, and a guest left powered off had only
-    # half a cycle. Measured 2026-09-20: the ledger said "1 performed" while the guest was Running.
-    log "round $r: shutting the guest down so the next round starts from the applied state"
-    # NEVER `qvm-shutdown --wait`. Its --timeout is "timeout after which domains are KILLED"
-    # (default 60 s), so --wait is a hard-kill on a timer - and a guest applying a staged
-    # cumulative on shutdown legitimately takes many minutes. That is how this harness came to
-    # hold a latent guest-killer aimed at the exact moment a guest is least safe to kill: mid
-    # servicing apply. Measured 2026-09-20: it returned at 61 s with the guest still Running and
-    # qrexec still answering - not a stall, an impatient harness with a kill attached.
-    # Request the shutdown, then WATCH. A guest that will not halt is reported, never killed.
-    log "round $r: requested shutdown; waiting for the guest to power off on its own (no kill)"
-    toolstack_accept "$VM" >/dev/null 2>&1
-    _sd=$(( $(date +%s) + 1800 ))
-    while [ "$(date +%s)" -lt "$_sd" ] && [ "$(qstate)" != Halted ]; do sleep 20; done
-    if [ "$(qstate)" != Halted ]; then
-      if stalled; then log "[ERROR] round $r: STALLED during shutdown"; else log "[ERROR] round $r: FAIL - the guest did not power off, so the requested reboot did NOT happen"; fi
-      fails=1; break
-    fi
-    log "round $r: guest is down; bringing it back to complete the requested cycle"
-    timeout 300 qvm-start "$VM" >/dev/null 2>&1
-    if wait_qrexec 900; then
-      note_performed
-    else
-      log "[ERROR] round $r: FAIL - the guest did not come back, so the requested reboot is INCOMPLETE"
-      fails=1; break
-    fi
-  elif [ "$reboot_needed" = unknown ]; then
-    # Unreadable status is missing data, and missing data fails - it must never be treated as
-    # "no reboot needed", because that silently turns a requested cycle into none.
-    log "[ERROR] round $r: FAIL - update-status.json unreadable, so reboot_needed is UNKNOWN (missing data fails)"
-    fails=1
-  fi
 done
 
 if [ "$reboots_performed" != "$reboots_requested" ]; then
