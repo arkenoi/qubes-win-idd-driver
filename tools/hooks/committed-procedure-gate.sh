@@ -53,18 +53,63 @@ fi
 # So the command binding was inert: a permit obtained for prime-run authorised a full 8-cell
 # campaign, measured 2026-10-16 by tools/tests/committed-procedure-gate-selftest.sh. The mention of
 # the alternative is evidence it was considered; it is not a substitute for naming the command.
-recent=$(awk -v frag="$frag" '
-  $0 ~ /committed_procedure|use_committed|procedure_delta/ && index($0, substr(frag,1,20))>0 {print NR}
-' "$WIRE" | tail -1)
+#
+# AND THE PERMIT MUST BE RECENT. WINDOW_MIN was declared on line 6 and then never read again: the
+# lookup below returned a LINE NUMBER, and nothing ever compared a clock, so every permit ever
+# written stayed valid forever. MEASURED 2026-10-29: a campaign was launched on the permit at line
+# 9814, written 2026-10-28T03:16 - a day and a different package earlier - while that run's own
+# fresh permit sat unread at line 10079. The word "recent" was in the block message the whole time.
+# A line whose ts is missing or unparseable is NOT fresh: jev.py stamps every line it writes, so an
+# unstamped line is not a Jev permit, and failing open on one would restore exactly this hole.
+verdict=$(WINDOW_MIN="$WINDOW_MIN" FRAG="$frag" python3 - "$WIRE" <<'WIREPY'
+import json, os, sys, datetime
 
-# Exception: recreate-goldens sequence (no short-cycle alternative exists)
-if [ -z "${recent:-}" ]; then
-  recent=$(awk '
-    $0 ~ /recreate_goldens|PROCEDURE-recreate-goldens/ {print NR}
-  ' "$WIRE" | tail -1)
+wire = sys.argv[1]
+frag = os.environ["FRAG"][:20]
+win  = float(os.environ["WINDOW_MIN"])
+now  = datetime.datetime.now(datetime.timezone.utc)
+
+fresh = None          # (kind, age_min) a permit inside the window
+stale = None          # (kind, age_min) the NEWEST one outside it, named in the block message
+
+for line in open(wire, errors="replace"):
+    if ("committed_procedure" in line or "use_committed" in line or "procedure_delta" in line) \
+       and frag in line:
+        kind = "permit"
+    elif "recreate_goldens" in line or "PROCEDURE-recreate-goldens" in line:
+        kind = "recreate-goldens permit"
+    else:
+        continue
+    try:
+        t = datetime.datetime.fromisoformat(json.loads(line).get("ts"))
+        if t.tzinfo is None:
+            t = t.astimezone()
+    except Exception:
+        continue
+    age = (now - t).total_seconds() / 60.0
+    if age <= win:
+        fresh = (kind, age)
+    elif stale is None or age < stale[1]:
+        stale = (kind, age)
+
+if fresh:   print("OK|%s|%.0f" % fresh)
+elif stale: print("STALE|%s|%.0f" % stale)
+else:       print("NONE|none|0")
+WIREPY
+)
+state="${verdict%%|*}"; rest="${verdict#*|}"; kind="${rest%%|*}"; age="${rest##*|}"
+
+if [ "$state" = "STALE" ]; then
+  cat >&2 <<EOM
+BLOCKED by committed-procedure-gate.sh: the newest Jev $kind naming this command is ${age} min old (window ${WINDOW_MIN} min).
+Heavy path: $frag
+A permit authorises the run it was asked about, not a later one. Ask Jev again, NOW, with state
+containing "committed_procedure", the exact command, and the rejected short-cycle alternative.
+EOM
+  exit 2
 fi
 
-if [ -z "${recent:-}" ]; then
+if [ "$state" != "OK" ]; then
   cat >&2 <<EOM
 BLOCKED by committed-procedure-gate.sh: no recent Jev call quoting both the command and the committed alternative.
 Heavy path: $frag

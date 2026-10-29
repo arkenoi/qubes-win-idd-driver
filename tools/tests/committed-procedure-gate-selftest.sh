@@ -23,10 +23,15 @@ print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]}}))' "$
 }
 
 : > "$T/empty-wire.jsonl"
+# THE FIXTURES CARRY A ts, because jev.py stamps every line it writes and the gate now reads it.
+# NOW is computed per run: a fixture with a hardcoded date would pass today and start failing
+# tomorrow, which is the stale-permit bug wearing the test's clothes.
+NOW="$(date -Iseconds)"
+OLD="$(date -Iseconds -d '24 hours ago')"
 # a wire log that DOES quote the committed procedure for a campaign command
-printf '%s\n' '{"state":"committed_procedure: PKG=38872220406 mgmt/harness/campaign-run.sh; rejected short-cycle alternative: quick-upgrade.sh over the golden, which cannot exercise the clean-install cells"}' > "$T/good-wire.jsonl"
+printf '%s\n' '{"ts":"'"$NOW"'","state":"committed_procedure: PKG=38872220406 mgmt/harness/campaign-run.sh; rejected short-cycle alternative: quick-upgrade.sh over the golden, which cannot exercise the clean-install cells"}' > "$T/good-wire.jsonl"
 # a wire log with a Jev call that says nothing about the procedure
-printf '%s\n' '{"state":"is this line an error? some unrelated question"}' > "$T/unrelated-wire.jsonl"
+printf '%s\n' '{"ts":"'"$NOW"'","state":"is this line an error? some unrelated question"}' > "$T/unrelated-wire.jsonl"
 
 # ---- 1. THE MEASURED HOLE: the campaign entry points must be gated ----------------------------
 for c in "PKG=38872220406 mgmt/harness/campaign-run.sh" \
@@ -66,13 +71,26 @@ if [ "$rc" = 2 ]; then ok "an unrelated Jev call does NOT open the gate - a wire
 else no "an unrelated Jev call does NOT open the gate" "rc=$rc"; fi
 
 # a wire log quoting a DIFFERENT heavy command must not authorise this one
-printf '%s\n' '{"state":"committed_procedure: mgmt/harness/prime-run.sh win10-base win10-acc ours; rejected: quick-upgrade"}' > "$T/other-wire.jsonl"
+printf '%s\n' '{"ts":"'"$NOW"'","state":"committed_procedure: mgmt/harness/prime-run.sh win10-base win10-acc ours; rejected: quick-upgrade"}' > "$T/other-wire.jsonl"
 rc=$(ask "PKG=38872220406 mgmt/harness/campaign-run.sh" "$T/other-wire.jsonl")
 if [ "$rc" = 2 ]; then ok "a permit for ANOTHER heavy command does not authorise this one"
 else no "a permit for ANOTHER heavy command does not authorise this one" "rc=$rc"; fi
 
+# ---- 4b. A PERMIT EXPIRES. MEASURED 2026-10-29: a campaign ran on a permit from the previous
+# day because WINDOW_MIN was declared and never read, while that run's own fresh permit went unused.
+printf '%s\n' '{"ts":"'"$OLD"'","state":"committed_procedure: PKG=38872220406 mgmt/harness/campaign-run.sh; rejected short-cycle alternative: quick-upgrade.sh over the golden"}' > "$T/stale-wire.jsonl"
+rc=$(ask "PKG=38872220406 mgmt/harness/campaign-run.sh" "$T/stale-wire.jsonl")
+if [ "$rc" = 2 ]; then ok "a permit naming this command EXACTLY but 24 h old does NOT open the gate"
+else no "a 24 h old permit does NOT open the gate" "rc=$rc $(head -1 "$T/err")"; fi
+
+# a line with no ts at all is not a permit either: failing open on one restores the whole hole
+printf '%s\n' '{"state":"committed_procedure: PKG=38872220406 mgmt/harness/campaign-run.sh; rejected: quick-upgrade"}' > "$T/nots-wire.jsonl"
+rc=$(ask "PKG=38872220406 mgmt/harness/campaign-run.sh" "$T/nots-wire.jsonl")
+if [ "$rc" = 2 ]; then ok "an UNSTAMPED line is not a permit - the freshness check cannot fail open"
+else no "an unstamped line is not a permit" "rc=$rc"; fi
+
 # ---- 5. the recreate-goldens exception still works --------------------------------------------
-printf '%s\n' '{"state":"recreate_goldens per docs/PROCEDURE-recreate-goldens.md - no golden exists, so no short-cycle alternative does either"}' > "$T/recreate-wire.jsonl"
+printf '%s\n' '{"ts":"'"$NOW"'","state":"recreate_goldens per docs/PROCEDURE-recreate-goldens.md - no golden exists, so no short-cycle alternative does either"}' > "$T/recreate-wire.jsonl"
 rc=$(ask "mgmt/harness/prime-run.sh win10-base win10-acc ours" "$T/recreate-wire.jsonl")
 if [ "$rc" = 0 ]; then ok "the recreate-goldens exception still opens the gate"
 else no "the recreate-goldens exception still opens the gate" "rc=$rc"; fi
