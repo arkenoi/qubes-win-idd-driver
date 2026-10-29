@@ -100,8 +100,8 @@ boot_checks(){ # $1=vm label for messages
   case $rc in
     0) ok "$lbl: $WCOUNT window(s) mapped with notepad open, none fullscreen-sized" ;;
     2) no "$lbl: A FULLSCREEN-SIZED WINDOW WAS MAPPED - the rule that must never break" ;;
-    3) no "$lbl: notepad was opened but dom0 got NO window - the guest is not presenting windows" ;;
-    4) no "$lbl: INVALID-INSTRUMENT - the guest shows $WG_GUEST notepad window(s) but the dom0 capture returned none on six tries (a dom0 desktop switch or capture fault)" ;;
+    3) no "$lbl: notepad was opened but dom0 got NO window - the guest is not presenting windows (gui=${WG_GUI:-unread})" ;;
+    4) no "$lbl: INVALID-INSTRUMENT - the guest shows $WG_GUEST notepad window(s) but the dom0 capture returned none on six tries (a dom0 desktop switch or capture fault; the agent still has a GUI client, gui=${WG_GUI:-unread})" ;;
     *) no "$lbl: screenshot failed - window check could not run" ;;
   esac
   # agent state: left the secure desktop, not stuck

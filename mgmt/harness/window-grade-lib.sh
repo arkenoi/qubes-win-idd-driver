@@ -21,11 +21,13 @@
 #   rc 0  window(s) mapped, none fullscreen-sized          WG_W = how many
 #      1  a FULLSCREEN-SIZED window was mapped             (Mode 1 is unconditionally off)
 #      2  INVALID-INSTRUMENT: the guest HAS a top-level window but dom0 returned none
+#         AND the agent still has a GUI client, so the capture is the thing that failed
 #      3  notepad opened and dom0 got no window            WG_GUEST = guest-side count
+#   WG_GUI is set whenever the guest-side count is taken: client | noclient | unknown.
 #   Always sets WG_CTLSTOP_OUT / WG_CTLSTOP_RC - the control window's close. THE CALLER MUST
 #   BRANCH ON WG_CTLSTOP_RC: a control window that did not close stays on the desktop and any
 #   later window grading in the same cell counts it as the product's (lifecycle-lib.sh CTL-STOP-RC-A).
-WG_W=0; WG_GUEST=""; WG_CTLSTOP_OUT=""; WG_CTLSTOP_RC=0
+WG_W=0; WG_GUEST=""; WG_CTLSTOP_OUT=""; WG_CTLSTOP_RC=0; WG_GUI=""
 
 # ---- THE CAPTURE PRIMITIVES. One reader of a PNG's IHDR. This was copied into SIX harnesses in
 # FIVE output formats ('W H', 'WxH', 'WxH:<sha>') - p5-run.sh, sg1-u2-coldboot.sh, gate-preflight.sh,
@@ -66,6 +68,39 @@ _wg_npwin(){ # <vm> -> count of notepad processes owning a top-level window, emp
     | tr -d '\r' | grep -aoE '^NPWIN=.*' | head -1 | sed 's/^NPWIN=//'
 }
 
+# THE DISCRIMINATOR THIS CHECK WAS MISSING (2026-10-29). "Guest has a window, dom0 captured
+# none" was attributed, unconditionally, to "a dom0 desktop switch or capture fault" - the check
+# blamed its own instrument. In acceptance run rel-40817518835 cell win11de-uc that attribution
+# was WRONG and it hid the most severe failure this product can have: the agent's GUI channel was
+# dead, so no window was ever mapped and the dom0 capture was CORRECT to return nothing. Measured:
+# the agent logged "A vchan client has connected" at 08:51:39, lost it by 08:52:00, restarted, and
+# the replacement sat at "Awaiting for a vchan client" through the check at 08:53:03. The same
+# signature is in rel-39678937221 (10-22) and rel-39880114972 (10-23).
+# The agent's own log decides it, and the log already says which state it is in: compare the LAST
+# "connected" against the LAST "Awaiting". Reading it costs one qrexec call and only on the path
+# that was about to grade itself INVALID. Log-reading idiom is stability-e2e.sh:108's, unchanged.
+# unknown (log unreadable) keeps the old INVALID-INSTRUMENT verdict - this must not turn an
+# unreadable log into a product failure.
+_wg_guiclient(){ # <vm> -> client | noclient | unknown
+  local L body conn await
+  L=$(QTEST_VM=$1 timeout -k 5 90 ./tools/qtest run 'cmd /c dir /b /o-d "Q:\Qubes Logs\gui-agent-*.log"' 2>/dev/null \
+      | tr -d '\r' | grep -a '^gui-agent' | head -1)
+  [ -n "$L" ] || { echo unknown; return 0; }
+  body=$(QTEST_VM=$1 timeout -k 5 90 ./tools/qtest run \
+      "cmd /c findstr /c:\"A vchan client has connected\" /c:\"Awaiting for a vchan client\" \"Q:\\Qubes Logs\\$L\"" \
+      2>/dev/null | tr -d '\r')
+  conn=$(printf '%s\n' "$body"  | grep -a 'A vchan client has connected' | tail -1 | grep -aoE '[0-9]{8}\.[0-9]{6}\.[0-9]{3}' | head -1)
+  await=$(printf '%s\n' "$body" | grep -a 'Awaiting for a vchan client'  | tail -1 | grep -aoE '[0-9]{8}\.[0-9]{6}\.[0-9]{3}' | head -1)
+  # No "Awaiting" at all means this agent never even announced: not something this check can read
+  # as a dead client, so it stays unknown unless a connect is on record.
+  [ -n "$await" ] || { if [ -n "$conn" ]; then echo client; else echo unknown; fi; return 0; }
+  [ -n "$conn" ]  || { echo noclient; return 0; }
+  # Both are "YYYYMMDD.HHMMSS.mmm", fixed width, so dropping the dots gives a 17-digit integer
+  # (max ~9.9e16, well inside bash's 64-bit arithmetic) and the compare is a plain time compare -
+  # no locale collation involved.
+  if [ "${await//./}" -gt "${conn//./}" ]; then echo noclient; else echo client; fi
+}
+
 grade_mapped_window(){ # $1=vm $2=artifact-base
   local app=$1 base=$2
   local full_w=${WG_FULL_W:-5120} full_h=${WG_FULL_H:-1440}
@@ -97,10 +132,17 @@ grade_mapped_window(){ # $1=vm $2=artifact-base
   # taskkill, or there is nothing left to ask about.
   if [ "$WG_W" -eq 0 ]; then
     WG_GUEST=$(_wg_npwin "$app")
+    WG_GUI=$(_wg_guiclient "$app")
   fi
   WG_CTLSTOP_OUT=$(QTEST_VM=$app T=45 ctl_stop "${nppid:-0}" "${npstart:-0}"); WG_CTLSTOP_RC=$?
   [ "$big" = 1 ] && return 1
   [ "$WG_W" -gt 0 ] && return 0
-  [ "${WG_GUEST:-x}" -ge 1 ] 2>/dev/null && return 2
+  # A guest window that dom0 did not capture is INVALID-INSTRUMENT only while the agent still has
+  # a GUI client. With no client there is nothing to deliver over, the empty capture is the
+  # correct answer, and this is the product failing - rc 3, same as any other undelivered window.
+  if [ "${WG_GUEST:-x}" -ge 1 ] 2>/dev/null; then
+    [ "$WG_GUI" = noclient ] && return 3
+    return 2
+  fi
   return 3
 }

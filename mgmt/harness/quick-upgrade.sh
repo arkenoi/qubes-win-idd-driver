@@ -1175,8 +1175,8 @@ esac
 case "$wrc" in
   0) ok "a guest window reached dom0 as PIXELS: $WG_W window(s) mapped, none fullscreen-sized" ;;
   1) no "a FULLSCREEN-SIZED window was mapped" ;;
-  2) no "INVALID-INSTRUMENT: the guest shows $WG_GUEST notepad window(s) but the dom0 capture returned none on six tries" ;;
-  *) no "notepad opened but dom0 got NO window (guest-side notepad windows: ${WG_GUEST:-unreadable})" ;;
+  2) no "INVALID-INSTRUMENT: the guest shows $WG_GUEST notepad window(s) but the dom0 capture returned none on six tries (the agent still has a GUI client: gui=${WG_GUI:-unread})" ;;
+  *) no "notepad opened but dom0 got NO window (guest-side notepad windows: ${WG_GUEST:-unreadable}, gui=${WG_GUI:-unread})" ;;
 esac
 grun 'cmd /c powershell -NoProfile -Command "if(Test-Path C:\qwt-install.log){Get-Content C:\qwt-install.log -Tail 60}"' 90 > "$OUT/msi-final.log" 2>/dev/null
 

@@ -2618,9 +2618,9 @@ grade_appvm_window(){ # $1=appvm $2=tag $3=boot-number
   case "$_wrc" in
     1) no "$lbl-appvm boot $b: a FULLSCREEN-SIZED window was mapped"; return 1 ;;
     0) ok "$lbl-appvm boot $b: $WG_W window(s) mapped, none fullscreen-sized"; return 0 ;;
-    2) say "  $lbl-appvm boot $b: INVALID-INSTRUMENT - the guest shows $WG_GUEST notepad window(s) but the dom0 capture returned none on six tries (a dom0 desktop switch or capture fault; graded after the cell's other boots)"
+    2) say "  $lbl-appvm boot $b: INVALID-INSTRUMENT - the guest shows $WG_GUEST notepad window(s) but the dom0 capture returned none on six tries (a dom0 desktop switch or capture fault; the agent still has a GUI client, gui=${WG_GUI:-unread}; graded after the cell's other boots)"
        return 2 ;;
-    *) no "$lbl-appvm boot $b: notepad opened but dom0 got NO window (guest-side notepad windows: ${WG_GUEST:-unreadable})"; return 3 ;;
+    *) no "$lbl-appvm boot $b: notepad opened but dom0 got NO window (guest-side notepad windows: ${WG_GUEST:-unreadable}, gui=${WG_GUI:-unread})"; return 3 ;;
   esac
 }
 
