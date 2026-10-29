@@ -250,6 +250,30 @@ Everything else is secondary - the reboot-required rate scored 0.03 and the PV N
 latter because the boot-time mechanism already exists in the product (`QubesPvNic` on a boot trigger,
 `QubesPvNicRearm` on event 1074), so deferral has somewhere to go.
 
+**The experiment as built, and what it can and cannot show** (2026-10-29). A default-off DWORD
+`ExpStagePvDriversOnly=1` makes stage 2 stage xenvif and xencons into the driver store
+(`pnputil /add-driver`, no `/install`) and leave the bind to the cold boots. It is a PARTIAL answer
+to the measurement above, and must not be reported as the whole one - Jev scored the arm 0.35
+against the blocker as stated:
+
+- **xencons is the clean probe.** The string `xencons` does not occur anywhere in a full real
+  msiexec log, so on this arm nothing installs it live and the driver store is the only place it
+  exists when the guest boots. A bound XENCONS node after the boots is the blocker's question
+  answered for one device.
+- **xenvif is confounded.** msiexec's own DIFxApp PnP-installs the MSI's xenvif inside msiexec
+  (`Installing INF file '...xenvif.inf' (Plug and Play)`), and the arm does not defer that. The node
+  exists in both arms, so at most this shows whether a boot UPGRADES an already-bound node from the
+  store. The versions separate them: the MSI ships 9.1.0.0, our xenbits build is DriverVer
+  9.1.0.998. The adapter name does NOT separate them - the per-boot unplug latch can produce a
+  Realtek reading with the correct xenvif bound (Jev 0.13), so it is recorded as context only.
+- **The IddCx half is not covered at all** and is deliberately excluded: root-enumerated, created by
+  `devcon install`, and no boot creates a node with no hardware to discover (Jev
+  `idd_is_the_exception` 0.86). Including it would only confound the result.
+
+The arm is run against a CONTROL run of the same build and the same readout, not against
+expectation (Jev `control_arm_same_build` 0.93) - a staged-only reading is uninterpretable without
+the normal one beside it.
+
 Until that measurement exists this section is not built, and §2 is unchanged.
 
 ---

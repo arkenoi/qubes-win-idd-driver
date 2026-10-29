@@ -1118,16 +1118,49 @@ qu_coldboot(){ # $1=n
 qu_coldboot 1
 qu_coldboot 2
 
-# THE EXPERIMENT'S ONE MEASUREMENT, taken after the boots that were supposed to do the binding.
+# THE EXPERIMENT'S MEASUREMENT, taken after the boots that were supposed to do the binding.
 # Printed whichever arm ran, so the control run records the same fields and the two are comparable.
-_pvps="Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { \$_.InstanceId -match 'VEN_5853|XENVIF|XENCONS|VIF|CONS' } | ForEach-Object { 'PVDEV ' + \$_.Status + ' ' + \$_.Class + ' ' + \$_.InstanceId }"
-_pv=$(QTEST_VM=$SUBJECT timeout -k 5 120 ./tools/qtest run "powershell -NoProfile -Command \"$_pvps\"" 2>/dev/null | tr -d '\r' | grep -a '^PVDEV ' || true)
+#
+# THE TWO HALVES ARE NOT EQUALLY STRONG, and the log must not blur them (Jev 2026-10-29 scored the
+# first version of this readout 0.24/0.30 for doing exactly that).
+#
+# xencons is the CLEAN probe. The MSI does not contain it at all - 0 occurrences of 'xencons' in a
+# full real msiexec log - so in the staged-only arm NOTHING installs it live. A bound XENCONS node
+# after the boots is therefore the blocker's own question answered: a boot brought up a device whose
+# install never ran.
+#
+# xenvif is the WEAK probe. msiexec's DIFxApp PnP-installs the MSI's own xenvif inside msiexec
+# ("Installing INF file '...xenvif.inf' (Plug and Play)"), and the arm does not defer that. So an
+# XENVIF node exists in both arms and its presence shows nothing; at most this measures whether a
+# boot UPGRADES an already-bound node from the store. Version decides which: the MSI ships
+# xenvif.sys 9.1.0.0, our xenbits build is DriverVer 9.1.0.998.
+#
+# The adapter name is NOT the discriminator and is printed as context only. A Realtek reading can be
+# produced by the per-boot unplug latch (xen.sys consumes Services\XEN\Unplug\NICS delete-on-read
+# and vetoes without a VIF subkey; first appearance fails problem 14) with the correct xenvif bound.
+_pvps="\$ErrorActionPreference='SilentlyContinue'; foreach (\$d in (Get-PnpDevice | Where-Object { \$_.InstanceId -match 'XENVIF|XENCONS|VEN_5853' })) { \$v = (Get-PnpDeviceProperty -InstanceId \$d.InstanceId -KeyName 'DEVPKEY_Device_DriverVersion').Data; \$pc = (Get-PnpDeviceProperty -InstanceId \$d.InstanceId -KeyName 'DEVPKEY_Device_ProblemCode').Data; 'PVDEV {0} prob={1} ver={2} {3} {4}' -f \$d.Status, \$pc, \$v, \$d.Class, \$d.InstanceId }; foreach (\$a in (Get-NetAdapter)) { 'PVNET {0} | {1}' -f \$a.Status, \$a.InterfaceDescription }"
+_pv=$(QTEST_VM=$SUBJECT timeout -k 5 120 ./tools/qtest run "powershell -NoProfile -Command \"$_pvps\"" 2>/dev/null | tr -d '\r' | grep -aE '^(PVDEV|PVNET) ' || true)
 log "PV device state after both cold boots (arm: EXP_STAGE_PV_ONLY=${EXP_STAGE_PV_ONLY:-0}):"
 if [ -n "$_pv" ]; then
   printf '%s\n' "$_pv" > "$OUT/pv-devices-after-boots.txt"
   while IFS= read -r _r; do log "    $_r"; done <<EOFPV
 $_pv
 EOFPV
+  # State the two readings separately, strongest first, so a later reader cannot merge them.
+  if printf '%s\n' "$_pv" | grep -qai '^PVDEV OK .*XENCONS'; then
+    log "  XENCONS BOUND (the clean probe: the MSI does not ship xencons, so only the store could have)"
+  elif printf '%s\n' "$_pv" | grep -qai 'XENCONS'; then
+    log "  XENCONS PRESENT BUT NOT OK - read the prob= field on its row"
+  else
+    log "  XENCONS ABSENT after both boots"
+  fi
+  if printf '%s\n' "$_pv" | grep -qai '^PVDEV .*ver=9\.1\.0\.998.*XENVIF'; then
+    log "  XENVIF on OUR build 9.1.0.998 (weak probe: an upgrade of a node msiexec had already bound)"
+  elif printf '%s\n' "$_pv" | grep -qai '^PVDEV .*XENVIF'; then
+    log "  XENVIF present on a version that is NOT 9.1.0.998 - the MSI's 9.1.0.0 is still the bound one"
+  else
+    log "  XENVIF ABSENT after both boots"
+  fi
 elif [ "${EXP_STAGE_PV_ONLY:-0}" = 1 ]; then
   # Only an error in the arm that exists to take this reading. On a control run a silent readout
   # is an inconclusive instrument, not a failed install, and must not redden every cycle.

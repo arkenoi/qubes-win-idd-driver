@@ -233,6 +233,12 @@ INFORMATIONAL = (
     'uac_prompt_on_secure_desktop',                                        # L3778 readback
     'certs_installed', 'precondition', 'payload_files_verified', 'package_version',   # L3921/L4115/L4193/L4205
     'clock_skew_certs', 'guest_utc_at_refusal',                            # records beside clock_skew_refusal (which carries the verdict)
+    'exp_stage_pv_only',         # WHICH ARM RAN. The ExpStagePvDriversOnly knob is absent on every normal
+                                 # run, so this is False there; True means xenvif/xencons were staged into
+                                 # the driver store and left for the next boot to bind. Neither value is an
+                                 # error - a staged-only run that did not come up is graded by pv_xenvif and
+                                 # pv_xencons, which are error-class above. It is recorded so a run can never
+                                 # be read as the arm it was not.
     'svc_serial_start_secs', 'svc_serial_start_after_retry_secs',          # Start-QwtServicesSerially: wall time of each serialized start (the A/B's pacing measure)
     'svc_qrexec_held_secs',                                                # Start-HeldQrexecAgent / the power-off skip: how long QrexecAgent was held through the device work (docs/ADR-boot.md 2)
 )
