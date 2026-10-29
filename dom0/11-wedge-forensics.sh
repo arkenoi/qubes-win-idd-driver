@@ -65,7 +65,18 @@ echo "domid=$DOMID" | tee "$OUT/domid.txt"
 
 # 1. Is it spinning, and on how many vCPUs? (two samples, 10 s apart)
 xl list -l "$VM" > "$OUT/xl-list-long.json" 2>&1
-xentop -b -i2 -d5 2>/dev/null | grep -E "NAME|$VM" > "$OUT/xentop.txt"
+# MEASURED (wedge-1404, 2026-10-29): xentop.txt contained exactly two lines, both the column
+# header. The headers matched the filter on "NAME", so the pipeline ran and the redirect
+# worked, yet not one data row survived - while xl-dmesg-domains.txt from the same capture
+# shows four live domains there were rows to print. WHY no row survived is NOT established:
+# it could be the name filter, or xentop emitting none, and `2>/dev/null` threw away the one
+# thing that would say which (jev-xentopblind-out.json: root_cause=insufficient_evidence
+# 0.86, and the missing measurement is xentop output this qube cannot take - dom0 is
+# off-limits). So do not filter and do not discard stderr: the next capture either shows the
+# whole table or says why there is none, and both are readable. The filter was wrong
+# independently of the cause - scoped to one VM, it could never answer "what ELSE on this
+# host is burning cores", which is the question a spin wedge actually raises.
+xentop -b -i2 -d5 > "$OUT/xentop.txt" 2>&1
 xl vcpu-list "$DOMID" > "$OUT/vcpu-list-1.txt" 2>&1
 sleep 10
 xl vcpu-list "$DOMID" > "$OUT/vcpu-list-2.txt" 2>&1
@@ -194,7 +205,9 @@ done
 virsh -c xen:/// dumpxml "$VM" 2>/dev/null | grep -E '<(console|serial)|@?tty=' > "$OUT/libvirt-console.txt" 2>&1 || true
 
 echo "--- summary ---" | tee -a "$OUT/grant-summary.txt"
-grep -E "Mem|VCPUs|state" "$OUT/xentop.txt" 2>/dev/null | tail -2
+awk -v v="$VM" 'NR==1||index(v,$1)==1||$1==v' "$OUT/xentop.txt" 2>/dev/null | tail -3
+echo "host-wide CPU(%) by domain (2nd xentop sample):"
+awk '$1=="NAME"{n++;next} n==2 && $4+0>5 {printf "  %-12s %6s%%\n",$1,$4}' "$OUT/xentop.txt" 2>/dev/null
 cat "$OUT/grant-summary.txt"
 
 # The memory image comes BEFORE the NMI: the NMI reboots the guest, and a rebooted guest is not
