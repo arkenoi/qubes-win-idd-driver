@@ -53,6 +53,10 @@ verified.
 >     [`docs/ADR-supervision.md`](docs/ADR-supervision.md) §5 (owner, 2026-10-07) is *"nothing of ours
 >     relaunches anything"*. The agent behaved exactly as the ADR requires. The drills assert a
 >     retired contract.
+>   * **The gap behind all four**: a fault-injection switch in the product names the check it
+>     exists to break — *"the routing-invariance detector must then FAIL … or it is decoration"* —
+>     and that detector had never been written. The area was unmeasured, and the failing drill
+>     made it look covered. `T7a` is now that detector.
 > * **One known issue, already declared**: `toast-hold-test` failed one row of twenty-one,
 >   `S3ii-1=PREEMPTED` — `TOASTPREEMPTLOSESBANNER`, listed under *Known issues shipped knowingly*
 >   in the release notes.

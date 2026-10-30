@@ -192,6 +192,16 @@ spans. The coverage receipt names **16**. Uncovered:
     the timestamp and the text, so it counted zero where there were five — while `fwd_attempts`,
     three lines away in the same file, had been updated and stayed correct.
   - `T7c` passed, so the skip path still works.
+  - **And behind all four, the gap they were hiding.** `notifhost.cpp` carries a compile-time
+    fault-injection switch, `P3AQ_DEFECT_ROUTE`, whose own comment names the check it exists to
+    break: *"acquisition state gates the A0 forward/skip routing; the routing-invariance detector
+    must then FAIL"*, and at the injection site, *"must FAIL on this build or it is decoration"*.
+    **That detector had never been written.** The switch had nothing to break, and the row
+    standing where it should have been was asserting the opposite of the ADR. So this area was
+    not merely failing — it was unmeasured, and the failure looked like coverage. `T7a` is now
+    that detector: the route a toast takes must not change with the ETW tier, compared across the
+    parked and restored arms over the same fixtures. A second row covers the allowlisted sender,
+    which is the half the switch actually perturbs.
 - `p3a-etw-gate` `T5`/`T8c` — **these two are harness defects, not product defects, and saying so
   is not a downgrade.** Both kill the ETW proxy and then wait for the agent to relaunch it; the
   suite states outright that "the agent's relauncher IS the thing under test". There is no
