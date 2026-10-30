@@ -349,7 +349,19 @@ Four decisions, each measured rather than assumed:
   would hold the frames of its own animation. This leak is not new: the gap between Windows repainting the shared window and
   the tracking pass unmapping it exists for every content swap, and the grader already carries it as `double_flash`. Rule 5
   had been hiding it by unmapping the window seconds earlier for an unrelated reason.
-* **Bound expiry ungates and forces a full-window repaint** (Jev 0.82, 0.81 on re-ask). It needs no case of its own: past
+* **The release repaints, and WHERE it repaints depends on the feed** (Jev 0.98 for the visible region
+  against 0.02 for a full-window send with the trade merely recorded). Held frames leave dom0 holding the
+  frame from before the hold, and nothing else re-sends the current content - so without a repaint dom0
+  would show the PREVIOUS toast's pixels in a window the guest has already repainted with the next one,
+  which is exactly the misattribution rule 5 existed to prevent. A **per-window** WGC capture contains
+  only its own window, so a full-window damage cannot bleed anything in: it is sent at once, on the
+  tracking pass. A **slice-fed** window takes its content from the composited desktop, where the pixels
+  under a higher window belong to that window, so a full-window send would hand this window their pixels -
+  the bleed whose recorded symptom is "corrupts a menu's host window on hover". That case is paid from
+  main.c's existing region-aware release, which sends `rgnVisible`, this window minus the area claimed by
+  higher windows. The first version of this fix sent the full window in both cases; the review finding
+  against that send was already in `main.c`, two screens from the line being copied.
+* **Bound expiry ungates and forces that same repaint** (Jev 0.82, 0.81 on re-ask). It needs no case of its own: past
   `TH_HOLD_BOUND_MS` / `TH_PREEMPT_WINDOW_MS` the pre-emption is no longer wanted, so it arrives as a plain show with the gate
   open. The repaint is mandatory - held frames left dom0 with a stale one and nothing else re-sends the current content, so
   without it "ungated" would mean "frozen".
@@ -366,7 +378,12 @@ Four decisions, each measured rather than assumed:
 the run data - so most holds resolve well inside the 3 s bound, and the max exceeds the "at most 3 s" stated above, which is
 what the bound is for. Frames dropped per episode are counted and reported once, on the resume line, never per frame.
 
-**Open, and honest about it.** The gap between Windows painting the swap and the hook thread closing the gate is not measured:
+**Open, and honest about it.** A **slice-fed** banner's release repaint waits for the next capture frame,
+and on a direct-capable guest at rest none arrives (`CaptureAcquireTimeout` returns `INFINITE` so that a
+desktop at rest cannot wake the capture thread). So if painting stops within the identity read's latency of
+a swap, a slice-fed banner can hold dom0's pre-hold frame until something paints again. Per-window captures
+are unaffected - they are paid on the tracking pass, unconditionally. The gap between Windows painting the
+swap and the hook thread closing the gate is also not measured:
 no guest capture on this disk contains a content swap on a held banner, because those lines only appear on a hold build under
 the toast campaign. Jev named it the one missing measurement (0.54, conf 0.39). The instrument is now in place - the
 `QGATOASTGATE` pair plus the content-changed line are three timestamps on the same window - so the next guest run yields it.
