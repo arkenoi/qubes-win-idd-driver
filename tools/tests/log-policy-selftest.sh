@@ -39,6 +39,17 @@ bad(){ fail=$((fail+1)); echo "FAIL  $*"; }
 #                                                              evidence for the no-double/no-lost
 #                                                              notification P1; losing it in the
 #                                                              field would cost more than it saves
+#   QGATOASTGATE                                             - one line per frame-gate TRANSITION
+#                                                              (a swap or a pre-emption), never per
+#                                                              frame: the per-frame drops are
+#                                                              counted and reported on the resume
+#                                                              line. toast-hold-grade.py's
+#                                                              mapped_at reads this pair to tell a
+#                                                              gated window from one showing the
+#                                                              toast that just repainted it, so at
+#                                                              DEBUG it would be absent from every
+#                                                              shipped capture and the grader would
+#                                                              call each held swap a DOUBLE
 #   QGADRAGSLICE / QGADRAGFREEZE ev=settle                   - one line per drag, user-initiated
 #   QGADDAMOVE                                               - DDA ownership changing hands on a
 #                                                              move, which is a transition, not a
@@ -71,7 +82,7 @@ bad(){ fail=$((fail+1)); echo "FAIL  $*"; }
 #                                                              it; fires per oscillation, not per
 #                                                              window, and is the evidence the rebuild
 #                                                              was avoided (same class as QGADDAMOVE)
-ALLOW='BROKERHOLD hwnd 0x%x holding last content|BROKERLATEREG hwnd 0x%x registered with the broker|BROKERRECROP hwnd 0x%x crop %d,%d - session kept|QGABROKERDIED|QGABROKERHUNG|QGABROKERREAP|QGABROKERBACK|BROKERDIMS|QGAZERORECT|QGATOASTGAP|ZORDERINVALID|QGAHELPERSDISARM|QGAHELPERSREARM|QGAHELPERTASK|QGADIRECTSUPPRESS|QGACAPSTRIP|QGAFSFLASH|QGASTARTDISMISS|QGAUAC|QGALOGPOLICY|QGARAISE|QGADESKSTUCK|QGAPROTO|QGATOASTHOLD|QGATOASTIDENT|QGATOASTPREEMPT|QGAPLACEKEEP|QGADRAGSLICE|QGADRAGFREEZE|QGADDAMOVE|popup damage|QGADRAGSIM|QGAERRBOX|QGASLICEBLACK|QGAPWECHO'
+ALLOW='BROKERHOLD hwnd 0x%x holding last content|BROKERLATEREG hwnd 0x%x registered with the broker|BROKERRECROP hwnd 0x%x crop %d,%d - session kept|QGABROKERDIED|QGABROKERHUNG|QGABROKERREAP|QGABROKERBACK|BROKERDIMS|QGAZERORECT|QGATOASTGAP|ZORDERINVALID|QGAHELPERSDISARM|QGAHELPERSREARM|QGAHELPERTASK|QGADIRECTSUPPRESS|QGACAPSTRIP|QGAFSFLASH|QGASTARTDISMISS|QGAUAC|QGALOGPOLICY|QGARAISE|QGADESKSTUCK|QGAPROTO|QGATOASTHOLD|QGATOASTIDENT|QGATOASTPREEMPT|QGATOASTGATE|QGAPLACEKEEP|QGADRAGSLICE|QGADRAGFREEZE|QGADDAMOVE|popup damage|QGADRAGSIM|QGAERRBOX|QGASLICEBLACK|QGAPWECHO'
 
 python3 - "$SRC" "$ALLOW" <<'PY' > /tmp/logpolicy.$$ 2>&1
 import re, sys, pathlib
@@ -374,8 +385,13 @@ done
 # output data still to send". Which of the two happened is still unsettled, and a discarded stderr
 # is what makes it unanswerable.
 _amb=mgmt/harness/arm-module-bases.sh
-if command grep -qE 'schtasks /create .*2>/dev/null' "$_amb" || \
-   command grep -A2 'armed=\$\(' "$_amb" | command grep -q '2>/dev/null'; then
+# The second clause here was `grep -A2 'armed=\$\(' | grep -q 2>/dev/null`, and it was INERT: in a BRE
+# `\(` opens a group, so that pattern was an unterminated subexpression, grep exited with "Unmatched (
+# or \(" on every run, and the empty pipe made the clause always false. Fixing the escape would have
+# made it worse - the three lines it reads include the comment that RECORDS the old `2>/dev/null`, so a
+# corrected pattern reports the fix as the defect. Dropped rather than repaired; the first clause is the
+# real property and it works.
+if command grep -qE 'schtasks /create .*2>/dev/null' "$_amb"; then
   bad "stderr: the schtasks arming in $_amb discards stderr - a failure and a lost reply log identically"
 else
   ok "stderr: the schtasks arming keeps stderr, so a failure names itself"

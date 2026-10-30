@@ -309,10 +309,11 @@ defect knob in the offline suite. Jev on the result: no doubles 0.79, the bounds
 rest 0.71, nothing lost 0.54, top residual an identity mismatch on real banners (measured by the guest test).
 
 **Cost.** A first toast waits for its verdict: the identity read plus the verdict latency, at most 3 s, then shown. A
-window-path banner followed within its display time by a bridged toast loses its dom0 display (it stays in the guest's
+window-path banner followed within its display time by a bridged toast USED TO lose its dom0 display (it stayed in the guest's
 Notification Center) - measured 2026-10-06: withdrawn 20 ms after it was mapped, or, when the newer record was already there,
-never mapped at all. That is against the owner's rule (no flash, nothing lost); 4.3.35 ships it as a known issue by the owner's
-decision, and rule 5 is to be replaced (Open). A flyout (Quick Settings, volume, clock) appears up to ~250 ms plus one read later.
+never mapped at all. That was against the owner's rule (no flash, nothing lost); 4.3.35 shipped it as a known issue by the
+owner's decision, for 4.3.35. **Rule 5 is now replaced by swap-edge gating (below): the banner keeps its display and its
+frames are held instead, so it is no longer withdrawn ahead of the toast that takes the window.** A flyout (Quick Settings, volume, clock) appears up to ~250 ms plus one read later.
 
 **Evidence.** Offline: `agent/gui-agent/toasthold_test.c` (176 checks, as C99 and as C++17) and
 `tools/notifhost/toasthold_bridge_test.cpp` (25 checks), every defect knob (15 + 2) seen to fail; CI builds and runs
@@ -324,10 +325,52 @@ non-seamless forwarding nothing - and failed only rule 5's case.
 **Open.** Not fixed by this section: a toast whose banner timed out before a correction is only in the guest's
 Notification Center; the identity of system toasts whose display name differs between the notification database and
 the card is unmeasured (a mismatch fails open: the double returns, logged).
-Rule 5 is to be replaced: keep the displayed window-path banner mapped, and while a newer `bridge` or `pending` record is
-queued behind it forward none of that window's new frames until a fresh identity read shows which toast it carries (swap-edge
-gating; Jev 2026-10-06 0.44, against 0.36 for a bridge re-route with it as the fallback and 0.08 for keeping rule 5). First
-measurement: whether the capture path can hold back one mapped window's frames (Jev 0.75).
+**DECIDED AND BUILT 2026-10-31: rule 5 is replaced by swap-edge gating.** The displayed window-path banner stays MAPPED and
+that window's frames are held back until a fresh identity read says which toast it now carries. The measurement this section
+was waiting on - "whether the capture path can hold back one mapped window's frames" (Jev 0.75) - is taken, from source:
+`SendWindowDamageEvent` has exactly ONE definition (`agent/gui-agent/send.c`, declared in `send.h`), every forwarding path
+goes through it (the WGC per-window damage callback on the capture thread, plus ~18 sites in `main.c`), and it ALREADY drops
+a rect there - the negative-geometry refusal, counted and logged. So the hold needed no new mechanism and its inheritance is
+provable by there being a single definition rather than by visiting call sites. On that measurement Jev moved swap-edge
+gating from 0.44 to 0.79, against the 0.44/0.36/0.08 of 2026-10-06.
+
+Why holding frames is the right semantics: Windows toasts reuse ONE banner window, which is why rule 5 unmapped rather than
+leaving toast B's pixels inside the window dom0 was told is toast A. But the pre-emption fires on the mere EXISTENCE of a
+newer unconsumed record - measured 4.47 s before that toast's content arrived - so the cure ran far ahead of the disease and
+the banner was simply lost. Gated, dom0 keeps the frame it has, which IS the displayed toast, correctly attributed, while the
+shared window is repainted underneath with content dom0 never sees.
+
+Four decisions, each measured rather than assumed:
+
+* **The gate is applied at the swap edge, not only on the pre-emption decision** (Jev 0.97). The pre-emption's 3 s bound can
+  lapse before the queued toast actually takes the window, and then the swap frame goes out. So the frame gate is also closed
+  on the content-change notice from the WinEvent hook thread - the earliest thing the agent learns about the shared window
+  being repainted - but only for a banner that is already decided and shown, because gating a banner that is still sliding in
+  would hold the frames of its own animation. This leak is not new: the gap between Windows repainting the shared window and
+  the tracking pass unmapping it exists for every content swap, and the grader already carries it as `double_flash`. Rule 5
+  had been hiding it by unmapping the window seconds earlier for an unrelated reason.
+* **Bound expiry ungates and forces a full-window repaint** (Jev 0.82, 0.81 on re-ask). It needs no case of its own: past
+  `TH_HOLD_BOUND_MS` / `TH_PREEMPT_WINDOW_MS` the pre-emption is no longer wanted, so it arrives as a plain show with the gate
+  open. The repaint is mandatory - held frames left dom0 with a stale one and nothing else re-sends the current content, so
+  without it "ungated" would mean "frozen".
+* **Direct-capable per-window capture only** (Jev 1.00). `vchan-handlers.c` passes `window == NULL` for whole-desktop damage,
+  so on the composite path one window's frames cannot be held back - the frame IS the screen. A composite guest keeps rule 5's
+  behaviour. No composite fallback on direct-capable guests is the standing rule anyway, but the limit is stated here rather
+  than discovered later.
+* **Running out of gate slots falls back to rule 5, never to forwarding.** Four lock-free slots, idempotent, read with plain
+  loads on the capture thread because a per-rect lock there was measured as the dominant tail cost of ProtoTrace itself
+  (580 ms against 66 ms, FINDINGS 2026-08-12). If no slot is free the banner is unmapped - a loss, which is bad, rather than
+  a misattribution, which is worse. That line is deliberately left undeclared in the log-sweep baseline so it surfaces.
+
+**Cost, measured.** The hold lasts one identity read: median 218 ms, p90 1109 ms, max 4953 ms over 2351 `held_ms` samples in
+the run data - so most holds resolve well inside the 3 s bound, and the max exceeds the "at most 3 s" stated above, which is
+what the bound is for. Frames dropped per episode are counted and reported once, on the resume line, never per frame.
+
+**Open, and honest about it.** The gap between Windows painting the swap and the hook thread closing the gate is not measured:
+no guest capture on this disk contains a content swap on a held banner, because those lines only appear on a hold build under
+the toast campaign. Jev named it the one missing measurement (0.54, conf 0.39). The instrument is now in place - the
+`QGATOASTGATE` pair plus the content-changed line are three timestamps on the same window - so the next guest run yields it.
+Acceptance remains the failing guest row S3ii-1 in `mgmt/harness/toast-hold-test.sh`.
 
 ## 11. A toast's buttons travel to dom0 as actions, and a dom0 click is carried out in the guest - all of them or none
 
