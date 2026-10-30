@@ -177,18 +177,29 @@ blog_since(){ # $1 = old line count
 # union of BOTH lines survives a single-line drop in either direction and stays correct after
 # the BLog share-mode fix. All patterns are ANCHORED at the HH:MM:SS line start so guest-
 # controlled toast TITLES embedded in SENT lines can never forge a match.
+#
+# THE LEVEL TAG IS OPTIONAL IN ALL FOUR PATTERNS (2026-10-30). qtb_shared.h's BLog now writes
+# "HH:MM:SS [INFO] ..." and its comment says "ONE consumer anchored on the old shape -
+# mgmt/harness/a0-lib.sh:198 - and it is updated in the same change". Line 198 is fwd_attempts.
+# fwd_count sits three lines above it and was NOT updated, so it returned 0 on every real window
+# while fwd_attempts beside it stayed correct. Measured on the shape the bridge writes today:
+# fwd_count=0 where it must be 5; on the legacy shape, 5. That false-FAILed p3a-etw-gate's T7b
+# ("allowlisted forward broken: warmup=no check=no") on a run where the forwards had happened, and
+# took T7w ungraded with it. Fixing one function in a file and not its neighbour is how this hid.
+# The anchor is unchanged, so the forgery property above still holds: a tag inside a guest-supplied
+# title is not at line start, and fwd_selftest now carries a LEVELLED forgery line to prove it.
 fwd_count(){ # $1 = FILE holding a bridge.log window -> echoes the number of DISTINCT toasts
              # PROVEN delivered to dom0 in that window (per-id forwards, deduped across the
              # FWD_RTT/SENT pair, plus the item counts of acked coalesced batches)
   local f="$1" n c
-  n=$( { sed -n 's/^[0-9][0-9]:[0-9][0-9]:[0-9][0-9] FWD_RTT guest_id=\([1-9][0-9]*\) seq=[0-9][0-9]* ms=[0-9][0-9]* ok=1\r*$/\1/p' "$f"
-         sed -n "s/^[0-9][0-9]:[0-9][0-9]:[0-9][0-9] SENT id=\([0-9][0-9]*\) .*: OK\r*\$/\1/p" "$f"
+  n=$( { sed -n 's/^[0-9][0-9]:[0-9][0-9]:[0-9][0-9] \(\[[A-Z]*\] \)\?FWD_RTT guest_id=\([1-9][0-9]*\) seq=[0-9][0-9]* ms=[0-9][0-9]* ok=1\r*$/\2/p' "$f"
+         sed -n "s/^[0-9][0-9]:[0-9][0-9]:[0-9][0-9] \(\[[A-Z]*\] \)\?SENT id=\([0-9][0-9]*\) .*: OK\r*\$/\2/p" "$f"
        } | sort -un | wc -l )
   # coalesced batches (guest_id=0) carry no per-id lines; only an ACKED batch counts (the old
   # `SENT coalesced x[0-9]+` grep counted FAILed batches as delivered - latent overcount).
   # Summed with awk, NOT `paste|bc`: bc is NOT INSTALLED on this rig, so the old harness's
   # coalesced sum was silently always empty (caught by fwd_selftest 2026-09-05).
-  c=$( sed -n 's/^[0-9][0-9]:[0-9][0-9]:[0-9][0-9] SENT coalesced x\([0-9][0-9]*\): OK\r*$/\1/p' "$f" | awk '{s+=$1} END{print s+0}' )
+  c=$( sed -n 's/^[0-9][0-9]:[0-9][0-9]:[0-9][0-9] \(\[[A-Z]*\] \)\?SENT coalesced x\([0-9][0-9]*\): OK\r*$/\2/p' "$f" | awk '{s+=$1} END{print s+0}' )
   echo $(( ${n:-0} + ${c:-0} ))
 }
 fwd_attempts(){ # $1 = FILE; counts lines evidencing ANY dom0-forward ATTEMPT (SENT any
@@ -205,23 +216,30 @@ fwd_attempts(){ # $1 = FILE; counts lines evidencing ANY dom0-forward ATTEMPT (S
 # must fire on any attempt and stay 0 on a forward-free window with embedded forgeries.
 fwd_selftest(){
   local d="$OUT/fwd-selftest"; mkdir -p "$d"
+  # THE FIXTURE CARRIES THE CAPTURED SHAPE AND THE LEGACY ONE, in every file. Until 2026-10-30 it
+  # was entirely untagged - a model of the format, not a capture of it - so it stayed green while
+  # fwd_count went blind to every line the bridge actually writes. Mixing the two forms in one
+  # fixture is what makes this able to catch a pattern that handles only one of them.
   printf '%s\r\n' \
-    '22:25:59 FWD_RTT guest_id=15 seq=2 ms=9 ok=1' \
-    "22:34:39 SENT id=21 app='Windows PowerShell' title='A0T burst 1': OK" \
+    '22:25:59 [INFO] FWD_RTT guest_id=15 seq=2 ms=9 ok=1' \
+    "22:34:39 [INFO] SENT id=21 app='Windows PowerShell' title='A0T burst 1': OK" \
     '22:34:39 FWD_RTT guest_id=21 seq=3 ms=17 ok=1' \
-    '22:36:00 FWD_RTT guest_id=0 seq=4 ms=3 ok=1' \
-    '22:36:00 SENT coalesced x3: OK' > "$d/delivered.txt"
+    '22:36:00 [INFO] FWD_RTT guest_id=0 seq=4 ms=3 ok=1' \
+    '22:36:00 [INFO] SENT coalesced x3: OK' > "$d/delivered.txt"
   printf '%s\r\n' \
-    '22:26:00 FWD_RTT guest_id=17 seq=9 ms=15000 ok=-2' \
-    '22:26:00 send seq=9: ack timeout' \
-    "22:26:15 SENT id=17 app='x' title='y': FAIL (unseen, retried)" \
+    '22:26:00 [INFO] FWD_RTT guest_id=17 seq=9 ms=15000 ok=-2' \
+    '22:26:00 [INFO] send seq=9: ack timeout' \
+    "22:26:15 [INFO] SENT id=17 app='x' title='y': FAIL (unseen, retried)" \
     '22:26:30 SENT coalesced x4: FAIL (unseen, retried)' \
-    "22:26:45 SENT id=88 app='x' title='FWD_RTT guest_id=999 seq=1 ms=1 ok=1': FAIL (unseen, retried)" > "$d/undelivered.txt"
+    "22:26:45 [INFO] SENT id=88 app='x' title='FWD_RTT guest_id=999 seq=1 ms=1 ok=1': FAIL (unseen, retried)" > "$d/undelivered.txt"
+  # clean.txt carries the forgery BOTH ways - an untagged one and a tagged one - so making the
+  # level optional cannot be the thing that opens a hole a guest title could drive through.
   printf '%s\r\n' \
-    '22:28:04 skip id=16 aumid=Microsoft.Windows.Explorer (window path)' \
+    '22:28:04 [INFO] skip id=16 aumid=Microsoft.Windows.Explorer (window path)' \
     '22:29:00 skip id=99 aumid=Evil SENT id=77 t: OK' \
-    '22:25:12 connected (server version 1.0)' \
-    '22:25:44 Dismissed id=2 reason=1 (not user-dismissed - guest record kept)' > "$d/clean.txt"
+    '22:29:01 [INFO] skip id=98 aumid=Evil SENT id=76 t: OK' \
+    '22:25:12 [INFO] connected (server version 1.0)' \
+    '22:25:44 [INFO] Dismissed id=2 reason=1 (not user-dismissed - guest record kept)' > "$d/clean.txt"
   local a b c au ac
   a=$(fwd_count "$d/delivered.txt"); b=$(fwd_count "$d/undelivered.txt"); c=$(fwd_count "$d/clean.txt")
   au=$(fwd_attempts "$d/undelivered.txt"); ac=$(fwd_attempts "$d/clean.txt")
