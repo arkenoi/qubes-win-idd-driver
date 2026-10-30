@@ -8,6 +8,16 @@ refuses them).
 **The qube carries `timezone=localtime` from CREATE time, the installer sets the guest's zone from
 `/qubes-timezone`, and nothing anywhere writes `RealTimeIsUniversal`.** That is the whole design.
 
+**It is correct for the RTC and incomplete for the clock Windows derives from it, across a DST
+boundary.** Windows converts the RTC with the `ActiveTimeBias` already in its registry, then
+updates that bias for the current date *without moving the clock it just set*. An image sealed on
+the other side of a transition therefore boots exactly one hour out, with a bias that reads correct
+afterwards. Measured 2026-10-30 on a fresh clone of `win11r-qwt` (sealed 2026-10-15, summer; Sofia
+left DST 2026-10-25), first boot, nothing else run on it: host `2026-10-30T20:10:16Z` against guest
+`2026-10-30T19:10:21Z` - **3594 s behind**, `ActiveTimeBias -120`, `DST False`. The bias is the one
+field that repairs itself, so reading it is not a test of this. See `findings/issues.md`
+ETWCLOCKDST (parked, P2).
+
 ## Why that is all there is
 
 A hardware clock holds a number; two parties have to agree what it means.
@@ -95,7 +105,28 @@ creation?"*
   `/etc/cron.d/qubes-sync-clock` - `0 * * * * root /usr/bin/qvm-sync-clock` - an HOURLY push of
   `qubes.SetDateTime` to every running qube, served by the same `set-time.ps1` the pull used. The
   residual exposure is boot-to-next-hourly-tick, worst case ~60 min, on an RTC that already holds
-  dom0 local time. Jev, asked about the objective rather than about iterating the script:
+  dom0 local time.
+
+  **CORRECTED 2026-10-30: that residual is not 2.9 s of drift.** Across a DST boundary it is a full
+  hour of wrong clock for up to 60 minutes of every boot (measurement in CURRENT STATE above), and
+  everything that reads a clock in that window reads it wrong - certificate validity at driver
+  install, a `--since` log window, a scan's measured duration.
+
+  **The pull is still not the answer, and the reason is stronger than cost.** `findings/wedge.md`
+  records it as the last thing the guest completes before two wedge onsets - 2026-10-28
+  `034440.252 CLOCKSYNC ... pulled from dom0` -> `034440.385 XcOpen` -> nothing on the volume, and
+  2026-10-23 `20:09:44 CLOCKSYNC` -> `20:09:47.027 XcOpen`, the last line that guest ever wrote. It
+  is guest-initiated, so the vchan SERVER role, inside the boot+15 s window every recorded onset
+  sits in. Owner, 2026-10-28: *"the clock sync is the mechanism, not the engine."* Restoring it
+  would trade one hour of clock error for a suspected trigger of the open P1 wedge.
+
+  **What would end it, and why it is not done here.** `RealTimeIsUniversal` with the `timezone`
+  feature absent puts true UTC in the RTC and takes the bias out of the boot conversion entirely -
+  zero runtime cost, zero boot traffic, no expiry. This ADR rejects that value and `lint-harness.py`
+  L26 enforces the rejection, so changing it is an owner call, not a rig fix. Until then the rig is
+  covered by `primitives.sh` `clock_correct` on every cell ENTRY path, and a real guest is covered
+  only by dom0's hourly push. Re-sealing a golden in winter fixes its clones until the March 2027
+  transition and not past it. Jev, asked about the objective rather than about iterating the script:
   `pull_is_needed_at_all` = not_needed **0.85**, `cheapest_sufficient_shape` = drop_the_task
   **0.89**, `three_hour_premise_is_gone` **0.94**, `setter_powershell_is_wasteful` **0.88**.
 

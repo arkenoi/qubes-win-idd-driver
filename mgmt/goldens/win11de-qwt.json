@@ -1,5 +1,5 @@
 {
-  "note": "German 25H2 QWT golden; RealTimeIsUniversal ABSENT (Windows default); guest zone 'FLE Standard Time' synced to dom0 (Europe/Sofia)",
+  "note": "German 25H2 QWT golden, re-sealed 2026-10-30 winter: booted once so Windows wrote ActiveTimeBias -120 into the hive, so a clone's FIRST boot converts the RTC correctly. Receipt this boot: host 2026-10-30T21:25:44Z, guest 20:25:43.30Z, ATB -120, TZK FLE Standard Time. RealTimeIsUniversal still ABSENT (Windows default); zone synced to dom0 (Europe/Sofia). Expires at the March 2027 transition.",
   "props": {
     "klass": "TemplateVM",
     "maxmem": "0",
@@ -7,14 +7,14 @@
     "vcpus": "4",
     "virt_mode": "hvm"
   },
-  "reseal_reason": "re-sealed 2026-10-15 after two deliberate boots under GOLDEN_UNSEAL. MEASURED, with a classifier that reads the reg output line rather than the echoed command: RealTimeIsUniversal ABSENT (deleted on the first boot - the guest said 'Der Vorgang wurde erfolgreich beendet.' and the re-read 'FEHLER: ... nicht gefunden'), and the guest zone set from 'W. Europe Standard Time' to 'FLE Standard Time' to match dom0's Europe/Sofia. The reproduction value of this German fixture is that its guest zone is SYNCED TO ITS DOM0, as the reporter's is - not the literal W. Europe, which on a Sofia host would leave the guest an hour out from its own dom0. An earlier run of this correction reported 'the delete DID NOT TAKE'; that was FALSE and never reached a seal, because the classifier matched its own echoed command (the rtc-lib banner bug). Neither boot could be sealed at the time: w_halt expired at its 900 s bound with the guest still Running, twice, and a plain qvm-shutdown got it down in about two minutes each time - registered as DEGOLDENHALTSLOW.",
-  "sealed_utc": "2026-10-15T16:01:34Z",
+  "reseal_reason": "deliberate winter re-seal 2026-10-30 for the DST boot clock (ETWCLOCKDST). Revision 1792076230-back aged out of revisions_to_keep=2 when this boot cut 1793395552-back; 1792077421-back from the 2026-10-15 seal is still reachable. The abandoned state is the summer-bias image whose clones booted ~3600 s behind - abandoned ON PURPOSE. Recipe measured first on a disposable clone of win11r-qwt (boot1 -3608.6 s, boot2 +1.5 s), scratchpad/reseal-probe.log. Halted in 12 s, so DEGOLDENHALTSLOW did not repeat.",
+  "sealed_utc": "2026-10-30T21:26:41Z",
   "vm": "win11de-qwt",
   "volumes": {
     "private": {
       "revisions": [
-        "1792076230-back",
-        "1792077421-back"
+        "1792077421-back",
+        "1793395552-back"
       ],
       "revisions_to_keep": "2",
       "size": "21474836480",
@@ -22,12 +22,12 @@
     },
     "root": {
       "revisions": [
-        "1792076230-back",
-        "1792077421-back"
+        "1792077421-back",
+        "1793395552-back"
       ],
       "revisions_to_keep": "2",
       "size": "85899345920",
-      "usage": "10213432229"
+      "usage": "10307921510"
     }
   }
 }

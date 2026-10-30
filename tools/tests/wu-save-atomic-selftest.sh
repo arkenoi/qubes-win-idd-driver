@@ -11,5 +11,8 @@ bad=0
 out=$("$PWSH" -NoProfile -File "$S" -Defect plainwrite 2>&1); rc=$?
 if [ "$rc" = 0 ]; then echo "FAIL  defect 'plainwrite' did NOT break the suite - the atomic write is decoration"; bad=1
 else echo "OK    defect 'plainwrite' -> suite FAILS (a locked file kills the pass again)"; fi
+out=$("$PWSH" -NoProfile -File "$S" -Defect clockblind 2>&1); rc=$?
+if [ "$rc" = 0 ]; then echo "FAIL  defect 'clockblind' did NOT break the suite - the monotonic pass clock is decoration"; bad=1
+else echo "OK    defect 'clockblind' -> suite FAILS (a clock jump corrupts the duration again)"; fi
 [ "$bad" = 0 ] && { echo "SAVE MATRIX OK"; exit 0; }
 echo "SAVE MATRIX FAILED"; exit 1

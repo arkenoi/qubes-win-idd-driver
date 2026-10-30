@@ -169,6 +169,34 @@ $script:LogLossReported = $false
 $script:St = [ordered]@{ action=$Action; phase='init'; ts=$null; owner_pid=0; owner_pid_start=''; count=0; available=@();
                          downloading=$null; installing=$null; result=@(); reboot_needed=$false; error=$null; recovered='';
                          not_actionable=@(); satisfied=@() }
+
+# ---- WU-PASS-CLOCK-BEGIN
+# A PASS DURATION MUST NOT BE READ OFF A CLOCK THAT MOVES UNDER IT. `ts` above is
+# (Get-Date).ToString('s') - LOCAL and with no offset - so any duration taken as the difference of
+# two of them silently absorbs every correction that lands in between, and on this platform those
+# corrections are an hour wide and routine.
+# MEASURED 2026-10-30 on the clean cell of this very campaign:
+#   CLOCKSTAMP guest UTC 2026-10-30T14:08:59.0Z is 3573.6 s BEHIND host stamp 2026-10-30T15:06:54.0Z
+#   carried forward by 99 s of uptime - correcting FORWARD
+# 3573.6 s is 59.56 minutes, and the boot scan starts at boot + 2 min, so a correction landing in a
+# scan adds very close to one hour to anything timed by subtracting wall clocks.
+# WHY THIS MATTERS HERE AND NOT ONLY IN THEORY: the scan task's ExecutionTimeLimit was raised
+# PT20M -> PT2H on the strength of "a FIRST scan after servicing ran >25 min and >66 min on the
+# reporter's template, 2026-09-17". That number survives only as a comment - it is in no findings
+# entry, no ADR and no retained capture - and >66 min is, to the minute, a ~6 min scan plus one of
+# these corrections. It is not refuted, and it is not evidence either until something times a pass
+# with a clock that cannot jump.
+# So: Stopwatch is monotonic (QueryPerformanceCounter) and is unaffected by any clock change. The
+# pass publishes BOTH - elapsed_s, which is the truth, and the wall-clock disagreement, which names
+# the artefact instead of letting it inflate the number. `ts` is untouched: dom0 and the Qube
+# Manager handler read it, and this adds fields rather than changing one.
+$script:PassWatch     = [System.Diagnostics.Stopwatch]::StartNew()
+$script:PassWallStart = Get-Date
+$script:ClockJumpLogged = $false
+# A correction smaller than this is ordinary drift and says nothing; the sweep's own
+# clock_boot_correction_s gate sits at 60 s, so 30 s is below anything it would pass.
+$script:ClockJumpThresholdSec = 30
+# ---- WU-PASS-CLOCK-END
 # ---- WU-SAVE-ATOMIC-BEGIN
 # ATOMIC, AND NEVER FATAL. The Qube Manager handler TAILS this file while a pass writes it (that is
 # what the mutex comment above describes), and a plain Set-Content fails outright on the sharing
@@ -182,7 +210,27 @@ $script:St = [ordered]@{ action=$Action; phase='init'; ts=$null; owner_pid=0; ow
 # one, never a half-written one. Retry briefly, and if it still cannot land, LOG and carry on - a
 # status write must never be able to kill the install it is reporting on. (# GUARD:saveatomic)
 function Save {
-    $script:St.ts = (Get-Date).ToString('s')
+    $now = Get-Date
+    $script:St.ts = $now.ToString('s')
+    # The monotonic truth, and the wall clock's disagreement with it - see WU-PASS-CLOCK above.
+    if ($script:PassWatch) {
+        $mono = $script:PassWatch.Elapsed.TotalSeconds
+        $script:St.elapsed_s = [math]::Round($mono, 1)
+        $wall = ($now - $script:PassWallStart).TotalSeconds
+        $jump = $wall - $mono
+        if ([math]::Abs($jump) -ge $script:ClockJumpThresholdSec) {
+            $script:St.clock_jump_s = [math]::Round($jump, 1)
+            if (-not $script:ClockJumpLogged) {
+                $script:ClockJumpLogged = $true
+                Log ("[WARN] QWTUPDCLOCKJUMP the wall clock moved {0:N1} s against {1:N1} s of real elapsed time during this pass - every duration taken from 'ts' is wrong by that much, 'elapsed_s' is not" -f $jump, $mono)
+            }
+        } elseif ($script:St.Contains('clock_jump_s')) {
+            # RECOMPUTED, NEVER STICKY. The field must mean "this pass is out by this much, now".
+            # Left set, a jump recorded once would be re-asserted by every later write of a state
+            # object that outlives it, and dom0 would read a correction as still pending.
+            $script:St.Remove('clock_jump_s')
+        }
+    }
     # THE LOG'S OWN LOSSES TRAVEL WITH THE STATUS. dom0 reads this file; if lines were dropped, the
     # log it would be told to consult is incomplete, and that must be visible rather than inferred
     # from a gap.

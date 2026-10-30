@@ -47,7 +47,9 @@ no(){ fail=$((fail+1)); printf '  FAIL  %s\n     -> %s\n' "$1" "$2"; }
 
 # ---- T1: ONE CONVENTION - every host-side stamp is `date -u` ---------------------------------------
 # A LOCAL STAMP is a `$(date ...)` (or backtick) whose format names a clock or calendar field and
-# carries no -u. `%s` is an epoch and `%z`/`%:z` IS the zone, so neither is a stamp. tools/tests is
+# carries no -u. `%s` (with or without a `.%N`/`%3N` tail) is an EPOCH and `%z`/`%:z` IS the zone, so
+# neither is a stamp: an epoch difference cannot move with a zone. The `.%N` form was missing from
+# this exemption until 2026-10-30, which flagged accept-load-loop.sh's four `t1-t0` deltas. tools/tests is
 # excluded because its fixtures (this file included) quote the defect on purpose.
 SCOPE=( mgmt/harness/*.sh tools/*.sh .claude/skills/win-guest-e2e/*.sh )
 _rx=$'(\\$\\(|`)date( -u)? (\'\\+|"\\+|\\+)[^\'")`]*'
@@ -56,7 +58,7 @@ local_stamps(){ # $@ files -> one "file:line:call" per local-clock stamp
   for f in "$@"; do
     grep -naoE "$_rx" "$f" 2>/dev/null \
       | grep -avE 'date -u ' \
-      | grep -avE $'date [\'"]?\\+%(s(%[0-9]*N)?|:?z)[\'"]?$' \
+      | grep -avE $'date [\'"]?\\+%(s([.]?%[0-9]*N)?|:?z)[\'"]?$' \
       | sed "s|^|$f:|"
   done; return 0; }
 
