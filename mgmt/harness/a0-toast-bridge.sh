@@ -323,11 +323,11 @@ fi
 # ungraded (INVALID -> EXECUTED-WITH-GAPS, re-run), never a vacuous pass.
 if [ -n "$sent" ]; then
   # A PNG IS NOT A DESKTOP - see the same guard on p3a-etw-gate's T7w.
-  _st4=$(desktop_struct_value "$OUT/p4a-dom0.tar")
+  _st4=$(desktop_struct "$OUT/p4a-dom0.tar")
   if [ "${n4w:-0}" -ge 1 ] && ! desktop_visible "$OUT/p4a-dom0.tar"; then
-    verdict P4w "INSTRUMENT dom0 desktop blank or locked at the bridged forward ack (structure=${_st4:--1} < $DESKTOP_STRUCT_MIN) - a bubble cannot be photographed over a screen lock, so the pixel half is UNGRADED; the ack is on record (P4a). Not a product verdict and not a vacuous pass"
+    verdict P4w "INSTRUMENT dom0 desktop blank or locked at the bridged forward ack (${_st4:-no capture}; floors STRUCT>=$DESKTOP_STRUCT_MIN DARK<$DESKTOP_DARK_MAX) - a bubble cannot be photographed over a screen lock, so the pixel half is UNGRADED; the ack is on record (P4a). Not a product verdict and not a vacuous pass"
   elif [ "${n4w:-0}" -ge 1 ]; then
-    verdict P4w "ATTENDED-PENDING dom0 render witness captured at the bridged forward ack ($n4w PNG in p4a-dom0.tar, desktop structure=${_st4:--1} >= $DESKTOP_STRUCT_MIN) - READ IT: a '$VM: A0T bridged' bubble must be in the dom0 pixels; P4a is the mechanical ack, this capture is the pixel half and only an operator grades it. THE STRUCTURE NUMBER IS NOT A CLAIM THAT THE DESKTOP WAS UNLOCKED - it only says the image is not uniform, and a locker drawing a wallpaper and a clock is not uniform either. First look at the capture and confirm it is a desktop and not a lock screen; if it is a lock screen this row is ungraded, not a missing bubble"
+    verdict P4w "ATTENDED-PENDING dom0 render witness captured at the bridged forward ack ($n4w PNG in p4a-dom0.tar, ${_st4:-?}, both floors cleared) - READ IT: a '$VM: A0T bridged' bubble must be in the dom0 pixels; P4a is the mechanical ack, this capture is the pixel half and only an operator grades it. THE STRUCTURE NUMBER IS NOT A CLAIM THAT THE DESKTOP WAS UNLOCKED - it only says the image is not uniform, and a locker drawing a wallpaper and a clock is not uniform either. First look at the capture and confirm it is a desktop and not a lock screen; if it is a lock screen this row is ungraded, not a missing bubble"
   else
     verdict P4w "INSTRUMENT dom0 render witness capture returned no PNG (p4a-dom0.tar) - the delivery ack is on record (P4a) but the pixel half is UNGRADED; re-run"
   fi

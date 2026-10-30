@@ -1355,11 +1355,11 @@ else
     # A PNG IS NOT A DESKTOP. The old predicate was "the tar holds a PNG", and a photograph of a
     # locked or blanked screen satisfies it - the row then tells the operator to find a bubble in
     # a lock screen, and a report of "no bubble" would blame the product for the screensaver.
-    _st7=$(desktop_struct_value "$OUT/t7b-dom0.tar")
+    _st7=$(desktop_struct "$OUT/t7b-dom0.tar")
     if [ "$n7w" -ge 1 ] && ! desktop_visible "$OUT/t7b-dom0.tar"; then
-      verdict T7w "INSTRUMENT dom0 desktop blank or locked at the forward ack (structure=${_st7:--1} < $DESKTOP_STRUCT_MIN) - a bubble cannot be photographed over a screen lock, so the pixel half is UNGRADED; the ack is on record (T7b). Not a product verdict and not a vacuous pass"
+      verdict T7w "INSTRUMENT dom0 desktop blank or locked at the forward ack (${_st7:-no capture}; floors STRUCT>=$DESKTOP_STRUCT_MIN DARK<$DESKTOP_DARK_MAX) - a bubble cannot be photographed over a screen lock, so the pixel half is UNGRADED; the ack is on record (T7b). Not a product verdict and not a vacuous pass"
     elif [ "$n7w" -ge 1 ]; then
-      verdict T7w "ATTENDED-PENDING dom0 render witness captured at the forward ack ($n7w PNG in t7b-dom0.tar, desktop structure=${_st7:--1} >= $DESKTOP_STRUCT_MIN) - READ IT: an 'A0T p3a-bridged' bubble must be in the dom0 pixels; the ack (T7b) is the mechanical half, this capture is the pixel half and only an operator grades it. THE STRUCTURE NUMBER IS NOT A CLAIM THAT THE DESKTOP WAS UNLOCKED - it only says the image is not uniform, and a locker drawing a wallpaper and a clock is not uniform either. First look at the capture and confirm it is a desktop and not a lock screen; if it is a lock screen this row is ungraded, not a missing bubble"
+      verdict T7w "ATTENDED-PENDING dom0 render witness captured at the forward ack ($n7w PNG in t7b-dom0.tar, ${_st7:-?}, both floors cleared) - READ IT: an 'A0T p3a-bridged' bubble must be in the dom0 pixels; the ack (T7b) is the mechanical half, this capture is the pixel half and only an operator grades it. THE STRUCTURE NUMBER IS NOT A CLAIM THAT THE DESKTOP WAS UNLOCKED - it only says the image is not uniform, and a locker drawing a wallpaper and a clock is not uniform either. First look at the capture and confirm it is a desktop and not a lock screen; if it is a lock screen this row is ungraded, not a missing bubble"
     else
       verdict T7w "INSTRUMENT dom0 render witness capture returned no PNG (t7b-dom0.tar, two attempts) - the ack is on record (T7b) but the pixel half is UNGRADED; re-run"
     fi
