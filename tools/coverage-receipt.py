@@ -42,7 +42,6 @@ import argparse, glob, json, os, re, sys, time
 # model of the format). Its fixture is now the captured shape, and the legacy forms stay parsed.
 VERDICT_RE = re.compile(r"^(?:\[[0-9:]+\]\s*)?(?:\[(?:ERROR|WARN|WARNING|INFO|DEBUG)\]\s*)?(PASS|FAIL)  ([A-Za-z0-9]+-[A-Za-z0-9-]+?)(?: boot \d+)?:\s*(.*)$")
 FOOTER_RE = re.compile(r"^=== MATRIX: (\d+) passed, (\d+) failed ===$")
-CELLS_RE = re.compile(r"^(?:\[[0-9:]+\])?\s*cells:\s*(.*)$")
 INSTRUMENT_TOKENS = ("INVALID", "INSTRUMENT", "INCONCLUSIVE", "BLOCKED", "SKIPPED")
 
 

@@ -18,7 +18,7 @@ REST_SORTED=$(printf '%s\n' $FEATS | tail -n +2 | sed 's/^/feature-/' | sort | p
 ALL_SORTED=$(printf '%s\n' $FEATS | sed 's/^/feature-/' | sort | paste -sd, - | sed 's/,/, /g')
 camp(){ # $1 dir  $2 result of the FIRST listed feature test (pass|fail|none)  $3 result of every OTHER one (pass|fail|none)
   local d=$1; mkdir -p "$d"
-  { echo "[12:00:00]   cells: $MATRIX_CELLS"; echo "=== MATRIX: 96 passed, 0 failed ==="; } > "$d/full.out"
+  { echo "[12:00:00] [INFO]   cells: $MATRIX_CELLS"; echo "=== MATRIX: 96 passed, 0 failed ==="; } > "$d/full.out"
   local t r
   for t in $FEATS; do
     r=$3; [ "$t" = "$FIRST" ] && r=$2
@@ -48,8 +48,8 @@ rcase_run(){ # $1 name $2 cells the re-run covers $3 failures in the re-run's fo
   local d="$T/$1" r="$T/$1-rerun" iso="$T/$1.iso" sha rc out reason=(--rerun-reason "test: the cells re-run")
   [ "${7:-}" = noreason ] && reason=()
   camp "$d" pass pass
-  { echo "[12:00:00]   cells: $MATRIX_CELLS"; echo "[12:30:00] FAIL  WIN10-clean: prime-run hit its deadline"
-    echo "[12:31:00] FAIL  WIN10-reinstall: FAIL - qrexec was DEAD on a running guest at unpark time (QREXECDEAD)"
+  { echo "[12:00:00] [INFO]   cells: $MATRIX_CELLS"; echo "[12:30:00] [INFO] FAIL  WIN10-clean: prime-run hit its deadline"
+    echo "[12:31:00] [INFO] FAIL  WIN10-reinstall: FAIL - qrexec was DEAD on a running guest at unpark time (QREXECDEAD)"
     [ -n "$4" ] && echo "[12:32:00] $4"
     echo "=== MATRIX: 66 passed, 2 failed ==="; } > "$d/full.out"
   mkdir -p "$r"; { echo "[13:00:00]   cells: $2"; echo "=== MATRIX: 30 passed, $3 failed ==="; } > "$r/full.out"
