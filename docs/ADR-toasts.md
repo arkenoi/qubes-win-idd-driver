@@ -382,8 +382,15 @@ what the bound is for. Frames dropped per episode are counted and reported once,
 and on a direct-capable guest at rest none arrives (`CaptureAcquireTimeout` returns `INFINITE` so that a
 desktop at rest cannot wake the capture thread). So if painting stops within the identity read's latency of
 a swap, a slice-fed banner can hold dom0's pre-hold frame until something paints again. Per-window captures
-are unaffected - they are paid on the tracking pass, unconditionally. The gap between Windows painting the
-swap and the hook thread closing the gate is also not measured:
+are unaffected - they are paid on the tracking pass, unconditionally.
+
+A second limit is **inherent and will not be designed away**: the hook event that closes the gate *follows*
+the paint it reacts to, so the gate can never be shut before the first frame of a swap. The agent has no
+signal that arrives before Windows repaints the shared window - the module's own note says a banner arriving
+in place keeps the same rect, so "the event is the only signal". What the gate removes is the rest of the
+swap, not its first frame, and a swap for which no change notice arrives at all is not covered either. Jev,
+asked directly whether the implementation closes the leak, answered 0.58 - above its earlier 0.37 and still
+under the floor, which is the honest reading: narrowed, not eliminated. The gap itself is not measured:
 no guest capture on this disk contains a content swap on a held banner, because those lines only appear on a hold build under
 the toast campaign. Jev named it the one missing measurement (0.54, conf 0.39). The instrument is now in place - the
 `QGATOASTGATE` pair plus the content-changed line are three timestamps on the same window - so the next guest run yields it.
