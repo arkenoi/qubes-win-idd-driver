@@ -174,21 +174,36 @@ release is published with **no `--acceptance-override`** — unlike 4.3.38, 4.3.
 ([`docs/ADR-acceptance.md`](ADR-acceptance.md)) requires **19 suites** for the range this release
 spans. The coverage receipt names **16**. Uncovered:
 
-- `p3a-etw-gate` — **ran and FAILED**, on a real defect found that night: the shadow probe
-  *forwards* toasts it is only permitted to measure, while the allowlisted forward is broken. That
-  is a double-notification mechanism and it is open.
-- `toast-hold-test` — **ran and FAILED**: the ETW proxy is force-terminated and `not relaunched (no
-  relaunch loop)`, so the detector never fires. This is the same gap named under
-  `BROKERHANGNORELAUNCH` below, in a different process.
+- `p3a-etw-gate` — **ran and FAILED on four drills, of which one is a real product defect.**
+  `T7a`/`T7b` are that defect, and they are one bug seen from both sides: the shadow probe emitted
+  **ten forward attempts** (`SENT`/`FWD_RTT`) for toasts it is only permitted to *measure*, while
+  the forward that *is* allowlisted did not happen at all (`warmup=no check=no SHOWBANNER-NOW=absent`).
+  The forward decision is routing the wrong set. That is a double-notification mechanism and it is
+  open. `T7c` passed, so the skip path still works.
+- `p3a-etw-gate` `T5`/`T8c` — **these two are harness defects, not product defects, and saying so
+  is not a downgrade.** Both kill the ETW proxy and then wait for the agent to relaunch it; the
+  suite states outright that "the agent's relauncher IS the thing under test". There is no
+  relauncher, deliberately: [`docs/ADR-supervision.md`](ADR-supervision.md) §5, accepted by the
+  owner on 2026-10-07, is *"Nothing of ours relaunches anything; an exit code is a contract"*, and
+  it names "every helper a supervisor relaunches". The agent did exactly what the ADR requires —
+  logged the external force-termination at ERROR, parked the tier for the boot, and degraded to the
+  listener/DB rungs so notifications still reach dom0. The drills assert a contract that was
+  retired, and they are why this suite has never gone green.
 - `failproof-gates`, `failproof-faultinject` — aborted at their own control step, on a subject that
   had already carried a four-hour campaign, a preflight, a log sweep and an injector upgrade. "The
   subject is dirty" is one of the two causes those suites name for that abort, so this is most
   likely a sequencing error on our side rather than a product verdict. It has not been re-run on a
   clean subject, so it is **uncovered**, not passed.
+- `toast-hold-test` — **ran and FAILED on one row of twenty-one**, `S3ii-1=PREEMPTED`, with 18 PASS
+  and nothing ungraded. That row is `TOASTPREEMPTLOSESBANNER`, which is already declared below
+  under *Known issues shipped knowingly* — a pre-emption taking a displayed banner off screen
+  before the swap. It is a known P1 being shipped knowingly, not a new finding.
 
 16 of 19 is the highest coverage any release here has recorded — the previous best is 4.3.35 with
 13, whose ledger row nonetheless claims `full=true`. It is still not a met gate, and this release
-is not cut on one.
+is not cut on one. It is now also clear *why* the ceiling has stood: the full set requires
+`p3a-etw-gate`, and two of that suite's drills contradict ADR §5, so the gate has been
+unsatisfiable by construction rather than merely unmet.
 
 **How it was published anyway, stated plainly.** At the moment of the cut, `tools/cut-release.sh`
 did not consult the coverage gate at all. The gate exists — `tools/hooks/release-cut-gate.sh`

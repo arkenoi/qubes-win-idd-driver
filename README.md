@@ -33,12 +33,27 @@ verified.
 > `updater-component`).
 >
 > **The change-scoped gate is still not met.** It requires **19 suites** for this range and the
-> receipt names **16** — the highest any release here has recorded, and still short. Two of the
-> missing four *ran and failed* on real defects: `p3a-etw-gate`, where a shadow probe forwards
-> toasts it is only permitted to measure while the allowlisted forward is broken (a
-> double-notification mechanism), and `toast-hold-test`, where the ETW proxy is killed and never
-> relaunched so the detector never fires. The other two aborted at their own control step on a
-> reused test subject and have not been re-run clean — *uncovered*, not passed.
+> receipt names **16** — the highest any release here has recorded, and still short. What the
+> missing four actually are, because the summary matters:
+>
+> * **One real product defect**, in `p3a-etw-gate`: the shadow probe emitted ten forward attempts
+>   for toasts it may only *measure*, while the forward that is allowlisted did not happen at all.
+>   One bug from both sides — the forward decision routes the wrong set. It is a
+>   double-notification mechanism and it is open.
+> * **Two harness defects in the same suite**, which is why it has never gone green: two drills
+>   kill the ETW proxy and wait for the agent to relaunch it, but
+>   [`docs/ADR-supervision.md`](docs/ADR-supervision.md) §5 (owner, 2026-10-07) is *"nothing of ours
+>   relaunches anything"*. The agent behaved exactly as the ADR requires. The drills assert a
+>   retired contract.
+> * **One known issue, already declared**: `toast-hold-test` failed one row of twenty-one,
+>   `S3ii-1=PREEMPTED` — `TOASTPREEMPTLOSESBANNER`, listed under *Known issues shipped knowingly*
+>   in the release notes.
+> * **Two uncovered**, not failed: `failproof-gates` and `failproof-faultinject` aborted at their
+>   own control step on a reused test subject and have not been re-run clean.
+>
+> Because the full set requires `p3a-etw-gate`, and that suite cannot pass while two of its drills
+> contradict the ADR, this gate has been unsatisfiable by construction — which is the real reason
+> no release here has ever met it.
 >
 > The gate that should have refused this cut did not run: it matches the *command text* for
 > `gh release create`, and the sanctioned cut script runs that from inside itself, where the
@@ -103,9 +118,10 @@ build. **All five feature tests ran and passed.** The acceptance record for ISO 
 CLEAN and the release carries no `--acceptance-override`.
 
 The change-scoped gate ([`docs/ADR-acceptance.md`](docs/ADR-acceptance.md)) is a separate question
-and it is **not met**: 19 suites required, 16 covered. `p3a-etw-gate` and `toast-hold-test` ran and
-**failed** on defects named in the release notes; `failproof-gates` and `failproof-faultinject`
-aborted at their own control step on a reused subject and are uncovered rather than passed.
+and it is **not met**: 19 suites required, 16 covered. One real product defect sits in there — the
+toast forward decision routing the wrong set — alongside two drills asserting a contract ADR §5
+retired, one already-declared known issue, and two suites that aborted on a reused subject. Each is
+broken out in the release notes.
 
 The one failure, named: `win11-upgrade`'s guest log sweep, one breach, **zero P1**,
 `signatures_unclassified = 1`, on a stock `qubesdb` line — `QpsWrite: [N] client is disconnected`.
