@@ -34,7 +34,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$Name = 'qrexec-wrapper',
+    [string]$Name = 'qrexec-wrapper,qrexec-agent',
     [int]$ProcId = 0,
     [switch]$Stacks,
     [switch]$Dump,
@@ -54,8 +54,19 @@ if ($ProcId -gt 0) {
     $p = Get-Process -Id $ProcId -ErrorAction SilentlyContinue
     if ($p) { $procs = @($p) } else { Emit "NOPROC pid=$ProcId"; exit 1 }
 } else {
-    $procs = @(Get-Process -Name $Name -ErrorAction SilentlyContinue)
-    if (-not $procs -or $procs.Count -eq 0) { Emit "NOPROC name=$Name"; exit 1 }
+    # A COMMA-SEPARATED LIST, and the default names BOTH sides. In a wedge the stuck child is the
+    # subject, but whether the AGENT is still alive beside it is the whole question 190c190 turns
+    # on - capturing one without the other answers half of it, and a second pushrun to ask is a
+    # second qrexec call into a guest that may not have one to spare.
+    foreach ($nm in ($Name -split ',')) {
+        $nm = $nm.Trim()
+        if (-not $nm) { continue }
+        $found = @(Get-Process -Name $nm -ErrorAction SilentlyContinue)
+        if ($found.Count -eq 0) { Emit "NOPROC name=$nm" } else { $procs += $found }
+    }
+    # A MISSING WRAPPER IS NORMAL - they are per-call and short-lived. Only an empty TOTAL is a
+    # nothing-to-read result, and even then the NOPROC lines above have already said which.
+    if ($procs.Count -eq 0) { Emit "NOPROC_ALL $Name"; exit 1 }
 }
 Emit ("SUBJECTS n=" + $procs.Count)
 

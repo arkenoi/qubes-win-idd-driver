@@ -556,6 +556,50 @@ pool_gate "this campaign" || { say "=== MATRIX: 0 passed, 1 failed ==="; exit 2;
 # can see any of them. A product FAIL and an ungraded INVALID are different severities and say so.
 no(){ FAIL=$((FAIL+1)); local _l="[ERROR] "; case "$*" in *INVALID*) INVALID=$((INVALID+1)); _l="[WARN] " ;; esac; say "${_l}FAIL  $*"; }
 
+# CATCH A WEDGE WHILE IT IS STILL ONE, instead of reading its ashes afterwards.
+# Everything in findings/wedge.md was reconstructed from a memory image taken after a kill, for one
+# reason: a wedged wrapper used to take the agent's event loop with it (130 handles against a
+# 64-handle API, and one WAIT_FAILED ending the loop), so the guest went silent and there was
+# nothing left to ask. core-agent 190c190 is supposed to end that, and this is where the claim gets
+# tested on a real stall: if the probe gets an answer out of a guest that has a stuck wrapper in
+# it, the fix did its job, and if it does not, that is a result too.
+#
+# IT MUST NEVER COST A CELL. The cell has already failed by the time this runs; a capture that
+# throws, hangs or finds nothing changes no verdict and returns 0 either way. It is bounded because
+# the subject may be exactly the guest that cannot answer, and it takes NOTHING when the guest is
+# already gone.
+# NO POLLING, ANYWHERE. This fires once, on a stall the harness has already declared - a watcher
+# sampling guests through the campaign would add qrexec load to the one experiment whose trigger IS
+# qrexec load, which is how self-inflicted load manufactures a false red.
+wedge_live_capture(){ # $1=vm $2=label - advisory, never fails the cell
+  local vm="${1:-}" lbl="${2:-}" out rc
+  [ -n "$vm" ] && [ -n "$lbl" ] || return 0
+  out="$M/$lbl-wedge-live.out"
+  if ! qvm-check --running "$vm" >/dev/null 2>&1; then
+    say "  $lbl: no live capture - $vm is not running, so there is no live process to read"
+    return 0
+  fi
+  say "  $lbl: LIVE CAPTURE of $vm before anything else touches it (bounded 300s)"
+  QTEST_VM="$vm" timeout 300 "$HERE/tools/qtest" pushrun tools/wedge-live-probe.ps1 \
+      -Stacks -Dump >"$out" 2>&1
+  rc=$?
+  if [ "$rc" -eq 124 ]; then
+    # 124 IS A FINDING, NOT A TOOL FAILURE: the probe could not get a word out of the guest, which
+    # is the pre-190c190 shape. Named so a sweep can see it.
+    say "  $lbl: [WARN] QWTWEDGELIVE timeout - $vm answered nothing in 300s; the agent did NOT survive its stuck child"
+    return 0
+  fi
+  if [ "$rc" -ne 0 ]; then
+    say "  $lbl: [WARN] live capture exited $rc - $(tail -1 "$out" 2>/dev/null | tr -d '\r' | cut -c1-110)"
+    return 0
+  fi
+  # The three lines worth having in the campaign log itself; the rest stays in the file.
+  command grep -aE '^(PROC |THREAD .*(Executive|EventPair)|RIP |DUMP_SIZE|DUMP_TIMEOUT|NOPROC_ALL)' "$out" 2>/dev/null \
+    | head -6 | while IFS= read -r _wl; do say "  $lbl: QWTWEDGELIVE $_wl"; done
+  say "  $lbl: live capture written to $out"
+  return 0
+}
+
 # GRADE THE SWEEP'S EXIT CODE, DO NOT READ IT AS A BOOLEAN. log-sweep.sh exits 0 CLEAN, 1 FINDINGS,
 # 3 DATA (collected, but something was empty or unparseable), 4 INCOMPLETE (the judge never ran).
 # The first version of this treated every non-zero rc as "collection FAILED ... no guest logs for
@@ -1815,9 +1859,9 @@ run_install(){ # $1=vm $2=label $3=install-source (drive/dir carrying install.cm
   case $CELL_RC in
     0) say "  $lbl: install reported a RESULT" ;;
     1) no "$lbl: guest went to the recovery screen DURING the install" ;;
-    2) no "$lbl: install hit the 2400s deadline" ;;
+    2) no "$lbl: install hit the 2400s deadline"; wedge_live_capture "$vm" "$lbl" ;;
     3) say "  $lbl: guest halted during/after the install (expected for a two-stage install)" ;;
-    4) no "$lbl: install STALLED (no progress for ${STALL_SECS}s)" ;;
+    4) no "$lbl: install STALLED (no progress for ${STALL_SECS}s)"; wedge_live_capture "$vm" "$lbl" ;;
   esac
   # RE-ASSERT THE LOG BIND, BECAUSE STAGE 2 DELETES THE KEY IT LIVES IN.
   # On reinstall/upgrade/seeded/stock the bind runs right after w_session, BEFORE this install (the
