@@ -174,12 +174,24 @@ release is published with **no `--acceptance-override`** — unlike 4.3.38, 4.3.
 ([`docs/ADR-acceptance.md`](ADR-acceptance.md)) requires **19 suites** for the range this release
 spans. The coverage receipt names **16**. Uncovered:
 
-- `p3a-etw-gate` — **ran and FAILED on four drills, of which one is a real product defect.**
-  `T7a`/`T7b` are that defect, and they are one bug seen from both sides: the shadow probe emitted
-  **ten forward attempts** (`SENT`/`FWD_RTT`) for toasts it is only permitted to *measure*, while
-  the forward that *is* allowlisted did not happen at all (`warmup=no check=no SHOWBANNER-NOW=absent`).
-  The forward decision is routing the wrong set. That is a double-notification mechanism and it is
-  open. `T7c` passed, so the skip path still works.
+- `p3a-etw-gate` — **ran and FAILED on four drills, and all four are defects of the suite.** An
+  earlier version of this section called `T7a`/`T7b` *"a real product defect ... a
+  double-notification mechanism"*. That was wrong. Both were instrument failures, and the
+  correction is the opposite direction from a downgrade: the product was doing what it is
+  specified to do and the harness called it a bug.
+  - `T7a` asserted that the ten `SENT`/`FWD_RTT` lines from five non-allowlisted informational
+    toasts were forwards the shadow probe may not make. They were correct.
+    [`docs/ADR-toasts.md`](ADR-toasts.md) §2, accepted and shipped in 4.3.31, is *"the route is
+    decided per toast; the allowlist is a shortcut, not the gate"*, and line 118 is *"every toast
+    that is not already allowlisted is classified from its own content. `verdict=bridge`
+    forwards"*. `ToastActListingDecide` consults the allowlist **only** when no verdict arrived.
+    Nor was the measure-only rule broken: the shadow classifier derives its verdict from the
+    toast's own payload, and the tier only decides where the row is read from.
+  - `T7b` reported `warmup=no check=no`. The forwards had happened. `fwd_count` matches
+    `HH:MM:SS SENT …` anchored at line start, and an `[INFO] ` level tag had been inserted between
+    the timestamp and the text, so it counted zero where there were five — while `fwd_attempts`,
+    three lines away in the same file, had been updated and stayed correct.
+  - `T7c` passed, so the skip path still works.
 - `p3a-etw-gate` `T5`/`T8c` — **these two are harness defects, not product defects, and saying so
   is not a downgrade.** Both kill the ETW proxy and then wait for the agent to relaunch it; the
   suite states outright that "the agent's relauncher IS the thing under test". There is no
@@ -188,7 +200,7 @@ spans. The coverage receipt names **16**. Uncovered:
   it names "every helper a supervisor relaunches". The agent did exactly what the ADR requires —
   logged the external force-termination at ERROR, parked the tier for the boot, and degraded to the
   listener/DB rungs so notifications still reach dom0. The drills assert a contract that was
-  retired, and they are why this suite has never gone green.
+  retired, and together with `T7a`/`T7b` they are why this suite has never gone green.
 - `failproof-gates`, `failproof-faultinject` — aborted at their own control step, on a subject that
   had already carried a four-hour campaign, a preflight, a log sweep and an injector upgrade. "The
   subject is dirty" is one of the two causes those suites name for that abort, so this is most
@@ -202,8 +214,11 @@ spans. The coverage receipt names **16**. Uncovered:
 16 of 19 is the highest coverage any release here has recorded — the previous best is 4.3.35 with
 13, whose ledger row nonetheless claims `full=true`. It is still not a met gate, and this release
 is not cut on one. It is now also clear *why* the ceiling has stood: the full set requires
-`p3a-etw-gate`, and two of that suite's drills contradict ADR §5, so the gate has been
-unsatisfiable by construction rather than merely unmet.
+`p3a-etw-gate`, and four of that suite's drills contradicted the product's own ADRs or misread
+its own logs, so the gate has been unsatisfiable by construction rather than merely unmet.
+`T7a` and `T7b` are fixed. `T5`/`T8c` are not — re-pointing them at what ADR §5 actually
+promises, or retiring them, is the owner's call. The suite has not been re-run since, so 16 of
+19 remains what is measured, not what is expected.
 
 **How it was published anyway, stated plainly.** At the moment of the cut, `tools/cut-release.sh`
 did not consult the coverage gate at all. The gate exists — `tools/hooks/release-cut-gate.sh`

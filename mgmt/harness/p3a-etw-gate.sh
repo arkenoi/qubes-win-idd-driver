@@ -1199,11 +1199,13 @@ else
 fi
 
 # ---------- T7 A0 regression: the shadow probe is MEASURE-ONLY -------------------------------
-# Routing must be exactly A0's per-app split: allowlisted PS AUMID forwards (delivered per
-# fwd_count) and earns lazy suppression; non-allowlisted control stays windowed with
-# 'skip id='; the toastfire bursts above produced ZERO forward attempts (their AUMIDs are not
-# allowlisted - the classifier WATCHED them, it must not have ROUTED them); and no supervisor
-# relaunch happened. Forward detectors are a0-lib's fwd_count/fwd_attempts (audit 2026-09-05):
+# Routing must be exactly A0's per-app split: the allowlisted PS AUMID forwards (delivered per
+# fwd_count) and earns lazy suppression; the control toast, which carries REAL-CHOICE BUTTONS
+# its plan cannot carry, stays windowed with 'skip id='; and no supervisor relaunch happened.
+# A non-allowlisted INFORMATIONAL toast forwards as well - it is classified from its own
+# content like any other (ADR-toasts 2). T7a asserted the opposite until 2026-10-30; the
+# paragraph above T7a says what that cost. Forward detectors are a0-lib's
+# fwd_count/fwd_attempts (audit 2026-09-05):
 # NEGATIVE must-be-zero asserts use fwd_attempts (ANY anchored SENT line, any outcome, or ANY
 # FWD_RTT line) because BLog's share-mode collision can DROP a SENT line while the forward
 # happened and FWD_RTT ok=1 still records it - a SENT-only grep can HIDE a real forward, the
@@ -1212,13 +1214,70 @@ fi
 # same dropped-SENT shape without false-FAILing. Both proven both directions by fwd_selftest
 # in T0i - that is the named seen-to-fail proof for every T7 assert below.
 log "T7: A0 regression slice - forward/skip/SHOWBANNER unchanged, shadow measure-only"
-if [ -s "$OUT/t6-blog.txt" ]; then
-  t6fwd=$(fwd_attempts "$OUT/t6-blog.txt")
-  [ "${t6fwd:-0}" = 0 ] \
-    && verdict T7a "PASS measure-only: 0 forward-attempt lines (SENT/FWD_RTT, fwd_attempts) for the (non-allowlisted) toastfire burst - shadow classification did not route" \
-    || verdict T7a "FAIL $t6fwd forward-attempt line(s) (SENT/FWD_RTT) during the toastfire burst - the shadow probe ROUTED (or attempted to route) a toast it may only measure"
+# T7a REWRITTEN 2026-10-30. It used to assert ZERO forward attempts during T6's toastfire burst,
+# on the premise "their AUMIDs are not allowlisted, so the classifier may WATCH them but must not
+# ROUTE them". That premise contradicts the product's accepted contract:
+#   * docs/ADR-toasts.md decision 2 - "the route is decided per toast; the allowlist is a
+#     shortcut, not the gate"; line 118 - "every toast that is not already allowlisted is
+#     classified from its own content. verdict=bridge forwards"; line 136 records the measured
+#     non-allowlisted informational toast being bridged. ACCEPTED, shipped in 4.3.31.
+#   * toastactions.h ToastActListingDecide consults `allowlisted` ONLY when no verdict arrived:
+#     `if (verdictKnown) return (routeBridge && plan.ok) ? ForwardWithPlan : Window;`.
+# So a non-allowlisted informational toast classified verdict=bridge forwards BY DESIGN. On
+# 2026-10-30 T7a counted 10 such lines (5 toasts x FWD_RTT+SENT, every one aumid=
+# QubesToastfire.StartShortcut actions=none) and FAILed the product for obeying its own ADR.
+# That verdict was published in the 4.3.39 notes as an open double-notification defect. It was
+# not one, and no measure-only rule was broken either: ShadowClassifyWork derives the verdict
+# from ClassifyToastXmlBytes(payload) - content - and the tier only chooses where the row is
+# read from.
+#
+# What the ladder may NOT do is let the ETW TIER decide a route. That is the property the ADR
+# protects, and notifhost.cpp:1025 names its detector in as many words: "P3AQ_DEFECT_ROUTE -
+# acquisition state gates the A0 forward/skip routing; the routing-invariance detector must then
+# FAIL". No such detector existed - the knob had nothing to break. These two rows are it:
+#   T7a  the CONTENT route is invariant across the tier. Free: both tier states are already on
+#        record over the same fixture kind.
+#   T7d  the ALLOWLIST route is invariant across the tier. This is the half DEFECT_ROUTE breaks
+#        (it sets listed=false whenever the tier is not LIVE, which survives into the `route`
+#        line's verdict= token), and it is graded down in T8c because that is the only window
+#        after T7 where the tier is genuinely down.
+#
+# T7a compares t5-classify.txt (T5's parked arm: src=db, tier down) against t6-classify.txt
+# (T6's restored arm: src=etw-sig, tier up). Both fire start-shortcut/informational toasts.
+# Compare ONLY the routing decision - the verdict, the decision-table row with its reason, and
+# the actions carried. Everything else in the line MUST be allowed to differ: row_latency and
+# corr are acquisition facts (measured ok vs id-ok), src/etw ARE the independent variable, and
+# activator= is a first-fire artifact (measured: 'none' on the first parked toast,
+# 'shortcut-no-activator' on all nine others). A whole-line diff would false-FAIL on all three.
+# It is a SET comparison, not a multiset one: T5 fires 5 distinct titles and T6 one title five
+# times precisely because the parked DB rung disambiguates by content, so the row COUNTS
+# legitimately differ between the arms and only the set of distinct decisions is the property.
+# Only rows the tier actually SERVED are comparable. A parked-arm row the DB rung cannot pin to
+# one wpndatabase entry comes out src=none corr=ambiguous, and the never-guess rule (ADR-toasts 2)
+# makes it verdict=window - correctly. Comparing those would read an ACQUISITION limit as a
+# routing change and FAIL the product for obeying the rule, which is the exact mistake this row
+# was rewritten to stop making. It is not hypothetical: the suite's own T5 comment records the
+# pre-2026-09-06 same-title burst yielding 1 clean src=db and 4x src=none corr=ambiguous, and a
+# title collision would bring that shape back. Unserved rows are graded where they belong -
+# T5db for the parked arm's thinness, T8a for the norow fail-open - and an arm with NO served
+# row lands in the INSTRUMENT branch below rather than passing on an empty set.
+_t7route(){ # classify window -> the distinct routing decisions among the rows the tier SERVED
+  grep -aE 'src=(db|etw-sig) ' "$1" \
+    | grep -aoE 'verdict=[a-z]+ row_latency=[0-9]+ms signals=[^ ]+ corr=[a-z-]+ actions=[^ ]+' \
+    | sed -E 's/ row_latency=[0-9]+ms//; s/ corr=[a-z-]+//' | sort -u
+}
+if [ ! -s "$OUT/t5-classify.txt" ] || [ ! -s "$OUT/t6-classify.txt" ]; then
+  verdict T7a "INSTRUMENT a tier window is missing (t5-classify=$([ -s "$OUT/t5-classify.txt" ] && echo present || echo absent), t6-classify=$([ -s "$OUT/t6-classify.txt" ] && echo present || echo absent)) - routing invariance needs BOTH tier states, ungraded, NOT a vacuous pass"
 else
-  verdict T7a "INSTRUMENT no T6 burst window on record (T6 was ungraded) - measure-only assert has nothing to judge, NOT a vacuous pass"
+  _t7dn="$(_t7route "$OUT/t5-classify.txt")"; _t7up="$(_t7route "$OUT/t6-classify.txt")"
+  _t7nd=$(printf '%s\n' "$_t7dn" | grep -c . || true); _t7nu=$(printf '%s\n' "$_t7up" | grep -c . || true)
+  if [ "${_t7nd:-0}" -lt 1 ] || [ "${_t7nu:-0}" -lt 1 ]; then
+    verdict T7a "INSTRUMENT no SERVED row to compare (tier-down decisions=${_t7nd:-0}, tier-up decisions=${_t7nu:-0}) - the windows exist but carry no src=db/src=etw-sig row with a verdict=/signals=/actions= triple, ungraded, NOT a vacuous pass"
+  elif [ "$_t7dn" = "$_t7up" ]; then
+    verdict T7a "PASS content route invariant across the ETW tier: the tier-down arm (src=db) and the tier-up arm (src=etw-sig) resolve to the same decision set [$(printf '%s' "$_t7dn" | paste -sd';')] - the tier changed the SOURCE of the row, not the route taken from it"
+  else
+    verdict T7a "FAIL the content route CHANGED with the ETW tier - tier-down [$(printf '%s' "$_t7dn" | paste -sd';')] vs tier-up [$(printf '%s' "$_t7up" | paste -sd';')]; acquisition state must not reach the route (ADR-toasts 2)"
+  fi
 fi
 if ! Lw=$(blog_len); then
   verdict T7b "INSTRUMENT blog_len unreadable - allowlisted-forward arm ungraded"
@@ -1576,9 +1635,91 @@ else
         verdict T8c "FAIL tier-down fire classified src=$c_src etw=$c_etw (wanted src=db) - the DB rung did not carry the squatted outage"
       fi
     fi
+    # T8r's offsets are taken HERE, BEFORE T7d fires and waits, and T8r reuses them below.
+    # etw_tier_up only accepts a fresh LIVE/connected line PAST the offset it is given, and the
+    # squatter releases at ~120s - well inside T7d's worst case of a fire plus a 90s wait. Taken
+    # after T7d, an offset could sit on the far side of the recovery it is meant to detect and
+    # T8r would report "tier did not recover" about a tier that had. A probe must not be able to
+    # fail the drill it was inserted into.
+    P8rok=1
+    P8r=$(plog_len) || P8rok=""
+    L8r=$(blog_len) || P8rok=""
+    # T7d: the ALLOWLIST half of the routing-invariance detector T7a's header describes. The
+    # allowlisted PS AUMID is fired HERE, with the tier down, because nowhere else after T7 is
+    # it down: T5 parks the tier but T5r cold-boots to un-park before T6, and T7b/T7c run tier
+    # up. The tier-up reference is already on record from T7b - measured 2026-10-30, ids 25/26:
+    # "route id=25 aumid={1AC14E77-...}\WindowsPowerShell\v1.0\powershell.exe bridge
+    # verdict=classifier+allowlisted actions=none". The token must be the same here.
+    #
+    # This is the row P3AQ_DEFECT_ROUTE is seen-to-fail against, and it is the ONLY one: that
+    # knob sets listed=false while the tier is not LIVE, and `listed` reaches just two things
+    # downstream - ToastActListingDecide, which ignores it whenever a verdict is known, and this
+    # log line's token. So on a DEFECT_ROUTE build a tier-down allowlisted toast with a verdict
+    # still forwards, but logs verdict=classifier (-> FAIL here), and one WITHOUT a verdict
+    # falls from ForwardBlind to Window (-> no route line, a skip instead -> also FAIL here).
+    # T7a's content half cannot see either, because its fixtures are not allowlisted. Both
+    # halves are needed; neither is the detector on its own.
+    if ! L7d=$(blog_len); then
+      verdict T7d "INSTRUMENT blog_len unreadable before the tier-down allowlisted fire - allowlist-invariance arm ungraded, NOT a vacuous pass"
+    elif ! fire_info "A0T p3a-tierdown" > /dev/null 2>&1; then
+      verdict T7d "INSTRUMENT the tier-down allowlisted fire never confirmed FIRED - ungraded, NOT a product verdict"
+    else
+      r7d=""; k7d=""
+      _w7d=$SECONDS
+      for i in $(seq 1 15); do
+        blog_since "$L7d" > "$OUT/t7d-blog.txt" 2>/dev/null
+        r7d=$(grep -aF "$PSAUMID" "$OUT/t7d-blog.txt" | grep -ao 'route id=[0-9]* .* bridge verdict=[a-z+]*' | tail -1)
+        k7d=$(grep -aF "$PSAUMID" "$OUT/t7d-blog.txt" | grep -ac 'skip id=' || true)
+        { [ -n "$r7d" ] || [ "${k7d:-0}" != 0 ]; } && break
+        [ $(( SECONDS - _w7d )) -ge 90 ] && break
+        sleep 3
+      done
+      dismiss_toasts
+      v7d=$(printf '%s' "$r7d" | grep -aoE 'verdict=[a-z+]*$' | cut -d= -f2)
+      # THE TIER MUST STILL HAVE BEEN DOWN WHEN THIS TOAST LANDED, and only the toast's own
+      # CLASSIFY line can say so. The squatter releases at ~120s while T8c's own waits (exit-8
+      # up to 150s, then its CLASSIFY up to 90s) can outlast it, so by the time T7d fires the
+      # tier may already have recovered - and then this row would be comparing a tier-UP route
+      # against a tier-UP route and PASSing on it. That is a vacuous pass, not a measurement.
+      # Key by the id the route/skip line carries, never by "the last CLASSIFY in the window".
+      l7d=$(grep -aF "$PSAUMID" "$OUT/t7d-blog.txt" | grep -a 'route id=\|skip id=' | tail -1)
+      id7d=$(printf '%s' "$l7d" | grep -aoE '(route|skip) id=[0-9]+' | head -1 | cut -d= -f2)
+      c7d=""
+      [ -n "$id7d" ] && c7d=$(grep -aoE "CLASSIFY id=$id7d src=[a-z-]+ etw=[a-z-]+" "$OUT/t7d-blog.txt" | tail -1)
+      # Tier-down must be proven POSITIVELY. An absent CLASSIFY line is not evidence of a down
+      # tier, it is absence of evidence, and falling through it to PASS is how a vacuous pass
+      # gets written. Keyed on etw= rather than src= so an unserved-but-down shape (a tier that
+      # is down AND found no row) still counts as down; only etw=sig-hit means it was serving.
+      # case, not a pipe into grep -q: the script runs under pipefail (grep -q exits on the
+      # first match and the writer takes SIGPIPE -> 141, which reads as "no match").
+      down7d=""
+      case "$c7d" in
+        "")            : ;;              # no CLASSIFY for this id - cannot claim anything
+        *etw=sig-hit*) : ;;              # the tier WAS serving - this is not a tier-down fire
+        *)             down7d=1 ;;
+      esac
+      # EVERY branch below needs the tier-down premise, not just the PASS. With the tier up
+      # this row has no measurement to make in either direction: a right token would be
+      # comparing tier-up against tier-up, and a WRONG one would be ambiguous between the
+      # product and the rig (an AUMID that does not match the allowlist value set at line 402
+      # produces exactly the same token), which is the harness's own definition of INSTRUMENT.
+      # Nothing is lost by not FAILing here - the tier-up allowlisted route is T7b's row, and
+      # the anomaly is printed so it cannot be swallowed.
+      if [ -z "$down7d" ]; then
+        verdict T7d "INSTRUMENT the tier was NOT PROVEN DOWN for this fire (${c7d:-no CLASSIFY for id=${id7d:-?}}) - the squatter most likely released before the toast landed. Without a tier-down fire there is no invariance to compare and a wrong token could as easily be the rig as the product; the tier-up allowlisted route is graded by T7b, not here. Observed anyway: route token='${v7d:-none}', allowlisted skip lines=${k7d:-0}"
+      elif [ "$v7d" = "classifier+allowlisted" ]; then
+        verdict T7d "PASS allowlist route invariant across the ETW tier: with the tier DOWN ($c7d) the allowlisted sender routed verdict=classifier+allowlisted, the same token T7b recorded with it up - acquisition state did not reach the allowlist decision"
+      elif [ -n "$v7d" ]; then
+        verdict T7d "FAIL the allowlist route CHANGED with the ETW tier: with the tier down ($c7d) the allowlisted sender routed verdict=$v7d, where T7b records verdict=classifier+allowlisted with it up - acquisition state reached the routing decision ($(printf '%s' "$r7d" | head -c 160))"
+      elif [ "${k7d:-0}" != 0 ]; then
+        verdict T7d "FAIL the allowlisted sender took the WINDOW path ($k7d skip line(s)) with the tier down ($c7d), where T7b records it forwarding with the tier up - acquisition state reached the routing decision"
+      else
+        verdict T7d "INSTRUMENT the tier-down allowlisted toast produced neither a route nor a skip line within 90s - ungraded, NOT a vacuous pass"
+      fi
+    fi
     # RECOVERY: the squatter releases at ~120s; backoff doubled across the squatted exits, so
     # allow ~6 min (3 bounded etw_tier_up rounds; TODO(RIG)#7's backoff caveat applies).
-    if ! P8r=$(plog_len) || ! L8r=$(blog_len); then
+    if [ -z "$P8rok" ]; then
       verdict T8r "INSTRUMENT log offsets unreadable before the recovery wait - recovery ungraded (a 0 offset would false-pass on the OLD LIVE lines)"
     else
       rec=""
@@ -1619,6 +1760,11 @@ gate_rc=$VS_RC
 # (T6, T8a, T8b, T8c/T8r) grade the tier's behaviour under adversity: a FAIL there blocks, an
 # ungraded one is a re-run request, a PASS-DATUM is a caveat - none of them can turn a proven
 # mechanism into PICK-ETW-BLOCKED, which is reserved for an actual FAIL.
+# T7d is NOT in MECH although it is half of T7a's detector. It can only be graded inside T8c's
+# tier-down window, so every way T8c goes ungraded (no live proxy to squat, the squatter losing
+# the pipe race, an unreadable offset) would take T7d ungraded with it and put the whole gate at
+# UNDECIDED on a drill that did not run. As a degradation-class row it keeps the teeth that
+# matter - a FAIL still reaches PICK-ETW-BLOCKED through VS_FAIL - without that coupling.
 MECH="T2 T3 T3j T4a T7a T7b T7c T7w"
 mech_fail=""; mech_ungraded=""
 for l in $MECH; do

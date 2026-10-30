@@ -36,24 +36,35 @@ verified.
 > receipt names **16** — the highest any release here has recorded, and still short. What the
 > missing four actually are, because the summary matters:
 >
-> * **One real product defect**, in `p3a-etw-gate`: the shadow probe emitted ten forward attempts
->   for toasts it may only *measure*, while the forward that is allowlisted did not happen at all.
->   One bug from both sides — the forward decision routes the wrong set. It is a
->   double-notification mechanism and it is open.
-> * **Two harness defects in the same suite**, which is why it has never gone green: two drills
->   kill the ETW proxy and wait for the agent to relaunch it, but
->   [`docs/ADR-supervision.md`](docs/ADR-supervision.md) §5 (owner, 2026-10-07) is *"nothing of ours
->   relaunches anything"*. The agent behaved exactly as the ADR requires. The drills assert a
->   retired contract.
+> * `p3a-etw-gate` — **all four of its failing drills are defects in the suite, not in the
+>   product.** An earlier version of this section called two of them a real product defect and a
+>   *"double-notification mechanism"*. That was wrong, and wrong in the direction that matters:
+>   it reported shipped, specified behaviour as a bug.
+>   * `T7a` asserted that a toast whose sender is not on the forward allowlist must never be
+>     forwarded. The shipped contract is the opposite:
+>     [`docs/ADR-toasts.md`](docs/ADR-toasts.md) §2 is *"the route is decided per toast; the
+>     allowlist is a shortcut, not the gate"*, and a toast that is not allowlisted is classified
+>     from its own content and bridged when its own verdict says so. The ten forward attempts the
+>     drill counted were five informational toasts routed exactly as the ADR requires.
+>   * `T7b` reported the allowlisted forward broken. It had happened: the delivery counter had
+>     gone blind to an `[INFO]` level tag inserted in front of the lines it matches, and read zero
+>     where there were five.
+>   * `T5`/`T8c` kill the ETW proxy and then wait for the agent to relaunch it, but
+>     [`docs/ADR-supervision.md`](docs/ADR-supervision.md) §5 (owner, 2026-10-07) is *"nothing of ours
+>     relaunches anything"*. The agent behaved exactly as the ADR requires. The drills assert a
+>     retired contract.
 > * **One known issue, already declared**: `toast-hold-test` failed one row of twenty-one,
 >   `S3ii-1=PREEMPTED` — `TOASTPREEMPTLOSESBANNER`, listed under *Known issues shipped knowingly*
 >   in the release notes.
 > * **Two uncovered**, not failed: `failproof-gates` and `failproof-faultinject` aborted at their
 >   own control step on a reused test subject and have not been re-run clean.
 >
-> Because the full set requires `p3a-etw-gate`, and that suite cannot pass while two of its drills
-> contradict the ADR, this gate has been unsatisfiable by construction — which is the real reason
-> no release here has ever met it.
+> Because the full set requires `p3a-etw-gate`, and that suite could not pass while four of its
+> drills contradicted the product's own ADRs or misread its own logs, this gate has been
+> unsatisfiable by construction — which is the real reason no release here has ever met it.
+> `T7a` and `T7b` are now fixed. `T5`/`T8c` are not: whether to re-point them at what ADR §5
+> actually promises or retire them is the owner's call. The suite has not been re-run either
+> way, so 16 of 19 is what is measured, not what is expected.
 >
 > The gate that should have refused this cut did not run: it matches the *command text* for
 > `gh release create`, and the sanctioned cut script runs that from inside itself, where the
@@ -118,10 +129,11 @@ build. **All five feature tests ran and passed.** The acceptance record for ISO 
 CLEAN and the release carries no `--acceptance-override`.
 
 The change-scoped gate ([`docs/ADR-acceptance.md`](docs/ADR-acceptance.md)) is a separate question
-and it is **not met**: 19 suites required, 16 covered. One real product defect sits in there — the
-toast forward decision routing the wrong set — alongside two drills asserting a contract ADR §5
-retired, one already-declared known issue, and two suites that aborted on a reused subject. Each is
-broken out in the release notes.
+and it is **not met**: 19 suites required, 16 covered. No product defect sits in there: the four
+`p3a-etw-gate` failures are all defects of that suite — two drills asserting a contract ADR §5
+retired, one asserting the opposite of ADR-toasts §2, one reading a log line whose format had
+moved — alongside one already-declared known issue and two suites that aborted on a reused
+subject. Each is broken out in the release notes.
 
 The one failure, named: `win11-upgrade`'s guest log sweep, one breach, **zero P1**,
 `signatures_unclassified = 1`, on a stock `qubesdb` line — `QpsWrite: [N] client is disconnected`.
