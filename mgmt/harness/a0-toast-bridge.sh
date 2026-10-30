@@ -57,6 +57,7 @@ source mgmt/harness/vmlock.sh; vm_lock "$VM"   # one harness per guest; see vmlo
 # A kill of this script must leave ZERO orphans churning the guest. job_init owns the EXIT
 # trap - never add another `trap ... EXIT` in this file.
 source mgmt/harness/run-lib.sh; job_init a0-toast-bridge
+source mgmt/harness/desktop-visible-lib.sh   # desktop_struct/_visible - a locked dom0 desktop must not be handed to the operator as a render witness
 source mgmt/harness/verdict-lib.sh   # verdict_aggregate - the three-class (FAIL / ungraded / PASS-DATUM) wrap
 source .claude/skills/win-guest-e2e/e2e-lib.sh
 source mgmt/harness/e2e-wait.sh
@@ -321,8 +322,12 @@ fi
 # branch, never a silent gap, never blocks a CLEAN run). No capture at an ack = a missing datum =
 # ungraded (INVALID -> EXECUTED-WITH-GAPS, re-run), never a vacuous pass.
 if [ -n "$sent" ]; then
-  if [ "${n4w:-0}" -ge 1 ]; then
-    verdict P4w "ATTENDED-PENDING dom0 render witness captured at the bridged forward ack ($n4w PNG in p4a-dom0.tar) - READ IT: a '$VM: A0T bridged' bubble must be in the dom0 pixels; P4a is the mechanical ack, this capture is the pixel half and only an operator grades it"
+  # A PNG IS NOT A DESKTOP - see the same guard on p3a-etw-gate's T7w.
+  _st4=$(desktop_struct_value "$OUT/p4a-dom0.tar")
+  if [ "${n4w:-0}" -ge 1 ] && ! desktop_visible "$OUT/p4a-dom0.tar"; then
+    verdict P4w "INSTRUMENT dom0 desktop blank or locked at the bridged forward ack (structure=${_st4:--1} < $DESKTOP_STRUCT_MIN) - a bubble cannot be photographed over a screen lock, so the pixel half is UNGRADED; the ack is on record (P4a). Not a product verdict and not a vacuous pass"
+  elif [ "${n4w:-0}" -ge 1 ]; then
+    verdict P4w "ATTENDED-PENDING dom0 render witness captured at the bridged forward ack ($n4w PNG in p4a-dom0.tar, desktop structure=${_st4:--1} >= $DESKTOP_STRUCT_MIN) - READ IT: a '$VM: A0T bridged' bubble must be in the dom0 pixels; P4a is the mechanical ack, this capture is the pixel half and only an operator grades it. THE STRUCTURE NUMBER IS NOT A CLAIM THAT THE DESKTOP WAS UNLOCKED - it only says the image is not uniform, and a locker drawing a wallpaper and a clock is not uniform either. First look at the capture and confirm it is a desktop and not a lock screen; if it is a lock screen this row is ungraded, not a missing bubble"
   else
     verdict P4w "INSTRUMENT dom0 render witness capture returned no PNG (p4a-dom0.tar) - the delivery ack is on record (P4a) but the pixel half is UNGRADED; re-run"
   fi

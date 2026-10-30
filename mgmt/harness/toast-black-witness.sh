@@ -33,6 +33,7 @@ mkdir -p "$OUT"
 say(){ echo "[$(date -u +%H:%M:%S)] $*"; }
 
 source mgmt/harness/vmlock.sh
+source mgmt/harness/desktop-visible-lib.sh   # a round graded against a lock screen is not a round
 vm_lock "$VM"
 trap 'vm_unlock "$VM"' EXIT
 
@@ -105,6 +106,18 @@ for r in $(seq 1 "$ROUNDS"); do
   clear_toasts
   # BASELINE, ASSERTED. Without this a round where no toast ever appears reads as "never black".
   QTEST_VM=$VM timeout -k 5 90 ./tools/qtest fullshot "$OUT/r$r-base.tar" >/dev/null 2>&1
+  # A locked or blanked desktop makes the whole round meaningless: the locker is mapped
+  # fullscreen and override-redirect, which is exactly what cut_toast selects on, so grading
+  # would proceed against the lock screen instead of a toast. Checked on the baseline capture,
+  # before anything is cut out of it.
+  if ! desktop_visible "$OUT/r$r-base.tar"; then
+    say "  round $r VOID: dom0 desktop blank or locked (structure=$(desktop_struct_value "$OUT/r$r-base.tar") < $DESKTOP_STRUCT_MIN) - a toast cannot be"
+    say "                photographed over a screen lock, and the locker is itself a fullscreen"
+    say "                override-redirect window, so cut_toast would grade IT. Refusing to grade."
+    fails=$((fails+1))
+    sleep 12
+    continue
+  fi
   base=$(cut_toast "$OUT/r$r-base.tar" "r$r-base")
   if [ "$base" != "NOTOAST" ]; then
     say "  round $r VOID: a toast is STILL on screen after the dismiss ($base) - refusing to grade"
