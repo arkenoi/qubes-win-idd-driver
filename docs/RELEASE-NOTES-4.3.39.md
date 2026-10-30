@@ -148,21 +148,58 @@ answered, for reasons recorded in `docs/ADR-boot.md`.
 
 ## What was verified, and what was not
 
-**This section is incomplete and must be replaced before this release is cut.** As written it
-reports only what is true before the acceptance campaign, and a release published with this text
-still standing would be making no claim at all about its own testing. The campaign writes a record
-keyed on the ISO's own hash, and `tools/cut-release.sh` refuses to publish without one — that gate
-is separate from this file and cannot be satisfied by it, so the risk here is a published page that
-says less than the evidence does, not an untested release.
+**The acceptance matrix ran against these exact bytes and came back clean.** Eight cells — clean
+install, same-version reinstall, in-place upgrade and template→AppVM derivation, on both Windows 10
+and Windows 11 — **89 checks passed, 0 failed**. Per cell:
 
-What is true on these bytes today: CI is green on the build commit, and the release-package
-preflight reports `PREFLIGHT CLEAR` — every fix under test is present in the package, and there has
-been no product drift since it was built.
+| cell | PASS | FAIL |
+|---|---|---|
+| `WIN10-clean` | 14 | 0 |
+| `WIN10-reinstall` | 12 | 0 |
+| `WIN10-upgrade` | 13 | 0 |
+| `WIN10-appvm` | 3 | 0 |
+| `WIN11-clean` | 14 | 0 |
+| `WIN11-reinstall` | 12 | 0 |
+| `WIN11-upgrade` | 13 | 0 |
+| `WIN11-appvm` | 3 | 0 |
 
-What is **not** yet true: the acceptance matrix has not run against this package. Until it has,
-none of the fixes above has a campaign measurement behind it, and the de-slice, desktop-loss and
-capture-watchdog changes in particular are argued from source and from earlier runs rather than
-demonstrated on this build.
+**All five feature tests passed** — `crop-before-map`, `notify-errors-guest-test`,
+`supervision-gate`, `template-update`, `updater-component`. That is the first release in this
+series where none of them is uncovered.
+
+The acceptance record for ISO `19dcd1bd…` reads **CLEAN**, 6 cell-groups clean, 0 failed, and this
+release is published with **no `--acceptance-override`** — unlike 4.3.38, 4.3.37 and 4.3.36.
+
+**What was NOT verified, and it is not a small thing.** The change-scoped gate
+([`docs/ADR-acceptance.md`](ADR-acceptance.md)) requires **19 suites** for the range this release
+spans. The coverage receipt names **16**. Uncovered:
+
+- `p3a-etw-gate` — **ran and FAILED**, on a real defect found that night: the shadow probe
+  *forwards* toasts it is only permitted to measure, while the allowlisted forward is broken. That
+  is a double-notification mechanism and it is open.
+- `toast-hold-test` — **ran and FAILED**: the ETW proxy is force-terminated and `not relaunched (no
+  relaunch loop)`, so the detector never fires. This is the same gap named under
+  `BROKERHANGNORELAUNCH` below, in a different process.
+- `failproof-gates`, `failproof-faultinject` — aborted at their own control step, on a subject that
+  had already carried a four-hour campaign, a preflight, a log sweep and an injector upgrade. "The
+  subject is dirty" is one of the two causes those suites name for that abort, so this is most
+  likely a sequencing error on our side rather than a product verdict. It has not been re-run on a
+  clean subject, so it is **uncovered**, not passed.
+
+16 of 19 is the highest coverage any release here has recorded — the previous best is 4.3.35 with
+13, whose ledger row nonetheless claims `full=true`. It is still not a met gate, and this release
+is not cut on one.
+
+**How it was published anyway, stated plainly.** At the moment of the cut, `tools/cut-release.sh`
+did not consult the coverage gate at all. The gate exists — `tools/hooks/release-cut-gate.sh`
+refuses `gh release create`, a `git tag v…` or a push of a v-tag unless the receipt satisfies
+`tools/gate-scope.py check` — but it matches the *command text*, and the sanctioned cut path runs
+`gh release create` from inside a script, where the matcher cannot see it. So the one path a
+release is actually cut by was the one path that gate was blind to, and this release went out
+through it. The check has since been moved in-process into `tools/cut-release.sh`, before any asset
+is uploaded, where no wrapper can hide it; a short receipt now requires an explicit
+`--coverage-override` whose reason is published in the release body. This release predates that
+change and carries no such banner, which is why it is written out here instead.
 
 ## Known issues shipped knowingly
 
