@@ -261,6 +261,25 @@ $script:QrexecAgentReleased = $false
 # buffered tail is a lost tail. FileOptions.WriteThrough is what LogSafeFlush=1 gives the native
 # modules (FILE_FLAG_WRITE_THROUGH) - fastfat completes the data and the directory entry at the
 # device before the write returns. Add-Content does not do this.
+# THE DIRECTORY IS RESOLVED LAZILY AND THE LATCH IS ON SUCCESS ONLY, MEASURED 2026-10-30.
+# It used to latch on the FIRST ATTEMPT, and that cost the mirror every run where the root key was
+# not already there - which is EVERY CLEAN INSTALL, because this installer creates LogDir itself
+# ("seeded gui-agent registry defaults ... LogDir=Q:\Qubes Logs - was unset") about half a minute
+# in, long after the first line is written. Counted on the log volume the host reads without
+# qrexec, over the two releases built since the mirror shipped (rel-40911442205, rel-40976966595):
+#     win10-clean, win11-clean                NO mirror   (4 of 4)
+#     win10/11-reinstall, win10/11-upgrade    mirror      (8 of 8)
+# The primary C: log was complete in all twelve, so nothing about the install differed - only
+# whether HKLM...\Qubes Tools\LogDir happened to exist at line 1. A guest whose log volume is not
+# mounted yet fails the same way, and so does any first install on a guest that never had QWT.
+# The ONE-SHOT property the latch was for is kept, and it is about SUCCESS: msiexec rewrites the
+# key as it upgrades, so once a directory has been resolved the key is never read again and the
+# mirror does not follow it somewhere else halfway through the run.
+# The lines written before LogDir exists are NOT replayed, deliberately: they are the opening
+# banner, the elevation check and the argument parsing, and resolution succeeds at line 16 of 210
+# - 35 lines before msiexec and long before the qrexec hold that is the only reason this sink
+# exists. The mirror carries the whole window it was built to carry, and the primary log on C:
+# keeps the opening for any guest that can be reached at all.
 $script:MirrorLog      = $null
 $script:MirrorResolved = $false
 
@@ -285,15 +304,18 @@ function Get-PvStageOnly {
 }
 
 function Resolve-MirrorLog {
-    # Resolved ONCE, on the first line written, then cached: msiexec rewrites this key as it
-    # upgrades, and the mirror must not follow it somewhere else halfway through the run.
-    $script:MirrorResolved = $true
+    # Resolved ONCE PER SUCCESS, then cached - see the note at $script:MirrorLog. A failed attempt
+    # returns with the state untouched so the next line tries again; only an opened file latches.
+    $candidate = $null
     try {
         $dir = (Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -Name 'LogDir' -ErrorAction Stop).LogDir
         if (-not $dir) { return }
         if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
-        $script:MirrorLog = Join-Path $dir 'qwt-improved-install.log'
-    } catch { $script:MirrorLog = $null; return }
+        $candidate = Join-Path $dir 'qwt-improved-install.log'
+    } catch { return }
+    if (-not $candidate) { return }
+    $script:MirrorLog      = $candidate
+    $script:MirrorResolved = $true
     # The volume outlives the run and this opens in Append mode, so without a banner two runs are
     # one undelimited file. Safe to call: MirrorResolved is already $true, so this does not recurse.
     Write-MirrorLine ('=== INSTALL-LOG MIRROR === pid={0} primary={1} opened={2}' -f $PID, $script:LogFile, (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))

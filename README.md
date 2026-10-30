@@ -96,7 +96,12 @@ double notifications. The boot clock pull is gone, and the installer's log no lo
 channel the install itself holds closed: it mirrors to `Q:\Qubes Logs\qwt-improved-install.log`,
 written through rather than buffered, so a hung or killed install still leaves a log that ends on
 the step it hung in. If you have hit the installer leaving a dead empty window, **that log is now
-worth sending.**
+worth sending** — but on 4.3.39 itself the mirror appears only where Qubes Tools was already
+installed. On a first install the registry value it resolves does not exist yet (the installer
+creates it), the resolution was cached as a failure, and the mirror stayed off for the whole run:
+absent in all four clean-install cells and present in all eight reinstall/upgrade cells of the two
+builds since it shipped. On 4.3.39, send `C:\qwt-improved-install.log` instead. The next build
+caches only a directory that opened, so the mirror starts as soon as the value exists.
 
 **Carried forward from 4.3.38: "updates available" stops coming back a minute after you updated.**
 Windows Defender republishes its virus definitions several times a day, and the guest was reporting

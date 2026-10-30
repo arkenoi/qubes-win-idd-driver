@@ -128,6 +128,19 @@ are killed rather than shut down and a buffered tail is a lost tail. On an ordin
 simply means the setup log lands beside every other module's log instead of alone at the root of
 `C:`.
 
+**CORRECTED 2026-10-30: in 4.3.39 this works only if Qubes Tools was already installed.** The
+directory was resolved on the first line written and the result was cached whether or not it
+resolved, so a run that found no `LogDir` value in the registry at that first line had the mirror
+switched off for the rest of the install — and a **first** install has no such value, because this
+installer is what creates it, about half a minute in. Counted on the log volume over the two builds
+made since the mirror shipped: present in all eight reinstall and upgrade cells, absent in all four
+clean-install cells, with the `C:` log complete in all twelve. So the one case the mirror was built
+for — the fresh guest whose install hangs, which is the install a new user is running when they are
+asked for this log — is the one case it did not cover. Fixed in the next build: the cache now
+latches only on a directory that actually opened, so the mirror starts the moment the value exists
+(measured on a real Windows 11 guest against the real registry, with the value first absent and
+then created mid-run, and again with it pointing at a volume that is not mounted yet).
+
 The same change fixed an installer-side crash of its own: a `schtasks` probe added with the
 clock-sync removal merged stderr into the success stream, which under `ErrorActionPreference='Stop'`
 threw before the probe could read its own exit code, and killed stage 2 on any guest where the task
