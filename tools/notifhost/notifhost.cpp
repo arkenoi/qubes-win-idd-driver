@@ -3503,8 +3503,16 @@ static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring con
         return false;                                 // genuinely the console user: send inline
 
     // Same UTF-16LE + BOM notify file the inline path reads; deleted by the reader.
+    // THE PID IS PART OF THE NAME, as it already is for the sibling deferred- queue
+    // (NotifyDeferWrite below). A tick alone is not a unique name: GetTickCount64's resolution is
+    // the scheduler quantum, ~15 ms, and two one-shots inside one tick would share this path - the
+    // second's write would overwrite the first's text, and the second's child reading and deleting
+    // it would make the FIRST parent's existence check read "delivered" for content that was never
+    // sent. Concurrent one-shots are separate processes (each --notify invocation is its own), so
+    // the pid separates them. The delivery verdict below is only as sound as this name.
     std::wstring dir = StateDir();
-    std::wstring file = dir + L"\\handoff-" + std::to_wstring(GetTickCount64()) + L".txt";
+    std::wstring file = dir + L"\\handoff-" + std::to_wstring(GetTickCount64())
+                      + L"-" + std::to_wstring(GetCurrentProcessId()) + L".txt";
     std::wstring text = summary; if (!body.empty()) { text += L"\n"; text += body; }
     std::vector<BYTE> raw; raw.push_back(0xFF); raw.push_back(0xFE);
     raw.insert(raw.end(), (const BYTE*)text.data(), (const BYTE*)text.data() + text.size() * sizeof(wchar_t));
@@ -3518,8 +3526,11 @@ static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring con
     wchar_t shortFile[MAX_PATH] = { 0 };
     if (!GetShortPathNameW(file.c_str(), shortFile, RTL_NUMBER_OF(shortFile))) wcscpy_s(shortFile, file.c_str());
 
-    // A unique task name per send: concurrent errors must not delete each other's task.
-    std::wstring task = L"QwtNotifyOnce-" + std::to_wstring(GetTickCount64());
+    // A unique task name per send: concurrent errors must not delete each other's task. Same reason
+    // the file above carries the pid - a tick alone is not unique at ~15 ms resolution, and this
+    // name is what the /create, /run and /delete below all address.
+    std::wstring task = L"QwtNotifyOnce-" + std::to_wstring(GetTickCount64())
+                      + L"-" + std::to_wstring(GetCurrentProcessId());
     wchar_t cmd[MAX_PATH * 3 + 256];
     swprintf(cmd, RTL_NUMBER_OF(cmd),
              L"schtasks.exe /create /tn %s /tr \"%s --notify-file %s\" /sc once /st 00:00 /ru %s /it /f",
@@ -3556,12 +3567,30 @@ static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring con
     // it. So a handoff file that is STILL THERE after the wait means the reader never got it. That
     // is locale-independent, which parsing schtasks' "Last Result" would not be - this project ships
     // a German golden and localised output has bitten it before.
-    const bool delivered = (GetFileAttributesW(file.c_str()) == INVALID_FILE_ATTRIBUTES);
+    bool delivered = (GetFileAttributesW(file.c_str()) == INVALID_FILE_ATTRIBUTES);
 
     swprintf(cmd, RTL_NUMBER_OF(cmd), L"schtasks.exe /delete /tn %s /f", task.c_str());
     STARTUPINFOW si3 = { sizeof(si3) }; PROCESS_INFORMATION pi3 = {};
     if (CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si3, &pi3))
     { WaitForSingleObject(pi3.hProcess, 15000); CloseHandle(pi3.hThread); CloseHandle(pi3.hProcess); }
+
+    // RE-READ THE VERDICT, BECAUSE THE ONE ABOVE IS NOW SECONDS OLD AND ACTING ON IT COSTS A
+    // DUPLICATE. Between that read and this branch sits a whole `schtasks /delete` round trip - a
+    // CreateProcessW plus a wait of up to 15 s - and a child that started late reads the file
+    // inside that window, which DELETES it (ReadNotifyFile's `take`) and sends. The stale verdict
+    // then says "never read" about a message that was just delivered, this function returns false,
+    // and NotifyOnceMain's caller contract sends it INLINE as well: two bubbles for one message.
+    // That is exactly the triple in GWeck's 4.3.39 bundle (forum 42717 #204), in that order -
+    // `one-shot sent ok=1`, `handoff ... never read`, `one-shot sent ok=1` again, three messages
+    // each seen twice - and the order is what identifies it, since the parent cannot log its own
+    // inline `sent ok=1` BEFORE this branch runs.
+    // IT CANNOT LOSE A MESSAGE. The re-read only ever turns a false negative into delivered=true;
+    // a file that is genuinely still there reads the same as before and still falls through to the
+    // loud branch. RESIDUAL, unmeasured: a child slower than the whole /run + 6 s + /delete
+    // sequence still produces a double, which is the Sleep(6000) bound's own question
+    // ([[NOTIFYSENTTWICEAFTERAFAILEDHANDOFF]]) and not a bound this change may guess at.
+    if (!delivered)
+        delivered = (GetFileAttributesW(file.c_str()) == INVALID_FILE_ATTRIBUTES);
 
     if (!delivered)
     {
@@ -3574,9 +3603,16 @@ static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring con
         // valid and GetLastError() here would be a stale value from an unrelated call. Report what
         // is actually known: the attributes, and the exact strings the child was handed.
         const DWORD attr = GetFileAttributesW(file.c_str());
+        // summary= IS WHAT MAKES THIS ATTRIBUTABLE. Parent and child append to the SAME log with no
+        // pid or role in the line (qtb_shared.h BLogV: `HH:MM:SS [LEVEL] msg`, and a prefix must not
+        // grow - inserting [INFO] there already blinded a0-lib.sh's fwd_count,
+        // [[FWDCOUNTBLINDTOTHISBUILDSBRIDGELINES]]). Every other line on this path already names its
+        // summary; this one, the only total failure, named only a tick-stamped file nothing else
+        // mentions - so with three concurrent one-shots in flight, as in GWeck's bundle, no reader
+        // could tell which message the failure belonged to or whose `sent ok=1` preceded it.
         BLogE(L"NOTIFY handoff: the relaunched instance never read the handoff - this message reaches "
-              L"nobody. file=%s attr=0x%lx short=%s ran-as=%s session=%lu self=%s",
-              file.c_str(), attr, shortFile, who.c_str(), active, shortSelf);
+              L"nobody. file=%s attr=0x%lx short=%s ran-as=%s session=%lu self=%s summary=%s",
+              file.c_str(), attr, shortFile, who.c_str(), active, shortSelf, summary.c_str());
         DeleteFileW(file.c_str());   // the reader did not take it; do not leave it to accumulate
         return false;
     }
