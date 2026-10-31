@@ -222,9 +222,40 @@ finish(){ # $1=rc $2=message  - every exit goes through here and says which exit
       \( -name '*.log' -o -name '*.out' -o -name '*.cur' -o -name '*.tail' \) \
       -size -8M -size +0 2>/dev/null)
   fi
+  # A VERDICT ABOUT THIS RUN MUST BE SCOPED TO THIS RUN, and until now this call passed only a file
+  # list while its sibling at matrix.sh:3660 passed --build and --since. The campaign half was fixed
+  # on 2026-10-24 with its own measurement (503 lines predating their own cell's window across eight
+  # cells of run 40037710497); this half - the path that runs on EVERY fix on this project - was left.
+  # MEASURED 2026-10-30, run 41138837627 over the 303fb40c package: this cell exited rc=3 on
+  # `QpsRead: [N] client is disconnected` x31 <== ROSE from x17 and `QpsReaderThread: [N] read failed`
+  # x32 <== ROSE from x16, and stopped a P1 fix's guest acceptance from running. Per file: this run's
+  # upgrade boot wrote 14/14, which is what all four prior runs of this same shape read (40976966595,
+  # 40407378739 twice, 40364796167); the other 17/18 came from qubesdb-daemon-20261030-222404, a boot
+  # whose SIBLING log this very gate named `gui-agent 4.3.35.795 (superseded by 4.3.39.1187)` and put
+  # in its prior-build exclusion. It arrived inside the image - the golden's own re-seal boot, 2 h 21
+  # min before this run started - and it escaped the version-based exclusion because qubesdb-daemon's
+  # LogInit prints module, uptime, user and pid and NO version, so the attributor has no version to
+  # bill it with and only a clock could reach it. That residual is recorded, not coded around
+  # (Jev record_and_leave 0.75): the window is what covers a version-less module here.
+  # NOTHING BECOMES SILENTLY CLEAN. sweep-gate.sh prints what the window dropped as a figure for
+  # exactly this reason - a wrong --since shows up there as an implausible count, not as a pass.
+  # THE STAMP COMES FROM attempt_id, NOT FROM $RUN_ID. attempt_id mints YYYYMMDDTHHMMSSZ-<pid> in
+  # UTC and `export RUN_ID`s it - but every caller invokes it as $(attempt_id), and an export inside
+  # a command substitution never reaches the parent, which is why that function keeps a $$-keyed
+  # memo file at all. Reading $RUN_ID here left it EMPTY and the guard below silently omitted the
+  # flag: measured on run 41138837627 at 23:44:05Z, where the gate printed no PRIOR-RUN line in
+  # either form and the counts stayed x31/x32. Calling attempt_id reads the memo every subshell
+  # shares, which is the same value $OUT is named after.
+  _sg_since=$(attempt_id | sed -E \
+    's/^([0-9]{4})([0-9]{2})([0-9]{2})T([0-9]{2})([0-9]{2})([0-9]{2})Z-[0-9]+$/\1-\2-\3T\4:\5:\6Z/')
+  # A shape the sed does not match omits the flag rather than passing the gate garbage;
+  # ${PV:+} covers an early refusal reaching finish() before PV is read (it is assigned in the main
+  # shell below, so finish - a function of that same shell - sees it on every non-early exit).
+  case "$_sg_since" in [0-9][0-9][0-9][0-9]-??-??T??:??:??Z) ;; *) _sg_since= ;; esac
   if [ "${#_swg[@]}" -gt 0 ] && [ -x tools/sweep-gate.sh ]; then
     log "sweep-gate: ${#_swg[@]} input(s) - this run's log plus the guest's own logs from $OUT/logvol"
-    if bash tools/sweep-gate.sh "${_swg[@]}" >>"$OUT/sweep-gate.out" 2>&1; then
+    # shellcheck disable=SC2086
+    if bash tools/sweep-gate.sh ${PV:+--build "$PV"} ${_sg_since:+--since "$_sg_since"} "${_swg[@]}" >>"$OUT/sweep-gate.out" 2>&1; then
       log "sweep-gate: no undeclared error-shaped line in this run's log or the guest's"
     else
       grep -a '^  ' "$OUT/sweep-gate.out" | tail -8 | while IFS= read -r l; do log "  $l"; done
