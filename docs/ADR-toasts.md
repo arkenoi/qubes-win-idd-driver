@@ -71,7 +71,7 @@ flowchart TD
 | 8 | When the classifier cannot trust its inputs, it stops classifying | ACCEPTED | 4.3.31 |
 | 9 | The allowlist is a guest-side convenience; the switches that matter are dom0's | ACCEPTED | 4.3.30 |
 | 10 | The guest banner is suppressed by not mapping it, never by ShowBanner | ACCEPTED (owner, Jev); built for 4.3.35, guest acceptance owed | 2026-10-04 |
-| 11 | A toast's buttons travel to dom0 as actions, and a dom0 click is carried out in the guest - all of them or none | PROPOSED (owner queued it, Jev scoped it); built 2026-10-07, offline evidence only, guest test owed | 2026-10-07 |
+| 11 | A toast's buttons travel to dom0 as actions, and a dom0 click is carried out in the guest - all of them or none | ACCEPTED (owner, 2026-10-31); shipped - 4.3.36 carries seven fixes to the buttons a forwarded notification carries | 2026-10-31 |
 
 Status words and the section format are defined in `docs/ADR-README.md`.
 
@@ -331,12 +331,16 @@ measurement: whether the capture path can hold back one mapped window's frames (
 
 ## 11. A toast's buttons travel to dom0 as actions, and a dom0 click is carried out in the guest - all of them or none
 
-**Status:** PROPOSED. Queued by the owner 2026-10-02 ("an ok/cancel choice can be backrouted?", "how feasible is it to
-re-render toast xml to dom0 actionable notification?" - "queue it after the acceptances and gwecks update fix");
-scope by Jev 2026-10-02 (1.00: text + buttons + default click, back-route protocol 3.7/4 and Win32 COM-activator 2.8/4
-actions, UWP 0.0, system/background 0.1); the capability question by Jev 2026-10-06 (0.76); the failure handling by Jev
-2026-10-06 (0.71). Built 2026-10-07 on `feat/toast-actions`; the evidence is offline only and the guest test is owed
-(below); not in any release.
+**Status:** ACCEPTED (owner, 2026-10-31: the all-or-none action route is the shipped behaviour, and the
+"stays a guest window" reading of §2 for every toast with buttons is superseded by this section). Shipped: the
+route is in the release builds, and `docs/RELEASE-NOTES-4.3.36.md` records seven fixes to the buttons a forwarded
+notification carries. History of the decision: queued by the owner 2026-10-02 ("an ok/cancel choice can be
+backrouted?", "how feasible is it to re-render toast xml to dom0 actionable notification?" - "queue it after the
+acceptances and gwecks update fix"); scope by Jev 2026-10-02 (1.00: text + buttons + default click, back-route
+protocol 3.7/4 and Win32 COM-activator 2.8/4 actions, UWP 0.0, system/background 0.1); the capability question by
+Jev 2026-10-06 (0.76); the failure handling by Jev 2026-10-06 (0.71); built 2026-10-07 on `feat/toast-actions`.
+The guest test named below has no record in this repo as of 2026-10-31; the status above is the owner's decision,
+not that test.
 
 **Context.** §2 keeps every toast with real-choice buttons (the classifier's row 4) on the window path, because the
 bridge sent dom0 no actions and could not have carried a click back. The stock dom0 proxy can: it relays the guest's
