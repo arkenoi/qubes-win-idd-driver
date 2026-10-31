@@ -119,19 +119,20 @@ fi
 
 # The GUEST agreeing is not enough - the agent must have followed, or every gate compares against a
 # screen size the agent does not believe in. This is the check that was missing on 2026-08-30.
-cat > "$TMP/p5-agentscreen.ps1" <<'PS'
-$ErrorActionPreference='Continue'
-$d=(Get-ItemProperty 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -EA SilentlyContinue).LogDir
-$f=(Get-ChildItem $d -Filter 'gui-agent-*.log' -EA SilentlyContinue | Sort-Object LastWriteTime -Desc | Select-Object -First 1)
-if(-not $f){Write-Output 'AGENTSCREEN none';exit 1}
-$c = Get-Content $f.FullName -Tail 3000
-$m = $c | Select-String -Pattern 'A6CONFIGURE window 0 -> (\d+)x(\d+)' | Select-Object -Last 1
-if($m){ Write-Output ('AGENTSCREEN ' + $m.Matches[0].Groups[1].Value + 'x' + $m.Matches[0].Groups[2].Value) }
-else  { Write-Output 'AGENTSCREEN no-configure-line' }
-PS
-as=$(T=300 q pushrun "$TMP/p5-agentscreen.ps1" | tr -d '\r' | grep -ao 'AGENTSCREEN .*' | head -1)
+# READ THE BELIEF, NOT THE ANNOUNCEMENT (2026-11-01). Until then this grepped the agent's last
+# `A6CONFIGURE window 0 -> WxH` - the whole-desktop configure the agent sends dom0 only while it
+# holds a screen grant. A seamless guest never holds one (ADR-windows s5: "A seamless guest
+# therefore never holds a whole-desktop grant (SeamlessNoScreenGrant, on by default)"; shipped
+# 2026-09-13 in agent 2862c13; main.c: "the A6 window-0 configure echo is dump-coupled and is
+# skipped with the dump"). So the line never appeared, the reader said `no-configure-line`, this
+# FATALed, verdicts.tsv stayed empty and failproof-gates aborted "SG4 is not green at baseline" -
+# on 2026-10-30 and 2026-10-31 alike - while the same agent's log carried `RESDRIFT
+# believed=5120x1440 actual=1920x1080 - adopting the actual mode`: the belief HAD followed.
+# agent_screen (lifecycle-lib.sh) reads the last line that wrote g_ScreenWidth, bounded to the
+# running agent's own lines in the daily log.
+as=$(T=300 agent_screen)
 log "  agent believes: ${as:-?}"
-echo "$as" | grep -qa "AGENTSCREEN ${GW}" || {
+[ "$(echo "${as:-}" | awk '{print $2}')" = "$GW" ] || {
     log "FATAL: agent's believed screen (${as:-?}) != guest screen (${GW}). A gate sized to one and"
     log "       enforced against the other grades nothing. INVALID-PRECONDITION, not a pass."
     exit 2

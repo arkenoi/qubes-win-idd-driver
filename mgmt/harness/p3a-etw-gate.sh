@@ -134,6 +134,9 @@ source .claude/skills/win-guest-e2e/e2e-lib.sh
 source mgmt/harness/e2e-wait.sh
 source mgmt/harness/desktop-visible-lib.sh   # desktop_struct/_visible - a locked dom0 desktop must not be handed to the operator as a render witness
 source mgmt/harness/a0-lib.sh   # PSAUMID CTLAUMID QT BLOG HBF INCOMING raspush blog_* path_state hb_* fire_* showbanner dismiss_toasts
+source mgmt/harness/lifecycle-lib.sh   # agent_restart_push/_run/_grade - THE one way a
+                                       # harness restarts the agent (watchdog stop+start,
+                                       # turnover proven by content). The T5/T8c stimulus.
 source mgmt/harness/verdict-lib.sh   # verdict_aggregate / verdict_label_class - the three-class (FAIL / ungraded / PASS-DATUM) wrap
 
 log "=== P3a ETW proxy gate: subject=$VM base=$BASE setup=$SETUP out=$OUT ==="
@@ -156,17 +159,6 @@ p3a_ps_enc(){ printf '%s' "$1" | iconv -f UTF-8 -t UTF-16LE | base64 -w0; }
 # -EncodedCommand runner: the command line the console echoes is an opaque blob, so output
 # markers can never self-match (the a0-lib path_state/blog_len lesson).
 enc_run(){ qrun "powershell -NoProfile -EncodedCommand $(p3a_ps_enc "$1")"; }
-# The proxy's pid from ITS OWNER'S record: the agent's "ETWPROXYSUP launched etwproxy.exe pid=N"
-# line (etwproxy.c), the last one in the current agent log, verified alive BY PID (tasklist /fi
-# "pid eq N" - Get-Process is unreliable on this guest, memory [[guest-desktop-on-display2]]).
-# Never a name scan (owner 2026-10-07): `tasklist /fi "imagename eq etwproxy.exe"` selected ANY
-# process with that name. The T5 and T8c drills END that child on purpose: the agent's relauncher
-# IS the thing under test and its relaunch is the measured outcome - the kill is the stimulus, not
-# a lifetime the drill pretends to own. -> "PROXYPID <pid> alive=<0|1>"
-proxy_owned_pid(){
-  enc_run '$d=(Get-ItemProperty "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools" -EA SilentlyContinue).LogDir; $f=(Get-ChildItem $d -Filter "gui-agent-*.log" -EA SilentlyContinue | Sort-Object LastWriteTime -Desc | Select-Object -First 1); $procId = 0; if ($f) { $m = @(Select-String -Path $f.FullName -Pattern "ETWPROXYSUP launched etwproxy.exe pid=(\d+)" | Select-Object -Last 1); if ($m.Count) { $procId = [int]$m[0].Matches[0].Groups[1].Value } }; $alive = 0; if ($procId -gt 0) { $alive = @(& tasklist /nh /fo csv /fi "pid eq $procId" 2>$null | Select-String -SimpleMatch "etwproxy.exe").Count }; Write-Output ("PROXYPID " + $procId + " alive=" + $alive)' \
-    | tr -d '\r' | grep -aoE 'PROXYPID [0-9]+ alive=[0-9]+' | tail -1
-}
 
 # Path-generic guest-file line count / tail-past-offset (blog_len/blog_since with the path as a
 # parameter — same retry, same whole-line-integer anchor, same NONZERO-on-hard-failure contract:
@@ -260,7 +252,7 @@ p3a_bridge_up(){ # heartbeat + connected past blog offset $1; return 0 = up (cal
   return 1
 }
 # ETW tier up: proxy LIVE in etw-proxy.log past $1 + bridge 'ETW IPC connected' past blog $2.
-# Wall cap 150s per call (expected: relaunch backoff floor 5s + connect, well under 120s
+# Wall cap 150s per call (expected: a fresh agent's launch + connect, well under 120s
 # nominal; two ~55s-capped guest reads per turn could otherwise stretch seq 24 to ~48 min).
 # T8r's recovery deliberately calls this 3x for its ~6-8 min post-squat window (TODO(RIG)#7).
 etw_tier_up(){ # $1=plog offset $2=blog offset; 0 = up, nonzero = deadline (logged)
@@ -1029,34 +1021,33 @@ if ! grep -qai "$ACCT" "$OUT/t5-plu-after-add.txt"; then
 else
   log "T5: drift injected AND seen by the T1d probe (its fail direction is now proven)"
   AM5=$(p3a_amark); [ -n "$AM5" ] || AM5=0   # p3a_amark's pipeline exits 0 even when empty - test output
-  # end the running proxy BY THE PID ITS OWNER RECORDED (proxy_owned_pid: the agent's own
-  # "launched etwproxy.exe pid=" line - never the user-session notifhost bridge, never a name
-  # scan); the agent's exit-wait relaunches it, and THAT launch's census meets the drifted
-  # token. (History: a tasklist imagename filter, RIG-RECONCILED 2026-09-05/06 for the console
-  # split and the session-0 placement; replaced 2026-10-07 by the owner's record, which does not
-  # depend on placement or name at all.)
-  pp=$(proxy_owned_pid); printf '%s\n' "${pp:-no answer}" > "$OUT/t5-proxypid.txt"
-  ppid=$(printf '%s' "$pp" | awk '{print $2}'); palive=$(printf '%s' "$pp" | sed -n 's/.*alive=//p')
-  if [ -z "$ppid" ] || [ "$ppid" = 0 ] || [ "${palive:-0}" = 0 ]; then
-    verdict T5 "INSTRUMENT no live etwproxy.exe in the agent's own launch record (${pp:-no answer}; tier already down?) - drift relaunch cannot be forced, ungraded"
+  # THE STIMULUS IS AN AGENT START. The census that catches drift runs at LAUNCH (etwproxy.c:
+  # "PROVISIONING DRIFT ... parked for this boot"), and since 2026-10-07 NOTHING RELAUNCHES THE
+  # PROXY: every death path ends at EtwProxyDeadLocked and "the tier is down until the next agent
+  # start". The old stimulus - taskkill the supervised child, then wait up to 150 s for a relaunch
+  # whose census meets the drifted token - therefore cannot fire on any build after that decision.
+  # It graded this row FAIL on 2026-10-30 and again on 2026-10-31 against correct shipped
+  # behaviour, which is the one mistake this file must not make.
+  # ONE SHOT, NO LADDER. agent_restart_run stops and starts the watchdog service and proves the
+  # turnover itself (new init record, live pid, serving), returning only once the new agent is up -
+  # so the census line is already in the log when it returns. Read once, grade once. A restart that
+  # cannot be PROVEN is INSTRUMENT, never a product verdict: missing data does not grade a product.
+  if ! rst5=$(agent_restart_run) || ! rg5=$(agent_restart_grade "$rst5"); then
+    printf '%s\n' "${rst5:-no output}" > "$OUT/t5-restart.txt"
+    verdict T5 "INSTRUMENT the agent restart did not prove turnover ($(agent_restart_grade "${rst5:-}" | head -c 160)) - the drift census never re-ran, so the detector is ungraded (NOT a product verdict); evidence t5-restart.txt"
   else
-    qrun "taskkill /f /pid $ppid" >/dev/null 2>&1   # the supervised child, by its owner's pid: the relaunch is what T5 measures
-    t5seen=""; _wt5=$SECONDS
-    for i in $(seq 1 24); do   # nominal 120s: 5s backoff floor + census; TODO(RIG)#7
-      # wall cap 150s (the documented 120s window + margin; p3a_asince is a ~55s-capped enc_run
-      # per turn, so seq*sleep alone could stretch this to ~25 min - audit 2026-09-06)
-      a5=$(p3a_asince "$AM5" 'ETWPROXYSUP')
-      printf '%s' "$a5" | grep -qa 'PROVISIONING DRIFT' && printf '%s' "$a5" | grep -qa 'parked for this boot' && { t5seen=1; break; }
-      [ $(( SECONDS - _wt5 )) -ge 150 ] && break
-      sleep 5
-    done
-    log "T5: drift-park wait exit=$([ -n "$t5seen" ] && echo success || echo deadline) t=$((SECONDS-_wt5))s (i=$i/24)"
+    printf '%s\n' "$rst5" > "$OUT/t5-restart.txt"
+    log "T5: agent restarted ($rg5) - THAT launch's census meets the drifted token"
+    a5=$(p3a_asince "$AM5" 'ETWPROXYSUP')
     printf '%s\n' "$a5" > "$OUT/t5-agentlines.txt"
-    if [ -n "$t5seen" ]; then
-      verdict T5 "PASS drift detector FIRED: agent census refused (PROVISIONING DRIFT) and the tier parked ($(printf '%s' "$a5" | grep -a 'parked for this boot' | tail -1 | head -c 160)). Proxy-side refuse machinery proven separately in T4a."
+    # Both phrases sit in ONE line by contract (etwproxy.c: "The ETW gate greps the log for
+    # 'PROVISIONING DRIFT' and 'parked for this boot' ... so both stay in the line").
+    if printf '%s' "$a5" | grep -qa 'PROVISIONING DRIFT' && printf '%s' "$a5" | grep -qa 'parked for this boot'; then
+      verdict T5 "PASS drift detector FIRED on the restarted agent: the census refused (PROVISIONING DRIFT) and the tier parked ($(printf '%s' "$a5" | grep -a 'parked for this boot' | tail -1 | head -c 160)). Proxy-side refuse machinery proven separately in T4a."
     else
-      verdict T5 "FAIL drift injected + proxy killed but no DRIFT/park within the 150s wall budget - the detector did NOT fire (agent lines: $(printf '%s' "$a5" | grep -a 'ETWPROXYSUP' | tail -2 | tr '\n' ';' | head -c 240))"
+      verdict T5 "FAIL drift injected and the agent restart PROVEN ($rg5), but that launch's census did not refuse - no 'PROVISIONING DRIFT ... parked for this boot' line (agent lines: $(printf '%s' "$a5" | grep -a 'ETWPROXYSUP' | tail -2 | tr '\n' ';' | head -c 240))"
     fi
+
     # src=db CONTROL ARM: tier parked => the shadow ladder must serve from the DB rung. Any
     # src=etw-sig line here means the park LEAKED - a product assert, not just instrumentation.
     # A 0-default offset would scan T2/T3's legitimate src=etw-sig lines and false-FAIL the
@@ -1128,14 +1119,12 @@ else
 fi
 
 # ---------- T6 LATENCY: src=etw-sig vs the T5 src=db control + heartbeat cadence -------------
-log "T6: latency - same burst as T5, tier up; CLASSIFY row_latency etw-sig-vs-db + heartbeat gap"
-# background heartbeat mtime sampler (SYSTEM, survives the qrexec call; read back afterwards)
-hbps='$o="C:\ProgramData\Qubes\p3a-hbsample.txt"; Remove-Item $o -Force -EA SilentlyContinue; $hb="C:\ProgramData\qubes-toast-bridge\heartbeat"; 1..40 | ForEach-Object { $t=0; $it=Get-Item -LiteralPath $hb -EA SilentlyContinue; if ($it) { $t=$it.LastWriteTimeUtc.Ticks }; Add-Content -LiteralPath $o -Value "$t"; Start-Sleep -Milliseconds 900 }'
-# Start-Process, not `start`: start passes every inheritable handle whatever the redirection, so a
-  # detached launch holds this call's vchan pipes and the wrapper's pumps never see EOF (lint L27,
-  # measured d3fe180 and again on campaign run 38994277148). ShellExecute inherits none.
-  qrun "powershell -NoProfile -Command \"Start-Process -WindowStyle Hidden -FilePath 'powershell.exe' -ArgumentList '-NoProfile','-EncodedCommand','$(p3a_ps_enc "$hbps")'\"" >/dev/null 2>&1
-sleep 2
+log "T6: latency - same burst as T5, tier up; CLASSIFY row_latency etw-sig-vs-db"
+# NO HEARTBEAT-CADENCE SAMPLER. Deleted 2026-10-31: the bridge's 2 s heartbeat loop was
+# replaced by event wakes (notifhost.cpp REST-ZERO S4c, docs/DESIGN-rest-zero-capture.md C)
+# and the file is PUBLISHED ONCE as "<tick> <pid>". There is no cadence left to grade, and
+# the drill that tried blamed its own sampler for intended behaviour. The surviving property
+# - the file IS published - is a precondition of p3a_bridge_up, which every arm runs.
 if ! L6=$(blog_len); then
   # A 0-default would pull T5's src=db rows and T2/T3's src=etw-sig rows into this window and
   # fabricate a latency comparison - ungraded, never guessed.
@@ -1187,16 +1176,6 @@ else
   fi
   [ "$conn6a" = "$conn6b" ] && log "T6: no supervisor relaunch during the burst (connected-count stable at $conn6a)" \
     || verdict T6sup "FAIL supervisor relaunched the bridge during the burst (connected-count $conn6a -> $conn6b)"
-fi
-# heartbeat cadence during the burst: max gap between successive DISTINCT mtimes
-enc_run 'if (Test-Path C:\ProgramData\Qubes\p3a-hbsample.txt) { Get-Content C:\ProgramData\Qubes\p3a-hbsample.txt }' | tr -d '\r' | grep -aoxE '[0-9]+' > "$OUT/t6-hbsample.txt"
-hbgap=$(awk '$1>0 { if (prev>0 && $1!=prev) { d=($1-prev)/10000000; if (d>max) max=d } prev=$1 } END{printf "%.1f", max+0}' "$OUT/t6-hbsample.txt")
-if [ -z "$hbgap" ] || [ "$hbgap" = "0.0" ]; then
-  verdict T6hb "INSTRUMENT heartbeat sampler saw no mtime change in ~36s (sampler broken or file absent; $(wc -l < "$OUT/t6-hbsample.txt") samples) - cadence ungraded"
-elif awk -v g="$hbgap" 'BEGIN{exit !(g<=4.0)}'; then
-  verdict T6hb "PASS heartbeat max gap ${hbgap}s <= 4s during the burst (TODO(RIG)#9)"
-else
-  verdict T6hb "FAIL heartbeat max gap ${hbgap}s > 4s during the burst - a pass is blocking the loop"
 fi
 
 # ---------- T7 A0 regression: the shadow probe is MEASURE-ONLY -------------------------------
@@ -1529,28 +1508,31 @@ fi
 # for the freed name AFTER the harness force-killed the proxy from bash - but the agent's
 # relaunch (a fast exit-cb + CreateProcess) re-grabbed the single-instance name inside the
 # ~sub-second gap before the squatter's next 200ms poll, so the squatter NEVER won the race.
-# Now the squatter OWNS the whole race atomically, in ONE guest process: it force-kills the
-# live proxy itself - by the pid the AGENT recorded when it launched it (the last "ETWPROXYSUP
-# launched etwproxy.exe pid=" line of the current agent log; taskkill /pid, since Get-Process is
-# broken on this guest, memory [[guest-desktop-on-display2]] class; never a name scan, owner
-# 2026-10-07) - then TIGHT busy-loops (no sleep) to CreateNamedPipe the instant the name frees. The agent's relaunch must traverse exit-cb -> backoff -> CreateProcess
-# -> guard/census -> EtwOpen -> CreateNamedPipe (many ms); an in-process spin beats it every
-# time. The relaunched proxy then meets the squatted name => 'ETWPROXY FAIL CreateNamedPipe ...
-# (squatter holding the name?)' => exit 8. The killed proxy's own rc=1 (TerminateProcess code)
-# is now logged QUIETLY by the agent (etwproxy.c ETWPROXY_EXIT_KILLED), not as an anomaly. The
-# squatter self-bounds (20s grab window, 120s hold) so nothing lingers. NOTE $procId (not $pid,
-# a PowerShell automatic) and quote-free matching so the script survives -EncodedCommand.
+# RE-POINTED 2026-10-31: THERE IS NO RACE LEFT TO WIN, so the drill stops trying to win one.
+# The 2026-09-06 reconciliation handed the squatter the whole race atomically (self-kill the proxy,
+# then tight-spin on CreateNamedPipe) because the agent's relaunch - exit-cb -> backoff ->
+# CreateProcess -> census -> EtwOpen -> CreateNamedPipe - would otherwise re-grab the name first.
+# The relaunch was REMOVED on 2026-10-07 ("since 2026-10-07 nothing relaunches it: the tier is down
+# until the next agent start", etwproxy.c), so after the kill the name stays free and the grab needs
+# no spin. What the drill then lacked was a proxy to MEET the squatted name: nothing launches one,
+# so no rc=8 could ever appear, and this row graded FAIL on 2026-10-30 and again on 2026-10-31
+# against correct shipped behaviour.
+# SO: kill the proxy (the name frees and STAYS free), grab it ONCE, then START AN AGENT - the
+# trigger the product kept - and THAT launch's proxy meets the squatter => 'ETWPROXY FAIL
+# CreateNamedPipe ... (squatter holding the name?)' => exit 8. The killed proxy's own rc=1
+# (TerminateProcess code) is logged quietly by the agent (ETWPROXY_EXIT_KILLED), not as an anomaly.
+# The squatter self-bounds (240s hold, enough to cover a watchdog stop+start) so nothing lingers.
+# The kill is still BY THE PID THE AGENT RECORDED (the last "ETWPROXYSUP launched etwproxy.exe
+# pid=" line), never a name scan (owner 2026-10-07). NOTE $procId (not $pid, a PowerShell
+# automatic) and quote-free matching so the script survives -EncodedCommand.
 sq='$out="C:\ProgramData\Qubes\p3a-squat.txt"; Remove-Item $out -Force -EA SilentlyContinue
 $d=(Get-ItemProperty "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools" -EA SilentlyContinue).LogDir
 $lf=(Get-ChildItem $d -Filter "gui-agent-*.log" -EA SilentlyContinue | Sort-Object LastWriteTime -Desc | Select-Object -First 1)
 $procId = 0
 if ($lf) { $m = @(Select-String -Path $lf.FullName -Pattern "ETWPROXYSUP launched etwproxy.exe pid=(\d+)" | Select-Object -Last 1); if ($m.Count) { $procId = [int]$m[0].Matches[0].Groups[1].Value } }
-if ($procId -gt 0) { & taskkill /f /pid $procId *>$null }
-$p=$null; $deadline=(Get-Date).AddSeconds(20)
-while ((Get-Date) -lt $deadline) {
-  try { $p = New-Object System.IO.Pipes.NamedPipeServerStream("qubes-toast-etw",[System.IO.Pipes.PipeDirection]::Out,1); break } catch {}
-}
-if ($p) { Set-Content $out "SQUAT-HELD"; Start-Sleep -Seconds 120; $p.Dispose(); Add-Content $out "SQUAT-RELEASED" }
+if ($procId -gt 0) { & taskkill /f /pid $procId *>$null; Start-Sleep -Milliseconds 500 }
+try { $p = New-Object System.IO.Pipes.NamedPipeServerStream("qubes-toast-etw",[System.IO.Pipes.PipeDirection]::Out,1) } catch { $p = $null }
+if ($p) { Set-Content $out "SQUAT-HELD"; Start-Sleep -Seconds 240; $p.Dispose(); Add-Content $out "SQUAT-RELEASED" }
 else { Set-Content $out "SQUAT-NEVER" }'
 enc_run 'Remove-Item C:\ProgramData\Qubes\p3a-squat.txt -Force -EA SilentlyContinue; "SQCLEAN"' >/dev/null
 # pre-check the live proxy exists (its pid is evidence + the "nothing to kill" guard); the
@@ -1564,9 +1546,22 @@ P8c=$(plog_len) || P8c=""   # pre-squat proxy-log offset: a relaunch is only FRE
 if [ -z "$spid" ]; then
   verdict T8c "INSTRUMENT no running etwproxy.exe (tier already down?) - squatter drill ungraded"
 else
-  log "T8c: launching self-killing busy-grab squatter (live proxy pid=$spid)"
+  log "T8c: killing the proxy and grabbing the freed pipe name (live proxy pid=$spid)"
   # Start-Process, not `start` - see the note at the heartbeat launch above (lint L27).
   qrun "powershell -NoProfile -Command \"Start-Process -WindowStyle Hidden -FilePath 'powershell.exe' -ArgumentList '-NoProfile','-EncodedCommand','$(p3a_ps_enc "$sq")'\"" >/dev/null 2>&1
+  # The grab is immediate now (free name, nothing re-takes it), but it happens in a DETACHED
+  # process, so give it a moment before the agent start - otherwise the new proxy takes the name
+  # and the drill measures nothing.
+  sleep 3
+  t8cnorestart=""
+  rst8=$(agent_restart_run) || true
+  printf '%s\n' "${rst8:-no output}" > "$OUT/t8c-restart.txt"
+  if ! rg8=$(agent_restart_grade "${rst8:-}"); then
+    t8cnorestart="$rg8"
+    log "T8c: [WARN] the agent restart did not prove turnover ($rg8) - no fresh proxy was launched into the squatted name; the arms below will grade this ungraded, not FAIL"
+  else
+    log "T8c: agent restarted ($rg8) - its proxy must now fail CreateNamedPipe and exit 8"
+  fi
   t8cexit=""; _w8x=$SECONDS
   for i in $(seq 1 24); do   # exit 8 lands within the first relaunch backoffs (floor 5s)
     # wall cap 150s (the documented 120s window + margin; p3a_asince is a ~55s-capped enc_run
@@ -1598,6 +1593,8 @@ else
       else
         verdict T8c "INSTRUMENT squatter ran (SQUAT-NEVER) but the proxy shows no kill+fresh-relaunch (exits past mark=${killed8:-0}, pre-squat offsets plog=${P8c:-?} blog=${L8c:-?}) - the kill never landed, drill ungraded ($(p3a_asince_hits "$AM8" 'proxy exited' | tail -1 | head -c 160))"
       fi
+    elif [ -n "$t8cnorestart" ]; then
+      verdict T8c "INSTRUMENT the agent restart did not prove turnover ($t8cnorestart), so no fresh proxy was launched into the squatted name - the exit-8 path was never exercised and this drill is ungraded (NOT a product verdict); evidence t8c-restart.txt"
     elif [ "$sqstate" != SQUAT-HELD ] && [ "$sqstate" != SQUAT-RELEASED ]; then
       verdict T8c "INSTRUMENT squatter never ran or never wrote its state (state=${sqstate:-none}) - drill ungraded ($(p3a_asince_hits "$AM8" 'proxy exited' | tail -1 | head -c 160))"
     else

@@ -24,12 +24,13 @@ set -uo pipefail
 cd /home/user/qubes-win-idd-driver
 require_scripts(){ local m=""; for s in "$@"; do [ -f "$s" ] || m="$m $s"; done
   [ -z "$m" ] || { echo "FATAL: required guest script(s) missing:$m" >&2; exit 2; }; }
-require_scripts guest/set-resolution.ps1 guest/run-as-user.ps1
+require_scripts guest/set-resolution.ps1
 
 VM="${1:?usage: $0 <vm> [outdir]}"
 source mgmt/harness/vmlock.sh; vm_lock "$VM"   # one harness per guest; see vmlock.sh
 source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the notepad this run starts is stopped by its recorded identity, never by name
 source mgmt/harness/window-grade-lib.sh # wg_png_dims/wg_png_wxh/wg_png_id: the ONE reader of a capture's dimensions
+AGL=$(agent_lines_ps)   # the PowerShell prelude every log query below starts with: $agentlines = the RUNNING agent's lines only
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/RND8-$VM}"
 # A contaminated subject is refused BEFORE any work: this script's default output dir carries no
 # run-id, so a second attempt would otherwise append to the first attempt's artefacts and be read
@@ -39,7 +40,6 @@ attempt_dir "$OUT" || exit 1
 
 mkdir -p "$OUT"
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
-GUEST='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
 q(){ QTEST_VM=$VM timeout -k 8 "${T:-150}" ./tools/qtest "$@" 2>/dev/null; }
 r(){ q run "$1" | tr -d '\r' | grep -avE '^(Microsoft Windows \[Version|\(c\) Microsoft|C:\\)'; }
 # Any PowerShell with quotes or backslashes goes through -EncodedCommand: bash -> qtest ->
@@ -87,24 +87,28 @@ shot_hash(){
   wg_png_id "$big"
 }
 
-# type into Notepad from the USER session so the pixels genuinely change
+# type into Notepad so the pixels genuinely change. THE TYPIST RUNS AS SYSTEM, THROUGH pushrun, and
+# activates the notepad by its OWNING PID - the one ctl_start recorded - never by caption.
+# Measured 2026-11-01 on win11-acc against a ctl_start notepad: AppActivate from the user session
+# (guest/run-as-user.ps1, the previous shape) -> False, so every pixel row and the keyed-mutex row
+# of this suite came back INVALID-INSTRUMENT "typing stimulus did not land" on each run that reached
+# them, and the suite is in none of the 46 receipts; AppActivate(<pid>) as SYSTEM -> 'TYPED ok' and
+# the window's hash moved 164c758c5c295bf1 -> e7bbca2aa600bf89 (1418x736). The notepad ctl_start
+# opens is a qrexec (SYSTEM) process, so the typist on the same desktop is the one that reaches it;
+# tools/accept-clean.sh types the same way. By pid, not by title: the caption is "Editor" on a
+# German guest and a title match there reads as a dead stimulus (owner 2026-10-01: never identify a
+# window by its caption, not even in a harness).
 cat > "$TMP/type.ps1" <<'PS'
+param([int]$ProcId)
 $ErrorActionPreference='Continue'
 Add-Type -AssemblyName System.Windows.Forms
 $w = New-Object -ComObject WScript.Shell
-if ($w.AppActivate('Untitled - Notepad') -or $w.AppActivate('Notepad')) {
+$act = $false; try { $act = $w.AppActivate($ProcId) } catch { Write-Output ("TYPED error " + $_.Exception.Message) }
+if ($act) {
   Start-Sleep -Milliseconds 600
   [System.Windows.Forms.SendKeys]::SendWait("RND8 " + (Get-Random) + "`n" + ("#" * 60) + "`n")
-  Write-Output 'TYPED ok'
-} else { Write-Output 'TYPED no-notepad' }
-PS
-q push "$TMP/type.ps1" >/dev/null 2>&1
-
-cat > "$TMP/ascreen.ps1" <<'PS'
-$d=(Get-ItemProperty 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -EA SilentlyContinue).LogDir
-$f=(Get-ChildItem $d -Filter 'gui-agent-*.log' -EA SilentlyContinue | Sort-Object LastWriteTime -Desc | Select-Object -First 1)
-$m = (Get-Content $f.FullName -Tail 4000 | Select-String -Pattern 'A6CONFIGURE window 0 -> (\d+)x(\d+)' | Select-Object -Last 1)
-if($m){ Write-Output ('AGENTSCREEN ' + $m.Matches[0].Groups[1].Value + 'x' + $m.Matches[0].Groups[2].Value) } else { Write-Output 'AGENTSCREEN none' }
+  Write-Output ('TYPED ok pid=' + $ProcId)
+} else { Write-Output ('TYPED no-activate pid=' + $ProcId) }
 PS
 
 # A notepad left by an earlier run is NOT ours to stop (owner 2026-10-07: nothing is killed by
@@ -125,17 +129,17 @@ for M in $MODES; do
     log "  -> FAIL: the guest did not adopt $M"
     printf 'RND-8\tmode-followed-%s\tFAIL\t%s\t%s\n' "$M" "$res" "$EV" >> "$V"; rc=1; continue; }
 
-  # the AGENT must agree, or dom0 is being told a different screen than the guest has
-  ag=$(T=300 q pushrun "$TMP/ascreen.ps1" 2>/dev/null | tr -d '\r' | grep -ao 'AGENTSCREEN .*' | head -1)
-  if [ -z "$ag" ]; then
-    cat > "$TMP/ascreen.ps1" <<'PS'
-$d=(Get-ItemProperty 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -EA SilentlyContinue).LogDir
-$f=(Get-ChildItem $d -Filter 'gui-agent-*.log' -EA SilentlyContinue | Sort-Object LastWriteTime -Desc | Select-Object -First 1)
-$m = (Get-Content $f.FullName -Tail 4000 | Select-String -Pattern 'A6CONFIGURE window 0 -> (\d+)x(\d+)' | Select-Object -Last 1)
-if($m){ Write-Output ('AGENTSCREEN ' + $m.Matches[0].Groups[1].Value + 'x' + $m.Matches[0].Groups[2].Value) } else { Write-Output 'AGENTSCREEN none' }
-PS
-    ag=$(T=300 q pushrun "$TMP/ascreen.ps1" | tr -d '\r' | grep -ao 'AGENTSCREEN .*' | head -1)
-  fi
+  # the AGENT must agree, or dom0 is being told a different screen than the guest has.
+  # THE BELIEF, NOT THE ANNOUNCEMENT (2026-11-01). This read the agent's last `A6CONFIGURE window 0
+  # -> WxH`, the whole-desktop configure a seamless agent never sends (ADR-windows s5: a seamless
+  # guest never holds a whole-desktop grant; SeamlessNoScreenGrant on by default since 2026-09-13).
+  # Every mode-followed row therefore FAILED "the agent last told dom0 none" while the agent's own
+  # log carried `RESDRIFT believed=5120x1440 actual=1920x1080 - adopting the actual mode` - the
+  # belief had followed; the reader was looking for a line the product deliberately stopped
+  # writing. agent_screen (lifecycle-lib.sh) reads the last line that WROTE the belief, bounded to
+  # the running agent's own lines. One bounded re-read when the query itself answers nothing.
+  ag=$(T=300 agent_screen)
+  [ -n "$ag" ] || { sleep 5; ag=$(T=300 agent_screen); }
   log "  agent: ${ag:-?}"
 
   # GRADE THE AGENT'S AGREEMENT, which is what this check has always CLAIMED to do.
@@ -151,26 +155,30 @@ PS
   # Graded on its own now, not as a side effect of the pixel test - a check that can be SKIPPED
   # by an unrelated branch is nearly as bad as one that cannot fail (the other two modes emitted
   # no mode-followed verdict at all in that run, because the pixel judge went INVALID first).
+  # SINCE 2026-11-01 THE PROPERTY IS THE BELIEF. In seamless mode dom0 consumes no window-0 geometry
+  # at all (xside.c composes only screen-dump windows from it), so "told dom0" is vacuous there and
+  # what a stale belief breaks is the agent's own input normalisation and window clamps. The
+  # FI_NOSCREENCONFIG measurement above dates from the grant era and is kept as history.
   agv=$(echo "$ag" | awk '{print $2}')
   if [ -z "$agv" ]; then
     log "  -> INVALID-INSTRUMENT: the agent-screen query returned nothing; not grading mode-followed"
     printf 'RND-8\tmode-followed-%s\tINVALID-INSTRUMENT\tagent-screen query returned no data\t%s\n' "$M" "$EV" >> "$V"; rc=1
   elif [ "$agv" = "$M" ]; then
-    log "  -> PASS: the guest adopted $M AND the agent's last A6CONFIGURE to dom0 agrees ($agv)"
-    printf 'RND-8\tmode-followed-%s\tPASS-UNPROVEN\tguest adopted %s and the agent last told dom0 %s - they agree\t%s\n' "$M" "$M" "$agv" "$EV" >> "$V"
+    log "  -> PASS: the guest adopted $M AND the agent's believed screen agrees ($ag)"
+    printf 'RND-8\tmode-followed-%s\tPASS-UNPROVEN\tguest adopted %s and the agent believes %s - they agree\t%s\n' "$M" "$M" "$agv" "$EV" >> "$V"
   else
-    log "  -> FAIL: the guest adopted $M but the agent last told dom0 '$agv' - dom0 is on stale geometry"
-    printf 'RND-8\tmode-followed-%s\tFAIL\tguest adopted %s but the agent last told dom0 %s\t%s\n' "$M" "$M" "$agv" "$EV" >> "$V"; rc=1
+    log "  -> FAIL: the guest adopted $M but the agent still believes '$agv' ($ag) - dom0 is being told stale geometry"
+    printf 'RND-8\tmode-followed-%s\tFAIL\tguest adopted %s but the agent believes %s\t%s\n' "$M" "$M" "$agv" "$EV" >> "$V"; rc=1
   fi
 
   sleep 6
   h1=$(shot_hash)
   # CAPTURE the stimulus result - a discarded stimulus was the bug. type.ps1 reports 'TYPED ok' vs
-  # 'TYPED no-notepad', and run-as-user reports no-session; if none of that is checked and the
-  # stimulus silently fails to land (no interactive session, AppActivate/SendKeys no-op, Notepad not
-  # focusable), the pixels never change, h1==h2, and a MISSING STIMULUS gets recorded as the product
-  # capture-death defect (V3: missing data must be INVALID-INSTRUMENT, never FAIL).
-  typed=$(T=200 q pushrun guest/run-as-user.ps1 -Script "$GUEST\\type.ps1" 2>/dev/null | tr -d '\r')
+  # 'TYPED no-activate'; if that is not checked and the stimulus silently fails to land (no window
+  # of that pid to activate, SendKeys no-op), the pixels never change, h1==h2, and a MISSING
+  # STIMULUS gets recorded as the product capture-death defect (V3: missing data must be
+  # INVALID-INSTRUMENT, never FAIL).
+  typed=$(T=200 q pushrun "$TMP/type.ps1" "$NP_PID" 2>/dev/null | tr -d '\r')
   sleep 8
   h2=$(shot_hash)
   t2=$(date +%s%3N)
@@ -179,7 +187,7 @@ PS
   if ! echo "$typed" | grep -qa 'TYPED ok'; then
     log "  -> INVALID-INSTRUMENT: the visible-change typing stimulus did not land at $M (no 'TYPED ok');"
     log "     without a guaranteed pixel change, identical h1==h2 says nothing about frozen capture - not grading"
-    printf 'RND-8\tpixels-change-after-resize-%s\tINVALID-INSTRUMENT\ttyping stimulus did not land (run-as-user/type.ps1 gave no TYPED ok) - not a product frozen-capture\t%s\n' "$M" "$EV" >> "$V"; rc=1
+    printf 'RND-8\tpixels-change-after-resize-%s\tINVALID-INSTRUMENT\ttyping stimulus did not land (type.ps1 gave no TYPED ok) - not a product frozen-capture\t%s\n' "$M" "$EV" >> "$V"; rc=1
   elif [ "$h1" = NOCAP ] || [ "$h2" = NOCAP ] || [ "$h1" = NOWIN ] || [ "$h2" = NOWIN ]; then
     log "  -> INVALID-INSTRUMENT: no capture at $M, so the pixel judge could not run"
     printf 'RND-8\tpixels-change-after-resize-%s\tINVALID-INSTRUMENT\tcapture returned %s / %s\t%s\n' "$M" "$h1" "$h2" "$EV" >> "$V"; rc=1
@@ -213,13 +221,16 @@ done
 # line reading " abandonments,  recreates,  thread deaths". A fabricated product defect from a
 # silently broken query - protocol 0.8b rule 2, the same hazard that made a health-check plant
 # silently do nothing. The identical query through -EncodedCommand returns `KM=10 RC=23 DIED=0`.
-KM=$(psrun '$d=(Get-ItemProperty "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\").LogDir
-$f=Get-ChildItem $d -Filter gui-agent-*.log | Sort LastWriteTime -Desc | Select -First 1
-$a=Get-Content $f.FullName
-Write-Output ("KM=" + @($a | Select-String -SimpleMatch 887a0026).Count + " RC=" + @($a | Select-String -SimpleMatch RecreateDuplication).Count + " DIED=" + @($a | Select-String -Pattern "capture thread|thread exiting|giving up").Count)' \
-  | grep -aoE 'KM=[0-9]+ RC=[0-9]+ DIED=[0-9]+' | head -1)
+# BOUNDED TO THE RUNNING AGENT'S LINES ($AGL, lifecycle-lib agent_lines_ps). The daily log holds every
+# lifetime of the day, and on 2026-11-01 the whole-file count scored DIED=4 from the orderly shutdown
+# lines of two EARLIER agents ("capture thread still in its acquire at exit", "window event thread
+# exiting on request") against KM=3, one per lifetime - a thread-death verdict on an agent that had
+# lost no thread.
+KM=$(psrun "$AGL"$'\n''$a=$agentlines
+Write-Output ("KM=" + @($a | Select-String -SimpleMatch 887a0026).Count + " RC=" + @($a | Select-String -SimpleMatch RecreateDuplication).Count + " DIED=" + @($a | Select-String -Pattern "capture thread|thread exiting|giving up").Count + " PID=" + $agentpid)' \
+  | grep -aoE 'KM=[0-9]+ RC=[0-9]+ DIED=[0-9]+ PID=[0-9]*' | head -1)
 km=$(echo "$KM" | grep -ao 'KM=[0-9]*' | cut -d= -f2); rec=$(echo "$KM" | grep -ao 'RC=[0-9]*' | cut -d= -f2); died=$(echo "$KM" | grep -ao 'DIED=[0-9]*' | cut -d= -f2)
-log "=== keyed mutex: ${km:-?} abandonment(s), ${rec:-?} RecreateDuplication, ${died:-?} thread death(s) ==="
+log "=== keyed mutex: ${km:-?} abandonment(s), ${rec:-?} RecreateDuplication, ${died:-?} thread death(s) - agent pid $(echo "$KM" | grep -ao 'PID=[0-9]*' | cut -d= -f2) ==="
 
 # ---------------------------------------------------------------- FRAME LIVENESS, from OUTPUT
 # The `DIED` counter above is a LOG GREP, and on 2026-08-31 it was measured to be worthless for
@@ -233,17 +244,15 @@ log "=== keyed mutex: ${km:-?} abandonment(s), ${rec:-?} RecreateDuplication, ${
 # a monotonic `seq=`; if seq advances across a visible guest change, frames are genuinely being
 # captured. That cannot be satisfied by any log message, which is the whole point
 # (CLAUDE.md: "Judge output, not logs").
-perf_seq(){ psrun '$d=(Get-ItemProperty "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\").LogDir
-$f=Get-ChildItem $d -Filter gui-agent-*.log | Sort LastWriteTime -Desc | Select -First 1
-$m=@(Get-Content $f.FullName -Tail 3000 | Select-String -Pattern "QGAPERF,v=\d+,seq=(\d+)")
+perf_seq(){ psrun "$AGL"$'\n''$m=@($agentlines | Select-String -Pattern "QGAPERF,v=\d+,seq=(\d+)")
 if ($m.Count -eq 0) { Write-Output "PERFSEQ none" }
-else { Write-Output ("PERFSEQ " + $m[-1].Matches[0].Groups[1].Value) }'     | grep -aoE 'PERFSEQ [0-9]+|PERFSEQ none' | awk '{print $2}' | head -1; }
+else { Write-Output ("PERFSEQ " + $m[-1].Matches[0].Groups[1].Value) }' | grep -aoE 'PERFSEQ [0-9]+|PERFSEQ none' | awk '{print $2}' | head -1; }
 
 s0=$(perf_seq)
 # CAPTURE the liveness stimulus too: a flat QGAPERF seq after a stimulus that never landed is a
 # missing stimulus, not a dead capture thread. Grading it as capture-death would fabricate a product
 # defect (V3), the same class as the per-mode pixel judge above.
-typed2=$(T=200 q pushrun guest/run-as-user.ps1 -Script "$GUEST\\type.ps1" 2>/dev/null | tr -d '\r')
+typed2=$(T=200 q pushrun "$TMP/type.ps1" "$NP_PID" 2>/dev/null | tr -d '\r')
 sleep 8
 s1=$(perf_seq)
 log "  frame liveness: QGAPERF seq $s0 -> $s1"

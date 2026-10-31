@@ -35,6 +35,18 @@
 #   ctl_stop <pid> <start>        stop EXACTLY that process: Stop-Process -Id, only if its start
 #                                 time still matches (a reused pid is not ours). Prints
 #                                 "CTLSTOP stopped|gone|not-ours|unknown". Never by name.
+#   agent_lines_ps                -> PowerShell PRELUDE text: fills $agentlines with the RUNNING
+#                                 agent's own lines and $agentpid with its pid. The log is one file
+#                                 per DAY since 4.3.33 and every agent started that day appends to
+#                                 it, so a count or a "last matching line" over the file reads the
+#                                 earlier lifetimes too. Prepend it to any log query.
+#   agent_screen                  -> "AGENTSCREEN <W>x<H> src=<line> pid=<n>": the screen size the
+#                                 running agent BELIEVES (g_ScreenWidth), read from the last line
+#                                 that wrote it - RESDRIFT, RESEXACT, RESAPPLIED(-MISMATCH),
+#                                 NEVEREXIT, or A6CONFIGURE where a whole-desktop grant exists.
+#                                 "AGENTSCREEN none pid=<n>" when its lines carry no such write.
+#                                 NOT the A6CONFIGURE announce alone: a seamless agent never sends
+#                                 it (ADR-windows s5), and two readers that did FAILED for two days.
 #
 # The helper's marker lines (guest/restart-gui-agent.ps1 header) are what callers grep:
 #   SVCSTOP ... / OLDLOG ... / WDSTART <status> <err> / AGENTPID <pid> after <n>s / OLDALIVE <0|1>
@@ -197,4 +209,73 @@ Write-Output ('CTLSTOP ' + \$(if (\$p.HasExited) { 'stopped' } else { 'STILL-RUN
     *)                         return 2 ;;   # no answer / no pid: instrument failure, not a stop
   esac
   # CTL-STOP-RC-B
+}
+
+# ---- the running agent's own log lines, and the screen size it believes -----------------------------
+# WHY A PRELUDE AND NOT A GREP. The agent log became one file per day in 4.3.33 and every agent
+# started that day appends to it (2026-11-01 on win11-acc: pids 8176, 4388 and 7416 in one file). A
+# query over the whole file therefore counts the lifetimes before this one - RND-8's DIED counter
+# scored the orderly shutdown lines of two EARLIER agents ("capture thread still in its acquire at
+# exit; the exit ends it", "window event thread exiting on request - the agent is leaving") as four
+# thread deaths of the running one - and a "last matching line" may be theirs. The running agent is
+# the one that wrote the file's last line; its lines are selected by pid, and when its process
+# started before today the earlier daily files back to its start date are read as well, so a
+# lifetime that crosses midnight is not cut in half. findings/misc.md: a pattern match in a module
+# log must be bounded to the run it judges. Nothing here finds a process by name: the pid comes from
+# the log and Get-Process -Id only dates it.
+agent_lines_ps(){ cat <<'PS'
+$ErrorActionPreference='Continue'
+$agentlines=@(); $agentpid=''
+$d=(Get-ItemProperty 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -EA SilentlyContinue).LogDir
+$fs=@(Get-ChildItem $d -Filter 'gui-agent-*.log' -EA SilentlyContinue | Sort-Object LastWriteTime -Descending)
+if($fs.Count -gt 0){
+  # -ReadCount 0 hands back ONE object, the whole string[]; wrapped in @() it nests as a single element
+  # (measured 2026-11-01 on a 79 KB log: lines=1, no pid found). A typed variable keeps it a string[].
+  [string[]]$new = Get-Content $fs[0].FullName -ReadCount 0 -EA SilentlyContinue
+  for($i=$new.Count-1; $i -ge 0; $i--){ if($new[$i] -match '^\[\d{8}\.\d{6}\.\d{3}-(\d+):'){ $agentpid=$Matches[1]; break } }
+  $since=$null; if($agentpid){ try{ $since=(Get-Process -Id ([int]$agentpid) -EA Stop).StartTime.Date }catch{} }
+  $pick=@($fs[0])
+  if($since -and $fs.Count -gt 1){
+    foreach($f in $fs[1..($fs.Count-1)]){
+      if($f.Name -match '^gui-agent-(\d{8})\.log$'){ try{ if([datetime]::ParseExact($Matches[1],'yyyyMMdd',$null) -ge $since){ $pick += $f } }catch{} }
+    }
+  }
+  $re='^\[\d{8}\.\d{6}\.\d{3}-' + $agentpid + ':'
+  foreach($f in ($pick | Sort-Object LastWriteTime)){
+    [string[]]$c = if($f.FullName -eq $fs[0].FullName){ $new } else { Get-Content $f.FullName -ReadCount 0 -EA SilentlyContinue }
+    $agentlines += @($c | Where-Object { $_ -match $re })
+  }
+}
+PS
+}
+
+# The last line that WROTE g_ScreenWidth, scanned backwards so the scan stops at the first hit. The
+# writers and what each logs (agent/gui-agent/resolution.c, vchan-handlers.c, main.c), every one of
+# them the ADOPTED size - after a mismatch, width/height already hold the applied mode when RESEXACT
+# and the legacy path log and assign:
+#   RESDRIFT believed=AxB actual=WxH - adopting the actual mode              -> WxH   resolution.c:1513
+#   RESAPPLIED-MISMATCH applied=WxH expected=AxB - adopting the applied size -> WxH   :1892, :2066
+#   RESEXACT WxH replug=N                                                             :1913
+#   RESAPPLIED WxH                     (the readback the legacy path adopts)           :2063
+#   NEVEREXIT adopted WxH as the current screen size                                  vchan-handlers.c:258
+#   A6CONFIGURE window 0 -> WxH        (the announce; only under a whole-desktop grant) main.c:15828
+_lc_agent_screen_ps(){ cat <<'PS'
+$pats=@(
+  @{t='RESDRIFT';            r='RESDRIFT believed=\d+x\d+ actual=(\d+x\d+)'},
+  @{t='RESAPPLIED-MISMATCH'; r='RESAPPLIED-MISMATCH applied=(\d+x\d+)'},
+  @{t='RESEXACT';            r='RESEXACT (\d+x\d+) replug='},
+  @{t='RESAPPLIED';          r='RESAPPLIED (\d+x\d+)'},
+  @{t='NEVEREXIT';           r='NEVEREXIT adopted (\d+x\d+) as the current screen size'},
+  @{t='A6CONFIGURE';         r='A6CONFIGURE window 0 -> (\d+x\d+)'})
+$hit=$null
+for($i=$agentlines.Count-1; $i -ge 0 -and -not $hit; $i--){
+  foreach($p in $pats){ if($agentlines[$i] -match $p.r){ $hit=@{t=$p.t; v=$Matches[1]}; break } }
+}
+if($hit){ Write-Output ('AGENTSCREEN ' + $hit.v + ' src=' + $hit.t + ' pid=' + $agentpid) }
+else { Write-Output ('AGENTSCREEN none pid=' + $agentpid) }
+PS
+}
+agent_screen(){
+  _lc_ps "$(agent_lines_ps)
+$(_lc_agent_screen_ps)" | grep -ao 'AGENTSCREEN .*' | head -1
 }

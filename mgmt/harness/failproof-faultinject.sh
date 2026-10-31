@@ -86,22 +86,6 @@ pass_verdict(){  # <tag> -> writes $OUT/<tag>/, echoes "died=N km=N rec=N pix=ye
 detail(){ grep -aoE 'keyed mutex: [0-9]+ abandonment.*' "$OUT/$1/rnd8.log" 2>/dev/null | head -1; }
 pixels(){ grep -aoiE 'pixels (changed|did not change)[^,]*' "$OUT/$1/rnd8.log" 2>/dev/null | head -3 | tr '\n' ';'; }
 
-# ---------------------------------------------------------------- D-5: the paired GREEN, unarmed
-log "=== D-5: GREEN pass - fault build, NOTHING armed (this is the control) ==="
-psrun "New-Item -Path '$KEY' -Force | Out-Null
-Remove-ItemProperty -Path '$KEY' -Name FaultCaptureExit -EA SilentlyContinue
-Write-Output 'DISARMED'" | grep -a DISARMED | sed 's/^/  /'
-G1=$(pass_verdict green-before)
-log "  unarmed verdict: ${G1:-NONE}   $(detail green-before)"
-log "  pixels: $(pixels green-before)"
-if [ "$G1" != PASS-UNPROVEN ] && [ "$G1" != PASS ]; then
-  log "ABORTING: the fault build is not green with nothing armed (got '${G1:-NONE}'). Either the"
-  log "  build differs from the release in more than the injector, or the subject is dirty. A red"
-  log "  in D-6 could not be attributed to the fault, so there is nothing to prove here."
-  printf 'FI\tcapture-failproof\tINVALID-INSTRUMENT\tunarmed fault build did not go green (got %s)\t%s\n' "${G1:-NONE}" "$EV" >> "$V"
-  exit 1
-fi
-
 # ---------------------------------------------------------------- agent restart, graded
 # THE AGENT IS RESTARTED THROUGH THE SERVICE THAT OWNS IT, AND THE TURNOVER IS PROVEN (owner
 # 2026-10-07; same shape as gate-preflight.sh's set_bits and failproof-gates.sh's set_gate - all
@@ -174,6 +158,43 @@ restart_agent_checked(){  # <ps-preamble> <marker-echo-line> <marker> <context>
   [ "${_sv:-none}" = connected ] || \
     toggle_invalid "$4" "the restarted agent never reached serving=connected (serving=${_sv:-none}); RND-8 grades pixels and would see none"
 }
+
+# ---------------------------------------------------------------- QGAPERF needs the debug feature
+# RND-8's keyed-mutex row grades FRAME LIVENESS from the agent's QGAPERF seq lines, and the agent
+# emits them only when dom0 sets service.gui-agent-debug (perf.c: g_PerfEnabled is read at Init, so
+# the value takes at the next agent start; the feature also raises the log level to Debug). Nothing
+# in the chain set it, so every pass that reached the row came back INVALID-INSTRUMENT "no QGAPERF
+# seq available" (2026-10-30 and 2026-10-31; the suite is in none of the 46 receipts). Set for the
+# suite's lifetime and restored on exit to exactly what it was; the proven restart below is what
+# makes it take. qvm-features on a win-idd-testbed qube is pre-authorised (CLAUDE.md, Rig).
+FEAT_WAS=$(qvm-features "$VM" service.gui-agent-debug 2>/dev/null || true)
+restore_debug_feature(){
+  if [ -n "$FEAT_WAS" ]; then qvm-features "$VM" service.gui-agent-debug "$FEAT_WAS" >/dev/null 2>&1
+  else qvm-features --unset "$VM" service.gui-agent-debug >/dev/null 2>&1; fi
+}
+trap restore_debug_feature EXIT
+[ "$FEAT_WAS" = 1 ] || qvm-features "$VM" service.gui-agent-debug 1
+log "  service.gui-agent-debug: was '${FEAT_WAS:-unset}', now '$(qvm-features "$VM" service.gui-agent-debug 2>/dev/null)'"
+
+# ---------------------------------------------------------------- D-5: the paired GREEN, unarmed
+log "=== D-5: GREEN pass - fault build, NOTHING armed (this is the control) ==="
+# A PROVEN RESTART, NOT A BARE REGISTRY WRITE. Until 2026-11-01 this block sat ABOVE
+# restart_agent_checked's definition and restarted nothing: the baseline graded whichever agent
+# happened to be running - one that had read neither the fault keys' absence nor the debug feature,
+# so QGAPERF was off and the row could only come back INVALID-INSTRUMENT. Same helper, same proof,
+# same serving wait as D-6.
+restart_agent_checked "New-Item -Path '$KEY' -Force | Out-Null
+$DISARM_PS" "Write-Output 'DISARMED'" DISARMED "disarming for the unarmed baseline"
+G1=$(pass_verdict green-before)
+log "  unarmed verdict: ${G1:-NONE}   $(detail green-before)"
+log "  pixels: $(pixels green-before)"
+if [ "$G1" != PASS-UNPROVEN ] && [ "$G1" != PASS ]; then
+  log "ABORTING: the fault build is not green with nothing armed (got '${G1:-NONE}'). Either the"
+  log "  build differs from the release in more than the injector, or the subject is dirty. A red"
+  log "  in D-6 could not be attributed to the fault, so there is nothing to prove here."
+  printf 'FI\tcapture-failproof\tINVALID-INSTRUMENT\tunarmed fault build did not go green (got %s)\t%s\n' "${G1:-NONE}" "$EV" >> "$V"
+  exit 1
+fi
 
 # ---------------------------------------------------------------- D-6: arm the fault, expect RED
 # ArmDelaySec is lowered so the one-shot is live by the time RND-8 drives its first mode change;
