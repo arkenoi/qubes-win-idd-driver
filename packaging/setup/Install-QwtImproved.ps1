@@ -1447,15 +1447,23 @@ function Register-QwtEventSource {
 #                ResultCode 2147943691, LastTaskResult 267014 - so this Select cannot tell them apart and
 #                eats both. The genuine hang is reported NOWHERE. The arms differ only in a SEPARATE record
 #                (329 for the time limit; 330+111 for the reap), which one Select over one record cannot see.
-#                [[SCANHANGINVISIBLEATTHESUBSCRIPTION]] P1 holds the fix: subscribe to 329 itself, which
-#                fires on the hang and NOT on the reap, rather than letting 2147943691 back through - that
-#                would restore the refused-launch 203 per shutdown this exclusion exists to remove, and
-#                mgmt/harness/log-sweep-collect.ps1 collects it (Ids 201/203, $OurTaskRx matches
-#                QwtDeathReporter). Blocked only on 329's record shape, which its fixture must come from.
+#                FIXED BY SUBSCRIBING TO 329 BELOW, not by letting 2147943691 back through - that would
+#                restore the refused-launch 203 per shutdown this exclusion exists to remove, and
+#                mgmt/harness/log-sweep-collect.ps1 collects it (Ids 201/203/329, $OurTaskRx matches
+#                QwtDeathReporter). 329's EventData is TaskName + TaskInstanceId and no ResultCode, read off
+#                the provider manifest on win11r 26300 (Get-WinEvent -ListProvider
+#                Microsoft-Windows-TaskScheduler), so the Select can scope to OUR tasks exactly as 203 does.
+#                MEASURED ON A REAL KILL, win11r-thold 2026-10-31 (live329-20261031-124147Z): 329 raised with
+#                EventData [TaskName, TaskInstanceId] only, selected by this shape at +76 s, 330=0 and 111=0,
+#                its paired 201 carrying 2147943691 / LastTaskResult 267014 - and the whole subscription,
+#                third Select and all, registered rc=0.
+#                AND THE PAIR IS DEDUPLICATED, or one hang would be two deaths: the reporter ignores a 201
+#                carrying this code when a 329 exists for the SAME TaskInstanceId (GUARD:timeoutdup). This
+#                Select never sees that 201, but the boot catch-up replays every record it finds.
 #                The string form '2147943691', not a numeric literal: the same shape as the TaskName
 #                comparison, which the four refusals prove this evaluator matches.
 # Microsoft-Windows-TaskScheduler/Operational is DISABLED by default on client Windows (Task Scheduler's
-# "Enable All Tasks History"); it is enabled here, or 201/203 would never be written at all.
+# "Enable All Tasks History"); it is enabled here, or 201/203/329 would never be written at all.
 function Register-QwtDeathReporter {
     param([Parameter(Mandatory)][string]$Root)
     $reporterTask = 'QwtDeathReporter'
@@ -1519,6 +1527,14 @@ function Register-QwtDeathReporter {
             "<Query Id=`"2`" Path=`"$tsPath`">",
             "<Select Path=`"$tsPath`">*[System[Provider[@Name='Microsoft-Windows-TaskScheduler'] and EventID=201] and EventData[Data[@Name='ResultCode']!=0 and Data[@Name='ResultCode']!='2147943691' and ($taskOr)]]</Select>",
             "<Select Path=`"$tsPath`">*[System[Provider[@Name='Microsoft-Windows-TaskScheduler'] and EventID=203] and EventData[$taskOr]]</Select>",
+            # 329 - "terminated ... due to exceeding the time allocated for execution". The ONE record that
+            # separates a genuine hang of ours from the shutdown reap, which the 201 above cannot (both leave
+            # ResultCode 2147943691). Scoping by TaskName is possible because 329's EventData IS TaskName +
+            # TaskInstanceId, read off the provider's own manifest on win11r 26300 rather than assumed, so this
+            # cannot fire for a foreign task. No ResultCode term: the record has none, and needs none - the event
+            # is itself the statement of cause. The reap raises 330+111 and no 329, so this adds no shutdown-time
+            # launch and the refused-launch 203 that 0262ce2a removed stays removed.
+            "<Select Path=`"$tsPath`">*[System[Provider[@Name='Microsoft-Windows-TaskScheduler'] and EventID=329] and EventData[$taskOr]]</Select>",
             '</Query>',
             '</QueryList>'
         ) -join ''

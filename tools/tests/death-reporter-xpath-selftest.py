@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 INSTALLER = ROOT / 'packaging' / 'setup' / 'Install-QwtImproved.ps1'
 REPORTER = ROOT / 'guest' / 'qwt-report-death.ps1'
 MAKESETUP = ROOT / 'packaging' / 'make-setup.ps1'
-KNOBS = ('noexefilter', 'anyresult', 'noerrorexit', 'selftrigger', 'onelist', 'anyours', 'reapedresult')
+KNOBS = ('noexefilter', 'anyresult', 'noerrorexit', 'selftrigger', 'onelist', 'anyours', 'reapedresult', 'no329')
 # Task Scheduler rejects a Select whose OR-list is too long (measured 2026-10-04 on win11-acc: 22 executables register, 24 do not;
 # the single list of 28 failed the reporter's registration on every install). Each Select is held to MAX_TERMS, with margin.
 MAX_TERMS = 16
@@ -70,6 +70,8 @@ def build_selects(reg: str, defect: str) -> dict[str, list[str]]:
             xp = xp.replace(' and (EventID=4001 or EventID=4002 or EventID=4003 or EventID=4004)', '')
         if defect == 'reapedresult' and 'EventID=201' in xp:
             xp = xp.replace("Data[@Name='ResultCode']!='2147943691' and ", '')
+        if defect == 'no329' and 'EventID=329' in xp:
+            continue   # the state before SCANHANGINVISIBLEATTHESUBSCRIPTION was fixed: a task killed for overrunning selects nothing
         selects[path].append(xp)
     if not all(selects.values()):
         raise SystemExit(f'FAIL  the region yields no Select for some channel: { {k: len(v) for k, v in selects.items()} }')
@@ -89,6 +91,10 @@ def clr(exe): return ev('.NET Runtime', 1026, 'Application', [f'Application: {ex
 def ours(eid): return ev('Qubes Windows Tools', eid, 'Application', ['text', 'gui-agent.exe', '1', '0x1', '1', 'd'])
 def scm(eid, display): return ev('Service Control Manager', eid, 'System', named={'param1': display, 'param2': '1'})
 def task(eid, name, result): return ev('Microsoft-Windows-TaskScheduler', eid, 'Microsoft-Windows-TaskScheduler/Operational', named={'TaskName': name, 'TaskInstanceId': 'i', 'ActionName': 'a', 'ResultCode': result})
+# 329 carries TWO fields and no more: measured 2026-10-31 from the provider's own manifest on win11r 26300
+# (Get-WinEvent -ListProvider Microsoft-Windows-TaskScheduler; 329 v0 = TaskName, TaskInstanceId). It does NOT
+# carry a ResultCode, so it cannot reuse task() - a Select written against task()'s shape would select nothing.
+def tasktimeout(name): return ev('Microsoft-Windows-TaskScheduler', 329, 'Microsoft-Windows-TaskScheduler/Operational', named={'TaskName': name, 'TaskInstanceId': 'i'})
 
 
 def matrix(selects) -> list[tuple[str, bool, bool]]:
@@ -127,6 +133,12 @@ def matrix(selects) -> list[tuple[str, bool, bool]]:
         ('203 \\QubesAutologonGuard',                   task(203, '\\QubesAutologonGuard', '2147942402'), True),
         ('203 \\QwtDeathReporter (never: no self-trigger)', task(203, '\\QwtDeathReporter', '2147942402'), False),
         ('201 \\QwtDeathReporter result 1 (never: no self-trigger)', task(201, '\\QwtDeathReporter', '1'), False),
+        # 329: Task Scheduler killed the instance for exceeding ExecutionTimeLimit. The ONLY record a hung task of
+        # ours leaves that says so - the 201 it also writes carries 2147943691, which the row above deliberately drops
+        # as a shutdown reap. Without this Select a hang is invisible (SCANHANGINVISIBLEATTHESUBSCRIPTION).
+        ('329 \\QubesWindowsUpdateScan (our task killed for overrunning)', tasktimeout('\\QubesWindowsUpdateScan'), True),
+        ('329 \\Microsoft\\Windows\\Defrag\\ScheduledDefrag (not ours)', tasktimeout('\\Microsoft\\Windows\\Defrag\\ScheduledDefrag'), False),
+        ('329 \\QwtDeathReporter (never: no self-trigger)', tasktimeout('\\QwtDeathReporter'), False),
         ('100 \\QubesPvNic (a start: not subscribed)',  task(100, '\\QubesPvNic', '0'), False),
     ]
     rows = []

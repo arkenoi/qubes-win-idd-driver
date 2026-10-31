@@ -156,7 +156,9 @@ The notification has ONE shape for every sender (the agent's `notifyerr.h`, noti
   recovery, nothing), and what the user can do — only when there is something.
 - **line 2**: the cause in words: `Cause: an access violation.` The meaning comes from the table of
   the code's SOURCE — a process exit or exception code, a Windows error the SCM reports (7023), a
-  service-specific code (7024; the service defines it, no table of ours), a task result (201/203) —
+  service-specific code (7024; the service defines it, no table of ours), a task result (201/203), and
+  NO code at all for a task Task Scheduler killed for overrunning (329 carries none; the event is the
+  cause: "it was still running when its time limit ran out, so Task Scheduler stopped it") —
   never the process table for the others. The code itself is NOT on this line (2026-10-10): the
   technical line carries it, and a fact appears once.
 - **line 3**, the technical line: `<executable>[ pid <n>][; <code>][; ran <h:mm:ss>]; death <n>

@@ -156,7 +156,7 @@ TASK_RETURN_CODE_RE = re.compile(r"with return code (-?\d+)")
 
 
 def task_record_is_failure(eid, msg):
-    """Is this TaskScheduler 201/203 record for one of our tasks actually a FAILURE?
+    """Is this TaskScheduler 201/203/329 record for one of our tasks actually a FAILURE?
 
     MEASURED 2026-10-09 on win11-acc. task_failures counted every 201 and 203 for one of our tasks,
     and 201 is "Task Scheduler SUCCESSFULLY COMPLETED task X ... with return code N". Our tasks are
@@ -176,6 +176,14 @@ def task_record_is_failure(eid, msg):
     Jev put this change's residual exactly there (zero-code-failure-missed 0.68).
     """
     if eid == 203:
+        return True
+    # 329 - "terminated ... due to exceeding the time allocated for execution". A HANG, and the one
+    # record that says so: the 201 the same kill writes carries 2147943691, which the shutdown codes
+    # below excuse because the shutdown reap leaves it too (measured 2026-10-30, three arms). Stated
+    # rather than left to the no-parsable-code branch: 329 carries no return code AT ALL (its
+    # EventData is TaskName + TaskInstanceId, measured off the provider manifest on win11r 26300),
+    # so it would reach that branch and be counted for the right reason by accident.
+    if eid == 329:
         return True
     m = TASK_RETURN_CODE_RE.search(msg or "")
     if not m:
@@ -208,7 +216,7 @@ def event_wanted(log, eid, provider, msg):
     if "LocalSessionManager" in log:
         return eid in (21, 22, 23, 24, 25, 54)
     if "TaskScheduler" in log:
-        if eid not in (201, 203) or not OUR_TASKS_RE.search(msg):
+        if eid not in (201, 203, 329) or not OUR_TASKS_RE.search(msg):
             return False
         # A LAUNCH THE SYSTEM REFUSED BECAUSE IT WAS SHUTTING DOWN IS NOT A TASK FAILURE. Task
         # Scheduler reports id=203 "failed to launch action" with an Error Value, and when that

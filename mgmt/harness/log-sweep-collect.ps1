@@ -26,7 +26,9 @@
 #     System: 7000/7009/7011/7023/7024/7031/7034/7036/7040/7043/7045 naming our services, the boot and shutdown markers
 #     (1074/1076, 13, 12 Kernel-General, 6005/6006/6008/6009/6013, Kernel-Power 41/109, BugCheck 1001);
 #     TerminalServices-LocalSessionManager/Operational 21-25/54 (logon, logoff, "received system shutdown message");
-#     TaskScheduler/Operational 201/203 naming our tasks (the channel is optional: client Windows ships it disabled).
+#     TaskScheduler/Operational 201/203/329 naming our tasks (the channel is optional: client Windows ships it disabled).
+#     329 is the time-limit kill - a hang, and the one record that says so, since the 201 of that kill
+#     carries the same ResultCode the shutdown reap leaves. tools/log-sweep.py counts it as a failure.
 #
 # OUTPUT: one stream the rig DECODES AND VERIFIES (the proven transfer shape of the toast-hold harness - trust
 # counts, not streams). Every line the harness reads starts with 'LSW ' - a marker that never appears on the
@@ -497,7 +499,7 @@ if (-not $NoEvents) {
         @{ Log = 'System'; Ids = @(12, 13, 41, 1001, 1074, 1076, 6005, 6006, 6008, 6009, 6013, 109, 7000, 7009, 7011, 7023, 7024, 7031, 7034, 7036, 7040, 7043, 7045); Required = $true },
         @{ Log = 'Application'; Ids = @(1000, 1001, 1026, 4001, 4002, 4003, 4004); Required = $true },
         @{ Log = 'Microsoft-Windows-TerminalServices-LocalSessionManager/Operational'; Ids = @(21, 22, 23, 24, 25, 54); Required = $false },
-        @{ Log = 'Microsoft-Windows-TaskScheduler/Operational'; Ids = @(201, 203); Required = $false }
+        @{ Log = 'Microsoft-Windows-TaskScheduler/Operational'; Ids = @(201, 203, 329); Required = $false }
     )
     foreach ($ch in $channels) {
         $log = $ch.Log

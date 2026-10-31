@@ -10,7 +10,9 @@
 #                children ended by the system with their session, are recorded there and not subscribed)
 #   System       7031 / 7034 / 7023 / 7024 (Service Control Manager: a service of ours ended)
 #   TaskScheduler/Operational  201 with a non-zero result other than 0x8007050B (an instance of ours the
-#                shutdown reaped - QwtShutdownResultCodes below), and 203 (a task of ours failed)
+#                shutdown reaped - QwtShutdownResultCodes below), 203 (a task of ours failed to launch) and
+#                329 (Task Scheduler killed an instance of ours for exceeding its execution time limit - the
+#                ONE record that says so: the 201 the same kill writes carries the reaped code above)
 # The task hands this script ONLY the record's channel and EventRecordID (ValueQueries); the event is read
 # back here with Get-WinEvent, so no event text ever travels through a command line.
 #
@@ -40,7 +42,8 @@
 #   line 2   "Cause: <meaning>." The meaning comes from the table of the code's SOURCE: the process table for a
 #            crash's exception or a supervisor's exit code (plus the codes an executable documents), the
 #            Windows-error table for the SCM's 7023, no table for a service-specific 7024 (the service defines
-#            it), the task-result table for 201/203. Never the process table for the others ("ended by
+#            it), the task-result table for 201/203, and NO code at all for 329 (its record carries none and
+#            the event itself is the cause). Never the process table for the others ("ended by
 #            TerminateProcess" for a task result was rz39 defect 3). The CODE is not on this line: the
 #            technical line carries it, and a fact appears once (owner 2026-10-10, "too much prose": one short
 #            clause for the condition, one for the consequence, then the facts; explanation goes in a comment).
@@ -508,6 +511,25 @@ $script:QwtTaskEndedProbe = {
                             -FilterXPath $x -MaxEvents 1 -ErrorAction Stop))
     } catch { return $false }
 }
+# WAS THIS INSTANCE KILLED FOR OVERRUNNING? The 329 of that kill, by instance.
+# A time-limit kill writes BOTH a 329 and a 201 whose ResultCode is 2147943691. The live
+# subscription takes only the 329 (the 201 Select excludes that code since 0262ce2a), but the
+# catch-up pass replays EVERY record above its watermark and reads both - so without this the one
+# kill would open two deaths, which is the double the owner grades P1.
+# TaskInstanceId, NOT InstanceId: 329 names the field TaskInstanceId and 111 names it InstanceId,
+# read off the provider manifest on win11r 26300. Mixing them up would make this probe answer
+# $false forever, exactly as QwtTaskEndedProbe once did.
+# Fails CLOSED here on purpose, unlike QwtShutdownNearProbe: an unreadable log returns $false, so
+# the 201 is still reported. Missing data never buys silence.
+$script:QwtTaskTimedOutProbe = {
+    param([string]$instanceId)
+    if (-not $instanceId) { return $false }
+    try {
+        $x = "*[System[EventID=329]][EventData[Data[@Name='TaskInstanceId']='$instanceId']]"
+        return ($null -ne (Get-WinEvent -LogName 'Microsoft-Windows-TaskScheduler/Operational' `
+                            -FilterXPath $x -MaxEvents 1 -ErrorAction Stop))
+    } catch { return $false }
+}
 # A shutdown was under way at $at. Kernel-General 109 is the kernel's own "the system is shutting
 # down"; User32 1074 records who asked for it; EventLog 6006 is the log service stopping.
 # THREE ANSWERS, not two: $true (a shutdown record is near), $false (the log was read and holds none
@@ -869,8 +891,12 @@ function ConvertFrom-QwtDeathEvent {
             return $r
         }
         'Microsoft-Windows-TaskScheduler' {
-            if ($eventId -notin 201, 203) { $r.reason = "TaskScheduler $eventId is not a task-failure record"; return $r }
+            if ($eventId -notin 201, 203, 329) { $r.reason = "TaskScheduler $eventId is not a task-failure record"; return $r }
             $task = "$($named['TaskName'])"
+            # 329 carries NO ResultCode - its EventData is TaskName + TaskInstanceId and nothing else
+            # (read off the provider's own manifest on win11r 26300: Get-WinEvent -ListProvider
+            # Microsoft-Windows-TaskScheduler, event 329 v0). ConvertTo-QwtDeathUInt32 of an absent
+            # field yields $null, which is what every consumer below already handles.
             $code = ConvertTo-QwtDeathUInt32 "$($named['ResultCode'])"
             $r.taskName = $task.TrimStart('\')
             if ($script:QwtDeathHelperTasks.ContainsKey($task)) {
@@ -885,9 +911,41 @@ function ConvertFrom-QwtDeathEvent {
             } else {
                 $r.reason = "task '$task' is not ours"; return $r
             }
+            # A HANG OF OURS, STATED BY TASK SCHEDULER ITSELF, AND THE ONE RECORD THAT CAN SAY SO.
+            # The 201 this same kill also writes carries ResultCode 2147943691 / LastTaskResult
+            # 267014 - byte for byte what a `schtasks /end` reap leaves (MEASURED win11-acc
+            # 2026-10-30, three arms) - so the result code cannot discriminate and the 201 Select
+            # excludes that code to keep the shutdown reap from launching this reporter into a
+            # refusal. 329 is what separates them: the time-limit kill raises it and the reap does
+            # not (the reap raises 330+111 and no 329). So this arm is the ONLY route by which a
+            # genuinely hung task of ours reaches the user, and it needs no shutdown test at all -
+            # unlike a result code, which is whatever the killed process left behind, 329 IS Task
+            # Scheduler's statement of cause. [[SCANHANGINVISIBLEATTHESUBSCRIPTION]]
+            if ($eventId -eq 329) {
+                $r.ours = $true; $r.kind = 'tasktimeout'; $r.rec = 'task-timeout'
+                # anchor is NOT set here: it was already set above - 'join-only' for a helper task,
+                # whose own death the agent reports as 4002/4003, and 'nopid' for a script task.
+                if ($script:QwtDeathHelperTasks.ContainsKey($task)) { $r.label = "$($r.exe) (task $($r.taskName)) was terminated for exceeding its execution time limit" }
+                else { $r.label = "task $($r.taskName) was terminated for exceeding its execution time limit" }
+                return $r
+            }
             if ($eventId -eq 201) {
                 if ($null -eq $code -or $code -eq 0) { $r.reason = "task '$task' ended with result 0"; return $r }
                 if ($code -eq 267014) { $r.ignore = $true; $r.reason = "task '$task' was ENDED by Task Scheduler (0x41306) - a stop that was asked for, not a death"; return $r }
+                # THE 329 OF THE SAME KILL IS THE RECORD OF IT, and it is subscribed now. This 201
+                # carries only what the stopped process left behind; the 329 carries Task
+                # Scheduler's statement of cause, and the arm above reports it. Keyed on the SAME
+                # TaskInstanceId, so it can silence no other instance's failure, and asked ONLY for
+                # 2147943691 - the code arm (c) leaves (MEASURED win11-acc 2026-10-30) - so no other
+                # result is touched. This is the catch-up's path: the live subscription never sees
+                # this 201 at all. [[SCANHANGINVISIBLEATTHESUBSCRIPTION]]
+                if ($code -eq 2147943691 -and (& $script:QwtTaskTimedOutProbe "$($named['TaskInstanceId'])")) {   # GUARD:timeoutdup
+                    $r.ignore = $true
+                    $r.reason = ("task '$task' instance $($named['TaskInstanceId']) was terminated for exceeding its " +
+                                 'execution time limit - event 329 is the record of that kill and is reported on its ' +
+                                 "own; this 201's result code $code is what the stopped process left behind")
+                    return $r
+                }
                 # A RESULT THE TASK USES TO MEAN SOMETHING ELSE. Only exact codes a task's own
                 # documented contract defines as not-a-failure; anything else, including every other
                 # code from the same task, is still a death.
@@ -1215,6 +1273,30 @@ function Format-QwtDeathNotice {
             $codeText = Format-QwtDeathCode $Death.code 'result'
             $cause = Format-QwtDeathCause $Death.code 'task' ''
             $detail = 'Task Scheduler history (TaskScheduler/Operational) event 201'
+        }
+        'tasktimeout' {
+            # 329. Mirrors the 'task' arm's two shapes (a script task of ours has a human name and an
+            # impact line; a helper task's record is the agent's own helper death wearing a task
+            # number), so a helper never indexes QwtDeathTaskNames with an unset key - that
+            # StrictMode throw is how a clock reason once reached the user as stage=unknown. The
+            # helper branch is LIVE, not defensive: a helper's 329 carries anchor 'join-only', so
+            # it opens no death, but a join inside QwtDeathWindowSec formats this notice with the
+            # AGAIN tag. tools/tests/notify-render-test.ps1 says why it holds no helper case.
+            if ($Death.task) {
+                $next = "$($script:QwtDeathTaskNames[$Death.task].impact)"
+                $subject = "task $($Death.taskName)"
+            } else {
+                $next = Get-QwtDeathNext $Death
+                $subject = "$($Death.exe) (task $($Death.taskName))"
+            }
+            # 'ran too long' and not 'was stopped for running too long': the header is 'The <human name>
+            # <what>' and must stay at 60 characters for the LONGEST task name we subscribe
+            # ('Windows Update download task', 28), which leaves 27. The stop is on the cause line.
+            $what = 'ran too long'
+            # No code: the record carries none, and the cause is the event itself rather than
+            # anything the killed process left behind.
+            $cause = 'Cause: it was still running when its time limit ran out, so Task Scheduler stopped it.'
+            $detail = 'Task Scheduler history (TaskScheduler/Operational) event 329'
         }
         'launchfail' {
             $what = 'could not start'
