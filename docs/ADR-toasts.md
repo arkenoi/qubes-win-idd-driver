@@ -15,7 +15,7 @@ and Maintenance, the backup reminder) is forwarded even when the classifier cann
 extend the list per guest - but since the buttons route (§11) a toast of theirs whose verdict has arrived
 follows that verdict like any other: a listed application cannot smuggle a toast with buttons to dom0 as text.
 
-Buttons can now travel too (§11, built, not yet proven on a guest). When every button of a toast is one the
+Buttons can now travel too (§11). When every button of a toast is one the
 bridge can press on your behalf - a link the button opens, or a classic Windows application that registered
 the hook the notification system itself calls when you click - the toast is forwarded with its buttons, dom0
 shows them as the buttons of its own notification, and your click in dom0 is carried out inside the guest the
