@@ -29,6 +29,15 @@
 #
 #   - `flock -o` keeps the locked fd ONLY in the flock waiter; the exec'd sentinel (tail) does
 #     not carry it, and no harness child can ever inherit it - the harness shell never owns it.
+#   - the holder's STDOUT AND STDERR GO TO /dev/null, and that is not tidiness. The sentinel
+#     outlives the vm_lock call by design, so whatever it inherited it holds for the life of the
+#     lock - and a caller that PIPES vm_lock (`vm_lock "$VM" 2>&1 | tail -2`) hands it the write
+#     end of that pipe. `tail -2` then never sees EOF and the pipeline never returns: measured
+#     2026-10-31, a job hung 1h43m at its FIRST command, never reached its `qvm-start`, and left
+#     the guest Halted with no output at all while holding the lock. The same inheritance trap as
+#     the fd above, one stream over. Nothing reads these streams - the holder line is written
+#     straight to the lock file ("$4") and the acquire is confirmed from that file's CONTENT - so
+#     there is nothing to lose by closing them.
 #   - the sentinel lives exactly as long as the JOB LEADER ($$ of the script that called
 #     vm_lock): when the leader exits FOR ANY REASON (normal exit, error, SIGTERM, SIGKILL),
 #     `tail --pid` notices within ~1-2s, exits, the flock waiter exits, and the lock is FREE.
@@ -65,7 +74,7 @@ _vmlock_try(){
   local vm="$1" lf="$2" hp n line
   flock -n -o "$lf" /bin/sh -c \
     'printf "pid=%s holder=%s sentinel=%s started=%s cmd=%s vm=%s\n" "$1" "$PPID" "$$" "$(date -u +%FT%TZ)" "$2" "$3" > "$4"; exec tail --pid="$1" -f /dev/null' \
-    vmlock-holder "$$" "${0##*/}" "$vm" "$lf" &
+    vmlock-holder "$$" "${0##*/}" "$vm" "$lf" >/dev/null 2>&1 &
   hp=$!
   disown "$hp" 2>/dev/null || true
   # Acquisition is confirmed by CONTENT (this job's pid+holder pid in the lock file, written by
