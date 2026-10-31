@@ -346,6 +346,15 @@ def parse_agent(lines: List[str], offset: dt.timedelta, tz: Optional[dt.tzinfo] 
             # QGATOASTGATEDROP, which this does not match and which is pure volume, not a state change.
             kind = "GATE"; hwnd = re.search(r"QGATOASTGATE hwnd=" + HEX_RE, msg).group(1).lower()
             kv["what"] = "gated" if " frames gated" in msg else "resumed"
+        elif "QGATOASTREPAINT hwnd=" in msg:
+            # The gate release's repaint DEBT and its settlement (agent bcd7bda). Three shapes:
+            # `owed=deferred feed=slice`, `frame=seen owed_ms=N`, `paid=immediate|paid=region after N ms`.
+            # A release is NOT a repaint: for a slice-fed banner - which every toast banner is - the payment
+            # rides the next capture frame, and measured on run 41161440735 none arrived in the 5.9 s before
+            # the window was destroyed, so dom0 kept the PREVIOUS toast's frame. Only `paid` says the pixels
+            # went out, which is why this is parsed rather than skipped by the else below.
+            kind = "REPAINT"; hwnd = re.search(r"QGATOASTREPAINT hwnd=" + HEX_RE, msg).group(1).lower()
+            kv = dict(KV_RE.findall(msg))
         elif "QGATOASTPREEMPT hwnd=" in msg:
             kind = "PREEMPT"; hwnd = re.search(r"QGATOASTPREEMPT hwnd=" + HEX_RE, msg).group(1).lower()
             # " unmapped:" means a WITHDRAWAL and nothing else - it is what the PREEMPTED verdict below
@@ -680,6 +689,19 @@ class Grader:
                 state = e.kind == "MAP"
         return state and not gated
 
+    def repaint_paid(self, hwnd: str, after: Tuple, until: Tuple) -> bool:
+        """Did dom0 actually RECEIVE this window's current content after a gate release in that span?
+
+        The release only records a debt (`owed=deferred`); the pixels go out when the tracking pass pays it
+        (`paid=region after N ms`), or at once for a window on its own per-window capture (`paid=immediate`).
+        For a slice-fed banner the payment rides the next capture frame, and on run 41161440735 the gate
+        released after holding 3 frames, the debt was recorded, and NO frame arrived in the 5.9 s before the
+        window was destroyed: `frame=seen` 0, `paid=` 0. dom0 kept the previous toast's banner. So a resume
+        without a payment inside the toast's own segment is NOT this toast reaching the screen.
+        """
+        return any(e.kind == "REPAINT" and e.hwnd == hwnd and "paid" in e.kv and after < e.key() <= until
+                   for e in self.agent)
+
     def banner_hwnds(self) -> set:
         s = set()
         for e in self.agent:
@@ -859,11 +881,26 @@ class Grader:
             if held:
                 p = held[0]
                 end = self._segment_end(p.hwnd, p.key(), nid, th, p.t + dt.timedelta(seconds=CONTENT_WINDOW_S))
-                shown = [e for e in self.agent if e.hwnd == p.hwnd and p.key() < e.key() < end
-                         and (e.kind == "MAP" or (e.kind == "GATE" and e.kv.get("what") == "resumed"))]
+                # A RELEASE THAT WAS NEVER PAID PUT NOTHING ON THE SCREEN, and a bare MAP is not this
+                # toast's: counting one cost a FALSE DOUBLE on run 41161440735 S3ii-2, where the only MAP in
+                # id=13's segment (07:10:03.519) was the DISPLAYED toast id=12's own first map, 6167 ms late
+                # by its own row. id=13's gate never resumed at all before the window died, so dom0 never had
+                # its pixels. The MAP term was a stand-in from when no resume line existed; the resume does
+                # exist now (agent 8440f75), so the release signal is the resume, and the repaint must land.
+                resumes = [e for e in self.agent if e.hwnd == p.hwnd and e.kind == "GATE"
+                           and e.kv.get("what") == "resumed" and p.key() < e.key() < end]
+                # A MAP still counts, but only a RE-map: one with an UNMAP before it in this segment. That is
+                # the shape the MAP term was for - a window withdrawn and brought back with the queued toast's
+                # content in it, which emits no resume - and requiring the unmap is what stops the DISPLAYED
+                # toast's own first map being billed here. Under frames-held gating the window stays mapped by
+                # design, so a map with no unmap before it cannot be a re-exposure of this toast.
+                segunmaps = [e for e in self.agent if e.hwnd == p.hwnd and is_unmap(e) and p.key() < e.key() < end]
+                remaps = [e for e in self.agent if e.hwnd == p.hwnd and e.kind == "MAP" and p.key() < e.key() < end
+                          and any(u.key() < e.key() for u in segunmaps)]
+                shown = [r for r in resumes if self.repaint_paid(p.hwnd, r.key(), end)] + remaps
                 detail = (f"queued behind the displayed banner in hwnd=0x{p.hwnd}, frames gated "
-                          f"{p.t.strftime('%H:%M:%S.%f')[:-3]}; frame releases (gate resume or re-map) before another "
-                          f"toast takes the window or it ends: {len(shown)}")
+                          f"{p.t.strftime('%H:%M:%S.%f')[:-3]}; gate resumes before another toast takes the window "
+                          f"or it ends: {len(resumes)}, re-maps after an unmap: {len(remaps)}, reached dom0: {len(shown)}")
                 if deliv:
                     return ("DOUBLE", detail + " double=after-gated-preempt") if shown else ("OK-BRIDGED", detail)
                 if shown:
@@ -902,12 +939,21 @@ class Grader:
         maps = [e for e in in_win if e.kind == "MAP"]
         unmaps = [e for e in in_win if is_unmap(e)]
         preempts = [e for e in in_win if e.kind == "PREEMPT" and e.kv.get("what") == "unmapped"]
-        mapped = mapped_at_exam or bool(maps)
-        delay_ms = 0 if mapped_at_exam else (int((maps[0].t - t_exam).total_seconds() * 1000) if maps else None)
+        # UNDER SWAP-EDGE GATING THE SECOND TOAST IN A SHARED WINDOW GETS NO MAP OF ITS OWN: the window is
+        # already mapped, and what reaches dom0 is the gate release plus the repaint it forces. So a release
+        # whose repaint was PAID inside this toast's segment is this toast being shown, and one that was not
+        # is the window frozen on the previous toast's frame (run 41161440735 id=15: resumed after 3 held,
+        # owed=deferred, then no frame and no payment in the 5.9 s before the destroy - a real loss).
+        releases = [e for e in in_win if e.kind == "GATE" and e.kv.get("what") == "resumed"
+                    and self.repaint_paid(h, e.key(), w_end)]
+        shown_ev = min(maps + releases, key=Ev.key) if (maps or releases) else None
+        mapped = mapped_at_exam or shown_ev is not None
+        delay_ms = 0 if mapped_at_exam else (int((shown_ev.t - t_exam).total_seconds() * 1000) if shown_ev else None)
         reasons = ",".join(sorted({e.kv.get("reason", "?") for e in late})) if late else "-"
         detail = (f"hwnd=0x{h} examined={t_exam.strftime('%H:%M:%S.%f')[:-3]} decisions="
                   f"{'/'.join((e.kv.get('state') or 'late') for e in decisions) or 'none'} mapped_at_exam={int(mapped_at_exam)} "
-                  f"maps={len(maps)} unmaps={len(unmaps)} map_delay_ms={delay_ms if delay_ms is not None else '-'} failopen={reasons}")
+                  f"maps={len(maps)} repainted_releases={len(releases)} unmaps={len(unmaps)} "
+                  f"map_delay_ms={delay_ms if delay_ms is not None else '-'} failopen={reasons}")
         if deliv and not mapped:
             return "OK-BRIDGED", detail
         if deliv and mapped:
@@ -916,7 +962,7 @@ class Grader:
         if mapped:
             if delay_ms is not None and delay_ms > WINDOW_BOUND_MS:
                 return "LATE-WINDOW", detail + f" bound={WINDOW_BOUND_MS}"
-            shown_at = None if mapped_at_exam else maps[0]
+            shown_at = None if mapped_at_exam else shown_ev
             pre = [e for e in preempts if shown_at is None or e.key() > shown_at.key()]
             if pre:
                 # The owner's rule (ADR-toasts 10's Why): a flash is not fine, nothing is lost. A displayed window-path banner
