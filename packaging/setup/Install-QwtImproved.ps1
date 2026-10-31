@@ -1432,10 +1432,26 @@ function Register-QwtEventSource {
 #                2147943691 (0x8007050B) is what an instance of OUR OWN task leaves when the shutdown reaps
 #                it: each of the four 2026-10-08/10 shutdown refusals of this task followed such a 201 of
 #                \QubesPvNic or \QubesPvNicRearm by 43-781 ms. The reporter ignores that record on its own
-#                (QwtShutdownResultCodes), and the boot catch-up pass still reads every record, so the one
-#                thing this Select stops is the launch that Windows was going to refuse. An instance ended
-#                with that result OUTSIDE a shutdown is reported by the catch-up pass at the next boot
-#                rather than at once; 267014 (ended on request) never launched it either.
+#                (QwtShutdownResultCodes); 267014 (ended on request) never launched it either.
+#                THIS EXCLUSION NOW SILENCES A REAL HANG, and the sentence that said otherwise is deleted.
+#                It read: "the boot catch-up pass still reads every record ... an instance ended with that
+#                result OUTSIDE a shutdown is reported by the catch-up pass at the next boot rather than at
+#                once." True when 0262ce2a wrote it (2026-10-10), false six days later: Invoke-QwtDeathCatchUp
+#                stops at the BOOT BOUNDARY (owner 2026-10-16 - reading the previous boot's backlog is
+#                "misleading and overreaching"), so no record from a boot that is over is ever judged, and a
+#                hang killed mid-boot is written long after the catch-up has run. The same correction was
+#                applied to the sibling 203 comment in qwt-report-death.ps1 ("IT NO LONGER CLAIMS THE
+#                CATCH-UP COVERS IT") and missed here.
+#                WHAT IT COSTS: MEASURED on win11-acc 2026-10-30, three arms to completion, an
+#                ExecutionTimeLimit kill of our scan leaves EXACTLY what the shutdown reap leaves - 201 with
+#                ResultCode 2147943691, LastTaskResult 267014 - so this Select cannot tell them apart and
+#                eats both. The genuine hang is reported NOWHERE. The arms differ only in a SEPARATE record
+#                (329 for the time limit; 330+111 for the reap), which one Select over one record cannot see.
+#                [[SCANHANGINVISIBLEATTHESUBSCRIPTION]] P1 holds the fix: subscribe to 329 itself, which
+#                fires on the hang and NOT on the reap, rather than letting 2147943691 back through - that
+#                would restore the refused-launch 203 per shutdown this exclusion exists to remove, and
+#                mgmt/harness/log-sweep-collect.ps1 collects it (Ids 201/203, $OurTaskRx matches
+#                QwtDeathReporter). Blocked only on 329's record shape, which its fixture must come from.
 #                The string form '2147943691', not a numeric literal: the same shape as the TaskName
 #                comparison, which the four refusals prove this evaluator matches.
 # Microsoft-Windows-TaskScheduler/Operational is DISABLED by default on client Windows (Task Scheduler's
