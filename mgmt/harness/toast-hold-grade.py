@@ -843,6 +843,32 @@ class Grader:
                 if remaps:
                     return "OK-WINDOW", detail
                 return "LOST", detail + " (window path, never mapped)"
+            # Named only by a FRAME-GATED pre-emption - the NORMAL pre-emption since swap-edge gating (ADR-toasts 10),
+            # and a shape this path was blind to: it only consulted the `unmapped:` withdrawal above. The agent holds
+            # THIS toast's frames instead of withdrawing the window, so the window stays mapped with the OTHER toast's
+            # pixels in it, and this toast reaches dom0 only if its frames are RELEASED while its content is in the
+            # window - a gate resume or a fresh MAP, before another toast's content takes the window.
+            # Measured, run 41154092416 S3ii-2 (id=24, hwnd=0x20240): the window's only MAP is the displayed toast's
+            # own (`state=show ... id=23` at 04:05:53.624), the gate closed 720 ms later and the window was DESTROYED
+            # at 04:06:04.404 with no resume - dom0 never got a frame of id=24. The fall-through below has no
+            # segmentation at all (any banner MAP in a flat 10 s window), so it counted the other toast's banner as
+            # this toast's and graded DOUBLE over a hold that worked. Run 1's same shape (id=13) escaped only because
+            # that window survived long enough for the toast to be examined, which takes the owned path below.
+            held = sorted([e for e in self.agent if e.kind == "PREEMPT" and e.kv.get("what") == "frames-held"
+                           and e.kv.get("id") == nid and e.t >= t0 - dt.timedelta(seconds=1)], key=Ev.key)
+            if held:
+                p = held[0]
+                end = self._segment_end(p.hwnd, p.key(), nid, th, p.t + dt.timedelta(seconds=CONTENT_WINDOW_S))
+                shown = [e for e in self.agent if e.hwnd == p.hwnd and p.key() < e.key() < end
+                         and (e.kind == "MAP" or (e.kind == "GATE" and e.kv.get("what") == "resumed"))]
+                detail = (f"queued behind the displayed banner in hwnd=0x{p.hwnd}, frames gated "
+                          f"{p.t.strftime('%H:%M:%S.%f')[:-3]}; frame releases (gate resume or re-map) before another "
+                          f"toast takes the window or it ends: {len(shown)}")
+                if deliv:
+                    return ("DOUBLE", detail + " double=after-gated-preempt") if shown else ("OK-BRIDGED", detail)
+                if shown:
+                    return "OK-WINDOW", detail
+                return "LOST", detail + " (window path, frames never released)"
             # The hold never examined a banner for this toast. Did a banner window get mapped anyway (a window the
             # hold did not own)? Did the guest show a banner at all?
             mapped_any = self._any_banner_map(t0, t0 + dt.timedelta(seconds=CONTROL_BANNER_WINDOW_S))
