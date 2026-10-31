@@ -65,10 +65,22 @@ for f in "${outs[@]}"; do
   fi
   nf="$(printf '%s' "$line" | sed -nE 's/.*, ([0-9]+) failed ===$/\1/p')"
   if [ "$nf" = "0" ]; then clean=$((clean+1)); else failed=$((failed+1)); FAILED_GROUPS+=("$f"); fi
-  # The cells a group ran are echoed by matrix.sh as '[HH:MM:SS]   cells: a b c'; the timestamp is OPTIONAL. The pattern used to be
-  # '^\[[0-9:]+\]?...', where only the ']' was optional, so a line without the timestamp was silently never read (found 2026-10-02 by
-  # tools/tests/acceptance-record-selftest.sh when the feature tests' cell-groups recorded no cells).
-  c="$(grep -aE '^(\[[0-9:]+\])?[[:space:]]*cells:' "$f" | tail -1 | sed -nE 's/.*cells:[[:space:]]*//p')"
+  # The cells a group ran are echoed as '[HH:MM:SS] [INFO]   cells: a b c'; BOTH the timestamp and the LEVEL are optional, because
+  # tools/release-acceptance.sh's feature groups emit neither. Two blindings have been paid for here:
+  #   2026-10-02: the pattern was '^\[[0-9:]+\]?...', only the ']' optional, so an untimestamped line was never read - the feature
+  #               cell-groups recorded no cells.
+  #   2026-10-30: the campaign gained a LEVEL tag ('[INFO] ') between the timestamp and the text. Nothing here allowed it, so
+  #               full.out's one cells: line stopped matching while every feature group still did. The record for the 4.3.39 ISO came
+  #               out 'CLEAN, cells=[the five feature tests]' and tools/acceptance-record-check.py called it PARTIAL - "win10-clean,
+  #               win11-clean, ... did not run" - of a campaign that had just finished 89 passed, 0 failed with all eight install
+  #               cells named on the very line this failed to read. A clean release blocked by a regex, with the evidence it wanted
+  #               already written. THIRD time this tag has blinded a consumer and the fix was not carried across: the 2026-10-15
+  #               watcher in tools/campaign-state.py's docstring (four failed cells reported as "campaign healthy" four times),
+  #               then tools/coverage-receipt.py's VERDICT_RE, now here. failln below was blind the same way and had never been
+  #               exercised, so the re-run path would have claimed a failed group "carries no FAIL line".
+  # What this pattern reads is the campaign's PLANNED cell list, as it always has - per-cell verdicts are tools/coverage-receipt.py's
+  # job, and the footer's "N failed" is what makes a group clean here.
+  c="$(grep -aE '^(\[[0-9:]+\])?[[:space:]]*(\[(ERROR|WARN|WARNING|INFO|DEBUG)\])?[[:space:]]*cells:' "$f" | tail -1 | sed -nE 's/.*cells:[[:space:]]*//p')"
   [ -n "$c" ] && cells="$cells $c"
 done
 shopt -u nullglob
@@ -80,8 +92,8 @@ if [ "$failed" -gt 0 ] && [ "${#RERUNS[@]}" -gt 0 ]; then
 import sys, re, glob, os, json
 n = int(sys.argv[1]); groups = sys.argv[2:2+n]; reruns = sys.argv[2+n:]
 footer = re.compile(r'^=== MATRIX: (\d+) passed, (\d+) failed ===$')
-cellsln = re.compile(r'^(\[[0-9:]+\])?\s*cells:\s*(.*)$')
-failln = re.compile(r'^(\[[0-9:]+\])?\s*FAIL  (.*)$')
+cellsln = re.compile(r'^(?:\[[0-9:]+\])?\s*(?:\[(?:ERROR|WARN|WARNING|INFO|DEBUG)\])?\s*cells:\s*(.*)$')
+failln = re.compile(r'^(?:\[[0-9:]+\])?\s*(?:\[(?:ERROR|WARN|WARNING|INFO|DEBUG)\])?\s*FAIL  (.*)$')
 named = re.compile(r'^([A-Za-z0-9]+-[A-Za-z0-9-]+?)(?: boot \d+)?:')   # 'WIN10-clean:' / 'WIN10-appvm boot 2:'
 # the cells the re-runs passed: a re-run group counts only if its footer says 0 failed
 passed_by = {}
@@ -91,12 +103,12 @@ for d in reruns:
         fl = [footer.match(l) for l in lines if footer.match(l)]
         if not fl or fl[-1].group(2) != '0':
             print(f"FAILED: re-run group {f} did not finish clean", file=sys.stderr); sys.exit(3)
-        cl = [cellsln.match(l).group(2) for l in lines if cellsln.match(l)]
+        cl = [cellsln.match(l).group(1) for l in lines if cellsln.match(l)]
         for c in (cl[-1].split() if cl else []):
             passed_by[c.lower()] = os.path.abspath(d)
 out = []
 for g in groups:
-    fails = [failln.match(l).group(2) for l in open(g, encoding='utf-8', errors='replace').read().splitlines() if failln.match(l)]
+    fails = [failln.match(l).group(1) for l in open(g, encoding='utf-8', errors='replace').read().splitlines() if failln.match(l)]
     if not fails:
         print(f"FAILED: {g} says failed but carries no FAIL line - nothing to supersede", file=sys.stderr); sys.exit(3)
     for t in fails:
@@ -110,7 +122,7 @@ for g in groups:
 print(json.dumps(out))
 PY
 )" && { failed=0; clean=$((clean+${#FAILED_GROUPS[@]})); for r in "${RERUNS[@]}"; do outs2=("$r"/*.out); for f in "${outs2[@]}"; do
-      c="$(grep -aE '^(\[[0-9:]+\])?[[:space:]]*cells:' "$f" | tail -1 | sed -nE 's/.*cells:[[:space:]]*//p')"; [ -n "$c" ] && cells="$cells $c"; done; done; } \
+      c="$(grep -aE '^(\[[0-9:]+\])?[[:space:]]*(\[(ERROR|WARN|WARNING|INFO|DEBUG)\])?[[:space:]]*cells:' "$f" | tail -1 | sed -nE 's/.*cells:[[:space:]]*//p')"; [ -n "$c" ] && cells="$cells $c"; done; done; } \
     || SUPERSEDED_JSON="[]"
 fi
 

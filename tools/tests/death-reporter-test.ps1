@@ -132,6 +132,12 @@ function New-Svc([int]$id, [string]$display, [DateTime]$time, $named) {
     foreach ($k in $named.Keys) { $n[$k] = $named[$k] }
     return New-EvXml 'Service Control Manager' $id 'System' $time @() $n
 }
+function New-TaskTimeout([string]$task, [DateTime]$time) {
+    # 329: TaskName + TaskInstanceId and NOTHING else - no ActionName, no ResultCode, no EnginePID.
+    # Read off the provider's own manifest on win11r 26300, so not New-Task's shape.
+    $n = [ordered]@{ TaskName = $task; TaskInstanceId = '{1b2c3d4e-0000-4000-8000-000000000001}' }
+    return New-EvXml 'Microsoft-Windows-TaskScheduler' 329 'Microsoft-Windows-TaskScheduler/Operational' $time @() $n
+}
 function New-Task([int]$id, [string]$task, [string]$result, [DateTime]$time) {
     $n = [ordered]@{ TaskName = $task; TaskInstanceId = '{1b2c3d4e-0000-4000-8000-000000000001}'; ActionName = 'C:\x\y.exe'; ResultCode = $result; EnginePID = '1234' }
     return New-EvXml 'Microsoft-Windows-TaskScheduler' $id 'Microsoft-Windows-TaskScheduler/Operational' $time @() $n
@@ -415,6 +421,23 @@ Check 'not ended: an ordinary non-zero task result is a death as before' ($ev.ou
 # expected output). A 201 whose result is 0 is a task that SUCCEEDED and is not a death.
 $ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesWindowsUpdateScan' '0' $T0)
 Check 'task 201 result 0: not a death' (-not $ev.ours)
+# A HANG OF OURS, AND ONE DEATH FOR IT. Task Scheduler's time-limit kill writes BOTH a 329 and a 201
+# whose ResultCode is 2147943691 - the same code the shutdown reap leaves, which is why the 201 Select
+# excludes it and why the hang used to be reported NOWHERE. The subscription now takes the 329; the
+# catch-up pass replays BOTH records, so the 201 of a kill whose instance already has a 329 must be
+# ignored or one hang opens two deaths.
+$script:QwtTaskTimedOutProbe = { param([string]$i) return $true }
+$ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesWindowsUpdateScan' '2147943691' $T0)
+Check 'one kill one death: the 201 of an instance that has a 329 is ignored - the 329 is the record of that kill' `
+      ($ev.ignore -eq $true -and -not $ev.ours) "ignore=$($ev.ignore) ours=$($ev.ours) reason=$($ev.reason)"
+$ev = ConvertFrom-QwtDeathEvent (New-Task 201 '\QubesWindowsUpdateScan' '1' $T0)
+Check 'and it silences nothing else: any other result from that instance is still a death' ($ev.ours -eq $true -and $ev.ignore -ne $true)
+$script:QwtTaskTimedOutProbe = { param([string]$i) return $false }
+$ev = ConvertFrom-QwtDeathEvent (New-TaskTimeout '\QubesWindowsUpdateScan' $T0)
+Check '329: a task of ours killed for overrunning IS a death, with its own kind' `
+      ($ev.ours -eq $true -and $ev.kind -eq 'tasktimeout' -and $ev.rec -eq 'task-timeout' -and $null -eq $ev.code) "kind=$($ev.kind) rec=$($ev.rec) code=$($ev.code)"
+$ev = ConvertFrom-QwtDeathEvent (New-TaskTimeout '\Microsoft\Windows\Defrag\ScheduledDefrag' $T0)
+Check '329 of a foreign task: not ours' (-not $ev.ours) "reason=$($ev.reason)"
 # AN EXE EXIT THAT MEANS "I AM ALREADY RUNNING" IS NOT A DEATH. FIELD-REPORTED by GWeck on 4.3.35
 # (forum 42717 post 175, screenshot): "a lot of notifications pop up" on VM start, FOUR of them
 # "The notification bridge exited unexpectedly ... Cause: a clean exit nobody asked for - exit code

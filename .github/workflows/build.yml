@@ -888,6 +888,9 @@ jobs:
           #      (a suppressed banner ignores its record turning window / the bridge dying before dom0's ack - a
           #      loss), NORECLAIM (a completed identity loses its consumed record), NOIDENT_IGNORES_BRIDGE (the
           #      no-identity hold waits out 3 s with the bridge down).
+          #   19. PREEMPT_UNMAPS restores rule 5: a pre-emption UNMAPS the displayed banner instead of gating
+          #      its frames, which is TOASTPREEMPTLOSESBANNER - the banner withdrawn seconds before the queued
+          #      toast's content arrives, and never re-mapped (run 40407378739: 680 ms of display).
           #   12..16. second review: NOFORWARDBOUND (a suppression awaiting dom0's ack never reopens), NOCARD_UNPACED
           #      (an unpaced second card-less read classes a banner mid-grow as a flyout), SIZE60 (the absolute
           #      ceiling that never held a 573 px banner at 768 px), DEADRECORDS (a dead bridge's records stay
@@ -899,7 +902,7 @@ jobs:
                            'TOASTHOLD_DEFECT_NOFORWARDBOUND', 'TOASTHOLD_DEFECT_NOCARD_UNPACED', 'TOASTHOLD_DEFECT_SIZE60',
                            'TOASTHOLD_DEFECT_DEADRECORDS', 'TOASTHOLD_DEFECT_NOBACKOFF',
                            'TOASTIDENT_DEFECT_TIE_SLOTORDER', 'TOASTHOLD_DEFECT_RECLAIM_ANY',
-                           'TOASTIDENT_DEFECT_MARK_BY_SLOT')) {
+                           'TOASTIDENT_DEFECT_MARK_BY_SLOT', 'TOASTHOLD_DEFECT_PREEMPT_UNMAPS')) {
             & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 `
                 /t:Rebuild "/p:ToastHoldDefect=$d"
             if ($LASTEXITCODE -ne 0) { throw "toasthold_test defect $d build failed to compile" }

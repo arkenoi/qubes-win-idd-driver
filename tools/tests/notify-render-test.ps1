@@ -126,6 +126,13 @@ function New-Svc([int]$id, [string]$display, [DateTime]$time, $named) {
     foreach ($k in $named.Keys) { $n[$k] = $named[$k] }
     return New-EvXml 'Service Control Manager' $id 'System' $time @() $n
 }
+function New-TaskTimeout([string]$task, [DateTime]$time) {
+    # 329's EventData is TaskName + TaskInstanceId and no more - read off the provider manifest on win11r 26300
+    # (Get-WinEvent -ListProvider Microsoft-Windows-TaskScheduler). NOT New-Task's shape: no ResultCode exists here,
+    # and a renderer that reached for one would render the empty string as a code.
+    $n = [ordered]@{ TaskName = $task; TaskInstanceId = '{1b2c3d4e-0000-4000-8000-000000000002}' }
+    return New-EvXml 'Microsoft-Windows-TaskScheduler' 329 'Microsoft-Windows-TaskScheduler/Operational' $time @() $n
+}
 function New-Task([int]$id, [string]$task, [string]$result, [DateTime]$time) {
     $n = [ordered]@{ TaskName = $task; TaskInstanceId = '{1b2c3d4e-0000-4000-8000-000000000001}'; ActionName = 'C:\x\y.exe'; ResultCode = $result; EnginePID = '1234' }
     return New-EvXml 'Microsoft-Windows-TaskScheduler' $id 'Microsoft-Windows-TaskScheduler/Operational' $time @() $n
@@ -141,7 +148,7 @@ $script:struck = @('not by a fault of its own', 'nobody asked for', 'Windows end
 # what a header can say happened (its tail after the human name): line 1 must not say it again
 $script:whats = @('crashed', 'exited unexpectedly', 'ended by Windows', 'stopped answering', 'disappeared', 'is already running',
                   'stopped with an error', 'stopped unexpectedly', 'task ended with an error', 'failed', 'could not start',
-                  'needs a reboot that was refused', 'could not be activated')
+                  'needs a reboot that was refused', 'could not be activated', 'ran too long')
 function Test-NotifyRules([string]$case, [string]$text, [string]$subject, [string]$countPhrase) {
     $lines = @($text -split "`r`n")
     $header = $lines[0]
@@ -208,6 +215,13 @@ $cases = [ordered]@{
     '201 task: \QubesPvNic result 1'                = @{ rec = { New-Task 201 '\QubesPvNic' '1' $T0 }; subject = 'task QubesPvNic;'; code = 'result 1'; meaning = 'the script reported a failure'; not = 'TerminateProcess'; header = 'The PV NIC setup task failed'; comp = 'pvnic' }
     '201 task: \QubesWindowsUpdateRun result 0xC0000409' = @{ rec = { New-Task 201 '\QubesWindowsUpdateRun' '3221226505' $T0 }; subject = 'task QubesWindowsUpdateRun;'; code = 'result 0xC0000409'; meaning = 'its program crashed'; header = 'The Windows Update install task failed'; comp = 'update-run' }
     '203 task: \QubesAutologonGuard launch failed'  = @{ rec = { New-Task 203 '\QubesAutologonGuard' '2147942402' $T0 }; subject = 'task QubesAutologonGuard;'; code = 'result 0x80070002'; meaning = 'the file was not found'; header = 'The autologon guard task could not start'; comp = 'autologon-guard' }
+    '329 task: \QubesWindowsUpdateScan hung'        = @{ rec = { New-TaskTimeout '\QubesWindowsUpdateScan' $T0 }; subject = 'task QubesWindowsUpdateScan;'; meaning = 'its time limit ran out'; not = 'TerminateProcess'; header = 'The Windows Update scan task ran too long'; comp = 'update-scan'; next = 'dom0 gets no fresh update availability report' }
+    '329 task: \QubesWindowsUpdateDownload hung (the longest name)' = @{ rec = { New-TaskTimeout '\QubesWindowsUpdateDownload' $T0 }; subject = 'task QubesWindowsUpdateDownload;'; meaning = 'its time limit ran out'; header = 'The Windows Update download task ran too long'; comp = 'update-download' }
+    # NO helper-task case here, and that is the design, not a gap: a 329 of \Qubes-WgcBroker or \Qubes-NotifBridge
+    # carries anchor 'join-only' (GUARD:helperjoin), so it JOINS the agent's own 4002/4003 for that helper and opens
+    # no death of its own - the notification the user gets is the '4002 agent: wgcbroker.exe HUNG' case above. The
+    # helper branch of the reporter's 'tasktimeout' notice arm is still live: a join inside QwtDeathWindowSec formats
+    # the notice with the AGAIN tag, which is the path that branch exists for.
 }
 foreach ($k in $cases.Keys) {
     $c = $cases[$k]

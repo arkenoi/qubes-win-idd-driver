@@ -66,6 +66,7 @@ say() { echo "[cut] $*"; }
 RUN=""
 DRAFT=""
 OVERRIDE=""
+COVOVERRIDE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --run)   RUN="${2:-}"; shift 2 ;;
@@ -78,6 +79,14 @@ while [ $# -gt 0 ]; do
   It is printed and published: say what failed and why shipping anyway is the right call."
       [ "${#OVERRIDE}" -ge 24 ] || die "--acceptance-override reason is ${#OVERRIDE} characters.
   It goes into the published release notes - name the failure and the decision, not a word."
+      shift 2 ;;
+    --coverage-override)
+      COVOVERRIDE="${2:-}"
+      [ -n "$COVOVERRIDE" ] || die "--coverage-override requires a reason in the next argument.
+  It is printed and published: name the suites the gate did not cover and why shipping anyway is
+  the right call."
+      [ "${#COVOVERRIDE}" -ge 24 ] || die "--coverage-override reason is ${#COVOVERRIDE} characters.
+  It goes into the published release notes - name the uncovered suites and the decision, not a word."
       shift 2 ;;
     # The old header advertised --i-am-rebuilding-history and the parser never had it, so it died
     # on "unknown argument" (found 2026-10-25 while looking for exactly this escape hatch). Name it
@@ -95,7 +104,7 @@ while [ $# -gt 0 ]; do
   distinguish it from the correct one. Pass the release-package run that BUILT the package:
       tools/cut-release.sh --run <run-id>
   Find it with:  gh run list --workflow release-package --limit 5"
-      die "unknown argument: $1 (expected --run <run-id> [--draft] [--acceptance-override \"<reason>\"])" ;;
+      die "unknown argument: $1 (expected --run <run-id> [--draft] [--acceptance-override \"<reason>\"] [--coverage-override \"<reason>\"])" ;;
   esac
 done
 [ -n "$RUN" ] || die "no --run <release-package-run-id> given. gh run list --workflow release-package --limit 5"
@@ -302,6 +311,113 @@ else
 OVR
 fi
 
+# ---------------------------------------------------------------- gate: the COVERAGE RECEIPT
+# WHY THIS IS HERE (2026-10-30), AND IT IS NOT THAT THE GATE WAS MISSING.
+# tools/hooks/release-cut-gate.sh already enforces exactly this rule. It is a PreToolUse hook that
+# matches the COMMAND TEXT for `gh release create`, `git tag v...` or a push of a v-tag, and
+# refuses unless a receipt for HEAD satisfies tools/gate-scope.py check. It works: handed the
+# literal text it blocks, with the required range and the command to produce the receipt.
+#
+# It cannot see THIS script. The sanctioned way to publish is `bash tools/cut-release.sh --run N`,
+# and the `gh release create` it runs is inside the file, not in the command the hook is shown. So
+# the one path a release is actually cut by is the one path the gate is blind to. Measured on
+# 2026-10-30: v4.3.39-agentf0dd19f published through this script at a HEAD with NO receipt at all,
+# while the gate was armed and would have refused the same act written out by hand. A text matcher
+# on the caller cannot gate a thing the callee does.
+#
+# So the check moves to where the act is. This runs in-process, next to the acceptance record,
+# before a single asset is uploaded, and no wrapper can hide it. The hook stays - it still catches
+# a hand-cut tag, which this file knows nothing about. Belt and braces, each covering the other's
+# blind spot.
+#
+# The per-ISO acceptance record above does NOT cover this: it says every CELL of the campaign ran
+# clean and says nothing about which SUITES the diff required. On the night of 4.3.39 the receipt
+# stood at 16 of 19 while the record was legitimately CLEAN. Two gates that disagree are one gate,
+# and the 4.3.35 ledger row "claims full=true" on 13 of 19 is what that costs.
+#
+# The receipt is keyed by the commit the gate RAN at, which is not always the commit the package
+# was built from - the harness moves HEAD after a build with changes that touch no product path.
+# A receipt taken at a DESCENDANT of the build commit is accepted, but ONLY as a list of which
+# suites ran. What those suites must COVER is computed here, over this package's own range, and
+# passed to gate-scope explicitly.
+#
+# THAT EXPLICIT RANGE IS THE WHOLE POINT, and the first draft of this block got it wrong. Without
+# it, `gate-scope.py check` falls back to the range recorded INSIDE the receipt - lastTag..D, not
+# lastTag..BUILD. The tempting argument is that a descendant's diff contains the package's, so its
+# required set is a superset. It is not: these are NET diffs from a common base, so a commit
+# between BUILD and D that REVERTS a product file removes that file from lastTag..D while it is
+# still in lastTag..BUILD. The receipt would then be checked against a SMALLER requirement than
+# the package actually has, and a release could pass on a gate that never asked for the suite its
+# own diff needed. Computing the requirement here, from BUILDSHA, cannot drift that way.
+#
+# What the descendant still costs: those suites ran against D's code, not BUILD's. The commits in
+# between are printed rather than waved through, so a reader can see what the gate was actually
+# exercised over. A receipt from an unrelated commit, or none at all, is not a pass - missing data
+# fails, exactly as it does for the acceptance record, and for the same reason: an absent receipt
+# names nothing, so there is nothing for --coverage-override to be an override OF.
+COVOUT="$WORK/coverage-check.log"
+COVREC="scratchpad/gate-coverage-${BUILDSHA:0:12}.json"
+if [ ! -f "$COVREC" ]; then
+  COVREC=""
+  for _c in $(ls -t scratchpad/gate-coverage-*.json 2>/dev/null); do
+    _sha="$(basename "$_c" .json)"; _sha="${_sha#gate-coverage-}"
+    git rev-parse -q --verify "${_sha}^{commit}" >/dev/null 2>&1 || continue
+    git merge-base --is-ancestor "$BUILDSHA" "$_sha" 2>/dev/null || continue
+    git merge-base --is-ancestor "$_sha" HEAD 2>/dev/null || continue
+    COVREC="$_c"; break
+  done
+fi
+[ -n "$COVREC" ] || die "NO COVERAGE RECEIPT for the build commit ${BUILDSHA:0:12}.
+  tools/gate-scope.py decides which suites THIS diff requires, and nothing here recorded that they
+  ran. Produce one with the committed gate, then cut:
+      tools/gate-remainder.sh --run $RUN --vm10 <win10> --vm11 <win11> --os11 <label>
+  There is no flag to skip this. --coverage-override relaxes a receipt that is SHORT and names what
+  it missed; an absent receipt names nothing."
+# The range, computed the same way tools/hooks/release-cut-gate.sh computes it: the newest release
+# tag that is an ancestor of the build commit, to the build commit. With no such tag the whole
+# history is the diff, which maps to the full set - the right answer for a first release.
+COVBASE="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${BUILDSHA}^" 2>/dev/null)" \
+  || COVBASE="$(git rev-list --max-parents=0 "$BUILDSHA" | head -1)"
+[ -n "$COVBASE" ] || die "cannot determine the range base for ${BUILDSHA:0:12} - refusing to check
+  coverage against a range this script had to guess."
+COVRANGE="${COVBASE}..${BUILDSHA}"
+say "coverage receipt: $COVREC"
+say "coverage range:   $COVRANGE (the PACKAGE's diff, not the receipt's own)"
+_rsha="$(basename "$COVREC" .json)"; _rsha="${_rsha#gate-coverage-}"
+if [ "${_rsha}" != "${BUILDSHA:0:${#_rsha}}" ]; then
+  say "  note: the receipt was taken at ${_rsha}, which is ahead of the build commit. The suites ran"
+  say "        over these extra commit(s), and the requirement below is still computed from ${BUILDSHA:0:12}:"
+  git --no-pager log --oneline "${BUILDSHA}..${_rsha}" 2>/dev/null | sed 's/^/          /'
+fi
+if python3 tools/gate-scope.py check "$COVREC" "$COVRANGE" >"$COVOUT" 2>&1; then
+  cat "$COVOUT"
+  COVOVERRIDE=""   # a satisfied receipt needs no override; never let the flag imply one was needed
+else
+  COVRC=$?
+  cat "$COVOUT" >&2
+  # rc=2 is gate-scope saying it COULD NOT DECIDE - a missing map, an unreadable ledger, a bad
+  # range. Its own header says that is never "nothing required", so it is not something an override
+  # can be an override OF: there is no named gap to accept. Only a decided refusal (rc=1) is.
+  [ "$COVRC" != 2 ] || die "tools/gate-scope.py could not DECIDE what this diff requires (rc=2, above).
+  That is missing data, not a short receipt, so --coverage-override does not cover it - there is no
+  named gap to accept. Fix what it names (usually mgmt/gate-scope.json or the ledger) and re-run."
+  [ -n "$COVOVERRIDE" ] || die "the coverage receipt does not satisfy the gate (above, rc=$COVRC).
+  Run the suites it names and record them, or, if the decision is to publish anyway:
+      tools/cut-release.sh --run $RUN --coverage-override \"<why this ships under-covered>\""
+  cat >&2 <<COV
+
+  ============================== COVERAGE OVERRIDE ==============================
+  The coverage receipt for ${BUILDSHA:0:12} does not cover every suite this diff
+  requires, and this release is being published anyway, deliberately.
+      reason:  $COVOVERRIDE
+      receipt: $COVREC
+  Every other gate remains enforced. The refusal above and this reason are being
+  prepended to the published release notes.
+  ===============================================================================
+
+COV
+fi
+
 # ---------------------------------------------------------------- notes
 NOTES_FILE="docs/RELEASE-NOTES-${VER}.md"
 [ -f "$NOTES_FILE" ] || die "no $NOTES_FILE - a release whose notes are a generated one-liner tells the reader nothing about what changed or what was verified"
@@ -310,8 +426,11 @@ NOTES_FILE="docs/RELEASE-NOTES-${VER}.md"
 # text. The committed notes file is NOT edited: a release-specific fact about one cut does not
 # belong in the tree, and touching the tree here would also move HEAD under a running campaign.
 PUBNOTES="$NOTES_FILE"
-if [ -n "$OVERRIDE" ]; then
+if [ -n "$OVERRIDE" ] || [ -n "$COVOVERRIDE" ]; then
   PUBNOTES="$WORK/RELEASE-NOTES-published.md"
+  : > "$PUBNOTES" || die "cannot write $PUBNOTES"
+fi
+if [ -n "$OVERRIDE" ]; then
   {
     echo "> ## Published on a FAILED acceptance record"
     echo ">"
@@ -331,9 +450,33 @@ if [ -n "$OVERRIDE" ]; then
     echo ""
     echo "---"
     echo ""
-    cat "$NOTES_FILE"
-  } > "$PUBNOTES" || die "cannot write $PUBNOTES"
-  say "published notes lead with the override banner ($PUBNOTES)"
+  } >> "$PUBNOTES" || die "cannot write $PUBNOTES"
+  say "published notes lead with the acceptance-override banner ($PUBNOTES)"
+fi
+if [ -n "$COVOVERRIDE" ]; then
+  {
+    echo "> ## Published UNDER-COVERED: the gate did not run every required suite"
+    echo ">"
+    echo "> This release was cut deliberately with \`--coverage-override\`. tools/gate-scope.py"
+    echo "> computes which suites this diff requires; the receipt for \`${BUILDSHA:0:12}\` does not"
+    echo "> cover all of them."
+    echo ">"
+    echo "> **Reason given at the cut:** ${COVOVERRIDE}"
+    echo ">"
+    echo "> The scope checker refused it as follows:"
+    echo ">"
+    sed -e 's/^/>     /' "$COVOUT"
+    echo ">"
+    echo "> This says nothing about the cells that DID run: acceptance for these exact bytes is"
+    echo "> recorded separately and was enforced above."
+    echo ""
+    echo "---"
+    echo ""
+  } >> "$PUBNOTES" || die "cannot write $PUBNOTES"
+  say "published notes carry the coverage-override banner ($PUBNOTES)"
+fi
+if [ "$PUBNOTES" != "$NOTES_FILE" ]; then
+  cat "$NOTES_FILE" >> "$PUBNOTES" || die "cannot write $PUBNOTES"
 fi
 
 mapfile -t ASSETS < <(find "$WORK/assets" -maxdepth 1 -type f \( -name '*.iso' -o -name '*.rpm' -o -name '*.tar.gz' -o -name '*.exe' -o -name 'SHA256SUMS.txt' \) | sort)

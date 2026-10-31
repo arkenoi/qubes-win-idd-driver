@@ -248,14 +248,21 @@ if ($x) {
         $queries = @($sub.QueryList.Query)
         Check 'subscription: three queries - Application, System, TaskScheduler/Operational' ($queries.Count -eq 3 -and (@($queries | ForEach-Object { $_.Path }) -join ',') -eq 'Application,System,Microsoft-Windows-TaskScheduler/Operational')
         $selects = @($queries | ForEach-Object { @($_.Select) } | ForEach-Object { $_.'#text' })
-        # nine: the executables are two lists (Task Scheduler rejects one list of 28 - measured 2026-10-04), so 1000 and 1001 have two each
-        Check 'subscription: nine selects (1000 and 1001 one per executable list)' ($selects.Count -eq 9) "$($selects.Count)"
+        # ten: the executables are two lists (Task Scheduler rejects one list of 28 - measured 2026-10-04), so 1000 and
+        # 1001 have two each; and TaskScheduler/Operational carries THREE - 201, 203 and 329, the time-limit kill, which is
+        # the only record a hang of ours leaves (the 201 of that kill carries the code the shutdown reap leaves too).
+        # Ten, not nine, since 2026-10-31: Task Scheduler ACCEPTED all ten with the third Select in Query 2, measured on
+        # win11r-thold (schtasks /create rc=0, readback 10 Selects) - the 2026-10-04 limit is in TERMS, not in Selects.
+        Check 'subscription: ten selects (1000 and 1001 one per executable list; three for TaskScheduler)' ($selects.Count -eq 10) "$($selects.Count)"
         Check 'subscription: 1000 and 1001 are filtered to our executables, each by Data=' (@($selects | Where-Object { $_ -match "EventID=1000\] and EventData\[Data='gui-agent\.exe' or " }).Count -eq 1 -and @($selects | Where-Object { $_ -match "EventID=1001\] and EventData\[Data='gui-agent\.exe' or " }).Count -eq 1)
         Check 'subscription: 1026 is taken unfiltered (the script filters it)' (@($selects | Where-Object { $_ -eq "*[System[Provider[@Name='.NET Runtime'] and EventID=1026]]" }).Count -eq 1)
         Check 'subscription: ids 4001-4004 of our source, the explicit set (4011-4014 are teardown records, not deaths)' (@($selects | Where-Object { $_ -eq "*[System[Provider[@Name='Qubes Windows Tools'] and (EventID=4001 or EventID=4002 or EventID=4003 or EventID=4004)]]" }).Count -eq 1)
         Check 'subscription: the SCM ids 7031/7034/7023/7024 for our four display names' (@($selects | Where-Object { $_ -match "\(EventID=7031 or EventID=7034 or EventID=7023 or EventID=7024\)\] and EventData\[Data\[@Name='param1'\]='QubesDB daemon' or .*'Qubes RPC agent' or .*'Qubes GUI agent watchdog' or .*'Qubes PV NIC address applier'\]\]$" }).Count -eq 1)
         Check 'subscription: 201 only with a non-zero result other than 2147943691 (an instance of ours the shutdown reaped), for our tasks' (@($selects | Where-Object { $_ -match "EventID=201\] and EventData\[Data\[@Name='ResultCode'\]!=0 and Data\[@Name='ResultCode'\]!='2147943691' and \(Data\[@Name='TaskName'\]='\\Qubes-WgcBroker' or " }).Count -eq 1)
         Check 'subscription: 203 for our tasks' (@($selects | Where-Object { $_ -match "EventID=203\] and EventData\[Data\[@Name='TaskName'\]='\\Qubes-WgcBroker' or " }).Count -eq 1)
+        # 329 scoped by TaskName and by NOTHING ELSE: its EventData is TaskName + TaskInstanceId with no ResultCode, so a
+        # result term would select nothing. A hang reaches the user through this Select or not at all.
+        Check 'subscription: 329 (a task of ours killed for exceeding its execution time limit) for our tasks, with no result term' (@($selects | Where-Object { $_ -match "EventID=329\] and EventData\[Data\[@Name='TaskName'\]='\\Qubes-WgcBroker' or " -and $_ -notmatch 'ResultCode' }).Count -eq 1)
         Check 'subscription: the reporter never subscribes to its own task' ($subText -notlike '*QwtDeathReporter*')
         Check 'subscription: the generic cat.exe shim is not subscribed' ($subText -notlike "*Data='cat.exe'*")
     }

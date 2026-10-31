@@ -27,6 +27,13 @@ HEAVY="$HEAVY|repro-run\.sh"
 # and the operator's screen, on the single command most likely to be typed from memory at the end of
 # a long session. Found 2026-10-29 while reading the chain before running it.
 HEAVY="$HEAVY|campaign-full\.sh"
+# The ETW gate suite added 2026-10-30. Found while preparing to re-run it: its T0 step primes
+# the subject from a base golden with a clean install from the release package - the same heavy
+# path listed first in this regex - and the suite itself was never listed. That is exactly the
+# one-level-of-indirection hole measured on 2026-10-16 and rebuilt on 2026-10-29, a third time:
+# the gate reads the command it is asked to allow, so naming the inner script does nothing for a
+# wrapper that calls it. Any suite that primes its own subject belongs here.
+HEAVY="$HEAVY|p3a-etw-gate\.sh"
 
 # THE BLUNTNESS IS LOAD-BEARING, AND A READ-ONLY EXEMPTION IS NOT AS EASY AS IT LOOKS.
 # This regex matches the command TEXT, so a command that merely NAMES a heavy script - a grep for

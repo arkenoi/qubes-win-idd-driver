@@ -278,6 +278,25 @@ class Ev:
         return (self.t, self.idx)
 
 
+def _named_id(v: Optional[str]) -> Optional[str]:
+    """A record id that actually names a toast. The agent writes id=0 for none, and _segment_end
+    already reads it that way (`eid not in (None, "0")`)."""
+    return None if v in (None, "0") else v
+
+
+def _named_hash(v: Optional[str]) -> Optional[str]:
+    """A content hash that actually names a toast. An ALL-ZERO hash means NO IDENTITY, not a
+    different toast, and the agent line says so outright: `state=hold reason=no-identity
+    ident=0000000000000000 s=0000000000000000 t=0000000000000000`.
+
+    Reading zero as "some other toast" turned every S2 row - the orphan row the predicate below
+    exists for, whose expected verdict IS OK-WINDOW - from PASS into FAIL LOST in all four
+    archived runs. Measured on run 41161440735 boot 041519: id=9's nearest preceding content event
+    is that zero line at 063340.071, 492 ms before its MAP at 063340.563, while the bridge gives
+    id=9 t=64f92f1f3fc94755."""
+    return None if v is None or set(v) == {"0"} else v
+
+
 def is_unmap(e: "Ev") -> bool:
     """Did this line take a MAPPED banner off dom0's screen?
 
@@ -341,9 +360,32 @@ def parse_agent(lines: List[str], offset: dt.timedelta, tz: Optional[dt.tzinfo] 
             ma = re.search(r"after (\d+) ms suppressed", msg)
             if ma:
                 kv["held_ms"] = ma.group(1)
+        elif "QGATOASTGATE hwnd=" in msg:
+            # The gate TRANSITION family (toasthold.c). Note the space: the per-frame drop line is
+            # QGATOASTGATEDROP, which this does not match and which is pure volume, not a state change.
+            kind = "GATE"; hwnd = re.search(r"QGATOASTGATE hwnd=" + HEX_RE, msg).group(1).lower()
+            kv["what"] = "gated" if " frames gated" in msg else "resumed"
+        elif "QGATOASTREPAINT hwnd=" in msg:
+            # The gate release's repaint DEBT and its settlement (agent bcd7bda). Three shapes:
+            # `owed=deferred feed=slice`, `frame=seen owed_ms=N`, `paid=immediate|paid=region after N ms`.
+            # A release is NOT a repaint: for a slice-fed banner - which every toast banner is - the payment
+            # rides the next capture frame, and measured on run 41161440735 none arrived in the 5.9 s before
+            # the window was destroyed, so dom0 kept the PREVIOUS toast's frame. Only `paid` says the pixels
+            # went out, which is why this is parsed rather than skipped by the else below.
+            kind = "REPAINT"; hwnd = re.search(r"QGATOASTREPAINT hwnd=" + HEX_RE, msg).group(1).lower()
+            kv = dict(KV_RE.findall(msg))
         elif "QGATOASTPREEMPT hwnd=" in msg:
             kind = "PREEMPT"; hwnd = re.search(r"QGATOASTPREEMPT hwnd=" + HEX_RE, msg).group(1).lower()
-            kv["what"] = "unmapped" if " unmapped:" in msg else "re-mapped"
+            # " unmapped:" means a WITHDRAWAL and nothing else - it is what the PREEMPTED verdict below
+            # keys on. Since swap-edge gating (ADR-toasts 10) the normal pre-emption HOLDS THE FRAMES and
+            # the banner stays mapped, which is not a withdrawal and must not be graded as one; only the
+            # rule-5 fallback (no frame-gate slot free) still unmaps, and its line still says "unmapped:".
+            # Named here rather than left to fall into the "re-mapped" bucket, so a future reword cannot
+            # quietly turn a hold into a withdrawal or the other way round.
+            kv["what"] = ("unmapped" if " unmapped:" in msg
+                          else "frames-held" if " frames held:" in msg
+                          else "frames-resumed" if " frames resumed after" in msg
+                          else "re-mapped")
             kv.update(dict(KV_RE.findall(msg)))
         elif "QGATOASTIDENT hwnd=" in msg:
             kind = "IDENT"; hwnd = re.search(r"QGATOASTIDENT hwnd=" + HEX_RE, msg).group(1).lower()
@@ -639,15 +681,45 @@ class Grader:
     # -- helpers over events
     def mapped_timeline(self, hwnd: str) -> List[Ev]:
         return sorted([e for e in self.agent if e.hwnd == hwnd
-                       and (e.kind in ("MAP", "DESTROY") or is_unmap(e))], key=Ev.key)
+                       and (e.kind in ("MAP", "DESTROY", "GATE") or is_unmap(e))], key=Ev.key)
 
     def mapped_at(self, hwnd: str, when: dt.datetime, idx: Optional[int] = None) -> bool:
-        state = False
+        """Was this banner window showing ITS OWN current content in dom0 at that instant?
+
+        MAPPED IS NO LONGER THE WHOLE ANSWER. Since swap-edge gating (ADR-toasts 10) the agent keeps a
+        banner window mapped while holding back its frames, so dom0 goes on displaying the frame it
+        already had - the PREVIOUS toast - while the shared window is repainted underneath with the next
+        one. A window that is mapped but gated is therefore not showing the toast that just took it, and
+        counting it as shown turns every correctly-held swap into a DOUBLE: measured here, this predicate
+        graded the fixed shape of run 40407378739 as DOUBLE=flash over a 20 ms interval in which dom0 was
+        provably holding the other toast's pixels.
+
+        The gate's two ends are the QGATOASTGATE pair, from the only two places that move it - the
+        tracking pass and the swap edge on the hook thread. Nothing is inferred: a window counts as gated
+        only between a `frames gated` line and the next `frames resumed` for that same hwnd.
+        """
+        state, gated = False, False
         for e in self.mapped_timeline(hwnd):
             if (e.t, e.idx) > (when, idx if idx is not None else 10 ** 9):
                 break
-            state = e.kind == "MAP"
-        return state
+            if e.kind == "GATE":
+                gated = e.kv.get("what") == "gated"
+            else:
+                state = e.kind == "MAP"
+        return state and not gated
+
+    def repaint_paid(self, hwnd: str, after: Tuple, until: Tuple) -> bool:
+        """Did dom0 actually RECEIVE this window's current content after a gate release in that span?
+
+        The release only records a debt (`owed=deferred`); the pixels go out when the tracking pass pays it
+        (`paid=region after N ms`), or at once for a window on its own per-window capture (`paid=immediate`).
+        For a slice-fed banner the payment rides the next capture frame, and on run 41161440735 the gate
+        released after holding 3 frames, the debt was recorded, and NO frame arrived in the 5.9 s before the
+        window was destroyed: `frame=seen` 0, `paid=` 0. dom0 kept the previous toast's banner. So a resume
+        without a payment inside the toast's own segment is NOT this toast reaching the screen.
+        """
+        return any(e.kind == "REPAINT" and e.hwnd == hwnd and "paid" in e.kv and after < e.key() <= until
+                   for e in self.agent)
 
     def banner_hwnds(self) -> set:
         s = set()
@@ -730,7 +802,7 @@ class Grader:
         # 3. non-seamless rows: the bridge's mode path is the fact that matters
         if mode_ns:
             ns_path = bool(skip and "non-seamless" in skip.kv.get("reason", ""))
-            mapped_any = self._any_banner_map(t0, t0 + dt.timedelta(seconds=CONTROL_BANNER_WINDOW_S))
+            mapped_any = self._any_banner_map(t0, t0 + dt.timedelta(seconds=CONTROL_BANNER_WINDOW_S), nid, th)
             if deliv:
                 cls = "FORWARDED-NS"
             elif mapped_any:
@@ -754,9 +826,41 @@ class Grader:
                 return e.kv["id"]
         return None
 
-    def _any_banner_map(self, a: dt.datetime, b: dt.datetime) -> bool:
+    def _any_banner_map(self, a: dt.datetime, b: dt.datetime, nid: Optional[str] = None,
+                        th: Optional[str] = None) -> bool:
+        """Was a banner window mapped in [a, b] with THIS toast's content in it?
+
+        The banner window is shared and re-used, so an unsegmented "any banner MAP" bills one
+        toast's banner to another. Measured, run 41161440735 boot 041519 S3iii-2 / id=15: graded
+        OK-WINDOW "mapped without a hold decision" on the MAP at 063737.343, which is the DISPLAYED
+        id=14's own first map - emitted in the same millisecond as `state=show ident=a8f03cc3..
+        id=14`, and the MAP id=14's own row was graded on. A whole toast was lost and the run
+        graded CLEAN.
+
+        Identity comes from the agent, never from grading order (a claim set would depend on which
+        row is graded first): the nearest PRECEDING content event on that hwnd names whose content
+        the window holds - `state=show` carries id=, `state=hold` and `state=content-changed` carry
+        the title hash t=.
+
+        A MAP is REFUSED only on POSITIVE evidence that it belongs to another toast. No preceding
+        event, or one that names nothing (see _named_hash - `reason=no-identity` writes all-zero
+        hashes), still counts: that is the orphan this predicate exists for, a banner window the
+        hold never owned, and refusing it would turn a measured OK-WINDOW into a silent LOST."""
         B = self.banner_hwnds()
-        return any(e.kind == "MAP" and e.hwnd in B and a <= e.t <= b for e in self.agent)
+        for m in [e for e in self.agent if e.kind == "MAP" and e.hwnd in B and a <= e.t <= b]:
+            prior = [e for e in self.agent if e.hwnd == m.hwnd and e.kind == "TH"
+                     and e.kv.get("state") in ("hold", "content-changed", "show")
+                     and e.key() <= m.key()]
+            if not prior:
+                return True
+            owner = max(prior, key=Ev.key)
+            oid, oth = _named_id(owner.kv.get("id")), _named_hash(owner.kv.get("t"))
+            if oid is not None and nid is not None and oid != nid:
+                continue
+            if oth is not None and th is not None and oth != th:
+                continue
+            return True
+        return False
 
     @staticmethod
     def _held_start(e: "Ev") -> Tuple:
@@ -812,9 +916,50 @@ class Grader:
                 if remaps:
                     return "OK-WINDOW", detail
                 return "LOST", detail + " (window path, never mapped)"
+            # Named only by a FRAME-GATED pre-emption - the NORMAL pre-emption since swap-edge gating (ADR-toasts 10),
+            # and a shape this path was blind to: it only consulted the `unmapped:` withdrawal above. The agent holds
+            # THIS toast's frames instead of withdrawing the window, so the window stays mapped with the OTHER toast's
+            # pixels in it, and this toast reaches dom0 only if its frames are RELEASED while its content is in the
+            # window - a gate resume or a fresh MAP, before another toast's content takes the window.
+            # Measured, run 41154092416 S3ii-2 (id=24, hwnd=0x20240): the window's only MAP is the displayed toast's
+            # own (`state=show ... id=23` at 04:05:53.624), the gate closed 720 ms later and the window was DESTROYED
+            # at 04:06:04.404 with no resume - dom0 never got a frame of id=24. The fall-through below has no
+            # segmentation at all (any banner MAP in a flat 10 s window), so it counted the other toast's banner as
+            # this toast's and graded DOUBLE over a hold that worked. Run 1's same shape (id=13) escaped only because
+            # that window survived long enough for the toast to be examined, which takes the owned path below.
+            held = sorted([e for e in self.agent if e.kind == "PREEMPT" and e.kv.get("what") == "frames-held"
+                           and e.kv.get("id") == nid and e.t >= t0 - dt.timedelta(seconds=1)], key=Ev.key)
+            if held:
+                p = held[0]
+                end = self._segment_end(p.hwnd, p.key(), nid, th, p.t + dt.timedelta(seconds=CONTENT_WINDOW_S))
+                # A RELEASE THAT WAS NEVER PAID PUT NOTHING ON THE SCREEN, and a bare MAP is not this
+                # toast's: counting one cost a FALSE DOUBLE on run 41161440735 S3ii-2, where the only MAP in
+                # id=13's segment (07:10:03.519) was the DISPLAYED toast id=12's own first map, 6167 ms late
+                # by its own row. id=13's gate never resumed at all before the window died, so dom0 never had
+                # its pixels. The MAP term was a stand-in from when no resume line existed; the resume does
+                # exist now (agent 8440f75), so the release signal is the resume, and the repaint must land.
+                resumes = [e for e in self.agent if e.hwnd == p.hwnd and e.kind == "GATE"
+                           and e.kv.get("what") == "resumed" and p.key() < e.key() < end]
+                # A MAP still counts, but only a RE-map: one with an UNMAP before it in this segment. That is
+                # the shape the MAP term was for - a window withdrawn and brought back with the queued toast's
+                # content in it, which emits no resume - and requiring the unmap is what stops the DISPLAYED
+                # toast's own first map being billed here. Under frames-held gating the window stays mapped by
+                # design, so a map with no unmap before it cannot be a re-exposure of this toast.
+                segunmaps = [e for e in self.agent if e.hwnd == p.hwnd and is_unmap(e) and p.key() < e.key() < end]
+                remaps = [e for e in self.agent if e.hwnd == p.hwnd and e.kind == "MAP" and p.key() < e.key() < end
+                          and any(u.key() < e.key() for u in segunmaps)]
+                shown = [r for r in resumes if self.repaint_paid(p.hwnd, r.key(), end)] + remaps
+                detail = (f"queued behind the displayed banner in hwnd=0x{p.hwnd}, frames gated "
+                          f"{p.t.strftime('%H:%M:%S.%f')[:-3]}; gate resumes before another toast takes the window "
+                          f"or it ends: {len(resumes)}, re-maps after an unmap: {len(remaps)}, reached dom0: {len(shown)}")
+                if deliv:
+                    return ("DOUBLE", detail + " double=after-gated-preempt") if shown else ("OK-BRIDGED", detail)
+                if shown:
+                    return "OK-WINDOW", detail
+                return "LOST", detail + " (window path, frames never released)"
             # The hold never examined a banner for this toast. Did a banner window get mapped anyway (a window the
             # hold did not own)? Did the guest show a banner at all?
-            mapped_any = self._any_banner_map(t0, t0 + dt.timedelta(seconds=CONTROL_BANNER_WINDOW_S))
+            mapped_any = self._any_banner_map(t0, t0 + dt.timedelta(seconds=CONTROL_BANNER_WINDOW_S), nid, th)
             seen = self.guest_banner_seen(label)
             if deliv and not mapped_any:
                 return "OK-BRIDGED", "no banner examined by the hold, no banner window mapped" + (" (guest showed a banner)" if seen else "")
@@ -845,12 +990,21 @@ class Grader:
         maps = [e for e in in_win if e.kind == "MAP"]
         unmaps = [e for e in in_win if is_unmap(e)]
         preempts = [e for e in in_win if e.kind == "PREEMPT" and e.kv.get("what") == "unmapped"]
-        mapped = mapped_at_exam or bool(maps)
-        delay_ms = 0 if mapped_at_exam else (int((maps[0].t - t_exam).total_seconds() * 1000) if maps else None)
+        # UNDER SWAP-EDGE GATING THE SECOND TOAST IN A SHARED WINDOW GETS NO MAP OF ITS OWN: the window is
+        # already mapped, and what reaches dom0 is the gate release plus the repaint it forces. So a release
+        # whose repaint was PAID inside this toast's segment is this toast being shown, and one that was not
+        # is the window frozen on the previous toast's frame (run 41161440735 id=15: resumed after 3 held,
+        # owed=deferred, then no frame and no payment in the 5.9 s before the destroy - a real loss).
+        releases = [e for e in in_win if e.kind == "GATE" and e.kv.get("what") == "resumed"
+                    and self.repaint_paid(h, e.key(), w_end)]
+        shown_ev = min(maps + releases, key=Ev.key) if (maps or releases) else None
+        mapped = mapped_at_exam or shown_ev is not None
+        delay_ms = 0 if mapped_at_exam else (int((shown_ev.t - t_exam).total_seconds() * 1000) if shown_ev else None)
         reasons = ",".join(sorted({e.kv.get("reason", "?") for e in late})) if late else "-"
         detail = (f"hwnd=0x{h} examined={t_exam.strftime('%H:%M:%S.%f')[:-3]} decisions="
                   f"{'/'.join((e.kv.get('state') or 'late') for e in decisions) or 'none'} mapped_at_exam={int(mapped_at_exam)} "
-                  f"maps={len(maps)} unmaps={len(unmaps)} map_delay_ms={delay_ms if delay_ms is not None else '-'} failopen={reasons}")
+                  f"maps={len(maps)} repainted_releases={len(releases)} unmaps={len(unmaps)} "
+                  f"map_delay_ms={delay_ms if delay_ms is not None else '-'} failopen={reasons}")
         if deliv and not mapped:
             return "OK-BRIDGED", detail
         if deliv and mapped:
@@ -859,7 +1013,7 @@ class Grader:
         if mapped:
             if delay_ms is not None and delay_ms > WINDOW_BOUND_MS:
                 return "LATE-WINDOW", detail + f" bound={WINDOW_BOUND_MS}"
-            shown_at = None if mapped_at_exam else maps[0]
+            shown_at = None if mapped_at_exam else shown_ev
             pre = [e for e in preempts if shown_at is None or e.key() > shown_at.key()]
             if pre:
                 # The owner's rule (ADR-toasts 10's Why): a flash is not fine, nothing is lost. A displayed window-path banner
@@ -1469,6 +1623,51 @@ def selftest() -> int:
           cls == "PREEMPTED" and r.startswith("FAIL"), r[:200])
     r2 = _row(g, "S3ii-2")
     check("the bridged toast queued behind it, the window never re-mapped -> OK-BRIDGED", r2.startswith("PASS OK-BRIDGED"), r2[:170])
+
+    # THE SAME CAPTURE WITH SWAP-EDGE GATING (ADR-toasts 10), on the measured timings of run 40407378739.
+    # The pre-emption fires on the mere EXISTENCE of a newer unconsumed record (1.039), but the shared banner
+    # window is not repainted until Windows actually shows that toast - which in that capture was 4.47 s
+    # later. Rule 5 unmapped at 1.039 and the banner never came back: 680 ms of display. Gating holds the
+    # window's frames instead, so the banner keeps its display until the queued toast genuinely takes the
+    # window at 5.50, and the hold expires by its own 3 s bound at 4.045 (ungate and repaint - the repaint is
+    # a no-op here, since nothing has changed yet, which is the point: an expired gate cannot freeze a window).
+    #
+    # TWO THINGS ARE ASSERTED. That a frame hold is not graded as a withdrawal, and - the sharper one - that
+    # the toast queued behind the held frames is still OK-BRIDGED and NOT a DOUBLE. The banner window stays
+    # MAPPED across the forward now, which under rule 5 it never did; what keeps it from being a double is
+    # that dom0 is holding the previous toast's frame, so the forwarded toast is on screen exactly once.
+    def window_then_frames_held(fx):
+        s1 = fx.fire("S3ii-1", 0, cls="realchoice")
+        s2 = fx.fire("S3ii-2", 0.7)
+        fx.a(0.8, f"QGAPROTO,msg=CREATE,hwnd=0x{H},x=5120,y=1392,w=396,h=152,ovr=1,style=0x94000000,ex=0x00200008")
+        fx.a(0.8, f"QGATOASTHOLD hwnd=0x{H} state=hold reason=no-identity ident=0000000000000000 s=0000000000000000 t=0000000000000000 m=0000000000000000 bridgeUp=1 (banner withheld)")
+        fx.a(0.8, f"QGAHELDDEFER hwnd=0x{H} class={BANNER_CLASS} w=396 h=152 t=1 slicefed=1 brokerslot=1")
+        n1, c1 = fx.hold_pub(0.9, s1, "window")
+        fx.b(1, f"skip id={n1} aumid=QubesToastfire.StartShortcut (window path; classifier verdict)")
+        fx.a(1.019, f"QGATOASTHOLD hwnd=0x{H} state=show ident={c1} id={n1} held_ms=219 (verdict=window: the banner is the toast)")
+        fx.a(1.019, f"QGAPROTO,msg=MAP,hwnd=0x{H},ovr=1,transient=0x0,style=0x94000000,ex=0x00200008,vis=1,w=364,h=109")
+        n2, c2 = fx.hold_pub(1.03, s2, "bridge")
+        fx.a(1.039, f"QGATOASTPREEMPT hwnd=0x{H} frames held: a bridge-bound or still-pending toast (id={n2}) is queued behind the displayed banner and would paint into this window in place; the banner stays mapped showing the toast dom0 was told it carries")
+        fx.a(1.039, f"QGATOASTGATE hwnd=0x{H} frames gated reason=preempt: a newer toast's record is queued behind this shown banner")
+        fx.b(2, f"FWD_RTT guest_id={n2} seq=2 ms=9 ok=1")
+        fx.b(2, f"HOLD id={n2} verdict=forwarded")
+        # the 3 s bound lapses with the swap still pending: ungate and repaint (a no-op repaint - nothing
+        # has changed yet), which is what keeps an expired gate from freezing a live window
+        fx.a(4.045, f"QGATOASTPREEMPT hwnd=0x{H} frames resumed after 3006 ms: the queued toast resolved to window (or its window passed)")
+        fx.a(4.045, f"QGATOASTGATE hwnd=0x{H} frames resumed: the window carries a window-path toast again and has been repainted in full")
+        # ...and the swap itself, 1.5 s later: the hook thread closes the gate before the tracking pass
+        # has decided anything, which is the only reason the forwarded toast below is not a double
+        fx.a(5.495, f"QGATOASTGATE hwnd=0x{H} frames gated at the swap edge: this shown banner's window changed")
+        fx.a(5.50, f"QGATOASTHOLD hwnd=0x{H} content changed in place: new ident={c2} s=1 t={title_hash_hex(s2)} m=2 - held again")
+        fx.a(5.52, f"QGATOASTHOLD hwnd=0x{H} state=suppress ident={c2} id={n2} verdict=bridge held_ms=20 (forwarded to dom0)")
+        fx.a(5.52, f"Unmapping window 0x{H}")
+        fx.a(13.256, f"QGAPROTO,msg=DESTROY,hwnd=0x{H}")
+    g, r, cls = hold_case("S3ii-1", "OK-WINDOW", window_then_frames_held)
+    check("frames HELD instead of the banner unmapped -> the displayed toast keeps its display, not PREEMPTED",
+          cls != "PREEMPTED" and r.startswith("PASS"), f"cls={cls} {r[:170]}")
+    r2 = _row(g, "S3ii-2")
+    check("and the toast forwarded while the frames were held is NOT a double -> OK-BRIDGED",
+          r2.startswith("PASS OK-BRIDGED"), r2[:170])
 
     # RE-MAP of a banner the hold unmapped after showing it: the buffer must be re-announced first (REMAP-DUMP)
     def remap_case(with_dump):

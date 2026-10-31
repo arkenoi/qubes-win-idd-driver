@@ -26,7 +26,6 @@ pipe-server-lifetime-selftest.sh
 pwcarry-selftest.sh
 pwclass-truth-table.sh
 qdbwait-bound-selftest.sh
-qrexec-user-normalise-selftest.sh
 relay-vouch-selftest.sh
 rpm-spec-selftest.sh
 rtc-utc-selftest.sh

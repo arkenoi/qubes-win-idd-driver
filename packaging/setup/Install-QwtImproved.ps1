@@ -261,6 +261,25 @@ $script:QrexecAgentReleased = $false
 # buffered tail is a lost tail. FileOptions.WriteThrough is what LogSafeFlush=1 gives the native
 # modules (FILE_FLAG_WRITE_THROUGH) - fastfat completes the data and the directory entry at the
 # device before the write returns. Add-Content does not do this.
+# THE DIRECTORY IS RESOLVED LAZILY AND THE LATCH IS ON SUCCESS ONLY, MEASURED 2026-10-30.
+# It used to latch on the FIRST ATTEMPT, and that cost the mirror every run where the root key was
+# not already there - which is EVERY CLEAN INSTALL, because this installer creates LogDir itself
+# ("seeded gui-agent registry defaults ... LogDir=Q:\Qubes Logs - was unset") about half a minute
+# in, long after the first line is written. Counted on the log volume the host reads without
+# qrexec, over the two releases built since the mirror shipped (rel-40911442205, rel-40976966595):
+#     win10-clean, win11-clean                NO mirror   (4 of 4)
+#     win10/11-reinstall, win10/11-upgrade    mirror      (8 of 8)
+# The primary C: log was complete in all twelve, so nothing about the install differed - only
+# whether HKLM...\Qubes Tools\LogDir happened to exist at line 1. A guest whose log volume is not
+# mounted yet fails the same way, and so does any first install on a guest that never had QWT.
+# The ONE-SHOT property the latch was for is kept, and it is about SUCCESS: msiexec rewrites the
+# key as it upgrades, so once a directory has been resolved the key is never read again and the
+# mirror does not follow it somewhere else halfway through the run.
+# The lines written before LogDir exists are NOT replayed, deliberately: they are the opening
+# banner, the elevation check and the argument parsing, and resolution succeeds at line 16 of 210
+# - 35 lines before msiexec and long before the qrexec hold that is the only reason this sink
+# exists. The mirror carries the whole window it was built to carry, and the primary log on C:
+# keeps the opening for any guest that can be reached at all.
 $script:MirrorLog      = $null
 $script:MirrorResolved = $false
 
@@ -285,15 +304,18 @@ function Get-PvStageOnly {
 }
 
 function Resolve-MirrorLog {
-    # Resolved ONCE, on the first line written, then cached: msiexec rewrites this key as it
-    # upgrades, and the mirror must not follow it somewhere else halfway through the run.
-    $script:MirrorResolved = $true
+    # Resolved ONCE PER SUCCESS, then cached - see the note at $script:MirrorLog. A failed attempt
+    # returns with the state untouched so the next line tries again; only an opened file latches.
+    $candidate = $null
     try {
         $dir = (Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -Name 'LogDir' -ErrorAction Stop).LogDir
         if (-not $dir) { return }
         if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
-        $script:MirrorLog = Join-Path $dir 'qwt-improved-install.log'
-    } catch { $script:MirrorLog = $null; return }
+        $candidate = Join-Path $dir 'qwt-improved-install.log'
+    } catch { return }
+    if (-not $candidate) { return }
+    $script:MirrorLog      = $candidate
+    $script:MirrorResolved = $true
     # The volume outlives the run and this opens in Append mode, so without a banner two runs are
     # one undelimited file. Safe to call: MirrorResolved is already $true, so this does not recurse.
     Write-MirrorLine ('=== INSTALL-LOG MIRROR === pid={0} primary={1} opened={2}' -f $PID, $script:LogFile, (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
@@ -1410,14 +1432,38 @@ function Register-QwtEventSource {
 #                2147943691 (0x8007050B) is what an instance of OUR OWN task leaves when the shutdown reaps
 #                it: each of the four 2026-10-08/10 shutdown refusals of this task followed such a 201 of
 #                \QubesPvNic or \QubesPvNicRearm by 43-781 ms. The reporter ignores that record on its own
-#                (QwtShutdownResultCodes), and the boot catch-up pass still reads every record, so the one
-#                thing this Select stops is the launch that Windows was going to refuse. An instance ended
-#                with that result OUTSIDE a shutdown is reported by the catch-up pass at the next boot
-#                rather than at once; 267014 (ended on request) never launched it either.
+#                (QwtShutdownResultCodes); 267014 (ended on request) never launched it either.
+#                THIS EXCLUSION NOW SILENCES A REAL HANG, and the sentence that said otherwise is deleted.
+#                It read: "the boot catch-up pass still reads every record ... an instance ended with that
+#                result OUTSIDE a shutdown is reported by the catch-up pass at the next boot rather than at
+#                once." True when 0262ce2a wrote it (2026-10-10), false six days later: Invoke-QwtDeathCatchUp
+#                stops at the BOOT BOUNDARY (owner 2026-10-16 - reading the previous boot's backlog is
+#                "misleading and overreaching"), so no record from a boot that is over is ever judged, and a
+#                hang killed mid-boot is written long after the catch-up has run. The same correction was
+#                applied to the sibling 203 comment in qwt-report-death.ps1 ("IT NO LONGER CLAIMS THE
+#                CATCH-UP COVERS IT") and missed here.
+#                WHAT IT COSTS: MEASURED on win11-acc 2026-10-30, three arms to completion, an
+#                ExecutionTimeLimit kill of our scan leaves EXACTLY what the shutdown reap leaves - 201 with
+#                ResultCode 2147943691, LastTaskResult 267014 - so this Select cannot tell them apart and
+#                eats both. The genuine hang is reported NOWHERE. The arms differ only in a SEPARATE record
+#                (329 for the time limit; 330+111 for the reap), which one Select over one record cannot see.
+#                FIXED BY SUBSCRIBING TO 329 BELOW, not by letting 2147943691 back through - that would
+#                restore the refused-launch 203 per shutdown this exclusion exists to remove, and
+#                mgmt/harness/log-sweep-collect.ps1 collects it (Ids 201/203/329, $OurTaskRx matches
+#                QwtDeathReporter). 329's EventData is TaskName + TaskInstanceId and no ResultCode, read off
+#                the provider manifest on win11r 26300 (Get-WinEvent -ListProvider
+#                Microsoft-Windows-TaskScheduler), so the Select can scope to OUR tasks exactly as 203 does.
+#                MEASURED ON A REAL KILL, win11r-thold 2026-10-31 (live329-20261031-124147Z): 329 raised with
+#                EventData [TaskName, TaskInstanceId] only, selected by this shape at +76 s, 330=0 and 111=0,
+#                its paired 201 carrying 2147943691 / LastTaskResult 267014 - and the whole subscription,
+#                third Select and all, registered rc=0.
+#                AND THE PAIR IS DEDUPLICATED, or one hang would be two deaths: the reporter ignores a 201
+#                carrying this code when a 329 exists for the SAME TaskInstanceId (GUARD:timeoutdup). This
+#                Select never sees that 201, but the boot catch-up replays every record it finds.
 #                The string form '2147943691', not a numeric literal: the same shape as the TaskName
 #                comparison, which the four refusals prove this evaluator matches.
 # Microsoft-Windows-TaskScheduler/Operational is DISABLED by default on client Windows (Task Scheduler's
-# "Enable All Tasks History"); it is enabled here, or 201/203 would never be written at all.
+# "Enable All Tasks History"); it is enabled here, or 201/203/329 would never be written at all.
 function Register-QwtDeathReporter {
     param([Parameter(Mandatory)][string]$Root)
     $reporterTask = 'QwtDeathReporter'
@@ -1481,6 +1527,14 @@ function Register-QwtDeathReporter {
             "<Query Id=`"2`" Path=`"$tsPath`">",
             "<Select Path=`"$tsPath`">*[System[Provider[@Name='Microsoft-Windows-TaskScheduler'] and EventID=201] and EventData[Data[@Name='ResultCode']!=0 and Data[@Name='ResultCode']!='2147943691' and ($taskOr)]]</Select>",
             "<Select Path=`"$tsPath`">*[System[Provider[@Name='Microsoft-Windows-TaskScheduler'] and EventID=203] and EventData[$taskOr]]</Select>",
+            # 329 - "terminated ... due to exceeding the time allocated for execution". The ONE record that
+            # separates a genuine hang of ours from the shutdown reap, which the 201 above cannot (both leave
+            # ResultCode 2147943691). Scoping by TaskName is possible because 329's EventData IS TaskName +
+            # TaskInstanceId, read off the provider's own manifest on win11r 26300 rather than assumed, so this
+            # cannot fire for a foreign task. No ResultCode term: the record has none, and needs none - the event
+            # is itself the statement of cause. The reap raises 330+111 and no 329, so this adds no shutdown-time
+            # launch and the refused-launch 203 that 0262ce2a removed stays removed.
+            "<Select Path=`"$tsPath`">*[System[Provider[@Name='Microsoft-Windows-TaskScheduler'] and EventID=329] and EventData[$taskOr]]</Select>",
             '</Query>',
             '</QueryList>'
         ) -join ''
@@ -3996,8 +4050,8 @@ function Invoke-Stage2 {
             Write-Log "xenvif install returned $LASTEXITCODE - PV networking may stay on the emulated NIC" 'WARN'
             $script:Result.detail.pv_xenvif = "failed rc=$LASTEXITCODE"
         } else {
-            Write-Log 'xenvif installed - the emulated NIC should be unplugged after the reboot'
-            $script:Result.detail.pv_xenvif = 'installed'
+            Write-Log ("xenvif {0} - the emulated NIC should be unplugged after the reboot" -f $(if ($pvStageOnly) { 'staged (no /install)' } else { 'installed' }))
+            $script:Result.detail.pv_xenvif = $(if ($pvStageOnly) { 'staged-only' } else { 'installed' })
         }
         }
     } else {

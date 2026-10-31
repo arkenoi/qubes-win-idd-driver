@@ -31,6 +31,7 @@ Improve Windows-guest desktop fidelity and responsiveness in QWT seamless mode. 
 - **Check the clock before asking.** Between 01:00 and 06:00 local, do not ask a scope question - pick the option that keeps working, state the assumption, and leave the question for the morning. A lengthy task is a reason to START. Enforced by the same hook.
 - Do not stop to report. End a turn when the goal is met or a real external blocker is hit.
 - **A selftest that fails and needs a quick fix is DELETED, not fixed.** Owner 2026-10-26: «i do not like you writing endless selftests ... if any of those fail and need a "quick fix", DROP THE FUCKING THING COMPLETELY». No new suites. Product defects and the log sweep are the work; a suite is not. Drop it, lower the floor in the same commit, and say what still enforces the property (usually the build throwing on a failed patch apply).
+- **P1 means a user can see it.** Severity grades USER IMPACT, never how much a thing blocks me. Our own gates, sweeps, fixtures, selftests, harness classifiers and evidence plumbing are the measuring apparatus and **cannot be P1** (owner 2026-10-30), however urgent - they take P2 or below, keeping their class suffix (`P2 instrument`, `P2 gate`, `P2 rig custody`).
 - Escalate to owner only for: dom0/sudo/policy, upstream contact, acceptance stuck after ~3 iterations, guest reinstall, or isolation-weakening tradeoff.
 
 ## Capabilities decided at start

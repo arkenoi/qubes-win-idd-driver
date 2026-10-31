@@ -41,7 +41,7 @@
 #     cold boot, same knobs (ProtoTrace on, service.notify-bridge on, one allowlisted toastfire AUMID), same toastfire,
 #     same scenario list and gaps, on both sides.
 #   INSTRUMENT: the guest's own logs, joined on the guest's clock and on per-toast identity: the agent log (QGATOASTHOLD /
-#     QGATOASTHOLDLATE / QGATOASTPREEMPT / QGAHELDDEFER / QGAPROTO CREATE+MAP / "Unmapping window"), bridge.log (HOLD id=
+#     QGATOASTHOLDLATE / QGATOASTPREEMPT / QGATOASTGATE / QGAHELDDEFER / QGAPROTO CREATE+MAP / "Unmapping window"), bridge.log (HOLD id=
 #     verdict= t=<hash> / SENT / FWD_RTT ok=1 / skip), toastfire's FIRED lines stamped by guest/toast-hold-fire.ps1 with
 #     the guest clock, a clock PROBE (charmap's CREATE ties the agent log's clock to the bridge's), and a banner-visibility
 #     probe (user32 on the HWND the agent logged). Validated BEFORE any verdict: toast-hold-grade.py --selftest (synthetic

@@ -1,5 +1,5 @@
 {
-  "note": "German-free Win11 retail QWT golden @ 4.3.35, rebuilt 2026-10-15 from the clock-corrected win11r-base",
+  "note": "re-sealed 2026-10-30 winter: booted once so Windows wrote ActiveTimeBias -120 into the hive, so a clone's FIRST boot converts the RTC correctly. Receipt this boot: host 2026-10-30T21:24:13Z, guest 20:24:11.83Z, ATB -120, TZK FLE Standard Time. Expires at the March 2027 transition.",
   "props": {
     "klass": "StandaloneVM",
     "maxmem": "0",
@@ -7,14 +7,14 @@
     "vcpus": "4",
     "virt_mode": "hvm"
   },
-  "reseal_reason": "re-seal 2026-10-15 22:4x: the seal taken by seal-qwt-golden 3 seconds earlier recorded THREE revisions (1792092866-back, 1792093099-back, 1792093342-back) and the oldest had already rotated out by the time it was verified - revisions_to_keep is 2, so a seal taken while three exist drifts on the very next shutdown. The drift is the REVISION LIST only; no volume content changed, and the two surviving revisions match the seal. This is the clock-corrected win11r-qwt built from the REBUILT win11r-base with the N-1 (4.3.35) tree, which the acceptance feature cells clone.",
-  "sealed_utc": "2026-10-15T19:43:40Z",
+  "reseal_reason": "deliberate winter re-seal 2026-10-30 for the DST boot clock (ETWCLOCKDST). The abandoned revision 1792093099-back aged out of revisions_to_keep=2 when this boot cut 1793395465-back; 1792093342-back from the 2026-10-15 seal is still reachable. The abandoned state is the summer-bias image whose clones booted 3594-3609 s behind - it is being abandoned ON PURPOSE, not lost. Recipe measured first on a disposable clone (boot1 -3608.6 s, boot2 +1.5 s), scratchpad/reseal-probe.log.",
+  "sealed_utc": "2026-10-30T21:25:20Z",
   "vm": "win11r-qwt",
   "volumes": {
     "private": {
       "revisions": [
-        "1792093099-back",
-        "1792093342-back"
+        "1792093342-back",
+        "1793395465-back"
       ],
       "revisions_to_keep": "2",
       "size": "21474836480",
@@ -22,12 +22,12 @@
     },
     "root": {
       "revisions": [
-        "1792093099-back",
-        "1792093342-back"
+        "1792093342-back",
+        "1793395465-back"
       ],
       "revisions_to_keep": "2",
       "size": "85899345920",
-      "usage": "14963666059"
+      "usage": "14989435863"
     }
   }
 }

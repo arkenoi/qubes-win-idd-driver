@@ -32,6 +32,7 @@ knob_line() {
         installdir) printf '%s' '    if ($false) { }   # DEFECT: the registry install dir is ignored' ;;
         bootbacklog) printf '%s' '    $seed = $fresh   # DEFECT: the previous boot'"'"'s backlog is read and reported - the toasts the owner called misleading' ;;
         endedbyshutdown) printf '%s' '                $ended = '"'"'not-ended'"'"'   # DEFECT: a task instance ended BY A SHUTDOWN is reported as a death anyway' ;;
+        timeoutdup) printf '%s' '                if ($false) {   # DEFECT: the 201 of a time-limit kill opens a SECOND death beside its 329 - one hang, two notifications' ;;
         wdjoin)    printf '%s' '                    $r.rec = '"'"'scm-agentdied'"'"'   # DEFECT: the watchdog'"'"'s agent-died exit opens a death of its own (a second notification per agent death)' ;;
         sysendtext) printf '%s' '            $sysEnd = $false   # DEFECT: a child Windows ended with its session gets the family'"'"'s header and advice (exited unexpectedly, a Task Scheduler restart)' ;;
         sysendisdeath) printf '%s' '                if ($false) {   # DEFECT: a child Windows ended with its session during a shutdown is escalated as a death (the measured five)' ;;
@@ -59,6 +60,7 @@ knob_target() {
         installdir) printf '%s' 'install dir: the registry InstallDir decides, else the folder above the script'"'"'s bin, else the default' ;;
         bootbacklog) printf '%s' 'catch-up: a watermark from another boot reports NOTHING' ;;
         endedbyshutdown) printf '%s' 'ended by shutdown: a 201 whose instance Task Scheduler ended while the system went down' ;;
+        timeoutdup) printf '%s' 'one kill one death: the 201 of an instance that has a 329 is ignored' ;;
         wdjoin)    printf '%s' 'wd exit: the watchdog'"'"'s 7024 with QGA_SVC_EXIT_AGENT_DIED attaches to the agent'"'"'s death' ;;
         sysendtext) printf '%s' 'teardown text: the header says Windows ended it, not that it exited unexpectedly or crashed' ;;
         sysendisdeath) printf '%s' 'shutdown teardown: a 4003 carrying 0x40010004 near a shutdown is ignored - nothing launched, ledger empty' ;;
@@ -83,7 +85,7 @@ EOF
     printf '%s' "$copy"
 }
 
-KNOBS="ours deathid anchorpid logfirst onerec werjoin helperjoin pidreuse managedonly installdir wdjoin endedbyshutdown sysendtext sysendisdeath build shortbuild scmshutdown launchshutdown bootbacklog"
+KNOBS="ours deathid anchorpid logfirst onerec werjoin helperjoin pidreuse managedonly installdir wdjoin endedbyshutdown timeoutdup sysendtext sysendisdeath build shortbuild scmshutdown launchshutdown bootbacklog"
 # the suite against a copy with one knob applied: the route's knobs go in through -HelperPath, the reporter's through -ReporterPath
 run_knob() { # $1 knob, $2 copy, $3 output file
     if [ "$(knob_file "$1")" = "$HELPER" ]; then "$PWSH" -NoProfile -File "$SUITE" -HelperPath "$2" >"$3" 2>&1

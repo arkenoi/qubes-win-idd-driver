@@ -1,6 +1,6 @@
 ---
 name: guest-introspection
-description: Determine what a Windows test guest is ACTUALLY doing mid-flight - processes, phase, progress rate - instead of inferring it from silence. Use whenever a long guest operation (DISM/CBS servicing, a large download, a feature update, a benchmark) is running and you are tempted to say "it is probably still working" or "it seems stuck".
+description: Determine what a Windows test guest is ACTUALLY doing mid-flight - processes, phase, progress rate - instead of inferring it from silence. Use whenever a long guest operation (DISM/CBS servicing, a large download, a feature update, a benchmark) is running and you are tempted to say "it is probably still working" or "it seems stuck". ALSO the binding procedure for the PV console (tools/qcon): read it BEFORE attaching, closing or re-attaching a guest console, and before reading anything into a console transcript.
 ---
 
 # Introspect the guest, do not guess
@@ -76,6 +76,51 @@ Phase names worth recognising in the CBS tail:
    until after the verdict.
 6. **Big logs: analyse in-guest.** CBS.log routinely passes 250 MB. Streaming it out over qrexec
    costs more than the analysis; run the aggregation in the guest and return a digest.
+
+## The PV console: one attach, and you do not get it back
+
+`tools/qcon` is the out-of-band channel for "guest alive, qrexec dead". Everything below was paid
+for on win11-acc, 2026-10-29.
+
+**There are TWO console transports and qcon only speaks one of them.**
+
+| transport | reaches | available to this qube |
+|---|---|---|
+| `admin.vm.Console` (what `qcon` uses) | libvirt's `<console>` tty, verbatim (`/domain/devices/console/@tty`) | yes |
+| `xl console -t pv` / `qvm-console` | the guest's own Xen PV console ring, the one `xencons_tty` terminates | **no - dom0 only** |
+
+`dom0/11-wedge-forensics.sh:204` and README "Known limitations" both say this. They are not the
+same pty. If the one you can reach is the wrong one, no amount of retrying fixes it.
+
+**Banner + one login prompt + silence is NOT a health signal, in either direction.**
+A fresh attach is blank until you send a CR (a pty has no scrollback), so the prompt is just the
+wake answer. Measured:
+
+- `~/tmp/qcon-win11-once.closed.log`, a **healthy** guest, is byte-identical to the wedged one:
+  38 bytes, `\r\n[ATTACHED]\r\n\r\nWIN11-IDD-TEST login: `, then nothing.
+- The PV ring log in a wedge bundle records five attaches on win11-acc inside a window where the
+  guest was provably healthy (install `ok`, session up 4 min later). All five: the same 38 bytes.
+- Across that whole ring log: **125 login prompts, zero ever followed by a typed username.**
+
+So never write "the guest wrote it live, so it is not dead" from a prompt, and never write "the
+console is dead" from the silence after it. Neither claim is carried by those bytes.
+
+**Do not use an old transcript as the baseline.** The two transcripts in `~/tmp` that show an echoed
+username and `Password:` (`win11de-led`, `win11de-gweck`) have **two** login prompts because they
+predate `bc4e4e96`, which removed an extra CR that made the guest emit a second prompt. Post-fix, a
+healthy guest shows ONE prompt. Comparing against the pre-fix shape inverts the conclusion.
+
+**`close` does not recover a console - it spends it.** Tested directly: a session that was at least
+returning the banner was closed (`rc=0`, detached, no attacher left in this qube) and the fresh
+attach returned **zero bytes, not even dom0's `[ATTACHED]`** - and `rc` was 2, not 200/126, so dom0
+*granted* the flock. Closing made the channel strictly worse and there is no way back from this
+qube. This is why the one-attach rule is a rule and not a style preference.
+
+**When the attach is silent, the remaining moves are all dom0** (`sudo xl console -t pv <vm>`,
+`qvm-console <vm>`, or reading `/var/log/xen/console/guest-<vm>.log`, the retroactive transcript
+xenconsoled writes with no guest cooperation). Those are owner escalations, not something to retry
+around. A wedge bundle's `console-pv.txt` reading `Unable to attach console` is an **instrument
+failure, not a guest fact** - do not quote it as evidence the console was dead.
 
 ## Related
 

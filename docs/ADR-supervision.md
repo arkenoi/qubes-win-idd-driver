@@ -29,7 +29,7 @@ flowchart TD
     B -->|no| C{"How did it end?"}
     C -->|"it crashed"| D["Windows records it:<br/>WER report; Application 1000 and 1001;<br/>.NET Runtime 1026 for a managed one"]
     C -->|"a service ended or failed"| E["Windows records it:<br/>System 7031 / 7034; 7023 / 7024 when it ended with an error<br/>(our services exit non-zero when their worker fails)"]
-    C -->|"a scheduled task's action failed"| F["Windows records it:<br/>TaskScheduler/Operational 201 / 203"]
+    C -->|"a scheduled task's action failed or overran"| F["Windows records it:<br/>TaskScheduler/Operational 201 / 203,<br/>and 329 when Task Scheduler killed it for<br/>exceeding its execution time limit"]
     C -->|"a supervised helper exited without a crash"| G["Its supervisor writes ONE Event Log record<br/>under our source 'Qubes Windows Tools', ERROR level<br/>(4001 agent, 4002 broker, 4003 bridge, 4004 etwproxy)"]
     D --> H
     E --> H
@@ -270,7 +270,15 @@ cap 8). The subscription is data in `Register-QwtDeathReporter` and is evaluated
 `tools/tests/death-reporter-xpath-selftest.py`; the reporter's identity, count and text by
 `tools/tests/death-reporter-selftest.sh`; the registration by `tools/tests/supervision-install-selftest.sh`.
 The installer enables Microsoft-Windows-TaskScheduler/Operational: client Windows ships it disabled, and
-201/203 are never written otherwise.
+201/203/329 are never written otherwise.
+A HANG IS A DEATH, AND 329 IS THE ONLY RECORD THAT SAYS SO. A task of ours that Task Scheduler kills
+for exceeding its ExecutionTimeLimit leaves a 201 whose ResultCode is 2147943691 - byte for byte what
+the shutdown reap leaves (MEASURED 2026-10-30, three arms) - so the 201 Select excludes that code and
+cannot report the hang. 329 is subscribed for exactly this, scoped by TaskName like the 203 Select
+because its EventData IS TaskName + TaskInstanceId and nothing else (provider manifest, win11r 26300;
+a real kill measured on win11r-thold 2026-10-31 with 330 and 111 absent, so this adds no shutdown-time
+launch). The 201 of that same kill is ignored where its instance has a 329, so one hang is one death -
+the live subscription never sees that 201, but the boot catch-up replays every record it finds.
 
 **§4, restarts.** `Set-QubesServiceRecovery` arms QdbDaemon, QrexecAgent and QubesGuiWatchdog;
 `pvnic-selfprime.ps1` arms QwtngNetSetup where it creates it; `health-check.ps1` step 2b asserts all four

@@ -8,8 +8,17 @@ AGENT="${AGENT_DIR:-$ROOT/agent}"
 UTILS_INC="${WINDOWS_UTILS_INC:-$ROOT/upstream/ro/qubes-windows-utils/include}"
 STUB="$ROOT/tools/tests/win32stub"
 OUT="${LIFECYCLE_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/lifecycle-selftest-XXXXXX")}"
+OUT_OURS=0; [ -n "${LIFECYCLE_OUT:-}" ] || OUT_OURS=1
 mkdir -p "$OUT"
 bad=0
+# THIS SUITE LEAKED ITS SCRATCH, AND IT BLOCKED A RELEASE. mktemp here with no cleanup left one
+# directory per run - 20 of them, 492 MB, measured 2026-10-29 - in a /tmp that is a 1 GB RAM-backed
+# tmpfs on this qube. tools/release-acceptance.sh refuses to start below 200 MB free on /tmp, a
+# floor that exists because campaigns were OOM-killed mid-run, so the acceptance campaign could not
+# be launched. Remove only what WE created, and only when the suite PASSED: on a failure the build
+# logs and binaries under $OUT are the evidence, and the path is printed for exactly that reason.
+cleanup_out() { [ "$OUT_OURS" = 1 ] && [ "$bad" = 0 ] && rm -rf "$OUT"; return 0; }
+trap cleanup_out EXIT
 say() { printf '%s\n' "$*"; }
 
 WD="$AGENT/watchdog/watchdog.c"; LC="$AGENT/gui-agent/lifecycle.c"; MAIN="$AGENT/gui-agent/main.c"
@@ -442,5 +451,8 @@ xc_all_loggers_guarded() {
 }
 shape "agent: EVERY xencontrol logger asks QgaXcLineKept, not just one of them" xc_all_loggers_guarded "$AGENT/gui-agent" 'if (!QgaXcLineKept((int)logLevel, function))   // GUARD:xcnotify'
 
-say "--- outputs in $OUT"
+# Say where the outputs are only when they will STILL BE THERE - cleanup_out removes our own
+# scratch on a pass, and printing a path that is about to be deleted is a false line.
+if [ "$OUT_OURS" = 1 ] && [ "$bad" = 0 ]; then say "--- passed; scratch removed"
+else say "--- outputs in $OUT"; fi
 exit $bad

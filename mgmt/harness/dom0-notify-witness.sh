@@ -33,6 +33,7 @@ VM="${1:?vm}"; LABEL="${2:?label}"; shift 2
 # is a no-op under a lock-holding caller like notify-errors-guest-test.sh and a real lock when this
 # is run on its own. Either way two jobs cannot interleave on one subject.
 source mgmt/harness/vmlock.sh
+source mgmt/harness/desktop-visible-lib.sh   # desktop_struct / desktop_visible - the lock-or-blank check, shared with the other three witnesses
 vm_lock "$VM"
 
 OUT="scratchpad/notify-witness/$LABEL-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -111,26 +112,10 @@ say "ambient churn with no trigger: $AMB"
 #
 # The tell: a lock or blank screen is nearly uniform, a working desktop is not. The threshold only
 # has to separate "a desktop" from "no desktop", not grade anything.
-STRUCTOUT=$(python3 - "$OUT/amb1.tar" <<'WITPY'
-import sys, tarfile, io, numpy as np
-from PIL import Image
-try:
-    with tarfile.open(sys.argv[1]) as t:
-        best = None
-        for m in t.getmembers():
-            if m.name.lower().endswith(".png") and (best is None or m.size > best.size): best = m
-        if best is None:
-            print("STRUCT=-1"); raise SystemExit
-        im = Image.open(io.BytesIO(t.extractfile(best).read())).convert("L")
-    a = np.asarray(im, dtype=np.int16)
-    print("STRUCT=%.5f" % float((np.abs(np.diff(a, axis=1)) > 12).mean()))
-except Exception:
-    print("STRUCT=-1")
-WITPY
-)
+STRUCTOUT=$(desktop_struct "$OUT/amb1.tar")
 say "desktop structure: $STRUCTOUT"
 _st=$(printf '%s' "$STRUCTOUT" | sed -nE 's/STRUCT=([0-9.-]+)/\1/p')
-if awk -v v="${_st:--1}" 'BEGIN{exit !(v >= 0 && v < 0.004)}'; then
+if ! desktop_visible "$OUT/amb1.tar"; then
   echo "WITNESS=undecidable(dom0 desktop blank or locked, structure=${_st} - a bubble cannot be photographed over a screen lock, and calling that 'not rendered' would blame the product for the operator's screensaver)"
   exit 1
 fi

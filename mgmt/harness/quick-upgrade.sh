@@ -222,9 +222,40 @@ finish(){ # $1=rc $2=message  - every exit goes through here and says which exit
       \( -name '*.log' -o -name '*.out' -o -name '*.cur' -o -name '*.tail' \) \
       -size -8M -size +0 2>/dev/null)
   fi
+  # A VERDICT ABOUT THIS RUN MUST BE SCOPED TO THIS RUN, and until now this call passed only a file
+  # list while its sibling at matrix.sh:3660 passed --build and --since. The campaign half was fixed
+  # on 2026-10-24 with its own measurement (503 lines predating their own cell's window across eight
+  # cells of run 40037710497); this half - the path that runs on EVERY fix on this project - was left.
+  # MEASURED 2026-10-30, run 41138837627 over the 303fb40c package: this cell exited rc=3 on
+  # `QpsRead: [N] client is disconnected` x31 <== ROSE from x17 and `QpsReaderThread: [N] read failed`
+  # x32 <== ROSE from x16, and stopped a P1 fix's guest acceptance from running. Per file: this run's
+  # upgrade boot wrote 14/14, which is what all four prior runs of this same shape read (40976966595,
+  # 40407378739 twice, 40364796167); the other 17/18 came from qubesdb-daemon-20261030-222404, a boot
+  # whose SIBLING log this very gate named `gui-agent 4.3.35.795 (superseded by 4.3.39.1187)` and put
+  # in its prior-build exclusion. It arrived inside the image - the golden's own re-seal boot, 2 h 21
+  # min before this run started - and it escaped the version-based exclusion because qubesdb-daemon's
+  # LogInit prints module, uptime, user and pid and NO version, so the attributor has no version to
+  # bill it with and only a clock could reach it. That residual is recorded, not coded around
+  # (Jev record_and_leave 0.75): the window is what covers a version-less module here.
+  # NOTHING BECOMES SILENTLY CLEAN. sweep-gate.sh prints what the window dropped as a figure for
+  # exactly this reason - a wrong --since shows up there as an implausible count, not as a pass.
+  # THE STAMP COMES FROM attempt_id, NOT FROM $RUN_ID. attempt_id mints YYYYMMDDTHHMMSSZ-<pid> in
+  # UTC and `export RUN_ID`s it - but every caller invokes it as $(attempt_id), and an export inside
+  # a command substitution never reaches the parent, which is why that function keeps a $$-keyed
+  # memo file at all. Reading $RUN_ID here left it EMPTY and the guard below silently omitted the
+  # flag: measured on run 41138837627 at 23:44:05Z, where the gate printed no PRIOR-RUN line in
+  # either form and the counts stayed x31/x32. Calling attempt_id reads the memo every subshell
+  # shares, which is the same value $OUT is named after.
+  _sg_since=$(attempt_id | sed -E \
+    's/^([0-9]{4})([0-9]{2})([0-9]{2})T([0-9]{2})([0-9]{2})([0-9]{2})Z-[0-9]+$/\1-\2-\3T\4:\5:\6Z/')
+  # A shape the sed does not match omits the flag rather than passing the gate garbage;
+  # ${PV:+} covers an early refusal reaching finish() before PV is read (it is assigned in the main
+  # shell below, so finish - a function of that same shell - sees it on every non-early exit).
+  case "$_sg_since" in [0-9][0-9][0-9][0-9]-??-??T??:??:??Z) ;; *) _sg_since= ;; esac
   if [ "${#_swg[@]}" -gt 0 ] && [ -x tools/sweep-gate.sh ]; then
     log "sweep-gate: ${#_swg[@]} input(s) - this run's log plus the guest's own logs from $OUT/logvol"
-    if bash tools/sweep-gate.sh "${_swg[@]}" >>"$OUT/sweep-gate.out" 2>&1; then
+    # shellcheck disable=SC2086
+    if bash tools/sweep-gate.sh ${PV:+--build "$PV"} ${_sg_since:+--since "$_sg_since"} "${_swg[@]}" >>"$OUT/sweep-gate.out" 2>&1; then
       log "sweep-gate: no undeclared error-shaped line in this run's log or the guest's"
     else
       grep -a '^  ' "$OUT/sweep-gate.out" | tail -8 | while IFS= read -r l; do log "  $l"; done
@@ -1138,8 +1169,17 @@ qu_coldboot 2
 # The adapter name is NOT the discriminator and is printed as context only. A Realtek reading can be
 # produced by the per-boot unplug latch (xen.sys consumes Services\XEN\Unplug\NICS delete-on-read
 # and vetoes without a VIF subkey; first appearance fails problem 14) with the correct xenvif bound.
-_pvps="\$ErrorActionPreference='SilentlyContinue'; foreach (\$d in (Get-PnpDevice | Where-Object { \$_.InstanceId -match 'XENVIF|XENCONS|VEN_5853' })) { \$v = (Get-PnpDeviceProperty -InstanceId \$d.InstanceId -KeyName 'DEVPKEY_Device_DriverVersion').Data; \$pc = (Get-PnpDeviceProperty -InstanceId \$d.InstanceId -KeyName 'DEVPKEY_Device_ProblemCode').Data; 'PVDEV {0} prob={1} ver={2} {3} {4}' -f \$d.Status, \$pc, \$v, \$d.Class, \$d.InstanceId }; foreach (\$a in (Get-NetAdapter)) { 'PVNET {0} | {1}' -f \$a.Status, \$a.InterfaceDescription }"
-_pv=$(QTEST_VM=$SUBJECT timeout -k 5 120 ./tools/qtest run "powershell -NoProfile -Command \"$_pvps\"" 2>/dev/null | tr -d '\r' | grep -aE '^(PVDEV|PVNET) ' || true)
+_pvps="\$ErrorActionPreference='SilentlyContinue'; \$all = @(Get-PnpDevice); 'PVTOTAL {0}' -f \$all.Count; \$drv = @{}; foreach (\$sd in (Get-CimInstance Win32_PnPSignedDriver)) { if (\$sd.DeviceID) { \$drv[\$sd.DeviceID.ToUpper()] = \$sd.DriverVersion } }; foreach (\$d in (\$all | Where-Object { \$_.InstanceId -match 'XENBUS|XENVIF|XENCONS|XENIFACE|VEN_5853|DEV_VIF|DEV_CONS|DEV_IFACE' })) { \$v = (Get-PnpDeviceProperty -InstanceId \$d.InstanceId -KeyName 'DEVPKEY_Device_DriverVersion').Data; if (-not \$v) { \$v = \$drv[\$d.InstanceId.ToUpper()] }; if (-not \$v) { \$v = '-' }; \$pc = (Get-PnpDeviceProperty -InstanceId \$d.InstanceId -KeyName 'DEVPKEY_Device_ProblemCode').Data; if (\$null -eq \$pc) { \$pc = '-' }; 'PVDEV {0} prob={1} ver={2} {3} {4}' -f \$d.Status, \$pc, \$v, \$d.Class, \$d.InstanceId }; \$na = @(Get-NetAdapter); 'PVNETTOTAL {0}' -f \$na.Count; foreach (\$a in \$na) { 'PVNET {0} | {1}' -f \$a.Status, \$a.InterfaceDescription }"
+_pv=$(QTEST_VM=$SUBJECT timeout -k 5 120 ./tools/qtest run "powershell -NoProfile -Command \"$_pvps\"" 2>/dev/null | tr -d '\r' | grep -aE '^(PVDEV|PVNET|PVTOTAL|PVNETTOTAL) ' || true)
+# WHICH ARM ACTUALLY RAN, from the installer's own RESULT and not from what we asked for.
+_want=${EXP_STAGE_PV_ONLY:-0}
+_got=$(grep -ao '"exp_stage_pv_only"[: ]*[a-z]*' "$OUT/install-mirror.log" 2>/dev/null | tail -1 | grep -o '[a-z]*$')
+case "${_want}:${_got}" in
+  1:true|0:false) log "arm confirmed by the installer's RESULT: exp_stage_pv_only=$_got" ;;
+  *:'')           log "[WARN] the RESULT did not carry exp_stage_pv_only - the arm is UNCONFIRMED (asked for $_want)" ;;
+  *)              log "[ERROR] ARM MISMATCH: asked for EXP_STAGE_PV_ONLY=$_want, the installer recorded exp_stage_pv_only=$_got - this run is NOT the arm it is labelled, do not read the rows below as that arm" ;;
+esac
+
 log "PV device state after both cold boots (arm: EXP_STAGE_PV_ONLY=${EXP_STAGE_PV_ONLY:-0}):"
 if [ -n "$_pv" ]; then
   printf '%s\n' "$_pv" > "$OUT/pv-devices-after-boots.txt"
@@ -1147,20 +1187,33 @@ if [ -n "$_pv" ]; then
 $_pv
 EOFPV
   # State the two readings separately, strongest first, so a later reader cannot merge them.
-  if printf '%s\n' "$_pv" | grep -qai '^PVDEV OK .*XENCONS'; then
-    log "  XENCONS BOUND (the clean probe: the MSI does not ship xencons, so only the store could have)"
-  elif printf '%s\n' "$_pv" | grep -qai 'XENCONS'; then
-    log "  XENCONS PRESENT BUT NOT OK - read the prob= field on its row"
-  else
-    log "  XENCONS ABSENT after both boots"
-  fi
-  if printf '%s\n' "$_pv" | grep -qai '^PVDEV .*ver=9\.1\.0\.998.*XENVIF'; then
-    log "  XENVIF on OUR build 9.1.0.998 (weak probe: an upgrade of a node msiexec had already bound)"
-  elif printf '%s\n' "$_pv" | grep -qai '^PVDEV .*XENVIF'; then
-    log "  XENVIF present on a version that is NOT 9.1.0.998 - the MSI's 9.1.0.0 is still the bound one"
-  else
-    log "  XENVIF ABSENT after both boots"
-  fi
+  # WHICH DRIVER IS BOUND, never merely whether a device is there. The expected version comes from
+  # THIS run's own RESULT (idd_bound = <maj>.<min>.<pt>.<build>; the PV drivers ship as 9.1.0.<build>).
+  _bld=$(grep -ao '"idd_bound"[: ]*"[0-9.]*"' "$OUT/install-mirror.log" 2>/dev/null | tail -1 | grep -o '[0-9.]*"$' | tr -d '"')
+  _want_ver=""; case "$_bld" in *.*.*.*) _want_ver="9.1.0.${_bld##*.}" ;; esac
+  if [ -n "$_want_ver" ]; then log "  the package under test ships PV drivers as $_want_ver (from idd_bound=$_bld)"
+  else log "  [WARN] could not derive the package's PV driver version from idd_bound - the rows below cannot be graded"; fi
+
+  for _d in CONS VIF; do
+    _row=$(printf '%s\n' "$_pv" | grep -ai "^PVDEV .*DEV_${_d}" | head -1)
+    _gotv=$(printf '%s' "$_row" | grep -o 'ver=[0-9.]*' | cut -d= -f2)
+    if [ -z "$_row" ]; then
+      log "  XEN${_d} ABSENT after both boots"
+    elif [ -z "$_want_ver" ] || [ -z "$_gotv" ]; then
+      log "  XEN${_d} present, version UNGRADED (got '${_gotv:-none}') - $_row"
+    elif [ "$_gotv" = "$_want_ver" ]; then
+      log "  XEN${_d} BOUND ON THIS PACKAGE'S DRIVER ($_gotv)"
+    else
+      log "  XEN${_d} still on $_gotv, NOT this package's $_want_ver - the staged driver did not bind"
+    fi
+  done
+
+  # AND SAY WHAT THIS SUBJECT CAN AND CANNOT SETTLE. A subject upgraded from a QWT golden arrives
+  # with these devices already bound, so no reading here answers "does a boot bring up a device
+  # whose install never ran" - only "did a boot REPLACE an already-bound driver from the store".
+  # The first question needs a from-scratch install on a BASE golden.
+  log "  SCOPE: this subject is an upgrade over a QWT golden - the devices pre-exist the run, so these"
+  log "         rows can only show whether a STAGED driver replaced one, never whether a boot created one."
 elif [ "${EXP_STAGE_PV_ONLY:-0}" = 1 ]; then
   # Only an error in the arm that exists to take this reading. On a control run a silent readout
   # is an inconclusive instrument, not a failed install, and must not redden every cycle.
