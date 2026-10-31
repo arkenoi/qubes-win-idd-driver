@@ -387,6 +387,17 @@ Rules that follow:
 - If the update is not complete in the agent's cache after `CopyToCache`, the row FAILS and names the leaves
   that are missing.
 - **A vendor payload is never carved, repacked, extracted or provisioned by us.**
+- **The size dom0 shows is what the guest will fetch, never the offer's `MaxDownloadSize`** (added
+  2026-11-01; Jev 0.99 on the decision; PROPOSED to the owner - this bullet widens an accepted section and
+  says so). An offered node's `MaxDownloadSize` is an upper bound over its whole bundle tree - every language
+  and architecture variant - and read as a size it showed 92,637.7 MB for a cumulative that moved 4,553.8 MB
+  (2026-10-31, identity 43f0fc0f r1), and 92,399.7 against 4,424.5 in the 2026-09-17 capture: 20.3x and 20.9x.
+  `size_mb` in the row dom0 reads is the sum of the NEEDED leaves' sizes (the walk above already visits them);
+  `size_src` says `leaves`, or `bundle` when the walk found no content leaf and the offer's own number is all
+  there is - a fallback must be distinguishable from a measurement. The pass logs one `WUSIZE` line per offer
+  (UpdateID+RevisionNumber, §6) with the bundle max/min, the leaf sums and counts, beside its own `THROUGHPUT`
+  record, so the claim is checked by every pass and never by a standalone probe (§12.4: the pass owns the only
+  relay).
 
 (The flowchart for this decision is in "In plain English" at the top of this file.)
 

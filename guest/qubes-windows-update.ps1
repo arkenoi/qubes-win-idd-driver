@@ -873,7 +873,13 @@ function Report-Availability($count){
 # (0x80070002 bare and with /q), and the agent runs it through MpSigStub with the update's own command line. Bounded: 256 nodes, and 64
 # content items per leaf (a self-contained leaf carries one; an express node carries thousands, which are never enumerated).
 function Get-WuNeededLeaves($u){
-  $acc = [ordered]@{ needed=@(); urls=@(); missing=@(); content=0; express=$false; visited=0 }
+  # bytes_needed/bytes_all: the LEAF sizes, because the offered node's own MaxDownloadSize is an upper bound over its whole bundle tree -
+  # every language and architecture variant - and not the content THIS guest will fetch. Measured: 92637.7 MB reported against 4553.8 MB
+  # moved for identity 43f0fc0f r1 (2026-10-31), and 92399.7 against 4424.5 in the capture at tools/tests/wu-update-render-test.ps1
+  # (2026-09-17): 20.3x and 20.9x. Summed HERE because this walk already visits every leaf for the content classification, so the honest
+  # number costs no second enumeration and no HEAD per offer. leaves/maxdepth feed the WUSIZE line beside the row dom0 reads - the
+  # measurement that proves the sum against the pass's own THROUGHPUT record, per UpdateID+RevisionNumber.
+  $acc = [ordered]@{ needed=@(); urls=@(); missing=@(); content=0; express=$false; visited=0; bytes_needed=[long]0; bytes_all=[long]0; leaves=0; maxdepth=0 }
   Add-WuLeaves $u 0 $acc
   return $acc
 }
@@ -883,12 +889,19 @@ function Add-WuLeaves($n, [int]$depth, $acc){
   $nc=0; try{ $nc=[int]$n.DownloadContents.Count }catch{}
   if($nc -gt 0){
     $acc.content += $nc
+    $acc.leaves++; if($depth -gt $acc.maxdepth){ $acc.maxdepth=$depth }
+    # A LEAF's MaxDownloadSize IS its content: the max-over-variants ambiguity lives at bundle nodes, which this walk descends past.
+    # Counted into bytes_all for every content leaf and into bytes_needed only on the needed arm, so "small because the leaves are
+    # already present" can be told from "small because the bundle number was an upper bound".
+    $lsz=[long]0; try{ $lsz=[long]$n.MaxDownloadSize }catch{}
+    $acc.bytes_all += $lsz
     $installed=$false; $downloaded=$false
     try{ $installed=[bool]$n.IsInstalled }catch{}
     try{ $downloaded=[bool]$n.IsDownloaded }catch{}
     $title=''; try{ $title=[string]$n.Title }catch{}
     $uid=''; try{ $uid=[string]$n.Identity.UpdateID }catch{}
     if(-not $installed -and -not $downloaded){   # GUARD:leafneeded - installed or already-cached leaves are not fetched again
+      $acc.bytes_needed += $lsz
       $static=@(); $bad=@()
       if($nc -gt 64){ $bad += "$nc content items (express-shaped)"; $acc.express=$true }
       else {
@@ -916,10 +929,16 @@ function Add-WuLeaves($n, [int]$depth, $acc){
 function Get-WuContentClass($u){
   $lv = Get-WuNeededLeaves $u
   $downloaded=$false; try{ $downloaded=[bool]$u.IsDownloaded }catch{}
-  if($lv.needed.Count -gt 0 -and $lv.missing.Count -eq 0){ return @{ class='self-contained'; urls=@($lv.urls | Sort-Object -Unique) } }
-  if($lv.needed.Count -eq 0 -and $lv.content -gt 0 -and $downloaded){ return @{ class='self-contained'; urls=@() } }
-  if($lv.express){ return @{ class='express'; urls=@() } }
-  return @{ class='none'; urls=@() }
+  # THE SIZE, AND ITS PROVENANCE. bytes = what the needed leaves add up to. When the walk found NO content leaf at all the sum measures
+  # nothing, so the bundle's own number is used and src says so: a fallback that cannot be told from a leaf sum is how the inflated value
+  # survived in the first place.
+  $bytes=[long]$lv.bytes_needed; $src='leaves'
+  if($lv.content -eq 0){ $bytes=[long]0; try{ $bytes=[long]$u.MaxDownloadSize }catch{}; $src='bundle' }
+  $sz=@{ bytes=$bytes; src=$src; leaf_needed=[long]$lv.bytes_needed; leaf_all=[long]$lv.bytes_all; leaves_needed=$lv.needed.Count; leaves_all=$lv.leaves; visited=$lv.visited; depth=$lv.maxdepth }
+  if($lv.needed.Count -gt 0 -and $lv.missing.Count -eq 0){ return @{ class='self-contained'; urls=@($lv.urls | Sort-Object -Unique); size=$sz } }
+  if($lv.needed.Count -eq 0 -and $lv.content -gt 0 -and $downloaded){ return @{ class='self-contained'; urls=@(); size=$sz } }
+  if($lv.express){ return @{ class='express'; urls=@(); size=$sz } }
+  return @{ class='none'; urls=@(); size=$sz }
 }
 
 # ---- WU-SECPLATFORM-READ-BEGIN   (tools/tests/wu-secplatform-test.ps1 runs this region)
@@ -1038,7 +1057,13 @@ function Get-Available {
     try { $uid=[string]$u.Identity.UpdateID; $rev=[int]$u.Identity.RevisionNumber } catch {}
     if($kb -ne '(no KB)' -and -not $script:LiveUpdates.ContainsKey($kb)){ $script:LiveUpdates[$kb] = $u }
     if($uid){ $script:LiveUpdates[$uid] = $u }
-    $out += [ordered]@{ kb=$kb; title="$($u.Title)"; size_mb=[math]::Round($u.MaxDownloadSize/1MB,1); downloaded=[bool]$u.IsDownloaded; content_class=$cls.class; direct_urls=@($cls.urls); uid=$uid; rev=$rev; classifications=@(Get-WuClassifications $u); is_definition=(Test-WuDefinitionUpdate $u) }
+    # WUSIZE - the measurement the size fix ships with. ADR-updater 12.4 forbids a standalone WU probe (the pass owns the only relay),
+    # so the numbers come from the pass itself: one line per offer at scan time, keyed by UpdateID+RevisionNumber (section 6) - no
+    # title, no KB. bundle_max/bundle_min are the offer's own numbers, leaf_* the walk's; the pass's THROUGHPUT record is the other side.
+    $bmax=0; try{ $bmax=[math]::Round($u.MaxDownloadSize/1MB,1) }catch{}
+    $bmin=0; try{ $bmin=[math]::Round($u.MinDownloadSize/1MB,1) }catch{}
+    Log ("WUSIZE uid=$uid rev=$rev bundle_max_mb=$bmax bundle_min_mb=$bmin leaf_needed_mb=" + [math]::Round($cls.size.leaf_needed/1MB,1) + " leaf_all_mb=" + [math]::Round($cls.size.leaf_all/1MB,1) + " leaves_needed=$($cls.size.leaves_needed) leaves_all=$($cls.size.leaves_all) visited=$($cls.size.visited) depth=$($cls.size.depth) src=$($cls.size.src)")
+    $out += [ordered]@{ kb=$kb; title="$($u.Title)"; size_mb=[math]::Round($cls.size.bytes/1MB,1); size_src=$cls.size.src; downloaded=[bool]$u.IsDownloaded; content_class=$cls.class; direct_urls=@($cls.urls); uid=$uid; rev=$rev; classifications=@(Get-WuClassifications $u); is_definition=(Test-WuDefinitionUpdate $u) }
   }
   return ,$out
 }

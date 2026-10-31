@@ -38,7 +38,7 @@ try {
         $sz = 0; try { $sz = [math]::Round($u.MaxDownloadSize/1MB,1) } catch {}
         $rep.updates += [ordered]@{
             title      = "$($u.Title)"
-            size_mb    = $sz
+            bundle_max_mb = $sz   # the offer's MaxDownloadSize: an upper bound over the whole bundle tree, not what a guest fetches (the product sums the leaves)
             downloaded = [bool]$u.IsDownloaded
             n_files    = $urls.Count
             sample_url = if ($urls.Count -gt 0) { "$($urls[0])" } else { '(none exposed)' }
