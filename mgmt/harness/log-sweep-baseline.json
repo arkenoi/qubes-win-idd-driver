@@ -105,6 +105,13 @@
    "reason": "The frame gate's two ends, from the only two places that move it: the tracking pass (reason=preempt, and the resume that forces the repaint) and the swap edge on the hook thread. One line per TRANSITION and never per frame - the frames actually dropped are counted and reported as 'after N held' on the resume line, which is also the measurement of what the gate held back. toast-hold-grade.py's mapped_at reads this pair to tell a gated window from one showing the toast that just repainted it, so these lines are evidence, not noise.",
    "regex": "^agent\\|[IWE]\\|ToastHold(Decide|NoteChanged): QGATOASTGATE hwnd=0xH frames (gated|resumed)",
    "status": "expected"
+  },
+  {
+   "issue": "adr-toasts-10-swap-edge-gating",
+   "max_per_boot": 16,
+   "reason": "The gate release's REPAINT DEBT, both ends. The release only RECORDS the debt; until it is paid dom0 still shows the frame from before the hold - the PREVIOUS toast - so `released` and `shown` are different facts and only `paid` carries the second. A per-window-fed banner is paid immediately in the same pass; a slice-fed one rides the next capture frame, and on a direct-capable guest at rest none arrives (ADR-toasts 10, and main.c says so at the payment site), so `owed=deferred` with no `paid` for that hwnd is a window that held dom0 on stale pixels. That is the fact a LOST row needs and could not have: toast-hold-grade.py cannot tell a gated window that was released and repainted from one released and left frozen without this pair.",
+   "regex": "^agent\\|[IWE]\\|(ToastHeldByBridge|ProcessNewFrame): QGATOASTREPAINT hwnd=0xH (owed=deferred|frame=seen owed_ms=N|paid=immediate|paid=region after N ms)",
+   "status": "expected"
   }
  ],
  "signatures": {
