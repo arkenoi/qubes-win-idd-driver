@@ -1954,6 +1954,11 @@ struct VerdictEntry
     int row = 0;              // the classifier's row (4 = real-choice buttons: the SENT line asserts actions went with it)
     ToastActPlan plan;        // ok with actions (possibly none) when route is bridge
     std::wstring clsid;       // "{...}" when any action is a COM activation
+    /* When this verdict was stored. THE SAME INSTANT the hold record turns `bridge` (VerdictStorePut
+     * publishes it from this thread) and therefore the instant the agent suppresses the banner and arms
+     * TH_FORWARD_BOUND_MS. Carried to the forward so FWDWAIT can state what that bound actually races;
+     * 0 until stored, which is what an allowlisted blind forward reports. */
+    ULONGLONG putTick = 0;
 };
 struct VerdictStore
 {
@@ -1975,6 +1980,7 @@ static void VerdictStorePut(uint32_t id, int route, ToastActPlan const& plan, st
         if (g_verdict.route.size() > 4096) { g_verdict.route.clear(); g_verdict.passes.clear(); }
         VerdictEntry& e = g_verdict.route[id];
         e.route = route; e.row = row; e.plan = plan; e.clsid = clsid;
+        e.putTick = GetTickCount64();
     }
     InterlockedExchange(&g_listWanted, 1);
     if (g_mainWake) SetEvent(g_mainWake);   // a toast may be waiting for this verdict: re-list now, not on a tick
@@ -2012,6 +2018,43 @@ static void VerdictForget(uint32_t id)
     CsGuard g(&g_verdict.lock);
     g_verdict.route.erase(id);
     g_verdict.passes.erase(id);
+}
+
+// THE INTERVAL THE AGENT'S SUPPRESSION BOUND ACTUALLY RACES, stated as FIELDS because this log's
+// timestamps are whole seconds - the same reason FWD_RTT carries ms= and CLASSIFY row_latency=.
+// Measured because TH_FORWARD_BOUND_MS=3000 is justified in its own comment against the ACK alone
+// (85 forwards 2026-10-06: p50 9 ms, max 24 ms), while the deadline is armed at the agent's
+// suppression - so what it really bounds is this whole path. Both doubles of 41138837627 failed
+// open on a forward that SUCCEEDED (FWD_RTT ok=1, ms=229 and ms=11) with the record turning
+// `forwarded` inside the same second as the fail-open: a sub-second miss that second-resolution
+// stamps cannot attribute (Jev forward_bound_misdimensioned 0.79; the FIX fork is UNDER FLOOR at
+// 0.34 pending exactly this number, so nothing is tuned here yet).
+//   verdict_age_ms  tick the verdict was stored -> dom0's ack.
+//   wait_ms         ...-> just before the send: this pass plus, when the verdict landed mid-pass,
+//                   the next listing's 2 s cadence. verdict_age_ms - wait_ms is the send plus the ack,
+//                   which must reproduce the ms= on the neighbouring FWD_RTT line.
+// THIS IS NOT THE BOUND'S OWN CLOCK, and must not be read as one. It starts when the VERDICT was
+// stored; the agent arms TH_FORWARD_BOUND_MS when it first MATCHES the record, which is later - and
+// when the record was created already carrying its verdict (run A's id=16 appeared as `HOLD id=16
+// seq=11 verdict=bridge flags=0x1`, the verdict predating the record) verdict_age_ms OVER-READS the
+// armed interval by that match latency, about 0.5 s on that case. The bound's own clock is the
+// agent's QGATOASTACK ack_wait_ms, measured from the suppression itself; these two fields exist to
+// ATTRIBUTE what fills the interval - how much is the listing cadence and how much the send - which
+// ack_wait_ms alone cannot say. Jev scored this pair 0.39/0.52 for deciding the bound by itself.
+// A NEW LINE, never a field on FWD_RTT or SENT: a0-lib.sh:198 anchors both of those seds at
+// end-of-line (`ok=1$`, `: OK$`), so an appended field would silently stop its delivery counters
+// from matching and a counter reading zero deliveries looks like a product failure, not an
+// instrument change (Jev instrument_shape=new_additive_line 1.00, field_placement_safe 0.84).
+// Logged only on an ACKED forward: without the ack there is no interval to report, and the
+// failure path already says so.
+static void FwdWaitLog(uint32_t id, ULONGLONG verdictTick, ULONGLONG tSend, ULONGLONG tAck)
+{
+    if (!verdictTick) { BLog(L"FWDWAIT id=%u verdict_age_ms=-1 wait_ms=-1 (no verdict: forwarded blind)", id); return; }
+    // The shadow worker can re-store a verdict for the same id while this pass runs, so a tick from
+    // after the send is possible: clamped, never printed as an underflowed unsigned.
+    BLog(L"FWDWAIT id=%u verdict_age_ms=%llu wait_ms=%llu", id,
+         (unsigned long long)(tAck  > verdictTick ? tAck  - verdictTick : 0),
+         (unsigned long long)(tSend > verdictTick ? tSend - verdictTick : 0));
 }
 
 struct ShadowJob
@@ -4202,6 +4245,7 @@ static int BridgeMain()
                     std::wstring clsid;       // the sender's toast activator, when any action is a COM activation
                     int row = 0;              // the classifier's row (0 = no verdict: an allowlisted toast forwarded blind)
                     bool allowlisted = false;
+                    ULONGLONG verdictTick = 0;   // VerdictEntry::putTick, for FWDWAIT (0 = forwarded blind)
                 };
                 std::vector<NewToast> fresh;
                 // NON-SEAMLESS MODE (ADR-toasts 10): the agent says whether the hold exists right now. While it does
@@ -4344,6 +4388,7 @@ static int BridgeMain()
                     nt.id = id; nt.aumid = aumid; nt.app = app; nt.title = title;
                     nt.body = (sep == std::wstring::npos) ? L"" : tb.substr(sep + 1);
                     nt.allowlisted = listed;
+                    nt.verdictTick = ve.putTick;   // 0 when VerdictLookup missed (blind): ve keeps its initialiser
                     if (!blind) { nt.row = ve.row; if (ve.route == ToastRouteBridge && ve.plan.ok) { nt.plan = ve.plan; nt.clsid = ve.clsid; } }
                     fresh.push_back(std::move(nt));
                 }
@@ -4405,11 +4450,14 @@ static int BridgeMain()
                         for (auto const& e : plain) { if (!lines.empty()) lines += L"\n"; lines += e.title + L": " + e.body; }
                         wchar_t sum[256];
                         swprintf(sum, RTL_NUMBER_OF(sum), L"%u notifications (%s)", (UINT)plain.size(), plain[0].app.c_str());
+                        const ULONGLONG tSend = GetTickCount64();
                         bool ok = ForwardText(sum, lines, 0);
+                        const ULONGLONG tAck = GetTickCount64();
                         // Acknowledged by dom0: the record turns `forwarded` - the agent's suppression now stands even if
                         // this bridge dies (a `bridge` without the ack is reopened on bridge death: nobody knows whether
                         // dom0 has it). The classifier's verdict is forgotten only now that the toast is done.
-                        if (ok) for (auto const& e : plain) { seen.insert(e.id); fwdFails.erase(e.id); VerdictForget(e.id); HoldVerdict(e.id, TH_VERDICT_FORWARDED, false); }
+                        // One FWDWAIT per id: the batch shares a send, but each toast's verdict was stored at its own tick.
+                        if (ok) for (auto const& e : plain) { seen.insert(e.id); fwdFails.erase(e.id); VerdictForget(e.id); HoldVerdict(e.id, TH_VERDICT_FORWARDED, false); FwdWaitLog(e.id, e.verdictTick, tSend, tAck); }
                         else { for (auto const& e : plain) capFailed(e.id); retryPending = true; }
                         BLog(L"SENT coalesced x%u: %s%s", (UINT)plain.size(), ok ? L"OK" : L"FAIL",
                              ok ? L"" : L" (unseen, retried)");
@@ -4437,9 +4485,11 @@ static int BridgeMain()
                                           (UINT)evicted, evicted == 1 ? L"y" : L"ies", (UINT)ToastActTable::kMax);
                     }
                     uint64_t seq = 0;
+                    const ULONGLONG tSend = GetTickCount64();
                     bool ok = ForwardText(e.title, e.body.empty() ? e.app : e.body, e.id, NotifyKind::Info, actions, &seq);
+                    const ULONGLONG tAck = GetTickCount64();
                     uint32_t dom0Id = 0;
-                    if (ok) { seen.insert(e.id); fwdFails.erase(e.id); VerdictForget(e.id); HoldVerdict(e.id, TH_VERDICT_FORWARDED, false); }
+                    if (ok) { seen.insert(e.id); fwdFails.erase(e.id); VerdictForget(e.id); HoldVerdict(e.id, TH_VERDICT_FORWARDED, false); FwdWaitLog(e.id, e.verdictTick, tSend, tAck); }
                     else { capFailed(e.id); retryPending = true; }
                     if (withActions)
                     {
