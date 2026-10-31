@@ -278,6 +278,25 @@ class Ev:
         return (self.t, self.idx)
 
 
+def _named_id(v: Optional[str]) -> Optional[str]:
+    """A record id that actually names a toast. The agent writes id=0 for none, and _segment_end
+    already reads it that way (`eid not in (None, "0")`)."""
+    return None if v in (None, "0") else v
+
+
+def _named_hash(v: Optional[str]) -> Optional[str]:
+    """A content hash that actually names a toast. An ALL-ZERO hash means NO IDENTITY, not a
+    different toast, and the agent line says so outright: `state=hold reason=no-identity
+    ident=0000000000000000 s=0000000000000000 t=0000000000000000`.
+
+    Reading zero as "some other toast" turned every S2 row - the orphan row the predicate below
+    exists for, whose expected verdict IS OK-WINDOW - from PASS into FAIL LOST in all four
+    archived runs. Measured on run 41161440735 boot 041519: id=9's nearest preceding content event
+    is that zero line at 063340.071, 492 ms before its MAP at 063340.563, while the bridge gives
+    id=9 t=64f92f1f3fc94755."""
+    return None if v is None or set(v) == {"0"} else v
+
+
 def is_unmap(e: "Ev") -> bool:
     """Did this line take a MAPPED banner off dom0's screen?
 
@@ -783,7 +802,7 @@ class Grader:
         # 3. non-seamless rows: the bridge's mode path is the fact that matters
         if mode_ns:
             ns_path = bool(skip and "non-seamless" in skip.kv.get("reason", ""))
-            mapped_any = self._any_banner_map(t0, t0 + dt.timedelta(seconds=CONTROL_BANNER_WINDOW_S))
+            mapped_any = self._any_banner_map(t0, t0 + dt.timedelta(seconds=CONTROL_BANNER_WINDOW_S), nid, th)
             if deliv:
                 cls = "FORWARDED-NS"
             elif mapped_any:
@@ -807,9 +826,41 @@ class Grader:
                 return e.kv["id"]
         return None
 
-    def _any_banner_map(self, a: dt.datetime, b: dt.datetime) -> bool:
+    def _any_banner_map(self, a: dt.datetime, b: dt.datetime, nid: Optional[str] = None,
+                        th: Optional[str] = None) -> bool:
+        """Was a banner window mapped in [a, b] with THIS toast's content in it?
+
+        The banner window is shared and re-used, so an unsegmented "any banner MAP" bills one
+        toast's banner to another. Measured, run 41161440735 boot 041519 S3iii-2 / id=15: graded
+        OK-WINDOW "mapped without a hold decision" on the MAP at 063737.343, which is the DISPLAYED
+        id=14's own first map - emitted in the same millisecond as `state=show ident=a8f03cc3..
+        id=14`, and the MAP id=14's own row was graded on. A whole toast was lost and the run
+        graded CLEAN.
+
+        Identity comes from the agent, never from grading order (a claim set would depend on which
+        row is graded first): the nearest PRECEDING content event on that hwnd names whose content
+        the window holds - `state=show` carries id=, `state=hold` and `state=content-changed` carry
+        the title hash t=.
+
+        A MAP is REFUSED only on POSITIVE evidence that it belongs to another toast. No preceding
+        event, or one that names nothing (see _named_hash - `reason=no-identity` writes all-zero
+        hashes), still counts: that is the orphan this predicate exists for, a banner window the
+        hold never owned, and refusing it would turn a measured OK-WINDOW into a silent LOST."""
         B = self.banner_hwnds()
-        return any(e.kind == "MAP" and e.hwnd in B and a <= e.t <= b for e in self.agent)
+        for m in [e for e in self.agent if e.kind == "MAP" and e.hwnd in B and a <= e.t <= b]:
+            prior = [e for e in self.agent if e.hwnd == m.hwnd and e.kind == "TH"
+                     and e.kv.get("state") in ("hold", "content-changed", "show")
+                     and e.key() <= m.key()]
+            if not prior:
+                return True
+            owner = max(prior, key=Ev.key)
+            oid, oth = _named_id(owner.kv.get("id")), _named_hash(owner.kv.get("t"))
+            if oid is not None and nid is not None and oid != nid:
+                continue
+            if oth is not None and th is not None and oth != th:
+                continue
+            return True
+        return False
 
     @staticmethod
     def _held_start(e: "Ev") -> Tuple:
@@ -908,7 +959,7 @@ class Grader:
                 return "LOST", detail + " (window path, frames never released)"
             # The hold never examined a banner for this toast. Did a banner window get mapped anyway (a window the
             # hold did not own)? Did the guest show a banner at all?
-            mapped_any = self._any_banner_map(t0, t0 + dt.timedelta(seconds=CONTROL_BANNER_WINDOW_S))
+            mapped_any = self._any_banner_map(t0, t0 + dt.timedelta(seconds=CONTROL_BANNER_WINDOW_S), nid, th)
             seen = self.guest_banner_seen(label)
             if deliv and not mapped_any:
                 return "OK-BRIDGED", "no banner examined by the hold, no banner window mapped" + (" (guest showed a banner)" if seen else "")
