@@ -56,8 +56,9 @@
 #     proxy's own refuse machinery, T0i fires the rest).
 #   BUDGET: prime <=3600s; 2 cold boots (T0 gate-on, T5 restore — the §10.16.2 boot-path
 #     element); ~30 confirmed fires at ~30-60s each incl. bounded 3s-cadence log polls (<=45s
-#     per fire); drift relaunch window 120s (backoff floor 5s; TODO(RIG) #7 below); T8c's
-#     squatter window ~2 min hold + up to ~6 min bounded recovery wait. Total ~100-170 min.
+#     per fire); T5/T8c/T8r each drive ONE proven agent restart (lifecycle-lib; the product has
+#     kept no relaunch since 2026-10-07); T8c's squatter holds the name ~4 min, then T8r waits for
+#     the release, restarts, and allows one 150 s tier wait. Total ~100-170 min.
 #     Terminal states: prime TERMINAL/DEADLINE, no-user-session, T2 no-go (STOP
 #     with FALL-TO-DB/KILL). Stall = any bounded poll exhausting its seq loop, always logged.
 #     EVERY poll loop is seq-bounded AND wall-clock capped (owner audit 2026-09-06, after the
@@ -87,9 +88,11 @@
 #  #6 --dump-etw no-go discriminator (T2x): hybrid semantics — the tier needs a SIGNAL, not a
 #     payload; the grep keys on 'aumid=1' ETWEVT lines / 'aumid_events=<n>' / the ETWDUMP
 #     verdict line. Tighten from real output if the discriminator is ever exercised.
-#  #7 drift-arm relaunch window (T5): 120s assumes the 5s backoff floor; if prior exits doubled
-#     the backoff, widen — the wait logs the agent lines it saw either way. (T8c's recovery
-#     wait inherits the same caveat, already widened to ~6 min for the squatted exits.)
+#  #7 RETIRED 2026-11-01: there is no relaunch window to size. etwproxy.c launches the proxy ONCE
+#     per agent life (ADR-supervision 5.3, owner 2026-10-07); T5, T8c and T8r drive a PROVEN agent
+#     restart and read once. T8r graded that silence FAIL on 2026-11-01 (three 150 s deadlines
+#     over a log that said "not relaunched (no relaunch loop)") - the mistake 71dba4ee fixed for
+#     T5 and T8c, left in T8r.
 #  #8 provision trailer fallback: if C:\qwt-improved-install.log is absent/rotated, re-run the
 #     provisioning script from the staged setup tree (path on guest unverified) to re-print it.
 #  #9 heartbeat gap bound 4s (T6) assumes the shipped 2s wake cadence; reconcile.
@@ -254,7 +257,8 @@ p3a_bridge_up(){ # heartbeat + connected past blog offset $1; return 0 = up (cal
 # ETW tier up: proxy LIVE in etw-proxy.log past $1 + bridge 'ETW IPC connected' past blog $2.
 # Wall cap 150s per call (expected: a fresh agent's launch + connect, well under 120s
 # nominal; two ~55s-capped guest reads per turn could otherwise stretch seq 24 to ~48 min).
-# T8r's recovery deliberately calls this 3x for its ~6-8 min post-squat window (TODO(RIG)#7).
+# T8r calls this ONCE, after the restart it drives: the product's recovery is a new agent life
+# (its proxy takes the freed name within seconds), not a relaunch to wait minutes for.
 etw_tier_up(){ # $1=plog offset $2=blog offset; 0 = up, nonzero = deadline (logged)
   local i t0=$SECONDS
   for i in $(seq 1 24); do
@@ -664,8 +668,8 @@ ndll=$(printf '%s' "$pexits" | grep -ca 'rc=3221225794' || true)
 wsready=$(p3a_asince_hits 0 'dedicated winsta ready' | tail -1)
 pl2=""; _wpl=$SECONDS
 for i in $(seq 1 12); do
-  # wall cap 90s (expected: the proxy's first log line lands within seconds of its launch,
-  # backoff floor 5s; plog_len's internal 3-try retry could stretch a turn to ~3 min)
+  # wall cap 90s (expected: the proxy's first log line lands within seconds of its ONE launch
+  # per agent life; plog_len's internal 3-try retry could stretch a turn to ~3 min)
   pl2=$(plog_len) && [ "${pl2:-0}" -gt 0 ] && break
   [ $(( SECONDS - _wpl )) -ge 90 ] && break
   sleep 5
@@ -1563,7 +1567,7 @@ else
     log "T8c: agent restarted ($rg8) - its proxy must now fail CreateNamedPipe and exit 8"
   fi
   t8cexit=""; _w8x=$SECONDS
-  for i in $(seq 1 24); do   # exit 8 lands within the first relaunch backoffs (floor 5s)
+  for i in $(seq 1 24); do   # exit 8 lands within seconds of the restarted agent's ONE proxy launch
     # wall cap 150s (the documented 120s window + margin; p3a_asince is a ~55s-capped enc_run
     # per turn - audit 2026-09-06)
     p3a_asince_hits "$AM8" 'proxy exited rc=8 after' | grep -qa 'rc=8 after' && { t8cexit=1; break; }
@@ -1639,15 +1643,8 @@ else
         verdict T8c "FAIL tier-down fire classified src=$c_src etw=$c_etw (wanted src=db) - the DB rung did not carry the squatted outage"
       fi
     fi
-    # T8r's offsets are taken HERE, BEFORE T7d fires and waits, and T8r reuses them below.
-    # etw_tier_up only accepts a fresh LIVE/connected line PAST the offset it is given, and the
-    # squatter releases at ~120s - well inside T7d's worst case of a fire plus a 90s wait. Taken
-    # after T7d, an offset could sit on the far side of the recovery it is meant to detect and
-    # T8r would report "tier did not recover" about a tier that had. A probe must not be able to
-    # fail the drill it was inserted into.
-    P8rok=1
-    P8r=$(plog_len) || P8rok=""
-    L8r=$(blog_len) || P8rok=""
+    # T8r takes its log offsets right before the restart IT drives (below): the recovery it
+    # measures starts at that restart, so an offset taken earlier could only admit stale lines.
     # T7d: the ALLOWLIST half of the routing-invariance detector T7a's header describes. The
     # allowlisted PS AUMID is fired HERE, with the tier down, because nowhere else after T7 is
     # it down: T5 parks the tier but T5r cold-boots to un-park before T6, and T7b/T7c run tier
@@ -1721,17 +1718,45 @@ else
         verdict T7d "INSTRUMENT the tier-down allowlisted toast produced neither a route nor a skip line within 90s - ungraded, NOT a vacuous pass"
       fi
     fi
-    # RECOVERY: the squatter releases at ~120s; backoff doubled across the squatted exits, so
-    # allow ~6 min (3 bounded etw_tier_up rounds; TODO(RIG)#7's backoff caveat applies).
-    if [ -z "$P8rok" ]; then
-      verdict T8r "INSTRUMENT log offsets unreadable before the recovery wait - recovery ungraded (a 0 offset would false-pass on the OLD LIVE lines)"
+    # RECOVERY, re-pointed 2026-11-01. THE PRODUCT KEEPS NO RELAUNCHER: after exit 8 the tier is
+    # "DOWN for this agent's life ... not relaunched" (etwproxy.c EtwProxyDeadLocked; ADR-supervision
+    # 5.3, owner 2026-10-07), and the recovery it KEPT is the next agent start. Until today this
+    # block waited ~6 min for a relaunch into the freed name and graded the ADR-conformant silence
+    # FAIL (2026-11-01 06:54Z at bafe660f: three deadlines over a supervisor log that said "not
+    # relaunched (no relaunch loop)" twice); its two PASSes on record predate the removal. Now:
+    #   (1) the squatter must have RELEASED the name - its state file appends SQUAT-RELEASED ~240 s
+    #       after the grab (T8c read SQUAT-HELD); still held or unknown = INSTRUMENT, the stimulus
+    #       is not in the measured state;
+    #   (2) one PROVEN agent restart (lifecycle-lib, as T5/T8c) sends a fresh proxy at the free
+    #       name; an unproven restart = INSTRUMENT, never a product verdict;
+    #   (3) the tier must come up past offsets taken right before that restart, within ONE bounded
+    #       etw_tier_up (150 s). A fresh life whose proxy cannot take a FREE name is the FAIL.
+    sqrel=""; sqs=""; _w8r=$SECONDS
+    for i in $(seq 1 30); do   # the hold is 240 s from the grab and T7d ran meanwhile; wall cap 300 s
+      sqs=$(enc_run 'if (Test-Path C:\ProgramData\Qubes\p3a-squat.txt) { Get-Content C:\ProgramData\Qubes\p3a-squat.txt }' | grep -aoE 'SQUAT-[A-Z]+' | tail -1)
+      [ "$sqs" = SQUAT-RELEASED ] && { sqrel=1; break; }
+      [ $(( SECONDS - _w8r )) -ge 300 ] && break
+      sleep 10
+    done
+    if [ -z "$sqrel" ]; then
+      verdict T8r "INSTRUMENT the squatter never reported SQUAT-RELEASED (last state=${sqs:-none} after $((SECONDS-_w8r)) s) - the name may still be held, so a restart would measure the squat again, not the recovery; ungraded"
     else
-      rec=""
-      for t in 1 2 3; do etw_tier_up "$P8r" "$L8r" && { rec=1; break; }; done
-      if [ -n "$rec" ]; then
-        verdict T8r "PASS tier recovered after the squatter released (fresh ETWPROXY LIVE + ETW IPC connected) - subject left sane"
+      AM8r=$(p3a_amark); [ -n "$AM8r" ] || AM8r=0
+      P8r=$(plog_len) || P8r=""
+      L8r=$(blog_len) || L8r=""
+      if [ -z "$P8r" ] || [ -z "$L8r" ]; then
+        verdict T8r "INSTRUMENT log offsets unreadable before the recovery restart - ungraded (a 0 offset would false-pass on the OLD LIVE lines)"
+      elif ! rst8r=$(agent_restart_run) || ! rg8r=$(agent_restart_grade "$rst8r"); then
+        printf '%s\n' "${rst8r:-no output}" > "$OUT/t8r-restart.txt"
+        verdict T8r "INSTRUMENT the recovery restart did not prove turnover ($(agent_restart_grade "${rst8r:-}" | head -c 160)) - no fresh proxy was sent at the freed name; ungraded (NOT a product verdict)"
       else
-        verdict T8r "FAIL tier did not recover within ~6 min of the squat - subject left tier-down; check the backoff ($(p3a_asince_hits "$AM8" 'relaunch in' | tail -1 | head -c 160))"
+        printf '%s\n' "$rst8r" > "$OUT/t8r-restart.txt"
+        log "T8r: squatter released ($sqs), agent restarted ($rg8r) - THAT launch's proxy takes the freed name"
+        if etw_tier_up "$P8r" "$L8r"; then
+          verdict T8r "PASS tier back through the recovery the product kept: squatter released, one proven agent restart, fresh ETWPROXY LIVE + ETW IPC connected past the pre-restart offsets - subject left sane"
+        else
+          verdict T8r "FAIL tier did not come up within 150 s of a PROVEN agent restart with the pipe name FREE (squatter released) - a fresh life's proxy could not take the name: $(p3a_asince_hits "$AM8r" 'ETWPROXYSUP' | tail -2 | tr '\n' ';' | head -c 240)"
+        fi
       fi
     fi
   fi
