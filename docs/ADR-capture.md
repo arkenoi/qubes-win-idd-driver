@@ -37,7 +37,7 @@ flowchart TD
     A["A tracked guest window"] --> B{"Build 26100+ and the broker enabled?<br/>(latched once at agent Init, never re-read - §1)"}
     B -->|yes| C{"Window class"}
     C -->|"ordinary window, UWP frame, toast,<br/>Terminal, layered window"| D["WGC session in the user-session broker, on the window itself (§12, §18).<br/>Frames copied by WGC's dirty regions when the broker signals."]
-    C -->|"override-redirect menu or popup<br/>(WGC refuses CreateForWindow)"| E["Broker PrintWindow slot, rendered only on its own pokes:<br/>damage whose pixels changed, or input (§20, §23);<br/>first frame retried at 0/50/100/200/400 ms (§19)"]
+    C -->|"a window WGC refuses at CreateForWindow<br/>(o-r menus in 2026-09; none of 13 popups<br/>measured on 26300.9457, §19)"| E["Broker PrintWindow slot, rendered only on its own pokes:<br/>damage whose pixels changed, or input (§20, §23);<br/>first frame retried at 0/50/100/200/400 ms (§19)"]
     B -->|no| F{"Window class (PwWindowClassify)"}
     F -->|"ordinary, unoccluded, eligible"| G["Copied from the composited desktop,<br/>established by one PrintWindow (§2)"]
     F -->|"ordinary, partly covered"| H["Whole-window PrintWindow on each change of its own<br/>visible pixels (§3, §5), guarded against echoes (§9)"]
@@ -83,7 +83,7 @@ flowchart TD
 | 16 | The echo guard is retired | PROPOSED; its premise (§15) was rejected | 2026-09-30 |
 | 17 | Liveness from process handles and system notifications, not heartbeats | PROPOSED; largely carried out in another form by §18 S4 and §19 | 2026-09-30 |
 | 18 | Every window on 26100+ is captured with WGC through the broker; at rest nothing runs | ACCEPTED, MEASUREMENT OWED; the deaf ladder amended by §32 | 2026-09-30 |
-| 19 | Rest-zero S3/S4 as built | ACCEPTED (Jev); the damage-driven liveness items SUPERSEDED by §32 | 2026-10-01 |
+| 19 | Rest-zero S3/S4 as built | ACCEPTED (Jev); the damage-driven liveness items SUPERSEDED by §32; item 6 MEASUREMENT RECORDED 2026-11-01, decision open | 2026-10-01 |
 | 20 | Rest-zero S2 and the three loops the acceptance found | ACCEPTED (Jev), MEASURED | 2026-10-01 |
 | 21 | Liveness pokes need a margin and the event order; a refused focus is not a no-op | the margin SUPERSEDED by §32; the focus fix ACCEPTED (Jev) | 2026-10-01 |
 | 22 | Windows' composition is not bypassed | ACCEPTED (Jev) | 2026-10-01 |
@@ -516,7 +516,8 @@ released by an existing event or process exit.
 
 **Status:** ACCEPTED (Jev), 2026-10-01, recorded while implementing §18's stages S3 (own-change pokes, deaf
 hold, no PrintWindow backstop) and S4 (no timed wake on either side). Items 1 and 2 concern damage-driven
-liveness pokes on WGC slots and are SUPERSEDED by §32; the rest stand.
+liveness pokes on WGC slots and are SUPERSEDED by §32; the rest stand. Item 6's premise was measured false
+on 26300.9457 on 2026-11-01; whether item 6 stays is the owner's decision.
 
 **Decisions.**
 
@@ -544,6 +545,25 @@ liveness pokes on WGC slots and are SUPERSEDED by §32; the rest stand.
 6. **A PrintWindow popup's first frame is retried at 0/50/100/200/400 ms after its open**, then only its own
    pokes render it: a popup rendered before it painted comes back black, and its own paint can land in the pass
    the agent attributes to its appearance. Bounded; armed by the open, ended by the first published frame.
+   Built in the broker as `WGCBRK_PW_FIRST_MS` (`tools/wgcbroker/wgcbroker.cpp`). **MEASUREMENT RECORDED
+   2026-11-01, decision open.** On win11-acc, build 26300.9457, agent proto trace on, 0 of 13 popups entered
+   the PrintWindow path. The instrument is the agent's `BROKERCHAIN` line, which reads `path=printwindow` for
+   a PrintWindow channel and `path=wgc` for a WGC one (`PwConsumeBrokerFrame`, `agent/gui-agent/main.c`): all
+   20 lines of the two traced agents read `valid=1 path=wgc`, 13 popups and 7 ordinary windows. The 13
+   were 7 classic `#32768` menus (msinfo32's menu bar and system menu, Notepad's File menu, the console's
+   system menu), 3 Notepad menus of the first boot whose class no line names, and 3 shell popups of the
+   desktop and Explorer context menus. They are 6 from the first boot's seven surfaces and 7 from the second
+   boot's seven: the desktop menu opened two popups, and Start and the tray clock opened none. WGC
+   `CreateForWindow` captured every one; each first frame was published 34-220 ms after the broker opened
+   the channel. So the premise that an override-redirect popup reaches
+   PrintWindow because WGC refuses it is FALSE on 26300.9457, and none of the 13 exercised this ladder.
+   Whether any other window class still falls back on that build is not measured. The premise held in
+   2026-09: 24 of 24 Explorer context menus fell back to PrintWindow (`findings/windowing.md`, verified
+   2026-09-24); that record names no build. Unused, the ladder costs nothing at rest: `WGCBRK_PW_FIRST_MS` is read only in
+   the PrintWindow slot loop, `owed` exists only for a PrintWindow channel, and the main loop waits INFINITE unless such a
+   slot armed a deadline (`Due`) - with every popup on WGC it causes no wake, render or timer. Whether the ladder stays is
+   the owner's decision. Evidence:
+   `~/qwt-accept/ladder-win11-acc-20261101T155702Z`, `~/qwt-accept/ladder-classic2-win11-acc-20261101T163102Z`.
 7. **The diagnostic signature of a burst's last frame keeps a one-shot 500 ms deadline** armed by the burst;
    without it a static window's published signature stays on the frame before its last change (measured
    2026-09-27).

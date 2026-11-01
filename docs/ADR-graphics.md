@@ -31,7 +31,7 @@ and this row is wrong. Explanations for the reader live in `docs/design/DESIGN-g
 | G19 | Liveness is judged from input and Windows' own events only; a session that delivers nothing after one recreate is declared deaf, the notice is raised once per application per boot and at most 8 error notices per boot (`QERR_CAP_PER_BOOT`), and the user is told in dom0 to close and reopen the window. | `ADR-capture.md` §32 (item 5) | ACCEPTED (owner) |
 | G20 | A required-kept toast is held back from mapping until its crop resolves, bounded by `CROP_BEFORE_SHOW_TIMEOUT_MS` = `TOAST_CROP_UIA_TIMEOUT_MS` (500 ms) + 200 ms = 700 ms (400 ms until 2026-09-09). | `ADR-windows.md` §7 for the crop; the budget is a constant in `agent/gui-agent/main.c` / `toastcrop.h` | ACCEPTED (owner) for the crop |
 | G21 | Alt-nav key-tip badges are dropped fully: not shown in dom0, nothing spent on them. | `ADR-capture.md` §31 | ACCEPTED (owner, 2026-10-02) |
-| G22 | A PrintWindow popup's first frame is retried at 0/50/100/200/400 ms after its open, then only its own pokes render it. | `ADR-capture.md` §19 (item 6) | ACCEPTED (Jev); in the broker's source since c30cc77a (`WGCBRK_PW_FIRST_MS`, `tools/wgcbroker/wgcbroker.cpp`); its firing is not instrumented - the broker has no log |
+| G22 | A PrintWindow popup's first frame is retried at 0/50/100/200/400 ms after its open, then only its own pokes render it. | `ADR-capture.md` §19 (item 6) | ACCEPTED (Jev); built in the broker since c30cc77a (`WGCBRK_PW_FIRST_MS`, `tools/wgcbroker/wgcbroker.cpp`); MEASURED 2026-11-01 on 26300.9457: none of 13 popups entered it, so its premise is refuted on that build, and other window classes are not measured (`ADR-capture.md` §19 item 6) |
 
 ## Postponed and open
 
@@ -59,7 +59,7 @@ is in the source - the merge struck it as "no such ladder exists in the agent", 
 searched only `agent/gui-agent/`, recorded it as ADR/source drift; the schedule is the broker's,
 `WGCBRK_PW_FIRST_MS` in `tools/wgcbroker/wgcbroker.cpp` since c30cc77a; the agent process holds only the
 companion, the slice map hold (`SliceContentReady`). Whether the schedule fires is not instrumented (the
-broker has no log). G22 says exactly that. (This product's source is four trees: `agent/gui-agent/`,
+broker has no log). G22 said exactly that until the 2026-11-01 measurement it now records. (This product's source is four trees: `agent/gui-agent/`,
 `tools/wgcbroker/`, `tools/notifhost/`, `tools/notify-proxy/`; a claim about "the agent" must say which.)
 "CROP_BEFORE_SHOW_TIMEOUT_MS = 400" was wrong (700 since 2026-09-09, `main.c:6202`). Alt-nav badges as
 POSTPONED was wrong (§31 is owner-ACCEPTED, G21). Every other row was re-read against the Status line of

@@ -1512,9 +1512,10 @@ static void OpenChannel(int i) {
     if (fallback) { DeclareDeaf(i); return; }   // a ladder open (the relay's capture failed): no PrintWindow rung, see above
     if (!monitor && hwnd && IsWindow(hwnd)) {
         c.hwnd = hwnd; c.slot = i; c.pw = true; s->FailHr = 0;
-        // Claim the tick block for the PrintWindow path (ABI 4). Until this existed, a menu - which
-        // ALWAYS lands here, because WGC rejects override-redirect popups - left the block holding
-        // the last WGC window's ticks, and the agent reported a false "slot reopened" for it.
+        // Claim the tick block for the PrintWindow path (ABI 4). Until this existed, a window landing
+        // here (in 2026-09 every menu did: WGC rejected override-redirect popups on that build) left
+        // the block holding the last WGC window's ticks, and the agent reported a false "slot
+        // reopened" for it.
         s->TickHwnd  = s->Hwnd;
         s->TickOpenOk = 0;
         s->TickPw = 1;
@@ -1522,10 +1523,11 @@ static void OpenChannel(int i) {
         s->PollCount = 0;
         s->OpenTick = openT;
         // ItemTick on this path = the moment the WGC attempt was abandoned and we fell back. The
-        // gap OpenTick->ItemTick is therefore what a menu PAYS for a CreateForWindow that cannot
-        // succeed: WGC rejects override-redirect popups by rule, so this cost is spent on every
-        // single menu to learn something already known. Measured as part of a 31-78 ms
-        // "first poll" that the loop structure says contains no waiting at all.
+        // gap OpenTick->ItemTick is therefore what the window PAYS for a CreateForWindow that
+        // failed. In 2026-09 that was every menu (WGC rejected override-redirect popups on that
+        // build), measured as part of a 31-78 ms "first poll" that the loop structure says contains
+        // no waiting at all. On 26300.9457 WGC captured all 13 popups tried and none reached this
+        // path (2026-11-01, ADR-capture section 19 item 6).
         s->ItemTick = QpcNow();
         s->PoolTick = s->StartTick = 0;
         s->FirstArrivedTick = s->FirstPublishTick = 0;
@@ -2099,8 +2101,10 @@ int wmain(int argc, wchar_t** argv) {
         // The 1 s staleness backstop that used to render anyway (SafetyPolls), its adaptive backoff and the
         // futile-poke stretch are REMOVED: on a static desktop they were the broker's own timed renders, and a
         // Windows 11 window asked to render repaints - which is the next change (ADR-capture section 8, 14).
-        // SafetyPolls stays as a counter and must read 0. Only o-r popups (menus) reach this route on 26100+:
-        // WGC refuses them by rule, and the ladder no longer descends here.
+        // SafetyPolls stays as a counter and must read 0. Only a window WGC refused at CreateForWindow reaches
+        // this route - every o-r menu in 2026-09, none of 13 popups on 26300.9457 (2026-11-01, ADR-capture
+        // section 19 item 6) - and the relay's ladder no longer descends here. With no PrintWindow channel
+        // the loop below reads WGCBRK_PW_FIRST_MS for nothing and arms nothing.
         const ULONGLONG nowTick = GetTickCount64();
         for (int i = 0; i < WGCBRK_MAX_SLOTS; i++) {
             if (!g_ch[i].pw || !g_ch[i].hwnd) continue;
