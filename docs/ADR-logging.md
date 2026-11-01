@@ -11,6 +11,102 @@ to **0.01** once the facts below were in the brief.
 Shipped as `patches/windows-utils-one-log-per-module.patch`, applied unconditionally by both
 workflows with marker assertions, guarded by `tools/tests/one-log-per-module-selftest.sh` (18 checks).
 
+**Decision (2026-11-01): EVERY log a component of ours writes goes into the ONE directory, and every
+line in that directory is accounted for by the sweep.** Owner, 2026-11-01: *"fix all logs locations,
+MAKE SURE ALL LINES THERE ARE ACCOUNTED FOR IN SWEEP"*; 2026-10-07: *"NOTHING should write log
+outside"*. The bullet that sat under "Not done" since 2026-10-07 is this decision's reason.
+
+1. **The directory** is log.c's rule, for every writer: registry `LogDir` at the root key, else
+   `<SystemDrive>\Qubes Logs`.
+2. **The line** is the windows-utils shape `[yyyyMMdd.HHmmss.fff-PID[:TID]-L] msg`, one file per
+   module per day: `<module>-<yyyyMMdd>.log` for native and C# writers, `<script>.ps1-<yyyyMMdd>.log`
+   for PowerShell. Kept in their own declared shapes and matched by name: `bridge.log` and
+   `etw-proxy.log` (BLog), `qwt-deaths.log` (`yyyy-MM-dd HH:mm:ss [LEVEL]`, UTC), the bind-dirs logs,
+   and DISM's own log, `dism-<yyyyMMdd>.log` (the vendor's shape, a sweep family of its own).
+3. **The PowerShell sink is the framework we already ship**, `core-agent/src/qubes-rpc-services/log.ps1`
+   (*"use known logging framework, do not invent"*). It gains one primitive, `Write-QwtLogLine
+   <E|W|I|D|V> <msg>`, which returns whether the line was written; `LogError`..`LogVerbose` call it
+   directly; the file is staged into `bin` beside the scripts that use it. Each script keeps its own
+   `Log` wrapper and every call site; the updater keeps its loss accounting (`QWTUPDLOGLOST`) on the
+   primitive's return. The two C# writers, the updates relay and the netsetup service, implement the
+   same rule. Jev: helper H1 **0.98**; updater keeps its own Log, new path and prefix **1.00**.
+4. **Moved**, each with every reader in the same commit, including the two texts a user reads that name
+   a moved file (the death reporter's PV NIC impact line, activate-idd's "Evidence:" line):
+
+   | writer | was | now |
+   |---|---|---|
+   | updater (`qubes-windows-update.ps1`) | `C:\ProgramData\Qubes\wu\agent.log`, cumulative | `qubes-windows-update.ps1-<d>.log` |
+   | updater's DISM calls | `wu\dism.log` | `dism-<d>.log` |
+   | updates relay and its handlers | `wu\qubes-updates-relay.log`, `wu\relay-handler.log` | `qubes-updates-relay-<d>.log`, `relay-handler-<d>.log` |
+   | `vmupdate-shim.ps1` | `C:\ProgramData\Qubes\vmupdate-shim.log` | `vmupdate-shim.ps1-<d>.log` |
+   | PV NIC per-boot payload (`bin\pvnic-boot.ps1`, written by `pvnic-selfprime.ps1`) | `C:\ProgramData\QubesPvNic.log` | `pvnic-boot.ps1-<d>.log` |
+   | netsetup service | `C:\ProgramData\QubesNetSetup.log`, `Q:\qwtng-netsetup.log` | `qwtng-netsetup-<d>.log` |
+   | `activate-idd.ps1`, `deactivate-idd.ps1` | `C:\qwt-idd-activate.log`, `C:\qwt-idd-deactivate.log` | `activate-idd.ps1-<d>.log`, `deactivate-idd.ps1-<d>.log` |
+   | reboot-cause recorder | `reboot-audit.log` (second fallback `C:\Users\Public\Documents\Qubes Logs`) | `record-reboot-cause.ps1-<d>.log` |
+   | `ensure-autologon.ps1`, `quiet-desktop.ps1` (SYSTEM tasks) | nowhere: console output only | `ensure-autologon.ps1-<d>.log`, `quiet-desktop.ps1-<d>.log` |
+
+   Two files in the directory carry no writer of ours by name: `qwtng-netsetup-<d>.log` and
+   `powershell-<d>.log` open with the library's own `LogInit: Log started, module name: ...` line, so
+   the windows-utils library writes them under the name of the process that loaded it. The netsetup
+   service's own lines join the first: one process, one file, appends shared for writing.
+5. **Not logs, so out of the directory:** `qwt-death-watermark.json` and `reboot-audit.last` go to
+   `C:\ProgramData\Qubes`; `record-reboot-cause.ps1`, a script, goes to `bin`.
+6. **Declared exceptions.** (a) The installer: `C:\qwt-improved-install.log` stays the primary, because
+   a clean install's first lines precede the directory, and is mirrored into it from the line it
+   exists (b47325e5); msiexec's verbose logs stay `C:\qwt-install.log` / `C:\qwt-uninstall.log`
+   (Jev `msi_to_logdir` **0.30**). (b) `C:\ProgramData\QubesIDD-diag.log`, written by the UMDF
+   display driver as LocalService: a driver-track item, queued (Jev **0.88**). (c) State and
+   instrument records are not logs: `update-status.json`, `update-refusal.json`, `notify-errors\`,
+   the PV NIC marker files, the installer's stage flag `C:\qwt-improved-stage1.json`,
+   `reboot-dialog-watch.jsonl`.
+   (d) `relocate-dir.exe` is a native boot-time program (BootExecute, before the Win32 subsystem and
+   before the private volume is reliably mounted): it keeps `C:\relocate-dir-<d>-<t>.log` and
+   `C:\relocate-dir-result.txt`, read by the collector. (e) `C:\qubes-win-idd-setup.log` and
+   `C:\qubes-de-firstlogon.log` are written by the harness's own payloads (mgmt/payload-setup*.cmd,
+   the prime jobs' onboot.cmd), not by anything that ships.
+7. **Accounted** is one decidable property of the sweep (Jev **0.71**), computed per file:
+   * **Scope.** Every file in the directory, any extension, subdirectories included; the declared
+     exceptions of item 6 that are logs, at their fixed paths: the installer's three C: logs,
+     `QubesIDD-diag.log`, relocate-dir's `.log` and the two harness payload logs (records such as
+     `relocate-dir-result.txt` and `qwt-improved-stage1.json` are not); and every file at an OLD
+     PATH, the "was" column of item 4's table: `C:\ProgramData\Qubes\wu\` `agent.log`, `dism.log`,
+     `qubes-updates-relay.log`, `relay-handler.log`; `C:\ProgramData\Qubes\vmupdate-shim.log`;
+     `C:\ProgramData\QubesPvNic.log`; `C:\ProgramData\QubesNetSetup.log`; `Q:\qwtng-netsetup.log`;
+     `C:\qwt-idd-activate.log`; `C:\qwt-idd-deactivate.log`; `reboot-audit.log` in the directory and
+     in `C:\Users\Public\Documents\Qubes Logs`. An old path inside the directory takes the legacy
+     kind. The collector lists each file with its path, last write time and line count.
+   * **Kind.** The file's NAME matches exactly one declared rule in `tools/log-sweep.py`: a product
+     log family, a state file, a harness artefact, a legacy per-process name, or one of the declared
+     exceptions above. A family found by sniffing the content, or the `plain` fallback, does not
+     account for a file. No match, or two, is `unaccounted-file`.
+   * **Lines.** A file whose kind holds log lines and whose last write is inside the window
+     (`--since`) has `total = parsed + continuation + not_pulled + unparsed`, where `total` is the
+     collector's count and a continuation is a line its family's parser attaches to the record above.
+     A state file, a harness artefact, or a file last written before the window is checked for its
+     kind only. The collector (PowerShell) and the sweep (Python) count lines by one rule, because the
+     identity compares their numbers: decode by the byte-order mark (UTF-16 LE/BE, or UTF-8 with the
+     mark dropped), else as UTF-8; split on LF; drop one trailing CR from each piece; drop the empty
+     piece after a final LF. Every other piece, an empty one included, is a line.
+   * **Verdict.** Accounted means no problem. The problems, each named with the file and its counts
+     and each P2 (the instrument's class): `unaccounted-file`; `unaccounted-lines` (unparsed > 0);
+     `unpulled-lines` (not_pulled > 0, a capped pull); `ledger-mismatch` (a row that does not add
+     up); `stray` (a file at an OLD PATH last written inside the window: something still writes
+     there). A declared exception is never `stray`.
+
+Measured before the decision, 2026-11-01. Per-file accounting over GWeck's own folder (forum
+bundle, build 4.3.37.1096) and campaign bafe660f's collection. Of GWeck's 20 files, 7 were not
+accounted: 6 had no name rule or were state, a script or levelless, and one, qrexec-wrapper's, held a
+line of two raw bytes (`0x0F 0x02`). The campaign's collection showed `reboot-audit.log` and the
+harness's `module-bases.txt` levelless as well, and three files from outside the directory:
+`QubesIDD-diag.log` levelless, `QubesNetSetup.log` and `QubesPvNic.log` matched only by sniffing.
+The directory's ACL on win10-tup: SYSTEM and Administrators full control, Authenticated Users modify,
+inherited from `Q:\`; every scheduled task and service of ours runs as SYSTEM, so no ACL changes
+(Jev `acl_settled` **0.84**). The legacy names come from a census of every file name in the log sets
+collected under `~/qwt-accept` and in GWeck's folder.
+
+Nothing has measured the result yet. It is measured by the full campaign at the final HEAD, whose
+sweep reads every cell's directory.
+
 **Decision (2026-10-25): the acceptance log volume's DEVICE SET has one owner and four named
 phases** — `priming` / `graded` / `answer` / `none` — composed whole by
 `mgmt/harness/logvol-lib.sh`, applied only at a domain boundary through a writer that refuses a live
@@ -204,9 +300,8 @@ which is not a contradiction of `LOGVOL_BIND=0` above: the bind is its subject, 
 * Nothing has run on a guest: every file-count claim is a prediction until then.
 * No concurrent-append test on local NTFS — atomicity rests on the documented `FILE_APPEND_DATA`
   contract, not on a measurement of ours.
-* `QubesPvNic.log`, `QubesNetSetup.log`, `QubesIDD-diag.log`, the updater's
-  `C:\ProgramData\Qubes\wu\*.log` and the `C:\` root setup logs still write OUTSIDE the common
-  directory, against a direct instruction.
+* `QubesIDD-diag.log` still writes outside the common directory: the declared driver-track exception of
+  the 2026-11-01 decision. The other writers this bullet named moved with that decision.
 * Within one day a module's file has no size bound, only the age-based purge. Total bytes logged are
   unchanged; the maximum size of one file is what grew.
 
