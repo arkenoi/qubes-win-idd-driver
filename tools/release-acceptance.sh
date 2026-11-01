@@ -623,8 +623,38 @@ if [ -n "$COVHEAD" ]; then
     if [ -n "$GSBASE" ] && python3 tools/gate-scope.py check "$COVFILE" "$GSBASE..$(git rev-parse HEAD)" >>"$LOG" 2>&1; then
       say "PASS  gate scope: this run covers what the diff requires"
     else
-      say "FAIL  gate scope: this run does NOT cover what the diff requires (see $LOG) - the release-cut gate will refuse the cut"
-      MRC=1
+      # THIS SCRIPT'S EXIT CODE GRADES WHAT THIS SCRIPT RAN. On a FULL plan the receipt it just wrote
+      # can never satisfy gate-scope by itself: six of the required suites belong to tools/gate-remainder,
+      # which the chain runs NEXT (its step 3) and merges into this same receipt. MEASURED 2026-10-30,
+      # 10-31 and 11-01: every full run ended this step with "FAIL gate scope" + exit 1 over 6 clean
+      # cells and 5 passing feature tests, and the chain's final exit carried that 1 - a green full run
+      # could not end green. So: a required suite of OUR OWN repertoire (package-verify, a cell in
+      # $CELLS, a feature test) missing from the receipt is a FAIL here - it ran here or nowhere; one
+      # outside it is named and left to the remainder, and the cut still refuses until that has run.
+      _mine=$(python3 - "$COVFILE" "$GSBASE..$(git rev-parse HEAD)" "$CELLS" <<'PYSCOPE' 2>>"$LOG"
+import json, subprocess, sys
+cov, rng, cells = sys.argv[1], sys.argv[2], sys.argv[3].split()
+req = json.loads(subprocess.run([sys.executable, 'tools/gate-scope.py', 'required', rng, '--json'],
+                                capture_output=True, text=True, check=True).stdout)
+have = set(json.load(open(cov, encoding='utf-8')).get('suites') or [])
+feats = [l.strip() for l in open('tools/release-feature-tests.txt', encoding='utf-8')
+         if l.strip() and not l.startswith('#')]
+mine = {'package-verify'} | set(cells) | set(feats)
+missing = set(req['suites']) - have
+print('MINE ' + ' '.join(sorted(missing & mine)))
+print('THEIRS ' + ' '.join(sorted(missing - mine)))
+print('REQ %d HAVE %d' % (len(req['suites']), len(have & set(req['suites']))))
+PYSCOPE
+)
+      _mm=$(printf '%s\n' "$_mine" | sed -n 's/^MINE //p'); _mt=$(printf '%s\n' "$_mine" | sed -n 's/^THEIRS //p')
+      _mn=$(printf '%s\n' "$_mine" | sed -n 's/^REQ //p')
+      if [ -z "$_mine" ]; then
+        say "FAIL  gate scope: the check refused and the split could not be computed (see $LOG) - the release-cut gate will refuse the cut"; MRC=1
+      elif [ -n "${_mm// /}" ]; then
+        say "FAIL  gate scope: required suites of THIS run's own repertoire are not in the receipt: $_mm (see $LOG) - the release-cut gate will refuse the cut"; MRC=1
+      else
+        say "gate scope: this run covers its part - required ${_mn%% HAVE *}, in the receipt ${_mn##* }; left to tools/gate-remainder (the chain's next step):$( [ -n "${_mt// /}" ] && echo " $_mt" || echo " nothing it names") - the cut refuses until that has run and merged"
+      fi
     fi
   fi
 fi
