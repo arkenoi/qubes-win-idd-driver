@@ -50,6 +50,12 @@ bad(){ fail=$((fail+1)); echo "FAIL  $*"; }
 #                                                              DEBUG it would be absent from every
 #                                                              shipped capture and the grader would
 #                                                              call each held swap a DOUBLE
+#   QGATOASTFEED                                             - per broker registration of a window the
+#                                                              toast hold owned (latched, re-armed only
+#                                                              by BrokerRegister): what that feed
+#                                                              delivered, the measurement that splits
+#                                                              the TOASTBANNERLOSTONDIRECTPATH P1's two
+#                                                              causes; per TOAST like QGATOASTHOLD
 #   QGADRAGSLICE / QGADRAGFREEZE ev=settle                   - one line per drag, user-initiated
 #   QGADDAMOVE                                               - DDA ownership changing hands on a
 #                                                              move, which is a transition, not a
@@ -82,7 +88,7 @@ bad(){ fail=$((fail+1)); echo "FAIL  $*"; }
 #                                                              it; fires per oscillation, not per
 #                                                              window, and is the evidence the rebuild
 #                                                              was avoided (same class as QGADDAMOVE)
-ALLOW='BROKERHOLD hwnd 0x%x holding last content|BROKERLATEREG hwnd 0x%x registered with the broker|BROKERRECROP hwnd 0x%x crop %d,%d - session kept|QGABROKERDIED|QGABROKERHUNG|QGABROKERREAP|QGABROKERBACK|BROKERDIMS|QGAZERORECT|QGATOASTGAP|ZORDERINVALID|QGAHELPERSDISARM|QGAHELPERSREARM|QGAHELPERTASK|QGADIRECTSUPPRESS|QGACAPSTRIP|QGAFSFLASH|QGASTARTDISMISS|QGAUAC|QGALOGPOLICY|QGARAISE|QGADESKSTUCK|QGAPROTO|QGATOASTHOLD|QGATOASTIDENT|QGATOASTPREEMPT|QGATOASTGATE|QGAPLACEKEEP|QGADRAGSLICE|QGADRAGFREEZE|QGADDAMOVE|popup damage|QGADRAGSIM|QGAERRBOX|QGASLICEBLACK|QGAPWECHO'
+ALLOW='BROKERHOLD hwnd 0x%x holding last content|BROKERLATEREG hwnd 0x%x registered with the broker|BROKERRECROP hwnd 0x%x crop %d,%d - session kept|QGABROKERDIED|QGABROKERHUNG|QGABROKERREAP|QGABROKERBACK|BROKERDIMS|QGAZERORECT|QGATOASTGAP|ZORDERINVALID|QGAHELPERSDISARM|QGAHELPERSREARM|QGAHELPERTASK|QGADIRECTSUPPRESS|QGACAPSTRIP|QGAFSFLASH|QGASTARTDISMISS|QGAUAC|QGALOGPOLICY|QGARAISE|QGADESKSTUCK|QGAPROTO|QGATOASTHOLD|QGATOASTIDENT|QGATOASTPREEMPT|QGATOASTGATE|QGATOASTFEED|QGAPLACEKEEP|QGADRAGSLICE|QGADRAGFREEZE|QGADDAMOVE|popup damage|QGADRAGSIM|QGAERRBOX|QGASLICEBLACK|QGAPWECHO'
 
 python3 - "$SRC" "$ALLOW" <<'PY' > /tmp/logpolicy.$$ 2>&1
 import re, sys, pathlib

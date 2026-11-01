@@ -240,7 +240,7 @@ switch ($Mode) {
     'pull' {
         Write-Output "THC now=$(Get-ThcNow)"
         $a = Resolve-ThcAgentLog
-        $filter = New-Object System.Text.RegularExpressions.Regex('QGATOAST|QGAHELD|QGAPROTO,msg=(CREATE|MAP|DESTROY)|Unmapping window|toast card in|no card measured|Seamless mode chang|QGATWEAKS|QGANOTIF|QGASLICEMAP|QGACROPLATE|QGADIRECT|QGASTARTDISMISS|QGAFAULT|gui-agent|version|QGAFSFLASH|RESREQ|New resolution|msg=CONFIGURE,hwnd=0x0,')
+        $filter = New-Object System.Text.RegularExpressions.Regex('QGATOAST|QGAHELD|QGAPROTO,msg=(CREATE|MAP|DESTROY)|Unmapping window|toast card in|no card measured|Seamless mode chang|QGATWEAKS|QGANOTIF|QGASLICEMAP|QGACROPLATE|QGADIRECT|QGASTARTDISMISS|QGAFAULT|gui-agent|version|QGAFSFLASH|RESREQ|New resolution|msg=CONFIGURE,hwnd=0x0,|QGASLICEBLACK|BROKERDIMS|BROKERREREG|BROKERRECROP|BROKERLATEREG|BROKERHOLD|QGACROPFALLBACK|per-window buffer')
         $kept = New-Object 'System.Collections.Generic.List[string]'
         $total = 0
         if ($a.path) {
