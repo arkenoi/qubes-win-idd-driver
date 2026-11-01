@@ -854,6 +854,11 @@ function Remove-Proxy {
 # re-quotes any single arg containing spaces, so pass SPLIT tokens: the first (no spaces) is emitted
 # verbatim with literal pipes; '/c' 'echo' $count append space-separated -> field4 = "cmd /c echo N".
 function Report-Availability($count){
+  # St.count IS the number dom0 is told, set at the ONE place that tells dom0 - so the field the dom0-facing reader prints
+  # (wu-update.ps1's summary line) can never differ from the report. From 2026-10-25 (61557095) to 2026-11-01 it did: the scan
+  # narrowed St.count to the non-definition offers while this function sent every offer, and dom0 printed "found 7 update(s)"
+  # over eight KBs. One writer, three callers (scan, reboot-pending, post-install rescan).
+  $script:St.count = [int]$count; Save
   $qr='C:\Program Files\Qubes Tools\bin\qrexec-client-vm.exe'
   if(-not(Test-Path $qr)){ Log 'qrexec-client-vm.exe not found - cannot report to dom0'; return }
   try { & $qr 'dom0|qubes.NotifyUpdates|user|cmd' '/c' 'echo' "$count" 2>&1 | Out-Null
@@ -1166,7 +1171,7 @@ function Install-ViaWU {
       Log ("WU: selected " + $u.Title)
     }
     if ($coll.Count -eq 0) { Log 'WU: nothing matched the requested KBs'; return @() }
-    $script:St.count = $coll.Count; Save
+    $script:St.wu_selected = $coll.Count; Save   # the Windows Update installer's selection - not what dom0 is told (St.count is set where dom0 is told)
 
     $script:St.phase='download'; Save
     $downloader = $session.CreateUpdateDownloader(); $downloader.Updates = $coll
@@ -2828,40 +2833,34 @@ try {
     Log "SCAN PARTIAL: found $($avail.Count) update(s) but the relay gave up on $giveUps fetch(es) - the list may be incomplete; treat the count as a lower bound, not the whole truth." 'WARN'
   }
 
-  # ---- WU-DEFINITION-EXCLUDE-BEGIN
-  # DEFINITION UPDATES DO NOT RAISE dom0's updates-available. Microsoft republishes Defender
-  # signatures several times a day, so a guest that has just been fully updated goes back to
-  # "updates available" within minutes and stays that way forever - dom0 was telling the truth and
-  # the truth was useless. The flag now means "servicing work is pending", which is a thing an
-  # operator can act on.
-  #
-  # St.available KEEPS EVERY OFFER. The install path looks offers up in it BY KB (the platform and
-  # security-platform rows, and St.satisfied), so filtering it would change what gets installed -
-  # and definitions going stale is a security regression, not a tidier flag. Only the COUNT dom0
-  # reads is narrowed, and the excluded offers are counted and logged so a reader can see what was
-  # left out rather than inferring it from a smaller number.
+  # ---- WU-DEFINITION-EXCLUDE-BEGIN   (the marker names what this region CLAIMED from 2026-10-25 to 2026-11-01; it records now)
+  # DEFINITION OFFERS COUNT LIKE EVERY OFFER (ADR-updater section 2 point 2: a classification may narrow what a pass acts on, never
+  # what the guest admits to). Commit 61557095 claimed otherwise - "Defender definitions stopped raising dom0's flag" - and did not:
+  # it narrowed St.count to the non-definition offers while Report-Availability kept sending every offer, so dom0 heard the definition
+  # and the status lied about it (measured 2026-11-01 on win10-tup: "excluded 1 of 8" beside "7 reported", the definition among
+  # them; 22 campaign scans on win11de-tup: "2 of 6" beside "6 reported"). Quieting definitions is WUQUIETDEFINITIONS, the owner's
+  # queued request - an ADR amendment and the owner's go, because on a netvm-free template a dom0-driven pass is the only way a
+  # definition ever installs. Kept: `is_definition` on every offer (WU's own classification, WU-DEFINITION-CLASS) and
+  # `definitions_offered`, how many of the offers are definitions - information for the reader, deciding nothing.
   $defs = @($avail | Where-Object { $_.is_definition })
-  $rep  = @($avail | Where-Object { -not $_.is_definition })
   $script:St.available=$avail
-  $script:St.definitions_excluded=$defs.Count
-  $script:St.count=$rep.Count
+  $script:St.definitions_offered=$defs.Count
   Save
   if ($defs.Count -gt 0) {
-    Log ("definition updates excluded from the count dom0 reads: {0} of {1} offer(s) [{2}] - they still install on any pass that runs" -f `
+    Log ("{0} of {1} offer(s) are Defender definition updates [{2}] - counted to dom0 like every offer (ADR-updater section 2 point 2); WUQUIETDEFINITIONS is queued, not implemented" -f `
          $defs.Count, $avail.Count, (($defs | ForEach-Object { $_.kb + '[' + (@($_.classifications) -join ' ') + ']' }) -join ','))
   }
 
   # ---- WU-DEFINITION-CLASS-WATCH-BEGIN
   # A WRONG OR CHANGED GUID FAILS IN SILENCE. That is the one weakness of the fail-safe direction:
   # if Microsoft ever classifies signatures under a different GUID, or adds a second one, nothing
-  # matches, nothing is excluded, the oscillation simply comes back, and NOTHING IN THE LOG SAYS
+  # matches, is_definition is false and definitions_offered undercounts, and NOTHING IN THE LOG SAYS
   # WHY - the next reader would be debugging dom0's flag with no idea the classifier had stopped
   # matching. The constant is also still unconfirmed against a live object
   # (WUDEFINITIONGUIDUNCONFIRMED), so this watcher is what turns "wrong GUID" from an invisible
   # no-op into a named line.
   #
-  # IT DOES NOT CHANGE A DECISION. It only reports: a signature offer that is not classified as a
-  # definition still counts, exactly as before.
+  # IT DOES NOT CHANGE A DECISION. It only reports; every offer counts regardless (ADR-updater section 2 point 2).
   #
   # THE [WARN] IS IN THE MESSAGE, not passed as Log's level, and that is deliberate even though
   # Log now honours a level (it silently dropped one until the commit that added this watcher).
@@ -2877,9 +2876,9 @@ try {
     $seen = @($r.classifications)
     $anom += ($r.kb + '[' + ($seen -join ' ') + ']')
     if ($seen.Count -eq 0) {
-      Log ("[WARN] QWTUPDDEFCLASSNEW {0} is a signature offer carrying NO readable UpdateClassification, so it is COUNTED and not excluded - its categories were absent or threw." -f $r.kb)
+      Log ("[WARN] QWTUPDDEFCLASSNEW {0} is a signature offer carrying NO readable UpdateClassification, so is_definition is false for it - its categories were absent or threw (every offer counts regardless)." -f $r.kb)
     } else {
-      Log ("[WARN] QWTUPDDEFCLASSNEW {0} is a signature offer but Windows Update classifies it as [{1}], not {2} - the definition exclusion is NOT applying to it, dom0 will keep seeing it, and the classification GUID has changed or there is more than one." -f $r.kb, ($seen -join ' '), $script:WU_DEFINITION_CLASS)
+      Log ("[WARN] QWTUPDDEFCLASSNEW {0} is a signature offer but Windows Update classifies it as [{1}], not {2} - is_definition is false for it and definitions_offered undercounts; the classification GUID has changed or there is more than one." -f $r.kb, ($seen -join ' '), $script:WU_DEFINITION_CLASS)
     }
   }
   $script:St.definition_class_anomalies = @($anom)
@@ -2987,8 +2986,11 @@ try {
   $notUnroutable = { param($r) ($unroutable -notcontains "$($r.kb)") }
   $actionableCount = @($avail | Where-Object { (& $notPriorInfo $_) -and (& $notUnroutable $_) }).Count
   $reportCount = @($avail | Where-Object { (& $notPriorSat $_) -and (& $notUnroutable $_) }).Count   # GUARD:truecount
-  if ($priorInfo.Count -gt 0 -and $actionableCount -ne $avail.Count) {
-    Log ("scan: " + ($avail.Count - $actionableCount) + " offer(s) a previous pass proved not actionable: " + ($priorInfo -join ', ') +
+  # Said only of the offers it is TRUE of: a previous pass's informational KB that THIS pass also verified has no route is left out
+  # by point 5, so the line must not call it counted (run 4, 2026-11-01: the line said 'still COUNTED' one line above 'reported 0').
+  $priorInfoCounted = @($priorInfo | Where-Object { $unroutable -notcontains "$_" })
+  if ($priorInfoCounted.Count -gt 0) {
+    Log ("scan: " + $priorInfoCounted.Count + " offer(s) a previous pass proved not actionable: " + ($priorInfoCounted -join ', ') +
          " - still COUNTED to dom0, because what we cannot install is not the same as nothing being available")
   }
   # (The class-keyed override that stood here - "under the ESU notice, count self-contained offers only" - is gone: the

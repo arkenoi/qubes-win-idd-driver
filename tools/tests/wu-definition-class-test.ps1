@@ -1,21 +1,19 @@
-# wu-definition-class-test.ps1 - runs the SHIPPED definition classifier and the SHIPPED exclusion
+# wu-definition-class-test.ps1 - runs the SHIPPED definition classifier and the SHIPPED record of definition offers
 # (guest/qubes-windows-update.ps1) against fake Windows Update offers. No guest.
 #
-# WHY: Microsoft republishes Defender signatures several times a day, so a fully-updated guest went
-# back to "updates available" within minutes and stayed there forever. dom0 was telling the truth and
-# the truth was useless. The flag now means "servicing work is pending". Two things have to hold for
-# that to be safe, and neither is visible by reading:
+# WHY: the classifier marks a Defender signature offer `is_definition` from WU's own classification GUID, never from a title
+# (ADR-updater section 6), and the scan records how many offers are definitions (`definitions_offered`). THAT IS INFORMATION:
+# every offer counts to dom0 (ADR-updater section 2 point 2). The exclusion this suite guarded from 2026-10-25 to 2026-11-01
+# never existed at dom0 - the scan narrowed St.count while the report sent every offer - and is gone; quieting definitions is
+# WUQUIETDEFINITIONS, the owner's queued request. Two things still have to hold:
 #
-#   1. the daily SIGNATURE definitions are excluded, and the Defender PLATFORM / engine updates are
-#      NOT - they are real servicing work. A KB or a title cannot tell those apart; the WU
-#      classification GUID can, and it is what the guest reads.
-#   2. an offer the guest cannot classify still COUNTS. An exclusion that swallows what it failed to
-#      classify would hide real updates, which is the expensive direction.
+#   1. the daily SIGNATURE offers are classified structurally, so a German title classifies like an English one;
+#   2. an offer the guest cannot classify is NOT a definition - nothing is classified by absence.
 #
-#   pwsh wu-definition-class-test.ps1 [-Script <path>] [-Defect titlematch|swallowunknown]
+#   pwsh wu-definition-class-test.ps1#   pwsh wu-definition-class-test.ps1 [-Script <path>] [-Defect titlematch|swallowunknown]
 #   -Defect titlematch       replaces the structural test with an English title substring match.
 #                            The German case and the platform case must then FAIL.
-#   -Defect swallowunknown   makes an unclassifiable offer excluded instead of counted.
+#   -Defect swallowunknown   makes an unclassifiable offer a definition (is_definition true).
 #                            The unreadable-categories case must then FAIL.
 #   -Defect quietwatch       deletes the watcher that reports a signature offer whose classification
 #                            is NOT the one the exclusion keys on. The three checks that read that
@@ -85,7 +83,7 @@ function Check([string]$name, [bool]$got, [bool]$want, [string]$why) {
 
 # --- the classifier -------------------------------------------------------------------------------
 Check 'signature-en' (Test-WuDefinitionUpdate (New-Offer 'KB2267602' 'Definition Update for Microsoft Defender Antivirus - KB2267602 (Version 1.431.84.0)' @(New-Category $DEFN))) $true `
-      'the daily signature offer is a definition and is excluded'
+      'the daily signature offer is a definition (recorded in definitions_offered; every offer still counts)'
 # THE CASE A TITLE MATCH CANNOT PASS. Same classification, German title - the field reporter runs a
 # German 25H2 edition, and ADR section 6 forbids title text as an identity.
 Check 'signature-de' (Test-WuDefinitionUpdate (New-Offer 'KB2267602' 'Definitionsupdate fuer Microsoft Defender Antivirus - KB2267602 (Version 1.431.84.0)' @(New-Category $DEFN))) $true `
@@ -93,7 +91,7 @@ Check 'signature-de' (Test-WuDefinitionUpdate (New-Offer 'KB2267602' 'Definition
 # THE DISCRIMINATING CASE. The Defender platform/engine update is real servicing work and must count,
 # and its title contains the word Defender exactly as the signature offer does.
 Check 'defender-platform' (Test-WuDefinitionUpdate (New-Offer 'KB4052623' 'Update for Microsoft Defender Antivirus antimalware platform - KB4052623' @(New-Category $UPDS))) $false `
-      'the Defender PLATFORM update is ordinary servicing and still counts'
+      'an offer WU classifies as Security Updates is not a definition (fixture; the real KB4052623 carried the definition GUID on 2026-11-01)'
 Check 'cumulative' (Test-WuDefinitionUpdate (New-Offer 'KB5062553' '2026-10 Cumulative Update for Windows 11' @(New-Category $UPDS))) $false `
       'a Security Updates offer counts'
 Check 'driver' (Test-WuDefinitionUpdate (New-Offer 'KB999001' 'Intel - Display' @(New-Category $SECU))) $false `
@@ -121,13 +119,13 @@ else { Write-Output "  FAIL classifications: throwing categories yielded $($g2.C
 
 # --- the fail-safe direction ----------------------------------------------------------------------
 Check 'no-categories' (Test-WuDefinitionUpdate (New-Offer 'KB999' 'x' $null)) $false `
-      'an offer with NO categories counts - an exclusion must not swallow what it cannot classify'
+      'an offer with NO categories is not a definition - nothing is classified by absence'
 Check 'throwing-categories' (Test-WuDefinitionUpdate (New-Offer 'KB999' 'x' (ThrowingCats))) $false `
-      'categories that throw leave the offer counted, and the guest does not die'
+      'categories that throw leave the offer unclassified, and the guest does not die'
 
-# --- the exclusion: what dom0 actually reads ------------------------------------------------------
-# Run the SHIPPED exclusion region over a synthetic scan result.
-$script:St = [ordered]@{ available=$null; count=$null; definitions_excluded=$null }
+# --- the record: what the scan writes about definitions (and does NOT decide) ----------------------
+# Run the SHIPPED region over a synthetic scan result.
+$script:St = [ordered]@{ available=$null; count=$null; definitions_offered=$null }
 function Save {}
 function Log { param([string]$m, [string]$lvl = 'INFO') $script:logged += @($m) }
 $script:logged = @()
@@ -139,15 +137,15 @@ $avail = @(
 )
 . ([scriptblock]::Create($exc))
 
-if ($script:St.count -eq 2) { Write-Output '  ok   count: dom0 reads 2 of 4 offers - the two definitions are excluded' }
-else { Write-Output "  FAIL count: dom0 reads $($script:St.count), want 2"; $fails++ }
+if ($null -eq $script:St.count) { Write-Output '  ok   count: the region leaves St.count alone - the number dom0 hears is set where dom0 is told (Report-Availability), never narrowed here' }
+else { Write-Output "  FAIL count: the region set St.count=$($script:St.count) - a classification may not narrow what the guest admits to"; $fails++ }
 if (@($script:St.available).Count -eq 4) { Write-Output '  ok   available: all 4 offers kept - the install path looks offers up here BY KB' }
 else { Write-Output "  FAIL available: $(@($script:St.available).Count) offer(s) kept, want 4 - filtering this stops definitions INSTALLING"; $fails++ }
-if ($script:St.definitions_excluded -eq 2) { Write-Output '  ok   disclosure: the excluded count is recorded, not inferred from a smaller number' }
-else { Write-Output "  FAIL disclosure: definitions_excluded=$($script:St.definitions_excluded), want 2"; $fails++ }
-if (($script:logged -join ' ') -match 'KB2267602' -and ($script:logged -join ' ') -match 'KB2310138') {
-    Write-Output '  ok   log: names which offers were excluded'
-} else { Write-Output "  FAIL log: did not name the excluded offers: $($script:logged -join ' | ')"; $fails++ }
+if ($script:St.definitions_offered -eq 2) { Write-Output '  ok   disclosure: the definition offers are counted in definitions_offered (information)' }
+else { Write-Output "  FAIL disclosure: definitions_offered=$($script:St.definitions_offered), want 2"; $fails++ }
+if (($script:logged -join ' ') -match 'KB2267602' -and ($script:logged -join ' ') -match 'KB2310138' -and ($script:logged -join ' ') -match 'counted to dom0') {
+    Write-Output '  ok   log: names the definition offers and says they are counted'
+} else { Write-Output "  FAIL log: did not name the definition offers as counted: $($script:logged -join ' | ')"; $fails++ }
 # THE LOG IS THE RECEIPT FOR THE GUID. A log that names only the KB leaves the constant
 # unfalsifiable from a real pass, which is the whole defect being closed here.
 if (($script:logged -join ' ') -match ("KB2267602\[" + [regex]::Escape($DEFN) + "\]")) {
@@ -161,7 +159,7 @@ if (($script:logged -join ' ') -match ("KB2267602\[" + [regex]::Escape($DEFN) + 
 # are driven through the SHIPPED region, and the emitted line is printed so the judge's fixture can
 # be the real text rather than my idea of it.
 function Run-Watch($rows) {
-    $script:St = [ordered]@{ available=$null; count=$null; definitions_excluded=$null; definition_class_anomalies=$null }
+    $script:St = [ordered]@{ available=$null; count=$null; definitions_offered=$null; definition_class_anomalies=$null }
     $script:logged = @()
     $avail = $rows
     . ([scriptblock]::Create($exc))
@@ -196,12 +194,12 @@ if ($l -match 'QWTUPDDEFCLASSNEW' -and $l -match 'NO readable UpdateClassificati
     Write-Output '  ok   unreadable-class: an unclassifiable signature offer is reported as its OWN cause, not as a changed GUID'
 } else { Write-Output "  FAIL unreadable-class: not distinguished: $l"; $fails++ }
 
-# An all-definitions scan must report ZERO, which is the whole point.
-$script:St = [ordered]@{ available=$null; count=$null; definitions_excluded=$null }
+# An all-definitions scan records 1 of 1 and still does not touch the count - the offer counts to dom0 like any other.
+$script:St = [ordered]@{ available=$null; count=$null; definitions_offered=$null }
 $avail = @([ordered]@{ kb='KB2267602'; classifications=@($DEFN); is_definition=$true })
 . ([scriptblock]::Create($exc))
-if ($script:St.count -eq 0) { Write-Output '  ok   definitions-only: a scan finding only definitions reports 0 to dom0' }
-else { Write-Output "  FAIL definitions-only: reported $($script:St.count), want 0"; $fails++ }
+if ($script:St.definitions_offered -eq 1 -and $null -eq $script:St.count) { Write-Output '  ok   definitions-only: recorded 1 of 1, count untouched - it counts to dom0' }
+else { Write-Output "  FAIL definitions-only: definitions_offered=$($script:St.definitions_offered) count=$($script:St.count), want 1 and untouched"; $fails++ }
 
 if ($fails) { Write-Output "FAILED: $fails check(s)"; exit 1 }
 Write-Output 'PASS  every check'

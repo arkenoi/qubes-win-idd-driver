@@ -337,7 +337,9 @@ $capRows = @($cap.result | ForEach-Object { $_ | ConvertTo-Json -Depth 6 -Compre
 $r = Render (StatusJson ($capRows + $RowInstalledA + $RowInfo) $true 4)
 CheckEq 'deferred+informational: staged, deferred, installed and informational rows -> exit code 0' $r.rc 0
 CheckEq 'deferred+informational: no FAILED line anywhere' (@($r.lines | Where-Object { $_ -like 'FAILED *' }).Count) 0
-CheckEq 'deferred+informational: 4 lines - staged pair, deferred, its advice, informational' $r.lines.Count 4
+CheckEq 'deferred+informational: 5 lines - installed, staged, deferred, its advice, informational' $r.lines.Count 5
+CheckEq 'deferred+informational: the row whose state is installed is reported installed, not staged (KB5007651 is the security platform, installed and verified by effect; a pending reboot does not make it staged)' $r.lines[0] 'installed: KB5007651'
+CheckEq 'deferred+informational: the DISM 3010 row is the staged one' $r.lines[1] 'staged (completes at restart): KB5126052'
 CheckContract 'all non-failure classes' $r
 
 # --- 5. a failure alongside a deferral: both told, failure decides the exit code ------------------

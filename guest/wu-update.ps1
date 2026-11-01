@@ -111,6 +111,14 @@ function Get-Outcome($st) {
 # The outcome is written in two parts around the reboot block: what this pass did (head), then the
 # reboot notice, then what failed (tail, which decides the exit code). After 100.0 every stderr line
 # is shown by dom0 as a message, and a line must never END in a bare number (see Msg).
+# A row is STAGED when its own state says so (DISM 3010: written to the image, applied at the next boot); an ok row with
+# no state under a pending reboot is the older writer shape and reads as staged too. Every other ok row INSTALLED. One
+# predicate for the head lines and the summary line, so they cannot disagree. Until 2026-11-01 a pending reboot made every
+# ok row "staged" - MSRT and the Defender signatures, installed and verified by effect, were reported as staged.
+function Test-RowStaged($row, [bool]$rebootNeeded) {
+    $s = "$($row.state)"
+    return (($s -eq 'staged') -or ($rebootNeeded -and $s -eq ''))
+}
 function Write-OutcomeHead($o, [bool]$rebootNeeded) {
     # WORD IT HONESTLY. DISM 3010 means the package is STAGED and applies during the next boot - it
     # is not proof that it landed. Measured 2026-08-13 on the 24H2 template: kb5121003.msu returned
@@ -118,8 +126,10 @@ function Write-OutcomeHead($o, [bool]$rebootNeeded) {
     # with 0x80070490. The scan after the boot re-offers such an update, so the truth arrives
     # either way - but this line must not claim more than it knows.
     if ($o.ok.Count) {
-        $verb = if ($rebootNeeded) { 'staged (completes at restart): ' } else { 'installed: ' }
-        $Err.WriteLine($verb + (@($o.ok | ForEach-Object { $_.kb }) -join ', '))
+        $staged = @($o.ok | Where-Object { Test-RowStaged $_ $rebootNeeded })
+        $inst   = @($o.ok | Where-Object { -not (Test-RowStaged $_ $rebootNeeded) })
+        if ($inst.Count)   { $Err.WriteLine('installed: ' + (@($inst | ForEach-Object { $_.kb }) -join ', ')) }
+        if ($staged.Count) { $Err.WriteLine('staged (completes at restart): ' + (@($staged | ForEach-Object { $_.kb }) -join ', ')) }
     }
     foreach ($r in $o.deferred) { $Err.WriteLine("deferred $($r.kb): " + ((Get-RowWhy $r) -replace '^deferred:\s*', '')) }
     if ($o.deferred.Count) { $Err.WriteLine('run this update again after the restart to install what was deferred') }
@@ -431,8 +441,11 @@ while ((Get-Date) -lt $deadline) {
     if ($st.recovered) { Msg ("note: " + $st.recovered) }
     # Announce WHICH updates as soon as the scan knows, independent of phase: the tail polls
     # every 3 s and a short-lived phase can pass between two polls unseen. Msg de-duplicates.
-    if ([int]$st.count -gt 0 -and $st.available) {
-        Msg ("found " + $st.count + " update(s): " + (@($st.available | ForEach-Object { $_.kb }) -join ', '))
+    if ($st.available -and @($st.available).Count -gt 0) {
+        # What Windows OFFERED, by KB - the list's own length, never another field's number. Until 2026-11-01 this printed
+        # `count`, a definitions-narrowed figure, over a list of every offer ("found 7 update(s): <8 KBs>"). What dom0 is
+        # TOLD is the summary line at the end, from `count`, which the pass sets where it reports (Report-Availability).
+        Msg ("offered " + @($st.available).Count + " update(s): " + (@($st.available | ForEach-Object { $_.kb }) -join ', '))
     }
 
     switch ($st.phase) {
@@ -464,7 +477,7 @@ if (-not $st) { $Err.WriteLine('no status produced - update task never started')
 switch ($st.phase) {
     'done' {
         Prog 100
-        if ([int]$st.count -eq 0 -and -not $st.result) { Write-Output 'no updates available'; exit 100 }
+        if (@($st.available).Count -eq 0 -and -not $st.result) { Write-Output 'no updates available'; exit 100 }   # nothing OFFERED - `count` is what dom0 was told, which can be 0 with offers present (verified not installable)
 
         # A KB whose every .msu failed is a failed update and dom0 must hear about it, otherwise
         # this repeats the defect found in QWT's VMExec handler - reporting success regardless.
@@ -538,7 +551,15 @@ switch ($st.phase) {
             }
         }
         if ((Write-OutcomeTail $outcome) -ne 0) { exit 1 }
-        Write-Output ("updates processed: count=" + $st.count)
+        # The last line dom0 collects: what Windows offered, what this pass did with it, and the number dom0 was told (`count`
+        # is set where the pass reports over qubes.NotifyUpdates, so it IS that report). The verified-not-installable set is
+        # named. Ends in a word, not a bare number (the WU-OUTCOME header's rule).
+        $stg = @($outcome.ok | Where-Object { Test-RowStaged $_ ([bool]$st.reboot_needed) }).Count
+        $unr = @($st.unroutable | Where-Object { $_ })
+        $line = ('updates: ' + @($st.available).Count + ' offered; ' + ($outcome.ok.Count - $stg) + ' installed, ' + $stg + ' staged, ' +
+                 $outcome.deferred.Count + ' deferred, ' + $outcome.info.Count + ' informational; dom0 is told ' + [int]$st.count + ' update(s) remain')
+        if ($unr.Count) { $line += ' (not counted: ' + ($unr -join ', ') + ' - verified not installable from this guest)' }
+        Write-Output $line
         exit 0
     }
     'error' { Prog 100; $Err.WriteLine("update failed: " + $st.error); exit 1 }
