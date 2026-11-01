@@ -1,6 +1,19 @@
 # QWT-NG 4.3.38 — "updates available" means something again, and a shutdown crash is gone
 
-## Defender definitions no longer raise dom0's update flag
+## Defender definitions no longer raise dom0's update flag (corrected 2026-11-01: they still did)
+
+**Correction, 2026-11-01.** Two claims below did not survive measurement. (1) The exclusion never reached dom0:
+the pass narrowed its own `count` field to the non-definition offers, but the number it reported over
+`qubes.NotifyUpdates` was never narrowed by it, so definitions raised the flag throughout, and the status file
+and the "found N update(s)" line disagreed with the list beside them (wu-e2e round 2 of run 41260670314:
+`found 1 update(s): KB4052623, KB5127648`). (2) "The Defender platform update still counts" rested on a
+distinction the classification does not make: Windows Update files KB4052623, the platform update, under the
+definitions classification too (that round: `is_definition` true, and the narrowed count of 1 left it out).
+The narrowing is removed: a definition counts like any other offer (ADR-updater section 2; only a no-route
+verified this pass leaves an offer out), the status records `definitions_offered` as information, and quieting
+definitions stays the owner's queued decision (WUQUIETDEFINITIONS).
+
+*The text below is the note as published on 2026-10-25; the correction above supersedes it.*
 
 On a freshly updated Windows qube, dom0's `updates-available` could go back to *available* within a
 minute of clearing, indefinitely. That was not a defect in the flag: Microsoft republishes Defender
