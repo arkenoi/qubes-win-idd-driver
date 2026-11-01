@@ -1503,6 +1503,25 @@ function Get-UrlSize($url){
   return -1
 }
 
+# THE ROW LEARNS ITS SIZE HERE - from bytes a fetch MEASURED: Content-Length when the file is fetched, the VERIFIED local copy's
+# length when the server answers the resume with 416 (MEASURED 2026-11-01, campaign at bafe660f, template-update round 2: KB5127648
+# was a cache hit from round 1's deferred fetch; its row stayed size_mb=null/unresolved while a 4553.8 MB file verified by Test-Msu sat
+# on disk and `downloading` already said total_mb 4553.8). Keyed by file so a retry or a resume counts a file once; looked up by KB the
+# way the install path does (St.available keeps every offer); the next Save carries it to dom0. A row that cannot be updated never
+# fails the fetch. ADR-updater 12.2.
+function Resolve-WuRowSize($kb,$dst,$bytes,$via){
+  if(-not $kb -or $kb -notmatch '^KB\d+$'){ return }
+  if(-not $bytes -or [long]$bytes -le 0){ return }
+  try{
+    if(-not $script:ResolvedSize){ $script:ResolvedSize=@{} }
+    if(-not $script:ResolvedSize.ContainsKey($kb)){ $script:ResolvedSize[$kb]=@{} }
+    $script:ResolvedSize[$kb][[IO.Path]::GetFileName($dst)]=[long]$bytes
+    $sum=[long]0; foreach($v in $script:ResolvedSize[$kb].Values){ $sum+=$v }
+    foreach($row in @($script:St.available | Where-Object { $_.kb -eq $kb })){ $row.size_mb=[math]::Round($sum/1MB,1); $row.size_src='content' }
+    Log ("WUSIZE-RESOLVED kb={0} file={1} mb={2} row_mb={3} via={4}" -f $kb, [IO.Path]::GetFileName($dst), [math]::Round([long]$bytes/1MB,1), [math]::Round($sum/1MB,1), $via)
+  }catch{ Log "  row size not updated for ${kb}: $($_.Exception.Message)" }
+}
+
 function Fetch-Msu($url,$dst,$kb){
   # Throughput is a first-class output here, not a nicety: every rate figure recorded for this
   # tunnel so far was taken while the guest was also talking to telemetry endpoints the proxy
@@ -1536,20 +1555,8 @@ function Fetch-Msu($url,$dst,$kb){
         if($asked){ Log "  server ignored the resume range (HTTP $status) - restarting the download" }
         $have=0; $expect=$resp.ContentLength
       }
-      # THE ROW LEARNS ITS SIZE HERE. For a catalog-delivered offer this Content-Length is the first honest number there is
-      # (Get-WuContentClass): the row's size_mb becomes the sum of the files fetched for its KB, size_src=content, and the next Save
-      # carries it to dom0. Keyed by file so a retry or a resume counts a file once; looked up by KB the way the install path does
-      # (St.available keeps every offer). A row that cannot be updated never fails the fetch.
-      if($expect -gt 0 -and $kb -match '^KB\d+$'){
-        try{
-          if(-not $script:ResolvedSize){ $script:ResolvedSize=@{} }
-          if(-not $script:ResolvedSize.ContainsKey($kb)){ $script:ResolvedSize[$kb]=@{} }
-          $script:ResolvedSize[$kb][[IO.Path]::GetFileName($dst)]=[long]$expect
-          $sum=[long]0; foreach($v in $script:ResolvedSize[$kb].Values){ $sum+=$v }
-          foreach($row in @($script:St.available | Where-Object { $_.kb -eq $kb })){ $row.size_mb=[math]::Round($sum/1MB,1); $row.size_src='content' }
-          Log ("WUSIZE-RESOLVED kb={0} file={1} mb={2} row_mb={3}" -f $kb, [IO.Path]::GetFileName($dst), [math]::Round($expect/1MB,1), [math]::Round($sum/1MB,1))
-        }catch{ Log "  row size not updated for ${kb}: $($_.Exception.Message)" }
-      }
+      # For a catalog-delivered offer this Content-Length is the first honest number there is (Get-WuContentClass said unresolved).
+      Resolve-WuRowSize $kb $dst $expect 'content-length'
 
       $mode = if($append){[System.IO.FileMode]::Append}else{[System.IO.FileMode]::Create}
       $in=$resp.GetResponseStream()
@@ -1594,6 +1601,8 @@ function Fetch-Msu($url,$dst,$kb){
         # size against the server's true total (Get-UrlSize; -1 => magic-only, best effort).
         $srvTotal = Get-UrlSize $url
         if((Test-Msu $dst $srvTotal) -eq 'ok'){
+          # A verified complete copy is a measured size: the row would otherwise stay unresolved on every cache hit.
+          Resolve-WuRowSize $kb $dst $have 'cached'
           Log "  $([IO.Path]::GetFileName($dst)) already complete ($([math]::Round($have/1MB,1)) MB; server refused resume with 416)"
           $script:St.downloading=[ordered]@{kb=$kb;file=[IO.Path]::GetFileName($dst);mb=[math]::Round($have/1MB,1);total_mb=[math]::Round($have/1MB,1);pct=100}; Save
           return $true

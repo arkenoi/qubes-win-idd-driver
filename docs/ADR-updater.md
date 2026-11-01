@@ -397,7 +397,10 @@ Rules that follow:
   for 28.6 (1.0x): sometimes right, never knowable from the offer. Those offers are catalog-delivered
   (`Resolve-Catalog`), and their size is first known when the pass opens the content and reads its
   `Content-Length`. So the row carries `size_mb` = the leaf sum with `size_src=leaves`, or `size_mb=null`
-  with `size_src=unresolved` until the fetch starts and writes the file sizes in (`size_src=content`); the
+  with `size_src=unresolved` until the fetch writes a MEASURED size in (`size_src=content`: the file's
+  `Content-Length`, or the verified local copy's length when the server answers the resume with 416 - a cache
+  hit; MEASURED 2026-11-01 round 2: KB5127648 re-offered after round 1 deferred it, 4553.8 MB on disk, row
+  still unresolved until this clause); the
   offer's own number travels as `bundle_max_mb`, under its own name. The pass logs one `WUSIZE` line per offer
   at scan (UpdateID+RevisionNumber, §6) and one `WUSIZE-RESOLVED` line per fetched file, beside its
   `THROUGHPUT` record, so the claim is checked by every pass and never by a standalone probe (§12.4: the pass

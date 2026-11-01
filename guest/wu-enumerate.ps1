@@ -38,7 +38,7 @@ try {
         $sz = 0; try { $sz = [math]::Round($u.MaxDownloadSize/1MB,1) } catch {}
         $rep.updates += [ordered]@{
             title      = "$($u.Title)"
-            bundle_max_mb = $sz   # the offer's MaxDownloadSize: not what a guest fetches (measured 20.3x on a cumulative); the product sums the leaves where WUA exposes them, else says unresolved until the fetch reads Content-Length
+            bundle_max_mb = $sz   # the offer's MaxDownloadSize: not what a guest fetches (measured 20.3x on a cumulative); the product sums the leaves where WUA exposes them, else says unresolved until the fetch measures a size (Content-Length, or a verified cached copy)
             downloaded = [bool]$u.IsDownloaded
             n_files    = $urls.Count
             sample_url = if ($urls.Count -gt 0) { "$($urls[0])" } else { '(none exposed)' }
