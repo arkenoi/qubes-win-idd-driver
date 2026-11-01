@@ -28,6 +28,17 @@
 # not cover and merges the receipt; gate-scope.py check refuses a receipt that misses a required
 # suite; campaign-state.py reads the verdict from report.json artifacts, never from log prose.
 #
+# THE ONE THING IT DOES BETWEEN THEM IS SETTLE THE RIG. release-acceptance.sh settles the rig before
+# each feature test and after none, and gate-remainder's first suite refuses a second running guest by
+# design (serial-rig.sh: "stopping the other guest is a decision, not a default"). MEASURED 2026-10-31
+# 20:27:21Z, remainder-32dc22690186: supervision-e2e left win11r-sup Running, gate-remainder said
+# "REFUSING: another Windows guest is up - win11r-sup(Running)" and the chain ended six suites short -
+# the same way it had on 2026-10-30. So the decision is taken HERE, once, by the only script that
+# knows both steps: the running guests come from the primitive the refusal itself reads (admin.vm.List,
+# one call - never qvm-ls, 2026-10-09) and each is asked down through qwt_shutdown's bounded wait, the
+# helper release-acceptance's own settle uses. A guest that does not halt is NOT killed: it is the
+# specimen of whatever stopped it, and the chain stops and says so.
+#
 # Exit: 2 usage or a refusal before any guest was touched · the preflight's own code (11/12/13/14)
 #       · else the first non-zero of the steps that ran, and the verdict is printed whatever happens.
 set -uo pipefail
@@ -40,6 +51,12 @@ set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/run-lib.sh" || {
   echo "FATAL: cannot load run-lib.sh - without it a cancel leaves the campaign running" >&2; exit 2; }
 job_init "campaign-full"
+# shutdown-lib: the bounded settle between step 2 and step 3. serial-rig: the rig read gate-remainder's
+# own refusal uses, so this script sees exactly what the remainder would refuse on.
+. "$(dirname "${BASH_SOURCE[0]}")/shutdown-lib.sh" || {
+  echo "FATAL: cannot load shutdown-lib.sh - nothing bounded can settle the rig between step 2 and step 3" >&2; exit 2; }
+. "$(dirname "${BASH_SOURCE[0]}")/serial-rig.sh" || {
+  echo "FATAL: cannot load serial-rig.sh - the rig cannot be read the way gate-remainder reads it" >&2; exit 2; }
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 2
 
 DRY="${DRY:-}"
@@ -169,6 +186,7 @@ if [ -n "$DRY" ]; then
   log "DRY: the chain would now run, in order:"
   log "  1. tools/verify-release-package.sh --tree <$PKG setup> --commit $PKG_SHA  (the PACKAGE's commit)"
   log "  2. PKG=$PKG mgmt/harness/campaign-full.sh's inner campaign-run.sh (preflight -> release-acceptance -> campaign-state)"
+  log "  2b. settle the rig: qwt_shutdown <each running testbed guest> 600 - the guests read as serial-rig.sh reads them (admin.vm.List)"
   log "  3. tools/gate-remainder.sh --run $PKG --vm10 $VM10 --vm11 $VM11 --os11 $OS11 --fi-run $FI"
   log "  4. tools/gate-scope.py check <receipt>"
   exit 0
@@ -228,6 +246,27 @@ if [ -n "$missing" ]; then
   exit "${crc:-1}"
 fi
 # ---- MATRIXABORT-END
+
+# ---- 5b. settle the rig: step 2 leaves its last feature test's guest up, step 3 refuses ANY guest ----
+log "step 2b/4: settle the rig before the remainder"
+left=$(_sr_running_guests ""); lrc=$?        # not through a pipe - the status is the rig-read signal (serial-rig.sh)
+if [ "$lrc" = 2 ]; then
+  log "STOP: the rig could not be read (admin.vm.List returned nothing) - whether a guest is up is UNKNOWN, and gate-remainder refuses on no information too"
+  exit 1
+fi
+unsettled=""
+for g in $left; do                               # entries: name(State) or name(State,tag-lookup-TIMED-OUT), space-separated
+  vm="${g%%(*}"
+  log "  $g is up after step 2 - qwt_shutdown $vm 600"
+  qwt_shutdown "$vm" 600 >>"$OUT/settle.out" 2>&1; src=$?
+  log "  qwt_shutdown $vm rc=$src (0 halted; anything else: see $OUT/settle.out - the guest is left UP, nothing here kills)"
+  [ "$src" = 0 ] || unsettled="$unsettled $vm"
+done
+if [ -n "$unsettled" ]; then
+  log "STOP: not halted within 600 s:$unsettled - the specimen of whatever stopped it; gate-remainder would refuse it, so the chain ends here"
+  exit 1
+fi
+[ -n "${left// /}" ] || log "  no testbed guest is up"
 
 # ---- 6. the six suites release-acceptance does not cover ------------------------------------------
 log "step 3/4: gate-remainder (--fi-run $FI)"
