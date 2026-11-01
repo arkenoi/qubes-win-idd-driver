@@ -1,5 +1,7 @@
 # ADR - display: the IddCx driver and the guest's screen (Track B)
 
+Index of the graphics decisions across all ADRs: `docs/ADR-graphics.md`. This file is the contract for its own decisions, in full.
+
 ## In plain English
 
 Stock Windows Tools has no display driver, so the guest runs on an emulated adapter with a fixed list of 29

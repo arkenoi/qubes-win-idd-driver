@@ -1,5 +1,7 @@
 # ADR - windows: which guest surfaces become dom0 windows, and how the guest keeps a session
 
+Index of the graphics decisions across all ADRs: `docs/ADR-graphics.md`. This file is the contract for its own decisions, in full.
+
 ## In plain English
 
 Not every window a Windows guest has should become a window on your desktop. The agent decides, and these are

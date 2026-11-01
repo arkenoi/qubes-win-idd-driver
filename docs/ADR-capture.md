@@ -1,5 +1,7 @@
 # ADR - window content capture: the PrintWindow engine, the WGC broker, and rest
 
+Index of the graphics decisions across all ADRs: `docs/ADR-graphics.md`. This file is the contract for its own decisions, in full.
+
 ## In plain English
 
 Every guest window shown in dom0 needs a source of pixels. Windows does not let a system service capture a
