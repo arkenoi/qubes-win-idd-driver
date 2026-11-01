@@ -8,7 +8,8 @@ exists only while a pass runs. The guest has no route of its own, so the updater
 through that proxy; Windows' peer-to-peer and background download mechanisms are never used.
 
 One invariant governs the rest: what dom0 is told must be true. dom0 hears the number of updates Windows is
-OFFERING, with whether we can place each one recorded beside it and never subtracted from that number. An
+OFFERING, with whether we can place each one recorded beside it and never subtracted from that number - with
+one measured exception: an offer the pass VERIFIED has no route on this guest at all (section 2, point 5). An
 install counts only when its effect is measured, because an exit code of zero is not success. The relay
 refuses a disallowed request finally, never with a hang Windows Update would wait out. Nothing is matched by
 display title. Our code never runs a vendor installer and never chooses its switches: cumulatives come from
@@ -160,7 +161,8 @@ cannot be left to update itself.
 
 ## 2. The invariant: dom0's reported state must be true
 
-**Status:** ACCEPTED; amended 2026-10-07 (point 1, which had said the opposite).
+**Status:** ACCEPTED; amended 2026-10-07 (point 1, which had said the opposite); amended 2026-11-01 (point 5:
+the ESU exception generalised to a verified no-route rule - PROPOSED to the owner, who asked for it).
 
 **Decision.** dom0 must never be told that a template is up to date when it is not.
 
@@ -169,21 +171,42 @@ cannot be left to update itself.
    `actionable`) with a reason per item.
 2. An item that cannot be installed on this path is `severity=info` with a reason, and is still COUNTED:
    what we cannot install is not the same as nothing being available. A classification may narrow what a
-   PASS acts on; it may not narrow what the guest admits to.
+   PASS acts on; it may not narrow what the guest admits to. Point 5 is the one exception, and it is
+   earned by measurement on every pass, never by classification.
 3. An offer whose own identity a pass installed and proved installed is GONE, and does not count. That is
    not the same as point 2, and only this one may reduce the number: Windows re-presents satisfied
    signatures under one KB, and counting them makes dom0's marker oscillate.
 4. The invariant breaks in two directions: too little (silence about a pending update) and too much (a count
    that can never clear). They are one defect class. Fixing one direction does not close the other, and the
    open direction may not be re-filed at a lower priority in order to call the work done.
-5. ONE exception, owner-ruled: under the ESU servicing notice (netvm-free Win10 22H2, past end of
-   servicing) dom0 is told the actionable count - "a Win10 22H2 guest reporting 0 actionable updates with
-   ESU items as info is CORRECT".
+5. ONE exception, and it is MEASURED, not declared: an offer this pass VERIFIED cannot be installed by any
+   route this guest has is left out of the number dom0 hears, and the verification is repeated on every
+   pass. Verified means all three of: the Update Catalog answered with a valid results page and resolved no
+   package for this KB on this build and architecture; the offer's content is not self-contained (Windows
+   Update serves it only as express or Delivery Optimization streams); and the guest has no default route
+   for Windows Update's own downloader. The row says so (`severity=info`, a reason naming the three facts),
+   the status carries the set (`unroutable`), and NOTHING IS REMEMBERED: a scan that would leave an offer
+   out of dom0's count asks the Catalog first, in that scan. Nothing here keys on a build number, a release
+   date, a content class alone, a KB list or a switch. So the day the Catalog publishes the package, the
+   guest gains a route, or an entitlement makes Windows offer the real update, the next pass measures that
+   and the offer counts and installs: an ESU-entitled Windows 10 guest is offered the monthly cumulative,
+   the Catalog serves it, and it installs by the ordinary `.msu` route with no change on our side. An
+   UNRESOLVED Catalog answer is not verification - the offer stays counted. The ESU licence state is read
+   live on every pass (`esu`) and reported beside the count as information; it decides nothing.
+   (Owner, 2026-11-01: the decision is "we detected that we cannot install this update now, so we
+   legitimately verified the reason and skipped it", not "we blacklisted ESU by class". This replaces the
+   2026-08-20 ruling that keyed on Windows 10 22H2 and the express class.)
 
 **Why.** dom0's reported state is the product. Every other rule in this file exists to keep it true - and a
 count reduced by our own inability to install something is the "too little" direction of this very
 invariant, which is how a field reporter came to see "no updates available" while his own Windows Update
-window listed one.
+window listed one. On the exception: an unenrolled Windows 10 22H2 guest is offered ONLY the ESU-enrollment
+out-of-band (KB5071959, measured 2026-08-20) - express-only and absent from the Catalog - while Windows
+withholds the real cumulative from it, so that one offer can never be placed from this guest and counting it
+pins dom0 at "updates available" for work no admin can do. The class test that stood in for this ("under the
+notice, count self-contained offers only") was keyed on build 19045 and a hardcoded date, and the 2026-11-01
+run showed why a class cannot carry the decision: the Windows 11 cumulative KB5127648 was offered as
+`content_class=none` and installed from the Catalog (4553.8 MB). The route is the fact; the class is a hint.
 
 ## 3. Verify by effect, never by exit code
 
