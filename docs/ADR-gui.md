@@ -1,5 +1,7 @@
 # ADR - gui: window geometry between the guest and dom0
 
+Index of the graphics decisions across all ADRs: `docs/ADR-graphics.md`. This file is the contract for its own decisions, in full.
+
 ## In plain English
 
 Two defects in how windows are placed and resized between the guest and dom0, and the rules that fixed them.

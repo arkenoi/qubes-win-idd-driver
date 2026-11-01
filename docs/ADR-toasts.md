@@ -1,5 +1,7 @@
 # ADR - guest notifications: the toast bridge
 
+Index of the graphics decisions across all ADRs: `docs/ADR-graphics.md`. This file is the contract for its own decisions, in full.
+
 ## In plain English
 
 A Windows notification (a "toast") in a seamless qube used to appear as a small window drawn by the guest on

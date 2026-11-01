@@ -2,13 +2,13 @@
 
 An ADR records a DECISION: what we do, why, what it costs, and what evidence shows that it works. It is not a
 status report. What a guest measured on a given day belongs in `findings/*.md`; how a mechanism works belongs
-in `docs/design/DESIGN-*.md` and in the code headers. An ADR section goes stale only when the decision changes.
+in `docs/DESIGN-*.md` and `docs/design/DESIGN-*.md` and in the code headers (superseded mechanism documents are kept whole under `docs/archive/`, with a stub at the old path). An ADR section goes stale only when the decision changes.
 
 ## The records
 
 | file | scope | sections |
 |---|---|---|
-| `ADR-graphics.md` | current graphics path: IDD sole output, capture paths, crop/classification/synthesis, legacy support | G1–G20 + postponed |
+| `ADR-graphics.md` | the INDEX of the graphics decisions across the ADRs below - each row names the section that decides it; not a second contract | G1–G21, P1–P3 |
 | `ADR-windows.md` | which guest surfaces become dom0 windows: the screens never shown, the fullscreen window that needs dom0's consent, the secure desktop, the non-seamless desktop window, chrome fragments, popups, autologon | 10 |
 | `ADR-capture.md` | where a guest window's pixels come from: the PrintWindow engine, the WGC broker, liveness at rest | 33 |
 | `ADR-gui.md` | window geometry between the guest and dom0's gui-daemon: placement after a restart, resizes | 2 |
@@ -28,6 +28,13 @@ in `docs/design/DESIGN-*.md` and in the code headers. An ADR section goes stale 
 | `docs/design/DESIGN-graphics.md` | why the IDD driver is the chosen path, how it differs from legacy QWT, 25H2+ capture paths, legacy support |
 | `docs/design/DESIGN-window-surfaces.md` | window crop (toastcrop/MapDeferred), classification, window/menu synthesis |
 | `docs/design/DESIGN-capture-paths.md` | Windows capture mechanisms that exist, which ones the agent uses, when, and why |
+
+### Archive (`docs/archive/`)
+
+Superseded mechanism documents are moved there whole, and the old top-level path keeps a stub that
+names the ADR sections which decide what the document described. Archived text is history, never a
+contract. An ADR section is never archived or trimmed: the status words below say what happened to a
+decision, and the section stays where its citations point (`docs/archive/README.md`).
 
 ### Cross-cutting rules, and where they are decided
 
