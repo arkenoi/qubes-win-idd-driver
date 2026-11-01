@@ -387,6 +387,22 @@ Rules that follow:
 - If the update is not complete in the agent's cache after `CopyToCache`, the row FAILS and names the leaves
   that are missing.
 - **A vendor payload is never carved, repacked, extracted or provisioned by us.**
+- **The size dom0 shows is a measured number or no number - never the offer's `MaxDownloadSize`** (added
+  2026-11-01; Jev 0.99 on the decision; PROPOSED to the owner - this bullet widens an accepted section and
+  says so). MEASURED on one pass (win11de-tup, 2026-11-01; the `WUSIZE` line at scan against the same pass's
+  `THROUGHPUT` records): where WUA exposes content leaves, the NEEDED leaves' sizes summed were exactly the
+  bytes moved (83.7, 21.7, 207.9 MB); where it exposes the offer as a single node with no `DownloadContents`
+  and no `BundledUpdates` - the cumulative, .NET, a driver - its `MaxDownloadSize` was 92,637.7 MB for a
+  4,553.8 MB .msu (20.3x; 92,399.7 against 4,424.5 in the 2026-09-17 capture), 184.6 for 92.3 (2.0x) and 28.6
+  for 28.6 (1.0x): sometimes right, never knowable from the offer. Those offers are catalog-delivered
+  (`Resolve-Catalog`), and their size is first known when the pass opens the content and reads its
+  `Content-Length`. So the row carries `size_mb` = the leaf sum with `size_src=leaves`, or `size_mb=null`
+  with `size_src=unresolved` until the fetch starts and writes the file sizes in (`size_src=content`); the
+  offer's own number travels as `bundle_max_mb`, under its own name. The pass logs one `WUSIZE` line per offer
+  at scan (UpdateID+RevisionNumber, §6) and one `WUSIZE-RESOLVED` line per fetched file, beside its
+  `THROUGHPUT` record, so the claim is checked by every pass and never by a standalone probe (§12.4: the pass
+  owns the only relay). The dom0 handler's own line, `downloading KB (total_mb MB)`, reads the live block's
+  Content-Length and was honest already; nothing in the repo reads `size_mb` (census 2026-11-01).
 
 (The flowchart for this decision is in "In plain English" at the top of this file.)
 

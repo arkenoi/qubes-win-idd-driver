@@ -873,7 +873,14 @@ function Report-Availability($count){
 # (0x80070002 bare and with /q), and the agent runs it through MpSigStub with the update's own command line. Bounded: 256 nodes, and 64
 # content items per leaf (a self-contained leaf carries one; an express node carries thousands, which are never enumerated).
 function Get-WuNeededLeaves($u){
-  $acc = [ordered]@{ needed=@(); urls=@(); missing=@(); content=0; express=$false; visited=0 }
+  # bytes_needed/bytes_all: the LEAF sizes. The offered node's own MaxDownloadSize is not the content this guest fetches: 92637.7 MB against
+  # a 4553.8 MB .msu for identity 43f0fc0f r1 (2026-10-31 and again 2026-11-01), 92399.7 against 4424.5 in the capture at
+  # tools/tests/wu-update-render-test.ps1 (2026-09-17). Where WUA exposes leaves their sum IS the content (3 of 3 exact, 2026-11-01); where
+  # it exposes none (visited=1) there is nothing to sum and Get-WuContentClass says so. Summed HERE because this walk already visits every
+  # leaf for the content classification, so the honest
+  # number costs no second enumeration and no HEAD per offer. leaves/maxdepth feed the WUSIZE line beside the row dom0 reads - the
+  # measurement that proves the sum against the pass's own THROUGHPUT record, per UpdateID+RevisionNumber.
+  $acc = [ordered]@{ needed=@(); urls=@(); missing=@(); content=0; express=$false; visited=0; bytes_needed=[long]0; bytes_all=[long]0; leaves=0; maxdepth=0 }
   Add-WuLeaves $u 0 $acc
   return $acc
 }
@@ -883,12 +890,19 @@ function Add-WuLeaves($n, [int]$depth, $acc){
   $nc=0; try{ $nc=[int]$n.DownloadContents.Count }catch{}
   if($nc -gt 0){
     $acc.content += $nc
+    $acc.leaves++; if($depth -gt $acc.maxdepth){ $acc.maxdepth=$depth }
+    # A LEAF's MaxDownloadSize IS its content: the max-over-variants ambiguity lives at bundle nodes, which this walk descends past.
+    # Counted into bytes_all for every content leaf and into bytes_needed only on the needed arm, so "small because the leaves are
+    # already present" can be told from "small because the bundle number was an upper bound".
+    $lsz=[long]0; try{ $lsz=[long]$n.MaxDownloadSize }catch{}
+    $acc.bytes_all += $lsz
     $installed=$false; $downloaded=$false
     try{ $installed=[bool]$n.IsInstalled }catch{}
     try{ $downloaded=[bool]$n.IsDownloaded }catch{}
     $title=''; try{ $title=[string]$n.Title }catch{}
     $uid=''; try{ $uid=[string]$n.Identity.UpdateID }catch{}
     if(-not $installed -and -not $downloaded){   # GUARD:leafneeded - installed or already-cached leaves are not fetched again
+      $acc.bytes_needed += $lsz
       $static=@(); $bad=@()
       if($nc -gt 64){ $bad += "$nc content items (express-shaped)"; $acc.express=$true }
       else {
@@ -916,10 +930,29 @@ function Add-WuLeaves($n, [int]$depth, $acc){
 function Get-WuContentClass($u){
   $lv = Get-WuNeededLeaves $u
   $downloaded=$false; try{ $downloaded=[bool]$u.IsDownloaded }catch{}
-  if($lv.needed.Count -gt 0 -and $lv.missing.Count -eq 0){ return @{ class='self-contained'; urls=@($lv.urls | Sort-Object -Unique) } }
-  if($lv.needed.Count -eq 0 -and $lv.content -gt 0 -and $downloaded){ return @{ class='self-contained'; urls=@() } }
-  if($lv.express){ return @{ class='express'; urls=@() } }
-  return @{ class='none'; urls=@() }
+  # THE SIZE, AND ITS PROVENANCE. bytes = what the needed leaves add up to, and NOTHING when the walk found no content leaf. The offer's
+  # own MaxDownloadSize is never the size. MEASURED 2026-11-01 on win11de-tup - the WUSIZE line at scan against the same pass's fetches:
+  # where leaves exist their sum was exactly the bytes moved (83.7, 21.7, 207.9 MB); where WUA exposes the offer as ONE node with no
+  # DownloadContents and no BundledUpdates (the cumulative, .NET, a driver) the bundle number was 92637.7 MB for a 4553.8 MB .msu (20.3x),
+  # 184.6 for 92.3 (2.0x) and 28.6 for 28.6 (1.0x): sometimes right, never knowable from the offer. Those offers are catalog-delivered and
+  # their size is first known when Fetch-Msu opens the content and reads Content-Length - which writes it into the row (size_src=content).
+  # Until then the row says size_mb=null, size_src=unresolved, and the bundle number travels under its own name, bundle_max_mb.
+  $bytes=$null; $src='unresolved'
+  if($lv.content -gt 0){ $bytes=[long]$lv.bytes_needed; $src='leaves' }
+  $bmax=[long]0; try{ $bmax=[long]$u.MaxDownloadSize }catch{}
+  $sz=@{ bytes=$bytes; src=$src; bundle_max=$bmax; leaf_needed=[long]$lv.bytes_needed; leaf_all=[long]$lv.bytes_all; leaves_needed=$lv.needed.Count; leaves_all=$lv.leaves; visited=$lv.visited; depth=$lv.maxdepth }
+  # WUSIZE - the measurement the size rule ships with, logged HERE and not in Get-Available: that function is run in isolation by
+  # tools/tests/wu-available-test.ps1 (this one stubbed, no Log) and had no Log call until the first cut put one there - measured
+  # 2026-11-01: every leg threw "The term 'Log' is not recognized". ADR-updater 12.4 forbids a standalone WU probe (the pass owns the
+  # only relay), so the numbers come from the pass: one line per offer at scan, keyed by UpdateID+RevisionNumber (section 6) - no title,
+  # no KB. bundle_max/bundle_min are the offer's own numbers, leaf_* the walk's; the pass's THROUGHPUT and WUSIZE-RESOLVED are the other side.
+  $wuid=''; $wrev=''; try{ $wuid=[string]$u.Identity.UpdateID; $wrev=[int]$u.Identity.RevisionNumber }catch{}
+  $bmin=[long]0; try{ $bmin=[long]$u.MinDownloadSize }catch{}
+  Log ("WUSIZE uid=$wuid rev=$wrev bundle_max_mb=" + [math]::Round($bmax/1MB,1) + " bundle_min_mb=" + [math]::Round($bmin/1MB,1) + " leaf_needed_mb=" + [math]::Round($lv.bytes_needed/1MB,1) + " leaf_all_mb=" + [math]::Round($lv.bytes_all/1MB,1) + " leaves_needed=$($lv.needed.Count) leaves_all=$($lv.leaves) visited=$($lv.visited) depth=$($lv.maxdepth) src=$src")
+  if($lv.needed.Count -gt 0 -and $lv.missing.Count -eq 0){ return @{ class='self-contained'; urls=@($lv.urls | Sort-Object -Unique); size=$sz } }
+  if($lv.needed.Count -eq 0 -and $lv.content -gt 0 -and $downloaded){ return @{ class='self-contained'; urls=@(); size=$sz } }
+  if($lv.express){ return @{ class='express'; urls=@(); size=$sz } }
+  return @{ class='none'; urls=@(); size=$sz }
 }
 
 # ---- WU-SECPLATFORM-READ-BEGIN   (tools/tests/wu-secplatform-test.ps1 runs this region)
@@ -1038,7 +1071,7 @@ function Get-Available {
     try { $uid=[string]$u.Identity.UpdateID; $rev=[int]$u.Identity.RevisionNumber } catch {}
     if($kb -ne '(no KB)' -and -not $script:LiveUpdates.ContainsKey($kb)){ $script:LiveUpdates[$kb] = $u }
     if($uid){ $script:LiveUpdates[$uid] = $u }
-    $out += [ordered]@{ kb=$kb; title="$($u.Title)"; size_mb=[math]::Round($u.MaxDownloadSize/1MB,1); downloaded=[bool]$u.IsDownloaded; content_class=$cls.class; direct_urls=@($cls.urls); uid=$uid; rev=$rev; classifications=@(Get-WuClassifications $u); is_definition=(Test-WuDefinitionUpdate $u) }
+    $out += [ordered]@{ kb=$kb; title="$($u.Title)"; size_mb=$(if($null -ne $cls.size.bytes){ [math]::Round($cls.size.bytes/1MB,1) }else{ $null }); size_src=$cls.size.src; bundle_max_mb=[math]::Round($cls.size.bundle_max/1MB,1); downloaded=[bool]$u.IsDownloaded; content_class=$cls.class; direct_urls=@($cls.urls); uid=$uid; rev=$rev; classifications=@(Get-WuClassifications $u); is_definition=(Test-WuDefinitionUpdate $u) }
   }
   return ,$out
 }
@@ -1502,6 +1535,20 @@ function Fetch-Msu($url,$dst,$kb){
       } else {
         if($asked){ Log "  server ignored the resume range (HTTP $status) - restarting the download" }
         $have=0; $expect=$resp.ContentLength
+      }
+      # THE ROW LEARNS ITS SIZE HERE. For a catalog-delivered offer this Content-Length is the first honest number there is
+      # (Get-WuContentClass): the row's size_mb becomes the sum of the files fetched for its KB, size_src=content, and the next Save
+      # carries it to dom0. Keyed by file so a retry or a resume counts a file once; looked up by KB the way the install path does
+      # (St.available keeps every offer). A row that cannot be updated never fails the fetch.
+      if($expect -gt 0 -and $kb -match '^KB\d+$'){
+        try{
+          if(-not $script:ResolvedSize){ $script:ResolvedSize=@{} }
+          if(-not $script:ResolvedSize.ContainsKey($kb)){ $script:ResolvedSize[$kb]=@{} }
+          $script:ResolvedSize[$kb][[IO.Path]::GetFileName($dst)]=[long]$expect
+          $sum=[long]0; foreach($v in $script:ResolvedSize[$kb].Values){ $sum+=$v }
+          foreach($row in @($script:St.available | Where-Object { $_.kb -eq $kb })){ $row.size_mb=[math]::Round($sum/1MB,1); $row.size_src='content' }
+          Log ("WUSIZE-RESOLVED kb={0} file={1} mb={2} row_mb={3}" -f $kb, [IO.Path]::GetFileName($dst), [math]::Round($expect/1MB,1), [math]::Round($sum/1MB,1))
+        }catch{ Log "  row size not updated for ${kb}: $($_.Exception.Message)" }
       }
 
       $mode = if($append){[System.IO.FileMode]::Append}else{[System.IO.FileMode]::Create}

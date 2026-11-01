@@ -32,7 +32,7 @@ try {
     $coll = New-Object -ComObject Microsoft.Update.UpdateColl
     foreach ($u in $sr.Updates) {
         $mb = [math]::Round($u.MaxDownloadSize/1MB,1)
-        $out.updates += ("" + $u.Title + " | " + $mb + "MB")
+        $out.updates += ("" + $u.Title + " | bundle_max " + $mb + "MB")   # MaxDownloadSize is an upper bound over the bundle tree, not the download
         try { if (-not $u.EulaAccepted) { $u.AcceptEula() } } catch {}
         [void]$coll.Add($u)
     }

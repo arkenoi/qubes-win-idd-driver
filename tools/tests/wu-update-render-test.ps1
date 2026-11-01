@@ -84,6 +84,9 @@ Check 'culture: de-DE is live ((1.5).ToString() -> "1,5")' ((1.5).ToString() -eq
 # guest (scratchpad/gweck25h2/run/i1/logs.txt). Two result rows: the .NET KB5126052 staged by DISM
 # (rc 3010) and the September cumulative KB5129195 deferred behind it. The `available`/`downloading`
 # blocks are kept as captured; only `result`, `count` and `reboot_needed` matter to the render.
+# size_mb 92399.7 on KB5129195 is the PRE-FIX producer's number - the offer's MaxDownloadSize, an upper bound over the whole
+# bundle tree; the same pass moved 4424.5 MB (the `downloading` block). Kept exactly as captured: it is a capture, not an
+# expectation, and it exercises a five-digit size in the renderer.
 $CapturedJson = @'
 {
     "action":  "full",

@@ -73,6 +73,8 @@ Check 'culture: de-DE is live ((1.5).ToString() -> "1,5")' ((1.5).ToString() -eq
 # Pass 1 (QubesWindowsUpdateRun, 22:34-22:49 guest time, evidence run/i1/logs.txt): the September
 # cumulative KB5129195 was fetched (4,424.5 MB) and DEFERRED behind the staged .NET KB5126052 by the
 # one-staged-package-per-CBS-session rule. The file says remaining 0 - that number is the defect.
+# size_mb 92399.7 on KB5129195 is the PRE-FIX producer's number (the offer's MaxDownloadSize, an upper bound over the bundle
+# tree) beside the 4,424.5 MB the same pass moved; kept exactly as captured, it is a capture and not an expectation.
 $Pass1Json = @'
 {
     "action":  "full",
