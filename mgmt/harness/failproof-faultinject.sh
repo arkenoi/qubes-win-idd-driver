@@ -84,7 +84,18 @@ pass_verdict(){  # <tag> -> writes $OUT/<tag>/, echoes "died=N km=N rec=N pix=ye
   awk -F'\t' '$2=="keyed-mutex-recovered"{print $3}' "$vf" | head -1
 }
 detail(){ grep -aoE 'keyed mutex: [0-9]+ abandonment.*' "$OUT/$1/rnd8.log" 2>/dev/null | head -1; }
-pixels(){ grep -aoiE 'pixels (changed|did not change)[^,]*' "$OUT/$1/rnd8.log" 2>/dev/null | head -3 | tr '\n' ';'; }
+# THE PIXEL HALF IS READ FROM RND-8'S VERDICT ROWS, NOT ITS PROSE. rnd8-resolution.sh writes one
+#   RND-8 <TAB> pixels-change-after-resize-<mode> <TAB> PASS-UNPROVEN|FAIL|INVALID-INSTRUMENT <TAB> <detail>
+# row per mode into verdicts.tsv - the same artifact pass_verdict already reads for the keyed-mutex row.
+# Until 2026-11-01 this grepped the LOG for 'pixels (changed|did not change)' and the verdict below
+# demanded 'did not change', a phrase RND-8 has never written (its FAIL line says "identical pixels ...
+# capture is FROZEN", since db453097 of 2026-08-31 - the day this file was written, 1ac9c1dc): the
+# independent half could never be seen, so this suite could never earn its proof, only PASS-UNPROVEN
+# rc=1. The row is the contract; the prose may change.
+pixrows(){ awk -F'\t' '$2 ~ /^pixels-change-after-resize-/ { sub(/^pixels-change-after-resize-/, "", $2); printf "%s=%s;", $2, $3 }' "$OUT/$1/verdicts.tsv" 2>/dev/null; }
+pixels(){ pixrows "$1"; }
+frozen(){ awk -F'\t' '$2 ~ /^pixels-change-after-resize-/ && $3 == "FAIL" { f=1 } END { exit !f }' "$OUT/$1/verdicts.tsv" 2>/dev/null; }          # some mode: h1 == h2 after a landed stimulus
+moved(){  awk -F'\t' '$2 ~ /^pixels-change-after-resize-/ && $3 ~ /^PASS/ { f=1 } END { exit !f }' "$OUT/$1/verdicts.tsv" 2>/dev/null; }        # some mode: the pixels moved
 
 # ---------------------------------------------------------------- agent restart, graded
 # THE AGENT IS RESTARTED THROUGH THE SERVICE THAT OWNS IT, AND THE TURNOVER IS PROVEN (owner
@@ -216,8 +227,21 @@ log "  disarmed verdict: ${G2:-NONE}   $(detail green-after)"
 
 # ---------------------------------------------------------------- verdict
 pixred=$(pixels red)
+# THE PIXEL EVIDENCE IS A CONTRAST, NOT A FROZEN RED. "Pixels stopped under the fault" means nothing
+# unless they MOVED with nothing armed, on each side of it: a witness that reads FROZEN in the control
+# too is blind, for a reason that has nothing to do with the capture thread. Measured in the first run
+# that reached this verdict (remainder-bafe660fa326, 2026-11-01): green-before, red and green-after ALL
+# carried FAIL on every pixels-change row (nine of nine: identical hash before and after the typing),
+# while the keyed-mutex rows discriminated correctly (QGAPERF seq 133->145 green, 15->15 red, 97->110
+# green-again). A reader that keyed on the red run alone would have called that PROOF EARNED. So:
+# independent evidence = FROZEN in red AND moving pixels (and no FROZEN) in BOTH greens; a FROZEN
+# control is the witness's own INVALID-INSTRUMENT, graded before anything else.
 indep=no
-echo "$pixred" | grep -qi 'did not change' && indep=yes
+if frozen green-before || frozen green-after; then
+  indep=blind
+elif frozen red && moved green-before && moved green-after; then
+  indep=yes
+fi
 
 log "=== RESULT: green=${G1} armed=${R1} green-again=${G2} independent-pixel-evidence=$indep ==="
 if [ "$R1" = FAIL ] && [ "$G2" != FAIL ] && [ "$indep" = yes ]; then
@@ -226,6 +250,11 @@ if [ "$R1" = FAIL ] && [ "$G2" != FAIL ] && [ "$indep" = yes ]; then
     printf 'FI\t%s\tPASS\tSEEN TO FAIL via FI_CAPTURE_EXIT on the fault build: unarmed=%s, armed=FAIL, disarmed=%s. Same binary throughout - only the registry value changed. INDEPENDENT evidence: dom0 pixels stopped changing (%s), so the red is not merely the injector logging its own name\t%s\n' \
       "$chk" "$G1" "$G2" "$pixred" "$EV" >> "$V"
   done
+elif [ "$indep" = blind ]; then
+  log "  -> INVALID-INSTRUMENT: the pixel witness read FROZEN with NOTHING armed (green-before: $(pixels green-before)"
+  log "     green-after: $(pixels green-after)). Identical pixels in the control are not the fault's doing - a locked dom0"
+  log "     display or a typing stimulus that did not reach the window read exactly like this - so no red here is attributable."
+  printf 'FI\tcapture-failproof\tINVALID-INSTRUMENT\tpixel witness FROZEN in the unarmed control (before: %s after: %s) - blind, nothing attributable\t%s\n' "$(pixels green-before)" "$(pixels green-after)" "$EV" >> "$V"; rc=1
 elif [ "$R1" = FAIL ] && [ "$indep" != yes ]; then
   log "  -> NOT PROVEN: the checks went red, but the only evidence was the log grep, which"
   log "     FI_CAPTURE_EXIT's own message satisfies by containing 'capture thread'. Without the"
