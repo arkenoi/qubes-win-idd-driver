@@ -8,7 +8,7 @@ in `docs/DESIGN-*.md` and `docs/design/DESIGN-*.md` and in the code headers (sup
 
 | file | scope | sections |
 |---|---|---|
-| `ADR-graphics.md` | the INDEX of the graphics decisions across the ADRs below - each row names the section that decides it; not a second contract | G1–G21, P1–P3 |
+| `ADR-graphics.md` | the INDEX of the graphics decisions across the ADRs below - each row names the section that decides it; not a second contract | G1–G22, P1–P3 |
 | `ADR-windows.md` | which guest surfaces become dom0 windows: the screens never shown, the fullscreen window that needs dom0's consent, the secure desktop, the non-seamless desktop window, chrome fragments, popups, autologon | 10 |
 | `ADR-capture.md` | where a guest window's pixels come from: the PrintWindow engine, the WGC broker, liveness at rest | 33 |
 | `ADR-gui.md` | window geometry between the guest and dom0's gui-daemon: placement after a restart, resizes | 2 |

@@ -28,9 +28,10 @@ and this row is wrong. Explanations for the reader live in `docs/design/DESIGN-g
 | G16 | Autologon is enforced: a guest without a session is unreachable. | `ADR-windows.md` §10 | ACCEPTED (owner) |
 | G17 | A window's change is a change of its OWN visible pixels; some applications repaint because they were asked to paint, and the engine treats its own PrintWindow as a possible cause of damage. | `ADR-capture.md` §5, §8 | ACCEPTED |
 | G18 | Guest stacking follows dom0 only through focus. | `ADR-capture.md` §6 | ACCEPTED (a protocol fact) |
-| G19 | Liveness is judged from input and Windows' own events only; a session that delivers nothing after one recreate is declared deaf, the notice is raised once per application per boot, and the user is told in dom0 to close and reopen the window. | `ADR-capture.md` §32 | ACCEPTED (owner) |
+| G19 | Liveness is judged from input and Windows' own events only; a session that delivers nothing after one recreate is declared deaf, the notice is raised once per application per boot and at most 8 error notices per boot (`QERR_CAP_PER_BOOT`), and the user is told in dom0 to close and reopen the window. | `ADR-capture.md` §32 (item 5) | ACCEPTED (owner) |
 | G20 | A required-kept toast is held back from mapping until its crop resolves, bounded by `CROP_BEFORE_SHOW_TIMEOUT_MS` = `TOAST_CROP_UIA_TIMEOUT_MS` (500 ms) + 200 ms = 700 ms (400 ms until 2026-09-09). | `ADR-windows.md` §7 for the crop; the budget is a constant in `agent/gui-agent/main.c` / `toastcrop.h` | ACCEPTED (owner) for the crop |
 | G21 | Alt-nav key-tip badges are dropped fully: not shown in dom0, nothing spent on them. | `ADR-capture.md` §31 | ACCEPTED (owner, 2026-10-02) |
+| G22 | A PrintWindow popup's first frame is retried at 0/50/100/200/400 ms after its open, then only its own pokes render it. | `ADR-capture.md` §19 (item 6) | ACCEPTED (Jev); in the broker's source since c30cc77a (`WGCBRK_PW_FIRST_MS`, `tools/wgcbroker/wgcbroker.cpp`); its firing is not instrumented - the broker has no log |
 
 ## Postponed and open
 
@@ -47,11 +48,19 @@ They exist so a suite can see a gate fail on one binary. They are not product be
 listed as decisions. Their definition and use live in the harness (`tools/tests/`,
 `agent/gui-agent/faultinject.c`).
 
-## Corrections made when this index was merged (2026-11-01)
+## Corrections made when this index was merged (2026-11-01), and corrected again the same day
 
-The draft carried four claims that the ADRs and the source do not: "menu first-frame retries
-0/50/100/200/400 ms" (no such ladder exists in the agent); "CROP_BEFORE_SHOW_TIMEOUT_MS = 400" (it is
-700 since 2026-09-09); "at most 8 notices" for deaf windows (the notice is once per application per
-boot; no count of eight exists anywhere); and alt-nav key-tip badges listed as POSTPONED
-(`ADR-capture.md` §31 is an owner-ACCEPTED decision, G21 above). Each row now cites its section so
-the next drift is visible where it happens.
+The draft carried four claims this index checked against the ADRs and the source when it was merged
+(02:03); that check got two of them wrong, and the first re-check (same afternoon, after a Jev review the
+merge itself had not had) got one of those wrong a second time. "At most 8 notices" IS the contract
+(`ADR-capture.md` §32 item 5) and the source (`QERR_CAP_PER_BOOT` = 8, `notifyerr.h`): G19 names it. "Menu
+first-frame retries 0/50/100/200/400 ms" IS the contract (`ADR-capture.md` §19 item 6, ACCEPTED (Jev)) AND
+is in the source - the merge struck it as "no such ladder exists in the agent", and the re-check, having
+searched only `agent/gui-agent/`, recorded it as ADR/source drift; the schedule is the broker's,
+`WGCBRK_PW_FIRST_MS` in `tools/wgcbroker/wgcbroker.cpp` since c30cc77a; the agent process holds only the
+companion, the slice map hold (`SliceContentReady`). Whether the schedule fires is not instrumented (the
+broker has no log). G22 says exactly that. (This product's source is four trees: `agent/gui-agent/`,
+`tools/wgcbroker/`, `tools/notifhost/`, `tools/notify-proxy/`; a claim about "the agent" must say which.)
+"CROP_BEFORE_SHOW_TIMEOUT_MS = 400" was wrong (700 since 2026-09-09, `main.c:6202`). Alt-nav badges as
+POSTPONED was wrong (§31 is owner-ACCEPTED, G21). Every other row was re-read against the Status line of
+the section it cites on 2026-11-01: all agree.
