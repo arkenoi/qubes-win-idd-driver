@@ -168,7 +168,7 @@ $script:LogDropFirst = ''
 $script:LogLossReported = $false
 $script:St = [ordered]@{ action=$Action; phase='init'; ts=$null; owner_pid=0; owner_pid_start=''; count=0; available=@();
                          downloading=$null; installing=$null; result=@(); reboot_needed=$false; error=$null; recovered='';
-                         not_actionable=@(); satisfied=@() }
+                         not_actionable=@(); satisfied=@(); unroutable=@(); route_unknown=@(); esu=$null; notice=$null }
 
 # ---- WU-PASS-CLOCK-BEGIN
 # A PASS DURATION MUST NOT BE READ OFF A CLOCK THAT MOVES UNDER IT. `ts` above is
@@ -1326,7 +1326,53 @@ function Install-DriverCab($cab, $label){
 }
 # ---- WU-DRIVER-TITLE-END
 
+# ONE ASK PER KB PER PASS. The route proof (WU-ROUTE-PROOF, below) asks the Catalog at scan for every offer it might leave out
+# of dom0's count, and the install loop asks again for every KB. The answer cannot change inside one pass, so the second ask
+# returns the first one. $script:CatalogAsked[kb] = @{ urls; valid; rows; ranked } - valid is GUARD:catalogvalid's verdict for THAT kb, kept
+# per KB because $script:CatalogUnresolved is only ever the LAST ask's. Memoised within a pass ONLY: the next pass asks again,
+# which is what lets a Catalog publication, a new route or an entitlement be seen the moment it exists (nothing remembered).
+# A throw (no proxy, no Catalog) is not caught here: the install loop's behaviour on it is unchanged; the route proof catches it.
 function Resolve-Catalog($kb){
+  if (-not $script:CatalogAsked) { $script:CatalogAsked = @{} }
+  if ($script:CatalogAsked.ContainsKey($kb)) {
+    $m = $script:CatalogAsked[$kb]
+    $script:CatalogUnresolved = -not $m.valid
+    return @($m.urls)
+  }
+  $urls = @(Resolve-CatalogUncached $kb)
+  $script:CatalogAsked[$kb] = @{ urls = @($urls); valid = (-not $script:CatalogUnresolved); rows = $script:CatalogRows; ranked = $script:CatalogRanked }
+  return @($urls)
+}
+# TRUE only when THIS pass asked the Catalog for the KB, got a valid results page, and resolved no package for this guest.
+# The one fact that may turn 'no .msu' into an informational row; an unresolved page or an unasked KB never does.
+function Test-CatalogProvedNoPackage($kb){
+  return [bool]($script:CatalogAsked -and $script:CatalogAsked.ContainsKey($kb) -and $script:CatalogAsked[$kb].valid -and
+                (@($script:CatalogAsked[$kb].urls).Count -eq 0))
+}
+# THE ROW NAMES THE THREE FACTS (ADR-updater section 2 point 5) in the words the dom0 user reads: wu-update.ps1 prints a row's
+# reason verbatim as "informational <KB>: <reason>", so this text is what the Qube Manager update window shows. ONE writer for the
+# scan's log line and both install-loop gates, so the three cannot drift apart. Called only where all three were measured this pass
+# (Test-CatalogProvedNoPackage true; the content not self-contained; HasDefaultRoute false).
+function Get-NoRouteReason($kb, $contentClass) {
+  $m = if ($script:CatalogAsked) { $script:CatalogAsked[$kb] } else { $null }
+  $page = if ($null -eq $m.rows) { 'a valid results page' } elseif ([int]$m.rows -eq 0) { "a valid results page with no entries (the Catalog's own 'no results')" }
+          elseif ([int]$m.rows -eq 1) { 'a valid results page with 1 entry' } else { "a valid results page with $($m.rows) entries" }
+  if ($null -ne $m.ranked -and [int]$m.rows -gt 0) { $page += ", $($m.ranked) of them for $OsArch build $OsBuild," }
+  $cls = if ("$contentClass" -ne '') { "$contentClass" } else { 'none' }
+  $content = if ($cls -eq 'express') { "Windows Update serves it only as express or Delivery Optimization streams (content_class=express)" }
+             else { "Windows Update supplies no static file our installer could fetch (content_class=$cls)" }
+  return ("not installable from this guest, verified this pass: the Update Catalog answered " + $page + " and resolved no package for " + $kb +
+          "; the content is not self-contained - " + $content + "; and the guest has no default route for Windows Update's own downloader." +
+          " Informational, not a failure: left out of dom0's count until a pass measures otherwise")
+}
+# The content class the scan computed for an offer, by KB - the install-loop gates hold KBs, not offers.
+function Get-OfferContentClass($kb) {
+  $u = @($script:St.available | Where-Object { "$($_.kb)" -eq "$kb" } | Select-Object -First 1)
+  if ($u.Count -gt 0 -and "$($u[0].content_class)" -ne '') { return "$($u[0].content_class)" }
+  return 'none'
+}
+function Resolve-CatalogUncached($kb){
+  $script:CatalogRows = $null; $script:CatalogRanked = $null   # the valid page's entry counts; Resolve-Catalog keeps them per KB for the reason the row names
   $hdr = @{}
   if ($AcceptLanguage) { $hdr['Accept-Language'] = $AcceptLanguage }
   $r=Invoke-WebRequest "https://www.catalog.update.microsoft.com/Search.aspx?q=$kb" -Proxy $Proxy -UseBasicParsing -TimeoutSec 60 -Headers $hdr
@@ -1385,6 +1431,7 @@ function Resolve-Catalog($kb){
     $ranked += [pscustomobject]@{ guid=$m.Groups[1].Value; title=$t; score=$score }
   }
   $ranked = @($ranked | Sort-Object -Property @{Expression='score';Descending=$true})
+  $script:CatalogRows = $all.Count; $script:CatalogRanked = $ranked.Count   # what the valid page listed, and how many of those name this arch and build
 
   $fallback = $null
   foreach($c in $ranked){
@@ -1809,8 +1856,11 @@ function Test-HasDefaultRoute {
   } catch { return $false }
 }
 
-# Best-effort ESU (Extended Security Updates) entitlement status, for the honesty gate on post-EOS
-# Win10 (19045). Not load-bearing - purely informational for dom0 - so it never throws.
+# Best-effort ESU (Extended Security Updates) licence status, read LIVE on every pass and every build. INFORMATIONAL:
+# it is reported beside the count and decides nothing (ADR-updater section 2, point 5) - an entitled guest is offered the
+# real cumulative and the route proof below finds it in the Catalog, with no switch of ours. Never throws.
+# MEASURED 2026-11-01: an unenrolled Win10 22H2 guest and a Win11 26H2 guest both carry ZERO SoftwareLicensingProduct rows
+# whose Name says ESU, so 'not-enrolled' is what both read today; 'entitled' needs a licensed ESU product row.
 function Get-EsuStatus {
   try {
     $esu = @(Get-CimInstance -ClassName SoftwareLicensingProduct -EA SilentlyContinue |
@@ -1820,26 +1870,63 @@ function Get-EsuStatus {
   } catch { return 'unknown' }
 }
 
-# Build a human-readable INFORMATIONAL diagnosis for the post-end-of-support / ESU-gated state, so dom0
-# sees WHY the newest security cumulative is not being installed - a licensing ceiling, not a transport
-# failure. Returns $null when there is nothing to report (ESU-entitled, or not the post-EOS Win10 case).
-# Keyed off the OS build + entitlement, NOT a live-clock comparison, so it is deterministic. $avail rows
-# carry content_class/title from Get-Available; used only to name the phantom OOB if one is offered.
-function Get-ServicingNotice($avail, $esu) {
-  if ("$OsBuild" -ne '19045') { return $null }   # only Windows 10 22H2 is post-end-of-support in this fleet
-  if ($esu -eq 'entitled')    { return $null }   # entitled -> the catalog CU installs; nothing to report
-  $exprCU = @($avail | Where-Object { $_.content_class -eq 'express' -and "$($_.title)" -match 'Cumulative Update' })
-  $offer = if ($exprCU.Count -gt 0) {
-    ' Windows Update currently offers only the ESU-enrollment out-of-band (' +
-    (($exprCU | ForEach-Object { $_.kb }) -join ',') + '), which carries no new security content.'
-  } else { '' }
-  return ('Windows 10 22H2 (build 19045) reached end-of-support on 2025-10-14 and this guest is NOT ' +
-    'enrolled in Extended Security Updates (ESU=' + $esu + '). Post-end-of-support security updates ' +
-    'therefore cannot be INSTALLED: the current monthly security cumulative update IS published in the ' +
-    'Microsoft Update Catalog and the updater can fetch it through the proxy, but Windows (CBS) refuses ' +
-    'to apply it without ESU entitlement.' + $offer + ' To resume security servicing, enroll this guest ' +
-    'in ESU with a volume Multiple Activation Key (MAK, offline-activatable). INFORMATIONAL, not an error.')
+# The INFORMATIONAL notice dom0's reader sees beside the count. Built from LIVE facts only - the offers THIS pass verified
+# have no route (WU-ROUTE-PROOF) and the live ESU licence state - never from a build number, a date or a class. $null when
+# nothing was left out of the count. Until 2026-11-01 this fired only on build 19045 with a hardcoded end-of-support date
+# and then left every express/none-class offer out of dom0's count BY CLASS (owner: "that sucks").
+function Get-ServicingNotice($unroutable, $esu) {
+  $u = @($unroutable | Where-Object { $_ })
+  if ($u.Count -eq 0) { return $null }
+  return ("$($u.Count) offered update(s) have no route on this guest, verified this pass: " + ($u -join ', ') +
+    '. For each, the Update Catalog answered a valid results page with no package for build ' + "$OsBuild/$OsArch" +
+    ', Windows Update offers no self-contained content for it (express / Delivery Optimization streams only), and this guest ' +
+    'has no default route for Windows Update''s own downloader. They are left out of the count reported to dom0 while this ' +
+    'holds and verified again on every pass. ESU licence: ' + "$esu" + ' (read live; informational). INFORMATIONAL, not an error.')
 }
+
+# ---- WU-ROUTE-PROOF-BEGIN
+# WHAT EARNS AN OFFER ITS SILENCE TO DOM0 (ADR-updater section 2, point 5; owner 2026-11-01: the decision is "we detected that
+# we cannot install this update now so we legitimately verified the reason and skipped it", not "we blacklisted ESU by class").
+# Test-OfferRoute returns the route THIS pass finds for an offer, or the verified absence of one:
+#   static    - the content is self-contained: the agent's own installer installs it from content we fetch (Install-ViaAgentCache)
+#   catalog   - the Update Catalog resolves an .msu for this KB on this build/arch (the DISM route; Resolve-Catalog, memoised)
+#   wu-native - no Catalog package, content not express, but the guest has a default route (or the override): Install-ViaWU can
+#   none      - VERIFIED no route: a valid Catalog results page with no package for this guest, no self-contained content, and
+#               no route for Windows Update's own downloader (express content is never handed to it - the install loop's rule).
+#               The ONLY verdict that leaves an offer out of dom0's count.
+#   unknown   - the Catalog answer was UNRESOLVED (GUARD:catalogvalid), the search threw, or the offer has no KB: COUNTED.
+# Nothing here keys on a build, a date, a class alone or a KB list - the class only says whether the agent-cache route exists.
+# Asked again on every pass, so the day the Catalog publishes the package, the guest gains a route, or an entitlement makes
+# Windows offer the real update, the next pass counts it and installs it. MEASURED basis: an unenrolled Win10 22H2 guest is
+# offered only KB5071959, the ESU-enrollment OOB - express-only and absent from the Catalog (findings/updates.md:90); the
+# 2026-11-01 run offered the Win11 cumulative KB5127648 as content_class=none and installed it from the Catalog (4553.8 MB).
+function Test-OfferRoute($u) {
+  if ("$($u.content_class)" -eq 'self-contained') { return 'static' }
+  if (-not ("$($u.kb)" -match '^KB\d+$')) { return 'unknown' }   # the no-KB route (Catalog by title) is the install loop's, WU-NOKB
+  $urls = @()
+  try { $urls = @(Resolve-Catalog $u.kb) }
+  catch { Log ("  " + $u.kb + " : catalog search threw (" + $_.Exception.Message + ") - route UNKNOWN, the offer stays counted"); return 'unknown' }
+  if ($urls.Count -gt 0) { return 'catalog' }
+  if ($script:CatalogUnresolved) { return 'unknown' }
+  # ADR-updater section 2 point 5, third condition: a guest WITH a default route is never "no route" - Windows Update's
+  # own downloader is a route whatever the content class, so the offer stays counted (the install loop decides what it
+  # does with it). Only a routeless guest can verify 'none'.
+  if ($script:HasDefaultRoute) { return 'wu-native' }   # a default route IS a route (Windows Update's own downloader), whatever the class
+  return 'none'
+}
+# The offers THIS pass verified have no route (their KBs), and the ones it could not verify. Computed fresh on every call and
+# written to the status as `unroutable` / `route_unknown`; nothing is carried from a previous pass.
+function Measure-Unroutable($offers) {
+  $none = @(); $unknown = @()
+  foreach ($u in @($offers)) {
+    if (-not $u) { continue }
+    $route = Test-OfferRoute $u
+    if ($route -eq 'none') { $none += "$($u.kb)"; Log ("  " + $u.kb + " : " + (Get-NoRouteReason $u.kb $u.content_class)) }
+    elseif ($route -eq 'unknown' -and ("$($u.kb)" -match '^KB\d+$')) { $unknown += "$($u.kb)" }
+  }
+  return @{ none = @($none); unknown = @($unknown) }
+}
+# ---- WU-ROUTE-PROOF-END
 
 # WHICH EFFECT PROBE answers for an update: by its fixed KB, else by the filename family of its content (ADR-updater section 6: keys and
 # filename families, never titles). A probe measures the artefact the package actually changes; the agent's result is judged with it.
@@ -2799,15 +2886,24 @@ try {
   if ($anom.Count -gt 0) { Save }
   # ---- WU-DEFINITION-CLASS-WATCH-END
   # ---- WU-DEFINITION-EXCLUDE-END
-  # Post-end-of-support / ESU diagnosis: INFORMATIONAL, computed on every pass from the fresh scan so a
-  # bare `scan` surfaces it too. Explains WHY the newest security cumulative is not installable here.
-  if ("$OsBuild" -eq '19045') {
-    $script:St.esu = Get-EsuStatus
-    $script:St.notice = Get-ServicingNotice $avail $script:St.esu
+  # THE ROUTE PROOF, AT SCAN (ADR-updater section 2, point 5, amended 2026-11-01). The ESU licence state is read live on
+  # every pass and every build and is information only. Then every offer that is not self-contained is taken to the
+  # Catalog NOW, in this pass, so the only offers left out of dom0's count are the ones THIS pass verified have no route
+  # on this guest - never a class, a build, a date or a remembered set. The proxy is up for the whole pass (Ensure-Proxy
+  # above, Remove-Proxy in the finally), and Resolve-Catalog is memoised per KB, so the install loop pays nothing twice.
+  # Definition offers are not taken to the Catalog: the definition exclusion owns them (above) and they still install.
+  # The third fact of ADR-updater section 2 point 5 is MEASURED: a default route, or none. The install loop's knob
+  # QUBES_UPDATES_ALLOW_WU_NATIVE is not read here - nothing in the proof keys on a switch (Jev 2026-11-01: a switch inside
+  # the proof was the one deviation from the contract, 0.51); the knob stays what it was, the install loop's own.
+  $script:HasDefaultRoute = [bool](Test-HasDefaultRoute)
+  $script:St.esu = Get-EsuStatus
+  $routeProof = Measure-Unroutable @($avail | Where-Object { -not $_.is_definition })
+  $script:St.unroutable = @($routeProof.none)
+  $script:St.route_unknown = @($routeProof.unknown)
+  $script:St.notice = Get-ServicingNotice $script:St.unroutable $script:St.esu
+  if (@($routeProof.unknown).Count -gt 0) {
+    Log ("scan: route UNKNOWN for " + (@($routeProof.unknown) -join ',') + " (the Catalog answer was unresolved or the search threw) - counted to dom0, never excluded on an unknown")
   }
-  # dom0's "updates available" marker should reflect ACTIONABLE updates. Under the ESU notice, the
-  # express/ESU-gated offers are informational (in St.notice), not installable - do not count them, or
-  # dom0 would show a permanent "updates available" for a phantom the guest can never apply.
   # ---- WU-SCAN-COUNT-BEGIN
   # GUARD:scanactioned - a SCAN must not re-inflate what an install pass already settled.
   # Measured 2026-09-20 on the German 25H2 guest: an install pass correctly drove dom0 to EMPTY,
@@ -2884,23 +2980,24 @@ try {
   #     re-presents satisfied signatures under the same KB, and counting them is what drove dom0 0 -> 3 -> 0
   #     on 2026-09-20 (GUARD:offeridentity above);
   #   an offer we CANNOT INSTALL is still available, and subtracting it is the concealment this fix removes.
-  $actionableCount = @($avail | Where-Object { (& $notPriorInfo $_) }).Count
-  $reportCount = @($avail | Where-Object { (& $notPriorSat $_) }).Count   # GUARD:truecount DEFECT: $reportCount = $actionableCount
+  # THE ONE MEASURED EXCEPTION (ADR-updater section 2, point 5): an offer THIS pass VERIFIED has no route on this guest -
+  # WU-ROUTE-PROOF, minutes ago, in this very pass, written to St.unroutable - is left out of what dom0 hears. Not a class,
+  # not a build, not a carried-forward set: the next pass asks the Catalog again before leaving it out again.
+  $unroutable = @($script:St.unroutable | Where-Object { $_ })
+  $notUnroutable = { param($r) ($unroutable -notcontains "$($r.kb)") }
+  $actionableCount = @($avail | Where-Object { (& $notPriorInfo $_) -and (& $notUnroutable $_) }).Count
+  $reportCount = @($avail | Where-Object { (& $notPriorSat $_) -and (& $notUnroutable $_) }).Count   # GUARD:truecount
   if ($priorInfo.Count -gt 0 -and $actionableCount -ne $avail.Count) {
     Log ("scan: " + ($avail.Count - $actionableCount) + " offer(s) a previous pass proved not actionable: " + ($priorInfo -join ', ') +
          " - still COUNTED to dom0, because what we cannot install is not the same as nothing being available")
   }
-  # Under the ESU notice (netvm-free, post-EOS): only SELF-CONTAINED updates are actionable - express
-  # (ESU-gated phantom) and 'none' (Defender delta / DO-only) cannot install routeless and are informational.
-  # The ESU notice is the owner's standing exception and keeps its own rule: "a Win10 22H2 guest reporting
-  # 0 actionable updates with ESU items as info is CORRECT" (findings/updates.md).
-  if ($script:St.notice) { $reportCount = @($avail | Where-Object { $_.content_class -eq 'self-contained' -and (& $notPriorInfo $_) }).Count
-                           $actionableCount = $reportCount }
+  # (The class-keyed override that stood here - "under the ESU notice, count self-contained offers only" - is gone: the
+  # verified set above is the whole exception, measured, and the notice is built from it rather than the other way round.)
   $script:St.offered = $avail.Count
   $script:St.actionable = $actionableCount
   # ---- WU-SCAN-COUNT-END
   $script:St.remaining = $actionableCount; Save
-  Log ("scan: $($avail.Count) update(s) offered, $actionableCount actionable, $reportCount reported to dom0" + $(if($script:St.notice){ "; $reportCount actionable (" + ($avail.Count - $reportCount) + " ESU-gated/express informational - see notice)" }else{ '' }))
+  Log ("scan: $($avail.Count) update(s) offered, $actionableCount actionable, $reportCount reported to dom0" + $(if($unroutable.Count -gt 0){ "; " + $unroutable.Count + " verified no route this pass (" + ($unroutable -join ',') + ") - see notice" }else{ '' }))
   if ($script:St.notice) { Log ("SERVICING NOTICE: " + $script:St.notice) }
   Report-Availability $reportCount    # -> dom0 Qube Manager (default-allowed for TemplateVMs)
 
@@ -2943,8 +3040,9 @@ try {
 
   # KBs the catalog cannot serve; handed to the Windows Update installer after the loop.
   $script:WuFallbackKbs = @()
-  # KBs Windows Update publishes ONLY as Delivery-Optimization express streams (KB5071959-class):
-  # not installable on a netvm-free guest, terminally classified, reported honestly after the loop.
+  # KBs Windows Update publishes ONLY as Delivery-Optimization express streams (KB5071959-class) and the Catalog has no
+  # package for: not installable on a netvm-free guest, reported honestly after the loop - informational only when the
+  # Catalog's answer was a valid page (Test-CatalogProvedNoPackage), outstanding when it was not.
   $script:WuOnlyExpressKbs = @()
   if ($env:QUBES_UPDATES_FAKE_FALLBACK_KB) {
     $script:WuFallbackKbs += $env:QUBES_UPDATES_FAKE_FALLBACK_KB
@@ -3116,7 +3214,7 @@ try {
             # around. What actually hid KB5101684 from the reporter was the scan COUNT, not this
             # branch (GUARD:truecount, above).
             $script:WuOnlyExpressKbs += $u.kb
-            Log "$($u.kb): published only as Delivery-Optimization express/UUP streams - terminally classified (not installable netvm-free, not chased)"
+            Log "$($u.kb): published only as Delivery-Optimization express/UUP streams and absent from the Catalog - the route gate after the loop decides (the Windows Update installer on a routed guest, an informational row on a routeless one)"
             continue
           }
           # class 'none'/unknown: only a guest that actually has a route may try the WU installer.
@@ -3149,7 +3247,16 @@ try {
   # REFUSE on a guest with no route (measured DO 0x80D03805 / BITS 0x80200010) - so on a netvm-free
   # guest this rung only manufactures phantom 0x80240022 failures. canWuNative is the guest's ability to
   # ever install these: a real default route (netvm-attached standalone) or the explicit override.
-  $canWuNative = (Test-HasDefaultRoute) -or ($env:QUBES_UPDATES_ALLOW_WU_NATIVE -eq '1')
+  $canWuNative = $script:HasDefaultRoute -or ($env:QUBES_UPDATES_ALLOW_WU_NATIVE -eq '1')   # the route measured above the scan count, plus the install loop's own knob
+  # ADR-updater section 2 point 5, third fact: a guest WITH a default route has a route for express-only content too - Windows Update's
+  # own downloader - so on it those offers are work for the Windows Update installer with the rest of the fallback set, not a ceiling to
+  # report. Only a routeless guest reaches the express gate below, where all three facts hold and the row may say so.
+  if ($canWuNative -and $script:WuOnlyExpressKbs.Count -gt 0) {
+    $why = if ($script:HasDefaultRoute) { 'this guest has a default route' } else { 'QUBES_UPDATES_ALLOW_WU_NATIVE=1 forces the Windows Update installer' }
+    Log ("express-only offer(s) " + ($script:WuOnlyExpressKbs -join ',') + ": " + $why + ", so the Windows Update installer takes them instead of an informational row")
+    $script:WuFallbackKbs += $script:WuOnlyExpressKbs
+    $script:WuOnlyExpressKbs = @()
+  }
   # DEFER only makes sense when the guest CAN install them next pass (canWuNative): CBS applies exactly
   # ONE staged session per boot, so a second WU-native install this pass would be silently discarded.
   # On a netvm-free guest (no route) they are never installable, so skip the deferral and let the
@@ -3168,19 +3275,19 @@ try {
   if ($Action -in 'install','full' -and $script:WuFallbackKbs.Count -gt 0 -and -not $canWuNative) {
     $script:WuFallbackKbs = @($script:WuFallbackKbs | Sort-Object -Unique)
     foreach ($kb in $script:WuFallbackKbs) {
-      # severity='info': on a netvm-free guest there is NO route by which these could install (no catalog
-      # .msu, no static file, and DO/BITS refuse routeless), so this is a deterministic INFORMATIONAL
-      # ceiling. Not a failure, and excluded from the actionable/remaining count reported to dom0.
+      # severity='info': the three facts of ADR-updater section 2 point 5 hold for these - the Catalog's valid page resolved no
+      # package (checked below), the content is not self-contained (that is how they got here), and the guest has no default
+      # route (-not canWuNative, above) - so the row names them (Get-NoRouteReason) and is left out of the count dom0 hears.
       # GUARD:catalogvalid - but ONLY when the catalog actually answered. If the search response
       # could not be validated as a results page then "no catalog .msu" is an UNKNOWN, not a fact,
       # and an unknown must never buy a permanent exclusion from dom0's count.
-      if ($script:CatalogUnresolved) {
-        Log ("  " + $kb + " : NOT classified informational - the catalog search was UNRESOLVED, so 'no package' is unproven")
+      if (-not (Test-CatalogProvedNoPackage $kb)) {
+        Log ("  " + $kb + " : NOT classified informational - the catalog search for it was UNRESOLVED, so 'no package' is unproven")
         $script:St.result += [ordered]@{ kb=$kb; ok=$false; files=@()
           reason='catalog search did not return a valid results page - resolution UNRESOLVED, so this KB stays outstanding rather than being excluded' }
       } else {
       $script:St.result += [ordered]@{ kb=$kb; ok=$false; severity='info'; files=@()
-        reason='not installable on a netvm-free guest: no catalog .msu and no self-contained static installer (delivered only via Delivery Optimization / a delta patch). INFORMATIONAL - not a failure' }
+        reason=(Get-NoRouteReason $kb (Get-OfferContentClass $kb)) }
       }
     }
     Save
@@ -3217,24 +3324,29 @@ try {
     }
   }
 
-  # Terminal honesty gate for express-only KBs (KB5071959-class). These are published only as
-  # Delivery-Optimization delta streams and are not installable on a netvm-free guest by ANY path -
-  # so report them once, deterministically, as a fixed ceiling, instead of failing them forever. On
-  # post-EOS Win10 (19045) the underlying reason is the ESU entitlement gate at CBS install time
-  # (the real Nov CU, KB5068781, IS in the catalog and installs via the existing path ONCE entitled);
-  # surface that as a stable status so dom0 sees the ceiling rather than a phantom transport failure.
+  # The express gate (KB5071959-class, on a routeless guest). Windows Update publishes them only as Delivery-Optimization
+  # streams and the Catalog has no package for them, so no path of ours can install them on a guest with no default route: report
+  # that, as a ceiling VERIFIED this pass, instead of failing them forever. Verified means the Catalog answered a valid results page
+  # for THIS kb (Test-CatalogProvedNoPackage) - an UNRESOLVED answer leaves the KB outstanding, exactly as the fallback gate
+  # above does, because an unknown must never buy an informational row (GUARD:catalogvalid). Whatever the licensing story
+  # behind such an offer (the ESU enrollment OOB on an unenrolled Win10 22H2 guest is the measured instance), the row says
+  # what was measured; the ESU licence state travels beside it as information (St.esu, read at scan).
   if ($Action -in 'install','full' -and $script:WuOnlyExpressKbs.Count -gt 0) {
     $script:WuOnlyExpressKbs = @($script:WuOnlyExpressKbs | Sort-Object -Unique)
     foreach ($kb in $script:WuOnlyExpressKbs) {
-      # severity='info' marks this as INFORMATIONAL, not a failure: it is excluded from the failed/
-      # remaining count reported to dom0 (see below), so a KB the guest can never apply routeless does
-      # not read as a broken update forever. The St.notice (set at scan time) carries the ESU diagnosis.
+      if (-not (Test-CatalogProvedNoPackage $kb)) {
+        Log ("  " + $kb + " : NOT classified informational - the catalog search for it was UNRESOLVED, so 'express-only with no package' is unproven")
+        $script:St.result += [ordered]@{ kb=$kb; ok=$false; files=@()
+          reason='catalog search did not return a valid results page - resolution UNRESOLVED, so this KB stays outstanding rather than being excluded' }
+        continue
+      }
+      # severity='info' marks this as INFORMATIONAL, not a failure: it is excluded from the failed/remaining count reported
+      # to dom0 (see below), so a KB the guest can never apply routeless does not read as a broken update forever.
       $script:St.result += [ordered]@{ kb=$kb; ok=$false; severity='info'
-        reason='wu-only-express: Windows Update offers this KB only through Delivery Optimization (express streams and/or a delta patch that needs a base); no catalog .msu and no self-contained static installer, so it is not installable on a netvm-free guest. INFORMATIONAL - not a failure.' }
+        reason=(Get-NoRouteReason $kb 'express') }
     }
-    if ("$OsBuild" -eq '19045' -and -not $script:St.esu) { $script:St.esu = Get-EsuStatus }
     Save
-    Log ("wu-only-express (informational, terminally classified): " + ($script:WuOnlyExpressKbs -join ',') +
+    Log ("express-only offers with no route on this guest (informational, verified this pass): " + ($script:WuOnlyExpressKbs -join ',') +
          $(if($script:St.esu){ " ; ESU=$($script:St.esu)" }else{ '' }))
   }
 
@@ -3294,9 +3406,13 @@ try {
       # successfully as phase=error.
       try {
         $after = Get-Available
-        # Refresh the ESU diagnosis from the post-install scan, and report only ACTIONABLE updates so an
-        # ESU-gated/express phantom does not leave dom0 permanently marked "updates available".
-        if ("$OsBuild" -eq '19045') { $script:St.esu = Get-EsuStatus; $script:St.notice = Get-ServicingNotice $after $script:St.esu }
+        # The route proof again, over the RESCAN's offers (WU-ROUTE-PROOF): memoised KBs cost nothing, a newly offered KB is
+        # asked now. What this pass verified has no route is left out below; the ESU state is re-read as information.
+        $script:St.esu = Get-EsuStatus
+        $afterProof = Measure-Unroutable @($after | Where-Object { -not $_.is_definition })
+        $script:St.unroutable = @($afterProof.none)
+        $script:St.route_unknown = @($afterProof.unknown)
+        $script:St.notice = Get-ServicingNotice $script:St.unroutable $script:St.esu
         # Exclude KBs this pass proved informational (a self-contained artifact DISM rejected as
         # not-a-package, e.g. KB5001716) - they are self-contained by shape but never installable, so
         # they must not leave dom0 marked "updates available" forever.
@@ -3340,8 +3456,10 @@ try {
                      ForEach-Object { $_.kb; if($_.PSObject -and (Test-RowKey $_ 'title')){ $_.title } } |
                      Where-Object { $_ })
         $notInfo = { param($r) ($infoKbs -notcontains $r.kb) -and ($infoKbs -notcontains $r.title) }
-        $reportCount = if ($script:St.notice) { @($after | Where-Object { $_.content_class -eq 'self-contained' -and (& $notInfo $_) }).Count }
-                       else { @($after | Where-Object { (& $notInfo $_) }).Count }
+        # ...and the offers THIS pass verified have no route (St.unroutable, WU-ROUTE-PROOF) - the one measured exception
+        # (ADR-updater section 2, point 5); the class-keyed notice branch that stood here is gone.
+        $unroutableAfter = @($script:St.unroutable | Where-Object { $_ })
+        $reportCount = @($after | Where-Object { (& $notInfo $_) -and ($unroutableAfter -notcontains "$($_.kb)") }).Count
         # STAGED WORK STILL COUNTS even when Windows has stopped offering it - it is written to the
         # image and not applied until the restart. Counted from the RESULT rows, not from what the
         # rescan still offers. No blanket floor on reboot_needed: forcing >=1 with nothing staged
@@ -3361,7 +3479,7 @@ try {
                                  Where-Object { $_ })
         # ---- WU-INFO-EXCLUDE-END
         $script:St.remaining = $reportCount; Save
-        Log ("post-install rescan: $($after.Count) offered; $reportCount actionable to dom0" + $(if($script:St.notice){ ' (ESU-gated informational - see notice)' }else{ '' }))
+        Log ("post-install rescan: $($after.Count) offered; $reportCount actionable to dom0" + $(if($unroutableAfter.Count -gt 0){ ' (' + $unroutableAfter.Count + ' verified no route this pass - see notice)' }else{ '' }))
         if ($script:St.notice) { Log ("SERVICING NOTICE: " + $script:St.notice) }
         Report-Availability $reportCount
       } catch {

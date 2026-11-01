@@ -6,8 +6,10 @@
 #   (the verdict on an installer-type update moved to WU-AGENT-VERDICT on 2026-10-03, when the updater stopped running vendor .exe
 #   files itself; tools/tests/wu-agentcache-test.ps1 replays it. The WU-NOTPACKAGE region went with the DISM-on-static-content path.)
 #   WU-INFO-EXCLUDE-*   : GUARD:infoalways + GUARD:nokbinfo - informational rows are excluded from
-#                         dom0's actionable count ALWAYS (not only under the ESU notice), and the
-#                         exclusion keys on kb AND title so a no-KB offer is actually excluded.
+#                         dom0's actionable count ALWAYS, and the exclusion keys on kb AND title so a no-KB
+#                         offer is actually excluded. The one other exclusion is St.unroutable - the offers
+#                         THIS pass verified have no route (WU-ROUTE-PROOF, ADR-updater section 2 point 5);
+#                         the regions consume that set, the proof itself (a Catalog ask) runs outside them.
 #
 # -Defect <knob> re-introduces a specific defect so the suite MUST fail on the check that knob
 # targets. A guard never seen to fail is decoration.
@@ -41,7 +43,6 @@ switch ($Defect) {
     # Literal .Replace, not -replace: '$' is regex end-of-anchor and PowerShell also interpolates it
     # inside double quotes, and between them the old pattern silently matched NOTHING once the code
     # it targeted moved. A knob that matches nothing reports the guard as decoration.
-    'noticeonly'{ $infoRegion = $infoRegion -replace '(?s)else \{ @\(\$after \| Where-Object \{ \(& \$notInfo \$_\) \}\)\.Count \}', 'else { $after.Count }' }
     'kbonly'    { $infoRegion = $infoRegion -replace '-and \(\$infoKbs -notcontains \$r\.title\)', '' }
     'trustzero' { $cvRegion = $cvRegion -replace '(?s)if \(\[string\]::IsNullOrWhiteSpace.*?\n  \}', '' }
     # drops the catalog-by-title route - the state before 2026-09-21, where a KB-less offer with
@@ -55,15 +56,15 @@ switch ($Defect) {
     'stageddone'{ $infoRegion = $infoRegion.Replace('($_.ok -eq $true -and ((-not (Test-RowKey $_ ''state'')) -or ($doneStates -contains [string]$_.state)))', '$_.ok -eq $true').Replace('if ($stagedN -gt $reportCount) { $reportCount = $stagedN }', '') }
     # Ignores the offer identity entirely - the state before GUARD:offeridentity, where a scan
     # re-counted an offer the previous pass had resolved and proved.
-    'satignore' { $scRegion = $scRegion.Replace('@($avail | Where-Object { (& $notPriorSat $_) }).Count', '@($avail).Count') }
+    'satignore' { $scRegion = $scRegion.Replace('@($avail | Where-Object { (& $notPriorSat $_) -and (& $notUnroutable $_) }).Count', '@($avail | Where-Object { (& $notUnroutable $_) }).Count') }
     # Drops the carry-forward: the scan consumes the identities and writes an empty list back, so
     # the knowledge lasts exactly one scan.
     'satdrop'   { $scRegion = $scRegion.Replace('$script:St.satisfied = @($priorSat)', '') }
     # the 2026-10-07 concealment, restored: report only what we can INSTALL, so an offer we cannot place
     # makes dom0 say "no updates available" while Windows goes on offering it (GWeck, forum #175)
-    'scanhide'  { $scRegion = $scRegion.Replace('$reportCount = @($avail | Where-Object { (& $notPriorSat $_) }).Count', '$reportCount = $actionableCount') }
+    'scanhide'  { $scRegion = $scRegion.Replace('$reportCount = @($avail | Where-Object { (& $notPriorSat $_) -and (& $notUnroutable $_) }).Count', '$reportCount = $actionableCount') }
     ''          { }
-    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (noticeonly | kbonly | trustzero | shapeskip | infoonly | scanall | satignore | satdrop | stageddone | notitle)"; exit 2 }
+    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (kbonly | trustzero | shapeskip | infoonly | scanhide | satignore | satdrop | stageddone | notitle)"; exit 2 }
 }
 
 function Log($m) { }   # the regions log; the suite does not care what they print
@@ -294,25 +295,28 @@ Check "scan: the SECOND scan still knows it is not actionable - the classificati
 Check "scan: ...and dom0 still hears all three, because durability must not become concealment" `
       (ScanCount2 $scanAvail @('AudioProcessingObject Driver Update')).reported 3
 
-# THE OWNER'S STANDING EXCEPTION, kept: under the ESU servicing notice (netvm-free Win10 22H2, post-EOS) only
-# self-contained updates are actionable AND that is what dom0 hears - "a Win10 22H2 guest reporting 0
-# actionable updates with ESU items as info is CORRECT" (findings/updates.md). Jev confirmed the change above
-# does not disturb it (0.28).
-function ScanCountNotice($avail, $prevResult) {
-    $script:St = [ordered]@{ notice = 'Windows 10 22H2 is past end of servicing (ESU)'; not_actionable = @() }
-    $StatusFile = Join-Path ([IO.Path]::GetTempPath()) ("wuscanN-" + [guid]::NewGuid().ToString() + ".json")
-    if ($null -ne $prevResult) { (@{ result = $prevResult } | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $StatusFile }
-    $script:PrevStatus = if (Test-Path $StatusFile) { Get-Content -LiteralPath $StatusFile -Raw | ConvertFrom-Json } else { $null }
+# THE ONE MEASURED EXCEPTION (ADR-updater section 2, point 5, amended 2026-11-01). Until then this case asserted the
+# class rule: "under the ESU notice only self-contained offers count" - a blacklist by class on build 19045. Owner: "do we
+# de-select ESU updates by class? that sucks ... select updates based on actual availability". Now an offer is left out of
+# dom0's count only when THIS pass VERIFIED it has no route (a valid Catalog page with no package, no self-contained content,
+# no default route) - the proof runs outside the region and lands in St.unroutable for this pass only; the region consumes it.
+function ScanCountUnroutable($avail, $unroutable) {
+    $script:St = [ordered]@{ notice = $null; not_actionable = @(); unroutable = @($unroutable) }
+    $StatusFile = Join-Path ([IO.Path]::GetTempPath()) ("wuscanU-" + [guid]::NewGuid().ToString() + ".json")
+    $script:PrevStatus = $null
     $reportCount = -1; $actionableCount = -1
     Invoke-Expression $scRegion
     Remove-Item $StatusFile -EA SilentlyContinue
     return @{ reported = $reportCount; actionable = $actionableCount }
 }
 $esuAvail = @(
-    [pscustomobject]@{ kb = 'KB5068781'; title = 'ESU cumulative';  content_class = 'express' },
-    [pscustomobject]@{ kb = 'KB2267602'; title = 'Defender defs';   content_class = 'self-contained' }
+    [pscustomobject]@{ kb = 'KB5071959'; title = 'ESU enrollment OOB';  content_class = 'express' },
+    [pscustomobject]@{ kb = 'KB2267602'; title = 'Defender defs';       content_class = 'self-contained' }
 )
-Check "scan: under the ESU notice dom0 hears the ACTIONABLE count, as the owner ruled" (ScanCountNotice $esuAvail $null).reported 1
+Check "scan: an offer THIS pass VERIFIED has no route is left out of dom0's count"            (ScanCountUnroutable $esuAvail @('KB5071959')).reported 1
+Check "scan: ...and out of the actionable split"                                             (ScanCountUnroutable $esuAvail @('KB5071959')).actionable 1
+Check "scan: the SAME express offer with NO verification this pass is COUNTED (a class is not a verdict)" (ScanCountUnroutable $esuAvail @()).reported 2
+Check "scan: a verification naming a KB that is not offered excludes nothing"                 (ScanCountUnroutable $esuAvail @('KB5068781')).reported 2
 
 # GUARD:offeridentity. The oscillation that failed the bar on 2026-09-20: a pass installed a
 # Defender signature and PROVED it by effect, dom0 went empty, and a scan 30 seconds later counted
@@ -352,6 +356,32 @@ function ScanCarry($avail, $satisfied) {
 }
 Check "scan: the identities are CARRIED FORWARD, so a second scan still excludes" `
       (ScanCarry $idAvail @('aaaa-1111:204')) 'aaaa-1111:204' 
+
+# ROUTED FOLD (ADR-updater section 2 point 5, third fact). The express gate writes its "no default route" row only on a routeless
+# guest; where the Windows Update installer CAN run ($canWuNative: a measured default route, or the install loop's own knob
+# QUBES_UPDATES_ALLOW_WU_NATIVE=1) the express-only offers join its set instead. Jev 2026-11-01: the only configuration that
+# runs this code with a route is a TemplateVM given a netvm, which the rig may not create (templates stay netvm=''), so the
+# fold is replayed here from the shipped text - extracted by its own first line, no marker added to the product.
+$foldM = [regex]::Match($src, '(?s)\n  if \(\$canWuNative -and \$script:WuOnlyExpressKbs\.Count -gt 0\) \{.*?\n  \}')
+if (-not $foldM.Success) { Write-Output "INSTRUMENT: the routed fold was not found in the shipped script"; exit 2 }
+$foldRegion = $foldM.Value
+function Fold($canWuNative, $hasRoute, $expressKbs) {
+    $script:WuOnlyExpressKbs = @($expressKbs); $script:WuFallbackKbs = @('KB1111111'); $script:HasDefaultRoute = $hasRoute
+    $script:foldLog = ''
+    function Log($m) { $script:foldLog += "$m`n" }
+    Invoke-Expression $foldRegion
+    return @{ fallback = (@($script:WuFallbackKbs) -join ','); express = (@($script:WuOnlyExpressKbs) -join ','); log = $script:foldLog }
+}
+$r = Fold $true $true @('KB5071959')
+Check "fold: with a default route an express-only offer joins the Windows Update installer's set"  $r.fallback 'KB1111111,KB5071959'
+Check "fold: ...and leaves the express gate nothing to exclude"                                     $r.express ''
+Check "fold: ...and the log names the measured route as the reason"                                 ($r.log -like '*this guest has a default route*') $true
+$r = Fold $true $false @('KB5071959')
+Check "fold: under the knob without a route the log names the knob, not a route"                    ($r.log -like '*QUBES_UPDATES_ALLOW_WU_NATIVE=1 forces*') $true
+Check "fold: ...and the offer still joins the installer's set"                                      $r.fallback 'KB1111111,KB5071959'
+$r = Fold $false $false @('KB5071959')
+Check "fold: routeless and no knob: nothing folds, the express gate keeps the offer"                $r.express 'KB5071959'
+Check "fold: ...and the installer's set is untouched"                                               $r.fallback 'KB1111111'
 
 Write-Output "checks: $pass passed, $fail failed"
 if ($fail -eq 0) { exit 0 } else { exit 1 }
