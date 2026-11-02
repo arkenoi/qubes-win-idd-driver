@@ -18,10 +18,26 @@ Remove-Item -Recurse -Force $out -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 $relayLog = 'C:\ProgramData\Qubes\wu\qubes-updates-relay.log'
 function W($s) { Write-Output $s }
+# THE ONE LOG DIRECTORY (docs/ADR-logging.md, Decision 2026-11-01), by log.ps1's rule, inlined because this probe runs
+# without it: the registry LogDir, else <SystemDrive>\Qubes Logs. A moved log is its per-day files there,
+# <module>-<yyyyMMdd>.log, newest last; only a guest with none of them reads the file at its old path.
+function Get-MovedLogFiles([string]$Module, [string]$Old) {
+  $d = $null
+  try { $d = Get-ItemPropertyValue 'HKLM:\Software\Invisible Things Lab\Qubes Tools' LogDir -ErrorAction Stop } catch { }
+  if (-not $d) { $d = Join-Path $env:SystemDrive 'Qubes Logs' }
+  $rx = '^' + [regex]::Escape($Module) + '-\d{8}\.log$'
+  $f = @(Get-ChildItem -LiteralPath $d -Filter "$Module-*.log" -File -EA SilentlyContinue | Where-Object { $_.Name -match $rx } | Sort-Object Name | ForEach-Object { $_.FullName })
+  if ($f.Count -eq 0 -and $Old -and (Test-Path -LiteralPath $Old)) { $f = @($Old) }
+  $f
+}
 
+# The relay's bytes over every file it may be writing - its per-day files and the old cumulative one - so a pass that
+# starts a new day's file between the two witnesses still counts as growth.
 function Witness {
   $r = 0
-  if (Test-Path -LiteralPath $relayLog) { $r = (Get-Item -LiteralPath $relayLog).Length }
+  foreach ($p in @(Get-MovedLogFiles 'qubes-updates-relay' '') + @($relayLog)) {
+    if (Test-Path -LiteralPath $p) { $r += (Get-Item -LiteralPath $p).Length }
+  }
   $d = 0
   try {
     $d = (Get-ChildItem -Recurse -Force -File 'C:\Windows\SoftwareDistribution\Download' `
@@ -118,8 +134,9 @@ try {
 Get-CimInstance Win32_Service | Where-Object { $_.Name -in @('DoSvc','BITS','wuauserv','UsoSvc') } |
   Select-Object Name,State,ProcessId,StartMode | Format-Table -AutoSize | Out-String -Width 200 > "$out\services.txt"
 
-if (Test-Path -LiteralPath $relayLog) { Get-Content -LiteralPath $relayLog -Tail 800 > "$out\relaytail.txt" }
-else { "MISSING $relayLog" | Out-File "$out\relaytail.txt" }
+$relayFiles = @(Get-MovedLogFiles 'qubes-updates-relay' $relayLog)
+if ($relayFiles.Count) { @(foreach ($p in $relayFiles) { Get-Content -LiteralPath $p -Tail 800 }) | Select-Object -Last 800 > "$out\relaytail.txt" }
+else { "MISSING relay log: no qubes-updates-relay-<yyyyMMdd>.log in the log directory, no $relayLog" | Out-File "$out\relaytail.txt" }
 
 $w1 = Witness
 $relayGrew = $w1.Relay - $w0.Relay

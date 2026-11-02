@@ -14,6 +14,24 @@
 # Runs from installer stage 2 together with disable-hw-accel.ps1, under the same /noapptweaks
 # switch. Emits the trailer the installer parses:  === RESULT === changed=N failed=N
 $ErrorActionPreference = 'Continue'
+# The log sink, from beside this script (docs/ADR-logging.md).
+$qwtLogPs1 = Join-Path $PSScriptRoot 'log.ps1'
+try { . $qwtLogPs1 } catch { [Console]::Error.WriteLine("quiet-desktop.ps1: cannot load $qwtLogPs1 ($($_.Exception.Message)) - no log sink"); exit 1 }
+if (-not (Get-Command Write-QwtLogLine -EA SilentlyContinue)) { [Console]::Error.WriteLine("quiet-desktop.ps1: $qwtLogPs1 has no Write-QwtLogLine - no log sink"); exit 1 }
+# EVERY LINE IT PRINTS ALSO GOES TO ITS LOG, quiet-desktop.ps1-<yyyyMMdd>.log in the one log directory.
+# Its boot task (QubesQuietDesktopGuard) runs it with no console, and Task Scheduler discards the
+# output: until 2026-11-01 a boot-time run left no record of what it set or failed to set.
+# Write-Output is SHADOWED rather than every call site edited, so the printed lines, the trailer the
+# callers parse and the regions the offline suites extract (they run with the real cmdlet) stay as
+# they were. A FAIL line is an error, a WARN line a warning; the blank separator is not logged.
+function Write-Output {
+    param([Parameter(Position = 0)][string]$InputObject)
+    Microsoft.PowerShell.Utility\Write-Output $InputObject
+    if (-not $InputObject) { return }
+    $lvl = 'I'
+    if ($InputObject -like 'FAIL*') { $lvl = 'E' } elseif ($InputObject -like 'WARN*') { $lvl = 'W' }
+    $null = Write-QwtLogLine $lvl $InputObject -Module 'quiet-desktop.ps1'
+}
 $script:changed = 0
 $script:failed = 0
 

@@ -1475,6 +1475,16 @@ function Register-QwtDeathReporter {
             if (-not (Test-Path -LiteralPath $src)) { throw "$f is not in the payload" }
             Copy-Item -LiteralPath $src -Destination (Join-Path $script:DefaultBinDir $f) -Force
         }
+        # ...and the PowerShell log sink the scripts of ours in bin dot-source (docs/ADR-logging.md): the PV NIC
+        # payload and the reboot-cause recorder. Their own installers place it before they write those scripts;
+        # the reporter does not use it, so its absence - or a copy that throws, under this script's Stop - is
+        # said here and does not fail the reporter: the enclosing catch would leave the whole route unregistered.
+        $sinkSrc = Join-Path $Root 'log.ps1'
+        if (Test-Path -LiteralPath $sinkSrc) {
+            try { Copy-Item -LiteralPath $sinkSrc -Destination (Join-Path $script:DefaultBinDir 'log.ps1') -Force }
+            catch { Write-Log "log.ps1 could not be copied into bin ($($_.Exception.Message)) - bin gets no log sink from the death reporter step" 'WARN' }
+        }
+        else { Write-Log 'log.ps1 is not in the payload - bin gets no log sink from the death reporter step' 'WARN' }
         $reporter = Join-Path $script:DefaultBinDir 'qwt-report-death.ps1'
 
         # 2. the channel 201/203 are written to
@@ -5028,6 +5038,16 @@ function Invoke-Stage2 {
             try {
                 $qBin = Join-Path $script:DefaultBinDir 'quiet-desktop.ps1'
                 New-Item -ItemType Directory -Force (Split-Path $qBin) | Out-Null
+                # ITS LOG SINK FIRST (docs/ADR-logging.md): the guard exits 1 at every boot without log.ps1 beside
+                # it, so with none in the payload nothing is placed or registered, and a guard an earlier install
+                # registered keeps its own copy.
+                $qSink = Join-Path $Root 'log.ps1'
+                if (-not (Test-Path -LiteralPath $qSink)) { throw "log.ps1 is not in the payload ($qSink)" }
+                $qSinkBin = Join-Path (Split-Path $qBin) 'log.ps1'
+                if (-not ((Test-Path -LiteralPath $qSinkBin) -and
+                          (Get-FileHash -LiteralPath $qSinkBin).Hash -eq (Get-FileHash -LiteralPath $qSink).Hash)) {
+                    Copy-Item -LiteralPath $qSink -Destination $qSinkBin -Force
+                }
                 Copy-Item -LiteralPath $quiet -Destination $qBin -Force
                 $qXml = @"
 <?xml version="1.0" encoding="UTF-16"?>

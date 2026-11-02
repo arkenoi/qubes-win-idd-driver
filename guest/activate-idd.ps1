@@ -17,8 +17,25 @@
 param([string]$Root = $PSScriptRoot, [switch]$NoReboot)
 
 $ErrorActionPreference = 'Stop'
-$log = 'C:\qwt-idd-activate.log'
-function Log($m,$lvl='INFO'){ $line=('{0} [{1}] {2}' -f (Get-Date -Format 'HH:mm:ss'),$lvl,$m); Write-Host $line; try{Add-Content -LiteralPath $log -Value $line}catch{} }
+# THE ONE LOG DIRECTORY (docs/ADR-logging.md): activate-idd.ps1-<yyyyMMdd>.log through the shipped sink,
+# which ships beside this script. The file it replaces, at the root of C:, sat behind a try/catch that
+# dropped a line it could not write without a word; the sink says so on stderr.
+$qwtLogPs1 = Join-Path $PSScriptRoot 'log.ps1'
+try { . $qwtLogPs1 } catch { [Console]::Error.WriteLine("activate-idd.ps1: cannot load $qwtLogPs1 ($($_.Exception.Message)) - no log sink"); exit 1 }
+if (-not (Get-Command Write-QwtLogLine -EA SilentlyContinue)) { [Console]::Error.WriteLine("activate-idd.ps1: $qwtLogPs1 has no Write-QwtLogLine - no log sink"); exit 1 }
+function Log($m,$lvl='INFO'){
+    Write-Host ('{0} [{1}] {2}' -f (Get-Date -Format 'HH:mm:ss'),$lvl,$m)
+    $L = switch ($lvl) { 'ERROR' { 'E' } 'FATAL' { 'E' } 'WARN' { 'W' } default { 'I' } }
+    $null = Write-QwtLogLine $L $m -Module 'activate-idd.ps1'
+}
+# The file the sink named at this run's first line - what a notice's Evidence points to.
+function Get-IddLogFile {
+    $p = $null
+    $named = Get-Variable -Name QwtLogPathByModule -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if ($named) { $p = $named['activate-idd.ps1'] }
+    if (-not $p) { $p = Join-Path (Get-QwtLogDir) ('activate-idd.ps1-' + (Get-Date -Format 'yyyyMMdd') + '.log') }
+    return $p
+}
 $result = [ordered]@{ ok=$false; idd=$null; reboot_needed=$false; error=$null }
 $script:GuiQuiesced = $false
 
@@ -123,7 +140,7 @@ function Emit($code){
     $result.idd = "$($script:idd)"
     $json = ($result | ConvertTo-Json -Compress)
     Write-Host '=== RESULT ==='; Write-Host $json
-    try { Add-Content -LiteralPath $log -Value "=== RESULT === $json" } catch {}
+    $null = Write-QwtLogLine I "=== RESULT === $json" -Module 'activate-idd.ps1'
     exit $code
 }
 # $hwid is a LIST since 4.3.31 (root\qubesidd, plus the legacy root\iddsampledriver that
@@ -426,11 +443,12 @@ public static class QiddProbe {
             Log "shutdown.exe /r was REFUSED (rc '$LASTEXITCODE') - the guest is NOT rebooting on its own; the IDD is activated but will not be primary until this qube is rebooted BY HAND" 'FATAL'
             # terse by rule (owner 2026-10-10): the driver is activated, just not primary until a reboot; a hand restart
             # is qvm-shutdown then qvm-start from dom0; shutdown.exe's exit code is in the log named by the technical line
+            $iddLog = Get-IddLogFile
             [void](Send-QwtError -Component 'activate-idd' -Id 'reboot-refused' -Severity ACTION `
                 -Header 'The display driver needs a reboot that was refused' `
                 -Next 'The new display driver is not primary until this qube is restarted by hand from dom0.' `
                 -Cause 'Cause: Windows refused the reboot request; the log has shutdown.exe''s code.' `
-                -Tech (Format-QwtNotifyTechLine -Subject 'activate-idd.ps1' -Count 'reported once per boot' -Evidence $log))
+                -Tech (Format-QwtNotifyTechLine -Subject 'activate-idd.ps1' -Count 'reported once per boot' -Evidence $iddLog))
             # Same situation as -NoReboot: this run is not rebooting, so the agent it quiesced must
             # come back or the qube maps no windows until that manual reboot.
             Restore-Gui
@@ -446,11 +464,12 @@ public static class QiddProbe {
     Log "IDD ACTIVATION FAILED: $($result.error)" 'ERROR'
     # Templated text only: the exception message is in the log, not in the notification. Nothing changed for the
     # user - the previous display configuration stays.
+    $iddLog = Get-IddLogFile
     [void](Send-QwtError -Component 'activate-idd' -Id 'activation-failed' -Severity ACTION `
         -Header 'The display driver could not be activated' `
         -Next 'The display configuration is unchanged; rerun the activation after reading its log.' `
         -Cause 'Cause: a step of the activation failed; the log has the error.' `
-        -Tech (Format-QwtNotifyTechLine -Subject 'activate-idd.ps1' -Count 'reported once per boot' -Evidence $log))
+        -Tech (Format-QwtNotifyTechLine -Subject 'activate-idd.ps1' -Count 'reported once per boot' -Evidence $iddLog))
     Restore-Gui
     Emit 1
 }

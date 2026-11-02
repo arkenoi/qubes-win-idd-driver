@@ -5,7 +5,8 @@
 #                            -Header 'The display driver needs a reboot that was refused' `
 #                            -Next 'The new display driver is not primary until this qube is rebooted by hand.' `
 #                            -Cause 'Cause: Windows refused the reboot request (shutdown.exe exit code 1190).' `
-#                            -Tech (Format-QwtNotifyTechLine -Subject 'activate-idd.ps1' -Count 'reported once per boot' -Evidence 'C:\qwt-idd-activate.log')
+#                            -Tech (Format-QwtNotifyTechLine -Subject 'activate-idd.ps1' -Count 'reported once per boot' `
+#                                     -Evidence (Join-Path (Get-QwtLogDir) "activate-idd.ps1-$(Get-Date -Format yyyyMMdd).log"))
 #
 # It reports a guest error to dom0 as a notification IN ADDITION TO the caller's own log line -
 # never instead of it. The caller logs first, exactly as before, then calls this. The transport

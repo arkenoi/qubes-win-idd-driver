@@ -43,6 +43,40 @@ $L += ("mirror emptied: " + (@(Get-ChildItem $dir -EA SilentlyContinue).Count) +
 # another pass completed recently - which silently made an earlier version of this test measure
 # nothing at all. An explicit pass always runs.
 $env:QUBES_UPDATES_ALLOW = 'ctl-mirror-test.invalid'
+# THE ONE LOG DIRECTORY (docs/ADR-logging.md, Decision 2026-11-01), by log.ps1's rule, inlined because this probe runs
+# without it: the registry LogDir, else <SystemDrive>\Qubes Logs. A moved log is its per-day files there,
+# <module>-<yyyyMMdd>.log, newest last; only a guest with none of them reads the file at its old path.
+function Get-MovedLogFiles([string]$Module, [string]$Old) {
+  $d = $null
+  try { $d = Get-ItemPropertyValue 'HKLM:\Software\Invisible Things Lab\Qubes Tools' LogDir -ErrorAction Stop } catch { }
+  if (-not $d) { $d = Join-Path $env:SystemDrive 'Qubes Logs' }
+  $rx = '^' + [regex]::Escape($Module) + '-\d{8}\.log$'
+  $f = @(Get-ChildItem -LiteralPath $d -Filter "$Module-*.log" -File -EA SilentlyContinue | Where-Object { $_.Name -match $rx } | Sort-Object Name | ForEach-Object { $_.FullName })
+  if ($f.Count -eq 0 -and $Old -and (Test-Path -LiteralPath $Old)) { $f = @($Old) }
+  $f
+}
+# The lines a pass appended to the per-day files: each from its length in $Mark, a file born since then whole.
+function Get-LinesSince([hashtable]$Mark, [string[]]$Files) {
+  $t = New-Object System.Collections.Generic.List[string]
+  foreach ($p in $Files) {
+    $off = [int64]0; if ($Mark.ContainsKey($p)) { $off = [int64]$Mark[$p] }
+    try {
+      $fs = [IO.File]::Open($p, 'Open', 'Read', 'ReadWrite')
+      try {
+        if ($off -le $fs.Length) { [void]$fs.Seek($off, 'Begin') }
+        $sr = New-Object IO.StreamReader($fs)
+        while ($null -ne ($ln = $sr.ReadLine())) { $t.Add($ln) }
+      } finally { $fs.Dispose() }
+    } catch { }
+  }
+  $t.ToArray()
+}
+# THE PASS LOG IS SHARED NOW: qubes-windows-update.ps1-<yyyyMMdd>.log in the one log directory, whatever -WorkDir says,
+# holds every pass of the day, so the read below is bounded to what THIS pass appends - the per-day files' lengths are
+# marked here. An older build writes its own log under -WorkDir, emptied here for the same reason: it used to be
+# deleted only after the pass, right before it was read, so its lines were never shown.
+$logMark = @{}; foreach ($p in @(Get-MovedLogFiles 'qubes-windows-update.ps1' '')) { $logMark[$p] = (Get-Item -LiteralPath $p).Length }
+Remove-Item -LiteralPath 'C:\ProgramData\Qubes\ctl-test-wu\agent.log' -Force -EA SilentlyContinue | Out-Null
 try {
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $agent -Action scan `
       -StatusFile 'C:\ProgramData\Qubes\ctl-test-status.json' `
@@ -60,11 +94,12 @@ $L += ("mirror cabs after: " + $files)
 # THE ASSERTION: with an unusable mirror, RootDirURL must not point at it.
 $pointsAtEmpty = ($rootAfter -and ($rootAfter -like "file://$dir*") -and $files -eq 0)
 $L += ("VERDICT points_at_empty_mirror=" + $pointsAtEmpty + "  (must be False)")
-# and the log must say so as an ERROR rather than claiming success
-Remove-Item -LiteralPath 'C:\ProgramData\Qubes\ctl-test-wu\agent.log' -Force -EA SilentlyContinue | Out-Null
+# and the log must say so as an ERROR rather than claiming success: what this pass appended
 $lg='C:\ProgramData\Qubes\ctl-test-wu\agent.log'
-if (Test-Path $lg) {
-  $m = Select-String -Path $lg -Pattern 'Sync-Revocation' -EA SilentlyContinue | Select-Object -Last 4
+$lgs = @(Get-MovedLogFiles 'qubes-windows-update.ps1' '')
+if ($lgs.Count -or (Test-Path $lg)) {
+  $lines = @(if ($lgs.Count) { Get-LinesSince $logMark $lgs } else { Get-Content -LiteralPath $lg -EA SilentlyContinue })
+  $m = $lines | Select-String -Pattern 'Sync-Revocation' | Select-Object -Last 4
   foreach ($x in $m) { $L += ("  log: " + $x.Line.Trim()) }
 }
 

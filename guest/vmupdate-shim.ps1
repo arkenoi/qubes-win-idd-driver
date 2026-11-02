@@ -31,18 +31,25 @@ if ($a.Count -eq 0) { $Err.WriteLine('vmupdate-shim: no command'); exit 1 }
 $qt = $env:QUBES_TOOLS
 if (-not $qt) { $qt = 'C:\Program Files\Qubes Tools' }
 
+# The log sink, from beside this script (docs/ADR-logging.md). Loaded BEFORE the Log below, so this
+# script's own Log wins over log.ps1's. `exit`, not `throw`: VMExec runs this with `&`, where exit
+# ends only this script and VMExec reads the code as $LASTEXITCODE and audits it, exactly as for
+# Done; a throw would end VMExec itself before its audit line.
+$qwtLogPs1 = Join-Path $PSScriptRoot 'log.ps1'
+try { . $qwtLogPs1 } catch { $Err.WriteLine("vmupdate-shim.ps1: cannot load $qwtLogPs1 ($($_.Exception.Message)) - no log sink"); exit 1 }
+if (-not (Get-Command Write-QwtLogLine -EA SilentlyContinue)) { $Err.WriteLine("vmupdate-shim.ps1: $qwtLogPs1 has no Write-QwtLogLine - no log sink"); exit 1 }
+
 function Log($m) { Write-Output "vmupdate-shim: $m" }
 
 # Audit trail. dom0 accumulates code = max(step codes) across the whole run, so ONE prep step
 # returning nonzero makes a successful update report as an error - with nothing in dom0's output
 # saying which step it was. Record every invocation and its exit code here instead of guessing.
-$script:AuditPath = 'C:\ProgramData\Qubes\vmupdate-shim.log'
+# Its own file in the one log directory, vmupdate-shim.ps1-<yyyyMMdd>.log, even though it runs in
+# VMExec's process (-Module names the file; without it the lines would land in VMExec's). Level I
+# whatever the rc, like VMExec's own audit line: 100 is "no updates", and the updater logs its errors.
 function Audit([string]$what) {
-    try {
-        $who = try { [Security.Principal.WindowsIdentity]::GetCurrent().Name } catch { '?' }
-        Add-Content -LiteralPath $script:AuditPath -Encoding ASCII -ErrorAction SilentlyContinue `
-            -Value ("{0} [{1}] {2}" -f (Get-Date -Format 'HH:mm:ss'), $who, $what)
-    } catch { }
+    $who = try { [Security.Principal.WindowsIdentity]::GetCurrent().Name } catch { '?' }
+    $null = Write-QwtLogLine I "[$who] $what" -Module 'vmupdate-shim.ps1'
 }
 function Done([int]$rc, [string]$note) { Audit ("rc=$rc  $note  argv: " + ($a -join ' ')); exit $rc }
 Audit ("ENTER argv: " + ($a -join ' '))

@@ -24,7 +24,6 @@ param(
 )
 $ErrorActionPreference = 'Continue'
 $proxy = 'http://127.0.0.1:8082'
-$wu    = 'C:\ProgramData\Qubes\wu'
 $urls  = [ordered]@{
     'disallowedcertstl' = 'http://ctldl.windowsupdate.com/msdownload/update/v3/static/trustedr/en/disallowedcertstl.cab'
     'authrootstl'       = 'http://ctldl.windowsupdate.com/msdownload/update/v3/static/trustedr/en/authrootstl.cab'
@@ -39,9 +38,12 @@ $ro = Join-Path $PSScriptRoot 'relay-own.ps1'
 if (-not (Test-Path -LiteralPath $ro)) { Write-Output 'relay-own.ps1 not pushed next to this script (tools/qtest push guest/relay-own.ps1)'; exit 3 }
 . $ro
 function Stop-Relays { Stop-OwnRelay; Start-Sleep -Seconds 2 }
+# No --log, the same arguments for both arms: a build from after the log move logs into the one log directory by its own
+# rule, beside the updater's relay (docs/ADR-logging.md, Decision 2026-11-01); the pre-allowlist build keeps its own
+# default. --log named the updater's work directory before the move. Neither arm's log is read here.
 function Start-Relay($exe) {
     Stop-Relays
-    [void](Start-OwnRelay -Exe $exe -Arguments @('--listen','8082','--target','@default','--log',$wu) -SettleSec 3)
+    [void](Start-OwnRelay -Exe $exe -Arguments @('--listen','8082','--target','@default') -SettleSec 3)
 }
 
 $stats = @{}

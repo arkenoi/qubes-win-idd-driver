@@ -51,7 +51,11 @@ Stop-Process -Id $listen.Id -Force -EA SilentlyContinue
 # handshake (a HANDLER line). The warm pool opens these at startup regardless of the inbound client,
 # so this is the accurate signal. (The old check grepped the relay log for 'CONN token=', which only
 # appears on a CONNECT *error* and never fires when the smoke client sends no request - a false negative.)
+# A handler built from today's source writes relay-handler-<yyyyMMdd>.log in the --log directory (docs/ADR-logging.md,
+# Decision 2026-11-01); an older build writes relay-handler.log.
+$hlogs = @(Get-ChildItem -LiteralPath $work -Filter 'relay-handler-*.log' -EA SilentlyContinue | Sort-Object Name | ForEach-Object { $_.FullName })
 $hlog = Join-Path $work 'relay-handler.log'
-$connback = (Test-Path $hlog) -and (Select-String -Path $hlog -Pattern 'HANDLER token=' -Quiet)
+if ($hlogs.Count -eq 0 -and (Test-Path $hlog)) { $hlogs = @($hlog) }
+$connback = ($hlogs.Count -gt 0) -and (Select-String -LiteralPath $hlogs -Pattern 'HANDLER token=' -Quiet)
 $out = [ordered]@{ ok = ($bound -and $connback); compiled = (Test-Path $exe); listener_bound = $bound; connect_back = $connback }
 Write-Output ("=== RESULT === " + ($out | ConvertTo-Json -Compress))

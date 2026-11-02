@@ -45,6 +45,11 @@ ug_gate(){ # ug_gate <id> <description> <0|1 ok> [detail]
 # non-UTF-8 files without it. -F wherever the pattern is not deliberately a regex.
 ug_has(){   grep -qaF -- "$2" "$1" 2>/dev/null; }
 ug_hasre(){ grep -qaE -- "$2" "$1" 2>/dev/null; }
+# A DECLARED ERROR, IN EITHER SHAPE THE UPDATER HAS WRITTEN: the "[ERROR]" in the text of the old "HH:mm:ss msg"
+# lines, or the E letter of the windows-utils prefix "[yyyyMMdd.HHmmss.fff-PID-E] msg" its log carries since
+# 2026-11-01 (docs/ADR-logging.md) - a site that passes 'ERROR' as Log's level no longer writes the word at all.
+# The relay's lines (U3) need no such reading: every gate matches them past the prefix.
+UG_ERR='(\[ERROR\]|^\[[0-9]{8}\.[0-9]{6}\.[0-9]{3}-[0-9]+(:[0-9]+)?-E\])'
 
 # updater_gates_grade <evidence-dir> [reporter-name]
 #   0 = all gates pass, 1 = a gate failed (the product), 2 = the evidence is missing (INSTRUMENT).
@@ -113,9 +118,9 @@ updater_gates_grade(){
 
   # U6 - nothing died on the relay
   local u6=0
-  ug_hasre "$alog" '\[ERROR\].*not accepting connections on 127\.0\.0\.1:8082' && u6=1
+  ug_hasre "$alog" "$UG_ERR.*not accepting connections on 127\\.0\\.0\\.1:8082" && u6=1
   ug_gate U6 "no pass died with the relay not accepting on 8082" "$u6" \
-    "$(grep -aoE '\[ERROR\].*not accepting connections on 127\.0\.0\.1:8082' "$alog" 2>/dev/null | head -1)"
+    "$(grep -aoE "$UG_ERR.*not accepting connections on 127\\.0\\.0\\.1:8082" "$alog" 2>/dev/null | head -1)"
 
   # U7 - the environment, including the locale. Never assumed: an absent assert FAILS.
   #
@@ -326,7 +331,7 @@ updater_gates_diagnose(){
   if ug_fired U6; then
     UG_DIAG="${UG_DIAG}  U6 a pass died on the relay:"$'\n'
     ug_cand CONFIRMED "the relay process lived but never reached its listener within the bound" \
-      "$(grep -aoE '\[ERROR\].*not accepting connections on 127\.0\.0\.1:8082[^|]{0,80}' "$alog" | head -1)"
+      "$(grep -aoE "$UG_ERR.*not accepting connections on 127\\.0\\.0\\.1:8082[^|]{0,80}" "$alog" | head -1)"
     ug_has "$alog" 'did not serve the port' \
       && ug_cand CONFIRMED "a respawn did not help either" "the 'did not serve the port after a respawn' line is present"
   fi

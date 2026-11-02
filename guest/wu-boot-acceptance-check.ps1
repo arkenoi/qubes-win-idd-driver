@@ -21,10 +21,37 @@ $res['boot_now']    = $bootNow.ToString('s')
 $res['rebooted']    = ($arm['boot_time_before'] -ne $bootNow.ToString('s'))
 $res['uptime_min']  = [math]::Round(((Get-Date)-$bootNow).TotalMinutes,1)
 
-# only the slice written since the reboot
+# THE ONE LOG DIRECTORY (docs/ADR-logging.md, Decision 2026-11-01), by log.ps1's rule, inlined because this probe runs
+# without it: the registry LogDir, else <SystemDrive>\Qubes Logs. A moved log is its per-day files there,
+# <module>-<yyyyMMdd>.log, newest last; only a guest with none of them reads the file at its old path.
+function Get-MovedLogFiles([string]$Module, [string]$Old) {
+  $d = $null
+  try { $d = Get-ItemPropertyValue 'HKLM:\Software\Invisible Things Lab\Qubes Tools' LogDir -ErrorAction Stop } catch { }
+  if (-not $d) { $d = Join-Path $env:SystemDrive 'Qubes Logs' }
+  $rx = '^' + [regex]::Escape($Module) + '-\d{8}\.log$'
+  $f = @(Get-ChildItem -LiteralPath $d -Filter "$Module-*.log" -File -EA SilentlyContinue | Where-Object { $_.Name -match $rx } | Sort-Object Name | ForEach-Object { $_.FullName })
+  if ($f.Count -eq 0 -and $Old -and (Test-Path -LiteralPath $Old)) { $f = @($Old) }
+  $f
+}
+function ReadFrom([string]$p, [int64]$off) {
+  $t = ''
+  try { $fs=[IO.File]::Open($p,'Open','Read','ReadWrite'); try{ if($off -le $fs.Length){[void]$fs.Seek($off,'Begin')}; $t=(New-Object IO.StreamReader($fs)).ReadToEnd() } finally { $fs.Dispose() } } catch {}
+  $t
+}
+# only the slice written since the reboot. The pass log is qubes-windows-update.ps1-<yyyyMMdd>.log in the one log
+# directory now: the file the arm marked, from its mark, and every later day's file whole - all of them when the arm
+# marked the old cumulative file, since none existed then. A guest with none reads the old file from its mark, as before.
 $offset = 0; if($arm['agent_log_offset']){ $offset = [int64]$arm['agent_log_offset'] }
+$armedName = [string]$arm['agent_log_name']
+$armedDay = $armedName -like 'qubes-windows-update.ps1-*'
 $txt=''
-try { $fs=[IO.File]::Open($log,'Open','Read','ReadWrite'); try{ if($offset -le $fs.Length){[void]$fs.Seek($offset,'Begin')}; $txt=(New-Object IO.StreamReader($fs)).ReadToEnd() } finally { $fs.Dispose() } } catch {}
+$days = @(Get-MovedLogFiles 'qubes-windows-update.ps1' '')
+if ($days.Count -eq 0) { $txt = ReadFrom $log $offset }
+foreach ($p in $days) {
+  $c = [string]::CompareOrdinal((Split-Path -Leaf $p), $armedName)
+  if (-not $armedDay -or $c -gt 0) { $txt += ReadFrom $p 0 }
+  elseif ($c -eq 0) { $txt += ReadFrom $p $offset }
+}
 $res['new_log_bytes'] = $txt.Length
 
 $cls = [regex]::Matches($txt,'VM class \(live from qubesdb\):\s*(\S*)')

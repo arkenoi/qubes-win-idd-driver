@@ -348,6 +348,12 @@ foreach ($g in 'pvnic-selfprime.ps1', 'qubesdb-read.ps1', 'health-check.ps1',
                                            # event-triggered QwtDeathReporter task on it (Register-QwtDeathReporter)
     Copy-Item (Need (Join-Path $RepoRoot "guest\$g") "guest payload ($g)") $OutDir -Force
 }
+# THE POWERSHELL LOG SINK at the payload root as well (docs/ADR-logging.md, Decision 2026-11-01): the
+# scripts that write into the one log directory dot-source it from beside themselves, so it must sit
+# beside the ones that run from here (activate-idd, deactivate-idd, ensure-autologon, quiet-desktop),
+# and the installers copy it from here next to every script they place in bin or the rpc directory -
+# a script without it exits 1. The same file the rpc sweep above stages into rpc\qubes-rpc-services.
+Copy-Item (Need (Join-Path $rpcSrcDir 'log.ps1') 'PowerShell log sink (core-agent log.ps1)') $OutDir -Force
 
 # --- the MSI ---------------------------------------------------------------------------
 $msiSrc = Join-Path $MsiArtifact 'installer.msi'

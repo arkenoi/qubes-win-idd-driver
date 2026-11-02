@@ -12,7 +12,6 @@ param([int]$Repeats = 6, [string]$Target = '@default')
 $ErrorActionPreference = 'Continue'
 $proxy = 'http://127.0.0.1:8082'
 $relay = 'C:\Program Files\Qubes Tools\bin\qubes-updates-relay.exe'
-$wu    = 'C:\ProgramData\Qubes\wu'
 Write-Output '=== RESULT ==='
 Write-Output ("proxy target = {0}" -f $Target)
 # RELAY OWNED BY HANDLE (guest/relay-own.ps1 next to this script; owner 2026-10-07): started once the
@@ -20,7 +19,9 @@ Write-Output ("proxy target = {0}" -f $Target)
 $ro = Join-Path $PSScriptRoot 'relay-own.ps1'
 if (-not (Test-Path -LiteralPath $ro)) { Write-Output 'relay-own.ps1 not pushed next to this script (tools/qtest push guest/relay-own.ps1)'; exit 3 }
 . $ro
-try { [void](Start-OwnRelay -Exe $relay -Arguments @('--listen','8082','--target',$Target,'--log',$wu) -SettleSec 3) } catch { Write-Output $_.Exception.Message; exit 2 }
+# No --log: the relay then logs into the one log directory by its own rule, beside the updater's relay - the place --log
+# named before the move, when that was the updater's work directory (docs/ADR-logging.md, Decision 2026-11-01).
+try { [void](Start-OwnRelay -Exe $relay -Arguments @('--listen','8082','--target',$Target) -SettleSec 3) } catch { Write-Output $_.Exception.Message; exit 2 }
 $urls = [ordered]@{
     'disallowedcertstl.cab' = 'http://ctldl.windowsupdate.com/msdownload/update/v3/static/trustedr/en/disallowedcertstl.cab'
     'authrootstl.cab'       = 'http://ctldl.windowsupdate.com/msdownload/update/v3/static/trustedr/en/authrootstl.cab'

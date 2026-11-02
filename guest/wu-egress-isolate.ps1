@@ -9,7 +9,6 @@
 # Testing them separately says which one to chase.
 $ErrorActionPreference = 'Continue'
 $relay = 'C:\Program Files\Qubes Tools\bin\qubes-updates-relay.exe'
-$wu    = 'C:\ProgramData\Qubes\wu'
 $proxy = 'http://127.0.0.1:8082'
 Write-Output '=== RESULT ==='
 
@@ -24,7 +23,9 @@ Set-ItemProperty -Path $IS -Name ProxyServer -Value '127.0.0.1:8082'
 $ro = Join-Path $PSScriptRoot 'relay-own.ps1'
 if (-not (Test-Path -LiteralPath $ro)) { Write-Output 'relay-own.ps1 not pushed next to this script (tools/qtest push guest/relay-own.ps1)'; exit 3 }
 . $ro
-try { [void](Start-OwnRelay -Exe $relay -Arguments @('--listen','8082','--target','@default','--log',$wu) -SettleSec 3); Write-Output ("relay running = pid {0} (started here)" -f $script:OwnRelayPid) }
+# No --log: the relay then logs into the one log directory by its own rule, beside the updater's relay - the place --log
+# named before the move, when that was the updater's work directory (docs/ADR-logging.md, Decision 2026-11-01).
+try { [void](Start-OwnRelay -Exe $relay -Arguments @('--listen','8082','--target','@default') -SettleSec 3); Write-Output ("relay running = pid {0} (started here)" -f $script:OwnRelayPid) }
 catch { Write-Output $_.Exception.Message; exit 2 }
 
 # 1. .NET stack through the explicit proxy - this is our downloader's path.
@@ -53,10 +54,22 @@ try {
 }
 
 # 3. What the relay itself logged - a 403 from our own allowlist looks nothing like a TLS failure.
-$rl = Join-Path $wu 'qubes-updates-relay.log'
-if (Test-Path $rl) {
+# THE ONE LOG DIRECTORY (docs/ADR-logging.md, Decision 2026-11-01), by log.ps1's rule, inlined because this probe runs
+# without it: the registry LogDir, else <SystemDrive>\Qubes Logs. A moved log is its per-day files there,
+# <module>-<yyyyMMdd>.log, newest last; only a guest with none of them reads the file at its old path.
+function Get-MovedLogFiles([string]$Module, [string]$Old) {
+    $d = $null
+    try { $d = Get-ItemPropertyValue 'HKLM:\Software\Invisible Things Lab\Qubes Tools' LogDir -ErrorAction Stop } catch { }
+    if (-not $d) { $d = Join-Path $env:SystemDrive 'Qubes Logs' }
+    $rx = '^' + [regex]::Escape($Module) + '-\d{8}\.log$'
+    $f = @(Get-ChildItem -LiteralPath $d -Filter "$Module-*.log" -File -EA SilentlyContinue | Where-Object { $_.Name -match $rx } | Sort-Object Name | ForEach-Object { $_.FullName })
+    if ($f.Count -eq 0 -and $Old -and (Test-Path -LiteralPath $Old)) { $f = @($Old) }
+    $f
+}
+$rl = @(Get-MovedLogFiles 'qubes-updates-relay' 'C:\ProgramData\Qubes\wu\qubes-updates-relay.log')
+if ($rl.Count) {
     Write-Output '--- relay log tail ---'
-    Get-Content $rl -Tail 12 -EA SilentlyContinue | ForEach-Object { Write-Output ("   " + $_) }
+    @(foreach ($p in $rl) { Get-Content -LiteralPath $p -Tail 12 -EA SilentlyContinue }) | Select-Object -Last 12 | ForEach-Object { Write-Output ("   " + $_) }
 }
 
 & netsh winhttp reset proxy | Out-Null

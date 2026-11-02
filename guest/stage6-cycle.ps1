@@ -19,7 +19,9 @@ SetV $POL 'ProxySettingsPerUser' 0 'DWord'; SetV $IS 'ProxyEnable' 1 'DWord'; Se
 
 # relay (kept alive by this script)
 Get-NetTCPConnection -LocalPort 8082 -State Listen -EA SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -EA SilentlyContinue }
-Remove-Item $log -EA SilentlyContinue
+# A FRESH LOG PER RUN, under both names: a relay built from today's source writes qubes-updates-relay-<yyyyMMdd>.log in
+# its --log directory and appends to it all day (docs/ADR-logging.md, Decision 2026-11-01); an older build writes $log.
+Remove-Item $log, 'C:\Users\Public\relaytest\qubes-updates-relay-*.log' -EA SilentlyContinue
 $relay = Start-Process -FilePath $exe -ArgumentList '--listen','8082','--target','@default','--log','C:\Users\Public\relaytest' -PassThru -WindowStyle Hidden
 Start-Sleep -Milliseconds 1200
 
@@ -51,7 +53,9 @@ try {
     $hr = if($_.Exception.InnerException){$_.Exception.InnerException.HResult}else{$_.Exception.HResult}
     $out.search = "EXC 0x" + ('{0:X8}' -f ($hr -band 0xFFFFFFFF)) + " " + $_.Exception.Message
 }
-$conns = @(); if (Test-Path $log) { $conns = @((Get-Content $log | Where-Object { $_ -match 'CONN ' }) | ForEach-Object { [string]$_ }) }
+$relayLogs = @(Get-ChildItem 'C:\Users\Public\relaytest\qubes-updates-relay-*.log' -EA SilentlyContinue | Sort-Object Name | ForEach-Object { $_.FullName })
+if ($relayLogs.Count -eq 0 -and (Test-Path $log)) { $relayLogs = @($log) }
+$conns = @(); if ($relayLogs.Count) { $conns = @((Get-Content -LiteralPath $relayLogs | Where-Object { $_ -match 'CONN ' }) | ForEach-Object { [string]$_ }) }
 $out.relay_conns = $conns.Count
 try { Stop-Process -Id $relay.Id -Force -EA SilentlyContinue } catch {}
 Write-Output ("=== RESULT === " + ($out | ConvertTo-Json -Compress -Depth 4))

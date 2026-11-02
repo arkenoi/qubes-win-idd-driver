@@ -179,7 +179,7 @@
       "check": "p2-net5-reconciler",
       "verdict": "BLOCKED",
       "title": "NET-5: live netvm detach/reattach reconciler",
-      "detail": "WHY unattended-blocked: detach netvm '' -> quiet handling (vif gone, no failure marker, ghost devnode ignored) -> reattach -> reconverge <=120 s with zero reboots and reconciler evidence in Q:\\qwtng-netsetup.log -> NET-3 smoke. The detach/reattach choreography with its own bind budget has no committed primitive; hand-rolling it in a step command is forbidden (H0)."
+      "detail": "WHY unattended-blocked: detach netvm '' -> quiet handling (vif gone, no failure marker, ghost devnode ignored) -> reattach -> reconverge <=120 s with zero reboots and reconciler evidence in the netsetup service's <LogDir>\\qwtng-netsetup-<yyyyMMdd>.log (Q:\\qwtng-netsetup.log on a build from before 2026-11-01) -> NET-3 smoke. The detach/reattach choreography with its own bind budget has no committed primitive; hand-rolling it in a step command is forbidden (H0)."
     },
     {
       "id": "p2-net7-standalone-attach",

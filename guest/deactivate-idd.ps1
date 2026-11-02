@@ -42,8 +42,29 @@ if (-not $Root) {
 }
 
 $ErrorActionPreference = 'Stop'
-$log = 'C:\qwt-idd-deactivate.log'
-function Log($m,$lvl='INFO'){ $line=('{0} [{1}] {2}' -f (Get-Date -Format 'HH:mm:ss'),$lvl,$m); Write-Host $line; try{Add-Content -LiteralPath $log -Value $line}catch{} }
+# THE ONE LOG DIRECTORY (docs/ADR-logging.md): deactivate-idd.ps1-<yyyyMMdd>.log through the shipped sink,
+# which ships beside this script. The file it replaces, at the root of C:, sat behind a try/catch that
+# dropped a line it could not write without a word; the sink says so on stderr. Found from this
+# script's own directory the same robust way as $Root above, never from -Root (that names the medium
+# holding idd-driver\, which need not be where this script is).
+$qwtSelfDir = $PSScriptRoot
+if (-not $qwtSelfDir -and $PSCommandPath) { $qwtSelfDir = Split-Path -Parent $PSCommandPath }
+if (-not $qwtSelfDir -and $MyInvocation.MyCommand.Path) { $qwtSelfDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
+try { $qwtLogPs1 = Join-Path $qwtSelfDir 'log.ps1'; . $qwtLogPs1 } catch { [Console]::Error.WriteLine("deactivate-idd.ps1: cannot load $qwtSelfDir\log.ps1 ($($_.Exception.Message)) - no log sink"); exit 1 }
+if (-not (Get-Command Write-QwtLogLine -EA SilentlyContinue)) { [Console]::Error.WriteLine("deactivate-idd.ps1: $qwtLogPs1 has no Write-QwtLogLine - no log sink"); exit 1 }
+function Log($m,$lvl='INFO'){
+    Write-Host ('{0} [{1}] {2}' -f (Get-Date -Format 'HH:mm:ss'),$lvl,$m)
+    $L = switch ($lvl) { 'ERROR' { 'E' } 'FATAL' { 'E' } 'WARN' { 'W' } default { 'I' } }
+    $null = Write-QwtLogLine $L $m -Module 'deactivate-idd.ps1'
+}
+# The file the sink named at this run's first line - what a notice's Evidence points to.
+function Get-IddLogFile {
+    $p = $null
+    $named = Get-Variable -Name QwtLogPathByModule -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if ($named) { $p = $named['deactivate-idd.ps1'] }
+    if (-not $p) { $p = Join-Path (Get-QwtLogDir) ('deactivate-idd.ps1-' + (Get-Date -Format 'yyyyMMdd') + '.log') }
+    return $p
+}
 
 # Secondary error route (docs/DESIGN-error-notify.md): the ACTION failure below is ALSO sent to dom0
 # as a notification, in addition to the Log line. Absent helper = no-op (fail-open); Send-QwtError
@@ -56,7 +77,7 @@ $result = [ordered]@{ ok=$false; no_topology_apply=$false; vga=$null; idd=$null;
 function Emit($code){
     $json = ($result | ConvertTo-Json -Compress)
     Write-Host '=== RESULT ==='; Write-Host $json
-    try { Add-Content -LiteralPath $log -Value "=== RESULT === $json" } catch {}
+    $null = Write-QwtLogLine I "=== RESULT === $json" -Module 'deactivate-idd.ps1'
     exit $code
 }
 
@@ -151,11 +172,12 @@ try {
             Log "shutdown.exe /r was REFUSED (rc '$LASTEXITCODE') - the guest is NOT rebooting on its own; the device changes are made but take effect only at the next boot - reboot this qube from dom0 (qvm-shutdown --wait, then qvm-start)" 'FATAL'
             # terse by rule (owner 2026-10-10): the device changes are made; a hand restart is qvm-shutdown then
             # qvm-start from dom0; shutdown.exe's exit code is in the log named by the technical line
+            $iddLog = Get-IddLogFile
             [void](Send-QwtError -Component 'deactivate-idd' -Id 'reboot-refused' -Severity ACTION `
                 -Header 'The display change needs a reboot that was refused' `
                 -Next 'The device changes take effect only at the next boot: restart this qube by hand from dom0.' `
                 -Cause 'Cause: Windows refused the reboot request; the log has shutdown.exe''s code.' `
-                -Tech (Format-QwtNotifyTechLine -Subject 'deactivate-idd.ps1' -Count 'reported once per boot' -Evidence $log))
+                -Tech (Format-QwtNotifyTechLine -Subject 'deactivate-idd.ps1' -Count 'reported once per boot' -Evidence $iddLog))
             $result.ok = $false
             $result.error = "reboot request refused by shutdown.exe (rc $LASTEXITCODE) - reboot this qube by hand for the VGA topology to be rebuilt"
             Emit 1

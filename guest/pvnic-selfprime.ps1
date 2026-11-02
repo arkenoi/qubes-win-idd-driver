@@ -31,6 +31,8 @@
 #
 # Output: one MARKJSON line consumed by the harness.
 $ErrorActionPreference = 'SilentlyContinue'
+# This run's own start: the verdict's bootlog is the payload log written from here on (see bootlog below).
+$primeStart = Get-Date
 
 $bindir   = 'C:\Program Files\Qubes Tools\bin'
 $payload  = Join-Path $bindir 'pvnic-boot.ps1'
@@ -92,7 +94,7 @@ $csc = @(Get-ChildItem 'C:\Windows\Microsoft.NET\Framework64' -Filter csc.exe -R
 if (-not $csc) { $fail['netsetup_no_csc'] = 'csc.exe not found' }
 else {
     @'
-// ---- NETSETUP-CS-BEGIN  (tools/tests/pvnic-netsetup-verdict-selftest.sh extracts this source by marker;
+// ---- NETSETUP-CS-BEGIN  (the markers bound the service source;
 //      it is compiled on the guest by the .NET Framework csc, i.e. C# 5 - no newer syntax)
 using System; using System.Diagnostics; using System.Runtime.InteropServices;
 using System.Collections.Generic;
@@ -145,7 +147,6 @@ public class QwtngNetSetup : ServiceBase {
         } catch { return -1; }
     }
 
-    const string LOG   = @"C:\ProgramData\QubesNetSetup.log";
     const string STAMP = @"C:\ProgramData\QubesNetSetup.applied";
     const string CACHE = @"Q:\qwtng-netcfg.txt";
     // Machine-readable anomaly marker, same shape as the task's QubesPvNic-FAILED.txt. Written when a
@@ -154,7 +155,7 @@ public class QwtngNetSetup : ServiceBase {
     const string MARK  = @"C:\ProgramData\QubesNetSetup-FAILED.txt";
 
     static void Loud(string why) {
-        Log("ERROR " + why);
+        Log('E', why);
         try { System.IO.File.WriteAllText(MARK, "QubesNetSetup FAILED: " + why + " at " + DateTime.Now.ToString("o") + "\r\n"); } catch { }
         try {
             if (!EventLog.SourceExists("QubesNetSetup")) EventLog.CreateEventSource("QubesNetSetup", "Application");
@@ -162,14 +163,16 @@ public class QwtngNetSetup : ServiceBase {
         } catch { }
     }
 
-    static void Log(string m) {
-        // PREFER the private volume: an AppVM's C: is volatile, so a guest that dies mid-boot takes
-        // its own evidence with it. Q: persists across reboots, which is the only way to see what
-        // the previous boot did.
-        string line = DateTime.Now.ToString("HH:mm:ss") + " up=" +
-                      ((int)TimeSpan.FromMilliseconds(Environment.TickCount).TotalSeconds) + "s " + m + "\r\n";
-        try { if (System.IO.Directory.Exists(@"Q:\")) System.IO.File.AppendAllText(@"Q:\qwtng-netsetup.log", line); } catch { }
-        try { System.IO.File.AppendAllText(LOG, line); } catch { }
+    // THE ONE LOG DIRECTORY (docs/ADR-logging.md, Decision 2026-11-01): <LogDir>\qwtng-netsetup-<yyyyMMdd>.log, written
+    // by the windows-utils library (QwtLog, below) - the file it already writes from this process under the process name
+    // (its qubesdb client logs there): one process, one file. It replaces C:\ProgramData\QubesNetSetup.log and
+    // Q:\qwtng-netsetup.log: LogDir is the private volume's Q:\Qubes Logs on a Qubes guest, so what the previous boot did
+    // still survives an AppVM's volatile C:.
+    // 'I' unless the call site reports a failure (E) or an anomaly (W). The uptime stays in the text: this
+    // service's lines are read against boot timing (how far into a boot it applied, waited, gave up).
+    static void Log(string m) { Log('I', m); }
+    static void Log(char level, string m) {
+        QwtLog.Write(level, "up=" + ((int)TimeSpan.FromMilliseconds(Environment.TickCount).TotalSeconds) + "s " + m);
     }
     static string Rd(IntPtr h, string k) {
         uint len; IntPtr p = qdb_read(h, k, out len);
@@ -214,7 +217,7 @@ public class QwtngNetSetup : ServiceBase {
         if (report != xenGuidLastReport) {
             xenGuidLastReport = report;
             if (presentCount == 1) Log(report);
-            else Log("ERROR " + report + " (ambiguous - a stale class entry on this root; reconciler may target the wrong adapter)");
+            else Log('E', report + " (ambiguous - a stale class entry on this root; reconciler may target the wrong adapter)");
         }
         return pick;
     }
@@ -239,12 +242,12 @@ public class QwtngNetSetup : ServiceBase {
                 if (pr.WaitForExit(netshTimeoutMs)) { pr.WaitForExit(); rc = pr.ExitCode; }   // the second wait drains the async readers
                 else { try { pr.Kill(); } catch { } rc = -2; }
                 detail = "netsh " + args + " rc=" + rc + (sb.Length > 0 ? " [" + sb.ToString().Trim() + "]" : "");
-                if (rc != 0) Log("ERROR " + detail);
+                if (rc != 0) Log('E', detail);
                 return rc;
             }
         } catch (Exception e) {
             detail = "netsh " + args + " rc=-1 [" + e.Message + "]";
-            Log("ERROR " + detail);
+            Log('E', detail);
             return -1;
         }
     }
@@ -270,8 +273,8 @@ public class QwtngNetSetup : ServiceBase {
                         id.StartsWith(@"XENVIF\", StringComparison.OrdinalIgnoreCase)) { found++; ids += id + " "; }
             }
         } catch (Exception e) { err = "EXCEPTION " + e.Message; }
-        string report = err != null ? "ERROR vif probe failed: " + err : (found > 0 ? "present vif device(s): " + ids.Trim() : "no present vif device");
-        if (report != vifLastReport) { vifLastReport = report; Log(report); }
+        string report = err != null ? "vif probe failed: " + err : (found > 0 ? "present vif device(s): " + ids.Trim() : "no present vif device");
+        if (report != vifLastReport) { vifLastReport = report; Log(err != null ? 'E' : 'I', report); }
         return err != null ? -1 : (found > 0 ? 1 : 0);
     }
 
@@ -361,7 +364,7 @@ public class QwtngNetSetup : ServiceBase {
             NetworkAddressChangedEventHandler h = delegate { try { kick.Set(); } catch { } };
             bool hooked = false;
             try { NetworkChange.NetworkAddressChanged += h; hooked = true; }
-            catch (Exception e) { Log("NetworkAddressChanged unavailable (" + e.Message + ") - read-back on the 1 s backstop only"); }
+            catch (Exception e) { Log('W', "NetworkAddressChanged unavailable (" + e.Message + ") - read-back on the 1 s backstop only"); }
             try {
                 int t0 = Environment.TickCount;
                 while (true) {
@@ -397,7 +400,7 @@ public class QwtngNetSetup : ServiceBase {
             using (Registry.LocalMachine.CreateSubKey(
                        @"SYSTEM\CurrentControlSet\Enum\XENBUS\VEN_XP0001&DEV_VIF")) { }
             Log("unplug latch armed (NICS=1)");
-        } catch (Exception e) { Log("arming the unplug latch failed: " + e.Message); }
+        } catch (Exception e) { Log('E', "arming the unplug latch failed: " + e.Message); }
     }
 
     static void Work() {
@@ -423,7 +426,7 @@ public class QwtngNetSetup : ServiceBase {
                 System.Threading.Thread.Sleep(500);
             }
             if (qwait > 0)
-                Log("waited " + (qwait / 2) + " s for QdbDaemon to reach Running before opening qubesdb"
+                Log(qwait >= 120 ? 'W' : 'I', "waited " + (qwait / 2) + " s for QdbDaemon to reach Running before opening qubesdb"
                     + (qwait >= 120 ? " - it never did, opening anyway" : ""));
             IntPtr h = IntPtr.Zero;
             int waited = 0;
@@ -433,7 +436,7 @@ public class QwtngNetSetup : ServiceBase {
             }
             if (h != IntPtr.Zero) {
                 qdbOpened = true;
-                if (waited >= 60) Log("qubesdb opened late (" + (waited / 2) + " s) - QdbDaemon slow on this boot");
+                if (waited >= 60) Log('W', "qubesdb opened late (" + (waited / 2) + " s) - QdbDaemon slow on this boot");
                 try {
                     // Not one cold read (audit #11): keep the connection and re-read, bounded, while
                     // a vif is present but /qubes-ip is not yet published - see WaitForNetvmKeys.
@@ -444,7 +447,7 @@ public class QwtngNetSetup : ServiceBase {
                     Log("qubesdb " + k.verdict + ": ip=" + ip + " gw=" + gw + (k.why.Length > 0 ? " (" + k.why + ")" : ""));
                 } finally { qdb_close(h); }
             } else Loud("qubesdb never opened within 180 s (QdbDaemon late or absent) - falling back to the Q: cache, which may be another boot's or lineage's addressing");
-        } catch (Exception e) { Log("qdb EXCEPTION " + e.Message); }
+        } catch (Exception e) { Log('E', "qdb EXCEPTION " + e.Message); }
 
         // The cache stands in for a qubesdb that did not ANSWER. A qubesdb that answered with no
         // /qubes-ip means NO NETVM: applying a cached address from an earlier netvm there would be
@@ -460,7 +463,7 @@ public class QwtngNetSetup : ServiceBase {
                         Log("loaded cache " + ip + " gw=" + gw);
                     }
                 }
-            } catch (Exception e) { Log("cache read EXCEPTION " + e.Message); }
+            } catch (Exception e) { Log('E', "cache read EXCEPTION " + e.Message); }
         } else if (ip != null && mask != null && gw != null) {
             try {
                 System.IO.File.WriteAllText(CACHE, ip + "\r\n" + mask + "\r\n" + gw + "\r\n" +
@@ -468,7 +471,7 @@ public class QwtngNetSetup : ServiceBase {
             } catch { }
         }
         if (ip == null || mask == null || gw == null) {
-            if (!qdbOpened) { Log("no settings from qubesdb or cache"); return; }
+            if (!qdbOpened) { Log('E', "no settings from qubesdb or cache"); return; }
             // 'no netvm' is only ever concluded from the vif cross-check, never from an empty read.
             if (keysVerdict == "no-netvm") { Log("qubesdb up, /qubes-ip absent, no present vif device: no netvm, nothing to apply"); return; }
             Loud("qubesdb answered but yielded no L3 config - " + keysVerdict + (keysWhy.Length > 0 ? " (" + keysWhy + ")" : "") + " - not applying");
@@ -574,14 +577,14 @@ public class QwtngNetSetup : ServiceBase {
 
     protected override void OnStart(string[] args) {
         System.Threading.ThreadPool.QueueUserWorkItem(delegate {
-            try { Work(); } catch (Exception e) { Log("FATAL " + e.Message); }
+            try { Work(); } catch (Exception e) { Log('E', "FATAL " + e.Message); }
             // STAY RESIDENT and reconcile. A LIVE netvm change removes the vif and brings a new one
             // back with a DIFFERENT gateway; the boot-time apply cannot cover that, and leaving it
             // to the event-triggered PowerShell task cost ~11 s of "address present, no default
             // route" on every switch (measured 2026-08-23). Re-apply ONLY when the config is
             // actually wrong - never on a correct one, which is exactly the churn that made the
             // stock tool harmful.
-            try { Reconcile(); } catch (Exception e) { Log("reconciler died: " + e.Message); }
+            try { Reconcile(); } catch (Exception e) { Log('E', "reconciler died: " + e.Message); }
         });
     }
 
@@ -624,6 +627,31 @@ public class QwtngNetSetup : ServiceBase {
     public static void Main(string[] argv) {
         if (argv.Length > 0 && argv[0] == "--console") { Work(); return; }
         ServiceBase.Run(new QwtngNetSetup());
+    }
+}
+
+// THE ONE LOG DIRECTORY AND THE ONE LINE SHAPE (docs/ADR-logging.md, Decision 2026-11-01), written by the windows-utils
+// library - windows-utils.dll in System32, installed by the QWT MSI, the log.c every Qubes Tools program logs through. It
+// names the file (<dir>\<name>-<yyyyMMdd>.log), makes the directory, opens it append-only and shared for writing, and
+// writes one line per WriteFile, so the handlers - separate processes - append to one file safely.
+static class QwtLog
+{
+    [DllImport("windows-utils.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void LogStart(string logfilePath);
+    [DllImport("windows-utils.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void LogInit(string logDir, string logName);
+    [DllImport("windows-utils.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+    public static extern uint LogInitDefault(string logName);
+    // _LogFormat(level, raw, functionName, format, ...). The message is the "%s" argument, never the format.
+    [DllImport("windows-utils.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+    static extern void _LogFormat(int level, int raw, IntPtr functionName, string format, string arg);
+    // LOG_MAX_MESSAGE_LENGTH (log.h) is 65536 characters with the prefix; the library's vswprintf_s ends the process past it.
+    const int MaxMessage = 60000;
+
+    public static void Write(char level, string msg)
+    {
+        if (msg != null && msg.Length > MaxMessage) msg = msg.Substring(0, MaxMessage) + " ...(truncated)";
+        _LogFormat(level == 'E' ? 1 : level == 'W' ? 2 : 3, 0, IntPtr.Zero, "%s", msg);
     }
 }
 // ---- NETSETUP-CS-END
@@ -747,7 +775,6 @@ $body = @'
 param([switch]$RearmOnly)
 # QubesPvNic per-boot payload. Runs as SYSTEM. See pvnic-selfprime.ps1 for the full why.
 $ErrorActionPreference = 'SilentlyContinue'
-$log  = 'C:\ProgramData\QubesPvNic.log'
 $mark = 'C:\ProgramData\QubesPvNic-FAILED.txt'
 # GRACEFUL SHUTDOWN. Owner 2026-10-09: "if shutdown hits anything of ours, it should gracefully
 # terminate and not emit spontaneous errors to notification toasts." A task still running when the
@@ -764,18 +791,23 @@ function ShuttingDown { try { return ([Q.Sd]::GetSystemMetrics(0x2000) -ne 0) } 
 # read as a warning; and its "/qubes-ip absent, no vif device: no netvm, nothing to apply" - which
 # is Ok()'s way of saying the state is CORRECT - was graded a WARNING, 12 of 132 warning lines on a
 # clean cycle. The vocabulary is deleted now, so an undeclared line is simply unjudgeable.
-function L($m, [string]$lvl = 'INFO') {
-    Add-Content -Path $log -Value ("{0} [{1}] {2}" -f (Get-Date -Format 'HH:mm:ss'), $lvl, $m)
-}
-function LW($m) { L $m 'WARN' }
-function LE($m) { L $m 'ERROR' }
-if ((Get-Item $log -EA SilentlyContinue).Length -gt 262144) { Remove-Item $log -Force }
+# The level is the line's prefix letter (I/W/E), written by log.ps1 into <LogDir>\pvnic-boot.ps1-<yyyyMMdd>.log
+# (docs/ADR-logging.md, Decision 2026-11-01). That replaced C:\ProgramData\QubesPvNic.log and its 256 KB cap: the
+# directory is bounded by the prune below.
+function L($m, [string]$lvl = 'I') { $null = Write-QwtLogLine $lvl "$m" -Module 'pvnic-boot.ps1' }
+function LW($m) { L $m 'W' }
+function LE($m) { L $m 'E' }
 
 # 1. RE-ARM THE LATCH. xen.sys deleted the value at this boot's start (delete-on-read);
 #    writing it now arms the NEXT boot. Harmless on AppVMs (volatile root, and xenvif re-arms
 #    on device start anyway). Runs on every trigger including shutdown (1074).
 reg add "HKLM\SYSTEM\CurrentControlSet\Services\XEN\Unplug" /v NICS /t REG_DWORD /d 1 /f | Out-Null
 reg add "HKLM\SYSTEM\CurrentControlSet\Enum\XENBUS\VEN_XP0001&DEV_VIF" /f | Out-Null
+# THE LOG SINK, log.ps1 beside this file in bin - loaded AFTER the re-arm, so the latch never depends on it.
+# Without it the run says so on stderr and exits 1, which the task's result carries to the death reporter.
+$qwtLogPs1 = Join-Path $PSScriptRoot 'log.ps1'
+try { . $qwtLogPs1 } catch { [Console]::Error.WriteLine("pvnic-boot.ps1: cannot load $qwtLogPs1 ($($_.Exception.Message)) - no log sink"); exit 1 }
+if (-not (Get-Command Write-QwtLogLine -EA SilentlyContinue)) { [Console]::Error.WriteLine("pvnic-boot.ps1: $qwtLogPs1 has no Write-QwtLogLine - no log sink"); exit 1 }
 if ($RearmOnly) { L 'rearm-only trigger: latch re-armed'; exit 0 }
 
 # COOLDOWN - BREAK THE SELF-RETRIGGER LOOP. This task triggers on NetworkProfile/Operational 10000,
@@ -797,19 +829,14 @@ if (Test-Path $okStamp) {
     } catch { }
 }
 
-# LogDir now points at the PRIVATE volume (Q:\Qubes Logs), which PERSISTS - so that is the
-# directory that needs bounding, on templates and AppVMs alike. The 4.3.6 build kept pruning only
-# C:\ProgramData\QubesLogs, a directory QWT no longer writes to, while the real one grew without
-# bound. The C: prune stays for the residues still written there (this log, QubesNetSetup.log).
-Get-ChildItem 'C:\ProgramData\QubesLogs' -Filter '*.log' -EA SilentlyContinue |
-    Sort-Object LastWriteTime -Descending | Select-Object -Skip 30 | Remove-Item -Force -EA SilentlyContinue
-if (Test-Path 'Q:\Qubes Logs') {
-    Get-ChildItem 'Q:\Qubes Logs' -Filter '*.log' -EA SilentlyContinue |
-        Sort-Object LastWriteTime -Descending | Select-Object -Skip 60 | Remove-Item -Force -EA SilentlyContinue
-}
-# The netsetup service's own flat log on Q: appends forever; cap it by size.
-Get-Item 'Q:\qwtng-netsetup.log' -EA SilentlyContinue |
-    Where-Object { $_.Length -gt 1048576 } | Remove-Item -Force -EA SilentlyContinue
+# BOUND THE ONE LOG DIRECTORY, found by the one rule (Get-QwtLogDir: the registry LogDir, else
+# <SystemDrive>\Qubes Logs). On a Qubes guest that is the PRIVATE volume's Q:\Qubes Logs, which
+# PERSISTS, on templates and AppVMs alike; the 4.3.6 build kept pruning only C:\ProgramData\QubesLogs,
+# a directory QWT no longer writes to, while the real one grew without bound. This log and the
+# netsetup service's are in it now, so the C:\ProgramData\QubesLogs prune and the size cap on
+# Q:\qwtng-netsetup.log went with them.
+Get-ChildItem -LiteralPath (Get-QwtLogDir) -Filter '*.log' -EA SilentlyContinue |
+    Sort-Object LastWriteTime -Descending | Select-Object -Skip 60 | Remove-Item -Force -EA SilentlyContinue
 L "--- run start (boot=$((Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString('o')))"
 L "latch re-armed NICS=$((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\XEN\Unplug').NICS)"
 
@@ -1195,6 +1222,37 @@ if (-not $qdbEverUp) { Loud 'qubesdb never became reachable within the deadline'
 elseif ($sawAdapter) { Loud ("network config never stably applied (last qubesdb ip: " + $(if ($script:want) { $script:want.ip } else { 'none' }) + ")") }
 else { Loud 'PV adapter never appeared within the deadline' }
 '@
+# ITS LOG SINK FIRST (docs/ADR-logging.md, Decision 2026-11-01). The payload dot-sources log.ps1 from beside
+# itself and exits 1 without it, and the QubesPvNic task registered below can start it on the next
+# NetworkProfile event - inside this install. The source is the copy beside this script (make-setup stages it
+# at the payload root). PUSHED ALONE (tools/qtest pushrun lands only this file in QubesIncoming, which is how the
+# template priming in mgmt runs it) nothing is beside it, and the installed product's copy in bin is the sink if it
+# defines Write-QwtLogLine - an older bin copy does not, and the payload would exit 1 on it. No usable sink fails
+# the priming and rolls it back, as a payload that cannot log would fail at every boot. bin's copy is left on a
+# rollback: other scripts of ours there use it too. log_sink in MARKJSON says which copy the payload will load.
+$sinkSrc = $null
+$sinkUsed = 'none'
+if ($PSScriptRoot) { $sinkSrc = Join-Path $PSScriptRoot 'log.ps1' }
+$sinkBin = Join-Path $bindir 'log.ps1'
+if (-not $sinkSrc -or -not (Test-Path -LiteralPath $sinkSrc)) {
+    $binSink = (Test-Path -LiteralPath $sinkBin) -and
+               [bool](Select-String -LiteralPath $sinkBin -Pattern '^\s*function\s+Write-QwtLogLine\b' -Quiet -EA SilentlyContinue)
+    if (-not $binSink) {
+        $fail['log_sink'] = "log.ps1 is not beside pvnic-selfprime.ps1 ($sinkSrc) and bin's copy ($sinkBin) has no Write-QwtLogLine - the payload would have no log sink"
+    } else {
+        $sinkUsed = 'bin (pushed alone, the installed copy)'
+        $sinkHash = $null
+        try { $sinkHash = Get-FileHash -LiteralPath $sinkBin -Algorithm SHA256 -EA Stop } catch { }
+        if ($sinkHash -and $sinkHash.Hash) { $sinkUsed += ' sha256=' + $sinkHash.Hash.Substring(0, 16) }
+    }
+} else {
+    try {
+        $sinkSame = (Test-Path -LiteralPath $sinkBin) -and
+                    ((Get-FileHash -LiteralPath $sinkBin -Algorithm SHA256 -EA Stop).Hash -eq (Get-FileHash -LiteralPath $sinkSrc -Algorithm SHA256 -EA Stop).Hash)
+        if (-not $sinkSame) { Copy-Item -LiteralPath $sinkSrc -Destination $sinkBin -Force -EA Stop }
+        $sinkUsed = $(if ($sinkSame) { 'beside, bin already identical' } else { 'beside, copied to bin' })
+    } catch { $fail['log_sink'] = "could not place log.ps1 in bin: $($_.Exception.Message)" }
+}
 Set-Content -Path $payload -Value $body -Encoding ASCII
 if (-not (Test-Path $payload)) { $fail.payload = 'could not write payload' }
 # Resolve defensively: the line above has just recorded "could not write payload", and chaining
@@ -1356,6 +1414,21 @@ if (-not $armed) {
     Remove-Item $payload -Force -EA SilentlyContinue
 }
 
+# bootlog: what the payload wrote during THIS run - every <LogDir>\pvnic-boot.ps1-*.log written since $primeStart,
+# in name order, the directory by the one rule (log.ps1's Get-QwtLogDir: the registry LogDir, else
+# <SystemDrive>\Qubes Logs). None (the usual case: this run arms the latch through the cmd.exe re-arm task, not
+# the payload) falls back to the file the payload wrote before it moved, as this field always read.
+$bootLogDir = $null
+try { $bootLogDir = Get-ItemPropertyValue $qwtKey LogDir -ErrorAction Stop } catch { }
+if (-not $bootLogDir) { $bootLogDir = Join-Path $env:SystemDrive 'Qubes Logs' }
+$bootLogs = @(Get-ChildItem -LiteralPath $bootLogDir -Filter 'pvnic-boot.ps1-*.log' -EA SilentlyContinue |
+              Where-Object { $_.LastWriteTime -ge $primeStart } | Sort-Object Name)
+if ($bootLogs.Count -gt 0) {
+    $bootLogText = (@($bootLogs | ForEach-Object { "$(Get-Content -LiteralPath $_.FullName -Raw -EA SilentlyContinue)" }) -join ' ')
+} else {
+    $bootLogText = "$(Get-Content 'C:\ProgramData\QubesPvNic.log' -Raw -EA SilentlyContinue)"
+}
+
 Write-Output 'MARKJSON'
 [pscustomobject]@{
     ok           = $armed
@@ -1369,7 +1442,8 @@ Write-Output 'MARKJSON'
     # exit code, not output text: the 'does not exist' error names the task on some builds
     stock_reapply_task = $(& schtasks /query /tn QubesNetworkReapply 2>&1 | Out-Null; $LASTEXITCODE -eq 0)
     hibernation_off = -not (Test-Path 'C:\hiberfil.sys')
-    bootlog      = ("$(Get-Content 'C:\ProgramData\QubesPvNic.log' -Raw -EA SilentlyContinue)" -replace '\s+',' ')
+    bootlog      = ($bootLogText -replace '\s+',' ')
+    log_sink     = $sinkUsed
 } | ConvertTo-Json -Compress
 
 # EXIT ON OUR OWN VERDICT, NEVER ON WHATEVER RAN LAST.

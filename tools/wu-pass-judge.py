@@ -3,7 +3,9 @@
 
     tools/wu-pass-judge.py --agent-log AGENT.LOG [--dom0-reported N] [--limit N] [--no-judge] [--json out]
 
-Input: the guest's updater agent log (C:\\ProgramData\\Qubes\\wu\\agent.log), as captured. This is the
+Input: the guest's updater log, as captured: <LogDir>\\qubes-windows-update.ps1-<yyyyMMdd>.log since
+2026-11-01 (docs/ADR-logging.md), C:\\ProgramData\\Qubes\\wu\\agent.log before it. Both line shapes are read - the
+windows-utils prefix "[yyyyMMdd.HHmmss.fff-PID-L] msg" and the old "HH:mm:ss msg". This is the
 WORKFLOW level - one line per step of each pass - and it is the level at which dom0's view of a guest
 goes wrong. tools/wu-log-judge.py is the level below it (the decoded WU engine log inside one scan);
 the two are complementary and neither substitutes for the other.
@@ -21,7 +23,8 @@ CODE (load-bearing, fixed strings the updater emits - counted over EVERY pass, n
   reported      a pass that reached "reported N update(s) to dom0 qubes.NotifyUpdates".
   errored       a pass whose last substantive line declares ERROR - either "[ERROR] ..." (the form
                 the writer emits since e4162c79) or the older bare "ERROR: ...". Both, always: see
-                SEEN TO FAIL below for what reading only one of them cost.
+                SEEN TO FAIL below for what reading only one of them cost. Since 2026-11-01 the
+                level is the line's E letter (the windows-utils prefix), read as the same "[ERROR]".
   noop          a pass that declined by design ("Doing nothing" - e.g. a StandaloneVM, which is
                 template-only by design and is NOT a failure).
   SILENT        errored AND never reported: dom0 was left holding a stale number. Any is a FAIL.
@@ -67,6 +70,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from jev import load_key, ask  # noqa: E402
 
 TS = re.compile(r"^(\d\d):(\d\d):(\d\d)\s+(.*)$")
+# THE WINDOWS-UTILS PREFIX, the shape every log in the one log directory carries since 2026-11-01 (docs/ADR-logging.md):
+# the level is the line's letter, no longer a "[ERROR] " in its text. The old shape above stays: a capture from before the
+# move, or from a guest still running an older updater, is that shape, and its verdicts must not move.
+NEWTS = re.compile(r"^\[(\d{8})\.(\d{6})\.(\d{3})-(\d+)(?::(\d+))?-([EWIDV])\] ?(.*)$")
+# E and W mean what the old writer's "[ERROR] " and "[WARN] " text prefixes meant, so the letter is rendered back as that
+# prefix (unless the text already carries it - the call sites that wrote it into their message keep it) and every rule
+# below, and the lines Jev reads, are the same in both shapes. D, V and I carried no prefix.
+LEVEL_TEXT = {"E": "[ERROR]", "W": "[WARN]"}
 PASS_START = "VM class (live from qubesdb)"
 REPORTED = re.compile(r"reported\s+(\d+)\s+update\(s\) to dom0")
 OFFERED = re.compile(r"scan:\s+(\d+)\s+update\(s\) offered")
@@ -155,10 +166,19 @@ def parse_passes(path):
         sys.exit(2)
     passes, cur = [], None
     for line in raw:
-        m = TS.match(line.strip())
-        if not m:
-            continue  # banner, prompt, blank
-        t, msg = "%s:%s:%s" % (m.group(1), m.group(2), m.group(3)), m.group(4).strip()
+        n = NEWTS.match(line.strip())
+        if n:
+            # The time of day names a pass in the report, as it did before the move.
+            hms = n.group(2)
+            t, msg = "%s:%s:%s" % (hms[0:2], hms[2:4], hms[4:6]), n.group(7).strip()
+            tag = LEVEL_TEXT.get(n.group(6))
+            if tag and not msg.startswith((tag, "ERROR:") if tag == "[ERROR]" else tag):
+                msg = "%s %s" % (tag, msg)
+        else:
+            m = TS.match(line.strip())
+            if not m:
+                continue  # banner, prompt, blank
+            t, msg = "%s:%s:%s" % (m.group(1), m.group(2), m.group(3)), m.group(4).strip()
         if PASS_START in msg:
             if cur:
                 passes.append(cur)

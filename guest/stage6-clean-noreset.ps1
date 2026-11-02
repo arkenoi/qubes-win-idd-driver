@@ -26,7 +26,9 @@ if ($owner -ne 0) {
     (@{ mode='clean-noreset'; refused="port 8082 is owned by pid $owner - not this script's; nothing started, nothing stopped" } | ConvertTo-Json -Compress) | Set-Content -LiteralPath 'C:\Users\Public\stage6clean-result.txt'
     'DONE' | Set-Content -LiteralPath 'C:\Users\Public\stage6clean-done.txt'; exit 2
 }
-Remove-Item $log -EA SilentlyContinue
+# A FRESH LOG PER RUN, under both names: a relay built from today's source writes qubes-updates-relay-<yyyyMMdd>.log in
+# its --log directory and appends to it all day (docs/ADR-logging.md, Decision 2026-11-01); an older build writes $log.
+Remove-Item $log, 'C:\Users\Public\relaytest\qubes-updates-relay-*.log' -EA SilentlyContinue
 $ownRelay = Start-Process -FilePath $exe -ArgumentList '--listen','8082','--target','@default','--log','C:\Users\Public\relaytest','--parent-pid',"$PID" -WindowStyle Hidden -PassThru
 Start-Sleep -Milliseconds 1500
 
@@ -54,6 +56,8 @@ try {
     $out.download = "EXC 0x" + ('{0:X8}' -f ($hr -band 0xFFFFFFFF))
 }
 $out.downloaded_mb = [math]::Round((Get-ChildItem C:\Windows\SoftwareDistribution\Download -Recurse -File -EA SilentlyContinue|Measure-Object Length -Sum).Sum/1MB,1)
-$out.relay_conns = (@(Get-Content $log -EA SilentlyContinue | Where-Object { $_ -match 'CONN token=' }).Count)
+$relayLogs = @(Get-ChildItem 'C:\Users\Public\relaytest\qubes-updates-relay-*.log' -EA SilentlyContinue | Sort-Object Name | ForEach-Object { $_.FullName })
+if ($relayLogs.Count -eq 0) { $relayLogs = @($log) }
+$out.relay_conns = (@(Get-Content -LiteralPath $relayLogs -EA SilentlyContinue | Where-Object { $_ -match 'CONN token=' }).Count)
 ($out | ConvertTo-Json -Compress) | Set-Content -LiteralPath 'C:\Users\Public\stage6clean-result.txt'
 'DONE' | Set-Content -LiteralPath 'C:\Users\Public\stage6clean-done.txt'

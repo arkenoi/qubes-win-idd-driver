@@ -666,7 +666,24 @@ if ($stale.Count) {
     Log "relay exe vouched at $exe (carries the shipped binary's parent= marker)"
     # ---- RELAYEXEVOUCH-END
 
-# 2. place the agent script
+# THE LOG SINK GOES FIRST (docs/ADR-logging.md, Decision 2026-11-01). The updater, the shim and the
+# autologon guard each dot-source log.ps1 from beside themselves and exit 1 without it, so it is in a
+# directory before any of them can start from there - from this payload (make-setup stages it at the
+# root), unless the directory already holds the same bytes. The rpc directory needs it too: on
+# /updatesonly the installer's rpc sweep never runs, and the copy there is whatever an earlier build
+# left - possibly one without Write-QwtLogLine, which the shim and the guard refuse.
+function Install-LogSink([string]$Dir) {
+    $sinkSrc = Join-Path $SetupRoot 'log.ps1'
+    if (-not (Test-Path -LiteralPath $sinkSrc)) { throw "log sink not found at $sinkSrc - the updater, the shim and the autologon guard exit 1 without it beside them" }
+    $sinkDst = Join-Path $Dir 'log.ps1'
+    if ((Test-Path -LiteralPath $sinkDst) -and
+        (Get-FileHash -LiteralPath $sinkDst).Hash -eq (Get-FileHash -LiteralPath $sinkSrc).Hash) { return }
+    Copy-Item -LiteralPath $sinkSrc -Destination $sinkDst -Force
+    Log "placed log sink -> $sinkDst"
+}
+
+# 2. place the agent script, its log sink first
+Install-LogSink $BinDir
 $agent = Join-Path $BinDir 'qubes-windows-update.ps1'
 Copy-Item (Join-Path $SetupRoot 'qubes-windows-update.ps1') $agent -Force
 Log "placed agent -> $agent"
@@ -763,6 +780,7 @@ $qt = $env:QUBES_TOOLS; if (-not $qt) { $qt = 'C:\Program Files\Qubes Tools' }
 $handlerDir = Join-Path $qt 'qubes-rpc-services'
 $svcDir     = Join-Path $qt 'qubes-rpc'
 if ((Test-Path $handlerDir) -and (Test-Path $svcDir)) {
+    Install-LogSink $handlerDir   # before the shim and the guard below
     Copy-Item (Join-Path $SetupRoot 'wu-update.ps1') (Join-Path $handlerDir 'wu-update.ps1') -Force
     $map = 'c:\windows\system32\cmd.exe /c powershell.exe -executionpolicy bypass -noninteractive -inputformat none -file "%QUBES_TOOLS%\qubes-rpc-services\wu-update.ps1"'
     [IO.File]::WriteAllText((Join-Path $svcDir 'qubes.WindowsUpdate'), $map, [Text.Encoding]::ASCII)

@@ -1,20 +1,32 @@
 # Why did an offline .msu install fail? Pull the decisive lines out of DISM's own log and CBS,
 # per package, instead of guessing from an exit code.
 $ErrorActionPreference = 'Continue'
-$dism = 'C:\ProgramData\Qubes\wu\dism.log'
+# THE ONE LOG DIRECTORY (docs/ADR-logging.md, Decision 2026-11-01), by log.ps1's rule, inlined because this probe runs
+# without it: the registry LogDir, else <SystemDrive>\Qubes Logs. A moved log is its per-day files there,
+# <module>-<yyyyMMdd>.log, newest last; only a guest with none of them reads the file at its old path.
+function Get-MovedLogFiles([string]$Module, [string]$Old) {
+    $d = $null
+    try { $d = Get-ItemPropertyValue 'HKLM:\Software\Invisible Things Lab\Qubes Tools' LogDir -ErrorAction Stop } catch { }
+    if (-not $d) { $d = Join-Path $env:SystemDrive 'Qubes Logs' }
+    $rx = '^' + [regex]::Escape($Module) + '-\d{8}\.log$'
+    $f = @(Get-ChildItem -LiteralPath $d -Filter "$Module-*.log" -File -EA SilentlyContinue | Where-Object { $_.Name -match $rx } | Sort-Object Name | ForEach-Object { $_.FullName })
+    if ($f.Count -eq 0 -and $Old -and (Test-Path -LiteralPath $Old)) { $f = @($Old) }
+    $f
+}
+$dism = @(Get-MovedLogFiles 'dism' 'C:\ProgramData\Qubes\wu\dism.log')
 
 function Section($t) { Write-Output ''; Write-Output "=== $t ===" }
 
 Section 'DISM: per-package outcome lines'
-if (Test-Path $dism) {
-    Get-Content $dism |
+if ($dism.Count) {
+    Get-Content -LiteralPath $dism |
         Where-Object { $_ -match 'Add-Package|PackagePath|Failed processing|The operation completed|hrResult|Error DISM' } |
         Select-Object -Last 25 | ForEach-Object { Write-Output ("  " + $_.Trim()) }
-} else { Write-Output "  (no $dism)" }
+} else { Write-Output '  (no DISM log: no dism-<yyyyMMdd>.log in the log directory, none at the old path)' }
 
 Section 'DISM: first error after each package start'
-if (Test-Path $dism) {
-    $lines = Get-Content $dism
+if ($dism.Count) {
+    $lines = @(Get-Content -LiteralPath $dism)
     for ($i = 0; $i -lt $lines.Count; $i++) {
         if ($lines[$i] -match 'kb504308|kb512100|ndp481') {
             Write-Output ("  @" + $i + ": " + $lines[$i].Trim())
