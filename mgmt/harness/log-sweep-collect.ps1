@@ -47,6 +47,11 @@
 #       what the --since filter excluded, ALWAYS emitted. newestdropped= is the newest stamp among the
 #       dropped files and is what settles "was anything from this run excluded?" - the name
 #       list is a SAMPLE of at most 40, and capped= counts the names NOT recorded.
+#   LSW ACCT pathb64=<b64> origin=<logdir|exception|oldpath> relb64=<b64 path inside LogDir, logdir only> written=<local> inwin=<0|1> bytes=<n> lines=<n|-1>
+#   LSW ACCTEND n=<rows>
+#       THE ACCOUNTING LISTING (docs/ADR-logging.md item 7): every file in LogDir (any extension,
+#       subdirectories included), item 6's logs at their fixed paths and item 4's old paths, each with
+#       its line count by the ONE rule tools/log-sweep.py read_lines also counts by (-1: unreadable).
 #   LSW EVENTS channels=<n> required_missing=<list|->
 #   LSW PULL name=events ... (the EV block)
 #   LSW END files=<n> pulled=<n> errors=<n> event_errors=<n>
@@ -85,6 +90,20 @@ $InstallerLogs = @('C:\qwt-improved-install.log', 'C:\qwt-install.log', 'C:\qwt-
 # went first, 7e349bac). This list closes the hole meanwhile, and keeps working for guests that
 # still carry the old paths. Owner: "keep logs in single place, sweep them together".
 $StrayLogDirs = @('C:\ProgramData', 'C:\ProgramData\Qubes', 'C:\ProgramData\Qubes\wu')
+# THE ACCOUNTING SCOPE OUTSIDE LogDir (docs/ADR-logging.md item 7). Item 6's declared exceptions that
+# are logs, at their fixed paths, and item 4's OLD PATHS - the "was" column; the old path INSIDE the
+# directory (reboot-audit.log) is listed with the directory. Each is listed whatever its age, and
+# pulled when it was written inside the window. tools/log-sweep.py ACCT_FIXED_RULES is the other half:
+# a path listed here that no rule there accounts for is `unaccounted-file`, which is how the two lists
+# are kept from drifting apart.
+$AcctExceptionPaths = @('C:\qwt-improved-install.log', 'C:\qwt-install.log', 'C:\qwt-uninstall.log',
+    'C:\ProgramData\QubesIDD-diag.log', 'C:\qubes-win-idd-setup.log', 'C:\qubes-de-firstlogon.log')
+$AcctExceptionRootGlobs = @('relocate-dir-*.log')
+$AcctOldPaths = @('C:\ProgramData\Qubes\wu\agent.log', 'C:\ProgramData\Qubes\wu\dism.log',
+    'C:\ProgramData\Qubes\wu\qubes-updates-relay.log', 'C:\ProgramData\Qubes\wu\relay-handler.log',
+    'C:\ProgramData\Qubes\vmupdate-shim.log', 'C:\ProgramData\QubesPvNic.log', 'C:\ProgramData\QubesNetSetup.log',
+    'Q:\qwtng-netsetup.log', 'C:\qwt-idd-activate.log', 'C:\qwt-idd-deactivate.log',
+    'C:\Users\Public\Documents\Qubes Logs\reboot-audit.log')
 $StrayLogRootFiles = @('C:\qubes-win-idd-setup.log', 'C:\qubes-de-firstlogon.log')
 $StrayLogRootGlobs = @('relocate-dir-*.log', 'qubes-*.log', 'qwt-*.log')
 $StrayLogRx = '(?i)^(Qubes[A-Za-z]*(-[A-Za-z]+)?|qubes-[a-z-]+|qwt-[a-z-]+|agent|relay-handler|dism[a-z-]*|vmexec|vmupdate-shim)\.log$'
@@ -175,15 +194,44 @@ function Get-LswLogDirCandidates {
     return $out.ToArray()
 }
 
-# FileShare.ReadWrite: the writers hold their logs open. detectEncodingFromByteOrderMarks: the msiexec logs are UTF-16.
+# ONE COUNTING RULE ON BOTH SIDES, because the sweep's ledger compares this count with its own
+# (docs/ADR-logging.md item 7, "Lines"; tools/log-sweep.py read_lines is the other half): decode by the
+# byte-order mark (UTF-16 LE/BE - the msiexec logs - or UTF-8 with the mark dropped), else as UTF-8;
+# split on LF; drop one trailing CR from each piece; drop the empty piece after a final LF. Every other
+# piece, an empty one included, is a line; an empty file has none. StreamReader.ReadLine, used here
+# before, also broke on a lone CR. FileShare.ReadWrite: the writers hold their logs open.
+function Get-LswText([string]$path) {
+    $fs = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try { $ms = New-Object System.IO.MemoryStream; $fs.CopyTo($ms); $b = $ms.ToArray() } finally { $fs.Dispose() }
+    if ($b.Length -ge 2 -and $b[0] -eq 0xFF -and $b[1] -eq 0xFE) { return [System.Text.Encoding]::Unicode.GetString($b, 2, $b.Length - 2) }
+    if ($b.Length -ge 2 -and $b[0] -eq 0xFE -and $b[1] -eq 0xFF) { return [System.Text.Encoding]::BigEndianUnicode.GetString($b, 2, $b.Length - 2) }
+    if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { return [System.Text.Encoding]::UTF8.GetString($b, 3, $b.Length - 3) }
+    return [System.Text.Encoding]::UTF8.GetString($b)
+}
+
 function Read-LswLines([string]$path) {
     $out = New-Object 'System.Collections.Generic.List[string]'
-    $fs = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
-    try {
-        $sr = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8, $true)
-        try { while ($null -ne ($l = $sr.ReadLine())) { $out.Add($l) } } finally { $sr.Dispose() }
-    } finally { $fs.Dispose() }
+    $text = Get-LswText $path
+    if ($text.Length -eq 0) { return ,$out }
+    $pieces = $text.Split([char]10)
+    $n = $pieces.Length
+    if ($text[$text.Length - 1] -eq [char]10) { $n-- }
+    for ($i = 0; $i -lt $n; $i++) {
+        $p = $pieces[$i]
+        if ($p.Length -gt 0 -and $p[$p.Length - 1] -eq [char]13) { $p = $p.Substring(0, $p.Length - 1) }
+        $out.Add($p)
+    }
     return ,$out
+}
+
+# The same rule as a count: a CR never changes it, so it is the number of LFs, plus one for a last
+# line with no LF after it.
+function Get-LswLineCount([string]$path) {
+    $text = Get-LswText $path
+    if ($text.Length -eq 0) { return 0 }
+    $n = $text.Length - $text.Replace([string][char]10, '').Length
+    if ($text[$text.Length - 1] -ne [char]10) { $n++ }
+    return $n
 }
 
 function Write-LswBlock([string]$name, $lines) {
@@ -335,6 +383,38 @@ foreach ($p in @((Join-Path $BridgeDir 'bridge.log'), (Join-Path $BridgeDir 'bri
         if ($f -and $f.LastWriteTimeUtc -ge $sinceU) { $cands.Add($f) }
     }
 }
+# ---- THE ACCOUNTING LIST (docs/ADR-logging.md item 7, "Scope") ----------------------------------
+# Every file in LogDir, whatever its extension, hidden ones too; then the fixed paths. A file the
+# ledger must count lines for is pulled when it was written inside the window and is not a candidate
+# already - an old path such as Q:\qwtng-netsetup.log is in none of the lists above.
+$acct = New-Object 'System.Collections.Generic.List[object]'
+$acctSeen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+if ($dirExists) {
+    # the separator by name, so this also runs where it is '/' (a parse-and-count check off the guest)
+    $sep = [System.IO.Path]::DirectorySeparatorChar
+    $acctBase = ([System.IO.Path]::GetFullPath([string]$logDir)).TrimEnd($sep)
+    foreach ($f in @(Get-ChildItem -LiteralPath $logDir -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+        if (-not $acctSeen.Add($f.FullName)) { continue }
+        $rel = $f.FullName
+        if ($rel.StartsWith($acctBase + $sep, [StringComparison]::OrdinalIgnoreCase)) { $rel = $rel.Substring($acctBase.Length + 1) }
+        $acct.Add(@{ f = $f; origin = 'logdir'; rel = $rel.Replace('\', '/') })
+    }
+}
+$acctFixed = @()
+foreach ($p in $AcctExceptionPaths) { $acctFixed += ,@($p, 'exception') }
+foreach ($g in $AcctExceptionRootGlobs) {
+    foreach ($f in @(Get-ChildItem -LiteralPath 'C:\' -Filter $g -File -Force -ErrorAction SilentlyContinue)) { $acctFixed += ,@($f.FullName, 'exception') }
+}
+foreach ($p in $AcctOldPaths) { $acctFixed += ,@($p, 'oldpath') }
+$candSeen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+foreach ($c in $cands) { [void]$candSeen.Add($c.FullName) }
+foreach ($pe in $acctFixed) {
+    if (-not (Test-Path -LiteralPath $pe[0] -PathType Leaf)) { continue }
+    $f = Get-Item -LiteralPath $pe[0] -Force -ErrorAction SilentlyContinue
+    if (-not $f -or -not $acctSeen.Add($f.FullName)) { continue }
+    $acct.Add(@{ f = $f; origin = $pe[1]; rel = '' })
+    if ($f.LastWriteTimeUtc -ge $sinceU -and $candSeen.Add($f.FullName)) { $cands.Add($f) }
+}
 # THE CAP MUST NAME WHAT IT DROPS, AND NEVER DROP A LOG THAT CARRIES A VERDICT (2026-10-07).
 # It reported a COUNT only - "skipped n=5" - so after the lifecycle retest nothing could say whether an agent or
 # watchdog log had been left behind, and "zero deaths" had to be established by cross-referencing pids instead of
@@ -347,7 +427,8 @@ $verdictFirst = { param($f)
         '^gui-watchdog-' { 1 }
         '^qwt-.*install' { 2 }
         'bridge\.log'    { 3 }
-        '^etwproxy'      { 4 }
+        # the file is etw-proxy.log; '^etwproxy' matched nothing, so it ranked 9 and a cap could drop it
+        '^etw-proxy\.log' { 4 }
         # THE SOLE RECORD OF A WHOLE SUBSYSTEM IS NEVER CHATTY. These live outside LogDir, so each
         # is the ONLY log its subsystem has: the dom0-driven update path (relay, relay-handler,
         # agent), the PV NIC, the network setup, the display driver, and the first-boot/setup logs
@@ -377,6 +458,20 @@ $verdictFirst = { param($f)
         # code = max(all step codes) and does not say which step it was.
         '^(VMExec\.ps1-\d{8}|vmexec)\.log$' { 5 }
         '^qubes-win-idd-setup\.log$'  { 5 }
+        # THE SAME SUBSYSTEMS UNDER THEIR NAMES IN LogDir since the log move (docs/ADR-logging.md item
+        # 4). The old names above stay for upgraded guests' old paths; these are what the build under
+        # test writes. Measured 2026-11-02 on a copy of a smoke run's directory pulled at the
+        # collector's default cap: the updater, pvnic-boot and etw-proxy logs ranked 9 and were the
+        # files the cap dropped.
+        '^qubes-windows-update\.ps1-\d{8}\.log$'              { 5 }
+        '^vmupdate-shim\.ps1-\d{8}\.log$'                     { 5 }
+        '^(qubes-updates-relay|relay-handler)-\d{8}\.log$'     { 5 }
+        '^dism-\d{8}\.log$'                                    { 5 }
+        '^pvnic-boot\.ps1-\d{8}\.log$'                        { 5 }
+        '^qwtng-netsetup-\d{8}\.log$'                          { 5 }
+        '^record-reboot-cause\.ps1-\d{8}\.log$'               { 5 }
+        '^(activate|deactivate)-idd\.ps1-\d{8}\.log$'         { 5 }
+        '^(ensure-autologon|quiet-desktop)\.ps1-\d{8}\.log$'  { 5 }
         '^qubes-de-firstlogon\.log$'  { 5 }
         '^relocate-dir-'               { 5 }
         default          { 9 }
@@ -433,6 +528,19 @@ foreach ($f in $sorted) {
         Write-Output ("${Mark}FILEERR pathb64=$(Get-LswB64 $f.FullName) error=$(Get-LswB64 $_.Exception.Message)")
     }
 }
+# ---- THE ACCOUNTING LIST, emitted -----------------------------------------------------------------
+# After the pull, so a file the ledger finds pulled is judged on its FILE record (the same read as its
+# content); this count is the one used for a file that was not pulled. The inventory below reuses it.
+$acctLines = @{}
+foreach ($a in $acct) {
+    $f = $a.f
+    $lc = -1
+    try { $lc = Get-LswLineCount $f.FullName } catch { $lc = -1 }
+    $acctLines[$f.FullName] = $lc
+    $relb64 = if ($a.rel) { Get-LswB64 $a.rel } else { '' }
+    Write-Output ("${Mark}ACCT pathb64=$(Get-LswB64 $f.FullName) origin=$($a.origin) relb64=$relb64 written=$(Get-LswStamp $f.LastWriteTime) inwin=$(if ($f.LastWriteTimeUtc -ge $sinceU) { 1 } else { 0 }) bytes=$($f.Length) lines=$lc")
+}
+Write-Output ("${Mark}ACCTEND n=$($acct.Count)")
 # ---- THE INVENTORY: what is actually THERE, not what we pulled ---------------------------------
 # This is the measurement Jev named as the one that would most change the logging decision
 # (missing_measurement = total-line-volume-per-boot, confidence 1.00) and that nothing reported, so
@@ -460,15 +568,9 @@ foreach ($f in $invSrc) {
     # FileShare.Read that [System.IO.File]::ReadLines defaults to. Measured 2026-10-08 on
     # win11r-logvol: every module with a live file reported "1 UNREADABLE", i.e. the inventory could
     # not count the lines of exactly the files that matter.
-    try {
-        $fs = [System.IO.File]::Open($f.FullName, [System.IO.FileMode]::Open,
-                                     [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
-        try {
-            $sr = New-Object System.IO.StreamReader($fs)
-            try { while ($null -ne $sr.ReadLine()) { $n++ } } finally { $sr.Dispose() }
-        } finally { $fs.Dispose() }
-    }
-    catch { $n = -1 }   # unreadable: reported as -1, never as zero - missing data must not read as empty
+    # THE ACCOUNTING LIST'S COUNT, by the one rule (Get-LswLineCount opens with FileShare.ReadWrite).
+    if ($acctLines.ContainsKey($f.FullName)) { $n = $acctLines[$f.FullName] }
+    else { try { $n = Get-LswLineCount $f.FullName } catch { $n = -1 } }   # unreadable: reported as -1, never as zero - missing data must not read as empty
     if ($n -ge 0) { $invLines += $n }
     # the module is the name without the date (and without the old time-and-pid shape)
     $mod = $f.Name -replace '-\d{8}(-\d{6}-\d+)?\.log$','' -replace '\.log$',''

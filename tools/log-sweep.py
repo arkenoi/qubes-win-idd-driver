@@ -260,6 +260,20 @@ EV_ERR_RE = re.compile(r"^EV ERR \[([^\]]+)\] ?(.*)$")
 CONSOLE_RE = re.compile(r"^\[(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)\] ?(.*)$")
 QREXEC_DOM0_RE = re.compile(r"^(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)\.(\d+) qrexec-daemon\[\d+\]: (.*)$")
 
+# EVERY MODULE THAT WRITES THROUGH windows-utils' log.c UNDER ITS OWN NAME (LogInitDefault names the
+# file after the executable: `<module>-<yyyyMMdd>.log`, and before the one-file-per-module patch
+# `<module>-<yyyyMMdd>-<hhmmss>-<pid>.log`). The shipped executables are the installer's list
+# (upstream/ro/qubes-installer-qubes-os-windows-tools/vs2022/installer/*.wxs, less xenagent and
+# xenbus_monitor, which are the PV drivers' own); gui-agent, gui-watchdog, the qrexec trio and
+# qubesdb-daemon have families of their own below. Ours: the updates relay and its handlers
+# (LogStart/LogInit in guest/qubes-updates-relay.cs), the netsetup service and PowerShell, both named
+# after the process that loaded the library (docs/ADR-logging.md item 4).
+WINUTILS_MODULES = ("advertise-tools", "autologon", "clipboard-copy", "clipboard-paste", "file-receiver",
+                    "file-sender", "get-image-rgba", "network-setup", "open-in-vm", "open-url", "qubesdb-cmd",
+                    "set-gui-mode", "vm-file-editor", "wait-for-logon",
+                    "qubes-updates-relay", "relay-handler", "qwtng-netsetup", "powershell")
+_WU_MOD_RX = "|".join(re.escape(m) for m in WINUTILS_MODULES)
+
 FAMILY_BY_NAME = [
     (re.compile(r"(?i)^gui-agent-\d{8}-\d{6}-\d+\.log$|^agent\d*\.log$|gui-agent.*\.log$"), "agent"),
     (re.compile(r"(?i)^gui-watchdog-.*\.log$|watchdog.*\.log$"), "watchdog"),
@@ -273,7 +287,13 @@ FAMILY_BY_NAME = [
     (re.compile(r"(?i)^qrexec\..*\.log$"), "qrexec-dom0"),
     (re.compile(r"(?i)^guest-.*\.log$"), "console"),
     (re.compile(r"(?i)^events\.txt$"), "events"),
-    (re.compile(r"(?i)^(network-setup|relocate-dir|set-gui-mode|file-receiver|qwtng-netsetup|disable-autosleep|qubes-updates-relay)-.*\.log$"), "winutils"),
+    # relocate-dir is a windows-utils module too, but writes at C:\ (a declared exception, ADR item 6d);
+    # disable-autosleep is kept from the earlier rule and has no writer in today's trees.
+    (re.compile(r"(?i)^(" + _WU_MOD_RX + r"|relocate-dir|disable-autosleep)-.*\.log$"), "winutils"),
+    # qwt-report-death.ps1's record: `yyyy-MM-dd HH:mm:ss [LEVEL] msg`, the installer's line shape, and
+    # the family the content sniffer already gave it - by NAME now, so its baseline keys stay as they are.
+    (re.compile(r"(?i)^qwt-deaths\.log$"), "installer"),
+    (re.compile(r"(?i)^dism-\d{8}\.log$"), "dism"),
     (re.compile(r"(?i)^bind-dirs.*\.(log|txt)$"), "binddirs"),
     # The PowerShell qrexec services log through core-agent/src/qubes-rpc-services/log.ps1, one
     # file per script per day: "<script>.ps1-YYYYMMDD.log". Their prefix now carries a pid, so
@@ -284,7 +304,7 @@ FAMILY_BY_NAME = [
 ]
 WINUTILS_FAMILIES = {"agent", "watchdog", "qrexec", "qubesdb", "winutils"}
 BLOG_FAMILIES = {"bridge", "etwproxy", "blog"}
-STRUCTURED_FAMILIES = WINUTILS_FAMILIES | BLOG_FAMILIES | {"installer", "events", "msi"}
+STRUCTURED_FAMILIES = WINUTILS_FAMILIES | BLOG_FAMILIES | {"installer", "events", "msi", "dism"}
 # WHO OWNS THE LINE. Owner, 2026-10-08, after lifting the blanket no-warnings rule: "in our
 # components, though, it stands. warning means something is not quite normal, yet workable."
 # That rule can only be measured if the count is SPLIT, because the single biggest warning source on
@@ -298,6 +318,183 @@ STRUCTURED_FAMILIES = WINUTILS_FAMILIES | BLOG_FAMILIES | {"installer", "events"
 #   OTHER  - not a guest component of ours at all (msiexec's own log, the dom0 side, the PV console,
 #            event records), or 'plain', whose owner is by definition unknown.
 OUR_FAMILIES   = {"agent", "watchdog", "qrexec", "winutils", "bridge", "etwproxy", "installer", "binddirs", "blog"}
+
+# WHAT ACCOUNTS FOR A FILE (docs/ADR-logging.md item 7, "Kind"). Every file the collector lists (LSW
+# ACCT: the whole log directory, item 6's logs at their fixed paths, item 4's old paths) must match
+# EXACTLY ONE rule here by name - a log-directory file by its path inside the directory, any other by
+# its full path. No match, or two, is `unaccounted-file`; a family found by sniffing, or `plain` as
+# the fallback, never accounts for a file. Each rule is (kind, family, full-match regex):
+#   log        a product log family
+#   legacy     a legacy per-process name: `<module>-<yyyyMMdd>-<hhmmss>-<pid>.log`, written before the
+#              one-file-per-module patch and still found on guests a predecessor build ran on
+#   oldpath    item 4's "was" column: `stray` when written inside the window by the build under test
+#   exception  item 6's logs at their fixed paths
+#   state      not a log (item 5's three files, a result record)
+#   harness    written by this rig, not by anything that ships
+# `family` is the parser the file is read with, and it wins over the collector's hint and over
+# FAMILY_BY_NAME, so a file is parsed by the rule that accounts for it. None: the file holds no log
+# lines and is checked for its kind only.
+ACCT_LOGDIR_RULES = [
+    ("log", "agent", r"gui-agent-\d{8}\.log"),
+    ("log", "watchdog", r"gui-watchdog-\d{8}\.log"),
+    ("log", "qrexec", r"qrexec-(?:agent|wrapper|client-vm)-\d{8}\.log"),
+    ("log", "qubesdb", r"qubesdb-daemon-\d{8}\.log"),
+    ("log", "winutils", r"(?:" + _WU_MOD_RX + r")-\d{8}\.log"),
+    # core-agent/src/qubes-rpc-services/log.ps1 names the file after the script: `<script>.ps1-<d>.log`
+    ("log", "winutils", r"[A-Za-z0-9._-]+\.ps1-\d{8}\.log"),
+    ("log", "bridge", r"bridge\.log(?:\.old)?"),
+    ("log", "etwproxy", r"etw-proxy\.log(?:\.old)?"),
+    ("log", "installer", r"qwt-deaths\.log"),
+    # the installer's mirror of C:\qwt-improved-install.log (b47325e5)
+    ("log", "installer", r"qwt-improved-install\.log"),
+    ("log", "binddirs", r"bind-dirs(?:\.prev)?\.log"),
+    ("log", "dism", r"dism-\d{8}\.log"),
+    ("legacy", "agent", r"gui-agent-\d{8}-\d{6}-\d+\.log"),
+    ("legacy", "watchdog", r"gui-watchdog-\d{8}-\d{6}-\d+\.log"),
+    ("legacy", "qrexec", r"qrexec-(?:agent|wrapper|client-vm)-\d{8}-\d{6}-\d+\.log"),
+    ("legacy", "qubesdb", r"qubesdb-daemon-\d{8}-\d{6}-\d+\.log"),
+    ("legacy", "winutils", r"(?:" + _WU_MOD_RX + r")-\d{8}-\d{6}-\d+\.log"),
+    # the reboot-cause recorder's old file, `[yyyyMMdd.HHmmss] id=...` with no level (now
+    # record-reboot-cause.ps1-<d>.log); "an old path inside the directory takes the legacy kind"
+    ("oldpath", "plain", r"reboot-audit\.log"),
+    # item 5: not logs - the build under test keeps them in C:\ProgramData\Qubes and bin, so a copy
+    # here is an older install's
+    ("state", None, r"qwt-death-watermark\.json"),
+    ("state", None, r"reboot-audit\.last"),
+    ("state", None, r"record-reboot-cause\.ps1"),
+    # bind-dirs' per-boot result record (guest/bind-dirs-status.ps1 reads it)
+    ("state", None, r"bind-dirs-result\.txt"),
+    # mgmt/harness/arm-module-bases.sh writes it INTO the guest log directory
+    ("harness", None, r"module-bases\.txt"),
+    # mgmt/harness/logvol-lib.sh logvol_prove_roundtrip: the nonce it writes into the directory the
+    # product resolves, to prove the log volume round trip (`LVPROOF-<utc>-<pid>-<random>.proof`)
+    ("harness", None, r"LVPROOF-\d{8}T\d{6}Z-\d+-\d+\.proof"),
+]
+ACCT_FIXED_RULES = [
+    ("exception", "installer", r"c:\\qwt-improved-install\.log"),
+    ("exception", "msi", r"c:\\qwt-(?:un)?install\.log"),
+    ("exception", "plain", r"c:\\programdata\\qubesidd-diag\.log"),
+    ("exception", "winutils", r"c:\\relocate-dir-\d{8}-\d{6}\.log"),
+    ("exception", "plain", r"c:\\qubes-win-idd-setup\.log"),
+    ("exception", "plain", r"c:\\qubes-de-firstlogon\.log"),
+    # the families are the old shapes': `HH:mm:ss [LVL] msg` (updater, activate/deactivate-idd), BLog-like
+    # undated (PV NIC, netsetup), DISM's own, and `HH:mm:ss.fff msg` / custom, which no parser reads
+    ("oldpath", "blog", r"c:\\programdata\\qubes\\wu\\agent\.log"),
+    ("oldpath", "dism", r"c:\\programdata\\qubes\\wu\\dism\.log"),
+    ("oldpath", "plain", r"c:\\programdata\\qubes\\wu\\(?:qubes-updates-relay|relay-handler)\.log"),
+    ("oldpath", "plain", r"c:\\programdata\\qubes\\vmupdate-shim\.log"),
+    ("oldpath", "blog", r"c:\\programdata\\qubes(?:pvnic|netsetup)\.log"),
+    ("oldpath", "blog", r"q:\\qwtng-netsetup\.log"),
+    ("oldpath", "blog", r"c:\\qwt-idd-(?:de)?activate\.log"),
+    ("oldpath", "plain", r"c:\\users\\public\\documents\\qubes logs\\reboot-audit\.log"),
+]
+_ACCT_LOGDIR = [(k, f, re.compile(rx, re.I)) for k, f, rx in ACCT_LOGDIR_RULES]
+_ACCT_FIXED = [(k, f, re.compile(rx, re.I)) for k, f, rx in ACCT_FIXED_RULES]
+
+
+def acct_kinds(origin, key):
+    """Every rule that matches: (kind, family) pairs. Exactly one accounts for the file."""
+    if origin == "logdir":
+        return [(k, f) for k, f, rx in _ACCT_LOGDIR if rx.fullmatch(key or "")]
+    return [(k, f) for k, f, rx in _ACCT_FIXED if rx.fullmatch((key or "").lower())]
+
+
+def acct_rows_of(meta):
+    """The collector's ACCT rows, decoded: [{path, origin, rel, written, inwin, bytes, lines}], or
+    None when the stream carries no listing (a collector older than the ledger)."""
+    if not meta or meta.get("acct") is None:
+        return None
+    out = []
+    for r in meta["acct"]:
+        try:
+            lines = int(r.get("lines", "-1"))
+        except ValueError:
+            lines = -1
+        path = b64dec_path(r.get("pathb64", ""))
+        origin = r.get("origin", "?")
+        rel = b64dec_path(r.get("relb64", "")) if r.get("relb64") else ""
+        kinds = acct_kinds(origin, rel if origin == "logdir" else path)
+        out.append({"path": path, "origin": origin, "rel": rel, "written": r.get("written"),
+                    "inwin": r.get("inwin") == "1", "bytes": r.get("bytes"), "lines": lines, "kinds": kinds})
+    return out
+
+
+def account_ledger(rows, by_guest, aliases):
+    """docs/ADR-logging.md item 7: one row per listed file, and the problems that make it not
+    accounted, all P2 (the instrument's class). `by_guest` maps a lower-cased guest path to its pulled
+    LogFile, `aliases` a decode-dropped copy's guest path to the kept copy's (the same file read under
+    two candidate directories). `stray` is NOT decided here: it needs the install anchor, which only
+    exists once the lines are attributed (stray_problems, called from cmd_analyze).
+
+    THE IDENTITY: total = parsed + continuation + not_pulled + unparsed. `total` and the pulled count
+    are the collector's, from the SAME read as the content (its FILE record); parsed is every line the
+    family's parser understood (kept, deliberately skipped as routine, or a declared blank/banner),
+    continuation a line attached to the record above, unparsed what it did not understand. A file
+    that was never pulled has not_pulled = the ACCT row's count. Both sides count by read_lines' rule,
+    so a row that does not add up means the transfer or a parser lost or invented a line."""
+    problems = []
+    for r in rows:
+        r["kind"] = r["kinds"][0][0] if len(r["kinds"]) == 1 else None
+        r["family"] = r["kinds"][0][1] if len(r["kinds"]) == 1 else None
+        r["ledger"] = None
+        if len(r["kinds"]) != 1:
+            problems.append(("unaccounted-file", r["path"],
+                             "no declared rule in tools/log-sweep.py matches this name" if not r["kinds"] else
+                             "%d declared rules match this name (%s) - exactly one must"
+                             % (len(r["kinds"]), ", ".join("%s/%s" % kf for kf in r["kinds"]))))
+            continue
+        if r["family"] is None or not r["inwin"]:
+            continue          # kind only: a state file, a harness artefact, or last written before the window
+        g = r["path"].lower()
+        lf = by_guest.get(g) or by_guest.get(aliases.get(g, ""))
+        if lf is None:
+            total = r["lines"]
+            led = {"total": total, "pulled": 0, "parsed": 0, "continuation": 0,
+                   "not_pulled": total, "unparsed": 0}
+        else:
+            total = lf.total_lines if lf.total_lines is not None else -1
+            led = {"total": total, "pulled": lf.pulled, "parsed": len(lf.lines) + lf.skipped + lf.ignored,
+                   "continuation": lf.continuation, "not_pulled": total - lf.pulled, "unparsed": lf.unparsed}
+        r["ledger"] = led
+        nums = "total=%(total)d parsed=%(parsed)d continuation=%(continuation)d not_pulled=%(not_pulled)d unparsed=%(unparsed)d" % led
+        if total < 0:
+            problems.append(("ledger-mismatch", r["path"], "the collector could not read this file, so it has no "
+                             "line count to account for (%s)" % nums))
+            continue
+        if led["parsed"] + led["continuation"] + led["not_pulled"] + led["unparsed"] != total:
+            problems.append(("ledger-mismatch", r["path"], "the row does not add up: %s" % nums))
+        if led["unparsed"] > 0:
+            problems.append(("unaccounted-lines", r["path"], "%d line(s) the %s parser did not understand (%s)"
+                             % (led["unparsed"], r["family"], nums)))
+        if led["not_pulled"] > 0:
+            problems.append(("unpulled-lines", r["path"], "%d line(s) not pulled - %s (%s)"
+                             % (led["not_pulled"], "over the collector's size cap: head + W/E/suspicious lines + tail only"
+                                if lf is not None else "the file was not pulled at all", nums)))
+    return problems
+
+
+ACCT_PROBLEMS = ("unaccounted-file", "unaccounted-lines", "unpulled-lines", "ledger-mismatch", "stray")
+
+
+def stray_problems(rows, anchor):
+    """`stray`: a file at an OLD PATH last written inside the window - something still writes there.
+    A file last written BEFORE THE INSTALL ANCHOR is not the build under test's: on an upgrade cell the
+    predecessor runs inside the window and writes its old paths, and an old path carries no version,
+    which is the case install_anchor exists for (bridge.log, TaskScheduler). That row is marked
+    `predecessor` and reported, never dropped. A declared exception is never `stray`."""
+    problems = []
+    for r in rows or []:
+        if r.get("kind") != "oldpath" or not r["inwin"]:
+            continue
+        w = parse_iso(r["written"]) if r.get("written") else None
+        if anchor is not None and w is not None and w < anchor:
+            r["stray"] = "predecessor"
+            continue
+        r["stray"] = "yes"
+        problems.append(("stray", r["path"], "an OLD PATH (docs/ADR-logging.md item 4) last written %s, inside the window%s"
+                         % (r.get("written") or "?", "" if anchor is None else
+                            " and after the install anchor %s" % anchor.isoformat(sep=" "))))
+    return problems
 STOCK_FAMILIES = {"qubesdb"}
 
 # Structural thresholds: the owner's rules, as numbers, each with the severity its breach is reported at. A baseline
@@ -1321,6 +1518,7 @@ class LogFile:
         self.ignored = 0         # banner / blank / known non-log lines
         self.unparsed = 0        # lines the family parser did not understand
         self.skipped = 0         # structured lines deliberately not kept (msi routine, console routine)
+        self.continuation = 0    # lines the parser attached to the record above (the ledger's own column)
         self.partial = False
         self.total_lines = None
         self.written = None      # the collector's LastWriteTime (local), for dating BLog lines
@@ -1375,19 +1573,29 @@ def family_of(name, hint=None, first_lines=None):
 
 
 def read_lines(path):
+    """ONE COUNTING RULE ON BOTH SIDES, because the ledger (account_ledger) compares this count with
+    the collector's (docs/ADR-logging.md item 7, "Lines"; Read-LswLines and Get-LswLineCount in
+    mgmt/harness/log-sweep-collect.ps1 are the other half): decode by the byte-order mark (UTF-16
+    LE/BE, or UTF-8 with the mark dropped), else as UTF-8; split on LF; drop one trailing CR from each
+    piece; drop the empty piece after a final LF. Every other piece, an empty one included, is a line;
+    an empty file has none. A lone CR is no line break - it used to be one here and in the collector's
+    StreamReader.ReadLine, which is the rule the ADR replaced."""
     with open(path, "rb") as f:
         data = f.read()
-    for enc in ("utf-8-sig", "utf-16"):
-        try:
-            text = data.decode(enc)
-            if enc == "utf-16" and not (data[:2] in (b"\xff\xfe", b"\xfe\xff")):
-                continue
-            break
-        except UnicodeDecodeError:
-            continue
+    if data[:2] == b"\xff\xfe":
+        text = data[2:].decode("utf-16-le", errors="replace")
+    elif data[:2] == b"\xfe\xff":
+        text = data[2:].decode("utf-16-be", errors="replace")
+    elif data[:3] == b"\xef\xbb\xbf":
+        text = data[3:].decode("utf-8", errors="replace")
     else:
         text = data.decode("utf-8", errors="replace")
-    return text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if not text:
+        return []
+    pieces = text.split("\n")
+    if text.endswith("\n"):
+        pieces.pop()
+    return [p[:-1] if p.endswith("\r") else p for p in pieces]
 
 
 # ----------------------------------------------------------------------------------------------- parsers
@@ -1401,6 +1609,7 @@ def parse_winutils(lf, raw_lines):
                 lf.ignored += 1
             elif prev is not None and (raw.startswith(" ") or raw.startswith("\t")):
                 prev.msg += " " + raw.strip()      # continuation of a multi-line message
+                lf.continuation += 1
             else:
                 lf.unparsed += 1
             continue
@@ -1691,6 +1900,11 @@ def parse_blog(lf, raw_lines, anchor):
         lf.lines.append(Line(lf.family, lf.name, i, dated[j], blog_level(msg), "", msg, raw))
 
 
+# The LogDir mirror's opening line (packaging/setup/Install-QwtImproved.ps1 Write-MirrorLine, b47325e5):
+# written once per installer process into qwt-improved-install.log under LogDir, never at C:\.
+INSTALLER_MIRROR_RE = re.compile(r"^=== INSTALL-LOG MIRROR === pid=\d+ primary=.* opened=\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$")
+
+
 def parse_installer(lf, raw_lines):
     run = 0
     for i, raw in enumerate(raw_lines):
@@ -1723,10 +1937,45 @@ def parse_installer(lf, raw_lines):
                 lf.lines.append(Line(lf.family, lf.name, i, ts, "E", "RESULT",
                                      "stage=%s ok=false error=%s flags=%s" % (stage, err, ",".join(flags) or "-"), raw[:300], {"run": run}))
             continue
-        if IGNORE_LINE_RE.match(raw) or raw.strip() == "":
+        if IGNORE_LINE_RE.match(raw) or raw.strip() == "" or INSTALLER_MIRROR_RE.match(raw):
             lf.ignored += 1
         elif lf.lines and (raw.startswith(" ") or raw.startswith("\t")):
             lf.lines[-1].msg += " " + raw.strip()
+            lf.continuation += 1
+        else:
+            lf.unparsed += 1
+
+
+# DISM's own log (/LogPath, guest/qubes-windows-update.ps1 -> dism-<yyyyMMdd>.log, ADR item 2). The
+# shapes are taken from a real C:\Windows\Logs\DISM\dism.log (Dism.exe 10.0.18362.1, quoted in
+# github.com/nkc3g4/wtg-assistant issue 5): `yyyy-MM-dd HH:mm:ss, <Level> <Component> <msg>`, columns
+# space-padded, levels Info / Warning / Error there; and the WIM library's raw trace lines between
+# them, `[<pid>] [0x<hresult>] <Function>:(<line>): <msg>`. Any other shape is unparsed - a Perf or
+# other level is added when a capture shows one, not before. The level is the one DISM declared; a
+# trace line has none, so it takes the HRESULT's severity bit (a failure code is E).
+DISM_RE = re.compile(r"^(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d), (Info|Warning|Error) +(\S+) +(.*)$")
+DISM_TRACE_RE = re.compile(r"^\[(\d+)\] \[0x([0-9A-Fa-f]{8})\] (.*)$")
+
+
+def parse_dism(lf, raw_lines):
+    for i, raw in enumerate(raw_lines):
+        lf.scanned += 1
+        m = DISM_RE.match(raw)
+        if m:
+            y, mo, d, hh, mi, ss, lvl, comp, msg = m.groups()
+            ts = dt.datetime(int(y), int(mo), int(d), int(hh), int(mi), int(ss))
+            lf.lines.append(Line(lf.family, lf.name, i, ts, {"Info": "I", "Warning": "W", "Error": "E"}[lvl], "", msg, raw,
+                                 {"component": comp}))
+            continue
+        m = DISM_TRACE_RE.match(raw)
+        if m:
+            hr = int(m.group(2), 16)
+            ts = lf.lines[-1].ts if lf.lines else None
+            lf.lines.append(Line(lf.family, lf.name, i, ts, "E" if hr & 0x80000000 else "I", "", m.group(3), raw,
+                                 {"pid": m.group(1), "hresult": "0x%08X" % hr}))
+            continue
+        if raw.strip() == "":
+            lf.ignored += 1
         else:
             lf.unparsed += 1
 
@@ -1862,6 +2111,8 @@ def parse_file(lf, raw_lines, anchor):
         parse_msi(lf, raw_lines, anchor.date() if anchor else None)
     elif fam == "events":
         parse_events(lf, raw_lines)
+    elif fam == "dism":
+        parse_dism(lf, raw_lines)
     else:
         parse_plain(lf, raw_lines, fam)
 
@@ -1964,11 +2215,24 @@ def load_logs(logsdir, paths=None):
                     guest_bytes[gn] = int(fe["bytes"])
                 except (TypeError, ValueError):
                     pass
+        # THE LEDGER'S ROWS, read before the files: a file the ledger checks takes the family of the
+        # rule that accounts for it, and its per-file problems are the ledger's (unpulled-lines
+        # supersedes `partial`, unaccounted-lines `unparseable`) - one problem per fact.
+        acct_rows = acct_rows_of(meta)
+        ledger_checks = {r["path"].lower(): r["kinds"][0][1] for r in (acct_rows or [])
+                         if len(r["kinds"]) == 1 and r["kinds"][0][1] is not None and r["inwin"]}
+        for e in meta.get("decode_dedup") or []:
+            if (e.get("dropped_path") or "").lower() in ledger_checks:
+                ledger_checks[(e.get("kept_path") or "").lower()] = ledger_checks[e["dropped_path"].lower()]
         for fe in meta.get("files", []):
             local = fe.get("local")
             path = os.path.join(logsdir, local) if local else None
-            name = os.path.basename(b64dec_path(fe.get("pathb64", "")) or local or "?")
-            lf = LogFile(path, name, family_of(name, fe.get("family")))
+            gpath = b64dec_path(fe.get("pathb64", ""))
+            name = os.path.basename(gpath or local or "?")
+            lf = LogFile(path, name, ledger_checks.get((gpath or "").lower()) or family_of(name, fe.get("family")))
+            lf.guest_path = gpath
+            lf.ledger = (gpath or "").lower() in ledger_checks
+            lf.pulled = int(fe.get("lines", 0) or 0)
             lf.partial = str(fe.get("partial", "0")) == "1"
             lf.total_lines = int(fe.get("total_lines", fe.get("lines", 0)) or 0)
             lf.written = parse_iso(fe["written"]) if fe.get("written") else None
@@ -1992,7 +2256,7 @@ def load_logs(logsdir, paths=None):
                     problems.append(("empty", name, "the collector found this log empty (0 lines)"))   # GUARD:empty DEFECT: pass
                 else:
                     placeholders.append(("empty-expected", name, _why))
-            if lf.partial:
+            if lf.partial and not lf.ledger:
                 problems.append(("partial", name, "over the collector's size cap: head + W/E/suspicious lines + tail only (%s lines in the file)" % lf.total_lines))
             # A NUL RUN IS LOST DATA, AND LOST DATA IS REPORTED. An unclean guest shutdown can leave
             # a log whose size was extended but whose bytes never reached the disk; the next boot
@@ -2082,8 +2346,6 @@ def load_logs(logsdir, paths=None):
         if not lf.path or not os.path.exists(lf.path):
             continue
         raw = read_lines(lf.path)
-        if raw and raw[-1] == "":
-            raw = raw[:-1]
         if lf.family == "plain":
             lf.family = family_of(lf.name, None, raw[:5])
         if lf.family in ("plain", "console", "binddirs") and has_m8_records(raw):
@@ -2093,7 +2355,7 @@ def load_logs(logsdir, paths=None):
             # corpus mode: date BLog lines from the newest windows-utils line in the same directory, if any
             anchor = None
         parse_file(lf, raw, anchor)
-        structured = lf.family in STRUCTURED_FAMILIES
+        structured = lf.family in STRUCTURED_FAMILIES and not getattr(lf, "ledger", False)
         kept = len(lf.lines) + lf.skipped
         if structured and kept == 0 and (lf.scanned - lf.ignored) > 0:
             problems.append(("unparseable", lf.name, "%d lines, none in the %s format" % (lf.scanned, lf.family)))
@@ -2108,11 +2370,19 @@ def load_logs(logsdir, paths=None):
     for lf in files:
         if lf.family in BLOG_FAMILIES and lf.lines and all(l.ts is None for l in lf.lines) and newest:
             raw = read_lines(lf.path)
-            if raw and raw[-1] == "":
-                raw = raw[:-1]
             lf.lines = []
             lf.scanned = lf.ignored = lf.unparsed = 0
             parse_blog(lf, raw, newest)
+    # THE LEDGER (docs/ADR-logging.md item 7), collector streams only: a corpus directory or a file
+    # list has no listing of the guest's directory, so nothing here could say what is missing from it.
+    if meta is not None:
+        rows = acct_rows_of(meta)
+        meta["ledger"] = rows
+        if rows is not None:
+            by_guest = {lf.guest_path.lower(): lf for lf in files if getattr(lf, "guest_path", None)}
+            aliases = {(e.get("dropped_path") or "").lower(): (e.get("kept_path") or "").lower()
+                       for e in meta.get("decode_dedup") or []}
+            problems.extend(account_ledger(rows, by_guest, aliases))
     return meta, files, problems, placeholders
 
 
@@ -4171,6 +4441,18 @@ def write_summary(rep, path):
     else:
         L.append("LOGDIR INVENTORY: absent - this stream predates the inventory, so the file and line "
                  "volume for this run is NOT KNOWN (missing data, not zero)")
+    acc = rep.get("accounting")
+    if acc is None:
+        L.append("ACCOUNTED: not computed - this stream carries no accounting listing (LSW ACCT), so "
+                 "nothing here says whether every file and line in the log directory was accounted for")
+    else:
+        _kinds = Counter(p[0] for p in rep["data_problems"] if p[0] in ACCT_PROBLEMS)
+        _pred = [r for r in acc["rows"] if r.get("stray") == "predecessor"]
+        L.append("ACCOUNTED: %d of %d file(s) (docs/ADR-logging.md item 7)%s%s" % (
+            acc["accounted"], acc["files"],
+            ("; not: " + ", ".join("%s %d" % kv for kv in sorted(_kinds.items()))) if _kinds else "",
+            ("; %d old-path file(s) last written before the install anchor, by the predecessor: %s"
+             % (len(_pred), ", ".join(r["path"] for r in _pred))) if _pred else ""))
     # WHAT THE WINDOW EXCLUDED, from the filter's own count. The inventory above and the files=N in
     # the header count DIFFERENT populations (non-recursive *.log vs recursive .log/.txt/.json/.old,
     # windowed), so their difference was never a number anyone should have subtracted - and in
@@ -4522,6 +4804,7 @@ def cmd_analyze(a):
     _clock_measured = bool(a.host_utc) and bool((meta or {}).get("begin", {}).get("nowutc"))
     _clock_ok = _clock_measured and not any(p[0] == "clockskew" for p in problems)
     _cut_scope, _cut = cut_predecessor(files, getattr(a, "build", None), since, _clock_ok)
+    problems.extend(stray_problems((meta or {}).get("ledger"), _cut_scope.anchor))
     now = parse_iso((meta.get("begin") or {}).get("now")) if meta and (meta.get("begin") or {}).get("now") else None
     metrics = compute_metrics(files, boots, st, since, now, getattr(a, "build", None))
     # NAMED, NEVER SILENT: what the cut moved, per module and version, is a reported field. An
@@ -4697,6 +4980,14 @@ def cmd_analyze(a):
                    "agent_instances": len(st["instances"]), "collector": meta.get("begin") if meta else None},
         "data_problems": problems,
         "data_placeholders": placeholders,
+        # docs/ADR-logging.md item 7. None when the stream carries no listing (a collector older than
+        # the ledger, or a corpus directory): "not computed", never "everything accounted".
+        "accounting": (None if (meta or {}).get("ledger") is None else {
+            "files": len(meta["ledger"]),
+            "accounted": len([r for r in meta["ledger"] if not any(p[0] in ACCT_PROBLEMS and p[1] == r["path"] for p in problems)]),
+            "rows": [{"path": r["path"], "origin": r["origin"], "kind": r.get("kind"), "family": r.get("family"),
+                      "written": r.get("written"), "inwin": r["inwin"], "lines": r["lines"],
+                      "ledger": r.get("ledger"), "stray": r.get("stray")} for r in meta["ledger"]]}),
         # A FILE RECORD MAY NOT CLAIM ONE BOOT AND ONE PID WHEN THE FILE SPANS SEVERAL.
         # `lf.pid` and `lf.boot` are LAST-INIT-WINS: every LogInit overwrites them, so a per-day
         # append log - which is what every windows-utils module writes, `<module>-<yyyymmdd>.log` -
@@ -4789,6 +5080,11 @@ def cmd_decode(a):
             meta["inventory"] = kv_parse(body[10:])
         elif body.startswith("INVMODULE "):
             meta.setdefault("invmodules", []).append(kv_parse(body[10:]))
+        elif body.startswith("ACCT "):
+            meta.setdefault("acct", []).append(kv_parse(body[5:]))
+        elif body.startswith("ACCTEND "):
+            meta["acctend"] = kv_parse(body[8:])
+            meta.setdefault("acct", [])       # an EMPTY listing is a listing; no ACCTEND is none
         elif body.startswith("EVENTS "):
             meta["events"] = kv_parse(body[7:])
         elif body.startswith("PULL "):
@@ -4815,6 +5111,13 @@ def cmd_decode(a):
         print("DECODE: no BEGIN line - this is not a collector stream"); rc = 1
     if meta["end"] is None and strict:
         print("DECODE: no END line - the stream was CUT SHORT"); rc = 1
+    # THE LEDGER'S LISTING IS COUNTED LIKE A BLOCK: a row lost in transfer would read as a file that
+    # is not there, which is the one thing the ledger exists to say.
+    if meta.get("acct") is not None or meta.get("acctend") is not None:
+        _an = (meta.get("acctend") or {}).get("n")
+        if _an is None or str(len(meta.get("acct") or [])) != _an:
+            print("DECODE: ACCT rows %d, announced %s - the accounting listing is TRUNCATED"
+                  % (len(meta.get("acct") or []), _an if _an is not None else "nowhere (no ACCTEND line)")); rc = 1
 
     def verify(name, b):
         if b is None:
@@ -4828,8 +5131,10 @@ def cmd_decode(a):
         if strict and (len(data) != b["bytes"] or hashlib.sha256(data).hexdigest() != b["sha"]):
             return None, "bytes/sha mismatch (%d vs %d)" % (len(data), b["bytes"])
         text = data.decode("utf-8", errors="replace")
-        n = len(text.split("\n")) if text else 0
-        if strict and n != b["lines"] and not (b["lines"] == 0 and text == ""):
+        # the pieces of the "\n"-joined block: NO line and ONE empty line both send zero bytes, and
+        # the announced count is what tells them apart
+        n = len(text.split("\n")) if (text or b["lines"] == 1) else 0
+        if strict and n != b["lines"]:
             return None, "%d lines decoded, %d announced" % (n, b["lines"])
         return text, None
 
@@ -4847,7 +5152,10 @@ def cmd_decode(a):
             meta["decode"].append({"id": name, "path": path, "ok": False, "error": err})
             continue
         with open(os.path.join(a.out, "files", local), "w", encoding="utf-8") as f:
-            f.write(text + ("\n" if text and not text.endswith("\n") else ""))
+            # ONE "\n" AFTER EVERY BLOCK THAT HOLDS A LINE, so read_lines - which drops the empty piece
+            # after a final LF - counts exactly what was announced. The old "unless it already ends in
+            # \n" made a file whose last line is empty read one line short.
+            f.write(text + "\n" if blocks[name]["lines"] > 0 else "")
         fe["local"] = os.path.join("files", local)
         by_base.setdefault(base, []).append({"fe": fe, "id": name, "path": path, "local": local, "text": text})
         meta["decode"].append({"id": name, "path": path, "ok": True, "lines": blocks[name]["lines"], "bytes": blocks[name]["bytes"]})
@@ -5184,8 +5492,6 @@ def cmd_attribute(a):
                               "UNATTR" if scope.unattributable(lf, l) else
                               "CAND  " if line_version(lf, l) else "?     ")
             raw = read_lines(lf.path)
-            if raw and raw[-1] == "":
-                raw = raw[:-1]
             for i, line in enumerate(raw):
                 print("%s %6d | %s" % (tag.get(i, "?     "), i + 1, line))
             break
