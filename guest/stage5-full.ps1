@@ -28,7 +28,9 @@ SetV $DO 'DODownloadMode' 0 'DWord'
 
 # 3. relay child, kept alive by this script
 Get-NetTCPConnection -LocalPort 8082 -State Listen -EA SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -EA SilentlyContinue }
-Remove-Item $log -EA SilentlyContinue
+# A FRESH LOG PER RUN, under both names: a relay built from today's source writes qubes-updates-relay-<yyyyMMdd>.log in
+# its --log directory and appends to it all day (docs/ADR-logging.md, Decision 2026-11-01); an older build writes $log.
+Remove-Item $log, 'C:\Users\Public\relaytest\qubes-updates-relay-*.log' -EA SilentlyContinue
 $relay = Start-Process -FilePath $exe -ArgumentList '--listen','8082','--target','@default','--log','C:\Users\Public\relaytest' -PassThru -WindowStyle Hidden
 Start-Sleep -Milliseconds 1200
 $bound = @(Get-NetTCPConnection -LocalPort 8082 -State Listen -EA SilentlyContinue).Count -gt 0
@@ -59,7 +61,9 @@ try {
 $scan.seconds = [math]::Round($sw.Elapsed.TotalSeconds,1)
 
 # relay log = did WU dial 8082?
-$connLines = @(); if (Test-Path $log) { $connLines = @((Get-Content $log | Where-Object { $_ -match 'CONN ' }) | ForEach-Object { [string]$_ }) }
+$relayLogs = @(Get-ChildItem 'C:\Users\Public\relaytest\qubes-updates-relay-*.log' -EA SilentlyContinue | Sort-Object Name | ForEach-Object { $_.FullName })
+if ($relayLogs.Count -eq 0 -and (Test-Path $log)) { $relayLogs = @($log) }
+$connLines = @(); if ($relayLogs.Count) { $connLines = @((Get-Content -LiteralPath $relayLogs | Where-Object { $_ -match 'CONN ' }) | ForEach-Object { [string]$_ }) }
 try { Stop-Process -Id $relay.Id -Force -EA SilentlyContinue } catch {}
 
 $out = [ordered]@{

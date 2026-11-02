@@ -3,10 +3,22 @@
 # (so the retry could not help) or it did and still failed. Quoting this through qtest/cmd fails on
 # the pipes and quotes, hence a script.
 $ErrorActionPreference = 'Continue'
-$log = 'C:\ProgramData\Qubes\wu\qubes-updates-relay.log'
+# THE ONE LOG DIRECTORY (docs/ADR-logging.md, Decision 2026-11-01), by log.ps1's rule, inlined because this probe runs
+# without it: the registry LogDir, else <SystemDrive>\Qubes Logs. A moved log is its per-day files there,
+# <module>-<yyyyMMdd>.log, newest last; only a guest with none of them reads the file at its old path.
+function Get-MovedLogFiles([string]$Module, [string]$Old) {
+    $d = $null
+    try { $d = Get-ItemPropertyValue 'HKLM:\Software\Invisible Things Lab\Qubes Tools' LogDir -ErrorAction Stop } catch { }
+    if (-not $d) { $d = Join-Path $env:SystemDrive 'Qubes Logs' }
+    $rx = '^' + [regex]::Escape($Module) + '-\d{8}\.log$'
+    $f = @(Get-ChildItem -LiteralPath $d -Filter "$Module-*.log" -File -EA SilentlyContinue | Where-Object { $_.Name -match $rx } | Sort-Object Name | ForEach-Object { $_.FullName })
+    if ($f.Count -eq 0 -and $Old -and (Test-Path -LiteralPath $Old)) { $f = @($Old) }
+    $f
+}
+$log = @(Get-MovedLogFiles 'qubes-updates-relay' 'C:\ProgramData\Qubes\wu\qubes-updates-relay.log')
 Write-Output '=== RESULT ==='
-if (-not (Test-Path $log)) { Write-Output 'no relay log'; exit 1 }
-$lines = @(Get-Content $log -EA SilentlyContinue)
+if ($log.Count -eq 0) { Write-Output 'no relay log'; exit 1 }
+$lines = @(Get-Content -LiteralPath $log -EA SilentlyContinue)
 Write-Output ("total lines      = {0}" -f $lines.Count)
 $plain = @($lines | Where-Object { $_ -match 'PLAIN' })
 $ctldl = @($lines | Where-Object { $_ -match 'ctldl' })

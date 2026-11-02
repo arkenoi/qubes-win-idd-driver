@@ -231,7 +231,7 @@ static class Relay
                 return RunListen(args);
             if (args.Length >= 1 && args[0] == "--selftest")
                 return SelfTest();
-            Console.Error.WriteLine("usage: qubes-updates-relay --listen [port] [--target VM] [--user U] [--log DIR] [--parent-pid PID]");
+            Console.Error.WriteLine("usage: qubes-updates-relay --listen [port] [--target VM] [--user U] [--log DIR] [--log-file PATH] [--parent-pid PID]");
             Console.Error.WriteLine("       qubes-updates-relay --selftest                      (response-framing contract)");
             Console.Error.WriteLine("       qubes-updates-relay --relay <controlPort> <token>   (internal; spawned via qrexec)");
             return 2;
@@ -553,7 +553,9 @@ static class Relay
             if (w != null && w.Suppressed > 0) Log(logPath, DenySuppressedLine(who, w.Suppressed));   // GUARD:deny-count
             _denyLogged[who] = new DenyWindow { Since = now, Suppressed = 0 };
         }
-        Log(logPath, "DENY " + who + HostedSuffix(peerPid) + " - not part of the update. The proxy serves the update process only; "
+        // A caller whose pid could not be looked up is denied by an infrastructure failure, not by policy (RunListen): W, not I.
+        char level = (who != null && who.StartsWith("pid-lookup-failed(", StringComparison.Ordinal)) ? 'W' : 'I';
+        Log(logPath, level, "DENY " + who + HostedSuffix(peerPid) + " - not part of the update. The proxy serves the update process only; "
                      + "this caller sees an unreachable proxy, exactly as it would on an offline guest.");
     }
     // A denied svchost used to be logged as "svchost (pid N)" and nothing more - so whether pid 3468
@@ -875,7 +877,7 @@ static class Relay
             {
                 Thread.Sleep(intervalMs);
                 string why;
-                if (!w.Alive(out why)) { Log(logPath, "parent pid " + pid + " is gone (" + why + ") - exiting so the proxy goes down"); onGone(); return; }   // GUARD:parent-gone
+                if (!w.Alive(out why)) { Log(logPath, 'W', "parent pid " + pid + " is gone (" + why + ") - exiting so the proxy goes down"); onGone(); return; }   // GUARD:parent-gone
             }
         });
         t.IsBackground = true;
@@ -904,13 +906,20 @@ static class Relay
         // / can't find the proxy" (plus the many AUTHENTICATION FAILURES in the qrexec-wrapper log).
         // SYSTEM sidesteps the account-name dependency entirely. --user still overrides if ever set.
         string user = "SYSTEM";
-        string logDir = @"C:\Users\Public";
+        // THE ONE LOG DIRECTORY (docs/ADR-logging.md, Decision 2026-11-01). --log is the directory the handlers write their
+        // per-day log into (RunRelay), and this relay's own when --log-file is not given; absent, it is the directory every
+        // log of ours goes to. It was C:\Users\Public here and the updater's WorkDir from the updater - two places
+        // collected with nothing else. --log-file is the file the updater NAMED for this relay and reads back
+        // (Get-RelayGiveUps): this relay writes it for its whole life, so writer and reader cannot disagree on a date.
+        string logDir = null;
+        string logFile = null;
         int parentPid = 0;   // 0 = not given: no watchdog, the pre-2026-09-17 behaviour (tests, other callers)
         for (int i = 1; i < args.Length; i++)
         {
             if (args[i] == "--target" && i + 1 < args.Length) target = args[++i];
             else if (args[i] == "--user" && i + 1 < args.Length) user = args[++i];
             else if (args[i] == "--log" && i + 1 < args.Length) logDir = args[++i];
+            else if (args[i] == "--log-file" && i + 1 < args.Length) logFile = args[++i];
             else if (args[i] == "--parent-pid" && i + 1 < args.Length) { if (!int.TryParse(args[++i], out parentPid)) parentPid = 0; }
             // A BARE INTEGER IS THE PORT ONLY IN THE FIRST POSITIONAL SLOT, AND ANYTHING ELSE IS A
             // REFUSAL. The old catch-all was `if (int.TryParse(args[i], out p)) port = p;` for ANY
@@ -936,7 +945,11 @@ static class Relay
             }
         }
         string self = Process.GetCurrentProcess().MainModule.FileName;
-        string logPath = Path.Combine(logDir, "qubes-updates-relay.log");
+        if (string.IsNullOrEmpty(logDir)) logDir = QwtLog.LogDir();
+        string logPath = !string.IsNullOrEmpty(logFile) ? logFile
+                       : Path.Combine(logDir, "qubes-updates-relay-" + DateTime.Now.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture) + ".log");
+        _handlerLogDir = logDir;
+        QwtLog.ReportLostAtExit(logPath);
         Log(logPath, "listen 127.0.0.1:" + port + " target=" + target + " user=" + user + " self=" + self
                      + (parentPid > 0 ? " parent=" + parentPid : " parent=none (no watchdog)"));
 
@@ -1099,7 +1112,7 @@ static class Relay
             {
                 // The relay itself cannot reach the proxy (spawn / connect-back failed): a hard,
                 // final, logged refusal - never a bare close (see the file header).
-                await TrySend(a, Refused403("no-channel")); Log(logPath, "CLOSE reason=no-channel peer=" + peer + " - 403 to client req=[" + reqLine + "]");   // GUARD:close-nochannel
+                await TrySend(a, Refused403("no-channel")); Log(logPath, 'E', "CLOSE reason=no-channel peer=" + peer + " - 403 to client req=[" + reqLine + "]");   // GUARD:close-nochannel
                 inbound.Close();
                 return;
             }
@@ -1129,7 +1142,7 @@ static class Relay
                 await Task.WhenAny(Task.WhenAll(t1, t2), Task.Delay(DrainMs()));
             }
         }
-        catch (Exception e) { Log(logPath, "CONN token=" + token + " error " + e.Message); }
+        catch (Exception e) { Log(logPath, 'E', "CONN token=" + token + " error " + e.Message); }
         finally { _gate.Release(); Log(logPath, "CONN warm=" + (warm ? 1 : 0) + " up=" + up + " down=" + down + " ttfb=" + ttfb + " ms=" + sw.ElapsedMilliseconds + " eof=" + eofSide + " " + (endReasons != null ? endReasons() : "upEnd=- downEnd=-") + " [" + connHdr + "] req=[" + reqLine + "]"); }
     }
 
@@ -1387,7 +1400,7 @@ static class Relay
                             await ch.Stream.FlushAsync();
                             r = await ReadResponse(ch.Stream, a, isHead);
                         }
-                        catch (Exception e) { Log(logPath, "PLAIN read error " + e.GetType().Name + ": " + e.Message); }
+                        catch (Exception e) { Log(logPath, 'W', "PLAIN read error " + e.GetType().Name + ": " + e.Message); }
                     }
                     // A spilled response is already on the client's wire. It cannot be retried and it
                     // must not be written again - it IS the answer, complete or not, and the log below
@@ -1419,7 +1432,7 @@ static class Relay
                         continue;
                     }
                     attempts++;
-                    Log(logPath, "PLAIN incomplete attempt=" + (attempts - 1)
+                    Log(logPath, 'W', "PLAIN incomplete attempt=" + (attempts - 1)
                                  + " bytes=" + (r == null ? -1 : r.Bytes.Length)
                                  + " headers=" + (r != null && r.HeadersFound)
                                  + " got=" + (r == null ? -1 : r.GotBody)
@@ -1445,7 +1458,7 @@ static class Relay
                 {
                     // Nothing came back because no channel could be opened at all: the relay cannot
                     // reach the proxy. Hard, final, logged - never a bare close (see the file header).
-                    await TrySend(a, Refused403("no-channel")); Log(logPath, "CLOSE reason=no-channel peer=" + peer + " - 403 to client req=[" + reqLine + "]");   // GUARD:close-nochannel-plain
+                    await TrySend(a, Refused403("no-channel")); Log(logPath, 'E', "CLOSE reason=no-channel peer=" + peer + " - 403 to client req=[" + reqLine + "]");   // GUARD:close-nochannel-plain
                 }
                 else
                 {
@@ -1453,7 +1466,7 @@ static class Relay
                     // it a transient (file header). The log text stays 'PLAIN REFUSED' - the updater's
                     // give-up count reads it.
                     await TrySend(a, Refused403("incomplete"));
-                    Log(logPath, "PLAIN REFUSED after " + attempts + " attempt(s) - 403 to client"
+                    Log(logPath, 'E', "PLAIN REFUSED after " + attempts + " attempt(s) - 403 to client"
                                + " bytes=" + (best == null ? 0 : best.Bytes.Length)
                                + " body=" + (best == null ? 0 : best.GotBody)
                                + "/" + (best == null ? -1 : best.Expected)
@@ -1463,11 +1476,13 @@ static class Relay
                 }
             }
         }
-        catch (Exception e) { Log(logPath, "PLAIN error " + e.Message); }
+        catch (Exception e) { Log(logPath, 'W', "PLAIN error " + e.Message); }
         finally
         {
             _gate.Release();
-            Log(logPath, "PLAIN tries=" + attempts + " bytes=" + (best == null ? 0 : best.Bytes.Length)
+            // A SPILLED response that ended short is already on the client's wire and cannot be refused, so this line is the
+            // only record of that failure: E. Every other failure has its own E line above, and this summary stays I.
+            Log(logPath, (best != null && best.Streamed && !best.Complete) ? 'E' : 'I', "PLAIN tries=" + attempts + " bytes=" + (best == null ? 0 : best.Bytes.Length)
                        + " body=" + (best == null ? 0 : best.GotBody) + "/" + (best == null ? -1 : best.Expected)
                        + " complete=" + (best != null && best.Complete)
                        + " streamed=" + (best != null && best.Streamed)
@@ -1489,8 +1504,13 @@ static class Relay
         TcpClient relay = null;   // hoisted: the catch must close an accepted-but-failed socket
         try
         {
-            string handlerLogDir = "";
-            try { handlerLogDir = Path.GetDirectoryName(logPath); } catch { handlerLogDir = ""; }
+            // The handlers write into RunListen's --log directory; a caller that never ran RunListen keeps the old rule, the
+            // directory of its own log.
+            string handlerLogDir = _handlerLogDir;
+            if (string.IsNullOrEmpty(handlerLogDir)) { try { handlerLogDir = Path.GetDirectoryName(logPath); } catch { handlerLogDir = ""; } }
+            // A trailing backslash would escape the closing quote below for the handler's argument parser ("D:\x\" reads as
+            // D:\x" and the rest of the line); doubled, it parses back to one.
+            if (!string.IsNullOrEmpty(handlerLogDir) && handlerLogDir.EndsWith("\\", StringComparison.Ordinal)) handlerLogDir += "\\";
             string handler = "\"" + self + "\" --relay " + cport + " " + token
                            + (string.IsNullOrEmpty(handlerLogDir) ? "" : " --log \"" + handlerLogDir + "\"");
             ProcessStartInfo psi = new ProcessStartInfo();
@@ -1507,7 +1527,7 @@ static class Relay
             Task<TcpClient> accept = control.AcceptTcpClientAsync();
             if (await Task.WhenAny(accept, Task.Delay(20000)) != accept)
             {
-                Log(logPath, "CHAN token=" + token + " relay never connected back");
+                Log(logPath, 'W', "CHAN token=" + token + " relay never connected back");
                 // A connect-back that lands AFTER the timeout would orphan the accepted socket (and
                 // its handler) - 'return null' is not an exception, so the catch below never runs.
                 // Close it whenever it eventually arrives. Fire-and-forget by design (CS4014 suppressed).
@@ -1523,7 +1543,7 @@ static class Relay
             byte[] tk = Encoding.ASCII.GetBytes(token + "\n");
             byte[] got = new byte[tk.Length];
             if (!await ReadExact(rs, got, got.Length) || Encoding.ASCII.GetString(got) != token + "\n")
-            { Log(logPath, "CHAN token=" + token + " bad token from relay"); relay.Close(); return null; }
+            { Log(logPath, 'W', "CHAN token=" + token + " bad token from relay"); relay.Close(); return null; }
 
             Ready r = new Ready();
             r.Relay = relay; r.Stream = rs; r.Token = token; r.Born = DateTime.UtcNow;
@@ -1532,7 +1552,7 @@ static class Relay
         }
         catch (Exception e)
         {
-            Log(logPath, "CHAN token=" + token + " error " + e.Message);
+            Log(logPath, 'W', "CHAN token=" + token + " error " + e.Message);
             // An exception between accept and return used to LEAK the accepted connect-back socket:
             // nothing owned it, so it - and the handler pumping into it - lingered. Close is
             // synchronous, so this is legal in a C# 5 catch (no await here).
@@ -1658,7 +1678,8 @@ static class Relay
     static int RunRelay(int controlPort, string token, string logDir)
     {
         string hlog = null;
-        try { if (!string.IsNullOrEmpty(logDir)) hlog = Path.Combine(logDir, "relay-handler.log"); } catch { hlog = null; }
+        try { if (!string.IsNullOrEmpty(logDir)) hlog = Path.Combine(logDir, "relay-handler-" + DateTime.Now.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture) + ".log"); } catch { hlog = null; }
+        if (hlog != null) QwtLog.ReportLostAtExit(hlog);
         using (TcpClient sock = new TcpClient())
         {
             sock.Connect(IPAddress.Loopback, controlPort);
@@ -1686,7 +1707,8 @@ static class Relay
             // short body and the defect is upstream of this process.
             if (hlog != null)
             {
-                Log(hlog, "HANDLER token=" + token + " ms=" + hsw.ElapsedMilliseconds
+                // cut_response=True is the truncation being OURS (above): an anomaly, W.
+                Log(hlog, !t2.IsCompleted ? 'W' : 'I', "HANDLER token=" + token + " ms=" + hsw.ElapsedMilliseconds
                         + " request_bytes=" + outBytes + " response_bytes=" + inBytes
                         + " first_to_finish=" + firstName
                         + " requestEnd=" + outEnd + " responseEnd=" + inEnd
@@ -1737,10 +1759,101 @@ static class Relay
         return true;
     }
 
-    static readonly object _logLock = new object();
-    static void Log(string path, string msg)
+    // RunListen's --log directory, handed to every handler OpenChannel spawns (null until RunListen has run).
+    static string _handlerLogDir;
+    // Every line goes through QwtLog (below). 'I' unless the call site reports a failure (E) or an anomaly (W).
+    static void Log(string path, string msg) { QwtLog.Write(path, 'I', msg); }
+    static void Log(string path, char level, string msg) { QwtLog.Write(path, level, msg); }
+}
+
+// THE ONE LOG DIRECTORY AND THE ONE LINE SHAPE, for a C# writer (docs/ADR-logging.md, Decision 2026-11-01; the same class
+// in every C# program of ours). The directory is log.c's rule: the registry LogDir, else <SystemDrive>\Qubes Logs. The line
+// is the windows-utils shape, [yyyyMMdd.HHmmss.fff-PID:TID-L] msg, so the sweep parses it like every other log there.
+// One Write per line on a handle shared for writing, because the handlers are separate processes appending to one file.
+// A line that still cannot be written is said on stderr and COUNTED - the old body swallowed every failure in silence.
+static class QwtLog
+{
+    const int Tries = 20;
+    const int RetryMs = 15;
+    static readonly object Gate = new object();
+    static readonly Encoding Utf8 = new UTF8Encoding(false);
+    static readonly int Pid = Process.GetCurrentProcess().Id;
+    static long _lost;
+    const uint FILE_APPEND_DATA = 0x4, SYNCHRONIZE = 0x100000, FILE_SHARE_ALL = 0x7, OPEN_ALWAYS = 4, FILE_ATTRIBUTE_NORMAL = 0x80;
+    const int ERROR_PATH_NOT_FOUND = 3, ERROR_SHARING_VIOLATION = 32, ERROR_LOCK_VIOLATION = 33;
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool WriteFile(Microsoft.Win32.SafeHandles.SafeFileHandle h, byte[] buffer, int count, out int written, IntPtr overlapped);
+
+    public static long Lost { get { return Interlocked.Read(ref _lost); } }
+
+    public static string LogDir()
     {
-        try { lock (_logLock) File.AppendAllText(path, DateTime.Now.ToString("HH:mm:ss.fff") + " " + msg + "\r\n"); }
+        try
+        {
+            using (Microsoft.Win32.RegistryKey k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Invisible Things Lab\Qubes Tools"))
+            {
+                string d = (k == null) ? null : k.GetValue("LogDir") as string;
+                if (!string.IsNullOrEmpty(d)) return d;
+            }
+        }
         catch { }
+        return Environment.GetEnvironmentVariable("SystemDrive") + @"\Qubes Logs";
+    }
+
+    public static void Write(string path, char level, string msg)
+    {
+        string line = "[" + DateTime.Now.ToString("yyyyMMdd.HHmmss.fff", System.Globalization.CultureInfo.InvariantCulture)
+                    + "-" + Pid + ":" + Thread.CurrentThread.ManagedThreadId + "-" + level + "] " + msg + "\r\n";
+        byte[] b = Utf8.GetBytes(line);
+        string why = "after " + Tries + " contended attempts";
+        bool mkdirTried = false;
+        for (int attempt = 1; attempt <= Tries; attempt++)
+        {
+            int err = 0;
+            // The lock keeps this process's threads apart; other processes are kept apart by the append itself.
+            lock (Gate)
+            {
+                // APPEND-ONLY: FILE_APPEND_DATA without FILE_WRITE_DATA makes every WriteFile land at the end of the file in
+                // one piece, against every other writer - the windows-utils library in this same process (its patched
+                // log.c opens the same way) and the relay's other handlers. A FileStream opened for Write seeks to the end
+                // and then writes at that offset, so a line appended in between was overwritten.
+                using (Microsoft.Win32.SafeHandles.SafeFileHandle h = CreateFileW(path, FILE_APPEND_DATA | SYNCHRONIZE, FILE_SHARE_ALL, IntPtr.Zero, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, IntPtr.Zero))
+                {
+                    if (!h.IsInvalid)
+                    {
+                        int n;
+                        if (WriteFile(h, b, b.Length, out n, IntPtr.Zero) && n == b.Length) return;
+                        err = Marshal.GetLastWin32Error();
+                        why = "(WriteFile error " + err + ", " + n + " of " + b.Length + " bytes)";
+                        break;
+                    }
+                    err = Marshal.GetLastWin32Error();
+                }
+            }
+            // The directory is missing: the writer creates it, as log.c does (CreateDirectory before its first line) - once.
+            if (err == ERROR_PATH_NOT_FOUND && !mkdirTried)
+            {
+                mkdirTried = true;
+                try { Directory.CreateDirectory(Path.GetDirectoryName(path)); continue; } catch { }
+            }
+            // Only a sharing collision is retried; anything else - a refusal, a bad path - retried would only be hidden.
+            if (err != ERROR_SHARING_VIOLATION && err != ERROR_LOCK_VIOLATION) { why = "(CreateFile error " + err + ")"; break; }
+            if (attempt < Tries) Thread.Sleep(RetryMs);
+        }
+        try { Console.Error.WriteLine("qwt log: line LOST " + why + ": " + line.TrimEnd('\r', '\n')); } catch { }
+        Interlocked.Increment(ref _lost);
+    }
+
+    // The count of lost lines, said once at exit in the log itself (and on stderr if that line is lost too). A process
+    // killed outright (TerminateProcess) runs no exit handler, so its count is only on stderr, line by line.
+    public static void ReportLostAtExit(string path)
+    {
+        AppDomain.CurrentDomain.ProcessExit += delegate(object sender, EventArgs e)
+        {
+            long n = Lost;
+            if (n > 0) Write(path, 'W', "lines lost: " + n);
+        };
     }
 }

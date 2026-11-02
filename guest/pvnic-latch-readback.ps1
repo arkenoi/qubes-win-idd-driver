@@ -18,5 +18,17 @@ Write-Output 'MARKJSON'
     } else { $null })
     marker = (Test-Path 'C:\ProgramData\QubesPvNic-FAILED.txt')
     boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString('o')
-    log_tail = ((Get-Content 'C:\ProgramData\QubesPvNic.log' -Tail 6) -join ' // ')
+    # The payload's log moved into the one log directory (docs/ADR-logging.md, Decision 2026-11-01): its newest
+    # per-day file there, the directory by log.ps1's rule (the registry LogDir, else <SystemDrive>\Qubes Logs),
+    # and only on a guest with none of those the old C:\ProgramData\QubesPvNic.log. Below the hash line on
+    # purpose: tools/lint-baseline.txt names that line by number.
+    log_tail = $(
+        $pvLogDir = $null
+        try { $pvLogDir = Get-ItemPropertyValue 'HKLM:\Software\Invisible Things Lab\Qubes Tools' LogDir -ErrorAction Stop } catch { }
+        if (-not $pvLogDir) { $pvLogDir = Join-Path $env:SystemDrive 'Qubes Logs' }
+        $pvLog = 'C:\ProgramData\QubesPvNic.log'
+        $pvNew = Get-ChildItem -LiteralPath $pvLogDir -Filter 'pvnic-boot.ps1-*.log' -EA SilentlyContinue | Sort-Object Name | Select-Object -Last 1
+        if ($pvNew) { $pvLog = $pvNew.FullName }
+        ((Get-Content -LiteralPath $pvLog -Tail 6) -join ' // ')
+    )
 } | ConvertTo-Json -Compress

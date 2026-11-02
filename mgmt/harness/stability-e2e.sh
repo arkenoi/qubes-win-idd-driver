@@ -46,6 +46,14 @@ stop_vm(){ local vm=$1 dl; toolstack_accept "$vm" >/dev/null 2>&1; dl=$(( SECOND
     fi
     sleep 5
   done; }
+# THE REBOOT-CAUSE RECORDS, the new file first and the old one second. The recorder writes
+# record-reboot-cause.ps1-<yyyyMMdd>.log in the log directory since 2026-11-01 (docs/ADR-logging.md) - Q:\Qubes Logs on
+# this rig, as for the watchdog read below - and wrote reboot-audit.log there before, which an upgraded guest keeps.
+# Both shapes start a record with "[<yyyyMMdd>." - "[yyyyMMdd.HHmmss]" then, the windows-utils prefix now.
+reboot_records(){
+  qrun 'cmd /c type "Q:\Qubes Logs\record-reboot-cause.ps1-*.log"' 2>/dev/null
+  qrun 'cmd /c type "Q:\Qubes Logs\reboot-audit.log"' 2>/dev/null
+}
 qready(){ local n=${1:-40} i; for i in $(seq 1 "$n"); do
     command grep -qa '^QREADY' <<< "$(timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null)" && return 0; sleep 10; done; return 1; }
 # -EncodedCommand, not nested quotes: the nested form fails SILENTLY (rule 16), and here that
@@ -337,7 +345,7 @@ EOF
     qready 40 || say "  no qrexec on boot $b"
     boot_checks "$TAG-app-b$b"
     # did the guest restart itself while we were looking?
-    local audit; audit=$(qrun 'cmd /c type "Q:\Qubes Logs\reboot-audit.log"' 2>/dev/null | tr -d '\r' | grep -ac '^\[2026')
+    local audit; audit=$(reboot_records | tr -d '\r' | grep -ac '^\[2026')
     say "  $TAG boot $b: reboot-audit entries so far: ${audit:-0}"
     stop_vm "$APP"
   done
@@ -351,7 +359,7 @@ EOF
   say "  $TAG watchdog: 'died within'=$storms  'not restarting it (going down)'=$notrestart"
   [ "${storms:-0}" -eq 0 ] && ok "$TAG: no watchdog death-storm across 3 shutdowns" \
                            || say "  $TAG: $storms quick-death lines - inspect $S/$TAG-watchdog.log"
-  qrun 'cmd /c type "Q:\Qubes Logs\reboot-audit.log"' 2>/dev/null | tr -d '\r' | grep -a '^\[2026' > "$S/$TAG-reboot-audit.log" || true
+  reboot_records | tr -d '\r' | grep -a '^\[2026' > "$S/$TAG-reboot-audit.log" || true
   say "  $TAG reboot-audit records: $(wc -l < "$S/$TAG-reboot-audit.log" 2>/dev/null || echo 0)"
   stop_vm "$APP"
 }

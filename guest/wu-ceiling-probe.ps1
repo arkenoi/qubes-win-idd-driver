@@ -17,10 +17,21 @@ $ErrorActionPreference = 'Continue'
 [Net.ServicePointManager]::Expect100Continue = $false
 [Net.ServicePointManager]::DefaultConnectionLimit = 64
 
-$wu      = 'C:\ProgramData\Qubes\wu'
-$log     = Join-Path $wu 'qubes-updates-relay.log'
+$relayOld = 'C:\ProgramData\Qubes\wu\qubes-updates-relay.log'
 $relay   = 'C:\Program Files\Qubes Tools\bin\qubes-updates-relay.exe'
 $refUrl  = 'http://speedtest.tele2.net/100MB.zip'
+# THE ONE LOG DIRECTORY (docs/ADR-logging.md, Decision 2026-11-01), by log.ps1's rule, inlined because this probe runs
+# without it: the registry LogDir, else <SystemDrive>\Qubes Logs. A moved log is its per-day files there,
+# <module>-<yyyyMMdd>.log, newest last; only a guest with none of them reads the file at its old path.
+function Get-MovedLogFiles([string]$Module, [string]$Old) {
+  $d = $null
+  try { $d = Get-ItemPropertyValue 'HKLM:\Software\Invisible Things Lab\Qubes Tools' LogDir -ErrorAction Stop } catch { }
+  if (-not $d) { $d = Join-Path $env:SystemDrive 'Qubes Logs' }
+  $rx = '^' + [regex]::Escape($Module) + '-\d{8}\.log$'
+  $f = @(Get-ChildItem -LiteralPath $d -Filter "$Module-*.log" -File -EA SilentlyContinue | Where-Object { $_.Name -match $rx } | Sort-Object Name | ForEach-Object { $_.FullName })
+  if ($f.Count -eq 0 -and $Old -and (Test-Path -LiteralPath $Old)) { $f = @($Old) }
+  $f
+}
 
 Write-Output "=== CEILING PROBE $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff') ==="
 
@@ -32,23 +43,29 @@ if (-not (Test-Path -LiteralPath $relay)) { Write-Output "FAIL: relay exe missin
 $owner = 0
 try { $l = @(Get-NetTCPConnection -LocalPort 8082 -State Listen -ErrorAction SilentlyContinue); if ($l.Count) { $owner = [int]$l[0].OwningProcess } } catch { $owner = -1 }
 if ($owner -ne 0) { Write-Output "REFUSED: port 8082 is owned by pid $owner (not this script's) - nothing started, nothing adopted"; exit 2 }
-$proc = Start-Process -FilePath $relay -ArgumentList '--listen','8082','--target','@default','--log',$wu,'--parent-pid',"$PID" -WindowStyle Hidden -PassThru
+# No --log: the relay then logs into the one log directory by its own rule, beside the updater's relay - the place --log
+# named before the move, when that was the updater's work directory (docs/ADR-logging.md, Decision 2026-11-01).
+$proc = Start-Process -FilePath $relay -ArgumentList '--listen','8082','--target','@default','--parent-pid',"$PID" -WindowStyle Hidden -PassThru
 Start-Sleep -Seconds 3
 if ($proc) { try { if ($proc.HasExited) { $proc = $null } } catch { } }
 Write-Output "relay_started=$([bool]$proc) pid=$(if ($proc) { $proc.Id } else { 'none' })"
 if (-not $proc) { Write-Output 'FAIL: the relay this probe started did not stay up'; exit 1 }
 
-# mark the log so the after-window can be sliced exactly at this point
+# mark the log so the after-window can be sliced exactly at this point. The relay just started names its file at start,
+# qubes-updates-relay-<yyyyMMdd>.log, and has written its listen line by now: the newest per-day file is its own.
+$relayDays = @(Get-MovedLogFiles 'qubes-updates-relay' '')
+$log = $relayOld; if ($relayDays.Count) { $log = $relayDays[-1] }
 $logMark = 0
 if (Test-Path -LiteralPath $log) { $logMark = (Get-Item -LiteralPath $log).Length }
 Write-Output "log_mark_bytes=$logMark"
 
 # ---- 2. pick the WU URL out of the relay log ------------------------------------------------
+# The per-day files first, newest last; the old cumulative file only when they hold no GET (history from before the move).
 $wuUrl = $null
-if (Test-Path -LiteralPath $log) {
-  $m = Select-String -Path $log -Pattern 'req=\[GET (http://[^ ]+) HTTP' | Select-Object -Last 1
-  if ($m) { $wuUrl = $m.Matches[0].Groups[1].Value }
-}
+$m = $null
+if ($relayDays.Count) { $m = Select-String -LiteralPath $relayDays -Pattern 'req=\[GET (http://[^ ]+) HTTP' | Select-Object -Last 1 }
+if (-not $m -and (Test-Path -LiteralPath $relayOld)) { $m = Select-String -LiteralPath $relayOld -Pattern 'req=\[GET (http://[^ ]+) HTTP' | Select-Object -Last 1 }
+if ($m) { $wuUrl = $m.Matches[0].Groups[1].Value }
 if ($wuUrl) { Write-Output "wu_url=$wuUrl" } else { Write-Output 'wu_url=NONE (no GET line in relay log; WU leg SKIPPED, not substituted)' }
 
 # ---- 3. the fetcher -------------------------------------------------------------------------

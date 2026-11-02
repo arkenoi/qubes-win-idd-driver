@@ -17,7 +17,9 @@
 #   * dom0's updates-available BEFORE and AFTER, so a pass that leaves dom0 stale is caught. This
 #     is the field failure the whole line exists for: the guest throws, never reports, and dom0
 #     keeps the previous number while Qube Manager shows the qube as up to date.
-#   * the guest's own wu\agent.log, through tools/wu-pass-judge.py --dom0-reported <after>, which
+#   * the guest's own updater log - its per-day files in the one log directory since 2026-11-01, plus the
+#     cumulative wu\agent.log of an image from before the move - cut to what the round appended (wu_slice),
+#     through tools/wu-pass-judge.py --dom0-reported <after>, which
 #     FAILS on a SILENT pass (errored and never reported) and on a guest/dom0 disagreement.
 #   * update-status.json, kept as evidence for each round.
 #
@@ -117,6 +119,110 @@ guest_file(){  # $1 = windows path -> stdout, without the cmd banner
   return 1
 }
 
+# THE PASS'S OWN LOGS ARE PER-DAY FILES IN THE ONE LOG DIRECTORY since 2026-11-01 (docs/ADR-logging.md): the updater's
+# qubes-windows-update.ps1-<d>.log, the relay's qubes-updates-relay-<d>.log, its handlers' relay-handler-<d>.log and the
+# shim's vmupdate-shim.ps1-<d>.log, each named on the day its process starts - so one round can append to yesterday's
+# file AND start today's. Before the move each was ONE cumulative file at a fixed path; an image from before the move
+# still has them (an upgraded guest keeps them, frozen; an older updater still writes them), so every family is its
+# per-day files plus its old path, below.
+WU_OLD_LOGS=(
+  'C:\ProgramData\Qubes\wu\agent.log'
+  'C:\ProgramData\Qubes\wu\qubes-updates-relay.log'
+  'C:\ProgramData\Qubes\wu\relay-handler.log'
+  'C:\ProgramData\Qubes\vmupdate-shim.log'
+)
+# a guest path -> its family, which is also the round's file for it (nothing = not one of ours)
+wu_family(){
+  case "${1##*\\}" in
+    qubes-windows-update.ps1-*.log|agent.log)               echo agent.log ;;
+    qubes-updates-relay-*.log|qubes-updates-relay.log)      echo relay.log ;;
+    relay-handler-*.log|relay-handler.log)                  echo relay-handler.log ;;
+    vmupdate-shim.ps1-*.log|vmupdate-shim.log)              echo vmupdate-shim.log ;;
+  esac; }
+# THE ONE LOG DIRECTORY, by log.c's rule: the registry LogDir, else <SystemDrive>\Qubes Logs - read through
+# guest_file's own transport. QWTSYSDRIVE proves the guest answered: without it an absent LogDir value and a guest
+# that said nothing would read the same, and the default would stand in for an answer.
+guest_logdir(){ local i out sd ld
+  for i in 1 2 3 4 5 6; do
+    out=$(timeout -k 5 180 tools/qtest run 'cmd /c reg query "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools" /v LogDir & echo QWTSYSDRIVE=%SystemDrive%' 2>/dev/null | tr -d '\r')
+    sd=$(printf '%s\n' "$out" | sed -n 's/^QWTSYSDRIVE=\([A-Za-z]:\)[[:space:]]*$/\1/p' | tail -1)
+    if [ -n "$sd" ]; then
+      ld=$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*LogDir[[:space:]][[:space:]]*REG_[A-Z_]*SZ[[:space:]][[:space:]]*\(.*[^[:space:]]\)[[:space:]]*$/\1/p' | tail -1)
+      printf '%s\n' "${ld:-$sd\\Qubes Logs}"; return 0
+    fi
+    sleep 5
+  done
+  return 1; }
+# Every file of every family on the guest now, one path per line, the same transport again. A wildcard item yields
+# only the files that exist; an old path is checked with `if exist`. QWTLISTEND proves the listing RAN: an empty
+# answer is a guest that did not answer, never "no files" - a before-snapshot taken from nothing would hand the judge
+# the image's whole history again.
+guest_logs(){ local ld="$1" i out set p
+  set="\"$ld\\qubes-windows-update.ps1-*.log\" \"$ld\\qubes-updates-relay-*.log\" \"$ld\\relay-handler-*.log\" \"$ld\\vmupdate-shim.ps1-*.log\""
+  for p in "${WU_OLD_LOGS[@]}"; do set="$set \"$p\""; done
+  for i in 1 2 3 4 5 6; do
+    out=$(timeout -k 5 180 tools/qtest run "cmd /c for %g in ($set) do @if exist \"%~g\" echo QWTLOG=%~g& echo QWTLISTEND" 2>/dev/null | tr -d '\r')
+    if printf '%s\n' "$out" | grep -qx 'QWTLISTEND'; then printf '%s\n' "$out" | sed -n 's/^QWTLOG=//p'; return 0; fi
+    sleep 5
+  done
+  return 1; }
+# The order a family is read in: its old path first - anything there was written before the move - then the per-day
+# files by name, which is their date order.
+wu_order(){ local p o op
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    o=1; for op in "${WU_OLD_LOGS[@]}"; do [ "$p" = "$op" ] && o=0; done
+    printf '%s\t%s\t%s\n' "$o" "${p##*\\}" "$p"
+  done | sort -t "$(printf '\t')" -k1,1 -k2,2 | cut -f3-; }
+# wu_snapshot <tsv>: BEFORE the pass, the line count of every file of every family ("<count><TAB><path>"), counted
+# by guest_file exactly as wu_slice counts it afterwards. Fails if the guest cannot be listed or a listed file read.
+wu_snapshot(){ local tsv="$1" ld list p body
+  : > "$tsv"
+  ld=$(guest_logdir) || return 1
+  list=$(guest_logs "$ld") || return 1
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    body=$(guest_file "$p") || return 1
+    printf '%s\t%s\n' "$(printf '%s\n' "$body" | wc -l)" "$p" >> "$tsv"
+  done < <(printf '%s\n' "$list" | wu_order)
+  return 0; }
+# wu_slice <rd> <tsv>: AFTER the pass, what the round appended to each family, into <rd>/<family file>: each file's
+# lines past its snapshot count, and the whole of a file the snapshot does not hold (it is new this round).
+# <rd>/guestlogs.tsv records every file's counts, so a slice can be checked against what was on the guest.
+# Returns 1 when the guest cannot be listed, 2 when a listed file cannot be read (UNREAD in guestlogs.tsv): a read that
+# failed is missing data, never a file that shrank or a new file with no lines.
+wu_slice(){ local rd="$1" tsv="$2" ld list p fam pre body n bad=0
+  : > "$rd/agent.log"; : > "$rd/relay.log"; : > "$rd/relay-handler.log"; : > "$rd/vmupdate-shim.log"
+  printf 'file\tbefore\tafter\tthis_round\tguest_path\n' > "$rd/guestlogs.tsv"
+  ld=$(guest_logdir) || return 1
+  list=$(guest_logs "$ld") || return 1
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    fam=$(wu_family "$p"); [ -n "$fam" ] || continue
+    # ENVIRON, not -v: awk processes backslash escapes in a -v value, so a Windows path never equalled its own row.
+    pre=$(P="$p" awk -F'\t' '$2 == ENVIRON["P"] { print $1; exit }' "$tsv" 2>/dev/null)
+    if ! body=$(guest_file "$p"); then
+      log "[ERROR] round $r: INSTRUMENT - $p could not be read after the pass - not sliced"
+      printf '%s\t%s\t-\tUNREAD\t%s\n' "$fam" "${pre:--}" "$p" >> "$rd/guestlogs.tsv"
+      bad=1; continue
+    fi
+    n=0; [ -n "$body" ] && n=$(printf '%s\n' "$body" | wc -l)
+    if [ -z "$pre" ]; then
+      [ -n "$body" ] && printf '%s\n' "$body" >> "$rd/$fam"
+      printf '%s\t-\t%s\t%s\t%s\n' "$fam" "$n" "$n" "$p" >> "$rd/guestlogs.tsv"
+    elif [ "$n" -lt "$pre" ]; then
+      # These files are append-only: one that SHRANK was replaced or truncated under the pass, and its tail would be
+      # some other file's lines. Said, and left out of the slice.
+      log "[WARN] round $r: $p had $pre line(s) before the pass and $n after - not sliced"
+      printf '%s\t%s\t%s\tSHRANK\t%s\n' "$fam" "$pre" "$n" "$p" >> "$rd/guestlogs.tsv"
+    else
+      [ "$n" -gt "$pre" ] && printf '%s\n' "$body" | tail -n +$((pre + 1)) >> "$rd/$fam"
+      printf '%s\t%s\t%s\t%s\t%s\n' "$fam" "$pre" "$n" "$((n - pre))" "$p" >> "$rd/guestlogs.tsv"
+    fi
+  done < <(printf '%s\n' "$list" | wu_order)
+  [ "$bad" = 0 ] || return 2
+  return 0; }
+
 # STABLY up, not just up. A single successful probe proves the agent answered ONCE. Measured
 # 2026-09-21 on win11de-ctld: 60 s after a reboot that applied a cumulative, one probe succeeded -
 # so the reboot counted and the next pass was driven - and that pass then got rc=46 on nearly every
@@ -207,10 +313,15 @@ for r in $(seq 1 "$ROUNDS"); do
   mgmt/harness/wu-evidence-facts.sh "$VM" "$RD/facts-before.txt" > "$RD/facts-before.out" 2>&1 \
     || log "round $r: facts before the pass INCOMPLETE - $(tail -1 "$RD/facts-before.out" | cut -c1-160)"
 
-  # agent.log is CUMULATIVE - it carries every pass this image has ever run, including the
-  # golden's history. Judging the whole file each round re-judges the past and lets an old pass
-  # decide this round's verdict. Snapshot it BEFORE, and judge only what this round appended.
-  guest_file 'C:\ProgramData\Qubes\wu\agent.log' > "$RD/agent-before.log"
+  # The old agent.log was CUMULATIVE - it carries every pass this image has ever run, including the
+  # golden's history - and a per-day file carries every pass of its day. Judging whole files each
+  # round re-judges the past and lets an old pass decide this round's verdict. Snapshot every file
+  # BEFORE, and judge only what this round appended (wu_slice, after the pass).
+  pre_ok=1
+  if ! wu_snapshot "$RD/guestlogs-before.tsv"; then
+    pre_ok=0
+    log "[ERROR] round $r: INSTRUMENT - the guest's update logs could not be listed or read before the pass, so this round's lines cannot be told from earlier passes'"
+  fi
   # ...and `satisfied` in update-status.json is cumulative for the SAME reason, deliberately:
   # guest/qubes-windows-update.ps1 GUARD:offeridentity carries the previous pass's list forward
   # ($script:St.satisfied = @($priorSat)) so a scan stops re-raising dom0 for a package it proved
@@ -308,23 +419,24 @@ for r in $(seq 1 "$ROUNDS"); do
   fi
   log "round $r: replay rc=$rc (dom0 contract: 0 ok, 100 no updates, else error)"
 
-  guest_file 'C:\ProgramData\Qubes\wu\agent.log'        > "$RD/agent-after.log"
-  # The delta is what this round did. comm needs sorted input, so use the line count instead:
-  # the log only ever grows, so everything past the before-snapshot's length is this round's.
-  bl=$(wc -l < "$RD/agent-before.log" 2>/dev/null || echo 0)
-  tail -n +$((bl + 1)) "$RD/agent-after.log" > "$RD/agent.log"
-  log "round $r: agent.log grew by $(wc -l < "$RD/agent.log") line(s)"
+  # The delta is what this round did. comm needs sorted input, so use the line counts instead:
+  # these logs only ever grow, so everything past a file's before-snapshot length is this round's,
+  # and so is every line of a file the snapshot did not see.
+  # THE RELAY'S OWN LOG is sliced with it. Every byte explaining a relay failure is in there -
+  # "parent watchdog armed: pid N", then "listen 127.0.0.1:<port> target=..." just before its
+  # listener.Start(). It was never collected, so when the relay failed to serve the port on
+  # 2026-10-19 (release 4.3.37, template-update, all three rounds) the evidence that would have said
+  # how far it got was left in the guest and the guest was torn down. Collected for every round now,
+  # pass or fail - and since the pass names the relay's file per day (--log-file), per file like the rest.
+  slice_rc=0; wu_slice "$RD" "$RD/guestlogs-before.tsv" || slice_rc=$?
+  case "$slice_rc" in
+    0) : ;;
+    1) log "[ERROR] round $r: the guest's update logs could not be listed after the pass - nothing of this round was collected" ;;
+    *) log "[ERROR] round $r: a guest update log could not be read after the pass (UNREAD in $RD/guestlogs.tsv) - this round's slice is incomplete" ;;
+  esac
+  log "round $r: agent.log grew by $(wc -l < "$RD/agent.log") line(s) ($(grep -ac '^agent\.log' "$RD/guestlogs.tsv" 2>/dev/null) file(s) read)"
   guest_file 'C:\ProgramData\Qubes\update-status.json'  > "$RD/update-status.json"
-  guest_file 'C:\ProgramData\Qubes\vmupdate-shim.log'   > "$RD/vmupdate-shim.log" 2>/dev/null
-  # THE RELAY'S OWN LOG. The pass starts qubes-updates-relay.exe with `--log C:\ProgramData\Qubes\wu`
-  # and every byte explaining a relay failure is in there - "parent watchdog armed: pid N", then
-  # "listen 127.0.0.1:<port> target=..." just before its listener.Start(). It was never collected,
-  # so when the relay failed to serve the port on 2026-10-19 (release 4.3.37, template-update, all
-  # three rounds) the evidence that would have said how far it got was left in the guest and the
-  # guest was torn down. Collected for every round now, pass or fail.
-  guest_file 'C:\ProgramData\Qubes\wu\qubes-updates-relay.log' > "$RD/relay.log" 2>/dev/null
-  guest_file 'C:\ProgramData\Qubes\wu\relay-handler.log'       > "$RD/relay-handler.log" 2>/dev/null
-  log "round $r: relay log $(wc -l < "$RD/relay.log" 2>/dev/null || echo 0) line(s), handler log $(wc -l < "$RD/relay-handler.log" 2>/dev/null || echo 0) line(s)"
+  log "round $r: relay log $(wc -l < "$RD/relay.log" 2>/dev/null || echo 0) line(s), handler log $(wc -l < "$RD/relay-handler.log" 2>/dev/null || echo 0) line(s), shim log $(wc -l < "$RD/vmupdate-shim.log" 2>/dev/null || echo 0) line(s)"
   mgmt/harness/wu-evidence-facts.sh "$VM" "$RD/facts-after.txt" > "$RD/facts-after.out" 2>&1 \
     || log "round $r: facts after the pass INCOMPLETE - $(tail -1 "$RD/facts-after.out" | cut -c1-160)"
 
@@ -335,6 +447,12 @@ for r in $(seq 1 "$ROUNDS"); do
   case "$after" in ''|*[!0-9]*) : ;; *) jargs+=(--dom0-reported "$after") ;; esac
   if [ -n "$refused" ]; then
     log "[WARN] round $r: JUDGE REFUSED (no pass ran - the refusal above is this round's outcome)"
+  elif [ "$pre_ok" != 1 ]; then
+    # Missing data fails: with no before-snapshot every file was taken whole, and an earlier pass would decide this round.
+    log "[ERROR] round $r: JUDGE INSTRUMENT - no before-snapshot of the guest's update logs (above), so nothing was judged"; fails=1
+  elif [ "$slice_rc" != 0 ]; then
+    # ...and so does a slice with a file missing from it: the judge would grade part of the pass as the whole.
+    log "[ERROR] round $r: JUDGE INSTRUMENT - the guest's update logs were not all read after the pass (above), so nothing was judged"; fails=1
   elif python3 tools/wu-pass-judge.py "${jargs[@]}" > "$RD/judge.out" 2>&1; then
     log "round $r: JUDGE PASS"
   else

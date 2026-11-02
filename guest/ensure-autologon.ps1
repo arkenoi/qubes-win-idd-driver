@@ -20,6 +20,24 @@
 # Windows password protects nothing dom0 relies on. QWT's own Autologon component would store an
 # LSA secret instead, but it randomises the account password, which is why the image omits it.
 $ErrorActionPreference = 'Continue'
+# The log sink, from beside this script (docs/ADR-logging.md).
+$qwtLogPs1 = Join-Path $PSScriptRoot 'log.ps1'
+try { . $qwtLogPs1 } catch { [Console]::Error.WriteLine("ensure-autologon.ps1: cannot load $qwtLogPs1 ($($_.Exception.Message)) - no log sink"); exit 1 }
+if (-not (Get-Command Write-QwtLogLine -EA SilentlyContinue)) { [Console]::Error.WriteLine("ensure-autologon.ps1: $qwtLogPs1 has no Write-QwtLogLine - no log sink"); exit 1 }
+# EVERY LINE IT PRINTS ALSO GOES TO ITS LOG, ensure-autologon.ps1-<yyyyMMdd>.log in the one log directory.
+# Its boot task (QubesAutologonGuard) runs it with no console, and Task Scheduler discards the
+# output: until 2026-11-01 a boot-time run left no record of what it found or repaired.
+# Write-Output is SHADOWED rather than every call site edited, so the printed lines, the trailer the
+# callers parse and the regions the offline suites extract (they run with the real cmdlet) stay as
+# they were. A FAIL line is an error, a WARN line a warning; the blank separator is not logged.
+function Write-Output {
+    param([Parameter(Position = 0)][string]$InputObject)
+    Microsoft.PowerShell.Utility\Write-Output $InputObject
+    if (-not $InputObject) { return }
+    $lvl = 'I'
+    if ($InputObject -like 'FAIL*') { $lvl = 'E' } elseif ($InputObject -like 'WARN*') { $lvl = 'W' }
+    $null = Write-QwtLogLine $lvl $InputObject -Module 'ensure-autologon.ps1'
+}
 $WL = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
 $changed = 0
 $warn = 0

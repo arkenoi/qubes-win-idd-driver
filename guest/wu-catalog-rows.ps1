@@ -52,7 +52,9 @@ Set-ItemProperty -Path `$IS -Name ProxyServer -Value '127.0.0.1:8082'
 `$owner = 0
 try { `$l = @(Get-NetTCPConnection -LocalPort 8082 -State Listen -ErrorAction SilentlyContinue); if (`$l.Count) { `$owner = [int]`$l[0].OwningProcess } } catch { `$owner = -1 }
 if (`$owner -ne 0) { W ("REFUSED: port 8082 is owned by pid " + `$owner + " (not this worker's) - nothing started, nothing adopted"); W 'DONE'; exit 2 }
-`$ownRelay = Start-Process -FilePath '$RelayExe' -ArgumentList '--listen','8082','--target','@default','--log','$WorkDir','--parent-pid',"`$PID" -WindowStyle Hidden -PassThru
+# No --log: the relay then logs into the one log directory by its own rule, beside the updater's relay - the place --log
+# named before the move, when that was the updater's work directory (docs/ADR-logging.md, Decision 2026-11-01).
+`$ownRelay = Start-Process -FilePath '$RelayExe' -ArgumentList '--listen','8082','--target','@default','--parent-pid',"`$PID" -WindowStyle Hidden -PassThru
 Start-Sleep -Seconds 3
 
 `$rx = [regex]"(?is)id='([0-9a-fA-F\-]{36})_link'[^>]*>(.*?)</a>"

@@ -75,6 +75,11 @@ if (-not $script:QwtDeathStateDir) {
     else { $script:QwtDeathStateDir = '/tmp/qwt-notify-errors' }
 }
 if (-not $script:QwtDeathLogDir) { $script:QwtDeathLogDir = $null }   # $null = resolve LogDir from the registry
+# The watermark is STATE, not a log, so it lives in <ProgramData>\Qubes (docs/ADR-logging.md, Decision 2026-11-01,
+# item 5); $null = beside qwt-deaths.log, which is where it stays where there is no ProgramData (the offline suites).
+if (-not $script:QwtDeathWatermarkDir) {
+    if ($env:ProgramData) { $script:QwtDeathWatermarkDir = Join-Path $env:ProgramData 'Qubes' } else { $script:QwtDeathWatermarkDir = $null }
+}
 # Where the record was MEANT to go, and whether we have already said it did not get there. Both
 # feed the one-per-process fallback marker in Write-QwtDeathLog.
 if (-not $script:QwtDeathLogDirConfigured) { $script:QwtDeathLogDirConfigured = $null }
@@ -244,7 +249,7 @@ $script:QwtDeathScriptTasks = @('\QubesPvNic', '\QubesPvNicRearm', '\QubesNetwor
                                 '\QubesWindowsUpdateDownload', '\QwtImprovedSetup')
 # each script task's MACHINE ID (the route component, in the same style as the executables'), its HUMAN NAME, and what its
 # failure means (line 1) - from the tasks' own registrations (their <Description>), cut to the consequence (owner
-# 2026-10-10). What the lines used to carry: QubesPvNic's log is C:\ProgramData\QubesPvNic.log and names the step, and a
+# 2026-10-10). What the lines used to carry: QubesPvNic's log is <LogDir>\pvnic-boot.ps1-<yyyyMMdd>.log and names the step, and a
 # failure can also be a previous session's shutdown re-arm of the unplug latch not completing; QubesPvNicRearm fails only
 # when a registry write returned an error (a run the shutdown itself ENDED is not reported - result 267014 is ignored for
 # every task - and the next boot judges that from the re-arm stamp); the autologon guard's miss shows after an update or
@@ -1444,14 +1449,48 @@ function Invoke-QwtDeathReport {
 # skipped; with no watermark at all (a fresh install) it starts from the current end of each channel rather than
 # reporting the machine's whole history.
 function Get-QwtDeathWatermarkPath {
-    # Beside qwt-deaths.log: the same directory the reporter already owns and can write as SYSTEM.
-    $dir = Get-QwtDeathLogDir
+    # <ProgramData>\Qubes, beside the route's marker store, which this reporter already writes as SYSTEM.
+    $dir = $script:QwtDeathWatermarkDir
+    if (-not $dir) { $dir = Get-QwtDeathLogDir }
     if (-not $dir) { return $null }
     try { if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null } } catch { return $null }
     return (Join-Path $dir 'qwt-death-watermark.json')
 }
-function Read-QwtDeathWatermark {
+# THE WATERMARK AN EARLIER BUILD KEPT in the log directory, beside qwt-deaths.log. Before the first read or write in a
+# process: if the new file is absent and the old one exists it is MOVED (one rename); if the move fails the old one is
+# READ where it is, and deleted after the next successful write of the new one - an upgrade never re-reports the deaths
+# the old watermark already covers. Returns the path to read.
+$script:QwtDeathWatermarkMigrated = $false
+$script:QwtDeathWatermarkOld = $null    # the old file, while it is the one to read (its move failed)
+function Get-QwtDeathWatermarkReadPath {
     $p = Get-QwtDeathWatermarkPath
+    if (-not $p) { return $null }
+    if (-not $script:QwtDeathWatermarkMigrated) {
+        $script:QwtDeathWatermarkMigrated = $true
+        $ld = Get-QwtDeathLogDir
+        if ($ld) {
+            $old = Join-Path $ld 'qwt-death-watermark.json'
+            if ($old -ne $p -and -not (Test-Path -LiteralPath $p) -and (Test-Path -LiteralPath $old)) {
+                try { Move-Item -LiteralPath $old -Destination $p -ErrorAction Stop }
+                catch {
+                    # The reporter and the boot catch-up are separate tasks, so both can reach this move on the first
+                    # boot: the one that loses finds the old file gone and the migrated one in place, and reads THAT -
+                    # pointing it at the vanished old path would read an empty watermark and write it over the moved one.
+                    if (Test-Path -LiteralPath $old) {
+                        $script:QwtDeathWatermarkOld = $old
+                        Write-QwtDeathLog 'WARN' "the watermark could not be moved from $old to $p ($($_.Exception.Message)) - read there until the next write"
+                    } elseif (-not (Test-Path -LiteralPath $p)) {
+                        Write-QwtDeathLog 'WARN' "the watermark could not be moved from $old to $p ($($_.Exception.Message)) and neither file is there now - this pass starts without one"
+                    }
+                }
+            }
+        }
+    }
+    if ($script:QwtDeathWatermarkOld) { return $script:QwtDeathWatermarkOld }
+    return $p
+}
+function Read-QwtDeathWatermark {
+    $p = Get-QwtDeathWatermarkReadPath
     if (-not $p -or -not (Test-Path -LiteralPath $p)) { return @{} }
     try {
         $o = Get-Content -LiteralPath $p -Raw -ErrorAction Stop | ConvertFrom-Json
@@ -1471,6 +1510,7 @@ function Read-QwtDeathWatermark {
 }
 function Write-QwtDeathWatermark {
     param([Parameter(Mandatory)][hashtable]$Marks)
+    [void](Get-QwtDeathWatermarkReadPath)   # the move above happens before a first WRITE too
     $p = Get-QwtDeathWatermarkPath
     if (-not $p) { return $false }
     try {
@@ -1485,6 +1525,10 @@ function Write-QwtDeathWatermark {
         $tmp = "$p.tmp"
         ($Marks | ConvertTo-Json -Compress) | Set-Content -LiteralPath $tmp -Encoding UTF8 -ErrorAction Stop
         Move-Item -LiteralPath $tmp -Destination $p -Force -ErrorAction Stop   # replace, never a half-written file
+        if ($script:QwtDeathWatermarkOld) {
+            Remove-Item -LiteralPath $script:QwtDeathWatermarkOld -Force -ErrorAction SilentlyContinue
+            $script:QwtDeathWatermarkOld = $null
+        }
         return $true
     } catch {
         Write-QwtDeathLog 'WARN' "the watermark could not be written ($($_.Exception.Message)) - the next boot may re-report"

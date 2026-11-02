@@ -16,7 +16,6 @@
 param([int]$PerRound = 5, [int]$Rounds = 2)
 $ErrorActionPreference = 'Continue'
 $exe   = 'C:\Program Files\Qubes Tools\bin\qubes-updates-relay.exe'
-$wu    = 'C:\ProgramData\Qubes\wu'
 $proxy = 'http://127.0.0.1:8082'
 $url   = 'http://ctldl.windowsupdate.com/msdownload/update/v3/static/trustedr/en/authrootstl.cab'
 $TRUE_LEN = 80043
@@ -36,7 +35,10 @@ for ($r = 1; $r -le $Rounds; $r++) {
         Stop-OwnRelay
         Start-Sleep -Seconds 2
         $env:QUBES_UPDATES_DRAINMS = "$drain"
-        [void](Start-OwnRelay -Exe $exe -Arguments @('--listen','8082','--target','@default','--log',$wu) -SettleSec 3)
+        # No --log: the relay then logs into the one log directory by its own rule, beside the updater's
+        # relay - the place --log named before the move, when that was the updater's work directory
+        # (docs/ADR-logging.md, Decision 2026-11-01).
+        [void](Start-OwnRelay -Exe $exe -Arguments @('--listen','8082','--target','@default') -SettleSec 3)
         for ($i = 1; $i -le $PerRound; $i++) {
             try {
                 $resp = Invoke-WebRequest $url -Proxy $proxy -UseBasicParsing -TimeoutSec 60

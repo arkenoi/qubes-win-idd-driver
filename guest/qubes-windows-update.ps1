@@ -54,6 +54,12 @@ param(
   [switch]$Scheduled
 )
 $ErrorActionPreference = 'Continue'
+# THE LOG SINK IS log.ps1, beside this script in bin (docs/ADR-logging.md, Decision 2026-11-01): the pass writes
+# qubes-windows-update.ps1-<yyyyMMdd>.log in the one log directory. Without it every line would be lost in silence, so a
+# pass that cannot load it says so and does not run. log.ps1 defines a Log(level,msg) of its own; the Log below replaces it.
+$qwtLogPs1 = Join-Path $PSScriptRoot 'log.ps1'
+try { . $qwtLogPs1 } catch { [Console]::Error.WriteLine("qubes-windows-update.ps1: cannot load $qwtLogPs1 ($($_.Exception.Message)) - no log sink"); exit 1 }
+if (-not (Get-Command Write-QwtLogLine -EA SilentlyContinue)) { [Console]::Error.WriteLine("qubes-windows-update.ps1: $qwtLogPs1 has no Write-QwtLogLine - no log sink"); exit 1 }
 # ---- WU-PROXY-SANE-BEGIN
 # GUARD:proxysane - the proxy must be an ABSOLUTE URI, checked before anything uses it.
 # Measured 2026-09-21: `-Action full -OnlyKb KB2267602 KB5007651` bound the first KB to -OnlyKb and
@@ -530,9 +536,19 @@ function Log($m, $lvl){
   # failures could never be counted as errors. tools/log-sweep.py recorded all eight as undeclared
   # for the same reason. This is the 2026-10-14 blindness from the other end: that time the writer
   # changed its prefix and the reader stopped matching; here the writer never emitted one at all.
-  if ($lvl) { $m = "[$lvl] $m" }
-  $line = (Get-Date -Format 'HH:mm:ss')+' '+$m
-  Write-Host $line
+  # THE LEVEL IS THE LINE'S PREFIX LETTER NOW, not a "[$lvl] " in its text (docs/ADR-logging.md, Decision 2026-11-01):
+  # E for ERROR/FAILED, W for WARN/WARNING, D for DEBUG, I otherwise - from the level a call site PASSES. The twelve
+  # sites that write "[ERROR] "/"[WARN] " INTO the text with no $lvl keep that text (its declaration lives there on
+  # purpose - QWTUPDDEFCLASSNEW below says why) and take the letter that text declares, by the rule tools/log-sweep.py
+  # applied to this log before the move (BLOG_DECLARED_RE, leading blanks allowed). At I they would vanish from the
+  # sweep, which reads the letter and treats I as not a failure - the pass's own final "[ERROR] " line among them.
+  $L = 'I'
+  if ($lvl -in 'ERROR', 'FAILED') { $L = 'E' } elseif ($lvl -in 'WARN', 'WARNING') { $L = 'W' } elseif ($lvl -eq 'DEBUG') { $L = 'D' }
+  elseif (-not $lvl -and "$m" -match '^\s*\[(ERROR|FATAL|WARN|WARNING)\]\s') { if ($Matches[1] -in 'ERROR', 'FATAL') { $L = 'E' } else { $L = 'W' } }
+  # The console keeps its old shape: whoever runs a pass by hand reads the level in the text.
+  $shown = $m
+  if ($lvl) { $shown = "[$lvl] $m" }
+  Write-Host ((Get-Date -Format 'HH:mm:ss') + ' ' + $shown)
   # A DROPPED LOG LINE IS A LOST ERROR, AND THIS USED TO DROP THEM IN SILENCE. The old body was
   #     try { Add-Content ... -EA SilentlyContinue } catch {}
   # - a suppressed error inside an empty catch, so a failed append left no trace in the file, on the
@@ -543,37 +559,35 @@ function Log($m, $lvl){
   # runs immediately AFTER Ensure-Proxy and only if Ensure-Proxy returned - and Ensure-Proxy's
   # success path emits both. Add-Content takes a write lock, and the updater deploy was writing in
   # that same second. Those two absences then became evidence for a defect that was never there.
-  # Save (above) has retried its write since it was written; this never did.
   # Write-Host alone is not a record: under Task Scheduler there is no console to keep it.
-  $p = Join-Path $WorkDir 'agent.log'
-  # ONCE THE LOG IS PLAINLY GONE, STOP PAYING FOR IT. Retrying every line costs ~375 ms each, so a
-  # long pass against an unwritable log would spend minutes retrying a write that cannot work. After
-  # three drops the retry is skipped and the line is counted directly: the loss is still reported,
-  # the pass is not slowed down.
-  $tries = if ($script:LogDropped -ge 3) { 1 } else { 5 }
-  for ($i = 0; $i -lt $tries; $i++) {
-    try {
-      # THE LOG REPORTS ITS OWN GAPS. A status field can go unread; a line in the log is seen by
-      # whoever reads the log, including tools/log-sweep.py. So the first write that SUCCEEDS after
-      # any loss states how many lines went missing and why - otherwise the only trace of a gap is
-      # the gap, and an absent line would again be mistaken for an event that did not happen.
-      if ($script:LogDropped -gt 0 -and -not $script:LogLossReported) {
-        $notice = (Get-Date -Format 'HH:mm:ss') + " QWTUPDLOGLOST $script:LogDropped line(s) could not be written to this log and are GONE (first reason: $script:LogDropFirst). Anything inferred from a MISSING line in this file is unsafe."
-        Add-Content -LiteralPath $p -Value $notice -EA Stop
-        # MARKED REPORTED ONLY ONCE IT IS ON DISK. Setting the flag first meant a notice that was
-        # ITSELF dropped counted as delivered, so the gap was never announced - caught by
-        # tools/tests/wu-log-loss-selftest.sh the first time it ran.
-        $script:LogLossReported = $true
-      }
-      Add-Content -LiteralPath $p -Value $line -EA Stop; return
-    }
-    catch {
-      if (-not $script:LogDropFirst) { $script:LogDropFirst = "$($_.Exception.Message)" }
-      Start-Sleep -Milliseconds (25 * ($i + 1))
+  # THE RETRY IS log.ps1's NOW: Write-QwtLogLine retries a sharing collision 20 x 15 ms and gives up at
+  # once on a missing directory or a refusal, so the five tries and the after-three-drops shortcut that
+  # lived here are gone - a log that is plainly gone already costs one attempt. What stays is the
+  # ACCOUNTING, keyed on its answer.
+  $mod = 'qubes-windows-update.ps1'
+  # THE LOG REPORTS ITS OWN GAPS. A status field can go unread; a line in the log is seen by
+  # whoever reads the log, including tools/log-sweep.py. So the first write that SUCCEEDS after
+  # any loss states how many lines went missing and why - otherwise the only trace of a gap is
+  # the gap, and an absent line would again be mistaken for an event that did not happen.
+  if ($script:LogDropped -gt 0 -and -not $script:LogLossReported) {
+    $notice = "QWTUPDLOGLOST $script:LogDropped line(s) could not be written to this log and are GONE (first reason: $script:LogDropFirst). Anything inferred from a MISSING line in this file is unsafe."
+    # MARKED REPORTED ONLY ONCE IT IS ON DISK. Setting the flag first meant a notice that was
+    # ITSELF dropped counted as delivered, so the gap was never announced - caught by
+    # tools/tests/wu-log-loss-selftest.sh the first time it ran.
+    if (Write-QwtLogLine W $notice -Module $mod) { $script:LogLossReported = $true }
+    else {
+      # The gap is still unannounced, so this line must not land after it as if nothing were missing: it is lost too,
+      # and said on stderr like every other lost line (log.ps1 has only said so for the notice).
+      [Console]::Error.WriteLine("qwt log: line LOST (the QWTUPDLOGLOST notice before it was not written): $m")
+      $script:LogDropped++
+      return
     }
   }
-  # Still unwritable after five tries: COUNT it. Save reports the count, so an incomplete log is a
-  # stated fact rather than a gap someone has to notice.
+  if (Write-QwtLogLine $L "$m" -Module $mod) { return }
+  # The primitive has already said why on stderr; it returns no reason, so the status names where to look.
+  if (-not $script:LogDropFirst) { $script:LogDropFirst = 'Write-QwtLogLine could not write the line - log.ps1 named the cause on stderr' }
+  # COUNT it. Save reports the count, so an incomplete log is a stated fact rather than a gap someone
+  # has to notice.
   $script:LogDropped++
 }
 # The start gate (WU-PREVPASS-GATE) ran before Log existed; what it decided about a cut-off earlier pass goes on the record here.
@@ -586,7 +600,7 @@ function SetV($p,$n,$v,$t){ if(-not(Test-Path $p)){New-Item -Path $p -Force|Out-
 # qrexec qubes.UpdatesProxy call - measured 147 dom0 policy hits in one afternoon on an "offline"
 # guest, still dripping hours after the last scan. Remove-Proxy in the finally below restores the
 # routeless baseline; update traffic is the only traffic that ever gets a path out.
-# ---- WU-RELAY-BEGIN   (tools/tests/wu-relay-own-test.ps1 extracts this region by these markers)
+# ---- WU-RELAY-BEGIN   (region markers)
 function Test-RelayListening {
   param([int]$BoundMs = 15000)
   # Does something ACCEPT a TCP connection on 127.0.0.1:8082? A relay PROCESS existing does not prove
@@ -629,8 +643,8 @@ function Test-RelayListening {
     Start-Sleep -Milliseconds 250
   }
 }
-# WHAT THE RELAY ITSELF SAID, for the two failure paths below. The relay is started with
-# `--log $WorkDir` and writes qubes-updates-relay.log there, including "parent watchdog armed: pid N"
+# WHAT THE RELAY ITSELF SAID, for the two failure paths below. The relay writes the file Start-Relay
+# named for it ($script:RelayLogPath, passed as --log-file), including "parent watchdog armed: pid N"
 # and then "listen 127.0.0.1:<port> target=..." immediately before its listener.Start() - so its own
 # log says how far it got. Neither failure path read it, and the harness did not collect it, so the
 # one artefact that explains the failure was discarded every time. Jev: diagnosis_gap 0.81.
@@ -642,8 +656,8 @@ function Get-RelayDiagnosis {
   } catch { }
   $tail = ''
   try {
-    $lp = Join-Path $WorkDir 'qubes-updates-relay.log'
-    if (Test-Path -LiteralPath $lp) { $tail = ((Get-Content -LiteralPath $lp -Tail 6 -ErrorAction Stop) -join ' | ') }
+    $lp = $script:RelayLogPath
+    if ($lp -and (Test-Path -LiteralPath $lp)) { $tail = ((Get-Content -LiteralPath $lp -Tail 6 -ErrorAction Stop) -join ' | ') }
     else { $tail = "no relay log at $lp - the relay never got as far as writing one" }
   } catch { $tail = "relay log unreadable: $($_.Exception.Message)" }
   return ("relay pid {0} {1} after {2} connect attempt(s); its own log: {3}" -f `
@@ -671,14 +685,27 @@ function Format-RelayRefusal([int]$owner) {
   try { $op = Get-Process -Id $owner -ErrorAction SilentlyContinue; if ($op) { $who = " ($($op.ProcessName), started $($op.StartTime.ToString('s')))" } } catch { }
   return "REFUSED: 127.0.0.1:8082 is already served by pid $owner$who, which this pass did not start - the pass never adopts a relay (ADR-updater 12.4), and under the updater mutex another listener on its port is an ANOMALY: find out what pid $owner is before the next pass; it was NOT killed"
 }
+# Start-Process joins -ArgumentList with bare spaces - Windows PowerShell 5.1 quotes nothing - and the log directory is
+# "<SystemDrive>\Qubes Logs" by default: unquoted, "Logs" reaches the relay as a stray argument and it refuses to start.
+# Quoted by the rules its argument parser applies, a trailing backslash doubled so it cannot escape the closing quote.
+function ConvertTo-RelayArg([string]$s) {
+  if ($s -and $s -notmatch '\s') { return $s }
+  return '"' + ($s -replace '(\\+)$', '$1$1') + '"'
+}
 function Start-Relay {
   if (-not (Test-Path -LiteralPath $RelayExe)) { throw "relay not found at $RelayExe" }
   $env:QUBES_UPDATES_MAXCONN='256'
+  # THE RELAY'S LOG IS NAMED HERE, once per pass, in the one log directory (docs/ADR-logging.md, Decision 2026-11-01), and
+  # this pass reads it back (Get-RelayGiveUps, Get-RelayDiagnosis): one variable on both sides, so the reader cannot look at
+  # another day's file than the one the relay writes - it writes this one for its whole life, and a respawn writes it too.
+  # --log is the directory the relay's handlers write their own per-day log into.
+  $relayLogDir = Get-QwtLogDir
+  if (-not $script:RelayLogPath) { $script:RelayLogPath = Join-Path $relayLogDir ('qubes-updates-relay-' + (Get-Date -Format 'yyyyMMdd') + '.log') }
   # OWNED BY HANDLE (ADR-updater 12.4): -PassThru hands back the Process object of the one relay THIS pass started; that object,
   # its pid and its start time are the only identity this pass ever stops (Stop-OwnRelay). --parent-pid: the relay exits on its
   # own when THIS process is gone (measured 2026-09-17: a pass ended hard by the scheduler never reached the Remove-Proxy below,
   # and the relay served for hours).
-  $p = Start-Process -FilePath $RelayExe -ArgumentList '--listen','8082','--target','@default','--log',$WorkDir,'--parent-pid',"$PID" -WindowStyle Hidden -PassThru   # GUARD:relayhandle
+  $p = Start-Process -FilePath $RelayExe -ArgumentList '--listen','8082','--target','@default','--log',(ConvertTo-RelayArg $relayLogDir),'--log-file',(ConvertTo-RelayArg $script:RelayLogPath),'--parent-pid',"$PID" -WindowStyle Hidden -PassThru   # GUARD:relayhandle
   $script:OwnRelay = $p
   $script:OwnRelayPid = 0
   $script:OwnRelayStart = ''
@@ -827,7 +854,7 @@ function Sync-Revocation {
 # logic being right; this teardown does not. Keeping both means a mistake in either one is
 # bounded by the other: a wrong allowlist is still limited to the minutes a pass runs, and a
 # pass left open still serves nobody but the update. Do not remove this because the other exists.
-# ---- WU-RELAY-TEARDOWN-BEGIN   (tools/tests/wu-relay-own-test.ps1 extracts this region by these markers)
+# ---- WU-RELAY-TEARDOWN-BEGIN   (region markers)
 function Remove-Proxy {
   & netsh winhttp reset proxy | Out-Null
   SetV $IS 'ProxyEnable' 0 'DWord'
@@ -1824,7 +1851,10 @@ function Test-RollupRegistered($before, $after){
 # inside the main cab, where CBS orders it itself). rc reduction across cabs: any real
 # failure wins, else 3010 if anything staged, else 0.
 function Add-PackageCompat($f){
-  & DISM /Online /Add-Package /PackagePath:"$f" /NoRestart /Quiet /LogPath:"$WorkDir\dism.log" | Out-Null
+  # DISM's own log goes to the one log directory, in DISM's own shape: dism-<yyyyMMdd>.log, dated by the call
+  # (docs/ADR-logging.md, Decision 2026-11-01, item 2).
+  $dismLog = Join-Path (Get-QwtLogDir) ('dism-' + (Get-Date -Format 'yyyyMMdd') + '.log')
+  & DISM /Online /Add-Package /PackagePath:"$f" /NoRestart /Quiet /LogPath:"$dismLog" | Out-Null
   $rc=$LASTEXITCODE
   if($rc -ne 50){ return $rc }
   $name=[IO.Path]::GetFileName($f)
@@ -1838,7 +1868,8 @@ function Add-PackageCompat($f){
   if($cabs.Count -eq 0){ Log "  $name : expand produced no cabs"; Remove-Item $tmp -Recurse -Force -EA SilentlyContinue; return 50 }
   $worst=0; $staged=$false
   foreach($c in $cabs){
-    & DISM /Online /Add-Package /PackagePath:"$($c.FullName)" /NoRestart /Quiet /LogPath:"$WorkDir\dism.log" | Out-Null
+    $dismLog = Join-Path (Get-QwtLogDir) ('dism-' + (Get-Date -Format 'yyyyMMdd') + '.log')
+    & DISM /Online /Add-Package /PackagePath:"$($c.FullName)" /NoRestart /Quiet /LogPath:"$dismLog" | Out-Null
     $crc=$LASTEXITCODE
     Log ("  cab " + $c.Name + " rc=" + $crc)
     if($crc -eq 3010 -or $crc -eq 2359302){ $staged=$true }
@@ -2767,18 +2798,18 @@ try {
   # So: watch the relay's own log across the scan. If it gave up on any fetch (complete=False)
   # AND the scan found nothing, the result is UNKNOWN, not zero - retry once, then refuse to
   # report a number nobody can stand behind.
-  # The relay writes its log under the SAME WorkDir it is started with (see Ensure-Proxy: --log
-  # $WorkDir). This was hardcoded to the default path, so any run with a non-default -WorkDir read a
-  # file that never grew, counted zero give-ups, and disarmed the guard silently.
-  $relayLog = Join-Path $WorkDir 'qubes-updates-relay.log'
+  # The relay writes the file Start-Relay named for it ($script:RelayLogPath, passed as --log-file), and
+  # this reads that same variable. The path was once hardcoded to the default WorkDir while the relay
+  # wrote under the WorkDir it was started with, so any run with a non-default -WorkDir read a file
+  # that never grew, counted zero give-ups, and disarmed the guard silently.
   # Number of fetches the relay gave up on since $fromOffset, or -1 for UNKNOWN.
   # UNKNOWN IS NOT ZERO. This used to answer 0 when the log was missing and 0 again when reading it
   # threw - a check that could not fail, and therefore was not a check. The caller now treats an
   # unknown answer as suspect instead of as a clean bill of health.
   function Get-RelayGiveUps([long]$fromOffset) {
-    if (-not (Test-Path $relayLog)) { return -1 }
+    if (-not $script:RelayLogPath -or -not (Test-Path $script:RelayLogPath)) { return -1 }
     try {
-      $fs = [IO.File]::Open($relayLog, 'Open', 'Read', 'ReadWrite')
+      $fs = [IO.File]::Open($script:RelayLogPath, 'Open', 'Read', 'ReadWrite')
       try {
         if ($fromOffset -gt $fs.Length) { $fromOffset = 0 }
         [void]$fs.Seek($fromOffset, 'Begin')
@@ -2792,7 +2823,7 @@ try {
       return ([regex]::Matches($text, 'PLAIN REFUSED|complete=False')).Count
     } catch { return -1 }
   }
-  $relayOffset = if (Test-Path $relayLog) { (Get-Item $relayLog).Length } else { 0 }
+  $relayOffset = if ($script:RelayLogPath -and (Test-Path $script:RelayLogPath)) { (Get-Item $script:RelayLogPath).Length } else { 0 }
 
   $avail = Get-Available
   # TEST HOOK, same reasoning as the agent's SoloFaultInject: this guard only fires when a scan
@@ -2813,7 +2844,7 @@ try {
   if ($suspect) {
     $gu = if ($giveUps -lt 0) { 'UNKNOWN (relay log unreadable)' } else { $giveUps }
     Log "scan is suspect - relay give-ups: $gu, found $($avail.Count) update(s) - rescanning" 'WARN'
-    $relayOffset = if (Test-Path $relayLog) { (Get-Item $relayLog).Length } else { 0 }
+    $relayOffset = if ($script:RelayLogPath -and (Test-Path $script:RelayLogPath)) { (Get-Item $script:RelayLogPath).Length } else { 0 }
     Start-Sleep -Seconds 5
     $avail = Get-Available
     $giveUps = Get-RelayGiveUps $relayOffset

@@ -10,17 +10,38 @@
 # lines, which we emit in English, and numbers. Get-Content is used without -Encoding so the
 # ANSI/UTF-16 question stays with PowerShell's own detection, and the host side greps with -a.
 $ErrorActionPreference = 'Continue'
-$work  = 'C:\ProgramData\Qubes\wu'
 $bin   = 'C:\Program Files\Qubes Tools\bin'
 $agent = Join-Path $bin 'qubes-windows-update.ps1'
 $exe   = Join-Path $bin 'qubes-updates-relay.exe'
-$alog  = Join-Path $work 'agent.log'
-$rlog  = Join-Path $work 'qubes-updates-relay.log'
 $ilog  = 'C:\qwt-improved-install.log'
+# THE PASS'S LOGS ARE PER-DAY FILES IN THE ONE LOG DIRECTORY since 2026-11-01 (docs/ADR-logging.md): the updater's
+# qubes-windows-update.ps1-<yyyyMMdd>.log and the relay's qubes-updates-relay-<yyyyMMdd>.log, each named on the day its
+# process starts - so one pass can write a file that did not exist when the window opened. The directory is log.c's
+# rule: the registry LogDir, else <SystemDrive>\Qubes Logs. The old cumulative files are read SECOND: an updater from
+# before the move still writes them, and on an upgraded guest they stay, frozen.
+$logDir = $null
+try { $logDir = (Get-ItemProperty 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -Name LogDir -ErrorAction Stop).LogDir } catch { }
+if (-not $logDir) { $logDir = Join-Path $env:SystemDrive 'Qubes Logs' }
+$work  = 'C:\ProgramData\Qubes\wu'
+$aOld  = Join-Path $work 'agent.log'
+$rOld  = Join-Path $work 'qubes-updates-relay.log'
 
 function Size([string]$p) { if (Test-Path -LiteralPath $p) { (Get-Item -LiteralPath $p).Length } else { 0 } }
-$aPre = Size $alog
-$rPre = Size $rlog
+# Every file of one log as it stands now: the per-day files in name order (their date order), then the old one.
+function Log-Files([string]$filter, [string]$old) {
+    $f = @(Get-ChildItem -LiteralPath $logDir -Filter $filter -File -ErrorAction SilentlyContinue |
+           Sort-Object Name | ForEach-Object { $_.FullName })
+    $f += $old
+    return $f
+}
+# The length of each of those files - the window's start. A file absent here and present after is wholly this pass's.
+function Sizes([string]$filter, [string]$old) {
+    $h = @{}
+    foreach ($p in (Log-Files $filter $old)) { $h[$p] = Size $p }
+    return $h
+}
+$aPre = Sizes 'qubes-windows-update.ps1-*.log' $aOld
+$rPre = Sizes 'qubes-updates-relay-*.log' $rOld
 
 # ---- what the DEPLOY said. The whole install log is filtered to the updater's own lines: the three
 # vouch/compile lines are what the fa5b416a defect lacked while still reporting success.
@@ -70,8 +91,8 @@ for ($attempt = 1; $attempt -le 10; $attempt++) {
     # wait carried the CONCURRENT pass's completion ("13:10:48 scan: 6 update(s) offered ... reported
     # to dom0"), so U5 could have been satisfied by a pass this test did not drive. Same verdict that
     # time, but a gate must not depend on which pass happened to finish inside the window.
-    $aPre = Size $alog
-    $rPre = Size $rlog
+    $aPre = Sizes 'qubes-windows-update.ps1-*.log' $aOld
+    $rPre = Sizes 'qubes-updates-relay-*.log' $rOld
     $scanOut = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $agent -Action scan 2>&1)
     $rc = $LASTEXITCODE
     if (@($scanOut | Where-Object { "$_" -match 'QWTUPDMUTEXHELD' }).Count -gt 0) {
@@ -91,8 +112,8 @@ Write-Output '#ENDSCAN#'
 # the offsets the windows below actually used - printed AFTER the scan because they are taken
 # immediately before the attempt that ran, so a reader can check the window against the logs
 Write-Output '#SIZES#'
-Write-Output ("agent_log_pre=" + $aPre)
-Write-Output ("relay_log_pre=" + $rPre)
+foreach ($k in @($aPre.Keys | Sort-Object)) { Write-Output ("agent_log_pre=" + $aPre[$k] + " " + $k) }
+foreach ($k in @($rPre.Keys | Sort-Object)) { Write-Output ("relay_log_pre=" + $rPre[$k] + " " + $k) }
 Write-Output '#ENDSIZES#'
 
 # NOTHING NEW MEANS NOTHING - NEVER THE WHOLE FILE.
@@ -118,10 +139,20 @@ function New-Lines([string]$p, [long]$pre) {
     return ([Text.Encoding]::Default.GetString($new) -split "`r?`n")
 }
 
+# What this pass appended to every file of one log, the per-day files first and the old file last, each from the length
+# it had when the window opened (0 for a file the window did not see: all of it is new).
+function Pass-Lines([string]$filter, [string]$old, [hashtable]$pre) {
+    foreach ($p in (Log-Files $filter $old)) {
+        $from = 0
+        if ($pre.ContainsKey($p)) { $from = [long]$pre[$p] }
+        foreach ($l in @(New-Lines $p $from)) { if ($l.Trim()) { Write-Output $l.TrimEnd() } }
+    }
+}
+
 Write-Output '#AGENTLOG#'
-foreach ($l in @(New-Lines $alog $aPre)) { if ($l.Trim()) { Write-Output $l.TrimEnd() } }
+Pass-Lines 'qubes-windows-update.ps1-*.log' $aOld $aPre
 Write-Output '#ENDAGENTLOG#'
 
 Write-Output '#RELAYLOG#'
-foreach ($l in @(New-Lines $rlog $rPre)) { if ($l.Trim()) { Write-Output $l.TrimEnd() } }
+Pass-Lines 'qubes-updates-relay-*.log' $rOld $rPre
 Write-Output '#ENDRELAYLOG#'

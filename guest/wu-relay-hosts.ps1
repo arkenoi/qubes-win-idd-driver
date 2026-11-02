@@ -3,8 +3,20 @@
 # route at exactly the moment we need the bandwidth. This counts connections and held-time per
 # destination host, which is what decides whether update traffic is competing with telemetry.
 $ErrorActionPreference = 'Continue'
-$log = 'C:\ProgramData\Qubes\wu\qubes-updates-relay.log'
-$lines = @(Get-Content -LiteralPath $log -EA SilentlyContinue | Where-Object { $_ -match ' CONN ' })
+# THE ONE LOG DIRECTORY (docs/ADR-logging.md, Decision 2026-11-01), by log.ps1's rule, inlined because this probe runs
+# without it: the registry LogDir, else <SystemDrive>\Qubes Logs. A moved log is its per-day files there,
+# <module>-<yyyyMMdd>.log, newest last; only a guest with none of them reads the file at its old path.
+function Get-MovedLogFiles([string]$Module, [string]$Old) {
+    $d = $null
+    try { $d = Get-ItemPropertyValue 'HKLM:\Software\Invisible Things Lab\Qubes Tools' LogDir -ErrorAction Stop } catch { }
+    if (-not $d) { $d = Join-Path $env:SystemDrive 'Qubes Logs' }
+    $rx = '^' + [regex]::Escape($Module) + '-\d{8}\.log$'
+    $f = @(Get-ChildItem -LiteralPath $d -Filter "$Module-*.log" -File -EA SilentlyContinue | Where-Object { $_.Name -match $rx } | Sort-Object Name | ForEach-Object { $_.FullName })
+    if ($f.Count -eq 0 -and $Old -and (Test-Path -LiteralPath $Old)) { $f = @($Old) }
+    $f
+}
+$log = @(Get-MovedLogFiles 'qubes-updates-relay' 'C:\ProgramData\Qubes\wu\qubes-updates-relay.log')
+$lines = @(); if ($log.Count) { $lines = @(Get-Content -LiteralPath $log -EA SilentlyContinue | Where-Object { $_ -match ' CONN ' }) }
 Write-Output "=== RESULT ==="
 Write-Output ("total_conns=" + $lines.Count)
 $stats = @{}

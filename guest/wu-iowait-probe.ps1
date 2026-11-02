@@ -18,8 +18,25 @@ $paths = @(
 # was running". Record proof that bytes moved DURING the sampling window, or refuse to conclude.
 $relayLog = 'C:\ProgramData\Qubes\wu\qubes-updates-relay.log'
 $dlDir    = 'C:\Windows\SoftwareDistribution\Download'
+# THE ONE LOG DIRECTORY (docs/ADR-logging.md, Decision 2026-11-01), by log.ps1's rule, inlined because this probe runs
+# without it: the registry LogDir, else <SystemDrive>\Qubes Logs. A moved log is its per-day files there,
+# <module>-<yyyyMMdd>.log, newest last; only a guest with none of them reads the file at its old path.
+function Get-MovedLogFiles([string]$Module, [string]$Old) {
+  $d = $null
+  try { $d = Get-ItemPropertyValue 'HKLM:\Software\Invisible Things Lab\Qubes Tools' LogDir -ErrorAction Stop } catch { }
+  if (-not $d) { $d = Join-Path $env:SystemDrive 'Qubes Logs' }
+  $rx = '^' + [regex]::Escape($Module) + '-\d{8}\.log$'
+  $f = @(Get-ChildItem -LiteralPath $d -Filter "$Module-*.log" -File -EA SilentlyContinue | Where-Object { $_.Name -match $rx } | Sort-Object Name | ForEach-Object { $_.FullName })
+  if ($f.Count -eq 0 -and $Old -and (Test-Path -LiteralPath $Old)) { $f = @($Old) }
+  $f
+}
+# The relay's bytes over every file it may be writing - its per-day files and the old cumulative one - so a pass that
+# starts a new day's file between the two witnesses still counts as growth.
 function Witness {
-  $rl = 0; if (Test-Path -LiteralPath $relayLog) { $rl = (Get-Item -LiteralPath $relayLog).Length }
+  $rl = 0
+  foreach ($p in @(Get-MovedLogFiles 'qubes-updates-relay' '') + @($relayLog)) {
+    if (Test-Path -LiteralPath $p) { $rl += (Get-Item -LiteralPath $p).Length }
+  }
   $dl = 0
   try { $dl = (Get-ChildItem -LiteralPath $dlDir -Recurse -File -ErrorAction SilentlyContinue |
                Measure-Object -Property Length -Sum).Sum } catch { $dl = -1 }

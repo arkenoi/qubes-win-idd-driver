@@ -12,7 +12,6 @@
 # CONNECT/TLS, so plain-HTTP proxying may simply never have been exercised.
 $ErrorActionPreference = 'Continue'
 $relay = 'C:\Program Files\Qubes Tools\bin\qubes-updates-relay.exe'
-$wu    = 'C:\ProgramData\Qubes\wu'
 $proxy = 'http://127.0.0.1:8082'
 Write-Output '=== RESULT ==='
 # RELAY OWNED BY HANDLE (owner 2026-10-07; the shape of guest/relay-own.ps1, inlined): the old shape ADOPTED
@@ -21,7 +20,9 @@ Write-Output '=== RESULT ==='
 $owner = 0
 try { $l = @(Get-NetTCPConnection -LocalPort 8082 -State Listen -ErrorAction SilentlyContinue); if ($l.Count) { $owner = [int]$l[0].OwningProcess } } catch { $owner = -1 }
 if ($owner -ne 0) { Write-Output "REFUSED: port 8082 is owned by pid $owner (not this script's) - nothing started, nothing adopted"; exit 2 }
-$ownRelay = Start-Process -FilePath $relay -ArgumentList '--listen','8082','--target','@default','--log',$wu,'--parent-pid',"$PID" -WindowStyle Hidden -PassThru
+# No --log: the relay then logs into the one log directory by its own rule, beside the updater's relay - the place --log
+# named before the move, when that was the updater's work directory (docs/ADR-logging.md, Decision 2026-11-01).
+$ownRelay = Start-Process -FilePath $relay -ArgumentList '--listen','8082','--target','@default','--parent-pid',"$PID" -WindowStyle Hidden -PassThru
 Start-Sleep -Seconds 3
 
 $urls = @(

@@ -5,8 +5,9 @@ THE RULE (owner, 2026-09-17): "a sanctioned path should work, a non-sanctioned p
 blocked. no uncertainty anywhere." And: "it should be pointed to something that hard fails
 immediately, not waits, not retries."
 
-WHAT THIS CHECKS, given the relay log (C:\\ProgramData\\Qubes\\wu\\qubes-updates-relay.log pulled from
-the guest) and optionally the decoded Windows Update log (Get-WindowsUpdateLog output):
+WHAT THIS CHECKS, given the relay log pulled from the guest (<LogDir>\\qubes-updates-relay-<yyyyMMdd>.log
+since 2026-11-01, C:\\ProgramData\\Qubes\\wu\\qubes-updates-relay.log before it) and optionally the
+decoded Windows Update log (Get-WindowsUpdateLog output):
   1. CODE, not judgment - the GAP check: every Windows Update download failure (WinHTTP 12030/12029/
      12002, "*FAILED* [80072EFE]" etc.) must have a relay line within +-2 s that accounts for it
      (a served response, a DENY, or a CLOSE with a reason). A failure the relay never logged is the
@@ -43,9 +44,11 @@ by `abs(tt - t)`. Two consequences, both measured on this repo's own evidence:
     qwt-accept/rel-39175573529/template-update.d/wu-e2e/round1/relay.log is 3048 lines whose
     stamps run 19:41 -> 19:03 -> 05:02 -> 05:14, several days in one file.
 So every stamp becomes ONE ABSOLUTE INSTANT at parse time. The WU log already carries its date
-(`2026.09.17 19:02:25.3141907`); the relay log carries none, so its date must be SUPPLIED
-(--relay-date) and is never guessed. When the two sources are on different clocks, declare both
-zones (--relay-tz/--wu-tz). If an instant cannot be established the judge exits 2 and says why; it
+(`2026.09.17 19:02:25.3141907`); the old relay log carries none, so its date must be SUPPLIED
+(--relay-date) and is never guessed. Since 2026-11-01 the relay writes the windows-utils prefix,
+`[yyyyMMdd.HHmmss.fff-PID:TID-L] msg` (docs/ADR-logging.md), so a line of that shape carries its own
+date and needs none supplied; --relay-date dates only the lines of the old shape. When the two
+sources are on different clocks, declare both zones (--relay-tz/--wu-tz). If an instant cannot be established the judge exits 2 and says why; it
 never falls back to a time-of-day comparison, because that fallback yields a pass.
 
 The API key is read from ~/.config/qwt-secrets/typesafe.key (owner-only file, outside the repo) or
@@ -53,10 +56,10 @@ from TYPESAFE_API_KEY. It is never printed. Usage:
   tools/relay-log-judge.py --relay-log <file> [--wu-log <file>] [--no-judge] [--json out.json]
                            [--relay-date YYYY-MM-DD] [--relay-tz +03:00] [--wu-tz Z]
   --no-judge runs only the code-level GAP check (no network, no key).
-  --relay-date is REQUIRED with --wu-log: it dates the relay log's FIRST stamp, and the date rolls
-  forward at each midnight crossing. It is NOT inferred from the WU log - "the relay log is on the
-  WU log's date" cannot be falsified from the data, and when it is wrong the inference returns a
-  clean PASS, which is the defect this guards.
+  --relay-date is REQUIRED with --wu-log for a log holding old-shape lines: it dates the relay log's
+  FIRST stamp, and the date rolls forward at each midnight crossing. It is NOT inferred from the WU
+  log - "the relay log is on the WU log's date" cannot be falsified from the data, and when it is
+  wrong the inference returns a clean PASS, which is the defect this guards.
   --relay-tz/--wu-tz declare the two sources' zones; give both or neither. Neither means one shared
   clock, which is today's rig (both logs are written by the guest), and the report says so.
 """
@@ -68,6 +71,9 @@ from jev import load_key, ask, KEYFILE  # one wire-logged call path for every Je
 
 # ---- parsing ----------------------------------------------------------------------------------
 RELAY_TS = re.compile(r"^(\d\d):(\d\d):(\d\d)\.(\d{3})\s+(.*)$")
+# The windows-utils prefix the relay writes since 2026-11-01: date, time, ms, pid, tid, level, message. The level is not
+# read here - Jev judges the message, and the message is the same text in both shapes.
+RELAY_NEW = re.compile(r"^\[(\d{8})\.(\d{6})\.(\d{3})-(\d+)(?::(\d+))?-([EWIDV])\] ?(.*)$")
 WU_TS = re.compile(r"^(\d{4})\.(\d\d)\.(\d\d)\s+(\d\d):(\d\d):(\d\d)\.(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$")
 WU_FAIL = re.compile(r"\*FAILED\* \[(80072EFE|80072EE7|80072EFD|80072EE2|80072F78|80072EF3)\]", re.I)
 # The download's own identity: msdownload URLs end in <8+ digits>_<hex>. It is carried identically by
@@ -101,9 +107,24 @@ def parse_tz(spec, what):
     return timezone(sign * timedelta(hours=int(m.group(3)), minutes=int(m.group(4))))
 
 
+def relay_shapes(path):
+    """(lines of the old undated shape, lines of the dated windows-utils shape) in a relay log."""
+    old = new = 0
+    for line in open(path, encoding="utf-8", errors="replace"):
+        line = line.rstrip("\n")
+        if RELAY_NEW.match(line):
+            new += 1
+        elif RELAY_TS.match(line):
+            old += 1
+    return old, new
+
+
 def parse_relay(path, anchor_date, tz=None, single_day=False):
     """Parse the relay log into (absolute datetime, text), dating every stamp. Returns (events,
     backward_steps).
+
+    A line in the windows-utils shape carries its own date and is placed by it; nothing below
+    applies to it, and it does not move the old-shape clock. Everything below is about the OLD shape.
 
     The relay writes a bare local time of day (guest/qubes-updates-relay.cs Log()), append-only,
     never rotated, so the date comes from anchor_date - the date of the FIRST stamp in the file -
@@ -120,6 +141,17 @@ def parse_relay(path, anchor_date, tz=None, single_day=False):
     steps are counted, returned, and printed."""
     ev, prev, day, backward = [], None, anchor_date, 0
     for lineno, line in enumerate(open(path, encoding="utf-8", errors="replace"), 1):
+        n = RELAY_NEW.match(line.rstrip("\n"))
+        if n:
+            d, hms, ms = n.group(1), n.group(2), n.group(3)
+            try:
+                t = datetime(int(d[0:4]), int(d[4:6]), int(d[6:8]), int(hms[0:2]), int(hms[2:4]),
+                             int(hms[4:6]), microsecond=int(ms) * 1000, tzinfo=tz)
+            except ValueError as e:
+                raise Undatable("relay log %s line %d: %r is not a date and time (%s)"
+                                % (path, lineno, d + "." + hms, e))
+            ev.append((t, n.group(7)))
+            continue
         m = RELAY_TS.match(line.rstrip("\n"))
         if not m:
             continue
@@ -274,8 +306,9 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="judge at most N lines (cost bound)")
     ap.add_argument("--json")
     ap.add_argument("--relay-date", help="YYYY-MM-DD of the relay log's FIRST stamp. Required with "
-                                         "--wu-log: the relay log carries no date, and it is not "
-                                         "guessed from the WU log.")
+                                         "--wu-log when the log holds lines of the old shape: they "
+                                         "carry no date, and it is not guessed from the WU log. "
+                                         "A windows-utils line carries its own.")
     ap.add_argument("--relay-single-day", action="store_true",
                     help="declare that every stamp in the relay log is on --relay-date. Use it for "
                          "a capture whose stamps are not monotonic for a reason you know (a "
@@ -297,9 +330,17 @@ def main():
         timebase = ("relay=%s wu=%s" % (a.relay_tz, a.wu_tz)) if rtz else "one-shared-clock"
 
         anchor, anchor_src, dates = None, None, []
+        n_old, n_new = relay_shapes(a.relay_log)
         if a.wu_log:
             dates = wu_dates(a.wu_log)
-            if a.relay_date is None:
+            if a.relay_date is None and n_old == 0 and n_new > 0:
+                # Every line carries its own date (the windows-utils prefix): nothing is supplied and
+                # nothing is guessed. The summary names the first line's date.
+                first = next(RELAY_NEW.match(l.rstrip("\n")) for l in open(a.relay_log, encoding="utf-8", errors="replace")
+                             if RELAY_NEW.match(l.rstrip("\n")))
+                anchor = "%s-%s-%s" % (first.group(1)[0:4], first.group(1)[4:6], first.group(1)[6:8])
+                anchor_src = "the relay lines' own dates (windows-utils prefix)"
+            elif a.relay_date is None:
                 # NOT inferred from the WU log, deliberately. "The relay log is on the WU log's
                 # date" is unfalsifiable from the data: a freshly pulled relay.log holds the
                 # golden's whole history (3048 lines, several days), so a line from any earlier day
@@ -307,9 +348,10 @@ def main():
                 # data fails here instead.
                 raise Undatable(
                     "--wu-log correlates two sources, and the relay log carries NO date "
-                    "(guest/qubes-updates-relay.cs logs HH:mm:ss.fff only), so the correlation has "
-                    "no timebase. Pass --relay-date YYYY-MM-DD for the relay log's FIRST stamp%s."
-                    % (" - the WU log covers %s, but the relay log's own date is not derivable "
+                    "(%d line(s) of the old HH:mm:ss.fff shape, written before the relay took the "
+                    "windows-utils prefix), so the correlation has no timebase. Pass --relay-date "
+                    "YYYY-MM-DD for the relay log's FIRST stamp%s."
+                    % (n_old, " - the WU log covers %s, but the relay log's own date is not derivable "
                        "from that" % ", ".join(dates) if dates else ""))
         if a.relay_date is not None:
             if not ISO_DATE.match(a.relay_date):
@@ -320,6 +362,7 @@ def main():
             # on a placeholder and SAY so, rather than fall back to a bare time of day.
             anchor, anchor_src = "1970-01-01", "placeholder (no --wu-log: nothing is correlated)"
         y, mo, d = (int(x) for x in anchor.split("-"))
+        # The anchor dates the OLD-shape lines only; a windows-utils line is placed by its own date.
         relay, backward = parse_relay(a.relay_log, datetime(y, mo, d).date(), rtz,
                                       a.relay_single_day)
         if a.relay_single_day:
@@ -331,7 +374,7 @@ def main():
         print("INSTRUMENT: no relay lines parsed from", a.relay_log); sys.exit(2)
     report = {"relay_lines": len(relay), "gaps": [], "judged": [], "violations": [],
               "relay_date": anchor, "relay_date_source": anchor_src, "timebase": timebase,
-              "relay_backward_steps": backward}
+              "relay_backward_steps": backward, "relay_lines_self_dated": n_new}
     if a.wu_log:
         try:
             wf = parse_wu_failures(a.wu_log, wtz)
