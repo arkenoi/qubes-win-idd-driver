@@ -99,7 +99,6 @@ else {
 using System; using System.Diagnostics; using System.Runtime.InteropServices;
 using System.Collections.Generic;
 using System.ServiceProcess; using System.Net.NetworkInformation; using Microsoft.Win32;
-using System.IO; using System.Text; using System.Threading;   // QwtLog, the C# log sink below
 
 public class QwtngNetSetup : ServiceBase {
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -164,23 +163,16 @@ public class QwtngNetSetup : ServiceBase {
         } catch { }
     }
 
-    // THE ONE LOG DIRECTORY (docs/ADR-logging.md, Decision 2026-11-01): <LogDir>\qwtng-netsetup-<yyyyMMdd>.log, the
-    // file the windows-utils library already writes from this process (its qubesdb client logs under the process
-    // name) - one process, one file. It replaces C:\ProgramData\QubesNetSetup.log and Q:\qwtng-netsetup.log: LogDir is
-    // the private volume's Q:\Qubes Logs on a Qubes guest, so what the previous boot did still survives an AppVM's
-    // volatile C:. Dated once, at the first line, as log.c names its file at start. Not readonly: a test points it
-    // elsewhere.
-    static string logPath = null;
-    static string LogPath() {
-        if (logPath == null)
-            logPath = Path.Combine(QwtLog.LogDir(), "qwtng-netsetup-" + DateTime.Now.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture) + ".log");
-        return logPath;
-    }
+    // THE ONE LOG DIRECTORY (docs/ADR-logging.md, Decision 2026-11-01): <LogDir>\qwtng-netsetup-<yyyyMMdd>.log, written
+    // by the windows-utils library (QwtLog, below) - the file it already writes from this process under the process name
+    // (its qubesdb client logs there): one process, one file. It replaces C:\ProgramData\QubesNetSetup.log and
+    // Q:\qwtng-netsetup.log: LogDir is the private volume's Q:\Qubes Logs on a Qubes guest, so what the previous boot did
+    // still survives an AppVM's volatile C:.
     // 'I' unless the call site reports a failure (E) or an anomaly (W). The uptime stays in the text: this
     // service's lines are read against boot timing (how far into a boot it applied, waited, gave up).
     static void Log(string m) { Log('I', m); }
     static void Log(char level, string m) {
-        QwtLog.Write(LogPath(), level, "up=" + ((int)TimeSpan.FromMilliseconds(Environment.TickCount).TotalSeconds) + "s " + m);
+        QwtLog.Write(level, "up=" + ((int)TimeSpan.FromMilliseconds(Environment.TickCount).TotalSeconds) + "s " + m);
     }
     static string Rd(IntPtr h, string k) {
         uint len; IntPtr p = qdb_read(h, k, out len);
@@ -633,101 +625,33 @@ public class QwtngNetSetup : ServiceBase {
         }
     }
     public static void Main(string[] argv) {
-        QwtLog.ReportLostAtExit(LogPath());
         if (argv.Length > 0 && argv[0] == "--console") { Work(); return; }
         ServiceBase.Run(new QwtngNetSetup());
     }
 }
 
-// THE ONE LOG DIRECTORY AND THE ONE LINE SHAPE, for a C# writer (docs/ADR-logging.md, Decision 2026-11-01; the same class
-// in every C# program of ours). The directory is log.c's rule: the registry LogDir, else <SystemDrive>\Qubes Logs. The line
-// is the windows-utils shape, [yyyyMMdd.HHmmss.fff-PID:TID-L] msg, so the sweep parses it like every other log there.
-// One Write per line on a handle shared for writing, because the handlers are separate processes appending to one file.
-// A line that still cannot be written is said on stderr and COUNTED - the old body swallowed every failure in silence.
+// THE ONE LOG DIRECTORY AND THE ONE LINE SHAPE (docs/ADR-logging.md, Decision 2026-11-01), written by the windows-utils
+// library - windows-utils.dll in System32, installed by the QWT MSI, the log.c every Qubes Tools program logs through. It
+// names the file (<dir>\<name>-<yyyyMMdd>.log), makes the directory, opens it append-only and shared for writing, and
+// writes one line per WriteFile, so the handlers - separate processes - append to one file safely.
 static class QwtLog
 {
-    const int Tries = 20;
-    const int RetryMs = 15;
-    static readonly object Gate = new object();
-    static readonly Encoding Utf8 = new UTF8Encoding(false);
-    static readonly int Pid = Process.GetCurrentProcess().Id;
-    static long _lost;
-    const uint FILE_APPEND_DATA = 0x4, SYNCHRONIZE = 0x100000, FILE_SHARE_ALL = 0x7, OPEN_ALWAYS = 4, FILE_ATTRIBUTE_NORMAL = 0x80;
-    const int ERROR_PATH_NOT_FOUND = 3, ERROR_SHARING_VIOLATION = 32, ERROR_LOCK_VIOLATION = 33;
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
-    [DllImport("kernel32.dll", SetLastError = true)]
-    static extern bool WriteFile(Microsoft.Win32.SafeHandles.SafeFileHandle h, byte[] buffer, int count, out int written, IntPtr overlapped);
+    [DllImport("windows-utils.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void LogStart(string logfilePath);
+    [DllImport("windows-utils.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void LogInit(string logDir, string logName);
+    [DllImport("windows-utils.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+    public static extern uint LogInitDefault(string logName);
+    // _LogFormat(level, raw, functionName, format, ...). The message is the "%s" argument, never the format.
+    [DllImport("windows-utils.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+    static extern void _LogFormat(int level, int raw, IntPtr functionName, string format, string arg);
+    // LOG_MAX_MESSAGE_LENGTH (log.h) is 65536 characters with the prefix; the library's vswprintf_s ends the process past it.
+    const int MaxMessage = 60000;
 
-    public static long Lost { get { return Interlocked.Read(ref _lost); } }
-
-    public static string LogDir()
+    public static void Write(char level, string msg)
     {
-        try
-        {
-            using (Microsoft.Win32.RegistryKey k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Invisible Things Lab\Qubes Tools"))
-            {
-                string d = (k == null) ? null : k.GetValue("LogDir") as string;
-                if (!string.IsNullOrEmpty(d)) return d;
-            }
-        }
-        catch { }
-        return Environment.GetEnvironmentVariable("SystemDrive") + @"\Qubes Logs";
-    }
-
-    public static void Write(string path, char level, string msg)
-    {
-        string line = "[" + DateTime.Now.ToString("yyyyMMdd.HHmmss.fff", System.Globalization.CultureInfo.InvariantCulture)
-                    + "-" + Pid + ":" + Thread.CurrentThread.ManagedThreadId + "-" + level + "] " + msg + "\r\n";
-        byte[] b = Utf8.GetBytes(line);
-        string why = "after " + Tries + " contended attempts";
-        bool mkdirTried = false;
-        for (int attempt = 1; attempt <= Tries; attempt++)
-        {
-            int err = 0;
-            // The lock keeps this process's threads apart; other processes are kept apart by the append itself.
-            lock (Gate)
-            {
-                // APPEND-ONLY: FILE_APPEND_DATA without FILE_WRITE_DATA makes every WriteFile land at the end of the file in
-                // one piece, against every other writer - the windows-utils library in this same process (its patched
-                // log.c opens the same way) and the relay's other handlers. A FileStream opened for Write seeks to the end
-                // and then writes at that offset, so a line appended in between was overwritten.
-                using (Microsoft.Win32.SafeHandles.SafeFileHandle h = CreateFileW(path, FILE_APPEND_DATA | SYNCHRONIZE, FILE_SHARE_ALL, IntPtr.Zero, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, IntPtr.Zero))
-                {
-                    if (!h.IsInvalid)
-                    {
-                        int n;
-                        if (WriteFile(h, b, b.Length, out n, IntPtr.Zero) && n == b.Length) return;
-                        err = Marshal.GetLastWin32Error();
-                        why = "(WriteFile error " + err + ", " + n + " of " + b.Length + " bytes)";
-                        break;
-                    }
-                    err = Marshal.GetLastWin32Error();
-                }
-            }
-            // The directory is missing: the writer creates it, as log.c does (CreateDirectory before its first line) - once.
-            if (err == ERROR_PATH_NOT_FOUND && !mkdirTried)
-            {
-                mkdirTried = true;
-                try { Directory.CreateDirectory(Path.GetDirectoryName(path)); continue; } catch { }
-            }
-            // Only a sharing collision is retried; anything else - a refusal, a bad path - retried would only be hidden.
-            if (err != ERROR_SHARING_VIOLATION && err != ERROR_LOCK_VIOLATION) { why = "(CreateFile error " + err + ")"; break; }
-            if (attempt < Tries) Thread.Sleep(RetryMs);
-        }
-        try { Console.Error.WriteLine("qwt log: line LOST " + why + ": " + line.TrimEnd('\r', '\n')); } catch { }
-        Interlocked.Increment(ref _lost);
-    }
-
-    // The count of lost lines, said once at exit in the log itself (and on stderr if that line is lost too). A process
-    // killed outright (TerminateProcess) runs no exit handler, so its count is only on stderr, line by line.
-    public static void ReportLostAtExit(string path)
-    {
-        AppDomain.CurrentDomain.ProcessExit += delegate(object sender, EventArgs e)
-        {
-            long n = Lost;
-            if (n > 0) Write(path, 'W', "lines lost: " + n);
-        };
+        if (msg != null && msg.Length > MaxMessage) msg = msg.Substring(0, MaxMessage) + " ...(truncated)";
+        _LogFormat(level == 'E' ? 1 : level == 'W' ? 2 : 3, 0, IntPtr.Zero, "%s", msg);
     }
 }
 // ---- NETSETUP-CS-END

@@ -544,18 +544,18 @@ static class Relay
     static Timer _denyFlushTimer;   // RunListen's periodic DenyFlush; a field so the GC cannot collect it
     // `peerPid` names the denied process by EVERY service it hosts (HostedSuffix) - looked up only
     // when a line is actually written, so a storm of suppressed repeats costs no SCM rounds.
-    static void DenyLog(string logPath, string who, int peerPid, DateTime now)
+    static void DenyLog(string who, int peerPid, DateTime now)
     {
         lock (_denyLogged)
         {
             DenyWindow w;
             if (_denyLogged.TryGetValue(who, out w) && (now - w.Since).TotalSeconds < DenyWindowSeconds) { w.Suppressed++; return; }
-            if (w != null && w.Suppressed > 0) Log(logPath, DenySuppressedLine(who, w.Suppressed));   // GUARD:deny-count
+            if (w != null && w.Suppressed > 0) Log(DenySuppressedLine(who, w.Suppressed));   // GUARD:deny-count
             _denyLogged[who] = new DenyWindow { Since = now, Suppressed = 0 };
         }
         // A caller whose pid could not be looked up is denied by an infrastructure failure, not by policy (RunListen): W, not I.
         char level = (who != null && who.StartsWith("pid-lookup-failed(", StringComparison.Ordinal)) ? 'W' : 'I';
-        Log(logPath, level, "DENY " + who + HostedSuffix(peerPid) + " - not part of the update. The proxy serves the update process only; "
+        Log(level, "DENY " + who + HostedSuffix(peerPid) + " - not part of the update. The proxy serves the update process only; "
                      + "this caller sees an unreachable proxy, exactly as it would on an offline guest.");
     }
     // A denied svchost used to be logged as "svchost (pid N)" and nothing more - so whether pid 3468
@@ -580,7 +580,7 @@ static class Relay
     }
     // A window nobody follows (a burst, then silence) would never be counted by DenyLog alone;
     // RunListen calls this periodically so the count is written anyway.
-    static void DenyFlush(string logPath, DateTime now)
+    static void DenyFlush(DateTime now)
     {
         List<string> lines = new List<string>();
         lock (_denyLogged)
@@ -595,7 +595,7 @@ static class Relay
                 _denyLogged.Remove(who);
             }
         }
-        foreach (string l in lines) Log(logPath, l);
+        foreach (string l in lines) Log(l);
     }
 
     // AN INBOUND CONNECTION IS NEVER CLOSED SILENTLY, AND NEVER WITH A TRANSIENT (see the file
@@ -866,10 +866,10 @@ static class Relay
             catch (Exception e) { why = "check failed (" + e.GetType().Name + ": " + e.Message + ") - presumed alive"; return true; }
         }
     }
-    static void StartParentWatchdog(int pid, int intervalMs, string logPath, Action onGone)
+    static void StartParentWatchdog(int pid, int intervalMs, Action onGone)
     {
         ParentWatch w = new ParentWatch(pid);
-        Log(logPath, "parent watchdog armed: pid " + pid + (w.StartTimeKnown ? "" : " (start time unreadable: existence only)")
+        Log("parent watchdog armed: pid " + pid + (w.StartTimeKnown ? "" : " (start time unreadable: existence only)")
                      + ", checked every " + intervalMs + " ms");
         Thread t = new Thread(delegate()
         {
@@ -877,7 +877,7 @@ static class Relay
             {
                 Thread.Sleep(intervalMs);
                 string why;
-                if (!w.Alive(out why)) { Log(logPath, 'W', "parent pid " + pid + " is gone (" + why + ") - exiting so the proxy goes down"); onGone(); return; }   // GUARD:parent-gone
+                if (!w.Alive(out why)) { Log('W', "parent pid " + pid + " is gone (" + why + ") - exiting so the proxy goes down"); onGone(); return; }   // GUARD:parent-gone
             }
         });
         t.IsBackground = true;
@@ -945,24 +945,26 @@ static class Relay
             }
         }
         string self = Process.GetCurrentProcess().MainModule.FileName;
-        if (string.IsNullOrEmpty(logDir)) logDir = QwtLog.LogDir();
-        string logPath = !string.IsNullOrEmpty(logFile) ? logFile
-                       : Path.Combine(logDir, "qubes-updates-relay-" + DateTime.Now.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture) + ".log");
-        _handlerLogDir = logDir;
-        QwtLog.ReportLostAtExit(logPath);
-        Log(logPath, "listen 127.0.0.1:" + port + " target=" + target + " user=" + user + " self=" + self
+        // The library opens this relay's log: --log-file as the updater named it, else qubes-updates-relay-<yyyyMMdd>.log in
+        // --log, else in the library's own directory (the registry LogDir).
+        if (!string.IsNullOrEmpty(logFile)) QwtLog.LogStart(logFile);
+        else if (!string.IsNullOrEmpty(logDir)) QwtLog.LogInit(logDir, "qubes-updates-relay");
+        else QwtLog.LogInitDefault("qubes-updates-relay");
+        // The handlers write into --log, else into the directory of --log-file, else (neither given) into the library's own.
+        _handlerLogDir = !string.IsNullOrEmpty(logDir) ? logDir : (!string.IsNullOrEmpty(logFile) ? Path.GetDirectoryName(logFile) : null);
+        Log("listen 127.0.0.1:" + port + " target=" + target + " user=" + user + " self=" + self
                      + (parentPid > 0 ? " parent=" + parentPid : " parent=none (no watchdog)"));
 
         TcpListener listener = new TcpListener(IPAddress.Loopback, port);
         listener.Start();
         if (parentPid > 0)
-            StartParentWatchdog(parentPid, ParentCheckMs, logPath, delegate { Environment.Exit(3); });
+            StartParentWatchdog(parentPid, ParentCheckMs, delegate { Environment.Exit(3); });
 
         // Start warming channels immediately, so the first request does not pay setup either.
-        Task filler = Task.Run(delegate { return PoolFiller(self, target, user, logPath); });
+        Task filler = Task.Run(delegate { return PoolFiller(self, target, user); });
         GC.KeepAlive(filler);
         // A DENY burst that nothing follows is counted by this flush (DenyFlush), not by the next caller.
-        _denyFlushTimer = new Timer(delegate { DenyFlush(logPath, DateTime.UtcNow); }, null, 10000, 10000);
+        _denyFlushTimer = new Timer(delegate { DenyFlush(DateTime.UtcNow); }, null, 10000, 10000);
         while (true)
         {
             TcpClient inbound = listener.AcceptTcpClient();
@@ -994,17 +996,17 @@ static class Relay
                     // that half-answers. It also fails FAST: never a hang waiting for a timeout.
                     try { inbound.Client.LingerState = new LingerOption(true, 0); } catch { }
                     try { inbound.Close(); } catch { }
-                    DenyLog(logPath, who, peerPid, DateTime.UtcNow);
+                    DenyLog(who, peerPid, DateTime.UtcNow);
                     continue;
                 }
             }
             TcpClient captured = inbound;
             string capturedPeer = peer;
-            Task.Run(delegate { HandleInbound(captured, capturedPeer, self, target, user, logPath).Wait(); });
+            Task.Run(delegate { HandleInbound(captured, capturedPeer, self, target, user).Wait(); });
         }
     }
 
-    static async Task HandleInbound(TcpClient inbound, string peer, string self, string target, string user, string logPath)
+    static async Task HandleInbound(TcpClient inbound, string peer, string self, string target, string user)
     {
         NetworkStream a = inbound.GetStream();
 
@@ -1023,7 +1025,7 @@ static class Relay
         catch (Exception e) { hlen = 0; readErr = e.GetType().Name; }
         if (hlen <= 0)
         {
-            Log(logPath, "CLOSE reason=" + (readErr == null ? "read-first-empty" : "read-error:" + readErr) + " peer=" + peer);   // GUARD:close-readfirst
+            Log("CLOSE reason=" + (readErr == null ? "read-first-empty" : "read-error:" + readErr) + " peer=" + peer);   // GUARD:close-readfirst
             inbound.Close();
             return;
         }
@@ -1044,7 +1046,7 @@ static class Relay
                     await a.WriteAsync(deny, 0, deny.Length);
                 }
                 catch { }
-                Log(logPath, "DENY host=" + (dest.Length > 0 ? dest : "(unparsed)") + " req=[" + line0 + "]");
+                Log("DENY host=" + (dest.Length > 0 ? dest : "(unparsed)") + " req=[" + line0 + "]");
                 inbound.Close();
                 return;
             }
@@ -1071,7 +1073,7 @@ static class Relay
         // this same transport, and is opaque to us by construction.
         if (!IsConnect(head, hlen))
         {
-            await HandlePlainHttp(inbound, peer, head, hlen, self, target, user, logPath);
+            await HandlePlainHttp(inbound, peer, head, hlen, self, target, user);
             return;
         }
 
@@ -1105,14 +1107,14 @@ static class Relay
             reqLine = Encoding.ASCII.GetString(head, 0, Math.Max(0, Math.Min(nl, 120))).Trim();
 
             // A sanctioned request is SERVED: warm channel if there is one, a fresh one otherwise.
-            Ready ch = TakeWarm(logPath);
+            Ready ch = TakeWarm();
             if (ch != null) { warm = true; }
-            else { ch = await OpenChannel(self, target, user, logPath); }
+            else { ch = await OpenChannel(self, target, user); }
             if (ch == null)
             {
                 // The relay itself cannot reach the proxy (spawn / connect-back failed): a hard,
                 // final, logged refusal - never a bare close (see the file header).
-                await TrySend(a, Refused403("no-channel")); Log(logPath, 'E', "CLOSE reason=no-channel peer=" + peer + " - 403 to client req=[" + reqLine + "]");   // GUARD:close-nochannel
+                await TrySend(a, Refused403("no-channel")); Log('E', "CLOSE reason=no-channel peer=" + peer + " - 403 to client req=[" + reqLine + "]");   // GUARD:close-nochannel
                 inbound.Close();
                 return;
             }
@@ -1142,8 +1144,8 @@ static class Relay
                 await Task.WhenAny(Task.WhenAll(t1, t2), Task.Delay(DrainMs()));
             }
         }
-        catch (Exception e) { Log(logPath, 'E', "CONN token=" + token + " error " + e.Message); }
-        finally { _gate.Release(); Log(logPath, "CONN warm=" + (warm ? 1 : 0) + " up=" + up + " down=" + down + " ttfb=" + ttfb + " ms=" + sw.ElapsedMilliseconds + " eof=" + eofSide + " " + (endReasons != null ? endReasons() : "upEnd=- downEnd=-") + " [" + connHdr + "] req=[" + reqLine + "]"); }
+        catch (Exception e) { Log('E', "CONN token=" + token + " error " + e.Message); }
+        finally { _gate.Release(); Log("CONN warm=" + (warm ? 1 : 0) + " up=" + up + " down=" + down + " ttfb=" + ttfb + " ms=" + sw.ElapsedMilliseconds + " eof=" + eofSide + " " + (endReasons != null ? endReasons() : "upEnd=- downEnd=-") + " [" + connHdr + "] req=[" + reqLine + "]"); }
     }
 
     static bool IsConnect(byte[] head, int hlen)
@@ -1352,7 +1354,7 @@ static class Relay
     // channel if the transport lost part of it. Nothing is written to the client until a complete
     // response is in hand, so a short body is never handed to Windows as if it were the file.
     static async Task HandlePlainHttp(TcpClient inbound, string peer, byte[] head, int hlen,
-                                      string self, string target, string user, string logPath)
+                                      string self, string target, string user)
     {
         NoteDemand();   // allowed plain-HTTP demand (read-first + allowlist already passed in HandleInbound)
         await _gate.WaitAsync();
@@ -1387,9 +1389,9 @@ static class Relay
                 bool noChannel = false;   // OpenChannel itself failed: the relay cannot reach the proxy at all
                 for (attempts = 1; attempts <= maxTries; )
                 {
-                    Ready ch = avoidWarm ? null : TakeWarm(logPath);
+                    Ready ch = avoidWarm ? null : TakeWarm();
                     bool wasWarm = ch != null;
-                    if (ch == null) ch = await OpenChannel(self, target, user, logPath);
+                    if (ch == null) ch = await OpenChannel(self, target, user);
                     if (ch == null) { noChannel = true; break; }
                     HttpResponse r = null;
                     using (ch.Relay)
@@ -1400,7 +1402,7 @@ static class Relay
                             await ch.Stream.FlushAsync();
                             r = await ReadResponse(ch.Stream, a, isHead);
                         }
-                        catch (Exception e) { Log(logPath, 'W', "PLAIN read error " + e.GetType().Name + ": " + e.Message); }
+                        catch (Exception e) { Log('W', "PLAIN read error " + e.GetType().Name + ": " + e.Message); }
                     }
                     // A spilled response is already on the client's wire. It cannot be retried and it
                     // must not be written again - it IS the answer, complete or not, and the log below
@@ -1428,11 +1430,11 @@ static class Relay
                     {
                         deadChannels++;
                         avoidWarm = true;
-                        Log(logPath, "PLAIN dead warm channel (" + deadChannels + ") - fresh channel, attempt " + attempts + " not spent");
+                        Log("PLAIN dead warm channel (" + deadChannels + ") - fresh channel, attempt " + attempts + " not spent");
                         continue;
                     }
                     attempts++;
-                    Log(logPath, 'W', "PLAIN incomplete attempt=" + (attempts - 1)
+                    Log('W', "PLAIN incomplete attempt=" + (attempts - 1)
                                  + " bytes=" + (r == null ? -1 : r.Bytes.Length)
                                  + " headers=" + (r != null && r.HeadersFound)
                                  + " got=" + (r == null ? -1 : r.GotBody)
@@ -1458,7 +1460,7 @@ static class Relay
                 {
                     // Nothing came back because no channel could be opened at all: the relay cannot
                     // reach the proxy. Hard, final, logged - never a bare close (see the file header).
-                    await TrySend(a, Refused403("no-channel")); Log(logPath, 'E', "CLOSE reason=no-channel peer=" + peer + " - 403 to client req=[" + reqLine + "]");   // GUARD:close-nochannel-plain
+                    await TrySend(a, Refused403("no-channel")); Log('E', "CLOSE reason=no-channel peer=" + peer + " - 403 to client req=[" + reqLine + "]");   // GUARD:close-nochannel-plain
                 }
                 else
                 {
@@ -1466,7 +1468,7 @@ static class Relay
                     // it a transient (file header). The log text stays 'PLAIN REFUSED' - the updater's
                     // give-up count reads it.
                     await TrySend(a, Refused403("incomplete"));
-                    Log(logPath, 'E', "PLAIN REFUSED after " + attempts + " attempt(s) - 403 to client"
+                    Log('E', "PLAIN REFUSED after " + attempts + " attempt(s) - 403 to client"
                                + " bytes=" + (best == null ? 0 : best.Bytes.Length)
                                + " body=" + (best == null ? 0 : best.GotBody)
                                + "/" + (best == null ? -1 : best.Expected)
@@ -1476,13 +1478,13 @@ static class Relay
                 }
             }
         }
-        catch (Exception e) { Log(logPath, 'W', "PLAIN error " + e.Message); }
+        catch (Exception e) { Log('W', "PLAIN error " + e.Message); }
         finally
         {
             _gate.Release();
             // A SPILLED response that ended short is already on the client's wire and cannot be refused, so this line is the
             // only record of that failure: E. Every other failure has its own E line above, and this summary stays I.
-            Log(logPath, (best != null && best.Streamed && !best.Complete) ? 'E' : 'I', "PLAIN tries=" + attempts + " bytes=" + (best == null ? 0 : best.Bytes.Length)
+            Log((best != null && best.Streamed && !best.Complete) ? 'E' : 'I', "PLAIN tries=" + attempts + " bytes=" + (best == null ? 0 : best.Bytes.Length)
                        + " body=" + (best == null ? 0 : best.GotBody) + "/" + (best == null ? -1 : best.Expected)
                        + " complete=" + (best != null && best.Complete)
                        + " streamed=" + (best != null && best.Streamed)
@@ -1495,7 +1497,7 @@ static class Relay
     // part (dom0 policy + service start in the proxy qube), and the whole point of the pool is
     // to run it OFF the critical path. Every success is counted in _opened - one open is one vchan
     // channel that will eventually be torn down, so _opened's growth rate is the grant churn.
-    static async Task<Ready> OpenChannel(string self, string target, string user, string logPath)
+    static async Task<Ready> OpenChannel(string self, string target, string user)
     {
         string token = Guid.NewGuid().ToString("N");
         TcpListener control = new TcpListener(IPAddress.Loopback, 0);   // ephemeral
@@ -1504,10 +1506,8 @@ static class Relay
         TcpClient relay = null;   // hoisted: the catch must close an accepted-but-failed socket
         try
         {
-            // The handlers write into RunListen's --log directory; a caller that never ran RunListen keeps the old rule, the
-            // directory of its own log.
+            // The handlers write into RunListen's log directory (none: the library's own).
             string handlerLogDir = _handlerLogDir;
-            if (string.IsNullOrEmpty(handlerLogDir)) { try { handlerLogDir = Path.GetDirectoryName(logPath); } catch { handlerLogDir = ""; } }
             // A trailing backslash would escape the closing quote below for the handler's argument parser ("D:\x\" reads as
             // D:\x" and the rest of the line); doubled, it parses back to one.
             if (!string.IsNullOrEmpty(handlerLogDir) && handlerLogDir.EndsWith("\\", StringComparison.Ordinal)) handlerLogDir += "\\";
@@ -1527,7 +1527,7 @@ static class Relay
             Task<TcpClient> accept = control.AcceptTcpClientAsync();
             if (await Task.WhenAny(accept, Task.Delay(20000)) != accept)
             {
-                Log(logPath, 'W', "CHAN token=" + token + " relay never connected back");
+                Log('W', "CHAN token=" + token + " relay never connected back");
                 // A connect-back that lands AFTER the timeout would orphan the accepted socket (and
                 // its handler) - 'return null' is not an exception, so the catch below never runs.
                 // Close it whenever it eventually arrives. Fire-and-forget by design (CS4014 suppressed).
@@ -1543,7 +1543,7 @@ static class Relay
             byte[] tk = Encoding.ASCII.GetBytes(token + "\n");
             byte[] got = new byte[tk.Length];
             if (!await ReadExact(rs, got, got.Length) || Encoding.ASCII.GetString(got) != token + "\n")
-            { Log(logPath, 'W', "CHAN token=" + token + " bad token from relay"); relay.Close(); return null; }
+            { Log('W', "CHAN token=" + token + " bad token from relay"); relay.Close(); return null; }
 
             Ready r = new Ready();
             r.Relay = relay; r.Stream = rs; r.Token = token; r.Born = DateTime.UtcNow;
@@ -1552,7 +1552,7 @@ static class Relay
         }
         catch (Exception e)
         {
-            Log(logPath, 'W', "CHAN token=" + token + " error " + e.Message);
+            Log('W', "CHAN token=" + token + " error " + e.Message);
             // An exception between accept and return used to LEAK the accepted connect-back socket:
             // nothing owned it, so it - and the handler pumping into it - lingered. Close is
             // synchronous, so this is legal in a C# 5 catch (no await here).
@@ -1574,7 +1574,7 @@ static class Relay
     // handing the channel to a CONNECT client that has no dead-warm retry. Poll cannot see an
     // UNdelivered FIN; the plain-HTTP dead-warm allowance stays behind this as the backstop. Discards
     // are logged WITH AGE: the dead-age distribution is the in-band data that refines POOLAGE.
-    static Ready TakeWarm(string logPath)
+    static Ready TakeWarm()
     {
         Ready r;
         while (_pool.TryDequeue(out r))
@@ -1590,7 +1590,7 @@ static class Relay
             catch { dead = true; }
             if (!stale && !dead) { Interlocked.Increment(ref _warmHits); return r; }
             if (dead) Interlocked.Increment(ref _deadAtTake); else Interlocked.Increment(ref _staleAtTake);
-            Log(logPath, "POOL discard reason=" + (dead ? "dead" : "stale") + " age=" + (int)age + "s");
+            Log("POOL discard reason=" + (dead ? "dead" : "stale") + " age=" + (int)age + "s");
             _toClose.Enqueue(r);   // filler closes it PACED, off this request's critical path
         }
         Interlocked.Increment(ref _warmMisses);
@@ -1610,12 +1610,12 @@ static class Relay
     // noticed within <=1 s; the first post-idle request pays a cold open (it cannot wait for the filler)
     // and the pool is warm for the burst that follows. While there IS demand, the 2026-08-13
     // deficit/batch-of-4 refill is unchanged, so burst throughput is protected.
-    static async Task PoolFiller(string self, string target, string user, string logPath)
+    static async Task PoolFiller(string self, string target, string user)
     {
         int target_n = PoolTarget();
         if (target_n <= 0) return;
-        Log(logPath, "POOL warm channels target=" + target_n);
-        Log(logPath, "POOL policy age=" + PoolAgeSeconds() + "s idle=" + PoolIdleSeconds() + "s");
+        Log("POOL warm channels target=" + target_n);
+        Log("POOL policy age=" + PoolAgeSeconds() + "s idle=" + PoolIdleSeconds() + "s");
         DateTime lastStat = DateTime.UtcNow;
         while (true)
         {
@@ -1635,7 +1635,7 @@ static class Relay
                     Ready victim; int d = 0;
                     while (_pool.TryDequeue(out victim))
                     { try { victim.Relay.Close(); } catch { } d++; Interlocked.Increment(ref _drained); await Task.Delay(100); }
-                    if (d > 0) Log(logPath, "POOL drain n=" + d + " idle");
+                    if (d > 0) Log("POOL drain n=" + d + " idle");
                     pause = 1000;
                 }
                 else
@@ -1649,7 +1649,7 @@ static class Relay
                         {
                             batch[i] = Task.Run(async delegate
                             {
-                                Ready r = await OpenChannel(self, target, user, logPath);
+                                Ready r = await OpenChannel(self, target, user);
                                 if (r != null) _pool.Enqueue(r);
                             });
                         }
@@ -1660,7 +1660,7 @@ static class Relay
                 if ((DateTime.UtcNow - lastStat).TotalSeconds >= 60)
                 {
                     lastStat = DateTime.UtcNow;
-                    Log(logPath, "POOL stat target=" + target_n + " pool=" + _pool.Count
+                    Log("POOL stat target=" + target_n + " pool=" + _pool.Count
                                + " opened=" + Interlocked.Read(ref _opened)
                                + " drained=" + Interlocked.Read(ref _drained)
                                + " hit=" + Interlocked.Read(ref _warmHits)
@@ -1677,9 +1677,8 @@ static class Relay
     // ---- relay side (qrexec handler; stdio == vchan) -------------------------------------
     static int RunRelay(int controlPort, string token, string logDir)
     {
-        string hlog = null;
-        try { if (!string.IsNullOrEmpty(logDir)) hlog = Path.Combine(logDir, "relay-handler-" + DateTime.Now.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture) + ".log"); } catch { hlog = null; }
-        if (hlog != null) QwtLog.ReportLostAtExit(hlog);
+        // The library opens the handler's log: relay-handler-<yyyyMMdd>.log in the relay's --log directory, else in its own.
+        if (!string.IsNullOrEmpty(logDir)) QwtLog.LogInit(logDir, "relay-handler"); else QwtLog.LogInitDefault("relay-handler");
         using (TcpClient sock = new TcpClient())
         {
             sock.Connect(IPAddress.Loopback, controlPort);
@@ -1705,10 +1704,9 @@ static class Relay
             // it later: cut_response=True means the truncation is OURS and the fix is teardown
             // ORDERING; cut_response=False with a short `in` count means the vchan delivered a
             // short body and the defect is upstream of this process.
-            if (hlog != null)
             {
                 // cut_response=True is the truncation being OURS (above): an anomaly, W.
-                Log(hlog, !t2.IsCompleted ? 'W' : 'I', "HANDLER token=" + token + " ms=" + hsw.ElapsedMilliseconds
+                Log(!t2.IsCompleted ? 'W' : 'I', "HANDLER token=" + token + " ms=" + hsw.ElapsedMilliseconds
                         + " request_bytes=" + outBytes + " response_bytes=" + inBytes
                         + " first_to_finish=" + firstName
                         + " requestEnd=" + outEnd + " responseEnd=" + inEnd
@@ -1761,99 +1759,33 @@ static class Relay
 
     // RunListen's --log directory, handed to every handler OpenChannel spawns (null until RunListen has run).
     static string _handlerLogDir;
-    // Every line goes through QwtLog (below). 'I' unless the call site reports a failure (E) or an anomaly (W).
-    static void Log(string path, string msg) { QwtLog.Write(path, 'I', msg); }
-    static void Log(string path, char level, string msg) { QwtLog.Write(path, level, msg); }
+    // Every line goes through the windows-utils library (QwtLog, below), started once per process (RunListen, RunRelay).
+    // 'I' unless the call site reports a failure (E) or an anomaly (W).
+    static void Log(string msg) { QwtLog.Write('I', msg); }
+    static void Log(char level, string msg) { QwtLog.Write(level, msg); }
 }
 
-// THE ONE LOG DIRECTORY AND THE ONE LINE SHAPE, for a C# writer (docs/ADR-logging.md, Decision 2026-11-01; the same class
-// in every C# program of ours). The directory is log.c's rule: the registry LogDir, else <SystemDrive>\Qubes Logs. The line
-// is the windows-utils shape, [yyyyMMdd.HHmmss.fff-PID:TID-L] msg, so the sweep parses it like every other log there.
-// One Write per line on a handle shared for writing, because the handlers are separate processes appending to one file.
-// A line that still cannot be written is said on stderr and COUNTED - the old body swallowed every failure in silence.
+// THE ONE LOG DIRECTORY AND THE ONE LINE SHAPE (docs/ADR-logging.md, Decision 2026-11-01), written by the windows-utils
+// library - windows-utils.dll in System32, installed by the QWT MSI, the log.c every Qubes Tools program logs through. It
+// names the file (<dir>\<name>-<yyyyMMdd>.log), makes the directory, opens it append-only and shared for writing, and
+// writes one line per WriteFile, so the handlers - separate processes - append to one file safely.
 static class QwtLog
 {
-    const int Tries = 20;
-    const int RetryMs = 15;
-    static readonly object Gate = new object();
-    static readonly Encoding Utf8 = new UTF8Encoding(false);
-    static readonly int Pid = Process.GetCurrentProcess().Id;
-    static long _lost;
-    const uint FILE_APPEND_DATA = 0x4, SYNCHRONIZE = 0x100000, FILE_SHARE_ALL = 0x7, OPEN_ALWAYS = 4, FILE_ATTRIBUTE_NORMAL = 0x80;
-    const int ERROR_PATH_NOT_FOUND = 3, ERROR_SHARING_VIOLATION = 32, ERROR_LOCK_VIOLATION = 33;
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
-    [DllImport("kernel32.dll", SetLastError = true)]
-    static extern bool WriteFile(Microsoft.Win32.SafeHandles.SafeFileHandle h, byte[] buffer, int count, out int written, IntPtr overlapped);
+    [DllImport("windows-utils.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void LogStart(string logfilePath);
+    [DllImport("windows-utils.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void LogInit(string logDir, string logName);
+    [DllImport("windows-utils.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+    public static extern uint LogInitDefault(string logName);
+    // _LogFormat(level, raw, functionName, format, ...). The message is the "%s" argument, never the format.
+    [DllImport("windows-utils.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+    static extern void _LogFormat(int level, int raw, IntPtr functionName, string format, string arg);
+    // LOG_MAX_MESSAGE_LENGTH (log.h) is 65536 characters with the prefix; the library's vswprintf_s ends the process past it.
+    const int MaxMessage = 60000;
 
-    public static long Lost { get { return Interlocked.Read(ref _lost); } }
-
-    public static string LogDir()
+    public static void Write(char level, string msg)
     {
-        try
-        {
-            using (Microsoft.Win32.RegistryKey k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Invisible Things Lab\Qubes Tools"))
-            {
-                string d = (k == null) ? null : k.GetValue("LogDir") as string;
-                if (!string.IsNullOrEmpty(d)) return d;
-            }
-        }
-        catch { }
-        return Environment.GetEnvironmentVariable("SystemDrive") + @"\Qubes Logs";
-    }
-
-    public static void Write(string path, char level, string msg)
-    {
-        string line = "[" + DateTime.Now.ToString("yyyyMMdd.HHmmss.fff", System.Globalization.CultureInfo.InvariantCulture)
-                    + "-" + Pid + ":" + Thread.CurrentThread.ManagedThreadId + "-" + level + "] " + msg + "\r\n";
-        byte[] b = Utf8.GetBytes(line);
-        string why = "after " + Tries + " contended attempts";
-        bool mkdirTried = false;
-        for (int attempt = 1; attempt <= Tries; attempt++)
-        {
-            int err = 0;
-            // The lock keeps this process's threads apart; other processes are kept apart by the append itself.
-            lock (Gate)
-            {
-                // APPEND-ONLY: FILE_APPEND_DATA without FILE_WRITE_DATA makes every WriteFile land at the end of the file in
-                // one piece, against every other writer - the windows-utils library in this same process (its patched
-                // log.c opens the same way) and the relay's other handlers. A FileStream opened for Write seeks to the end
-                // and then writes at that offset, so a line appended in between was overwritten.
-                using (Microsoft.Win32.SafeHandles.SafeFileHandle h = CreateFileW(path, FILE_APPEND_DATA | SYNCHRONIZE, FILE_SHARE_ALL, IntPtr.Zero, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, IntPtr.Zero))
-                {
-                    if (!h.IsInvalid)
-                    {
-                        int n;
-                        if (WriteFile(h, b, b.Length, out n, IntPtr.Zero) && n == b.Length) return;
-                        err = Marshal.GetLastWin32Error();
-                        why = "(WriteFile error " + err + ", " + n + " of " + b.Length + " bytes)";
-                        break;
-                    }
-                    err = Marshal.GetLastWin32Error();
-                }
-            }
-            // The directory is missing: the writer creates it, as log.c does (CreateDirectory before its first line) - once.
-            if (err == ERROR_PATH_NOT_FOUND && !mkdirTried)
-            {
-                mkdirTried = true;
-                try { Directory.CreateDirectory(Path.GetDirectoryName(path)); continue; } catch { }
-            }
-            // Only a sharing collision is retried; anything else - a refusal, a bad path - retried would only be hidden.
-            if (err != ERROR_SHARING_VIOLATION && err != ERROR_LOCK_VIOLATION) { why = "(CreateFile error " + err + ")"; break; }
-            if (attempt < Tries) Thread.Sleep(RetryMs);
-        }
-        try { Console.Error.WriteLine("qwt log: line LOST " + why + ": " + line.TrimEnd('\r', '\n')); } catch { }
-        Interlocked.Increment(ref _lost);
-    }
-
-    // The count of lost lines, said once at exit in the log itself (and on stderr if that line is lost too). A process
-    // killed outright (TerminateProcess) runs no exit handler, so its count is only on stderr, line by line.
-    public static void ReportLostAtExit(string path)
-    {
-        AppDomain.CurrentDomain.ProcessExit += delegate(object sender, EventArgs e)
-        {
-            long n = Lost;
-            if (n > 0) Write(path, 'W', "lines lost: " + n);
-        };
+        if (msg != null && msg.Length > MaxMessage) msg = msg.Substring(0, MaxMessage) + " ...(truncated)";
+        _LogFormat(level == 'E' ? 1 : level == 'W' ? 2 : 3, 0, IntPtr.Zero, "%s", msg);
     }
 }
