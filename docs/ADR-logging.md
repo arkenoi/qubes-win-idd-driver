@@ -28,8 +28,15 @@ outside"*. The bullet that sat under "Not done" since 2026-10-07 is this decisio
    <E|W|I|D|V> <msg>`, which returns whether the line was written; `LogError`..`LogVerbose` call it
    directly; the file is staged into `bin` beside the scripts that use it. Each script keeps its own
    `Log` wrapper and every call site; the updater keeps its loss accounting (`QWTUPDLOGLOST`) on the
-   primitive's return. The two C# writers, the updates relay and the netsetup service, implement the
-   same rule. Jev: helper H1 **0.98**; updater keeps its own Log, new path and prefix **1.00**.
+   primitive's return. The two C# writers, the updates relay and the netsetup service, write through
+   the library every Qubes Tools program already logs through, `windows-utils.dll` (System32, MSI-installed,
+   our patched log.c), by DllImport of `LogStart` / `LogInit` / `LogInitDefault` / `_LogFormat`: the relay
+   `LogStart` on the file the updater names, else `LogInit(<--log>, "qubes-updates-relay")`; each handler
+   `LogInit(<--log>, "relay-handler")`; the netsetup service no init at all, because its qubesdb client has
+   already initialised the library in that process. A hand-written C# sink was specified first and
+   withdrawn (owner, 2026-11-02: the order was "use known logging framework, do not invent"; it overwrote
+   lines under concurrency, which the library had solved). Jev: helper H1 **0.98**; updater keeps its own
+   Log, new path and prefix **1.00**.
 4. **Moved**, each with every reader in the same commit, including the two texts a user reads that name
    a moved file (the death reporter's PV NIC impact line, activate-idd's "Evidence:" line):
 
@@ -90,8 +97,14 @@ outside"*. The bullet that sat under "Not done" since 2026-10-07 is this decisio
    * **Verdict.** Accounted means no problem. The problems, each named with the file and its counts
      and each P2 (the instrument's class): `unaccounted-file`; `unaccounted-lines` (unparsed > 0);
      `unpulled-lines` (not_pulled > 0, a capped pull); `ledger-mismatch` (a row that does not add
-     up); `stray` (a file at an OLD PATH last written inside the window: something still writes
-     there). A declared exception is never `stray`.
+     up); `stray` (a file at an OLD PATH last written inside the window and not before the install
+     anchor: something of the build under test still writes there). The install anchor is the
+     sweep's own "when the build under test first ran" (`install_anchor`); an old path carries no
+     version, and on an upgrade cell the predecessor boots inside the window and writes its old
+     paths, so a file last written before the anchor is reported as the predecessor's, never as a
+     problem (Jev **0.99**). A declared exception is never `stray`. For a file the ledger checks,
+     `unpulled-lines` and `unaccounted-lines` replace the older per-file `partial` and `unparseable`
+     (one problem per fact, Jev **1.00**); files outside the scope keep those.
 
 Measured before the decision, 2026-11-01. Per-file accounting over GWeck's own folder (forum
 bundle, build 4.3.37.1096) and campaign bafe660f's collection. Of GWeck's 20 files, 7 were not
@@ -104,8 +117,16 @@ inherited from `Q:\`; every scheduled task and service of ours runs as SYSTEM, s
 (Jev `acl_settled` **0.84**). The legacy names come from a census of every file name in the log sets
 collected under `~/qwt-accept` and in GWeck's folder.
 
-Nothing has measured the result yet. It is measured by the full campaign at the final HEAD, whose
-sweep reads every cell's directory.
+Measured off the guest, 2026-11-02 (apparatus commit b6e5cc15): the collector, run under pwsh 7
+over a copy of a smoke run's real guest directory (66 files, 46 of them old per-process logs),
+accounts for 66 of 66 files and 1740 of 1740 lines; each of the 12716 file names in the guest log
+directories this project's run collections hold matches exactly one rule. Two gaps were found by it:
+the collector's pull priority still named the old files, and the installer mirror's header line was
+undeclared. For the guest's PowerShell 5.1 the collector is clean by
+tools/ps-compat-check.ps1 and by PSScriptAnalyzer's compatible-commands and compatible-types rules against
+the Windows 10 / PowerShell 5.1 profile (0 findings each). The guest run - the fixed paths, the old paths and
+`stray` against the anchor - is measured by the full campaign at the final HEAD, whose sweep reads
+every cell's directory.
 
 **Decision (2026-10-25): the acceptance log volume's DEVICE SET has one owner and four named
 phases** — `priming` / `graded` / `answer` / `none` — composed whole by

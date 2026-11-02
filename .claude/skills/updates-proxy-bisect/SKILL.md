@@ -60,7 +60,9 @@ root, no dom0, no policy change is needed to stand it up - `tinyproxy` is instal
 
 3. **Point the guest at THIS qube by name** rather than `@default`, so routing is not a variable:
    the relay takes `--target`, e.g.
-   `qubes-updates-relay.exe --listen 8082 --target win-idd-mgmt --log C:\ProgramData\Qubes\wu`
+   `qubes-updates-relay.exe --listen 8082 --target win-idd-mgmt`
+   (it writes `qubes-updates-relay-<yyyyMMdd>.log`, and each handler `relay-handler-<yyyyMMdd>.log`, into
+   the log directory; `--log <dir>` names another directory)
    (`@default` sends it wherever dom0 policy decides, which is exactly the thing you cannot see.)
 
 4. **Re-run the failing fetch** and compare the two logs you now own:

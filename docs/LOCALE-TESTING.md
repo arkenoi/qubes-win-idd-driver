@@ -55,7 +55,8 @@ The console OEM code page is 932/936/949/950 rather than 437/1252.
 
 * Does the update run at all, or does it fail early? Native tool output (`reg`, `schtasks`, `DISM`)
   is parsed in places.
-* Is `C:\ProgramData\Qubes\wu\agent.log` readable, or full of replacement characters?
+* Is the updater's log, `qubes-windows-update.ps1-<yyyyMMdd>.log` in the log directory (registry
+  `LogDir`, else `<SystemDrive>\Qubes Logs`), readable, or full of replacement characters?
 * Does a user profile path or computer name containing non-ASCII characters break the workdir
   (`C:\ProgramData\Qubes\wu`) or the qrexec transport?
 
@@ -103,7 +104,8 @@ powershell -ExecutionPolicy Bypass -File guest\wu-locale-invariant.ps1 -Kb <KB o
 
 Then attach:
 
-* `C:\ProgramData\Qubes\wu\agent.log` — what the agent decided, with its `catalog pick:` line
+* `qubes-windows-update.ps1-<yyyyMMdd>.log` from the log directory — what the agent decided, with its
+  `catalog pick:` line
 * `C:\ProgramData\Qubes\update-status.json` — the phase/progress the handler was reading
 * the dom0-side output of the update (the progress bar behaviour is the point)
 
