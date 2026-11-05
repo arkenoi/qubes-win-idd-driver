@@ -76,8 +76,8 @@ function Msg([string]$m) {
 #                         healthy Patch Tuesday as a DISM failure. Every guest more than one reboot
 #                         behind produces such a row on its first pass.
 #   reason='deferred: ..' the same rule applied to the Windows-Update-native fallback (no state key)
-#   severity=info or      an informational ceiling (not installable on this guest by any path); the
-#   state=informational   writer already excludes it from the count it reports to dom0
+#   severity=info or      informational (not installable on this guest by this path); still COUNTED to dom0
+#   state=informational   unless this pass verified it has no route (ADR-updater section 2 points 2 and 5)
 #   anything else         a real failure. Its reason is the row's own record - $row.reason, or per
 #                         file files.why / files.error / files.rc - never a cause invented here.
 function Get-RowWhy($row) {

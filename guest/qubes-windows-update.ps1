@@ -174,7 +174,7 @@ $script:LogDropFirst = ''
 $script:LogLossReported = $false
 $script:St = [ordered]@{ action=$Action; phase='init'; ts=$null; owner_pid=0; owner_pid_start=''; count=0; available=@();
                          downloading=$null; installing=$null; result=@(); reboot_needed=$false; error=$null; recovered='';
-                         not_actionable=@(); satisfied=@(); unroutable=@(); route_unknown=@(); esu=$null; notice=$null }
+                         not_actionable=@(); satisfied=@(); satisfied_rule='installed'; unroutable=@(); route_unknown=@(); esu=$null; notice=$null }
 
 # ---- WU-PASS-CLOCK-BEGIN
 # A PASS DURATION MUST NOT BE READ OFF A CLOCK THAT MOVES UNDER IT. `ts` above is
@@ -521,6 +521,27 @@ function Complete-Pass {
 function Test-RowKey($row, [string]$key) {
   if ($row -is [System.Collections.IDictionary]) { return [bool]$row.Contains($key) }
   return (@($row.PSObject.Properties.Name) -contains $key)
+}
+# INSTALLED AND PROVED INSTALLED (ADR-updater section 2 point 3) - the ONE test, read by `satisfied` (GUARD:offeridentity), the
+# post-install count (WU-INFO-EXCLUDE) and the reboot-pending count (WU-REBOOT-PENDING-REPORT), so the three cannot drift apart.
+# ok=true, not informational, and state 'installed' - or no state at all, the shape of a row an older writer measured installed
+# (the captured direct-signature row: severity 'ok', "verified by effect"). Every shipped writer states the outcome - Install-ViaWU
+# from each update's own RebootRequired since 2026-11-02 - so a STAGED row says 'staged': ok=true and NOT installed, it waits for
+# the restart (GUARD:stagedpending). An informational row is never installed, whatever its ok says.
+function Test-RowInstalled($row) {
+  if (-not $row -or $row.ok -ne $true) { return $false }
+  if ((Test-RowKey $row 'severity') -and "$($row.severity)" -eq 'info') { return $false }
+  return ((-not (Test-RowKey $row 'state')) -or ([string]$row.state -eq 'installed'))
+}
+# What THIS pass installed, by kb and title (a no-KB row is recorded under its title), and the offer identities (uid:rev) of the
+# scan's offers it names - what both ends of a pass write to `satisfied` (the post-install rescan, the reboot-pending report).
+function Get-InstalledKeys {
+  return @(@($script:St.result) | Where-Object { Test-RowInstalled $_ } |
+           ForEach-Object { $_.kb; if (Test-RowKey $_ 'title') { $_.title } } | Where-Object { $_ })
+}
+function Get-InstalledIdentities($keys) {
+  return @(@($script:St.available) | Where-Object { $_ -and (($keys -contains $_.kb) -or ($keys -contains $_.title)) } |
+           ForEach-Object { if ((Test-RowKey $_ 'uid') -and $_.uid) { "$($_.uid):$($_.rev)" } } | Where-Object { $_ })
 }
 # ---- WU-ROWKEY-END
 # Write-Host alone is lost under the scheduled task, which is why every download failure so far
@@ -1227,10 +1248,14 @@ function Install-ViaWU {
       $u = $ready.Item($i)
       $r = $ires.GetUpdateResult($i)
       $kb = @($u.KBArticleIDs) | Select-Object -First 1
-      $rows += [ordered]@{ kb = $(if ($kb) { "KB$kb" } else { '(no KB)' })
-                           ok = ($r.ResultCode -in @(2, 3))
-                           files = @([ordered]@{ file = "$($u.Title)"; rc = $r.ResultCode; hr = $r.HResult }) }
-      Log ("WU:   $($u.Title) -> ResultCode=$($r.ResultCode) HResult=$($r.HResult)")
+      # THE ROW STATES ITS OUTCOME (GUARD:stagedpending): a succeeded update whose own RebootRequired is set is STAGED, not installed -
+      # it completes at the restart. Until 2026-11-02 these rows carried only ok, and every reader had to guess from the pass's flag.
+      $ok = ($r.ResultCode -in @(2, 3))
+      $row = [ordered]@{ kb = $(if ($kb) { "KB$kb" } else { '(no KB)' }); ok = $ok }
+      if ($ok) { $row['state'] = $(if ($r.RebootRequired) { 'staged' } else { 'installed' }) }
+      $row['files'] = @([ordered]@{ file = "$($u.Title)"; rc = $r.ResultCode; hr = $r.HResult })
+      $rows += $row
+      Log ("WU:   $($u.Title) -> ResultCode=$($r.ResultCode) HResult=$($r.HResult) RebootRequired=$($r.RebootRequired)")
     }
     return ,$rows
   } finally { Restore-DoPolicy }
@@ -1307,7 +1332,15 @@ function Resolve-DriverByTitle($title){
   $want = ($env:PROCESSOR_ARCHITECTURE).ToLower()          # AMD64 -> amd64, ARM64 -> arm64
   $q = [uri]::EscapeDataString(($title -replace '\s*\(Version [^)]*\)\s*$','').Trim())
   $hdr = @{}; if ($AcceptLanguage) { $hdr['Accept-Language'] = $AcceptLanguage }
-  $r = Invoke-WebRequest "https://www.catalog.update.microsoft.com/Search.aspx?q=$q" -Proxy $Proxy -UseBasicParsing -TimeoutSec 60 -Headers $hdr
+  # AN UNANSWERED TITLE SEARCH IS UNRESOLVED, never "no entry" (ADR-updater section 2 point 5): a throw (run 9's refused Catalog
+  # ended the whole pass here until 2026-11-02) or a body that is not the Catalog's results page - the GUARD:catalogvalid test of
+  # WU-CATALOG-VALID - returns @{ unresolved }, and WU-NOKB leaves the offer outstanding.
+  try { $r = Invoke-WebRequest "https://www.catalog.update.microsoft.com/Search.aspx?q=$q" -Proxy $Proxy -UseBasicParsing -TimeoutSec 60 -Headers $hdr }
+  catch { Log ("  title resolve: catalog search threw (" + $_.Exception.Message + ") - UNRESOLVED, not 'no entry'"); return @{ unresolved = $true } }
+  $body = [string]$r.Content
+  if ([string]::IsNullOrWhiteSpace($body) -or ($body -notmatch '(?i)catalogBody|updateMatches|catalog\.update\.microsoft\.com')) {
+    Log ("  title resolve: catalog response is not a results page (" + $body.Length + " bytes) - UNRESOLVED, not 'no entry'"); return @{ unresolved = $true }
+  }
   $rows = [regex]::Matches($r.Content, "id='([0-9a-f-]{36})_link'[^>]*>\s*(.*?)\s*</a>", 'Singleline')
   $cands = @()
   foreach($m in $rows){
@@ -1316,17 +1349,25 @@ function Resolve-DriverByTitle($title){
   }
   if($cands.Count -eq 0){ Log "  title resolve: no catalog entry titled exactly '$title'"; return $null }
   Log "  title resolve: $($cands.Count) candidate(s); choosing by the architecture each PACKAGE declares (want $want)"
+  $uninspected = 0   # GUARD:dialogunanswered on this route too - a candidate whose dialog or package never arrived was not inspected
   foreach($uid in $cands){
     $json = '[{"size":0,"languages":"","uidInfo":"' + $uid + '","updateID":"' + $uid + '"}]'
-    try { $dl = Invoke-WebRequest 'https://www.catalog.update.microsoft.com/DownloadDialog.aspx' -Method POST -Body @{updateIDs=$json} -Proxy $Proxy -UseBasicParsing -TimeoutSec 60 -Headers $hdr } catch { continue }
+    try { $dl = Invoke-WebRequest 'https://www.catalog.update.microsoft.com/DownloadDialog.aspx' -Method POST -Body @{updateIDs=$json} -Proxy $Proxy -UseBasicParsing -TimeoutSec 60 -Headers $hdr }
+    catch { $uninspected++; Log ("    $uid : download dialog failed (" + $_.Exception.Message + ") - not inspected"); continue }
+    if ([string]::IsNullOrWhiteSpace([string]$dl.Content)) { $uninspected++; Log "    $uid : download dialog returned an empty body - not inspected"; continue }
     $url = @([regex]::Matches($dl.Content, "https?://[^'`"]+\.cab") | ForEach-Object { $_.Value } | Sort-Object -Unique)[0]
     if(-not $url){ continue }
     $f = Join-Path $WorkDir ([IO.Path]::GetFileName(($url -split '\?')[0]))
     if(-not (Test-Path $f)){ Fetch-Msu $url $f | Out-Null }
-    if(-not (Test-Path $f)){ continue }
+    if(-not (Test-Path $f)){ $uninspected++; Log "    $uid : package fetch failed - not inspected"; continue }
     $arch = Get-PackageArch $f
     Log "    $uid arch=$arch"
     if($arch -split ',' -contains $want){ return @{ uid=$uid; url=$url; file=$f; arch=$arch } }
+  }
+  # The skip row this would lead to tells dom0 "each identically-titled candidate is inspected" - true only if each one was.
+  if($uninspected -gt 0){
+    Log "  title resolve: $uninspected of $($cands.Count) candidate(s) not inspected - UNRESOLVED, not 'no candidate declares $want'"
+    return @{ unresolved = $true }
   }
   Log "  title resolve: no candidate declares $want - this offer is not installable on this architecture"
   return $null
@@ -1363,7 +1404,13 @@ function Install-DriverCab($cab, $label){
 # returns the first one. $script:CatalogAsked[kb] = @{ urls; valid; rows; ranked } - valid is GUARD:catalogvalid's verdict for THAT kb, kept
 # per KB because $script:CatalogUnresolved is only ever the LAST ask's. Memoised within a pass ONLY: the next pass asks again,
 # which is what lets a Catalog publication, a new route or an entitlement be seen the moment it exists (nothing remembered).
-# A throw (no proxy, no Catalog) is not caught here: the install loop's behaviour on it is unchanged; the route proof catches it.
+# A THROW IS UNRESOLVED, caught HERE (no proxy, a refused or failed Catalog request), and it is NOT memoised - it is not an
+# answer: the next ask in this pass (the install loop after the scan's route proof) asks again, so a one-off timeout at scan costs
+# nothing, and an unanswered KB never proves 'no package' (Test-CatalogProvedNoPackage needs a memoised valid page). Meanwhile the
+# install loop's UNRESOLVED gates leave the KB outstanding (ADR-updater section 2 point 5: "An UNRESOLVED Catalog answer is not
+# verification - the offer stays counted").
+# Until 2026-11-02 only the route proof caught it: run 9 on win10-tup (Catalog 403 through the proxy) ended the pass at the
+# resolve step with phase=error, and dom0's user read "update failed: ... (403) Forbidden." for offers it could not have installed.
 function Resolve-Catalog($kb){
   if (-not $script:CatalogAsked) { $script:CatalogAsked = @{} }
   if ($script:CatalogAsked.ContainsKey($kb)) {
@@ -1371,7 +1418,12 @@ function Resolve-Catalog($kb){
     $script:CatalogUnresolved = -not $m.valid
     return @($m.urls)
   }
-  $urls = @(Resolve-CatalogUncached $kb)
+  try { $urls = @(Resolve-CatalogUncached $kb) }
+  catch {
+    $script:CatalogUnresolved = $true; $script:CatalogRows = $null; $script:CatalogRanked = $null
+    Log ("  " + $kb + " : catalog search threw (" + $_.Exception.Message + ") - UNRESOLVED, not 'no package'")
+    return @()
+  }
   $script:CatalogAsked[$kb] = @{ urls = @($urls); valid = (-not $script:CatalogUnresolved); rows = $script:CatalogRows; ranked = $script:CatalogRanked }
   return @($urls)
 }
@@ -1466,11 +1518,13 @@ function Resolve-CatalogUncached($kb){
   $script:CatalogRows = $all.Count; $script:CatalogRanked = $ranked.Count   # what the valid page listed, and how many of those name this arch and build
 
   $fallback = $null
+  $unanswered = 0   # GUARD:dialogunanswered - candidates whose download dialog never ANSWERED (the request failed, or an empty body)
   foreach($c in $ranked){
     $json='[{"size":0,"languages":"","uidInfo":"'+$c.guid+'","updateID":"'+$c.guid+'"}]'
     try{
       $dl=Invoke-WebRequest 'https://www.catalog.update.microsoft.com/DownloadDialog.aspx' -Method POST -Body @{updateIDs=$json} -Proxy $Proxy -UseBasicParsing -TimeoutSec 60 -Headers $hdr
-    }catch{ Log ("  candidate rejected (download dialog failed): " + $c.title); continue }
+    }catch{ $unanswered++; Log ("  candidate unanswered (download dialog failed: " + $_.Exception.Message + "): " + $c.title); continue }
+    if ([string]::IsNullOrWhiteSpace([string]$dl.Content)) { $unanswered++; Log ("  candidate unanswered (download dialog returned an empty body): " + $c.title); continue }
     $files=@([regex]::Matches($dl.Content,"url\s*=\s*'(http[^']+)'")|ForEach-Object{$_.Groups[1].Value}|Where-Object{$_ -match '\.msu(\?|$)'}|Sort-Object -Unique)
     if(-not $files.Count){ Log ("  candidate rejected (no .msu): " + $c.title); continue }
 
@@ -1505,6 +1559,13 @@ function Resolve-CatalogUncached($kb){
   # Log every candidate: a resolution miss is otherwise invisible and looks like "no updates".
   Log "  no catalog entry matches arch=$OsArch ver=$OsVer build=$OsBuild family=$wantFamily; candidates:"
   foreach($c in $all){ Log "    - $c" }
+  # A candidate the dialog never answered might have been the package: 'no package' is unproven (ADR-updater section 2 point 5).
+  # Until 2026-11-02 this returned a VERIFIED miss - the valid search page alone - so a refused dialog POST left the offer out of
+  # dom0's count with an informational row saying the Catalog "resolved no package" (replayed with KB5127648, which it serves).
+  if ($unanswered -gt 0) {
+    $script:CatalogUnresolved = $true
+    Log ("  " + $kb + " : " + $unanswered + " candidate(s) unanswered by the download dialog - UNRESOLVED, not 'no package'")
+  }
   return @()
 }
 
@@ -1940,7 +2001,7 @@ function Test-OfferRoute($u) {
   if ("$($u.content_class)" -eq 'self-contained') { return 'static' }
   if (-not ("$($u.kb)" -match '^KB\d+$')) { return 'unknown' }   # the no-KB route (Catalog by title) is the install loop's, WU-NOKB
   $urls = @()
-  try { $urls = @(Resolve-Catalog $u.kb) }
+  try { $urls = @(Resolve-Catalog $u.kb) }   # Resolve-Catalog catches the Catalog's throw itself (UNRESOLVED); this catch is a guard
   catch { Log ("  " + $u.kb + " : catalog search threw (" + $_.Exception.Message + ") - route UNKNOWN, the offer stays counted"); return 'unknown' }
   if ($urls.Count -gt 0) { return 'catalog' }
   if ($script:CatalogUnresolved) { return 'unknown' }
@@ -2967,10 +3028,18 @@ try {
   # as resolved is not a fresh offer, whatever its KB says. This is what lets a scan stop
   # re-raising dom0 for a package that was installed and proven installed thirty seconds earlier,
   # without touching the conservative rule above: a NEW revision carries a new identity and counts.
+  # ONLY A LIST WRITTEN BY THIS RULE (satisfied_rule='installed', ADR-updater section 2 point 3). An agent before 2026-11-02 also
+  # recorded INFORMATIONAL offers here, and its list survives the upgrade in the status file: carried forward, it would keep those
+  # offers out of dom0's count for ever (WUINFOIDENTITYREMEMBERED). Such a list is discarded once and every offer measured again -
+  # the cost is an installed offer Windows re-presents being counted until the next pass, the safe direction.
   $priorSat = @()
   try {
     if ($script:PrevStatus -and (Test-RowKey $script:PrevStatus 'satisfied')) {
-      $priorSat = @($script:PrevStatus.satisfied | Where-Object { $_ })
+      $prevList = @($script:PrevStatus.satisfied | Where-Object { $_ })
+      if ((Test-RowKey $script:PrevStatus 'satisfied_rule') -and "$($script:PrevStatus.satisfied_rule)" -eq 'installed') { $priorSat = $prevList }
+      elseif ($prevList.Count -gt 0) {
+        Log ("scan: the previous status's satisfied list (" + $prevList.Count + " offer identities) was written by an agent that also recorded informational offers - discarded, every offer is measured again")
+      }
     }
   } catch { $priorSat = @() }
   # DURABLE, for the same reason not_actionable is. A scan writes its OWN status, so knowledge
@@ -3118,6 +3187,12 @@ try {
         if($Action -in 'install','full'){
           Log "no KB and no direct URL - trying the catalog by title: $nokb"
           $drv = Resolve-DriverByTitle $nokb
+          if($drv -and $drv.unresolved){   # GUARD:nokbunresolved - the title search was not answered: outstanding, never the skip below
+            $script:St.result += [ordered]@{ kb=$nokb; title=$nokb; ok=$false; files=@()
+                                             reason='catalog title search did not return a valid results page - resolution UNRESOLVED, so this offer stays outstanding rather than being skipped' }
+            Save
+            continue
+          }
           if($drv){
             $drow = Install-DriverCab $drv.file $nokb
             # The row carries WHAT WAS MEASURED, the same rule the Defender row was corrected under
@@ -3137,8 +3212,10 @@ try {
         # Genuinely no route from here - and now that is a MEASURED statement, not an assumption
         # about the catalog.
         Log "skip (no KB, no direct URL, no catalog match for this architecture): $nokb"
-        $script:St.result += [ordered]@{ kb=$nokb; title=$nokb; ok=$true; state='not-actionable'; severity='info';
-                                         info_reason='offer carries no KB and no self-contained URL, and the catalog holds no entry with this exact title whose package declares this guest architecture - so there is no route to it from here. Checked, not assumed: the title search runs and each identically-titled candidate is inspected.' }
+        # `reason`, the row-level key every reader takes (dom0's Get-RowWhy, tools/wu-exclusion-evidence.py). Until 2026-11-02 this
+        # row alone wrote `info_reason`, and dom0 printed "informational <title>: no reason recorded" (measured with the shipped reader).
+        $script:St.result += [ordered]@{ kb=$nokb; title=$nokb; ok=$false; state='not-actionable'; severity='info';
+                                         reason='offer carries no KB and no self-contained URL, and the catalog holds no entry with this exact title whose package declares this guest architecture - so there is no route to it from here. Checked, not assumed: the title search runs and each identically-titled candidate is inspected.' }
         Save
         continue
         # ---- WU-NOKB-END
@@ -3418,9 +3495,12 @@ try {
       # path after GUARD:rowkey fixed it here and GUARD:stagedpending fixed it in the post-install
       # rescan. The oscillation check caught it independently: dom0 '<empty>' after the pass and
       # '1' after the very next scan. (# GUARD:stagedpending, reboot-pending half.)
-      $doneStates = @('installed','ok','up-to-date','not-actionable')
+      # AN INFORMATIONAL ROW STILL COUNTS (ADR-updater section 2 point 2) unless this pass's route proof verified its offer has
+      # no route (point 5, St.unroutable, written by this pass's scan): the WU-NOKB skip measures no route, and until 2026-11-02
+      # it was left out here while the next scan counted it.
+      $unroutablePass = @($script:St.unroutable | Where-Object { $_ })
       $pendingKbs = @($script:St.result |
-                     Where-Object { (Test-RowKey $_ 'kb') -and $_.severity -ne 'info' -and ((-not $_.ok) -or ((Test-RowKey $_ 'state') -and ($doneStates -notcontains [string]$_.state))) })   # GUARD:rowkey
+                     Where-Object { (Test-RowKey $_ 'kb') -and -not (Test-RowInstalled $_) -and -not ("$($_.severity)" -eq 'info' -and $unroutablePass -contains "$($_.kb)") })   # GUARD:rowkey
       # NO FLOOR. An earlier version of this fix forced at least 1 whenever a reboot was pending,
       # even with nothing staged or deferred - which would pin dom0 at "updates available" forever
       # on a guest carrying a stale CBS RebootPending and nothing to install. That is the inverse
@@ -3428,6 +3508,9 @@ try {
       # exactly "count what is not applied" and nothing more. Jev ruled on staged packages
       # (count-staged 0.97); the floor was mine and is withdrawn.
       $pendingCount = $pendingKbs.Count
+      # GUARD:offeridentity at this end of a pass too: what THIS pass installed and proved installed (the Defender signatures
+      # beside a staged cumulative) is recorded, so the boot scan does not count it again if Windows re-presents it.
+      $script:St.satisfied = @(Get-InstalledIdentities (Get-InstalledKeys))
       $script:St.remaining = $pendingCount; Save
       Log "reboot pending; reporting $pendingCount remaining to dom0 (staged and deferred work is NOT applied)"
       Report-Availability $pendingCount
@@ -3446,33 +3529,20 @@ try {
         $script:St.unroutable = @($afterProof.none)
         $script:St.route_unknown = @($afterProof.unknown)
         $script:St.notice = Get-ServicingNotice $script:St.unroutable $script:St.esu
-        # Exclude KBs this pass proved informational (a self-contained artifact DISM rejected as
-        # not-a-package, e.g. KB5001716) - they are self-contained by shape but never installable, so
-        # they must not leave dom0 marked "updates available" forever.
-        # Key on kb AND title. A no-KB offer (GUARD:nokbinfo) is recorded under its TITLE because it
-        # has no KB, so a kb-only match would silently fail to exclude exactly the rows that most
-        # need excluding - the ones that can never be actioned.
-        # GUARD:actioned - dom0's count is what the ADMIN still has to do, not what Windows Update
-        # still feels like offering. Two kinds of row drop out of it:
-        #   severity='info'  - the guest can never action it (no route, no package, nothing to do);
-        #   ok=$true         - THIS PASS actioned or satisfied it (installed, staged, already
-        #                      current), and Windows Update re-offering it changes nothing the
-        #                      admin can act on.
-        # Measured 2026-09-20 on the German 25H2 guest: after a pass that INSTALLED KB5007651 and
-        # found the Defender signatures current, both were still offered and both still counted, so
-        # dom0 sat at "updates available" for work already done - the same untruth as the field
-        # report, one layer further in.
-        # Rows with ok=$false stay counted, which is what keeps a DEFERRED cumulative visible - the
-        # control that must never be excluded.
-        # GUARD:infoalways - informational rows are excluded from dom0's actionable count ALWAYS,
-        # not only under the post-end-of-support notice. Before 2026-09-20 the else-branch was a
-        # bare $after.Count, so on a current OS every un-actionable offer still counted and dom0
-        # could never reach "up to date" - measured on the German 25H2 template, three items
-        # re-offered on every pass after the September cumulative was fully applied.
+        # GUARD:actioned - dom0's count is what the ADMIN still has to do. An offer THIS PASS installed and proved installed
+        # (ADR-updater section 2 point 3) drops out of it: measured 2026-09-20 on the German 25H2 guest, after a pass that
+        # INSTALLED KB5007651 and found the Defender signatures current, both were still offered and both still counted, so dom0
+        # sat at "updates available" for work already done. Key on kb AND title: a no-KB row is recorded under its TITLE.
+        # Rows with ok=$false stay counted, which is what keeps a DEFERRED cumulative visible - the control that must never be
+        # excluded.
         # ---- WU-INFO-EXCLUDE-BEGIN
-        # WHAT EARNS AN OFFER ITS SILENCE. Two things only: a row classified INFORMATIONAL, and a
-        # row that is genuinely DONE. A STAGED or DEFERRED row is neither - it is work written to
-        # the image that needs a reboot to become real.
+        # WHAT EARNS AN OFFER ITS SILENCE (ADR-updater section 2). Two things only: an offer this pass INSTALLED and proved
+        # installed (point 3, Test-RowInstalled), and an offer the rescan's own route proof just VERIFIED has no route (point 5,
+        # unroutableAfter below). An INFORMATIONAL row is still COUNTED (point 2): until 2026-11-02 every severity='info' row
+        # dropped out here and its offer identity went into `satisfied`, so a no-KB offer the scan counts (WU-NOKB measures no
+        # route) made dom0 hear N-1 after the pass and N at the next scan, or nothing for ever once `satisfied` remembered it
+        # (WUINFOIDENTITYREMEMBERED: run 9 on win10-tup reported 0 where the scan's own line said 2). A STAGED or DEFERRED row
+        # is not installed either - it is work written to the image that needs a reboot to become real.
         #
         # GUARD:stagedpending. Measured 2026-09-21 on the PRE-TUESDAY CONTROL, and only the control
         # could see it: KB5129195 came back ok=true state=staged with reboot_needed=true, the bare
@@ -3481,18 +3551,12 @@ try {
         # field report's own defect (ADR section 2), reintroduced through the door opened to fix
         # its opposite. On an already-updated guest this bug is invisible, which is the whole
         # argument for running both controls against one build.
-        $doneStates = @('installed','ok','up-to-date','not-actionable')
-        $infoKbs = @($script:St.result |
-                     Where-Object {
-                       ($_.severity -eq 'info') -or
-                       ($_.ok -eq $true -and ((-not (Test-RowKey $_ 'state')) -or ($doneStates -contains [string]$_.state))) } |
-                     ForEach-Object { $_.kb; if($_.PSObject -and (Test-RowKey $_ 'title')){ $_.title } } |
-                     Where-Object { $_ })
-        $notInfo = { param($r) ($infoKbs -notcontains $r.kb) -and ($infoKbs -notcontains $r.title) }
+        $installedKeys = @(Get-InstalledKeys)
+        $notInstalled = { param($r) ($installedKeys -notcontains $r.kb) -and ($installedKeys -notcontains $r.title) }
         # ...and the offers THIS pass verified have no route (St.unroutable, WU-ROUTE-PROOF) - the one measured exception
         # (ADR-updater section 2, point 5); the class-keyed notice branch that stood here is gone.
         $unroutableAfter = @($script:St.unroutable | Where-Object { $_ })
-        $reportCount = @($after | Where-Object { (& $notInfo $_) -and ($unroutableAfter -notcontains "$($_.kb)") }).Count
+        $reportCount = @($after | Where-Object { (& $notInstalled $_) -and ($unroutableAfter -notcontains "$($_.kb)") }).Count
         # STAGED WORK STILL COUNTS even when Windows has stopped offering it - it is written to the
         # image and not applied until the restart. Counted from the RESULT rows, not from what the
         # rescan still offers. No blanket floor on reboot_needed: forcing >=1 with nothing staged
@@ -3505,11 +3569,9 @@ try {
         # it ("installed last time" is not evidence a FRESH offer is satisfied): a new revision has
         # a different identity and is counted again. An offer with no identity records nothing, so
         # the fallback is always "count it".
-        $script:St.satisfied = @($script:St.available | Where-Object {
-                                   ($infoKbs -contains $_.kb) -or ($infoKbs -contains $_.title) } |
-                                 ForEach-Object {
-                                   if ($_ -and (Test-RowKey $_ 'uid') -and $_.uid) { "$($_.uid):$($_.rev)" } } |
-                                 Where-Object { $_ })
+        # INSTALLED identities only (point 3): an informational offer is measured again by the next scan's route proof (point 5),
+        # never remembered here.
+        $script:St.satisfied = @(Get-InstalledIdentities $installedKeys)
         # ---- WU-INFO-EXCLUDE-END
         $script:St.remaining = $reportCount; Save
         Log ("post-install rescan: $($after.Count) offered; $reportCount actionable to dom0" + $(if($unroutableAfter.Count -gt 0){ ' (' + $unroutableAfter.Count + ' verified no route this pass - see notice)' }else{ '' }))

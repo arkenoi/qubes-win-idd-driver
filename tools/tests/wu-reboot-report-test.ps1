@@ -18,8 +18,9 @@
                 never a key, exactly as measured on the guest (run/diag/psobject.txt)
       report    the reboot-pending report on the pass-1 rows counts exactly KB5129195 -> remaining
                 1, dom0 told 1 (the guest wrote 0 and told dom0 0); on the pass-2 rows (KB5129195
-                staged, ok=true) -> 0, so the fix does not over-report; an informational row stays
-                excluded; JSON-shaped rows give the same answer
+                staged, ok=true) -> 0, so the fix does not over-report; an informational row this pass
+                verified has no route stays excluded, any other informational row is COUNTED (ADR-updater
+                section 2 points 2 and 5); JSON-shaped rows give the same answer
       debounce  the boot scan at 22:54:00 after the reboot-pending pass whose done_ts is 22:49:16
                 RUNS (the guest skipped it at exactly these stamps); a scan's own answer 4.7 min old
                 still debounces the next scheduled scan; an old, errored or absent status never
@@ -393,11 +394,11 @@ $script:Saves = 0; $script:LogLines = @(); $script:Reported = @()
 function Save { $script:Saves++ }
 function Log($m) { $script:LogLines += $m }
 function Report-Availability($count) { $script:Reported += ,$count }
-function Invoke-Report($rows) {
+function Invoke-Report($rows, $unroutable = @(), $available = @()) {
     $script:Saves = 0; $script:LogLines = @(); $script:Reported = @()
-    $script:St = [ordered]@{ action = 'full'; phase = 'install'; result = @($rows); reboot_needed = $true }
+    $script:St = [ordered]@{ action = 'full'; phase = 'install'; result = @($rows); reboot_needed = $true; unroutable = @($unroutable); available = @($available) }
     . $reportFile
-    return [pscustomobject]@{ remaining = $script:St.remaining; reported = @($script:Reported); failed = @($pendingKbs); log = @($script:LogLines) }
+    return [pscustomobject]@{ remaining = $script:St.remaining; reported = @($script:Reported); failed = @($pendingKbs); log = @($script:LogLines); satisfied = @($script:St.satisfied) }
 }
 
 $pass1 = $Pass1Json | ConvertFrom-Json
@@ -415,6 +416,12 @@ $r = Invoke-Report $pass1Rows
 # the staged one is no more applied than the deferred one. The old expectation counted only the
 # deferred row because the staged rule did not exist yet.
 CheckEq 'report: pass-1 replay - BOTH the deferred and the staged row count; the guest wrote 0' $r.remaining 2
+# This end of a pass records what it INSTALLED too (ADR-updater section 2 point 3), so the boot scan does not count it again; the
+# staged and the deferred offer stay out of it.
+$r7 = Invoke-Report $pass1Rows @() @([pscustomobject]@{ kb = 'KB5007651'; uid = 'bbbb'; rev = 7 },
+                                     [pscustomobject]@{ kb = 'KB5126052'; uid = 'cccc'; rev = 9 },
+                                     [pscustomobject]@{ kb = 'KB5129195'; uid = 'dddd'; rev = 2 })
+CheckEq 'report: pass-1 replay - satisfied records the INSTALLED offer only, never the staged or the deferred one' ($r7.satisfied -join ',') 'bbbb:7'
 CheckEq 'report: pass-1 replay - dom0 is told 2, exactly once' ($r.reported -join ',') '2'
 Check   'report: pass-1 replay - the outstanding KBs are the STAGED and the DEFERRED one' `
         ($r.failed.Count -eq 2 -and (@($r.failed | ForEach-Object { $_.kb }) -join ',') -eq 'KB5126052,KB5129195')
@@ -436,11 +443,15 @@ $r2 = Invoke-Report $pass2Rows
 CheckEq 'report: pass-2 replay - a STAGED package still counts (reboot not yet performed)' $r2.remaining 1
 CheckEq 'report: pass-2 replay - dom0 is told 1 (the staged package)' ($r2.reported -join ',') '1'
 
-# An informational row in the shipped shape (qubes-windows-update.ps1, the wu-only-express record):
-# excluded from the count by severity, exactly as before the fix.
+# An informational row in the shipped shape (qubes-windows-update.ps1, the express gate's record): excluded only because this
+# pass's scan verified its offer has no route (St.unroutable, ADR-updater section 2 point 5) - the express gate writes it only for
+# a KB the same memo proved has no package on a routeless guest. Any other informational row is COUNTED (point 2): the no-KB skip.
 $infoRow = [ordered]@{ kb = 'KB5071959'; ok = $false; severity = 'info'; reason = 'wu-only-express (test copy of the shipped shape)' }
-$r3 = Invoke-Report ($pass1Rows + ,$infoRow)
-CheckEq 'report: pass-1 rows + a severity=info row - still 2 (informational stays excluded)' $r3.remaining 2
+$r3 = Invoke-Report ($pass1Rows + ,$infoRow) @('KB5071959')
+CheckEq 'report: pass-1 rows + a severity=info row this pass verified has no route - still 2' $r3.remaining 2
+$nokbRow = [ordered]@{ kb = 'AudioProcessingObject Driver Update'; title = 'AudioProcessingObject Driver Update'; ok = $true; state = 'not-actionable'; severity = 'info' }
+$r3b = Invoke-Report ($pass1Rows + ,$infoRow + ,$nokbRow) @('KB5071959')
+CheckEq 'report: ...and the no-KB skip row (informational, no route proof names it) is COUNTED - 3' $r3b.remaining 3
 
 # The same rows in their JSON shape (PSCustomObject): the helper answers both shapes the same way.
 $r4 = Invoke-Report @($pass1.result)

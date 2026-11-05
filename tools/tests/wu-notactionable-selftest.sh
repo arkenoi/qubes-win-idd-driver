@@ -32,10 +32,10 @@ target_of() {
         satdrop)    printf '%s' "the identities are CARRIED FORWARD" ;;
         stageddone) printf '%s' "an ok=true STAGED cumulative is NOT done" ;;
         notitle)    printf '%s' "the CATALOG has a package for this arch" ;;
-        kbonly)     printf '%s' "no ESU notice -> dom0 hears 0" ;;
+        kbonly)     printf '%s' "an INSTALLED no-KB driver drops out by its TITLE" ;;
         trustzero)  printf '%s' "EMPTY body -> UNRESOLVED" ;;
         shapeskip)  printf '%s' "HAS a direct URL on an install action -> INSTALLED" ;;
-        infoonly)   printf '%s' "dom0 reaches 0 (up to date)" ;;
+        infoonly)   printf '%s' "installed rows drop out" ;;
         scanhide)   printf '%s' "is still COUNTED to dom0" ;;
         *)          return 1 ;;
     esac

@@ -5,11 +5,12 @@
 # what is under test is the code that ships, not a copy of it here:
 #   (the verdict on an installer-type update moved to WU-AGENT-VERDICT on 2026-10-03, when the updater stopped running vendor .exe
 #   files itself; tools/tests/wu-agentcache-test.ps1 replays it. The WU-NOTPACKAGE region went with the DISM-on-static-content path.)
-#   WU-INFO-EXCLUDE-*   : GUARD:infoalways + GUARD:nokbinfo - informational rows are excluded from
-#                         dom0's actionable count ALWAYS, and the exclusion keys on kb AND title so a no-KB
-#                         offer is actually excluded. The one other exclusion is St.unroutable - the offers
-#                         THIS pass verified have no route (WU-ROUTE-PROOF, ADR-updater section 2 point 5);
-#                         the regions consume that set, the proof itself (a Catalog ask) runs outside them.
+#   WU-INFO-EXCLUDE-*   : what drops out of dom0's post-install count (ADR-updater section 2): an offer this pass
+#                         INSTALLED and proved installed (point 3, Test-RowInstalled; keyed on kb AND title so an
+#                         installed no-KB driver drops out), and St.unroutable - the offers THIS pass verified have
+#                         no route (WU-ROUTE-PROOF, point 5); the regions consume that set, the proof itself (a
+#                         Catalog ask) runs outside them. An informational row is still COUNTED (point 2).
+#   Resolve-Catalog     : a THROW from the Catalog search is UNRESOLVED, memoised for the pass, never 'no package'.
 #
 # -Defect <knob> re-introduces a specific defect so the suite MUST fail on the check that knob
 # targets. A guard never seen to fail is decoration.
@@ -43,17 +44,16 @@ switch ($Defect) {
     # Literal .Replace, not -replace: '$' is regex end-of-anchor and PowerShell also interpolates it
     # inside double quotes, and between them the old pattern silently matched NOTHING once the code
     # it targeted moved. A knob that matches nothing reports the guard as decoration.
-    'kbonly'    { $infoRegion = $infoRegion -replace '-and \(\$infoKbs -notcontains \$r\.title\)', '' }
+    'kbonly'    { $infoRegion = $infoRegion -replace '-and \(\$installedKeys -notcontains \$r\.title\)', '' }
     'trustzero' { $cvRegion = $cvRegion -replace '(?s)if \(\[string\]::IsNullOrWhiteSpace.*?\n  \}', '' }
     # drops the catalog-by-title route - the state before 2026-09-21, where a KB-less offer with
     # no direct URL was always excluded even when the catalog held a package for this architecture.
     'notitle'   { $nkRegion = $nkRegion.Replace('$drv = Resolve-DriverByTitle $nokb', '$drv = $null') }
     'shapeskip' { $nkRegion = $nkRegion -replace '(?s)if\(\$nokbUrls\.Count -gt 0.*?\n        \}', '' }
-    # restores the pre-fix rule: only severity='info' drops out, so an update this pass
-    # actually INSTALLED still counts and dom0 never reaches "up to date".
-    'infoonly'  { $infoRegion = $infoRegion.Replace('($_.ok -eq $true -and ((-not (Test-RowKey $_ ''state'')) -or ($doneStates -contains [string]$_.state)))', '$false') }
+    # restores the pre-2026-09-20 rule: nothing a pass INSTALLED drops out, so dom0 never reaches "up to date".
+    'infoonly'  { $infoRegion = $infoRegion.Replace('$installedKeys = @(Get-InstalledKeys)', '$installedKeys = @()') }
     # treats a STAGED row as done - dom0 then hears 0 while a cumulative waits for a reboot
-    'stageddone'{ $infoRegion = $infoRegion.Replace('($_.ok -eq $true -and ((-not (Test-RowKey $_ ''state'')) -or ($doneStates -contains [string]$_.state)))', '$_.ok -eq $true').Replace('if ($stagedN -gt $reportCount) { $reportCount = $stagedN }', '') }
+    'stageddone'{ $infoRegion = $infoRegion.Replace('$installedKeys = @(Get-InstalledKeys)', '$installedKeys = @($script:St.result | Where-Object { $_.ok -eq $true } | ForEach-Object { $_.kb; $_.title } | Where-Object { $_ })').Replace('if ($stagedN -gt $reportCount) { $reportCount = $stagedN }', '') }
     # Ignores the offer identity entirely - the state before GUARD:offeridentity, where a scan
     # re-counted an offer the previous pass had resolved and proved.
     'satignore' { $scRegion = $scRegion.Replace('@($avail | Where-Object { (& $notPriorSat $_) -and (& $notUnroutable $_) }).Count', '@($avail | Where-Object { (& $notUnroutable $_) }).Count') }
@@ -81,31 +81,37 @@ function Check($label, $got, $want) {
 }
 
 # ---------- WU-INFO-EXCLUDE ----------
-function RunCount($after, $result, $notice, $available, $rebootNeeded = $false) {
+function RunCount($after, $result, $notice, $available, $rebootNeeded = $false, $unroutable = @()) {
     # The stub must be the REAL shape: the shipped $script:St is an [ordered]@{}, the region writes
     # $script:St.satisfied, and it now reads $script:St.result and .reboot_needed. A PSCustomObject
     # cannot take a new property, and a stub missing .result makes the region compute over nothing
     # - which is how the staged-pending defect went untested: $infoKbs was built HERE, by the test,
     # so the shipped construction was never exercised at all. It is built inside the region now.
     $script:St = [ordered]@{ notice = $notice; available = @($available); satisfied = @();
-                             result = @($result); reboot_needed = $rebootNeeded }
+                             result = @($result); reboot_needed = $rebootNeeded; unroutable = @($unroutable) }
     $reportCount = 0
     Invoke-Expression $infoRegion
     return $reportCount
 }
+# The informational rows in the shapes their writers produce: the express gate (KB5071959) and the fallback gate (KB4023057), both
+# ok=$false, and the WU-NOKB skip (ok=$false state='not-actionable').
 $after = @(
-    [pscustomobject]@{ kb = 'KB5007651'; title = 'Security platform';  content_class = 'self-contained' },
-    [pscustomobject]@{ kb = 'KB2267602'; title = 'Defender defs';      content_class = 'self-contained' },
+    [pscustomobject]@{ kb = 'KB5071959'; title = 'ESU enrollment';     content_class = 'express' },
+    [pscustomobject]@{ kb = 'KB4023057'; title = 'Update Service components'; content_class = 'none' },
     [pscustomobject]@{ kb = '';          title = 'AudioProcessingObject Driver Update'; content_class = 'none' }
 )
 $result = @(
-    [pscustomobject]@{ kb = 'KB5007651'; severity = 'info' },
-    [pscustomobject]@{ kb = 'KB2267602'; severity = 'info' },
-    [pscustomobject]@{ kb = 'AudioProcessingObject Driver Update'; title = 'AudioProcessingObject Driver Update'; severity = 'info' }
+    [pscustomobject]@{ kb = 'KB5071959'; ok = $false; severity = 'info' },
+    [pscustomobject]@{ kb = 'KB4023057'; ok = $false; severity = 'info' },
+    [pscustomobject]@{ kb = 'AudioProcessingObject Driver Update'; title = 'AudioProcessingObject Driver Update'; ok = $false; state = 'not-actionable'; severity = 'info' }
 )
-Check "count: all three informational, no ESU notice -> dom0 hears 0 (it can reach 'up to date')" (RunCount $after $result $null) 0
-$result2 = @([pscustomobject]@{ kb = 'KB5007651'; severity = 'info' })
-Check "count: one informational, two real -> dom0 hears 2" (RunCount $after $result2 $null) 2
+# ADR-updater section 2 point 2 (amended 2026-11-01): an informational row is still COUNTED; point 5 - the offers THIS pass
+# verified have no route (St.unroutable) - is the one exception. The no-KB driver has no KB, so no route proof can name it.
+Check "count: three informational rows, none verified this pass -> all 3 COUNTED (point 2)" (RunCount $after $result $null) 3
+Check "count: two of them in this pass's verified set -> only the no-KB driver is COUNTED" `
+      (RunCount $after $result $null @() $false @('KB5071959','KB4023057')) 1
+$result2 = @([pscustomobject]@{ kb = 'KB5071959'; ok = $false; severity = 'info' })
+Check "count: one verified no-route offer, two real -> dom0 hears 2" (RunCount $after $result2 $null @() $false @('KB5071959')) 2
 Check "count: nothing informational -> dom0 hears all 3" (RunCount $after @() $null) 3
 
 # ---------- THE POSITIVE CONTROL: Patch Tuesday content must never be excluded ----------
@@ -114,21 +120,21 @@ Check "count: nothing informational -> dom0 hears all 3" (RunCount $after @() $n
 # resurrected by its own fix. A cumulative arrives as .msu and is decided by DISM, so it cannot
 # reach the exe branch at all; assert that it is counted whenever it is not itself informational.
 $tuesday = @(
-    [pscustomobject]@{ kb = 'KB5129195'; title = '2026-09 Cumulative';  content_class = 'self-contained' },
-    [pscustomobject]@{ kb = 'KB5007651'; title = 'Security platform';   content_class = 'self-contained' },
+    [pscustomobject]@{ kb = 'KB5129195'; title = '2026-09 Cumulative';  content_class = 'none' },
+    [pscustomobject]@{ kb = 'KB5071959'; title = 'ESU enrollment';      content_class = 'express' },
     [pscustomobject]@{ kb = '';          title = 'AudioProcessingObject Driver Update'; content_class = 'none' }
 )
 $infoOnlyTheUnactionable = @(
-    [pscustomobject]@{ kb = 'KB5007651'; severity = 'info' },
-    [pscustomobject]@{ kb = 'AudioProcessingObject Driver Update'; title = 'AudioProcessingObject Driver Update'; severity = 'info' }
+    [pscustomobject]@{ kb = 'KB5071959'; ok = $false; severity = 'info' },
+    [pscustomobject]@{ kb = 'AudioProcessingObject Driver Update'; title = 'AudioProcessingObject Driver Update'; ok = $false; state = 'not-actionable'; severity = 'info' }
 )
-Check "CONTROL: a pending Patch Tuesday cumulative is STILL counted while the others are excluded" `
-      (RunCount $tuesday $infoOnlyTheUnactionable $null) 1
-# And the failing case this control exists to catch: if the cumulative were ever marked info, dom0
-# would hear 0 with a real update pending. That must be visible as a distinct number, not hidden.
-$infoIncludingCumulative = $infoOnlyTheUnactionable + @([pscustomobject]@{ kb = 'KB5129195'; severity = 'info' })
-Check "CONTROL: if the cumulative were wrongly excluded dom0 would hear 0 - proving the count is what carries it" `
-      (RunCount $tuesday $infoIncludingCumulative $null) 0
+Check "CONTROL: a pending Patch Tuesday cumulative is STILL counted beside a verified no-route offer (and the no-KB driver)" `
+      (RunCount $tuesday $infoOnlyTheUnactionable $null @() $false @('KB5071959')) 2
+# And the failing case this control exists to catch: if the cumulative were ever in the verified set, dom0
+# would hear only the driver with a real update pending. That must be visible as a distinct number, not hidden.
+$infoIncludingCumulative = $infoOnlyTheUnactionable + @([pscustomobject]@{ kb = 'KB5129195'; ok = $false; severity = 'info' })
+Check "CONTROL: if the cumulative were wrongly in the verified set dom0 would hear 1 - proving the count is what carries it" `
+      (RunCount $tuesday $infoIncludingCumulative $null @() $false @('KB5071959','KB5129195')) 1
 
 # ---------- WU-CATALOG-VALID: a broken response is not "no package" ----------
 # Jev: is_defect 0.94, severity high-silently-hides-real-updates 1.00, self_corrects 0.21.
@@ -146,6 +152,70 @@ Check "catalog: the catalog's own no-results page -> resolved (genuinely zero)" 
 Check "catalog: EMPTY body -> UNRESOLVED (truncated, not 'no package')"                  (CatalogUnresolved '')         'True'
 Check "catalog: a truncated fragment -> UNRESOLVED"                                       (CatalogUnresolved '<html><body>') 'True'
 Check "catalog: a proxy error page -> UNRESOLVED"                                         (CatalogUnresolved '<html><h1>502 Bad Gateway</h1></html>') 'True'
+# A THROW from the search (run 9 on win10-tup: the Catalog refused 403 through the proxy ended the pass at 'resolve').
+$rcFn = [regex]::Match($src, '(?s)function Resolve-Catalog\(\$kb\)\{.*?\n\}\r?\n').Value
+$pnFn = [regex]::Match($src, '(?s)function Test-CatalogProvedNoPackage\(\$kb\)\{.*?\n\}\r?\n').Value
+if (-not $rcFn -or -not $pnFn) { Write-Output "INSTRUMENT: Resolve-Catalog / Test-CatalogProvedNoPackage not found in the shipped script"; exit 2 }
+Invoke-Expression $rcFn; Invoke-Expression $pnFn
+function Resolve-CatalogUncached($kb) { $script:uncachedCalls++; throw 'The remote server returned an error: (403) Forbidden.' }
+$script:CatalogAsked = $null; $script:uncachedCalls = 0; $script:CatalogUnresolved = $false
+$thrown = @(Resolve-Catalog 'KB4023057')
+Check "catalog: a THROW from the search -> no URLs and UNRESOLVED, the pass goes on" "$($thrown.Count)/$($script:CatalogUnresolved)" '0/True'
+Check "catalog: ...and it is not 'no package' (an informational row needs a valid page)" (Test-CatalogProvedNoPackage 'KB4023057') 'False'
+$script:CatalogUnresolved = $false; $thrown = @(Resolve-Catalog 'KB4023057')
+Check "catalog: ...NOT memoised (a throw is no answer): asked again, UNRESOLVED again" "$($script:uncachedCalls)/$($script:CatalogUnresolved)" '2/True'
+
+# A CANDIDATE WHOSE DOWNLOAD DIALOG NEVER ANSWERED is not "no package" (ADR-updater section 2 point 5). Until 2026-11-02 the shipped
+# Resolve-CatalogUncached caught a refused DownloadDialog POST itself and returned a VERIFIED miss: replayed with KB5127648, the
+# Win11 cumulative the Catalog serves, on a routeless guest it went to St.unroutable and out of dom0's count. The REAL functions run
+# here; only the network is stubbed.
+$rcuFn = [regex]::Match($src, '(?s)function Resolve-CatalogUncached\(\$kb\)\{.*?\n\}\r?\n').Value
+$rdtFn = [regex]::Match($src, '(?s)function Resolve-DriverByTitle\(\$title\)\{.*?\n\}\r?\n').Value
+if (-not $rcuFn -or -not $rdtFn) { Write-Output "INSTRUMENT: Resolve-CatalogUncached / Resolve-DriverByTitle not found in the shipped script"; exit 2 }
+Invoke-Expression $rcuFn; Invoke-Expression $rdtFn
+if (-not $env:PROCESSOR_ARCHITECTURE) { $env:PROCESSOR_ARCHITECTURE = 'AMD64' }   # pwsh on Linux has none; Resolve-DriverByTitle reads it
+$OsArch = 'x64'; $OsBuild = '26200'; $OsVer = '25H2'; $Proxy = 'http://127.0.0.1:8082'; $AcceptLanguage = $null
+$WorkDir = Join-Path ([IO.Path]::GetTempPath()) ('wunotact-' + [guid]::NewGuid().ToString('N').Substring(0, 8)); New-Item -ItemType Directory $WorkDir | Out-Null
+$script:CatPage = "<html><body><table id='ctl00_catalogBody_updateMatches'><a id='0a1b2c3d-0000-1111-2222-333344445555_link' href='#'>2026-10 Cumulative Update for Windows 11 Version 25H2 for x64-based Systems (KB5127648)</a></table></body></html>"
+function Invoke-WebRequest { param($Uri, $Method, $Body, $Proxy, [switch]$UseBasicParsing, $TimeoutSec, $Headers)
+    if ($Uri -like '*Search.aspx*') {
+        if ($script:SearchMode -eq 'throw') { throw 'The remote server returned an error: (403) Forbidden.' }
+        return [pscustomobject]@{ Content = $script:CatPage } }
+    switch ($script:DialogMode) {
+        'throw' { throw 'The remote server returned an error: (403) Forbidden.' }
+        'empty' { return [pscustomobject]@{ Content = '' } }
+        'nomsu' { return [pscustomobject]@{ Content = "<html>downloadInformation[0].files = [];</html>" } }
+        'msu'   { return [pscustomobject]@{ Content = "<html>downloadInformation[0].files[0].url = 'http://dl/windows11.0-kb5127648-x64_aa.msu';</html>" } }
+        'cab'   { return [pscustomobject]@{ Content = "<html>url = 'http://dl/drv-amd64_aa.cab'</html>" } }
+    } }
+function Fetch-Msu($u, $f) { if ($script:FetchOk) { Set-Content -LiteralPath $f -Value 'x' } }
+function Get-PackageArch($f) { return 'arm64' }   # never this guest's: a fetched candidate is inspected and does not match
+function CatalogAfterDialog($mode) {
+    $script:SearchMode = ''; $script:DialogMode = $mode; $script:CatalogAsked = $null; $script:CatalogUnresolved = $false
+    $u = @(Resolve-Catalog 'KB5127648')
+    return "{0}/{1}/{2}" -f $u.Count, $script:CatalogUnresolved, (Test-CatalogProvedNoPackage 'KB5127648')
+}
+Check "catalog: the download dialog REFUSED (403) -> UNRESOLVED, not proved 'no package'"  (CatalogAfterDialog 'throw') '0/True/False'
+Check "catalog: the download dialog answered an EMPTY body -> UNRESOLVED, not proved"       (CatalogAfterDialog 'empty') '0/True/False'
+Check "catalog: the dialog ANSWERED with no package -> a proved 'no package' (unchanged)"   (CatalogAfterDialog 'nomsu') '0/False/True'
+Check "catalog: the dialog answered with this KB's .msu -> picked"                          (CatalogAfterDialog 'msu')   '1/False/False'
+# The no-KB title route, the same rule: an unanswered search or an uninspected candidate is UNRESOLVED (WU-NOKB keeps the offer
+# outstanding), and only a valid page with every candidate inspected may end in "no candidate for this architecture" ($null).
+function TitleRoute($search, $dialog, $fetchOk) {
+    $script:SearchMode = $search; $script:DialogMode = $dialog; $script:FetchOk = $fetchOk
+    Remove-Item (Join-Path $WorkDir '*') -EA SilentlyContinue
+    $d = Resolve-DriverByTitle 'AudioProcessingObject Driver Update'
+    if ($null -eq $d) { return 'null' }; if ($d.unresolved) { return 'unresolved' }; return 'match'
+}
+$script:CatPage = "<html><body><table id='ctl00_catalogBody_updateMatches'><a id='0a1b2c3d-0000-1111-2222-333344445555_link' href='#'>AudioProcessingObject Driver Update</a></table></body></html>"
+Check "title: the catalog search THREW -> unresolved (it ended the pass until 2026-11-02)"   (TitleRoute 'throw' '' $false) 'unresolved'
+Check "title: a candidate's download dialog refused -> unresolved, not 'no candidate'"      (TitleRoute '' 'throw' $false) 'unresolved'
+Check "title: a candidate's dialog answered empty -> unresolved"                           (TitleRoute '' 'empty' $false) 'unresolved'
+Check "title: a candidate's package could not be fetched -> unresolved"                    (TitleRoute '' 'cab' $false)   'unresolved'
+Check "title: every candidate inspected, none for this architecture -> null (a real miss)" (TitleRoute '' 'cab' $true)    'null'
+$script:CatPage = '<html><h1>502 Bad Gateway</h1></html>'
+Check "title: the search answered a proxy error page -> unresolved"                        (TitleRoute '' 'cab' $true)    'unresolved'
+Remove-Item function:Invoke-WebRequest; Remove-Item -Recurse -Force $WorkDir -EA SilentlyContinue
 
 # ---------- WU-NOKB: a no-KB offer with a URL is INSTALLABLE, not 'not actionable' ----------
 # Jev put 0.80 on a genuinely installable update legitimately lacking a KB. Get-Available computes
@@ -158,6 +228,7 @@ function Install-ViaAgentCache($u) { $script:installCalled = $true; return [orde
 # has to supply those two. $script:DrvFound decides whether the catalog has a package for this
 # guest's architecture; $script:drvInstalled records that the driver path was taken.
 function Resolve-DriverByTitle($title) {
+    if ($script:DrvUnresolved) { return @{ unresolved = $true } }
     if ($script:DrvFound) { return @{ uid = 'test-uid'; url = 'https://dl.example/x.cab'; file = 'x.cab'; arch = 'amd64' } }
     return $null
 }
@@ -190,6 +261,11 @@ Check "nokb: NO direct URL and no catalog match -> informational, with a MEASURE
 Check "nokb: no direct URL but the CATALOG has a package for this arch -> INSTALLED via the driver path" `
       (NoKbDrv 'AudioProcessingObject Driver Update' $true) 'False/installed//drv=True'
 $script:DrvFound = $false
+# The title search itself unanswered (a throw, or not the Catalog's results page): Resolve-DriverByTitle says UNRESOLVED.
+$script:DrvUnresolved = $true
+Check "nokb: the catalog TITLE SEARCH unanswered -> an outstanding ok=false row, never the informational skip" `
+      ("{0}/ok={1}" -f (NoKbDrv 'AudioProcessingObject Driver Update' $false), [string]@($script:St.result)[0].ok) 'False///drv=False/ok=False'
+$script:DrvUnresolved = $false
 Check "nokb: has a URL but the action is only 'resolve' -> not installed, not excluded as a lie" `
       (NoKb 'Some driver' @('https://dl.example/x.exe') 'resolve') 'False/not-actionable/info'
 
@@ -205,13 +281,18 @@ $afterC = @(
 $resultC = @(
     [pscustomobject]@{ kb = 'KB5007651'; ok = $true;  state = 'installed' },
     [pscustomobject]@{ kb = 'KB2267602'; ok = $true;  severity = 'ok' },
-    [pscustomobject]@{ kb = 'AudioProcessingObject Driver Update'; title = 'AudioProcessingObject Driver Update'; ok = $true; severity = 'info' }
+    [pscustomobject]@{ kb = 'AudioProcessingObject Driver Update'; title = 'AudioProcessingObject Driver Update'; ok = $false; state = 'not-actionable'; severity = 'info' }
 )
-Check "actioned: everything installed/satisfied/unactionable -> dom0 reaches 0 (up to date)" (RunCount $afterC $resultC $null) 0
+# KB2267602's row has ok and no state - the shape Install-ViaWU writes (the agent's ResultCode 2/3) - and is installed too.
+Check "actioned: installed rows drop out (state 'installed' and the stateless ok row) - only the no-KB driver, informational, is COUNTED" `
+      (RunCount $afterC $resultC $null) 1
+$resultCdrv = @($resultC[0], $resultC[1],
+    [pscustomobject]@{ kb = 'AudioProcessingObject Driver Update'; title = 'AudioProcessingObject Driver Update'; ok = $true; state = 'installed' })
+Check "actioned: an INSTALLED no-KB driver drops out by its TITLE -> dom0 reaches 0 (up to date)" (RunCount $afterC $resultCdrv $null) 0
 # ...and the control that must survive it: a DEFERRED cumulative is ok=false and stays counted.
 $afterD = @([pscustomobject]@{ kb = 'KB5129195'; title = 'cumulative'; content_class = 'self-contained' }) + $afterC
 $resultD = $resultC + @([pscustomobject]@{ kb = 'KB5129195'; ok = $false; state = 'deferred' })
-Check "actioned: a DEFERRED cumulative is ok=false and STAYS counted -> dom0 hears 1" (RunCount $afterD $resultD $null) 1
+Check "actioned: a DEFERRED cumulative is ok=false and STAYS counted -> dom0 hears 2 (it and the no-KB driver)" (RunCount $afterD $resultD $null) 2
 
 # GUARD:stagedpending. Measured 2026-09-21 on the PRE-TUESDAY CONTROL and invisible on an
 # already-updated guest: a cumulative came back ok=true state=staged with reboot_needed=true, the
@@ -325,7 +406,7 @@ Check "scan: a verification naming a KB that is not offered excludes nothing"   
 function ScanCountId($avail, $satisfied) {
     $script:St = [ordered]@{ notice = $null; not_actionable = @() }
     $StatusFile = Join-Path ([IO.Path]::GetTempPath()) ("wuscan3-" + [guid]::NewGuid().ToString() + ".json")
-    (@{ result = @(); not_actionable = @(); satisfied = $satisfied } | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $StatusFile
+    (@{ result = @(); not_actionable = @(); satisfied = $satisfied; satisfied_rule = 'installed' } | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $StatusFile
     $script:PrevStatus = Get-Content -LiteralPath $StatusFile -Raw | ConvertFrom-Json
     $reportCount = -1
     Invoke-Expression $scRegion
@@ -341,13 +422,24 @@ Check "scan: a NEW REVISION of that offer counts again (only the identity is tru
       (ScanCountId $idAvail @('aaaa-1111:203')) 2
 Check "scan: an identity for a DIFFERENT offer excludes nothing here" (ScanCountId $idAvail @('zzzz-9999:1')) 2
 Check "scan: offers with NO identity fall back to counting" (ScanCountId $scanAvail @('aaaa-1111:204')) 3
+# A list an OLDER agent wrote (no satisfied_rule) held informational identities too (WUINFOIDENTITYREMEMBERED, run 9: dom0 told 0
+# where the scan's own line said 2). It survives the upgrade in the status file, so the scan discards it once and measures again.
+function ScanCountLegacy($avail, $satisfied) {
+    $script:St = [ordered]@{ notice = $null; not_actionable = @() }
+    $script:PrevStatus = (@{ result = @(); not_actionable = @(); satisfied = $satisfied } | ConvertTo-Json -Depth 6 | ConvertFrom-Json)
+    $reportCount = -1
+    Invoke-Expression $scRegion
+    return "$reportCount/$(@($script:St.satisfied) -join ',')"
+}
+Check "scan: a satisfied list with NO satisfied_rule (an older agent's) is discarded - both offers counted, nothing carried" `
+      (ScanCountLegacy $idAvail @('aaaa-1111:204')) '2/'
 # DURABILITY. A scan writes its own status; if it does not write `satisfied` back, the knowledge
 # survives exactly one scan and the next one re-counts. Measured on the guest 2026-09-21: the pass
 # wrote two identities and the consuming scan wrote satisfied=[] straight back.
 function ScanCarry($avail, $satisfied) {
     $script:St = [ordered]@{ notice = $null; not_actionable = @(); satisfied = @() }
     $StatusFile = Join-Path ([IO.Path]::GetTempPath()) ("wuscan4-" + [guid]::NewGuid().ToString() + ".json")
-    (@{ result = @(); not_actionable = @(); satisfied = $satisfied } | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $StatusFile
+    (@{ result = @(); not_actionable = @(); satisfied = $satisfied; satisfied_rule = 'installed' } | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $StatusFile
     $script:PrevStatus = Get-Content -LiteralPath $StatusFile -Raw | ConvertFrom-Json
     $reportCount = -1
     Invoke-Expression $scRegion
