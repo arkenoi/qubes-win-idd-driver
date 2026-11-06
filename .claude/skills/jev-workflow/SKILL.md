@@ -26,6 +26,18 @@ gate checks the file exists, parses as Jev answers, and is under 60 minutes old.
 the verdict - it enforces that the fork was ASKED.
 
 
+## The plan comes before the script
+
+`PLANNING-PROMPT.md`, beside this file, is the planning instrument: the items a plan must answer
+BEFORE one line of script exists, each with the refusal that makes the plan incomplete. Answer it
+into `scratchpad/workflow-plan-<name>.md` and name that file in the launch as
+`// WORKFLOW-PLAN: <path>`. This page is the reference; that one is what you fill in.
+
+The gate refuses a Workflow that names no plan, whose plan file is absent or empty, or whose plan
+does not name every tier the script pins as a quoted literal and every literal phase name it runs.
+A plan inside the script could not govern the script, and divergence is measurable only between two
+artifacts (Jev: `named_checked_artifact` 0.89, `pins_and_literal_phases` 0.91).
+
 ## Where the judgement sits INSIDE the run
 
 The entry receipt proves the fork was asked BEFORE the fan-out. It says nothing about the run's

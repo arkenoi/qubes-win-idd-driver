@@ -111,7 +111,8 @@ fi
 # and one hard check with no judgement in it: a script with agent() calls and no model: anywhere pinned
 # no tier at all, so every stage silently inherits the session model - the most expensive one.
 build=$(printf '%s' "$input" | python3 -c '
-import json, re, sys
+import json, os, re, sys
+root = sys.argv[1] if len(sys.argv) > 1 else ""
 try: o = json.loads(sys.stdin.read() or "{}")
 except Exception: sys.exit(0)
 if o.get("tool_name") != "Workflow": sys.exit(0)
@@ -148,17 +149,49 @@ pinned = sorted(set(re.findall(r"\bmodel\s*:\s*[\x27\"]([A-Za-z0-9._-]+)[\x27\"]
 missing = [t for t in pinned if t not in dec]
 if dec and missing:
     bad.append("MODEL-PLAN does not name the tier(s) the script actually pins: " + ", ".join(missing))
+# THE PLAN IS AN ARTIFACT, NOT A COMMENT. A plan written inside the script cannot govern the script, and
+# one artifact cannot diverge from another that does not exist - divergence is measurable only between two
+# (Jev: named_checked_artifact 0.89 conf 0.85, pins_and_literal_phases 0.91 conf 0.88). So the launch names
+# a plan file written BEFORE the script, and everything the script LITERALLY commits to must appear in it.
+# A computed tier or phase name is not a literal and is exempt: the first false positive is what gets a
+# check argued around instead of obeyed.
+m = re.search(r"WORKFLOW-PLAN:\s*(\S+)", src)
+if not m:
+    bad.append("no WORKFLOW-PLAN declaration naming the plan file")
+else:
+    rel, plan = m.group(1), ""
+    for cand in ([os.path.join(root, rel), rel] if root else [rel]):
+        try:
+            plan = open(cand, encoding="utf-8", errors="replace").read()
+            break
+        except Exception:
+            continue
+    if not plan.strip():
+        bad.append("the plan file named by WORKFLOW-PLAN (" + rel + ") does not exist or is empty")
+    else:
+        phases = sorted(set(re.findall(r"\bphase\s*(?:\(\s*|:\s*)[\x27\"]([^\x27\"]+)[\x27\"]", src)))
+        gone = sorted(set([t for t in pinned if t not in plan] + [f for f in phases if f not in plan]))
+        if gone:
+            bad.append("the plan does not name what the script commits to: " + ", ".join(gone))
 print("; ".join(bad))
-')
+' "$ROOT")
 if [ -n "$build" ]; then
     cat >&2 <<EOM
 BLOCKED by tools/hooks/jev-first-gate.sh: the fork receipt is fine, the BUILD is not - $build.
 
-JEV FIRST is satisfied; this is the other half. Put two comment lines in the script:
+JEV FIRST is satisfied; this is the other half. Put three comment lines in the script:
 
     // JEV-JUDGE: <what Jev judges here, in code, over the artifacts the stages return>
     //            or: NONE - <why nothing in this run is a judgement>
     // MODEL-PLAN: <stage>=<tier> per stage, e.g. spec=sonnet judge=jev write=main-thread
+    // WORKFLOW-PLAN: scratchpad/workflow-plan-<name>.md
+
+THE PLAN COMES FIRST, and it is a FILE, not a comment: a plan written inside the script cannot
+govern the script. Answer .claude/skills/jev-workflow/PLANNING-PROMPT.md into that file BEFORE any
+script text exists - it asks, in order, whether a workflow is warranted at all, what would
+disconfirm the plan, the fork and its relevance question, the per-stage placement and spend, what
+Jev judges, who writes, and the literals below. The plan must NAME every tier the script pins as a
+quoted literal and every literal phase name it runs; computed tiers and phase names are exempt.
 
 WHAT COUNTS AS A JUDGEMENT, and therefore Jev's: a verdict, a score, a classification, a ranking,
 "is this real", "does this hold". A model may not perform any step a script could produce
