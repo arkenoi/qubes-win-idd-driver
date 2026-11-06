@@ -25,11 +25,20 @@ shape of its messages — raises the caller's rc on an unaccounted or risen erro
 case (`undeclared_ours>0`: a gate that judged only part of the run, whose silence means nothing) as a
 finding too, and discounts the caller's own graded verdicts so one failure is not counted twice.
 `matrix.sh` does the same through `no "INVALID-SWEEP…"`. `quick-upgrade.sh` — the short cycle, the
-sanctioned path for every fix here — does the same: sweep-gate findings, or a gate that did not judge, raise its rc to 3.
+sanctioned path for every fix here — does the same: sweep-gate findings, or a gate that did not
+judge, raise its rc to **4**, which means THE CELL RAN AND PASSED AND THIS RUN'S LOG IS NOT CLEAN.
+It is deliberately not 3. 3 is REFUSED in that script — about twenty sites that all mean the cell
+never ran — and while the two shared one code, four of its six callers reported a cell that had
+PASSED as a precondition refusal, as `FATAL: upgrade did not complete`, as "the updater was never
+reached", and as a FAIL verdict that truncated a campaign to its first cell.
 
-**3 and 4 are never a pass.** rc 3 means a log was missing, empty, partial or unparseable; rc 4
-means the judge did not run. Missing data is not a clean run. `campaign-state.py` exit 2 means no
-cell graded anything — also not a pass, and it says so in words rather than printing a zero.
+**These are two different code spaces; read a code against its emitter.** From `log-sweep.sh` and
+`campaign-state.py`: 3 and 4 are never a pass — rc 3 means a log was missing, empty, partial or
+unparseable, rc 4 means the judge did not run, and missing data is not a clean run;
+`campaign-state.py` exit 2 means no cell graded anything, also not a pass, and it says so in words
+rather than printing a zero. From `quick-upgrade.sh`: 4 is not a clean run either — its verdict line
+still opens `NOT OK:` — but the subject IS installed, so a caller may go on measuring the product
+provided it names the findings, which is what all six callers now do.
 
 ## Two stores, and why both
 

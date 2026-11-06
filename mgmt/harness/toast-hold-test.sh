@@ -237,6 +237,11 @@ else
     0) ;;
     2) finish 2 "DEADLINE: quick-upgrade hit its deadline - $VM left as it stands (see $OUT/quick-upgrade.out)" ;;
     3) finish 1 "REFUSED by quick-upgrade (preconditions) - see $OUT/quick-upgrade.out" ;;
+    # 4 = the cell RAN, every one of its checks passed, and the error sweep then found something in
+    # the log (quick-upgrade.sh's finish()). The subject has the package, so this cell's measurement
+    # stands. Until 4 existed that state arrived as 3 and this script called it a precondition
+    # refusal; a catch-all would now call it "the package did not install" over a guest that has it.
+    4) log "  quick-upgrade: the install passed every check and the error sweep was not clean (rc=4) - $VM has the package, so this cell continues; the findings are in $OUT/quick-upgrade.out and under $OUT/quick-upgrade/" ;;
     *) finish 1 "FAIL: quick-upgrade did not verify the upgrade (rc=$rc) - the package did not install; see $OUT/quick-upgrade.out" ;;
   esac
   QU_MAN=$(ls -d "$OUT"/quick-upgrade/"$VM"-*/MANIFEST.json 2>/dev/null | tail -1)

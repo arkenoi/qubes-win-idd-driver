@@ -177,7 +177,7 @@ release_loop(){
 }
 finish(){ # $1=rc $2=message  - every exit goes through here and says which exit it took
   local rc=$1; shift
-  local _gate_override=0
+  local _gate_override=0 _gate_why=""
   # Pull the log volume on EVERY exit, pass or fail. Host-side, nothing detached, so it works with
   # the guest still running or wedged - which is the whole point: the wedge is the case to catch.
   if [ -n "${LOGVOL_IMG:-}" ]; then
@@ -272,12 +272,28 @@ finish(){ # $1=rc $2=message  - every exit goes through here and says which exit
       # who is told "FINDINGS" when the gate actually crashed goes looking for findings that do not
       # exist.
       sweep_gate_rc "$OUT/sweep-gate.out"; _sg_rc=$?
+      # THE OVERRIDE TAKES ITS OWN EXIT CODE, AND IT IS NOT 3. 3 is REFUSED - about twenty sites in
+      # this file that all mean THE CELL NEVER RAN (no golden, the golden is not Halted or failed its
+      # seal, a bad disc, Gate-0 failed, another subject still Running, a package not newer than the
+      # golden). This branch is the OPPOSITE fact: it fires only where rc was already 0, so the
+      # upgrade installed and every one of this cell's own checks passed, and the sweep then found
+      # something in the log. Sharing 3 made those two indistinguishable to any caller that reads an
+      # exit code, and four of the six callers duly reported a cell that PASSED as "REFUSED by
+      # quick-upgrade (preconditions)", "FATAL: upgrade did not complete", "the updater was never
+      # reached" and a FAIL verdict that truncated the campaign to its first cell - the same class of
+      # harm the measurement at the top of this function records, where this code stopped a P1 fix's
+      # guest acceptance from running.
+      # 4 = THE CELL RAN AND PASSED, AND THIS RUN'S LOG IS NOT CLEAN. Both arms take it: to a caller
+      # deciding whether its subject is usable they are one fact - the install is good - and which of
+      # the two it was stays in the log line, in $_gate_why below and in sweep-gate.out, where the
+      # reader who cares is already looking. One code per fact, read in a `case`, is the idiom
+      # everywhere else in this harness (log-sweep.sh:222-224, stability-e2e.sh:92-93 and :111-112).
       case "$_sg_rc" in
         0) log "sweep-gate: the only error-shaped lines are this run's own graded verdicts" ;;
         2) log "[ERROR] SWEEP-GATE DID NOT JUDGE this run - it exited without a verdict line; see $OUT/sweep-gate.out"
-           [ "$rc" = 0 ] && { rc=3; _gate_override=1; } ;;
+           [ "$rc" = 0 ] && { rc=4; _gate_override=1; _gate_why="did not judge this run - it exited without a verdict line"; } ;;
         *) log "[ERROR] SWEEP-GATE FINDINGS in this run's log or the guest's own logs - see $OUT/sweep-gate.out"
-           [ "$rc" = 0 ] && { rc=3; _gate_override=1; } ;;
+           [ "$rc" = 0 ] && { rc=4; _gate_override=1; _gate_why="found findings in this run's own log"; } ;;
       esac
     fi
   fi
@@ -289,7 +305,10 @@ finish(){ # $1=rc $2=message  - every exit goes through here and says which exit
   # printed `[ERROR] OK: win11-nfy upgraded 4.3.35.795 -> 4.3.36.980 ... and verified`: a level and
   # a noun that contradict each other, and the noun is what a reader believes. The cell's own
   # verdict is kept, as the subordinate clause it now is.
-  [ "$_gate_override" = 1 ] && set -- "NOT OK: the sweep gate found findings in this run's own log. The cell's own checks said: $*"
+  # AND THE WORDS NAME WHICH OF THE TWO IT WAS. This line said "found findings" for both arms, so a
+  # run whose gate CRASHED told its reader to go looking for findings that were never printed - the
+  # mistake the case above explicitly refuses to make in its log lines, made again one layer up.
+  [ "$_gate_override" = 1 ] && set -- "NOT OK: the sweep gate $_gate_why. The cell's own checks said: $*"
   log "$([ "$rc" = 0 ] || printf '[ERROR] ')$*"
   # A cell that failed says so with a LEVEL, because "summary: 3 passed, 2 failed" and
   # "summary: 5 passed, 0 failed" are the same shape and opposite facts - only this line, which

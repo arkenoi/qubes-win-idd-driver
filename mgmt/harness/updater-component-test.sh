@@ -112,10 +112,19 @@ say "step 1/4: quick-upgrade over $GOLDEN"
 # reported an install that had verified when THIS run's install had been killed at rc=143. A file
 # cannot scope a run; the evidence a verdict reads must be this run's bytes only.
 : > "$OUT/upgrade.out"
-if ! QU_OUT="$OUT/qu" ./mgmt/harness/quick-upgrade.sh "$PKG" "$VM" "$FAMILY" >"$OUT/upgrade.out" 2>&1; then
-  say "INSTRUMENT: the package install over $GOLDEN did not pass - the updater was never reached"
+QU_OUT="$OUT/qu" ./mgmt/harness/quick-upgrade.sh "$PKG" "$VM" "$FAMILY" >"$OUT/upgrade.out" 2>&1; _urc=$?
+# "THE UPDATER WAS NEVER REACHED" IS A CLAIM ABOUT THE INSTALL, so only a failed install may make
+# it. rc=4 means the opposite: the cell ran, every check passed, and the error sweep then found
+# something in this run's log (quick-upgrade.sh's finish()). `if !` read that as a failed install
+# and exited 2 with "the updater was never reached" over a guest the updater was perfectly
+# reachable on - an INSTRUMENT verdict invented out of a clean install.
+if [ "$_urc" != 0 ] && [ "$_urc" != 4 ]; then
+  say "INSTRUMENT: the package install over $GOLDEN did not pass (rc=$_urc) - the updater was never reached"
   grep -aE '\[ERROR\]|UNACCOUNTED|REFUSED' "$OUT/upgrade.out" | tail -5 | sed 's/^/    /' | tee -a "$LOG"
   exit 2
+fi
+if [ "$_urc" = 4 ]; then
+  say "  the install passed every check and the error sweep was not clean (rc=4) - $VM has the package, so this component test continues; the findings are in $OUT/upgrade.out"
 fi
 say "  install: $(grep -aE 'summary:' "$OUT/upgrade.out" | tail -1)"
 

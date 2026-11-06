@@ -196,13 +196,22 @@ PS
 # ---- L1 deploy ----------------------------------------------------------------------------------------------------
 if has L1; then
   log "L1: deploy the package under test over $GOLDEN"
-  if mgmt/harness/quick-upgrade.sh "$ISO" "$SUBJ" win11r > "$OUT/L1-upgrade.out" 2>&1; then
-    verdict L1 PASS "the package installs and the guest answers" "$(grep -ac 'PASS' "$OUT/L1-upgrade.out") checks passed; $OUT/L1-upgrade.out"
-  else
-    verdict L1 FAIL "the package installs and the guest answers" "$(grep -aE 'FAIL' "$OUT/L1-upgrade.out" | head -3 | tr '\n' ' ' | cut -c1-220)"
-    log "L1 failed - the later cells would measure the install, not the product; stopping"
-    CELLS="L1"
-  fi
+  mgmt/harness/quick-upgrade.sh "$ISO" "$SUBJ" win11r > "$OUT/L1-upgrade.out" 2>&1; _l1rc=$?
+  # L1 ASKS WHETHER THE PACKAGE INSTALLS, NOT WHETHER THE RUN'S LOG IS CLEAN. `if` treated every
+  # non-zero rc as the install failing, so rc=4 - the cell ran, every check passed, and the error
+  # sweep then found something in the log - was graded FAIL and set CELLS="L1", dropping L9/L2/L8.
+  # That is how the last campaign came back as one cell over a guest that had the package installed
+  # and answering. The sweep findings are still reported, in the reason, where they belong.
+  case $_l1rc in
+    0) verdict L1 PASS "the package installs and the guest answers" "$(grep -ac 'PASS' "$OUT/L1-upgrade.out") checks passed; $OUT/L1-upgrade.out" ;;
+    4) verdict L1 PASS "the package installs and the guest answers" "$(grep -ac 'PASS' "$OUT/L1-upgrade.out") checks passed; the error sweep then found findings (rc=4), named in $OUT/L1-upgrade.out" ;;
+    # ANCHORED ON THE CHECK-LINE SHAPE. A bare 'FAIL' matched inside identifiers such as QGAWDFAIL
+    # and put substrings of passing lines in the reason; quick-upgrade writes a failed check as
+    # `FAIL  <text>` with two spaces, and a refusal as `REFUSED: <text>`.
+    *) verdict L1 FAIL "the package installs and the guest answers" "rc=$_l1rc: $(grep -aE 'FAIL  |REFUSED:' "$OUT/L1-upgrade.out" | head -3 | tr '\n' ' ' | cut -c1-220)"
+       log "L1 failed - the later cells would measure the install, not the product; stopping"
+       CELLS="L1" ;;
+  esac
 fi
 if [ "$(state)" != Running ]; then qvm-start "$SUBJ" >/dev/null 2>&1; fi
 w=$(wait_session 300); [ "$w" = up ] || { verdict L0 INVALID "a session before the cells" "wait_session=$w"; log "no session ($w) - nothing below can run"; CELLS=""; }

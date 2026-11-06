@@ -116,7 +116,16 @@ say "quick-upgrade over win11-qwt with $(python3 -c "import json;m=json.load(ope
 export STALL_REPRO_INVOKED_BY="notify-errors-guest-test.sh"
 ./mgmt/harness/quick-upgrade.sh "$PKG" "$VM" "$OS_FAMILY" >>"$LOG" 2>&1
 prc=$?; say "quick-upgrade rc=$prc"
-[ "$prc" -eq 0 ] || { say "FATAL: upgrade did not complete"; vm_unlock "$VM"; exit 1; }
+# THE UPGRADE COMPLETING AND THIS RUN'S LOG BEING CLEAN ARE TWO FACTS. rc=4 is the second one
+# failing while the first held: the install verified, every check in the cell passed, and the error
+# sweep then found something in the log (quick-upgrade.sh's finish()). This read `-eq 0` and called
+# that "FATAL: upgrade did not complete" over a guest that had completed the upgrade, which is a
+# false sentence about the product and it cost a whole run of this test.
+case $prc in
+  0) ;;
+  4) say "  the install passed every check and the error sweep was not clean (rc=4) - $VM has the package, so this test continues; the findings are in $LOG" ;;
+  *) say "FATAL: upgrade did not complete (rc=$prc)"; vm_unlock "$VM"; exit 1 ;;
+esac
 
 # The helper lives in the PAYLOAD dir beside activate-idd.ps1 (make-setup.ps1:330 - "dot-sourced by
 # activate-idd.ps1 / deactivate-idd.ps1 from $PSScriptRoot"), which the installer stages to
