@@ -123,7 +123,21 @@ vm_lock(){
   if ! declare -F assert_sole_guest >/dev/null 2>&1; then
     . "$(dirname "${BASH_SOURCE[0]}")/serial-rig.sh"
   fi
-  assert_sole_guest "$vm" || exit 1
+  # EXIT 2, NOT 1. This is a SOURCED function, so the exit terminates its HOST script and pre-empts
+  # whatever the host would have done with a refusal. MEASURED 2026-11-06T21:58:11Z, campaign
+  # campaign-full-bb29d23b: win11r-up was deliberately left Running as a specimen, so this assert
+  # refused the first suite that takes the rig - and `vm_lock "$SUBJ" || { verdict INVALID-RIG ...;
+  # exit 2; }` in tools/smoke/logvol-smoke.sh:120 NEVER RAN, because the host was already exiting.
+  # rc=1 then fell past the `2) could not measure (INVALID-RIG) - the rig, not the bind` arm in
+  # tools/release-acceptance.sh to its `*)` arm, which printed "fix the volume path before spending
+  # the cells" for what was a rig-occupancy refusal. An instrument that could not measure must never
+  # report as a product regression (the acceptance rule), and 2 is the instrument code throughout
+  # this project - including the very next line, for "cannot open lock", the same class of condition.
+  # Of 26 call sites outside this file, every one that handles the refusal itself uses 2 (or 3 for
+  # "vmlock busy") and NONE uses 1, so this aligns the gate with the contract its callers already
+  # encode rather than inventing one. lint-harness L22 requires the assert and pins no code.
+  # Jev vmlock_exit_code=align_to_2 0.97.
+  assert_sole_guest "$vm" || exit 2
   local lf="${TMPDIR:-/tmp}/qwt-vmlock-$vm"
   : >> "$lf" 2>/dev/null || { echo "FATAL: cannot open lock $lf" >&2; exit 2; }
 

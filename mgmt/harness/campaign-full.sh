@@ -77,6 +77,44 @@ mkdir -p "$OUT" || exit 2
 log(){ printf '%s campaign-full[%s] %s\n' "$(date -u '+%H:%M:%S')" "$SHORT" "$*" | tee -a "$OUT/chain.log"; }
 die(){ log "REFUSED: $*"; exit 2; }
 
+# ---- THE RIG SETTLE, ONE DEFINITION, CALLED AT BOTH STEP BOUNDARIES -----------------------------
+# This used to be inline at step 2b only - before step 3, because step 2 leaves its last feature
+# test's guest up and gate-remainder refuses ANY running guest. MEASURED 2026-11-06T21:58:11Z,
+# campaign-full-bb29d23b: it refused 15 SECONDS into step 2 instead, because step 2's OWN first
+# suite takes the rig too. win11r-up had been left Running on purpose as the short cycle's specimen;
+# campaign-preflight passed it (its check is "no SUBJECT guest is running", and win11r-up is not a
+# subject of this campaign), and then the logvol smoke's vm_lock hit assert_sole_guest and the chain
+# ended with no cell spent. The header above already says this decision is taken HERE, once, by the
+# only script that knows both steps - it knew about step 3's boundary and not about step 2's.
+# release-acceptance.sh does own a settle_rig(), but it is defined INSIDE its `if SKIP_FEATURES`
+# block, after the smoke and after the matrix, and its body needs wedge-gates-lib.sh which is sourced
+# later still - so the fix belongs here, at the boundary, not in a hoist of that function.
+# Jev settle_placement=orchestrator_before_step_2 0.94.
+# NOTHING HERE KILLS: a guest that will not halt within 600 s is the specimen of whatever stopped
+# it, and the chain ends saying so. Returns 1 so the caller owns the exit code.
+settle_the_rig(){
+  local when="${1:?settle_the_rig <when> <who-refuses>}" refuser="${2:?}" left lrc unsettled="" g vm src
+  log "settle the rig before $when"
+  left=$(_sr_running_guests ""); lrc=$?   # not through a pipe - the status is the rig-read signal (serial-rig.sh)
+  if [ "$lrc" = 2 ]; then
+    log "STOP: the rig could not be read (admin.vm.List returned nothing) - whether a guest is up is UNKNOWN, and $refuser refuses on no information too"
+    return 1
+  fi
+  for g in $left; do                      # entries: name(State) or name(State,tag-lookup-TIMED-OUT), space-separated
+    vm="${g%%(*}"
+    log "  $g is up before $when - qwt_shutdown $vm 600"
+    qwt_shutdown "$vm" 600 >>"$OUT/settle.out" 2>&1; src=$?
+    log "  qwt_shutdown $vm rc=$src (0 halted; anything else: see $OUT/settle.out - the guest is left UP, nothing here kills)"
+    [ "$src" = 0 ] || unsettled="$unsettled $vm"
+  done
+  if [ -n "$unsettled" ]; then
+    log "STOP: not halted within 600 s:$unsettled - the specimen of whatever stopped it; $refuser would refuse it, so the chain ends here"
+    return 1
+  fi
+  [ -n "${left// /}" ] || log "  no testbed guest is up"
+  return 0
+}
+
 log "head $HEAD_SHA on $BRANCH; evidence in $OUT"
 
 # ---- 1. the two packages, PROVEN -----------------------------------------------------------------
@@ -185,8 +223,9 @@ log "plan: ready=$ready, $nsuite suite(s) required"
 if [ -n "$DRY" ]; then
   log "DRY: the chain would now run, in order:"
   log "  1. tools/verify-release-package.sh --tree <$PKG setup> --commit $PKG_SHA  (the PACKAGE's commit)"
+  log "  2a. settle the rig: qwt_shutdown <each running testbed guest> 600 - step 2's own first suite takes the rig"
   log "  2. PKG=$PKG mgmt/harness/campaign-full.sh's inner campaign-run.sh (preflight -> release-acceptance -> campaign-state)"
-  log "  2b. settle the rig: qwt_shutdown <each running testbed guest> 600 - the guests read as serial-rig.sh reads them (admin.vm.List)"
+  log "  2b. settle the rig again: step 2 leaves its last feature test's guest up - the guests read as serial-rig.sh reads them (admin.vm.List)"
   log "  3. tools/gate-remainder.sh --run $PKG --vm10 $VM10 --vm11 $VM11 --os11 $OS11 --fi-run $FI"
   log "  4. tools/gate-scope.py check <receipt>"
   exit 0
@@ -203,6 +242,13 @@ log "step 1/4: package-verify"
 bash tools/verify-release-package.sh --tree "$TREE" --commit "$PKG_SHA" > "$OUT/package-verify.out" 2>&1; vrc=$?
 log "  package-verify rc=$vrc: $(tail -1 "$OUT/package-verify.out" | cut -c1-140)"
 [ "$vrc" = 0 ] || { log "STOP: the package does not verify - nothing downstream would be meaningful"; exit "$vrc"; }
+
+# ---- 4b. settle the rig BEFORE step 2 - its first suite takes the rig too ------------------------
+# Placed after package-verify on purpose: a package that does not verify must not cost the operator
+# a running guest. The preflight inside step 2 will NOT catch this - it asks whether a SUBJECT guest
+# is running, and the guest that refused us was not a subject.
+log "step 2a/4: settle the rig before the cells"
+settle_the_rig "step 2 (its logvol smoke clones and boots a golden)" "the logvol smoke" || exit 1
 
 # ---- 5. the cells and the feature tests (preflight decides whether to start) ----------------------
 log "step 2/4: campaign-run (preflight -> release-acceptance -> verdict)"
@@ -249,24 +295,7 @@ fi
 
 # ---- 5b. settle the rig: step 2 leaves its last feature test's guest up, step 3 refuses ANY guest ----
 log "step 2b/4: settle the rig before the remainder"
-left=$(_sr_running_guests ""); lrc=$?        # not through a pipe - the status is the rig-read signal (serial-rig.sh)
-if [ "$lrc" = 2 ]; then
-  log "STOP: the rig could not be read (admin.vm.List returned nothing) - whether a guest is up is UNKNOWN, and gate-remainder refuses on no information too"
-  exit 1
-fi
-unsettled=""
-for g in $left; do                               # entries: name(State) or name(State,tag-lookup-TIMED-OUT), space-separated
-  vm="${g%%(*}"
-  log "  $g is up after step 2 - qwt_shutdown $vm 600"
-  qwt_shutdown "$vm" 600 >>"$OUT/settle.out" 2>&1; src=$?
-  log "  qwt_shutdown $vm rc=$src (0 halted; anything else: see $OUT/settle.out - the guest is left UP, nothing here kills)"
-  [ "$src" = 0 ] || unsettled="$unsettled $vm"
-done
-if [ -n "$unsettled" ]; then
-  log "STOP: not halted within 600 s:$unsettled - the specimen of whatever stopped it; gate-remainder would refuse it, so the chain ends here"
-  exit 1
-fi
-[ -n "${left// /}" ] || log "  no testbed guest is up"
+settle_the_rig "step 3 (gate-remainder refuses ANY running guest)" "gate-remainder" || exit 1
 
 # ---- 6. the six suites release-acceptance does not cover ------------------------------------------
 log "step 3/4: gate-remainder (--fi-run $FI)"
