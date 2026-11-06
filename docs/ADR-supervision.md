@@ -51,6 +51,7 @@ flowchart TD
 | 5 | Nothing of ours relaunches anything: an exit code is a contract, the relauncher is disarmed before its target is ended, and a loud error the user must see reaches them even when dom0 cannot be told | ACCEPTED (owner) | 2026-10-07 |
 | 7 | A deliberate stand-down is ultimate: no clock, no deadline, no report, until something starts it | ACCEPTED (owner) | 2026-10-24 |
 | 8 | A supervisor may POLL to detect, but only on a handle it owns, and it may not restart | ACCEPTED (owner) | 2026-10-24 |
+| 9 | The channel that ASKS a child to exit is created by its OWNER, before the child runs | ACCEPTED (Jev 0.96) | 2026-11-06 |
 
 (Section 6 is a recorded FINDING, not a decision, and keeps its number.)
 
@@ -711,3 +712,65 @@ fucking inner mechanics at all"*. The triage - which rows carry a real user acti
 and which are operator facts that belong in the log plus a dom0-queryable health state - is owed, and
 `docs/ADR-toasts.md` §6 is where the error route's side of it is recorded. Tracked as
 `DOM0ROWSAREALLACTIONSEVERITY`/`ROWASSERTSACONSEQUENCEITNEVERMEASURED` in `findings/issues.md`.
+
+## 9. The channel that ASKS a child to exit is created by its OWNER, before the child runs
+
+**Status:** ACCEPTED, 2026-11-06. Jev `stop_ask_shape` = `service_creates_the_stop_event_before_resume`
+**0.96**, over three rejected shapes (agent creates it earlier 0.00, service retries the open 0.01, a
+fifth lifecycle-channel event 0.02).
+
+**Context, MEASURED on quick-upgrade win11r-up, package 4.3.39+agent.07228b934c97.** §5 makes an
+orderly exit a contract: the owner ASKS, waits on the handle it holds, and only then terminates. The
+ask went through `Global\QGA_SHUTDOWN` - an object the AGENT created, part-way through its own `Init`.
+The watchdog service started 34 s into a boot, launched an agent, and 442 ms later took PRESHUTDOWN.
+Its `OpenEvent` returned `ERROR_FILE_NOT_FOUND`: the agent was about 2-11 ms short of creating the
+object. So the ask was impossible, and the contract fell through to its last resort -
+`TerminateProcess` after the full `AGENT_STOP_GRACE_MS`. The cost, all three of its parts visible to
+a user or left behind in dom0:
+
+- **10 s added to the shutdown**, spent waiting for an answer that could never come;
+- the agent's exit path never ran, so its **framebuffer grants stayed held** and its helpers were
+  never told to leave - `StopOwnAgent`'s own comment is the authority for why the ask exists at all:
+  the exit path "revokes the grants, which process death never does";
+- exit code **0x1**, not any `QGA_EXIT_*`, so the death reads as a crash rather than a stop.
+
+The window is single-digit milliseconds wide and it is not exotic: it is hit by the service's own
+launch racing its own stop, which is what a boot-then-shutdown does every time.
+
+**Decision.** The object a supervisor uses to ask its child to exit is created **by the supervisor,
+before the child is resumed** - the rule the lifecycle channel already followed (`CREATE_SUSPENDED`,
+create the channel, `ResumeThread`; "the agent only opens them"). `Global\QGA_SHUTDOWN` now follows
+it too: created in `ServiceMain` before the control handler is registered, held for the service's
+lifetime, and set from the held handle rather than opened by name.
+
+Three consequences are part of the decision, not details:
+
+1. **The child still opens-or-creates.** `CreateEvent` returns the existing object with
+   `ERROR_ALREADY_EXISTS`, and `CreateNamedEvent` treats that as success, so the agent's own call site
+   is unchanged and an agent run WITHOUT the service still works.
+2. **The DACL is the supervisor's choice and must not widen anything** (`QGA_SHUTDOWN_SDDL`). `SY`
+   gets `GA` because the agent is no longer the creator and its `CreateEvent` asks for
+   `EVENT_ALL_ACCESS` against a descriptor it did not write; `AU` gets `0x120002`
+   (`EVENT_MODIFY_STATE|READ_CONTROL|SYNCHRONIZE`), exactly what the agent's own `CreatePublicAcl`
+   granted, so the three `OpenExisting` signallers - `guest/activate-idd.ps1`,
+   `packaging/setup/Install-QwtImproved.ps1`, the payload README one-liner - keep working unchanged.
+   `AU` deliberately does not get `GA`: that would hand every authenticated user `WRITE_DAC` on the
+   object, and widening isolation is not a change this ADR makes.
+3. **A long-lived event must be RESET before each child.** While the child created it the object died
+   with the child, so every child got an unsignalled one. A set that no child consumed would
+   otherwise be waiting for the next one, which would exit immediately and leave the qube with no
+   GUI. The reset sits immediately before `ResumeThread`, the one place always crossed on the way to
+   a running agent.
+
+**Why not the alternatives.** Creating it earlier in the agent only NARROWS the window, and the
+penalty behind the window is the full grace, so any remaining width still costs 10 s. Retrying the
+open is a poll against a deadline on the shutdown path. A fifth lifecycle-channel event would be a
+new sink for a direction this object already owns, and would need the child waiting on it before
+`Init` - the same early-readiness problem in a new place.
+
+**Residual, stated rather than hidden.** An agent started by hand as a plain user while the service
+is running would now fail to open an object it does not own with `EVENT_ALL_ACCESS`. The shipped
+agent runs as SYSTEM (`StartTargetProcess`), so this is a developer path only. A creation failure in
+`ServiceMain` is non-fatal and the stop path falls back to opening by name, which is what it did
+before - so the service degrades to the old behaviour rather than refusing to start, and that
+fallback is also what carries an upgrade, where an OLD agent may already own the object.
