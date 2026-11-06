@@ -6,7 +6,131 @@
 
 z40=0000000000000000000000000000000000000000
 fail=0
+subgate_fail=0
 tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+
+# ---- SUBMODULE ORDERING: a pinned SHA must ALREADY be on the submodule's own remote -------------
+#
+# WHY THIS IS A GATE AND NOT A NOTE. The parent pins one SHA per submodule. Push the parent while a
+# pinned SHA is not on that submodule's remote and CI dies in its checkout, at
+# `submodule update --init --force --depth=1`, with `upload-pack: not our ref <sha>` - a shallow
+# fetch will not walk history to find it. Three times, a different submodule each time: 2026-10-07
+# core-agent (parent pushed seconds early); 2026-10-28 agent (carrying an untouched commit from
+# earlier work, so "did I change it?" was the wrong question); 2026-11-06 core-agent at 7760000
+# (run 42241372883, two jobs dead in 15 s). docs/ADR-upstream.md:41 had already DECIDED the rule -
+# "Submodules are pushed before the superproject" - and agent memory restated it in capitals,
+# naming both submodules and naming "checking only the one you edited" as the failure mode. Two
+# prose records, walked past both times. This project measured that difference once already
+# (tools/hooks/ask-operator-gate.sh): mechanised rules fired 62 times in one session; prose rules
+# were walked past.
+#
+# WHAT IS CHECKED: the gitlinks of each pushed ref's TIP - what CI builds and what a clone of the
+# branch gets. Deliberately NOT every commit in the outgoing range: an old broken pointer deep in a
+# long branch would then block a push that is fine today, and a gate that refuses legitimate pushes
+# gets bypassed habitually and protects nothing after that. So a mid-range commit pinning an
+# unpushed SHA still lands - checking THAT commit out breaks, building the tip does not.
+#
+# HOW: refresh the submodule's own remote, then test that the pinned commit is contained in one of
+# that remote's branches. NOT `ls-remote` tip equality, because a pinned ANCESTOR of a pushed tip is
+# perfectly reachable for CI and would be refused. NOT "the submodule is ahead of its upstream",
+# because that is a proxy and not the property: the parent can pin an OLDER local-only commit while
+# HEAD matches the remote, and a submodule may legitimately be ahead on commits the parent does not
+# pin. A submodule whose branch has no upstream answers `fatal: no upstream configured`, which reads
+# as "nothing to push" and is not; ancestry against the remote's refs has no such blind spot.
+# (Jev 2026-11-06: home 0.96, predicate 0.71.)
+#
+# THE FETCH PRUNES, AND THAT IS LOAD-BEARING. Without --prune a remote-tracking ref left behind by a
+# branch since deleted or force-moved upstream still contains the pinned commit, so the ancestry
+# test passes for a commit the remote can no longer serve - a FALSE PASS of exactly the bug this
+# gate exists to stop, and silent. Measured 2026-11-06: three independent adversarial lenses each
+# reproduced it (push accepted, exit 0, while `cat-file -e` against the bare remote said ABSENT).
+# Squash-merge-then-delete-branch and force-push both produce that state routinely.
+#
+# THE FETCH IS BOUNDED, AND THE REASON IS KEPT. An unreachable-but-silent remote (blackholed
+# address, a server that accepts and never answers) otherwise stalls the push forever with nothing
+# on screen saying which submodule or why; only fast failures returned. A bound here is not papering
+# over a failure - expiry HARD-FAILS with the elapsed limit named. GIT_TERMINAL_PROMPT=0 so a
+# credential prompt cannot hang it either, and stderr is kept so "could not reach" says whether it
+# was auth, DNS, a missing path or the bound.
+#
+# NOTHING IS LET THROUGH UNVERIFIED. "Cannot tell" blocks, because a false pass is the entire bug
+# being fixed; each such case names what to run. The cost of that choice, stated plainly: while a
+# submodule's remote is unreachable, EVERY parent push is refused, including one that touches no
+# submodule at all.
+#
+# KNOWN OVER-BLOCKS, not chased, with the reason. (1) A pin reachable on the remote only from a TAG
+# and from no branch is refused, although CI could fetch it - measured: a `fetch --depth=1 <sha>` of
+# such a commit succeeds. (2) A submodule clone whose remote.origin.fetch has been narrowed to one
+# branch is refused for a pin on another pushed branch. Fixing either safely needs the remote's refs
+# in a private namespace; doing it cheaply by also searching local `refs/tags/` would let a
+# LOCAL-ONLY tag make an unpushed commit look reachable - a false pass, which is the worse
+# direction. Both are exotic here (gitlinks pinned at tag objects are unusual, and this repo's
+# submodules use full refspecs), so the message below says what was actually tested rather than
+# predicting CI's death. (3) `origin` is taken to be the URL .gitmodules names, which is true for
+# this repo but is NOT verified here - a clone with origin rewired to a fork or mirror that has the
+# commit would pass while CI fetched a URL that does not.
+#
+# NO BYPASS KNOB. A parent pinning an unreachable submodule SHA is broken for every consumer, not
+# only for CI, so there is no legitimate case to record - and `git push --no-verify` remains for a
+# real emergency, where it is at least visible in shell history. (Jev's own answer on a knob came
+# back UNDER FLOOR at 0.31, env 0.54 against none 0.44; this is the conservative choice and NOT a
+# Jev verdict.)
+subgate_timeout=${SUBGATE_FETCH_TIMEOUT:-20}
+declare -A subgate_fetch=()
+subgate_why=""
+
+# <path> <sha> -> 0 reachable on the remote, 1 definitely NOT, 2 cannot tell.
+#
+# The reason goes into the GLOBAL subgate_why, never onto stdout. The first version returned it on
+# stdout and the caller read it with $( ), which runs this function in a SUBSHELL - so every
+# subgate_fetch[...] write was discarded and the fetch ran once per (pushed ref x submodule), not
+# once per submodule. Measured 2026-11-06; the cache the comment promised did not exist.
+submodule_sha_on_remote() {
+  p=$1 sha=$2
+  subgate_why=""
+  # AN UNINITIALISED SUBMODULE IS AN EMPTY DIRECTORY, and `git -C <empty dir> rev-parse --git-dir`
+  # SUCCEEDS by walking up into the parent repository. Testing that was dead code, and worse: the
+  # function then fetched the PARENT's remote and tested ancestry in the PARENT's object store, so a
+  # fresh clone that had not run `submodule update --init` had every push refused with the wrong
+  # diagnosis. The submodule's toplevel must BE this path.
+  sg_top=$(git -C "$p" rev-parse --show-toplevel 2>/dev/null)
+  sg_want=$(cd "$p" 2>/dev/null && pwd -P)
+  sg_have=""
+  [ -n "$sg_top" ] && sg_have=$(cd "$sg_top" 2>/dev/null && pwd -P)
+  if [ -z "$sg_want" ] || [ -z "$sg_have" ] || [ "$sg_have" != "$sg_want" ]; then
+    subgate_why="it is not initialised in this checkout - run: git submodule update --init -- '$p'"
+    return 2
+  fi
+  sg_r=origin
+  if ! git -C "$p" config --get "remote.$sg_r.url" >/dev/null 2>&1; then
+    subgate_why="it has no '$sg_r' remote, so the SHA cannot be checked against what CI will fetch"
+    return 2
+  fi
+  if [ -z "${subgate_fetch[$p]:-}" ]; then
+    sg_err=$(GIT_TERMINAL_PROMPT=0 timeout "$subgate_timeout" \
+             git -C "$p" fetch --quiet --prune "$sg_r" 2>&1)
+    case $? in
+      0)   subgate_fetch[$p]=ok ;;
+      124) subgate_fetch[$p]="its '$sg_r' remote did not answer within ${subgate_timeout}s" ;;
+      *)   subgate_fetch[$p]="its '$sg_r' remote could not be reached: $(printf '%s' "$sg_err" | tr '\n' ' ' | cut -c1-200)" ;;
+    esac
+  fi
+  if [ "${subgate_fetch[$p]}" != ok ]; then
+    subgate_why="${subgate_fetch[$p]}"
+    return 2
+  fi
+  if ! git -C "$p" cat-file -e "${sha}^{commit}" 2>/dev/null; then
+    subgate_why="the pinned commit is not in the submodule clone even after fetching '$sg_r'"
+    return 2
+  fi
+  while read -r sg_ref; do
+    [ -n "$sg_ref" ] || continue
+    # --is-ancestor is true for the tip itself, so a pinned ref tip passes here too.
+    git -C "$p" merge-base --is-ancestor "$sha" "$sg_ref" 2>/dev/null && return 0
+  done < <(git -C "$p" for-each-ref --format='%(refname)' "refs/remotes/$sg_r/")
+  subgate_why="it is on no branch of '$sg_r'"
+  return 1
+}
 
 while read -r _local_ref local_sha _remote_ref remote_sha; do
   [ "$local_sha" = "$z40" ] && continue   # ref deletion pushes nothing
@@ -27,10 +151,44 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
         fi ;;
     esac
   done < <(git rev-list --objects $range 2>/dev/null)
+
+  # Every submodule the TIP being pushed pins must already be fetchable from its own remote.
+  # ls-tree -z, because without it ls-tree C-QUOTES any path with a non-ASCII byte, a tab, a quote
+  # or a backslash ("caf\303\251"), and `read` additionally strips surrounding spaces - so a
+  # correctly initialised submodule at such a path was reported uninitialised and the push refused.
+  # With -z the record is <mode> SP <type> SP <sha> TAB <path>, path raw, records NUL-separated.
+  while IFS= read -r -d '' sg_entry; do
+    sg_rest=${sg_entry#* }                 # drop the mode
+    [ "${sg_entry%% *}" = 160000 ] || continue
+    sg_rest=${sg_rest#* }                  # drop the type
+    sg_sha=${sg_rest%%$'\t'*}
+    sg_path=${sg_rest#*$'\t'}
+    [ -n "$sg_path" ] || continue
+    submodule_sha_on_remote "$sg_path" "$sg_sha"; sg_rc=$?
+    case "$sg_rc" in
+      0) ;;
+      1) echo "PUSH BLOCKED: submodule '$sg_path' is pinned at $sg_sha by the commit being pushed, and"
+         echo "              $subgate_why. CI fetches that exact SHA and will fail with"
+         echo "              'upload-pack: not our ref $sg_sha'. Push the submodule FIRST:"
+         echo "                  git -C '$sg_path' push origin HEAD"
+         echo "              then push this repo again - no new parent commit is needed, the pin resolves."
+         subgate_fail=1 ;;
+      *) echo "PUSH BLOCKED: submodule '$sg_path' is pinned at $sg_sha and could not be verified:"
+         echo "              $subgate_why"
+         subgate_fail=1 ;;
+    esac
+  done < <(git ls-tree -r -z "$local_sha" 2>/dev/null)
 done
 
+# Both gates report, then one exit: a push that trips both should say so once, not hide the second
+# behind the first.
 if [ "$fail" -eq 1 ]; then
   echo "pre-push REFUSED (capture gate). Remove the object from the outgoing history; do not bypass."
+fi
+if [ "$subgate_fail" -eq 1 ]; then
+  echo "pre-push REFUSED (submodule ordering). Push the submodule(s) named above, then push this repo again."
+fi
+if [ "$fail" -eq 1 ] || [ "$subgate_fail" -eq 1 ]; then
   exit 1
 fi
 exit 0

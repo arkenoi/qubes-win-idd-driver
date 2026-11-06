@@ -40,6 +40,14 @@ assimilated into this project once the current work lands.
 by commit. Work happens in them directly. Submodules are pushed before the superproject, because CI
 checks out the superproject's recorded commit and a parent pushed first races its own submodule.
 
+**ENFORCED, since 2026-11-06, by `.githooks/pre-push`** - not by this paragraph. The ordering was
+written here, and again in agent memory in capitals naming both submodules, and was still got wrong
+three times (2026-10-07 core-agent, 2026-10-28 agent, 2026-11-06 core-agent at 7760000, the last
+killing release-package run 42241372883 at checkout). The hook refuses a parent push while any
+submodule SHA the pushed tip pins is unreachable on that submodule's own remote, and names the
+submodule and the command that fixes it. Its limits are stated in its own header; read those before
+trusting it rather than assuming the rule is now total.
+
 **Why.** These two carry the work: the window tracker, the capture engines, the broker, the
 lifecycle, the RPC agent and its services. The change is continuous and the history matters.
 
