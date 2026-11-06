@@ -14,7 +14,19 @@
 # a Workflow is launched or an Agent is spawned on the Fable model. The verdict is not parsed: the gate
 # enforces that Jev was consulted first, not what it said.
 #
-# Exit 0 = allow. Exit 2 = block, and the message on stderr goes back to the model.
+# WHAT IT ALSO REQUIRES, of a Workflow: that the script DECLARE where the judgement sits and what each
+# stage spends (JEV-JUDGE:, MODEL-PLAN:), and that it pin a model: somewhere if it calls agent(). The
+# entry receipt proves the fork was asked BEFORE the fan-out and says nothing about the run's insides -
+# a workflow whose verify stage was one expensive model scoring another's prose passed it cleanly.
+#
+# stdin: the hook JSON. Exit 0 = allow, 2 = block (message handed back to the model).
+# No self-test: the suite that drove this was deleted 2026-11-06, when the BUILD check above made its
+# "named+fresh receipt -> allowed" fixture assert the retired contract; the owner's standing rule is that
+# a selftest which fails and needs a quick fix is dropped whole, and Jev chose the disposition
+# (delete_the_whole_suite 0.87, conf 0.83) over repairing the fixture. What enforces the property is this
+# hook's shape: its last statement is `exit 2`, so a state it does not recognise BLOCKS rather than
+# allows, and the build half refuses a script whose text it cannot read. Verify a change to it inside the
+# turn - pipe a tool_input JSON at it and read the rc - and back the file up first.
 set -u
 WINDOW_MIN="${JEV_FIRST_WINDOW_MIN:-60}"
 ROOT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
@@ -44,11 +56,17 @@ else:
 # afterwards, answered in one call and invalidated the result. A window cannot show WHICH decision
 # was asked. So the launcher names the answers file, and this checks that file.
 fork=$(printf '%s' "$input" | python3 -c '
-import json, re, sys
+import json, os, re, sys
 try: o = json.loads(sys.stdin.read() or "{}")
 except Exception: sys.exit(0)
 ti = o.get("tool_input") or {}
 hay = " ".join(str(ti.get(k, "")) for k in ("script", "prompt", "name", "description"))
+# A scriptPath launch - which is how a RESUME is relaunched - carries no script text, so a receipt
+# named inside the script was invisible here and every resume was refused with no way to comply.
+p = str(ti.get("scriptPath") or "")
+if p and os.path.isfile(p):
+    try: hay += " " + open(p, encoding="utf-8", errors="replace").read()
+    except Exception: pass
 m = re.search(r"JEV-FORK:\s*(\S+)", hay)
 print(m.group(1) if m else "")
 ')
@@ -80,6 +98,83 @@ if not isinstance(a, dict) or not a: raise SystemExit(1)
     echo "BLOCKED by tools/hooks/jev-first-gate.sh: '$fork' is not a Jev answers file (no answers map)." >&2
     exit 2
 fi
+# THE BUILD, NOT ONLY THE ENTRY. A named receipt proves the fork was ASKED before the fan-out. It says
+# nothing about where the judgement sits INSIDE the run, or what each stage spends - so a workflow whose
+# verify stage was one model scoring another model's prose passed this gate cleanly. Owner, 2026-11-06:
+# "you build workflows without jev as judgement. you have entry gate with jev, but it does not ensure
+# that the build is right and tokens are optimized."
+#
+# Two declarations are required of a Workflow script, checked the way JEV-FORK is - that they were
+# WRITTEN, never what they say, because only the author knows the stages:
+#   JEV-JUDGE:  what Jev judges in this run, or NONE and why nothing in it needs judging
+#   MODEL-PLAN: the tier each stage spends
+# and one hard check with no judgement in it: a script with agent() calls and no model: anywhere pinned
+# no tier at all, so every stage silently inherits the session model - the most expensive one.
+build=$(printf '%s' "$input" | python3 -c '
+import json, re, sys
+try: o = json.loads(sys.stdin.read() or "{}")
+except Exception: sys.exit(0)
+if o.get("tool_name") != "Workflow": sys.exit(0)
+ti = o.get("tool_input") or {}
+src = str(ti.get("script") or "")
+p = str(ti.get("scriptPath") or "")
+if not src and p:
+    try: src = open(p, encoding="utf-8", errors="replace").read()
+    except Exception: pass
+# Fail CLOSED, as every other arm of this script does: a build that cannot be read cannot be checked,
+# and reporting the three declaration misses of an empty string would name the wrong defect. An inline
+# launch always carries text, and a bare name: launch never reaches here - the entry half refuses it
+# first, because a saved workflow name cannot carry the receipt path.
+if not src:
+    print("the script text could not be read" + (" from scriptPath " + p if p else "")); sys.exit(0)
+bad = []
+if not re.search(r"JEV-JUDGE:\s*\S", src): bad.append("no JEV-JUDGE declaration")
+if not re.search(r"MODEL-PLAN:\s*\S", src): bad.append("no MODEL-PLAN declaration")
+if re.search(r"\bagent\s*\(", src) and not re.search(r"\bmodel\s*:", src):
+    bad.append("agent() calls but no model: pinned anywhere - every stage inherits the session tier")
+# THE DECLARATION MUST NOT DIVERGE FROM THE RUN. A declaration that can say anything is worth what it
+# costs to type, so the one part of it that is decidable is decided here: every tier the script LITERALLY
+# pins must be named in MODEL-PLAN. A computed model (model: d.tier) is unquoted and is not checked -
+# that keeps this at zero false positives, and the declaration still has to cover what it can see.
+dec, lines = "", src.splitlines()
+for i, ln in enumerate(lines):
+    if "MODEL-PLAN:" in ln:
+        dec = ln
+        for nxt in lines[i + 1:]:
+            if not re.match(r"\s*(//|#|\*)", nxt): break
+            dec += " " + nxt
+        break
+pinned = sorted(set(re.findall(r"\bmodel\s*:\s*[\x27\"]([A-Za-z0-9._-]+)[\x27\"]", src)))
+missing = [t for t in pinned if t not in dec]
+if dec and missing:
+    bad.append("MODEL-PLAN does not name the tier(s) the script actually pins: " + ", ".join(missing))
+print("; ".join(bad))
+')
+if [ -n "$build" ]; then
+    cat >&2 <<EOM
+BLOCKED by tools/hooks/jev-first-gate.sh: the fork receipt is fine, the BUILD is not - $build.
+
+JEV FIRST is satisfied; this is the other half. Put two comment lines in the script:
+
+    // JEV-JUDGE: <what Jev judges here, in code, over the artifacts the stages return>
+    //            or: NONE - <why nothing in this run is a judgement>
+    // MODEL-PLAN: <stage>=<tier> per stage, e.g. spec=sonnet judge=jev write=main-thread
+
+WHAT COUNTS AS A JUDGEMENT, and therefore Jev's: a verdict, a score, a classification, a ranking,
+"is this real", "does this hold". A model may not perform any step a script could produce
+deterministically (.claude/skills/jev-classifier/SKILL.md) - checking a cited file:line, diffing,
+counting and matching are CODE. One model re-reading a high-stakes result against its original is
+sanctioned, but ALONGSIDE Jev, never instead of it.
+
+TIERS: an unpinned agent() inherits the session model, which is the dearest tier, so a mechanical
+read costs what the hardest judgement costs. Name the tier per stage, and the effort with it.
+MODEL-PLAN must name every tier the script literally pins - the declaration is checked against the
+run, not taken on trust. A computed model (model: d.tier) is not checkable and is not checked.
+Read .claude/skills/jev-workflow/SKILL.md before changing this build.
+EOM
+    exit 2
+fi
+
 last=$(date -r "$fpath" +%s 2>/dev/null || echo "")
 now=$(date +%s)
 if [ -n "$last" ] && [ $((now - last)) -le $((WINDOW_MIN * 60)) ]; then

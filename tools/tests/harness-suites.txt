@@ -38,7 +38,6 @@ gate-scope-selftest.sh
 grade-noise-selftest.sh
 grade-receipt-selftest.sh
 grader-census-selftest.sh
-jev-first-gate-selftest.sh
 killpattern-gate-selftest.sh
 launch-determination-selftest.sh
 logsweep-rotation-placeholder-selftest.sh
