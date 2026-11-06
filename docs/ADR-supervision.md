@@ -221,10 +221,31 @@ smooth"*, and - of the other components - *"same of other components."*
    | reopen again | `0x00000000` | stable, not a one-shot |
    | `NtMakeTemporaryObject` + close, then reopen | `0x0`, `0x0`, `0xC0000034` | the latch can be RELEASED deliberately, and leaves nothing behind |
 
-   **NOT YET IMPLEMENTED (2026-11-06).** The carrier is decided and measured; nothing sets or reads it yet, so
-   the nine unguarded launch sites still refuse on nothing and clause 2's announcement is still the only
-   signal in the code. Until the latch exists, this entry records a decision with its evidence - not shipped
-   behaviour.
+   **IMPLEMENTED FOR THE SERVICE'S LAUNCH ONLY (2026-11-06).** The latch exists, with its three operations in
+   `agent/include/qga-lifecycle.h` - the shared header, because the agent and the service share no source
+   file - and five call sites:
+
+   | site | file | what it does |
+   |---|---|---|
+   | set | `gui-agent/lifecycle.c`, `WM_QUERYENDSESSION` | publishes the agent's OWN session, beside `HelpersDisarm`, **before** the bounded ack wait, so it holds when Windows terminates the agent inside that wait |
+   | adopt | `watchdog/watchdog.c`, the launch guard | a held latch is adopted into `endedSession`/`endedSessionAt`, the same two variables the channel sets |
+   | release | `gui-agent/lifecycle.c`, the veto path | the end was cancelled; the agent is the one process that learns this with no service in the path |
+   | release | `watchdog/watchdog.c`, `SESSION_END_NEVER_HAPPENED_MS` | the publisher died inside a vetoed end - the only recovery for that case |
+   | release | `watchdog/watchdog.c`, the logoff arm | the session is no longer *going* down, it is down |
+
+   The adopt arm deliberately does **not** refuse in parallel with clause 2's `endedSession` check. It feeds
+   that one check instead, so the refusal, its log line and - decisively - the stuck-session recovery stay in
+   one place. A second refusal arm with no timer behind it would have left a guest with no GUI until it
+   rebooted, which is worse than the defect being fixed. For the same reason `QgaGoingDownHeld` answers three
+   values and only `1` refuses: a latch that cannot be READ is not a latch that is held.
+
+   **STILL NOT WIRED:** the other launch sites. There are ~15, not nine as this entry first said
+   (`watchdog.c:296`; `etwproxy.c:880`; `main.c:2754`, `:2825`, `:6745`; `notifyerr.c:468`;
+   `notifhost.cpp` ×7; `qrexec-wrapper.c:387`), and they are not a single decision: `qrexec-wrapper` serves
+   dom0's requests rather than our own supervision, and `notifhost` runs under the **interactive user's** token,
+   not SYSTEM (`main.c:4669` launches it "inside the interactive user session"; `main.c:6558` "uses the SESSION
+   token"), so it cannot open a SYSTEM-only object at all. Widening the DACL is the gate on that scope and it
+   has not been asked for. Until then those sites behave exactly as before.
 3. **Nothing of ours relaunches anything.** The agent keeps **no** relaunch loop: each helper is launched once
    per agent life, through its scheduled task, and the task's own `RestartOnFailure` is its only relauncher.
    An unexpected agent death makes the watchdog **end itself** with a service-specific failure code, so the

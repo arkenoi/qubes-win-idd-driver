@@ -194,4 +194,9 @@ BOOL TranslateMessage(const MSG *);
 LRESULT DispatchMessage(const MSG *);
 LRESULT DefWindowProc(HWND, UINT, WPARAM, LPARAM);
 BOOL QueryFullProcessImageNameW(HANDLE, DWORD, LPWSTR, DWORD *);
+// Returned as void * rather than FARPROC, which is not declared here: the one caller casts it to its own
+// function-pointer type either way (include/qga-lifecycle.h, the going-down latch's two ntdll calls).
+void *GetProcAddress(HMODULE, const char *);
+BOOL ProcessIdToSessionId(DWORD, DWORD *);
+#define ERROR_FILE_NOT_FOUND 2
 #endif
