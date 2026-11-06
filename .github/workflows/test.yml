@@ -16,6 +16,18 @@ on:
   push:
     branches: [main]
     paths:
+      # THE GITLINKS THEMSELVES, bare and with NO glob. `core-agent/**` below matches paths INSIDE
+      # the submodule, which never change in this repository - a pointer bump is a change to the one
+      # path `core-agent` (mode 160000), which that pattern does not match, and `agent` was not
+      # listed in any form. So the one required workflow covering the submodules never fired for a
+      # submodule change and ci-state inherited the PREDECESSOR sha's verdict instead. MEASURED
+      # TWICE, in both directions: 2026-10-26 it inherited a false PASS for a core-agent change it
+      # never ran on (TESTYMLMISSESSUBMODULEBUMP); 2026-11-06 a8bfd883 and 7c636ce9 bumped `agent`
+      # and it still did not fire, so ci-state inherited the RED from 152d6247 - whose cause, a
+      # submodule SHA unreachable on its remote, had been fixed hours earlier - and
+      # campaign-preflight refused a 19-suite campaign on a sha nothing was actually wrong with.
+      - 'agent'
+      - 'core-agent'
       - 'guest/**'
       - 'packaging/**'
       - 'tools/**'

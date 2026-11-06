@@ -99,6 +99,16 @@ exit 0
 EOF
 chmod +x "$T/bin/mdir"
 printf '#!/bin/bash\nexit 0\n' > "$T/bin/udisksctl"; chmod +x "$T/bin/udisksctl"
+# THE UPDATES PROXY, refusal 16, added to the gate by 90fd252f. `updates_proxy_ok` is a FUNCTION
+# sourced from primitives.sh, so unlike every other external here it cannot be replaced on PATH -
+# but everything it shells out to can, which is this suite's existing idiom. Without these three the
+# gate dies 16 on EVERY leg wherever there is no tinyproxy on 8082, which is every CI runner: this
+# suite was green on the dev qube (standing infra) and red in CI from 2026-11-06, six legs failing
+# with 16 where 0/13/13/13/13/14 were expected, and that inherited red then refused a full campaign.
+# PROXY_LISTEN empty = nothing on 8082; PROXY_HTTP = what the probe gets back from Windows Update.
+printf '#!/bin/bash\n[ -n "${PROXY_LISTEN:-}" ] && echo "LISTEN 0 4096 127.0.0.1:8082 0.0.0.0:*"\nexit 0\n' > "$T/bin/ss"; chmod +x "$T/bin/ss"
+printf '#!/bin/bash\nprintf %%s "${PROXY_HTTP:-200}"\nexit 0\n' > "$T/bin/curl"; chmod +x "$T/bin/curl"
+printf '#!/bin/bash\nexit 0\n' > "$T/bin/tinyproxy"; chmod +x "$T/bin/tinyproxy"
 # a blockclaim lib whose sweep answers from a variable: STUCK_VMS names the guests it cannot clear.
 cat > "$T/blockclaim-lib.sh" <<'EOF'
 claim_sweep_stale(){ case " ${STUCK_VMS:-} " in *" $1 "*) return 1 ;; *) return 0 ;; esac; }
@@ -119,6 +129,7 @@ run(){ # -> rc; output in $T/out
   POOL_FREE_CMD="${POOL_FREE_CMD_OVERRIDE:-echo ${POOL_FREE:-999}}" \
   MTOOLS_BINS="${MTOOLS_BINS_OVERRIDE:-mcopy mdir minfo mformat}" \
   STUCK_VMS="${STUCK_VMS:-}" ABSENT_VMS="${ABSENT_VMS:-}" \
+  PROXY_LISTEN="${PROXY_LISTEN-1}" PROXY_HTTP="${PROXY_HTTP:-200}" \
     bash mgmt/harness/campaign-preflight.sh "${1:-12345}" > "$T/out" 2>&1
   echo $?
 }
@@ -175,6 +186,19 @@ printf 'conclusion=success\nheadsha=%s\n' "0000000000000000000000000000000000000
 rc=$(GH_STATE="$T/norel.state" run)
 if [ "$rc" = 13 ]; then ok "a package commit unrelated to HEAD refuses (13)"
 else no "a package commit unrelated to HEAD refuses (13)" "rc=$rc $(tail -1 "$T/out")"; fi
+
+# ---- 3b. the updates proxy (16) ----------------------------------------------------------------
+# NEVER SEEN TO FAIL UNTIL NOW. 90fd252f added this refusal to the gate and gave this suite no stub,
+# so the refusal fired on every leg in CI and was still never driven deliberately - a refusal whose
+# message nobody has read is this project's definition of decoration. Both arms, because the
+# primitive has two failing exits: nothing listening (2) and listening but no egress (3).
+rc=$(PROXY_HTTP=503 run)
+if [ "$rc" = 16 ] && grep -qa 'updates proxy cannot carry this campaign' "$T/out"; then ok "a proxy that does NOT reach Windows Update refuses (16) - a run now would blame the guest for a network failure"
+else no "a proxy that does NOT reach Windows Update refuses (16)" "rc=$rc $(tail -1 "$T/out")"; fi
+
+rc=$(PROXY_LISTEN= run)
+if [ "$rc" = 16 ] && grep -qa 'updates proxy cannot carry this campaign' "$T/out"; then ok "NOTHING listening on 8082, and it will not start, refuses (16)"
+else no "NOTHING listening on 8082, and it will not start, refuses (16)" "rc=$rc $(tail -1 "$T/out")"; fi
 
 # ---- 4. CI ------------------------------------------------------------------------------------
 rc=$(CI_LINE="CI 1 a required workflow is RED or absent - do not receipt against this sha" run)
