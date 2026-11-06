@@ -201,6 +201,30 @@ smooth"*, and - of the other components - *"same of other components."*
    `QGA_EXIT_SESSION_END`; `WM_ENDSESSION(FALSE)` re-arms. The service never launches into a session that has
    announced its end, and a `0x40010004` with no such notice is read as the system's own record of that
    session ending - loud, and still no relaunch into it.
+2b. **THE PREDICATE IS THAT THE SESSION IS GOING DOWN, NOT THAT IT ANNOUNCED IT.** Clause 2 says the service
+   never launches into a session "that has announced its end", and §7 below describes the case that breaks
+   that wording outright: the shutdown is announced, another application vetoes it, and *the agent dies before
+   it can say so*. A session can therefore be going down with no announcement on record, and every launch site
+   that keys on the announcement starts a process into a dying session. The condition a launch site must refuse
+   on is the session going down, however that became true - announced, vetoed-then-resumed, or witnessed only
+   by a process that is already gone.
+   **The carrier is a named kernel event created `OBJ_PERMANENT` by the LocalSystem service**, chosen because
+   the fact must outlive the process that observed it (Jev `permanent_named_object` 0.88,
+   `latch_names_the_session` 0.88). MEASURED on a win11 guest (build 10.0.26300.9457, PS 5.1.26100.9444),
+   both sides and the teardown, as SYSTEM with `SeCreatePermanentPrivilege` **Enabled**:
+
+   | leg | result | what it establishes |
+   |---|---|---|
+   | open a name never created | `0xC0000034` | the check can fail, so the others are not decoration |
+   | create WITHOUT `OBJ_PERMANENT`, creator exits, reopen | `0xC0000034` | the control: the name dies with its creator, so nothing else retains these names |
+   | create WITH `OBJ_PERMANENT`, creator exits, reopen | `0x00000000` | the fact survives the process that recorded it - the whole reason for this carrier |
+   | reopen again | `0x00000000` | stable, not a one-shot |
+   | `NtMakeTemporaryObject` + close, then reopen | `0x0`, `0x0`, `0xC0000034` | the latch can be RELEASED deliberately, and leaves nothing behind |
+
+   **NOT YET IMPLEMENTED (2026-11-06).** The carrier is decided and measured; nothing sets or reads it yet, so
+   the nine unguarded launch sites still refuse on nothing and clause 2's announcement is still the only
+   signal in the code. Until the latch exists, this entry records a decision with its evidence - not shipped
+   behaviour.
 3. **Nothing of ours relaunches anything.** The agent keeps **no** relaunch loop: each helper is launched once
    per agent life, through its scheduled task, and the task's own `RestartOnFailure` is its only relauncher.
    An unexpected agent death makes the watchdog **end itself** with a service-specific failure code, so the
