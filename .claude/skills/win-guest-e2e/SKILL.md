@@ -12,21 +12,18 @@ description: >
 # Windows guest E2E validation
 
 You control ONLY the `win-idd-*` test guest, only via `tools/qtest`. This skill is how to validate
-a change on it without lying to yourself. Every rule here was paid for by a real miss this project
-made. Follow them.
+a change on it without lying to yourself. Follow every rule here.
 
-## The seven rules (non-negotiable)
+## The rules (non-negotiable)
 
 1. **Test the build that CONTAINS your fix — prove it before asserting.**
    A deployed setup tree / installed binary routinely PREDATES your commits. Before you conclude
    "the fix works" or "the fix failed", PROVE the artifact under test carries the change:
    - grep the deployed `install.cmd` for the new option, check `DisplayVersion`/a file hash against
      the manifest, or diff the running binary's sha256 vs what you built.
-   - Real miss: `/iddonly` "failed" as *Unknown option* — the test tree was built before `/iddonly`
-     existed. Both E2E phases were invalid; the fix was fine. The logs never said so — a screenshot did.
 
 2. **Screenshot to READ the screen — not just to confirm pixels rendered.**
-   A screenshot has TWO jobs, and the second is the one you keep forgetting:
+   A screenshot has TWO jobs:
    (a) confirm something RENDERS (`idd:OK` is not "the desktop renders"; `agent:running` is not
        "pixels reach dom0"); and — more often the point —
    (b) READ what is actually on screen: the TEXT in a cmd/terminal window, an error dialog, an
@@ -34,9 +31,7 @@ made. Follow them.
        error exists — JSON checks and log tails are blind to it.
    So whenever ANYTHING is running or in doubt — an install's cmd window, a wizard, a "Working on
    updates" screen, a lock screen — screenshot it and actually READ IT, MID-RUN, not only at verdicts.
-   Real miss: `install.cmd /iddonly` sat printing `Unknown option: /iddonly` in its cmd window for
-   minutes while every log and device-JSON check said nothing was wrong; one look at that window
-   ended it instantly. If a guest window is doing something you have not read, you are flying blind.
+   If a guest window is doing something you have not read, you are flying blind.
    - Capture at every verdict, on every failure, AND any time an on-screen window has output you
      have not read. `tools/qtest shot out.tar` → PNGs of the guest's mapped windows; then `Read` each
      PNG and read the text in it. Open a window (e.g. `notepad`) only if the desktop is bare. A 0-byte
@@ -73,9 +68,7 @@ made. Follow them.
 
 8. **Baseline accumulating state — a stale log lies.**
    Logs, RESULT lines, on-screen windows all PERSIST across runs. A "did it fail?" check that greps
-   an accumulating log will fire on the PREVIOUS run's error. Real miss: `wait_install` "detected
-   FAILED" one second after launch — it read a prior run's `boot disk is on the Xen PV` line, so the
-   real install never got a chance and its stale RESULT got reported as this run's. Before each run:
+   an accumulating log will fire on the PREVIOUS run's error. Before each run:
    DELETE the install log (or record a baseline marker/offset) so every check sees only THIS run's
    output. Same for windows — close leftovers, or capture what is genuinely current.
 

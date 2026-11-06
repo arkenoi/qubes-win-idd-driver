@@ -5,10 +5,10 @@ description: Own BOTH ends of the updates-proxy path by running tinyproxy in thi
 
 # Do not guess the infrastructure. Become it.
 
-Two failures this exists to prevent, both committed repeatedly in this project:
+Two failures this exists to prevent:
 
-1. **Inventing qube names.** There is no `sys-net` and no `sys-firewall` here. Naming them wastes
-   the user's time and produces conclusions about a topology that does not exist.
+1. **Inventing qube names.** Naming a qube you have not seen in `qvm-ls` wastes the user's time and
+   produces conclusions about a topology that does not exist.
 2. **Escalating instead of bisecting.** "The proxy qube may be degraded, please restart it" is not
    a finding. This qube can BE the updates proxy in about a minute, after which both ends are
    instrumented and the question is answered with evidence.
@@ -17,15 +17,11 @@ Two failures this exists to prevent, both committed repeatedly in this project:
 
     qvm-ls --fields NAME,STATE,CLASS,NETVM
 
-The roster CHANGES - re-run the command, never trust this paragraph. As of 2026-08-30 the visible
-world is `dom0`, `win-idd-mgmt` (this dev qube), and the `win-idd-testbed`-tagged Windows guests
-(`win10-base`, `win11-base`, `win10-tpl`, `win11-tpl`, `win10-app`, `win11-app`, plus whatever
-fixtures a campaign has built). The network-providing qube is **`fw-net`** (the earlier `core-net`
-and the `win10-clean`/`win11-fresh` goldens named here are gone). `fw-net` is NOT visible to
-`qvm-ls` from this qube - that is a policy refusal, not absence.
-Anything else you were about to type is a hallucination. See also the `reuse-policied-qube-names`
-memory: the testbed policy is tag-based (`win-idd-testbed`), so only qubes already on the roster
-have policy.
+The roster CHANGES - re-run the command, never recall it. The network-providing qube is NOT visible
+to `qvm-ls` from this qube - that is a policy refusal, not absence; its name is the NETVM column of
+the guests it serves. Any qube name the command did not print is a hallucination. See also the
+`reuse-policied-qube-names` memory: the testbed policy is tag-based (`win-idd-testbed`), so only
+qubes already on the roster have policy.
 
 ## Why this qube can serve the proxy
 
@@ -77,22 +73,15 @@ root, no dom0, no policy change is needed to stand it up - `tinyproxy` is instal
 | short/failed upstream | short body | the fault is upstream of this qube - the network path, not Qubes plumbing |
 | request never arrives | error | routing/policy: check `--target`, and that the service call is permitted |
 
-That table is the whole value: it converts "the proxy qube might be unhealthy" into a fact, without
-touching a qube you do not own.
-
 ## Rules
 
 - **Never ask the user to restart infrastructure before doing this.** It is faster than the ask.
 - **Never name a qube you have not seen in `qvm-ls`.**
 - Keep the config, logs and pidfile in the scratchpad, never in `/etc` - no sudo is required and
   needing it means you have taken a wrong turn.
-- **The listener on 127.0.0.1:8082 is STANDING RIG INFRASTRUCTURE, not litter.** Owner, 2026-08-30:
-  *"we routinely diagnose updater through it"* / *"it is not 'stale', it is normal part of our rig"*.
-  It runs from `/home/user/updates-tinyproxy.conf` logging to `/home/user/updates-tinyproxy.log`, and
-  a long uptime is NORMAL - it had been up 16 days when this note was written. **Do not kill it, and
-  never call it stray because it is old.** An earlier version of this rule said "kill tinyproxy when
-  finished", which is what led a session to stop a 16-day-old listener mid-campaign on the theory it
-  was leftover.
+- **The listener on 127.0.0.1:8082 is STANDING RIG INFRASTRUCTURE, not litter.** It runs from
+  `/home/user/updates-tinyproxy.conf` logging to `/home/user/updates-tinyproxy.log`, and a long
+  uptime is NORMAL. **Do not kill it, and never call it stray because it is old.**
 - If you genuinely need a different log level or a clean window, ROTATE IN PLACE: keep the same port,
   `Listen`, `Allow`, `ConnectPort` and `Timeout`, keep the canonical config and log paths, write a
   marker line into the log to delimit your window, and restart it immediately. Only a proxy YOU

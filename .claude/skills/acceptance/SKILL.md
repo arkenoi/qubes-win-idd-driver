@@ -54,13 +54,13 @@ success. Tarball verified, THEN `manifest.json`. Exit 0 complete / 1 gaps named 
 
 ## The secondary log volume (section 3) — the wedge instrument
 
-Owner 2026-10-13: its purpose is to catch WEDGES and find where vchan load must be eased, so the LAST lines
+The volume's purpose is to catch WEDGES and find where vchan load must be eased, so the LAST lines
 before a hang are the whole point. `logvol-lib.sh`: FAT image on a loop in this qube, `--required` at
 xvdj read-only=false, a second removable usb-storage device on the existing xhci controller (compose, never
 overwrite `qemu-extra-args`), `cache=writethrough`; the guest binder sets root `LogDir` → the volume and
 `LogSafeFlush=1` (FILE_FLAG_WRITE_THROUGH at every module's next LogInit) and copies the old directory across.
-What survives a wedge and what does not is in the library header — do not claim more. No harness attaches
-one yet (section 8 step 2): call the collector with `--logvol none` and the package records the gap.
+What survives a wedge and what does not is in the library header — do not claim more. Until a harness attaches
+one (section 8 step 2), call the collector with `--logvol none` and the package records the gap.
 `mgmt/harness/logvol-winpe-copy.cmd` is the (nice-to-have) WinPE copier: synchronous, never non-zero.
 
 ## Instrument vs product (section 6)

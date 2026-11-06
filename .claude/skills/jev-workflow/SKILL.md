@@ -1,23 +1,15 @@
 ---
 name: jev-workflow
-description: How to DESIGN a multi-stage workflow around Jev - what goes to Jev vs Fable vs Sonnet, in what order, how to size a fork, how to brief a downstream agent with Jev's verdict as a PREMISE, and the schema/floor traps that have cost real tokens here. Read this BEFORE spawning any Fable agent or Workflow. For how to CALL jev.py, see the `jev` skill; this is about what to ask and who runs after.
+description: How to DESIGN a multi-stage workflow around Jev - what goes to Jev vs Fable vs Sonnet, in what order, how to size a fork, how to brief a downstream agent with Jev's verdict as a PREMISE, and the schema/floor traps. Read this BEFORE spawning any Fable agent or Workflow. For how to CALL jev.py, see the `jev` skill; this is about what to ask and who runs after.
 ---
 
 # Designing a workflow with Jev
 
-The `jev` skill says how to call it. This says how to build the thing around it. Every rule below
-has a receipt; none is a preference.
+The `jev` skill says how to call it. This says how to build the thing around it.
 
 ## The order is not negotiable
 
 **JEV FIRST. Fable second, to mechanise what Jev decided. Sonnet to verify against source.**
-
-Receipt: 2026-09-30/10-01 an 8-agent Fable design workflow re-read the agent and broker (~2.5M
-tokens) for forks that four small Jev calls then settled. Owner: *"jev first, fable second"*,
-*"you are irrationally burning tokens again due to bad workflow design"*. Repeated later as
-*"just using one simple hint: two words: JEV FIRST"*. Then again on 2026-10-17: ~1.1M subagent
-tokens over three passes on a question that, asked afterwards, answered in ONE call and
-invalidated the result.
 
 Mechanised by `tools/hooks/jev-first-gate.sh` (PreToolUse on `Workflow` and on `Agent` with
 `model: fable`). It is not satisfied by having called Jev recently - it wants THIS decision's
@@ -35,11 +27,8 @@ the verdict - it enforces that the fork was ASKED.
 
 ## Fable is wrong when asked directly
 
-Owner, 2026-10-28: *"fable does all surprisingly wrong when asked directly"*, and in the same
-breath asked that Jev be put in front of a running Fable audit.
-
-So a Fable brief must hand it **decided premises, not open questions**. Fable is the tier that
-reads 4,500 lines and reasons; it is not the tier that chooses what the question is. If the brief
+A Fable brief must hand it **decided premises, not open questions**. Fable is the tier that
+reads thousands of lines and reasons; it is not the tier that chooses what the question is. If the brief
 contains a fork, Fable will answer it its own way and the whole pass is spent on the wrong axis.
 
 The brief pattern that works:
@@ -56,8 +45,7 @@ The brief pattern that works:
 
 ## Sizing the fork
 
-Small, premise-framed questions. NOT one 25-question call over a 28 KB fact dump - that is the
-shape the owner called bad workflow design.
+Small, premise-framed questions. NOT one call carrying dozens of questions over a large fact dump.
 
 Frame the owner's constraint as the PREMISE, not as one of the options. A fork that asks "should
 we do what the owner just said?" wastes the call.
@@ -70,22 +58,17 @@ to correct it later, in front of the owner.
 
 Below floor = **no verdict**. You may not proceed as if the leading option won.
 
-**Do not re-ask a question that came back low by reshaping it.** Receipt, 2026-10-28:
-`degenerate_ab_ok` returned 0.51, was re-asked as a differently-shaped question, and returned
-1.00. That is manufacturing a verdict. Owner: *"DESPITE JEV ACTIVELY TRYING TO STOP YOU FROM
-FUCKING!"*
+**Do not re-ask a question that came back low by reshaping it.** That is manufacturing a verdict.
 
-**You MAY re-ask when you find evidence you had not given it.** Receipt, same day:
-`detector_already_exists` came back 0.30; grepping found the probe I had told Jev might not exist;
-re-asked with it, 0.96. The test is whether the STATE changed, not whether the question did.
+**You MAY re-ask when you find evidence you had not given it.** The test is whether the STATE
+changed, not whether the question did.
 
 When a question stays under floor, pick the defensible option, say in the turn and in the commit
-that it was NOT a Jev verdict, and name what you chose it on. Receipt: `threshold_choice` 0.41
-- the 120 s was taken because it was already the value in the file, not because Jev said so.
+that it was NOT a Jev verdict, and name what you chose it on.
 
 A low-confidence answer is a FINDING. `missing_measurement` is a blocker, not advice.
 
-## Rubric schema - the traps that cost calls here
+## Rubric schema - the traps
 
 * The rubric is a **map of id -> question**, never a bare question object.
 * Every question needs a **`type`**: `choice` | `noul` | `score`.
@@ -99,9 +82,7 @@ A low-confidence answer is a FINDING. `missing_measurement` is a blocker, not ad
 ## Verify the agent, do not trust it
 
 A returned report is model output, not a measurement. Check its load-bearing claims against the
-source yourself before any of it reaches findings or a commit. Receipts from one session: an agent
-reported a script as "committed" that was untracked; another's grep for "stall" matched the
-substring inside `w_install`-style labels and produced 217 phantom hits.
+source yourself before any of it reaches findings or a commit.
 
 A subagent that says it was denied permission and asks you to run the command instead is
 permission laundering. Refuse and surface it.

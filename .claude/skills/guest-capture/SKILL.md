@@ -24,25 +24,9 @@ verdict=$(w_screen "$VM" "some-tag" "$OUTDIR")   # RECOVERY | BLACK | DESKTOP | 
 
 The verdict survives. The desktop never becomes an artifact.
 
-## Why this exists
-
-`qtest fullshot` photographs the **entire dom0 desktop** — every other qube, the owner's editor,
-dom0 terminal scrollback. Three such captures reached a PUBLIC repo.
-
-On 2026-08-29 the rule went into the experimenter skill: *never escalate to fullshot merely because
-a per-window shot came back empty.* On **2026-08-30** `e2e-wait.sh` was promoted into this repo with
-`w_screen` calling `qtest fullshot` unconditionally, and it stayed that way for ten days - through
-dozens of runs, and through my own repeated citing of that very rule.
-
-No excuse survives inspection here. The rule was written, it was read, it was quoted in this
-project's own commit messages, and the code did the opposite the whole time. Prose in a skill did
-not stop it. It was found on 2026-09-09 only because a stall capture happened to be opened by hand
-and contained the owner's notes.
-
-**So this skill does not rely on being read.** `tools/lint-harness.py` FAILS the commit when new code
-calls `qtest fullshot` outside the sanctioned allowlist below. If you believe you need a new direct
-caller, you are changing that allowlist deliberately, in a commit, with a reason - not deciding it
-in the moment.
+`tools/lint-harness.py` FAILS the commit when new code calls `qtest fullshot` outside the sanctioned
+allowlist below. If you believe you need a new direct caller, you are changing that allowlist
+deliberately, in a commit, with a reason - not deciding it in the moment.
 
 ## The only sanctioned direct uses of fullshot
 

@@ -13,7 +13,7 @@ Heavier paths only when the clean-install path itself is under test, or after a 
 Enforced by `tools/hooks/committed-procedure-gate.sh`.
 
 ## Recreate goldens (exception)
-If `win10-base`, `win11-base`, `win10-qwt` and `win11-qwt` are all missing or fail `mgmt/golden.sh verify`, follow `docs/PROCEDURE-recreate-goldens.md` exactly.
+If the sealed goldens (`mgmt/golden.sh list`) are all missing or fail `mgmt/golden.sh verify`, follow `docs/PROCEDURE-recreate-goldens.md` exactly.
 There is no short-cycle alternative in that case. A Jev state containing `recreate_goldens` and quoting that procedure satisfies the gate for the heavy steps in the sequence.
 
 ## Never invent evidence

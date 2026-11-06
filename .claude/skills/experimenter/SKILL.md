@@ -5,16 +5,14 @@ description: Rules for running any experiment against a VM or long-running syste
 
 # Experimenter
 
-Every rule here was paid for by a real failure in this project, most of them in one afternoon.
-They are prohibitions, not advice. If a rule blocks the thing you were about to type, the thing
-you were about to type was the mistake.
+The rules here are prohibitions, not advice. If a rule blocks the thing you were about to type,
+the thing you were about to type was the mistake.
 
 ## The prohibitions
 
 **1. Never re-run a failed experiment unchanged.**
 If it failed, either the instrument or the hypothesis is wrong. Fix one, state which, then run.
-"Maybe it won't happen this time" is not a hypothesis. (Cost: a chain re-run three times, each
-producing a zero-byte log, before anyone asked why the log was empty.)
+"Maybe it won't happen this time" is not a hypothesis.
 
 **2. Never run an experiment whose instrument cannot produce evidence.**
 Before the run, answer: *if this fails, what will I be holding?* If the answer is "a log on a
@@ -27,21 +25,19 @@ the data OUT while the subject is still alive.
       to fail is not evidence, it is decoration.
 
 **4. Run the baseline control FIRST, and never skip it because it seems obvious.**
-Before concluding "X broke it", prove the subject works without X. (Cost: a whole afternoon spent
-on "the installer bricked the guest" without ever checking that a bare clone survives a reboot -
-which took three minutes and would have framed everything correctly.)
+Before concluding "X broke it", prove the subject works without X.
 
 **5. One variable per run, and injected defects must be switchable.**
 If the harness seeds a defect, it needs an off switch, and both sides get run. A brick with the
 seed ON and no seed-OFF control attributes nothing.
 A seed-OFF control is necessary and NOT sufficient: the defect must also be injected where and
-WHEN the code under test can act on it. (Cost, 2026-08-29: six "FAIL BRICKED" results measured an
-injection fired five seconds before the installer even started. Timestamp both the injection and
-the code under test, from the same clock, and check the order before reading the outcome.)
+WHEN the code under test can act on it. Timestamp both the injection and the code under test from
+the same clock, and check the order before reading the outcome.
 
 **5b. Assert a precondition on the SAME signal the code under test consults.**
-A cell that checked a registry key for "no QWT installed" while the code under test consults the
-MSI product registration called a half-uninstalled guest "fresh" and then measured an upgrade.
+A "no QWT installed" precondition reads the MSI product registration - the signal the installer
+consults - not a registry key; otherwise a half-uninstalled guest passes as "fresh" and the cell
+measures an upgrade.
 A test that asserts its own precondition on a different signal is not a test.
 
 **6. Every wait has THREE exits, and says which one it took.**
@@ -70,17 +66,13 @@ A kill is permitted only when the state is already unrecoverable AND is about to
 corruption you will then misdiagnose.
 
 **11. A transient must not fail the run, and must never be discarded silently.**
-Retry with backoff, and log the error text. (A push failed once, one second after boot, with the
-error thrown away - and took a whole cell with it. The error, kept, said rc=46: no session yet.)
+Retry with backoff, and log the error text.
 
 **12. Check the premise before building on it.**
-State what you believe about the subject, then verify it. Two premises here were false and shaped
-days of work: "this image installs in two stages" (its testsigning was already ACTIVE) and "this
-is a fresh install" (it already had QWT 4.3.2 on it).
+State what you believe about the subject, then verify it.
 
 **13. Trust counts, not streams.**
-A streaming capture died silently at 28 lines while the source had 104. Any instrument that can
-truncate must be cross-checked against a count read separately.
+Any instrument that can truncate must be cross-checked against a count read separately.
 
 **14. Baseline accumulating state.**
 Logs, screens and result files persist across runs. Delete or mark them, or a check will fire on
@@ -98,8 +90,7 @@ will kill your own run and report it as something else.
     INSTRUMENT: <what data you will hold if it fails, and how it was validated>
     BUDGET:     <expected duration; deadline; terminal states; stall threshold>
 
-If any line is blank, the experiment is not ready. This costs a minute and has repeatedly been
-the difference between a result and a wasted hour.
+If any line is blank, the experiment is not ready.
 
 ## Wait primitives
 
@@ -107,18 +98,13 @@ Do not hand-roll wait loops. Use the ones with the failure modes already in them
 `.claude/skills/win-guest-e2e/e2e-lib.sh` plus the matrix harness's `e2e-wait.sh`
 (`w_session`, `w_install`, `w_halt`, `w_screen`) - they implement rules 6, 7, 9 and 13.
 
-An EMPTY tar from `qtest shot` is NOT evidence that the guest has no session. **CORRECTED
-2026-08-29** - this line previously said it was, and told you to escalate to `qtest fullshot`.
-That instruction is what routed normal, capturable windows to a whole-desktop capture, three of
-which reached a PUBLIC repo. An empty tar has three causes and you must tell them apart:
+An EMPTY tar from `qtest shot` is NOT evidence that the guest has no session. An empty tar has
+three causes and you must tell them apart:
 1. **The target does not exist or lacks the `win-idd-testbed` tag** - the dom0 service exits
-   non-zero writing nothing, which looks identical to "no windows". A bare `tools/qtest`
-   defaulted to `win-idd-test`, which has not existed for some time; `tools/qtest` now refuses
-   this up front, so if you see that error, fix `QTEST_VM` - do not escalate.
-2. **The tool discarded the window.** `tools/winshot.py` used to drop every geometry line whose
-   name was a single token - the bare VM name, or the `?` written when a window has no WM_NAME -
-   and then reported "no window matching". Fixed 2026-08-29; if you are on an older checkout,
-   that is your answer.
+   non-zero writing nothing, which looks identical to "no windows". A bare `tools/qtest` is
+   refused up front; if you see that error, fix `QTEST_VM` - do not escalate.
+2. **The tool discarded the window.** `tools/winshot.py` names what the capture holds when nothing
+   matched; a bare VM name or `?` (a window with no WM_NAME) is a valid window name.
 3. **Genuinely no windows** - only conclude this after 1 and 2 are excluded.
 
 To look at one guest window, use the per-window path: `local.WinScreenshot` (selects by the
@@ -128,5 +114,5 @@ rule matched each capture). Neither ever touches the root window.
 `qtest fullshot` photographs the ENTIRE dom0 desktop, every other qube included. It is justified
 for exactly two things: override-redirect windows (menus/tooltips, absent from `_NET_CLIENT_LIST`)
 and dom0-side compositing defects. Never reach for it merely because a per-window shot came back
-empty. `tools/winshot.py <tar> <vm> --classify` (RECOVERY / BLACK / DESKTOP) still classifies a
-crop, and is what makes rule 9 enforceable - feed it a per-window capture.
+empty. `tools/winshot.py <tar> <vm> --classify` (RECOVERY / BLACK / DESKTOP) classifies a crop,
+and is what makes rule 9 enforceable - feed it a per-window capture.
