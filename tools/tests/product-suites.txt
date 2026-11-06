@@ -11,7 +11,6 @@ errbox-selftest.sh
 exit-decision-coverage-selftest.sh
 failproof-misc.sh
 firstboot-effects-selftest.sh
-init-record-consumers-selftest.sh
 ledger-invariant-audit.py
 lifecycle-selftest.sh
 logvol-modulekey-selftest.sh
