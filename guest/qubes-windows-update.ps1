@@ -543,6 +543,15 @@ function Get-InstalledIdentities($keys) {
   return @(@($script:St.available) | Where-Object { $_ -and (($keys -contains $_.kb) -or ($keys -contains $_.title)) } |
            ForEach-Object { if ((Test-RowKey $_ 'uid') -and $_.uid) { "$($_.uid):$($_.rev)" } } | Where-Object { $_ })
 }
+# The key an offer's no-route verdict is recorded and looked up under (ADR-updater section 2 point 5, extended 2026-11-06): the KB when
+# the offer has one, else its exact title, used whole (section 6: never parsed). A no-KB offer's kb field is the shared placeholder
+# '(no KB)', and the WU-NOKB result row carries the title in kb, so this one function serves offers and result rows alike.
+function Get-OfferRouteKey($u) {
+  if ($u -and (Test-RowKey $u 'kb') -and ("$($u.kb)" -match '^KB\d+$')) { return "$($u.kb)" }
+  if ($u -and (Test-RowKey $u 'title') -and "$($u.title)".Trim()) { return "$($u.title)".Trim() }
+  if ($u -and (Test-RowKey $u 'kb') -and "$($u.kb)" -ne '(no KB)') { return "$($u.kb)".Trim() }   # a result row written with the title in kb
+  return ''
+}
 # ---- WU-ROWKEY-END
 # Write-Host alone is lost under the scheduled task, which is why every download failure so far
 # had to be reconstructed from DISM's log instead of ours. Tee to a file.
@@ -1329,6 +1338,10 @@ function Get-PackageArch($cab){
 }
 
 function Resolve-DriverByTitle($title){
+  # ONE ASK PER TITLE PER PASS (the Resolve-Catalog rule): the scan's route proof asks first and the install loop's WU-NOKB reuses the
+  # answer. UNRESOLVED is never memoised - the next ask asks again. Within a pass only: nothing is remembered across passes.
+  if (-not $script:TitleAsked) { $script:TitleAsked = @{} }
+  if ($script:TitleAsked.ContainsKey($title)) { return $script:TitleAsked[$title] }
   $want = ($env:PROCESSOR_ARCHITECTURE).ToLower()          # AMD64 -> amd64, ARM64 -> arm64
   $q = [uri]::EscapeDataString(($title -replace '\s*\(Version [^)]*\)\s*$','').Trim())
   $hdr = @{}; if ($AcceptLanguage) { $hdr['Accept-Language'] = $AcceptLanguage }
@@ -1347,22 +1360,22 @@ function Resolve-DriverByTitle($title){
     $t = ($m.Groups[2].Value -replace '\s+',' ').Trim()
     if($t -eq $title.Trim()){ $cands += $m.Groups[1].Value }
   }
-  if($cands.Count -eq 0){ Log "  title resolve: no catalog entry titled exactly '$title'"; return $null }
+  if($cands.Count -eq 0){ Log "  title resolve: no catalog entry titled exactly '$title'"; $script:TitleAsked[$title] = $null; return $null }
   Log "  title resolve: $($cands.Count) candidate(s); choosing by the architecture each PACKAGE declares (want $want)"
-  $uninspected = 0   # GUARD:dialogunanswered on this route too - a candidate whose dialog or package never arrived was not inspected
+  $uninspected = 0   # GUARD:dialogunanswered on this route too - a candidate whose dialog or package never arrived, or whose dialog lists no .cab package, was not inspected
   foreach($uid in $cands){
     $json = '[{"size":0,"languages":"","uidInfo":"' + $uid + '","updateID":"' + $uid + '"}]'
     try { $dl = Invoke-WebRequest 'https://www.catalog.update.microsoft.com/DownloadDialog.aspx' -Method POST -Body @{updateIDs=$json} -Proxy $Proxy -UseBasicParsing -TimeoutSec 60 -Headers $hdr }
     catch { $uninspected++; Log ("    $uid : download dialog failed (" + $_.Exception.Message + ") - not inspected"); continue }
     if ([string]::IsNullOrWhiteSpace([string]$dl.Content)) { $uninspected++; Log "    $uid : download dialog returned an empty body - not inspected"; continue }
     $url = @([regex]::Matches($dl.Content, "https?://[^'`"]+\.cab") | ForEach-Object { $_.Value } | Sort-Object -Unique)[0]
-    if(-not $url){ continue }
+    if(-not $url){ $uninspected++; Log "    $uid : the download dialog lists no .cab package - not inspected"; continue }
     $f = Join-Path $WorkDir ([IO.Path]::GetFileName(($url -split '\?')[0]))
     if(-not (Test-Path $f)){ Fetch-Msu $url $f | Out-Null }
     if(-not (Test-Path $f)){ $uninspected++; Log "    $uid : package fetch failed - not inspected"; continue }
     $arch = Get-PackageArch $f
     Log "    $uid arch=$arch"
-    if($arch -split ',' -contains $want){ return @{ uid=$uid; url=$url; file=$f; arch=$arch } }
+    if($arch -split ',' -contains $want){ $script:TitleAsked[$title] = @{ uid=$uid; url=$url; file=$f; arch=$arch }; return $script:TitleAsked[$title] }
   }
   # The skip row this would lead to tells dom0 "each identically-titled candidate is inspected" - true only if each one was.
   if($uninspected -gt 0){
@@ -1370,6 +1383,7 @@ function Resolve-DriverByTitle($title){
     return @{ unresolved = $true }
   }
   Log "  title resolve: no candidate declares $want - this offer is not installable on this architecture"
+  $script:TitleAsked[$title] = $null
   return $null
 }
 
@@ -1438,6 +1452,12 @@ function Test-CatalogProvedNoPackage($kb){
 # scan's log line and both install-loop gates, so the three cannot drift apart. Called only where all three were measured this pass
 # (Test-CatalogProvedNoPackage true; the content not self-contained; HasDefaultRoute false).
 function Get-NoRouteReason($kb, $contentClass) {
+  if (-not ("$kb" -match '^KB\d+$')) {   # an offer without a KB, verified by its exact title (point 5, extended 2026-11-06)
+    return ("not installable from this guest, verified this pass: the Update Catalog answered a valid results page for the title '" + $kb +
+            "' and none of the identically-titled packages declares " + $OsArch + " (each candidate inspected); the offer carries no " +
+            "self-contained content (no direct URL); and the guest has no default route for Windows Update's own downloader." +
+            " Informational, not a failure: left out of dom0's count until a pass measures otherwise")
+  }
   $m = if ($script:CatalogAsked) { $script:CatalogAsked[$kb] } else { $null }
   $page = if ($null -eq $m.rows) { 'a valid results page' } elseif ([int]$m.rows -eq 0) { "a valid results page with no entries (the Catalog's own 'no results')" }
           elseif ([int]$m.rows -eq 1) { 'a valid results page with 1 entry' } else { "a valid results page with $($m.rows) entries" }
@@ -1976,7 +1996,8 @@ function Get-ServicingNotice($unroutable, $esu) {
   if ($u.Count -eq 0) { return $null }
   return ("$($u.Count) offered update(s) have no route on this guest, verified this pass: " + ($u -join ', ') +
     '. For each, the Update Catalog answered a valid results page with no package for build ' + "$OsBuild/$OsArch" +
-    ', Windows Update offers no self-contained content for it (express / Delivery Optimization streams only), and this guest ' +
+    ' (an offer without a KB: none of its identically-titled packages declares this architecture), Windows Update offers no ' +
+    'self-contained content for it (express / Delivery Optimization streams only), and this guest ' +
     'has no default route for Windows Update''s own downloader. They are left out of the count reported to dom0 while this ' +
     'holds and verified again on every pass. ESU licence: ' + "$esu" + ' (read live; informational). INFORMATIONAL, not an error.')
 }
@@ -1991,7 +2012,10 @@ function Get-ServicingNotice($unroutable, $esu) {
 #   none      - VERIFIED no route: a valid Catalog results page with no package for this guest, no self-contained content, and
 #               no route for Windows Update's own downloader (express content is never handed to it - the install loop's rule).
 #               The ONLY verdict that leaves an offer out of dom0's count.
-#   unknown   - the Catalog answer was UNRESOLVED (GUARD:catalogvalid), the search threw, or the offer has no KB: COUNTED.
+#   unknown   - the Catalog answer was UNRESOLVED (GUARD:catalogvalid), the search threw, or the offer has neither KB nor title: COUNTED.
+#   An offer WITHOUT a KB (point 5, extended 2026-11-06) is asked by its exact TITLE instead, in this scan: a direct URL is 'static';
+#   Resolve-DriverByTitle (one ask per title per pass) gives catalog | unknown | (default route ? wu-native : none). Its key at every
+#   site that writes or reads the set is Get-OfferRouteKey (the KB, or the title).
 # Nothing here keys on a build, a date, a class alone or a KB list - the class only says whether the agent-cache route exists.
 # Asked again on every pass, so the day the Catalog publishes the package, the guest gains a route, or an entitlement makes
 # Windows offer the real update, the next pass counts it and installs it. MEASURED basis: an unenrolled Win10 22H2 guest is
@@ -1999,7 +2023,16 @@ function Get-ServicingNotice($unroutable, $esu) {
 # 2026-11-01 run offered the Win11 cumulative KB5127648 as content_class=none and installed it from the Catalog (4553.8 MB).
 function Test-OfferRoute($u) {
   if ("$($u.content_class)" -eq 'self-contained') { return 'static' }
-  if (-not ("$($u.kb)" -match '^KB\d+$')) { return 'unknown' }   # the no-KB route (Catalog by title) is the install loop's, WU-NOKB
+  if (-not ("$($u.kb)" -match '^KB\d+$')) {   # no KB: the title route, verified in THIS scan (ADR-updater section 2 point 5, extended 2026-11-06)
+    if (@(@($u.direct_urls) | Where-Object { $_ }).Count -gt 0) { return 'static' }   # the agent's own installer (WU-NOKB's first branch)
+    $title = Get-OfferRouteKey $u
+    if (-not $title) { return 'unknown' }   # neither KB nor title: nothing to ask the Catalog for
+    $drv = Resolve-DriverByTitle $title
+    if ($drv -and $drv.unresolved) { return 'unknown' }   # GUARD:nokbunresolved - an unanswered title search is not verification
+    if ($drv) { return 'catalog' }   # an identically-titled package declaring this architecture: WU-NOKB installs it (Install-DriverCab)
+    if ($script:HasDefaultRoute) { return 'wu-native' }   # a default route IS a route, whatever the offer's shape
+    return 'none'   # VERIFIED: a valid results page, every candidate inspected, none for this architecture, no URL, no default route
+  }
   $urls = @()
   try { $urls = @(Resolve-Catalog $u.kb) }   # Resolve-Catalog catches the Catalog's throw itself (UNRESOLVED); this catch is a guard
   catch { Log ("  " + $u.kb + " : catalog search threw (" + $_.Exception.Message + ") - route UNKNOWN, the offer stays counted"); return 'unknown' }
@@ -2011,15 +2044,15 @@ function Test-OfferRoute($u) {
   if ($script:HasDefaultRoute) { return 'wu-native' }   # a default route IS a route (Windows Update's own downloader), whatever the class
   return 'none'
 }
-# The offers THIS pass verified have no route (their KBs), and the ones it could not verify. Computed fresh on every call and
+# The offers THIS pass verified have no route (by Get-OfferRouteKey: the KB, or the exact title of an offer without one), and the ones it could not verify. Computed fresh on every call and
 # written to the status as `unroutable` / `route_unknown`; nothing is carried from a previous pass.
 function Measure-Unroutable($offers) {
   $none = @(); $unknown = @()
   foreach ($u in @($offers)) {
     if (-not $u) { continue }
     $route = Test-OfferRoute $u
-    if ($route -eq 'none') { $none += "$($u.kb)"; Log ("  " + $u.kb + " : " + (Get-NoRouteReason $u.kb $u.content_class)) }
-    elseif ($route -eq 'unknown' -and ("$($u.kb)" -match '^KB\d+$')) { $unknown += "$($u.kb)" }
+    if ($route -eq 'none') { $k = Get-OfferRouteKey $u; $none += $k; Log ("  " + $k + " : " + (Get-NoRouteReason $k $u.content_class)) }
+    elseif ($route -eq 'unknown') { $k = Get-OfferRouteKey $u; if ($k) { $unknown += $k } }   # a nameless offer is counted and named nowhere
   }
   return @{ none = @($none); unknown = @($unknown) }
 }
@@ -3083,7 +3116,7 @@ try {
   # WU-ROUTE-PROOF, minutes ago, in this very pass, written to St.unroutable - is left out of what dom0 hears. Not a class,
   # not a build, not a carried-forward set: the next pass asks the Catalog again before leaving it out again.
   $unroutable = @($script:St.unroutable | Where-Object { $_ })
-  $notUnroutable = { param($r) ($unroutable -notcontains "$($r.kb)") }
+  $notUnroutable = { param($r) ($unroutable -notcontains (Get-OfferRouteKey $r)) }   # the KB, or the exact title of an offer without one
   $actionableCount = @($avail | Where-Object { (& $notPriorInfo $_) -and (& $notUnroutable $_) }).Count
   $reportCount = @($avail | Where-Object { (& $notPriorSat $_) -and (& $notUnroutable $_) }).Count   # GUARD:truecount
   # Said only of the offers it is TRUE of: a previous pass's informational KB that THIS pass also verified has no route is left out
@@ -3183,7 +3216,8 @@ try {
         # No KB and no self-contained URL - but the CATALOG may still hold it under its title.
         # Resolve-DriverByTitle downloads each identically-titled candidate and picks on the
         # architecture the package declares, because that is the only thing that differs between
-        # them. Only on an install action: a resolve/download pass must not change the guest.
+        # them. The scan's route proof asked first (one ask per title per pass, ADR-updater section 2 point 5 extended 2026-11-06), so
+        # this reuses its answer; only on an install action is anything installed.
         if($Action -in 'install','full'){
           Log "no KB and no direct URL - trying the catalog by title: $nokb"
           $drv = Resolve-DriverByTitle $nokb
@@ -3500,7 +3534,7 @@ try {
       # it was left out here while the next scan counted it.
       $unroutablePass = @($script:St.unroutable | Where-Object { $_ })
       $pendingKbs = @($script:St.result |
-                     Where-Object { (Test-RowKey $_ 'kb') -and -not (Test-RowInstalled $_) -and -not ("$($_.severity)" -eq 'info' -and $unroutablePass -contains "$($_.kb)") })   # GUARD:rowkey
+                     Where-Object { (Test-RowKey $_ 'kb') -and -not (Test-RowInstalled $_) -and -not ("$($_.severity)" -eq 'info' -and $unroutablePass -contains (Get-OfferRouteKey $_)) })   # GUARD:rowkey
       # NO FLOOR. An earlier version of this fix forced at least 1 whenever a reboot was pending,
       # even with nothing staged or deferred - which would pin dom0 at "updates available" forever
       # on a guest carrying a stale CBS RebootPending and nothing to install. That is the inverse
@@ -3556,7 +3590,7 @@ try {
         # ...and the offers THIS pass verified have no route (St.unroutable, WU-ROUTE-PROOF) - the one measured exception
         # (ADR-updater section 2, point 5); the class-keyed notice branch that stood here is gone.
         $unroutableAfter = @($script:St.unroutable | Where-Object { $_ })
-        $reportCount = @($after | Where-Object { (& $notInstalled $_) -and ($unroutableAfter -notcontains "$($_.kb)") }).Count
+        $reportCount = @($after | Where-Object { (& $notInstalled $_) -and ($unroutableAfter -notcontains (Get-OfferRouteKey $_)) }).Count
         # STAGED WORK STILL COUNTS even when Windows has stopped offering it - it is written to the
         # image and not applied until the restart. Counted from the RESULT rows, not from what the
         # rescan still offers. No blanket floor on reboot_needed: forcing >=1 with nothing staged

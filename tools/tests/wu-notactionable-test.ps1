@@ -38,6 +38,7 @@ $cvRegion   = Region 'WU-CATALOG-VALID'
 $nkRegion   = Region 'WU-NOKB'
 $scRegion   = Region 'WU-SCAN-COUNT'
 $infoRegion = Region 'WU-INFO-EXCLUDE'
+$rpRegion   = Region 'WU-ROUTE-PROOF'
 
 # Defect knobs rewrite the SHIPPED text back to its pre-fix form.
 switch ($Defect) {
@@ -63,8 +64,14 @@ switch ($Defect) {
     # the 2026-10-07 concealment, restored: report only what we can INSTALL, so an offer we cannot place
     # makes dom0 say "no updates available" while Windows goes on offering it (GWeck, forum #175)
     'scanhide'  { $scRegion = $scRegion.Replace('$reportCount = @($avail | Where-Object { (& $notPriorSat $_) -and (& $notUnroutable $_) }).Count', '$reportCount = $actionableCount') }
+    # restores the pre-2026-11-06 route proof for a no-KB offer: the title search is never answered at scan, so the offer is 'unknown'
+    # and COUNTED for ever, even when every identically-titled package was inspected and none fits this architecture.
+    'nokbroute' { $rpRegion = $rpRegion.Replace('$drv = Resolve-DriverByTitle $title', '$drv = @{ unresolved = $true }') }
+    # restores the bare skip: a candidate whose download dialog lists no .cab package was passed over as if inspected, so a page of
+    # such candidates ended as 'no candidate declares this architecture' - a VERIFIED miss the scan (since 2026-11-06) drops from dom0's count.
+    'nocabskip' { $src = $src.Replace('if(-not $url){ $uninspected++; Log "    $uid : the download dialog lists no .cab package - not inspected"; continue }', 'if(-not $url){ continue }') }
     ''          { }
-    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (kbonly | trustzero | shapeskip | infoonly | scanhide | satignore | satdrop | stageddone | notitle)"; exit 2 }
+    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (kbonly | trustzero | shapeskip | infoonly | scanhide | satignore | satdrop | stageddone | notitle | nokbroute | nocabskip)"; exit 2 }
 }
 
 function Log($m) { }   # the regions log; the suite does not care what they print
@@ -106,10 +113,15 @@ $result = @(
     [pscustomobject]@{ kb = 'AudioProcessingObject Driver Update'; title = 'AudioProcessingObject Driver Update'; ok = $false; state = 'not-actionable'; severity = 'info' }
 )
 # ADR-updater section 2 point 2 (amended 2026-11-01): an informational row is still COUNTED; point 5 - the offers THIS pass
-# verified have no route (St.unroutable) - is the one exception. The no-KB driver has no KB, so no route proof can name it.
+# verified have no route (St.unroutable) - is the one exception. Since 2026-11-06 the route proof names the no-KB driver by its exact
+# TITLE (point 5 extended); the two checks after the next leave it out by that key, and never by the '(no KB)' placeholder.
 Check "count: three informational rows, none verified this pass -> all 3 COUNTED (point 2)" (RunCount $after $result $null) 3
 Check "count: two of them in this pass's verified set -> only the no-KB driver is COUNTED" `
       (RunCount $after $result $null @() $false @('KB5071959','KB4023057')) 1
+Check "count: the no-KB driver verified by its TITLE this pass (point 5 extended 2026-11-06) -> dom0 hears 0" `
+      (RunCount $after $result $null @() $false @('KB5071959','KB4023057','AudioProcessingObject Driver Update')) 0
+Check "count: the '(no KB)' placeholder in the verified set names nothing -> the driver is still COUNTED" `
+      (RunCount $after $result $null @() $false @('KB5071959','KB4023057','(no KB)')) 1
 $result2 = @([pscustomobject]@{ kb = 'KB5071959'; ok = $false; severity = 'info' })
 Check "count: one verified no-route offer, two real -> dom0 hears 2" (RunCount $after $result2 $null @() $false @('KB5071959')) 2
 Check "count: nothing informational -> dom0 hears all 3" (RunCount $after @() $null) 3
@@ -187,6 +199,7 @@ function Invoke-WebRequest { param($Uri, $Method, $Body, $Proxy, [switch]$UseBas
         'nomsu' { return [pscustomobject]@{ Content = "<html>downloadInformation[0].files = [];</html>" } }
         'msu'   { return [pscustomobject]@{ Content = "<html>downloadInformation[0].files[0].url = 'http://dl/windows11.0-kb5127648-x64_aa.msu';</html>" } }
         'cab'   { return [pscustomobject]@{ Content = "<html>url = 'http://dl/drv-amd64_aa.cab'</html>" } }
+        'nocab' { return [pscustomobject]@{ Content = "<html>url = 'http://dl/drv-amd64_aa.exe'</html>" } }   # a package that is not a .cab: nothing this route can inspect
     } }
 function Fetch-Msu($u, $f) { if ($script:FetchOk) { Set-Content -LiteralPath $f -Value 'x' } }
 function Get-PackageArch($f) { return 'arm64' }   # never this guest's: a fetched candidate is inspected and does not match
@@ -203,6 +216,7 @@ Check "catalog: the dialog answered with this KB's .msu -> picked"              
 # outstanding), and only a valid page with every candidate inspected may end in "no candidate for this architecture" ($null).
 function TitleRoute($search, $dialog, $fetchOk) {
     $script:SearchMode = $search; $script:DialogMode = $dialog; $script:FetchOk = $fetchOk
+    $script:TitleAsked = $null   # each scenario is its own pass: the per-pass title memo (one ask per title per pass) starts empty
     Remove-Item (Join-Path $WorkDir '*') -EA SilentlyContinue
     $d = Resolve-DriverByTitle 'AudioProcessingObject Driver Update'
     if ($null -eq $d) { return 'null' }; if ($d.unresolved) { return 'unresolved' }; return 'match'
@@ -212,6 +226,7 @@ Check "title: the catalog search THREW -> unresolved (it ended the pass until 20
 Check "title: a candidate's download dialog refused -> unresolved, not 'no candidate'"      (TitleRoute '' 'throw' $false) 'unresolved'
 Check "title: a candidate's dialog answered empty -> unresolved"                           (TitleRoute '' 'empty' $false) 'unresolved'
 Check "title: a candidate's package could not be fetched -> unresolved"                    (TitleRoute '' 'cab' $false)   'unresolved'
+Check "title: a candidate's dialog lists no .cab package -> unresolved, not 'no candidate'" (TitleRoute '' 'nocab' $true) 'unresolved'
 Check "title: every candidate inspected, none for this architecture -> null (a real miss)" (TitleRoute '' 'cab' $true)    'null'
 $script:CatPage = '<html><h1>502 Bad Gateway</h1></html>'
 Check "title: the search answered a proxy error page -> unresolved"                        (TitleRoute '' 'cab' $true)    'unresolved'
@@ -268,6 +283,47 @@ Check "nokb: the catalog TITLE SEARCH unanswered -> an outstanding ok=false row,
 $script:DrvUnresolved = $false
 Check "nokb: has a URL but the action is only 'resolve' -> not installed, not excluded as a lie" `
       (NoKb 'Some driver' @('https://dl.example/x.exe') 'resolve') 'False/not-actionable/info'
+
+# ---------- WU-ROUTE-PROOF: an offer WITHOUT a KB is verified by its exact TITLE (ADR-updater section 2 point 5, extended 2026-11-06) ----------
+# The shipped Test-OfferRoute / Measure-Unroutable / Get-NoRouteReason run here; Resolve-DriverByTitle is the stub above (DrvFound /
+# DrvUnresolved) and the default route is a flag. Until 2026-11-06 a no-KB offer was 'unknown' at scan and COUNTED for ever, because
+# point 5 needed a KB page.
+$nrFn = [regex]::Match($src, '(?s)function Get-NoRouteReason\(\$kb, \$contentClass\) \{.*?\n\}\r?\n').Value
+if (-not $nrFn) { Write-Output "INSTRUMENT: Get-NoRouteReason not found in the shipped script"; exit 2 }
+Invoke-Expression $nrFn
+Invoke-Expression $rpRegion
+function RouteVerdicts($offers, $hasRoute, $found, $unresolved) {
+    $script:HasDefaultRoute = $hasRoute; $script:DrvFound = $found; $script:DrvUnresolved = $unresolved; $script:CatalogAsked = $null
+    $r = Measure-Unroutable $offers
+    return "none=$(@($r.none) -join ',');unknown=$(@($r.unknown) -join ',')"
+}
+$drvOffer = [pscustomobject]@{ kb = '(no KB)'; title = 'AudioProcessingObject Driver Update'; content_class = 'none'; direct_urls = @() }
+Check "route: a no-KB title MISS on a routeless guest -> VERIFIED no route, keyed by the TITLE" `
+      (RouteVerdicts @($drvOffer) $false $false $false) 'none=AudioProcessingObject Driver Update;unknown='
+Check "route: the same miss on a guest WITH a default route -> wu-native, COUNTED (in neither set)" `
+      (RouteVerdicts @($drvOffer) $true $false $false) 'none=;unknown='
+Check "route: the title search UNRESOLVED -> unknown, COUNTED, named in route_unknown" `
+      (RouteVerdicts @($drvOffer) $false $false $true) 'none=;unknown=AudioProcessingObject Driver Update'
+Check "route: the catalog HAS a package for this architecture -> the catalog route, COUNTED and installable" `
+      (RouteVerdicts @($drvOffer) $false $true $false) 'none=;unknown='
+Check "route: a no-KB offer WITH a direct URL is static (the agent's installer), never asked by title" `
+      (RouteVerdicts @([pscustomobject]@{ kb = '(no KB)'; title = 'X'; content_class = 'none'; direct_urls = @('https://dl.example/x.exe') }) $false $false $false) 'none=;unknown='
+Check "route: an offer with neither KB nor title cannot be verified -> COUNTED, in neither set" `
+      (RouteVerdicts @([pscustomobject]@{ kb = '(no KB)'; title = ''; content_class = 'none'; direct_urls = @() }) $false $false $false) 'none=;unknown='
+Check "route: the reason names the title and this architecture, in the dom0 user's words" `
+      ((Get-NoRouteReason 'AudioProcessingObject Driver Update' 'none') -like "*valid results page for the title 'AudioProcessingObject Driver Update'*declares x64*no default route*") $true
+# ...and the scan count takes the verified set by the same key: the title, never the '(no KB)' placeholder.
+function ScanCountRoute($avail, $unroutable) {
+    $script:St = [ordered]@{ notice = $null; not_actionable = @(); unroutable = @($unroutable) }
+    $script:PrevStatus = (@{ result = @(); not_actionable = @(); satisfied = @(); satisfied_rule = 'installed' } | ConvertTo-Json -Depth 6 | ConvertFrom-Json)
+    $reportCount = -1
+    Invoke-Expression $scRegion
+    return $reportCount
+}
+$scanAvailDrv = @($drvOffer, [pscustomobject]@{ kb = 'KB5129195'; title = 'cumulative'; content_class = 'none' })
+Check "scan: the no-KB driver verified by TITLE this pass is left out -> dom0 hears 1 (the cumulative)" (ScanCountRoute $scanAvailDrv @('AudioProcessingObject Driver Update')) 1
+Check "scan: '(no KB)' in the set is not a key -> both COUNTED" (ScanCountRoute $scanAvailDrv @('(no KB)')) 2
+Check "scan: nothing verified -> both COUNTED" (ScanCountRoute $scanAvailDrv @()) 2
 
 if ($pass + $fail -eq 0) { Write-Output "INSTRUMENT: no checks ran at all"; exit 2 }
 # ---------- GUARD:actioned: what the ADMIN must still do, not what WU keeps offering ----------

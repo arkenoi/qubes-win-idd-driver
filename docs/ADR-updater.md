@@ -162,7 +162,8 @@ cannot be left to update itself.
 ## 2. The invariant: dom0's reported state must be true
 
 **Status:** ACCEPTED; amended 2026-10-07 (point 1, which had said the opposite); amended 2026-11-01 (point 5:
-the ESU exception generalised to a verified no-route rule - PROPOSED to the owner, who asked for it).
+the ESU exception generalised to a verified no-route rule - PROPOSED to the owner, who asked for it); amended 2026-11-06
+(point 5: an offer that carries no KB is verified by its exact title - owner).
 
 **Decision.** dom0 must never be told that a template is up to date when it is not.
 
@@ -196,6 +197,14 @@ the ESU exception generalised to a verified no-route rule - PROPOSED to the owne
    (Owner, 2026-11-01: the decision is "we detected that we cannot install this update now, so we
    legitimately verified the reason and skipped it", not "we blacklisted ESU by class". This replaces the
    2026-08-20 ruling that keyed on Windows 10 22H2 and the express class.)
+   An offer that carries no KB is verified by its exact title, used whole and never parsed (section 6), where
+   the KB would stand: the Catalog answered a valid results page for that title, every entry bearing exactly
+   that title was inspected and none of their packages declares this guest's architecture; a candidate that
+   could not be inspected leaves the search UNRESOLVED, and an offer with no title cannot be verified at all -
+   both stay counted. The second and third facts are unchanged: the offer's content is not self-contained (no
+   direct URL) and the guest has no default route for Windows Update's own downloader. The verification runs
+   in the scan, like the KB case, and the row, the status set and the notice name such an offer by its title.
+   (Owner, 2026-11-06: extend p5 to a no-KB offer verified by its title in the same pass.)
 
 **Why.** dom0's reported state is the product. Every other rule in this file exists to keep it true - and a
 count reduced by our own inability to install something is the "too little" direction of this very
