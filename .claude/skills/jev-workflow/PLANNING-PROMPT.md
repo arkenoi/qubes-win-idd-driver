@@ -11,12 +11,20 @@ words, so write what you will do, not what is good to do. Items are ordered so t
 mistake comes first. Each carries its REFUSAL: if the refusal holds, the plan is incomplete and the
 launch does not go out.
 
-## 1. Is there a workflow at all
+## 1. Is this already recorded, and is there a workflow at all
 
-Name the cheapest instrument that would settle the task: a grep, one script, or a few Jev calls.
+Search the record before the code: `xerj-check search "<the task in plain words>"` prints an ALREADY
+RECORDED section - open issues in the register, the findings heads, the ADRs, memory - above the code
+hits. List what it returns and what each one means for this plan: an OPEN issue may already own this
+work and name its NEXT step, an ADR may already have decided it, and a memory may record that the
+approach was tried and retracted.
+Then name the cheapest instrument that would settle the task: a grep, one script, or a few Jev calls.
 State what it would return and why that return is not the answer.
-REFUSAL: you cannot name the cheaper instrument, or its stated shortfall is "it would miss things"
-without naming one thing it misses. Fanning out for what a grep settles is the dearest mistake available.
+REFUSAL: the record was not searched; a listed OPEN issue owns this work and the plan neither continues
+it nor says why it starts over; an ADR decided it the other way and the plan does not say so; you cannot
+name the cheaper instrument; or its stated shortfall is "it would miss things" without naming one thing
+it misses. Fanning out for what a grep settles is the dearest mistake available, and fanning out for what
+is already written down is the same mistake with a record to prove it.
 
 ## 2. The question, in freeform, with the owner's words as premise
 
