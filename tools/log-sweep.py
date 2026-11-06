@@ -287,9 +287,16 @@ FAMILY_BY_NAME = [
     (re.compile(r"(?i)^qrexec\..*\.log$"), "qrexec-dom0"),
     (re.compile(r"(?i)^guest-.*\.log$"), "console"),
     (re.compile(r"(?i)^events\.txt$"), "events"),
-    # relocate-dir is a windows-utils module too, but writes at C:\ (a declared exception, ADR item 6d);
+    # relocate-dir SHIPS in windows-utils, but it is not a windows-utils-shaped writer: it is a native
+    # ntdll image logging through its own NtLog (core-agent/src/relocate-dir/main.c:89), the same
+    # `[*]/[D]/[~]/>/-/[!]` shape bind-dirs writes, with no per-line timestamp and no [LEVEL] field. The
+    # winutils parser understood NOT ONE of its lines, and because winutils is a STRUCTURED family the
+    # unparsed ratio tripped: 9070 unparsed of 9070 scanned on the 4.3.39 campaign's win10 cells and
+    # 10234 on the win11 cells -> unaccounted-lines -> INVALID-SWEEP-DATA -> SIX cells ungraded, over a
+    # file whose content was never the problem. It goes to the family that already reads that writer.
+    (re.compile(r"(?i)^relocate-dir-.*\.log$"), "binddirs"),
     # disable-autosleep is kept from the earlier rule and has no writer in today's trees.
-    (re.compile(r"(?i)^(" + _WU_MOD_RX + r"|relocate-dir|disable-autosleep)-.*\.log$"), "winutils"),
+    (re.compile(r"(?i)^(" + _WU_MOD_RX + r"|disable-autosleep)-.*\.log$"), "winutils"),
     # qwt-report-death.ps1's record: `yyyy-MM-dd HH:mm:ss [LEVEL] msg`, the installer's line shape, and
     # the family the content sniffer already gave it - by NAME now, so its baseline keys stay as they are.
     (re.compile(r"(?i)^qwt-deaths\.log$"), "installer"),
@@ -374,7 +381,8 @@ ACCT_FIXED_RULES = [
     ("exception", "installer", r"c:\\qwt-improved-install\.log"),
     ("exception", "msi", r"c:\\qwt-(?:un)?install\.log"),
     ("exception", "plain", r"c:\\programdata\\qubesidd-diag\.log"),
-    ("exception", "winutils", r"c:\\relocate-dir-\d{8}-\d{6}\.log"),
+    # stays an "exception" (it writes at C:\, ADR item 6d) but in bind-dirs' family: same NtLog writer
+    ("exception", "binddirs", r"c:\\relocate-dir-\d{8}-\d{6}\.log"),
     ("exception", "plain", r"c:\\qubes-win-idd-setup\.log"),
     ("exception", "plain", r"c:\\qubes-de-firstlogon\.log"),
     # the families are the old shapes': `HH:mm:ss [LVL] msg` (updater, activate/deactivate-idd), BLog-like
