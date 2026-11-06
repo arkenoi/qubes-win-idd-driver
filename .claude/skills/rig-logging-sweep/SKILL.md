@@ -1,16 +1,11 @@
 # rig-logging-sweep — get the guest's logs out, and judge them
 
-Read before collecting, grading or reporting on a run's logs. Every number below was measured on
-this rig; none is a shape anyone invented.
+Read before collecting, grading or reporting on a run's logs.
 
 ## The one rule
 
 **A run has no log verdict until a structured artifact says so.** Not a tail, not a grep, not
-silence. `report.json` per cell, `campaign-state.py` per campaign. Silence is the failure mode this
-whole chain exists to remove: on 2026-10-15 a campaign with four failed cells and three P1 breaches
-was reported as "0 FAIL, campaign healthy" four times, because a hand-written watcher pattern
-(`^\[[0-9:]+\] (FAIL|no) `) did not match the line it was looking at
-(`[20:00:38] [ERROR] FAIL  win10-clean: ...`). The sweep had returned `rc=1 FINDINGS` every time.
+silence. `report.json` per cell, `campaign-state.py` per campaign.
 
 ## The pipeline
 
@@ -29,9 +24,8 @@ was reported as "0 FAIL, campaign healthy" four times, because a hand-written wa
 shape of its messages — raises the caller's rc on an unaccounted or risen error, treats the **blind**
 case (`undeclared_ours>0`: a gate that judged only part of the run, whose silence means nothing) as a
 finding too, and discounts the caller's own graded verdicts so one failure is not counted twice.
-`matrix.sh` does the same through `no "INVALID-SWEEP…"`. Until 2026-10-16 `quick-upgrade.sh` printed
-the findings and left rc alone, so the short cycle — the sanctioned path for every fix here — could
-carry an unexplained declared error and still exit 0.
+`matrix.sh` does the same through `no "INVALID-SWEEP…"`. `quick-upgrade.sh` — the short cycle, the
+sanctioned path for every fix here — does the same: sweep-gate findings, or a gate that did not judge, raise its rc to 3.
 
 **3 and 4 are never a pass.** rc 3 means a log was missing, empty, partial or unparseable; rc 4
 means the judge did not run. Missing data is not a clean run. `campaign-state.py` exit 2 means no
@@ -46,9 +40,9 @@ cell graded anything — also not a pass, and it says so in words rather than pr
   that survives a wedged guest, which is exactly when the pull path cannot help.
 
 `logvol_bind_guest <vm> <id>` (`mgmt/harness/logvol-lib.sh`) binds LogDir onto the stick. It is
-**OFF by default** (`LOGVOL_BIND=1` to enable) and that default has been wrong in both directions;
-`LOGVOL_BIND=1` is for hunting a wedge, which is what the volume was built for. The receipt is the
-`LOGVOL-BIND` line — **a bind that moved 0 bytes is a failed bind**, not a bind.
+**OFF by default** (`LOGVOL_BIND=1` to enable); `LOGVOL_BIND=1` is for hunting a wedge, which is what
+the volume was built for. The receipt is the `LOGVOL-BIND` line — **a bind that moved 0 bytes is a
+failed bind**, not a bind.
 
 mtools is lost on every mgmt reboot: `rpm2cpio` → `~/bin` (memory `mtools-mcopy-recovery`).
 
@@ -61,15 +55,7 @@ therefore **invisible to every gate**. So undeclared lines are **counted and nam
 that count is the honest size of what the tool cannot judge, and the lever for making the emitter
 declare.
 
-Two earlier versions tried to recognise an error by its words and missed
-
-```
-gui-agent.exe died within 10000 ms of starting, 2 time(s) in a row ... The guest has NO GUI
-while this lasts ... (grant-table exhaustion, 0x5aa, needs a reboot)
-```
-
-because no word in it was on the list. Jev scored that approach **0.07**. Owner: *"NO FUCKING
-SHAPES. ALL error messages should be handled."* The emitter **should** declare; fix the emitter.
+Never recognise an error by its words. The emitter **should** declare; fix the emitter.
 
 ## The ledger is a disposition, not a silencer
 
@@ -85,44 +71,38 @@ signature a defect, expected behaviour or noise?" → **Jev**, batched one call 
 per item. `jev.py` exit 2 = the judge did not run = **INCOMPLETE, never a pass**. Score the
 ARTIFACT, not prose (`tools/jev-artifact.sh`).
 
-## Traps, each one measured
+## Traps
 
-- **Boot attribution manufactures defects.** Three times now. `boot_for()` admitted a boot up to
-  150 s in the **future** and kept the last one; win10-clean's boots were **55 and 62 s apart**, so
-  three of four agent instances landed in boot 4 and `agent_instances_per_boot` read 3 against a max
-  of 1. The forward allowance must be **derived** — never past `BOOT_TOL_S`, never past the midpoint
-  to the next boot. Before trusting any per-boot metric, check the boot list in `report.json`.
+- **Boot attribution manufactures defects.** `boot_for()` must not admit a boot in the future and
+  keep the last one. The forward allowance must be **derived** — never past `BOOT_TOL_S`, never past
+  the midpoint to the next boot. Before trusting any per-boot metric, check the boot list in
+  `report.json`.
 - **A per-day log is many processes.** `gui-agent-<yyyymmdd>.log` is appended by every instance of
   the day, and concurrent appenders **interleave**. Split by the **pid in the prefix**, grouped, not
   by consecutive runs; one file ≠ one instance. windows-utils writes `Log started` → `System uptime`
-  → `process ID`, so **open the instance record on `Log started`** — opening it on the pid line put
-  each instance's boot estimate on the previous instance's record and threw the first one away.
-- **A clock correction looks like six boots.** The guest's clock moves mid-boot; estimates either
+  → `process ID`, so **open the instance record on `Log started`**, never on the pid line.
+- **A clock correction looks like several boots.** The guest's clock moves mid-boot; estimates either
   side of the jump land one offset apart and the same boot counts twice. Sequence per **writer**,
   never across writers, and never re-detect on already-shifted data.
 - **`events.txt` concatenates channels**, each in its own time order — a channel boundary is **not**
-  a backward clock jump. Two P1s (960 s, 1260 s) were this.
+  a backward clock jump.
 - **A completed task is not a failure.** Task Scheduler 201 reads "successfully completed ... with
-  return code N". Our tasks run and complete every boot, so counting every 201 made a `max 0` metric
-  unpassable. Require the return code.
+  return code N". Require the return code.
 - **A reaped task is not a death — and the previous boot's backlog is not read at all.** Task
   Scheduler **refuses to launch anything during shutdown**, so the death reporter is not alive when
-  the kills land. It used to read them in the next boot's catch-up and infer, from a record's mere
-  presence there, that a shutdown had reaped it — which is what put "The PV NIC setup task failed"
-  in front of the user. Owner 2026-10-16: reading that backlog "is misleading and overreaching".
-  The catch-up now stops at the boot boundary (the watermark carries the volatile per-boot token it
-  was written under), so a record from another boot re-seeds and reports nothing, and the only
-  shutdown evidence left needs no inference: the live kernel state plus a result code that NAMES the
-  reap. Event 111 is also raised at `ExecutionTimeLimit`, which is why the code was never optional.
+  the kills land. Never infer a reap from a record's mere presence in the next boot's catch-up. The
+  catch-up stops at the boot boundary (the watermark carries the volatile per-boot token it was
+  written under), so a record from another boot re-seeds and reports nothing, and the only shutdown
+  evidence admitted needs no inference: the live kernel state plus a result code that NAMES the
+  reap. Event 111 is also raised at `ExecutionTimeLimit`, so the code is never optional.
 - **The gate must not grade its own output.** `_is_own_report` excludes `SWEEP-GATE-*` and
-  `LOGSWEEP-RESULT` from the census; without it the gate blocked on its own report.
-- **Coverage is over our own logger shapes only.** A gate that judged 9% of its input and passed is
-  worse than no gate.
+  `LOGSWEEP-RESULT` from the census.
+- **Coverage is over our own logger shapes only.** A gate that judged only part of its input and
+  passed is worse than no gate.
 - **A pushed file must ARRIVE before anything runs it.** `qtest pushrun` asserts the delivered byte
-  count and exits 4 if nothing arrived — measured twice as `sent 0/11 KB` followed by "the argument
-  ... does not exist", and both times the logs stayed on C:.
-- **Every gate suite needs a producer.** 14 of 33 had none. `tools/tests/gate-producer-selftest.sh`.
-- **Never sample.** `head` on an enumeration is how three P1s were missed. Enumerate completely.
+  count and exits 4 if nothing arrived.
+- **Every gate suite needs a producer.** `tools/tests/gate-producer-selftest.sh`.
+- **Never sample.** Never `head` an enumeration. Enumerate completely.
 - **Tool-shell grep is `ugrep -I`** and silently skips non-UTF-8 files — guest captures contain
   `NT-AUTORITÄT`. Use `grep -a` / `command grep`.
 

@@ -1,20 +1,13 @@
 ---
 name: rig-capabilities
-description: Verified inventory of what this dev qube CAN and CANNOT do against the Windows testbed - Admin API, qube lifecycle, tags, netvm, firewall, loop devices, CI, local tooling - plus the exact environment map (loops, ISOs, pools) and a list of false limitations previously invented and disproven. Read this BEFORE concluding that anything is impossible, blocked, out of scope, or "needs the owner", and before writing any plan that assumes a constraint.
+description: Verified inventory of what this dev qube CAN and CANNOT do against the Windows testbed - Admin API, qube lifecycle, tags, netvm, firewall, loop devices, CI, local tooling - plus the exact environment map (loops, ISOs, pools). Read this BEFORE concluding that anything is impossible, blocked, out of scope, or "needs the owner", and before writing any plan that assumes a constraint.
 ---
 
 # Rig capabilities — measured, not assumed
 
-**SIXTH INSTANCE, 2026-09-21 — the same row, a second time.** An agent wrote that `prime-run` could not attach its job stick because "losetup needs sudo and that is off-limits", and put that into a harness and a commit message. `udisksctl loop-setup` was three lines away in `matrix.sh`, this table already said so, and the row already recorded the 2026-09-16 instance. THE CAUSE WAS TRACED: `CLAUDE.md`'s own off-limits list used "`losetup` attach" as its example of what needs sudo, so the BINDING file contradicted this measured one. CLAUDE.md is corrected; if you are reading a constraint in a binding file, check it against this table before you act on it - a rule that names an example can be stale in the example while right in the rule.
+A constraint read in a binding file is checked against this table before you act on it - a rule that names an example can be stale in the example while right in the rule.
 
-**Why this exists.** Across one session I invented five separate limitations that were all false, and
-each one distorted a plan or wasted rig time: "screenshots are impossible for this guest", "the qube
-is unkillable", "networking cannot be tested", "fw-net is not visible", "qube names cannot be
-invented because policy is name-based". The owner had to correct every one. **The rule now: an
-"impossible" is a measurement, not an intuition. Verify with a command; if you cannot, say
-"unverified", never "impossible".**
-
-Everything below was executed and recorded on 2026-08-29 unless marked otherwise.
+**The rule: an "impossible" is a measurement, not an intuition. Verify with a command; if you cannot, say "unverified", never "impossible".**
 
 ## Policy model — TAG-based, not name-based
 
@@ -25,14 +18,9 @@ Everything below was executed and recorded on 2026-08-29 unless marked otherwise
     qubes.Filecopy         *  win-idd-mgmt  @tag:win-idd-testbed  allow
     admin.vm.Start/Shutdown/Kill/CurrentState/List/property.Get  ... @tag:win-idd-testbed  allow
 
-**Consequence: you MAY create new qube names.** Verified end to end — created `qwt-probe-tmp` (a name
-on no roster), tagged it `win-idd-testbed`, and immediately got working `admin.vm.CurrentState`,
-`admin.vm.property.Get`, `qvm-prefs` read **and** write. Then removed it.
+**Consequence: you MAY create new qube names.** A qube on no roster, once tagged `win-idd-testbed`, gets working `admin.vm.CurrentState`, `admin.vm.property.Get`, `qvm-prefs` read **and** write.
 
-*Supersedes the memory `reuse-policied-qube-names`, which said "never invent qube names; recycle the
-roster that already has dom0 policy". That is FALSE as stated.* Create freely; **tag immediately** —
-an untagged qube is what policy refuses, and `qvm-clone` fails precisely because it copies volumes
-before tags exist (hence `mgmt/clone-to-template.sh`'s create → tag → copy order).
+Create freely; **tag immediately** — an untagged qube is what policy refuses, and `qvm-clone` fails precisely because it copies volumes before tags exist (hence `mgmt/clone-to-template.sh`'s create → tag → copy order).
 
 ## Verified capabilities
 
@@ -43,9 +31,9 @@ before tags exist (hence `mgmt/clone-to-template.sh`'s create → tag → copy o
 | `qvm-prefs` read/write | **PASS** | incl. `netvm`, `qrexec_timeout`, `memory`, `vcpus` |
 | `qvm-tags` add/list | **PASS** | |
 | `qvm-firewall` add/del | **PASS** | Per-qube rules only; inter-VM traffic is dropped in the netvm regardless |
-| `qvm-volume info` / `revisions` | **PASS** | Revisions exist and `qvm-volume revert` WORKS from here (proven 2026-09-01, marker round-trip: 2 s revert, later write gone, earlier one kept). The old "returned empty — do not rely on snapshots" note is RETRACTED. Cut on clean shutdown, hold the session's ENTRY state, `revisions_to_keep=2` and `qvm-volume config` is policy-refused. Use `mgmt/harness/checkpoint.sh` (park/unpark = exact+durable 2-4 s; undo-session = post-hoc, depth 2) — never reprovision for a restore |
+| `qvm-volume info` / `revisions` | **PASS** | Revisions exist and `qvm-volume revert` WORKS from here. Cut on clean shutdown, hold the session's ENTRY state, `revisions_to_keep=2` and `qvm-volume config` is policy-refused. Use `mgmt/harness/checkpoint.sh` (park/unpark = exact+durable; undo-session = post-hoc, depth 2) — never reprovision for a restore |
 | Volume clone between qubes | **PASS** | via `mgmt/clone-to-template.sh` (create → tag → copy). A bare `qvm-clone` fails on tag ordering |
-| `qvm-pool info` | **PASS** | `vm-pool` ~81% used, ~155 GB free |
+| `qvm-pool info` | **PASS** | `qvm-pool info vm-pool` reports current usage and free space |
 | Start/Shutdown/Kill guests | **PASS** | ACPI `qvm-shutdown` recovers a headless-but-running guest; a hard kill mid-driver-transition can leave it unbootable |
 | Screenshots per window | **PASS** | `tools/qtest shot` → tar of `win-N.png`. An EMPTY tar ≠ "no windows" |
 | Whole-desktop capture | PASS but **restricted** | `qtest fullshot` photographs every qube. Only for override-redirect surfaces / dom0 compositing |
@@ -54,7 +42,7 @@ before tags exist (hence `mgmt/clone-to-template.sh`'s create → tag → copy o
 | `git push origin` | **PASS** | Public repo `arkenoi/qubes-win-idd-driver` |
 | pwsh 7.4 locally | **PASS** | `/home/user/pwsh74/pwsh` — parse-check `.ps1` before shipping (`tools/ps-parse-gate.sh`) |
 | `7z`, `cabextract`, `python3` | **PASS** | Inspect MSIs, answer-stick images, catalogs |
-| **BLOCK-DEVICE BINDING** (loop-setup, attach, assign, USB emulation) | **PASS, root-free, every step** | See the explicit table in the Block-device binding section below. `sudo losetup` is the ONE spelling that fails; `udisksctl loop-setup` is the one we use, in `matrix.sh`/`prime-run.sh`/`quick-upgrade.sh`/`build-media.sh`. Six agents have read the failing spelling as a missing capability |
+| **BLOCK-DEVICE BINDING** (loop-setup, attach, assign, USB emulation) | **PASS, root-free, every step** | See the explicit table in the Block-device binding section below. `sudo losetup` is the ONE spelling that fails; `udisksctl loop-setup` is the one we use, in `matrix.sh`/`prime-run.sh`/`quick-upgrade.sh`/`build-media.sh` |
 | `losetup -l` (read) | **PASS** | Reading loop state never needed root |
 
 ## Block-device binding
@@ -76,7 +64,7 @@ missing without running it first:
 
 `sudo losetup`, `losetup -d`, `mount` and a dom0 shell are what you do NOT have. Each has a
 root-free equivalent in the table above, so needing root for ONE SPELLING never means the
-capability is absent — that inversion has been made six times and cost hours each time.
+capability is absent.
 
 REAL traps here, none of them permission problems:
 - `qvm-device block list` is POLICY-REFUSED from this qube. Assert an assignment by re-issuing
@@ -86,44 +74,34 @@ REAL traps here, none of them permission problems:
 - `assign --required` PERSISTS while loop numbers are TRANSIENT (recycled on reboot and by every
   `loop-delete`). A stale claim makes the guest unstartable with only `internal error: libxenlight
   failed to create new domain` — check assignments FIRST when a guest will not create (`findings/rig.md`).
-- **`qvm-start <vm> --cdrom=<holder>:<loopN>` WORKS.** This line said it was "BROKEN from this qube
-  and poisons the guest" until 2026-09-25, when the claim it cited (`findings/rig.md` line 59) turned
-  out to be flagged STALE in that same file, with a LATER entry recording the opposite as MEASURED:
-  the start-time disc was verified inside the guest, at D:, with the expected commit. `matrix.sh` uses
-  it in every reinstall cell. What IS broken is the **live** `devtype=cdrom` attach/detach against a
-  RUNNING guest - an uncaught `libvirtError` in qubesd that returns an empty response - and
-  `lint-harness.py` rule L12 already refuses that. The disc goes in AT START.
+- **`qvm-start <vm> --cdrom=<holder>:<loopN>` WORKS.** `matrix.sh` uses it in every reinstall cell.
+  What IS broken is the **live** `devtype=cdrom` attach/detach against a RUNNING guest - an uncaught
+  `libvirtError` in qubesd that returns an empty response - and `lint-harness.py` rule L12 already
+  refuses that. The disc goes in AT START.
 
 ## Environment map
 
 **Loop devices** (attach them ROOT-FREE with `udisksctl loop-setup`; the backing file may be rewritten in place at constant size):
 
-| Loop | Backing file | Role |
-|---|---|---|
-| loop0 | `Win10_22H2_EnglishInternational_x64v1.iso` | Win10 vendor ISO — **en-GB media** |
-| loop3 | `win11-24h2-eval-x64-en-us.iso` | Win11 vendor ISO — en-US media |
-| loop9 | `answer-usb.img` | answer stick (rebuilt per campaign) |
-| loop10 | `answer-usb-win11.img` | answer stick |
-| loop11 | `answer-usb-stock.img` | answer stick |
+`losetup -l` lists the current loops and the file backing each one (a vendor ISO or an `answer-usb*.img` stick); loop numbers are transient, read them before use.
 
 `mgmt/build-answer-stick.sh` rewrites a stick **in place at constant size**, so the loop stays valid.
 `SIZE_MB` must not change. **`LOCALE` defaults to en-US; Win10 media here is en-GB** — a mismatch
 drops Setup to the interactive locale picker silently (tell: guest CPU ~1 s per 40 s instead of
 ~45 s; proof: a screenshot).
 
-**Provisioning:** `mgmt/reprovision-usb.sh <vm> <iso-loop> <stick-loop>`, ~18–20 min, and it
+**Provisioning:** `mgmt/reprovision-usb.sh <vm> <iso-loop> <stick-loop>`, and it
 **resets `netvm` and `qrexec_timeout`** because it removes and recreates the qube.
 
-**Not reachable from here:** `fw-net`. `qvm-check` says `non-existent!` but
-`qrexec-client-vm fw-net admin.vm.CurrentState` says **`Request refused`** — a POLICY refusal, i.e. a
+**Not reachable from here:** the network-providing qube (the NETVM column of `qvm-ls`). `qvm-check` says `non-existent!` but
+`qrexec-client-vm <netvm> admin.vm.CurrentState` says **`Request refused`** — a POLICY refusal, i.e. a
 filtered view, NOT proof of non-existence. Do not claim a qube does not exist on `qvm-check` alone.
 
-**Inter-VM traffic is dropped by the netvm.** Tested: served on `10.137.0.63:8899`, guest firewall
-already `accept all`, added an explicit accept rule — **zero requests arrived**. So a local-endpoint
-benchmark is genuinely blocked; benchmark against a CDN instead (`speed.cloudflare.com/__down`,
-25 MB; 100 MB returns 403).
+**Inter-VM traffic is dropped by the netvm**, regardless of the guest's own firewall rules. A
+local-endpoint benchmark is genuinely blocked; benchmark against a CDN instead
+(`speed.cloudflare.com/__down`, 25 MB; 100 MB returns 403).
 
-## Traps that have cost real time
+## Traps
 
 - **Queued qrexec calls auto-start a Halted qube** and outlive the caller, so a guest looks
   "unkillable" and `qvm-remove` blocks for minutes with pool usage unchanged. **Drain: set
@@ -131,8 +109,8 @@ benchmark is genuinely blocked; benchmark against a CDN instead (`speed.cloudfla
   qube on the next queued call.
 - **One Windows guest at a time.** Three at 8 GB starves the host: qubesd calls start failing and
   guests fail to boot. Shut a guest down before starting the next.
-- **`qvm-prefs` has reported failure while the write took effect** (`Failed to access 'netvm'
-  property` twice, yet the value changed). Re-read the property; never trust the exit message alone.
+- **`qvm-prefs` can report failure while the write took effect** (`Failed to access 'netvm'
+  property`, yet the value changed). Re-read the property; never trust the exit message alone.
 - **`pkill -f <pattern>`** matches this shell's own command line and kills the session. Filter by PID.
 - **A tool-call timeout kills backgrounded children.** Use `setsid nohup … &` for long runs.
 - **`pnputil` prints "Driver package added successfully" for a package that did not land** — only a
@@ -149,13 +127,10 @@ benchmark is genuinely blocked; benchmark against a CDN instead (`speed.cloudfla
    warranted only for the cell that tests Windows-install-plus-QWT-at-first-logon.
 3. Never park a half-installed or mid-campaign image in place of a pristine one.
 
-## NEVER REINSTALL WINDOWS TO GET A WINDOWS GUEST (added 2026-08-30, after doing it three times in one night)
+## NEVER REINSTALL WINDOWS TO GET A WINDOWS GUEST
 
-**Measured, same session:** cloning a sealed golden took **1.8 seconds**. A reprovision from vendor
-media takes **17-20 minutes** and resets `netvm`, `qrexec_timeout` and tags. I ran the reinstall
-three times to obtain guests I already had parked, and the owner had to stop me each time
-("why do you run windows install each time", "why don't you clone from already installed windows
-golden image", "why windows install again? we agreed to clone it from pristine, no?").
+Cloning a sealed golden takes seconds. A reprovision from vendor media takes tens of minutes and
+resets `netvm`, `qrexec_timeout` and tags.
 
     python3 - <golden> <target> <<'EOF'
     import sys, qubesadmin
@@ -166,7 +141,7 @@ golden image", "why windows install again? we agreed to clone it from pristine, 
 
 **A full reprovision (R3) is warranted for exactly ONE thing:** the cell that tests
 Windows-install-plus-QWT-at-first-logon via the answer file. Nothing else. If you are about to run
-`reprovision-usb.sh` for any other reason, you are about to waste 20 minutes - clone instead.
+`reprovision-usb.sh` for any other reason, you are about to waste tens of minutes - clone instead.
 
 ## USE THE BUILT-IN TOOLS-INSTALL MECHANISM, DO NOT BUILD ONE
 
@@ -175,28 +150,17 @@ dom0's own supported way to put the QWT installer in front of a Windows guest. *
 from this qube it fails with *"Existing block device identifier needed when running from outside of
 dom0 (see qvm-block)"*, so the equivalent here is attaching the ISO as a cdrom block device.
 
-I did not look for this and instead built a custom answer stick with `REAL_STOCK_EXE`, a staged
-installer, a testsigning reboot and a SYSTEM onstart task - an entire mechanism parallel to one that
-already existed. **Before building a delivery mechanism, check whether Qubes already has the knob.**
+**Before building a delivery mechanism, check whether Qubes already has the knob.**
 
 ## DO NOT RECORD YOUR OWN FAILURE AS A PROPERTY OF THE PRODUCT
 
-I wrote a FINDINGS entry titled "the GENUINE-stock route did not produce a working stock QWT" after
-MY provisioning attempt failed. Stock QWT installs reliably and always has (owner: "it DID install
-thousand times before"). That entry would have told every future reader that stock does not install
-on this rig, and they would have stopped looking.
-
-**A FABRICATION, not a mistake of degree - it cost this session the entire stock-install path:** I
-asserted "a pristine guest has no channel, attaching media does not run it". That sentence was in no
-document, was never true, and I wrote it into the protocol as a rule and built a mechanism around
-it. Inventing a constraint and then engineering against it is the most expensive failure mode here,
-because the invented constraint looks like knowledge afterwards. The tools ISO **AUTORUNS** - that is what
+Stock QWT installs reliably. The tools ISO **AUTORUNS** - that is what
 `qvm-start --install-windows-tools` is for. Never assert that something cannot be driven without
 checking how the product is actually installed by its users.
 
-**And do not aim qrexec at a guest with no qrexec agent.** This one WAS already recorded here and in
-§2.1 ("ST0 - No qrexec, undriveable") and I re-derived it anyway with a polling loop: queued calls against an agentless guest auto-start
-it, outlive the caller, and produce the "unkillable qube" once reported as a defect.
+**And do not aim qrexec at a guest with no qrexec agent** (§2.1 "ST0 - No qrexec, undriveable"):
+queued calls against an agentless guest auto-start it, outlive the caller, and produce the
+"unkillable qube".
 
 **Rule:** when something that has worked many times fails in your hands, the defect is YOURS until
 proven otherwise. Write "my attempt failed, cause unknown", never "X does not work". A wrong record
@@ -204,80 +168,44 @@ outlives the session that made it.
 
 ## DETERMINE, DO NOT ASK, AND DO NOT INVENT
 
-Two failure modes from the same night, both corrected by the owner:
- - asking permission to continue instead of choosing ("no, you did not find it, I did");
- - inventing a mechanism to explain a failure - "stock 4.2.2 cannot speak Qubes 4.3 qrexec" - with
-   no evidence, contradicting a path known to work. Owner: "obvious hallucinatory bullshit that came
-   from context overload."
+ - Do not ask permission to continue instead of choosing.
+ - Do not invent a mechanism to explain a failure with no evidence, contradicting a path known to work.
 If a cause is unknown, the words are "undiagnosed", and the next action is a measurement.
 
 ## WHEN A ROUTE ALREADY WORKS, CHANGE ONE VARIABLE — DO NOT WRITE A SECOND ROUTE
 
-Added 2026-08-30, after the owner asked "so wtf, why did you break what already works?" and, before
-that, "you did it before thousand times, what changed?".
-
-**What happened.** Installing stock QWT on a fresh guest had worked reliably for weeks via
-`answer-stock.iso` → `payload/install-qwt.cmd`: it drives stock's extracted MSI and, critically,
-imports the six vendor `SigningCert*.cer` into **Root AND TrustedPublisher** first. The comment
-above that loop says why, in my own words, from measurement: without TrustedPublisher the PnP
-driver-store step can stall or fail on the "install this device software?" trust prompt, and
-"nobody is clicking here".
-
-For the upgrade-over-stock cell I needed stock's *default* feature set (the defect being reproduced
-is about `xenvbd`, which the old route deliberately omits). Instead of changing that one variable, I
-added a whole parallel route — `REAL_STOCK_EXE`, running the genuine bundle from a SYSTEM onstart
-task — and reimplemented the install from scratch. The new implementation did not seed the certs.
-First real run: `stock installer rc=1603`, a guest with testsigning on, no QWT, no qrexec, and no
-way to see why, sitting unnoticed for hours.
-
-**Why it was invisible for so long.** The parallel route also dropped the *observability* the old
-one had. It logged one rc and nothing else, on a guest that by definition has no qrexec. A failure
-there is completely mute.
+A stock QWT install (`answer-stock.iso` → `payload/install-qwt.cmd`) imports the six vendor
+`SigningCert*.cer` into **Root AND TrustedPublisher** before driving the MSI: without
+TrustedPublisher the PnP driver-store step can stall or fail on the "install this device software?"
+trust prompt, and nobody is clicking there.
 
 **The rules.**
 1. Before writing a new path to a result the rig already achieves, find the existing one and
    diff the intent. If the difference is one flag, one feature list, one file — change that.
-2. A new route inherits none of the old route's hard-won workarounds. Every one of them was a bug
-   someone paid for. Grep the working route for its comments and carry them across explicitly.
+2. A new route inherits none of the old route's hard-won workarounds. Grep the working route for its comments and carry them across explicitly.
 3. Any route that runs on a guest with **no qrexec** must be able to report its own failure on the
    only channel such a guest has: THE SCREEN. Write the log, then arrange for it to be displayed
    (a self-deleting script in the all-users Startup folder + one reboot works, because autologon is
    enforced). "It failed silently" is a defect in the harness, not bad luck.
 4. Do not generate a batch script with a stack of `echo` lines into another batch script. The
-   quoting has to survive two layers of `cmd` parsing and silently does not — that is the origin of
-   the `%%ERRORLEVEL%%` class of bugs here. Stage a real file.
+   quoting has to survive two layers of `cmd` parsing and silently does not. Stage a real file.
 
 ## ONE OWNER PER GUEST, AND IT IS THE ORCHESTRATOR
 
 An orchestrator holds `/tmp/reprovision-<vm>.lock` precisely so a second one does not act on the
-same guest. Two ad-hoc monitors armed beside a running `mgmt/reprovision-usb.sh` once issued a
-reboot while the MSI was mid-flight.
+same guest.
 
 - **Check for the lock and for a running orchestrator before touching a guest**:
   `fuser -v /tmp/reprovision-<vm>.lock` and `ps -eo pid,etime,cmd | grep reprovision`.
 - A watcher that acts on the guest is a second owner. If an orchestrator is running, watchers are
   **passive** — read state, read the screen, report. Nothing else.
-- Two of my conclusions that day ("stage 2 never fired", "the restarts were missing") were artefacts
-  of not looking for the existing owner. Retract loudly when this happens.
-- `cmd | tee log` reports **tee's** exit status. The orchestrator's `exit 1` refusal was reported to
-  me as success because of this. Use `PIPESTATUS`, or do not pipe a status-bearing command.
+- A conclusion reached without first checking for the existing owner is an artefact: retract it loudly.
+- `cmd | tee log` reports **tee's** exit status. Use `PIPESTATUS`, or do not pipe a status-bearing
+  command.
 
 ## WHEN GUEST STATE IS IN QUESTION, LOOK AT IT. YOU HAVE THE SCREENSHOT TOOL.
 
-Four things the owner had to report from their own screen in one session, each capturable at any
-moment with `qtest shot`:
-
-| owner told me | what I was doing instead |
-|---|---|
-| "it says stock installer rc=1603" | speculating about hang-vs-fail across several turns |
-| "it is sitting idle, apparently" | polling a log and believing `cpu=6225` from a probe I had just written wrong |
-| "notepad app is preventing shutdown" | reading `qvm-shutdown: error: Failed to shut down` and moving on |
-| "wants password now" | nothing - I had not looked since the shutdown failed |
-
-The idle one cost the most: one capture would have shown a settled desktop and exposed the parse bug
-an hour earlier.
-
-**The rule.** A screenshot costs ~30 s and needs no qrexec. Take one BEFORE reasoning about guest
+**The rule.** A screenshot is cheap and needs no qrexec. Take one BEFORE reasoning about guest
 state, not after a checkpoint says to. Specifically, capture immediately when:
 
 - any guest-directed command FAILS or times out (`qvm-shutdown` failing means something is on screen
@@ -289,5 +217,5 @@ state, not after a checkpoint says to. Specifically, capture immediately when:
 - before concluding anything about a guest with no qrexec. The screen is its ONLY channel; that is
   the entire premise of the primer and of `PRISTINE` mode.
 
-**Do not wait to be told.** If the owner can see it, so can I - the tool is `tools/qtest shot`, it
+**Do not wait to be told.** The tool is `tools/qtest shot`, it
 works on any tagged guest, and an unread screen is a choice.

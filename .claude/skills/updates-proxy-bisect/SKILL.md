@@ -19,9 +19,9 @@ Two failures this exists to prevent:
 
 The roster CHANGES - re-run the command, never recall it. The network-providing qube is NOT visible
 to `qvm-ls` from this qube - that is a policy refusal, not absence; its name is the NETVM column of
-the guests it serves. Any qube name the command did not print is a hallucination. See also the
-`reuse-policied-qube-names` memory: the testbed policy is tag-based (`win-idd-testbed`), so only
-qubes already on the roster have policy.
+the guests it serves. Any qube name the command did not print is a hallucination. The testbed policy is
+tag-based (`win-idd-testbed`): a qube has policy once it carries the tag (see the `rig-capabilities`
+skill).
 
 ## Why this qube can serve the proxy
 
