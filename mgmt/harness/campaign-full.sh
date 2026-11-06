@@ -183,10 +183,43 @@ fi
 # ---- 2. required CI, green for THIS sha ----------------------------------------------------------
 # ci-state.py names any required workflow that is due but branch-filtered, in those words. Dispatch
 # exactly those, wait, and re-ask - up to twice, because a third round means something else is wrong.
+# A RUN THAT HAS NOT FINISHED IS NOT A RED. ci-state.py's own contract is "rc 2 one is still
+# running, or gh could not be read: no verdict yet, never a pass", and it prints every unfinished
+# required run with its id. This loop read only the TRUTHINESS of that exit and then asserted "a
+# required workflow is RED" - a false statement about an inconclusive instrument, on the one gate
+# that decides whether four hours of rig time start. MEASURED 2026-11-07T00:18:47+02:00: the commit
+# that fixed the step-2 settle touches mgmt/, which is a trigger path of test.yml, so pushing it
+# started test.yml and build.yml for the new sha; the campaign was launched two minutes later and
+# refused in 15 seconds naming a RED that did not exist. Waiting is already what this loop does for
+# a workflow it dispatches, so it waits here too - on exactly the runs ci-state names, and ONLY
+# when it can name them: rc 2 also covers "gh could not be read", and with no id to wait on this
+# falls through to the refusal below rather than block on nothing.
+_wait_run(){ # <label> <run-id>: block until that run is completed, then log its final status
+  local what="$1" rid="$2" st
+  while :; do
+    st=$(gh run view "$rid" --json status,conclusion --jq '"\(.status)|\(.conclusion)"' 2>/dev/null)
+    case "$st" in completed*) log "  $what ($rid): $st"; return 0 ;; *) sleep 45 ;; esac
+  done
+}
 ci_ok(){ python3 tools/ci-state.py "$SHORT" > "$OUT/ci-state.txt" 2>&1; }
 for round in 1 2 3; do
-  if ci_ok; then log "CI is green for $SHORT"; break; fi
-  [ "$round" = 3 ] && { sed -n '1,12p' "$OUT/ci-state.txt" | sed 's/^/    /' | tee -a "$OUT/chain.log"; die "CI is still not green for $SHORT after dispatching what ci-state named"; }
+  ci_ok; circ=$?
+  if [ "$circ" = 0 ]; then log "CI is green for $SHORT"; break; fi
+  [ "$round" = 3 ] && { sed -n '1,12p' "$OUT/ci-state.txt" | sed 's/^/    /' | tee -a "$OUT/chain.log"; die "CI is still not green for $SHORT after dispatching and waiting for what ci-state named"; }
+  # ---- CIINFLIGHT-BEGIN
+  if [ "$circ" = 2 ]; then
+    # the required rows ci-state marked "run " (queued/in_progress/waiting), by run id
+    mapfile -t inflight < <(grep -aE '^[[:space:]]*run[[:space:]]' "$OUT/ci-state.txt" \
+                            | grep -a '(required)' | grep -aoE '[0-9]{8,}')
+    if [ "${#inflight[@]}" -gt 0 ]; then
+      log "CI for $SHORT has ${#inflight[@]} required run(s) still IN FLIGHT - ci-state says 'no verdict yet', which is not a red; waiting for them"
+      [ -n "$DRY" ] && { log "DRY: not waiting on CI"; break; }
+      for rid in "${inflight[@]}"; do _wait_run "in-flight required run" "$rid"; done
+      continue
+    fi
+    log "ci-state exited 2 but named no in-flight required run - treating it as unreadable, not as waiting"
+  fi
+  # ---- CIINFLIGHT-END
   # ---- CIDUE-BEGIN  (driven by tools/tests/campaign-full-selftest.sh)
   mapfile -t due < <(grep -aE 'REQUIRED, its paths matched, and it cannot run on this branch' "$OUT/ci-state.txt" \
                      | grep -aoE '^[[:space:]]*MISS[[:space:]]+[a-z0-9.-]+\.yml' | awk '{print $2}')
@@ -202,10 +235,7 @@ for round in 1 2 3; do
   for wf in "${due[@]}"; do
     sleep 10
     rid=$(gh run list --branch "$BRANCH" --workflow="$wf" --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null)
-    while :; do
-      st=$(gh run view "$rid" --json status,conclusion --jq '"\(.status)|\(.conclusion)"' 2>/dev/null)
-      case "$st" in completed*) log "  $wf ($rid): $st"; break ;; *) sleep 45 ;; esac
-    done
+    _wait_run "$wf" "$rid"
   done
 done
 
