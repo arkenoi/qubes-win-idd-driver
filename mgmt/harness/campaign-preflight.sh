@@ -364,6 +364,23 @@ else
     log "space: ${_free} GB free on $POOL_NAME, above the per-cell floor of ${POOL_FLOOR_GB} GB - the campaign-level requirement is UNVERIFIED (no peak recorded in $SPACE_RECORD yet; the matrix records one as it runs)"
 fi
 
+# (e) THE UPDATES PROXY REACHES WINDOWS UPDATE. A netvm-less guest has exactly one route to Windows
+# Update - qubes.UpdatesProxy, a symlink to 127.0.0.1:8082 in THIS qube - and nothing restarts it.
+# It was found dead on 2026-09-20 having been down for two days with its symlink and config still in
+# place, which is the state in which every update pass fails on network and every failure reads as a
+# guest defect. The check lived in ONE suite (wu-e2e.sh) in full and in another (template-update-
+# test.sh) as a listen-only test that passes over a proxy reaching nothing, so a campaign could
+# enter with no proof of egress at all. It is one primitive now and the campaign asserts it here,
+# before any cell runs, so every suite inherits it instead of each one owning a copy.
+#
+# SOURCED HERE AND NOT RELIED ON FROM ABOVE: this file's existing `. mgmt/harness/primitives.sh` is
+# inside the --probe-primitives branch, so on the normal path the primitive is not defined and this
+# call would have been a 127 wearing a network failure's message. primitives.sh defines no `log` or
+# `die`, which are this file's own two functions, so sourcing it here collides with nothing.
+# shellcheck source=/dev/null
+. mgmt/harness/primitives.sh
+updates_proxy_ok || die 16 "the updates proxy cannot carry this campaign (updates_proxy_ok rc=$?, last http=${UPDATES_PROXY_HTTP:-no answer}) - every update cell would fail on network and the failures would read as guest defects"
+
 # ---- 3. ONE PRODUCT, and the fix is IN the package ---------------------------------------------
 con=$("$GH_BIN" run view "$PKG" --json conclusion -q .conclusion 2>/dev/null)
 [ "$con" = success ] || die 13 "release-package $PKG concluded '${con:-<unreadable>}'"

@@ -246,32 +246,15 @@ stalled(){ [ "$(qstate)" != Halted ] && ! wait_qrexec 120; }
 [ -x tools/wu-pass-judge.py ] || { echo "INSTRUMENT: tools/wu-pass-judge.py missing"; exit 2; }
 [ -f tools/replay-dom0-update.py ] || { echo "INSTRUMENT: tools/replay-dom0-update.py missing"; exit 2; }
 
-# PREFLIGHT: the updates proxy. A netvm-less guest reaches Windows Update ONLY through
-# qubes.UpdatesProxy, which on this rig is a symlink to 127.0.0.1:8082 in THIS qube. Found dead on
-# 2026-09-20, down since this qube's session died two days earlier, with the symlink and config
-# still in place - so every pass would have failed on network and the failures would have read as
-# guest defects. Nothing restarts it, so check it here and PROVE egress rather than assume it.
-if ! ss -ltn 2>/dev/null | grep -q ':8082'; then
-  log "updates proxy is DOWN - starting tinyproxy"
-  rm -f /home/user/updates-tinyproxy.pid
-  tinyproxy -c /home/user/updates-tinyproxy.conf >/dev/null 2>&1
-  sleep 2
-fi
-ss -ltn 2>/dev/null | grep -q ':8082' || { echo "[ERROR] INSTRUMENT: no updates proxy on 127.0.0.1:8082 and it would not start"; exit 2; }
-# RETRY: the FIRST request through this proxy after it has been idle regularly hangs the whole
-# timeout and returns nothing, while the next one answers instantly. Measured 2026-09-21: probe 1
-# empty after 40 s, probes 2 and 3 http=200 in under a second - and the single-shot version of this
-# check aborted two runs in a row on a rig whose egress was fine. An empty result is NO ANSWER, not
-# proof of no egress; only a real non-200, or three no-answers, is a reason to refuse.
-pcode=''
-for _pt in 1 2 3; do
-  pcode=$(timeout 40 curl -sS -o /dev/null -w '%{http_code}' -x http://127.0.0.1:8082 \
-          http://download.windowsupdate.com/ 2>/dev/null)
-  [ "$pcode" = 200 ] && break
-  [ "$_pt" -lt 3 ] && sleep 3
-done
-[ "$pcode" = 200 ] || { echo "INSTRUMENT: updates proxy is listening but does not reach Windows Update after 3 attempts (last http=$pcode) - a run now would blame the guest for a network failure"; exit 2; }
-log "updates proxy OK (egress proven, http=$pcode)"
+# PREFLIGHT: the updates proxy. The check and every reason for its shape now live in ONE place,
+# primitives.sh's updates_proxy_ok - this file held the only full copy, template-update-test.sh held
+# a listen-only one that could pass over a proxy reaching nothing, and the campaign preflight that
+# runs before every suite had neither. The primitive starts it when nothing listens, proves egress
+# with three attempts because the first request after an idle period regularly returns nothing, and
+# leaves it standing. This caller's verdict is unchanged: INSTRUMENT, exit 2.
+source mgmt/harness/primitives.sh
+updates_proxy_ok || { echo "INSTRUMENT: the updates proxy cannot carry this run (updates_proxy_ok rc=$?) - a run now would blame the guest for a network failure"; exit 2; }
+log "updates proxy OK (egress proven, http=$UPDATES_PROXY_HTTP)"
 
 fails=0
 # REBOOT ACCOUNTING (owner, 2026-09-20: "there should be no forced reboots in 'hope to settle'.

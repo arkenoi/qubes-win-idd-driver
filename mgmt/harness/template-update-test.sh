@@ -66,7 +66,13 @@ else
 say "template-update-test: PKG=$PKG golden=$FAMILY-qwt reporter=$REPORTER subject=$VM rounds=$ROUNDS"
 [ "$(qvm-ls --raw-data --fields class "$FAMILY-qwt" 2>/dev/null)" = TemplateVM ] \
   || verdict INSTRUMENT "golden $FAMILY-qwt is not a TemplateVM - this test exists for the TemplateVM path and measures nothing else"
-ss -ltn | grep -q '127.0.0.1:8082' || verdict INSTRUMENT "the updates proxy (127.0.0.1:8082) is down"
+# THE PROXY MUST REACH WINDOWS UPDATE, NOT MERELY LISTEN. This asserted only that something was
+# bound to 8082, so this suite could pass its own preflight over a proxy that was listening and
+# reaching nothing - and the measured-causes note further down this file records "a squatter on
+# 8082" as one of the four things the same symptom was blamed on in turn. primitives.sh's
+# updates_proxy_ok starts it when nothing listens and PROVES egress; the verdict stays INSTRUMENT.
+source mgmt/harness/primitives.sh
+updates_proxy_ok || verdict INSTRUMENT "the updates proxy cannot carry this run (updates_proxy_ok rc=$?, last http=${UPDATES_PROXY_HTTP:-no answer})"
 
 # 1. upgrade + environment
 QU_OUT="$OUT/qu" mgmt/harness/quick-upgrade.sh "$PKG" "$VM" "$FAMILY" > "$OUT/quick-upgrade.out" 2>&1; qrc=$?

@@ -111,6 +111,19 @@ say "step 1/4: quick-upgrade over $GOLDEN"
 # "PASS  installed gui-agent.exe == package reference" lines from the same file - so a grep over it
 # reported an install that had verified when THIS run's install had been killed at rc=143. A file
 # cannot scope a run; the evidence a verdict reads must be this run's bytes only.
+
+# EGRESS BEFORE THE INSTALL IS SPENT. This suite did not check the updates proxy, and on 2026-11-06
+# it graded `U5 the scan reported a count to dom0` as FAIL - THE PRODUCT - on HRESULT 0x80072F78,
+# its own diagnosis block printing CONFIRMED "Windows Update itself returned an error". That was
+# true, and the reason WU errored is that its only route did not exist: the proxy had been dead
+# since 11-02 and the full acceptance campaign ran straight through it, which is why both updater
+# P1s came back UNMEASURED rather than confirmed or refuted. Jev's supplementary call put
+# root_cause=wu_error at 0.99 while evidence_is_sufficient came back 0.37 - under floor, the honest
+# signal that the bundle could not separate a product defect from a missing route. A missing route
+# is this rig's fault and never the product's, so the level is INSTRUMENT: exit 2, no verdict.
+source mgmt/harness/primitives.sh
+updates_proxy_ok || { say "INSTRUMENT: no updates-proxy egress (updates_proxy_ok rc=$?, last http=${UPDATES_PROXY_HTTP:-no answer}) - a pass now would charge the product for a route that does not exist"; exit 2; }
+
 : > "$OUT/upgrade.out"
 QU_OUT="$OUT/qu" ./mgmt/harness/quick-upgrade.sh "$PKG" "$VM" "$FAMILY" >"$OUT/upgrade.out" 2>&1; _urc=$?
 # "THE UPDATER WAS NEVER REACHED" IS A CLAIM ABOUT THE INSTALL, so only a failed install may make

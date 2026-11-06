@@ -57,6 +57,16 @@ say "control capture: $cn notice line(s) found (must be >= 1)"
 . mgmt/harness/vmlock.sh
 vm_lock "$VM" || { say "REFUSED: vmlock busy"; exit 3; }
 . mgmt/harness/shutdown-lib.sh
+
+# EGRESS FIRST, OR THIS CELL CANNOT MEAN WHAT IT SAYS. It asks whether a shutdown that reaps the
+# update scan still tells dom0 the scan task FAILED. With no route to Windows Update the scan fails
+# on network by itself, so dom0 gets its "scan task failed" notice for a reason that has nothing to
+# do with the shutdown - and the cell reads as a pass while having measured nothing. Exit 2 is this
+# cell's INVALID INSTRUMENT, which its header already defines; the lock releases on exit as it does
+# at every other exit here.
+. mgmt/harness/primitives.sh
+updates_proxy_ok || { say "INSTRUMENT: no updates-proxy egress (updates_proxy_ok rc=$?, last http=${UPDATES_PROXY_HTTP:-no answer}) - the scan would fail on network and this cell could not attribute dom0's notice to the shutdown"; exit 2; }
+
 ps1(){ QTEST_VM=$VM timeout "${T:-180}" tools/qtest run \
          "powershell -NoProfile -EncodedCommand $(printf '%s' "$1" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)" 2>&1; }
 wait_qrexec(){ for _i in $(seq 1 42); do

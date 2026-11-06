@@ -12,6 +12,11 @@
 #   package_identity  -> sha256 of the staged binary vs the guest's
 #   golden_recreate   -> mgmt/harness/golden_recreate.sh    (the only reseal path)
 #
+# AND ONE SHARED CHECK under the same one-door rule, listed here because a header that enumerates
+# this file's contents is read as the whole list:
+#   updates_proxy_ok  -> 127.0.0.1:8082 + a proven 200 from Windows Update (the only egress route a
+#                        netvm-less guest has, and it is NOT sealed - callers word their own verdict)
+#
 # THE ATTEMPT DISCIPLINE lives here too, because thirty copies of it is the defect it exists to stop:
 # every artefact's first line is "ATTEMPT <run-id> <utc>", every path carries the run-id, a directory
 # holding another run-id is a CONTAMINATED SUBJECT and the caller exits non-zero before any product
@@ -369,3 +374,78 @@ unusable_verdict(){
 # ---------------------------------------------------------------- 6. golden_recreate
 # The sixth is a script, because it is a procedure with its own gates and must be quotable verbatim
 # in a Jev state: mgmt/harness/golden_recreate.sh --golden <name> --base <pristine-base>
+
+# ---------------------------------------------------------------- updates_proxy_ok
+# IS THE UPDATES PROXY UP, AND DOES IT ACTUALLY REACH WINDOWS UPDATE?
+#
+#   updates_proxy_ok || <the caller's own INSTRUMENT verdict>
+#
+# A netvm-less guest reaches Windows Update ONLY through qubes.UpdatesProxy, which on this rig is a
+# symlink to 127.0.0.1:8082 in THIS qube. Found dead on 2026-09-20, down since this qube's session
+# had died two days earlier, with the symlink and the config still in place - so every update pass
+# would have failed on network and every failure would have read as a guest defect. Nothing restarts
+# it, so this proves egress instead of assuming it. The proxy is standing rig infrastructure: this
+# starts it when nothing is listening and never tears it down.
+#
+# THE FIRST REQUEST AFTER AN IDLE PERIOD REGULARLY HANGS the whole timeout and returns nothing while
+# the next answers instantly. Measured 2026-09-21: probe 1 empty after 40 s, probes 2 and 3 http=200
+# in under a second - and a single-shot version of this check aborted two runs in a row on a rig
+# whose egress was fine. An empty result is NO ANSWER, not proof of no egress; only a real non-200,
+# or three no-answers, is a reason to refuse.
+#
+# IT EXISTED TWICE AND DISAGREED WITH ITSELF, which is why it is here: wu-e2e.sh carried the full
+# start-plus-egress-proof and template-update-test.sh carried a listen-only check, so a suite could
+# pass its own preflight over a proxy that was listening and reaching nothing. Every other suite,
+# and the campaign preflight that runs before all of them, had neither.
+#
+# NO `ss | grep -q`, WHICH IS A CHOICE AND NOT A BUG FIX - said plainly because the probe disagreed
+# with the theory. Under `set -o pipefail`, which every caller sets, grep -q exits on its first match
+# and a left-hand side that writes afterwards takes SIGPIPE, which makes the PIPELINE 141 and reads
+# as "the proxy is down". Both inline copies had that shape; MEASURED on this qube, 30 runs, both
+# `ss -ltn` and the much larger `ss -ltnap`: rc 0 every single time, because that output fits the
+# 64 KiB pipe buffer, so ss has written everything and exited before grep closes the pipe. So the
+# old shape was never observed failing. The substitution is used anyway: the pattern has bitten this
+# project before, and nothing holds the listener list under the buffer forever.
+#
+# Returns 0 with the proven code in UPDATES_PROXY_HTTP; 2 when nothing listens and it will not
+# start; 3 when it listens but does not reach Windows Update in three attempts. The caller words its
+# own verdict - one site exits 2 inline and another raises an INSTRUMENT verdict, and both still can.
+updates_proxy_ok(){
+  UPDATES_PROXY_HTTP=''
+  local _listen _pt
+  _listen=$(ss -ltn 2>/dev/null)
+  case "$_listen" in
+    *:8082*) ;;
+    *) _p_say "updates proxy is DOWN - starting tinyproxy"
+       rm -f /home/user/updates-tinyproxy.pid
+       tinyproxy -c /home/user/updates-tinyproxy.conf >/dev/null 2>&1
+       sleep 2
+       _listen=$(ss -ltn 2>/dev/null) ;;
+  esac
+  case "$_listen" in
+    *:8082*) ;;
+    *) _p_say "[ERROR] no updates proxy on 127.0.0.1:8082 and it would not start"
+       return 2 ;;
+  esac
+  for _pt in 1 2 3; do
+    UPDATES_PROXY_HTTP=$(timeout 40 curl -sS -o /dev/null -w '%{http_code}' -x http://127.0.0.1:8082 \
+                         http://download.windowsupdate.com/ 2>/dev/null)
+    [ "$UPDATES_PROXY_HTTP" = 200 ] && break
+    [ "$_pt" -lt 3 ] && sleep 3
+  done
+  [ "$UPDATES_PROXY_HTTP" = 200 ] || {
+    _p_say "[ERROR] updates proxy is listening but does not reach Windows Update after 3 attempts (last http=${UPDATES_PROXY_HTTP:-no answer}) - a run now would blame the guest for a network failure"
+    return 3
+  }
+  # WHICH proxy answered. A 200 through -x proves something on 8082 relayed to Windows Update; it
+  # does not prove it was OUR tinyproxy, and "a squatter on 8082" is one of the four causes the same
+  # symptom was blamed on in turn (template-update-test.sh's measured-causes note). tinyproxy writes
+  # `Established connection to host` per upstream connect, so that line appearing AFTER the probes
+  # identifies the process. Reported, never fatal: the egress claim rests on the 200, and refusing
+  # over an unreadable or rotated log would manufacture exactly the false red this check prevents.
+  if tail -40 /home/user/updates-tinyproxy.log 2>/dev/null | grep -q 'Established connection to host'; then
+    _p_say "updates proxy OK (egress proven, http=$UPDATES_PROXY_HTTP; our tinyproxy's log corroborates the upstream connect)"
+  else
+    _p_say "updates proxy OK (egress proven, http=$UPDATES_PROXY_HTTP) - but /home/user/updates-tinyproxy.log shows no recent 'Established connection to host', which is also what a squatter on 8082 looks like"
+  fi
+}

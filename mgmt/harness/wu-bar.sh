@@ -38,6 +38,13 @@ source mgmt/harness/shutdown-lib.sh
 vm_lock "$VM" || { echo "wu-bar: another job holds $VM - refusing to interleave"; exit 1; }
 
 log(){ echo "$(date -u +%H:%M:%S) bar[$VM]: $*"; }
+
+# EGRESS BEFORE THE BAR. The bar measures a REAL update pass, so with no route to Windows Update it
+# measures a network failure and reports it as the product's behaviour. 2 is this file's precondition
+# code - the `cd` and the package read above both use it - and never 1, which here means a product
+# FAIL. The lock releases on exit, as at every other exit in this file.
+source mgmt/harness/primitives.sh
+updates_proxy_ok || { log "REFUSED: no updates-proxy egress (updates_proxy_ok rc=$?, last http=${UPDATES_PROXY_HTTP:-no answer}) - the bar would measure a network failure, not the product"; exit 2; }
 # RETRY, and never let a failed CALL look like a STATE. `qvm-ls` can fail transiently (qubesd
 # busy, a call racing a domain transition) and then this returned the empty string, which every
 # caller reads as "not Halted" or "not Running" - so a shutdown loop, a reboot ledger and a stall
