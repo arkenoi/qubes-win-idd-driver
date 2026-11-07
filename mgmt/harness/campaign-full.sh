@@ -180,6 +180,45 @@ if [ "$PKG_SHA" != "$HEAD_SHA" ]; then
 fi
 # ---- PKGDRIFT-END
 
+# ---- 1b. THE INNER TREE MUST BE CLEAN, BEFORE THE CI WAIT ----------------------------------------
+# MEASURED 2026-11-06/07: attempt 1 (21:58) died mid-smoke and left
+# ~/qwt-accept/rel-42297190009/campaign/logvol-smoke-refutation/ATTEMPT-20261106T215811Z-803214 on
+# disk. Attempt 3 was launched at 22:24 with a FRESH operator-chosen OUT, waited 42 MINUTES for two
+# required CI runs (22:25:15 -> 23:07:24), verified the package, settled the rig, and was then refused
+# 24 seconds into its first real step:
+#     FATAL: logvol smoke (refutation arm) could not measure (INVALID-RIG, rc=2): contaminated
+#            subject: .../campaign/logvol-smoke-refutation holds attempt 20261106T215811Z-803214
+# on a file that had been sitting there since 21:58. A fresh OUT does not help: OUT is the
+# ORCHESTRATOR's directory, while the tree the cells write into is keyed to the PACKAGE RUN
+# (release-acceptance.sh: WORK="${WORK:-$HOME/qwt-accept/rel-$RUN}", CAMP="$WORK/campaign"), so every
+# attempt against the same package shares it. The refusal is RIGHT and nothing here changes it; what
+# was wrong is only the ORDER - the condition was already true, and one readdir away, before the wait.
+#
+# THE OWNER ORDERED THIS WIRED (2026-11-07, "wire that precondition too"), WHICH OVERRIDES A JEV
+# VERDICT I had taken the other way: contaminated_tree=leave_it 0.77, precondition_in_the_chain 0.17,
+# on the grounds that attempt_dir already refuses at the first point it owns and a second site knowing
+# the same fact costs more than the 42 minutes. Recorded because the next reader deserves to know the
+# verdict exists and was overruled deliberately, not missed.
+#
+# THIS NEVER DELETES. The archive move is printed for the operator to run, because attempt 1's
+# logvol-smoke.log and smoke.log are the evidence of why it died - exactly what I preserved by hand
+# with `mv campaign campaign-refused-<id>` rather than rm.
+CAMPTREE="${WORK:-$HOME/qwt-accept/rel-$PKG}/campaign"
+if [ -d "$CAMPTREE" ]; then
+  # Any ATTEMPT-* under the tree belongs to a PREVIOUS attempt by construction: this run has not
+  # reached a cell yet, so it has written none. Depth-agnostic on purpose - attempt_dir marks whatever
+  # directory its caller owns (the smoke's arm today, another cell tomorrow).
+  stale=$(find "$CAMPTREE" -name 'ATTEMPT-*' -printf '%P\n' 2>/dev/null | head -5)
+  if [ -n "$stale" ]; then
+    log "the inner campaign tree already holds a previous attempt's marker(s):"
+    printf '    %s\n' $stale | tee -a "$OUT/chain.log"
+    log "  this tree is keyed to the PACKAGE RUN ($PKG), not to OUT, so a fresh outdir does not clear it"
+    log "  archive it (never delete - it holds why that attempt died), then re-run:"
+    log "    mv $CAMPTREE $CAMPTREE-refused-\$(date -u +%Y%m%dT%H%M%SZ)"
+    die "contaminated inner tree at $CAMPTREE - refused in a second rather than after the CI wait"
+  fi
+fi
+
 # ---- 2. required CI, green for THIS sha ----------------------------------------------------------
 # ci-state.py names any required workflow that is due but branch-filtered, in those words. Dispatch
 # exactly those, wait, and re-ask - up to twice, because a third round means something else is wrong.

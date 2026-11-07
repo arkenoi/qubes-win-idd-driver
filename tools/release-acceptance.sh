@@ -568,9 +568,16 @@ if [ "$SKIP_FEATURES" -eq 0 ]; then
     # Each feature test's exit travels into the coverage receipt (step 7), where 2 is INSTRUMENT (uncovered)
     # and any other non-zero is a product failure (covered, result fail) - tools/coverage-receipt.py.
     FEATRCS="${FEATRCS:-} --feature $t=$rc"
+    # THE POINTER MUST NAME A FILE THAT EXISTS. Both lines below said "see $WORK/$t.log", but only the
+    # arms that pass LOG= write one (notify, crop-before-map, updater-component, template-update);
+    # EVERY arm redirects into "$WORK/$t.out", and supervision-gate - the arm whose failures are the
+    # ones most likely to be read - passes no LOG at all. MEASURED 2026-11-07 in the campaign at
+    # a3dfdd79a00a: the feature-test failure line sent its reader to a path that has never existed on
+    # any run. Name the .out, which is always there, and add the .log only when it is.
+    tsee="$WORK/$t.out"; [ -s "$WORK/$t.log" ] && tsee="$tsee and $WORK/$t.log"
     if [ $rc -eq 0 ]; then say "PASS  $t"
-    elif [ $rc -eq 2 ]; then say "INSTRUMENT  $t (rc=2 - the suite could not measure the product; this is NOT a product defect, and the run still fails: see $WORK/$t.log)"; MRC=1
-    else say "FAIL  $t (rc=$rc, see $WORK/$t.log)"; MRC=1; fi
+    elif [ $rc -eq 2 ]; then say "INSTRUMENT  $t (rc=2 - the suite could not measure the product; this is NOT a product defect, and the run still fails: see $tsee)"; MRC=1
+    else say "FAIL  $t (rc=$rc, see $tsee)"; MRC=1; fi
     # A FEATURE TEST IS PART OF THE RECORDED VERDICT. record-acceptance.sh derives the record from $CAMP/*.out only, so the
     # feature tests used to be invisible to it (rz30 recorded CLEAN with both never run). Each now leaves a cell-group in the
     # campaign dir with matrix.sh's footer; tools/acceptance-record-check.py requires feature-<test> among the recorded cells.
