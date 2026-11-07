@@ -197,10 +197,15 @@ qube.
 
 `MANIFEST.json` does **not** duplicate the dependency refs: `make-package.ps1` parses them
 out of the `gui-agent` job's `env:` block in `.github/workflows/build.yml`, so it cannot
-drift. Verified against the current workflow — it yields `WINDOWS_UTILS_REF v4.2.2`,
-`VCHAN_REF v4.2.7`, `QUBESDB_REF v4.3.1`, `PVDRIVERS_REF v4.2.0-1`, `XENIFACE_SHA 9cd9a604…`,
+drift. Verified against the current workflow — it yields `VCHAN_REF v4.2.7`,
+`QUBESDB_REF v4.3.1`, `PVDRIVERS_REF v4.2.0-1`, `XENIFACE_SHA 9cd9a604…`,
 `GUI_COMMON_REF v4.3.1`, `BUILDERV2_REF main`. If parsing ever fails the manifest says
 `UNRESOLVED` rather than guessing.
+
+`WINDOWS_UTILS_REF` is no longer among them, and its absence is not a parse failure: windows-utils
+was assimilated on 2026-11-07 (`docs/ADR-upstream.md` §4) and is now the `winutils` submodule, so
+the manifest carries its identity as a gitlink commit rather than as a dependency ref. The 13
+build-time patches that used to be applied against a fresh clone are ordinary history on that fork.
 
 ---
 

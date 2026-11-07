@@ -801,7 +801,7 @@ function Suspend-QubesServiceRecovery {
     # the MSI was innocent (its own verbose log: "Skipping action: StartServices (condition is false)", and not
     # one ServiceStart/ServiceDelete op in the whole log), and of the three services stopped the same way only
     # QdbDaemon came back - the one whose worker returns an error on a requested stop
-    # (patches/windows-utils-service-exit-code.patch now exempts a requested stop, which is the other half of
+    # (winutils/src/service.c, a patch until the 2026-11-07 assimilation, now exempts a requested stop, which is the other half of
     # this fix). Jev: root cause 0.99, this fix shape 0.89.
     #
     # So: before a DELIBERATE stop of one of our services, its recovery is read, RECORDED and disarmed; the

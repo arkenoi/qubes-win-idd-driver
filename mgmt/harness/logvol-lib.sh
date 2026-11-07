@@ -25,7 +25,7 @@
 #      sets the ROOT registry value LogSafeFlush=1 (HKLM\Software\Invisible Things Lab\Qubes Tools;
 #      CfgReadDword falls back from the module key to the root, config.c:64-94), which every
 #      windows-utils module honours at its next LogInit by opening its log with
-#      FILE_FLAG_WRITE_THROUGH (patches/windows-utils-one-log-per-module.patch, log.c). With that flag
+#      FILE_FLAG_WRITE_THROUGH (winutils/src/log.c, a patch until the 2026-11-07 assimilation). With that flag
 #      fastfat completes the write - the data and the directory entry - at the device before WriteFile
 #      returns. So EVERY LINE WHOSE WriteFile RETURNED is at the device.
 #   L2 the device.  Windows' default policy for a removable usb-storage device is Quick removal

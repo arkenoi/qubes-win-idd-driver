@@ -58,9 +58,12 @@ on:
       - 'driver/**'
       # Submodule PATHS (a bump shows as a change to the path itself - .gitmodules is the
       # full set): agent = gui-agent binaries in the MSI; core-agent = the rpc overlay
-      # swept into the payload and the guard's compiled-source checks.
+      # swept into the payload and the guard's compiled-source checks; winutils =
+      # windows-utils.dll in the MSI (the log, pipe-server and service code the programs link),
+      # OURS since 2026-11-07 - a v4.2.2 clone plus patches/windows-utils-*.patch before that.
       - 'agent'
       - 'core-agent'
+      - 'winutils'
       - '.gitmodules'
       # make-setup.ps1 stages guest/*.ps1 (activate-idd, deactivate-idd, the updater agent,
       # the desktop tweaks, VMExec) into the package. Without this filter a fix to one of
@@ -76,7 +79,9 @@ on:
       - 'tools/wgcbroker/**'
       # Shipped as compile-on-guest diagnostic source in tools\.
       - 'tools/winenum.cs'
-      # pv-xenvif builds with these patches; the stock MSI + ITL certs come from vendor/.
+      # pv-xenvif builds with these patches (xenvif-ctrl-ring-fix, xenvif-enable-diag - the only
+      # two left since the windows-utils stack became the winutils submodule above); the stock
+      # MSI + ITL certs come from vendor/.
       - 'patches/**'
       - 'vendor/**'
       # The rpm job packages the auto-qwt stub and README from contrib/.

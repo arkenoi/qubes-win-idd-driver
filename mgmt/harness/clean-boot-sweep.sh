@@ -43,7 +43,7 @@ ref=$(sha256sum "$SETUP/reference/gui-agent.exe" | awk '{print $1}')
 say "reference from $SETUP: ${ref:0:12}"
 
 # WHY THERE IS NO "ARCHIVE THE LOGS FIRST" STEP HERE. It was written, and it cannot work:
-# windows-utils opens its log with FILE_SHARE_READ only (upstream/ro/qubes-windows-utils/src/log.c),
+# windows-utils opens its log with FILE_SHARE_READ only (winutils/src/log.c, ours since 2026-11-07),
 # so a live service's PER-DAY log - gui-agent, qrexec-agent, gui-watchdog, exactly the files that
 # accumulate - cannot be moved or renamed while it runs. A step that archives only what is already
 # closed would report success and leave the capture mixed.

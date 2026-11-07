@@ -123,7 +123,7 @@ STALE_ERR_RE = re.compile(r"failed with error 0x0\b")
 # `--declare-error` would have excused. A process dying inside our own code is the most severe thing
 # this analyser can see in a log, so it gets its own P1 count and no declaration path. The pattern is
 # the unhandled-exception filter's own head, which error.c keeps byte-identical for exactly this kind
-# of consumer (patches/windows-utils-uef-one-line.patch).
+# of consumer (winutils/src/error.c, ErrUEF).
 CRASH_RE = re.compile(r"\bUnhandled exception [0-9a-fA-F]{8}\b")
 # `Note: 1:` AND BARE `Rollback` WERE DROPPED FROM THIS SELECTOR, 2026-10-23, and the reason is that
 # the 2026-10-08 fix for them was only half of one. That day's measurement (see parse_msi) found that
@@ -1654,7 +1654,7 @@ def parse_winutils(lf, raw_lines):
         lf.lines.append(ln)
         prev = ln
         # ONE LINE CARRIES THE WHOLE INIT RECORD, because the six-line banner below it is no
-        # longer written on a product session. patches/windows-utils-loginit-banner-debug
+        # longer written on a product session. winutils/src/log.c LogInit
         # (ea61ba28, owner 2026-10-20: "it is NOT normal to have thousands of lines of log during
         # the brief normal run") demoted every LogInit line to LogDebug - and this parser reads
         # THREE facts out of that banner: the module name, the boot (from System uptime) and the
@@ -1666,7 +1666,7 @@ def parse_winutils(lf, raw_lines):
         # demotion. The four campaigns before it read boots=3..6 agent_instances=3..5 in the same
         # cells.
         #
-        # patches/windows-utils-single-birth-line emits those facts as ONE INFO line per process
+        # winutils/src/log.c emits those facts as ONE INFO line per process
         # start. tools/sweep-gate.sh:747 already named that marker and :778 already greps for it;
         # the producer did not exist, which is why the gate's own measurement of birth lines per
         # capture went "2484, then 327, then ZERO".
@@ -3216,7 +3216,7 @@ def build_structure(files, boots, declared=None):
             # prefix belongs to an OLD per-process file, where the file IS the instance.
             #
             # BOTH SPELLINGS, AND THAT WAS MISSING. This read only "Log started", the line
-            # patches/windows-utils-loginit-banner-debug DEMOTED TO LogDebug; a shipped build writes
+            # winutils/src/log.c DEMOTED TO LogDebug; a shipped build writes
             # `LogInit: QWTBIRTH module=... ver=...` at Info instead. So on every current build the
             # generation never advanced, and a per-day log that spans an upgrade - one file, the pid
             # reused, which is the ordinary shape under one-log-per-module - collapsed into ONE
@@ -5408,9 +5408,9 @@ def cmd_attribute(a):
     THE TWO CALLERS AND WHY THEY EXIST.
     (1) tools/sweep-gate.sh, the CAMPAIGN-level gate. It used to parse the banner itself, with
         `_sg_modver` grepping `module name:` and `Module version:` - the two lines
-        patches/windows-utils-loginit-banner-debug DEMOTED TO DEBUG, replaced by one INFO line
+        winutils/src/log.c DEMOTED TO DEBUG, replaced by one INFO line
         `LogInit: QWTBIRTH module=<m> ver=<a.b.c.d> ...` from
-        patches/windows-utils-single-birth-line. MEASURED 2026-10-24 on a real capture
+        the same LogInit. MEASURED 2026-10-24 on a real capture
         (scratchpad/dedup-test/logs/files): the candidate's `gui-agent-20261023.log` carries
         `QWTBIRTH module=gui-agent ver=4.3.37.1066` and ZERO legacy banner lines, so `_sg_modver`
         returned EMPTY on it, while the 4.3.35.795 entry fixture - an image predating the demotion -

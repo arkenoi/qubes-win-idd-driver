@@ -248,10 +248,10 @@ _text() { # <file> -> its text as UTF-8 on stdout
 #
 # IT HAD ITS OWN PARSER AND ITS OWN RULE, AND BOTH WERE A BUILD BEHIND. The parser grepped
 # "LogInit: Log started, module name: <m>" and "LogInit: Module version: <v>" - the two lines
-# patches/windows-utils-loginit-banner-debug DEMOTED TO DEBUG (owner 2026-10-20, "it is NOT normal
+# winutils/src/log.c (LogInit) DEMOTED TO DEBUG (owner 2026-10-20, "it is NOT normal
 # to have thousands of lines of log during the brief normal run"), replaced by ONE InfoLevel line,
 # `LogInit: QWTBIRTH module=<m> ver=<a.b.c.d> pid=... session=... uptime=...`, from
-# patches/windows-utils-single-birth-line. This file already knew that: :747 names the patch and
+# the same LogInit. This file already knew that: :747 names the producer and
 # :778 greps BOTH spellings for its birth-line census. The extractor here knew only the dead one.
 #
 # MEASURED 2026-10-24 on a real two-build capture, scratchpad/dedup-test/logs/files, with the old
@@ -333,7 +333,7 @@ _prior_lines_of() { # $1=file -> the line numbers inside a MIXED file that the p
 # rather than one per case. A FILE THAT HOLDS BOTH BUILDS LOSES ONLY THE PREDECESSOR'S LINES: a
 # per-FILE verdict was all the old extractor could manage, and it is wrong whenever one log spans
 # the turnover - the ordinary case now that a module writes ONE per-day file
-# (patches/windows-utils-one-log-per-module) instead of one per process, so an upgrade appends both
+# (winutils/src/log.c) instead of one per process, so an upgrade appends both
 # builds to the same file. Dropping it whole would hide the candidate's own errors; keeping it whole
 # bills the predecessor's errors to the candidate, which is the defect being cured.
 _sg_text_scoped() { # $1=file -> its text, minus every line the attributor excluded
@@ -885,7 +885,7 @@ LD=$(mktemp); grep -vE '^\s*(#|$)' "$LEDGER" > "$LD" || true
 # A WINDOWS-UTILS MODULE DECLARES ITSELF WHEN IT STARTS, and that declaration is the proof. Birth
 # lines per campaign capture, measured over the last three: 2484, then 327, then ZERO. The zero is
 # yesterday's campaign, which graded a capture that could not have held an agent record. Either
-# spelling counts: QWTBIRTH (one line per module at INFO, patches/windows-utils-single-birth-line)
+# spelling counts: QWTBIRTH (one line per module at INFO, winutils/src/log.c LogInit)
 # or the legacy "Log started, module name:" banner, which is proof whenever the level was raised.
 #
 # The predicate is NOT a knob. An input with windows-utils lines and no birth line is unjudgeable,
@@ -1027,7 +1027,7 @@ if [ -n "${_sg_nobirth:-}" ] && [ "${_sg_bl:-0}" -gt 0 ]; then
     echo "  windows-utils writes one file per module, so a file with records but no birth line is a"
     echo "  module whose LogInit was never seen - and that module's SILENCE cannot be read as clean."
     echo "  One birth line somewhere in the capture says nothing about the others. Raise LogLevel for"
-    echo "  this cell, or ship a package carrying patches/windows-utils-single-birth-line.patch."
+    echo "  this cell, or ship a package built from a winutils tree whose LogInit writes the QWTBIRTH line."
     exit 2
 fi
 if [ "${_sg_wl:-0}" -gt 0 ] && [ "${_sg_bl:-0}" = 0 ]; then
@@ -1035,7 +1035,7 @@ if [ "${_sg_wl:-0}" -gt 0 ] && [ "${_sg_bl:-0}" = 0 ]; then
     echo "  Windows-utils logs are present but NO module declared itself: no QWTBIRTH line and no"
     echo "  'Log started, module name:' banner. A capture with no module birth cannot hold that"
     echo "  module's errors either, so silence here means nothing. Raise LogLevel for this cell, or"
-    echo "  ship a package carrying patches/windows-utils-single-birth-line.patch."
+    echo "  ship a package built from a winutils tree whose LogInit writes the QWTBIRTH line."
     exit 2
 fi
 # SG-LIFE-END

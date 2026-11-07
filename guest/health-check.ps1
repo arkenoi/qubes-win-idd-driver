@@ -100,7 +100,8 @@ Check 'qubes_services_running' (@($svcs).Count -gt 0 -and $badSvc.Count -eq 0) $
 #
 # WHAT A PASS DOES NOT PROVE: this asserts "the recovery that was promised is configured", NOT
 # "recovery works". Recovery fires only on a crash or a non-zero exit, and until the QWT build's
-# patches/windows-utils-service-exit-code.patch (2026-10-03) QdbDaemon and QrexecAgent reported
+# service exit-code fix (2026-10-03; carried as patches/windows-utils-service-exit-code.patch until
+# the 2026-11-07 assimilation, now winutils/src/service.c) QdbDaemon and QrexecAgent reported
 # SERVICE_STOPPED with exit code 0 when their worker failed (audit 2026-09-08 #34), so their actions
 # were inert. The patch is proven offline (tools/tests/svc-exitcode-selftest.sh); "recovery works" on
 # a guest still needs its defect-reintroduced proof (a forced WaitForQdb timeout -> event 7023 + 7031
@@ -156,7 +157,7 @@ foreach ($svcName in 'QdbDaemon', 'QrexecAgent', 'QubesGuiWatchdog', 'QwtngNetSe
 Check 'service_recovery_configured' $recovOk `
     @{ services = $recovEv
        want = "reset_period=$recovWantReset, >=$recovWantRestarts RESTART actions, FailureActionsOnNonCrashFailures=1 on every service of ours that is present (QdbDaemon, QrexecAgent, QubesGuiWatchdog from Set-QubesServiceRecovery; QwtngNetSetup from pvnic-selfprime)"
-       note = 'CONFIGURATION only: a PASS says the promised recovery is configured, not that it works - the service exit-code fix (patches/windows-utils-service-exit-code.patch) is proven offline and still owed its on-guest defect-reintroduced proof' }
+       note = 'CONFIGURATION only: a PASS says the promised recovery is configured, not that it works - the service exit-code fix (winutils/src/service.c) is proven offline and still owed its on-guest defect-reintroduced proof' }
 # ---- SVC-RECOVERY-CHECK-END
 
 # --- 3. IDD device present + started + primary ------------------------------------

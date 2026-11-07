@@ -101,6 +101,13 @@ if (-not ($um.PSObject.Properties.Name -contains 'core_agent_sha') -or -not $um.
     throw 'qwt-full MANIFEST.json records no core_agent_sha - cannot say which core-agent produced the shipped qrexec-agent.exe/relocate-dir.exe/advertise-tools.exe'
 }
 $coreAgentSha = $um.core_agent_sha
+# SAME CONTRACT FOR winutils, and for the same reason: windows-utils.dll is OURS since 2026-11-07
+# (docs/ADR-upstream.md section 4). The WINDOWS_UTILS_REF pin and the patch list that used to name
+# its source are gone, so this field is the only thing in a release that can.
+if (-not ($um.PSObject.Properties.Name -contains 'winutils_sha') -or -not $um.winutils_sha) {
+    throw 'qwt-full MANIFEST.json records no winutils_sha - cannot say which windows-utils produced the shipped windows-utils.dll'
+}
+$winutilsSha = $um.winutils_sha
 $baseQwt   = '4.2.2'   # upstream QWT release these sources were rebuilt from (compat field)
 # SINGLE SOURCE OF TRUTH for the deliverable version: agent/version - the SAME file qwt-full.yml
 # reads (line ~311) to stamp the MSI ProductVersion. Reading it here instead of a second hardcoded
@@ -617,6 +624,7 @@ $manifest = [ordered]@{
         # which core-agent built the qrexec-agent.exe inside it - and that is where 4.3.21's qrexec
         # P1 fix lives. agent_commit is a DIFFERENT submodule and cannot answer for it.
         core_agent_commit          = $coreAgentSha
+        winutils_commit            = $winutilsSha
         agent_describe             = $agentDesc
         agent_upstream             = 'https://github.com/QubesOS/qubes-gui-agent-windows'
         installer_upstream_commit  = $um.installer_sha

@@ -57,6 +57,10 @@ on:
       # user-mode tool exes so the table can grow to claim them. A submodule bump must
       # rebuild the MSI.
       - 'core-agent'
+      # winutils is the third gitlink in this tree (our windows-utils, docs/ADR-upstream.md section 4).
+      # Bare and with NO glob: a pointer bump is a change to the one path `winutils` (mode 160000),
+      # which a `winutils/**` pattern would not match (test.yml, TESTYMLMISSESSUBMODULEBUMP).
+      - 'winutils'
       - 'vendor/qwt-4.2.2/**'
       - 'packaging/stage-qwt-repo.ps1'
       - 'packaging/patch-xenbus-inf.ps1'
@@ -99,7 +103,6 @@ jobs:
       # release", the exact shape the release gates reject). The stamper still throws on UNSET.
       QWTNG_BUILD_REV: ${{ inputs.build_rev || '0' }}
       # Agent-dependency pins — identical to build.yml's gui-agent job (proven).
-      WINDOWS_UTILS_REF: v4.2.2
       VCHAN_REF: v4.2.7
       QUBESDB_REF: v4.3.1
       PVDRIVERS_REF: v4.2.0-1
@@ -160,6 +163,9 @@ jobs:
           "msbuild=$msbuild" | Out-File -Append $env:GITHUB_OUTPUT
           "lib=$lib"         | Out-File -Append $env:GITHUB_OUTPUT
 
+      # windows-utils is not fetched here. It is OUR source (docs/ADR-upstream.md section 4), carried
+      # in this tree as the winutils/ submodule: the checkout above (submodules: recursive) puts it in
+      # place and "Build Qubes user-mode dependencies" builds it there. Nothing is cloned or patched.
       - name: Fetch sources (agent deps + installer + builderv2)
         shell: pwsh
         run: |
@@ -168,7 +174,6 @@ jobs:
             git clone --quiet --depth 1 --branch $ref -c advice.detachedHead=false $url $dir
             if ($LASTEXITCODE -ne 0) { throw "clone failed: $url @ $ref" }
           }
-          Clone https://github.com/QubesOS/qubes-windows-utils.git             $env:WINDOWS_UTILS_REF deps-src/windows-utils
           Clone https://github.com/QubesOS/qubes-core-vchan-xen.git            $env:VCHAN_REF         deps-src/core-vchan-xen
           Clone https://github.com/QubesOS/qubes-core-qubesdb.git              $env:QUBESDB_REF       deps-src/core-qubesdb
           Clone https://github.com/QubesOS/qubes-gui-common.git                $env:GUI_COMMON_REF    deps-src/gui-common
@@ -186,340 +191,13 @@ jobs:
           git -C installer-src checkout --quiet $env:INSTALLER_SHA
           if ($LASTEXITCODE -ne 0) { throw "installer checkout failed" }
 
-
-      # THE INTERACTIVE-LOGON FIX, always applied. windows-utils is cloned FRESH from upstream at
-      # WINDOWS_UTILS_REF, so an edit to our read-only mirror under upstream/ro/ would NEVER reach a
-      # build - the fix has to be a patch applied here, or it ships as a no-op (the same class of
-      # defect as the user-session helpers that shipped nowhere).
-      # exec.c ran an INTERACTIVE service by string-matching the account name dom0 requested (the
-      # default "user") against the logged-on console user, and on a mismatch discarded the valid
-      # console token and called LogonUser("user", ".", "userpass"). On a guest whose local account
-      # is not named "user" (the real name is in qvm-prefs default_user) that logon fails, so the
-      # updates proxy/relay, toasts and shell helpers never launch: "no network / can't find the
-      # proxy" plus a stream of qrexec-wrapper AUTHENTICATION FAILUREs. Reported by a field tester
-      # 2026-09-10. The patch makes an interactive service run as the actual logged-on console user
-      # whenever we hold its token, and leaves the non-interactive path and the not-logged-on
-      # LogonUser fallback untouched.
-      - name: Apply the windows-utils interactive-logon fix (always)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ws = $env:GITHUB_WORKSPACE
-          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-interactive-token.patch"
-          if ($LASTEXITCODE -ne 0) { throw "windows-utils interactive-logon patch did not apply" }
-          # A patch that silently no-ops would ship the bug with a new version number.
-          $src = Get-Content "$ws\deps-src\windows-utils\src\exec.c" -Raw
-          if ($src -notmatch '!interactive \&\& wcscmp') { throw 'interactive-logon fix marker missing after patch' }
-          if ($src -match 'if \(!userToken \|\| wcscmp\(loggedUserName, userName\)\)') { throw 'the old name-match gate is still present after patching' }
-          Write-Host "::notice title=windows-utils::interactive-logon fix applied"
-
-      # EVERY SERVICE OF OURS MAKES ITS FAILURES VISIBLE (docs/ADR-supervision.md 2). windows-utils'
-      # SvcMainLoop - the service wrapper of QrexecAgent AND of the qubesdb daemon - reported
-      # SERVICE_STOPPED with exit code 0 whatever the worker thread returned (SvcSetState ignored
-      # its exit-code argument), so a QrexecAgent whose WaitForQdb timed out, or a QdbDaemon whose
-      # mainloop failed, ended as a CLEAN stop: no event 7023/7024 and no SCM recovery, even with
-      # FailureActionsOnNonCrashFailures set (health-check.ps1 2b, audit #34). The patch forwards the
-      # worker's exit code. Proven offline by tools/tests/svc-exitcode-selftest.sh.
-      - name: Apply the windows-utils service-exit-code fix (always)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ws = $env:GITHUB_WORKSPACE
-          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-service-exit-code.patch"
-          if ($LASTEXITCODE -ne 0) { throw "windows-utils service-exit-code patch did not apply" }
-          # A patch that silently no-ops would ship the bug with a new version number.
-          $src = Get-Content "$ws\deps-src\windows-utils\src\service.c" -Raw
-          if ($src -notmatch 'GetExitCodeThread\(g_Service->WorkerThread') { throw 'service-exit-code fix marker missing after patch' }
-          if ($src -match 'UNREFERENCED_PARAMETER\(win32ExitCode\)') { throw 'the old exit-code swallow is still present after patching' }
-          Write-Host "::notice title=windows-utils::service-exit-code fix applied"
-      # AN ORDINARY DISCONNECT IS NOT A WARNING. windows-utils' pipe server logged the normal END OF
-      # A CLIENT SESSION as "read failed" at WARNING with GetLastError DISCARDED (its win_perror was
-      # commented out), so a completed session and a real fault printed the same line. This protocol
-      # has no goodbye message - EOF IS the disconnect (qdb_close just closes the handles;
-      # qrexec-client-vm's last act is CloseHandle(writePipe)) - so every success ended there.
-      # Measured on a German 25H2 guest after one install and three boots: 199 of those lines from
-      # qrexec-agent and ~60 from the qubesdb daemon, all of them successful sessions, 259 of the 766
-      # error/warning lines in the whole log. The Linux side returns the same event silently
-      # (qubes-core-qubesdb db-cmds.c "/* EOF */ if (ret == 0) return 0;"), so it is a port artefact.
-      # The patch classifies WHY the read ended and makes every case that is NOT an expected end
-      # LOUDER than before - ERROR level AND the Win32 code, which the old code-less warning never
-      # gave - plus a new ERROR for a peer that goes away MID-MESSAGE, which used to print the same
-      # warning as a clean session end. Jev: root_cause_established 0.92, fix_is_real 0.88.
-      - name: Apply the windows-utils pipe-EOF classification fix (always)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ws = $env:GITHUB_WORKSPACE
-          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-pipe-eof.patch"
-          if ($LASTEXITCODE -ne 0) { throw "windows-utils pipe-EOF patch did not apply" }
-          # A patch that silently no-ops would ship the noise with a new version number.
-          $src = Get-Content "$ws\deps-src\windows-utils\src\pipe-server.c" -Raw
-          if ($src -notmatch 'peer closed the pipe \(end of session\)') { throw 'pipe-EOF marker missing after patch' }
-          if ($src -notmatch 'peer gone mid-message') { throw 'mid-message ERROR marker missing after patch' }
-          if ($src -notmatch 'win_perror2\(readError, "ReadFile\(client pipe\)"\)') { throw 'the loud non-EOF path is missing after patch' }
-          if ($src -match 'LogWarning\("\[%lld\] read failed"') { throw 'the unconditional read-failed warning is still present after patching' }
-          Write-Host "::notice title=windows-utils::pipe-EOF classification fix applied"
-      # ONE LOG FILE PER MODULE PER DAY instead of one per PROCESS - see build.yml for the measured
-      # numbers and the reason the date stays in the name.
-      - name: Apply the windows-utils one-log-per-module fix (always)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ws = $env:GITHUB_WORKSPACE
-          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-one-log-per-module.patch"
-          if ($LASTEXITCODE -ne 0) { throw "windows-utils one-log-per-module patch did not apply" }
-          $src = Get-Content "$ws\deps-src\windows-utils\src\log.c" -Raw
-          if ($src -notmatch 'FILE_APPEND_DATA \| FILE_READ_ATTRIBUTES') { throw 'append-only open marker missing after patch' }
-          if ($src -notmatch 'WriteFile\(g_LogfileHandle, g_LineBufUtf8') { throw 'the single-write line marker is missing after patch' }
-          if ($src -notmatch '%s-%04d%02d%02d\.log') { throw 'per-module log name marker missing after patch' }
-          if ($src -match '(?m)st\.wSecond,\s*$') { throw 'the log name still carries the time and the pid after patching' }
-          if ($src -match '%02d%02d%02d-%d\.log') { throw 'the per-process log name is still present after patching' }
-          if ($src -notmatch '%03d-%d:%d-%c') { throw 'the pid is missing from the line prefix after patch' }
-          if ($src -notmatch 'FILE_FLAG_WRITE_THROUGH') { throw 'safe flush would be a no-op on an append-only handle after patch' }
-          Write-Host "::notice title=windows-utils::one-log-per-module fix applied"
-      # A BLOCKING READ WITH NO DATA YET IS NOT A WARNING. VchanReceiveBuffer warned every time the
-      # ring held fewer bytes than the caller asked for, which is immediately followed by a
-      # libvchan_recv that blocks and succeeds. Measured 2026-10-08 on win11r-logvol: 6 of these on
-      # a FULLY IDLE clean cycle, and the count scales with every protocol message received, so
-      # under GUI load it is unbounded. Owner the same day, for our own components: "no warnings on
-      # normal operation. warning means something is not quite normal, yet workable." A read that
-      # fails or returns short is still an ERROR, two lines below, and the wedge breadcrumb is kept
-      # by the agent's own "CaptureThread: main loop slow" WARNING.
-      # THE STARTUP BANNER IS DEBUG, NOT AN EVENT. qrexec-wrapper is spawned once per qrexec call;
-      # acceptance run 39225775322 logged 155 invocations in one brief cell, and LogInit's six
-      # LogInfo lines times 155 is ~1085 of that module's 1250 lines - 87% of it a process
-      # announcing its own birth. The guest session read 2535 INFO against 52 WARN and 2 ERROR.
-      # Owner 2026-10-20: "ok for debug purposes but not on a product session". At
-      # LOG_LEVEL_DEBUG every one of them comes back. MUST be applied AFTER one-log-per-module,
-      # which is the only other patch touching log.c.
-      - name: Apply the windows-utils LogInit-banner-to-debug fix (always)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ws = $env:GITHUB_WORKSPACE
-          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-loginit-banner-debug.patch"
-          if ($LASTEXITCODE -ne 0) { throw "windows-utils loginit-banner-debug patch did not apply" }
-          # A patch that silently no-ops would ship the flood with a new version number.
-          $src = Get-Content "$ws\deps-src\windows-utils\src\log.c" -Raw
-          foreach ($m in @('Log started, module name', 'System uptime: %.3f seconds', 'Session: %lu', 'Command line: %s')) {
-            if ($src -notmatch [regex]::Escape($m)) { throw "banner line vanished instead of being demoted: $m" }
-          }
-          if ($src -match 'LogInfo\("Log started')   { throw 'the banner is still at INFO after patching' }
-          if ($src -match 'LogInfo\("System uptime') { throw 'the uptime line is still at INFO after patching' }
-          if ($src -match 'LogInfo\("Session:')      { throw 'the session line is still at INFO after patching' }
-          if ($src -notmatch 'LogDebug\("Log started') { throw 'the banner was not demoted to LogDebug' }
-      # ONE BIRTH LINE AT INFO, BECAUSE A LOG THAT CANNOT NAME ITS BUILD CANNOT BE GRADED. The
-      # demotion above also removed the only line that bills a log line to a build, and
-      # tools/log-sweep.py reads three facts out of that banner: the module, the boot (System
-      # uptime) and the version. MEASURED, acceptance run 39868919766: every graded cell reported
-      # boots=0 agent_instances=0 over 3781-7653 lines, FOUR returned status=CLEAN having attributed
-      # nothing, and win10-upgrade failed on five ERROR lines from its 4.3.35.795 entry fixture, the
-      # only banner-bearing log in the capture. tools/sweep-gate.sh:747 already named this patch and
-      # :778 already greps for its marker. MUST be applied AFTER loginit-banner-debug - it is
-      # generated against the demoted source.
-      - name: Apply the windows-utils single-birth-line fix (always)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ws = $env:GITHUB_WORKSPACE
-          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-single-birth-line.patch"
-          if ($LASTEXITCODE -ne 0) { throw "windows-utils single-birth-line patch did not apply" }
-          # A patch that silently no-ops would ship a package no sweep can attribute - which is the
-          # exact failure this fixes, so it is checked here rather than discovered in a campaign.
-          $src = Get-Content "$ws\deps-src\windows-utils\src\log.c" -Raw
-          if ($src -notmatch 'LogInfo\("QWTBIRTH module=') { throw 'no birth line at INFO after patching' }
-          foreach ($k in @('module=%s', 'ver=%d.%d.%d.%d', 'pid=%lu', 'session=%lu', 'uptime=%.3f')) {
-            if ($src -notmatch [regex]::Escape($k)) { throw "the birth line omits $k - log-sweep cannot rebuild the init record" }
-          }
-          $n = ([regex]::Matches($src, 'LogInfo\("QWTBIRTH')).Count
-          if ($n -ne 1) { throw "expected exactly one QWTBIRTH INFO line, found $n" }
-          if ($src -match 'LogInfo\("Log started') { throw 'the birth line restored the banner to INFO' }
-      - name: Apply the windows-utils blocking-read level fix (always)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ws = $env:GITHUB_WORKSPACE
-          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-vchan-blocking-read.patch"
-          if ($LASTEXITCODE -ne 0) { throw "windows-utils blocking-read patch did not apply" }
-          $src = Get-Content "$ws\deps-src\windows-utils\src\vchan-common.c" -Raw
-          if ($src -notmatch 'no data yet, the read will block') { throw 'blocking-read marker missing after patch' }
-          if ($src -match 'LogWarning\("\(%p, %s\): no data, blocking read"') { throw 'the blocking-read WARNING is still present after patching' }
-          if ($src -notmatch 'LogError\("\(%p, %s\): failed to read') { throw 'a failed read is no longer an ERROR after patching' }
-          Write-Host "::notice title=windows-utils::blocking-read level fix applied"
-      # A CLIENT THAT IS NOT IN THE LIST KILLED THE WHOLE SERVICE. QpsConnectClient starts a reader
-      # and a writer thread and returns; each one's FIRST statement was a dereference of
-      # QpsGetClient's result, which is NULL whenever the id is not in the server's client list -
-      # either because a disconnect unlinked it, or because QpsConnectClient's own error paths
-      # create both threads BEFORE InsertTailList. MEASURED on a Win10 acceptance cell 2026-10-14
-      # (QREXECAGENTAV): qrexec-agent.exe took c0000005 reading address 0x18 - WritePipe's offset in
-      # PIPE_CLIENT - and the Qubes RPC agent service STOPPED (watchdog: System/7031). That is the
-      # release goal's own failure mode: an agent that dies mid-call is how dom0's callers lose
-      # stdout, stderr and the agent log. THIS WORKFLOW IS WHAT THE RELEASE PACKAGE IS BUILT FROM,
-      # and it carries its own copy of these steps - the fix first went only into build.yml, which
-      # would have shipped a package without it while a different workflow applied it.
-      # PER-CALL MECHANICS ARE DEBUG. The pipe server takes a client per qrexec call; one brief cell
-      # of run 39476792836 logged 58 disconnect lines, inside a guest session that read 2535 INFO
-      # against 52 WARN and 2 ERROR. Owner 2026-10-20: "ok for debug purposes but not on a product
-      # session". Independent of the log.c patches - different file, any order.
-      - name: Apply the windows-utils per-call-mechanics-to-debug fix (always)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ws = $env:GITHUB_WORKSPACE
-          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-percall-mechanics-debug.patch"
-          if ($LASTEXITCODE -ne 0) { throw "windows-utils per-call-mechanics patch did not apply" }
-          $src = Get-Content "$ws\deps-src\windows-utils\src\pipe-server.c" -Raw
-          if ($src -match 'LogInfo\("\[%lld\] disconnected') { throw 'the disconnect line is still at INFO after patching' }
-          if ($src -notmatch 'LogDebug\("\[%lld\] disconnected') { throw 'the disconnect line was not demoted to LogDebug' }
-      - name: Apply the windows-utils pipe-client NULL fix (always)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ws = $env:GITHUB_WORKSPACE
-          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-pipe-client-null.patch"
-          if ($LASTEXITCODE -ne 0) { throw "windows-utils pipe-client NULL patch did not apply" }
-          $src = Get-Content "$ws\deps-src\windows-utils\src\pipe-server.c" -Raw
-          if ($src -notmatch 'not in the client list; reader thread exits') { throw 'reader guard marker missing after patch' }
-          if ($src -notmatch 'not in the client list; writer thread exits') { throw 'writer guard marker missing after patch' }
-          if ($src -notmatch 'NOTHING TO RELEASE IF THE CLIENT IS ALREADY GONE') { throw 'release-call-site guard marker missing after patch' }
-          # The defects themselves: a lookup immediately followed by the dereference, in either
-          # thread, and the public disconnect handing an unchecked lookup to QpsReleaseClient.
-          if ($src -match '(?m)QpsGetClient\(server, param->ClientId\);\r?\n\s*HANDLE pipe =') { throw 'a thread entry still dereferences the client without checking it' }
-          if ($src -match '(?m)QpsGetClientRaw\(Server, ClientId, FALSE\);\r?\n\s*QpsReleaseClient') { throw 'QpsDisconnectClient still passes an unchecked lookup to QpsReleaseClient' }
-          Write-Host "::notice title=windows-utils::pipe-client NULL fix applied"
-      # A CLIENT IS PUBLISHED BEFORE ITS THREADS CAN RUN. QpsConnectClient used to insert the client
-      # into the server's list as its LAST statement, with both worker threads running since several
-      # statements earlier - and each thread's first act is to look itself up in that list. MEASURED
-      # 2026-10-14 (QREXECAGENTAV): qrexec-agent.exe took c0000005 reading address 0x18, WritePipe's
-      # offset in PIPE_CLIENT, and the Qubes RPC agent service STOPPED (watchdog System/7031). Every
-      # error return in that body also abandoned the half-built client, its buffers, its critical
-      # section, its thread parameters and any thread handle (CONNECTERRORLEAK), leaving a thread
-      # looking up an id that would never appear. The function is REWRITTEN rather than guarded: the
-      # threads are created CREATE_SUSPENDED, the client is published under the server lock, and only
-      # then are they resumed - so the race cannot be constructed. One failure path, reached only
-      # while nothing is published and no thread has run.
-      - name: Apply the windows-utils connect-order rewrite (always)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ws = $env:GITHUB_WORKSPACE
-          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-pipe-connect-rewrite.patch"
-          if ($LASTEXITCODE -ne 0) { throw "windows-utils connect-order rewrite did not apply" }
-          $src = Get-Content "$ws\deps-src\windows-utils\src\pipe-server.c" -Raw
-          if ($src -notmatch 'nothing was published') { throw 'unwind marker missing after patch' }
-          if ($src -notmatch 'QpsReaderThread, readerParam, CREATE_SUSPENDED') { throw 'the reader thread is not created suspended after patch' }
-          if ($src -notmatch 'QpsWriterThread, writerParam, CREATE_SUSPENDED') { throw 'the writer thread is not created suspended after patch' }
-          if ($src -notmatch 'ResumeThread\(client->ReaderThread\)') { throw 'the reader thread is never resumed after patch' }
-          # THE ORDERING INVARIANT, the whole point: the insert must come BEFORE any resume.
-          if ($src -notmatch '(?s)InsertTailList\(&Server->Clients.*ResumeThread\(client->ReaderThread\)') { throw 'a thread is resumed before the client is published' }
-          # And the old shape must be gone: a bare return from the middle of the construction.
-          if ($src -match '(?m)if \(client->ReadBuffer == NULL\)\r?\n\s*\{\r?\n\s*LeaveCriticalSection\(&Server->Lock\);\r?\n\s*return') { throw 'QpsConnectClient still returns from the middle of a half-built client' }
-          Write-Host "::notice title=windows-utils::connect-order rewrite applied"
-      # A SERVER OBJECT MUST SURVIVE ITS OWN DESTROY, because the threads still calling it belong to
-      # the CALLER and nothing joins them. QpsDestroy ended with DeleteCriticalSection + ZeroMemory
-      # + free(Server), so the next call entered a deleted lock in freed memory.
-      # MEASURED 2026-10-26 (QDBSTOPUAF), Win10 acceptance cell WIN10-reinstall of campaign
-      # rel-40243956400-r2, qubesdb-daemon pid 3488, four lines from one clock:
-      #   092152.485 [3788-I] mainloop: service stopped, exiting
-      #   092153.517 [3788-I] QpsDisconnectClientInternal: [9] disconnecting, ReaderExiting 0
-      #   092153.533 [4624-W] pipe_thread_client: QpsRead from client 9 failed: 109
-      #   092153.535 [4624-E] ErrUEF: Unhandled exception c0000005 at 00007FF8CCD3FAAD, flags: 0
-      # The cell FAILED its sweep on that one line. qubesdb-daemon.exe is not built here (wave 3)
-      # but it RUNS this DLL, so the fix lands here and ships. Offline:
-      # tools/tests/pipe-server-lifetime-selftest.sh.
-      - name: Apply the windows-utils pipe-server lifetime fix (always)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ws = $env:GITHUB_WORKSPACE
-          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-pipe-server-lifetime.patch"
-          if ($LASTEXITCODE -ne 0) { throw "windows-utils pipe-server lifetime patch did not apply" }
-          $src = Get-Content "$ws\deps-src\windows-utils\src\pipe-server.c" -Raw
-          if ($src -notmatch 'THE SERVER OBJECT IS DELIBERATELY RETAINED') { throw 'retain marker missing after patch' }
-          if ($src -notmatch 'QPSDESTROYED server object retained') { throw 'destroy receipt missing after patch' }
-          if ($src -notmatch 'BOOL Destroyed;') { throw 'the Destroyed field is missing after patch' }
-          if ($src -notmatch 'if \(!Server \|\| Server->Destroyed\)') { throw 'the funnel guard is missing after patch' }
-          # THE DEFECT ITSELF, scoped to the function that had it: QpsDestroy must no longer
-          # invalidate memory a caller can still legally reach.
-          $destroy = [regex]::Match([regex]::Replace($src, '(?m)//.*$', ''), '(?s)void QpsDestroy\(.*?\r?\n\}').Value
-          if (-not $destroy) { throw 'could not find QpsDestroy to check it' }
-          foreach ($s in @('free(Server)', 'DeleteCriticalSection(&Server->Lock)', 'ZeroMemory(Server')) {
-            if ($destroy.Contains($s)) { throw "QpsDestroy still does $s after patch" }
-          }
-          if (-not $destroy.Contains('InterlockedExchange((LONG *)&Server->Destroyed, TRUE)')) { throw 'QpsDestroy does not publish the Destroyed flag' }
-          # AND IT MUST NOT TAKE THE LOCK TO DO IT: an orphaned &Server->Lock (two TerminateThread
-          # paths can orphan it) would turn this fix into a hang at service stop.
-          $tail = [regex]::Match($destroy, '(?s)QpsDisconnectClientInternal\(Server, clientIds.*').Value
-          if ($tail.Contains('EnterCriticalSection(&Server->Lock)')) { throw 'the tail of QpsDestroy takes the server lock' }
-          Write-Host "::notice title=windows-utils::pipe-server lifetime fix applied"
-      # AN UNHANDLED-EXCEPTION FILTER GETS ONE WRITE. It logged the exception, then one line per
-      # exception parameter - and for an access violation those parameters hold the only two facts
-      # that identify it (read/write, and the address touched). On 2026-10-26 the qubesdb-daemon log
-      # ENDS on the head line: the process did not survive to write the parameters, so the fact
-      # needed to name the bad pointer was emitted and still lost. Everything now goes in one line,
-      # head kept byte-identical because the sweep's signature quotes that prefix.
-      # Offline: tools/tests/uef-one-line-selftest.sh.
-      - name: Apply the windows-utils UEF one-line fix (always)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ws = $env:GITHUB_WORKSPACE
-          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-uef-one-line.patch"
-          if ($LASTEXITCODE -ne 0) { throw "windows-utils UEF one-line patch did not apply" }
-          $src = Get-Content "$ws\deps-src\windows-utils\src\error.c" -Raw
-          # COMMENTS STRIPPED for anything asked about the CODE: the comment refusing
-          # GetModuleHandleEx names it, and the comment explaining the old shape quotes it.
-          $code = [regex]::Replace($src, '(?m)//.*$', '')
-          if ($src -notmatch 'ONE WRITE, EVERY FACT') { throw 'UEF one-line marker missing after patch' }
-          if ($code -notmatch '#include <strsafe\.h>') { throw 'strsafe include missing - StringCchPrintfW would not compile' }
-          if ($code -match 'LogError\("Parameter %d: %p"') { throw 'the UEF still logs parameters on their own lines' }
-          if ($code -notmatch 'Unhandled exception %08x at %p, flags: %x%s') { throw 'the one-line emit is missing, or its head changed' }
-          if ($code -match 'GetModuleHandleEx') { throw 'the UEF now takes the loader lock - read the comment that refuses it' }
-          Write-Host "::notice title=windows-utils::UEF one-line fix applied"
-      # CALL THROUGH A RELOADED CALLBACK FIELD. pipe-server.c tested Server->ConnectCallback and
-      # then, because an InterlockedIncrement sits between the test and the use, RE-READ the field
-      # and called it - both outside Server->Lock, which LeaveCriticalSection released above.
-      # MEASURED in the shipped windows-utils.dll of 4.3.39+agent.1f7216b11d1e at 0x180005c30:
-      #   cmp [rsi+0x270],rbx / je / lock inc [rdi+0x78] / mov rax,[rsi+0x270] / call rax
-      # rbx is 0 (xor ebx,ebx at 0x180005b45), so that compare IS the NULL test - and QpsDestroy
-      # clearing the field between the test and the reload turns the call into `call 0`, which is
-      # c0000005 "execute of 0000000000000000", p0=8 p1=0. The disconnect site was safe only
-      # because the optimiser happened to keep one load. Both now load once into a const local.
-      # Jev: fix_is_right=hoist 0.79, disconnect_too 0.61.
-      - name: Apply the windows-utils connect-callback single-load fix (always)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ws = $env:GITHUB_WORKSPACE
-          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-connect-callback-reload.patch"
-          if ($LASTEXITCODE -ne 0) { throw "windows-utils connect-callback single-load patch did not apply" }
-          $src = Get-Content "$ws\deps-src\windows-utils\src\pipe-server.c" -Raw
-          $code = [regex]::Replace($src, '(?m)//.*$', '')
-          if ($code -match 'Server->ConnectCallback\(') { throw 'the connect callback is still called through the struct field' }
-          if ($code -match 'Server->DisconnectCallback\(') { throw 'the disconnect callback is still called through the struct field' }
-          if ($code -notmatch 'const QPS_CLIENT_CONNECTED connectCallback') { throw 'the connect single-load local is missing' }
-          if ($code -notmatch 'const QPS_CLIENT_DISCONNECTED disconnectCallback') { throw 'the disconnect single-load local is missing' }
-          Write-Host "::notice title=windows-utils::connect-callback single-load fix applied"
-      # A DEPARTED PEER STOPS BEING AN ERROR OF OURS, at the first of the four lines it wrote.
-      # libvchan's client init PROBES the peer's xenstore entry - "test if the store entry exists;
-      # if not - wait a second time" - and discards the status on the next line. But XcStoreRead
-      # reports every failure at XLL_ERROR from inside xencontrol, so a client that had simply gone
-      # away produced an ERROR line for a question we only wanted the answer to. Measured on
-      # win11r-logvol 2026-10-08: eight of the new binary's ten error lines were this class, four
-      # per call. The handle's level is the caller's to set and a message is emitted only when its
-      # level <= the current one, so 0 silences that one read and is restored immediately; the real
-      # THE SECOND HALF OF "ONE FAILURE, ONE REPORT" for a departed peer. XcStoreRead reports its
-      # own failure at XLL_ERROR from inside xencontrol and libxenvchan_client_init then reports the
-      # SAME missing key again with the path and the status, so one gone client wrote two error lines
-      # here on top of the two the caller wrote. The handle's level is already set two lines above
-
       # THE PRIVATE VOLUME IS OURS NOW. Stock's PreparePrivateImg custom action is one cold
       # `Get-Disk -Number 1` with Return="ignore": 4 of 28 clean Win10 installs finished with no Q:
       # through it (2026-09-16), 3 graded ok:true, and it cannot tell the private disk from the
       # volatile. Install-QwtImproved.ps1 identifies the private disk by serial and creates Q: on it
       # BEFORE msiexec, which leaves the stock action a no-op at best and, with the volatile at #1,
-      # a not-quite-no-op that partitions the scratch disk. Owner: "if it is no op, drop it." Same
-      # mechanism as the two patches above: the installer source is cloned fresh at the pinned tag,
+      # a not-quite-no-op that partitions the scratch disk. Owner: "if it is no op, drop it."
+      # The installer source is cloned fresh at the pinned tag,
       # so this is the only place the removal can reach a build. The script FAILS the build if any
       # of the three elements is not found, or if the identifier survives.
       - name: "Drop the stock PreparePrivateImg action - the wrapper owns Q:"
@@ -609,7 +287,7 @@ jobs:
           $wiring = @{
             'libxenvchan.dll'    = @("$ws\deps-src\pvdrivers\version",      'libxenvchan.vcxproj PreBuildEvent -> pvdrivers\set_version.ps1 (shadow)')
             'libvchan.dll'       = @("$ws\deps-src\core-vchan-xen\version", 'libvchan.vcxproj PreBuildEvent -> windows\set_version.ps1 (shadow)')
-            'windows-utils.dll'  = @("$ws\deps-src\windows-utils\version",  'windows-utils.vcxproj PreBuildEvent -> $(QB_SCRIPTS)\set-version.ps1 (shadow)')
+            'windows-utils.dll'  = @("$ws\winutils\version",                'windows-utils.vcxproj PreBuildEvent -> $(QB_SCRIPTS)\set-version.ps1 (shadow)')
             'qubesdb-client.dll' = @("$ws\deps-src\core-qubesdb\version",   '.sln dependency qubesdb-daemon PreBuildEvent -> windows\set_version.ps1 (shadow)')
             'qubesdb-cmd.exe'    = @("$ws\deps-src\core-qubesdb\version",   'same header as qubesdb-client; version.rc item added below')
             'gui-agent.exe'      = @("$ws\agent\version",                   'gui-agent.vcxproj PreBuildEvent -> $(QB_SCRIPTS)\set-version.ps1 (shadow)')
@@ -734,10 +412,10 @@ jobs:
           Stage 'core-vchan-xen' `
             @("$ws\deps-src\core-vchan-xen\windows\include\libvchan.h") `
             @("$ws\deps-src\core-vchan-xen\windows\vs2022\x64\$cfg\libvchan\libvchan.lib")
-          MB "$ws\deps-src\windows-utils\vs2022\windows-utils.sln" ''
+          MB "$ws\winutils\vs2022\windows-utils.sln" ''
           Stage 'windows-utils' `
-            @(Get-ChildItem "$ws\deps-src\windows-utils\include\*.h" | % FullName) `
-            @("$ws\deps-src\windows-utils\vs2022\x64\$cfg\windows-utils\windows-utils.lib")
+            @(Get-ChildItem "$ws\winutils\include\*.h" | % FullName) `
+            @("$ws\winutils\vs2022\x64\$cfg\windows-utils\windows-utils.lib")
           MB "$ws\deps-src\core-qubesdb\windows\vs2022\core-qubesdb.sln" 'qubesdb-client'
           Stage 'core-qubesdb' `
             @("$ws\deps-src\core-qubesdb\include\qubesdb.h",
@@ -774,7 +452,7 @@ jobs:
           }
           Collect "$ws\deps-src\pvdrivers\vs2022\x64\$cfg\libxenvchan\libxenvchan.dll"                  "$ws\deps-src\pvdrivers"
           Collect "$ws\deps-src\core-vchan-xen\windows\vs2022\x64\$cfg\libvchan\libvchan.dll"           "$ws\deps-src\core-vchan-xen"
-          Collect "$ws\deps-src\windows-utils\vs2022\x64\$cfg\windows-utils\windows-utils.dll"          "$ws\deps-src\windows-utils"
+          Collect "$ws\winutils\vs2022\x64\$cfg\windows-utils\windows-utils.dll"                        "$ws\winutils"
           Collect "$ws\deps-src\core-qubesdb\windows\vs2022\x64\$cfg\qubesdb-client\qubesdb-client.dll" "$ws\deps-src\core-qubesdb"
           Collect "$ws\deps-src\core-qubesdb\windows\vs2022\x64\$cfg\qubesdb-cmd\qubesdb-cmd.exe"       "$ws\deps-src\core-qubesdb"
           $expect  = 'libxenvchan.dll','libvchan.dll','windows-utils.dll','qubesdb-client.dll','qubesdb-cmd.exe'
@@ -1274,6 +952,11 @@ jobs:
             agent_sha        = (git -C $ws/agent rev-parse HEAD).Trim()
             agent_describe   = (git -C $ws/agent describe --tags --long --always).Trim()
             core_agent_sha   = (git -C $ws/core-agent rev-parse HEAD).Trim()
+            # WHICH windows-utils PRODUCED THE SHIPPED windows-utils.dll. Until 2026-11-07 that DLL
+            # was a v4.2.2 clone plus patches/windows-utils-*.patch, so repo_sha named its source
+            # exactly; it is OUR submodule now (docs/ADR-upstream.md section 4) and no other field
+            # in the package says which commit of it was built.
+            winutils_sha     = (git -C $ws/winutils rev-parse HEAD).Trim()
             installer_sha    = $env:INSTALLER_SHA
             stock_msi_sha256 = $env:STOCK_MSI_SHA256
             files            = [ordered]@{}

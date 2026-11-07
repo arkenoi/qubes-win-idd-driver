@@ -122,7 +122,7 @@ function Get-LswStamp([datetime]$d) { return $d.ToString('yyyy-MM-ddTHH:mm:ss.ff
 function Get-LswLogDir {
     # LOOK WHERE THE PRODUCT WOULD HAVE WRITTEN, in the product's own order.
     #
-    # upstream/ro/qubes-windows-utils/src/log.c:236-253 with log.h:59: when LogInit gets no
+    # winutils/src/log.c:282 with winutils/include/log.h:59: when LogInit gets no
     # directory it builds "<system drive>\Qubes Logs" (LOG_DEFAULT_DIR is L"Qubes Logs", with the
     # space) and CREATES it. That path was missing from this chain entirely, so a guest whose
     # registry carries no LogDir at all wrote its logs to C:\Qubes Logs and this collector looked at
