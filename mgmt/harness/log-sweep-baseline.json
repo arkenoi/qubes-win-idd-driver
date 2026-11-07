@@ -3988,6 +3988,28 @@
    "status": "benign",
    "max_per_boot": 2200,
    "reason": "The `[~]` half of the same directory pair as `[D] PATH`, folded the same way: 1570 distinct signatures on win10-clean, 1673 lines in the heaviest boot, bound 2200 as headroom over that maximum."
+  },
+  "agent|D|Init: 'SeamlessMode' is not set - using the default (FALSE)": {
+   "status": "expected",
+   "reason": "Jev: expected 0.75 on the corpus",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "D",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.75
+   }
+  },
+  "agent|W|Init: Failed to read 'SeamlessMode' config value (0xH), using default (FALSE)": {
+   "status": "unsettled",
+   "reason": "Jev: expected 0.41 on the corpus (below 0.5) - a human decision is owed",
+   "max_per_boot": 1,
+   "family": "agent",
+   "level": "W",
+   "jev": {
+    "choice": "expected",
+    "confidence": 0.41
+   }
   }
  },
  "source_reports": [
@@ -4170,5 +4192,5 @@
   }
  },
  "version": 1,
- "preaccounted_at": "36a82f01e140ed4546d838eef7cdc6631607c70c"
+ "preaccounted_at": "81dbd4c4b455ade990903a88615567347af35c89"
 }
