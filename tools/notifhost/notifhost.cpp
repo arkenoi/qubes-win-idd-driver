@@ -1447,6 +1447,22 @@ static DWORD WINAPI EtwIpcThread(LPVOID)
         static const DWORD bo[] = { 2000, 5000, 15000, 60000 };   // bounded reconnect backoff
         int idx = 0;
         bool loggedDown = false;
+        // THE STARTUP ORDER IS NOT AN OUTAGE. This thread opens the proxy's pipe; the GUI AGENT is
+        // what launches the proxy, so on a cold start we reliably arrive first and ERROR_FILE_NOT_FOUND
+        // is the expected answer for a second or two. MEASURED 2026-11-07 in the acceptance campaign's
+        // log sweep (remainder-a3dfdd79a00a, win11-clean + win11-upgrade + log-sweep all breached
+        // fallbacks_fired max=0, P1): every single one of the counted lines is this race -
+        //   04:02:22 pipe absent (2) -> 04:02:23 ETWPROXY LIVE -> 04:02:24 ETW IPC connected
+        //   04:04:10 pipe absent (2) -> 04:04:12 ETWPROXY LIVE -> 04:04:13 ETW IPC connected
+        // and the boots where the proxy happened to come up first (04:01:40, 04:03:16, 04:49:37)
+        // logged nothing at all. The tier was down for about a second, at startup, before any toast
+        // could arrive. The sweep is right to count "DB fallback"/"tier down" as a fired fallback
+        // (project rule: a fallback firing is an anomaly, and it is P1 when it is loud to the client);
+        // what was wrong is calling the cold start one. So the FIRST absence, before the proxy has
+        // ever connected in this process, is reported as what it is - at INFO, in words that are not
+        // a fallback - and it becomes the loud WARNING if it OUTLIVES the first 2 s back-off, or if
+        // the proxy had been live and went away. A real outage is still loud, two seconds later.
+        bool everLive = false;
         for (;;)
         {
             if (WaitForSingleObject(g_etw.stopEvt, 0) == WAIT_OBJECT_0) return 0;
@@ -1454,19 +1470,29 @@ static DWORD WINAPI EtwIpcThread(LPVOID)
                                       OPEN_EXISTING, 0, nullptr);
             if (pipe == INVALID_HANDLE_VALUE)
             {
-                InterlockedExchange(&g_etw.state, ETW_STATE_DOWN);
+                InterlockedExchange(&g_etw.state, ETW_STATE_DOWN);   // the state is the truth either way
                 if (!loggedDown)   // once per outage, not once per attempt
                 {
-                    BLogW(L"ETW IPC proxy pipe absent (%lu) - tier down, DB fallback (reconnect pending)",
-                         GetLastError());
-                    loggedDown = true;
+                    const DWORD err = GetLastError();
+                    if (!everLive && idx == 0)
+                        // The cold start: not an anomaly, and deliberately worded so the sweep's
+                        // fallback matcher does not read it as one. If the proxy really is not coming,
+                        // the next attempt (2 s) takes the WARNING branch below.
+                        BLog(L"ETW IPC proxy pipe not up yet (%lu) - the gui-agent launches it; the listing is "
+                             L"served from the notification DB until it connects, retry in %lu ms",
+                             err, bo[0]);
+                    else
+                    {
+                        BLogW(L"ETW IPC proxy pipe absent (%lu) - tier down, DB fallback (reconnect pending)", err);
+                        loggedDown = true;
+                    }
                 }
                 if (WaitForSingleObject(g_etw.stopEvt, bo[idx < 3 ? idx : 3]) == WAIT_OBJECT_0)
                     return 0;
                 idx++;
                 continue;
             }
-            idx = 0; loggedDown = false;
+            idx = 0; loggedDown = false; everLive = true;
             ULONG spid = 0;
             GetNamedPipeServerProcessId(pipe, &spid);
             InterlockedExchange(&g_etw.state, ETW_STATE_LIVE);
