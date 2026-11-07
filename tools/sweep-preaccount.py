@@ -80,7 +80,13 @@ def _load_sweep():
 # already documents at its own line 4021.
 MACRO_LEVEL = {
     "LogError": "E", "LogWarning": "W", "LogInfo": "I", "LogDebug": "D", "LogVerbose": "D",
-    "BLogW": "W", "BLog": "I",
+    # BLogE WAS MISSING UNTIL 2026-11-07, and it is notifhost's ERROR emitter: 26 call sites against
+    # BLogW's 16, so the louder half of that module's complaints was the invisible half. MACRO_RE
+    # sorts by length descending, so "BLogE" is tried before "BLog" and the longer name wins; adding
+    # it the other way round would have matched `BLog` and read the level as Info. The same omission
+    # in tools/msg-audit.py's C_CALL read 42 of notifhost's complaints as zero while counting its 152
+    # informational BLog lines as complaints - inverted on both sides, found the same day.
+    "BLogE": "E", "BLogW": "W", "BLog": "I",
     "win_perror": "E", "win_perror2": "E",
     # THE GOING-DOWN DEGRADE MACROS (agent/gui-agent/lifecycle.h, agent ef3ce2b). The letter here is
     # the LOUD branch; the other branch is handled below, because one site emits TWO possible lines.
@@ -97,6 +103,9 @@ MACRO_LEVEL = {
 # failing all three cells of 20261018-010748 (SWEEPGATEVERDICTUNSTABLE). Both keys are checked.
 DEGRADE_MACROS = ("LogErrorUnlessGoingDown", "LogWarningUnlessGoingDown")
 MACRO_RE = re.compile(r"\b(" + "|".join(sorted(MACRO_LEVEL, key=len, reverse=True)) + r")\s*\(")
+# The extensions in which a MACRO_LEVEL name can be a CALL rather than a mention. See the measured
+# incident at the hunk scan in diff_log_calls().
+C_SOURCE = (".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hxx")
 LITERAL_RE = re.compile(r'L?"((?:[^"\\]|\\.)*)"')
 # C CONCATENATES ADJACENT LITERALS, AND SO MUST THIS. Found while validating against 4e0e3e29..adc2b202:
 # notifhost's ETW line is written as two `L"..."` pieces on two source lines, so a per-line scan produced
@@ -274,23 +283,42 @@ def added_log_literals(since, head, repo=None, prefix=""):
     # submodule the diff says `gui-agent/capture.c` while the table says `agent/gui-agent/`, and
     # without it every agent path would map to no family at all. The line reported is the literal's
     # own, derived from its offset inside the joined hunk (see below).
-    found, hunks = [], []
+    # ONLY A FILE THAT COMPILES THESE MACROS CAN CALL ONE. Every name in MACRO_LEVEL is a C/C++
+    # emitter, so a .py, .sh, .ps1, .json or .md file that merely NAMES one is prose about the macro,
+    # never a call site - and this file and tools/msg-audit.py both discuss them at length. Measured
+    # 2026-11-07 on HEAD~1..HEAD (d0814c66..6f082720, the commit that taught this checker the degrade
+    # macros): the diff touched only tools/sweep-preaccount.py, the substring test below matched the
+    # macro name inside a COMMENT, the tail read was demanded, and `agent/gui-agent/lifecycle.h` does
+    # not resolve in the PARENT repo because agent/ is a gitlink - so the leg exited 2, an INSTRUMENT
+    # failure, and campaign-preflight dies on a non-zero pre-account leg. A .py comment would have
+    # aborted a campaign at minute 0.
+    # This filter does NOT narrow the real coverage: PowerShell emitters (guest/*.ps1's Write-QwtLog,
+    # packaging/setup's Write-Log) are not in MACRO_LEVEL and were never seen by this checker. That
+    # gap is real and is recorded against the census, not closed here.
+    found, hunks, cur_ok = [], [], False
     for raw in out.stdout.splitlines():
         if raw.startswith("+++ b/"):
-            hunks.append([prefix + raw[6:], 0, "", []])
+            path = prefix + raw[6:]
+            cur_ok = path.endswith(C_SOURCE)
+            if cur_ok:
+                hunks.append([path, 0, "", []])
             continue
         if raw.startswith("@@"):
+            if not cur_ok:
+                continue
             m = re.match(r"@@ -\S+ \+(\d+)(?:,\d+)? @@\s*(.*)$", raw)
             if m and hunks:
                 fm = re.search(r"\b(\w+)\s*\(", m.group(2).strip())
                 hunks.append([hunks[-1][0], int(m.group(1)), fm.group(1) if fm else "", []])
             continue
-        if hunks and raw.startswith("+") and not raw.startswith("+++"):
+        if cur_ok and hunks and raw.startswith("+") and not raw.startswith("+++"):
             hunks[-1][3].append(raw[1:])
     # THE SUFFIX IS READ ONCE, AND ONLY WHEN A DEGRADE MACRO IS ACTUALLY IN THE DIFF: a tree with no
     # going-down site has no lifecycle.h to read, and demanding one there would turn every other
-    # tree's clean leg into an instrument failure.
-    tail = goingdown_tail(repo, head) if any(m in out.stdout for m in DEGRADE_MACROS) else None
+    # tree's clean leg into an instrument failure. The test runs over the SCANNED hunks, not the raw
+    # diff, so it answers the question the sentence above claims to ask.
+    scanned = "\n".join("\n".join(h[3]) for h in hunks)
+    tail = goingdown_tail(repo, head) if any(m in scanned for m in DEGRADE_MACROS) else None
     for path, lineno, func, lines in hunks:
         if not lines:
             continue
@@ -390,8 +418,18 @@ def cmd_check(a):
         print("PREACCOUNT INSTRUMENT: %s" % e)
         return 2
     accounted, unaccounted, unreadable = preaccount_report(baseline, literals, sweep)
+    # RESOLVE BOTH ENDS FOR THE LABEL, because `[:12]` on a revision EXPRESSION truncates the part
+    # that makes it one: `ef3ce2b5e0ef^` printed as `ef3ce2b5e0ef`, so a real parent..child range
+    # read exactly like the empty `X..X` the preflight legitimately prints when the baseline is
+    # stamped at the package's own commit. Measured 2026-11-07: the diff had used the caret and found
+    # 10 literals, while the label said the range was a single commit. An instrument whose label does
+    # not name what it measured is how a reader talks themselves out of a real number.
+    def _short(rev):
+        out = subprocess.run(["git", "-C", a.repo or ROOT, "rev-parse", "--short=12", rev],
+                             capture_output=True, text=True)
+        return out.stdout.strip() if out.returncode == 0 and out.stdout.strip() else rev[:12]
     print("PREACCOUNT %s..%s: %d log literal(s) added, %d accounted, %d UNACCOUNTED, %d unreadable"
-          % (since[:12], a.head[:12], len(literals), len(accounted), len(unaccounted),
+          % (_short(since), _short(a.head), len(literals), len(accounted), len(unaccounted),
              len(unreadable)))
     for path, lineno, func, level, run, fam in unaccounted:
         print("  UNACCOUNTED %s:%d  %s|%s|%s: %s" % (path, lineno, fam, level, func, run[:100]))
