@@ -160,8 +160,8 @@ def added_log_literals(since, head, repo=None, prefix=""):
     # literals: a log call is routinely written across several source lines. `prefix` makes a
     # submodule's paths repo-root-relative, so LOGFILE_BY_PATH stays keyed one way - in the agent
     # submodule the diff says `gui-agent/capture.c` while the table says `agent/gui-agent/`, and
-    # without it every agent path would map to no family at all. The line number reported is the
-    # hunk's first, which is honest about the precision this has.
+    # without it every agent path would map to no family at all. The line reported is the literal's
+    # own, derived from its offset inside the joined hunk (see below).
     found, hunks = [], []
     for raw in out.stdout.splitlines():
         if raw.startswith("+++ b/"):
@@ -179,10 +179,19 @@ def added_log_literals(since, head, repo=None, prefix=""):
         if not lines:
             continue
         text = " ".join(lines)
+        # WHERE each joined line begins in `text`, so a macro's offset names the line it sits ON.
+        # Reporting the hunk's FIRST line instead sent the reader 38 lines away from the literal:
+        # measured on agent/gui-agent/capture.c, where QGADDARECREATE at 689 was refused as 651. A
+        # refusal that names a file:line the reader then cannot find is worse than naming neither.
+        starts, pos = [], 0
+        for ln in lines:
+            starts.append(pos)
+            pos += len(ln) + 1
         for mm in MACRO_RE.finditer(text):
             run = LITERAL_RUN_RE.match(text[mm.end():].lstrip())
             fmt = "".join(LITERAL_RE.findall(run.group(1))) if run else ""
-            found.append((path, lineno, func, MACRO_LEVEL[mm.group(1)], fmt or None))
+            at = lineno + sum(1 for s in starts if s <= mm.start()) - 1
+            found.append((path, at, func, MACRO_LEVEL[mm.group(1)], fmt or None))
     return found
 
 
