@@ -247,6 +247,35 @@ smooth"*, and - of the other components - *"same of other components."*
    not SYSTEM (`main.c:4669` launches it "inside the interactive user session"; `main.c:6558` "uses the SESSION
    token"), so it cannot open a SYSTEM-only object at all. Widening the DACL is the gate on that scope and it
    has not been asked for. Until then those sites behave exactly as before.
+
+   **RUNNER: NONE YET. L12 is DESIGNED AND OWED, and the probe on its own is not a runner.**
+   `guest/sup-goingdown-latch.ps1` (2026-11-07) is the in-guest half: it publishes the latch from a child
+   that EXITS before the guard reads it, ends the agent, reads the refusal, releases, and has a `-Control`
+   arm that performs the identical kill with no latch published. Its instrument is validated before the
+   stimulus by `pre_open`, which must read `0xC0000034`, and its four graded tokens all have producers in
+   `watchdog/watchdog.c`. None of that matters yet, because **nothing in the tree calls the file** - grep
+   finds the name only inside itself. The gap moved from "no script" to "no caller"; item 2b is still
+   unproven on a guest.
+   What the harness step owes, so it is built once and not improvised:
+   * **It takes the object identity from the header, never a default.** The four mandatory parameters come
+     from `QGA_GOINGDOWN_NTNAME_FMT`, `QGA_GOINGDOWN_SDDL`, `QGA_EVENT_ALL_ACCESS` and `QGA_OBJ_PERMANENT`.
+     Two traps: the format string carries `%lu`, which the harness translates to `{0}`; and
+     `QGA_GOINGDOWN_SDDL` is defined **as** `QGA_LIFECYCLE_SDDL`, so an extractor that reads its literal
+     value gets a macro token instead of the SDDL and would hand the probe an identity the product never
+     uses - exactly the rename case the mandatory parameters exist to prevent.
+   * **No new SYSTEM mechanism.** The latch DACL is SYSTEM-only, and `qubes.VMShell` on this testbed already
+     runs as `NT AUTHORITY\SYSTEM` by a dom0 policy line, landing in the interactive session. So the
+     existing `q run` path is correct as it stands; a scheduled task would run as the interactive user and
+     report "not held" for a latch that IS held.
+   * **It runs AFTER L8 and L11, never before.** This cell ends an agent, so it produces a death record, one
+     dom0 notification and a death-number increment, and those two cells assert DELTAS on exactly those.
+   * **Grading order is terminal, then unproven stimulus, then the product.** No `LogDir`, a kill that did
+     not land, a privilege that could not be enabled or a `pre_open` that is not `0xC0000034` are INVALID -
+     the cell measured nothing and claims nothing. Only then: an agent appearing while the latch is held, no
+     adopt line at all, or no agent after the release are FAILs, and `stuck_lines` must be 0 or the launch
+     being graded is the watchdog own recovery rather than the release.
+   * **The control arm is not optional.** Without it a refusal proves nothing, because an agent that fails
+     to return for its own reasons reads exactly like a refusal.
 3. **Nothing of ours relaunches anything.** The agent keeps **no** relaunch loop: each helper is launched once
    per agent life, through its scheduled task, and the task's own `RestartOnFailure` is its only relauncher.
    An unexpected agent death makes the watchdog **end itself** with a service-specific failure code, so the
