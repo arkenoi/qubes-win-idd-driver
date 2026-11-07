@@ -452,6 +452,17 @@ _pa_ahead=$(git rev-parse --verify --quiet "$PKGSHA:agent")
 $PREACCOUNT check --baseline "$SWEEP_BASELINE" --since "$_pa_abase" --head "$_pa_ahead" \
             --repo agent --path-prefix agent/ \
     || die 13 "the sweep has not been told about every log line this package adds (agent submodule) - the lines are named above"
+# CORE-AGENT IS THE OTHER SUBMODULE AND WAS NOT CHECKED AT ALL UNTIL 2026-11-07. Two legs covered
+# the parent and agent/, and neither can see inside it: c766a4f degraded two qrexec-wrapper lines to
+# Info and both legs reported a clean zero. Derived from the stamped parent commit exactly as the
+# agent leg is, so the three ranges can never disagree about which product version is meant.
+_pa_cbase=$(git rev-parse --verify --quiet "$_pa_base:core-agent")
+_pa_chead=$(git rev-parse --verify --quiet "$PKGSHA:core-agent")
+{ [ -n "$_pa_cbase" ] && [ -n "$_pa_chead" ]; } \
+    || die 13 "could not resolve the core-agent submodule sha at ${_pa_base:0:8} or ${PKGSHA:0:8} - an unchecked tree is not a clean one"
+$PREACCOUNT check --baseline "$SWEEP_BASELINE" --since "$_pa_cbase" --head "$_pa_chead" \
+            --repo core-agent --path-prefix core-agent/ \
+    || die 13 "the sweep has not been told about every log line this package adds (core-agent submodule) - the lines are named above"
 log "every log line this package adds is accounted for in $SWEEP_BASELINE"
 
 log "PREFLIGHT CLEAR: package $PKG, commit ${PKGSHA:0:8}"

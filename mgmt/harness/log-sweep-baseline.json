@@ -132,6 +132,30 @@
    "max_per_boot": 10,
    "issue": "findings/issues.md TOASTBANNERLOSTONDIRECTPATH",
    "reason": "An instrument line, part of the fix in agent 9083d8a: mgmt/harness/toast-hold-grade.py KEYS on QGATOASTIDENT, and this is the line that explains a hold which outlived the pacing interval instead of being released as a flyout. It fires when a card-less look does not count because the window changed size since the first look, i.e. a banner still building rather than a flyout, so the look becomes the first of a new pair. Jev class_qgatoastident expected 0.99. max_per_boot 10 is NOT a Jev verdict (the bounds question returned 0.49, under floor): it is the measured ceiling of this line's closest sibling in this file, `agent|I|ToastHoldDecide: QGATOASTHOLD ... state=hold reason=no-identity` at 10, whose cadence is the same per-look one; the other two ToastHoldDecide INFO rows sit at 4 and 5. THE REGEX STOPS AT `hwnd=`: the sweep matches a row against the NORMALISED rendered line (`hwnd=0xH`) while tools/sweep-preaccount.py can only match the format string (`hwnd=0x%x`), so a row has to be anchored on the fixed text BEFORE the first specifier to be true for both. Written as `0xH` first, it accounted for nothing and the checker said so."
+  },
+  {
+   "regex": "^agent\\|[IWE]\\|.*\\[QGAGOINGDOWN expected: a going-down was already in progress\\]",
+   "status": "expected",
+   "issue": "ADR-supervision 7 (docs/ADR-supervision.md:636, ACCEPTED 2026-10-24)",
+   "reason": "The suffix the degrade macros append (agent/gui-agent/lifecycle.h, agent ef3ce2b). Emitted ONLY while LifecycleGoingDown() holds - QgaGoingDownSilences over the section 7 predicate QgaDesliceTeardownExcused - so its presence IS the evidence that the condition it excuses was requested. Eight sites route through it today (QGANOTIFPID, QGASTARTDISMISS, QGAHOLDSTARVED, `vchan disconnected`, QGACAPDEAD, A6EXIT, qdb_open, qubesdb connection lost), Jev 0.75 to 0.92 per site, and tail_declaration_status expected 0.95 on this declaration. DECLARED LEVEL-AGNOSTIC, ON PURPOSE AND BY PRECEDENT: the A6LEAK row below records what a level-keyed declaration costs when the level moves - fc94490 lowered that line to Info, its two level-W rows stopped matching, and all three cells of campaign 20261018-010748 failed (SWEEPGATEVERDICTUNSTABLE). NO max_per_boot, because a teardown emits these in bursts (main.c:1621 fired 25 times inside one) and a ceiling would manufacture ROSE reports. THE LOUD BRANCH OF EVERY ONE OF THESE SITES IS UNTOUCHED AND UNDECLARED: ADR-supervision 1 keeps a complaint nobody requested a major error, and this row cannot match it - the suffix is absent there."
+  },
+  {
+   "regex": "^agent\\|[IWE]\\|[^|]*QGADDASTOPPEDTEARDOWN duplication lost",
+   "status": "unsettled",
+   "issue": "GOINGDOWNCOMPLAINTSOWEDAVERDICT",
+   "reason": "capture.c:1922 and 2113 (agent ef3ce2b), replacing two bespoke `if (capture->stop)` blocks the owner rejected. Jev stopped_teardown_status returned expected 0.42 - UNDER THE 0.70 FLOOR, which is no verdict - so this is recorded as owed rather than excused: the two lines report a REAL loss (the duplication is gone and nothing recreates it) that happens to be the correct outcome at a going-down, and whether those are the same fact is what the call could not settle. `unsettled` is this file's own encoding of an under-floor answer (baseline-init writes it verbatim: \"Jev: <choice> <conf> on the corpus (below 0.5) - a human decision is owed\"), and at level I it is counted by no gate: signatures_unclassified reads E and W only (log-sweep.py:4024). Level-agnostic for the same reason as the row above."
+  },
+  {
+   "regex": "^qrexec\\|[IWE]\\|.*QGAGOINGDOWN interactive logon wait abandoned",
+   "status": "expected",
+   "issue": "ADR-supervision 7 (docs/ADR-supervision.md:636, ACCEPTED 2026-10-24)",
+   "reason": "core-agent/src/qrexec-wrapper/qrexec-wrapper.c:476 (core-agent c766a4f), degraded in place rather than routed, because the stop IS the branch's condition - the line sits inside `WaitForSingleObject(g_StopEvent) == WAIT_OBJECT_0`, so there is nothing to read at runtime and the level is the whole fix. Jev degrade_when_going_down 0.87. This tree had never been pre-accounted at all: the preaccount pathspec named only the parent's directory names, so a diff taken inside this submodule filtered to zero lines, and campaign-preflight.sh ran no core-agent leg."
+  },
+  {
+   "regex": "^qrexec\\|[IWE]\\|.*QGAGOINGDOWN the vchan is being closed while",
+   "status": "expected",
+   "issue": "ADR-supervision 7 (docs/ADR-supervision.md:636, ACCEPTED 2026-10-24)",
+   "reason": "core-agent/src/qrexec-wrapper/qrexec-wrapper.c:738 (core-agent c766a4f), inside `if (g_VchanClosing)` - our own close, which nobody else asked for. Jev degrade_when_going_down 0.96, the highest in the audit. THE SIBLING THREE LINES ABOVE IT IS DELIBERATELY STILL LOUD AND STILL UNDECLARED: there the PEER closed the vchan, which this side did not request, and Jev returned insufficient_evidence 0.51 on it. That pair is the evidence this is not a blanket rule."
   }
  ],
  "signatures": {
@@ -4146,5 +4170,5 @@
   }
  },
  "version": 1,
- "preaccounted_at": "4291962930521074ce8c1323939b5cd2e69cf09c"
+ "preaccounted_at": "36a82f01e140ed4546d838eef7cdc6631607c70c"
 }

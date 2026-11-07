@@ -82,7 +82,20 @@ MACRO_LEVEL = {
     "LogError": "E", "LogWarning": "W", "LogInfo": "I", "LogDebug": "D", "LogVerbose": "D",
     "BLogW": "W", "BLog": "I",
     "win_perror": "E", "win_perror2": "E",
+    # THE GOING-DOWN DEGRADE MACROS (agent/gui-agent/lifecycle.h, agent ef3ce2b). The letter here is
+    # the LOUD branch; the other branch is handled below, because one site emits TWO possible lines.
+    # Without these two rows `MACRO_RE` matched neither - `\bLogError\s*\(` cannot match
+    # `LogErrorUnlessGoingDown(` - so the eight sites the going-down fix routes were invisible to
+    # this checker: it reported "2 log literal(s) added" on a commit that touched ten.
+    "LogErrorUnlessGoingDown": "E", "LogWarningUnlessGoingDown": "W",
 }
+# EACH OF THESE EMITS TWO LINES, AND THE SECOND IS THE WHOLE POINT OF THE MACRO: the same text at
+# LOG_LEVEL_INFO with a fixed suffix, whenever a going-down already holds. The sweep keys on
+# family|LEVEL|text, so the degraded line is a DIFFERENT KEY from the loud one - which is precisely
+# the failure this baseline already records against A6LEAK, where fc94490 lowered one line to Info
+# and the two level-W rows that declared it stopped matching, re-judging the line per campaign and
+# failing all three cells of 20261018-010748 (SWEEPGATEVERDICTUNSTABLE). Both keys are checked.
+DEGRADE_MACROS = ("LogErrorUnlessGoingDown", "LogWarningUnlessGoingDown")
 MACRO_RE = re.compile(r"\b(" + "|".join(sorted(MACRO_LEVEL, key=len, reverse=True)) + r")\s*\(")
 LITERAL_RE = re.compile(r'L?"((?:[^"\\]|\\.)*)"')
 # C CONCATENATES ADJACENT LITERALS, AND SO MUST THIS. Found while validating against 4e0e3e29..adc2b202:
@@ -130,12 +143,104 @@ def family_for(path, sweep):
     return None
 
 
+def literal_runs(fmt):
+    """Every stretch of FIXED text in a format string, in order."""
+    return [p.strip() for p in CONVERSION_RE.split(fmt) if p and p.strip()]
+
+
 def longest_literal_run(fmt):
     """The longest stretch of FIXED text in a format string - all a source-derived check can honestly
     compare, and in this project also the most distinctive part of the line, because that is where the
     QGA* tag sits."""
-    parts = [p.strip() for p in CONVERSION_RE.split(fmt) if p and p.strip()]
+    parts = literal_runs(fmt)
     return max(parts, key=len) if parts else ""
+
+
+def log_calls_in(text, tail=None):
+    """Every log macro call in a block of C, as (offset, level, format-or-None).
+
+    ONE extractor, used by the diff scan AND by the `since` scan below, because two spellings of
+    this would be free to disagree about what a site emits - and then a line present at `since`
+    would read as added, or an added one as present. `tail` is the degrade suffix: given, each
+    going-down site also yields its INFO twin; None, only the loud branch."""
+    out = []
+    for mm in MACRO_RE.finditer(text):
+        name = mm.group(1)
+        # A MACRO'S OWN #define IS NOT AN EMITTER. lifecycle.h names both degrade macros in their
+        # definitions, where there is no format literal to find, and they were reported as two
+        # UNREADABLE lines - a refusal with nothing wrong behind it, which is how a check like this
+        # becomes something people pass by editing the baseline.
+        if text[text.rfind("\n", 0, mm.start()) + 1:mm.start()].lstrip().startswith("#"):
+            continue
+        rest = text[mm.end():]
+        # THE DEGRADE MACROS TAKE THE STOP FLAG FIRST, so the format sits past the first comma.
+        # Matching a literal run straight after `(` reads `FALSE, "QGA...` as no literal at all,
+        # which turned every one of the eight routed sites into UNREADABLE on first run.
+        if name in DEGRADE_MACROS:
+            comma = rest.find(",")
+            rest = rest[comma + 1:] if comma >= 0 else rest
+        run = LITERAL_RUN_RE.match(rest.lstrip())
+        fmt = "".join(LITERAL_RE.findall(run.group(1))) if run else ""
+        out.append((mm.start(), MACRO_LEVEL[name], fmt or None))
+        if name in DEGRADE_MACROS and fmt and tail is not None:
+            out.append((mm.start(), "I", fmt + tail))
+    return out
+
+
+def literal_keys_at(rev, path, repo, prefix, tail):
+    """The (level, longest-fixed-run) pairs a file ALREADY HELD at `rev`.
+
+    THE DIFF CANNOT TELL AN ADDED LINE FROM A MOVED CALL. Measured 2026-11-07 on
+    154c573cfa70..ef3ce2b5e0ef: routing eight sites through a degrade macro rewrote each call's
+    first line, so all eight loud E/W branches - same text, same level, same function, present and
+    undeclared for months - came back as this change's additions. A checker whose refusal names a
+    line the change did not add teaches its reader to edit the baseline to shut it up, which is the
+    opposite of what it is for. A file absent at `rev` returns the empty set: then every line in it
+    really is new."""
+    rel = path[len(prefix):] if prefix and path.startswith(prefix) else path
+    out = subprocess.run(["git", "-C", repo or ROOT, "show", "%s:%s" % (rev, rel)],
+                         capture_output=True, text=True)
+    if out.returncode != 0:
+        return set()
+    # EVERY run, not just the longest, BECAUSE THE DIFF SEES ONLY THE LINES IT TOUCHED. A call
+    # written across four source lines whose FIRST line was edited yields a format cut off at the
+    # first line's end, and the longest run of that fragment is a different string from the longest
+    # run of the whole call - measured on QGASTARTDISMISS, where the fragment's `refused - foreground
+    # held by pid` lost to `; the hidden menu may take clicks`'s one extra character in the full
+    # format, so an unchanged line was still reported as added. Holding every run makes the
+    # comparison independent of where the diff happened to stop.
+    keys = set()
+    for _, lvl, fmt in log_calls_in(out.stdout, tail):
+        for part in literal_runs(fmt or ""):
+            keys.add((lvl, part))
+    return keys
+
+
+def goingdown_tail(repo, head):
+    """The fixed suffix the degrade macros append, READ OUT OF THE HEADER THAT DEFINES IT, AT `head`.
+
+    It is not copied here. A second spelling of this string is the defect this project keeps paying
+    for - the same reason normalize() and FAMILY_BY_NAME are imported rather than duplicated - and a
+    copy would go stale the first time the wording changes, silently accounting a key no build emits.
+    Read with `git show` and not off disk, because the checkout is not the revision under test: the
+    preflight checks a PACKAGE's sha, and a tail read from the working tree would describe a build
+    nobody is about to run. Raises when it cannot be read - a suffix this cannot see is not a suffix
+    that is absent, and cmd_check turns a raise into exit 2, which is never a pass."""
+    tried = []
+    for rel in ("gui-agent/lifecycle.h", "agent/gui-agent/lifecycle.h"):
+        spec = "%s:%s" % (head, rel)
+        tried.append(spec)
+        out = subprocess.run(["git", "-C", repo or ROOT, "show", spec],
+                             capture_output=True, text=True)
+        if out.returncode != 0:
+            continue
+        m = re.search(r'#\s*define\s+QGA_GOINGDOWN_TAIL\s+L"((?:[^"\\]|\\.)*)"', out.stdout)
+        if m:
+            return m.group(1)
+        raise RuntimeError("%s defines no QGA_GOINGDOWN_TAIL; the degraded form of every "
+                           "LogErrorUnlessGoingDown line is then unknowable from source" % spec)
+    raise RuntimeError("none of %s exists, yet a going-down degrade macro is used in this diff"
+                       % ", ".join(tried))
 
 
 def added_log_literals(since, head, repo=None, prefix=""):
@@ -152,7 +257,14 @@ def added_log_literals(since, head, repo=None, prefix=""):
     cmd = ["git", "-C", repo or ROOT, "diff", "--unified=0", "--no-color", "--no-ext-diff",
            "%s..%s" % (since, head), "--",
            "agent", "driver", "core-agent", "tools", "guest", "packaging",
-           "gui-agent", "watchdog", "include"]
+           "gui-agent", "watchdog", "include",
+           # AND `src`, BECAUSE core-agent IS THE OTHER SUBMODULE AND ITS WHOLE TREE LIVES UNDER IT.
+           # Measured 2026-11-07 on 7760000cba34..c766a4f2895e, the commit that degraded two
+           # qrexec-wrapper lines: with `--repo core-agent` given correctly, this pathspec filtered
+           # the diff to ZERO LINES, so the leg reported "0 log literal(s) added" on a diff that
+           # adds two. A pathspec naming only the parent's directory names cannot match a path
+           # inside a submodule, which is rooted at the submodule.
+           "src"]
     out = subprocess.run(cmd, capture_output=True, text=True)
     if out.returncode != 0:
         raise RuntimeError("git diff %s..%s failed: %s" % (since, head, (out.stderr or "").strip()))
@@ -175,10 +287,14 @@ def added_log_literals(since, head, repo=None, prefix=""):
             continue
         if hunks and raw.startswith("+") and not raw.startswith("+++"):
             hunks[-1][3].append(raw[1:])
+    # THE SUFFIX IS READ ONCE, AND ONLY WHEN A DEGRADE MACRO IS ACTUALLY IN THE DIFF: a tree with no
+    # going-down site has no lifecycle.h to read, and demanding one there would turn every other
+    # tree's clean leg into an instrument failure.
+    tail = goingdown_tail(repo, head) if any(m in out.stdout for m in DEGRADE_MACROS) else None
     for path, lineno, func, lines in hunks:
         if not lines:
             continue
-        text = " ".join(lines)
+        text = "\n".join(lines)
         # WHERE each joined line begins in `text`, so a macro's offset names the line it sits ON.
         # Reporting the hunk's FIRST line instead sent the reader 38 lines away from the literal:
         # measured on agent/gui-agent/capture.c, where QGADDARECREATE at 689 was refused as 651. A
@@ -187,12 +303,28 @@ def added_log_literals(since, head, repo=None, prefix=""):
         for ln in lines:
             starts.append(pos)
             pos += len(ln) + 1
-        for mm in MACRO_RE.finditer(text):
-            run = LITERAL_RUN_RE.match(text[mm.end():].lstrip())
-            fmt = "".join(LITERAL_RE.findall(run.group(1))) if run else ""
-            at = lineno + sum(1 for s in starts if s <= mm.start()) - 1
-            found.append((path, at, func, MACRO_LEVEL[mm.group(1)], fmt or None))
-    return found
+        for off, level, fmt in log_calls_in(text, tail):
+            at = lineno + sum(1 for s in starts if s <= off) - 1
+            found.append((path, at, func, level, fmt))
+    # AND NOW DROP WHAT WAS ALREADY THERE, on (level, fixed run) - the pair the sweep's own key is
+    # built from: if the sweep could not have told the two apart, neither may this.
+    prior = {}
+    for path in {e[0] for e in found}:
+        prior[path] = literal_keys_at(since, path, repo, prefix, tail)
+    kept = []
+    for e in found:
+        run = longest_literal_run(e[4] or "")
+        # CONTAINED IN a prior run, not equal to one, BECAUSE THE DIFF CAN CUT A RUN IN HALF. The
+        # QGANOTIFPID call's first line ends mid-sentence at `...notifhost.exe from the `, so the
+        # fragment's longest run is a PREFIX of the whole call's `...from the install dir in
+        # session` and no equality could ever hold. Bounded by the same 8 characters that make a run
+        # readable at all, and by the level, so this cannot swallow a short coincidence - and the
+        # direction of the remaining error is the one this file already accepts: it may pass a line
+        # whose run matches something, and it never silently drops one it could not read.
+        if len(run) >= 8 and any(lvl == e[3] and run in part for lvl, part in prior[e[0]]):
+            continue
+        kept.append(e)
+    return kept
 
 
 def preaccount_report(baseline, literals, sweep):
