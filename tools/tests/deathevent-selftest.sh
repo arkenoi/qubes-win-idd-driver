@@ -5,7 +5,7 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 AGENT="${AGENT_DIR:-$ROOT/agent}"
-UTILS_INC="${WINDOWS_UTILS_INC:-$ROOT/upstream/ro/qubes-windows-utils/include}"
+UTILS_INC="${WINDOWS_UTILS_INC:-$ROOT/winutils/include}"
 STUB="$ROOT/tools/tests/win32stub"
 OUT="${DEATHEVENT_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/deathevent-selftest-XXXXXX")}"
 mkdir -p "$OUT"

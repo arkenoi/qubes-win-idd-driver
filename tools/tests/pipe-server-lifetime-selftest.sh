@@ -1,78 +1,34 @@
 #!/bin/bash
-# QpsDestroy cannot free a pipe server a caller's threads can still reach - the UAF patch holds.
+# QpsDestroy cannot free a pipe server a caller's threads can still reach - the lifetime fix in winutils/src/pipe-server.c holds.
 # run: tools/tests/pipe-server-lifetime-selftest.sh
 # pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PATCHFILE="$ROOT/patches/windows-utils-pipe-server-lifetime.patch"
-MIRROR="$ROOT/upstream/ro/qubes-windows-utils"
-OUT="${PSLIFE_SELFTEST_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/pipe-server-lifetime-XXXXXX")}"
+WU="$ROOT/winutils"
 pass=0; fail=0
 ok(){ pass=$((pass+1)); echo "PASS  $*"; }
 bad(){ fail=$((fail+1)); echo "FAIL  $*"; }
-[ -f "$PATCHFILE" ] || { echo "FAIL  $PATCHFILE is missing - nothing ran (missing data fails)"; exit 2; }
-[ -d "$MIRROR" ]    || { echo "FAIL  $MIRROR is missing"; exit 2; }
+[ -f "$WU/src/pipe-server.c" ] || { echo "FAIL  $WU/src/pipe-server.c is missing (is the winutils submodule checked out?) - nothing ran (missing data fails)"; exit 2; }
 
-# ---- 1. written against the ref CI actually clones ---------------------------------------------
-ref=$(command grep -oE 'WINDOWS_UTILS_REF: *[^ ]+' "$ROOT/.github/workflows/build.yml" | head -1 | awk '{print $2}')
-mirror_ver=$(tr -d ' \r\n' < "$MIRROR/version" 2>/dev/null)
-if [ -n "$ref" ] && [ -n "$mirror_ver" ] && [ "${ref#v}" = "${mirror_ver#v}" ]; then
-  ok "ref_matches_mirror: written against $mirror_ver, which is WINDOWS_UTILS_REF ($ref)"
-else
-  bad "ref_matches_mirror: WINDOWS_UTILS_REF='$ref' but the mirror says '$mirror_ver'"
-fi
+SRC="$WU/src/pipe-server.c"
 
-# ---- 2. applies to a pristine copy, and alongside every other patch in CI ORDER ----------------
-# `patch`, not `git apply`: this runs in a scratch dir that may sit under another git worktree.
-mkdir -p "$OUT/solo" && cp -r "$MIRROR"/. "$OUT/solo/"
-if ( cd "$OUT/solo" && patch -p1 --dry-run -i "$PATCHFILE" >/dev/null 2>&1 ); then
-  ok "applies: dry run succeeds against a pristine mirror"
-else
-  bad "applies: dry run FAILED against a pristine mirror"
-fi
-
-# The order is read OUT OF build.yml, so a reordering there cannot leave this test asserting a
-# stack CI no longer applies.
-mapfile -t ORDER < <(command grep -oE 'patches\\windows-utils-[a-z-]+\.patch' "$ROOT/.github/workflows/build.yml" \
-                     | sed 's/.*windows-utils-//; s/\.patch//')
-mkdir -p "$OUT/stack" && cp -r "$MIRROR"/. "$OUT/stack/"
-stack_rc=0; applied=0
-for p in "${ORDER[@]}"; do
-  ( cd "$OUT/stack" && patch -p1 -i "$ROOT/patches/windows-utils-$p.patch" >>"$OUT/stack.log" 2>&1 ) || stack_rc=1
-  applied=$((applied+1))
-done
-if [ "$stack_rc" -eq 0 ] && [ "$applied" -ge 6 ]; then
-  ok "coexists: all $applied windows-utils patches apply in build.yml's own order"
-else
-  bad "coexists: the stack failed (rc=$stack_rc, applied=$applied) - see $OUT/stack.log"
-fi
-
-SRC="$OUT/stack/src/pipe-server.c"
-PRISTINE="$MIRROR/src/pipe-server.c"
-[ -f "$SRC" ] || { echo "FAIL  the stacked source is missing - nothing below ran"; exit 2; }
-
-# ---- 3. the patched source carries every marker the build step asserts -------------------------
+# ---- 3. the shipped source carries the receipts and the funnel guard's own log line ---------------
 marker(){ # <label> <pattern>
-  if command grep -qE "$2" "$SRC"; then ok "marker: $1"; else bad "marker: $1 is MISSING from the patched source"; fi
-  if command grep -qE "$2" "$PRISTINE"; then bad "marker: $1 is present in UNPATCHED source too - it proves nothing"; else ok "marker: $1 absent before the patch"; fi
+  if command grep -qE "$2" "$SRC"; then ok "marker: $1"; else bad "marker: $1 is MISSING from the shipped source"; fi
 }
 marker "retain record"   'THE SERVER OBJECT IS DELIBERATELY RETAINED'
 marker "destroy receipt" 'QPSDESTROYED server object retained'
 marker "funnel guard"    'no client list to search'
 
-# ---- 4. the DEFECT is gone from QpsDestroy, and was really there before ------------------------
+# ---- 4. the DEFECT is gone from QpsDestroy -----------------------------------------------------
 # Scoped to the function body, not the file: free() and DeleteCriticalSection are legitimate
 # elsewhere (QpsReleaseClient frees a CLIENT and deletes the CLIENT's lock, which stays correct).
 destroy_body(){ awk '/^void QpsDestroy\(/,/^}/' "$1" | sed 's@//.*@@'; }
 for site in 'free(Server)' 'DeleteCriticalSection(&Server->Lock)' 'ZeroMemory(Server'; do
-  n_after=$(destroy_body "$SRC"      | command grep -cF "$site")
-  n_before=$(destroy_body "$PRISTINE" | command grep -cF "$site")
+  n_after=$(destroy_body "$SRC" | command grep -cF "$site")
   [ "$n_after" -eq 0 ] \
     && ok "defect: QpsDestroy no longer does $site" \
     || bad "defect: QpsDestroy still does $site ($n_after site(s)) - a caller's pointer is still invalidated"
-  [ "$n_before" -eq 1 ] \
-    && ok "defect: UNPATCHED QpsDestroy does $site (the check can fail)" \
-    || bad "defect: expected 1 '$site' in the mirror's QpsDestroy, found $n_before - the shape changed, re-read the source"
 done
 
 # The replacement must actually mark the server, and must NOT take the lock to do it.
@@ -156,7 +112,7 @@ done
 # by construction. Each exported Qps* that takes a live PIPE_SERVER must either reach the client
 # list through the funnel or carry the guard itself. QpsCreate takes an OUT parameter and QpsConnect
 # takes no server, so both are exempt - stated, not silently skipped.
-mapfile -t EXPORTED < <(command grep -A3 'WINDOWSUTILS_API' "$MIRROR/include/pipe-server.h" \
+mapfile -t EXPORTED < <(command grep -A3 'WINDOWSUTILS_API' "$WU/include/pipe-server.h" \
                         | command grep -oE '^(DWORD|void|PVOID) Qps[A-Za-z]+' | awk '{print $2}' | sort -u)
 [ "${#EXPORTED[@]}" -ge 8 ] \
   && ok "entry points: ${#EXPORTED[@]} exported from the header ($(printf '%s ' "${EXPORTED[@]}"))" \
@@ -182,17 +138,6 @@ for fn in "${EXPORTED[@]}"; do
   fi
 done
 
-# AND THE SAME PREDICATE MUST FAIL ON UNPATCHED SOURCE, or it is decoration: pristine QpsMainLoop
-# reads Server->PipeName with no guard anywhere above it.
-pb=$(awk '/^DWORD QpsMainLoop\(/,/^}/' "$PRISTINE" | sed 's@//.*@@')
-p_g=$(printf '%s\n' "$pb" | command grep -nE 'if \(!Server \|\| Server->Destroyed\)|if \(!Server\)' | head -1 | cut -d: -f1)
-p_d=$(printf '%s\n' "$pb" | command grep -nE 'Server->' | head -1 | cut -d: -f1)
-if [ -z "$p_g" ] && [ -n "$p_d" ]; then
-  ok "entry points: UNPATCHED QpsMainLoop dereferences Server-> at line $p_d with no guard (the check can fail)"
-else
-  bad "entry points: the mirror's QpsMainLoop already guards (guard '$p_g', deref '$p_d') - this leg is asserting nothing"
-fi
-
 dci=$(awk '/^static void QpsDisconnectClientInternal\(/,/^}/' "$SRC")
 if printf '%s' "$dci" | command grep -qF 'QpsGetClient(Server, ClientId)' \
    && printf '%s' "$dci" | command grep -qF 'if (!client)'; then
@@ -202,41 +147,18 @@ else
 fi
 
 # ---- 6. THE STOCK DAEMON RUNS OUR COPY ---------------------------------------------------------
-# This is why a windows-utils patch is a fix at all. Pristine QpsDisconnectClientInternal logs BOTH
-# "disconnecting, WriterExiting .." and "disconnected (%lld total)" at LogInfo;
-# windows-utils-percall-mechanics-debug.patch demotes the second to LogDebug. The 2026-10-26
-# capture holds 61 of the first and zero of the second, with no DEBUG line in the file - so the
-# code that wrote them is the patched copy. If that patch ever stops demoting the line, this
-# argument is gone and the register entry has to be re-read, so it is asserted here.
-pc="$ROOT/patches/windows-utils-percall-mechanics-debug.patch"
-if command grep -qE '^[-].*LogInfo\("\[%lld\] disconnected \(%lld total\)' "$pc" \
-   && command grep -qE '^[+].*LogDebug\("\[%lld\] disconnected \(%lld total\)' "$pc"; then
-  ok "runs our copy: the demotion that proves it is still in percall-mechanics-debug.patch"
+# This is why a windows-utils fix is a fix at all. Stock (v4.2.2) QpsDisconnectClientInternal logs BOTH
+# "disconnecting, WriterExiting .." and "disconnected (%lld total)" at LogInfo; our source demotes the
+# second to LogDebug. The 2026-10-26 capture holds 61 of the first and zero of the second, with no
+# DEBUG line in the file - so the code that wrote them is OUR copy. If the shipped source ever stops
+# demoting the line, this argument is gone and the register entry has to be re-read, so it is
+# asserted here.
+if command grep -qE '^[[:space:]]*LogDebug\("\[%lld\] disconnected \(%lld total\)' "$SRC" \
+   && ! command grep -qE '^[[:space:]]*LogInfo\("\[%lld\] disconnected \(%lld total\)' "$SRC"; then
+  ok "runs our copy: the shipped pipe-server.c logs the 'disconnected' line at Debug, not Info (stock logs it at Info)"
 else
-  bad "runs our copy: percall-mechanics-debug.patch no longer demotes the 'disconnected' line - the proof that the stock daemon runs this DLL needs re-establishing"
+  bad "runs our copy: winutils pipe-server.c no longer demotes the 'disconnected' line - the proof that the stock daemon runs this DLL needs re-establishing"
 fi
 
-# ---- 7. EVERY PRODUCER APPLIES EVERY PATCH -----------------------------------------------------
-# Two workflows clone windows-utils and each carries its own copy of the apply steps: build.yml and
-# qwt-full.yml, the one the RELEASE PACKAGE is built from. A patch applied by one and not the other
-# ships a package without the fix while every offline check here still passes.
-mapfile -t PRODUCERS < <(command grep -rl 'deps-src.windows-utils' "$ROOT/.github/workflows/" | sort)
-mapfile -t ALLPATCHES < <(ls "$ROOT"/patches/windows-utils-*.patch | xargs -n1 basename | sort)
-[ "${#PRODUCERS[@]}" -ge 2 ] \
-  && ok "producers: ${#PRODUCERS[@]} workflows clone windows-utils ($(printf '%s ' "${PRODUCERS[@]##*/}"))" \
-  || bad "producers: only ${#PRODUCERS[@]} found - if a producer was removed, re-check this test"
-missing=0
-for w in "${PRODUCERS[@]}"; do
-  for pf in "${ALLPATCHES[@]}"; do
-    command grep -q "$pf" "$w" || { bad "producers: $(basename "$w") never applies $pf"; missing=$((missing+1)); }
-  done
-done
-[ "$missing" -eq 0 ] && ok "producers: every windows-utils patch is applied by every producer (${#ALLPATCHES[@]} patches x ${#PRODUCERS[@]} workflows)"
-for w in "${PRODUCERS[@]}"; do
-  command grep -q 'pipe-server lifetime patch did not apply' "$w" \
-    && ok "producers: $(basename "$w") FAILS the build if this patch does not apply" \
-    || bad "producers: $(basename "$w") would let a failed apply pass silently"
-done
-
-echo "pipe-server-lifetime-selftest: $pass passed, $fail failed  (tree: $OUT)"
+echo "pipe-server-lifetime-selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

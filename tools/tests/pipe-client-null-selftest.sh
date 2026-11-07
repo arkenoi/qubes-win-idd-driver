@@ -1,81 +1,36 @@
 #!/bin/bash
-# The NULL-client patch guards both thread entries and the sibling site; every producer applies it.
+# The NULL-client guards cover both pipe-server thread entries and the sibling site, in the winutils source we ship.
 # run: tools/tests/pipe-client-null-selftest.sh
 # pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PATCHFILE="$ROOT/patches/windows-utils-pipe-client-null.patch"
-MIRROR="$ROOT/upstream/ro/qubes-windows-utils"
-OUT="${PIPENULL_SELFTEST_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/pipe-client-null-XXXXXX")}"
+WU="$ROOT/winutils"
 pass=0; fail=0
 ok(){ pass=$((pass+1)); echo "PASS  $*"; }
 bad(){ fail=$((fail+1)); echo "FAIL  $*"; }
-[ -f "$PATCHFILE" ] || { echo "FAIL  $PATCHFILE is missing - nothing ran (missing data fails)"; exit 2; }
-[ -d "$MIRROR" ]    || { echo "FAIL  $MIRROR is missing"; exit 2; }
+[ -f "$WU/src/pipe-server.c" ] || { echo "FAIL  $WU/src/pipe-server.c is missing (is the winutils submodule checked out?) - nothing ran (missing data fails)"; exit 2; }
 
-# ---- 1. written against the ref CI actually clones ---------------------------------------------
-ref=$(command grep -oE 'WINDOWS_UTILS_REF: *[^ ]+' "$ROOT/.github/workflows/build.yml" | head -1 | awk '{print $2}')
-mirror_ver=$(tr -d ' \r\n' < "$MIRROR/version" 2>/dev/null)
-if [ -n "$ref" ] && [ -n "$mirror_ver" ] && [ "${ref#v}" = "${mirror_ver#v}" ]; then
-  ok "ref_matches_mirror: written against $mirror_ver, which is WINDOWS_UTILS_REF ($ref)"
-else
-  bad "ref_matches_mirror: WINDOWS_UTILS_REF='$ref' but the mirror says '$mirror_ver'"
-fi
+SRC="$WU/src/pipe-server.c"
 
-# ---- 2. applies to a pristine copy, and alongside every other patch in CI ORDER ----------------
-# `patch`, not `git apply`: this runs inside a scratch directory that may sit under another git
-# worktree, and git then refuses with a path error about an unrelated repo.
-mkdir -p "$OUT/solo" && cp -r "$MIRROR"/. "$OUT/solo/"
-if ( cd "$OUT/solo" && patch -p1 --dry-run -i "$PATCHFILE" >/dev/null 2>&1 ); then
-  ok "applies: dry run succeeds against a pristine mirror"
-else
-  bad "applies: dry run FAILED against a pristine mirror"
-fi
-
-# The order is read OUT OF build.yml, so a reordering there cannot leave this test asserting a
-# stack CI no longer applies.
-mapfile -t ORDER < <(command grep -oE 'patches\\windows-utils-[a-z-]+\.patch' "$ROOT/.github/workflows/build.yml" \
-                     | sed 's/.*windows-utils-//; s/\.patch//')
-mkdir -p "$OUT/stack" && cp -r "$MIRROR"/. "$OUT/stack/"
-stack_rc=0; applied=0
-for p in "${ORDER[@]}"; do
-  ( cd "$OUT/stack" && patch -p1 -i "$ROOT/patches/windows-utils-$p.patch" >>"$OUT/stack.log" 2>&1 ) || stack_rc=1
-  applied=$((applied+1))
-done
-if [ "$stack_rc" -eq 0 ] && [ "$applied" -ge 6 ]; then
-  ok "coexists: all $applied windows-utils patches apply in build.yml's own order"
-else
-  bad "coexists: the stack failed (rc=$stack_rc, applied=$applied) - see $OUT/stack.log"
-fi
-
-SRC="$OUT/stack/src/pipe-server.c"
-PRISTINE="$MIRROR/src/pipe-server.c"
-
-# ---- 3. the patched source carries every marker the build step asserts -------------------------
-# If these drift apart, CI throws on a patch that applied correctly - or passes one that did nothing.
+# ---- 3. the shipped source carries the guards' own log lines -----------------------------------
 marker(){ # <label> <pattern>
-  if command grep -qE "$2" "$SRC"; then ok "marker: $1"; else bad "marker: $1 is MISSING from the patched source"; fi
-  # the same check against UNPATCHED source must NOT find it
-  if command grep -qE "$2" "$PRISTINE"; then bad "marker: $1 is present in UNPATCHED source too - it proves nothing"; else ok "marker: $1 absent before the patch"; fi
+  if command grep -qE "$2" "$SRC"; then ok "marker: $1"; else bad "marker: $1 is MISSING from the shipped source"; fi
 }
 marker "reader guard"  'not in the client list; reader thread exits'
 marker "writer guard"  'not in the client list; writer thread exits'
 marker "release guard" 'NOTHING TO RELEASE IF THE CLIENT IS ALREADY GONE'
 
-# ---- 4. the DEFECT is gone, and was really there before ----------------------------------------
+# ---- 4. the DEFECT is gone ---------------------------------------------------------------------
 # The defect's exact shape: the lookup, then a dereference on the next line, with nothing between.
 defect_re='QpsGetClient\(server, param->ClientId\);'
-# -E, not BRE: in a BRE `\(` is a GROUP, so this pattern matched nothing and BOTH counts came
-# back 0 - the "defect gone" check passed vacuously and only the must-fail-on-unpatched half of
-# this test exposed it. That is precisely what that half is for.
+# -E, not BRE: in a BRE `\(` is a GROUP, so this pattern matched nothing and the count came back 0 -
+# the "defect gone" check passed vacuously. So the lookups are COUNTED too: a pattern that finds none
+# proves nothing, and there are exactly two thread entries.
 n_bad_after=$(command grep -E -A1 "$defect_re" "$SRC" | command grep -c 'HANDLE pipe = client->')
-n_bad_before=$(command grep -E -A1 "$defect_re" "$PRISTINE" | command grep -c 'HANDLE pipe = client->')
-[ "$n_bad_after" -eq 0 ] \
-  && ok "defect: no thread entry dereferences the client on the line after the lookup" \
-  || bad "defect: $n_bad_after thread entry/entries still dereference the client immediately"
-[ "$n_bad_before" -eq 2 ] \
-  && ok "defect: UNPATCHED source has it in BOTH thread entries (the check can fail)" \
-  || bad "defect: expected 2 unguarded entries in the mirror, found $n_bad_before - the shape changed, re-read the source"
+n_lookups=$(command grep -cE "$defect_re" "$SRC")
+[ "$n_bad_after" -eq 0 ] && [ "$n_lookups" -eq 2 ] \
+  && ok "defect: no thread entry dereferences the client on the line after the lookup (2 lookups, 0 unguarded)" \
+  || bad "defect: $n_bad_after of $n_lookups lookups are dereferenced immediately (want 0 of 2 - or the lookup's shape changed, re-read the source)"
 
 # ---- 4b. THE SIBLING SITE, which the first draft of this patch left unguarded ------------------
 # Jev, on that draft: sibling_sites_left_unguarded leaned one_or_more_left. It was right.
@@ -84,13 +39,9 @@ n_bad_before=$(command grep -E -A1 "$defect_re" "$PRISTINE" | command grep -c 'H
 # 0x78 and InterlockedDecrement WRITES through the pointer, so that is a distinct crash of the same
 # class; a fix guarding only the two thread entries would have been a repeat waiting to happen.
 rel_after=$(awk '/^void QpsDisconnectClient\(/,/^}/' "$SRC" | command grep -c 'if (client)')
-rel_before=$(awk '/^void QpsDisconnectClient\(/,/^}/' "$PRISTINE" | command grep -c 'if (client)')
 [ "$rel_after" -ge 1 ] \
   && ok "sibling: QpsDisconnectClient checks the lookup before releasing it" \
   || bad "sibling: QpsDisconnectClient still passes an unchecked lookup to QpsReleaseClient"
-[ "$rel_before" -eq 0 ] \
-  && ok "sibling: UNPATCHED QpsDisconnectClient has no check (the check can fail)" \
-  || bad "sibling: the mirror already checks - re-read the source, this test is asserting nothing"
 # And the guard must come BEFORE the decrement, not merely exist somewhere in the function.
 # COMPARE THE LINE NUMBERS. The first attempt grepped for a literal '1:' prefix, which is the
 # stream position of the match, not its rank - it can never be 1 here, so the check failed on a
@@ -128,30 +79,5 @@ for t in Reader Writer; do
   fi
 done
 
-# ---- 6. EVERY PRODUCER APPLIES EVERY PATCH ------------------------------------------------------
-# COUNT THE PRODUCERS. Two workflows clone windows-utils and each carries its OWN copy of the
-# apply steps: build.yml, and qwt-full.yml - which is the one the RELEASE PACKAGE is built from
-# (release-package.yml calls it). This fix first went into build.yml alone, so the package would
-# have been built WITHOUT it while a different workflow applied it, and every offline check here
-# would still have passed. So the invariant is checked for all patches against all producers,
-# not for this patch against one.
-mapfile -t PRODUCERS < <(command grep -rl 'deps-src.windows-utils' "$ROOT/.github/workflows/" | sort)
-mapfile -t ALLPATCHES < <(ls "$ROOT"/patches/windows-utils-*.patch | xargs -n1 basename | sort)
-[ "${#PRODUCERS[@]}" -ge 2 ] \
-  && ok "producers: ${#PRODUCERS[@]} workflows clone windows-utils ($(printf '%s ' "${PRODUCERS[@]##*/}"))" \
-  || bad "producers: only ${#PRODUCERS[@]} found - if a producer was removed, re-check this test"
-missing=0
-for w in "${PRODUCERS[@]}"; do
-  for pf in "${ALLPATCHES[@]}"; do
-    command grep -q "$pf" "$w" || { bad "producers: $(basename "$w") never applies $pf"; missing=$((missing+1)); }
-  done
-done
-[ "$missing" -eq 0 ] && ok "producers: every windows-utils patch is applied by every producer (${#ALLPATCHES[@]} patches x ${#PRODUCERS[@]} workflows)"
-for w in "${PRODUCERS[@]}"; do
-  command grep -q 'pipe-client NULL patch did not apply' "$w" \
-    && ok "producers: $(basename "$w") FAILS the build if this patch does not apply" \
-    || bad "producers: $(basename "$w") would let a failed apply pass silently"
-done
-
-echo "pipe-client-null-selftest: $pass passed, $fail failed  (tree: $OUT)"
+echo "pipe-client-null-selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -8,16 +8,14 @@ pass=0; fail=0
 ok(){ pass=$((pass+1)); printf '  PASS  %s\n' "$1"; }
 no(){ fail=$((fail+1)); printf '  FAIL  %s\n     -> %s\n' "$1" "$2"; }
 
-LOGC=upstream/ro/qubes-windows-utils/src/log.c
-# upstream/ro IS GITIGNORED (.gitignore:27), so the vendored source is local working material
-# and NOT in the repo. A check that reads it would pass here and be unrunnable from a clean
-# checkout, which is decoration. So the two upstream premises are verified when the material is
-# present and reported INCONCLUSIVE (rc=2) when it is not - never as a pass.
-LOGC="${LOGVOL_MK_LOGC:-upstream/ro/qubes-windows-utils/src/log.c}"
-CFGC="${LOGVOL_MK_CFGC:-upstream/ro/qubes-windows-utils/src/config.c}"
+# The two windows-utils premises are verified against the source we SHIP: winutils/, the tracked
+# submodule. A checkout without the submodule has nothing to read, and that is reported INCONCLUSIVE
+# (rc=2) - never as a pass.
+LOGC="${LOGVOL_MK_LOGC:-winutils/src/log.c}"
+CFGC="${LOGVOL_MK_CFGC:-winutils/src/config.c}"
 inconclusive=0
 
-# 1+2. THE UPSTREAM PREMISE: the log path is read WITH THE MODULE NAME, and the config layer tries
+# 1+2. THE WINDOWS-UTILS PREMISE: the log path is read WITH THE MODULE NAME, and the config layer tries
 # the module key BEFORE the root. Together these are what make the bind deterministic instead of a
 # race against the installer's root seed.
 if [ -r "$LOGC" ] && [ -r "$CFGC" ]; then
@@ -31,10 +29,9 @@ if [ -r "$LOGC" ] && [ -r "$CFGC" ]; then
           "checked $CFGC"; fi
 else
   inconclusive=1
-  printf '  INCONCLUSIVE  the upstream premise cannot be verified from this checkout\n'
-  printf '     -> %s\n' "upstream/ro is gitignored (.gitignore:27) and ${LOGC} / ${CFGC} are not readable here."
+  printf '  INCONCLUSIVE  the windows-utils premise cannot be verified from this checkout\n'
+  printf '     -> %s\n' "${LOGC} / ${CFGC} are not readable here - is the winutils submodule checked out?"
   printf '     -> %s\n' "The bind's determinism RESTS on that premise, so it must not read as a pass."
-  printf '     -> %s\n' "To make it verifiable from the repo: assert the module-first read in a TRACKED patch under patches/, or vendor the two functions."
 fi
 
 # 3. THE PRODUCT MUST STAY THE ONLY WRITER OF THE ROOT, AND NEVER WRITE A MODULE KEY.

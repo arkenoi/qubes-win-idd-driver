@@ -4,43 +4,17 @@
 # pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PATCHFILE="$ROOT/patches/windows-utils-pipe-connect-rewrite.patch"
-MIRROR="$ROOT/upstream/ro/qubes-windows-utils"
-OUT="${CONNORDER_SELFTEST_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/pipe-connect-order-XXXXXX")}"
+WU="$ROOT/winutils"
 pass=0; fail=0
 ok(){ pass=$((pass+1)); echo "PASS  $*"; }
 bad(){ fail=$((fail+1)); echo "FAIL  $*"; }
-[ -f "$PATCHFILE" ] || { echo "FAIL  $PATCHFILE is missing - nothing ran (missing data fails)"; exit 2; }
-[ -d "$MIRROR" ]    || { echo "FAIL  $MIRROR is missing"; exit 2; }
+[ -f "$WU/src/pipe-server.c" ] || { echo "FAIL  $WU/src/pipe-server.c is missing (is the winutils submodule checked out?) - nothing ran (missing data fails)"; exit 2; }
 
-ref=$(command grep -oE 'WINDOWS_UTILS_REF: *[^ ]+' "$ROOT/.github/workflows/build.yml" | head -1 | awk '{print $2}')
-mirror_ver=$(tr -d ' \r\n' < "$MIRROR/version" 2>/dev/null)
-[ -n "$ref" ] && [ "${ref#v}" = "${mirror_ver#v}" ] \
-  && ok "ref_matches_mirror: written against $mirror_ver = WINDOWS_UTILS_REF ($ref)" \
-  || bad "ref_matches_mirror: ref='$ref' mirror='$mirror_ver'"
-
-mkdir -p "$OUT/solo" && cp -r "$MIRROR"/. "$OUT/solo/"
-( cd "$OUT/solo" && patch -p1 --dry-run -i "$PATCHFILE" >/dev/null 2>&1 ) \
-  && ok "applies: dry run succeeds against a pristine mirror" \
-  || bad "applies: dry run FAILED against a pristine mirror"
-
-mapfile -t ORDER < <(command grep -oE 'patches\\windows-utils-[a-z-]+\.patch' "$ROOT/.github/workflows/build.yml" \
-                     | sed 's/.*windows-utils-//; s/\.patch//')
-mkdir -p "$OUT/stack" && cp -r "$MIRROR"/. "$OUT/stack/"
-stack_rc=0
-for p in "${ORDER[@]}"; do
-  ( cd "$OUT/stack" && patch -p1 -i "$ROOT/patches/windows-utils-$p.patch" >>"$OUT/stack.log" 2>&1 ) || stack_rc=1
-done
-[ "$stack_rc" -eq 0 ] && [ "${#ORDER[@]}" -ge 7 ] \
-  && ok "coexists: all ${#ORDER[@]} patches apply in build.yml's own order" \
-  || bad "coexists: stack rc=$stack_rc with ${#ORDER[@]} patches - see $OUT/stack.log"
-
-SRC="$OUT/stack/src/pipe-server.c"
-PRISTINE="$MIRROR/src/pipe-server.c"
+SRC="$WU/src/pipe-server.c"
 # Comments stripped for every structural assertion: this function's comments name the very calls
 # being counted, and a count that includes the explanation is a count of prose.
 fnbody(){ awk '/^static DWORD QpsConnectClient\(/{c++} c==2' "$1" | awk 'NR==1,/^\}/' | sed 's@//.*@@'; }
-AFTER=$(fnbody "$SRC"); BEFORE=$(fnbody "$PRISTINE")
+AFTER=$(fnbody "$SRC")
 n(){ printf '%s\n' "$1" | command grep -cE "$2"; }
 lineof(){ printf '%s\n' "$1" | command grep -nE "$2" | head -1 | cut -d: -f1; }
 
@@ -52,15 +26,6 @@ if [ -n "$ins_a" ] && [ -n "$res_a" ] && [ "$ins_a" -lt "$res_a" ]; then
   ok "order: the client is published (line $ins_a) before any thread is resumed (line $res_a)"
 else
   bad "order: insert at '$ins_a', resume at '$res_a' - a thread can run before its client is findable"
-fi
-# In the UNPATCHED source the threads are created BEFORE the insert, with no suspension - that is
-# the defect, and this check must see it.
-ins_b=$(lineof "$BEFORE" 'InsertTailList\(&Server->Clients')
-cre_b=$(lineof "$BEFORE" 'CreateThread\(NULL, 0, QpsReaderThread')
-if [ -n "$ins_b" ] && [ -n "$cre_b" ] && [ "$cre_b" -lt "$ins_b" ] && [ "$(n "$BEFORE" 'CREATE_SUSPENDED')" -eq 0 ]; then
-  ok "order: UNPATCHED source starts threads (line $cre_b) before the insert (line $ins_b), unsuspended - the check can fail"
-else
-  bad "order: the mirror does not show the defect any more - re-read the source before trusting this test"
 fi
 [ "$(n "$AFTER" 'CREATE_SUSPENDED')" -eq 2 ] \
   && ok "order: both threads are created suspended" \
@@ -113,9 +78,6 @@ bare_after=$(printf '%s\n' "$AFTER" | command grep -A1 'LeaveCriticalSection(&Se
 [ "$bare_after" -eq 0 ] \
   && ok "unwind: no failure returns from the middle of a half-built client" \
   || bad "unwind: $bare_after bare returns remain"
-[ "$(printf '%s\n' "$BEFORE" | command grep -A1 'LeaveCriticalSection(&Server->Lock);' | command grep -c 'return ERROR_')" -ge 5 ] \
-  && ok "unwind: UNPATCHED source has them (the check can fail)" \
-  || bad "unwind: the mirror no longer shows the bare returns"
 [ "$(n "$AFTER" '^fail:')" -eq 1 ] && ok "unwind: exactly one failure label" || bad "unwind: label count wrong"
 [ "$(n "$AFTER" 'goto fail;')" -eq 2 ] \
   && ok "unwind: two failure points, both reaching it" \
@@ -145,17 +107,8 @@ done
   && ok "unwind: no refcount or disconnect machinery - the client was never published" \
   || bad "unwind: touches refcount/disconnect state for a client that was never published"
 
-# ---- it says so, and BOTH producers apply it ----------------------------------------------------
+# ---- it says so -----------------------------------------------------------------------------------
 command grep -q 'nothing was published' "$SRC" && ok "marker: the failure path logs what happened" || bad "marker: no log line on the failure path"
-command grep -q 'nothing was published' "$PRISTINE" && bad "marker: present in UNPATCHED source too" || ok "marker: absent before the patch"
-for w in "$ROOT/.github/workflows/build.yml" "$ROOT/.github/workflows/qwt-full.yml"; do
-  command grep -q 'windows-utils-pipe-connect-rewrite.patch' "$w" \
-    && ok "wired: $(basename "$w") applies it" || bad "wired: $(basename "$w") does not apply it"
-  command grep -q 'connect-order rewrite did not apply' "$w" \
-    && ok "wired: $(basename "$w") fails the build if it does not apply" || bad "wired: $(basename "$w") would pass a failed apply"
-  command grep -q 'a thread is resumed before the client is published' "$w" \
-    && ok "wired: $(basename "$w") asserts the ordering invariant in CI" || bad "wired: $(basename "$w") does not check the order"
-done
 
-echo "pipe-connect-order-selftest: $pass passed, $fail failed  (tree: $OUT)"
+echo "pipe-connect-order-selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -3,7 +3,7 @@
    (deathevent-selftest.sh), and windows-utils' src/service.c with svc-exitcode-test.c (svc-exitcode-selftest.sh).
    It is NOT a Windows compiler and proves nothing about linking: it gives the files the SDK's types, constants
    and function ARITIES, nothing more - CI compiles the real thing. Used together with the REAL windows-utils
-   headers (log.h, config.h, qubes-io.h, service.h) from upstream/ro/qubes-windows-utils/include, which include
+   headers (log.h, config.h, qubes-io.h, service.h) from winutils/include (the tracked windows-utils submodule), which include
    only <windows.h>. Grown from the stub the 2026-10-03 watchdog change was checked with. */
 #ifndef STUB_WINDOWS_H
 #define STUB_WINDOWS_H

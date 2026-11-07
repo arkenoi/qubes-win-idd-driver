@@ -1,23 +1,23 @@
 /*
- * svc-exitcode-test.c - offline suite for patches/windows-utils-service-exit-code.patch: windows-utils'
+ * svc-exitcode-test.c - offline suite for winutils/src/service.c: windows-utils'
  * SvcMainLoop must END THE SERVICE WITH THE WORKER'S ERROR, so that the SCM logs event 7023 and runs the
  * recovery actions the installer arms (docs/ADR-supervision.md 2; the standing finding of health-check.ps1
  * section 2b: QdbDaemon and QrexecAgent exited 0 when their worker failed, so their recovery was inert).
  *
- * gcc on the dev qube, no Windows: this file #includes the PATCHED copy of src/service.c that
- * tools/tests/svc-exitcode-selftest.sh prepares, and stubs the SCM. The dispatcher calls ServiceMain
+ * gcc on the dev qube, no Windows: this file #includes the copy of the shipped winutils/src/service.c that
+ * tools/tests/svc-exitcode-selftest.sh puts next to it, and stubs the SCM. The dispatcher calls ServiceMain
  * synchronously; CreateThread runs the worker synchronously and keeps its return value for
  * GetExitCodeThread; SetServiceStatus records every status the service reports. So the checks are what
  * the SCM would be told, for the real control flow of service.c - not a re-implementation of it.
- * The selftest also builds this against the UNPATCHED service.c (the defect present) and requires it to
- * FAIL. Prints "ok <case>" / "FAIL <case>" lines; exit 0 iff no FAIL.
+ * The selftest also builds this against a copy of service.c with the requested-stop exemption cut out and
+ * requires case 7 to FAIL. Prints "ok <case>" / "FAIL <case>" lines; exit 0 iff no FAIL.
  */
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
 #include <wchar.h>
 
-#include "service.c"   /* the copy the selftest put next to this file: patched, or the original under the defect knob */
+#include "service.c"   /* the copy the selftest put next to this file: winutils' own, or the exemption-removed knob */
 
 /* --- the stubbed SCM and runtime ----------------------------------------------------------- */
 #define MAX_STATUS 16

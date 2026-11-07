@@ -20,7 +20,6 @@ one-log-per-module-selftest.sh
 peek-abi-assert-selftest.sh
 pipe-client-null-selftest.sh
 pipe-connect-order-selftest.sh
-pipe-eof-selftest.sh
 pipe-server-lifetime-selftest.sh
 pwcarry-selftest.sh
 pwclass-truth-table.sh

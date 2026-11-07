@@ -85,7 +85,7 @@ import yaml
 d=yaml.safe_load(open('.github/workflows/test.yml'))
 j=d['jobs'].get('offline-suites') or {}
 print(sum(1 for s in j.get('steps',[]) if 'run-offline-suites.sh' in (s.get('run') or '')))" 2>/dev/null)"
-ck "that job checks out submodules (the patch suites need the mirror)" "True" \
+ck "that job checks out submodules (the windows-utils suites read winutils/)" "True" \
    "$(python3 -c "
 import yaml
 d=yaml.safe_load(open('.github/workflows/test.yml'))

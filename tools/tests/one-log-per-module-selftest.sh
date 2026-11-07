@@ -4,55 +4,16 @@
 # pass: exit 0
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-PATCHFILE="$ROOT/patches/windows-utils-one-log-per-module.patch"
-MIRROR="$ROOT/upstream/ro/qubes-windows-utils"
+WU="$ROOT/winutils"
 OUT="${ONELOG_SELFTEST_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/one-log-XXXXXX")}"
 pass=0; fail=0
 ok(){ pass=$((pass+1)); echo "PASS  $*"; }
 bad(){ fail=$((fail+1)); echo "FAIL  $*"; }
-[ -f "$PATCHFILE" ] || { echo "FAIL  $PATCHFILE is missing - nothing ran (missing data fails)"; exit 2; }
-[ -d "$MIRROR" ]    || { echo "FAIL  $MIRROR is missing"; exit 2; }
+[ -f "$WU/src/log.c" ] || { echo "FAIL  $WU/src/log.c is missing (is the winutils submodule checked out?) - nothing ran (missing data fails)"; exit 2; }
 
-# ---- 1. the patch is written against the ref CI actually clones ---------------------------------
-ref=$(command grep -oE 'WINDOWS_UTILS_REF: *[^ ]+' "$ROOT/.github/workflows/build.yml" | head -1 | awk '{print $2}')
-mirror_ver=$(tr -d ' \r\n' < "$MIRROR/version" 2>/dev/null)
-if [ -n "$ref" ] && [ -n "$mirror_ver" ] && [ "${ref#v}" = "${mirror_ver#v}" ]; then
-  ok "ref_matches_mirror: written against $mirror_ver, which is WINDOWS_UTILS_REF ($ref)"
-else
-  bad "ref_matches_mirror: WINDOWS_UTILS_REF='$ref' but the mirror says '$mirror_ver'"
-fi
+SRC="$WU/src/log.c"
 
-# ---- 2. it applies cleanly, AND co-exists with every other windows-utils patch -----------------
-# CI applies four patches to one clone. A patch that applies alone and conflicts with its
-# neighbours fails in CI only, after a build. Apply them in the order build.yml does.
-rm -rf "$OUT/clean"; mkdir -p "$OUT/clean"
-cp -r "$MIRROR"/. "$OUT/clean/"
-( cd "$OUT/clean" && git init -q . 2>/dev/null; git apply --check "$PATCHFILE" ) 2>"$OUT/apply.err"
-if [ $? -eq 0 ]; then ok "applies: git apply --check succeeds against a pristine mirror"
-else bad "applies: $(head -2 "$OUT/apply.err" | tr '\n' ' ')"; fi
-
-order=$(command grep -oE 'patches\\windows-utils-[a-z-]+\.patch' "$ROOT/.github/workflows/build.yml" \
-        | sed 's/.*\\//' | awk '!seen[$0]++')
-rm -rf "$OUT/all"; mkdir -p "$OUT/all"
-cp -r "$MIRROR"/. "$OUT/all/"
-( cd "$OUT/all" && git init -q . ) 2>/dev/null
-allok=1; applied=0
-for p in $order; do
-  if ( cd "$OUT/all" && git apply "$ROOT/patches/$p" ) 2>>"$OUT/all.err"; then
-    applied=$((applied+1))
-  else
-    allok=0; echo "      ... $p failed to apply in sequence"
-  fi
-done
-if [ "$allok" = 1 ] && [ "$applied" -ge 4 ] && echo "$order" | command grep -q 'one-log-per-module'; then
-  ok "stacks_with_siblings: all $applied windows-utils patches apply in build.yml's order, ours among them"
-else
-  bad "stacks_with_siblings: applied=$applied of $(echo "$order" | wc -w) in CI order ($(echo $order | tr '\n' ' '))"
-fi
-SRC="$OUT/clean/src/log.c"
-( cd "$OUT/clean" && git apply "$PATCHFILE" ) 2>/dev/null
-
-# ---- 3. every marker the build step asserts is present after patching --------------------------
+# ---- 3. the shipped log.c carries the shared append-only open, the composed write, the dated name ---
 miss=""
 for m in 'FILE_APPEND_DATA | FILE_READ_ATTRIBUTES' \
          'WriteFile(g_LogfileHandle, g_LineBufUtf8' \
@@ -60,7 +21,7 @@ for m in 'FILE_APPEND_DATA | FILE_READ_ATTRIBUTES' \
          'g_LineBufUtf8[CONVERT_MAX_BUFFER_LENGTH + 1024]'; do
   command grep -qF "$m" "$SRC" || miss="$miss [$m]"
 done
-[ -z "$miss" ] && ok "markers: every string the build step asserts is present after patching" \
+[ -z "$miss" ] && ok "markers: the shipped log.c carries the append-only open, the composed write, the dated name and the line buffer" \
                || bad "markers: missing$miss"
 
 # ---- 4. the defect is GONE, not merely shadowed ------------------------------------------------
@@ -250,31 +211,6 @@ command grep -qF 'no-new-init' "$RGA" || rga_bad="$rga_bad [turnover still waits
 command grep -qF -- '-InitAt' "$RGA" || rga_bad="$rga_bad [pid age still checked against the file's creation time]"
 [ -z "$rga_bad" ] && ok "restart_verifier: identity is the LAST init record, and later markers must follow it" \
                   || bad "restart_verifier:$rga_bad"
-
-# ---- 12. THE CHECKS MUST FAIL ON UNPATCHED SOURCE ----------------------------------------------
-# A check never seen to fail is decoration. Run the marker checks against the pristine mirror.
-UN="$MIRROR/src/log.c"
-un_markers=0
-for m in 'FILE_APPEND_DATA | FILE_READ_ATTRIBUTES' 'g_LineBufUtf8' '%s-%04d%02d%02d.log'; do
-  command grep -qF "$m" "$UN" && un_markers=$((un_markers+1))
-done
-if [ "$un_markers" = 0 ] && command grep -qF '%02d%02d%02d-%d.log' "$UN" && command grep -qF 'GENERIC_WRITE' "$UN"; then
-  ok "seen_to_fail: against UNPATCHED source every marker is absent and both defects are present"
-else
-  bad "seen_to_fail: unpatched source has $un_markers/3 markers - the checks above prove nothing"
-fi
-
-# ---- 13. the build wires it in BOTH workflows, with the no-op guard ----------------------------
-for wf in build qwt-full; do
-  f="$ROOT/.github/workflows/$wf.yml"
-  if command grep -q 'windows-utils-one-log-per-module.patch' "$f" \
-     && command grep -q 'append-only open marker missing after patch' "$f" \
-     && command grep -q 'the per-process log name is still present after patching' "$f"; then
-    ok "wired_$wf: applied unconditionally, with assertions for both the new marker and the old defect"
-  else
-    bad "wired_$wf: not applied, or applied without a marker assertion"
-  fi
-done
 
 echo
 echo "one-log-per-module-selftest: $pass passed, $fail failed   (work dir: $OUT)"

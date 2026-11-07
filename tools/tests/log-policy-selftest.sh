@@ -427,14 +427,9 @@ core-agent/src/qrexec-wrapper/qrexec-wrapper.c|data protocol version
 core-agent/src/qrexec-wrapper/qrexec-wrapper.c|Running '%s' as
 core-agent/src/qrexec-agent/qrexec-agent.c|Command: %s
 core-agent/src/qrexec-agent/qrexec-agent.c|user '%s' is this service
+winutils/src/pipe-server.c|\[%lld\] disconnected \(%lld total\)
 EOFP
-[ "$_percall_bad" = 0 ] && ok "percall: no per-call mechanics line is left at INFO in qrexec-wrapper or qrexec-agent"
-# and the upstream half, which is a patch rather than our source
-if [ -f patches/windows-utils-percall-mechanics-debug.patch ]; then
-  ok "percall: the upstream pipe-server disconnect line has a demotion patch"
-else
-  bad "percall: no patch for the upstream per-call disconnect line" "58 of them in one brief cell"
-fi
+[ "$_percall_bad" = 0 ] && ok "percall: no per-call mechanics line is left at INFO in qrexec-wrapper, qrexec-agent or the windows-utils pipe server"
 
 echo
 echo "log-policy-selftest: $pass passed, $fail failed"

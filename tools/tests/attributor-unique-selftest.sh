@@ -332,24 +332,23 @@ fi
         "the campaign gate would be deciding this on its own, which is where this defect lived"
 
 # =================================================================================================
-# D. BOTH BANNER SPELLINGS ARE READ - AND THE FIXTURE'S SHAPE COMES FROM THE PATCHES.
+# D. BOTH BANNER SPELLINGS ARE READ - AND THE FIXTURE'S SHAPE COMES FROM THE SHIPPED SOURCE.
 #
 # A fixture that encodes a format from memory stops testing the product the moment the product
 # changes, which is the whole mechanism of this defect: the gate's extractor was correct for a
-# format that had been retired. So assert the two patches still say what these fixtures assume, and
-# fail LOUDLY if they do not.
-P_BIRTH="patches/windows-utils-single-birth-line.patch"
-P_DEMOTE="patches/windows-utils-loginit-banner-debug.patch"
-if [ -f "$P_BIRTH" ] && command grep -q 'LogInfo("QWTBIRTH module=%s ver=%d\.%d\.%d\.%d' "$P_BIRTH"; then
-    ok "D0 the shipped birth line is still LogInfo QWTBIRTH module=... ver=... ($P_BIRTH)"
+# format that had been retired. So assert the shipped winutils log.c still says what these fixtures
+# assume, and fail LOUDLY if it does not.
+P_LOG="winutils/src/log.c"
+if [ -f "$P_LOG" ] && command grep -q 'LogInfo("QWTBIRTH module=%s ver=%d\.%d\.%d\.%d' "$P_LOG"; then
+    ok "D0 the shipped birth line is still LogInfo QWTBIRTH module=... ver=... ($P_LOG)"
 else
-    no "D0 $P_BIRTH no longer writes 'LogInfo(\"QWTBIRTH module=%s ver=%d.%d.%d.%d'" \
-       "the fixtures below encode a format the product may no longer emit - re-derive them from the patch"
+    no "D0 $P_LOG no longer writes 'LogInfo(\"QWTBIRTH module=%s ver=%d.%d.%d.%d'" \
+       "the fixtures below encode a format the product may no longer emit - re-derive them from winutils/src/log.c"
 fi
-if [ -f "$P_DEMOTE" ] && command grep -q '^+        LogDebug("Module version:' "$P_DEMOTE"; then
-    ok "D0 the legacy banner is still DEMOTED to LogDebug ($P_DEMOTE)"
+if [ -f "$P_LOG" ] && command grep -q '^[[:space:]]*LogDebug("Module version:' "$P_LOG"; then
+    ok "D0 the legacy banner is still DEMOTED to LogDebug ($P_LOG)"
 else
-    no "D0 $P_DEMOTE no longer demotes 'Module version:' to LogDebug" \
+    no "D0 $P_LOG no longer demotes 'Module version:' to LogDebug" \
        "if the legacy banner is back at Info, the blindness this suite guards has a different shape"
 fi
 # D1: a capture whose ONLY banner is the new spelling - what every shipped build writes.

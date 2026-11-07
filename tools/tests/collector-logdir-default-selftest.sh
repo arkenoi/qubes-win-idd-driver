@@ -30,14 +30,13 @@ if command grep -aq 'QubesLogs' "$C"; then
 else
   ok "it is spelled \"Qubes Logs\" with the space, as log.h:59 defines it"
 fi
-# and the claim about log.c must still be true of the shipped source.
-# ABSENCE IS NOT A CHANGE. upstream/ro is gitignored, so a clean checkout has no log.h - and this
-# read reported "LOG_DEFAULT_DIR changed" there, which is a claim about upstream made from a missing
-# file. In CI that was one of four reds that pass on the dev qube. Missing input is INCONCLUSIVE and
-# says so; test.yml now materialises the pinned mirror, so the real read happens there too.
-LOGH="${COLLECTOR_LOGH:-$ROOT/upstream/ro/qubes-windows-utils/include/log.h}"   # override: this suite only
+# and the claim about log.c must still be true of the shipped source: winutils/, the tracked submodule.
+# ABSENCE IS NOT A CHANGE. A checkout without the submodule has no log.h, and reading that as
+# "LOG_DEFAULT_DIR changed" would be a claim about the source made from a missing file. Missing input
+# is INCONCLUSIVE and says so.
+LOGH="${COLLECTOR_LOGH:-$ROOT/winutils/include/log.h}"   # override: this suite only
 if [ ! -f "$LOGH" ]; then
-  echo "INCONCLUSIVE: $LOGH absent (upstream/ro is gitignored) - the premise about log.h was NOT checked"
+  echo "INCONCLUSIVE: $LOGH absent (is the winutils submodule checked out?) - the premise about log.h was NOT checked"
   INCONCLUSIVE=$((${INCONCLUSIVE:-0} + 1))
 elif command grep -aq 'define LOG_DEFAULT_DIR L"Qubes Logs"' "$LOGH"; then
   ok "log.h:59 still defines LOG_DEFAULT_DIR as \"Qubes Logs\" (the premise holds)"
