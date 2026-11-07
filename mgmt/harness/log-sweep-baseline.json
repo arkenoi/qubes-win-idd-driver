@@ -45,8 +45,8 @@
    "status": "known-defect"
   },
   {
-   "issue": "findings/issues.md P2 \"win11-24H2 resolution-change capture FREEZE (0x887a0026 keyed-mutex-abandoned)\"; findings/capture.md",
-   "reason": "fires routinely on resolution/seamless transitions; RecreateDuplication recovers in place, windows kept (filed P2)",
+   "issue": "findings/issues.md RECREATEKEEPSWINDOWSWITHOUTAREPAINT (was the closed P2 \"win11-24H2 resolution-change capture FREEZE (0x887a0026 keyed-mutex-abandoned)\" - reopened 2026-11-07, reproduced on 25H2); findings/capture.md",
+   "reason": "fires routinely on resolution/seamless transitions; the loss itself is expected - what was filed is that the KEPT windows were never repainted after it (agent 8604fbc)",
    "regex": "duplication->(AcquireNextFrame|ReleaseFrame)[()]* failed with error 0xH: The keyed mutex was abandoned",
    "status": "known-defect"
   },
@@ -171,10 +171,10 @@
   },
   "agent|E|GetFrame: duplication->AcquireNextFrame() failed with error 0xH: The keyed mutex was abandoned.": {
    "family": "agent",
-   "issue": "findings/issues.md P2 \"win11-24H2 resolution-change capture FREEZE (0x887a0026 keyed-mutex-abandoned)\"; findings/capture.md",
+   "issue": "findings/issues.md RECREATEKEEPSWINDOWSWITHOUTAREPAINT (was the closed P2 \"win11-24H2 resolution-change capture FREEZE (0x887a0026 keyed-mutex-abandoned)\" - reopened 2026-11-07, reproduced on 25H2); findings/capture.md",
    "level": "E",
    "max_per_boot": 1,
-   "reason": "fires routinely on resolution/seamless transitions; RecreateDuplication recovers in place, windows kept (filed P2)",
+   "reason": "fires routinely on resolution/seamless transitions; the loss itself is expected - what was filed is that the KEPT windows were never repainted after it (agent 8604fbc)",
    "status": "known-defect"
   },
   "agent|E|QioReadBuffer: ReadFile failed with error 0xH: The pipe has been ended.": {
@@ -192,10 +192,10 @@
   "agent|E|ReleaseFrame: duplication->ReleaseFrame failed with error 0xH: The keyed mutex was abandoned.": {
    "carried": true,
    "family": "agent",
-   "issue": "findings/issues.md P2 \"win11-24H2 resolution-change capture FREEZE (0x887a0026 keyed-mutex-abandoned)\"; findings/capture.md",
+   "issue": "findings/issues.md RECREATEKEEPSWINDOWSWITHOUTAREPAINT (was the closed P2 \"win11-24H2 resolution-change capture FREEZE (0x887a0026 keyed-mutex-abandoned)\" - reopened 2026-11-07, reproduced on 25H2); findings/capture.md",
    "level": "E",
    "max_per_boot": 1,
-   "reason": "fires routinely on resolution/seamless transitions; RecreateDuplication recovers in place, windows kept (filed P2) [carried from 2026-10-07T06:29:25Z, not seen in these reports]",
+   "reason": "fires routinely on resolution/seamless transitions; the loss itself is expected - what was filed is that the KEPT windows were never repainted after it (agent 8604fbc) [carried from 2026-10-07T06:29:25Z, not seen in these reports]",
    "status": "known-defect"
   },
   "agent|E|UpdateWindowData: QGADIRECTSUPPRESS hwnd 0xH (class #N, NxN) NOT SHOWN: the direct per-window path is required on this guest and this window has never received a frame (sliceFed=N brokerSourced=N slot=N brokerActive=N). There is no compos": {

@@ -149,7 +149,6 @@ classified entries whose head said OPEN as closed. Full text is in git history i
 - P2 [user-facing, notifications; OURS - the death reporter's trigger; FIXED 2026-10-07, not yet demonstrated] A COMPONENT THAT DIED DURING A SHUTDOWN LOST ITS DOM0 NOTIFICATION [verified 2026-10-07]
 - P2 [user-facing, notifications; OURS - the helper tasks' instance policy; FIXED IN rc2 (agent bfdadba), NOT YET DEMONSTRATED] AFTER AN AGENT RESTART THE GUEST RAN WITH NO TOAST BRIDGE AT ALL, SILENTLY FOR THE REST [verified 2026-10-07]
 - P2 toast-bridge (docs/DESIGN-toast-bridge.md): A0 per-app forward-bridge DONE  GATE NOW DEFAULTS ON (2026-09-13, agent 2862c13, rig-unvalidated) [UNVERIFIED]
-- P2 win11-24H2 resolution-change capture FREEZE (0x887a0026 keyed-mutex-abandoned) [verified 2026-10-16] **MY 2026-10-16 LINKAGE TO THE FAILPROOF SUITES IS RETRACTED - see FAILPROOFGATESP53BLOCKED: those suites sto
 - P3 Win10 ESU: real 2025-11 CU resolves and is installable; the gate is CBS ESU entitlement — owner MAK/licensing decision. [verified 2026-08-20]
 - P3 Windows PV TCP connect tail ~5x vs Linux qube (p99 65 vs 49 ms) + ~8 ms DNS overhead; IPv6 hypothesis disproven. [verified 2026-08-24]
 - P3 [ASSOCIATION OVER 4 OBSERVATIONS, NOT A MECHANISM] THE FIRST WU SCAN AFTER A SERVICING APPLY IS VERY SLOW on the German 25H2 template: ordinary-boot scans took ~70 s and ~ [verified 2026-09-17]
