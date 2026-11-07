@@ -216,7 +216,19 @@ def preaccount_report(baseline, literals, sweep):
         needle = sweep.normalize(run)
         hit = any(needle in k for k in by_family.get(fam, []))
         if not hit:
-            hit = any(re.search(rx, run) for rx in pats)
+            # A PATTERN IS MATCHED AGAINST THE KEY, because that is what the sweep matches it against:
+            # its rows are anchored like `^watchdog\|E\|WatchdogThread: Proc...`. This used to search
+            # the bare longest literal run, so EVERY anchored row missed, and a line the sweep would
+            # have accounted for was reported UNACCOUNTED - a refusal with nothing wrong behind it.
+            # The run is also the wrong string for a row keyed on a QGA* tag: the tag sits in the
+            # format's HEAD and the longest fixed stretch is routinely the tail.
+            # AND A ROW MUST BE ANCHORED ON THE FIXED TEXT BEFORE ITS FIRST SPECIFIER. The sweep
+            # matches a row against the normalised RENDERED line (`hwnd=0xH`); nothing static can
+            # render, so this matches the FORMAT (`hwnd=0x%x`). A row written past the first
+            # specifier is true for exactly one of the two - measured on QGATOASTIDENT, where
+            # `hwnd=0xH` accounted for nothing until the regex stopped at `hwnd=`.
+            pseudo = "%s|%s|%s: %s" % (fam, level, func, sweep.normalize(fmt))
+            hit = any(re.search(rx, pseudo) for rx in pats)
         # The NEEDLE is the longest fixed run, which is the strongest thing to match on - but it is
         # often the line's TAIL, and a reader at preflight needs the head, where this project puts the
         # QGA* tag. Both are carried: the head identifies the line, the run is what was compared.
