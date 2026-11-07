@@ -76,6 +76,30 @@ rc=$(ask "PKG=38872220406 mgmt/harness/campaign-run.sh" "$T/other-wire.jsonl")
 if [ "$rc" = 2 ]; then ok "a permit for ANOTHER heavy command does not authorise this one"
 else no "a permit for ANOTHER heavy command does not authorise this one" "rc=$rc"; fi
 
+# ---- 4c. THE PREFIX HOLE, measured 2026-11-07 (PERMITBINDINGISWEAKANDBYPASSABLE). The case above
+# passes on the fragment alone because the two commands differ inside their first 20 characters. The
+# hole was the pair that does NOT: with a `cd` in front, frag[:20] is `cd /home/user/qubes-` for
+# EVERY command in this repo, and `mgmt/harness/campaig` is shared by three entry points, so one
+# permit authorised all of them. The permit is now bound to the heavy script NAMES the command
+# contains as well as to the fragment.
+printf '%s\n' '{"ts":"'"$NOW"'","state":"committed_procedure: cd /home/user/qubes-win-idd-driver && mgmt/harness/campaign-run.sh; rejected short-cycle alternative: quick-upgrade.sh over the golden, which cannot exercise the clean-install cells"}' > "$T/sameprefix-wire.jsonl"
+rc=$(ask "cd /home/user/qubes-win-idd-driver && mgmt/harness/campaign-full.sh 2>&1" "$T/sameprefix-wire.jsonl")
+if [ "$rc" = 2 ]; then ok "a permit for campaign-run.sh is REFUSED for campaign-full.sh (same 20-char prefix)"
+else no "a permit for campaign-run.sh is REFUSED for campaign-full.sh" "rc=$rc $(head -3 "$T/err" | tr '\n' ' ')"; fi
+
+# ...and the SAME permit must still open the gate for the command it was actually written for, or
+# the binding is not a binding, it is just a wider refusal.
+rc=$(ask "cd /home/user/qubes-win-idd-driver && mgmt/harness/campaign-run.sh 2>&1" "$T/sameprefix-wire.jsonl")
+if [ "$rc" = 0 ]; then ok "that same permit still ALLOWS the command it names"
+else no "that same permit still ALLOWS the command it names" "rc=$rc $(head -3 "$T/err" | tr '\n' ' ')"; fi
+
+# ---- 4d. HOLE 2 of the same issue: the recreate-goldens branch had NO command binding at all, so
+# one such line inside the window authorised ANY heavy command. It now carries the same binding.
+printf '%s\n' '{"ts":"'"$NOW"'","state":"recreate_goldens per docs/PROCEDURE-recreate-goldens.md - no golden exists, so no short-cycle alternative does either"}' > "$T/recreate-bare-wire.jsonl"
+rc=$(ask "cd /home/user/qubes-win-idd-driver && mgmt/harness/campaign-full.sh 2>&1" "$T/recreate-bare-wire.jsonl")
+if [ "$rc" = 2 ]; then ok "a bare recreate-goldens line does NOT authorise a heavy command it never names"
+else no "a bare recreate-goldens line does NOT authorise a heavy command it never names" "rc=$rc"; fi
+
 # ---- 4b. A PERMIT EXPIRES. MEASURED 2026-10-29: a campaign ran on a permit from the previous
 # day because WINDOW_MIN was declared and never read, while that run's own fresh permit went unused.
 printf '%s\n' '{"ts":"'"$OLD"'","state":"committed_procedure: PKG=38872220406 mgmt/harness/campaign-run.sh; rejected short-cycle alternative: quick-upgrade.sh over the golden"}' > "$T/stale-wire.jsonl"
@@ -90,7 +114,10 @@ if [ "$rc" = 2 ]; then ok "an UNSTAMPED line is not a permit - the freshness che
 else no "an unstamped line is not a permit" "rc=$rc"; fi
 
 # ---- 5. the recreate-goldens exception still works --------------------------------------------
-printf '%s\n' '{"ts":"'"$NOW"'","state":"recreate_goldens per docs/PROCEDURE-recreate-goldens.md - no golden exists, so no short-cycle alternative does either"}' > "$T/recreate-wire.jsonl"
+# ITS PERMIT NOW NAMES THE SCRIPT, as of 2026-11-07. The marker alone used to be enough, which was
+# HOLE 2 above; CLAUDE.md already required the state to quote the exact command, so this fixture is
+# what a well-formed recreate-goldens permit always should have looked like.
+printf '%s\n' '{"ts":"'"$NOW"'","state":"recreate_goldens per docs/PROCEDURE-recreate-goldens.md - running mgmt/harness/prime-run.sh win10-base win10-acc ours; no golden exists, so no short-cycle alternative does either"}' > "$T/recreate-wire.jsonl"
 rc=$(ask "mgmt/harness/prime-run.sh win10-base win10-acc ours" "$T/recreate-wire.jsonl")
 if [ "$rc" = 0 ]; then ok "the recreate-goldens exception still opens the gate"
 else no "the recreate-goldens exception still opens the gate" "rc=$rc"; fi

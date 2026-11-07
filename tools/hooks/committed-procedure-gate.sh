@@ -61,6 +61,22 @@ else: print("")
 
 if ! echo "$cmd" | grep -qE "$HEAVY"; then exit 0; fi
 
+# HOLE 1, measured 2026-11-07 (findings/issues.md PERMITBINDINGISWEAKANDBYPASSABLE): the permit was
+# matched on frag[:20] and nothing else, and for a chain launch that prefix is `mgmt/harness/campaig`
+# - shared by campaign-full.sh, campaign-run.sh and campaign-preflight.sh - or, once a `cd` is in
+# front, `cd /home/user/qubes-`, which EVERY command in this repo shares. So a permit for one heavy
+# script authorised every other, which is the same class the header above says was closed on
+# 2026-10-16. The permit must now ALSO name every heavy script the command names. This is a
+# CONJUNCT, not a replacement: the frag check below stays, so the binding can only ever refuse more
+# than before. A match with no extractable name fails CLOSED - the two cannot disagree, and if they
+# ever do it is this gate that is broken, not the permit that is valid.
+names=$(echo "$cmd" | grep -oE "$HEAVY" | sort -u)
+namelist=$(echo "$names" | tr '\n' ' ' | sed 's/ *$//')
+if [ -z "$namelist" ]; then
+  echo "BLOCKED by committed-procedure-gate.sh: the heavy regex matched but no script name could be extracted from the command - failing closed." >&2
+  exit 2
+fi
+
 frag=$(echo "$cmd" | head -c 80 | tr -d "\"'\\n" | sed 's/  */ /g')
 
 if [ ! -s "$WIRE" ]; then
@@ -88,11 +104,12 @@ fi
 # fresh permit sat unread at line 10079. The word "recent" was in the block message the whole time.
 # A line whose ts is missing or unparseable is NOT fresh: jev.py stamps every line it writes, so an
 # unstamped line is not a Jev permit, and failing open on one would restore exactly this hole.
-verdict=$(WINDOW_MIN="$WINDOW_MIN" FRAG="$frag" python3 - "$WIRE" <<'WIREPY'
+verdict=$(WINDOW_MIN="$WINDOW_MIN" FRAG="$frag" NAMES="$names" python3 - "$WIRE" <<'WIREPY'
 import json, os, sys, datetime
 
 wire = sys.argv[1]
 frag = os.environ["FRAG"][:20]
+names = [n for n in os.environ.get("NAMES", "").splitlines() if n.strip()]
 win  = float(os.environ["WINDOW_MIN"])
 now  = datetime.datetime.now(datetime.timezone.utc)
 
@@ -100,6 +117,14 @@ fresh = None          # (kind, age_min) a permit inside the window
 stale = None          # (kind, age_min) the NEWEST one outside it, named in the block message
 
 for line in open(wire, errors="replace"):
+    # HOLE 2, same issue and same measurement: the recreate-goldens branch below carried NO command
+    # binding whatever, so one such line inside the window authorised ANY heavy command - measured
+    # by a control probe about neither goldens nor the command it named, refused only because that
+    # line happened to be 1866 min old. Binding BOTH branches in one place closes both holes: a
+    # permit line that does not name every heavy script THIS command names is not this command's
+    # permit, whichever marker it carries. (# GUARD:permitnamebinding)
+    if not all(n in line for n in names):
+        continue
     if ("committed_procedure" in line or "use_committed" in line or "procedure_delta" in line) \
        and frag in line:
         kind = "permit"
@@ -130,6 +155,7 @@ if [ "$state" = "STALE" ]; then
   cat >&2 <<EOM
 BLOCKED by committed-procedure-gate.sh: the newest Jev $kind naming this command is ${age} min old (window ${WINDOW_MIN} min).
 Heavy path: $frag
+Permit must name every one of: $namelist
 A permit authorises the run it was asked about, not a later one. Ask Jev again, NOW, with state
 containing "committed_procedure", the exact command, and the rejected short-cycle alternative.
 EOM
@@ -140,6 +166,7 @@ if [ "$state" != "OK" ]; then
   cat >&2 <<EOM
 BLOCKED by committed-procedure-gate.sh: no recent Jev call quoting both the command and the committed alternative.
 Heavy path: $frag
+Permit must name every one of: $namelist
 If no golden exists, ask Jev with state containing recreate_goldens and the commands from docs/PROCEDURE-recreate-goldens.md.
 EOM
   exit 2
