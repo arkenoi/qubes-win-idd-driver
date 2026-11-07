@@ -34,6 +34,57 @@ WIRE="${JEV_WIRE_LOG:-$ROOT/scratchpad/jev-wire.jsonl}"
 # Markers that say "this Jev call was about whether to involve the operator".
 MARKERS='ask_operator|should_ask|operator_intervention|escalate_to_owner|interrupt_the_owner|blocking_question'
 
+# ---- THE SECOND SURFACE: A TURN THAT SIMPLY STOPS AND ASKS --------------------------------------
+# OWNER, 2026-11-07: «so you asked me and paused bypassing operator interaction gate? how is it
+# possible?» It is possible because this gate's matcher is AskUserQuestion|ExitPlanMode - TOOL CALLS.
+# At ~04:00 that morning I ended a turn with prose that reported the campaign and named what it
+# needed from him ("what blocks the cut now ... needs the rig, the owner's screen"). No tool was
+# called, so nothing here ran, and the night window - the exact hours this gate exists to protect -
+# was handed back to him anyway. A gate on the tool does not cover the behaviour: ENDING A TURN WITH
+# A QUESTION IS THE INTERRUPTION. So the Stop event is gated by the same clock and the same Jev
+# receipt. STOP_HOOK_ACTIVE means the stop was already blocked once: never loop a session.
+if [ -n "${CLAUDE_HOOK_STDIN:-}" ] || [ ! -t 0 ]; then
+    _hook_json=$(cat 2>/dev/null || true)
+else
+    _hook_json=""
+fi
+if printf '%s' "$_hook_json" | grep -q '"hook_event_name"[[:space:]]*:[[:space:]]*"Stop"'; then
+    printf '%s' "$_hook_json" | grep -q '"stop_hook_active"[[:space:]]*:[[:space:]]*true' && exit 0
+    _tp=$(printf '%s' "$_hook_json" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    [ -n "$_tp" ] && [ -r "$_tp" ] || exit 0
+    # The last assistant text, and whether it hands something to the owner. Deliberately narrow: a
+    # question mark in the closing lines, or an explicit hand-back. A report that merely CONTAINS a
+    # question mark mid-text is not one, and text naming this gate is how the rule gets explained.
+    _handback=$(python3 - "$_tp" <<'PYASK'
+import json, re, sys
+last = ''
+try:
+    for line in open(sys.argv[1], encoding='utf-8', errors='replace'):
+        try: rec = json.loads(line)
+        except Exception: continue
+        if rec.get('type') != 'assistant': continue
+        ch = [c.get('text','') for c in (rec.get('message') or {}).get('content') or []
+              if isinstance(c, dict) and c.get('type') == 'text']
+        if any(ch): last = '\n'.join(ch)
+except Exception:
+    sys.exit(0)
+if not last or re.search(r'ask-operator-gate|ASK_OPERATOR_NIGHT_OK', last):
+    sys.exit(0)
+tail = '\n'.join([l for l in last.strip().splitlines() if l.strip()][-3:])
+PHRASES = (r'\b(let me know|your call|up to you|tell me which|which would you|do you want me to|'
+           r'shall i|should i|needs? (you|your|the owner)|waiting (for|on) (you|your)|'
+           r'blocked on (you|your)|if you want|when you(\'re| are) ready)\b')
+if re.search(PHRASES, last, re.I) or '?' in tail:
+    print((re.search(PHRASES, last, re.I) or re.search(r'[^.\n]*\?', tail)).group(0)[:120])
+PYASK
+)
+    [ -n "$_handback" ] || exit 0
+    ASK_SURFACE="the END OF THIS TURN (no tool call - prose that hands the owner a question: \"$_handback\")"
+else
+    case "${_hook_json:+x}" in x) ;; *) ;; esac   # PreToolUse: the tool itself is the surface
+    ASK_SURFACE=""
+fi
+
 # ---- THE CLOCK, BEFORE ANYTHING ELSE -----------------------------------------------------------
 # NIGHT HOURS. Nothing here judges how important the question is: a question asked at 03:00 waits
 # until morning whatever it is, so the only thing that changes is whether the intervening hours were
@@ -42,7 +93,8 @@ MARKERS='ask_operator|should_ask|operator_intervention|escalate_to_owner|interru
 hour=$(date +%-H)
 if [ "${ASK_OPERATOR_NIGHT_OK:-}" != "1" ] && [ "$hour" -ge "$NIGHT_FROM" ] && [ "$hour" -lt "$NIGHT_TO" ]; then
     cat >&2 <<EOM
-BLOCKED by tools/hooks/ask-operator-gate.sh: it is $(date +%H:%M) local, inside the ${NIGHT_FROM}:00-${NIGHT_TO}:00 night window.
+BLOCKED by tools/hooks/ask-operator-gate.sh: it is $(date +%H:%M) local, inside the ${NIGHT_FROM}:00-${NIGHT_TO}:00 night window.${ASK_SURFACE:+
+The surface is $ASK_SURFACE - ending a turn with a question is the interruption, tool or no tool.}
 The owner's rule: "before asking principal, check time. if it is in range 1am-6am, better keep
 yourself busy overnight rather than ask 'should i do that lengthy task'."
 

@@ -67,6 +67,17 @@
         ]
       },
       {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/tools/hooks/shape-not-a-finding-gate.sh\"",
+            "timeout": 15,
+            "statusMessage": "Checking a recurrence is being fixed, not recorded"
+          }
+        ]
+      },
+      {
         "matcher": "AskUserQuestion|ExitPlanMode",
         "hooks": [
           {
@@ -112,9 +123,40 @@
             "command": "bash \"$CLAUDE_PROJECT_DIR/tools/hooks/wrong-interpreter-gate.sh\""
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/tools/hooks/shape-not-a-finding-gate.sh\"",
+            "timeout": 15,
+            "statusMessage": "Checking the commit message does not record a repeat with no fix"
+          }
+        ]
       }
     ],
     "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/tools/hooks/shape-not-a-finding-gate.sh\"",
+            "timeout": 15,
+            "statusMessage": "Checking this turn does not end on a repeat with no fix"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/tools/hooks/ask-operator-gate.sh\"",
+            "timeout": 15,
+            "statusMessage": "Checking this turn does not end by handing the owner a question"
+          }
+        ]
+      },
       {
         "hooks": [
           {
