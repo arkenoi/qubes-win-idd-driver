@@ -26,6 +26,10 @@
 # settle() shuts guests down between suites, so it needs the per-guest lock (lint L2).
 . "$(dirname "$0")/../mgmt/harness/vmlock.sh" 2>/dev/null || true
 . "$(dirname "$0")/../mgmt/harness/primitives.sh" 2>/dev/null || true   # clock_correct and the other five
+# verdict_class is this project's classifier for a verdict TEXT, and the only code that knows
+# FAIL-MINE is an INSTRUMENT class rather than a product FAIL. suite_class below reads a ledger
+# THROUGH it instead of re-deciding here which spellings mean what.
+. "$(dirname "$0")/../mgmt/harness/verdict-lib.sh" 2>/dev/null || true
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
@@ -69,13 +73,47 @@ LOG="$OUTDIR/remainder.log"
 export TMPDIR="${TMPDIR:-$HOME/tmp}"
 
 say() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" | tee -a "$LOG"; }
+# WHY THE CLASS COMES FROM THE LEDGER AND NOT FROM $?. MEASURED 2026-11-07, one complete chain run
+# at a3dfdd79a00a: failproof-faultinject wrote `INVALID-INSTRUMENT: the pixel witness read FROZEN
+# with NOTHING armed ... so no red here is attributable` and exited 1, and failproof-gates wrote
+# `INVALID-INSTRUMENT` with `ABORTING: SG4 is not green at baseline, so no later red is
+# attributable` and exited 1. Both were reported here as `FAIL <suite>` - as the PRODUCT failing,
+# which is the one thing a blind instrument cannot tell you.
+# AN EXIT CODE CANNOT CARRY THIS DISTINCTION HERE, because two conventions exist in this apparatus
+# and they are INVERTED: mgmt/harness/verdict-lib.sh:65-69 reads 1 as EXECUTED-WITH-GAPS and 2 as
+# BROKEN, while tools/release-acceptance.sh's logvol arm reads 2 as INVALID-RIG and every other
+# non-zero as a product FAIL. Renumbering the suites would move the ambiguity, not remove it
+# (Jev classifier_source=verdict_ledger 0.99, renumber_exits 0.00), and the suites ALREADY declare
+# the class per row, in column 3 of their verdict ledger. Read that.
+# ITS REACH IS EXACTLY THE SUITES WHOSE OUTDIR IS $WORK/<label>, which today is the two failproof
+# suites - the two that exhibited this. Every other suite has no ledger at that path, gets NONE,
+# and is classified exactly as before. A ledger that is missing, empty or unclassifiable is a FAIL
+# too: "no row" must never read as "not a failure".
+suite_class() {      # suite_class <label> -> FAIL (product) | INVALID (could not measure) | NONE
+  local f="$WORK/$1/verdicts.tsv" v worst=NONE
+  declare -F verdict_class >/dev/null 2>&1 || { echo NONE; return; }
+  [ -s "$f" ] || { echo NONE; return; }
+  while IFS= read -r v; do
+    [ -n "$v" ] || continue
+    case "$(verdict_class "$v")" in
+      FAIL)    worst=FAIL ;;                        # one product FAIL outranks every gap
+      INVALID) [ "$worst" = FAIL ] || worst=INVALID ;;
+    esac
+  done < <(awk -F'\t' 'NF>=3 {print $3}' "$f")
+  echo "$worst"
+}
+
 run_it() {           # run_it <label> <cmd...>  - never `cmd | tee`, which reports TEE's status
   local label="$1"; shift
   if [ "$DRY" = 1 ]; then echo "INTEND[dry] $label: $*" | tee -a "$LOG"; return 0; fi
   say "--- $label"
   "$@" >>"$WORK/$label.out" 2>&1
   local rc=$?
-  if [ "$rc" = 0 ]; then say "PASS  $label"; else say "FAIL  $label (exit $rc) - see $WORK/$label.out"; fi
+  if [ "$rc" = 0 ]; then say "PASS  $label"
+  elif [ "$(suite_class "$label")" = INVALID ]; then
+    say "UNCOVERED  $label (exit $rc) - its ledger declares INVALID-* and no product FAIL: it could"
+    say "           not measure, so nothing here is a verdict about the product. See $WORK/$label.out"
+  else say "FAIL  $label (exit $rc) - see $WORK/$label.out"; fi
   return $rc
 }
 
@@ -117,7 +155,7 @@ fi
 # ---- the suites, each named exactly as gate-scope names it --------------------------------------
 # Only a suite that RAN and PASSED is recorded. A suite gate-scope does not require is skipped and
 # is never recorded either.
-PASSED=""; FAILED=""; SKIPPED=""; INTENDED=""
+PASSED=""; FAILED=""; SKIPPED=""; INTENDED=""; UNCOVERED=""
 REPAIRED=""   # subjects make_candidate has already re-upgraded in THIS run (repair once, then refuse)
 
 # SETTLE THE RIG BETWEEN SUITES. Measured 2026-10-09, first non-dry run: toast-hold-test was
@@ -262,9 +300,14 @@ make_candidate() {    # make_candidate <vm> - rc 0 = the guest runs the candidat
 # measured over six suites whose command was bash /nonexistent/suite-that-cannot-exist.sh, all
 # six PASSED. acceptance-plan.py:202 makes that dry call the remainder cell's first probe, so
 # the probe could not fail. Dry results go to INTENDED and nowhere near PASSED.
+# A SUITE THAT COULD NOT MEASURE IS NOT IN FAILED. It is not in PASSED either, so the merge below
+# still records nothing for it and gate-scope still refuses the cut on coverage - which is the
+# correct outcome and the one this run already produced. What changes is only the CLASS the
+# operator is told, which is the whole defect.
 note() {
   if [ "$DRY" = 1 ]; then INTENDED="$INTENDED $2"
   elif [ "$1" = 0 ]; then PASSED="$PASSED $2"
+  elif [ "$(suite_class "$2")" = INVALID ]; then UNCOVERED="$UNCOVERED $2"
   else FAILED="$FAILED $2"; fi
 }
 
@@ -521,6 +564,7 @@ else SKIPPED="$SKIPPED failproof-faultinject"; fi
 say "passed:$PASSED"
 say "intended:$INTENDED"
 say "failed:$FAILED"
+say "uncovered:$UNCOVERED"
 say "skipped:$SKIPPED"
 
 # ---- merge into the receipt the release-cut gate reads -----------------------------------------
@@ -534,10 +578,11 @@ else
   # change that but makes it cheap, and a reader of the receipt could not otherwise tell a single
   # coherent campaign from four one-suite runs settled differently. Measured 2026-10-27: without this
   # the receipt records only the suite names.
-  python3 - "$COVFILE" "$RUN" "$HEAD12" "$PASSED" "$ONLY" <<'PYMERGE'
+  python3 - "$COVFILE" "$RUN" "$HEAD12" "$PASSED" "$ONLY" "$UNCOVERED" <<'PYMERGE'
 import json, os, sys
 out, run, head, passed = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4].split()
 only = sys.argv[5] if len(sys.argv) > 5 else ""
+uncovered = sys.argv[6].split() if len(sys.argv) > 6 else []
 rec = {}
 if os.path.exists(out):
     try:
@@ -546,6 +591,17 @@ if os.path.exists(out):
         rec = {}
 suites = sorted(set(rec.get("suites") or []) | set(passed))
 rec["suites"] = suites
+# THE RECEIPT ALREADY HAS A CLASS FOR A SUITE THAT COULD NOT MEASURE, and this merge never wrote
+# it. tools/coverage-receipt.py:25 defines `"instrument_fail": [...] (NOT in suites - uncovered)`
+# and its own note says "instrument-fail is uncovered and refuses the cut (plan section 6)", so
+# the vocabulary has been here all along - only `suites` was being merged, which left the class to
+# a log line that scrolls away. tools/gate-scope.py check reads ONLY cov["suites"] (:309), so
+# recording this changes no gate decision: the cut still refuses because the suite is absent from
+# `suites`, which is exactly how this run already refused.
+# A suite that passes LATER must LEAVE this list, or the record contradicts itself across a
+# narrowed run - a receipt is a record, not an intention (docs/ADR-acceptance.md section 4).
+if uncovered or rec.get("instrument_fail"):
+    rec["instrument_fail"] = sorted((set(rec.get("instrument_fail") or []) | set(uncovered)) - set(suites))
 rec.setdefault("package_run", run)
 rec.setdefault("built_from", head)
 if only:
@@ -565,5 +621,11 @@ PYMERGE
   if [ "$CHK" = 0 ]; then say "GATE SATISFIED for $HEAD12"; else say "GATE NOT YET SATISFIED (exit $CHK)"; fi
 fi
 
-[ -z "$FAILED" ] || exit 1
+# THE EXIT CONTRACT IS DELIBERATELY UNCHANGED: every input that exited 1 before still exits 1,
+# because an uncovered suite was in FAILED until this commit. Whether an instrument-only run
+# should get its own code is NOT settled - Jev instrument_only_exit came back 0.53, and 0.21 with
+# the leading option flipped once the chain's own exit composition was in the state - so it was
+# not taken on a verdict. It was taken on "no unrequested behaviour changes": the defect measured
+# here is the class this gate REPORTS, not the code it returns.
+[ -z "$FAILED$UNCOVERED" ] || exit 1
 exit 0

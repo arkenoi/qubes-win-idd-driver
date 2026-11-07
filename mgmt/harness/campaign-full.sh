@@ -331,7 +331,15 @@ settle_the_rig "step 3 (gate-remainder refuses ANY running guest)" "gate-remaind
 log "step 3/4: gate-remainder (--fi-run $FI)"
 tools/gate-remainder.sh --run "$PKG" --vm10 "$VM10" --vm11 "$VM11" --os11 "$OS11" --fi-run "$FI" \
   > "$OUT/gate-remainder.out" 2>&1; grc=$?
-log "  gate-remainder rc=$grc: $(grep -aE 'PASS|FAIL|merged' "$OUT/gate-remainder.out" | tail -1 | cut -c1-140)"
+# QUOTE THE SET, NOT THE LAST LINE. MEASURED 2026-11-07 at a3dfdd79a00a: FOUR suites did not pass
+# - the remainder's own log says `failed: toast-hold-test log-sweep failproof-gates
+# failproof-faultinject` - and this line reported ONE of them, because it took `tail -1` of every
+# line matching PASS|FAIL|merged and the last such line is simply the last suite to fail. An
+# operator reading the chain log saw a quarter of the result. The remainder prints its own
+# authoritative roll-up as `passed:`/`failed:`/`uncovered:`/`skipped:`, lower-case, which that
+# pattern never matched; quote those, because they are the summary the gate itself computed.
+log "  gate-remainder rc=$grc: $(grep -aE '\] (passed|failed|uncovered|skipped):' "$OUT/gate-remainder.out" 2>/dev/null \
+      | sed 's/^\[[0-9:]*\] //' | tr '\n' ' ' | cut -c1-300)"
 
 # ---- 7. the receipt must satisfy its own floor ---------------------------------------------------
 log "step 4/4: does the receipt cover what the gate requires?"
