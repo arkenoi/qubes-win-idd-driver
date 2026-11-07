@@ -4,3 +4,7 @@
 [submodule "core-agent"]
 	path = core-agent
 	url = https://github.com/arkenoi/qubes-core-agent-windows
+[submodule "winutils"]
+	path = winutils
+	url = https://github.com/arkenoi/qubes-windows-utils
+	branch = qwt-4.3
