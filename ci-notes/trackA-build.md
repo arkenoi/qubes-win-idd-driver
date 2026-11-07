@@ -1,6 +1,14 @@
 # Track A — building `qubes-gui-agent-windows` (user-mode agent) in GitHub Actions
 
 Status: **GO.** Investigated 2026-07-30. Owner of this file: the Track A CI agent.
+
+> **Stale in one respect, corrected 2026-11-07.** The dependency transcript below still shows
+> `windows-utils` being cloned from `QubesOS` at `WINDOWS_UTILS_REF` and patched. It is not, and it
+> is not upstream: nothing outside QWT consumes that library, we carried 13 patches against it, and
+> it is now the `winutils` submodule, built in place (`docs/ADR-upstream.md` §4, commits a23aa0ec
+> and 5c1c713e). The transcript is kept as the July 2026 record and the two tables below are
+> corrected where they stand. Every other repo it clones is genuinely upstream and still cloned
+> exactly as shown.
 Scope: how to build `gui-agent.exe` / `gui-watchdog.exe` / `dump-windows.exe` from the
 `agent/` submodule on a GitHub-hosted `windows-2022` runner.
 
@@ -68,7 +76,7 @@ shipped in `Windows Kits\10\{Include,Lib}\<ver>\um`). The last four are Qubes.
 
 | header | comes from |
 |---|---|
-| `log.h`, `config.h`, `exec.h`, `list.h`, `qubes-io.h`, `vchan-common.h` | `qubes-windows-utils/include/` |
+| `log.h`, `config.h`, `exec.h`, `list.h`, `qubes-io.h`, `vchan-common.h` | `winutils/include/` (OURS since 2026-11-07, `docs/ADR-upstream.md` §4; this row said `qubes-windows-utils/include/`) |
 | `libvchan.h` | `qubes-core-vchan-xen/windows/include/` |
 | `qubesdb-client.h` | `qubes-core-qubesdb/include/` |
 | `xencontrol.h` (→ pulls `xeniface_ioctls.h`) | `xeniface/include/` (submodule of pvdrivers) |
@@ -155,7 +163,7 @@ So headers must come from the source repos and libs must be built (or synthesize
 
 | DLL | FileVersion | size | ⇒ source ref to pin |
 |---|---|---|---|
-| `windows-utils.dll` | 4.2.2.0 | 67144 | `QubesOS/qubes-windows-utils` **`v4.2.2`** |
+| `windows-utils.dll` | 4.2.2.0 | 67144 | the `winutils` submodule (`arkenoi/qubes-windows-utils` `qwt-4.3`) — **OURS**, `docs/ADR-upstream.md` §4. **CORRECTED 2026-11-07:** this row read `QubesOS/qubes-windows-utils` `v4.2.2`, which never described the shipped DLL: that was the v4.2.2 clone plus 13 patches applied in the runner. |
 | `libvchan.dll` | 4.2.7.0 | 24584 | `QubesOS/qubes-core-vchan-xen` **`v4.2.7`** |
 | `qubesdb-client.dll` | 4.3.1.0 | 26120 | `QubesOS/qubes-core-qubesdb` **`v4.3.1`** |
 | `libxenvchan.dll` | 4.2.0.0 | 30728 | `QubesOS/qubes-vmm-xen-windows-pvdrivers` **`v4.2.0-1`** |

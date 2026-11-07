@@ -234,7 +234,7 @@ and calls `Send-QwtError`:
 | Application 1000 / 1001 (`Application Error`, `Windows Error Reporting`) for one of our executables | Windows | a crash: faulting application, exception code, pid, start time, the WER report folder |
 | Application 1026 (`.NET Runtime`) for one of ours | Windows | an unhandled managed exception (qwtng-netsetup.exe, qubes-updates-relay.exe) |
 | Application 4001-4004, source **`Qubes Windows Tools`** (registered by `Register-QwtEventSource`) | our supervisors (agent `include/deathevent.h`): the QubesGuiWatchdog service for gui-agent.exe; the agent for wgcbroker.exe, notifhost.exe, etwproxy.exe | the one death Windows cannot see - a child that exited (or hung and was reaped) without being asked to; exe, pid, exit code, run time |
-| System 7031 / 7034 / 7023 / 7024 (`Service Control Manager`) for QdbDaemon, QrexecAgent, QubesGuiWatchdog, QwtngNetSetup | Windows | a service of ours ended; 7023/7024 only since the QWT build's `patches/windows-utils-service-exit-code.patch` makes a worker failure a non-zero service exit |
+| System 7031 / 7034 / 7023 / 7024 (`Service Control Manager`) for QdbDaemon, QrexecAgent, QubesGuiWatchdog, QwtngNetSetup | Windows | a service of ours ended; 7023/7024 only since the QWT build's `winutils/src/service.c` (windows-utils' service-exit-code change, a patch until 2026-11-07) makes a worker failure a non-zero service exit |
 | TaskScheduler/Operational 201 (non-zero result) / 203 for our tasks | Windows | a task's action failed or could not start (the channel is enabled by the installer; client Windows ships it disabled) |
 
 The notification: component = the executable's stem (`gui-agent`, `wgcbroker`, `qrexec-agent`,

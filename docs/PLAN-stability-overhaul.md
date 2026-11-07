@@ -24,8 +24,8 @@ Three gates, all required. A fix that passes one and regresses another is not do
   capture death (18:19:43.3) by ~6.5 s. A modal dialog stops the daemon draining the vchan ⇒
   **any single suspicious message is a guest display DoS.**
 - Blocking mechanism: `VchanSendBuffer` spins `while (VchanGetWriteBufferSize < size) Sleep(1);`
-  with no deadline and no `libvchan_is_open` check — `upstream/ro/qubes-windows-utils/src/
-  vchan-common.c:96-102` (vendored, read-only) — while the caller holds `g_VchanCriticalSection`.
+  with no deadline and no `libvchan_is_open` check — `winutils/src/vchan-common.c:96-102`
+  (OURS since 2026-11-07, docs/ADR-upstream.md section 4) — while the caller holds `g_VchanCriticalSection`.
 - Repro honesty: 4 post-reboot ProtoTrace storm runs produced ZERO natural negative geometry.
   The storm probe is a validated reproducer for flip churn, **not** for S1b. Hence rank 1.
 

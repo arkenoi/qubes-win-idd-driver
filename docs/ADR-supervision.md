@@ -68,7 +68,7 @@ Where the details live:
 | `docs/DESIGN-error-notify.md` | the error-notify route (`service.notify-errors`) that carries the death notification |
 | `guest/qwt-report-death.ps1`, `guest/qwt-notify-error.ps1` | the reporter's action and the route it sends through |
 | `include/deathevent.h` (agent) | the one Event Log record a supervisor writes per death |
-| `patches/windows-utils-service-exit-code.patch` | services exit non-zero when their worker fails |
+| `winutils/src/service.c` (until 2026-11-07 `patches/windows-utils-service-exit-code.patch`) | services exit non-zero when their worker fails |
 | `guest/health-check.ps1` (step 2b) | asserts every service's recovery settings |
 | `tools/tests/death-reporter-*`, `svc-exitcode-selftest.sh`, `supervision-install-selftest.sh`, `health-recovery-selftest.sh` | the offline proofs |
 | `findings/issues.md` | what is still owed on a guest |
@@ -304,11 +304,14 @@ reaches it; its three relaunch lines and the park line are ERROR now). Uncompile
 pinned by `gui-agent/deathevent_test.c` via `tools/tests/deathevent-selftest.sh`.
 
 **§2, services visible.** The exit-0 swallow was not in the services but in windows-utils' `SvcMainLoop`:
-`SvcSetState` ignored its exit code, in the wrapper of QrexecAgent and of the qubesdb daemon alike. Fixed by
-`patches/windows-utils-service-exit-code.patch`, applied by `build.yml` and `qwt-full.yml` like the
-interactive-logon patch. `tools/tests/svc-exitcode-selftest.sh` proves it against the exact ref CI clones
-(v4.2.2) and sees the unpatched file fail. qrexec-agent.c already returned the worker's Win32 code; the qubesdb
-daemon returns `ERROR_UNIDENTIFIED_ERROR` on a failed mainloop. A requested stop stays exit 0.
+`SvcSetState` ignored its exit code, in the wrapper of QrexecAgent and of the qubesdb daemon alike. Fixed in
+`winutils/src/service.c`; until 2026-11-07 that was `patches/windows-utils-service-exit-code.patch`, applied by
+`build.yml` and `qwt-full.yml` like the interactive-logon patch, and the stack is now commit `e25cbc1` of the
+`winutils` submodule (`ADR-upstream` §4). `tools/tests/svc-exitcode-selftest.sh` proves it against
+`winutils/src/service.c` itself and sees the suite fail when the requested-stop exemption is taken out (until
+then it proved it against the exact ref CI cloned, v4.2.2, and saw the unpatched file fail). qrexec-agent.c
+already returned the worker's Win32 code; the qubesdb daemon returns `ERROR_UNIDENTIFIED_ERROR` on a failed
+mainloop. A requested stop stays exit 0.
 
 **§3, the reporter.** Task `QwtDeathReporter` (SYSTEM, EventTrigger, `Queue`, ValueQueries = channel +
 EventRecordID only), action `guest/qwt-report-death.ps1` in bin, route `qwt-notify-error.ps1` (gate, redaction,
@@ -348,9 +351,9 @@ relaunch therefore stays for both, and their deaths are reported through 4002/40
 - A .NET 1026 counts only for our two managed executables. Our install directory comes from the registry
   (`InstallDir`) or from the reporter's own folder, never from a hard-coded default that would refuse every
   crash of an install elsewhere.
-- The windows-utils patch keeps a REQUESTED stop clean. Both workers return success on the stop event:
-  qrexec-agent sets ERROR_SUCCESS, and qubesdb's mainloop takes its stop branch because its pipe thread has no
-  stop path (Jev 0.87).
+- The windows-utils service-exit-code change (`winutils/src/service.c`) keeps a REQUESTED stop clean.
+  Both workers return success on the stop event: qrexec-agent sets ERROR_SUCCESS, and qubesdb's mainloop
+  takes its stop branch because its pipe thread has no stop path (Jev 0.87).
 
 ### Accepted residuals
 

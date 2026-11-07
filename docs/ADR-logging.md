@@ -8,8 +8,11 @@ line composed and written in a SINGLE `WriteFile`.** Jev `sink` **0.79** (conf 0
 `append_atomic_single_write` **0.84**, `earlier_answer_superseded` **0.72**; the event-log option fell
 to **0.01** once the facts below were in the brief.
 
-Shipped as `patches/windows-utils-one-log-per-module.patch`, applied unconditionally by both
-workflows with marker assertions, guarded by `tools/tests/one-log-per-module-selftest.sh` (18 checks).
+Shipped in `winutils/src/log.c`; until 2026-11-07 as `patches/windows-utils-one-log-per-module.patch`,
+applied unconditionally by both workflows with marker assertions. The patch stack has since become
+commit `e25cbc1` of the `winutils` submodule (`ADR-upstream` §4). Guarded by
+`tools/tests/one-log-per-module-selftest.sh`, which read the patch (18 checks) and now reads
+`winutils/src/log.c` itself.
 
 **Decision (2026-11-01): EVERY log a component of ours writes goes into the ONE directory, and every
 line in that directory is accounted for by the sweep.** Owner, 2026-11-01: *"fix all logs locations,
@@ -30,7 +33,7 @@ outside"*. The bullet that sat under "Not done" since 2026-10-07 is this decisio
    `Log` wrapper and every call site; the updater keeps its loss accounting (`QWTUPDLOGLOST`) on the
    primitive's return. The two C# writers, the updates relay and the netsetup service, write through
    the library every Qubes Tools program already logs through, `windows-utils.dll` (System32, MSI-installed,
-   our patched log.c), by DllImport of `LogStart` / `LogInit` / `LogInitDefault` / `_LogFormat`: the relay
+   our `winutils/src/log.c`), by DllImport of `LogStart` / `LogInit` / `LogInitDefault` / `_LogFormat`: the relay
    `LogStart` on the file the updater names, else `LogInit(<--log>, "qubes-updates-relay")`; each handler
    `LogInit(<--log>, "relay-handler")`; the netsetup service no init at all, because its qubesdb client has
    already initialised the library in that process. A hand-written C# sink was specified first and
@@ -159,6 +162,9 @@ logging framework, do not invent"*, *"fix logging, this mess is unacceptable"*.
 
 The primitive is upstream `qubes-windows-utils` `src/log.c`, cloned fresh at build time; we already
 patch that repo, now four times, each with a marker check that fails the build on a no-op.
+**CORRECTED 2026-11-07:** it is not upstream - nothing outside QWT consumes that library
+(`ADR-upstream` §4) - and it is no longer cloned or patched: `winutils/src/log.c` is ours, carried
+as the `winutils` submodule.
 
 1. **One file per module per day.** `LogInit`'s format string carried module, date, time and pid.
    The **date stays**: `PurgeOldLogs` deletes by `ftCreationTime`, so a dateless name keeps its first
@@ -204,7 +210,7 @@ to `fwprintf` twice, and an empty message reading `g_BufferUtf8[-1]`.
 * **`meets_owner_constraints` chose the event log, 0.61 at confidence 0.48**, against this at 0.22,
   because a **bespoke logger survives this fix** — which is what *"do not invent"* was aimed at. What
   the fix does is make it smaller: the per-process naming and the three-write line are gone, and
-  rotation/purge is the upstream mechanism, untouched.
+  rotation/purge is the mechanism v4.2.2 shipped, untouched.
 * **`missing_measurement = total-line-volume-per-boot`, confidence 1.00.** Now instrumented rather
   than argued: the collector reports `LSW INVENTORY` / `LSW INVMODULE` for the log directory itself,
   independent of the collection cap, and the analyzer names it in the summary (41aae917). The number

@@ -19,15 +19,17 @@ Project's network driver - code with thousands of users who are not us. It does 
 Windows utility library. Nothing outside the Windows tools consumes it: no Linux component, no dom0
 component, no package. Its only consumers are this project's own two forks, the installer, and the
 Windows halves of two other libraries - all of them parts of the same product. Nine of our eleven
-patches are aimed at it. So there is no upstream there to send a patch to, and the library is being
-assimilated into this project once the current work lands.
+patches were aimed at it when this was decided. So there is no upstream there to send a patch to,
+and the library was assimilated into this project on 2026-11-07. By then the patches aimed at it had
+grown from nine to thirteen; they are now one commit in a third repository of ours, carried beside
+the two forks.
 
 | § | decision | status |
 |---|---|---|
 | 1 | two repositories are forked, as submodules | ACCEPTED |
 | 2 | four dependencies are cloned at a pinned version and patched | ACCEPTED |
 | 3 | the vendored read-only checkout is local working material, never a build input | ACCEPTED |
-| 4 | windows-utils is to be assimilated - it has no consumer outside QWT | ACCEPTED |
+| 4 | windows-utils is to be assimilated - it has no consumer outside QWT | ACCEPTED, DONE 2026-11-07 |
 
 ## The decisions in detail
 
@@ -63,7 +65,7 @@ act rather than something the build does.
 
 | dependency | pinned ref | our patches |
 |---|---|---|
-| `qubes-windows-utils` | `v4.2.2` | 9, see §4 |
+| `qubes-windows-utils` | `v4.2.2` | 9 at the decision, 13 by 2026-11-07, none since: no longer cloned, see §4 |
 | `qubes-gui-common` | `v4.3.1` | none |
 | `qubes-core-vchan-xen` | `v4.2.7` | none |
 | `qubes-core-qubesdb` | `v4.3.1` | none |
@@ -116,6 +118,7 @@ asserts they agree.
 ## 4. windows-utils is to be ASSIMILATED - it has no consumer outside QWT
 
 **Status:** ACCEPTED (maintainer), 2026-10-21. Sequenced AFTER the work in flight lands.
+**DONE 2026-11-07** - see "Done" below.
 
 **Context, measured 2026-10-21.** §4 was first written as "the patch set has outgrown the rule",
 with the cost given as +531/-103 across nine patches, one of them a 260-line rewrite of the logging
@@ -146,6 +149,23 @@ disguise".
 3. `xenvif` stays as patches (§2): it is Xen's, outside Qubes, with consumers who are not us.
 4. The four dependencies we do not modify stay pinned clones (§2). Assimilation is for what we
    change, not for what we merely use.
+
+**Done, 2026-11-07.** Point 2 held this behind the work in flight, and the stack grew from the nine
+patches counted above to thirteen while it waited. It landed on 2026-11-07.
+
+The fork is `arkenoi/qubes-windows-utils`, branch `qwt-4.3`: v4.2.2 plus all thirteen patches as ONE
+commit, `e25cbc1` (6 files, +719/-116: `src/log.c`, `pipe-server.c`, `service.c`, `error.c`, `exec.c`,
+`vchan-common.c`), pushed. Its message names the thirteen patches in the order the build applied them
+and the file each touched, so the delta against v4.2.2 is `git diff v4.2.2 e25cbc1` inside `winutils/`.
+It is carried in this repository as the submodule `winutils/` (`.gitmodules`, branch `qwt-4.3`), the way
+§1's two forks are. `patches/windows-utils-*.patch` (13 files) and the steps in `build.yml` and
+`qwt-full.yml` that cloned the pinned ref and applied them are deleted, and both workflows build
+`winutils/` in place; `patches/` keeps the two xenvif patches (§2).
+
+The gitignored mirror `upstream/ro/qubes-windows-utils` was never the shipped source: it sits at
+`22e03f5` on branch `main`, while the build pinned `v4.2.2` and then applied the patches, so the
+shipped source existed in no checkout on disk. §2's third cost and §3's mirror are about that gap, and
+`winutils/` closes it for this library.
 
 **Why.** The one honest argument for the patch form is that a patch file is the upstream
 deliverable. That argument does not survive the measurement: there is no upstream consumer to
