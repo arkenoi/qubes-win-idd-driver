@@ -291,8 +291,12 @@ QUESTION = {"type": "choice",
                 "insufficient-evidence": "the item as shown cannot be judged (a fragment, or its meaning depends on code not shown)"}}
 
 
-def judge(items, batch_size=10, out_dir="scratchpad/msg-audit"):
-    """Batch the candidates to Jev. One call per batch; exit 2 aborts the run."""
+def judge(items, batch_size=10, out_dir="scratchpad/msg-audit", rule_state=None, question=None):
+    """Batch the candidates to Jev. One call per batch; exit 2 aborts the run.
+
+    rule_state/question default to the WORDINESS pair (RULE_STATE, QUESTION). The going-down audit
+    passes its own, so one batching path, one abort-on-exit-2 and one answers-on-disk layout serve
+    both axes - a second copy of this loop is how the two would drift."""
     os.makedirs(os.path.join(ROOT, out_dir), exist_ok=True)
     cands = [i for i in items if i["candidate"]]
     # dom0-facing first: they are what he reads on screen
@@ -300,7 +304,7 @@ def judge(items, batch_size=10, out_dir="scratchpad/msg-audit"):
     verdicts, cost = {}, 0
     for b in range(0, len(cands), batch_size):
         chunk = cands[b:b + batch_size]
-        state = [RULE_STATE, "THE ITEMS IN THIS BATCH:"]
+        state = [rule_state or RULE_STATE, "THE ITEMS IN THIS BATCH:"]
         rubric = {"questions": {}}
         for n, it in enumerate(chunk, 1):
             key = "m%d" % n
@@ -309,7 +313,14 @@ def judge(items, batch_size=10, out_dir="scratchpad/msg-audit"):
                             it["len"], it["prose_len"], it["sentences"],
                             "".join(" FLAG:" + f for f in ("reassurance", "hedge", "repo_path", "explanation") if it[f]),
                             it["text"]))
-            q = json.loads(json.dumps(QUESTION))
+            if it.get("gd_reach"):
+                state.append("    THE TEARDOWN PATH THAT REACHES THIS LINE, measured by a reader that "
+                             "accounted for every emitter in this file: " + it["gd_reach"])
+                state.append("    THE CONDITION THIS SITE ALREADY TESTS: " + (it.get("gd_guard") or "none"))
+            if it.get("gd_context"):
+                state.append("    THE SOURCE ABOVE THIS CALL:\n" +
+                             "\n".join("      " + l for l in it["gd_context"].split("\n")))
+            q = json.loads(json.dumps(question or QUESTION))
             q["instructions"]["judge"] = "Item %s. " % key + q["instructions"]["judge"]
             rubric["questions"][key] = q
         sp = os.path.join(ROOT, out_dir, "state-%03d.txt" % b)
@@ -803,6 +814,178 @@ def verify(inp, judged_path, reask_dir, window, only_files):
     return 0
 
 
+# ---- the going-down axis: never complain about an absence that was ASKED FOR ---------------------
+# Owner, 2026-11-07: "NEVER complain about anything going down when it is expected to ... all these
+# messages should be degraded to informational when shutdown is in progress already ... this is, like,
+# fourth time we are doing that and still get things missed?" - and he was right about the four:
+# main.c:1269, main.c:16525, main.c:17493 and log-sweep.py:221 each carry their own prose and their own
+# hand-rolled condition, with no shared call anywhere, which is exactly how a fifth site (capture.c, via
+# agent d8e6c80) reintroduced the defect and failed three of eight cells of rel-42356238859.
+# WHICH EMITTERS ARE EVEN CANDIDATES is a string test over the message, so it is here and not in a
+# model. WHETHER THE STAND-DOWN ADR GOVERNS a given one is a judgement, so it is Jev's. WHETHER THE TREE
+# ACTUALLY ROUTES a governed one is a tree fact, so it is here too (goingdown_enforce) - that check is
+# what makes a sixth site impossible rather than merely regrettable.
+GD_ABSENCE = re.compile(r"\b(lost|could not be (re)?created|not recreated|disappear\w*|vanish\w*|"
+                        r"is gone|are gone|went away|no longer|missing|absent|not found|unavailable|"
+                        r"disconnect\w*|closed|abandon\w*|never (opened|published|issued|arrived|came)|"
+                        r"not confirmed|reaches nobody|stale|frozen|died|dead|"
+                        r"timed out|no answer|no response|not ready|unreachable|refused)\b", re.I)
+
+GD_RULE_STATE = """THE TWO DECISIONS, both ACCEPTED, both binding. Judge each line AGAINST them; neither is
+open here.
+
+ADR-supervision section 7 (docs/ADR-supervision.md:636, ACCEPTED 2026-10-24): "A deliberate stand-down is
+ultimate: no clock, no deadline, no report, until something starts it", because "an alert for a condition
+that was requested is never actionable - it is the fault that reached this project's owner twice".
+Owner, 2026-11-07: "NEVER complain about anything going down when it is expected to"; "all these messages
+should be degraded to informational when shutdown is in progress already".
+
+ADR-supervision section 1 (docs/ADR-supervision.md:76): "Anything of ours that dies unexpectedly is a
+major ERROR, and it is LOUD." The sweep counts agent_deaths_at_shutdown and agent_ends_unrecorded for
+precisely this. A DEATH, or a fault the going-down did not ask for, is what those exist to catch, and
+degrading one would blind them.
+
+SO THE QUESTION IS NOT "does this line happen during a shutdown" - many do. It is: IS THE THING IT
+COMPLAINS ABOUT THE VERY THING THE GOING-DOWN REMOVED? An absence that was requested is section 7 and
+becomes informational while a going-down holds. Something that broke on its own is section 1 and stays
+loud, mid-shutdown included.
+
+WHAT IS ALREADY BUILT, so "there is no predicate yet" is not a consideration: agent/include/qga-lifecycle.h
+carries QgaGoingDownSilences(stopRequested, helpersDisarmed, sessionEnding) over the section 7 predicate
+QgaDesliceTeardownExcused; agent/gui-agent/lifecycle.h exposes LifecycleGoingDown(stopRequested) and the
+macros LogErrorUnlessGoingDown / LogWarningUnlessGoingDown, which emit THE SAME TEXT at INFO while a
+going-down holds and are unchanged outside one. Routing a site costs one call, so cost is no reason to
+leave a line loud. A helper outside SYSTEM cannot read the session latch (notifhost runs as the
+interactive user), so for those the deliberate-stop fact has to be the caller's own.
+
+A LEVEL CHANGE IS NOT A DELETION: the line is still written, with its text, as information."""
+
+GD_QUESTION = {"type": "choice",
+               "confidence_floor": 0.70,
+               "instructions": {
+                   "judge": "Is the thing this emitter complains about the very thing a deliberate "
+                            "going-down removed - so ADR-supervision section 7 governs it and it must be "
+                            "informational while a going-down holds - or is it a death or an unexpected "
+                            "fault that section 1 keeps loud?",
+                   "context": "The level shown is what it emits today. A line that fires 25 times inside "
+                              "one teardown is a hot path: the answer may not assume a kernel-object read.",
+               },
+               "criteria": {
+                   "degrade_when_going_down": "The absence, loss or failure it reports is what the "
+                        "going-down itself caused or asked for. Route it through LifecycleGoingDown so it "
+                        "reads as information while a going-down holds, and is untouched otherwise.",
+                   "stays_loud": "It reports a death, or a fault the going-down did not ask for. Section 1 "
+                        "keeps it at its current level even mid-shutdown; routing it would blind a real "
+                        "failure.",
+                   "not_a_going_down_site": "A deliberate going-down cannot reach this line, so nothing "
+                        "about it needs to change.",
+                   "insufficient_evidence": "The facts given do not establish which of the above holds.",
+               }}
+
+# The levels that COMPLAIN. LEVEL_OF also carries "I" (LogInfo) and "D" (LogDebug), so testing
+# `kind in LEVEL_OF` admits every emitter in the tree - the first run of this audit did exactly that and
+# 32 of its 52 governed sites were lines that are ALREADY informational, with nothing to degrade.
+GD_COMPLAINS = {"E", "W", "P", "B"}
+
+# A site is also satisfied when the line simply no longer complains - see goingdown_enforce.
+GD_INFORMATIONAL = re.compile(r"\b(LogInfo|LogDebug|LogVerbose|BLog|LogInfoRaw)\s*\(")
+
+GD_ROUTED = re.compile(r"\b(LifecycleGoingDown|LogErrorUnlessGoingDown|LogWarningUnlessGoingDown|"
+                       r"QgaGoingDownSilences|QgaDesliceTeardownExcused|QgaGoingDownHeld)\b")
+
+
+def goingdown_candidates(items):
+    """The emitters whose MESSAGE is about something absent, lost or not recreated - a string test, so it
+    is code. Everything else is counted and left alone: sending all ~583 emitters to a judge is the shape
+    the classifier skill forbids, and most of them report a fault, not an absence."""
+    for it in items:
+        it["candidate"] = (bool(GD_ABSENCE.search(it.get("text") or ""))
+                           and LEVEL_OF.get(it.get("kind")) in GD_COMPLAINS)
+    return [i for i in items if i["candidate"]]
+
+
+def goingdown_reach_facts(items, census_path):
+    """THE RE-ASK'S NEW EVIDENCE. 78 of 90 going-down judgements came back UNDER FLOOR with only the source
+    above the call to go on, and the reason is identifiable: the fact that decides a site is the TEARDOWN
+    PATH that reaches it - a call-graph fact spanning WM_QUERYENDSESSION -> HelpersDisarm -> the thread
+    that logs - which no window of source lines contains. A census (one read-only agent per
+    component-tree unit, 465 emitters read, every citation re-verified in code afterwards) produced
+    exactly that field. Attaching it is NEW EVIDENCE IN THE STATE, which is the only thing that licenses
+    a re-ask; re-wording the question would not (jev-workflow: `degenerate_ab_ok` 0.51 re-shaped to 1.00
+    is the receipt for why). Matched on file plus the NEAREST line within 30, because the census read the
+    tree before this patch moved lines. Returns how many items gained a fact."""
+    try:
+        census = json.load(open(os.path.join(ROOT, census_path), encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0
+    by_file = {}
+    for c in census:
+        by_file.setdefault(c.get("file"), []).append(c)
+    n = 0
+    for it in items:
+        cands = by_file.get(it["file"]) or []
+        near = [c for c in cands if abs((c.get("line") or 0) - (it.get("line") or 0)) <= 30]
+        if not near:
+            continue
+        c = min(near, key=lambda x: abs((x.get("line") or 0) - (it.get("line") or 0)))
+        it["gd_reach"] = c.get("how_reached") or ""
+        it["gd_guard"] = c.get("existing_guard") or "none"
+        n += 1
+    return n
+
+
+def goingdown_enforce(judged, window=8, floor=0.70):
+    """THE LINT. For every site with an ABOVE-FLOOR degrade_when_going_down verdict, does the tree either
+    route it through the one shared decision or no longer emit it as a complaint at all? Two things this
+    gets right only because it got them wrong first:
+
+    THE FLOOR IS PART OF THE PREDICATE. A verdict under the floor is NO VERDICT (the jev-workflow skill),
+    so it cannot be an enforcement target. Measured 2026-11-07: 78 of 90 judgements came back under
+    floor, and enforcing all 18 "governed" rows made the lint fail on 16 sites nobody had decided -
+    noise that would be switched off within a week. Under-floor rows are OWED, printed separately.
+
+    SATISFIED MEANS THE LINE NO LONGER COMPLAINS, not that it is spelled a particular way. A site whose
+    stop is its own BRANCH CONDITION (core-agent qrexec-wrapper.c:470 sits inside
+    `WaitForSingleObject(g_StopEvent) == WAIT_OBJECT_0`) has nothing to read at runtime: degrading the
+    level IS the fix, and a lint that demanded the predicate's NAME there would force a call whose
+    answer is statically true. So an informational emitter at the site counts as satisfied.
+
+    Located by TEXT first and by line only as a hint, because a patch moves lines - a check anchored on
+    the recorded line number called three capture.c sites unrouted when my own patch had moved them 43
+    lines down. Returns (routed, unrouted, not_located, owed)."""
+    routed, unrouted, missing, owed = [], [], [], []
+    cache = {}
+    for it in judged:
+        if it.get("verdict") != "degrade_when_going_down":
+            continue
+        if (it.get("confidence") or 0) < floor:
+            owed.append(it)
+            continue
+        rel = it["file"]
+        if rel not in cache:
+            p = os.path.join(ROOT, rel)
+            cache[rel] = (open(p, encoding="utf-8", errors="replace").read().splitlines()
+                          if os.path.exists(p) else None)
+        L = cache[rel]
+        if L is None:
+            missing.append(it)
+            continue
+        needle = (it.get("text") or "")[:40]
+        hits = [n for n, ln in enumerate(L) if needle and needle in ln]
+        if not hits:
+            missing.append(it)
+            continue
+        n = min(hits, key=lambda h: abs(h + 1 - (it.get("line") or 0)))
+        lo, hi = max(0, n - window), min(len(L), n + window)
+        how = ""
+        if GD_ROUTED.search("\n".join(L[lo:hi])):
+            how = "routed through the shared decision"
+        elif GD_INFORMATIONAL.search(L[n]):
+            how = "degraded in place: the line no longer complains"
+        (routed if how else unrouted).append(dict(it, found_at=n + 1, satisfied_by=how))
+    return routed, unrouted, missing, owed
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -813,6 +996,15 @@ def main():
     pj.add_argument("--inp", default="scratchpad/msg-audit.json")
     pj.add_argument("--out", default="scratchpad/msg-audit-judged.json")
     pj.add_argument("--batch", type=int, default=10)
+    pg = sub.add_parser("goingdown", help="never complain about an absence that was asked for: "
+                        "filter, judge with Jev, then check the tree routes every governed site")
+    pg.add_argument("--out", default="scratchpad/goingdown-judged.json")
+    pg.add_argument("--batch", type=int, default=12)
+    pg.add_argument("--enforce-only", action="store_true",
+                    help="skip Jev: re-run the tree check against --out (this is the lint)")
+    pg.add_argument("--reask", metavar="CENSUS",
+                    help="re-ask ONLY the under-floor sites, with the teardown path that CENSUS measured "
+                         "for each - new evidence in the state, which is what licenses a re-ask")
     pv = sub.add_parser("verify")
     pv.add_argument("--inp", default=None, help="the before corpus: the measure output judge consumed "
                     "(default: <judged>.before.json as judge froze it, else scratchpad/msg-audit.json)")
@@ -821,6 +1013,87 @@ def main():
     pv.add_argument("--window", type=int, default=10, help="lines around the call searched for the moved words")
     pv.add_argument("--files", nargs="*", default=None, help="limit the per-item rows to these files (not the gate)")
     a = ap.parse_args()
+
+    if a.cmd == "goingdown":
+        op = os.path.join(ROOT, a.out)
+        if a.reask:
+            if not os.path.exists(op):
+                print("FAIL %s does not exist - there is nothing to re-ask" % a.out, file=sys.stderr)
+                return 3
+            judged = json.load(open(op, encoding="utf-8"))
+            under = [i for i in judged if (i.get("confidence") or 0) < 0.70]
+            got = goingdown_reach_facts(under, a.reask)
+            print("UNDER FLOOR %d; %d of them gained a measured teardown path from %s"
+                  % (len(under), got, a.reask))
+            todo = [i for i in under if i.get("gd_reach")]
+            if not todo:
+                print("FAIL no under-floor site matched the census - the re-ask has no new evidence and "
+                      "would be the same question in new words, which is forbidden", file=sys.stderr)
+                return 3
+            for i in todo:
+                i["candidate"] = True
+            again, cost = judge(todo, a.batch, out_dir="scratchpad/goingdown-reask",
+                               rule_state=GD_RULE_STATE, question=GD_QUESTION)
+            if again is None:
+                return 4
+            fixed = {(i["file"], i["line"]): i for i in again}
+            merged = [fixed.get((i["file"], i["line"]), i) for i in judged]
+            json.dump(merged, open(op, "w", encoding="utf-8"), indent=1)
+            print("re-asked %d site(s) with the teardown path (jev input_tokens %d); rewrote %s"
+                  % (len(again), cost, a.out))
+            judged = merged
+        elif a.enforce_only:
+            if not os.path.exists(op):
+                print("FAIL %s does not exist - there is nothing to enforce against; run without "
+                      "--enforce-only first" % a.out, file=sys.stderr)
+                return 3
+            judged = json.load(open(op, encoding="utf-8"))
+        else:
+            items = [measure(i) for i in collect()]
+            if not items:
+                print("FAIL no messages extracted - a defect of this script, not an empty corpus",
+                      file=sys.stderr)
+                return 3
+            cands = goingdown_candidates(items)
+            for it in cands:
+                it["gd_context"] = context_of(it, before=16)[0]
+            print("EMITTERS %d; COMPLAIN ABOUT AN ABSENCE %d (string test on the message and the level, "
+                  "not a verdict); each carries the 16 source lines above its call, which is the fact "
+                  "that decides it" % (len(items), len(cands)))
+            if not cands:
+                print("FAIL the absence filter matched nothing out of %d emitters - that is this "
+                      "script's defect, not a clean tree" % len(items), file=sys.stderr)
+                return 3
+            judged, cost = judge(cands, a.batch, out_dir="scratchpad/goingdown",
+                                 rule_state=GD_RULE_STATE, question=GD_QUESTION)
+            if judged is None:
+                return 4
+            os.makedirs(os.path.dirname(op), exist_ok=True)
+            json.dump(judged, open(op, "w", encoding="utf-8"), indent=1)
+            print("wrote %s (jev input_tokens %d)" % (a.out, cost))
+        counts = {}
+        for i in judged:
+            counts[i.get("verdict")] = counts.get(i.get("verdict"), 0) + 1
+        print("VERDICTS", counts)
+        under = [i for i in judged if (i.get("confidence") or 0) < 0.70]
+        print("UNDER FLOOR (no verdict, NOT a pass): %d" % len(under))
+        for i in under[:12]:
+            print("   %-42s :%-6s %.2f %s" % (i["file"], i["line"], i.get("confidence") or 0,
+                                              (i.get("text") or "")[:60]))
+        routed, unrouted, miss, owed = goingdown_enforce(judged)
+        print("GOVERNED SITES WITH A VERDICT: %d satisfied, %d NOT, %d not located; %d more are UNDER "
+              "FLOOR and therefore OWED a verdict, not a patch"
+              % (len(routed), len(unrouted), len(miss), len(owed)))
+        for i in routed:
+            print("  ok       %-40s :%-6s %s" % (i["file"], i.get("found_at"), i.get("satisfied_by")))
+        for i in owed:
+            print("  OWED %.2f %-40s :%-6s %s" % (i.get("confidence") or 0, i["file"], i["line"],
+                                                  (i.get("text") or "")[:60]))
+        for i in unrouted:
+            print("  UNROUTED %-40s :%-6s %s" % (i["file"], i.get("found_at"), (i.get("text") or "")[:70]))
+        for i in miss:
+            print("  NOT LOCATED %-37s :%-6s %s" % (i["file"], i.get("line"), (i.get("text") or "")[:70]))
+        return 1 if (unrouted or miss) else 0
 
     if a.cmd == "verify":
         return verify(a.inp, a.judged, a.reask_dir, a.window, set(a.files) if a.files else None)
