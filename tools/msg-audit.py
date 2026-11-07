@@ -61,6 +61,8 @@ USAGE
         the gate.
 """
 import argparse
+import collections
+import importlib.util
 import json
 import os
 import re
@@ -79,21 +81,144 @@ DOM0_FACING = [
     "guest/qwt-report-death.ps1",       # the death reporter: header, consequence, cause, technical
     "guest/qwt-notify-error.ps1",       # the route
 ]
-LOG_LINES = [
-    "agent/gui-agent", "agent/watchdog", "tools/notifhost", "tools/wgcbroker",
-    "core-agent/src", "guest",
-]
+# THE SCOPE IS DERIVED, NOT TYPED. tools/log-sweep.py OUR_FAMILIES (agent, watchdog, qrexec, winutils,
+# bridge, etwproxy, installer, binddirs, blog) is what the sweep polices, and what writes those lines is
+# the component trees: every submodule .gitmodules declares (agent/, core-agent/, winutils/) plus tools/
+# (the bridge, the ETW proxy, the broker) and guest/. This was six typed directories. winutils/, our fork of
+# qubes-windows-utils and the source of the shipped log library, was not one of them, so every emitter it holds was
+# in no census; tools/wgcbroker was, and it holds no logging call ("This broker has no log", wgcbroker.cpp). A tree
+# added as a submodule is in scope the day .gitmodules names it, and scope_report() prints what a scan
+# covered: a tree or a directory that yields nothing is a line of output, not a silence.
+# packaging/ and the C# extension were the two ways a writer of OUR_FAMILIES was in no census at all.
+# packaging/setup/Install-QwtImproved.ps1 is the writer of the `installer` family (its Write-Log is the
+# `yyyy-MM-dd HH:mm:ss [LEVEL] message` line tools/log-sweep.py INSTALLER_RE reads) and is neither a submodule nor
+# tools/ nor guest/; guest/qubes-updates-relay.cs is the shipped relay, a `winutils|` writer that log-sweep.py names,
+# in a language no extension of the scan listed. packaging/ also holds the BUILD scripts (make-package.ps1,
+# make-setup.ps1, patch-xenbus-inf.ps1, stage-qwt-repo.ps1), whose Write-Warning runs on a build host. No property of a
+# FILE tells a build script from a guest-run one, so none is used and no list of them is typed; the property that IS
+# readable is the CALL: Write-Warning and Write-Error are console streams that write no log file (NOT_LOG_LINE), so they
+# are counted and shown apart instead of being carved out.
+# A writer is not always a call to a sink by its name, either. A script the installer writes to disk sits inside a
+# single-quoted here-string (install-reboot-audit.ps1's recorder), which ps_mask reads as code when it holds a log
+# command; and a function that passes its own parameter on as the message of a log command (the installer's Fail,
+# activate-idd.ps1's Log) is a log command of its file, which ps_commands reads from the code and lists in the
+# WRAPPERS line, so its callers are emitters.
+OWN_TREES = ("tools", "guest", "packaging")
+SOURCE_EXT = (".c", ".cpp", ".h", ".ps1", ".cs")
+
+
+def scope_roots():
+    """Every path .gitmodules declares plus OWN_TREES. A .gitmodules that cannot be read stops the run: a
+    scope that quietly lost its submodules is the defect this replaces."""
+    r = subprocess.run(["git", "config", "-f", ".gitmodules", "--get-regexp", r"^submodule\..*\.path$"],
+                       cwd=ROOT, capture_output=True, text=True)
+    paths = [ln.split(None, 1)[1].strip() for ln in r.stdout.splitlines() if " " in ln]
+    if r.returncode != 0 or not paths:
+        print("FAIL no submodule path read from .gitmodules (git config rc=%d) - that is a defect of this "
+              "script, not a product without submodules" % r.returncode, file=sys.stderr)
+        sys.exit(3)
+    return sorted(set(paths) | set(OWN_TREES))
+
 
 # ---- extraction ---------------------------------------------------------------------------------
 # A C call's text can be several adjacent literals across lines; the compiler concatenates them and so
 # do we. Anything else would measure a fragment and rank it as short.
-C_CALL = re.compile(r"\b(LogError|LogWarning|LogInfo|LogDebug|BLog|LogOnce|win_perror2?|PlatLog)\s*\(")
+C_CALL = re.compile(r"\b(LogError|LogWarning|LogInfo|LogDebug|BLogE|BLogW|BLog|LogOnce|win_perror2?|PlatLog|NtLog)\s*\(")
 PS_CALL = re.compile(r"(Write-QwtDeathLog\s+'(?:ERROR|WARN)'|Write-Error|Write-Warning|Write-QwtLog\s+'(?:ERROR|WARN)')")
 LITERAL = re.compile(r"L?\"((?:[^\"\\]|\\.)*)\"")
 PS_LITERAL = re.compile(r"(?:\"((?:[^\"\\`]|\\.|`.)*)\"|'((?:[^']|'')*)')")
 
-LEVEL_OF = {"LogError": "E", "win_perror": "E", "win_perror2": "E", "LogWarning": "W",
-            "LogOnce": "W", "BLog": "B", "PlatLog": "P", "LogInfo": "I", "LogDebug": "D"}
+# Write-QwtLog 'ERROR|WARN' has no caller in any tree (measured 2026-11-07); the sink's callable name is Write-QwtLogLine,
+# which ps_commands reads with the other command-style emitters. A PowerShell emitter is not `name(args)`: its message
+# and level are whitespace-separated arguments, positional or named, in a statement that can run over several lines, so
+# PS_CALL's one-line search cannot read them and ps_commands does. PS_SLOTS is the positional order of each.
+PS_SLOTS = {"Write-Log": ("message", "level"), "Write-QwtLogLine": ("level", "message"), "LogError": ("message",),
+            "LogWarning": ("message",), "LogInfo": ("message",), "LogDebug": ("message",), "LogVerbose": ("message",)}
+# PowerShell command names are case-insensitive; the kind keeps the spelling PS_SLOTS gives.
+PS_CMD = re.compile(r"(?<![\w$.\-])(" + "|".join(PS_SLOTS) + r")(?![\w\-])", re.I)
+PS_DEFAULT_LEVEL = {"Write-Log": "INFO"}     # Write-Log's parameter default, packaging/setup/Install-QwtImproved.ps1
+PS_HERE = re.compile(r"@(['\"])[ \t]*\r?\n")
+PS_FUNC = re.compile(r"\bfunction\s+([A-Za-z_][\w\-]*)\s*(?:\(([^)]*)\))?\s*\{", re.I)
+PS_PARAM = re.compile(r"\s*param\s*\(", re.I)
+CS_CALL = re.compile(r"(?<![\w.])Log\s*\(")
+
+# notifhost declares its level in the call NAME (tools/notifhost/qtb_shared.h: BLogE writes "[ERROR] ",
+# BLogW "[WARN] ", plain BLog "[INFO] "), and `\s*\(` has to follow the name at once - so BLog( never
+# matched BLogE( or BLogW(, and the 26 + 16 calls that complain read as none (40 carry a literal; the
+# other two are the definitions in qtb_shared.h).
+LEVEL_OF = {"LogError": "E", "win_perror": "E", "win_perror2": "E", "BLogE": "E", "LogWarning": "W",
+            "LogOnce": "W", "BLogW": "W", "BLog": "I", "PlatLog": "P", "LogInfo": "I", "LogDebug": "D", "LogVerbose": "V"}
+# The words a level is written as outside a call NAME: Write-Log's INFO / WARN / ERROR / FATAL / DEBUG (the
+# installer's [LEVEL] tag) and the single letters of Write-QwtLogLine and of the relay's Log(level, ...). FATAL is an
+# error: the installer ends on it.
+LEVEL_WORD = {"E": "E", "ERROR": "E", "FATAL": "E", "W": "W", "WARN": "W", "WARNING": "W", "I": "I", "INFO": "I",
+              "D": "D", "DEBUG": "D", "V": "V"}
+# NtLog is bind-dirs' and relocate-dir's writer (core-agent/src/bind-dirs/main.c, relocate-dir/main.c). Its level is
+# not in its name: the line it writes starts "[!] ", "[*] ", "[D] ", "[~] " or "[?] ", and the sweep reads such a line
+# (family binddirs) through parse_plain -> blog_level, which takes a level ONLY from a declared "[ERROR] / [WARN] /
+# [INFO] / [FATAL] / [DEBUG] " tag and otherwise returns None ("No vocabulary, no guessing"). level_of asks that
+# function instead of keeping a copy of its grammar, so the two cannot disagree: today no NtLog site declares a
+# level, which makes every one UNJUDGEABLE here, and the day the writer declares one they stop being.
+_LOG_SWEEP = []
+
+
+def log_sweep():
+    """tools/log-sweep.py as a module, loaded once the way tools/sweep-preaccount.py loads it (_load_sweep). A sweep
+    that cannot be loaded stops the run: a level read by a different rule would be a fabricated verdict. No bytecode
+    is written - a census must not write into the tree it measures."""
+    if not _LOG_SWEEP:
+        spec = importlib.util.spec_from_file_location("log_sweep", os.path.join(ROOT, "tools", "log-sweep.py"))
+        keep, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+        try:
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+        except Exception as e:
+            print("FAIL tools/log-sweep.py could not be loaded (%s): NtLog's level is read by its parser, so this "
+                  "census cannot run without it" % e, file=sys.stderr)
+            sys.exit(3)
+        finally:
+            sys.dont_write_bytecode = keep
+        _LOG_SWEEP.append(mod)
+    return _LOG_SWEEP[0]
+
+
+def level_of(kind, text=""):
+    """The level letter an emitter's kind carries, or None when its source does not say. C calls say it in the name
+    (LEVEL_OF). PowerShell and C# calls carry it IN the kind as `<call>/<LEVEL>` (Write-Log/WARN, Log/E): the kind is
+    what `verify` matches its frozen judged files on and what an items file written by `measure` keeps for `judge`,
+    so a level kept anywhere else would be lost on the way. NtLog's is whatever the sweep's own parser reads from the
+    text. None is a fact about the SOURCE (an undeclared level, a variable), never a guess."""
+    if kind in LEVEL_OF:
+        return LEVEL_OF[kind]
+    if kind == "NtLog":
+        return log_sweep().blog_level(text)
+    return LEVEL_WORD.get(kind.partition("/")[2])
+
+
+def call_args(src, start):
+    """The argument text of a call whose open paren ends at src[start - 1]: up to the balanced close paren, or None
+    when none closes within 4000 characters, so a malformed file cannot run to EOF. A parenthesis inside a string or
+    character literal is text, not syntax: win_perror("SetTokenInformation(TokenUIAccess") at winutils/src/exec.c never
+    balanced and the emitter was dropped without a word (2026-11-07: the one call of 1849 in the five trees this
+    changes; the other 1828 that carry a literal read the same text, none is lost)."""
+    i, depth, quote = start, 1, None
+    while i < len(src) and i < start + 4000:
+        c = src[i]
+        if quote:
+            if c == "\\":
+                i += 1
+            elif c == quote:
+                quote = None
+        elif c in "\"'":
+            quote = c
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return src[start:i]
+        i += 1
+    return None
 
 
 def c_messages(path):
@@ -102,21 +227,9 @@ def c_messages(path):
     out = []
     for m in C_CALL.finditer(src):
         func = m.group(1)
-        # take the call's argument text up to a balanced close paren, bounded so a malformed file
-        # cannot run to EOF
-        i, depth, end = m.end(), 1, None
-        while i < len(src) and i < m.end() + 4000:
-            if src[i] == "(":
-                depth += 1
-            elif src[i] == ")":
-                depth -= 1
-                if depth == 0:
-                    end = i
-                    break
-            i += 1
-        if end is None:
+        args = call_args(src, m.end())
+        if args is None:
             continue
-        args = src[m.end():end]
         parts = [lit.group(1) for lit in LITERAL.finditer(args)]
         if not parts:
             continue
@@ -125,8 +238,11 @@ def c_messages(path):
     return out
 
 
-def ps_messages(path):
-    """(line, kind, text) for PowerShell error/warning emissions and notice texts."""
+def ps_messages(path, unread=None):
+    """(line, kind, text) for PowerShell error/warning emissions and notice texts. A match whose line carries no
+    literal is appended to `unread` as (line, kind) when a list is passed, comment lines excepted: its message is a
+    variable or sits past the call's first line, so the census cannot read it, and a call it cannot read is counted,
+    not dropped."""
     out = []
     for n, line in enumerate(open(path, encoding="utf-8", errors="replace"), 1):
         m = PS_CALL.search(line)
@@ -134,8 +250,354 @@ def ps_messages(path):
             continue
         lit = PS_LITERAL.search(line[m.end():])
         if not lit:
+            if unread is not None and not line.lstrip().startswith("#"):
+                unread.append((n, m.group(1).split()[0]))
             continue
         out.append((n, m.group(1).split()[0], lit.group(1) or lit.group(2) or ""))
+    return out
+
+
+def split_top(args):
+    """`args` split at the commas that sit outside every string, character literal and bracket."""
+    parts, cur, depth, quote, i = [], [], 0, None, 0
+    while i < len(args):
+        c = args[i]
+        if quote:
+            if c == "\\":
+                cur.append(c)
+                i += 1
+                c = args[i] if i < len(args) else ""
+            elif c == quote:
+                quote = None
+        elif c in "\"'":
+            quote = c
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == "," and depth == 0:
+            parts.append("".join(cur))
+            cur = []
+            i += 1
+            continue
+        cur.append(c)
+        i += 1
+    parts.append("".join(cur))
+    return parts
+
+
+def cs_messages(path, unread=None):
+    """(line, kind, text) for the Log calls of a C# file. guest/qubes-updates-relay.cs wraps the winutils log library
+    (winutils/, our fork of qubes-windows-utils) in Log(msg), which writes at 'I', and Log(level, msg), whose level is
+    a character - 'E', 'W' or 'I' - that QwtLog.Write hands to the library. The level goes into the kind (Log/E, Log/W,
+    Log/I); a level that is not a character literal (`Log(level, ...)`, `Log(ok ? 'I' : 'W', ...)`) is Log/?, which
+    level_of reads as undeclared.
+    A definition (`static void Log(string msg)`) is not a call: an identifier ends the text before it on its line.
+    The text is the string literals of the message argument; a message with none is appended to `unread`."""
+    src = open(path, encoding="utf-8", errors="replace").read()
+    out = []
+    for m in CS_CALL.finditer(src):
+        before = src[src.rfind("\n", 0, m.start()) + 1:m.start()]
+        word = re.search(r"([A-Za-z_]\w*)\s*$", before)
+        if word and word.group(1) not in ("else", "do"):
+            continue
+        args = call_args(src, m.end())
+        if args is None:
+            continue
+        parts = split_top(args)
+        if len(parts) == 1:
+            level = "I"
+        else:
+            ch = re.fullmatch(r"'([A-Za-z])'", parts[0].strip())
+            level = ch.group(1) if ch else "?"
+        line = src.count("\n", 0, m.start()) + 1
+        text = "".join(lit.group(1) for lit in LITERAL.finditer(parts[-1]))
+        if text:
+            out.append((line, "Log/" + level, text))
+        elif unread is not None:
+            unread.append((line, "Log/" + level))
+    return out
+
+
+def ps_mask(src):
+    """(masked, strings, balanced) for PowerShell source. `masked` has the length and offsets of `src` with each comment
+    blanked to spaces and the inside of each string replaced by \\x01 (neither whitespace nor syntax), so a name found in
+    it is a name in CODE and a statement can be cut at its newline, `;` or `|` without a quote or a comment confusing
+    the cut. `strings` is the (start, end) of the inside of every string that begins in code, here-strings included
+    (except a single-quoted one that is a script of its own: its code is masked in place and its own strings are the
+    ones listed). A double-quoted string may hold a `$( )` with strings of its own - set-time.ps1 has "... $(if ($null -eq $raw) {
+    'nothing' } else { "'" + $raw + "'" }) ..." - which is why this is a scan with a stack and not a regex. A backtick
+    before a line break joins the two lines. `balanced` is False when the file ends inside a string or a `$( )`: the
+    scan lost its place, and ps_commands says so rather than trust what follows."""
+    out, spans, n, lost = list(src), [], len(src), False
+    stack = [("c", 0, 0)]          # (mode: code / double-quoted / code inside $( ), paren depth in a $( ), string start)
+    i = 0
+    while i < n:
+        mode, depth, began = stack[-1]
+        c = src[i]
+        if mode == "d":
+            if c == "`":
+                i += 2
+            elif c == '"':
+                if src.startswith('""', i):
+                    i += 2
+                else:
+                    stack.pop()
+                    if stack[-1][0] == "c":
+                        spans.append((began + 1, i))
+                        out[began + 1:i] = ["\x01"] * (i - began - 1)
+                    i += 1
+            elif c == "$" and src.startswith("$(", i):
+                stack.append(("s", 0, 0))
+                i += 2
+            else:
+                i += 1
+            continue
+        top = mode == "c"
+        if c == "`":
+            if top and src[i + 1:i + 2] in ("\r", "\n"):
+                j = i + (3 if src.startswith("\r\n", i + 1) else 2)
+                out[i:j] = [" "] * (j - i)
+                i = j
+            else:
+                i += 2
+        elif src.startswith("<#", i):
+            j = src.find("#>", i + 2)
+            j = n if j < 0 else j + 2
+            if top:
+                out[i:j] = [" "] * (j - i)
+            i = j
+        elif c == "#" and (i == 0 or not re.match(r"[\w$.\-:'\"`]", src[i - 1])):
+            j = src.find("\n", i)
+            j = n if j < 0 else j
+            if top:
+                out[i:j] = [" "] * (j - i)
+            i = j
+        elif c == "'":
+            j = i + 1
+            while j < n:
+                if src[j] == "'":
+                    if src.startswith("''", j):
+                        j += 2
+                        continue
+                    break
+                j += 1
+            lost = lost or j >= n
+            if top:
+                spans.append((i + 1, j))
+                out[i + 1:j] = ["\x01"] * max(0, j - i - 1)
+            i = j + 1
+        elif c == '"':
+            stack.append(("d", 0, i))
+            i += 1
+        elif c == "@" and PS_HERE.match(src, i):
+            hm = PS_HERE.match(src, i)
+            k = src.find("\n" + hm.group(1) + "@", hm.end() - 1)
+            k = n if k < 0 else k
+            lost = lost or k >= n
+            if top:
+                # A single-quoted here-string that holds a log command is a SCRIPT the installer writes to disk
+                # (guest/install-reboot-audit.ps1's recorder, guest/pvnic-selfprime.ps1's boot script): the calls in it
+                # are calls, so the body is masked as code of its own. One that does not parse stays a blanked string.
+                inner = ps_mask(src[hm.end():k]) if hm.group(1) == "'" and PS_CMD.search(src, hm.end(), k) else None
+                if inner and inner[2]:
+                    spans.extend((a + hm.end(), b + hm.end()) for a, b in inner[1])
+                    # The opener's and the closer's line breaks stay: the first and the last line of the script are
+                    # statements of their own, at command position and ended by their line break.
+                    out[i + 2:hm.end() - 1] = ["\x01"] * (hm.end() - i - 3)
+                    out[hm.end():k] = inner[0]
+                else:
+                    lost = lost or inner is not None      # names a log command and does not parse: a script this scan could not read
+                    spans.append((hm.end(), max(hm.end(), k)))
+                    out[i + 2:min(n, k + 1)] = ["\x01"] * (min(n, k + 1) - i - 2)      # the opener's and closer's line breaks too
+            i = min(n, k + 3)
+        elif mode == "s" and c == "(":
+            stack[-1] = (mode, depth + 1, 0)
+            i += 1
+        elif mode == "s" and c == ")":
+            if depth == 0:
+                stack.pop()
+            else:
+                stack[-1] = (mode, depth - 1, 0)
+            i += 1
+        else:
+            i += 1
+    return "".join(out), spans, len(stack) == 1 and not lost
+
+
+def ps_tokens(masked, start):
+    """The (start, end) of each whitespace-separated token of the PowerShell command whose name ends at `start` in
+    `masked` (ps_mask's output), up to the end of its statement: a newline, `;` or `|` outside brackets, or a closing
+    bracket that belongs to the construct around the command. Whitespace inside brackets does not split a token, so
+    `("a " + $b) 'WARN'` is two tokens however many lines the first one takes."""
+    toks, depth, first, i, n = [], 0, None, start, len(masked)
+    while i < n:
+        c = masked[i]
+        if depth == 0 and c in "\n;|":
+            break
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                break
+            depth -= 1
+        if c in " \t\r\f":
+            if depth == 0 and first is not None:
+                toks.append((first, i))
+                first = None
+        elif first is None:
+            first = i
+        i += 1
+    if first is not None:
+        toks.append((first, i))
+    return toks
+
+
+def ps_level_word(src, masked, tok, default):
+    """The level word a call's level argument spells - its quoted or bare literal, upper-cased - `default` when the call
+    gives none, and `?` for anything that is not one of LEVEL_WORD's words: a variable, an expression, a word the
+    sweep has no level for."""
+    word = default
+    if tok:
+        raw, mk = src[tok[0]:tok[1]], masked[tok[0]:tok[1]]
+        if len(raw) > 2 and raw[0] in "'\"" and raw[-1] == raw[0] and set(mk[1:-1]) == {"\x01"}:
+            raw = raw[1:-1]
+        word = raw.strip().upper()
+    return word if word in LEVEL_WORD else "?"
+
+
+def ps_functions(src, masked):
+    """[(name, start, lo, hi, params)] for the `function Name(...) {` definitions in CODE (masked is ps_mask's output):
+    the body is masked[lo:hi], and params is [(name, default)] in order, read from the parenthesised list or from the
+    `param(...)` block that opens the body. A default is kept only when it is a bare or quoted word (`'INFO'`)."""
+    out, n = [], len(masked)
+    for m in PS_FUNC.finditer(masked):
+        lo = hi = m.end()
+        depth = 1
+        while hi < n and depth:
+            depth += {"{": 1, "}": -1}.get(masked[hi], 0)
+            hi += 1
+        a, b = m.start(2), m.end(2)
+        pm = PS_PARAM.match(masked, lo) if a < 0 else None
+        if pm:
+            a = b = pm.end()
+            depth = 1
+            while b < n and depth:
+                depth += {"(": 1, ")": -1}.get(masked[b], 0)
+                b += 1
+            b -= 1
+        params = []
+        for part in (split_top(masked[a:b]) if 0 <= a < b else []):
+            nm = re.search(r"\$(\w+)", re.sub(r"\[[^\]]*\]", "", part))
+            dm = re.search(r"=\s*['\"]?([A-Za-z]+)['\"]?\s*$", src[a:a + len(part)])
+            if nm:
+                params.append((nm.group(1), dm.group(1) if dm else None))
+            a += len(part) + 1
+        out.append((m.group(1), m.start(), lo, hi, params))
+    return out
+
+
+def ps_calls(src, masked, names):
+    """[(pos, name, got)] for every use of a log command in CODE. `names` is {lower-case name: (name, slots, level word,
+    whether the level is fixed)}. A use is only where a command can start - after a line break, `{`, `(`, `;`, `|`, `=`
+    or `&`, or the `)` of a scriptblock's `param(...)` - which leaves out `function Write-Log {`, `Get-Command LogDebug`
+    and the no-op `function LogInfo($m) { }` fallbacks, and a name followed by `=` or `{` is a hashtable key, an
+    assignment or a switch label, not a call. `got` maps each slot of the command (message, level, module) to the
+    (start, end) of its argument, named (`-Message x`) or positional in the order of the command's slots."""
+    rx = re.compile(r"(?<![\w$.\-])(" + "|".join(re.escape(n) for n in names) + r")(?![\w\-])", re.I)
+    out = []
+    for m in rx.finditer(masked):
+        k = m.start() - 1
+        while k >= 0 and masked[k] in " \t":
+            k -= 1
+        if k >= 0 and masked[k] not in "\r\n{(;|=&" and not (
+                masked[k] == ")" and re.search(r"\bparam\s*\([^()]*\)$", masked[max(0, k - 160):k + 1], re.I)):
+            continue
+        if re.match(r"[ \t]*[={]", masked[m.end():m.end() + 80]):
+            continue                    # `ok = $x` is a hashtable key or an assignment, `Ok { ... }` a switch label
+        name, slots = names[m.group(1).lower()][:2]
+        got, rest, toks = {}, [], ps_tokens(masked, m.end())
+        j = 0
+        while j < len(toks):
+            word = masked[toks[j][0]:toks[j][1]]
+            if re.fullmatch(r"-[A-Za-z]+", word):
+                key = word[1:].lower()
+                if key in ("message", "msg", "level", "module") and j + 1 < len(toks):
+                    got["message" if key == "msg" else key] = toks[j + 1]
+                    j += 1
+            else:
+                rest.append(toks[j])
+            j += 1
+        for slot in slots:
+            if slot not in got and rest:
+                got[slot] = rest.pop(0)
+        out.append((m.start(), name, got))
+    return out
+
+
+def ps_commands(path, unread=None, wrapped=None):
+    """(line, kind, text) for the PowerShell emitters that are written as COMMANDS, which PS_CALL's one-line search
+    cannot read: the installer's `Write-Log <message> [<level>]`, the log.ps1 sink `Write-QwtLogLine <level> <message>
+    [-Module m]` and its LogError / LogWarning / LogInfo / LogDebug / LogVerbose `<message>`. A call is found only in
+    CODE (ps_mask has blanked the comments and the insides of strings, so a name in a prose comment or a data
+    here-string is not one; see ps_calls for where a command can start). The level goes into the kind (Write-Log/WARN):
+    INFO when Write-Log is given none, `?` when it is a variable. The text is the string literals of the message
+    argument, joined as c_messages joins a call's; a message with none, or only a variable, is appended to `unread`.
+    A FUNCTION THAT PASSES ITS OWN PARAMETER ON as the message of a log command is a log command of its file - the
+    installer's `Fail` is `Write-Log $Message 'FATAL'`, activate-idd.ps1's `Log($m, $lvl)` ends in `Write-QwtLogLine $L
+    $m` - so its callers are emitters (Fail/FATAL, Log/WARN) and its own forwarding call, whose message is a variable,
+    is not. That is read from the code and not listed: the level is the one the function fixes, else the one its
+    callers pass in the argument after the message (its default when they pass none), and `?` when that is no level
+    word. `wrapped` receives (line, name, level) for each such function."""
+    src = open(path, encoding="utf-8", errors="replace").read()
+    if not PS_CMD.search(src):
+        return []
+    masked, strings, balanced = ps_mask(src)
+    if not balanced and unread is not None:
+        unread.append((1, "unbalanced-file"))      # the scan lost its place in this file; see ps_mask
+    names = {n.lower(): (n, PS_SLOTS[n], LEVEL_OF.get(n) or PS_DEFAULT_LEVEL.get(n), n in LEVEL_OF) for n in PS_SLOTS}
+    funcs = ps_functions(src, masked)
+    while funcs:
+        found = {}
+        for pos, name, got in ps_calls(src, masked, names):
+            mt = got.get("message")
+            fn = min((f for f in funcs if f[2] <= pos < f[3]), key=lambda f: f[3] - f[2], default=None)
+            fm = re.fullmatch(r'"?\$(\w+)"?', src[mt[0]:mt[1]]) if mt else None
+            pnames = [p[0].lower() for p in fn[4]] if fn else []
+            if not (fm and fn) or fn[0].lower() in names or fm.group(1).lower() not in pnames:
+                continue
+            midx, (_n, _s, dflt, fixed) = pnames.index(fm.group(1).lower()), names[name.lower()]
+            ltok = None if fixed else got.get("level")
+            lvar = re.fullmatch(r"\$(\w+)", src[ltok[0]:ltok[1]]) if ltok else None
+            others = [i for i in range(len(pnames)) if i != midx]
+            # A level that is a variable is the function's own parameter, or computed from the one after the message.
+            lname = lvar.group(1).lower() if lvar else None
+            lidx = (pnames.index(lname) if lname in pnames else others[0]) if lvar and others else None
+            spec = ("arg", lidx) if lidx is not None else ("fixed", ps_level_word(src, masked, ltok, dflt))
+            found.setdefault(fn[0].lower(), (fn, set()))[1].add((midx, spec))
+        for key, (fn, specs) in found.items():
+            midx, spec = next(iter(specs)) if len(specs) == 1 else (min(s[0] for s in specs), ("fixed", "?"))
+            lvl = fn[4][spec[1]][1] if spec[0] == "arg" else spec[1]
+            names[key] = (fn[0], tuple("message" if i == midx else "level" if spec == ("arg", i) else "-"
+                                       for i in range(len(fn[4]))), lvl, spec[0] == "fixed")
+            if wrapped is not None:
+                how = lvl if spec[0] == "fixed" else "argument %d, default %s" % (spec[1] + 1, lvl or "none")
+                wrapped.append((src.count("\n", 0, fn[1]) + 1, fn[0], how))
+        if not found:
+            break
+    out, line, last = [], 1, 0
+    for pos, name, got in ps_calls(src, masked, names):
+        _n, _s, dflt, fixed = names[name.lower()]
+        kind = name if name in PS_SLOTS and name in LEVEL_OF else name + "/" + ps_level_word(
+            src, masked, None if fixed else got.get("level"), dflt)
+        line += src.count("\n", last, pos)
+        last = pos
+        tok = got.get("message")
+        text = "".join(src[a:b] for a, b in strings if tok[0] <= a and b <= tok[1]) if tok else ""
+        if text and not re.fullmatch(r"\s*\$\w+\s*", text):
+            out.append((line, kind, text))
+        elif unread is not None:
+            unread.append((line, kind))
     return out
 
 
@@ -166,39 +628,102 @@ def h_texts(path):
     return out
 
 
-def extract_file(rel):
+def extract_file(rel, unread=None, wrapped=None):
     """(line, kind, text) for ONE file, by the extractor collect() uses for it: the dom0-facing headers
-    are literal tables, the dom0-facing .ps1 files add their notice builders, everything else is calls.
+    are literal tables, the dom0-facing .ps1 files add their notice builders, C# is read for its Log calls,
+    everything else is calls. `unread`, when a list, receives (line, kind) for every call the scan matched and
+    could not read; `wrapped` receives (line, name, level) for every function a .ps1 file passes a log message through.
     verify() re-extracts a judged item's file through this, so it measures what measure() measured."""
     p = os.path.join(ROOT, rel)
     if rel in DOM0_FACING and rel.endswith(".h"):
         return h_texts(p)
     if rel.endswith(".ps1"):
-        return ps_messages(p) + (ps_notice_texts(p) if rel in DOM0_FACING else [])
+        return ps_messages(p, unread) + ps_commands(p, unread, wrapped) + (ps_notice_texts(p) if rel in DOM0_FACING else [])
+    if rel.endswith(".cs"):
+        return cs_messages(p, unread)
     return c_messages(p)
 
 
+def scope_report(roots, scanned, items, unread=(), wrapped=()):
+    """What a scan covered, printed by collect() so no caller scans without it. Each line is a way a tree
+    used to be absent without a word: a tree that yielded nothing; a directory that held source and
+    yielded nothing, which is where a log writer whose call name C_CALL / PS_CALL does not know sits; a
+    tree OUTSIDE the scope that holds emitters; how many files of each extension were read and what they yielded (a
+    language nobody extracts is a row of zeros, not a silence); the calls that matched and had no text to read; and
+    the functions read as log commands because they pass a parameter on as a log message, with their callers."""
+    tree_of = lambda p: next((t for t in roots if p.startswith(t + "/")), None)
+    per_tree = collections.Counter(tree_of(i["file"]) for i in items)
+    print("SCOPE emitters per tree (.gitmodules + %s): %s"
+          % (" + ".join(OWN_TREES), ", ".join("%s %d" % (t, per_tree[t]) for t in roots)))
+    ext = lambda f: os.path.splitext(f)[1]
+    print("SCANNED BY EXTENSION: " + "; ".join(
+        "%s %d files/%d emitters" % (e, sum(1 for f in scanned if ext(f) == e), sum(1 for i in items if ext(i["file"]) == e))
+        for e in SOURCE_EXT))
+    if unread:
+        print("UNREAD %d CALL(S): the message is a variable or sits past the call's first line, so there is no text to "
+              "judge, and they are NOT among the emitters: %s"
+              % (len(unread), ", ".join("%s %d" % kv for kv in sorted(collections.Counter(k for _f, _l, k in unread).items()))))
+    if wrapped:
+        callers = collections.Counter((i["file"], i["kind"].partition("/")[0]) for i in items)
+        print("WRAPPERS READ AS LOG COMMANDS %d (a function that passes its own parameter on as the message of a log "
+              "command; its callers are emitters and its level is the one it fixes or the one its callers pass): %s"
+              % (len(wrapped), "; ".join("%s:%d %s [%s] %d emitters" % (f, ln, nm, lv, callers[(f, nm)])
+                                         for f, ln, nm, lv in wrapped)))
+    files = collections.Counter(os.path.dirname(f) for f in scanned)
+    emit = collections.Counter(os.path.dirname(i["file"]) for i in items)
+    silent = (sorted(d for d in files if not emit[d])
+              + [t for t in roots if not any(tree_of(f) == t for f in scanned)])
+    if silent:
+        print("NO EMITTER IN %d DIR(S) HOLDING SOURCE - a log writer listed here is invisible to this census: %s"
+              % (len(silent), " ".join("%s(%d)" % (d, files[d]) for d in silent)))
+    ls = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+                        cwd=ROOT, capture_output=True, text=True)
+    if ls.returncode != 0:
+        print("NOT SCANNED: UNKNOWN - git ls-files failed (rc=%d), so the trees outside the scope were not listed"
+              % ls.returncode)
+        return
+    outside = collections.Counter()
+    for f in ls.stdout.split("\0"):
+        if f.endswith(SOURCE_EXT) and not tree_of(f) and os.path.isfile(os.path.join(ROOT, f)):
+            outside[f.split("/")[0]] += len(extract_file(f))
+    held = sorted((t, n) for t, n in outside.items() if n)
+    if held:
+        print("NOT SCANNED, HAS EMITTERS: " + ", ".join("%s %d" % kv for kv in held))
+
+
+# The calls the scan matched and could not read, as (file, line, kind): a message that is a variable
+# (`Write-Log $Message 'FATAL'`, Log(l)) or sits past the call's first line. Filled by collect(), printed by
+# scope_report() and counted in the going-down headline. Such a call is an emitter whose words the census cannot see;
+# dropping it silently is the failure this census exists to catch.
+UNREAD = []
+
+
 def collect():
-    items = []
+    items, unread, wrapped = [], [], []
     for rel in DOM0_FACING:
         if not os.path.exists(os.path.join(ROOT, rel)):
             continue
         for line, kind, text in extract_file(rel):
             items.append({"file": rel, "line": line, "kind": kind, "text": text, "stakes": "dom0"})
     seen = {(i["file"], i["line"]) for i in items}
-    for base in LOG_LINES:
-        d = os.path.join(ROOT, base)
-        if not os.path.isdir(d):
-            continue
-        for dirpath, _, names in os.walk(d):
+    roots, scanned = scope_roots(), []
+    for base in roots:
+        for dirpath, dirs, names in os.walk(os.path.join(ROOT, base)):
+            dirs.sort()
             for nm in sorted(names):
-                if not nm.endswith((".c", ".cpp", ".h", ".ps1")):
+                if not nm.endswith(SOURCE_EXT):
                     continue
                 rel = os.path.relpath(os.path.join(dirpath, nm), ROOT)
-                for line, kind, text in extract_file(rel):
+                scanned.append(rel)
+                lost, wrap = [], []
+                for line, kind, text in extract_file(rel, lost, wrap):
                     if (rel, line) in seen:
                         continue
                     items.append({"file": rel, "line": line, "kind": kind, "text": text, "stakes": "log"})
+                unread.extend((rel, ln, kd) for ln, kd in lost)
+                wrapped.extend((rel,) + w for w in wrap)
+    UNREAD[:] = unread
+    scope_report(roots, scanned, items, unread, wrapped)
     return items
 
 
@@ -309,7 +834,7 @@ def judge(items, batch_size=10, out_dir="scratchpad/msg-audit", rule_state=None,
         for n, it in enumerate(chunk, 1):
             key = "m%d" % n
             state.append("\n%s  [%s] %s:%d  level=%s  len=%d prose=%d sentences=%d%s\n    %s"
-                         % (key, it["stakes"], it["file"], it["line"], LEVEL_OF.get(it["kind"], it["kind"]),
+                         % (key, it["stakes"], it["file"], it["line"], level_of(it["kind"], it["text"]) or it["kind"],
                             it["len"], it["prose_len"], it["sentences"],
                             "".join(" FLAG:" + f for f in ("reassurance", "hedge", "repo_path", "explanation") if it[f]),
                             it["text"]))
@@ -401,7 +926,7 @@ def reask(items, floor=FLOOR, batch_size=6, out_dir="scratchpad/msg-audit"):
             key = "m%d" % n
             ctx, commented = context_of(it)
             state.append("\n%s  [%s] %s:%d level=%s len=%d prose=%d comment_above=%s\n  MESSAGE: %s\n  SOURCE ABOVE THE CALL:\n%s"
-                         % (key, it["stakes"], it["file"], it["line"], LEVEL_OF.get(it["kind"], it["kind"]),
+                         % (key, it["stakes"], it["file"], it["line"], level_of(it["kind"], it["text"]) or it["kind"],
                             it["len"], it["prose_len"], commented, it["text"],
                             "\n".join("    " + l for l in ctx.split("\n")[-8:])))
             q = json.loads(json.dumps(QUESTION))
@@ -831,6 +1356,42 @@ GD_ABSENCE = re.compile(r"\b(lost|could not be (re)?created|not recreated|disapp
                         r"not confirmed|reaches nobody|stale|frozen|died|dead|"
                         r"timed out|no answer|no response|not ready|unreachable|refused)\b", re.I)
 
+# THE EMITTERS NO SOURCE REGEX CAN SELECT. win_perror and win_perror2 build their text at RUNTIME:
+# winutils/src/log.c _win_perror runs FormatMessage(FROM_SYSTEM) on the status and appends " failed with
+# error 0x%x: <system text>" to the caller's literal. qrexec-agent.c:1854 reads
+# win_perror2(status, "CfgReadMultiString(" REG_CONFIG_AUTOSTART_VALUE L")") and its line says "... failed
+# with error 0x2: The system cannot find the file specified": the absence is in no literal, so GD_ABSENCE
+# cannot select the site. Measured 2026-11-07 on the old scope: 334 such emitters, 0 selected. They are
+# COUNTED, and the count is printed beside the candidate count; they are not classified from source,
+# because source has no answer to give.
+GD_RUNTIME_TEXT = frozenset({"win_perror", "win_perror2"})
+
+# EMITTERS THAT ARE NOT LOG LINES. `notice` and `text` are the dom0-facing literal tables (the words of a toast), and
+# Write-Error / Write-Warning are PowerShell console streams: the call writes no file by itself, so no log family of
+# the sweep's is theirs and no level makes them a line. They stay in EMITTERS, are shown apart, and are never
+# candidates and never "unjudgeable" - which keeps packaging's build-time Write-Warning visible and counted without a
+# typed list of build scripts (see OWN_TREES).
+NOT_LOG_LINE = frozenset({"notice", "text", "Write-Error", "Write-Warning"})
+
+
+def unjudged_reason(it):
+    """Why the source cannot decide an emitter, or None when it can (or when it is not a log line). The words of an
+    absence, or the level that makes a line a complaint, are not in the source for: win_perror* (the text is rendered
+    at runtime), NtLog (the sweep's parser reads no level from its prefix), a level that is a variable or that the call
+    does not give and the callee has no default for (`Write-Log $m $lvl`, Log(level, ...), a wrapper's `Log "text"`),
+    and Write-QwtDeathLog, whose ERROR / WARN is in the call but not in its kind - the kind is what verify matches the
+    frozen judged files on, so it cannot change."""
+    k = it["kind"]
+    if k in GD_RUNTIME_TEXT:
+        return "failure text is rendered from a Win32 status at runtime"
+    if k in NOT_LOG_LINE or level_of(k, it["text"]) is not None:
+        return None
+    if k == "NtLog":
+        return "level undeclared: the sweep's binddirs parser reads none from the prefix"
+    if k.endswith("/?"):
+        return "level is not a word at the call (a variable, or none given)"
+    return "level is in the call but not in the kind"
+
 GD_RULE_STATE = """THE TWO DECISIONS, both ACCEPTED, both binding. Judge each line AGAINST them; neither is
 open here.
 
@@ -882,14 +1443,22 @@ GD_QUESTION = {"type": "choice",
                    "insufficient_evidence": "The facts given do not establish which of the above holds.",
                }}
 
-# The levels that COMPLAIN. LEVEL_OF also carries "I" (LogInfo) and "D" (LogDebug), so testing
+# The levels that COMPLAIN. LEVEL_OF also carries "I" (LogInfo, BLog) and "D" (LogDebug), so testing
 # `kind in LEVEL_OF` admits every emitter in the tree - the first run of this audit did exactly that and
 # 32 of its 52 governed sites were lines that are ALREADY informational, with nothing to degrade.
-GD_COMPLAINS = {"E", "W", "P", "B"}
+# BLog was one of them, filed as "B" and counted here: on 2026-11-07, 12 of the 80 candidates were its
+# "[INFO] " lines, while BLogE and BLogW - the notifhost lines that do complain - were not emitters at all.
+GD_COMPLAINS = {"E", "W", "P"}
 
 # A site is also satisfied when the line simply no longer complains - see goingdown_enforce.
 GD_INFORMATIONAL = re.compile(r"\b(LogInfo|LogDebug|LogVerbose|BLog|LogInfoRaw)\s*\(")
 
+# LogErrorUnlessGoingDown / LogWarningUnlessGoingDown are ALREADY-ROUTED sites and must not become candidates again, and
+# their absence from C_CALL is deliberate: `\bLogError\s*\(` cannot match `LogErrorUnlessGoingDown(`, and that is the
+# right answer. A site that uses them is the fix goingdown_enforce looks for (this regex is how it recognises one),
+# so adding them to C_CALL would send every routed site back to the judge as a new candidate. Do not "fix" it.
+# tools/sweep-preaccount.py DOES carry both (MACRO_LEVEL) because it checks what the sweep will READ; this census asks
+# what still needs routing.
 GD_ROUTED = re.compile(r"\b(LifecycleGoingDown|LogErrorUnlessGoingDown|LogWarningUnlessGoingDown|"
                        r"QgaGoingDownSilences|QgaDesliceTeardownExcused|QgaGoingDownHeld)\b")
 
@@ -900,7 +1469,7 @@ def goingdown_candidates(items):
     the classifier skill forbids, and most of them report a fault, not an absence."""
     for it in items:
         it["candidate"] = (bool(GD_ABSENCE.search(it.get("text") or ""))
-                           and LEVEL_OF.get(it.get("kind")) in GD_COMPLAINS)
+                           and level_of(it.get("kind") or "", it.get("text") or "") in GD_COMPLAINS)
     return [i for i in items if i["candidate"]]
 
 
@@ -1060,6 +1629,21 @@ def main():
             print("EMITTERS %d; COMPLAIN ABOUT AN ABSENCE %d (string test on the message and the level, "
                   "not a verdict); each carries the 16 source lines above its call, which is the fact "
                   "that decides it" % (len(items), len(cands)))
+            why = collections.defaultdict(collections.Counter)
+            for it in items:
+                r = unjudged_reason(it)
+                if r:
+                    why[r][it["kind"]] += 1
+            print("UNJUDGEABLE FROM SOURCE %d of %d emitters (%s), plus %d call(s) with no literal message that are not "
+                  "among the emitters. The words of an absence, or the level that makes a line a complaint, are not "
+                  "in the source for these; the %d candidates are not a count of them"
+                  % (sum(sum(c.values()) for c in why.values()), len(items),
+                     "; ".join("%s: %s" % (r, ", ".join("%s %d" % kv for kv in sorted(c.items())))
+                               for r, c in sorted(why.items())) or "none", len(UNREAD), len(cands)))
+            apart = collections.Counter(i["kind"] for i in items if i["kind"] in NOT_LOG_LINE)
+            print("NOT LOG LINES %d of %d, never candidates (dom0-facing literal tables and PowerShell console "
+                  "streams): %s" % (sum(apart.values()), len(items),
+                                    ", ".join("%s %d" % kv for kv in sorted(apart.items())) or "none"))
             if not cands:
                 print("FAIL the absence filter matched nothing out of %d emitters - that is this "
                       "script's defect, not a clean tree" % len(items), file=sys.stderr)
