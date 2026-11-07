@@ -910,8 +910,16 @@ PS
         if grep -qa 'L8R|catchup_ran_this_boot|1' "$OUT/L8-read.out"; then _l8why=ran-and-silent; break; fi
         sleep 20
       done
-      log "  L8: waited for the catch-up (${_l8why}); deaths_after=$(grep -a '^L8R|deaths_after|' "$OUT/L8-read.out" | tail -1 | cut -d'"'"'|'"'"' -f3-)"
+      # READ THE FIELD WITH THE FIELD READER. This line had its own copy of the grep|tail|cut, and
+      # its delimiter was written `-d'"'"'|'"'"'`, which passes cut the THREE characters '|' - so
+      # every run of this cell printed `cut: the delimiter must be a single character` to stderr and
+      # then `deaths_after=` with nothing after it. MEASURED 2026-11-07 on win11r-sup in the
+      # campaign's supervision-gate run. Only the log line was affected: g8r below re-reads the
+      # same field with a correct delimiter and the verdict uses THAT, with `[ -z "$da" ]` already
+      # failing the cell on missing data - so nothing was ever graded on the empty value. The fix
+      # is to define the reader first and use it, rather than keep a second spelling of it.
       g8r(){ grep -a "^L8R|$1|" "$OUT/L8-read.out" | tail -1 | cut -d'|' -f3-; }
+      log "  L8: waited for the catch-up (${_l8why}); deaths_after=$(g8r deaths_after)"
       da=$(g8r deaths_after); wma=$(g8r watermark_after)
       if [ -z "$da" ] || [ -z "$db" ]; then
         verdict L8 INVALID "a death during a shutdown is reported at the next boot, exactly once" \
