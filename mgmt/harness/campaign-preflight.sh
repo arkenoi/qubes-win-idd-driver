@@ -420,5 +420,39 @@ while :; do
     esac
 done
 
+# ---- 5. THE SWEEP ALREADY KNOWS EVERY LOG LINE THIS PACKAGE ADDS -------------------------------
+# Owner, 2026-11-07: "on ANY change, update the sweep data so the sweep is going to pass. wasting a
+# run on discovery that it would not is extremely stupid. So do xerj plus jev on this wired as part
+# of preflight. How many times you failed to pre-account new lines?" EIGHT recorded occasions, listed
+# in tools/sweep-preaccount.py's header, every one the same shape: our own change emits a line,
+# nothing tells the baseline, and a run is spent discovering it - once as 13 unclassified signatures
+# that failed a cell, once as a declaration orphaned by a level change that then failed three cells.
+# The sweep's own `baseline-init` learns signatures FROM a run, which is discovery by construction
+# and cannot help before that run exists. This asks the question statically, off the diff.
+#
+# THE AGENT IS A SUBMODULE AND NEEDS ITS OWN RANGE. A diff taken in the parent shows the gitlink and
+# not one line of the tree that writes most of these lines - found while validating the checker, by
+# running it and getting a reassuring zero. The agent sha is DERIVED from the stamped parent commit
+# (`<sha>:agent`), so the two ranges can never disagree about which product version is meant.
+PREACCOUNT="${PREACCOUNT:-python3 tools/sweep-preaccount.py}"
+SWEEP_BASELINE="${SWEEP_BASELINE:-mgmt/harness/log-sweep-baseline.json}"
+_pa_base=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("preaccounted_at") or "")' \
+           "$SWEEP_BASELINE" 2>/dev/null)
+[ -n "$_pa_base" ] || die 13 "$SWEEP_BASELINE carries no preaccounted_at, so nothing can say which product version it accounts for - stamp it: tools/sweep-preaccount.py record --baseline $SWEEP_BASELINE --at <sha>"
+$PREACCOUNT check --baseline "$SWEEP_BASELINE" --since "$_pa_base" --head "$PKGSHA" \
+    || die 13 "the sweep has not been told about every log line this package adds (parent tree) - the lines are named above"
+# `git rev-parse <sha>:agent` PRINTS THE UNRESOLVED STRING ON STDOUT and exits 128, so a -n test on
+# what it printed is not a resolution test - it passes happily with git's own error text sitting in
+# the variable as the "sha". Found by this file's suite: the clear case stayed GREEN against a
+# baseline stamped 000...0, which resolves to nothing. --verify --quiet prints nothing and exits 1.
+_pa_abase=$(git rev-parse --verify --quiet "$_pa_base:agent")
+_pa_ahead=$(git rev-parse --verify --quiet "$PKGSHA:agent")
+{ [ -n "$_pa_abase" ] && [ -n "$_pa_ahead" ]; } \
+    || die 13 "could not resolve the agent submodule sha at ${_pa_base:0:8} or ${PKGSHA:0:8} - the tree that writes most of our log lines cannot be checked, and an unchecked tree is not a clean one"
+$PREACCOUNT check --baseline "$SWEEP_BASELINE" --since "$_pa_abase" --head "$_pa_ahead" \
+            --repo agent --path-prefix agent/ \
+    || die 13 "the sweep has not been told about every log line this package adds (agent submodule) - the lines are named above"
+log "every log line this package adds is accounted for in $SWEEP_BASELINE"
+
 log "PREFLIGHT CLEAR: package $PKG, commit ${PKGSHA:0:8}"
 exit 0

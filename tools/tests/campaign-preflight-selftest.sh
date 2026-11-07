@@ -109,6 +109,19 @@ printf '#!/bin/bash\nexit 0\n' > "$T/bin/udisksctl"; chmod +x "$T/bin/udisksctl"
 printf '#!/bin/bash\n[ -n "${PROXY_LISTEN:-}" ] && echo "LISTEN 0 4096 127.0.0.1:8082 0.0.0.0:*"\nexit 0\n' > "$T/bin/ss"; chmod +x "$T/bin/ss"
 printf '#!/bin/bash\nprintf %%s "${PROXY_HTTP:-200}"\nexit 0\n' > "$T/bin/curl"; chmod +x "$T/bin/curl"
 printf '#!/bin/bash\nexit 0\n' > "$T/bin/tinyproxy"; chmod +x "$T/bin/tinyproxy"
+# The pre-accounting checker, stubbed the way gh and ci-state are: the scenarios below test OTHER
+# arms, and the real checker would take a git diff against the fixture's package sha. The stamp has
+# to be a REAL commit, because the preflight derives the agent submodule's sha FROM it (<sha>:agent)
+# - a fabricated 000...0 let the clear case stay green while resolving to nothing, which is how the
+# preflight came to read git's exit status instead of its stdout. An UNSTAMPED baseline is itself a
+# refusal, and a checker that reports an unaccounted line is another; both are driven at the end.
+mkdir -p "$T/bin"
+printf '#!/bin/bash\nexit ${PREACCOUNT_RC:-0}\n' > "$T/bin/preaccount"
+chmod +x "$T/bin/preaccount"
+printf '{"preaccounted_at": "%s", "signatures": {}}\n' "$GOODSHA" > "$T/baseline.json"
+printf '{"signatures": {}}\n' > "$T/baseline-unstamped.json"
+printf '{"preaccounted_at": "0000000000000000000000000000000000000000", "signatures": {}}\n' > "$T/baseline-badsha.json"
+
 # a blockclaim lib whose sweep answers from a variable: STUCK_VMS names the guests it cannot clear.
 cat > "$T/blockclaim-lib.sh" <<'EOF'
 claim_sweep_stale(){ case " ${STUCK_VMS:-} " in *" $1 "*) return 1 ;; *) return 0 ;; esac; }
@@ -121,6 +134,8 @@ run(){ # -> rc; output in $T/out
   GH_BIN="$T/bin/gh" GH_STATE="${GH_STATE:-$T/pkg.state}" \
   QVM_CHECK="$T/bin/qvm-check" GOLDEN_SH="$T/bin/golden.sh" \
   CI_STATE="$T/bin/ci-reader" \
+  PREACCOUNT="${PREACCOUNT_OVERRIDE:-$T/bin/preaccount}" \
+  SWEEP_BASELINE="${SWEEP_BASELINE_OVERRIDE:-$T/baseline.json}" \
   GOLDENS_DIR="$T/goldens" FIXTURES_DIR="$T/fixtures" \
   CI_WAIT_SECONDS="${CI_WAIT_SECONDS:-0}" CI_POLL_SECONDS=1 \
   RUNNING_VMS="${RUNNING_VMS:-}" BAD_GOLDENS="${BAD_GOLDENS:-}" CI_LINE="${CI_LINE:-}" \
@@ -289,6 +304,27 @@ if [ "$rc" = 0 ] && grep -qa 'requirement is UNVERIFIED' "$T/out" && ! grep -qa 
 else no "a zero peak is UNVERIFIED" "rc=$rc $(grep -a 'space:' "$T/out" | tail -1)"; fi
 
 
+
+# ---- 5. the sweep already knows every log line this package adds -------------------------------
+# Three refusals, because each is a four-hour campaign otherwise spent discovering the answer. The
+# middle one is not hypothetical - it is the defect it was written for: `git rev-parse <sha>:agent`
+# prints the string it could not resolve on STDOUT and exits 128, so the preflight's `-n` test on
+# that output passed with git's error text as the sha, and the clear case above stayed green.
+rc=$(SWEEP_BASELINE_OVERRIDE="$T/baseline-unstamped.json" run)
+if [ "$rc" = 13 ] && grep -qa 'carries no preaccounted_at' "$T/out"; then
+  ok "a sweep baseline with NO preaccounted_at REFUSES (13) - with no anchor commit there is no range to diff, so 'nothing new' is unmeasured rather than true"
+else no "an unstamped sweep baseline REFUSES (13)" "rc=$rc $(tail -1 "$T/out")"; fi
+
+rc=$(SWEEP_BASELINE_OVERRIDE="$T/baseline-badsha.json" run)
+if [ "$rc" = 13 ] && grep -qa 'could not resolve the agent submodule sha' "$T/out"; then
+  ok "a stamp that resolves to NOTHING refuses (13) instead of checking the agent tree against git's error text - the tree that writes most of our log lines is never left unchecked"
+else no "a stamp that resolves to nothing REFUSES (13)" "rc=$rc $(tail -1 "$T/out")"; fi
+
+rc=$(PREACCOUNT_RC=1 run)
+if [ "$rc" = 13 ] && grep -qa 'has not been told about every log line' "$T/out"; then
+  ok "a log line the baseline has never seen REFUSES (13) at minute 0 - eight recorded times a run was spent discovering one, twice failing cells on it"
+else no "an unaccounted log line REFUSES (13)" "rc=$rc $(tail -1 "$T/out")"; fi
+
 # ---- the tally, LAST, and the exit code is the contract -----------------------------------------
 # This block used to sit above the preparation legs, so the printed total excluded them and the
 # suite's exit code was whatever its final `if` happened to leave behind. A suite whose rc does not
@@ -296,7 +332,7 @@ else no "a zero peak is UNVERIFIED" "rc=$rc $(grep -a 'space:' "$T/out" | tail -
 # THE FLOOR IS A FLOOR, not an exact count: arms get added (the preparation gates added twelve), and
 # an assertion on an exact number turns every addition into a failure. What it guards is that the
 # arms RAN - a suite that refuses everything, or nothing, trips it.
-ARMS_FLOOR="${ARMS_FLOOR:-25}"
+ARMS_FLOOR="${ARMS_FLOOR:-30}"
 if [ "$fail" -eq 0 ] && [ "$pass" -ge "$ARMS_FLOOR" ]; then
   ok "all arms driven: $pass of at least $ARMS_FLOOR - one CLEAR case and the refusals, entry images through preparation"
 else
