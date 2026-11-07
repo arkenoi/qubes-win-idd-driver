@@ -900,6 +900,28 @@ _NORM_RULES = [
     # sweep's own vocabulary, so a reader and a classifier see the verdict rather than a digit.
     (re.compile(r"\b(with return code) (?:2147943515|2147943691)\b"), r"\1 SHUTDOWNREFUSAL"),   # GUARD:taskrcname DEFECT: (re.compile(r"$^"), r""),
     (re.compile(r"\b(with return code) 0\b"), r"\1 ZERO"),
+    # A DATA TABLE IS NOT A LOG EVENT, and two of ours were arriving as thousands of distinct
+    # signatures. MEASURED on campaign rel-42356238859, win10-clean: 5389 of the 5562 items in `new`
+    # were the bind-dirs relocation manifest, 5387 of them from ONE file - 1570 `[D] <path>`, 1570
+    # `[~] <path>`, 1105 `- <name> [A: ...]` and 1144 `> <name> [A: ...]`, one signature per FILE in
+    # a Windows user profile, 4732 of them seen exactly once. Every cell was the same shape, and the
+    # sweep spent 223-241 Jev calls carrying 5564-6025 questions per cell asking whether a filename
+    # in a user profile is a defect - answered `noise` at 0.55-0.68, i.e. mostly under the floor.
+    # Jev normalise_the_entry_name 0.98 against excluding them 0.02: the NAME folds and the line
+    # SHAPE stays, so a manifest that starts reporting something new still surfaces, while a profile
+    # with different files in it stops being news. A per-name allowlist cannot converge - every
+    # guest relocates a different profile. The `[*]` status lines of the same file are untouched:
+    # those are 16 of the baseline's keys and they are the records that say what the run DID.
+    # THE NAMES ARE NOT FOLDED BY THE GENERIC RULES BELOW: `01_Music_..._5_stars.wpl` has no word
+    # boundary between a digit and `_`, so `\b\d+\b` never matches inside it. That is why these
+    # rules exist and why they run BEFORE the folding.
+    (re.compile(r"\[([D~])\] [A-Za-z]:\\.*$"), r"[\1] PATH"),
+    (re.compile(r"(^|\|)([->]) .+ \[A: [^]]*\]$"), r"\1\2 NAME [ATTRS]"),
+    # mgmt/harness/arm-module-bases.sh writes one of these per loaded kernel module per boot so that
+    # tools/resolve-guest-rip.py can resolve a wedge RIP to module+offset. 178 per run across the
+    # nine remainder-* reports, 84% of everything they flagged. The baseline holds 6 of them, and a
+    # guest that loads a different driver set can never turn that into a converging allowlist.
+    (re.compile(r"(MODBASE\b.*?\bname=)\S+"), r"\1NAME"),
     (re.compile(r"\b0x[0-9A-Fa-f]+"), "0xH"),
     (re.compile(r"\b\d+x\d+\b"), "NxN"),                        # window / screen sizes
     (re.compile(r"\b[0-9A-Fa-f]*[A-Fa-f][0-9A-Fa-f]*\b(?<=[0-9A-Fa-f]{8})"), "H"),   # 8+ hex chars with a letter
