@@ -307,6 +307,25 @@ smooth"*, and - of the other components - *"same of other components."*
    `SESSION_END_NEVER_HAPPENED_MS` timer lives there, and a parallel refusal arm with no timer behind it
    would strand a guest with no GUI until reboot - worse than the defect. None of the other sites has one.
 
+   **THE STRANDING OBJECTION DOES NOT REACH THE FIVE, AND THE DECISION IS STILL NOT RIPE.** Read out of the
+   sources afterwards: all five gui-agent sites spawn HELPERS, never the agent - `SpawnHelperAsUser`
+   (`main.c:2732`), `SpawnHelperInSession` (`:2778`), `RestyleGuestCaption` (`:6675`, the caption helper),
+   `notifyerr.c:468` (whose next line reads "fire and forget: no wait, ever") and `etwproxy.c:880`
+   (etwproxy.exe, created suspended and assigned to a job before resume). The three `main.c` sites re-launch
+   the agent's own image with helper arguments, via `GetModuleFileName` on a NULL module; the GUI agent is
+   launched at exactly ONE site, in `watchdog.c`, which is the site already guarded and where the 90 s
+   recovery lives. So refusing any of the five means a helper does not appear during shutdown - the behaviour
+   the P1 asks for - and there is nothing to strand and nothing to recover.
+
+   That fact was missing from the first ask, so it licensed a re-ask on a CHANGED state rather than reshaped
+   wording. `gui_agent_sites_now` came back at conf **0.36 - under floor, so still NO verdict**, and it is
+   again not empty: `implement_at_all_five` scored **0.09** and `helpers_only_not_etwproxy` 0.01, while the
+   survivors are implement-but-prove-on-a-guest-first 0.49 against still-wait 0.35. Both survivors refuse to
+   endorse writing the five refusals unproven. **Two under-floor results on one decision is itself the
+   finding: it is not ripe, nothing is wired on a 0.36, and a third ask needs new evidence rather than new
+   wording.** When it is taken up, the harness cell that exercises a refusal at one of these five belongs in
+   the SAME change as the code - which is how item 2b itself was finally believed.
+
    What the harness step owes, so it is built once and not improvised:
    * **It takes the object identity from the header, never a default.** The four mandatory parameters come
      from `QGA_GOINGDOWN_NTNAME_FMT`, `QGA_GOINGDOWN_SDDL`, `QGA_EVENT_ALL_ACCESS` and `QGA_OBJ_PERMANENT`.
