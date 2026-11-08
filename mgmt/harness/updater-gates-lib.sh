@@ -141,6 +141,60 @@ updater_gates_grade(){
       "no env-assert.out in $d - the environment and locale were never asserted"
   fi
 
+  # U8 - THE OBSERVATION WUOFFERSURVIVESITSOWNINSTALL HAS BEEN WAITING FOR, AND NOTHING WAS WATCHING.
+  # The register entry (P2, OPEN, verified 2026-11-01) reads "STILL OPEN, unobserved": its six campaign
+  # hits (KB4052623 x3, KB2267602 x2, tu-rerun-6bd8aea8) all predate the single-writer fix, and the one
+  # run since - run 10, win11de-tup - offered a NEW definition under a NEW identity, which is the CLEAN
+  # case. So the defect condition has never been produced on this rig and no gate could have caught it.
+  #
+  # THE INVARIANT, ADR-updater section 2 point 3: only the identity-keyed `satisfied` reducer may reduce
+  # dom0's number. With N offered by the last scan, K reported to dom0, and S of the persisted satisfied
+  # identities still among THAT scan's offers, correct behaviour is K <= N - S. K > N - S means at least
+  # one offer this guest PROVED INSTALLED was counted to dom0 again.
+  #
+  # SECTION 2 POINT 4 IS BINDING ON HOW THIS READS: the invariant breaks in TWO directions and this gate
+  # watches ONE. A U8 pass says nothing about the "too little" direction and must not be reported as
+  # closing the class.
+  #
+  # S=0 IS NOT A PASS OF THE MECHANISM, it is the stimulus not occurring - so the gate says how many
+  # matched and passes, because an absent stimulus is not a product verdict. That is what makes this a
+  # LATCH rather than a check, and why it prints S and the identities it matched: the run that finally
+  # produces the condition is legible in the output instead of silent.
+  #
+  # BOTH COUNTS COME FROM THE SAME SCAN. Counting satisfied-identity hits over the whole pass while
+  # taking N from the last scan line mixes two offer sets - the field/record mismatch that has produced
+  # false verdicts in this repo before - so the WUSIZE lines are scoped to the window between the
+  # previous scan summary and the last one, which is where the last scan emitted them.
+  # (# GUARD:reofferlatch DEFECT: an offer whose identity is in `satisfied` is counted to dom0 again)
+  local u8 sat s_seen=0 s_hit="" n_off k_rep l_last l_prev lastscan
+  if [ ! -s "$d/status.txt" ] || ! ug_has "$d/status.txt" 'status_readable=True'; then
+    UG_LINES="${UG_LINES}INSTRUMENT  U8  the re-offer latch is not graded: this capture carries no readable update-status.json"$'\n'
+  else
+    l_last=$(grep -anE 'scan: [0-9]+ update\(s\) offered,' "$alog" 2>/dev/null | tail -1 | cut -d: -f1)
+    l_prev=$(grep -anE 'scan: [0-9]+ update\(s\) offered,' "$alog" 2>/dev/null | tail -2 | head -1 | cut -d: -f1)
+    [ -n "$l_last" ] && [ "$l_prev" = "$l_last" ] && l_prev=0
+    n_off=$(grep -aoE 'scan: [0-9]+ update\(s\) offered' "$alog" 2>/dev/null | tail -1 | grep -aoE '[0-9]+')
+    k_rep=$(grep -aoE '[0-9]+ reported to dom0' "$alog" 2>/dev/null | tail -1 | grep -aoE '^[0-9]+')
+    if [ -z "$n_off" ] || [ -z "$k_rep" ] || [ -z "$l_last" ]; then
+      UG_LINES="${UG_LINES}INSTRUMENT  U8  the re-offer latch is not graded: this pass's agent log carries no scan line with offered/reported counts"$'\n'
+    else
+      lastscan=$(awk -v a="${l_prev:-0}" -v b="$l_last" 'NR>a && NR<b' "$alog" 2>/dev/null)
+      while IFS= read -r sat; do
+        [ -n "$sat" ] || continue
+        if printf '%s' "$lastscan" | grep -qaF "uid=${sat%%:*} rev=${sat##*:}"; then
+          s_seen=$((s_seen+1)); s_hit="${s_hit:+$s_hit,}$sat"
+        fi
+      done < <(sed -n 's/^satisfied=//p' "$d/status.txt")
+      if [ "$s_seen" -gt "$n_off" ]; then
+        UG_LINES="${UG_LINES}INSTRUMENT  U8  not graded: $s_seen satisfied identities matched the last scan's offers but it reported only $n_off offered - the two numbers do not come from the same scan"$'\n'
+      else
+        u8=0; [ "$k_rep" -gt "$((n_off - s_seen))" ] && u8=1
+        ug_gate U8 "no offer this guest proved installed was counted to dom0 again (satisfied identities still offered: $s_seen)" "$u8" \
+          "offered=$n_off reported=$k_rep satisfied_still_offered=$s_seen${s_hit:+ [$s_hit]} - ADR section 2 point 3 requires reported <= offered - satisfied_still_offered. This is the 'too much' direction only (point 4)."
+      fi
+    fi
+  fi
+
   # AN ENVIRONMENT FAILURE IS NEVER A PRODUCT FAILURE. If U7 is the ONLY gate that failed, we did
   # not test what we claimed to test - the subject is not the reporter's environment - so the
   # verdict is INSTRUMENT and the product is not implicated. template-update-test.sh classifies a
@@ -184,6 +238,7 @@ updater_gates_collect(){
   awk '/^#EXE#/{f=1;next}/^#ENDEXE#/{f=0}f'               "$d/probe.out" | tr -d '\r' > "$d/exe.txt"
   awk '/^#SCAN#/{f=1;next}/^#ENDSCAN#/{f=0}f'             "$d/probe.out" | tr -d '\r' > "$d/scan.txt"
   awk '/^#SIZES#/{f=1;next}/^#ENDSIZES#/{f=0}f'           "$d/probe.out" | tr -d '\r' > "$d/sizes.txt"
+  awk '/^#STATUS#/{f=1;next}/^#ENDSTATUS#/{f=0}f'         "$d/probe.out" | tr -d '\r' > "$d/status.txt"
   return 0
 }
 
@@ -219,7 +274,7 @@ updater_gates_diagnose(){
   local ilog="$d/install.log" alog="$d/agent.log" rlog="$d/relay.log" exe="$d/exe.txt"
   local pat="" g
   UG_DIAG=""
-  for g in U1 U2 U3 U4 U5 U6 U7; do
+  for g in U1 U2 U3 U4 U5 U6 U7 U8; do
     if printf '%s' "$UG_LINES" | grep -qa "^FAIL  $g "; then pat="$pat $g:FAIL"; else pat="$pat $g:pass"; fi
   done
   UG_DIAG="DIAGNOSIS${pat}"$'\n'
@@ -344,6 +399,30 @@ updater_gates_diagnose(){
     fi
   fi
 
+  # ---- U8: an installed offer was counted to dom0 again -----------------------------------------
+  if ug_fired U8; then
+    UG_DIAG="${UG_DIAG}  U8 an offer this guest proved installed was counted to dom0 again:"$'\n'
+    # THE FIRST DISCRIMINATOR IS WHETHER THE SUBTRACTION HAD ANYTHING TO SUBTRACT. :3072 honours the
+    # persisted list ONLY when satisfied_rule is 'installed'; any other rule and the next pass discards
+    # it, so a correct subtraction site still reduces nothing.
+    ug_has "$d/status.txt" 'satisfied_rule=installed' \
+      && ug_cand CONFIRMED "the satisfied list was written under the honoured rule, so the subtraction HAD the data and still did not happen" \
+           "status.txt carries satisfied_rule=installed, and guest/qubes-windows-update.ps1:3072 honours exactly that" \
+      || ug_cand CONFIRMED "the satisfied list was written under a rule the next pass DISCARDS, so there was nothing to subtract" \
+           "status.txt has no satisfied_rule=installed; :3072 accepts only 'installed' and drops the list otherwise"
+    # THE SECOND IS AN OFFER THAT CANNOT BE MATCHED AT ALL. Get-Available's identity stamp at :1133 is a
+    # bare try/catch: on a throw the row keeps uid='' and no satisfied entry can ever equal it.
+    ug_hasre "$alog" 'WUSIZE uid= ' \
+      && ug_cand CONFIRMED "at least one offer reached the scan with an EMPTY identity, so it can never match the satisfied list" \
+           "$(grep -aoE 'WUSIZE uid= rev=[0-9]*' "$alog" 2>/dev/null | head -1) - the try/catch at :1133 left uid empty" \
+      || ug_cand EXCLUDED "an empty offer identity" "every WUSIZE line in this pass carries a uid"
+    # THE THIRD IS THE JOIN, AND IT IS THE MEASURED MECHANISM. An install result row carries kb/title and
+    # NO identity at any of the 17 writers, so Get-InstalledIdentities (:542) recovers it by joining back
+    # to the offer row on kb OR title. A miss there means the identity never enters satisfied at all.
+    ug_cand POSSIBLE "the kb/title join lost the identity: the result row carried only a KB or title and did not match its offer row" \
+      "no line can separate this from the above - the join at guest/qubes-windows-update.ps1:542-546 logs nothing when it matches nothing. If satisfied_rule=installed yet satisfied is EMPTY while an install succeeded, this is the cause."
+  fi
+
   UG_DIAG="${UG_DIAG}  Any cause marked POSSIBLE is undecided BY DESIGN - this evidence cannot separate it."$'\n'
   UG_DIAG="${UG_DIAG}  For probabilities, hand the bundle to the classifier of record rather than guessing:"$'\n'
   UG_DIAG="${UG_DIAG}    JEV_ARTIFACT_OUT=$d/jev.json tools/jev-artifact.sh <rubric.json> $d/diagnosis.txt $d/install.log $d/agent.log $d/relay.log"$'\n'
@@ -370,7 +449,7 @@ updater_gates_jev(){
   local d="${1:?updater_gates_jev <evidence-dir>}" first="" g
   UG_JEV=""
   [ "$UG_FAIL" = 0 ] && { UG_JEV="(no failing gate - Jev not asked)"; return 0; }
-  for g in U1 U2 U3 U4 U5 U6 U7; do
+  for g in U1 U2 U3 U4 U5 U6 U7 U8; do
     if printf '%s' "$UG_LINES" | grep -qa "^FAIL  $g "; then first="$g"; break; fi
   done
   local rub="$d/jev-cause-rubric.json" crit=""
@@ -403,6 +482,10 @@ updater_gates_jev(){
          "port_taken":"something else held the port so the relay could not bind it"' ;;
     U7) crit='"env_mismatch":"env-assert measured a mismatch against the reporter record",
          "never_asserted":"the environment was never asserted at all"' ;;
+    U8) crit='"satisfied_not_subtracted":"the satisfied list was present and written under the honoured rule, yet the count reported to dom0 still included an identity in it",
+         "satisfied_rule_discarded":"the list was written under a rule the next pass discards, so the subtraction had nothing to subtract",
+         "empty_identity":"an offer reached the scan with an empty UpdateID, so it could never match the satisfied list",
+         "join_lost_the_identity":"the install result row carried only a KB or title and the kb/title join back to the offer row missed, so the identity never entered satisfied"' ;;
     *)  UG_JEV="(no candidate set for $first)"; return 0 ;;
   esac
   cat > "$rub" <<JEOF

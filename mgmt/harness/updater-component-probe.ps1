@@ -116,6 +116,34 @@ foreach ($k in @($aPre.Keys | Sort-Object)) { Write-Output ("agent_log_pre=" + $
 foreach ($k in @($rPre.Keys | Sort-Object)) { Write-Output ("relay_log_pre=" + $rPre[$k] + " " + $k) }
 Write-Output '#ENDSIZES#'
 
+# THE PERSISTED STATUS, FOR U8 - AND SPLIT INTO PLAIN LINES HERE, NOT PARSED IN THE SHELL.
+# `satisfied` is the list of offer identities (uid:rev) a pass wrote under satisfied_rule='installed',
+# the only list the NEXT pass honours (guest/qubes-windows-update.ps1:3072, ADR-updater section 2 point 3),
+# and the only place an identity this guest proved installed survives a pass. The grader is all grep over
+# files by design, so the JSON is decoded HERE, where a parser exists, and leaves as one `satisfied=` line
+# per identity. The updater itself records that this file can be held by another pass
+# (qubes-windows-update.ps1:210), so an unreadable file prints its own reason and NEVER fails the probe:
+# no status means U8 has no verdict, which is not a product failure.
+Write-Output '#STATUS#'
+try {
+    $sp = 'C:\ProgramData\Qubes\update-status.json'
+    if (Test-Path -LiteralPath $sp) {
+        # READ IT THE WAY ITS OWN WRITER READS IT. guest/qubes-windows-update.ps1:89 does exactly
+        # `Get-Content -LiteralPath $StatusFile -Raw | ConvertFrom-Json`; [IO.File]::ReadAllText would
+        # decode as UTF-8 regardless of what PowerShell 5.1's Set-Content wrote on a German guest,
+        # which is the same byte/encoding mismatch this file already pays attention to further down.
+        $sj = Get-Content -LiteralPath $sp -Raw | ConvertFrom-Json
+        Write-Output ('status_readable=True mtime=' + (Get-Item -LiteralPath $sp).LastWriteTimeUtc.ToString('yyyy-MM-ddTHH:mm:ssZ'))
+        Write-Output ('satisfied_rule=' + [string]$sj.satisfied_rule)
+        foreach ($s in @($sj.satisfied)) { if ("$s".Trim()) { Write-Output ('satisfied=' + "$s") } }
+    } else {
+        Write-Output 'status_readable=False reason=absent'
+    }
+} catch {
+    Write-Output ('status_readable=False reason=' + $_.Exception.GetType().Name)
+}
+Write-Output '#ENDSTATUS#'
+
 # NOTHING NEW MEANS NOTHING - NEVER THE WHOLE FILE.
 # MEASURED 2026-10-22: the else-branch here used to return the ENTIRE log when this pass had
 # appended nothing. On a run whose scan refused instantly (QWTUPDMUTEXHELD) that handed the grader

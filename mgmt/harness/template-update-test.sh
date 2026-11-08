@@ -156,9 +156,14 @@ if [ "$pfrc" -ne 0 ]; then
   updater_gates_jev "$PF" || true
   printf 'JEV (secondary evaluator, supplementary):\n%s\n' "$UG_JEV" | tee -a "$LOG"
   [ "$pfrc" = 2 ] && verdict INSTRUMENT "the updater preflight could not be graded ($UG_FAIL gate(s) unmeasurable) - no dom0 rounds were spent"
-  verdict FAIL "the updater preflight failed $UG_FAIL of 7 gates - the relay was not built or not serving, so the $ROUNDS dom0-driven round(s) were NOT spent; see $PF and the diagnosis above"
+  # THE DENOMINATOR COMES FROM THE COUNTERS, NEVER A LITERAL. It was 7 until U8 (the re-offer latch)
+  # was added, and U8 grades only when the capture carries a readable update-status.json - so the
+  # number of gates GRADED differs between a live run and an older evidence dir, by design. A literal
+  # here would have misstated every live run the moment a gate was added, which is the shape that has
+  # broken consumers in this repo before.
+  verdict FAIL "the updater preflight failed $UG_FAIL of $((UG_PASS+UG_FAIL)) graded gates - the relay was not built or not serving, so the $ROUNDS dom0-driven round(s) were NOT spent; see $PF and the diagnosis above"
 fi
-say "preflight: all 7 gates passed - proceeding to the $ROUNDS dom0-driven round(s)"
+say "preflight: all $UG_PASS graded gate(s) passed - proceeding to the $ROUNDS dom0-driven round(s)"
 
 # 2. the passes
 E2E="$OUT/wu-e2e"

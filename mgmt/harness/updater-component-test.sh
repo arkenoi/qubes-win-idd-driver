@@ -29,7 +29,7 @@
 #     we emit in English, or a number - never Windows' prose. env-assert.sh holds the environment
 #     itself to the reporter's record.
 #
-# THE GATES (U1..U7) and their discriminator-based DIAGNOSIS live in the library; see its header.
+# THE GATES (U1..U8) and their discriminator-based DIAGNOSIS live in the library; see its header.
 # The main flow is deterministic and self-contained. On a failure it additionally asks Jev for
 # supplementary data - which cause the evidence most supports, and how strongly - because a
 # probability is a classification and classifications belong to the classifier of record. That call
