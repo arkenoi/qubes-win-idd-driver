@@ -677,3 +677,38 @@ NOT CHASED, and that is deliberate, not an oversight: the owner's standing order
   purpose was to answer the question. Both wrong calls this turn - this one and the headless capture
   retraction above - are the same failure: concluding an absence from the probes I happened to run
   instead of the one that decides it.
+
+## What the LINUX counterpart bounds, read off upstream/ro (2026-11-08)
+
+- [verified 2026-11-08] THE LINUX UPDATE CHECK HAS NO TIME LIMIT AT ALL, and that is not an
+  omission in my reading - it is the unit. qubes-core-agent-linux/vm-systemd/qubes-update-check.service
+  is `Type=oneshot` with NO TimeoutStartSec and no TimeoutSec, and systemd.service(5) states the
+  default explicitly: "Defaults to DefaultTimeoutStartSec= set in the manager, except when
+  Type=oneshot is used, in which case the timeout is disabled by default". So the upstream equivalent
+  of \QubesWindowsUpdateScan may run forever.
+- [verified 2026-11-08] AND IT DELIBERATELY DISCARDS ITS OWN EXIT STATUS: the line is
+  `ExecStart=-/usr/lib/qubes/upgrades-status-notify started-by-init`, and systemd.service(5) treats a
+  command prefixed `-` as not failing the unit. Upstream therefore has NO path by which a slow or
+  broken update check becomes anything a user sees. That is the whole dilemma I weighed for PT2H -
+  two hours of silence versus a false "The Windows Update scan task failed" - and on Linux NEITHER
+  side of it exists, because there is no limit to trip and no failure to report.
+- [verified 2026-11-08] THE ONLY TIMEOUT ANYWHERE IN THAT AGENT'S UPDATE PATH is tinyproxy's
+  `Timeout 60` in network/tinyproxy-updates.conf, which is an HTTP idle timeout on the updates proxy,
+  not a bound on any pass. qubes.UpdatesProxy.config sets no timeout (skip-service-descriptor,
+  exit-on-service-eof); qubes.InstallUpdatesGUI.config is `wait-for-session=1`, an UNBOUNDED wait.
+  upgrades-status-notify, upgrades-installed-check and the dom0-updates download scripts contain no
+  timeout of any kind - the `dnf -yq check-update` that answers "are there updates" is simply run.
+  qubes-core-admin-linux contains zero timeout mentions.
+- [verified 2026-11-08] QREXEC BOUNDS CONNECTIONS, NEVER DURATION, which is why none of its numbers
+  cap an update pass on either OS: MAX_STARTUP_TIME_DEFAULT 60 in daemon/qrexec-daemon.c:210 (this is
+  the qrexec_timeout property we raise to 300 on our guests), connection_timeout 120 in
+  agent/qrexec-agent-data.c:219 and :361, connection_timeout 10 in daemon/qrexec-client.c:175
+  (overridable), TRIGGER_CLIENT_TIMEOUT 5 in agent/qrexec-agent.c:95. Once a service is connected
+  nothing in qrexec stops it.
+- [verified 2026-11-08] CADENCE, where we are the aggressive one by 16x: the Linux timer is
+  OnBootSec=5min then OnUnitActiveSec=2d - twice a week. Ours is a BootTrigger at PT2M plus a
+  TimeTrigger repeating at $Interval = PT6H, so eight scans a day.
+- [verified 2026-11-08] HONEST GAP: dom0's own update driver (the `vmupdate` package behind
+  qubes-vm-update) is NOT installed in this qube and is not under upstream/ro, so its timeouts are
+  unread. Nothing above should be taken as covering the dom0 side; what is covered is the in-VM
+  agent, the qrexec transport and qubes-core-admin-linux.
