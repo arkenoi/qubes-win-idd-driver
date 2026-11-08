@@ -3284,11 +3284,22 @@ try {
   }
 
   if ($Action -eq 'wuinstall') {
+    # NO EARLY RETURN. This installed through Windows Update and then returned straight out, skipping
+    # the end-of-pass availability re-report 350 lines below - so dom0 kept the number the PRE-INSTALL
+    # scan computed, with everything this action had just installed still inside it. It is the sixth of
+    # the six .msu-route miscounts (WUMSUROUTENEVERSAYSUNVERIFIED) and the only one left open. No caller
+    # passes -Action wuinstall (measured 2026-11-08: the only occurrences in the tree are this
+    # ValidateSet, this branch and the frozen prime-job copies), so it is reached by hand and the stale
+    # number self-corrects at the boot scan or inside the 6-hourly interval - which is why it is a P2,
+    # not a reason to leave it wrong.
+    # THE RE-REPORT IS REUSED, NOT COPIED. Everything this branch used to do itself - Protect-Autologon,
+    # phase=done, Complete-Pass - is the shared tail of this same try block. The four blocks in between
+    # are each gated on BOTH `$Action -in 'install','full'` AND a non-empty $script:WuFallbackKbs or
+    # $script:WuOnlyExpressKbs, which only the offer loop fills and a wuinstall pass never enters, and
+    # the offer loop itself is gated on an $Action this is not. So falling through reaches exactly one
+    # more block than before, and that block is the fix.
     $script:St.result = Install-ViaWU
-    Protect-Autologon
-    $script:St.phase='done'; Complete-Pass
-    Log 'done (WU-native)'
-    return
+    Log 'WU-native install finished; re-reporting availability below'
   }
 
   # KBs the catalog cannot serve; handed to the Windows Update installer after the loop.
@@ -3637,7 +3648,9 @@ try {
   #    scan is a -Scheduled pass; the debounce at the top of this file exempts it while the
   #    previous status is reboot-pending, because without the exemption it was skipped every time.
   #  - nothing pending: rescan now and report, or the flag stays set until the next 6-hourly scan.
-  if ($Action -in 'install','full') {
+  # 'wuinstall' IS HERE for the same reason the other three gates exclude it: this is the only block a
+  # WU-native pass must still run, and it ran none of it until 2026-11-08.
+  if ($Action -in 'install','full','wuinstall') {
     if ($script:St.reboot_needed) {
       # Everything offered was applied; the reboot is ours to perform and happens immediately
       # after this pass. Windows keeps listing the KB as "available" until it boots, but that is

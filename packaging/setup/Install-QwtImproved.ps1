@@ -3564,9 +3564,28 @@ function Invoke-Stage2 {
     $script:UpdTaskPrestop = [ordered]@{}
     $script:UpdTasksDisabled = @()
     foreach ($t in @('QubesWindowsUpdateScan', 'QubesWindowsUpdateRun', 'QubesWindowsUpdateDownload')) {
+        # ASK WHETHER THE TASK IS THERE, because without that answer the two failures below are the
+        # same failure. Until 2026-11-08 `absent` was written whenever /end and /disable BOTH failed,
+        # and that is two opposite facts in one word: a clean install with no task yet (benign, and
+        # what the comment above promises), or a task that IS there and that we ended nothing of and
+        # disabled nothing of - which is the residual of UPGRADEREAPREPORTEDASDEATH. In that second
+        # case an instance may still be running, msiexec's Restart Manager reaps it moments later
+        # with 0xC000013A (STATUS_CONTROL_C_EXIT, measured 2026-10-22 at 04:01:35.747), that code is
+        # NOT excluded in the death reporter, and the user is told "The Windows Update scan task
+        # failed" about a scan our own installer stopped. It was invisible because the log line for
+        # it read exactly like a clean install.
+        # EXIT CODES ONLY, NEVER schtasks' PROSE. This runs on a German guest, where /query prints
+        # localised field names and a localised Status value, so matching "Running" would match
+        # nothing there and make the loud state unreachable on the one environment that reported
+        # this. rc=0 from /query means the task exists, and that is the whole question.
+        # RESET PER TASK. $ended and $disabled were assigned only inside the try, so a throw left
+        # the PREVIOUS task's values standing and this task was graded on them.
+        $exists = $false; $ended = $false; $disabled = $false
         $prev = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
         try {
+            $null = & schtasks /query /tn $t 2>&1
+            $exists = ($LASTEXITCODE -eq 0)
             $null = & schtasks /end /tn $t 2>&1
             $ended = ($LASTEXITCODE -eq 0)
             $null = & schtasks /change /tn $t /disable 2>&1
@@ -3576,7 +3595,11 @@ function Invoke-Stage2 {
         $script:UpdTaskPrestop[$t] = if ($ended -and $disabled) { 'ended+disabled' }
                                      elseif ($disabled)        { 'disabled' }
                                      elseif ($ended)           { 'ended' }
+                                     elseif ($exists)          { 'present-but-unstopped' }
                                      else                      { 'absent' }
+        if ($script:UpdTaskPrestop[$t] -eq 'present-but-unstopped') {
+            Write-Log "pre-msiexec: $t EXISTS and neither /end nor /disable succeeded - if an instance is running, the Restart Manager will reap it and dom0 will be told the scan failed" 'WARN'
+        }
     }
     $script:Result.detail.upd_task_prestop = (($script:UpdTaskPrestop.GetEnumerator() |
         ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' ')
