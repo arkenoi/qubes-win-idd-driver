@@ -429,3 +429,24 @@ does not cover either name.
   theory REFUTED. NEXT: the BOOT context.", so the next reader does not redo the step that is done nor pursue
   the theory that is dead. Also landed: memory start-process-argumentlist-does-not-quote, so the array trap is in
   `recall` rather than rediscovered. Nothing in the product was changed; the tree was and is clean.
+- CAPTIONSTRIPTHENFULLSCREENDENY, THE FIX [verified 2026-11-08] ADR-windows s2 keys Mode 2 on
+  WS_CAPTION ('a maximized window WITH a title bar is always allowed') while s9's seamless tweak
+  REMOVES WS_CAPTION from guest windows by default since 4.3.21, so our own tweak destroys the
+  signal the gate reads. The deny at main.c now also tests data->CaptionWasStripped - the field
+  that means WE took the caption; main.h:597-602 records that CaptionHidden is ALSO set for a
+  window deliberately left alone (an own-frame app), so reading that one would wave a genuinely
+  borderless window through. INHERITANCE PROVEN BY READING, not assumed: all three callers go
+  through ShouldAcceptWindow - the two accept paths (:7908, :8089) and the already-announced
+  ineligibility path (:9796) that sends the UNMAP and sets DeletePending, which is the one that
+  destroyed hwnd 0x70094 300 ms after announcing it. The field survives a pass: GetWindowData
+  ZeroMemory()s the struct it fills, but UpdateWindowData points it at a LOCAL (:9705-9706) and
+  copies only named fields into the live entry (:9745, :9855), and CaptionWasStripped is not
+  among them. The deny's LogDebug text is UNCHANGED - four consumers test for its presence.
+- WUSCANTASKFAILSANDLOGSNOTHING, THE INVOCATION LAYER IS EXONERATED TOO [verified 2026-11-08]
+  schtasks /run /tn QubesWindowsUpdateScan on the reporter's build: SCHTASKS_RC=0, 'Letztes
+  Ergebnis: 0', and event 201 at 18:03:17 'Aktion powershell.exe mit Rueckgabecode 0
+  erfolgreich abgeschlossen'. So the scheduler CAN run that task to completion with the
+  registered argv - the script was already exonerated by the elevated hand run (rc=0, stderr
+  empty). Both are NEGATIVE CONTROLS on this subject and build, not a diagnosis. The 0x80070001
+  seen 6x was on EVERY BOOT, and the boot context is now the only suspect left: a BootTrigger
+  with Delay PT2M, install-updater-agent.ps1:698. NOT MEASURED: no reboot has been taken since.
