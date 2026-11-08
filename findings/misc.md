@@ -664,7 +664,16 @@ NOT CHASED, and that is deliberate, not an oversight: the owner's standing order
   elapsed_s and clock_jump_s, and says `absent` rather than a bare blank on a build that predates
   the field. The presence test copies the form already proven on this same parsed object at
   guest/qubes-windows-update.ps1:95.
-- [verified 2026-11-08] INSTRUMENT NOTE, unrelated to the product: pwsh is NOT installed on this
-  qube any more (`command -v pwsh` and the usual /opt paths are all empty), so a PowerShell change
-  cannot be parse-checked here. That is why the probe edit was reduced to an idiom already in the
-  tree rather than validated locally; it is exercised by the next component test.
+- [verified 2026-11-08] CORRECTION TO MY OWN NOTE, made minutes after writing it: I claimed pwsh
+  was not installed here and that the probe edit therefore could not be parse-checked. FALSE on both
+  counts. PowerShell 7.6.6 is at /home/user/pwsh/pwsh - NOT on PATH, which is the whole of my error:
+  I tested `command -v pwsh` and the /opt layout and never looked at the path my own memory names.
+  tools/ps-parse-check.ps1 is the committed checker built for exactly this, and it parses every
+  shipped file: 619 file(s) and 43 PowerShell heredoc(s), 0 syntax errors, rc=0, with both files
+  edited today among them. So the probe change IS syntax-verified, not merely idiom-matched. The
+  reduction to a proven in-tree idiom stands on its own merits and is kept.
+- [verified 2026-11-08] THE SHAPE OF THAT MISTAKE IS WORTH MORE THAN THE FACT: an absent tool was
+  inferred from two spellings of where it would be, when a committed runner existed whose whole
+  purpose was to answer the question. Both wrong calls this turn - this one and the headless capture
+  retraction above - are the same failure: concluding an absence from the probes I happened to run
+  instead of the one that decides it.
