@@ -659,6 +659,14 @@ def offers(d):
     out = []
     for k in ("available", "not_actionable"):
         for u in (d.get(k) or []):
+            # not_actionable is a DURABLE list of STRINGS - kb and title, built from the previous
+            # status's info rows (guest/qubes-windows-update.ps1:3162-3177) and carried forward on
+            # purpose. Walking it as objects raised AttributeError here on 2026-11-08 and took the
+            # whole oscillation verdict with it. It crashed exactly when an info-severity offer
+            # exists, which is the only case this check is for, so the instrument was blind in
+            # precisely its own subject. The PRODUCT is correct; this projection was not.
+            if not isinstance(u, dict):
+                continue
             if u.get("uid"):
                 out.append({"uid": u["uid"], "rev": u.get("rev"), "kb": u.get("kb") or ""})
     return out
