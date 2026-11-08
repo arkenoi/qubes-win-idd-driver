@@ -277,6 +277,36 @@ smooth"*, and - of the other components - *"same of other components."*
    Jev `release_must_shorten_the_hold` 0.44, and 0.20 on a licensed re-ask carrying those source arms
    (timer-is-the-only-exit 0.47 against guard-must-reread 0.46). It is neither filed as a defect nor excused,
    and a third ask needs new evidence rather than rewording.
+   **THE REMAINING SITES, AND WHY EXTENDING THIS LATCH IS NOT THE FIX** (measured 2026-11-08 from the
+   sources, not from the issue text). The DACL constrains the READER - the process that opens the latch
+   before launching - never the token the child gets, so the thirteen other sites split 7/7:
+
+   | reader runs as | sites | can it open `D:P(A;;GA;;;SY)`? |
+   |---|---|---|
+   | SYSTEM | `watchdog.c:296`; `gui-agent/etwproxy.c:880`, `notifyerr.c:468`, `main.c:2754`, `:2825`, `:6745`; `qrexec-wrapper.c:387` | yes, today, with no DACL change |
+   | the interactive user | `tools/notifhost/notifhost.cpp` x7 | no |
+
+   The watchdog duplicates its OWN SYSTEM token and only retargets the session (`:272`-`:296`), which is why
+   every gui-agent site is SYSTEM too - the three `main.c` sites call `CreateProcessAsUser`, but that sets the
+   CHILD's token, not the reader's. qrexec-wrapper is SYSTEM because `WTSQueryUserToken` (`:323`, `:433`)
+   requires SeTcbPrivilege and it runs services as SYSTEM (`:575`). notifhost is a separate exe put into the
+   interactive user session by `HelperTaskRegister` ("the same interactive-user launch as WgcLaunch ... a full
+   user context", `main.c:4670`), so its seven sites are refused by the DACL; widening it has not been asked
+   for and is a separate, isolation-weakening decision.
+
+   **The gui-agent is the process that SETS the latch** (`gui-agent/lifecycle.c`, WM_QUERYENDSESSION), so at
+   its five sites the would-be reader IS the writer. Asking a kernel object what this process just recorded
+   buys nothing: the object exists so the fact OUTLIVES the process, a property only another process needs.
+   Jev `writer_reading_its_own_object` = `local_flag_is_correct_there` 0.80 at **conf 0.73 - above floor, and
+   the only verdict in this scoping**. A process-local going-down flag is the mechanism there.
+   `remaining_sites_scope` has **NO verdict** at conf 0.32, but it is not empty: `all_seven_system_side`
+   scored **0.00** and `the_four_helper_sites_only` 0.08, while the two survivors are a dead heat -
+   none-until-a-recovery-exists 0.46 against local-flag-for-the-gui-agent 0.45. Both survivors say the same
+   thing about the latch, and the counter-fact driving them is that **a refusal needs a recovery behind it**:
+   the watchdog's guard is folded into the existing endedSession arm precisely because the 90 s
+   `SESSION_END_NEVER_HAPPENED_MS` timer lives there, and a parallel refusal arm with no timer behind it
+   would strand a guest with no GUI until reboot - worse than the defect. None of the other sites has one.
+
    What the harness step owes, so it is built once and not improvised:
    * **It takes the object identity from the header, never a default.** The four mandatory parameters come
      from `QGA_GOINGDOWN_NTNAME_FMT`, `QGA_GOINGDOWN_SDDL`, `QGA_EVENT_ALL_ACCESS` and `QGA_OBJ_PERMANENT`.
