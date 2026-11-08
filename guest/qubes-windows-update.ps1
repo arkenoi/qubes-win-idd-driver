@@ -540,8 +540,27 @@ function Get-InstalledKeys {
            ForEach-Object { $_.kb; if (Test-RowKey $_ 'title') { $_.title } } | Where-Object { $_ })
 }
 function Get-InstalledIdentities($keys) {
-  return @(@($script:St.available) | Where-Object { $_ -and (($keys -contains $_.kb) -or ($keys -contains $_.title)) } |
+  # A ROW THAT CARRIES ITS OWN IDENTITY IS TAKEN AT ITS WORD, and only a row without one is
+  # joined back to the scan's offers on kb/title. The join is what hid a re-presented offer:
+  # same KB, new revision, so keying on kb/title matched the OLD available row and dom0 heard
+  # N-1 and then N (WURESCANKEYSBYKBSCANBYIDENTITY). Install-ViaWU stamps uid/rev on the rows
+  # it returns, so the non-catalog fallback path needs no join at all.
+  $own = @(@($script:St.result) |
+           Where-Object { (Test-RowInstalled $_) -and (Test-RowKey $_ 'uid') -and $_.uid } |
+           ForEach-Object { "$($_.uid):$($_.rev)" })
+  # AND THE JOIN MUST NOT ANSWER FOR A ROW THAT ALREADY SPOKE. A stamped row's KB is dropped from
+  # the join's keys, so the scan's twin of that offer - same KB, NEW revision - cannot ride in on
+  # it. Without this the stamp would be inert: $own would hold uid:204 and the join would add
+  # uid:205 beside it, and the re-presented offer would be subtracted from dom0's number exactly
+  # as before. An unstamped installed row still joins on kb/title, which is the offer loop's
+  # residual and is named as such in ADR-updater section 2.
+  $spoken = @(@($script:St.result) |
+           Where-Object { (Test-RowInstalled $_) -and (Test-RowKey $_ 'uid') -and $_.uid } |
+           ForEach-Object { $_.kb; if (Test-RowKey $_ 'title') { $_.title } } | Where-Object { $_ })
+  $joinKeys = @(@($keys) | Where-Object { $spoken -notcontains $_ })
+  $joined = @(@($script:St.available) | Where-Object { $_ -and (($joinKeys -contains $_.kb) -or ($joinKeys -contains $_.title)) } |
            ForEach-Object { if ((Test-RowKey $_ 'uid') -and $_.uid) { "$($_.uid):$($_.rev)" } } | Where-Object { $_ })
+  return @(@($own + $joined) | Sort-Object -Unique)
 }
 # The key an offer's no-route verdict is recorded and looked up under (ADR-updater section 2 point 5, extended 2026-11-06): the KB when
 # the offer has one, else its exact title, used whole (section 6: never parsed). A no-KB offer's kb field is the shared placeholder
@@ -1170,12 +1189,34 @@ function Restore-DoPolicy {
   $script:DoRestore = $null
 }
 
+# The update's OWN identity, read off the live COM object: UpdateID plus RevisionNumber, with rev an
+# [int] so a stamped result row and a scan offer carry the SAME JSON type to dom0 (ADR-updater
+# section 6: structured data, never a parsed string). An object that refuses the properties yields an
+# empty uid, which every caller reads as "no identity" rather than inventing one.
+#
+# WHY THE THREE INLINE COPIES STAY INLINE, measured 2026-11-08 rather than left as an untidied
+# duplicate: they are the same READ but not the same empty value, and both differences are
+# load-bearing. :1030 starts $wrev at '' and prints it in the sweep-parsed `WUSIZE uid= rev=`
+# line, so routing it here turns a failed read from `rev=` into `rev=0` and moves text a parser
+# keys on. :1152 starts uid/rev at $null and serialises them into $script:St.available, i.e. into
+# JSON dom0 reads, where '' and 0 are not the same as null and a rev of 0 could collide with a
+# genuine revision 0. :984 wants the uid alone off a different object. Converting them is a
+# separate change with its own measurement, not a tidy-up - do not fold them in silently.
+function Get-WuIdentity($u) {
+  $uid = ''; $rev = 0
+  try { $uid = [string]$u.Identity.UpdateID; $rev = [int]$u.Identity.RevisionNumber } catch { }
+  return @{ uid = $uid; rev = $rev }
+}
 function Install-ViaWU {
   # $OnlyKbs limits the pass to specific KBs. Used as the FALLBACK for updates the Update
   # Catalog cannot serve: Defender definitions and the Malicious Software Removal Tool are not
   # .msu packages at all, so Resolve-Catalog will never find them, and without this they are
   # reported failed on every pass forever - dom0 keeps showing updates that can never clear.
-  param([string[]]$OnlyKbs = @(), [bool]$TunePolicies = $true)
+  # $OnlyUids names offers by the update's OWN identity (Identity.UpdateID, with or without
+  # ":rev" - the two forms -OnlyUid accepts at :3141). It exists because $OnlyKbs cannot name an
+  # offer that carries no KB at all - every vendor driver is one - and those are exactly the
+  # offers WU-NOKB has to hand over here (ADR-updater section 2, the point-3 mechanism).
+  param([string[]]$OnlyKbs = @(), [bool]$TunePolicies = $true, [string[]]$OnlyUids = @())
   # Delivery Optimization: no peering (99 = simple), and no background throttling. A qube's only
   # path out is the updates proxy, which is up ONLY during this pass, so there is nothing to be
   # polite to - the usual reason WU downloads slowly in the background does not apply here.
@@ -1219,6 +1260,12 @@ function Install-ViaWU {
 
     $coll = New-Object -ComObject Microsoft.Update.UpdateColl
     foreach ($u in $found.Updates) {
+      $wid = Get-WuIdentity $u
+      if ($OnlyUids.Count -gt 0) {
+        # Compared as FIELDS, never as a parsed string (ADR-updater section 6). Both narrowings
+        # apply in sequence, the way -OnlyUid and -OnlyKb compose at the top of the script.
+        if (-not (@($OnlyUids | Where-Object { $_ -eq $wid.uid -or $_ -eq "$($wid.uid):$($wid.rev)" }).Count -gt 0)) { continue }
+      }
       if ($OnlyKbs.Count -gt 0) {
         $kbs = @($u.KBArticleIDs) | ForEach-Object { "KB$_" }
         if (-not (@($kbs | Where-Object { $OnlyKbs -contains $_ }).Count -gt 0)) { continue }
@@ -1260,7 +1307,13 @@ function Install-ViaWU {
       # THE ROW STATES ITS OUTCOME (GUARD:stagedpending): a succeeded update whose own RebootRequired is set is STAGED, not installed -
       # it completes at the restart. Until 2026-11-02 these rows carried only ok, and every reader had to guess from the pass's flag.
       $ok = ($r.ResultCode -in @(2, 3))
+      # THE ROW CARRIES ITS OWN IDENTITY (ADR-updater section 2, the point-3 mechanism decided
+      # 2026-11-08). Every OTHER writer on this fallback path emits ok=$false, so these are the
+      # only rows here that Test-RowInstalled can ever pass - which is why stamping at this one
+      # place is enough to let Get-InstalledIdentities stop joining back on kb/title.
+      $rid = Get-WuIdentity $u
       $row = [ordered]@{ kb = $(if ($kb) { "KB$kb" } else { '(no KB)' }); ok = $ok }
+      if ($rid.uid) { $row['uid'] = $rid.uid; $row['rev'] = $rid.rev }
       if ($ok) { $row['state'] = $(if ($r.RebootRequired) { 'staged' } else { 'installed' }) }
       $row['files'] = @([ordered]@{ file = "$($u.Title)"; rc = $r.ResultCode; hr = $r.HResult })
       $rows += $row
@@ -3020,6 +3073,11 @@ try {
   # QUBES_UPDATES_ALLOW_WU_NATIVE is not read here - nothing in the proof keys on a switch (Jev 2026-11-01: a switch inside
   # the proof was the one deviation from the contract, 0.51); the knob stays what it was, the install loop's own.
   $script:HasDefaultRoute = [bool](Test-HasDefaultRoute)
+  # ASSIGNED HERE, not 370 lines below where the fallback rungs first used it: the install loop
+  # needs the same fact (WU-NOKB's routed branch), and one variable assigned once beats the loop
+  # re-deriving it. Value-identical - HasDefaultRoute is assigned on this line and nowhere else,
+  # and the env knob is never written by this script.
+  $canWuNative = $script:HasDefaultRoute -or ($env:QUBES_UPDATES_ALLOW_WU_NATIVE -eq '1')   # the route measured above the scan count, plus the install loop's own knob
   $script:St.esu = Get-EsuStatus
   $routeProof = Measure-Unroutable @($avail | Where-Object { -not $_.is_definition })
   $script:St.unroutable = @($routeProof.none)
@@ -3242,6 +3300,24 @@ try {
             Save
             continue
           }
+          # ROUTED GUEST, ONE ROUTE LEFT: Windows Update's own downloader. A no-KB offer the
+          # catalog cannot serve by title is still installable where the guest HAS a default route,
+          # and until 2026-11-08 this fell straight through to the not-actionable row below - so
+          # dom0 was told N with the offer inside the number on every pass and nothing ever
+          # installed it (WUNOKBMISSNOTINSTALLEDONROUTEDGUEST). Handed over BY IDENTITY: -OnlyKbs
+          # selects on a KB this offer does not have, and a parsed title is forbidden (section 6).
+          if($canWuNative -and $u.uid){
+            Log "no KB and no catalog match, but this guest has a route - Windows Update by identity: $($u.uid):$($u.rev)"
+            $nokbWuRows = @(Install-ViaWU -OnlyUids @("$($u.uid):$($u.rev)") -TunePolicies $false)
+            if($nokbWuRows.Count -gt 0){
+              foreach($row in $nokbWuRows){ $script:St.result += $row }
+              Save
+              continue
+            }
+            # Windows Update selected nothing for this identity. That is NOT a route proof, so the
+            # offer takes the not-actionable row below and stays COUNTED (point 2).
+            Log "  Windows Update selected nothing for $($u.uid):$($u.rev) - not-actionable, still counted"
+          }
         }
         # Genuinely no route from here - and now that is a MEASURED statement, not an assumption
         # about the catalog.
@@ -3391,7 +3467,6 @@ try {
   # REFUSE on a guest with no route (measured DO 0x80D03805 / BITS 0x80200010) - so on a netvm-free
   # guest this rung only manufactures phantom 0x80240022 failures. canWuNative is the guest's ability to
   # ever install these: a real default route (netvm-attached standalone) or the explicit override.
-  $canWuNative = $script:HasDefaultRoute -or ($env:QUBES_UPDATES_ALLOW_WU_NATIVE -eq '1')   # the route measured above the scan count, plus the install loop's own knob
   # ADR-updater section 2 point 5, third fact: a guest WITH a default route has a route for express-only content too - Windows Update's
   # own downloader - so on it those offers are work for the Windows Update installer with the rest of the fallback set, not a ceiling to
   # report. Only a routeless guest reaches the express gate below, where all three facts hold and the row may say so.

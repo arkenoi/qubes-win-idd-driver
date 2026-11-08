@@ -50,6 +50,7 @@ switch ($Defect) {
     # drops the catalog-by-title route - the state before 2026-09-21, where a KB-less offer with
     # no direct URL was always excluded even when the catalog held a package for this architecture.
     'notitle'   { $nkRegion = $nkRegion.Replace('$drv = Resolve-DriverByTitle $nokb', '$drv = $null') }
+    'nokbwu'    { $nkRegion = $nkRegion.Replace('if($canWuNative -and $u.uid){', 'if($false){') }
     'shapeskip' { $nkRegion = $nkRegion -replace '(?s)if\(\$nokbUrls\.Count -gt 0.*?\n        \}', '' }
     # restores the pre-2026-09-20 rule: nothing a pass INSTALLED drops out, so dom0 never reaches "up to date".
     'infoonly'  { $infoRegion = $infoRegion.Replace('$installedKeys = @(Get-InstalledKeys)', '$installedKeys = @()') }
@@ -71,7 +72,11 @@ switch ($Defect) {
     # such candidates ended as 'no candidate declares this architecture' - a VERIFIED miss the scan (since 2026-11-06) drops from dom0's count.
     'nocabskip' { $src = $src.Replace('if(-not $url){ $uninspected++; Log "    $uid : the download dialog lists no .cab package - not inspected"; continue }', 'if(-not $url){ continue }') }
     ''          { }
-    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (kbonly | trustzero | shapeskip | infoonly | scanhide | satignore | satdrop | stageddone | notitle | nokbroute | nocabskip)"; exit 2 }
+    # Applied LATER, where the WU-ROWKEY region is extracted - that extraction runs after this
+    # switch, so a rewrite here would be thrown away. This case exists only so the default
+    # branch below stops rejecting the knob as unknown.
+    'staleid'   { }
+    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (staleid | nokbwu | kbonly | trustzero | shapeskip | infoonly | scanhide | satignore | satdrop | stageddone | notitle | nokbroute | nocabskip)"; exit 2 }
 }
 
 function Log($m) { }   # the regions log; the suite does not care what they print
@@ -80,12 +85,42 @@ function Log($m) { }   # the regions log; the suite does not care what they prin
 # if there were no prior state at all. That is how a passing-looking suite can test nothing.
 $rkRegion = [regex]::Match($src, "function Test-RowKey.*?# ---- WU-ROWKEY-END", 'Singleline').Value
 if (-not $rkRegion) { Write-Output "INSTRUMENT: Test-RowKey not found in the shipped script"; exit 2 }
+# THE ROWKEY REGION HAS ITS OWN KNOB POINT, because it is extracted BELOW the switch above - a
+# knob applied up there would be overwritten by the line that extracts it, and a knob that
+# matches nothing reports the guard as decoration. 'staleid' restores the UNRESTRICTED join,
+# the form in which the identity stamp is inert: $own holds uid:204 and the join adds uid:205
+# beside it, so the re-presented offer is subtracted from dom0's number exactly as before.
+if ($Defect -eq 'staleid') {
+    $rkRegion = $rkRegion.Replace('($joinKeys -contains $_.kb) -or ($joinKeys -contains $_.title)',
+                                  '($keys -contains $_.kb) -or ($keys -contains $_.title)')
+}
 Invoke-Expression ($rkRegion -replace '# ---- WU-ROWKEY-END', '')
 $pass = 0; $fail = 0
 function Check($label, $got, $want) {
     if ("$got" -eq "$want") { Write-Output "PASS  $label"; $script:pass++ }
     else { Write-Output "FAIL  $label (got '$got', want '$want')"; $script:fail++ }
 }
+
+# ---------- the installed row's OWN identity (ADR-updater section 2, point-3 mechanism) ----------
+function RunIdentities($result, $available) {
+    $script:St = [ordered]@{ available = @($available); result = @($result); satisfied = @() }
+    return @(Get-InstalledIdentities (Get-InstalledKeys))
+}
+# The MEASURED case (WURESCANKEYSBYKBSCANBYIDENTITY): KB2267602 rev 204 installed through the
+# non-catalog WU fallback, and the rescan offers the SAME KB at rev 205 - Windows re-presents a
+# satisfied signature under one KB - beside a second, unrelated update.
+$idInstalled = [ordered]@{ kb='KB2267602'; ok=$true; state='installed'; uid='U-DEF'; rev=204 }
+$idRescan    = @([ordered]@{ kb='KB2267602'; title='Defender definitions'; uid='U-DEF'; rev=205 },
+                 [ordered]@{ kb='KB5007651'; title='Another update';       uid='U-OTH'; rev=1   })
+Check "identity: a stamped installed row answers with ITS OWN rev, not the rescan's" `
+      ((RunIdentities @($idInstalled) $idRescan) -join ',') 'U-DEF:204'
+Check "identity: ...so the re-presented offer is NOT in satisfied and stays COUNTED" `
+      (@((RunIdentities @($idInstalled) $idRescan) | Where-Object { $_ -eq 'U-DEF:205' }).Count) 0
+# An UNSTAMPED installed row is the offer loop's residual and still joins on kb/title.
+Check "identity: an unstamped installed row still joins on kb/title (the named residual)" `
+      ((RunIdentities @([ordered]@{ kb='KB5007651'; ok=$true; state='installed' }) $idRescan) -join ',') 'U-OTH:1'
+Check "identity: a row that is NOT installed contributes no identity at all" `
+      ((RunIdentities @([ordered]@{ kb='KB2267602'; ok=$false; uid='U-DEF'; rev=204 }) $idRescan) -join ',') ''
 
 # ---------- WU-INFO-EXCLUDE ----------
 function RunCount($after, $result, $notice, $available, $rebootNeeded = $false, $unroutable = @()) {
@@ -275,6 +310,38 @@ Check "nokb: NO direct URL and no catalog match -> informational, with a MEASURE
 # architecture the item is installed, not excluded - and the row says installed, not info.
 Check "nokb: no direct URL but the CATALOG has a package for this arch -> INSTALLED via the driver path" `
       (NoKbDrv 'AudioProcessingObject Driver Update' $true) 'False/installed//drv=True'
+# WU-NOKB ON A ROUTED GUEST (WUNOKBMISSNOTINSTALLEDONROUTEDGUEST). The catalog title search misses,
+# but a guest WITH a default route can still fetch the offer through Windows Update's own downloader,
+# selected BY IDENTITY because -OnlyKbs cannot name an offer that has no KB. Install-ViaWU is STUBBED:
+# what this replays is the routing decision and the selector it passes, never the install itself -
+# that is owed on a routed subject in the campaign's U-cells, and the rig's netvm='' rule means no
+# subject here has a default route at all.
+$script:wuUidsAsked = @(); $script:WuNativeServes = $false
+function Install-ViaWU { param([string[]]$OnlyKbs = @(), [bool]$TunePolicies = $true, [string[]]$OnlyUids = @())
+    $script:wuUidsAsked = @($OnlyUids)
+    if ($script:WuNativeServes) { return ,@([ordered]@{ kb='(no KB)'; ok=$true; state='installed'; uid='U-DRV'; rev=7 }) }
+    return @()
+}
+function NoKbRouted($routed, $serves) {
+    $script:DrvFound = $false; $script:DrvUnresolved = $false
+    $script:wuUidsAsked = @(); $script:WuNativeServes = $serves
+    $script:installCalled = $false; $script:drvInstalled = $false
+    $script:St = [pscustomobject]@{ result = @() }
+    $u = [pscustomobject]@{ kb = '(no KB)'; title = 'AudioProcessingObject Driver Update'
+                            direct_urls = @(); uid = 'U-DRV'; rev = 7 }
+    $Action = 'install'; $canWuNative = $routed
+    function Save { }
+    foreach ($once in 1) { Invoke-Expression $nkRegion }
+    $row = @($script:St.result)[0]
+    return "$([string]$row.state)/$([string]$row.severity)/asked=$($script:wuUidsAsked -join ',')"
+}
+Check "nokb routed: a catalog title MISS on a routed guest goes to WU BY IDENTITY, not by title" `
+      (NoKbRouted $true $true) 'installed//asked=U-DRV:7'
+Check "nokb routed: WU selects nothing -> not-actionable and STILL COUNTED, identity still asked" `
+      (NoKbRouted $true $false) 'not-actionable/info/asked=U-DRV:7'
+Check "nokb routeless: no route, so WU is never asked and the row is the measured no-route one" `
+      (NoKbRouted $false $false) 'not-actionable/info/asked='
+$script:DrvFound = $false
 $script:DrvFound = $false
 # The title search itself unanswered (a throw, or not the Catalog's results page): Resolve-DriverByTitle says UNRESOLVED.
 $script:DrvUnresolved = $true

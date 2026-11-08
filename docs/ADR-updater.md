@@ -217,6 +217,47 @@ notice, count self-contained offers only") was keyed on build 19045 and a hardco
 run showed why a class cannot carry the decision: the Windows 11 cumulative KB5127648 was offered as
 `content_class=none` and installed from the Catalog (4553.8 MB). The route is the fact; the class is a hint.
 
+**Mechanism for point 3, decided 2026-11-08 (Jev, three verdicts above floor).** Point 3 needs the
+offer's own identity on the row that says a pass installed it. `uid`/`rev` ARE the Windows Update
+API's own `Identity.UpdateID` and `Identity.RevisionNumber` (`guest/qubes-windows-update.ps1:1133`),
+not a key of ours. The 17 `$script:St.result` writers split 8/8/1: eight hold the offer (`$u` in the
+offer loop at `:3193`, `$e.u` inside `Install-MsuPlan`), eight hold only a KB string taken off
+`$script:WuFallbackKbs` - a `[string[]]` fed `$u.kb` at `:3365` and then `Sort-Object -Unique`'d at
+`:3420`/`:3443`, which collapses two distinct offers that share a KB - and one assigns the whole
+list `Install-ViaWU` returns.
+
+1. Identity is stamped INSIDE `Install-ViaWU`, which enumerates the live WU session and already
+   holds each update's identity (`identity_on_the_fallback_path` = stamp_inside_install_viawu, conf
+   1.00, every alternative 0.00). The queue stays a KB list and its de-duplication is untouched.
+   This is SUFFICIENT, and that is measured rather than assumed: every one of those eight KB-string
+   writers emits `ok=$false`, so `Test-RowInstalled` (`:531`, which requires `ok -eq $true`, rejects
+   `severity=info` and requires `state` absent or `installed`) rejects all eight. The only fallback
+   rows that can ever enter `satisfied` are the ones `Install-ViaWU` hands back.
+2. `Install-ViaWU` takes an `-OnlyUids` selector keyed on the enumerated update's own identity,
+   mirroring the existing `-OnlyUid` field comparison at `:3141` (conf 0.91). `-OnlyKbs` (`:1178`,
+   selecting at `:1224`) cannot name a no-KB offer at all, which is why WU-NOKB has no routed branch
+   today and why `-OnlyKbs` could not be given one.
+3. Re-keying the queue's de-duplication by identity instead was scored a REAL RISK needing a named
+   guard or a measurement before it lands (`dedup_semantics_change` 1.01 of 2, conf 0.91): Windows
+   Update could be asked for one KB twice in a pass. That risk is the REASON point 1 leaves the
+   queue alone - it is not a cost accepted alongside it.
+
+`-OnlyUid` (`:41`) already restricts a pass by identity and is documented as the only way to name a
+KB-less offer, but it narrows `$avail` at the top of the pass and never reaches `Install-ViaWU`. It
+is the shape to follow here, not a case already covered.
+
+**Landed 2026-11-08**, with the identity read put in one place (`Get-WuIdentity`) and `rev` kept an
+`[int]` so a stamped result row and a scan offer carry the same JSON type. Three inline copies of
+that read (`:984`, `:1030`, `:1152`) were deliberately NOT folded in: they are the same read but not
+the same empty value, and both differences are load-bearing - `:1030` prints `$wrev` in the
+sweep-parsed `WUSIZE uid= rev=` line, where a failed read would turn `rev=` into `rev=0`, and
+`:1152` serialises `uid`/`rev` into `$script:St.available`, i.e. into JSON dom0 reads, where `''`
+and `0` are not `null` and a rev of 0 could collide with a genuine revision 0. Folding them in is a
+separate change owing its own measurement. Jev scored the remaining duplication
+`redundant_with_hit` 0.77 at conf 0.66 - UNDER FLOOR, so no verdict, and it is recorded here rather
+than resolved by deleting the helper.
+
+
 ## 3. Verify by effect, never by exit code
 
 **Status:** ACCEPTED.
