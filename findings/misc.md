@@ -67,3 +67,47 @@ forensics only — do not load it into context.
 - **SKILLDOCSNAMEPRIVATETOOLING - two tracked skill docs in the public repo name the private search tooling, one of them with an absolute path into its data directory.** [P2 repo hygiene, OPEN] [verified 2026-11-08] `.claude/skills/jev-workflow/SKILL.md` (a section heading at :133, then :136, :200, :206) and `.claude/skills/jev-workflow/PLANNING-PROMPT.md` (:16, :69, :72). The standing constraint is that all of that material lives under `/home/user/xerj-data` and `/home/user/.claude` only; these two files sit at `<repo>/.claude/skills/`, which is tracked and public. The only other tracked mentions - `mgmt/harness/campaign-preflight.sh:425` and `tools/sweep-preaccount.py:5` - are one quoted owner sentence in a comment and disclose no path. NOT fixed here: the references are load-bearing for the procedure the doc describes, so the fix is to move that section into the user-level skill that already lives off-repo, which is a restructuring of an owner-read procedure doc rather than a redaction. Found while censusing `upstream/ro` for docs/ADR-upstream.md 3, not by a sweep - nothing scans for this.
 
 - **WUSCANTASKFAILSANDLOGSNOTHING, the measured detail** (moved out of the register entry when it was corrected and compacted). [verified 2026-11-08] Read out of `scratchpad/gweck-logs-1027` rather than reasoned about. **What the bundle actually contains:** the guest's `Qubes Logs` directory - our module logs plus the death reporter's files - and NO event-log export at all, in either the .37 or the .38 tarball. So nothing beyond the reporter's own lines is recoverable from a field bundle, and asking a reporter for "the logs" can never produce a Task Scheduler record. **What the reporter did capture,** 6 times across the two bundles, e.g. `2026-10-27 10:14:08 [ERROR] DEATH #1 NEW Microsoft-Windows-TaskScheduler/Operational/201#332: The Windows Update scan task failed | task QubesWindowsUpdateScan ended with a non-zero result | Cause: incorrect function. | task QubesWindowsUpdateScan; result 0x80070001; death 1 this boot; build 4.3.37.1096. Evidence: Q:\Qubes Logs\qwt-deaths.log. | detail: Task Scheduler history (TaskScheduler/Operational) event 201`, each followed by `notified to dom0 as update-scan.death-N`. **Three things that fixes in the register's reading of it.** (1) `Microsoft-Windows-TaskScheduler/Operational` WAS enabled on his guest - the reporter read 201 out of it - which `install-updater-agent.ps1:758-776` has done since f93d0d3d (2026-09-17), so the entry's old NEXT, "log the failure before anything else", was already done before the bundles were taken. (2) The event is **201**, "the action completed with a non-zero result", NOT a 101/103 start failure: Task Scheduler DID launch `powershell.exe`, so `0x80070001` is what the action RETURNED and not the scheduler's own refusal. 101 and 103 are absent from `log-sweep-collect.ps1:604`'s id list (201/203/329) and have never been seen to fire here, so they were NOT added - an id we have no record of is decoration, and the 23-expression XPath cap documented at :608 is not the constraint (5 ids + StartTime is 6). (3) `0x80070001` is `HRESULT_FROM_WIN32(ERROR_INVALID_FUNCTION)` and `Cause: incorrect function.` is just its FormatMessage text, so the string carries no information the code does not. **What stays unexplained, and it is the whole defect:** what makes `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <BinDir>\qubes-windows-update.ps1 -Action scan -Scheduled -RelayExe <exe>` exit `0x80070001` before the agent reaches its own LogInit - no `qubes-windows-update*.log` exists in either bundle. The task definition is not visibly at fault: `install-updater-agent.ps1:699-724` interpolates `PT6H` and `PT2H`, `<Principal id="Author">` matches `<Actions Context="Author">`, and `schtasks /create` returned rc=0 (the installer throws otherwise at :724). Cheapest next probe, and it needs a guest we do not have: `schtasks /query /tn QubesWindowsUpdateScan /xml` plus `wevtutil qe Microsoft-Windows-TaskScheduler/Operational` from a failing guest.
+
+## WUMSUROUTENEVERSAYSUNVERIFIED - the six miscounts still open on the .msu route (2026-11-08)
+
+Register line in findings/issues.md. The owner asked for a plain inventory of what the updater
+counts, how it installs, and what it counts wrong; these six came out of reading the code against
+ADR-updater and NONE of them was in the register before. All are READ OFF THE CODE ONLY - no guest
+has been seen doing any of them - and they are listed so the next guest pass can look for them.
+
+1. `Install-ViaWU` counts ResultCode 3, "succeeded with errors", as installed, with no effect probe
+   on that path at all (:1309, row state at :1318). ADR 3 wants the effect, or an admission.
+2. When a restart is pending, the number sent to dom0 is built from THIS pass's result ROWS, not
+   from what Windows still offers (:3611-3613). An offer the pass never attempted contributes
+   nothing, and two rows carrying one KB count twice.
+3. After an install with no restart, staged/deferred rows and the fresh offer count are combined by
+   taking the LARGER, not the sum (:3674-3675). One staged update Windows no longer offers plus one
+   different failing offer reports 1, not 2.
+4. A scan that could only partly load the offer list sets scan_partial and logs it, but
+   Report-Availability sends dom0 a bare integer with no lower-bound flag (:3009-3012, :932-936).
+5. Every no-KB result row is labelled `(no KB)` (:1315) and the post-install subtraction matches on
+   that label (:3664), so installing one no-KB offer can subtract EVERY no-KB offer from the count.
+6. The `wuinstall` action saves its result and returns without calling Report-Availability at all
+   (:3226-3231), so that path leaves dom0's number stale. Looks acceptance-only; not confirmed.
+
+Also found and NOT a defect, recorded so it is not "fixed" by mistake: `Get-MsuKbVerdict` counts a
+KB installed when AT LEAST ONE of its files succeeded. That is deliberate and measured - one catalog
+KB yields several .msu for different builds and the inapplicable ones fail by design, a 24H2
+cumulative returning rc=552 on a 25H2 guest.
+
+And the trap that nearly turned this fix into a false red: arming the cumulative's registration
+check on all of `$OK_RC` would have included 2359302, ALREADY INSTALLED (which :2009 treats as
+staged). Nothing new appears in the package list for it, so the check would have reported "not
+registered" and FAILED a cumulative that was already on the machine. Armed on 0 and 3010 only.
+
+## WUCUMULATIVEORDERORPHANRED - CLOSED 2026-11-08, it was the test (ex findings/issues.md)
+
+Red on `rp-unreadable-proceeds` and `unreadable-not-staged` at 43e95083 and 07b3a743, undiagnosed
+until now. Both checks anchored on log text the writer does not emit: `WARNING: <kb>: CBS
+RebootPending could not be read` against the product's `[WARN] ` at :2757, and
+`^  ERROR: DISM accepted .* UNKNOWN` against the product's `[ERROR] ` - the inline spelling
+`tools/wu-pass-judge.py:91` reads as `^(?:\[ERROR\]|ERROR:)`. Stale anchors that could never match,
+so the rest of each check never ran. Proven not to be my edits: the identical pair is red on a clean
+worktree of 9e0921b9 with the edits absent. Both checks DROPPED per the owner's rule rather than
+repaired; the suite now PASSes. What still enforces the properties is named in the file where they
+stood. The test's own `Log` stub also still takes one parameter where the product's takes two.

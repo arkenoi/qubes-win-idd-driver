@@ -1961,16 +1961,16 @@ function Get-CbsPackageStates {
 # InstallPending before). Measured when it works: RollupFix 9457 'InstallPending' and 8037 'UninstallPending' after the call, 9457
 # Installed and 8037 Superseded after the restart. An already-pending rollup is NOT this call's doing and does not pass it.
 # Returns ok (registered), known (both lists were readable) and a why that names what was seen. Jev Q3 0.88: the check is needed.
-function Test-RollupRegistered($before, $after){
+function Test-RollupRegistered($before, $after, [string]$WantState = 'InstallPending'){
   if($null -eq $before -or $null -eq $after){
     $which = if($null -eq $before -and $null -eq $after){ 'before and after' } elseif($null -eq $before){ 'before' } else { 'after' }
-    return @{ ok=$false; known=$false; why="the package list could not be read $which the DISM call, so whether a RollupFix package became InstallPending is UNKNOWN" }
+    return @{ ok=$false; known=$false; why="the package list could not be read $which the DISM call, so whether a RollupFix package became $WantState is UNKNOWN" }
   }
-  $newlyPending = @($after.Keys | Where-Object { $_ -match 'RollupFix' -and $after[$_] -eq 'InstallPending' -and ((-not $before.ContainsKey($_)) -or ($before[$_] -ne 'InstallPending')) })   # GUARD:rollupregistered
+  $newlyPending = @($after.Keys | Where-Object { $_ -match 'RollupFix' -and $after[$_] -eq $WantState -and ((-not $before.ContainsKey($_)) -or ($before[$_] -ne $WantState)) })   # GUARD:rollupregistered
   $seen = @($after.Keys | Where-Object { $_ -match 'RollupFix' } | Sort-Object | ForEach-Object {
              "$_=$($after[$_])" + $(if($before.ContainsKey($_)){ " (before: $($before[$_]))" } else { ' (absent before)' }) })
-  if($newlyPending.Count -gt 0){ return @{ ok=$true; known=$true; why=('newly InstallPending: ' + ($newlyPending -join ', ')) } }
-  return @{ ok=$false; known=$true; why=('no RollupFix package is newly InstallPending - RollupFix packages after the call: ' + $(if($seen.Count){ $seen -join ', ' } else { 'none' })) }
+  if($newlyPending.Count -gt 0){ return @{ ok=$true; known=$true; why=("newly $WantState" + ': ' + ($newlyPending -join ', ')) } }
+  return @{ ok=$false; known=$true; why=("no RollupFix package is newly $WantState" + ' - RollupFix packages after the call: ' + $(if($seen.Count){ $seen -join ', ' } else { 'none' })) }
 }
 # ---- WU-CUMULATIVE-REGISTERED-END
 
@@ -2491,7 +2491,7 @@ function Install-ViaAgentCache($u){
 
 # ---- WU-INSTALL-MSUS-BEGIN   (tools/tests/wu-cumulative-order-test.ps1 runs this function with DISM, the settle and the package list stood in)
 function Install-Msus($files){
-  $reboot=$false; $rows=@(); $cumRow=$null; $cumBefore=$null; $cumFile=''
+  $reboot=$false; $rows=@(); $cumRow=$null; $cumBefore=$null; $cumFile=''; $cumRc=$null
   foreach($f in (Order-Msus $files)){
     $name = [IO.Path]::GetFileName($f)
     $pi = Get-MsuInfo $f
@@ -2546,7 +2546,16 @@ function Install-Msus($files){
     # (measured 2026-10-04: 'Not Present' whether the rollup later lands or is dropped) - the package list after the settle decides.
     $after = Get-MsuInfo $f
     $row = [ordered]@{ file=$name; rc=$rc; state_after=$after.state; kind=$kind }
-    if($kind -eq 'cumulative' -and $rc -eq 3010){ $cumRow = $row; $cumFile = $name }
+    # ARMED ON BOTH OUTCOMES, not only 3010. Until 2026-11-08 this read `-and $rc -eq 3010`, so a
+    # cumulative DISM APPLIED IN PLACE (rc=0) left $cumRow null, skipped the registration check
+    # entirely, and was reported installed on DISM's exit code alone - exactly what ADR-updater 3
+    # forbids, and the same shape as the 2026-08-14 incident this region was built for. $cumBefore
+    # was already being captured for any cumulative on the line above and then thrown away.
+    # 0 and 3010 ONLY, never all of $OK_RC: its third member 2359302 is ALREADY INSTALLED (and this
+    # file treats it as staged at the cab loop above), so nothing new appears in the package list for
+    # it - arming the check there would look for a newly Installed RollupFix, find none, and FAIL a
+    # cumulative that was already on the machine. A false red is not a better lie than the old one.
+    if($kind -eq 'cumulative' -and $rc -in @(0, 3010)){ $cumRow = $row; $cumFile = $name; $cumRc = $rc }
     $rows += $row
     Log "  DISM $name rc=$rc state_after=$($after.state)"
   }
@@ -2555,25 +2564,37 @@ function Install-Msus($files){
   # KB5120710 returned 3010 (reboot required), KB5121003 then returned 0, and the pass ended
   # claiming reboot_needed=false while Windows had CBS RebootPending set.
   if ($reboot) { $script:St.reboot_needed = $true }
-  if ($reboot) { Wait-CbsSettle }
+  if ($reboot -or $cumRow) { Wait-CbsSettle }   # a cumulative applied in place still has TiWorker finishing behind it
   # THE REGISTRATION CHECK, after the settle (TiWorker idle): was the cumulative DISM accepted actually registered by Windows? A row
   # that was not is NOT staged, whatever rc=3010 says - it will not complete at the restart, and dom0 is never told it will
   # (Get-MsuKbVerdict fails the KB on it). The restart is requested either way: it is what clears the state that blocked the
   # registration, and the pass after it retries the package, which stays on disk.
   if ($cumRow) {
+    # WHICH STATE PROVES IT DEPENDS ON WHAT DISM DID, and that is why rc=0 could not simply be
+    # added to the arming condition above. rc=3010 means CBS took the package for the next boot, so
+    # the proof is a RollupFix package that is NEWLY InstallPending. rc=0 means DISM applied it in
+    # place, and such a package is never InstallPending - it is Installed (measured in this region's
+    # own header: 9457 'InstallPending' after the call, 'Installed' after the restart). Asking for
+    # InstallPending on the rc=0 path would therefore have FAILED every cumulative that really
+    # landed, which is a worse lie than the one being fixed.
+    $cumWant = if ($cumRc -eq 3010) { 'InstallPending' } else { 'Installed' }
     $cumAfter = Get-CbsPackageStates
-    $reg = Test-RollupRegistered $cumBefore $cumAfter
+    $reg = Test-RollupRegistered $cumBefore $cumAfter $cumWant
     if ($reg.ok) {
       $script:CumulativeRegisteredThisSession = $true   # GUARD:registeredrelaxes - the only thing that lets a later package stage this pass
       $cumRow.registered = $true
       Log "  REGISTERED $cumFile - $($reg.why)"
     } elseif ($reg.known) {
       $cumRow.registered = $false
-      $cumRow.why = "DISM accepted $cumFile (rc=3010; the cumulative) but Windows did NOT register it: $($reg.why). It is NOT staged and will not complete at a restart; this pass requests the restart that clears the state which blocked it, and the pass after the restart retries this package"
+      $cumRow.why = if ($cumRc -eq 3010) {
+        "DISM accepted $cumFile (rc=3010; the cumulative) but Windows did NOT register it: $($reg.why). It is NOT staged and will not complete at a restart; this pass requests the restart that clears the state which blocked it, and the pass after the restart retries this package"
+      } else {
+        "DISM reported $cumFile applied (rc=0; the cumulative) but no RollupFix package is newly Installed: $($reg.why). rc=0 is not proof it landed, so this is NOT reported as installed and the next pass retries this package, which stays on disk"
+      }
       Log "  [ERROR] $($cumRow.why)"
     } else {
       $cumRow.registered = 'unknown'   # GUARD:unreadablefails - missing data fails: not reported as staged
-      $cumRow.why = "DISM accepted $cumFile (rc=3010; the cumulative) but whether Windows registered it is UNKNOWN: $($reg.why). NOT reported as staged; this pass requests a restart, which settles it either way, and the pass after the restart retries this package if Windows did not take it"
+      $cumRow.why = "DISM returned rc=$cumRc for $cumFile (the cumulative) but whether Windows registered it is UNKNOWN: $($reg.why). NOT reported as staged or installed; the next pass retries this package if Windows did not take it"
       Log "  [ERROR] $($cumRow.why)"
     }
   }
