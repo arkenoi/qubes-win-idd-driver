@@ -539,3 +539,31 @@ failed prestop (2026-11-08)
   instance's outcome is taken from - but it is SELF-HEALING and this guest's copy is already spent:
   the on-demand `schtasks /run` taken earlier today overwrote it with 0. Only a fresh boot can
   witness the boot instance, which is what the cell now gets to do.
+
+## The scan task's BOOT context is exonerated too, and elapsed_s is read for the first time
+(2026-11-08, win11de-p1stim, u2-p1stim-bootscan-20261108T165127Z)
+
+- [verified 2026-11-08] THE COLD BOOT WAS PROVEN BEFORE ANYTHING WAS READ: LastBootUpTime moved
+  2026-11-08T17:00:59 -> T18:52:04 (guest local), "COLD BOOT PROVEN", and the debounce was CLEARED
+  before the boot so the boot pass could not be suppressed. The boot-triggered pass then RAN -
+  new_log_bytes=2618, class_lines=1, classes_seen=TemplateVM - and the task's Letztes Ergebnis reads
+  0. That 0 is the BOOT instance's, not this morning's spent on-demand 0, because the field carries
+  the most recent completed instance and the pass's own status write is stamped 18:54:51, after the
+  18:52:04 boot and ~2m47s past it, which is the PT2M trigger plus a short scan.
+- [verified 2026-11-08] SO ALL THREE SUSPECTS ARE NOW EXONERATED ON 4.3.39, and none of them is a
+  diagnosis: the script run by hand as SYSTEM with the scheduler's own argv (rc=0, stderr empty),
+  the task started on demand through the scheduler (rc=0, event 201 code 0), and now the task
+  started by its own BootTrigger (rc=0). The 0x80070001 was seen 6x on the reporter's .37/.38 and
+  reproduces in NO context on our current build. That is a failure to reproduce, NOT a fix, and the
+  entry stays open on that basis: what makes it self-reporting if it recurs is the script-scope trap
+  at guest/qubes-windows-update.ps1:75, which writes the error through the loaded sink instead of to
+  the stderr Task Scheduler discards.
+- [verified 2026-11-08] elapsed_s = 29.6 s, THE FIRST READING OF THAT FIELD EVER (0 of 241 earlier
+  captures carried it), with no clock_jump_s present - so no correction landed during the pass and
+  the number needs no caveat. It does NOT touch the PT2H question: this is an up-to-date guest whose
+  pass found count=0, while the limit exists for a FIRST SCAN AFTER SERVICING, which is a different
+  case. One fast-path datum on record; the serviced-guest number is still owed.
+- [verified 2026-11-08] The cell's own verdict is a separate matter and it PASSED - the boot pass
+  classified this TemplateVM correctly from qubesdb on a real cold boot (class_correct=true,
+  saw_empty_class=false, qdb_retry_evidence=true), rc=0. First time U2 has been able to run on a
+  German guest at all; the refusal that prevented it is fixed in 1f8d527a.
