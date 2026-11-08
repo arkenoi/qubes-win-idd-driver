@@ -2002,6 +2002,22 @@ int wmain(int argc, wchar_t** argv) {
     // Optional by design: an older agent does not pass --frame, and the broker must still serve
     // it (the agent then falls back to noticing frames on its capture pass, as it always did).
     if (frmName) g_hFrame = OpenEventW(EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, frmName);
+    // TELL THE AGENT WE ARE UP. Everything it reads on this wake is already published above - the pid its adoption
+    // path keys on, the relay capability, and the two events it handed us - and the ctl open above has already
+    // refused if we cannot serve, so this never announces a broker that will not run. Without it the agent learned
+    // we were up on whichever main-loop pass next ran BrokerSupervise: over 229 launch->ready pairs that was a
+    // median of 4.85 s but a 31.33 s maximum, against the agent's 30 s "broker not ready" warning to the user.
+    // Best effort, like --frame above: an older agent never created this event, OpenEventW then fails, and the
+    // agent falls back to noticing us on its next pass, as it always did. The event is the agent's and auto-reset;
+    // we set it once and have no further use for the handle.
+    {
+        std::wstring rn(shmName);
+        if (rn.size() > 4 && rn.compare(rn.size() - 4, 4, L"_shm") == 0) {
+            rn.replace(rn.size() - 4, 4, L"_ready");
+            HANDLE hRdy = OpenEventW(EVENT_MODIFY_STATE, FALSE, rn.c_str());
+            if (hRdy) { SetEvent(hRdy); CloseHandle(hRdy); }
+        }
+    }
 
     // REST-ZERO S4 wake sources. Everything the old 250 ms tick re-read is now an event or a deadline:
     //   * agent exit: g_agent in the wait below (unchanged); agent shutdown: the agent sets Shutdown AND signals g_hCtl;

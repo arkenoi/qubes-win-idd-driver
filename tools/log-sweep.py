@@ -2342,6 +2342,7 @@ def load_logs(logsdir, paths=None):
             reasons = sorted({p.split("=", 1)[1] for p in ev["required_missing"].split(",") if "=" in p})
             why = ", ".join({"norecords": "was read and returned none of the ids the sweep queries",
                              "unreadable": "could not be read",
+                             "wiped": "is enabled and holds no records at all, so it was cleared",
                              "undecodable": "returned records that would not decode"}.get(r, "reported " + r)
                             for r in reasons) or "could not be read"
             problems.append(("events-required", ev["required_missing"], "a required event channel " + why))

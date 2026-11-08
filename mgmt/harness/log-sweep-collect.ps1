@@ -683,9 +683,8 @@ if (-not $NoEvents) {
             # (which is what System did for weeks, above) - or because the records genuinely did not
             # occur, which for Application's 1000/1001/1026 crash ids is the HEALTHY case (Jev
             # must_not_occur_on_a_healthy_guest 0.98). Two cheap facts tell those apart: the same
-            # window with NO id filter, and the channel's own listing. Recorded, NOT acted on: the
-            # verdict below is unchanged, because whether a readable-but-empty required channel may
-            # pass came back 0.64, UNDER the 0.70 floor, and that is not a verdict to build on.
+            # window with NO id filter, and the channel's own listing. BOTH ARE NOW ACTED ON, below:
+            # an enabled channel whose own RecordCount is zero has been cleared, whatever our ids did.
             $anyid = -1; $lgEn = '?'; $lgRec = -1
             try { $anyid = @(Get-WinEvent -FilterHashtable @{ LogName = $log; StartTime = $sinceL } -MaxEvents 2000 -ErrorAction Stop).Count }
             catch { if ($_.Exception.Message -match 'No events were found') { $anyid = 0 } }
@@ -701,12 +700,17 @@ if (-not $NoEvents) {
             # any window a release sweep covers. `-ne $false`, not a plain truth test, so a channel
             # marked Required with no MustOccur key stays STRICT and adding one cannot silently
             # switch this guard off.
-            # RESIDUAL, deliberately not closed here: a CLEARED or zeroed Application log now looks
-            # healthy to this predicate. The discriminator is already on the EV NONE line above
-            # (anyid/enabled/records) and is still not acted on, because whether a readable-but-empty
-            # required channel may pass came back 0.64 and then 0.44 on the byte-identical question
-            # - an oscillation, so there is no verdict and nothing here is built on one.
+            # A CLEARED CHANNEL IS CAUGHT BY THE SECOND PREDICATE, not by the one above. The question
+            # "may a readable-but-empty required channel pass?" came back 0.64 and then 0.44 on the
+            # byte-identical state - an oscillation, so there is no verdict and nothing is built on one.
+            # That question was a JUDGEMENT. This property is DECIDABLE instead and needs no verdict: a
+            # channel the OS reports as enabled whose own RecordCount is 0 has been cleared, because the
+            # Application log takes routine events from dozens of sources on every boot - zero is not a
+            # quiet guest. Measured on a healthy win11r-qwt: enabled=True records=310. It is independent
+            # of MustOccur on purpose (a wiped System log is just as wiped), and -1 is the LISTING having
+            # failed - the defaults above - which is not a wipe and must not be reported as one.
             if ($raw -eq 0 -and $ch.Required -and $ch.MustOccur -ne $false) { $requiredMissing.Add("${log}=norecords") }
+            if ($ch.Required -and $lgEn -eq 'True' -and $lgRec -eq 0) { $requiredMissing.Add("${log}=wiped") }
         }
     }
     $rm = if ($requiredMissing.Count -gt 0) { [string]::Join(',', $requiredMissing.ToArray()) } else { '-' }
