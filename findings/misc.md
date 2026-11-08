@@ -568,7 +568,31 @@ failed prestop (2026-11-08)
   saw_empty_class=false, qdb_retry_evidence=true), rc=0. First time U2 has been able to run on a
   German guest at all; the refusal that prevented it is fixed in 1f8d527a.
 
-## The guest capture path fails SILENTLY on a guest that has an active session (2026-11-08)
+## RETRACTED: that was a HEADLESS update run with genuinely no windows, not a capture failure (2026-11-08)
+
+- [verified 2026-11-08] RETRACTED IN FULL. Owner, 2026-11-08: «updates are headless. of course there
+  is nothing to screenshot?» That is correct and it disposes of the entry below. The p1stim stimulus
+  is the update SCAN task, which Task Scheduler runs as SYSTEM with no interactive process, so the
+  guest legitimately has NO top-level window for the duration. An empty tar is then the TRUE answer,
+  and NOWINDOW logged 18 times is the cadence reporting that truth 18 times - it concealed nothing.
+- [verified 2026-11-08] WHAT I GOT WRONG, precisely, because the rule was already written down:
+  .claude/skills/experimenter lists THREE causes of an empty tar - a missing or untagged target, the
+  helper discarding a window, and genuinely no windows - and says the third may be concluded only
+  after excluding the first two. I applied that in one direction only. I excluded the first two and
+  then declared a defect, which requires excluding the THIRD, and the third was the answer. An ACTIVE
+  console session is not a window: autologon gives you a session, a window needs a process that
+  creates one, and a SYSTEM scheduled task creates none.
+- [verified 2026-11-08] THE ONE THING THAT SURVIVES is a correction to my own worry, not a defect:
+  CLAUDE.md requires a shot every 15 min on a long install or boot, and on a HEADLESS update run
+  those shots correctly hold nothing. Zero pixel evidence there is the procedure working as intended,
+  not a breach of it - so the cold-boot verdict resting on qrexec-side reads is properly evidenced,
+  and I was wrong to flag it as thin.
+- [verified 2026-11-08] AND THE COUNT I TOOK CANNOT SETTLE IT EITHER WAY: win11de-p1stim while
+  Running answers 1 process with a non-zero MainWindowHandle, but a VMShell call runs cmd.exe, which
+  IS a window - the instrument creates the thing it counts. It needs no cleaning up, because the run
+  under discussion had no interactive process at all.
+
+### The original entry, kept for the record - its conclusion is withdrawn, its measurements stand
 
 - [verified 2026-11-08] NOT the parked winshot defect, and not "no windows". `QTEST_VM=win11de-p1stim
   tools/qtest shot <tar>` exits 1, writes a ZERO-BYTE tar and prints NOTHING on stdout or stderr,
