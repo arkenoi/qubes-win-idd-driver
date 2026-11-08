@@ -712,3 +712,41 @@ NOT CHASED, and that is deliberate, not an oversight: the owner's standing order
   qubes-vm-update) is NOT installed in this qube and is not under upstream/ro, so its timeouts are
   unread. Nothing above should be taken as covering the dom0 side; what is covered is the in-VM
   agent, the qrexec transport and qubes-core-admin-linux.
+
+## The counting P1s: the PRE-fix side is already on disk, and only a package is missing (2026-11-08)
+
+- [verified 2026-11-08] WHY THEY ARE STILL UNMEASURED, and it is not the stimulus: the newest fix is
+  83714c29 at 2026-11-08 12:05, and the newest run of any kind is 2026-11-08 00:16 - TWELVE HOURS
+  EARLIER. Every retained capture predates the code it would be measuring. I previously wrote that
+  these needed stimuli "none manufacturable on demand"; that was wrong and is withdrawn. The
+  conditions are ROUTINE: rel-42400226595 round1 alone offered 7 updates of which TWO carried
+  `(no KB)` (the join ambiguity GUARD:offeridentity exists for), ONE was verified-no-route, and one
+  title failed to resolve in the Catalog. The same shape appears in rel-42297190009 and
+  rel-42356238859. A stale golden produces all three conditions every time.
+- [verified 2026-11-08] THE PRE-FIX HARM IS REPRODUCED AND RETAINED, so only one side is owed:
+  esu-route-win10-tup-run9/update-status-scan-blocked.json has count=0 - dom0 told ZERO - while
+  carrying two identities in `satisfied` ("657943f1-...:1", "cb4f8361-...:1"), and that run's own scan
+  lines report "8 update(s) offered, 7 actionable, 7 reported to dom0". A guest reading as up to date
+  with seven updates pending is the user-visible defect, measured, on a build that remembered
+  non-installed identities.
+- [verified 2026-11-08] AND A SUSPICION OF MINE IS REFUTED, which narrows what the run must look at:
+  I suspected the verified-no-route exclusion (ADR point 5) was the silent path, because
+  rel-42400226595 carries the no-route offer's identity (740c4b6c:1, `(no KB)`) in `satisfied`. It is
+  not. Across rounds 1, 2 and 3 of that run the offer is RE-VERIFIED and RE-ANNOUNCED every pass -
+  "1 verified no route this pass" plus a SERVICING NOTICE naming it each time - and the counts move
+  7->6, 3->2, 2->1 exactly as point 5 intends. Nothing was silently dropped there. The harm belongs
+  to the remembered-identity path alone, which is what 83714c29 changes to `St.satisfied =
+  $installedIds` (INSTALLED identities only).
+- [verified 2026-11-08] SO THE POST-FIX READ IS A ONE-SHOT COMPARISON, with its predicate written
+  down in advance rather than decided afterwards: on one pass of the fixed build, `satisfied` must
+  contain NO identity the pass did not install, and the number dom0 hears must equal the scan's own
+  "reported to dom0" figure. Both are single fields in update-status.json and the agent log.
+- [verified 2026-11-08] WHAT BLOCKS IT IS STRUCTURAL, not a choice of harness: the updater reaches a
+  guest only through the full installer (packaging/setup/Install-QwtImproved.ps1:5402), and
+  quick-upgrade.sh:332 requires a package carrying install.cmd, MANIFEST.json, SHA256SUMS.txt and
+  msi/installer.msi, verifies those sums, and refuses when reference/gui-agent.exe is absent because
+  the agent-hash verify would be vacuous. Hand-patching a tree is therefore not available and
+  regenerating the sums to make one pass would be defeating a verification check. The MSI is built
+  from WiX on Windows in CI and gui-agent.exe needs MSVC, so this Linux qube cannot build one. A
+  verified package comes from CI, CI builds on a push, and the fix sits on no remote branch with the
+  local tree 31 commits ahead. Jev push_or_ask = get_explicit_push_authorisation 0.96 (conf 0.94).
