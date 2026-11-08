@@ -44,6 +44,15 @@
 #                 crash WHILE THE GUEST IS UP, and the death-1/death-2 numbering across two crashes".
 #                 The increment is the property, not the literal 1 and 2: L8 has already put
 #                 wgcbroker deaths in the same per-day log, so the counter is not at zero here
+#   L12 goingdown a launch is REFUSED while the going-down latch is held and happens after the release.
+#                 ADR-supervision item 2b, which shipped with five call sites and RUNNER: none. The
+#                 latch is published by a process that EXITS (the ADR's case is a session witnessed
+#                 only by a process already gone), and the object's name, SDDL, access mask and
+#                 OBJ_PERMANENT flag are read out of agent/include/qga-lifecycle.h rather than copied
+#                 here, so a product rename makes the cell INVALID instead of reporting the defect
+#                 absent. Runs as SYSTEM (the DACL is SYSTEM-only), its CONTROL arm goes FIRST, and
+#                 it requires stuck_lines 0 - past SESSION_END_NEVER_HAPPENED_MS the watchdog
+#                 releases the latch itself, and a launch after that belongs to the recovery
 #   L6 toast      an actionable toast reaches dom0 WITH its actions, an informational one without and without
 #                 waiting for the action work; --click waits for the owner to press a button (no dom0 shell here)
 #   L7 pvnic      the PV NIC shutdown re-arm LANDS its two registry writes (the measurement Jev named at 0.85) and
@@ -61,7 +70,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; ROOT="$(cd "$ROOT/.." && pwd)"
 cd "$ROOT" || exit 2
 
-ISO=""; SUBJ="win11r-sup"; GOLDEN="win11r-qwt"; CELLS="L1 L9 L2 L3 L5 L6 L7 L7C L8 L11 L4 L10"; CYCLES=2; CLICK=0
+ISO=""; SUBJ="win11r-sup"; GOLDEN="win11r-qwt"; CELLS="L1 L9 L2 L3 L5 L6 L7 L7C L8 L11 L12 L4 L10"; CYCLES=2; CLICK=0
 BUILD="${BUILD:-}"                                # package_version of the build under test, for the sweep's attribution
 HOLD="${HOLD_REPO:-$PWD}"                         # kept for an override; the helpers are in THIS repo now
 SWEEP="${SWEEP_REPO:-$PWD}"                       # the log sweep, likewise - no cross-worktree dependency
@@ -1178,6 +1187,227 @@ if has L11; then
                 "round1 +1 row +1 NEW (suffix $_s1, 4001 x$_e1, AGAIN +$_a1), round2 +1 row +1 NEW (suffix $_s2, 4001 x$_e2, AGAIN +$_a2, numbers $_anums), agent relaunched as pid $_rel between them; then a clean shutdown+boot added NOTHING (rows $_l11rows -> $_l11rows2). AGAIN is the positive evidence that a SECOND record of one death notifies nothing; a zero there means the stimulus produced one record, which is reported rather than demanded. WER 1000/1001 recorded not required - a Kill is a termination, not a fault, and the injector carries no crash knob (Jev: add-a-crash-knob 0.08)"
       fi
     fi
+  fi
+fi
+
+# ---- L12 ADR-supervision item 2b's going-down latch, which had RUNNER: none ----------------------
+# Item 2b shipped 2026-11-06 with five call sites and no run behind it. LAUNCHINTOADYINGSESSION says
+# what is owed in its own words: "prove in a run that the service's launch is REFUSED while the latch
+# is held and allowed after the release". guest/sup-goingdown-latch.ps1 IS that probe and until this
+# cell nothing called it - a committed instrument with no caller measures exactly as much as no
+# instrument, and it reads better in a review, which is why this is the half that gets forgotten.
+# THE OBJECT'S IDENTITY COMES FROM THE PRODUCT HEADER, never from a literal here (lint L10, no
+# default target). A latch renamed in agent/include/qga-lifecycle.h while this cell kept its own copy
+# of the name would publish one object, let the guard read another, find nothing held and report THE
+# ABSENCE OF THE DEFECT - a PASS whose every line ran and whose subject was never touched. So the
+# name format, the SDDL, the access mask and the OBJ_PERMANENT flag are READ OUT of the header, and
+# an extraction that fails makes the cell INVALID rather than falling back to a value.
+# IT RUNS AS SYSTEM. The latch's DACL is D:P(A;;GA;;;SY) - SYSTEM only - so an interactive token
+# cannot open the object at all and a run as the logged-on user would report "not held" for a latch
+# that IS held. `qtest run` is qubes.VMShell, which runs as nt authority\system and needs no session
+# (MEASURED on win11r-sup 2026-11-08: `whoami` -> nt authority\system; arm-module-bases.sh:132
+# records the same). That is why this cell does NOT use guest_ps/`qtest pushrun`, which land in the
+# user session - and why guest/run-elevated.ps1 is the wrong tool here even though it is the elevation
+# helper: its own header says it runs the task AS THE CURRENT USER at HIGHEST because /ru SYSTEM is
+# refused from a filtered token, and a full admin token is still not SYSTEM against this DACL.
+# AFTER L8 AND L11, BEFORE L10. It ends an agent, so it produces a death record, one dom0
+# notification and a death-number increment, and L8/L11 assert DELTAS on exactly those. L10 takes the
+# guest's own qrexec down for six minutes and shuts the subject down after itself, so nothing may
+# follow it.
+# THE CONTROL ARM GOES FIRST (experimenter rule 4, and the probe's own BASELINE line): the same kill
+# with NO latch published must bring the agent back and must produce NO adopt line. Without it a
+# refusal proves nothing, because an agent that fails to return for its own reasons reads exactly
+# like a refusal. It also runs every line of the ntdll interop on a healthy guest before the stimulus.
+if has L12; then
+  # ONE INDIRECTION, FOLLOWED. QGA_GOINGDOWN_SDDL is `#define`d AS QGA_LIFECYCLE_SDDL, so a reader
+  # that takes the literal gets the macro TOKEN `QGA_LIFECYCLE_SDDL` and hands it to the guest as an
+  # SDDL string, which ConvertStringSecurityDescriptorToSecurityDescriptorW then rejects - the publish
+  # fails, nothing is held, and the cell reports the defect absent. A SECOND level is not followed: it
+  # would be an unresolved token and is reported as one instead of passed on.
+  lifecycle_macro(){ # $1 macro -> its value, one indirection resolved, L"" and the UL suffix stripped
+    local _h=agent/include/qga-lifecycle.h _n="$1" _v="" _hop=0
+    while [ "$_hop" -lt 2 ]; do
+      _v=$(sed -n "s|^[[:space:]]*#define[[:space:]]\{1,\}${_n}[[:space:]]\{1,\}\(.*\)$|\1|p" "$_h" | head -1)
+      _v=${_v%%/\**}                                   # a trailing /* comment */ is not part of the value
+      _v=${_v%%//*}                                    # and NEITHER IS A // ONE: QGA_EVENT_ALL_ACCESS
+      # carries `0x001F0003UL   // includes DELETE, which NtMakeTemporaryObject needs`, and with that
+      # text still attached the UL does not strip, $(( )) throws on the expression, and the cell
+      # reports its own INVALID against a header that is perfectly well formed. Caught by running
+      # these two expressions against the real file before the first guest run rather than after it.
+      _v=$(printf '%s' "$_v" | sed 's|[[:space:]]*$||')
+      [ -n "$_v" ] || return 1
+      case "$_v" in
+        QGA_*) _n="$_v"; _hop=$((_hop+1)); continue ;; # a bare macro token: follow it, once
+      esac
+      break
+    done
+    case "$_v" in
+      L\"*\") _v=${_v#L\"}; _v=${_v%\"} ;;             # L"..." -> ...
+    esac
+    _v=${_v%UL}; _v=${_v%ul}
+    printf '%s' "$_v"
+  }
+  _ntfmt_raw=$(lifecycle_macro QGA_GOINGDOWN_NTNAME_FMT) || _ntfmt_raw=""
+  _sddl12=$(lifecycle_macro QGA_GOINGDOWN_SDDL)         || _sddl12=""
+  _acc_raw=$(lifecycle_macro QGA_EVENT_ALL_ACCESS)      || _acc_raw=""
+  _perm_raw=$(lifecycle_macro QGA_OBJ_PERMANENT)        || _perm_raw=""
+  # C's \\ is ONE backslash, and the header's %lu is the probe's {0}.
+  _ntfmt=$(printf '%s' "$_ntfmt_raw" | sed 's|\\\\|\\|g; s|%lu|{0}|')
+  # DECIMAL. The value crosses a cmd.exe command line into a PowerShell [uint32] parameter, and
+  # PowerShell's binder does not convert the STRING '0x001F0003' to an integer - it throws. $(( ))
+  # reads the header's 0x form here, so the product's own constant still decides the mask.
+  _acc12=0; _perm12=0
+  case "$_acc_raw"  in 0x*|[0-9]*) _acc12=$(( _acc_raw ))   ;; esac
+  case "$_perm_raw" in 0x*|[0-9]*) _perm12=$(( _perm_raw )) ;; esac
+  _mbad=""
+  case "$_ntfmt" in '\BaseNamedObjects\'*'{0}'*) : ;;
+    *) _mbad="QGA_GOINGDOWN_NTNAME_FMT read as '$_ntfmt_raw' -> '$_ntfmt', which is not an NT object path carrying the session placeholder" ;; esac
+  case "$_sddl12" in D:*) : ;;
+    *) _mbad="$_mbad; QGA_GOINGDOWN_SDDL read as '$_sddl12', which is not an SDDL string - it is defined AS QGA_LIFECYCLE_SDDL and that indirection must be followed" ;; esac
+  [ "$_acc12"  -gt 0 ] || _mbad="$_mbad; QGA_EVENT_ALL_ACCESS read as '$_acc_raw', which is not a number"
+  [ "$_perm12" -gt 0 ] || _mbad="$_mbad; QGA_OBJ_PERMANENT read as '$_perm_raw', which is not a number"
+  if [ -n "$_mbad" ]; then
+    verdict L12 INVALID "the latch's identity is read out of agent/include/qga-lifecycle.h, and it could not be" \
+            "${_mbad#; } - this cell refuses to default a target (lint L10): a latch published under the wrong name reports 'not held', which is indistinguishable from the product being correct"
+  else
+  _inc12=$(incoming)
+  q push guest/sup-goingdown-latch.ps1 >/dev/null 2>&1
+  log "L12: the going-down latch, identity from the header - name='$_ntfmt' sddl='$_sddl12' access=$_acc12 permanent=$_perm12"
+  for _arm12 in CONTROL INJECT; do
+    case "$_arm12" in
+      CONTROL) _f12="-Control"; _t12='C:\Windows\Temp\L12c.txt'; _l12=L12C ;;
+      *)       _f12="";         _t12='C:\Windows\Temp\L12i.txt'; _l12=L12  ;;
+    esac
+    log "$_l12: $_arm12 - $([ "$_arm12" = CONTROL ] && echo 'end gui-agent with NO latch published: an agent must come back and NO adopt line may appear' || echo 'publish the latch from a process that then exits, end gui-agent, and the guard must launch nothing until the release')"
+    # LAST RUN'S TRANSCRIPT IS DELETED. The probe APPENDS (Out-File -Append) and the publisher
+    # child's pub_ keys live ONLY in this file - the child's stdout goes to a hidden window - so a
+    # surviving file mixes two runs' publish records under one key. Experimenter rule 14.
+    QT_T=60 q run "cmd /c del /f /q $_t12" >/dev/null 2>&1 || true
+    # SYNCHRONOUS, and -File rather than -Command (lint L3 refuses the latter for failing silently).
+    # L10 has to detach because its injection takes the channel down; this one must NOT: gui-agent is
+    # not qrexec-agent, so the channel survives the kill - L11 ends the same process over the same
+    # channel - and waiting means the parent's stdout IS this run's transcript, by construction.
+    QT_T=900 q run "powershell -NoProfile -ExecutionPolicy Bypass -File \"$_inc12\\sup-goingdown-latch.ps1\" -Out $_t12 -NtNameFmt \"$_ntfmt\" -Sddl \"$_sddl12\" -Access $_acc12 -PermanentFlag $_perm12 $_f12" \
+        > "$OUT/$_l12.out" 2>&1 || true
+    q run "cmd /c type $_t12" > "$OUT/$_l12-read.out" 2>&1 || true
+    # GRADED FROM THE PARENT'S STDOUT, which needs no started-stamp guard because the cell waited for
+    # it. The FILE is read for the pub_ keys only, and only to explain a publish that failed.
+    g12(){ grep -a "^L12|$1|" "$OUT/$_l12.out"      2>/dev/null | tail -1 | cut -d'|' -f3- | tr -d '\r'; }
+    p12(){ grep -a "^L12|pub_$1|" "$OUT/$_l12-read.out" 2>/dev/null | tail -1 | cut -d'|' -f3- | tr -d '\r'; }
+    _pre=$(g12 pre_open); _done12=$(g12 done); _term12=$(g12 terminal)
+    _kill12=$(g12 killed); _before12=$(g12 agent_pid_before); _during12=$(g12 agent_pid_during)
+    _after12=$(g12 agent_pid_after); _adopt=$(g12 adopt_lines); _nolaunch=$(g12 nolaunch_lines)
+    _stuck=$(g12 stuck_lines); _latchend=$(g12 latch_at_end); _wexit=$(g12 wait_exit)
+    _rexit=$(g12 relaunch_exit); _adoptms=$(g12 adopt_ms)
+    if [ -n "$_term12" ]; then
+      verdict "$_l12" INVALID "the stimulus could not be applied, so nothing about the guard was measured" \
+              "$_term12 - publisher said: $(p12 publish_status | cut -c1-40)${_pre:+, pre_open=$_pre}; no verdict is claimed either way"
+      continue
+    fi
+    if [ -z "$_pre" ]; then
+      verdict "$_l12" INVALID "the probe never reached its own validation leg" \
+              "no pre_open line in the transcript - see $OUT/$_l12.out; a cell that cannot read the latch name cannot report on it"
+      continue
+    fi
+    # THE LEG THAT MAKES A NEGATIVE READING MEAN SOMETHING. pre_open opens the name before anything
+    # created it and must be 0xC0000034 (OBJECT_NAME_NOT_FOUND). Anything else and the held/not-held
+    # reading is not known to be able to come back negative: 0xC0000022 is ACCESS_DENIED, i.e. not
+    # SYSTEM, which would report every latch as absent.
+    if [ "$_pre" != 0xC0000034 ]; then
+      verdict "$_l12" INVALID "the instrument's negative leg did not read OBJECT_NAME_NOT_FOUND" \
+              "pre_open=$_pre, want 0xC0000034$([ "$_pre" = 0xC0000022 ] && echo ' (0xC0000022 is ACCESS_DENIED: the probe is not SYSTEM, and it would read every latch as absent)') - so 'not held' is not known to be a readable answer and no verdict rests on it"
+      continue
+    fi
+    if [ -z "$_done12" ]; then
+      verdict "$_l12" INVALID "the transcript never completed" \
+              "wait exit: ${_wexit:-<none>}, relaunch exit: ${_rexit:-<none>} - no claim either way"
+      continue
+    fi
+    if [ -z "$_kill12" ]; then
+      verdict "$_l12" INVALID "the kill did not land, so a launch that did not happen is not the guard's doing" \
+              "agent_pid_before=${_before12:-<none>} killed=<none> - this cell NEVER reads an absent agent as a refusal when its own stimulus is unproven"
+      continue
+    fi
+    if [ "$_arm12" = CONTROL ]; then
+      if [ "${_adopt:-0}" -gt 0 ]; then
+        # THE CONTROL'S WHOLE JOB. An adopt line with nothing published means the guard adopts
+        # something else - a latch left by an earlier cell, or a name it computes differently - and
+        # then an adopt in the injected arm is not evidence of our publish.
+        verdict L12C FAIL "the guard adopted a going-down latch in an arm that published NONE, so an adopt in the injected arm proves nothing" \
+                "adopt_lines=$_adopt (adopt_ms=$_adoptms), latch_at_end=$_latchend - this instrument cannot attribute its own stimulus"
+      elif [ -z "$_after12" ] || [ "$_after12" = NONE ] || [ "$_after12" = "$_before12" ]; then
+        verdict L12C INVALID "an agent does not come back after a plain kill on this subject, so a refusal cannot be attributed" \
+                "agent_pid_before=$_before12 agent_pid_after=${_after12:-<none>}, relaunch exit: $_rexit - the no-latch baseline is what makes the injected arm's silence mean 'refused' rather than 'broken', and it is REPORTED here rather than read as the latch working"
+      elif [ "$_latchend" = 0x00000000 ]; then
+        verdict L12C FAIL "a going-down latch exists at the end of an arm that published none" \
+                "latch_at_end=$_latchend after pre_open=$_pre - something else publishes this name, and the injected arm's hold would not be ours"
+      else
+        verdict L12C PASS "the kill alone brings an agent back and produces NO adopt line" \
+                "agent $_before12 -> $_after12 ($_rexit), adopt_lines=0 nolaunch_lines=${_nolaunch:-0} stuck_lines=${_stuck:-0}, latch_at_end=$_latchend; every line of the ntdll interop ran on a healthy guest and the negative leg read $_pre"
+      fi
+      continue
+    fi
+    _held=$(g12 held_after_publish); _relms=$(g12 release_at_ms); _winms=$(g12 window_ms)
+    _relstat=$(g12 release_status); _heldrel=$(g12 held_after_release); _withdrawn=$(g12 withdrawn_lines)
+    _relaunchms=$(g12 relaunch_ms)
+    # TWO VERDICTS, BECAUSE THE TWO HALVES FAIL INDEPENDENTLY AND ONE GATE USED TO VOID BOTH. The
+    # first run of this cell (20261108T025009Z-2338742) established ten things - the publish
+    # outliving its creator, the adopt, the refusal, the release withdrawing the object - and then
+    # reported "nothing about the guard was measured" on the strength of stuck_lines=1, which is a
+    # gate on the POST-RELEASE LAUNCH wearing the whole cell's verdict. The ADR scopes it that way in
+    # its own words: stuck_lines "must be 0 or THE LAUNCH BEING GRADED is the watchdog own recovery
+    # rather than the release" (Jev stuck_lines_gate_scope = scope_to_the_post_release_launch 1.00).
+    # L12 is the refusal half, L12R the release half. The suite still exits non-zero on either.
+    if [ "${_adopt:-0}" -lt 1 ]; then
+      verdict L12 FAIL "the launch guard never read the going-down latch" \
+              "held_after_publish=$_held (the name DOES open, from a publisher that exited) but adopt_lines=0 after $_wexit - item 2b's five call sites consult a fact that nothing adopts, and agent_pid_during=${_during12:-?}"
+    elif [ "$_during12" != NONE ]; then
+      # THE DEFECT ITSELF, and the probe's first REFUTED clause.
+      verdict L12 FAIL "an agent was launched into a session whose going-down latch was HELD" \
+              "agent_pid_during=$_during12 while the latch was held (held_after_publish=$_held, adopt_lines=$_adopt at ${_adoptms}ms, nolaunch_lines=${_nolaunch:-0}) - this is LAUNCHINTOADYINGSESSION, the defect item 2b exists to stop"
+    else
+      verdict L12 PASS "a launch into a session whose going-down latch is HELD is REFUSED, and the latch outlives the process that published it" \
+              "published by a child that EXITED (publisher_running=NO, pub_publish_status=$(p12 publish_status)) and the name still opened (held_after_publish=$_held); the guard adopted it at ${_adoptms}ms ($_wexit) and said so (nolaunch_lines=${_nolaunch:-0}); no agent was launched while it was held (agent_pid_during=NONE), and the CONTROL arm's verdict above is what makes that silence mean refused. Identity from the header: name='$_ntfmt' sddl='$_sddl12' access=$_acc12 permanent=$_perm12. This is the refusal half only - the post-release launch is L12R"
+    fi
+    # THE RELEASE HALF. The object-level questions come FIRST, because whether the release withdrew
+    # the latch is attributable whatever the watchdog did afterwards; only the LAUNCH needs the
+    # recovery to have stayed quiet.
+    if [ -z "$_relms" ] || [ -z "$_winms" ] || [ "${_relms:-0}" -ge "${_winms:-0}" ]; then
+      verdict L12R INVALID "the release did not land inside SESSION_END_NEVER_HAPPENED_MS, so nothing after it is attributable" \
+              "release_at_ms=${_relms:-<none>} window_ms=${_winms:-<none>} (watchdog.c:96) - past that bound the watchdog releases the latch itself and launches"
+    elif [ "$_heldrel" = 0x00000000 ]; then
+      verdict L12R FAIL "the latch still opens after it was released, so nothing downstream can tell held from released" \
+              "release_status=$_relstat held_after_release=$_heldrel - an OBJ_PERMANENT object outlives its creator by design, which is exactly why the release has to withdraw it"
+    elif [ -z "$_after12" ] || [ "$_after12" = NONE ] || [ "$_after12" = "$_before12" ]; then
+      # WORSE THAN THE DEFECT, and the probe's third REFUTED clause: a latch that is never cleared
+      # strands the guest's GUI for good.
+      verdict L12R FAIL "the GUI never came back after the latch was released - the latch strands the session" \
+              "agent_pid_before=$_before12 agent_pid_after=${_after12:-<none>} after release_status=$_relstat ($_rexit), stuck_lines=${_stuck:-0} - refusing forever is worse than launching once"
+    elif [ "${_relaunchms:-0}" -ge $(( ${_adoptms:-0} + ${_winms:-0} - 5000 )) ]; then
+      # WHICH PATH DELIVERED THE GUI, DECIDED BY THE CLOCK AND NOT BY stuck_lines. The recovery lands
+      # at adopt + window, so a relaunch at that instant is ITS launch whatever the log says - and
+      # stuck_lines CANNOT discriminate here, which this cell learned the hard way on its own second
+      # run: 20261108T025645Z-2341311 read stuck_lines=0 while the relaunch landed 90.9 s after the
+      # release and 0.9 s after adopt+window, so the recovery plainly delivered it and merely did not
+      # appear in the probe's byte delta. The verdict that trusted stuck_lines=0 there announced "a
+      # launch follows the release, before the recovery could" about the recovery's own launch.
+      # MEASURED TWICE, both runs: adopt 15338 + 90000 = 105338 vs relaunch 106543; adopt 60307 +
+      # 90000 = 150307 vs relaunch 151235. The hold runs its FULL window from the ADOPT and the
+      # release 33 ms later shortens nothing, because watchdog.c takes `consoleSession ==
+      # endedSession` (:632) before QgaGoingDownHeld (:641) and so never re-reads the latch once
+      # adopted. Whether the product OWES a shorter hold HAS NO VERDICT: Jev
+      # release_must_shorten_the_hold 0.44, and 0.20 on a licensed re-ask carrying those source arms
+      # (0.47 vs 0.46, a dead heat), so it is neither filed as a defect here nor excused. This is a
+      # PASS on the product's actual contract for this scenario - the object is withdrawn and the GUI
+      # does come back, bounded - and it NAMES the path so the gap stays visible in the record (Jev
+      # what_l12r_should_assert = assert_the_object_release_and_the_recovery_relaunch 0.97).
+      verdict L12R PASS "the release withdraws the latch and the GUI comes back - via the stuck-session recovery, not via the release" \
+              "released at ${_relms}ms of window_ms=$_winms and the object WAS withdrawn (release_status=$_relstat, held_after_release=$_heldrel, withdrawn_lines=${_withdrawn:-0}); but the agent returned only at relaunch_ms=${_relaunchms:-?} ($_rexit), $(( ${_relaunchms:-0} - ${_relms:-0} ))ms after the release and within 5 s of adopt ${_adoptms}ms + $_winms, so the recovery delivered it (stuck_lines=${_stuck:-0}, which reads 0 even when it did). The guard does not re-read the latch after adopting it (watchdog.c:632 before :641), so this hold costs its full window; whether that is owed is UNDECIDED at Jev 0.47/0.46 and recorded against LAUNCHINTOADYINGSESSION. latch_at_end=$_latchend leaves no litter"
+    else
+      verdict L12R PASS "the release withdraws the latch and a launch follows it, well before the stuck-session recovery could" \
+              "released at ${_relms}ms inside window_ms=$_winms (release_status=$_relstat, held_after_release=$_heldrel, withdrawn_lines=${_withdrawn:-0}); an agent came back as $_after12 at relaunch_ms=${_relaunchms:-?} ($_rexit), $(( ${_relaunchms:-0} - ${_relms:-0} ))ms after the release and well short of adopt ${_adoptms}ms + $_winms, so the relaunch is the release's. latch_at_end=$_latchend leaves no litter"
+    fi
+  done
   fi
 fi
 

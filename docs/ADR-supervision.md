@@ -248,14 +248,35 @@ smooth"*, and - of the other components - *"same of other components."*
    token"), so it cannot open a SYSTEM-only object at all. Widening the DACL is the gate on that scope and it
    has not been asked for. Until then those sites behave exactly as before.
 
-   **RUNNER: NONE YET. L12 is DESIGNED AND OWED, and the probe on its own is not a runner.**
-   `guest/sup-goingdown-latch.ps1` (2026-11-07) is the in-guest half: it publishes the latch from a child
-   that EXITS before the guard reads it, ends the agent, reads the refusal, releases, and has a `-Control`
-   arm that performs the identical kill with no latch published. Its instrument is validated before the
-   stimulus by `pre_open`, which must read `0xC0000034`, and its four graded tokens all have producers in
-   `watchdog/watchdog.c`. None of that matters yet, because **nothing in the tree calls the file** - grep
-   finds the name only inside itself. The gap moved from "no script" to "no caller"; item 2b is still
-   unproven on a guest.
+   **RUNNER: supervision-e2e L12**, added 2026-11-08, with `L12C` (the control) and `L12R` (the release
+   half). `guest/sup-goingdown-latch.ps1` (2026-11-07) is the in-guest half: it publishes the latch from a
+   child that EXITS before the guard reads it, ends the agent, reads the refusal, releases, and has a
+   `-Control` arm that performs the identical kill with no latch published. Its instrument is validated
+   before the stimulus by `pre_open`, which must read `0xC0000034`, and its four graded tokens all have
+   producers in `watchdog/watchdog.c`. It was committed on 2026-11-07 and **called by nothing** for a day -
+   the gap had moved from "no script" to "no caller" - which is why the cell, not the probe, is what closed
+   item 2b's RUNNER.
+
+   **MEASURED 2026-11-08 on win11r-sup** (`qwt-sup/20261108T025009Z-2338742`, reproduced in
+   `…T025645Z-2341311`): the refusal half holds. The latch was published by a child that exited
+   (`publisher_running=NO`) and the name still opened (`held_after_publish=0x00000000`); the guard **adopted
+   it** (`QGAWDGOINGDOWN`, `adopt_ms=15338`), **said so** (`QGAWDNOLAUNCH` ×1) and **launched nothing while
+   it was held** (`agent_pid_during=NONE`), against a control arm whose identical kill produced
+   `adopt_lines=0` and an agent back. `pre_open` read `0xC0000034` first, so the negative reading is known
+   to be reachable.
+
+   **THE RELEASE DOES NOT WAKE THE GUARD, and this entry's release-site list overstates what it does.** The
+   deliberate release withdrew the object (`release_status=0x00000000`, `held_after_release=0xC0000034`)
+   33 ms after the adopt, yet no agent returned until `relaunch_ms=106543` - `15338 + 90000 = 105338`, one
+   poll earlier - and again at `151235` against `60307 + 90000 = 150307` on the second run. The cause is in
+   this file's own design: the guard tries `consoleSession == endedSession` (`watchdog.c:632`) **before**
+   `QgaGoingDownHeld` (`:641`), and the adopt branch says it outright - "The next pass takes the arm above".
+   So once adopted the latch is unreachable, and only a real session end (`:794`, `:815`) or the 90 s
+   recovery (`:753`) clears the refusal. "Released on the agent's veto path", above, can therefore only
+   shorten a hold the guard has **not yet adopted**. Whether the product owes a shorter hold is **UNDECIDED**:
+   Jev `release_must_shorten_the_hold` 0.44, and 0.20 on a licensed re-ask carrying those source arms
+   (timer-is-the-only-exit 0.47 against guard-must-reread 0.46). It is neither filed as a defect nor excused,
+   and a third ask needs new evidence rather than rewording.
    What the harness step owes, so it is built once and not improvised:
    * **It takes the object identity from the header, never a default.** The four mandatory parameters come
      from `QGA_GOINGDOWN_NTNAME_FMT`, `QGA_GOINGDOWN_SDDL`, `QGA_EVENT_ALL_ACCESS` and `QGA_OBJ_PERMANENT`.
