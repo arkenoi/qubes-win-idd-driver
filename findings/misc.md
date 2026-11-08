@@ -567,3 +567,24 @@ failed prestop (2026-11-08)
   classified this TemplateVM correctly from qubesdb on a real cold boot (class_correct=true,
   saw_empty_class=false, qdb_retry_evidence=true), rc=0. First time U2 has been able to run on a
   German guest at all; the refusal that prevented it is fixed in 1f8d527a.
+
+## The guest capture path fails SILENTLY on a guest that has an active session (2026-11-08)
+
+- [verified 2026-11-08] NOT the parked winshot defect, and not "no windows". `QTEST_VM=win11de-p1stim
+  tools/qtest shot <tar>` exits 1, writes a ZERO-BYTE tar and prints NOTHING on stdout or stderr,
+  while that guest answers qrexec (cmd /c echo ALIVE) and `query session` reports an ACTIVE console
+  session: "gerd-test, 1, Aktiv". guivm is dom0 and the gui feature is 1. The parked
+  CAPTUREHELPERDROPSUNNAMEDWINDOW is winshot.py DISCARDING windows out of a capture that exists -
+  this is no capture at all, so the two are different failures and the parked one does not cover it.
+- [verified 2026-11-08] IT RAN 18 TIMES WITHOUT BEING NOTICED, which is the part worth keeping: the
+  capture cadence over the p1stim run logged NOWINDOW 18 times and left 18 zero-byte tars, and
+  NOWINDOW reads exactly like "the guest had no windows". A silent rc=1 plus an empty file is
+  indistinguishable from a legitimate answer at every consumer that groups the token.
+- [verified 2026-11-08] WHY IT MATTERS BEYOND CAPTURE: CLAUDE.md requires a `tools/qtest shot` at
+  least every 15 min on any install or boot over 5 min and says zero screenshots on a long run FAILS
+  the procedure. With this, a run can satisfy the letter of that rule - shots attempted on cadence -
+  and hold no pixel evidence whatsoever. The cold-boot run above is in exactly that state: its
+  verdict rests entirely on qrexec-side reads.
+NOT CHASED, and that is deliberate, not an oversight: the owner's standing order is that product
+  defects lead and harness work follows what they need. Recorded here rather than in
+  findings/issues.md because the register's CURRENT STATE head is at the byte ratchet.
