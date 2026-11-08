@@ -59,7 +59,7 @@ forensics only — do not load it into context.
 - **THE 26 ESTATE REDS OF run-all.sh, PER SUITE: 11 REAL, 9 THE MEASUREMENT, 5 ENVIRONMENTAL, 1 FIXED.** [verified 2026-10-24] Moved out of the register entry SUITESREDATRELEASE when it was compacted; the index entry keeps the headline, the concurrency evidence and the pointers. `run-all.sh` over 195 suites gave 169/26 CONCURRENT WITH A RIG JOB on a 2-CPU qube, and every red below was RE-RUN ALONE before being believed.
   **THE MEASUREMENT, NOT THE PRODUCT (9):** campaign-preflight, deathevent, death-reporter, notify-render, toastactions, svc-serial-start, collector-logdir-default, wu-dead-pass, wu-prevpass-gate - all green alone.
   **FIXED (1):** restart-gui-agent-selftest 12/0 - cause and fix in 1bcf4d99.
-  **REAL, each with its ONE failing leg named (11):** `clock-sync` fallthrough_retries_bounded (the fallthrough does not wait, or the loop is unbounded) · `env-assert` service.enableWinKey unset -> expected exit 3, got 2 · `console-window-mapped` guard: oversized payload not refused · `errbox` shape: ShouldAcceptWindow accepts the box before the shell-window rule · `procown-sites` 66/1, netsetup: the service process lingers · `qrexec-user-normalise` shape logs_requested_and_consequence · `g0-negative-control` only 3 catalogs, expected >= · `acceptance-plan` 17/6 (the floor/full legs) · `wu-cumulative-order` 2 checks (its own register entry WUCUMULATIVEORDERSELFTESTFAILS) · `wu-effectsettle` 1 check · `wu-relay-own` 34/1, deaf: the respawn is logged again. THREE OF THE ELEVEN ARE SOURCE-SHAPE LEGS (clock-sync, errbox, qrexec-user-normalise), which is the class 8e26657a cleared four of the same day - a shape assertion that rots when the code it quotes is reworded - so each needs reading against the code before it is called a product fact.
+  **REAL, each with its ONE failing leg named (11):** `clock-sync` fallthrough_retries_bounded (the fallthrough does not wait, or the loop is unbounded) · `env-assert` service.enableWinKey unset -> expected exit 3, got 2 · `console-window-mapped` guard: oversized payload not refused · `errbox` shape: ShouldAcceptWindow accepts the box before the shell-window rule · `procown-sites` 66/1, netsetup: the service process lingers · `qrexec-user-normalise` shape logs_requested_and_consequence · `g0-negative-control` only 3 catalogs, expected >= · `acceptance-plan` 17/6 (the floor/full legs) · `wu-cumulative-order` 2 checks - FIXED 2026-11-08 in 712ef02c: the fault was stale log anchors INSIDE the two checks, and the same two standing failures had already cost the selftest its life on 2026-10-26 (WUCUMULATIVEORDERSELFTESTFAILS, "it could not tell a knob from its own standing failure"), so BOTH deletions rested on a cause that is now removed. That is not a reason to restore the selftest - no new suites · `wu-effectsettle` 1 check · `wu-relay-own` 34/1, deaf: the respawn is logged again. THREE OF THE ELEVEN ARE SOURCE-SHAPE LEGS (clock-sync, errbox, qrexec-user-normalise), which is the class 8e26657a cleared four of the same day - a shape assertion that rots when the code it quotes is reworded - so each needs reading against the code before it is called a product fact.
   **ENVIRONMENTAL / NEED A GUEST (5):** failproof-check-chrome, private-disk-gate-guest, qcon-session, specimen-boot-gate (all rig-dependent, so an offline run is not a verdict) and `wu-deploy-loud` (its fake scheduled-task reader does not intercept, so the region reaches the real `schtasks`, which pwsh on Linux does not have - a known red since 2026-10-15). `run-offline-suites` is the nested case: it RUNS the 103 listed suites, so inside run-all's 90 s per-suite timeout it can only time out; CI runs it green on 81c1fe5f.
 
 - **THE DNS BLIP THAT VOIDED A CELL, WITH THE NUMBERS** (moved out of register entry SWEEPINVOCATIONNOTRECORDED when it was compacted). [verified 2026-10-22] Campaign 3 cell win10-upgrade: `JEV: calls=1 questions=80 rc=2 - jev.py exited 2 on call 1 (25 questions): INSTRUMENT: TypeSafe call failed: URLError: <urlopen error [Errno -3] Temporary failure in name resolution>`, so `LOGSWEEP-RESULT rc=4 status=INCOMPLETE` and matrix reported `INVALID-SWEEP-UNJUDGED guest logs collected (90 file(s), 1189 QWT line(s)) but the judge never ran`. DNS was working again 20 minutes later (`api.anthropic.com` resolves, a live Jev call returned 0.98), so the failure was transient. The logs, the metrics and the breaches are all on disk, and `tools/log-sweep.py analyze <logsdir> --baseline ... --out ...` re-runs the analyzer over a collected directory without touching the rig; report.json's `header` carries label, since, logsdir and baseline. Reconstructing the three `--tolerate-error` pattern/justification pairs by hand is the same substitution that cost twenty minutes of rig time earlier the same night (ACCEPTANCETARGETSUNCROSSCHECKED). A run whose environment is not recorded cannot be reproduced.
@@ -68,27 +68,82 @@ forensics only — do not load it into context.
 
 - **WUSCANTASKFAILSANDLOGSNOTHING, the measured detail** (moved out of the register entry when it was corrected and compacted). [verified 2026-11-08] Read out of `scratchpad/gweck-logs-1027` rather than reasoned about. **What the bundle actually contains:** the guest's `Qubes Logs` directory - our module logs plus the death reporter's files - and NO event-log export at all, in either the .37 or the .38 tarball. So nothing beyond the reporter's own lines is recoverable from a field bundle, and asking a reporter for "the logs" can never produce a Task Scheduler record. **What the reporter did capture,** 6 times across the two bundles, e.g. `2026-10-27 10:14:08 [ERROR] DEATH #1 NEW Microsoft-Windows-TaskScheduler/Operational/201#332: The Windows Update scan task failed | task QubesWindowsUpdateScan ended with a non-zero result | Cause: incorrect function. | task QubesWindowsUpdateScan; result 0x80070001; death 1 this boot; build 4.3.37.1096. Evidence: Q:\Qubes Logs\qwt-deaths.log. | detail: Task Scheduler history (TaskScheduler/Operational) event 201`, each followed by `notified to dom0 as update-scan.death-N`. **Three things that fixes in the register's reading of it.** (1) `Microsoft-Windows-TaskScheduler/Operational` WAS enabled on his guest - the reporter read 201 out of it - which `install-updater-agent.ps1:758-776` has done since f93d0d3d (2026-09-17), so the entry's old NEXT, "log the failure before anything else", was already done before the bundles were taken. (2) The event is **201**, "the action completed with a non-zero result", NOT a 101/103 start failure: Task Scheduler DID launch `powershell.exe`, so `0x80070001` is what the action RETURNED and not the scheduler's own refusal. 101 and 103 are absent from `log-sweep-collect.ps1:604`'s id list (201/203/329) and have never been seen to fire here, so they were NOT added - an id we have no record of is decoration, and the 23-expression XPath cap documented at :608 is not the constraint (5 ids + StartTime is 6). (3) `0x80070001` is `HRESULT_FROM_WIN32(ERROR_INVALID_FUNCTION)` and `Cause: incorrect function.` is just its FormatMessage text, so the string carries no information the code does not. **What stays unexplained, and it is the whole defect:** what makes `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <BinDir>\qubes-windows-update.ps1 -Action scan -Scheduled -RelayExe <exe>` exit `0x80070001` before the agent reaches its own LogInit - no `qubes-windows-update*.log` exists in either bundle. The task definition is not visibly at fault: `install-updater-agent.ps1:699-724` interpolates `PT6H` and `PT2H`, `<Principal id="Author">` matches `<Actions Context="Author">`, and `schtasks /create` returned rc=0 (the installer throws otherwise at :724). Cheapest next probe, and it needs a guest we do not have: `schtasks /query /tn QubesWindowsUpdateScan /xml` plus `wevtutil qe Microsoft-Windows-TaskScheduler/Operational` from a failing guest.
 
-## WUMSUROUTENEVERSAYSUNVERIFIED - the six miscounts still open on the .msu route (2026-11-08)
+## WUMSUROUTENEVERSAYSUNVERIFIED - the six miscounts, each now measured (2026-11-08)
 
 Register line in findings/issues.md. The owner asked for a plain inventory of what the updater
-counts, how it installs, and what it counts wrong; these six came out of reading the code against
-ADR-updater and NONE of them was in the register before. All are READ OFF THE CODE ONLY - no guest
-has been seen doing any of them - and they are listed so the next guest pass can look for them.
+counts, how it installs, and what it counts wrong. Six came out of reading the code against
+ADR-updater and none was in the register before. They were listed as READ OFF THE CODE ONLY; each
+has now been decided against the code rather than left as a reading. THREE FIXED, TWO RETRACTED,
+ONE OPEN. No guest has run any of it.
 
-1. `Install-ViaWU` counts ResultCode 3, "succeeded with errors", as installed, with no effect probe
-   on that path at all (:1309, row state at :1318). ADR 3 wants the effect, or an admission.
-2. When a restart is pending, the number sent to dom0 is built from THIS pass's result ROWS, not
-   from what Windows still offers (:3611-3613). An offer the pass never attempted contributes
-   nothing, and two rows carrying one KB count twice.
-3. After an install with no restart, staged/deferred rows and the fresh offer count are combined by
-   taking the LARGER, not the sum (:3674-3675). One staged update Windows no longer offers plus one
-   different failing offer reports 1, not 2.
-4. A scan that could only partly load the offer list sets scan_partial and logs it, but
-   Report-Availability sends dom0 a bare integer with no lower-bound flag (:3009-3012, :932-936).
-5. Every no-KB result row is labelled `(no KB)` (:1315) and the post-install subtraction matches on
-   that label (:3664), so installing one no-KB offer can subtract EVERY no-KB offer from the count.
-6. The `wuinstall` action saves its result and returns without calling Report-Availability at all
-   (:3226-3231), so that path leaves dom0's number stale. Looks acceptance-only; not confirmed.
+**1. FIXED - the Windows Update route reported `installed` and admitted nothing.** `Install-ViaWU`
+counts ResultCode 2 and 3 as ok (`$ok = ($r.ResultCode -in @(2, 3))`) and there is no effect probe
+on that route at all, so ADR-updater 3 and 12.3's fourth row require the ROW to say so. It carried
+neither field. It now carries `verified_by_effect=$false` and `probe=$null`, the same names and
+meaning as Install-ViaAgentCache's row and Get-MsuKbVerdict's (61eae363), and ResultCode 3 -
+orcSucceededWithErrors - writes a `reason` naming itself. `$ok` is DELIBERATELY unchanged: that is
+Windows' own verdict and nothing of ours can second it. With this all three install routes report
+the same two fields, which is what makes the first two fixes worth anything to the exclusion audit
+and the evidence builder.
+
+**2. RETRACTED.** The claim was that the reboot-pending count is built from this pass's result ROWS
+rather than from what Windows still offers, so an offer the pass never attempted contributes
+nothing and two rows for one KB count twice. Both halves fail on measurement. Every early exit in
+the offer loop was audited: the three bare `continue`s are the `resolve` action (`:3407`, and the
+counting block runs only for install/full), and two pushes onto `WuOnlyExpressKbs` / `WuFallbackKbs`
+(`:3470`, `:3475`) which the four gates after the loop provably drain into rows - gate 2 takes the
+routeless case, gate 3 the routed one, so no element survives an install pass without a row. Every
+other `continue` is preceded by a `St.result +=`. And two rows sharing one KB counting 2 is what the
+no-reboot branch does too: it counts OFFERS from the rescan, and two offers sharing a KB are also 2
+there. The branches agree on the unit, which is items of work, not distinct KB numbers.
+
+**3. RETRACTED, and the obvious fix would have been a defect.** The claim was that staged/deferred
+rows and the fresh offer count are combined by taking the LARGER instead of the sum
+(`if ($stagedN -gt $reportCount) { $reportCount = $stagedN }`). SUM WOULD DOUBLE-COUNT: a deferred
+row is not installed, so Windows still offers it and it is already inside `$reportCount`. And that
+branch runs only when `reboot_needed` is false, where `$stagedN` is near-unreachable: in normal
+operation every staged or deferred row implies `reboot_needed`. The chain is exhaustive -
+`StagedThisSession` has exactly TWO assignment sites (`:1861` the QUBES_UPDATES_FAKE_STAGED test
+knob, `:2543` an rc=3010), `:2543` also sets `$reboot` and `:2566` sets reboot_needed; the .msu
+deferral at `:2762` sets it at `:2763`; the stage-behind-cumulative deferral needs
+StagedThisSession, i.e. this pass's own 3010; `Install-ViaAgentCache` sets it at its `:266` beside
+the same `state='staged'`; `Install-ViaWU` sets it from the installer's aggregate RebootRequired.
+UNVERIFIED, the one remaining door: whether WUA can report a per-update RebootRequired while the
+aggregate is false. If it can, that line is the only thing protecting that case, so it STAYS.
+
+**4. FIXED - a partial scan was printed as a complete count.** The pass records
+`St.scan_partial` (`:3042`, the relay's give-up count at scan time) and NOTHING in this tree read
+it: not guest/wu-update.ps1, not tools/, not the harness. So a scan that could only partly load the
+offer list printed its number exactly like a complete one and the operator could not tell an empty
+guest from an unreachable catalogue. The report itself cannot carry the caveat - `qubes.NotifyUpdates`
+takes a bare integer and that protocol is dom0's, not ours - so the admission goes on the line dom0
+collects, in wu-update.ps1's outcome summary.
+
+**5. FIXED - the guest reported UP TO DATE with a driver update outstanding.** `Get-Available`
+labels any offer with no KBArticleIDs `(no KB)` and `Install-ViaWU` labels its rows the same way, so
+one installed no-KB row put that literal into `Get-InstalledKeys`, and the post-install rescan's
+`$notInstalled` - which matched an offer on kb/title alone - excluded EVERY no-KB offer from the
+number dom0 hears. Reachable on any routed guest with two such offers: the WU-by-identity path
+installs one and both disappear. MEASURED on the shipped predicate, three ways, two no-KB offers
+with one installed this pass and the truth 1: at 712ef02c dom0 is told **0** - not one too few, zero,
+the Qube Manager reading of an up-to-date qube; with the `(no KB)` label merely dropped from the key
+set, **2** - it counts the one it just installed; with the predicate deciding on the offer's own
+identity first, **1**. Both halves shipped, because they answer different cases: the identity arm
+needs a `uid`, which `Install-ViaWU` stamps and `Get-Available` carries, and the label filter keeps a
+row WITHOUT one from spending `(no KB)` as a key in the kb/title fallback. `Get-InstalledIdentities`
+is hoisted a few lines so the count uses the same set `St.satisfied` is assigned, computed once. The
+identity machinery never had the hole (it drops a stamped row's kb from the join as `$spoken`); only
+the raw key join did. The driver-by-title rows at `:3315`/`:3326`/`:3359` were never affected: they
+key on the offer's TITLE, distinct per offer.
+
+**6. OPEN, P2, and not fixed here.** `if ($Action -eq 'wuinstall') { ...; return }` (`:3258`)
+returns without re-reporting, so after that action dom0 keeps the PRE-install scan count until the
+next scan. MEASURED SCOPE: nothing in the tree invokes it - the only hits for `wuinstall` are this
+script's own ValidateSet and the three gitignored prime-jobs build copies - so it is an operator
+action typed by hand, which is why it is P2 and not P1. The cheap fix is wrong: the correct count
+needs the post-install rescan, and that block is ~80 lines inline on the install/full path, so
+fixing this properly means extracting it. That is a design change and belongs behind its own Jev
+review, not inside a counting fix.
 
 Also found and NOT a defect, recorded so it is not "fixed" by mistake: `Get-MsuKbVerdict` counts a
 KB installed when AT LEAST ONE of its files succeeded. That is deliberate and measured - one catalog
@@ -99,7 +154,6 @@ And the trap that nearly turned this fix into a false red: arming the cumulative
 check on all of `$OK_RC` would have included 2359302, ALREADY INSTALLED (which :2009 treats as
 staged). Nothing new appears in the package list for it, so the check would have reported "not
 registered" and FAILED a cumulative that was already on the machine. Armed on 0 and 3010 only.
-
 ## WUCUMULATIVEORDERORPHANRED - CLOSED 2026-11-08, it was the test (ex findings/issues.md)
 
 Red on `rp-unreadable-proceeds` and `unreadable-not-staged` at 43e95083 and 07b3a743, undiagnosed

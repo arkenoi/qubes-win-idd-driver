@@ -559,6 +559,17 @@ switch ($st.phase) {
         $line = ('updates: ' + @($st.available).Count + ' offered; ' + ($outcome.ok.Count - $stg) + ' installed, ' + $stg + ' staged, ' +
                  $outcome.deferred.Count + ' deferred, ' + $outcome.info.Count + ' informational; dom0 is told ' + [int]$st.count + ' update(s) remain')
         if ($unr.Count) { $line += ' (not counted: ' + ($unr -join ', ') + ' - verified not installable from this guest)' }
+        # A PARTIAL SCAN MAKES THAT NUMBER A LOWER BOUND, and nothing said so. The pass records
+        # St.scan_partial - the relay's give-up count at scan time, qubes-windows-update.ps1's own
+        # guard on a scan that could only partly load the offer list - and NO reader in this tree read
+        # it: not this script, not tools/, not the harness. So a scan that lost fetches printed its
+        # count exactly like a complete one, and the operator had no way to tell an empty guest from an
+        # unreachable catalogue. The report itself cannot carry the caveat: qubes.NotifyUpdates takes a
+        # bare integer and that protocol is dom0's, not ours to change - so the admission goes where it
+        # is read, on the line dom0 collects.
+        $partial = 0
+        if ((@($st.PSObject.Properties.Name) -contains 'scan_partial') -and $null -ne $st.scan_partial) { $partial = [int]$st.scan_partial }
+        if ($partial -gt 0) { $line += ' (AT LEAST that many: the scan could not fully load the offer list - ' + $partial + ' fetch(es) given up on - so offers may be missing)' }
         Write-Output $line
         exit 0
     }

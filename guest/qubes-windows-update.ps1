@@ -536,8 +536,20 @@ function Test-RowInstalled($row) {
 # What THIS pass installed, by kb and title (a no-KB row is recorded under its title), and the offer identities (uid:rev) of the
 # scan's offers it names - what both ends of a pass write to `satisfied` (the post-install rescan, the reboot-pending report).
 function Get-InstalledKeys {
+  # '(no KB)' IS NOT A KEY, AND USED TO BE SPENT AS ONE. Get-Available labels every offer carrying no
+  # KBArticleIDs '(no KB)' and Install-ViaWU labels its rows the same way, so ONE installed no-KB row
+  # put that literal in here - and the post-install rescan's $notInstalled, which matches an offer on
+  # kb/title, then excluded EVERY no-KB offer from the number dom0 hears. Reachable on any routed
+  # guest with two such offers: the WU-by-identity path (WUNOKBMISSNOTINSTALLEDONROUTEDGUEST's fix)
+  # installs one and the other vanishes from the count - the under-report the owner reported from the
+  # field, by a different door. The IDENTITY path never had this hole: Get-InstalledIdentities drops a
+  # stamped row's kb from the join as $spoken, so only the raw key join below ever used the label.
+  # Dropping it costs nothing a reader can see. A row with no identity records nothing and its offer
+  # is COUNTED AGAIN - this file's own stated rule ("the fallback is always count it") and the safer
+  # error of the two (Jev: under-reporting is the worse one, 0.99).
   return @(@($script:St.result) | Where-Object { Test-RowInstalled $_ } |
-           ForEach-Object { $_.kb; if (Test-RowKey $_ 'title') { $_.title } } | Where-Object { $_ })
+           ForEach-Object { $_.kb; if (Test-RowKey $_ 'title') { $_.title } } |
+           Where-Object { $_ -and "$_" -ne '(no KB)' })
 }
 function Get-InstalledIdentities($keys) {
   # A ROW THAT CARRIES ITS OWN IDENTITY IS TAKEN AT ITS WORD, and only a row without one is
@@ -1315,6 +1327,22 @@ function Install-ViaWU {
       $row = [ordered]@{ kb = $(if ($kb) { "KB$kb" } else { '(no KB)' }); ok = $ok }
       if ($rid.uid) { $row['uid'] = $rid.uid; $row['rev'] = $rid.rev }
       if ($ok) { $row['state'] = $(if ($r.RebootRequired) { 'staged' } else { 'installed' }) }
+      # THE ROW ADMITS THAT NOTHING CHECKED (ADR-updater 3 and 12.3, fourth row). This path has no
+      # effect probe at all - the verdict IS the WUA installer's ResultCode - so it says probe=$null
+      # and verified_by_effect=$false instead of leaving a reader to infer a measured install from
+      # ok=$true. Same two field names, types and meaning as Install-ViaAgentCache's row and
+      # Get-MsuKbVerdict's (61eae363); with this the exclusion audit and the evidence builder see all
+      # THREE install routes instead of two, which is what made the first two fixes worth having.
+      $row['verified_by_effect'] = $false
+      $row['probe'] = $null
+      # AND SUCCEEDED-WITH-ERRORS NOW SAYS SO. ResultCode 3 is orcSucceededWithErrors and still counts
+      # as ok here (deliberately unchanged - it is Windows' own verdict and nothing of ours can second
+      # it), but it is not a clean install, and `reason` is the row-level key every reader takes -
+      # dom0's Get-RowWhy and tools/wu-exclusion-evidence.py. The one outcome on this route that most
+      # deserves a sentence carried none, so a partly-failed install read exactly like a clean one.
+      if ($r.ResultCode -eq 3) {
+        $row['reason'] = ('Windows Update reported SUCCEEDED WITH ERRORS (ResultCode 3, HResult 0x{0:X8}) - counted installed on that verdict, and nothing on this route probed the effect' -f $r.HResult)
+      }
       $row['files'] = @([ordered]@{ file = "$($u.Title)"; rc = $r.ResultCode; hr = $r.HResult })
       $rows += $row
       Log ("WU:   $($u.Title) -> ResultCode=$($r.ResultCode) HResult=$($r.HResult) RebootRequired=$($r.RebootRequired)")
@@ -3693,7 +3721,20 @@ try {
         # its opposite. On an already-updated guest this bug is invisible, which is the whole
         # argument for running both controls against one build.
         $installedKeys = @(Get-InstalledKeys)
-        $notInstalled = { param($r) ($installedKeys -notcontains $r.kb) -and ($installedKeys -notcontains $r.title) }
+        # AND THE OFFER'S OWN IDENTITY DECIDES FIRST, where it has one (GUARD:offeridentity, this end).
+        # The kb/title join alone cannot answer for a no-KB offer: every one of them is labelled
+        # '(no KB)' by Get-Available and by Install-ViaWU's rows alike, so the join either matched ALL
+        # of them off one install (measured: two offered, one installed, dom0 told ZERO - the guest
+        # read as up to date with a driver update outstanding) or, once that label stops being a key,
+        # matches NONE and counts the installed one again (told 2 where 1 is true). Neither is the
+        # number. Install-ViaWU stamps uid/rev on the rows it returns and Get-Available carries uid/rev
+        # on the offers, so the identity is already on both sides - the same set this block computes a
+        # few lines below for St.satisfied, hoisted so the count can use it instead of guessing.
+        $installedIds = @(Get-InstalledIdentities $installedKeys)
+        $notInstalled = { param($r)
+          $rid = $(if ((Test-RowKey $r 'uid') -and $r.uid) { "$($r.uid):$($r.rev)" } else { $null })
+          (-not ($rid -and $installedIds -contains $rid)) -and
+          ($installedKeys -notcontains $r.kb) -and ($installedKeys -notcontains $r.title) }
         # ...and the offers THIS pass verified have no route (St.unroutable, WU-ROUTE-PROOF) - the one measured exception
         # (ADR-updater section 2, point 5); the class-keyed notice branch that stood here is gone.
         $unroutableAfter = @($script:St.unroutable | Where-Object { $_ })
@@ -3712,7 +3753,7 @@ try {
         # the fallback is always "count it".
         # INSTALLED identities only (point 3): an informational offer is measured again by the next scan's route proof (point 5),
         # never remembered here.
-        $script:St.satisfied = @(Get-InstalledIdentities $installedKeys)
+        $script:St.satisfied = $installedIds
         # ---- WU-INFO-EXCLUDE-END
         $script:St.remaining = $reportCount; Save
         Log ("post-install rescan: $($after.Count) offered; $reportCount actionable to dom0" + $(if($unroutableAfter.Count -gt 0){ ' (' + $unroutableAfter.Count + ' verified no route this pass - see notice)' }else{ '' }))
