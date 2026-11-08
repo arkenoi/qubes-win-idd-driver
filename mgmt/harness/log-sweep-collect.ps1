@@ -605,10 +605,40 @@ if (-not $NoEvents) {
     )
     foreach ($ch in $channels) {
         $log = $ch.Log
+        # THE 23-EXPRESSION XPATH CAP, and it made System blind on EVERY sweep ever run. Get-WinEvent
+        # compiles the hashtable into ONE event selector; a selector holds at most 23 expressions, and
+        # past that Windows does not report an invalid query - it reports "No events were found". System
+        # carries 23 ids, so with StartTime that is 24. MEASURED 2026-11-08 on win11-acc: 22 ids +
+        # StartTime -> 31 records; 23 ids + StartTime -> throws "No events were found"; the SAME 23 ids
+        # WITHOUT StartTime -> 143; and with no id filter at all the channel read 810 records over the
+        # window (ListLog: enabled=True, 1618 records, Circular). A superset returning less than its own
+        # subset is a malformed query, not a quiet channel. This is the CAUSE of the blindness
+        # GUARD:channelraw and GUARD:channelrawthrown detect: both fired correctly, neither could say
+        # why, and the shutdown markers and SCM records they reported as lost were lost to this.
+        $qerr = $null
+        $nchunks = 0
+        $ids = @($ch.Ids)
+        $recs = New-Object 'System.Collections.Generic.List[object]'
+        for ($qi = 0; $qi -lt $ids.Count; $qi += 22) {   # 22 ids + StartTime = 23, the maximum
+            $grp = @($ids[$qi..([Math]::Min($qi + 21, $ids.Count - 1))])
+            $nchunks++
+            try {
+                foreach ($rr in @(Get-WinEvent -FilterHashtable @{ LogName = $log; Id = $grp; StartTime = $sinceL } -ErrorAction Stop)) { $recs.Add($rr) }
+            } catch {
+                # "No events were found" is how this channel says zero for THIS chunk; any other failure
+                # is the channel being unreadable and must not be rounded down to zero.
+                if ($_.Exception.Message -notmatch 'No events were found') { $qerr = $_.Exception.Message; break }
+            }
+        }
+        if ($qerr) {
+            $evErrors++
+            $ev.Add("EV ERR [$log] " + ($qerr -replace "[`r`n]+", ' '))
+            if ($ch.Required) { $requiredMissing.Add("${log}=unreadable") }
+            continue
+        }
+        $raw = $recs.Count
+        $kept = 0
         try {
-            $recs = @(Get-WinEvent -FilterHashtable @{ LogName = $log; Id = $ch.Ids; StartTime = $sinceL } -ErrorAction Stop)
-            $raw = $recs.Count
-            $kept = 0
             foreach ($r in ($recs | Sort-Object TimeCreated)) {
                 $msg = $r.Message
                 if ([string]::IsNullOrEmpty($msg)) {
@@ -627,38 +657,41 @@ if (-not $NoEvents) {
                 $kept++
                 $ev.Add("EV $($r.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss.fff')) [$log] id=$($r.Id) level=$($r.Level) ${prov}: $msg")
             }
-            # TWO DIFFERENT NOTHINGS, AND THE DIFFERENCE IS THE EVIDENCE. Measured 2026-10-10 on
-            # win10-acc, twice: the System channel reported `EV NONE [System]` with
-            # required_missing=- , so the sweep was blind to every shutdown marker (109/1074/6006)
-            # and every SCM record (7023/7024/7031/7034) while reporting itself complete. A
-            # REQUIRED channel that returns no records at all is missing data and must fail; one
-            # that returned records this filter then dropped is an answer, and says so.
-            # (# GUARD:channelraw)
-            if ($kept -eq 0) {
-                $ev.Add("EV NONE [$log] raw=$raw kept=0 src=query")
-                if ($raw -eq 0 -and $ch.Required) { $requiredMissing.Add("$log (no records at all)") }
-            }
         } catch {
-            $m = $_.Exception.Message
-            # THE SAME NOTHING, THROUGH THE OTHER DOOR - and this is the GUARD:channelraw fix above
-            # failing a second time. Get-WinEvent -ErrorAction Stop THROWS "No events were found"
-            # when the filter matches nothing, so a required channel with zero records never reaches
-            # the $kept -eq 0 branch: it lands here, got a bare EV NONE, and $requiredMissing stayed
-            # empty. Measured 2026-11-07 on campaign 42400226595 cell WIN10-clean: System AND
-            # Application both EV NONE while the summary printed required_missing=- , so the sweep
-            # reported itself complete with both required channels blind - and the kernel-power and
-            # SCM records that would have said why the stage-2 resume task never fired on that boot
-            # were the ones lost. Same accounting as :637-639, which is the only reason that branch
-            # is not wrong too. (# GUARD:channelrawthrown)
-            if ($m -match 'No events were found') {
-                $ev.Add("EV NONE [$log] raw=0 kept=0 src=thrown")
-                if ($ch.Required) { $requiredMissing.Add("$log (no records at all)") }
-            }
-            else {
-                $evErrors++
-                $ev.Add("EV ERR [$log] " + ($m -replace "[`r`n]+", ' '))
-                if ($ch.Required) { $requiredMissing.Add($log) }
-            }
+            $evErrors++
+            $ev.Add("EV ERR [$log] decoding records: " + ($_.Exception.Message -replace "[`r`n]+", ' '))
+            if ($ch.Required) { $requiredMissing.Add("${log}=undecodable") }
+            continue
+        }
+        # TWO DIFFERENT NOTHINGS, AND THE DIFFERENCE IS THE EVIDENCE. Measured 2026-10-10 on win10-acc,
+        # twice: the System channel reported `EV NONE [System]` with required_missing=- , so the sweep
+        # was blind to every shutdown marker (109/1074/6006) and every SCM record (7023/7024/7031/7034)
+        # while reporting itself complete. A REQUIRED channel that returns no records at all is missing
+        # data and must fail; one that returned records this filter then dropped is an answer, and says
+        # so. The chunked query above removes the CAUSE those two guards were detecting, so "no records
+        # at all" now means the channel really was asked and really answered nothing.
+        # (# GUARD:channelraw, # GUARD:channelrawthrown - one accounting, both doors)
+        # THE VALUE CARRIES NO SPACES. tools/log-sweep.py kv_parse splits this line on whitespace, so
+        # `System (no records at all),Application (no records at all)` reached the report as bare
+        # `System`: the second blind channel vanished and the norecords/unreadable distinction - the
+        # evidence this guard exists to carry - was discarded. Measured on campaign 42400226595's
+        # supervision run, which named one affected channel out of two.
+        if ($kept -eq 0) {
+            # WHY IT IS EMPTY IS NOT RECORDED ANYWHERE, so the question cannot be settled from a
+            # capture. A required channel reads zero for reasons that are opposite in meaning - the
+            # log was cleared, the Event Log service is down, an id filter silently stopped matching
+            # (which is what System did for weeks, above) - or because the records genuinely did not
+            # occur, which for Application's 1000/1001/1026 crash ids is the HEALTHY case (Jev
+            # must_not_occur_on_a_healthy_guest 0.98). Two cheap facts tell those apart: the same
+            # window with NO id filter, and the channel's own listing. Recorded, NOT acted on: the
+            # verdict below is unchanged, because whether a readable-but-empty required channel may
+            # pass came back 0.64, UNDER the 0.70 floor, and that is not a verdict to build on.
+            $anyid = -1; $lgEn = '?'; $lgRec = -1
+            try { $anyid = @(Get-WinEvent -FilterHashtable @{ LogName = $log; StartTime = $sinceL } -MaxEvents 2000 -ErrorAction Stop).Count }
+            catch { if ($_.Exception.Message -match 'No events were found') { $anyid = 0 } }
+            try { $l0 = Get-WinEvent -ListLog $log -ErrorAction Stop; $lgEn = [string]$l0.IsEnabled; $lgRec = [long]$l0.RecordCount } catch { }
+            $ev.Add("EV NONE [$log] raw=$raw kept=0 chunks=$nchunks anyid=$anyid enabled=$lgEn records=$lgRec")
+            if ($raw -eq 0 -and $ch.Required) { $requiredMissing.Add("${log}=norecords") }
         }
     }
     $rm = if ($requiredMissing.Count -gt 0) { [string]::Join(',', $requiredMissing.ToArray()) } else { '-' }
