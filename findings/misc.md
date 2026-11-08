@@ -104,10 +104,21 @@ registered" and FAILED a cumulative that was already on the machine. Armed on 0 
 
 Red on `rp-unreadable-proceeds` and `unreadable-not-staged` at 43e95083 and 07b3a743, undiagnosed
 until now. Both checks anchored on log text the writer does not emit: `WARNING: <kb>: CBS
-RebootPending could not be read` against the product's `[WARN] ` at :2757, and
-`^  ERROR: DISM accepted .* UNKNOWN` against the product's `[ERROR] ` - the inline spelling
+RebootPending could not be read` against the product's inline `[WARN] ` at :2768, and
+`^  ERROR: DISM accepted .* UNKNOWN` against its inline `[ERROR] ` at :2597 - the spelling
 `tools/wu-pass-judge.py:91` reads as `^(?:\[ERROR\]|ERROR:)`. Stale anchors that could never match,
 so the rest of each check never ran. Proven not to be my edits: the identical pair is red on a clean
-worktree of 9e0921b9 with the edits absent. Both checks DROPPED per the owner's rule rather than
-repaired; the suite now PASSes. What still enforces the properties is named in the file where they
-stood. The test's own `Log` stub also still takes one parameter where the product's takes two.
+worktree of 9e0921b9 with the edits absent.
+
+RESTORED, not dropped. Dropping them was my own unapproved move on a baseline that is the owner's to
+move, and a real repair was available for the price of two regexes: both checks are back with the
+anchors corrected and the suite PASSes 15 of 15. The repair is load-bearing and was measured as such:
+putting the two stale anchors back turns exactly those two checks red and nothing else. One of the
+two faults was mine: 096a6e6f changed that error's verb from `DISM accepted` to `DISM returned
+rc=<rc>`, because the rc=0 path does not accept-and-stage. The level spelling was wrong from birth -
+`Log "  [ERROR] ..."` stood there at 096a6e6f^ too.
+
+Why the INLINE spelling is the right anchor here: the test's `Log` stub takes one parameter and
+records the message only, while the product's takes two and turns `$lvl` into the log file's prefix
+LETTER (docs/ADR-logging.md, 2026-11-01). A check written against this stub can only ever see what
+the writer puts IN the text, so an anchor on a level the stub never receives cannot match.

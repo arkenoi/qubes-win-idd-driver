@@ -152,17 +152,17 @@ Install-MsuPlan @([ordered]@{ u = [pscustomobject]@{ kb = 'KB5129195'; title = '
 Check 'deferral-requests-restart: the cumulative alone, a restart pending - nothing reaches DISM and the deferral ITSELF requests the restart (reboot_needed) through the existing channel' `
       ($script:Calls.Count -eq 1 -and $script:Calls[0] -eq 'REBOOTPENDING' -and (Row 'KB5129195').state -eq 'deferred' -and $script:St.reboot_needed)
 
-# TWO CHECKS DROPPED HERE 2026-11-08, and NOT repaired - owner's rule: a check that fails and needs a
-# quick fix is dropped completely. rp-unreadable-proceeds and unreadable-not-staged (the second sat
-# below, before stale-pending-not-new) were red at 43e95083 and 07b3a743 alike, and the fault was in
-# THEM: each anchored on log text the writer does not emit - 'WARNING: <kb>: CBS RebootPending could
-# not be read' and '^  ERROR: DISM accepted .* UNKNOWN' - while qubes-windows-update.ps1 writes
-# '[WARN] ' and '[ERROR] ' inline, which is the spelling tools/wu-pass-judge.py:91 reads
-# (^(?:\[ERROR\]|ERROR:)). The anchors could never match, so the rest of each check never ran.
-# WHAT STILL ENFORCES THE PROPERTIES: the RebootPending ordering by cumulative-deferred,
-# deferral-requests-restart and list-brackets-dism; the registration verdicts by registered,
-# unregistered-fails and stale-pending-not-new; the unreadable package list by registered-check,
-# as a pure function (not ok, NOT known); and the level spelling by wu-pass-judge.py:91 itself.
+# RESTORED 2026-11-08 with the ANCHOR REPAIRED, not re-deleted. This check and unreadable-not-staged
+# (below, before stale-pending-not-new) were red because each anchored on log text the writer does not
+# emit: 'WARNING: <kb>: ...' and '^  ERROR: DISM accepted .* UNKNOWN'. qubes-windows-update.ps1:2768
+# writes '  [WARN] ' and :2597 '  [ERROR] ' INTO the message - the spelling tools/wu-pass-judge.py:91
+# reads - and 096a6e6f additionally changed that error's verb from 'DISM accepted' to 'DISM returned
+# rc=<rc>', because the rc=0 path does not accept-and-stage. Anchor on what the product emits.
+Reset-World $null $pkgBefore $pkgRegistered
+Install-MsuPlan (New-Plan)
+$rc = Row 'KB5129195'
+Check 'rp-unreadable-proceeds: RebootPending unreadable - a WARNING names it, the cumulative still goes to DISM first (after the before-read) and the registration check decides' `
+      ($script:Calls[0] -eq 'REBOOTPENDING' -and $script:Calls[1] -eq 'PKGLIST' -and $script:Calls[2] -eq "DISM $cumFile" -and (@($script:LogLines | Where-Object { $_ -match '^  \[WARN\] KB5129195: CBS RebootPending could not be read' }).Count -eq 1) -and $rc.ok -and $rc.state -eq 'staged' -and $rc.files[0].registered -eq $true)
 
 # ---------- WU-INSTALL-MSUS: the one-package rule and its single relaxation
 Reset-World $false $pkgBefore $pkgRegistered $true $true
@@ -187,6 +187,13 @@ Reset-World $false $pkgBefore $pkgDropped
 $rows = @(Install-Msus @($cumPath)); $v = Get-MsuKbVerdict 'KB5129195' $rows
 Check 'unregistered-fails: DISM 3010 but no RollupFix newly InstallPending (only the servicing stack pending) -> the KB FAILS: DISM accepted it, Windows did not register it, NOT staged, retried after the restart; the flag stays unset; the file row keeps rc 3010' `
       ((-not $v.ok) -and $v.state -eq 'failed' -and $v.reason -match 'DISM accepted windows11\.0-kb5129195-x64_abc\.msu \(rc=3010; the cumulative\) but Windows did NOT register it: no RollupFix package is newly InstallPending' -and $v.reason -match 'It is NOT staged and will not complete at a restart' -and $v.reason -match 'the pass after the restart retries this package' -and (-not $script:CumulativeRegisteredThisSession) -and $script:St.reboot_needed -and $rows[0].rc -eq 3010 -and $rows[0].registered -eq $false)
+Reset-World $false $pkgBefore $null
+$rows = @(Install-Msus @($cumPath)); $v = Get-MsuKbVerdict 'KB5129195' $rows
+Reset-World $false $null $pkgRegistered
+$rows2 = @(Install-Msus @($cumPath)); $v2 = Get-MsuKbVerdict 'KB5129195' $rows2
+Check 'unreadable-not-staged: the package list unreadable after (or before) the call -> the KB FAILS saying UNKNOWN, never staged; the flag stays unset; the ERROR is logged' `
+      ((-not $v.ok) -and $v.state -eq 'failed' -and $v.reason -match 'whether Windows registered it is UNKNOWN: the package list could not be read after the DISM call' -and $v.reason -match 'NOT reported as staged' -and $rows[0].registered -eq 'unknown' -and (-not $script:CumulativeRegisteredThisSession) -and
+       (-not $v2.ok) -and $v2.state -eq 'failed' -and $v2.reason -match 'could not be read before the DISM call' -and (@($script:LogLines | Where-Object { $_ -match '^  \[ERROR\] DISM returned rc=.* UNKNOWN' }).Count -eq 1))
 Reset-World $false $pkgStale $pkgStale
 $rows = @(Install-Msus @($cumPath)); $v = Get-MsuKbVerdict 'KB5129195' $rows
 Check 'stale-pending-not-new: a RollupFix already InstallPending before the call and unchanged after it is NOT this call''s registration -> the KB FAILS' `
