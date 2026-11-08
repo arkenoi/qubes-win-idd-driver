@@ -302,3 +302,54 @@ does not cover either name.
   `redundant_outside` 0.68; `consistent` 0.33 is VOID by the feed's own reading rule, which holds a
   consistency answer void unless `comparator_relevant` lists a relevant equivalent - it says
   `only_unrelated_hits`.
+
+## The U-cells cannot measure the four counting P1s - why their NEXT lines were wrong (2026-11-08)
+
+- [verified 2026-11-08] **Four register entries named an instrument that cannot produce their stimulus.**
+  WUINFOIDENTITYREMEMBERED, WUPASSDIESONCATALOGREFUSAL, WURESCANKEYSBYKBSCANBYIDENTITY and
+  WUNOKBMISSNOTINSTALLEDONROUTEDGUEST all carried "NEXT: the U-cells ... measure it on a guest".
+  They cannot, for three independent reasons, and this is why a GREEN U-cell run read as progress
+  toward closing them while nothing had been measured.
+  (a) ONE PASS. `mgmt/harness/updater-component-test.sh:157` is "step 3/4: one scan pass, guest-side".
+  Every one of the three counting defects needs a pass that WRITES `satisfied` followed by a LATER
+  scan that READS it; a single scan cannot stage that sequence at all.
+  (b) MEASURED, 2026-11-08 11:00-11:09Z on win11de-wufix with package qwt-pkg-42277450697
+  (sha a8bfd883, which `git merge-base --is-ancestor` confirms contains the fix 07b3a743): the run
+  graded 8 passed / 0 failed, "VERDICT: PASS - the updater component is healthy on gweck's locale",
+  WITH offers present - `scan: 7 update(s) offered, 6 actionable, 6 reported to dom0` - and
+  `satisfied` EMPTY in the captured status, so U8 printed "satisfied identities still offered: 0".
+  The gates library says what that means in its own words, `mgmt/harness/updater-gates-lib.sh:159`:
+  "S=0 IS NOT A PASS OF THE MECHANISM, it is the stimulus not occurring". The PASS was real and the
+  measurement never happened; both facts were in the output and only the first was read.
+  (c) ONE DIRECTION. `updater-gates-lib.sh:155-157`: "the invariant breaks in TWO directions and this
+  gate watches ONE. A U8 pass says nothing about the 'too little' direction and must not be reported
+  as closing the class." WURESCANKEYSBYKBSCANBYIDENTITY IS the too-little direction (dom0 heard N-1
+  then N), so U8 can NEVER close it, with any stimulus. `wu-e2e.sh`'s oscillation check - dom0's
+  number across a SCAN-only pass - is the instrument that watches that direction.
+  And no gate anywhere names WUPASSDIESONCATALOGREFUSAL: a grep over mgmt/, tools/ and guest/ returns
+  only the product file and the offline suite `tools/tests/wu-notactionable-test.ps1`.
+  FIX-LANDED: the four NEXT clauses in findings/issues.md:83-86 now name `wu-e2e.sh` on a subject
+  WITH offers (and a routed subject for WU-NOKB), and say explicitly which instrument CANNOT close
+  each one. The verification was redirected onto a fresh clone of win11de-qwt the same hour.
+
+- [verified 2026-11-08] **The wu-e2e run that proved the oscillation-wait fix could not exercise the four.**
+  13:47-13:57Z on win11de-wufix: rounds=3, fails=0, sweep=0, "reboot accounting OK: 1 performed =
+  1 requested", oscillation OK in all three rounds, and the ADR-8.5 guard added in ce7ae0e5 fired
+  each round ("pending count re-read after the cycle: remaining=0"). The previous run on this subject
+  died in exactly that window; this one does not. But `updates-available` was '<empty>' before and
+  after every round and `remaining` was 0 throughout - by then the subject was fully patched, so there
+  were no offers to miscount and no counting defect could fire. A clean green run on a subject with
+  no stimulus is not evidence about a stimulus-dependent defect.
+  The run exited 4 = UNJUDGED, not a failure: one excluded item, "Microsoft Corporation
+  AudioProcessingObject Driver Update (1.0.4.55794)", hidden from dom0 in all three rounds. Judged
+  with evidence from OUTSIDE the updater, per ADR-updater section 2: the Catalog queried from this
+  dev qube through our own tinyproxy at the endpoint the product uses returned http=200 and 25 update
+  rows (positive control - the search worked), carrying 9 AudioProcessingObject titles from DTS,
+  Fortemedia and intelliGo; version 1.0.4.55794 occurs ZERO times and no row is published by
+  Microsoft Corporation. The subject is netvm='' so the WU direct path is absent too, and guest-side
+  `Win32_PnPSignedDriver` (80 drivers enumerated as control) shows only Microsoft inbox audio drivers
+  at 10.0.26100.x with no AudioProcessingObject driver at any version. Nothing can serve it and
+  nothing is concealed; the harness's own gate function replays RC=0 over the run's
+  `excluded-items.tsv`. Reading it honestly: the classification sits at confidence 0.43, UNDER the
+  0.70 floor, so "correct-exclusion" is NOT a Jev verdict - what the evidence carries is the
+  decidable part, P(concealed-failure)=0.09 and reason_fits=0.75, both well clear of the gate's 0.5.
