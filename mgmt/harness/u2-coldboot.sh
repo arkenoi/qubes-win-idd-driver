@@ -50,9 +50,26 @@ alive || { log "FATAL: $VM not answering qrexec"; exit 2; }
 
 # ---------------------------------------------------------------- scan must be ARMED, not disarmed
 log "=== ENSURE the boot scan is ENABLED (the opposite of every rendering cell) ==="
-r 'cmd /c schtasks /change /tn QubesWindowsUpdateScan /enable & schtasks /query /tn QubesWindowsUpdateScan /fo list | findstr /i status' \
-  | grep -ai status | sed 's/^/  /' | tee "$OUT/scan-state.txt"
-grep -qi 'ready' "$OUT/scan-state.txt" || { log "FATAL: the scan task is not Ready; U2 cannot be exercised"; exit 2; }
+# STATE BY ITS NUMBER, NEVER schtasks' PROSE. `/query /fo list | findstr status` prints a LOCALISED
+# Status value, so `grep -qi ready` refused this cell on every German guest - measured 2026-11-08 on
+# win11de-p1stim, which printed "Status: Bereit" (German for Ready) and was then declared "not
+# Ready", exit 2, on the ONE platform the updater defect under test was reported from. The idiom
+# without that failure mode is already in the tree: mgmt/harness/wu-liveness.sh reads [int]$tk.State
+# off the Schedule.Service COM object and names it ITSELF - locale-free, and it works where the
+# ScheduledTasks cmdlet set is absent (the reason install-updater-agent.ps1 uses schtasks at all).
+# LastTaskResult comes free with it, which is the field a boot instance's own outcome is read from.
+psrun 'schtasks /change /tn QubesWindowsUpdateScan /enable | Out-Null
+$ErrorActionPreference = "SilentlyContinue"
+$st = "UNREADABLE"; $lr = ""
+try {
+  $svc = New-Object -ComObject Schedule.Service; $svc.Connect()
+  $tk = $svc.GetFolder("\").GetTask("QubesWindowsUpdateScan")
+  $st = @("Unknown","Disabled","Queued","Ready","Running")[[int]$tk.State]
+  $lr = "0x{0:X}" -f ([int64]$tk.LastTaskResult -band 0xFFFFFFFF)
+} catch { $st = "UNREADABLE" }
+"SCANSTATE=$st"
+"SCANLAST=$lr"' | grep -aE 'SCANSTATE=|SCANLAST=' | sed 's/^/  /' | tee "$OUT/scan-state.txt"
+grep -qa 'SCANSTATE=Ready' "$OUT/scan-state.txt" || { log "FATAL: the scan task is not Ready - $(grep -ao 'SCANSTATE=[A-Za-z]*' "$OUT/scan-state.txt" | head -1); U2 cannot be exercised"; exit 2; }
 
 log "=== ARM the acceptance baseline BEFORE the reboot ==="
 T=300 q pushrun guest/wu-boot-acceptance-arm.ps1 2>/dev/null | tr -d '\r' | grep -aE 'boot_time_before|vm_class_now|enabled' | sed 's/^/  /'

@@ -516,3 +516,26 @@ failed prestop (2026-11-08)
   the paired 201 (bbb006e2) - so the only remaining cost of the long limit is the delay. The limit
   is NOT being changed on this reasoning: nobody asked for a behaviour change, and the datum that
   would justify one is one field on the next pass, which any run we take delivers for free.
+
+## U2 could not run on a German guest at all - the idiom was in the tree and this cell never got it
+(2026-11-08)
+
+- [verified 2026-11-08] MEASURED, not reasoned: u2-coldboot.sh win11de-p1stim exited 2 with "FATAL:
+  the scan task is not Ready; U2 cannot be exercised" while its OWN captured output, printed two
+  lines above the refusal, read "Status: Bereit" - German for Ready. The check was
+  `grep -qi 'ready'` over `schtasks /query /fo list | findstr /i status`, whose Status VALUE is
+  localised. So the cell that exists to exercise the boot-triggered scan pass was unrunnable on
+  every German guest, which is the one platform WUSCANTASKFAILSANDLOGSNOTHING was reported from.
+  Exit 2 is an INSTRUMENT failure and never a product fact, so nothing was ever read as a pass.
+- [verified 2026-11-08] THE LESSON WAS ALREADY PAID FOR ELSEWHERE AND NOT COPIED HERE.
+  install-updater-agent.ps1's prestop block says it outright - "EXIT CODES ONLY, NEVER schtasks'
+  PROSE. This runs on a German guest, where /query prints localised field names and a localised
+  Status value, so matching 'Running' would match nothing there" - and wu-liveness.sh:42 already
+  reads [int]$tk.State off a Schedule.Service COM object and names it ITSELF. The fix copies that
+  committed idiom rather than inventing one; it is locale-free and works where the ScheduledTasks
+  cmdlet set is absent, which is why the product uses schtasks in the first place. A harness-wide
+  sweep for the same shape found exactly ONE other candidate and it was already correct.
+- [verified 2026-11-08] LastTaskResult comes free with that read, and it is the field the boot
+  instance's outcome is taken from - but it is SELF-HEALING and this guest's copy is already spent:
+  the on-demand `schtasks /run` taken earlier today overwrote it with 0. Only a fresh boot can
+  witness the boot instance, which is what the cell now gets to do.
