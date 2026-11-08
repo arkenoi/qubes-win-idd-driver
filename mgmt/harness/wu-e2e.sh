@@ -502,8 +502,51 @@ PY
   # re-inflate the count. Measured 2026-09-20 - a pass drove dom0 to EMPTY and the following boot
   # scan reported 3 again, so the admin was told there was work when there was none. This is the
   # bar the reporter actually lives at, because a scan runs at every boot and on a timer.
+  # ADR-updater section 8 point 5 (owner 2026-11-08): a CHANGE-NOTHING measurement must not be taken
+  # while the guest has announced work that has NOT APPLIED YET. The field that decides it is not
+  # reboot_needed (consumed above) but the PENDING COUNT the pass announced - `remaining` - which this
+  # harness already had on disk and never consulted here. update-status.json is rewritten only BY A PASS,
+  # so after the cycle it still carries this round's LAST ANNOUNCEMENT, which is exactly the standing
+  # announcement ADR 8.5 makes a completion cycle traceable to; it is re-read rather than reused so the
+  # guest's power state is read at the same moment, and so a rewrite by anything else cannot be missed.
+  # MEASURED 2026-11-08 on win11de-wufix round 2: the cycle was requested and performed (the ledger
+  # stayed honest, 2 = 2), then Windows' servicing completion took its own cycle +83 s into the next boot,
+  # INSIDE this check's 900 s poll, and the round failed as "the guest POWERED ITSELF OFF during the
+  # scan-only oscillation wait". The product was doing what the ADR sanctions; the instrument was
+  # measuring where its measurement is not defined. So the pending count is RE-READ here, fresh.
+  osc_remaining=unknown
+  if [ "$(qstate)" = Running ]; then
+    guest_file 'C:\ProgramData\Qubes\update-status.json' > "$RD/update-status-postcycle.json" 2>/dev/null || true
+    osc_remaining=$(python3 - "$RD/update-status-postcycle.json" <<'PY' 2>/dev/null
+import json, sys
+# utf-8-sig for the same reason as the reboot_needed read above: the guest writes a UTF-8 BOM.
+try:
+    r = json.load(open(sys.argv[1], encoding='utf-8-sig')).get('remaining')
+    print(int(r) if r is not None else 0)
+except Exception:
+    print('unknown')
+PY
+)
+  fi
+  case "$osc_remaining" in (''|*[!0-9]*) osc_remaining=unknown ;; esac
+  log "round $r: pending count re-read after the cycle: remaining=$osc_remaining (state $(qstate))"
   if [ -n "$refused" ]; then
     log "round $r: oscillation check skipped - no pass ran, so there is no report for a scan to contradict"
+  elif [ "$(qstate)" != Running ]; then
+    # DID NOT RUN, and it SAYS so - this is never read as a pass. The guest is down because the servicing
+    # completion took the cycle its announcement asked for (ADR-updater 8.5). The next round's top already
+    # counts that self-power-off as a request and starts the guest, so the work continues there and the
+    # following round measures the oscillation the product was never given a chance to show here.
+    log "round $r: oscillation check DID NOT RUN - the guest is $(qstate), so there is nothing for a scan to contradict (ADR-updater 8.5)"
+  elif [ "$osc_remaining" = unknown ]; then
+    # FAIL CLOSED, like the sibling read above - which fails the round outright on an unreadable status
+    # (ADR 8.3, missing data fails). Here the honest outcome is weaker and more precise: without the
+    # pending count we cannot establish that this measurement is DEFINED, and a check that could not
+    # establish its precondition must never read as a pass. Running it anyway is exactly what
+    # manufactured the false red this change exists to stop, so it is recorded as unmeasured instead.
+    log "round $r: oscillation check DID NOT RUN - the pending count could not be read, so whether work is still unapplied is UNKNOWN, and a check that cannot establish its precondition is not a pass (ADR-updater 8.5)"
+  elif [ "$osc_remaining" -gt 0 ]; then
+    log "round $r: oscillation check DID NOT RUN - the guest announces remaining=$osc_remaining, work that has NOT APPLIED yet, so a scan-only 'dom0 must not change' measurement is not defined here (ADR-updater 8.5)"
   else
     log "round $r: oscillation check - running a SCAN-only pass, dom0 must not change"
     # THE BASELINE IS RE-READ HERE, NOT INHERITED FROM BEFORE THE REBOOT. $after was measured

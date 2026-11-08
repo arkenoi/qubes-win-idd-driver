@@ -329,6 +329,30 @@ the first task.
 3. If `reboot_needed` cannot be read it is UNKNOWN, and missing data fails. It is never read as false.
 4. The harness fails the run on a mismatch in either direction: an extra cycle nobody asked for, or a
    requested cycle skipped.
+5. A CUMULATIVE COSTS MORE THAN ONE CYCLE, and the extra one is CORRECT, not a defect. Where the work can
+   be ordered so a single cycle serves - the cumulative installs online, before anything is pending
+   (`GUARD:cumulativefirst`) - it is ordered that way. Where it cannot, Windows' own servicing completion
+   takes a cycle we never issued: measured 2026-11-08 on win11de-wufix, boot at 13:55:02 and
+   TrustedInstaller's 1074 at 13:56:25 - **+83 s**, reason "Betriebssystem: Aktualisierung (geplant)" -
+   against our boot scan's `PT2M` trigger. That is a race we lose by 37 s and must not try to win, and no
+   documented policy reaches TrustedInstaller's completion restart (`NoAutoRebootWithLoggedOnUsers` is
+   inert under our `NoAutoUpdate=1`). What makes the cycle ACCOUNTED under point 1 is the STANDING
+   ANNOUNCEMENT: the pass reports the count still pending - what has not applied yet -
+   (`guest/qubes-windows-update.ps1:3690-3698`, whose rule is exactly "count what is not applied" and
+   nothing more, Jev `count-staged` 0.97; dom0 read `1` on that run). Owner 2026-11-08: «so yes, we need
+   a reboot -- we announce the count still pending (what has not applied yet)», and «we collapse reboots
+   when we can, if we can not, it is the right way to do until new api would allow a guest to
+   self-announce a reboot». So no new channel and no dom0 service are to be built for this; the count IS
+   the channel. **NORMAL DOM0 IS NOT OUR HARNESS, and the two must never be conflated here.** Normal
+   dom0 reads `updates-available` and nothing else: it never opens `update-status.json`, keeps no reboot
+   ledger, and does not power-cycle a Windows guest. So in the field the standing announcement makes the
+   remaining work VISIBLE - Qube Manager shows the qube as having updates - and the ADMIN acts on it. A
+   qube that Windows' completion restart has halted stays Halted until the admin starts it: that is the
+   user-visible cost of this decision, and it is accepted, not hidden. Only inside OUR harness does the
+   announcement also account the cycle - there, a power cycle taken while `remaining > 0` traces to the
+   standing announcement and satisfies point 1, and a CHANGE-NOTHING measurement must never be taken in
+   that window because the guest has declared itself unfinished. Settled until an API lets a guest
+   self-announce a reboot; not to be re-argued.
 
 **Why.** Rebooting until things settle is unfalsifiable (reboot often enough and something eventually works),
 and it conceals the defect that needed the extra cycle. It also stops reproducing what a user gets, because a
