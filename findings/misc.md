@@ -2,6 +2,44 @@
 
 ## CURRENT STATE
 
+- **The broker launch is off the agent's main loop, and the schtasks wait that bounded it was not a bound.** [verified 2026-11-08]
+  WHAT THE TARGET WAS, stated before the fix: the a93cf137 anchor fix IS in the tree and correct - it stamps the
+  de-slice anchor after `WgcLaunch()` returns. What it left behind is the BLOCKING. `WgcLaunch` drives schtasks,
+  a subprocess, up to three times (its own `/delete`, then `HelperTaskRegister`'s `/create` and one retry after
+  `Sleep(500)`), and it ran inside `BrokerSupervise`, which the main loop invokes at `main.c:15872` under the
+  comment "every wake, waits for nothing". MEASURED registrations on this rig: 0.374, 1.040, 1.676 and 7.524 s;
+  the metering branch broke a 672 ms case down as `xml=32 ms, schtasks1=640 ms, retry=0`, so the subprocess is
+  the whole cost. Two things were paid: `g_MainLoopTick`, the liveness counter the loop bumps on every wake,
+  stopped for the window; and the 7.524 s case exceeded `WGCBRK_AGENT_DEADLINE_MS` (5000), charging an
+  `AgentStalls` tick. `CheckAgentDeadline` counts and disarms - the broker does NOT exit - which is why this cost
+  menus and toasts nothing and is graded below P1.
+  JEV: `which_change_is_the_fix` = `move_registration_off_the_loop` 0.86 at conf 0.82 (`bound_the_whole_registration`
+  0.13); `blocking_loop_is_a_defect` = yes 0.85 at conf 0.77. The first ask was under floor (0.65/0.48, then
+  0.53/0.41); the re-ask added the call site, the `AgentStalls` path and the hoisting constraint - evidence I had
+  not given it, not a reshaped question - and the leader FLIPPED.
+  THE SHAPE, agent 2e936b9: the launch is ISSUED on one pass and REAPED on another. Every shared-state write stays
+  on the loop thread, so the cross-thread surface is two scalars ordered by the interlocked state write.
+  `g_WgcLaunched` is not set until the reap, so the shell-anchored pre-launch hold (`DESLICE_LAUNCH_PENDING_MS`)
+  keeps the report quiet during flight by the mechanism that already existed. Three consequences of the split,
+  handled in the same change: the exit path waits bounded on an in-flight registration before deleting the task,
+  so a `/delete` cannot overtake the `/create` and strand a task the scheduler restarts; the disarm guard counts a
+  launch ISSUED, not reaped; and the main loop takes one 250 ms wake while in flight, because its default wait is
+  INFINITE (rest-zero S4) and a FAILED launch would otherwise go unsaid until the pending window expired and named
+  the wrong reason. A `CreateThread` failure is an anomaly said at ERROR and the launch then runs on the loop
+  exactly as before.
+  THE BOUND, agent bc9f890: see WGCSCHTASKSWAITWASNOTABOUND in issues-closed.md. The 15 s is OUR number, not
+  Windows'; nothing in the tree derives it from a measurement. The exit-path wait was first sized at 50 s off the
+  stacked 48.5 s guarantee and then CORRECTED to 20 s (agent 2e936b9) on the owner's point that an unbounded read
+  is a race not won rather than a long elapsed time - 48.5 s is bound arithmetic, 7.524 s is the worst thing
+  measured, and holding the exit path for 48 s would turn a rare schtasks stall into an agent that hangs on
+  shutdown past the SCM's patience.
+  WHAT IS NOT MEASURED YET: any of this on a guest. `QGADESLICEGRACESTALEANCHOR` closes only when a run reproduces
+  the trigger with `dom0_loud_failures=0`, and `EMPTYREQUIREDCHANNELFAILSTHESWEEP` wants one supervision-e2e run.
+  Also not measured: which part of a 7.5 s registration is schtasks.exe's own startup, the Schedule service's
+  write, or the broker's start - the meter times the whole subprocess only.
+  THE SIBLING IS NOT FIXED: `NotifBridgeSupervise()` -> `NotifBridgeLaunch()` (`main.c:5305`) -> `NotifRunInSession`
+  is the same three schtasks calls from the same loop. Recorded as NOTIFLAUNCHBLOCKSTHELOOP; Jev's verdict named
+  the broker site, not that one.
 - **The counting fix is MEASURED: two full passes, `satisfied` held exactly what each pass installed, dom0's number followed it, and the one exclusion is UNPROVEN.** [P1 product - CLOSED as [[WUINFOIDENTITYREMEMBERED]]; the exclusion stays open] [verified 2026-11-08] RUN: `mgmt/harness/wu-e2e.sh win11de-wufix 2`, 18:39-19:24Z, package 4.3.39+agent.6855e290bc4c, evidence `scratchpad/wu-e2e-win11de-wufix-20261108T183947Z`. `rounds=2 fails=0 sweep=0`, both rounds JUDGE PASS, reboot accounting 2 performed = 2 requested; the exit 4 is the unjudged exclusion and nothing else.
   **ROUND 1** (full, `elapsed_s 762.7`): the scan half logged "7 update(s) offered, 6 actionable, 6 reported to dom0"; the install half installed 4 of 7; the end-of-pass report was "reported 2 update(s) to dom0", `count 2`. `satisfied` held EXACTLY the four `state=installed` identities - KB890830, KB5007651, KB2267602 and the APO driver 1.0.4.7057 - and nothing else: the `staged` KB5127690, the `deferred` KB5127648 and the `not-actionable` informational APO 1.0.4.55794 (identity `702e6ed7-...:1`) are all absent. 6 - 4 = 2 is ADR-updater s2 p3 exactly: only an offer this pass INSTALLED earns silence.
   **ROUND 2** (full, `elapsed_s 1266.2`): "3 offered, 2 actionable, 2 reported"; installed 1 (KB4052623); "reported 1", `count 1`. `satisfied` held that one identity; the staged cumulative stayed counted.
