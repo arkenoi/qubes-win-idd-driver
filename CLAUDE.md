@@ -28,6 +28,17 @@ Improve Windows-guest desktop fidelity and responsiveness in QWT seamless mode. 
   and, on why the product may never depend on one, «it is not approved path for ourselves -- we
   should not rely on its availability». AppVMs/StandaloneVMs that test PV networking get a netvm.
 - Second boot is a failure for PV-network acceptance.
+- **The netvm is `fw-net`. There is no `sys-net` and no `sys-firewall` on this rig** - never type
+  either name, in a command, a plan, or as a throwaway probe argument. Owner 2026-11-08: «you have
+  your qubes rules to follow! explicitly told to forget about sys-net and sys-firewall!» `qvm-check
+  fw-net` answers `non-existent!` because enumeration is policied - a FILTERED VIEW, not truth, and
+  never a licence to substitute a name from stock Qubes. `core-update` is the torified updates proxy
+  (owner-designated, `mgmt/10-win-idd-all.policy`); this qube's own tinyproxy on 127.0.0.1:8082
+  serves the non-Tor download path. A qube name is a FACT about the rig, to be recalled, not
+  guessed: `qvm-prefs <vm> netvm <name>` WRITES TO DOM0 whether the name exists or not. This rule
+  lived in three places and two of my own commits removed it (3b07a85c stripped it from
+  updates-proxy-bisect as "archeology" while claiming every rule was kept; 8ccbdee7 stripped
+  rig-capabilities' superseding text) - it is here because this file is the one always in context.
 
 ## Public repo
 - Captures, evidence, raw benchmarks → scratchpad/ or private memory. Never tracked. Never git add -A. .githooks enforces.
