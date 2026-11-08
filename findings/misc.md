@@ -588,3 +588,53 @@ failed prestop (2026-11-08)
 NOT CHASED, and that is deliberate, not an oversight: the owner's standing order is that product
   defects lead and harness work follows what they need. Recorded here rather than in
   findings/issues.md because the register's CURRENT STATE head is at the byte ratchet.
+
+## The scan time limit's basis, MEASURED - and the retraction of "elapsed_s has never been read" (2026-11-08)
+
+- [verified 2026-11-08] RETRACTED, MY OWN CLAIM FROM EARLIER TODAY: the entry above says "HARVESTED
+  all 241 update-status*.json captures under qwt-accept/ and scratchpad/: elapsed_s appears in ZERO
+  of them", and b78de060 plus 2ddf74ec recorded 29.6 s as "THE FIRST READING OF THAT FIELD EVER".
+  Both are false. `jq -r '.elapsed_s'` over the same glob finds a value in 59 files, and a plain
+  `grep -l elapsed_s` finds the key in 68 under qwt-accept alone, with readings going back to
+  rel-41210455061. The FILE SET was right - 176 under qwt-accept plus 65 under scratchpad/ is
+  exactly the 241 I reported - so the census enumerated the correct files and then failed to detect
+  a key that grep finds in a quarter of them. Not the non-UTF-8 grep trap: these are UTF-8 with BOM
+  and grep matches them (tested on the 2221 s file). Whatever that harvest actually ran, it did not
+  test what I said it tested, and the number it produced was load-bearing for two commits.
+- [verified 2026-11-08] THE BASIS, SPLIT BY THE PASS'S OWN `action` FIELD - which is the whole
+  answer, because the scan task and the install task are different tasks with the same limit:
+      action=scan   n=37   max  141.3 s  (2.4 min)
+      action=full   n=22   max 2221.0 s  (37.0 min)
+  \QubesWindowsUpdateScan registers `-Action scan` ONLY (guest/install-updater-agent.ps1:704, and
+  the file's own header at :13 states it); `-Action full` belongs to QubesWindowsUpdateRun, a
+  separate on-demand task registered at :754 under $PassTaskLimit. So the 25-37 min durations that
+  PT2H was raised for are produced by a pass this task never runs. Against the scans it DOES run,
+  PT20M is 8.5x the worst measured case and PT2H is 51x.
+- [verified 2026-11-08] THE DST THEORY IS DEAD, in the direction that matters: clock_jump_s is
+  absent from all 59 readings, so no correction landed during any of them and [[ETWCLOCKDST]]
+  explains none of these numbers. That cuts both ways and I am saying the half that costs me
+  something: >66 min is still unreproduced (max observed 2221 s), and >25 min as a SCAN is now
+  contradicted by 37 clock-proof measurements rather than merely unsupported.
+- [verified 2026-11-08] WHAT THE SAMPLE CANNOT SAY, and this is not a hedge - it is the reason the
+  value is not being changed on this evidence alone: a scan the scheduler kills at its limit never
+  reaches its final Save, so it writes no elapsed_s at all. These 37 are COMPLETED scans BY
+  CONSTRUCTION, so the set cannot contain the pathological case it would take to justify PT2H. It
+  refutes "an ordinary first scan after servicing needs more than 20 minutes". It does not prove
+  that no scan ever can.
+- [verified 2026-11-08] PT2H IS UNCHANGED and the decision is the owner's: lowering a shipped limit
+  is a product behaviour change, and its cost is real but bounded - a hung scan stays silent for the
+  limit before 329 reports it, which at PT2H is two hours and at PT20M would be twenty minutes.
+  Note for whoever takes that call: the deploy mutex bound reads the LONGEST limit among the tasks
+  that can hold it (install-updater-agent.ps1:121), and $PassTaskLimit stays PT2H, so lowering the
+  scan limit would NOT shorten that wait.
+- [verified 2026-11-08] WHY NOTHING READ IT FOR SO LONG, fixed in this commit: wu-e2e copies the
+  whole update-status.json, so the field was CAPTURED all along - the gap was reading. The component
+  test's probe, by contrast, printed a two-field digest (status_readable, satisfied_rule) and threw
+  the rest away, so a component run could not show the number at all. The probe now prints
+  elapsed_s and clock_jump_s, and says `absent` rather than a bare blank on a build that predates
+  the field. The presence test copies the form already proven on this same parsed object at
+  guest/qubes-windows-update.ps1:95.
+- [verified 2026-11-08] INSTRUMENT NOTE, unrelated to the product: pwsh is NOT installed on this
+  qube any more (`command -v pwsh` and the usual /opt paths are all empty), so a PowerShell change
+  cannot be parse-checked here. That is why the probe edit was reduced to an idiom already in the
+  tree rather than validated locally; it is exercised by the next component test.

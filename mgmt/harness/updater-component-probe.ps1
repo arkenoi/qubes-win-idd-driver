@@ -135,6 +135,23 @@ try {
         $sj = Get-Content -LiteralPath $sp -Raw | ConvertFrom-Json
         Write-Output ('status_readable=True mtime=' + (Get-Item -LiteralPath $sp).LastWriteTimeUtc.ToString('yyyy-MM-ddTHH:mm:ssZ'))
         Write-Output ('satisfied_rule=' + [string]$sj.satisfied_rule)
+        # THE PASS DURATION, AND WHY IT IS PRINTED HERE. qubes-windows-update.ps1's Save() publishes
+        # elapsed_s off a monotonic Stopwatch on every write, plus clock_jump_s when the wall clock
+        # disagrees with it by >=30 s. Nothing read either field until 2026-11-08: the scan task's
+        # ExecutionTimeLimit was raised PT20M -> PT2H on a '>25 and >66 min' basis that lives only in
+        # a comment, and 66-60=6 means that figure is indistinguishable from a short scan plus one
+        # DST-wide correction. A duration is only evidence if the clock under it cannot jump, so the
+        # probe prints the monotonic number for every component test from now on.
+        # ABSENT IS NOT ZERO: a guest running a build from before the field existed must not read as
+        # a pass that took no time, so the key's presence is tested and named.
+        # The presence test is the form already proven on THIS object, at
+        # guest/qubes-windows-update.ps1:95 (`$prev.PSObject.Properties.Name -contains 'available'`)
+        # against the same ConvertFrom-Json status file. Not a hashtable: on an [ordered]@{} that
+        # property list would name Count/Keys rather than the data's own keys.
+        if ($sj.PSObject.Properties.Name -contains 'elapsed_s') { Write-Output ('elapsed_s=' + [string]$sj.elapsed_s) }
+        else { Write-Output 'elapsed_s=absent reason=field-not-written-by-this-build' }
+        if ($sj.PSObject.Properties.Name -contains 'clock_jump_s') { Write-Output ('clock_jump_s=' + [string]$sj.clock_jump_s) }
+        else { Write-Output 'clock_jump_s=none' }
         foreach ($s in @($sj.satisfied)) { if ("$s".Trim()) { Write-Output ('satisfied=' + "$s") } }
     } else {
         Write-Output 'status_readable=False reason=absent'

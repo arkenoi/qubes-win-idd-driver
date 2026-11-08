@@ -136,12 +136,28 @@ Log "relay source vouched at $src (parses --parent-pid, refuses unknown flags, d
 # Update scan task failed" about a scan that was working and simply had not finished. Killing it
 # sooner is not a fix and neither is hiding the report. BUT >66 MIN IS NOT EVIDENCE: it is, to the
 # minute, a ~6 min scan plus one hourly clock correction on a guest running an hour behind - the
-# arithmetic and the reason are at qubes-windows-update.ps1 WU-PASS-CLOCK. >25 min stands (a
-# correction adds exactly 3600 s, so an apparent 25 min cannot contain one) and it alone refutes
-# PT20M. The pass now publishes elapsed_s from a monotonic Stopwatch; that field, not `ts`, is
-# what sets this limit from data, and it has not been read off a serviced guest yet.
-# sooner is not a fix and neither is hiding the report: the scan gets the time it actually needs,
-# which is the same budget the install and download passes already have.
+# arithmetic and the reason are at qubes-windows-update.ps1 WU-PASS-CLOCK. >25 min is not refuted
+# by that arithmetic (a correction adds exactly 3600 s, so an apparent 25 min cannot contain one) -
+# but it IS now contradicted by direct measurement, which is the stronger statement and the reason
+# this comment no longer claims PT20M was measured to be too few.
+#
+# MEASURED 2026-11-08, off the elapsed_s field this file's own note asked for - 59 readings already
+# sitting in the retained wu-e2e and esu-route captures, split by the pass's own `action`:
+#   action=scan   n=37   max  141.3 s  (2.4 min)   <- THIS TASK. PT20M is 8.5x that; PT2H is 51x.
+#   action=full   n=22   max 2221.0 s  (37.0 min)  <- QubesWindowsUpdateRun, NOT this task.
+# clock_jump_s is absent from all 59, so no correction landed in any of them and [[ETWCLOCKDST]]
+# explains none of these numbers. The 25-37 min figures that PT2H was raised for occur ONLY on a
+# FULL pass - scan plus download plus install - and this task registers `-Action scan` only (the
+# header at the top of this file says so, and $args below is where it is spelled). $PassTaskLimit
+# keeps PT2H on exactly the tasks whose measured worst case is 37 min, and that one is well founded.
+#
+# WHAT THE SAMPLE CANNOT SAY: a scan the scheduler kills at its limit never reaches its final Save,
+# so it writes no elapsed_s. These 37 are COMPLETED scans by construction and the set therefore
+# cannot contain the pathological case. It refutes "an ordinary first scan after servicing needs
+# more than 20 minutes"; it does not prove no scan ever can.
+# UNCHANGED PENDING THE OWNER: lowering a shipped limit is a product behaviour change and the cost
+# of PT2H is real but bounded - a hung scan stays silent for the limit before 329 reports it. The
+# number stays as it is until that call is made; the data for it is in findings/misc.md.
 $ScanTaskLimit = 'PT2H'
 $PassTaskLimit = 'PT2H'    # QubesWindowsUpdateRun and QubesWindowsUpdateDownload
 # At its limit a task is first asked to stop and only then terminated (AllowHardTerminate=true) -
