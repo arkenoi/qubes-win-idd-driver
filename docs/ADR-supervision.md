@@ -258,9 +258,9 @@ smooth"*, and - of the other components - *"same of other components."*
    item 2b's RUNNER.
 
    **MEASURED 2026-11-08 on win11r-sup** (`qwt-sup/20261108T025009Z-2338742`, reproduced in
-   `…T025645Z-2341311`): the refusal half holds. The latch was published by a child that exited
+   `…T025645Z-2341311`, `…T030218Z-2342974` and the full suite `…T030912Z-2345074`): the refusal half holds. The latch was published by a child that exited
    (`publisher_running=NO`) and the name still opened (`held_after_publish=0x00000000`); the guard **adopted
-   it** (`QGAWDGOINGDOWN`, `adopt_ms=15338`), **said so** (`QGAWDNOLAUNCH` ×1) and **launched nothing while
+   it** (`QGAWDGOINGDOWN`, `adopt_ms=15338`), **said so** (`QGAWDNOLAUNCH` ×1 on this run, ×0 on the other three - the count races its writer, so the refusal is witnessed by the adopt and the silence after it, never by this line) and **launched nothing while
    it was held** (`agent_pid_during=NONE`), against a control arm whose identical kill produced
    `adopt_lines=0` and an agent back. `pre_open` read `0xC0000034` first, so the negative reading is known
    to be reachable.
@@ -268,7 +268,7 @@ smooth"*, and - of the other components - *"same of other components."*
    **THE RELEASE DOES NOT WAKE THE GUARD, and this entry's release-site list overstates what it does.** The
    deliberate release withdrew the object (`release_status=0x00000000`, `held_after_release=0xC0000034`)
    33 ms after the adopt, yet no agent returned until `relaunch_ms=106543` - `15338 + 90000 = 105338`, one
-   poll earlier - and again at `151235` against `60307 + 90000 = 150307` on the second run. The cause is in
+   poll LATER, never before it - and the SAME SHAPE ON ALL FOUR RUNS: adopt 15338/60307/60390/15355 against relaunch 106543/151235/151309/106422, i.e. 1205/928/919/1067 ms AFTER `adopt_ms + 90000` and not once before it. The cause is in
    this file's own design: the guard tries `consoleSession == endedSession` (`watchdog.c:632`) **before**
    `QgaGoingDownHeld` (`:641`), and the adopt branch says it outright - "The next pass takes the arm above".
    So once adopted the latch is unreachable, and only a real session end (`:794`, `:815`) or the 90 s

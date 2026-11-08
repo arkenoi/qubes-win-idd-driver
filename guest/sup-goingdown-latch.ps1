@@ -339,7 +339,14 @@ while ($true) {
 T 'wait_exit' $why
 T 'adopt_ms' $adoptMs
 T 'adopt_lines'    @([regex]::Matches($text, 'QGAWDGOINGDOWN console session')).Count
-T 'nolaunch_lines' @([regex]::Matches($text, 'QGAWDNOLAUNCH')).Count
+# AT THE ADOPT INSTANT, WHICH IS NOT WHEN THE REFUSAL IS LOGGED. The guard adopts on the pass that
+# wanted to launch and writes QGAWDNOLAUNCH on the NEXT one (watchdog.c:632, the arm the adopt
+# branch's own comment points at), while the wait above breaks the moment the adopt line appears -
+# so this count races the writer. MEASURED: x1 on ONE run and x0 on the other THREE, with the product
+# behaving identically (supervision-e2e L12, 20261108T030912Z-2345074). Kept because the value at
+# this instant is still a fact, renamed so nothing reads it as the refusal's witness, and counted
+# again over the WHOLE arm at the end where it cannot race.
+T 'nolaunch_lines_at_adopt' @([regex]::Matches($text, 'QGAWDNOLAUNCH')).Count
 $during = Agent-Pid
 T 'agent_pid_during' $(if ($during) { $during.Id } else { 'NONE' })
 
@@ -369,6 +376,9 @@ $after = Agent-Pid
 T 'agent_pid_after' $(if ($after) { $after.Id } else { 'NONE' })
 $wdEnd = Wd-Lines $wd0.mark
 T 'stuck_lines'     @([regex]::Matches($wdEnd.text, 'QGAWDSESSIONSTUCK')).Count
+# THE REFUSAL'S OWN LOG LINE, over the whole arm rather than at the adopt instant - see
+# nolaunch_lines_at_adopt above. This is the one a verdict may rest on.
+T 'nolaunch_lines'  @([regex]::Matches($wdEnd.text, 'QGAWDNOLAUNCH')).Count
 T 'withdrawn_lines' @([regex]::Matches($wdEnd.text, 'withdrawn with it')).Count
 T 'latch_at_end' (Hex ([Q.Latch]::Open($ntName, $Access)))
 T 'done' (Get-Date).ToUniversalTime().ToString('s')
