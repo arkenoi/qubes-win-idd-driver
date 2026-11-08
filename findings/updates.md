@@ -99,3 +99,53 @@ forensics only — do not load it into context.
 - ACCEPTANCE STANDING (docs/ACCEPTANCE-4.3.16.md): U0 + U2 pass on 4.3.16; every U1 claim in that campaign — the "failure" AND the later "3/3 scans" closure — traces to the voided window, so U1 (availability to dom0) is simply UNMEASURED post-void; one clean live scan settles it when needed. U3 was not run in that campaign; the prior end-to-end proofs above stand. UNVERIFIED
 - OPEN ITEMS (statuses last verified 2026-08-20; the erased window may have touched them — re-verify live): (a) win11-fresh's relay/updater deploy returned an EMPTY result — not deployed, not verified, cause unknown; (b) scan tasks on win10-clean / win11-tpl / win11-fresh lack `-Scheduled`, so the debounce is inert there until wu-task-add-scheduled.ps1 or a reinstall; (c) the live large-download acceptance for the relay truncation fix (see relay bullet); (d) the TemplateVM install drain (see install bullet); (e) plain-HTTP vchan loss (see transport bullet); (f) video-modes-during-update (hide or shrink+decorate the guest desktop during servicing, restore on every exit path) is planned, NOT started. UNVERIFIED
 - SCOPE NOTE: xenvif attach/mirage, the 4.3.8 WDDM DriverVer regression, and MSI driver-catalog signing belong to the network/idd/install topics, not here; the catalog-signing defect is closed by the G0 gate per docs/ACCEPTANCE-4.3.16.md (8 catalogs, 0 unsigned, two-sided negative control). [verified 2026-08-30]
+
+**THE GUEST TOOK A RESTART ADR s10 FORBIDS, AND THE QUBE HALTED MID-PASS** (win11de-wufix, 4.3.39,
+two-round wu-e2e 2026-11-08). ADR-updater s10 is "The guest cannot restart itself; a restart is
+REQUESTED, never taken". It was taken.
+- [verified 2026-11-08] Event 1074 names the process: `C:\WINDOWS\servicing\TrustedInstaller.exe`,
+  on behalf of NT-AUTORITAET\SYSTEM, reason "Betriebssystem: Aktualisierung (geplant)", code
+  0x80020003, Shutdown Type "neu starten" - guest 13:56:25, about 17 s after the harness had
+  brought the guest back up. 6006 followed it.
+- [verified 2026-11-08] It was CLEAN and process-initiated, not a crash or a pull: across the last
+  14 shutdown-class events there is no 6008 and no 41 at all - every one is 1074 then 6006.
+- [verified 2026-11-08] The two preceding 1074s are OURS and correct: `shutdown.exe`, user
+  gerd-test, comment "Qubes: completing Windows update servicing" (guest 13:51:05, 13:22:16). The
+  REBOOT POLICY above held; the restart that killed the pass was Windows' own, after ours.
+- [verified 2026-11-08] NoAutoUpdate=1 IS SET (`reg query` of the AU policy key printed
+  `NoAutoUpdate REG_DWORD 0x1`) and did NOT prevent this. It governs AU download/install, not the
+  servicing stack's completion restart, so it is the wrong knob for this path.
+- [verified 2026-11-08] `NoAutoRebootWithLoggedOnUsers` is ABSENT from that key - the query printed
+  NoAutoUpdate and nothing else - while a user IS logged on (gerd-test, autologon verified by
+  effect in the same boot). That is the condition that policy exists to cover.
+- [verified 2026-11-08] The cost is not cosmetic: KB5127648 (cumulative) stayed state=staged rc=3010
+  state_after='Not Present' with reboot_needed=true in BOTH rounds, so the servicing never
+  completed. Other offers DID converge in the same run (offered 7 -> 3, count 2 -> 1, KB5127690
+  cleared after its reboot), so this is one stuck item, not a stalled updater.
+- UNVERIFIED - the candidate remedy is `NoAutoRebootWithLoggedOnUsers=1` beside the NoAutoUpdate we
+  already write in install-updater-agent.ps1 step 9. NOT measured, and not to be written up as a
+  fix until a routed pass shows TrustedInstaller reporting the pending restart instead of taking
+  one. A qube that is `on_reboot=destroy` cannot distinguish the two from outside.
+
+**THE NO-KB AUDIOPROCESSINGOBJECT EXCLUSION IS HONEST, measured from OUTSIDE the updater.**
+- [verified 2026-11-08] tools/wu-driver-resolve.py --arch amd64 on "Microsoft Corporation
+  AudioProcessingObject Driver Update (1.0.4.55794)": "no catalog entry matches that title", rc=1 -
+  zero title matches, not a wrong-architecture match.
+- [verified 2026-11-08] INSTRUMENT VALIDATED on a known-good subject, same tool and options: the
+  sibling offer (1.0.4.7057), which this guest installed in round 1, returned 2 candidates with
+  that exact title (arm64 28,502,721 B; amd64 29,981,141 B), chose the amd64 by the architecture
+  the package's own INF declares, and downloaded the .cab, rc=0. So the catalog is reachable and
+  title search works.
+- [verified 2026-11-08] With that evidence, tools/wu-exclusion-audit.py exits 0, "every excluded
+  item positively judged correct-exclusion", reason_fits noul 0.90. The `classification` question
+  itself is only 0.32 (correct-exclusion 0.49 vs insufficient-evidence 0.44) - UNDER FLOOR, so the
+  judgment rests on reason_fits and the catalog measurement, NOT on a Jev verdict.
+
+**INSTRUMENT TRAP, recorded because it nearly became a finding.**
+- [verified 2026-11-08] `2>nul` inside a `tools/qtest run 'cmd /c ...'` payload reached the guest as
+  `2>/dev/null`. cmd cannot open that path, so it answered "Das System kann den angegebenen Pfad
+  nicht finden" and the command behind the redirect NEVER RAN. Read literally that German line says
+  a path is missing, and the path under discussion was a registry key - so it read exactly like
+  "the AU policy key does not exist", which is the opposite of the truth. Query the guest's
+  registry with NO redirect, and treat a path-not-found from cmd as a statement about the REDIRECT
+  TARGET until proven otherwise.
