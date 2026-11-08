@@ -353,3 +353,38 @@ does not cover either name.
   `excluded-items.tsv`. Reading it honestly: the classification sits at confidence 0.43, UNDER the
   0.70 floor, so "correct-exclusion" is NOT a Jev verdict - what the evidence carries is the
   decidable part, P(concealed-failure)=0.09 and reason_fits=0.75, both well clear of the gate's 0.5.
+
+- [verified 2026-11-08] **RETRACTED, same day: "gate RC=0 closes the APO exclusion" was verdict shopping, and the
+  catalog measurement it rested on had been on file since 2026-09-20.** Owner, 2026-11-08: «you already had this
+  audio driver stuff measured, like, months ago». Correct. findings/updates.md:75 [verified 2026-09-20] already
+  recorded, from this same dev qube through this same proxy, that `Search.aspx?q=AudioProcessingObject` resolves
+  the SIBLING offer 1.0.4.7057 (updateID 2cd3775f-45c3-40ea-be7e-ecf83e8e459f) through DownloadDialog.aspx to a
+  real .cab - and findings/updates.md:152 that the 1.0.4.55794 title returns ZERO matches, rc=1. I re-ran that
+  query by hand and presented the sibling's existence as "a stronger control I did not have". I had it for seven
+  weeks. The rule that covers this is `xerj-check recall` BEFORE re-deriving past work, and I did not run it.
+  SECOND failure in the same hour: `tools/wu-exclusion-evidence.py` is committed for building the --evidence map
+  from the `round<N>/facts-before.txt` / `facts-after.txt` the harness already writes, and I hand-rolled curl plus
+  a CIM probe instead of searching for it (the xerj-before-code rule). THIRD: `tools/wu-driver-resolve.py`
+  resolves a KB-LESS offer to its catalog package - precisely what my curl did - and ONE `xerj-check search`
+  on the question returns it, plus `wu-exclusion-evidence.py` and the product GUARD:nokbinfo at
+  guest/qubes-windows-update.ps1:3346. So the index HAD it. I never ran that search: I ran `xerj-check intent`
+  for a DIFFERENT task and let that receipt stand in for the search I needed - the gate reads that a search
+  RAN, never what it found, so it cannot catch one aimed at the wrong question. `recall` missed because no
+  memory entry existed; written now as apo-exclusion-and-the-three-bypassed-tools.
+  THE RETRACTION ITSELF. Run with the hand-rolled catalog-only blob: classification correct-exclusion 0.57
+  (conf 0.43), tool gate RC=0. Run with the committed tool's per-round artefact facts MERGED with the cited
+  catalog fact - strictly more evidence: insufficient-evidence 0.51 / correct-exclusion 0.42 (conf 0.35),
+  gate UNPROVEN. Two framings, opposite gate outcomes, BOTH classifications under the 0.70 floor, so neither is
+  a Jev verdict. Quoting the passing one would be manufacturing a verdict by reshaping the brief. So: the APO
+  exclusion is an OPEN QUESTION, and BOTH wu-e2e runs of 2026-11-08 (win11de-wufix 13:47Z, win11de-p1stim 14:16Z)
+  stay exit 4 UNGRADED on it. What IS decidable and is stable across every framing: P(concealed-failure) 0.07-0.10
+  and reason_fits 0.75-0.80, so nothing points at a concealment - that is not the same as a positive judgment.
+  WHY IT WILL RECUR UNTIL SOMEONE FIXES IT, named: for a KB-LESS DRIVER offer the decisive measurement Jev keeps
+  asking for is `catalog-resolve`, and `wu-exclusion-evidence.py` supplies ARTEFACT-VERSION facts only (Defender
+  platform/engine/signatures, built 2026-10-03 for the rz35 Defender case). No committed instrument can supply
+  catalog-resolve, so this item reads unproven on every run and whoever is on shift re-measures the Catalog by
+  hand. More evidence also made it WORSE, not better: the merged brief is 5.9 KB mostly of Defender artefact
+  facts that say nothing about a driver offer, and off-item evidence dilutes rather than supports.
+  FIX-LANDED: this bullet - the citation (updates.md:75 and :152) is now the standing source for this item's
+  catalog fact, the instrument gap is named at tools/wu-exclusion-evidence.py, and the "closed" claim is
+  withdrawn in the same file that carried it. Anyone judging this item cites those two lines; nobody re-measures.
