@@ -259,3 +259,46 @@ preceding pass would change either way - U8 exists because an already-satisfied 
 be counted again. One clone per arm, each routed after creation, each swept afterwards by
 mgmt/harness/rig-cleanup.sh --go, whose protected set is DERIVED from mgmt/goldens/*.json and so
 does not cover either name.
+
+## WUSCANTASKFAILSANDLOGSNOTHING - the cause narrowed, the silence fixed (2026-11-08)
+
+- [verified 2026-11-08] **WUSCANTASKFAILSANDLOGSNOTHING, the cause narrowed and the silence fixed** (moved out of the
+  register entry when the byte ratchet refused it; the register line is the status, this is the
+  measurement). **(a) The scheduler is EXCLUDED.** Task Scheduler reports its
+  own verdicts as `SCHED_E_*`/`SCHED_S_*` in 0x80041xxx/0x00041xxx; `0x80070001` is in neither range,
+  being `HRESULT_FROM_WIN32(ERROR_INVALID_FUNCTION)`. With event 201 present and 101/103 absent,
+  `powershell.exe` ran and that is what it RETURNED - not the service's refusal. **(b) Parameter
+  binding is REFUTED:** the agent at the bundles' date declared `-Action` (param block :27),
+  `-RelayExe` (:29) and `-Scheduled` (:54), so the task's arguments bound. **(c) The log-sink exit 1
+  cannot explain it:** the two `exit 1` sites at HEAD (:61, :62, both "no log sink") arrived
+  2026-11-02 in 43e95083, SIX DAYS after the bundles, and at the bundles' date the agent had no
+  `exit 1` in its first 200 lines at all - only `exit 2` (proxy sanity) and `exit 0` (debounce). What
+  remains is an unhandled terminating error before the first log write. **(d) NEGATIVE CONTROL,** on
+  win11de-nokb-ctl (German 25H2, the reporter's locale): the same task with a byte-identical action
+  line ran 2026-11-08 14:33:21 with `LastTaskResult 0x00000000` and 0 missed runs. The task
+  definition, the arguments and the startup path are sound as shipped. **(e) THE SILENT WINDOW** is
+  why six field occurrences carried no cause: `log.ps1` is dot-sourced and `Write-QwtLogLine` proven
+  callable at :61-62, but the agent's own `Log` wrapper is not defined until ~:624 and the first
+  recorded line is :655 (HEAD's own comment at :654: "ran before Log existed"). ~590 lines execute
+  with a WORKING sink and write nothing - two `New-Item`, three status-file reads, the debounce,
+  `New-Object System.Threading.Mutex($false,'Global\QubesWindowsUpdate')` at :433, the mutex
+  acquisition, `Save` at :485, a registry read - and a terminating error there goes to STDERR, which
+  Task Scheduler DISCARDS. That is why the old NEXT ("needs an event export") was unachievable by
+  construction. **(f) FIXED:** a script-scope trap at `guest/qubes-windows-update.ps1:75` writes the
+  terminating error (type, message, line number, source line) through the already-loaded sink.
+  `break` keeps the control flow exactly - the script still terminates and still returns 1 - and the
+  body cannot fail its host. PROVED against the real sink, not a fixture: exit code 1 and the sink
+  received `UNHANDLED TERMINATING ERROR, this pass ends here: RuntimeException: deliberate startup
+  failure at line N`. Parse-clean; `tools/ps-parse-gate.sh` clean (243 scanned, 0 failing).
+- [verified 2026-11-08] On that fix I had first decided to change NOTHING, and that was wrong. Jev
+  came back UNDER FLOOR twice - `close_the_silent_window` 0.53 then 0.65, the state corrected between
+  askings (the scheduler-side alternative excluded) and the question unchanged, with
+  `silence_is_its_own_defect` 0.56 - and the register entry itself said "not more logging", so I
+  recorded the option as not taken. `tools/hooks/shape-not-a-finding-gate.sh` refused that commit and
+  was right: the owner's rule of 2026-11-07 is that a corrected premise carrying no fix IS the fix
+  having failed. An owner rule outranks a note I wrote myself the same morning, and an under-floor
+  Jev is NO VERDICT rather than a licence to change nothing. Jev on the landed diff: `plan_matches`
+  0.96, `not_recorded` 0.78; under floor and therefore no verdict, `redundant_inside` 0.68 and
+  `redundant_outside` 0.68; `consistent` 0.33 is VOID by the feed's own reading rule, which holds a
+  consistency answer void unless `comparator_relevant` lists a relevant equivalent - it says
+  `only_unrelated_hits`.

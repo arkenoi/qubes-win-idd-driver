@@ -60,6 +60,26 @@ $ErrorActionPreference = 'Continue'
 $qwtLogPs1 = Join-Path $PSScriptRoot 'log.ps1'
 try { . $qwtLogPs1 } catch { [Console]::Error.WriteLine("qubes-windows-update.ps1: cannot load $qwtLogPs1 ($($_.Exception.Message)) - no log sink"); exit 1 }
 if (-not (Get-Command Write-QwtLogLine -EA SilentlyContinue)) { [Console]::Error.WriteLine("qubes-windows-update.ps1: $qwtLogPs1 has no Write-QwtLogLine - no log sink"); exit 1 }
+# THE SILENT STARTUP WINDOW, CLOSED. The sink above is loaded and proven callable FROM HERE, but this
+# script's own Log wrapper is not defined for another ~560 lines, so a terminating error before that went
+# only to STDERR - and Task Scheduler DISCARDS stderr. That is why six field occurrences of
+# WUSCANTASKFAILSANDLOGSNOTHING (reporter builds 4.3.37/.38, bundles 2026-10-27) carried a result code
+# and not one line of cause: 0x80070001 is HRESULT_FROM_WIN32(1), which is what powershell.exe returns
+# for an unhandled terminating error, and no Task Scheduler event export could ever have held the
+# statement that raised it. Measured the same day: the task definition, its arguments and this startup
+# path are sound as shipped - win11de-nokb-ctl (German 25H2, the reporter's locale) ran the identical
+# action with LastTaskResult 0x00000000 - so what was missing was never a guard, only the line.
+# `break` keeps today's control flow EXACTLY: the script still terminates and still returns 1. The
+# wording is deliberately NOT "startup" - a trap is script-wide and must be truthful wherever it fires.
+# The body cannot fail its host: a sink that throws must not become the error it was reporting.
+trap {
+  try {
+    $qwtLn = "$($_.InvocationInfo.Line)".Trim()
+    $null = Write-QwtLogLine E ("UNHANDLED TERMINATING ERROR, this pass ends here: $($_.Exception.GetType().Name): $($_.Exception.Message) at line $($_.InvocationInfo.ScriptLineNumber): $qwtLn") -Module 'qubes-windows-update.ps1'
+  } catch { }
+  try { [Console]::Error.WriteLine("qubes-windows-update.ps1: UNHANDLED TERMINATING ERROR: $($_.Exception.Message)") } catch { }
+  break
+}
 # ---- WU-PROXY-SANE-BEGIN
 # GUARD:proxysane - the proxy must be an ABSOLUTE URI, checked before anything uses it.
 # Measured 2026-09-21: `-Action full -OnlyKb KB2267602 KB5007651` bound the first KB to -OnlyKb and
