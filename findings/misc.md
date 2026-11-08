@@ -136,14 +136,22 @@ identity machinery never had the hole (it drops a stamped row's kb from the join
 the raw key join did. The driver-by-title rows at `:3315`/`:3326`/`:3359` were never affected: they
 key on the offer's TITLE, distinct per offer.
 
-**6. OPEN, P2, and not fixed here.** `if ($Action -eq 'wuinstall') { ...; return }` (`:3258`)
-returns without re-reporting, so after that action dom0 keeps the PRE-install scan count until the
-next scan. MEASURED SCOPE: nothing in the tree invokes it - the only hits for `wuinstall` are this
-script's own ValidateSet and the three gitignored prime-jobs build copies - so it is an operator
-action typed by hand, which is why it is P2 and not P1. The cheap fix is wrong: the correct count
-needs the post-install rescan, and that block is ~80 lines inline on the install/full path, so
-fixing this properly means extracting it. That is a design change and belongs behind its own Jev
-review, not inside a counting fix.
+**6. FIXED 2026-11-08 in b3f3e203 - the WU-native action left dom0 the count it took before it
+installed anything.** `if ($Action -eq 'wuinstall') { ...; return }` returned without re-reporting,
+so after that action dom0 kept the PRE-install scan count until the next scan. MEASURED SCOPE:
+nothing in the tree invokes it - the only hits for `wuinstall` are this script's own ValidateSet,
+that branch and the three gitignored prime-jobs build copies - so it is an operator action typed by
+hand, which is why it is P2 and not P1. THE ~80-LINE EXTRACTION THIS ENTRY CALLED FOR WAS NOT
+NEEDED, and that was the thing worth checking before building it: Protect-Autologon, phase=done and
+Complete-Pass are already the shared tail of the same try block, and the four blocks in between are
+each gated on BOTH `$Action -in 'install','full'` AND a non-empty $script:WuFallbackKbs or
+$script:WuOnlyExpressKbs - arrays that only the offer loop fills, that are initialised to @() above
+them, and that a wuinstall pass never reaches. So deleting the early return and adding 'wuinstall'
+to the one gate it must pass makes it reach exactly one more block than before, and that block is
+the re-report. STRUCTURAL, NOT EXECUTED: the offline suites replay MARKED REGIONS and this branch is
+not in one, stubbing the pass needs WUA COM, and no caller will exercise it on a guest either - so
+what is verified is the gates and those initialisations, read at b3f3e203, plus the file's suites
+still passing (wu-notactionable MATRIX OK, wu-reboot-report 41/41). Not a run.
 
 Also found and NOT a defect, recorded so it is not "fixed" by mistake: `Get-MsuKbVerdict` counts a
 KB installed when AT LEAST ONE of its files succeeded. That is deliberate and measured - one catalog
@@ -176,3 +184,78 @@ Why the INLINE spelling is the right anchor here: the test's `Log` stub takes on
 records the message only, while the product's takes two and turns `$lvl` into the log file's prefix
 LETTER (docs/ADR-logging.md, 2026-11-01). A check written against this stub can only ever see what
 the writer puts IN the text, so an anchor on a level the stub never receives cannot match.
+
+## WUNOKBMISSNOTINSTALLEDONROUTEDGUEST - what is measurable and what is not (2026-11-08)
+
+Register line in findings/issues.md. The handoff is measured OFFLINE: wu-notactionable 80/80 with
+Install-ViaWU stubbed, and the `nokbwu` knob seen to fail on its target. Unmeasured is the real
+Install-ViaWU call and the install behind a route.
+
+CORRECTED SAME DAY, after the owner asked whether a networked Linux TemplateVM still uses the
+update proxy. An earlier version of this section said the install "cannot be measured here, and the
+reason is structural". THAT WAS WRONG and the correction matters, because it was being used to
+write the item off:
+
+- [verified 2026-11-08] Qubes itself keeps the proxy on a networked template. /usr/lib/qubes/update-proxy-configs decides
+  on ONE thing - `if qsvc yum-proxy-setup || qsvc updates-proxy-setup` - and the word netvm does not
+  appear in that script at all (grep: 0). A routed Linux template still gets
+  `Acquire::http::Proxy "http://127.0.0.1:8082/"` and still goes over qrexec to qubes.UpdatesProxy;
+  the route only carries other traffic. `qvm-service -d <tpl> updates-proxy-setup` is what turns it
+  off, never a netvm.
+- [verified 2026-11-08] Our own updater is the same shape. Test-DirectInternet is called at exactly ONE site,
+  guest/qubes-windows-update.ps1:2982, inside the StandaloneVM branch; the TemplateVM branch never
+  consults the route. So a Windows TemplateVM WITH a netvm would run the proxy updater exactly as
+  it does now.
+- [verified 2026-11-08] :3140 `$canWuNative = $script:HasDefaultRoute -or ($env:QUBES_UPDATES_ALLOW_WU_NATIVE -eq '1')`.
+  A route arms the WU-native path - and so does a knob the product already ships.
+
+WHAT THE netvm='' RULE ACTUALLY RULES, owner 2026-11-08: «the rig hygiene says that when creating
+or managing a template, this should be completely out of the path, that's it. there is no
+prohibition to test something with it later», and on the product side «it is not approved path for
+ourselves -- we should not rely on its availability». So the template is CREATED and MANAGED with
+no route, the PRODUCT never depends on one, and attaching a netvm to an existing template in order
+to TEST this is allowed. Two earlier drafts of this section had it wrong in opposite directions -
+first "structural, cannot be measured here", then "waits on the owner relaxing a rule" - and both
+are withdrawn. CLAUDE.md now carries the split so it is not re-derived from the one-line rule.
+
+SO THE MEASUREMENT IS OURS TO TAKE, on a subject created and upgraded netvm-free and given a route
+only afterwards:
+- [verified 2026-11-08] The subject exists and already presents the right input. win11de-wufix, scan pass 2026-11-08:
+  "7 update(s) offered, 6 actionable, 6 reported to dom0; 1 verified no route this pass (Microsoft
+  Corporation AudioProcessingObject Driver Update (1.0.4.55794))" - a no-KB offer whose
+  catalog-by-title search missed, which is exactly WU-NOKB's input.
+- [verified 2026-11-08] THE CONTROL IS ALREADY MEASURED, and it is the line above: routeless, $canWuNative is false, the
+  hand-over is inert, and the offer correctly stays counted with its no-route reason.
+- UNVERIFIED - THE ARM: with a netvm attached afterwards, :3140 $canWuNative is true through HasDefaultRoute and
+  WU-NOKB should hand that offer to Install-ViaWU by identity (-OnlyUids). That is what this fix
+  added and the one thing never measured on a guest.
+- UNVERIFIED - QUBES_UPDATES_ALLOW_WU_NATIVE=1 arms the same branch WITHOUT a route, where the expected answer
+  is ResultCode 4 (findings/updates.md: the WU-native path installs nothing routeless). It measures
+  the hand-over only - the cheaper half, not a substitute for the routed install.
+
+Manufacturing a route is still not an option: NLA/NCSI flipping and the KM-TEST loopback adapter
+are RETRACTED APPROACHES in findings/updates.md, "non-deterministic + security-weakening
+deception, forbidden". A real netvm on an already-built template is not that.
+
+THE ROUTED SUBJECT IS A DISPOSABLE CLONE, NOT THE MANAGED ONE. Owner 2026-11-08, on attaching a
+netvm for this test: «you need to make a clone for later disposal», «or a snapshot to be reverted».
+Both were offered; CLONE is taken, and the reason is measured, not stylistic. win11de-wufix:root is
+save_on_stop=True with revisions_to_keep 2, and it already holds its full two (1794135921-back,
+1794137006-back). A snapshot-and-revert needs the pre-route revision to survive: shutdown (rotate),
+attach, boot, pass, shutdown (rotate), revert. The two-deep ring is spent by those two shutdowns
+alone, and wu-e2e.sh is running two further passes on this same template right now - so the
+revision to go back to would be gone before the revert. That two-shutdown window is exactly how
+win10-base was lost on 2026-10-11 (CLAUDE.md). A clone has no such window: the routed guest is born
+disposable and win11de-wufix is never routed at all, keeping the control arm's netvm-free
+provenance intact.
+
+Cost is not a reason to prefer the snapshot: the subject's real allocation is 16908 MB against
+~180 GiB free in the pool, so each clone is ~17 GiB of thin pool.
+
+TWO clones, not one re-used. Both arms must be ROUTED (the defect is a routed-guest defect), so the
+control cannot be the existing routeless pass. And the arms cannot share a guest in sequence: the
+fixed arm's precondition is that the no-KB offer is still NOT installed, which is the very thing a
+preceding pass would change either way - U8 exists because an already-satisfied identity must not
+be counted again. One clone per arm, each routed after creation, each swept afterwards by
+mgmt/harness/rig-cleanup.sh --go, whose protected set is DERIVED from mgmt/goldens/*.json and so
+does not cover either name.

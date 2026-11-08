@@ -20,7 +20,13 @@ Improve Windows-guest desktop fidelity and responsiveness in QWT seamless mode. 
 - Never write a limitation until you have grepped the repo and run the cheapest disproving probe. See .claude/skills/rig-capabilities/SKILL.md.
 
 ## Networking (binding)
-- Templates stay netvm=''. AppVMs/StandaloneVMs that test PV networking get a netvm.
+- Templates are CREATED and MANAGED with netvm='' - provisioning, priming, upgrading and sealing
+  keep a route completely out of the path. That is rig hygiene and it is the whole of it: attaching
+  a netvm to an EXISTING template later, to test something with it, is not prohibited. Owner
+  2026-11-08: «the rig hygiene says that when creating or managing a template, this should be
+  completely out of the path, that's it. there is no prohibition to test something with it later»,
+  and, on why the product may never depend on one, «it is not approved path for ourselves -- we
+  should not rely on its availability». AppVMs/StandaloneVMs that test PV networking get a netvm.
 - Second boot is a failure for PV-network acceptance.
 
 ## Public repo
