@@ -572,7 +572,7 @@ PY
     mkdir -p "$OUT/round$r" 2>/dev/null
     printf 'oscillation poll for round %s, started %s (budget 900s, 30s interval)\n' \
       "$r" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$_osc_log"
-    _sc=$(( $(date +%s) + 900 )); scan_seen=0; _osc_empty_run=0; _osc_empty_tot=0
+    _sc=$(( $(date +%s) + 900 )); scan_seen=0; _osc_empty_run=0; _osc_empty_tot=0; _osc_gone=""
     while [ "$(date +%s)" -lt "$_sc" ]; do
       sleep 30
       st_now=$(guest_file 'C:\ProgramData\Qubes\update-status.json' | tr -d '\r')
@@ -581,6 +581,26 @@ PY
       # 2026-10-29 both ended at the same message. Counted here so the verdict can name which.
       if [ -z "${st_now:-}" ]; then
         _osc_empty_run=$((_osc_empty_run+1)); _osc_empty_tot=$((_osc_empty_tot+1))
+        # THE THIRD EXIT, AND THE 2026-10-29 FIX WAS ONLY THE MESSAGE. That round's note (below, at
+        # the scan_seen=0 verdict) already recorded "nine consecutive empty ones AS THE GUEST
+        # REBOOTED" - so a subject powering off inside this wait was MEASURED then, and all that
+        # changed was the wording of the failure. The loop still had two success exits and a
+        # deadline, no terminal state, so it could only INFER a departed guest from empty reads
+        # after spending the whole budget. MEASURED AGAIN 2026-11-07, campaign 42400226595 round 2:
+        # the guest powered itself off at ~22:48, this loop read empty fifteen times over 920 s and
+        # declared the question undecidable, and the power-off was only named at 23:04:23 by the NEXT
+        # round ("the guest powered itself off before round 3"). A wait that cannot detect "this will
+        # never happen" burns its whole budget on a subject that died in the first minute.
+        # qstate is the primitive stalled() already uses; Halted is terminal for a guest nothing here
+        # will start, so the wait ends AT the event and the verdict attributes it instead of guessing.
+        # (# GUARD:oscillationterminalexit)
+        _osc_gone=$(qstate)
+        if [ "$_osc_gone" = Halted ]; then
+          printf '%s  TERMINAL: guest power_state=%s - it will never answer this read; ending the wait\n' \
+            "$(date -u +%H:%M:%SZ)" "$_osc_gone" >> "$_osc_log"
+          break
+        fi
+        _osc_gone=""
       else _osc_empty_run=0; fi
       # EITHER SIGNAL ENDS THE WAIT, and the durable one is the reliable half:
       #   * the TRANSIENT one - action contains 'scan' - is what this used to rely on alone, and it
@@ -692,8 +712,15 @@ PY
       # MEASURED 2026-10-29: this said "the scan never ran" while the poll log showed eleven good
       # reads and then nine consecutive empty ones as the guest rebooted - so the message sent the
       # reader hunting a scan defect that did not exist. Both still fail; only the cause differs.
-      if [ "$_osc_empty_run" -ge 3 ]; then
-        log "[ERROR] round $r: FAIL - the GUEST STOPPED ANSWERING during the oscillation wait ($_osc_empty_tot empty read(s), the last $_osc_empty_run consecutive), so whether the scan ran cannot be decided (missing data fails) - see $_osc_log"
+      # TWO CLAIMS, AND ONLY ONE OF THEM IS UNDECIDABLE. "Did the scan run?" cannot be answered once
+      # the subject is gone. "Did the guest stay up across a pass defined to change nothing?" IS
+      # answered - measured, by power state, at the moment it happened - and the answer is no. So
+      # this is a product FAIL on what was measured, never an instrument excuse for what was not:
+      # a scan-only oscillation pass that ends with the subject powered off is the finding itself.
+      if [ -n "$_osc_gone" ]; then
+        log "[ERROR] round $r: FAIL - the guest POWERED ITSELF OFF (power_state=$_osc_gone) DURING the scan-only oscillation wait, after $_osc_empty_tot empty read(s) - MEASURED by power state, not inferred. This pass is defined to change nothing, so the power-off is the finding; whether the scan ran is separately undecidable - see $_osc_log"
+      elif [ "$_osc_empty_run" -ge 3 ]; then
+        log "[ERROR] round $r: FAIL - the GUEST STOPPED ANSWERING during the oscillation wait ($_osc_empty_tot empty read(s), the last $_osc_empty_run consecutive) while power_state was NOT Halted, so whether the scan ran cannot be decided (missing data fails) - see $_osc_log"
       else
         log "[ERROR] round $r: FAIL - the scan never ran, so the oscillation check did not happen (missing data fails)"
       fi

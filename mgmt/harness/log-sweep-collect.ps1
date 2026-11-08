@@ -635,12 +635,25 @@ if (-not $NoEvents) {
             # that returned records this filter then dropped is an answer, and says so.
             # (# GUARD:channelraw)
             if ($kept -eq 0) {
-                $ev.Add("EV NONE [$log] raw=$raw kept=0")
+                $ev.Add("EV NONE [$log] raw=$raw kept=0 src=query")
                 if ($raw -eq 0 -and $ch.Required) { $requiredMissing.Add("$log (no records at all)") }
             }
         } catch {
             $m = $_.Exception.Message
-            if ($m -match 'No events were found') { $ev.Add("EV NONE [$log]") }
+            # THE SAME NOTHING, THROUGH THE OTHER DOOR - and this is the GUARD:channelraw fix above
+            # failing a second time. Get-WinEvent -ErrorAction Stop THROWS "No events were found"
+            # when the filter matches nothing, so a required channel with zero records never reaches
+            # the $kept -eq 0 branch: it lands here, got a bare EV NONE, and $requiredMissing stayed
+            # empty. Measured 2026-11-07 on campaign 42400226595 cell WIN10-clean: System AND
+            # Application both EV NONE while the summary printed required_missing=- , so the sweep
+            # reported itself complete with both required channels blind - and the kernel-power and
+            # SCM records that would have said why the stage-2 resume task never fired on that boot
+            # were the ones lost. Same accounting as :637-639, which is the only reason that branch
+            # is not wrong too. (# GUARD:channelrawthrown)
+            if ($m -match 'No events were found') {
+                $ev.Add("EV NONE [$log] raw=0 kept=0 src=thrown")
+                if ($ch.Required) { $requiredMissing.Add("$log (no records at all)") }
+            }
             else {
                 $evErrors++
                 $ev.Add("EV ERR [$log] " + ($m -replace "[`r`n]+", ' '))
