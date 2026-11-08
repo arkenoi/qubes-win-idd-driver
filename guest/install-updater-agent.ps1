@@ -155,9 +155,12 @@ Log "relay source vouched at $src (parses --parent-pid, refuses unknown flags, d
 # so it writes no elapsed_s. These 37 are COMPLETED scans by construction and the set therefore
 # cannot contain the pathological case. It refutes "an ordinary first scan after servicing needs
 # more than 20 minutes"; it does not prove no scan ever can.
-# UNCHANGED PENDING THE OWNER: lowering a shipped limit is a product behaviour change and the cost
-# of PT2H is real but bounded - a hung scan stays silent for the limit before 329 reports it. The
-# number stays as it is until that call is made; the data for it is in findings/misc.md.
+# SO WHY IS IT STILL PT2H? Because the survivor bias above cuts the other way too, and the two
+# errors are not symmetric. Killing a working scan makes the guest tell the user "The Windows Update
+# scan task failed" - the exact false notification the raise fixed - while keeping PT2H only delays
+# the report of a genuine hang, which 329 then makes truthfully. On a sample that cannot contain the
+# pathological case, the quiet failure is the better one to risk. Decided without escalating (a P2
+# timeout is not on the escalation list); the data is in findings/misc.md.
 $ScanTaskLimit = 'PT2H'
 $PassTaskLimit = 'PT2H'    # QubesWindowsUpdateRun and QubesWindowsUpdateDownload
 # At its limit a task is first asked to stop and only then terminated (AllowHardTerminate=true) -

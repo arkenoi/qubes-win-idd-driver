@@ -621,9 +621,15 @@ NOT CHASED, and that is deliberate, not an oversight: the owner's standing order
   CONSTRUCTION, so the set cannot contain the pathological case it would take to justify PT2H. It
   refutes "an ordinary first scan after servicing needs more than 20 minutes". It does not prove
   that no scan ever can.
-- [verified 2026-11-08] PT2H IS UNCHANGED and the decision is the owner's: lowering a shipped limit
-  is a product behaviour change, and its cost is real but bounded - a hung scan stays silent for the
-  limit before 329 reports it, which at PT2H is two hours and at PT20M would be twenty minutes.
+- [verified 2026-11-08] PT2H IS UNCHANGED, AND THAT WAS DECIDED HERE rather than escalated - Jev
+  involve_operator_now = decide_myself_keep_the_value 0.99, conf 0.98. Escalation is reserved for
+  dom0/sudo/policy, upstream contact, an acceptance stuck after ~3 iterations, a guest reinstall or
+  an isolation-weakening tradeoff, and a P2 timeout value is none of those; "no unrequested
+  behaviour changes" already points at keeping it. The cost of keeping it is real but bounded: a
+  hung scan stays silent for the limit before 329 reports it, which at PT2H is two hours and at
+  PT20M would be twenty minutes. The cost of the other direction is worse and user-visible - the
+  guest says "The Windows Update scan task failed" about a scan that was working, which is the
+  defect the raise fixed - and the survivors-only sample above cannot rule that case out.
   Note for whoever takes that call: the deploy mutex bound reads the LONGEST limit among the tasks
   that can hold it (install-updater-agent.ps1:121), and $PassTaskLimit stays PT2H, so lowering the
   scan limit would NOT shorten that wait.
