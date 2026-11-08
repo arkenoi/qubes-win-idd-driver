@@ -121,7 +121,7 @@ source mgmt/harness/vmlock.sh; vm_lock "$SUBJ" || { echo "FAIL  the rig lock for
 SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 log "start iso=$(sha256sum "$ISO" | cut -c1-12) golden=$GOLDEN cells='$CELLS' cycles=$CYCLES click=$CLICK out=$OUT"
 
-q(){ QTEST_VM="$SUBJ" timeout "${QT_T:-120}" ./tools/qtest "$@"; }
+q(){ QTEST_VM="${QT_VM:-$SUBJ}" timeout "${QT_T:-120}" ./tools/qtest "$@"; }   # QT_VM targets a CONTROL guest
 state(){ qvm-ls --raw-data --fields STATE "$SUBJ" 2>/dev/null | tr -d '\n'; }
 # THREE EXITS, and it says which: a session appeared / the guest is Halted (terminal) / the deadline passed.
 wait_session(){ local d=$((SECONDS+${1:-300}));
@@ -645,7 +645,14 @@ if has L7C; then
     done
     log "  control $CTL: $cd_why"
     if [ "$cd_ok" = 1 ]; then
-      QTEST_VM="$CTL" timeout 300 ./tools/qtest pushrun "$OUT/L7-probe.ps1" > "$OUT/L7C.out" 2>&1
+      # THE CONTROL IS CAPTURED BY THE SAME HELPER AS THE SUBJECT, never by a hand-rolled copy of
+      # it. L7 goes through guest_ps, which strips the guest's CR; this line used to call qtest
+      # directly and keep it, so cwl was False plus a CR, [ "$cwl" = False ] was false, and a
+      # differential that read exactly right (control False, subject True) graded INVALID on an
+      # invisible byte. Measured on run 20261108T211221Z: 25 CR lines in L7C.out, 0 in L7.out.
+      # The subshell keeps QT_VM/QT_T off every later cell. L11/L12 stay off guest_ps on purpose
+      # (see the comment near line 1240) and strip the CR themselves.
+      ( QT_VM="$CTL"; QT_T=300; guest_ps "$OUT/L7-probe.ps1" ) > "$OUT/L7C.out" 2>&1
       c7(){ grep -a "^L7|$1|" "$OUT/L7C.out" | tail -1 | cut -d'|' -f3-; }
       cl=$(c7 lastresult); cac=$(c7 action_cmd); cwl=$(c7 writes_landed); swl=$(grep -a '^L7|writes_landed|' "$OUT/L7.out" 2>/dev/null | tail -1 | cut -d'|' -f3)
       if [ -z "$cac$cwl" ]; then
