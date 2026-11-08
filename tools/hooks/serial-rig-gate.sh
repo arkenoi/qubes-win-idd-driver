@@ -159,6 +159,19 @@ def is_launch(toks):
     # (# GUARD:findaction)
     if name == 'find' and not any(a in rest for a in ('-exec', '-execdir', '-ok', '-okdir', '-delete')):
         return False
+    # `tar` is the SAME SHAPE as find, and was the fourth measured case of this over-match: on
+    # 2026-11-08 `tar xf /home/user/qwt-quick-upgrade/rel-.../evidence.tar` was refused, because tar
+    # is not passive, so its segment survived and the verb regex then matched `quick-upgrade` inside
+    # a PATH ARGUMENT. Unpacking a failure package is how a run's evidence gets read, and the rule
+    # at the top of this file is that monitoring a running job is never blocked. tar is NOT simply
+    # passive, though - it has options that run a command, so it goes here with find rather than in
+    # PASSIVE beside cp/mv/diff. Proven both ways with tools/tests/gate-explain.py: the plain `xf`
+    # drops, and `tar --to-command=...` still matches. (# GUARD:taraction)
+    if name == 'tar' and not any(
+            a == '-I' or a.startswith(('--to-command', '--use-compress-program', '--checkpoint-action',
+                                       '--rsh-command', '--info-script', '--new-volume-script'))
+            for a in rest):
+        return False
     if name in ('command', 'builtin') and rest and rest[0] in ('-v', '-V'):
         return False                # `command -v qvm-shutdown` LOOKS UP a path, runs nothing
     # `bash -n script.sh` PARSES and exits - it is the syntax check you run after editing a
