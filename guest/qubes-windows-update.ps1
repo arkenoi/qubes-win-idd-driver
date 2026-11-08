@@ -2706,7 +2706,18 @@ function Get-MsuKbVerdict([string]$kb, $rows){
   $deferred = @($rows | Where-Object { $_.rc -eq 'deferred' }).Count -gt 0
   $state = if ($staged) { 'staged' } elseif ($applied) { 'installed' }
            elseif ($deferred) { 'deferred' } else { 'failed' }
-  $row = [ordered]@{ kb=$kb; ok=$ok; state=$state; files=@($rows) }
+  # THE ROW NOW SAYS WHETHER IT WAS VERIFIED. ADR-updater 3 and 12.3 permit an exit-code success
+  # ONLY where no probe exists and the row ADMITS it (probe=none, "never implying verification").
+  # This route carried neither field, so the main install path - the cumulative and every other
+  # .msu - reported `installed` with nothing to distinguish a measured install from an assumed one,
+  # and the two consumers the sibling route feeds (the exclusion audit and the evidence builder,
+  # which read severity / verified_by_effect / probe) saw nothing for it at all. Same field names
+  # and types as Install-ViaAgentCache's row, so nothing is invented here.
+  # The cumulative's probe IS the registration check in Install-Msus; no other .msu has one.
+  $regRow = @($rows | Where-Object { Test-RowKey $_ 'registered' })
+  $probe = if($regRow.Count -gt 0){ 'rollup-registered' } else { $null }
+  $eff = ($regRow.Count -gt 0) -and ($regRow[0].registered -eq $true)
+  $row = [ordered]@{ kb=$kb; ok=$ok; state=$state; files=@($rows); verified_by_effect=[bool]$eff; probe=$probe }
   $unregistered = @($rows | Where-Object { (Test-RowKey $_ 'registered') -and ($_.registered -ne $true) })
   if ($unregistered.Count -gt 0) {   # GUARD:unregisteredfails
     $row.ok = $false; $row.state = 'failed'; $row.reason = [string]$unregistered[0].why
