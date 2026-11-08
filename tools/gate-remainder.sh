@@ -286,11 +286,18 @@ make_candidate() {    # make_candidate <vm> - rc 0 = the guest runs the candidat
   say "    $v carries the INJECTOR build this gate installed on its last run - that is ours to undo"
   REPAIRED="$REPAIRED $v"
   say "    $v does not run the candidate - upgrading it to the package under test (quick-upgrade over $OS11)"
-  if ! QU_OUT="$WORK/make-candidate-$v" bash mgmt/harness/quick-upgrade.sh "$SETUP" "$v" "$OS11" \
-         >>"$WORK/make-candidate-$v.out" 2>&1; then
-    say "    REFUSING: could not upgrade $v to the package under test - see $WORK/make-candidate-$v.out"
+  local qurc
+  QU_OUT="$WORK/make-candidate-$v" bash mgmt/harness/quick-upgrade.sh "$SETUP" "$v" "$OS11" \
+       >>"$WORK/make-candidate-$v.out" 2>&1; qurc=$?
+  # rc=4 IS AN INSTALLED PACKAGE, not a failed upgrade: quick-upgrade.sh's finish() exits 4 when
+  # every check passed and the error sweep then found something in THIS run's log. `if !` read that
+  # as "could not upgrade" and refused a subject already carrying the candidate - the same misread
+  # updater-component-test.sh:134 records, at a caller that fix did not name.
+  if [ "$qurc" != 0 ] && [ "$qurc" != 4 ]; then
+    say "    REFUSING: could not upgrade $v to the package under test (rc=$qurc) - see $WORK/make-candidate-$v.out"
     return 2
   fi
+  [ "$qurc" = 4 ] && say "    the upgrade passed every check and the error sweep was not clean (rc=4) - $v carries the candidate, so this gate continues; the findings are in $WORK/make-candidate-$v.out"
   say "    $v upgraded to the package under test"
   ready "$v" || return 2
   assert_candidate "$v"
@@ -532,15 +539,21 @@ FIMARK
       else
         settle "$VM11"
         say "--- installing the injector tree on $VM11 (its agent carries QGA-FAULT-INJECTION:on)"
-        if QU_OUT="$WORK/fi-install" bash mgmt/harness/quick-upgrade.sh "$FISETUP" "$VM11" "$OS11" \
-             >>"$WORK/fi-install.out" 2>&1; then
+        QU_OUT="$WORK/fi-install" bash mgmt/harness/quick-upgrade.sh "$FISETUP" "$VM11" "$OS11" \
+             >>"$WORK/fi-install.out" 2>&1; firc=$?
+        # rc=4 IS AN INSTALLED INJECTOR (see make_candidate above). Read as a failure it left
+        # fi_installed=0, and the two branches below then SKIPPED BOTH failproof suites over a guest
+        # that was carrying the injector build - which is how campaign 42400226595 produced no
+        # failproof-faultinject row at all, the only instrument for the agent fix under test.
+        if [ "$firc" = 0 ] || [ "$firc" = 4 ]; then
           say "    injector build installed"; fi_installed=1
+          [ "$firc" = 4 ] && say "    the install passed every check and the error sweep was not clean (rc=4) - the findings are in $WORK/fi-install.out"
           # SAID OUT LOUD because it is the state the next run inherits: from here on $VM11 is
           # NOT the release build, and make_candidate above is what puts it back.
           say "    NOTE: $VM11 now carries the INJECTOR build, not the release - the next run of"
           say "          this gate re-makes it (make_candidate), it is not a guest to grade a release on"
         else
-          say "    FAIL could not install the injector tree - see $WORK/fi-install.out"
+          say "    FAIL could not install the injector tree (rc=$firc) - see $WORK/fi-install.out"
         fi
       fi
     fi
