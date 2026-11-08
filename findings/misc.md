@@ -388,3 +388,21 @@ does not cover either name.
   FIX-LANDED: this bullet - the citation (updates.md:75 and :152) is now the standing source for this item's
   catalog fact, the instrument gap is named at tools/wu-exclusion-evidence.py, and the "closed" claim is
   withdrawn in the same file that carried it. Anyone judging this item cites those two lines; nobody re-measures.
+
+- [verified 2026-11-08] **CAPTUREHELPERDROPSUNNAMEDWINDOW [P2 instrument, tools/winshot.py + mgmt/harness/e2e-wait.sh
+  w_screen; OPEN]** `w_screen` reports NOWINDOW for a window it DID capture, whenever that window carries no
+  WM_NAME. Repro, kept: `scratchpad/wu-e2e-p1stim/shots/cadence-06-145527Z.tar` holds `./win-0.png` (3091 B);
+  `python3 tools/winshot.py <that tar> win11de-p1stim --classify` exits **3** printing nothing, while the same
+  call with `'?'` as the name exits **0**. `w_screen` matches `*VERDICT=*` on stdout, so an empty stdout becomes
+  NOWINDOW with no distinction between "no window" and "a window the filter dropped" - the exact conflation
+  .claude/skills/guest-capture/SKILL.md warns is cause 2 and not cause 3.
+  COST, 2026-11-08: 9 cadence captures over two wu-e2e runs produced **0 PNGs** (8 empty tars, 1 non-empty and
+  discarded), so BOTH runs have ZERO pixel evidence and the CLAUDE.md cadence rule was met in letter only - I
+  reported "cadence ran as required" and "NOWINDOW is correct for a pre-session guest" having excluded cause 1
+  (the tag is present) but never cause 2, which is the one that was true.
+  NOT FIXED HERE, deliberately: `winshot.py` is shared by every harness, so changing its filter semantics is a
+  behaviour change that goes through Jev review, not a mid-session patch.
+  FIX-LANDED: this entry - the repro tar is kept, the failing and passing invocations are recorded, and the
+  false "cadence ran as required" claim is withdrawn. NEXT: Jev on the filter semantics, then one fix in
+  winshot.py with w_screen made to distinguish exit 3 from an empty capture. findings/issues.md is at its byte
+  ceiling (102373/102395, shrink-only above 100K), so this P2 lives here until a P1 retires.
