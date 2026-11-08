@@ -696,11 +696,36 @@ fi
 (cd "$SWEEP" && timeout 1200 bash mgmt/harness/log-sweep.sh "$SUBJ" "$SINCE" "$OUT/sweep" ${BUILD:+--build "$BUILD"} "${DECL[@]}") > "$OUT/sweep.out" 2>&1
 sweepline=$(grep -a 'LOGSWEEP-RESULT' "$OUT/sweep.out" | tail -1)
 log "$sweepline"
-case "$sweepline" in
-  *status=CLEAN*) verdict SW PASS "the sweep finds nothing new or breached" "$sweepline" ;;
-  *status=*) verdict SW FAIL "the sweep finds nothing new or breached" "$sweepline" ;;
-  *) verdict SW INVALID "the sweep ran" "no LOGSWEEP-RESULT line" ;;
-esac
+# THE SWEEP'S rc IS THE CONTRACT; `status=` IS PROSE - AND AN INSTRUMENT THAT COULD NOT MEASURE IS NOT
+# A PRODUCT REGRESSION. This read `*status=CLEAN*) PASS ;; *status=*) FAIL`, so EVERY non-clean status
+# was graded as a defect of the product, DATA among them - and DATA means the sweep could not get the
+# data it needs. MEASURED on run 20261108T030912Z-2345074: `rc=3 status=DATA` with BREACHES 0, P1 0,
+# and one single complaint, `events-required Application=norecords` (a required event channel the
+# collector could not read). That is the apparatus, and it was reported as the one FAIL of the whole
+# suite - exactly the inversion CLAUDE.md forbids: a suite that could not measure is INSTRUMENT,
+# uncovered, reported on its own channel, never a product regression.
+# The arms below are the CAMPAIGN HARNESS'S OWN (its `case "$rc"`: 0 clean, 1 breach-or-defect, 3
+# DATA, 4 the judge never ran, anything else undocumented), inherited rather than re-invented, on the
+# rule this file already states for the --tolerate-error declarations above - TWO INSTRUMENTS GRADING
+# ONE PRODUCT MUST CARRY THE SAME DISPOSITIONS.
+# INVALID IS NOT THE SOFTER ANSWER. The tally at the end exits non-zero on $ni as well as $nf, so this
+# moves the failure into the column that says "re-run me, I measured nothing" and clears none of it.
+# The rc is read from the line the sweep PRINTS, not from $?, which the subshell above discards.
+if [ -z "$sweepline" ]; then
+  verdict SW INVALID "the sweep ran" "no LOGSWEEP-RESULT line"
+else
+  _swrc=$(printf '%s' "$sweepline" | sed -n 's/.*[[:space:]]rc=\([0-9]\{1,\}\).*/\1/p')
+  case "${_swrc:-unreadable}" in
+    0) verdict SW PASS "the sweep finds nothing new or breached" "$sweepline" ;;
+    1) verdict SW FAIL "the sweep finds nothing new or breached" "$sweepline" ;;
+    3) verdict SW INVALID "the sweep could MEASURE this run's logs" \
+               "INVALID-SWEEP-DATA the sweep is missing data it requires, or could not parse it, so it graded nothing: $sweepline" ;;
+    4) verdict SW INVALID "the sweep could MEASURE this run's logs" \
+               "INVALID-SWEEP-UNJUDGED the logs were collected but the judge never ran, so this run has no sweep verdict: $sweepline" ;;
+    *) verdict SW INVALID "the sweep could MEASURE this run's logs" \
+               "INVALID-SWEEP-RC the sweep exited rc=${_swrc:-unreadable}, which it does not document; that says nothing about what reached the disk: $sweepline" ;;
+  esac
+fi
 
 # ---- L8 a death DURING a shutdown reaches dom0 at the NEXT boot, exactly once -----------------------------------------
 # The measurement L5 does not make. The death reporter is a scheduled task, and Task Scheduler REFUSES to start
