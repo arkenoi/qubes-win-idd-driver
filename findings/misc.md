@@ -406,3 +406,26 @@ does not cover either name.
   false "cadence ran as required" claim is withdrawn. NEXT: Jev on the filter semantics, then one fix in
   winshot.py with w_screen made to distinguish exit 3 from an empty capture. findings/issues.md is at its byte
   ceiling (102373/102395, shrink-only above 100K), so this P2 lives here until a P1 retires.
+
+- [verified 2026-11-08] **WUSCANTASKFAILSANDLOGSNOTHING: the stderr theory is REFUTED by the reporter it asked for.**
+  The entry's NEXT was "that action by hand, elevated, stderr to a file", resting on the conclusion that an
+  unhandled terminating error in the window between the loaded sink and the first recorded line goes to stderr,
+  which Task Scheduler discards. Ran on win11de-p1stim (package qwt-pkg-42277450697, sha a8bfd883, Halted-then-up
+  from the 14:16Z wu-e2e run), as `nt-autorität\system` = the task's own S-1-5-18 principal, with the argument
+  string taken PROGRAMMATICALLY from the installed task XML (`$x.Task.Actions.Exec.Arguments`) so no transcription
+  of mine is in the loop: **REPORTER_RC=0, STDERR_BYTES=0**. The action succeeds and writes nothing to stderr, so
+  there is no discarded stderr to be the cause. The script is exonerated ON THIS SUBJECT AND BUILD; that is a
+  NEGATIVE CONTROL, not a diagnosis, and the field symptom (0x80070001 in event 201, 6 boots, reporter .37/.38)
+  is unexplained. Remaining suspects, now only two: the task INVOCATION layer (I ran the action, not the task),
+  and the BOOT context - the trigger is `BootTrigger` with `Delay PT2M`, and the on-demand run had none of boot's
+  timing, nor contention with the boot scan's own `Global\QubesWindowsUpdate` mutex.
+  MY OWN TRAP, TWICE, and it nearly became the finding: the FIRST reporter attempt passed the action as a
+  `Start-Process -ArgumentList` ARRAY. `Start-Process` does not quote array elements containing spaces, so
+  `C:\Program Files\...\qubes-windows-update.ps1` split at the space and PowerShell refused `-File "C:\Program"`.
+  That produced REPORTER_RC=-196608 and 203 bytes of plausible German error text on stderr - on a task whose
+  documented symptom is "fails and logs nothing", one step from being recorded as the product's cause. The
+  guard that caught it was reading the stderr instead of the exit code.
+  FIX-LANDED: findings/issues.md:22 - "NEXT needs the reporter" is replaced by "REPORTER RAN: rc=0, stderr EMPTY -
+  theory REFUTED. NEXT: the BOOT context.", so the next reader does not redo the step that is done nor pursue
+  the theory that is dead. Also landed: memory start-process-argumentlist-does-not-quote, so the array trap is in
+  `recall` rather than rediscovered. Nothing in the product was changed; the tree was and is clean.
