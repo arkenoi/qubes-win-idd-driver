@@ -2334,7 +2334,17 @@ def load_logs(logsdir, paths=None):
                                  (" (dropped: %s)" % shown if shown else "")))
         ev = meta.get("events") or {}
         if ev.get("required_missing") and ev.get("required_missing") != "-":
-            problems.append(("events-required", ev["required_missing"], "a required event channel could not be read"))
+            # THE WHY-TEXT NAMED THE WRONG FAILURE. The collector reports three distinct reasons
+            # (log-sweep-collect.ps1: =norecords, =unreadable, =undecodable) and this printed "could
+            # not be read" for every one. On qwt-sup/20261108T021337Z-2316993 it printed "a required
+            # event channel could not be read" over a channel the SAME capture recorded as
+            # anyid=116 enabled=True records=310 - a sentence contradicted by the evidence beside it.
+            reasons = sorted({p.split("=", 1)[1] for p in ev["required_missing"].split(",") if "=" in p})
+            why = ", ".join({"norecords": "was read and returned none of the ids the sweep queries",
+                             "unreadable": "could not be read",
+                             "undecodable": "returned records that would not decode"}.get(r, "reported " + r)
+                            for r in reasons) or "could not be read"
+            problems.append(("events-required", ev["required_missing"], "a required event channel " + why))
         evp = os.path.join(logsdir, "events.txt")
         if os.path.exists(evp):
             lf = LogFile(evp, "events.txt", "events")

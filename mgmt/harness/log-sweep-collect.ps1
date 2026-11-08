@@ -599,7 +599,7 @@ if (-not $NoEvents) {
     # channel -> ids queried; the message filters below narrow 1000/1001/1026 and the 7xxx records to ours
     $channels = @(
         @{ Log = 'System'; Ids = @(12, 13, 41, 1001, 1074, 1076, 6005, 6006, 6008, 6009, 6013, 109, 7000, 7009, 7011, 7023, 7024, 7031, 7034, 7036, 7040, 7043, 7045); Required = $true },
-        @{ Log = 'Application'; Ids = @(1000, 1001, 1026, 4001, 4002, 4003, 4004); Required = $true },
+        @{ Log = 'Application'; Ids = @(1000, 1001, 1026, 4001, 4002, 4003, 4004); Required = $true; MustOccur = $false },
         @{ Log = 'Microsoft-Windows-TerminalServices-LocalSessionManager/Operational'; Ids = @(21, 22, 23, 24, 25, 54); Required = $false },
         @{ Log = 'Microsoft-Windows-TaskScheduler/Operational'; Ids = @(201, 203, 329); Required = $false }
     )
@@ -691,7 +691,22 @@ if (-not $NoEvents) {
             catch { if ($_.Exception.Message -match 'No events were found') { $anyid = 0 } }
             try { $l0 = Get-WinEvent -ListLog $log -ErrorAction Stop; $lgEn = [string]$l0.IsEnabled; $lgRec = [long]$l0.RecordCount } catch { }
             $ev.Add("EV NONE [$log] raw=$raw kept=0 chunks=$nchunks anyid=$anyid enabled=$lgEn records=$lgRec")
-            if ($raw -eq 0 -and $ch.Required) { $requiredMissing.Add("${log}=norecords") }
+            # MUSTOCCUR, NOT Required. `Required` says three different things in this one file:
+            # "must be readable" (=unreadable, above), "must be decodable" (=undecodable, above),
+            # and "these ids must occur" - here. Only the third is false for Application. Its ids
+            # are crash and hang records, and Jev application_ids_must_occur =
+            # must_not_occur_on_a_healthy_guest 0.98: a guest that crashed nothing legitimately has
+            # none, so their absence cannot be missing data. The predicate is UNCHANGED and still
+            # strict for System, whose ids include the boot and shutdown markers that must occur in
+            # any window a release sweep covers. `-ne $false`, not a plain truth test, so a channel
+            # marked Required with no MustOccur key stays STRICT and adding one cannot silently
+            # switch this guard off.
+            # RESIDUAL, deliberately not closed here: a CLEARED or zeroed Application log now looks
+            # healthy to this predicate. The discriminator is already on the EV NONE line above
+            # (anyid/enabled/records) and is still not acted on, because whether a readable-but-empty
+            # required channel may pass came back 0.64 and then 0.44 on the byte-identical question
+            # - an oscillation, so there is no verdict and nothing here is built on one.
+            if ($raw -eq 0 -and $ch.Required -and $ch.MustOccur -ne $false) { $requiredMissing.Add("${log}=norecords") }
         }
     }
     $rm = if ($requiredMissing.Count -gt 0) { [string]::Join(',', $requiredMissing.ToArray()) } else { '-' }
