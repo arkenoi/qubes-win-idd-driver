@@ -126,6 +126,26 @@ REQUESTED, never taken". It was taken.
   already write in install-updater-agent.ps1 step 9. NOT measured, and not to be written up as a
   fix until a routed pass shows TrustedInstaller reporting the pending restart instead of taking
   one. A qube that is `on_reboot=destroy` cannot distinguish the two from outside.
+- [verified 2026-11-08] THAT CANDIDATE IS RULED OUT, on Microsoft's own documentation, BEFORE it
+  cost a rig cycle. learn.microsoft.com/windows/deployment/update/waas-restart: "No auto-restart
+  with logged on users for scheduled automatic updates installations ... This policy ONLY APPLIES
+  when Configure Automatic Updates is set to option 4 - Auto download and schedule the install",
+  and its registry recipe is explicit that `AUOptions` must be `4` AND
+  `NoAutoRebootWithLoggedOnUsers` `1`. We set NoAutoUpdate=1, which disables Automatic Updates
+  outright, so AUOptions=4 is not in play and that value would have been INERT - an arm B built on
+  it would have measured nothing while looking like a fix. The same page adds that the policy "was
+  never created as a CSP", that "in Group Policy this policy doesn't work exactly as per
+  description", and that it can suppress quality-update reboots entirely.
+- [verified 2026-11-08] It is also aimed at the wrong actor: these AU keys govern the Windows Update
+  AU client's restart, and the restart measured here was initiated by TrustedInstaller (the
+  servicing stack) with reason code 0x80020003. Nothing on that page establishes that an AU policy
+  reaches a servicing-completion restart at all.
+- UNVERIFIED - the remaining shape that does NOT depend on a vendor knob, and is the one ADR s10
+  actually points at: OUR pass commits every reboot the work needs, so Windows never has a reason
+  to take one. That means treating `reboot_pending_confirmed` still true AFTER our committed reboot
+  as the pass's own unfinished business rather than leaving the guest running for TrustedInstaller
+  to act on. Not designed, not measured, and a behaviour change - it needs the owner and a Jev call
+  before any code moves.
 
 **THE NO-KB AUDIOPROCESSINGOBJECT EXCLUSION IS HONEST, measured from OUTSIDE the updater.**
 - [verified 2026-11-08] tools/wu-driver-resolve.py --arch amd64 on "Microsoft Corporation
@@ -149,3 +169,31 @@ REQUESTED, never taken". It was taken.
   "the AU policy key does not exist", which is the opposite of the truth. Query the guest's
   registry with NO redirect, and treat a path-not-found from cmd as a statement about the REDIRECT
   TARGET until proven otherwise.
+- [verified 2026-11-08] THE ITEM IS NOT PERMANENTLY STUCK, measured on a clone of that exact disk
+  state. win11de-nokb-ctl was cloned from the parent's halted state and started once: it completed
+  the staged servicing on that boot with NO restart of its own (its System log's newest 1074 is
+  still the parent's 13:56:25 TrustedInstaller entry, inherited on disk - no new one), and it ended
+  reboot_needed=false with dom0's updates-available empty. So the parent's halt WAS the boot the
+  servicing needed, and the earlier reading "the servicing never completed" holds only for the
+  parent's two rounds, where each pass staged further work.
+- [verified 2026-11-08] That sharpens the defect rather than dissolving it: a pass that stages a
+  CUMULATIVE needs TWO boots, our pass commits ONE, and Windows takes the second - which on an
+  on_reboot=destroy qube is a halt. The user-visible cost is a VM that powers off mid-update and
+  must be started again by hand, not a lost update. "Pending reboot: once is OK" makes two the
+  thing that is out of policy, so the remaining shape above (our pass commits every reboot the work
+  needs) is the one the measurement now supports.
+- [verified 2026-11-08] Also on that clone's log, for the record: the two 1074s at 13:05:13 and
+  13:04:20 are `xenagent_9_1_0_0.exe` initiating a SHUTDOWN on behalf of SYSTEM - the normal Qubes
+  path - so the event id alone does not identify an unwanted restart. The PROCESS and the shutdown
+  TYPE are what separate ours, Xen's and Windows' own.
+- [verified 2026-11-08] The offers() fix is PROVEN on real data, not on a fixture: this run printed
+  `OSC-VERDICT STABLE before=2 after=1` with the info-severity no-KB offer present - the exact
+  condition that raised AttributeError and voided the verdict before the guard. The carried
+  exclusion answers also replayed, `unjudged_exclusions=0`.
+- [verified 2026-11-08] THAT RUN IS NOT A CONTROL ARM and must not be read as one. It exited 3 with
+  `JUDGE FAIL / INSTRUMENT: no passes found ... (no 'VM class (live from qubesdb)' line)`:
+  agent.log grew 0 lines, relay/handler/shim logs 0 lines, and dom0's updates-available was empty
+  BEFORE and after, so there was nothing for a dom0-driven pass to drive and the updater never ran.
+  The restart precondition had already been spent by the clone's own first boot. Both clones are
+  therefore spent for this experiment, and reproducing it needs a subject that still holds a staged
+  cumulative at the moment the pass starts.
