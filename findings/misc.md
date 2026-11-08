@@ -485,3 +485,34 @@ failed prestop (2026-11-08)
   VALUE SET. Nothing guards that, and per the owner's standing rule no suite is being added for it;
   the enforcement is that the value list now lives in the predicate, the comment and the message
   string together, so a reader of any one of them sees all five.
+
+## SCANTIMELIMITBASISUNRECORDED - the arithmetic was already landed; the DATA has never been read
+(2026-11-08)
+
+- [verified 2026-11-08] THE REGISTER LINE WAS STALE, the third one today. It said the '>25 and >66
+  min' basis has no primary record outside a comment and that '>66 min ... may be a DST artifact'.
+  The product had already said both, more precisely, at guest/qubes-windows-update.ps1:210-214:
+  '>66 min is, to the minute, a ~6 min scan plus one of these corrections. It is not refuted, and
+  it is not evidence either until something times a pass with a clock that cannot jump.'
+- [verified 2026-11-08] THE TWO FIGURES ARE SEPARABLE BY ARITHMETIC, no run needed. ETWCLOCKDST is
+  a constant one-hour OFFSET, not dilation (findings/issues.md: a guest whose stored bias is the
+  summer one boots exactly one hour behind and stays behind), so it cannot inflate a duration taken
+  from one clock unless a forward correction lands DURING the pass - and then by exactly 3600 s.
+  An apparent 25 min therefore CANNOT contain one and >25 min stands as a primary observation; it
+  alone refutes PT20M. An apparent 66 min CAN, and 66 - 60 = 6, so >66 min is withdrawn as
+  evidence. On a real guest the correction is available hourly (dom0's qvm-sync-clock push), which
+  is what makes the contamination reachable there and not on the rig.
+- [verified 2026-11-08] THE INSTRUMENT IS LANDED AND HAS NEVER BEEN READ. 6d8da2c2 added elapsed_s
+  from a monotonic Stopwatch (QueryPerformanceCounter, unaffected by any clock change) plus
+  clock_jump_s and the QWTUPDCLOCKJUMP warning that names the artefact instead of letting it
+  inflate the number. HARVESTED all 241 update-status*.json captures under qwt-accept/ and
+  scratchpad/: elapsed_s appears in ZERO of them, clock_jump_s in zero, and the keys those files DO
+  carry are the pre-6d8da2c2 set (action, phase, ts, owner_pid, count, available, result,
+  satisfied, not_actionable, reboot_needed, recovered, error). So no pass has yet been timed with a
+  clock that cannot jump, and that is the whole of what this entry still owes.
+- [verified 2026-11-08] PT2H STANDS MEANWHILE, and its cost is named rather than hidden: a hung
+  scan stays silent for the limit plus ~16 s of Task Scheduler slack. That silence is no longer a
+  false 'scan failed' - the 329 subscription reports a time-limit kill as itself and deduplicates
+  the paired 201 (bbb006e2) - so the only remaining cost of the long limit is the delay. The limit
+  is NOT being changed on this reasoning: nobody asked for a behaviour change, and the datum that
+  would justify one is one field on the next pass, which any run we take delivers for free.

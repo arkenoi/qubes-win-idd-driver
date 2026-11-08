@@ -134,6 +134,12 @@ Log "relay source vouched at $src (parses --parent-pid, refuses unknown flags, d
 # Scheduler then ends the instance at the limit (event 111), the 201 records a non-zero result, the
 # death reporter correctly turns that into a dom0 notification, and the user is told "The Windows
 # Update scan task failed" about a scan that was working and simply had not finished. Killing it
+# sooner is not a fix and neither is hiding the report. BUT >66 MIN IS NOT EVIDENCE: it is, to the
+# minute, a ~6 min scan plus one hourly clock correction on a guest running an hour behind - the
+# arithmetic and the reason are at qubes-windows-update.ps1 WU-PASS-CLOCK. >25 min stands (a
+# correction adds exactly 3600 s, so an apparent 25 min cannot contain one) and it alone refutes
+# PT20M. The pass now publishes elapsed_s from a monotonic Stopwatch; that field, not `ts`, is
+# what sets this limit from data, and it has not been read off a serviced guest yet.
 # sooner is not a fix and neither is hiding the report: the scan gets the time it actually needs,
 # which is the same budget the install and download passes already have.
 $ScanTaskLimit = 'PT2H'
