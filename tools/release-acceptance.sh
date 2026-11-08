@@ -568,6 +568,21 @@ if [ "$SKIP_FEATURES" -eq 0 ]; then
     # Each feature test's exit travels into the coverage receipt (step 7), where 2 is INSTRUMENT (uncovered)
     # and any other non-zero is a product failure (covered, result fail) - tools/coverage-receipt.py.
     FEATRCS="${FEATRCS:-} --feature $t=$rc"
+    # AND THE DECLARED CLASS TRAVELS WITH IT, or the receipt infers class from the exit code alone.
+    # Measured in campaign 42400226595: supervision-gate had BREACHES 0 and 5 of 6 cells PASS, and its
+    # one failing row was `SW FAIL ... status=DATA` - missing data, which verdict-lib.sh:11 calls
+    # INVALID-INSTRUMENT, never FAIL. The receipt saw a non-zero exit and recorded a PRODUCT regression.
+    # A suite that writes verdicts.tsv declares its own class there; coverage-receipt.py reads it and may
+    # never turn a non-zero exit into a pass. Two anchors, because the arms differ and neither is a path
+    # this script invents: the arms that pass OUT="$WORK/$t.d" have the ledger right there, and a suite
+    # that picks its own evidence dir PRINTS it. No ledger -> no flag -> unchanged behaviour.
+    tled=""
+    [ -s "$WORK/$t.d/verdicts.tsv" ] && tled="$WORK/$t.d/verdicts.tsv"
+    if [ -z "$tled" ]; then
+      tdir=$(grep -aoE 'evidence in [^ ]+' "$WORK/$t.out" 2>/dev/null | tail -1 | sed 's/^evidence in //')
+      [ -n "$tdir" ] && [ -s "$tdir/verdicts.tsv" ] && tled="$tdir/verdicts.tsv"
+    fi
+    [ -n "$tled" ] && FEATLEDGERS="${FEATLEDGERS:-} --feature-ledger $t=$tled"
     # THE POINTER MUST NAME A FILE THAT EXISTS. Both lines below said "see $WORK/$t.log", but only the
     # arms that pass LOG= write one (notify, crop-before-map, updater-component, template-update);
     # EVERY arm redirects into "$WORK/$t.out", and supervision-gate - the arm whose failures are the
@@ -619,8 +634,8 @@ if [ -n "$COVHEAD" ]; then
   mkdir -p scratchpad
   GSBASE=$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD^ 2>/dev/null || git rev-list --max-parents=0 HEAD 2>/dev/null)
   # package-verify is rc 0 here by construction: step 3 dies on any other outcome before a guest is touched.
-  # shellcheck disable=SC2086  # FEATRCS is a list of --feature name=rc words
-  if python3 tools/coverage-receipt.py --out "$COVFILE" --campaign "$CAMP" --cells "$CELLS" ${FEATRCS:-} \
+  # shellcheck disable=SC2086  # FEATRCS and FEATLEDGERS are lists of --feature/--feature-ledger words
+  if python3 tools/coverage-receipt.py --out "$COVFILE" --campaign "$CAMP" --cells "$CELLS" ${FEATRCS:-} ${FEATLEDGERS:-} \
        --package-verify-rc 0 --package-run "$RUN" --built-from "$HEAD" --range "${GSBASE:-?}..$(git rev-parse HEAD)" >>"$LOG" 2>&1; then
     say "coverage receipt: $COVFILE - $(python3 -c "import json,sys;r=json.load(open(sys.argv[1]));print('covered %d, product_fail %s, instrument_fail %s, not_run %s' % (len(r['suites']), r['product_fail'] or '-', r['instrument_fail'] or '-', r['not_run'] or '-'))" "$COVFILE")"
   else

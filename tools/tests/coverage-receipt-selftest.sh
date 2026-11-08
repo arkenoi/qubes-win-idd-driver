@@ -90,7 +90,8 @@ GATE_SCOPE_ROOT="$FX" python3 "$ROOT/tools/gate-scope.py" check "$T/k.json" "$B.
 # the driver is WIRED to this tool: step 7 calls it with the campaign dir and every feature test's exit
 grep -q 'tools/coverage-receipt.py --out "$COVFILE" --campaign "$CAMP" --cells "$CELLS" ${FEATRCS:-}' "$ROOT/tools/release-acceptance.sh" \
   && grep -q 'FEATRCS="${FEATRCS:-} --feature $t=$rc"' "$ROOT/tools/release-acceptance.sh" \
-  && ok "wiring: tools/release-acceptance.sh step 7 derives the receipt through this tool, with each feature test's rc" || bad "wiring: release-acceptance.sh does not call coverage-receipt.py as expected"
+  && grep -q 'coverage-receipt.py .*${FEATLEDGERS:-}' "$ROOT/tools/release-acceptance.sh" \
+  && ok "wiring: tools/release-acceptance.sh step 7 derives the receipt through this tool, with each feature test's rc and declared class" || bad "wiring: release-acceptance.sh does not call coverage-receipt.py as expected"
 
 # refusals
 python3 "$SRC" --out "$T/n.json" --campaign "$T/nope" --cells "x" > "$T/n.out" 2>&1; rc=$?
