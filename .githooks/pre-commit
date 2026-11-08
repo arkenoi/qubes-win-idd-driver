@@ -192,6 +192,31 @@ if git diff --cached --name-only --diff-filter=ACM | grep -qE '\.(ps1|sh)$'; the
       echo "      pwsh 7 accepts syntax 5.1 rejects, so the parse check above does NOT cover it:"
       echo "        TMPDIR=/home/user/tmp $PWSH -NoProfile -Command \"Install-Module PSScriptAnalyzer -Scope CurrentUser -Force -AcceptLicense\""
     fi
+    # ---- THE TWO AST CHECKS THAT LIVED ONLY IN AN UNCALLED TOOL. Neither is a syntax error, so
+    # ps-parse-check.ps1 above cannot see either one: (1) an `-f` format index with no argument
+    # behind it, which threw on every run AND silenced the one diagnostic that tells a wrong crop
+    # from missing pixels, from the day valid= was added; (2) a bare type literal as a command
+    # argument, where the cast is passed as the argument and the value is simply gone. Both were
+    # found BY HAND on 2026-10-24 and tools/ps-parse-gate.sh was written to catch them - then
+    # nothing ever called it. Measured 2026-11-08: every other gate-shaped tool in this repo has
+    # 1-8 callers; that one had 0, so the class it exists for had nothing in its way.
+    #
+    # CALLED HERE, inside the existing gate, NOT as a second gate: a syntax error has already
+    # exited above, so this cannot double-report, and the repo keeps ONE PowerShell gate. Its own
+    # legs are proved by tools/tests/ps-runtime-shapes-selftest.sh, which sees both shapes REFUSED.
+    # rc=3 is its "no pwsh, DID NOT CHECK" exit - unreachable here, since PWSH is non-empty in this
+    # branch - but handled, because a check that did not run must never read as a pass.
+    gout=$(bash tools/ps-parse-gate.sh 2>&1)
+    grc=$?
+    if [ $grc -eq 1 ]; then
+      echo "$gout"
+      echo
+      echo "pre-commit REFUSED: tools/ps-parse-gate.sh found a structural defect that parses"
+      echo "cleanly and throws at runtime (an -f index with no argument, or an eaten type literal)."
+      exit 1
+    elif [ $grc -ne 0 ]; then
+      echo "NOTE: tools/ps-parse-gate.sh DID NOT RUN (rc=$grc) - that is not a pass."
+    fi
   fi
 fi
 exit 0
