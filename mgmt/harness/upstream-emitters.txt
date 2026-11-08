@@ -2,7 +2,7 @@
 # Functions that emit a declared ERROR/WARNING in code we vendor READ-ONLY and that emit
 # nowhere in agent/ core-agent/ winutils/ guest/ mgmt/ tools/ packaging/. tools/sweep-gate.sh prints
 # their lines for diagnosis and does not count them toward acceptance (owner 2026-10-18).
-# 6 of 34 vendored emitters; the other 28 also emit in our own tree and stay GRADED.
+# 6 of 6 vendored emitters; the other 0 also emit in our own tree and stay GRADED.
 client_connected_callback	upstream/ro/qubes-core-qubesdb/daemon/db-daemon.c
 connect_to_daemon	upstream/ro/qubes-core-qubesdb/client/qdb-client.c
 init_server_socket	upstream/ro/qubes-core-qubesdb/daemon/db-daemon.c

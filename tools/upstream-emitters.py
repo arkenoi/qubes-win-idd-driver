@@ -18,6 +18,9 @@ emit in BOTH trees, so a naive "is it under upstream/ro" test would silence our 
 the concealment the gate exists to prevent. The answer is a SET DIFFERENCE: a function is upstream
 only when it emits a declared level in vendored code and emits NOWHERE in our own tree.
 
+OPERATOR TOOL, NEVER CI: its one input is the gitignored in-tree corpus `upstream/ro`, its output is
+tracked, and CI reads only that output. Why that is permitted and must stay so: ADR-upstream 3.
+
 Output: one line per function, `<function>\t<vendored file that emits it>`, so every exclusion
 carries the path it came from. Regenerate with:  tools/upstream-emitters.py --write
 """

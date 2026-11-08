@@ -69,11 +69,34 @@ act rather than something the build does.
 | `qubes-gui-common` | `v4.3.1` | none |
 | `qubes-core-vchan-xen` | `v4.2.7` | none |
 | `qubes-core-qubesdb` | `v4.3.1` | none |
-| `qubes-vmm-xen-windows-pvdrivers` | `v4.2.0-1` | none |
+| `qubes-vmm-xen-windows-pvdrivers` | `v4.2.0-1` | 1, as a build-time edit script |
 | `xeniface` | commit `9cd9a604` | none |
+| `qubes-installer-qubes-os-windows-tools` | commit `14c189e4` | 2, as build-time edit scripts |
 
 A ref is pinned, never a branch: a moving upstream would change what we build and what our suites
 measure with no commit here saying so.
+
+**THE TABLE READ "none" FOR TWO SOURCES WE DO MODIFY. Corrected 2026-11-08** from `qwt-full.yml`
+rather than from the table: three of our changes to cloned upstream sources are PowerShell edit
+scripts under `packaging/`, not `.patch` files under `patches/`, which is why a census of `patches/`
+counted two and missed three.
+
+| script | target | applied at |
+|---|---|---|
+| `patch-installer-drop-prepareprivateimg.ps1` | `installer-src/vs2022/installer/Package.wxs` | `qwt-full.yml:208` |
+| `patch-installer-serialize-services.ps1` | the same `Package.wxs` | `qwt-full.yml:228` |
+| `patch-xenbus-inf.ps1` | pvdrivers' `xenbus.inf`, then catalog regenerate + re-sign | `qwt-full.yml:792` |
+
+All three FAIL THE BUILD if the edit does not apply (7, 12 and 14 `throw`s), the two installer ones
+are re-counted in the patched source afterwards (`:211`, `:231`), and the serialized start is
+verified in the BUILT MSI database (`:894`) - so the form is a script, but the proof is not weaker.
+Cost 3 reaches all three: the shipped installer and INF exist in no checkout on disk. What keeps
+them clear of §4's windows-utils failure is that nothing in the tree ASSERTS anything about them -
+no suite reads a mirrored copy - so there is no instrument to mislead.
+
+**Open (2026-11-08).** `qubes-installer-qubes-os-windows-tools` has no consumer outside QWT, which
+is the measurement §4 assimilated windows-utils on. Two build-time edits are not thirteen patches,
+so the cost side differs; nothing is decided here and no fork is proposed.
 
 **THE TWO XENVIF PATCHES ARE THE ONLY ONES AIMED AT A REAL UPSTREAM.** `xenvif/frontend.c` belongs
 to the Xen Project, outside Qubes altogether (maintainer 2026-10-21: "xenvif is xen, it is even
@@ -109,11 +132,34 @@ listed in the CI estate. A clean checkout has no `upstream/ro`, so both reported
 the offline runner counts red — so the estate was green on the dev qube and red in CI on every run,
 and `campaign-preflight` refuses a release campaign on "CI is not green". A third suite read `log.h`
 and reported "LOG_DEFAULT_DIR changed" from the file's absence, which is a claim about upstream made
-from a missing file. `test.yml` now materialises the mirror pinned to the same commit the dev qube
-holds, so the reads happen for real in CI; the third suite now reports INCONCLUSIVE and exits 2.
+from a missing file. `test.yml` then materialised the mirror at the dev qube's commit, so the
+reads happened for real in CI.
 
-**Open.** The CI mirror's pin and the dev qube's checkout are the same commit today by hand. Nothing
-asserts they agree.
+**RETIRED as an input, measured 2026-11-08.** Five counts, each read rather than argued:
+
+1. **CI: zero.** No workflow names `upstream/ro`. `test.yml` fetches the `winutils` submodule and
+   "nothing else is fetched for them" (`:204`, `:251`); the three suites of the Cost above read
+   `winutils/` now, and nothing in the tree reads a mirrored `log.c`/`log.h`. The old Open - whether
+   the CI mirror's pin and the dev qube's checkout agree - is MOOT: there is no CI pin any more.
+2. **The forks are out of the mirror.** It holds twelve checkouts and not one of them is
+   `qubes-gui-agent-windows`, `qubes-core-agent-windows` or `qubes-windows-utils`, so the set
+   difference in `tools/upstream-emitters.py` now reports 6 of 6 vendored emitters with 0 also
+   emitting in our tree, against the "6 of 34, the other 28" its committed output still recorded.
+3. **One tracked consumer is left:** `tools/upstream-emitters.py` (`VENDORED` at `:28`, scanned at
+   `:67`), an operator tool run by hand with `--write`. Its OUTPUT is tracked, CI reads only that,
+   and `tools/sweep-gate.sh` takes the path field as a label it never opens (`up[fn] = src`,
+   `:412`). The harm this section records - a fresh clone getting suites whose input lives on one
+   qube - does not reach it.
+4. **The other 17 mentions are citations, not inputs:** 13 `.md`, two `.txt` ledgers, one comment in
+   `tools/log-sweep.py:266` and one in `packaging/patch-installer-drop-prepareprivateimg.ps1:23`.
+   `.gitignore:27` stays - it is what keeps the corpus out of the public repo.
+5. **Moving the corpus out of the repo tree is BLOCKED, not declined.** It is the one step that
+   would retire the path NAME rather than the dependency, and it would stale the off-repo search
+   index rooted at `upstream/ro` (30705 records), whose reindex waits on the owner's judgment on
+   the 20 files its secret scan refuses.
+
+So the search-corpus role this section ACCEPTED stands, and what the owner named is gone: no build,
+no CI job and no suite reads the mirror.
 
 ## 4. windows-utils is to be ASSIMILATED - it has no consumer outside QWT
 
