@@ -124,10 +124,19 @@ ERROR_FLAGS = [
     # disabled (the /end failed, so an instance ALREADY RUNNING survives into msiexec and the
     # Restart Manager reaps it - which is the P1 this block exists to prevent: the user was told
     # "The Windows Update scan task failed" about a scan our own install stopped).
-    # So a bare `ended` or `disabled` is error-class and the other two are not. The regex anchors on
-    # `=` so that `ended+disabled` does not match either half of itself.
-    ('upd_task_prestop',        lambda v: bool(re.search(r'=(?:ended|disabled)(?:\s|$)', _s(v))),
-                                                                          'pre-msiexec narrative <task>=ended+disabled|absent|ended|disabled; a bare ended or disabled = that task was only half handled and the MSI can still reap a running instance'),
+    # present-but-unstopped (the task IS there and /end and /disable BOTH failed) is the WORST of
+    # them and was added to the installer on 2026-11-08; this table knew four values and graded it
+    # exactly like a clean install, so an install that reaped a running scan - the P1 above, told to
+    # the user as "The Windows Update scan task failed" - came out GREEN here. Measured against all
+    # five values: ended+disabled and absent do not match, ended and disabled do, and
+    # present-but-unstopped did not until it was named below.
+    # The KEY-drift selftest could not have caught this: it fails when the installer grows a key
+    # this file does not classify, and upd_task_prestop was already classified - what drifted was
+    # the key's VALUE SET, which nothing guards.
+    # So a bare `ended` or `disabled` or present-but-unstopped is error-class and the other two are
+    # not. The regex anchors on `=` so that `ended+disabled` does not match either half of itself.
+    ('upd_task_prestop',        lambda v: bool(re.search(r'=(?:ended|disabled|present-but-unstopped)(?:\s|$)', _s(v))),
+                                                                          'pre-msiexec narrative <task>=ended+disabled|absent|ended|disabled|present-but-unstopped; a bare ended or disabled = that task was only half handled, and present-but-unstopped = it exists and we stopped nothing of it, so the MSI can still reap a running instance'),
     ('clock_skew_refusal',      is_true,                                  'clock sanity ERROR: a payload certificate is not yet valid by the guest clock - the install refused before touching a driver'),
     ('timezone_overridden',     nonempty,                                 'Set-GuestTimeZoneFromHost ERROR: this guest held a time zone that was neither our shipped default nor dom0s, and it was REPLACED - "<old> -> <new> (dom0 <iana>)". A timezone=localtime qube presents dom0 LOCAL time in its hardware clock, and that clock carries no zone of its own, so a guest keeping a different one computes a UTC wrong by the difference on EVERY boot and no RealTimeIsUniversal value corrects it. Reaching this means someone set a zone on this qube - an unsupported configuration for this release, since a guest zone of its own requires a UTC hardware clock (docs/ADR-clock.md). The user is told at ACTION severity too; this is the dom0-readable record. Never set when the guest already matches dom0 (that path returns early), so a reinstall does not trip it.'),
     ('gui_runtime_survivors',   nonempty,                                 'Stop-QwtRuntime WARN: gui-agent/gui-watchdog still running after the service stop and the exit request (name/pid; reported, never killed)'),

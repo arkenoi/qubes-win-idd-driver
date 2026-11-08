@@ -450,3 +450,38 @@ does not cover either name.
   empty). Both are NEGATIVE CONTROLS on this subject and build, not a diagnosis. The 0x80070001
   seen 6x was on EVERY BOOT, and the boot context is now the only suspect left: a BootTrigger
   with Delay PT2M, install-updater-agent.ps1:698. NOT MEASURED: no reboot has been taken since.
+
+## UPGRADEREAPREPORTEDASDEATH - the 0xC000013A decision, and the grader that could not see a
+failed prestop (2026-11-08)
+
+- [verified 2026-11-08] DECIDED, Jev above floor: 0xC000013A does NOT get 2147943691's treatment.
+  c000013a_treatment = no_change_decision_recorded 0.87, against unconditional_filter 0.01 and
+  correlate_with_installer 0.02. 2147943691's treatment is an UNCONDITIONAL subscription filter
+  (packaging/setup/Install-QwtImproved.ps1:1430 subscribes to 201 with a ResultCode OTHER than it),
+  and applying that to 0xC000013A would discard the 201 before the reporter ever sees it, on every
+  build - silencing a genuine console-control death of the scan. qwt-report-death.ps1:619-626 says
+  the current shape is deliberate: it is listed, but 'Listing it suppresses NOTHING by itself - the
+  caller still requires a shutdown record in the SAME BOOT SESSION'. An MSI install is not a
+  shutdown, which is exactly why the residual survives, and :1450 records that the project already
+  refused to widen the sibling filter once.
+- [verified 2026-11-08] residual_observed = only_pre_prestop_observations, conf 1.00. The reap was
+  measured on 2026-10-22 (campaign 3, win11-reinstall, 04:01:35.747), but UPDTASKPRESTOP was added
+  IN RESPONSE to that incident, and its trailers read ended+disabled on 610 runs since. So the
+  residual path has never been taken on a build that carries the prestop. An observation on a
+  prestop build is what would reopen the decision - a re-ask without one is verdict shopping.
+- [verified 2026-11-08] THE VISIBILITY HALF WAS NOT DONE, and Jev caught it: visibility_half_done
+  noul 0.34, under floor and leaning NO. The installer distinguishes the state correctly since
+  2026-11-08 (present-but-unstopped vs absent, plus a WARN), but mgmt/harness/result-flags.py - by
+  its own header 'the ONE place the flag list lives', called by quick-upgrade and the matrix
+  harness at the point the RESULT is graded - knew only FOUR values and matched none of the fifth.
+  MEASURED on all five: ended+disabled no, absent no, ended yes, disabled yes, and
+  present-but-unstopped NO. So an install whose prestop failed, and whose running scan was
+  therefore reaped into a false 'The Windows Update scan task failed', graded GREEN. Fixed by
+  naming it in the predicate; exercised both ways - the blind value now exits 1 with the flag
+  named, ended+disabled still exits 0 with no flags, selftest 158 passed / 0 failed.
+- [verified 2026-11-08] WHY NO INSTRUMENT CAUGHT IT, and the residual that stays: the drift selftest
+  fails when the installer grows a detail KEY this table does not classify - it counted 103 keys
+  and all were classified, because upd_task_prestop was never a new key. What drifted was the key's
+  VALUE SET. Nothing guards that, and per the owner's standing rule no suite is being added for it;
+  the enforcement is that the value list now lives in the predicate, the comment and the message
+  string together, so a reader of any one of them sees all five.
