@@ -250,16 +250,22 @@
    "reason": "Jev on the canonical log-sweep rubric (tools/log-sweep.py:4383 criteria, floor 0.5): expected 0.65. The daemon vchan was torn down before this sender could send; the line is the correct record of a teardown that raced a send, and no wake is handed back because the ring is gone. NEW in core-agent 6061882 (the QRSENDLOCK senders release the component lock across the wait, so a teardown can now be observed mid-wait). CEILING UNMEASURED - omitted deliberately rather than guessed; the first campaign that produces it measures the per-boot maximum."
   },
   {
+   "regex": "^qrexec\\|E\\|WatchForEvents: CreateEvent\\(send-room\\)",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NOT A JEV VERDICT - the status is mine. Jev on the canonical log-sweep rubric (tools/log-sweep.py:4383 criteria, floor 0.5), fed the emitting code and the macro from the tree: expected 0.48, then insufficient-evidence 0.53 after the caller's handling of the return value was added - so under floor twice and WORSE with more evidence. Asked twice, not reshaped, then stopped. CreateEvent for g_VchanRoomEvent failed at agent startup, before the daemon vchan exists; the agent cannot send, and WatchForEvents returns the error. Declared unsettled and not expected for two reasons: the IDENTICAL condition in qrexec-wrapper scored expected 0.84, and one condition must not carry two statuses; and unsettled is the status that FAILS a run if this ever fires, which is what a fatal startup failure in our own agent should do. Costs nothing in a healthy run - signatures_unclassified iterates only signatures observed in the run (tools/log-sweep.py:3949), and a failed CreateEvent at startup means the guest is out of handles. CEILING UNMEASURED."
+  },
+  {
+   "regex": "^qrexec\\|E\\|wmain: CreateEvent\\(send-room\\)",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NOT A JEV VERDICT - the status is mine; Jev said expected 0.84 (then 0.77 on the second call), above this rubric's 0.5 floor, fed the emitting code and the sibling InitVchan failure from the tree. Declared unsettled anyway to match the agent's identical condition above, which came back under floor: the same failure in two components must not carry two statuses, and the conservative one is the status that fails a run if it fires. Same mechanism: CreateEvent for g_VchanRoomEvent failed in wmain before InitVchan, so no send on this vchan could wait for ring room; the call fails through cleanup with child->Vchan still NULL, the same path as an InitVchan failure. Two signatures and not one because win_perror expands to _win_perror(__FUNCTION__, L\"...\"), so the function name is part of the key. CEILING UNMEASURED."
+  },
+  {
    "regex": "^qrexec\\|I\\|VchanSendMessage: ring full \\(need ",
    "status": "expected",
    "max_per_boot": null,
    "reason": "Jev on the canonical log-sweep rubric (tools/log-sweep.py:4383 criteria, floor 0.5): expected 0.85. Ordinary backpressure. Info and not Warning on purpose: since d228a03 the wait releases g_DaemonCriticalSection, so a full ring delays this sender alone. Info and not Debug because the shipped LogLevel is 3, so this is the only field record that it happened. CEILING UNMEASURED - load-dependent; omitted rather than guessed."
-  },
-  {
-   "regex": "^qrexec\\|W\\|Vchan(SendMessage|WaitForSendSpace): no vchan event to wait on, polling for room instead",
-   "status": "expected",
-   "max_per_boot": null,
-   "reason": "Jev on the canonical log-sweep rubric (tools/log-sweep.py:4383 criteria, floor 0.5): expected 0.61 (qrexec-agent) and 0.71 (qrexec-wrapper), judged separately on the same text. DuplicateHandle on the vchan's own event failed, so the wait falls back to sleeping one slice per iteration and re-checking ring space: the WAIT mechanism degrades from event-driven to polling, nothing is dropped, and the same deadline bounds both. The duplicate exists because libvchan_close closes the original handle, so waiting on the un-duplicated handle would be a use-after-close. ONE pattern for two functions: identical text, identical condition. CEILING UNMEASURED."
   },
   {
    "regex": "^qrexec\\|I\\|VchanSendMessage: ring drained after ",
@@ -4327,5 +4333,5 @@
   }
  },
  "version": 1,
- "preaccounted_at": "f3eaf75646dbf2e91b70a2cc0ad7568b84b4634e"
+ "preaccounted_at": "bef60aaabcbe551ed7a3d8851d417997ca97f68f"
 }
