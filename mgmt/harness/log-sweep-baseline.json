@@ -242,6 +242,78 @@
    "max_per_boot": 40,
    "regex": "^qrexec\\|I\\|[^|]*: client [^ ]* departed before sending its request header",
    "reason": "NORMAL OPERATION. core-agent qrexec-agent.c:1629 (core-agent 598903ef), the quiet half of a pair that used to claim a fault: a pipe client that disconnected before its request header arrived is a caller that went away, not a failure, so the branch on ERROR_BROKEN_PIPE / ERROR_PIPE_NOT_CONNECTED / ERROR_NOT_CONNECTED reports at Info while every later read keeps its ERROR (past that point a v4 magic has arrived, so a departure IS a request lost in flight). Deliberately ONE LEVEL ABOVE the library's two siblings because LOG_LEVEL_DEFAULT is INFO, so a Debug line would leave no trace in a field log and nothing else can say the header never arrived. max_per_boot 40: the harness itself makes concurrent qubes.VMShell calls whose callers come and go, which is the same shape as QGAVCHANUNDECLARED's 22-per-run group. The specifier is wildcarded ([^ ]*) rather than written as %lld or as N, because the census matches a pattern against the FORMAT string and the sweep matches it against the RENDERED line - a row written in either form is true for exactly one of the two (tools/sweep-preaccount.py:385-389)."
+  },
+  {
+   "regex": "^qrexec\\|I\\|VchanSendMessage: QGAGOINGDOWN the daemon vchan was closed before ",
+   "status": "expected",
+   "max_per_boot": null,
+   "reason": "Jev on the canonical log-sweep rubric (tools/log-sweep.py:4383 criteria, floor 0.5): expected 0.65. The daemon vchan was torn down before this sender could send; the line is the correct record of a teardown that raced a send, and no wake is handed back because the ring is gone. NEW in core-agent 6061882 (the QRSENDLOCK senders release the component lock across the wait, so a teardown can now be observed mid-wait). CEILING UNMEASURED - omitted deliberately rather than guessed; the first campaign that produces it measures the per-boot maximum."
+  },
+  {
+   "regex": "^qrexec\\|I\\|VchanSendMessage: ring full \\(need ",
+   "status": "expected",
+   "max_per_boot": null,
+   "reason": "Jev on the canonical log-sweep rubric (tools/log-sweep.py:4383 criteria, floor 0.5): expected 0.85. Ordinary backpressure. Info and not Warning on purpose: since d228a03 the wait releases g_DaemonCriticalSection, so a full ring delays this sender alone. Info and not Debug because the shipped LogLevel is 3, so this is the only field record that it happened. CEILING UNMEASURED - load-dependent; omitted rather than guessed."
+  },
+  {
+   "regex": "^qrexec\\|W\\|Vchan(SendMessage|WaitForSendSpace): no vchan event to wait on, polling for room instead",
+   "status": "expected",
+   "max_per_boot": null,
+   "reason": "Jev on the canonical log-sweep rubric (tools/log-sweep.py:4383 criteria, floor 0.5): expected 0.61 (qrexec-agent) and 0.71 (qrexec-wrapper), judged separately on the same text. DuplicateHandle on the vchan's own event failed, so the wait falls back to sleeping one slice per iteration and re-checking ring space: the WAIT mechanism degrades from event-driven to polling, nothing is dropped, and the same deadline bounds both. The duplicate exists because libvchan_close closes the original handle, so waiting on the un-duplicated handle would be a use-after-close. ONE pattern for two functions: identical text, identical condition. CEILING UNMEASURED."
+  },
+  {
+   "regex": "^qrexec\\|I\\|VchanSendMessage: ring drained after ",
+   "status": "expected",
+   "max_per_boot": null,
+   "reason": "Jev on the canonical log-sweep rubric (tools/log-sweep.py:4383 criteria, floor 0.5): expected 0.73. The exit line of a backpressure stall, carrying the two counters added in 6061882 so an ordinary run can say whether a stall ended on a WAKE or on a slice TIMEOUT - the measurement findings/qrexec.md records as UNDECIDED (four stalls of 102/106/103/24 ms against a 100 ms slice). Fires only when the sender actually blocked. CEILING UNMEASURED - load-dependent."
+  },
+  {
+   "regex": "^qrexec\\|I\\|VchanWaitForSendSpace: \\(.*\\): ring drained, ",
+   "status": "expected",
+   "max_per_boot": null,
+   "reason": "Jev on the canonical log-sweep rubric (tools/log-sweep.py:4383 criteria, floor 0.5): expected 0.69. The wrapper's counterpart of the qrexec-agent exit line above, same purpose and same counters. CEILING UNMEASURED - load-dependent."
+  },
+  {
+   "regex": "^qrexec\\|[IWE]\\|VchanWaitForSendSpace: \\(.*\\): vchan buffer full, blocking write",
+   "status": "expected",
+   "max_per_boot": null,
+   "reason": "Jev on the canonical log-sweep rubric (tools/log-sweep.py:4383 criteria, floor 0.5): expected 0.77. REPLACES THE ORPHANED SIGNATURE 'qrexec|W|VchanWaitForSendSpace: (H, output data): vchan buffer full, blocking write' (status benign, ceiling 1), which core-agent 6061882 orphaned TWICE OVER - it reworded the text (adding 'need N, free N) - waiting WITHOUT g_VchanCs') and lowered the level from Warning to Info, deliberately, because the wait now releases g_VchanCs so a full ring delays this sender alone. A key is family|LEVEL|text, so the old row matched nothing. DECLARED LEVEL-AGNOSTIC ON PURPOSE, following the A6LEAK precedent in this file: the level of this line is a recorded decision that has moved once and may move again, and the declaration must not move with it. The prior class was benign; Jev's 0.77 expected is the first verdict above floor on the reworded line. CEILING NOT CARRIED: the old ceiling of 1 was measured while the line was rare AND Warning-level; releasing the lock during the wait can only make backpressure more visible, so carrying 1 forward would manufacture a rise."
+  },
+  {
+   "regex": "^agent\\|E\\|GoCallLocked: GRANTOWNER .* worker is gone without answering op ",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "CLASSIFICATION OWED - NOT A JEV VERDICT. Asked twice and under the 0.5 floor both times: defect 0.41 conf (defect=0.56 expected=0.28) on the canonical rubric, and defect 0.43 on a first ask with a narrower state. The second ask ADDED the caller handling (GoGrantForeignAccess:212 and GoRevokeForeignAccess:230 return the status up, GoClose:247 discards it) and confidence FELL, which is the instrument saying the line is genuinely ambiguous: the worker thread being gone is a failure condition, while failing the call instead of waiting for an answer that cannot come is the correct response to it. A human decision is owed; until then this counts in signatures_unclassified (E/W) and stays loud. CEILING UNMEASURED."
+  },
+  {
+   "regex": "^agent\\|W\\|VchanReserveLocked: VCHANWAIT .*: the connection was declared gone while ",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "CLASSIFICATION OWED - NOT A JEV VERDICT. expected 0.29 conf (expected=0.47 defect=0.31 insufficient=0.22) on the canonical rubric; 0.47 on the first ask, and the richer state LOWERED it. The consumer is vchan.c:110-125, which rate-limits a VCHANWEDGE give-up line distinguishing 'disconnected' from 'not draining the ring', and send.c:1243, where the handshake must fail fast. Correct record of a teardown race, or a report of lost bytes - Jev will not separate them. A human decision is owed. CEILING UNMEASURED."
+  },
+  {
+   "regex": "^qrexec\\|E\\|VchanSendMessage: out of memory for a ",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "CLASSIFICATION OWED - NOT A JEV VERDICT, and the one item where Jev's own leading answer was that it cannot be settled: insufficient-evidence=0.61, defect=0.25, expected=0.13 (conf 0.48). NEW in 6061882, which allocates one frame for header+body instead of sending them separately, so this malloc is new. A FALSE return loses real work in every caller: :541 logs an Error and carries '// FIXME: error' so dom0 is never told the connection ended, :1016 fails the MSG_HELLO handshake, :1933 fails a guest-initiated service call. A human decision is owed. CEILING UNMEASURED."
+  },
+  {
+   "regex": "^qrexec\\|W\\|VchanSendMessage: the daemon closed the vchan while ",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "CLASSIFICATION OWED - NOT A JEV VERDICT. expected 0.28 conf (expected=0.46 insufficient=0.30 defect=0.23); 0.40 on the first ask, lowered by the caller evidence. Mirrors the wrapper's pre-existing 'the peer closed the vchan while N bytes waited for room - not sent'. Same unresolved question as the agent-side VCHANWAIT line: correct record of a teardown race, or a report of lost bytes. A human decision is owed. CEILING UNMEASURED."
+  },
+  {
+   "regex": "^qrexec\\|E\\|VchanSendMessage: VchanSendBuffer\\(",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "CLASSIFICATION OWED - NOT A JEV VERDICT. expected 0.32 conf (expected=0.49 insufficient=0.38 defect=0.12). THIS IS A REWORDED PRE-EXISTING LINE, not a new condition: 6061882 replaced LogError('VchanSendBuffer(header for %s) failed') and LogError('VchanSendBuffer(%s) failed') with one call carrying the byte count. Neither old text had a baseline row either, so the classification debt is pre-existing and was merely surfaced by the rewording - the log-key drift that tools/hooks/log-key-drift-gate.sh exists to catch. A human decision is owed. CEILING UNMEASURED."
+  },
+  {
+   "regex": "^qrexec\\|I\\|VchanSendMessage: QGAGOINGDOWN the vchan is being closed, ",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "CLASSIFICATION OWED - NOT A JEV VERDICT: expected 0.49 conf (expected=0.62 insufficient=0.33), one hundredth under the 0.5 floor, so no verdict. INFO level, so it does NOT count in signatures_unclassified (tools/log-sweep.py:4044 filters to E and W) and blocks nothing; it is declared so the sweep cannot meet it unannounced. A human decision is owed. CEILING UNMEASURED."
   }
  ],
  "signatures": {
@@ -3777,17 +3849,6 @@
    "reason": "Jev: noise 0.53 on the corpus",
    "status": "benign"
   },
-  "qrexec|W|VchanWaitForSendSpace: (H, output data): vchan buffer full, blocking write": {
-   "family": "qrexec",
-   "jev": {
-    "choice": "insufficient-evidence",
-    "confidence": 0.55
-   },
-   "level": "W",
-   "max_per_boot": 1,
-   "reason": "OWNER'S CALL 2026-10-23: declare benign, BUT IT MAY CARRY PRODUCT SIGNAL - his standing hypothesis is that it CORRELATES WITH WEDGES, so this declaration must not silence it. A full vchan send buffer is vchan pressure, and the wedge work is about reducing Xen API load (findings/wedge.md: the blocked GNTTABOP_unmap_grant_ref, and the antecedent rather than the post-mortem). Hence max_per_boot=1 at the observed count: benign at this volume, and a RISE breaches, so a correlation would surface as a rise instead of being absorbed. The READ-side sibling was demoted in the product by patches/windows-utils-vchan-blocking-read.patch for warning on every blocking read with no data yet; that patch contains ZERO SendSpace occurrences, so the write side was missed rather than decided - deliberately NOT demoted here, because demoting it would remove the very signal the hypothesis needs. Tracked as VCHANSENDFULLMAYTRACKWEDGES.",
-   "status": "benign"
-  },
   "qrexec|W|WrapperCtrlHandler: console control event N: closing the data vchan before exiting": {
    "family": "qrexec",
    "jev": {
@@ -4266,5 +4327,5 @@
   }
  },
  "version": 1,
- "preaccounted_at": "c8729329b4919080632098abc8d21d03e3e022b2"
+ "preaccounted_at": "f3eaf75646dbf2e91b70a2cc0ad7568b84b4634e"
 }
