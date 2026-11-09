@@ -114,6 +114,26 @@ verdict(){ # $1 cell, $2 PASS|FAIL|INVALID|SKIP, $3 claim, $4 evidence
 }
 has(){ case " $CELLS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
+# A CELL'S REQUIRED INPUT IS KNOWABLE AT MINUTE 0, AND "I READ THE HEADER" IS NOT A MECHANISM.
+# L6 refuses without --toastfire (below), and on 2026-11-09 that refusal fired TEN MINUTES IN, after
+# L1 had already deployed and installed the package - the same shape, and the same cost, as the
+# census gate below. DECLARED rather than hardcoded per cell: one row per cell that needs an input,
+# so a cell that gains one later is a row here instead of another ad-hoc check hundreds of lines
+# down, where the next run discovers it. Each row is <cell>:<var>:<flag>; the var must name an
+# EXISTING FILE; and what was verified is LOGGED, because a precondition that only ever speaks when
+# it fails cannot be told apart from one that never ran. `has` is defined just above, so this is the
+# first point the cell list can be read - and still before vm_lock, so a refusal cannot strand the
+# rig lock.
+CELL_INPUTS="L6:TFEXE:--toastfire"
+for _ci in $CELL_INPUTS; do
+    _cell=${_ci%%:*}; _rest=${_ci#*:}; _var=${_rest%%:*}; _flag=${_rest#*:}
+    has "$_cell" || continue
+    _val=${!_var:-}
+    [ -n "$_val" ] && [ -f "$_val" ] \
+      || { echo "FAIL  $_cell needs $_flag <file> and it must exist (got '${_val:-unset}') - pass it, or drop $_cell from --cells" >&2; exit 2; }
+    log "cell input present: $_cell $_flag $_val ($(sha256sum "$_val" | cut -c1-12))"
+done
+
 # THE CENSUS GATE, AS A PROBE AT MINUTE 0. This harness sweeps (the SW cell) but never ran the
 # preaccount census, so a log line the sweep has never been told about could not be known about
 # here until SW failed ~30 minutes in - which is exactly where it was found on 2026-11-08: SW FAIL
