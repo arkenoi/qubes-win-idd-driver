@@ -56,6 +56,17 @@ lifecycle, the RPC agent and its services. The change is continuous and the hist
 **Cost.** Two extra pushes per change, in order. Rebasing onto upstream is a deliberate, occasional
 act rather than something the build does.
 
+**Each fork carries an `upstream` remote - for provenance and mergeability, NOT as a routine source.**
+Owner 2026-11-09: «fixing remotes is more of consistency hygiene and making our forks potentially
+mergeable, not about using them as actual regular upstream source». `.gitmodules` records only
+`origin`, so this second remote is local `.git/config` that a fresh clone does not get:
+`git -C <sub> remote add upstream https://github.com/QubesOS/<repo>` for `agent` →
+`qubes-gui-agent-windows`, `core-agent` → `qubes-core-agent-windows`, `winutils` →
+`qubes-windows-utils`. **winutils had none until 2026-11-09**, which silently excluded it from an
+upstream survey and let me assert it had no upstream repository at all. It does, and winutils is a
+true fork by history - 193 commits, with upstream's v4.2.2 base `6da0e21` an ancestor of HEAD. §4's
+assimilation is about it having no external CONSUMER, never about the repository not existing.
+
 ## 2. Dependencies we barely change are cloned at a pinned version and patched
 
 **Status:** ACCEPTED.
