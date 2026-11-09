@@ -187,12 +187,22 @@
         # verify before relying on it); the entry only enforces that whatever the
         # workflow signed into deps-bins is what the MSI carries, never the stock copy.
         @{ Package = 'msi-image/System64/qubesdb-client.dll';  Stock = 'qubesdb-client.dll';  Required = $true }
-        # qrexec-agent.exe / qrexec-client-vm.exe are deliberately NOT shipped. Their sources
-        # are unmodified against the 4.2.2 base, so our build would be functionally identical -
-        # no benefit - while qrexec-agent is the service dom0 talks to and a bad swap costs the
-        # guest's manageability entirely. They are built (qrexec-agent.vcxproj also generates
-        # qwt_version.h) and kept in the artifact for diagnostics, not staged into the MSI.
-        # The moment either source diverges, CompiledSources fails the build until it ships.
+        # qrexec-agent.exe AND qrexec-client-vm.exe BOTH SHIP FROM THE FORK - the two entries
+        # above are the authority (168f72c3, 2026-09-08, owner-approved, so the readiness P1
+        # actually reaches guests; and the qrexec v4 pipe format, which a stock qrexec-client-vm
+        # cannot speak at all).
+        # THIS COMMENT USED TO SAY THE OPPOSITE: "deliberately NOT shipped ... their sources are
+        # unmodified against the 4.2.2 base ... kept in the artifact for diagnostics, not staged
+        # into the MSI". It dates to afaffc67 (2026-08-28) and was ALREADY FALSE the moment
+        # 168f72c3 added the entry above it without deleting this. Both halves of its premise are
+        # now wrong: the sources ARE modified (qrexec-agent.c carries the QRSENDLOCK lock-releasing
+        # wait, 2026-11-09) and the binary IS staged into the MSI image. It is corrected rather than
+        # deleted because a reader who trusted it would conclude the fork's qrexec-agent fixes are
+        # dead code and stop shipping them - and this file is the recorded policy, so that reading
+        # would have been the defensible one.
+        # STILL TRUE, and why the entries above are enough on their own: qrexec-agent.vcxproj also
+        # generates qwt_version.h, and CompiledSources fails the build the moment a fork source
+        # diverges without shipping - which is the guard that would have caught this drift.
     )
 
     # --------------------------------------------------------------------------- DeadEnds
