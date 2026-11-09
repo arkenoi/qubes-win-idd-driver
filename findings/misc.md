@@ -947,9 +947,26 @@ halves are now measured.
   (0.35-0.64), `redundant_inside` faultinject 0.64, and the `consistent` nouls at 0.42-0.43, which
   are the known non-applicable pattern for a diff of this shape. `redundant_inside` is
   `not_redundant` 0.73-0.86 on the other three.
-- **STILL NOT MEASURED ON A GUEST.** UNVERIFIED. The P1 itself is unverified: no run has graded SG3 against a
-  build carrying the fix. What changed is that the step is now runnable and cannot silently
-  no-op - a suite that still cannot see a D line says so by name and grades nothing.
+- [verified 2026-11-09] **MEASURED ON A GUEST, and the P1 is CLOSED.** This bullet said "STILL NOT
+  MEASURED ON A GUEST / UNVERIFIED" until the run below; that is now wrong and is replaced rather
+  than left standing. p5-run.sh over win11r-sg3, cloned from the seal-VERIFIED win11r-qwt and
+  upgraded 4.3.35.0 -> 4.3.40+agent.b3eb1fd25688 (agent b3eb1fd, which contains the fix 6855e29):
+  SG3 `-Mode captioned` expect map -> **mapped**, `agent_map=1`, "1 MAP message(s) for 0x90026",
+  dom0 dims 1908x1074, verdict PASS-UNPROVEN "the captioned screen-sized window mapped, as the
+  README requires". `=== P5 finished rc=0 ===`. The green is ATTRIBUTABLE because the specificity
+  control held in the same pass: SG4 overrideredirect and SG2 borderless both stayed nomap with the
+  agent's own deny text ('unconditionally denied, feature or not' hits=2; 'hidden (set
+  service.gui-fullscreen to allow)' hits=1) and SG9 kept Start out with deny hits=31. Register entry
+  retired to findings/issues-closed.md, which also SHRANK the issues.md head.
+- [verified 2026-11-09] **The DEBUG precondition is proven on a guest, not just offline.** Three
+  facts from the same run, each one a thing that was previously only argued: p5 did NOT exit 2, so
+  the assert read real D lines from the running agent rather than a feature value dom0 asked for;
+  SG4 and SG2 graded on LogDebug-only deny text where on 2026-11-01 they graded INVALID-VACUOUS and
+  the caller above them blamed the product ("SG4 is not green at baseline") for a condition of the
+  instrument; and `agent_debug_hold`'s chained EXIT restore left `service.gui-agent-debug` ABSENT
+  afterwards - `qvm-features win11r-sg3 service.gui-agent-debug` prints empty - so the subject is
+  unchanged and the hold survived an agent restart, which is what perf.c:341 reading the feature at
+  Init requires.
 - [verified 2026-11-09] **CLOSED: the plan's "assert" half IS satisfied in faultinject, by propagation,
   and my own bound on it was the thing that was wrong.** FIX-LANDED: the chain is now documented and the
   operator warning corrected at `mgmt/harness/failproof-faultinject.sh:187-202`. The mechanism, read off
