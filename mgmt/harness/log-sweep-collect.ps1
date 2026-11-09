@@ -598,7 +598,7 @@ if (-not $NoEvents) {
     $requiredMissing = New-Object 'System.Collections.Generic.List[string]'
     # channel -> ids queried; the message filters below narrow 1000/1001/1026 and the 7xxx records to ours
     $channels = @(
-        @{ Log = 'System'; Ids = @(12, 13, 41, 1001, 1074, 1076, 6005, 6006, 6008, 6009, 6013, 109, 7000, 7009, 7011, 7023, 7024, 7031, 7034, 7036, 7040, 7043, 7045); Required = $true },
+        @{ Log = 'System'; Ids = @(12, 13, 41, 104, 1001, 1074, 1076, 6005, 6006, 6008, 6009, 6013, 109, 7000, 7009, 7011, 7023, 7024, 7031, 7034, 7036, 7040, 7043, 7045); Required = $true },
         @{ Log = 'Application'; Ids = @(1000, 1001, 1026, 4001, 4002, 4003, 4004); Required = $true; MustOccur = $false },
         @{ Log = 'Microsoft-Windows-TerminalServices-LocalSessionManager/Operational'; Ids = @(21, 22, 23, 24, 25, 54); Required = $false },
         @{ Log = 'Microsoft-Windows-TaskScheduler/Operational'; Ids = @(201, 203, 329); Required = $false }
@@ -683,8 +683,8 @@ if (-not $NoEvents) {
             # (which is what System did for weeks, above) - or because the records genuinely did not
             # occur, which for Application's 1000/1001/1026 crash ids is the HEALTHY case (Jev
             # must_not_occur_on_a_healthy_guest 0.98). Two cheap facts tell those apart: the same
-            # window with NO id filter, and the channel's own listing. BOTH ARE NOW ACTED ON, below:
-            # an enabled channel whose own RecordCount is zero has been cleared, whatever our ids did.
+            # window with NO id filter, and the channel's own listing. Both are RECORDED, and neither
+            # is a wipe detector - see the note on event 104 below the predicate.
             $anyid = -1; $lgEn = '?'; $lgRec = -1
             try { $anyid = @(Get-WinEvent -FilterHashtable @{ LogName = $log; StartTime = $sinceL } -MaxEvents 2000 -ErrorAction Stop).Count }
             catch { if ($_.Exception.Message -match 'No events were found') { $anyid = 0 } }
@@ -700,17 +700,21 @@ if (-not $NoEvents) {
             # any window a release sweep covers. `-ne $false`, not a plain truth test, so a channel
             # marked Required with no MustOccur key stays STRICT and adding one cannot silently
             # switch this guard off.
-            # A CLEARED CHANNEL IS CAUGHT BY THE SECOND PREDICATE, not by the one above. The question
-            # "may a readable-but-empty required channel pass?" came back 0.64 and then 0.44 on the
-            # byte-identical state - an oscillation, so there is no verdict and nothing is built on one.
-            # That question was a JUDGEMENT. This property is DECIDABLE instead and needs no verdict: a
-            # channel the OS reports as enabled whose own RecordCount is 0 has been cleared, because the
-            # Application log takes routine events from dozens of sources on every boot - zero is not a
-            # quiet guest. Measured on a healthy win11r-qwt: enabled=True records=310. It is independent
-            # of MustOccur on purpose (a wiped System log is just as wiped), and -1 is the LISTING having
-            # failed - the defaults above - which is not a wipe and must not be reported as one.
+            # A CLEARED CHANNEL IS NOT DETECTABLE FROM A RECORD COUNT, and the attempt is recorded
+            # here because the predicate that tried it SHIPPED AND COULD NOT FIRE. The question that had
+            # stalled this - may a readable-but-empty required channel pass - scored 0.64 and then 0.44 on
+            # the byte-identical state, an oscillation, so it was never a verdict. Replacing that
+            # JUDGEMENT with the "decidable" property `enabled -and RecordCount -eq 0` looked right and
+            # was wrong: MEASURED on win11r-sup 2026-11-09, `wevtutil cl Application` returned and the
+            # very next read of that channel was already `numberOfLogRecords: 1`, and 4 a minute later,
+            # because Windows is writing as the clear returns. Zero is not reachable on a live guest, so
+            # that predicate was decoration and is gone rather than tuned to a threshold.
+            # WHAT ENFORCES IT NOW: Windows records the clear ITSELF. Event 104 from
+            # Microsoft-Windows-Eventlog is written to the System channel and names the log that was
+            # cleared - measured at 2026-11-09T01:47:55 for the clear above - so 104 is in the System ids
+            # at the top of this block and a wipe arrives as a CAPTURED EVENT carrying its own timestamp
+            # and provider, judged like any other, instead of being inferred from a count.
             if ($raw -eq 0 -and $ch.Required -and $ch.MustOccur -ne $false) { $requiredMissing.Add("${log}=norecords") }
-            if ($ch.Required -and $lgEn -eq 'True' -and $lgRec -eq 0) { $requiredMissing.Add("${log}=wiped") }
         }
     }
     $rm = if ($requiredMissing.Count -gt 0) { [string]::Join(',', $requiredMissing.ToArray()) } else { '-' }

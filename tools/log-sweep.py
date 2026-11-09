@@ -202,6 +202,16 @@ def event_wanted(log, eid, provider, msg):
             return True
         if eid == 12 and provider == "Microsoft-Windows-Kernel-General":
             return True
+        # A LOG WAS CLEARED, and this is Windows saying so rather than us inferring it from a count.
+        # THE ID LIST LIVES IN TWO PLACES and the first fix changed one: log-sweep-collect.ps1 asked
+        # for 104 in the System ids, and without this arm the record was captured into events.txt and
+        # then DROPPED here, so a wipe never became a signature and never reached the gate. MEASURED on
+        # win11r-sup 2026-11-09: "The Application log file was cleared." sat in events.txt while
+        # signatures_unclassified stayed 0. What this replaces could not fire at all - a predicate on
+        # "enabled and RecordCount 0", when Windows had already written a record by the time
+        # `wevtutil cl` returned (numberOfLogRecords: 1 on the very next read, 4 a minute later).
+        if eid == 104 and provider == "Microsoft-Windows-Eventlog":
+            return True
         if eid == 1001 and "BugCheck" in provider:
             return True
         if eid == 41 and "Kernel-Power" in provider:
@@ -2342,7 +2352,6 @@ def load_logs(logsdir, paths=None):
             reasons = sorted({p.split("=", 1)[1] for p in ev["required_missing"].split(",") if "=" in p})
             why = ", ".join({"norecords": "was read and returned none of the ids the sweep queries",
                              "unreadable": "could not be read",
-                             "wiped": "is enabled and holds no records at all, so it was cleared",
                              "undecodable": "returned records that would not decode"}.get(r, "reported " + r)
                             for r in reasons) or "could not be read"
             problems.append(("events-required", ev["required_missing"], "a required event channel " + why))
