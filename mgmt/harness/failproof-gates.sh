@@ -196,9 +196,15 @@ set_gate_checked(){  # <hex-or-0> <context> <check-column>
 }
 
 # P5 takes the same per-VM lock; QWT_VMLOCK_HELD is already exported, so it passes through.
-p5(){  # <tag> -> "SG4=<v> SG2=<v> SG3=<v> SG9=<v>"
+p5(){  # <tag> -> "SG4=<v> SG2=<v> SG3=<v> SG9=<v>" | NORESULT | PRECONDITION
   rm -rf "$OUT/$1"
-  bash "$P5_RUNNER" "$VM" "$OUT/$1" > "$OUT/$1.out" 2>&1
+  local prc=0
+  bash "$P5_RUNNER" "$VM" "$OUT/$1" > "$OUT/$1.out" 2>&1 || prc=$?
+  # p5's OWN rc was discarded here, and rc 2 is its code for "precondition not established, nothing
+  # was run" - which arrived as an empty verdicts.tsv, became NORESULT, and was reported by the
+  # baseline loop as "SG4 is not green at baseline": the cell blamed for a condition p5 had already
+  # diagnosed BY NAME in $OUT/$1.out. An inherited failure still needs its own cause.
+  [ "$prc" = 2 ] && { echo "PRECONDITION"; return; }
   local f="$OUT/$1/verdicts.tsv"
   [ -s "$f" ] || { echo "NORESULT"; return; }   # rule 14
   awk -F'\t' '{v[$1]=$3} END{printf "SG4=%s SG2=%s SG3=%s SG9=%s", v["SG4"], v["SG2"], v["SG3"], v["SG9"]}' "$f"
@@ -207,12 +213,44 @@ p5(){  # <tag> -> "SG4=<v> SG2=<v> SG3=<v> SG9=<v>"
 # rule 14 refined: an empty suite is DATA only while the guest still answers. NORESULT from a
 # guest that no longer answers liveness is the degraded-session case - grade it and stop.
 noresult_check(){  # <suite-result> <context> <check-column>
+  # PRECONDITION is p5 refusing to grade at all (its exit 2). It has already named the cause in its
+  # own log, so this is an INSTRUMENT row carrying that fact - never a cell verdict, and never a
+  # fall-through to "not green at baseline", which would describe the wrong thing entirely.
+  if [ "$1" = PRECONDITION ]; then
+    log "-> INVALID-INSTRUMENT: p5 refused to grade ($2): its precondition was not established."
+    log "   p5 names the cause in $OUT/<tag>.out. Nothing was measured, so no cell has a verdict"
+    log "   to read and no red or green from this run would be attributable to anything."
+    T=120 set_gate 0 >/dev/null 2>&1 || true   # bounded clear so the subject is not left armed
+    printf 'GATES\t%s\tINVALID-INSTRUMENT\tp5 refused to grade: its precondition was not established (%s); nothing was measured\t%s\n' \
+      "${3:-sequence}" "$2" "$EV" >> "$V"
+    exit 3
+  fi
   [ "$1" = NORESULT ] || return 0
   alive && return 0
   guest_gone "$2: the p5 suite produced no verdicts and the guest no longer answers" "$3"
 }
 green(){ case "$1" in PASS|PASS-UNPROVEN) return 0;; *) return 1;; esac; }
 field(){ echo "$1" | grep -ao "$2=[A-Za-z-]*" | cut -d= -f2; }
+
+# ---------------------------------------------------------------- the cells must be able to GRADE
+# SG4 and SG2 turn on the agent's two fullscreen deny lines, both LogDebug (main.c:9611, :9636), so
+# at the shipped LogLevel 3 this suite measured nothing: on 2026-11-01 (win11-acc, agent pid 3716)
+# both cells graded INVALID-VACUOUS, the baseline loop below refused to attribute anything, and SG3
+# - whose product fix had ALREADY landed - was never reached. Held HERE, before the first
+# set_gate_checked, because perf.c:341 reads the feature at Init and the value takes only at the
+# agent's next start; that restart is the one set_gate_checked performs. Restored at EXIT by the
+# helper, to exactly the value this subject had, so the guest does not leave the suite changed.
+# CALLED AT TOP LEVEL, NEVER INSIDE $( ) OR A PIPELINE: both are subshells, so the EXIT trap and
+# the saved previous value would be installed and then thrown away while the qvm-features WRITE
+# still landed - the subject would keep service.gui-agent-debug=1 with nothing left to restore it.
+log "=== DEBUG precondition: holding service.gui-agent-debug on $VM ==="
+agent_debug_hold "$VM" || {
+  log "REFUSING: could not hold service.gui-agent-debug on $VM. SG4's and SG2's discriminators are"
+  log "  LogDebug, so every cell would grade INVALID-VACUOUS and no red here would mean anything."
+  printf 'GATES\tgates-entry\tINVALID-INSTRUMENT\tcould not hold service.gui-agent-debug on the subject; SG4/SG2 discriminators are LogDebug and would never be written\t%s\n' \
+    "$EV" >> "$V"
+  exit 3; }
+log "  service.gui-agent-debug: was '${_LC_DEBUG_WAS:-unset}', now '$(qvm-features "$VM" service.gui-agent-debug 2>/dev/null)'"
 
 # ---------------------------------------------------------------- baseline, everything gated
 log "=== BASELINE: FaultGateOff=0, all safeguards in force ==="

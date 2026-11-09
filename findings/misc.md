@@ -814,3 +814,263 @@ NOT CHASED, and that is deliberate, not an oversight: the owner's standing order
   from WiX on Windows in CI and gui-agent.exe needs MSVC, so this Linux qube cannot build one. A
   verified package comes from CI, CI builds on a push, and the fix sits on no remote branch with the
   local tree 31 commits ahead. Jev push_or_ask = get_explicit_push_authorisation 0.96 (conf 0.94).
+
+## The pre-registered counting predicate is SATISFIED; what is still unstimulated is the GUARD (2026-11-09)
+
+- [verified 2026-11-09] THE BLOCKER ABOVE WAS CLEARED AND THE RUNS HAPPENED. The section before this
+  one reads "the newest run of any kind is 2026-11-08 00:16 - TWELVE HOURS EARLIER" than the 12:05
+  fix. Four later runs exist and postdate it: `scratchpad/wu-e2e-win11de-wufix-20261108T183947Z`
+  (2 rounds, offers present), `...T200306Z`, `...T201041Z` and `...T201535Z`. All four end
+  `fails=0 sweep=0`; 183947Z logs `JUDGE PASS` on both rounds.
+- [verified 2026-11-09] THE PREDICATE THAT SECTION WROTE DOWN IN ADVANCE HOLDS, on both rounds of
+  183947Z, and the arithmetic closes exactly in the under-report direction the class is about:
+    round 1  `scan: 7 update(s) offered, 6 actionable, 6 reported to dom0` (1 verified-no-route
+             excluded with its SERVICING NOTICE), `satisfied` = 4 identities, then
+             `reporting 2 remaining to dom0` - 6-4=2.
+    round 2  `3 offered, 2 actionable, 2 reported to dom0`, `satisfied` = 1 identity, then
+             `reporting 1 remaining to dom0` - 2-1=1.
+  A STAGED row is excluded from `satisfied` in both rounds even when it is verified: round 1's
+  KB5127690 is `ok:true state:staged rc:3010 verified_by_effect:false probe:null`, and round 2's
+  KB5127648 is `ok:true state:staged rc:3010 registered:true verified_by_effect:true
+  probe:rollup-registered` - and NEITHER leaves the number, which is what
+  "staged and deferred work is NOT applied" has to mean to be worth anything.
+  LIMIT OF THIS READING, stated rather than glossed: `satisfied` records bare `uid:rev` with no KB
+  beside it and the identities appear nowhere in agent.log, so "no identity the pass did not install"
+  is carried by the COUNT and by two independent exact closures, NOT by a per-identity join. A reader
+  cannot tell from update-status.json which KB an identity belongs to.
+- [verified 2026-11-09] AND THAT IS WHY THE PREDICATE HOLDING DOES NOT CLOSE
+  WURESCANKEYSBYKBSCANBYIDENTITY. The fix is the `$spoken` exclusion in `Get-InstalledIdentities`
+  (guest/qubes-windows-update.ps1:574), which stops a STAMPED row's available-twin at a NEW revision
+  riding in on its kb/title. Measured over every retained updater run - 83 `update-status*.json`,
+  148 install rows: `uid` is present on TWO rows, and both are the same offer (`(no KB)`,
+  "Microsoft Corporation AudioProcessingObject Driver Update (1.0.4.55794)",
+  `uid 702e6ed7-4f31-4f3b-9f49-de333467baf8 rev 1`, in `wu-e2e-win11de-wufix-20261108T201041Z` and
+  `wu-e2e-p1stim`). So the `$own` arm has produced exactly one identity on a guest, ever, and the
+  other 10 of the 12 distinct `uid:rev` pairs on record came from the kb/title `$joined` arm.
+  No UpdateID has EVER been recorded at two revisions: 12 pairs, zero GUID repeats. The guard can
+  only engage when a stamped row's KB also stands as an available offer at a DIFFERENT revision, so
+  the missing stimulus is sharper than "a re-presentable offer" - it is a STAMPED install whose KB
+  the SAME scan offers at another revision. `wu-e2e.sh` also has no inter-round delay (183947Z ran
+  round 1 -> round 2 at 18:55 -> 18:58), so back-to-back rounds cannot wait out a new revision.
+- [verified 2026-11-09] WUPASSDIESONCATALOGREFUSAL: the guest arm needs the route BROKEN, and a
+  healthy one cannot produce it. Across every retained run the catalog answered a valid results page
+  in all 11 resolutions ("the Update Catalog answered a valid results page with no package for build
+  26200/x64", "...for the title ..."); zero throws. Offline the throw is modelled at six shapes with
+  defect knobs behind each, `tools/tests/wu-notactionable-test.ps1`: :199-201 an empty body, a
+  truncated fragment and a 502 proxy page -> UNRESOLVED; :207-210 a 403 THROW -> no URLs, UNRESOLVED,
+  "the pass goes on"; :212-213 a throw is NOT memoised; :246-247 the download dialog refusing or
+  answering empty; :260-261 the title route, where :260 names this very defect -
+  "it ended the pass until 2026-11-02".
+- [verified 2026-11-09] WUMSUROUTENEVERSAYSUNVERIFIED's open half is confirmed as an ASYMMETRY, not a
+  missing field. The field is everywhere; the PROBE is not. Five named effect probes appear on the
+  other routes across these runs - `mrt-version`, `security-platform`, `defender-signature`,
+  `defender-platform`, `rollup-registered` - plus the pnputil driver-store probe on the catalog
+  route, while the WU-NOKB row carries `probe: null` and `verified_by_effect: false`. That one row is
+  the entry's own text, measured again.
+
+## SG3's landed fix was unreachable because the suite could not see a DEBUG line (2026-11-09)
+
+The register said `CAPTIONSTRIPTHENFULLSCREENDENY [P1 ... OPEN]` with `FIX-LANDED` and
+`NEXT: SG3 at DEBUG`. The fix is in the tree and correct, and the step was not runnable. Both
+halves are now measured.
+
+- **The product fix is there and reads the right field.** [verified 2026-11-09]
+  `agent/gui-agent/main.c:9633`: the Mode 2 deny is now
+  `!FiGateOff(FI_GATE_MODE2) && !(data->Style & WS_CAPTION) && !data->CaptionWasStripped &&
+  !g_ShowFullscreenScreen`. Its own comment says why that field and not the neighbouring one:
+  `CaptionWasStripped` means WE took the caption, while `CaptionHidden` is also set for a window
+  deliberately LEFT ALONE (an own-frame app), so reading `CaptionHidden` would wave a genuinely
+  borderless window through. Nothing about the product side was outstanding.
+
+- **The instrument could not produce the evidence, and said the wrong thing when it failed.** [verified 2026-11-09]
+  SG4's and SG2's discriminators are the agent's two fullscreen deny lines,
+  `main.c:9611` (boot/shutdown/logon-phase) and `:9636` (borderless, the same line this P1 is
+  about) - BOTH `LogDebug`. `tools/tests/log-policy-selftest.sh:7` records that the MSI ships
+  `LogLevel 3` = INFO, so at the shipped level neither line is ever written. `failproof-gates.sh`
+  set no debug precondition at all, and its baseline loop (`:223-226`) requires all four cells
+  green before any proof runs, with `green()` accepting only `PASS|PASS-UNPROVEN` - so two
+  unobservable cells aborted the run and SG3 was never reached. The abort message names a cell
+  ("SG4 is not green at baseline"), not the instrument.
+
+- **Four scripts needed the same precondition and each did it differently; one did nothing.** [verified 2026-11-09]
+  `failproof-faultinject.sh:181-188` set `service.gui-agent-debug` and
+  restored it; `crop-before-map.sh:136-146` and `vchan-collapse-debug-cell.sh:25-33` write the
+  registry `LogLevel` and reboot; `toast-hold-test.sh:73-75` only declares the need in a comment;
+  `failproof-gates.sh` had neither. `tools/tests/log-policy-selftest.sh:317` polices this class with
+  `command grep -q 'NEEDS LogLevel' "$f"` - it checks that a dependent DECLARES the need, so a
+  script that declares nothing is not failed by it, merely absent from its list. An absence must be
+  ENFORCED, not declared.
+
+- **What landed.** [verified 2026-11-09] `mgmt/harness/lifecycle-lib.sh` gains `agent_debug_hold` / `agent_debug_restore`
+  (hold the feature for the run, put the subject's previous value back at EXIT) and
+  `agent_debug_lines` (the running agent's D-line count, built on the existing `agent_lines_ps`
+  prelude so it is bounded to the graded pid, not to a previous agent's lifetime in the same daily
+  file). `failproof-gates.sh` holds it before the first `set_gate_checked`, because `perf.c:341`
+  reads the feature at Init and the value takes only at the agent's next start - which is the
+  restart `set_gate_checked` performs. `p5-run.sh` ASSERTS it after the control-UP proof and exits
+  2, this script's own code for "precondition not established, nothing is run". The hold replaces
+  faultinject's inline copy, so there is one implementation and both suites inherit it.
+
+- **p5's refusal was being swallowed, and that is fixed in the same place.** [verified 2026-11-09]
+  `failproof-gates.sh`'s `p5()` wrapper discarded the runner's exit code, so an exit 2 arrived as an
+  empty `verdicts.tsv`, became `NORESULT`, and was reported by the baseline loop as "SG4 is not
+  green at baseline" - a cell blamed for a condition p5 had already diagnosed by name in its own
+  log. `p5()` now returns `PRECONDITION` for rc 2 and `noresult_check` grades it as
+  INVALID-INSTRUMENT with the gate cleared, never as a cell verdict.
+
+- **Validated offline, both directions, before any guest run.** [verified 2026-11-09] The hold,
+  against a stub `qvm-features`: feature ABSENT -> set to 1 -> restored to ABSENT; already `1` ->
+  left `1`; `0` -> set to 1 -> restored to `0` (the exact prior value, not merely unset); no VM ->
+  `ERROR` with a declared level and rc 2. A caller-installed EXIT trap ran in every case, so the
+  chained install does not replace it - `${prev:+$prev; }` keeps it ONE armed `trap ... EXIT`
+  statement, which is what `tools/lint-harness.py` L21 counts. The discriminator regex
+  `^\[\d{8}\.\d{6}\.\d{3}-\d+(:\d+)?-D\]` was run in the real engine (`/home/user/pwsh/pwsh`, NOT
+  on PATH) over eight real-shaped lines: it matches a D line with AND without a thread id (the
+  sweep's `WINUTILS_RE` at `tools/log-sweep.py:257` makes the tid optional) and refuses `I`, `W`,
+  `E`, `V`, a Windows banner, and a message whose own text contains `-D]`. 0 disagreements.
+  `lint-harness.py` is unchanged at FINDINGS: 32, with L24 back to 75 after a level was declared on
+  the one new failure report; `lint-selftest.sh` 87/0.
+
+- **Jev on the diff, including the verdict that went against me.** [verified 2026-11-09]
+  `jev-feed-bfe636e4950f`: `plan_vs_diff` is `plan_matches` 1.00 for p5-run.sh and 0.89 for
+  lifecycle-lib.sh, and `already_recorded` is `recorded_owns_this` at 0.88-0.93 across all four
+  files - the recorded design note owns this work rather than it being invented here.
+  `plan_vs_diff` for failproof-faultinject.sh is **`plan_drifted` 0.81**, and it is right: I reused
+  one `xerj-check file` wording for three files, and for THAT file it describes adding the helper
+  pair and changing the gate suite, while the file's own diff does neither - it replaces an inline
+  block with a call to the shared helper. The plan text is wrong for that file; the code is not.
+  The receipt was NOT reworded to clear the verdict (never edit the plan that measures drift), and
+  the first run's 0.73 became 0.81 on the second, so the one code change made in between (dropping
+  an `exit 2` that block never had, back to a WARN) was not what the verdict was about - it was
+  worth making on its own, for removing an unrequested behaviour change and making a comment true.
+  Under floor, so NO verdict either way: `plan_vs_diff` gates.sh 0.44, every `comparator_relevant`
+  (0.35-0.64), `redundant_inside` faultinject 0.64, and the `consistent` nouls at 0.42-0.43, which
+  are the known non-applicable pattern for a diff of this shape. `redundant_inside` is
+  `not_redundant` 0.73-0.86 on the other three.
+- **STILL NOT MEASURED ON A GUEST.** UNVERIFIED. The P1 itself is unverified: no run has graded SG3 against a
+  build carrying the fix. What changed is that the step is now runnable and cannot silently
+  no-op - a suite that still cannot see a D line says so by name and grades nothing.
+- [verified 2026-11-09] **CLOSED: the plan's "assert" half IS satisfied in faultinject, by propagation,
+  and my own bound on it was the thing that was wrong.** FIX-LANDED: the chain is now documented and the
+  operator warning corrected at `mgmt/harness/failproof-faultinject.sh:187-202`. The mechanism, read off
+  the code: a failed hold leaves the feature off, so `rnd8-resolution.sh` takes its blind arm (`alive =
+  unknown`, no QGAPERF seq) at :277 - ordered BEFORE the `alive = no` arm at :282 and before the only
+  PASS arm at :287 - and writes `keyed-mutex-recovered INVALID-INSTRUMENT` at :281; `pass_verdict`
+  echoes that row verbatim into `G1` at faultinject:214; and the guard at :217 is a WHITELIST (`!=
+  PASS-UNPROVEN && != PASS`), so ANY non-green value aborts and THIS suite writes its OWN `FI
+  capture-failproof INVALID-INSTRUMENT` row at :221 with rc=1. A vacuous pass is unreachable in BOTH
+  row families, and because :217 whitelists rather than blacklists, a blind verdict value added to
+  RND-8 later still aborts instead of slipping through.
+- [verified 2026-11-09] **What I got wrong, which is the part worth keeping.** Six feeds returned
+  `plan_vs_diff_mgmt_harness_failproof_faultinject_sh choice=plan_drifted` above the 0.70 floor, and
+  five times I answered it by DECLARING it rather than by reading the code: my stated bound was "a
+  vacuous pass is unreachable by branch order in the child", which covers RND-8's row family and says
+  nothing about faultinject's own `FI capture-failproof` rows - a piece offered for the whole. The
+  propagation through `G1`'s whitelist is what actually covers both, and it was always there to be
+  read. The repeat was the signal; the declaration was the error. The verdict itself stays
+  `plan_drifted` and that is CORRECT ON ITS OWN TERMS: Jev compares the plan text to ADDED STATEMENTS,
+  and satisfaction-by-propagation is invisible to that comparison. A true verdict about statements is
+  not a true signal about vacuous grading, and the plan text was NOT reworded to make it agree.
+- [verified 2026-11-09] **findings rule 4 is enforced by nothing, and the linter says otherwise.**
+  `tools/lint-harness.py:650` lists "a commit appending history must also touch CURRENT STATE" under
+  NOT LINTED, with the reason that it "needs the git diff, so it lives in the pre-commit hook, not
+  here". `.githooks/pre-commit` has no such check: it carries the dated-section-header refusal and the
+  102400-byte head ratchet, and nothing that compares an append against a CURRENT STATE edit. `grep
+  -rn 'appending history' tools/ findings/ .githooks/` returns that one lint-harness.py line and
+  nothing else, so the rule's own text is not in findings/rules.md either. P2 gate - the measuring
+  apparatus cannot be P1. Deliberately not fixed here: no machinery gets built around it inside a
+  commit whose subject is a product defect's instrument.
+
+## The one red leg in lifecycle-selftest is a text-pinned assertion, not a product defect (2026-11-09)
+
+Running `tools/tests/lifecycle-selftest.sh` for the change above returned rc=1: 69 PASS, 1 FAIL.
+`agent/gui-agent/main.c` is unmodified, so the red is pre-existing - but the FIRST evidence I wrote
+for that was worthless and is corrected here: `git diff --stat HEAD -- agent/gui-agent/main.c` in
+this repo returns empty for ANY state of that file, because `agent/` is a SUBMODULE and the parent
+tracks a gitlink, not the path (`git ls-files --error-unmatch agent/gui-agent/main.c` ->
+"did not match any file(s) known to git"). The claim stands on `git -C agent status --porcelain`
+being empty instead. Measured leg by leg
+rather than inferred:
+
+- [verified 2026-11-09] `main_shell_latch` ("the shell-seen latch is set only through ShellWindowNow (the one
+  GetShellWindow() call in code), which every phase gate asks") has six greps. Five pass. The
+  **one-call-site leg PASSES**: `grep -v '^[[:space:]]*//' main.c | grep -c 'GetShellWindow()'` is
+  exactly **1**, the real call at `:3132` inside `ShellWindowNow()`, with all eight other mentions
+  being comment text that the filter strips. **The product invariant holds.**
+- [verified 2026-11-09] The failing leg is `grep -q 'sid != 0xFFFFFFFF && ShellWindowNow())'`, which reads **0**, because
+  `main.c:4385` now says `... && sid != 0xFFFFFFFF && ShellWindowNow() && g_WgcLaunchState == 0)`.
+  The leg pins a closing paren immediately after `ShellWindowNow()`; a legitimate product change put
+  another condition there. [verified 2026-11-09]
+- [verified 2026-11-09] FIX-LANDED: `tools/tests/lifecycle-selftest.sh` - the leg is DELETED, not
+  repaired, and the suite is green again at 69 PASS / 0 FAIL, rc=0 (70 checks before, 69 after:
+  exactly the one). That makes it the FOURTH source-shape leg dropped from this one file; its own
+  comment already recorded two of them ("THE TWO DE-SLICE SOURCE-SHAPE LEGS ARE DELETED
+  (2026-10-26), not repaired ... rewriting it to the new spelling would only re-arm the same trap
+  for the next fix"). Repair was refused twice over: re-pinning the new spelling re-arms that trap
+  for whoever next edits the condition, and deleting ONLY the failing grep while keeping the other
+  five would narrow a check's scope so that it passes - the condition trickery issues.md forbids
+  outright. What still enforces the property is written at the deletion site: the
+  one-GetShellWindow()-call-site rule in main.c is from now on enforced by NOTHING automated, said
+  out loud so this suite's green is not read as covering it, while the latch's SEMANTICS stay
+  asserted on behaviour through `QgaLockVerdict` / `QgaDesliceSupervisionHeld` and their offline
+  rows, and main.c:8444 reports the shell-seen bit in the 30 s classifier line on every run.
+- [verified 2026-11-09] ALREADY REGISTERED, and more precisely than a new entry would have put it:
+  `SUITESREDATRELEASE` [P2 instrument; OPEN] names this in its STILL OPEN clause - "the three
+  source-shape legs read against the code". No new register line was needed, so the issues.md
+  ratchet is untouched at 102394 of 102400.
+
+## test.yml has been RED since the last green at 18:15 on 2026-11-08, on two stale legs (2026-11-09)
+
+Asked Jev what to do next (`scratchpad/jev-sg3-out.json`): `proceed_no_owner_needed` 0.81 and
+`verify_build_carries_fix_first` **1.00** - the subject's binary must be PROVEN to carry the
+CaptionWasStripped predicate or a green SG3 proves nothing. `sg3_run_timing` came back 0.45, UNDER
+FLOOR, so no verdict on when to run; the 1.00 made that moot, because provenance comes first and
+needs no guest. Following it turned up the real blocker.
+
+- [verified 2026-11-09] **A required workflow is RED at HEAD, and `ci-state.py` refuses the sha.**
+  `tools/ci-state.py 45a62e1c`: `build.yml` ok, `qwt-full.yml` and `release-package.yml` green
+  (inherited from 00615baa), `test.yml` **RED** (run 42542118756) -> "do not receipt against this
+  sha". Same at 00615baa (run 42532773887). The failing job is `offline-suites`, and at BOTH shas
+  the failures are the same two: `lifecycle-selftest.sh` rc=1 on the shell-seen latch leg, and
+  `supervision-e2e-selftest.sh` 16/1 on "the control waits for a LOGGED-ON session before pushrun".
+- [verified 2026-11-09] **The red window, from `gh run list --workflow=test.yml`.** Last SUCCESS
+  `428e9feb` 2026-11-08T18:15:09Z. Then `8fb013c6` 20:49 failure, `00615baa` 22:57 failure,
+  `c8729329` 00:07 failure, `45a62e1c` 00:47 failure. The five runs in between are `cancelled` -
+  superseded pushes, the "a second push cancels the first sha's test.yml" shape. At 8fb013c6 only
+  lifecycle was red; supervision joined once it was actually being run.
+- [verified 2026-11-09] **Cause 1, and the trap in dating it.** The lifecycle leg pins
+  `sid != 0xFFFFFFFF && ShellWindowNow())`; agent commit `35c49f5` put `&& g_WgcLaunchState == 0`
+  after that call. Its author date is 2026-11-08 22:30, which is AFTER the 20:49 red, so the date
+  looks like it exonerates the commit - it does not. The agent pointer at `8fb013c6` was
+  `2e936b9`, and `git -C agent show 2e936b9:gui-agent/main.c | grep -c` the pinned string reads
+  **0** there too, with `&& g_WgcLaunchState == 0` present at its :4320. One consistent cause; a
+  commit's timestamp is when it was written, not when it landed.
+- [verified 2026-11-09] **Cause 2 is worse: that leg was NEVER GREEN.** The anchor
+  `qtest pushrun "$OUT/L7-probe.ps1"` was added by `2a246aa1`, 2026-10-07 14:56. The helper it
+  should have matched, `guest_ps(){ q pushrun "$1" ...; }`, was introduced by `7c5de9e0` at
+  2026-10-07 13:36 - EIGHTY MINUTES EARLIER. The literal it pins has not existed in
+  supervision-e2e.sh since before the assertion was written, so the leg could never pass. It only
+  became visible when the suite started actually running in CI; `6d7ae42f` (2026-10-27) put it in a
+  registry, and test.yml's own comment records that this workflow named selftests "only inside
+  comments". A check never seen to FAIL is decoration; one never seen to PASS was never valid.
+- [verified 2026-11-09] FIX-LANDED: both legs are DELETED, not repaired -
+  `tools/tests/lifecycle-selftest.sh` (69 PASS / 0 FAIL, rc=0) and
+  `tools/tests/supervision-e2e-selftest.sh` (16 passed / 0 failed, rc=0), each with what still
+  enforces the property written at the deletion site. Both properties were checked to HOLD in the
+  code first: one real `GetShellWindow()` call at main.c:3132 inside `ShellWindowNow`, and
+  supervision-e2e.sh:666 waiting on `imagename eq explorer.exe` before the control's probe at :680.
+- [verified 2026-11-09] **The package with the fix exists; the receipt was what was blocked.**
+  `git ls-tree 00615baa agent` -> `b3eb1fd`, and `git -C agent merge-base --is-ancestor 6855e29
+  b3eb1fd` passes, so the agent in that package carries the fix (`6855e29`, 2026-11-08 18:23, the
+  hunk adding `!data->CaptionWasStripped`). `release-package.yml` 42532773994 and `qwt-full.yml`
+  42532773882 are both green there, and that run's artefacts are LIVE, not expired:
+  `qwt-improved-setup` 29,483,957 bytes, plus `qwt-full-package` and `qwt-improved-iso`. So an SG3
+  run was never short of a subject - it was short of a sha a receipt could be taken against, and no
+  amount of guest time would have surfaced that.
+- [verified 2026-11-09] **The offline gate is green locally, and only a PUSH can make CI agree.**
+  `tools/tests/run-offline-suites.sh`, the exact command test.yml's `offline-suites` job runs:
+  `RESULT: PASS`, rc=0, "136 green, 0 red, 0 reporting nothing; 2496 assertions over 136 suite(s)",
+  with `lifecycle-selftest.sh` at 69 and `supervision-e2e-selftest.sh` at 16. Green INSIDE the full
+  list, which also clears `OFFLINELISTINTERMITTENTRED` as an explanation for these two. The two
+  deletions are what turn test.yml green, they are uncommitted, and commit/push is the owner's word -
+  so the receipt for any SG3 measurement is blocked on that push and on nothing technical.

@@ -175,17 +175,32 @@ restart_agent_checked(){  # <ps-preamble> <marker-echo-line> <marker> <context>
 # emits them only when dom0 sets service.gui-agent-debug (perf.c: g_PerfEnabled is read at Init, so
 # the value takes at the next agent start; the feature also raises the log level to Debug). Nothing
 # in the chain set it, so every pass that reached the row came back INVALID-INSTRUMENT "no QGAPERF
-# seq available" (2026-10-30 and 2026-10-31; the suite is in none of the 46 receipts). Set for the
-# suite's lifetime and restored on exit to exactly what it was; the proven restart below is what
-# makes it take. qvm-features on a win-idd-testbed qube is pre-authorised (CLAUDE.md, Rig).
-FEAT_WAS=$(qvm-features "$VM" service.gui-agent-debug 2>/dev/null || true)
-restore_debug_feature(){
-  if [ -n "$FEAT_WAS" ]; then qvm-features "$VM" service.gui-agent-debug "$FEAT_WAS" >/dev/null 2>&1
-  else qvm-features --unset "$VM" service.gui-agent-debug >/dev/null 2>&1; fi
-}
-trap restore_debug_feature EXIT
-[ "$FEAT_WAS" = 1 ] || qvm-features "$VM" service.gui-agent-debug 1
-log "  service.gui-agent-debug: was '${FEAT_WAS:-unset}', now '$(qvm-features "$VM" service.gui-agent-debug 2>/dev/null)'"
+# seq available" (2026-10-30 and 2026-10-31; the suite is in none of the 46 receipts).
+# THE HOLD NOW LIVES IN lifecycle-lib.sh (agent_debug_hold / agent_debug_restore). failproof-gates.sh
+# needs exactly the same precondition for a different reason - its SG4/SG2 discriminators are the
+# agent's two LogDebug fullscreen deny lines - and had NO hold at all, so both cells graded
+# INVALID-VACUOUS there while this file quietly had the answer. One implementation, inherited by
+# both; the proven restart below is still what makes the value take, and the helper restores the
+# subject's previous value at EXIT exactly as this block did. Called at top level, never inside
+# $( ) or a pipeline: it keeps the EXIT trap and the previous value in shell state, and a subshell
+# would discard both while the qvm-features write still landed.
+# DE-DUPLICATION ONLY, and the plan's "assert" half is SATISFIED HERE BY PROPAGATION rather than by
+# a new check. The chain, end to end: if the hold fails the feature is off, so rnd8-resolution.sh
+# takes its blind arm (`alive = unknown`, QGAPERF produced no seq) at :277 - ordered BEFORE the
+# `alive = no` arm at :282 and before the only PASS arm at :287 - and writes keyed-mutex-recovered
+# INVALID-INSTRUMENT at :281. pass_verdict echoes that row verbatim into G1 (:214), and the guard at
+# :217 is a WHITELIST (`!= PASS-UNPROVEN && != PASS`), so ANY non-green value aborts and THIS suite
+# writes its OWN `FI capture-failproof INVALID-INSTRUMENT` row at :221 with rc=1. So a vacuous pass
+# is unreachable in BOTH row families - by branch ORDER in the child, by a whitelist here - and
+# because it is a whitelist and not a blacklist, a blind verdict value added to RND-8 later still
+# aborts instead of slipping through. That is why no `exit 2` is added: it would trade a graded row
+# that names WHICH half went blind for a bare log line. Reading only the child's half of this chain
+# is how the earlier version of this comment came to claim less than the code guarantees.
+# rnd8-resolution.sh never sets the feature itself (:278 only ASKS whether it is on), so this hold is
+# what establishes it for all three child runs, and it sits before the first restart_agent_checked
+# (:212) because perf.c reads the feature once at Init.
+agent_debug_hold "$VM" || log "WARN could not hold service.gui-agent-debug on $VM - no QGAPERF seq: RND-8 and this suite both grade INVALID-INSTRUMENT"
+log "  service.gui-agent-debug: was '${_LC_DEBUG_WAS:-unset}', now '$(qvm-features "$VM" service.gui-agent-debug 2>/dev/null)'"
 
 # ---------------------------------------------------------------- D-5: the paired GREEN, unarmed
 log "=== D-5: GREEN pass - fault build, NOTHING armed (this is the control) ==="

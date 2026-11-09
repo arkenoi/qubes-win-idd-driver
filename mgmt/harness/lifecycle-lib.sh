@@ -279,3 +279,67 @@ agent_screen(){
   _lc_ps "$(agent_lines_ps)
 $(_lc_agent_screen_ps)" | grep -ao 'AGENTSCREEN .*' | head -1
 }
+
+# ---- the DEBUG precondition: the feature that writes the agent's debug lines, and the proof -------
+# WHY THIS IS A SHARED PAIR AND NOT A COMMENT IN EACH SUITE. Several harnesses grade on lines the
+# agent writes ONLY at DEBUG, and each one established that precondition its own way or not at all:
+# failproof-faultinject.sh set service.gui-agent-debug and restored it (for QGAPERF seq lines),
+# crop-before-map.sh and vchan-collapse-debug-cell.sh write the registry LogLevel and reboot, and
+# failproof-gates.sh did NEITHER - its SG4/SG2 discriminators are the agent's two fullscreen deny
+# lines (main.c:9611 "boot/shutdown/logon-phase fullscreen" and :9636 "borderless fullscreen ...
+# hidden (set service.gui-fullscreen to allow)", both LogDebug), so against a guest at the shipped
+# LogLevel 3 the baseline agent wrote ZERO D lines, both cells graded INVALID-VACUOUS, and SG3 -
+# whose product fix HAD landed - was never reached, because failproof-gates.sh aborts when any of
+# the four is not green at baseline (measured 2026-11-01 on win11-acc, agent pid 3716).
+# tools/tests/log-policy-selftest.sh:317 polices this class by grepping for the COMMENT "NEEDS
+# LogLevel", so a suite that declares nothing is not failed by it - merely absent from its list. An
+# absence must be ENFORCED, not declared, which is what these two functions are for.
+# perf.c:341 reads /qubes-service/gui-agent-debug at Init and raises the level for the whole
+# process, so the value takes AT THE NEXT AGENT START: hold it BEFORE the restart that precedes the
+# graded run, never after. qvm-features on a win-idd-testbed qube is pre-authorised (CLAUDE.md, Rig).
+# CALL agent_debug_hold AT TOP LEVEL - never inside $( ), a pipeline, or any other subshell. It
+# installs an EXIT trap and remembers the subject's previous value in shell state, and a subshell
+# throws BOTH away while the qvm-features write still lands on dom0: the guest would be left with
+# service.gui-agent-debug=1 and nothing to put it back. Read its one printf line from stdout, or the
+# globals it sets, rather than capturing it.
+agent_debug_hold(){  # <vm> - hold service.gui-agent-debug=1 for this script; the old value goes back at EXIT
+  _LC_DEBUG_VM="${1:-$(_lc_vm)}"
+  [ -n "$_LC_DEBUG_VM" ] || { echo "ERROR agent_debug_hold: no VM (pass one, or set QTEST_VM/VM)" >&2; return 2; }
+  _LC_DEBUG_WAS=$(qvm-features "$_LC_DEBUG_VM" service.gui-agent-debug 2>/dev/null || true)
+  # CHAINED, NEVER REPLACED, AND INSTALLED AS ONE STATEMENT. Bash keeps a single EXIT trap, so a
+  # bare `trap agent_debug_restore EXIT` here would silently drop whatever the caller installed -
+  # p5-run.sh's _p5_exit removes its tempdir AND re-enables the update scan it disarmed - which is
+  # the defect tools/lint-harness.py L21 was written for. ${x:+...} keeps this ONE armed trap
+  # instead of an if/else pair; L21 counts armed `trap ... EXIT` statements, and a second one here
+  # would be a real finding rather than a formatting accident.
+  _LC_DEBUG_PREV_TRAP=$(trap -p EXIT | sed -n "s/^trap -- '\(.*\)' EXIT\$/\1/p")
+  trap "${_LC_DEBUG_PREV_TRAP:+$_LC_DEBUG_PREV_TRAP; }agent_debug_restore" EXIT
+  [ "$_LC_DEBUG_WAS" = 1 ] || qvm-features "$_LC_DEBUG_VM" service.gui-agent-debug 1 || return 1
+  printf 'AGENTDEBUGFEATURE was=%s now=%s\n' "${_LC_DEBUG_WAS:-unset}" \
+    "$(qvm-features "$_LC_DEBUG_VM" service.gui-agent-debug 2>/dev/null || true)"
+}
+
+agent_debug_restore(){  # back to EXACTLY what it was, including ABSENT - a left-behind 1 is a changed subject
+  [ -n "${_LC_DEBUG_VM:-}" ] || return 0
+  if [ -n "${_LC_DEBUG_WAS:-}" ]
+  then qvm-features "$_LC_DEBUG_VM" service.gui-agent-debug "$_LC_DEBUG_WAS" >/dev/null 2>&1
+  else qvm-features --unset "$_LC_DEBUG_VM" service.gui-agent-debug >/dev/null 2>&1
+  fi
+}
+
+# THE PROOF THAT THE HOLD TOOK, read from the agent that is about to be GRADED - never from the
+# feature value, which says only what dom0 asked for. tools/log-sweep.py:257 is the authority on the
+# line shape: [YYYYMMDD.HHMMSS.mmm-<pid>[:<tid>]-<LEVEL>] with LEVEL in [IWEDV]. agent_lines_ps has
+# already bounded $agentlines to the RUNNING pid, so a PREVIOUS agent's debug lines - these suites
+# restart the agent on every toggle, and 4.3.33 made the log one file per day - cannot satisfy the
+# current one's precondition.
+_lc_agent_debug_ps(){ cat <<'PS'
+$dbg=0
+foreach($l in $agentlines){ if($l -match '^\[\d{8}\.\d{6}\.\d{3}-\d+(:\d+)?-D\]'){ $dbg++ } }
+Write-Output ('AGENTDEBUG ' + $dbg + ' of ' + $agentlines.Count + ' pid=' + $agentpid)
+PS
+}
+agent_debug_lines(){
+  _lc_ps "$(agent_lines_ps)
+$(_lc_agent_debug_ps)" | grep -ao 'AGENTDEBUG .*' | head -1
+}

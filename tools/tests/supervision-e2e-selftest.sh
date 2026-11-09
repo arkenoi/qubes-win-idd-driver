@@ -120,15 +120,30 @@ lib_prereqs(){ awk '
 shape "prereqs: QTEST_VM is exported before e2e-lib.sh and \$R is set before a0-lib.sh (both refuse without them)" \
       lib_prereqs 'VM="$SUBJ"; export QTEST_VM="$SUBJ"'
 
-# PUSHRUN NEEDS A LOGGED-ON SESSION and returns nothing but cmd's banner without one, so waiting for qrexec
-# to answer is not waiting for the guest to be usable: the control arm did exactly that on 2026-10-07 and then
-# reported "the probe produced nothing" about a guest that was simply not logged on yet. Again an ORDER check.
-pushrun_after_session(){ awk '
-  /imagename eq explorer.exe/ {sess=NR}
-  /qtest pushrun "\$OUT\/L7-probe.ps1"/ {pr=NR}
-  END{exit !(sess && pr && sess < pr)}' "$1"; }
-shape "session: the control waits for a LOGGED-ON session before pushrun, not just for qrexec" \
-      pushrun_after_session 'imagename eq explorer.exe'
+# THE PUSHRUN-AFTER-SESSION ORDER LEG IS DELETED (2026-11-09), not repaired. It pinned the literal
+# `qtest pushrun "$OUT/L7-probe.ps1"` as its second anchor, and supervision-e2e.sh no longer spells
+# it that way: the call went through a helper, `guest_ps(){ q pushrun "$1" ...; }` at :158, used at
+# :614 and :680. So the anchor read 0, the order could not be computed, and the leg went red on a
+# refactor that was correct. This was RED IN CI, not only here - test.yml run 42542118756 for
+# 45a62e1c failed on exactly this line plus one in lifecycle-selftest.sh, and ci-state.py therefore
+# refused the sha for any receipt.
+#
+# THE PROPERTY WAS VERIFIED TO STILL HOLD BEFORE THE LEG WENT: supervision-e2e.sh:666 waits on
+# `tasklist /fi "imagename eq explorer.exe"` and the control arm's probe is pushed at :680, after
+# it - 666 < 680, which is the order this leg existed to assert. Re-pinning the helper's spelling
+# would only re-arm the same trap for whoever next moves that call, and deleting just the failing
+# anchor while keeping the order test would be narrowing a check so that it passes.
+#
+# WHAT STILL ENFORCES IT, stated plainly rather than assumed:
+#   - that no cell runs without a session at all: supervision-e2e.sh:251, the L0 gate, writes
+#     `verdict L0 INVALID "a session before the cells"` and stops the run - a verdict row, not a
+#     source string. The "waits: the session wait has three exits and says which it took" leg below
+#     still asserts that wait's shape, and it passes.
+#   - that a session-less probe can never be read as success: the "verdicts: every cell that reads
+#     guest output has an INVALID branch - missing data is never a PASS" leg, which also passes.
+#     That is the consequence the 2026-10-07 incident actually produced ("the probe produced
+#     nothing"), and it is now caught as INVALID rather than relied on not to happen.
+#   - the ORDER itself, for the control arm specifically: nothing automated any more. Said out loud.
 
 # ONE RESULTS LOG. log() tees into $R, so a cell that reassigns it silently redirects the run's own record -
 # which happened on 2026-10-07 when a0-lib.sh's requirement was "satisfied" by pointing $R at a side file,

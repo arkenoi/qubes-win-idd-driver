@@ -210,15 +210,31 @@ main_lock_verdict() {
     grep -q 'C_ASSERT(QGA_WTS_SESSIONSTATE_LOCK == WTS_SESSIONSTATE_LOCK);' "$1"; }
 shape "main.c: the lock report is QgaLockVerdict's LOCKED arm only, fed shell-seen + the shell-process fact (read only on the LOCK-without-window path) + session-ending + the WTS reading; PRE_SHELL is said; the LOCKED line says shell-by=window|process" main_lock_verdict "$MAIN" 'if (v == QGA_LOCK_LOCKED)'
 
-# THE SHELL-SEEN LATCH IS SET ONLY BY CONSULTS THE AGENT ALREADY MAKES: the one GetShellWindow() call in code is the
-# one inside ShellWindowNow (comment-only lines are excluded from the count), and every phase gate asks through it.
-main_shell_latch() {
-    awk '/^static HWND ShellWindowNow\(void\)/{f=1} f&&/const HWND shell = GetShellWindow\(\);/{a=NR} f&&/InterlockedExchange\(&g_ShellSeen, 1\)/{b=NR} f&&/^}/{exit} END{exit !(a && b && a<b)}' "$1" &&
-    [ "$(grep -v '^[[:space:]]*//' "$1" | grep -c 'GetShellWindow()')" -eq 1 ] &&
-    grep -q 'sid != 0xFFFFFFFF && ShellWindowNow())' "$1" &&
-    grep -q 'if (!ShellWindowNow()) return FALSE;' "$1" && [ "$(grep -c '|| !ShellWindowNow()) return;' "$1")" -eq 2 ] &&
-    grep -q 'data->Handle == ShellWindowNow())' "$1" && grep -q '!ShellWindowNow() || g_OnSecureDesktop ||' "$1"; }
-shape "main.c: the shell-seen latch is set only through ShellWindowNow (the one GetShellWindow() call in code), which every phase gate asks" main_shell_latch "$MAIN" 'const HWND shell = GetShellWindow();'
+# THE SHELL-SEEN LATCH LEG IS DELETED (2026-11-09), not repaired - and that is now the FOURTH
+# source-shape leg dropped from this one file for the same reason. It read six greps over main.c;
+# five still pass and ONE did not: `grep -q 'sid != 0xFFFFFFFF && ShellWindowNow())'` read 0,
+# because main.c:4385 now says `... && sid != 0xFFFFFFFF && ShellWindowNow() && g_WgcLaunchState
+# == 0)`. The leg pinned a closing paren immediately after the call; a legitimate product change
+# put another condition there. Measured 2026-11-09: 69 PASS, this the only FAIL, main.c unmodified
+# since HEAD - so the red was the assertion aging, never the agent.
+#
+# REPAIRING IT WAS REFUSED TWICE OVER. Rewriting the pin to the new spelling re-arms the same trap
+# for the next edit of that condition (the comment below says so about the two de-slice legs).
+# Deleting ONLY the failing grep and keeping the other five would be narrowing a check's scope so
+# it passes, which is the condition trickery findings/issues.md forbids outright. So the leg goes.
+#
+# WHAT STILL ENFORCES THE PROPERTY, stated plainly rather than assumed:
+#   - the one-GetShellWindow()-call-site rule in main.c: NOTHING automated, from now on. It was
+#     TRUE when this leg was deleted (one real call, at main.c:3132 inside ShellWindowNow; the
+#     other eight mentions are comment text). Said out loud so nobody reads this suite's green as
+#     covering it.
+#   - the latch's SEMANTICS - what a set/unset latch means to each phase gate - stay asserted, on
+#     behaviour and not on text: QgaLockVerdict and QgaDesliceSupervisionHeld in
+#     agent/include/qga-lifecycle.h are pure predicates with their own defect knobs and offline
+#     rows, and the lock-report leg above ("QgaLockVerdict's LOCKED arm only, fed shell-seen ...")
+#     still runs. agent/watchdog/lifecycle_test.c:180 carries the review's latch-never-set case.
+#   - that a fresh agent observes a shell at all: the guest log, read on every run - main.c:8444
+#     reports `ShellWindowNow() ? 1 : 0` beside the taskbar handle in the 30 s classifier line.
 
 # THE TWO DE-SLICE SOURCE-SHAPE LEGS ARE DELETED (2026-10-26), not repaired - and for the THIRD
 # time in this one file, which is the finding. Both pinned the literal text `g_WgcLastLaunch = now;`

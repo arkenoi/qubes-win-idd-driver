@@ -298,6 +298,32 @@ if ! start_control; then
 fi
 log "=== control UP: dom0 sees $CONTROL_N window(s), control=$CONTROL_DIM - capture path proven alive ==="
 
+# ---------------------------------------------------------------- P5-3b: the DEBUG precondition
+# SG4's and SG2's discriminators are the agent's two fullscreen deny lines, and BOTH of them are
+# LogDebug (main.c:9611 boot/shutdown/logon-phase fullscreen, :9636 borderless fullscreen hidden).
+# At the shipped LogLevel 3 neither is ever written, so "no deny line" means "the level hid it", not
+# "the gate did not fire" - and that is not a distinction a verdict can carry. Measured 2026-11-01
+# on win11-acc: the graded agent (pid 3716) wrote ZERO D lines, both cells graded INVALID-VACUOUS,
+# and the caller above it reported "SG4 is not green at baseline" - blaming the cells for a
+# condition of the instrument. A vacuous cell is an UNMEASURED cell, so it is refused HERE, by name,
+# before anything is graded (exit 2, this script's code for "precondition not established").
+# The level is turned on by the caller (lifecycle-lib.sh agent_debug_hold, held across the restart
+# that precedes this run, because perf.c:341 reads the feature at Init). This is the proof it TOOK,
+# read from the running agent's OWN log and not from the feature value dom0 asked for.
+DBGLINES=$(agent_debug_lines)
+log "=== DEBUG precondition: ${DBGLINES:-<no answer from the guest>} ==="
+case "${DBGLINES:-}" in
+  'AGENTDEBUG 0 of '*|'')
+    log "FATAL: the running agent has written NO DEBUG lines, so SG4's and SG2's discriminators"
+    log "       cannot appear whatever the safeguards do, and every nomap verdict would be vacuous."
+    log "       Hold the feature before the agent restart that precedes this run:"
+    log "         qvm-features $VM service.gui-agent-debug 1   (perf.c reads it at Init)"
+    log "       or call agent_debug_hold from mgmt/harness/lifecycle-lib.sh, which is what"
+    log "       failproof-gates.sh and failproof-faultinject.sh do."
+    log "       INVALID-PRECONDITION, not a pass: an unmeasured cell beats a vacuous one."
+    exit 2 ;;
+esac
+
 # run_cell <id> <probe-mode> <expect: map|nomap> <discriminator>
 run_cell(){
   local id="$1" mode="$2" expect="$3" disc="$4"
