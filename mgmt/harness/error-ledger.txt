@@ -27,7 +27,18 @@
 # THE POLICY, stated so it is auditable: a message is accounted for only when defect <= 0.20 AND
 # handled+overlogged >= 0.70. Anything else keeps surfacing. An "undecided" is never an account -
 # it means the code did not answer, which is a reason to read more, not to stop reporting.
-3 Init: Failed to read 'StagingGrant' config value, using default (TRUE)   # the value is optional; the site applies the documented default agent/gui-agent/main.c:152
+#
+# RETIRED 2026-11-09, and a row being retired rather than re-keyed is itself the record: "Init:
+# Failed to read 'StagingGrant' config value, using default (TRUE)", x3. agent/gui-agent/main.c:17480
+# emits "Failed to read '%s' config value (0x%x), using default (TRUE)" - an inserted " (0x%x)" the
+# row does not have - so the key has matched nothing for longer than anyone noticed, and its rise
+# ceiling was gone with it. It is NOT re-keyed, because the normalised form of (0x%x) can only come
+# from a captured line and nothing has ever captured that branch; guessing it would put an invented
+# key in the one file whose whole purpose is receipts. If the condition fires it will surface as
+# unaccounted and earn a receipt from a real line, which is this file working as designed. The
+# routine ERROR_FILE_NOT_FOUND arm has since moved to LogDebug at main.c:17478, so the row's own
+# reason - "the value is optional; the site applies the documented default" - had stopped describing
+# the branch that still warns. Found by tools/hooks/log-key-drift-gate.sh, which this commit adds.
 2 ProcessAutostarts: CfgReadMultiString(Autostart) failed with error 0x2: <OSMSG>   # the value is OPTIONAL and absence is the normal configuration, stated at the site: ERROR_FILE_NOT_FOUND means no autostart entries core-agent/src/qrexec-agent/qrexec-agent.c:1577
 1 WaWatchThread: qdb_open failed (N consecutive), dom0 work area feed unavailable; retrying in N ms   # qubesdb is unavailable in early boot and at shutdown; the site retries on a bounded interval agent/gui-agent/workarea.c:397
 102 GetRealWindowRect: <HEX>: inverted DWM bounds (N,N)-(N,N) and no usable GetWindowRect - rejecting   # Jev over agent/gui-agent/main.c:1566: overlogged=0.43 handled=0.38 defect=0.15 - the site rejects unusable DWM geometry by design (the routine all-zero case is already at Debug on line 1537); the W level is what is in question, not the handling

@@ -219,4 +219,32 @@ if git diff --cached --name-only --diff-filter=ACM | grep -qE '\.(ps1|sh)$'; the
     fi
   fi
 fi
+
+# ---- GATE: A MESSAGE'S TEXT IS A KEY (2026-11-09). -----------------------------------------
+# mgmt/harness/error-ledger.txt matches a disposition on the WHOLE normalised message, and the
+# row's count IS the rise ceiling for it. Append four words to a message and the row stops
+# matching, in two directions: the unaccounted channel fails LOUDLY - one 25-minute guest run
+# exited rc=4 with 12 of 12 product gates passed - while the ceiling is dropped in SILENCE, so a
+# message capped at x43 could reach x4300 unremarked. tools/sweep-gate.sh --verify-ledger exists
+# for this and cannot decide it: 9 of 25 rows come back UNCERTAIN, because its heuristic wants a
+# literal 20-char run taken from the ROW and the row's <HEX>/N tokens shred it into fragments.
+# A SECOND row was already dead the same way when this was written, found by the same check in
+# minutes: "Init: Failed to read 'StagingGrant' config value, using default (TRUE)" against an
+# emitter that has said "config value (0x%x), using default (TRUE)" at main.c:17480 for longer
+# than anyone noticed - retired in the same commit as this gate, because its normalised form
+# cannot be re-keyed without a captured line and nothing has ever captured that branch.
+# The rule is the OLD text, which needs no normaliser (Jev 0.91 over three candidates). It was
+# SEEN TO FAIL on the real diff that caused the rc=4, core-agent d228a03, and seen to pass on
+# winutils bd9a197, on the same diff with the ledger staged, and under its escape hatch.
+kout=$(bash tools/hooks/log-key-drift-gate.sh 2>&1)
+krc=$?
+if [ $krc -eq 1 ]; then
+  echo "$kout"
+  echo
+  echo "pre-commit REFUSED: tools/hooks/log-key-drift-gate.sh - the text or severity of a log"
+  echo "message that the error ledger keys on changed, and the ledger is not in this commit."
+  exit 1
+elif [ $krc -ne 0 ]; then
+  echo "NOTE: tools/hooks/log-key-drift-gate.sh DID NOT RUN (rc=$krc) - that is not a pass."
+fi
 exit 0
