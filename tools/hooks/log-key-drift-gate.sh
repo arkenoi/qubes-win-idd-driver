@@ -1,10 +1,19 @@
 #!/bin/bash
 # log-key-drift-gate.sh - A MESSAGE'S TEXT IS A KEY. Refuse a commit that breaks one silently.
 #
-#   tools/hooks/log-key-drift-gate.sh                 gate the staged diff
-#   tools/hooks/log-key-drift-gate.sh <diff-file>     gate a saved diff (this is how it is proved)
+#   tools/hooks/log-key-drift-gate.sh                        the staged diff + every bumped submodule
+#   tools/hooks/log-key-drift-gate.sh <diff-file>            a saved diff
+#   tools/hooks/log-key-drift-gate.sh --sub <path> <o> <n>   one submodule range
 #
 # Exit: 0 nothing at risk; 1 a ledger row would be orphaned; 2 nothing could be read.
+#
+# SEEN TO FAIL, which is what separates a check from decoration. Against the real commit that
+# caused the rc=4, replayed in the shape it will actually meet - a SUBMODULE range, not a parent
+# diff: `--sub core-agent d228a03^ d228a03` exits 1, naming the run "vchan buffer full, blocking
+# write" and the x43 row it orphaned. And it stays quiet where it must, all measured 2026-11-09:
+# `--sub winutils f7ffa81 bd9a197` (ships, changes no message) 0; the same append diff with the
+# ledger staged 0; under LOGKEY_DRIFT_REASON 0; core-agent 5b2bff9, where the text was already
+# appended, 0; agent 60d00bf, which changed the (FALSE) sibling and not the keyed (TRUE) row, 0.
 #
 # WHY. mgmt/harness/error-ledger.txt matches a disposition on the WHOLE normalised message, and
 # the row carries the RISE CEILING for it as its count. Change the text and the row stops
@@ -52,13 +61,37 @@ WE_RX='Log(Warning|Error)\(|LogWarningUnlessGoingDown\(|Write-Log|\[WARN\]|\[ERR
 # is not in the source, so a run may not cross one.
 SPEC='s/%[-+ #0-9.*lhIzjt]*[diouxXeEfgGaAcspnS%]/\n/g'
 
-if [ "$#" -gt 0 ] && [ -n "${1:-}" ]; then
+# WHERE THE EMITTERS ACTUALLY LIVE, and why this is not just `git diff --cached`. Every C log
+# emitter is in a SUBMODULE (agent/, core-agent/, winutils/), and a submodule commit does not run
+# the superproject's hooks: none of the three has core.hooksPath or a pre-commit of its own, so a
+# gate reading only the parent's staged diff would never fire where the text actually changes - it
+# would be decoration, which is the one thing a check must not be. The POINTER BUMP is the first
+# moment the change can reach a package, and it is also the commit that can carry the fix, because
+# the ledger is a parent-repo file. So for every submodule whose pin this commit moves, the gate
+# reads that submodule's own old..new diff and applies the same rule to it.
+if [ "${1:-}" = "--sub" ]; then
+    # Replay one submodule range. This is how the submodule leg is PROVED, with real shas.
+    [ "$#" -ge 4 ] || { echo "usage: $0 --sub <path> <old> <new>" >&2; exit 2; }
+    DIFF=$(git -C "$2" diff "$3" "$4" -- '*.c' '*.h' '*.cpp' '*.ps1' 2>/dev/null)
+    LEDGER_STAGED=0
+elif [ "$#" -gt 0 ] && [ -n "${1:-}" ]; then
     [ -r "$1" ] || { echo "log-key-drift: cannot read $1" >&2; exit 2; }
     DIFF=$(cat "$1")
     LEDGER_STAGED=$(printf '%s\n' "$DIFF" | grep -cE "^(\+\+\+ b/)?$LEDGER")
 else
     DIFF=$(git diff --cached -U0 -- '*.c' '*.h' '*.cpp' '*.ps1' '*.sh' '*.py')
     LEDGER_STAGED=$(git diff --cached --name-only | grep -cxF "$LEDGER")
+    while IFS= read -r sub; do
+        [ -n "$sub" ] || continue
+        [ -e "$sub/.git" ] || continue
+        subd=$(git diff --cached -- "$sub")
+        old=$(printf '%s\n' "$subd" | sed -n 's/^-Subproject commit \([0-9a-f]\{7,\}\).*/\1/p' | head -1)
+        new=$(printf '%s\n' "$subd" | sed -n 's/^+Subproject commit \([0-9a-f]\{7,\}\).*/\1/p' | head -1)
+        [ -n "$old" ] && [ -n "$new" ] || continue
+        subdiff=$(git -C "$sub" diff "$old" "$new" -- '*.c' '*.h' '*.cpp' '*.ps1' 2>/dev/null)
+        [ -n "$subdiff" ] && DIFF="$DIFF
+$subdiff"
+    done < <(git diff --cached --name-only)
 fi
 [ -n "$DIFF" ] || exit 0
 
