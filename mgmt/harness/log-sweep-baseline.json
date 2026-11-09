@@ -262,6 +262,12 @@
    "reason": "NOT A JEV VERDICT - the status is mine; Jev said expected 0.84 (then 0.77 on the second call), above this rubric's 0.5 floor, fed the emitting code and the sibling InitVchan failure from the tree. Declared unsettled anyway to match the agent's identical condition above, which came back under floor: the same failure in two components must not carry two statuses, and the conservative one is the status that fails a run if it fires. Same mechanism: CreateEvent for g_VchanRoomEvent failed in wmain before InitVchan, so no send on this vchan could wait for ring room; the call fails through cleanup with child->Vchan still NULL, the same path as an InitVchan failure. Two signatures and not one because win_perror expands to _win_perror(__FUNCTION__, L\"...\"), so the function name is part of the key. CEILING UNMEASURED."
   },
   {
+   "regex": "^agent\\|E\\|VchanInit: CreateEvent\\(send-room\\)",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "THE THIRD COPY OF ONE CONDITION, and it carries the same status as the two above it for the reason recorded there: one condition must not carry two statuses, and unsettled is the status that FAILS a run if it ever fires, which is what a fatal startup failure in our own agent should do. Jev on the canonical log-sweep rubric (tools/log-sweep.py:4383 criteria, floor 0.5), fed the emitting code, the macro, the caller's KEEP-FATAL handling and the two siblings' scores from the tree: insufficient-evidence 0.67 (expected 0.24, defect 0.01) - ABOVE this rubric's floor, so unlike the qrexec-agent copy this status is supported rather than purely mine, and it agrees with that copy's insufficient-evidence 0.53. Three signatures and not one because win_perror expands to _win_perror(__FUNCTION__, L\"...\"), so the function name is part of the key. Mechanism: CreateEvent for g_VchanRoomEvent is the FIRST thing VchanInit does, before the daemon vchan exists, so no send can be in flight; on failure VchanInit returns FALSE, main.c:15566 logs \"VchanInit() failed\" and the agent exits for a service respawn with backoff. Costs nothing in a healthy run - signatures_unclassified iterates only signatures observed in the run (tools/log-sweep.py:3949), and an unnamed auto-reset CreateEvent fails essentially only on handle or memory exhaustion. CEILING UNMEASURED."
+  },
+  {
    "regex": "^qrexec\\|I\\|VchanSendMessage: ring full \\(need ",
    "status": "expected",
    "max_per_boot": null,
@@ -4333,5 +4339,5 @@
   }
  },
  "version": 1,
- "preaccounted_at": "bef60aaabcbe551ed7a3d8851d417997ca97f68f"
+ "preaccounted_at": "5ed1aa0"
 }
