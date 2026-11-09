@@ -91,40 +91,55 @@ def pause_flags(d, domid):
     The dump may be truncated (`xl dmesg | tail -200`), so a partial block yields partial data
     rather than nothing, and an absent block yields {}.
     """
-    txt = read(d, "xl-dmesg-domains.txt")
-    if not txt:
-        return {}
-    out, keep, cur = {}, False, None
-    want_vcpus = False
-    for line in txt.splitlines():
-        line = line.replace("(XEN)", "").strip()
-        # ANY line naming a domain id switches context. Not an enumerated list of header
-        # spellings: `dump_domains` prints several ("General information for domain N",
-        # "Rangesets belonging to domain N", "NODE affinity for domain N", ...) and an
-        # unlisted one would let the NEXT domain's vCPUs be read as this domain's. Verified
-        # against the real dump: no line INSIDE a vCPU block names a domain, so this cannot
-        # terminate a block early.
-        m = re.search(r"\bdomain (\d+)", line)
-        if m:
-            keep = (int(m.group(1)) == domid)
-            want_vcpus = keep and line.startswith("VCPU information")
-            cur = None
+    # THE SAME dump_domains OUTPUT LANDS IN MORE THAN ONE FILE, and until 2026-11-09 this read
+    # only the first. dom0/11-wedge-forensics.sh snapshots dmesg at several points, so the `q`
+    # block for one domain can be gone from xl-dmesg-domains.txt (that ring wrapped past it) while
+    # sitting intact in xl-dmesg-before-regs.txt. On the 4.3.40 win10-acc specimen it was exactly
+    # that: this printed "PAUSE-FLAGS: ABSENT" while pause_flags=4 for the held vCPU was in the
+    # other file OF THE SAME BUNDLE - the third time the misreading the docstring above warns
+    # about was paid for, and the second time on this very guest.
+    #
+    # Each file is parsed SEPARATELY and the first one carrying this domain wins. They are never
+    # concatenated: two snapshots taken at different moments would put two copies of the domain
+    # list in one stream, and a block truncated in the first would then be completed by the
+    # second's lines, attributing one sample's flags to another's vCPUs.
+    for name in ("xl-dmesg-domains.txt", "xl-dmesg-before-regs.txt"):
+        txt = read(d, name)
+        if not txt:
             continue
-        # Only the "VCPU information and callbacks" section carries pause_flags. A truncated
-        # dump (`xl dmesg | tail -200`) may cut that header off while leaving VCPU lines
-        # behind; those are then attributed to no domain and dropped, which is the safe way
-        # to be wrong.
-        if not (keep and want_vcpus):
-            continue
-        m = re.match(r"VCPU(\d+):", line)
-        if m:
-            cur = int(m.group(1))
-            continue
-        m = re.search(r"pause_flags=(\d+)", line)
-        if m and cur is not None:
-            out[cur] = int(m.group(1))
-            cur = None
-    return out
+        out, keep, cur = {}, False, None
+        want_vcpus = False
+        for line in txt.splitlines():
+            line = line.replace("(XEN)", "").strip()
+            # ANY line naming a domain id switches context. Not an enumerated list of header
+            # spellings: `dump_domains` prints several ("General information for domain N",
+            # "Rangesets belonging to domain N", "NODE affinity for domain N", ...) and an
+            # unlisted one would let the NEXT domain's vCPUs be read as this domain's. Verified
+            # against the real dump: no line INSIDE a vCPU block names a domain, so this cannot
+            # terminate a block early.
+            m = re.search(r"\bdomain (\d+)", line)
+            if m:
+                keep = (int(m.group(1)) == domid)
+                want_vcpus = keep and line.startswith("VCPU information")
+                cur = None
+                continue
+            # Only the "VCPU information and callbacks" section carries pause_flags. A truncated
+            # dump (`xl dmesg | tail -200`) may cut that header off while leaving VCPU lines
+            # behind; those are then attributed to no domain and dropped, which is the safe way
+            # to be wrong.
+            if not (keep and want_vcpus):
+                continue
+            m = re.match(r"VCPU(\d+):", line)
+            if m:
+                cur = int(m.group(1))
+                continue
+            m = re.search(r"pause_flags=(\d+)", line)
+            if m and cur is not None:
+                out[cur] = int(m.group(1))
+                cur = None
+        if out:
+            return out
+    return {}
 
 
 def parse_vcpus(block):
