@@ -114,6 +114,31 @@ verdict(){ # $1 cell, $2 PASS|FAIL|INVALID|SKIP, $3 claim, $4 evidence
 }
 has(){ case " $CELLS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
+# THE CENSUS GATE, AS A PROBE AT MINUTE 0. This harness sweeps (the SW cell) but never ran the
+# preaccount census, so a log line the sweep has never been told about could not be known about
+# here until SW failed ~30 minutes in - which is exactly where it was found on 2026-11-08: SW FAIL
+# on QGAWGCITEMCLOSED, a line agent ff37934 had added on 2026-10-01. The campaign and acceptance
+# entry points have run this check for as long as it has existed; nothing in a supervision run did.
+# Three legs - the parent tree and both submodules - each derived from the STAMPED PARENT COMMIT
+# the way the preflight derives them, so the ranges cannot disagree about which product version is
+# meant; a submodule sha that will not resolve is itself a refusal, because an unchecked tree is
+# not a clean one. BEFORE vm_lock, so a refusal cannot strand the rig lock.
+SWBASE=mgmt/harness/log-sweep-baseline.json
+_pa=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("preaccounted_at") or "")' "$SWBASE" 2>/dev/null)
+[ -n "$_pa" ] || { echo "FAIL  $SWBASE carries no preaccounted_at, so nothing says which product version it accounts for" >&2; exit 2; }
+_pa_fail=0
+python3 tools/sweep-preaccount.py check --baseline "$SWBASE" --since "$_pa" --head HEAD || _pa_fail=1
+for _sub in agent core-agent; do
+  _b=$(git rev-parse --verify --quiet "$_pa:$_sub"); _h=$(git rev-parse --verify --quiet "HEAD:$_sub")
+  { [ -n "$_b" ] && [ -n "$_h" ]; } \
+    || { echo "FAIL  could not resolve $_sub at ${_pa:0:8} or at HEAD - an unchecked tree is not a clean one" >&2; exit 2; }
+  python3 tools/sweep-preaccount.py check --baseline "$SWBASE" --since "$_b" --head "$_h" \
+          --repo "$_sub" --path-prefix "$_sub/" || _pa_fail=1
+done
+[ "$_pa_fail" = 0 ] \
+  || { echo "FAIL  the sweep has not been told about every log line this tree emits - the lines are named above. Classify each with Jev, write them into $SWBASE, then stamp: tools/sweep-preaccount.py record --baseline $SWBASE --at \$(git rev-parse HEAD)" >&2; exit 2; }
+log "the sweep accounts for every log line in the parent tree and both submodules (stamp ${_pa:0:12})"
+
 # qwt_shutdown ASKS and POLLS and never kills - `qvm-shutdown --wait` kills at its timeout, and a killed guest
 # contaminates every later cell (lint rule L9, which caught exactly this in the first draft of this file).
 source mgmt/harness/shutdown-lib.sh

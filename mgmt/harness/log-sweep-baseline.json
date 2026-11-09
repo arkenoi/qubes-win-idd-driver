@@ -168,8 +168,80 @@
    "issue": "docs/ADR-capture.md:1009 - the event-driven reopen is the DECIDED design",
    "max_per_boot": 6,
    "reason": "NORMAL OPERATION, AND ALREADY ADJUDICATED - the line is written only AFTER the broker has reopened the session on its own initiative, so there is no state in which it reports an unrepaired condition. The unrepaired condition has its own ERROR three blocks below: QGAWGCDEAF, 'WGC delivered no first frame or own-change poke within N ms, recreated once, silent again'. ADR-capture.md:1009 records the reopen as the decided design ('The event-driven reopen of a capture item Windows closes (QGAWGCITEMCLOSED) stays'). MEASURED on supervision run 20261108T231014Z, one occurrence, agent thread 4280:4284, inside L6: toast hwnd 0x401da was rebuilt in the SAME millisecond (PwDetachWindow 396x43 -> PwCarryContent 'PWCARRY 43 rows carried across the rebuild' -> PwAttachWindowCarry 396x152, then 'BROKERRECROP crop 0,0 - session kept'), the item closed, the reopen delivered, and NO QGAWGCDEAF appeared anywhere in the run. WHY Windows closed it is NOT established and is not claimed here: the hwnd survived the rebuild, and a WGC item is normally invalidated by destruction. THE LEVEL STAYS W DELIBERATELY, and a demotion to I was considered and REFUSED. tools/tests/loudness-channel-selftest.sh pins this exact line at W three times, because it is the project's canonical fixture for 'a W-level internal diagnostic that must NOT be read as user-visible' - the comment there records what it cost to learn: a 'level OR send token' rule 'called an internal diagnostic a user-visible failure - on win11-appvm, acceptance run 38826875627, the single line it raised a P1 for was [W] BrokerReportDeaf: QGAWGCITEMCLOSED ... reopened at once, a condition that recovered immediately'. Demoting it would delete that fixture and reverse a recorded decision for the second time on the same line. A move to E would be a severity change we want to see. JEV: diagnosis_lost = not_lost 0.94 (the crop cluster beside it has its own declared pattern, so nothing is hidden by classifying this one); itemclosed_level = demote_to_info 0.73 at confidence 0.64, UNDER the 0.70 floor and NOT acted on - the demotion was refused on the selftest fixture and the ADR, not on a Jev verdict. ANCHORED ON family, level, function and tag ONLY, so a later detail addition cannot blind it the way commit 93a1b27 blinded QGACROPFALLBACK for two weeks. max_per_boot 6 against ONE observed occurrence in a run that fired 2 toasts and restarted the agent five times: headroom for a toast-heavy boot, while a storm of closures - which is what a real capture regression would look like - still breaches.",
-   "regex": "^agent\\|W\\|BrokerReportDeaf: QGAWGCITEMCLOSED hwnd 0xH",
+   "regex": "^agent\\|W\\|BrokerReportDeaf: QGAWGCITEMCLOSED hwnd ",
    "status": "expected"
+  },
+  {
+   "status": "expected",
+   "max_per_boot": 12,
+   "regex": "^agent\\|I\\|[^|]*: QGAMETERHELPERTASK ",
+   "reason": "NORMAL OPERATION. A metering line, ported from branch metering/helper-register-cost (agent 7278694), which exists to measure HELPERREGISTERCOSTSSECONDSUNEXPLAINED - it reports where helper-task registration spends its time and says nothing about health. Emitted on every helper task registration. MEASURED 8 occurrences across the 6 boots of /home/user/qwt-sup/final-c8729329; max_per_boot 12 leaves room for two tasks per launch in a kill-heavy boot while a storm still breaches. Jev normal_operation 1.00. Function wildcarded because the census reads the enclosing function from a git hunk header and the runtime writes __FUNCTION__, and the two disagree (measured: census said WgcLaunch where the runtime writes WgcLaunchThreadProc)."
+  },
+  {
+   "status": "expected",
+   "max_per_boot": 6,
+   "regex": "^agent\\|I\\|[^|]*: QGATHREAD role=wgclaunch tid=",
+   "reason": "NORMAL OPERATION. The first statement of the broker launch thread, an M1 instrument announcing the thread's role and tid; the role is the only SHORT-LIVED one, so restwatch never joins it. MEASURED 4 across 6 boots (final-c8729329). QGATHREAD is a SHARED tag - capture, main, toastcrop and hooks also emit it - so the role is part of the anchor and this row speaks only for wgclaunch. Jev normal_operation 1.00."
+  },
+  {
+   "status": "expected",
+   "max_per_boot": 6,
+   "regex": "^agent\\|I\\|[^|]*: QGALAUNCHOFFLOOP role=wgclaunch ok=",
+   "reason": "NORMAL OPERATION, AND IT CARRIES ITS OWN FAILURE. Written when every off-loop broker launch finishes, with ok=1 on success and ok=0 on failure - ONE line for both outcomes, the failure in a FIELD rather than in a separate line or level, so declaring it expected does not silence a failure path (the E-level QGABROKERLAUNCHTHREAD rows below are the ones that report one). Also carries registration_ms, loop_ticks and loop_idle_ms. MEASURED 4 across 6 boots. Jev normal_operation 0.99 conf 0.98 - the 0.01 against is the ok=0 case, which is the right thing to be uneasy about and is why this reason names it."
+  },
+  {
+   "status": "expected",
+   "max_per_boot": 6,
+   "regex": "^agent\\|I\\|[^|]*: QGAMETERDESLICEARM pass_now=",
+   "reason": "NORMAL OPERATION. A metering line on every de-slice rearm, also from branch metering/helper-register-cost. Its decidable property is armed - done == DESLICE_FIRST_WARN_MS on every rearm, readable on an ORDINARY run with no trigger and no injected delay - which is the point: it is instrumentation for a measurement, not a health signal. MEASURED 4 across 6 boots. Jev normal_operation 0.96 conf 0.94."
+  },
+  {
+   "status": "expected",
+   "max_per_boot": 6,
+   "regex": "^agent\\|I\\|[^|]*: QGATHREAD role=notiflaunch tid=",
+   "reason": "NORMAL OPERATION. The notification-bridge launch thread's role/tid announcement, same shape and same reasoning as role=wgclaunch; short-lived, never joined. MEASURED 4 across 6 boots. Jev normal_operation 1.00."
+  },
+  {
+   "status": "expected",
+   "max_per_boot": 6,
+   "regex": "^agent\\|I\\|[^|]*: QGALAUNCHOFFLOOP role=notiflaunch ok=",
+   "reason": "NORMAL OPERATION, AND IT CARRIES ITS OWN FAILURE - same shape as role=wgclaunch: ok=1/ok=0 in a field on a line written when the bridge launch finishes, with the E-level QGANOTIFLAUNCHTHREAD rows below reporting the actual failures. MEASURED 4 across 6 boots. Jev normal_operation 0.99 conf 0.98."
+  },
+  {
+   "status": "unsettled",
+   "regex": "^agent\\|W\\|[^|]*: QGABROKERREADYEVT not created \\(",
+   "reason": "NEVER OBSERVED, AND DELIBERATELY NOT SILENCED. Added agent b3eb1fd behind `if (!g_WgcReadyEvt)`: the broker's readiness event could not be created, so readiness falls back to being noticed on the next main-loop pass instead of being pushed. The code comment above it says a fallback is an ANOMALY here and is named rather than absorbed, and this project's rule is that fallbacks are anomalies - so the row exists to satisfy the census (tools/sweep-preaccount.py refuses a campaign on any line it has not been told about, whatever the level), NOT to excuse the line. status unsettled still counts toward signatures_unclassified (log-sweep.py:4044 counts new plus unsettled), so the first occurrence breaches at max 0 and gets a decision then. MEASURED 0 occurrences in final-c8729329 across 6 boots. Jev anomaly_keep_armed 1.00."
+  },
+  {
+   "status": "unsettled",
+   "regex": "^agent\\|W\\|[^|]*: schtasks did not finish within N s \\(",
+   "reason": "NEVER OBSERVED, AND DELIBERATELY NOT SILENCED. Guarded by WAIT_TIMEOUT on a 15 s WaitForSingleObject around the schtasks child, which is then TerminateProcess'd and the call treated as failed - so when this fires the helper task is NOT registered. Carries no QGA tag, so the anchor is the function and the fixed text. Row is for the census only; unsettled keeps signatures_unclassified armed so the first occurrence breaches. MEASURED 0 across 6 boots. Jev anomaly_keep_armed 1.00."
+  },
+  {
+   "status": "unsettled",
+   "regex": "^agent\\|E\\|[^|]*: QGABROKERLAUNCHTHREAD could not start the launch thread \\(",
+   "reason": "NEVER OBSERVED, AND DELIBERATELY NOT SILENCED. CreateThread for the off-loop broker launch failed, so registration runs ON the main loop instead - the pre-change behaviour, which blocks the loop for as long as schtasks takes. The work still happens, which is exactly why this must stay loud: the symptom is latency, not absence. Row is for the census; unsettled keeps the gate armed. MEASURED 0 across 6 boots. Jev anomaly_keep_armed 1.00."
+  },
+  {
+   "status": "unsettled",
+   "regex": "^agent\\|E\\|[^|]*: QGABROKERLAUNCHTHREAD the broker launch had not finished at the agent's exit \\(wait=0x",
+   "reason": "NEVER OBSERVED, AND DELIBERATELY NOT SILENCED. A 20 s join on the broker launch thread did not complete at agent exit, and the task is disarmed anyway - so the disarm races the registration. Row is for the census; unsettled keeps the gate armed. MEASURED 0 across 6 boots. Jev anomaly_keep_armed 1.00."
+  },
+  {
+   "status": "unsettled",
+   "regex": "^agent\\|E\\|[^|]*: QGANOTIFLAUNCHTHREAD CreateThread for the bridge launch failed \\(",
+   "reason": "NEVER OBSERVED, AND DELIBERATELY NOT SILENCED. The notification bridge's launch thread could not be created, so the launch runs on the main loop and blocks it for the registration - same shape and same reasoning as QGABROKERLAUNCHTHREAD. Row is for the census; unsettled keeps the gate armed. MEASURED 0 across 6 boots. Jev anomaly_keep_armed 1.00."
+  },
+  {
+   "status": "unsettled",
+   "regex": "^agent\\|E\\|[^|]*: QGANOTIFLAUNCHTHREAD the bridge launch had not finished N s into the exit \\(wait ",
+   "reason": "NEVER OBSERVED, AND DELIBERATELY NOT SILENCED. The bridge launch had not finished 20 s into the agent's exit, and the task disarm below may race its registration. Row is for the census; unsettled keeps the gate armed. MEASURED 0 across 6 boots. Jev anomaly_keep_armed 1.00."
+  },
+  {
+   "status": "expected",
+   "max_per_boot": 40,
+   "regex": "^qrexec\\|I\\|[^|]*: client [^ ]* departed before sending its request header",
+   "reason": "NORMAL OPERATION. core-agent qrexec-agent.c:1629 (core-agent 598903ef), the quiet half of a pair that used to claim a fault: a pipe client that disconnected before its request header arrived is a caller that went away, not a failure, so the branch on ERROR_BROKEN_PIPE / ERROR_PIPE_NOT_CONNECTED / ERROR_NOT_CONNECTED reports at Info while every later read keeps its ERROR (past that point a v4 magic has arrived, so a departure IS a request lost in flight). Deliberately ONE LEVEL ABOVE the library's two siblings because LOG_LEVEL_DEFAULT is INFO, so a Debug line would leave no trace in a field log and nothing else can say the header never arrived. max_per_boot 40: the harness itself makes concurrent qubes.VMShell calls whose callers come and go, which is the same shape as QGAVCHANUNDECLARED's 22-per-run group. The specifier is wildcarded ([^ ]*) rather than written as %lld or as N, because the census matches a pattern against the FORMAT string and the sweep matches it against the RENDERED line - a row written in either form is true for exactly one of the two (tools/sweep-preaccount.py:385-389)."
   }
  ],
  "signatures": {
@@ -4194,5 +4266,5 @@
   }
  },
  "version": 1,
- "preaccounted_at": "81dbd4c4b455ade990903a88615567347af35c89"
+ "preaccounted_at": "c8729329b4919080632098abc8d21d03e3e022b2"
 }
