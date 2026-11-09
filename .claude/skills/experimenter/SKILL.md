@@ -65,8 +65,29 @@ A kill is permitted only when the state is already unrecoverable AND is about to
 (e.g. its volumes are overwritten by the next clone). Otherwise a hard kill manufactures the very
 corruption you will then misdiagnose.
 
-**11. A transient must not fail the run, and must never be discarded silently.**
-Retry with backoff, and log the error text.
+**11. There is no such thing as a transient. NEVER retry in hope.**
+Owner, 2026-09-17: *"it should be pointed to something that hard fails immediately, not waits, not
+retries. if it is not supposed to work, it should not continue trying"*, and *"no uncertainty
+anywhere"*. Owner again, 2026-11-09: *"TRANSIENT IS THE WORST KIND OF BUG BECAUSE YOU CANNOT EVEN
+REPRODUCE IT. YOU ARE STRICTLY PROHIBITED FROM RETRYING ANYTHING IN HOPE IT GOES AWAY."*
+
+So a failure HARD-FAILS on the first attempt, with the error text kept, and the fix is never a
+bound on the wait: it is to remove the cause or to turn the failure into a definitive refusal.
+Calling something transient is a claim you cannot support, because the evidence for it is the
+absence of a reproduction.
+
+**Retry is permitted for exactly one thing: a DIFFERENT, authoritative channel.** Reading the same
+dead channel again is retrying in hope; reading the log volume host-side with mtools when the guest
+shell does not answer is a different instrument, and the silent channel is then graded as its own
+named finding rather than swallowed.
+
+**What this rule cost, measured 2026-11-09.** This text used to read *"A transient must not fail the
+run... Retry with backoff"*, and `mgmt/harness/matrix.sh` was written under it: three attempts with
+backoff on the installer-log fetch, its comment calling the 2026-09-09 occurrence "a transient".
+On the 4.3.40 acceptance all three attempts returned nothing, the cell graded INVALID-INSTRUMENT,
+and the retry had masked a real defect for two months - `qubes.VMShell` hangs on the subject while
+`qubes.GetDate` answers in 26 bytes with a live clock, and the installer log it could not fetch was
+sitting on the bound log volume with its `=== RESULT === {"ok":true,...}` trailer intact.
 
 **12. Check the premise before building on it.**
 State what you believe about the subject, then verify it.
