@@ -1091,3 +1091,35 @@ needs no guest. Following it turned up the real blocker.
   list, which also clears `OFFLINELISTINTERMITTENTRED` as an explanation for these two. The two
   deletions are what turn test.yml green, they are uncommitted, and commit/push is the owner's word -
   so the receipt for any SG3 measurement is blocked on that push and on nothing technical.
+
+## Supervisor discipline, tested end to end with no defects (2026-11-09)
+
+- [verified 2026-11-09] **18 cells, 18 PASS, 0 fail, 0 invalid, rc=0.** `supervision-e2e.sh` over
+  win11r-sup, cloned by the harness from the seal-VERIFIED win11r-qwt, deploying the package under
+  test (`--build 4.3.40+agent.b3eb1fd25688`, iso fingerprint b779fdfd9caa matching the sha256
+  verified at download). Cells graded: L1 L9 L2 L3 L5 L6 L7 L7C SW L8 L8W L4 L11 L12C L12 L12R L10C
+  L10 - the 13 requested expanded into 18 by their own sub-cells. 07:32:45Z to 08:00:48Z, 28 minutes,
+  not the hours I had budgeted for. `--build` was passed deliberately: the script's own comment says
+  that without it the analyzer bills the GOLDEN's errors to the candidate on exactly the cell that
+  upgrades a golden, which L1 always does.
+- [verified 2026-11-09] **The log evidence agrees with the verdicts, which is the part a row count
+  cannot show.** results.log carries ZERO `[ERROR]` and ZERO `[WARN]` lines, and the SW cell is not
+  a self-report but a sweep: `LOGSWEEP-RESULT vm=win11r-sup rc=0 status=CLEAN`, report at
+  sweep/report.json. So "18 pass" is not resting on the absence of a check - the sweep ran over the
+  whole window and found nothing new or breached.
+- [verified 2026-11-09] **L6 was measured rather than graded INVALID, and that took a preflight.**
+  `toastfire.exe` is in NEITHER shipped package - not in qwt-improved-setup.iso (its MANIFEST's
+  reference_binaries are gui-agent.exe and gui-watchdog.exe only) and not in qwt-full-package (whose
+  helper-bins are etwproxy, notifhost, wgcbroker). That is by design: it is a test tool, not a
+  shipped helper, built by .github/workflows/build.yml:831 into the `gui-agent-package` artifact.
+  Without `--toastfire` the cell grades INVALID by name ("missing data fails",
+  supervision-e2e.sh:509), so launching before checking would have burned the campaign on a cell
+  that could not measure. Taken from run 42532774015, the build of 00615baa - the SAME commit as the
+  package under test, not a stale local probe copy.
+- [verified 2026-11-09] **The campaign refused to start while another guest was up, and that was
+  right.** win11r-sg3 was left RUNNING by the p5 run; supervision-e2e exited 2 with "REFUSING:
+  another Windows guest is up" and offered no override flag, saying "stopping the other guest is a
+  decision, not a default". Resolved with `qwt_shutdown win11r-sg3 600` from shutdown-lib.sh - the
+  bounded stop, never `qvm-shutdown --wait`, which kills on expiry and reports it as a clean stop -
+  then verified `win11r-sg3|Halted` before relaunching. Its evidence was already pulled and
+  committed in 3704b7fd, so nothing was lost to the shutdown.
