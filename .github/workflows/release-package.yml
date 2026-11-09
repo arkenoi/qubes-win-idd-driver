@@ -144,7 +144,7 @@ jobs:
   # console probes that job also builds are development tools and have no place in an
   # installable payload.
   idd:
-    runs-on: windows-2025
+    runs-on: windows-2022
     timeout-minutes: 120   # a hung step must fail the job, not hold a concurrency slot for the 6-hour default
     steps:
       - name: Require signing config
@@ -312,7 +312,7 @@ jobs:
 
   setup:
     needs: [msi, idd, pv, cons]
-    runs-on: windows-2025
+    runs-on: windows-2022
     timeout-minutes: 120   # a hung step must fail the job, not hold a concurrency slot for the 6-hour default
     steps:
       - uses: actions/checkout@v4

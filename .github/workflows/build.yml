@@ -24,7 +24,7 @@ env:
 jobs:
   # ---------------------------------------------------------------- Track B: IddCx driver
   idd-driver:
-    runs-on: windows-2025
+    runs-on: windows-2022
     timeout-minutes: 120   # a hung step must fail the job, not hold a concurrency slot for the 6-hour default
     steps:
       - uses: actions/checkout@v4
@@ -254,7 +254,7 @@ jobs:
   # per ci-notes/trackA-build.md. Enable via repo variable AGENT_BUILD=true.
   gui-agent:
     if: ${{ vars.AGENT_BUILD == 'true' }}
-    runs-on: windows-2025
+    runs-on: windows-2022
     timeout-minutes: 120   # a hung step must fail the job, not hold a concurrency slot for the 6-hour default
     env:
       CONFIG: Release
@@ -940,7 +940,7 @@ jobs:
     needs: [gui-agent, idd-driver]
     # Build the package whenever the agent built, even if the driver job failed.
     if: ${{ always() && needs.gui-agent.result == 'success' }}
-    runs-on: windows-2025
+    runs-on: windows-2022
     timeout-minutes: 120   # a hung step must fail the job, not hold a concurrency slot for the 6-hour default
     steps:
       - uses: actions/checkout@v4
