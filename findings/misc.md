@@ -34,7 +34,13 @@
   measured, and holding the exit path for 48 s would turn a rare schtasks stall into an agent that hangs on
   shutdown past the SCM's patience.
   WHAT IS NOT MEASURED YET: any of this on a guest. `QGADESLICEGRACESTALEANCHOR` closes only when a run reproduces
-  the trigger with `dom0_loud_failures=0`, and `EMPTYREQUIREDCHANNELFAILSTHESWEEP` wants one supervision-e2e run.
+  the trigger with `dom0_loud_failures=0` - and the closest run, L8W on 20261109T073245Z-3150578, read
+  `dom0_loud_failures=1`, so that one is still genuinely owed.
+  `EMPTYREQUIREDCHANNELFAILSTHESWEEP` NO LONGER WANTS A RUN and this line was stale when read on 2026-11-10: the
+  collector fix 9e0921b9 was measured end to end on 20261108T215223Z (SW PASS, `LOGSWEEP-RESULT vm=win11r-sup rc=0
+  status=CLEAN`), and the whole suite then ran clean on 20261109T073245Z-3150578 - 18 cells, 18 PASS, zero FAIL,
+  zero INVALID, in 28 minutes. issues-closed.md has carried that receipt since 2026-11-09 while this line kept
+  saying a run was wanted; read literally it sends the next reader at a goal already met.
   Also not measured: which part of a 7.5 s registration is schtasks.exe's own startup, the Schedule service's
   write, or the broker's start - the meter times the whole subprocess only.
   THE SIBLING IS NOT FIXED: `NotifBridgeSupervise()` -> `NotifBridgeLaunch()` (`main.c:5305`) -> `NotifRunInSession`
