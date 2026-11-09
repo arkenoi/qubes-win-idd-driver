@@ -144,7 +144,7 @@ jobs:
   # console probes that job also builds are development tools and have no place in an
   # installable payload.
   idd:
-    runs-on: windows-2022
+    runs-on: windows-2025
     timeout-minutes: 120   # a hung step must fail the job, not hold a concurrency slot for the 6-hour default
     steps:
       - name: Require signing config
@@ -198,7 +198,7 @@ jobs:
         shell: pwsh
         run: |
           $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
-              -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe |
+              -latest -version '[17.0,18.0)' -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe |
               Select-Object -First 1
           & $msbuild driver\ /m /p:Configuration=Release /p:Platform=x64 /t:Build
           if ($LASTEXITCODE -ne 0) { throw "msbuild failed" }
@@ -312,7 +312,7 @@ jobs:
 
   setup:
     needs: [msi, idd, pv, cons]
-    runs-on: windows-2022
+    runs-on: windows-2025
     timeout-minutes: 120   # a hung step must fail the job, not hold a concurrency slot for the 6-hour default
     steps:
       - uses: actions/checkout@v4
@@ -386,7 +386,7 @@ jobs:
         shell: pwsh
         run: |
           $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
-              -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe |
+              -latest -version '[17.0,18.0)' -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe |
               Select-Object -First 1
           & $msbuild tools\qwt-bootstrap\qwt-bootstrap.vcxproj /p:Configuration=Release /p:Platform=x64 /t:Build
           if ($LASTEXITCODE -ne 0) { throw "qwt-bootstrap msbuild failed" }
@@ -401,7 +401,7 @@ jobs:
           # The stock qubesdb-cmd CLI mis-parses '/'-prefixed keys on Windows; this tiny tool reads
           # qubesdb correctly via the client DLL. Plain console exe, no core-qubesdb build dep.
           $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
-              -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe |
+              -latest -version '[17.0,18.0)' -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe |
               Select-Object -First 1
           & $msbuild tools\qubesdb-read\qubesdb-read.vcxproj /p:Configuration=Release /p:Platform=x64 /t:Build
           if ($LASTEXITCODE -ne 0) { throw "qubesdb-read msbuild failed" }

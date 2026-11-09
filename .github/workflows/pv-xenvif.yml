@@ -74,7 +74,7 @@ env:
 
 jobs:
   xenvif:
-    runs-on: windows-2022
+    runs-on: windows-2025
     timeout-minutes: 45
     steps:
       # Copied VERBATIM from build.yml's proven idd-driver step. My paraphrase failed:
@@ -197,7 +197,7 @@ jobs:
           # (the previous failure: "The term 'msbuild.exe' is not recognized"). Put the VS
           # MSBuild directory on PATH rather than editing upstream's script.
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $mb = & $vswhere -latest -requires Microsoft.Component.MSBuild `
+          $mb = & $vswhere -latest -version '[17.0,18.0)' -requires Microsoft.Component.MSBuild `
                   -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
           if (-not $mb) { throw "MSBuild.exe not found" }
           $env:PATH = (Split-Path $mb) + ';' + $env:PATH
