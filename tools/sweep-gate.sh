@@ -610,7 +610,7 @@ if [ "${VLED:-}" = 1 ]; then
     SRC=$(mktemp)
     grep -ra --exclude-dir=.git --exclude=error-ledger.txt --exclude=error-corpus.txt \
          --exclude=log-sweep-baseline.json --exclude='sweep-gate*' -h '' \
-         agent core-agent guest mgmt/harness mgmt/prime-jobs tools 2>/dev/null > "$SRC"
+         agent core-agent guest mgmt/harness mgmt/prime-jobs tools winutils 2>/dev/null > "$SRC"
     python3 tools/sweep-gate-verify-ledger.py "$LEDGER" "$SRC"
     _vrc=$?
     rm -f "$SRC"

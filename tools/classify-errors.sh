@@ -100,13 +100,21 @@ PYK
     # to classify the emitter of 'QGAVCHANFAIL ...' from classify-errors.sh:54. It answered
     # defect=0.72. A confident verdict about the wrong file is the worst output available here, and
     # it would have gone into the ledger as a receipt. Same self-match that the ledger verifier hit.
+    # winutils/ is OUR fork and lives HERE since a23aa0ec/e25cbc1 (2026-11-07), so it belongs in the
+    # roots below - DO NOT remove it. send_command_to_daemon stays EXTERNAL: it is the qubesdb client.
     while IFS= read -r _k; do
       [ -n "$_k" ] || continue
+      # NOT FIXED HERE: a file that merely QUOTES the message still wins by root order - measured
+      # 2026-11-09, "QpsRead from client" -> agent/gui-agent/perf.c where it is a COMMENT. And a
+      # win_perror text ("The pipe is being closed") is assembled at RUNTIME, so it is in NO source
+      # and EXTERNAL is right, yet a quoter is reported. Telling an EMITTER from a QUOTER needs more
+      # than a literal search. A file-level copy of the preference below was tried and MEASURED NOT
+      # TO FIX IT - it accepts `echo `, so a harness script echoing the text still wins.
       for _pat in '*.c' '*.cpp' '*.h' '*.sh' '*.ps1' '*.py'; do
         src=$(grep -rln --exclude-dir=.git --exclude=error-ledger.txt --exclude=error-corpus.txt \
                 --exclude=log-sweep-baseline.json --exclude='classify-errors.sh' \
                 --exclude='sweep-gate*' --include="$_pat" \
-                -F -- "$_k" agent core-agent guest mgmt/harness mgmt/prime-jobs 2>/dev/null | head -1)
+                -F -- "$_k" agent core-agent guest mgmt/harness mgmt/prime-jobs winutils 2>/dev/null | head -1)
         [ -n "$src" ] && break
       done
       if [ -n "$src" ]; then
@@ -135,7 +143,7 @@ PYK
   # matters: one is a tool failure to fix, the other is a disposition to write by hand.
   if [ -z "$ln" ]; then
     if [ -z "$src" ]; then
-      echo "EXTERNAL x$cnt $fn - no file under agent/ core-agent/ guest/ mgmt/ tools/ carries this message or function, so it comes from vendored code this repository does not contain (windows-utils, the qrexec pipe server, libvchan). No Jev verdict is possible from here; the ledger row has to say that."
+      echo "EXTERNAL x$cnt $fn - no file under agent/ core-agent/ guest/ mgmt/harness/ mgmt/prime-jobs/ winutils/ carries this message or function, so it comes from code this repository does not author (the qubesdb client, libvchan, anything under upstream/ro/). No Jev verdict is possible from here; the ledger row has to say that."
     else
       echo "SKIP x$cnt $fn - found $src but cannot locate the emitting line (key='$key'), so there is no evidence to judge"
     fi
