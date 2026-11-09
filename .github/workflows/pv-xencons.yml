@@ -76,7 +76,7 @@ jobs:
           $vsix = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Vsix" -Recurse -Filter '*.vsix' |
                   Select-Object -First 1
           if (-not $vsix) { throw "WDK.vsix not found after choco install" }
-          $inst = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022" -Recurse -Filter VSIXInstaller.exe |
+          $inst = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio" -Recurse -Filter VSIXInstaller.exe |
                   Select-Object -First 1
           # VSIXInstaller can HANG on the hosted runner (2026-10-03/04: release-package runs 37147382401 and 37179019542 sat in it, the
           # choco WDK install itself finishing in ~1 min). Bounded: 4 min per attempt, the installer WE started stopped by its handle,
@@ -136,7 +136,7 @@ jobs:
           # (the previous failure: "The term 'msbuild.exe' is not recognized"). Put the VS
           # MSBuild directory on PATH rather than editing upstream's script.
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $mb = & $vswhere -latest -version '[17.0,18.0)' -requires Microsoft.Component.MSBuild `
+          $mb = & $vswhere -latest -version '[17.0,19.0)' -requires Microsoft.Component.MSBuild `
                   -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
           if (-not $mb) { throw "MSBuild.exe not found" }
           $env:PATH = (Split-Path $mb) + ';' + $env:PATH

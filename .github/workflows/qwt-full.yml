@@ -153,9 +153,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $msbuild = & $vswhere -latest -version '[17.0,18.0)' -requires Microsoft.Component.MSBuild `
+          $msbuild = & $vswhere -latest -version '[17.0,19.0)' -requires Microsoft.Component.MSBuild `
                        -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
-          $vsroot  = & $vswhere -latest -version '[17.0,18.0)' -property installationPath
+          $vsroot  = & $vswhere -latest -version '[17.0,19.0)' -property installationPath
           $tv      = (Get-Content "$vsroot\VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt").Trim()
           $lib     = "$vsroot\VC\Tools\MSVC\$tv\bin\Hostx64\x64\lib.exe"
           if (-not (Test-Path $msbuild)) { throw "MSBuild.exe not found" }
@@ -512,7 +512,7 @@ jobs:
           # qubes-etwproxy batch token in session 0, which has no window station; a user32 or
           # gdi32 import means 0xC0000142 STATUS_DLL_INIT_FAILED before main (the rig-proven
           # failure the console split removed). Refuse to ship a binary that regressed it.
-          $dumpbin = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022" -Recurse `
+          $dumpbin = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio" -Recurse `
                        -Filter dumpbin.exe -ErrorAction SilentlyContinue |
                      Where-Object FullName -match 'Hostx64\\x64' | Select-Object -First 1
           if (-not $dumpbin) { throw 'dumpbin.exe not found - cannot verify the etwproxy import table' }
@@ -591,7 +591,7 @@ jobs:
             $vsix = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Vsix" -Recurse -Filter '*.vsix' -ErrorAction SilentlyContinue |
                     Select-Object -First 1
             if (-not $vsix) { throw "WDK.vsix not found after choco install" }
-            $inst = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022" -Recurse -Filter VSIXInstaller.exe |
+            $inst = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio" -Recurse -Filter VSIXInstaller.exe |
                     Select-Object -First 1
             # VSIXInstaller can HANG on the hosted runner (2026-10-03/04: release-package runs 37147382401 and 37179019542 sat in it, the
             # choco WDK install itself finishing in ~1 min). Bounded: 4 min per attempt, the installer WE started stopped by its handle,
@@ -819,7 +819,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $redist = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022" -Recurse `
+          $redist = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio" -Recurse `
                     -Filter vc_redist.x64.exe -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $redist) { throw 'vc_redist.x64.exe not found on runner' }
           $fake = "$env:RUNNER_TEMP\fake-ewdk"
