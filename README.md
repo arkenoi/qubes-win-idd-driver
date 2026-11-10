@@ -21,62 +21,59 @@ Anywhere this README says "stock", it means unmodified upstream QWT 4.2.2 as shi
 
 ## Download
 
-Release **[v4.3.39-agentf0dd19f](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.39-agentf0dd19f)** — agent `f0dd19f`, package `4.3.39`, built from commit `ab0c1994`. See
-[`docs/RELEASE-NOTES-4.3.39.md`](docs/RELEASE-NOTES-4.3.39.md) for what changed and what was
+Release **[v4.3.40-agent5ed1aa0](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.40-agent5ed1aa0)** — agent `5ed1aa0`, package `4.3.40`, built from commit `01e6d48a`. See
+[`docs/RELEASE-NOTES-4.3.40.md`](docs/RELEASE-NOTES-4.3.40.md) for what changed and what was
 verified.
 
-> **Read this before you install it.** 4.3.39 is the first release in this series cut on a **CLEAN
-> acceptance record and no override**. On these exact bytes the **full eight-cell matrix** ran —
-> clean install, same-version reinstall, in-place upgrade and template→AppVM derivation, on both
-> Windows 10 and Windows 11 — **89 checks passed, 0 failed**, and **all five feature tests passed**
-> (`crop-before-map`, `notify-errors-guest-test`, `supervision-gate`, `template-update`,
-> `updater-component`).
+> **Read this before you install it.** 4.3.40 was published **under two deliberate overrides**, both
+> printed in full at the top of the notes on the release page. On these exact bytes the **full
+> eight-cell matrix** ran — clean install, same-version reinstall, in-place upgrade and
+> template→AppVM derivation, on both Windows 10 and Windows 11 — **89 checks passed, 0 failed, and
+> zero product failures**. Four of the five feature tests passed: `crop-before-map`,
+> `notify-errors-guest-test`, `supervision-gate`, `updater-component`.
 >
-> **The change-scoped gate is still not met.** It requires **19 suites** for this range and the
-> receipt names **16** — the highest any release here has recorded, and still short. What the
-> missing four actually are, because the summary matters:
+> **The first override covers one unmeasurable item, not a defect.** The fifth feature test,
+> `template-update`, returned **INSTRUMENT** — the suite could not measure, so it is recorded as
+> *uncovered* rather than as passed. Its own run was clean: three dom0-driven update rounds,
+> `fails=0`, and all eight graded updater gates passed. What could not be judged is a single
+> *excluded* update — a Microsoft audio-driver offer carrying no KB and no self-contained URL. The
+> harness that builds independent evidence for excluded items only knows how to measure
+> Defender-shaped artefact versions, so for this item it reports that no measured artefact is known,
+> and the audit cannot then positively judge the exclusion. An independent catalog measurement taken
+> 2026-11-08 shows the exclusion is honest — the catalog holds no entry with that title — but that
+> measurement is not yet wired into the audit. **No product defect is implicated and nothing about
+> this item reaches a user.**
 >
-> * `p3a-etw-gate` — **all four of its failing drills are defects in the suite, not in the
->   product.** An earlier version of this section called two of them a real product defect and a
->   *"double-notification mechanism"*. That was wrong, and wrong in the direction that matters:
->   it reported shipped, specified behaviour as a bug.
->   * `T7a` asserted that a toast whose sender is not on the forward allowlist must never be
->     forwarded. The shipped contract is the opposite:
->     [`docs/ADR-toasts.md`](docs/ADR-toasts.md) §2 is *"the route is decided per toast; the
->     allowlist is a shortcut, not the gate"*, and a toast that is not allowlisted is classified
->     from its own content and bridged when its own verdict says so. The ten forward attempts the
->     drill counted were five informational toasts routed exactly as the ADR requires.
->   * `T7b` reported the allowlisted forward broken. It had happened: the delivery counter had
->     gone blind to an `[INFO]` level tag inserted in front of the lines it matches, and read zero
->     where there were five.
->   * `T5`/`T8c` kill the ETW proxy and then wait for the agent to relaunch it, but
->     [`docs/ADR-supervision.md`](docs/ADR-supervision.md) §5 (owner, 2026-10-07) is *"nothing of ours
->     relaunches anything"*. The agent behaved exactly as the ADR requires. The drills assert a
->     retired contract.
->   * **The gap behind all four**: a fault-injection switch in the product names the check it
->     exists to break — *"the routing-invariance detector must then FAIL … or it is decoration"* —
->     and that detector had never been written. The area was unmeasured, and the failing drill
->     made it look covered. `T7a` is now that detector.
-> * **One known issue, already declared**: `toast-hold-test` failed one row of twenty-one,
->   `S3ii-1=PREEMPTED` — `TOASTPREEMPTLOSESBANNER`, listed under *Known issues shipped knowingly*
->   in the release notes.
-> * **Two uncovered**, not failed: `failproof-gates` and `failproof-faultinject` aborted at their
->   own control step on a reused test subject and have not been re-run clean.
+> **The second override is the one that matters.** The remainder suites did not run at this build:
+> `failproof-faultinject`, `failproof-gates`, `gate-preflight`, `log-sweep`, `p3a-etw-gate` and
+> `toast-hold-test` are **unmeasured here**. The receipt covers **13 of the 19 suites** this diff
+> requires. Fault injection, the failproof gates and the ETW drills are therefore not evidence for
+> this release in either direction — treat them as unknown, not as clean.
 >
-> Because the full set requires `p3a-etw-gate`, and that suite could not pass while four of its
-> drills contradicted the product's own ADRs or misread its own logs, this gate has been
-> unsatisfiable by construction — which is the real reason no release here has ever met it.
-> `T7a` and `T7b` are now fixed. `T5`/`T8c` are not: whether to re-point them at what ADR §5
-> actually promises or retire them is the owner's call. The suite has not been re-run either
-> way, so 16 of 19 is what is measured, not what is expected.
->
-> The gate that should have refused this cut did not run: it matches the *command text* for
-> `gh release create`, and the sanctioned cut script runs that from inside itself, where the
-> matcher cannot see it. That check now lives inside the cut tool. This release predates the fix
-> and so carries no override banner; it is written out in
-> [`docs/RELEASE-NOTES-4.3.39.md`](docs/RELEASE-NOTES-4.3.39.md) instead.
+> **How this compares with 4.3.39.** 4.3.39 was cut on a clean acceptance record with no override,
+> but its coverage shortfall was the same shape and the gate that should have said so *did not fire*:
+> it matched the command text of the `gh` release-publishing call, which the sanctioned cut script
+> runs from inside itself, where the matcher could not see it. That check now lives inside the cut
+> tool, which is why this release had to override it out loud instead of passing quietly. The
+> 19-of-19 floor has never been met by any release in this series.
 
-**The change you will notice: a Windows qube can no longer lose its entire desktop.**
+**The change you will notice: a Windows qube that stops answering while its log says everything is
+fine.** Every component we ship writes to dom0 over a vchan, and when that write ring filled the
+sender parked — holding the lock every other sender on the channel needs. One slow reader on the dom0
+side therefore did not slow one send, it froze every thread that wanted to say anything, which is why
+a slow daemon could stop the agent answering outright rather than merely delay a message. Underneath
+that, the senders waited on an **auto-reset** event shared with the reader, and such an event releases
+exactly one waiter: when a reader and a sender were both parked the wake went to whichever Windows
+chose, and the loser learned room had appeared only when its own timeout slice expired. Each
+component now owns a process-wide auto-reset room event, and the reader relays every wake
+unconditionally, because a data-less wake *is* the room notification a sender armed. In `qrexec`,
+where this wait is reachable on a shipping configuration, stalls attributable to the lost wake went
+from **67–72% of 187** recorded stalls to **0 of 149**. Two further defects sat at the same four
+sites — a header committed before the body had room, and a wait parked on a handle the peer's close
+can shut — and both are closed; the detail is in
+[`docs/RELEASE-NOTES-4.3.40.md`](docs/RELEASE-NOTES-4.3.40.md).
+
+**A Windows qube can no longer lose its entire desktop** — from 4.3.39, carried forward unchanged.
 A guest would keep answering `qvm-run`, keep writing its log, and show nothing at all for the rest
 of that boot. What dies is dom0's `gui-daemon`, and nothing restarts it — deliberately, because it
 parses bytes a guest controls, so `exit(1)` is fail-closed and that is not being changed. Which
@@ -132,35 +129,23 @@ the shadow-restore and spawn-path failures that stopped being silent — is carr
 
 **What was verified, and what was not.** The matrix — clean install, same-version reinstall, in-place
 upgrade and template→AppVM derivation, on **both Windows 10 and Windows 11**, eight cells — ran
-against this exact package: **89 checks passed, 0 failed.** The build the captures declare is
-`4.3.39+agent.f0dd19fe65d1`, so these measurements are of these bytes and not of a neighbouring
-build. **All five feature tests ran and passed.** The acceptance record for ISO `19dcd1bd…` reads
-CLEAN and the release carries no `--acceptance-override`.
+against this exact package: **89 checks passed, 0 failed, zero product failures.** Per cell, on each
+OS: 16 clean install, 12 same-version reinstall, 13 in-place upgrade, 3 AppVM derivation. The build
+the captures declare is `4.3.40+agent.5ed1aa018f70`, so these measurements are of these bytes and not
+of a neighbouring build. Four of the five feature tests passed — `crop-before-map`,
+`notify-errors-guest-test`, `supervision-gate`, `updater-component`. **The acceptance record for this
+ISO reads FAILED, and the release carries both `--acceptance-override` and `--coverage-override`**,
+for the reasons set out in the banner above.
 
-The change-scoped gate ([`docs/ADR-acceptance.md`](docs/ADR-acceptance.md)) is a separate question
-and it is **not met**: 19 suites required, 16 covered. No product defect sits in there: the four
-`p3a-etw-gate` failures are all defects of that suite — two drills asserting a contract ADR §5
-retired, one asserting the opposite of ADR-toasts §2, one reading a log line whose format had
-moved — alongside one already-declared known issue and two suites that aborted on a reused
-subject. Each is broken out in the release notes.
+The change-scoped gate ([`docs/ADR-acceptance.md`](docs/ADR-acceptance.md)) is **not met**: 19 suites
+required, 13 covered. Nothing in that gap is a measured product defect — it is one suite that could
+not measure (`template-update`) and six that did not run at this build (`failproof-faultinject`,
+`failproof-gates`, `gate-preflight`, `log-sweep`, `p3a-etw-gate`, `toast-hold-test`). That is not the
+same thing as evidence of correctness in those areas, and it should not be read as such.
 
-The one failure, named: `win11-upgrade`'s guest log sweep, one breach, **zero P1**,
-`signatures_unclassified = 1`, on a stock `qubesdb` line — `QpsWrite: [N] client is disconnected`.
-That is the daemon cancelling a write to a client that had already closed the pipe, the write-side
-twin of five sibling lines our sweep dictionary already settles as normal teardown; the twin's
-wording is not in it. The gate counts an unclassified warning because classification is a debt we
-owe, not because anything misbehaved: the same cell measured zero dom0-visible failures, zero
-crashes, zero bugchecks, zero unrequested agent deaths, zero lost notifications. The churn that
-produces those teardowns is ours and stays open as `QUBESDBCONNECTPERREAD` (P2) — we open a fresh
-qubesdb connection per read instead of one per process.
-
-One thing this run did settle: the `win10-reinstall` cell, which is where the pipe-server crash above
-was caught, **swept CLEAN on a package carrying the fix** — `crash_lines=0`, `wer_crashes=0`,
-`error_lines_undeclared=0`. That was the one measurement that fix still owed.
-
-One thing 4.3.38 owed and 4.3.39 settles: the `win11-upgrade` cell that breached on the `qubesdb`
-classification debt now sweeps with **zero failures**, on all eight cells.
-
+4.3.39's run settled the `win11-upgrade` `qubesdb` sweep breach and the `win10-reinstall` pipe-server
+crash; those, the `p3a-etw-gate` suite defects and the `QUBESDBCONNECTPERREAD` (P2) log-classification
+debt are written out in [`docs/RELEASE-NOTES-4.3.39.md`](docs/RELEASE-NOTES-4.3.39.md).
 **On "updates available" reappearing right after an update — this is Windows Defender, and dom0 is telling you the truth.**
 On a freshly updated guest, dom0's updates-available can go back to "available" within a minute of clearing. We chased this as a
 possible defect and it is not one: the guest's own scan record names what it found — `KB2267602`, a Microsoft Defender Security
@@ -205,15 +190,15 @@ reappearing are, to the gate, the same event. That is a gap in our testing, not 
 
 | file | use it for |
 |---|---|
-| [`qubes-windows-tools-ng-4.3.39-1.agentf0dd19fe65d1.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.39-agentf0dd19f/qubes-windows-tools-ng-4.3.39-1.agentf0dd19fe65d1.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and runs nothing in dom0 |
-| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.39-agentf0dd19f/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
-| [`qubes-tools-4.3.39.exe`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.39-agentf0dd19f/qubes-tools-4.3.39.exe) | the installer on its own, if you already have a way to get a file into the guest |
-| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.39-agentf0dd19f/SHA256SUMS.txt) | checksums for all of them |
+| [`qubes-windows-tools-ng-4.3.40-1.agent5ed1aa018f70.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.40-agent5ed1aa0/qubes-windows-tools-ng-4.3.40-1.agent5ed1aa018f70.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and runs nothing in dom0 |
+| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.40-agent5ed1aa0/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
+| [`qubes-tools-4.3.40.exe`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.40-agent5ed1aa0/qubes-tools-4.3.40.exe) | the installer on its own, if you already have a way to get a file into the guest |
+| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.40-agent5ed1aa0/SHA256SUMS.txt) | checksums for all of them |
 
 The dom0 RPM is unsigned, so `qubes-dom0-update` will refuse it; install it directly:
 
 ```
-sudo rpm -i qubes-windows-tools-ng-4.3.39-1.agentf0dd19fe65d1.noarch.rpm
+sudo rpm -i qubes-windows-tools-ng-4.3.40-1.agent5ed1aa018f70.noarch.rpm
 ```
 
 With the RPM in place, dom0 can attach the media itself — `qvm-start <vm> --install-windows-tools`
@@ -222,7 +207,7 @@ hands the guest exactly this ISO as a CD.
 Upgrading a guest that already runs stock QWT or an older build of this package is a
 plain in-place upgrade — run the installer, it detects the older version and lets the
 MSI replace it in one transaction. Validated end to end for an upgrade **from an older
-build of this package** — 4.3.39's acceptance ran the in-place upgrade cell on both
+build of this package** — 4.3.40's acceptance ran the in-place upgrade cell on both
 Windows 10 and Windows 11 and **both swept clean**, 13 checks each, zero failures. An
 upgrade from **stock QWT 4.2.2** uses the same unchanged
 MSI machinery but has not been exercised on our testbed since August 2026, because the
@@ -230,6 +215,24 @@ test images themselves carry a newer build.
 
 **Hand-created qube?** Run `qvm-features <qube> vmexec 1` and `qvm-prefs <qube> qrexec_timeout 1800`
 in dom0 (on the template; AppVMs inherit), or the Qubes Update tool fails against it.
+
+**What changed in 4.3.40 — one wait, four defects, three components.**
+Almost everything here is downstream of a single idiom: a sender blocked because the vchan write ring
+is full. Every component we ship writes to dom0 over a vchan, all three had copied the same wait, and
+it was wrong in four independent ways. The send lock was held across the wait, so one slow reader on
+the dom0 side did not slow one send — it froze every thread that wanted to say anything. `qrexec-agent`
+committed a message header and then waited for room for the body, so a peer saw a header promising
+bytes that would not arrive until the ring drained. The wait blocked on a handle the peer's close can
+shut. And the senders shared an **auto-reset** event with the reader, which releases exactly one
+waiter — so when a reader and a sender were both parked the wake went to whichever Windows picked,
+and the loser only learned room had appeared when its own timeout slice expired. Each component now
+has a process-wide auto-reset room event, with the reader relaying every wake unconditionally,
+because a data-less wake *is* the room notification a sender armed. Measured in `qrexec`, where the
+wait is reachable on a shipping configuration: stalls attributable to the lost wake went from
+**67–72% of 187** recorded stalls to **0 of 149**. Alongside it, the agent's main loop is no longer
+held hostage by a subprocess, the toast hold finally holds the right thing, and supervision makes one
+decision instead of nine. Full story, and what was not verified, in
+[`docs/RELEASE-NOTES-4.3.40.md`](docs/RELEASE-NOTES-4.3.40.md).
 
 **What changed in 4.3.39 — a Windows qube could lose its whole desktop, and we were the ones closing it.**
 Two paths by which our own bytes could make dom0's `gui-daemon` call `exit(1)` are closed at a
