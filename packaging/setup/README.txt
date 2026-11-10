@@ -114,11 +114,18 @@ From the ISO (recommended -- no networking needed):
      Manager, log back in, run install.cmd again -- from the CD or from
      C:\qwt-improved-setup\, either works. Starting a fresh qube here is not a
      workaround; it is what binds the Xen PV bus.
-  4. That run finishes WITHOUT taking the guest down: qrexec answers and the seamless desktop
-     appears in dom0 within about a minute. The Xen PV disk and network drivers
-     take over from the emulated ones the next time the qube starts, which is how
-     stock Qubes Windows Tools leaves a qube too. Pass /reboot if you would rather
-     have that end state immediately.
+  4. That run finishes WITHOUT taking the guest down, and the qube's window STAYS
+     FROZEN from the middle of it (on an upgrade its windows disappear instead):
+     the old display path is switched off during the install and the new one starts
+     at the next boot, so the installer's last lines cannot be seen. When it is
+     done, dom0 shows a notification from the qube:
+         The tools install is complete - restart this qube
+     Shut the qube down from the Qube Manager and start it again. The seamless
+     desktop appears in dom0 within about a minute of that start, and the Xen PV
+     disk and network drivers take over from the emulated ones at the same time,
+     which is how stock Qubes Windows Tools leaves a qube too.
+     (No notification after ten minutes? Restart the qube anyway and read
+     C:\qwt-improved-install.log -- its last lines say how the install ended.)
 
   An upgrade over an OLDER (or equal) QWT is one MSI transaction and adds no
   reboot and no extra run: the three steps above are the whole procedure. Only

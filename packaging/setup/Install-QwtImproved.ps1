@@ -5546,6 +5546,8 @@ public static class QdbPrime {
         # behaviour is the noise the gate is supposed to be free of.
         Write-Log ('gui-agent NOT restarted: a reboot is pending (reboot_needed) and the agent would ' +
                    'map no windows before it - this qube maps no windows until it is rebooted') 'INFO'
+        # A human who ran this by hand can see neither the line above nor the RESULT - there is no display path
+        # left to show them. RESTART-TO-FINISH-NOTIFY below tells that caller through dom0.
         $script:Result.detail.gui_restored = 'skipped: reboot pending'
     }
     elseif ($script:GuiQuiesced -and -not ($Auto -and $RebootAtEnd)) {
@@ -5652,6 +5654,37 @@ public static class QdbPrime {
     }
     # ---- TZ-OVERRIDE-NOTIFY-END
 
+    # ---- RESTART-TO-FINISH-NOTIFY-BEGIN
+    # A HUMAN WHO RAN THIS BY HAND IS TOLD THROUGH DOM0, BECAUSE NOTHING ELSE CAN REACH THEM. The skip above leaves
+    # the guest with no display path at all - the emulated adapter is disabled and no agent maps windows - so the
+    # RESULT, the log lines and install.cmd's "Done. Restart the qube if the script asked you to." are all written
+    # into a console nobody can see. No harness sees it: every automated caller passes -Auto and reboots the guest
+    # itself within seconds. The skip itself stays, on every path (owner: "ok lets not restart the gui agent when
+    # reboot is pending in upgrade"); restarting the agent on a run without -Auto is the alternative, one condition
+    # away at the skip above.
+    # ACTION, by the route's own definition: the product is not delivering and a human must act. Not under -Auto:
+    # there the caller restarts the qube and a notification would be noise in every acceptance cell.
+    if (-not $Auto -and "$($script:Result.detail.gui_restored)" -eq 'skipped: reboot pending') {
+        $sentRs = 'unavailable:qrexec-not-running'
+        $qa3 = Get-Service -Name 'QrexecAgent' -ErrorAction SilentlyContinue
+        if ($qa3 -and "$($qa3.Status)" -eq 'Running') {
+            $nh3 = Join-Path $Root 'qwt-notify-error.ps1'
+            $sentRs = 'unavailable:helper-absent'
+            if (Test-Path -LiteralPath $nh3) {
+                try {
+                    . $nh3
+                    $sentRs = Send-QwtError -Component 'installer' -Id 'restart-to-finish' -Severity ACTION `
+                        -Header 'The tools install is complete - restart this qube' `
+                        -Next 'This qube shows no windows until it is restarted: shut it down from dom0 and start it again.' `
+                        -Cause 'Cause: the display path was switched during the install and the new one starts at the next boot.' `
+                        -Tech (Format-QwtNotifyTechLine -Subject 'Install-QwtImproved.ps1' -Count 'reported once per install' -Evidence 'C:\qwt-improved-install.log')
+                } catch { $sentRs = "failed: $($_.Exception.Message)" }
+            }
+        }
+        Write-Log "  dom0 notification installer.restart-to-finish: $sentRs"
+        if ("$sentRs" -ne 'send') { Write-Log "  dom0 was NOT told to restart this qube ($sentRs) - only this log says so" 'ERROR' }
+    }
+    # ---- RESTART-TO-FINISH-NOTIFY-END
 
     if ($Auto -and $RebootAtEnd) {
         Write-Log 'powering off in 2 s (-RebootAtEnd); start the qube again for the finished, PV-bound state'
