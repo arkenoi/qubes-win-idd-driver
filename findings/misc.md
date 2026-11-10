@@ -2,6 +2,37 @@
 
 ## CURRENT STATE
 
+- **A domain stuck in Transient blocks EVERY cell, and the two non-destructive clearing paths are now measured refuted - with the one number that would decide it unobtainable.** [verified 2026-11-10]
+  `assert_sole_guest` refuses while any subject is in a state that is not `Halted` - its filter is literally
+  `if (s!="" && s!="Halted")`, so `Paused` counts as up exactly like `Running` - and it has no override flag by
+  design, its bypass knob having been deleted once it was found referenced nowhere but at its own definition. So
+  one stalled subject blocks cells on the OTHER OS too, whose subject may be perfectly Halted and ready. That is
+  the whole-campaign cost of one stuck domain, and it is worth knowing before planning around it.
+  **THE FULL BUDGET.** `qwt_shutdown <vm> 1800` - its OWN default - issues FIFTEEN idempotent ACPI requests, one
+  every 120 s. A caller that passes a shorter bound buys proportionally fewer asks: 420 s buys THREE. The re-ask
+  is load-bearing, not decoration - the function's header records a guest still up at 909 s that answered its
+  SECOND ask within seconds, at the cost of two golden seals. Run at the full budget against this subject it
+  reported Transient at all fifteen polls and returned `rc=3`: "still up at the deadline and the guest's boot time
+  is NOT READABLE ... This is UNKNOWN, not 'ignoring'." Nothing in it ever kills, so it is always safe first.
+  **THE LOST-WAKEUP PROBE, REFUTED FOR THIS CLASS.** `Transient -> Paused -> Transient`, both calls rc=0, with
+  `w_cpu_state` unchanged in rate across the probe (MOVING ~138.7-138.9k per 20 s before and after). The toolstack
+  CAN still move this domain's power state - which the fifteen ignored ACPI requests did not reveal - and
+  redelivering the wakeup does not complete the transition. Recorded as refuted precisely because it LOOKS like
+  it should work; do not re-spend it.
+  **THE DELEGATED CLASSIFIER.** `tools/guest-state-judge.py`, which `qwt_shutdown` delegates to on rc=3, returned
+  ABOVE its floor: `guest_state choice=insufficient-evidence conf=0.82` with `still-up-ignoring-request=0.00`, and
+  `missing_measurement choice=guest-boot-time conf=0.95`. The deciding measurement is the guest's own boot time,
+  and it is unobtainable here: qrexec answered `rc=126` on both paired reads, 60 s apart, with power `Transient ->
+  Transient`, uptime `UNAVAILABLE -> UNAVAILABLE` and `NO MAPPED WINDOWS` on both.
+  **THE MEDIA.** Both of this subject's media were still attached from this qube (`loop1` the read-only answer
+  stick, `loop2` its log volume), which closes off the judge's own benign explanation - "a guest resuming an
+  install whose medium is NOT attached waits indefinitely and looks exactly like one refusing to shut down".
+  WHAT IS LEFT, stated so it is not rediscovered as a surprise: `rig-cleanup.sh` refuses anything not Halted by
+  design, and the committed last resort for a guest that ignored ACPI is the matrix's own unpark arm, which takes
+  `w_screen` and `w_cpu_state` and THEN kills. Editing the sole-guest gate to exempt `Paused` would be changing a
+  verification check to let one's own work through, and is not on the table however reasonable the argument that a
+  paused domain can neither interleave a probe nor reboot anything.
+
 - **The log-volume bind ran against a domain creation nothing asserted, and one cell's missing USB controller forfeited a whole campaign.** [verified 2026-11-10]
   `qemu-extra-args` is read at DOMAIN CREATION and nowhere else. The clean cell applies the `priming` device set
   before the install's first boot and binds the log volume several reboots later - so the bind's precondition was
