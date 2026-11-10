@@ -144,8 +144,9 @@ inline std::wstring QwtLogDir()
 // since 2026-10-07. Jev: it is noise 0.90, the relaunch hazard is real 0.90, and of four ways to
 // separate them, keep-zero-and-record-the-reason 0.92 against distinct-codes 0.00.
 //
-// So the reason is RECORDED instead. One line, written to the bridge's own state directory - which
-// its interactive-user token owns, unlike the SYSTEM-written state elsewhere - as
+// So the reason is RECORDED instead. One line, in a file the bridge itself creates in its state
+// directory and therefore owns - whoever created the DIRECTORY (the installer does, elevated, since
+// 2026-09-05, so what SYSTEM writes there the bridge can read and cannot delete) - as
 //   <pid> <reason>
 // The PID is what makes it evidence: the agent accepts the reason only from the instance that just
 // exited, so a file left by an earlier bridge can never excuse a later real death. The bridge

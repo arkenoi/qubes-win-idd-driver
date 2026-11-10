@@ -3445,7 +3445,13 @@ static bool ReadNotifyFile(std::wstring const& path, std::wstring& summary, std:
     // file; this is the case it could open and not use, which I reasoned past when adding it.
     // Deleting only on success makes absence mean delivered, which is what the caller assumes.
     // Nothing accumulates: the caller deletes the file itself on its own failure branch.
-    auto take = [&]() { DeleteFileW(path.c_str()); return true; };
+    // AND IT SAYS SO WHEN THE ACK CANNOT BE GIVEN. A reader that sends and cannot delete is how one message becomes
+    // two (the handoff parent finds the file and sends it itself) or one per bridge start (the deferred queue);
+    // WriteSmallForSession below has the cause. The message is still sent: it was read, and dropping it here would
+    // trade a double for a loss wherever the writer cannot send it itself.
+    // (ONE LINE on purpose: tools/tests/notify-render-selftest.sh reads `auto take = ... DeleteFileW(path` as the proof
+    // that the delete is confined to this success-only helper.)
+    auto take = [&]() { if (!DeleteFileW(path.c_str())) BLogW(L"NOTIFY one-shot: read %s, delete failed (%lu): it will be sent again", path.c_str(), GetLastError()); return true; };
 
     if (!ok || rd == 0) return false;
     std::wstring all;
@@ -3494,7 +3500,36 @@ static bool ReadNotifyFile(std::wstring const& path, std::wstring& summary, std:
 // whitespace, which really does fail with "Invalid argument/option - 'Files\Qubes'".
 // Defined further down (with the NOTIFYERR self-reporting code); declared here because the handoff
 // writes its notify file before that point in the file.
-static bool WriteSmallA(std::wstring const& path, const void* data, DWORD len);
+static bool WriteSmallA(std::wstring const& path, const void* data, DWORD len, SECURITY_ATTRIBUTES* sa = nullptr);
+
+// A FILE THE INTERACTIVE USER MUST DELETE GETS THAT RIGHT WHEN IT IS CREATED.
+// The handoff file and the deferred queue are both "the reader deletes it" protocols across two principals: this
+// process writes as SYSTEM, the reader is `--notify-file` running as the logged-on user, and ReadNotifyFile's
+// delete is the acknowledgement the handoff parent waits for (and what keeps a deferred message from being sent
+// again at the next bridge start). The state directory is created elevated by the installer
+// (guest/provision-etwproxy-account.ps1 step 9), so a file SYSTEM creates there inherits SYSTEM, Administrators and
+// read-only Users: a user whose token carries no enabled Administrators group - a standard user, and every
+// administrator while UAC is on - reads it and cannot delete it (measured on a rig Windows 11 guest: read OK, delete
+// refused, file still there). The parent then takes the message for unread and sends it a second time. The rig's
+// guests are built with UAC off, so their readers hold an administrator token and it does not happen there.
+// THE DESCRIPTOR IS THE WHOLE ACL. One passed to CreateFileW is NOT merged with the directory's inheritable ACEs
+// (measured: the file comes out with exactly these three entries and no inherited one). So the file is SYSTEM full,
+// Administrators full, INTERACTIVE read + delete, and nobody else has any access. INTERACTIVE and not Users on
+// purpose: the ETW proxy's account is denied interactive logon by the installer and can never hold that SID, where a
+// grant to Users would hand it the delete (the directory's DENY for it is not inherited by a file created this way).
+static bool WriteSmallForSession(std::wstring const& path, const void* data, DWORD len)
+{
+    SECURITY_ATTRIBUTES sa = { sizeof(sa) };
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FRSD;;;IU)",
+                                                              SDDL_REVISION_1, &sa.lpSecurityDescriptor, nullptr))
+    {
+        BLogE(L"NOTIFY state file: SDDL conversion failed (%lu), %s not written", GetLastError(), path.c_str());
+        return false;
+    }
+    const bool ok = WriteSmallA(path, data, len, &sa);
+    LocalFree(sa.lpSecurityDescriptor);
+    return ok;
+}
 
 static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring const& body)
 {
@@ -3542,7 +3577,7 @@ static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring con
     std::wstring text = summary; if (!body.empty()) { text += L"\n"; text += body; }
     std::vector<BYTE> raw; raw.push_back(0xFF); raw.push_back(0xFE);
     raw.insert(raw.end(), (const BYTE*)text.data(), (const BYTE*)text.data() + text.size() * sizeof(wchar_t));
-    if (!WriteSmallA(file, raw.data(), (DWORD)raw.size()))
+    if (!WriteSmallForSession(file, raw.data(), (DWORD)raw.size()))
     { BLogE(L"NOTIFY handoff: cannot write %s", file.c_str()); return false; }
 
     wchar_t self[MAX_PATH] = { 0 };
@@ -3606,10 +3641,9 @@ static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring con
     // inside that window, which DELETES it (ReadNotifyFile's `take`) and sends. The stale verdict
     // then says "never read" about a message that was just delivered, this function returns false,
     // and NotifyOnceMain's caller contract sends it INLINE as well: two bubbles for one message.
-    // That is exactly the triple in GWeck's 4.3.39 bundle (forum 42717 #204), in that order -
-    // `one-shot sent ok=1`, `handoff ... never read`, `one-shot sent ok=1` again, three messages
-    // each seen twice - and the order is what identifies it, since the parent cannot log its own
-    // inline `sent ok=1` BEFORE this branch runs.
+    // (The same three lines in the same order - `one-shot sent ok=1`, `handoff ... never read`, `one-shot sent ok=1`
+    // again - also come from a child that sent and could not DELETE the file. That case is WriteSmallForSession's,
+    // above; this re-read is for the late child only, which nothing has measured yet.)
     // IT CANNOT LOSE A MESSAGE. The re-read only ever turns a false negative into delivered=true;
     // a file that is genuinely still there reads the same as before and still falls through to the
     // loud branch. RESIDUAL, unmeasured: a child slower than the whole /run + 6 s + /delete
@@ -3625,6 +3659,8 @@ static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring con
         // file this process had just written - an ACL on a SYSTEM-created file read by the
         // interactive user, or the 8.3 short path not resolving in that session are both live
         // candidates, so the fields that would separate them are printed here.
+        // A reader that DID open the file and send, and could not DELETE it, says so itself (ReadNotifyFile) - so a
+        // "never read" with no such line beside it is one of the two above.
         // The file EXISTS in this branch - that is what !delivered means - so its attributes are
         // valid and GetLastError() here would be a stale value from an unrelated call. Report what
         // is actually known: the attributes, and the exact strings the child was handed.
@@ -3678,7 +3714,7 @@ static bool NotifyDeferWrite(std::wstring const& summary, std::wstring const& bo
     std::wstring text = summary; if (!body.empty()) { text += L"\n"; text += body; }
     std::vector<BYTE> raw; raw.push_back(0xFF); raw.push_back(0xFE);
     raw.insert(raw.end(), (const BYTE*)text.data(), (const BYTE*)text.data() + text.size() * sizeof(wchar_t));
-    if (!WriteSmallA(file, raw.data(), (DWORD)raw.size()))
+    if (!WriteSmallForSession(file, raw.data(), (DWORD)raw.size()))
     { BLogE(L"NOTIFY defer: cannot write %s - notification LOST summary=%s", file.c_str(), summary.c_str()); return false; }
     BLogW(L"NOTIFY deferred: no route yet (no console session, and this process is not the console user) - "
           L"queued as %s, the session bridge sends it summary=%s", file.c_str(), summary.c_str());
@@ -3819,9 +3855,9 @@ static bool ReadSmallA(std::wstring const& path, std::string& out)
     out.assign(buf, rd);
     return true;
 }
-static bool WriteSmallA(std::wstring const& path, const void* data, DWORD len)
+static bool WriteSmallA(std::wstring const& path, const void* data, DWORD len, SECURITY_ATTRIBUTES* sa)
 {
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, sa, CREATE_ALWAYS,
                            FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) return false;
     DWORD wr = 0;
@@ -3918,7 +3954,7 @@ static void ReportErrorSelf(const char* key)
 // --- bridge main --------------------------------------------------------------------------
 
 // RECORD A DEPARTURE WE ASKED FOR (qtb_shared.h). "<pid> <reason>", written next to the bridge's
-// other control surfaces, which its interactive-user token owns. The PID is what makes it evidence:
+// other control surfaces, in a file this process creates and therefore owns. The PID is what makes it evidence:
 // the agent accepts the reason only from the instance that just exited, so a file from an earlier
 // bridge cannot excuse a later real death. Best-effort by design - if the write fails the agent
 // simply sees no reason and reports the exit as before, which is the safe direction: a death
