@@ -110,11 +110,82 @@ _LV_RESTORE_PENDING=0
 # superfloppy FAT on a FIXED disk, which Windows will not mount - campaign 40134888669); or it has a
 # volume the probe could not letter. Telling them apart took three separate guest probes AFTER the
 # abort. Experimenter rule 2: if this fails, what will I be holding?
-logvol_bind_guestview(){ # $1=vm $2=label
+logvol_bind_guestview(){ # $1=vm $2=label [$3=severity prefix, default the FATAL one]
+  # $3 EXISTS SO THIS CAN BE CALLED BEFORE THE BIND TOO. It was failure-only, and that is exactly
+  # why "the healthy case carries a removable device" had never been recorded anywhere on this rig
+  # (Jev missing_measurement healthy_run_usb_inventory 0.73, 2026-11-10). One function, two callers,
+  # no second copy of the probe - the quoting in it is the only version proven on a live guest.
+  local sev="${3:-[ERROR] FATAL: }"
   QTEST_VM="$1" timeout 180 ./tools/qtest run 'powershell -NoProfile -Command "Get-Disk | Format-Table -Auto Number,FriendlyName,BusType,Size,PartitionStyle,IsOffline | Out-String -Width 200; Get-CimInstance Win32_DiskDrive | Format-Table -Auto Model,InterfaceType,Size,Partitions | Out-String -Width 200; Get-Volume | Format-Table -Auto DriveLetter,FileSystemLabel,FileSystem,DriveType,Size | Out-String -Width 200"' \
       > "$M/$2-logvol-bind-guestview.out" 2>&1 \
-    && say "[ERROR] FATAL: the guest's disk/volume inventory at the moment of failure: $M/$2-logvol-bind-guestview.out" \
-    || say "[ERROR] FATAL: could not read the guest's disk inventory either (see $M/$2-logvol-bind-guestview.out) - the guest may be gone"
+    && say "${sev}the guest's disk/volume inventory: $M/$2-logvol-bind-guestview.out" \
+    || say "${sev}could not read the guest's disk inventory either (see $M/$2-logvol-bind-guestview.out) - the guest may be gone"
+}
+
+# THE PRECONDITION THE BIND DEPENDS ON AND NOTHING ASSERTED, decided from the inventory above.
+# `qemu-extra-args` is read at DOMAIN CREATION and nowhere else, so a bind that runs several
+# reboots after prime-run applied the `priming` set is betting on a presentation no one checked -
+# and the post-prime refusal to rewrite it is TOLERATED here by design, which is what makes the
+# inheritance silent. MEASURED 2026-11-10, acceptance rel-42714096257-c cell WIN10-clean: the
+# install PASSED, then `no_volume_labelled_DIAG_with_LOGVOL.TAG` and the campaign aborted twelve
+# minutes in with seven cells unrun. The guest's last boot carried the 256 MB image as a FIXED
+# `XENSRC PVDISK SCSI`, MBR with 0 partitions and NO DRIVE LETTER, with zero USB controllers, while
+# the host image was a sound FAT32 'DIAG' the guest had itself written into on its FIRST boot: a
+# partitionless superfloppy, which Windows mounts on REMOVABLE media and not on a fixed disk - the
+# third of the three rig states the comment above enumerates. The working shape is the smoke's,
+# same night: "applied the GRADED device set before first boot" -> `LOGVOL-BIND ok ... found=D:`.
+#
+# IT TRIGGERS ON THE MEASURED SIGNATURE, NOT ON THE ABSENCE OF A POSITIVE. Requiring a DIAG-labelled
+# volume to be MISSING *and* a disk of the image's size to be present on a non-USB bus means a guest
+# that mounted the volume can never trip it, and an inventory this cannot parse never trips it
+# either - an unreadable probe must not conjure a reboot. Both arms are decided from TEXT, so the
+# failing side is provable offline against that run's own artefact.
+logvol_removable_present(){ # $1=guestview file -> 0 present/undecidable, 1 the measured signature
+  local gv="$1"
+  [ -s "$gv" ] || return 0
+  # CASE-SENSITIVE on the two PERMISSIVE tests, because the guest prints both in capitals and a
+  # lower-case match can only come from prose. MEASURED: a real healthy capture of this rig
+  # (rel-39175573529 WIN10-clean-prime.log) carries the harness line "diag markers saved to ...",
+  # which an -i match reads as a lettered DIAG volume - so the very input shape that proves the
+  # volume MISSING would have been graded present and the boundary never crossed.
+  command grep -qaE '(^|[[:space:]])DIAG([[:space:]]|$)' "$gv" && return 0   # a DIAG volume is lettered
+  command grep -qaiE 'XENSRC|PVDISK' "$gv" || return 0                        # not an inventory we can read
+  command grep -qa 'USB' "$gv" && return 0                                   # some USB device exists
+  return 1
+}
+
+# THE ONE REMEDY THE DESIGN ALLOWS: ask for the device set where the request means something.
+# logvol-lib.sh: "A caller that wants a different device set for the graded boots asks for it at a
+# domain boundary, which is the only place the request means anything." `graded` and not `priming`,
+# because the prime stick is unassigned by now and `priming` names /dev/xvdi - a judged boot would
+# then reference an unassigned loop and the domain would not be created at all, which is the
+# campaign 1024-2333 failure recorded in that same file. Jev assert_then_boundary_swap 0.85
+# [0.88 vs unconditional 0.09, investigate-first 0.02, leave-fatal-and-rerun 0.00]; and
+# boundary_swap_is_a_retry noul=0.37 - it establishes a precondition only a domain creation can
+# establish, which is not the retrying-in-hope this project prohibits.
+logvol_rebind_at_boundary(){ # $1=vm $2=label -> 0 crossed, non-zero and SAID why
+  local vm="$1" lbl="$2"
+  say "  $lbl: the live domain has no removable log volume - crossing a domain boundary so the recorded device set takes effect"
+  [ "$(w_state "$vm")" = Halted ] || {
+    w_drain_and_shutdown "$vm" say
+    [ "${W_DRAIN_QREXEC_DEAD:-0}" = 1 ] && { say "[ERROR] $lbl: qrexec was DEAD on a running guest at the log-volume boundary (QREXECDEAD); crossing it would prove nothing about guest health"; return 1; }
+    # THE SAME ARMS AS park_installed/unpark_installed, AND THE SAME VOCABULARY - but not through
+    # `no`: that increments FAIL, and this helper's caller already adds its own +1 in the ABORTED
+    # line, so one condition would be counted twice. What is mirrored is the CLASS and the LEVEL
+    # `no` would have given it - an INVALID token demotes to [WARN] there - so arm 3 is [WARN] here.
+    w_halt_stable "$vm" 660 "$lbl-logvol-boundary" say
+    case $? in
+      0) ;;
+      3) say "[WARN] $lbl: INVALID-INSTRUMENT - halted then RESTARTED at the log-volume boundary by an OBSERVED queued qrexec call, not a product failure"; return 1 ;;
+      4) say "[ERROR] $lbl: halted then RESTARTED ITSELF at the log-volume boundary with NO queued call pending - unexplained, graded as PRODUCT until shown otherwise"; return 1 ;;
+      *) say "[ERROR] $lbl: no stable Halted within 660s at the log-volume boundary"; return 1 ;;
+    esac
+  }
+  logvol_devices_apply "$vm" graded || { say "[ERROR] $lbl: the graded device set could not be applied at the log-volume boundary"; return 1; }
+  start_vm "$vm"
+  w_session "$vm" 900 "$lbl-logvol-boundary" "$M" say \
+    || { say "[ERROR] $lbl: no session after the log-volume boundary"; return 1; }
+  return 0
 }
 
 logvol_bind_now(){ # $1=vm $2=label
@@ -147,6 +218,20 @@ logvol_bind_now(){ # $1=vm $2=label
   # and that exit (below) leaves the registry naming the stick. Latching on success would skip the
   # restore on exactly the path that needs it.
   LOGVOL_BOUND=1; _LV_RESTORE_PENDING=0
+  # ASSERT THE PRECONDITION FIRST, AND RECORD THE INVENTORY EITHER WAY. This is deliberately not in
+  # the bind's failure branch: lint L29 requires that branch to stop, and it still does.
+  logvol_bind_guestview "$1" "$2-prebind" "  $2: "
+  if ! logvol_removable_present "$M/$2-prebind-logvol-bind-guestview.out"; then
+    if ! logvol_rebind_at_boundary "$1" "$2"; then
+      say "[ERROR] FATAL: $2: the log volume is absent from the LIVE domain - the device set is read"
+      say "[ERROR] FATAL: at domain creation and this one carries no removable DIAG stick - and the"
+      say "[ERROR] FATAL: boundary that would restore it could not be crossed, so the bind cannot"
+      say "[ERROR] FATAL: succeed and no later cell would have an instrument that survives a wedge."
+      say "=== MATRIX: ${PASS:-0} passed, $(( ${FAIL:-0} + 1 )) failed - ABORTED on a log-device failure ==="
+      exit 2
+    fi
+    logvol_bind_guestview "$1" "$2-postboundary" "  $2: "
+  fi
   if logvol_bind_guest "$1" "$1" >>"$M/$2-logvol-bind.out" 2>&1; then
     say "  $2: QWT logs bound to the log volume"
     # AND PROVE IT, because a bind that returned ok is not evidence that evidence will arrive.
