@@ -151,13 +151,37 @@ WIREPY
 )
 state="${verdict%%|*}"; rest="${verdict#*|}"; kind="${rest%%|*}"; age="${rest##*|}"
 
+# WHAT THE MATCHED LINE ACTUALLY BOUND, because the refusal used to claim more than it knew. The
+# `permit` arm above requires frag in the line, so it IS bound to this command. The
+# `recreate-goldens` arm deliberately is not - one permit covers the whole committed sequence
+# (CLAUDE.md: "A Jev state with recreate_goldens satisfies the gate for that sequence"), so it is
+# bound to the script NAMES and the window, and nothing else. Both messages therefore said "naming
+# this command" for a kind that never looked at the command.
+# MEASURED 2026-11-10: three read-only commands in one night were refused because a script name sat
+# in an echo LABEL, a grep pattern and a --harness-cmd argument, each time with "the newest Jev
+# recreate-goldens permit naming this command is <N> min old" - which reads as an EXPIRED permit
+# when no permit had ever matched, and sent the reader hunting a permit instead of globbing a name.
+# The predicate is untouched: the bluntness is load-bearing (see the header) and a read-only
+# exemption was designed and dropped on 2026-10-29. Only the sentence is true now.
+case "$kind" in
+  "recreate-goldens permit") what="those scripts" ;;
+  *)                         what="this command" ;;
+esac
+mention='THIS GATE MATCHES THE COMMAND TEXT: a command that merely NAMES one of those scripts - in
+an echo label, a grep pattern, a --harness-cmd argument, a heredoc body - is refused exactly like
+one that runs it, and any age above is then about a permit that was never for this command at all.
+READING, not running? Write the name as a glob - tools/release-accept*.sh, mgmt/harness/matri*.sh -
+or use the Read tool. RUNNING it? The permit is bound to the first 20 characters of the command as
+well, so one env override in front invalidates a permit that otherwise matched.'
+
 if [ "$state" = "STALE" ]; then
   cat >&2 <<EOM
-BLOCKED by committed-procedure-gate.sh: the newest Jev $kind naming this command is ${age} min old (window ${WINDOW_MIN} min).
+BLOCKED by committed-procedure-gate.sh: the newest Jev $kind naming $what is ${age} min old (window ${WINDOW_MIN} min).
 Heavy path: $frag
 Permit must name every one of: $namelist
 A permit authorises the run it was asked about, not a later one. Ask Jev again, NOW, with state
 containing "committed_procedure", the exact command, and the rejected short-cycle alternative.
+$mention
 EOM
   exit 2
 fi
@@ -168,6 +192,7 @@ BLOCKED by committed-procedure-gate.sh: no recent Jev call quoting both the comm
 Heavy path: $frag
 Permit must name every one of: $namelist
 If no golden exists, ask Jev with state containing recreate_goldens and the commands from docs/PROCEDURE-recreate-goldens.md.
+$mention
 EOM
   exit 2
 fi
