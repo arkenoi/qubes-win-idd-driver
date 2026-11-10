@@ -2,6 +2,52 @@
 
 ## CURRENT STATE
 
+- **The log-volume bind ran against a domain creation nothing asserted, and one cell's missing USB controller forfeited a whole campaign.** [verified 2026-11-10]
+  `qemu-extra-args` is read at DOMAIN CREATION and nowhere else. The clean cell applies the `priming` device set
+  before the install's first boot and binds the log volume several reboots later - so the bind's precondition was
+  established by a domain creation that no code had checked. Acceptance rel-42714096257-c died 12 minutes in with
+  `matrix rc=2` after WIN10-clean's install had PASSED: the binder refused with
+  `no_volume_labelled_DIAG_with_LOGVOL.TAG` and the campaign stopped, correctly, rather than grade seven more
+  cells with no instrument that survives a wedge.
+  MEASURED, failing side, from that cell's own capture: four `XENSRC PVDISK SCSI` disks, the 256 MB log image
+  among them as a FIXED MBR disk with 0 partitions and no drive letter, and ZERO occurrences of the string `USB` -
+  no xhci controller was instantiated at all. On the host `mdir` read a sound FAT32 `DIAG` holding `LOGVOL.TAG`
+  that the guest had written `prime-progress.log` into on its FIRST boot. Windows mounts a partitionless
+  superfloppy on removable media, never on a fixed disk.
+  MEASURED, working side, the same night and from the run data alone: the logvol smoke applied the GRADED device
+  set before first boot and reported `LOGVOL-BIND ok ... found=D: letter=pinned` with `LOGVOL-PROOF
+  seen_in_image=1`. A lettered DIAG volume is the property; the device set being in force at THAT boot produces it.
+  EXCLUDED: the cause the library header records for campaign 40134888669 - a live rewrite of the arguments - is
+  not this. The single writer refused correctly in all three runs of that night and the recorded value still
+  carried controller + both sticks afterwards. Intermittent, 1 of 3; why qemu did not instantiate the controller
+  on that one creation lives in dom0 libxl logs this qube cannot read, and `qvm-device block list` is
+  policy-refused here.
+  THE FALSE POSITIVE THE FIX ALMOST SHIPPED WITH, found by testing the predicate against a real HEALTHY capture
+  of this rig rather than a fixture: that capture carries the harness line `diag markers saved to ...`, which a
+  case-insensitive match read as a lettered DIAG volume - so the one input shape that proves the volume MISSING
+  was graded present, and the repair would have been skipped silently. Made case-sensitive on the two PERMISSIVE
+  tests (the guest prints DIAG and USB in capitals; a lower-case match can only come from prose), that row flips
+  0 -> 1 and no other row changes.
+  JEV: `assert_then_boundary_swap` 0.85 [0.88 vs unconditional 0.09]; `boundary_swap_is_a_retry` noul=0.37, so
+  establishing a precondition only a domain creation can establish is not the retrying-in-hope this project
+  prohibits. `missing_measurement` named `healthy_run_usb_inventory` 0.73 - this harness recorded a guest disk
+  inventory ONLY on failure, which is why the healthy device view had never been written down anywhere.
+  STILL OWED, and not papered over: asked again after the fix, `missing_measurement` chose `both_captures` at
+  conf 0.41 - UNDER the 0.70 floor, so no verdict - but put 0.00 on "the offline proof suffices". The
+  DIAG-present branch has never run against a real capture of a healthy guest's inventory, because none exists;
+  the capture cannot be taken until this is in the harness, so the next campaign's first cell produces it.
+  `consistent_with_real_comparator` came back `diverges_materially` conf=0.21 [materially 0.41, cosmetically 0.38,
+  matches 0.20]: a three-way split under floor. The idiom alignment that was landed rests on measurement, not on
+  that verdict - `no()` picks the log LEVEL and a separate INVALID counter from the text, so arm 3 is now [WARN] +
+  INVALID-INSTRUMENT like the two committed boundary sites, arm 4 keeps ERROR and "graded as PRODUCT until shown
+  otherwise", and the drain arm carries QREXECDEAD. `no()` itself is not called: it increments FAIL and the
+  caller's ABORTED line adds its own +1.
+  FIX-LANDED: d1ded9a0 - `logvol_removable_present` (the precondition, proven both ways offline against the
+  failing run's own artefact), `logvol_rebind_at_boundary` (halt, apply `graded`, start, wait for a session, with
+  the four `w_halt_stable` arms the two committed boundary sites use), and `logvol_bind_guestview`'s severity
+  prefix so the inventory is recorded on BOTH outcomes - wired into `logvol_bind_now` immediately before the bind,
+  which keeps lint L29's requirement that the bind's own failure branch stops.
+
 - **The broker launch is off the agent's main loop, and the schtasks wait that bounded it was not a bound.** [verified 2026-11-08]
   WHAT THE TARGET WAS, stated before the fix: the a93cf137 anchor fix IS in the tree and correct - it stamps the
   de-slice anchor after `WgcLaunch()` returns. What it left behind is the BLOCKING. `WgcLaunch` drives schtasks,
