@@ -319,13 +319,17 @@ rm -f "mgmt/fixtures/$CHURN.aborted"
 # writer means a future change that moved this call after a start would be REFUSED instead of
 # silently describing a device set the running domain does not have. Owner 2026-10-25: "no rewriting
 # arguments on the fly."
-# THE PRIMING PHASE, from the one declaration in logvol-lib. This used to be the fragment written
-# out literally here, while matrix.sh carried a pattern to strip it and logvol-smoke composed its
-# own - three copies of one fact, which is how they drifted and how a judged boot came to reference
-# an unassigned loop. logvol_devices_apply composes the WHOLE value and refuses off a boundary; the
-# subject was just removed and recreated, so it is Halted and this passes.
-logvol_devices_apply "$CHURN" priming \
-  || { log "[ERROR] TERMINAL: could not apply the priming device set"; exit 1; }
+# THE ANSWER PHASE, through the one entry point (owner 2026-11-10: «no free form arguments anymore.
+# single script with uniform arguments and sanity checks that confirm the device is correct and
+# accessible»). This line passed `priming` until 2026-11-10, which CONTRADICTED the paragraph above:
+# priming declares the evidence stick too, and that stick's image does not exist yet here - it is
+# created and attached ~50 lines below. The declaration was only harmless because logvol_attach's
+# compose is idempotent and returned the value untouched, so no sanity check at this point could
+# ever have passed. MEASURED byte-for-byte: logvol_devices_for priming is identical to
+# logvol_qemu_args_compose(logvol_devices_for answer), so the final value this subject boots with is
+# unchanged - the difference is that every write now happens with its own backing in place.
+bash "$LOGVOL_ROOT/mgmt/harness/logvol-devices.sh" --vm "$CHURN" --phase answer \
+  || { log "[ERROR] TERMINAL: could not apply the answer device set"; exit 1; }
 # NOT --required, MEASURED 2026-09-21. A `--required` assignment cannot be satisfied at domain
 # creation on this rig at present: with one the domain is not created at all (6/6, across two
 # subjects, a loop the guest had never seen, a different frontend slot, a different devtype, and a

@@ -274,7 +274,7 @@ build_fixture(){
     # writer refuses a live domain (the value is read at DOMAIN CREATION), so clearing it above the
     # shutdown - where the blanket unset used to sit - would be refused and the fixture would be
     # cloned carrying a provisioning rig, which is the thing these two lines exist to prevent.
-    logvol_devices_apply "$vm" none >>"$LOG" 2>&1 \
+    bash "$LOGVOL_ROOT/mgmt/harness/logvol-devices.sh" --vm "$vm" --phase none >>"$LOG" 2>&1 \
         || fail "iqi:$vm" "could not clear the device set - a fixture must not carry a provisioning rig" "$vm"
     assert_fixture "$vm" || fail "iqi:$vm" "final condition not met" "$vm"
     record "iqi:$vm" ok "base=$base"

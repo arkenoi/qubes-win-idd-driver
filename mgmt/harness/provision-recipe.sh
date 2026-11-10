@@ -67,7 +67,8 @@ set -u
 # logusb/logdrv, and it had no cache=writethrough). It is now one declaration with named phases:
 #
 #     . mgmt/harness/logvol-lib.sh
-#     logvol_devices_apply <vm> priming|graded|answer|none    # at a domain boundary, never live
+#     mgmt/harness/logvol-devices.sh --vm <vm> --phase priming|graded|answer|none [--image <img>]
+#         # the ONE entry point: uniform named arguments, sanity-checked, at a domain boundary
 #
 # priming = stick + evidence volume, graded = evidence volume only (what a judged boot gets),
 # answer = stick only, none = unset. lint-harness.py L31 refuses any other writer.
@@ -118,9 +119,9 @@ provision_disarm() { # <vm> - no stale claim survives a run
 import qubesadmin
 vm=qubesadmin.Qubes().domains['$vm']
 for a in list(vm.devices['block'].get_assigned_devices()): vm.devices['block'].unassign(a)" 2>/dev/null
-    declare -F logvol_devices_apply >/dev/null 2>&1 \
+    declare -p LOGVOL_ROOT >/dev/null 2>&1 \
         || . "$(dirname "${BASH_SOURCE[0]}")/logvol-lib.sh"
-    logvol_devices_apply "$vm" none 2>/dev/null
+    bash "$LOGVOL_ROOT/mgmt/harness/logvol-devices.sh" --vm "$vm" --phase none 2>/dev/null
     echo "provision: $vm disarmed (assignments cleared, device set set to the none phase)"
 }
 

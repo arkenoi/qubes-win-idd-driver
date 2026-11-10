@@ -76,7 +76,7 @@ fi
 # so the one writer refuses a live domain - and this script's own predecessor line ran before the
 # shutdown, where that refusal would have left the provisioning device set sealed INTO the golden
 # and inherited by every clone taken from it. A failure to clear it is fatal for the same reason.
-logvol_devices_apply "$GOLD" none \
+bash "$LOGVOL_ROOT/mgmt/harness/logvol-devices.sh" --vm "$GOLD" --phase none \
   || { echo "FAIL: could not clear $GOLD's device set - refusing to seal a golden that carries a"
        echo "      provisioning rig; every clone taken from it would inherit one."; exit 1; }
 

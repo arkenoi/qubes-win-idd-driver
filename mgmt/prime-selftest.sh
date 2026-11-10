@@ -57,9 +57,9 @@ EOF
 log "cloned"
 
 log "attaching the job stick as an emulated USB device"
-# From the device set's one owner, not a fourth copy of the string (mgmt/harness/logvol-lib.sh).
+# Through the one entry point, with uniform named arguments (owner 2026-11-10).
 . "$(dirname "${BASH_SOURCE[0]}")/harness/logvol-lib.sh"
-logvol_devices_apply "$CHURN" answer || exit 1
+bash "$LOGVOL_ROOT/mgmt/harness/logvol-devices.sh" --vm "$CHURN" --phase answer || exit 1
 qvm-device block assign --required -o frontend-dev=xvdi -o devtype=disk "$CHURN" "$HOLDER:$STICKLOOP" || exit 1
 
 SHOTDIR="$HERE/evidence/prime-selftest-$CHURN-$(date -u +%Y%m%d-%H%M%S)"; mkdir -p "$SHOTDIR"

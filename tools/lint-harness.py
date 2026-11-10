@@ -817,6 +817,26 @@ def l31_qemu_args_one_writer() -> None:
                         "writes qemu-extra-args directly; use logvol_qemu_write (logvol-lib.sh), "
                         "which refuses on a live domain - the value only means anything at domain "
                         "creation (campaign 40134888669 aborted on a rewrite against a live guest)")
+            # AND THE PHASE IS NOT A FREE-FORM ARGUMENT EITHER. Owner 2026-11-10: «no free form
+            # arguments anymore. single script with uniform arguments and sanity checks that confirm
+            # the device is correct and accessible.» Routing the WRITE through one function left the
+            # CHOICE of phase to nine hand-written call sites, validated only for spelling: nothing
+            # tied the word to the boot it would govern, and prime-run.sh passed `priming` where its
+            # own comment demanded the answer stick alone, declaring an evidence stick whose image
+            # did not exist yet. The pre-matrix smoke picks `graded`, so it could never cover the
+            # clean cell that binds under `priming`, and cell one of eight failed with the stick
+            # absent from the guest's inventory. The entry point takes --vm/--phase/--image, checks
+            # the loop, the FAT label the guest resolves by, the --required claim at the frontend the
+            # device string names, that the domain is Halted, and reads the value back byte for byte.
+            # COMMENT-STRIPPED, because the first cut fired on a trailing comment that merely NAMED
+            # the function (reprovision-usb.sh:12, a `source` line annotated with the owner's name).
+            # A source assertion that reads comments reports prose as code.
+            code = st.split("#", 1)[0]
+            if "logvol_devices_apply" in code and f.name != "logvol-devices.sh":
+                finding("L31-phase-not-one-entry-point", f"{f.name}:{i}",
+                        "calls logvol_devices_apply directly; apply a device phase through "
+                        "mgmt/harness/logvol-devices.sh --vm <vm> --phase <phase> [--image <img>], "
+                        "which is the only path that sanity-checks the backing before the write")
 
 
 def l12_provisioning_recipe() -> None:

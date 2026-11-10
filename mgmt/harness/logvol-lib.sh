@@ -354,8 +354,39 @@ logvol_devices_for(){ # <phase> -> the WHOLE qemu-extra-args value for that phas
   esac
 }
 
-logvol_devices_apply(){ # <vm> <phase> - the ONLY way a harness sets the device set
-  local vm="${1:?[ERROR] logvol_devices_apply <vm> <phase>}" ph="${2:?[ERROR] logvol_devices_apply <vm> <phase>}" val
+logvol_assert_backing(){ # <vm> <phase> -> 0 the backing is there, 4 REFUSED and named the missing link
+  # CHECK IN ADVANCE, REFUSE RIGHT AWAY. Owner 2026-11-10: «you should had done sanity check twice,
+  # check the loopback status in advance and refuse right away if it is not there». H1 and H2 of
+  # logvol-chain-check.sh are exactly these two links, and until now they existed ONLY in that
+  # standalone script - which nothing in a campaign runs - so an absent backend was learned from the
+  # GUEST's own disk inventory after an install, on cell one of eight, with seven cells ungraded.
+  # The phase string names `file=/dev/$LOGVOL_FRONTEND` literally. A value that is well-formed and
+  # complete says NOTHING about whether a backend exists for qemu to open at DOMAIN CREATION, which
+  # is the only moment it is read, and a stale claim is already recorded in findings/rig.md as
+  # making a guest unstartable with nothing but `libxenlight failed to create new domain`.
+  # SCOPE, stated rather than implied: this covers OUR log stick. The answer stick's loop is claimed
+  # by the provisioning script and its identity is not known here, so it is NOT covered.
+  # The image is an EXPLICIT argument, never an ambient global. Owner 2026-11-10: «no free form
+  # arguments anymore.» An assertion that reads $LOGVOL_IMG asserts whatever the environment last
+  # happened to hold, which is the same class of hole as a hand-picked phase word.
+  local vm="${1:?[ERROR] logvol_assert_backing <vm> <phase> <image>}" ph="${2:?[ERROR] logvol_assert_backing <vm> <phase> <image>}" img="${3:-}" dev fe
+  case "$ph" in priming|graded) ;; *) return 0 ;; esac   # only these two phases name the log stick
+  [ -n "$img" ] || { _lv_say "[ERROR] REFUSED: phase '$ph' names the log stick but no image was given - nothing identifies the volume whose loop would back /dev/$LOGVOL_FRONTEND. Go through mgmt/harness/logvol-devices.sh --vm <vm> --phase <phase> --image <img>"; return 4; }
+  dev=$(logvol_loop_of "$img")
+  [ -n "$dev" ] && [ -e "/dev/$dev" ] \
+    || { _lv_say "[ERROR] REFUSED: phase '$ph' names file=/dev/$LOGVOL_FRONTEND but $img is on NO loop device - qemu would be asked to open a backend that does not exist"; return 4; }
+  # `qvm-device block list` is POLICY-REFUSED from this qube (mgmt/CLAUDE.md); this read is the
+  # documented alternative and, unlike re-issuing `assign`, it does NOT create the claim - repairing
+  # it here would be the very thing the order above rules out.
+  fe=$(python3 -c "import sys,qubesadmin; a=qubesadmin.Qubes(); print(next((x.options.get('frontend-dev','') for x in a.domains[sys.argv[1]].devices['block'].get_assigned_devices() if sys.argv[2]+'::' in str(x)), ''))" "$vm" "$dev" 2>/dev/null)
+  [ "$fe" = "$LOGVOL_FRONTEND" ] \
+    || { _lv_say "[ERROR] REFUSED: $vm carries no --required claim for $LOGVOL_HOLDER:$dev at frontend $LOGVOL_FRONTEND (read back: '${fe:-none}') - the device set would name a frontend the domain never gets"; return 4; }
+  return 0
+}
+
+logvol_devices_apply(){ # <vm> <phase> [image] - the writer; reach it through logvol-devices.sh
+  local vm="${1:?[ERROR] logvol_devices_apply <vm> <phase> [image]}" ph="${2:?[ERROR] logvol_devices_apply <vm> <phase> [image]}" img="${3:-}" val
+  logvol_assert_backing "$vm" "$ph" "$img" || return 4
   val=$(logvol_devices_for "$ph") || return 2
   if [ -z "$val" ]; then
     logvol_qemu_write "$vm" --unset || return 1

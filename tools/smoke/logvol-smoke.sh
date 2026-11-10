@@ -26,7 +26,13 @@
 #   volume inventory - the three states `no volume labelled DIAG` cannot tell apart (never
 #   enumerated / enumerated with NO partition / present but unletterable). It can FAIL: --no-attach
 #   runs the identical sequence with the volume NOT attached, and the bind MUST refuse. That arm is
-#   what makes a pass mean anything, and tools/tests/logvol-smoke-selftest.sh asserts both shapes.
+#   what makes a pass mean anything. tools/tests/logvol-smoke-selftest.sh used to assert both shapes
+#   by STUBBING logvol_devices_apply; the device set now goes on through mgmt/harness/logvol-devices.sh,
+#   which a function stub cannot intercept, so 6 of its 14 legs broke on the conversion and it was
+#   DELETED rather than repaired (owner 2026-10-26: a selftest that fails and needs a quick fix is
+#   dropped completely). WHAT STILL ENFORCES IT: tools/tests/accept-logvol-smoke-selftest.sh (10/0)
+#   still asserts both arms and the rc=2 -> INVALID-RIG classification at the acceptance level, and
+#   the entry point refuses on each of its own nine checks - measured 2026-11-10 in eight directions.
 # BUDGET: ~8 min. Three exits, each named: bound and proved / a terminal rig state / the deadline.
 #
 # IT CLEANS UP AFTER ITSELF. The subject is removed and the loop released on every exit, --keep
@@ -138,8 +144,8 @@ if [ "$ATTACH" = 1 ]; then
   # owner's "you organically cannot keep matrix and smoke test configurations in sync": if this cell
   # composed its own device set it would be proving a configuration no campaign runs. The subject is
   # Halted here (it has never been started), so the boundary rule is satisfied.
-  logvol_devices_apply "$SUBJ" graded \
-    || { verdict INVALID-RIG "the graded device set applies" "logvol_devices_apply refused - see $OUT/attach.out"; exit 2; }
+  bash "$LOGVOL_ROOT/mgmt/harness/logvol-devices.sh" --vm "$SUBJ" --phase graded --image "$IMG" \
+    || { verdict INVALID-RIG "the graded device set applies" "logvol-devices.sh refused - see $OUT/attach.out"; exit 2; }
   say "attached $IMG (loop ${SMOKE_LOOP:-?}) and applied the GRADED device set before first boot"
 else
   say "--no-attach: NOTHING attached - the bind below MUST refuse"

@@ -181,7 +181,8 @@ logvol_rebind_at_boundary(){ # $1=vm $2=label -> 0 crossed, non-zero and SAID wh
       *) say "[ERROR] $lbl: no stable Halted within 660s at the log-volume boundary"; return 1 ;;
     esac
   }
-  logvol_devices_apply "$vm" graded || { say "[ERROR] $lbl: the graded device set could not be applied at the log-volume boundary"; return 1; }
+  bash "$LOGVOL_ROOT/mgmt/harness/logvol-devices.sh" --vm "$vm" --phase graded --image "$LOGVOL_IMG" \
+    || { say "[ERROR] $lbl: the graded device set could not be applied at the log-volume boundary"; return 1; }
   start_vm "$vm"
   w_session "$vm" 900 "$lbl-logvol-boundary" "$M" say \
     || { say "[ERROR] $lbl: no session after the log-volume boundary"; return 1; }
@@ -1518,10 +1519,10 @@ park_installed(){ # $1=vm $2=label - halt and park the just-installed subject as
   # value is read at DOMAIN CREATION) the priming fragment survived while its loop had already been
   # unassigned, and the first judged boot of campaign 1024-2333 never created a domain at all:
   # `t+60s qvm=Halted`, with the bind and the nonce round trip having PASSED minutes earlier.
-  # One owner, named phases, applied at a boundary: logvol_devices_apply. Jev: phase-function 0.98,
+  # One entry point, named phases, applied at a boundary: logvol-devices.sh. Jev: phase-function 0.98,
   # after-park-halt 0.80. Owner: "you organically cannot keep matrix and smoke test configurations
   # in sync" - so neither composes one any more.
-  if ! logvol_devices_apply "$vm" graded; then
+  if ! bash "$LOGVOL_ROOT/mgmt/harness/logvol-devices.sh" --vm "$vm" --phase graded --image "$LOGVOL_IMG"; then
     no "$lbl: the graded device set could not be applied at the park boundary - a judged boot would reference the priming stick's loop, which is unassigned, and the domain would not be created"
     return 1
   fi

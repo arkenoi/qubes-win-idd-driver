@@ -9,7 +9,7 @@
 # Build the stick first: mgmt/build-answer-stick.sh (keep SIZE_MB constant so the loop
 # device's cached capacity stays valid - it is rewritten in place, no root needed).
 . "$(dirname "$0")/harness/shutdown-lib.sh"
-. "$(dirname "$0")/harness/logvol-lib.sh"   # the device set's one owner (logvol_devices_apply)
+. "$(dirname "$0")/harness/logvol-lib.sh"   # for LOGVOL_ROOT; the device set goes on through logvol-devices.sh
 set -u
 VM="${1:?usage: $0 <vm> <iso-loop> <stick-loop>}"
 ISOLOOP="${2:?}"
@@ -112,12 +112,18 @@ fi
 # what the marker volume is, and `answer` is the stick alone. Owner 2026-10-25: "no rewriting
 # arguments on the fly"; four independent copies of one device set is how campaign 1024-2333's
 # first judged boot came to ask qemu for a loop device that had been unassigned.
+# THROUGH THE ONE ENTRY POINT, AND THE CLAIM GOES ON FIRST. Owner 2026-11-10: «no free form
+# arguments anymore. single script with uniform arguments and sanity checks that confirm the device
+# is correct and accessible.» The assign used to run AFTER the device set was written, so a check at
+# the write could not see the claim it depends on; the two statements are simply swapped. The entry
+# point verifies the marker volume is on a loop, is readable as FAT, carries the label the guest
+# resolves by, and is claimed --required at the frontend the device string names.
 if [ -n "$MARKLOOP" ]; then
-    logvol_devices_apply "$VM" priming || exit 1
     qvm-device block assign --required -o frontend-dev=xvdj -o devtype=disk -o read-only=false "$VM" "$HOLDER:$MARKLOOP" >/dev/null 2>&1 \
         || { log "FAIL: could not assign the completion-marker volume"; exit 1; }
+    bash "$LOGVOL_ROOT/mgmt/harness/logvol-devices.sh" --vm "$VM" --phase priming --image "$MARKIMG" || exit 1
 else
-    logvol_devices_apply "$VM" answer || exit 1
+    bash "$LOGVOL_ROOT/mgmt/harness/logvol-devices.sh" --vm "$VM" --phase answer || exit 1
 fi
 qvm-device block assign --required -o frontend-dev=xvdi -o devtype=disk "$VM" "$HOLDER:$STICKLOOP" || exit 1
 # Positive proof the assignment stuck: this qube may not LIST block devices, but a second
