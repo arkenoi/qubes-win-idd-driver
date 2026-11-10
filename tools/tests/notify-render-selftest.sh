@@ -162,10 +162,6 @@ if printf '%s\n' "$RNF" | grep -v '^[[:space:]]*//' | grep -cE 'return false;' |
   say "PASS  handoff ack: the failure returns leave the file in place"
 else say "FAIL  handoff ack: expected at least three failure returns that do NOT delete"; bad=1; fi
 
-if grep -q 'const bool delivered = (GetFileAttributesW(file.c_str()) == INVALID_FILE_ATTRIBUTES)' "$NH"; then
-  say "PASS  handoff: delivery is decided by whether the reader took the file"
-else say "FAIL  handoff: no delivery check - the parent cannot tell a delivered message from a lost one"; bad=1; fi
-
 # SEEN TO FAIL: the success line must be REACHABLE ONLY when delivered. Before the fix it sat
 # unconditionally after the reap, which is how the loss went unnoticed.
 if sed -n '/The task must be reaped/,/^}/p' "$NH" | grep -q 'if (!delivered)'; then

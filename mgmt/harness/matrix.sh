@@ -304,12 +304,11 @@ logvol_bind_now(){ # $1=vm $2=label
     # evidenced. An unsupported measurement in a comment becomes the next reader's evidence.
     say "[ERROR] FATAL: $2: log-volume bind FAILED (see $M/$2-logvol-bind.out)"
     # WHAT THE GUEST ACTUALLY SEES, CAPTURED WHILE IT IS STILL UP - through a NAMED FUNCTION so an
-    # offline suite can stub it. tools/tests/stick-scope-restore-selftest.sh evals this whole
-    # function to test the restore behaviour, and the first cut of this capture put a literal
-    # `timeout 180 ./tools/qtest run` here: the runner's rig shim caught it as
-    # `TOUCHED-RIG ... qvm-check --quiet sub` and CI went red, because a shell-function stub cannot
-    # intercept a binary that `timeout` EXECs (this project's own 2026-10-21 lesson). A function
-    # call CAN be stubbed, which is how every other rig touch in that suite is handled.
+    # offline suite can stub it. The first cut of this capture put a literal
+    # `timeout 180 ./tools/qtest run` here, and a suite that evals this whole function had the
+    # runner's rig shim catch it as `TOUCHED-RIG ... qvm-check --quiet sub`: a shell-function stub
+    # cannot intercept a binary that `timeout` EXECs (this project's own 2026-10-21 lesson). A
+    # function call CAN be stubbed.
     logvol_bind_guestview "$1" "$2"
     say "[ERROR] FATAL: the log volume is the ONLY instrument that survives a wedge - a guest that"
     say "[ERROR] FATAL: will not halt cannot be asked for its logs, and mtools reads the image with"

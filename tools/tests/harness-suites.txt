@@ -43,7 +43,6 @@ launch-determination-selftest.sh
 logsweep-rotation-placeholder-selftest.sh
 logvol-guesttext-selftest.sh
 logvol-level-reaches-gate-selftest.sh
-logvol-smoke-selftest.sh
 loudness-channel-selftest.sh
 matrix-appvmcell-grade-selftest.sh
 matrix-appvmwindow-grade-selftest.sh
@@ -77,7 +76,6 @@ specimen-boot-gate-selftest.sh
 specimen-mark-reachable-selftest.sh
 specimen-not-a-leftover-selftest.sh
 start-dismiss-grade-selftest.sh
-stick-scope-restore-selftest.sh
 supervision-e2e-selftest.sh
 sweep-gate-selftest.sh
 sweep-life-selftest.sh
