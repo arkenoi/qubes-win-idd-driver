@@ -84,7 +84,14 @@ def gate(verdicts: dict) -> int:
     # FAILS - not because the item is bad, but because nothing here established that dom0's silence
     # about it is true, and missing data fails (CLAUDE.md). The remedy is named in the output:
     # collect the decisive measurement Jev asked for and re-run with --evidence.
-    bad, unproven = [], []
+    # UNPROVEN HAS TWO CAUSES AND THEY ARE NOT THE SAME FINDING (split 2026-11-10). Both read as
+    # "no positive judgment" to a human, so they shared one list and one exit code; but one says
+    # nothing here could measure the item, and the other says a benign claim was made and did not
+    # hold up. The first does not implicate the product and the second does, so they are kept apart
+    # and only the first lowers the blame. Collapsing them cost both ways: as one, an unmeasurable
+    # driver offer was recorded as a product regression, and a benign class resting on a reason Jev
+    # rejected would have been excused as an instrument gap.
+    bad, unmeasurable, misfit = [], [], []
     for k, v in verdicts.items():
         c = v['answers'].get('classification') or {}
         choice, conf = c.get('choice'), float(c.get('confidence') or 0.0)
@@ -94,12 +101,17 @@ def gate(verdicts: dict) -> int:
         if choice == 'concealed-failure' or concealed >= 0.5:
             bad.append((k, choice, conf, concealed, dm))
         elif choice in (None, 'insufficient-evidence'):
-            unproven.append((k, conf, dm, v['evidence']))
+            # Nothing available could decide it - including the case where the judge returned no
+            # classification at all, which is the instrument producing nothing and must never be
+            # papered over as a product result.
+            unmeasurable.append((k, conf, dm, v['evidence']))
         else:
             rf_ = v['answers'].get('reason_fits') or {}
-            # A benign class resting on a reason Jev judged not to fit the item is not proven either.
+            # A benign class resting on a reason Jev judged not to fit the item is not proven either
+            # - and this one is a CLAIM THAT FAILED, not a measurement that was missing.
             if float(rf_.get('noul') or 1.0) < 0.5:
-                unproven.append((k, conf, dm, v['evidence']))
+                misfit.append((k, conf, dm, v['evidence']))
+    unproven = misfit + unmeasurable
 
     print()
     print('EXCLUSION AUDIT: %d excluded item(s); %d judged a concealed failure, %d unproven'
@@ -110,10 +122,25 @@ def gate(verdicts: dict) -> int:
     for k, conf, dm, had_ev in unproven:
         print('  UNPROVEN           %s  (no positive judgment%s) -> collect: %s, then re-run '
               'with --evidence' % (k, '' if had_ev else '; NO independent evidence was supplied', dm))
-    if bad:
+    # TWO OUTCOMES, TWO EXIT CODES - they were both 1 until 2026-11-10, and a line both branches
+    # emit cannot discriminate. The caller maps a non-zero exit onto this project's verdict
+    # vocabulary, so one code for both made every unjudgeable item a PRODUCT verdict: tonight's
+    # acceptance recorded product_fail ['template-update'] for an audio-driver offer whose only
+    # defect was that nothing here can measure it (Jev 0.86 instrument_gap against 0.01
+    # product_defect). The audit already KNEW the difference one screen above - it prints CONCEALED
+    # FAILURE for one and UNPROVEN for the other - and then threw it away at the return.
+    #   1 = a PRODUCT finding: an exclusion Jev judged a concealed failure or P(concealed) >= 0.5,
+    #       OR a benign class whose reason Jev judged does not fit the item - a claim that failed.
+    #   2 = an INSTRUMENT gap: nothing here could measure the item, so the product is NOT
+    #       implicated. 2 is the project's standing INSTRUMENT code, and this file's own code for
+    #       "could not run".
+    # NEITHER IS A PASS and both still refuse the cut: an instrument gap is UNCOVERED, which the
+    # coverage receipt and tools/cut-release.sh treat as a refusal, not as a benign result. The
+    # change moves BLAME, never the outcome.
+    if bad or misfit:
         return 1
-    if unproven:
-        return 1
+    if unmeasurable:
+        return 2
     print('  every excluded item positively judged correct-exclusion or perpetual-by-nature')
     return 0
 

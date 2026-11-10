@@ -218,8 +218,23 @@ if [ "$erc" = 4 ]; then
   # and refuses when an excluded round lacks them (INSTRUMENT - missing data fails). EVAL_ONLY reads the same files from the run dir.
   python3 tools/wu-exclusion-evidence.py "$E2E" "$OUT/exclusion-evidence.json" > "$OUT/exclusion-evidence.out" 2>&1 \
     || verdict INSTRUMENT "could not build the exclusion evidence: $(tail -1 "$OUT/exclusion-evidence.out")"
-  python3 tools/wu-exclusion-audit.py "$E2E" --evidence "$OUT/exclusion-evidence.json" --out "$OUT/exclusion-verdict.json" > "$OUT/exclusion-audit.out" 2>&1 \
-    || verdict FAIL "the exclusion audit did not pass ($OUT/exclusion-audit.out)"
+  # READ THE AUDIT'S CLASS, NOT MERELY "NON-ZERO" (2026-11-10). `|| verdict FAIL` made every
+  # unjudgeable exclusion a product verdict, because the audit returned 1 for both of its outcomes.
+  # It now distinguishes them and so does this: 1 is an exclusion judged a CONCEALED FAILURE, which
+  # implicates the product; 2 is an item nothing here can measure, which is an INSTRUMENT gap. Both
+  # still stop the release - INSTRUMENT is uncovered and the cut is refused either way - so this
+  # moves BLAME and never the outcome. The item that forced it: an audio-driver offer whose
+  # independent-evidence leg is structurally empty (no measured artefact exists for a driver, and
+  # the Get-HotFix fallback cannot list one), so Jev answered insufficient-evidence and the release
+  # recorded a product regression for a measurement this rig cannot take.
+  python3 tools/wu-exclusion-audit.py "$E2E" --evidence "$OUT/exclusion-evidence.json" --out "$OUT/exclusion-verdict.json" > "$OUT/exclusion-audit.out" 2>&1
+  _arc=$?
+  case "$_arc" in
+    0) : ;;
+    1) verdict FAIL "the exclusion audit judged a concealed failure ($OUT/exclusion-audit.out)" ;;
+    2) verdict INSTRUMENT "the exclusion audit could not judge every excluded item - no independent measurement exists for it here, so the product is NOT implicated ($OUT/exclusion-audit.out)" ;;
+    *) verdict INSTRUMENT "the exclusion audit exited $_arc ($OUT/exclusion-audit.out)" ;;
+  esac
   say "exclusions judged: $(tail -1 "$OUT/exclusion-audit.out" | cut -c1-200)"
 elif [ "$erc" != 0 ] && [ "$erc" != 3 ]; then
   verdict INSTRUMENT "wu-e2e exited $erc"

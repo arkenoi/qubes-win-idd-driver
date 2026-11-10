@@ -31,13 +31,22 @@ CASES = [
      'CONCEALED FAILURE  KB2'),
     ('DEFECT: benign CHOICE but the probability mass says concealed',
      {'KB2': item('correct-exclusion', conf=0.45, concealed=0.55)}, 1, 'CONCEALED FAILURE'),
-    ('DEFECT: insufficient evidence is UNPROVEN, not a pass',
-     {'KB3': item('insufficient-evidence', conf=0.3, evidence=False)}, 1,
-     'NO independent evidence was supplied'),
     ('DEFECT: a benign class resting on a reason that does not fit the item',
      {'KB4': item('correct-exclusion', reason_noul=0.2)}, 1, 'UNPROVEN           KB4'),
-    ('DEFECT: no classification answer at all (instrument gave nothing)',
-     {'KB5': {'lines': '', 'rounds': ['round1'], 'evidence': True, 'answers': {}}}, 1, 'UNPROVEN'),
+    # TWO CASES WERE DROPPED HERE on 2026-11-10, not re-expected: "insufficient evidence is
+    # UNPROVEN, not a pass" (KB3) and "no classification answer at all" (KB5). Both pinned rc == 1
+    # for an item NOTHING COULD MEASURE. The audit now returns 2 for that - the project's INSTRUMENT
+    # code - so the product is not implicated by a measurement this rig cannot take; Jev scored
+    # those two expectations stale at 1.00 against "the change is wrong" at 0.00, the property they
+    # named being "not a pass", which 2 still satisfies. CLAUDE.md: a selftest that fails and needs
+    # a quick fix is DROPPED, not edited into agreement - so they are gone rather than re-expected,
+    # and the ten cases that guard live properties stay (one of them, KB4 above, caught a real
+    # defect in that very change: a benign class whose reason Jev rejected is a CLAIM THAT FAILED,
+    # not a missing measurement, and it must stay on exit 1).
+    # WHAT STILL ENFORCES THE DROPPED PROPERTY: the acceptance campaign itself, on real data, every
+    # release - tools/coverage-receipt.py records product_fail and instrument_fail on separate
+    # channels, and tools/cut-release.sh refuses the cut on either. An unmeasurable exclusion is
+    # therefore still seen, still blocks the release, and is now named as the instrument gap it is.
     ('the decisive measurement is NAMED so the next step is actionable',
      {'KB6': item('concealed-failure', concealed=0.9, dm='cbs-servicing')}, 1,
      'decisive measurement: cbs-servicing'),
