@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# wu-evidence-facts.sh <vm> <facts-out> - measure, on a RUNNING guest, the artefact versions tools/wu-exclusion-evidence.py turns into
+# wu-evidence-facts.sh <vm> <facts-out> [offers] - measure, on a RUNNING guest, the artefact versions tools/wu-exclusion-evidence.py turns into
 # the INDEPENDENT evidence tools/wu-exclusion-audit.py --evidence judges against. Read by the harness, never by the updater under test.
 #
 # Why a script of its own (2026-10-03): it was inline in mgmt/harness/template-update-test.sh, where its first live run would have been
@@ -9,10 +9,19 @@
 # live): Get-AppxPackage -AllUsers and Get-AppxProvisionedPackage -Online need it. Prints 'EV|key=value' lines; the last is EV|end=1.
 # Exit 0 = the answer is complete (the end marker arrived); 2 = it is not (guest down, qrexec refused, the probe died) - missing data
 # fails, and an empty value stays empty for the builder's required-key check to refuse.
+#
+# `offers` (2026-11-10) adds a SECOND read, after the first is complete: what the Windows Update agent itself holds for every pending
+# offer, read from its local store with no network (Online=$false; the updater's own search is the online one, and the pass owns the
+# only relay - docs/ADR-updater.md 12.4). One 'EV|offer=' line per offer, then 'EV|offers=<count>' LAST - the count is that
+# section's end marker. It can never change this script's exit code: the versions above are complete or not on their own, and
+# tools/wu-exclusion-evidence.py refuses by itself when an item it must decide has no offer line (missing data fails there).
+# WHY: an offer the updater leaves out of dom0's count as 'no route' rests on three facts (ADR-updater section 2 point 5). Its
+# 'the content is not self-contained' existed only in the updater's own status, so the exclusion audit had nothing independent to
+# hold it against and one permanent driver offer on the field reporter's environment ended every acceptance run INSTRUMENT.
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver || exit 2
-VM="${1:?usage: wu-evidence-facts.sh <vm> <facts-out>}"
-OUT="${2:?usage: wu-evidence-facts.sh <vm> <facts-out>}"
+VM="${1:?usage: wu-evidence-facts.sh <vm> <facts-out> [offers]}"
+OUT="${2:?usage: wu-evidence-facts.sh <vm> <facts-out> [offers]}"
 source mgmt/harness/vmlock.sh; vm_lock "$VM"
 # DEFENDER LOADS LATE (measured 2026-10-03 on the rz35 subject, German 25H2): 68 s after boot WinDefend was Running but reported
 # AMRunningMode 'Not running', engine 0.0.0.0 and NO signature version; at 170 s it reported Normal, engine 1.1.26080.3, signatures
@@ -63,3 +72,65 @@ QTEST_VM="$VM" timeout -k 5 420 tools/qtest run "powershell -NoProfile -NonInter
 grep -a '^EV|' "$raw" > "$OUT"
 grep -a -q '^EV|end=1$' "$OUT" || { echo "INCOMPLETE: no end marker from $VM (raw answer kept in $raw)" >&2; exit 2; }
 echo "facts from $VM: $(grep -a -v '^EV|end=' "$OUT" | tr '\n' ' ' | cut -c1-400)"   # -a: SYSTEM's name is localized (NT-AUTORITÄT, OEM codepage)
+[ "${3:-}" = offers ] || exit 0
+# THE OFFERS, AS THE AGENT HOLDS THEM. Per offer: UpdateID; nodes visited in its bundle tree; leaves (nodes that carry content);
+# NEEDED leaves (neither installed nor downloaded); content items on needed leaves that are a plain download.windowsupdate.com
+# file, and those that are anything else (an express or Delivery Optimization stream, a URL with a query, none at all - a leaf
+# with more than 64 items is express-shaped and counted whole, never enumerated); whether the agent already holds the offer's
+# content; the title as base64 of its UTF-8 (a German title does not survive the console codepage - see the whoami line above).
+# COUNTS ONLY: which combination means "self-contained" is decided by the builder on the host, where it can be read and tested.
+# A second call, not a longer first one: cmd.exe cuts a command line at 8191 characters and the first program already encodes
+# to about 6700 (mgmt/harness/console-window-check.sh measured the cut: mid-base64, the remainder run as a command).
+read -r -d '' OFPS <<'PS' || true
+$ErrorActionPreference = 'Stop'
+function Add-EvNode($n, $a) {
+  if ($a.n -ge 256) { return }
+  $a.n++
+  $c = 0; try { $c = [int]$n.DownloadContents.Count } catch {}
+  if ($c -gt 0) {
+    $a.l++
+    $i = $false; $d = $false
+    try { $i = [bool]$n.IsInstalled } catch {}
+    try { $d = [bool]$n.IsDownloaded } catch {}
+    if (-not $i -and -not $d) {
+      $a.k++
+      if ($c -gt 64) { $a.o += $c }
+      else {
+        foreach ($f in $n.DownloadContents) {
+          $u = ''; try { $u = [string]$f.DownloadUrl } catch {}
+          if ($u -match '^https?://[^/]*download\.windowsupdate\.com/' -and $u -notmatch '\?|filestreamingservice|tlu\.dl\.delivery\.mp\.microsoft\.com') { $a.s++ } else { $a.o++ }
+        }
+      }
+    }
+  }
+  $b = 0; try { $b = [int]$n.BundledUpdates.Count } catch {}
+  if ($b -gt 0) { foreach ($x in $n.BundledUpdates) { Add-EvNode $x $a } }
+}
+try {
+  $q = (New-Object -ComObject Microsoft.Update.Session).CreateUpdateSearcher()
+  $q.ServerSelection = 2; $q.Online = $false
+  $r = $q.Search('IsInstalled=0 and IsHidden=0')
+  $k = 0
+  foreach ($u in $r.Updates) {
+    $a = @{ n = 0; l = 0; k = 0; s = 0; o = 0 }
+    Add-EvNode $u $a
+    $d = 0; try { if ($u.IsDownloaded) { $d = 1 } } catch {}
+    'EV|offer=' + [string]$u.Identity.UpdateID + ';' + $a.n + ';' + $a.l + ';' + $a.k + ';' + $a.s + ';' + $a.o + ';' + $d + ';' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$u.Title))
+    $k++
+  }
+  'EV|offers=' + $k
+} catch { 'EV|offers_error=' + ($_.Exception.Message -replace '\s+', ' ') }
+PS
+ocmd="powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $(printf '%s' "$OFPS" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)"
+if [ "${#ocmd}" -gt 8000 ]; then
+  echo "OFFERS NOT READ: the encoded probe is ${#ocmd} characters, past what cmd.exe passes whole (8191) - shorten it"
+  exit 0
+fi
+QTEST_VM="$VM" timeout -k 5 240 tools/qtest run "$ocmd" 2>&1 | tr -d '\r' > "$OUT.offers.raw"
+if grep -a -q '^EV|offers=[0-9][0-9]*$' "$OUT.offers.raw"; then
+  grep -a -E '^EV\|offers?=' "$OUT.offers.raw" >> "$OUT"
+  echo "offers held by the Windows Update agent on $VM: $(grep -a -c '^EV|offer=' "$OUT.offers.raw") line(s), count line $(grep -a '^EV|offers=' "$OUT.offers.raw" | tail -1)"
+else
+  echo "OFFERS NOT READ from $VM: $(grep -a '^EV|offers_error=' "$OUT.offers.raw" | head -1 | cut -c1-200) (no count line; raw answer kept in $OUT.offers.raw)"
+fi
+exit 0

@@ -21,6 +21,18 @@ against the evidence for THAT item. Nothing here writes a verdict of its own.
 --evidence is an optional {"<kb>": "<independently measured fact>"} map: what the servicing stack
 says about that item, gathered from the guest AFTER the run. An item with no independent evidence
 is judged on the row alone, and Jev is told so explicitly - so a thin brief reads as thin.
+
+ONE EXCEPTION TO "NOTHING HERE WRITES A VERDICT" (2026-11-10), and it is a comparison, not a
+judgment. An evidence entry may be an object {"text": ..., "measured": {"class", "verdict", "why"}}
+instead of a string: tools/wu-exclusion-evidence.py writes one for an offer the updater calls
+unroutable, where the claim is three recorded facts and each has been measured outside the updater.
+Whether recorded values agree is computable, and this project's classifier rule forbids asking a
+model for what a script can compute - so for such an item the gate reads `measured` FIRST:
+`agree` passes it, `contradicts` is a product failure (exit 1), and Jev's answer is still asked,
+still printed, and cannot change either. docs/ADR-updater.md section 16 has the same shape for the
+updater's component gates, in the owner's words (verbatim): "the main flow should stay determenistic
+and self contained, but we SHOULD ask jev for supplementary data". Every other item is judged
+exactly as before.
 """
 from __future__ import annotations
 import argparse, json, subprocess, sys
@@ -91,8 +103,16 @@ def gate(verdicts: dict) -> int:
     # and only the first lowers the blame. Collapsing them cost both ways: as one, an unmeasurable
     # driver offer was recorded as a product regression, and a benign class resting on a reason Jev
     # rejected would have been excused as an instrument gap.
-    bad, unmeasurable, misfit = [], [], []
+    bad, unmeasurable, misfit, proven, refuted = [], [], [], [], []
     for k, v in verdicts.items():
+        # DECIDED BY MEASUREMENT, before any judgment is read (this file's header, 2026-11-10). The
+        # builder wrote `measured` only when every fact of the claim was measured outside the
+        # updater; a fact it could not measure made the builder exit 2 and never reached here.
+        ms = v.get('measured') or {}
+        if ms.get('verdict') == 'agree':
+            proven.append((k, ms)); continue
+        if ms.get('verdict') == 'contradicts':
+            refuted.append((k, ms)); continue
         c = v['answers'].get('classification') or {}
         choice, conf = c.get('choice'), float(c.get('confidence') or 0.0)
         probs = c.get('probabilities') or {}
@@ -115,7 +135,15 @@ def gate(verdicts: dict) -> int:
 
     print()
     print('EXCLUSION AUDIT: %d excluded item(s); %d judged a concealed failure, %d unproven'
-          % (len(verdicts), len(bad), len(unproven)))
+          % (len(verdicts), len(bad), len(unproven))
+          + ('; %d decided by measurement (%d of them contradicted)' % (len(proven) + len(refuted), len(refuted))
+             if proven or refuted else ''))
+    for k, ms in refuted:
+        print('  MEASURED FALSE     %s  (%s: %s) - the updater\'s claim is contradicted by a '
+              'measurement taken outside it' % (k, ms.get('class'), ms.get('why')))
+    for k, ms in proven:
+        print('  MEASURED CORRECT   %s  (%s: %s) - decided by measurement; the judge\'s answer '
+              'above is supplementary' % (k, ms.get('class'), ms.get('why')))
     for k, choice, conf, concealed, dm in bad:
         print('  CONCEALED FAILURE  %s  (choice=%s conf=%.2f, P(concealed)=%.2f) '
               '-> decisive measurement: %s' % (k, choice, conf, concealed, dm))
@@ -137,11 +165,12 @@ def gate(verdicts: dict) -> int:
     # NEITHER IS A PASS and both still refuse the cut: an instrument gap is UNCOVERED, which the
     # coverage receipt and tools/cut-release.sh treat as a refusal, not as a benign result. The
     # change moves BLAME, never the outcome.
-    if bad or misfit:
+    if bad or misfit or refuted:
         return 1
     if unmeasurable:
         return 2
-    print('  every excluded item positively judged correct-exclusion or perpetual-by-nature')
+    print('  every excluded item positively judged correct-exclusion or perpetual-by-nature'
+          + (', or measured correct' if proven else ''))
     return 0
 
 
@@ -202,9 +231,12 @@ def main() -> int:
             'and saw nothing is a NEGATIVE result, not a missing one.',
             '',
         ]
+        # A string, or {"text", "measured"} where the builder could decide the item by comparison.
+        entry = ev.get(k)
+        measured = entry.get('measured') if isinstance(entry, dict) else None
         if k in ev:
             state += ['INDEPENDENT EVIDENCE measured on the guest itself, outside the updater:',
-                      str(ev[k]), '']
+                      str(entry.get('text') if isinstance(entry, dict) else entry), '']
         else:
             state += ['INDEPENDENT EVIDENCE: NONE was collected for this item. The judgment below',
                       'rests on the updater\'s own row - i.e. on the word of the component under',
@@ -248,6 +280,15 @@ def main() -> int:
         af = sdir / f'jev-excl-{safe}-answers.json'
         p = subprocess.run([sys.executable, str(ROOT / 'tools' / 'jev.py'), str(rf), str(sf),
                             '--out', str(af)], capture_output=True, text=True)
+        if p.returncode != 0 and measured:
+            # SUPPLEMENTARY MEANS IT CANNOT STOP THE VERDICT EITHER. This item is decided by a
+            # measurement already in hand; an unreachable judge is said out loud and changes nothing.
+            print(f'=== {k}  (rounds: {", ".join(it["rounds"])}, decided by measurement)')
+            print(f'    JEV DID NOT RUN (rc={p.returncode} {p.stderr.strip()[:200]}) - its answer was '
+                  'supplementary for this item and is absent')
+            verdicts[k] = {'lines': '', 'answers': {}, 'rounds': it['rounds'], 'evidence': True,
+                           'measured': measured}
+            continue
         if p.returncode != 0:
             # exit 2 means the INSTRUMENT did not run. Never paper over it as an answer.
             print(f'JEV DID NOT RUN for {k}: rc={p.returncode} {p.stderr.strip()[:300]}', file=sys.stderr)
@@ -258,10 +299,16 @@ def main() -> int:
         try:
             ans = json.loads(af.read_text(encoding='utf-8')).get('answers', {})
         except Exception as e:
-            print(f'INSTRUMENT: answers for {k} unreadable ({e})', file=sys.stderr)
-            return 2
+            if not measured:
+                print(f'INSTRUMENT: answers for {k} unreadable ({e})', file=sys.stderr)
+                return 2
+            ans = {}
         verdicts[k] = {'lines': p.stdout.strip(), 'answers': ans,
                        'rounds': it['rounds'], 'evidence': k in ev}
+        if measured:
+            # Kept IN the record --out writes, so wu-e2e.sh's WU_EXCLUSION_VERDICT replay through
+            # gate() reaches the same decision this run did, with no second measurement.
+            verdicts[k]['measured'] = measured
 
     if a.out:
         a.out.write_text(json.dumps(verdicts, indent=1), encoding='utf-8')

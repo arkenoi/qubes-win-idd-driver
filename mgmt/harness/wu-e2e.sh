@@ -420,7 +420,11 @@ for r in $(seq 1 "$ROUNDS"); do
   log "round $r: agent.log grew by $(wc -l < "$RD/agent.log") line(s) ($(grep -ac '^agent\.log' "$RD/guestlogs.tsv" 2>/dev/null) file(s) read)"
   guest_file 'C:\ProgramData\Qubes\update-status.json'  > "$RD/update-status.json"
   log "round $r: relay log $(wc -l < "$RD/relay.log" 2>/dev/null || echo 0) line(s), handler log $(wc -l < "$RD/relay-handler.log" 2>/dev/null || echo 0) line(s), shim log $(wc -l < "$RD/vmupdate-shim.log" 2>/dev/null || echo 0) line(s)"
-  mgmt/harness/wu-evidence-facts.sh "$VM" "$RD/facts-after.txt" > "$RD/facts-after.out" 2>&1 \
+  # `offers` (2026-11-10): after the pass the harness also records what the Windows Update agent itself holds for every pending
+  # offer - the independent read of "is this offer's content self-contained" that tools/wu-exclusion-evidence.py holds an
+  # unroutable claim against. After the pass only: that is the state the round's claim is about, and before round 1 the
+  # agent's store is whatever the golden last saw.
+  mgmt/harness/wu-evidence-facts.sh "$VM" "$RD/facts-after.txt" offers > "$RD/facts-after.out" 2>&1 \
     || log "round $r: facts after the pass INCOMPLETE - $(tail -1 "$RD/facts-after.out" | cut -c1-160)"
 
   after=$(dom0_avail); log "round $r: dom0 updates-available AFTER='${after:-<empty>}'"

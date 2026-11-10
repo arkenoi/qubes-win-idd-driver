@@ -384,6 +384,30 @@ purpose: they are observations, and they change.
 5. Missing data fails. A check that cannot fail is not a check: every gate here must have been seen to FAIL
    on a build with the defect put back.
 
+**Mechanism for point 4, 2026-11-10 - a HARNESS rule, not an owner decision.** One class of excluded item is
+decided by comparison in code and not by a judge: an offer that carries no KB and that the updater lists in
+`unroutable` in every round that excluded it. Its claim is section 2 point 5's three facts, and each is held
+against a measurement taken outside the updater: the Catalog's answer for the exact title, asked from the
+development qube with a positive control in the same invocation (`tools/wu-catalog-facts.py`); the offer's
+content as the Windows Update agent itself holds it after each excluding pass, read offline by the harness
+(`mgmt/harness/wu-evidence-facts.sh ... offers`); and the qube's netvm as `env-assert.sh` read it from the
+Admin API. All three agreeing passes the item; one contradicting is a product FAIL; a fact that was not
+measured is INSTRUMENT. Jev is still asked and its answer printed; it cannot change the result (the shape
+section 16 already has for the component gates).
+
+Why: the item this was built for - an audio-driver offer the field reporter's environment presents on every
+pass - had no measured artefact, so every acceptance run ended INSTRUMENT on it. Given the Catalog measurement
+by hand on 2026-11-08 the judge answered correct-exclusion 0.49, 0.57 and 0.63 and insufficient-evidence 0.51
+in four calls, none above the floor; given all three measurements on 2026-11-10 it answered
+insufficient-evidence 0.48 and 0.49 in two. Jev on the design itself: `verdict_source` =
+code-gates-judge-supplementary at conf 0.37 (0.53 against judge-gates 0.24) - UNDER FLOOR, so the choice is
+mine and not a verdict; `catalog_agreement_sufficient` noul 0.31, which is why the Catalog fact alone does not
+pass an item; `missing_measurement` = self-contained-content at conf 0.85, which is the agent read.
+
+Not covered, and judged as before: an unroutable offer that HAS a KB (the Windows 10 ESU case), for which no
+host-side Catalog measurement by KB exists. The comparison's contradiction legs have been driven only by
+fixtures derived from one real capture; no run has yet produced a real self-contained offer in the agent read.
+
 ## 10. The guest cannot restart itself; a restart is REQUESTED, never taken
 
 **Status:** ACCEPTED.

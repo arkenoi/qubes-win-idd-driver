@@ -21,7 +21,9 @@
 #      restart was performed before the next round. At most ONE such round - a second means the remedy did not clear it;
 #   5. excluded items, if any, positively judged (tools/wu-exclusion-audit.py, Jev) against INDEPENDENT evidence: the artefact versions
 #      wu-e2e.sh measured on the guest before and after each pass that excluded them (tools/wu-exclusion-evidence.py), replayed
-#      through that tool's own gate.
+#      through that tool's own gate. ONE class is decided by comparison and not by the judge (2026-11-10): an offer without a KB
+#      that the updater lists as unroutable, held against the Catalog's answer asked from this qube (tools/wu-catalog-facts.py),
+#      the Windows Update agent's own record of the offer and the qube's netvm. Agreement passes it, a contradiction is FAIL.
 # Exit 0 PASS, 1 FAIL, 2 INSTRUMENT (the test could not produce a verdict - never a pass).
 #
 # EVAL_ONLY=<wu-e2e out dir> ROUNDS=<n>: judge an EXISTING wu-e2e run by the rules above and touch nothing (no rig) - the offline
@@ -216,6 +218,16 @@ if [ "$erc" = 4 ]; then
   # failed on three Defender items whose versions were never measured. mgmt/harness/wu-e2e.sh measures the artefacts before and after
   # every pass (mgmt/harness/wu-evidence-facts.sh); tools/wu-exclusion-evidence.py turns the excluded rounds' facts into the evidence,
   # and refuses when an excluded round lacks them (INSTRUMENT - missing data fails). EVAL_ONLY reads the same files from the run dir.
+  # THE CATALOG, ASKED FROM THIS QUBE, BEFORE THE EVIDENCE IS BUILT (2026-11-10). An offer without a KB that the updater calls
+  # unroutable is decided by comparing its three facts with measurements taken outside it (tools/wu-exclusion-evidence.py); the
+  # Catalog one is taken here, with a control in the same invocation. It exits 2 when the control does not resolve - a
+  # measurement that cannot find a known package cannot report "no package" - and 0 without touching the network when no
+  # excluded item needs it. EVAL_ONLY touches nothing: the builder reads the catalog-resolve.json the judged run recorded.
+  if [ -z "${EVAL_ONLY:-}" ]; then
+    python3 tools/wu-catalog-facts.py "$E2E" > "$OUT/catalog-facts.out" 2>&1 \
+      || verdict INSTRUMENT "the host-side Catalog measurement could not prove itself: $(tail -1 "$OUT/catalog-facts.out" | cut -c1-200)"
+    say "catalog facts: $(tail -1 "$OUT/catalog-facts.out" | cut -c1-200)"
+  fi
   python3 tools/wu-exclusion-evidence.py "$E2E" "$OUT/exclusion-evidence.json" > "$OUT/exclusion-evidence.out" 2>&1 \
     || verdict INSTRUMENT "could not build the exclusion evidence: $(tail -1 "$OUT/exclusion-evidence.out")"
   # READ THE AUDIT'S CLASS, NOT MERELY "NON-ZERO" (2026-11-10). `|| verdict FAIL` made every
@@ -231,7 +243,7 @@ if [ "$erc" = 4 ]; then
   _arc=$?
   case "$_arc" in
     0) : ;;
-    1) verdict FAIL "the exclusion audit judged a concealed failure ($OUT/exclusion-audit.out)" ;;
+    1) verdict FAIL "the exclusion audit found a concealed failure - judged one, or measured the updater's claim false ($OUT/exclusion-audit.out)" ;;
     2) verdict INSTRUMENT "the exclusion audit could not judge every excluded item - no independent measurement exists for it here, so the product is NOT implicated ($OUT/exclusion-audit.out)" ;;
     *) verdict INSTRUMENT "the exclusion audit exited $_arc ($OUT/exclusion-audit.out)" ;;
   esac
