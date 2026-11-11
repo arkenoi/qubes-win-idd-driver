@@ -380,6 +380,24 @@
    "status": "unsettled",
    "max_per_boot": null,
    "reason": "NEVER OBSERVED, AND DELIBERATELY NOT SILENCED. agent/gui-agent/vchan-handlers.c HandleFocus and HandleConfigure (agent b498a2f): dom0 sent a focus or a configure naming a handle that IS a window and that the agent's list does not hold - the agent announced it and lost it, or Windows reused a destroyed window's handle for one not announced yet. A click or a move made on the dom0 side is then not applied to that window. Jev on the canonical log-sweep rubric (floor 0.5): expected 0.56 conf [expected=0.67 insufficient-evidence=0.30 defect=0.03 noise=0.00] as a correct record; keep_armed noul=0.94, so it is armed rather than expected: the first occurrence is flagged and decided with that run's evidence."
+  },
+  {
+   "regex": "^bridge\\|[^|]*\\|.*NOTIFY handoff: cannot read own token's elevation \\(",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED, AND DELIBERATELY NOT SILENCED. tools/notifhost/notifhost.cpp TokenIsElevatedHalf: the helper could not open or query its own process token, so it cannot tell whether it holds the elevated half of a split administrator token. It then sends inline, as every sender did before the check existed, and on a guest with UAC on an elevated sender's notice is queued until the next bridge start. CLASSIFICATION OWED - NOT A JEV VERDICT: on the canonical log-sweep rubric (floor 0.5) expected 0.35 conf [expected=0.51 insufficient-evidence=0.42 defect=0.06 noise=0.01], under the floor, and keep_armed noul=0.64, under its 0.70 floor. Armed on one ground only: an ERROR that has no class is not declared expected. CEILING UNMEASURED."
+  },
+  {
+   "regex": "^bridge\\|[^|]*\\|.*RELAY .* is gone - its sender left before this relay started",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED. tools/notifhost/notifhost.cpp RelayMain: the relay found no pipe of the name it was started for - its sender closed it, having given up after its 15 s wait or exited - and has nothing to relay. Whether that sender's notice was queued is in the sender's own lines, not in this one. Jev on the canonical log-sweep rubric (floor 0.5): insufficient-evidence 0.51 conf [insufficient-evidence=0.63 expected=0.35 defect=0.02 noise=0.00]; keep_armed noul=0.92. INFO level, so it does not count in signatures_unclassified and blocks nothing; it is declared so the sweep cannot meet it unannounced. How often a relay starts after its sender has gone is NOT measured: the relay logged nothing before this line existed. CEILING UNMEASURED."
+  },
+  {
+   "regex": "^bridge\\|[^|]*\\|.*RELAY cannot open ",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED ON THE RIG, AND DELIBERATELY NOT SILENCED. tools/notifhost/notifhost.cpp RelayMain: the sender's pipe exists and the relay could not open it - the line carries the Windows error code - so the sender gets no connection to dom0 and queues its notice until the next bridge start. The one cause inferred so far, a sender holding the elevated half of a split token while UAC is on (measured on a Windows 11 guest as the sender's 'relay never connected'), is removed by the change that adds this line, and the rig's guests have UAC off. Jev on the canonical log-sweep rubric (floor 0.5): expected 0.65 conf [expected=0.74 insufficient-evidence=0.24 defect=0.02 noise=0.00] as a correct record; keep_armed noul=0.83, so it is armed rather than expected: the first occurrence is flagged and decided with that run's evidence. CEILING UNMEASURED."
   }
  ],
  "signatures": {
@@ -4393,5 +4411,5 @@
   }
  },
  "version": 1,
- "preaccounted_at": "6a0d6c44d4adc7c7625ecc22629a36b63bf43091"
+ "preaccounted_at": "245756e8034d6c1c1f0700ca3ee300c78c1f16c5"
 }
