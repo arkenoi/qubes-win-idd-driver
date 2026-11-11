@@ -1,9 +1,10 @@
-Subject: [PATCH] Handle backends without a control ring
+Subject: [XENVIF PATCH] Handle backends without a control ring
 
 If the backend does not advertise feature-ctrl-ring, ControllerConnect()
-sets up no ring and leaves Controller->Connected clear. Requests used to
-fail with STATUS_NOT_SUPPORTED in that case, and the frontend ignored that
-for the default (UNSPECIFIED) hash algorithm. Two changes have broken this:
+sets up no ring and leaves Controller->Connected clear. Since ae23a3b
+"Fix compatibility with older backends" requests failed with
+STATUS_NOT_SUPPORTED in that case, and the frontend ignored that for the
+default (UNSPECIFIED) hash algorithm. Two changes have broken this:
 
 - 50957a5 "Fix argument to ControllerSetHashAlgorithm" made
   __FrontendUpdateHash() treat UNSPECIFIED like NONE, and so check the
@@ -27,12 +28,19 @@ unless a hash is being asked for, and that fails with STATUS_NOT_SUPPORTED
 
 Nothing else uses the control ring, and the remaining Controller*() calls
 made by the frontend already cope with Connected being clear.
+
+This is not 4e080f8 "Skip hash update if frontend is not enabled" again,
+which had to be reverted because NDIS queries the hash types before the
+frontend is enabled. The controller is enabled as soon as the frontend is
+connected, so with a control ring every request goes through as it does
+today.
 ---
 Not part of the commit message:
  * Against xenvif master c042e3b.
  * patches/xenvif-ctrl-ring-fix.patch in this repository is the same change
    against the revision our build pins (0c61248).
- * Add the Signed-off-by before sending.
+ * Add the Signed-off-by before sending. The list asks for an Assisted-by:
+   tag, not Co-Authored-By, where LLM assistance is indicated.
 
   src/xenvif/controller.c | 14 ++++++++++++--
   src/xenvif/controller.h |  7 ++++++-
