@@ -17,7 +17,7 @@
 #   bits                     cell  check earned
 #   MODE1|MODE2      0x3     SG4   or-fullscreen-never-mapped   (companion: SG2)
 #   MODE2            0x2     SG2   borderless-fullscreen-gated  - ALREADY EARNED, not re-run
-#   START|NOCARD     0x14    SG9   start-not-presented          (defended in depth)
+#   START|NOCARD     0x14    SG9   start-not-presented          - NOT proven here, by the owner's call (see the prove list)
 #   FI_DROP_CAPTIONED 0x20   SG3   windowed-fullscreen-allowed
 #
 # Combinations, not single bits, because two of these properties are defended IN DEPTH - see the
@@ -318,8 +318,13 @@ prove(){  # <bitname> <hex> <cell> <check> [cells allowed to move too]
 # MODE1 and MODE2 alone are NOT run any more: both were measured 2026-08-31 leaving their cell
 # green because a second clause defends the same property. The combinations below are what
 # actually falsify each property, with the companion cell declared.
+#
+# START (SG9) IS NOT PROVEN HERE. What is asserted about Start is that the Windows key does not open it
+# by default and that it may be enabled - owner, 2026-11-11: «investing any effort into "fully
+# suppressing it" is plain misdirection». The armed run could not have earned it either: the agent maps
+# Start override-redirect, which the dom0 window list SG9 counts never holds, and the cell's deny count
+# reached the guest cut to its first word by pushrun's argument join. SG9 still runs as a cell.
 prove FI_GATE_MODE1_2     0x3  SG4 or-fullscreen-never-mapped  SG2
-prove FI_GATE_START_NOCARD 0x14 SG9 start-not-presented
 prove FI_DROP_CAPTIONED   0x20 SG3 windowed-fullscreen-allowed
 
 log "=== clearing FaultGateOff and leaving the subject with every safeguard in force ==="
