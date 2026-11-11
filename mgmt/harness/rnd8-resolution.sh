@@ -98,17 +98,64 @@ shot_hash(){
 # tools/accept-clean.sh types the same way. By pid, not by title: the caption is "Editor" on a
 # German guest and a title match there reads as a dead stimulus (owner 2026-10-01: never identify a
 # window by its caption, not even in a harness).
+# NO KEYSTROKES SINCE 2026-11-11. On the 23b19e36 chain AppActivate+SendKeys printed 'TYPED ok' in
+# all six unarmed passes of failproof-faultinject while the keystrokes never reached the window: the
+# agent's log shows the typed notepad (0x1c0274) receiving caret-blink damage only, and the witness
+# read the same empty-notepad hash in every control (5088e1d307bbff6c, also seen on earlier days).
+# 'TYPED ok' meant "AppActivate found a window", not "text arrived" - activation is subject to the
+# foreground lock and SendWait types into whatever holds focus. The text now goes straight into the
+# pid's edit control with WM_SETTEXT, which needs neither the foreground nor the input queue, and
+# 'TYPED ok' is printed only when WM_GETTEXT reads the marker back out of the control.
 cat > "$TMP/type.ps1" <<'PS'
 param([int]$ProcId)
-$ErrorActionPreference='Continue'
-Add-Type -AssemblyName System.Windows.Forms
-$w = New-Object -ComObject WScript.Shell
-$act = $false; try { $act = $w.AppActivate($ProcId) } catch { Write-Output ("TYPED error " + $_.Exception.Message) }
-if ($act) {
-  Start-Sleep -Milliseconds 600
-  [System.Windows.Forms.SendKeys]::SendWait("RND8 " + (Get-Random) + "`n" + ("#" * 60) + "`n")
-  Write-Output ('TYPED ok pid=' + $ProcId)
-} else { Write-Output ('TYPED no-activate pid=' + $ProcId) }
+$ErrorActionPreference='Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public class Rnd8Edit {
+    delegate bool EnumProc(IntPtr h, IntPtr l);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr l);
+    [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr h, EnumProc cb, IntPtr l);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassNameW(IntPtr h, StringBuilder s, int n);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern IntPtr SendMessageW(IntPtr h, uint m, IntPtr w, string l);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern IntPtr SendMessageW(IntPtr h, uint m, IntPtr w, StringBuilder l);
+    [DllImport("user32.dll")] static extern IntPtr SendMessageW(IntPtr h, uint m, IntPtr w, IntPtr l);
+    // The edit control inside a VISIBLE top-level window the pid owns: "Edit" (classic Notepad) or
+    // a "RichEdit..." class (RichEditD2DPT in the newer Notepad).
+    public static IntPtr Find(uint want) {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows((top, l) => {
+            uint pid; GetWindowThreadProcessId(top, out pid);
+            if (pid == want && IsWindowVisible(top))
+                EnumChildWindows(top, (h, l2) => {
+                    var c = new StringBuilder(64); GetClassNameW(h, c, 64);
+                    string s = c.ToString();
+                    if (s == "Edit" || s.StartsWith("RichEdit")) { found = h; return false; }
+                    return true;
+                }, IntPtr.Zero);
+            return found == IntPtr.Zero;
+        }, IntPtr.Zero);
+        return found;
+    }
+    // WM_SETTEXT, then WM_GETTEXTLENGTH + WM_GETTEXT: returns what the control HOLDS afterwards.
+    public static string Put(IntPtr edit, string text) {
+        SendMessageW(edit, 0x000C, IntPtr.Zero, text);
+        int n = (int)SendMessageW(edit, 0x000E, IntPtr.Zero, IntPtr.Zero);
+        var b = new StringBuilder(n + 1);
+        SendMessageW(edit, 0x000D, (IntPtr)(n + 1), b);
+        return b.ToString();
+    }
+}
+'@
+$e = [Rnd8Edit]::Find([uint32]$ProcId)
+if ($e -eq [IntPtr]::Zero) { Write-Output ('TYPED no-edit pid=' + $ProcId); exit 0 }
+$mark = 'RND8 ' + (Get-Random)
+$back = [Rnd8Edit]::Put($e, $mark + "`r`n" + ('#' * 60) + "`r`n")
+if ($back.Contains($mark)) { Write-Output ('TYPED ok pid=' + $ProcId + ' edit=0x' + $e.ToInt64().ToString('x')) }
+else { Write-Output ('TYPED no-readback pid=' + $ProcId + ' held=' + $back.Length) }
 PS
 
 # A notepad left by an earlier run is NOT ours to stop (owner 2026-10-07: nothing is killed by
