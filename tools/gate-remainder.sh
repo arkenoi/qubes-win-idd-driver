@@ -469,7 +469,11 @@ if need toast-hold-test; then
   # carries the coverage this run does not have rather than leaving it to the suite's verdict file.
   say "    note: toast-hold S5 (whole-desktop SetGuiMode round trip) is NOT exercised by this gate -"
   say "          it takes over the screen. Run the suite with --nonseamless deliberately for S5a/S5c."
-  run_it toast-hold-test bash mgmt/harness/toast-hold-test.sh --run "$RUN" --os "$OS11"; thrc=$?
+  # THE LEDGER suite_class READS. toast-hold writes an INVALID-INSTRUMENT row there when a GitHub
+  # artifact download fails (2026-11-11: an HTTP 502 was graded `FAIL toast-hold-test`). Emptied before
+  # EVERY attempt: a row left by the first attempt would grade a product FAIL of the retry as UNCOVERED.
+  THL="$WORK/toast-hold-test/verdicts.tsv"; mkdir -p "${THL%/*}"
+  rm -f "$THL"; run_it toast-hold-test env TH_LEDGER="$THL" bash mgmt/harness/toast-hold-test.sh --run "$RUN" --os "$OS11"; thrc=$?
   # ONE RETRY, DRIVEN BY THE REFUSAL'S OWN TEXT. quick-upgrade refuses while ANY win1* guest is up,
   # and settle() above only knows the guests THIS gate names. Measured 2026-10-09: it refused with
   # "REFUSED: these are not Halted: win11r-up" - a leftover from other work on the rig, which no
@@ -486,7 +490,7 @@ if need toast-hold-test; then
         if vm_lock "$v"; then qwt_shutdown "$v" 600 >>"$LOG" 2>&1 || say "    WARN $v did not halt cleanly"; vm_unlock
         else say "    WARN could not lock $v to settle it"; fi
       done
-      run_it toast-hold-test bash mgmt/harness/toast-hold-test.sh --run "$RUN" --os "$OS11"; thrc=$?
+      rm -f "$THL"; run_it toast-hold-test env TH_LEDGER="$THL" bash mgmt/harness/toast-hold-test.sh --run "$RUN" --os "$OS11"; thrc=$?
     fi
   fi
   note "$thrc" toast-hold-test
@@ -544,8 +548,15 @@ if need failproof-gates || need failproof-faultinject; then
       say "INTEND[dry] install the injector tree on $VM11 via quick-upgrade"
       fi_installed=1
     else
-      [ -s "$FISETUP/install.cmd" ] || gh run download "$FIRUN" -n qwt-improved-setup -D "$FISETUP" >>"$LOG" 2>&1 || true
-      if [ ! -s "$FISETUP/install.cmd" ]; then
+      # THE DOWNLOAD'S OWN ANSWER IS SAID. This was `|| true` followed by a guess, and on 2026-11-11 the
+      # guess ("was it dispatched with fault_injection=true?") was wrong: the run carried the artifact,
+      # and api.github.com had answered `HTTP 502: Server Error`.
+      fidl_out=""
+      [ -s "$FISETUP/install.cmd" ] || fidl_out=$(gh run download "$FIRUN" -n qwt-improved-setup -D "$FISETUP" 2>&1)
+      [ -n "$fidl_out" ] && printf '%s\n' "$fidl_out" >> "$LOG"
+      if [ ! -s "$FISETUP/install.cmd" ] && [ -n "$fidl_out" ]; then
+        say "ERROR: could not download qwt-improved-setup from run $FIRUN: $(printf '%s' "$fidl_out" | tail -1)"
+      elif [ ! -s "$FISETUP/install.cmd" ]; then
         say "ERROR: run $FIRUN has no installable qwt-improved-setup - was it dispatched on"
         say "       release-package with -f fault_injection=true? (qwt-full alone is not installable)"
       elif ! python3 - "$FISETUP/reference/gui-agent.exe" <<'FIMARK'
