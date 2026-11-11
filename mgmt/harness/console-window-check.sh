@@ -127,7 +127,10 @@ ninit=$(echo "$out" | grep -a '^CWC-INIT|' | cut -d'|' -f2 | sort -u | wc -l)
 hits=$(echo "$out" | grep -a '^CWC-HIT|')
 if [ -n "$hits" ]; then
   nhits=$(echo "$hits" | wc -l)
-  first=$(echo "$hits" | head -1 | cut -d'|' -f3- | cut -c1-200)
+  # QUOTED WITHOUT ITS BRACKETS. The record's stamp, bracketed, is how tools/sweep-gate.sh
+  # recognises a windows-utils record, and it looks for one anywhere on a line: a caller that logs
+  # this result then owns a "module log" with no birth line, and the gate refuses to judge the run.
+  first=$(echo "$hits" | head -1 | cut -d'|' -f3- | tr -d '[]' | cut -c1-200)
   if [ "$ALLOW_INSTALLER" = 1 ] && [ "$nhits" -eq 1 ]; then
     # The cell DECLARED that it started a console. Exactly one is the installer's; it is still
     # REPORTED, so it can never go unseen, and a second one is still the defect.

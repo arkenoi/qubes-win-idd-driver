@@ -262,6 +262,12 @@ sweep_gate_rc(){
         echo "  judge this run. That is missing data, not a clean sweep ($out)." >&2
         return 2
     fi
+    # AN INCONCLUSIVE RESULT LINE IS THE GATE SAYING IT DID NOT JUDGE. It carries neither of the two
+    # counters read below, so both defaulted to 0 and the refusal came out as "nothing to count".
+    case "$res" in 'SWEEP-GATE-RESULT INCONCLUSIVE'*)
+        echo "sweep_gate_rc: the gate's result is INCONCLUSIVE - it did not judge this run ($out)." >&2
+        return 2 ;;
+    esac
     blind=$(printf '%s\n' "$res" | sed -n 's/.*undeclared_ours=\([0-9][0-9]*\).*/\1/p')
     if [ -n "$blind" ] && [ "$blind" -gt 0 ]; then return 1; fi
     un=$(printf '%s\n' "$res" | sed -n 's/.*unaccounted=\([0-9][0-9]*\).*/\1/p'); un=${un:-0}
