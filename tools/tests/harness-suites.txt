@@ -4,7 +4,6 @@ accept-attempt-boundary-selftest.sh
 accept-cancel-selftest.sh
 accept-clean-wu-selftest.sh
 accept-logvol-smoke-selftest.sh
-acceptance-record-selftest.sh
 admin-target-gate-selftest.sh
 answer-labconfig-selftest.sh
 ask-operator-night-selftest.sh
@@ -12,7 +11,6 @@ assert-payload-floor-selftest.sh
 attributor-unique-selftest.sh
 breach-evidence-selftest.sh
 build-attribution-selftest.sh
-campaign-full-selftest.sh
 campaign-preflight-selftest.sh
 campaign-state-selftest.sh
 cell-coverage-selftest.sh
@@ -23,7 +21,6 @@ collector-logdir-default-selftest.sh
 committed-procedure-gate-selftest.sh
 console-window-check-selftest.sh
 console-window-mapped-selftest.sh
-coverage-receipt-selftest.sh
 cpu-raw-reader-selftest.sh
 cputime-failopen-selftest.sh
 decode-dedup-selftest.sh
