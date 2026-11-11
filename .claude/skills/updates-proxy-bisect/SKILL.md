@@ -40,7 +40,7 @@ root, no dom0, no policy change is needed to stand it up - `tinyproxy` is instal
    ```
    Port 8082
    Listen 127.0.0.1
-   Timeout 600
+   Timeout 60
    LogFile "<scratch>/tinyproxy.log"
    LogLevel Connect          # Info/Connect logs each request; Critical hides what you need
    PidFile "<scratch>/tinyproxy.pid"
@@ -84,7 +84,9 @@ root, no dom0, no policy change is needed to stand it up - `tinyproxy` is instal
   uptime is NORMAL. **Do not kill it, and never call it stray because it is old.**
 - If you genuinely need a different log level or a clean window, ROTATE IN PLACE: keep the same port,
   `Listen`, `Allow`, `ConnectPort` and `Timeout`, keep the canonical config and log paths, write a
-  marker line into the log to delimit your window, and restart it immediately. Only a proxy YOU
+  marker line into the log to delimit your window, and restart it immediately. `Timeout` is 60, the
+  stock Qubes updates proxy's value: at 600 one stalled tunnel held the guest's update pass, and with
+  it the updater mutex, for the whole of updater-component's 10-minute wait (2026-11-11). Only a proxy YOU
   started for a one-off bisect should be killed when you are done with it.
 - The guest's own relay also listens on 8082 INSIDE the guest. Same number, different qube - do not
   confuse the two when reading logs.
