@@ -303,8 +303,18 @@ settle_the_rig "step 2 (its logvol smoke clones and boots a golden)" "the logvol
 
 # ---- 5. the cells and the feature tests (preflight decides whether to start) ----------------------
 log "step 2/4: campaign-run (preflight -> release-acceptance -> verdict)"
-PKG="$PKG" mgmt/harness/campaign-run.sh 2>&1 | tee -a "$OUT/campaign-run.out"
-crc=${PIPESTATUS[0]}
+# INTERRUPTIBLY, OR A STOP NEVER ARRIVES. MEASURED 2026-11-11, build-4.3.41.1266: `kill -TERM` to this
+# script at 14:51:58Z left it and its whole tree running - bash holds a trapped signal until the
+# foreground command returns, this step was a foreground pipeline hours long, and so job_init's
+# teardown was queued behind the very step it had to end; each level below had to be signalled by hand.
+# rl_fg (run-lib.sh) waits on a background child instead, which a signal interrupts, so the trap tears
+# the tree down at once. The tee stays INSIDE the background job, in this function: the trap runs with
+# the redirections of the command it interrupted, so a tee on the rl_fg call itself is one the teardown
+# kills and then writes its TORE DOWN line into - measured on that shape, the job died of SIGPIPE (141)
+# with no TORE DOWN line. The function returns campaign-run.sh's own status, not tee's.
+campaign_run_step(){ env PKG="$PKG" mgmt/harness/campaign-run.sh 2>&1 | tee -a "$OUT/campaign-run.out"; return "${PIPESTATUS[0]}"; }
+rl_fg campaign_run_step
+crc=$?
 log "  campaign-run rc=$crc"
 case "$crc" in 11|12|13|14) log "STOP: the preflight refused with $crc - no guest was touched"; exit "$crc" ;; esac
 # AN INCOMPLETE MATRIX STOPS THE CHAIN: whatever follows would run on a rig the matrix did not finish
@@ -354,8 +364,10 @@ settle_the_rig "step 3 (gate-remainder refuses ANY running guest)" "gate-remaind
 
 # ---- 6. the six suites release-acceptance does not cover ------------------------------------------
 log "step 3/4: gate-remainder (--fi-run $FI)"
-tools/gate-remainder.sh --run "$PKG" --vm10 "$VM10" --vm11 "$VM11" --os11 "$OS11" --fi-run "$FI" \
-  > "$OUT/gate-remainder.out" 2>&1; grc=$?
+# Interruptibly too, for both reasons at step 2: this step runs for hours, and its redirection stays
+# inside the background job, so the trap's own lines reach the chain's output rather than this file.
+gate_remainder_step(){ tools/gate-remainder.sh --run "$PKG" --vm10 "$VM10" --vm11 "$VM11" --os11 "$OS11" --fi-run "$FI" > "$OUT/gate-remainder.out" 2>&1; }
+rl_fg gate_remainder_step; grc=$?
 # QUOTE THE SET, NOT THE LAST LINE. MEASURED 2026-11-07 at a3dfdd79a00a: FOUR suites did not pass
 # - the remainder's own log says `failed: toast-hold-test log-sweep failproof-gates
 # failproof-faultinject` - and this line reported ONE of them, because it took `tail -1` of every
