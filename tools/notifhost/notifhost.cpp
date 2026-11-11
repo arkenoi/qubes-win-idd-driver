@@ -4156,14 +4156,25 @@ static int BridgeMain()
     // PUBLISHED ONCE: our pid for the agent ("<tick> <pid>", the format it parses - the tick lets it accept only a file
     // written after the launch it is answering), then the ready event so it takes it on that wake.
     {
+        // A PID THAT COULD NOT BE PUBLISHED IS SAID HERE, because nothing else says it: this bridge then arms and
+        // forwards as usual while the agent, reading no pid or an earlier run's, reports no bridge ready and holds no
+        // toast window back. The agent removes a leftover file at its own start, so a refusal here is a new cause.
+        bool published = false;
+        DWORD pubErr = 0;
         HANDLE f = CreateFileW(hbf.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (f != INVALID_HANDLE_VALUE)
         {
             char t[48]; int n = sprintf_s(t, "%llu %lu\n", GetTickCount64(), GetCurrentProcessId());
-            DWORD wr; WriteFile(f, t, (DWORD)n, &wr, nullptr);
+            DWORD wr = 0;
+            published = WriteFile(f, t, (DWORD)n, &wr, nullptr) && wr == (DWORD)n;
+            if (!published) pubErr = GetLastError();
             CloseHandle(f);
         }
+        else pubErr = GetLastError();
+        if (!published)
+            BLogE(L"BRIDGE pid not published: %s not written (%lu) - the agent finds no bridge here, reports none ready "
+                  L"and holds no toast window back", hbf.c_str(), pubErr);
         if (g_readyEvt) SetEvent(g_readyEvt);
         else BLog(L"BRIDGE no --ready from the agent (mixed install?) - it will find our pid only on its own wakes");
     }
