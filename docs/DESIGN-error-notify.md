@@ -210,7 +210,7 @@ Wired (all `ACTION` unless stated):
 | site | id | why it is ACTION |
 |---|---|---|
 | `main.c` QGABROKERMISSING | `gui-agent.broker-missing` | `wgcbroker.exe` not shipped: surfaces withheld, only a reinstall fixes it |
-| `main.c` QGADESLICEDOWN | `gui-agent.deslice-down` | broker expected, absent > 30 s: surfaces withheld, nothing recovers it; text names present-vs-missing like the log line |
+| `main.c` QGADESLICEDOWN | `gui-agent.deslice-down` | broker expected, absent > 30 s: surfaces withheld, nothing recovers it; text names present-vs-missing like the log line. A broker whose process exists and that has never been ready is starting, not absent: that one deadline is logged (QGABROKERSTARTSLOW, WARNING) and not sent, and the next, 120 s later, is sent unconditionally (`docs/ADR-supervision.md` §8) |
 | `main.c` QGADESKSTUCK | `gui-agent.desktop-stuck` | secure desktop > 30 s in seamless: dom0 sees nothing — the case this route is best at (zero windows, live qrexec) |
 | `main.c` QGABROKERDIED | `gui-agent.broker-died` | **DEGRADED, deliberately below threshold** — a relaunch follows; wired so the threshold is exercised by a real site |
 | `notifhost.cpp` bridge FATAL access denied | `notifhost.listener-denied` | the bridge the operator turned on does nothing, forever, one relaunch per minute; needs Settings or the gate |

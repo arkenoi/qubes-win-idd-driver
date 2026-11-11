@@ -807,6 +807,19 @@ buy nothing and the alternative (a name scan) is the thing actually worth bannin
 down is the point: the previous text was read as forbidding the component, so nobody checked the component
 against it.
 
+**Applied to a helper that is still starting (implementation note, 2026-11-11; NOT an owner decision).** At
+item 4's reporting deadline the agent holds the "capture helper is not running" report ONCE when the helper it
+launched has never been ready, has no death on record and still has a process. "Still has a process" is read
+from the helper's own singleton mutex (`WGCBRK_SINGLETON_NAME`, `agent/gui-agent/wgcbroker_ipc.h`), which the
+helper creates as its first act and holds for life; the agent opens it and never waits on it. This is not item
+1's owned handle - Task Scheduler starts the helper, and the agent holds no handle to it until it has published
+its pid - and it is not item 2's search: nothing is looked for by image name, by window or in the task list.
+A stranger that creates an object of that name buys one report delayed by one interval, nothing else. The next
+deadline, 120 s later, reports unconditionally, so a start that never finishes is still said, and nothing is
+restarted (item 3). Measured behind it, in a field tester's logs: ten boots, 16 to 58 s from launch to ready,
+the report sent in six of them, the helper ready by itself 2 to 26 s later in every one. If the owner rules
+that a named object is a search under item 2, the hold goes and the deadline question returns to him.
+
 **STILL OPEN, and it is a decision, not a patch.** `grep -oE 'QERR_SEV_[A-Z]+' agent/gui-agent/notifytexts.h`
 is 10 `ACTION`, 1 `DEGRADED`, 0 informational - nearly every row we send dom0 is phrased as something for the
 user to do, and most name our own components. The owner, 2026-10-24: *"why does user care about all this

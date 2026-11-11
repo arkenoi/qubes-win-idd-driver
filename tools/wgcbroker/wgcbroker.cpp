@@ -1900,7 +1900,7 @@ int wmain(int argc, wchar_t** argv) {
             p(GetCurrentThread(), L"wgcbroker: main");
 #endif
     }
-    HANDLE mtx = CreateMutexW(nullptr, FALSE, L"Global\\QubesWgcBrokerSingleton");
+    HANDLE mtx = CreateMutexW(nullptr, FALSE, WGCBRK_SINGLETON_NAME);   // first, and held for life: the agent reads it
     if (mtx) { DWORD w = WaitForSingleObject(mtx, 0);
         if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED) return 0; }
     ProcessIdToSessionId(GetCurrentProcessId(), &g_mySession);
