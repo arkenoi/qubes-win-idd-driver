@@ -708,7 +708,7 @@ static class QwtLog
             $q = (& sc.exe qc QwtngNetSetup 2>&1 | Out-String)
             $registered = $created -and ($q -notmatch 'does not exist')
             if ($registered) {
-                # ---- NETSETUP-RECOVERY-BEGIN  (tools/tests/supervision-install-test.ps1 extracts this region by marker)
+                # ---- NETSETUP-RECOVERY-BEGIN
                 # SCM RECOVERY, ARMED WHERE THE SERVICE IS CREATED (docs/ADR-supervision.md 4: every service
                 # of ours has failure actions, with the non-crash flag so an error exit counts too). The same
                 # shape the installer gives QdbDaemon/QrexecAgent/QubesGuiWatchdog (Set-QubesServiceRecovery):

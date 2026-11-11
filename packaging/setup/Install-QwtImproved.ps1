@@ -912,7 +912,7 @@ function Resume-QubesServiceRecovery {
 }
 # ---- RECOVERY-SUSPEND-END
 
-# ---- SVC-RECOVERY-BEGIN  (tools/tests/supervision-install-test.ps1 extracts this function by marker)
+# ---- SVC-RECOVERY-BEGIN
 function Set-QubesServiceRecovery {
     # SELF-HEALING FOR THE CONTROL CHANNEL (2026-09-06, measured).
     #
@@ -1365,7 +1365,7 @@ function Skip-HeldQrexecAgentForPowerOff {
 }
 # ---- SVC-SERIAL-START-END
 
-# ---- DEATH-REPORTER-BEGIN  (tools/tests/supervision-install-test.ps1 extracts this region by marker)
+# ---- DEATH-REPORTER-BEGIN  (tools/tests/death-reporter-xpath-selftest.py extracts this region by marker)
 # OUR EVENT LOG SOURCE (docs/ADR-supervision.md 2). The supervisors - the QubesGuiWatchdog service for
 # gui-agent.exe, the agent for its de-slice broker, notification bridge and ETW proxy - write ONE
 # Application-log event under it when a child exits without being asked to (agent include/deathevent.h,

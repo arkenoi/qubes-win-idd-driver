@@ -70,7 +70,7 @@ Where the details live:
 | `include/deathevent.h` (agent) | the one Event Log record a supervisor writes per death |
 | `winutils/src/service.c` (until 2026-11-07 `patches/windows-utils-service-exit-code.patch`) | services exit non-zero when their worker fails |
 | `guest/health-check.ps1` (step 2b) | asserts every service's recovery settings |
-| `tools/tests/death-reporter-*`, `svc-exitcode-selftest.sh`, `supervision-install-selftest.sh`, `health-recovery-selftest.sh` | the offline proofs |
+| `tools/tests/death-reporter-*`, `svc-exitcode-selftest.sh`, `health-recovery-selftest.sh` | the offline proofs |
 | `findings/issues.md` | what is still owed on a guest |
 
 ## 1. Anything of ours that dies unexpectedly is a major ERROR, and it is LOUD
@@ -416,7 +416,10 @@ mainloop. A requested stop stays exit 0.
 EventRecordID only), action `guest/qwt-report-death.ps1` in bin, route `qwt-notify-error.ps1` (gate, redaction,
 cap 8). The subscription is data in `Register-QwtDeathReporter` and is evaluated offline by
 `tools/tests/death-reporter-xpath-selftest.py`; the reporter's identity, count and text by
-`tools/tests/death-reporter-selftest.sh`; the registration by `tools/tests/supervision-install-selftest.sh`.
+`tools/tests/death-reporter-selftest.sh`; the registration by every install on a guest - `death_reporter` and
+`death_catchup` in the installer's RESULT, graded by `mgmt/harness/result-flags.py`. (The offline
+`supervision-install-selftest.sh` was dropped 2026-11-11 under the selftest rule: its Linux world has no Task
+Scheduler, which the registration now reads.)
 The installer enables Microsoft-Windows-TaskScheduler/Operational: client Windows ships it disabled, and
 201/203/329 are never written otherwise.
 A HANG IS A DEATH, AND 329 IS THE ONLY RECORD THAT SAYS SO. A task of ours that Task Scheduler kills
@@ -526,8 +529,8 @@ campaign". All four are false as of 2026-10-24: `supervision-gate` is the fifth 
    MEASURED on a live guest: `source=True msgfile=True task=True eventtrigger=True runs_as=S-1-5-18
    names_4001=True` - the event source registered WITH a message file that exists (without it every
    4001..4004 record renders "description not found"), and QwtDeathReporter present with an
-   `<EventTrigger>` naming 4001, running as SYSTEM. supervision-install-selftest still checks the
-   installer SOURCE offline; this is the guest-side half it could never give.
+   `<EventTrigger>` naming 4001, running as SYSTEM. This guest-side check is the proof; the offline
+   check of the installer source (supervision-install-selftest) was dropped 2026-11-11.
 2. A forced gui-agent.exe crash yields Application 1000 (+1001) and our 4001, exactly ONE notification
    `gui-agent.death-1` in dom0, one `DEATH #1 NEW` line in `qwt-deaths.log`, and `AGAIN` lines for the
    1001/4001 records. A second forced crash yields `death-2`.
