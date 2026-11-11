@@ -139,6 +139,18 @@ finish(){ # $1=rc $2...=message; every exit says which exit it took (the EXIT tr
   log "evidence: $OUT"
   exit "$rc"
 }
+# A DOWNLOAD THAT GITHUB REFUSED MEASURED NOTHING. tools/gate-remainder.sh grades a suite FAIL (product)
+# unless the ledger it reads, TH_LEDGER, declares INVALID-*, and before this every refusal here exited 1
+# with no ledger. MEASURED 2026-11-11, chain of build-4.3.41.1270: `REFUSED: could not download
+# qwt-improved-iso ... HTTP 502: Server Error` from api.github.com was graded `FAIL toast-hold-test`;
+# twelve of fourteen artifact zips of the two runs answered 502 in the minutes after. The row uses
+# failproof's TSV shape (column 3 is the class). Only the downloads take this path: every other
+# refusal here is about the package itself and stays ungraded-as-FAIL, as before.
+th_dl_refused(){ # $1=what failed to download, $2=the gh output file
+  local why="could not download $1 ($(tail -1 "$2" 2>/dev/null))"
+  [ -n "${TH_LEDGER:-}" ] && printf 'TOASTHOLD\tdownload\tINVALID-INSTRUMENT\t%s\t%s\n' "$why" "$OUT" >> "$TH_LEDGER"
+  finish 1 "REFUSED: $why"
+}
 b64(){ printf '%s' "$1" | base64 -w0; }
 
 # ---- 0. the package: a green release-package run -> ISO (installed) + setup tree (MANIFEST, reference hash) ------
@@ -153,12 +165,12 @@ mkdir -p "$DL"
 if [ ! -s "$(ls "$DL"/qwt-improved-iso/*.iso 2>/dev/null | head -1)" ]; then
   log "downloading qwt-improved-iso"
   gh run download "$RID" -n qwt-improved-iso -D "$DL/qwt-improved-iso" >"$OUT/gh-download-iso.out" 2>&1 \
-    || finish 1 "REFUSED: could not download qwt-improved-iso from run $RID ($(tail -1 "$OUT/gh-download-iso.out"))"
+    || th_dl_refused "qwt-improved-iso from run $RID" "$OUT/gh-download-iso.out"
 fi
 if [ ! -f "$DL/qwt-improved-setup/MANIFEST.json" ]; then
   log "downloading qwt-improved-setup"
   gh run download "$RID" -n qwt-improved-setup -D "$DL/qwt-improved-setup" >"$OUT/gh-download-setup.out" 2>&1 \
-    || finish 1 "REFUSED: could not download qwt-improved-setup from run $RID ($(tail -1 "$OUT/gh-download-setup.out"))"
+    || th_dl_refused "qwt-improved-setup from run $RID" "$OUT/gh-download-setup.out"
 fi
 ISO=$(ls "$DL"/qwt-improved-iso/*.iso 2>/dev/null | head -1)
 SETUP="$DL/qwt-improved-setup"
@@ -200,7 +212,7 @@ if [ -z "$TFEXE" ]; then
   [ -n "$BID" ] && [ "$BID" != null ] || finish 1 "REFUSED: no green 'build' run for ${HEAD:0:12} to take toastfire.exe from - pass --toastfire <exe> (gui-agent-package artifact)"
   log "downloading gui-agent-package from build run $BID (toastfire.exe)"
   gh run download "$BID" -n gui-agent-package -D "$DL/gui-agent-package" >"$OUT/gh-download-agentpkg.out" 2>&1 \
-    || finish 1 "REFUSED: could not download gui-agent-package from build run $BID"
+    || th_dl_refused "gui-agent-package from build run $BID" "$OUT/gh-download-agentpkg.out"
   TFEXE=$(find "$DL/gui-agent-package" -iname 'toastfire.exe' | head -1)
 fi
 [ -n "$TFEXE" ] && [ -s "$TFEXE" ] || finish 1 "REFUSED: toastfire.exe not found (and no --toastfire given)"
