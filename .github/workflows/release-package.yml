@@ -577,7 +577,26 @@ jobs:
         # run 34384073456 - a release build whose every code job had already succeeded - failed the
         # ISO on "Failed to fetch .../chrome-stable/... Hash Sum mismatch", so an unrelated vendor
         # repo blocked a release. xorriso comes from the Ubuntu archive; nothing here needs those.
+        # THE AZURE MIRROR IS DROPPED TOO. Measured 2026-11-11, build 1268 (f2dc755b): ten attempts of this
+        # step, 14:28-15:10Z, each spent ~3.5 min and ended `Temporary failure resolving
+        # 'azure.archive.ubuntu.com'` for the four .debs it fetches - on the SAME runner image (ubuntu-24.04
+        # 20261101.360.1) that set xorriso up in 11 s at 11:06Z, every build job green. actions/runner-images
+        # #12949 and #14823 put this class on the Azure regional mirror, not on the image. The image fetches
+        # through a mirror list, /etc/apt/apt-mirrors.txt, Azure first; deleting that line leaves the
+        # canonical archive hosts, and apt verifies the packages against the archive's signature whichever
+        # host serves them. The list and which hosts resolve are printed first, so a failure names the host
+        # the runner could not reach instead of hiding it behind -qq.
         run: |
+          for h in azure.archive.ubuntu.com archive.ubuntu.com security.ubuntu.com; do
+            if a=$(getent ahostsv4 "$h"); then echo "resolves: $h -> ${a%%[[:space:]]*}"; else echo "UNRESOLVED: $h"; fi
+          done
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            echo "apt mirror list as the image ships it:"; cat /etc/apt/apt-mirrors.txt
+            sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
+            echo "apt mirror list without the Azure mirror:"; cat /etc/apt/apt-mirrors.txt
+          else
+            echo "no /etc/apt/apt-mirrors.txt on this image - its apt sources are used unchanged"
+          fi
           # Update ONLY the main archive: sourceparts=/dev/null ignores every /etc/apt/sources.list.d
           # entry. Matching those by FILENAME was tried first and did not work - the runner image
           # carries the Chrome repo as a deb822 .sources file, not a *chrome*.list - which is the
