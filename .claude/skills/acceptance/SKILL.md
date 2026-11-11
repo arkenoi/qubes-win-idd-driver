@@ -69,7 +69,8 @@ A suite that could not measure (INVALID-*, exit 2, sweep DATA/INCOMPLETE, core r
 INSTRUMENT: uncovered, reported on its own channel, never a product regression, and the gate refuses the cut
 until it is re-run. A FAIL line that names the product is PRODUCT: covered, result fail, the record refuses the
 cut. `verdict-lib.sh`'s three classes are the vocabulary; a check never seen to fail with its defect present
-is decoration (every tool here has `# GUARD:<knob> DEFECT:` lines and a self-test under `tools/tests/`).
+is decoration - see it fail ONCE, by hand, and restore it; no defect knob or `# GUARD:` line is kept in the
+harness for it (CLAUDE.md, owner 2026-11-11).
 
 ## Never
 
