@@ -1139,6 +1139,53 @@ dom0_sends_park(){ # $1=vm $2=label - the notification record, pulled while the 
   return 0
 }
 
+# THE COLD-BOOT HALT MUST NOT ABORT OUR OWN SERVICE STARTS. qu_coldboot 2 halts the guest moments
+# after cold boot #1's session comes up, while SCM may still be starting our automatic services.
+# MEASURED 2026-11-11 (build 4.3.41.1270, supervision gate, win11r-sup), one guest's System log: the
+# OS started 21:35:07.5, the session was seen 21:35:34, the halt began 21:35:42.4 (1074), and SCM
+# logged 7000 "The QwtngNetSetup service failed to start ... did not respond to the start or control
+# request in a timely fashion" at 21:35:44.2 - inside the shutdown, with no 7009. A start the halt
+# aborted, which the sweep then counted as our error (Jev: line_class shutdown_aborted_pending_start
+# 0.83, remedy harness_settle_wait 0.86). So the halt after a fresh boot first waits while a start of
+# ours is still to come: an automatic service of ours that is Start Pending, or Stopped with 1077
+# (ERROR_SERVICE_NEVER_STARTED - SCM has not tried it yet this boot). "Ours" is the sweep's own
+# definition, $OurSvcRx in log-sweep-collect.ps1, read from there so the two cannot drift. A service
+# that ran and stopped is not waited for - no halt can abort it, and the sweep grades its own events
+# (7023/7024/7031/7034). Settled is said at INFO; no answer and the deadline are [WARN] lines this
+# run's sweep-gate grades, and the halt goes ahead either way.
+qu_ours_settled(){ # $1=vm $2=deadline seconds -> 0 settled, 1 a [WARN] line says why not
+  local vm=$1 dl=$2 t0 rx ps st e pend other
+  rx=$(sed -n "s/^\$OurSvcRx = '\(.*\)'\$/\1/p" mgmt/harness/log-sweep-collect.ps1 | head -1)
+  if [ -z "$rx" ]; then
+    log "  [WARN] QUSVCRX: no \$OurSvcRx line in mgmt/harness/log-sweep-collect.ps1 - the halt cannot wait for our services"
+    return 1
+  fi
+  ps=$(cat <<'PSEOF'
+$rx = '__RX__'
+$b = @(Get-CimInstance Win32_Service -Filter "StartMode='Auto'" | Where-Object { ($_.Name -match $rx -or $_.DisplayName -match $rx) -and $_.State -ne 'Running' } | ForEach-Object { '{0}:{1}:{2}' -f $_.Name, ($_.State -replace ' ', '_'), $_.ExitCode })
+Write-Host ('SVC=' + $(if ($b.Count) { $b -join ',' } else { 'ALLRUNNING' }))
+PSEOF
+)
+  ps=${ps//__RX__/"$rx"}
+  t0=$(date +%s)
+  for _ in $(seq 1 $((dl / 5 + 1))); do
+    st=$(g_probe "$vm" SVC "$ps" 60)
+    [ -n "$st" ] || { log "  [WARN] QUSVCNOANSWER: $vm did not answer the service query before the cold-boot halt - halting without knowing"; return 1; }
+    pend=""; other=""
+    [ "$st" = ALLRUNNING ] || for e in ${st//,/ }; do
+      case "$e" in *:Start_Pending:*|*:Stopped:1077) pend="$pend $e" ;; *) other="$other $e" ;; esac
+    done
+    if [ -z "$pend" ]; then
+      log "  our automatic services: no start pending $(( $(date +%s) - t0 )) s after the session${other:+ (not Running, not waited for:$other)}"
+      return 0
+    fi
+    [ $(( $(date +%s) - t0 )) -ge "$dl" ] && break
+    sleep 5
+  done
+  log "  [WARN] QUSVCPENDING: after $(( $(date +%s) - t0 )) s a start of ours is still to come:$pend - halting anyway"
+  return 1
+}
+
 qu_coldboot(){ # $1=n
   local n=$1
   if [ "$(w_state "$SUBJECT")" != Halted ]; then
@@ -1146,6 +1193,9 @@ qu_coldboot(){ # $1=n
     # volume and this side had none of it, which is how the owner ended up reading toasts aloud
     # (2026-10-10). Never boots a guest; an unreadable record is said under its own tag.
     dom0_sends_park "$SUBJECT" "boot$n"
+    # Only the halt that follows a boot of OURS: after the install (n=1) a service the upgrade just
+    # registered is Stopped/1077 until the reboot by design, and waiting for it would be wrong.
+    [ "$n" -ge 2 ] && qu_ours_settled "$SUBJECT" 240
     toolstack_accept "$SUBJECT" >/dev/null 2>&1
     if ! w_halt "$SUBJECT" 420 "boot$n-halt" log; then
       log "  guest ignored ACPI shutdown for 420 s (screen=$(w_screen "$SUBJECT" "boot$n-stuck" "$OUT")) - killing as the last resort"
