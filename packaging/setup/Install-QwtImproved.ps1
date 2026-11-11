@@ -1467,13 +1467,15 @@ function Register-QwtEventSource {
 function Register-QwtDeathReporter {
     param([Parameter(Mandatory)][string]$Root)
     $reporterTask = 'QwtDeathReporter'
+    $catchUpTask = 'QwtDeathCatchUp'
+    $sched = $null
+    $quiesced = @()   # our tasks that 2b disabled; the finally reads each one's state back
     try {
-        # 1. the reporter and the route helper it dot-sources, in bin: the setup payload does not survive
+        # 1. the reporter and the route helper it dot-sources, in bin: the setup payload does not survive.
+        #    Checked here; copied at 2b, once nothing of ours is running them.
         New-Item -ItemType Directory -Force -Path $script:DefaultBinDir | Out-Null
         foreach ($f in 'qwt-report-death.ps1', 'qwt-notify-error.ps1') {
-            $src = Join-Path $Root $f
-            if (-not (Test-Path -LiteralPath $src)) { throw "$f is not in the payload" }
-            Copy-Item -LiteralPath $src -Destination (Join-Path $script:DefaultBinDir $f) -Force
+            if (-not (Test-Path -LiteralPath (Join-Path $Root $f))) { throw "$f is not in the payload" }
         }
         # ...and the PowerShell log sink the scripts of ours in bin dot-source (docs/ADR-logging.md): the PV NIC
         # payload and the reboot-cause recorder. Their own installers place it before they write those scripts;
@@ -1491,6 +1493,46 @@ function Register-QwtDeathReporter {
         $global:LASTEXITCODE = $null
         & wevtutil.exe set-log Microsoft-Windows-TaskScheduler/Operational /enabled:true 2>&1 | Out-Null   # GUARD:tasklog
         if ($LASTEXITCODE -ne 0) { throw "wevtutil could not enable Microsoft-Windows-TaskScheduler/Operational (rc '$LASTEXITCODE')" }
+
+        # 2b. NOTHING OF OURS MAY BE RUNNING THE SCRIPT WHILE IT IS REPLACED. MEASURED 2026-11-11, acceptance of
+        #     build-4.3.41.1266, cell win11-reinstall: the copy of qwt-report-death.ps1 failed at 15:08:17 "being used
+        #     by another process", and this boot's \QwtDeathCatchUp pass (BootTrigger, PT90S) completed at
+        #     15:08:20.611 with no other task of ours in between - its powershell was opening the script as the copy
+        #     wrote it. Nothing was registered (death_reporter=failed), so from that install on a death of ours
+        #     reached the guest log only, never dom0. Any install within minutes of a boot can meet that pass, and
+        #     any death of ours can start \QwtDeathReporter on the same script.
+        #     The shape UPDTASKPRESTOP handles for the update tasks - our installer, our tasks - with one difference:
+        #     these are DISABLED and waited for, never /end-ed. An instance of the reporter may be telling dom0
+        #     about a real death, and ending it would drop that notice with nothing in this boot to send it again;
+        #     a run lasts seconds. /disable keeps a new one from starting (an event, or a boot pass whose delay has
+        #     not run out); the Task Scheduler's own NUMERIC state - never schtasks' localised prose, the
+        #     run-in-session.ps1 lesson - says when the running one is done. TASK_STATE_DISABLED (1) is "disabled,
+        #     and no instances of the task are queued or running": the one state the copy may follow. Not reached
+        #     in 60 s is a failed registration, said as one - never a copy tried anyway, never a retry.
+        $sched = New-Object -ComObject Schedule.Service
+        $sched.Connect()
+        foreach ($t in @($reporterTask, $catchUpTask)) {
+            try { $tk = $sched.GetFolder('\').GetTask($t) }
+            catch {
+                $ex = $_.Exception; if ($ex.InnerException) { $ex = $ex.InnerException }
+                # 0x80070002 is the one answer that means "not registered": a clean install has neither task yet
+                if ($ex.HResult -eq -2147024894) { Write-Log "death reporter: $t is not registered yet - nothing of it can be running"; continue }
+                throw "the Task Scheduler could not read $t ($($ex.Message)) - its script cannot be replaced safely"
+            }
+            $prevEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+            try { $global:LASTEXITCODE = $null; $null = & schtasks.exe /change /tn $t /disable 2>&1; $rcDis = $LASTEXITCODE }
+            finally { $ErrorActionPreference = $prevEap }
+            if ($rcDis -ne 0) { throw "schtasks /change /tn $t /disable rc '$rcDis' - its script cannot be replaced safely" }
+            $quiesced += $t
+            $t0 = Get-Date
+            while ($tk.State -ne 1 -and ((Get-Date) - $t0).TotalSeconds -lt 60) { Start-Sleep -Milliseconds 250 }
+            $el = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
+            if ($tk.State -ne 1) { throw "$t still has an instance running or queued ${el}s after /disable (task state $($tk.State)) - its script cannot be replaced" }
+            Write-Log "death reporter: $t disabled; no instance running or queued after ${el}s"
+        }
+        foreach ($f in 'qwt-report-death.ps1', 'qwt-notify-error.ps1') {
+            Copy-Item -LiteralPath (Join-Path $Root $f) -Destination (Join-Path $script:DefaultBinDir $f) -Force
+        }
 
         # 3. the subscription. The executables are what packaging/make-setup.ps1 ships into bin (the
         #    MSI's own, the user-session helpers, the fork qrexec binaries) plus the two compiled on the
@@ -1600,8 +1642,7 @@ function Register-QwtDeathReporter {
         # A SEPARATE TASK, not a second trigger on the reporter's own: Task Scheduler substitutes ValueQueries only for
         # an event trigger, so a BootTrigger on that task would run its action with the literal text "$(Channel)". Still
         # ONE reporter and one route (ADR-supervision 3) - one script, one notification path, a second way in.
-        $catchUpTask = 'QwtDeathCatchUp'
-        $cuArgs = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $reporter + '" -CatchUp'
+        $cuArgs ='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $reporter + '" -CatchUp'
         $cuXml = @"
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -1637,6 +1678,22 @@ function Register-QwtDeathReporter {
     } catch {
         Write-Log "death reporter NOT registered: $($_.Exception.Message) - a death of our components stays in the guest logs only, nothing reaches dom0 (non-fatal)" 'WARN'
         $script:Result.detail.death_reporter = "failed: $($_.Exception.Message)"
+    } finally {
+        # NEVER LEAVE THE REPORTER SWITCHED OFF. Read back from the Task Scheduler, not from this function's own
+        # bookkeeping: every task 2b disabled must be enabled now - by its /create /f above, or, where that did not
+        # happen (a failed copy, a failed registration), on its previous definition.
+        foreach ($t in $quiesced) {
+            $on = $false
+            try { $on = [bool]$sched.GetFolder('\').GetTask($t).Enabled } catch { $on = $false }
+            if ($on) { Write-Log "death reporter: $t read back enabled after the copy"; continue }
+            $prevEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+            try { $global:LASTEXITCODE = $null; $null = & schtasks.exe /change /tn $t /enable 2>&1; $rcEn = $LASTEXITCODE }
+            finally { $ErrorActionPreference = $prevEap }
+            if ($rcEn -eq 0) { Write-Log "death reporter: $t was disabled for the copy and not registered again - enabled back on its previous definition" 'WARN'; continue }
+            Write-Log "death reporter: $t was disabled for the copy and could NOT be enabled again (schtasks rc '$rcEn') - it stays off until the next install" 'ERROR'
+            if ($t -eq $reporterTask) { $script:Result.detail.death_reporter = "failed: $t is not enabled after the copy (schtasks /change /enable rc '$rcEn')" }
+            else { $script:Result.detail.death_catchup = "failed: $t is not enabled after the copy (schtasks /change /enable rc '$rcEn')" }
+        }
     }
 }
 # ---- DEATH-REPORTER-END
