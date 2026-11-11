@@ -235,8 +235,8 @@ the build if the driver is not confirmed.
 **Open.** The ctrl-ring defect is upstream's (win-pv-devel) and has been reported. The maintainers' answer,
 relayed by the owner 2026-11-11, is that xenvif was never tested without a control ring and needs general
 adjustments rather than a specific fix in `__FrontendUpdateHash`. The patch is now that general form (the
-controller is enabled only when it has a ring, and the hash path asks before using it), with the same change
-against master in `upstream/xenvif-no-ctrl-ring.patch`. The general form has not yet run on a guest; the
+controller is enabled only when it has a ring, and the hash path asks before using it), and since the pin
+moved to xenvif master the patch file is itself the am-ready commit upstream is offered. The general form has not yet run on a guest; the
 one-spot form it replaces is what the rig verified (`findings/network.md` carries the current state).
 
 ## 8. A netvm's defects are fixed in the netvm, upstream, with the owner's approval of the text

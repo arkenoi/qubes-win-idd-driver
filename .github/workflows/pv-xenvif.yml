@@ -56,7 +56,8 @@ env:
   # /Brepro: content-hash PE TimeDateStamp so the same commit yields the same binary.
   # Without it gui-agent.exe differed across runs at one commit (CBBD0206.. vs BDA4615A..).
   LINK: /Brepro
-  # PINNED to the commit every shipped build has actually used so far.
+  # PINNED. From 2026-08-29 to 2026-11-11 the pin was 0c61248 (2026-08-25), the commit every
+  # build shipped in that time used.
   #
   # This was `master` from 2026-08-07 ("unpin and upgrade xenvif") until 2026-08-29, on the
   # reasoning that the rev-5 assertion below was protection enough. It is not: that assertion
@@ -70,7 +71,16 @@ env:
   # This exact hazard was checked on 2026-08-29 while deriving the .13-vs-.15 difference: both
   # builds happened to carry 0c61248, so nothing was mis-measured - by luck, not by design.
   # Bumping is a deliberate edit now, and the rev-5 assertion still guards the bump.
-  XENVIF_REF: 0c61248439c6bdeb862178c95843bba9a27877fc
+  #
+  # BUMPED 2026-11-11 to c042e3b (2026-10-26, the xenbits master tip): 38 commits, taken to
+  # carry VIF interface V11 (81be917, revision 0x09000006) and so that the control-ring patch
+  # is the one file upstream is offered. Revision 0x09000005 is still defined, so the 4.2.2
+  # xennet binds exactly as before, and xenvif.inf and the xenbus interface versions xenvif
+  # asks for are unchanged. What the bump changes in behaviour, none of it run on a guest
+  # yet: e5c7de8 (transmit no longer kicks the backend once per packet when there is no
+  # hash) and f03e52a (a ring whose responses were faked closes and reconnects the frontend
+  # before it is re-enabled).
+  XENVIF_REF: c042e3b5beb149ab176bfffe785321388632540f
 
 jobs:
   xenvif:
@@ -145,7 +155,7 @@ jobs:
       # The patch is the general form the xenvif maintainers asked for (2026-11-11), not the
       # earlier one-spot exemption in __FrontendUpdateHash: the controller is not enabled
       # without a ring, and the hash path asks ControllerIsEnabled() before using it.
-      # upstream/xenvif-no-ctrl-ring.patch is the same change against xenvif master.
+      # The file is an am-ready commit on xenvif master - the same file upstream is offered.
       # This MUST NOT be gated on `diagnostic`: without it a release build cannot bring up a
       # Windows PV NIC on any ctrl-ring-less netback.
       - name: Apply the control-ring fix (always)
