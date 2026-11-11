@@ -1452,7 +1452,7 @@ function Resolve-DriverByTitle($title){
   try { $r = Invoke-WebRequest "https://www.catalog.update.microsoft.com/Search.aspx?q=$q" -Proxy $Proxy -UseBasicParsing -TimeoutSec 60 -Headers $hdr }
   catch { Log ("  title resolve: catalog search threw (" + $_.Exception.Message + ") - UNRESOLVED, not 'no entry'"); return @{ unresolved = $true } }
   $body = [string]$r.Content
-  if ([string]::IsNullOrWhiteSpace($body) -or ($body -notmatch '(?i)catalogBody|updateMatches|catalog\.update\.microsoft\.com')) {
+  if ([string]::IsNullOrWhiteSpace($body) -or ($body -notmatch 'ctl00_catalogBody_(updateMatches|noResult)')) {
     Log ("  title resolve: catalog response is not a results page (" + $body.Length + " bytes) - UNRESOLVED, not 'no entry'"); return @{ unresolved = $true }
   }
   $rows = [regex]::Matches($r.Content, "id='([0-9a-f-]{36})_link'[^>]*>\s*(.*?)\s*</a>", 'Singleline')
@@ -1591,9 +1591,12 @@ function Resolve-CatalogUncached($kb){
   # installable update from dom0 - the field defect this product already shipped once.
   # Jev: is_defect 0.94, severity high-silently-hides-real-updates 1.00, self_corrects 0.21.
   # Believe a zero count ONLY from a response that is demonstrably the catalog's own results page.
+  # The Catalog's answer to a search carries its results table or its own "no results" element. Its error page, and a
+  # search page it returns with an empty results container, carry neither while still carrying other catalogBody ids, so
+  # "the body mentions catalogBody" is not the test. The title search in Resolve-DriverByTitle applies the same expression.
   $script:CatalogUnresolved = $false
   $body = [string]$r.Content
-  if ([string]::IsNullOrWhiteSpace($body) -or ($body -notmatch '(?i)catalogBody|updateMatches|catalog\.update\.microsoft\.com')) {
+  if ([string]::IsNullOrWhiteSpace($body) -or ($body -notmatch 'ctl00_catalogBody_(updateMatches|noResult)')) {
     $script:CatalogUnresolved = $true
     Log ("  " + $kb + " : catalog response is not a results page (" + $body.Length + " bytes) - UNRESOLVED, not 'no package'")
     return @()
