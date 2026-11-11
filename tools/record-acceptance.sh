@@ -15,15 +15,21 @@
 #     tools/record-acceptance.sh --iso <path> --campaign <campaign-out-dir> [--release <ver>]
 #                                [--rerun <rerun-campaign-dir> ... --rerun-reason "<why>"]
 #
-# A RE-RUN OF FAILED CELLS (owner-approved, 2026-10-03: "rerun two missing cells", the rz38d gate's WIN10-clean wedge and its
-# knock-on). A cell-group of the campaign that FAILED is accepted only if EVERY 'FAIL  <CELL>:' line in it names a cell, and each of those
-# cells ran again in a --rerun campaign of the SAME ISO whose cell-group is clean and lists that cell. Any FAIL line that names no cell, a
-# failed cell no clean re-run covers, or a failed re-run keeps the record FAILED. The record keeps every superseded failure verbatim, the
-# re-run campaigns and the reason - it can never read cleaner than the logs.
+# WHAT IT READS: the campaign's JSON, through tools/acceptance_json.py - <campaign>/matrix/matrix-result.json and
+# checks.jsonl (written by mgmt/harness/matrix.sh) and one <campaign>/feature-<test>.json per feature test (written by
+# tools/release-acceptance.sh). The groups, the cells and the verdict are DERIVED from those - never passed in - so the
+# record cannot claim a cleaner run than the campaign wrote. No log text is read; a campaign that left no JSON cannot
+# be recorded.
 #
-# The campaign dir is an accraces-*/ style directory holding runner.log plus one <tag>.out per
-# cell-group (what mgmt/harness drops). Cells and the verdict are DERIVED from those logs - never
-# passed in - so the record cannot claim a cleaner run than the logs show.
+# A GROUP IS CLEAN when: the matrix's result is final and complete, none of its rows is FAIL or INVALID, and every
+# planned cell has a passing check; a feature test exited 0. Anything else is a failed group, and missing data fails.
+#
+# A RE-RUN OF FAILED CELLS (owner-approved 2026-10-03: "rerun two missing cells"). The rule is _supersede in
+# tools/acceptance_json.py: a failed MATRIX group is accepted only if it reached its footer, at least one failed check
+# in it names a cell, and every cell a failed row names or that has no passing check passed in a --rerun campaign of
+# the SAME ISO whose every group is clean. Anything else keeps the record FAILED. The record keeps every superseded
+# failure verbatim, the re-run campaigns and the reason.
+# NOT YET MEASURED ON A REAL CAMPAIGN: the re-run path has run on fixtures only. Read its first real use row by row.
 set -uo pipefail
 die() { echo "ERROR: $*" >&2; exit 1; }
 
@@ -50,115 +56,56 @@ cd "$(git rev-parse --show-toplevel)" || die "run from inside the repo"
 
 ISOSHA="$(sha256sum "$ISO" | cut -d' ' -f1)"
 
-# ---- derive the verdict from the logs, never from an argument --------------------------------
-# matrix.sh's per-cell footer is '=== MATRIX: N passed, M failed ==='. A cell-group whose .out has
-# no such footer did not finish, and MUST NOT be counted clean - missing data fails.
-clean=0; failed=0; cells=""; FAILED_GROUPS=()
-shopt -s nullglob
-outs=("$CAMP"/*.out)
-[ "${#outs[@]}" -gt 0 ] || die "no cell-group output (*.out) in $CAMP - nothing to record"
-for f in "${outs[@]}"; do
-  line="$(grep -aE '^=== MATRIX: [0-9]+ passed, [0-9]+ failed ===$' "$f" | tail -1)"
-  if [ -z "$line" ]; then
-    echo "ERROR: $(basename "$f") has no MATRIX footer - that cell-group did not finish" >&2
-    failed=$((failed+1)); continue
-  fi
-  nf="$(printf '%s' "$line" | sed -nE 's/.*, ([0-9]+) failed ===$/\1/p')"
-  if [ "$nf" = "0" ]; then clean=$((clean+1)); else failed=$((failed+1)); FAILED_GROUPS+=("$f"); fi
-  # The cells a group ran are echoed as '[HH:MM:SS] [INFO]   cells: a b c'; BOTH the timestamp and the LEVEL are optional, because
-  # tools/release-acceptance.sh's feature groups emit neither. Two blindings have been paid for here:
-  #   2026-10-02: the pattern was '^\[[0-9:]+\]?...', only the ']' optional, so an untimestamped line was never read - the feature
-  #               cell-groups recorded no cells.
-  #   2026-10-30: the campaign gained a LEVEL tag ('[INFO] ') between the timestamp and the text. Nothing here allowed it, so
-  #               full.out's one cells: line stopped matching while every feature group still did. The record for the 4.3.39 ISO came
-  #               out 'CLEAN, cells=[the five feature tests]' and tools/acceptance-record-check.py called it PARTIAL - "win10-clean,
-  #               win11-clean, ... did not run" - of a campaign that had just finished 89 passed, 0 failed with all eight install
-  #               cells named on the very line this failed to read. A clean release blocked by a regex, with the evidence it wanted
-  #               already written. THIRD time this tag has blinded a consumer and the fix was not carried across: the 2026-10-15
-  #               watcher in tools/campaign-state.py's docstring (four failed cells reported as "campaign healthy" four times),
-  #               then tools/coverage-receipt.py's VERDICT_RE, now here. failln below was blind the same way and had never been
-  #               exercised, so the re-run path would have claimed a failed group "carries no FAIL line".
-  # What this pattern reads is the campaign's PLANNED cell list, as it always has - per-cell verdicts are tools/coverage-receipt.py's
-  # job, and the footer's "N failed" is what makes a group clean here.
-  c="$(grep -aE '^(\[[0-9:]+\])?[[:space:]]*(\[(ERROR|WARN|WARNING|INFO|DEBUG)\])?[[:space:]]*cells:' "$f" | tail -1 | sed -nE 's/.*cells:[[:space:]]*//p')"
-  [ -n "$c" ] && cells="$cells $c"
-done
-shopt -u nullglob
-
-# ---- a failed group superseded by clean re-runs of exactly its failed cells -----------------------------------------------------
-SUPERSEDED_JSON="[]"
-if [ "$failed" -gt 0 ] && [ "${#RERUNS[@]}" -gt 0 ]; then
-  SUPERSEDED_JSON="$(python3 - "${#FAILED_GROUPS[@]}" "${FAILED_GROUPS[@]}" "${RERUNS[@]}" <<'PY'
-import sys, re, glob, os, json
-n = int(sys.argv[1]); groups = sys.argv[2:2+n]; reruns = sys.argv[2+n:]
-footer = re.compile(r'^=== MATRIX: (\d+) passed, (\d+) failed ===$')
-cellsln = re.compile(r'^(?:\[[0-9:]+\])?\s*(?:\[(?:ERROR|WARN|WARNING|INFO|DEBUG)\])?\s*cells:\s*(.*)$')
-failln = re.compile(r'^(?:\[[0-9:]+\])?\s*(?:\[(?:ERROR|WARN|WARNING|INFO|DEBUG)\])?\s*FAIL  (.*)$')
-named = re.compile(r'^([A-Za-z0-9]+-[A-Za-z0-9-]+?)(?: boot \d+)?:')   # 'WIN10-clean:' / 'WIN10-appvm boot 2:'
-# the cells the re-runs passed: a re-run group counts only if its footer says 0 failed
-passed_by = {}
-for d in reruns:
-    for f in sorted(glob.glob(os.path.join(d, '*.out'))):
-        lines = open(f, encoding='utf-8', errors='replace').read().splitlines()
-        fl = [footer.match(l) for l in lines if footer.match(l)]
-        if not fl or fl[-1].group(2) != '0':
-            print(f"FAILED: re-run group {f} did not finish clean", file=sys.stderr); sys.exit(3)
-        cl = [cellsln.match(l).group(1) for l in lines if cellsln.match(l)]
-        for c in (cl[-1].split() if cl else []):
-            passed_by[c.lower()] = os.path.abspath(d)
-out = []
-for g in groups:
-    fails = [failln.match(l).group(1) for l in open(g, encoding='utf-8', errors='replace').read().splitlines() if failln.match(l)]
-    if not fails:
-        print(f"FAILED: {g} says failed but carries no FAIL line - nothing to supersede", file=sys.stderr); sys.exit(3)
-    for t in fails:
-        m = named.match(t)
-        if not m:
-            print(f"FAILED: a FAIL line in {g} names no cell: {t[:120]}", file=sys.stderr); sys.exit(3)
-        c = m.group(1).lower()
-        if c not in passed_by and os.environ.get("RERUN_COVER_DEFECT") != "1":   # GUARD:rerun-covers (knob: tools/tests/acceptance-record-selftest.sh)
-            print(f"FAILED: cell {c} failed in {g} and no clean re-run covers it", file=sys.stderr); sys.exit(3)
-        out.append({"cell": c, "failed_in": os.path.abspath(g), "failure": t[:400], "passed_in": passed_by.get(c, "(no clean re-run)")})
-print(json.dumps(out))
-PY
-)" && { failed=0; clean=$((clean+${#FAILED_GROUPS[@]})); for r in "${RERUNS[@]}"; do outs2=("$r"/*.out); for f in "${outs2[@]}"; do
-      c="$(grep -aE '^(\[[0-9:]+\])?[[:space:]]*(\[(ERROR|WARN|WARNING|INFO|DEBUG)\])?[[:space:]]*cells:' "$f" | tail -1 | sed -nE 's/.*cells:[[:space:]]*//p')"; [ -n "$c" ] && cells="$cells $c"; done; done; } \
-    || SUPERSEDED_JSON="[]"
-fi
-
-CELLS_JSON="$(printf '%s' "$cells" | tr ' ' '\n' | sed '/^$/d' | sort -u | python3 -c '
-import sys,json; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
-
-VERDICT="CLEAN"
-[ "$failed" -eq 0 ] || VERDICT="FAILED"
-
-OUTDIR="${ACCEPT_RECORD_DIR:-scratchpad/acceptance-records}"   # override: tools/tests/acceptance-record-selftest.sh only
+OUTDIR="${ACCEPT_RECORD_DIR:-scratchpad/acceptance-records}"
 mkdir -p "$OUTDIR" || die "cannot create $OUTDIR"
 OUT="$OUTDIR/${ISOSHA}.json"
 
-python3 - "$OUT" "$ISOSHA" "$REL" "$clean" "$failed" "$VERDICT" "$CAMP" "$CELLS_JSON" "$SUPERSEDED_JSON" "$RERUN_REASON" "${RERUNS[@]}" <<'PY'
-import json,sys,os,datetime
-out,iso,rel,clean,failed,verdict,camp,cells,superseded,reason = sys.argv[1:11]
-reruns = [os.path.abspath(r) for r in sys.argv[11:]]
+# ---- derive the record from what the campaign wrote as JSON, never from an argument or a log line ----------------------
+# The reader is asked directly, in this one process: the facts never travel through a shell variable or a pipe.
+# Exit: 0 recorded CLEAN, 1 recorded FAILED, 3 the campaign holds no group result (nothing is recorded).
+python3 - "$OUT" "$ISOSHA" "$REL" "$CAMP" "$RERUN_REASON" "${RERUNS[@]}" <<'PY'
+import datetime, json, os, sys
+sys.path.insert(0, os.path.join(os.getcwd(), "tools"))
+import acceptance_json
+out, iso, rel, camp, reason = sys.argv[1:6]
+reruns = sys.argv[6:]
+f = acceptance_json.record_facts(camp, reruns)
+if not f["groups"]:
+    print("ERROR: no group result in %s (matrix/matrix-result.json, feature-*.json) - nothing to record" % camp, file=sys.stderr)
+    sys.exit(3)
+verdict = "CLEAN" if f["failed"] == 0 else "FAILED"
 rec = {
   "iso_sha256": iso,
   "release_version": rel,
-  "cells": json.loads(cells),
-  "cell_groups_clean": int(clean),
-  "cell_groups_failed": int(failed),
+  "cells": f["cells"],
+  "cell_groups_clean": f["clean"],
+  "cell_groups_failed": f["failed"],
   "verdict": verdict,
   "campaign_dir": os.path.abspath(camp),
   "recorded_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+  "derived_from": "the campaign's JSON results, through tools/acceptance_json.py; no log text",
+  "groups": [{"group": g["group"], "clean": g["clean"], "why": g["why"]} for g in f["groups"]],
 }
-if json.loads(superseded):
-    rec["superseded_failures"] = json.loads(superseded)
-    rec["rerun_campaign_dirs"] = reruns
+if f["superseded"]:
+    rec["superseded_failures"] = f["superseded"]
+    rec["rerun_campaign_dirs"] = [os.path.abspath(r) for r in reruns]
     rec["rerun_reason"] = reason
-json.dump(rec, open(out,"w"), indent=2)
-print(f"recorded {verdict}: {clean} clean, {failed} failed -> {out}")
+if f["rerun_refused"]:
+    rec["rerun_refused"] = f["rerun_refused"]
+json.dump(rec, open(out, "w"), indent=2)
+print(f"recorded {verdict}: {f['clean']} clean, {f['failed']} failed -> {out}")
+for g in f["groups"]:
+    if not g["clean"]:
+        print(f"  not clean: {g['group']} - {g['why']}")
+if f["rerun_refused"]:
+    print(f"  re-run NOT accepted: {f['rerun_refused']}")
+sys.exit(0 if verdict == "CLEAN" else 1)
 PY
+rc=$?
 
-if [ "$VERDICT" != "CLEAN" ]; then
-  echo "NOTE: the record says FAILED. cut-release will refuse it - which is the point." >&2
-  exit 1
-fi
+case "$rc" in
+  0) ;;
+  1) echo "NOTE: the record says FAILED. cut-release will refuse it - which is the point." >&2; exit 1 ;;
+  3) die "no group result in $CAMP - nothing to record" ;;
+  *) die "the record could not be written (rc=$rc)" ;;
+esac

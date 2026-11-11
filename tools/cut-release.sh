@@ -284,7 +284,7 @@ REC="scratchpad/acceptance-records/${ISOSHA}.json"
       tools/record-acceptance.sh --iso $ISO --campaign <campaign-out-dir>
   There is deliberately no flag to skip this, and --acceptance-override does NOT cover it: that
   flag ships a release whose failures are NAMED, and an absent record names nothing."
-# The check itself lives in tools/acceptance-record-check.py (testable offline: tools/tests/acceptance-record-selftest.sh); it requires
+# The check itself lives in tools/acceptance-record-check.py; it requires
 # every campaign cell AND the feature tests - a record that lacks any of them is PARTIAL (2026-10-02: rz30 recorded CLEAN with both
 # feature tests never run).
 RECOUT="$WORK/acceptance-check.log"

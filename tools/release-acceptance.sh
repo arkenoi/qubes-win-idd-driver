@@ -114,7 +114,70 @@ say(){ case "$*" in
 # three hours apart for events seconds apart (CAMPAIGNLOGTZSPLIT); the line says which clock.
 _clk_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ); _clk_loc=$(date +%:z)
 say "clock: stamps here are UTC ($_clk_utc; host local is UTC$_clk_loc); guest log stamps and file names are guest-local - convert before comparing"
-die(){ say "FATAL: $*"; exit 1; }
+# ---- THE RUN AS ONE JSON DOCUMENT --------------------------------------------------------------
+# Owner, 2026-11-10: "i think acceptance should produce clear jsons, not ambiguous text output".
+# What this run is doing and how it ended used to exist only as the prose above and below, and
+# the operator read it by pattern - a quiet stdout was taken for a stall while seven cells passed,
+# and a footer's "failed" for product failures. $WORK/acceptance.json is rewritten whole at every
+# phase change and at every exit of this script:
+#   state running|ended, pid, phase, result (complete | incomplete-or-failed), exit_code,
+#   stopped{at,why}, the package identity, cells_planned, matrix{exit_code, result = the matrix's
+#   own matrix-result.json}, features{skipped, tests[name, exit_code, out, ledger]},
+#   acceptance_recorded, gate_scope, receipt = the coverage receipt this run wrote (per-suite
+#   class, and for a matrix cell the failing checks' text), and files{} naming where the rest is.
+# The matrix result and the receipt are embedded only once THIS run has produced them: both paths
+# can hold an earlier run's file. Nothing here grades anything - every field is a fact this script
+# already had; the prose lines are unchanged.
+# A FEATURE TEST'S CLASS IS IN receipt.classes AND NOWHERE ELSE. tools/coverage-receipt.py takes it
+# from the suite's own ledger because an exit code cannot carry it (two inverted conventions, its
+# main() says where), so classing by exit code here as well would give one question two answers.
+# "running" IS A CLAIM ABOUT THE LAST WRITE (written_utc), NOT ABOUT NOW. Every `exit` in this file
+# below the banner rewrites the file as ended first, and a TERM/INT/HUP does it through run-lib.sh's
+# job_on_abort hook. A SIGKILL or an OOM kill cannot: "running" with no process `pid` alive is a
+# driver that died without writing.
+ACC_JSON="$WORK/acceptance.json"; ACC_T0=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+ACC_PHASE=preflight; ACC_FEATS=""; ACC_RECORDED=""; ACC_SCOPE=""; ACC_MATRIX_DONE=0; ACC_RECEIPT_WRITTEN=0
+_acc_json(){ # <running|ended> [exit code] [stopped-at] [why] -> $WORK/acceptance.json, whole and atomically; always returns 0
+  python3 - "$ACC_JSON" "$1" "${2:-}" "${3:-}" "${4:-}" "$ACC_PHASE" "$ACC_T0" "${RUN:-}" "${PV:-}" "${HEAD:-}" "${ACCEPT_ATTEMPT:-}" \
+            "${CELLS:-}" "${MATRIX_RC:-}" "${CAMP:-}" "${SKIP_FEATURES:-0}" "$ACC_FEATS" "$ACC_RECORDED" "${COVFILE:-}" "$ACC_SCOPE" \
+            "$WORK" "$ACC_MATRIX_DONE" "$ACC_RECEIPT_WRITTEN" "$$" <<'PYACC' 2>>"$LOG"
+import json, os, sys, time
+(out, state, rc, stop_at, why, phase, t0, run, pv, head, attempt, cells, mrc, camp, skip, feats, recorded, cov, scope,
+ work, matrix_done, receipt_written, pid) = sys.argv[1:24]
+mres = os.path.join(camp, "matrix", "matrix-result.json") if camp else ""
+docs = {}
+for key, path, wanted in (("matrix", mres, matrix_done == "1"), ("receipt", cov, receipt_written == "1")):
+    try:
+        docs[key] = json.load(open(path, encoding="utf-8")) if (wanted and path) else None
+    except (OSError, ValueError):
+        docs[key] = None
+tests = []
+for rec in feats.splitlines():
+    name, frc, ledger = (rec.split("|") + ["", ""])[:3]
+    if name:
+        tests.append({"name": name, "exit_code": int(frc), "out": os.path.join(work, name + ".out"), "ledger": ledger or None})
+ended = state == "ended"
+doc = {"schema": 1, "state": state, "pid": int(pid), "phase": phase,
+       "result": ("complete" if rc == "0" else "incomplete-or-failed") if ended else None,
+       "exit_code": int(rc) if rc else None, "stopped": {"at": stop_at, "why": why} if stop_at else None,
+       "attempt": attempt or None, "package_run": run or None, "package_version": pv or None, "built_from": head or None,
+       "started_utc": t0, "written_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+       "cells_planned": cells.split(),
+       "matrix": {"exit_code": int(mrc) if mrc else None, "result": docs["matrix"]},
+       "features": {"skipped": skip == "1", "tests": tests},
+       "acceptance_recorded": {"yes": True, "no": False}.get(recorded), "gate_scope": scope or None,
+       "receipt": docs["receipt"],
+       "files": {"log": os.path.join(work, "release-acceptance.log"), "matrix_result": mres or None,
+                 "matrix_rows": os.path.join(camp, "matrix", "checks.jsonl") if camp else None,
+                 "matrix_stdout": os.path.join(camp, "full.out") if camp else None, "receipt": cov or None}}
+with open(out + ".tmp", "w", encoding="utf-8") as f:
+    json.dump(doc, f, indent=1)
+    f.write("\n")
+os.replace(out + ".tmp", out)
+PYACC
+  return 0
+}
+die(){ say "FATAL: $*"; _acc_json ended 1 fatal "$*"; exit 1; }
 
 # REFUSE TO START UNDER A STRAY HARNESS PROCESS. An orphaned prime-run kept driving win10-acc after
 # its parents were killed on 2026-09-10 - restarting the guest under a new run, so state readings
@@ -132,6 +195,12 @@ if [ -n "$_stray" ]; then
 fi
 
 say "=== release acceptance for run $RUN (work: $WORK) ==="
+# FROM HERE THE FILE IS THIS RUN'S, and not before: until the refusal above has passed, a file at
+# this path may belong to a driver that is still running, and a second one must not write over it.
+_acc_json running
+# A CANCEL IS AN ENDING TOO. run-lib.sh calls job_on_abort on TERM/INT/HUP before it tears the tree
+# down; without this the file would say "running" for ever after an operator's stop.
+job_on_abort(){ _acc_json ended "" cancelled "$1"; }
 
 # ---- 1. the run must be a GREEN release-package run -------------------------------------------
 # Checked rather than assumed: downloading artifacts from a partially-failed run yields a package
@@ -225,12 +294,11 @@ mkdir -p "$CAMP"
 # at 21:50 AND `=== MATRIX: 44 passed, 2 failed - ABORTED on a log path that broke mid-cell ===`
 # from the 22:12 one, with nothing between them - and full.out is the file `matrix rc=` points a
 # reader at, so it is the one opened FIRST.
-# full.out is ROTATED, not stamped, and the comment below says why: record-acceptance.sh globs
-# $CAMP/*.out and requires ONE '=== MATRIX ... ===' footer per file, treating a footerless file as a
-# group that did not finish. Two footers in one file breaks that contract, and a separator line
-# inside it would not repair it. Rotating gives this attempt a file with exactly one footer while
-# KEEPING the previous attempt's - for an aborted attempt that output is its only record - and the
-# rotated name does not end in .out, so it leaves the glob the builder depends on.
+# full.out is ROTATED, not stamped: it is the file a reader opens first, and one file holding two
+# attempts' output reads as one run. Rotating gives this attempt a file of its own while KEEPING the
+# previous attempt's - for an aborted attempt that output is its only record. (Until 2026-11-11
+# there was a second reason: record-acceptance.sh globbed $CAMP/*.out and required ONE
+# '=== MATRIX ... ===' footer per file. It reads the campaign's JSON now and no *.out at all.)
 # The append-only logs beside it just take a boundary: they are read, not parsed.
 _ra_rotate_inherited(){ # <attempt-id> <file> -> moves it aside so this attempt starts clean
   local id="${1:?_ra_rotate_inherited <id> <file>}" f="${2:?}"
@@ -261,7 +329,7 @@ _ra_stamp_inherited(){ # <attempt-id> <path>... -> boundary into each existing p
 # (DONE lines, JUDGE verdicts, round counters), and a separator inside a parsed file does not help a
 # consumer that greps the whole of it. Rotating gives this attempt an empty tree while KEEPING the
 # previous attempt's as its only record. Fixing it HERE fixes every feature test at once - no suite
-# needs its own marker, and `rm -f "$CAMP"/feature-*.out` below already applies this principle to
+# needs its own marker, and `rm -f "$CAMP"/feature-*.json` below already applies this principle to
 # the result files.
 _ra_rotate_inherited_dir(){ # <attempt-id> <dir> -> moves it aside so this attempt starts empty
   local id="${1:?_ra_rotate_inherited_dir <id> <dir>}" d="${2:?}"
@@ -275,7 +343,8 @@ _ra_rotate_inherited_dir(){ # <attempt-id> <dir> -> moves it aside so this attem
 # now read the same string. shutdown-lib.sh loads primitives.sh with `|| true`, so a silent load
 # failure would leave this empty and stamp every artefact with no id at all - refuse instead.
 declare -F attempt_id >/dev/null 2>&1 \
-  || { echo "FATAL: primitives.sh did not load - no attempt id, so artefacts cannot be scoped" >&2; exit 2; }
+  || { echo "FATAL: primitives.sh did not load - no attempt id, so artefacts cannot be scoped" >&2
+       _acc_json ended 2 fatal "primitives.sh did not load - no attempt id"; exit 2; }
 ACCEPT_ATTEMPT="${ACCEPT_ATTEMPT:-$(attempt_id)}"
 _ra_rotate_inherited "$ACCEPT_ATTEMPT" "$CAMP/full.out" >/dev/null
 for _d in "$WORK"/*.d; do _ra_rotate_inherited_dir "$ACCEPT_ATTEMPT" "$_d" >/dev/null; done
@@ -294,6 +363,11 @@ export MATRIX_ATTEMPT="$ACCEPT_ATTEMPT"
 # MATRIX_ATTEMPT stays as the explicit transport it has always been; this generalises it.
 export RUN_ID="$ACCEPT_ATTEMPT"
 # RAATTEMPT-B
+# AND THE MATRIX'S RESULT FILE, for the reason full.out is rotated: step 4b below reads
+# matrix-result.json to learn whether the matrix completed, and a matrix that dies before its first
+# write would otherwise be read through the file an earlier run left in the same directory.
+_ra_rotate_inherited "$ACCEPT_ATTEMPT" "$CAMP/matrix/matrix-result.json" >/dev/null
+ACC_PHASE=logvol-smoke; _acc_json running
 
 # ---- 3c. THE BIND IS SMOKE-TESTED BEFORE THE EIGHT CELLS THAT COST HOURS ------------------------
 # Campaign 40134888669 aborted 11 minutes in, on its first cell, because the guest could not see the
@@ -306,8 +380,8 @@ export RUN_ID="$ACCEPT_ATTEMPT"
 # refuse; if it answers ok there, then its receipt is not about the volume and a PASS of the other
 # arm means nothing - a gate whose instrument is not checked each time is the decoration this
 # project keeps paying for. 3 minutes buys that, and it is also the cheaper arm to fail on.
-# A non-PASS STOPS THE CAMPAIGN HERE: the artefacts go to $CAMP/logvol-smoke-*/ and deliberately NOT
-# to a *.out (record-acceptance.sh globs those and requires a MATRIX footer in each).
+# A non-PASS STOPS THE CAMPAIGN HERE: the artefacts go to $CAMP/logvol-smoke-*/ (and not to a *.out
+# in $CAMP: until 2026-11-11 record-acceptance.sh globbed those; it reads the campaign's JSON now).
 # RASMOKE-A  (to the B marker: extracted and EXECUTED by
 # tools/tests/accept-logvol-smoke-selftest.sh; neither marker names the other)
 # AND THERE IS NO KNOB. Asked whether a LOGVOL_SMOKE=0 escape was acceptable, Jev answered 0.50 -
@@ -329,15 +403,21 @@ for _arm in --no-attach ""; do
 done
 # RASMOKE-B
 
-# The campaign's stdout MUST land in a <tag>.out inside $CAMP: record-acceptance.sh globs *.out and
-# requires the '=== MATRIX: n passed, n failed ===' footer in each, treating a footerless file as a
-# group that did not finish. Writing this to runner.log instead would make the run unrecordable.
+ACC_PHASE=matrix; _acc_json running
+say "matrix: while it runs its state is $CAMP/matrix/matrix-result.json (the cell running, counts by class) and its verdicts are rows in $CAMP/matrix/checks.jsonl"
+# The campaign's stdout lands in $CAMP/full.out FOR A READER (acceptance.json names it as
+# files.matrix_stdout). The record, the receipt and the stop below do not parse it: until 2026-11-11
+# record-acceptance.sh globbed $CAMP/*.out and required the '=== MATRIX: n passed, n failed ==='
+# footer in each; all three now come from $CAMP/matrix/matrix-result.json and checks.jsonl.
 # matrix.sh takes its own output dir from MATRIX_OUT, not OUT.
 MATRIX_WORK="$WORK" RELEASE_SETUP="$SETUP" RELEASE_ISO="$ISO" RELEASE_COMMIT="$HEAD" \
   CELLS="$CELLS" G10="$G10" G11="$G11" B10="$B10" B11="$B11" MATRIX_OUT="$CAMP/matrix" \
   POOL_SPACE_RUN="$ACCEPT_ATTEMPT" \
   ./mgmt/harness/matrix.sh 2>&1 | tee -a "$CAMP/full.out" >>"$CAMP/runner.log"
 MRC=${PIPESTATUS[0]}
+# MRC goes on to carry this whole script's exit code (a failed feature test sets it to 1), so the
+# matrix's own is kept apart for acceptance.json.
+MATRIX_RC=$MRC; ACC_MATRIX_DONE=1; _acc_json running
 say "matrix rc=$MRC (detail: $CAMP/full.out, artefacts: $CAMP/matrix)"
 
 # ---- 4b. ABORT ON A FATAL, which this script did not do ----------------------------------------
@@ -350,7 +430,8 @@ say "matrix rc=$MRC (detail: $CAMP/full.out, artefacts: $CAMP/matrix)"
 # failures still let the feature tests produce their independent evidence, which is the deliberate
 # scope split and the reason this keys on the tally rather than on MRC alone.
 . "$(dirname "$0")/../mgmt/harness/wedge-gates-lib.sh" || {
-  say "FAIL  cannot load wedge-gates-lib.sh - the fatal gate is the thing that stops a wedged run"; exit 2; }
+  say "FAIL  cannot load wedge-gates-lib.sh - the fatal gate is the thing that stops a wedged run"
+  _acc_json ended 2 fatal "cannot load wedge-gates-lib.sh"; exit 2; }
 # A HELD SPECIMEN STOPS THE CAMPAIGN BEFORE ANYTHING ELSE IS ATTEMPTED. Checked here as well as
 # in settle_rig, because the rig is occupied from that moment and nothing downstream can run.
 if [ -s "$CAMP/specimen-held" ]; then
@@ -365,17 +446,40 @@ if [ -s "$CAMP/specimen-held" ]; then
   say "[ERROR] record: $(tr -d '\r\n' < "$CAMP/specimen-record" 2>/dev/null)"
   say "[ERROR] to resume the rig once it has been examined: qvm-remove -f $_sv (it is contaminated and"
   say "[ERROR] must be redeployed from its golden in any case)."
+  _acc_json ended 1 specimen-held "$_sv is held as a specimen (record: $(tr -d '\r\n' < "$CAMP/specimen-record" 2>/dev/null))"
   exit 1
 fi
-if grep -qaE '=== MATRIX: .* ABORTED' "$CAMP/full.out" 2>/dev/null; then
-  say "[ERROR] STOP: $(grep -aoE '=== MATRIX:[^=]*' "$CAMP/full.out" | tail -1)"
+# DID THE MATRIX COMPLETE - READ FROM ITS RESULT FILE, THROUGH THE ONE READER. NO TEXT IS MATCHED.
+# Owner, 2026-11-11: "we were intended to stop grepping and make json parser instead, grep is
+# unreliable". This stop was `grep -qaE '=== MATRIX: .* ABORTED'` over the matrix's captured stdout:
+# one phrase. The matrix now states the fact as fields (matrix-result.json: state, finished,
+# abort_line, complete), written by its exit trap on every exit path, and tools/acceptance_json.py
+# reads them: exit 0 complete, 1 not complete, 2 no readable result. "Not complete" is every way of
+# not finishing - an abort line, an exit before the footer, a result still saying "running" because
+# the process died without its trap - and a MISSING file (this script moved any inherited one aside
+# above) means the matrix died before it could write one. That is WIDER than the grep was,
+# deliberately. MEASURED on rel-42584568371 (2026-11-09): the matrix exited 1 at 10:16:33 on
+# assert_sole_guest's refusal ("another Windows guest is up - win10-acc"), with no footer and no
+# ABORTED line, and this script ran feature tests until 11:00 on a campaign that could not be
+# recorded.
+# ANY non-zero stops: a reader that failed has not said "complete". The grep is gone and nothing
+# stands behind the result file - it decides alone (Jev 2026-11-11 witness_removed_acceptable 0.65).
+_mx_desc=$(python3 tools/acceptance_json.py matrix-complete "$CAMP" 2>>"$LOG"); _mx_rc=$?
+if [ "$_mx_rc" -ne 0 ]; then
+  case "$_mx_rc" in
+    1) _mx_word="its result file says so" ;;
+    2) _mx_word="it left no readable result file" ;;
+    *) _mx_word="the reader failed, rc=$_mx_rc" ;;
+  esac
+  say "[ERROR] STOP: the matrix did not complete ($_mx_word) - ${_mx_desc:-the reader printed nothing, see $LOG}"
   say "[ERROR] the matrix did not finish, so the feature tests, the remainder suites and the receipt"
   say "[ERROR] are NOT run: they would execute against a rig the matrix did not finish with."
   for _wgc in "$CAMP"/matrix/wedge-*/class.txt; do
     [ -s "$_wgc" ] || continue
     say "[ERROR]   wedge record present: $(dirname "$_wgc") class=$(tr -d '\r\n' < "$_wgc")"
   done
-  python3 tools/campaign-state.py 2>&1 | tail -20 | tee -a "$LOG" >/dev/null
+  python3 tools/campaign-state.py "$CAMP" 2>&1 | tail -30 | tee -a "$LOG" >/dev/null
+  _acc_json ended 1 matrix-incomplete "$_mx_word - $_mx_desc"
   exit 1
 fi
 
@@ -383,8 +487,9 @@ fi
 # These are NOT a substitute for the campaign; they are the per-feature evidence a campaign cell
 # does not cover. Each drives its own throwaway subject over quick-upgrade.
 # NO STALE FEATURE RESULTS: $CAMP is per release-package run, so a re-run of the same run would otherwise find an earlier attempt's
-# feature-*.out and record THEM - a skipped or failed feature test inheriting an old pass (Jev review 2026-10-02). Cleared first, always.
-rm -f "$CAMP"/feature-*.out
+# feature-*.json and record THEM - a skipped or failed feature test inheriting an old pass (Jev review 2026-10-02). Cleared first, always.
+# (feature-*.out is what these results were until 2026-11-11; nothing reads one any more, and one left beside the JSON would mislead.)
+rm -f "$CAMP"/feature-*.json "$CAMP"/feature-*.out
 if [ "$SKIP_FEATURES" -eq 0 ]; then
   # SETTLE THE RIG FIRST. The campaign's appvm cells leave their AppVM RUNNING, and quick-upgrade
   # refuses to start while any other Windows guest is up ("REFUSED: these are not Halted") - the
@@ -480,11 +585,13 @@ if [ "$SKIP_FEATURES" -eq 0 ]; then
     busy=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' '$1 ~ /^win1/ && $2!="Halted"{print $1}' | tr '\n' ' ')
     [ -z "$busy" ] || say "WARNING: still not Halted after 10 min: $busy - $1 will likely be refused"
   }
+  ACC_PHASE=features; _acc_json running
   settle_rig "the feature tests"
 
   # the list is shared with tools/acceptance-record-check.py, which requires every one of these in the record
   for t in $(grep -v -e '^#' -e '^[[:space:]]*$' tools/release-feature-tests.txt); do
     say "--- feature test: $t"
+    ACC_PHASE="feature:$t"; _acc_json running
     [ "$t" = crop-before-map ] || settle_rig "feature test $t"   # crop-before-map rides the notify test's running subject
     case "$t" in
       notify-errors-guest-test)
@@ -583,6 +690,7 @@ if [ "$SKIP_FEATURES" -eq 0 ]; then
       [ -n "$tdir" ] && [ -s "$tdir/verdicts.tsv" ] && tled="$tdir/verdicts.tsv"
     fi
     [ -n "$tled" ] && FEATLEDGERS="${FEATLEDGERS:-} --feature-ledger $t=$tled"
+    ACC_FEATS="${ACC_FEATS}${t}|${rc}|${tled}"$'\n'; _acc_json running
     # THE POINTER MUST NAME A FILE THAT EXISTS. Both lines below said "see $WORK/$t.log", but only the
     # arms that pass LOG= write one (notify, crop-before-map, updater-component, template-update);
     # EVERY arm redirects into "$WORK/$t.out", and supervision-gate - the arm whose failures are the
@@ -593,41 +701,47 @@ if [ "$SKIP_FEATURES" -eq 0 ]; then
     if [ $rc -eq 0 ]; then say "PASS  $t"
     elif [ $rc -eq 2 ]; then say "INSTRUMENT  $t (rc=2 - the suite could not measure the product; this is NOT a product defect, and the run still fails: see $tsee)"; MRC=1
     else say "FAIL  $t (rc=$rc, see $tsee)"; MRC=1; fi
-    # A FEATURE TEST IS PART OF THE RECORDED VERDICT. record-acceptance.sh derives the record from $CAMP/*.out only, so the
-    # feature tests used to be invisible to it (rz30 recorded CLEAN with both never run). Each now leaves a cell-group in the
-    # campaign dir with matrix.sh's footer; tools/acceptance-record-check.py requires feature-<test> among the recorded cells.
-    # The footer stays "0 passed, 1 failed" for BOTH kinds of failure - that is what makes the gate
-    # refuse the ISO - and the INSTRUMENT line beside it is what stops a reader attributing it to
-    # the product.
-    { echo "[$(date -u +%T)]   cells: feature-$t"
-      [ $rc -eq 2 ] && echo "[$(date -u +%T)]   INSTRUMENT: feature-$t could not measure the product (rc=2); the run fails, the product is not implicated"
-      if [ $rc -eq 0 ]; then echo "=== MATRIX: 1 passed, 0 failed ==="; else echo "=== MATRIX: 0 passed, 1 failed ==="; fi
-    } > "$CAMP/feature-$t.out"
+    # A FEATURE TEST IS PART OF THE RECORDED VERDICT, AND IT SAYS SO AS JSON. record-acceptance.sh derives the record from
+    # the campaign directory, so the feature tests used to be invisible to it (rz30 recorded CLEAN with both never run).
+    # Each leaves $CAMP/feature-<test>.json there - its exit code and its ledger, as fields - and
+    # tools/acceptance-record-check.py requires feature-<test> among the recorded cells. Until 2026-11-11 this was a
+    # synthetic PROSE file, a "cells:" line and a fake "=== MATRIX: 1 passed, 0 failed ===" footer, written here only so the
+    # recorder could grep it back: two of our own scripts exchanging a verdict as text. Any non-zero exit makes the group
+    # not clean, which is what makes the gate refuse the ISO; whether it was the product or the instrument is the
+    # coverage receipt's to say, from the ledger.
+    # A result that cannot be written fails the run: the record would lack the test and read PARTIAL.
+    python3 tools/acceptance_json.py feature-result "$CAMP" "$t" "$rc" --ledger "$tled" --out "$WORK/$t.out" \
+        --attempt "${ACCEPT_ATTEMPT:-}" >>"$LOG" 2>&1 \
+      || { say "FAIL  could not write $CAMP/feature-$t.json (see $LOG) - the record will not show this test"; MRC=1; }
   done
 else
   say "feature tests SKIPPED by --skip-features (say so in any report: this is not a full run)"
 fi
 
 # ---- 6. record ----------------------------------------------------------------------------------
-# The verdict is DERIVED from the campaign logs by record-acceptance.sh, never passed in.
+# The verdict is DERIVED by record-acceptance.sh from what the campaign wrote as JSON (the matrix's
+# result and rows, each feature test's result), never passed in and never read off a log line.
 say "--- recording the acceptance verdict against the ISO"
+ACC_PHASE=record; _acc_json running
 if bash tools/record-acceptance.sh --iso "$ISO" --campaign "$CAMP" >>"$LOG" 2>&1; then
-  say "PASS  acceptance recorded"
+  say "PASS  acceptance recorded"; ACC_RECORDED=yes
 else
   say "FAIL  acceptance NOT recorded - tools/cut-release.sh will refuse this ISO, which is correct"
-  MRC=1
+  MRC=1; ACC_RECORDED=no
 fi
+ACC_PHASE=receipt; _acc_json running
 
 # ---- 7. the coverage receipt ---------------------------------------------------------------------
 # WHAT THIS RUN ACTUALLY COVERED, written where the release-cut gate reads it (docs/ADR-acceptance.md
-# section 4). DERIVED from the campaign's own verdict lines by tools/coverage-receipt.py, never from the
-# intended cell list (this block used to name every cell in $CELLS whatever happened - a receipt is a
-# record, not an intention). PRODUCT-FAIL and INSTRUMENT-FAIL are told apart (PLAN-acceptance-optimization
-# section 6): a cell whose FAIL lines are all INVALID-* and a feature test exiting 2 could not MEASURE the
-# product - they are listed under instrument_fail and left OUT of `suites`, so the gate below (and the
-# release-cut hook, which re-runs the same check) refuses the cut until they are re-run; a FAIL line that
-# names the product is covered (it ran and measured) with result=fail, and the acceptance RECORD refuses
-# the cut (Jev 2026-10-13: covered-with-fail-flag 0.94).
+# section 4). DERIVED by tools/coverage-receipt.py from the matrix's own verdict ROWS (checks.jsonl, read
+# through tools/acceptance_json.py - no log line), never from the intended cell list (this block used to
+# name every cell in $CELLS whatever happened - a receipt is a record, not an intention). PRODUCT-FAIL
+# and INSTRUMENT-FAIL are told apart (PLAN-acceptance-optimization section 6): a cell whose failing rows
+# are all class INVALID and a feature test exiting 2 could not MEASURE the product - they are listed
+# under instrument_fail and left OUT of `suites`, so the gate below (and the release-cut hook, which
+# re-runs the same check) refuses the cut until they are re-run; a cell with a FAIL row - the product -
+# is covered (it ran and measured) with result=fail, and the acceptance RECORD refuses the cut (Jev
+# 2026-10-13: covered-with-fail-flag 0.94).
 COVHEAD=$(git rev-parse HEAD 2>/dev/null | cut -c1-12)
 if [ -n "$COVHEAD" ]; then
   COVFILE="scratchpad/gate-coverage-$COVHEAD.json"
@@ -638,12 +752,13 @@ if [ -n "$COVHEAD" ]; then
   if python3 tools/coverage-receipt.py --out "$COVFILE" --campaign "$CAMP" --cells "$CELLS" ${FEATRCS:-} ${FEATLEDGERS:-} \
        --package-verify-rc 0 --package-run "$RUN" --built-from "$HEAD" --range "${GSBASE:-?}..$(git rev-parse HEAD)" >>"$LOG" 2>&1; then
     say "coverage receipt: $COVFILE - $(python3 -c "import json,sys;r=json.load(open(sys.argv[1]));print('covered %d, product_fail %s, instrument_fail %s, not_run %s' % (len(r['suites']), r['product_fail'] or '-', r['instrument_fail'] or '-', r['not_run'] or '-'))" "$COVFILE")"
+    ACC_RECEIPT_WRITTEN=1
   else
     say "FAIL  coverage receipt could not be written (see $LOG) - no receipt, no cut"; MRC=1
   fi
   if [ -f tools/gate-scope.py ] && [ -s "$COVFILE" ]; then
     if [ -n "$GSBASE" ] && python3 tools/gate-scope.py check "$COVFILE" "$GSBASE..$(git rev-parse HEAD)" >>"$LOG" 2>&1; then
-      say "PASS  gate scope: this run covers what the diff requires"
+      say "PASS  gate scope: this run covers what the diff requires"; ACC_SCOPE=pass
     else
       # THIS SCRIPT'S EXIT CODE GRADES WHAT THIS SCRIPT RAN. On a FULL plan the receipt it just wrote
       # can never satisfy gate-scope by itself: six of the required suites belong to tools/gate-remainder,
@@ -672,9 +787,12 @@ PYSCOPE
       _mn=$(printf '%s\n' "$_mine" | sed -n 's/^REQ //p')
       if [ -z "$_mine" ]; then
         say "FAIL  gate scope: the check refused and the split could not be computed (see $LOG) - the release-cut gate will refuse the cut"; MRC=1
+        ACC_SCOPE=refused-split-unknown
       elif [ -n "${_mm// /}" ]; then
         say "FAIL  gate scope: required suites of THIS run's own repertoire are not in the receipt: $_mm (see $LOG) - the release-cut gate will refuse the cut"; MRC=1
+        ACC_SCOPE="refused-own-suites-missing:$_mm"
       else
+        ACC_SCOPE="own-part-covered-rest-left-to-remainder:$_mt"
         say "gate scope: this run covers its part - required ${_mn%% HAVE *}, in the receipt ${_mn##* }; left to tools/gate-remainder (the chain's next step):$( [ -n "${_mt// /}" ] && echo " $_mt" || echo " nothing it names") - the cut refuses until that has run and merged"
       fi
     fi
@@ -684,4 +802,6 @@ fi
 say "=== release acceptance for $PV: $( [ $MRC -eq 0 ] && echo COMPLETE || echo INCOMPLETE/FAILED ) ==="
 say "setup: $SETUP"
 say "iso:   $ISO"
+ACC_PHASE=done; _acc_json ended "$MRC"
+say "json:  $ACC_JSON (this run as fields: result, the matrix, each feature test, the receipt)"
 exit $MRC

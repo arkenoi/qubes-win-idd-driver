@@ -5,7 +5,7 @@ The record is tools/record-acceptance.sh's, keyed by the ISO's own hash. tools/c
 check inline, where nothing could test it without fetching a release. Moved out 2026-10-02 because the check had a hole: it required the
 six matrix cells and nothing else, while tools/release-acceptance.sh also runs FEATURE TESTS - and the rz30 run of that day recorded
 CLEAN with both feature tests never having run (they died on a retired golden in seconds). A record now has to show every required cell,
-the feature tests included, or the ISO is PARTIAL. tools/tests/acceptance-record-selftest.sh drives it.
+the feature tests included, or the ISO is PARTIAL.
 """
 import json
 import os
@@ -17,8 +17,6 @@ import sys
 _HERE = os.path.dirname(os.path.abspath(__file__))
 FEATURES = [l.strip() for l in open(os.path.join(_HERE, "release-feature-tests.txt")) if l.strip() and not l.startswith("#")]
 REQUIRED = {"win11-clean", "win10-clean", "win11-upgrade", "win11-reinstall", "win11-appvm", "win10-appvm"} | {"feature-" + f for f in FEATURES}
-if os.environ.get("ACCEPT_CHECK_DEFECT") == "1":   # GUARD:feature-cells - the self-test must FAIL with this set
-    REQUIRED = {c for c in REQUIRED if not c.startswith("feature-")}
 
 
 def bad(m):
