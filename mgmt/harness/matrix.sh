@@ -1907,11 +1907,28 @@ run_install(){ # $1=vm $2=label $3=install-source (drive/dir carrying install.cm
   mkdir -p "$M"
   echo "$E2E_MARK" >> "$M/$lbl-install.tail"
   say "  $lbl: run marker $E2E_MARK"
+  # THE SAME RUN IDENTITY ON THE LOG VOLUME, read by the host (quick-upgrade.sh's MIRROR_PRE idiom).
+  # The marker above is in the primary log on C:, which only qrexec can read back. The installer also
+  # appends every line to <LogDir>\qwt-improved-install.log, which the bind has pointed at the volume,
+  # and the bind copied the old log directory across - so bytes already there may be another
+  # install's. Their count NOW is where this run starts on that channel. verify_installed reads past
+  # it only when its qrexec read comes back empty. Unread stays empty, and then nothing is scoped.
+  MIRROR_PRE=; MIRROR_MARK="$E2E_MARK"
+  if [ -n "${LOGVOL_IMG:-}" ] && logvol_pull "$LOGVOL_IMG" "$M/logvol-pre-$lbl" >>"$M/$lbl-logvol-pre.out" 2>&1; then
+    MIRROR_PRE=$(find "$M/logvol-pre-$lbl/files" -type f -name 'qwt-improved-install.log' -printf '%s\n' 2>/dev/null | sort -rn | head -1)
+    MIRROR_PRE=${MIRROR_PRE:-0}
+  fi
+  say "  $lbl: installer log mirror on the volume: ${MIRROR_PRE:-UNREAD} pre-existing byte(s), not this run's"
 
-  # ARM THE MODULE-BASE RECORDER HERE, BEFORE THE INSTALL - not only after it.
+  # ARM THE MODULE-BASE RECORDER HERE, BEFORE THE INSTALL - and ONLY here since 2026-11-12.
   #
-  # There is a second arming call in the post-install path (search "module-base recorder armed"),
-  # and it is TOO LATE for the cell that actually wedges. WIN11-reinstall has stalled twice
+  # The second arming call, at t+0 of the post-install boot, is gone: its burst of qubes.VMShell
+  # calls at session-up preceded 2026-10-04 #4 and #5, the 4.3.40 acceptance and 4.3.41.1272's
+  # WIN10-upgrade (21:56:01Z session up, `schtasks` answered 21:56:04Z, the next call never
+  # answered, the domain stopped being run), and the owner's 2026-10-31 order is not to provoke
+  # it. The ONSTART task this call installs records that boot with no call from us (on 1272 it had
+  # not yet written by uptime 23 s, when that guest froze - so neither arming caught that table).
+  # It was also TOO LATE for the cell that actually wedges. WIN11-reinstall has stalled twice
   # (2026-09-12, and 2026-09-14 08:44) INSIDE this function; cell_reinstall does not reach the
   # post-install arming until line ~1120 returns. So the cell most likely to wedge was the one
   # guaranteed to be unarmed when it did, and the 09-14 stall produced the ninth unresolvable RIP
@@ -2170,45 +2187,37 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
     ) || true
   fi
 
-  # ARM THE MODULE-BASE RECORDER, the moment this guest can answer.
-  #
-  # WHY HERE. findings/issues.md P1's first next-action is "harvest a spinner's module bases":
-  # every one of the stall specimens is a RAW GUEST RIP that nobody can resolve, because KASLR
-  # re-randomises every boot and the bases were never recorded for THAT boot. Arming was wired
-  # into every repro harness (clean-install-repeat, enum-storm-repro, flush-durability-ab,
-  # ioreq-stall-repro, catch-specimen) and into NONE of the acceptance cells - so when the stall
-  # finally happened inside a campaign (win11-acc, WIN11-reinstall, 2026-09-12), it produced the
-  # ninth unresolvable address instead of the first resolved one. The guest went deaf about 60 s
-  # after this very line, which is exactly the window this arming has to beat.
-  #
-  # It is cheap, idempotent, takes its own per-VM lock, and a failure here must never affect the
-  # cell's verdict: this records evidence, it grades nothing.
-  if VM="$vm" OUT="${R%/*}/modbases-$lbl" ./mgmt/harness/arm-module-bases.sh >>"$R" 2>&1; then
-    say "  $lbl: module-base recorder armed (a stall's RIP will resolve to driver+offset)"
-  else
-    say "  $lbl: module-base recorder NOT armed - a stall in this cell will leave a raw, unresolvable RIP"
-  fi
+  # NO MODULE-BASE ARMING HERE (removed 2026-11-12): run_install's arming installs an ONSTART task
+  # that records this boot by itself; the burst this call added at session-up is in its comment.
   _assert_not_primed "$vm" "$lbl"
-  # RETRY, never fail a cell on ONE slow call. `type` on an ~18 KB log takes about two seconds, so
-  # a call that burns its whole timeout means the guest was not answering qrexec at all - and
-  # re-issuing gets a fresh connection, where simply waiting longer in one call sits on a dead one.
-  # MEASURED 2026-09-09 (4.3.24 campaign): WIN10-upgrade's fetch returned 0 bytes after exactly its
-  # 120 s timeout, on the guest that had just completed an MSI major upgrade - the busiest
-  # post-reboot moment of any cell - and the cell was scored INVALID-INSTRUMENT even though the
-  # install had already reported ok:true. The other two cells in the SAME run fetched fine, one of
-  # them byte-identical to the previous release's, so the mechanism was never broken: this was a
-  # transient, and a transient must be retried with backoff and its error KEPT, not turned into a
-  # verdict.
-  for _fa in 1 2 3; do
-    QTEST_VM=$vm timeout -k 5 90 ./tools/qtest run "cmd /c type \"$GLOG\"" 2>"$M/$lbl-final.err" \
-      | tr -d '\r' | grep -av 'system32>' > "$M/$lbl-final.log"
-    # EMPTY IS A FAILURE, not a short answer. A killed call can exit non-zero OR simply write
-    # nothing, so the exit status alone would let a zero-byte log through as if it had been read -
-    # which is exactly how this produced an INVALID cell instead of a retry.
-    [ -s "$M/$lbl-final.log" ] && break
-    say "  $lbl: installer-log fetch attempt $_fa/3 returned nothing: $(head -c 100 "$M/$lbl-final.err" 2>/dev/null | tr -d '\n') - retrying"
-    sleep $((_fa * 15))
-  done
+  # ONE READ. An empty answer is a FINDING, never a reason to ask the same channel again
+  # (experimenter rule 11). This was three attempts with backoff, on the reading that a silent
+  # qubes.VMShell after an upgrade is a transient (2026-09-09). On the 4.3.40 acceptance all three
+  # came back empty while qubes.GetDate answered, so the retry had been hiding a guest that stops
+  # serving qrexec calls - and the cell graded INVALID-INSTRUMENT over an install whose ok:true
+  # trailer sat intact on the log volume. The one permitted second read is a DIFFERENT channel: the
+  # installer's own mirror on that volume, read on the host past this run's MIRROR_PRE.
+  QTEST_VM=$vm timeout -k 5 90 ./tools/qtest run "cmd /c type \"$GLOG\"" 2>"$M/$lbl-final.err" \
+    | tr -d '\r' | grep -av 'system32>' > "$M/$lbl-final.log"
+  local _fromvol=0 _mf _ferr
+  # EMPTY IS A FAILURE, not a short answer: a killed call can exit non-zero OR simply write nothing.
+  if [ ! -s "$M/$lbl-final.log" ]; then
+    _ferr=$(head -c 100 "$M/$lbl-final.err" 2>/dev/null | tr -d '\n')
+    no "$lbl: VMSHELL-SILENT - qubes.VMShell returned nothing for the installer-log read within 90 s (${_ferr:-no stderr}); reading the RESULT from the log volume instead"
+    if [ -n "${E2E_MARK:-}" ] && [ "${MIRROR_MARK:-}" = "$E2E_MARK" ] && [ -n "${MIRROR_PRE:-}" ] \
+       && logvol_pull "$LOGVOL_IMG" "$M/logvol-final-$lbl" >>"$M/$lbl-logvol-final.out" 2>&1; then
+      _mf=$(find "$M/logvol-final-$lbl/files" -type f -name 'qwt-improved-install.log' -printf '%s %p\n' 2>/dev/null | sort -rn | head -1)
+      if [ -n "$_mf" ] && [ "${_mf%% *}" -gt "$MIRROR_PRE" ]; then
+        tail -c "+$(( MIRROR_PRE + 1 ))" "${_mf#* }" | tr -d '\r' > "$M/$lbl-final.log"
+        _fromvol=1
+        say "  $lbl: installer log read host-side from the log volume: $(( ${_mf%% *} - MIRROR_PRE )) byte(s) past this run's start"
+      else
+        say "  $lbl: the log volume holds no installer-log bytes past this run's start (${_mf:-no mirror file}, pre ${MIRROR_PRE})"
+      fi
+    else
+      say "  $lbl: the log volume could not be read for this run (marker ${MIRROR_MARK:-none}, pre ${MIRROR_PRE:-UNREAD})"
+    fi
+  fi
   # Same discriminator as w_install: 111 guest scripts emit "=== RESULT ===" banners and the
   # installer logs their output, so `grep -ao '=== RESULT === .*'` can pick up a nested one
   # (e.g. "=== RESULT === changed=0 warnings=0") and every json check then fails against a
@@ -2217,7 +2226,10 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
   # Judge only past this run's marker, for the same reason w_install does: the log carries the
   # golden's own install RESULT and anything boot tasks appended, and `tail -1` alone would happily
   # return the newest of those if this cell's installer never wrote one.
-  if [ -n "${E2E_MARK:-}" ] && grep -qa "$E2E_MARK" "$M/$lbl-final.log"; then
+  if [ "$_fromvol" = 1 ]; then
+    # Already scoped: on the volume's channel the byte offset IS this run's marker.
+    cp "$M/$lbl-final.log" "$M/$lbl-final.cur"
+  elif [ -n "${E2E_MARK:-}" ] && grep -qa "$E2E_MARK" "$M/$lbl-final.log"; then
     sed -n "/$E2E_MARK/,\$p" "$M/$lbl-final.log" > "$M/$lbl-final.cur"
   elif [ "${ENTRY_PRISTINE:-0}" = 1 ]; then
     # PRISTINE-ENTRY CELLS (C1/C2 via the primer) have no run marker, because run_install never
@@ -3767,22 +3779,6 @@ if [ -x tools/sweep-gate.sh ]; then
     # unreadable" for a condition it tests as `-not $logDir`, which is equally true of an ABSENT
     # value - the wording is what sent two investigations at WOW64 and permissions. Both stay open
     # in findings/issues.md; the message is in core-agent, so fixing it needs a new package.
-    # THE HARNESS RE-ARMS AT t+0 FROM A GUEST THAT HAS JUST REPLACED ITS OWN PV STACK, which
-    # arm-module-bases.sh:221 documents as the least-settled moment a guest ever has, measured
-    # 2026-09-22 in WIN11-reinstall. The retry is the committed response to that transient.
-    # IT CANNOT HIDE THE FAILURE: if both attempts write nothing the script says "FAIL: the
-    # recorder wrote NOTHING on this boot" and exits non-zero, and on success it says "the retry
-    # rescued the arming: N records" - so the declared line is the transient, never the outcome.
-    # ONLY THE LINE THAT WAS ACTUALLY OBSERVED. This regex first also covered the sibling pull WARN
-    # ("the host copy came back with no records - settling 10s and pulling once more"), on the
-    # reasoning that arm-module-bases.sh documents it identically and puts the same hard FAIL behind
-    # it. But that line did NOT occur in rel-40243956400-r2, and a declaration written for a
-    # condition nobody has seen excuses something unmeasured - Jev, shown the diff, scored
-    # scope_creep extra_behaviour 0.61 and hides_a_defect 0.62, and this is what it was pointing at.
-    # So it is out: when that WARN is first seen, it gets declared then, with its own receipt.
-    # Jev on this disposition: declare_caused 0.89 (product_defect 0.02).
-    --declare-caused-rare 'first run wrote nothing - settling [0-9]+s and retrying once'
-    'CAUSED by this campaign: it re-arms the module-base recorder immediately after the install or upgrade replaces the guest PV stack, at t+0 from the session returning, which arm-module-bases.sh:221 records as measured (2026-09-22, WIN11-reinstall) to be the least settled a guest ever is. The retry-once is the committed response and it reports its outcome either way - "the retry rescued the arming: N records" on success, and on total failure a FAIL line plus a non-zero exit that this regex does not cover and cannot excuse.'
     --declare-caused-rare 'qwt log: LogDir is unreadable .*(set-time|sync-clock-from-dom0)\.ps1-'
     'CAUSED by this campaign: matrix.sh:1319 calls logvol_clear_guest before every park, and logvol-bind.ps1:188 REMOVES the LogDir value (asserting its absence at :194) so that AppVMs derived from the park use the product default - without which every AppVM boot-time module logs nowhere. The guest then boots and its boot-time clock scripts run ~11 s after session-up, while the bind is re-asserted ~24 s after it, so those two scripts read an ABSENT value and log.ps1 falls back to <SystemDrive>\Qubes Logs and says so loudly, which is what CLAUDE.md requires of a fallback. Receipt: win10-clean, clear 07:09:58Z, boot 07:11:22Z, fallbacks guest-local 09:11:33/09:11:37, rebind 07:11:46Z; the same script wrote to the configured dir at 09:07:34, 09:12:46 and 09:14:06 without warning; and 12 LogDir fallbacks sit beside ZERO LogLevel fallbacks from the same key and the same read. On the two appvm cells the absence is permanent by design. Any OTHER script falling back is not covered by this regex and still blocks.'
     # THE HARNESS NARRATING A CORRECTION IT MADE ITSELF. MEASURED on this campaign's own clean cell,
