@@ -140,10 +140,10 @@ ACC_PHASE=preflight; ACC_FEATS=""; ACC_RECORDED=""; ACC_SCOPE=""; ACC_MATRIX_DON
 _acc_json(){ # <running|ended> [exit code] [stopped-at] [why] -> $WORK/acceptance.json, whole and atomically; always returns 0
   python3 - "$ACC_JSON" "$1" "${2:-}" "${3:-}" "${4:-}" "$ACC_PHASE" "$ACC_T0" "${RUN:-}" "${PV:-}" "${HEAD:-}" "${ACCEPT_ATTEMPT:-}" \
             "${CELLS:-}" "${MATRIX_RC:-}" "${CAMP:-}" "${SKIP_FEATURES:-0}" "$ACC_FEATS" "$ACC_RECORDED" "${COVFILE:-}" "$ACC_SCOPE" \
-            "$WORK" "$ACC_MATRIX_DONE" "$ACC_RECEIPT_WRITTEN" "$$" <<'PYACC' 2>>"$LOG"
+            "$WORK" "$ACC_MATRIX_DONE" "$ACC_RECEIPT_WRITTEN" "$$" "${BUILDTAG:-}" <<'PYACC' 2>>"$LOG"
 import json, os, sys, time
 (out, state, rc, stop_at, why, phase, t0, run, pv, head, attempt, cells, mrc, camp, skip, feats, recorded, cov, scope,
- work, matrix_done, receipt_written, pid) = sys.argv[1:24]
+ work, matrix_done, receipt_written, pid, build) = sys.argv[1:25]
 mres = os.path.join(camp, "matrix", "matrix-result.json") if camp else ""
 docs = {}
 for key, path, wanted in (("matrix", mres, matrix_done == "1"), ("receipt", cov, receipt_written == "1")):
@@ -160,7 +160,8 @@ ended = state == "ended"
 doc = {"schema": 1, "state": state, "pid": int(pid), "phase": phase,
        "result": ("complete" if rc == "0" else "incomplete-or-failed") if ended else None,
        "exit_code": int(rc) if rc else None, "stopped": {"at": stop_at, "why": why} if stop_at else None,
-       "attempt": attempt or None, "package_run": run or None, "package_version": pv or None, "built_from": head or None,
+       "attempt": attempt or None, "package_run": run or None, "build": build or None, "package_version": pv or None,
+       "built_from": head or None,
        "started_utc": t0, "written_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
        "cells_planned": cells.split(),
        "matrix": {"exit_code": int(mrc) if mrc else None, "result": docs["matrix"]},
@@ -214,6 +215,22 @@ case "$WF" in
   *) die "run $RUN is workflow '$WF', not release-package - only that workflow builds a full setup tree ('build' is an overlay)" ;;
 esac
 [ "$CONCL" = success ] || die "run $RUN concluded '$CONCL' - acceptance runs only against a green release build"
+
+# ---- 1b. THE BUILD TAG: the identity of what this run accepts ------------------------------------
+# Owner, 2026-11-11: «we are not accepting "head", we accept a precise build». tools/build-tag.sh
+# verifies the run on its own terms (release-package, success, QGA_FAULT_INJECTION=0 in the run's
+# build log, head on origin/main, the agent's version at that head) and creates
+# build-<version>.<run number> LOCALLY, idempotently - never pushed. Every receipt below is named by
+# it and merged per module, so a harness or documentation commit between two runs no longer splits
+# one build's coverage across two files (docs/ADR-acceptance.md section 7). `git rev-parse HEAD`
+# appears here exactly once, as the harness's own provenance on each verdict - never as a name - and
+# it is read NOW, at the start: the checkout that launched the run is the one that ran it, and a
+# commit landing while the run is in flight (allowed: it invalidates nothing) must not be recorded
+# as the harness of verdicts it never produced.
+BUILDTAG=$(tools/build-tag.sh create "$RUN" 2>>"$LOG") \
+  || die "run $RUN has no build tag: tools/build-tag.sh refused (see $LOG) - nothing is accepted without the identity of what it is"
+HARNESS=$(git rev-parse HEAD 2>/dev/null)
+say "build: $BUILDTAG (commit ${HEAD:0:12}); harness ${HARNESS:0:12}"
 
 # ---- 2. artifacts ------------------------------------------------------------------------------
 if [ ! -d "$WORK/dl/qwt-improved-setup" ]; then
@@ -742,22 +759,31 @@ ACC_PHASE=receipt; _acc_json running
 # re-runs the same check) refuses the cut until they are re-run; a cell with a FAIL row - the product -
 # is covered (it ran and measured) with result=fail, and the acceptance RECORD refuses the cut (Jev
 # 2026-10-13: covered-with-fail-flag 0.94).
-COVHEAD=$(git rev-parse HEAD 2>/dev/null | cut -c1-12)
-if [ -n "$COVHEAD" ]; then
-  COVFILE="scratchpad/gate-coverage-$COVHEAD.json"
-  mkdir -p scratchpad
-  GSBASE=$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD^ 2>/dev/null || git rev-list --max-parents=0 HEAD 2>/dev/null)
+# THE RECEIPT IS NAMED BY THE BUILD TAG, and this run's verdicts MERGE into it per module through
+# tools/coverage-receipt.py's one rule (docs/ADR-acceptance.md section 7). Until 2026-11-11 the name
+# was `git rev-parse HEAD` read HERE, at the end of a multi-hour run - the harness checkout, not the
+# build - and the range ended at HEAD. Owner: «we are not accepting "head", we accept a precise
+# build». The harness sha read at step 1b is passed only as --harness: the provenance of each verdict,
+# which the merge rule reads to let an instrument fix take effect and to refuse a no-change re-run from
+# turning a product-fail green. The range is the PACKAGE's: the newest release tag before the BUILD
+# commit, to the build commit - the same range tools/cut-release.sh and tools/hooks/release-cut-gate.sh compute.
+COVFILE="scratchpad/gate-coverage-$BUILDTAG.json"
+mkdir -p scratchpad
+GSBASE=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$HEAD^" 2>/dev/null || git rev-list --max-parents=0 "$HEAD" 2>/dev/null)
+GSRANGE="${GSBASE:-?}..$HEAD"
+{
   # package-verify is rc 0 here by construction: step 3 dies on any other outcome before a guest is touched.
   # shellcheck disable=SC2086  # FEATRCS and FEATLEDGERS are lists of --feature/--feature-ledger words
-  if python3 tools/coverage-receipt.py --out "$COVFILE" --campaign "$CAMP" --cells "$CELLS" ${FEATRCS:-} ${FEATLEDGERS:-} \
-       --package-verify-rc 0 --package-run "$RUN" --built-from "$HEAD" --range "${GSBASE:-?}..$(git rev-parse HEAD)" >>"$LOG" 2>&1; then
+  if python3 tools/coverage-receipt.py --out "$COVFILE" --build "$BUILDTAG" --campaign "$CAMP" --cells "$CELLS" ${FEATRCS:-} ${FEATLEDGERS:-} \
+       --package-verify-rc 0 --package-run "$RUN" --built-from "$HEAD" --range "$GSRANGE" \
+       --harness "$HARNESS" --run "$CAMP" --attempt "${ACCEPT_ATTEMPT:-}" >>"$LOG" 2>&1; then
     say "coverage receipt: $COVFILE - $(python3 -c "import json,sys;r=json.load(open(sys.argv[1]));print('covered %d, product_fail %s, instrument_fail %s, not_run %s' % (len(r['suites']), r['product_fail'] or '-', r['instrument_fail'] or '-', r['not_run'] or '-'))" "$COVFILE")"
     ACC_RECEIPT_WRITTEN=1
   else
     say "FAIL  coverage receipt could not be written (see $LOG) - no receipt, no cut"; MRC=1
   fi
   if [ -f tools/gate-scope.py ] && [ -s "$COVFILE" ]; then
-    if [ -n "$GSBASE" ] && python3 tools/gate-scope.py check "$COVFILE" "$GSBASE..$(git rev-parse HEAD)" >>"$LOG" 2>&1; then
+    if [ -n "$GSBASE" ] && python3 tools/gate-scope.py check "$COVFILE" "$GSRANGE" >>"$LOG" 2>&1; then
       say "PASS  gate scope: this run covers what the diff requires"; ACC_SCOPE=pass
     else
       # THIS SCRIPT'S EXIT CODE GRADES WHAT THIS SCRIPT RAN. On a FULL plan the receipt it just wrote
@@ -768,7 +794,7 @@ if [ -n "$COVHEAD" ]; then
       # could not end green. So: a required suite of OUR OWN repertoire (package-verify, a cell in
       # $CELLS, a feature test) missing from the receipt is a FAIL here - it ran here or nowhere; one
       # outside it is named and left to the remainder, and the cut still refuses until that has run.
-      _mine=$(python3 - "$COVFILE" "$GSBASE..$(git rev-parse HEAD)" "$CELLS" <<'PYSCOPE' 2>>"$LOG"
+      _mine=$(python3 - "$COVFILE" "$GSRANGE" "$CELLS" <<'PYSCOPE' 2>>"$LOG"
 import json, subprocess, sys
 cov, rng, cells = sys.argv[1], sys.argv[2], sys.argv[3].split()
 req = json.loads(subprocess.run([sys.executable, 'tools/gate-scope.py', 'required', rng, '--json'],
@@ -797,7 +823,7 @@ PYSCOPE
       fi
     fi
   fi
-fi
+}
 
 say "=== release acceptance for $PV: $( [ $MRC -eq 0 ] && echo COMPLETE || echo INCOMPLETE/FAILED ) ==="
 say "setup: $SETUP"

@@ -3,8 +3,8 @@
 # that makes a FULL gate reachable at all.
 #
 # WHY THIS EXISTS, MEASURED 2026-10-08. `tools/release-acceptance.sh` writes
-# scratchpad/gate-coverage-<head>.json naming package-verify, its cells, and the three feature tests
-# - twelve suites. `tools/gate-scope.py required` asks for EIGHTEEN whenever the diff touches an
+# scratchpad/gate-coverage-<build tag>.json naming package-verify, its cells, and the three feature
+# tests - twelve suites. `tools/gate-scope.py required` asks for EIGHTEEN whenever the diff touches an
 # unmapped path, which is most releases. A twelve-suite receipt was fed to `gate-scope.py check` and
 # refused, correctly, naming the six with no producer:
 #     failproof-gates  failproof-faultinject  gate-preflight  p3a-etw-gate  toast-hold-test  log-sweep
@@ -61,10 +61,24 @@ done
 [ -n "$VM11" ] || { echo "ERROR: --vm11 <win11 subject> is required - there is no default target" >&2; exit 2; }
 [ -n "$OS11" ] || { echo "ERROR: --os11 <label, the golden is <label>-qwt> is required - there is no default target" >&2; exit 2; }
 
-HEAD=$(git rev-parse HEAD) || exit 2
-HEAD12=$(printf '%s' "$HEAD" | cut -c1-12)
-COVFILE="scratchpad/gate-coverage-$HEAD12.json"
-OUTDIR="$HOME/qwt-accept/remainder-$HEAD12"
+# THE IDENTITY IS THE BUILD TAG OF --run, NEVER HEAD (docs/ADR-acceptance.md section 7; owner
+# 2026-11-11: «we are not accepting "head", we accept a precise build»). Until this date COVFILE and
+# OUTDIR were named by `git rev-parse HEAD` - the harness checkout - so a harness commit between the
+# campaign and this gate put the two halves of one build's coverage in two files, and the merge below
+# wrote the harness sha as `built_from`. The tag is resolved offline when it exists and created
+# (verified, idempotent, local) when it does not - the same tool the acceptance uses first. A DRY run
+# creates nothing: without a tag every variable below (range, receipt, outdir) is underived, so it
+# says so and stops rather than print a chain about a build it cannot name.
+BUILDTAG=$(tools/build-tag.sh resolve "$RUN" 2>/dev/null) || {
+  if [ "$DRY" = 1 ]; then
+    echo "ERROR: no local build tag names run $RUN and a dry run creates none - run 'tools/build-tag.sh create $RUN' first" >&2; exit 2
+  fi
+  BUILDTAG=$(tools/build-tag.sh create "$RUN") || exit 2
+}
+BUILDSHA=$(git rev-parse --verify --quiet "refs/tags/${BUILDTAG}^{commit}") || exit 2
+HARNESS=$(git rev-parse HEAD) || exit 2   # the provenance of this run's verdicts, recorded per module - never a name
+COVFILE="scratchpad/gate-coverage-$BUILDTAG.json"
+OUTDIR="$HOME/qwt-accept/remainder-$BUILDTAG"
 WORK="$OUTDIR/work"
 DL="$OUTDIR/dl"
 SETUP="$DL/qwt-improved-setup"
@@ -118,13 +132,16 @@ run_it() {           # run_it <label> <cmd...>  - never `cmd | tee`, which repor
 }
 
 mkdir -p "$OUTDIR" "$WORK" "$DL" || exit 2
-say "=== gate remainder for run $RUN at HEAD $HEAD12 (dry=$DRY) ==="
+say "=== gate remainder for $BUILDTAG (run $RUN, built from ${BUILDSHA:0:12}; harness ${HARNESS:0:12}; dry=$DRY) ==="
 
-# ---- what the diff actually requires, and which of it is still missing -------------------------
-BASE=$(git describe --tags --abbrev=0 --match 'v4.3.*' 2>/dev/null || echo "")
-[ -n "$BASE" ] || { say "ERROR: no v4.3.* tag to diff against"; exit 2; }
-say "range: $BASE..$HEAD12"
-REQ=$(python3 tools/gate-scope.py required "$BASE..$HEAD" 2>/dev/null \
+# ---- what the PACKAGE's diff requires, and which of it is still missing --------------------------
+# The range is the newest release tag before the BUILD commit, to the build commit - the same one
+# tools/cut-release.sh and tools/hooks/release-cut-gate.sh compute. It was <newest v4.3 tag at HEAD>..HEAD.
+BASE=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${BUILDSHA}^" 2>/dev/null || git rev-list --max-parents=0 "$BUILDSHA" 2>/dev/null)
+[ -n "$BASE" ] || { say "ERROR: no release tag before ${BUILDSHA:0:12} to diff against"; exit 2; }
+RANGE="${BASE}..${BUILDSHA}"
+say "range: $BASE..${BUILDSHA:0:12} (the package's diff)"
+REQ=$(python3 tools/gate-scope.py required "$RANGE" 2>/dev/null \
         | sed -n 's/^    \([a-z0-9][a-z0-9-]*\) .*/\1/p' | sort -u)
 [ -n "$REQ" ] || { say "ERROR: gate-scope named no suites - refusing to guess"; exit 2; }
 say "gate-scope requires: $(echo $REQ | tr '\n' ' ')"
@@ -133,7 +150,7 @@ if [ -n "$ONLY" ]; then
     say "--only $ONLY: running that suite alone; every other required suite is left UNRUN and this"
     say "          receipt therefore cannot satisfy the full gate floor"
   else
-    echo "ERROR: --only $ONLY is not in the required scope for $BASE..$HEAD, so running it could not" >&2
+    echo "ERROR: --only $ONLY is not in the required scope for $RANGE, so running it could not" >&2
     echo "       contribute to this receipt. Required: $(echo $REQ | tr '\n' ' ')" >&2
     exit 2
   fi
@@ -389,8 +406,11 @@ ready() {             # ready <vm>
 
 if need gate-preflight; then
   settle "$VM11"; ready "$VM11"
+  # NOT A PRODUCT VERDICT: a subject that could not be made the candidate measured nothing, so the
+  # suite is UNCOVERED (instrument-fail in the receipt) - a product-fail here would be a MEASURED
+  # verdict that the merge rule keeps against a later pass from the same harness.
   if ! make_candidate "$VM11"; then
-    say "FAIL  gate-preflight (subject is not the candidate)"; FAILED="$FAILED gate-preflight"
+    say "UNCOVERED  gate-preflight (subject is not the candidate - nothing measured)"; UNCOVERED="$UNCOVERED gate-preflight"
   else
   # <vm> <hex-bits>: the preflight bit-mask the suite documents; 0 exercises the no-fault path.
   run_it gate-preflight bash mgmt/harness/gate-preflight.sh "$VM11" 0; note $? gate-preflight
@@ -401,16 +421,16 @@ if need p3a-etw-gate; then
   # toastfire.exe comes from the `build` workflow, NOT from release-package: it is a TEST helper
   # that fires toasts and has no business shipping inside the product. p3a-etw-gate looks for it in
   # the setup tree and then accepts a TOASTFIRE= override; on the first non-dry run it found neither
-  # and died "FATAL toastfire.exe not in <setup>". So the gate fetches it from the build run at this
-  # same HEAD and passes it explicitly.
+  # and died "FATAL toastfire.exe not in <setup>". So the gate fetches it from the build run at the
+  # BUILD commit - the package's own commit, not the harness checkout's - and passes it explicitly.
   TF="${TOASTFIRE:-}"
   if [ -z "$TF" ]; then
     TFDIR="$DL/toastfire"
     if [ "$DRY" = 1 ]; then
-      say "INTEND[dry] download toastfire from the build run at HEAD ${HEAD:0:12}"
+      say "INTEND[dry] download toastfire from the build run at the build commit ${BUILDSHA:0:12}"
     else
       BRUN=$(gh run list -w build -L 20 --json databaseId,headSha,conclusion \
-               -q "[.[]|select(.conclusion==\"success\" and (.headSha|startswith(\"${HEAD:0:12}\")))][0].databaseId" 2>/dev/null)
+               -q "[.[]|select(.conclusion==\"success\" and (.headSha|startswith(\"${BUILDSHA:0:12}\")))][0].databaseId" 2>/dev/null)
       if [ -n "$BRUN" ] && [ "$BRUN" != "null" ]; then
         # ARTIFACT `gui-agent-package`, NOT `toastfire`. This asked for -n toastfire, which is not an
         # artifact that run publishes (it has idd-driver-package, gui-agent-package and
@@ -422,7 +442,7 @@ if need p3a-etw-gate; then
         TF=$(find "$TFDIR" -iname 'toastfire.exe' 2>/dev/null | head -1)
       fi
       [ -n "$TF" ] && say "    toastfire from build run $BRUN: $TF" \
-                   || say "    WARN no toastfire.exe for HEAD ${HEAD:0:12} - p3a-etw-gate will refuse, as it should"
+                   || say "    WARN no toastfire.exe for the build commit ${BUILDSHA:0:12} - p3a-etw-gate will refuse, as it should"
     fi
   fi
   settle "${OS11}-p3a"
@@ -475,7 +495,7 @@ else SKIPPED="$SKIPPED toast-hold-test"; fi
 if need log-sweep; then
   settle "$VM11"; ready "$VM11"
   if ! make_candidate "$VM11"; then
-    say "FAIL  log-sweep (subject is not the candidate)"; FAILED="$FAILED log-sweep"
+    say "UNCOVERED  log-sweep (subject is not the candidate - nothing measured)"; UNCOVERED="$UNCOVERED log-sweep"
   else
   # LAST, deliberately: it reads what every suite above wrote into the guest's logs.
   # DECLARE THE NOTIFICATIONS THE ACCEPTANCE SUITES FIRE ON PURPOSE, or this sweep counts them as
@@ -581,57 +601,37 @@ say "uncovered:$UNCOVERED"
 say "skipped:$SKIPPED"
 
 # ---- merge into the receipt the release-cut gate reads -----------------------------------------
-# Only PASSED suites are added, and an existing receipt is never shrunk: this is a merge, so the
-# cells recorded by release-acceptance.sh survive.
+# THROUGH tools/coverage-receipt.py AND ITS ONE MERGE RULE (docs/ADR-acceptance.md section 7). Until
+# 2026-11-11 this block was an inline python of its own: it unioned `suites`, wrote the HARNESS sha as
+# `built_from`, and recorded nothing for a suite that failed. Every suite that RAN is now recorded
+# with its class - PASSED -> pass, FAILED -> product-fail (measured: the product failed), UNCOVERED ->
+# instrument-fail (nothing measured) - and the rule decides what the receipt keeps: a measured verdict
+# stands against an instrument-fail or a not-run; a measured verdict replaces an unmeasured one; a
+# measured verdict replaces an earlier measured one ONLY from a different harness commit, so an
+# instrument fix takes effect and a no-change re-run cannot turn a product-fail green. A suite this
+# run SKIPPED is not named, and the receipt keeps whatever it held for it. ONLY is passed so a receipt
+# ASSEMBLED PIECEMEAL says so under narrowed_runs (measured 2026-10-27: without it the receipt could
+# not tell one campaign from four one-suite runs settled differently).
 if [ "$DRY" = 1 ]; then
   say "INTEND[dry] merge into $COVFILE:$INTENDED"
 else
-  # ONLY is passed in so a receipt ASSEMBLED PIECEMEAL says so. The merge has always UNIONED with
-  # whatever the file held, so a head can reach the floor across several invocations; --only does not
-  # change that but makes it cheap, and a reader of the receipt could not otherwise tell a single
-  # coherent campaign from four one-suite runs settled differently. Measured 2026-10-27: without this
-  # the receipt records only the suite names.
-  python3 - "$COVFILE" "$RUN" "$HEAD12" "$PASSED" "$ONLY" "$UNCOVERED" <<'PYMERGE'
-import json, os, sys
-out, run, head, passed = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4].split()
-only = sys.argv[5] if len(sys.argv) > 5 else ""
-uncovered = sys.argv[6].split() if len(sys.argv) > 6 else []
-rec = {}
-if os.path.exists(out):
-    try:
-        rec = json.load(open(out, encoding="utf-8"))
-    except ValueError:
-        rec = {}
-suites = sorted(set(rec.get("suites") or []) | set(passed))
-rec["suites"] = suites
-# THE RECEIPT ALREADY HAS A CLASS FOR A SUITE THAT COULD NOT MEASURE, and this merge never wrote
-# it. tools/coverage-receipt.py:25 defines `"instrument_fail": [...] (NOT in suites - uncovered)`
-# and its own note says "instrument-fail is uncovered and refuses the cut (plan section 6)", so
-# the vocabulary has been here all along - only `suites` was being merged, which left the class to
-# a log line that scrolls away. tools/gate-scope.py check reads ONLY cov["suites"] (:309), so
-# recording this changes no gate decision: the cut still refuses because the suite is absent from
-# `suites`, which is exactly how this run already refused.
-# A suite that passes LATER must LEAVE this list, or the record contradicts itself across a
-# narrowed run - a receipt is a record, not an intention (docs/ADR-acceptance.md section 4).
-if uncovered or rec.get("instrument_fail"):
-    rec["instrument_fail"] = sorted((set(rec.get("instrument_fail") or []) | set(uncovered)) - set(suites))
-rec.setdefault("package_run", run)
-rec.setdefault("built_from", head)
-if only:
-    narrowed = sorted(set(rec.get("narrowed_runs") or []) | {s for s in passed if s == only})
-    if narrowed:
-        rec["narrowed_runs"] = narrowed
-rec["note"] = ("merged by tools/gate-remainder.sh; names only suites seen to pass. "
-               + (("suites in narrowed_runs came from --only invocations, not one campaign. ")
-                  if rec.get("narrowed_runs") else "")
-               + (rec.get("note") or ""))[:400]
-json.dump(rec, open(out, "w"), indent=1)
-print("receipt now names %d suite(s): %s" % (len(suites), " ".join(suites)))
-PYMERGE
+  MODS=""
+  for s in $PASSED;    do MODS="$MODS --module $s=pass"; done
+  for s in $FAILED;    do MODS="$MODS --module $s=product-fail"; done
+  for s in $UNCOVERED; do MODS="$MODS --module $s=instrument-fail"; done
+  if [ -z "$MODS" ]; then
+    say "nothing ran, so nothing is merged into $COVFILE"
+  else
+    # shellcheck disable=SC2086  # MODS is a list of --module words
+    python3 tools/coverage-receipt.py --out "$COVFILE" --build "$BUILDTAG" --package-run "$RUN" ${FIRUN:+--fi-run "$FIRUN"} \
+        --fi-module failproof-gates --fi-module failproof-faultinject --range "$RANGE" --harness "$HARNESS" --run "$WORK" \
+        ${ONLY:+--narrowed "$ONLY"} $MODS 2>&1 | tee -a "$LOG"
+    [ "${PIPESTATUS[0]}" = 0 ] || say "ERROR: the receipt was not written (tools/coverage-receipt.py refused, above) - the cut cannot read this run"
+  fi
   say "--- does the receipt now satisfy the gate?"
-  python3 tools/gate-scope.py check "$COVFILE" "$BASE..$HEAD" 2>&1 | tee -a "$LOG"
+  python3 tools/gate-scope.py check "$COVFILE" "$RANGE" 2>&1 | tee -a "$LOG"
   CHK=${PIPESTATUS[0]}
-  if [ "$CHK" = 0 ]; then say "GATE SATISFIED for $HEAD12"; else say "GATE NOT YET SATISFIED (exit $CHK)"; fi
+  if [ "$CHK" = 0 ]; then say "GATE SATISFIED for $BUILDTAG"; else say "GATE NOT YET SATISFIED for $BUILDTAG (exit $CHK)"; fi
 fi
 
 # THE EXIT CONTRACT IS DELIBERATELY UNCHANGED: every input that exited 1 before still exits 1,

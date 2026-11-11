@@ -1,8 +1,19 @@
 #!/bin/bash
 # campaign-full.sh - FULL acceptance, end to end, as ONE command that owns no judgement of its own.
 #
-#   mgmt/harness/campaign-full.sh            # resolves everything from HEAD
-#   DRY=1 mgmt/harness/campaign-full.sh      # resolve, check and print the chain; touch no guest
+#   BUILD=build-4.3.41.1266 FI=<fi-run> mgmt/harness/campaign-full.sh   # the build tag names the package
+#   PKG=<release-package run> FI=<fi-run> mgmt/harness/campaign-full.sh  # the run; its build tag is created first
+#   DRY=1 BUILD=... FI=... mgmt/harness/campaign-full.sh                 # resolve, check and print the chain; touch no guest
+#
+# THE BUILD IS NAMED, NEVER DISCOVERED FROM HEAD. Owner, 2026-11-11: «we are not accepting "head", we
+# accept a precise build»; «i asked you to use fucking tags, you made tags and now you do not use it!».
+# Until this date this script "resolved everything from HEAD": it listed the successful release-package
+# runs whose head was HEAD and refused when there were none, so a documentation commit after the build
+# demanded a 20-minute rebuild to prove nothing, and the receipt it checked at the end was the newest
+# gate-coverage-*.json by mtime. tools/build-tag.sh creates build-<version>.<run number> for the named
+# run BEFORE ANY SUITE (verified: release-package, success, QGA_FAULT_INJECTION=0 in the run's own log,
+# head on origin/main), every receipt is named by that tag, and the harness commit appears only as the
+# provenance of each verdict (docs/ADR-acceptance.md section 7).
 #
 # WHY THIS EXISTS (owner, 2026-10-22: "run full acceptance when build is green. make sure everything
 # is mechanized first"). tools/acceptance-plan.py plans THREE cells and mgmt/harness/campaign-run.sh
@@ -16,7 +27,8 @@
 #     QGAFAULT in reference/gui-agent.exe) returned 0 on BOTH, which reads as "the flag did nothing".
 #     The workflow names the real check itself and carries the scar: `inputs.fault_injection == true`
 #     was always false because a dispatch input arrives as a STRING, so the build prints
-#     QGA_FAULT_INJECTION=0/1 and that is the only thing that settles it. Proven here, never ordered.
+#     QGA_FAULT_INJECTION=0/1 and that is the only thing that settles it. Proven, never ordered - by
+#     tools/build-tag.sh (create proves =0 for the package; fi-flag proves =1 for FI), one copy.
 #   * REQUIRED CI THAT CANNOT RUN ON THIS BRANCH. campaign-preflight refuses with 14 unless every
 #     required workflow is green for the sha. build.yml and test.yml run on push to MAIN only, so on
 #     a feature branch they are "DUE for this sha (its paths matched) but branch-filtered" and
@@ -60,13 +72,24 @@ job_init "campaign-full"
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 2
 
 DRY="${DRY:-}"
-BRANCH="${BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
-HEAD_SHA="$(git rev-parse HEAD)"
-SHORT="${HEAD_SHA:0:12}"
+BRANCH="${BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"   # where a branch-filtered CI workflow is dispatched; never an identity
+# ---- THE BUILD, NAMED (see the header) ------------------------------------------------------------
+# BUILD=<tag> names the build; PKG=<run> names the run and is turned into its tag. tools/build-tag.sh
+# create is idempotent: for a tag that exists it re-verifies that it points at the run's head and names
+# that run, and refuses otherwise. Both routes end in the same tag, the same build commit, and the same
+# receipt. These refusals print to stderr: OUT and log() do not exist until the build is known.
+if [ -n "${BUILD:-}" ]; then
+  PKG=$(tools/build-tag.sh run "$BUILD") || { echo "REFUSED: $BUILD is not a build tag this repo holds" >&2; exit 2; }
+fi
+[ -n "${PKG:-}" ] || { echo "REFUSED: name the build - BUILD=<build tag> or PKG=<release-package run id>, with FI=<fault-injection run id>" >&2; exit 2; }
+BUILDTAG=$(tools/build-tag.sh create "$PKG") || { echo "REFUSED: run $PKG has no build tag - tools/build-tag.sh refused, above" >&2; exit 2; }
+[ -z "${BUILD:-}" ] || [ "$BUILD" = "$BUILDTAG" ] || { echo "REFUSED: BUILD=$BUILD, but run $PKG's build tag is $BUILDTAG" >&2; exit 2; }
+PKG_SHA=$(git rev-parse --verify --quiet "refs/tags/${BUILDTAG}^{commit}") || exit 2
+SHORT="${PKG_SHA:0:12}"   # the BUILD commit, short - every "for $SHORT" below is about the build
 # The remainder's three targets. REQUIRED by gate-remainder (lint L10 - no default targets inside a
 # harness), so they are named HERE, in one place, exactly as campaign-run.sh names the entry images.
 : "${VM10:=win10-acc}" "${VM11:=win11-acc}" "${OS11:=win11r}"
-OUT="${OUT:-$HOME/qwt-accept/campaign-full-$SHORT}"
+OUT="${OUT:-$HOME/qwt-accept/campaign-full-$BUILDTAG}"
 # A contaminated subject is refused BEFORE any work: this script's default output dir carries no
 # run-id, so a second attempt would otherwise append to the first attempt's artefacts and be read
 # back as one run. Pass a fresh outdir to run again.
@@ -74,7 +97,7 @@ declare -F attempt_dir >/dev/null 2>&1 || . "$(dirname "${BASH_SOURCE[0]}")/prim
 attempt_dir "$OUT" || exit 1
 
 mkdir -p "$OUT" || exit 2
-log(){ printf '%s campaign-full[%s] %s\n' "$(date -u '+%H:%M:%S')" "$SHORT" "$*" | tee -a "$OUT/chain.log"; }
+log(){ printf '%s campaign-full[%s] %s\n' "$(date -u '+%H:%M:%S')" "$BUILDTAG" "$*" | tee -a "$OUT/chain.log"; }
 die(){ log "REFUSED: $*"; exit 2; }
 
 # ---- THE RIG SETTLE, ONE DEFINITION, CALLED AT BOTH STEP BOUNDARIES -----------------------------
@@ -115,66 +138,29 @@ settle_the_rig(){
   return 0
 }
 
-log "head $HEAD_SHA on $BRANCH; evidence in $OUT"
+log "build $BUILDTAG (commit $PKG_SHA, run $PKG) on branch $BRANCH; harness $(git rev-parse HEAD 2>/dev/null | cut -c1-12); evidence in $OUT"
 
-# ---- 1. the two packages, PROVEN -----------------------------------------------------------------
-# A run is the FI build iff its own log printed QGA_FAULT_INJECTION=1. Nothing else is accepted:
-# not dispatch order, not the display title (identical), not a grep of the shipped binary.
-# PKG/FI may be NAMED by the operator, and are then PROVEN exactly as discovered ones are - a named
-# pair is not a trusted pair. This exists because the package's commit and HEAD legitimately differ:
-# campaign-preflight.sh's own rule is "built from <sha>, carries every fix under test, NO PRODUCT
-# DRIFT since", so a harness-only commit after the build does not invalidate the package, and
-# rebuilding twice for it would cost 20 minutes to prove nothing. That judgement belongs to the
-# preflight; this script only proves which run is which, and refuses to GUESS a pair from an older
-# sha - if HEAD has none it names the newest proven pair for the operator to pass deliberately.
-resolve_pkgs(){
-  local ids id v
-  if [ -n "${PKG:-}" ] && [ -n "${FI:-}" ]; then
-    for id in "$PKG" "$FI"; do
-      v=$(gh run view "$id" --log 2>/dev/null | grep -aoE 'QGA_FAULT_INJECTION=[01]' | sort -u | tail -1)
-      case "$id:$v" in
-        "$PKG:QGA_FAULT_INJECTION=0") log "  named run $PKG verified as the ORDINARY package ($v)" ;;
-        "$FI:QGA_FAULT_INJECTION=1")  log "  named run $FI verified as the FAULT-INJECTION package ($v)" ;;
-        *) die "named run $id does not prove its role: its log says '${v:-nothing about injection}' - PKG must print QGA_FAULT_INJECTION=0 and FI must print =1" ;;
-      esac
-    done
-    return 0
-  fi
-  ids=$(gh run list --branch "$BRANCH" --workflow=release-package.yml --limit 12 \
-        --json databaseId,headSha,status,conclusion \
-        --jq ".[] | select(.headSha==\"$HEAD_SHA\" and .status==\"completed\" and .conclusion==\"success\") | .databaseId" 2>/dev/null)
-  [ -n "$ids" ] || die "no successful release-package run at $SHORT - dispatch it (gh workflow run release-package.yml --ref $BRANCH), and a second one with -f fault_injection=true"
-  PKG=""; FI=""
-  for id in $ids; do
-    v=$(gh run view "$id" --log 2>/dev/null | grep -aoE 'QGA_FAULT_INJECTION=[01]' | sort -u | tail -1)
-    case "$v" in
-      QGA_FAULT_INJECTION=0) [ -n "$PKG" ] || PKG="$id"; log "  run $id is the ORDINARY package (its log says $v)" ;;
-      QGA_FAULT_INJECTION=1) [ -n "$FI"  ] || FI="$id";  log "  run $id is the FAULT-INJECTION package (its log says $v)" ;;
-      *) log "  run $id: its log does not state QGA_FAULT_INJECTION - NOT used for either role" ;;
-    esac
-  done
-  [ -n "$PKG" ] || die "no run at $SHORT proved itself the ordinary package (QGA_FAULT_INJECTION=0)"
-  [ -n "$FI" ]  || die "no run at $SHORT proved itself the fault-injection package (QGA_FAULT_INJECTION=1) - failproof-gates and failproof-faultinject cannot run on an ordinary package, so a FULL gate is unreachable without it; dispatch release-package.yml with -f fault_injection=true"
-}
-resolve_pkgs
-# THE PACKAGE IS VERIFIED AGAINST ITS OWN COMMIT, taken from the RUN - not from HEAD and not from
-# the tree's own MANIFEST. Measured in this chain's first dry run: it printed
-# `verify-release-package.sh --commit <HEAD>` for a tree built from an earlier commit, which would
-# have failed a perfectly good package. HEAD and the package's commit differ legitimately whenever a
-# harness-only commit follows the build; campaign-preflight owns "no product drift since". Reading
-# the sha from the run rather than from MANIFEST.json keeps the check non-circular: the tree must
-# match something stated outside it.
-PKG_SHA=$(gh run view "$PKG" --json headSha --jq .headSha 2>/dev/null)
-[ -n "$PKG_SHA" ] || die "could not read the head sha of run $PKG - the package cannot be verified against an unknown commit"
-log "packages: ordinary=$PKG (built from ${PKG_SHA:0:12}) fault-injection=$FI"
-if [ "$PKG_SHA" != "$HEAD_SHA" ]; then
-  drift=$(git diff --name-only "$PKG_SHA..$HEAD_SHA" -- agent guest packaging driver tools/notifhost 2>/dev/null)
-  if [ -n "$drift" ]; then
-    log "PRODUCT PATHS changed since the package was built:"; printf '    %s\n' $drift | tee -a "$OUT/chain.log"
-    die "the package at ${PKG_SHA:0:12} does not carry HEAD's product changes - rebuild release-package (and the fault_injection variant) at $SHORT"
-  fi
-  log "  HEAD is ${SHORT} but no PRODUCT path changed since ${PKG_SHA:0:12} - the package is still the thing under test (campaign-preflight re-checks this)"
-fi
+# ---- 1. the FI package, PROVEN -------------------------------------------------------------------
+# A run is the FI build iff its own log printed QGA_FAULT_INJECTION=1. Nothing else is accepted: not
+# dispatch order, not the display title (identical), not a grep of the shipped binary. The ordinary
+# package was proven =0 by tools/build-tag.sh create above; the same tool reads the FI run's log here
+# (ONE implementation of the proof: tools/build-tag.sh fi-flag). The FI run must have been built from
+# the SAME commit as the build: failproof-gates and failproof-faultinject grade the injector build as
+# a stand-in for the package, which holds only when both came from one commit.
+[ -n "${FI:-}" ] || die "FI=<run id> is required: failproof-gates and failproof-faultinject cannot run on an ordinary package, so a FULL gate is unreachable without it - dispatch release-package.yml at $SHORT with -f fault_injection=true"
+fiflag=$(tools/build-tag.sh fi-flag "$FI") || die "run $FI does not prove its role: its log does not state exactly one QGA_FAULT_INJECTION value - FI must print =1"
+[ "$fiflag" = 1 ] || die "run $FI is not the FAULT-INJECTION package: its log reads QGA_FAULT_INJECTION=$fiflag, FI must print =1"
+FI_SHA=$(gh run view "$FI" --json headSha --jq .headSha 2>/dev/null)
+[ "$FI_SHA" = "$PKG_SHA" ] || die "the FI run $FI was built from ${FI_SHA:-<unreadable>}, not from the build's commit $PKG_SHA - its injector would stand in for a different package"
+log "  run $FI verified as the FAULT-INJECTION package (QGA_FAULT_INJECTION=1) at ${FI_SHA:0:12}"
+log "packages: ordinary=$PKG ($BUILDTAG, built from $SHORT) fault-injection=$FI"
+# THE PACKAGE IS VERIFIED AGAINST ITS OWN COMMIT - the one the build tag points at - never HEAD.
+# Measured in this chain's first dry run: it printed `verify-release-package.sh --commit <HEAD>` for a
+# tree built from an earlier commit, which would have failed a perfectly good package.
+# PRODUCT DRIFT between the build and this checkout is the PREFLIGHT's check (mgmt/harness/campaign-
+# preflight.sh, PRODUCT_PATHS derived from release-package.yml's own trigger paths, refusal 13): it
+# COMPARES, it does not identify. The hand-typed five-path list this script carried here until
+# 2026-11-11 disagreed with the derived one (it lacked tools/wgcbroker and tools/qubesdb-read) and is gone.
 
 # ---- 1b. THE INNER TREE MUST BE CLEAN, BEFORE THE CI WAIT ----------------------------------------
 # MEASURED 2026-11-06/07: attempt 1 (21:58) died mid-smoke and left
@@ -215,9 +201,13 @@ if [ -d "$CAMPTREE" ]; then
   fi
 fi
 
-# ---- 2. required CI, green for THIS sha ----------------------------------------------------------
-# ci-state.py names any required workflow that is due but branch-filtered, in those words. Dispatch
-# exactly those, wait, and re-ask - up to twice, because a third round means something else is wrong.
+# ---- 2. required CI, green for the BUILD commit --------------------------------------------------
+# ci-state.py is asked about $SHORT, the build commit - not the checkout's HEAD. It names any required
+# workflow that is due but branch-filtered, in those words. Dispatch exactly those, wait, and re-ask -
+# up to twice, because a third round means something else is wrong. A dispatch runs at the BRANCH tip:
+# that produces a run for the build commit only while the build is that tip, which is the case this
+# loop exists for (a feature branch, built at its head). On main the push itself ran build.yml and
+# test.yml for the build commit, and nothing is dispatched.
 # A RUN THAT HAS NOT FINISHED IS NOT A RED. ci-state.py's own contract is "rc 2 one is still
 # running, or gh could not be read: no verdict yet, never a pass", and it prints every unfinished
 # required run with its id. This loop read only the TRUTHINESS of that exit and then asserted "a
@@ -288,7 +278,7 @@ if [ -n "$DRY" ]; then
   log "  2. PKG=$PKG mgmt/harness/campaign-full.sh's inner campaign-run.sh (preflight -> release-acceptance -> campaign-state)"
   log "  2b. settle the rig again: step 2 leaves its last feature test's guest up - the guests read as serial-rig.sh reads them (admin.vm.List)"
   log "  3. tools/gate-remainder.sh --run $PKG --vm10 $VM10 --vm11 $VM11 --os11 $OS11 --fi-run $FI"
-  log "  4. tools/gate-scope.py check <receipt>"
+  log "  4. tools/gate-scope.py check scratchpad/gate-coverage-$BUILDTAG.json <previous release>..$SHORT"
   exit 0
 fi
 
@@ -377,13 +367,18 @@ log "  gate-remainder rc=$grc: $(grep -aE '\] (passed|failed|uncovered|skipped):
       | sed 's/^\[[0-9:]*\] //' | tr '\n' ' ' | cut -c1-300)"
 
 # ---- 7. the receipt must satisfy its own floor ---------------------------------------------------
-log "step 4/4: does the receipt cover what the gate requires?"
-RECEIPT=$(ls -t scratchpad/gate-coverage-*.json 2>/dev/null | head -1)
-if [ -n "$RECEIPT" ]; then
-  python3 tools/gate-scope.py check "$RECEIPT" > "$OUT/gate-check.out" 2>&1; srd=$?
+# THE RECEIPT FOR THIS BUILD, BY NAME - not the newest gate-coverage-*.json by mtime, which until
+# 2026-11-11 stood here and could be another build's. The range is the PACKAGE's (the newest release
+# tag before the build commit, to it - what tools/cut-release.sh computes), passed explicitly so
+# gate-scope never falls back to a range recorded inside the file.
+log "step 4/4: does the receipt for $BUILDTAG cover what the gate requires?"
+RECEIPT="scratchpad/gate-coverage-$BUILDTAG.json"
+RBASE=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${PKG_SHA}^" 2>/dev/null || git rev-list --max-parents=0 "$PKG_SHA" 2>/dev/null)
+if [ -s "$RECEIPT" ] && [ -n "$RBASE" ]; then
+  python3 tools/gate-scope.py check "$RECEIPT" "${RBASE}..${PKG_SHA}" > "$OUT/gate-check.out" 2>&1; srd=$?
   log "  gate-scope check rc=$srd: $(tail -1 "$OUT/gate-check.out" | cut -c1-150)"
 else
-  log "  [WARN] no scratchpad/gate-coverage-*.json receipt to check"; srd=2
+  log "  [WARN] no receipt at $RECEIPT (or no release tag before $SHORT) - nothing to check"; srd=2
 fi
 
 log "VERDICT, from the artifacts:"

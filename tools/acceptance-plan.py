@@ -4,7 +4,7 @@ this diff, as exact harness invocations with their expected exits and cheapest p
 volume is required. Claude executes the plan and feeds every non-PASS exit to the collector and the verdict wrapper;
 it never chooses cells or invents procedures.
 
-    tools/acceptance-plan.py [--range <base>..<head>] [--out scratchpad/acceptance-plan.json] [--package-run <id>] [--fi-run <id>]
+    tools/acceptance-plan.py [--range <base>..<build>] [--out scratchpad/acceptance-plan.json] [--package-run <id>] [--fi-run <id>]
                              [--setup <dir>] [--vm10 <vm>] [--vm11 <vm>] [--os11 <label>]
                              [--g10 <img>] [--g11 <img>] [--b10 <golden>] [--b11 <golden>] [--f11 <label>]
 
@@ -15,7 +15,9 @@ was not given is written with `targets_missing` and the plan says `ready: false`
 (tools/lint-harness.py L10, owner 2026-09-21).
 
 THE INVOCATIONS ARE THE COMMITTED ONES, verbatim - the same drivers the hooks and the receipt already know:
-  package-verify         tools/verify-release-package.sh --tree <setup> --commit <head>
+  package-verify         tools/verify-release-package.sh --tree <setup> --commit <build commit>
+THE PLAN IS FOR A BUILD, NEVER FOR HEAD (docs/ADR-acceptance.md section 7): the commit and the default range come from
+the package run's own head sha, and the plan records the build tag when tools/build-tag.sh has created it.
   the install cells and  tools/release-acceptance.sh --run <id> --cells "<only the required cells>" (its feature tests
   the feature tests      run as part of it; --skip-features when none is required)
   the six remainder      tools/gate-remainder.sh --run <id> --vm10 --vm11 --os11 [--fi-run] (it computes `need` from
@@ -73,7 +75,7 @@ EXITS_RELEASE_ACCEPTANCE = {"0": "COMPLETE - every cell and feature test passed 
                                  "any other FAIL line is product-fail; the receipt separates them",
                             "2": "refused before any guest was touched (usage, a missing fixture, a stray harness, /tmp too full)"}
 EXITS_GATE_REMAINDER = {"0": "every required remainder suite passed and was merged into the receipt",
-                        "1": "at least one suite failed (its .out under $HOME/qwt-accept/remainder-<head>/work names it; "
+                        "1": "at least one suite failed (its .out under $HOME/qwt-accept/remainder-<build tag>/work names it; "
                              "exit 2/3 inside a suite is INSTRUMENT, exit 1 is FAIL)",
                         "2": "usage or a refused download - nothing ran"}
 EXITS_PACKAGE_VERIFY = {"0": "the package's identity, sums and provenance verify", "other": "FAIL - nothing downstream is meaningful"}
@@ -137,7 +139,7 @@ def _run_head_sha(run_id: str) -> str:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--range", help="base..head (default: the newest v-tag that is an ancestor of HEAD, to HEAD)")
+    ap.add_argument("--range", help="base..build (default: the newest v-tag that is an ancestor of the package run's build commit, to it)")
     # DEFAULT INTO scratchpad/, NOT THE REPO ROOT. This is a generated per-run artefact in a PUBLIC
     # repo and the root is not gitignored, so the old default left a 27 KB internal plan one careless
     # `git add` from being tracked - found sitting there on 2026-10-15, dated two days earlier.
@@ -150,11 +152,11 @@ def main(argv=None) -> int:
         ap.add_argument("--" + t)
     a = ap.parse_args(argv)
 
-    head = git("rev-parse", "HEAD")
-    if not head:
+    if not git("rev-parse", "--show-toplevel"):
         return die("not a git repository: %s" % ROOT)
 
-    # THE COMMIT BEING RELEASED IS THE PACKAGE'S OWN BUILD COMMIT, NOT HEAD.
+    # THE COMMIT BEING RELEASED IS THE PACKAGE'S OWN BUILD COMMIT, NEVER HEAD (docs/ADR-acceptance.md
+    # section 7; owner 2026-11-11: «we are not accepting "head", we accept a precise build»).
     # verify-release-package.sh --commit is compared against MANIFEST.source.driver_repo_commit, so
     # handing it HEAD makes cell 1 fail on provenance the moment HEAD moves - and HEAD moves for a
     # harness commit, a suite, a lint rule, a findings edit, none of which change a shipped byte.
@@ -165,15 +167,35 @@ def main(argv=None) -> int:
     # The provenance this used to pretend to give is already given, twice over and properly, by
     # mgmt/harness/campaign-preflight.sh: the package's commit must be an ANCESTOR of HEAD, and NO
     # product path may have changed since it. Those two are the real guarantee; a string equal to
-    # HEAD was never part of it.
-    pkg_sha = ""
-    if a.package_run:
-        pkg_sha = _run_head_sha(a.package_run)
-    release_sha = pkg_sha or head
+    # HEAD was never part of it. UNTIL 2026-11-11 HEAD WAS STILL THE FALLBACK HERE - `pkg_sha or
+    # head`, and a default range ending at HEAD - so a plan written after a harness commit asked
+    # gate-scope about the harness's diff and told ci-state about the harness's commit. There is no
+    # fallback now: a plan is for a build, and a build the run cannot name is a refusal.
+    pkg_sha = _run_head_sha(a.package_run) if a.package_run else ""
+    if a.package_run and not pkg_sha:
+        return die("the build commit of run %s could not be read from gh - a plan that names the wrong commit is "
+                   "worse than none, and HEAD is not a fallback" % a.package_run)
     rng = a.range
-    if not rng:
-        base = git("describe", "--tags", "--abbrev=0", "--match", "v[0-9]*", "HEAD^") or git("rev-list", "--max-parents=0", "HEAD")
-        rng = "%s..%s" % (base, head)
+    if rng:
+        release_sha = pkg_sha or git("rev-parse", "--verify", "--quiet", rng.split("..")[-1] + "^{commit}")
+        if not release_sha:
+            return die('"%s" does not end in a commit this repo holds - the plan needs the build commit' % rng)
+    elif pkg_sha:
+        base = git("describe", "--tags", "--abbrev=0", "--match", "v[0-9]*", pkg_sha + "^") or git("rev-list", "--max-parents=0", pkg_sha)
+        rng = "%s..%s" % (base, pkg_sha)
+        release_sha = pkg_sha
+    else:
+        return die("a plan is for a BUILD: pass --package-run <release-package run id> (its build commit and range follow "
+                   "from the run) or --range <base>..<build commit>")
+    # The build tag, when the acceptance has already created it (tools/build-tag.sh; offline). Recorded, never required
+    # here: the chain creates it before any suite, and a plan may be written before the chain starts.
+    build_tag = ""
+    if a.package_run:
+        try:
+            bt = subprocess.run([os.path.join(HERE, "build-tag.sh"), "resolve", str(a.package_run)], capture_output=True, text=True, timeout=60)
+            build_tag = bt.stdout.strip() if bt.returncode == 0 else ""
+        except (OSError, subprocess.SubprocessError):
+            build_tag = ""
     req = gate_required(rng)
     if req is None:
         return die("the gate's requirement could not be computed for %s - a plan cannot be written from nothing" % rng)
@@ -199,8 +221,8 @@ def main(argv=None) -> int:
         order += 1
         cells.append({"order": order, "id": cid, "suites": suites, "harness": harness, "command": cmd, "expected_exits": exits,
                       "cheapest_probes": probes, "targets_missing": missing, "note": note,
-                      "logvol": {"required": logvol, "id": "%s-%s" % (cid, head[:8]) if logvol else None,
-                                 "image": "$LOGVOL_DIR/logs-%s-%s.img" % (cid, head[:8]) if logvol else None},
+                      "logvol": {"required": logvol, "id": "%s-%s" % (cid, release_sha[:8]) if logvol else None,
+                                 "image": "$LOGVOL_DIR/logs-%s-%s.img" % (cid, release_sha[:8]) if logvol else None},
                       "on_non_pass": "mgmt/harness/collect-failure.sh <vm> <outdir> \"<reason>\" --since <start> [--logvol <image>|none] --harness-cmd \"<this command>\"; "
                                      "then tools/verdict-jev.py --sweep <report.json>... --snapshot <outdir>/activity-snapshot.json --errors <harness FAIL lines>"})
         blocked.extend("%s: needs %s" % (cid, t) for t in missing)
@@ -273,7 +295,8 @@ def main(argv=None) -> int:
              "runs the suites gate-scope requires and merges only the ones seen to pass; log-sweep runs LAST over the subject", logvol=True)
 
     logvol_required = any(s in GUEST_DRIVING for s in required)   # GUARD:logvol DEFECT: logvol_required = False
-    plan = {"version": 1, "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "range": rng, "head": head,
+    plan = {"version": 1, "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "range": rng,
+            "build": release_sha, "build_tag": build_tag or None,
             "gate": {"full": bool(req.get("full")), "floor": req.get("floor") or "", "unmapped": req.get("unmapped") or [],
                      "changed": req.get("changed") or [], "closure_added": req.get("closure_added") or [],
                      "required": required, "why": {s: (why.get(s) or ["(the full set)"])[:3] for s in required}, "ledger": led},

@@ -314,9 +314,10 @@ fi
 # ---------------------------------------------------------------- gate: the COVERAGE RECEIPT
 # WHY THIS IS HERE (2026-10-30), AND IT IS NOT THAT THE GATE WAS MISSING.
 # tools/hooks/release-cut-gate.sh already enforces exactly this rule. It is a PreToolUse hook that
-# matches the COMMAND TEXT for `gh release create`, `git tag v...` or a push of a v-tag, and
-# refuses unless a receipt for HEAD satisfies tools/gate-scope.py check. It works: handed the
-# literal text it blocks, with the required range and the command to produce the receipt.
+# matches the COMMAND TEXT for `tools/cut-release.sh --run`, `gh release create`, `git tag v...` or a
+# push of a v-tag, and refuses unless the receipt for the run's BUILD TAG satisfies tools/gate-scope.py
+# check. It works: handed the literal text it blocks, with the required range and the command to
+# produce the receipt.
 #
 # It cannot see THIS script. The sanctioned way to publish is `bash tools/cut-release.sh --run N`,
 # and the `gh release create` it runs is inside the file, not in the command the hook is shown. So
@@ -335,39 +336,36 @@ fi
 # stood at 16 of 19 while the record was legitimately CLEAN. Two gates that disagree are one gate,
 # and the 4.3.35 ledger row "claims full=true" on 13 of 19 is what that costs.
 #
-# The receipt is keyed by the commit the gate RAN at, which is not always the commit the package
-# was built from - the harness moves HEAD after a build with changes that touch no product path.
-# A receipt taken at a DESCENDANT of the build commit is accepted, but ONLY as a list of which
-# suites ran. What those suites must COVER is computed here, over this package's own range, and
-# passed to gate-scope explicitly.
+# THE RECEIPT IS THE BUILD TAG'S, AND ONLY THAT ONE (docs/ADR-acceptance.md section 7). Owner,
+# 2026-11-11: «we are not accepting "head", we accept a precise build». tools/build-tag.sh names the
+# tag whose annotation names this run - OFFLINE, from the local tags - and the acceptance created it
+# before its first suite and named every receipt by it: scratchpad/gate-coverage-<tag>.json, one per
+# build, a verdict per module, accumulated across runs. Until this date the receipt was keyed by the
+# commit the gate RAN at, and a DESCENDANT fallback stood here - the newest gate-coverage-*.json by
+# mtime whose sha descended from the build - because the harness moves HEAD after a build. That
+# fallback is GONE: a receipt taken at another commit was never this build's record, and "newest by
+# mtime" is the trap this project keeps paying for. The tag must point at the manifest's build commit,
+# or the tag and the manifest disagree about what was built and nothing here can say which is right.
 #
-# THAT EXPLICIT RANGE IS THE WHOLE POINT, and the first draft of this block got it wrong. Without
-# it, `gate-scope.py check` falls back to the range recorded INSIDE the receipt - lastTag..D, not
-# lastTag..BUILD. The tempting argument is that a descendant's diff contains the package's, so its
-# required set is a superset. It is not: these are NET diffs from a common base, so a commit
-# between BUILD and D that REVERTS a product file removes that file from lastTag..D while it is
-# still in lastTag..BUILD. The receipt would then be checked against a SMALLER requirement than
-# the package actually has, and a release could pass on a gate that never asked for the suite its
-# own diff needed. Computing the requirement here, from BUILDSHA, cannot drift that way.
-#
-# What the descendant still costs: those suites ran against D's code, not BUILD's. The commits in
-# between are printed rather than waved through, so a reader can see what the gate was actually
-# exercised over. A receipt from an unrelated commit, or none at all, is not a pass - missing data
-# fails, exactly as it does for the acceptance record, and for the same reason: an absent receipt
-# names nothing, so there is nothing for --coverage-override to be an override OF.
+# THE EXPLICIT RANGE STAYS THE WHOLE POINT, and the first draft of this block got it wrong. Without
+# it, `gate-scope.py check` falls back to the range recorded INSIDE the receipt. These are NET diffs
+# from a common base, so a commit that REVERTS a product file can remove it from a wider range while
+# it is still in lastTag..BUILD, and a release could pass on a gate that never asked for the suite its
+# own diff needed. Computing the requirement here, from BUILDSHA, cannot drift that way. A receipt
+# from an unrelated build, or none at all, is not a pass - missing data fails, exactly as it does for
+# the acceptance record, and for the same reason: an absent receipt names nothing, so there is nothing
+# for --coverage-override to be an override OF.
 COVOUT="$WORK/coverage-check.log"
-COVREC="scratchpad/gate-coverage-${BUILDSHA:0:12}.json"
-if [ ! -f "$COVREC" ]; then
-  COVREC=""
-  for _c in $(ls -t scratchpad/gate-coverage-*.json 2>/dev/null); do
-    _sha="$(basename "$_c" .json)"; _sha="${_sha#gate-coverage-}"
-    git rev-parse -q --verify "${_sha}^{commit}" >/dev/null 2>&1 || continue
-    git merge-base --is-ancestor "$BUILDSHA" "$_sha" 2>/dev/null || continue
-    git merge-base --is-ancestor "$_sha" HEAD 2>/dev/null || continue
-    COVREC="$_c"; break
-  done
-fi
-[ -n "$COVREC" ] || die "NO COVERAGE RECEIPT for the build commit ${BUILDSHA:0:12}.
+BUILDTAG="$(tools/build-tag.sh resolve "$RUN")" || die "NO BUILD TAG names release-package run $RUN.
+  The acceptance creates it before its first suite (tools/build-tag.sh create $RUN) and names every
+  coverage receipt by it, so a run with no tag has no acceptance on record. Run the committed gate,
+  then cut:
+      BUILD=<tag> FI=<fault-injection run> mgmt/harness/campaign-full.sh"
+_tagsha="$(git rev-parse --verify --quiet "refs/tags/${BUILDTAG}^{commit}" 2>/dev/null)"
+[ "$_tagsha" = "$BUILDSHA" ] || die "tag $BUILDTAG points at ${_tagsha:-nothing}, not at this package's build commit ${BUILDSHA:0:12}.
+  The tag and the manifest disagree about what was built; nothing here can say which is right."
+COVREC="scratchpad/gate-coverage-${BUILDTAG}.json"
+[ -f "$COVREC" ] || die "NO COVERAGE RECEIPT for $BUILDTAG ($COVREC).
   tools/gate-scope.py decides which suites THIS diff requires, and nothing here recorded that they
   ran. Produce one with the committed gate, then cut:
       tools/gate-remainder.sh --run $RUN --vm10 <win10> --vm11 <win11> --os11 <label>
@@ -381,14 +379,8 @@ COVBASE="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${BUILDSHA}^" 2>/de
 [ -n "$COVBASE" ] || die "cannot determine the range base for ${BUILDSHA:0:12} - refusing to check
   coverage against a range this script had to guess."
 COVRANGE="${COVBASE}..${BUILDSHA}"
-say "coverage receipt: $COVREC"
+say "coverage receipt: $COVREC ($BUILDTAG)"
 say "coverage range:   $COVRANGE (the PACKAGE's diff, not the receipt's own)"
-_rsha="$(basename "$COVREC" .json)"; _rsha="${_rsha#gate-coverage-}"
-if [ "${_rsha}" != "${BUILDSHA:0:${#_rsha}}" ]; then
-  say "  note: the receipt was taken at ${_rsha}, which is ahead of the build commit. The suites ran"
-  say "        over these extra commit(s), and the requirement below is still computed from ${BUILDSHA:0:12}:"
-  git --no-pager log --oneline "${BUILDSHA}..${_rsha}" 2>/dev/null | sed 's/^/          /'
-fi
 if python3 tools/gate-scope.py check "$COVREC" "$COVRANGE" >"$COVOUT" 2>&1; then
   cat "$COVOUT"
   COVOVERRIDE=""   # a satisfied receipt needs no override; never let the flag imply one was needed
@@ -458,7 +450,7 @@ if [ -n "$COVOVERRIDE" ]; then
     echo "> ## Published UNDER-COVERED: the gate did not run every required suite"
     echo ">"
     echo "> This release was cut deliberately with \`--coverage-override\`. tools/gate-scope.py"
-    echo "> computes which suites this diff requires; the receipt for \`${BUILDSHA:0:12}\` does not"
+    echo "> computes which suites this diff requires; the receipt for \`${BUILDTAG}\` does not"
     echo "> cover all of them."
     echo ">"
     echo "> **Reason given at the cut:** ${COVOVERRIDE}"

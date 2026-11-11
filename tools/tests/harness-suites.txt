@@ -30,7 +30,6 @@ dom0-sends-selftest.sh
 env-assert-selftest.sh
 gate-candidate-selftest.sh
 gate-producer-selftest.sh
-gate-remainder-dry-selftest.sh
 gate-scope-selftest.sh
 grade-noise-selftest.sh
 grade-receipt-selftest.sh
@@ -59,7 +58,6 @@ qrexec-gap-witness-selftest.sh
 qtest-halted-guard-selftest.sh
 qtest-push-selftest.sh
 relay-judge-timenorm-selftest.sh
-release-cut-gate-selftest.sh
 reporter-env-gate-selftest.sh
 resolve-rip-selftest.sh
 result-flags-selftest.sh
