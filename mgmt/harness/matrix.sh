@@ -507,6 +507,7 @@ say(){ case "$*" in
          *'[ERROR]'*|*'[WARN]'*|*'[WARNING]'*|*'[INFO]'*|*'[DEBUG]'*) _m="$*" ;;
          *) _m="[INFO] $*" ;;
        esac
+       case "$*" in *'=== MATRIX: '*' ABORTED'*) _MX_ABORT_LINE="$*" ;; esac   # for matrix-result.json, below
        echo "[$(date -u +%H:%M:%S)] $_m" | tee -a "$R"; }
 # THE ZONE IS WRITTEN DOWN ONCE, HERE, because no stamp below carries it. Run 8's matrix.log held
 # three clocks: this logger's `date` (dom0 local, until ecf4d904), accept-clean's `date -u` quoted
@@ -520,7 +521,83 @@ say(){ case "$*" in
 _clk_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ); _clk_loc=$(date +%:z)
 say "clock: stamps here are UTC ($_clk_utc; host local is UTC$_clk_loc); guest log stamps and file names are guest-local - convert before comparing"
 PASS=0; FAIL=0; INVALID=0
-ok(){ PASS=$((PASS+1)); say "PASS  $*"; }
+# ---- THE VERDICTS AS ROWS ----------------------------------------------------------------------
+# Owner, 2026-11-10: "i think acceptance should produce clear jsons, not ambiguous text output".
+# Until now a check's verdict existed only as a prose line, and every reader recovered three facts
+# from it by pattern: WHICH CELL (a label parsed off the front of the message), WHICH CLASS (a token
+# somewhere in it - and tools/coverage-receipt.py held a different token list from no() below), and
+# WHETHER THE RUN FINISHED (a footer, or the word ABORTED). Each has been misread: a level tag added
+# in front of the verdict made every cell read "not run" for the 4.3.36 receipt; on 2026-11-10 a
+# `grep -c INVALID` counted the class line that NAMES the class, and the footer's "failed" - which
+# is product failures and ungraded cells together - was read as product failures.
+# So each counted verdict is ALSO written as one JSON line, with those facts as fields:
+#   $M/checks.jsonl         one row per bump of PASS/FAIL/INVALID: run, attempt, seq, utc, cell
+#                           (the loop variable, "" outside the cell loop), class PASS|FAIL|INVALID
+#                           (FAIL = the product; INVALID = could not be measured), kind (check |
+#                           cell-not-run | subject-unusable | selector-refused), text.
+#   $M/matrix-result.json   the run as a whole, rewritten at every cell boundary and by the exit
+#                           trap: state running|ended, counts by the same three classes, the cell
+#                           running, finished (the normal footer was reached), abort_line, and
+#                           complete = ended + finished + no abort line.
+# THE CLASS IS DECIDED ONCE, in no(), exactly as it always was (the INVALID token in the message),
+# and written down there; a consumer reads the field. Jev was flat on converting the 35 token
+# sites to a third function (one-place-token 0.46 / insufficient-evidence 0.46), so keeping the
+# call sites is my choice: sixteen offline suites run slices of this file with their own ok()/no().
+# APPENDED, NEVER TRUNCATED, and every row names its run: $M is re-entered by a continuation (see
+# MATTEMPT above), and a file cannot scope a run. A reader takes the rows whose `run` is the
+# result's. THE PROSE IS UNCHANGED, byte for byte - sweep-gate.sh and the protocol book
+# (protocol/steps/campaign.json) still read it. NOTHING THAT DECIDES A RELEASE DOES: since 2026-11-11
+# the acceptance record (tools/record-acceptance.sh), the coverage receipt
+# (tools/coverage-receipt.py), the two stops (tools/release-acceptance.sh,
+# mgmt/harness/campaign-full.sh) and the operator's view (tools/campaign-state.py) read these two
+# files through ONE reader, tools/acceptance_json.py, and match no text. Owner: "we were intended
+# to stop grepping and make json parser instead, grep is unreliable".
+# A ROW THAT CANNOT BE WRITTEN IS COUNTED, NOT RAISED: an emitter must not be able to fail the cell
+# it reports on. The loss shows as rows_lost and as a count that disagrees with the rows, and
+# tools/acceptance_json.py then refuses to class any cell from them.
+MATRIX_CELL=""
+MATRIX_RUN="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+_MX_ROWS="$M/checks.jsonl"; _MX_RESULT="$M/matrix-result.json"
+_MX_NROWS=0; _MX_ROWLOST=0; _MX_FINISHED=0; _MX_ABORT_LINE=""; _MX_T0=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+_mx_row(){ # <PASS|FAIL|INVALID> <kind> <text> -> one line appended to checks.jsonl; always returns 0
+  _MX_NROWS=$((_MX_NROWS+1))
+  python3 - "$_MX_ROWS" "$MATRIX_RUN" "${MATRIX_ATTEMPT:-}" "$_MX_NROWS" "${MATRIX_CELL:-}" "$1" "$2" "$3" <<'PYROW' 2>/dev/null || _MX_ROWLOST=$((_MX_ROWLOST+1))
+import json, sys, time
+a = sys.argv
+row = {"schema": 1, "run": a[2], "attempt": a[3], "seq": int(a[4]), "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+       "cell": a[5], "class": a[6], "kind": a[7], "text": a[8]}
+with open(a[1], "a", encoding="utf-8") as f:
+    f.write(json.dumps(row) + "\n")
+PYROW
+  return 0
+}
+_mx_result(){ # <running|ended> [exit code] -> matrix-result.json, whole and atomically; always returns 0
+  python3 - "$_MX_RESULT" "$1" "${2:-}" "$MATRIX_RUN" "${MATRIX_ATTEMPT:-}" "$_MX_T0" "${PASS:-0}" "${FAIL:-0}" "${INVALID:-0}" \
+            "$_MX_NROWS" "$_MX_ROWLOST" "$_MX_FINISHED" "$_MX_ABORT_LINE" "${MATRIX_CELL:-}" "${CELLS:-}" "${DEAD_FAMILIES:-}" <<'PYRES' 2>/dev/null
+import json, os, sys, time
+a = sys.argv
+ended, finished = a[2] == "ended", a[12] == "1"
+doc = {"schema": 1, "state": a[2], "exit_code": int(a[3]) if a[3] else None, "run": a[4], "attempt": a[5],
+       "started_utc": a[6], "written_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+       "counts": {"PASS": int(a[7]), "FAIL": int(a[8]) - int(a[9]), "INVALID": int(a[9])},
+       "rows_written": int(a[10]) - int(a[11]), "rows_lost": int(a[11]),
+       "finished": finished, "abort_line": a[13] or None, "complete": ended and finished and not a[13],
+       "cell_running": a[14] or None, "cells_planned": a[15].split(), "dead_families": a[16].split(),
+       "rows_file": "checks.jsonl"}
+with open(a[1] + ".tmp", "w", encoding="utf-8") as f:
+    json.dump(doc, f, indent=1)
+    f.write("\n")
+os.replace(a[1] + ".tmp", a[1])
+PYRES
+  return 0
+}
+ok(){ PASS=$((PASS+1)); say "PASS  $*"; _mx_row PASS check "$*"; }
+# FROM HERE ON THE RUN HAS A RESULT FILE. It says "running" until the exit trap rewrites it
+# (_matrix_release_loop, whose first act that is). ONE exit sits between here and where that trap is
+# set - the pool floor's refusal just below - and writes its own; lint L21 forbids a second
+# `trap ... EXIT`, rightly. A file still saying "running" once the process is gone means the run
+# died without its trap (SIGKILL, OOM), and every reader treats that as not complete.
+_mx_result running
 
 # ---- THIN-POOL FLOOR ---------------------------------------------------------------------------
 # Owner, 2026-10-08: "watch the thin pool space meanwhile." This harness had NO space check of any
@@ -627,7 +704,7 @@ json.dump(d, open(path, "w"), indent=1, sort_keys=True)
 open(path, "a").write("\n")
 PYS
 }
-pool_gate "this campaign" || { say "=== MATRIX: 0 passed, 1 failed ==="; exit 2; }
+pool_gate "this campaign" || { say "=== MATRIX: 0 passed, 1 failed ==="; _mx_result ended 2; exit 2; }
 
 # INVALID-* messages (a cell that did not run: precondition not met, instrument gave no data) are
 # counted TWICE on purpose: into FAIL, because the footer '=== MATRIX: N passed, M failed ===' and
@@ -639,7 +716,7 @@ pool_gate "this campaign" || { say "=== MATRIX: 0 passed, 1 failed ==="; exit 2;
 # conflating them (the residual recorded in protocol/rule-coverage.json).
 # Every failing check in this campaign is reported HERE, so this one line decides whether a sweep
 # can see any of them. A product FAIL and an ungraded INVALID are different severities and say so.
-no(){ FAIL=$((FAIL+1)); local _l="[ERROR] "; case "$*" in *INVALID*) INVALID=$((INVALID+1)); _l="[WARN] " ;; esac; say "${_l}FAIL  $*"; }
+no(){ FAIL=$((FAIL+1)); local _l="[ERROR] " _k=FAIL; case "$*" in *INVALID*) INVALID=$((INVALID+1)); _l="[WARN] "; _k=INVALID ;; esac; say "${_l}FAIL  $*"; _mx_row "$_k" check "$*"; }
 
 # CATCH A WEDGE WHILE IT IS STILL ONE, instead of reading its ashes afterwards.
 # Everything in findings/wedge.md was reconstructed from a memory image taken after a kill, for one
@@ -947,6 +1024,11 @@ MATRIX_LOOP_CREATED=""
 # released /dev/loop14 at 20:47:45, and stayed unstartable. So the claims go before the loop does.
 MATRIX_CDROM_CLAIMED=""
 _matrix_release_loop(){
+  # THE RESULT FIRST, before anything here can take time or fail: it is a local file write, and a
+  # campaign driver reads it the moment this process is gone. `$?` is still the exit code only in
+  # the first statement.
+  local _mx_rc=$?
+  _mx_result ended "$_mx_rc"
   # THE EXISTING TRAP IS EXTENDED, NOT JOINED. Bash keeps ONE EXIT trap, so a second `trap ... EXIT`
   # would silently discard the loop and claim release below.
   # THE CLAIMS AND THE LOOP GO FIRST, AND THE RESTORE LAST. The restore was added here as the
@@ -3167,6 +3249,9 @@ for c in $CELLS; do
 done
 [ "$NEED_ISO" = 1 ] && ensure_release_loop
 for c in $CELLS; do
+  # Every row written from here to the end of this iteration belongs to this cell, and the result
+  # file says which cell is running - a quiet stdout has been read as a stall while cells passed.
+  MATRIX_CELL="$c"; _mx_result running
   # PER CELL, NOT ONCE. The start-of-campaign check cannot see a pool that fills at cell 11, which is
   # the case that matters: stopping cleanly between cells leaves every completed cell's verdict
   # trustworthy, while filling MID-cell leaves a half-provisioned guest and a result nobody can read.
@@ -3177,12 +3262,14 @@ for c in $CELLS; do
     say "INVALID-$c  not run: $(cell_family "$c")'s subject was confirmed UNUSABLE by an earlier cell."
     say "            The campaign is INCOMPLETE and its coverage receipt must not claim this cell."
     FAIL=$((FAIL+1)); INVALID=$((INVALID+1))
+    _mx_row INVALID cell-not-run "not run: $(cell_family "$c")'s subject was confirmed UNUSABLE by an earlier cell"
     continue
   fi
   if ! pool_gate "cell $c"; then
     say "INVALID-$c  not run: the thin pool is below the floor. Cells completed before this one stand;"
     say "            the campaign is INCOMPLETE and its coverage receipt must not claim this cell."
     FAIL=$((FAIL+1)); INVALID=$((INVALID+1))
+    _mx_row INVALID cell-not-run "not run: the thin pool is below the floor"
     break
   fi
   case $c in
@@ -3211,10 +3298,10 @@ for c in $CELLS; do
       say "       q4315), which is forbidden: our code enters a guest ONLY from the release"
       say "       package. Clean install = win1X-clean (prime-run from the pristine base; the"
       say "       base's testsigning OFF makes it the true two-stage path)."
-      FAIL=$((FAIL+1)) ;;
+      FAIL=$((FAIL+1)); _mx_row FAIL selector-refused "cell '$c' is RETIRED: it installed from a pushed payload tree" ;;
     # An unknown selector must FAIL the campaign, not be narrated past: a typo would otherwise
     # silently shrink the matrix and the summary would still read as a clean run.
-    *) say "[ERROR] FATAL: unknown cell '$c'"; FAIL=$((FAIL+1)) ;;
+    *) say "[ERROR] FATAL: unknown cell '$c'"; FAIL=$((FAIL+1)); _mx_row FAIL selector-refused "unknown cell '$c'" ;;
   esac
   # PULL AFTER EVERY CELL, pass or fail, wedged or clean. Host-side with mtools: nothing is asked of
   # the guest and nothing is detached, so a cell that hung with qrexec dead still yields its logs -
@@ -3273,6 +3360,7 @@ for c in $CELLS; do
             _dead=$(cell_family "$c")
             DEAD_FAMILIES="$DEAD_FAMILIES $_dead"
             FAIL=$((FAIL+1)); INVALID=$((INVALID+1))
+            _mx_row INVALID subject-unusable "$_dead's subject is UNUSABLE: the guest never answered the pre-grading log-path probe"
             say "[ERROR] $c: $_dead's subject is UNUSABLE - every remaining $_dead cell is INVALID and"
             say "[ERROR] the campaign is INCOMPLETE. Cells on another subject still run."
             if [ "${_LV_RESTORE_PENDING:-0}" = 1 ]; then
@@ -3459,6 +3547,8 @@ for c in $CELLS; do
   fi
   # STICKSCOPE-B
 done
+# No cell is running from here on: the checks below grade the campaign, and their rows say so.
+MATRIX_CELL=""; _mx_result running
 
 # THE COLD CALLER PATH MUST HAVE BEEN MEASURED, AND ZERO MEASUREMENTS IS NOT A PASS.
 #
@@ -3505,17 +3595,13 @@ else
   ok "the cold dom0-caller path was measured this campaign for every OS family it ran ($_cold_seen )"
 fi
 
-# HARDWIRED ERROR SWEEP OVER THE CAMPAIGN'S OWN LOGS, AND IT BLOCKS.
+# HARDWIRED ERROR SWEEP OVER THE CAMPAIGN'S OWN LOGS. IT REPORTS. IT DOES NOT FAIL THE CAMPAIGN -
+# owner 2026-10-26, the reasons are at the branch below ("THIS GATE REPORTS"). The one thing in this
+# block that counts against the run is the file cap (INVALID-SWEEP-CAPPED).
 #
 # Nothing swept these. A campaign that reported 96 of 96 clean carried "log-volume bind failed" on
 # BOTH upgrade cells, and every reader including a model read the run as green (HARNESSLOGUNSWEPT,
-# LOGVOLBINDUPGRADE). Reporting was not enough - a line nobody reads is a line nobody reads whether
-# or not a tool printed it.
-#
-# IT RAISES THE *INVALID* CLASS, NEVER PRODUCT FAIL. An unaccounted error in our own harness logs is
-# missing or unexplained INSTRUMENT data, not a demonstrated product defect, and verdict-lib's V2
-# invariant is that INVALID-* is never folded into FAIL. INVALID blocks the release gate on its own
-# (the gate requires zero INVALID), so this stops a cut without inventing a product verdict.
+# LOGVOLBINDUPGRADE).
 #
 # A declared error is accounted for by an entry in mgmt/harness/error-ledger.txt that RECORDS WHY it
 # is not a defect. A row with no reason does not account for anything, and nothing is ever hidden:
@@ -3853,12 +3939,16 @@ say ""
 # stays byte-exact, so the campaign's severity is declared HERE, on the line that carries the same
 # two numbers. Without it a campaign could end with failing cells and no line any sweep could judge
 # - which is how a 96-of-96 "clean" campaign carried a log-volume bind failure nobody read.
-# A SUBJECT DIED, SO THE CAMPAIGN DID NOT FINISH - AND THE GATE READS A STRING, NOT AN EXIT CODE.
-# tools/release-acceptance.sh:370 stops on `grep -qaE '=== MATRIX: .* ABORTED'` in full.out. Letting
-# the other subject's cells run removes that string from the old abort path, which would have let an
-# incomplete campaign proceed to the feature tests, the remainder suites and THE RECEIPT. So the
-# string is emitted here instead: the surviving subject's cells still RUN and are still recorded -
-# that is the whole gain - and acceptance still refuses to issue a receipt over them.
+# A SUBJECT DIED, SO THE CAMPAIGN DID NOT FINISH - AND THE GATE READS THAT, NOT AN EXIT CODE.
+# tools/release-acceptance.sh and mgmt/harness/campaign-full.sh stop when tools/acceptance_json.py
+# reads this run's matrix-result.json as not complete (until 2026-11-11 they matched the string
+# `=== MATRIX: .* ABORTED` in the captured stdout instead). THIS run reaches its normal footer, so
+# the line below is the only thing that makes it incomplete: say() keeps it as the result's
+# abort_line, and complete is false whenever that is set. Letting the other subject's cells run
+# removed the line from the old abort path, which would have let an incomplete campaign proceed to
+# the feature tests, the remainder suites and THE RECEIPT. So it is emitted here instead: the
+# surviving subject's cells still RUN and are still recorded - that is the whole gain - and
+# acceptance still refuses to issue a receipt over them.
 # This line is NOT the machine-readable footer. That contract is the anchored
 # '^=== MATRIX: N passed, M failed ===$' echoed below, byte-exact, and it is untouched.
 if [ -n "${DEAD_FAMILIES// /}" ]; then
@@ -3869,6 +3959,7 @@ fi
 _mx_sev=""; [ "$((FAIL-INVALID))" -gt 0 ] && _mx_sev="[ERROR] " || { [ "$INVALID" -gt 0 ] && _mx_sev="[WARN] "; }
 say "${_mx_sev}classes: product-FAIL=$((FAIL-INVALID)) INVALID-*(cell did not run, ungraded)=$INVALID - the footer's 'failed' is both (contract kept; see mgmt/harness/verdict-lib.sh for the three-class rule)"
 echo "=== MATRIX: $PASS passed, $FAIL failed ===" | tee -a "$R"
+_MX_FINISHED=1   # the normal footer was reached; the exit trap writes it into matrix-result.json
 # Parks are campaign-scoped: pool cost grows as content diverges, so remove them when the
 # campaign is DONE (not per cell - later cells unpark them). NEVER park or remove a golden.
 parks=$(qvm-ls --raw-data --fields NAME 2>/dev/null | grep '^ckpt-' | tr '\n' ' ')
