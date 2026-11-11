@@ -3531,6 +3531,36 @@ static bool WriteSmallForSession(std::wstring const& path, const void* data, DWO
     return ok;
 }
 
+// THE CONSOLE USER HOLDS TWO TOKENS WHILE UAC IS ON, AND THE RELAY IS STARTED ON THE FILTERED ONE.
+// An administrator's logon is split: the session runs on the filtered token, and a process started "as administrator" -
+// the installer run by hand, and every notice it sends - holds the elevated one. Same name, same session, so the
+// account test in NotifyHandoffToSession calls it the console user and it sends inline. qrexec-agent starts the relay
+// on the session's own token, the filtered one, and that relay does not connect to the pipe an elevated sender
+// created. Measured on a Windows 11 guest with UAC on, same binary, same user, same minute: a sender on the filtered
+// token connected and sent; one at High integrity logged "relay never connected" and queued its notice for the next
+// bridge start - which, for the installer's "restart this qube", is after the restart it asks for.
+// So an elevated sender takes the handoff, as SYSTEM does: the task the handoff schedules runs at the default run
+// level, on the filtered token, and that instance sends. With UAC off no token is split (the type reads Default) and
+// nothing changes. A token that cannot be read counts as not elevated - the sender takes the inline route it took
+// before - and says so.
+static bool TokenIsElevatedHalf()
+{
+    HANDLE tok = nullptr;
+    const wchar_t* step = L"OpenProcessToken";
+    TOKEN_ELEVATION_TYPE type = TokenElevationTypeDefault; DWORD got = 0;
+    BOOL ok = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok);
+    if (ok) { step = L"GetTokenInformation"; ok = GetTokenInformation(tok, TokenElevationType, &type, sizeof(type), &got); }
+    const DWORD err = ok ? ERROR_SUCCESS : GetLastError();
+    if (tok) CloseHandle(tok);
+    if (!ok)
+    {
+        BLogE(L"NOTIFY handoff: cannot read own token's elevation (%s failed %lu) - an elevated sender is not "
+              L"recognised and sends inline", step, err);
+        return false;
+    }
+    return type == TokenElevationTypeFull;
+}
+
 static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring const& body, NotifyKind kind)
 {
     DWORD mySession = 0;
@@ -3560,8 +3590,8 @@ static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring con
     // session it is in.
     wchar_t me[256] = { 0 }; DWORD meLen = RTL_NUMBER_OF(me);
     if (!GetUserNameW(me, &meLen)) { BLogE(L"NOTIFY handoff: cannot read own user (%lu) - handoff abandoned", GetLastError()); return false; }
-    if (_wcsicmp(me, who.c_str()) == 0 && active == mySession)
-        return false;                                 // genuinely the console user: send inline
+    if (_wcsicmp(me, who.c_str()) == 0 && active == mySession && !TokenIsElevatedHalf())
+        return false;                                 // the console user, on the token the relay gets: send inline
 
     // Same UTF-16LE + BOM notify file the inline path reads; deleted by the reader.
     // THE PID IS PART OF THE NAME, as it already is for the sibling deferred- queue
@@ -4794,7 +4824,16 @@ static int RelayMain(const wchar_t* pipeName)
     // + FILE_FLAG_FIRST_PIPE_INSTANCE on the resident side rule out a second handle).
     HANDLE pipe = CreateFileW(pipeName, GENERIC_READ | GENERIC_WRITE, 0, nullptr,
                               OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
-    if (pipe == INVALID_HANDLE_VALUE) return 1;
+    if (pipe == INVALID_HANDLE_VALUE)
+    {
+        // The sender sees only "relay never connected", fifteen seconds later and with its cause guessed at. This is
+        // the one process that knows. A pipe that is not there means the sender closed it - it gave up or exited
+        // before this relay started - and there is nothing left to relay; any other code is a refusal.
+        const DWORD e = GetLastError();
+        if (e == ERROR_FILE_NOT_FOUND) BLog(L"RELAY %s is gone - its sender left before this relay started, nothing to relay", pipeName);
+        else BLogE(L"RELAY cannot open %s (%lu) - its sender gets no connection to dom0", pipeName, e);
+        return 1;
+    }
     HANDLE eA = CreateEventW(nullptr, TRUE, FALSE, nullptr);   // pump A's pipe-write event
     HANDLE eB = CreateEventW(nullptr, TRUE, FALSE, nullptr);   // pump B's pipe-read event
     if (!eA || !eB) return 1;
