@@ -3531,7 +3531,7 @@ static bool WriteSmallForSession(std::wstring const& path, const void* data, DWO
     return ok;
 }
 
-static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring const& body)
+static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring const& body, NotifyKind kind)
 {
     DWORD mySession = 0;
     ProcessIdToSessionId(GetCurrentProcessId(), &mySession);
@@ -3593,9 +3593,13 @@ static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring con
     std::wstring task = L"QwtNotifyOnce-" + std::to_wstring(GetTickCount64())
                       + L"-" + std::to_wstring(GetCurrentProcessId());
     wchar_t cmd[MAX_PATH * 3 + 256];
+    // THE KIND TRAVELS WITH THE MESSAGE. The relaunched instance reads its kind from its own command line, and one
+    // that is given none sends an error, which stays on the user's screen until dismissed.
+    const wchar_t* sev = kind == NotifyKind::Info ? L" --severity info"
+                       : kind == NotifyKind::Warning ? L" --severity warning" : L"";
     swprintf(cmd, RTL_NUMBER_OF(cmd),
-             L"schtasks.exe /create /tn %s /tr \"%s --notify-file %s\" /sc once /st 00:00 /ru %s /it /f",
-             task.c_str(), shortSelf, shortFile, who.c_str());
+             L"schtasks.exe /create /tn %s /tr \"%s --notify-file %s%s\" /sc once /st 00:00 /ru %s /it /f",
+             task.c_str(), shortSelf, shortFile, sev, who.c_str());
     STARTUPINFOW si = { sizeof(si) }; PROCESS_INFORMATION pi = {};
     if (!CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
     { BLogE(L"NOTIFY handoff: schtasks /create failed %lu - this message reaches nobody", GetLastError()); return false; }
@@ -3759,7 +3763,7 @@ static void NotifyDeferDrain()
 static int NotifyOnceMain(std::wstring const& summary, std::wstring const& body, NotifyKind kind)
 {
     // SESSION 0 CANNOT DELIVER. Hand off to the interactive session rather than failing there.
-    if (NotifyHandoffToSession(summary, body)) return 0;
+    if (NotifyHandoffToSession(summary, body, kind)) return 0;
 
     ProcessIdToSessionId(GetCurrentProcessId(), &g_mySession);
     InitializeCriticalSection(&g_corrLock);
