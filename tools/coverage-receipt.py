@@ -10,38 +10,34 @@ is a record, not an intention - and a suite that could not measure the product (
 exiting 2) was recorded exactly like one that measured it and failed. Section 6: instrument-fail is not a product
 regression, the suite is UNCOVERED, and the gate refuses the cut.
 
-HOW A CELL IS CLASSED, from the campaign's cell-group outputs (<dir>/*.out, the files record-acceptance.sh reads):
-  * the lines `PASS  <LABEL>: ...` / `FAIL  <LABEL>: ...` (optional [hh:mm:ss] prefix, optional ` boot N`), where a
-    cell `win10-clean` is labelled `WIN10-clean` by matrix.sh;
-  * a FAIL line carrying one of mgmt/harness/verdict-lib.sh's ungraded tokens (INVALID, INSTRUMENT, INCONCLUSIVE,
-    BLOCKED, SKIPPED) is an instrument-class line; any other FAIL line names the product;
-  * no verdict line at all, or a group without the `=== MATRIX: N passed, M failed ===` footer -> not run.
-  cell class:  any product FAIL line -> product-fail;  FAIL lines all instrument-class -> instrument-fail;
-               only PASS lines -> pass;  nothing -> not-run.
-A feature test is classed by its exit: 0 pass, 2 instrument-fail, anything else product-fail. package-verify by its rc.
+HOW A CELL IS CLASSED: by tools/acceptance_json.py from the matrix's own JSON - <dir>/matrix/matrix-result.json and the
+rows in <dir>/matrix/checks.jsonl, where the cell and the class are fields set where mgmt/harness/matrix.sh decides
+them. NO LOG TEXT IS READ. Until 2026-11-11 this file recovered both by a regex over the campaign's *.out lines, with
+a token list of its own, and was blinded by a change to that prose (the 4.3.36 receipt: every cell "not run" with the
+evidence on disk). Owner, 2026-11-11: "we were intended to stop grepping and make json parser instead, grep is
+unreliable". The rules are the reader's and are stated in its header; in short:
+  cell class:  a FAIL row -> product-fail;  else an INVALID row -> instrument-fail;  else a PASS row -> pass;
+               no row -> not-run;  rows that cannot be relied on (the run did not end through its exit trap, a lost
+               or corrupt row) -> EVERY cell instrument-fail, with the reason.
+  A campaign directory with no matrix-result.json has no matrix verdict at all: every cell is not-run. That includes
+  campaigns recorded before the rows existed - they cannot be re-classed by this tool, and that is deliberate.
+  `cell_verdict_source` in the receipt says which it was: rows | none.
+A feature test is classed by the class its own ledger DECLARES when one is passed (--feature-ledger; see main()), and
+otherwise by its exit: 0 pass, 2 instrument-fail, anything else product-fail. package-verify by its rc.
 
 THE RECEIPT: {"suites": [pass + product-fail]  (what RAN and MEASURED - Jev 2026-10-13 receipt_product_fail_covered =
 covered-with-fail-flag 0.94: a product failure is covered, and the cut is refused by the acceptance RECORD),
 "product_fail": [...], "instrument_fail": [...] (NOT in suites - uncovered), "not_run": [...], "result": pass|fail, ...}.
 Exit 0 receipt written; 2 the campaign dir or an argument is unusable (no receipt - missing data fails).
-Self-test: tools/tests/coverage-receipt-selftest.sh (knob: instrumentcovered).
 """
 from __future__ import annotations
-import argparse, glob, json, os, re, sys, time
+import argparse, json, os, re, sys, time
 
-# THE LEVEL TOKEN SITS BETWEEN THE TIMESTAMP AND THE VERDICT, AND THIS PATTERN HAD NO SLOT FOR IT.
-# matrix.sh's verdict lines are tagged with the writer's level so a sweep can tell "3 passed, 2
-# failed" from "5 passed, 0 failed" - the right change, and it silently blinded this parser:
-#     [11:13:08] [ERROR] FAIL  win10-clean: the guest log sweep found a breach or a defect
-# matched nothing, so EVERY matrix cell read as not_run while its report.json sat on disk with
-# graded breaches. The 4.3.36 campaign ran all eight cells and the receipt said `covered=3`,
-# `not_run=[all eight]`, and gate-scope then refused the cut with "required 18, covered 3" - a
-# release blocked by a regex, with the evidence it wanted already written.
-# The self-test did not catch it because its fixture carried the PRE-TAGGING shape, so it was green
-# against text nothing emits any more (the standing trap: a fixture comes from a CAPTURE, not from a
-# model of the format). Its fixture is now the captured shape, and the legacy forms stay parsed.
-VERDICT_RE = re.compile(r"^(?:\[[0-9:]+\]\s*)?(?:\[(?:ERROR|WARN|WARNING|INFO|DEBUG)\]\s*)?(PASS|FAIL)  ([A-Za-z0-9]+-[A-Za-z0-9-]+?)(?: boot \d+)?:\s*(.*)$")
-FOOTER_RE = re.compile(r"^=== MATRIX: (\d+) passed, (\d+) failed ===$")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import acceptance_json  # noqa: E402 - the one reader of a campaign's JSON; this file reads no log text
+
+# THE UNGRADED VOCABULARY, for a FEATURE TEST'S LEDGER only (ledger_class below). Matrix cells are not classed by
+# token any more: their class is a field of the matrix's own rows, read through tools/acceptance_json.py.
 INSTRUMENT_TOKENS = ("INVALID", "INSTRUMENT", "INCONCLUSIVE", "BLOCKED", "SKIPPED")
 # A SWEEP DECLARES "I COULD NOT MEASURE" IN ITS STATUS, NOT IN A TOKEN THIS LIST HOLDS. MEASURED
 # 2026-11-07, campaign 42400226595 at 4b55d0a46510: supervision-gate's ONLY failing row was
@@ -54,7 +50,7 @@ INSTRUMENT_TOKENS = ("INVALID", "INSTRUMENT", "INCONCLUSIVE", "BLOCKED", "SKIPPE
 # "sweep DATA/INCOMPLETE" as instrument per plan section 6 - only the vocabulary never got it.
 # ANCHORED ON `status=`, NOT THE BARE WORD: "DATA" is a substring of METADATA and of any prose that
 # mentions data, so a bare token would silently reclassify real product FAILs. The predicate has to
-# BE the declaration, not a word that co-occurs with it. (# GUARD:ungradedstatus)
+# BE the declaration, not a word that co-occurs with it.
 UNGRADED_STATUS_RE = re.compile(r"\bstatus=(?:DATA|INCOMPLETE)\b")
 
 
@@ -93,50 +89,6 @@ def ledger_class(path: str) -> str:
     return worst
 
 
-def label_of(cell: str) -> str:
-    os_, _, rest = cell.partition("-")
-    return "%s-%s" % (os_.upper(), rest)
-
-
-def classify_campaign(campdir: str, cells: list[str]) -> tuple[dict[str, dict], list[str]]:
-    outs = sorted(glob.glob(os.path.join(campdir, "*.out")))
-    notes: list[str] = []
-    lines_by_label: dict[str, list[tuple[str, str, str]]] = {}
-    finished_groups: list[str] = []
-    for f in outs:
-        try:
-            text = open(f, encoding="utf-8", errors="replace").read().splitlines()
-        except OSError as e:
-            notes.append("%s unreadable: %s" % (f, e))
-            continue
-        footer = [ln for ln in text if FOOTER_RE.match(ln)]
-        if footer:
-            finished_groups.append(os.path.basename(f))
-        else:
-            notes.append("%s has no MATRIX footer - that cell-group did not finish" % os.path.basename(f))
-        for ln in text:
-            m = VERDICT_RE.match(ln)
-            if m:
-                lines_by_label.setdefault(m.group(2).lower(), []).append((m.group(1), m.group(3), os.path.basename(f)))
-    out: dict[str, dict] = {}
-    for c in cells:
-        rows = lines_by_label.get(label_of(c).lower(), [])
-        fails = [r for r in rows if r[0] == "FAIL"]
-        product = [r for r in fails if not instrument_line(r[1])]
-        instrument = [r for r in fails if instrument_line(r[1])]
-        if not rows:
-            cls = "not-run"
-        elif product:
-            cls = "product-fail"
-        elif instrument:
-            cls = "instrument-fail"
-        else:
-            cls = "pass"
-        out[c] = {"class": cls, "pass_lines": sum(1 for r in rows if r[0] == "PASS"), "product_fail_lines": [r[1][:200] for r in product][:5],
-                  "instrument_fail_lines": [r[1][:200] for r in instrument][:5]}
-    return out, notes
-
-
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", required=True)
@@ -155,7 +107,9 @@ def main(argv=None) -> int:
         print("coverage-receipt: no campaign dir %s - no receipt (missing data fails)" % a.campaign, file=sys.stderr)
         return 2
     cells = a.cells.split()
-    classes, notes = classify_campaign(a.campaign, cells)
+    matrix = acceptance_json.read_matrix(a.campaign)
+    classes, notes = acceptance_json.cell_classes(matrix, cells)
+    source = "rows" if matrix["present"] else "none"
     suites: dict[str, str] = {}
     for c, info in classes.items():
         suites[c] = info["class"]
@@ -201,17 +155,19 @@ def main(argv=None) -> int:
                              % (name, ledgers[name], rc_i, by_exit))
     if a.package_verify_rc is not None:
         suites["package-verify"] = "pass" if a.package_verify_rc == 0 else "product-fail"
-    covered = sorted(s for s, c in suites.items() if c in ("pass", "product-fail"))   # GUARD:instrumentcovered DEFECT: covered = sorted(s for s, c in suites.items() if c in ("pass", "product-fail", "instrument-fail"))
+    covered = sorted(s for s, c in suites.items() if c in ("pass", "product-fail"))   # an instrument-fail suite is NOT covered
     rec = {"suites": covered,
            "product_fail": sorted(s for s, c in suites.items() if c == "product-fail"),
            "instrument_fail": sorted(s for s, c in suites.items() if c == "instrument-fail"),
            "not_run": sorted(s for s, c in suites.items() if c == "not-run"),
            "result": "pass" if all(c == "pass" for c in suites.values()) and suites else "fail",
            "classes": {s: classes.get(s, {"class": c}) for s, c in suites.items()},
+           "cell_verdict_source": source,
            "package_run": a.package_run, "built_from": a.built_from, "range": a.range,
            "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "notes": notes,
-           "note": "written by tools/coverage-receipt.py from the campaign's own verdict lines; `suites` names what RAN and MEASURED "
-                   "(pass + product-fail); instrument-fail is uncovered and refuses the cut (plan section 6)"}
+           "note": "written by tools/coverage-receipt.py from the campaign's own verdicts (cell_verdict_source: rows = the matrix's "
+                   "checks.jsonl through tools/acceptance_json.py, none = the campaign left no matrix result); `suites` names what "
+                   "RAN and MEASURED (pass + product-fail); instrument-fail is uncovered and refuses the cut (plan section 6)"}
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     json.dump(rec, open(a.out, "w", encoding="utf-8"), indent=1)
     print("RECEIPT %s: covered=%d product_fail=%s instrument_fail=%s not_run=%s result=%s -> %s" % (

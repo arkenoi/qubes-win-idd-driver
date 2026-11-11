@@ -120,7 +120,6 @@ log "head $HEAD_SHA on $BRANCH; evidence in $OUT"
 # ---- 1. the two packages, PROVEN -----------------------------------------------------------------
 # A run is the FI build iff its own log printed QGA_FAULT_INJECTION=1. Nothing else is accepted:
 # not dispatch order, not the display title (identical), not a grep of the shipped binary.
-# ---- PKGROLES-BEGIN  (driven by tools/tests/campaign-full-selftest.sh)
 # PKG/FI may be NAMED by the operator, and are then PROVEN exactly as discovered ones are - a named
 # pair is not a trusted pair. This exists because the package's commit and HEAD legitimately differ:
 # campaign-preflight.sh's own rule is "built from <sha>, carries every fix under test, NO PRODUCT
@@ -157,7 +156,6 @@ resolve_pkgs(){
   [ -n "$PKG" ] || die "no run at $SHORT proved itself the ordinary package (QGA_FAULT_INJECTION=0)"
   [ -n "$FI" ]  || die "no run at $SHORT proved itself the fault-injection package (QGA_FAULT_INJECTION=1) - failproof-gates and failproof-faultinject cannot run on an ordinary package, so a FULL gate is unreachable without it; dispatch release-package.yml with -f fault_injection=true"
 }
-# ---- PKGROLES-END
 resolve_pkgs
 # THE PACKAGE IS VERIFIED AGAINST ITS OWN COMMIT, taken from the RUN - not from HEAD and not from
 # the tree's own MANIFEST. Measured in this chain's first dry run: it printed
@@ -169,7 +167,6 @@ resolve_pkgs
 PKG_SHA=$(gh run view "$PKG" --json headSha --jq .headSha 2>/dev/null)
 [ -n "$PKG_SHA" ] || die "could not read the head sha of run $PKG - the package cannot be verified against an unknown commit"
 log "packages: ordinary=$PKG (built from ${PKG_SHA:0:12}) fault-injection=$FI"
-# ---- PKGDRIFT-BEGIN  (driven by tools/tests/campaign-full-selftest.sh)
 if [ "$PKG_SHA" != "$HEAD_SHA" ]; then
   drift=$(git diff --name-only "$PKG_SHA..$HEAD_SHA" -- agent guest packaging driver tools/notifhost 2>/dev/null)
   if [ -n "$drift" ]; then
@@ -178,7 +175,6 @@ if [ "$PKG_SHA" != "$HEAD_SHA" ]; then
   fi
   log "  HEAD is ${SHORT} but no PRODUCT path changed since ${PKG_SHA:0:12} - the package is still the thing under test (campaign-preflight re-checks this)"
 fi
-# ---- PKGDRIFT-END
 
 # ---- 1b. THE INNER TREE MUST BE CLEAN, BEFORE THE CI WAIT ----------------------------------------
 # MEASURED 2026-11-06/07: attempt 1 (21:58) died mid-smoke and left
@@ -245,7 +241,6 @@ for round in 1 2 3; do
   ci_ok; circ=$?
   if [ "$circ" = 0 ]; then log "CI is green for $SHORT"; break; fi
   [ "$round" = 3 ] && { sed -n '1,12p' "$OUT/ci-state.txt" | sed 's/^/    /' | tee -a "$OUT/chain.log"; die "CI is still not green for $SHORT after dispatching and waiting for what ci-state named"; }
-  # ---- CIINFLIGHT-BEGIN
   if [ "$circ" = 2 ]; then
     # the required rows ci-state marked "run " (queued/in_progress/waiting), by run id
     mapfile -t inflight < <(grep -aE '^[[:space:]]*run[[:space:]]' "$OUT/ci-state.txt" \
@@ -258,11 +253,8 @@ for round in 1 2 3; do
     fi
     log "ci-state exited 2 but named no in-flight required run - treating it as unreadable, not as waiting"
   fi
-  # ---- CIINFLIGHT-END
-  # ---- CIDUE-BEGIN  (driven by tools/tests/campaign-full-selftest.sh)
   mapfile -t due < <(grep -aE 'REQUIRED, its paths matched, and it cannot run on this branch' "$OUT/ci-state.txt" \
                      | grep -aoE '^[[:space:]]*MISS[[:space:]]+[a-z0-9.-]+\.yml' | awk '{print $2}')
-  # ---- CIDUE-END
   [ "${#due[@]}" -gt 0 ] || { sed -n '1,12p' "$OUT/ci-state.txt" | sed 's/^/    /' | tee -a "$OUT/chain.log"; die "CI is not green for $SHORT and nothing is merely branch-filtered - a required workflow is RED"; }
   for wf in "${due[@]}"; do
     log "required but branch-filtered: $wf - dispatching it for this sha"
@@ -325,20 +317,25 @@ PKG="$PKG" mgmt/harness/campaign-run.sh 2>&1 | tee -a "$OUT/campaign-run.out"
 crc=${PIPESTATUS[0]}
 log "  campaign-run rc=$crc"
 case "$crc" in 11|12|13|14) log "STOP: the preflight refused with $crc - no guest was touched"; exit "$crc" ;; esac
-# ---- MATRIXABORT-BEGIN  (driven by tools/tests/campaign-full-selftest.sh)
-# AN ABORTED OR INCOMPLETE MATRIX STOPS THE CHAIN. MEASURED 2026-10-22: the matrix printed
-# "=== MATRIX: 75 passed, 6 failed - ABORTED on a log path that broke mid-cell ===" at 13:38, having
-# wedged a guest in WIN11-upgrade - and this chain walked straight into the feature tests on a rig
-# whose subject had just been hard-killed, then would have spent gate-remainder on it. The operator
-# had to stop it. Two mechanical reasons to halt, neither a judgement:
-#   * the matrix said ABORTED - whatever follows is running on a rig it did not finish with;
+# AN INCOMPLETE MATRIX STOPS THE CHAIN: whatever follows would run on a rig the matrix did not finish
+# with (a wedged or hard-killed subject), and gate-remainder would be spent on it. Two mechanical
+# reasons to halt, neither a judgement:
+#   * the matrix's own result does not say complete. tools/acceptance_json.py matrix-complete reads
+#     $CAMPTREE/matrix/matrix-result.json, which the matrix writes from its exit trap: exit 0
+#     complete, 1 not complete, 2 no readable result. Any non-zero stops - an abort, an exit before
+#     the footer, a result still saying "running", and no file at all. A result found here is this
+#     attempt's: step 1b refuses a tree that holds an earlier attempt's marker, and the inner run
+#     moves an inherited result aside before its matrix;
 #   * a cell in acceptance-record-check.py's REQUIRED set produced no report.json, so the record is
 #     already unsatisfiable and gate-remainder cannot rescue it.
-if grep -aqE '=== MATRIX: .* ABORTED' "$OUT/campaign-run.out" 2>/dev/null; then
-  log "STOP: the matrix ABORTED - $(grep -aoE '=== MATRIX:[^=]*' "$OUT/campaign-run.out" | tail -1)"
+_mx_desc=$(python3 tools/acceptance_json.py matrix-complete "$CAMPTREE" 2>&1); _mx_rc=$?
+if [ "$_mx_rc" -ne 0 ]; then
+  log "STOP: the matrix did not complete (matrix-complete rc=$_mx_rc: 1 = its result says so, 2 = no readable result) - $_mx_desc"
   log "      the remainder suites and the receipt check are NOT run on an unfinished matrix"
-  python3 tools/campaign-state.py 2>&1 | tail -20 | tee -a "$OUT/chain.log"
-  exit "${crc:-1}"
+  python3 tools/campaign-state.py "$CAMPTREE" 2>&1 | tail -30 | tee -a "$OUT/chain.log"
+  # a STOP never exits 0: the inner run's own code when it has one, else 1
+  [ "${crc:-0}" != 0 ] && exit "$crc"
+  exit 1
 fi
 missing=$(python3 - <<'PYMISS' 2>/dev/null
 import glob, json, os, re, sys
@@ -360,7 +357,6 @@ if [ -n "$missing" ]; then
   python3 tools/campaign-state.py 2>&1 | tail -20 | tee -a "$OUT/chain.log"
   exit "${crc:-1}"
 fi
-# ---- MATRIXABORT-END
 
 # ---- 5b. settle the rig: step 2 leaves its last feature test's guest up, step 3 refuses ANY guest ----
 log "step 2b/4: settle the rig before the remainder"

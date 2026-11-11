@@ -11,10 +11,16 @@ success. The owner found the failures by asking a question.
 
 So this reads STRUCTURED ARTIFACTS, never log prose:
   * every <cell>-guestlogs/report.json  - the sweep's own status, rc and breach list, with severity
-  * the campaign's own verdict lines, located by the harness's marker, not by a pattern of mine
-and it EXITS NON-ZERO whenever any cell failed or any P1 breached. A watcher that cannot fail is
-the defect this file exists to prevent, so `--selftest` plants a failing report and requires this
-tool to report it.
+  * what the run wrote about ITSELF as JSON, through tools/acceptance_json.py (the one reader):
+    the driver's acceptance.json (phase, result, each feature test's exit code), the matrix's
+    matrix-result.json (state, the cell running, complete or not) and its rows in checks.jsonl
+    (counts by class per cell, and every FAIL and INVALID check's own text). Until 2026-11-11 the
+    second bullet here promised "the campaign's own verdict lines" and no code read them: a quiet
+    stdout was taken for a stall while seven cells passed, and `grep -c INVALID` counted the line
+    that names the class. Owner: "we were intended to stop grepping and make json parser instead".
+and it EXITS NON-ZERO whenever any cell failed or any P1 breached - a failing matrix row counts. A
+watcher that cannot fail is the defect this file exists to prevent, so `--selftest` plants a
+failing report and requires this tool to report it.
 
 Usage:
   tools/campaign-state.py [<campaign-dir>]     # default: the newest under ~/qwt-accept/*/campaign
@@ -25,7 +31,54 @@ import json
 import os
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import acceptance_json  # noqa: E402 - the one reader of a campaign's JSON
+
 P1 = "P1"
+
+
+def run_facts(campdir):
+    """What the run wrote about itself as JSON -> (printable lines, number of failing matrix rows).
+
+    Every line is a field read through acceptance_json; nothing is matched in a log. Row counts are
+    shown even while the matrix is running (they are what has been written so far); a CLASS is shown
+    only once the rows are final, because nothing may be classed from a run that has not ended.
+    """
+    lines = []
+    acc = acceptance_json.read_acceptance(os.path.dirname(os.path.abspath(campdir)))
+    if acc:
+        dead = acc.get("state") == "running" and not os.path.exists("/proc/%s" % acc.get("pid"))
+        lines.append("  driver: state=%s phase=%s result=%s exit_code=%s attempt=%s written=%s pid=%s%s" % (
+            acc.get("state"), acc.get("phase"), acc.get("result"), acc.get("exit_code"), acc.get("attempt"),
+            acc.get("written_utc"), acc.get("pid"),
+            "  <- NO SUCH PROCESS: the driver died without writing its end" if dead else ""))
+        if acc.get("stopped"):
+            lines.append("  driver stopped at %s: %s" % (acc["stopped"].get("at"), acc["stopped"].get("why")))
+        for t in (acc.get("features") or {}).get("tests") or []:
+            lines.append("    feature %-28s exit_code=%s" % (t.get("name"), t.get("exit_code")))
+    else:
+        lines.append("  driver: no acceptance.json beside this campaign directory")
+    m = acceptance_json.read_matrix(campdir)
+    word, desc = acceptance_json.matrix_complete(m)
+    lines.append("  matrix: %s - %s" % (word.upper(), desc))
+    failing = [r for r in m["rows"] if r["class"] != "PASS"]
+    if m["result"]:
+        res = m["result"]
+        planned = [str(c) for c in res.get("cells_planned")] if isinstance(res.get("cells_planned"), list) else []
+        if not m["final"]:
+            lines.append("  matrix rows are NOT FINAL (%s) - counts below are what has been written so far" % m["why_not_final"])
+        classes = acceptance_json.cell_classes(m, planned)[0] if m["final"] else {}
+        for c in planned + [""]:
+            mine = [r for r in m["rows"] if (r.get("cell") or "") == c]
+            if not c and not mine:
+                continue
+            n = {k: sum(1 for r in mine if r["class"] == k) for k in acceptance_json.ROW_CLASSES}
+            lines.append("    %-18s PASS=%-3d FAIL=%-3d INVALID=%-3d %s%s" % (
+                c or "(campaign-level)", n["PASS"], n["FAIL"], n["INVALID"], classes.get(c, {}).get("class", ""),
+                "  <- running" if c and c == res.get("cell_running") and res.get("state") == "running" else ""))
+        for r in failing:
+            lines.append("    [%s] %s: %s" % (r["class"], r.get("cell") or "(campaign-level)", str(r.get("text"))[:200]))
+    return lines, len(failing)
 
 
 def find_campaign(arg=None):
@@ -79,6 +132,9 @@ def main(argv):
         return 2
     rows, p1s, bad = summarise(campdir)
     print("campaign %s" % campdir)
+    facts, mfail = run_facts(campdir)
+    for ln in facts:
+        print(ln)
     if not rows:
         print("  no cell has produced a sweep report yet")
     for cell, rep, why in rows:
@@ -101,9 +157,9 @@ def main(argv):
     if have == 0:
         print("CAMPAIGN NO-VERDICT - no cell has produced a sweep report yet; this is not a pass")
         return 2
-    print("CAMPAIGN %s - %d cell(s) with a report, %d not CLEAN, %d P1" %
-          ("FINDINGS" if (bad or p1s) else "CLEAN", have, len(bad), len(p1s)))
-    return 1 if (bad or p1s) else 0
+    print("CAMPAIGN %s - %d cell(s) with a report, %d not CLEAN, %d P1, %d failing matrix row(s)" %
+          ("FINDINGS" if (bad or p1s or mfail) else "CLEAN", have, len(bad), len(p1s), mfail))
+    return 1 if (bad or p1s or mfail) else 0
 
 
 def selftest():
