@@ -1,32 +1,68 @@
+diff --git a/src/xenvif/controller.c b/src/xenvif/controller.c
+index dac6952..5740ee9 100644
+--- a/src/xenvif/controller.c
++++ b/src/xenvif/controller.c
+@@ -694,7 +694,9 @@ ControllerEnable(
+ {
+     __ControllerAcquireLock(Controller);
+ 
+-    Controller->Enabled = TRUE;
++    // Requests can only be accepted if ControllerConnect() set up a
++    // control ring, which it does not do unless the backend offers one.
++    Controller->Enabled = Controller->Connected;
+ 
+     __ControllerReleaseLock(Controller);
+ 
+@@ -715,6 +717,14 @@ ControllerDisable(
+     Trace("<===>\n");
+ }
+ 
++BOOLEAN
++ControllerIsEnabled(
++    IN  PXENVIF_CONTROLLER      Controller
++    )
++{
++    return Controller->Enabled;
++}
++
+ _IRQL_requires_(DISPATCH_LEVEL)
+ VOID
+ ControllerDisconnect(
+diff --git a/src/xenvif/controller.h b/src/xenvif/controller.h
+index 18e09b7..951c04a 100644
+--- a/src/xenvif/controller.h
++++ b/src/xenvif/controller.h
+@@ -71,6 +71,11 @@ ControllerDisable(
+     IN  PXENVIF_CONTROLLER  Controller
+     );
+ 
++extern BOOLEAN
++ControllerIsEnabled(
++    IN  PXENVIF_CONTROLLER  Controller
++    );
++
+ _IRQL_requires_(DISPATCH_LEVEL)
+ extern VOID
+ ControllerDisconnect(
 diff --git a/src/xenvif/frontend.c b/src/xenvif/frontend.c
-index 086d0df..44b6584 100644
+index 086d0df..dfa42b6 100644
 --- a/src/xenvif/frontend.c
 +++ b/src/xenvif/frontend.c
-@@ -2088,8 +2088,26 @@ __FrontendUpdateHash(
+@@ -2086,6 +2086,17 @@ __FrontendUpdateHash(
+         return STATUS_NOT_SUPPORTED;
+     }
  
-     status = ControllerSetHashAlgorithm(Controller,
-                                         NetifAlgorithm);
--    if (!NT_SUCCESS(status))
-+    if (!NT_SUCCESS(status)) {
-+        /* A backend that offers no control ring cannot be told anything about
-+           hashing. When we are not asking for hashing there is no configuration
-+           left to apply, so that is nothing to report - do not fail the device
-+           over it.
-+
-+           Without this, ANY backend without feature-ctrl-ring makes the NIC
-+           unusable: ControllerConnect skips creating the ring (goto done),
-+           ControllerEnable sets Enabled anyway, and ControllerPutRequest then
-+           finds a zeroed ring, where RING_FULL is trivially true (0 - 0 == 0),
-+           and returns STATUS_INSUFFICIENT_RESOURCES. That propagates out of
-+           FrontendEnable, so xennet's MiniportRestart fails and the adapter
-+           ends at CM_PROB_FAILED_POST_START - purely because we could not say
-+           "no hashing" to a peer that never offered hashing.
-+           Measured against a MirageOS netback (qubes-mirage-firewall). */
++    // Hashing is configured using the control ring. If the controller is
++    // not accepting requests, which it never does if the backend has no
++    // control ring, then no hash can be configured. This is not a problem
++    // unless one is being asked for: there is nothing to turn off.
++    if (!ControllerIsEnabled(Controller)) {
 +        if (NetifAlgorithm == XEN_NETIF_CTRL_HASH_ALGORITHM_NONE)
 +            goto done;
 +
-         goto fail1;
++        return STATUS_NOT_SUPPORTED;
 +    }
- 
-     if (NetifAlgorithm == XEN_NETIF_CTRL_HASH_ALGORITHM_NONE)
-         goto done;
++
+     status = ControllerSetHashAlgorithm(Controller,
+                                         NetifAlgorithm);
+     if (!NT_SUCCESS(status))

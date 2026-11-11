@@ -142,6 +142,10 @@ jobs:
       # CM_PROB_FAILED_POST_START - purely because we could not say "no hashing" to a peer that
       # never offered hashing. Measured against qubes-mirage-firewall; Linux xen-netback
       # advertises feature-ctrl-ring, which is why it is not seen there.
+      # The patch is the general form the xenvif maintainers asked for (2026-11-11), not the
+      # earlier one-spot exemption in __FrontendUpdateHash: the controller is not enabled
+      # without a ring, and the hash path asks ControllerIsEnabled() before using it.
+      # upstream/xenvif-no-ctrl-ring.patch is the same change against xenvif master.
       # This MUST NOT be gated on `diagnostic`: without it a release build cannot bring up a
       # Windows PV NIC on any ctrl-ring-less netback.
       - name: Apply the control-ring fix (always)
@@ -151,8 +155,13 @@ jobs:
           $ErrorActionPreference = 'Stop'
           git apply --verbose ..\repo\patches\xenvif-ctrl-ring-fix.patch
           if ($LASTEXITCODE -ne 0) { throw "ctrl-ring fix did not apply" }
-          if (-not (Select-String -Path src\xenvif\frontend.c -Pattern 'no hashing' -Quiet)) {
-            throw "ctrl-ring fix marker missing after patch"
+          # Both halves, in the code and not in a comment: the hash path consults the controller,
+          # and the controller is only enabled when it has a ring.
+          if (-not (Select-String -Path src\xenvif\frontend.c -Pattern 'ControllerIsEnabled\(Controller\)' -Quiet)) {
+            throw "ctrl-ring fix marker missing after patch (frontend.c)"
+          }
+          if (-not (Select-String -Path src\xenvif\controller.c -Pattern 'Controller->Enabled = Controller->Connected;' -SimpleMatch -Quiet)) {
+            throw "ctrl-ring fix marker missing after patch (controller.c)"
           }
           Write-Host "::notice title=xenvif::control-ring fix applied"
 

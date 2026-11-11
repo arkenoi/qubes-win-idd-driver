@@ -1,0 +1,124 @@
+Subject: [PATCH] Handle backends without a control ring
+
+If the backend does not advertise feature-ctrl-ring, ControllerConnect()
+sets up no ring and leaves Controller->Connected clear. Requests used to
+fail with STATUS_NOT_SUPPORTED in that case, and the frontend ignored that
+for the default (UNSPECIFIED) hash algorithm. Two changes have broken this:
+
+- 50957a5 "Fix argument to ControllerSetHashAlgorithm" made
+  __FrontendUpdateHash() treat UNSPECIFIED like NONE, and so check the
+  result of setting XEN_NETIF_CTRL_HASH_ALGORITHM_NONE.
+
+- a9e785f "Check controller enable status in PutRequest" replaced the
+  Connected check in ControllerPutRequest() with Enabled, which
+  ControllerEnable() sets unconditionally. A request now gets as far as
+  RING_FULL(), which is always true for a ring that was never initialized,
+  and fails with STATUS_INSUFFICIENT_RESOURCES.
+
+As a result FrontendEnable() fails on such a backend, XENNET cannot restart
+its miniport and the device ends up with CM_PROB_FAILED_POST_START.
+
+Only enable the controller if it is connected, so that it never accepts a
+request it has no ring for, and add ControllerIsEnabled() so that
+__FrontendUpdateHash() can leave the controller alone in that case. Hashing
+cannot be configured without a control ring, so there is nothing to do
+unless a hash is being asked for, and that fails with STATUS_NOT_SUPPORTED
+(XENNET then does not advertise RSS).
+
+Nothing else uses the control ring, and the remaining Controller*() calls
+made by the frontend already cope with Connected being clear.
+---
+Not part of the commit message:
+ * Against xenvif master c042e3b.
+ * patches/xenvif-ctrl-ring-fix.patch in this repository is the same change
+   against the revision our build pins (0c61248).
+ * Add the Signed-off-by before sending.
+
+  src/xenvif/controller.c | 14 ++++++++++++--
+  src/xenvif/controller.h |  7 ++++++-
+  src/xenvif/frontend.c   | 11 +++++++++++
+  3 files changed, 29 insertions(+), 3 deletions(-)
+
+diff --git a/src/xenvif/controller.c b/src/xenvif/controller.c
+index f5dc178..53910a2 100644
+--- a/src/xenvif/controller.c
++++ b/src/xenvif/controller.c
+@@ -684,12 +684,14 @@ fail1:
+ 
+ VOID
+ ControllerEnable(
+-    _Out_ PXENVIF_CONTROLLER    Controller
++    _Inout_ PXENVIF_CONTROLLER  Controller
+     )
+ {
+     __ControllerAcquireLock(Controller);
+ 
+-    Controller->Enabled = TRUE;
++    // Requests can only be accepted if ControllerConnect() set up a
++    // control ring, which it does not do unless the backend offers one.
++    Controller->Enabled = Controller->Connected;
+ 
+     __ControllerReleaseLock(Controller);
+ 
+@@ -710,6 +712,14 @@ ControllerDisable(
+     Trace("<===>\n");
+ }
+ 
++BOOLEAN
++ControllerIsEnabled(
++    _In_ PXENVIF_CONTROLLER Controller
++    )
++{
++    return Controller->Enabled;
++}
++
+ _IRQL_requires_(DISPATCH_LEVEL)
+ VOID
+ ControllerDisconnect(
+diff --git a/src/xenvif/controller.h b/src/xenvif/controller.h
+index 39eab1f..8de634e 100644
+--- a/src/xenvif/controller.h
++++ b/src/xenvif/controller.h
+@@ -63,7 +63,7 @@ ControllerStoreWrite(
+ 
+ extern VOID
+ ControllerEnable(
+-    _Out_ PXENVIF_CONTROLLER    Controller
++    _Inout_ PXENVIF_CONTROLLER  Controller
+     );
+ 
+ extern VOID
+@@ -71,6 +71,11 @@ ControllerDisable(
+     _Out_ PXENVIF_CONTROLLER    Controller
+     );
+ 
++extern BOOLEAN
++ControllerIsEnabled(
++    _In_ PXENVIF_CONTROLLER Controller
++    );
++
+ _IRQL_requires_(DISPATCH_LEVEL)
+ extern VOID
+ ControllerDisconnect(
+diff --git a/src/xenvif/frontend.c b/src/xenvif/frontend.c
+index b1701cf..f1ab7e8 100644
+--- a/src/xenvif/frontend.c
++++ b/src/xenvif/frontend.c
+@@ -2090,6 +2090,17 @@ __FrontendUpdateHash(
+         return STATUS_NOT_SUPPORTED;
+     }
+ 
++    // Hashing is configured using the control ring. If the controller is
++    // not accepting requests, which it never does if the backend has no
++    // control ring, then no hash can be configured. This is not a problem
++    // unless one is being asked for: there is nothing to turn off.
++    if (!ControllerIsEnabled(Controller)) {
++        if (NetifAlgorithm == XEN_NETIF_CTRL_HASH_ALGORITHM_NONE)
++            goto done;
++
++        return STATUS_NOT_SUPPORTED;
++    }
++
+     status = ControllerSetHashAlgorithm(Controller,
+                                         NetifAlgorithm);
+     if (!NT_SUCCESS(status))
