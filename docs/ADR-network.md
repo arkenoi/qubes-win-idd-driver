@@ -232,8 +232,12 @@ Everything else in the MSI except gui-agent and the IDD is staged bit-for-bit fr
 MSI. `install_patched_xenvif()` runs BEFORE priming (a PV INF `AddReg` rewrites `NICS`), and the pipeline fails
 the build if the driver is not confirmed.
 
-**Open.** The ctrl-ring defect is upstream's (win-pv-devel); the report was drafted and is UNSENT as last
-recorded, pending the owner's approval of the text. Re-check before assuming it was sent.
+**Open.** The ctrl-ring defect is upstream's (win-pv-devel) and has been reported. The maintainers' answer,
+relayed by the owner 2026-11-11, is that xenvif was never tested without a control ring and needs general
+adjustments rather than a specific fix in `__FrontendUpdateHash`. The patch is now that general form (the
+controller is enabled only when it has a ring, and the hash path asks before using it), with the same change
+against master in `upstream/xenvif-no-ctrl-ring.patch`. The general form has not yet run on a guest; the
+one-spot form it replaces is what the rig verified (`findings/network.md` carries the current state).
 
 ## 8. A netvm's defects are fixed in the netvm, upstream, with the owner's approval of the text
 
@@ -252,5 +256,7 @@ were published 2026-08-24 with the library-first ordering disclosed; the owner's
 has carried the patched unikernel since. Nothing in the guest works around a netvm defect.
 
 **Evidence.** The submitted build measured on the rig: Windows 15-16 MB/s, Linux 15.5-17.7 MB/s on the same
-backend, no Linux-pair regression (the `rx_gso_checksum_fixup` falsifier held). Upstream status after
-2026-08-24 is unknown; re-check before acting.
+backend, no Linux-pair regression (the `rx_gso_checksum_fixup` falsifier held). Upstream status re-checked
+2026-11-11: only the checksum fix is upstream (mirage-net-xen 2.1.9, qubes-mirage-firewall 0.9.6); #121 and
+#232 are open and unmerged, and the maintainer has his own unmerged `state-machine` branch for the library
+half, which he asked to have tested (`findings/network.md`).
