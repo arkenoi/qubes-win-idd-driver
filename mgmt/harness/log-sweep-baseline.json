@@ -326,6 +326,60 @@
    "status": "unsettled",
    "max_per_boot": null,
    "reason": "CLASSIFICATION OWED - NOT A JEV VERDICT: expected 0.49 conf (expected=0.62 insufficient=0.33), one hundredth under the 0.5 floor, so no verdict. INFO level, so it does NOT count in signatures_unclassified (tools/log-sweep.py:4044 filters to E and W) and blocks nothing; it is declared so the sweep cannot meet it unannounced. A human decision is owed. CEILING UNMEASURED."
+  },
+  {
+   "regex": "^bridge\\|[^|]*\\|.*NOTIFY one-shot: read ",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED, AND DELIBERATELY NOT SILENCED. tools/notifhost/notifhost.cpp ReadNotifyFile: the bridge read and SENT a one-shot notification file and could not delete it. The delete is the acknowledgement, so the writer or the next bridge start sends the same message again - when this line is written the user gets a notification twice. The change that adds the line also gives the file read+delete for INTERACTIVE, so the delete is expected to succeed. Row is for the census; unsettled keeps the first occurrence flagged. Jev on the canonical log-sweep rubric (floor 0.5): expected 0.48 conf [expected=0.61 defect=0.26 insufficient-evidence=0.12 noise=0.01] - under the floor, no class. keep_armed noul=0.71."
+  },
+  {
+   "regex": "^bridge\\|[^|]*\\|.*NOTIFY state file: SDDL conversion failed \\(",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED, AND DELIBERATELY NOT SILENCED. tools/notifhost/notifhost.cpp WriteSmallForSession: converting a compile-time constant SDDL string failed, the file is not written and both callers then log that the notification is lost. Row is for the census; unsettled keeps the first occurrence flagged. Jev on the canonical log-sweep rubric (floor 0.5): expected 0.43 conf [expected=0.57 insufficient-evidence=0.32 defect=0.11 noise=0.00] - under the floor, no class. keep_armed noul=0.84."
+  },
+  {
+   "regex": "^agent\\|W\\|[^|]*: QGABROKERSTARTSLOW the de-slice broker's process is running and has not published ready ",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED ON THE RIG, AND DELIBERATELY NOT SILENCED. agent/gui-agent/main.c BrokerStartHold (agent 543d13f): at the 30 s deadline the capture helper has never been ready, has no death on record and its process exists, so the 'not running' report is held once and goes out 120 s later if the helper is still not ready. A field tester's guest needed 16 to 58 s; the rig's helper is ready within seconds, so an occurrence here is a slow start worth reading. Jev on the canonical log-sweep rubric (floor 0.5): expected 0.51 conf [expected=0.63 insufficient-evidence=0.28 defect=0.09 noise=0.00]. keep_armed noul=0.87, so it is armed rather than expected: the first occurrence is flagged and decided with that run's evidence."
+  },
+  {
+   "regex": "^agent\\|I\\|[^|]*: WGCBROKER ready \\(pid ",
+   "status": "expected",
+   "max_per_boot": null,
+   "reason": "Jev on the canonical log-sweep rubric (tools/log-sweep.py jev_rubric criteria, floor 0.5): expected 0.83. NORMAL OPERATION. agent/gui-agent/main.c BrokerSupervise (agent 543d13f): the line every helper start has always written when the helper becomes ready, with three measured numbers appended - ms since the launch, the process's age and its CPU time. CEILING UNMEASURED: once per helper start."
+  },
+  {
+   "regex": "^agent\\|I\\|[^|]*: NOTIFBRIDGE stale state file removed at start: ",
+   "status": "expected",
+   "max_per_boot": null,
+   "reason": "Jev on the canonical log-sweep rubric (tools/log-sweep.py jev_rubric criteria, floor 0.5): expected 0.87 conf [expected=0.90 insufficient-evidence=0.08 defect=0.01 noise=0.01]. NORMAL OPERATION. agent/gui-agent/main.c NotifBridgeRetireLeftovers: at its start, before it launches a bridge, the agent deletes the three files an earlier run may have left in the bridge's state directory - stop, heartbeat, exit-reason - and writes this line once per file that was there. The agent writes the stop file at every shutdown, so one line per agent start is the ordinary case and three is the most. CEILING UNMEASURED: how often a heartbeat or an exit-reason is left at an ordinary shutdown is not measured."
+  },
+  {
+   "regex": "^agent\\|W\\|[^|]*: NOTIFBRIDGE stale state file not removed \\(",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED, AND DELIBERATELY NOT SILENCED. agent/gui-agent/main.c NotifBridgeRetireLeftovers: the SYSTEM agent could not delete a leftover stop, heartbeat or exit-reason file. The line names the file and what follows: the bridge stops on a stop file, a bridge that cannot replace the heartbeat is never reported ready, and one that cannot replace exit-reason has an exit it was asked for reported as a death. Row is for the census; unsettled keeps the first occurrence flagged. Jev on the canonical log-sweep rubric (floor 0.5): expected 0.44 conf [expected=0.58 insufficient-evidence=0.30 defect=0.12 noise=0.00] - under the floor, no class. keep_armed noul=0.83."
+  },
+  {
+   "regex": "^bridge\\|[^|]*\\|.*BRIDGE pid not published: ",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED, AND DELIBERATELY NOT SILENCED. tools/notifhost/notifhost.cpp BridgeMain: the bridge could not create or write the heartbeat file that publishes its pid, so it runs and forwards while the agent reports no bridge ready and holds no toast window back. The one measured cause - a file left by a bridge that ran with UAC off, which a bridge running with UAC on cannot replace - is removed by the agent at its start in the same change, so an occurrence is a new cause. Jev on the canonical log-sweep rubric (floor 0.5): expected 0.73 conf [expected=0.80 insufficient-evidence=0.12 defect=0.08 noise=0.00] as a correct record; keep_armed noul=0.80, so it is armed rather than expected: the first occurrence is flagged and decided with that run's evidence."
+  },
+  {
+   "regex": "^agent\\|I\\|[^|]*: QGADOM0WINDOWGONE dom0's ",
+   "status": "expected",
+   "max_per_boot": null,
+   "reason": "Jev on the canonical log-sweep rubric (tools/log-sweep.py jev_rubric criteria, floor 0.5): expected 0.52 conf [expected=0.64 insufficient-evidence=0.34 defect=0.01 noise=0.01]. agent/gui-agent/vchan-handlers.c HandleFocus and HandleConfigure (agent b498a2f): dom0 sent a focus or a configure naming a handle the agent's list does not hold and that IsWindow says is not a window. dom0 and the guest are not synchronised, so the message was in flight while the guest destroyed the window; nothing is applied. For this case it replaces the WARNING 'window 0x.. not tracked', seen once on the 4.3.41 smoke run 35 ms after the harness closed its Notepad and in 1 of the 40 newest runs. WHAT IT CANNOT TELL: a destroyed window from a handle that never was one. CEILING UNMEASURED."
+  },
+  {
+   "regex": "^agent\\|W\\|[^|]*: QGADOM0WINDOWUNTRACKED dom0's ",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED, AND DELIBERATELY NOT SILENCED. agent/gui-agent/vchan-handlers.c HandleFocus and HandleConfigure (agent b498a2f): dom0 sent a focus or a configure naming a handle that IS a window and that the agent's list does not hold - the agent announced it and lost it, or Windows reused a destroyed window's handle for one not announced yet. A click or a move made on the dom0 side is then not applied to that window. Jev on the canonical log-sweep rubric (floor 0.5): expected 0.56 conf [expected=0.67 insufficient-evidence=0.30 defect=0.03 noise=0.00] as a correct record; keep_armed noul=0.94, so it is armed rather than expected: the first occurrence is flagged and decided with that run's evidence."
   }
  ],
  "signatures": {
@@ -4339,5 +4393,5 @@
   }
  },
  "version": 1,
- "preaccounted_at": "146f0f4cc2e1dc75e377d7174d2e03af444cd827"
+ "preaccounted_at": "6a0d6c44d4adc7c7625ecc22629a36b63bf43091"
 }
