@@ -88,10 +88,13 @@ AppVM derivation checks. The feature tests ran the updater on the reporter's Ger
 upgraded 4.3.29 → 4.3.41 from the release disc, all 8 updater gates passed — and on a TemplateVM in that
 environment through three dom0-driven update passes, plus the guest's error notifications,
 crop-before-map and the supervision gate. The remainder suites proved the full-screen and capture
-checks able to fail, one clause at a time. **Not verified: UAC on.** The rig's guests, the reporter's
-environment included, are provisioned with UAC disabled, so no cell of this acceptance ran the UAC-on
-paths this release fixes; they were found in the reporter's logs, and the field is where they will be
-confirmed. Full detail in [`docs/RELEASE-NOTES-4.3.41.md`](docs/RELEASE-NOTES-4.3.41.md).
+checks able to fail, one clause at a time. **Not verified by the acceptance: UAC on.** The rig's
+guests, the reporter's environment included, are provisioned with UAC disabled, so no acceptance cell
+ran the UAC-on paths this release fixes; they were found in the reporter's logs. Before the acceptance,
+one smoke on the German guest with UAC turned on and a cold reboot, on an earlier build of this release
+(4.3.41.1264), showed the agent removing the leftover `stop` and `heartbeat` files and the notification
+bridge ready 797 ms after its launch. That is a single smoke on a neighbouring build, not a measured
+cell on these bytes. Full detail in [`docs/RELEASE-NOTES-4.3.41.md`](docs/RELEASE-NOTES-4.3.41.md).
 **On "updates available" reappearing right after an update — this is Windows Defender, and dom0 is telling you the truth.**
 On a freshly updated guest, dom0's updates-available can go back to "available" within a minute of clearing. We chased this as a
 possible defect and it is not one: the guest's own scan record names what it found — `KB2267602`, a Microsoft Defender Security
