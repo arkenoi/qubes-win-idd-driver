@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# wu-evidence-facts.sh <vm> <facts-out> [offers] - measure, on a RUNNING guest, the artefact versions tools/wu-exclusion-evidence.py turns into
+# wu-evidence-facts.sh <vm> <facts-out> [offers|offers-only] - measure, on a RUNNING guest, the artefact versions tools/wu-exclusion-evidence.py turns into
 # the INDEPENDENT evidence tools/wu-exclusion-audit.py --evidence judges against. Read by the harness, never by the updater under test.
 #
 # Why a script of its own (2026-10-03): it was inline in mgmt/harness/template-update-test.sh, where its first live run would have been
@@ -18,10 +18,16 @@
 # WHY: an offer the updater leaves out of dom0's count as 'no route' rests on three facts (ADR-updater section 2 point 5). Its
 # 'the content is not self-contained' existed only in the updater's own status, so the exclusion audit had nothing independent to
 # hold it against and one permanent driver offer on the field reporter's environment ended every acceptance run INSTRUMENT.
+#
+# `offers-only` (2026-11-12) takes ONLY that second read and appends it to <facts-out>, which must already hold a complete first
+# read (EV|end=1) and no offers section; anything else is refused with exit 2. mgmt/harness/wu-e2e.sh defers the offers read of a
+# round whose pass scheduled its own restart to the next round's start, because the read raced that restart: MEASURED on build
+# 4.3.41.1272's template-update round 2, the pass's `shutdown /r /t 60` (guest/wu-update.ps1) fell ~60 s after it ended, and the
+# read returned at that moment with only PowerShell's "#< CLIXML" header - no offer, no count, no error line.
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver || exit 2
-VM="${1:?usage: wu-evidence-facts.sh <vm> <facts-out> [offers]}"
-OUT="${2:?usage: wu-evidence-facts.sh <vm> <facts-out> [offers]}"
+VM="${1:?usage: wu-evidence-facts.sh <vm> <facts-out> [offers|offers-only]}"
+OUT="${2:?usage: wu-evidence-facts.sh <vm> <facts-out> [offers|offers-only]}"
 source mgmt/harness/vmlock.sh; vm_lock "$VM"
 # DEFENDER LOADS LATE (measured 2026-10-03 on the rz35 subject, German 25H2): 68 s after boot WinDefend was Running but reported
 # AMRunningMode 'Not running', engine 0.0.0.0 and NO signature version; at 170 s it reported Normal, engine 1.1.26080.3, signatures
@@ -65,14 +71,19 @@ $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
 'EV|whoami=' + [Security.Principal.WindowsIdentity]::GetCurrent().Name
 'EV|end=1'
 PS
-b64=$(printf '%s' "$EVPS" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)
-raw="$OUT.raw"
-QTEST_VM="$VM" timeout -k 5 420 tools/qtest run "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $b64" \
-  2>&1 | tr -d '\r' > "$raw"
-grep -a '^EV|' "$raw" > "$OUT"
-grep -a -q '^EV|end=1$' "$OUT" || { echo "INCOMPLETE: no end marker from $VM (raw answer kept in $raw)" >&2; exit 2; }
-echo "facts from $VM: $(grep -a -v '^EV|end=' "$OUT" | tr '\n' ' ' | cut -c1-400)"   # -a: SYSTEM's name is localized (NT-AUTORITÄT, OEM codepage)
-[ "${3:-}" = offers ] || exit 0
+if [ "${3:-}" = offers-only ]; then
+  grep -a -q '^EV|end=1$' "$OUT" 2>/dev/null || { echo "OFFERS-ONLY REFUSED: $OUT holds no complete first read (no EV|end=1) to append the offers to" >&2; exit 2; }
+  if grep -a -q '^EV|offers' "$OUT"; then echo "OFFERS-ONLY REFUSED: $OUT already carries an offers section" >&2; exit 2; fi
+else
+  b64=$(printf '%s' "$EVPS" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)
+  raw="$OUT.raw"
+  QTEST_VM="$VM" timeout -k 5 420 tools/qtest run "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $b64" \
+    2>&1 | tr -d '\r' > "$raw"
+  grep -a '^EV|' "$raw" > "$OUT"
+  grep -a -q '^EV|end=1$' "$OUT" || { echo "INCOMPLETE: no end marker from $VM (raw answer kept in $raw)" >&2; exit 2; }
+  echo "facts from $VM: $(grep -a -v '^EV|end=' "$OUT" | tr '\n' ' ' | cut -c1-400)"   # -a: SYSTEM's name is localized (NT-AUTORITÄT, OEM codepage)
+  [ "${3:-}" = offers ] || exit 0
+fi
 # THE OFFERS, AS THE AGENT HOLDS THEM. Per offer: UpdateID; nodes visited in its bundle tree; leaves (nodes that carry content);
 # NEEDED leaves (neither installed nor downloaded); content items on needed leaves that are a plain download.windowsupdate.com
 # file, and those that are anything else (an express or Delivery Optimization stream, a URL with a query, none at all - a leaf

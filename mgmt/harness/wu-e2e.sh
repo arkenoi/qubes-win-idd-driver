@@ -268,6 +268,9 @@ reboots_requested=0
 reboots_performed=0
 note_request(){ reboots_requested=$((reboots_requested+1)); log "REBOOT REQUESTED (#$reboots_requested): $*"; }
 note_performed(){ reboots_performed=$((reboots_performed+1)); log "reboot performed (#$reboots_performed)"; }
+# The round directory whose after-pass OFFERS read is still owed - set by a round whose pass scheduled its own restart (see the
+# after-pass facts below), taken at the next round's start, or after the loop for the last round.
+offers_owed=""
 
 for r in $(seq 1 "$ROUNDS"); do
   RD="$OUT/round$r"; mkdir -p "$RD"
@@ -295,6 +298,15 @@ for r in $(seq 1 "$ROUNDS"); do
   # refused by tools/wu-exclusion-evidence.py when an excluded round needs it (missing data fails).
   mgmt/harness/wu-evidence-facts.sh "$VM" "$RD/facts-before.txt" > "$RD/facts-before.out" 2>&1 \
     || log "round $r: facts before the pass INCOMPLETE - $(tail -1 "$RD/facts-before.out" | cut -c1-160)"
+  # THE OFFERS READ THE PREVIOUS ROUND OWES (it scheduled a restart - see the after-pass facts below), taken HERE: after the
+  # settle, the qrexec wait and the self-power-off handling above, where build 4.3.41.1272's template-update round 3 then ran
+  # undisturbed - not straight after the cycle, where that run's guest powered itself off once more for servicing completion.
+  # Appended to THAT round's facts, the round the exclusion audit judges it for.
+  if [ -n "$offers_owed" ]; then
+    mgmt/harness/wu-evidence-facts.sh "$VM" "$offers_owed/facts-after.txt" offers-only >> "$offers_owed/facts-after.out" 2>&1
+    log "round $r: the offers read ${offers_owed##*/} owed: $(tail -1 "$offers_owed/facts-after.out" | cut -c1-160)"
+    offers_owed=""
+  fi
 
   # The old agent.log was CUMULATIVE - it carries every pass this image has ever run, including the
   # golden's history - and a per-day file carries every pass of its day. Judging whole files each
@@ -419,13 +431,34 @@ for r in $(seq 1 "$ROUNDS"); do
   esac
   log "round $r: agent.log grew by $(wc -l < "$RD/agent.log") line(s) ($(grep -ac '^agent\.log' "$RD/guestlogs.tsv" 2>/dev/null) file(s) read)"
   guest_file 'C:\ProgramData\Qubes\update-status.json'  > "$RD/update-status.json"
+  # Read here, from the status just fetched, because the after-pass facts below already depend on it; logged and acted on at the
+  # pending-reboot block further down.
+  reboot_needed=$(python3 - "$RD/update-status.json" <<'PY' 2>/dev/null
+import json,sys
+# The guest writes update-status.json with a UTF-8 BOM; plain utf-8 raises and reboot_needed
+# then read 'unknown' every round (measured 2026-09-20).
+try: print(str(json.load(open(sys.argv[1], encoding='utf-8-sig')).get('reboot_needed', False)).lower())
+except Exception: print('unknown')
+PY
+)
   log "round $r: relay log $(wc -l < "$RD/relay.log" 2>/dev/null || echo 0) line(s), handler log $(wc -l < "$RD/relay-handler.log" 2>/dev/null || echo 0) line(s), shim log $(wc -l < "$RD/vmupdate-shim.log" 2>/dev/null || echo 0) line(s)"
   # `offers` (2026-11-10): after the pass the harness also records what the Windows Update agent itself holds for every pending
   # offer - the independent read of "is this offer's content self-contained" that tools/wu-exclusion-evidence.py holds an
   # unroutable claim against. After the pass only: that is the state the round's claim is about, and before round 1 the
   # agent's store is whatever the golden last saw.
-  mgmt/harness/wu-evidence-facts.sh "$VM" "$RD/facts-after.txt" offers > "$RD/facts-after.out" 2>&1 \
-    || log "round $r: facts after the pass INCOMPLETE - $(tail -1 "$RD/facts-after.out" | cut -c1-160)"
+  # ...EXCEPT WHEN THE PASS SCHEDULED ITS OWN RESTART. guest/wu-update.ps1 runs `shutdown /r /t 60` when a reboot is needed, and an
+  # offers read in that minute races it. MEASURED on build 4.3.41.1272's template-update round 2: the read returned at the restart,
+  # ~60 s after the pass ended, with only "#< CLIXML" - no offer, no count, no error line - so the exclusion evidence for the one item
+  # excluded in all three rounds could not be built and the cell ended INSTRUMENT. Round 1, same notice, finished its read in 2 s.
+  # Such a round takes its first read now and OWES the offers read to the next round's start (offers_owed, taken there).
+  if [ "$reboot_needed" = true ]; then
+    mgmt/harness/wu-evidence-facts.sh "$VM" "$RD/facts-after.txt" > "$RD/facts-after.out" 2>&1 \
+      || log "round $r: facts after the pass INCOMPLETE - $(tail -1 "$RD/facts-after.out" | cut -c1-160)"
+    offers_owed=$RD
+  else
+    mgmt/harness/wu-evidence-facts.sh "$VM" "$RD/facts-after.txt" offers > "$RD/facts-after.out" 2>&1 \
+      || log "round $r: facts after the pass INCOMPLETE - $(tail -1 "$RD/facts-after.out" | cut -c1-160)"
+  fi
 
   after=$(dom0_avail); log "round $r: dom0 updates-available AFTER='${after:-<empty>}'"
   echo "${after:-}" > "$RD/dom0-updates-available.txt"
@@ -457,14 +490,7 @@ for r in $(seq 1 "$ROUNDS"); do
   # record. Rounds 1 and 3 passed only because their restart fell outside the window: the cell
   # was a race. Nothing is excused by the reorder - the scan still has to run and the stamp
   # still has to move - it is just asked for at a moment the guest is up to answer it.
-  reboot_needed=$(python3 - "$RD/update-status.json" <<'PY' 2>/dev/null
-import json,sys
-# The guest writes update-status.json with a UTF-8 BOM; plain utf-8 raises and reboot_needed
-# then read 'unknown' every round (measured 2026-09-20).
-try: print(str(json.load(open(sys.argv[1], encoding='utf-8-sig')).get('reboot_needed', False)).lower())
-except Exception: print('unknown')
-PY
-)
+  # (reboot_needed was read from this round's update-status.json right after it was fetched, above.)
   log "round $r: reboot_needed=$reboot_needed"
   if [ "$reboot_needed" = true ]; then
     note_request "update-status.json says reboot_needed=true after round $r"
@@ -857,6 +883,33 @@ PY
   fi
 
 done
+
+# A LAST ROUND THAT SCHEDULED A RESTART OWES ITS OFFERS READ TOO, with no next round to take it at, so this is that round's top:
+# the settle, the qrexec wait, a self-power-off counted as the guest's own request, then the read. Only after a run that went
+# through every round - every break out of the loop above sets fails=1 - because a stopped run's guest is left as it is, to be
+# interrogated. A read that is not taken is logged as the gap it is, and the evidence builder refuses on it (missing data fails).
+if [ -n "$offers_owed" ] && [ "$fails" = 0 ]; then
+  log "settling ${SETTLE:-60}s before the offers read ${offers_owed##*/} owes"; sleep "${SETTLE:-60}"
+  owed_up=1
+  if ! wait_qrexec 900; then
+    owed_up=0
+    if stalled; then log "after round $ROUNDS: STALLED (Running, qrexec dead) - stopping, the guest must be interrogated"; fails=1
+    else
+      note_request "the guest powered itself off after round $ROUNDS"
+      timeout 240 qvm-start "$VM" >/dev/null 2>&1
+      note_performed
+      if wait_qrexec 900; then owed_up=1; else log "after round $ROUNDS: guest never came up"; fails=1; fi
+    fi
+  fi
+  if [ "$owed_up" = 1 ]; then
+    mgmt/harness/wu-evidence-facts.sh "$VM" "$offers_owed/facts-after.txt" offers-only >> "$offers_owed/facts-after.out" 2>&1
+    log "after round $ROUNDS: the offers read ${offers_owed##*/} owed: $(tail -1 "$offers_owed/facts-after.out" | cut -c1-160)"
+  else
+    log "after round $ROUNDS: the offers read ${offers_owed##*/} owed was NOT taken - the guest did not answer"
+  fi
+elif [ -n "$offers_owed" ]; then
+  log "the offers read ${offers_owed##*/} owed was NOT taken - the run stopped early and its guest is left as it is"
+fi
 
 if [ "$reboots_performed" != "$reboots_requested" ]; then
   log "[ERROR] FAIL REBOOT ACCOUNTING: $reboots_performed performed vs $reboots_requested requested - a power cycle happened that nobody asked for (or a requested one was skipped)"
