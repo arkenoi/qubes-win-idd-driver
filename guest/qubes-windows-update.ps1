@@ -60,17 +60,17 @@ $ErrorActionPreference = 'Continue'
 $qwtLogPs1 = Join-Path $PSScriptRoot 'log.ps1'
 try { . $qwtLogPs1 } catch { [Console]::Error.WriteLine("qubes-windows-update.ps1: cannot load $qwtLogPs1 ($($_.Exception.Message)) - no log sink"); exit 1 }
 if (-not (Get-Command Write-QwtLogLine -EA SilentlyContinue)) { [Console]::Error.WriteLine("qubes-windows-update.ps1: $qwtLogPs1 has no Write-QwtLogLine - no log sink"); exit 1 }
-# THE SILENT STARTUP WINDOW, CLOSED. The sink above is loaded and proven callable FROM HERE, but this
-# script's own Log wrapper is not defined for another ~560 lines, so a terminating error before that went
-# only to STDERR - and Task Scheduler DISCARDS stderr. That is why six field occurrences of
-# WUSCANTASKFAILSANDLOGSNOTHING (reporter builds 4.3.37/.38, bundles 2026-10-27) carried a result code
-# and not one line of cause: 0x80070001 is HRESULT_FROM_WIN32(1), which is what powershell.exe returns
-# for an unhandled terminating error, and no Task Scheduler event export could ever have held the
-# statement that raised it. Measured the same day: the task definition, its arguments and this startup
-# path are sound as shipped - win11de-nokb-ctl (German 25H2, the reporter's locale) ran the identical
-# action with LastTaskResult 0x00000000 - so what was missing was never a guard, only the line.
-# `break` keeps today's control flow EXACTLY: the script still terminates and still returns 1. The
-# wording is deliberately NOT "startup" - a trap is script-wide and must be truthful wherever it fires.
+# THE SILENT STARTUP WINDOW, CLOSED. The sink above is loaded and proven callable FROM HERE, before this
+# script's own Log wrapper exists, and a terminating error that reaches no log goes only to STDERR - which
+# Task Scheduler DISCARDS. 0x80070001 is HRESULT_FROM_WIN32(1), what powershell.exe returns for an
+# unhandled terminating error, and no Task Scheduler event export can hold the statement that raised it.
+# The six field occurrences of WUSCANTASKFAILSANDLOGSNOTHING (reporter builds 4.3.37/.38) carried that
+# code and no cause; their bundles held no updater log at all - those builds wrote C:\ProgramData\Qubes\wu\agent.log.
+# `break` ENDS THE PASS on every terminating error the script does not catch itself, a statement-terminating
+# one included - and that one, without a trap, prints to stderr and carries on. Reproduced 2026-11-12 under
+# pwsh 7.6: a parameter-binding error in a function called from script level continued with exit 0 without
+# the trap and ended the script with exit 1 with it. So an uncaught error stops the pass, on the record.
+# The wording is deliberately NOT "startup" - a trap is script-wide and must be truthful wherever it fires.
 # The body cannot fail its host: a sink that throws must not become the error it was reporting.
 trap {
   try {
@@ -192,6 +192,78 @@ if ($Scheduled -and $Action -eq 'scan') {
 $script:LogDropped = 0
 $script:LogDropFirst = ''
 $script:LogLossReported = $false
+# Log IS DEFINED HERE, before Save and the mutex block, because Save calls it. Until 2026-11-12 it was defined after
+# them, so in the first Save (line "Save" under the mutex block) both of Save's Log calls bound to log.ps1's
+# Log(level,msg), whose [int] level refuses a string. Reproduced in a ten-line script under pwsh 7.6: the clock-jump
+# warning raised an argument-transformation error and the trap above ended the pass with exit 1 - a scan task
+# "failure" whose only cause was a wall-clock correction of 30 s or more early in the pass.
+# Write-Host alone is lost under the scheduled task, which is why every download failure so far
+# had to be reconstructed from DISM's log instead of ours. Tee to a file.
+function Log($m, $lvl){
+  # THE LEVEL WAS SILENTLY THROWN AWAY. This took one parameter while EIGHT call sites passed a
+  # level positionally - `Log "..." 'WARN'` - and PowerShell puts the extra argument in $args and
+  # drops it. MEASURED, not reasoned: `function Log($m){...}; Log "x" "WARN"` prints the message
+  # and `args: [WARN]`.
+  # IT BLINDED THE JUDGE. tools/wu-pass-judge.py reads the writer's declared level and nothing
+  # else - `^(?:\[ERROR\]|ERROR:)` - so `Log "Windows Update fallback failed" 'ERROR'` and
+  # `Log "Sync-Revocation: FAILED ..." 'ERROR'` wrote lines that cannot match, and two real
+  # failures could never be counted as errors. tools/log-sweep.py recorded all eight as undeclared
+  # for the same reason. This is the 2026-10-14 blindness from the other end: that time the writer
+  # changed its prefix and the reader stopped matching; here the writer never emitted one at all.
+  # THE LEVEL IS THE LINE'S PREFIX LETTER NOW, not a "[$lvl] " in its text (docs/ADR-logging.md, Decision 2026-11-01):
+  # E for ERROR/FAILED, W for WARN/WARNING, D for DEBUG, I otherwise - from the level a call site PASSES. The twelve
+  # sites that write "[ERROR] "/"[WARN] " INTO the text with no $lvl keep that text (its declaration lives there on
+  # purpose - QWTUPDDEFCLASSNEW below says why) and take the letter that text declares, by the rule tools/log-sweep.py
+  # applied to this log before the move (BLOG_DECLARED_RE, leading blanks allowed). At I they would vanish from the
+  # sweep, which reads the letter and treats I as not a failure - the pass's own final "[ERROR] " line among them.
+  $L = 'I'
+  if ($lvl -in 'ERROR', 'FAILED') { $L = 'E' } elseif ($lvl -in 'WARN', 'WARNING') { $L = 'W' } elseif ($lvl -eq 'DEBUG') { $L = 'D' }
+  elseif (-not $lvl -and "$m" -match '^\s*\[(ERROR|FATAL|WARN|WARNING)\]\s') { if ($Matches[1] -in 'ERROR', 'FATAL') { $L = 'E' } else { $L = 'W' } }
+  # The console keeps its old shape: whoever runs a pass by hand reads the level in the text.
+  $shown = $m
+  if ($lvl) { $shown = "[$lvl] $m" }
+  Write-Host ((Get-Date -Format 'HH:mm:ss') + ' ' + $shown)
+  # A DROPPED LOG LINE IS A LOST ERROR, AND THIS USED TO DROP THEM IN SILENCE. The old body was
+  #     try { Add-Content ... -EA SilentlyContinue } catch {}
+  # - a suppressed error inside an empty catch, so a failed append left no trace in the file, on the
+  # console, or in the status. MEASURED 2026-10-08 with an unwritable WorkDir: the call does not
+  # throw, writes nothing, and reports nothing.
+  # IT HAPPENED FOR REAL. On WIN11-upgrade and win11de-tup the pass's agent.log was missing
+  # "relay started: pid ..." and "proxy up: ..." although it plainly reached Sync-Revocation, which
+  # runs immediately AFTER Ensure-Proxy and only if Ensure-Proxy returned - and Ensure-Proxy's
+  # success path emits both. Add-Content takes a write lock, and the updater deploy was writing in
+  # that same second. Those two absences then became evidence for a defect that was never there.
+  # Write-Host alone is not a record: under Task Scheduler there is no console to keep it.
+  # THE RETRY IS log.ps1's NOW: Write-QwtLogLine retries a sharing collision 20 x 15 ms and gives up at
+  # once on a missing directory or a refusal, so the five tries and the after-three-drops shortcut that
+  # lived here are gone - a log that is plainly gone already costs one attempt. What stays is the
+  # ACCOUNTING, keyed on its answer.
+  $mod = 'qubes-windows-update.ps1'
+  # THE LOG REPORTS ITS OWN GAPS. A status field can go unread; a line in the log is seen by
+  # whoever reads the log, including tools/log-sweep.py. So the first write that SUCCEEDS after
+  # any loss states how many lines went missing and why - otherwise the only trace of a gap is
+  # the gap, and an absent line would again be mistaken for an event that did not happen.
+  if ($script:LogDropped -gt 0 -and -not $script:LogLossReported) {
+    $notice = "QWTUPDLOGLOST $script:LogDropped line(s) could not be written to this log and are GONE (first reason: $script:LogDropFirst). Anything inferred from a MISSING line in this file is unsafe."
+    # MARKED REPORTED ONLY ONCE IT IS ON DISK. Setting the flag first meant a notice that was
+    # ITSELF dropped counted as delivered, so the gap was never announced - caught by
+    # tools/tests/wu-log-loss-selftest.sh the first time it ran.
+    if (Write-QwtLogLine W $notice -Module $mod) { $script:LogLossReported = $true }
+    else {
+      # The gap is still unannounced, so this line must not land after it as if nothing were missing: it is lost too,
+      # and said on stderr like every other lost line (log.ps1 has only said so for the notice).
+      [Console]::Error.WriteLine("qwt log: line LOST (the QWTUPDLOGLOST notice before it was not written): $m")
+      $script:LogDropped++
+      return
+    }
+  }
+  if (Write-QwtLogLine $L "$m" -Module $mod) { return }
+  # The primitive has already said why on stderr; it returns no reason, so the status names where to look.
+  if (-not $script:LogDropFirst) { $script:LogDropFirst = 'Write-QwtLogLine could not write the line - log.ps1 named the cause on stderr' }
+  # COUNT it. Save reports the count, so an incomplete log is a stated fact rather than a gap someone
+  # has to notice.
+  $script:LogDropped++
+}
 $script:St = [ordered]@{ action=$Action; phase='init'; ts=$null; owner_pid=0; owner_pid_start=''; count=0; available=@();
                          downloading=$null; installing=$null; result=@(); reboot_needed=$false; error=$null; recovered='';
                          not_actionable=@(); satisfied=@(); satisfied_rule='installed'; unroutable=@(); route_unknown=@(); esu=$null; notice=$null }
@@ -604,74 +676,7 @@ function Get-OfferRouteKey($u) {
   return ''
 }
 # ---- WU-ROWKEY-END
-# Write-Host alone is lost under the scheduled task, which is why every download failure so far
-# had to be reconstructed from DISM's log instead of ours. Tee to a file.
-function Log($m, $lvl){
-  # THE LEVEL WAS SILENTLY THROWN AWAY. This took one parameter while EIGHT call sites passed a
-  # level positionally - `Log "..." 'WARN'` - and PowerShell puts the extra argument in $args and
-  # drops it. MEASURED, not reasoned: `function Log($m){...}; Log "x" "WARN"` prints the message
-  # and `args: [WARN]`.
-  # IT BLINDED THE JUDGE. tools/wu-pass-judge.py reads the writer's declared level and nothing
-  # else - `^(?:\[ERROR\]|ERROR:)` - so `Log "Windows Update fallback failed" 'ERROR'` and
-  # `Log "Sync-Revocation: FAILED ..." 'ERROR'` wrote lines that cannot match, and two real
-  # failures could never be counted as errors. tools/log-sweep.py recorded all eight as undeclared
-  # for the same reason. This is the 2026-10-14 blindness from the other end: that time the writer
-  # changed its prefix and the reader stopped matching; here the writer never emitted one at all.
-  # THE LEVEL IS THE LINE'S PREFIX LETTER NOW, not a "[$lvl] " in its text (docs/ADR-logging.md, Decision 2026-11-01):
-  # E for ERROR/FAILED, W for WARN/WARNING, D for DEBUG, I otherwise - from the level a call site PASSES. The twelve
-  # sites that write "[ERROR] "/"[WARN] " INTO the text with no $lvl keep that text (its declaration lives there on
-  # purpose - QWTUPDDEFCLASSNEW below says why) and take the letter that text declares, by the rule tools/log-sweep.py
-  # applied to this log before the move (BLOG_DECLARED_RE, leading blanks allowed). At I they would vanish from the
-  # sweep, which reads the letter and treats I as not a failure - the pass's own final "[ERROR] " line among them.
-  $L = 'I'
-  if ($lvl -in 'ERROR', 'FAILED') { $L = 'E' } elseif ($lvl -in 'WARN', 'WARNING') { $L = 'W' } elseif ($lvl -eq 'DEBUG') { $L = 'D' }
-  elseif (-not $lvl -and "$m" -match '^\s*\[(ERROR|FATAL|WARN|WARNING)\]\s') { if ($Matches[1] -in 'ERROR', 'FATAL') { $L = 'E' } else { $L = 'W' } }
-  # The console keeps its old shape: whoever runs a pass by hand reads the level in the text.
-  $shown = $m
-  if ($lvl) { $shown = "[$lvl] $m" }
-  Write-Host ((Get-Date -Format 'HH:mm:ss') + ' ' + $shown)
-  # A DROPPED LOG LINE IS A LOST ERROR, AND THIS USED TO DROP THEM IN SILENCE. The old body was
-  #     try { Add-Content ... -EA SilentlyContinue } catch {}
-  # - a suppressed error inside an empty catch, so a failed append left no trace in the file, on the
-  # console, or in the status. MEASURED 2026-10-08 with an unwritable WorkDir: the call does not
-  # throw, writes nothing, and reports nothing.
-  # IT HAPPENED FOR REAL. On WIN11-upgrade and win11de-tup the pass's agent.log was missing
-  # "relay started: pid ..." and "proxy up: ..." although it plainly reached Sync-Revocation, which
-  # runs immediately AFTER Ensure-Proxy and only if Ensure-Proxy returned - and Ensure-Proxy's
-  # success path emits both. Add-Content takes a write lock, and the updater deploy was writing in
-  # that same second. Those two absences then became evidence for a defect that was never there.
-  # Write-Host alone is not a record: under Task Scheduler there is no console to keep it.
-  # THE RETRY IS log.ps1's NOW: Write-QwtLogLine retries a sharing collision 20 x 15 ms and gives up at
-  # once on a missing directory or a refusal, so the five tries and the after-three-drops shortcut that
-  # lived here are gone - a log that is plainly gone already costs one attempt. What stays is the
-  # ACCOUNTING, keyed on its answer.
-  $mod = 'qubes-windows-update.ps1'
-  # THE LOG REPORTS ITS OWN GAPS. A status field can go unread; a line in the log is seen by
-  # whoever reads the log, including tools/log-sweep.py. So the first write that SUCCEEDS after
-  # any loss states how many lines went missing and why - otherwise the only trace of a gap is
-  # the gap, and an absent line would again be mistaken for an event that did not happen.
-  if ($script:LogDropped -gt 0 -and -not $script:LogLossReported) {
-    $notice = "QWTUPDLOGLOST $script:LogDropped line(s) could not be written to this log and are GONE (first reason: $script:LogDropFirst). Anything inferred from a MISSING line in this file is unsafe."
-    # MARKED REPORTED ONLY ONCE IT IS ON DISK. Setting the flag first meant a notice that was
-    # ITSELF dropped counted as delivered, so the gap was never announced - caught by
-    # tools/tests/wu-log-loss-selftest.sh the first time it ran.
-    if (Write-QwtLogLine W $notice -Module $mod) { $script:LogLossReported = $true }
-    else {
-      # The gap is still unannounced, so this line must not land after it as if nothing were missing: it is lost too,
-      # and said on stderr like every other lost line (log.ps1 has only said so for the notice).
-      [Console]::Error.WriteLine("qwt log: line LOST (the QWTUPDLOGLOST notice before it was not written): $m")
-      $script:LogDropped++
-      return
-    }
-  }
-  if (Write-QwtLogLine $L "$m" -Module $mod) { return }
-  # The primitive has already said why on stderr; it returns no reason, so the status names where to look.
-  if (-not $script:LogDropFirst) { $script:LogDropFirst = 'Write-QwtLogLine could not write the line - log.ps1 named the cause on stderr' }
-  # COUNT it. Save reports the count, so an incomplete log is a stated fact rather than a gap someone
-  # has to notice.
-  $script:LogDropped++
-}
-# The start gate (WU-PREVPASS-GATE) ran before Log existed; what it decided about a cut-off earlier pass goes on the record here.
+# What the start gate (WU-PREVPASS-GATE) decided about a cut-off earlier pass goes on the record here.
 if ($script:St.recovered) { Log ("PREVPASS " + $script:St.recovered) }
 function SetV($p,$n,$v,$t){ if(-not(Test-Path $p)){New-Item -Path $p -Force|Out-Null}; New-ItemProperty -Path $p -Name $n -Value $v -PropertyType $t -Force|Out-Null }
 
