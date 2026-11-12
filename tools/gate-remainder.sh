@@ -99,10 +99,17 @@ say() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" | tee -a "$LOG"; }
 # non-zero as a product FAIL. Renumbering the suites would move the ambiguity, not remove it
 # (Jev classifier_source=verdict_ledger 0.99, renumber_exits 0.00), and the suites ALREADY declare
 # the class per row, in column 3 of their verdict ledger. Read that.
-# ITS REACH IS EXACTLY THE SUITES WHOSE OUTDIR IS $WORK/<label>, which today is the two failproof
-# suites - the two that exhibited this. Every other suite has no ledger at that path, gets NONE,
-# and is classified exactly as before. A ledger that is missing, empty or unclassifiable is a FAIL
-# too: "no row" must never read as "not a failure".
+# ITS REACH IS EXACTLY THE SUITES WHOSE LEDGER IS $WORK/<label>/verdicts.tsv: the two failproof
+# suites, which exhibited this, and toast-hold-test (TH_LEDGER, below). Every other suite has no
+# ledger at that path, gets NONE, and is classified exactly as before. A ledger that is missing,
+# empty or unclassifiable is a FAIL too: "no row" must never read as "not a failure".
+# A FAILPROOF SUITE'S PASS-UNPROVEN IS ITS PROOF NOT EARNED. For an ordinary check PASS-UNPROVEN is a
+# pass that was never seen to fail, and verdict_class rightly says PASS. A failproof suite measures
+# only whether the CHECKS can fail, and every PASS-UNPROVEN it writes is a NOT PROVEN or NOT RED arm
+# (failproof-faultinject.sh's verdict, failproof-gates.sh:306,314): a finding about the instrument.
+# MEASURED on build-4.3.41.1272: failproof-faultinject's only row was PASS-UNPROVEN, it exited 1,
+# this function said NONE, run_it fell back on the exit code and the receipt filed the suite under
+# product_fail (Jev faultinject_class=instrument_fail 0.93).
 suite_class() {      # suite_class <label> -> FAIL (product) | INVALID (could not measure) | NONE
   local f="$WORK/$1/verdicts.tsv" v worst=NONE
   declare -F verdict_class >/dev/null 2>&1 || { echo NONE; return; }
@@ -112,6 +119,7 @@ suite_class() {      # suite_class <label> -> FAIL (product) | INVALID (could no
     case "$(verdict_class "$v")" in
       FAIL)    worst=FAIL ;;                        # one product FAIL outranks every gap
       INVALID) [ "$worst" = FAIL ] || worst=INVALID ;;
+      PASS)    case "$1:$v" in failproof-*:PASS-UNPROVEN*) [ "$worst" = FAIL ] || worst=INVALID ;; esac ;;
     esac
   done < <(awk -F'\t' 'NF>=3 {print $3}' "$f")
   echo "$worst"
