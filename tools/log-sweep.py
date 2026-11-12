@@ -4709,13 +4709,14 @@ def cmd_analyze(a):
         with open(a.baseline, encoding="utf-8") as f:
             baseline = json.load(f)
     meta, files, problems, placeholders = load_logs(a.logsdir)
-    # --since is UTC (the wrapper's contract); the guest's logs and event records are in GUEST LOCAL time. The collector
-    # reports the offset (tz=+hh:mm); a guest not pinned to UTC (the German images) is shifted here, never assumed.
-    if since is not None and meta and (meta.get("begin") or {}).get("tz"):
-        m = re.match(r"^([+-])(\d\d):(\d\d)$", meta["begin"]["tz"])
-        if m:
-            off = dt.timedelta(hours=int(m.group(2)), minutes=int(m.group(3)))
-            since = since + off if m.group(1) == "+" else since - off
+    # --since and --host-utc are UTC (the wrapper's contract); the guest's logs and event records are in GUEST LOCAL
+    # time. The collector reports the offset (tz=+hh:mm); both instants are shifted by it here, never assumed.
+    guest_tz = None
+    m = re.match(r"^([+-])(\d\d):(\d\d)$", ((meta or {}).get("begin") or {}).get("tz") or "")
+    if m:
+        guest_tz = dt.timedelta(hours=int(m.group(2)), minutes=int(m.group(3))) * (1 if m.group(1) == "+" else -1)
+    if since is not None and guest_tz is not None:
+        since = since + guest_tz
     # A --since WINDOW IS ONLY AS GOOD AS THE GUEST'S CLOCK. The window arrives in UTC and the logs
     # are in guest-local time, converted above with the offset the collector reports - but if the
     # guest's clock itself is wrong, no conversion saves it. MEASURED 2026-10-08 on win11r-logvol:
@@ -4798,10 +4799,12 @@ def cmd_analyze(a):
     # (mgmt/harness/log-sweep.sh passes --host-utc, recorded on this side as the collector ran); the
     # guest's own `now` is the fallback for a corpus analysed without it, and is itself a guest clock.
     _anchor = parse_iso(a.host_utc.rstrip("Z")) if a.host_utc else None
+    if _anchor is not None and guest_tz is not None:
+        _anchor = _anchor + guest_tz   # the lines it bounds are guest-local, like the window
     if _anchor is None and meta and (meta.get("begin") or {}).get("now"):
         _anchor = parse_iso((meta.get("begin") or {}).get("now"))
     _phase_offset = detect_clock_offset(files)
-    _shifted = normalize_clock_phase(files, _anchor, _phase_offset)   # GUARD:phasenorm DEFECT: _shifted = 0
+    _shifted = normalize_clock_phase(files, _anchor, _phase_offset)
     # REPORTED, NOT a data problem: a data problem sets rc=3 and says the sweep is incomplete, and
     # this is the opposite - the lines are usable now. It goes in the header and the summary, because
     # a correction nobody can see is indistinguishable from a lie.
