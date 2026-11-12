@@ -16,14 +16,19 @@
 # behaviourally identical to the release (every fault defaults off and needs an explicit registry
 # value), so green->red->green is attributable to the registry value alone.
 #
-# THE EVIDENCE IS THE PIXELS, NOT THE LOG LINE. RND-8 counts thread deaths by grepping the agent
-# log for /capture thread|thread exiting|giving up/, and FI_CAPTURE_EXIT's own trigger message
-# ("the capture thread returns WITHOUT ...") CONTAINS "capture thread". So the log half of the
-# red is partly self-referential - the check would be detecting the injector announcing itself.
-# That is why this harness records the PIXEL half as the primary evidence: with the capture
-# thread gone and no error signalled, dom0's view of the guest stops updating, and that is an
-# output-side symptom the injector cannot fake (CLAUDE.md: "Judge output, not logs"). A red whose
-# ONLY evidence is the fault's own log line is reported here as NOT PROVEN.
+# THE EVIDENCE IS THE CONDITION ITSELF, READ FROM THE OS - NOT A LOG LINE, AND NOT THE PIXELS. The
+# checks go red on the agent's QGAPERF frame counter first (rnd8-resolution.sh, since 47b3be25): a
+# count of produced frames, which the injector's own announcement cannot satisfy. The independent
+# witness that the CONDITION held is the agent process's thread list: the
+# capture thread the running agent announced (`QGATHREAD role=capture tid=N`) is GONE from that
+# process after the armed pass and PRESENT after both unarmed ones. Until 2026-11-12 the witness was
+# dom0's pixels, on the premise that a dead duplication worker freezes dom0's view. It does not.
+# MEASURED 2026-11-12 on win11-acc at FIXED geometry, after "QGAFAULT FI_CAPTURE_EXIT firing": QGAPERF
+# stayed 3 -> 3 while a WM_SETTEXT into notepad reached dom0 ("RND8 848019726" -> "RND8 853676904"),
+# because the main thread kept sending DAMAGE from window events and dom0 refreshes from the display
+# framebuffer, which needs no capture thread (docs/ADR-capture.md: nothing per-window goes through the
+# duplication). The pixels moved armed in every run, so the proof could never be earned (Jev
+# witness=thread_witness 1.00). They are still logged, as information.
 #
 # RND-8 IS THE INSTRUMENT, called unchanged. Reimplementing its measurements here would create a
 # second instrument needing its own validation; running the validated one three times does not.
@@ -91,11 +96,21 @@ detail(){ grep -aoE 'keyed mutex: [0-9]+ abandonment.*' "$OUT/$1/rnd8.log" 2>/de
 # demanded 'did not change', a phrase RND-8 has never written (its FAIL line says "identical pixels ...
 # capture is FROZEN", since db453097 of 2026-08-31 - the day this file was written, 1ac9c1dc): the
 # independent half could never be seen, so this suite could never earn its proof, only PASS-UNPROVEN
-# rc=1. The row is the contract; the prose may change.
+# rc=1. The row is the contract; the prose may change. Since 2026-11-12 the rows are information only
+# (the header says why); the witness is capture_thread below.
 pixrows(){ awk -F'\t' '$2 ~ /^pixels-change-after-resize-/ { sub(/^pixels-change-after-resize-/, "", $2); printf "%s=%s;", $2, $3 }' "$OUT/$1/verdicts.tsv" 2>/dev/null; }
 pixels(){ pixrows "$1"; }
-frozen(){ awk -F'\t' '$2 ~ /^pixels-change-after-resize-/ && $3 == "FAIL" { f=1 } END { exit !f }' "$OUT/$1/verdicts.tsv" 2>/dev/null; }          # some mode: h1 == h2 after a landed stimulus
-moved(){  awk -F'\t' '$2 ~ /^pixels-change-after-resize-/ && $3 ~ /^PASS/ { f=1 } END { exit !f }' "$OUT/$1/verdicts.tsv" 2>/dev/null; }        # some mode: the pixels moved
+# THE WITNESS: the capture thread the RUNNING agent announced, looked up in that process's thread list,
+# read right after a pass and before the next restart replaces the agent. "CAPTHREAD alive|gone tid= pid="
+# or "CAPTHREAD none" (no capture thread announced) / "noagent" (the process is gone) / nothing (no
+# answer). A recycled thread id can only read alive - the direction that withholds the proof.
+capture_thread(){ psrun "$(agent_lines_ps)"$'\n''$t=""; foreach($l in $agentlines){ if($l -match "QGATHREAD role=capture tid=(\d+)"){ $t=$Matches[1] } }
+if(-not $t){ Write-Output "CAPTHREAD none"; return }
+$p=Get-Process -Id ([int]$agentpid) -EA SilentlyContinue
+if(-not $p){ Write-Output "CAPTHREAD noagent"; return }
+$n=@($p.Threads | Where-Object { $_.Id -eq [int]$t }).Count
+Write-Output ("CAPTHREAD " + $(if($n){"alive"}else{"gone"}) + " tid=" + $t + " pid=" + $agentpid)' \
+  | grep -aoE 'CAPTHREAD [a-z]+( tid=[0-9]+ pid=[0-9]+)?' | head -1; }
 
 # ---------------------------------------------------------------- agent restart, graded
 # THE AGENT IS RESTARTED THROUGH THE SERVICE THAT OWNS IT, AND THE TURNOVER IS PROVEN (owner
@@ -109,8 +124,8 @@ moved(){  awk -F'\t' '$2 ~ /^pixels-change-after-resize-/ && $3 ~ /^PASS/ { f=1 
 # the helper stops the QubesGuiWatchdog service (since 2026-10-03 its stop ends the agent IT
 # started, by handle), starts it, and proves a NEW gui-agent-<ts>-<pid>.log with a live pid; a
 # missing proof is RESTART INVALID-INSTRUMENT and restart_agent_checked grades it. Nothing is
-# killed, nothing is found by name. The pixel witness is RND-8's own shot_hash (NOCAP/NOWIN are
-# graded there).
+# killed, nothing is found by name. RND-8's own pixel rows (shot_hash; NOCAP/NOWIN graded there) are
+# logged as information; the witness is capture_thread, read before each restart replaces the agent.
 source mgmt/harness/lifecycle-lib.sh
 # RND-8 GRADES PIXELS, so every restart here waits for the agent to be SERVING, not merely alive
 # (lifecycle-lib.sh -> restart-gui-agent.ps1 -WaitServing; 0 is the default everywhere else).
@@ -214,6 +229,8 @@ $DISARM_PS" "Write-Output 'DISARMED'" DISARMED "disarming for the unarmed baseli
 G1=$(pass_verdict green-before)
 log "  unarmed verdict: ${G1:-NONE}   $(detail green-before)"
 log "  pixels: $(pixels green-before)"
+TW1=$(capture_thread)
+log "  capture thread: ${TW1:-no answer}"
 if [ "$G1" != PASS-UNPROVEN ] && [ "$G1" != PASS ]; then
   log "ABORTING: the fault build is not green with nothing armed (got '${G1:-NONE}'). Either the"
   log "  build differs from the release in more than the injector, or the subject is dirty. A red"
@@ -233,48 +250,50 @@ Set-ItemProperty -Path '$KEY' -Name FaultArmDelaySec -Value 20 -Type DWord" \
 R1=$(pass_verdict red)
 log "  ARMED verdict: ${R1:-NONE}   $(detail red)"
 log "  pixels: $(pixels red)"
+TW2=$(capture_thread)
+log "  capture thread: ${TW2:-no answer}"
 
 # ---------------------------------------------------------------- D-9: disarm and prove green again
 log "=== D-9: disarm, restart, and re-run - the paired green must come back ==="
 restart_agent_checked "$DISARM_PS" "Write-Output 'DISARMED'" DISARMED "disarming after the armed run"
 G2=$(pass_verdict green-after)
 log "  disarmed verdict: ${G2:-NONE}   $(detail green-after)"
+log "  pixels: $(pixels green-after)"
+TW3=$(capture_thread)
+log "  capture thread: ${TW3:-no answer}"
 
 # ---------------------------------------------------------------- verdict
-pixred=$(pixels red)
-# THE PIXEL EVIDENCE IS A CONTRAST, NOT A FROZEN RED. "Pixels stopped under the fault" means nothing
-# unless they MOVED with nothing armed, on each side of it: a witness that reads FROZEN in the control
-# too is blind, for a reason that has nothing to do with the capture thread. Measured in the first run
-# that reached this verdict (remainder-bafe660fa326, 2026-11-01): green-before, red and green-after ALL
-# carried FAIL on every pixels-change row (nine of nine: identical hash before and after the typing),
-# while the keyed-mutex rows discriminated correctly (QGAPERF seq 133->145 green, 15->15 red, 97->110
-# green-again). A reader that keyed on the red run alone would have called that PROOF EARNED. So:
-# independent evidence = FROZEN in red AND moving pixels (and no FROZEN) in BOTH greens; a FROZEN
-# control is the witness's own INVALID-INSTRUMENT, graded before anything else.
+# THE WITNESS IS A CONTRAST, NOT A RED ALONE. "The capture thread is gone under the fault" means
+# nothing unless it is ALIVE with nothing armed, on each side of it: a control that reads anything but
+# alive (gone, none, noagent, no answer) is blind for a reason that has nothing to do with the fault.
+# The same contrast guarded the pixel witness, and caught it: remainder-bafe660fa326 (2026-11-01) read
+# FROZEN on all nine pixel rows of all three passes while QGAPERF discriminated (133->145 green, 15->15
+# red, 97->110 green-again), and a reader keyed on the red pass alone would have called that PROOF
+# EARNED. So: independent evidence = gone after the armed pass AND alive after BOTH unarmed ones; a
+# control that is not alive is the witness's own INVALID-INSTRUMENT, graded before anything else.
 indep=no
-if frozen green-before || frozen green-after; then
-  indep=blind
-elif frozen red && moved green-before && moved green-after; then
-  indep=yes
-fi
+case "$TW1|$TW3" in
+  "CAPTHREAD alive "*"|CAPTHREAD alive "*) case "$TW2" in "CAPTHREAD gone "*) indep=yes ;; esac ;;
+  *) indep=blind ;;
+esac
 
-log "=== RESULT: green=${G1} armed=${R1} green-again=${G2} independent-pixel-evidence=$indep ==="
+log "=== RESULT: green=${G1} armed=${R1} green-again=${G2} independent-thread-evidence=$indep ==="
 if [ "$R1" = FAIL ] && [ "$G2" != FAIL ] && [ "$indep" = yes ]; then
   for chk in keyed-mutex-recovered capture-thread-survives-resize; do
     log "  -> PROOF EARNED: $chk"
-    printf 'FI\t%s\tPASS\tSEEN TO FAIL via FI_CAPTURE_EXIT on the fault build: unarmed=%s, armed=FAIL, disarmed=%s. Same binary throughout - only the registry value changed. INDEPENDENT evidence: dom0 pixels stopped changing (%s), so the red is not merely the injector logging its own name\t%s\n' \
-      "$chk" "$G1" "$G2" "$pixred" "$EV" >> "$V"
+    printf 'FI\t%s\tPASS\tSEEN TO FAIL via FI_CAPTURE_EXIT on the fault build: unarmed=%s, armed=FAIL, disarmed=%s. Same binary throughout - only the registry value changed. INDEPENDENT evidence: the capture thread the agent announced was gone from its process after the armed pass (%s) and alive after both unarmed ones (%s / %s), so the red is the condition itself\t%s\n' \
+      "$chk" "$G1" "$G2" "$TW2" "$TW1" "$TW3" "$EV" >> "$V"
   done
 elif [ "$indep" = blind ]; then
-  log "  -> INVALID-INSTRUMENT: the pixel witness read FROZEN with NOTHING armed (green-before: $(pixels green-before)"
-  log "     green-after: $(pixels green-after)). Identical pixels in the control are not the fault's doing - a locked dom0"
-  log "     display or a typing stimulus that did not reach the window read exactly like this - so no red here is attributable."
-  printf 'FI\tcapture-failproof\tINVALID-INSTRUMENT\tpixel witness FROZEN in the unarmed control (before: %s after: %s) - blind, nothing attributable\t%s\n' "$(pixels green-before)" "$(pixels green-after)" "$EV" >> "$V"; rc=1
+  log "  -> INVALID-INSTRUMENT: the thread witness did not read alive with NOTHING armed (green-before: ${TW1:-no answer}"
+  log "     green-after: ${TW3:-no answer}). A control whose capture thread is not alive, or could not be read, says"
+  log "     nothing about the fault, so no red here is attributable."
+  printf 'FI\tcapture-failproof\tINVALID-INSTRUMENT\tthread witness did not read alive in an unarmed control (before: %s after: %s) - blind, nothing attributable\t%s\n' "${TW1:-no answer}" "${TW3:-no answer}" "$EV" >> "$V"; rc=1
 elif [ "$R1" = FAIL ] && [ "$indep" != yes ]; then
-  log "  -> NOT PROVEN: the checks went red, but the only evidence was the log grep, which"
-  log "     FI_CAPTURE_EXIT's own message satisfies by containing 'capture thread'. Without the"
-  log "     pixels stopping, this red does not demonstrate the check detects the CONDITION."
-  printf 'FI\tcapture-failproof\tPASS-UNPROVEN\tred was log-only (self-referential); pixels kept changing\t%s\n' "$EV" >> "$V"; rc=1
+  log "  -> NOT PROVEN: the checks went red (the QGAPERF frame counter stopped), but the thread witness"
+  log "     did not read the capture thread gone after the armed pass (${TW2:-no answer}), so this red is"
+  log "     not shown to be the CONDITION the checks exist for."
+  printf 'FI\tcapture-failproof\tPASS-UNPROVEN\tred from the frame counter, but the armed thread witness read %s, not gone\t%s\n' "${TW2:-no answer}" "$EV" >> "$V"; rc=1
 elif [ "$G2" = FAIL ]; then
   log "  -> INVALID-INSTRUMENT: still red after disarming. The subject is dirty; the D-6 red"
   log "     cannot be attributed to the fault. Rebuild before grading anything else on it."
@@ -282,8 +301,9 @@ elif [ "$G2" = FAIL ]; then
 else
   log "  -> NOT RED: arming FI_CAPTURE_EXIT did not make the checks fail. Either the fault did not"
   log "     fire (look for 'QGAFAULT FI_CAPTURE_EXIT firing' in the agent log) or the checks cannot"
-  log "     detect a dead capture thread - which would be a finding about the CHECKS."
-  printf 'FI\tcapture-failproof\tPASS-UNPROVEN\tarming the fault did not turn the checks red (armed verdict=%s)\t%s\n' "${R1:-NONE}" "$EV" >> "$V"; rc=1
+  log "     detect a dead capture thread - which would be a finding about the CHECKS. The armed thread"
+  log "     witness tells the two apart: ${TW2:-no answer} (gone = the fault fired and the checks missed it)."
+  printf 'FI\tcapture-failproof\tPASS-UNPROVEN\tarming the fault did not turn the checks red (armed verdict=%s, armed thread witness=%s)\t%s\n' "${R1:-NONE}" "${TW2:-no answer}" "$EV" >> "$V"; rc=1
 fi
 
 log "=== finished rc=$rc ==="
