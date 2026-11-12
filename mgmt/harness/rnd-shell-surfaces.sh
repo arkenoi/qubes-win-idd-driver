@@ -158,7 +158,10 @@ $t = Get-ScheduledTask -TaskName QubesWindowsUpdateScan -EA SilentlyContinue
 if ($t) { & schtasks /change /tn QubesWindowsUpdateScan /disable *>$null }
 # A running scan PASS owns its relay: end the TASK (the owner) and the relay exits with it
 # (--parent-pid). Never the relay by name (owner 2026-10-07) - that was any process so named.
-if ($t -and "$($t.State)" -eq 'Running') { & schtasks /end /tn QubesWindowsUpdateScan *>$null }
+# Read AFTER the disable, as guest/disarm-update-scan.ps1 does: a pass that started between a read
+# taken before the disable and the disable was never ended (measured there 2026-11-12).
+$t1 = Get-ScheduledTask -TaskName QubesWindowsUpdateScan -EA SilentlyContinue
+if ($t1 -and "$($t1.State)" -eq 'Running') { & schtasks /end /tn QubesWindowsUpdateScan *>$null }
 Write-Output 'DISARMED done'
 PS
 T=300 q pushrun "$TMP/disarm.ps1" >/dev/null 2>&1

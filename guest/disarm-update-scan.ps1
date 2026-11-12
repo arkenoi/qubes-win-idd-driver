@@ -18,7 +18,13 @@ if (-not $t) { Write-Output 'SCAN_TASK ABSENT'; Write-Output 'DISARMED True'; ex
 $i = Get-ScheduledTaskInfo -TaskName QubesWindowsUpdateScan -EA SilentlyContinue
 Write-Output ('SCAN_BEFORE state=' + $t.State + ' nextrun=' + $i.NextRunTime)
 & schtasks /change /tn QubesWindowsUpdateScan /disable *>$null
-if ("$($t.State)" -eq 'Running') { Write-Output 'SCAN_RUNNING - ending the task (its relay leaves with it)'; & schtasks /end /tn QubesWindowsUpdateScan *>$null }
+# THE STATE THAT DECIDES THE END IS READ AFTER THE DISABLE, NOT BEFORE IT. A disabled task starts no
+# new pass, so only a read taken after the disable sees every pass that can still be running.
+# MEASURED 2026-11-12 on win11-acc (build-4.3.41.1272, failproof-gates): the read above said Ready,
+# the boot+2min pass started at 03:59:20.55Z by its own log - between that read and the disable -
+# and the check below found it Running, so the precondition refused and the suite measured nothing.
+$t1 = Get-ScheduledTask -TaskName QubesWindowsUpdateScan -EA SilentlyContinue
+if ("$($t1.State)" -eq 'Running') { Write-Output 'SCAN_RUNNING - ending the task (its relay leaves with it)'; & schtasks /end /tn QubesWindowsUpdateScan *>$null }
 Start-Sleep -Seconds 2
 $t2 = Get-ScheduledTask -TaskName QubesWindowsUpdateScan -EA SilentlyContinue
 Write-Output ('SCAN_AFTER state=' + $t2.State)
