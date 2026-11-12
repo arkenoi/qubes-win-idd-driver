@@ -398,6 +398,18 @@
    "status": "unsettled",
    "max_per_boot": null,
    "reason": "NEVER OBSERVED ON THE RIG, AND DELIBERATELY NOT SILENCED. tools/notifhost/notifhost.cpp RelayMain: the sender's pipe exists and the relay could not open it - the line carries the Windows error code - so the sender gets no connection to dom0 and queues its notice until the next bridge start. The one cause inferred so far, a sender holding the elevated half of a split token while UAC is on (measured on a Windows 11 guest as the sender's 'relay never connected'), is removed by the change that adds this line, and the rig's guests have UAC off. Jev on the canonical log-sweep rubric (floor 0.5): expected 0.65 conf [expected=0.74 insufficient-evidence=0.24 defect=0.02 noise=0.00] as a correct record; keep_armed noul=0.83, so it is armed rather than expected: the first occurrence is flagged and decided with that run's evidence. CEILING UNMEASURED."
+  },
+  {
+   "regex": "^agent\\|W\\|[^|]*: QGABROKERSLOW de-slice broker has not answered slot ",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED, AND DELIBERATELY NOT SILENCED. agent/gui-agent/main.c BrokerHangConfirm (agent e0bd28f): the first time a request to the de-slice broker has gone unacknowledged for 2 s with no broker progress and the stage over its budget, the broker is only SUSPECTED - this line, nothing ended - and the existing QGABROKERHUNG verdict follows only if nothing moves for 6 s more. While it is open, a menu, toast or broker-served window waits. The old 2 s verdict never fired in 1349 rig agent logs; the field tester's 4.3.37/4.3.38 logs held three in six broker starts. The supervision test's L3 step (4 s suspension, must not be ended) can produce it on purpose when a request is outstanding. Jev on the canonical log-sweep rubric (floor 0.5): expected 0.69 conf [expected=0.77 defect=0.13 insufficient-evidence=0.10 noise=0.00]; keep_armed noul=0.86, so it is armed rather than expected: the first occurrence is flagged and decided with that run's evidence. CEILING UNMEASURED."
+  },
+  {
+   "regex": "^agent\\|W\\|[^|]*: QGABROKERSLOW de-slice broker seen moving again ",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED, AND DELIBERATELY NOT SILENCED. agent/gui-agent/main.c BrokerHangConfirm (agent e0bd28f): written only after the 'has not answered slot' warning, when an acknowledgement, progress or stage change ended the suspicion within 6 s - the broker was slow, not hung, and is kept; it carries the time since the warning. Jev on the canonical log-sweep rubric (floor 0.5): expected 0.84 conf [expected=0.88 defect=0.06 insufficient-evidence=0.06 noise=0.00]; keep_armed noul=0.85, so it is armed rather than expected: the first occurrence is flagged and decided with that run's evidence. CEILING UNMEASURED."
   }
  ],
  "signatures": {
@@ -4422,5 +4434,5 @@
   }
  },
  "version": 1,
- "preaccounted_at": "245756e8034d6c1c1f0700ca3ee300c78c1f16c5"
+ "preaccounted_at": "b10b20c36ed978eeef426fe8c1f48062d1cfaca8"
 }
