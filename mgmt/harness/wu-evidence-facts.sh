@@ -88,7 +88,9 @@ fi
 # NEEDED leaves (neither installed nor downloaded); content items on needed leaves that are a plain download.windowsupdate.com
 # file, and those that are anything else (an express or Delivery Optimization stream, a URL with a query, none at all - a leaf
 # with more than 64 items is express-shaped and counted whole, never enumerated); whether the agent already holds the offer's
-# content; the title as base64 of its UTF-8 (a German title does not survive the console codepage - see the whoami line above).
+# content; the title as base64 of its UTF-8 (a German title does not survive the console codepage - see the whoami line above);
+# LAST, only when the agent gives it, the identity's RevisionNumber (2026-11-12: tools/wu-exclusion-evidence.py lets a round whose
+# own read cannot hold an offer stand on another round's read of the same UpdateID only at the same revision - Jev 0.77).
 # COUNTS ONLY: which combination means "self-contained" is decided by the builder on the host, where it can be read and tested.
 # A second call, not a longer first one: cmd.exe cuts a command line at 8191 characters and the first program already encodes
 # to about 6700 (mgmt/harness/console-window-check.sh measured the cut: mid-base64, the remainder run as a command).
@@ -126,7 +128,8 @@ try {
     $a = @{ n = 0; l = 0; k = 0; s = 0; o = 0 }
     Add-EvNode $u $a
     $d = 0; try { if ($u.IsDownloaded) { $d = 1 } } catch {}
-    'EV|offer=' + [string]$u.Identity.UpdateID + ';' + $a.n + ';' + $a.l + ';' + $a.k + ';' + $a.s + ';' + $a.o + ';' + $d + ';' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$u.Title))
+    $rv = ''; try { $rv = ';' + [int]$u.Identity.RevisionNumber } catch {}
+    'EV|offer=' + [string]$u.Identity.UpdateID + ';' + $a.n + ';' + $a.l + ';' + $a.k + ';' + $a.s + ';' + $a.o + ';' + $d + ';' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$u.Title)) + $rv
     $k++
   }
   'EV|offers=' + $k

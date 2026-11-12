@@ -404,6 +404,21 @@ code-gates-judge-supplementary at conf 0.37 (0.53 against judge-gates 0.24) - UN
 mine and not a verdict; `catalog_agreement_sufficient` noul 0.31, which is why the Catalog fact alone does not
 pass an item; `missing_measurement` = self-contained-content at conf 0.85, which is the agent read.
 
+**2026-11-12, a round whose own read cannot hold the offer.** The content read follows the restart a pass
+staged (`mgmt/harness/wu-e2e.sh` takes it at the next round's start). After the restart that completed the
+November cumulative the agent's offline store held no offer at all (template-update re-run, round 2: 0 offers
+on 26200.9974 - why it was empty is not measured), and a read inside the guest's own 60 s restart window
+returned nothing (rel-43099265433, round 2). Such a round takes the content of the identity its OWN status
+lists for the title from the harness's reads in the other excluding rounds of the run - only when every such
+read shows that UpdateID at the same RevisionNumber with no node that carries content. `needed` and
+`downloaded` are the round's state and the bundle tree is the identity's metadata, so a bundle without content
+cannot be self-contained in any download state. The evidence names the substitution. An identity with content,
+at another revision, read without a revision, or read in no other round stays a gap (INSTRUMENT); a
+self-contained reading in any round still contradicts. The harness read carries the RevisionNumber from this
+date (`wu-evidence-facts.sh`, the last field of an `EV|offer` line). Jev: `missing_measurement` =
+revision-number at 0.77 - a verdict, hence the field; `fix_path` identity-from-another-round 0.59 [0.67] and
+`substitution_sound` noul 0.56 are UNDER FLOOR, so the rule is my choice and not a verdict.
+
 Not covered, and judged as before: an unroutable offer that HAS a KB (the Windows 10 ESU case), for which no
 host-side Catalog measurement by KB exists. The comparison's contradiction legs have been driven only by
 fixtures derived from one real capture; no run has yet produced a real self-contained offer in the agent read.

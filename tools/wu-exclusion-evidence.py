@@ -20,7 +20,8 @@ ONE CLASS IS DECIDED HERE, BY COMPARISON, AND NOT BY A JUDGE (2026-11-10): an of
 `unroutable` in every round that excluded it. The updater's claim is then a structured one - three facts, named in docs/ADR-updater.md
 section 2 point 5 - and each has a measurement taken outside the updater: the Catalog's answer for that exact title, asked from this
 qube with a control (tools/wu-catalog-facts.py -> <wu-e2e-dir>/catalog-resolve.json); the offer's content as the Windows Update agent
-itself holds it after each excluding pass (the 'EV|offer=' lines of facts-after.txt); and the qube's netvm as env-assert.sh read it
+itself holds it after each excluding pass (the 'EV|offer=' lines of facts-after.txt - for a round whose own read cannot hold the offer,
+the same content-free UpdateID and revision as read in another excluding round, see unroutable_compare); and the qube's netvm as env-assert.sh read it
 from the Admin API (<wu-e2e-dir>/../preflight/env-assert.out). Whether three recorded values agree with a recorded claim is a
 comparison, so it is made in code (unroutable_compare) and written beside the text as `measured` = {class, verdict: agree |
 contradicts, why}; the audit's gate honours it before any judgment. A fact that was not measured is neither: it is named and this
@@ -126,8 +127,9 @@ def moved(a: str, b: str) -> str:
     return f'{a or "?"} -> {b or "?"}' + (' (moved during the pass)' if a and b and a != b else ' (unchanged by the pass)' if a and b else '')
 
 
-# uid; nodes; content leaves; needed leaves; static items; other items; downloaded; base64(UTF-8 title) - mgmt/harness/wu-evidence-facts.sh
-OFFER_SHAPE = r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12};\d{1,4};\d{1,4};\d{1,4};\d{1,6};\d{1,6};[01];[A-Za-z0-9+/]*={0,2}'
+# uid; nodes; content leaves; needed leaves; static items; other items; downloaded; base64(UTF-8 title); revision -
+# mgmt/harness/wu-evidence-facts.sh. The revision is last and optional: reads before 2026-11-12 do not carry it.
+OFFER_SHAPE = r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12};\d{1,4};\d{1,4};\d{1,4};\d{1,6};\d{1,6};[01];[A-Za-z0-9+/]*={0,2}(?:;\d{1,9})?'
 
 
 def load_offers(p: Path):
@@ -146,13 +148,13 @@ def load_offers(p: Path):
             v = line[len('EV|offer='):]
             if not re.fullmatch(OFFER_SHAPE, v):
                 return None
-            uid, n, l, k, s, o, d, b64 = v.split(';')
+            uid, n, l, k, s, o, d, b64, *rev = v.split(';')
             try:
                 title = base64.b64decode(b64, validate=True).decode('utf-8')
             except Exception:
                 return None
             offers.append({'uid': uid, 'nodes': int(n), 'leaves': int(l), 'needed': int(k), 'static': int(s), 'other': int(o),
-                           'downloaded': d == '1', 'title': ' '.join(title.split())})
+                           'downloaded': d == '1', 'title': ' '.join(title.split()), 'rev': int(rev[0]) if rev else None})
     if count is None or not count.isdigit() or int(count) != len(offers):
         return None
     return offers
@@ -183,13 +185,24 @@ def load_route(p: Path):
 def unroutable_compare(title: str, rounds: list, catalog, route):
     """THE UPDATER SAID 'NO ROUTE' ABOUT A KB-LESS OFFER - do three measurements taken outside it say the same?
 
-    rounds = [(round name, load_offers(that round's facts-after.txt))] for every round that excluded the title. Returns
+    rounds = [(round name, load_offers(that round's facts-after.txt), [(UpdateID, revision) that round's update-status.json lists
+    for the title in `available`])] for every round that excluded the title. Returns
     (verdict, why, lines, gaps): verdict 'agree' when all three facts were measured and hold, 'contradicts' when a measured fact says
     the opposite (a package in the Catalog, self-contained content in the agent, a netvm on the qube - each alone is a route the
     updater did not take, which is the concealed failure this audit exists to catch), None when neither can be said, with the
     unmeasured facts named in gaps. A contradiction outranks a gap: one measured route is enough to make 'no route' false.
     SELF-CONTAINED is the updater's own definition, restated on the harness's counts (guest/qubes-windows-update.ps1
-    Get-WuContentClass): every needed leaf is a static file, or nothing is needed because the agent already holds the content."""
+    Get-WuContentClass): every needed leaf is a static file, or nothing is needed because the agent already holds the content.
+
+    A ROUND WHOSE OWN READ CANNOT HOLD THE OFFER (2026-11-12). The read follows the restart a pass staged (mgmt/harness/wu-e2e.sh
+    takes it at the next round's start). After the restart that completed the November cumulative the agent's offline store held
+    no offer at all (template-update re-run, round 2: 'EV|offers=0' on 26200.9974 - why it was empty is not measured), and a read
+    inside the guest's own 60 s restart window returned nothing (rel-43099265433, round 2). Such a round takes the content of the
+    identity its own status lists for the title from the harness's read in the OTHER excluding rounds of the run - only when every
+    such read shows that UpdateID at the same revision (Jev: missing_measurement = revision-number 0.77) with no content (0 leaves).
+    `needed` and `downloaded` are the round's state; the leaves are the identity's bundle tree, so a bundle with none cannot be
+    self-contained in any download state. The evidence names the substitution. An identity with content, another revision, a read
+    without a revision, or no other read leaves the gap; a self-contained reading in any round still contradicts."""
     lines, gaps, against = [], [], []
     want = ' '.join(title.split())
     c = (catalog or {}).get('control') or {}
@@ -208,22 +221,41 @@ def unroutable_compare(title: str, rounds: list, catalog, route):
     else:
         lines.append(f"  1. CATALOG, asked from the host through its own proxy at {when}: {item.get('why')}. The control in the same "
                      f"measurement - a title that does have a package ({c.get('source')}) - resolved: {c.get('why')}.")
-    held = []
-    for name, offers in rounds:
-        if offers is None:
-            gaps.append(f"{name}: the harness has no read of the agent's offers after the pass (facts-after.txt carries no complete EV|offers section)")
-            continue
-        mine = [o for o in offers if o['title'] == want]
+    held, read, unread, lent = [], {}, [], []
+    for name, offers, *ids in rounds:
+        mine = [o for o in offers or [] if o['title'] == want]
         if not mine:
-            gaps.append(f"{name}: the harness's read of the agent lists {len(offers)} pending offer(s) and none bears this title")
+            unread.append((name, offers, ids[0] if ids else []))
             continue
         for o in mine:
-            counts = (f"UpdateID {o['uid']}: {o['nodes']} node(s), {o['leaves']} with content, {o['needed']} needed, "
+            counts = (f"UpdateID {o['uid']}{'' if o['rev'] is None else ' revision ' + str(o['rev'])}: {o['nodes']} node(s), "
+                      f"{o['leaves']} with content, {o['needed']} needed, "
                       f"{o['static']} static file(s), {o['other']} other, downloaded={'yes' if o['downloaded'] else 'no'}")
+            read.setdefault(o['uid'], []).append((name, o, counts))
             if (o['needed'] > 0 and o['other'] == 0) or (o['needed'] == 0 and o['leaves'] > 0 and o['downloaded']):
                 against.append(f"{name}: the agent holds this offer with SELF-CONTAINED content ({counts})")
             else:
                 held.append(f"{name}: {counts}")
+    for name, offers, ids in unread:
+        own = ("the harness has no read of the agent's offers after the pass (facts-after.txt carries no complete EV|offers section)"
+               if offers is None else f"the harness's read of the agent lists {len(offers)} pending offer(s) and none bears this title")
+        lend = [(uid, rev, read.get(uid, [])) for uid, rev in ids]
+        if ids and all(rev is not None and rs and all(o['rev'] == rev and o['leaves'] == 0 for _n, o, _c in rs) for _u, rev, rs in lend):
+            held.append(f"{name}: its own read could not hold the offer ({own}); its own update-status.json lists "
+                        + ', '.join(f"UpdateID {uid} revision {rev}" for uid, rev, _rs in lend)
+                        + " for this title, which the harness read at that revision with no content in "
+                        + '; '.join(f"{n} ({c})" for _u, _v, rs in lend for n, _o, c in rs)
+                        + " - a bundle that carries no content cannot be self-contained in any download state")
+            lent.append(name)
+        else:
+            why_not = sorted({'its own update-status.json gives no revision' for _u, rev, _rs in lend if rev is None}
+                             | {'no other excluding round read it' for _u, _v, rs in lend if not rs}
+                             | {f"{n}'s read records no revision" for _u, _v, rs in lend for n, o, _c in rs if o['rev'] is None}
+                             | {f"{n} read revision {o['rev']}, its own status says {rev}" for _u, rev, rs in lend for n, o, _c in rs
+                                if o['rev'] is not None and o['rev'] != rev}
+                             | {f"{n} read it with content" for _u, _v, rs in lend for n, o, _c in rs if o['leaves']})
+            gaps.append(f"{name}: {own}" + (f"; the UpdateID its own status lists cannot be taken from another excluding round's read "
+                                            f"({', '.join(why_not)})" if why_not else ''))
     if held:
         lines.append("  2. CONTENT, as the Windows Update agent itself holds the offer after each excluding pass (read by the harness, "
                      "offline): not self-contained - " + '; '.join(held) + '.')
@@ -239,7 +271,9 @@ def unroutable_compare(title: str, rounds: list, catalog, route):
     if gaps:
         return None, '', lines, gaps
     return 'agree', (f"all three facts of the no-route rule hold independently: no Catalog package for this title "
-                     f"(control resolved), content not self-contained in {len(held)} excluding round(s), no netvm"), lines, gaps
+                     f"(control resolved), content not self-contained in {len(held)} excluding round(s)"
+                     + (f" ({', '.join(lent)}: the same content-free UpdateID and revision as read in another excluding round)" if lent else '')
+                     + ", no netvm"), lines, gaps
 
 
 def main() -> int:
@@ -288,7 +322,11 @@ def main() -> int:
                             + ('  [EXCLUDED - a round the audit judges]' if ex else '  [counted - not excluded]'))
             if not ex_round:
                 continue
-            unr.append((name, kb in (st.get('unroutable') or []), load_offers(rd / 'facts-after.txt')))
+            # the identity this round's own status lists for the item - what a round whose own read cannot hold the offer is matched
+            # by (unroutable_compare); a uid or revision of the wrong type is kept as None, so it can match nothing
+            ids = [(a.get('uid') if isinstance(a.get('uid'), str) else None, a.get('rev') if type(a.get('rev')) is int else None)
+                   for a in (st.get('available') or []) if a.get('kb') == kb or a.get('title') == kb]
+            unr.append((name, kb in (st.get('unroutable') or []), load_offers(rd / 'facts-after.txt'), ids))
             fb, fa = load_facts(rd / 'facts-before.txt'), load_facts(rd / 'facts-after.txt')
             gaps = [f'{which} ({"absent or incomplete" if f is None else "no " + ", ".join(k for k in REQUIRED if not f.get(k))})'
                     for which, f in (('facts-before', fb), ('facts-after', fa)) if f is None or any(not f.get(k) for k in REQUIRED)]
@@ -315,8 +353,8 @@ def main() -> int:
                 'that excluded the item - not by the updater:']
         # THE NO-ROUTE CLASS: no KB, no artefact of its own, and listed in `unroutable` by every round that excluded it.
         measured = None
-        if kind is None and not re.fullmatch(r'KB\d+', kb) and unr and all(u for _n, u, _o in unr):
-            verdict, why, lines, gaps = unroutable_compare(kb, [(n, o) for n, _u, o in unr], catalog, route)
+        if kind is None and not re.fullmatch(r'KB\d+', kb) and unr and all(u for _n, u, _o, _i in unr):
+            verdict, why, lines, gaps = unroutable_compare(kb, [(n, o, i) for n, _u, o, i in unr], catalog, route)
             meas = [m for m in meas if not m.startswith(NO_ARTEFACT)]   # a title is not a KB: Get-HotFix has nothing to say here
             meas.append("  THE UPDATER'S CLAIM IS 'NO ROUTE': it lists this offer in `unroutable` in every round that excluded it "
                         "(docs/ADR-updater.md section 2 point 5 names the three facts that rests on). EACH FACT, MEASURED OUTSIDE THE UPDATER:")
