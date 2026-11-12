@@ -2147,7 +2147,20 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
   # which is exactly why the gap is measured rather than assumed.
   say "  $lbl: rebooting the guest, as the installer's contract requires of its caller"
   toolstack_accept "$vm" >/dev/null 2>&1
-  w_halt "$vm" 420 "$lbl-postinstall-halt" say || { qvm-kill "$vm" >/dev/null 2>&1; sleep 10; }
+  if ! w_halt "$vm" 420 "$lbl-postinstall-halt" say; then
+    # A GUEST THAT IGNORES THIS SHUTDOWN IS A FAILURE. It was killed here with no word said and the cell PASSed:
+    # rel-39175573529 (2026-10-18) WIN10-clean "DEADLINE 420s, still Running" - the symptom the field tester reported
+    # (forum 42717 post 201, Windows 10 "had to be killed" after an install). Measured before the kill, like the
+    # unpark arm, and the cell goes on as before: the kill is how it proceeds, not how it passes.
+    local _cs; _cs=$(w_cpu_state "$vm")
+    say "  $lbl: guest ignored the post-install ACPI shutdown for 420 s (screen=$(w_screen "$vm" "stuck-$vm" "$M") cpu=$_cs) - killing as the last resort"
+    qvm-kill "$vm" >/dev/null 2>&1
+    if w_halt "$vm" 120 "$lbl-postinstall-kill" say; then
+      no "$lbl: guest ignored the post-install shutdown for 420 s - KILLED (a user would have had to kill it too)"
+    else
+      no "$lbl: guest ignored the post-install shutdown for 420 s, and did not halt after qvm-kill either"
+    fi
+  fi
   start_vm "$vm"
   w_session "$vm" 900 "$lbl-back" "$M" say
   case $? in
