@@ -95,6 +95,18 @@ for i in $(seq 1 24); do
 done
 [ "$up" = 1 ] || { echo "FAIL  qrexec never answered on $VM within 240 s - nothing built"; exit 2; }
 
+# THE FILE RECEIVER RUNS IN THE USER SESSION. qrexec answering is the pre-session SYSTEM channel;
+# pushing before a session exists dies with "sent 0/NNNN KBEOF" (measured 2026-10-08 on win11de-ur1).
+# The first-run flag below needs it too: it lives in the user's hive, loaded only while the user is
+# logged on - so the wait comes before the "already installed?" branch, which writes the flag as well.
+# w_usersession, NOT `query session`: that prints its State column in the UI language ("Aktiv" on the
+# German guests this builder exists for), and an 'Aktiv|Active' word list stood here. Owner, 2026-11-12:
+# "extending locale-specific dictionary is not the way to handle german locale". explorer.exe's image
+# name and a pushrun marker that round-trips carry no language - and the round-trip is what the push needs.
+. mgmt/harness/e2e-wait.sh
+w_usersession "$VM" 300 envbuild "$OUT" say; ws=$?
+[ "$ws" = 0 ] || { echo "FAIL  no user session on $VM (w_usersession rc=$ws) - nothing pushed"; exit 2; }
+
 # -EncodedCommand, which is what lint-harness points at: escaped quotes inside -Command fail
 # SILENTLY, and a cmd one-liner cannot carry these paths either - measured 2026-10-09 on
 # win11de-tup, where `(if exist "..." echo EXE_PATH=C:\Program Files (x86)\...)` printed NOTHING
@@ -110,11 +122,30 @@ probe_says_present(){   # $1 = probe output file
   command grep -qa '^PROBE-DONE' "$1" || { echo "FAIL  the Open-Shell probe did not complete - no verdict"; return 2; }
   command grep -qa '^EXE_PATH=' "$1"
 }
+# OPEN-SHELL UNUSED IS NOT THE REPORTER'S STATE. Measured 2026-11-12 on win11de-os20 (4.3.41, this
+# script's install): the first Windows key opened Open-Shell's "Start Menu Style" settings dialog, an
+# explorer-owned #32770, instead of its menu - so a probe that opens the menu found nothing. Open-Shell
+# writes ShowedStyle2=1 under the user's Software\OpenShell\StartMenu when it shows that dialog (it was
+# there before OK was pressed) and never shows it again. A reporter who uses Open-Shell is past it, so
+# the flag is written for the AUTOLOGON user - HKU\<sid>, which qrexec's SYSTEM reaches while the
+# session is up - and read back. The style stays Open-Shell's default; the reporter's is not recorded.
+# The account and the hive wait are guest/disable-session-lock.ps1's hive guard (:157-:196): DOMAIN\user when Winlogon
+# names a domain, and a bounded wait for HKU\<sid> - the hive loads during logon, not at the instant the session reads Active.
+openshell_firstrun_done(){
+  local ps out
+  ps='$wl=Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"; $u=if ($wl.DefaultDomainName) { "$($wl.DefaultDomainName)\$($wl.DefaultUserName)" } else { "$($wl.DefaultUserName)" }; $sid=([Security.Principal.NTAccount]$u).Translate([Security.Principal.SecurityIdentifier]).Value; $d=(Get-Date).AddSeconds(60); while (-not (Test-Path "Registry::HKEY_USERS\$sid") -and (Get-Date) -lt $d) { Start-Sleep -Seconds 2 }; if (-not (Test-Path "Registry::HKEY_USERS\$sid")) { Write-Output ("FIRSTRUN=NOHIVE user=" + $u); exit }; $k="Registry::HKEY_USERS\$sid\Software\OpenShell\StartMenu"; if (-not (Test-Path $k)) { New-Item -Path $k -Force | Out-Null }; Set-ItemProperty -Path $k -Name ShowedStyle2 -Value 1 -Type DWord; Write-Output ("FIRSTRUN=" + (Get-ItemProperty -Path $k -Name ShowedStyle2 -EA SilentlyContinue).ShowedStyle2 + " user=" + $u)'
+  out=$(timeout 120 tools/qtest run "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $(b64 "$ps")" 2>/dev/null | tr -d '\r' | command grep -a '^FIRSTRUN=' | tail -1)
+  case "$out" in
+    "FIRSTRUN=1 user="?*) say "Open-Shell's first-run dialog marked done for ${out#* user=} (ShowedStyle2=1, read back)" ;;
+    *) echo "FAIL  Open-Shell's first-run flag is not set for the autologon user (${out:-no answer})"; return 2 ;;
+  esac
+}
 probe_openshell > "$OUT/probe-before.txt" 2>&1
 probe_says_present "$OUT/probe-before.txt"; pre=$?
 [ "$pre" = 2 ] && { cat "$OUT/probe-before.txt"; exit 2; }
 if [ "$pre" = 0 ]; then
   say "Open-Shell is already installed: $(command grep -a -m1 '^EXE_PATH=' "$OUT/probe-before.txt")"
+  openshell_firstrun_done || exit 2
   exit 0
 fi
 
@@ -125,18 +156,6 @@ fi
   echo "      reporter's environment."
   exit 2
 }
-
-# THE FILE RECEIVER RUNS IN THE USER SESSION. qrexec answering is the pre-session SYSTEM channel;
-# pushing before a session exists dies with "sent 0/NNNN KBEOF" (measured 2026-10-08 on win11de-ur1).
-sess=0
-for i in $(seq 1 30); do
-  if command grep -aqE 'Aktiv|Active' <<< "$(timeout 30 tools/qtest run 'cmd /c query session' 2>/dev/null)"; then
-      sess=1; say "a session is active at t+$((i*10))s"; break; fi
-  if ! command grep -qa '^ALIVE' <<< "$(timeout 20 tools/qtest run 'cmd /c echo ALIVE' 2>/dev/null)"; then
-      echo "FAIL  qrexec went away while waiting for a session - terminal, nothing pushed"; exit 2; fi
-  sleep 10
-done
-[ "$sess" = 1 ] || { echo "FAIL  no active session within 300 s on $VM - nothing pushed"; exit 2; }
 
 base=$(basename "$OPENSHELL_EXE")
 say "pushing $(stat -c%s "$OPENSHELL_EXE") bytes ($base)"
@@ -175,5 +194,6 @@ probe_openshell > "$OUT/probe-after.txt" 2>&1
 probe_says_present "$OUT/probe-after.txt" \
   || { echo "FAIL  Open-Shell is still not present after the install"; cat "$OUT/probe-after.txt"; exit 2; }
 say "verified by effect: $(command grep -a -m1 '^EXE_PATH=' "$OUT/probe-after.txt")"
+openshell_firstrun_done || exit 2
 say "built; env-assert.sh must now pass on its own"
 exit 0
