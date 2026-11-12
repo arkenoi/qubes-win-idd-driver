@@ -627,7 +627,11 @@ if (-not $NoEvents) {
             } catch {
                 # "No events were found" is how this channel says zero for THIS chunk; any other failure
                 # is the channel being unreadable and must not be rounded down to zero.
-                if ($_.Exception.Message -notmatch 'No events were found') { $qerr = $_.Exception.Message; break }
+                # BY ITS ERROR ID, NEVER ITS TEXT. The message is localized: on the reporter's German
+                # image it reads "Es wurden keine Ereignisse gefunden, ..." and every empty chunk made
+                # System and Application "unreadable", grading the sweep DATA (measured 2026-11-12 on
+                # win11de-os20, 4.3.41). The id there: NoMatchingEventsFound,...GetWinEventCommand.
+                if ($_.FullyQualifiedErrorId -notlike 'NoMatchingEventsFound*') { $qerr = $_.Exception.Message; break }
             }
         }
         if ($qerr) {
@@ -687,7 +691,7 @@ if (-not $NoEvents) {
             # is a wipe detector - see the note on event 104 below the predicate.
             $anyid = -1; $lgEn = '?'; $lgRec = -1
             try { $anyid = @(Get-WinEvent -FilterHashtable @{ LogName = $log; StartTime = $sinceL } -MaxEvents 2000 -ErrorAction Stop).Count }
-            catch { if ($_.Exception.Message -match 'No events were found') { $anyid = 0 } }
+            catch { if ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*') { $anyid = 0 } }   # the id, not the localized text
             try { $l0 = Get-WinEvent -ListLog $log -ErrorAction Stop; $lgEn = [string]$l0.IsEnabled; $lgRec = [long]$l0.RecordCount } catch { }
             $ev.Add("EV NONE [$log] raw=$raw kept=0 chunks=$nchunks anyid=$anyid enabled=$lgEn records=$lgRec")
             # MUSTOCCUR, NOT Required. `Required` says three different things in this one file:

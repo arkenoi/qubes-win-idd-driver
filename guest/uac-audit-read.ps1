@@ -34,8 +34,10 @@ try {
     $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 4688; StartTime = $boot } -ErrorAction Stop)
 } catch {
     $readError = $_.Exception.Message
-    # "No events were found" is a legitimate empty result, not a read failure - tell them apart.
-    if ($readError -match 'No events were found') { $readError = $null }
+    # "No events were found" is a legitimate empty result, not a read failure - tell them apart BY THE
+    # ERROR ID: the message is localized ("Es wurden keine Ereignisse gefunden, ..." on a German guest,
+    # measured 2026-11-12 on win11de-os20), so the English match read every empty German log as a failure.
+    if ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*') { $readError = $null }
 }
 if ($readError) { Write-Output "AUDIT_USABLE=no reason=read-failed detail=$readError"; exit 2 }
 
