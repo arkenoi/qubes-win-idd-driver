@@ -3329,13 +3329,16 @@ for c in $CELLS; do
     # what the sweep reads as CLEAN - the exact false comfort this instrument exists to prevent.
     # So: prove, then pull. A guest that has gone (wedged, removed) cannot be asked and is NOT a
     # proof failure - the pull still runs, because an unreachable guest is why the volume exists.
-    # ONLY WHERE A BIND IS IN FORCE. The stick is attached unconditionally, so LOGVOL_IMG is set in
+    # ONLY IN A CAMPAIGN THAT BINDS. The stick is attached unconditionally, so LOGVOL_IMG is set in
     # a LOGVOL_BIND=0 campaign too, where LogDir is the product's own Q:\Qubes Logs on the private
     # PV disk: the prover writes its nonce THERE, looks for it on the stick, and aborts on a path
     # that was never on the stick. Measured 2026-11-12, run 20261111T235359Z-1391359: 13 PASS, then
     # "log path broke mid-cell" with 71 fresh logs in Q:\Qubes Logs and none on D: (the stick).
-    if [ "${LOGVOL_BOUND:-0}" != 1 ]; then
-      say "  $c: no bind in force (LOGVOL_BIND=0) - nothing names the stick, so there is no log path on it to prove; the guest-log sweep below grades the product's own LogDir"
+    # THE KNOB, as at the bind itself, the park's clear and the three rebinds - not LOGVOL_BOUND,
+    # which would skip in silence a cell that was meant to bind and never did; with the knob that
+    # cell is still proven here, and aborts.
+    if [ "${LOGVOL_BIND:-1}" != 1 ]; then
+      say "  $c: log volume not bound in this campaign (LOGVOL_BIND=0) - LogDir is the product's own, so there is no path on the stick to prove; the guest-log sweep below grades it"
     elif qvm-check --running "$LOGVOL_VM" >/dev/null 2>&1; then
       # --require-agent-logs HERE AND NOT AT THE BIND. The nonce proves only that the prover can
       # write to the directory the prover resolved. The agent family resolved its LogDir at ITS OWN
