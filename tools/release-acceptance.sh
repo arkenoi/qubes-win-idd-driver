@@ -11,7 +11,7 @@
 # REQUIRES; cutting stays a separate, deliberate act.
 #
 # Usage:
-#   tools/release-acceptance.sh --run <release-package-run-id> [--cells "..."] [--skip-features]
+#   tools/release-acceptance.sh --run <release-package-run-id> [--cells "..."] [--features "<test> ..."] [--skip-features]
 #
 # The run id must be a `release-package` workflow run: that is the only workflow that produces a
 # full installable setup tree. `build` produces an overlay and is NOT a release package.
@@ -66,11 +66,17 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --run) RUN="${2:-}"; shift 2 ;;
     --cells) CELLS="${2:-}"; shift 2 ;;
+    --features) FEATURES_ONLY="${2:-}"; shift 2 ;;
     --skip-features) SKIP_FEATURES=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 [ -n "$RUN" ] || { echo "ERROR: --run <release-package-run-id> is required" >&2; exit 2; }
+# --features "<test> ...": run only these feature tests - a per-module re-run (docs/ADR-acceptance.md section 7). Every name must be
+# a line of tools/release-feature-tests.txt: a misspelt one would run nothing and read as a filter that matched.
+for _f in ${FEATURES_ONLY:-}; do
+  grep -qx -- "$_f" tools/release-feature-tests.txt || { echo "ERROR: --features names '$_f', which tools/release-feature-tests.txt does not list" >&2; exit 2; }
+done
 
 # /tmp IS RAM ON THIS QUBE - a 1 GB tmpfs on a 4 GB machine - and a full one gets the acceptance run
 # OOM-killed mid-campaign. That is not hypothetical: this runner was killed twice that way, once
@@ -607,6 +613,7 @@ if [ "$SKIP_FEATURES" -eq 0 ]; then
 
   # the list is shared with tools/acceptance-record-check.py, which requires every one of these in the record
   for t in $(grep -v -e '^#' -e '^[[:space:]]*$' tools/release-feature-tests.txt); do
+    case " ${FEATURES_ONLY:-$t} " in *" $t "*) ;; *) say "--- feature test: $t - not in --features, not run"; continue ;; esac
     say "--- feature test: $t"
     ACC_PHASE="feature:$t"; _acc_json running
     [ "$t" = crop-before-map ] || settle_rig "feature test $t"   # crop-before-map rides the notify test's running subject
