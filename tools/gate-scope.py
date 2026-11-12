@@ -14,12 +14,14 @@ through its REVERSE-DEPENDENCY CLOSURE before anything is mapped.
 
     tools/gate-scope.py required <base>..<head> [--json]     what the gate must cover, and why
     tools/gate-scope.py floor                                does the floor trip, and on which condition
-    tools/gate-scope.py check <coverage.json> [<base>..<head>]   REFUSES when coverage misses a required suite
+    tools/gate-scope.py check <coverage.json> [<base>..<head>]   REFUSES when coverage misses a required suite, or
+                                                                 lists one under product_fail
     tools/gate-scope.py ledger-add --version V --tag T --run R --range B..H --covered a,b --result pass|fail
 
-Exit codes:  0 satisfied / nothing required   1 something is required that is not covered (the refusal)
+Exit codes:  0 satisfied / nothing required   1 something required is not covered, or was measured failing (the refusal)
              2 the tool could not decide (missing map, unreadable ledger, bad git range) - never "nothing required"
-A coverage file is {"suites": ["win11-clean", ...]} plus anything else the harness wants to record.
+A coverage file is {"suites": ["win11-clean", ...], "product_fail": [...]} plus anything else the harness wants to
+record; `check` reads `suites`, `product_fail` and `range`.
 """
 from __future__ import annotations
 import argparse, fnmatch, json, re, subprocess, sys
@@ -314,6 +316,11 @@ def main() -> int:
             die('no range given and the coverage file carries none')
         res = required(rng, m)
         missing = [s for s in res['suites'] if s not in have]
+        # COVERED IS NOT PASSED. `suites` holds pass AND product-fail modules (ran and measured), and the acceptance
+        # record that refuses a product failure holds only the matrix and the feature tests, so a remainder suite
+        # measured FAILING was refused by nothing. MEASURED 2026-11-12: build-4.3.41.1272's receipt with
+        # failproof-faultinject in product_fail and the rest covered read "satisfied", rc=0.
+        failing = sorted(set(cov.get('product_fail') or []) & set(res['suites']))
         extra = sorted(have - set(res['suites']))
         print(f'required {len(res["suites"])}, covered {len(have)}' + (f', also ran {len(extra)}' if extra else ''))
         if missing:
@@ -323,6 +330,12 @@ def main() -> int:
             if res['floor']:
                 print(f'    (the floor is in force: {res["floor"]})')
             print('Run those suites and record them, or run the full gate.')
+        if failing:
+            print('REFUSED - measured as FAILING (the suite ran and the product failed):')
+            for s in failing:
+                print(f'    {s}')
+            print('A re-run replaces a product failure only from a different harness commit (docs/ADR-acceptance.md section 7).')
+        if missing or failing:
             return 1
         print('satisfied' + (f' (the full set was required: {res["floor"] or "an unmapped path or a pattern"})' if res['full'] else ''))
         return 0

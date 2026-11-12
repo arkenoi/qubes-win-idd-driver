@@ -31,7 +31,7 @@ as --module name=class words). Per module:
     harness commit - so an instrument fix takes effect, and a re-run with no change cannot turn a product-fail green.
 The top-level `suites` (pass + product-fail = covered), `product_fail`, `instrument_fail`, `not_run`, `result` and
 `classes` are RECOMPUTED from the module map on every write, so every existing reader of those fields keeps working
-(tools/gate-scope.py check reads `suites` and `range`; tools/release-acceptance.sh reads `classes`).
+(tools/gate-scope.py check reads `suites`, `product_fail` and `range`; tools/release-acceptance.sh reads `classes`).
 
 HOW A CELL IS CLASSED: by tools/acceptance_json.py from the matrix's own JSON - <dir>/matrix/matrix-result.json and the
 rows in <dir>/matrix/checks.jsonl, where the cell and the class are fields set where mgmt/harness/matrix.sh decides
