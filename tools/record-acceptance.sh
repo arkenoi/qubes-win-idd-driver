@@ -30,7 +30,10 @@
 # the SAME ISO whose every group is clean; a failed FEATURE group only if its test exited 2 (could not measure) and
 # that group passed in such a campaign - a product failure stays. Anything else keeps the record FAILED. The record
 # keeps every superseded failure verbatim, the re-run campaigns and the reason.
-# NOT YET MEASURED ON A REAL CAMPAIGN: the re-run path has run on fixtures only. Read its first real use row by row.
+# FIRST REAL USE 2026-11-12, read row by row: build-4.3.41.1272's record (ISO c42abbb8) from the full campaign
+# rel-43099265433 with --rerun rel-43099265433.tup-r4 - template-update's exit 2 superseded, the other five groups
+# and all 13 cells matching the campaign's own JSON, verdict CLEAN; a re-run that is itself not clean refuses the
+# whole supersession (_supersede), so only the clean re-run is passed and an earlier failed one is named in the reason.
 set -uo pipefail
 die() { echo "ERROR: $*" >&2; exit 1; }
 

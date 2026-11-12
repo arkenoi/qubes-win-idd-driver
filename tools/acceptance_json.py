@@ -226,7 +226,6 @@ def _supersede(failed: list[dict], reruns: list[str]) -> tuple[str, list[dict], 
     (docs/ADR-acceptance.md section 7: a measured verdict replaces an instrument-fail; a product-fail stays). Any other
     failed feature group - a product failure - keeps the refusal.
     Anything else keeps the record FAILED.
-    NOT YET MEASURED ON A REAL CAMPAIGN - fixtures only. Read the first real use of it row by row.
     """
     passed_by: dict[str, str] = {}
     for d in reruns:
