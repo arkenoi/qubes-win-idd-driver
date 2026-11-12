@@ -448,6 +448,40 @@ static void EnsureConsent()
     RegCloseKey(k);
 }
 
+// WHAT DENIES THE LISTENER, read at the refusal (notifytexts.h: the listener-denied-* rows, one per answer, each
+// naming its fix). The order is the one that decides: a policy - group policy or device management, the same
+// setting, LetAppsAccessNotifications 2 = Force Deny - overrides both consent toggles, and the device toggle
+// overrides the user's. Nothing denying is the refusal no setting explains: a bug to report. `readout` gets every
+// value read ("unset" where there is none) for the FATAL line, so a field log shows what the notice rested on.
+static const char* ListenerDenialReason(std::wstring& readout)
+{
+    static const wchar_t kConsent[] =
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\userNotificationListener";
+    auto policy = [](const wchar_t* sub, DWORD* v) {
+        DWORD cb = sizeof(*v);
+        return RegGetValueW(HKEY_LOCAL_MACHINE, sub, L"LetAppsAccessNotifications", RRF_RT_REG_DWORD, nullptr, v,
+                            &cb) == ERROR_SUCCESS;
+    };
+    auto consent = [](HKEY root, wchar_t (&v)[16]) {
+        DWORD cb = sizeof(v);
+        return RegGetValueW(root, kConsent, L"Value", RRF_RT_REG_SZ, nullptr, v, &cb) == ERROR_SUCCESS;
+    };
+    DWORD gpo = 0, mdm = 0;
+    wchar_t dev[16] = { 0 }, usr[16] = { 0 };
+    const bool hasGpo = policy(L"SOFTWARE\\Policies\\Microsoft\\Windows\\AppPrivacy", &gpo);
+    const bool hasMdm = policy(L"SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\Privacy", &mdm);
+    const bool hasDev = consent(HKEY_LOCAL_MACHINE, dev);
+    const bool hasUsr = consent(HKEY_CURRENT_USER, usr);
+    readout = L"policy=" + (hasGpo ? std::to_wstring(gpo) : std::wstring(L"unset")) +
+              L" mdm=" + (hasMdm ? std::to_wstring(mdm) : std::wstring(L"unset")) +
+              L" device=" + (hasDev ? std::wstring(dev) : std::wstring(L"unset")) +
+              L" user=" + (hasUsr ? std::wstring(usr) : std::wstring(L"unset"));
+    if ((hasGpo && gpo == 2) || (hasMdm && mdm == 2)) return "listener-denied-policy";
+    if (hasDev && _wcsicmp(dev, L"Deny") == 0) return "listener-denied-device";
+    if (hasUsr && _wcsicmp(usr, L"Deny") == 0) return "listener-denied-user";
+    return "listener-denied-unknown";
+}
+
 // --- ShowBanner lifecycle: RETIRED (docs/ADR-toasts.md 10, 2026-10-04) ------------------------
 // Until 4.3.34 the bridge wrote ShowBanner=0 per AUMID (prior value recorded in a SID-scoped marker
 // file, restored on every exit path and at the next start) so a forwarded toast's guest banner
@@ -4089,8 +4123,10 @@ static int BridgeMain()
         auto st = listener.RequestAccessAsync().get();
         if (st != UserNotificationListenerAccessStatus::Allowed)
         {
-            BLog(L"FATAL access=%d - window path preserved, exiting", (int)st);
-            ReportErrorSelf("listener-denied");   // notifytexts.h: "exit code 2" is this return
+            std::wstring readout;
+            const char* key = ListenerDenialReason(readout);
+            BLog(L"FATAL access=%d %s -> %S - window path preserved, exiting", (int)st, readout.c_str(), key);
+            ReportErrorSelf(key);   // notifytexts.h: that reason's listener-denied-* row; "exit code 2" is this return
             return 2;
         }
     } catch (...) {

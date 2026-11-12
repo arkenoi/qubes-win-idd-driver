@@ -183,8 +183,10 @@ pointer, and a list of struck phrases.
 
 The agent's and notifhost's texts are rows of `agent/gui-agent/notifytexts.h`, rendered offline by
 `notifyrender_test.c`; the deaths and the scripts' texts are rendered by
-`tools/tests/notify-render-test.ps1`; `tools/tests/notify-render-selftest.sh` runs both with the
-defect knobs that make each rule fail. Callers pass templated text — never an exception message,
+`tools/tests/notify-render-test.ps1`. Neither runs automatically: `notify-render-selftest.sh`, which
+ran both by hand, was deleted on 2026-11-12 when a row change broke its shape check (a selftest that
+needs a quick fix is deleted, not fixed); `notifyrender_test.c` still builds with gcc on any host.
+Callers pass templated text — never an exception message,
 never a file's contents, never a value read from the system.
 
 Redaction **refuses** (does not mask) a payload that is longer than 600 bytes, has more than 6
@@ -213,7 +215,7 @@ Wired (all `ACTION` unless stated):
 | `main.c` QGADESLICEDOWN | `gui-agent.deslice-down` | broker expected, absent > 30 s: surfaces withheld, nothing recovers it; text names present-vs-missing like the log line. A broker whose process exists and that has never been ready is starting, not absent: that one deadline is logged (QGABROKERSTARTSLOW, WARNING) and not sent, and the next, 120 s later, is sent unconditionally (`docs/ADR-supervision.md` §8) |
 | `main.c` QGADESKSTUCK | `gui-agent.desktop-stuck` | secure desktop > 30 s in seamless: dom0 sees nothing — the case this route is best at (zero windows, live qrexec) |
 | `main.c` QGABROKERDIED | `gui-agent.broker-died` | **DEGRADED, deliberately below threshold** — a relaunch follows; wired so the threshold is exercised by a real site |
-| `notifhost.cpp` bridge FATAL access denied | `notifhost.listener-denied` | the bridge the operator turned on does nothing, forever, one relaunch per minute; needs Settings or the gate |
+| `notifhost.cpp` bridge FATAL access denied | `notifhost.listener-denied` (row `listener-denied-policy`, `-device`, `-user` or `-unknown`: what denies it, read at the refusal) | the bridge the operator turned on does nothing until the cause is gone; Task Scheduler restarts it three times, a minute apart. The row names the fix, or (`-unknown`, nothing denies it) asks for a bug report |
 | `notifhost.cpp` bridge FATAL listener init threw | `notifhost.listener-init` | same shape |
 | `activate-idd.ps1` reboot refused | `activate-idd.reboot-refused` | IDD not primary until a hand reboot |
 | `activate-idd.ps1` activation failed | `activate-idd.activation-failed` | templated text; the exception stays in the log |
