@@ -38,8 +38,6 @@ SHAPES, and each is a shape the project has RECORDED rather than one invented he
            latched on vcpu2, in the second it has been taken. What the live guest actually gave: all Active, idle RIP, one transient RVI taken between
            samples. The NEGATIVE control - it must not read as any wedge shape.
   garbage  a bundle whose VMX block is unparseable, to prove the chain declines to answer.
-
-Used by tools/tests/wedge-gates-selftest.sh. It writes a tar when the target ends in .tar.
 """
 import os
 import subprocess

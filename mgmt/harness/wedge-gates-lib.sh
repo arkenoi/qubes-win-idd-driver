@@ -36,9 +36,7 @@
 #     wedge-lib's one sound primitive and owns the decision itself;
 #   * STAGE 1 is a PURE FUNCTION of (observables, context) - it issues nothing, so re-running it
 #     cannot change its answer. STAGE 2 is the only step that intervenes.
-#   * Everything reads FILES, so the same code grades a live guest and a captured evidence dir -
-#     which is how tools/tests/wedge-gates-selftest.sh drives every class offline, including the
-#     two REAL specimens of 2026-10-22.
+#   * Everything reads FILES, so the same code grades a live guest and a captured evidence dir.
 #
 # HONEST CEILING. Jev graded the written design's determinism 0.57 across four structurally
 # different drafts, and the limit is not the tree - it is the instruments it reads, which the

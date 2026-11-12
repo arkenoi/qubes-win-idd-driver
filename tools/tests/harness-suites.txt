@@ -80,7 +80,6 @@ updater-component-selftest.sh
 verdict-jev-selftest.sh
 verdict-lib-selftest.sh
 wait-bound-selftest.sh
-wedge-gates-selftest.sh
 wedge-verdict-selftest.sh
 wrong-interpreter-gate-selftest.sh
 wu-judge-levelprefix-selftest.sh

@@ -227,8 +227,8 @@ clock_correct(){
 # never took.
 #
 # IT NEVER PASSES --wait. `qvm-shutdown --wait` defaults to --timeout 60 and DESTROYS the domain
-# when that expires; tools/tests/wedge-gates-selftest.sh asserts that neither the wedge library nor
-# release-acceptance.sh ever spells it, because a destroyed domain is a destroyed specimen. A bare
+# when that expires; lint-harness.py L9 refuses the spelling in every harness script, because a
+# destroyed domain is a destroyed specimen. A bare
 # qvm-shutdown IS the ACPI request: it returns at once, kills nothing, and is idempotent. Callers
 # that need "did it actually halt" poll for it themselves (w_halt / shutdown-lib), which is what
 # every existing call site already does.
