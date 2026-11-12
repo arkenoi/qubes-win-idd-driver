@@ -89,6 +89,10 @@ SHORT="${PKG_SHA:0:12}"   # the BUILD commit, short - every "for $SHORT" below i
 # The remainder's three targets. REQUIRED by gate-remainder (lint L10 - no default targets inside a
 # harness), so they are named HERE, in one place, exactly as campaign-run.sh names the entry images.
 : "${VM10:=win10-acc}" "${VM11:=win11-acc}" "${OS11:=win11r}"
+# A DRY run writes its plan and chain.log and marks its directory like any attempt, so in the real run's
+# default it made the real run refuse itself: 2026-11-12, build-4.3.42.1278, the DRY at 20:59:47Z and the
+# real run after it refused as a contaminated subject before any work. A DRY's default is its own.
+[ -z "$DRY" ] || OUT="${OUT:-$HOME/qwt-accept/campaign-full-$BUILDTAG.dry-$(date -u +%Y%m%dT%H%M%SZ)}"
 OUT="${OUT:-$HOME/qwt-accept/campaign-full-$BUILDTAG}"
 # A contaminated subject is refused BEFORE any work: this script's default output dir carries no
 # run-id, so a second attempt would otherwise append to the first attempt's artefacts and be read

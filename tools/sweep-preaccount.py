@@ -437,9 +437,15 @@ def cmd_check(a):
         print("  UNREADABLE  %s:%d  %s%s" % (path, lineno, why,
                                              (" - " + fmt[:60]) if fmt else ""))
     if unaccounted or unreadable:
+        # preaccounted_at holds a PARENT commit and a submodule leg's range is derived from it as
+        # <stamp>:<submodule>, so that leg's own head is no sha to stamp. 2026-11-12, build-4.3.42.1278:
+        # the agent leg's hint said `record --at 32129613e337`, the agent's sha.
+        stamp = a.head[:12]
+        if a.path_prefix:
+            stamp = "<the parent commit that pins this %s tree>" % a.path_prefix.rstrip("/")
         print("REFUSE: the sweep would meet %d line(s) it has never been told about. Classify each "
               "with Jev, write them into %s, then stamp `record --at %s`."
-              % (len(unaccounted) + len(unreadable), a.baseline, a.head[:12]))
+              % (len(unaccounted) + len(unreadable), a.baseline, stamp))
         return 1
     print("OK: every log line this change adds is already accounted for")
     return 0
