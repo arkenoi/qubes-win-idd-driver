@@ -578,6 +578,21 @@ on 26300.9457 on 2026-11-01; whether item 6 stays is the owner's decision.
     broker opening eight sessions in one pass was reaped as hung (measured). Jev: fixes it 0.94, still detects
     a real hang 0.94 - confirmed by suspending the broker: QGABROKERHUNG 2 s after the next request, reaped,
     back in 594 ms.
+    **Amended 2026-11-12 (agent e0bd28f): the 2 s predicate is a suspicion; the verdict needs 6 s more.** The
+    594 ms above was a reaped broker coming back. Since docs/ADR-supervision.md section 5 (2026-10-07) nothing
+    relaunches it, so one verdict costs every menu, toast and broker-served window until the next agent start. The
+    field tester's 4.3.37/4.3.38 logs hold three verdicts in six broker starts, two at `stage=loop` (the broker
+    inside none of its calls, which is also what a broker the system does not schedule looks like); the rig has
+    none in 1349 agent logs. Now the first time the predicate holds, one `QGABROKERSLOW` WARNING names the slot, the
+    age and the stage, and nothing is ended. The broker is ended (`QGABROKERHUNG`, the reap, as before) only if the
+    predicate still holds `BROKER_HANG_GRACE_MS` (6000) later: 8 s on the default stages, 14 s in an 8 s-budget
+    stage. An ack, progress or a stage change closes the episode with `QGABROKERSLOW ... seen moving again N ms`;
+    N is an upper bound, taken at the agent's next wake (a registration's first frame wakes it within ~0.2 s; a
+    release ack wakes nothing until the grace ends). The cost, accepted: for a TRUE hang, windows opened during the
+    grace are held instead of brokerless, and the death notice comes 6 s later. Jev: warn-then-end 0.86, still
+    ends a real hang 0.84; root cause insufficient-evidence 0.83. The correctness review after the commit gave no
+    verdict (defect_found 0.51, safe_to_ship 0.60; most serious = the later verdict, 0.84). Not yet verified on a
+    guest: suspend the broker a few seconds (kept) and past 8 s (ended).
 11. **The notification bridge lists on the ETW proxy's records, not on a clock.** On 26100.1742
     NotificationChanged throws for the unpackaged bridge, which therefore listed the Notification Center every
     2 s for ever (~25 wakes/s, the last rest load of the stack). The notification database is NOT written when
