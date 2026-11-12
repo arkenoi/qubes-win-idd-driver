@@ -6,17 +6,41 @@ AUTHORITATIVE. Maintain by editing in place; never append dated sections (the pr
 refuses them).
 
 **The qube carries `timezone=localtime` from CREATE time, the installer sets the guest's zone from
-`/qubes-timezone`, and nothing anywhere writes `RealTimeIsUniversal`.** That is the whole design.
+`/qubes-timezone`, and nothing anywhere writes `RealTimeIsUniversal`.** That is the whole convention.
 
-**It is correct for the RTC and incomplete for the clock Windows derives from it, across a DST
-boundary.** Windows converts the RTC with the `ActiveTimeBias` already in its registry, then
-updates that bias for the current date *without moving the clock it just set*. An image sealed on
-the other side of a transition therefore boots exactly one hour out, with a bias that reads correct
-afterwards. Measured 2026-10-30 on a fresh clone of `win11r-qwt` (sealed 2026-10-15, summer; Sofia
-left DST 2026-10-25), first boot, nothing else run on it: host `2026-10-30T20:10:16Z` against guest
-`2026-10-30T19:10:21Z` - **3594 s behind**, `ActiveTimeBias -120`, `DST False`. The bias is the one
-field that repairs itself, so reading it is not a test of this. See `findings/issues.md`
-ETWCLOCKDST (parked, P2).
+**Across a DST boundary the boot clock is corrected by `bind-dirs.exe`, before any service
+starts** (core-agent `28594ff`, first shipped in package 4.3.42). Windows converts the RTC with the
+`ActiveTimeBias` stored at the last shutdown, then rewrites that bias for the current date during
+init *without moving the clock it just set*, so an image shut down on the other side of a
+transition boots exactly one hour out with a bias that reads correct (measured 2026-10-30: a
+`win11r-qwt` clone sealed in summer booted **3594 s behind** with `ActiveTimeBias -120`).
+bind-dirs runs at BootExecute - smss, before any Win32 service and any qrexec - and in its cleanup
+moves the clock by one DST step only when two signals agree: the `TimeZoneInformation` key was
+written inside this boot (the kernel's init rewrite), and the zone's bias at `ShutdownTime` is
+exactly one step off the kernel's current bias. It calls `NtSetSystemTime` once. It writes
+`ActiveTimeBias` only if the kernel's refresh left it different, with a `[WARN]` line; no measured
+boot has needed that. Every boot leaves one `clock:` line in `Q:\Qubes Logs\bind-dirs.log` and a
+`clock=` field in `bind-dirs-result.txt` (`docs/BIND-DIRS.md`): `corrected`, `already-correct`,
+`no-dst`, `refused` or `error`. The move itself raises no Kernel-General Event 1 (xenagent's later
+sub-second set does), so those two lines are its only record.
+
+Measured 2026-11-12 on 4.3.42+agent.caa86b42941c (in-guest `bind-dirs.exe` sha256 `b232e302...cc90d0`),
+a `win11r-qwt` clone whose clock was set into summer (2026-10-20) and shut down:
+
+* **its own next boot:** kernel time init `12:23:14.5Z` against true `13:23:14Z`; the kernel's
+  zone rewrite 0.39 s later; `clock: corrected: bias -180 -> -120, 2026-11-12T12:23:25.249Z ->
+  2026-11-12T13:23:25.249Z (3600 s)` 10.7 s after time init and 2.4 s before qrexec-agent's first
+  line; `ActiveTimeBias -120`; guest minus host +0.1 to +2.8 s; no `qubes.GetDate` in
+  qrexec-agent's first minute (it logs every guest-initiated call; read from the log volume).
+* **a fresh `clone-guest.sh` clone of it, first boot:** the same line (3600 s, 11.2 s after time
+  init), skew +0.3 to +3.2 s, no GetDate, sweep CLEAN with `clock_boot_correction_s` 0 and
+  `bootclockskew` +2 s.
+* **that clone's second boot:** `clock: already-correct: ActiveTimeBias -120, kernel -120` - no
+  zone write inside the boot, no move; sweep CLEAN, `clock_boot_correction_s` 0, skew +1 s.
+
+No boot wrote `RealTimeIsUniversal`, and bind-dirs wrote no registry value on any of them. The
+spring direction (an image sealed in winter, booted in summer) is the same code path with the sign
+reversed; it is covered by analysis only until the 2027-03-28 transition.
 
 ## Why that is all there is
 
@@ -103,14 +127,15 @@ creation?"*
 
   Drift is corrected without us. dom0 ships
   `/etc/cron.d/qubes-sync-clock` - `0 * * * * root /usr/bin/qvm-sync-clock` - an HOURLY push of
-  `qubes.SetDateTime` to every running qube, served by the same `set-time.ps1` the pull used. The
-  residual exposure is boot-to-next-hourly-tick, worst case ~60 min, on an RTC that already holds
-  dom0 local time.
+  `qubes.SetDateTime` to every running qube, served by the same `set-time.ps1` the pull used. That
+  push is read from dom0's package, not measured here: the one window observed (2026-11-12, a boot
+  that began 58 s after a minute-0 tick and ran 22.7 min one hour behind) saw no set, which neither
+  confirms nor refutes it.
 
-  **CORRECTED 2026-10-30: that residual is not 2.9 s of drift.** Across a DST boundary it is a full
-  hour of wrong clock for up to 60 minutes of every boot (measurement in CURRENT STATE above), and
-  everything that reads a clock in that window reads it wrong - certificate validity at driver
-  install, a `--since` log window, a scan's measured duration.
+  **The DST hour is not left to it.** Across a transition the residual was a full hour of wrong
+  clock until the next push, and everything that reads a clock in that window reads it wrong -
+  certificate validity at driver install, a `--since` log window, a scan's measured duration.
+  bind-dirs closes it at BootExecute (CURRENT STATE), so what remains for the push is drift.
 
   **The pull is still not the answer, and the reason is stronger than cost.** `findings/wedge.md`
   records it as the last thing the guest completes before two wedge onsets - 2026-10-28
@@ -120,13 +145,12 @@ creation?"*
   sits in. Owner, 2026-10-28: *"the clock sync is the mechanism, not the engine."* Restoring it
   would trade one hour of clock error for a suspected trigger of the open P1 wedge.
 
-  **What would end it, and why it is not done here.** `RealTimeIsUniversal` with the `timezone`
-  feature absent puts true UTC in the RTC and takes the bias out of the boot conversion entirely -
-  zero runtime cost, zero boot traffic, no expiry. This ADR rejects that value and `lint-harness.py`
-  L26 enforces the rejection, so changing it is an owner call, not a rig fix. Until then the rig is
-  covered by `primitives.sh` `clock_correct` on every cell ENTRY path, and a real guest is covered
-  only by dom0's hourly push. Re-sealing a golden in winter fixes its clones until the March 2027
-  transition and not past it. Jev, asked about the objective rather than about iterating the script:
+  **Why not `RealTimeIsUniversal`.** With the `timezone` feature absent it puts true UTC in the RTC
+  and takes the bias out of the boot conversion entirely. This ADR rejects that value and
+  `lint-harness.py` L26 enforces the rejection - in the owner's words, prior attempts "produced
+  multi-hour skews and other side effects" - so the correction works inside the `localtime`
+  convention instead, guest-side, before any qrexec. Jev on the pull, asked about the objective
+  rather than about iterating the script:
   `pull_is_needed_at_all` = not_needed **0.85**, `cheapest_sufficient_shape` = drop_the_task
   **0.89**, `three_hour_premise_is_gone` **0.94**, `setter_powershell_is_wasteful` **0.88**.
 
@@ -154,7 +178,13 @@ creation?"*
 * `tools/tests/rtc-utc-selftest.sh` - the absence, plus the feature set on all five create paths,
   with planted-writer and planted-clear cases seen to fail.
 * `clock_boot_correction_s` (P1, max 60) - the detector, in the sweep, where it belongs: a backward
-  jump in the guest's own logs. Left strictly as it is.
+  jump in the guest's own logs. Left strictly as it is. It counts BACKWARD jumps only, and a
+  corrected boot leaves none in either direction: the move precedes every module's first line. A
+  fixture built by moving a RUNNING guest's clock writes that jump into its own logs, and every later
+  sweep of the same log set breaches on it (2026-11-12: one jump in `qrexec-wrapper`'s daily log,
+  1995720 s, the fixture's `Set-Date`) - measure such a fixture's boots on a fresh log volume.
+* `bind-dirs.log` `clock:` and `bind-dirs-result.txt` `clock=` - the boot correction's only record
+  (no Event 1, CURRENT STATE). The sweep collects both from `Q:\Qubes Logs`.
 * `bootclockskew` (`tools/log-sweep.py`) - the residual the removal leaves: the sweep already
   MEASURES the pre-sync guest-vs-host skew (`mgmt/harness/log-sweep.sh` -> `context.guest_clock.
   presync_skew_s`), and it is now GRADED against `max_skew_s` (`LOGSWEEP_MAX_SKEW_S`, default 120).
@@ -181,3 +211,13 @@ creation?"*
   pre-boot revisions. Its measured state is `RealTimeIsUniversal` absent and zone `FLE Standard Time`.
 * An unmapped IANA zone leaves the guest on whatever zone Setup gave it, which is wrong by the
   difference from dom0's. Reported, not guessed at.
+* **What the boot correction does not cover**, by analysis. A time-zone CHANGE: there is no
+  transition signal, so `already-correct` while wrong by the zone difference. A hard kill followed
+  by a transition, with the last clean shutdown in the other season: `ShutdownTime` then names the
+  wrong bias, so `refused` with a `[WARN]` and the clock untouched. A boot inside the repeated
+  autumn hour: the stored bias is still the right one for that instant's UTC, so the kernel writes
+  nothing and the result is `already-correct` while one hour behind, until the next boot or push.
+  Fast Startup resume: no BootExecute (off on our guests). And one benign edge: after a SPRING
+  correction the kernel's zone write is stamped an hour ahead, so a reboot whose boot instant lands
+  in the ~11 s before that stamp reads it as written inside the boot and logs `refused`, moving
+  nothing.
