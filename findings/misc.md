@@ -449,6 +449,23 @@ does not cover either name.
   `redundant_outside` 0.68; `consistent` 0.33 is VOID by the feed's own reading rule, which holds a
   consistency answer void unless `comparator_relevant` lists a relevant equivalent - it says
   `only_unrelated_hits`.
+- [verified 2026-11-12] **Three corrections, and one cause found - for 4.3.40/.41, not for the field
+  reports.** (1) "Logs nothing" was never measured. On 4.3.37/.38 the updater wrote
+  `C:\ProgramData\Qubes\wu\agent.log` (WorkDir's default, read from the tags v4.3.37-agent93a1b27 and
+  v4.3.38-agent3cb91be; v4.3.39-agentf0dd19f still did), and the bundles held only `Qubes Logs`, so the
+  cause may have been logged where nobody collected it. The updater's log moved into `Qubes Logs`, and
+  the trap arrived, with 4.3.40. (2) (e)'s window was HEAD's on 11-08, not the bundles' build, which had
+  no log.ps1 sink at all. (3) (f)'s "`break` keeps the control flow exactly" is false for a
+  statement-terminating error. Reproduced under pwsh 7.6: a parameter-binding error in a function
+  called from script level printed and carried on (exit 0) without the trap, and ended the script
+  (exit 1) with it. **That made one latent defect fatal on 4.3.40 and 4.3.41:** the first `Save`, under
+  the mutex block, ran before the script's own `Log` was defined, so its clock-jump warning bound to
+  log.ps1's `Log([int]$level, $msg)`. Measured on the updater's real text with the real log.ps1 writer
+  and the wall clock forced 100 s ahead of the Stopwatch: exit 1, the trap's UNHANDLED TERMINATING ERROR
+  line in the log, and no update-status.json at all. b3799890 defines `Log` before `Save`: the same run
+  then logs the warning at W, writes the status (clock_jump_s 100.0), and exits 0. It cannot explain
+  .37/.38 (no trap there). a58b24bc makes the notice say "the script reported a failure or an unhandled
+  error" instead of "incorrect function".
 
 ## The U-cells cannot measure the four counting P1s - why their NEXT lines were wrong (2026-11-08)
 
@@ -1206,3 +1223,15 @@ needs no guest. Following it turned up the real blocker.
   bounded stop, never `qvm-shutdown --wait`, which kills on expiry and reports it as a clean stop -
   then verified `win11r-sg3|Halted` before relaunching. Its evidence was already pulled and
   committed in 3704b7fd, so nothing was lost to the shutdown.
+
+## STARTSTUCKSEAMLESS - repeated in the reporter's own environment (2026-11-12)
+
+- [verified 2026-11-12] Repeated on 4.3.41 in GWeck's environment (win11de-os20: German 25H2, Open-Shell,
+  `service.enableWinKey 1`, UAC on) by guest-local Shift+Win - Open-Shell's route to the native menu - in 9
+  of 9 attempts: `QGASTARTDISMISS 0x10188: activation to 0x100fe refused - foreground held by pid 6108`, then
+  `still open 1563-2125 ms after activation returned`, and the native Start (`Windows.UI.Core.CoreWindow`)
+  still held the foreground 6.5 s after the press every time; the one-per-agent-run notice was sent. A
+  Windows-key press in that state still opened Open-Shell's full menu (guest-side pixels and 28 MSAA items,
+  18:12Z); one probe started ~5 s later found that menu with 0 MSAA items for 3 s (18:07Z), not reproduced
+  since. Still the owner's call (register line); GWeck, forum post 209: the Start menu shown only in
+  non-seamless mode is "quite okay" for him.
