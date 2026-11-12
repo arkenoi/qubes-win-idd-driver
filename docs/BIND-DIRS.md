@@ -84,6 +84,7 @@ the boot that failed:
 result=ok|failed
 reason=bound|no-config|entries-failed|config|private-volume|enable-privileges
 status=0x00000000
+clock=corrected|already-correct|no-dst|refused|error
 entries=2
 ok=2
 failed=0
@@ -96,6 +97,9 @@ entry=C:\ProgramData\SomeVendor\SomeApp result=ok reason=bound status=0x00000000
 If `Q:` is not mounted at BootExecute time the log falls back to `C:\bind-dirs.log` and says so
 on the boot screen; problems (`[!]` lines) are also printed on the boot screen, the way
 `autochk` prints. `guest/bind-dirs-status.ps1` prints the record and verifies each junction.
+
+`clock=` is not about binding: the same image corrects the boot clock after a DST transition
+(`boot-clock.c`, docs/ADR-clock.md), after the binding work, and logs one `clock:` line.
 
 Per-entry `reason` tokens: `bound`, `already-bound`, `duplicate` (ok); `source-missing`,
 `file-unsupported`, `foreign-reparse-point`, `reparse-ancestor`, `target-missing`,
