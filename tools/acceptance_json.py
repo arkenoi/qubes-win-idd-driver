@@ -37,7 +37,8 @@ THE RULES, in one place:
   * A matrix group is CLEAN for the record when its result is final and complete, no row is FAIL or INVALID, and every
     planned cell has a passing check. A feature group is clean when its test exited 0.
   * A failed matrix group may be SUPERSEDED by re-run campaigns only as _supersede below says: it reached its footer,
-    a failed check names a cell, and every cell that failed or has no passing check passed in a clean re-run.
+    a failed check names a cell, and every cell that failed or has no passing check passed in a clean re-run. A failed
+    feature group may be, only when its test exited 2 (could not measure) and the same group passed in a clean re-run.
 """
 from __future__ import annotations
 import argparse, glob, json, os, sys, time
@@ -203,7 +204,8 @@ def read_groups(campdir: str) -> list[dict]:
         else:
             clean, why = False, "%s is not a readable feature result naming group %s" % (os.path.basename(p), name)
         groups.append({"group": name, "kind": "feature", "clean": clean, "why": why, "final": good, "cells": [name],
-                       "passed_cells": [name] if clean else [], "failures": [], "source": p})
+                       "passed_cells": [name] if clean else [], "failures": [], "source": p,
+                       "exit_code": rc if good else None})
     return groups
 
 
@@ -218,6 +220,11 @@ def _supersede(failed: list[dict], reruns: list[str]) -> tuple[str, list[dict], 
       * every failure names a cell;
       * every cell a failed row names, and every planned cell with no passing check (so a cell that never ran too),
         passed in a re-run campaign whose every group is clean.
+    A failed FEATURE group is superseded only when its result is readable, its test exited 2 - it could not measure
+    the product (tools/release-acceptance.sh: every feature test exits 2 for exactly that, and the coverage receipt
+    reads 2 as instrument-fail) - and the same group passed in a re-run campaign whose every group is clean
+    (docs/ADR-acceptance.md section 7: a measured verdict replaces an instrument-fail; a product-fail stays). Any other
+    failed feature group - a product failure - keeps the refusal.
     Anything else keeps the record FAILED.
     NOT YET MEASURED ON A REAL CAMPAIGN - fixtures only. Read the first real use of it row by row.
     """
@@ -233,8 +240,18 @@ def _supersede(failed: list[dict], reruns: list[str]) -> tuple[str, list[dict], 
                 passed_by[c] = os.path.abspath(d)
     sup: list[dict] = []
     for g in failed:
+        if g["kind"] == "feature":
+            if not (g["final"] and g.get("exit_code") == 2):
+                return ("%s failed (%s) - a feature test is superseded by a re-run only when it exited 2 (could not "
+                        "measure); a product failure stays" % (g["group"], g["why"])), [], []
+            if g["group"] not in passed_by:
+                return "%s exited 2 in %s and no clean re-run passed it" % (g["group"], g["source"]), [], []
+            sup.append({"cell": g["group"], "failed_in": g["source"], "failure": g["why"][:400],
+                        "passed_in": passed_by[g["group"]]})
+            continue
         if g["kind"] != "matrix":
-            return "%s failed (%s) - only a failed matrix cell can be superseded by a re-run" % (g["group"], g["why"]), [], []
+            return ("%s failed (%s) - only a failed matrix cell or an instrument-failed feature test can be superseded "
+                    "by a re-run" % (g["group"], g["why"])), [], []
         if not g["final"]:
             return "the matrix group cannot be superseded - its rows are not final: %s" % g["why"], [], []
         if not g["finished"]:

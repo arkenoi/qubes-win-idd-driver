@@ -27,8 +27,9 @@
 # A RE-RUN OF FAILED CELLS (owner-approved 2026-10-03: "rerun two missing cells"). The rule is _supersede in
 # tools/acceptance_json.py: a failed MATRIX group is accepted only if it reached its footer, at least one failed check
 # in it names a cell, and every cell a failed row names or that has no passing check passed in a --rerun campaign of
-# the SAME ISO whose every group is clean. Anything else keeps the record FAILED. The record keeps every superseded
-# failure verbatim, the re-run campaigns and the reason.
+# the SAME ISO whose every group is clean; a failed FEATURE group only if its test exited 2 (could not measure) and
+# that group passed in such a campaign - a product failure stays. Anything else keeps the record FAILED. The record
+# keeps every superseded failure verbatim, the re-run campaigns and the reason.
 # NOT YET MEASURED ON A REAL CAMPAIGN: the re-run path has run on fixtures only. Read its first real use row by row.
 set -uo pipefail
 die() { echo "ERROR: $*" >&2; exit 1; }
