@@ -260,10 +260,54 @@ $script:QwtDeathTaskNames = @{
     '\QubesNetworkReapply'        = @{ id = 'network-reapply'; human = 'network re-apply task';         impact = 'The network configuration was not re-applied to the new interface.' }
     '\QubesQuietDesktopGuard'     = @{ id = 'quiet-desktop';   human = 'quiet-desktop guard task';      impact = 'Windows may show its consumer nags again this boot.' }
     '\QubesAutologonGuard'        = @{ id = 'autologon-guard'; human = 'autologon guard task';          impact = 'Autologon was not re-asserted; after a sign-out this qube may stop at the sign-in screen.' }
-    '\QubesWindowsUpdateScan'     = @{ id = 'update-scan';     human = 'Windows Update scan task';      impact = 'dom0 gets no fresh update availability report.' }
-    '\QubesWindowsUpdateRun'      = @{ id = 'update-run';      human = 'Windows Update install task';   impact = 'dom0''s update run reports the failure.' }
-    '\QubesWindowsUpdateDownload' = @{ id = 'update-download'; human = 'Windows Update download task';  impact = 'dom0''s update run reports the failure.' }
+    '\QubesWindowsUpdateScan'     = @{ id = 'update-scan';     human = 'Windows Update scan task';      impact = 'dom0 gets no fresh update availability report.'; action = 'scan' }
+    '\QubesWindowsUpdateRun'      = @{ id = 'update-run';      human = 'Windows Update install task';   impact = 'dom0''s update run reports the failure.'; action = 'full' }
+    '\QubesWindowsUpdateDownload' = @{ id = 'update-download'; human = 'Windows Update download task';  impact = 'dom0''s update run reports the failure.'; action = 'download' }
     '\QwtImprovedSetup'           = @{ id = 'qwt-setup';       human = 'Qubes Tools setup task';        impact = 'The install may be unfinished.' }
+}
+# THE UPDATE PASS'S OWN REASON (findings/issues.md WUSCANTASKFAILSANDLOGSNOTHING; GWeck's post 175, docs/GWECK-STATUS.md 28(f)).
+# An update pass that ends on an error it caught exits 1 - Task Scheduler's 0x80070001, which names no cause - after writing the
+# reason to its status file in the same second: qubes-windows-update.ps1's main catch publishes phase 'error' in its finally,
+# and the transport-loss path writes 'scan-failed'. His 4.3.37/.38 scan task failed with 0x80070001 on every boot and the
+# reason never reached him or us. It is used only when the status was written by THIS run: the -Action the dying task registers
+# (the rows above; install-updater-agent.ps1 registers Scan 'scan', Run 'full', Download 'download'), that phase, a non-empty
+# error, and a stamp at most QwtDeathUpdateStatusSec before the record and a few seconds after it. The file is one for every pass:
+# a pass that died without saving (the trap) leaves an earlier pass's status, and a refusal it could not record exits 1 over the
+# HOLDER's status - neither says anything about this failure, and the generic cause stands.
+$script:QwtDeathUpdateStatusFile = 'C:\ProgramData\Qubes\update-status.json'
+$script:QwtDeathUpdateStatusSec = 120
+function Get-QwtDeathUpdateReason {
+    param([Parameter(Mandatory)]$Death)
+    try {
+        if (-not ($Death.task -and $script:QwtDeathTaskNames.ContainsKey($Death.task))) { return $null }
+        $want = "$($script:QwtDeathTaskNames[$Death.task].action)"
+        if (-not $want) { return $null }
+        $st = Get-Content -LiteralPath $script:QwtDeathUpdateStatusFile -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $names = @($st.PSObject.Properties.Name)
+        if (-not ($names -contains 'action' -and $names -contains 'phase' -and $names -contains 'error' -and $names -contains 'ts')) { return $null }
+        if ("$($st.action)" -ne $want) { return $null }
+        if ("$($st.phase)" -notin @('error', 'scan-failed')) { return $null }
+        $err = ("$($st.error)" -replace '\s+', ' ').Trim()
+        if (-not $err) { return $null }
+        # The stamp is (Get-Date).ToString('s'): local, no zone. pwsh 7's ConvertFrom-Json hands it back as a DateTime, Windows
+        # PowerShell 5.1 leaves it a string - so both go through 's', as the updater and wu-update.ps1 read it (prevTs, Format-Ts).
+        $tsText = "$($st.ts)"
+        if ($st.ts -is [datetime]) { $tsText = $st.ts.ToString('s') }
+        $ts = [datetime]::MinValue
+        if (-not [datetime]::TryParseExact($tsText, 'yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture,
+                                           [Globalization.DateTimeStyles]::AssumeLocal, [ref]$ts)) { return $null }
+        # Not wu-update.ps1's "since this run started": that handler started the pass and knows when. Task Scheduler's record
+        # names no start, and the error status is written in the pass's finally, seconds before the exit the record reports.
+        $age = ([datetime]$Death.time).ToUniversalTime() - $ts.ToUniversalTime()
+        if ($age.TotalSeconds -lt -5 -or $age.TotalSeconds -gt $script:QwtDeathUpdateStatusSec) { return $null }
+        if ($err.Length -gt 160) { $err = $err.Substring(0, 157) + '...' }
+        $cause = "Cause: the pass recorded this error: $err"
+        # the route refuses a whole notification whose text it would redact: a reason it would refuse must not silence the death
+        if ((Get-Command Get-QwtNotifyRedactReason -ErrorAction SilentlyContinue) -and (Get-QwtNotifyRedactReason $cause)) { return $null }
+        return $cause
+    } catch {
+        return $null
+    }
 }
 # our own source: event id -> the supervisor that wrote it (include/deathevent.h)
 $script:QwtDeathSupervisorIds = @{ 4001 = 'the GUI agent watchdog'; 4002 = 'the GUI agent'; 4003 = 'the GUI agent'; 4004 = 'the GUI agent' }
@@ -1281,6 +1325,12 @@ function Format-QwtDeathNotice {
             $codeText = Format-QwtDeathCode $Death.code 'result'
             $cause = Format-QwtDeathCause $Death.code 'task' ''
             $detail = 'Task Scheduler history (TaskScheduler/Operational) event 201'
+            if ($Death.task -and $script:QwtDeathTaskNames.ContainsKey($Death.task) -and
+                "$($script:QwtDeathTaskNames[$Death.task].action)") {
+                $passReason = Get-QwtDeathUpdateReason $Death
+                if ($passReason) { $cause = $passReason }
+                $detail = "update-status.json in C:\ProgramData\Qubes and the updater's log qubes-windows-update.ps1-<yyyyMMdd>.log in $logDir; $detail"
+            }
         }
         'tasktimeout' {
             # 329. Mirrors the 'task' arm's two shapes (a script task of ours has a human name and an
