@@ -66,18 +66,17 @@ offline suites; (5) re-evaluate, and only then consider a full campaign.
 
 - VCPU0HELDINXEN4340 [P1; OPEN - site 0.99, defect unnamed] [verified 2026-11-12]
   win10-acc, 42584568371: dom 901 vCPU0 pause_flags=4 (VPF_blocked_in_xen), others idle,
-  RIP unmoved 38 min, pg off 0x285 = hcall 20 = grant_table_op. Jev site
-  vcpu0_held_in_xen_at_grant_hypercall 0.99 puts kernel_wait_in_log_volume_storage_stack
-  0.00: LOG VOLUME EXONERATED, 0.66 retracted; role_of_the_pin total_not_causal 1.00;
-  our_offloop_helper_launch 0.00. Unmap = libvchan_close at qrexec-wrapper.c:2246 under
-  g_VchanCs, right after the guest's LAST line (RINGPEER :2239). NO SHORT CYCLE COVERS IT: no
-  win10-qwt golden, so quick-upgrade REFUSES a win10 upgrade - 0 real win10 runs of 258; same
-  agent ran win11r clean 52 min before. Dose is NOT it: 39/81 s peak 4/s vs 45 peak 6/s.
-  RECURRED 11-11 on 4.3.41.1272: froze 3 s into the t+0 burst, stub idle, vCPU0 held after
-  memory_op, vCPU3 after an EPT-violation write. Owner: «OUR lock certainly». Jev on the
-  cause, so premised: leans emulated USB stick 0.58 over product teardown 0.35;
-  user_reachable 0.13; ab_logvol_off 0.89, one LOGVOL_BIND=0 run. 5ad41b8d dropped the t+0
-  re-arm: night call, no verdict.
+  RIP unmoved 38 min, pg off 0x285 = grant_table_op. Jev: site 0.99; a GUEST-side wait in
+  the log volume's storage stack 0.00 (QEMU's drain never asked); role_of_the_pin
+  total_not_causal 1.00. Unmap = libvchan_close at qrexec-wrapper.c:2246 under g_VchanCs,
+  after the guest's LAST line (RINGPEER :2239) - 54999a1's own-thread close (09-29, first
+  v4.3.33): every 0-CPU specimen has it (a CPU-burner also followed it). NO SHORT CYCLE (no
+  win10-qwt golden). Not dose (4/s vs 6/s clean). RECURRED 11-11 on 4.3.41.1272: 3 s into
+  the t+0 burst, stub idle, vCPU0 held after memory_op, vCPU3 after an EPT-violation write.
+  Owner: «OUR lock certainly». A/B 11-12, LOGVOL_BIND=0 at 5ad41b8d (t+0 re-arm dropped,
+  night call): no freeze, 13 PASS - weak (P~0.78 at 2/9) and two variables. Jev, premised:
+  cause both_required 0.49 / teardown 0.33 / stick 0.08, no verdict; user_reachable 0.79;
+  next: acceptance, stick bound, blkback stats read on a freeze (0.73, under floor).
 - PRIMERUNCALLSANYMOVEMENTASPIN [P2, all three waiters; OPEN - landed in all 3, branches NOT seen to fire] [verified 2026-10-25] The deadline classifier called a moving cpu_time plus dead qrexec the P1 SPIN fingerprint. That conjunction is satisfied VACUOUSLY by a guest whose QWT never installed, so the one distinction it existed to make was the one it could not make; 2 of the 3 episodes that ever got the verdict were never wedges. CPU is the WEAK conjunct (owner 2026-10-22): a healthy guest of the class measured 327/321/262% of a core against the specimen's 175%. FIX: a qrexec_ever latch set at the first QREADY answer, before the quiet window and before either `continue`; unset at the deadline means VACUOUS-UNREACHABLE, an install failure, not a wedge. AND THE WAIT GAINED ITS THIRD EXIT - it had only success and deadline, so an install failure cost the full 3600 s (measured: 48 min polling a guest whose `installer rc=1` the loop had already copied off the DIAG volume at t+597s). OWED: neither branch has been SEEN to fire on a live run.
 - LOGVOLBINDABTOWED [P2; OPEN - the wedge-rate causal claim is WITHDRAWN, the experiment is not] [verified 2026-10-25] My "wedge rate rose at the log-volume bind" finding (0/15 campaigns before run 39225775322, 2/9 after) is WITHDRAWN as not reproducible: across EVERY campaign on disk there is exactly ONE campaign/matrix/wedge-* directory, not two, and the only two episodes that ever got the wedge verdict are the vacuous install failures of PRIMERUNCALLSANYMOVEMENTASPIN. Fisher one-sided 2/9 p=0.130, 1/9 0.375, 0/9 1.000 against a pre-registered 0.043. The owner's premise is not refuted, only my answer - what WE changed may be the CLASSIFIER'S exposure, not the guest's. OWED: the LOGVOL_BIND 0-vs-1 A/B on a re-derived numerator with vacuous verdicts excluded, pre-registered first.
 - SUPERVISIONDIDNOTRAISETEARLOAD1109 [P2; OPEN until 1109 has a capture] [verified 2026-10-25] Asked whether this session's supervisor discipline raised PV-bus/vchan teardown load. FROM THE DIFF: no, and it cannot have - the guest-side product change between 1096 (df506bae2836) and 1109 (9e19018e) is exactly three files, the agent submodule moving by ONE commit (e921819, the PwLedger counting fix) plus two guest scripts, and `git diff` over that range adds ZERO lines matching Supervise|libvchan|XcOpen|CreateProcess|GrantRef|unmap. FROM THE MEASUREMENT, `XcOpen: XenIface handle` per logvol capture: win10-upgrade 220/220/222, win11-upgrade 126/224/122, win11de-uc 110-140, win11de-tup 102-158 - no trend. For scale, stock QWT 4.2.2 runs 11-35 per capture (~3.3 per qrexec request) against ours at 6.6 per call. THE CAVEAT THAT DECIDES IT: 1109 has NEVER run on a guest and has no logvol capture, so this is an answer about the diff and the preceding builds, NOT a measurement of 1109. The baseline is pinned HERE so the comparison cannot be made after the fact. OWED: recompute the same per-cell XcOpen counts from the next campaign's pulls, with the counter in a committed tool.
