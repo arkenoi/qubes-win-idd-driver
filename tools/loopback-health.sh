@@ -16,6 +16,9 @@
 #                                              never completed the handshake, which is what a
 #                                              stubdomain waiting for /dev/xvdX looks like from here
 #   inflight                                 - non-zero with no traffic means requests are parked
+#   requests per vbd (blkback statistics)    - the same counters read twice, apart: none moving while
+#                                              the loop it serves shows inflight is a request parked
+#                                              between a guest's (or stub's) frontend and the file
 set -u
 cd "$(dirname "$0")/.." 2>/dev/null || true
 say(){ printf '%s\n' "$*"; }
@@ -67,7 +70,13 @@ for e in /sys/bus/xen-backend/devices/vbd-*; do
       *)                      w="UNKNOWN state string - read it, do not assume health" ;;
     esac
     dom=${n#vbd-}; dom=${dom%%-*}
-    say "  $n -> domain $dom  state=$st ($w)"
+    # WHICH LOOP, AND HOW MANY REQUESTS. blkback prints physical_device as hex major:minor; the
+    # domain may be a guest or its stub domain (QEMU's emulated USB stick goes through the stub).
+    pd=$(cat "$e/physical_device" 2>/dev/null); dev="?"
+    [ -n "$pd" ] && dev=$(basename "$(readlink -f "/sys/dev/block/$(printf '%d:%d' "0x${pd%%:*}" "0x${pd##*:}" 2>/dev/null)" 2>/dev/null)")
+    req=""; for s in "$e"/statistics/*; do [ -f "$s" ] && req="$req ${s##*/}=$(cat "$s" 2>/dev/null)"; done
+    say "  $n -> domain $dom  state=$st ($w)  dev=${dev:-?} ($pd)"
+    say "      requests:${req:- none readable}"
 done
 [ "$found" = 1 ] || say "  none - this qube is serving no block device to any domain right now"
 
