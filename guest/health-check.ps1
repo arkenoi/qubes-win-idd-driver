@@ -923,12 +923,17 @@ try {
                                         } catch { "unreadable: $($_.Exception.Message)" }
                                     } else { $null }) }
     }
-    # fsutil reports "is Dirty" / "is NOT Dirty"; anything else means we could not tell, and
-    # "could not tell" is not "clean".
+    # THE DIRTY BIT AS A BOOLEAN, NEVER fsutil's SENTENCE. fsutil prints its verdict in the SYSTEM
+    # locale - "Volume - C: ist NICHT fehlerhaft." on GWeck's German 25H2 - with exit code 0 either
+    # way, so the English match that stood here ('is (NOT) Dirty') read every German guest as "could
+    # not tell" and failed it. Win32_Volume.DirtyBitSet is the same volume flag as a boolean (measured
+    # 2026-11-12 on win11de-os20, de-DE: False on all four volumes). No single system volume, or a flag
+    # that is not a boolean, is still "could not tell" - and "could not tell" is not "clean".
     $step = 'dirty-bit'
-    $dq = (& fsutil.exe dirty query $env:SystemDrive 2>&1 | Out-String).Trim()
-    $dirty = ($dq -match 'is\s+Dirty')
-    $unknownDirty = -not ($dq -match 'is\s+(NOT\s+)?Dirty')
+    $sysVol = @(Get-CimInstance Win32_Volume -Filter "DriveLetter = '$env:SystemDrive'" -ErrorAction Stop)
+    $dq = "Win32_Volume $env:SystemDrive DirtyBitSet=$(@($sysVol | ForEach-Object { $_.DirtyBitSet }) -join ',') ($($sysVol.Count) volume(s))"
+    $dirty = ($sysVol.Count -eq 1 -and $sysVol[0].DirtyBitSet -eq $true)
+    $unknownDirty = -not ($sysVol.Count -eq 1 -and $sysVol[0].DirtyBitSet -is [bool])
     # SEEN TO FAIL, 2026-09-09, which is what makes a PASS here worth anything. A guest was hard
     # killed mid-write (40 x 32 MB) and this check then reported events:41,6008 - and, importantly,
     # the NTFS dirty bit still read "NOT Dirty" on that same boot. So the EVENT IDs are the working
@@ -944,8 +949,9 @@ try {
     # simultaneously reporting 41,6008. Measured 2026-09-10 on win10-abt: 131 of 131 verdicts across
     # 50 boots said healthy, and zero autochk/chkdsk runs (Wininit 1001) appeared - so a guest that
     # shuts down and comes back really does keep a clean volume, and that is now asserted rather
-    # than assumed. A repair actually running (1001, or Ntfs 130/131 "has now been repaired") is the
-    # loud case and fails this check outright.
+    # than assumed. A repair actually running (Wininit 1001, or the 'Ntfs' provider's 130/131) is the
+    # loud case and fails this check outright. Every one of these is decided by an ID or a numeric
+    # field, never by a rendered sentence: the rig's main subject is a German guest.
     $repairs = @()
     # Same boot-window correction as prev_shutdown_orderly above: event 98 and any repair are
     # written AT MOUNT, i.e. at or after LastBootUpTime, so an EndTime of $bootT excluded every
@@ -962,16 +968,37 @@ try {
     $step = 'ntfs-health-98'
     foreach ($ev in @(Get-WinEvent -FilterHashtable @{
                           LogName = 'System'; StartTime = $bootT.AddSeconds(-30)
-                          ProviderName = 'Microsoft-Windows-Ntfs'
+                          ProviderName = 'Microsoft-Windows-Ntfs'; Id = 98
                       } -MaxEvents 60 -ErrorAction SilentlyContinue)) {
-        if ($ev.Id -eq 98 -and $ev.Message -notmatch 'is healthy') {
+        # HEALTHY IS CorruptionActionState = 0, READ BY NAME - never the sentence. The provider defines
+        # event 98 as 'Volume "%1" (%2) %3', where %3 is that UInt32 rendered in the SYSTEM locale:
+        # "is healthy. No action is needed." in English, "ist fehlerfrei. Es ist keine Aktion
+        # erforderlich." in German, which the English match that stood here counted as a repair, one
+        # per volume per boot (measured 2026-11-12 on win11de-os20: 12 of 12 records carried 0, the
+        # three German ones in that failed report among them). A record whose field cannot be read
+        # counts too: could not tell is not clean.
+        $cas = $null
+        try {
+            $cas = (([xml]$ev.ToXml()).Event.EventData.Data |
+                    Where-Object { $_.Name -eq 'CorruptionActionState' } | Select-Object -First 1).'#text'
+        } catch { }
+        if ("$cas" -ne '0') {
             $repairs += @{ id = $ev.Id; time = $ev.TimeCreated.ToUniversalTime().ToString('o')
-                           msg = ($ev.Message -replace '\s+', ' ') }
+                           corruption_action_state = "$cas"; msg = ($ev.Message -replace '\s+', ' ') }
         }
-        if ((130, 131) -contains $ev.Id -and $ev.Message -match 'repaired') {
-            $repairs += @{ id = $ev.Id; time = $ev.TimeCreated.ToUniversalTime().ToString('o')
-                           msg = ($ev.Message -replace '\s+', ' ') }
-        }
+    }
+    # 130 AND 131 ARE NOT Microsoft-Windows-Ntfs EVENTS, so the query above - which used to look for
+    # them too - never returned one, in any language, and its English 'repaired' match never ran.
+    # They belong to the provider named 'Ntfs': 130 "has now been repaired" (level 3), 131 "cannot be
+    # corrected" (level 2), from its own definitions on win11de-os20, 2026-11-12. The ID is the fact,
+    # and both say the volume needed a repair.
+    $step = 'ntfs-repair-130-131'
+    foreach ($ev in @(Get-WinEvent -FilterHashtable @{
+                          LogName = 'System'; StartTime = $bootT.AddSeconds(-30)
+                          ProviderName = 'Ntfs'; Id = 130, 131
+                      } -MaxEvents 20 -ErrorAction SilentlyContinue)) {
+        $repairs += @{ id = $ev.Id; time = $ev.TimeCreated.ToUniversalTime().ToString('o')
+                       msg = ($ev.Message -replace '\s+', ' ') }
     }
     # NO ProviderName IN THIS FILTER. Measured 2026-09-11 on win11-nfy (PS 5.1.26100): the
     # 'Microsoft-Windows-Wininit' ETW provider is linked to the System log and its own Diagnostic

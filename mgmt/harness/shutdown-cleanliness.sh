@@ -60,7 +60,9 @@ $b=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime
 $e=@(Get-WinEvent -FilterHashtable @{LogName="System";Id=41,6008;StartTime=$b.AddSeconds(-30)} -MaxEvents 10 -EA SilentlyContinue)
 $et=(($e | ForEach-Object { $_.TimeCreated.ToUniversalTime().ToString("o") }) -join ";")
 $ids=($e | ForEach-Object { $_.Id }) -join ","
-$d=(& fsutil.exe dirty query $env:SystemDrive 2>&1 | Out-String).Trim()
+# The dirty bit as a WMI boolean: fsutil prints it in the SYSTEM locale ("ist NICHT fehlerhaft" on a
+# German guest), so the NOT Dirty match below could never say clean there. Same rule as health-check.ps1.
+$d="DirtyBitSet=" + ((@(Get-CimInstance Win32_Volume | Where-Object { $_.DriveLetter -eq $env:SystemDrive }) | ForEach-Object { $_.DirtyBitSet }) -join ",")
 Write-Host ("CLEAN=boot:" + $b.ToUniversalTime().ToString("o") + "|events:" + $(if($ids){$ids}else{"none"}) + "|at:" + $(if($et){$et}else{"-"}) + "|" + $d)'
 }
 
@@ -94,7 +96,7 @@ for r in $(seq 1 "$ROUNDS"); do
     after=$(probe)
     say "r$r/$mode: $after"
     case "$after" in
-      *events:none*NOT\ Dirty*) say "  -> clean" ;;
+      *events:none*\|DirtyBitSet=False) say "  -> clean" ;;
       *)                        say "  -> UNCLEAN (this is the hypothesis confirmed for '$mode')" ;;
     esac
   done
