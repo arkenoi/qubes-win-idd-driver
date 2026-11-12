@@ -31,7 +31,8 @@ from __future__ import annotations
 import argparse, base64, json, os, re, sys, time
 
 WU_RE = re.compile(r"^﻿?\[(?P<d>\d{8})\.(?P<t>\d{6})\.(?P<ms>\d{3})-(?:(?P<pid>\d+):)?(?P<tid>\d+)-(?P<lvl>[A-Z])\] (?P<func>[A-Za-z0-9_]+): (?P<msg>.*)$")
-EV_RE = re.compile(r"^EV (?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) \[(?P<log>[^\]]+)\] id=(?P<id>\d+) level=(?P<lvl>\d+) (?P<prov>[^:]+): (?P<msg>.*)$")
+# rc=N: a TaskScheduler 201's ResultCode field, which the sweep collector writes after level= since 2026-11-12
+EV_RE = re.compile(r"^EV (?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) \[(?P<log>[^\]]+)\] id=(?P<id>\d+) level=(?P<lvl>\d+)(?: rc=(?P<rc>-?\d+))? (?P<prov>[^:]+): (?P<msg>.*)$")
 TS_RE = re.compile(r"(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?)")
 WINDOW_FUNCS = re.compile(r"(SendWindowMap|SendWindowUnmap|SendWindowFocus|OnFocus|WindowEvent|AddWindow|RemoveWindow|ShouldAcceptWindow|SendWindowConfigure|PwAttachWindow|PwDetachWindow|focus)", re.I)
 HWND_RE = re.compile(r"\b(?:hwnd[= ]|window )(0x[0-9a-fA-F]+)")

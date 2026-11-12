@@ -659,7 +659,20 @@ if (-not $NoEvents) {
                 elseif ($log -eq 'System' -and $r.Id -in @(41, 109)) { $keep = ($prov -like '*Kernel-Power*') }
                 if (-not $keep) { continue }
                 $kept++
-                $ev.Add("EV $($r.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss.fff')) [$log] id=$($r.Id) level=$($r.Level) ${prov}: $msg")
+                # A TASK'S RESULT CODE BY FIELD, NOT BY WORDS. A 201's message is rendered in the guest's language, and
+                # tools/log-sweep.py read the code out of the English "with return code N": on the reporter's German 25H2
+                # (win11de-os20, 2026-11-12) the one 201 in the window was a success with code 0, matched nothing, and was
+                # counted - task_failures 1. ResultCode is the record's own EventData field; the line carries it as rc=N.
+                # Owner, 2026-11-12: "extending locale-specific dictionary is not the way to handle german locale".
+                $rcTok = ''
+                if ($log -like 'Microsoft-Windows-TaskScheduler*' -and $r.Id -eq 201) {
+                    # read by name the way guest/qwt-report-death.ps1 reads its records (GetAttribute, not the XML adapter)
+                    try {
+                        $rcVal = @(foreach ($d in ([xml]$r.ToXml()).GetElementsByTagName('Data')) { if ("$($d.GetAttribute('Name'))" -eq 'ResultCode') { "$($d.InnerText)" } })
+                        if ($rcVal.Count -eq 1 -and $rcVal[0] -match '^-?\d+$') { $rcTok = " rc=$($rcVal[0])" }
+                    } catch { }
+                }
+                $ev.Add("EV $($r.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss.fff')) [$log] id=$($r.Id) level=$($r.Level)$rcTok ${prov}: $msg")
             }
         } catch {
             $evErrors++

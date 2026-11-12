@@ -155,8 +155,14 @@ EV_SERVICE_IDS = {7000, 7009, 7011, 7023, 7024, 7031, 7034, 7036, 7040, 7043, 70
 TASK_RETURN_CODE_RE = re.compile(r"with return code (-?\d+)")
 
 
-def task_record_is_failure(eid, msg):
+def task_record_is_failure(eid, msg, rc=None):
     """Is this TaskScheduler 201/203/329 record for one of our tasks actually a FAILURE?
+
+    THE CODE IS THE RECORD'S ResultCode FIELD (rc=N on the EV line, which the collector writes since
+    2026-11-12); the English "with return code N" is read only from a capture that predates it.
+    MEASURED 2026-11-12 on win11de-os20 (German 25H2): the message is in the guest's language, the one
+    201 in the window was a success with code 0, it matched no English pattern, and it was counted -
+    task_failures 1 on a guest with no failed task.
 
     MEASURED 2026-10-09 on win11-acc. task_failures counted every 201 and 203 for one of our tasks,
     and 201 is "Task Scheduler SUCCESSFULLY COMPLETED task X ... with return code N". Our tasks are
@@ -185,10 +191,13 @@ def task_record_is_failure(eid, msg):
     # so it would reach that branch and be counted for the right reason by accident.
     if eid == 329:
         return True
-    m = TASK_RETURN_CODE_RE.search(msg or "")
-    if not m:
-        return True
-    code = int(m.group(1))
+    if rc is not None:
+        code = rc
+    else:
+        m = TASK_RETURN_CODE_RE.search(msg or "")
+        if not m:
+            return True
+        code = int(m.group(1))
     if code == 0:
         return False
     return not SHUTDOWN_RESULT_CODES_RE.search(str(code))
@@ -264,7 +273,8 @@ RESULT_RE = re.compile(r"^\ufeff?=== RESULT === (\{.*\})\s*$")
 CLOCK_SKEW_TOLERANCE_S = 300
 
 MSI_RE = re.compile(r"^\ufeff?MSI \([sc]\) \([0-9A-Fa-f:!]+\) \[(\d\d):(\d\d):(\d\d):(\d{3})\]: ?(.*)$")
-EV_RE = re.compile(r"^EV (\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)\.(\d{3}) \[([^\]]+)\] id=(\d+) level=(\d+) ([^:]*): ?(.*)$")
+# rc=N: a TaskScheduler 201's ResultCode field, when the collector carried it (see task_record_is_failure)
+EV_RE = re.compile(r"^EV (\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)\.(\d{3}) \[([^\]]+)\] id=(\d+) level=(\d+)(?: rc=(-?\d+))? ([^:]*): ?(.*)$")
 EV_NONE_RE = re.compile(r"^EV NONE \[([^\]]+)\]")
 EV_ERR_RE = re.compile(r"^EV ERR \[([^\]]+)\] ?(.*)$")
 CONSOLE_RE = re.compile(r"^\[(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)\] ?(.*)$")
@@ -2054,14 +2064,15 @@ def parse_events(lf, raw_lines):
         lf.scanned += 1
         m = EV_RE.match(raw)
         if m:
-            y, mo, d, hh, mi, ss, ms, log, eid, lvl, prov, msg = m.groups()
+            y, mo, d, hh, mi, ss, ms, log, eid, lvl, rc, prov, msg = m.groups()
             ts = dt.datetime(int(y), int(mo), int(d), int(hh), int(mi), int(ss), int(ms) * 1000)
             lvl = int(lvl)
             level = "E" if lvl in (1, 2) else ("W" if lvl == 3 else "I")
             if not event_wanted(log, int(eid), prov.strip(), msg):
                 lf.skipped += 1
                 continue
-            lf.lines.append(Line(lf.family, lf.name, i, ts, level, "", msg, raw, {"log": log, "id": int(eid), "provider": prov.strip(), "evlevel": lvl}))
+            lf.lines.append(Line(lf.family, lf.name, i, ts, level, "", msg, raw, {"log": log, "id": int(eid), "provider": prov.strip(), "evlevel": lvl,
+                                                                              "rc": int(rc) if rc is not None else None}))
             continue
         m = EV_NONE_RE.match(raw)
         if m:
@@ -3643,10 +3654,10 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
     # established at the TOP of this function, because "below this block" was itself the defect.
     m["prior_build_mix"] = {k: v["versions"] for k, v in sorted(_builds.items()) if module_turned_over(v)}
     # TaskScheduler records are Event Log entries with no module version, so only the anchor can
-    # place them. Same one line as before, so the GUARD:taskrc knob stays driveable.
+    # place them.
     _count("task_failures", [l for l in events if "TaskScheduler" in str(l.extra.get("log")) and l.extra.get("id") in (201, 203)
                               and OUR_TASKS_RE.search(l.msg) and sel(l.ts) and not _pre_install(l)
-                              and task_record_is_failure(l.extra.get("id"), l.msg)])   # GUARD:taskrc DEFECT: and True])
+                              and task_record_is_failure(l.extra.get("id"), l.msg, l.extra.get("rc"))])
     m["install_anchor"] = _anchor.isoformat(sep=" ") if _anchor else None
     # ATTRIBUTION THAT COULD NOT RUN MUST FAIL, NOT GRADE GREEN. install_anchor is neither a gated
     # metric nor an informational one, so when it came back None - which it did on win11-upgrade and
