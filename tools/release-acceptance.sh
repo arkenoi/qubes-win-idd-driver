@@ -682,6 +682,13 @@ if [ "$SKIP_FEATURES" -eq 0 ]; then
         ./mgmt/harness/supervision-e2e.sh --iso "$ISO" --subject "$F11-sup" --golden "$F11-qwt" \
           ${PV:+--build "$PV"} --cells "L1 L9 L2 L8" >>"$WORK/$t.out" 2>&1
         rc=$? ;;
+      uac-on)
+        # THE ONE SUBJECT WITH UAC ON. The reporter runs with it on and every other subject here has it off, so the
+        # fixes that only a split token triggers - the bridge's leftovers, the handoff file's delete, the elevated
+        # sender - had no check that could fail. Over his sealed German 25H2 golden, env-asserted as his.
+        VM=win11de-uac PKG="$SETUP" FAMILY=win11de REPORTER=gweck LOG="$WORK/$t.log" OUT="$WORK/$t.d" \
+          ./mgmt/harness/uac-on-test.sh >>"$WORK/$t.out" 2>&1
+        rc=$? ;;
       *)
         # A listed test with no arm would otherwise inherit rc from the PREVIOUS test - a stale PASS (tools/check-cell-coverage.sh
         # also refuses such a list at commit time).

@@ -5,8 +5,10 @@
 # full sequence starts, we want quick check if main functionality passes without failure".
 # crop-before-map must stay immediately after notify-errors-guest-test: it rides that test's
 # already-installed subject.
+# uac-on is the one guest that runs with UAC on, as the reporter's does; every other subject has it off.
 updater-component
 notify-errors-guest-test
 crop-before-map
 template-update
 supervision-gate
+uac-on
