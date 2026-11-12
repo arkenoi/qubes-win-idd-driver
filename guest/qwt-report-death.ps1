@@ -316,12 +316,15 @@ $script:QwtDeathCodeTables = @{
         [uint32]0x800710E0L = 'the operator or administrator refused the request'
         [uint32]0x80070569L = 'the account is not granted this logon type'
         [uint32]0x8007052EL = 'the account could not log on'
-        [uint32]0x8007010BL = 'the working directory is invalid'; [uint32]0x80070001L = 'incorrect function'
+        [uint32]0x8007010BL = 'the working directory is invalid'
         [uint32]0x41301 = 'the task is currently running'; [uint32]0x41303 = 'the task has not yet run'
         [uint32]0x41306 = 'the last run was ended by Task Scheduler'
         [uint32]1 = 'the script reported a failure or an unhandled error'
     }
 }
+# HRESULT_FROM_WIN32(1): event 201 records a script's exit code 1 as 0x80070001, so it means what code 1 means. Its Win32
+# text, 'incorrect function', is what every scan-task notice on the reporter's 4.3.37/.38 said, and it named no cause at all.
+$script:QwtDeathCodeTables['task'][[uint32]0x80070001L] = $script:QwtDeathCodeTables['task'][[uint32]1]
 # exit codes an executable of ours documents (the process table's per-executable refinement)
 $script:QwtDeathExeCodes = @{
     'notifhost.exe' = @{ [uint32]2 = 'notification access is denied for this user'
