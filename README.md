@@ -86,11 +86,16 @@ from 4.3.29 to 4.3.42 from the release package, and all 8 updater gates passed; 
 update passes on a TemplateVM in that environment, each judged PASS; and, new in this acceptance, ran
 4.3.41's notification and session-helper fixes on a clone of that environment with UAC on, all
 passing. The remainder suites proved the full-screen and capture checks able to fail, one clause at a
-time. **Not measured:** the listener refusal names on a guest with each setting set to Deny (they are
-render-tested); the spring daylight-saving direction, until 2027-03-28; the clock-jump branch under
+time. **Measured after the release** (2026-11-13, a clone of that German 25H2 environment): group policy
+and device-management Force Deny each produce the policy notice, exactly once; a user or device-wide
+consent of Deny does not refuse the bridge on 25H2 at all, so those two notices are render-tested only.
+**Not measured:** the spring daylight-saving direction, until 2027-03-28; the clock-jump branch under
 Windows PowerShell 5.1 on a guest; the notice deferral's drain; and the dom0-driven half of the resize
-fault test. **Still open:** a broker ended as hung is not restarted, what stalls it for 2 s in the
-field is unknown, and so is the cause of the reporter's 4.3.37/4.3.38 scan-task failures. Full detail
+fault test. **Still open:** a capture helper or notification bridge that dies is not restarted until the
+GUI agent next starts (restart the qube), and this release's notice for that death wrongly says Task
+Scheduler restarts it up to three times - Task Scheduler retries only a launch that failed (corrected on
+main for the next release). What stalls the broker for 2 s in the field is unknown, and so is the cause
+of the reporter's 4.3.37/4.3.38 scan-task failures. Full detail
 in [`docs/RELEASE-NOTES-4.3.42.md`](docs/RELEASE-NOTES-4.3.42.md).
 **On "updates available" reappearing right after an update — this is Windows Defender, and dom0 is telling you the truth.**
 On a freshly updated guest, dom0's updates-available can go back to "available" within a minute of clearing. We chased this as a

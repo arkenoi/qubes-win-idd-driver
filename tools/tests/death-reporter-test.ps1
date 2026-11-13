@@ -659,7 +659,7 @@ Check 'teardown text: the longest name''s header stays within 60 characters' ($n
 # and the family's wording is untouched for every other code: the same child, exit 2, still "exited unexpectedly" with its own
 # next line - which promises no restart: Task Scheduler does not restart a helper that ran (measured 2026-11-13)
 $st = Invoke-QwtDeathReport (New-Super 4003 'notifhost.exe' '2249' '0x00000002' '30000' $T0.AddSeconds(20))
-Check 'teardown text: any other exit code keeps the family''s header and its own next line, which promises no restart' ($st -eq 'send' -and $script:launched.Count -eq 3 -and ([string]$script:launched[2]) -like "The notification bridge exited unexpectedly`r`nNot relaunched; guest toasts show as plain windows until this qube is restarted.`r`n*")
+Check 'teardown text: any other exit code keeps the family''s header and its own next line, which promises no restart' ($st -eq 'send' -and $script:launched.Count -eq 3 -and ([string]$script:launched[2]) -like "The notification bridge exited unexpectedly`r`nNot relaunched until the GUI agent next starts (restart the qube); guest toasts show as plain windows until then.`r`n*")
 
 # 6h. THE BUILD, AND THE SHAPE (owner 2026-10-10: "i see win11-acc error on screen, but since dom0 toasts do not have timestamps,
 #     i cannot figure out if it is a botched fix or control reproduction run" - and, reading the text above, "too much prose").

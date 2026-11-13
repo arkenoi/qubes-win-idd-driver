@@ -167,14 +167,14 @@ $script:QwtDeathHuman = @{
 # it after 5 s, then 15 s, then 60 s, and the restarted service launches a new agent; this qube's windows are gone from
 # dom0 until then. Task Scheduler's restart-on-failure for the helpers retries only a launch that failed (measured
 # 2026-11-13: a helper that ran and exited is not restarted, whatever its code) and the GUI agent relaunches nothing
-# (docs/ADR-supervision.md 4-5), so a helper that died stays down until the qube restarts - the "up to three times"
-# these lines promised never happened. The ETW proxy is relaunched only by the next GUI agent start, and
+# (docs/ADR-supervision.md 4-5), so a helper that died stays down until the GUI agent next starts - a qube restart, or
+# the watchdog's restart of a dead agent - and the "up to three times" these lines promised never happened. The ETW proxy is relaunched only by the next GUI agent start, and
 # toasts still reach dom0 through the bridge's two other sources meanwhile. The updates relay served an update pass
 # whose network path is gone with it.
 $script:QwtDeathNextByExe = @{
     'gui-agent.exe' = 'Windows restarts its watchdog service, which starts a new GUI agent; if the windows do not reopen, restart the qube.'
-    'wgcbroker.exe' = 'Not relaunched; menus, modern apps and notifications do not appear in dom0 until this qube is restarted.'
-    'notifhost.exe' = 'Not relaunched; guest toasts show as plain windows until this qube is restarted.'
+    'wgcbroker.exe' = 'Not relaunched until the GUI agent next starts (restart the qube); menus, modern apps and notifications do not appear in dom0 until then.'
+    'notifhost.exe' = 'Not relaunched until the GUI agent next starts (restart the qube); guest toasts show as plain windows until then.'
     'etwproxy.exe' = 'Not relaunched until the next GUI agent start; notifications still reach dom0.'
     'qubes-updates-relay.exe' = 'Not relaunched; the update pass it served cannot finish.'
 }
