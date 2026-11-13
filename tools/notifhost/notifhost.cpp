@@ -426,9 +426,9 @@ static std::vector<std::wstring> ReadAllowlist()
 // toggle writes; proven sufficient for an unpackaged reader on this guest). An
 // explicit value - crucially "Deny" - is the user's decision and is left untouched: re-seeding
 // Allow over a Deny would (a) override a user who deliberately turned notification access off
-// and (b) defeat the fail-open selftest, since the launch itself would re-grant. The authoritative
-// health check is GetAccessStatus afterwards - on Deny
-// the bridge exits WITHOUT having suppressed anything (fail-open).
+// and (b) defeat the fail-open selftest, since the launch itself would re-grant. An explicit Deny is then acted on by
+// BridgeMain's own reading, before the access check (docs/ADR-toasts.md 12): the bridge stands down WITHOUT having
+// suppressed anything (fail-open).
 static void EnsureConsent()
 {
     HKEY k;
@@ -571,6 +571,15 @@ static const wchar_t* HoldVerdictName(LONG v)
 static bool HoldSeamless()
 {
     return !g_hold || TI_LOAD32(&g_hold->Seamless) != 0;
+}
+
+// SEAMLESS MODE, SESSION GOING DOWN (docs/ADR-supervision.md item 2b, by mode): this process starts nothing of its own -
+// no click child, no relay, no deferred drain, no notice. The agent copies its end-session latch into the header because
+// this process runs as the user and cannot open the SYSTEM-only one. Without a section (older agent) it is unknown, and
+// launches go on as before.
+static bool HoldSeamlessGoingDown()
+{
+    return g_hold && TI_LOAD32(&g_hold->Seamless) != 0 && TI_LOAD32(&g_hold->GoingDown) != 0;
 }
 
 // Any thread - the shadow worker calls it with onlyIfPending (the ring's interlocked ops make it safe).
@@ -2977,6 +2986,8 @@ static bool ActChildSpawn(uint64_t token, ActClickInfo& info, std::wstring& why)
     const ToastAct* act = nullptr;
     for (auto const& a : info.entry.plan.actions) if (a.key == info.key) act = &a;
     if (!act) { why = L"dom0 invoked an action this toast never carried"; return false; }
+    // A refused click is a failure, and the user is told on the live connection.
+    if (HoldSeamlessGoingDown()) { why = L"the session is going down"; return false; }
     info.file = ActFilePath(token);
     if (!ActFileWrite(info.file, info.entry, *act)) { why = L"the instruction file could not be written"; return false; }
     wchar_t self[MAX_PATH] = { 0 };
@@ -3813,6 +3824,12 @@ static bool NotifyDeferWrite(std::wstring const& summary, std::wstring const& bo
 // Called by the session-resident bridge at startup - the one place that reliably HAS a route.
 static void NotifyDeferDrain()
 {
+    if (HoldSeamlessGoingDown())
+    {
+        BLog(L"NOTIFY deferred notices not drained: the session is going down (seamless mode) - they stay queued "
+             L"for the next bridge start");
+        return;
+    }
     std::wstring pat = StateDir() + L"\\deferred-*.txt";
     WIN32_FIND_DATAW fd = {};
     HANDLE h = FindFirstFileW(pat.c_str(), &fd);
@@ -3969,6 +3986,13 @@ static void ReportErrorSelf(const char* key)
     if (!QerrRenderText(text, sizeof(text), t, nullptr, (unsigned long)GetCurrentProcessId(), build) ||
         !QerrFormatHeader(header, sizeof(header), t->header, nullptr))
     { BLogE(L"NOTIFYERR notifhost.%S not sent: the text did not render", id); return; }
+    // Dropped after the render and before anything is written, as the agent's route drops it (notifyerr.c).
+    if (HoldSeamlessGoingDown())
+    {
+        BLog(L"NOTIFYERR notifhost.%S not sent: %S (seamless mode, the session is going down)", id,
+             QerrDecisionName(QERR_DROPPED_GOINGDOWN));
+        return;
+    }
 
     wchar_t pd[MAX_PATH];
     if (!GetEnvironmentVariableW(L"ProgramData", pd, RTL_NUMBER_OF(pd))) wcscpy_s(pd, L"C:\\ProgramData");
@@ -4042,10 +4066,11 @@ static void ReportErrorSelf(const char* key)
 
 // --- bridge main --------------------------------------------------------------------------
 
-// RECORD A DEPARTURE WE ASKED FOR (qtb_shared.h). "<pid> <reason>", written next to the bridge's
+// RECORD A DEPARTURE WE ASKED FOR (qtb_shared.h). "<pid> <reason> <tick>", written next to the bridge's
 // other control surfaces, in a file this process creates and therefore owns. The PID is what makes it evidence:
 // the agent accepts the reason only from the instance that just exited, so a file from an earlier
-// bridge cannot excuse a later real death. Best-effort by design - if the write fails the agent
+// bridge cannot excuse a later real death. A stand-down before any pid is published has only the tick: the agent
+// accepts it when it is no earlier than the launch it awaits. Best-effort by design - if the write fails the agent
 // simply sees no reason and reports the exit as before, which is the safe direction: a death
 // wrongly reported is noise, a death silently swallowed is the failure this project refuses.
 static void WriteExitReason(const wchar_t* reason)
@@ -4055,8 +4080,8 @@ static void WriteExitReason(const wchar_t* reason)
                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) { BLog(L"exit-reason: cannot write %s (%lu)", path.c_str(), GetLastError()); return; }
     char line[128];
-    const int n = _snprintf_s(line, sizeof(line), _TRUNCATE, "%lu %ls\n",
-                              GetCurrentProcessId(), reason);
+    const int n = _snprintf_s(line, sizeof(line), _TRUNCATE, "%lu %ls %llu\n",
+                              GetCurrentProcessId(), reason, (unsigned long long)GetTickCount64());
     DWORD wr = 0;
     if (n > 0) WriteFile(h, line, (DWORD)n, &wr, nullptr);
     CloseHandle(h);
@@ -4117,6 +4142,23 @@ static int BridgeMain()
 
     init_apartment(apartment_type::multi_threaded);
     EnsureConsent();
+    // AN EXPLICIT DENY STOPS THIS BRIDGE BY ITS OWN READING (docs/ADR-toasts.md 12), whatever the access check would
+    // answer: on 25H2 Windows granted access over a user or device Deny. It sends that setting's notice, records the
+    // stand-down for the agent and leaves before any pid is published. A policy refusal is left to the check, which
+    // the policy does govern, and the reader names a policy first.
+    {
+        std::wstring readout;
+        const char* key = ListenerDenialReason(readout);
+        if (strcmp(key, "listener-denied-device") == 0 || strcmp(key, "listener-denied-user") == 0)
+        {
+            BLog(L"FATAL access=deny %s -> %S - an explicit Deny, read before the access check: standing down, "
+                 L"window path preserved, exiting", readout.c_str(), key);
+            ReportErrorSelf(key);   // notifytexts.h: that reason's listener-denied-* row; "exit code 2" is this return
+            const std::wstring wkey(key, key + strlen(key));
+            WriteExitReason(wkey.c_str());
+            return 2;
+        }
+    }
     UserNotificationListener listener{ nullptr };
     try {
         listener = UserNotificationListener::Current();
@@ -4232,6 +4274,7 @@ static int BridgeMain()
     const int kFwdFailCap = 5;
     int failStreak = 0, backoff = 0;
     ULONGLONG nextReconnect = 0;
+    bool reconnectHeld = false;   // "not re-established, going down" said once per end
     int rc = 0;
 
     // ---- REST-ZERO S4c wake sources (docs/DESIGN-rest-zero-capture.md C) -----------------------------------------
@@ -4346,8 +4389,21 @@ static int BridgeMain()
                 connected = false;
                 BLog(L"connection down - toasts take the window path until it is back");
             }
-            if (!allow.empty() && now >= nextReconnect)
+            static const DWORD bo[] = { 5000, 15000, 60000, 300000 };
+            if (!allow.empty() && now >= nextReconnect && HoldSeamlessGoingDown())
             {
+                // No relay is started while the session is going down. The header wakes nothing on a cancelled end,
+                // so the next look is the first backoff step, and the backoff is not spent.
+                nextReconnect = GetTickCount64() + bo[0];
+                if (!reconnectHeld)
+                {
+                    reconnectHeld = true;
+                    BLog(L"connection not re-established: the session is going down (seamless mode)");
+                }
+            }
+            else if (!allow.empty() && now >= nextReconnect)
+            {
+                reconnectHeld = false;
                 // A fresh connection must trigger an immediate listing pass: toasts left
                 // deliberately unseen while disconnected (fail-open retry) forward NOW,
                 // not at the next NotificationChanged / 30 s floor. Banners are held per toast by the agent (ADR-toasts
@@ -4359,7 +4415,6 @@ static int BridgeMain()
                 }
                 else
                 {
-                    static const DWORD bo[] = { 5000, 15000, 60000, 300000 };
                     nextReconnect = GetTickCount64() + bo[backoff < 3 ? backoff : 3];
                     backoff++;
                 }

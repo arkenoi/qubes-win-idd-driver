@@ -149,10 +149,13 @@ inline std::wstring QwtLogDir()
 // So the reason is RECORDED instead. One line, in a file the bridge itself creates in its state
 // directory and therefore owns - whoever created the DIRECTORY (the installer does, elevated, since
 // 2026-09-05, so what SYSTEM writes there the bridge can read and cannot delete) - as
-//   <pid> <reason>
+//   <pid> <reason> <tick>
 // The PID is what makes it evidence: the agent accepts the reason only from the instance that just
 // exited, so a file left by an earlier bridge can never excuse a later real death. The bridge
-// deletes it at startup for the same reason.
+// deletes it at startup for the same reason. The tick (GetTickCount64 at the write) serves the one
+// departure with no pid to match: a stand-down on an explicit Deny (listener-denied-device or -user,
+// docs/ADR-toasts.md 12) leaves before it publishes one, and the agent accepts it at its 60 s check
+// only when the tick is no earlier than the launch it awaits. An older agent reads the first two fields.
 #define QTB_EXITREASON_FILE   L"\\exit-reason"
 #define QTB_REASON_AGENT_GONE     L"agent-gone"
 #define QTB_REASON_SESSION_CHANGED L"session-changed"
