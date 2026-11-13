@@ -127,58 +127,6 @@ try {
 # file with its own `done`, and the rpc handler tailing that file reported the update finished -
 # with an empty result - while DISM was still installing. The scan's Remove-Proxy also tears down
 # the proxy the other pass is downloading through.
-# DEBOUNCE, and only for the automatic scan. The mutex below stops two passes running AT ONCE; it
-# does nothing about one starting the moment another finished. That happens routinely - dom0 drives
-# an install, it completes, and the 6-hourly scan fires minutes later - and each pass costs a full
-# Windows Update scan plus a proxy/relay teardown and rebuild. The relay churn is not free: the
-# 2026-08-20 dump attributes the guest-wide freeze to the TLB shootdowns that qrexec bridge
-# processes generate as they exit, so a pass nobody needs is a wedge risk, not just wasted minutes.
-#
-# Rules, deliberately narrow:
-#   - ONLY -Scheduled passes are ever skipped. Anything dom0 asked for runs, always.
-#   - the window counts from the last COMPLETED pass of ANY kind (that is the point of it being
-#     cross-path); a pass that failed or is mid-flight does not start the clock.
-#   - QUBES_UPDATES_DEBOUNCE_MIN=0 disables it; the default is 30 minutes against a 6-hourly scan.
-#   - a pass that ended REBOOT-PENDING never debounces the scan that follows it (see inside).
-# The marker lines delimit the region tools/tests/wu-reboot-report-test.ps1 extracts and replays.
-# ---- WU-SCAN-DEBOUNCE-BEGIN
-if ($Scheduled -and $Action -eq 'scan') {
-    $debounceMin = 30
-    $envMin = $env:QUBES_UPDATES_DEBOUNCE_MIN
-    if ($envMin -and ($envMin -as [int]) -ne $null) { $debounceMin = [int]$envMin }
-    if ($debounceMin -gt 0 -and (Test-Path $StatusFile)) {
-        try {
-            $prev = Get-Content -LiteralPath $StatusFile -Raw | ConvertFrom-Json
-            # Only a pass that actually LEFT AN ANSWER may suppress the next scan. Measured on a
-            # real cold boot 2026-08-20: the boot-triggered scan was skipped 9 minutes after a
-            # download pass, finishing in 3 s having written nothing. That is right when the
-            # previous pass reported availability - and wrong when it did not, because the boot
-            # scan is exactly the recovery for a pass whose own rescan failed. Without this the
-            # guest could sit up to a full scan interval with no availability answer for dom0.
-            $prevAnswered = ($prev.PSObject.Properties.Name -contains 'available') -and ($prev.phase -eq 'done')
-            # A pass that ended REBOOT-PENDING did not scan: it reported a count derived from its own
-            # result rows and logged "boot scan will confirm". That boot scan (BootTrigger + 2 min,
-            # -Scheduled) is THIS pass, and it is the only correction dom0 ever gets - so a
-            # reboot-pending status never counts as an answer that may suppress it. Measured
-            # 2026-09-16 on German Win11 25H2 (4.3.29): the install pass wrote done_ts 22:49:16,
-            # the boot scan fired at 22:54:00 with LastTaskResult 0, exited right here having
-            # written nothing, and dom0 kept "no updates" with a 4.4 GB cumulative downloaded and
-            # unapplied on the guest.
-            $prevGuessed = [bool]$prev.reboot_needed   # GUARD:bootconfirm
-            if ($prev.done_ts -and $prevAnswered -and -not $prevGuessed) {
-                $age = ((Get-Date) - [datetime]$prev.done_ts).TotalMinutes
-                # A negative age means the stamp is in the future (clock moved) - do not trust it
-                # to skip work; run the pass.
-                if ($age -ge 0 -and $age -lt $debounceMin) {
-                    Write-Host ("skipping this scheduled scan: a {0} pass completed {1:N0} min ago (debounce {2} min)" -f `
-                                $prev.action, $age, $debounceMin)
-                    exit 0
-                }
-            }
-        } catch { }   # unreadable/absent status = no reason to skip; fall through and scan
-    }
-}
-# ---- WU-SCAN-DEBOUNCE-END
 
 # THE STATUS OBJECT AND Save COME BEFORE THE MUTEX. The ownership record below the mutex writes $script:St and calls Save;
 # until 2026-10-02 both were defined AFTER it, so owner_pid was never recorded (PropertyNotFound + CommandNotFound, swallowed
@@ -267,6 +215,61 @@ function Log($m, $lvl){
 $script:St = [ordered]@{ action=$Action; phase='init'; ts=$null; owner_pid=0; owner_pid_start=''; count=0; available=@();
                          downloading=$null; installing=$null; result=@(); reboot_needed=$false; error=$null; recovered='';
                          not_actionable=@(); satisfied=@(); satisfied_rule='installed'; unroutable=@(); route_unknown=@(); esu=$null; notice=$null }
+
+# DEBOUNCE, and only for the automatic scan. The mutex below stops two passes running AT ONCE; it
+# does nothing about one starting the moment another finished. That happens routinely - dom0 drives
+# an install, it completes, and the 6-hourly scan fires minutes later - and each pass costs a full
+# Windows Update scan plus a proxy/relay teardown and rebuild. The relay churn is not free: the
+# 2026-08-20 dump attributes the guest-wide freeze to the TLB shootdowns that qrexec bridge
+# processes generate as they exit, so a pass nobody needs is a wedge risk, not just wasted minutes.
+#
+# Rules, deliberately narrow:
+#   - ONLY -Scheduled passes are ever skipped. Anything dom0 asked for runs, always.
+#   - the window counts from the last COMPLETED pass of ANY kind (that is the point of it being
+#     cross-path); a pass that failed or is mid-flight does not start the clock.
+#   - QUBES_UPDATES_DEBOUNCE_MIN=0 disables it; the default is 30 minutes against a 6-hourly scan.
+#   - a pass that ended REBOOT-PENDING never debounces the scan that follows it (see inside).
+#   - a skip is a line in the pass log. The region sits below Log for that: the scan task runs under
+#     Task Scheduler, which discards Write-Host. Nothing above this point saves or takes the mutex.
+# The marker lines delimit the region tools/tests/wu-reboot-report-test.ps1 extracts and replays.
+# ---- WU-SCAN-DEBOUNCE-BEGIN
+if ($Scheduled -and $Action -eq 'scan') {
+    $debounceMin = 30
+    $envMin = $env:QUBES_UPDATES_DEBOUNCE_MIN
+    if ($envMin -and ($envMin -as [int]) -ne $null) { $debounceMin = [int]$envMin }
+    if ($debounceMin -gt 0 -and (Test-Path $StatusFile)) {
+        try {
+            $prev = Get-Content -LiteralPath $StatusFile -Raw | ConvertFrom-Json
+            # Only a pass that actually LEFT AN ANSWER may suppress the next scan. Measured on a
+            # real cold boot 2026-08-20: the boot-triggered scan was skipped 9 minutes after a
+            # download pass, finishing in 3 s having written nothing. That is right when the
+            # previous pass reported availability - and wrong when it did not, because the boot
+            # scan is exactly the recovery for a pass whose own rescan failed. Without this the
+            # guest could sit up to a full scan interval with no availability answer for dom0.
+            $prevAnswered = ($prev.PSObject.Properties.Name -contains 'available') -and ($prev.phase -eq 'done')
+            # A pass that ended REBOOT-PENDING did not scan: it reported a count derived from its own
+            # result rows and logged "boot scan will confirm". That boot scan (BootTrigger + 2 min,
+            # -Scheduled) is THIS pass, and it is the only correction dom0 ever gets - so a
+            # reboot-pending status never counts as an answer that may suppress it. Measured
+            # 2026-09-16 on German Win11 25H2 (4.3.29): the install pass wrote done_ts 22:49:16,
+            # the boot scan fired at 22:54:00 with LastTaskResult 0, exited right here having
+            # written nothing, and dom0 kept "no updates" with a 4.4 GB cumulative downloaded and
+            # unapplied on the guest.
+            $prevGuessed = [bool]$prev.reboot_needed   # GUARD:bootconfirm
+            if ($prev.done_ts -and $prevAnswered -and -not $prevGuessed) {
+                $age = ((Get-Date) - [datetime]$prev.done_ts).TotalMinutes
+                # A negative age means the stamp is in the future (clock moved) - do not trust it
+                # to skip work; run the pass.
+                if ($age -ge 0 -and $age -lt $debounceMin) {
+                    Log ("skipping this scheduled scan: a {0} pass completed {1:N0} min ago (debounce {2} min)" -f `
+                         $prev.action, $age, $debounceMin)
+                    exit 0
+                }
+            }
+        } catch { }   # unreadable/absent status = no reason to skip; fall through and scan
+    }
+}
+# ---- WU-SCAN-DEBOUNCE-END
 
 # ---- WU-PASS-CLOCK-BEGIN
 # A PASS DURATION MUST NOT BE READ OFF A CLOCK THAT MOVES UNDER IT. `ts` above is
@@ -545,9 +548,9 @@ try {
     # abandonment is a real anomaly and is logged as one; what is removed is a user-facing ERROR
     # about a task that did exactly the right thing.
     if ($Scheduled -and $Action -eq 'scan') {
-        Write-Host ("QWTUPDMUTEXABANDONED: a previous update operation was terminated without releasing " +
-                    "Global\QubesWindowsUpdate - the abandonment is cleared and this scheduled scan yields; " +
-                    "a scan only reads, so it has nothing to refuse. The next scheduled scan takes the mutex cleanly.")
+        Log ("QWTUPDMUTEXABANDONED: a previous update operation was terminated without releasing " +
+             "Global\QubesWindowsUpdate - the abandonment is cleared and this scheduled scan yields; " +
+             "a scan only reads, so it has nothing to refuse. The next scheduled scan takes the mutex cleanly.") 'WARN'
         exit 0
     }
     if (Write-Refusal 'mutex-abandoned' ("QWTUPDMUTEXABANDONED: a previous update operation was terminated without releasing " +
@@ -558,7 +561,7 @@ if (-not $script:HaveMutex) {
     if ($Scheduled -and $Action -eq 'scan') {
         # A scheduled scan yields to a running pass - it changes nothing - but the contention is on
         # the record rather than looking like an ordinary skip.
-        Write-Host "QWTUPDMUTEXHELD: another Qubes update operation is in progress - skipping this scheduled scan"
+        Log "QWTUPDMUTEXHELD: another Qubes update operation is in progress - skipping this scheduled scan"
         exit 0
     }
     if (Write-Refusal 'mutex-held' ("QWTUPDMUTEXHELD: another Qubes update operation is in progress - refusing to run this " +
