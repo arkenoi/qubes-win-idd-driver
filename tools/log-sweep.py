@@ -773,7 +773,7 @@ INFORMATIONAL_METRICS = ["error_lines", "modules_unattributable", "warning_lines
                          "deaths_by_exit_code", "broker_events_excused", "fi_records",
                          # what the build filter set aside, so an exclusion is never silent
                          "error_lines_prior_build", "warning_lines_prior_build", "prior_build_mix",
-                         "crash_lines_prior_build",
+                         "crash_lines_prior_build", "failure_records_prior_build",
                          # THE SWEEP EXCLUSION ITSELF, as a figure and a per-module list: the lines
                          # cut_predecessor() took out of the graded view at ingestion. Informational
                          # because it is a property of the CAPTURE (an upgrade cell has two builds
@@ -2591,6 +2591,43 @@ def cut_predecessor(files, build=None, since=None, window_trusted=True):
                                   "previous run's lines may still be in the graded view")}
 
 
+def records_follow_the_cut(st):
+    """THE FAILURE RECORDS build_structure() COPIED OUT OF LINES GO WHERE THE CUT PUT THOSE LINES.
+
+    build_structure() runs BEFORE cut_predecessor(), and has to: the boot census and the instance
+    list describe the guest, and need both builds. But it also copies failure records out of the
+    lines - the watchdog's death, going-down and fast-death lines, and the 4001-4004 death records -
+    and compute_metrics() grades those copies, which the cut never reaches. Without this, a crash of
+    the build being REPLACED, mid-install and before the install anchor, breaches
+    agent_unrequested_deaths and death_events for the build under test although the cut has moved
+    every line the records were taken from.
+
+    NOTHING IS ATTRIBUTED HERE. A record goes where cut_predecessor() put the line it was taken
+    from (`swept_out`), so the one decision the cut makes stays the only one. What is set aside is
+    kept in st["prior_records"] and reported as failure_records_prior_build, so the exclusion is a
+    figure, never a silence. A capture the cut refused to cut carries no mark and moves nothing.
+
+    The Event Log's own failure records - a WER crash of one of our executables, a failure of one of
+    our services - are counted from st["events"] in compute_metrics(), which applies the same mark at
+    those two counts. The machine's records stay graded whatever the cut says: a BugCheck and an
+    unclean shutdown are written at the NEXT boot about the previous one, so the anchor cannot place
+    them, and a candidate driver that bugchecks during its install is logged before any part of the
+    candidate has run.
+    """
+    cut = lambda l: l is not None and getattr(l, "swept_out", None) is not None
+    prior = {}
+    for key in ("deaths", "goingdown", "ev_deaths"):
+        prior[key] = [d for d in st[key] if cut(d.get("line"))]
+        st[key] = [d for d in st[key] if not cut(d.get("line"))]
+    prior["fastdeath"] = [l for l in st["fastdeath"] if cut(l)]
+    st["fastdeath"] = [l for l in st["fastdeath"] if not cut(l)]
+    for w in st["windows"]:
+        w["deaths"] = [d for d in w["deaths"] if not cut(d.get("line"))]
+        w["goingdown"] = [d for d in w["goingdown"] if not cut(d.get("line"))]
+    st["prior_records"] = prior
+    return prior
+
+
 # ----------------------------------------------------------------------------------------------- structure
 def normalize_clock_phase(files, anchor, offset):
     """Shift lines stamped in the guest's PRE-CORRECTION phase back into real time.
@@ -3630,9 +3667,21 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
         m["agent_ends_unrecorded_prior_build"] = len([i for i in insts if _inst_prior(i) and i["end_kind"] == "unknown" and (now - i["end"]).total_seconds() > 120 and not i["exit_logged"]])
     else:
         m["agent_ends_unrecorded"] = None   # not evaluable without the capture time (corpus mode)
-    _count("service_failures", [l for l in events if l.extra.get("log") == "System" and l.extra.get("id") in (7023, 7024, 7031, 7034, 7043) and OUR_SERVICES_RE.search(l.msg) and sel(l.ts)])
-    _count("wer_crashes", [l for l in events if l.extra.get("log") == "Application" and l.extra.get("id") in (1000, 1001, 1026) and OUR_EXES_RE.search(l.msg) and sel(l.ts)])
+    # Our components' own Event Log failure records follow the cut, as records_follow_the_cut()
+    # explains; `events` is the structure's copy, taken before the cut, so the mark is read here.
+    _svc = [l for l in events if l.extra.get("log") == "System" and l.extra.get("id") in (7023, 7024, 7031, 7034, 7043) and OUR_SERVICES_RE.search(l.msg) and sel(l.ts)]
+    _wer = [l for l in events if l.extra.get("log") == "Application" and l.extra.get("id") in (1000, 1001, 1026) and OUR_EXES_RE.search(l.msg) and sel(l.ts)]
+    _count("service_failures", [l for l in _svc if not l.swept_out])
+    _count("wer_crashes", [l for l in _wer if not l.swept_out])
     m["death_events"] = len([d for d in st["ev_deaths"] if sel(d["ts"])])
+    _prior_rec = st.get("prior_records") or {}
+    m["failure_records_prior_build"] = {k: n for k, n in (
+        ("deaths", len([d for d in _prior_rec.get("deaths", []) if sel(d["ts"])])),
+        ("going_down_exits", len([d for d in _prior_rec.get("goingdown", []) if sel(d["ts"])])),
+        ("death_events", len([d for d in _prior_rec.get("ev_deaths", []) if sel(d["ts"])])),
+        ("fast_death_backoffs", len([l for l in _prior_rec.get("fastdeath", []) if sel(l.ts)])),
+        ("service_failures", len([l for l in _svc if l.swept_out])),
+        ("wer_crashes", len([l for l in _wer if l.swept_out]))) if n}
     have_wd = bool(st["watchdogs"]) and bool([lf for lf in files if lf.family == "events"])
     mismatch = 0
     if have_wd:
@@ -4877,6 +4926,7 @@ def cmd_analyze(a):
     _clock_measured = bool(a.host_utc) and bool((meta or {}).get("begin", {}).get("nowutc"))
     _clock_ok = _clock_measured and not any(p[0] == "clockskew" for p in problems)
     _cut_scope, _cut = cut_predecessor(files, getattr(a, "build", None), since, _clock_ok)
+    records_follow_the_cut(st)
     problems.extend(stray_problems((meta or {}).get("ledger"), _cut_scope.anchor))
     now = parse_iso((meta.get("begin") or {}).get("now")) if meta and (meta.get("begin") or {}).get("now") else None
     metrics = compute_metrics(files, boots, st, since, now, getattr(a, "build", None))
