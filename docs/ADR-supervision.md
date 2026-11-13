@@ -26,7 +26,8 @@ the Linux way (the owner, 2026-11-13). As with an ACPI shutdown, nothing asks, a
 if the shutdown is then cancelled. That is rare. dom0's shutdown, as the Windows PV agent carries it, closes
 applications by force. Windows is set never to restart a qube by itself (the updater ADR, section 17).
 What remains is mostly a shutdown the user starts. If a policy makes an automatic restart possible after all, the qube warns loudly. In non-seamless
-mode no notification is lost. Built 2026-11-13, not yet seen on a guest (item 2b).
+mode no notification is lost. Built 2026-11-13. On a guest, an ordinary seamless shutdown showed the bridge
+declining to reconnect into the ending session (4.3.43); no cell yet drives a cancelled end (item 2b).
 
 The whole chain, from a death to the notification in dom0 (§1-§4):
 
@@ -312,8 +313,10 @@ smooth"*, and - of the other components - *"same of other components."*
    written against.
 
    **THE EXCEPTIONS ARE RE-DECIDED BY MODE (owner, 2026-11-13).** **Status:** ACCEPTED (owner; Jev accept
-   0.99); BUILT 2026-11-13 (agent `8225f30`; the bridge in `83b146b3`; the warning in `740a46ef`), not yet
-   seen on a guest. Outside seamless mode the EXCEPTION rows above stand as written. The owner: *"when
+   0.99); BUILT 2026-11-13 (agent `8225f30`; the bridge in `83b146b3`; the warning in `740a46ef`). Seen on a
+   guest with 4.3.43: the bridge declined to reconnect at an ordinary seamless shutdown, and the warning fired
+   (`docs/ADR-updater.md` §17 Evidence). The agent's refusals are not yet seen. Outside seamless mode the
+   EXCEPTION rows above stand as written. The owner: *"when
    Linux acpi shutdown is going down, it does not ask much. It expected to leave unsaved things lost and so on.
    So when in seamless mode, we follow the Linux way. In non-seamless mode no notification is lost."*. Then
    *"accept as collateral"*, *"automatic reboots were the problem"*, *"not WU itself, so make correction"*, and

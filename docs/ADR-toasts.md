@@ -571,8 +571,8 @@ honours the timeout; in the list on one that keeps notifications).
 
 ## 12. An explicit Deny of notification access stops the bridge by its own reading: it says why and stands down
 
-**Status:** ACCEPTED (owner, 2026-11-13; Jev accept 0.95); built (`83b146b3`, agent `8225f30`), the Evidence
-below not yet measured. Register: BRIDGEIGNORESCONSENTDENYON25H2.
+**Status:** ACCEPTED (owner, 2026-11-13; Jev accept 0.95); built (`83b146b3`, agent `8225f30`); measured on
+25H2 with 4.3.43 (Evidence).
 
 **Context.** The bridge reads every toast, so Windows' notification-access consent governs it. The consent is a
 `Value` under `...\CapabilityAccessManager\ConsentStore\userNotificationListener`, set per user and per device.
@@ -601,15 +601,18 @@ Every user-Deny refusal on record is on Win10 19045.
 **Cost.** A user who turned notification access off also loses forwarding to dom0. Nothing is lost: toasts take
 the guest-window path (§3), and the notice names the setting to change.
 
-**Evidence.** Seen to fail: the measurement above. Owed: on 25H2, a Deny produces that notice once and no armed
-listener, and the control (Allow) arms. A Deny set from the Settings toggle is covered only if the toggle writes
-the same value. That is unmeasured on 25H2.
+**Evidence.** Seen to fail: the measurement above. Measured 2026-11-13 on a clone of the same guest running
+4.3.43 (`8f58e403`), one setting per boot. A user Deny and a device Deny each logged `FATAL access=deny`, sent
+its notice once, recorded why and exited. The agent logged that the bridge stood down at its start, with no
+`QGANOTIFNOTREADY` and no death record. Group Policy and device-management Force Deny refused as before, each
+followed by the 60 s ERROR. With every setting back to Allow, the bridge armed. A Deny set from the Settings
+toggle is covered only if the toggle writes the same value. That is unmeasured on 25H2.
 
 **Open.** Settled at build. The Deny is read after `EnsureConsent` and before the access check (Jev 0.67,
 confidence 0.50, no verdict). The bridge logs `FATAL access=deny`, sends the notice, records
 `listener-denied-device` or `-user` with a tick, and exits 2 before it publishes a pid (Jev 0.72, confidence
 0.58, no verdict). The agent accepts the record at its 60 s check when the tick is no earlier than the launch it
 awaits. A Force Allow policy does not override the Deny (Jev 0.80). No death record is written by construction:
-the bridge leaves before it publishes a pid, as the measured policy refusal does. Seeing that on a guest is
-owed with the Evidence above. A policy refusal is still left to the access check and records nothing, so the
+the bridge leaves before it publishes a pid, as the measured policy refusal does. On a guest, no death record
+was written (Evidence). A policy refusal is still left to the access check and records nothing, so the
 agent's 60 s `QGANOTIFNOTREADY` ERROR stays for it (Jev 0.49 against 0.49, no verdict).

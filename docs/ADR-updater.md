@@ -856,8 +856,8 @@ scripts themselves, so it cannot drift from them.
 
 ## 17. Windows never restarts a guest on its own; a restart waits for the user, and a policy that overrides this is detected and warned about
 
-**Status:** ACCEPTED (owner, 2026-11-13; Jev accept 0.89); built in `guest/qubes-windows-update.ps1`, the
-Evidence below not yet measured.
+**Status:** ACCEPTED (owner, 2026-11-13; Jev accept 0.89); built in `guest/qubes-windows-update.ps1`. Decision
+2 is measured on a guest; decision 1's measurement is still owed (Evidence).
 
 **Context.** A StandaloneVM with direct internet updates itself. The updater removes `NoAutoUpdate` there
 (`guest/qubes-windows-update.ps1:3043`), and Windows Update may then restart the guest on its own. The qube is
@@ -900,9 +900,16 @@ automatic reboots. on templateVM and appVM they are off"*.
 
 **Cost.** An update that needs a restart stays pending until the user restarts, however long that takes.
 
-**Evidence.** Owed before this ships, and not yet measured on 25H2. A StandaloneVM clone with updates on and
-the two values set installs a cumulative while the autologon user is signed in; read who logs a 1074 and when,
-against a control without the values. Microsoft's caveats: the policy "was never created as a CSP", "in Group
+**Evidence.** Decision 2, measured 2026-11-13 with 4.3.43 (`8f58e403`), one cell per boot, on a clone of the
+retail Win11 26H2 StandaloneVM. It was offline, so Group Policy held `NoAutoUpdate=1`. As installed, the pass
+logged `WUAUTORESTART none`. With device management `AllowAutoUpdate=2` it logged `WUAUTORESTART possible:
+device management AllowAutoUpdate=2` at ERROR and sent one notice, which dom0's notification server
+acknowledged ("Windows may restart this qube by itself"). With the value removed it logged `none` again and sent
+no notice. On the 25H2 template, both passes that ran logged `none`.
+
+Decision 1 is owed before this ships. A StandaloneVM clone with updates on and the two values set installs a
+cumulative while the autologon user is signed in; read who logs a 1074 and when, against a control without the
+values. Microsoft's caveats: the policy "was never created as a CSP", "in Group
 Policy this policy doesn't work exactly as per description", and a restart the user schedules from the
 notification overrides it.
 
