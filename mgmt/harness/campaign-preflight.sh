@@ -274,6 +274,9 @@ BLOCKCLAIM_LIB="${BLOCKCLAIM_LIB:-mgmt/harness/blockclaim-lib.sh}"
 # be made to fail is decoration, and qubesadmin cannot be stubbed from a test. Prints GB free, or
 # nothing when it cannot tell - and "cannot tell" is a refusal, never an assumption.
 POOL_FREE_CMD="${POOL_FREE_CMD:-}"
+# The metadata read is its own external for the same reason. Prints "<usage bytes> <size bytes>", or
+# nothing when it cannot tell.
+POOL_META_CMD="${POOL_META_CMD:-}"
 
 # (a) THE TOOLS THAT READ THE EVIDENCE. mtools lives in ~/bin and is LOST ON EVERY MGMT REBOOT
 # (findings: rpm2cpio recovery) - and without it the log volume cannot be read at all, which is the
@@ -363,6 +366,33 @@ if [ -n "$_peak" ]; then
 else
     log "space: ${_free} GB free on $POOL_NAME, above the per-cell floor of ${POOL_FLOOR_GB} GB - the campaign-level requirement is UNVERIFIED (no peak recorded in $SPACE_RECORD yet; the matrix records one as it runs)"
 fi
+# AND THE METADATA, WHICH FREE DATA SPACE SAYS NOTHING ABOUT. lvm creates no thin volume - and every
+# qube start creates them - once the pool's free metadata is under min(25%, 4 MiB) of its size,
+# however much data space is left. That line is lvm's own rule, so it is a refusal here. How much
+# metadata a campaign draws is not recorded anywhere, so no earlier bound is claimed: the level and
+# the line are logged and the margin is UNVERIFIED.
+if [ -n "$POOL_META_CMD" ]; then
+    _meta=$($POOL_META_CMD 2>/dev/null)
+else
+    _meta=$(python3 - "$POOL_NAME" <<'PYMETA' 2>/dev/null
+import sys
+try:
+    import qubesadmin
+    d = qubesadmin.Qubes().pools[sys.argv[1]].usage_details
+    print(int(d['metadata_usage']), int(d['metadata_size']))
+except Exception:
+    print("")
+PYMETA
+)
+fi
+read -r _mused _msize _ <<<"$_meta"
+[[ "${_mused:-}" =~ ^[0-9]+$ && "${_msize:-}" =~ ^[1-9][0-9]*$ ]] \
+    || die 15 "the metadata usage of pool '$POOL_NAME' could not be read - a campaign is not started blind on space"
+_mline=$(( _msize - (_msize / 4 < 4194304 ? _msize / 4 : 4194304) ))
+_mpct=$(awk -v u="$_mused" -v s="$_msize" 'BEGIN{printf "%.2f", 100*u/s}')
+_lpct=$(awk -v u="$_mline" -v s="$_msize" 'BEGIN{printf "%.2f", 100*u/s}')
+[ "$_mused" -lt "$_mline" ] || die 15 "pool '$POOL_NAME' metadata is ${_mpct}% of $(( _msize / 1048576 )) MiB, at or above lvm's refusal line of ${_lpct}% - lvm creates no thin volume past it and every qube start needs one; reclaim (mgmt/harness/rig-cleanup.sh lists every leftover subject) or extend the pool's metadata in dom0"
+log "metadata: ${_mpct}% of $(( _msize / 1048576 )) MiB on $POOL_NAME, under lvm's refusal line of ${_lpct}% - whether a campaign's draw fits is UNVERIFIED (no campaign records its metadata draw)"
 
 # (e) THE UPDATES PROXY REACHES WINDOWS UPDATE. A netvm-less guest has exactly one route to Windows
 # Update - qubes.UpdatesProxy, a symlink to 127.0.0.1:8082 in THIS qube - and nothing restarts it.
