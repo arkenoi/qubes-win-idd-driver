@@ -315,7 +315,13 @@ smooth"*, and - of the other components - *"same of other components."*
    **THE EXCEPTIONS ARE RE-DECIDED BY MODE (owner, 2026-11-13).** **Status:** ACCEPTED (owner; Jev accept
    0.99); BUILT 2026-11-13 (agent `8225f30`; the bridge in `83b146b3`; the warning in `740a46ef`). Seen on a
    guest with 4.3.43: the bridge declined to reconnect at an ordinary seamless shutdown, and the warning fired
-   (`docs/ADR-updater.md` §17 Evidence). The agent's refusals are not yet seen. Outside seamless mode the
+   (`docs/ADR-updater.md` §17 Evidence). The agent's refusals are not yet seen, and a critical end (lParam
+   `ENDSESSION_CRITICAL`) did not reach them (measured 2026-11-13, a German 25H2 guest in seamless mode, `shutdown /s /t 0` from inside it): in the
+   millisecond the end reached the agent it disarmed and published the end, and the input desktop became
+   Winlogon, where window mapping is suppressed; 17 ms later it began its orderly exit. A captioned window opened
+   0.19 s after the end reached the agent appears nowhere in its log, so there was nothing to refuse. Seeing a
+   refusal needs an end that keeps the agent running on the default desktop; none has been measured. Outside
+   seamless mode the
    EXCEPTION rows above stand as written. The owner: *"when
    Linux acpi shutdown is going down, it does not ask much. It expected to leave unsaved things lost and so on.
    So when in seamless mode, we follow the Linux way. In non-seamless mode no notification is lost."*. Then

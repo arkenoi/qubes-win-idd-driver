@@ -606,7 +606,9 @@ the guest-window path (§3), and the notice names the setting to change.
 its notice once, recorded why and exited. The agent logged that the bridge stood down at its start, with no
 `QGANOTIFNOTREADY` and no death record. Group Policy and device-management Force Deny refused as before, each
 followed by the 60 s ERROR. With every setting back to Allow, the bridge armed. A Deny set from the Settings
-toggle is covered only if the toggle writes the same value. That is unmeasured on 25H2.
+toggles is the same Deny, measured 2026-11-13 on the same German 25H2 guest through UI Automation: the user toggle
+(`..._Notifications_UserGlobal_ToggleSwitch`) off wrote the user's `Value=Deny`, the device toggle
+(`..._Notifications_SystemGlobal_ToggleSwitch`) off wrote the device's `Value=Deny`, and on wrote `Allow` back.
 
 **Open.** Settled at build. The Deny is read after `EnsureConsent` and before the access check (Jev 0.67,
 confidence 0.50, no verdict). The bridge logs `FATAL access=deny`, sends the notice, records
