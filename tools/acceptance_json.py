@@ -38,13 +38,75 @@ THE RULES, in one place:
     planned cell has a passing check. A feature group is clean when its test exited 0.
   * A failed matrix group may be SUPERSEDED by re-run campaigns only as _supersede below says: it reached its footer,
     a failed check names a cell, and every cell that failed or has no passing check passed in a clean re-run. A failed
-    feature group may be, only when its test exited 2 (could not measure) and the same group passed in a clean re-run.
+    feature group may be, only when it could not measure - feature_class() says instrument-fail, the class the coverage
+    receipt records for it - and the same group passed in a clean re-run.
 """
 from __future__ import annotations
-import argparse, glob, json, os, sys, time
+import argparse, glob, json, os, re, sys, time
 
 ROW_CLASSES = ("PASS", "FAIL", "INVALID")
 GRADING_KINDS = ("check", "subject-unusable")
+
+# A FEATURE TEST'S CLASS - ONE RULE, applied by the coverage receipt (tools/coverage-receipt.py) and by the record's
+# supersession (_supersede below), so the two can never disagree about whether a feature test measured the product.
+# Matrix cells are not classed here: their class is a field of the matrix's own rows (cell_classes).
+INSTRUMENT_TOKENS = ("INVALID", "INSTRUMENT", "INCONCLUSIVE", "BLOCKED", "SKIPPED")
+# A sweep declares "I could not measure" in its status, not in a token above. Anchored on `status=`: "DATA" is a
+# substring of METADATA and of prose, so a bare word would reclassify real product FAILs.
+UNGRADED_STATUS_RE = re.compile(r"\bstatus=(?:DATA|INCOMPLETE)\b")
+
+
+def instrument_line(text: str) -> bool:
+    """True when a FAIL text DECLARES it could not measure, wherever in the text that sits."""
+    return any(t in text for t in INSTRUMENT_TOKENS) or bool(UNGRADED_STATUS_RE.search(text))
+
+
+def ledger_class(path: str) -> str:
+    """pass | product-fail | instrument-fail, or "" when there is no usable ledger.
+
+    The class is declared per row and the column is not fixed (supervision-e2e writes FAIL in column 2 and the sweep's
+    status=DATA in column 4), so the WHOLE row is scanned. Worst wins: one product FAIL outranks every gap. A missing,
+    empty or unreadable ledger returns "" so the caller falls back to the exit code - "no row" must never read as "not
+    a failure".
+    """
+    try:
+        rows = [ln for ln in open(path, encoding="utf-8", errors="replace").read().splitlines() if ln.strip()]
+    except OSError:
+        return ""
+    if not rows:
+        return ""
+    worst = "pass"
+    for ln in rows:
+        fields = [f.strip() for f in ln.split("\t")]
+        if not any(f == "FAIL" or any(f.startswith(t) for t in INSTRUMENT_TOKENS) for f in fields):
+            continue
+        if instrument_line(ln):
+            if worst != "product-fail":
+                worst = "instrument-fail"
+        else:
+            worst = "product-fail"
+    return worst
+
+
+def feature_class(rc: int, ledger: str = "") -> tuple[str, str]:
+    """A feature test's class from its exit code and its ledger -> (class, note); the note is "" unless the ledger
+    decided a class the exit code alone would not have.
+
+    The exit code alone: 0 pass, 2 instrument-fail (could not measure), anything else product-fail - and an exit code
+    cannot carry the distinction reliably, as two inverted conventions exist in this apparatus. A ledger that declares
+    a class overrides it, except that a ledger may never turn a non-zero exit into a pass: it is written DURING the
+    run, so a suite that died after its last row would read as green on its own stale evidence.
+    """
+    by_exit = "pass" if rc == 0 else ("instrument-fail" if rc == 2 else "product-fail")
+    declared = ledger_class(ledger) if ledger else ""
+    if declared and not (rc != 0 and declared == "pass"):
+        if declared == by_exit:
+            return declared, ""
+        return declared, "class %s DECLARED by %s (exit %d alone would have said %s)" % (declared, ledger, rc, by_exit)
+    if declared == "pass" and rc != 0:
+        return by_exit, ("ledger %s declares every row passing but the suite exited %d - kept %s; a ledger cannot "
+                         "outrank a non-zero exit" % (ledger, rc, by_exit))
+    return by_exit, ""
 
 
 def read_matrix(campdir: str) -> dict:
@@ -205,7 +267,7 @@ def read_groups(campdir: str) -> list[dict]:
             clean, why = False, "%s is not a readable feature result naming group %s" % (os.path.basename(p), name)
         groups.append({"group": name, "kind": "feature", "clean": clean, "why": why, "final": good, "cells": [name],
                        "passed_cells": [name] if clean else [], "failures": [], "source": p,
-                       "exit_code": rc if good else None})
+                       "exit_code": rc if good else None, "ledger": (d.get("ledger") or "") if good else ""})
     return groups
 
 
@@ -220,11 +282,11 @@ def _supersede(failed: list[dict], reruns: list[str]) -> tuple[str, list[dict], 
       * every failure names a cell;
       * every cell a failed row names, and every planned cell with no passing check (so a cell that never ran too),
         passed in a re-run campaign whose every group is clean.
-    A failed FEATURE group is superseded only when its result is readable, its test exited 2 - it could not measure
-    the product (tools/release-acceptance.sh: every feature test exits 2 for exactly that, and the coverage receipt
-    reads 2 as instrument-fail) - and the same group passed in a re-run campaign whose every group is clean
-    (docs/ADR-acceptance.md section 7: a measured verdict replaces an instrument-fail; a product-fail stays). Any other
-    failed feature group - a product failure - keeps the refusal.
+    A failed FEATURE group is superseded only when its result is readable, feature_class() over its exit code and
+    its ledger says instrument-fail - it could not measure the product, the class the coverage receipt records for
+    it - and the same group passed in a re-run campaign whose every group is clean (docs/ADR-acceptance.md section 7:
+    a measured verdict replaces an instrument-fail; a product-fail stays). Any other failed feature group - a product
+    failure - keeps the refusal.
     Anything else keeps the record FAILED.
     """
     passed_by: dict[str, str] = {}
@@ -240,11 +302,13 @@ def _supersede(failed: list[dict], reruns: list[str]) -> tuple[str, list[dict], 
     sup: list[dict] = []
     for g in failed:
         if g["kind"] == "feature":
-            if not (g["final"] and g.get("exit_code") == 2):
-                return ("%s failed (%s) - a feature test is superseded by a re-run only when it exited 2 (could not "
-                        "measure); a product failure stays" % (g["group"], g["why"])), [], []
+            fcls = feature_class(g["exit_code"], g.get("ledger") or "")[0] if g["final"] else ""
+            if fcls != "instrument-fail":
+                return ("%s failed (%s) - a feature test is superseded by a re-run only when it could not measure "
+                        "(class instrument-fail: exit 2, or a ledger whose worst row could not measure); a product "
+                        "failure stays" % (g["group"], g["why"])), [], []
             if g["group"] not in passed_by:
-                return "%s exited 2 in %s and no clean re-run passed it" % (g["group"], g["source"]), [], []
+                return "%s could not measure in %s and no clean re-run passed it" % (g["group"], g["source"]), [], []
             sup.append({"cell": g["group"], "failed_in": g["source"], "failure": g["why"][:400],
                         "passed_in": passed_by[g["group"]]})
             continue

@@ -62,60 +62,11 @@ import argparse, json, os, re, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import acceptance_json  # noqa: E402 - the one reader of a campaign's JSON; this file reads no log text
 
-# THE UNGRADED VOCABULARY, for a FEATURE TEST'S LEDGER only (ledger_class below). Matrix cells are not classed by
-# token any more: their class is a field of the matrix's own rows, read through tools/acceptance_json.py.
-INSTRUMENT_TOKENS = ("INVALID", "INSTRUMENT", "INCONCLUSIVE", "BLOCKED", "SKIPPED")
-# A SWEEP DECLARES "I COULD NOT MEASURE" IN ITS STATUS, NOT IN A TOKEN THIS LIST HOLDS. MEASURED
-# 2026-11-07, campaign 42400226595 at 4b55d0a46510: supervision-gate's ONLY failing row was
-# `FAIL  [SW] the sweep finds nothing new or breached -- LOGSWEEP-RESULT ... rc=3 status=DATA`,
-# and template-update failed twice on "missing data fails". Neither text carries one of the five
-# tokens above, so BOTH were recorded as product regressions - the one thing a blind instrument
-# cannot tell you - while every graded product cell passed (matrix 8/8 CLEAN, 0 breaches, 0 P1).
-# mgmt/harness/verdict-lib.sh:11 states the invariant that broke: "missing data is
-# INVALID-INSTRUMENT, never FAIL, never a default", and this file's own docstring already named
-# "sweep DATA/INCOMPLETE" as instrument per plan section 6 - only the vocabulary never got it.
-# ANCHORED ON `status=`, NOT THE BARE WORD: "DATA" is a substring of METADATA and of any prose that
-# mentions data, so a bare token would silently reclassify real product FAILs. The predicate has to
-# BE the declaration, not a word that co-occurs with it.
-UNGRADED_STATUS_RE = re.compile(r"\bstatus=(?:DATA|INCOMPLETE)\b")
+# A FEATURE TEST is classed by acceptance_json.feature_class(), the rule the acceptance record's supersession applies
+# too. Matrix cells are classed from the matrix's own rows, also through acceptance_json.
 CLASSES = ("pass", "product-fail", "instrument-fail", "not-run")
 MEASURED = ("pass", "product-fail")   # a VERDICT about the product; the other two classes measured nothing
 BUILD_TAG_RE = re.compile(r"^build-\d+\.\d+\.\d+\.\d+$")
-
-
-def instrument_line(text: str) -> bool:
-    """True when a FAIL text DECLARES it could not measure, wherever in the text that sits."""
-    return any(t in text for t in INSTRUMENT_TOKENS) or bool(UNGRADED_STATUS_RE.search(text))
-
-
-def ledger_class(path: str) -> str:
-    """pass | product-fail | instrument-fail, or "" when there is no usable ledger.
-
-    THE CLASS IS DECLARED PER ROW AND THE COLUMN IS NOT FIXED. tools/gate-remainder.sh:92 reads
-    column 3, which is right for the failproof ledgers (c3=INVALID-INSTRUMENT) and WRONG for
-    supervision-e2e's (c1=SW, c2=FAIL, c3=the claim, c4=LOGSWEEP-RESULT ... status=DATA): there it
-    reads the claim text, finds no token, returns NONE and the caller falls back to the exit code -
-    which is exactly the defect this fixes. So scan the WHOLE row. Worst wins: one product FAIL
-    outranks every gap. A missing, empty or unreadable ledger returns "" so the caller keeps its
-    old behaviour - "no row" must never read as "not a failure".
-    """
-    try:
-        rows = [ln for ln in open(path, encoding="utf-8", errors="replace").read().splitlines() if ln.strip()]
-    except OSError:
-        return ""
-    if not rows:
-        return ""
-    worst = "pass"
-    for ln in rows:
-        fields = [f.strip() for f in ln.split("\t")]
-        if not any(f == "FAIL" or any(f.startswith(t) for t in INSTRUMENT_TOKENS) for f in fields):
-            continue
-        if instrument_line(ln):
-            if worst != "product-fail":
-                worst = "instrument-fail"
-        else:
-            worst = "product-fail"
-    return worst
 
 
 def merge_module(old: dict | None, new: dict) -> tuple[dict, str]:
@@ -244,34 +195,14 @@ def main(argv=None) -> int:
         name, _, rc = f.partition("=")
         if not name or not rc.lstrip("-").isdigit():
             return refuse("bad --feature %r (want name=rc)" % f)
-        rc_i = int(rc)
-        by_exit = "pass" if rc_i == 0 else ("instrument-fail" if rc_i == 2 else "product-fail")
-        # AN EXIT CODE CANNOT CARRY THIS DISTINCTION, and the reason is recorded in
-        # tools/gate-remainder.sh:82-87: two conventions exist in this apparatus and they are
-        # INVERTED - verdict-lib.sh reads 1 as EXECUTED-WITH-GAPS and 2 as BROKEN, while
-        # release-acceptance.sh's logvol arm reads 2 as INVALID-RIG and every other non-zero as a
-        # product FAIL. That gate fixed it for the two suites whose ledger it can find and said so;
-        # the feature-test path never inherited the fix (the standing rule: a copied idiom needs
-        # EVERY site of that operation). The suites ALREADY declare the class per row - read that.
-        declared = ledger_class(ledgers[name]) if name in ledgers else ""
-        # A LEDGER MAY NEVER TURN A NON-ZERO EXIT INTO A PASS. The ledger is written DURING the run,
-        # so a suite that died after its last row would otherwise read as green on its own stale
-        # evidence - a verifier reading its own bookkeeping. Downgrading product-fail to
-        # instrument-fail is the whole point and is safe: `covered` excludes instrument-fail,
-        # so the suite leaves `suites`, gate-scope.py check still refuses the cut on coverage, and
-        # `result` stays "fail" for any non-pass class. The CLASS the operator is told changes;
-        # no gate decision does.
-        if declared and not (rc_i != 0 and declared == "pass"):
-            classed[name] = (declared, None, False)
-            if declared != by_exit:
-                notes.append("%s: class %s DECLARED by %s (exit %d alone would have said %s)"
-                             % (name, declared, ledgers[name], rc_i, by_exit))
-        else:
-            classed[name] = (by_exit, None, False)
-            if declared == "pass" and rc_i != 0:
-                notes.append("%s: ledger %s declares every row passing but the suite exited %d - "
-                             "kept %s; a ledger cannot outrank a non-zero exit"
-                             % (name, ledgers[name], rc_i, by_exit))
+        # The suites declare the class per ledger row, and acceptance_json.feature_class() reads it. Downgrading
+        # product-fail to instrument-fail here is safe: `covered` excludes instrument-fail, so the suite leaves
+        # `suites`, gate-scope.py check still refuses the cut on coverage, and `result` stays "fail" for any non-pass
+        # class. The CLASS the operator is told changes; no gate decision does.
+        cls, note = acceptance_json.feature_class(int(rc), ledgers.get(name, ""))
+        classed[name] = (cls, None, False)
+        if note:
+            notes.append("%s: %s" % (name, note))
     if a.package_verify_rc is not None:
         classed["package-verify"] = ("pass" if a.package_verify_rc == 0 else "product-fail", None, False)
     for mw in a.module:
