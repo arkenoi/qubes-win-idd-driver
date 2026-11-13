@@ -13,9 +13,10 @@ cleanly but unexpectedly, is written by its supervisor as a single event in the 
 subscribes to all of those records and sends the one notification, which says what died, the error code and
 its meaning, how long the program had run, how many deaths this boot, and where the evidence is.
 
-Restarts use the operating system's own recovery. Every service we install has recovery actions. Helpers use
-the scheduler's restart settings where its one-minute minimum interval fits, and our own bounded relaunch only
-where a helper must be back within seconds. The GUI agent keeps its small watchdog service, because starting a
+Restarts use the operating system's own recovery. Every service we install has recovery actions. Helpers are
+launched once per agent life through a scheduled task; its restart settings retry only a launch that failed
+(measured 2026-11-13, §4), so a helper that ran and died stays down until the next agent start - nothing of
+ours relaunches it (rule 3 below). The GUI agent keeps its small watchdog service, because starting a
 system-privileged process inside the user's session is the one job nothing in Windows does for us. There are
 no polling loops and no kill loops: a state that must hold is configured at its source. All of this was built
 on 2026-10-03. What remains is to demonstrate the chain on a real guest with a forced crash.
@@ -347,7 +348,9 @@ smooth"*, and - of the other components - *"same of other components."*
    * **The control arm is not optional.** Without it a refusal proves nothing, because an agent that fails
      to return for its own reasons reads exactly like a refusal.
 3. **Nothing of ours relaunches anything.** The agent keeps **no** relaunch loop: each helper is launched once
-   per agent life, through its scheduled task, and the task's own `RestartOnFailure` is its only relauncher.
+   per agent life, through its scheduled task, and the task's own `RestartOnFailure` is its only relauncher -
+   which in practice relaunches nothing that ran: it retries only a launch that failed (measured 2026-11-13,
+   §4), so a helper that started and then died stays down until the next agent start.
    An unexpected agent death makes the watchdog **end itself** with a service-specific failure code, so the
    SCM's recovery actions restart the service, which launches a new agent. The one relaunch the service still
    performs is `QGA_EXIT_RECONNECT` - dom0's daemon went away, a protocol event, not a death.
@@ -434,8 +437,13 @@ the live subscription never sees that 201, but the boot catch-up replays every r
 **§4, restarts.** `Set-QubesServiceRecovery` arms QdbDaemon, QrexecAgent and QubesGuiWatchdog;
 `pvnic-selfprime.ps1` arms QwtngNetSetup where it creates it; `health-check.ps1` step 2b asserts all four
 (`tools/tests/health-recovery-selftest.sh`). Task-launched helpers: Task Scheduler's restart-on-failure
-interval is **1 minute at minimum** (`RestartOnFailure/Interval`, PT1M..P31D; count 1..999) and applies to an
-instance that ended with a non-zero result. The broker must be back in ~8 s (the agent's relaunch throttle;
+interval is **1 minute at minimum** (`RestartOnFailure/Interval`, PT1M..P31D; count 1..999). This said it
+"applies to an instance that ended with a non-zero result" - read from the documentation's undefined "if the
+task fails", never measured, and false. **Measured 2026-11-13** (25H2; throwaway tasks carrying the live
+`\Qubes-NotifBridge` definition verbatim, counted by Operational-log event ID): it fires only when the task
+cannot be launched - a missing program was tried 1 + 3 times, a minute apart - while an action that ran and
+exited 2 or 0xC0000005 ran once, and the real bridge refused by a notification policy (exit 2) shows no restart
+attempt in its task history. The broker must be back in ~8 s (the agent's relaunch throttle;
 QGADESLICEDOWN escalates at 30 s), so 60 s does not fit and the agent's bounded relaunch stays. The bridge's
 agent relaunch is already one per 60 s, numerically equal, but it re-validates the gate, restores the banners
 and ENDS any stale instance through `schtasks /create /f`, so a second supervisor would race it. The agent's
@@ -727,7 +735,8 @@ applied two files away. A job would also cover the LIFETIME half better than hol
 on an IO completion port is the exit notification.
 
 **What does NOT cover it**, so the alternatives are not re-litigated later: Task Scheduler session/logon
-triggers (how `notifhost` and `wgcbroker` are launched) give restart-on-failure but no process handle and no
+triggers (how `notifhost` and `wgcbroker` are launched) give restart-on-failure (of a failed launch only, §4)
+but no process handle and no
 per-instance channel, so no identity; `SERVICE_INTERACTIVE_PROCESS` has been dead since Session 0 isolation;
 Restart Manager (`RegisterApplicationRestart`) is WER-driven self-restart for interactive apps and hands the
 supervisor no exit classification, which is the watchdog's main remaining job.
@@ -761,7 +770,8 @@ helpers are disarmed, and a helper stopped on purpose while the session continue
    block is the only place that knows the absence was asked for; everything downstream treats an absent
    helper as a fault.
 3. It clears on an **EVENT**, never on time: a new launch being issued (the owner's "next rearm"), or the
-   helper being seen alive again - because §4's system recovery can bring it back without us asking, and a
+   helper being seen alive again - because §4's system recovery can bring it back without us asking (by
+   retrying a launch that failed; it restarts nothing that ran), and a
    latch left set over a running helper would silence a LATER real outage.
 4. **Time cannot end it.** `QgaDesliceSupervisionHeld` accepts the clock values and deliberately does not
    read them, so a deadline cannot be reintroduced without deleting the lines that say why.

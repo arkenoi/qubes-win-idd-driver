@@ -142,7 +142,9 @@ inline std::wstring QwtLogDir()
 // and leaves a zero alone, so handing these their own codes would relaunch a bridge that was
 // deliberately stopped, or push one into a session that is gone - and nothing else relaunches it
 // since 2026-10-07. Jev: it is noise 0.90, the relaunch hazard is real 0.90, and of four ways to
-// separate them, keep-zero-and-record-the-reason 0.92 against distinct-codes 0.00.
+// separate them, keep-zero-and-record-the-reason 0.92 against distinct-codes 0.00. (The premise
+// was measured false on 2026-11-13: an instance that ran is not restarted whatever its code - the
+// agent's main.c HELPER LIFECYCLE. Exit 0 and the recorded reason stay; they cost nothing.)
 //
 // So the reason is RECORDED instead. One line, in a file the bridge itself creates in its state
 // directory and therefore owns - whoever created the DIRECTORY (the installer does, elevated, since

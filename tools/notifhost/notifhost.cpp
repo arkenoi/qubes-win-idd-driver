@@ -426,8 +426,8 @@ static std::vector<std::wstring> ReadAllowlist()
 // toggle writes; proven sufficient for an unpackaged reader on this guest). An
 // explicit value - crucially "Deny" - is the user's decision and is left untouched: re-seeding
 // Allow over a Deny would (a) override a user who deliberately turned notification access off
-// and (b) defeat the fail-open selftest, since Task Scheduler restarts this process on failure and
-// each launch would re-grant. The authoritative health check is GetAccessStatus afterwards - on Deny
+// and (b) defeat the fail-open selftest, since the launch itself would re-grant. The authoritative
+// health check is GetAccessStatus afterwards - on Deny
 // the bridge exits WITHOUT having suppressed anything (fail-open).
 static void EnsureConsent()
 {
@@ -3901,13 +3901,13 @@ static int NotifyOnceMain(std::wstring const& summary, std::wstring const& body,
 
 // --- secondary error route: this helper's OWN faults (notifyerr.h) ------------------------
 //
-// The bridge has two FATAL exits that recur for the life of the guest (Task Scheduler restarts it
-// on failure, up to its count, and it dies the same way each time): listener access DENIED for this
-// user, and listener init throwing. Each is logged here in bridge.log and as QGANOTIFBRIDGEEXIT in
+// The bridge has two FATAL exits that recur at every agent start for the life of the guest (nothing
+// restarts it in between - Task Scheduler restarts nothing that ran, measured 2026-11-13 - and it dies
+// the same way each time): listener access DENIED, and listener init throwing. Each is logged here in bridge.log and as QGANOTIFBRIDGEEXIT in
 // the agent log, and nothing else ever tells a human that the bridge they turned on is doing nothing.
 // So each is also reported through the same one-shot `--notify-file` path the agent uses, with
 // the SAME per-boot marker files (state dir shared with notifyerr.c), so the once-per-boot rule
-// holds across the restarts and across the two binaries.
+// holds across agent restarts within a boot and across the two binaries.
 //
 // Gate: --notify-errors N on the command line, resolved by the agent (the single reader of the
 // service.notify-errors gate); absent = off. Fail-open: nothing here can affect the exit path
