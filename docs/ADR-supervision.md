@@ -21,6 +21,15 @@ system-privileged process inside the user's session is the one job nothing in Wi
 no polling loops and no kill loops: a state that must hold is configured at its source. All of this was built
 on 2026-10-03. What remains is to demonstrate the chain on a real guest with a forced crash.
 
+When the guest's session is going down, nothing new of ours should start inside it. In seamless mode that
+follows the Linux way (the owner's decision, 2026-11-13). As with an ACPI shutdown, nothing asks, and anything
+not yet sent is lost if the shutdown is then cancelled. That case is rare. dom0's own shutdown closes
+applications by force. In the owner's judgment, an end that asks and is then called off comes mostly from
+Windows Update's restart policy, and templates and the qubes built on them keep that off. A qube that keeps
+Windows Update on is set so that Windows never restarts it by itself. If a policy overrides that, the qube
+warns loudly. In non-seamless mode no notification is lost. None of this is built yet (item 2b below, and
+the updater ADR's section 17).
+
 The whole chain, from a death to the notification in dom0 (§1-§4):
 
 ```mermaid
@@ -243,7 +252,9 @@ smooth"*, and - of the other components - *"same of other components."*
 
    **THE OTHER LAUNCH SITES ARE DECIDED (owner, 2026-11-13):** *"whenever makes sense and if there are no side
    effects, make them compliant to supervision discipline, if it breaks something, record a exception"*. Each
-   site's outcome is in the table under "THE LAUNCH SITES, ONE BY ONE" below.
+   site's outcome is in the table under "THE LAUNCH SITES, ONE BY ONE" below. Later the same day the owner
+   decided the EXCEPTION rows again, by mode. That decision is under "THE EXCEPTIONS ARE RE-DECIDED BY MODE",
+   after the table.
 
    **RUNNER: supervision-e2e L12**, added 2026-11-08, with `L12C` (the control) and `L12R` (the release
    half). `guest/sup-goingdown-latch.ps1` (2026-11-07) is the in-guest half: it publishes the latch from a
@@ -301,6 +312,68 @@ smooth"*, and - of the other components - *"same of other components."*
    supervisor watches, so one that an ending session's teardown kills is never reported as a death, and
    nothing launches it again. That leaves no relaunch loop and no death record, the two harms this item was
    written against.
+
+   **THE EXCEPTIONS ARE RE-DECIDED BY MODE (owner, 2026-11-13, after the table above).** **Status:** ACCEPTED
+   (owner; Jev accept 0.99); NOT BUILT. The EXCEPTION rows above still describe the agent as built (`ff1feed`). The owner judged
+   those rows from the user's side: *"need to evaluate it from UX perspective. See, when Linux acpi shutdown is
+   going down, it does not ask much. It expected to leave unsaved things lost and so on. So when in seamless
+   mode, we follow the Linux way. In non-seamless mode no notification is lost."* On what makes an end ask and
+   then not happen: *"the main reason for shutdown to behave this way is agressive WU policy. our appvm guest
+   has WU off, so no unexpected shutdowns are scheduled. for standalonevm it could be.. well, let's make a loud
+   warning for combination "seamless on + WU on" and accept as collateral."* Then: *"record in ADR"*.
+   * **Seamless mode follows the Linux way.** A session going down is treated like an ACPI shutdown. Nothing
+     new is launched into it, and nothing asks. Every launch site of ours refuses while the session is going
+     down.
+     What a refusal loses, if the end is then cancelled, is accepted collateral. Examples: a prompt shown
+     during the end keeps the guest's own title bar, the shadows stay wrong, or a notice or a forwarded toast
+     is not delivered.
+   * **Non-seamless mode loses no notification.** The notice launches keep launching while the session is
+     going down: `PlatSpawnNotify`, and the bridge's queued notices. The bridge forwards no toasts in
+     non-seamless mode (`docs/ADR-toasts.md`, plain-English part), so here the rule covers notices only.
+   * **Why the collateral is rare.** An end is announced and then cancelled when an application is asked and
+     says no. dom0's shutdown, as xenagent carries it into Windows, does not ask. xenagent calls
+     `InitiateSystemShutdownEx(NULL, NULL, 0, TRUE, ...)`
+     (`upstream/ro/qubes-vmm-xen-windows-pvdrivers/xeniface/src/xenagent/xenifacedevice.cpp:298`, `:312`), and
+     its fourth argument closes applications by force. Microsoft's page for that call adds that even with no
+     timeout such a shutdown "can still be aborted by applications, services, or even the system". The owner
+     names Windows Update's restart
+     policy as what schedules the ends nobody asked for. A guest that keeps `NoAutoUpdate=1`
+     (`docs/ADR-updater.md` §1) has automatic updates off. Templates and the AppVMs built on them keep it. A
+     StandaloneVM with direct internet does not: the updater removes it there on purpose
+     (`guest/qubes-windows-update.ps1:3012`, "it updates ITSELF via Windows Update").
+   * **The combination gets a loud warning.** As first decided, seamless mode on a guest with automatic updates
+     on gets a loud warning, and the losses above are the collateral the owner accepted for it. Its trigger was
+     re-keyed the same day (the next point). It is not built yet. When built, it reads the settings Windows
+     Update itself obeys, as they are in force, and never a stand-in for them: the restart values of
+     `docs/ADR-updater.md` §17, and the `NoAutoUpdate` policy value (which `guest/health-check.ps1` already
+     reads for `updates_dom0_owned`). It goes out through the ONE reporter (§3), under that reporter's per-boot
+     cap and dedupe.
+   * **What each site does, once built.** These refuse in seamless mode while the session is going down:
+     `RestyleGuestCaption`, the seamless direction of `ApplyGuestShadows`, QGADIRECTSUPPRESS and
+     QGASTARTDISMISS, and `PlatSpawnNotify`. Both notices are raised from the per-window watch, which
+     `ResetWatch` fills only in seamless mode. The other paths that add a watched window are to be checked
+     when this is built. `PlatSpawnNotify` must drop the
+     notice BEFORE the route. A spawn that the route sees fail becomes `QERR_FAIL_TRANSPORT`, and its
+     fallback is an error box in the ending session, the opposite of the Linux way. These keep launching:
+     dom0's qrexec requests (a request of dom0's, not a launch of ours) and the notice launches in
+     non-seamless mode. Two sites are still undecided, pending a reading of the code:
+     - The restore direction of `ApplyGuestShadows`. It runs from `SetSeamlessMode` when seamless is turned
+       off, and the setting it writes is persisted (`SPIF_UPDATEINIFILE`). What is still to be read is whether
+       the agent's next start, which re-applies the mode with `forceUpdate`, puts it back.
+     - The bridge. It cannot open the latch: the latch's DACL is SYSTEM-only, and widening it would be a
+       security-model change. So its sites need a going-down signal of the bridge's own.
+   * **Then: no automatic restarts at all (`docs/ADR-updater.md` §17).** The owner asked *"can we keep WU on
+     AND postpone reboots until user commands?"*. Windows documents a setting for this (`AUOptions=4` with
+     `NoAutoRebootWithLoggedOnUsers=1`), and he decided: *"perfect, let it make so: no auto
+     reboots whatsoever. if group policy overrides this, it is different story (we had not implement support
+     for managed guests yet anyway, so it matters for future work)"*, then *"so if it does, we detect and
+     warn"*. The decision, its caveats and the measurement it owes are in ADR-updater §17.
+     Read together, the three quotes re-key the loud warning above. The hazard it guards is an automatic
+     restart, not updates being on. So the warning is the one ADR-updater §17 decides: it is due whenever a
+     policy overrides the no-restart setting, and not merely because updates are on. §17 names no mode. If the
+     warning stays tied to seamless mode, note that `SetSeamlessMode` switches the mode while the agent runs
+     (`main.c`, at start and on a switch), so the check is due whenever the mode turns on. That reading is the
+     recorder's (2026-11-13), not words the owner used.
 
    **How far the two new guards are proven.** By construction, outside the disarmed window `HelpersDisarmed()`
    is FALSE, so both conditions reduce to the ones that were already there and every ordinary pass runs exactly

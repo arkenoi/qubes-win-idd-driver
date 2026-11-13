@@ -18,6 +18,10 @@ update's own command line, and a row is installed only when the installer succee
 a disagreement fails loudly. Reboots are counted: the guest requests, dom0 performs, none is speculative.
 Nothing is killed or adopted by name.
 
+A qube that updates itself, a StandaloneVM with its own internet, keeps Windows Update on. Even there,
+Windows never restarts the qube by itself: a restart waits for the user. If a policy we do not control
+overrides that, the qube says so loudly (section 17, decided 2026-11-13, not built yet).
+
 **The qrexec protocol, and what the guest does with it.** dom0's STOCK `qubes-vm-update` - and so the
 Qubes Update GUI - drives a Windows qube with no dom0-side command and no dom0 changes. The chain, every
 link of it in the tree:
@@ -130,6 +134,7 @@ flowchart TD
 | 13 | The installer waits for a running scan; a refused updater deploy is never quiet | ACCEPTED (Jev); shipped in 4.3.35 | 2026-10-04 |
 | 14 | The cumulative goes first, and Windows is asked whether it registered it | ACCEPTED (Jev) | 2026-10-04 |
 | 15 | Outside data never becomes a command | ACCEPTED | 2026-10-07 |
+| 17 | Windows never restarts a guest on its own; a restart waits for the user, and a policy that overrides this is detected and warned about | ACCEPTED (owner, Jev 0.89); not built | 2026-11-13 |
 
 Status words and the section format are defined in `docs/ADR-README.md`.
 
@@ -847,3 +852,54 @@ PASS, the **pre-fix pair must FAIL**, each gate must fail ALONE when only its ow
 removed, and missing evidence must read INSTRUMENT rather than pass.
 `tools/compare-acceptance-gates.sh` extracts the functional comparison of the two gates from the
 scripts themselves, so it cannot drift from them.
+
+## 17. Windows never restarts a guest on its own; a restart waits for the user, and a policy that overrides this is detected and warned about
+
+**Status:** ACCEPTED (owner, 2026-11-13; Jev accept 0.89); not built.
+
+**Context.** A StandaloneVM with direct internet updates itself. The updater removes `NoAutoUpdate` there
+(`guest/qubes-windows-update.ps1:3012`), so Windows Update runs with its default restart behaviour and can
+take a restart nobody asked for. On this platform that is worse than a restart: the qube is
+`on_reboot=destroy` (§10), so a restart the guest takes leaves it Halted. In seamless mode it is also an end
+that follows the Linux way (`docs/ADR-supervision.md` item 2b), and what it loses is collateral.
+
+The owner asked whether updates can stay on while restarts wait for the user. Windows documents a setting for
+exactly that: `AUOptions=4` together with `NoAutoRebootWithLoggedOnUsers=1` under
+`HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU`. Updates then download and install, and while a
+user is signed in Windows notifies them instead of restarting (learn.microsoft.com
+`windows/deployment/update/waas-restart`). These guests log on automatically, so a user is always signed in.
+
+**Decision.** The owner: *"perfect, let it make so: no auto reboots whatsoever. if group policy overrides this,
+it is different story (we had not implement support for managed guests yet anyway, so it matters for future
+work)"*, then *"so if it does, we detect and warn"*.
+
+1. Wherever Windows Update runs on its own, it never restarts the guest by itself. A restart waits for the
+   user's command. The updater writes the two values at the point where it turns updates on for a
+   StandaloneVM.
+2. If a policy overrides those values, so that an automatic restart is possible after all, the agent detects
+   this and warns loudly, through the ONE reporter (`docs/ADR-supervision.md` §3). Detection reads what is in
+   force; it never assumes that our own write held.
+3. Supporting managed guests (domain or device-management policy) is future work. Until then, this section
+   only detects them and warns.
+
+**Why.** A restart nobody asked for halts the qube. In seamless mode, it also costs whatever the session had
+not yet delivered.
+
+**Cost.** An update that needs a restart stays pending until the user restarts the guest, however long that
+takes. Microsoft's page warns the policy "can result in no quality update reboots period, given many users
+never log off". Here that is the intended effect.
+
+**Evidence.** Owed, before it ships. A StandaloneVM clone with updates on and the two values set installs a
+cumulative while the autologon user is signed in. Then read who logs a 1074 and when, against a control
+without the values. Microsoft's page adds that the policy "was never created as a CSP", that "in Group Policy
+this policy doesn't work exactly as per description", and that a restart the user schedules from the
+notification overrides it. Nothing has been measured on 25H2.
+
+**Open.**
+
+1. The servicing-completion restart that TrustedInstaller took on 2026-11-08 (`findings/updates.md`; §8 point
+   5) came from the servicing stack, not from the update client, and no documented policy is known to reach
+   it. Inside a pass dom0 started, §8 point 5 accepts it. On a self-updating StandaloneVM it would be an
+   automatic restart that this section does not yet prevent.
+2. Where `NoAutoUpdate=1` holds (templates and the AppVMs built on them), the update client installs nothing
+   on its own, so these values matter only where updates are on.
