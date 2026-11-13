@@ -858,48 +858,33 @@ scripts themselves, so it cannot drift from them.
 **Status:** ACCEPTED (owner, 2026-11-13; Jev accept 0.89); not built.
 
 **Context.** A StandaloneVM with direct internet updates itself. The updater removes `NoAutoUpdate` there
-(`guest/qubes-windows-update.ps1:3012`), so Windows Update runs with its default restart behaviour and can
-take a restart nobody asked for. On this platform that is worse than a restart: the qube is
-`on_reboot=destroy` (§10), so a restart the guest takes leaves it Halted. In seamless mode it is also an end
-that follows the Linux way (`docs/ADR-supervision.md` item 2b), and what it loses is collateral.
-
-The owner asked whether updates can stay on while restarts wait for the user. Windows documents a setting for
-exactly that: `AUOptions=4` together with `NoAutoRebootWithLoggedOnUsers=1` under
-`HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU`. Updates then download and install, and while a
-user is signed in Windows notifies them instead of restarting (learn.microsoft.com
+(`guest/qubes-windows-update.ps1:3012`), and Windows Update may then restart the guest on its own. The qube is
+`on_reboot=destroy` (§10), so such a restart leaves it Halted. In seamless mode the restart is also an end
+whose losses are collateral (`docs/ADR-supervision.md` item 2b). Windows documents a setting that keeps
+updates on and leaves the restart to a signed-in user: `AUOptions=4` with `NoAutoRebootWithLoggedOnUsers=1`
+under `HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU` (learn.microsoft.com
 `windows/deployment/update/waas-restart`). These guests log on automatically, so a user is always signed in.
 
 **Decision.** The owner: *"perfect, let it make so: no auto reboots whatsoever. if group policy overrides this,
 it is different story (we had not implement support for managed guests yet anyway, so it matters for future
-work)"*, then *"so if it does, we detect and warn"*.
+work)"*, *"so if it does, we detect and warn"*, and *"automatic reboots were the problem"*, *"not WU itself"*.
 
-1. Wherever Windows Update runs on its own, it never restarts the guest by itself. A restart waits for the
-   user's command. The updater writes the two values at the point where it turns updates on for a
-   StandaloneVM.
-2. If a policy overrides those values, so that an automatic restart is possible after all, the agent detects
-   this and warns loudly, through the ONE reporter (`docs/ADR-supervision.md` §3). Detection reads what is in
-   force; it never assumes that our own write held.
-3. Supporting managed guests (domain or device-management policy) is future work. Until then, this section
-   only detects them and warns.
+1. Windows Update may stay on, but it never restarts the guest by itself; a restart waits for the user. The
+   updater writes the two values at the point where it turns updates on.
+2. If a policy overrides them, so that an automatic restart is possible after all, the agent detects it from
+   what is in force and warns loudly, through the ONE reporter (ADR-supervision §3).
+3. Managed guests (domain or device-management policy) are future work. Until then they are detected and
+   warned about, nothing more.
 
-**Why.** A restart nobody asked for halts the qube. In seamless mode, it also costs whatever the session had
-not yet delivered.
+**Cost.** An update that needs a restart stays pending until the user restarts, however long that takes.
 
-**Cost.** An update that needs a restart stays pending until the user restarts the guest, however long that
-takes. Microsoft's page warns the policy "can result in no quality update reboots period, given many users
-never log off". Here that is the intended effect.
+**Evidence.** Owed before this ships, and not yet measured on 25H2. A StandaloneVM clone with updates on and
+the two values set installs a cumulative while the autologon user is signed in; read who logs a 1074 and when,
+against a control without the values. Microsoft's caveats: the policy "was never created as a CSP", "in Group
+Policy this policy doesn't work exactly as per description", and a restart the user schedules from the
+notification overrides it.
 
-**Evidence.** Owed, before it ships. A StandaloneVM clone with updates on and the two values set installs a
-cumulative while the autologon user is signed in. Then read who logs a 1074 and when, against a control
-without the values. Microsoft's page adds that the policy "was never created as a CSP", that "in Group Policy
-this policy doesn't work exactly as per description", and that a restart the user schedules from the
-notification overrides it. Nothing has been measured on 25H2.
-
-**Open.**
-
-1. The servicing-completion restart that TrustedInstaller took on 2026-11-08 (`findings/updates.md`; §8 point
-   5) came from the servicing stack, not from the update client, and no documented policy is known to reach
-   it. Inside a pass dom0 started, §8 point 5 accepts it. On a self-updating StandaloneVM it would be an
-   automatic restart that this section does not yet prevent.
-2. Where `NoAutoUpdate=1` holds (templates and the AppVMs built on them), the update client installs nothing
-   on its own, so these values matter only where updates are on.
+**Open.** TrustedInstaller's servicing-completion restart (2026-11-08, `findings/updates.md`; §8 point 5) comes
+from the servicing stack, and no documented policy is known to reach it. On a self-updating StandaloneVM it
+would still be an automatic restart. Where `NoAutoUpdate=1` holds (templates and their AppVMs), nothing installs
+on its own, so the two values matter only where updates are on.

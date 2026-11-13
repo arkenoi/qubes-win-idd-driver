@@ -575,43 +575,35 @@ honours the timeout; in the list on one that keeps notifications).
 
 **Context.** The bridge reads every toast, so Windows' notification-access consent governs it. The consent is a
 `Value` under `...\CapabilityAccessManager\ConsentStore\userNotificationListener`, set per user and per device.
-`EnsureConsent` (`tools/notifhost/notifhost.cpp`) writes `Allow` only when that value was never set. If the value
-is set to anything else, it logs `consent is '%s' (explicit) - respecting it, not re-seeding` and leaves the
-decision to Windows' access check, `RequestAccessAsync`. When that check refuses, the bridge reads what refused it
-(`ListenerDenialReason`: policy, device, user, or unknown). It then sends that reason's `listener-denied-*` notice
-and returns 2, which leaves the window path in place.
+`EnsureConsent` (`tools/notifhost/notifhost.cpp`) writes `Allow` only when the value is unset. Otherwise it logs
+that it is "respecting" the value, and leaves the decision to `RequestAccessAsync`. When that check refuses, the
+bridge names the cause (`ListenerDenialReason`: policy, device, user or unknown), sends that cause's
+`listener-denied-*` notice and returns 2. The window path stays in place.
 
-Measured 2026-11-13 on a clone of the German 25H2 guest (win11de-lsn, 4.3.42): a user or a device consent of Deny,
-written to the registry, did NOT refuse the bridge. Windows granted access, the bridge armed and toasts were
-forwarded, under a log line that said it was "respecting" the Deny. Group Policy and device-management Force Deny
-(`LetAppsAccessNotifications=2`) did refuse it, with one `listener-denied-policy` notice each. Every user-Deny
-refusal on record is from Win10 19045.
+Measured 2026-11-13 on a clone of the German 25H2 guest running 4.3.42:
+* a user or device Deny written to the registry did NOT refuse the bridge: Windows granted access, and toasts
+  were forwarded;
+* Group Policy and device-management Force Deny (`LetAppsAccessNotifications=2`) did refuse it, with one
+  `listener-denied-policy` notice each.
 
-**Decision.** The owner, on the suggestion that the bridge refuse on its own whenever it reads an explicit Deny:
+Every user-Deny refusal on record is on Win10 19045.
+
+**Decision.** The suggestion was that the bridge refuse on its own whenever it reads an explicit Deny. The owner:
 *"for bridge P2 sthe suggestion is right, the bridge should tell the diagnosis and disarm, not simply fail"*.
 
-1. When the bridge reads an explicit Deny, in either the user's or the device's consent, it does not arm,
-   whatever Windows' access check answers.
-2. It tells the diagnosis: that setting's notice (`listener-denied-user` or `listener-denied-device`, rows that
-   already exist), sent through the error route under its cap and dedupe. This is the same path a policy refusal
-   takes today.
-3. It disarms. Its leaving is a deliberate stand-down (`docs/ADR-supervision.md` §7), not a failure: nothing
-   relaunches it, and nothing reports it as a death. The next agent start reads the setting again.
+1. On an explicit Deny, user or device, the bridge does not arm, whatever the access check answers.
+2. It sends that setting's notice (`listener-denied-user` or `-device`, rows that already exist) through the
+   error route, under its cap and dedupe. This is the path a policy refusal takes today.
+3. It stands down (ADR-supervision §7). It is not relaunched and not reported as a death. The next agent start
+   reads the setting again.
 
-**Why.** The user has said no to apps reading their notifications. A bridge that reads them anyway, on a build
-whose own check lets it through, breaks that choice and claims in its log to respect it. The owner's rule puts
-the refusal in front of the user as their own setting, named, rather than as a failure.
+**Cost.** A user who turned notification access off also loses forwarding to dom0. Nothing is lost: toasts take
+the guest-window path (§3), and the notice names the setting to change.
 
-**Cost.** Someone who turned notification access off for other apps also loses forwarding to dom0. Bound: only
-on a guest where an explicit Deny is set, and nothing is lost there. With the bridge down, every toast takes the
-guest-window path (§3), and the notice names the setting to change.
+**Evidence.** Seen to fail: the measurement above. Owed: on 25H2, a Deny produces that notice once and no armed
+listener, and the control (Allow) arms. A Deny set from the Settings toggle is covered only if the toggle writes
+the same value. That is unmeasured on 25H2.
 
-**Evidence.** Seen to fail: 2026-11-13, above. Seen to pass: owed. With a Deny on 25H2, the guest shows that
-setting's notice once and no armed listener. The control, Allow, arms. The same read also covers a Deny set from
-the Settings toggle, as long as the toggle writes the same value. That part is unmeasured on 25H2.
-
-**Open.** How the stand-down is carried out. Today's refusal returns 2 after the notice
-(`notifhost.cpp`, the `RequestAccessAsync` branch). The bridge's other deliberate exits instead return 0 and
-record their reason, which the agent accepts only from the instance that just exited (`main.c`, the bridge's
-exit grading). Which of the two this stand-down uses, and that neither produces a death record, is to be read
-and settled at build time.
+**Open.** How the bridge exits. Today's refusal returns 2 after the notice. The bridge's other deliberate exits
+return 0 with a recorded reason, which the agent accepts only from that process (`main.c`, the bridge's exit
+grading). Pick one at build time, and prove that neither writes a death record.
