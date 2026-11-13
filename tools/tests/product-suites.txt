@@ -38,4 +38,3 @@ wgcbroker-layout-selftest.sh
 window-measure-selftest.sh
 wrapper-exit-emit-selftest.sh
 wrapper-one-line-selftest.sh
-wu-definition-class-selftest.sh

@@ -169,7 +169,10 @@ cannot be left to update itself.
 
 **Status:** ACCEPTED; amended 2026-10-07 (point 1, which had said the opposite); amended 2026-11-01 (point 5:
 the ESU exception generalised to a verified no-route rule - PROPOSED to the owner, who asked for it); amended 2026-11-06
-(point 5: an offer that carries no KB is verified by its exact title - owner).
+(point 5: an offer that carries no KB is verified by its exact title - owner); amended 2026-11-14 (point 6: the
+owner's Defender decision of 2026-10-16, kept until now only in the register, where it was reworded and then
+dropped in 4.3.40 on a misreading of point 2 - point 2 is about updates this path failed to install or cannot
+install, and never covered it).
 
 **Decision.** dom0 must never be told that a template is up to date when it is not.
 
@@ -177,11 +180,13 @@ the ESU exception generalised to a verified no-route rule - PROPOSED to the owne
    count - what Windows is offering - and the actionable split rides in `update-status.json` (`offered`,
    `actionable`) with a reason per item.
 2. An item that cannot be installed on this path is `severity=info` with a reason, and is still COUNTED:
-   what we cannot install is not the same as nothing being available. A classification may narrow what a
-   PASS acts on; it may not narrow what the guest admits to. Point 5 is the one exception, and it is
-   earned by measurement on every pass, never by classification.
+   what we cannot install is not the same as nothing being available, and an update we failed to install is
+   never dropped from the count to hide the failure. A classification may narrow what a PASS acts on; it may
+   not narrow the count because this path cannot install an applicable update. Point 5 is the one exception
+   to this point, earned by measurement on every pass, never by classification. This point is about failed
+   and uninstallable updates only; Defender definitions are decided by point 6.
 3. An offer whose own identity a pass installed and proved installed is GONE, and does not count. That is
-   not the same as point 2, and only this one may reduce the number: Windows re-presents satisfied
+   not the same as point 2, and besides points 5 and 6 only this one may reduce the number: Windows re-presents satisfied
    signatures under one KB, and counting them makes dom0's marker oscillate.
 4. The invariant breaks in two directions: too little (silence about a pending update) and too much (a count
    that can never clear). They are one defect class. Fixing one direction does not close the other, and the
@@ -211,6 +216,15 @@ the ESU exception generalised to a verified no-route rule - PROPOSED to the owne
    direct URL) and the guest has no default route for Windows Update's own downloader. The verification runs
    in the scan, like the KB case, and the row, the status set and the notice name such an offer by its title.
    (Owner, 2026-11-06: extend p5 to a no-KB offer verified by its title in the same pass.)
+6. DEFENDER DEFINITION UPDATES DO NOT COUNT toward dom0's updates-available. The owner, 2026-10-16: «can we
+   make a knob to exclude defender update notifications from reaching dom0? so defender will keep updating on
+   schedule, just not raising this flag every few hours». Microsoft republishes them several times a day, so
+   counting them raises the flag again within minutes of every pass and the flag stops meaning anything. A
+   definition is Windows Update's own "Definition Updates" classification (section 6: never a title); an offer
+   whose classification cannot be read counts. EVERY number dom0 is told leaves definitions out - the scan, the
+   reboot-pending report and the post-install rescan - and the dom0 summary line says so. They are still
+   offered, installed by every pass that runs, and recorded (`definitions_offered`). Point 2 does not override
+   this point.
 
 **Why.** dom0's reported state is the product. Every other rule in this file exists to keep it true - and a
 count reduced by our own inability to install something is the "too little" direction of this very

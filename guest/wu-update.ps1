@@ -559,6 +559,7 @@ switch ($st.phase) {
         $line = ('updates: ' + @($st.available).Count + ' offered; ' + ($outcome.ok.Count - $stg) + ' installed, ' + $stg + ' staged, ' +
                  $outcome.deferred.Count + ' deferred, ' + $outcome.info.Count + ' informational; dom0 is told ' + [int]$st.count + ' update(s) remain')
         if ($unr.Count) { $line += ' (not counted: ' + ($unr -join ', ') + ' - verified not installable from this guest)' }
+        if ([int]$st.definitions_offered -gt 0) { $line += '; Defender definition updates are never counted' }
         # A PARTIAL SCAN MAKES THAT NUMBER A LOWER BOUND, and nothing said so. The pass records
         # St.scan_partial - the relay's give-up count at scan time, qubes-windows-update.ps1's own
         # guard on a scan that could only partly load the offer list - and NO reader in this tree read

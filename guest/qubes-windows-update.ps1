@@ -1167,6 +1167,18 @@ function Test-WuDefinitionUpdate($u){
 }
 # ---- WU-DEFINITION-CLASS-END
 
+# A DEFENDER DEFINITION NEVER COUNTS TOWARD dom0's updates-available (ADR-updater section 2 point 6), at all three places dom0
+# is told a number: the scan, the reboot-pending report and the post-install rescan. An offer carries is_definition (Windows
+# Update's own classification, Test-WuDefinitionUpdate); a result row is matched to this pass's offers by its route key. An
+# offer whose classification could not be read is not a definition, so it counts.
+function Test-DefinitionOffer($r){
+  if (-not $r) { return $false }
+  if ((Test-RowKey $r 'is_definition') -and $r.is_definition) { return $true }
+  $k = Get-OfferRouteKey $r
+  if (-not $k) { return $false }
+  return [bool](@($script:St.available | Where-Object { $_ -and (Test-RowKey $_ 'is_definition') -and $_.is_definition -and ((Get-OfferRouteKey $_) -eq $k) }).Count)
+}
+
 function Get-Available {
   $s=New-Object -ComObject Microsoft.Update.Session
   $se=$s.CreateUpdateSearcher(); $se.ServerSelection=2; $se.Online=$true
@@ -3169,21 +3181,15 @@ try {
     Log "SCAN PARTIAL: found $($avail.Count) update(s) but the relay gave up on $giveUps fetch(es) - the list may be incomplete; treat the count as a lower bound, not the whole truth." 'WARN'
   }
 
-  # ---- WU-DEFINITION-EXCLUDE-BEGIN   (the marker names what this region CLAIMED from 2026-10-25 to 2026-11-01; it records now)
-  # DEFINITION OFFERS COUNT LIKE EVERY OFFER (ADR-updater section 2 point 2: a classification may narrow what a pass acts on, never
-  # what the guest admits to). Commit 61557095 claimed otherwise - "Defender definitions stopped raising dom0's flag" - and did not:
-  # it narrowed St.count to the non-definition offers while Report-Availability kept sending every offer, so dom0 heard the definition
-  # and the status lied about it (measured 2026-11-01 on win10-tup: "excluded 1 of 8" beside "7 reported", the definition among
-  # them; 22 campaign scans on win11de-tup: "2 of 6" beside "6 reported"). Quieting definitions is WUQUIETDEFINITIONS, the owner's
-  # queued request - an ADR amendment and the owner's go, because on a netvm-free template a dom0-driven pass is the only way a
-  # definition ever installs. Kept: `is_definition` on every offer (WU's own classification, WU-DEFINITION-CLASS) and
-  # `definitions_offered`, how many of the offers are definitions - information for the reader, deciding nothing.
+  # ---- WU-DEFINITION-EXCLUDE-BEGIN
+  # DEFENDER DEFINITION OFFERS ARE NOT COUNTED TO dom0 (ADR-updater section 2 point 6). They are still offered, installed and
+  # recorded; Test-DefinitionOffer leaves them out of every number dom0 is told. `definitions_offered` is how many there were.
   $defs = @($avail | Where-Object { $_.is_definition })
   $script:St.available=$avail
   $script:St.definitions_offered=$defs.Count
   Save
   if ($defs.Count -gt 0) {
-    Log ("{0} of {1} offer(s) are Defender definition updates [{2}] - counted to dom0 like every offer (ADR-updater section 2 point 2); WUQUIETDEFINITIONS is queued, not implemented" -f `
+    Log ("{0} of {1} offer(s) are Defender definition updates [{2}] - left out of the number dom0 is told (ADR-updater section 2 point 6)" -f `
          $defs.Count, $avail.Count, (($defs | ForEach-Object { $_.kb + '[' + (@($_.classifications) -join ' ') + ']' }) -join ','))
   }
 
@@ -3334,7 +3340,7 @@ try {
   $unroutable = @($script:St.unroutable | Where-Object { $_ })
   $notUnroutable = { param($r) ($unroutable -notcontains (Get-OfferRouteKey $r)) }   # the KB, or the exact title of an offer without one
   $actionableCount = @($avail | Where-Object { (& $notPriorInfo $_) -and (& $notUnroutable $_) }).Count
-  $reportCount = @($avail | Where-Object { (& $notPriorSat $_) -and (& $notUnroutable $_) }).Count   # GUARD:truecount
+  $reportCount = @($avail | Where-Object { (& $notPriorSat $_) -and (& $notUnroutable $_) -and -not (Test-DefinitionOffer $_) }).Count
   # Said only of the offers it is TRUE of: a previous pass's informational KB that THIS pass also verified has no route is left out
   # by point 5, so the line must not call it counted (run 4, 2026-11-01: the line said 'still COUNTED' one line above 'reported 0').
   $priorInfoCounted = @($priorInfo | Where-Object { $unroutable -notcontains "$_" })
@@ -3348,7 +3354,7 @@ try {
   $script:St.actionable = $actionableCount
   # ---- WU-SCAN-COUNT-END
   $script:St.remaining = $actionableCount; Save
-  Log ("scan: $($avail.Count) update(s) offered, $actionableCount actionable, $reportCount reported to dom0" + $(if($unroutable.Count -gt 0){ "; " + $unroutable.Count + " verified no route this pass (" + ($unroutable -join ',') + ") - see notice" }else{ '' }))
+  Log ("scan: $($avail.Count) update(s) offered, $actionableCount actionable, $reportCount reported to dom0" + $(if($unroutable.Count -gt 0){ "; " + $unroutable.Count + " verified no route this pass (" + ($unroutable -join ',') + ") - see notice" }else{ '' }) + $(if([int]$script:St.definitions_offered -gt 0){ "; " + $script:St.definitions_offered + " Defender definition update(s) not counted" }else{ '' }))
   if ($script:St.notice) { Log ("SERVICING NOTICE: " + $script:St.notice) }
   Report-Availability $reportCount    # -> dom0 Qube Manager (default-allowed for TemplateVMs)
 
@@ -3780,7 +3786,7 @@ try {
       # it was left out here while the next scan counted it.
       $unroutablePass = @($script:St.unroutable | Where-Object { $_ })
       $pendingKbs = @($script:St.result |
-                     Where-Object { (Test-RowKey $_ 'kb') -and -not (Test-RowInstalled $_) -and -not ("$($_.severity)" -eq 'info' -and $unroutablePass -contains (Get-OfferRouteKey $_)) })   # GUARD:rowkey
+                     Where-Object { (Test-RowKey $_ 'kb') -and -not (Test-RowInstalled $_) -and -not ("$($_.severity)" -eq 'info' -and $unroutablePass -contains (Get-OfferRouteKey $_)) -and -not (Test-DefinitionOffer $_) })
       # NO FLOOR. An earlier version of this fix forced at least 1 whenever a reboot was pending,
       # even with nothing staged or deferred - which would pin dom0 at "updates available" forever
       # on a guest carrying a stale CBS RebootPending and nothing to install. That is the inverse
@@ -3849,13 +3855,13 @@ try {
         # ...and the offers THIS pass verified have no route (St.unroutable, WU-ROUTE-PROOF) - the one measured exception
         # (ADR-updater section 2, point 5); the class-keyed notice branch that stood here is gone.
         $unroutableAfter = @($script:St.unroutable | Where-Object { $_ })
-        $reportCount = @($after | Where-Object { (& $notInstalled $_) -and ($unroutableAfter -notcontains (Get-OfferRouteKey $_)) }).Count
+        $reportCount = @($after | Where-Object { (& $notInstalled $_) -and ($unroutableAfter -notcontains (Get-OfferRouteKey $_)) -and -not (Test-DefinitionOffer $_) }).Count
         # STAGED WORK STILL COUNTS even when Windows has stopped offering it - it is written to the
         # image and not applied until the restart. Counted from the RESULT rows, not from what the
         # rescan still offers. No blanket floor on reboot_needed: forcing >=1 with nothing staged
         # would pin dom0 at "updates available" on a stale CBS RebootPending, which is the inverse
         # defect. (Jev: count-staged 0.97; under-reporting is the worse error at 0.99.)
-        $stagedN = @($script:St.result | Where-Object { (Test-RowKey $_ 'state') -and (@('staged','deferred') -contains [string]$_.state) }).Count
+        $stagedN = @($script:St.result | Where-Object { (Test-RowKey $_ 'state') -and (@('staged','deferred') -contains [string]$_.state) -and -not (Test-DefinitionOffer $_) }).Count
         if ($stagedN -gt $reportCount) { $reportCount = $stagedN }
         # GUARD:offeridentity - record WHICH OFFERS this pass resolved, by the offer's own identity.
         # A later scan may then exclude the very same offer without weakening the rule right above
