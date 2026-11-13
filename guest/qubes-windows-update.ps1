@@ -2075,7 +2075,8 @@ function Add-PackageCompat($f){
 }
 
 # Does this guest have a REAL default route (i.e. a netvm)? Loopback/blackhole adapters do not count.
-# Templates have none by design; only netvm-attached standalones do. Used to gate the DO/BITS-based
+# Only a template with a netvm attached has one when this runs: the class dispatch has already sent every
+# other class out, and templates are managed without a netvm. Used to gate the DO/BITS-based
 # Install-ViaWU rung, which fails routeless (measured DO 0x80D03805 / BITS 0x80200010) and must never
 # run on a netvm-free guest where it only produces phantom failures.
 function Test-HasDefaultRoute {
@@ -3634,7 +3635,7 @@ try {
   # The Windows Update installer (Install-ViaWU) downloads through Delivery Optimization / BITS, which
   # REFUSE on a guest with no route (measured DO 0x80D03805 / BITS 0x80200010) - so on a netvm-free
   # guest this rung only manufactures phantom 0x80240022 failures. canWuNative is the guest's ability to
-  # ever install these: a real default route (netvm-attached standalone) or the explicit override.
+  # ever install these: a real default route (a template with a netvm attached) or the explicit override.
   # ADR-updater section 2 point 5, third fact: a guest WITH a default route has a route for express-only content too - Windows Update's
   # own downloader - so on it those offers are work for the Windows Update installer with the rest of the fallback set, not a ceiling to
   # report. Only a routeless guest reaches the express gate below, where all three facts hold and the row may say so.
