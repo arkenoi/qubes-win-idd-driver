@@ -1697,16 +1697,17 @@ static class Relay
             string firstName = (firstDone == t1) ? "request(sock->vchan)" : "response(vchan->sock)";
             Task.WhenAny(Task.WhenAll(t1, t2), Task.Delay(DrainMs())).Wait();
 
-            // THE SMOKING-GUN FIELDS. Leaving this block disposes `sock`, so if the RESPONSE pump
-            // is still running at this point we are about to cut a transfer mid-body - and the
-            // listen side would then observe a perfectly clean EOF with a short body, which is
-            // exactly the symptom under investigation. Record it as a fact rather than inferring
-            // it later: cut_response=True means the truncation is OURS and the fix is teardown
-            // ORDERING; cut_response=False with a short `in` count means the vchan delivered a
-            // short body and the defect is upstream of this process.
+            // THE SMOKING-GUN FIELDS. Leaving this block disposes `sock`, so a RESPONSE pump still
+            // running is cut here. A channel that never carried a request (request_bytes=0: a
+            // pooled channel the listen side discarded unused, or one still idle when the relay
+            // stopped) holds no response anyone asked for, so that cut is a fact, logged at I. On a
+            // channel that carried a request the cut can leave a reader short of its body: a client
+            // that half-closed and is still reading looks, from this side, exactly like a client
+            // that left, because the listen side's drain ends both in order. So that cut is an
+            // anomaly, W. cut_response=False with a short response count means the vchan delivered
+            // a short body and the defect is upstream of this process.
             {
-                // cut_response=True is the truncation being OURS (above): an anomaly, W.
-                Log(!t2.IsCompleted ? 'W' : 'I', "HANDLER token=" + token + " ms=" + hsw.ElapsedMilliseconds
+                Log((!t2.IsCompleted && outBytes > 0) ? 'W' : 'I', "HANDLER token=" + token + " ms=" + hsw.ElapsedMilliseconds
                         + " request_bytes=" + outBytes + " response_bytes=" + inBytes
                         + " first_to_finish=" + firstName
                         + " requestEnd=" + outEnd + " responseEnd=" + inEnd
