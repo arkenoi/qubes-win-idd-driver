@@ -18,9 +18,10 @@ update's own command line, and a row is installed only when the installer succee
 a disagreement fails loudly. Reboots are counted: the guest requests, dom0 performs, none is speculative.
 Nothing is killed or adopted by name.
 
-A qube that updates itself, a StandaloneVM with its own internet, keeps Windows Update on. Even there,
-Windows never restarts the qube by itself: a restart waits for the user. If a policy we do not control
-overrides that, the qube says so loudly (section 17, decided 2026-11-13, not built yet).
+A qube that updates itself, a StandaloneVM with its own internet, keeps Windows Update on. Even there, Windows
+is to be set never to restart the qube by itself, so a restart waits for the user. If a policy we do not
+control overrides that, the qube says so loudly. Section 17 has this decision (2026-11-13) and its gaps; it is
+not built yet.
 
 **The qrexec protocol, and what the guest does with it.** dom0's STOCK `qubes-vm-update` - and so the
 Qubes Update GUI - drives a Windows qube with no dom0-side command and no dom0 changes. The chain, every
@@ -863,14 +864,15 @@ scripts themselves, so it cannot drift from them.
 whose losses are collateral (`docs/ADR-supervision.md` item 2b). Windows documents a setting that keeps
 updates on and leaves the restart to a signed-in user: `AUOptions=4` with `NoAutoRebootWithLoggedOnUsers=1`
 under `HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU` (learn.microsoft.com
-`windows/deployment/update/waas-restart`). These guests log on automatically, so a user is always signed in.
+`windows/deployment/update/waas-restart`). It holds only while a user is signed in, because Microsoft restarts a
+device that has none.
 
 **Decision.** The owner: *"perfect, let it make so: no auto reboots whatsoever. if group policy overrides this,
 it is different story (we had not implement support for managed guests yet anyway, so it matters for future
 work)"*, *"so if it does, we detect and warn"*, and *"automatic reboots were the problem"*, *"not WU itself"*.
 
-1. Windows Update may stay on, but it never restarts the guest by itself; a restart waits for the user. The
-   updater writes the two values at the point where it turns updates on.
+1. Windows Update may stay on, but it is set never to restart the guest by itself, so a restart waits for the
+   user. The gaps are under Open. The updater writes the two values at the point where it turns updates on.
 2. If a policy overrides them, so that an automatic restart is possible after all, the agent detects it from
    what is in force and warns loudly, through the ONE reporter (ADR-supervision §3).
 3. Managed guests (domain or device-management policy) are future work. Until then they are detected and
@@ -886,5 +888,7 @@ notification overrides it.
 
 **Open.** TrustedInstaller's servicing-completion restart (2026-11-08, `findings/updates.md`; §8 point 5) comes
 from the servicing stack, and no documented policy is known to reach it. On a self-updating StandaloneVM it
-would still be an automatic restart. Where `NoAutoUpdate=1` holds (templates and their AppVMs), nothing installs
-on its own, so the two values matter only where updates are on.
+would still be an automatic restart. A guest sitting at its logon screen has no signed-in user, so the setting
+does not hold there. The rig's guests log on automatically, but no one has established whether users' guests
+always do. Where `NoAutoUpdate=1` holds (templates and their AppVMs), nothing installs on its own, so the two
+values matter only where updates are on.

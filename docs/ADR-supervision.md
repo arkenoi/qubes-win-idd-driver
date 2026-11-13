@@ -23,9 +23,9 @@ on 2026-10-03. What remains is to demonstrate the chain on a real guest with a f
 
 When the guest's session is going down, nothing new of ours starts inside it. In seamless mode that follows
 the Linux way (the owner, 2026-11-13). As with an ACPI shutdown, nothing asks, and what is not yet sent is lost
-if the shutdown is then cancelled. That is rare. dom0's shutdown closes applications by force, and Windows is
-set never to restart a qube by itself (the updater ADR, section 17), so what remains is a shutdown the user
-starts. If a policy makes an automatic restart possible after all, the qube warns loudly. In non-seamless
+if the shutdown is then cancelled. That is rare. dom0's shutdown, as the Windows PV agent carries it, closes
+applications by force. Windows is to be set never to restart a qube by itself (the updater ADR, section 17).
+What remains is mostly a shutdown the user starts. If a policy makes an automatic restart possible after all, the qube warns loudly. In non-seamless
 mode no notification is lost. None of this is built yet (item 2b).
 
 The whole chain, from a death to the notification in dom0 (§1-§4):
@@ -322,11 +322,13 @@ smooth"*, and - of the other components - *"same of other components."*
      wrong, or a notice or a forwarded toast is not delivered.
    * **Non-seamless mode.** The notice launches keep launching: `PlatSpawnNotify` and the bridge's queued
      notices. The bridge forwards no toasts in this mode (ADR-toasts, plain-English part).
-   * **Why it is rare.** dom0's shutdown never asks. xenagent calls `InitiateSystemShutdownEx(NULL, NULL, 0,
+   * **Why it is rare.** dom0's shutdown, as xenagent carries it, never asks. xenagent calls
+     `InitiateSystemShutdownEx(NULL, NULL, 0,
      TRUE, ...)` (`upstream/ro/qubes-vmm-xen-windows-pvdrivers/xeniface/src/xenagent/xenifacedevice.cpp:298`,
      `:312`), which closes applications by force. Microsoft adds that such a shutdown "can still be aborted by
-     applications, services, or even the system". The ends nobody asked for were automatic reboots, and
-     ADR-updater §17 turns them off. What is left is an end the user starts.
+     applications, services, or even the system". The ACPI path is not checked. The ends nobody asked for were
+     automatic reboots, and ADR-updater §17 is to turn them off. What is left is mostly an end the user starts,
+     plus the gaps §17 names.
    * **Loud warning when an automatic reboot is possible after all.** This happens when a policy overrides
      §17's setting (*"so if it does, we detect and warn"*). The warning reads what is in force, never a stand-in,
      and goes out through the ONE reporter (§3) under its cap and dedupe.
