@@ -877,18 +877,20 @@ g_boot_id(){ g_probe "$1" BOOT 'Write-Host ("BOOT=" + (Get-CimInstance Win32_Ope
 # This requires: a boot identity BEFORE, the guest OBSERVED Halted, and a DIFFERENT boot identity
 # after. Any of those missing is a failure, not a retry.
 g_reboot_proven(){ # $1=vm $2=label
-  local vm=$1 label=${2:-reboot} before after i st
+  local vm=$1 label=${2:-reboot} before after i st started
   before=$(g_boot_id "$vm"); [ -n "$before" ] || { echo "$label: no boot id BEFORE" >&2; return 1; }
   QTEST_VM=$vm timeout -k 5 90 ./tools/qtest shutdown >/dev/null 2>&1
   for i in $(seq 1 40); do [ "$(w_state "$vm")" = Halted ] && break; sleep 10; done
   st=$(w_state "$vm")
   [ "$st" = Halted ] || { echo "$label: never reached Halted (state=$st) - it did not reboot" >&2; return 1; }
-  qvm-start "$vm" >/dev/null 2>&1
+  # The start's own output is the only record of WHY a guest stayed Halted: a refused start (the
+  # thin pool's volume-creation threshold, for one) returns at once and the guest logs nothing.
+  started=$(qvm-start "$vm" 2>&1 | tail -n 1 | cut -c1-120) || true
   # The boot bound here too: this loop waits for a START, so a 40 s probe is abandoned mid-queue on
   # the way up and the guest logs a dropped request for each one (see w_alive).
   # 600 s, the same ten minutes the seq-60 loop allowed, in ONE probe instead of sixty.
   w_alive_wait "$vm" 600 10 || true
-  w_alive "$vm" "${W_ALIVE_BOOT_BOUND:-90}" || { echo "$label: no qrexec within 10 min of start - TERMINAL" >&2; return 1; }
+  w_alive "$vm" "${W_ALIVE_BOOT_BOUND:-90}" || { echo "$label: no qrexec within 10 min of start - TERMINAL${started:+ (start: $started)}" >&2; return 1; }
   after=$(g_boot_id "$vm"); [ -n "$after" ] || { echo "$label: no boot id AFTER" >&2; return 1; }
   [ "$after" != "$before" ] || { echo "$label: boot id UNCHANGED ($after) - it did not reboot" >&2; return 1; }
   echo "$before -> $after"

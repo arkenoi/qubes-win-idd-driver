@@ -267,8 +267,11 @@ if has L1; then
        CELLS="L1" ;;
   esac
 fi
-if [ "$(state)" != Running ]; then qvm-start "$SUBJ" >/dev/null 2>&1; fi
-w=$(wait_session 300); [ "$w" = up ] || { verdict L0 INVALID "a session before the cells" "wait_session=$w"; log "no session ($w) - nothing below can run"; CELLS=""; }
+# EVERY START KEEPS ITS OWN OUTPUT beside the cell, and the verdict that grades a guest which never
+# came back quotes its last line: a refused start (the thin pool's volume-creation threshold, for one)
+# returns at once, the guest logs nothing, and "wait_session=halted" alone cannot say why.
+if [ "$(state)" != Running ]; then qvm-start "$SUBJ" > "$OUT/L0-start.out" 2>&1; fi
+w=$(wait_session 300); [ "$w" = up ] || { verdict L0 INVALID "a session before the cells" "wait_session=$w; start: $(tail -1 "$OUT/L0-start.out" 2>/dev/null | cut -c1-120)"; log "no session ($w) - nothing below can run"; CELLS=""; }
 
 # ---- L9 the install's supervision receipts (ADR-supervision 1 and 5: no runner before 2026-10-23) ----------------
 if has L9; then
@@ -373,8 +376,8 @@ if has L2; then
     sleep 30                                   # let the agent reach steady state before the shutdown under test
     qwt_shutdown "$SUBJ" 600 > "$OUT/L2-shutdown-$i.out" 2>&1
     [ "$(state)" = Halted ] || { verdict L2 INVALID "the guest halts on request (never killed)" "cycle $i left it $(state): $(tail -1 "$OUT/L2-shutdown-$i.out" | cut -c1-120)"; ok=0; break; }
-    qvm-start "$SUBJ" >/dev/null 2>&1
-    w=$(wait_session 300); [ "$w" = up ] || { verdict L2 INVALID "a session after cycle $i" "wait_session=$w"; ok=0; break; }
+    qvm-start "$SUBJ" > "$OUT/L2-start-$i.out" 2>&1
+    w=$(wait_session 300); [ "$w" = up ] || { verdict L2 INVALID "a session after cycle $i" "wait_session=$w; start: $(tail -1 "$OUT/L2-start-$i.out" 2>/dev/null | cut -c1-120)"; ok=0; break; }
     log "  cycle $i done"
   done
   if [ "$ok" = 1 ]; then
@@ -673,7 +676,7 @@ if has L7C; then
               "the subject would not halt, so the control cannot run without a second guest up: $(tail -1 "$OUT/L7C-subject-down.out" | cut -c1-110)"
       CELLS="$(printf '%s' "$CELLS" | sed 's/L7C//')"
     fi
-    qvm-start "$CTL" >/dev/null 2>&1
+    qvm-start "$CTL" > "$OUT/L7C-start.out" 2>&1
     # WAIT FOR A LOGGED-ON SESSION, not just for qrexec. `qtest pushrun` runs the script IN a user session and
     # returns nothing but cmd's banner when there is none - which is exactly what happened on 2026-10-07: the
     # control answered `echo UP` as soon as qrexec came up, the probe ran into a session-less guest, and the cell
@@ -688,7 +691,7 @@ if has L7C; then
       fi
       sleep 15
     done
-    log "  control $CTL: $cd_why"
+    log "  control $CTL: $cd_why; start: $(tail -1 "$OUT/L7C-start.out" 2>/dev/null | cut -c1-120)"
     if [ "$cd_ok" = 1 ]; then
       # THE CONTROL IS CAPTURED BY THE SAME HELPER AS THE SUBJECT, never by a hand-rolled copy of
       # it. L7 goes through guest_ps, which strips the guest's CR; this line used to call qtest
@@ -722,8 +725,8 @@ if has L7C; then
   fi
   # and the subject comes back up, because the sweep reads its logs
   if [ "$(state)" != Running ]; then
-    qvm-start "$SUBJ" >/dev/null 2>&1
-    w=$(wait_session 420); [ "$w" = up ] || log "WARNING: the subject did not return after the control (wait_session=$w) - the sweep will say so"
+    qvm-start "$SUBJ" > "$OUT/L7C-return-start.out" 2>&1
+    w=$(wait_session 420); [ "$w" = up ] || log "WARNING: the subject did not return after the control (wait_session=$w; start: $(tail -1 "$OUT/L7C-return-start.out" 2>/dev/null | cut -c1-120)) - the sweep will say so"
   fi
 fi
 
@@ -906,10 +909,10 @@ PS
     verdict L8 INVALID "a death during a shutdown is reported at the next boot, exactly once" \
             "the stimulus did not reach the broker: pid='$apid' killed='$kil' $(g8 error | cut -c1-110)"
   else
-    qvm-start "$SUBJ" >/dev/null 2>&1
+    qvm-start "$SUBJ" > "$OUT/L8-start.out" 2>&1
     w=$(wait_session 420)
     if [ "$w" != up ]; then
-      verdict L8 INVALID "a death during a shutdown is reported at the next boot, exactly once" "no session after the boot (wait_session=$w)"
+      verdict L8 INVALID "a death during a shutdown is reported at the next boot, exactly once" "no session after the boot (wait_session=$w; start: $(tail -1 "$OUT/L8-start.out" 2>/dev/null | cut -c1-120))"
     else
       cat > "$OUT/L8-read.ps1" <<'PS'
 $ErrorActionPreference = 'Continue'
@@ -1247,12 +1250,12 @@ if has L11; then
       verdict L11 INVALID "the guest halts on request after the injections (never killed)" \
               "state=$_l11state: $(tail -1 "$OUT/L11-shutdown.out" | cut -c1-110) - the two deaths WERE each reported once (suffixes $_s1, $_s2); the no-re-report half is unmeasured"
     else
-      qvm-start "$SUBJ" >/dev/null 2>&1
+      qvm-start "$SUBJ" > "$OUT/L11-start.out" 2>&1
       _w11=$(wait_session 300)
       _l11rows2=$(dom0_rows)
       if [ "$_w11" != up ]; then
         verdict L11 INVALID "a session after the post-injection boot" \
-                "wait_session=$_w11 - the two deaths WERE each reported once; the no-re-report half is unmeasured"
+                "wait_session=$_w11; start: $(tail -1 "$OUT/L11-start.out" 2>/dev/null | cut -c1-120) - the two deaths WERE each reported once; the no-re-report half is unmeasured"
       elif [ -z "${_l11rows:-}" ] || [ -z "${_l11rows2:-}" ]; then
         verdict L11 INVALID "the dom0 row count could not be read across the post-injection cycle" \
                 "rows before='${_l11rows:-}' after='${_l11rows2:-}' - unreadable is not zero"
