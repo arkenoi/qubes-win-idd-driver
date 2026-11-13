@@ -2993,6 +2993,33 @@ function Test-DirectInternet {
   }
   return $false
 }
+# ADR-updater 17: what lets Windows Update install an update and restart this guest by itself, read from what is in
+# force and counted wherever it is found - Group Policy ($Au = ...\WindowsUpdate\AU, $Wu = ...\WindowsUpdate) and
+# device management ($Mdm = PolicyManager\current\device\Update). Each argument is the key's Get-ItemProperty object,
+# or $null when the key is absent. Updates are off where NoAutoUpdate=1 or AllowAutoUpdate=5. AUOptions 2 and 3 only
+# notify, and AUOptions=4 with NoAutoRebootWithLoggedOnUsers=1 leaves the restart to the signed-in user. A deadline
+# overrides all of that, so it counts wherever updates are not off. With nothing configured anywhere, Windows installs
+# and restarts by default. The deadline value names are those of the Windows 11 WindowsUpdate.admx.
+# Returns one @{Tag; Detail} per cause: Tag is a fixed phrase for the notice, Detail names the values for the log.
+function Get-WuAutoRestartCause($Au, $Wu, $Mdm) {
+  $nau = $null; $auo = $null; $narw = $null; $aau = $null
+  if ($Au) { $nau = $Au.NoAutoUpdate; $auo = $Au.AUOptions; $narw = $Au.NoAutoRebootWithLoggedOnUsers }
+  if ($Mdm) { $aau = $Mdm.AllowAutoUpdate }
+  $c = @()
+  if (($null -ne $nau -or $null -ne $auo) -and $nau -ne 1) {
+    if ($auo -ne 2 -and $auo -ne 3 -and -not ($auo -eq 4 -and $narw -eq 1)) {
+      $c += @{ Tag = 'group policy'; Detail = "group policy NoAutoUpdate=$(if ($null -eq $nau) { 'unset' } else { $nau }) AUOptions=$(if ($null -eq $auo) { 'unset' } else { $auo }) NoAutoRebootWithLoggedOnUsers=$(if ($null -eq $narw) { 'unset' } else { $narw })" }
+    }
+  } elseif ($null -eq $nau -and $null -eq $auo -and $null -eq $aau) {
+    $c += @{ Tag = 'the Windows default'; Detail = 'no automatic-updates policy is set, and by default Windows installs and restarts' }
+  }
+  if ($aau -ge 1 -and $aau -le 4) { $c += @{ Tag = 'device management'; Detail = "device management AllowAutoUpdate=$aau" } }
+  $dl = @()
+  if ($Wu) { foreach ($n in 'SetComplianceDeadlineForQU', 'SetComplianceDeadlineForFU') { if ($Wu.$n -eq 1) { $dl += "group policy $n=1" } } }
+  if ($Mdm) { foreach ($n in 'ConfigureDeadlineForQualityUpdates', 'ConfigureDeadlineForFeatureUpdates') { if ($null -ne $Mdm.$n) { $dl += "device management $n=$($Mdm.$n)" } } }
+  if ($dl.Count -and $nau -ne 1 -and $aau -ne 5) { $c += @{ Tag = 'a deadline policy'; Detail = ($dl -join ' ') } }
+  return $c
+}
 $vmClassLive = Get-QubesVmClass
 if (-not $vmClassLive) {
   # qubesdb is the authority and is reliably readable (qubesdb-client.dll is in SYSTEM32). If we
@@ -3004,13 +3031,52 @@ if (-not $vmClassLive) {
   exit 0
 }
 Log "VM class (live from qubesdb): $vmClassLive"
+# ADR-updater 17: a StandaloneVM with direct internet updates itself, and Windows Update is set never to restart it by
+# itself - AUOptions=4 with NoAutoRebootWithLoggedOnUsers=1 leaves the restart to the signed-in user. The two values
+# are written before NoAutoUpdate is removed; when they cannot be written, NoAutoUpdate stays.
+$wuAuKey = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
+$selfUpdating = ($vmClassLive -eq 'StandaloneVM') -and (Test-DirectInternet)
+if ($selfUpdating) {
+  try {
+    & { $ErrorActionPreference = 'Stop'; SetV $wuAuKey 'AUOptions' 4 'DWord'; SetV $wuAuKey 'NoAutoRebootWithLoggedOnUsers' 1 'DWord' }
+    Log 'StandaloneVM with direct internet - it updates ITSELF via Windows Update, and a restart waits for the signed-in user (AUOptions=4, NoAutoRebootWithLoggedOnUsers=1). The qubes proxy updater is template-only: disabled. Undoing NoAutoUpdate=1.'
+    Remove-ItemProperty -Path $wuAuKey -Name NoAutoUpdate -EA SilentlyContinue
+  } catch {
+    Log "StandaloneVM with direct internet, but AUOptions=4 and NoAutoRebootWithLoggedOnUsers=1 could not be written ($($_.Exception.Message)) - NoAutoUpdate is left as it is." 'ERROR'
+  }
+}
+# ADR-updater 17 decision 2, on every class: warn when what is in force lets Windows restart this guest by itself. It
+# runs after the write above, so the first pass after an upgrade does not warn about the values it has just set.
+$wuCauses = $null
+try {
+  $wuCauses = @(Get-WuAutoRestartCause -Au (Get-ItemProperty -LiteralPath $wuAuKey -EA SilentlyContinue) `
+      -Wu (Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate' -EA SilentlyContinue) `
+      -Mdm (Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Update' -EA SilentlyContinue))
+} catch { Log "WUAUTORESTART the policy in force could not be read: $($_.Exception.Message)" 'ERROR' }
+if ($null -ne $wuCauses -and $wuCauses.Count -eq 0) { Log 'WUAUTORESTART none: no policy in force lets Windows restart this guest by itself' }
+elseif ($wuCauses) {
+  Log ('WUAUTORESTART possible: ' + (($wuCauses | ForEach-Object { $_.Detail }) -join '; ')) 'ERROR'
+  # The notice carries fixed phrases only; the values are in the line above.
+  $notifyPs1 = Join-Path $PSScriptRoot 'qwt-notify-error.ps1'
+  $sent = 'unavailable:helper-absent'
+  try {
+    if (Test-Path -LiteralPath $notifyPs1) {
+      $script:QwtNotifyLog = { param($m) Log "NOTIFYERR $m" 'WARN' }
+      . $notifyPs1
+      $sent = Send-QwtError -Component 'qubes-windows-update' -Id 'auto-restart-possible' -Severity ACTION `
+        -Header 'Windows may restart this qube by itself' `
+        -Next 'Windows Update can install an update and restart this qube without asking; unsaved work can be lost.' `
+        -Cause 'Cause: the Windows Update policy in force allows it; the log names the values.' `
+        -Tech (Format-QwtNotifyTechLine -Subject 'qubes-windows-update.ps1' -Code ('allowed by ' + (($wuCauses | ForEach-Object { $_.Tag } | Select-Object -Unique) -join ', ')) `
+          -Count 'reported once per boot' -Evidence (Join-Path (Get-QwtLogDir) ('qubes-windows-update.ps1-' + (Get-Date -Format 'yyyyMMdd') + '.log')))
+    }
+  } catch { $sent = 'failed:exception'; Log "WUAUTORESTART notice could not be sent: $($_.Exception.Message)" 'WARN' }
+  Log "WUAUTORESTART notice: $sent"
+}
 if ($vmClassLive -eq 'TemplateVM') {
   # the proxy updater's home - fall through to Ensure-Proxy below
 } elseif ($vmClassLive -eq 'StandaloneVM') {
-  if (Test-DirectInternet) {
-    Log 'StandaloneVM with direct internet - it updates ITSELF via Windows Update. The qubes proxy updater is template-only: disabled. Undoing NoAutoUpdate=1.'
-    Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate -EA SilentlyContinue
-  } else {
+  if (-not $selfUpdating) {
     Log 'StandaloneVM, offline - the qubes proxy updater is template-only and never runs here; this VM must update itself. Doing nothing.'
   }
   $script:St.phase='skipped-standalone'; Save

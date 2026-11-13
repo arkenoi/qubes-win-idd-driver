@@ -856,10 +856,11 @@ scripts themselves, so it cannot drift from them.
 
 ## 17. Windows never restarts a guest on its own; a restart waits for the user, and a policy that overrides this is detected and warned about
 
-**Status:** ACCEPTED (owner, 2026-11-13; Jev accept 0.89); not built.
+**Status:** ACCEPTED (owner, 2026-11-13; Jev accept 0.89); built in `guest/qubes-windows-update.ps1`, the
+Evidence below not yet measured.
 
 **Context.** A StandaloneVM with direct internet updates itself. The updater removes `NoAutoUpdate` there
-(`guest/qubes-windows-update.ps1:3012`), and Windows Update may then restart the guest on its own. The qube is
+(`guest/qubes-windows-update.ps1:3043`), and Windows Update may then restart the guest on its own. The qube is
 `on_reboot=destroy` (§10), so such a restart leaves it Halted. In seamless mode the restart is also an end
 whose losses are collateral (`docs/ADR-supervision.md` item 2b). Windows documents a setting that keeps
 updates on and leaves the restart to a signed-in user: `AUOptions=4` with `NoAutoRebootWithLoggedOnUsers=1`
@@ -870,11 +871,30 @@ device that has none.
 **Decision.** The owner: *"perfect, let it make so: no auto reboots whatsoever. if group policy overrides this,
 it is different story (we had not implement support for managed guests yet anyway, so it matters for future
 work)"*, *"so if it does, we detect and warn"*, and *"automatic reboots were the problem"*, *"not WU itself"*.
+Notify-only (`AUOptions=2`) was weighed the same day and declined: *"we always have someone signed in, and
+user-started installs are fine, so keep the old setting"*, and *"on standaloneVM updates stay on, but no
+automatic reboots. on templateVM and appVM they are off"*.
 
 1. Windows Update may stay on, but it is set never to restart the guest by itself, so a restart waits for the
-   user. The gaps are under Open. The updater writes the two values at the point where it turns updates on.
-2. If a policy overrides them, so that an automatic restart is possible after all, the agent detects it from
-   what is in force and warns loudly, through the ONE reporter (ADR-supervision §3).
+   user. The gaps are under Open. The updater writes the two values where it turns updates on, before it
+   removes `NoAutoUpdate`, and nowhere else (Jev 0.79, confidence 0.68, no verdict). When they cannot be
+   written, `NoAutoUpdate` stays.
+2. If a policy overrides them, so that an automatic restart is possible after all, the updater's pass detects
+   it from what is in force, on every class and after that write, and warns loudly through the ONE reporter
+   (ADR-supervision §3; Jev 0.74 for the updater's pass, confidence 0.68, no verdict). It counts a restart as
+   possible where updates can install by themselves and either the two values are not both in force or a
+   deadline policy is set (Jev 0.81, confidence 0.72). Each source counts on its own, so a device-management
+   value counts even where Group Policy turns updates off (chosen: Jev split 0.40 against 0.41 for "the
+   documented winner", no verdict):
+   * Group Policy that sets `NoAutoUpdate` or `AUOptions`, where `NoAutoUpdate` is not 1 and `AUOptions` is
+     neither 2 nor 3 (both only notify) nor 4 with `NoAutoRebootWithLoggedOnUsers=1`;
+   * device management, where `AllowAutoUpdate` is 1 to 4;
+   * a deadline, unless `NoAutoUpdate=1` or `AllowAutoUpdate=5` turns updates off;
+   * neither source setting automatic updates at all, since Windows then installs and restarts by default.
+
+   Microsoft's restart page gives the scheduled-time restart, active hours and the older restart deadline no
+   effect while `NoAutoRebootWithLoggedOnUsers` is on. That setting needs option 4 of Configure Automatic
+   Updates, and the deadline policies are documented to override Configure Automatic Updates.
 3. Managed guests (domain or device-management policy) are future work. Until then they are detected and
    warned about, nothing more.
 
@@ -889,6 +909,7 @@ notification overrides it.
 **Open.** TrustedInstaller's servicing-completion restart (2026-11-08, `findings/updates.md`; §8 point 5) comes
 from the servicing stack, and no documented policy is known to reach it. On a self-updating StandaloneVM it
 would still be an automatic restart. A guest sitting at its logon screen has no signed-in user, so the setting
-does not hold there. The rig's guests log on automatically, but no one has established whether users' guests
-always do. Where `NoAutoUpdate=1` holds (templates and their AppVMs), nothing installs on its own, so the two
-values matter only where updates are on.
+does not hold there; the owner: *"we always have someone signed in"*. Where `NoAutoUpdate=1` holds (templates
+and their AppVMs), nothing installs on its own, so the two values matter only where updates are on. A guest
+installed with `/noupdates` has no updater, so neither the values nor the warning reach it (Jev 0.87,
+confidence 0.80).
