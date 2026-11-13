@@ -241,13 +241,9 @@ smooth"*, and - of the other components - *"same of other components."*
    rebooted, which is worse than the defect being fixed. For the same reason `QgaGoingDownHeld` answers three
    values and only `1` refuses: a latch that cannot be READ is not a latch that is held.
 
-   **STILL NOT WIRED:** the other launch sites. There are ~15, not nine as this entry first said
-   (`watchdog.c:296`; `etwproxy.c:880`; `main.c:2754`, `:2825`, `:6745`; `notifyerr.c:468`;
-   `notifhost.cpp` ×7; `qrexec-wrapper.c:387`), and they are not a single decision: `qrexec-wrapper` serves
-   dom0's requests rather than our own supervision, and `notifhost` runs under the **interactive user's** token,
-   not SYSTEM (`main.c:4669` launches it "inside the interactive user session"; `main.c:6558` "uses the SESSION
-   token"), so it cannot open a SYSTEM-only object at all. Widening the DACL is the gate on that scope and it
-   has not been asked for. Until then those sites behave exactly as before.
+   **THE OTHER LAUNCH SITES ARE DECIDED (owner, 2026-11-13):** *"whenever makes sense and if there are no side
+   effects, make them compliant to supervision discipline, if it breaks something, record a exception"*. Each
+   site's outcome is in the table under "THE LAUNCH SITES, ONE BY ONE" below.
 
    **RUNNER: supervision-e2e L12**, added 2026-11-08, with `L12C` (the control) and `L12R` (the release
    half). `guest/sup-goingdown-latch.ps1` (2026-11-07) is the in-guest half: it publishes the latch from a
@@ -278,54 +274,42 @@ smooth"*, and - of the other components - *"same of other components."*
    Jev `release_must_shorten_the_hold` 0.44, and 0.20 on a licensed re-ask carrying those source arms
    (timer-is-the-only-exit 0.47 against guard-must-reread 0.46). It is neither filed as a defect nor excused,
    and a third ask needs new evidence rather than rewording.
-   **THE REMAINING SITES, AND WHY EXTENDING THIS LATCH IS NOT THE FIX** (measured 2026-11-08 from the
-   sources, not from the issue text). The DACL constrains the READER - the process that opens the latch
-   before launching - never the token the child gets, so the thirteen other sites split 7/7:
+   **THE LAUNCH SITES, ONE BY ONE** (read from the sources 2026-11-13; the owner's rule above decides each).
+   The GUI agent is launched at exactly one site, the watchdog's. Every other site in the agent re-launches the
+   agent's own image or `notifhost.exe` as a helper, and the agent is the process that SETS the latch, so there
+   the writer and the reader are one process and its own record is the mechanism: `HelpersDisarmed()`, set at
+   `WM_QUERYENDSESSION` and at the agent's own exit, cleared by a cancelled end (Jev
+   `local_flag_is_correct_there` 0.80 at conf 0.73). A site is GUARDED where a refusal loses nothing, and an
+   EXCEPTION where a refusal would break something, with what it would break:
 
-   | reader runs as | sites | can it open `D:P(A;;GA;;;SY)`? |
+   | site | launches | outcome |
    |---|---|---|
-   | SYSTEM | `watchdog.c:296`; `gui-agent/etwproxy.c:880`, `notifyerr.c:468`, `main.c:2754`, `:2825`, `:6745`; `qrexec-wrapper.c:387` | yes, today, with no DACL change |
-   | the interactive user | `tools/notifhost/notifhost.cpp` x7 | no |
+   | `watchdog/watchdog.c`, the launch guard | the GUI agent | GUARDED 2026-11-06 by the latch, adopted into `endedSession` with the 90 s recovery behind it |
+   | `gui-agent/etwproxy.c`, `EtwProxyTryLaunchLocked` | etwproxy.exe | GUARDED since 2026-10-07 (agent `33d15de`) by `g_Disarmed`, which `HelpersDisarm` sets. The 2026-11-08 census counted it as unwired; it was not |
+   | `gui-agent/main.c`, the broker and bridge launch blocks | wgcbroker.exe; the notification bridge | GUARDED since 2026-10-07 (agent `33d15de`: `!HelpersDisarmed()` on both) |
+   | `gui-agent/main.c`, `WgcRunSchtasks` | schtasks.exe | COMPLIANT AS IT STANDS: the calls that start a helper (`HelperTaskRegister`, reached only through `WgcLaunch` and `NotifRunInSession`) sit inside the two guarded launch blocks above, and the rest ARE the disarm (R1: `/change /disable`, then `/delete`), which an ending session must still run |
+   | `gui-agent/main.c`, `DaemonSettleSweep`, the shadows retry | the shadows helper | GUARDED 2026-11-13. The pass is skipped while disarmed, so no helper is launched into the ending session, no attempt of its bounded 30 is spent and no 3 s helper wait lands on the main loop during the end; a cancelled end resumes the retry where it stood |
+   | `gui-agent/main.c`, `SpawnHelperAsUser` | a helper under a window owner's token | GUARDED 2026-11-13; nothing calls it today |
+   | `gui-agent/main.c`, `ApplyGuestShadows`, both directions | the shadows helper | EXCEPTION: the restore direction has no retry, and the seamless direction's only retry is the settle sweep, which runs when the main loop's wait times out - a wait that is INFINITE on a quiet desktop. A refusal could leave the shadows wrong after a cancelled end until something times the loop out |
+   | `gui-agent/main.c`, `RestyleGuestCaption` | the caption helper | EXCEPTION: the windows announced during an end include the prompts that can cancel it ("save changes?"). Refused, each would show the guest's own title bar under dom0's, and keep it after a cancelled end, because a caption is stripped only when its window is announced |
+   | `gui-agent/notifyerr.c`, `PlatSpawnNotify` | `notifhost --notify-file` | EXCEPTION: refused, the notice would not reach dom0, and the route reads a spawn that did not happen as a transport failure, so its fallback would put the notice up as an error box in the ending session instead. The process is windowless and delivers outside the session |
+   | `gui-agent/main.c`, QGADIRECTSUPPRESS and QGASTARTDISMISS | `notifhost --notify-file` | EXCEPTION: refused, the notice would never reach dom0, and nothing sends it again |
+   | `core-agent/src/qrexec-wrapper/qrexec-wrapper.c` | the commands of dom0's qrexec calls | EXCEPTION: a dom0 request, not our supervision; a refusal fails the caller's command |
+   | `tools/notifhost/notifhost.cpp` x7 | `qrexec-client-vm`; its own `--act-exec` and `--notify-file` children | EXCEPTION: refused, forwarded toasts, notification clicks and queued notices would be lost. Separately, the bridge runs as the interactive user and cannot open the SYSTEM-only latch (`D:P(A;;GA;;;SY)`) unless its DACL is widened, a security-model change |
 
-   The watchdog duplicates its OWN SYSTEM token and only retargets the session (`:272`-`:296`), which is why
-   every gui-agent site is SYSTEM too - the three `main.c` sites call `CreateProcessAsUser`, but that sets the
-   CHILD's token, not the reader's. qrexec-wrapper is SYSTEM because `WTSQueryUserToken` (`:323`, `:433`)
-   requires SeTcbPrivilege and it runs services as SYSTEM (`:575`). notifhost is a separate exe put into the
-   interactive user session by `HelperTaskRegister` ("the same interactive-user launch as WgcLaunch ... a full
-   user context", `main.c:4670`), so its seven sites are refused by the DACL; widening it has not been asked
-   for and is a separate, isolation-weakening decision.
+   None of the agent's exceptions relaunches anything. Each is a one-shot, windowless child that no
+   supervisor watches, so one that an ending session's teardown kills is never reported as a death, and
+   nothing launches it again. That leaves no relaunch loop and no death record, the two harms this item was
+   written against.
 
-   **The gui-agent is the process that SETS the latch** (`gui-agent/lifecycle.c`, WM_QUERYENDSESSION), so at
-   its five sites the would-be reader IS the writer. Asking a kernel object what this process just recorded
-   buys nothing: the object exists so the fact OUTLIVES the process, a property only another process needs.
-   Jev `writer_reading_its_own_object` = `local_flag_is_correct_there` 0.80 at **conf 0.73 - above floor, and
-   the only verdict in this scoping**. A process-local going-down flag is the mechanism there.
-   `remaining_sites_scope` has **NO verdict** at conf 0.32, but it is not empty: `all_seven_system_side`
-   scored **0.00** and `the_four_helper_sites_only` 0.08, while the two survivors are a dead heat -
-   none-until-a-recovery-exists 0.46 against local-flag-for-the-gui-agent 0.45. Both survivors say the same
-   thing about the latch, and the counter-fact driving them is that **a refusal needs a recovery behind it**:
-   the watchdog's guard is folded into the existing endedSession arm precisely because the 90 s
-   `SESSION_END_NEVER_HAPPENED_MS` timer lives there, and a parallel refusal arm with no timer behind it
-   would strand a guest with no GUI until reboot - worse than the defect. None of the other sites has one.
-
-   **THE STRANDING OBJECTION DOES NOT REACH THE FIVE, AND THE DECISION IS STILL NOT RIPE.** Read out of the
-   sources afterwards: all five gui-agent sites spawn HELPERS, never the agent - `SpawnHelperAsUser`
-   (`main.c:2732`), `SpawnHelperInSession` (`:2778`), `RestyleGuestCaption` (`:6675`, the caption helper),
-   `notifyerr.c:468` (whose next line reads "fire and forget: no wait, ever") and `etwproxy.c:880`
-   (etwproxy.exe, created suspended and assigned to a job before resume). The three `main.c` sites re-launch
-   the agent's own image with helper arguments, via `GetModuleFileName` on a NULL module; the GUI agent is
-   launched at exactly ONE site, in `watchdog.c`, which is the site already guarded and where the 90 s
-   recovery lives. So refusing any of the five means a helper does not appear during shutdown - the behaviour
-   the P1 asks for - and there is nothing to strand and nothing to recover.
-
-   That fact was missing from the first ask, so it licensed a re-ask on a CHANGED state rather than reshaped
-   wording. `gui_agent_sites_now` came back at conf **0.36 - under floor, so still NO verdict**, and it is
-   again not empty: `implement_at_all_five` scored **0.09** and `helpers_only_not_etwproxy` 0.01, while the
-   survivors are implement-but-prove-on-a-guest-first 0.49 against still-wait 0.35. Both survivors refuse to
-   endorse writing the five refusals unproven. **Two under-floor results on one decision is itself the
-   finding: it is not ripe, nothing is wired on a 0.36, and a third ask needs new evidence rather than new
-   wording.** When it is taken up, the harness cell that exercises a refusal at one of these five belongs in
-   the SAME change as the code - which is how item 2b itself was finally believed.
+   **How far the two new guards are proven.** By construction, outside the disarmed window `HelpersDisarmed()`
+   is FALSE, so both conditions reduce to the ones that were already there and every ordinary pass runs exactly
+   as before. A refusal has NOT been seen on a guest: the shadows retry is pending only after an apply failed -
+   in practice the boot window before the user's profile is loaded - so the stimulus is an end inside that
+   window, and no harness cell drives
+   a session end that is then cancelled (`QGAHELPERSREARM` has no consumer under `mgmt/` or `guest/`).
+   `SpawnHelperAsUser` names its refusal in the log (`QGAHELPERREFUSED`); the sweep, like the broker and
+   bridge guards beside it, skips in silence.
 
    What the harness step owes, so it is built once and not improvised:
    * **It takes the object identity from the header, never a default.** The four mandatory parameters come
