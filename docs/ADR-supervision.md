@@ -315,12 +315,16 @@ smooth"*, and - of the other components - *"same of other components."*
    **THE EXCEPTIONS ARE RE-DECIDED BY MODE (owner, 2026-11-13).** **Status:** ACCEPTED (owner; Jev accept
    0.99); BUILT 2026-11-13 (agent `8225f30`; the bridge in `83b146b3`; the warning in `740a46ef`). Seen on a
    guest with 4.3.43: the bridge declined to reconnect at an ordinary seamless shutdown, and the warning fired
-   (`docs/ADR-updater.md` §17 Evidence). The agent's refusals are not yet seen, and a critical end (lParam
-   `ENDSESSION_CRITICAL`) did not reach them (measured 2026-11-13, a German 25H2 guest in seamless mode, `shutdown /s /t 0` from inside it): in the
-   millisecond the end reached the agent it disarmed and published the end, and the input desktop became
-   Winlogon, where window mapping is suppressed; 17 ms later it began its orderly exit. A captioned window opened
-   0.19 s after the end reached the agent appears nowhere in its log, so there was nothing to refuse. Seeing a
-   refusal needs an end that keeps the agent running on the default desktop; none has been measured. Outside
+   (`docs/ADR-updater.md` §17 Evidence). Two critical ends (lParam `ENDSESSION_CRITICAL`) on a German 25H2
+   guest in seamless mode, `shutdown /s /t 0` from inside it and dom0's shutdown (measured 2026-11-13), did not
+   reach the agent's refusals: within 12 ms of the end reaching the agent the input desktop became Winlogon,
+   where window mapping is suppressed, and the three captioned windows opened 0.12-0.23 s into the ends appear
+   nowhere in its log. A cancelled end sent by hand to the agent's lifecycle window (`WM_QUERYENDSESSION`, then
+   `WM_ENDSESSION(FALSE)`; same guest, same day) leaves the desktop on Default, and there the refusal is seen: a
+   captioned window opened 2.7 s into it got `QGAHELPERREFUSED <window>: caption strip not launched` and kept
+   the guest's own title bar; the cancel re-armed the helpers and withdrew the latch in the same millisecond;
+   a window opened after it was not refused. No end that Windows itself cancels has been driven; no harness of
+   ours cancels one. Outside
    seamless mode the
    EXCEPTION rows above stand as written. The owner: *"when
    Linux acpi shutdown is going down, it does not ask much. It expected to leave unsaved things lost and so on.
