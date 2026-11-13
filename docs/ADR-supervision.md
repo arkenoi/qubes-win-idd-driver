@@ -24,9 +24,9 @@ on 2026-10-03. What remains is to demonstrate the chain on a real guest with a f
 When the guest's session is going down, nothing new of ours starts inside it. In seamless mode that follows
 the Linux way (the owner, 2026-11-13). As with an ACPI shutdown, nothing asks, and what is not yet sent is lost
 if the shutdown is then cancelled. That is rare. dom0's shutdown, as the Windows PV agent carries it, closes
-applications by force. Windows is to be set never to restart a qube by itself (the updater ADR, section 17).
+applications by force. Windows is set never to restart a qube by itself (the updater ADR, section 17).
 What remains is mostly a shutdown the user starts. If a policy makes an automatic restart possible after all, the qube warns loudly. In non-seamless
-mode no notification is lost. None of this is built yet (item 2b).
+mode no notification is lost. Built 2026-11-13, not yet seen on a guest (item 2b).
 
 The whole chain, from a death to the notification in dom0 (§1-§4):
 
@@ -304,7 +304,7 @@ smooth"*, and - of the other components - *"same of other components."*
    | `gui-agent/notifyerr.c`, `PlatSpawnNotify` | `notifhost --notify-file` | EXCEPTION: refused, the notice would not reach dom0, and the route reads a spawn that did not happen as a transport failure, so its fallback would put the notice up as an error box in the ending session instead. The process is windowless and delivers outside the session |
    | `gui-agent/main.c`, QGADIRECTSUPPRESS and QGASTARTDISMISS | `notifhost --notify-file` | EXCEPTION: refused, the notice would never reach dom0, and nothing sends it again |
    | `core-agent/src/qrexec-wrapper/qrexec-wrapper.c` | the commands of dom0's qrexec calls | EXCEPTION: a dom0 request, not our supervision; a refusal fails the caller's command |
-   | `tools/notifhost/notifhost.cpp` x7 | `qrexec-client-vm`; its own `--act-exec` and `--notify-file` children | EXCEPTION: refused, forwarded toasts, notification clicks and queued notices would be lost. Separately, the bridge runs as the interactive user and cannot open the SYSTEM-only latch (`D:P(A;;GA;;;SY)`) unless its DACL is widened, a security-model change |
+   | `tools/notifhost/notifhost.cpp`, 9 launches | `qrexec-client-vm`; its own `--act-exec` and `--notify-file` children; in the `--act-exec` child, `ShellExecuteExW` and a local COM server; and `schtasks.exe` x3, run by a one-shot that is not the console user (SYSTEM) to hand a notice to the user's session | EXCEPTION: refused, forwarded toasts, notification clicks and queued notices would be lost. Separately, the long-running bridge runs as the interactive user and cannot open the SYSTEM-only latch (`D:P(A;;GA;;;SY)`) unless its DACL is widened, a security-model change |
 
    None of the agent's exceptions relaunches anything. Each is a one-shot, windowless child that no
    supervisor watches, so one that an ending session's teardown kills is never reported as a death, and
@@ -312,7 +312,8 @@ smooth"*, and - of the other components - *"same of other components."*
    written against.
 
    **THE EXCEPTIONS ARE RE-DECIDED BY MODE (owner, 2026-11-13).** **Status:** ACCEPTED (owner; Jev accept
-   0.99); NOT BUILT. The EXCEPTION rows above still describe the agent as built (`ff1feed`). The owner: *"when
+   0.99); BUILT 2026-11-13 (agent `8225f30`; the bridge in `83b146b3`; the warning in `740a46ef`), not yet
+   seen on a guest. Outside seamless mode the EXCEPTION rows above stand as written. The owner: *"when
    Linux acpi shutdown is going down, it does not ask much. It expected to leave unsaved things lost and so on.
    So when in seamless mode, we follow the Linux way. In non-seamless mode no notification is lost."*. Then
    *"accept as collateral"*, *"automatic reboots were the problem"*, *"not WU itself, so make correction"*, and
@@ -327,25 +328,26 @@ smooth"*, and - of the other components - *"same of other components."*
      TRUE, ...)` (`upstream/ro/qubes-vmm-xen-windows-pvdrivers/xeniface/src/xenagent/xenifacedevice.cpp:298`,
      `:312`), which closes applications by force. Microsoft adds that such a shutdown "can still be aborted by
      applications, services, or even the system". The ACPI path is not checked. The ends nobody asked for were
-     automatic reboots, and ADR-updater §17 is to turn them off. What is left is mostly an end the user starts,
+     automatic reboots, and ADR-updater §17 turns them off. What is left is mostly an end the user starts,
      plus the gaps §17 names.
    * **Loud warning when an automatic reboot is possible after all.** This happens when a policy overrides
      §17's setting (*"so if it does, we detect and warn"*). The warning reads what is in force, never a stand-in,
      and goes out through the ONE reporter (§3) under its cap and dedupe.
-   * **Per site, when built.**
-     - Refuse in seamless mode while the session is going down: `RestyleGuestCaption`, the seamless direction
-       of `ApplyGuestShadows`, QGADIRECTSUPPRESS and QGASTARTDISMISS, and `PlatSpawnNotify`. The two QGA
-       notices are raised from the per-window watch, which `ResetWatch` fills only in seamless mode; check the
-       other paths that add a watched window.
-     - `PlatSpawnNotify` drops the notice BEFORE the route. A failed spawn becomes `QERR_FAIL_TRANSPORT`, and
-       its fallback is an error box in the ending session.
-     - Keep: dom0's qrexec requests (they are dom0's, not launches of ours) and the notices in non-seamless
+   * **Per site, as built.** The predicate is seamless mode and the session's end, not the agent's own exit
+     (`SeamlessGoingDown()`; Jev 0.93).
+     - Refused, each logged at INFO as `QGAHELPERREFUSED`: the caption strip; the shadows and caption pass in
+       either direction, where a refused restore keeps its record for the next pass (Jev 0.74);
+       QGADIRECTSUPPRESS and QGASTARTDISMISS. The strip itself returns outside seamless mode (`main.c:7211`),
+       so no other path into the watch can strip a caption there.
+     - The error route drops a notice after compose and before the per-boot stamp, logged at INFO as
+       `NOTIFYERR ... not sent: dropped:going-down`. `PlatSpawnNotify` is never reached, and no marker, cap,
+       count or error box is spent (Jev 0.94).
+     - The bridge cannot open the SYSTEM-only latch. The agent copies the fact into the hold header
+       (`TH_IPC_HEADER.GoingDown`; Jev 0.81), and the bridge refuses its own four launches: the click child,
+       a relay reconnect, the deferred-notice drain, and its own notice. Its children do not check, because it
+       does not start them then.
+     - Kept: dom0's qrexec requests (they are dom0's, not launches of ours) and every launch in non-seamless
        mode.
-     - Read first, the restore direction of `ApplyGuestShadows`. It runs from `SetSeamlessMode` when seamless
-       mode is turned off, and the setting persists (`SPIF_UPDATEINIFILE`). Does the next start's forced apply
-       restore it?
-     - Read first, the bridge. It cannot open the SYSTEM-only latch, and widening the latch's DACL would be a
-       security-model change, so it needs a going-down signal of its own.
 
    **How far the two new guards are proven.** By construction, outside the disarmed window `HelpersDisarmed()`
    is FALSE, so both conditions reduce to the ones that were already there and every ordinary pass runs exactly
