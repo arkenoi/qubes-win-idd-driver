@@ -86,27 +86,18 @@ if ($Script) {
     Write-Output 'RUNASUSER error=give -Command or -Script'; exit 2
 }
 
-# Is anyone actually logged on? Without an interactive session `/it` has nothing to attach to and
-# the task reports success while running nothing - a silent no-op, which is the failure mode this
-# whole file exists to prevent.
-$sess = @(query user 2>&1 | Select-String -Pattern '\s(Active)\s')
-if ($sess.Count -eq 0) {
-    Write-Output 'RUNASUSER error=no_active_interactive_session (autologon not fired?) - refusing'
-    exit 3
-}
-
-# Run-as the REAL logged-on account, not the literal "user". GWeck's field bug (2026-09-10): a
-# guest whose local account is not named "user" - the real name is in the qube's qvm-prefs
-# default_user - has no "user" principal, so `schtasks /ru user` either fails or binds the wrong
-# principal and the task runs as nobody (a silent no-op, the exact failure this file exists to
-# prevent). The source of truth for the interactive account is the active console session, which
-# we already queried above: the USERNAME column is the first whitespace token of the Active line
-# (a leading '>' marks the current session and is stripped). Fall back loudly rather than to a
-# hardcoded name if it cannot be parsed.
-$activeLine = ($sess[0].Line).Trim()
-$ruUser = ((($activeLine -replace '^>\s*','') -split '\s+') | Select-Object -First 1)
+# Is anyone logged on at the console, and who? Without an interactive session `/it` has nothing to
+# attach to and the task reports success while running nothing - a silent no-op, which is the
+# failure mode this whole file exists to prevent. The task runs as the REAL logged-on account, not
+# the literal "user": a guest whose local account has another name (the qube's qvm-prefs
+# default_user) has no "user" principal, so `schtasks /ru user` fails or binds the wrong one.
+# Win32_ComputerSystem.UserName is the console session's user (COMPUTER\name), null with nobody
+# logged on. It is a field and reads the same in every display language; `query user` prints its
+# STATUS column in the display language ("Aktiv" on a German guest), so its text is not read.
+$ruUser = $null
+try { $ruUser = "$((Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).UserName)" } catch { }
 if ([string]::IsNullOrWhiteSpace($ruUser)) {
-    Write-Output "RUNASUSER error=could_not_parse_active_user from=[$activeLine] - refusing"
+    Write-Output 'RUNASUSER error=no_active_interactive_session (autologon not fired?) - refusing'
     exit 3
 }
 
