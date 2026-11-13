@@ -21,80 +21,77 @@ Anywhere this README says "stock", it means unmodified upstream QWT 4.2.2 as shi
 
 ## Download
 
-Release **[v4.3.41-agent355e7fc](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.41-agent355e7fc)** — agent `355e7fc`, package `4.3.41`, built from commit `721f26e7`. See
-[`docs/RELEASE-NOTES-4.3.41.md`](docs/RELEASE-NOTES-4.3.41.md) for what changed and what was
+Release **[v4.3.42-agent3212961](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.42-agent3212961)** — agent `3212961`, package `4.3.42`, built from commit `3cbc258d`. See
+[`docs/RELEASE-NOTES-4.3.42.md`](docs/RELEASE-NOTES-4.3.42.md) for what changed and what was
 verified.
 
-> **Published with no override, on a CLEAN acceptance record and — for the first time in this series
-> — a met change-scoped gate.** On these exact bytes the full eight-cell matrix ran — clean install,
-> same-version reinstall, in-place upgrade and template→AppVM derivation, on both Windows 10 and
-> Windows 11 — **89 checks passed, 0 failed, 0 invalid**. All five feature tests passed, and every
-> remainder suite ran, fault injection, the failproof gates and the ETW drills included: **all 19
-> suites this diff requires were covered** ([`docs/ADR-acceptance.md`](docs/ADR-acceptance.md)), a
-> floor no earlier release met. Three modules were measured a second time because the harness, not
-> the product, could not measure them the first time — `failproof-gates`, `failproof-faultinject`
-> and `template-update` — each re-run on the same package after its harness fix; the acceptance
-> record keeps the first result beside the re-run that superseded it.
+> **Published with no override, on a CLEAN acceptance record and a met change-scoped gate, and every
+> module passed on its first run.** On these exact bytes the full eight-cell matrix ran — clean
+> install, same-version reinstall, in-place upgrade and template→AppVM derivation, on both Windows 10
+> and Windows 11 — **89 checks passed, 0 failed, 0 invalid**. All six feature tests passed, among them
+> a new one that runs our copy of the reporter's German 25H2 environment with UAC on, and every remainder suite
+> ran: **the 19 suites this diff requires were covered, 21 in all**
+> ([`docs/ADR-acceptance.md`](docs/ADR-acceptance.md)). One half of one suite did not run — the
+> dom0-driven resize of the fault-injection test, blocked on our rig's dom0 resize service.
 
-**The change you will notice: notifications on a Windows qube that runs with UAC on.** Every product
-fix in this release answers a field report (Qubes forum thread 42717), and almost all of them share one
-cause: the reporter runs Windows with UAC enabled, and every guest our test rig builds has it disabled.
-With UAC on, the desktop session runs on a *filtered* token, and several handoffs between our
-SYSTEM-side components and the session's helpers silently assumed that the session user could delete,
-replace or open what the other side had created. What that produced, all fixed here:
+**The change you will notice: a failure says why.** The reporter on the Qubes forum (thread 42717)
+received *"The Windows Update scan task failed - incorrect function"* in dom0 at every boot of 4.3.37
+and 4.3.38, and nothing in that notice pointed anywhere. In this release:
 
-* **Every notification sent from SYSTEM arrived twice** — 33 of 33 handoffs in the reporter's logs. The
-  session could read the handoff file but not delete it, and the delete is the acknowledgement.
-* **The notification bridge was gone from the second boot on**, because it could not remove the `stop`
-  file the agent had left behind as SYSTEM; turning UAC on later broke it a second way, through a
-  leftover `heartbeat` it could not replace. The agent now retires all three leftover state files itself.
-* **A notice from a process run "as administrator" waited until the next boot**, and **an
-  informational notice arrived as an error**, which stays on screen until dismissed.
-* **Every logon warned that the notification source was missing** while that source was simply still
-  starting; for its first 30 s the bridge now treats that as the normal startup order.
+* **An update task's failure quotes the error its pass recorded.** When the scan, full-run or download
+  task fails, the dom0 notice now says *"Cause: the pass recorded this error: ..."* when the pass
+  recorded one for this run in `update-status.json`, and its detail names the status file and the
+  updater's log.
+* **0x80070001 no longer reads "incorrect function".** That code is how Task Scheduler records a
+  script's exit code 1; where no recorded error applies, the notice now says *"the script reported a
+  failure or an unhandled error"*.
+* **A refused notification listener names what refuses it** — group policy or device-management
+  policy, the device-wide consent or the user's — or says that none of them does and asks for a bug
+  report.
+* **A clock correction no longer ends an update pass.** On 4.3.40 and 4.3.41, a pass whose wall clock
+  had moved 30 s or more against its own timer by its first status save exited 1 — a dom0 failure
+  notice like the one above — and wrote no status. It now logs the warning and goes on. This is not
+  the reporter's cause: 4.3.37 and 4.3.38 had no such check, and what failed there is still unknown.
 
-One access list changes: the notice files a SYSTEM sender writes for the session user may now be
-deleted by the interactive user, because that delete is how a notice is acknowledged. No pipe, no
-service and no other file is opened wider than before.
+Two runtime fixes ship with them:
 
-Also in this release:
+* **Windows 11 24H2 and later: a slow capture helper is not a hung one.** The broker that supplies
+  menu and window pixels was ended the first time it missed its 2 s deadline, and the window kept
+  showing stale pixels. It is now ended only if it is still stuck 6 s later. On our rig a broker
+  suspended for 7 s was kept and the menu drawn in full, where 4.3.41's broker code ended a suspended
+  broker at 2 s.
+* **The clock after a daylight-saving change.** A guest shut down before a daylight-saving change and
+  started after it ran an hour off. `bind-dirs` now moves the time by that one step at boot, before
+  any service starts — measured on a test build of the change, for the autumn direction.
 
-* **A manual install tells you it has finished.** When an install run by hand needs a restart, the
-  qube shows a frozen window, or none, until it is restarted; it now sends one dom0 notification,
-  *"The tools install is complete - restart this qube"*.
-* **A notification that arrived while another was on screen could be lost.** While a newer
-  notification is queued behind the banner, the agent now reads the banner again, and Windows' own
-  display settings are neither read nor changed.
-* **An install made within a few minutes of a boot could switch off the notifications that tell dom0
-  one of our components died.** The installer now switches both tasks off and waits for a running pass
-  before it replaces their script, and installing this release re-registers them on a guest that lost
-  them.
-* **The updater believes only a real answer from the Microsoft Update Catalog.** Its error page and an
-  empty results page were read as "no package for this update", which took the update out of the count
-  dom0 shows; anything but a results table or the Catalog's own no-results element now keeps it counted.
-* **The capture broker and the notification bridge run at normal priority** instead of Task
-  Scheduler's below-normal default, and *"the capture helper is not running"* is held once while a
-  helper whose process exists is still starting, instead of being sent at 30 s.
-* Two harmless races are logged as information instead of warnings: dom0 addressing a window the guest
-  had just destroyed, and a second disconnect request when the qubesdb service stops.
+New privileged calls are in `bind-dirs` only: the daylight-saving correction opens the time-zone key
+for writing, sets the system clock at most once per boot, and writes the zone's `ActiveTimeBias` only
+if it still differs after that set (no measured boot has needed that write). Everywhere else the
+release adds reads only — the updater's own status file, four notification policy and consent values,
+and, in the health check below, a volume flag and event-log records by ID.
 
-Everything 4.3.40 and earlier brought is carried forward — among it the vchan send path that let one
-slow dom0 reader freeze a qube, the fix that stopped a Windows qube losing its whole desktop, and
-Defender definitions no longer raising dom0's update flag; see the history below.
+Also in the package: `health-check.ps1`, the guest self-check our test harness runs (copied into the
+setup tree, never run by the installer), judges the previous shutdown from values that do not depend
+on the display language, so a German guest can pass it.
+
+Everything 4.3.41 and earlier brought is carried forward — among it the notification fixes for a
+guest with UAC on, the vchan send path that let one slow dom0 reader freeze a qube, the fix that
+stopped a Windows qube losing its whole desktop, and Defender definitions no longer raising dom0's
+update flag; see the history below.
 
 **What was verified, and what was not.** The matrix ran against this exact package: per cell, on each
-OS, 16 clean install, 12 same-version reinstall, 13 in-place upgrade from the previous release and 3
-AppVM derivation checks. The feature tests ran the updater on a rig guest matching the reporter's German 25H2 setup —
-upgraded 4.3.29 → 4.3.41 from the release disc, all 8 updater gates passed — and on a TemplateVM in that
-environment through three dom0-driven update passes, plus the guest's error notifications,
-crop-before-map and the supervision gate. The remainder suites proved the full-screen and capture
-checks able to fail, one clause at a time. **Not verified by the acceptance: UAC on.** Every rig
-guest, the German one included, is provisioned with UAC disabled, so no acceptance cell ran the UAC-on
-paths this release fixes; they were found in the reporter's own logs. Before the acceptance,
-one smoke on the German guest with UAC turned on and a cold reboot, on an earlier build of this release
-(4.3.41.1264), showed the agent removing the leftover `stop` and `heartbeat` files and the notification
-bridge ready 797 ms after its launch. That is a single smoke on a neighbouring build, not a measured
-cell on these bytes. Full detail in [`docs/RELEASE-NOTES-4.3.41.md`](docs/RELEASE-NOTES-4.3.41.md).
+OS, 16 clean install, 12 same-version reinstall, 13 in-place upgrade from 4.3.35 and 3 AppVM
+derivation checks. The feature tests upgraded a rig guest matching the reporter's German 25H2 setup
+from 4.3.29 to 4.3.42 from the release package, and all 8 updater gates passed; drove three dom0
+update passes on a TemplateVM in that environment, each judged PASS; and, new in this acceptance, ran
+4.3.41's notification and session-helper fixes on a clone of that environment with UAC on, all
+passing. The remainder suites proved the full-screen and capture checks able to fail, one clause at a
+time. **Not measured:** the listener refusal names on a guest with each setting set to Deny (they are
+render-tested); the spring daylight-saving direction, until 2027-03-28; the clock-jump branch under
+Windows PowerShell 5.1 on a guest; the notice deferral's drain; and the dom0-driven half of the resize
+fault test. **Still open:** a broker ended as hung is not restarted, what stalls it for 2 s in the
+field is unknown, and so is the cause of the reporter's 4.3.37/4.3.38 scan-task failures. Full detail
+in [`docs/RELEASE-NOTES-4.3.42.md`](docs/RELEASE-NOTES-4.3.42.md).
 **On "updates available" reappearing right after an update — this is Windows Defender, and dom0 is telling you the truth.**
 On a freshly updated guest, dom0's updates-available can go back to "available" within a minute of clearing. We chased this as a
 possible defect and it is not one: the guest's own scan record names what it found — `KB2267602`, a Microsoft Defender Security
@@ -135,20 +132,20 @@ offer the last pass already resolved" distinguishable from "a genuinely new one"
 2026-11-08 our acceptance uses it in one direction: updater gate U8 fails a pass that counts to dom0
 an offer whose identity the guest has already proved installed. It watches only that direction —
 offers the updater leaves out of the count are judged separately, item by item — and in both of
-4.3.41's updater runs it passed with no such identity among the offers. That means the situation did
+4.3.42's updater runs it passed with no such identity among the offers. That means the situation did
 not arise, not that the path was exercised.
 
 | file | use it for |
 |---|---|
-| [`qubes-windows-tools-ng-4.3.41-1.agent355e7fca4960.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.41-agent355e7fc/qubes-windows-tools-ng-4.3.41-1.agent355e7fca4960.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and runs nothing in dom0 |
-| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.41-agent355e7fc/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
-| [`qubes-tools-4.3.41.exe`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.41-agent355e7fc/qubes-tools-4.3.41.exe) | the installer on its own, if you already have a way to get a file into the guest |
-| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.41-agent355e7fc/SHA256SUMS.txt) | checksums for all of them |
+| [`qubes-windows-tools-ng-4.3.42-1.agent32129613e337.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.42-agent3212961/qubes-windows-tools-ng-4.3.42-1.agent32129613e337.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and runs nothing in dom0 |
+| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.42-agent3212961/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
+| [`qubes-tools-4.3.42.exe`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.42-agent3212961/qubes-tools-4.3.42.exe) | the installer on its own, if you already have a way to get a file into the guest |
+| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.42-agent3212961/SHA256SUMS.txt) | checksums for all of them |
 
 The dom0 RPM is unsigned, so `qubes-dom0-update` will refuse it; install it directly:
 
 ```
-sudo rpm -i qubes-windows-tools-ng-4.3.41-1.agent355e7fca4960.noarch.rpm
+sudo rpm -i qubes-windows-tools-ng-4.3.42-1.agent32129613e337.noarch.rpm
 ```
 
 With the RPM in place, dom0 can attach the media itself — `qvm-start <vm> --install-windows-tools`
@@ -157,15 +154,23 @@ hands the guest exactly this ISO as a CD.
 Upgrading a guest that already runs stock QWT or an older build of this package is a
 plain in-place upgrade — run the installer, it detects the older version and lets the
 MSI replace it in one transaction. Validated end to end for an upgrade **from an older
-build of this package** — 4.3.41's acceptance ran the in-place upgrade cell on both
-Windows 10 and Windows 11, **13 checks each, zero failures**, and its two updater tests upgraded
-the reporter's German 25H2 environment from 4.3.29 to 4.3.41 from the release disc. An
+build of this package** — 4.3.42's acceptance ran the in-place upgrade cell from 4.3.35 on
+both Windows 10 and Windows 11, **13 checks each, zero failures**, and its three tests in the
+reporter's German 25H2 environment upgraded from 4.3.29 to 4.3.42 from the release package. An
 upgrade from **stock QWT 4.2.2** uses the same unchanged
 MSI machinery but has not been exercised on our testbed since August 2026, because the
 test images themselves carry a newer build.
 
 **Hand-created qube?** Run `qvm-features <qube> vmexec 1` and `qvm-prefs <qube> qrexec_timeout 1800`
 in dom0 (on the template; AppVMs inherit), or the Qubes Update tool fails against it.
+
+**What changed in 4.3.42 — a failure says why.** An update task's dom0 failure notice quotes the
+error its pass recorded, 0x80070001 no longer reads "incorrect function", and a refused notification
+listener names the setting that refuses it. A clock correction no longer ends an update pass (4.3.40
+and 4.3.41 exited 1 on it). On Windows 11 24H2 and later a slow capture helper is ended only if it is
+still stuck 6 s later, and a guest started after a daylight-saving change has its clock set right at
+boot. Full story, and what was not measured, in
+[`docs/RELEASE-NOTES-4.3.42.md`](docs/RELEASE-NOTES-4.3.42.md).
 
 **What changed in 4.3.41 — a guest with UAC on.** Almost every fix answers one field report whose
 cause our rig could not see: with UAC on, the desktop session runs on a filtered token, and several
