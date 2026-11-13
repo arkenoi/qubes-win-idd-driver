@@ -3838,6 +3838,17 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
 
 
 # ----------------------------------------------------------------------------------------------- signatures
+def signature_level_kept(family, level, func):
+    """Whether a line at this level can become a signature at all - the rule collect_signatures()
+    applies below, in one place, because tools/sweep-preaccount.py imports it: a baseline row for a
+    line this refuses is never consulted, so the preflight must not ask for one."""
+    if level in ("D", "V"):
+        return False
+    if level == "I" and family not in ("events", "guid") and func != "RESULT":
+        return False
+    return True
+
+
 def collect_signatures(files, since, prior=None):
     """`prior` is build_scope()'s predicate. A signature keeps EVERY occurrence and counts them
     both ways, exactly as the fault-injection split does below: suppressing the line would conceal
@@ -3864,9 +3875,7 @@ def collect_signatures(files, since, prior=None):
             # defect to fix at the writer, which is the whole direction of this change.
             # The two exemptions that remain are STRUCTURAL, not textual: the events/guid families
             # carry their level in a field of their own, and a RESULT record is a verdict.
-            if l.level in ("D", "V"):
-                continue
-            if l.level == "I" and lf.family not in ("events", "guid") and l.func != "RESULT":
+            if not signature_level_kept(lf.family, l.level, l.func):
                 continue
             k = l.key()
             s = sigs.get(k)

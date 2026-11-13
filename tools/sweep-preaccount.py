@@ -69,7 +69,7 @@ def _load_sweep():
         spec.loader.exec_module(mod)
     except Exception:
         return None
-    if not hasattr(mod, "normalize") or not hasattr(mod, "FAMILY_BY_NAME"):
+    if not all(hasattr(mod, n) for n in ("normalize", "FAMILY_BY_NAME", "signature_level_kept")):
         return None
     return mod
 
@@ -356,16 +356,22 @@ def added_log_literals(since, head, repo=None, prefix=""):
 
 
 def preaccount_report(baseline, literals, sweep):
-    """Which of these lines would the sweep meet for the first time? Returns three lists - accounted,
-    unaccounted, unreadable - so nothing is folded into a count that hides which kind it was."""
+    """Which of these lines would the sweep meet for the first time? Returns four lists - accounted,
+    unaccounted, unreadable, unkeyed - so nothing is folded into a count that hides which kind it was."""
     sigs = baseline.get("signatures") or {}
     pats = [p.get("regex", "") for p in (baseline.get("patterns") or []) if p.get("regex")]
     by_family = {}
     for key in sigs:
         by_family.setdefault(key.split("|")[0], []).append(sweep.normalize(key))
-    accounted, unaccounted, unreadable = [], [], []
+    accounted, unaccounted, unreadable, unkeyed = [], [], [], []
     for path, lineno, func, level, fmt in literals:
         fam = family_for(path, sweep)
+        # A LINE THE SWEEP MAKES NO SIGNATURE OF HAS NOTHING TO ACCOUNT FOR: collect_signatures() drops
+        # it before any baseline lookup, so a row written for it is never read. Its own rule decides,
+        # imported, not copied. An unmapped path still fails below - the rule needs the family.
+        if fam is not None and not sweep.signature_level_kept(fam, level, func):
+            unkeyed.append((path, lineno, func, level, fam))
+            continue
         run = longest_literal_run(fmt) if fmt else ""
         if fmt is None or fam is None or len(run) < 8:
             why = ("no log of the sweep's maps this path" if fam is None else
@@ -394,7 +400,7 @@ def preaccount_report(baseline, literals, sweep):
         # QGA* tag. Both are carried: the head identifies the line, the run is what was compared.
         head = fmt.split("%")[0].strip() or run
         (accounted if hit else unaccounted).append((path, lineno, func, level, head, fam))
-    return accounted, unaccounted, unreadable
+    return accounted, unaccounted, unreadable, unkeyed
 
 
 def cmd_check(a):
@@ -417,7 +423,7 @@ def cmd_check(a):
     except RuntimeError as e:
         print("PREACCOUNT INSTRUMENT: %s" % e)
         return 2
-    accounted, unaccounted, unreadable = preaccount_report(baseline, literals, sweep)
+    accounted, unaccounted, unreadable, unkeyed = preaccount_report(baseline, literals, sweep)
     # RESOLVE BOTH ENDS FOR THE LABEL, because `[:12]` on a revision EXPRESSION truncates the part
     # that makes it one: `ef3ce2b5e0ef^` printed as `ef3ce2b5e0ef`, so a real parent..child range
     # read exactly like the empty `X..X` the preflight legitimately prints when the baseline is
@@ -428,9 +434,10 @@ def cmd_check(a):
         out = subprocess.run(["git", "-C", a.repo or ROOT, "rev-parse", "--short=12", rev],
                              capture_output=True, text=True)
         return out.stdout.strip() if out.returncode == 0 and out.stdout.strip() else rev[:12]
-    print("PREACCOUNT %s..%s: %d log literal(s) added, %d accounted, %d UNACCOUNTED, %d unreadable"
+    print("PREACCOUNT %s..%s: %d log literal(s) added, %d accounted, %d UNACCOUNTED, %d unreadable, "
+          "%d not keyed by the sweep (no signature at their level)"
           % (_short(since), _short(a.head), len(literals), len(accounted), len(unaccounted),
-             len(unreadable)))
+             len(unreadable), len(unkeyed)))
     for path, lineno, func, level, run, fam in unaccounted:
         print("  UNACCOUNTED %s:%d  %s|%s|%s: %s" % (path, lineno, fam, level, func, run[:100]))
     for path, lineno, func, level, fmt, why in unreadable:
