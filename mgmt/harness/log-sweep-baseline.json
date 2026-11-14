@@ -410,18 +410,6 @@
    "status": "unsettled",
    "max_per_boot": null,
    "reason": "NEVER OBSERVED, AND DELIBERATELY NOT SILENCED. agent/gui-agent/main.c BrokerHangConfirm (agent e0bd28f): written only after the 'has not answered slot' warning, when an acknowledgement, progress or stage change ended the suspicion within 6 s - the broker was slow, not hung, and is kept; it carries the time since the warning. Jev on the canonical log-sweep rubric (floor 0.5): expected 0.84 conf [expected=0.88 defect=0.06 insufficient-evidence=0.06 noise=0.00]; keep_armed noul=0.85, so it is armed rather than expected: the first occurrence is flagged and decided with that run's evidence. CEILING UNMEASURED."
-  },
-  {
-   "regex": "^qrexec\\|E\\|WatchForEvents: trigger pipe not opened: ResumeThread failed \\(",
-   "status": "unsettled",
-   "max_per_boot": null,
-   "reason": "NEVER OBSERVED, AND DELIBERATELY NOT SILENCED. core-agent qrexec-agent.c WatchForEvents: the pipe server's accept thread is created suspended and resumed once the hello to the daemon is in the ring; this line is written when that resume fails, and from then on every call made inside the qube fails to connect while calls from dom0 are still served. NOT A JEV VERDICT - the status is mine: unsettled fails a run on the first occurrence, which is what a trigger pipe that never opens should do."
-  },
-  {
-   "regex": "^qrexec\\|E\\|InitVchan: the wait for the data client failed \\(",
-   "status": "unsettled",
-   "max_per_boot": null,
-   "reason": "NEVER OBSERVED, AND DELIBERATELY NOT SILENCED. core-agent qrexec-wrapper.c InitVchan, server role (a call made inside the qube): the wait for the target to connect to the data vchan itself failed (the line carries the wait result and the error), and the call is abandoned - the wrapper closes the vchan and exits. The wait has no time limit, so this is not a target that was slow. NOT A JEV VERDICT - the status is mine: unsettled fails a run on the first occurrence."
   }
  ],
  "signatures": {
