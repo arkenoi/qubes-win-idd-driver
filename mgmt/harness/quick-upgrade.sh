@@ -66,10 +66,16 @@ HERE="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$HERE" || exit 1
 # variable of mgmt/harness/stall-ab.sh, which tests the ranked stall hypothesis (Jev 2026-09-22,
 # `medium-pulled-from-reader` 0.56): that the installer's own medium is pulled from under it while
 # the PV storage path is replaced. The disc stays attached in both arms - only WHO READS IT changes.
+#
+# --user-install: run install.cmd the way a person does - without /auto, autologon left alone - and
+# grade the dom0 notice the installer sends only on that path: "restart this qube", when the run
+# skipped the GUI agent's restart because a reboot is pending and the guest has no display path.
+# Without this flag every launch here passes /auto, and no harness executes that notice.
 STAGE_TO_C=0
-_args=(); for _a in "$@"; do case "$_a" in --stage-to-c) STAGE_TO_C=1 ;; *) _args+=("$_a") ;; esac; done
+USER_INSTALL=0
+_args=(); for _a in "$@"; do case "$_a" in --stage-to-c) STAGE_TO_C=1 ;; --user-install) USER_INSTALL=1 ;; *) _args+=("$_a") ;; esac; done
 set -- ${_args+"${_args[@]}"}
-PKG="${1:?[ERROR] usage: quick-upgrade.sh <release-iso-or-setup-tree> [subject] [os] [--stage-to-c]}"
+PKG="${1:?[ERROR] usage: quick-upgrade.sh <release-iso-or-setup-tree> [subject] [os] [--stage-to-c] [--user-install]}"
 OS="${3:?[ERROR] usage: $0 <iso> <subject> <win10|win11> - name the OS family; it selects the golden and there is no default target}"
 SUBJECT="${2:-$OS-up}"
 GOLDEN="$OS-qwt"
@@ -830,6 +836,7 @@ installer_started(){
   return 1
 }
 
+if [ "$USER_INSTALL" = 1 ]; then _iargs="'/noautologon'"; _ishow='without /auto'; else _iargs="'/auto','/autologon:qubes'"; _ishow='/auto'; fi
 _lrc=1; _att=0
 while [ "$_att" -lt "$LAUNCH_TRIES" ]; do
   _att=$(( _att + 1 ))
@@ -841,14 +848,14 @@ while [ "$_att" -lt "$LAUNCH_TRIES" ]; do
   # inheritable handle whatever the redirection, and the call still died at the stop on win11de-v3/-v4
   # (rc=255 after 51-55 s). Start-Process goes through ShellExecute, which inherits no handles, so the
   # call returns as soon as the launch is done.
-  grun "powershell -NoProfile -Command \"Start-Process -WindowStyle Minimized -FilePath '$RELDISC\\install.cmd' -ArgumentList '/auto','/autologon:qubes'\"" 60 >/dev/null
+  grun "powershell -NoProfile -Command \"Start-Process -WindowStyle Minimized -FilePath '$RELDISC\\install.cmd' -ArgumentList $_iargs\"" 60 >/dev/null
   _lrc=$?
   _lel=$(( $(date +%s) - _lt0 ))
   if [ "$_lrc" = 0 ]; then
-    log "install.cmd /auto launch call RETURNED in ${_lel}s from $RELDISC (attempt $_att/$LAUNCH_TRIES) - the guest was answering when it did (deadline ${DEADLINE}s, stall ${STALL_SECS}s)"
+    log "install.cmd $_ishow launch call RETURNED in ${_lel}s from $RELDISC (attempt $_att/$LAUNCH_TRIES) - the guest was answering when it did (deadline ${DEADLINE}s, stall ${STALL_SECS}s)"
     break
   fi
-  log "install.cmd /auto launch call DID NOT RETURN (rc=$_lrc after ${_lel}s, attempt $_att/$LAUNCH_TRIES) from $RELDISC - the guest stopped answering DURING the launch; determining whether it ran anyway"
+  log "install.cmd $_ishow launch call DID NOT RETURN (rc=$_lrc after ${_lel}s, attempt $_att/$LAUNCH_TRIES) from $RELDISC - the guest stopped answering DURING the launch; determining whether it ran anyway"
   _w0=$(date +%s); _verdict=2
   while [ $(( $(date +%s) - _w0 )) -lt "$STALL_SECS" ]; do
     installer_started; _verdict=$?
@@ -1326,6 +1333,16 @@ else
   esac
   um=$(echo "$j" | grep -ao '"upgrade_mode":"[^"]*"' | head -1 | cut -d'"' -f4)
   [ "$um" = in-place-msi-major-upgrade ] && ok "installer branch = $um" || no "installer branch = '${um:-none}', expected in-place-msi-major-upgrade (INVALID-PRECONDITION if uninstall-first/reinstall)"
+  if [ "$USER_INSTALL" = 1 ]; then
+    # With a reboot pending the person's guest has no display path; this notice is all that tells them.
+    rn=$(grep -a 'dom0 notification installer\.restart-to-finish:' "$OUT/final.cur" | tail -1 | tr -d '\r')
+    gr=$(echo "$j" | grep -ao '"gui_restored":"[^"]*"' | head -1 | cut -d'"' -f4)
+    case "$rn" in
+      *'restart-to-finish: send') ok "user-path install: the restart notice was sent to dom0 (gui_restored '$gr')" ;;
+      '') no "user-path install: this run's installer log has no restart-notice line (gui_restored '${gr:-none}') - the notice never ran" ;;
+      *) no "user-path install: the restart notice was NOT sent - ${rn##*restart-to-finish: }" ;;
+    esac
+  fi
   rpv=$(echo "$j" | grep -ao '"package_version":"[^"]*"' | head -1 | cut -d'"' -f4)
   if [ -n "$rpv" ]; then
     [ "$(vercore "$rpv")" = "$PVCORE" ] && ok "RESULT package_version $rpv is the package under test" \
