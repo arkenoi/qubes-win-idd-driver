@@ -99,7 +99,9 @@ Omit the Xen PV disk drivers (xenvbd). Leaves the guest on emulated IDE. Diagnos
     than rebooting it (see Emit-ResultThenPowerOff for why): a Qubes HVM is on_reboot=destroy /
     on_poweroff=destroy, so the qube goes Halted and the CALLER starts it again to continue
     (stage 1 -> stage 2) or to reach the finished state (-RebootAtEnd). The interactive path
-    (no -Auto) is unchanged: it exits 10 and asks the operator to restart manually.
+    (no -Auto) exits 10 and asks the operator to restart manually, except at the end of an upgrade
+    that leaves the guest with no display path: there dom0 is told that the qube shuts down and to
+    start it again, and the guest powers off.
 #>
 [CmdletBinding()]
 param(
@@ -2513,10 +2515,10 @@ function Emit-ResultThenPowerOff {
     Write-Host $json
     try { Add-Content -LiteralPath $script:LogFile -Value "=== RESULT === $json" -Encoding UTF8 } catch { }
     Write-MirrorLine "=== RESULT === $json"
-    # This helper is reached ONLY on the -Auto (unattended) path - every caller is inside
-    # `if ($Auto)`. Nobody is watching a countdown, so a 15 s dialog was pure dead wait between
-    # stages. The RESULT is already flushed to the log above, so go down near-immediately; a 2 s
-    # margin just lets this process exit cleanly before the machine does.
+    # Callers: every -Auto stage transition, and the end of a run started by hand that left the guest
+    # with no display path (RESTART-TO-FINISH-NOTIFY). Nobody is watching a countdown on either, so a
+    # 15 s dialog would be pure dead wait. The RESULT is already flushed to the log above, so go down
+    # near-immediately; a 2 s margin just lets this process exit cleanly before the machine does.
     #
     # POWER OFF, NOT REBOOT - and this is load-bearing for DETERMINISM, not a style choice.
     # A Qubes HVM is configured `on_reboot=destroy` / `on_poweroff=destroy` (core-admin's
@@ -2543,10 +2545,13 @@ function Emit-ResultThenPowerOff {
     # install.cmd gone. A failed request is a FAILURE the caller must see. Stderr is captured (a
     # native stderr line is a terminating error under ErrorActionPreference=Stop) and the exit
     # code is cleared first so a stale one is never judged (see Set-BootResume).
-    # /f (force): close applications without warning. This is an unattended install in session 0
+    # /f (force): close applications without warning. On -Auto this is an unattended install in session 0
     # on a freshly-imaged guest - there is no user work to lose and nothing that legitimately needs
     # to veto the transition, but a stuck app or a "you have unsaved work" prompt CAN block a
     # /s without /f indefinitely, which would strand the install exactly as a refused shutdown does.
+    # On a run started by hand the guest has no display path by then, so such a prompt could not be
+    # answered at all; work left unsaved in an open app is lost, as nothing can reach it before the
+    # next start either.
     # NO FLUSH-AND-SETTLE HERE, AND THAT IS DELIBERATE (reverted 2026-09-10).
     # A flush + disk-settle wait used to sit at this point, added 2026-09-09 for a measured
     # "shutting down with writes in flight produces an unclean shutdown" (idle clean 3/3, loaded
@@ -5712,16 +5717,16 @@ public static class QdbPrime {
     # ---- TZ-OVERRIDE-NOTIFY-END
 
     # ---- RESTART-TO-FINISH-NOTIFY-BEGIN
-    # A HUMAN WHO RAN THIS BY HAND IS TOLD THROUGH DOM0, BECAUSE NOTHING ELSE CAN REACH THEM. The skip above leaves
-    # the guest with no display path at all - the emulated adapter is disabled and no agent maps windows - so the
-    # RESULT, the log lines and install.cmd's "Done. Restart the qube if the script asked you to." are all written
-    # into a console nobody can see. No harness sees it: every automated caller passes -Auto and reboots the guest
-    # itself within seconds. The skip itself stays, on every path (owner: "ok lets not restart the gui agent when
-    # reboot is pending in upgrade"); restarting the agent on a run without -Auto is the alternative, one condition
-    # away at the skip above.
-    # ACTION, by the route's own definition: the product is not delivering and a human must act. Not under -Auto:
-    # there the caller restarts the qube and a notification would be noise in every acceptance cell.
+    # A HUMAN WHO RAN THIS BY HAND IS TOLD THROUGH DOM0 THAT THE QUBE SHUTS DOWN, AND THEN IT POWERS OFF. The skip
+    # above leaves the guest with no display path at all - the emulated adapter is disabled and no agent maps
+    # windows - so nothing written in here reaches them, and the qube is of no use to them before its next start.
+    # The notice says it is shutting down and to start it again; the power-off after this block follows whether or
+    # not the notice went out, since the qube is of no use until that start either way. The skip itself stays, on
+    # every path (owner: "ok lets not restart the gui agent when reboot is pending in upgrade").
+    # ACTION, by the route's own definition: a human must act. Not under -Auto: there the caller restarts the qube.
+    $powerOffForUser = $false
     if (-not $Auto -and "$($script:Result.detail.gui_restored)" -eq 'skipped: reboot pending') {
+        $powerOffForUser = $true
         $sentRs = 'unavailable:qrexec-not-running'
         $qa3 = Get-Service -Name 'QrexecAgent' -ErrorAction SilentlyContinue
         if ($qa3 -and "$($qa3.Status)" -eq 'Running') {
@@ -5731,18 +5736,22 @@ public static class QdbPrime {
                 try {
                     . $nh3
                     $sentRs = Send-QwtError -Component 'installer' -Id 'restart-to-finish' -Severity ACTION `
-                        -Header 'The tools install is complete - restart this qube' `
-                        -Next 'This qube shows no windows until it is restarted: shut it down from dom0 and start it again.' `
+                        -Header 'The tools install is complete - this qube is shutting down' `
+                        -Next 'Start it again once it has stopped: its windows come back at that start.' `
                         -Cause 'Cause: the display path was switched during the install and the new one starts at the next boot.' `
                         -Tech (Format-QwtNotifyTechLine -Subject 'Install-QwtImproved.ps1' -Count 'reported once per install' -Evidence 'C:\qwt-improved-install.log')
                 } catch { $sentRs = "failed: $($_.Exception.Message)" }
             }
         }
         Write-Log "  dom0 notification installer.restart-to-finish: $sentRs"
-        if ("$sentRs" -ne 'send') { Write-Log "  dom0 was NOT told to restart this qube ($sentRs) - only this log says so" 'ERROR' }
+        if ("$sentRs" -ne 'send') { Write-Log "  dom0 was NOT told that this qube shuts down and must be started again ($sentRs) - only this log says so" 'ERROR' }
     }
     # ---- RESTART-TO-FINISH-NOTIFY-END
 
+    if ($powerOffForUser) {
+        Write-Log 'powering off in 2 s: this run was started by hand and the guest shows nothing until its next start'
+        Emit-ResultThenPowerOff 0
+    }
     if ($Auto -and $RebootAtEnd) {
         Write-Log 'powering off in 2 s (-RebootAtEnd); start the qube again for the finished, PV-bound state'
         Emit-ResultThenPowerOff 0
