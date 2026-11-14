@@ -827,53 +827,51 @@ print('count=%s offered=%s actionable=%s remaining=%s available=%d not_actionabl
     len(d.get('available') or []), len(d.get('not_actionable') or []), len(d.get('satisfied') or [])))
 PY
       )
-      # AND NOW IT JUDGES ON AGREEMENT, NOT ON THE FLAG MOVING. The bar this check exists for is in
-      # its own words above: "the admin was told there was work when there was none". A flag that
-      # CHANGED is not that bar - dom0 reporting work the guest also reports is dom0 being right.
-      # DIAGNOSED 2026-10-16 on win11de-tup. The leg failed '<empty>' -> '1' and the scan's own
-      # status, read off the preserved specimen, said count=1 offered=1 actionable=1 remaining=1
-      # with one item: KB2267602, Microsoft Defender Security Intelligence v1.461.56.0, actionable,
-      # with a download URL. Microsoft republishes Defender definitions several times a day, so an
-      # update really did become available in the minute between the pass and the scan - dom0 was
-      # told the truth and this leg failed it anyway. On any guest that receives definitions the old
-      # comparison fails intermittently for ever, and it is what failed template-update, one of the
-      # six suites missing from the 4.3.36 gate.
-      # SO: the guest's own count decides. Nonzero and dom0 says available -> they AGREE, no defect.
-      # Zero while dom0 says available -> the admin was told work exists that the guest does not
-      # have, which IS the bar, and it fails. Unreadable -> missing data fails, as everywhere here.
-      _cnt=$(python3 - "$RD/update-status-after-scan.json" <<'PY' 2>/dev/null
+      # IT JUDGES ON AGREEMENT, NOT ON THE FLAG MOVING. A flag that changed is not the defect: dom0
+      # reporting work the guest also has is dom0 being right, and an update published between the
+      # pass and the scan moves it.
+      # THE GUEST'S SIDE IS THE OFFERS dom0 IS TOLD ABOUT, derived from the rows the scan wrote and
+      # not from the `count` it published, which is the number under test. ADR-updater section 2
+      # leaves three kinds of offer out of that number, and so does this: a Defender definition
+      # (point 6, the row's is_definition), an offer this scan verified has no route (point 5,
+      # `unroutable`, keyed by the KB or by the exact title of an offer without one), and an
+      # identity already proved installed (point 3, `satisfied`, uid:rev).
+      # Offers left and dom0 says available -> they AGREE. None left and dom0 says available -> the
+      # admin was told of work the guest does not have; a flag raised by a definition alone ends
+      # here. Offers left and dom0 empty -> work the user cannot see. Unreadable -> missing data fails.
+      _told=$(python3 - "$RD/update-status-after-scan.json" <<'PY' 2>/dev/null
 import json, sys
 try:
     d = json.load(open(sys.argv[1], encoding='utf-8-sig'))
+    rows = d['available']
+    if not isinstance(rows, list):
+        raise ValueError
+    noroute = [str(k).lower() for k in d.get('unroutable') or []]
+    sat = [str(k).lower() for k in d.get('satisfied') or []]
+    left = []
+    for u in rows:
+        kb = str(u.get('kb') or '')
+        route = kb if kb[:2].upper() == 'KB' and kb[2:].isdigit() else str(u.get('title') or '').strip()
+        if (u.get('is_definition') is not True and route.lower() not in noroute
+                and ('%s:%s' % (u.get('uid'), u.get('rev'))).lower() not in sat):
+            left.append(route or str(u.get('uid') or '?'))
 except Exception:
     print('unreadable'); raise SystemExit
-# the guest's own answer to "is there work": the count it published, backed by the item list
-n = d.get('count')
-if not isinstance(n, int):
-    n = len(d.get('available') or [])
-print(max(int(n), len(d.get('available') or [])))
+print('%d\t%s' % (len(left), '; '.join(left) or '(none)'))
 PY
       )
-      _items=$(python3 - "$RD/update-status-after-scan.json" <<'PY' 2>/dev/null
-import json, sys
-try:
-    d = json.load(open(sys.argv[1], encoding='utf-8-sig'))
-except Exception:
-    raise SystemExit
-print('; '.join((u.get('kb') or u.get('uid') or '?') for u in (d.get('available') or [])) or '(none listed)')
-PY
-      )
+      _cnt=${_told%%$'\t'*}; _items=${_told#*$'\t'}
       if [ "${_cnt:-unreadable}" = unreadable ]; then
         log "[ERROR] round $r: FAIL - dom0 went '${dom0_before_scan:-<empty>}' -> '${dom0_after_scan:-<empty>}' across the scan and the guest's own status is UNREADABLE, so agreement cannot be judged (missing data fails)"
         fails=1
       elif [ -n "$dom0_after_scan" ] && [ "${_cnt:-0}" -gt 0 ]; then
-        log "round $r: oscillation OK - dom0 went '${dom0_before_scan:-<empty>}' -> '${dom0_after_scan:-<empty>}' and the guest AGREES: its own scan published ${_cnt} actionable item(s) [${_items:-?}]. dom0 was told what the guest found, which is not the defect this leg looks for"
+        log "round $r: oscillation OK - dom0 went '${dom0_before_scan:-<empty>}' -> '${dom0_after_scan:-<empty>}' and the guest AGREES: its own scan lists ${_cnt} offer(s) dom0 is told about [${_items:-?}]. dom0 was told what the guest found, which is not the defect this leg looks for"
       elif [ -z "$dom0_after_scan" ] && [ "${_cnt:-0}" -gt 0 ]; then
-        log "[ERROR] round $r: FAIL - the guest's scan published ${_cnt} actionable item(s) [${_items:-?}] and dom0's updates-available is EMPTY: work the user cannot see"
+        log "[ERROR] round $r: FAIL - the guest's scan lists ${_cnt} offer(s) dom0 is told about [${_items:-?}] and dom0's updates-available is EMPTY: work the user cannot see"
         log "  the guest's OWN status from that scan: ${_osc:-unreadable}  (kept at $RD/update-status-after-scan.json)"
         fails=1
       else
-        log "[ERROR] round $r: FAIL - dom0's updates-available is '${dom0_after_scan:-<empty>}' while the guest's own scan published ${_cnt:-0} actionable item(s): the admin was told there was work when there was none"
+        log "[ERROR] round $r: FAIL - dom0's updates-available is '${dom0_after_scan:-<empty>}' while the guest's own scan lists no offer dom0 is told about (Defender definitions, verified no-route offers and installed identities are left out): the admin was told there was work when there was none"
         log "  the guest's OWN status from that scan: ${_osc:-unreadable}  (kept at $RD/update-status-after-scan.json)"
         fails=1
       fi

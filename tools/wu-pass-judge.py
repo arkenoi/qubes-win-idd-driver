@@ -93,10 +93,9 @@ ERROR = re.compile(r"^(?:\[ERROR\]|ERROR:)\s*(.+)$")
 # check above is proven load-bearing against the real capture that it let through.
 ERROR_FRONT_ANCHORED_ONLY = re.compile(r"^ERROR:\s*(.+)$")
 # ONE [WARN] IS A FAILURE, AND IT IS THIS ONE. QWTUPDDEFCLASSNEW means a Defender SIGNATURE offer
-# came back without the classification is_definition keys on - Windows Update changed or multiplied
-# the GUID, definitions_offered undercounts, and the only thing that says why is this line. (Nothing
-# in the count depends on it since 2026-11-01 - every offer counts - but a changed classification is
-# a change in what Windows returns, and a run must say so rather than pass with a warning nobody reads.) A declared level that nothing acts on is just a tidier log, so it is judged here: the pass
+# came back without the classification the definition exclusion keys on - so the exclusion silently
+# stopped applying, dom0's flag goes back to oscillating, and the only thing that says why is this
+# line. A declared level that nothing acts on is just a tidier log, so it is judged here: the pass
 # did not "fail" in the sense of throwing, but the product behaviour dom0 depends on is broken and
 # a run must go red rather than pass with a warning nobody reads.
 DEFCLASSNEW = re.compile(r"QWTUPDDEFCLASSNEW\s+(.+)$")
@@ -310,10 +309,10 @@ def main():
     except OSError:
         pass
     for _d in defclass[:5]:
-        fails.append("DEFINITION CLASSIFICATION CHANGED (QWTUPDDEFCLASSNEW): %s - Windows Update "
-                     "no longer classifies this signature offer under the definition GUID is_definition "
-                     "keys on (definitions_offered undercounts; the count is unaffected). This needs the "
-                     "GUID checked against what Windows Update now returns, not a re-run" % _d[:240])
+        fails.append("DEFINITION CLASSIFICATION CHANGED (QWTUPDDEFCLASSNEW): %s - the Defender "
+                     "exclusion is not applying, so dom0's updates-available will oscillate again. "
+                     "This needs the GUID checked against what Windows Update now returns, not a "
+                     "re-run" % _d[:240])
     if len(defclass) > 5:
         fails.append("DEFINITION CLASSIFICATION CHANGED: %d further QWTUPDDEFCLASSNEW line(s) not "
                      "listed" % (len(defclass) - 5))
