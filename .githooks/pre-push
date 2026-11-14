@@ -79,6 +79,11 @@ subgate_timeout=${SUBGATE_FETCH_TIMEOUT:-20}
 declare -A subgate_fetch=()
 subgate_why=""
 
+# Git hands a hook the parent's GIT_DIR (githooks(5)); from a linked worktree it is absolute and overrides
+# `git -C <submodule>`, so every lookup below ran in the parent's object store and refused a pinned commit the
+# submodule clone holds. githooks(5)'s idiom for a foreign repository: clear the repository-local variables.
+subgate_git() { ( unset $(git rev-parse --local-env-vars); git -C "$@" ); }
+
 # <path> <sha> -> 0 reachable on the remote, 1 definitely NOT, 2 cannot tell.
 #
 # The reason goes into the GLOBAL subgate_why, never onto stdout. The first version returned it on
@@ -93,7 +98,7 @@ submodule_sha_on_remote() {
   # function then fetched the PARENT's remote and tested ancestry in the PARENT's object store, so a
   # fresh clone that had not run `submodule update --init` had every push refused with the wrong
   # diagnosis. The submodule's toplevel must BE this path.
-  sg_top=$(git -C "$p" rev-parse --show-toplevel 2>/dev/null)
+  sg_top=$(subgate_git "$p" rev-parse --show-toplevel 2>/dev/null)
   sg_want=$(cd "$p" 2>/dev/null && pwd -P)
   sg_have=""
   [ -n "$sg_top" ] && sg_have=$(cd "$sg_top" 2>/dev/null && pwd -P)
@@ -102,13 +107,13 @@ submodule_sha_on_remote() {
     return 2
   fi
   sg_r=origin
-  if ! git -C "$p" config --get "remote.$sg_r.url" >/dev/null 2>&1; then
+  if ! subgate_git "$p" config --get "remote.$sg_r.url" >/dev/null 2>&1; then
     subgate_why="it has no '$sg_r' remote, so the SHA cannot be checked against what CI will fetch"
     return 2
   fi
   if [ -z "${subgate_fetch[$p]:-}" ]; then
-    sg_err=$(GIT_TERMINAL_PROMPT=0 timeout "$subgate_timeout" \
-             git -C "$p" fetch --quiet --prune "$sg_r" 2>&1)
+    sg_err=$(unset $(git rev-parse --local-env-vars); GIT_TERMINAL_PROMPT=0 timeout "$subgate_timeout" \
+             git -C "$p" fetch --quiet --prune "$sg_r" 2>&1)   # timeout runs a program, not subgate_git
     case $? in
       0)   subgate_fetch[$p]=ok ;;
       124) subgate_fetch[$p]="its '$sg_r' remote did not answer within ${subgate_timeout}s" ;;
@@ -119,15 +124,15 @@ submodule_sha_on_remote() {
     subgate_why="${subgate_fetch[$p]}"
     return 2
   fi
-  if ! git -C "$p" cat-file -e "${sha}^{commit}" 2>/dev/null; then
+  if ! subgate_git "$p" cat-file -e "${sha}^{commit}" 2>/dev/null; then
     subgate_why="the pinned commit is not in the submodule clone even after fetching '$sg_r'"
     return 2
   fi
   while read -r sg_ref; do
     [ -n "$sg_ref" ] || continue
     # --is-ancestor is true for the tip itself, so a pinned ref tip passes here too.
-    git -C "$p" merge-base --is-ancestor "$sha" "$sg_ref" 2>/dev/null && return 0
-  done < <(git -C "$p" for-each-ref --format='%(refname)' "refs/remotes/$sg_r/")
+    subgate_git "$p" merge-base --is-ancestor "$sha" "$sg_ref" 2>/dev/null && return 0
+  done < <(subgate_git "$p" for-each-ref --format='%(refname)' "refs/remotes/$sg_r/")
   subgate_why="it is on no branch of '$sg_r'"
   return 1
 }
