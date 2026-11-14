@@ -476,7 +476,10 @@ is sent; §8 stands.
 it was registered with none, the agent logged QGADIRECTSUPPRESS at ERROR and told the user in dom0 "a window
 could not be shown". On a German 25H2 clone with every vCPU 95% taken, Explorer's own first paint came 18.7 s
 after it attached; the notice had gone out at 14 s and the window was correct from then on. The field
-reporter saw a message shortly after boot on 4.3.43.
+reporter's notice on 4.3.43 was true: it came for an installer window that then stayed missing
+(docs/GWECK-STATUS.md row 43); his message shortly after boot was the Windows Update one. On its own this
+decision would silence that fault: on the rig at 67% steal, an installer dialog that never got a frame went
+unreported. It ships only with the fix for that dialog.
 
 **Decision.**
 1. The user is told only of a definitive fault: the broker is down (past its launch grace, or a ready broker

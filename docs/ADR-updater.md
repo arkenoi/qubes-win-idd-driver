@@ -512,6 +512,9 @@ than looping); if the once-per-boot guard is seen to fire twice in the field; or
 state persist. Reporting it outside this project is the other live option, since this is Windows Update
 declining a proxy the system is handing it.
 
+**Reopened, 2026-11-14.** On the field reporter's 4.3.43 guest the state survived a full restart twice:
+findings/issues.md WU8024402CSURVIVESARESTART, docs/GWECK-STATUS.md row 47.
+
 ## 12. Architecture: who does what, and who may touch which process
 
 **Status:** ACCEPTED (owner, Jev), 2026-10-03, after the KB5007651 failure. Implemented in QWT-NG 4.3.33
