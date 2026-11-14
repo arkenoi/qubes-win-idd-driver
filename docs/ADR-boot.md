@@ -44,9 +44,10 @@ flowchart TD
 
 | § | decision | status | date |
 |---|---|---|---|
-| 1 | Work that reaches QEMU or Xen in a fresh domain's first minutes is serialized and paced | ACCEPTED (owner, Jev); the harness half WITHDRAWN (owner) | 2026-10-04 |
+| 1 | Work that reaches QEMU or Xen in a fresh domain's first minutes is serialized and paced | ACCEPTED (owner, Jev); the harness half WITHDRAWN (owner); rule 3 amended by §4 (owner) | 2026-10-04, 2026-11-14 |
 | 2 | The qrexec service opens only after stage 2's device work | ACCEPTED (owner, Jev); amended for 4.3.35: the updater deploy runs after the release | 2026-10-04, 2026-10-06 |
 | 3 | Stage 2 switches devices LIVE on a guest that is about to power off | PROPOSED (Jev); NOT BUILT - one measurement decides it | 2026-10-29 |
+| 4 | A dom0 call's ring unmap moves out of the console session's first minute | ACCEPTED (owner); the first version REJECTED (measured) | 2026-11-14 |
 
 Status words and the section format are defined in `docs/ADR-README.md`.
 
@@ -89,7 +90,9 @@ an emulated medium - our product never releases work all at once.
 2. Each step starts only when the previous step's completion has been OBSERVED. QWT's services after msiexec
    come up one by one, each after the previous one is running.
 3. Pacing means waiting for an observed completion. It never means a fixed sleep (owner: no pauses or timeouts
-   as a fix).
+   as a fix). **Amended 2026-11-14 (owner):** §4's ring hold is the one timed deferral allowed. It moves an unmap,
+   not a step, keeps each call's own spacing and takes the unmaps one at a time, so outside a shutdown nothing is
+   released at once.
 
 Jev: this rule 0.93; judging changes by their exposure alone 0.07.
 
@@ -309,5 +312,53 @@ alternative. It cannot be reached from the short cycle at all: the short cycle u
 golden by construction, and that is precisely what makes the measurement impossible.
 
 Until that measurement exists this section is not built, and §2 is unchanged.
+
+---
+
+## 4. A dom0 call's ring unmap moves out of the console session's first minute
+
+**Status:** ACCEPTED (owner), 2026-11-14. Offered "Amend ADR, redesign hold: you amend ADR-boot §1.3 to allow a timed
+deferral; I rebuild the hold to release one ring at a time after the session's first minute", the owner answered
+«look at freeze and amend ADR/redesign hold». The 60 s, the per-call shift and the turn are the agent's design under
+that order. Jev on this text: no verdict (revise 0.57, accept 0.42, under the floor); rule 2 removes the burst the
+first version was measured to make, except at a shutdown, 0.98.
+
+**Context.** A call from dom0 into the guest makes the guest map dom0's vchan ring, and the guest unmaps it when the call
+ends: a synchronous QEMU invalidate that drains all block I/O first (§2). From the campaign logs since 10-28, four of
+the five freezes came at the end of such a call, 0 to 21 s after the harness saw the post-install session come up
+(harness commit ca69c5a6). The calls are dom0's; the unmap at their end is ours.
+
+A first version (core-agent 918498b) held every such unmap until logon + 45 s. On a short cycle over the Win11 golden,
+ring closes in the first 45 s after the session arrived went from 2 of 9 (4.3.43) to 8 of 9 on the first boot after the
+upgrade, and stayed at 9 of 11 on the second. A reboot one second after the session arrived ended all seven holds, and
+the seven unmaps landed within 28 ms; in a boot that lives on, every hold ends at the same instant by construction. One
+release time for every held unmap is the synchronized release §1 names as the stall factor. REJECTED in that form
+(Jev 0.94).
+
+**Decision.**
+1. Only the guest's unmap of a dom0 call's ring is held: the wrapper's client role (`core-agent/src/qrexec-wrapper/
+   qrexec-wrapper.c`, `RingHoldPastLogon`). The guest's own outgoing calls only grant pages (§2), unmap nothing
+   foreign, and are not held.
+2. An unmap due within 60 s of the console session's logon waits exactly 60 s from that moment. Every held unmap moves
+   by the same amount, so the calls keep their own spacing. Then it takes its turn: held unmaps run one at a time,
+   each after the previous close has returned.
+3. A shutdown or stop ends the hold and the wait for the turn, and the unmap runs at once.
+4. At most 16 rings are held at a time. An unmap beyond that is not held, and its line says so.
+5. A held unmap logs one line after the close, outside the window: when it was unmapped relative to the logon, how
+   long it was held and waited for its turn, whether a stop ended the hold, and how long the close took.
+
+**Why.** The owner amended §1's rule 3 for this case. Nothing waits on the hold: the wrapper sends dom0 the exit code
+before the hold starts, and only the unmap moves. Rules 2 and 3 keep §1's rule 1 outside a shutdown: one unmap at a
+time, never released together.
+
+**Cost.** A held wrapper lives up to 60 s longer, plus its turn, with dom0's ring still mapped: at most 16 at a time.
+One log line per held unmap.
+
+**Evidence.** Seen to fail: the first version, above. Seen to pass: owed, from the short cycle of this build, read from
+rule 5's line.
+
+**Open.** A shutdown inside the minute still releases every hold at once (rule 3). In the measured short cycle the
+harness rebooted one second after the session arrived, so a short cycle's first boot after an upgrade can measure that
+case and not the hold. The freeze itself is QEMU's and is not fixed here.
 
 ---
