@@ -3137,6 +3137,9 @@ try {
   $relayOffset = if ($script:RelayLogPath -and (Test-Path $script:RelayLogPath)) { (Get-Item $script:RelayLogPath).Length } else { 0 }
 
   $avail = Get-Available
+  # A search that returned ends a proxy-state episode: the restart stamp goes, because WU-PROXYSTATE-REMEDY reads a stamp
+  # still present on a later boot as a restart that did not clear the state.
+  try { Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Qubes\Updates' -Name 'ProxyStateRestartAskedBoot', 'ProxyStateRestartUntilSearch' -EA SilentlyContinue } catch { }
   # TEST HOOK, same reasoning as the agent's SoloFaultInject: this guard only fires when a scan
   # finds nothing WHILE the transport was dropping fetches, and once Windows Update has cached
   # its metadata that state cannot be summoned on demand. QUBES_UPDATES_FAKE_EMPTY_SCAN=1 makes
@@ -3944,7 +3947,12 @@ try {
       $bootNow = $null
       try { $bootNow = (Get-CimInstance Win32_OperatingSystem -EA Stop).LastBootUpTime.ToUniversalTime().ToString('o') } catch { }
       $askedFor = $null
-      try { $askedFor = (Get-ItemProperty 'HKLM:\SOFTWARE\Qubes\Updates' -EA Stop).ProxyStateRestartAskedBoot } catch { }
+      $untilSearch = $null
+      try {
+        $stamp = Get-ItemProperty 'HKLM:\SOFTWARE\Qubes\Updates' -EA Stop
+        $askedFor = $stamp.ProxyStateRestartAskedBoot
+        $untilSearch = $stamp.ProxyStateRestartUntilSearch
+      } catch { }
       $remedy = ''
       if (-not $bootNow) {
         $remedy = ' A restart clears this state, but this pass could not read the boot time, so it is NOT requesting one.'
@@ -3957,9 +3965,18 @@ try {
         # claimed the remedy had failed when nothing had been tried.)
         $remedy = (' A restart was already requested for this in the current boot and has NOT been performed yet, so this pass ' +
                    'is not asking again - the request stands and the pass after the restart searches normally')
+      } elseif ($askedFor -and "$untilSearch" -eq '1') {
+        # THE RESTART HAPPENED AND DID NOT CLEAR IT. The stamp names an earlier boot, and a search that returns removes it
+        # (right after Get-Available in the scan), so finding it here means this guest has started again since the request
+        # and no search has succeeded in between. Asking again would be the reboot loop of the branch above, one boot apart.
+        # The stamp stays, so every later boot says this too, until a search succeeds. A stamp without the marker was written
+        # by a build that never removed it, so it proves nothing about a search and takes the request below.
+        $remedy = (' The restart requested for this on an earlier boot has happened and did NOT clear the state on this ' +
+                   'guest, so no further restart is requested')
       } else {
         try {
           if (-not (Test-Path 'HKLM:\SOFTWARE\Qubes\Updates')) { New-Item -Path 'HKLM:\SOFTWARE\Qubes\Updates' -Force | Out-Null }
+          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Qubes\Updates' -Name ProxyStateRestartUntilSearch -Value 1 -Type DWord
           Set-ItemProperty -Path 'HKLM:\SOFTWARE\Qubes\Updates' -Name ProxyStateRestartAskedBoot -Value $bootNow -Type String
           $script:St.reboot_needed = $true
           $remedy = ' A RESTART CLEARS THIS IMMEDIATELY (measured), so this pass requests one; the pass after the restart searches normally'
