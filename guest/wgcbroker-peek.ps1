@@ -103,7 +103,8 @@ for ($n = 0; $n -lt $Samples; $n++) {
     # ReqState/AckState are a 4-value enum (FREE/REQUESTED/ACTIVE/FAILED) and a window handle fits in
     # 32 bits here, so an impossible triple means the layout is wrong, not that the broker is broken.
     $rqS = RdI ($b+24); $akS = RdI ($b+56)
-    if ($hw -ne 0 -and ($hw -gt 0xFFFFFFFF -or $rqS -lt 0 -or $rqS -gt 3 -or $akS -lt 0 -or $akS -gt 3)) {
+    # 0xFFFFFFFFL, not 0xFFFFFFFF: PowerShell types the bare literal Int32, so it reads -1 and every handle exceeds it.
+    if ($hw -ne 0 -and ($hw -gt 0xFFFFFFFFL -or $rqS -lt 0 -or $rqS -gt 3 -or $akS -lt 0 -or $akS -gt 3)) {
       Write-Output ("S{0} slot{1} PEEK-MISALIGNED hwnd=0x{2:x} req={3} ack={4} - impossible for ABI {5}; `$STRIDE={6} is wrong, every slot after slot0 is garbage" -f $n,$i,$hw,$rqS,$akS,$WANT_ABI,$STRIDE)
       continue
     }
