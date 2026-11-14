@@ -1254,9 +1254,15 @@ if [ "$USER_INSTALL" = 1 ]; then qu_keep_msi_log; fi
 # and vetoes without a VIF subkey; first appearance fails problem 14) with the correct xenvif bound.
 _pvps="\$ErrorActionPreference='SilentlyContinue'; \$all = @(Get-PnpDevice); 'PVTOTAL {0}' -f \$all.Count; \$drv = @{}; foreach (\$sd in (Get-CimInstance Win32_PnPSignedDriver)) { if (\$sd.DeviceID) { \$drv[\$sd.DeviceID.ToUpper()] = \$sd.DriverVersion } }; foreach (\$d in (\$all | Where-Object { \$_.InstanceId -match 'XENBUS|XENVIF|XENCONS|XENIFACE|VEN_5853|DEV_VIF|DEV_CONS|DEV_IFACE' })) { \$v = (Get-PnpDeviceProperty -InstanceId \$d.InstanceId -KeyName 'DEVPKEY_Device_DriverVersion').Data; if (-not \$v) { \$v = \$drv[\$d.InstanceId.ToUpper()] }; if (-not \$v) { \$v = '-' }; \$pc = (Get-PnpDeviceProperty -InstanceId \$d.InstanceId -KeyName 'DEVPKEY_Device_ProblemCode').Data; if (\$null -eq \$pc) { \$pc = '-' }; 'PVDEV {0} prob={1} ver={2} {3} {4}' -f \$d.Status, \$pc, \$v, \$d.Class, \$d.InstanceId }; \$na = @(Get-NetAdapter); 'PVNETTOTAL {0}' -f \$na.Count; foreach (\$a in \$na) { 'PVNET {0} | {1}' -f \$a.Status, \$a.InterfaceDescription }"
 _pv=$(QTEST_VM=$SUBJECT timeout -k 5 120 ./tools/qtest run "powershell -NoProfile -Command \"$_pvps\"" 2>/dev/null | tr -d '\r' | grep -aE '^(PVDEV|PVNET|PVTOTAL|PVNETTOTAL) ' || true)
+# THE INSTALLER'S OWN RESULT, sliced after THIS run's marker, from the FULL guest log - fetched here,
+# ahead of the two readings below that need it and of section 6, which grades it. Not from the live
+# mirror: a user-path install powers the guest off right after its notice, and the mirror ends before
+# the RESULT line.
+grun "cmd /c type \"$GLOG\"" 120 | _shell_echo_strip > "$OUT/final.log"
+if grep -qa "$E2E_MARK" "$OUT/final.log"; then sed -n "/$E2E_MARK/,\$p" "$OUT/final.log" > "$OUT/final.cur"; else : > "$OUT/final.cur"; fi
 # WHICH ARM ACTUALLY RAN, from the installer's own RESULT and not from what we asked for.
 _want=${EXP_STAGE_PV_ONLY:-0}
-_got=$(grep -ao '"exp_stage_pv_only"[: ]*[a-z]*' "$OUT/install-mirror.log" 2>/dev/null | tail -1 | grep -o '[a-z]*$')
+_got=$(grep -ao '"exp_stage_pv_only"[: ]*[a-z]*' "$OUT/final.cur" 2>/dev/null | tail -1 | grep -o '[a-z]*$')
 case "${_want}:${_got}" in
   1:true|0:false) log "arm confirmed by the installer's RESULT: exp_stage_pv_only=$_got" ;;
   *:'')           log "[WARN] the RESULT did not carry exp_stage_pv_only - the arm is UNCONFIRMED (asked for $_want)" ;;
@@ -1272,7 +1278,7 @@ EOFPV
   # State the two readings separately, strongest first, so a later reader cannot merge them.
   # WHICH DRIVER IS BOUND, never merely whether a device is there. The expected version comes from
   # THIS run's own RESULT (idd_bound = <maj>.<min>.<pt>.<build>; the PV drivers ship as 9.1.0.<build>).
-  _bld=$(grep -ao '"idd_bound"[: ]*"[0-9.]*"' "$OUT/install-mirror.log" 2>/dev/null | tail -1 | grep -o '[0-9.]*"$' | tr -d '"')
+  _bld=$(grep -ao '"idd_bound"[: ]*"[0-9.]*"' "$OUT/final.cur" 2>/dev/null | tail -1 | grep -o '[0-9.]*"$' | tr -d '"')
   _want_ver=""; case "$_bld" in *.*.*.*) _want_ver="9.1.0.${_bld##*.}" ;; esac
   if [ -n "$_want_ver" ]; then log "  the package under test ships PV drivers as $_want_ver (from idd_bound=$_bld)"
   else log "  [WARN] could not derive the package's PV driver version from idd_bound - the rows below cannot be graded"; fi
@@ -1314,9 +1320,7 @@ fi
 qvm-device block detach "$SUBJECT" "$HOLDER:$LOOP" >/dev/null 2>&1 \
   && log "release ISO detached" || log "release ISO detach refused/no-op (the start-time attach dropped at the first shutdown)"
 
-# (a) installer's own RESULT, sliced after THIS run's marker, from the FULL log
-grun "cmd /c type \"$GLOG\"" 120 | _shell_echo_strip > "$OUT/final.log"
-if grep -qa "$E2E_MARK" "$OUT/final.log"; then sed -n "/$E2E_MARK/,\$p" "$OUT/final.log" > "$OUT/final.cur"; else : > "$OUT/final.cur"; fi
+# (a) installer's own RESULT - final.cur, fetched before the PV readout above
 j=$(grep -a '^=== RESULT === {' "$OUT/final.cur" | tail -1)
 if [ -z "$j" ]; then
   no "no installer RESULT trailer after the run marker - INVALID-INSTRUMENT (the install never concluded, or the log was not readable)"
