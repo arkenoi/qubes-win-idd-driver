@@ -68,9 +68,9 @@ HERE="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$HERE" || exit 1
 # the PV storage path is replaced. The disc stays attached in both arms - only WHO READS IT changes.
 #
 # --user-install: run install.cmd the way a person does - without /auto, autologon left alone - and
-# grade the dom0 notice the installer sends only on that path: "restart this qube", when the run
-# skipped the GUI agent's restart because a reboot is pending and the guest has no display path.
-# Without this flag every launch here passes /auto, and no harness executes that notice.
+# grade what the installer does only on that path when the run skipped the GUI agent's restart
+# because a reboot is pending: it tells dom0 that the qube shuts down and to start it again, then
+# powers the guest off. Without this flag every launch here passes /auto, and nothing executes that.
 STAGE_TO_C=0
 USER_INSTALL=0
 _args=(); for _a in "$@"; do case "$_a" in --stage-to-c) STAGE_TO_C=1 ;; --user-install) USER_INSTALL=1 ;; *) _args+=("$_a") ;; esac; done
@@ -1092,8 +1092,7 @@ case "$phase" in
   DEADLINE) finish 2 "DEADLINE: ${DEADLINE}s with no install conclusion - guest LEFT RUNNING as evidence ($OUT)" ;;
 esac
 
-# Only when the install actually concluded with a RESULT is there a complete log to keep.
-if [ "$phase" = RESULT ]; then
+qu_keep_msi_log(){
   # PRESERVE THE MSI VERBOSE LOG, WHOLE. The installer already runs msiexec with /l*v! to
   # C:\qwt-install.log; this harness kept only a 40-line TAIL, so no run here contains a single
   # DIFXAPP line - measured 2026-09-22 across 18 runs. That turned a comparison against matrix's
@@ -1101,6 +1100,7 @@ if [ "$phase" = RESULT ]; then
   # into MISSING DATA rather than a difference. Same fetch matrix.sh uses: encoded (escaped quotes
   # inside -Command fail silently) and boundary-marked, so a truncated transfer is detectable and
   # "no log" is distinguishable from broken quoting.
+  local _msips _b64
   _msips=$(printf '%s\n' \
     "\$ErrorActionPreference='Stop'" \
     "if (Test-Path 'C:/qwt-install.log') {" \
@@ -1127,7 +1127,10 @@ if [ "$phase" = RESULT ]; then
   else
     log "[WARN] could not fetch the MSI verbose log - kept $OUT/msi-b64.tmp for inspection"
   fi
-fi
+}
+# Only when the install actually concluded with a RESULT is there a complete log to keep. On the user
+# path the installer powers the guest off 2 s after its RESULT, so the log is kept after cold boot #2.
+if [ "$phase" = RESULT ] && [ "$USER_INSTALL" != 1 ]; then qu_keep_msi_log; fi
 
 # =============================================================================================
 # 5. TWO REAL COLD BOOTS - boot #1 runs on the emulated disk, boot #2 re-binds xenvbd
@@ -1222,8 +1225,12 @@ qu_coldboot(){ # $1=n
   esac
   log "cold boot #$n: session up"
 }
+# The user path's installer powers the guest off itself; this waits for that and asks nothing of the guest.
+SELF_HALTED=0
+[ "$USER_INSTALL" = 1 ] && w_halt "$SUBJECT" 120 "user-path self-poweroff" log && SELF_HALTED=1
 qu_coldboot 1
 qu_coldboot 2
+if [ "$USER_INSTALL" = 1 ]; then qu_keep_msi_log; fi
 
 # THE EXPERIMENT'S MEASUREMENT, taken after the boots that were supposed to do the binding.
 # Printed whichever arm ran, so the control run records the same fields and the two are comparable.
@@ -1342,6 +1349,12 @@ else
       '') no "user-path install: this run's installer log has no restart-notice line (gui_restored '${gr:-none}') - the notice never ran" ;;
       *) no "user-path install: the restart notice was NOT sent - ${rn##*restart-to-finish: }" ;;
     esac
+    po=$(grep -ac 'powering off in 2 s: this run was started by hand' "$OUT/final.cur")
+    if [ "$SELF_HALTED" = 1 ] && [ "$po" -gt 0 ]; then
+      ok "user-path install: the guest powered itself off after the notice"
+    else
+      no "user-path install: the guest did not power itself off after the notice (halted by itself: $SELF_HALTED, power-off lines in this run's log: $po)"
+    fi
   fi
   rpv=$(echo "$j" | grep -ao '"package_version":"[^"]*"' | head -1 | cut -d'"' -f4)
   if [ -n "$rpv" ]; then
