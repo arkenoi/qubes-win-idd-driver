@@ -196,11 +196,16 @@ cause our rig could not see: with UAC on, the desktop session runs on a filtered
 handoffs between our SYSTEM-side components and the session's helpers assumed that the session user
 could delete, replace or open what the other side had created. Notifications sent from SYSTEM arrived
 twice, the notification bridge was gone from the second boot on, an elevated process's notice waited
-for the next boot, and an informational notice arrived as an error. Also: a manual install says when
-it has finished, a notification queued behind another is no longer lost, an install made just after a
-boot no longer switches off the component-death notifications, the updater believes only a real
-answer from the Update Catalog, and the session helpers run at normal priority. Full story in
+for the next boot, and an informational notice arrived as an error. Also: a notification queued
+behind another is no longer lost, an install made just after a boot no longer switches off the
+component-death notifications, the updater believes only a real answer from the Update Catalog, and
+the session helpers run at normal priority. Full story in
 [`docs/RELEASE-NOTES-4.3.41.md`](docs/RELEASE-NOTES-4.3.41.md).
+**Correction:** 4.3.41 also said that a manual install says when it has finished. It did not, in
+4.3.41, 4.3.42 or 4.3.43: the notice failed before it was sent, so a manual upgrade still ended with
+no windows and nothing telling you to restart the qube. Measured on a German 25H2 clone installed by
+hand, and in a field reporter's install log. The fix is in the next release, measured sending the
+notice on the same clone.
 
 **What changed in 4.3.40 — one wait, four defects, three components.**
 Almost everything here is downstream of a single idiom: a sender blocked because the vchan write ring

@@ -71,6 +71,16 @@ when it cannot open a sender's pipe.
 
 ## 2. A manual install says that it has finished
 
+> **Correction, 2026-11-14: this did not work in 4.3.41, 4.3.42 or 4.3.43.** The notice failed before
+> it was sent. The installer runs under PowerShell strict mode, and the notification library it loads
+> read settings the installer had never set, which strict mode turns into an error. The install itself
+> completed, but a manual upgrade still ended with no windows and nothing telling you to restart the
+> qube. No test ran the installer by hand, so nothing caught it: every automated run passes `/auto`,
+> which skips this notice. Measured on a German 25H2 clone installed by hand, where 4.3.43 logged
+> `dom0 notification installer.restart-to-finish: failed: Die Variable "$script:QwtNotifyStateDir"
+> kann nicht abgerufen werden, weil sie nicht festgelegt wurde.` A field reporter's install log has
+> the same line. The fix is in the next release; on the same clone it was measured sending the notice.
+
 When an install needs a restart, the installer does not restart the GUI agent, and by then the
 emulated display adapter is already disabled: the qube shows a frozen window (fresh install) or no
 windows at all (upgrade) until it is restarted. Run by hand, the installer's "INSTALL COMPLETE" went

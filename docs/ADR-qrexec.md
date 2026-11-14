@@ -10,6 +10,16 @@ fix is small and needs no decision from the owner. A focused test then reproduce
 guest: two are gone in that build, one is not fixed (§3, §5). The other 32 are read from source only. Eleven
 of the fixes have no verdict from the judge; whether they ship is the owner's question (§7.8).
 
+**None of these fixes is in 4.3.44, and none is on main.** "The build for 4.3.44" below means
+build-4.3.44.1299 (winutils 41ab843, core-agent 47145b3). Its full acceptance failed on 2026-11-14: the
+win11-upgrade cell froze about 44 s into its first boot after the install, a vCPU held in Xen right after a
+ring unmap on a qrexec-wrapper thread - the device-model freeze of `docs/ADR-boot.md` §1. The owner chose to
+take 4.3.44 without these changes (build 1298). A review afterwards found two fixes that add work at the
+moments that freeze strikes - a new line at every agent start, and lines at a stop while a server-role
+wrapper waits for its data client - and two library paths that end in an unmap at process teardown.
+Bringing them back is the owner's call; the proposal is one at a time, each checked against that trigger
+and measured before the next.
+
 This record holds the rules those fixes follow. The fixes were built on the owner's order. The rules as
 written here are mine: they are PROPOSED until the owner has read them, and the questions at the end are the
 owner's.
