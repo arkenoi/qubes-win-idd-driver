@@ -354,11 +354,14 @@ time, never released together.
 **Cost.** A held wrapper lives up to 60 s longer, plus its turn, with dom0's ring still mapped: at most 16 at a time.
 One log line per held unmap.
 
-**Evidence.** Seen to fail: the first version, above. Seen to pass: owed, from the short cycle of this build, read from
-rule 5's line.
+**Evidence.** Seen to fail: the first version, above. Seen to pass: build 1303 (4708503) against build 1304, the same
+package without the hold, in four short cycles over the Win11 golden, read from rule 5's line and the wrapper's RINGPEER
+line. On the second boot after the upgrade, 9 and 10 unmaps fell in the first 60 s after logon without the hold; with
+it none did, every held unmap came 60.000-60.016 s late, no turn wait was longer than 0 ms, and neither side had two
+unmaps within 100 ms. All four cycles passed their 12 checks.
 
-**Open.** A shutdown inside the minute still releases every hold at once (rule 3). In the measured short cycle the
-harness rebooted one second after the session arrived, so a short cycle's first boot after an upgrade can measure that
-case and not the hold. The freeze itself is QEMU's and is not fixed here.
+**Open.** A shutdown inside the minute still releases every hold at once (rule 3). The harness reboots inside the
+minute on the first boot after an upgrade: both cycles with the hold released all seven within 100 ms, where the same
+calls without it unmapped at least 106 ms apart. The freeze itself is QEMU's and is not fixed here.
 
 ---
