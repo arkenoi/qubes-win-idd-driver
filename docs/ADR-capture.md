@@ -1152,3 +1152,25 @@ it as the default capture path means carrying a second architecture - staging bu
 lifecycle, input-desktop re-attach, ACCESS_LOST recovery - that exists only for window 0 and for
 guests below 26100. Demoting it to an on-demand window-0 engine is the shape that ports; keeping it
 as the capture path is the shape that does not.
+
+## 34. A frame dropped for size is served by one fresh session
+
+**Status:** ACCEPTED (Jev), 2026-11-14, broker (this commit). Jev: settled_reopen 0.78. The repeat rule below
+was chosen under the floor (stay_on_recreated_pool 0.55) - not a verdict. Proven on the rig: not yet.
+
+**Context.** FrameArrived drops a frame whose content size differs from the pool's, recreates the pool and
+publishes nothing, and a recreated pool delivers again only when the window changes. The agent's caption restyle
+grows a window right after registration, so a static dialog's only frame was the dropped one: on the German 25H2
+clone at 67% CPU steal the Open-Shell installer's dialog (495x387 to 499x389) stayed withheld 12 minutes, with
+`arrived=1 published=0 dropsize=1`, until a repaint (findings/issues.md SIZEDROPPEDFIRSTFRAMEWITHHOLDSWINDOW, field
+42717 #214/#216). It was 0/6 on 4.3.43 on the same path, where the broker's R2 rule reopened any session silent
+for 2 s - after the restyle, so at the final size (read from the code, not measured per run); a44bcefc limits R2
+to the ladder's own fresh session. A fresh session, opened as the broker's own user, delivered that static
+dialog's content at once, with no repaint.
+
+**Decision.** A plain-WGC channel that dropped a frame for size and has published nothing for 150 ms is
+reopened through Close/OpenChannel - the plain-WGC counterpart of the relay's re-open (`RelayOutgrown`), and
+event-driven like §32's closed-item reopen, not a liveness check. At most once per (agent request, dropped
+size): a window that drops again at that size stays on the recreated pool, which delivers on its next change.
+No RedrawWindow: an action on another program's window, and unmeasured from the broker's medium integrity
+against an elevated one. The reopen counts in `Reroutes`, next to `dropsize`; no ABI change.

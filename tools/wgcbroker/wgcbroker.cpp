@@ -160,6 +160,10 @@ struct Channel {
     // A visible window whose feed has been silent since it opened is one WGC is not serving.
     ULONGLONG openTick = 0;
     ULONGLONG lastArrivalTick = 0;
+    // A frame FrameArrived dropped for size with nothing published since: when (0 = none owed) and its content size.
+    // The recreated pool delivers the window at that size only when the window next changes; see SizeDropOwed.
+    ULONGLONG sizeDropTick = 0;
+    LONG      sizeDropW = 0, sizeDropH = 0;
     // ABI 10: the source-change test used before demoting a RELAY. A hash of the SOURCE window's
     // own pixels at the moment of the last demotion question, plus when it was taken, so the test
     // is throttled rather than run on every loop tick.
@@ -298,6 +302,18 @@ static volatile LONG g_closedGen[WGCBRK_MAX_SLOTS] = {};
 // item; a reopened item that is closed again before it delivered anything goes DEAF instead (no loop). Cleared with the
 // other per-registration flags.
 static bool      g_closedReopened[WGCBRK_MAX_SLOTS] = {};
+// A FRAME DROPPED FOR SIZE IS REPAIRED BY ONE REOPEN. FrameArrived recreates the pool at the window's new size and
+// publishes nothing, and a recreated pool delivers again only when the window changes: a window resized after its
+// session opened and then left alone - a dialog the agent's caption restyle grows right after registration - is never
+// published at its new size, and one with nothing published at all stays withheld (SIZEDROPPEDFIRSTFRAMEWITHHOLDSWINDOW).
+// A fresh session delivers the window's current content without a repaint. So a plain-WGC channel that dropped a frame
+// for size and has published nothing for RELAY_SIZE_SETTLE_MS is reopened through Close/OpenChannel, bounded as
+// RelayOutgrown is: the settle makes a drag-resize cost one reopen after it settles, and an (agent request, dropped size)
+// pair is reopened at most once - a window that drops again at that size stays on the recreated pool, which delivers on
+// its next change. These survive the close; cleared with the other per-registration flags.
+static LONG      g_sizeReopenCtl[WGCBRK_MAX_SLOTS] = {};
+static bool      g_sizeReopenValid[WGCBRK_MAX_SLOTS] = {};
+static LONG      g_sizeReopenW[WGCBRK_MAX_SLOTS] = {}, g_sizeReopenH[WGCBRK_MAX_SLOTS] = {};
 
 // RAII for g_pubCs. Both long regions below call C++/WinRT methods that THROW - frame.Surface() on a
 // closed frame is the obvious one - while sitting between a bare Enter and a bare Leave. A throw
@@ -1467,16 +1483,14 @@ static void OpenChannel(int i) {
                         ok = true;
                     } catch (...) {}
                     if (ok) g_slots[i].RecreateOk++; else g_slots[i].RecreateFail++;
-                    // BEHAVIOUR DELIBERATELY UNCHANGED HERE. A swallowed Recreate failure leaves
-                    // poolW/poolH stale, so every later frame mismatches and is dropped - a
-                    // permanent feed loss wearing an ACTIVE slot, and a real defect. It is NOT
-                    // fixed in this commit: this build exists to MEASURE which mechanism stops
-                    // the Settings feed, and a fix on the same path could alter or mask the very
-                    // state being measured (Jev, asked directly: should-have-been-separate 0.98,
-                    // against my own argument that they were separable). The counters above
-                    // record what happened; the fix lands once they have spoken.
+                    // Nothing reaches the agent at the new size until the window changes again, so this frame is
+                    // owed: Reconcile reopens a plain-WGC channel once the size has settled (g_sizeReopenCtl). That
+                    // reopen also repairs a swallowed Recreate failure, whose stale poolW/poolH drop every later frame.
+                    ch.sizeDropTick = GetTickCount64(); ch.sizeDropW = cs.Width; ch.sizeDropH = cs.Height;
+                    if (g_hWake) SetEvent(g_hWake);
                     return;
                 }
+                ch.sizeDropTick = 0;   // a frame at the pool's size reaches PublishFrame: no size drop is owed
                 g_slots[i].FramesPublished++;
                 PublishFrame(i, f);
             });
@@ -1663,6 +1677,20 @@ static bool RelayOutgrown(int i, const Channel& c, const WGCBRK_SLOT* s, SIZE* l
     return now - g_relaySeenTick[i] >= RELAY_SIZE_SETTLE_MS;                             // settled: re-open
 }
 
+// True when the plain-WGC channel on slot i dropped a frame for size, has published nothing since, that size has held
+// RELAY_SIZE_SETTLE_MS, and the channel was not reopened yet for this agent request and size (see g_sizeReopenCtl); *w and
+// *h get the size. A drop already answered for that request and size is cleared here, so it arms no deadline: the recreated
+// pool delivers on the window's next change. Under the slot's PubLock, because FrameArrived writes these fields under it.
+static bool SizeDropOwed(int i, const WGCBRK_SLOT* s, LONG* w, LONG* h) {
+    PubLock lk(i);
+    Channel& c = g_ch[i];
+    if (!c.sizeDropTick || GetTickCount64() - c.sizeDropTick < RELAY_SIZE_SETTLE_MS) return false;
+    if (g_sizeReopenValid[i] && g_sizeReopenCtl[i] == s->ControlSeq &&
+        c.sizeDropW == g_sizeReopenW[i] && c.sizeDropH == g_sizeReopenH[i]) { c.sizeDropTick = 0; return false; }
+    *w = c.sizeDropW; *h = c.sizeDropH;
+    return true;
+}
+
 // ONE SLOT'S CHANNEL OPEN MUST NOT MAKE ANOTHER SLOT'S REQUEST LOOK UNANSWERED (2026-10-07).
 //
 // Measured on 2026-10-01 (findings/issues.md P1; Jev: cause 0.92, this fix 0.97): an Explorer window registered on
@@ -1736,8 +1764,8 @@ static void Reconcile() {
             else if (!c.pokePendingSince)
                 c.pokePendingSince = nowP;                            // the first unanswered poke
         }
-        if (wantOpen && c.hwnd != want) { if (c.hwnd) CloseChannel(i); g_relayReopened[i] = false; g_wgcReopened[i] = false; g_closedReopened[i] = false; g_relaySizeCtlValid[i] = false; g_relaySeenTick[i] = 0; OpenChannel(i); }
-        else if (!wantOpen && c.hwnd)   { CloseChannel(i); g_relayReopened[i] = false; g_wgcReopened[i] = false; g_closedReopened[i] = false; g_relaySizeCtlValid[i] = false; g_relaySeenTick[i] = 0; }
+        if (wantOpen && c.hwnd != want) { if (c.hwnd) CloseChannel(i); g_relayReopened[i] = false; g_wgcReopened[i] = false; g_closedReopened[i] = false; g_relaySizeCtlValid[i] = false; g_relaySeenTick[i] = 0; g_sizeReopenValid[i] = false; OpenChannel(i); }
+        else if (!wantOpen && c.hwnd)   { CloseChannel(i); g_relayReopened[i] = false; g_wgcReopened[i] = false; g_closedReopened[i] = false; g_relaySizeCtlValid[i] = false; g_relaySeenTick[i] = 0; g_sizeReopenValid[i] = false; }
         // WINDOWS CLOSED THIS SESSION'S CAPTURE ITEM: reopen at once. Observed first (2026-09-30, Jev 0.96 observe-first) and
         // now measured: on 26100.1742 a UWP app's first item is closed as it launches - Settings (2026-09-30) and Calculator
         // (rz8, 2026-10-01: 3 frames, the splash, then ITEM closed=1) - and a closed item delivers nothing more, so the window
@@ -1760,6 +1788,17 @@ static void Reconcile() {
             g_relaySizeCtl[i] = ctl; g_relaySizeCtlValid[i] = true; g_relaySeenTick[i] = 0;
             g_relayReopenW[i] = live.cx; g_relayReopenH[i] = live.cy;
             g_forcePw[i] = true;                            // OpenChannel tries the relay where PrintWindow would be
+            OpenChannel(i);
+        }
+        // A FRAME DROPPED FOR SIZE, NOTHING PUBLISHED SINCE: one fresh session serves the window at its new size (see
+        // g_sizeReopenCtl). The plain-WGC counterpart of the relay re-open above, bounded the same way.
+        else if (LONG dw = 0, dh = 0; wantOpen && c.hwnd == want && !c.pw && !c.relay &&
+                 IsWindow(want) && IsWindowVisible(want) && !IsIconic(want) && SizeDropOwed(i, s, &dw, &dh)) {
+            g_slots[i].Reroutes++;                          // visible in the peek, next to dropsize
+            const LONG ctl = s->ControlSeq;
+            CloseChannel(i);                                // wipes the Channel - survivors are set after it
+            g_sizeReopenCtl[i] = ctl; g_sizeReopenW[i] = dw; g_sizeReopenH[i] = dh; g_sizeReopenValid[i] = true;
+            g_forcePw[i] = false;
             OpenChannel(i);
         }
         else if (wantOpen && c.hwnd == want && !c.pw &&
@@ -1859,6 +1898,8 @@ static void Reconcile() {
                     if (n.relay && n.srcHashSeen && n.srcHashTick + n.srcHashMs > due) due = n.srcHashTick + n.srcHashMs;
                     Due(due);
                 }
+                if (!n.relay && n.sizeDropTick)
+                    Due(n.sizeDropTick + RELAY_SIZE_SETTLE_MS);                                           // size drop
             }
             if (wantOpen && n.hwnd == want && n.relay && g_relaySeenTick[i])
                 Due(g_relaySeenTick[i] + RELAY_SIZE_SETTLE_MS);
