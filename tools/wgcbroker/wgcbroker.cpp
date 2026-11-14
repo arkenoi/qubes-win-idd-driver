@@ -1477,17 +1477,26 @@ static void OpenChannel(int i) {
                 ch.srcChangeStreak = 0;                  // a frame arrived: the run of "no frames" is broken
                 g_slots[i].LastContentW = cs.Width; g_slots[i].LastContentH = cs.Height;
                 g_slots[i].PoolW = ch.poolW;        g_slots[i].PoolH = ch.poolH;
-                if (cs.Width != ch.poolW || cs.Height != ch.poolH) {
+                // A frame rendered before a Recreate keeps that pool's surface size (the surface is always the pool's
+                // size; larger content is clipped to it), so its ContentSize can match the recreated pool while its
+                // surface cannot cover the card. It is a size drop too, not a publish: PublishCard would refuse it, and
+                // clearing sizeDropTick for it would leave a static window with no reopen. The pool is already the right
+                // size, so nothing is recreated: FramesDropSize above RecreateOk + RecreateFail counts these frames.
+                const auto sd = f.Surface().Description();
+                const bool poolMismatch = cs.Width != ch.poolW || cs.Height != ch.poolH;
+                if (poolMismatch || sd.Width < cs.Width || sd.Height < cs.Height) {
                     g_slots[i].FramesDropSize++;
                     ch.needWhole = true;                 // this arrival's regions never reach lastFull (rest-zero S1)
-                    bool ok = false;
-                    try {
-                        ch.pool.Recreate(g_rtDev,
-                            DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, cs);
-                        ch.poolW = cs.Width; ch.poolH = cs.Height;
-                        ok = true;
-                    } catch (...) {}
-                    if (ok) g_slots[i].RecreateOk++; else g_slots[i].RecreateFail++;
+                    if (poolMismatch) {
+                        bool ok = false;
+                        try {
+                            ch.pool.Recreate(g_rtDev,
+                                DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, cs);
+                            ch.poolW = cs.Width; ch.poolH = cs.Height;
+                            ok = true;
+                        } catch (...) {}
+                        if (ok) g_slots[i].RecreateOk++; else g_slots[i].RecreateFail++;
+                    }
                     // Nothing reaches the agent at the new size until the window changes again, so this frame is
                     // owed: Reconcile reopens a plain-WGC channel once the size has settled (g_sizeReopenCtl). That
                     // reopen also repairs a swallowed Recreate failure, whose stale poolW/poolH drop every later frame.
@@ -1495,7 +1504,7 @@ static void OpenChannel(int i) {
                     if (g_hWake) SetEvent(g_hWake);
                     return;
                 }
-                ch.sizeDropTick = 0;   // a frame at the pool's size reaches PublishFrame: no size drop is owed
+                ch.sizeDropTick = 0;   // a frame at the pool's size, on a surface that covers it, reaches PublishFrame
                 g_slots[i].FramesPublished++;
                 PublishFrame(i, f);
             });
