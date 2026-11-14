@@ -20,6 +20,7 @@ in `docs/DESIGN-*.md` and `docs/design/DESIGN-*.md` and in the code headers (sup
 | `ADR-updater.md` | the dom0-owned Windows update path (Track C): invariants, verification, install routes, process ownership, the installer's deploy | 13 |
 | `ADR-uac.md` | elevation prompts a user in dom0 can answer: the prompt moved off the secure desktop, the stand-in window, a prompt Windows did not raise, what may elevate at all | 10 |
 | `ADR-upstream.md` | upstream dependencies: which repositories we fork, which we clone at a pinned ref and patch, and the read-only mirror | 4 |
+| `ADR-qrexec.md` | qrexec in the guest (agent, trigger pipe, per-call wrapper): what a fix may ask of the device model, when calls from inside the qube are taken, how one failed call is contained, waits without a clock | 7 |
 
 ### Design docs (mechanisms, not decisions)
 
@@ -45,7 +46,7 @@ decision, and the section stays where its citations point (`docs/archive/README.
   guest), `ADR-supervision` §1 (every death is an ERROR and a dom0 notification), `ADR-capture` §32 (a deaf
   window is declared to the user), `ADR-toasts` §8 (a disabled classifier says so).
 - **Never a timeout as a fix; every wait is an observed condition.** `ADR-boot` §1 and §2, `ADR-updater` §4
-  and §12.3, `ADR-capture` §14.
+  and §12.3, `ADR-capture` §14, `ADR-qrexec` §4.
 - **Verify by effect, by pixels, with the defect seen first.** `ADR-updater` §3 and §9; every section's
   "Evidence" part.
 - **Nothing of ours is killed or adopted by name.** `ADR-updater` §12.4, `ADR-supervision` §4.

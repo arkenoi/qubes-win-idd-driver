@@ -3,7 +3,9 @@
 Status: REPORT (2026-11-10). Owner asked for this audit, and then for the report to be committed on its
 own, apart from the issue register (`findings/issues.md`). It is a report only: no source file was
 changed, nothing in it was measured on a guest, and as of that date nothing in it is fixed or entered in
-the register.
+the register. **Section 1.6, added 2026-11-14, records what was changed for release 4.3.44 and which
+candidates were reproduced on a guest since.** Every other section is the report as it was written, and its
+line numbers are those of the audited commits.
 
 Audited at `winutils` c09bfc6 (fork base tag `R4.3.0`), `core-agent` 6013dff (fork base tag
 `mm_a75b5e10`), parent repo 3d23fe6e. Linux reference: `upstream/ro/qubes-core-qrexec` at fa04483.
@@ -29,7 +31,8 @@ unbounded waits.
 - **21 have no verdict.** The judge's confidence stayed under its floor of 0.70 on both asks. That means
   not confirmed and not refuted: in none of the 21 did "the code prevents this" or "the claim misreads
   the source" reach the floor either.
-- **None was reproduced on a guest. Four have a trace in real data.** The one recorded crash of the
+- **None was reproduced on a guest. Four have a trace in real data.** [Since then three were: section
+  1.6.] The one recorded crash of the
   agent service (2026-10-14, closed in the register as QREXECAGENTAV) fits #9 step for step, and the
   cause it points at is still in the code: the fix that shipped guards the crash, not the early free
   behind it. The thread kill behind #11 is logged four times in captured qubesdb-daemon logs, the
@@ -90,6 +93,9 @@ worth your attention are in section 5.3:
 
 ### 1.4 What I would fix first (none of this is started)
 
+[The state on 2026-11-10. What was built of items 1 to 6 for release 4.3.44, and what was left: section
+1.6. Items 7 and 8 are untouched.]
+
 1. Open the trigger pipe only after the control channel is connected and the hello has been sent, as
    Linux does. Removes #16 and #6. Small.
 2. Make a failed call fail that call only: a failed launch (#3), a full table (190c190) and an unknown
@@ -118,6 +124,136 @@ The captured logs I searched come from harness runs, and several of the lines th
 defects are written at DEBUG or were demoted by the fork, so "0 occurrences" is weak evidence. Section 8
 has the full list of limits. One recorded wrapper crash (2026-10-09, section 7.9) turned up in the
 log search and I did not explain it.
+
+### 1.6 What was done about each one for release 4.3.44 (2026-11-14)
+
+You ordered the findings fixed, with one instruction: "when implementing the qrexec fixes, keep in mind
+circumventing the quemu bug we are aware of". The rules the fixes follow are in `docs/ADR-qrexec.md`.
+The code is `winutils` 41ab843 and `core-agent` 47145b3.
+
+**How.** For each source file one reader wrote the edits and a second tried to break them. Code checked
+that every edit's anchor and every objection's quote exist in the file. The judge then scored each fix
+on its edits and the objections: does it fix the candidate, does it introduce a defect, does it keep to
+the device-model rule (`ADR-qrexec` §1), and what should be done with it. Its floor is 0.70, and under
+it there is no verdict. I applied the edits myself. Only small fixes were taken: an edit that needs a
+new thread, a new lock, a protocol change or your decision was left, with its design below.
+
+Three fixes were first written with a time limit or a counted retry. The standing rule forbids a clock
+as a fix (`ADR-qrexec` §4), so I rewrote #20, #22 and #8 without one, asked the judge again, and had a
+second reader try to break the rewritten text. That reader returned no defect. It is a reading.
+
+**What is measured.** The audit reproduced no candidate. The focused test of the fixes (2026-11-14) ran two
+reproducers on one guest type, a clone of the same Windows 11 25H2 golden upgraded once to the package
+before the fixes (parent 797b6e58) and once to the package that carries them (build-4.3.44.1299). The two
+packages differ by the two submodule commits only.
+
+| # | stimulus | before the fixes | with the fixes |
+|---|---|---|---|
+| 1 | a piped call whose command is `exit 7`, followed by 4,000,000 bytes of input | the caller gets 232 | the caller gets 7; the wrapper logs the one failed write |
+| 12 | a caller opens the trigger pipe and leaves before the server has written the second pipe's name | one error line; the next call made inside the qube hangs | twenty such callers, twenty error lines; the next call is served |
+| 10 | a caller takes that name and leaves without opening the second pipe | nothing is logged; the next call hangs | the same. Not fixed |
+
+Each run began with its control: the command alone returned 7, and a call made inside the qube before the
+stimulus was served. #1 and #12 failed the same way on a second guest with the package before the fixes, a
+German Windows 11 template. The "before" answer of #10 comes from that guest alone. The other 32
+candidates stay read from source.
+
+The same test on the build with the fixes, over an upgrade and three boots: the agent logged its hello line
+once per boot and served the calls made inside the qube that followed (5); the qubesdb daemon served 30
+connections; no log holds an "open write pipe" line; the agent's log holds no error or warning line; and
+three calls from another qube each saw its name in `QREXEC_REMOTE_DOMAIN`. The log sweep's breaches are one
+burst: twelve error lines of the qubesdb client while the installer has the old daemon stopped. The pipe
+code on both ends of it was the golden's (4.3.35), it is in 15 of this upgrade's 17 runs since 2026-10-28,
+and the acceptance cells declare it.
+
+One probe on Windows 11 25H2 (build 26200.9974), on pipes of its own, measured what the pipe-server fixes
+rest on:
+
+- `ConnectNamedPipe` answers 232 (`ERROR_NO_DATA`) for a client that has opened the instance and closed
+  it again, with or without having written;
+- a read on such an inbound instance still returns what the client wrote, and then answers 109;
+- a write to such an outbound instance answers 232;
+- `CancelIoEx` on a handle ends another thread's blocking read with 995, and answers 1168 when no read
+  is in flight;
+- opening a pipe name nobody created answers 2.
+
+Owed: the acceptance of that build.
+
+**Fixed, with the judge at or above its floor.**
+
+| # | what changed | judge |
+|---|---|---|
+| 190c190 | a full connection table is logged and the loop goes on; the wrapper serves its call untracked | apply with a correction 0.98; the correction is applied |
+| 3 | a wrapper that cannot be started fails that call only (agent side; `exec.c` needed no change) | apply with a correction 0.90; applied |
+| 9 | the host's reference exists before the client is published; the client is not touched after the connect callback | apply 0.76 |
+| 27 | the disconnect flag is tested and set in one step | apply 0.81 |
+| 28 | the lookup takes its reference under the list lock | apply 0.84 |
+| 11 | NARROWED. A disconnect cancels the workers' pipe I/O by handle, so a blocked reader or writer ends by itself. The kill after 100 ms stays | apply with a correction 0.71 (fixes the candidate: 0.27) |
+| 7.4 | a pipe server that cannot be created ends the service with the error, so that it is restarted | apply 0.81 |
+| 7.5 | `QREXEC_REMOTE_DOMAIN` is removed from the agent's environment after each launch | apply 0.70 |
+| 7.7 | a log line longer than the buffer is cut instead of ending the process | apply with a correction 0.92; applied |
+| 7.8 | the comment at `log.c:506` now says what the code does | apply 0.92 |
+
+**Fixed with no verdict, on my own reading of the code.** Whether these ship in 4.3.44 is your question:
+`ADR-qrexec` §7.8.
+
+| # | what changed | judge |
+|---|---|---|
+| 16, 6 | the trigger pipe's accept thread is created suspended and resumed when the hello is in the ring | apply 0.64 |
+| 7.3 | the pipe client is released on every path of its thread | apply 0.68 |
+| 12 | the accept loop drops the one client whose step fails and goes on; both pipe creations are checked | apply 0.63. Seen to fail before it and to pass with it (above) |
+| 34 | a client that has already closed counts as connected, on both pipes | apply 0.23 |
+| 2 | `QpsRead` samples the disconnect flag before it looks at the queue | apply 0.22 |
+| 20 | the reader thread takes only what the queue has room for and waits for room without a limit; `QpsRead` takes the queue piece by piece, so a request may exceed it | this form: no option reached 0.30. With a count on the wait: apply with a correction 0.82 |
+| 22 | the client opens the second pipe once; the server creates it before it sends its name | this form: insufficient 0.32, apply 0.30. With a counted retry: apply 0.76 |
+| 1 | a failed write to the child's stdin closes stdin and the loop goes on to the child's exit; later input is discarded | apply 0.20. Seen to fail before it and to pass with it (above) |
+| 4 | the 120 s drain after the child's exit starts again while output is still moving | apply 0.40 |
+| 8 | a stop request ends the server's wait for its data client, and the wrapper closes its vchan itself | this form: apply in part 0.59. With the 120 s limit, which also closed #5: apply with a correction 0.63 |
+| 26 | the loop with no local program reads a closed vchan to its end; the call succeeded when the peer's exit code arrived | apply 0.66 |
+
+**What the fixes leave, as the second reader and I read it.**
+
+- #11. The kill now reaches a reader in two cases only: its way out takes longer than 100 ms, or it
+  looked at the flag just before the flag was set and then started a read. Before, the kill reached
+  every reader that was blocked in a read, and that reader held no lock. A reader on its way out can
+  hold the list lock for a few instructions. The form with no kill waits for the reader's end without a
+  limit and cancels again on each look; it trades the kill for a stop that can hang, and was not built.
+- #20. A host that neither reads nor disconnects a client now holds that client's writer in its write
+  once the queue is full; before, the overflow dropped the client. Both hosts get there only when they
+  cannot create the client's thread (`qrexec-agent.c` `ClientConnectedCallback`, the stock daemon's
+  `client_connected_callback`). The wait for room is a 10 ms look; an event set by `QpsRead` would be
+  the push form.
+- #22. The 10 ms pause after a successful open is inherited and kept.
+- #16. A caller that arrives before dom0's daemon has connected now gets "not found" where it got exit
+  code 0 and no call.
+
+**Not fixed.**
+
+| # | why, and what it would take |
+|---|---|
+| 5 | needs the wait for the data client to end by itself. Linux ends it after 120 s; the standing rule forbids that. Your question, `ADR-qrexec` §7.3 |
+| 10 | reproduced on both builds (above). The edit written was a counted look before the second connect; the judge said drop (0.23). The form that ends needs an overlapped connect that also waits on the first pipe closing; a client that stays and never opens the second pipe holds the loop until clients are accepted concurrently |
+| 13 | edit written: a reply that names no pending request is logged and the loop goes on. Judge: apply in part 0.42, fixes the candidate 0.15. Not applied. The other half, ids that restart at 1, was left as unshown |
+| 19 | edit written: a 10 s limit on the event loop's wait, served as a wake. It is a clock, and the judge said apply in part 0.52 (fixes 0.26). Not applied. The cause is a non-atomic OR in the vchan library, kept harmless by the one-CPU pin |
+| 30 | edit written: the payload is created suspended, given the full CPU mask, then resumed. Judge: apply in part 0.53 (fixes 0.38): the SYSTEM-token path is created inside `exec.c` and stays as it is. Not applied |
+| 29 | edit written: the service context outlives the control dispatcher. Judge: apply 0.27, introduces a defect 0.67. Not applied |
+| 35, 7.8 `LogLock` | edit written: the logger's lock is created by the first call at any level, and the start runs under it. Judge: 0.27 and 0.62. Not applied |
+| 7 | the send wait needs "the service is stopping" as an exit, and the stop event is closed by `service.c` while senders can still wait on it. Linux has the same shape |
+| 14 | belongs in the vchan library: wait on the xenstore watch for the server's entry, then connect once. A retry of the connect in the wrapper is what `ADR-qrexec` §1 forbids |
+| 15 | stdin as an overlapped pipe whose write is one more object in the loop's wait, with reads from the vchan held back while it is pending. Four functions |
+| 17 | the retry sits in the library's `VchanInitServer`; it needs xeniface to vanish between two calls |
+| 18, 21 | keep serving the vchan after the local program has exited, until the remote's exit code or its close. Needs an end of its own, because the library's check for a dead peer is a stub, and has no consumer until item 7 of 1.4 is decided |
+| 23 | after 18 and 21: in the client role, do not launch when the vchan has closed during the logon wait |
+| 24 | an accept loop that waits on a stop event and is joined, not killed. The same rebuild as #10 |
+| 25 | one lookup of session and token, handed from the wait to the launch. It settles which account runs: section 7.1 |
+| 31, 33 | who may open and who may serve these pipes is the descriptor in `exec.c`: your decision |
+| 32 | a flag for "the peer is gone", so that the writer flushes once on a disconnect the host asked for. It touches the stop path of the stock qubesdb daemon |
+| 7.2 | a non-zero status on a daemon disconnect would have the service restarted. The code keeps 0 on purpose, and each restart opens the control channel again |
+| 7.9 | not explained by the wrapper's source. The reader suspects the grant-map request's `OVERLAPPED` on the stack in xencontrol; unproven |
+| item 7 of 1.4, 7.1 | yours; no edit touches either |
+
+Read again and left as they are: #3's `exec.c` half, 7.6 (the three pipe ends are the only inheritable
+handles by convention, not by enforcement) and the pid note of 7.8.
 
 ## 2. How to read this
 
@@ -658,6 +794,8 @@ Jev: real possible_as_shown 0.72 | impact NO VERDICT (internal_only 0.33, re-ask
 diverges_from_reference 0.88.
 
 ## 4. All 35 candidates in one table
+
+[What was done about each one for release 4.3.44, and which were reproduced on a guest: section 1.6.]
 
 Generated by script from the candidate files and the Jev answers. "found by" names the finder unit and
 round (`r1`, `r2`, `rmain` for the two I added); "merged" counts claims at the same site and class that
