@@ -156,8 +156,7 @@ done
 # ---- THE SIGNATURE WATCHER. A declared level that nothing acts on is just a tidier log, so the
 # judge must FAIL a pass whose log carries QWTUPDDEFCLASSNEW: the Defender exclusion has silently
 # stopped applying and dom0's flag will oscillate again. The line is VERBATIM what the product
-# emits - taken from tools/tests/wu-definition-class-test.ps1 running the shipped region, not
-# written out by hand here.
+# emits for those arguments (guest/qubes-windows-update.ps1, region WU-DEFINITION-CLASS-WATCH).
 WATCHLINE='[WARN] QWTUPDDEFCLASSNEW KB2267602 is a signature offer but Windows Update classifies it as [aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb], not e0789628-ce08-4437-be74-2495b842f43b - the definition exclusion is NOT applying to it, dom0 will keep seeing it, and the classification GUID has changed or there is more than one.'
 { head -3 "$D/healthy.log"; printf '12:39:00 %s\n' "$WATCHLINE"; tail -3 "$D/healthy.log"; } > "$D/defclass.log"
 r=$(judge "$D/defclass.log")

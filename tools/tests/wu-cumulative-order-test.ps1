@@ -5,7 +5,7 @@
 # after the cumulative's DISM call), WU-CUMULATIVE-REGISTERED (Test-RollupRegistered) and WU-MSU-VERDICT (Get-MsuKbVerdict). DISM, the
 # CBS settle, the package list and RebootPending are stood in by fakes that record the order they ran in; the package-list fake answers
 # by STATE (what Windows would show at that moment), so a read skipped or moved by a knob is seen as such. The agent route and the
-# drivers are not here: they run inline in the offer loop as before, and tools/tests/wu-notactionable-test.ps1 replays that region.
+# drivers are not here: they run inline in the offer loop as before.
 #
 # WHY (2026-10-03/04, the reporter's German 25H2 template, 4.3.33, four fresh clones): in offer order .NET stages first and the shipped
 # one-package rule defers the cumulative to a second restart; with that rule lifted (QUBES_UPDATES_ALLOW_MULTISTAGE=1) a cumulative

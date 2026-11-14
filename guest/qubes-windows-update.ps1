@@ -231,7 +231,6 @@ $script:St = [ordered]@{ action=$Action; phase='init'; ts=$null; owner_pid=0; ow
 #   - a pass that ended REBOOT-PENDING never debounces the scan that follows it (see inside).
 #   - a skip is a line in the pass log. The region sits below Log for that: the scan task runs under
 #     Task Scheduler, which discards Write-Host. Nothing above this point saves or takes the mutex.
-# The marker lines delimit the region tools/tests/wu-reboot-report-test.ps1 extracts and replays.
 # ---- WU-SCAN-DEBOUNCE-BEGIN
 if ($Scheduled -and $Action -eq 'scan') {
     $debounceMin = 30
@@ -1110,37 +1109,32 @@ function Get-SecurityPlatformState {
 }
 # ---- WU-SECPLATFORM-READ-END
 
-# ---- WU-DEFINITION-CLASS-BEGIN   (tools/tests/wu-definition-class-test.ps1 runs this region)
-# DEFINITION UPDATES ARE IDENTIFIED STRUCTURALLY, NEVER BY TITLE. The field runs a German edition and
-# ADR section 6 forbids title text as an identity - "Definition Update for Microsoft Defender
-# Antivirus" is "Definitionsupdate fuer Microsoft Defender Antivirus" there, and a substring match
-# would silently stop excluding anything the day a locale or a product name changed.
+# ---- WU-DEFINITION-CLASS-BEGIN   (tools/tests/wu-available-test.ps1 loads this region)
+# A DEFENDER DEFINITION UPDATE IS IDENTIFIED BY WINDOWS UPDATE'S CLASSIFICATION, never by title and
+# not by KB number (ADR-updater section 2 point 6). A title is locale-dependent - "Definition Update
+# for Microsoft Defender Antivirus" is "Definitionsupdate fuer Microsoft Defender Antivirus" on a
+# German edition - and a KB number is Microsoft's to change.
 #
 # WU classifies every offer, and "Definition Updates" is a FIXED classification GUID,
 # e0789628-ce08-4437-be74-2495b842f43b, exposed in Categories as a category whose Type is
-# 'UpdateClassification'. It is the same field WU itself groups by, it is locale-independent, and it
-# is structured data straight off the COM object.
+# 'UpdateClassification'. It is the same field WU itself groups by and it is locale-independent.
 #
-# IT SEPARATES THE TWO DEFENDER THINGS, which neither a KB nor a title can: the daily signature
-# definitions carry this classification, while the Defender PLATFORM / antimalware engine updates are
-# classified as ordinary Updates. The engine updates are real servicing work and must keep counting.
+# THE CLASSIFICATION IS WIDER THAN THE SIGNATURES: Windows Update files the Defender antimalware
+# platform update (KB4052623) and the Windows Security platform update (KB5007651) under it too, so
+# they leave the number dom0 is told together with the signatures.
 #
 # UNREADABLE CATEGORIES MEAN "NOT A DEFINITION", deliberately: the failure direction is that an offer
 # still counts. An exclusion that swallows an update it could not classify would hide real servicing
-# work, which is the defect this project keeps paying for.
+# work.
 #
-# THE GUID IS DISCLOSED, NOT ASSERTED. The target value above has never been read off a live
-# IUpdate: the probe that proved this MECHANISM (German 25H2, as SYSTEM) ran against an offline
-# metadata cache that had no definition pending, so it returned Security Updates and Drivers and
-# could not answer the one question. Rather than leave the constant unfalsifiable, the extractor
-# returns the classifications it SAW, every offer row carries them, and the exclusion names them in
-# the log - so the next real pass that is offered KB2267602 settles it as DATA, in evidence dom0
-# already collects, instead of by anyone re-reading this comment. See WUDEFINITIONGUIDUNCONFIRMED.
+# THE GUID IS DISCLOSED, NOT ASSERTED: the extractor returns the classifications it saw, every offer
+# row carries them, and the exclusion names them in the log, so every pass that is offered a
+# definition shows as data what Windows Update returned.
 $script:WU_DEFINITION_CLASS = 'e0789628-ce08-4437-be74-2495b842f43b'
-# THE SIGNATURE OFFERS, BY KB. Used only to WATCH the classification, never to classify: KB is an
-# identifier off the COM object (KBArticleIDs), not title text, so ADR section 6 stands. The
-# platform/engine update is deliberately NOT here - KB4052623 is ordinary servicing and must keep
-# counting, and a watcher that fired on it would cry wolf every month until it was ignored.
+# THE SIGNATURE OFFERS, BY KB. Used only to WATCH the classification, never to classify: the watcher
+# reports a signature offer that arrives without it. Only the signatures are watched - they are the
+# offers republished several times a day, so they are what brings dom0's flag back the day the GUID
+# stops matching.
 $script:WU_SIGNATURE_KBS = @('KB2267602', 'KB2310138')
 function Get-WuClassifications($u){
   $ids=@()
@@ -1168,12 +1162,12 @@ function Test-WuDefinitionUpdate($u){
 # ---- WU-DEFINITION-CLASS-END
 
 # A DEFENDER DEFINITION NEVER COUNTS TOWARD dom0's updates-available (ADR-updater section 2 point 6), at all three places dom0
-# is told a number: the scan, the reboot-pending report and the post-install rescan. An offer carries is_definition (Windows
-# Update's own classification, Test-WuDefinitionUpdate); a result row is matched to this pass's offers by its route key. An
-# offer whose classification could not be read is not a definition, so it counts.
+# is told a number: the scan, the reboot-pending report and the post-install rescan. An offer carries is_definition
+# (Test-WuDefinitionUpdate) and answers for itself: one whose classification could not be read is not a definition, so it
+# counts. A result row carries no is_definition and is matched to this pass's offers by its route key.
 function Test-DefinitionOffer($r){
   if (-not $r) { return $false }
-  if ((Test-RowKey $r 'is_definition') -and $r.is_definition) { return $true }
+  if (Test-RowKey $r 'is_definition') { return [bool]$r.is_definition }
   $k = Get-OfferRouteKey $r
   if (-not $k) { return $false }
   return [bool](@($script:St.available | Where-Object { $_ -and (Test-RowKey $_ 'is_definition') -and $_.is_definition -and ((Get-OfferRouteKey $_) -eq $k) }).Count)
@@ -3196,21 +3190,17 @@ try {
   # ---- WU-DEFINITION-CLASS-WATCH-BEGIN
   # A WRONG OR CHANGED GUID FAILS IN SILENCE. That is the one weakness of the fail-safe direction:
   # if Microsoft ever classifies signatures under a different GUID, or adds a second one, nothing
-  # matches, is_definition is false and definitions_offered undercounts, and NOTHING IN THE LOG SAYS
-  # WHY - the next reader would be debugging dom0's flag with no idea the classifier had stopped
-  # matching. The constant is also still unconfirmed against a live object
-  # (WUDEFINITIONGUIDUNCONFIRMED), so this watcher is what turns "wrong GUID" from an invisible
-  # no-op into a named line.
+  # matches, nothing is excluded, dom0's flag goes back to rising with every republished signature,
+  # and NOTHING IN THE LOG SAYS WHY - the next reader would be debugging dom0's flag with no idea
+  # the classifier had stopped matching. This watcher turns "wrong GUID" from an invisible no-op
+  # into a named line.
   #
-  # IT DOES NOT CHANGE A DECISION. It only reports; every offer counts regardless (ADR-updater section 2 point 2).
+  # IT DOES NOT CHANGE A DECISION. It only reports: a signature offer that is not classified as a
+  # definition still counts (ADR-updater section 2 point 6).
   #
-  # THE [WARN] IS IN THE MESSAGE, not passed as Log's level, and that is deliberate even though
-  # Log now honours a level (it silently dropped one until the commit that added this watcher).
-  # This exact line is asserted verbatim in two places - the offline suite reads it out of the
-  # shipped region, and tools/wu-pass-judge.py's fixture is that printed text - so its declaration
-  # must not depend on a second mechanism continuing to behave. A line whose level came from
-  # elsewhere is a line that can lose its level somewhere else, which is the defect this same
-  # commit fixes.
+  # THE [WARN] IS IN THE MESSAGE, not passed as Log's level, so the line's declaration does not
+  # depend on a second mechanism continuing to behave: tools/wu-pass-judge.py fails a pass on this
+  # line, and a line whose level came from elsewhere can lose its level somewhere else.
   $anom = @()
   foreach ($r in $avail) {
     if ($script:WU_SIGNATURE_KBS -notcontains $r.kb) { continue }
@@ -3218,9 +3208,9 @@ try {
     $seen = @($r.classifications)
     $anom += ($r.kb + '[' + ($seen -join ' ') + ']')
     if ($seen.Count -eq 0) {
-      Log ("[WARN] QWTUPDDEFCLASSNEW {0} is a signature offer carrying NO readable UpdateClassification, so is_definition is false for it - its categories were absent or threw (every offer counts regardless)." -f $r.kb)
+      Log ("[WARN] QWTUPDDEFCLASSNEW {0} is a signature offer carrying NO readable UpdateClassification, so it is COUNTED and not excluded - its categories were absent or threw." -f $r.kb)
     } else {
-      Log ("[WARN] QWTUPDDEFCLASSNEW {0} is a signature offer but Windows Update classifies it as [{1}], not {2} - is_definition is false for it and definitions_offered undercounts; the classification GUID has changed or there is more than one." -f $r.kb, ($seen -join ' '), $script:WU_DEFINITION_CLASS)
+      Log ("[WARN] QWTUPDDEFCLASSNEW {0} is a signature offer but Windows Update classifies it as [{1}], not {2} - the definition exclusion is NOT applying to it, dom0 will keep seeing it, and the classification GUID has changed or there is more than one." -f $r.kb, ($seen -join ' '), $script:WU_DEFINITION_CLASS)
     }
   }
   $script:St.definition_class_anomalies = @($anom)
@@ -3607,7 +3597,7 @@ try {
             # monolithic package and the shipped resolver picks it. It holds for KB5071959, which is
             # the ESU phantom OOB the owner parked, and that is the class this branch was written
             # around. What actually hid KB5101684 from the reporter was the scan COUNT, not this
-            # branch (GUARD:truecount, above).
+            # branch (WU-SCAN-COUNT, above).
             $script:WuOnlyExpressKbs += $u.kb
             Log "$($u.kb): published only as Delivery-Optimization express/UUP streams and absent from the Catalog - the route gate after the loop decides (the Windows Update installer on a routed guest, an informational row on a routeless one)"
             continue
@@ -3778,7 +3768,7 @@ try {
       # Measured 2026-09-21 on win11de-ctld, GWeck's environment: KB5129195 came back
       # `ok=true state=staged` with reboot_needed=true and this path reported 0 to dom0, which then
       # showed the template as up to date - the ORIGINAL field report, surviving in a THIRD code
-      # path after GUARD:rowkey fixed it here and GUARD:stagedpending fixed it in the post-install
+      # path after the Test-RowKey predicate fixed it here and GUARD:stagedpending fixed it in the post-install
       # rescan. The oscillation check caught it independently: dom0 '<empty>' after the pass and
       # '1' after the very next scan. (# GUARD:stagedpending, reboot-pending half.)
       # AN INFORMATIONAL ROW STILL COUNTS (ADR-updater section 2 point 2) unless this pass's route proof verified its offer has

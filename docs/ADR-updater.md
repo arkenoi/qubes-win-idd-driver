@@ -220,11 +220,20 @@ install, and never covered it).
    make a knob to exclude defender update notifications from reaching dom0? so defender will keep updating on
    schedule, just not raising this flag every few hours». Microsoft republishes them several times a day, so
    counting them raises the flag again within minutes of every pass and the flag stops meaning anything. A
-   definition is Windows Update's own "Definition Updates" classification (section 6: never a title); an offer
-   whose classification cannot be read counts. EVERY number dom0 is told leaves definitions out - the scan, the
-   reboot-pending report and the post-install rescan - and the dom0 summary line says so. They are still
-   offered, installed by every pass that runs, and recorded (`definitions_offered`). Point 2 does not override
-   this point.
+   definition is an offer that carries Windows Update's own "Definition Updates" classification, and nothing
+   else decides it: not a title (section 6), and not a KB number (owner, 2026-11-14: «i do not like
+   classification by kb number. it may be a subject to change.»). An offer whose classification cannot be
+   read counts. EVERY number dom0 is told leaves definitions out - the scan, the reboot-pending report and the
+   post-install rescan - and the dom0 summary line says so. They are still offered, recorded
+   (`definitions_offered`) and installed by every install pass.
+   THE CLASSIFICATION IS WIDER THAN THE SIGNATURES. Windows Update files the Defender platform update
+   (KB4052623) and the Windows Security platform update (KB5007651) under it too (measured over 275 captured
+   scans: exactly three KBs carry it - the signatures, KB2267602, and those two). So both leave the number
+   with the signatures.
+   THE COST. Only dom0 starts an install pass; the scheduled pass scans and installs nothing. So on a qube
+   whose own updating is off (a template, an AppVM), definitions and the two platform updates arrive with the
+   next update dom0 runs for another reason, and a clear flag asks for none. Point 2 does not override this
+   point.
 
 **Why.** dom0's reported state is the product. Every other rule in this file exists to keep it true - and a
 count reduced by our own inability to install something is the "too little" direction of this very
