@@ -15,7 +15,7 @@ and this row is wrong. Explanations for the reader live in `docs/design/DESIGN-g
 | G3 | On build 26100+ the WGC broker is latched at agent start and is the pixel source for every ordinary window. | `ADR-capture.md` §18 | ACCEPTED, measurement owed |
 | G4 | Below 26100 the PrintWindow engine remains. No timed PrintWindow on any build. | `ADR-capture.md` §1, §4 | ACCEPTED |
 | G5 | Capabilities are latched at start and never re-read; a component that was working and stops is a failure, never a mode change. | `ADR-capture.md` §1; `ADR-toasts.md` §7; `ADR-README.md`, cross-cutting rules | ACCEPTED |
-| G6 | No silent fallback and no silent recovery: fail hard and visibly. | `ADR-windows.md` §8; `ADR-README.md`, cross-cutting rules | ACCEPTED (owner) |
+| G6 | No silent fallback and no silent recovery: fail hard and visibly; a withheld window is reported only for a definitive fault. | `ADR-windows.md` §8 and §12; `ADR-README.md`, cross-cutting rules | ACCEPTED (owner) |
 | G7 | The IDD never feeds frames through its own grant path without the owner's approval. | `ADR-display.md` §6 | ACCEPTED (owner), a standing gate |
 | G8 | Boot, logon and shutdown screens are never shown (Mode 1, unconditional). A borderless true-fullscreen window is shown only when dom0 opts in through `service.gui-fullscreen` (Mode 2). | `ADR-windows.md` §1, §2, §3 | ACCEPTED (owner) |
 | G9 | Chrome fragments are not windows. Popups, tooltips and toasts are override-redirect windows; a contained menu is synthesized onto its owner. | `ADR-windows.md` §6, §7 | ACCEPTED (owner) |

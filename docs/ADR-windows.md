@@ -22,7 +22,8 @@ itself) are dropped rather than bordered. The fix for a mis-bordered fragment is
 never to weaken dom0's borders. Menus and tooltips are sent borderless, as the Linux agent does; toasts
 likewise, and they stay shown. The Start menu is not presented in seamless mode. If the capture helper the
 design relies on is missing or dead, the agent fails visibly, with a black window that stays mapped and an
-error in dom0, rather than silently falling back to copying the whole desktop. Everything the agent changes in
+error in dom0, rather than silently falling back to copying the whole desktop. A window that is only slow to
+paint is not reported: you are told only when the helper is down or could not take the window. Everything the agent changes in
 the guest for seamless mode (title bars stripped, Windows key blocked, shadows off) is applied in one place
 and undone when the mode switches.
 
@@ -66,6 +67,8 @@ flowchart TD
 | 8 | No composite fallback on a direct-capable guest: fail hard and visibly | ACCEPTED (owner) | 2026-09-06 |
 | 9 | Seamless tweaks are applied in one place and reversed by construction | ACCEPTED (Jev 1.00) | 2026-09-25 |
 | 10 | Autologon is enforced: a guest without a session is unreachable | ACCEPTED (owner) | 2026-08-28 |
+| 11 | A hidden Start menu is CLOSED by returning activation, and the closure is recorded once | decided, unmeasured on a guest | 2026-10-17 |
+| 12 | A withheld window is reported to the user only for a fault that waiting cannot resolve | ACCEPTED (owner, Jev) | 2026-11-14 |
 
 Status words and the section format are defined in `docs/ADR-README.md`.
 
@@ -463,3 +466,41 @@ no evidence, which reads exactly like a clean result.
 **Unmeasured, and it is the whole point:** whether the menu actually closes on a guest. That needs
 the dedicated Start test on the German 25H2 subject. Until then this is a mechanism change with
 offline proof only (161 assertions, three defect knobs each seen to fail on its own checks).
+
+## 12. A withheld window is reported to the user only for a fault that waiting cannot resolve
+
+**Status:** ACCEPTED (owner, Jev), 2026-11-14. Agent fb010de, on a test branch. Narrows when §8's dom0 notice
+is sent; §8 stands.
+
+**Context.** On a direct-capable guest a window is withheld until its first painted frame. Ten seconds after
+it was registered with none, the agent logged QGADIRECTSUPPRESS at ERROR and told the user in dom0 "a window
+could not be shown". On a German 25H2 clone with every vCPU 95% taken, Explorer's own first paint came 18.7 s
+after it attached; the notice had gone out at 14 s and the window was correct from then on. The field
+reporter saw a message shortly after boot on 4.3.43.
+
+**Decision.**
+1. The user is told only of a definitive fault: the broker is down (past its launch grace, or a ready broker
+   died), the window got no broker slot or arena room, or the broker refused its slot (FAILED with any result
+   but DEAF).
+2. A window whose broker is up and holds its slot is late, not failed. The ERROR line and the DirectSuppressed
+   counter are unchanged; the window maps the moment its first painted frame lands. No timer decides a user
+   message.
+3. A deaf capture session keeps its own notice (`ADR-capture` §32, QGAWGCDEAF) and is not reported twice.
+
+Code: `DirectSuppressFault`, `DirectSuppressNotifyUser` (`agent/gui-agent/main.c`).
+
+**Why.** Jev: definitive_only 0.94 (conf 0.92), against a longer grace, a two-tier timer and an app-alive
+probe. Any fixed bound can be exceeded by a slower guest or a slower application, and a message that is
+wrong on a slow machine teaches the user to ignore the true one.
+
+**Cost.** A window whose capture session opens and never delivers a frame, with the broker up and the slot
+active, is not reported to the user: it does not appear, and the ERROR line is in the guest log. A window
+that is not mapped cannot receive the key or click §32's liveness check needs, so nothing else catches it.
+Bound: no genuinely silent session in four acceptance chains on the target (`ADR-capture` §32); the rate on
+a slow real machine is unmeasured (Jev silent_first_session_rate 0.60 at conf 0.47, not a verdict).
+
+**Evidence.** Seen to fail: the 95% steal run above, 4.3.43 test build. Seen to pass: owed - the same run on
+a build carrying fb010de, with no notice and the ERROR logged, and the deaf fault-injection cells still
+notifying.
+
+**Open.** The never-delivering first session in Cost.
