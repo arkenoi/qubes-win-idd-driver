@@ -71,6 +71,12 @@
 # prove the test sees that guard fail. Keep each guard on ONE line for that reason.
 
 # --- hooks (script scope; a test or a caller may override after dot-sourcing) ------------------
+# A caller under Set-StrictMode (the installer runs at 1.0) makes every test below a terminating error for a hook it never
+# set, so each unset hook is first defined as $null in the caller's script scope; one the caller set is left as it is.
+foreach ($qwtHook in 'QwtNotifyStateDir', 'QwtNotifyHostExe', 'QwtNotifyGate', 'QwtNotifyBootStamp', 'QwtNotifyLog',
+                     'QwtNotifyLauncher', 'QwtNotifyLogged', 'QwtNotifyBoxShower', 'QwtNotifyBoxWithoutRecord', 'QwtNotifyBuild') {
+    if (-not (Get-Variable -Name $qwtHook -Scope Script -ErrorAction SilentlyContinue)) { Set-Variable -Name $qwtHook -Scope Script -Value $null }
+}
 if (-not $script:QwtNotifyStateDir) {
     if ($env:ProgramData) { $script:QwtNotifyStateDir = Join-Path $env:ProgramData 'Qubes\notify-errors' }
     else { $script:QwtNotifyStateDir = '/tmp/qwt-notify-errors' }
