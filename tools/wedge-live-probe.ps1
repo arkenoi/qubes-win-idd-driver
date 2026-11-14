@@ -265,7 +265,7 @@ public class PS {
                                 $n = [int]$got
                                 if ($n -le 0) { $stopped = 'short read at +0x' + $total.ToString('x'); break }
                                 for ($i = 0; $i -le $n - 8 -and $frames -lt 40; $i += 8) {
-                                    $v = [uint64][BitConverter]::ToInt64($buf, $i)
+                                    $v = [BitConverter]::ToUInt64($buf, $i)
                                     if ($v -lt 0x10000) { continue }
                                     foreach ($r in $ranges) {
                                         if ($v -ge $r.Lo -and $v -lt $r.Hi) {
