@@ -160,9 +160,14 @@ w_alive(){ command grep -qa '^QREADY' <<< "$(QTEST_VM=$1 timeout -k 5 "${2:-40}"
 # caller's own deadline passes (2) - and only that last one abandons anything, deliberately, at the
 # point where the run is giving up and preserving the guest as evidence anyway.
 # The pid is $!, never a pattern match.
-w_alive_start(){ # $1=vm $2=outfile -> prints the pid of the single probe
+w_alive_start(){ # $1=vm $2=outfile [$3=hold seconds] -> prints the pid of the single probe
   : > "$2"
-  QTEST_VM=$1 ./tools/qtest run 'cmd /c echo QREADY' > "$2" 2>/dev/null &
+  if [ "${3:-0}" -gt 0 ]; then
+    # The call stays open $3 s after the marker, so its own vchan close comes after that interval.
+    QTEST_VM=$1 ./tools/qtest run "cmd /c \"echo QREADY& ping -n $(( $3 + 1 )) 127.0.0.1 >nul\"" > "$2" 2>/dev/null &
+  else
+    QTEST_VM=$1 ./tools/qtest run 'cmd /c echo QREADY' > "$2" 2>/dev/null &
+  fi
   echo $!
 }
 w_alive_poll(){ # $1=pid $2=outfile -> 0=marker seen 1=call ended without it 2=still running
@@ -188,8 +193,12 @@ w_alive_wait(){ # $1=vm $2=deadline seconds (default 600) $3=optional poll secon
 }
 
 # Wait for a usable session. 0=session 1=terminal 2=deadline
-w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
-  local vm=$1 dl=$2 lbl=$3 dir=$4 log=$5 t0 now st shots=0 dark=0 wedgesus=0 cpu
+w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn [$6=hold seconds]
+  # With a hold, the probe's call stays open that long past the marker and the wait returns only
+  # once the call has ENDED: a vchan close while the session is starting is where a post-install
+  # boot freezes (findings/wedge.md), so neither the probe's own close nor the caller's next call
+  # may land in those seconds.
+  local vm=$1 dl=$2 lbl=$3 dir=$4 log=$5 hold=${6:-0} up= t0 now st shots=0 dark=0 wedgesus=0 cpu
   # LOCAL, so a second wait in the same shell cannot inherit a finished probe's pid.
   local _wa_pid= _wa_out= _wa_rc=
   # The deadline arms below leave the single probe to FINISH on its own rather than killing it: a
@@ -200,6 +209,11 @@ w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
   while :; do
     now=$(( $(date +%s) - t0 ))
     if [ "$now" -ge "$dl" ]; then
+      if [ -n "$up" ]; then
+        eval "$_wa_cleanup"
+        $log "  $lbl: [ERROR] DEADLINE ${dl}s - the session was up at t+${up}s but the held probe call never ended (screen=$(w_screen "$vm" "$lbl-dl" "$dir"))"
+        return 2
+      fi
       if [ "$wedgesus" = 1 ]; then
         # Not a bare timeout: the wedge signature was present and persisted to the deadline. Say so,
         # so a caller and a reader see a CLASSIFIED outcome instead of "something did not answer".
@@ -228,16 +242,22 @@ w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
     # healthy guest answers on one probe and abandons nothing. A guest that is SLOWER than the bound
     # abandons one request per iteration, and that is what the guest reports as QGAVCHANFAIL.
     if [ -z "${_wa_pid:-}" ]; then
-      _wa_out=$(mktemp); _wa_pid=$(w_alive_start "$vm" "$_wa_out")
+      _wa_out=$(mktemp); _wa_pid=$(w_alive_start "$vm" "$_wa_out" "$hold")
     fi
     w_alive_poll "$_wa_pid" "$_wa_out"; _wa_rc=$?
     if [ "$_wa_rc" = 0 ]; then
-      rm -f "$_wa_out"; $log "  $lbl: session up at t+${now}s"; return 0
+      [ -z "$up" ] && up=$now
+      if [ "$hold" -le 0 ]; then
+        rm -f "$_wa_out"; $log "  $lbl: session up at t+${now}s"; return 0
+      fi
+      if ! kill -0 "$_wa_pid" 2>/dev/null; then
+        rm -f "$_wa_out"; $log "  $lbl: session up at t+${up}s, held probe call ended at t+${now}s"; return 0
+      fi
     fi
     if [ "$_wa_rc" = 1 ]; then
       # The call ENDED without the marker: the channel answered but the session is not up yet. A new
       # call is legitimate here - the previous one is finished, so nothing is left queued.
-      rm -f "$_wa_out"; _wa_out=$(mktemp); _wa_pid=$(w_alive_start "$vm" "$_wa_out")
+      rm -f "$_wa_out"; _wa_out=$(mktemp); _wa_pid=$(w_alive_start "$vm" "$_wa_out" "$hold")
     fi
     if [ $(( now / 60 )) -gt "$shots" ]; then
       shots=$(( now / 60 )); st=$(w_screen "$vm" "$lbl-t${now}" "$dir")

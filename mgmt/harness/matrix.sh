@@ -2162,7 +2162,9 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
     fi
   fi
   start_vm "$vm"
-  w_session "$vm" 900 "$lbl-back" "$M" say
+  # 45 s hold: the first post-install boot freezes on a vchan close in the seconds after its
+  # session arrives, so the probe keeps its call open past them and nothing follows until it ends.
+  w_session "$vm" 900 "$lbl-back" "$M" say 45
   case $? in
     1) no "$lbl: BRICKED - $(grep -a "$lbl-back: TERMINAL" "$R" | tail -1 | sed 's/.*TERMINAL - //' | cut -c1-120)"; return 1 ;;
     2) no "$lbl: no session within 900s even after the post-install reboot (last screen: $(w_screen "$vm" "$lbl-final" "$M"))"; return 1 ;;
