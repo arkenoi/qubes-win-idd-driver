@@ -160,6 +160,9 @@ struct Channel {
     // A visible window whose feed has been silent since it opened is one WGC is not serving.
     ULONGLONG openTick = 0;
     ULONGLONG lastArrivalTick = 0;
+    // The fresh session the quiet ladder opened after an unanswered key or click - the only session whose first
+    // frame is timed (R2). Every other open waits for its first frame however long the window takes to paint.
+    bool      ladderFresh = false;
     // A frame FrameArrived dropped for size with nothing published since: when (0 = none owed) and its content size.
     // The recreated pool delivers the window at that size only when the window next changes; see SizeDropOwed.
     ULONGLONG sizeDropTick = 0;
@@ -1257,6 +1260,8 @@ static void OpenChannel(int i) {
     WaitSameWindowTeardown(i, (HWND)(ULONG_PTR)g_slots[i].Hwnd);
     WGCBRK_SLOT* s = &g_slots[i];
     Channel& c = g_ch[i];
+    // Every open starts untimed, a failed one included; the quiet ladder marks its own fresh session after this returns.
+    c.ladderFresh = false;
     // First-frame attribution. The tick block is NOT touched yet: a slot is recycled, and this
     // open may fail below on a window that has already been destroyed (menus are short-lived).
     // Overwriting the block first is what made this probe destroy the record of the SUCCESSFUL
@@ -1824,7 +1829,11 @@ static void Reconcile() {
                  !(c.relay && g_relayNoDemote) &&
                  // R2: THIS session has delivered nothing (lastArrivalTick is per channel; FramesArrived is cumulative
                  // across every session the slot ever had, so a recreated session inherited the first one's frames).
-                 (c.lastArrivalTick == 0 ||
+                 // Asked only of the ladder's fresh session: liveness comes from a key or a click (ADR-capture 32), and a
+                 // session a registration opened has been promised no change. Timing its first frame would recreate, then
+                 // hold DEAF, a window whose app paints late on a slow guest, and a DEAF window that never had a frame
+                 // is withheld until it is registered again.
+                 ((c.lastArrivalTick == 0 && c.ladderFresh) ||
                   (c.pokePendingSince && GetTickCount64() - c.pokePendingSince >= WGCBRK_WGC_QUIET_MS &&
                    (!c.relay || RelaySrcDecides(i))))) {
             // BEHAVIOURAL DETECTION - this, not the structural test, is what decides.
@@ -1875,8 +1884,8 @@ static void Reconcile() {
             // other windows and its recompositions got a neighbour falsely recreated (rz27 FI cell); the relay remains a
             // CAPTURE ROUTE for a window opened on it (cross-process content), with its own re-open below.
             bool reopened = true;
-            if (wasPlainWgc && (!g_wgcReopened[i] || delivered)) { g_wgcReopened[i] = true; g_forcePw[i] = false; OpenChannel(i); }
-            else if (wasRelay && (!g_relayReopened[i] || delivered)) { g_relayReopened[i] = true; g_forcePw[i] = true; OpenChannel(i); }
+            if (wasPlainWgc && (!g_wgcReopened[i] || delivered)) { g_wgcReopened[i] = true; g_forcePw[i] = false; OpenChannel(i); g_ch[i].ladderFresh = true; }
+            else if (wasRelay && (!g_relayReopened[i] || delivered)) { g_relayReopened[i] = true; g_forcePw[i] = true; OpenChannel(i); g_ch[i].ladderFresh = true; }
             else                                       { reopened = false; DeclareDeaf(i); }
             if (reopened && !g_deafHold[i]) g_slots[i].QuietReroutes++;   // an open that itself ended DEAF recreated nothing
         }
@@ -1888,7 +1897,7 @@ static void Reconcile() {
             if (wantOpen && n.hwnd == want && !n.pw && !(n.relay && g_relayNoDemote) &&
                 IsWindow(want) && IsWindowVisible(want) && !IsIconic(want)) {
                 const ULONGLONG since = n.lastArrivalTick ? n.lastArrivalTick : n.openTick;
-                if (!n.lastArrivalTick)
+                if (!n.lastArrivalTick && n.ladderFresh)
                     Due(since + WGCBRK_WGC_QUIET_MS);                                                     // R2
                 else if (n.pokePendingSince) {
                     ULONGLONG due = (n.pokePendingSince > since ? n.pokePendingSince : since) + WGCBRK_WGC_QUIET_MS; // R3
