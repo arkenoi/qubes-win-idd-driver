@@ -105,7 +105,11 @@ outside"*. The bullet that sat under "Not done" since 2026-10-07 is this decisio
      sweep's own "when the build under test first ran" (`install_anchor`); an old path carries no
      version, and on an upgrade cell the predecessor boots inside the window and writes its old
      paths, so a file last written before the anchor is reported as the predecessor's, never as a
-     problem (Jev **0.99**). A declared exception is never `stray`. For a file the ledger checks,
+     problem (Jev **0.99**). The same test answers for an EMPTY legacy per-process log: last written
+     before the anchor it is the predecessor's, listed by name as expected-empty and not graded as
+     missing data (Jev **0.83**; that the rule can hide an empty log of the build under test: 0.30,
+     no verdict); with no anchor, or written at or after it, it stays the data problem `empty`.
+     A declared exception is never `stray`. For a file the ledger checks,
      `unpulled-lines` and `unaccounted-lines` replace the older per-file `partial` and `unparseable`
      (one problem per fact, Jev **1.00**); files outside the scope keep those.
 

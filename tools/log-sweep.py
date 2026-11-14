@@ -523,6 +523,27 @@ def stray_problems(rows, anchor):
                          % (r.get("written") or "?", "" if anchor is None else
                             " and after the install anchor %s" % anchor.isoformat(sep=" "))))
     return problems
+
+
+def predecessor_empties(problems, rows, anchor):
+    """An EMPTY legacy per-process log last written BEFORE THE INSTALL ANCHOR is the predecessor's, by the
+    test stray_problems applies to an old path. Its `empty` entry is taken out of `problems` and returned
+    for the expected-empty list, so the file stays in the report by name. A legacy name carries a start
+    stamp and a pid, but an empty file carries no version, which is the case the anchor exists for. With
+    no anchor (a clean or reinstall cell), or written at or after it, the file stays a data problem."""
+    moved = []
+    if anchor is None:
+        return moved
+    for r in rows or []:
+        w = parse_iso(r["written"]) if r.get("written") else None
+        if r.get("kind") != "legacy" or w is None or w >= anchor:
+            continue
+        name = os.path.basename(r["path"])
+        for p in [p for p in problems if p[0] == "empty" and p[1] == name]:
+            problems.remove(p)
+            moved.append(("empty-expected", name, "a predecessor's per-process log, last written %s, before the build "
+                          "under test first ran (%s)" % (r["written"], anchor.isoformat(sep=" "))))
+    return moved
 STOCK_FAMILIES = {"qubesdb"}
 
 # Structural thresholds: the owner's rules, as numbers, each with the severity its breach is reported at. A baseline
@@ -4928,6 +4949,7 @@ def cmd_analyze(a):
     _cut_scope, _cut = cut_predecessor(files, getattr(a, "build", None), since, _clock_ok)
     records_follow_the_cut(st)
     problems.extend(stray_problems((meta or {}).get("ledger"), _cut_scope.anchor))
+    placeholders.extend(predecessor_empties(problems, (meta or {}).get("ledger"), _cut_scope.anchor))
     now = parse_iso((meta.get("begin") or {}).get("now")) if meta and (meta.get("begin") or {}).get("now") else None
     metrics = compute_metrics(files, boots, st, since, now, getattr(a, "build", None))
     # NAMED, NEVER SILENT: what the cut moved, per module and version, is a reported field. An
