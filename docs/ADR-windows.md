@@ -507,11 +507,16 @@ that is not mapped cannot receive the key or click §32's liveness check needs, 
 Bound: no genuinely silent session in four acceptance chains on the target (`ADR-capture` §32); the rate on
 a slow real machine is unmeasured (Jev silent_first_session_rate 0.60 at conf 0.47, not a verdict).
 
-**Evidence.** Seen to fail: the 95% steal run above, 4.3.43 test build. Seen to pass: owed - the same run on
-a build carrying fb010de, with no notice and the ERROR logged, and the deaf fault-injection cells still
-notifying.
+**Evidence.** Seen to fail: the 95% steal run above, 4.3.43 test build. Seen to pass, on agent 099aea3
+(84f74ab): the same run at 95% steal - the ERROR at 10 s, no notice, the window mapped 0.3 s later
+(`tm-20261115T0012Z-combined/row46-steal95`); a deaf session from the fault-injection knob - QGAWGCDEAF's
+notice sent, no window notice (`deaf-20261115T0453Z-fikey`; that window was already mapped, so decision 3 was
+not reached); the broker killed, then a window opened past its grace - withheld, notified with fault
+broker-down (`bd-20261115T0823Z-gl2`).
 
-**Open.** The never-delivering first session in Cost.
+**Open.** The never-delivering first session in Cost. With the broker killed the death reporter's own notice
+reaches the user 70 s before the window notice; whether that pair reports one fault twice is undecided (Jev
+0.49 against 0.48).
 
 ## 13. A guest whose profiles live on an empty private volume says so, with the remedy
 
