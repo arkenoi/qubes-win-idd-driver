@@ -876,6 +876,17 @@ restarted (item 3). Measured behind it, in a field tester's logs: ten boots, 16 
 the report sent in six of them, the helper ready by itself 2 to 26 s later in every one. If the owner rules
 that a named object is a search under item 2, the hold goes and the deadline question returns to him.
 
+**Applied to the watchdog's launch path (implementation note, 2026-11-15; Jev 0.96, NOT an owner decision).**
+Before every launch the watchdog service scanned `WTSEnumerateProcesses` for a `gui-agent` image it had not
+started, and waited that process out (QGAWDFOREIGN) - item 2's search, carried from the original watchdog. It
+also spun: a dead agent stays listed while Windows Error Reporting holds its process object. Now the agent
+creates `Global\QGA_AGENT_ALIVE` (`include/qga-lifecycle.h`, SYSTEM only) owned by its main thread as its first
+act and holds it for life; the service opens it before a launch and, if it exists, waits on the mutex, never on
+a process. The kernel abandons it at process rundown, so a listed-but-dead agent no longer counts. Rejected: no
+check at all (an agent left by a crashed service would meet a second one on the vchan) and a kill-on-close job
+object (the kernel would end the agent with its framebuffer grants held). The agent's own image-name reads of
+`LogonUI.exe` and `consent.exe` classify which secure desktop is up; they supervise nothing and are not item 2.
+
 **STILL OPEN, and it is a decision, not a patch.** `grep -oE 'QERR_SEV_[A-Z]+' agent/gui-agent/notifytexts.h`
 is 10 `ACTION`, 1 `DEGRADED`, 0 informational - nearly every row we send dom0 is phrased as something for the
 user to do, and most name our own components. The owner, 2026-10-24: *"why does user care about all this
