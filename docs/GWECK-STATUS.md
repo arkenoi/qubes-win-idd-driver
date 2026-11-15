@@ -33,7 +33,11 @@ The combined test build (branch test/gweck-combined, 9904fa58, agent 099aea3, CI
 the fixes for rows 43, 52, 45, 44, 46 and 48. On the rig it passed the checks of rows 43, 52, 44, 46
 and 48 and sent no false window notice (row 45); at 95% steal it did send two notices for boot tasks
 stopped at their time limit (findings/issues.md GUARDTIMELIMITKILLISAFALSENOTICE). The rows say what each
-check showed.
+check showed. That limit is fixed on main (b20defd1): the guard-limit test build (test/guard-limit, e8c7e461,
+CI 43669163256) ran the same 95% cell twice on a fresh clone, and neither task was stopped and nothing
+reached dom0 - the autologon guard finished in 6:17 and 6:28, the quiet-desktop guard was still working at
+6.4 and 6.6 minutes. In those runs one Explorer window drew its first frame 10 s late and was shown when it
+came, with no notice.
 
 From 01:10 to 02:45 local on 2026-11-15 our own window capture froze dom0's display. dom0/04 is
 redeployed with the fix (its captures now carry scrot's PNG chunks, not ImageMagick's) and took 120
