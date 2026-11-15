@@ -21,9 +21,9 @@
 # git repo (sm1-3.tar, commit fbee3ed, found and removed 2026-08-29).
 #
 # So this service is NOT a workaround for a proven gap in 04. It is the per-window path made
-# explicit and diagnosable: it captures ONE WINDOW AT A TIME, never the root window, records which
-# rule matched each capture, and on no-match prints WHICH failure mode occurred instead of
-# returning an empty tar for the next reader to misdiagnose.
+# explicit and diagnosable: it captures ONE WINDOW AT A TIME and grabs nothing outside that
+# window's on-screen rectangle, records which rule matched each capture, and on no-match prints
+# WHICH failure mode occurred instead of returning an empty tar for the next reader to misdiagnose.
 #
 # UNVERIFIED, and deliberately marked as such: the title fallback below covers the case where a
 # qube's window carries no _QUBES_VMNAME at all. That case is plausible but has NOT been observed
@@ -54,30 +54,23 @@ CALLER=win-idd-mgmt
 
 [ "$(id -u)" -eq 0 ] || { echo "Run with sudo." >&2; exit 1; }
 
-# Only `import` and `xprop` are hard requirements — both are already used by local.WinScreenshot,
-# so they are known present. `xwininfo` is OPTIONAL and only buys frame-accurate capture (see
-# below); 07 deliberately refused to install packages into dom0 for a debugging nicety and that
-# judgement is kept here.
+# `xprop`, `xwininfo` and `scrot` are all required. The capture reads the frame's on-screen
+# rectangle with xwininfo and grabs it with `scrot -a`, because ImageMagick's `import -window <id>`
+# of a window that closed after the listing falls back to interactive selection, grabbing the
+# pointer and the whole X server until someone clicks: the dom0 desktop freezes.
 missing=()
-for tool in import xprop; do command -v "$tool" >/dev/null || missing+=("$tool"); done
+for tool in xprop xwininfo scrot; do command -v "$tool" >/dev/null || missing+=("$tool"); done
 if [ ${#missing[@]} -gt 0 ]; then
     echo "Missing in dom0: ${missing[*]}" >&2
-    echo "  sudo qubes-dom0-update ImageMagick" >&2
+    echo "  sudo qubes-dom0-update scrot xorg-x11-utils" >&2
     exit 1
-fi
-if command -v xwininfo >/dev/null; then
-    echo "xwininfo present: frame capture enabled (dom0 window borders will be visible)"
-else
-    echo "xwininfo absent: client-window capture only — dom0-drawn BORDERS WILL NOT APPEAR."
-    echo "  This matters if you are checking bordering/decoration behaviour. To enable:"
-    echo "    sudo qubes-dom0-update xorg-x11-utils"
 fi
 
 # NB: quoted heredoc — nothing expands at install time; every $ below is a RUNTIME variable.
 cat > "$SVC" <<'EOF'
 #!/bin/bash
 # Capture the named qube's own dom0 window(s). tar of win-N.png + manifest.txt on stdout.
-# NEVER captures the root window. See the installer header for the security model.
+# Returns only the target's own window rectangles, never the desktop. See the installer header.
 set -u
 
 VM="${QREXEC_SERVICE_ARGUMENT:-}"
@@ -135,20 +128,40 @@ frame_of() {
 i=0; scanned=0; : > "$TMP/manifest.txt"
 echo "# target=$VM  rule  window-id  frame-id  title" >> "$TMP/manifest.txt"
 
+# x,y,w,h of a viewable window on the screen, clipped at the origin (scrot -a's format). Fails
+# when the window is gone or unmapped, so nothing is grabbed where it no longer is.
+rect_of() {
+    "${X[@]}" xwininfo -id "$1" 2>/dev/null | awk '
+        /Absolute upper-left X:/ {x = $4}
+        /Absolute upper-left Y:/ {y = $4}
+        /^ *Width:/  {w = $2}
+        /^ *Height:/ {h = $2}
+        /Map State:/ {m = $3}
+        END {
+            if (m != "IsViewable") exit 1
+            if (x < 0) { w += x; x = 0 }
+            if (y < 0) { h += y; y = 0 }
+            if (w <= 0 || h <= 0) exit 1
+            printf "%d,%d,%d,%d\n", x, y, w, h
+        }'
+}
+
 capture() {  # capture <client-id> <rule>
-    local wid="$1" rule="$2" frame png
+    local wid="$1" rule="$2" frame png rect
     frame=$(frame_of "$wid")
     png="win-$i.png"
-    # -screen reads the region as COMPOSITED ON SCREEN. Without it X hands back the window's own
-    # drawable, which for an obscured or unmapped window is stale or blank. What we want to know
-    # is what is actually displayed, so -screen is correct here — with the consequence that an
-    # overlapping window WILL appear in the capture. Anything on top of the qube's window is by
-    # definition already visible on the same physical screen; this never widens the region beyond
-    # that one window's rectangle.
-    if "${X[@]}" import -window "$frame" -screen "$TMP/$png" 2>/dev/null; then
+    # What is COMPOSITED ON SCREEN in the frame's rectangle. A window lying over the qube's window
+    # WILL appear in the capture: it is already visible on the same physical screen, and the
+    # region never grows beyond this one window's rectangle. The rectangle is read again
+    # afterwards; if the frame left or moved, the grab is discarded.
+    rect=$(rect_of "$frame") || return 0
+    if "${X[@]}" scrot -a "$rect" -o "$TMP/$png" 2>/dev/null &&
+       [ "$(rect_of "$frame")" = "$rect" ]; then
         printf '%s\t%s\t%s\t%s\t%s\n' "$png" "$rule" "$wid" "$frame" "$(title_of "$wid" | head -1)" \
             >> "$TMP/manifest.txt"
         i=$((i+1))
+    else
+        rm -f "$TMP/$png"
     fi
 }
 

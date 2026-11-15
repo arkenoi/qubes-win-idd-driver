@@ -35,8 +35,8 @@ and 48 and sent no false window notice (row 45); at 95% steal it did send two no
 stopped at their time limit (findings/issues.md GUARDTIMELIMITKILLISAFALSENOTICE). The rows say what each
 check showed.
 
-Since 01:10 local on 2026-11-15 no window check can run: dom0's X calls hang and its GUI daemon does not
-attach to a booting guest (findings/issues.md DOM0DISPLAYHANGSAFTERACAPTURE; the owner's, in dom0).
+From 01:10 to 02:45 local on 2026-11-15 our own window capture froze dom0's display; window checks resume
+once the owner redeploys dom0/04 and dom0/15 (findings/issues.md DOM0DISPLAYHANGSAFTERACAPTURE).
 
 1. Row 43 (P1): 4.3.43 in the cell that failed (2 vCPU, 67% steal), twice. None of the six 4.3.43 runs
    used that cell, so whether 4.3.43 fails there is unmeasured.

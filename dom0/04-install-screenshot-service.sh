@@ -9,10 +9,14 @@ set -euo pipefail
 
 SVC=/etc/qubes-rpc/local.WinScreenshot
 
-# dependencies in dom0
-for tool in xprop import; do
+# dependencies in dom0. A window is captured as its on-screen rectangle (xwininfo) grabbed with
+# `scrot -a`, never with ImageMagick's `import -window <id>`: import treats an id it cannot find as
+# "no target" and falls back to interactive selection, grabbing the pointer and the whole X server
+# until someone clicks. A guest window that closes between the listing and the capture is exactly
+# such an id, and the dom0 desktop freezes.
+for tool in xprop xwininfo scrot; do
     command -v "$tool" >/dev/null || {
-        echo "Missing '$tool' in dom0 — install with: sudo qubes-dom0-update xdotool ImageMagick" >&2
+        echo "Missing '$tool' in dom0 — install with: sudo qubes-dom0-update scrot xorg-x11-utils" >&2
         exit 1
     }
 done
@@ -58,6 +62,24 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 chown "$DOMUSER" "$TMP" 2>/dev/null || chmod 0777 "$TMP"
 
+# x,y,w,h of a viewable window on the screen, clipped at the origin (scrot -a's format). Fails
+# when the window is gone or unmapped, so nothing is grabbed where it no longer is.
+rect_of() {
+    sudo -u "$DOMUSER" "${XENV[@]}" xwininfo -id "$1" 2>/dev/null | awk '
+        /Absolute upper-left X:/ {x = $4}
+        /Absolute upper-left Y:/ {y = $4}
+        /^ *Width:/  {w = $2}
+        /^ *Height:/ {h = $2}
+        /Map State:/ {m = $3}
+        END {
+            if (m != "IsViewable") exit 1
+            if (x < 0) { w += x; x = 0 }
+            if (y < 0) { h += y; y = 0 }
+            if (w <= 0 || h <= 0) exit 1
+            printf "%d,%d,%d,%d\n", x, y, w, h
+        }'
+}
+
 i=0; seen=0
 for wid in $(sudo -u "$DOMUSER" "${XENV[@]}" xprop -root _NET_CLIENT_LIST 2>/dev/null \
               | sed 's/.*# *//' | tr -d ' ' | tr ',' '\n' | grep '^0x'); do
@@ -65,8 +87,14 @@ for wid in $(sudo -u "$DOMUSER" "${XENV[@]}" xprop -root _NET_CLIENT_LIST 2>/dev
     owner=$(sudo -u "$DOMUSER" "${XENV[@]}" xprop -id "$wid" _QUBES_VMNAME 2>/dev/null \
             | sed -n 's/^_QUBES_VMNAME(STRING) = "\(.*\)"$/\1/p')
     [ "$owner" = "$VM" ] || continue
-    if sudo -u "$DOMUSER" "${XENV[@]}" import -window "$wid" "$TMP/win-$i.png" 2>/dev/null; then
+    # What is on screen in the window's rectangle; a window lying over it appears too. The
+    # rectangle is read again afterwards: if the window left or moved, the grab is discarded.
+    rect=$(rect_of "$wid") || continue
+    if sudo -u "$DOMUSER" "${XENV[@]}" scrot -a "$rect" -o "$TMP/win-$i.png" 2>/dev/null &&
+       [ "$(rect_of "$wid")" = "$rect" ]; then
         i=$((i+1))
+    else
+        rm -f "$TMP/win-$i.png"
     fi
 done
 
