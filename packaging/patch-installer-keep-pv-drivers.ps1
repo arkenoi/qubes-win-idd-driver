@@ -15,10 +15,13 @@ Two edits. Each refuses to apply twice, throws when it does not apply, and is re
   -WxsPath  Package.wxs gains <Property Id="QWTNG_PVDISKUNPLUG" Secure="yes"> holding a
             RegistrySearch of the latch's DISKS value (raw, 64-bit view). AppSearch runs in both
             sequences, so the property is set on install, repair and removal alike.
-  -MsiPath  the BUILT installer.msi. The DIFxApp extension schedules MsiProcessDrivers with the
-            condition 'VersionNT > 400' and does not let authoring override it, so its
-            InstallExecuteSequence row is rewritten to
+  -MsiPath  the BUILT installer.msi. The DIFxApp extension schedules MsiProcessDrivers and
+            MsiCleanupOnSuccess with the condition 'VersionNT > 400' and does not let authoring
+            override it, so both InstallExecuteSequence rows are rewritten to
                 VersionNT > 400 AND NOT (QWTNG_PVDISKUNPLUG AND REMOVE)
+            The two go together: MsiCleanupOnSuccess runs after InstallFinalize and opens the
+            per-component keys MsiProcessDrivers writes, so alone it fails a committed removal
+            with 1603 and Control Panel reports a removal that succeeded as failed.
             No feature removal runs the driver step while the latch is armed: Control Panel's
             uninstall, a modify that drops a driver feature, or this product's removal by a later
             version's upgrade, whose own install then updates the packages. An install or repair
@@ -83,31 +86,36 @@ $query = {
     [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($view)
     return , $rows
 }
-$conditionSql = "SELECT ``Condition`` FROM ``InstallExecuteSequence`` WHERE ``Action``='MsiProcessDrivers'"
+$difxActions = 'MsiProcessDrivers', 'MsiCleanupOnSuccess'
 $wi = New-Object -ComObject WindowsInstaller.Installer
 $db = $wi.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $wi, @($MsiPath, 1))   # 1 = transact
-$before = & $query $db $conditionSql
-if ($before.Count -ne 1) { throw "InstallExecuteSequence has $($before.Count) MsiProcessDrivers row(s) in $MsiPath, expected 1" }
-if ($before[0][0] -ne $stockCondition) { throw "MsiProcessDrivers condition is '$($before[0][0])', expected the DIFxApp extension's '$stockCondition' - the pinned WiX changed shape or the MSI was patched already" }
-Write-Host "MsiProcessDrivers condition read before the edit: '$($before[0][0])'"
-# An UPDATE view creates no result set, so it is executed and closed, never fetched.
-$update = $db.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $db, @("UPDATE ``InstallExecuteSequence`` SET ``Condition``='$keepCondition' WHERE ``Action``='MsiProcessDrivers'"))
-[void]$update.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $update, $null)
-[void]$update.GetType().InvokeMember('Close', 'InvokeMethod', $null, $update, $null)
-[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($update)
+foreach ($action in $difxActions) {
+    $before = & $query $db "SELECT ``Condition`` FROM ``InstallExecuteSequence`` WHERE ``Action``='$action'"
+    if ($before.Count -ne 1) { throw "InstallExecuteSequence has $($before.Count) $action row(s) in $MsiPath, expected 1" }
+    if ($before[0][0] -ne $stockCondition) { throw "$action condition is '$($before[0][0])', expected the DIFxApp extension's '$stockCondition' - the pinned WiX changed shape or the MSI was patched already" }
+    Write-Host "$action condition read before the edit: '$($before[0][0])'"
+    # An UPDATE view creates no result set, so it is executed and closed, never fetched.
+    $update = $db.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $db, @("UPDATE ``InstallExecuteSequence`` SET ``Condition``='$keepCondition' WHERE ``Action``='$action'"))
+    [void]$update.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $update, $null)
+    [void]$update.GetType().InvokeMember('Close', 'InvokeMethod', $null, $update, $null)
+    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($update)
+}
 [void]$db.GetType().InvokeMember('Commit', 'InvokeMethod', $null, $db, $null)
 [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($db)
 
 $db = $wi.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $wi, @($MsiPath, 0))   # 0 = read-only
-$after = & $query $db $conditionSql
+$after = @(foreach ($action in $difxActions) { , @($action, @(& $query $db "SELECT ``Condition`` FROM ``InstallExecuteSequence`` WHERE ``Action``='$action'")) })
 $search = & $query $db "SELECT ``Signature_`` FROM ``AppSearch`` WHERE ``Property``='QWTNG_PVDISKUNPLUG'"
 $locator = & $query $db "SELECT ``Root``, ``Key``, ``Name``, ``Type`` FROM ``RegLocator`` WHERE ``Signature_``='QwtngPvDiskUnplug'"
 $secure = & $query $db "SELECT ``Value`` FROM ``Property`` WHERE ``Property``='SecureCustomProperties'"
 [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($db)
 [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($wi)
-if ($after.Count -ne 1 -or $after[0][0] -ne $keepCondition) { throw "read-back FAILED: MsiProcessDrivers condition is '$($after | ForEach-Object { $_[0] })', expected '$keepCondition'" }
+foreach ($row in $after) {
+    $action = $row[0]; $got = $row[1]
+    if ($got.Count -ne 1 -or $got[0][0] -ne $keepCondition) { throw "read-back FAILED: $action condition is '$($got | ForEach-Object { $_[0] })', expected '$keepCondition'" }
+}
 if ($search.Count -ne 1 -or $search[0][0] -ne 'QwtngPvDiskUnplug') { throw 'read-back FAILED: no AppSearch row sets QWTNG_PVDISKUNPLUG from QwtngPvDiskUnplug - run this script with -WxsPath on Package.wxs before the build' }
 # RegLocator Root 2 = HKLM; Type 18 = raw (2) + 64-bit view (16).
 if ($locator.Count -ne 1 -or ($locator[0] -join '|') -ne '2|SYSTEM\CurrentControlSet\Services\XEN\Unplug|DISKS|18') { throw "read-back FAILED: RegLocator QwtngPvDiskUnplug is '$($locator | ForEach-Object { $_ -join '|' })', expected '2|SYSTEM\CurrentControlSet\Services\XEN\Unplug|DISKS|18'" }
 if ($secure.Count -ne 1 -or ($secure[0][0] -split ';') -notcontains 'QWTNG_PVDISKUNPLUG') { throw 'read-back FAILED: QWTNG_PVDISKUNPLUG is not in SecureCustomProperties' }
-Write-Host "MsiProcessDrivers condition in $MsiPath is now '$keepCondition'; AppSearch, RegLocator (HKLM XEN\Unplug DISKS, raw, 64-bit) and SecureCustomProperties carry QWTNG_PVDISKUNPLUG"
+Write-Host "MsiProcessDrivers and MsiCleanupOnSuccess conditions in $MsiPath are now '$keepCondition'; AppSearch, RegLocator (HKLM XEN\Unplug DISKS, raw, 64-bit) and SecureCustomProperties carry QWTNG_PVDISKUNPLUG"

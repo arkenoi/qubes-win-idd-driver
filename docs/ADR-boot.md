@@ -370,12 +370,13 @@ calls without it unmapped at least 106 ms apart. The freeze itself is QEMU's and
 ## 5. A removal keeps the Xen PV drivers while Xen will unplug the emulated disk
 
 **Status:** ACCEPTED, 2026-11-15, under Jev's floor - not a Jev verdict. Asked twice, the second time with the Safe
-Mode measurement below: keep 0.41 then 0.49, refuse 0.34 then 0.30, a full removal 0.16 then 0.18. Not yet measured
-on a build.
+Mode measurement below: keep 0.41 then 0.49, refuse 0.34 then 0.30, a full removal 0.16 then 0.18.
 
 **Decision.** The MSI reads `HKLM\SYSTEM\CurrentControlSet\Services\XEN\Unplug`, value `DISKS`, into the property
-`QWTNG_PVDISKUNPLUG`. While it is set, no feature removal runs DIFxApp's driver step: `MsiProcessDrivers` runs on
-`VersionNT > 400 AND NOT (QWTNG_PVDISKUNPLUG AND REMOVE)`. Control Panel's uninstall then removes the rest of QWT
+`QWTNG_PVDISKUNPLUG`. While it is set, no feature removal runs DIFxApp's driver step: `MsiProcessDrivers` and
+`MsiCleanupOnSuccess` both run on `VersionNT > 400 AND NOT (QWTNG_PVDISKUNPLUG AND REMOVE)`. The second opens, after
+`InstallFinalize`, the per-component keys the first writes, so skipping the first alone failed a committed removal
+with 1603 and Control Panel would have reported it failed. Control Panel's uninstall then removes the rest of QWT
 and leaves the five Xen driver packages installed and bound. Install and repair are unchanged, and with the latch
 absent every path is stock's. `packaging/patch-installer-keep-pv-drivers.ps1` makes both edits; `qwt-full.yml`
 applies them and reads the built database back.
@@ -397,6 +398,9 @@ another skips the driver step as well.
 **Evidence.** Seen to fail: the brick above (`row40-20261115T0829Z-gl2`). The recovery, on a second clone
 (`row40s-20261115T0914Z-r40s`): one Safe Mode boot set StartOverride=3 on `xenbus`, `xenvbd` and `xendisk` and bound
 the inbox disk driver to the emulated disks, and the next normal boot came up on the emulated disk, with `NICS=1`
-still armed. Seen to pass: owed - this build's uninstall on a fresh clone, then a normal boot on the PV disk.
+still armed. The first build (e629708d, 4.3.44.1318) on a fresh clone (`row40f-20261115T1015Z`): AppSearch set
+`QWTNG_PVDISKUNPLUG` to `#1`, `MsiProcessDrivers` was skipped, the removal committed (product registration gone),
+and the next boot came up on the PV disk with `xenbus` and `xenvbd` bound - but `msiexec /x` returned 1603 from
+`MsiCleanupOnSuccess` (DIFxApp ERROR 0x2 on each component's key). Seen to pass with both rows conditioned: owed.
 
 ---
