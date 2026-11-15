@@ -96,12 +96,12 @@ counted two and missed three.
 |---|---|---|
 | `patch-installer-drop-prepareprivateimg.ps1` | `installer-src/vs2022/installer/Package.wxs` | `qwt-full.yml:209` |
 | `patch-installer-serialize-services.ps1` | the same `Package.wxs` | `qwt-full.yml:229` |
-| `patch-installer-keep-pv-drivers.ps1` | the same `Package.wxs`, then the BUILT `installer.msi`'s `MsiProcessDrivers` row (docs/ADR-boot.md 5) | `qwt-full.yml:247`, `:881` |
+| `patch-installer-keep-pv-drivers.ps1` | the same `Package.wxs`, then the BUILT `installer.msi`'s `MsiProcessDrivers` row (docs/ADR-boot.md 5) | `qwt-full.yml:247`, `:883` |
 | `patch-xenbus-inf.ps1` | pvdrivers' `xenbus.inf`, then catalog regenerate + re-sign | `qwt-full.yml:805` |
 
 All four FAIL THE BUILD if the edit does not apply (7, 12, 14 and 14 `throw`s), the installer ones
 are re-counted in the patched source afterwards (`:211`, `:232`, `:247`), and the serialized start and the kept drivers are
-verified in the BUILT MSI database (`:895`, `:881`) - so the form is a script, but the proof is not weaker.
+verified in the BUILT MSI database (`:897`, `:883`) - so the form is a script, but the proof is not weaker.
 Cost 3 reaches all four: the shipped installer and INF exist in no checkout on disk. What keeps
 them clear of §4's windows-utils failure is that nothing in the tree ASSERTS anything about them -
 no suite reads a mirrored copy - so there is no instrument to mislead.

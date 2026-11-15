@@ -866,12 +866,14 @@ jobs:
           # CWD must be vs2022\installer: the CreateVersionWxi CodeTask reads ..\..\version
           # and writes version.wxi relative to the PROCESS working directory.
           Push-Location "$ws\installer-src\vs2022\installer"
+          # Every project is built on its own, so each is handed the SolutionDir a solution build would set:
+          # install-helper's OutDir is $(SolutionDir)x64\<cfg>\install-helper\, the path Package.wxs embeds.
+          $sln = "$ws\installer-src\vs2022\"
           & $msbuild ..\install-helper\install-helper.vcxproj -nologo -m -v:minimal `
-              -p:Platform=x64 "-p:Configuration=$env:CONFIG"
+              -p:Platform=x64 "-p:Configuration=$env:CONFIG" "-p:SolutionDir=$sln"
           if ($LASTEXITCODE -ne 0) { throw 'install-helper build failed' }
           # installer.msi first, then its database edit, then the bundle that embeds it: the bundle must carry the
           # edited MSI, so it is built from that file and never rebuilds it (BuildProjectReferences=false).
-          $sln = "$ws\installer-src\vs2022\"
           & $msbuild -restore installer.wixproj -nologo -m:1 -v:minimal `
               -p:Platform=x64 "-p:Configuration=$env:CONFIG" "-p:SolutionDir=$sln"
           if ($LASTEXITCODE -ne 0) { throw 'installer.wixproj build failed' }
