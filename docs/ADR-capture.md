@@ -1181,7 +1181,7 @@ against an elevated one. The reopen counts in `Reroutes`, next to `dropsize`; no
 **Status:** ACCEPTED (Jev), 2026-11-15, agent (this commit). Jev: suppress 0.85 (conf 0.82); distinct from the
 owner's 2026-08-16 popup decision 0.85 (conf 0.77). The end-state measurement below was chosen under the floor
 (log and per-window shot 0.70, conf 0.60) - not a verdict. On the rig: that measurement passed 3 of 3 on the fixed
-build; Jev on proven 0.48 against 0.47, no verdict (see Evidence).
+build, 4 of 4 with dom0's own pixels on both sides; Jev on proven 0.61 against 0.33, no verdict (see Evidence).
 
 **Context.** A file drag in Explorer shows a `SysDragImage` window: ownerless, WS_POPUP, ex-style
 LAYERED|TOOLWINDOW|TRANSPARENT|TOPMOST, per-pixel alpha. The agent announced it override-redirect, held it until
@@ -1217,3 +1217,9 @@ window, Explorer, with the thumbnail blended and moving, and in one run, over th
 beside it - the state that was 71% black on build 1319. Jev on proven: 0.48 against 0.47, no verdict; its
 leading missing measurement is dom0's own pixels of the black box on the old build (0.68, conf 0.60), which needs
 local.WinPopupShot.
+
+With local.WinPopupShot installed, the same drag, captures every ~10 s: build 1319 and 4.3.43 each mapped the
+image, and dom0's override-redirect layer held a 390x130 window of the qube in 1 of 8 and 3 of 6 captures - the
+thumbnail (and the drop tip) on black, the reporter's black frame. The fixed build created no window for it and 0
+of 6 captures held one; dom0's Explorer window showed the thumbnail and drop tip blended. Jev on proven: 0.61
+against 0.33 at confidence 0.42, no verdict. Only a drag inside one Explorer window was measured.
