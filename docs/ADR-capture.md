@@ -1180,7 +1180,8 @@ against an elevated one. The reopen counts in `Reroutes`, next to `dropsize`; no
 
 **Status:** ACCEPTED (Jev), 2026-11-15, agent (this commit). Jev: suppress 0.85 (conf 0.82); distinct from the
 owner's 2026-08-16 popup decision 0.85 (conf 0.77). The end-state measurement below was chosen under the floor
-(log and per-window shot 0.70, conf 0.60) - not a verdict. Proven on the rig: not yet.
+(log and per-window shot 0.70, conf 0.60) - not a verdict. On the rig: that measurement passed 3 of 3 on the fixed
+build; Jev on proven 0.48 against 0.47, no verdict (see Evidence).
 
 **Context.** A file drag in Explorer shows a `SysDragImage` window: ownerless, WS_POPUP, ex-style
 LAYERED|TOOLWINDOW|TRANSPARENT|TOPMOST, per-pixel alpha. The agent announced it override-redirect, held it until
@@ -1208,3 +1209,11 @@ ordinary window between it and the image in z-order.
 The fixed build is proven by the agent log showing no CREATE or MAP for the drag image during the same scripted
 drag, and a dom0 per-window capture of the Explorer window taken during it showing the thumbnail inside; dom0's
 override-redirect layer is not photographed (local.WinPopupShot is not installed).
+
+Measured on the fixed build (main 1ce30c09, CI run 43712653151, a fresh clone of the German golden, three cold-boot
+runs of the same 40 s drag): no CREATE or MAP for the drag image in any run while each run's Explorer window had
+both; the broker held no slot for it at any of the five sampled moments; dom0's per-window captures held one
+window, Explorer, with the thumbnail blended and moving, and in one run, over the target folder, the drop tip
+beside it - the state that was 71% black on build 1319. Jev on proven: 0.48 against 0.47, no verdict; its
+leading missing measurement is dom0's own pixels of the black box on the old build (0.68, conf 0.60), which needs
+local.WinPopupShot.
