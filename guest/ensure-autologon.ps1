@@ -235,12 +235,11 @@ if ($lsa) {
 #    qube a copy of T's root with a NEW, EMPTY private volume: the link dangles, the autologon user
 #    gets a temporary profile (User Profile Service 1505) and the shell never starts. Nothing in the
 #    guest can bring T's profiles back. When the installer left a profile seed on the root volume, the
-#    guard gives the qube a fresh profile store, as a Linux qube gets a fresh home (docs/ADR-windows.md
-#    section 14): Q: on the blank disk with the installer's two calls, Q:\Users seeded with Default and
-#    Public, every S-1-5-21 ProfileList entry whose folder is gone removed so Windows builds new
-#    profiles, then dom0 is told and the qube powers off for the user to start. Without a seed, or when
-#    a step fails, the user is told the remedy once per boot (qvm-clone copies the private volume) and
-#    autologon still happens. The private disk is told apart by serial, the installer's rule
+#    guard gives the qube a fresh profile store as a Linux qube gets a fresh home from /etc/skel
+#    (docs/ADR-windows.md section 14): Q: on the blank disk with the installer's two calls, Q:\Users
+#    seeded with Default and Public, every S-1-5-21 ProfileList entry whose folder is gone removed so
+#    Windows builds new profiles, and the boot goes on. Without a seed, or when a step fails, the user is
+#    told the remedy once per boot (qvm-clone copies the private volume) and autologon still happens. The private disk is told apart by serial, the installer's rule
 #    (Classify-PrivateDiskState, packaging/setup/Install-QwtImproved.ps1).
 try {
     $cu = Get-Item -LiteralPath 'C:\Users' -Force -ErrorAction Stop
@@ -307,22 +306,27 @@ try {
                     }
                 }
             }
-            $sent = 'unavailable:helper-absent'
-            $nh = @((Join-Path $PSScriptRoot 'qwt-notify-error.ps1'), (Join-Path (Split-Path -Parent $PSScriptRoot) 'bin\qwt-notify-error.ps1')) |
-                  Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-            if ($nh) {
-                # The helper's own lines go to this script's log, never to the pipeline: a line written there
-                # inside Send-QwtError would become part of its return value.
-                $script:QwtNotifyLog = { param($m) $null = Write-QwtLogLine 'W' "NOTIFYERR $m" -Module 'ensure-autologon.ps1'; Write-Host "note   NOTIFYERR $m" }
-                . $nh
-                if ($repaired) {
-                    $sent = Send-QwtError -Component 'autologon' -Id 'private-volume-renewed' -Severity ACTION `
-                        -Header 'This qube got a fresh private volume and powered off' `
-                        -Next 'Start it again: it comes up with new, empty user profiles. Files from its template were not carried.' `
-                        -Cause 'Cause: qvm-create --template gave it a new, empty private volume, where the profiles live.' `
-                        -Tech (Format-QwtNotifyTechLine -Subject 'ensure-autologon.ps1' -Code "Q: created and seeded for $cuTarget" `
-                                 -Count 'once' -Evidence 'ensure-autologon.ps1 log')
-                } else {
+            if ($repaired) {
+                # As on Linux, the boot goes on and nothing is sent to dom0. An autologon that already ran got a
+                # temporary profile; signing it out makes Winlogon log the user on again (AutoAdminLogon=1 with
+                # no AutoLogonCount), now from the fresh store.
+                $sids = @(Get-Process -IncludeUserName -ErrorAction SilentlyContinue |
+                          Where-Object { $_.SessionId -gt 0 -and $user -and ([string]$_.UserName).EndsWith("\$user", [StringComparison]::OrdinalIgnoreCase) } |
+                          Select-Object -ExpandProperty SessionId -Unique)
+                foreach ($sid in $sids) {
+                    & logoff.exe $sid 2>&1 | Out-Null
+                    Write-Output "SET    signed out session $sid of $user (rc=$LASTEXITCODE) - autologon logs on again with the new profile"
+                }
+                if (-not $sids.Count) { Write-Output "ok     no session of $user yet - its first logon builds the new profile" }
+            } else {
+                $sent = 'unavailable:helper-absent'
+                $nh = @((Join-Path $PSScriptRoot 'qwt-notify-error.ps1'), (Join-Path (Split-Path -Parent $PSScriptRoot) 'bin\qwt-notify-error.ps1')) |
+                      Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+                if ($nh) {
+                    # The helper's own lines go to this script's log, never to the pipeline: a line written there
+                    # inside Send-QwtError would become part of its return value.
+                    $script:QwtNotifyLog = { param($m) $null = Write-QwtLogLine 'W' "NOTIFYERR $m" -Module 'ensure-autologon.ps1'; Write-Host "note   NOTIFYERR $m" }
+                    . $nh
                     $sent = Send-QwtError -Component 'autologon' -Id 'private-volume-empty' -Severity ACTION `
                         -Header 'No user profile: the private volume of this qube is empty' `
                         -Next 'Windows shows no desktop. Recreate the qube in dom0 with: qvm-clone --class StandaloneVM TEMPLATE NAME' `
@@ -330,11 +334,7 @@ try {
                         -Tech (Format-QwtNotifyTechLine -Subject 'ensure-autologon.ps1' -Code "C:\Users links to the missing $cuTarget" `
                                  -Count 'reported once per boot' -Evidence 'Application log, User Profile Service event 1505')
                 }
-            }
-            Write-Output "WARN   dom0 notice: $sent"
-            if ($repaired) {
-                Write-Output 'SET    powering off - the user starts the qube again (no restart is taken)'
-                Stop-Computer -Force
+                Write-Output "WARN   dom0 notice: $sent"
             }
         }
     }

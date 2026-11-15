@@ -559,13 +559,25 @@ hung: delivery to dom0 is owed.
 **Open.** The reporter's Downloads and Documents links to Q: on 4.3.2x, whose profiles stayed on C:, are
 not explained; relocate-dir did not ship before 2026-09-08.
 
-## 14. Repairing such a guest: a fresh private volume, then power off
+## 14. Repairing such a guest: a fresh profile store, as Linux gives a fresh home
 
-**Status:** ACCEPTED, 2026-11-15, by the owner ("Build the repair"). Built in `guest/ensure-autologon.ps1`
-part 4 (the repair) and `packaging/setup/Install-QwtImproved.ps1` stage 2 (the seed).
+**Status:** ACCEPTED, 2026-11-15, by the owner ("Build the repair"; then «we should act exactly as linux
+counterpart»). Built in `guest/ensure-autologon.ps1` part 4 (the repair) and
+`packaging/setup/Install-QwtImproved.ps1` stage 2 (the seed).
 
-**As built.** Where: the §10 guard's part 4, which already detects the state (Jev 0.84); the race with the
-autologon does not matter because the repair ends in a power off, as in the hand measurement. Seed: the
+**The Linux counterpart, read from core-agent-linux.** At every boot, before any login: `setup-rwdev.sh`
+runs `mkfs.ext4` on a private volume whose first 10 MiB are zero and that carries no signature;
+`setup-rw.sh` fills `/rw/config` and `/rw/usrlocal` (from `/usr/local.orig` on root); `initialize_home
+/rw/home ifneeded` copies `/etc/skel`, on root, into every missing home. The boot goes on - no reboot, no
+power off, no notice, stderr lines only. Here `Default` plays `/etc/skel`, Q: plays `/rw`, and a
+ProfileList entry whose folder is gone plays a missing home.
+
+**As built.** Where: the §10 guard's part 4, which already detects the state (Jev 0.84). Linux runs before
+the login manager; Windows has no client hook that holds the autologon back, so the guard usually finishes
+after the autologon put the user on a temporary profile. It then signs that session out, and Winlogon logs
+the user on again at once from the fresh store - AutoAdminLogon=1 with no AutoLogonCount logs on "every
+time the current user logs off" (MSGina.dll features) - in the same boot (Jev logoff_session 0.90, against
+power off 0.04). Nothing is sent to dom0 on success (Jev log_only 0.80). Seed: the
 installer copies `C:\Users\Default` and `Public` to `%ProgramData%\Qubes\profile-seed` at every install and
 upgrade, data, attributes and timestamps, junctions excluded - the measured shape (Jev 0.92). Disk: the
 installer's two calls with its re-read at the write and its verify, repeated in the guard; a failure before
@@ -581,7 +593,8 @@ per-user data is not carried.
 1. The installer keeps a copy of `C:\Users\Default` and `Public` on the root volume.
 2. At boot, before logon, a guest in §13's state formats the blank private disk (by serial) as Q:, seeds
    `Q:\Users` from that copy, and removes the stale ProfileList entries so that Windows builds fresh profiles.
-3. It tells dom0 and powers off; the user starts the qube. No restart is taken (`ADR-updater` §10).
+3. The boot goes on; a session the autologon already opened is signed out so the user is logged on again
+   with the new profile. No restart is taken (`ADR-updater` §10) and nothing is sent to dom0.
 
 **Cost.** The template's per-user data (desktop files, settings) is not carried, as on Linux. Partitioning
 and formatting from boot code would be new here. The autologon comes about 5 s after the profile service
