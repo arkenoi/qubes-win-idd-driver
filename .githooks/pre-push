@@ -147,7 +147,7 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
   while read -r sha path; do
     [ -n "$path" ] || continue
     case "$path" in
-      *screen.png|*fullshot*)
+      *screen.png|*fullshot*|pop-[0-9]*.png|*/pop-[0-9]*.png)
         echo "PUSH BLOCKED: capture-class path '$path' in outgoing commit range."; fail=1 ;;
       *.tar|*.tgz|*.tar.gz|*.tar.xz|*.tar.zst|*.zip)
         git cat-file blob "$sha" > "$tmp" 2>/dev/null || continue

@@ -16,5 +16,6 @@ PY
 }
 
 # The capture-class signature. Content criterion, not a name criterion: whole-desktop
-# captures are screen.png / *fullshot* members whatever the archive is called.
-CAPTURE_RE='(^|/)screen\.png$|fullshot'
+# captures are screen.png / *fullshot* members whatever the archive is called, and a popup
+# capture's pop-<n>.png members can hold a dom0 notification bubble raised by ANY qube.
+CAPTURE_RE='(^|/)screen\.png$|fullshot|(^|/)pop-[0-9][^/]*\.png$'

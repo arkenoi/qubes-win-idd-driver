@@ -9,6 +9,7 @@
 #   state                 admin.vm.CurrentState (raw response; leading "0\x30" = OK)
 #   synctime              push this qube's clock into the guest (call after every start)
 #   shot [out.tar]        tar of PNGs of the VM's windows (local.WinScreenshot+<vm>)
+#   popups [out.tar]      the VM's override-redirect windows + dom0 notification bubbles, each its own rectangle (local.WinPopupShot)
 #   fullshot [out.tar]    whole dom0 desktop + geometry (local.WinFullScreen)
 #   wedge [dir]          dom0 wedge forensics for $QTEST_VM (needs dom0/13-install-...)
 #   resize <WxH|query>    resize the VM's dom0 window / read geometry (local.WinResize)
@@ -254,10 +255,14 @@ case "${1:-}" in
   # that hardcoded C:\Users\user pushed into a profile that did not exist on the reporter's guest.
   incoming) printf '%s\n' "$(qtest_incoming)" ;;
   fullshot) out="${2:-fullscreen.tar}"
-           # Whole dom0 desktop + geometry (dom0/07-install-fullscreen-screenshot.sh):
-           # the only way to see override-redirect windows and dom0-side rendering
-           # defects - per-window shots cannot show either.
+           # Whole dom0 desktop + geometry (dom0/07-install-fullscreen-screenshot.sh): dom0-side
+           # rendering defects only. Toasts, menus and dom0 bubbles have `popups`.
            qrexec-client-vm dom0 "local.WinFullScreen+$VM" </dev/null > "$out" && echo "saved $out" ;;
+  popups)  out="${2:-popups.tar}"
+           # The VM's override-redirect windows (toasts, menus, tooltips) and dom0's notification
+           # bubbles, each grabbed over its own rectangle, plus manifest.txt naming each one's rule
+           # and the saver/monitor state (dom0/19-install-popup-screenshot-service.sh).
+           qrexec-client-vm dom0 "local.WinPopupShot+$VM" </dev/null > "$out" && echo "saved $out" ;;
   dumpcore) # dumpcore — a guest MEMORY IMAGE, the one instrument that named the multi-vCPU wedge.
            # Needs dom0/17-install-wedge-core-service.sh installed once. NOT destructive: the
            # domain is PAUSED while xl dump-core writes, then left exactly as it was. The image

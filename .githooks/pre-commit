@@ -9,14 +9,14 @@ fail=0
 tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
 while IFS= read -r f; do
   case "$f" in
-    *screen.png|*fullshot*)
+    *screen.png|*fullshot*|pop-[0-9]*.png|*/pop-[0-9]*.png)
       echo "BLOCKED: '$f' is capture-class by name."; fail=1; continue ;;
   esac
   case "$f" in
     *.tar|*.tgz|*.tar.gz|*.tar.xz|*.tar.zst|*.zip)
       git show ":$f" > "$tmp" 2>/dev/null || continue
       if archive_members "$f" "$tmp" | grep -qiE "$CAPTURE_RE"; then
-        echo "BLOCKED: '$f' contains a desktop capture (screen.png / fullshot member)."; fail=1
+        echo "BLOCKED: '$f' contains a capture (screen.png / fullshot / pop-<n>.png member)."; fail=1
       fi ;;
   esac
 done < <(git diff --cached --name-only --diff-filter=AM)
