@@ -5026,6 +5026,25 @@ function Invoke-Stage2 {
         $script:Result.detail.clock_sync = 'absent'
     }
 
+    # --- profile seed: Default and Public, kept on the ROOT volume ---------------------------
+    # MoveUsers puts every profile, Default and Public included, on the private volume. A standalone
+    # made with `qvm-create --template` gets this root with a blank private volume, and the boot guard
+    # (ensure-autologon.ps1 part 4) rebuilds Q:\Users from this copy (docs/ADR-windows.md section 14).
+    # Data, attributes and timestamps, junctions excluded: the shape measured to give a working profile.
+    # Refreshed at every install and upgrade; a failed copy leaves such a standalone notice-only.
+    $seedRoot = Join-Path $env:ProgramData 'Qubes\profile-seed'
+    $seedOut = @()
+    foreach ($sp in 'Default', 'Public') {
+        $src = Join-Path 'C:\Users' $sp
+        if (-not (Test-Path -LiteralPath $src)) { $seedOut += "${sp}:absent"; continue }
+        $null = & robocopy.exe $src (Join-Path $seedRoot $sp) /MIR /COPY:DAT /DCOPY:DAT /XJ /R:0 /W:0 /NP /NFL /NDL /NJH /NJS 2>&1
+        $rc = $LASTEXITCODE
+        $seedOut += "${sp}:rc$rc"
+        if ($rc -ge 8) { Write-Log "profile seed: robocopy $src -> $seedRoot failed (rc=$rc) - a standalone made from this template without its private volume will only be told the remedy" 'WARN' }
+    }
+    $script:Result.detail.profile_seed = ($seedOut -join ' ')
+    Write-Log "profile seed: $($seedOut -join ' ') in $seedRoot"
+
     # --- autologon: VERIFY what stage 1 armed -------------------------------------------
     # The arming happens in stage 1 (the password is only available there - see the note next to
     # it). What stage 2 can do, and must, is check the result and report it, so an install that

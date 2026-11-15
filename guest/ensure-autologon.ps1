@@ -234,10 +234,14 @@ if ($lsa) {
 #    (C:\Users is a link to Q:\Users), and `qvm-create --class StandaloneVM --template T` gives the new
 #    qube a copy of T's root with a NEW, EMPTY private volume: the link dangles, the autologon user
 #    gets a temporary profile (User Profile Service 1505) and the shell never starts. Nothing in the
-#    guest can bring T's profiles back - qvm-clone, which copies the private volume too, is the
-#    remedy - so the user is told it once per boot. Reported, never repaired, and outside the exit
-#    contract: autologon itself still happens. The private disk is told apart by serial, the
-#    installer's rule (Classify-PrivateDiskState, packaging/setup/Install-QwtImproved.ps1).
+#    guest can bring T's profiles back. When the installer left a profile seed on the root volume, the
+#    guard gives the qube a fresh profile store, as a Linux qube gets a fresh home (docs/ADR-windows.md
+#    section 14): Q: on the blank disk with the installer's two calls, Q:\Users seeded with Default and
+#    Public, every S-1-5-21 ProfileList entry whose folder is gone removed so Windows builds new
+#    profiles, then dom0 is told and the qube powers off for the user to start. Without a seed, or when
+#    a step fails, the user is told the remedy once per boot (qvm-clone copies the private volume) and
+#    autologon still happens. The private disk is told apart by serial, the installer's rule
+#    (Classify-PrivateDiskState, packaging/setup/Install-QwtImproved.ps1).
 try {
     $cu = Get-Item -LiteralPath 'C:\Users' -Force -ErrorAction Stop
     $cuTarget = if (($cu.Attributes -band [IO.FileAttributes]::ReparsePoint) -and $cu.Target) { [string]@($cu.Target)[0] } else { '' }
@@ -254,7 +258,55 @@ try {
             Write-Output "WARN   NO USER PROFILE can load: C:\Users links to $cuTarget, whose drive does not exist; private disk: $privState"
         } else {
             Write-Output "WARN   NO USER PROFILE can load: C:\Users links to $cuTarget, whose drive does not exist, and the private disk is blank -"
-            Write-Output 'WARN   this qube was made from a template without its private volume; recreate it with qvm-clone --class StandaloneVM'
+            Write-Output 'WARN   this qube was made from a template without its private volume'
+            $seed = Join-Path $env:ProgramData 'Qubes\profile-seed'
+            $repaired = $false
+            $why = 'no profile seed on the root volume (the template was installed before it was kept)'
+            if (Test-Path -LiteralPath (Join-Path $seed 'Default\NTUSER.DAT')) {
+                $p = $priv[0]; $pSn = ([string]$p.SerialNumber).Trim(); $touched = $false; $seeded = $false
+                try {
+                    # The installer's prepare: the identity is read again at the instant of the write.
+                    $now = Get-Disk -Number $p.Number -ErrorAction Stop
+                    if (([string]$now.SerialNumber).Trim() -ne $pSn -or [string]$now.PartitionStyle -ne 'RAW') {
+                        throw "disk #$($p.Number) changed: now sn '$(([string]$now.SerialNumber).Trim())' style $($now.PartitionStyle) - not writing"
+                    }
+                    if ($now.IsOffline)  { Set-Disk -Number $p.Number -IsOffline $false -ErrorAction Stop }
+                    if ($now.IsReadOnly) { Set-Disk -Number $p.Number -IsReadOnly $false -ErrorAction Stop }
+                    $touched = $true
+                    Initialize-Disk -Number $p.Number -PartitionStyle GPT -PassThru -ErrorAction Stop | Out-Null
+                    $null = New-Volume -DiskNumber $p.Number -DriveLetter Q -FriendlyName 'Qubes Private Image' -FileSystem NTFS -ErrorAction Stop
+                    $onDisk = $null
+                    for ($vtry = 0; $vtry -lt 4; $vtry++) {
+                        $onDisk = try { [int](Get-Partition -DriveLetter Q -ErrorAction Stop).DiskNumber } catch { $null }
+                        if ((Test-Path -LiteralPath 'Q:\') -and $onDisk -eq [int]$p.Number) { break }
+                        Start-Sleep -Seconds 2
+                    }
+                    if (-not (Test-Path -LiteralPath 'Q:\') -or $onDisk -ne [int]$p.Number) { throw "Q: is not on disk #$($p.Number) after New-Volume" }
+                    Write-Output "SET    Q: created on the private disk #$($p.Number) (sn $pSn)"
+                    foreach ($sp in 'Default', 'Public') {
+                        $null = & robocopy.exe (Join-Path $seed $sp) (Join-Path 'Q:\Users' $sp) /E /COPY:DAT /DCOPY:DAT /R:0 /W:0 /NP /NFL /NDL /NJH /NJS 2>&1
+                        if ($LASTEXITCODE -ge 8) { throw "seeding Q:\Users\$sp failed (robocopy rc=$LASTEXITCODE)" }
+                    }
+                    $seeded = $true
+                    Write-Output 'SET    Q:\Users seeded with Default and Public from the root volume'
+                    $pl = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
+                    foreach ($k in @(Get-ChildItem -LiteralPath $pl -ErrorAction Stop | Where-Object { $_.PSChildName -like 'S-1-5-21-*' })) {
+                        $img = [Environment]::ExpandEnvironmentVariables([string](Get-ItemProperty -LiteralPath $k.PSPath -Name ProfileImagePath -ErrorAction SilentlyContinue).ProfileImagePath)
+                        if ($img -and (Test-Path -LiteralPath $img)) { continue }
+                        Remove-Item -LiteralPath $k.PSPath -Recurse -Force -ErrorAction Stop
+                        Write-Output "SET    removed ProfileList $($k.PSChildName) (its folder $img does not exist)"
+                    }
+                    $repaired = $true
+                } catch {
+                    $why = $_.Exception.Message.Split([char]10)[0]
+                    Write-Output "WARN   the repair failed: $why"
+                    if ($touched -and -not $seeded) {
+                        # Back to RAW, so the next boot finds the same state and tries again.
+                        try { Clear-Disk -Number $p.Number -RemoveData -RemoveOEM -Confirm:$false -ErrorAction Stop; Write-Output "SET    disk #$($p.Number) cleared back to RAW" }
+                        catch { Write-Output "WARN   could not clear disk #$($p.Number): $($_.Exception.Message.Split([char]10)[0])" }
+                    }
+                }
+            }
             $sent = 'unavailable:helper-absent'
             $nh = @((Join-Path $PSScriptRoot 'qwt-notify-error.ps1'), (Join-Path (Split-Path -Parent $PSScriptRoot) 'bin\qwt-notify-error.ps1')) |
                   Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
@@ -263,14 +315,27 @@ try {
                 # inside Send-QwtError would become part of its return value.
                 $script:QwtNotifyLog = { param($m) $null = Write-QwtLogLine 'W' "NOTIFYERR $m" -Module 'ensure-autologon.ps1'; Write-Host "note   NOTIFYERR $m" }
                 . $nh
-                $sent = Send-QwtError -Component 'autologon' -Id 'private-volume-empty' -Severity ACTION `
-                    -Header 'No user profile: the private volume of this qube is empty' `
-                    -Next 'Windows shows no desktop. Recreate the qube in dom0 with: qvm-clone --class StandaloneVM TEMPLATE NAME' `
-                    -Cause 'Cause: qvm-create --template gave it a new, empty private volume, where the profiles live.' `
-                    -Tech (Format-QwtNotifyTechLine -Subject 'ensure-autologon.ps1' -Code "C:\Users links to the missing $cuTarget" `
-                             -Count 'reported once per boot' -Evidence 'Application log, User Profile Service event 1505')
+                if ($repaired) {
+                    $sent = Send-QwtError -Component 'autologon' -Id 'private-volume-renewed' -Severity ACTION `
+                        -Header 'This qube got a fresh private volume and powered off' `
+                        -Next 'Start it again: it comes up with new, empty user profiles. Files from its template were not carried.' `
+                        -Cause 'Cause: qvm-create --template gave it a new, empty private volume, where the profiles live.' `
+                        -Tech (Format-QwtNotifyTechLine -Subject 'ensure-autologon.ps1' -Code "Q: created and seeded for $cuTarget" `
+                                 -Count 'once' -Evidence 'ensure-autologon.ps1 log')
+                } else {
+                    $sent = Send-QwtError -Component 'autologon' -Id 'private-volume-empty' -Severity ACTION `
+                        -Header 'No user profile: the private volume of this qube is empty' `
+                        -Next 'Windows shows no desktop. Recreate the qube in dom0 with: qvm-clone --class StandaloneVM TEMPLATE NAME' `
+                        -Cause "Cause: qvm-create --template gave it a new, empty private volume, where the profiles live; not repaired: $why" `
+                        -Tech (Format-QwtNotifyTechLine -Subject 'ensure-autologon.ps1' -Code "C:\Users links to the missing $cuTarget" `
+                                 -Count 'reported once per boot' -Evidence 'Application log, User Profile Service event 1505')
+                }
             }
             Write-Output "WARN   dom0 notice: $sent"
+            if ($repaired) {
+                Write-Output 'SET    powering off - the user starts the qube again (no restart is taken)'
+                Stop-Computer -Force
+            }
         }
     }
 } catch {

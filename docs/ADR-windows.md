@@ -521,7 +521,7 @@ reaches the user 70 s before the window notice; whether that pair reports one fa
 ## 13. A guest whose profiles live on an empty private volume says so, with the remedy
 
 **Status:** ACCEPTED (Jev 0.75), 2026-11-15. Built as part 4 of `guest/ensure-autologon.ps1`, the §10 guard.
-The repair is §14, PROPOSED.
+The repair is §14, ACCEPTED: this notice remains for a guest it cannot repair.
 
 **Context.** MoveUsers keeps every profile, Default and Public included, on the private volume: `C:\Users`
 is a link to `Q:\Users`. `qvm-create --class StandaloneVM --template T` gives the new qube a copy of T's root
@@ -539,6 +539,7 @@ reporter met an older form on 4.3.2x (`docs/GWECK-STATUS.md` row 37).
 2. A link to any other missing drive, or to a missing Q: while the private disk is not blank, is a WARN line
    only: the cause is unknown.
 3. Nothing on disk is changed, and the guard's exit contract (§10, rule 6) is untouched: autologon happens.
+   Superseded where §14 applies: a guest that carries the profile seed is repaired instead.
 
 **Why.** Jev: A_now_B_proposed 0.75 (conf 0.70), against detection alone 0.21 and building the repair now
 0.03; severity P1 1.00. Nothing inside the guest can bring the template's profiles back, and moving user data
@@ -560,13 +561,23 @@ not explained; relocate-dir did not ship before 2026-09-08.
 
 ## 14. Repairing such a guest: a fresh private volume, then power off
 
-**Status:** PROPOSED (Jev 0.75), 2026-11-15. Not built: the owner decides; the measurement it waited for is below.
+**Status:** ACCEPTED, 2026-11-15, by the owner ("Build the repair"). Built in `guest/ensure-autologon.ps1`
+part 4 (the repair) and `packaging/setup/Install-QwtImproved.ps1` stage 2 (the seed).
+
+**As built.** Where: the §10 guard's part 4, which already detects the state (Jev 0.84); the race with the
+autologon does not matter because the repair ends in a power off, as in the hand measurement. Seed: the
+installer copies `C:\Users\Default` and `Public` to `%ProgramData%\Qubes\profile-seed` at every install and
+upgrade, data, attributes and timestamps, junctions excluded - the measured shape (Jev 0.92). Disk: the
+installer's two calls with its re-read at the write and its verify, repeated in the guard; a failure before
+the seed is in clears the disk back to RAW so the next boot tries again (Jev 0.66, no verdict). ProfileList:
+every `S-1-5-21-*` key whose `ProfileImagePath` does not exist once Q: is made, never the service profiles
+(Jev 0.49, no verdict). A guest without the seed, or whose repair fails, gets §13's notice, naming why.
 
 **Context.** §13. A Linux qube made the same way starts with a fresh home: its agent formats an all-zero
 private volume at the first boot ("Virgin boot", core-agent-linux `setup-rwdev.sh`) and the template's
 per-user data is not carried.
 
-**Decision (proposed).**
+**Decision.**
 1. The installer keeps a copy of `C:\Users\Default` and `Public` on the root volume.
 2. At boot, before logon, a guest in §13's state formats the blank private disk (by serial) as Q:, seeds
    `Q:\Users` from that copy, and removes the stale ProfileList entries so that Windows builds fresh profiles.
