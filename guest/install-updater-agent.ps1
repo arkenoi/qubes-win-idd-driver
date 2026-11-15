@@ -847,6 +847,8 @@ $alPath = Join-Path $handlerDir 'ensure-autologon.ps1'
 # failure, not a skipped step: a task pointing at a script that is not there registers fine,
 # does nothing at every boot, and the installer would still record updater_agent='deployed'.
 if (-not (Test-Path $alPath)) { throw "autologon guard script missing at $alPath (qubes-rpc dirs absent or ensure-autologon.ps1 not in payload) - QubesAutologonGuard not registered" }
+# PT2H, the update tasks' bound: the guard's work takes seconds, so only a hang reaches the limit, and its stop
+# (event 329) is what the death reporter tells dom0. PT5M was reached by PowerShell's own start on a slow boot.
 $alXml = @"
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -856,7 +858,7 @@ $alXml = @"
   <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
     <StartWhenAvailable>true</StartWhenAvailable>
-    <ExecutionTimeLimit>PT5M</ExecutionTimeLimit>
+    <ExecutionTimeLimit>PT2H</ExecutionTimeLimit>
     <AllowHardTerminate>true</AllowHardTerminate>
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
