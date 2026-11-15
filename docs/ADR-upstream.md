@@ -82,7 +82,7 @@ assimilation is about it having no external CONSUMER, never about the repository
 | `qubes-core-qubesdb` | `v4.3.1` | none |
 | `qubes-vmm-xen-windows-pvdrivers` | `v4.2.0-1` | 1, as a build-time edit script |
 | `xeniface` | commit `9cd9a604` | none |
-| `qubes-installer-qubes-os-windows-tools` | commit `14c189e4` | 2, as build-time edit scripts |
+| `qubes-installer-qubes-os-windows-tools` | commit `14c189e4` | 3, as build-time edit scripts |
 
 A ref is pinned, never a branch: a moving upstream would change what we build and what our suites
 measure with no commit here saying so.
@@ -94,19 +94,20 @@ counted two and missed three.
 
 | script | target | applied at |
 |---|---|---|
-| `patch-installer-drop-prepareprivateimg.ps1` | `installer-src/vs2022/installer/Package.wxs` | `qwt-full.yml:208` |
-| `patch-installer-serialize-services.ps1` | the same `Package.wxs` | `qwt-full.yml:228` |
-| `patch-xenbus-inf.ps1` | pvdrivers' `xenbus.inf`, then catalog regenerate + re-sign | `qwt-full.yml:792` |
+| `patch-installer-drop-prepareprivateimg.ps1` | `installer-src/vs2022/installer/Package.wxs` | `qwt-full.yml:209` |
+| `patch-installer-serialize-services.ps1` | the same `Package.wxs` | `qwt-full.yml:229` |
+| `patch-installer-keep-pv-drivers.ps1` | the same `Package.wxs`, then the BUILT `installer.msi`'s `MsiProcessDrivers` row (docs/ADR-boot.md 5) | `qwt-full.yml:247`, `:881` |
+| `patch-xenbus-inf.ps1` | pvdrivers' `xenbus.inf`, then catalog regenerate + re-sign | `qwt-full.yml:805` |
 
-All three FAIL THE BUILD if the edit does not apply (7, 12 and 14 `throw`s), the two installer ones
-are re-counted in the patched source afterwards (`:211`, `:231`), and the serialized start is
-verified in the BUILT MSI database (`:894`) - so the form is a script, but the proof is not weaker.
-Cost 3 reaches all three: the shipped installer and INF exist in no checkout on disk. What keeps
+All four FAIL THE BUILD if the edit does not apply (7, 12, 14 and 14 `throw`s), the installer ones
+are re-counted in the patched source afterwards (`:211`, `:232`, `:247`), and the serialized start and the kept drivers are
+verified in the BUILT MSI database (`:895`, `:881`) - so the form is a script, but the proof is not weaker.
+Cost 3 reaches all four: the shipped installer and INF exist in no checkout on disk. What keeps
 them clear of §4's windows-utils failure is that nothing in the tree ASSERTS anything about them -
 no suite reads a mirrored copy - so there is no instrument to mislead.
 
 **Open (2026-11-08).** `qubes-installer-qubes-os-windows-tools` has no consumer outside QWT, which
-is the measurement §4 assimilated windows-utils on. Two build-time edits are not thirteen patches,
+is the measurement §4 assimilated windows-utils on. Three build-time edits are not thirteen patches,
 so the cost side differs; nothing is decided here and no fork is proposed.
 
 **THE TWO XENVIF PATCHES ARE THE ONLY ONES AIMED AT A REAL UPSTREAM.** `xenvif/frontend.c` belongs

@@ -83,7 +83,7 @@ manifest-recorded, no overlay, PV drivers exactly the verified upstream bits.
   verify + `msiexec /a` the vendored MSI → `packaging/stage-qwt-repo.ps1` (parses the .wxs
   QUBES_REPO refs, satisfies each from our bins/admin image, fails on missing/ambiguous) →
   populate `.distfiles` (nupkgs sha256-verified against the repo's pins) → fake EWDK tree
-  with the runner's vc_redist → `msbuild -restore installer.sln` with TEST_SIGN=1,
+  with the runner's vc_redist → `msbuild installer.wixproj`, the keep-PV-drivers database edit, then `installer-bundle.wixproj`, with TEST_SIGN=1,
   CWD=vs2022\installer (CodeTask relative paths) → artifact `qwt-full-package`
   (installer.msi, bundle, our exes, MANIFEST.json with all provenance shas).
 - Requires repo secrets SIGNING_PFX_B64/SIGNING_PFX_PASS + var SIGNING_ENABLED=true

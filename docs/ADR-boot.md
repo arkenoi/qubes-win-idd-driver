@@ -48,6 +48,7 @@ flowchart TD
 | 2 | The qrexec service opens only after stage 2's device work | ACCEPTED (owner, Jev); amended for 4.3.35: the updater deploy runs after the release | 2026-10-04, 2026-10-06 |
 | 3 | Stage 2 switches devices LIVE on a guest that is about to power off | PROPOSED (Jev); NOT BUILT - one measurement decides it | 2026-10-29 |
 | 4 | A dom0 call's ring unmap moves out of the console session's first minute | ACCEPTED (owner); the first version REJECTED (measured) | 2026-11-14 |
+| 5 | A removal keeps the Xen PV drivers while Xen will unplug the emulated disk | ACCEPTED under Jev's floor, not a verdict; not yet measured on a build | 2026-11-15 |
 
 Status words and the section format are defined in `docs/ADR-README.md`.
 
@@ -363,5 +364,39 @@ unmaps within 100 ms. All four cycles passed their 12 checks.
 **Open.** A shutdown inside the minute still releases every hold at once (rule 3). The harness reboots inside the
 minute on the first boot after an upgrade: both cycles with the hold released all seven within 100 ms, where the same
 calls without it unmapped at least 106 ms apart. The freeze itself is QEMU's and is not fixed here.
+
+---
+
+## 5. A removal keeps the Xen PV drivers while Xen will unplug the emulated disk
+
+**Status:** ACCEPTED, 2026-11-15, under Jev's floor - not a Jev verdict. Asked twice, the second time with the Safe
+Mode measurement below: keep 0.41 then 0.49, refuse 0.34 then 0.30, a full removal 0.16 then 0.18. Not yet measured
+on a build.
+
+**Decision.** The MSI reads `HKLM\SYSTEM\CurrentControlSet\Services\XEN\Unplug`, value `DISKS`, into the property
+`QWTNG_PVDISKUNPLUG`. While it is set, no feature removal runs DIFxApp's driver step: `MsiProcessDrivers` runs on
+`VersionNT > 400 AND NOT (QWTNG_PVDISKUNPLUG AND REMOVE)`. Control Panel's uninstall then removes the rest of QWT
+and leaves the five Xen driver packages installed and bound. Install and repair are unchanged, and with the latch
+absent every path is stock's. `packaging/patch-installer-keep-pv-drivers.ps1` makes both edits; `qwt-full.yml`
+applies them and reads the built database back.
+
+**Why.** `xen.sys` reads the latch delete-on-read at every boot start and the running drivers arm it again, so
+`DISKS` present means the next boot unplugs the emulated disks. Stock's DIFxApp step removes the packages, which
+unbinds `xenvbd` from the PV disk adapter but leaves `xenbus`, `xenfilt` and `xenvbd` boot-start: the next boot has
+no disk. Measured on 4.3.44.0, a German 25H2 clone: `msiexec /x` returned 3010 and the next two boots died 59 s and
+65 s after their start - forum 42717 #153's INACCESSIBLE_BOOT_DEVICE. The step is stock's, unchanged
+(`PvDriversComponents.wxs`, upstream tag v4.2.2-1). Refusing would leave no way to uninstall. A full removal would
+have to do before the first boot what only Safe Mode has been seen to do, and the recorded attempt from a running
+guest reached Automatic Repair, not a normal boot.
+
+**Cost.** After an uninstall on a PV-booted guest the Xen PV drivers stay, with no Add/Remove Programs entry;
+removing them by hand bricks the guest the same way. The user is not told: Control Panel's Uninstall shows no dialog
+that could say it, and the MSI log records the skipped action. A modify that adds one driver feature while removing
+another skips the driver step as well.
+
+**Evidence.** Seen to fail: the brick above (`row40-20261115T0829Z-gl2`). The recovery, on a second clone
+(`row40s-20261115T0914Z-r40s`): one Safe Mode boot set StartOverride=3 on `xenbus`, `xenvbd` and `xendisk` and bound
+the inbox disk driver to the emulated disks, and the next normal boot came up on the emulated disk, with `NICS=1`
+still armed. Seen to pass: owed - this build's uninstall on a fresh clone, then a normal boot on the PV disk.
 
 ---

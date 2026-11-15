@@ -66,6 +66,7 @@ on:
       - 'packaging/patch-xenbus-inf.ps1'
       - 'packaging/patch-installer-drop-prepareprivateimg.ps1'
       - 'packaging/patch-installer-serialize-services.ps1'
+      - 'packaging/patch-installer-keep-pv-drivers.ps1'
       - '.github/workflows/qwt-full.yml'
       # The user-session helpers are BUILT here and staged into the setup tree's bin\ - a
       # source change to either must rebuild them or the shipped helper goes stale (the
@@ -233,6 +234,18 @@ jobs:
           if ($p -ne 1) { throw "QWTNG_SERIALSTART property present $p time(s) in Package.wxs (expected exactly 1)" }
           Select-String -Path "$ws\installer-src\vs2022\installer\Package.wxs" -Pattern 'QWTNG_SERIALSTART' | ForEach-Object { "  $($_.Line.Trim())" }
           Write-Host "::notice title=installer::StartServices conditioned on QWTNG_SERIALSTART; Install-QwtImproved.ps1 starts the services serially"
+
+      # A REMOVAL KEEPS THE PV DRIVERS WHILE XEN WILL UNPLUG THE EMULATED DISK (docs/ADR-boot.md 5). Stock's DIFxApp
+      # step removes the driver packages on uninstall and the next boot stops with INACCESSIBLE_BOOT_DEVICE. This step
+      # adds the property that reads Xen's unplug latch; the build step conditions the driver step on it in the BUILT
+      # database, because the DIFxApp extension's sequence row cannot be overridden from authoring.
+      - name: "Keep the PV drivers on a removal while Xen's disk unplug is armed - the property"
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = $env:GITHUB_WORKSPACE
+          & "$ws\packaging\patch-installer-keep-pv-drivers.ps1" -WxsPath "$ws\installer-src\vs2022\installer\Package.wxs"
+          Select-String -Path "$ws\installer-src\vs2022\installer\Package.wxs" -Pattern 'QWTNG_PVDISKUNPLUG|QwtngPvDiskUnplug' | ForEach-Object { "  $($_.Line.Trim())" }
       - name: Shadow every set-version script with the QWT-NG stamper; wire one version into every shipped binary
         shell: pwsh
         run: |
@@ -856,9 +869,21 @@ jobs:
           & $msbuild ..\install-helper\install-helper.vcxproj -nologo -m -v:minimal `
               -p:Platform=x64 "-p:Configuration=$env:CONFIG"
           if ($LASTEXITCODE -ne 0) { throw 'install-helper build failed' }
-          & $msbuild -restore ..\installer.sln -nologo -m:1 -v:minimal `
-              -p:Platform=x64 "-p:Configuration=$env:CONFIG"
-          if ($LASTEXITCODE -ne 0) { throw 'installer.sln build failed' }
+          # installer.msi first, then its database edit, then the bundle that embeds it: the bundle must carry the
+          # edited MSI, so it is built from that file and never rebuilds it (BuildProjectReferences=false).
+          $sln = "$ws\installer-src\vs2022\"
+          & $msbuild -restore installer.wixproj -nologo -m:1 -v:minimal `
+              -p:Platform=x64 "-p:Configuration=$env:CONFIG" "-p:SolutionDir=$sln"
+          if ($LASTEXITCODE -ne 0) { throw 'installer.wixproj build failed' }
+          $msi = @(Get-ChildItem "$ws\installer-src\vs2022\x64\$env:CONFIG" -Recurse -Filter installer.msi)
+          if ($msi.Count -ne 1) { throw "expected one installer.msi after the MSI build, found $($msi.Count)" }
+          # A child process, so no COM handle on the database outlives the edit.
+          & pwsh -NoProfile -File "$ws\packaging\patch-installer-keep-pv-drivers.ps1" -MsiPath $msi[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw 'the MsiProcessDrivers condition edit failed' }
+          & $msbuild -restore ..\installer-bundle\installer-bundle.wixproj -nologo -m:1 -v:minimal `
+              -p:Platform=x64 "-p:Configuration=$env:CONFIG" "-p:SolutionDir=$sln" -p:BuildProjectReferences=false
+          if ($LASTEXITCODE -ne 0) { throw 'installer-bundle.wixproj build failed' }
+          Write-Host "::notice title=installer::installer.msi keeps the PV drivers on a removal while XEN\Unplug DISKS is armed; the bundle embeds that MSI"
           Pop-Location
 
       # THE SERIALIZED START, PROVEN IN THE BUILT DATABASE (docs/ADR-boot.md 1). The WiX patch above edits a
