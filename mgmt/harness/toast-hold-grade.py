@@ -706,6 +706,10 @@ class Grader:
                 gated = e.kv.get("what") == "gated"
             else:
                 state = e.kind == "MAP"
+                # The agent evicts a window's gate with the window (ToastHoldEvict), and Windows reuses
+                # a banner's handle value for the next banner: a new life starts ungated.
+                if e.kind == "DESTROY":
+                    gated = False
         return state and not gated
 
     def repaint_paid(self, hwnd: str, after: Tuple, until: Tuple) -> bool:
