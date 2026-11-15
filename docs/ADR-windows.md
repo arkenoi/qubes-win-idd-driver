@@ -657,6 +657,12 @@ verdict, do not resize. Its outcome never changes the guard's exit code. The two
 payload overlay from `guest/` and are listed in `packaging/ours-wins.psd1`: in the core-agent rpc sweep they
 would also be mirrored into the MSI, where a file with no wxs component fails that guard.
 
+**Shrinking is never automatic, as on Linux.** dom0 calls `qubes.ResizeDisk` only after it has resized the
+volume, and the client refuses a shrink unless forced, telling the user to shrink the filesystem first
+(qubes-core-admin-client `qubesadmin/storage.py`). So a shrink is: shrink Q: in the guest, then
+`qvm-volume resize --force`; the handler then fits Q: to the smaller disk. A forced shrink without the first
+step leaves Q: ending past the disk; the handler says so and names `qvm-volume revert`, never "nothing to grow".
+
 **Not measured:** whether the PV disk driver shows a new size to a running guest without a reboot (if not,
 the online path says so and the boot path grows it); a GPT disk whose backup header has to move; C: with a
 recovery partition after it.

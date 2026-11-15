@@ -39,8 +39,17 @@ try {
         Write-ResizeLine 'E' "Q: is on disk #$n (serial '$sn'), not on the private disk - not touching it"; exit 1
     }
     $part = Get-Partition -DiskNumber $n -PartitionNumber $part.PartitionNumber
-    $sup = Get-PartitionSupportedSize -DiskNumber $n -PartitionNumber $part.PartitionNumber
     $mib = { param($b) '{0:N0} MiB' -f ($b / 1MB) }
+    # Qubes only ever shrinks a volume when forced (qvm-volume resize --force), and it cuts the disk
+    # before this handler runs: a partition that was not shrunk first now ends past the disk.
+    if ([int64]$part.Offset + [int64]$part.Size -gt [int64]$dk.Size) {
+        Write-ResizeLine 'E' ("${letter}: ends at $(& $mib ([int64]$part.Offset + [int64]$part.Size)), past the end of disk #$n " +
+                              "($(& $mib $dk.Size)): the $Disk volume was shrunk below its partition, and data past the end is gone. " +
+                              "Restore it in dom0 with qvm-volume revert while the previous revision exists; shrink ${letter}: inside " +
+                              "the guest first, then resize the volume with --force")
+        exit 1
+    }
+    $sup = Get-PartitionSupportedSize -DiskNumber $n -PartitionNumber $part.PartitionNumber
     if ($sup.SizeMax -le $part.Size + $slack) {
         $used = (@(Get-Partition -DiskNumber $n) | Measure-Object -Property Size -Sum).Sum
         $free = [int64]$dk.Size - [int64]$used
