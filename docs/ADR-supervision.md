@@ -884,8 +884,11 @@ creates `Global\QGA_AGENT_ALIVE` (`include/qga-lifecycle.h`, SYSTEM only) owned 
 act and holds it for life; the service opens it before a launch and, if it exists, waits on the mutex, never on
 a process. The kernel abandons it at process rundown, so a listed-but-dead agent no longer counts. Rejected: no
 check at all (an agent left by a crashed service would meet a second one on the vchan) and a kill-on-close job
-object (the kernel would end the agent with its framebuffer grants held). The agent's own image-name reads of
-`LogonUI.exe` and `consent.exe` classify which secure desktop is up; they supervise nothing and are not item 2.
+object (the kernel would end the agent with its framebuffer grants held).
+The agent's own image-name reads went the same way (agent 52b9275): which secure desktop is up is read from the
+owners of the windows on the input desktop, the stuck-prompt check takes consent's pid from the UAC stand-in
+window, and the lock verdict's shell fact is asked from the Default desktop (`ADR-uac` §5, §7). The one snapshot
+left is `StartReplacementRefresh` - a third-party Start menu, which no system record names.
 
 **STILL OPEN, and it is a decision, not a patch.** `grep -oE 'QERR_SEV_[A-Z]+' agent/gui-agent/notifytexts.h`
 is 10 `ACTION`, 1 `DEGRADED`, 0 informational - nearly every row we send dom0 is phrased as something for the
