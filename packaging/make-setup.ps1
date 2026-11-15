@@ -214,6 +214,12 @@ foreach ($f in @(Get-ChildItem -LiteralPath $rpcSrcDir -File)) {
 }
 Copy-Item (Need (Join-Path $RepoRoot 'guest\VMExec.ps1') 'maintained VMExec.ps1 (guest copy is the single source of truth)') $rpcSvcOut -Force
 $rpcScripts += 'VMExec.ps1'
+# qubes.ResizeDisk (grow Q:/C: after dom0 extends a volume; the boot guard runs the same handler) lives in
+# guest\, not in the core-agent sweep: that sweep is mirrored into the MSI, where a file with no wxs component
+# fails the ours-wins guard. The overlay channel is how it reaches a guest; ours-wins lists both files.
+Copy-Item (Need (Join-Path $RepoRoot 'guest\resize-disk.ps1') 'qubes.ResizeDisk handler') $rpcSvcOut -Force
+Copy-Item (Need (Join-Path $RepoRoot 'guest\qubes.ResizeDisk') 'qubes.ResizeDisk service definition') $rpcDefOut -Force
+$rpcScripts += 'resize-disk.ps1'; $rpcDefs += 'qubes.ResizeDisk'
 # Tripwires: "the sweep swept nothing" must fail HERE, not silently ship a stock guest. The
 # two actively maintained scripts must be in the take, and the counts must be plausible.
 # (>= 13 definitions, not 14: qubes.GetAppMenus / qubes.GetAppmenus differ only by letter case

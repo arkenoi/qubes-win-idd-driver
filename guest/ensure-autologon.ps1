@@ -19,6 +19,10 @@
 # provisioned. That is not a Qubes boundary - the guest is untrusted either way, and a local
 # Windows password protects nothing dom0 relies on. QWT's own Autologon component would store an
 # LSA secret instead, but it randomises the account password, which is why the image omits it.
+#
+# -AtBoot is passed by the boot task (QubesAutologonGuard) only; part 5 runs only then, never for the
+# installer or the updater, which run this script for its autologon verdict.
+param([switch]$AtBoot)
 $ErrorActionPreference = 'Continue'
 # The log sink, from beside this script (docs/ADR-logging.md).
 $qwtLogPs1 = Join-Path $PSScriptRoot 'log.ps1'
@@ -340,6 +344,24 @@ try {
     }
 } catch {
     Write-Output "WARN   could not check where the user profiles live: $($_.Exception.Message.Split([char]10)[0])"
+}
+
+# 5. Volumes extended in dom0 while the qube was halted grow now, as Linux grows /rw at every boot.
+#    resize-disk.ps1 is also the qubes.ResizeDisk handler that dom0 calls on a running qube. It runs in its
+#    own process: its output goes to the console, which this script captures and logs. Its outcome never
+#    counts as an autologon warning - the exit code below is about autologon only.
+$rz = Join-Path $PSScriptRoot 'resize-disk.ps1'
+if (-not $AtBoot) {
+    # not the boot task
+} elseif (Test-Path -LiteralPath $rz) {
+    foreach ($v in 'private', 'root') {
+        $rzOut = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $rz -Disk $v 2>&1)
+        $rzRc = $LASTEXITCODE
+        foreach ($l in $rzOut) { if ("$l") { Write-Output ("{0} resize {1}: {2}" -f $(if ($rzRc) { 'WARN  ' } else { 'note  ' }), $v, "$l") } }
+        if (-not $rzOut.Count) { Write-Output "WARN   resize ${v}: no output (rc=$rzRc)" }
+    }
+} else {
+    Write-Output 'WARN   resize-disk.ps1 is not beside this script - volumes extended in dom0 do not grow at boot'
 }
 
 $lsaState = if (-not $lsaKnown) { 'unknown' } elseif ($lsa) { 'present' } else { 'absent' }

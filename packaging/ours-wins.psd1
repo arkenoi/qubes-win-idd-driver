@@ -106,6 +106,16 @@
             Package = 'msi-image/PFiles64/Qubes Tools/qubes-rpc-services/VMExec.ps1'
         }
         @{
+            # qubes.ResizeDisk: dom0 calls it after extending a volume; the boot guard runs the
+            # same handler. Overlay channel only - not in the MSI's wxs.
+            Source  = 'guest/resize-disk.ps1'
+            Package = 'rpc/qubes-rpc-services/resize-disk.ps1'
+        }
+        @{
+            Source  = 'guest/qubes.ResizeDisk'
+            Package = 'rpc/qubes-rpc/qubes.ResizeDisk'
+        }
+        @{
             # ETW-proxy account provisioning (DESIGN-p3-classifier-impl.md sec 10.14):
             # Install-QwtImproved.ps1 stage 2 runs it from the payload root. Listed so CI
             # FAILS the moment make-setup.ps1 stops staging it - a provisioning script that

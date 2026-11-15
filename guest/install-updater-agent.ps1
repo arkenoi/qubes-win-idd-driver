@@ -863,7 +863,7 @@ $alXml = @"
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
   </Settings>
-  <Actions Context="Author"><Exec><Command>powershell.exe</Command><Arguments>-NoProfile -ExecutionPolicy Bypass -File "$alPath"</Arguments></Exec></Actions>
+  <Actions Context="Author"><Exec><Command>powershell.exe</Command><Arguments>-NoProfile -ExecutionPolicy Bypass -File "$alPath" -AtBoot</Arguments></Exec></Actions>
 </Task>
 "@
 $fa = Join-Path $env:TEMP 'qubes-autologon-guard.xml'

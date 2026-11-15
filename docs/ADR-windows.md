@@ -620,3 +620,39 @@ not temporary, with no User Profile Service error; explorer, sihost and ctfmon k
 to 3 minutes after it, and nothing crashed. The boot before showed 1515, 1501, 1505 and 1544 three times
 each. Not measured: that desktop in pixels; a copy made by the installer itself, with ACLs; a repair run
 from boot code, which races the logon.
+
+## 15. A volume extended in dom0 grows inside the guest, as on Linux
+
+**Status:** ACCEPTED, built on the test branch; not measured on a guest.
+
+**Owner, 2026-11-15**, after the Linux paths were laid out: «yes, implement the guard» and «and ResizeDisk too».
+In the same message: «the copy behavior we keep for a while, unless we find a way to speed up populating the
+volume in most radical way» - dom0's clone of a Windows template's private volume for template-based qubes
+(section 14) stays.
+
+**Linux counterpart.** Two paths. dom0's `Storage.resize` (qubes-core-admin `qubes/storage/__init__.py`)
+grows the volume and, on a running qube, calls `qubes.ResizeDisk` as root with the volume name on stdin;
+core-agent-linux answers with `resize2fs /dev/xvdb` (private) or `resize-rootfs` (root). A failure there
+reaches the user as "Online resize of volume ... failed (you need to resize filesystem manually): <stderr>".
+At every boot `setup-rw.sh` runs `resize2fs` on `/rw` and `resize-rootfs-if-needed.sh` grows root, so a
+volume extended while the qube was halted grows at the next start.
+
+**What Windows had.** Neither: no `qubes.ResizeDisk` in core-agent, nothing in the guest grows a partition.
+An online extend reported the failure above; an offline one left unallocated space after Q:.
+
+**Decision.** One handler, two callers. `guest/resize-disk.ps1` reads `private` or `root` (stdin from qrexec,
+`-Disk` from the boot guard), rescans, and grows Q: (only on the private disk by serial) or the system drive
+to the largest contiguous size. Windows extends a partition only into unallocated space directly after it,
+so when a partition lies between the volume and the free space (on C:, usually the recovery partition) it
+names that partition and exits non-zero rather than moving anything. On the online path, "nothing to grow"
+is reported as an error, since dom0 calls it only after growing the volume: Windows not yet seeing the new
+size is said, with "grows at the next boot". `qubes.ResizeDisk` runs it as LocalSystem (qrexec-agent maps
+root to its own account). The boot guard (`ensure-autologon.ps1` part 5) runs it for both volumes when the
+boot task calls it with `-AtBoot`; the installer and the updater, which run the guard for its autologon
+verdict, do not resize. Its outcome never changes the guard's exit code. The two files ship through the
+payload overlay from `guest/` and are listed in `packaging/ours-wins.psd1`: in the core-agent rpc sweep they
+would also be mirrored into the MSI, where a file with no wxs component fails that guard.
+
+**Not measured:** whether the PV disk driver shows a new size to a running guest without a reboot (if not,
+the online path says so and the boot path grows it); a GPT disk whose backup header has to move; C: with a
+recovery partition after it.
