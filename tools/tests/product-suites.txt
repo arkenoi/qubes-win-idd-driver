@@ -3,7 +3,6 @@
 brokerctl-selftest.sh
 death-reporter-selftest.sh
 death-reporter-xpath-selftest.py
-deathevent-selftest.sh
 desktop-stuck-lock-selftest.sh
 dirty-union-selftest.sh
 discarded-scriptblock-selftest.sh

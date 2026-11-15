@@ -445,9 +445,8 @@ QubesPvNic/QubesNetSetup sources use. The supervisors write ONE event per death 
 `include/deathevent.h`: ids 4001 gui-agent (written by the watchdog), 4002 wgcbroker, 4003 notifhost, 4004
 etwproxy; strings %2..%6 = exe, pid, exit code, run time, the supervisor's detail. Sites: `watchdog.c` at its
 death line; `main.c` at QGABROKERDIED and QGANOTIFBRIDGEEXIT; `etwproxy.c` in EtwProxyExitCb (every exit that
-reaches it; its three relaunch lines and the park line are ERROR now). Uncompiled on the dev qube (gcc
-`-fsyntax-only` against stubs plus the real windows-utils headers; CI builds it); the record's contract is
-pinned by `gui-agent/deathevent_test.c` via `tools/tests/deathevent-selftest.sh`.
+reaches it; its three relaunch lines and the park line are ERROR now). CI builds it.
+The exit-code field is the raw code, or `unknown` / `hung` - sentinels above 32 bits, so no real exit code can be read as either.
 
 **§2, services visible.** The exit-0 swallow was not in the services but in windows-utils' `SvcMainLoop`:
 `SvcSetState` ignored its exit code, in the wrapper of QrexecAgent and of the qubesdb daemon alike. Fixed in

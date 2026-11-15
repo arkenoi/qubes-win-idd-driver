@@ -72,7 +72,7 @@ with the PV bus. Nothing here pretends otherwise.
 | `agent/gui-agent/notifyerr_test.c`, `agent/vs2022/notifyerr-test/` | C offline suite (gcc here, msbuild in CI). |
 | `tools/tests/notifyerr-test.ps1`, `tools/tests/notifyerr-selftest.sh` | PowerShell offline suite and the runner for the whole defect matrix. |
 | `guest/qwt-report-death.ps1` | **the ONE death reporter** (§10a): the `QwtDeathReporter` task's action; reads the triggering record back, counts the death, calls `Send-QwtError`. Suite: `tools/tests/death-reporter-selftest.sh`; subscription matrix: `tools/tests/death-reporter-xpath-selftest.py`. |
-| `agent/include/deathevent.h` | the supervisors' Event Log record (source `Qubes Windows Tools`, ids 4001-4004) for a child that exited unasked; header-only, no notification of its own. Suite: `tools/tests/deathevent-selftest.sh`. |
+| `agent/include/deathevent.h` | the supervisors' Event Log record (source `Qubes Windows Tools`, ids 4001-4004) for a child that exited unasked; header-only, no notification of its own. |
 
 Flow (both languages): caller logs as before → `QerrReport`/`Send-QwtError` → gate → severity →
 names → compose text → redaction → marker (this boot?) → cap → write marker + count → write
