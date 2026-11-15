@@ -401,6 +401,10 @@ the inbox disk driver to the emulated disks, and the next normal boot came up on
 still armed. The first build (e629708d, 4.3.44.1318) on a fresh clone (`row40f-20261115T1015Z`): AppSearch set
 `QWTNG_PVDISKUNPLUG` to `#1`, `MsiProcessDrivers` was skipped, the removal committed (product registration gone),
 and the next boot came up on the PV disk with `xenbus` and `xenvbd` bound - but `msiexec /x` returned 1603 from
-`MsiCleanupOnSuccess` (DIFxApp ERROR 0x2 on each component's key). Seen to pass with both rows conditioned: owed.
+`MsiCleanupOnSuccess` (DIFxApp ERROR 0x2 on each component's key). Seen to pass with both rows conditioned: build
+185518d0 (4.3.44.1319) on a fresh clone (`row40g-20261115T1110Z`) - both actions skipped ("condition is false"),
+"Removal completed successfully", `msiexec /x` 3010, no product registered, and the next boot on the PV disk with
+`xenbus`, `xenfilt` and `xenvbd` boot-start, `xenvbd` bound and `DISKS=1` armed again. `xenvif` and `xennet` were
+absent before the uninstall as after it, so this run says nothing about the network packages.
 
 ---
