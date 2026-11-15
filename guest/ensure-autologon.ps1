@@ -230,6 +230,53 @@ if ($lsa) {
     $warn++
 }
 
+# 4. A profile store that was never filled. MoveUsers keeps every profile on the private volume
+#    (C:\Users is a link to Q:\Users), and `qvm-create --class StandaloneVM --template T` gives the new
+#    qube a copy of T's root with a NEW, EMPTY private volume: the link dangles, the autologon user
+#    gets a temporary profile (User Profile Service 1505) and the shell never starts. Nothing in the
+#    guest can bring T's profiles back - qvm-clone, which copies the private volume too, is the
+#    remedy - so the user is told it once per boot. Reported, never repaired, and outside the exit
+#    contract: autologon itself still happens. The private disk is told apart by serial, the
+#    installer's rule (Classify-PrivateDiskState, packaging/setup/Install-QwtImproved.ps1).
+try {
+    $cu = Get-Item -LiteralPath 'C:\Users' -Force -ErrorAction Stop
+    $cuTarget = if (($cu.Attributes -band [IO.FileAttributes]::ReparsePoint) -and $cu.Target) { [string]@($cu.Target)[0] } else { '' }
+    if (-not $cuTarget) {
+        Write-Output 'ok     profile store C:\Users is a plain directory'
+    } elseif ($cuTarget -notmatch '^[A-Za-z]:\\' -or (Test-Path -LiteralPath $cuTarget.Substring(0, 3))) {
+        Write-Output "ok     profile store C:\Users links to $cuTarget"
+    } else {
+        $priv = @(Get-Disk -ErrorAction Stop | Where-Object { ([string]$_.SerialNumber).Trim() -in @('QM00002', '0001') })
+        $privState = if ($priv.Count -eq 1) { [string]$priv[0].PartitionStyle } else { "matched by $($priv.Count) disks" }
+        # MoveUsers always relocates to Q:, the private volume's letter; a link to any other missing drive
+        # was not made by us, so the notice's cause would be a guess.
+        if ($cuTarget -notmatch '^[Qq]:\\' -or $privState -ne 'RAW') {
+            Write-Output "WARN   NO USER PROFILE can load: C:\Users links to $cuTarget, whose drive does not exist; private disk: $privState"
+        } else {
+            Write-Output "WARN   NO USER PROFILE can load: C:\Users links to $cuTarget, whose drive does not exist, and the private disk is blank -"
+            Write-Output 'WARN   this qube was made from a template without its private volume; recreate it with qvm-clone --class StandaloneVM'
+            $sent = 'unavailable:helper-absent'
+            $nh = @((Join-Path $PSScriptRoot 'qwt-notify-error.ps1'), (Join-Path (Split-Path -Parent $PSScriptRoot) 'bin\qwt-notify-error.ps1')) |
+                  Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+            if ($nh) {
+                # The helper's own lines go to this script's log, never to the pipeline: a line written there
+                # inside Send-QwtError would become part of its return value.
+                $script:QwtNotifyLog = { param($m) $null = Write-QwtLogLine 'W' "NOTIFYERR $m" -Module 'ensure-autologon.ps1'; Write-Host "note   NOTIFYERR $m" }
+                . $nh
+                $sent = Send-QwtError -Component 'autologon' -Id 'private-volume-empty' -Severity ACTION `
+                    -Header 'No user profile: the private volume of this qube is empty' `
+                    -Next 'Windows shows no desktop. Recreate the qube in dom0 with: qvm-clone --class StandaloneVM TEMPLATE NAME' `
+                    -Cause 'Cause: qvm-create --template gave it a new, empty private volume, where the profiles live.' `
+                    -Tech (Format-QwtNotifyTechLine -Subject 'ensure-autologon.ps1' -Code "C:\Users links to the missing $cuTarget" `
+                             -Count 'reported once per boot' -Evidence 'Application log, User Profile Service event 1505')
+            }
+            Write-Output "WARN   dom0 notice: $sent"
+        }
+    }
+} catch {
+    Write-Output "WARN   could not check where the user profiles live: $($_.Exception.Message.Split([char]10)[0])"
+}
+
 $lsaState = if (-not $lsaKnown) { 'unknown' } elseif ($lsa) { 'present' } else { 'absent' }
 # reason= names the ONE thing to repair, in the same token form set-autologon.ps1 uses, so a caller
 # reading only the trailer can record it instead of guessing. Before this token every warning was

@@ -29,7 +29,10 @@ and undone when the mode switches.
 
 Finally, autologon is enforced, because a guest parked at the sign-in screen is unreachable: dom0 cannot run
 anything in it, and in seamless mode it is invisible. The password is validated before anything is written and
-stored only as a protected system secret, and a boot-time task re-asserts the arming.
+stored only as a protected system secret, and a boot-time task re-asserts the arming. A qube made from a
+template without the template's private volume, where every user profile lives, starts with no desktop; the
+same task tells you so in dom0, with the command that makes a working copy. Repairing such a qube in place is
+proposed, not built.
 
 How the agent decides whether a guest window becomes a dom0 window (§1, §2, §4, §6, §7):
 
@@ -69,6 +72,8 @@ flowchart TD
 | 10 | Autologon is enforced: a guest without a session is unreachable | ACCEPTED (owner) | 2026-08-28 |
 | 11 | A hidden Start menu is CLOSED by returning activation, and the closure is recorded once | decided, unmeasured on a guest | 2026-10-17 |
 | 12 | A withheld window is reported to the user only for a fault that waiting cannot resolve | ACCEPTED (owner, Jev) | 2026-11-14 |
+| 13 | A guest whose profiles live on an empty private volume says so, with the remedy | ACCEPTED (Jev 0.75) | 2026-11-15 |
+| 14 | Repairing such a guest: a fresh private volume, then power off | PROPOSED (Jev 0.75) | 2026-11-15 |
 
 Status words and the section format are defined in `docs/ADR-README.md`.
 
@@ -507,3 +512,65 @@ a build carrying fb010de, with no notice and the ERROR logged, and the deaf faul
 notifying.
 
 **Open.** The never-delivering first session in Cost.
+
+## 13. A guest whose profiles live on an empty private volume says so, with the remedy
+
+**Status:** ACCEPTED (Jev 0.75), 2026-11-15. Built as part 4 of `guest/ensure-autologon.ps1`, the §10 guard.
+The repair is §14, PROPOSED.
+
+**Context.** MoveUsers keeps every profile, Default and Public included, on the private volume: `C:\Users`
+is a link to `Q:\Users`. `qvm-create --class StandaloneVM --template T` gives the new qube a copy of T's root
+and a new, empty private volume (qubesadmin `clone_vm` with the private volume ignored); `qvm-clone --class
+StandaloneVM T` copies every volume. Measured on German 25H2 clones built that way from a QWT 4.3.29 root and
+from a 4.3.44 test build: no Q:, the link dangles, the autologon user gets a temporary profile (User Profile
+Service 1515, 1501, 1505), Explorer crashes 31 s after logon and stays down, ctfmon crashes every ~21 s. In
+seamless mode the qube shows nothing at all, and every QWT log is lost with it: LogDir is on Q:. The field
+reporter met an older form on 4.3.2x (`docs/GWECK-STATUS.md` row 37).
+
+**Decision.**
+1. At every boot the guard reads where `C:\Users` leads. A link to `Q:` while Q: does not exist and the
+   private disk is blank (RAW, told apart by serial as the installer does) is this case: two WARN lines and
+   one dom0 notice per boot that names the cause and the remedy, `qvm-clone --class StandaloneVM`.
+2. A link to any other missing drive, or to a missing Q: while the private disk is not blank, is a WARN line
+   only: the cause is unknown.
+3. Nothing on disk is changed, and the guard's exit contract (§10, rule 6) is untouched: autologon happens.
+
+**Why.** Jev: A_now_B_proposed 0.75 (conf 0.70), against detection alone 0.21 and building the repair now
+0.03; severity P1 1.00. Nothing inside the guest can bring the template's profiles back, and moving user data
+to the root volume is excluded by the owner's words on the report: "there should be no backwards migration"
+(forum 42717, post 140); Jev gave that option 0.01.
+
+**Cost.** The qube stays unusable until the user recreates it. Every guest pays one `Get-Item` per boot;
+`Get-Disk` runs only when the link's drive is missing.
+
+**Evidence.** Seen to fail: on the 4.3.44 clone, no desktop, and the only dom0 notice of that boot was a
+quiet-desktop task death, a symptom. Seen to pass: on the same clone the check fired, the notice composed
+within the size and redaction limits and a second run was suppressed as a duplicate; on a healthy 4.3.44
+guest, under strict mode 1.0 as the installer runs it, the guard logged `ok profile store C:\Users links to
+Q:\Users` and sent nothing. Both runs replaced the transport with a file copy, because dom0's display was
+hung: delivery to dom0 is owed.
+
+**Open.** The reporter's Downloads and Documents links to Q: on 4.3.2x, whose profiles stayed on C:, are
+not explained; relocate-dir did not ship before 2026-09-08.
+
+## 14. Repairing such a guest: a fresh private volume, then power off
+
+**Status:** PROPOSED (Jev 0.75), 2026-11-15. Not built: the owner decides, after the measurement owed below.
+
+**Context.** §13. A Linux qube made the same way starts with a fresh home: its agent formats an all-zero
+private volume at the first boot ("Virgin boot", core-agent-linux `setup-rwdev.sh`) and the template's
+per-user data is not carried.
+
+**Decision (proposed).**
+1. The installer keeps a copy of `C:\Users\Default` and `Public` on the root volume.
+2. At boot, before logon, a guest in §13's state formats the blank private disk (by serial) as Q:, seeds
+   `Q:\Users` from that copy, and removes the stale ProfileList entries so that Windows builds fresh profiles.
+3. It tells dom0 and powers off; the user starts the qube. No restart is taken (`ADR-updater` §10).
+
+**Cost.** The template's per-user data (desktop files, settings) is not carried, as on Linux. Partitioning
+and formatting from boot code would be new here. The autologon comes about 5 s after the profile service
+starts, so a repair from a SYSTEM task races the logon; native code at BootExecute can detect the state but
+has never partitioned or formatted a disk here.
+
+**Evidence.** Owed before any build (Jev missing_measurement seed_profile_works 0.86, conf 0.81): whether
+Windows builds a working profile on a freshly formatted Q: seeded with Default and Public.
