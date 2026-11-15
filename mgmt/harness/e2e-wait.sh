@@ -107,11 +107,19 @@ w_state(){ qvm-ls --raw-data --fields state "$1" 2>/dev/null; }
 # photograph the desktop. Its three causes (target missing/untagged, tool discarded the window,
 # genuinely no windows) are diagnosed by checking the target and the tool, never by widening the
 # capture.
+#
+# The per-window tar holds one PNG per window and no desktop, so its largest window is graded as a
+# PNG (winshot.py --png, as screenverdict in the win-guest-e2e skill does). winshot.py's tar mode
+# reads a desktop capture (screen.png + geometry.txt) and refuses this tar with exit 3.
 w_screen(){ # $1=vm $2=tag $3=outdir
-  local vm=$1 tag=$2 dir=$3 out
+  local vm=$1 tag=$2 dir=$3 out="" big="" ex
   QTEST_VM=$vm timeout -k 8 150 ./tools/qtest shot "$dir/$tag.tar" >/dev/null 2>&1
   [ -s "$dir/$tag.tar" ] || { echo NOWINDOW; return; }
-  out=$(python3 tools/winshot.py "$dir/$tag.tar" "$vm" -o "$dir/$tag.png" --classify 2>/dev/null)
+  ex="$dir/$tag.ex"; rm -rf "$ex"
+  mkdir -p "$ex" && tar xf "$dir/$tag.tar" -C "$ex" 2>/dev/null
+  big=$(ls -S "$ex"/*.png 2>/dev/null | head -1)
+  [ -n "$big" ] && cp "$big" "$dir/$tag.png" && out=$(python3 tools/winshot.py --png "$dir/$tag.png" 2>/dev/null)
+  rm -rf "$ex"
   case "$out" in *VERDICT=*) echo "${out##*VERDICT=}" ;; *) echo NOWINDOW ;; esac
 }
 
