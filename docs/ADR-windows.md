@@ -555,7 +555,7 @@ not explained; relocate-dir did not ship before 2026-09-08.
 
 ## 14. Repairing such a guest: a fresh private volume, then power off
 
-**Status:** PROPOSED (Jev 0.75), 2026-11-15. Not built: the owner decides, after the measurement owed below.
+**Status:** PROPOSED (Jev 0.75), 2026-11-15. Not built: the owner decides; the measurement it waited for is below.
 
 **Context.** §13. A Linux qube made the same way starts with a fresh home: its agent formats an all-zero
 private volume at the first boot ("Virgin boot", core-agent-linux `setup-rwdev.sh`) and the template's
@@ -573,4 +573,13 @@ starts, so a repair from a SYSTEM task races the logon; native code at BootExecu
 has never partitioned or formatted a disk here.
 
 **Evidence.** Owed before any build (Jev missing_measurement seed_profile_works 0.86, conf 0.81): whether
-Windows builds a working profile on a freshly formatted Q: seeded with Default and Public.
+Windows builds a working profile on a freshly formatted Q: seeded with Default and Public. Measured
+2026-11-15 on a German 25H2 standalone made with `qvm-create --template` (private disk RAW), steps 2 and 3
+done by hand from a SYSTEM shell while the user sat on the system default profile: the installer's two
+calls made Q:; `Default` and `Public`, copied from a healthy guest without junctions or ACLs, went into
+`Q:\Users`; the three S-1-5-21 ProfileList keys (the live temporary one, a `.bak`, an unused account) were
+removed; power off. At the next boot the autologon user got a new profile `Q:\Users\gerd-test`, loaded,
+not temporary, with no User Profile Service error; explorer, sihost and ctfmon kept their PIDs from logon
+to 3 minutes after it, and nothing crashed. The boot before showed 1515, 1501, 1505 and 1544 three times
+each. Not measured: that desktop in pixels; a copy made by the installer itself, with ACLs; a repair run
+from boot code, which races the logon.
